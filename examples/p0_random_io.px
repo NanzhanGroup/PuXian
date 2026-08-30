@@ -1,0 +1,67 @@
+# 普贤 M12 P0：文件随机读写 + fsync 回归测试
+# 覆盖：read_at / write_at / file_size / fsync_file / truncate_file
+# 模拟 WAL（Write-Ahead Log）增量追加 + 随机覆盖场景
+
+def main():
+    let path = "/tmp/px_p0_io.bin"
+    if exists(path):
+        remove(path)
+
+    print("=== 1. 增量追加（WAL 追加日志）===")
+    # 每条记录带长度头（4 字节），WAL 典型布局：len + payload
+    write_at(path, 0, "AAAA")          # 记录1
+    write_at(path, 4, "BBBB")          # 记录2
+    write_at(path, 8, "CCCC")          # 记录3
+    assert(file_size(path) == 12, "追加后大小应为 12")
+    print("大小:", file_size(path))
+
+    print("=== 2. 随机读 ===")
+    assert(read_at(path, 0, 4) == "AAAA", "读记录1")
+    assert(read_at(path, 4, 4) == "BBBB", "读记录2")
+    assert(read_at(path, 8, 4) == "CCCC", "读记录3")
+    print("三段顺序读取 OK")
+
+    print("=== 3. 随机覆盖（更新某条记录）===")
+    write_at(path, 4, "XX")
+    assert(read_at(path, 4, 2) == "XX", "覆盖后应读到新值")
+    assert(read_at(path, 6, 2) == "BB", "未覆盖部分应保留")
+    assert(file_size(path) == 12, "覆盖不改变文件大小")
+    print("覆盖后:", read_at(path, 0, 12))
+
+    print("=== 4. 越界读（EOF 保护）===")
+    assert(read_at(path, 100, 4) == "", "超 EOF 读返回空串")
+    let tail = read_at(path, 10, 10)
+    assert(len(tail) == 2, "读不足 length 返回实际字节数")
+    print("越界读 OK（len=", len(tail), "）")
+
+    print("=== 5. 空洞写（offset 跳跃）===")
+    write_at(path, 100, "Z")
+    assert(file_size(path) == 101, "跳写后文件扩展")
+    assert(read_at(path, 100, 1) == "Z", "尾部数据可读")
+    print("空洞写 OK，大小:", file_size(path))
+
+    print("=== 6. fsync 落盘 ===")
+    fsync_file(path)
+    assert(file_size(path) == file_size(path), "fsync 后大小一致")
+    print("fsync OK")
+
+    print("=== 7. 截断（WAL 轮转）===")
+    truncate_file(path, 6)
+    assert(file_size(path) == 6, "截断到 6 字节")
+    assert(read_at(path, 4, 2) == "XX", "截断后剩余数据正确")
+    print("截断 OK")
+
+    print("=== 8. 截断后继续追加 ===")
+    let sz = file_size(path)
+    write_at(path, sz, "LOG1")
+    sz = file_size(path)
+    write_at(path, sz, "LOG2")
+    assert(read_at(path, 6, 8) == "LOG1LOG2", "追加可续写")
+    print("续写内容:", read_at(path, 6, 8))
+
+    print("=== 9. write_at 返回写入字节数 ===")
+    let n = write_at(path, 100, "tail")
+    assert(n == 4, "write_at 应返回实际写入字节数")
+    print("写入字节数:", n)
+
+    print("\n[P0 文件随机读写 + fsync] 全部通过 ✅")

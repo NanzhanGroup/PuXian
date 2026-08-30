@@ -377,6 +377,132 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             let p = expect_str(&args[0], "exists", pos)?;
             Ok(Value::Bool(std::path::Path::new(p).exists()))
         }
+        // ---- M12 P0：文件随机读写 + fsync（WAL / 增量日志基石）----
+        // read_at(path, offset, length) → 字符串：从 offset 偏移读 length 字节
+        Builtin::ReadAt => {
+            if args.len() != 3 {
+                return Err(err("read_at 需要 (路径, 偏移, 长度) 三个参数", pos));
+            }
+            let p = expect_str(&args[0], "read_at", pos)?;
+            let offset = expect_int(&args[1], "read_at", pos)?;
+            let length = expect_int(&args[2], "read_at", pos)?;
+            if length < 0 {
+                return Err(err("read_at 长度不能为负", pos));
+            }
+            use std::os::unix::fs::FileExt;
+            match std::fs::File::open(p) {
+                Ok(f) => {
+                    let mut buf = vec![0u8; length as usize];
+                    match f.read_at(&mut buf, offset as u64) {
+                        Ok(n) => {
+                            buf.truncate(n);
+                            Ok(Value::Str(String::from_utf8_lossy(&buf).to_string()))
+                        }
+                        Err(e) => Err(LxError::new(
+                            "R2004",
+                            format!("io: 随机读失败 {}: {}", p, e),
+                            Some(pos),
+                        )),
+                    }
+                }
+                Err(e) => Err(LxError::new(
+                    "R2004",
+                    format!("io: 打开文件失败 {}: {}", p, e),
+                    Some(pos),
+                )),
+            }
+        }
+        // write_at(path, offset, content) → 实际写入字节数
+        Builtin::WriteAt => {
+            if args.len() != 3 {
+                return Err(err("write_at 需要 (路径, 偏移, 内容) 三个参数", pos));
+            }
+            let p = expect_str(&args[0], "write_at", pos)?;
+            let offset = expect_int(&args[1], "write_at", pos)?;
+            let content = match &args[2] {
+                Value::Str(s) => s.clone(),
+                v => v.to_string(),
+            };
+            use std::os::unix::fs::FileExt;
+            match std::fs::OpenOptions::new().create(true).write(true).open(p) {
+                Ok(f) => match f.write_at(content.as_bytes(), offset as u64) {
+                    Ok(n) => Ok(Value::Int(n as i64)),
+                    Err(e) => Err(LxError::new(
+                        "R2005",
+                        format!("io: 随机写失败 {}: {}", p, e),
+                        Some(pos),
+                    )),
+                },
+                Err(e) => Err(LxError::new(
+                    "R2005",
+                    format!("io: 打开文件失败 {}: {}", p, e),
+                    Some(pos),
+                )),
+            }
+        }
+        // file_size(path) → int
+        Builtin::FileSize => {
+            if args.len() != 1 {
+                return Err(err("file_size 需要一个路径参数", pos));
+            }
+            let p = expect_str(&args[0], "file_size", pos)?;
+            match std::fs::metadata(p) {
+                Ok(m) => Ok(Value::Int(m.len() as i64)),
+                Err(e) => Err(LxError::new(
+                    "R2006",
+                    format!("io: 获取文件大小失败 {}: {}", p, e),
+                    Some(pos),
+                )),
+            }
+        }
+        // fsync_file(path) → null：将文件数据刷入磁盘
+        Builtin::FsyncFile => {
+            if args.len() != 1 {
+                return Err(err("fsync_file 需要一个路径参数", pos));
+            }
+            let p = expect_str(&args[0], "fsync_file", pos)?;
+            match std::fs::OpenOptions::new().read(true).write(true).open(p) {
+                Ok(f) => match f.sync_all() {
+                    Ok(_) => Ok(Value::Null),
+                    Err(e) => Err(LxError::new(
+                        "R2007",
+                        format!("io: fsync 失败 {}: {}", p, e),
+                        Some(pos),
+                    )),
+                },
+                Err(e) => Err(LxError::new(
+                    "R2007",
+                    format!("io: 打开文件失败 {}: {}", p, e),
+                    Some(pos),
+                )),
+            }
+        }
+        // truncate_file(path, size) → null：截断/扩展文件
+        Builtin::TruncateFile => {
+            if args.len() != 2 {
+                return Err(err("truncate_file 需要 (路径, 大小) 两个参数", pos));
+            }
+            let p = expect_str(&args[0], "truncate_file", pos)?;
+            let size = expect_int(&args[1], "truncate_file", pos)?;
+            if size < 0 {
+                return Err(err("truncate_file 大小不能为负", pos));
+            }
+            match std::fs::OpenOptions::new().write(true).open(p) {
+                Ok(f) => match f.set_len(size as u64) {
+                    Ok(_) => Ok(Value::Null),
+                    Err(e) => Err(LxError::new(
+                        "R2008",
+                        format!("io: 截断文件失败 {}: {}", p, e),
+                        Some(pos),
+                    )),
+                },
+                Err(e) => Err(LxError::new(
+                    "R2008",
+                    format!("io: 打开文件失败 {}: {}", p, e),
+                    Some(pos),
+                )),
+            }
+        }
         Builtin::ListDir => {
             if args.len() != 1 {
                 return Err(err("list_dir 需要一个路径参数", pos));

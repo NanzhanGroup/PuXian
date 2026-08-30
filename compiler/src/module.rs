@@ -303,9 +303,15 @@ impl ModuleResolver {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    // 同一进程内多个测试并行跑会共用同一 pid 目录 → 互相删文件 → flaky。
+    // 用进程内单调序号给每个测试唯一目录，消除并行冲突。
+    static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
     fn tmpdir() -> PathBuf {
-        let d = std::env::temp_dir().join(format!("px_module_test_{}", std::process::id()));
+        let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+        let d = std::env::temp_dir().join(format!("px_module_test_{}_{}", std::process::id(), seq));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d

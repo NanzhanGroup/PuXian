@@ -22,6 +22,7 @@
 #include <errno.h>
 #include <strings.h>
 #include <signal.h>
+#include <ucontext.h>
 #include <sys/mman.h>
 #include <stdatomic.h>
 
@@ -377,7 +378,7 @@ static void gc_scan_stack(GCHash* set) {
 // 实现：getcontext() 把全部通用寄存器（含 caller-saved rax/rcx/rdx/rsi/rdi/r8-r11
 // 与 callee-saved rbx/rbp/r12-r15）写入 ucontext_t；该结构位于本函数栈帧，
 // 被 gc_scan_stack 保守扫描覆盖。
-#include <ucontext.h>
+// （ucontext.h 已在文件头部 include 区统一引入）
 
 // ==================== M11 并发 GC：线程暂停协议 ====================
 // 设计：GC 需要 stop-the-world 时，向所有已注册活跃线程发送 SIG_GC_STOP 实时信号。
@@ -1919,6 +1920,81 @@ static LXValue bi_append_file(LXValue* args, int nargs, void* ctx) {
     return lx_null();
 }
 
+// ---- M12 P0：文件随机读写 + fsync（WAL / 增量日志基石）----
+// read_at(path, offset, length) → 字符串：从 offset 偏移读 length 字节
+// （offset 超出 EOF 返回空串；读不足 length 返回实际读到的字节）
+static LXValue bi_read_at(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 3 || args[0].type != LX_STR) lx_error("read_at 需要 (路径, 偏移, 长度)");
+    const char* path = args[0].as.obj->as.str.data;
+    int64_t offset = int_val(args[1]);
+    int length = (int)int_val(args[2]);
+    if (length < 0) lx_error("read_at 长度不能为负");
+    if (length == 0) return lx_str("");
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) lx_error("io: 打开文件失败 %s: %s", path, strerror(errno));
+    char* buf = xmalloc((size_t)length);
+    ssize_t rd = pread(fd, buf, (size_t)length, (off_t)offset);
+    close(fd);
+    if (rd < 0) { xfree(buf); lx_error("io: 随机读失败 %s: %s", path, strerror(errno)); }
+    LXValue r = lx_str_len(buf, (int)rd);
+    xfree(buf);
+    return r;
+}
+
+// write_at(path, offset, content) → 实际写入字节数
+// 文件不存在自动创建；offset 超过 EOF 时中间为空洞（读回 0），WAL 增量写友好
+static LXValue bi_write_at(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 3 || args[0].type != LX_STR) lx_error("write_at 需要 (路径, 偏移, 内容)");
+    const char* path = args[0].as.obj->as.str.data;
+    int64_t offset = int_val(args[1]);
+    const char* content;
+    int clen;
+    if (args[2].type == LX_STR) { content = args[2].as.obj->as.str.data; clen = args[2].as.obj->as.str.len; }
+    else { content = lx_to_string(args[2]); clen = (int)strlen(content); }
+    int fd = open(path, O_WRONLY | O_CREAT, 0644);
+    if (fd < 0) lx_error("io: 打开文件失败 %s: %s", path, strerror(errno));
+    ssize_t wr = pwrite(fd, content, (size_t)clen, (off_t)offset);
+    close(fd);
+    if (wr < 0) lx_error("io: 随机写失败 %s: %s", path, strerror(errno));
+    return lx_int((int64_t)wr);
+}
+
+// file_size(path) → int：文件字节数
+static LXValue bi_file_size(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != LX_STR) lx_error("file_size 需要一个路径参数");
+    const char* path = args[0].as.obj->as.str.data;
+    struct stat st;
+    if (stat(path, &st) != 0) lx_error("io: 获取文件大小失败 %s: %s", path, strerror(errno));
+    return lx_int((int64_t)st.st_size);
+}
+
+// fsync_file(path) → null：将文件数据刷入磁盘（WAL 落盘保证）
+static LXValue bi_fsync_file(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != LX_STR) lx_error("fsync_file 需要一个路径参数");
+    const char* path = args[0].as.obj->as.str.data;
+    int fd = open(path, O_RDWR);
+    if (fd < 0) fd = open(path, O_RDONLY); // 只读权限文件也允许 fsync（Linux/POSIX）
+    if (fd < 0) lx_error("io: 打开文件失败 %s: %s", path, strerror(errno));
+    int rc = fsync(fd);
+    close(fd);
+    if (rc != 0) lx_error("io: fsync 失败 %s: %s", path, strerror(errno));
+    return lx_null();
+}
+
+// truncate_file(path, size) → null：截断/扩展文件到指定大小（日志轮转、预分配）
+static LXValue bi_truncate_file(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2 || args[0].type != LX_STR) lx_error("truncate_file 需要 (路径, 大小)");
+    const char* path = args[0].as.obj->as.str.data;
+    int64_t size = int_val(args[1]);
+    if (truncate(path, (off_t)size) != 0) lx_error("io: 截断文件失败 %s: %s", path, strerror(errno));
+    return lx_null();
+}
+
 static LXValue bi_exists(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1 || args[0].type != LX_STR) lx_error("exists 需要一个路径参数");
@@ -2311,6 +2387,12 @@ void lx_register_builtins(void) {
     lx_set_global("read_file", lx_native("read_file", bi_read_file));
     lx_set_global("write_file", lx_native("write_file", bi_write_file));
     lx_set_global("append_file", lx_native("append_file", bi_append_file));
+    // M12 P0：文件随机读写 + fsync（WAL / 增量日志基石）
+    lx_set_global("read_at", lx_native("read_at", bi_read_at));
+    lx_set_global("write_at", lx_native("write_at", bi_write_at));
+    lx_set_global("file_size", lx_native("file_size", bi_file_size));
+    lx_set_global("fsync_file", lx_native("fsync_file", bi_fsync_file));
+    lx_set_global("truncate_file", lx_native("truncate_file", bi_truncate_file));
     lx_set_global("exists", lx_native("exists", bi_exists));
     lx_set_global("list_dir", lx_native("list_dir", bi_list_dir));
     lx_set_global("mkdir", lx_native("mkdir", bi_mkdir));
