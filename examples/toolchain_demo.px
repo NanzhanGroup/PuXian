@@ -1,0 +1,38 @@
+## 普贤 M6 工具链演示（px fmt / lint / test / bench / doc / ast）
+## 本文件故意包含未格式化代码，供 `px fmt` 演示；含文档注释供 `px doc` 提取。
+
+import std.collections
+
+## 计算两数之和
+## 参数 a：第一个数；b：第二个数
+def add(a:int,b:int)->int:
+    return a+b
+
+## 判断是否为偶数
+def is_even(n:int)->bool:
+    return n%2==0
+
+## 从列表过滤偶数并求和
+def sum_even(nums:list)->int:
+    let evens = filter(nums, fn(x) { x % 2 == 0 })
+    return sum(evens)
+
+def test_add():
+    assert(add(1, 2) == 3, "add 基础")
+    assert(add(-1, 1) == 0, "add 负数")
+
+def test_is_even():
+    assert(is_even(4), "4 是偶数")
+    assert(not is_even(3), "3 不是偶数")
+
+def test_sum_even():
+    let nums = [1, 2, 3, 4, 5, 6]
+    assert(sum_even(nums) == 12, "2+4+6=12")
+
+def bench_add():
+    let x = 0
+    for i in range(100):
+        x = add(x, i)
+    return x
+
+print("toolchain demo ok:", sum_even([1, 2, 3, 4, 5, 6]))

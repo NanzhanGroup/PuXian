@@ -1,0 +1,22 @@
+# match + 闭包 + trait
+trait Shape:
+    def area(self) -> float:
+
+struct Circle:
+    r: float
+
+impl Shape for Circle:
+    def area(self) -> float:
+        return 3.14 * self.r * self.r
+
+def main():
+    let c = Circle(2.0)
+    let a = c.area()
+    let double = fn(x: int) -> int { x * 2 }
+    let desc = match a:
+        case 0.0:
+            "zero"
+        case _:
+            "nonzero"
+    print(double(21))
+    print(desc)

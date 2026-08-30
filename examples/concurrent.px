@@ -1,0 +1,14 @@
+# 普贤示例：并发（M3 真并发）
+# spawn 两个 worker 各自发送，主线程阻塞接收 + select 阻塞等待第二个值
+def worker(id: int, ch):
+    ch.send(id * 2)
+
+def main():
+    ch = chan[int](4)
+    spawn worker(1, ch)
+    spawn worker(2, ch)
+    let v = ch.recv()
+    print("first:", v)
+    select:
+        case x = ch.recv():
+            print("second:", x)

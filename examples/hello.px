@@ -1,0 +1,9 @@
+# 普贤示例：hello
+## 文档注释：main 函数
+def main():
+    let msg = "hello, 普贤\n"
+    let n = 42
+    if n > 0 and n < 100:
+        print(msg |> to_upper())
+    else:
+        print("n 不在范围内")

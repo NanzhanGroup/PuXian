@@ -1,0 +1,45 @@
+## 普贤标准库演示（M5.2 std.net）
+## 覆盖：TCP 服务器 / 客户端 + 明文 HTTP GET
+
+def main():
+    # ---- TCP echo 服务器（线程） ----
+    let listener = tcp_listen(7891)
+    print("TCP 监听 7891 端口")
+    spawn echo_server(listener)
+
+    # 给服务器一点启动时间
+    sleep(50)
+
+    # ---- TCP 客户端 ----
+    let conn = tcp_connect("127.0.0.1", 7891)
+    let sent = tcp_send(conn, "hello, 普贤 net!")
+    print("客户端发送", sent, "字节")
+    let reply = tcp_recv(conn, 1024)
+    print("客户端收到回显:", reply)
+    tcp_close(conn)
+
+    # ---- 明文 HTTP GET ----
+    print("http_get 测试（本地 7892 端口）...")
+    let http_listener = tcp_listen(7892)
+    spawn http_server(http_listener)
+    sleep(50)
+    let body = http_get("http://127.0.0.1:7892/api/hello")
+    print("HTTP 响应体:", body)
+
+    print("NET_DEMO OK")
+
+def echo_server(listener):
+    let c = tcp_accept(listener)
+    let data = tcp_recv(c, 4096)
+    tcp_send(c, data)
+    tcp_close(c)
+    tcp_close(listener)
+
+def http_server(listener):
+    let c = tcp_accept(listener)
+    let req = tcp_recv(c, 8192)
+    let body = "{\"status\": \"ok\", \"msg\": \"hello from 普贤\"}"
+    let resp = "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + str(len(body)) + "\r\n\r\n" + body
+    tcp_send(c, resp)
+    tcp_close(c)
+    tcp_close(listener)

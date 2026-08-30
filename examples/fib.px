@@ -1,0 +1,14 @@
+# 普贤示例：斐波那契
+def fib(n: int) -> int:
+    if n <= 1:
+        return n
+    else:
+        return fib(n - 1) + fib(n - 2)
+
+def main():
+    let nums = [0, 1, 1, 2, 3, 5, 8]
+    let doubled = [x * 2 for x in nums if x > 1]
+    for i in range(10):
+        print(fib(i))
+    let d = {"name": "px", "v": 1}
+    print(d["name"])

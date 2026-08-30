@@ -1,0 +1,17 @@
+# Rust 编译产物
+compiler/target/
+
+# 编译模式产物（生成的 C 源码与二进制）
+examples/build/
+
+# 备份文件
+*.bak
+*.bak.*
+*.orig
+*~
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+*.swp
+.DS_Store

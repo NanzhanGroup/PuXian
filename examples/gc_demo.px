@@ -1,0 +1,40 @@
+# 普贤示例：GC 值对象自动释放（M8）
+# 场景：循环引用 + 大量瞬时对象（无 GC 时必然泄漏/内存暴涨）
+# 内存验证：/usr/bin/time -v ./build/gc_demo | grep "Maximum resident"
+#   GC 开启   ：约 50 MB
+#   GC 关闭   ：约 350 MB（PX_GC_THRESHOLD=999999999 等效 MVP 不回收）
+## 编译模式运行：px build gc_demo.px && ./build/gc_demo
+
+## 制造循环引用（mark-sweep 的天然优势：无根即回收）
+def make_cycle():
+    let a = []
+    let b = []
+    a.append(b)
+    b.append(a)
+    return a
+
+## 制造瞬时字符串垃圾
+def make_garbage():
+    for i in range(20000):
+        let s = "garbage-object-" + str(i)
+        if len(s) == 0:
+            print("unreachable")
+
+def main():
+    print("=== 普贤 GC 演示（M8）===")
+
+    ## 第 1 阶段：20 万对循环引用（40 万对象）
+    for i in range(200000):
+        make_cycle()
+    print("阶段1 完成：20 万对循环引用")
+
+    ## 第 2 阶段：大量瞬时字符串（每轮触发自动 GC）
+    for round in range(10):
+        make_garbage()
+    print("阶段2 完成：10 轮瞬时字符串")
+
+    ## 第 3 阶段：再压一轮循环引用，验证内存稳定
+    for i in range(100000):
+        make_cycle()
+    print("阶段3 完成：再压 10 万对循环引用")
+    print("=== GC demo 完成 ===")

@@ -1,0 +1,17 @@
+struct Point:
+    x: int
+    y: int
+
+enum Color:
+    Red
+    Green
+    Blue
+
+def main():
+    let p = Point(1, 2)
+    let c = Color.Red
+    match c:
+        case Red:
+            print("red")
+        case _:
+            print("other")

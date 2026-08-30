@@ -1,0 +1,66 @@
+# 普贤示例：M3 真并发验证（确定性断言）
+# 1) 有缓冲通道：recv 阻塞直到收到值
+def worker1(ch):
+    sleep(100)
+    ch.send(42)
+
+let ch1 = chan[int](1)
+spawn worker1(ch1)
+let v1 = ch1.recv()
+assert(v1 == 42, "buffered chan recv")
+
+# 2) 无缓冲通道：rendezvous 同步
+def sender(ch):
+    ch.send(7)
+
+let ch2 = chan[int]()
+spawn sender(ch2)
+let v2 = ch2.recv()
+assert(v2 == 7, "unbuffered chan recv")
+
+# 3) select 多通道：阻塞等待任一就绪
+def producer(ch, v, ms):
+    sleep(ms)
+    ch.send(v)
+
+let a = chan[int](1)
+let b = chan[int](1)
+spawn producer(a, 100, 30)
+spawn producer(b, 200, 10)
+var got = 0
+select:
+    case x = a.recv():
+        got = x
+    case y = b.recv():
+        got = y
+assert(got == 200, "select picks ready chan (b faster)")
+
+# 4) select 无兜底：阻塞直到有值
+def later(ch):
+    sleep(50)
+    ch.send(5)
+
+let ch3 = chan[int](1)
+spawn later(ch3)
+var got2 = 0
+select:
+    case v = ch3.recv():
+        got2 = v
+assert(got2 == 5, "select blocks until ready")
+
+# 5) 并行度验证：两个 100ms 任务并行，总耗时 < 190ms
+let t0 = now_ms()
+def slowpoke(ch, ms):
+    sleep(ms)
+    ch.send(1)
+
+let c1 = chan[int](1)
+let c2 = chan[int](1)
+spawn slowpoke(c1, 100)
+spawn slowpoke(c2, 100)
+c1.recv()
+c2.recv()
+let elapsed = now_ms() - t0
+assert(elapsed < 190, "parallel execution (elapsed < 190ms)")
+
+print("M3 concurrent OK, elapsed=", elapsed, "ms")
