@@ -120,6 +120,7 @@ pub enum Builtin {
     TcpRecv,
     TcpClose,
     HttpGet,
+    HttpPost,
 }
 
 impl Builtin {
@@ -178,6 +179,7 @@ impl Builtin {
             Builtin::TcpRecv => "tcp_recv",
             Builtin::TcpClose => "tcp_close",
             Builtin::HttpGet => "http_get",
+            Builtin::HttpPost => "http_post",
         }
     }
 }

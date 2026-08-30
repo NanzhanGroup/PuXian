@@ -1,0 +1,21 @@
+## 普贤标准库演示（M10 std.net HTTPS）
+## 覆盖：HTTPS GET / HTTP→HTTPS 自动重定向 / 公开 API 调用
+## 说明：需要外网。回归脚本在断网时跳过本示例（见 compiler/tests/run_examples.sh）
+
+def main():
+    # ---- HTTPS GET（TLS 1.2/1.3，mbedtls/rustls）----
+    print("HTTPS GET https://example.com/ ...")
+    let b1 = http_get("https://example.com/")
+    print("  len=" + str(len(b1)) + " contains_html=" + str(contains(b1, "<!doctype html>")))
+
+    # ---- HTTP→HTTPS 自动重定向（http://example.com 返回 301 → https）----
+    print("HTTPS 重定向 http://example.com/ ...")
+    let b2 = http_get("http://example.com/")
+    print("  len=" + str(len(b2)) + " contains_html=" + str(contains(b2, "<!doctype html>")))
+
+    # ---- 公开 HTTPS API（GitHub 仓库信息，私有仓库返回 404 属正常）----
+    print("HTTPS API https://api.github.com/repos/NanzhanGroup/PuXian ...")
+    let b3 = http_get("https://api.github.com/repos/NanzhanGroup/PuXian")
+    print("  len=" + str(len(b3)) + " is_json=" + str(contains(b3, "{") and contains(b3, "}")))
+
+    print("HTTPS_DEMO OK")

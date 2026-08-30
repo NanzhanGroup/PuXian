@@ -21,6 +21,7 @@
 | 🔀 并发 | `spawn` 真并发、`channel` 阻塞通信、`select` 随机就绪，线程安全运行时 |
 | 🧹 内存 | 编译模式 C 运行时内置保守标记-清除 GC（循环引用可回收，自动触发） |
 | 🧩 模块化 | `import std.*` / `import foo.bar` / `from foo import x` / 相对路径导入；`px pkg` 包管理（init/add/install/list/remove） |
+| 🔒 网络 | `http_get` / `http_post` 支持 **HTTPS（TLS 1.2/1.3）** + 自动重定向；TCP 全功能 |
 | 🔧 工具链 | `px fmt` / `px lint` / `px test` / `px bench` / `px doc` / `px ast` 全内置 |
 | 🤖 AI 接入 | `px lsp`（语言服务器）、`px mcp`（MCP 服务器），AI 客户端可直接驱动 |
 | 📚 标准库 | io / fs / json / time / string / math / collections / os / net（含 .px 自举库） |
@@ -36,6 +37,9 @@ cd compiler
 cargo build --release
 # 产物：target/release/px
 ```
+
+> M10 起解释器依赖 rustls + webpki-roots（纯 Rust TLS），**首次构建需联网拉取依赖**（crates.io 或镜像）；
+> 编译模式内嵌 mbedtls 静态库（`compiler/runtime/mbedtls/`，随仓库提交），克隆即能 `px build` HTTPS 程序。
 
 ### Hello World
 
@@ -78,7 +82,7 @@ px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
 | [docs/requirements.md](docs/requirements.md) | 需求与设计讨论（动机、取舍、双模式架构） |
 | [docs/plan.md](docs/plan.md) | 开发方案（命名、里程碑规划、语言要点） |
 | [docs/spec.md](docs/spec.md) | 语言规格说明书（词法 / 语法 / 语义 / 标准库） |
-| [docs/PROGRESS.md](docs/PROGRESS.md) | 开发进度（M0–M9 产出与验证记录） |
+| [docs/PROGRESS.md](docs/PROGRESS.md) | 开发进度（M0–M10 产出与验证记录） |
 
 ## 里程碑进度
 
@@ -94,6 +98,7 @@ px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
 | M7 | LSP / MCP（AI 协议接入） | ✅ |
 | M8 | GC 值对象自动释放（编译模式 C 运行时） | ✅ |
 | M9 | 包管理器 / 模块化（px pkg + import 多文件） | ✅ |
+| M10 | HTTPS（std.net 加密网络：TLS 1.2/1.3 + 重定向 + POST） | ✅ |
 
 ---
 

@@ -189,6 +189,7 @@ impl Interpreter {
             ("tcp_recv", Builtin::TcpRecv),
             ("tcp_close", Builtin::TcpClose),
             ("http_get", Builtin::HttpGet),
+            ("http_post", Builtin::HttpPost),
         ];
         for (n, b) in names {
             g.define(n, Value::Builtin(*b));

@@ -19,8 +19,17 @@
 #include <netdb.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <strings.h>
 
-// std.net（M5.2）前向声明（定义在文件尾部，注册函数在前部使用）
+// M10 HTTPS：mbedtls 静态库（compiler/runtime/mbedtls/）
+#include "mbedtls/net_sockets.h"
+#include "mbedtls/ssl.h"
+#include "mbedtls/entropy.h"
+#include "mbedtls/ctr_drbg.h"
+#include "mbedtls/x509_crt.h"
+#include "mbedtls/error.h"
+
+// std.net（M5.2/M10）前向声明（定义在文件尾部，注册函数在前部使用）
 static LXValue bi_tcp_listen(LXValue* args, int nargs, void* ctx);
 static LXValue bi_tcp_accept(LXValue* args, int nargs, void* ctx);
 static LXValue bi_tcp_connect(LXValue* args, int nargs, void* ctx);
@@ -28,6 +37,11 @@ static LXValue bi_tcp_send(LXValue* args, int nargs, void* ctx);
 static LXValue bi_tcp_recv(LXValue* args, int nargs, void* ctx);
 static LXValue bi_tcp_close(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_get(LXValue* args, int nargs, void* ctx);
+static LXValue bi_http_post(LXValue* args, int nargs, void* ctx);
+
+// M10 HTTPS 内部辅助
+static char* lx_http_request(const char* url, const char* method, const char* body, int* out_len);
+static int lx_https_request(const char* host, int port, const char* req, char** out, int* out_len);
 
 // ==================== 内存分配（MVP 不释放） ====================
 
@@ -1919,6 +1933,7 @@ void lx_register_builtins(void) {
     lx_set_global("tcp_recv", lx_native("tcp_recv", bi_tcp_recv));
     lx_set_global("tcp_close", lx_native("tcp_close", bi_tcp_close));
     lx_set_global("http_get", lx_native("http_get", bi_http_get));
+    lx_set_global("http_post", lx_native("http_post", bi_http_post));
 }
 
 // ==================== 并发原语（M4.2） ====================
@@ -2211,77 +2226,299 @@ static LXValue bi_tcp_close(LXValue* args, int nargs, void* ctx) {
     return lx_null();
 }
 
-// 极简 HTTP GET（仅明文 http://，HTTP/1.0，不处理重定向/chunked）
+// ==================== M10 HTTP / HTTPS 客户端 ====================
+// 统一 http/https GET/POST：lx_http_request(url, method, body) → malloc 响应体
+// 自动跟随重定向（最多 5 次）；https 走 mbedtls（静态链接，保持静态二进制）
+
+// mbedtls 全局 CA 证书缓存（避免每次解析 CA bundle）
+static pthread_mutex_t g_cacert_mu = PTHREAD_MUTEX_INITIALIZER;
+static mbedtls_x509_crt g_cacert;
+static int g_cacert_loaded = 0;
+
+static void lx_ensure_cacert(void) {
+    pthread_mutex_lock(&g_cacert_mu);
+    if (!g_cacert_loaded) {
+        mbedtls_x509_crt_init(&g_cacert);
+        // RHEL 系与 Debian 系常见 CA bundle 路径
+        const char* paths[] = {
+            "/etc/pki/tls/certs/ca-bundle.crt",
+            "/etc/ssl/certs/ca-certificates.crt",
+            "/etc/ssl/cert.pem",
+            NULL
+        };
+        for (int i = 0; paths[i]; i++) {
+            if (mbedtls_x509_crt_parse_file(&g_cacert, paths[i]) == 0) {
+                g_cacert_loaded = 1;
+                break;
+            }
+        }
+    }
+    pthread_mutex_unlock(&g_cacert_mu);
+}
+
+// mbedtls HTTPS 请求：返回 malloc 响应（含响应头+体），*out_len 输出长度；0=成功
+static int lx_https_request(const char* host, int port, const char* req, char** out, int* out_len) {
+    mbedtls_net_context server_fd;
+    mbedtls_ssl_context ssl;
+    mbedtls_ssl_config conf;
+    mbedtls_ctr_drbg_context ctr_drbg;
+    mbedtls_entropy_context entropy;
+    int ret;
+    const char* pers = "px_https";
+
+    mbedtls_net_init(&server_fd);
+    mbedtls_ssl_init(&ssl);
+    mbedtls_ssl_config_init(&conf);
+    mbedtls_ctr_drbg_init(&ctr_drbg);
+    mbedtls_entropy_init(&entropy);
+
+    char portstr[16];
+    snprintf(portstr, sizeof(portstr), "%d", port);
+    ret = mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy,
+        (const unsigned char*)pers, strlen(pers));
+    if (ret != 0) { ret = -1001; goto cleanup; }
+    ret = mbedtls_net_connect(&server_fd, host, portstr, MBEDTLS_NET_PROTO_TCP);
+    if (ret != 0) { ret = -1002; goto cleanup; }
+
+    lx_ensure_cacert();
+    ret = mbedtls_ssl_config_defaults(&conf, MBEDTLS_SSL_IS_CLIENT,
+        MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT);
+    if (ret != 0) { ret = -1003; goto cleanup; }
+    mbedtls_ssl_conf_authmode(&conf, g_cacert_loaded ? MBEDTLS_SSL_VERIFY_REQUIRED : MBEDTLS_SSL_VERIFY_NONE);
+    mbedtls_ssl_conf_ca_chain(&conf, &g_cacert, NULL);
+    mbedtls_ssl_conf_rng(&conf, mbedtls_ctr_drbg_random, &ctr_drbg);
+    mbedtls_ssl_conf_min_version(&conf, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_3);
+
+    ret = mbedtls_ssl_setup(&ssl, &conf);
+    if (ret != 0) { ret = -1004; goto cleanup; }
+    mbedtls_ssl_set_hostname(&ssl, host);
+    mbedtls_ssl_set_bio(&ssl, &server_fd, mbedtls_net_send, mbedtls_net_recv, NULL);
+
+    int guard = 0;
+    while ((ret = mbedtls_ssl_handshake(&ssl)) != 0) {
+        if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
+            ret = -1005;
+            goto cleanup;
+        }
+        if (++guard > 40) { ret = -1006; goto cleanup; }
+    }
+
+    // 发送请求
+    int len = (int)strlen(req);
+    const char* rq = req;
+    while (len > 0) {
+        int w = mbedtls_ssl_write(&ssl, (const unsigned char*)rq, len);
+        if (w == MBEDTLS_ERR_SSL_WANT_WRITE || w == MBEDTLS_ERR_SSL_WANT_READ) continue;
+        if (w < 0) { ret = -1007; goto cleanup; }
+        len -= w;
+        rq += w;
+    }
+    // 读响应
+    int cap = 4096, total = 0;
+    char* buf = xmalloc(cap);
+    for (;;) {
+        if (total + 4096 > cap) { cap *= 2; buf = realloc(buf, cap); }
+        int n = mbedtls_ssl_read(&ssl, (unsigned char*)buf + total, 4096);
+        if (n == MBEDTLS_ERR_SSL_WANT_READ || n == MBEDTLS_ERR_SSL_WANT_WRITE) continue;
+        if (n <= 0) break;
+        total += n;
+    }
+    buf[total] = 0;
+    *out = buf;
+    *out_len = total;
+    ret = 0;
+cleanup:
+    mbedtls_net_free(&server_fd);
+    mbedtls_ssl_free(&ssl);
+    mbedtls_ssl_config_free(&conf);
+    mbedtls_ctr_drbg_free(&ctr_drbg);
+    mbedtls_entropy_free(&entropy);
+    return ret;
+}
+
+// 单次 HTTP 往返：返回 malloc 响应（响应头+体），解析状态码与 Location
+static char* lx_http_once(const char* url, const char* method, const char* body,
+    int* out_len, int* out_status, char* loc, int loc_cap) {
+    int is_https = 0;
+    const char* rest;
+    if (strncmp(url, "https://", 8) == 0) { is_https = 1; rest = url + 8; }
+    else if (strncmp(url, "http://", 7) == 0) { rest = url + 7; }
+    else { lx_error("net: 不支持的协议: %s", url); return NULL; }
+
+    char host[256];
+    int hostlen = 0;
+    while (rest[hostlen] && rest[hostlen] != '/' && rest[hostlen] != ':' && hostlen < 255) {
+        host[hostlen] = rest[hostlen];
+        hostlen++;
+    }
+    host[hostlen] = 0;
+    if (hostlen == 0) { lx_error("net: 主机名为空"); return NULL; }
+    int port = is_https ? 443 : 80;
+    const char* p = rest + hostlen;
+    if (*p == ':') {
+        port = atoi(p + 1);
+        if (port <= 0 || port > 65535) { lx_error("net: 端口非法"); return NULL; }
+        const char* q = p + 1;
+        while (*q && *q != '/') q++;
+        p = q;
+    }
+    const char* path = (*p == '/') ? p : "/";
+
+    // 构建请求
+    char req[4096];
+    int rlen = snprintf(req, sizeof(req),
+        "%s %s HTTP/1.0\r\nHost: %s:%d\r\nUser-Agent: PuXian/0.1\r\nConnection: close\r\n",
+        method, path, host, port);
+    if (body) {
+        rlen += snprintf(req + rlen, sizeof(req) - rlen,
+            "Content-Type: application/x-www-form-urlencoded\r\nContent-Length: %d\r\n",
+            (int)strlen(body));
+    }
+    rlen += snprintf(req + rlen, sizeof(req) - rlen, "\r\n");
+    if (body) {
+        memcpy(req + rlen, body, strlen(body));
+        rlen += (int)strlen(body);
+    }
+
+    char* resp = NULL;
+    int resp_len = 0;
+    if (is_https) {
+        int r = lx_https_request(host, port, req, &resp, &resp_len);
+        if (r != 0) { lx_error("net: HTTPS 请求失败 (%d) %s", r, host); return NULL; }
+    } else {
+        // 明文 http
+        struct addrinfo hints, *res = NULL;
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        char portstr[16];
+        snprintf(portstr, sizeof(portstr), "%d", port);
+        if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) { lx_error("net: 解析主机失败 %s", host); return NULL; }
+        int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+        if (fd < 0) { freeaddrinfo(res); lx_error("net: 创建 socket 失败"); return NULL; }
+        if (connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
+            freeaddrinfo(res);
+            close(fd);
+            lx_error("net: 连接 %s:%d 失败", host, port);
+            return NULL;
+        }
+        freeaddrinfo(res);
+        sock_send_all(fd, req, rlen);
+        int cap = 4096, len = 0;
+        resp = xmalloc(cap);
+        for (;;) {
+            if (len + 4096 > cap) { cap *= 2; resp = realloc(resp, cap); }
+            int n = (int)recv(fd, resp + len, 4096, 0);
+            if (n <= 0) break;
+            len += n;
+        }
+        close(fd);
+        resp[len] = 0;
+        resp_len = len;
+    }
+
+    // 解析状态码与 Location
+    int status = 0;
+    loc[0] = 0;
+    if (resp_len > 0) {
+        sscanf(resp, "HTTP/%*s %d", &status);
+        char* hdr_end = strstr(resp, "\r\n\r\n");
+        char* scan_end = hdr_end ? hdr_end : resp + resp_len;
+        char* line = resp;
+        while (line && line < scan_end) {
+            if (strncasecmp(line, "Location:", 9) == 0) {
+                char* v = line + 9;
+                while (*v == ' ' || *v == '\t') v++;
+                int vl = 0;
+                while (v[vl] && v[vl] != '\r' && v[vl] != '\n' && vl < loc_cap - 1) {
+                    loc[vl] = v[vl];
+                    vl++;
+                }
+                loc[vl] = 0;
+                break;
+            }
+            char* nl = strchr(line, '\n');
+            if (!nl || nl + 1 >= scan_end) break;
+            line = nl + 1;
+        }
+    }
+
+    *out_len = resp_len;
+    *out_status = status;
+    return resp;
+}
+
+// 统一 HTTP 请求：自动跟随重定向（最多 5 次），返回 malloc 响应体
+static char* lx_http_request(const char* url, const char* method, const char* body, int* out_len) {
+    char cur[2048];
+    snprintf(cur, sizeof(cur), "%s", url);
+    for (int i = 0; i < 5; i++) {
+        char loc[1024];
+        int status = 0;
+        int len = 0;
+        char* resp = lx_http_once(cur, method, body, &len, &status, loc, sizeof(loc));
+        if (status >= 300 && status < 400 && loc[0]) {
+            char next[2048];
+            if (strncmp(loc, "http://", 7) == 0 || strncmp(loc, "https://", 8) == 0) {
+                snprintf(next, sizeof(next), "%s", loc);
+            } else if (loc[0] == '/') {
+                const char* s = strstr(cur, "://");
+                if (!s) { free(resp); lx_error("net: 非法 URL"); return NULL; }
+                const char* hp = s + 3;
+                const char* hp_end = strchr(hp, '/');
+                int hplen = hp_end ? (int)(hp_end - hp) : (int)strlen(hp);
+                snprintf(next, sizeof(next), "%.*s://%.*s%s", (int)(s - cur), cur, hplen, hp, loc);
+            } else {
+                const char* s = strstr(cur, "://");
+                const char* hp = s + 3;
+                const char* hp_end = strchr(hp, '/');
+                int hplen = hp_end ? (int)(hp_end - hp) : (int)strlen(hp);
+                const char* dir = hp_end ? hp_end : "/";
+                const char* dslash = strrchr(dir, '/');
+                int dirlen = dslash ? (int)(dslash - dir + 1) : (int)strlen(dir);
+                snprintf(next, sizeof(next), "%.*s://%.*s%.*s%s", (int)(s - cur), cur, hplen, hp, dirlen, dir, loc);
+            }
+            free(resp);
+            snprintf(cur, sizeof(cur), "%s", next);
+            continue;
+        }
+        // 分离响应体
+        char* body_start = resp;
+        char* sep = strstr(resp, "\r\n\r\n");
+        if (sep) body_start = sep + 4;
+        int body_len = (int)(resp + len - body_start);
+        char* r = xmalloc(body_len + 1);
+        memcpy(r, body_start, body_len);
+        r[body_len] = 0;
+        free(resp);
+        *out_len = body_len;
+        return r;
+    }
+    lx_error("net: 重定向次数过多（>5）");
+    return NULL;
+}
+
+// http_get(url) → 响应体（支持 http/https，自动跟随重定向）
 static LXValue bi_http_get(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1 || args[0].type != LX_STR) lx_error("http_get 需要 (url) 参数");
     const char* url = args[0].as.obj->as.str.data;
-    if (strncmp(url, "http://", 7) != 0) lx_error("net: 仅支持 http:// 明文协议");
-    const char* p = url + 7;
-    // 提取 host[:port]
-    char host[256];
-    int hostlen = 0;
-    while (p[hostlen] && p[hostlen] != '/' && p[hostlen] != ':' && hostlen < 255) {
-        host[hostlen] = p[hostlen];
-        hostlen++;
-    }
-    host[hostlen] = 0;
-    if (hostlen == 0) lx_error("net: 主机名为空");
-    int port = 80;
-    if (p[hostlen] == ':') {
-        port = atoi(p + hostlen + 1);
-        if (port <= 0 || port > 65535) lx_error("net: 端口非法");
-        const char* q = p + hostlen + 1;
-        while (*q && *q != '/') q++;
-        p = q;
-    } else {
-        p = p + hostlen;
-    }
-    const char* path = (*p == '/') ? p : "/";
-    // 连接
-    struct addrinfo hints, *res = NULL;
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-    char portstr[16];
-    snprintf(portstr, sizeof(portstr), "%d", port);
-    if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) lx_error("net: 解析主机失败 %s", host);
-    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (fd < 0) { freeaddrinfo(res); lx_error("net: 创建 socket 失败"); }
-    if (connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
-        freeaddrinfo(res);
-        close(fd);
-        lx_error("net: 连接 %s:%d 失败", host, port);
-    }
-    freeaddrinfo(res);
-    // 发送 HTTP/1.0 GET
-    char req[2048];
-    snprintf(req, sizeof(req),
-        "GET %s HTTP/1.0\r\nHost: %s:%d\r\nUser-Agent: PuXian/0.1\r\nConnection: close\r\n\r\n",
-        path, host, port);
-    sock_send_all(fd, req, (int)strlen(req));
-    // 读全部响应
-    int cap = 4096, len = 0;
-    char* buf = xmalloc(cap);
-    for (;;) {
-        if (len + 4096 > cap) {
-            cap *= 2;
-            buf = realloc(buf, cap);
-        }
-        int n = (int)recv(fd, buf + len, 4096, 0);
-        if (n <= 0) break;
-        len += n;
-    }
-    close(fd);
-    buf[len] = 0;
-    // 分离响应头与响应体
-    char* body = buf;
-    char* sep = strstr(buf, "\r\n\r\n");
-    if (sep) {
-        *sep = 0;
-        body = sep + 4;
-    }
-    LXValue r = lx_str(body);
-    free(buf);
+    int len = 0;
+    char* body = lx_http_request(url, "GET", NULL, &len);
+    LXValue r = lx_str_len(body, len);
+    free(body);
+    return r;
+}
+
+// http_post(url, body) → 响应体（支持 http/https，自动跟随重定向）
+static LXValue bi_http_post(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2 || args[0].type != LX_STR || args[1].type != LX_STR) lx_error("http_post 需要 (url, body) 参数");
+    const char* url = args[0].as.obj->as.str.data;
+    const char* body = args[1].as.obj->as.str.data;
+    int len = 0;
+    char* resp = lx_http_request(url, "POST", body, &len);
+    LXValue r = lx_str_len(resp, len);
+    free(resp);
     return r;
 }

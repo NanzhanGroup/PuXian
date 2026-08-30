@@ -630,12 +630,20 @@ fn run_build(file: &str) -> ExitCode {
         return ExitCode::from(1);
     }
 
-    // gcc 编译（-static 静态链接；-pthread 支持并发原语）
+    // gcc 编译（-static 静态链接；-pthread 支持并发原语；-lmbedtls 支持 HTTPS）
+    // mbedtls 静态库位于 compiler/runtime/mbedtls/（M10 HTTPS）
+    let mbedtls_dir = runtime_dir.join("mbedtls");
+    let mbedtls_lib = mbedtls_dir.join("lib");
     let gcc_out = std::process::Command::new("gcc")
         .args(["-static", "-O2", "-pthread", "-o"])
         .arg(&out_path)
         .arg(&c_path)
         .arg(&dst_c)
+        .arg("-I")
+        .arg(mbedtls_dir.join("include"))
+        .arg(mbedtls_lib.join("libmbedtls.a"))
+        .arg(mbedtls_lib.join("libmbedx509.a"))
+        .arg(mbedtls_lib.join("libmbedcrypto.a"))
         .arg("-lm")
         .output();
 

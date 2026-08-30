@@ -637,9 +637,20 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
                 return Err(err("http_get 需要 (url) 参数", pos));
             }
             let url = expect_str(&args[0], "http_get", pos)?;
-            match http_get_impl(&url) {
+            match http_request(&url, "GET", None) {
                 Ok(body) => Ok(Value::Str(body)),
                 Err(e) => Err(LxError::new("R3009", format!("net: http_get 失败: {}", e), Some(pos))),
+            }
+        }
+        Builtin::HttpPost => {
+            if args.len() != 2 {
+                return Err(err("http_post 需要 (url, body) 参数", pos));
+            }
+            let url = expect_str(&args[0], "http_post", pos)?;
+            let body = expect_str(&args[1], "http_post", pos)?;
+            match http_request(&url, "POST", Some(&body)) {
+                Ok(b) => Ok(Value::Str(b)),
+                Err(e) => Err(LxError::new("R3009", format!("net: http_post 失败: {}", e), Some(pos))),
             }
         }
     }
@@ -677,47 +688,163 @@ fn net_close(id: i64) {
     net_listeners().lock().unwrap().remove(&id);
 }
 
-/// 极简 HTTP GET（仅明文 http://，HTTP/1.0 请求，不处理重定向/chunked）
-fn http_get_impl(url: &str) -> Result<String, String> {
-    let rest = url
-        .strip_prefix("http://")
-        .ok_or_else(|| format!("仅支持 http:// 明文协议: {}", url))?;
+/// HTTP 请求（M10：支持 http:// 与 https://，自动跟随重定向最多 5 次）
+/// 返回响应体。http/https 统一入口，GET/POST 均可。
+fn http_request(url: &str, method: &str, body: Option<&str>) -> Result<String, String> {
+    let mut cur = url.to_string();
+    for _ in 0..5 {
+        let (status, _head, resp_body, location) = http_once(&cur, method, body)?;
+        if (300..400).contains(&status) {
+            if let Some(loc) = location {
+                cur = resolve_url(&cur, &loc)?;
+                continue;
+            }
+        }
+        return Ok(resp_body);
+    }
+    Err("重定向次数过多（>5）".to_string())
+}
+
+/// 解析相对 Location 为完整 URL（基于当前 URL）
+fn resolve_url(base: &str, loc: &str) -> Result<String, String> {
+    if loc.starts_with("http://") || loc.starts_with("https://") {
+        return Ok(loc.to_string());
+    }
+    // 取 scheme://host[:port]
+    let scheme_end = base.find("://").ok_or("非法 base URL")?;
+    let scheme = &base[..scheme_end];
+    let rest = &base[scheme_end + 3..];
+    let hostport = match rest.find('/') {
+        Some(i) => &rest[..i],
+        None => rest,
+    };
+    if loc.starts_with('/') {
+        Ok(format!("{}://{}{}", scheme, hostport, loc))
+    } else {
+        // 相对路径：取当前路径目录
+        let dir = match rest.find('/') {
+            Some(i) => {
+                let p = &rest[i..];
+                match p.rfind('/') {
+                    Some(j) => &p[..j + 1],
+                    None => "/",
+                }
+            }
+            None => "/",
+        };
+        Ok(format!("{}://{}{}{}", scheme, hostport, dir, loc))
+    }
+}
+
+/// 单次 HTTP 往返（不重定向）：返回 (状态码, 响应头, 响应体, Location)
+fn http_once(url: &str, method: &str, body: Option<&str>) -> Result<(u16, String, String, Option<String>), String> {
+    let (scheme, rest) = if let Some(r) = url.strip_prefix("https://") {
+        ("https", r)
+    } else if let Some(r) = url.strip_prefix("http://") {
+        ("http", r)
+    } else {
+        return Err(format!("不支持的协议: {}（支持 http:// 与 https://）", url));
+    };
     let (hostport, path) = match rest.find('/') {
         Some(i) => (&rest[..i], &rest[i..]),
         None => (rest, "/"),
     };
     let (host, port) = match hostport.find(':') {
         Some(i) => (
-            &hostport[..i],
-            hostport[i + 1..].parse::<u16>().map_err(|_| format!("端口非法: {}", hostport))?,
+            hostport[..i].to_string(),
+            hostport[i + 1..]
+                .parse::<u16>()
+                .map_err(|_| format!("端口非法: {}", hostport))?,
         ),
-        None => (hostport, 80u16),
+        None => (
+            hostport.to_string(),
+            if scheme == "https" { 443u16 } else { 80u16 },
+        ),
     };
     if host.is_empty() {
         return Err("主机名为空".to_string());
     }
     use std::io::{Read, Write};
-    let addr = format!("{}:{}", host, port);
-    let mut stream = std::net::TcpStream::connect(&addr)
-        .map_err(|e| format!("连接 {} 失败: {}", addr, e))?;
-    let req = format!(
-        "GET {} HTTP/1.0\r\nHost: {}\r\nUser-Agent: PuXian/0.1\r\nConnection: close\r\n\r\n",
-        path, hostport
-    );
-    stream
-        .write_all(req.as_bytes())
-        .map_err(|e| format!("发送请求失败: {}", e))?;
-    let mut resp = Vec::new();
-    stream
-        .read_to_end(&mut resp)
-        .map_err(|e| format!("读取响应失败: {}", e))?;
-    let resp = String::from_utf8_lossy(&resp).to_string();
-    // 分离响应头与响应体
-    let body = match resp.find("\r\n\r\n") {
-        Some(i) => resp[i + 4..].to_string(),
-        None => resp,
+    let host_header = if hostport.contains(':') {
+        hostport.to_string()
+    } else {
+        format!("{}:{}", host, port)
     };
-    Ok(body)
+    let mut req = format!(
+        "{} {} HTTP/1.0\r\nHost: {}\r\nUser-Agent: PuXian/0.1\r\nConnection: close\r\n",
+        method, path, host_header
+    );
+    if let Some(b) = body {
+        req.push_str(&format!(
+            "Content-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n",
+            b.len()
+        ));
+    }
+    req.push_str("\r\n");
+    if let Some(b) = body {
+        req.push_str(b);
+    }
+    let resp = if scheme == "https" {
+        https_request(&host, port, &req)?
+    } else {
+        let addr = format!("{}:{}", host, port);
+        let mut stream = std::net::TcpStream::connect(&addr)
+            .map_err(|e| format!("连接 {} 失败: {}", addr, e))?;
+        stream
+            .write_all(req.as_bytes())
+            .map_err(|e| format!("发送请求失败: {}", e))?;
+        let mut resp = Vec::new();
+        stream
+            .read_to_end(&mut resp)
+            .map_err(|e| format!("读取响应失败: {}", e))?;
+        resp
+    };
+    let resp_str = String::from_utf8_lossy(&resp).to_string();
+    let (head, body_str) = match resp_str.find("\r\n\r\n") {
+        Some(i) => (&resp_str[..i], resp_str[i + 4..].to_string()),
+        None => (&resp_str[..], resp_str.clone()),
+    };
+    // 状态码
+    let status = head
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(0);
+    // Location 头（重定向）
+    let mut location = None;
+    for line in head.lines().skip(1) {
+        if let Some(v) = line
+            .strip_prefix("Location:")
+            .or_else(|| line.strip_prefix("location:"))
+        {
+            location = Some(v.trim().to_string());
+        }
+    }
+    Ok((status, head.to_string(), body_str, location))
+}
+
+/// HTTPS 请求（rustls TLS 1.2/1.3，内置 webpki-roots 根证书）
+fn https_request(host: &str, port: u16, req: &str) -> Result<Vec<u8>, String> {
+    use std::io::{Read, Write};
+    let mut roots = rustls::RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let cfg = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let server_name = rustls::pki_types::ServerName::try_from(host.to_string())
+        .map_err(|_| format!("非法主机名: {}", host))?;
+    let mut sock = std::net::TcpStream::connect((host, port))
+        .map_err(|e| format!("连接 {}:{} 失败: {}", host, port, e))?;
+    let mut conn = rustls::ClientConnection::new(std::sync::Arc::new(cfg), server_name)
+        .map_err(|e| format!("TLS 初始化失败: {}", e))?;
+    let mut tls = rustls::Stream::new(&mut conn, &mut sock);
+    tls.write_all(req.as_bytes())
+        .map_err(|e| format!("TLS 发送失败: {}", e))?;
+    let mut resp = Vec::new();
+    tls.read_to_end(&mut resp)
+        .map_err(|e| format!("TLS 读取失败: {}", e))?;
+    Ok(resp)
 }
 
 // ==================== M5 JSON 工具 ====================
@@ -1063,5 +1190,52 @@ fn list_of(v: &Value, fname: &str, pos: Pos) -> Result<Vec<Value>, LxError> {
         Value::List(l) => Ok(l.lock().unwrap().clone()),
         Value::Tuple(t) => Ok(t.clone()),
         _ => Err(err(format!("{} 第一个参数需要 list/tuple", fname), pos)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_url_absolute() {
+        assert_eq!(
+            resolve_url("https://a.com/x", "https://b.com/y").unwrap(),
+            "https://b.com/y"
+        );
+        assert_eq!(
+            resolve_url("http://a.com/x", "http://b.com/y").unwrap(),
+            "http://b.com/y"
+        );
+    }
+
+    #[test]
+    fn test_resolve_url_root_relative() {
+        assert_eq!(
+            resolve_url("https://a.com/path/page", "/new").unwrap(),
+            "https://a.com/new"
+        );
+        assert_eq!(
+            resolve_url("http://a.com:8080/p", "/q").unwrap(),
+            "http://a.com:8080/q"
+        );
+    }
+
+    #[test]
+    fn test_resolve_url_relative_dir() {
+        assert_eq!(
+            resolve_url("https://a.com/dir/page", "other").unwrap(),
+            "https://a.com/dir/other"
+        );
+        assert_eq!(
+            resolve_url("https://a.com/page", "sub").unwrap(),
+            "https://a.com/sub"
+        );
+    }
+
+    #[test]
+    fn test_http_once_rejects_bad_scheme() {
+        let e = http_once("ftp://x.com/", "GET", None).unwrap_err();
+        assert!(e.contains("不支持的协议"));
     }
 }

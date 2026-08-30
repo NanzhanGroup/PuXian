@@ -4,3 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# M10 HTTPS：纯 Rust TLS 客户端（rustls + webpki-roots 内置根证书）
+# 首次编译需联网拉取依赖（crates.io 或镜像）
+rustls = { version = "0.23", default-features = false, features = ["ring", "tls12", "logging", "std"] }
+rustls-pki-types = "1"
+webpki-roots = "0.26"
