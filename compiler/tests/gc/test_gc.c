@@ -77,7 +77,9 @@ int main(void) {
     assert(runs_after > runs_before);
 
     // 5. 深链标记不栈溢出（显式栈 DFS）
-    LXValue root = make_deep(200000);
+    //    （M11 分配器为 mmap 每对象一页 ≈4KB；200000 层 ≈ 800MB 超小内存服务器
+    //     → 降为 50000 层 ≈ 200MB，测试目的"深链不栈溢出"不变）
+    LXValue root = make_deep(50000);
     lx_set_global("deep", root);
     create_garbage(10000);
     lx_gc_collect();
@@ -87,8 +89,8 @@ int main(void) {
         cur = lx_index(cur, lx_int(0));
         depth++;
     }
-    fprintf(stderr, "[5] 深链 depth=%d (期望 200000)\n", depth);
-    assert(depth == 200000);
+    fprintf(stderr, "[5] 深链 depth=%d (期望 50000)\n", depth);
+    assert(depth == 50000);
 
     printf("ALL GC TESTS PASSED\n");
     return 0;

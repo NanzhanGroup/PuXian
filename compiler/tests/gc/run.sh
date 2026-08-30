@@ -10,6 +10,12 @@ gcc -std=c99 -O2 -Iruntime -I$MB/include tests/gc/test_gc.c runtime/runtime.c \
     -o /tmp/test_gc -lpthread -lm
 /tmp/test_gc
 echo "---"
+echo "并发 GC 测试（M11）："
+gcc -std=c99 -O2 -Iruntime -I$MB/include tests/gc/test_gc_concurrent.c runtime/runtime.c \
+    $MB/lib/libmbedtls.a $MB/lib/libmbedx509.a $MB/lib/libmbedcrypto.a \
+    -o /tmp/test_gc_conc -lpthread -lm
+/tmp/test_gc_conc
+echo "---"
 echo "GC 演示（编译模式 + 内存对照）："
 gcc -std=c99 -O2 -Iexamples/build -Iruntime -I$MB/include examples/build/gc_demo.c runtime/runtime.c \
     $MB/lib/libmbedtls.a $MB/lib/libmbedx509.a $MB/lib/libmbedcrypto.a \

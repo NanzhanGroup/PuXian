@@ -1,6 +1,7 @@
 // 普贤 (PuXian) C 运行时库 — runtime.c
 // M4 编译模式：动态值系统 + 内置函数
-// M8：值对象自动释放（保守标记-清除 GC；并发活跃时降级不回收，线程退出后自动恢复）
+// M8：值对象自动释放（保守标记-清除 GC）
+// M11：并发 GC（spawn 活跃时 stop-the-world 全量回收 + 多线程栈/寄存器保守扫描）
 #define _GNU_SOURCE
 #include "runtime.h"
 #include <stdio.h>
@@ -20,6 +21,9 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <strings.h>
+#include <signal.h>
+#include <sys/mman.h>
+#include <stdatomic.h>
 
 // M10 HTTPS：mbedtls 静态库（compiler/runtime/mbedtls/）
 #include "mbedtls/net_sockets.h"
@@ -28,6 +32,10 @@
 #include "mbedtls/ctr_drbg.h"
 #include "mbedtls/x509_crt.h"
 #include "mbedtls/error.h"
+
+// 前向声明：xmalloc/xfree 在 gc_block_stop 定义之前使用（M11 自由链表分配器）
+static void gc_block_stop(sigset_t* old);
+static void gc_unblock_stop(const sigset_t* old);
 
 // std.net（M5.2/M10）前向声明（定义在文件尾部，注册函数在前部使用）
 static LXValue bi_tcp_listen(LXValue* args, int nargs, void* ctx);
@@ -43,11 +51,43 @@ static LXValue bi_http_post(LXValue* args, int nargs, void* ctx);
 static char* lx_http_request(const char* url, const char* method, const char* body, int* out_len);
 static int lx_https_request(const char* host, int port, const char* req, char** out, int* out_len);
 
-// ==================== 内存分配（MVP 不释放） ====================
+// ==================== 内存分配（M11：mmap/munmap，无 glibc 堆锁） ====================
+// M11 并发 GC：sweep 会释放对象，而其他线程可能正在 malloc/free 中被 GC 信号挂起
+// （持有 glibc 堆锁）→ GC 主线程 free 会死锁。因此对象与子分配全部改用
+// mmap/munmap（纯 syscall，无用户态堆锁）：信号挂起在 mmap/munmap 中不持有堆锁，
+// GC 释放不会与"被挂起的分配线程"互相阻塞。
+// 已知限制：每次分配映射一页（4KB/对象），大量小对象场景内存放大（如 20 万对象
+// ≈ 800MB）。slab/子分配器优化列入 M12。
 
 static void* xmalloc(size_t n) {
-    void* p = malloc(n ? n : 1);
-    if (!p) { fprintf(stderr, "lx: 内存不足\n"); exit(1); }
+    if (n <= 0) n = 1;
+    size_t pg = 4096;
+    size_t total = (n + sizeof(size_t) + pg - 1) & ~(size_t)(pg - 1);
+    void* p = mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) { fprintf(stderr, "lx: 内存不足\n"); exit(1); }
+    *(size_t*)p = total;   // 记录映射大小（xfree/xrealloc 使用）
+    return (char*)p + sizeof(size_t);
+}
+
+static void xfree(void* p) {
+    if (!p) return;
+    size_t total = *(size_t*)((char*)p - sizeof(size_t));
+    munmap((char*)p - sizeof(size_t), total);
+}
+
+static void* xrealloc(void* p, size_t n) {
+    if (!p) return xmalloc(n);
+    size_t old_size = *(size_t*)((char*)p - sizeof(size_t)) - sizeof(size_t);
+    if (n <= old_size) return p;   // 容量足够，不缩小
+    void* np = xmalloc(n);
+    memcpy(np, p, old_size);
+    xfree(p);
+    return np;
+}
+
+static void* xcalloc(size_t n, size_t sz) {
+    void* p = xmalloc(n * sz);
+    memset(p, 0, n * sz);
     return p;
 }
 
@@ -69,9 +109,11 @@ static int g_len = 0;
 // 所有 LXObject 注册到全局对象表 g_objs。分配累计超阈值 → gc_collect()：
 //   1) mark：根 = 全局表 + 暂存根（刚创建对象）+ 当前线程栈保守扫描
 //   2) sweep：未标记对象释放子分配 + 本体，从表移除
-// 并发保护：spawn 线程活跃（g_active_threads > 0）时跳过回收（保持 MVP 行为），
-// 全部线程退出后自动恢复 GC。保守扫描只认对象本体地址（8 字节对齐），
-// 误标仅推迟回收（安全），漏标由暂存根 + 全局表 + 栈扫描综合兜底。
+// 并发保护（M11）：spawn 线程活跃时 stop-the-world——GC 主线程向所有活跃线程
+// 发送 SIG_GC_STOP 实时信号，线程在信号处理器中保存上下文（寄存器）+ 暂存根后
+// 自旋等待 g_gc_resume；GC 扫描全局表 + 所有线程栈/寄存器后清扫，再恢复线程。
+// 保守扫描只认对象本体地址（8 字节对齐），误标仅推迟回收（安全），漏标由暂存根
+// + 全局表 + 栈扫描综合兜底。
 
 #define GC_THRESHOLD_DEFAULT 100000   // 对象数触发阈值（可被 PX_GC_THRESHOLD 覆盖）
 #define GC_HASH_MIN_CAP 4096          // 对象地址哈希集合初始容量
@@ -85,7 +127,26 @@ static long long g_gc_trigger_bytes = 0;  // 0 = 未启用字节阈值
 static int g_gc_threshold = GC_THRESHOLD_DEFAULT;
 static int g_gc_env_inited = 0;
 static int g_gc_debug = 0;
-static int g_active_threads = 0;   // spawn 活跃线程数（>0 时 GC 跳过）
+static int g_active_threads = 0;   // spawn 活跃线程数（>0 时进入并发 GC 路径）
+
+// M11 并发 GC：线程注册表 + 暂停协议
+#define MAX_SPAWN_THREADS 64
+#define SIG_GC_STOP (SIGRTMIN + 2)   // 实时信号：暂停线程（可排队，不与用户信号冲突）
+typedef struct {
+    pthread_t tid;
+    int in_use;          // 槽位占用
+    int paused;          // 该线程已暂停（在信号处理器中等待恢复）
+    int is_main;         // 主线程槽位（退出时不注销）
+    int epoch;           // 暂停所属 GC 轮次（用于区分"本轮真暂停"与"堆积信号短暂暂停"）
+    ucontext_t uc;       // 暂停时保存的上下文（寄存器）
+    LXObject* tmp_root;  // 暂停时该线程的暂存根（__thread 跨线程不可读，由处理器保存）
+} GCThreadInfo;
+static GCThreadInfo g_threads[MAX_SPAWN_THREADS];
+static int g_paused_count = 0;      // 已暂停线程数（调试用；控制流以 paused 标志 + epoch 为准）
+static volatile int g_gc_resume = 0;// （保留字段，控制流以 epoch 为准）
+static volatile int g_gc_epoch = 0; // GC 轮次号：每轮开始/结束各 ++，handler 等待其变化
+static volatile int g_gc_stop_in_progress = 0; // 本轮 GC 是否在进行中（handler 用其区分过期堆积信号）
+static volatile pthread_t g_gc_executor = 0;   // 当前 GC 主线程（执行 lx_gc_collect 的线程）；handler 用它自检防自打断
 static int g_gc_runs = 0;
 static int g_gc_freed = 0;
 static int g_gc_skips = 0;
@@ -102,7 +163,7 @@ typedef struct {
 static void gc_hash_init(GCHash* h, size_t cap) {
     size_t c = GC_HASH_MIN_CAP;
     while (c < cap) c <<= 1;
-    h->slots = calloc(c, sizeof(uintptr_t));
+    h->slots = xcalloc(c, sizeof(uintptr_t));
     h->cap = c;
     h->count = 0;
 }
@@ -110,7 +171,7 @@ static void gc_hash_init(GCHash* h, size_t cap) {
 static void gc_hash_insert(GCHash* h, uintptr_t addr) {
     if ((h->count + 1) * 10 >= h->cap * 7) {  // load factor 0.7 扩容
         size_t ncap = h->cap << 1;
-        uintptr_t* ns = calloc(ncap, sizeof(uintptr_t));
+        uintptr_t* ns = xcalloc(ncap, sizeof(uintptr_t));
         for (size_t i = 0; i < h->cap; i++) {
             uintptr_t a = h->slots[i];
             if (!a) continue;
@@ -118,43 +179,59 @@ static void gc_hash_insert(GCHash* h, uintptr_t addr) {
             while (ns[j]) j = (j + 1) & (ncap - 1);
             ns[j] = a;
         }
-        free(h->slots);
+        xfree(h->slots);
         h->slots = ns;
         h->cap = ncap;
     }
     size_t j = (size_t)(addr ^ (addr >> 16)) & (h->cap - 1);
-    while (h->slots[j]) j = (j + 1) & (h->cap - 1);
-    h->slots[j] = addr;
-    h->count++;
+    for (size_t probes = 0; probes <= h->cap; probes++) {
+        if (!h->slots[j]) { h->slots[j] = addr; h->count++; return; }
+        j = (j + 1) & (h->cap - 1);
+    }
+    // 防御：表满（理论不可达），丢弃该插入
 }
 
 static bool gc_hash_has(GCHash* h, uintptr_t addr) {
     size_t j = (size_t)(addr ^ (addr >> 16)) & (h->cap - 1);
-    while (h->slots[j]) {
-        if (h->slots[j] == addr) return true;
+    // 防御：探测上限 cap+1 次，防止表损坏/满载时线性探测死循环导致 GC 卡死
+    for (size_t probes = 0; probes <= h->cap; probes++) {
+        uintptr_t s = h->slots[j];
+        if (!s) return false;
+        if (s == addr) return true;
         j = (j + 1) & (h->cap - 1);
     }
     return false;
 }
 
-static void gc_hash_free(GCHash* h) { free(h->slots); h->slots = NULL; }
+static void gc_hash_free(GCHash* h) { xfree(h->slots); h->slots = NULL; }
 
+static void gc_install_handler(void);
+static void gc_ensure_main_registered(void);
 static void gc_init_env(void) {
     const char* d = getenv("PX_GC_DEBUG");
     if (d && d[0] == '1') g_gc_debug = 1;
     const char* t = getenv("PX_GC_THRESHOLD");
     if (t && atoi(t) > 0) g_gc_threshold = atoi(t);
+    gc_install_handler();
+    gc_ensure_main_registered();
     g_gc_env_inited = 1;
 }
 
 static void gc_debug(const char* fmt, ...) {
     if (!g_gc_debug) return;
+    // 注意：必须用 write(2) 直写 fd，不能经 stdio（fprintf）——
+    // GC 主线程持 g_gc_mu 时若 fprintf，而某线程在 printf 中被 GC 信号挂起
+    // （持有 stdio 内部锁），会死锁。write 是原子 syscall，无 stdio 锁。
+    char buf[512];
+    int n = snprintf(buf, sizeof(buf), "[px-gc] ");
     va_list ap;
     va_start(ap, fmt);
-    fprintf(stderr, "[px-gc] ");
-    vfprintf(stderr, fmt, ap);
-    fprintf(stderr, "\n");
+    n += vsnprintf(buf + n, sizeof(buf) - n, fmt, ap);
     va_end(ap);
+    if (n < 0) n = 0;
+    if (n > (int)sizeof(buf) - 2) n = (int)sizeof(buf) - 2;
+    buf[n++] = '\n';
+    (void)write(2, buf, (size_t)n);
 }
 
 static bool lx_value_is_obj(LXValue v) {
@@ -177,47 +254,50 @@ static bool lx_value_is_obj(LXValue v) {
 // 释放对象内部子分配 + 对象本体（sweep 阶段调用）
 static void lx_obj_free(LXObject* o) {
     switch (o->type) {
-        case LX_STR: free(o->as.str.data); break;
-        case LX_LIST: free(o->as.list.items); break;
+        case LX_STR: xfree(o->as.str.data); break;
+        case LX_LIST: xfree(o->as.list.items); break;
         case LX_DICT:
-            for (int i = 0; i < o->as.dict.len; i++) free(o->as.dict.keys[i]);
-            free(o->as.dict.keys);
-            free(o->as.dict.vals);
+            for (int i = 0; i < o->as.dict.len; i++) xfree(o->as.dict.keys[i]);
+            xfree(o->as.dict.keys);
+            xfree(o->as.dict.vals);
             break;
-        case LX_FUNC: free(o->as.func.name); break;
-        case LX_NATIVE: free(o->as.native.name); break;
+        case LX_FUNC: xfree(o->as.func.name); break;
+        case LX_NATIVE: xfree(o->as.native.name); break;
         case LX_STRUCT:
-            free(o->as.struct_inst.type_name);
-            for (int i = 0; i < o->as.struct_inst.nfields; i++) free(o->as.struct_inst.fnames[i]);
-            free(o->as.struct_inst.fnames);
-            free(o->as.struct_inst.fvals);
+            xfree(o->as.struct_inst.type_name);
+            for (int i = 0; i < o->as.struct_inst.nfields; i++) xfree(o->as.struct_inst.fnames[i]);
+            xfree(o->as.struct_inst.fnames);
+            xfree(o->as.struct_inst.fvals);
             break;
         case LX_ENUM:
-            free(o->as.enum_inst.type_name);
-            free(o->as.enum_inst.variant);
+            xfree(o->as.enum_inst.type_name);
+            xfree(o->as.enum_inst.variant);
             break;
-        case LX_TUPLE: free(o->as.tuple.items); break;
+        case LX_TUPLE: xfree(o->as.tuple.items); break;
         case LX_CHAN:
-            free(o->as.chan.buf);
+            xfree(o->as.chan.buf);
             pthread_mutex_destroy(&o->as.chan.mu);
             pthread_cond_destroy(&o->as.chan.cv_send);
             pthread_cond_destroy(&o->as.chan.cv_recv);
             break;
         default: break;
     }
-    free(o);
+    xfree(o);
 }
 
 // 标记单个对象及其可达子对象（显式栈 DFS，避免深链递归栈溢出）
+// M11：每个出栈对象先用 gc_hash_has 校验是否在对象表（set）——并发数据竞争
+// 可能使对象图出现损坏指针（如 list.items 指向已释放/半构造区域），
+// 校验后跳过垃圾指针，避免 DFS 无限遍历损坏对象图导致 GC 卡死。
 static void gc_mark_obj(GCHash* set, LXObject* o) {
     if (!o) return;
-    (void)set;
     LXObject** stack = xmalloc(sizeof(LXObject*) * 1024);
     int cap = 1024, sp = 0;
-#define PUSH_OBJ(x) do { if (sp >= cap) { cap *= 2; stack = realloc(stack, sizeof(LXObject*) * cap); } stack[sp++] = (x); } while (0)
+#define PUSH_OBJ(x) do { if (sp >= cap) { cap *= 2; stack = xrealloc(stack, sizeof(LXObject*) * cap); } stack[sp++] = (x); } while (0)
     PUSH_OBJ(o);
     while (sp > 0) {
         LXObject* cur = stack[--sp];
+        if (!gc_hash_has(set, (uintptr_t)cur)) continue;   // 垃圾指针 → 跳过
         if (cur->gc_mark) continue;
         cur->gc_mark = 1;
         g_gc_marked++;
@@ -251,7 +331,7 @@ static void gc_mark_obj(GCHash* set, LXObject* o) {
                 break;
             }
             case LX_CHAN: {
-                // GC 仅在 active_threads==0 时执行，此时无并发访问，安全
+                // M11：并发下无锁保守扫描（chan.buf 元素为单 word 原子读写，误标仅推迟回收）
                 LXValue* buf = cur->as.chan.buf;
                 int phys = cur->as.chan.cap > 0 ? cur->as.chan.cap : 1;
                 for (int i = 0; i < phys; i++) {
@@ -262,11 +342,13 @@ static void gc_mark_obj(GCHash* set, LXObject* o) {
             default: break;  // STR / FUNC / NATIVE / ENUM 无子对象
         }
     }
-    free(stack);
+    xfree(stack);
 #undef PUSH_OBJ
 }
 
-// 当前线程栈保守扫描：把栈上"看起来像对象地址"的 word 标记为根
+// 当前线程栈保守扫描：把栈上"看起来像对象地址"的 word 标记为根。
+// 只扫描活跃帧 [当前 RSP, 栈底)——整栈（默认 8MB）逐 word 哈希查找太慢
+// （每次 GC 多线程 × 百万 word），且未使用栈区无有效指针。
 static void gc_scan_stack(GCHash* set) {
     pthread_attr_t attr;
     void* stackaddr = NULL;
@@ -276,10 +358,12 @@ static void gc_scan_stack(GCHash* set) {
         pthread_attr_destroy(&attr);
     }
     if (!stackaddr || stacksize == 0) return;
-    volatile char probe = 0;
-    uintptr_t cur = (uintptr_t)&probe;          // 当前栈位置（x86_64 栈向下增长）
-    uintptr_t end = (uintptr_t)stackaddr + stacksize;  // 栈底（高地址）
-    uintptr_t start = cur & ~(uintptr_t)7;
+    ucontext_t uc;
+    getcontext(&uc);
+    uintptr_t rsp = (uintptr_t)uc.uc_mcontext.gregs[REG_RSP];
+    uintptr_t start = rsp & ~(uintptr_t)7;
+    uintptr_t end = (uintptr_t)stackaddr + stacksize;
+    if (g_gc_debug) { char dbg[160]; int dn = snprintf(dbg, sizeof(dbg), "[scan-self] rsp=%lx start=%lx end=%lx range=%lu\n", rsp, start, end, (unsigned long)(end - start)); (void)write(2, dbg, (size_t)dn); }
     for (uintptr_t p = start; p + sizeof(uintptr_t) <= end; p += sizeof(uintptr_t)) {
         uintptr_t w = *(uintptr_t*)p;
         if ((w & 7) == 0 && gc_hash_has(set, w)) {
@@ -295,38 +379,320 @@ static void gc_scan_stack(GCHash* set) {
 // 被 gc_scan_stack 保守扫描覆盖。
 #include <ucontext.h>
 
-// 主回收入口：mark + sweep
-void lx_gc_collect(void) {
-    pthread_mutex_lock(&g_gc_mu);
-    if (!g_gc_env_inited) gc_init_env();
-    if (g_active_threads > 0) {  // 并发活跃：降级不回收
-        g_gc_skips++;
-        pthread_mutex_unlock(&g_gc_mu);
+// ==================== M11 并发 GC：线程暂停协议 ====================
+// 设计：GC 需要 stop-the-world 时，向所有已注册活跃线程发送 SIG_GC_STOP 实时信号。
+// 线程在信号处理器中（async-signal-safe，仅内存读写 + sched_yield）：
+//   保存 ucontext（寄存器）+ 本线程暂存根 → 计数 paused → 自旋等待 g_gc_resume → 恢复。
+// GC 主线程（触发 GC 的线程）不暂停自己，扫描：全局表 + 自己栈/寄存器 + 所有暂停
+// 线程的寄存器/栈/暂存根，然后设置 g_gc_resume=1 唤醒全部线程。
+
+// 信号处理器：暂停当前线程直到 GC 完成
+static void gc_stop_handler(int sig, siginfo_t* si, void* ctx) {
+    (void)sig; (void)si;
+    pthread_t me = pthread_self();
+    // M11 修复⑤：若我是当前 GC 执行者（正在跑 lx_gc_collect），忽略暂停信号——
+    // 否则延迟信号在本轮 GC 执行中投递，handler 自旋等 epoch，而 epoch 只有
+    // 本线程自己能推进 → 死锁（依赖 5 秒兜底才恢复，每轮 GC 卡 5 秒）。
+    if (g_gc_executor && pthread_equal(g_gc_executor, me)) return;
+    GCThreadInfo* ti = NULL;
+    for (int i = 0; i < MAX_SPAWN_THREADS; i++) {
+        if (g_threads[i].in_use && pthread_equal(g_threads[i].tid, me)) { ti = &g_threads[i]; break; }
+    }
+    if (!ti) return;  // 理论不会：未注册线程收到暂停信号
+    // 关键：区分"有效暂停请求"与"过期堆积信号"。
+    // 若当前没有 GC 在进行（g_gc_stop_in_progress==0），说明这是上一轮排队、
+    // 延迟到现在才处理的信号——直接忽略返回，避免 my_epoch 捕获当前 epoch 后
+    // 自旋等待一个永远不会到来的"本轮结束"（死锁）。
+    if (!g_gc_stop_in_progress) {
+        if (g_gc_debug) { char dbg[96]; int dn = snprintf(dbg, sizeof(dbg), "[stop-expired] tid=%lx\n", (unsigned long)me); (void)write(2, dbg, (size_t)dn); }
         return;
     }
+    if (g_gc_debug) {
+        char dbg[128];
+        int dn = snprintf(dbg, sizeof(dbg), "[stop] tid=%lx\n", (unsigned long)me);
+        (void)write(2, dbg, (size_t)dn);
+    }
+    ti->uc = *(const ucontext_t*)ctx;
+    ti->tmp_root = g_tmp_root;
+    ti->epoch = g_gc_epoch;   // 记录暂停所属轮次
+    ti->paused = 1;
+    __sync_fetch_and_add(&g_paused_count, 1);
+    __sync_synchronize();
+    // 自旋等待本轮 GC 结束：条件 = 本轮仍在进行（stop_in_progress）且 epoch 未变。
+    // 若本轮已结束（stop 已清除，信号为延迟/堆积）→ 立即退出，绝不空等——
+    // 否则会自旋等待一个永远不会到来的"本轮结束"（偶发死锁）。
+    // 兜底：自旋超上限（约 5 秒）强制恢复，宁可漏回收也绝不卡死。
+    int my_epoch = g_gc_epoch;
+    int hspins = 0;
+    while (g_gc_stop_in_progress && g_gc_epoch == my_epoch) {
+        sched_yield();
+        if (++hspins > 5000000) break;
+    }
+    __sync_synchronize();
+    ti->paused = 0;
+    __sync_fetch_and_add(&g_paused_count, -1);
+}
+
+static void gc_install_handler(void) {
+    static int installed = 0;
+    if (installed) return;
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = gc_stop_handler;
+    sa.sa_flags = SA_SIGINFO | SA_RESTART;  // SA_RESTART：被信号打断的系统调用自动重启
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIG_GC_STOP, &sa, NULL);
+    installed = 1;
+}
+
+// 结构修改关键区信号屏蔽：防止线程在 realloc/写元素中途被 GC 信号挂起，
+// 导致 GC 标记读到半更新状态（旧 items 指针已 free / 容量未同步等）。
+// 仅屏蔽 SIG_GC_STOP，不影响其他信号；chan.buf 单 word 原子写无需屏蔽。
+static void gc_block_stop(sigset_t* old) {
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIG_GC_STOP);
+    pthread_sigmask(SIG_BLOCK, &set, old);
+}
+static void gc_unblock_stop(const sigset_t* old) {
+    pthread_sigmask(SIG_SETMASK, old, NULL);
+}
+
+// 线程槽位注册/注销（调用方须持 g_gc_mu；信号处理器只读不写注册表）
+static GCThreadInfo* gc_find_thread(pthread_t tid) {
+    for (int i = 0; i < MAX_SPAWN_THREADS; i++) {
+        if (g_threads[i].in_use && pthread_equal(g_threads[i].tid, tid)) return &g_threads[i];
+    }
+    return NULL;
+}
+
+static int gc_register_thread(pthread_t tid, int is_main) {
+    if (gc_find_thread(tid)) return 0;  // 已注册
+    for (int i = 0; i < MAX_SPAWN_THREADS; i++) {
+        if (!g_threads[i].in_use) {
+            g_threads[i].tid = tid;
+            g_threads[i].in_use = 1;
+            g_threads[i].paused = 0;
+            g_threads[i].is_main = is_main;
+            g_threads[i].epoch = 0;
+            memset(&g_threads[i].uc, 0, sizeof(g_threads[i].uc));
+            g_threads[i].tmp_root = NULL;
+            return 0;
+        }
+    }
+    return -1;  // 槽位满
+}
+
+static void gc_unregister_thread(pthread_t tid) {
+    for (int i = 0; i < MAX_SPAWN_THREADS; i++) {
+        if (g_threads[i].in_use && !g_threads[i].is_main && pthread_equal(g_threads[i].tid, tid)) {
+            g_threads[i].in_use = 0;
+            g_threads[i].paused = 0;
+            g_threads[i].epoch = 0;
+            return;
+        }
+    }
+}
+
+// 确保主线程已注册（首次 GC 初始化时调用；此时通常仍为主线程）
+static void gc_ensure_main_registered(void) {
+    if (gc_find_thread(pthread_self())) return;
+    gc_register_thread(pthread_self(), 1);
+}
+
+// 扫描单个暂停线程的通用寄存器（x86_64）
+static void gc_scan_registers(GCHash* set, ucontext_t* uc) {
+    greg_t* regs = uc->uc_mcontext.gregs;
+    static const int reg_ids[] = {
+        REG_RAX, REG_RBX, REG_RCX, REG_RDX, REG_RSI, REG_RDI,
+        REG_RBP, REG_R8, REG_R9, REG_R10, REG_R11, REG_R12,
+        REG_R13, REG_R14, REG_R15
+    };
+    for (unsigned i = 0; i < sizeof(reg_ids)/sizeof(reg_ids[0]); i++) {
+        uintptr_t w = (uintptr_t)regs[reg_ids[i]];
+        if ((w & 7) == 0 && gc_hash_has(set, w)) gc_mark_obj(set, (LXObject*)w);
+    }
+}
+
+// 扫描单个暂停线程的栈（pthread_getattr_np 获取边界；只扫活跃帧 [RSP, 栈底)）
+static void gc_scan_thread_stack(GCHash* set, pthread_t tid, ucontext_t* uc) {
+    pthread_attr_t attr;
+    void* stackaddr = NULL;
+    size_t stacksize = 0;
+    if (pthread_getattr_np(tid, &attr) == 0) {
+        pthread_attr_getstack(&attr, &stackaddr, &stacksize);
+        pthread_attr_destroy(&attr);
+    }
+    if (!stackaddr || stacksize == 0) return;
+    uintptr_t rsp = (uintptr_t)uc->uc_mcontext.gregs[REG_RSP];
+    uintptr_t start = rsp & ~(uintptr_t)7;
+    uintptr_t end = (uintptr_t)stackaddr + stacksize;
+    for (uintptr_t p = start; p + sizeof(uintptr_t) <= end; p += sizeof(uintptr_t)) {
+        uintptr_t w = *(uintptr_t*)p;
+        if ((w & 7) == 0 && gc_hash_has(set, w)) gc_mark_obj(set, (LXObject*)w);
+    }
+}
+
+// 主回收入口：mark + sweep（M11：spawn 活跃时 stop-the-world）
+void lx_gc_collect(void) {
+    // M11 修复④：GC 执行期间屏蔽自己的 SIG_GC_STOP——防止上一轮"延迟信号"
+    // 在本轮 GC 执行中投递（handler 会自旋等 epoch，而 epoch 只有本线程能推进
+    // → 卡死/5 秒空转）。先拿锁再屏蔽：等锁期间不屏蔽（可被其他 GC 正常暂停），
+    // 持锁后屏蔽（防自打断）。出口统一 gc_unblock_stop。
+    sigset_t gc_old;
+    pthread_mutex_lock(&g_gc_mu);
+    gc_block_stop(&gc_old);
+    g_gc_executor = pthread_self();   // 标记我是 GC 执行者（handler 自检防自打断）
+    if (!g_gc_env_inited) gc_init_env();
     if (g_obj_count == 0) {
         pthread_mutex_unlock(&g_gc_mu);
+        g_gc_executor = 0;
+        gc_unblock_stop(&gc_old);
         return;
     }
+
+    if (g_active_threads > 0) {
+        // ===== M11 并发路径：stop-the-world =====
+        pthread_t me = pthread_self();
+        if (g_gc_debug) {
+            char dbg[512]; int dn = 0;
+            dn += snprintf(dbg+dn, sizeof(dbg)-dn, "[gc] me=%lx active=%d\n", (unsigned long)me, g_active_threads);
+            for (int i = 0; i < MAX_SPAWN_THREADS; i++)
+                if (g_threads[i].in_use)
+                    dn += snprintf(dbg+dn, sizeof(dbg)-dn, "  [%d] tid=%lx main=%d paused=%d\n", i, (unsigned long)g_threads[i].tid, g_threads[i].is_main, g_threads[i].paused);
+            (void)write(2, dbg, (size_t)dn);
+        }
+        // 本轮 GC 开始（handler 捕获 my_epoch 后自旋等待 epoch 变化）
+        g_gc_epoch++;
+        g_gc_stop_in_progress = 1;   // 标记进行中（handler 据此区分过期堆积信号）
+        __sync_synchronize();
+        // 1) 向所有已注册、非自身、已创建完成的线程发送暂停信号（只发一次）
+        for (int i = 0; i < MAX_SPAWN_THREADS; i++) {
+            GCThreadInfo* ti = &g_threads[i];
+            if (!ti->in_use || pthread_equal(ti->tid, me)) continue;
+            if ((uintptr_t)ti->tid == 0) continue;  // 创建中：还没运行普贤代码，无需暂停
+            pthread_kill(ti->tid, SIG_GC_STOP);     // ESRCH（线程恰好退出）忽略
+        }
+        // 2) 等待所有"仍存活且已注册"的线程**本轮**暂停。
+        //    判定"本轮真暂停"：ti->paused==1 且 ti->epoch==当前 epoch。
+        //    堆积信号（stop 已清除）会让 paused 短暂置 1 后立即返回，但 epoch 是旧值
+        //    → 不算本轮暂停 → 重发信号直到真正本轮暂停。已退出线程（ESRCH）忽略。
+        int spins = 0;
+        for (;;) {
+            int remain = 0;
+            __sync_synchronize();
+            for (int i = 0; i < MAX_SPAWN_THREADS; i++) {
+                GCThreadInfo* ti = &g_threads[i];
+                if (!ti->in_use || pthread_equal(ti->tid, me) || (uintptr_t)ti->tid == 0) continue;
+                if (ti->paused && ti->epoch == g_gc_epoch) continue;   // 本轮已真暂停
+                int rc = pthread_kill(ti->tid, SIG_GC_STOP);
+                if (g_gc_debug) { char dbg[96]; int dn = snprintf(dbg, sizeof(dbg), "[kill] tid=%lx rc=%d\n", (unsigned long)ti->tid, rc); (void)write(2, dbg, (size_t)dn); }
+                if (rc == 0 || (rc != 0 && errno == EAGAIN)) remain++;
+                /* ESRCH：线程已退出，忽略 */
+            }
+            if (remain == 0) break;
+            if (++spins > 5000000) {   // 兜底：约 5 秒未全部暂停 → 降级跳过本轮（绝不卡死）
+                g_gc_skips++;
+                g_gc_epoch++;
+                g_gc_stop_in_progress = 0;
+                __sync_synchronize();
+                while (g_paused_count > 0) sched_yield();
+                pthread_mutex_unlock(&g_gc_mu);
+                g_gc_executor = 0;
+                gc_unblock_stop(&gc_old);
+                return;
+            }
+            sched_yield();
+        }
+        // 3) 标记
+        GCHash set;
+        gc_hash_init(&set, (size_t)g_obj_count * 2);
+        for (int i = 0; i < g_obj_count; i++) gc_hash_insert(&set, (uintptr_t)g_objs[i]);
+        g_gc_marked = 0;
+        if (g_gc_debug) (void)write(2, "[mk] hash\n", 10);
+        // 根1：全局表
+        for (int i = 0; i < g_len; i++) {
+            if (lx_value_is_obj(g_vals[i]) && g_vals[i].as.obj) gc_mark_obj(&set, g_vals[i].as.obj);
+        }
+        if (g_gc_debug) (void)write(2, "[mk] globals\n", 13);
+        // 根2：本线程（GC 执行者）暂存根
+        if (g_tmp_root) gc_mark_obj(&set, g_tmp_root);
+        // 根3：本线程栈 + 寄存器（getcontext 写入栈上 ucontext，一并扫描）
+        ucontext_t uc;
+        getcontext(&uc);
+        gc_scan_stack(&set);
+        if (g_gc_debug) (void)write(2, "[mk] self-stack\n", 15);
+        // 根4：所有本轮暂停线程：寄存器 + 栈 + 暂存根
+        for (int i = 0; i < MAX_SPAWN_THREADS; i++) {
+            GCThreadInfo* ti = &g_threads[i];
+            if (!ti->in_use || !ti->paused || ti->epoch != g_gc_epoch || pthread_equal(ti->tid, me)) continue;
+            gc_scan_registers(&set, &ti->uc);
+            gc_scan_thread_stack(&set, ti->tid, &ti->uc);
+            if (ti->tmp_root) gc_mark_obj(&set, ti->tmp_root);
+            if (g_gc_debug) { char dbg[64]; int dn = snprintf(dbg, sizeof(dbg), "[mk] scanned tid=%lx\n", (unsigned long)ti->tid); (void)write(2, dbg, (size_t)dn); }
+        }
+        // 4) sweep
+        if (g_gc_debug) { char dbg[96]; int dn = snprintf(dbg, sizeof(dbg), "[mk] sweep count=%d\n", g_obj_count); (void)write(2, dbg, (size_t)dn); }
+        int freed = 0, w = 0;
+        for (int i = 0; i < g_obj_count; i++) {
+            LXObject* o = g_objs[i];
+            if (!gc_hash_has(&set, (uintptr_t)o)) continue;   // 防御：损坏条目，丢弃
+            if (o->gc_mark) {
+                o->gc_mark = 0;
+                g_objs[w++] = o;
+            } else {
+                lx_obj_free(o);
+                freed++;
+            }
+        }
+        g_obj_count = w;
+        g_alloc_bytes = 0;
+        g_gc_freed += freed;
+        g_gc_runs++;
+        g_tmp_root = NULL;
+        if (g_obj_count >= g_gc_threshold) g_gc_threshold = g_obj_count * 2;
+        gc_debug("collect #%d(并发): 标记 %lld/%d 回收 %d 存活 %d 线程 %d", g_gc_runs, g_gc_marked, g_obj_count + freed, freed, g_obj_count, g_paused_count);
+        if (g_gc_debug) (void)write(2, "[mk] after-collect\n", 19);
+        gc_hash_free(&set);
+        // 5) 本轮结束：epoch++ 唤醒所有暂停线程；清除进行中标志；等待其全部恢复
+        g_gc_epoch++;
+        g_gc_stop_in_progress = 0;
+        __sync_synchronize();
+        if (g_gc_debug) (void)write(2, "[mk] resume-wait\n", 17);
+        int wspins = 0, wstable = 0;
+        for (;;) {
+            int any_paused = 0;
+            __sync_synchronize();
+            for (int i = 0; i < MAX_SPAWN_THREADS; i++)
+                if (g_threads[i].in_use && g_threads[i].paused) { any_paused = 1; break; }
+            if (!any_paused) { if (++wstable >= 2) break; }
+            else wstable = 0;
+            if (++wspins > 5000000) break;   // 兜底：约 5 秒未全部恢复 → 强制继续（绝不卡死）
+            sched_yield();
+        }
+        if (g_gc_debug) (void)write(2, "[mk] resume-done\n", 17);
+        pthread_mutex_unlock(&g_gc_mu);
+        g_gc_executor = 0;
+        gc_unblock_stop(&gc_old);
+        return;
+    }
+
+    // ===== 单线程快路径（无活跃 spawn 线程）=====
     GCHash set;
     gc_hash_init(&set, (size_t)g_obj_count * 2);
     for (int i = 0; i < g_obj_count; i++) gc_hash_insert(&set, (uintptr_t)g_objs[i]);
-    // 调试：标记统计
     g_gc_marked = 0;
-    // 根 1：全局表
     for (int i = 0; i < g_len; i++) {
         if (lx_value_is_obj(g_vals[i]) && g_vals[i].as.obj) gc_mark_obj(&set, g_vals[i].as.obj);
     }
-    // 根 2：暂存根（刚创建、尚未被引用的对象）
     if (g_tmp_root) gc_mark_obj(&set, g_tmp_root);
-    // 根 3：当前线程栈保守扫描（getcontext 把全部寄存器写入栈上 ucontext，一并扫描）
     ucontext_t uc;
     getcontext(&uc);
     gc_scan_stack(&set);
-    // sweep
     int freed = 0, w = 0;
     for (int i = 0; i < g_obj_count; i++) {
         LXObject* o = g_objs[i];
+        if (!gc_hash_has(&set, (uintptr_t)o)) continue;   // 防御：损坏条目，丢弃
         if (o->gc_mark) {
             o->gc_mark = 0;
             g_objs[w++] = o;
@@ -340,11 +706,12 @@ void lx_gc_collect(void) {
     g_gc_freed += freed;
     g_gc_runs++;
     g_tmp_root = NULL;
-    // 自动退避：若存活对象仍超阈值，提高阈值避免频繁 GC
     if (g_obj_count >= g_gc_threshold) g_gc_threshold = g_obj_count * 2;
     gc_debug("collect #%d: 标记 %lld/%d 回收 %d 存活 %d 跳过 %d", g_gc_runs, g_gc_marked, g_obj_count + freed, freed, g_obj_count, g_gc_skips);
     gc_hash_free(&set);
     pthread_mutex_unlock(&g_gc_mu);
+    g_gc_executor = 0;
+    gc_unblock_stop(&gc_old);
 }
 
 // 注册对象（构造时调用）。est = 估算占用字节（触发字节阈值用，当前主用对象数阈值）。
@@ -354,7 +721,7 @@ static void gc_register(LXObject* o, long long est) {
     o->gc_mark = 0;   // 关键：xmalloc 未清零，gc_mark 垃圾值=1 会导致 DFS 跳过该节点（子对象漏标）
     if (g_obj_count >= g_obj_cap) {
         int ncap = g_obj_cap ? g_obj_cap * 2 : 8192;
-        g_objs = realloc(g_objs, sizeof(LXObject*) * ncap);
+        g_objs = xrealloc(g_objs, sizeof(LXObject*) * ncap);
         g_obj_cap = ncap;
     }
     g_objs[g_obj_count++] = o;
@@ -859,12 +1226,20 @@ void lx_index_set(LXValue obj, LXValue idx, LXValue val) {
         int len = obj.as.obj->as.list.len;
         if (i < 0) i += len;
         if (i < 0 || i >= len) lx_error("列表索引越界: %d", i);
+        // M11：与 GC 互斥（见 lx_list_push 注释）。注意：必须先拿锁再屏蔽信号——
+        // 等锁期间不能屏蔽 SIG_GC_STOP，否则 GC 无法暂停该线程（信号 pending），
+        // 导致 stop-the-world 空转/降级/漏扫描。
+        sigset_t old;
+        pthread_mutex_lock(&g_gc_mu);
+        gc_block_stop(&old);
         obj.as.obj->as.list.items[i] = val;
+        gc_unblock_stop(&old);
+        pthread_mutex_unlock(&g_gc_mu);
         return;
     }
     if (obj.type == LX_DICT) {
         if (idx.type == LX_STR) {
-            lx_dict_set(obj, idx.as.obj->as.str.data, val);
+            lx_dict_set(obj, idx.as.obj->as.str.data, val);   // 内部已互斥
             return;
         }
         lx_error("字典索引需要字符串键");
@@ -890,7 +1265,13 @@ void lx_field_set(LXValue obj, const char* name, LXValue val) {
         LXObject* o = obj.as.obj;
         for (int i = 0; i < o->as.struct_inst.nfields; i++) {
             if (strcmp(o->as.struct_inst.fnames[i], name) == 0) {
+                // M11：与 GC 互斥（见 lx_list_push 注释）
+                sigset_t old;
+                pthread_mutex_lock(&g_gc_mu);
+                gc_block_stop(&old);
                 o->as.struct_inst.fvals[i] = val;
+                gc_unblock_stop(&old);
+                pthread_mutex_unlock(&g_gc_mu);
                 return;
             }
         }
@@ -901,29 +1282,46 @@ void lx_field_set(LXValue obj, const char* name, LXValue val) {
 
 void lx_list_push(LXValue list, LXValue val) {
     LXObject* o = list.as.obj;
+    // M11：对象结构修改与 GC 标记/清扫通过 g_gc_mu 互斥（消除数据竞争）。
+    // 必须先拿锁再屏蔽信号：等锁期间若屏蔽 SIG_GC_STOP，GC 无法暂停本线程
+    // （信号 pending），导致 stop-the-world 空转、GC 降级、栈漏扫描（use-after-free）。
+    // 持锁后屏蔽：持锁期间 GC 主线程在等锁（不会发信号），不会被挂起。
+    sigset_t old;
+    pthread_mutex_lock(&g_gc_mu);
+    gc_block_stop(&old);
     if (o->as.list.len >= o->as.list.cap) {
         o->as.list.cap *= 2;
-        o->as.list.items = realloc(o->as.list.items, sizeof(LXValue) * o->as.list.cap);
+        o->as.list.items = xrealloc(o->as.list.items, sizeof(LXValue) * o->as.list.cap);
     }
     o->as.list.items[o->as.list.len++] = val;
+    gc_unblock_stop(&old);
+    pthread_mutex_unlock(&g_gc_mu);
 }
 
 void lx_dict_set(LXValue dict, const char* key, LXValue val) {
     LXObject* o = dict.as.obj;
+    // M11：与 GC 通过 g_gc_mu 互斥（见 lx_list_push 注释）。先拿锁再屏蔽信号。
+    sigset_t old;
+    pthread_mutex_lock(&g_gc_mu);
+    gc_block_stop(&old);
     for (int i = 0; i < o->as.dict.len; i++) {
         if (strcmp(o->as.dict.keys[i], key) == 0) {
             o->as.dict.vals[i] = val;
+            gc_unblock_stop(&old);
+            pthread_mutex_unlock(&g_gc_mu);
             return;
         }
     }
     if (o->as.dict.len >= o->as.dict.cap) {
         o->as.dict.cap *= 2;
-        o->as.dict.keys = realloc(o->as.dict.keys, sizeof(char*) * o->as.dict.cap);
-        o->as.dict.vals = realloc(o->as.dict.vals, sizeof(LXValue) * o->as.dict.cap);
+        o->as.dict.keys = xrealloc(o->as.dict.keys, sizeof(char*) * o->as.dict.cap);
+        o->as.dict.vals = xrealloc(o->as.dict.vals, sizeof(LXValue) * o->as.dict.cap);
     }
     o->as.dict.keys[o->as.dict.len] = xstrdup(key);
     o->as.dict.vals[o->as.dict.len] = val;
     o->as.dict.len++;
+    gc_unblock_stop(&old);
+    pthread_mutex_unlock(&g_gc_mu);
 }
 
 LXValue lx_dict_get(LXValue dict, const char* key) {
@@ -967,7 +1365,7 @@ static LXValue call_with_self(const char* fn, LXValue self, LXValue* args, int n
     a[0] = self;
     for (int i = 0; i < nargs; i++) a[i+1] = args[i];
     LXValue r = lx_call(lx_get_global(fn), a, nargs + 1);
-    free(a);
+    xfree(a);
     return r;
 }
 
@@ -1654,7 +2052,7 @@ static LXValue json_parse_value(JsonCtx* j) {
             j->p++;
             LXValue v = json_parse_value(j);
             lx_dict_set(d, key, v);
-            free(key);
+            xfree(key);
             json_ws(j);
             if (*j->p == ',') { j->p++; continue; }
             if (*j->p == '}') { j->p++; break; }
@@ -1681,7 +2079,7 @@ static LXValue json_parse_value(JsonCtx* j) {
         j->p++;
         char* s = json_str_raw(j);
         LXValue r = lx_str(s);
-        free(s);
+        xfree(s);
         return r;
     }
     if (strncmp(j->p, "true", 4) == 0) { j->p += 4; return lx_bool(true); }
@@ -1717,7 +2115,7 @@ static void jout_append(JOut* o, const char* s) {
     int l = (int)strlen(s);
     if (o->len + l + 1 > o->cap) {
         o->cap = o->cap * 2 + l + 16;
-        o->buf = realloc(o->buf, o->cap);
+        o->buf = xrealloc(o->buf, o->cap);
     }
     memcpy(o->buf + o->len, s, l);
     o->len += l;
@@ -1800,7 +2198,7 @@ static LXValue bi_json_stringify(LXValue* args, int nargs, void* ctx) {
     o.buf = xmalloc(64); o.cap = 64; o.buf[0] = 0;
     json_stringify_value(&o, args[0]);
     LXValue r = lx_str(o.buf);
-    free(o.buf);
+    xfree(o.buf);
     return r;
 }
 
@@ -1957,7 +2355,7 @@ void lx_select_wait(void) {
 bool lx_is_chan(LXValue v) { return v.type == LX_CHAN; }
 
 LXValue lx_chan_create(int cap) {
-    LXObject* o = calloc(1, sizeof(LXObject));
+    LXObject* o = xcalloc(1, sizeof(LXObject));
     o->type = LX_CHAN;
     o->as.chan.cap = cap;
     o->as.chan.len = 0;
@@ -1965,7 +2363,7 @@ LXValue lx_chan_create(int cap) {
     o->as.chan.closed = 0;
     o->as.chan.recv_waiting = 0;
     int phys = cap > 0 ? cap : 1;  // 无缓冲也保留 1 个交付槽
-    o->as.chan.buf = calloc(phys, sizeof(LXValue));
+    o->as.chan.buf = xcalloc(phys, sizeof(LXValue));
     pthread_mutex_init(&o->as.chan.mu, NULL);
     pthread_cond_init(&o->as.chan.cv_send, NULL);
     pthread_cond_init(&o->as.chan.cv_recv, NULL);
@@ -2086,30 +2484,73 @@ typedef struct {
 
 static void* spawn_thread(void* p) {
     SpawnJob* job = (SpawnJob*)p;
-    job->fn(job->args, job->nargs, NULL);
-    free(job->args);
-    free(job);
-    pthread_mutex_lock(&g_gc_mu);   // M8：线程退出，活跃计数减一（GC 可恢复）
-    g_active_threads--;
+    // M11 修复①（创建窗口）：新线程自注册——槽位已由 lx_spawn 预留（in_use=1, tid=0）。
+    // 必须在调用 fn（分配/持有对象）之前把真实 tid 写入槽位；否则 GC 会因
+    // "tid==0 创建中"跳过本线程，而它已在运行普贤代码 → 其栈上对象被 sweep 误回收
+    // （use-after-free，即此前偶发 SIGSEGV 的根因）。
+    pthread_mutex_lock(&g_gc_mu);
+    for (int i = 0; i < MAX_SPAWN_THREADS; i++) {
+        if (g_threads[i].in_use && (uintptr_t)g_threads[i].tid == 0) {
+            g_threads[i].tid = pthread_self();
+            break;
+        }
+    }
     pthread_mutex_unlock(&g_gc_mu);
+    job->fn(job->args, job->nargs, NULL);
+    // M11 修复②（退出窗口）：先持锁注销（活跃计数减一 + 槽位清空），再释放 job 内存。
+    // 保证"仍持有普贤对象"的阶段始终在注册表内被 GC 暂停/扫描；注销后本线程不再被
+    // 扫描，但只做 xfree（不创建/使用普贤对象），安全。原实现先 xfree 再等锁注销，
+    // 存在"线程已退出但槽位未清"窗口：GC 对半退出线程 pthread_kill 返回 ESRCH 被忽略
+    // → 漏暂停，或 pthread_getattr_np 读到已回收的栈 → SIGSEGV。
+    pthread_mutex_lock(&g_gc_mu);
+    g_active_threads--;
+    gc_unregister_thread(pthread_self());
+    pthread_mutex_unlock(&g_gc_mu);
+    xfree(job->args);
+    xfree(job);
     return NULL;
 }
 
 void lx_spawn(LXFuncPtr fn, LXValue* args, int nargs) {
     pthread_mutex_lock(&g_gc_mu);   // M8：创建前先标记活跃（防止主线程 GC 误判）
+    if (!g_gc_env_inited) gc_init_env();
     g_active_threads++;
+    // M11：同一临界区预留线程槽位（tid=0 表示创建中，GC 视为无需暂停）
+    int slot = -1;
+    for (int i = 0; i < MAX_SPAWN_THREADS; i++) {
+        if (!g_threads[i].in_use) { slot = i; break; }
+    }
+    if (slot >= 0) {
+        g_threads[slot].tid = (pthread_t)0;
+        g_threads[slot].in_use = 1;
+        g_threads[slot].paused = 0;
+        g_threads[slot].is_main = 0;
+        g_threads[slot].epoch = 0;
+        g_threads[slot].tmp_root = NULL;
+    } else {
+        // M11 修复③：槽位满时拒绝创建（而非让未注册线程裸奔——它不会被暂停/扫描，
+        // 栈上对象会被误回收）。g_active_threads 已 ++，回滚后报错。
+        g_active_threads--;
+    }
     pthread_mutex_unlock(&g_gc_mu);
-    SpawnJob* job = malloc(sizeof(SpawnJob));
+    if (slot < 0) lx_error("spawn: 并发线程数超出上限 %d", MAX_SPAWN_THREADS);
+    SpawnJob* job = xmalloc(sizeof(SpawnJob));
     job->fn = fn;
     job->nargs = nargs;
-    job->args = malloc(sizeof(LXValue) * (nargs > 0 ? nargs : 1));
+    job->args = xmalloc(sizeof(LXValue) * (nargs > 0 ? nargs : 1));
     if (nargs > 0) memcpy(job->args, args, sizeof(LXValue) * nargs);
     pthread_t t;
     if (pthread_create(&t, NULL, spawn_thread, job) != 0) {
         pthread_mutex_lock(&g_gc_mu);
         g_active_threads--;
+        if (slot >= 0) g_threads[slot].in_use = 0;
         pthread_mutex_unlock(&g_gc_mu);
         lx_error("spawn: 创建线程失败");
+    }
+    if (slot >= 0) {
+        pthread_mutex_lock(&g_gc_mu);
+        g_threads[slot].tid = t;
+        pthread_mutex_unlock(&g_gc_mu);
     }
     pthread_detach(t);
 }
@@ -2212,10 +2653,10 @@ static LXValue bi_tcp_recv(LXValue* args, int nargs, void* ctx) {
     if (maxlen <= 0) maxlen = 1;
     char* buf = xmalloc(maxlen + 1);
     int n = (int)recv(fd, buf, maxlen, 0);
-    if (n <= 0) { free(buf); return lx_str(""); }
+    if (n <= 0) { xfree(buf); return lx_str(""); }
     buf[n] = 0;
     LXValue r = lx_str_len(buf, n);
-    free(buf);
+    xfree(buf);
     return r;
 }
 
@@ -2317,7 +2758,7 @@ static int lx_https_request(const char* host, int port, const char* req, char** 
     int cap = 4096, total = 0;
     char* buf = xmalloc(cap);
     for (;;) {
-        if (total + 4096 > cap) { cap *= 2; buf = realloc(buf, cap); }
+        if (total + 4096 > cap) { cap *= 2; buf = xrealloc(buf, cap); }
         int n = mbedtls_ssl_read(&ssl, (unsigned char*)buf + total, 4096);
         if (n == MBEDTLS_ERR_SSL_WANT_READ || n == MBEDTLS_ERR_SSL_WANT_WRITE) continue;
         if (n <= 0) break;
@@ -2407,7 +2848,7 @@ static char* lx_http_once(const char* url, const char* method, const char* body,
         int cap = 4096, len = 0;
         resp = xmalloc(cap);
         for (;;) {
-            if (len + 4096 > cap) { cap *= 2; resp = realloc(resp, cap); }
+            if (len + 4096 > cap) { cap *= 2; resp = xrealloc(resp, cap); }
             int n = (int)recv(fd, resp + len, 4096, 0);
             if (n <= 0) break;
             len += n;
@@ -2463,7 +2904,7 @@ static char* lx_http_request(const char* url, const char* method, const char* bo
                 snprintf(next, sizeof(next), "%s", loc);
             } else if (loc[0] == '/') {
                 const char* s = strstr(cur, "://");
-                if (!s) { free(resp); lx_error("net: 非法 URL"); return NULL; }
+                if (!s) { xfree(resp); lx_error("net: 非法 URL"); return NULL; }
                 const char* hp = s + 3;
                 const char* hp_end = strchr(hp, '/');
                 int hplen = hp_end ? (int)(hp_end - hp) : (int)strlen(hp);
@@ -2478,7 +2919,7 @@ static char* lx_http_request(const char* url, const char* method, const char* bo
                 int dirlen = dslash ? (int)(dslash - dir + 1) : (int)strlen(dir);
                 snprintf(next, sizeof(next), "%.*s://%.*s%.*s%s", (int)(s - cur), cur, hplen, hp, dirlen, dir, loc);
             }
-            free(resp);
+            xfree(resp);
             snprintf(cur, sizeof(cur), "%s", next);
             continue;
         }
@@ -2490,7 +2931,7 @@ static char* lx_http_request(const char* url, const char* method, const char* bo
         char* r = xmalloc(body_len + 1);
         memcpy(r, body_start, body_len);
         r[body_len] = 0;
-        free(resp);
+        xfree(resp);
         *out_len = body_len;
         return r;
     }
@@ -2506,7 +2947,7 @@ static LXValue bi_http_get(LXValue* args, int nargs, void* ctx) {
     int len = 0;
     char* body = lx_http_request(url, "GET", NULL, &len);
     LXValue r = lx_str_len(body, len);
-    free(body);
+    xfree(body);
     return r;
 }
 
@@ -2519,6 +2960,6 @@ static LXValue bi_http_post(LXValue* args, int nargs, void* ctx) {
     int len = 0;
     char* resp = lx_http_request(url, "POST", body, &len);
     LXValue r = lx_str_len(resp, len);
-    free(resp);
+    xfree(resp);
     return r;
 }
