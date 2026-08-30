@@ -42,6 +42,10 @@ pub enum Value {
     Range { start: i64, end: i64, step: i64 },
     /// 通道（M3 协程运行时；M2 先同步阻塞版）
     Chan(ChanRef),
+    /// 互斥锁（M13：P1 锁原语，pxdb 并发场景）
+    Mutex(MutexRef),
+    /// 读写锁（M13：读多写少场景，多读者并行）
+    RWLock(RWLockRef),
     /// 类型对象（Color.Red 枚举构造 / Point(1,2) 结构体构造）
     TypeRef(TypeRefKind),
 }
@@ -227,6 +231,129 @@ pub struct ChanInner {
     pub recv_waiting: usize,
 }
 
+// ==================== 锁原语（M13：P1 mutex / rwlock） ====================
+// 与 chan 同构：Arc 共享 + Mutex/Condvar 实现真正阻塞（不忙等）
+// 编译模式（C 运行时）用 pthread_mutex_t / pthread_rwlock_t 对等实现
+
+/// 互斥锁引用
+pub type MutexRef = Arc<MutexState>;
+
+#[derive(Debug)]
+pub struct MutexState {
+    /// 保护 held 标志的锁
+    mu: Mutex<bool>,
+    /// 等待者（lock 阻塞时挂起，unlock 唤醒）
+    cv: Condvar,
+}
+
+impl MutexState {
+    pub fn new() -> Self {
+        Self {
+            mu: Mutex::new(false),
+            cv: Condvar::new(),
+        }
+    }
+    /// 阻塞加锁
+    pub fn lock(&self) {
+        let mut g = self.mu.lock().unwrap();
+        while *g {
+            g = self.cv.wait(g).unwrap();
+        }
+        *g = true;
+    }
+    /// 非阻塞尝试加锁：成功返回 true
+    pub fn try_lock(&self) -> bool {
+        let mut g = self.mu.lock().unwrap();
+        if *g {
+            return false;
+        }
+        *g = true;
+        true
+    }
+    /// 解锁（唤醒一个等待者）
+    pub fn unlock(&self) {
+        let mut g = self.mu.lock().unwrap();
+        *g = false;
+        self.cv.notify_one();
+    }
+}
+
+/// 读写锁引用
+pub type RWLockRef = Arc<RWLockState>;
+
+#[derive(Debug)]
+pub struct RWLockState {
+    mu: Mutex<RWLockInner>,
+    cv: Condvar,
+}
+
+#[derive(Debug)]
+struct RWLockInner {
+    readers: u32,
+    writer: bool,
+    /// 等待中的写者数（写优先：写者等待期间阻塞新读者，防读饿死写）
+    writer_waiting: u32,
+}
+
+impl RWLockState {
+    pub fn new() -> Self {
+        Self {
+            mu: Mutex::new(RWLockInner {
+                readers: 0,
+                writer: false,
+                writer_waiting: 0,
+            }),
+            cv: Condvar::new(),
+        }
+    }
+    /// 读锁：多读者并行；有写者持有或等待时阻塞
+    pub fn rlock(&self) {
+        let mut g = self.mu.lock().unwrap();
+        while g.writer || g.writer_waiting > 0 {
+            g = self.cv.wait(g).unwrap();
+        }
+        g.readers += 1;
+    }
+    pub fn try_rlock(&self) -> bool {
+        let mut g = self.mu.lock().unwrap();
+        if g.writer || g.writer_waiting > 0 {
+            return false;
+        }
+        g.readers += 1;
+        true
+    }
+    pub fn runlock(&self) {
+        let mut g = self.mu.lock().unwrap();
+        g.readers -= 1;
+        if g.readers == 0 {
+            self.cv.notify_all();
+        }
+    }
+    /// 写锁：独占；等待所有读者释放
+    pub fn wlock(&self) {
+        let mut g = self.mu.lock().unwrap();
+        g.writer_waiting += 1;
+        while g.writer || g.readers > 0 {
+            g = self.cv.wait(g).unwrap();
+        }
+        g.writer_waiting -= 1;
+        g.writer = true;
+    }
+    pub fn try_wlock(&self) -> bool {
+        let mut g = self.mu.lock().unwrap();
+        if g.writer || g.readers > 0 {
+            return false;
+        }
+        g.writer = true;
+        true
+    }
+    pub fn wunlock(&self) {
+        let mut g = self.mu.lock().unwrap();
+        g.writer = false;
+        self.cv.notify_all();
+    }
+}
+
 // ==================== 显示（print 输出） ====================
 
 fn fmt_value(v: &Value) -> String {
@@ -271,6 +398,8 @@ fn fmt_value(v: &Value) -> String {
         }
         Value::Range { start, end, step } => format!("range({}, {}, {})", start, end, step),
         Value::Chan(_) => "<chan>".to_string(),
+        Value::Mutex(_) => "<mutex>".to_string(),
+        Value::RWLock(_) => "<rwlock>".to_string(),
         Value::TypeRef(t) => match t {
             TypeRefKind::Struct(n) | TypeRefKind::Enum(n) => format!("<type {}>", n),
         },

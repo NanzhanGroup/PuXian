@@ -795,6 +795,14 @@ impl Interpreter {
                     });
                     return Ok(Value::Chan(ch));
                 }
+                if name == "mutex" {
+                    // M13：互斥锁构造 mutex()
+                    return Ok(Value::Mutex(Arc::new(MutexState::new())));
+                }
+                if name == "rwlock" {
+                    // M13：读写锁构造 rwlock()
+                    return Ok(Value::RWLock(Arc::new(RWLockState::new())));
+                }
                 // 结构体构造 Point(1, 2)
                 let def = self
                     .structs
@@ -855,6 +863,13 @@ impl Interpreter {
                     cv: Condvar::new(),
                 });
                 return Ok(Value::Chan(ch));
+            }
+            // M13：锁构造 mutex() / rwlock()（与 chan 同构）
+            if name == "mutex" {
+                return Ok(Value::Mutex(Arc::new(MutexState::new())));
+            }
+            if name == "rwlock" {
+                return Ok(Value::RWLock(Arc::new(RWLockState::new())));
             }
         }
         // 方法调用 obj.method(args)
@@ -1009,6 +1024,8 @@ impl Interpreter {
             Value::List(l) => self.call_list_method(l, name, args, pos),
             Value::Dict(d) => self.call_dict_method(d, name, args, pos),
             Value::Chan(c) => self.call_chan_method(c, name, args, pos),
+            Value::Mutex(m) => self.call_mutex_method(m, name, args, pos),
+            Value::RWLock(rw) => self.call_rwlock_method(rw, name, args, pos),
             Value::Tuple(t) => self.call_tuple_method(t, name, args, pos),
             _ => Err(LxError::new(
                 "R1007",
@@ -1034,6 +1051,8 @@ impl Interpreter {
             Value::EnumValue { .. } => "enum",
             Value::Range { .. } => "range",
             Value::Chan(_) => "chan",
+            Value::Mutex(_) => "mutex",
+            Value::RWLock(_) => "rwlock",
             Value::TypeRef(_) => "type",
         }
     }
@@ -1186,6 +1205,113 @@ impl Interpreter {
         match name {
             "len" => Ok(Value::Int(t.len() as i64)),
             _ => Err(LxError::new("R1007", format!("tuple 没有方法 '{}'", name), Some(pos))),
+        }
+    }
+
+    // ==================== 锁原语（M13：P1 mutex / rwlock） ====================
+
+    fn call_mutex_method(&mut self, m: &MutexRef, name: &str, args: &[Value], pos: Pos) -> Result<Value, LxError> {
+        match name {
+            "lock" => {
+                if !args.is_empty() {
+                    return Err(LxError::r1005("mutex.lock 不需要参数", pos));
+                }
+                m.lock();
+                Ok(Value::Null)
+            }
+            "unlock" => {
+                if !args.is_empty() {
+                    return Err(LxError::r1005("mutex.unlock 不需要参数", pos));
+                }
+                m.unlock();
+                Ok(Value::Null)
+            }
+            "try_lock" => {
+                if !args.is_empty() {
+                    return Err(LxError::r1005("mutex.try_lock 不需要参数", pos));
+                }
+                Ok(Value::Bool(m.try_lock()))
+            }
+            // with(fn)：自动 lock/unlock，异常安全（fn 出错也解锁）
+            "with" => {
+                if args.len() != 1 {
+                    return Err(LxError::r1005("mutex.with 需要一个函数参数", pos));
+                }
+                let f = args[0].clone();
+                m.lock();
+                let r = self.call_value(&f, &[], pos);
+                m.unlock();
+                r
+            }
+            _ => Err(LxError::new("R1007", format!("mutex 没有方法 '{}'", name), Some(pos))),
+        }
+    }
+
+    fn call_rwlock_method(&mut self, rw: &RWLockRef, name: &str, args: &[Value], pos: Pos) -> Result<Value, LxError> {
+        match name {
+            "rlock" => {
+                if !args.is_empty() {
+                    return Err(LxError::r1005("rwlock.rlock 不需要参数", pos));
+                }
+                rw.rlock();
+                Ok(Value::Null)
+            }
+            "runlock" => {
+                if !args.is_empty() {
+                    return Err(LxError::r1005("rwlock.runlock 不需要参数", pos));
+                }
+                rw.runlock();
+                Ok(Value::Null)
+            }
+            "wlock" => {
+                if !args.is_empty() {
+                    return Err(LxError::r1005("rwlock.wlock 不需要参数", pos));
+                }
+                rw.wlock();
+                Ok(Value::Null)
+            }
+            "wunlock" => {
+                if !args.is_empty() {
+                    return Err(LxError::r1005("rwlock.wunlock 不需要参数", pos));
+                }
+                rw.wunlock();
+                Ok(Value::Null)
+            }
+            "try_rlock" => {
+                if !args.is_empty() {
+                    return Err(LxError::r1005("rwlock.try_rlock 不需要参数", pos));
+                }
+                Ok(Value::Bool(rw.try_rlock()))
+            }
+            "try_wlock" => {
+                if !args.is_empty() {
+                    return Err(LxError::r1005("rwlock.try_wlock 不需要参数", pos));
+                }
+                Ok(Value::Bool(rw.try_wlock()))
+            }
+            // with_read(fn)：自动读锁/释放（异常安全）
+            "with_read" => {
+                if args.len() != 1 {
+                    return Err(LxError::r1005("rwlock.with_read 需要一个函数参数", pos));
+                }
+                let f = args[0].clone();
+                rw.rlock();
+                let r = self.call_value(&f, &[], pos);
+                rw.runlock();
+                r
+            }
+            // with_write(fn)：自动写锁/释放（异常安全）
+            "with_write" => {
+                if args.len() != 1 {
+                    return Err(LxError::r1005("rwlock.with_write 需要一个函数参数", pos));
+                }
+                let f = args[0].clone();
+                rw.wlock();
+                let r = self.call_value(&f, &[], pos);
+                rw.wunlock();
+                r
+            }
+            _ => Err(LxError::new("R1007", format!("rwlock 没有方法 '{}'", name), Some(pos))),
         }
     }
 

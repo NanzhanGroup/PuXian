@@ -281,6 +281,14 @@ static void lx_obj_free(LXObject* o) {
             pthread_cond_destroy(&o->as.chan.cv_send);
             pthread_cond_destroy(&o->as.chan.cv_recv);
             break;
+        case LX_MUTEX:
+            pthread_mutex_destroy(&o->as.mutex.mu);
+            pthread_cond_destroy(&o->as.mutex.cv);
+            break;
+        case LX_RWLOCK:
+            pthread_mutex_destroy(&o->as.rwlock.mu);
+            pthread_cond_destroy(&o->as.rwlock.cv);
+            break;
         default: break;
     }
     xfree(o);
@@ -897,6 +905,9 @@ const char* lx_type_name(LXValue v) {
         case LX_STRUCT: return "struct";
         case LX_ENUM: return "enum";
         case LX_TUPLE: return "tuple";
+        case LX_CHAN: return "chan";
+        case LX_MUTEX: return "mutex";
+        case LX_RWLOCK: return "rwlock";
     }
     return "unknown";
 }
@@ -1379,6 +1390,42 @@ LXValue lx_method(LXValue obj, const char* name, LXValue* args, int nargs) {
         }
         if (strcmp(name, "recv") == 0) return lx_chan_recv(obj);
         if (strcmp(name, "close") == 0) { lx_chan_close(obj); return lx_null(); }
+    }
+    // 互斥锁方法（M13）
+    if (obj.type == LX_MUTEX) {
+        if (strcmp(name, "lock") == 0) return lx_mutex_lock(obj);
+        if (strcmp(name, "unlock") == 0) return lx_mutex_unlock(obj);
+        if (strcmp(name, "try_lock") == 0) return lx_mutex_try_lock(obj);
+        if (strcmp(name, "with") == 0) {
+            if (nargs != 1) lx_error("mutex.with 需要 1 个函数参数");
+            lx_mutex_lock(obj);
+            LXValue r = lx_call(args[0], NULL, 0);
+            lx_mutex_unlock(obj);
+            return r;
+        }
+    }
+    // 读写锁方法（M13）
+    if (obj.type == LX_RWLOCK) {
+        if (strcmp(name, "rlock") == 0) return lx_rwlock_rlock(obj);
+        if (strcmp(name, "runlock") == 0) return lx_rwlock_runlock(obj);
+        if (strcmp(name, "wlock") == 0) return lx_rwlock_wlock(obj);
+        if (strcmp(name, "wunlock") == 0) return lx_rwlock_wunlock(obj);
+        if (strcmp(name, "try_rlock") == 0) return lx_rwlock_try_rlock(obj);
+        if (strcmp(name, "try_wlock") == 0) return lx_rwlock_try_wlock(obj);
+        if (strcmp(name, "with_read") == 0) {
+            if (nargs != 1) lx_error("rwlock.with_read 需要 1 个函数参数");
+            lx_rwlock_rlock(obj);
+            LXValue r = lx_call(args[0], NULL, 0);
+            lx_rwlock_runlock(obj);
+            return r;
+        }
+        if (strcmp(name, "with_write") == 0) {
+            if (nargs != 1) lx_error("rwlock.with_write 需要 1 个函数参数");
+            lx_rwlock_wlock(obj);
+            LXValue r = lx_call(args[0], NULL, 0);
+            lx_rwlock_wunlock(obj);
+            return r;
+        }
     }
     // 字符串方法
     if (obj.type == LX_STR) {
@@ -2435,6 +2482,137 @@ void lx_select_wait(void) {
 }
 
 bool lx_is_chan(LXValue v) { return v.type == LX_CHAN; }
+bool lx_is_mutex(LXValue v) { return v.type == LX_MUTEX; }
+bool lx_is_rwlock(LXValue v) { return v.type == LX_RWLOCK; }
+
+// ==================== 锁原语（M13：mutex / rwlock） ====================
+// 与解释器语义对齐：pthread_mutex + condvar 实现真正阻塞（非忙等）
+// rwlock 写优先：writer_waiting > 0 时阻塞新读者，防止读饿死写
+
+static LXObject* lx_mutex_obj(LXValue m, const char* op) {
+    if (m.type != LX_MUTEX) lx_error("%s: 目标不是互斥锁（%s）", op, lx_type_name(m));
+    return m.as.obj;
+}
+
+LXValue lx_mutex_create(void) {
+    LXObject* o = xcalloc(1, sizeof(LXObject));
+    o->type = LX_MUTEX;
+    o->as.mutex.locked = 0;
+    pthread_mutex_init(&o->as.mutex.mu, NULL);
+    pthread_cond_init(&o->as.mutex.cv, NULL);
+    LXValue v; v.type = LX_MUTEX; v.as.obj = o;
+    gc_register(o, sizeof(LXObject));
+    return v;
+}
+
+LXValue lx_mutex_lock(LXValue m) {
+    LXObject* o = lx_mutex_obj(m, "lock");
+    pthread_mutex_lock(&o->as.mutex.mu);
+    while (o->as.mutex.locked) pthread_cond_wait(&o->as.mutex.cv, &o->as.mutex.mu);
+    o->as.mutex.locked = 1;
+    pthread_mutex_unlock(&o->as.mutex.mu);
+    return lx_null();
+}
+
+LXValue lx_mutex_try_lock(LXValue m) {
+    LXObject* o = lx_mutex_obj(m, "try_lock");
+    pthread_mutex_lock(&o->as.mutex.mu);
+    int ok = 0;
+    if (!o->as.mutex.locked) { o->as.mutex.locked = 1; ok = 1; }
+    pthread_mutex_unlock(&o->as.mutex.mu);
+    return lx_bool(ok);
+}
+
+LXValue lx_mutex_unlock(LXValue m) {
+    LXObject* o = lx_mutex_obj(m, "unlock");
+    pthread_mutex_lock(&o->as.mutex.mu);
+    o->as.mutex.locked = 0;
+    pthread_cond_signal(&o->as.mutex.cv);
+    pthread_mutex_unlock(&o->as.mutex.mu);
+    return lx_null();
+}
+
+static LXObject* lx_rwlock_obj(LXValue m, const char* op) {
+    if (m.type != LX_RWLOCK) lx_error("%s: 目标不是读写锁（%s）", op, lx_type_name(m));
+    return m.as.obj;
+}
+
+LXValue lx_rwlock_create(void) {
+    LXObject* o = xcalloc(1, sizeof(LXObject));
+    o->type = LX_RWLOCK;
+    o->as.rwlock.readers = 0;
+    o->as.rwlock.writer = 0;
+    o->as.rwlock.writer_waiting = 0;
+    pthread_mutex_init(&o->as.rwlock.mu, NULL);
+    pthread_cond_init(&o->as.rwlock.cv, NULL);
+    LXValue v; v.type = LX_RWLOCK; v.as.obj = o;
+    gc_register(o, sizeof(LXObject));
+    return v;
+}
+
+LXValue lx_rwlock_rlock(LXValue m) {
+    LXObject* o = lx_rwlock_obj(m, "rlock");
+    pthread_mutex_lock(&o->as.rwlock.mu);
+    while (o->as.rwlock.writer || o->as.rwlock.writer_waiting > 0)
+        pthread_cond_wait(&o->as.rwlock.cv, &o->as.rwlock.mu);
+    o->as.rwlock.readers++;
+    pthread_mutex_unlock(&o->as.rwlock.mu);
+    return lx_null();
+}
+
+LXValue lx_rwlock_try_rlock(LXValue m) {
+    LXObject* o = lx_rwlock_obj(m, "try_rlock");
+    pthread_mutex_lock(&o->as.rwlock.mu);
+    int ok = 0;
+    if (!o->as.rwlock.writer && o->as.rwlock.writer_waiting == 0) {
+        o->as.rwlock.readers++;
+        ok = 1;
+    }
+    pthread_mutex_unlock(&o->as.rwlock.mu);
+    return lx_bool(ok);
+}
+
+LXValue lx_rwlock_runlock(LXValue m) {
+    LXObject* o = lx_rwlock_obj(m, "runlock");
+    pthread_mutex_lock(&o->as.rwlock.mu);
+    if (o->as.rwlock.readers > 0) o->as.rwlock.readers--;
+    if (o->as.rwlock.readers == 0) pthread_cond_broadcast(&o->as.rwlock.cv);
+    pthread_mutex_unlock(&o->as.rwlock.mu);
+    return lx_null();
+}
+
+LXValue lx_rwlock_wlock(LXValue m) {
+    LXObject* o = lx_rwlock_obj(m, "wlock");
+    pthread_mutex_lock(&o->as.rwlock.mu);
+    o->as.rwlock.writer_waiting++;
+    while (o->as.rwlock.writer || o->as.rwlock.readers > 0)
+        pthread_cond_wait(&o->as.rwlock.cv, &o->as.rwlock.mu);
+    o->as.rwlock.writer_waiting--;
+    o->as.rwlock.writer = 1;
+    pthread_mutex_unlock(&o->as.rwlock.mu);
+    return lx_null();
+}
+
+LXValue lx_rwlock_try_wlock(LXValue m) {
+    LXObject* o = lx_rwlock_obj(m, "try_wlock");
+    pthread_mutex_lock(&o->as.rwlock.mu);
+    int ok = 0;
+    if (!o->as.rwlock.writer && o->as.rwlock.readers == 0) {
+        o->as.rwlock.writer = 1;
+        ok = 1;
+    }
+    pthread_mutex_unlock(&o->as.rwlock.mu);
+    return lx_bool(ok);
+}
+
+LXValue lx_rwlock_wunlock(LXValue m) {
+    LXObject* o = lx_rwlock_obj(m, "wunlock");
+    pthread_mutex_lock(&o->as.rwlock.mu);
+    o->as.rwlock.writer = 0;
+    pthread_cond_broadcast(&o->as.rwlock.cv);
+    pthread_mutex_unlock(&o->as.rwlock.mu);
+    return lx_null();
+}
 
 LXValue lx_chan_create(int cap) {
     LXObject* o = xcalloc(1, sizeof(LXObject));

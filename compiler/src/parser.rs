@@ -131,6 +131,13 @@ impl Parser {
         }
     }
 
+    /// 大括号块体内缩进无关紧要（{} 已界定范围）：跳过行首 Indent/Dedent token
+    fn skip_brace_indents(&mut self) {
+        while self.check(&TokenKind::Indent) || self.check(&TokenKind::Dedent) {
+            self.advance();
+        }
+    }
+
     /// 跳过 Newline；若遇到 Dedent 则停止（块结束标记）
     fn skip_newlines_in_block(&mut self) {
         while self.check(&TokenKind::Newline) {
@@ -1265,9 +1272,11 @@ impl Parser {
             // 块表达式
             let mut stmts = Vec::new();
             self.skip_newlines();
+            self.skip_brace_indents();
             while !self.check(&TokenKind::RBrace) && !self.check(&TokenKind::Eof) {
                 stmts.push(self.parse_stmt()?);
                 self.skip_newlines();
+                self.skip_brace_indents();
             }
             self.expect(TokenKind::RBrace, "'}'")?;
             Ok(Expr::Block { stmts, pos })
@@ -1302,9 +1311,11 @@ impl Parser {
             let bpos = self.advance().pos;
             let mut stmts = Vec::new();
             self.skip_newlines();
+            self.skip_brace_indents();
             while !self.check(&TokenKind::RBrace) && !self.check(&TokenKind::Eof) {
                 stmts.push(self.parse_stmt()?);
                 self.skip_newlines();
+                self.skip_brace_indents();
             }
             self.expect(TokenKind::RBrace, "'}'")?;
             Expr::Block { stmts, pos: bpos }

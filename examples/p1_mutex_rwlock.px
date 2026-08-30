@@ -1,0 +1,74 @@
+# 普贤 M13 P1：mutex / rwlock 锁原语回归测试
+# 场景：pxdb 读多写少并发（共享计数器原子自增 + 并发读写）
+# 覆盖：mutex(lock/unlock/try_lock)、rwlock(rlock/runlock/wlock/wunlock/try_rlock/try_wlock)
+# ---- 1. mutex 保护共享计数器（无锁会丢更新，有锁必须精确） ----
+def inc_worker(m, counter, ch, n):
+    for i in range(n):
+        m.lock()
+        let cur = counter[0]
+        counter[0] = cur + 1
+        m.unlock()
+    ch.send (1)
+let m = mutex()
+let counter = [0]
+let ch = chan [int](8)
+let N = 1000
+spawn inc_worker(m, counter, ch, N)
+spawn inc_worker(m, counter, ch, N)
+spawn inc_worker(m, counter, ch, N)
+spawn inc_worker(m, counter, ch, N)
+ch.recv ()
+ch.recv ()
+ch.recv ()
+ch.recv ()
+assert(counter[0] == 4 * N, "mutex 保护下计数无丢失更新")
+print("1. mutex 并发计数 OK:", counter[0])
+# ---- 2. mutex try_lock 非阻塞语义 ----
+let m2 = mutex()
+assert(m2.try_lock() == true, "空闲时 try_lock 应成功")
+assert(m2.try_lock() == false, "已持有再 try_lock 应失败")
+m2.unlock()
+assert(m2.try_lock() == true, "释放后可再次获取")
+m2.unlock()
+print("2. mutex try_lock OK")
+# ---- 3. rwlock 互斥语义（确定性） ----
+let rw3 = rwlock()
+rw3.rlock()
+assert(rw3.try_rlock() == true, "读锁可重入（多读者并行）")
+assert(rw3.try_wlock() == false, "有读者时写锁失败")
+rw3.runlock()
+rw3.runlock()
+rw3.wlock()
+assert(rw3.try_rlock() == false, "写锁持有中读锁失败")
+assert(rw3.try_wlock() == false, "写锁不可重入")
+rw3.wunlock()
+assert(rw3.try_rlock() == true, "写锁释放后读锁恢复")
+rw3.runlock()
+print("3. rwlock 互斥语义 OK")
+# ---- 4. rwlock 并发读写（读多写少场景） ----
+# 2 个写者各 +100，2 个读者持续读；写锁互斥保证计数精确，读锁并行不干扰
+def rw_writer(rw, data, ch, n):
+    for i in range(n):
+        rw.wlock()
+        let cur = data[0]
+        data[0] = cur + 1
+        rw.wunlock()
+    ch.send (1)
+def rw_reader(rw, data, ch, n):
+    for i in range(n):
+        rw.rlock()
+        let v = data[0]
+        rw.runlock()
+    ch.send (1)
+let rw = rwlock()
+let data = [0]
+let rch = chan [int](16)
+spawn rw_writer(rw, data, rch, 100)
+spawn rw_reader(rw, data, rch, 100)
+spawn rw_reader(rw, data, rch, 100)
+spawn rw_writer(rw, data, rch, 100)
+for i in range(4):
+    rch.recv ()
+assert(data[0] == 200, "两写者各 +100，读锁不干扰写计数")
+print("4. rwlock 并发读写 OK:", data[0])
+print("M13 P1 mutex/rwlock ALL OK")

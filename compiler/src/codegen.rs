@@ -673,6 +673,13 @@ impl Codegen {
                         };
                         return Ok(format!("lx_chan_create({})", cap));
                     }
+                    // M13：锁构造 mutex() / rwlock()
+                    if cname == "mutex" {
+                        return Ok("lx_mutex_create()".to_string());
+                    }
+                    if cname == "rwlock" {
+                        return Ok("lx_rwlock_create()".to_string());
+                    }
                 }
                 // 结构体/枚举构造：Point(1,2) 解析为 Call(Var("Point"))
                 if let Expr::Var { name: cname, .. } = callee.as_ref() {

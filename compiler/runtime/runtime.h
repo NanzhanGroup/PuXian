@@ -30,6 +30,8 @@ typedef enum {
     LX_ENUM,    // 枚举值
     LX_TUPLE,   // 元组
     LX_CHAN,    // 通道（并发原语）
+    LX_MUTEX,   // 互斥锁（M13：P1 锁原语）
+    LX_RWLOCK,  // 读写锁（M13：读多写少）
 } LXType;
 
 typedef struct LXValue LXValue;
@@ -71,6 +73,18 @@ struct LXObject {
             pthread_cond_t cv_recv;  // 接收者等待（缓冲空）
             int recv_waiting;        // 无缓冲：等待中的接收者数
         } chan;
+        struct {
+            pthread_mutex_t mu;      // 保护 locked
+            pthread_cond_t cv;       // 等待者
+            int locked;              // 是否被持有
+        } mutex;
+        struct {
+            pthread_mutex_t mu;      // 保护状态
+            pthread_cond_t cv;
+            int readers;             // 活跃读者数
+            int writer;              // 写者持有
+            int writer_waiting;      // 等待中的写者数（写优先）
+        } rwlock;
     } as;
 };
 
@@ -162,6 +176,22 @@ LXValue lx_chan_recv(LXValue ch);             // 阻塞接收（空则等待，�
 bool lx_chan_try_recv(LXValue ch, LXValue* out); // 非阻塞尝试（select 用）
 void lx_chan_close(LXValue ch);               // 关闭：唤醒等待者
 bool lx_is_chan(LXValue v);
+
+// ==================== 锁原语（M13：mutex / rwlock） ====================
+// 互斥锁：同一时刻一个持有者；读写锁：多读者并行 + 写优先（防读饿死写）
+LXValue lx_mutex_create(void);
+LXValue lx_mutex_lock(LXValue m);
+LXValue lx_mutex_unlock(LXValue m);
+LXValue lx_mutex_try_lock(LXValue m);   // 成功 true / 失败 false
+LXValue lx_rwlock_create(void);
+LXValue lx_rwlock_rlock(LXValue m);
+LXValue lx_rwlock_runlock(LXValue m);
+LXValue lx_rwlock_wlock(LXValue m);
+LXValue lx_rwlock_wunlock(LXValue m);
+LXValue lx_rwlock_try_rlock(LXValue m);
+LXValue lx_rwlock_try_wlock(LXValue m);
+bool lx_is_mutex(LXValue v);
+bool lx_is_rwlock(LXValue v);
 
 // spawn：在线程中执行 lx_func(fn, args, nargs)，args 由运行时拷贝（调用后可释放）
 void lx_spawn(LXFuncPtr fn, LXValue* args, int nargs);
