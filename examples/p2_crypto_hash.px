@@ -1,0 +1,42 @@
+# 普贤 M14 P1：crypto 哈希回归测试
+# 场景：pxdb 缓存 key 归一化 / 签名校验 / 数据指纹
+# 覆盖：sha256(data) → hex、xxhash(data) → int（双端实现必须逐字节一致）
+# ---- 1. sha256 官方测试向量（FIPS 180-4） ----
+assert(sha256("") == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "sha256(空串) 官方向量")
+assert(sha256("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "sha256(abc) 官方向量")
+assert(sha256("hello") == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", "sha256(hello) 官方向量")
+print("1. sha256 官方向量 OK")
+# ---- 2. sha256 长输入（跨 64 字节块边界） ----
+let long = "a"
+for i in range(999):
+    long = long + "a"
+assert(sha256(long) == "41edece42d63e8d9bf515a9ba6932e1c20cbc9f5a5d134645adb5db1b9737ea3", "sha256(a*1000) 官方向量")
+print("2. sha256 长输入 OK")
+# ---- 3. xxhash 官方测试向量（xxHash 官方，seed=0） ----
+assert(xxhash("") == -1205034819632174695, "xxh64(空串)")  # 0xef46db3751d8e999 有符号
+assert(xxhash("a") == -3292477735350538661, "xxh64(a)")     # 0xd24ec4f1a98c6e5b
+assert(xxhash("abc") == 4952883123889572249, "xxh64(abc)")  # 0x44bc2cf5ad770999
+print("3. xxhash 官方向量 OK")
+# ---- 4. xxhash 长输入（跨 32 字节 4 路并行分支） ----
+assert(xxhash("012345678901234567890123456789012345678901234567890123456789") == 7415863930248964687, "xxh64(60B)")
+assert(xxhash("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx") == -6237096440398655122, "xxh64(64B)")
+let y100 = "yyyy"
+for i in range(96):
+    y100 = y100 + "y"
+assert(xxhash(y100) == -3661414239404777281, "xxh64(100B)")
+print("4. xxhash 长输入 OK")
+# ---- 5. 指纹用途：单字节差异 → 摘要不同；相同输入 → 摘要确定 ----
+let a1 = "the quick brown fox jumps over the lazy dog"
+let a2 = "the quick brown fox jumps over the lazy doG"
+assert(sha256(a1) != sha256(a2), "sha256 单字节差异应不同")
+assert(xxhash(a1) != xxhash(a2), "xxhash 单字节差异应不同")
+assert(sha256(a1) == sha256(a1), "sha256 确定性")
+assert(xxhash(a1) == xxhash(a1), "xxhash 确定性")
+print("5. 指纹唯一性/确定性 OK")
+# ---- 6. 非字符串参数（数值/布尔 → 字符串化后哈希） ----
+let h1 = sha256(12345)
+let h2 = sha256("12345")
+assert(h1 == h2, "sha256(12345) == sha256(\"12345\")")
+assert(len(h1) == 64, "sha256 hex 恒为 64 字符")
+print("6. 非字符串参数归一化 OK")
+print("ALL CRYPTO HASH TESTS PASSED")

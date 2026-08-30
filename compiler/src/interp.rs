@@ -174,6 +174,9 @@ impl Interpreter {
             ("file_size", Builtin::FileSize),
             ("fsync_file", Builtin::FsyncFile),
             ("truncate_file", Builtin::TruncateFile),
+            // M14 P1：crypto 哈希
+            ("sha256", Builtin::Sha256),
+            ("xxhash", Builtin::Xxhash),
             ("exists", Builtin::Exists),
             ("list_dir", Builtin::ListDir),
             ("mkdir", Builtin::Mkdir),

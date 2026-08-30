@@ -33,6 +33,7 @@
 #include "mbedtls/ctr_drbg.h"
 #include "mbedtls/x509_crt.h"
 #include "mbedtls/error.h"
+#include "mbedtls/sha256.h"
 
 // 前向声明：xmalloc/xfree 在 gc_block_stop 定义之前使用（M11 自由链表分配器）
 static void gc_block_stop(sigset_t* old);
@@ -2042,6 +2043,121 @@ static LXValue bi_truncate_file(LXValue* args, int nargs, void* ctx) {
     return lx_null();
 }
 
+// ==================== M14 P1：crypto 哈希（签名校验 / 缓存 key / 数据指纹） ====================
+
+// 取任意值的字符串表示（与解释器 to_string 一致：str 原样，其余 str(v)）
+static const char* val_cstr(LXValue v) {
+    if (v.type == LX_STR) return v.as.obj->as.str.data;
+    static char tmp[64];
+    snprintf(tmp, sizeof(tmp), "%s", fmt_num(v));
+    return tmp;
+}
+
+static void bytes_to_hex(const unsigned char* in, size_t len, char* out) {
+    static const char HEX[] = "0123456789abcdef";
+    for (size_t i = 0; i < len; i++) {
+        out[i * 2] = HEX[in[i] >> 4];
+        out[i * 2 + 1] = HEX[in[i] & 0x0F];
+    }
+    out[len * 2] = '\0';
+}
+
+// sha256(data) → 64 字符小写 hex 字符串（mbedtls 实现，与解释器一致）
+static LXValue bi_sha256(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) lx_error("sha256 需要一个参数");
+    const char* data = val_cstr(args[0]);
+    unsigned char digest[32];
+    if (mbedtls_sha256((const unsigned char*)data, strlen(data), digest, 0) != 0)
+        lx_error("sha256 计算失败");
+    char hex[65];
+    bytes_to_hex(digest, 32, hex);
+    return lx_str(hex);
+}
+
+// ---- XXH64（xxHash, seed=0）----
+#define XXH_P1 0x9E3779B185EBCA87ULL
+#define XXH_P2 0xC2B2AE3D27D4EB4FULL
+#define XXH_P3 0x165667B19E3779F9ULL
+#define XXH_P4 0x85EBCA77C2B2AE63ULL
+#define XXH_P5 0x27D4EB2F165667C5ULL
+
+static uint64_t xxh_rotl(uint64_t x, int r) { return (x << r) | (x >> (64 - r)); }
+
+static uint64_t xxh_round(uint64_t acc, uint64_t input) {
+    acc += input * XXH_P2;
+    acc = xxh_rotl(acc, 31);
+    acc *= XXH_P1;
+    return acc;
+}
+
+static uint64_t xxh_merge(uint64_t acc, uint64_t val) {
+    acc ^= xxh_round(0, val);
+    acc = acc * XXH_P1 + XXH_P4;
+    return acc;
+}
+
+static uint64_t rd64(const unsigned char* p) {
+    uint64_t v = 0;
+    for (int i = 7; i >= 0; i--) v = (v << 8) | p[i];
+    return v;
+}
+
+static uint64_t xxh64(const unsigned char* data, size_t len) {
+    size_t p = 0;
+    uint64_t h;
+    if (len >= 32) {
+        uint64_t v1 = XXH_P1 + XXH_P2, v2 = XXH_P2, v3 = 0, v4 = 0 - XXH_P1;
+        while (p + 32 <= len) {
+            v1 = xxh_round(v1, rd64(data + p));
+            v2 = xxh_round(v2, rd64(data + p + 8));
+            v3 = xxh_round(v3, rd64(data + p + 16));
+            v4 = xxh_round(v4, rd64(data + p + 24));
+            p += 32;
+        }
+        h = xxh_rotl(v1, 1) + xxh_rotl(v2, 7) + xxh_rotl(v3, 12) + xxh_rotl(v4, 18);
+        h = xxh_merge(h, v1);
+        h = xxh_merge(h, v2);
+        h = xxh_merge(h, v3);
+        h = xxh_merge(h, v4);
+    } else {
+        h = XXH_P5;
+    }
+    h += len;
+    while (p + 8 <= len) {
+        uint64_t k = xxh_round(0, rd64(data + p));
+        h ^= k;
+        h = xxh_rotl(h, 27) * XXH_P1 + XXH_P4;
+        p += 8;
+    }
+    if (p + 4 <= len) {
+        uint64_t k = 0;
+        for (int i = 3; i >= 0; i--) k = (k << 8) | data[p + i];
+        h ^= k * XXH_P1;
+        h = xxh_rotl(h, 23) * XXH_P2 + XXH_P3;
+        p += 4;
+    }
+    while (p < len) {
+        h ^= (uint64_t)data[p] * XXH_P5;
+        h = xxh_rotl(h, 11) * XXH_P1;
+        p++;
+    }
+    h ^= h >> 33;
+    h *= XXH_P2;
+    h ^= h >> 29;
+    h *= XXH_P3;
+    h ^= h >> 32;
+    return h;
+}
+
+// xxhash(data) → int（XXH64, seed=0；高速指纹/取模分片）
+static LXValue bi_xxhash(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) lx_error("xxhash 需要一个参数");
+    const char* data = val_cstr(args[0]);
+    return lx_int((int64_t)xxh64((const unsigned char*)data, strlen(data)));
+}
+
 static LXValue bi_exists(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1 || args[0].type != LX_STR) lx_error("exists 需要一个路径参数");
@@ -2440,6 +2556,9 @@ void lx_register_builtins(void) {
     lx_set_global("file_size", lx_native("file_size", bi_file_size));
     lx_set_global("fsync_file", lx_native("fsync_file", bi_fsync_file));
     lx_set_global("truncate_file", lx_native("truncate_file", bi_truncate_file));
+    // M14 P1：crypto 哈希
+    lx_set_global("sha256", lx_native("sha256", bi_sha256));
+    lx_set_global("xxhash", lx_native("xxhash", bi_xxhash));
     lx_set_global("exists", lx_native("exists", bi_exists));
     lx_set_global("list_dir", lx_native("list_dir", bi_list_dir));
     lx_set_global("mkdir", lx_native("mkdir", bi_mkdir));

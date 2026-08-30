@@ -105,6 +105,9 @@ pub enum Builtin {
     FileSize,
     FsyncFile,
     TruncateFile,
+    // M14 P1：crypto 哈希（签名校验 / 缓存 key / 数据指纹）
+    Sha256,
+    Xxhash,
     // std.fs
     Exists,
     ListDir,
@@ -175,6 +178,8 @@ impl Builtin {
             Builtin::FileSize => "file_size",
             Builtin::FsyncFile => "fsync_file",
             Builtin::TruncateFile => "truncate_file",
+            Builtin::Sha256 => "sha256",
+            Builtin::Xxhash => "xxhash",
             Builtin::Exists => "exists",
             Builtin::ListDir => "list_dir",
             Builtin::Mkdir => "mkdir",

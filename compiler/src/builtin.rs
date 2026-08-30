@@ -503,6 +503,29 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
                 )),
             }
         }
+        // ---- M14 P1：crypto 哈希（签名校验 / 缓存 key / 数据指纹）----
+        // sha256(data) → 64 字符小写 hex 字符串
+        Builtin::Sha256 => {
+            if args.len() != 1 {
+                return Err(err("sha256 需要一个参数", pos));
+            }
+            let data = match &args[0] {
+                Value::Str(s) => s.clone().into_bytes(),
+                v => v.to_string().into_bytes(),
+            };
+            Ok(Value::Str(crate::crypto::sha256_hex(&data)))
+        }
+        // xxhash(data) → int（XXH64, seed=0；高速指纹/取模分片）
+        Builtin::Xxhash => {
+            if args.len() != 1 {
+                return Err(err("xxhash 需要一个参数", pos));
+            }
+            let data = match &args[0] {
+                Value::Str(s) => s.clone().into_bytes(),
+                v => v.to_string().into_bytes(),
+            };
+            Ok(Value::Int(crate::crypto::xxh64(&data) as i64))
+        }
         Builtin::ListDir => {
             if args.len() != 1 {
                 return Err(err("list_dir 需要一个路径参数", pos));

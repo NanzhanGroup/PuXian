@@ -731,6 +731,8 @@ pub fn builtin_names() -> HashSet<String> {
         Builtin::FileSize,
         Builtin::FsyncFile,
         Builtin::TruncateFile,
+        Builtin::Sha256,
+        Builtin::Xxhash,
         Builtin::Exists,
         Builtin::ListDir,
         Builtin::Mkdir,

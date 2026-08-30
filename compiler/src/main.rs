@@ -19,6 +19,7 @@ mod ast_view;
 mod bench;
 mod builtin;
 mod codegen;
+mod crypto;
 mod doc;
 mod env;
 mod fmt;
