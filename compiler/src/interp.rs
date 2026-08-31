@@ -389,6 +389,8 @@ impl Interpreter {
             ("sandbox_enter", Builtin::SandboxEnter),
             ("vhost", Builtin::Vhost),
             ("rate_limit", Builtin::RateLimit),
+            ("gen_next", Builtin::GenNext),
+            ("list", Builtin::List),
         ];
         for (n, b) in names {
             g.define(n, Value::Builtin(*b));
@@ -934,6 +936,26 @@ impl Interpreter {
                 )?;
                 Ok(Value::new_list(out))
             }
+            Expr::GenExp { expr, clauses, cond, pos } => {
+                // M32 生成器表达式：创建时物化（双模式一致），gen_next/for-in/list 逐项消费
+                let mut out = Vec::new();
+                self.eval_comp(
+                    clauses,
+                    0,
+                    &mut CompSink::List(&mut out),
+                    Some(expr),
+                    None,
+                    None,
+                    cond,
+                    env,
+                    *pos,
+                )?;
+                let obj = crate::value::GenObj {
+                    materialized: out,
+                    cursor: 0,
+                };
+                Ok(Value::Gen(std::sync::Arc::new(std::sync::Mutex::new(obj))))
+            }
             Expr::DictComp { key, value, clauses, cond, pos } => {
                 let map = Arc::new(Mutex::new(HashMap::new()));
                 self.eval_comp(
@@ -1284,6 +1306,7 @@ impl Interpreter {
             Value::Mutex(_) => "mutex",
             Value::RWLock(_) => "rwlock",
             Value::TypeRef(_) => "type",
+            Value::Gen(_) => "generator",
         }
     }
 
@@ -2122,6 +2145,10 @@ impl Interpreter {
                 .keys()
                 .map(|k| Value::Str(k.clone()))
                 .collect()),
+            Value::Gen(g) => {
+                // M32：生成器物化结果迭代
+                Ok(g.lock().unwrap().materialized.clone())
+            }
             _ => Err(LxError::new("R1002", "此类型不可迭代", Some(pos))),
         }
     }
@@ -2162,7 +2189,7 @@ impl Interpreter {
     }
 
     /// 递归求值推导式：ci 为当前子句索引；最深层求值并收集
-    fn eval_comp(
+    pub(crate) fn eval_comp(
         &mut self,
         clauses: &[CompClause],
         ci: usize,

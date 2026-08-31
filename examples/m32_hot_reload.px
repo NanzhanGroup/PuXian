@@ -1,0 +1,21 @@
+# M32 进程池热更新：.px 脚本变更后下一次执行自动生效（无需重启服务）
+# 编译模式：px_pool 检测脚本 mtime 变化 → 滚动重启 worker（新代码 + 新 worker）
+# 解释器模式：每次执行重新读文件（天然热更新）；双模式输出一致
+write_file("/tmp/px_hot.px", "print(\"hot-v1\")\n")
+r1 = px_exec("/tmp/px_hot.px")
+print("r1:", r1)
+assert(contains(r1, "hot-v1"), "first version")
+
+sleep(1200)  # 确保 mtime 变化（秒级）
+
+write_file("/tmp/px_hot.px", "print(\"hot-v2\")\n")
+r2 = px_exec("/tmp/px_hot.px")
+print("r2:", r2)
+assert(contains(r2, "hot-v2"), "hot reload new version")
+
+# 连续执行（热更新后 worker 已滚动为新代）
+r3 = px_exec("/tmp/px_hot.px")
+print("r3:", r3)
+assert(contains(r3, "hot-v2"), "stable after reload")
+
+print("M32_HOT_RELOAD_OK")

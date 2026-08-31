@@ -1,0 +1,48 @@
+# M32 WebSocket 一行连接：ws_connect("ws://host:port/path") / wss://（TLS）
+# 双模式一致：解释器 Rust + 编译 C
+def handler(conn):
+    while true:
+        msg = ws_recv(conn)
+        if msg == null:
+            break
+        ws_send(conn, "echo:" + msg)
+    print("server conn closed")
+
+def serve_plain():
+    ws_serve(19011, handler)
+
+def serve_tls():
+    ws_serve(19012, handler)
+
+# ============ 生成自签证书 ============
+os_spawn("/bin/sh", ["-c", "openssl req -x509 -newkey rsa:2048 -keyout /tmp/px_m32_key.pem -out /tmp/px_m32_cert.pem -days 1 -nodes -subj /CN=localhost -addext basicConstraints=critical,CA:FALSE -addext subjectAltName=DNS:localhost"])
+sleep(600)
+assert(exists("/tmp/px_m32_cert.pem"))
+assert(exists("/tmp/px_m32_key.pem"))
+
+# ============ 1. 明文 WS：ws:// URL 一行连接（tls_server 注册前，避免全局 TLS） ============
+spawn serve_plain()
+sleep(500)
+conn = ws_connect("ws://127.0.0.1:19011/ws")
+assert(conn != null, "ws url connect")
+ws_send(conn, "hello url")
+assert(ws_recv(conn) == "echo:hello url", "ws url echo")
+ws_send(conn, "中文URL连接")
+assert(ws_recv(conn) == "echo:中文URL连接", "ws url cn")
+ws_close(conn)
+sleep(200)
+
+# ============ 2. WSS：tls_server 注册 → ws_serve 自动 WSS ============
+assert(tls_server("/tmp/px_m32_cert.pem", "/tmp/px_m32_key.pem"))
+spawn serve_tls()
+sleep(500)
+w = ws_connect("wss://localhost:19012/ws")
+if w == null:
+    print("wss connect failed (可能需要 PX_TLS_CA_FILE 信任自签)")
+    exit(1)
+ws_send(w, "hello wss")
+assert(ws_recv(w) == "echo:hello wss", "wss echo")
+ws_close(w)
+sleep(200)
+
+print("M32_WS_URL_OK")

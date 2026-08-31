@@ -50,6 +50,22 @@ pub enum Value {
     RWLock(RWLockRef),
     /// 类型对象（Color.Red 枚举构造 / Point(1,2) 结构体构造）
     TypeRef(TypeRefKind),
+    /// 生成器对象（M32：生成器表达式 (x for x in xs)；创建时物化，gen_next 逐项消费）
+    Gen(Arc<Mutex<GenObj>>),
+}
+
+/// 生成器对象：物化结果 + 游标
+/// - 创建时立即求值（双模式一致：Rust 解释器 / C 编译同一语义）
+/// - cursor 记录 gen_next 已取到的位置（Python 生成器语义：耗尽后 null）
+pub struct GenObj {
+    pub materialized: Vec<Value>,
+    pub cursor: usize,
+}
+
+impl std::fmt::Debug for GenObj {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Gen(items={}, cursor={})", self.materialized.len(), self.cursor)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -335,6 +351,11 @@ pub enum Builtin {
     SandboxEnter,
     Vhost,
     RateLimit,
+    // M32：生成器表达式（延迟物化）
+    // gen_next(g) → Value|null（逐项取值；耗尽后 null）
+    // list(x) → list（list/range/gen/tuple → list；str → chars；dict → keys）
+    GenNext,
+    List,
 }
 
 impl Builtin {
@@ -495,6 +516,8 @@ impl Builtin {
             Builtin::SandboxEnter => "sandbox_enter",
             Builtin::Vhost => "vhost",
             Builtin::RateLimit => "rate_limit",
+            Builtin::GenNext => "gen_next",
+            Builtin::List => "list",
         }
     }
 }
@@ -726,6 +749,14 @@ fn fmt_value(v: &Value) -> String {
         Value::TypeRef(t) => match t {
             TypeRefKind::Struct(n) | TypeRefKind::Enum(n) => format!("<type {}>", n),
         },
+        Value::Gen(g) => {
+            let g = g.lock().unwrap();
+            format!(
+                "<gen {} items, cursor={}>",
+                g.materialized.len(),
+                g.cursor
+            )
+        }
     }
 }
 
@@ -772,6 +803,10 @@ impl PartialEq for Value {
                 },
             ) => ta == tb && va == vb && pa == pb,
             (Value::Range { .. }, Value::Range { .. }) => false,
+            (Value::Gen(a), Value::Gen(b)) => {
+                let (ga, gb) = (a.lock().unwrap(), b.lock().unwrap());
+                ga.materialized == gb.materialized
+            }
             _ => false,
         }
     }

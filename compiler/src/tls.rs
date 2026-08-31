@@ -20,6 +20,8 @@ pub struct SConn {
 enum SConnInner {
     Plain(TcpStream),
     Tls(Box<rustls::StreamOwned<rustls::ServerConnection, TcpStream>>),
+    /// M32：客户端 TLS（wss 客户端一行连接）
+    TlsClient(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
 }
 
 impl SConn {
@@ -31,6 +33,12 @@ impl SConn {
     /// 明文连接克隆（客户端 ws_connect：注册读写独立句柄）
     pub fn plain_try_clone(s: &TcpStream) -> std::io::Result<Self> {
         Ok(SConn::plain(s.try_clone()?))
+    }
+    /// 客户端 TLS 连接（M32：wss 一行连接）
+    pub fn client_tls(t: rustls::StreamOwned<rustls::ClientConnection, TcpStream>) -> Self {
+        SConn {
+            inner: Arc::new(Mutex::new(SConnInner::TlsClient(Box::new(t)))),
+        }
     }
     fn tls(t: rustls::StreamOwned<rustls::ServerConnection, TcpStream>) -> Self {
         SConn {
@@ -52,6 +60,9 @@ impl SConn {
             SConnInner::Tls(t) => {
                 let _ = t.sock.shutdown(std::net::Shutdown::Both);
             }
+            SConnInner::TlsClient(t) => {
+                let _ = t.sock.shutdown(std::net::Shutdown::Both);
+            }
         }
     }
     /// 对端地址字符串
@@ -60,6 +71,7 @@ impl SConn {
         match &*g {
             SConnInner::Plain(s) => s.peer_addr().map(|a| a.to_string()).unwrap_or_default(),
             SConnInner::Tls(t) => t.sock.peer_addr().map(|a| a.to_string()).unwrap_or_default(),
+            SConnInner::TlsClient(t) => t.sock.peer_addr().map(|a| a.to_string()).unwrap_or_default(),
         }
     }
     /// 读超时（ws_recv 帧边界超时；TLS 转发到底层 sock）
@@ -68,6 +80,7 @@ impl SConn {
         match &*g {
             SConnInner::Plain(s) => s.set_read_timeout(dur),
             SConnInner::Tls(t) => t.sock.set_read_timeout(dur),
+            SConnInner::TlsClient(t) => t.sock.set_read_timeout(dur),
         }
     }
 }
@@ -78,6 +91,7 @@ impl std::io::Read for SConn {
         match &mut *g {
             SConnInner::Plain(s) => s.read(buf),
             SConnInner::Tls(t) => t.read(buf),
+            SConnInner::TlsClient(t) => t.read(buf),
         }
     }
 }
@@ -87,6 +101,7 @@ impl std::io::Write for SConn {
         match &mut *g {
             SConnInner::Plain(s) => s.write(buf),
             SConnInner::Tls(t) => t.write(buf),
+            SConnInner::TlsClient(t) => t.write(buf),
         }
     }
     fn flush(&mut self) -> std::io::Result<()> {
@@ -94,6 +109,7 @@ impl std::io::Write for SConn {
         match &mut *g {
             SConnInner::Plain(s) => s.flush(),
             SConnInner::Tls(t) => t.flush(),
+            SConnInner::TlsClient(t) => t.flush(),
         }
     }
 }

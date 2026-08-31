@@ -442,12 +442,13 @@ impl Codegen {
                 let v = self.new_var(var);
                 let mut s = String::new();
                 s.push_str(&format!("{}LXValue {} = {};\n", pad, it_var, it));
+                // 统一用 px_len/px_index：list/tuple/range/gen/dict 等可迭代类型安全
                 s.push_str(&format!(
-                    "{}for (int {} = 0; {} < {}.as.obj->as.list.len; {}++) {{\n",
+                    "{}for (int {} = 0; {} < px_len({}); {}++) {{\n",
                     pad, idx_var, idx_var, it_var, idx_var
                 ));
                 s.push_str(&format!(
-                    "{}    LXValue {} = {}.as.obj->as.list.items[{}];\n",
+                    "{}    LXValue {} = px_index({}, px_int({}));\n",
                     pad, v, it_var, idx_var
                 ));
                 for st in body {
@@ -1010,6 +1011,84 @@ impl Codegen {
                 }
                 let full = format!(
                     "({{ LXValue {} = px_list(0); LXValue {} = {}; {} {}; }})",
+                    rv, ivs[0], its[0], body, rv
+                );
+                Ok(full)
+            }
+            Expr::GenExp { expr, clauses, cond, .. } => {
+                // M32 生成器表达式：立即物化为列表 + px_gen_from_list 包装为生成器对象
+                //（双模式一致：Rust 解释器同样创建时物化；gen_next 逐项消费）
+                let rv = self.tmp();
+                let mut its = Vec::new();
+                let mut ivs = Vec::new();
+                let mut itms = Vec::new();
+                let mut idxs = Vec::new();
+                let mut binds = Vec::new();
+                let mut saved_all: Vec<Vec<(String, Option<String>)>> = Vec::new();
+                for cl in clauses {
+                    let it = self.gen_expr(&cl.iterable)?;
+                    its.push(it);
+                    ivs.push(self.tmp());
+                    itms.push(self.tmp());
+                    idxs.push(self.tmp());
+                    let mut bind = String::new();
+                    let mut saved = Vec::new();
+                    if cl.vars.len() == 1 {
+                        let lcvar = format!("_cv{}", self.uid());
+                        let sv = self.vars.insert(cl.vars[0].clone(), lcvar.clone());
+                        saved.push((cl.vars[0].clone(), sv));
+                        bind = format!("LXValue {} = {}; ", lcvar, itms.last().unwrap());
+                    } else {
+                        for (i, vn) in cl.vars.iter().enumerate() {
+                            let lcvar = format!("_cv{}_{}", self.uid(), i);
+                            let sv = self.vars.insert(vn.clone(), lcvar.clone());
+                            saved.push((vn.clone(), sv));
+                            bind.push_str(&format!(
+                                "LXValue {} = px_index({}, px_int({})); ",
+                                lcvar,
+                                itms.last().unwrap(),
+                                i
+                            ));
+                        }
+                    }
+                    binds.push(bind);
+                    saved_all.push(saved);
+                }
+                let e = self.gen_expr(expr)?;
+                let cond_c = match cond {
+                    Some(c) => Some(self.gen_expr(c)?),
+                    None => None,
+                };
+                for saved in saved_all {
+                    for (vn, sv) in saved {
+                        match sv {
+                            Some(v) => { self.vars.insert(vn, v); }
+                            None => { self.vars.remove(&vn); }
+                        }
+                    }
+                }
+                let mut body = match &cond_c {
+                    Some(c) => format!("if (px_is_truthy({})) {{ px_list_push({}, {}); }} ", c, rv, e),
+                    None => format!("px_list_push({}, {}); ", rv, e),
+                };
+                let n = clauses.len();
+                for i in (0..n).rev() {
+                    let mut inner_decl = String::new();
+                    if i + 1 < n {
+                        inner_decl = format!("LXValue {} = {}; ", ivs[i + 1], its[i + 1]);
+                    }
+                    body = format!(
+                        "for (int {idx}=0; {idx}<px_len({iv}); {idx}++) {{ LXValue {itm} = px_index({iv}, px_int({idx})); {bnd}{inner}{body} }} ",
+                        idx = idxs[i],
+                        iv = ivs[i],
+                        itm = itms[i],
+                        bnd = binds[i],
+                        inner = inner_decl,
+                        body = body,
+                    );
+                }
+                let full = format!(
+                    "({{ LXValue {} = px_list(0); LXValue {} = {}; {} px_gen_from_list({}); }})",
                     rv, ivs[0], its[0], body, rv
                 );
                 Ok(full)

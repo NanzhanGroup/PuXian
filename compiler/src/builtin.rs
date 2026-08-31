@@ -129,6 +129,10 @@ static SSE_NEXT_ID: AtomicI64 = AtomicI64::new(1);
 struct SseClient {
     reader: Mutex<Conn>,
     pending: Mutex<Vec<u8>>,
+    /// M32 自动重连：>0 时断线后等待该毫秒重连（携带 Last-Event-ID）；0 = 不重连
+    reconnect_ms: i64,
+    url: String,
+    last_event_id: String,
 }
 
 fn sse_clients() -> &'static Mutex<HashMap<i64, SseClient>> {
@@ -194,6 +198,11 @@ fn sse_take_event(pending: &mut Vec<u8>) -> Option<String> {
 
 /// sse_connect(url) → conn id 或 null（支持 http:// 与 https://）
 fn sse_client_connect(url: &str) -> Option<i64> {
+    sse_client_connect_ex(url, 0, "")
+}
+
+/// 建立 SSE 连接（握手完成返回 Conn + 剩余 pending 字节）
+fn sse_connect_raw(url: &str, last_event_id: &str) -> Option<(Conn, Vec<u8>)> {
     let (scheme, rest) = if let Some(r) = url.strip_prefix("https://") {
         ("https", r)
     } else if let Some(r) = url.strip_prefix("http://") {
@@ -228,10 +237,14 @@ fn sse_client_connect(url: &str) -> Option<i64> {
     } else {
         Conn::Plain(TcpStream::connect(format!("{}:{}", host, port)).ok()?)
     };
-    let req = format!(
-        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: PuXian/0.1\r\nAccept: text/event-stream\r\nConnection: close\r\nCache-Control: no-cache\r\n\r\n",
+    let mut req = format!(
+        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: PuXian/0.1\r\nAccept: text/event-stream\r\nConnection: close\r\nCache-Control: no-cache\r\n",
         path, host_header
     );
+    if !last_event_id.is_empty() {
+        req.push_str(&format!("Last-Event-ID: {}\r\n", last_event_id));
+    }
+    req.push_str("\r\n");
     conn.write_all(req.as_bytes()).ok()?;
     // 读响应头（直到 \r\n\r\n，上限 64KB）
     let mut buf: Vec<u8> = Vec::new();
@@ -271,7 +284,12 @@ fn sse_client_connect(url: &str) -> Option<i64> {
         return None;
     }
     // 剩余字节（头之后）作为初始 pending
-    let mut pending: Vec<u8> = buf[idx + 4..].to_vec();
+    Some((conn, buf[idx + 4..].to_vec()))
+}
+
+/// M32：sse_connect(url, reconnect_ms)——reconnect_ms>0 时断线自动重连（带 Last-Event-ID）
+fn sse_client_connect_ex(url: &str, reconnect_ms: i64, last_event_id: &str) -> Option<i64> {
+    let (conn, pending) = sse_connect_raw(url, last_event_id)?;
     let id = SSE_CLIENT_NEXT_ID.fetch_add(1, Ordering::SeqCst);
     {
         let mut m = sse_clients().lock().unwrap();
@@ -279,34 +297,71 @@ fn sse_client_connect(url: &str) -> Option<i64> {
             id,
             SseClient {
                 reader: Mutex::new(conn),
-                pending: Mutex::new(std::mem::take(&mut pending)),
+                pending: Mutex::new(pending),
+                reconnect_ms,
+                url: url.to_string(),
+                last_event_id: last_event_id.to_string(),
             },
         );
     }
     Some(id)
 }
 
-/// sse_read(conn) → 事件 dict 或 null（阻塞读一条；断开 → null）
+/// sse_read(conn) → 事件 dict 或 null（阻塞读一条；断开 → null；reconnect_ms>0 时自动重连）
 fn sse_client_read(conn: i64) -> Option<Value> {
-    let mut m = sse_clients().lock().unwrap();
-    let c = m.get_mut(&conn)?;
+    let mut tmp = [0u8; 8192];
     loop {
+        // 1. 先取 pending 中已完整事件
         {
+            let mut m = sse_clients().lock().unwrap();
+            let c = m.get_mut(&conn)?;
             let mut p = c.pending.lock().unwrap();
             if let Some(ev) = sse_take_event(&mut p) {
-                return Some(sse_parse_event(&ev));
+                let v = sse_parse_event(&ev);
+                // 记录 Last-Event-ID（自动重连时携带）
+                if let Value::Dict(d) = &v {
+                    if let Some(Value::Str(i)) = d.lock().unwrap().get("id") {
+                        c.last_event_id = i.clone();
+                    }
+                }
+                return Some(v);
             }
         }
-        let mut tmp = [0u8; 8192];
+        // 2. 阻塞读网络
         let n = {
+            let mut m = sse_clients().lock().unwrap();
+            let c = m.get_mut(&conn)?;
             let mut r = c.reader.lock().unwrap();
             match r.read(&mut tmp) {
-                Ok(0) => return None, // 对端关闭
+                Ok(0) => 0, // 对端关闭
                 Ok(n) => n,
-                Err(_) => return None,
+                Err(_) => 0,
             }
         };
-        c.pending.lock().unwrap().extend_from_slice(&tmp[..n]);
+        if n > 0 {
+            let mut m = sse_clients().lock().unwrap();
+            let c = m.get_mut(&conn)?;
+            c.pending.lock().unwrap().extend_from_slice(&tmp[..n]);
+            continue;
+        }
+        // 3. 断线：若开启自动重连 → 等待重连间隔后重连（携带 Last-Event-ID），继续读
+        let (url, eid, rms) = {
+            let mut m = sse_clients().lock().unwrap();
+            let c = m.get_mut(&conn)?;
+            if c.reconnect_ms <= 0 {
+                return None;
+            }
+            (c.url.clone(), c.last_event_id.clone(), c.reconnect_ms)
+        };
+        std::thread::sleep(std::time::Duration::from_millis(rms as u64));
+        if let Some((nc, npending)) = sse_connect_raw(&url, &eid) {
+            let mut m = sse_clients().lock().unwrap();
+            let c = m.get_mut(&conn)?;
+            *c.reader.lock().unwrap() = nc;
+            *c.pending.lock().unwrap() = npending;
+            continue; // 重连成功，继续读
+        }
+        return None;
     }
 }
 
@@ -455,6 +510,9 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
                     }
                 }
                 Value::Chan(c) => c.inner.lock().unwrap().buf.len() as i64,
+                Value::Gen(g) => {
+                    g.lock().unwrap().materialized.len() as i64
+                }
                 _ => return Err(err(format!("len 不支持类型 {}", interp.type_name(&args[0])), pos)),
             };
             Ok(Value::Int(n))
@@ -1209,6 +1267,67 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             }
             Ok(Value::Bool(crate::web::rate_limit_try(key, max, window)))
         }
+        Builtin::GenNext => {
+            if args.len() != 1 {
+                return Err(err("gen_next 需要一个参数", pos));
+            }
+            match &args[0] {
+                Value::Gen(g) => {
+                    let mut gg = g.lock().unwrap();
+                    let cur = gg.cursor;
+                    let got = gg.materialized.get(cur).cloned();
+                    if got.is_some() {
+                        gg.cursor += 1;
+                    }
+                    Ok(got.unwrap_or(Value::Null))
+                }
+                _ => Err(err("gen_next 需要生成器对象", pos)),
+            }
+        }
+        Builtin::List => {
+            if args.len() != 1 {
+                return Err(err("list 需要一个参数", pos));
+            }
+            let items = match &args[0] {
+                Value::List(l) => l.lock().unwrap().clone(),
+                Value::Tuple(t) => t.clone(),
+                Value::Str(s) => s.chars().map(|c| Value::Str(c.to_string())).collect(),
+                Value::Range { start, end, step } => {
+                    if *step == 0 {
+                        return Err(err("range step 不能为 0", pos));
+                    }
+                    let mut out = Vec::new();
+                    let mut cur = *start;
+                    if *step > 0 {
+                        while cur < *end {
+                            out.push(Value::Int(cur));
+                            cur += step;
+                        }
+                    } else {
+                        while cur > *end {
+                            out.push(Value::Int(cur));
+                            cur += step;
+                        }
+                    }
+                    out
+                }
+                Value::Gen(g) => {
+                    g.lock().unwrap().materialized.clone()
+                }
+                Value::Dict(d) => d
+                    .lock().unwrap()
+                    .keys()
+                    .map(|k| Value::Str(k.clone()))
+                    .collect(),
+                other => {
+                    return Err(err(
+                        format!("list 不支持类型 {}", interp.type_name(other)),
+                        pos,
+                    ))
+                }
+            };
+            Ok(Value::new_list(items))
+        }
         // ---- std.time ----
         Builtin::Now => {
             use std::time::{SystemTime, UNIX_EPOCH};
@@ -1839,11 +1958,17 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
         }
         // ==================== M23 SSE 客户端（流式消费 / 事件订阅） ====================
         Builtin::SseConnect => {
-            if args.len() != 1 {
-                return Err(err("sse_connect 需要 (url) 参数", pos));
+            // M32：sse_connect(url[, reconnect_ms])——reconnect_ms>0 时断线自动重连
+            if args.len() < 1 || args.len() > 2 {
+                return Err(err("sse_connect 需要 (url[, reconnect_ms]) 参数", pos));
             }
             let url = expect_str(&args[0], "sse_connect", pos)?;
-            match sse_client_connect(&url) {
+            let rms = if args.len() == 2 {
+                expect_int(&args[1], "sse_connect", pos)?
+            } else {
+                0
+            };
+            match sse_client_connect_ex(&url, rms, "") {
                 Some(id) => Ok(Value::Int(id)),
                 None => Ok(Value::Null),
             }
@@ -1981,8 +2106,80 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             Ok(Value::Null) // 不可达
         }
         Builtin::WsConnect => {
+            // M32：支持一行连接 ws_connect("ws://host:port/path") / "wss://..."（wss 走 TLS）
+            if args.len() == 1 {
+                if let Value::Str(url) = &args[0] {
+                    let url = url.clone();
+                    // 解析 URL
+                    let (is_tls, rest) = if let Some(r) = url.strip_prefix("wss://") {
+                        (true, r)
+                    } else if let Some(r) = url.strip_prefix("ws://") {
+                        (false, r)
+                    } else {
+                        return Ok(Value::Null);
+                    };
+                    let (hostport, path) = match rest.find('/') {
+                        Some(i) => (rest[..i].to_string(), rest[i..].to_string()),
+                        None => (rest.to_string(), "/".to_string()),
+                    };
+                    if hostport.is_empty() {
+                        return Ok(Value::Null);
+                    }
+                    let (host, port) = match hostport.find(':') {
+                        Some(i) => (
+                            hostport[..i].to_string(),
+                            hostport[i + 1..].parse::<u16>().map_err(|_| {
+                                LxError::new("R3010", format!("net: 无效端口 {}", hostport), Some(pos))
+                            })?,
+                        ),
+                        None => (hostport.clone(), if is_tls { 443u16 } else { 80u16 }),
+                    };
+                    let host_header = if hostport.contains(':') {
+                        hostport.clone()
+                    } else {
+                        format!("{}:{}", host, port)
+                    };
+                    if is_tls {
+                        let t = https_connect(&host, port).map_err(|e| {
+                            LxError::new("R3010", format!("net: TLS 连接 {} 失败: {}", host, e), Some(pos))
+                        })?;
+                        let mut conn = Conn::Tls(t);
+                        if let Err(_e) = crate::ws::client_handshake(&mut conn, &host, port, &path) {
+                            return Ok(Value::Null); // 握手失败 → null
+                        }
+                        // 注册：SConn::client_tls（读写共享同一 TLS 会话）
+                        match conn {
+                            Conn::Tls(tc) => {
+                                let sc = crate::tls::SConn::client_tls(tc);
+                                let w = sc.try_clone().map_err(|e| {
+                                    LxError::new("R3010", format!("net: 克隆连接失败: {}", e), Some(pos))
+                                })?;
+                                let (id, _rx) = crate::ws::ws_register_client(sc, w);
+                                return Ok(Value::Int(id));
+                            }
+                            _ => return Ok(Value::Null),
+                        }
+                    } else {
+                        let addr = format!("{}:{}", host, port);
+                        let mut stream = TcpStream::connect(&addr).map_err(|e| {
+                            LxError::new("R3010", format!("net: 连接 {} 失败: {}", addr, e), Some(pos))
+                        })?;
+                        if let Err(_e) = crate::ws::client_handshake(&mut stream, &host, port, &path) {
+                            return Ok(Value::Null);
+                        }
+                        let sc = match crate::tls::SConn::plain_try_clone(&stream) {
+                            Ok(w) => w,
+                            Err(_) => return Ok(Value::Null),
+                        };
+                        let (id, _rx) =
+                            crate::ws::ws_register_client(crate::tls::SConn::plain(stream), sc);
+                        return Ok(Value::Int(id));
+                    }
+                }
+                return Ok(Value::Null);
+            }
             if args.len() != 3 {
-                return Err(err("ws_connect 需要 (host, port, path) 参数", pos));
+                return Err(err("ws_connect 需要 (url) 或 (host, port, path) 参数", pos));
             }
             let host = expect_str(&args[0], "ws_connect", pos)?.to_string();
             let port = expect_int(&args[1], "ws_connect", pos)?;

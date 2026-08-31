@@ -424,6 +424,22 @@ fn collect_local_names(prog: &Program) -> Vec<String> {
                     walk_expr(c, out);
                 }
             }
+            ast::Expr::GenExp { expr, clauses, cond, .. } => {
+                for cl in clauses {
+                    for v in &cl.vars {
+                        if !out.contains(v) {
+                            out.push(v.clone());
+                        }
+                    }
+                }
+                walk_expr(expr, out);
+                for cl in clauses {
+                    walk_expr(&cl.iterable, out);
+                }
+                if let Some(c) = cond {
+                    walk_expr(c, out);
+                }
+            }
             ast::Expr::Closure { params, body, .. } => {
                 for p in params {
                     if !out.contains(&p.name) {

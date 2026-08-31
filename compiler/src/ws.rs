@@ -164,8 +164,13 @@ pub fn server_handshake(stream: &mut SConn) -> Result<(), String> {
     Ok(())
 }
 
-/// 客户端握手：发送 Upgrade 请求并校验 101 + Accept
-pub fn client_handshake(stream: &mut TcpStream, host: &str, port: u16, path: &str) -> Result<(), String> {
+/// 客户端握手：发送 Upgrade 请求并校验 101 + Accept（M32：泛型 R 支持明文 TCP 与 wss TLS）
+pub fn client_handshake<R: Read + Write>(
+    stream: &mut R,
+    host: &str,
+    port: u16,
+    path: &str,
+) -> Result<(), String> {
     // 生成 16 字节随机 key（时间 + 计数器派生，仅需唯一性）
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

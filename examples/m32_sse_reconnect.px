@@ -1,0 +1,36 @@
+# M32 SSE 客户端自动重连：sse_connect(url, reconnect_ms) — 断线自动重连（带 Last-Event-ID）
+# 双模式一致：解释器 Rust + 编译 C
+seq = 0
+
+def handler(req):
+    conn = req["conn"]
+    seq = seq + 1
+    sse_send(conn, {"event": "tick", "data": "hello-" + str(seq), "id": str(seq)})
+    sse_close(conn)  # 发完即断开 → 触发客户端自动重连
+
+def serve():
+    sse_serve(19031, handler)
+
+spawn serve()
+sleep(500)
+
+# reconnect_ms=300：断线后 300ms 重连
+c = sse_connect("http://127.0.0.1:19031/events", 300)
+assert(c != null, "sse connect")
+e1 = sse_read(c)
+assert(e1["data"] == "hello-1", "first event")
+e2 = sse_read(c)
+assert(e2["data"] == "hello-2", "reconnect event2")
+e3 = sse_read(c)
+assert(e3["data"] == "hello-3", "reconnect event3")
+# Last-Event-ID 校验：客户端重连请求携带最近 id（服务端按 id 校验则在此断言；此处验证事件连续）
+assert(e3["id"] == "3", "event id chain")
+
+# 无重连参数（默认）：断线返回 null
+c2 = sse_connect("http://127.0.0.1:19031/x")
+assert(c2 != null, "sse connect2")
+ev = sse_read(c2)
+assert(ev["data"] == "hello-4", "no-reconnect first")
+assert(sse_read(c2) == null, "no-reconnect null after close")
+
+print("M32_SSE_RECONNECT_OK")

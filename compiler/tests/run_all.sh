@@ -43,7 +43,7 @@ else
 fi
 
 echo "========== [3/4] 示例双模式回归 =========="
-EXAMPLES="hello fib struct match concurrent concurrent_m3 std_demo net_demo toolchain_demo p0_random_io p1_mutex_rwlock p2_crypto_hash p3_regex p4_http_server p5_px_serve p6_timer p7_aes_xml_zip m22_bitwise_data m23b_bytes m24_slice_xml m25_closure_gc m26_ushr m28_time_sqlite m28_route m29_jsonpath_web m29_webprod m30_int_bytes m30_comp m30_tls_pool m31_sandbox m31_vhost"
+EXAMPLES="hello fib struct match concurrent concurrent_m3 std_demo net_demo toolchain_demo p0_random_io p1_mutex_rwlock p2_crypto_hash p3_regex p4_http_server p5_px_serve p6_timer p7_aes_xml_zip m22_bitwise_data m23b_bytes m24_slice_xml m25_closure_gc m26_ushr m28_time_sqlite m28_route m29_jsonpath_web m29_webprod m30_int_bytes m30_comp m30_tls_pool m31_sandbox m31_vhost m32_gen m32_sse_reconnect m32_hot_reload"
 for ex in $EXAMPLES; do
     f="../examples/$ex.px"
     if [ ! -f "$f" ]; then echo "⚠ 跳过（不存在）: $f"; continue; fi
@@ -83,6 +83,18 @@ if [ -f ../examples/https_demo.px ]; then
     else
         echo "⚠ https_demo 需要外网，跳过（不判失败）"
     fi
+fi
+
+# M32 wss 一行连接（本地 wss：预生成自签 CA 供双模式信任；失败判定 FAIL）
+echo "--- m32_ws_url（本地 wss） ---"
+openssl req -x509 -newkey rsa:2048 -keyout /tmp/px_m32_key.pem -out /tmp/px_m32_cert.pem -days 1 -nodes -subj /CN=localhost -addext basicConstraints=critical,CA:FALSE -addext subjectAltName=DNS:localhost >/dev/null 2>&1
+export PX_TLS_CA_FILE=/tmp/px_m32_cert.pem
+r1=$(timeout 60 "$PX" run ../examples/m32_ws_url.px 2>/dev/null)
+if [ $? -ne 0 ] || ! echo "$r1" | grep -q M32_WS_URL_OK; then echo "❌ m32_ws_url run 失败"; FAIL=1; else
+    if "$PX" build ../examples/m32_ws_url.px >/dev/null 2>&1; then
+        r2=$(timeout 60 ../examples/build/m32_ws_url 2>/dev/null)
+        if echo "$r2" | grep -q M32_WS_URL_OK; then echo "✅ m32_ws_url run==build"; else echo "❌ m32_ws_url build 输出不一致"; FAIL=1; fi
+    else echo "❌ m32_ws_url build 失败"; FAIL=1; fi
 fi
 
 echo "========== [4/4] 静态链接检查 =========="

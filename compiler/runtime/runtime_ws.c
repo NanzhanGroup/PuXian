@@ -27,6 +27,12 @@
 #include <pthread.h>
 #include "mbedtls/sha1.h"
 
+// M32：wss 客户端复用 runtime.c 的 HTTPS 会话（HttpsSession 为内部类型，void* 包装）
+extern void* px_https_connect_ex(const char* host, int port);
+extern int px_https_fd_ex(void* hs);
+extern void px_https_close_ex(void* hs);
+extern PxConn* px_pxconn_from_https(void* hs);
+
 // ==================== 连接注册表 ====================
 #define MAX_WS_CONNS 256
 static pthread_mutex_t g_ws_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -39,6 +45,7 @@ static struct {
     long long last_activity; // 最近读到任何帧的时间（毫秒，0=未初始化；ws_heartbeat 超时检测）
     int hb_active;           // 心跳线程已启动（防重复）
     PxConn* conn;            // M27：连接对象（明文/TLS 统一读写；TLS 时共享指针）
+    void* hs;                // M32：wss 客户端 HttpsSession*（关闭时释放）
 } g_ws_conns[MAX_WS_CONNS];
 static int64_t g_ws_next_id = 1;
 
@@ -68,6 +75,15 @@ static int ws_alloc_slot(void) {
         if (!g_ws_conns[i].active) return i;
     }
     return -1;
+}
+
+// 释放 wss 客户端 TLS 会话（持锁调用；hs 为 HttpsSession*）
+static void ws_free_hs_locked(int idx) {
+    if (idx >= 0 && idx < MAX_WS_CONNS && g_ws_conns[idx].hs) {
+        void* hs = g_ws_conns[idx].hs;
+        g_ws_conns[idx].hs = NULL;
+        px_https_close_ex(hs);
+    }
 }
 
 // 复制 fd（不持锁做 IO；返回 -1 表示不存在/已关闭）
@@ -367,6 +383,36 @@ static int ws_client_handshake(int fd, const char* host, int port, const char* p
     return ok;
 }
 
+// 客户端握手（PxConn 版本：明文/TLS 统一；M32 wss 用）
+static int ws_client_handshake_px(PxConn* c, const char* host, int port, const char* path) {
+    static unsigned long long ws_key_seq = 0;
+    unsigned long long t = (unsigned long long)time(NULL) * 2654435761u + (ws_key_seq++);
+    unsigned char kb[16];
+    for (int i = 0; i < 16; i++) {
+        t = t * 6364136223846793005ULL + 1442695040888963407ULL;
+        kb[i] = (unsigned char)((t >> 33) & 0xFF);
+    }
+    char key[32];
+    ws_b64_encode(kb, 16, key);
+    char req[1024];
+    int rl = snprintf(req, sizeof(req),
+        "GET %s HTTP/1.1\r\nHost: %s:%d\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n",
+        path, host, port, key);
+    if (px_conn_write(c, req, (size_t)rl) < 0) return -1;
+    char* head = NULL;
+    int hlen = 0;
+    if (ws_read_http_header(c, &head, &hlen) < 0) return -1;
+    if (strstr(head, " 101 ") == NULL) { free(head); return -1; }
+    char* got = ws_header_value(head, "Sec-WebSocket-Accept");
+    free(head);
+    if (!got) return -1;
+    char expect[64];
+    ws_accept_key(key, expect);
+    int ok = (strcmp(got, expect) == 0) ? 0 : -1;
+    free(got);
+    return ok;
+}
+
 // ==================== 语言层 API ====================
 
 // ws_serve(port, handler)：阻塞 accept 循环（Go 风格）
@@ -484,7 +530,10 @@ LXValue ws_conn_worker(LXValue* args, int nargs, void* ctx) {
     if (closed) {
         pthread_mutex_lock(&g_ws_mu);
         for (int j = 0; j < MAX_WS_CONNS; j++) {
-            if (g_ws_conns[j].conn == c) g_ws_conns[j].conn = NULL;
+            if (g_ws_conns[j].conn == c) {
+                g_ws_conns[j].conn = NULL;
+                ws_free_hs_locked(j);
+            }
         }
         pthread_mutex_unlock(&g_ws_mu);
         px_conn_close(c);  // 对象保留（closed 标记）
@@ -495,13 +544,112 @@ LXValue ws_conn_worker(LXValue* args, int nargs, void* ctx) {
 }
 
 // ws_connect(host, port, path) → int conn | null（客户端握手）
+// ws_connect(host, port, path) → int conn | null（客户端握手）
+// M32：支持一行连接 ws_connect("ws://host:port/path") / "wss://host:port/path"（wss 走 TLS）
 LXValue bi_ws_connect(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
+    const char* host = NULL;
+    int port = 0;
+    const char* path = NULL;
+    int is_tls = 0;
+    if (nargs == 1 && args[0].type == PX_STR) {
+        // URL 形式：ws:// 或 wss://
+        const char* url = args[0].as.obj->as.str.data;
+        const char* rest;
+        if (strncmp(url, "wss://", 6) == 0) { is_tls = 1; rest = url + 6; }
+        else if (strncmp(url, "ws://", 5) == 0) { rest = url + 5; }
+        else return px_null();
+        const char* slash = strchr(rest, '/');
+        int hl;
+        if (slash) { hl = (int)(slash - rest); path = slash; }
+        else { hl = (int)strlen(rest); path = "/"; }
+        if (hl <= 0) return px_null();
+        char hbuf[512];
+        if (hl >= (int)sizeof(hbuf)) return px_null();
+        memcpy(hbuf, rest, (size_t)hl);
+        hbuf[hl] = 0;
+        char* colon = strchr(hbuf, ':');
+        port = is_tls ? 443 : 80;
+        if (colon) {
+            *colon = 0;
+            port = atoi(colon + 1);
+            if (port <= 0) return px_null();
+        }
+        host = hbuf;
+        if (!*host) return px_null();
+        // 注意：host 指向栈缓冲区，连接建立后不再使用 → 安全
+        if (is_tls) {
+            void* hs = px_https_connect_ex(host, port);
+            if (!hs) return px_null();
+            PxConn* cc = px_pxconn_from_https(hs);
+            if (!cc) { px_https_close_ex(hs); return px_null(); }
+            if (ws_client_handshake_px(cc, host, port, path) < 0) {
+                px_https_close_ex(hs);
+                return px_null();
+            }
+            int fd = px_https_fd_ex(hs);
+            pthread_mutex_lock(&g_ws_mu);
+            int slot = ws_alloc_slot();
+            if (slot < 0) {
+                pthread_mutex_unlock(&g_ws_mu);
+                px_https_close_ex(hs);
+                return px_null();
+            }
+            int64_t conn = g_ws_next_id++;
+            g_ws_conns[slot].fd = fd;
+            g_ws_conns[slot].id = conn;
+            g_ws_conns[slot].active = 1;
+            g_ws_conns[slot].client = 1;
+            g_ws_conns[slot].closed = 0;
+            g_ws_conns[slot].last_activity = 0;
+            g_ws_conns[slot].hb_active = 0;
+            g_ws_conns[slot].conn = cc;
+            g_ws_conns[slot].hs = hs;
+            pthread_mutex_unlock(&g_ws_mu);
+            return px_int(conn);
+        }
+        // 明文 URL：连接后走下方共用注册
+        int fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (fd < 0) return px_null();
+        struct hostent* he = gethostbyname(host);
+        if (!he) { close(fd); return px_null(); }
+        struct sockaddr_in addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons((uint16_t)port);
+        memcpy(&addr.sin_addr, he->h_addr, (size_t)he->h_length);
+        if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) { close(fd); return px_null(); }
+        if (ws_client_handshake(fd, host, port, path) < 0) { close(fd); return px_null(); }
+        PxConn* cc = malloc(sizeof(PxConn));
+        memset(cc, 0, sizeof(PxConn));
+        cc->fd = fd;
+        cc->is_tls = 0;
+        cc->rlen = cc->roff = 0;
+        pthread_mutex_lock(&g_ws_mu);
+        int slot = ws_alloc_slot();
+        if (slot < 0) {
+            pthread_mutex_unlock(&g_ws_mu);
+            close(fd);
+            return px_null();
+        }
+        int64_t conn = g_ws_next_id++;
+        g_ws_conns[slot].fd = fd;
+        g_ws_conns[slot].id = conn;
+        g_ws_conns[slot].active = 1;
+        g_ws_conns[slot].client = 1;
+        g_ws_conns[slot].closed = 0;
+        g_ws_conns[slot].last_activity = 0;
+        g_ws_conns[slot].hb_active = 0;
+        g_ws_conns[slot].conn = cc;
+        g_ws_conns[slot].hs = NULL;
+        pthread_mutex_unlock(&g_ws_mu);
+        return px_int(conn);
+    }
     if (nargs != 3 || args[0].type != PX_STR || args[1].type != PX_INT || args[2].type != PX_STR)
-        px_error("ws_connect 需要 (host, port, path) 参数");
-    const char* host = args[0].as.obj->as.str.data;
-    int port = (int)args[1].as.i;
-    const char* path = args[2].as.obj->as.str.data;
+        px_error("ws_connect 需要 (url) 或 (host, port, path) 参数");
+    host = args[0].as.obj->as.str.data;
+    port = (int)args[1].as.i;
+    path = args[2].as.obj->as.str.data;
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) return px_null();
     struct hostent* he = gethostbyname(host);
@@ -534,6 +682,7 @@ LXValue bi_ws_connect(LXValue* args, int nargs, void* ctx) {
     g_ws_conns[slot].last_activity = 0;
     g_ws_conns[slot].hb_active = 0;
     g_ws_conns[slot].conn = cc;
+    g_ws_conns[slot].hs = NULL;
     pthread_mutex_unlock(&g_ws_mu);
     return px_int(conn);
 }
@@ -556,6 +705,7 @@ LXValue bi_ws_send(LXValue* args, int nargs, void* ctx) {
             g_ws_conns[idx].active = 0;
             g_ws_conns[idx].fd = -1;
             g_ws_conns[idx].conn = NULL;
+            ws_free_hs_locked(idx);
             shutdown(c->fd, SHUT_RDWR);
             px_conn_close(c);  // 对象保留
         }
@@ -602,7 +752,8 @@ LXValue bi_ws_recv(LXValue* args, int nargs, void* ctx) {
                 if (msg) free(msg);
                 pthread_mutex_lock(&g_ws_mu);
                 int idx = ws_find(conn);
-                if (idx >= 0) { g_ws_conns[idx].active = 0; g_ws_conns[idx].fd = -1; g_ws_conns[idx].conn = NULL; }
+                if (idx >= 0) { g_ws_conns[idx].active = 0; g_ws_conns[idx].fd = -1; g_ws_conns[idx].conn = NULL;
+            ws_free_hs_locked(idx); }
                 pthread_mutex_unlock(&g_ws_mu);
                 px_conn_close(c);  // 对象保留
                 return px_null();
@@ -625,7 +776,8 @@ LXValue bi_ws_recv(LXValue* args, int nargs, void* ctx) {
             // 连接断开：清理注册
             pthread_mutex_lock(&g_ws_mu);
             int idx = ws_find(conn);
-            if (idx >= 0) { g_ws_conns[idx].active = 0; g_ws_conns[idx].fd = -1; g_ws_conns[idx].conn = NULL; }
+            if (idx >= 0) { g_ws_conns[idx].active = 0; g_ws_conns[idx].fd = -1; g_ws_conns[idx].conn = NULL;
+            ws_free_hs_locked(idx); }
             pthread_mutex_unlock(&g_ws_mu);
             px_conn_close(c);  // 对象保留
             return px_null();
@@ -641,7 +793,8 @@ LXValue bi_ws_recv(LXValue* args, int nargs, void* ctx) {
             if (msg) free(msg);
             pthread_mutex_lock(&g_ws_mu);
             int idx = ws_find(conn);
-            if (idx >= 0) { g_ws_conns[idx].active = 0; g_ws_conns[idx].fd = -1; g_ws_conns[idx].conn = NULL; }
+            if (idx >= 0) { g_ws_conns[idx].active = 0; g_ws_conns[idx].fd = -1; g_ws_conns[idx].conn = NULL;
+            ws_free_hs_locked(idx); }
             pthread_mutex_unlock(&g_ws_mu);
             px_conn_close(c);  // 对象保留
             return px_null();
@@ -683,6 +836,7 @@ LXValue bi_ws_close(LXValue* args, int nargs, void* ctx) {
         g_ws_conns[idx].active = 0;
         g_ws_conns[idx].fd = -1;
         g_ws_conns[idx].conn = NULL;
+            ws_free_hs_locked(idx);
     }
     pthread_mutex_unlock(&g_ws_mu);
     px_conn_close(c);  // 对象保留
@@ -701,7 +855,8 @@ LXValue bi_ws_ping(LXValue* args, int nargs, void* ctx) {
         shutdown(c->fd, SHUT_RDWR);
         pthread_mutex_lock(&g_ws_mu);
         int idx = ws_find(conn);
-        if (idx >= 0) { g_ws_conns[idx].active = 0; g_ws_conns[idx].fd = -1; g_ws_conns[idx].conn = NULL; }
+        if (idx >= 0) { g_ws_conns[idx].active = 0; g_ws_conns[idx].fd = -1; g_ws_conns[idx].conn = NULL;
+            ws_free_hs_locked(idx); }
         pthread_mutex_unlock(&g_ws_mu);
         px_conn_close(c);  // 对象保留
         return px_bool(false);
@@ -764,6 +919,7 @@ static void* ws_heartbeat_thread(void* arg) {
                 g_ws_conns[idx].active = 0;
                 g_ws_conns[idx].fd = -1;
                 g_ws_conns[idx].conn = NULL;
+            ws_free_hs_locked(idx);
                 g_ws_conns[idx].hb_active = 0;
             }
             pthread_mutex_unlock(&g_ws_mu);

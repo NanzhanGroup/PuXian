@@ -112,6 +112,8 @@ static pthread_cond_t g_pool_cond = PTHREAD_COND_INITIALIZER;
 static LXValue bi_sandbox_enter(LXValue* args, int nargs, void* ctx);
 static LXValue bi_vhost(LXValue* args, int nargs, void* ctx);
 static LXValue bi_rate_limit(LXValue* args, int nargs, void* ctx);
+static LXValue bi_gen_next(LXValue* args, int nargs, void* ctx);
+static LXValue bi_list(LXValue* args, int nargs, void* ctx);
 static int px_vhost_resolve(const char* host_hdr, const char* default_root,
                             char* out_root, int out_root_sz, LXValue* out_handler, int* has_handler);
 static void px_pool_push(int fd);
@@ -1290,8 +1292,34 @@ const char* px_type_name(LXValue v) {
         case PX_CHAN: return "chan";
         case PX_MUTEX: return "mutex";
         case PX_RWLOCK: return "rwlock";
+        case PX_GEN: return "generator";
     }
     return "unknown";
+}
+
+// ==================== M32 生成器（创建时物化） ====================
+
+LXValue px_gen_from_list(LXValue list) {
+    LXObject* o = xmalloc(sizeof(LXObject));
+    memset(o, 0, sizeof(LXObject));
+    o->type = PX_GEN;
+    o->as.gen.list = list;
+    o->as.gen.cursor = 0;
+    LXValue v;
+    v.type = PX_GEN;
+    v.as.obj = o;
+    return v;
+}
+
+LXValue px_gen_next(LXValue g) {
+    if (g.type != PX_GEN) px_error("gen_next 需要生成器对象");
+    LXObject* o = g.as.obj;
+    if (o->as.gen.list.type == PX_LIST && o->as.gen.cursor < o->as.gen.list.as.obj->as.list.len) {
+        LXValue r = o->as.gen.list.as.obj->as.list.items[o->as.gen.cursor];
+        o->as.gen.cursor++;
+        return r;
+    }
+    return px_null();
 }
 
 // ==================== 错误 ====================
@@ -1595,6 +1623,7 @@ LXValue px_or(LXValue a, LXValue b) {
 // ==================== 容器操作 ====================
 
 LXValue px_index(LXValue obj, LXValue idx) {
+    if (obj.type == PX_GEN) obj = obj.as.obj->as.gen.list;
     if (obj.type == PX_LIST) {
         int i = (int)int_val(idx);
         int len = obj.as.obj->as.list.len;
@@ -1860,6 +1889,7 @@ int px_len(LXValue v) {
         case PX_LIST: return v.as.obj->as.list.len;
         case PX_DICT: return v.as.obj->as.dict.len;
         case PX_TUPLE: return v.as.obj->as.tuple.len;
+        case PX_GEN: return v.as.obj->as.gen.list.as.obj->as.list.len;
         default: px_error("len 不支持类型 %s", px_type_name(v)); return 0;
     }
 }
@@ -4167,6 +4197,9 @@ void px_register_builtins(void) {
     px_set_global("sandbox_enter", px_native("sandbox_enter", bi_sandbox_enter));
     px_set_global("vhost", px_native("vhost", bi_vhost));
     px_set_global("rate_limit", px_native("rate_limit", bi_rate_limit));
+    // M32 生成器表达式：gen_next 逐项取值 / list 转列表
+    px_set_global("gen_next", px_native("gen_next", bi_gen_next));
+    px_set_global("list", px_native("list", bi_list));
     // M18 后台定时任务 / 定时器原语
     px_set_global("set_timeout", px_native("set_timeout", bi_set_timeout));
     px_set_global("set_interval", px_native("set_interval", bi_set_interval));
@@ -5581,8 +5614,7 @@ fail:
 }
 
 static void https_close(HttpsSession* s) {
-    if (!s) return;
-    // M25：关闭前补存会话（TLS 1.3 NewSessionTicket 常在首轮读时到达）
+    if (!s) return;    // M25：关闭前补存会话（TLS 1.3 NewSessionTicket 常在首轮读时到达）
     if (s->skey[0]) {
         mbedtls_ssl_session cur;
         mbedtls_ssl_session_init(&cur);
@@ -5597,6 +5629,34 @@ static void https_close(HttpsSession* s) {
     mbedtls_ctr_drbg_free(&s->ctr_drbg);
     mbedtls_entropy_free(&s->entropy);
     xfree(s);
+}
+
+// ==================== M32 wss 客户端导出（runtime_ws.c 复用） ====================
+// HttpsSession 为 runtime.c 内部类型；对 runtime_ws.c 暴露 void* 包装。
+void* px_https_connect_ex(const char* host, int port) {
+    return (void*)https_connect(host, port);
+}
+int px_https_fd_ex(void* hs) {
+    HttpsSession* s = (HttpsSession*)hs;
+    return s ? s->net.fd : -1;
+}
+void px_https_close_ex(void* hs) {
+    https_close((HttpsSession*)hs);
+}
+// 把 HTTPS 会话包装为 PxConn（指针指向会话内部；会话生命周期由调用方管理）
+PxConn* px_pxconn_from_https(void* hs) {
+    HttpsSession* s = (HttpsSession*)hs;
+    if (!s) return NULL;
+    PxConn* c = (PxConn*)xmalloc(sizeof(PxConn));
+    memset(c, 0, sizeof(PxConn));
+    c->fd = s->net.fd;
+    c->is_tls = 1;
+    c->owned = 0;
+    c->ssl = &s->ssl;
+    c->conf = &s->conf;
+    c->ctr_drbg = &s->ctr_drbg;
+    c->entropy = &s->entropy;
+    return c;
 }
 
 // 统一发送（tls 非空走 mbedtls，否则走 fd send）
@@ -7280,6 +7340,10 @@ static struct {
     unsigned char* pending;   // 已读未解析缓冲
     int pend_len;
     int pend_cap;
+    // M32：自动重连（sse_connect(url, reconnect_ms)）
+    long long reconnect_ms;   // >0 时断线自动重连
+    char url[512];            // 原始 URL（重连用）
+    char last_event_id[512];  // 最近事件 id（重连时带 Last-Event-ID）
 } g_sse_clients[MAX_SSE_CLIENTS];
 static int64_t g_sse_cli_next_id = 1;
 
@@ -7686,10 +7750,10 @@ static LXValue sse_parse_event_c(const char* text, int len) {
 }
 
 // sse_connect(url) → conn id | null
-static LXValue bi_sse_connect(LXValue* args, int nargs, void* ctx) {
-    (void)ctx;
-    if (nargs != 1 || args[0].type != PX_STR) px_error("sse_connect 需要 (url) 参数");
-    const char* url = args[0].as.obj->as.str.data;
+// M32：SSE 客户端连接核心（建立连接并填充 slot；不持锁，调用方管理 g_sse_cli_mu）
+// 返回 0 成功；失败时 slot 数据未填充（调用方负责清理旧数据）。
+static int sse_cli_connect_slot(int slot, const char* url, long long reconnect_ms,
+                                const char* last_event_id) {
     int is_https = 0;
     const char* rest;
     if (strncmp(url, "https://", 8) == 0) {
@@ -7698,7 +7762,7 @@ static LXValue bi_sse_connect(LXValue* args, int nargs, void* ctx) {
     } else if (strncmp(url, "http://", 7) == 0) {
         rest = url + 7;
     } else {
-        return px_null(); // 仅支持 http:// 与 https://
+        return -1; // 仅支持 http:// 与 https://
     }
     char host[256];
     int port = is_https ? 443 : 80;
@@ -7711,43 +7775,47 @@ static LXValue bi_sse_connect(LXValue* args, int nargs, void* ctx) {
     } else {
         hl = (int)strlen(rest);
     }
-    if (hl <= 0 || hl >= (int)sizeof(host)) return px_null();
-    memcpy(host, rest, hl);
+    if (hl <= 0 || hl >= (int)sizeof(host)) return -1;
+    memcpy(host, rest, (size_t)hl);
     host[hl] = 0;
     char* colon = strchr(host, ':');
     if (colon) {
         *colon = 0;
         port = atoi(colon + 1);
-        if (port <= 0) return px_null();
+        if (port <= 0) return -1;
     }
     int fd = -1;
     HttpsSession* tls = NULL;
     if (is_https) {
         tls = https_connect(host, port);
-        if (!tls) return px_null();
+        if (!tls) return -1;
         fd = tls->net.fd;
     } else {
         fd = socket(AF_INET, SOCK_STREAM, 0);
-        if (fd < 0) return px_null();
+        if (fd < 0) return -1;
         struct hostent* he = gethostbyname(host);
-        if (!he) { close(fd); return px_null(); }
+        if (!he) { close(fd); return -1; }
         struct sockaddr_in addr;
         memset(&addr, 0, sizeof(addr));
         addr.sin_family = AF_INET;
         addr.sin_port = htons((uint16_t)port);
         memcpy(&addr.sin_addr, he->h_addr, (size_t)he->h_length);
-        if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) { close(fd); return px_null(); }
+        if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) { close(fd); return -1; }
     }
     char req[8192];
     char hosthdr[512];
     if (colon) snprintf(hosthdr, sizeof(hosthdr), "%s:%d", host, port);
     else snprintf(hosthdr, sizeof(hosthdr), "%s", host);
     int rl = snprintf(req, sizeof(req),
-        "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: PuXian/0.1\r\nAccept: text/event-stream\r\nConnection: close\r\nCache-Control: no-cache\r\n\r\n",
+        "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: PuXian/0.1\r\nAccept: text/event-stream\r\nConnection: close\r\nCache-Control: no-cache\r\n",
         path, hosthdr);
+    if (last_event_id && *last_event_id) {
+        rl += snprintf(req + rl, sizeof(req) - (size_t)rl, "Last-Event-ID: %s\r\n", last_event_id);
+    }
+    rl += snprintf(req + rl, sizeof(req) - (size_t)rl, "\r\n");
     if (rl <= 0 || conn_send(tls, fd, req, rl) < 0) {
         if (tls) https_close(tls); else close(fd);
-        return px_null();
+        return -1;
     }
     // 读响应头（直到 \r\n\r\n，上限 64KB）
     unsigned char hbuf[65536];
@@ -7767,7 +7835,7 @@ static LXValue bi_sse_connect(LXValue* args, int nargs, void* ctx) {
     }
     if (header_end < 0) {
         if (tls) https_close(tls); else close(fd);
-        return px_null();
+        return -1;
     }
     char* hstr = xmalloc((size_t)header_end + 1);
     memcpy(hstr, hbuf, (size_t)header_end);
@@ -7786,22 +7854,18 @@ static LXValue bi_sse_connect(LXValue* args, int nargs, void* ctx) {
     xfree(hstr);
     if (status != 200 || !ct_ok) {
         if (tls) https_close(tls); else close(fd);
-        return px_null();
+        return -1;
     }
-    // 注册（剩余字节进 pending）
-    pthread_mutex_lock(&g_sse_cli_mu);
-    int slot = sse_cli_alloc_slot();
-    if (slot < 0) {
-        pthread_mutex_unlock(&g_sse_cli_mu);
-        if (tls) https_close(tls); else close(fd);
-        return px_null();
-    }
-    int64_t id = g_sse_cli_next_id++;
+    // 填充 slot（剩余字节进 pending）
     int remain = hn - header_end;
     g_sse_clients[slot].fd = fd;
     g_sse_clients[slot].tls = tls;
-    g_sse_clients[slot].id = id;
     g_sse_clients[slot].active = 1;
+    g_sse_clients[slot].reconnect_ms = reconnect_ms;
+    snprintf(g_sse_clients[slot].url, sizeof(g_sse_clients[slot].url), "%s", url);
+    snprintf(g_sse_clients[slot].last_event_id, sizeof(g_sse_clients[slot].last_event_id),
+             "%s", last_event_id ? last_event_id : "");
+    if (g_sse_clients[slot].pending) xfree(g_sse_clients[slot].pending);
     if (remain > 0) {
         g_sse_clients[slot].pend_cap = remain + 64;
         g_sse_clients[slot].pending = xmalloc((size_t)g_sse_clients[slot].pend_cap);
@@ -7811,8 +7875,47 @@ static LXValue bi_sse_connect(LXValue* args, int nargs, void* ctx) {
         g_sse_clients[slot].pending = NULL;
         g_sse_clients[slot].pend_len = g_sse_clients[slot].pend_cap = 0;
     }
+    return 0;
+}
+
+// sse_connect(url[, reconnect_ms]) → int conn | null
+// reconnect_ms>0：断线自动重连（等待该毫秒后重连，带 Last-Event-ID）
+static LXValue bi_sse_connect(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || nargs > 2 || args[0].type != PX_STR) px_error("sse_connect 需要 (url[, reconnect_ms]) 参数");
+    const char* url = args[0].as.obj->as.str.data;
+    long long reconnect_ms = 0;
+    if (nargs == 2) {
+        if (args[1].type != PX_INT) px_error("sse_connect 的 reconnect_ms 需要整数");
+        reconnect_ms = args[1].as.i;
+    }
+    pthread_mutex_lock(&g_sse_cli_mu);
+    int slot = sse_cli_alloc_slot();
+    if (slot < 0) {
+        pthread_mutex_unlock(&g_sse_cli_mu);
+        return px_null();
+    }
+    g_sse_clients[slot].active = 0;
+    g_sse_clients[slot].fd = -1;
+    g_sse_clients[slot].tls = NULL;
+    g_sse_clients[slot].pending = NULL;
+    g_sse_clients[slot].pend_len = g_sse_clients[slot].pend_cap = 0;
     pthread_mutex_unlock(&g_sse_cli_mu);
-    return px_int(id);
+    if (sse_cli_connect_slot(slot, url, reconnect_ms, NULL) != 0) {
+        // 连接失败：清理 slot
+        pthread_mutex_lock(&g_sse_cli_mu);
+        g_sse_clients[slot].active = 0;
+        g_sse_clients[slot].fd = -1;
+        if (g_sse_clients[slot].pending) { xfree(g_sse_clients[slot].pending); g_sse_clients[slot].pending = NULL; }
+        g_sse_clients[slot].pend_len = g_sse_clients[slot].pend_cap = 0;
+        g_sse_clients[slot].tls = NULL;
+        pthread_mutex_unlock(&g_sse_cli_mu);
+        return px_null();
+    }
+    pthread_mutex_lock(&g_sse_cli_mu);
+    g_sse_clients[slot].id = g_sse_cli_next_id++;
+    pthread_mutex_unlock(&g_sse_cli_mu);
+    return px_int(g_sse_clients[slot].id);
 }
 
 // sse_read(conn) → 事件 dict | null（阻塞读一条；断开 → null）
@@ -7843,6 +7946,18 @@ static LXValue bi_sse_read(LXValue* args, int nargs, void* ctx) {
                 int newlen = n - (found + sep);
                 memmove(p, p + found + sep, (size_t)newlen);
                 g_sse_clients[idx].pend_len = newlen;
+                // M32：记录 last_event_id（自动重连时带 Last-Event-ID）
+                if (g_sse_clients[idx].reconnect_ms > 0 && ev.type == PX_DICT) {
+                    LXObject* eo = ev.as.obj;
+                    for (int ei = 0; ei < eo->as.dict.len; ei++) {
+                        if (strcmp(eo->as.dict.keys[ei], "id") == 0 && eo->as.dict.vals[ei].type == PX_STR) {
+                            snprintf(g_sse_clients[idx].last_event_id,
+                                     sizeof(g_sse_clients[idx].last_event_id), "%s",
+                                     eo->as.dict.vals[ei].as.obj->as.str.data);
+                            break;
+                        }
+                    }
+                }
                 pthread_mutex_unlock(&g_sse_cli_mu);
                 return ev;
             }
@@ -7856,9 +7971,15 @@ static LXValue bi_sse_read(LXValue* args, int nargs, void* ctx) {
         pthread_mutex_unlock(&g_sse_cli_mu);
         int n = conn_recv(tls, fd, (char*)tmp, (int)sizeof(tmp));
         if (n <= 0) {
+            // M32：断线自动重连（reconnect_ms>0：等待后重连，带 Last-Event-ID）
             pthread_mutex_lock(&g_sse_cli_mu);
             HttpsSession* t2 = NULL;
+            long long rms = 0;
+            char url[512] = "", eid[512] = "";
             if (g_sse_clients[idx].active) {
+                rms = g_sse_clients[idx].reconnect_ms;
+                snprintf(url, sizeof(url), "%s", g_sse_clients[idx].url);
+                snprintf(eid, sizeof(eid), "%s", g_sse_clients[idx].last_event_id);
                 g_sse_clients[idx].active = 0;
                 if (g_sse_clients[idx].pending) xfree(g_sse_clients[idx].pending);
                 g_sse_clients[idx].pending = NULL;
@@ -7868,6 +7989,16 @@ static LXValue bi_sse_read(LXValue* args, int nargs, void* ctx) {
             }
             pthread_mutex_unlock(&g_sse_cli_mu);
             if (t2) https_close(t2); else close(fd);
+            if (rms > 0 && url[0]) {
+                usleep((useconds_t)(rms * 1000));
+                if (sse_cli_connect_slot(idx, url, rms, eid) == 0) {
+                    pthread_mutex_lock(&g_sse_cli_mu);
+                    g_sse_clients[idx].id = conn;  // 保持同一 conn id
+                    fd = g_sse_clients[idx].fd;
+                    pthread_mutex_unlock(&g_sse_cli_mu);
+                    continue;  // 重连成功，继续读
+                }
+            }
             return px_null();
         }
         pthread_mutex_lock(&g_sse_cli_mu);
@@ -7956,11 +8087,18 @@ typedef struct {
     int out_fd;   // worker→父（worker stdout）
     int alive;
     int busy;
+    int gen;      // M32：代际（热更新滚动重启计数）
 } PXWorker;
 
 static PXWorker g_px_pool[PX_POOL_SIZE];
 static pthread_mutex_t g_px_pool_mu = PTHREAD_MUTEX_INITIALIZER;
 static int g_px_pool_ready = 0;
+// M32 进程池热更新：脚本/二进制 mtime 变化 → 标记 reload → 空闲 worker 滚动重启
+static volatile int g_px_pool_reload = 0;
+static int g_pool_gen = 1;
+static long long g_last_script_mtime = 0;
+static long long g_last_bin_mtime = 0;
+static char g_last_script_path[1024] = "";
 
 // 派生一个 `px --worker` 进程（返回值 0 成功）
 static int px_pool_spawn(PXWorker* w) {
@@ -7995,6 +8133,7 @@ static int px_pool_spawn(PXWorker* w) {
     w->out_fd = out_pipe[0];
     w->alive = 1;
     w->busy = 0;
+    w->gen = g_pool_gen;
     return 0;
 }
 
@@ -8029,8 +8168,52 @@ static int px_pool_take(void) {
 
 static void px_pool_release(int idx) {
     pthread_mutex_lock(&g_px_pool_mu);
-    if (idx >= 0 && idx < PX_POOL_SIZE) g_px_pool[idx].busy = 0;
+    if (idx >= 0 && idx < PX_POOL_SIZE) {
+        g_px_pool[idx].busy = 0;
+        // M32 热更新：该 worker 是旧代 → 处理完当前任务后滚动重启（kill + 补位）
+        if (g_px_pool_reload && g_px_pool[idx].gen < g_pool_gen) {
+            PXWorker w = g_px_pool[idx];
+            g_px_pool[idx].alive = 0;
+            if (w.pid > 0) kill(w.pid, SIGKILL);
+            if (w.in_fd > 0) close(w.in_fd);
+            if (w.out_fd > 0) close(w.out_fd);
+            if (px_pool_spawn(&g_px_pool[idx]) != 0) g_px_pool[idx].alive = 0;
+        }
+        // 全部 worker 已是新代 → 清除 reload 标志
+        int all_new = 1;
+        for (int i = 0; i < PX_POOL_SIZE; i++) {
+            if (g_px_pool[i].alive && g_px_pool[i].gen < g_pool_gen) { all_new = 0; break; }
+        }
+        if (all_new) g_px_pool_reload = 0;
+    }
     pthread_mutex_unlock(&g_px_pool_mu);
+}
+
+// M32：检测脚本/px 二进制 mtime 变化 → 标记热更新（进程池滚动重启）
+static void px_pool_check_hot_reload(const char* path) {
+    struct stat st;
+    if (path && *path && stat(path, &st) == 0) {
+        long long mt = (long long)st.st_mtime;
+        if (g_last_script_path[0] == 0) {
+            snprintf(g_last_script_path, sizeof(g_last_script_path), "%s", path);
+            g_last_script_mtime = mt;
+        } else if (strcmp(g_last_script_path, path) == 0 && mt != g_last_script_mtime) {
+            g_last_script_mtime = mt;
+            g_pool_gen++;              // 新一代
+            g_px_pool_reload = 1;      // 脚本变更 → 滚动重启 worker
+        }
+    }
+    const char* bin = px_px_bin();
+    if (bin && stat(bin, &st) == 0) {
+        long long bmt = (long long)st.st_mtime;
+        if (g_last_bin_mtime == 0) {
+            g_last_bin_mtime = bmt;
+        } else if (bmt != g_last_bin_mtime) {
+            g_last_bin_mtime = bmt;
+            g_pool_gen++;
+            g_px_pool_reload = 1;      // px 二进制替换 → 滚动重启（新二进制生效）
+        }
+    }
 }
 
 // 杀掉并补位 worker（调用方此后不得再引用该下标）
@@ -8139,6 +8322,9 @@ static int px_pool_recv_result(int idx, char** out, int* out_len, int* exit_code
 static int px_pool_run(const char* path, const char* env_json, int dump_response,
                        int timeout_ms, char** out, int* out_len, int* exit_code) {
     px_pool_init_lazy();
+    // M32：热更新检测——脚本或 px 二进制变更 → 滚动重启 worker（worker 本身每次任务
+    // 重新读 .px 文件已天然热更新；滚动重启保证 worker 状态也刷新）
+    px_pool_check_hot_reload(path);
     for (int attempt = 0; attempt < 3; attempt++) {
         int idx = px_pool_take();
         if (idx < 0) {
@@ -8293,6 +8479,7 @@ int px_conn_init(PxConn* c, int fd) {
     memset(c, 0, sizeof(*c));
     c->fd = fd;
     c->is_tls = 0;
+    c->owned = 1;
     c->rlen = 0; c->roff = 0;
     if (!g_srv_tls_ready) return 0; // 明文
     c->ssl = malloc(sizeof(mbedtls_ssl_context));
@@ -8357,15 +8544,18 @@ void px_conn_close(PxConn* c) {
     c->closed = 1;
     if (c->is_tls) {
         mbedtls_ssl_close_notify((mbedtls_ssl_context*)c->ssl);
-        mbedtls_ssl_free((mbedtls_ssl_context*)c->ssl);
-        mbedtls_ssl_config_free((mbedtls_ssl_config*)c->conf);
-        mbedtls_ctr_drbg_free((mbedtls_ctr_drbg_context*)c->ctr_drbg);
-        mbedtls_entropy_free((mbedtls_entropy_context*)c->entropy);
-        free(c->ssl); free(c->conf); free(c->ctr_drbg); free(c->entropy);
-        c->ssl = c->conf = c->ctr_drbg = c->entropy = NULL;
+        if (c->owned) {
+            mbedtls_ssl_free((mbedtls_ssl_context*)c->ssl);
+            mbedtls_ssl_config_free((mbedtls_ssl_config*)c->conf);
+            mbedtls_ctr_drbg_free((mbedtls_ctr_drbg_context*)c->ctr_drbg);
+            mbedtls_entropy_free((mbedtls_entropy_context*)c->entropy);
+            free(c->ssl); free(c->conf); free(c->ctr_drbg); free(c->entropy);
+            c->ssl = c->conf = c->ctr_drbg = c->entropy = NULL;
+        }
+        // owned=0：TLS 状态由外部（HttpsSession）管理，px_https_close_ex 统一释放
     }
     if (c->fd >= 0) { close(c->fd); c->fd = -1; }
-    c->is_tls = 0;
+    if (c->owned) c->is_tls = 0;
 }
 
 // tls_server(cert, key)：注册服务端 TLS（cert/key 为 PEM 路径或 PEM 内容）→ bool
@@ -9668,6 +9858,54 @@ static LXValue bi_rate_limit(LXValue* args, int nargs, void* ctx) {
     long long win = args[2].as.i;
     if (max < 1 || win < 1) px_error("rate_limit: max 与 window_sec 需要正整数");
     return px_bool(px_rate_limit_try(args[0].as.obj->as.str.data, max, win));
+}
+
+// gen_next(g) → Value|null（逐项取值；耗尽后 null）
+static LXValue bi_gen_next(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("gen_next 需要 1 个参数");
+    if (args[0].type != PX_GEN) px_error("gen_next 需要生成器对象");
+    return px_gen_next(args[0]);
+}
+
+// list(x) → list（list/range/gen/tuple → list；str → 字符列表；dict → keys）
+static LXValue bi_list(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("list 需要 1 个参数");
+    LXValue v = args[0];
+    if (v.type == PX_LIST) return v;
+    if (v.type == PX_TUPLE) return px_list_n(v.as.obj->as.tuple.items, v.as.obj->as.tuple.len);
+    if (v.type == PX_GEN) {
+        return v.as.obj->as.gen.list;
+    }
+    if (v.type == PX_STR) {
+        // UTF-8 字符列表
+        const char* s = v.as.obj->as.str.data;
+        int n = v.as.obj->as.str.len;
+        LXValue l = px_list(0);
+        int i = 0;
+        while (i < n) {
+            int cl = 1;
+            unsigned char c = (unsigned char)s[i];
+            if (c >= 0xF0) cl = 4; else if (c >= 0xE0) cl = 3; else if (c >= 0xC0) cl = 2;
+            if (i + cl > n) cl = n - i;
+            char buf[8];
+            memcpy(buf, s + i, (size_t)cl);
+            buf[cl] = 0;
+            px_list_push(l, px_str_len(buf, cl));
+            i += cl;
+        }
+        return l;
+    }
+    if (v.type == PX_DICT) {
+        LXValue l = px_list(0);
+        LXObject* o = v.as.obj;
+        for (int i = 0; i < o->as.dict.len; i++) px_list_push(l, px_str(o->as.dict.keys[i]));
+        return l;
+    }
+    // range：C 端 range() 已物化为 list（bi_range 直接返回 list）
+    px_error("list 不支持类型 %s", px_type_name(v));
+    return px_null();
 }
 
 static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {

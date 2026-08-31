@@ -292,6 +292,13 @@ pub enum Expr {
         cond: Option<Box<Expr>>,
         pos: Pos,
     },
+    /// 生成器表达式 (expr for x in xs if cond)（M32：延迟物化，gen_next/for-in 消费）
+    GenExp {
+        expr: Box<Expr>,
+        clauses: Vec<CompClause>,
+        cond: Option<Box<Expr>>,
+        pos: Pos,
+    },
     /// 闭包/匿名函数
     Closure {
         params: Vec<Param>,

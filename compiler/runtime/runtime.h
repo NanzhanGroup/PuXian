@@ -34,6 +34,7 @@ typedef enum {
     PX_CHAN,    // 通道（并发原语）
     PX_MUTEX,   // 互斥锁（M13：P1 锁原语）
     PX_RWLOCK,  // 读写锁（M13：读多写少）
+    PX_GEN,     // 生成器（M32：生成器表达式延迟物化）
 } LXType;
 
 typedef struct LXValue LXValue;
@@ -87,6 +88,10 @@ struct LXObject {
             int writer;              // 写者持有
             int writer_waiting;      // 等待中的写者数（写优先）
         } rwlock;
+        struct {
+            LXValue  list;           // 物化后的列表
+            int      cursor;         // gen_next 游标
+        } gen;
     } as;
 };
 
@@ -108,6 +113,9 @@ LXValue px_native(const char* name, LXFuncPtr fn);
 LXValue px_struct(const char* type_name, char** fnames, LXValue* fvals, int nfields);
 LXValue px_enum(const char* type_name, const char* variant);
 LXValue px_tuple(LXValue* items, int len);
+// M32：生成器对象（创建时物化，gen_next 逐项消费）
+LXValue px_gen_from_list(LXValue list);
+LXValue px_gen_next(LXValue g);
 
 // ==================== 类型判断 ====================
 
@@ -295,6 +303,8 @@ typedef struct PxConn {
     unsigned char rbuf[16384]; // TLS 读缓冲（SSL_read 一次可多读）
     int rlen, roff;
     int closed;        // 连接已关闭（px_conn_close 置 1；对象保留避免并发 use-after-free）
+    int owned;         // M32：1 = ssl/conf/ctr_drbg/entropy 独立 malloc（px_conn_close 释放）；
+                       //      0 = 指向外部 HttpsSession（wss 客户端，由 px_https_close_ex 释放）
 } PxConn;
 
 // 初始化（fd 上做 TLS 握手若服务端 TLS 已注册；失败返回 -1）

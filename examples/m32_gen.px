@@ -1,0 +1,38 @@
+# M32 生成器表达式：语法 + gen_next 逐项 + for-in + list() 转换（双模式一致）
+def main():
+    g = (x * 2 for x in [1, 2, 3])
+    assert(gen_next(g) == 2, "gen1")
+    assert(gen_next(g) == 4, "gen2")
+    assert(gen_next(g) == 6, "gen3")
+    assert(gen_next(g) == null, "gen exhausted")
+
+    # for-in 迭代生成器
+    total = 0
+    for v in (y + 10 for y in [1, 2, 3]):
+        total += v
+    assert(total == 36, "for over gen")
+
+    # 多 for 嵌套生成器（笛卡尔积）
+    g2 = (a * 10 + b for a in [1, 2] for b in [3, 4])
+    assert(list(g2) == [13, 14, 23, 24], "cartesian")
+
+    # 带条件
+    g3 = (n for n in [1, 2, 3, 4, 5] if n % 2 == 1)
+    assert(list(g3) == [1, 3, 5], "cond")
+
+    # 多变量解包
+    pairs = [["a", 1], ["b", 2]]
+    g4 = (k + str(v) for k, v in pairs)
+    assert(list(g4) == ["a1", "b2"], "unpack")
+
+    # len() 物化
+    assert(len((i for i in range(5))) == 5, "len gen")
+
+    # 生成器作为中间值再生成器
+    g5 = (n * n for n in (x for x in [1, 2, 3]))
+    assert(list(g5) == [1, 4, 9], "gen of gen")
+
+    # 类型名
+    assert(type((x for x in [1])) == "generator", "type gen")
+
+    print("m32_gen_ok")

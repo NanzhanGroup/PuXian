@@ -22,10 +22,10 @@
 | ⏱ 定时器 | `set_timeout` / `set_interval` / `clear_timer`（一次性/周期回调，可变参数透传，回调内并发原语安全） |
 | 🧹 内存 | 编译模式 C 运行时内置保守标记-清除 GC（循环引用可回收，自动触发）+ **slab 分配器**（21 档 size-class 槽位复用）；解释器侧**追踪式 GC** 回收循环引用（list/dict/chan/**闭包 Func↔Env 循环**）+ `gc()` 强制回收 |
 | 🧩 模块化 | `import std.*` / `import foo.bar` / `from foo import x` / 相对路径导入；`px pkg` 包管理（init/add/install/list/remove） |
-| 🌐 网络 | HTTP 客户端（**HTTPS TLS 1.2/1.3** + gzip/chunked 自动解码 + **http/https 连接池复用** + **TLS 会话票据恢复** + **流式 gzip 边下边解**）+ **HTTP 服务端**（`http_serve` gzip/chunked/keep-alive/流式 + **`px_serve` 服务端 TLS**：`tls_server` 注册后 HTTPS/WSS/SSE-over-TLS + 请求体大小可配 + 413 + 大 body 落盘 + **优雅关闭** SIGINT/SIGTERM）+ **WebSocket**（RFC 6455，心跳/超时）+ **SSE** 服务端/客户端（LLM 流式推送基石）+ TCP 全功能 |
+| 🌐 网络 | HTTP 客户端（**HTTPS TLS 1.2/1.3** + gzip/chunked 自动解码 + **http/https 连接池复用** + **TLS 会话票据恢复** + **流式 gzip 边下边解**）+ **HTTP 服务端**（`http_serve` gzip/chunked/keep-alive/流式 + **`px_serve` 服务端 TLS**：`tls_server` 注册后 HTTPS/WSS/SSE-over-TLS + 请求体大小可配 + 413 + 大 body 落盘 + **优雅关闭** SIGINT/SIGTERM）+ **WebSocket**（RFC 6455，心跳/超时，**`ws://`/`wss://` 一行连接**）+ **SSE** 服务端/客户端（**断线自动重连**，带 Last-Event-ID）+ TCP 全功能 |
 | 🛡 加密/文档 | **AES-CBC-PKCS7 / AES-GCM**、**RSA**（PKCS#1 v1.5）、**XML** 解析/转义/**生成**（xml_build）、**zip** 打包/解压、**base64**、sha256 / xxhash |
-| 🔢 语言能力 | 切片语法 `a[i:j]` / `a[i:j:k]`（步长/反转，str 按 UTF-8 字符）、位运算 + 二进制数据视图（int_to_hex / bytes_to_hex / bit_count / bit_length）、正则表达式、锁原语（mutex / rwlock）、文件随机读写 + fsync、进程/信号（os_spawn / os_wait / signal） |
-| 🚀 应用平台 | **.px 脚本执行机制**（`px_serve` PHP/OpenResty 式应用服务器：Cookie/Session/基础认证 + 服务端 TLS + 优雅关闭、`px_exec` 语言层嵌入 API）+ **.px 进程池**（编译模式预派生 `px --worker` 解释器常驻复用，PHP-FPM 风格） |
+| 🔢 语言能力 | 切片语法 `a[i:j]` / `a[i:j:k]`（步长/反转，str 按 UTF-8 字符）、**生成器表达式** `(x for x in xs)`（`gen_next` 逐项 / for-in / `list()` 转换）、位运算 + 二进制数据视图（int_to_hex / bytes_to_hex / bit_count / bit_length）、正则表达式、锁原语（mutex / rwlock）、文件随机读写 + fsync、进程/信号（os_spawn / os_wait / signal） |
+| 🚀 应用平台 | **.px 脚本执行机制**（`px_serve` PHP/OpenResty 式应用服务器：Cookie/Session/基础认证 + 服务端 TLS + 优雅关闭、`px_exec` 语言层嵌入 API）+ **.px 进程池**（编译模式预派生 `px --worker` 解释器常驻复用，PHP-FPM 风格，**脚本/二进制变更自动滚动重启热更新**） |
 | 🔧 工具链 | `px fmt`（`-w` 写回 / `--check` 检查 / `--diff` 打印 unified diff）/ `px lint` / `px test` / `px bench` / `px doc` / `px ast` 全内置 |
 | 🤖 AI 接入 | `px lsp`（语言服务器）、`px mcp`（MCP 服务器），AI 客户端可直接驱动 |
 | 📚 标准库 | io / fs / json / time / string / math / collections / os / net（含 .px 自举库） |
@@ -86,7 +86,7 @@ px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
 | [docs/requirements.md](docs/requirements.md) | 需求与设计讨论（动机、取舍、双模式架构） |
 | [docs/plan.md](docs/plan.md) | 开发方案（语言命名、里程碑规划、语言要点） |
 | [docs/spec.md](docs/spec.md) | 语言规格说明书（词法 / 语法 / 语义 / 标准库） |
-| [docs/PROGRESS.md](docs/PROGRESS.md) | 开发进度（M0–M31 产出与验证记录，含 M32 候选） |
+| [docs/PROGRESS.md](docs/PROGRESS.md) | 开发进度（M0–M32 产出与验证记录，含 M33 候选） |
 
 ---
 
@@ -126,6 +126,7 @@ px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
 | M29 | WebServer 生产化 P1：JSON 路径运算符（json_path/json_path_set，JSONB 基石）+ 静态缓存头（ETag/Last-Modified/304）+ Range（206/Content-Range）+ 结构化访问日志 + 请求 ID（X-Request-Id）+ px_serve keep-alive/gzip/静态文件流式 | ✅ |
 | M30 | 服务端 https 连接池（TLS 会话缓存/票据恢复，openssl Reused 验证）+ 字节序可控整数↔bytes（int_to_bytes/bytes_to_int，pxdb 基石）+ 推导式语法补全（多 for/多变量解包/多 if/DictComp）+ fmt 配置化（--indent/--quote/.pxfmt.toml） | ✅ |
 | M31 | 沙箱安全（sandbox_enter：内存限制 setrlimit / 危险函数禁限 deny / 权限降级）+ 虚拟主机（vhost Host 头路由多域名共服）+ 限流防爆破（rate_limit 滑动窗口 + px_serve 按 IP 429）+ HTTP/2 预检（ALPN 固定 http/1.1 / h2c 505 / CORS 204）+ 并发模型升级（连接线程池突破 64 槽位，80 并发全 200） | ✅ |
+| M32 | ws:// wss:// 一行连接（ws_connect("ws://…"/"wss://…")，wss 走 TLS）+ SSE 自动重连（sse_connect(url, reconnect_ms)，断线带 Last-Event-ID 重连）+ 进程池热更新（.px 脚本/px 二进制 mtime 变化自动滚动重启 worker）+ 生成器表达式（(expr for x in xs)，gen_next 逐项 / for-in / list() 转换） | ✅ |
 
 ---
 

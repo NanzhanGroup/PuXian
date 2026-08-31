@@ -1299,6 +1299,17 @@ impl Parser {
             return Ok(Expr::Tuple { items: Vec::new(), pos });
         }
         let first = self.parse_expr()?;
+        // 生成器表达式 (expr for x in xs if cond)（M32：延迟物化）
+        if self.check(&TokenKind::For) {
+            let (clauses, cond) = self.parse_comp_clauses()?;
+            self.expect(TokenKind::RParen, "')'")?;
+            return Ok(Expr::GenExp {
+                expr: Box::new(first),
+                clauses,
+                cond,
+                pos,
+            });
+        }
         if self.check(&TokenKind::Comma) {
             // 元组
             let mut items = vec![first];
@@ -1730,6 +1741,7 @@ pub fn expr_pos(e: &Expr) -> Pos {
         | Expr::IfExpr { pos, .. }
         | Expr::ListComp { pos, .. }
         | Expr::DictComp { pos, .. }
+        | Expr::GenExp { pos, .. }
         | Expr::Closure { pos, .. }
         | Expr::Block { pos, .. }
         | Expr::Match { pos, .. }
