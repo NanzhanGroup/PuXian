@@ -934,45 +934,166 @@ impl Codegen {
                     t, c, t, a, t, b, t
                 ))
             }
-            Expr::ListComp { expr, var, iterable, cond, .. } => {
-                let it = self.gen_expr(iterable)?;
+            Expr::ListComp { expr, clauses, cond, .. } => {
                 let rv = self.tmp();
-                let iv = self.tmp();
-                let idx = self.tmp();
-                // 绑定迭代变量到临时名
-                let lcvar = format!("_lc{}", self.uid());
-                let saved = self.vars.insert(var.clone(), lcvar.clone());
+                let mut its = Vec::new();   // iterable C 表达式
+                let mut ivs = Vec::new();   // 迭代值变量名
+                let mut itms = Vec::new();  // 元素变量名
+                let mut idxs = Vec::new();  // 索引变量名
+                let mut binds = Vec::new(); // 解包绑定代码
+                let mut saved_all: Vec<Vec<(String, Option<String>)>> = Vec::new();
+                for cl in clauses {
+                    let it = self.gen_expr(&cl.iterable)?;
+                    its.push(it);
+                    ivs.push(self.tmp());
+                    itms.push(self.tmp());
+                    idxs.push(self.tmp());
+                    // 绑定变量到唯一临时名（多变量解包用 px_index 通用访问）
+                    let mut bind = String::new();
+                    let mut saved = Vec::new();
+                    if cl.vars.len() == 1 {
+                        let lcvar = format!("_cv{}", self.uid());
+                        let sv = self.vars.insert(cl.vars[0].clone(), lcvar.clone());
+                        saved.push((cl.vars[0].clone(), sv));
+                        bind = format!("LXValue {} = {}; ", lcvar, itms.last().unwrap());
+                    } else {
+                        for (i, vn) in cl.vars.iter().enumerate() {
+                            let lcvar = format!("_cv{}_{}", self.uid(), i);
+                            let sv = self.vars.insert(vn.clone(), lcvar.clone());
+                            saved.push((vn.clone(), sv));
+                            bind.push_str(&format!(
+                                "LXValue {} = px_index({}, px_int({})); ",
+                                lcvar,
+                                itms.last().unwrap(),
+                                i
+                            ));
+                        }
+                    }
+                    binds.push(bind);
+                    saved_all.push(saved);
+                }
+                // 生成 expr / cond（变量已全部绑定）
                 let e = self.gen_expr(expr)?;
                 let cond_c = match cond {
                     Some(c) => Some(self.gen_expr(c)?),
                     None => None,
                 };
-                match saved {
-                    Some(v) => { self.vars.insert(var.clone(), v); }
-                    None => { self.vars.remove(var); }
+                // 恢复变量表
+                for saved in saved_all {
+                    for (vn, sv) in saved {
+                        match sv {
+                            Some(v) => { self.vars.insert(vn, v); }
+                            None => { self.vars.remove(&vn); }
+                        }
+                    }
                 }
-                let mut s = format!(
-                    "({{ LXValue {} = px_list(0); LXValue {} = {}; ",
-                    rv, iv, it
+                // 组装嵌套循环（从内到外）：每层 for 体内声明下一层 iterable（Python 语义逐次求值）
+                let mut body = match &cond_c {
+                    Some(c) => format!("if (px_is_truthy({})) {{ px_list_push({}, {}); }} ", c, rv, e),
+                    None => format!("px_list_push({}, {}); ", rv, e),
+                };
+                let n = clauses.len();
+                for i in (0..n).rev() {
+                    let mut inner_decl = String::new();
+                    if i + 1 < n {
+                        inner_decl = format!("LXValue {} = {}; ", ivs[i + 1], its[i + 1]);
+                    }
+                    body = format!(
+                        "for (int {idx}=0; {idx}<px_len({iv}); {idx}++) {{ LXValue {itm} = px_index({iv}, px_int({idx})); {bnd}{inner}{body} }} ",
+                        idx = idxs[i],
+                        iv = ivs[i],
+                        itm = itms[i],
+                        bnd = binds[i],
+                        inner = inner_decl,
+                        body = body,
+                    );
+                }
+                let full = format!(
+                    "({{ LXValue {} = px_list(0); LXValue {} = {}; {} {}; }})",
+                    rv, ivs[0], its[0], body, rv
                 );
-                s.push_str(&format!(
-                    "for (int {} = 0; {} < {}.as.obj->as.list.len; {}++) {{ ",
-                    idx, idx, iv, idx
-                ));
-                s.push_str(&format!(
-                    "LXValue {} = {}.as.obj->as.list.items[{}]; ",
-                    lcvar, iv, idx
-                ));
-                if let Some(c) = cond_c {
-                    s.push_str(&format!("if (px_is_truthy({})) {{ ", c));
-                    s.push_str(&format!("px_list_push({}, {}); ", rv, e));
-                    s.push_str("} ");
-                } else {
-                    s.push_str(&format!("px_list_push({}, {}); ", rv, e));
+                Ok(full)
+            }
+            Expr::DictComp { key, value, clauses, cond, .. } => {
+                let rv = self.tmp();
+                let mut its = Vec::new();
+                let mut ivs = Vec::new();
+                let mut itms = Vec::new();
+                let mut idxs = Vec::new();
+                let mut binds = Vec::new();
+                let mut saved_all: Vec<Vec<(String, Option<String>)>> = Vec::new();
+                for cl in clauses {
+                    let it = self.gen_expr(&cl.iterable)?;
+                    its.push(it);
+                    ivs.push(self.tmp());
+                    itms.push(self.tmp());
+                    idxs.push(self.tmp());
+                    let mut bind = String::new();
+                    let mut saved = Vec::new();
+                    if cl.vars.len() == 1 {
+                        let lcvar = format!("_cv{}", self.uid());
+                        let sv = self.vars.insert(cl.vars[0].clone(), lcvar.clone());
+                        saved.push((cl.vars[0].clone(), sv));
+                        bind = format!("LXValue {} = {}; ", lcvar, itms.last().unwrap());
+                    } else {
+                        for (i, vn) in cl.vars.iter().enumerate() {
+                            let lcvar = format!("_cv{}_{}", self.uid(), i);
+                            let sv = self.vars.insert(vn.clone(), lcvar.clone());
+                            saved.push((vn.clone(), sv));
+                            bind.push_str(&format!(
+                                "LXValue {} = px_index({}, px_int({})); ",
+                                lcvar,
+                                itms.last().unwrap(),
+                                i
+                            ));
+                        }
+                    }
+                    binds.push(bind);
+                    saved_all.push(saved);
                 }
-                s.push_str("} ");
-                s.push_str(&format!("{}; }})", rv));
-                Ok(s)
+                let ke = self.gen_expr(key)?;
+                let ve = self.gen_expr(value)?;
+                let cond_c = match cond {
+                    Some(c) => Some(self.gen_expr(c)?),
+                    None => None,
+                };
+                for saved in saved_all {
+                    for (vn, sv) in saved {
+                        match sv {
+                            Some(v) => { self.vars.insert(vn, v); }
+                            None => { self.vars.remove(&vn); }
+                        }
+                    }
+                }
+                let put = format!(
+                    "{{ LXValue _k = {}; LXValue _v = {}; if (_k.type == PX_STR) px_dict_set({}, _k.as.obj->as.str.data, _v); }} ",
+                    ke, ve, rv
+                );
+                let mut body = match &cond_c {
+                    Some(c) => format!("if (px_is_truthy({})) {{ {} }} ", c, put),
+                    None => put,
+                };
+                let n = clauses.len();
+                for i in (0..n).rev() {
+                    let mut inner_decl = String::new();
+                    if i + 1 < n {
+                        inner_decl = format!("LXValue {} = {}; ", ivs[i + 1], its[i + 1]);
+                    }
+                    body = format!(
+                        "for (int {idx}=0; {idx}<px_len({iv}); {idx}++) {{ LXValue {itm} = px_index({iv}, px_int({idx})); {bnd}{inner}{body} }} ",
+                        idx = idxs[i],
+                        iv = ivs[i],
+                        itm = itms[i],
+                        bnd = binds[i],
+                        inner = inner_decl,
+                        body = body,
+                    );
+                }
+                let full = format!(
+                    "({{ LXValue {} = px_dict(); LXValue {} = {}; {} {}; }})",
+                    rv, ivs[0], its[0], body, rv
+                );
+                Ok(full)
             }
             Expr::Closure { params, body, .. } => {
                 // 无捕获闭包 → 独立 C 函数

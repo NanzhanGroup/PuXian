@@ -1,0 +1,50 @@
+# M30③ 推导式语法补全：多 for 嵌套 / 多变量解包 / 多 if / DictComp
+# 运行: px run examples/m30_comp.px == px build 后执行，stdout 逐字节一致
+
+# 基础（回归）
+let a = [x * 2 for x in [1, 2, 3]]
+assert(a == [2, 4, 6])
+
+# 多 for 嵌套（笛卡尔积）
+let b = [x * y for x in [1, 2] for y in [10, 20, 30]]
+assert(b == [10, 20, 30, 20, 40, 60])
+
+# 多 for + 多 if
+let c = [x + y for x in range(4) if x % 2 == 0 for y in range(3) if y > 0]
+assert(c == [1, 2, 3, 4])
+
+# 多变量解包（list）
+let pairs = [["a", 1], ["b", 2], ["c", 3]]
+let ks = [k for k, v in pairs]
+assert(ks == ["a", "b", "c"])
+let vs = [v * 10 for k, v in pairs if v > 1]
+assert(vs == [20, 30])
+
+# 多变量解包（tuple）
+let tp = [("x", 10), ("y", 20)]
+let ts = [k + str(v) for k, v in tp]
+assert(ts == ["x10", "y20"])
+
+# 字典推导
+let dc = {k: v * 2 for k, v in pairs}
+assert(dc["a"] == 2)
+assert(dc["b"] == 4)
+assert(dc["c"] == 6)
+
+# 字典推导 + 条件
+let dc2 = {k: v for k, v in pairs if v % 2 == 1}
+assert(dc2 == {"a": 1, "c": 3})
+
+# 字典推导 + 多 for 嵌套
+let m = {str(x) + str(y): x * y for x in [1, 2] for y in [3, 4]}
+assert(m["13"] == 3)
+assert(m["24"] == 8)
+
+# 反向推导（依赖外层变量）
+let outer = [x for x in [1, 2, 3]]
+let nested = [[x + y for y in [1, 2]] for x in [10, 20]]
+assert(nested == [[11, 12], [21, 22]])
+
+# len 校验
+assert(len([x for x in range(100) if x % 7 == 0]) == 15)
+print("ALL PASSED")

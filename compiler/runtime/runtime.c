@@ -33,6 +33,7 @@
 // M10 HTTPS：mbedtls 静态库（compiler/runtime/mbedtls/）
 #include "mbedtls/net_sockets.h"
 #include "mbedtls/ssl.h"
+#include "mbedtls/ssl_cache.h"
 #include "mbedtls/entropy.h"
 #include "mbedtls/ctr_drbg.h"
 #include "mbedtls/x509_crt.h"
@@ -54,6 +55,9 @@ static mbedtls_x509_crt g_srv_cert;
 static mbedtls_pk_context g_srv_key;
 static int g_srv_tls_ready = 0;
 static pthread_mutex_t g_srv_tls_mu = PTHREAD_MUTEX_INITIALIZER;
+// M30：服务端 https 连接池——TLS 会话缓存（Session ID + 票据），新连接快速恢复握手
+static mbedtls_ssl_cache_context g_srv_tls_cache;
+static int g_srv_tls_cache_init = 0;
 static LXValue bi_tls_server(LXValue* args, int nargs, void* ctx);
 static LXValue bi_session_open(LXValue* args, int nargs, void* ctx);
 static LXValue bi_session_id(LXValue* args, int nargs, void* ctx);
@@ -120,6 +124,9 @@ static LXValue bi_base64_to_bytes(LXValue* args, int nargs, void* ctx);
 static LXValue bi_bytes_find(LXValue* args, int nargs, void* ctx);
 static LXValue bi_read_bytes(LXValue* args, int nargs, void* ctx);
 static LXValue bi_write_bytes(LXValue* args, int nargs, void* ctx);
+// M30 P1：字节序可控整数↔bytes（pxdb 存储基石）
+static LXValue bi_int_to_bytes(LXValue* args, int nargs, void* ctx);
+static LXValue bi_bytes_to_int(LXValue* args, int nargs, void* ctx);
 
 // M23b 字节辅助（字符串/字节串统一 data+len；供 base64/hex 等前置函数使用）
 static const char* bdata(LXValue v);
@@ -2638,7 +2645,7 @@ static LXValue bi_bytes_to_hex(LXValue* args, int nargs, void* ctx) {
     return r;
 }
 
-// hex_to_bytes(hex) → str 或 null（hex → 原始字节；非法/奇数长度 → null）
+// hex_to_bytes(hex) → bytes 或 null（hex → 原始字节；非法/奇数长度 → null）
 static LXValue bi_hex_to_bytes(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) px_error("hex_to_bytes 需要一个参数");
@@ -2668,7 +2675,7 @@ static LXValue bi_hex_to_bytes(LXValue* args, int nargs, void* ctx) {
     }
     out[olen] = 0;
     xfree(clean);
-    LXValue r = px_str_len(out, (int)olen);
+    LXValue r = px_bytes_len(out, (int)olen);
     xfree(out);
     return r;
 }
@@ -4185,6 +4192,8 @@ void px_register_builtins(void) {
     px_set_global("bytes_find", px_native("bytes_find", bi_bytes_find));
     px_set_global("read_bytes", px_native("read_bytes", bi_read_bytes));
     px_set_global("write_bytes", px_native("write_bytes", bi_write_bytes));
+    px_set_global("int_to_bytes", px_native("int_to_bytes", bi_int_to_bytes));
+    px_set_global("bytes_to_int", px_native("bytes_to_int", bi_bytes_to_int));
 }
 
 // gc() → int：强制运行一次垃圾回收（与解释器 gc() 双模式一致）
@@ -4586,6 +4595,92 @@ static LXValue bi_write_bytes(LXValue* args, int nargs, void* ctx) {
     size_t wr = fwrite(d, 1, (size_t)len, f);
     fclose(f);
     return px_bool(wr == (size_t)len);
+}
+
+// ==================== M30 P1：字节序可控整数↔bytes（pxdb 存储基石） ====================
+// int_to_bytes(n, size[, endian[, signed]]) → bytes|null
+//   size 1..8；endian "big"/"little"（"be"/"le" 也接受，默认 big）
+//   signed=false（默认）：范围 [0, 2^(8s)-1]；signed=true：[-2^(8s-1), 2^(8s-1)-1]
+//   负数以补码编码；越界返回 null
+static LXValue bi_int_to_bytes(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 2 || nargs > 4) px_error("int_to_bytes 需要 (n, size[, endian[, signed]]) 参数");
+    if (args[0].type != PX_INT || args[1].type != PX_INT)
+        px_error("int_to_bytes 的 n/size 需要 int");
+    int64_t n = args[0].as.i;
+    int size = (int)args[1].as.i;
+    int big = 1;
+    if (nargs >= 3) {
+        const char* e = val_cstr(args[2]);
+        if (!strcasecmp(e, "little") || !strcasecmp(e, "le")) big = 0;
+        else if (!strcasecmp(e, "big") || !strcasecmp(e, "be")) big = 1;
+        else px_error("int_to_bytes 的 endian 需为 big/little");
+    }
+    int signed_ = 0;
+    if (nargs >= 4) {
+        if (args[3].type != PX_BOOL) px_error("int_to_bytes 的 signed 需为 bool");
+        signed_ = args[3].as.b ? 1 : 0;
+    }
+    if (size < 1 || size > 8) px_error("int_to_bytes 的 size 必须在 1..8");
+    // 范围检查
+    if (signed_) {
+        if (size < 8) {
+            int64_t lo = -(int64_t)1 << (8 * size - 1);
+            int64_t hi = ((int64_t)1 << (8 * size - 1)) - 1;
+            if (n < lo || n > hi) return px_null();
+        }
+        // size == 8：i64 全范围合法
+    } else {
+        if (n < 0) return px_null();
+        if (size < 8) {
+            uint64_t hi = ((uint64_t)1 << (8 * size)) - 1;
+            if ((uint64_t)n > hi) return px_null();
+        }
+    }
+    uint64_t v = (uint64_t)n;
+    if (size < 8) v &= ((uint64_t)1 << (8 * size)) - 1; // 负数补码截断
+    unsigned char buf[8];
+    for (int i = 0; i < size; i++) {
+        int shift = big ? (size - 1 - i) * 8 : i * 8;
+        buf[i] = (unsigned char)((v >> shift) & 0xFF);
+    }
+    return px_bytes_len(buf, size);
+}
+
+// bytes_to_int(b[, endian[, signed]]) → int|null（长度 1..8；非法长度返回 null）
+static LXValue bi_bytes_to_int(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || nargs > 3) px_error("bytes_to_int 需要 (bytes[, endian[, signed]]) 参数");
+    if (args[0].type != PX_BYTES) px_error("bytes_to_int 需要 bytes，实际是 %s", px_type_name(args[0]));
+    int len = args[0].as.obj->as.str.len;
+    const unsigned char* data = (const unsigned char*)args[0].as.obj->as.str.data;
+    int big = 1;
+    if (nargs >= 2) {
+        const char* e = val_cstr(args[1]);
+        if (!strcasecmp(e, "little") || !strcasecmp(e, "le")) big = 0;
+        else if (!strcasecmp(e, "big") || !strcasecmp(e, "be")) big = 1;
+        else px_error("bytes_to_int 的 endian 需为 big/little");
+    }
+    int signed_ = 0;
+    if (nargs >= 3) {
+        if (args[2].type != PX_BOOL) px_error("bytes_to_int 的 signed 需为 bool");
+        signed_ = args[2].as.b ? 1 : 0;
+    }
+    if (len < 1 || len > 8) return px_null();
+    uint64_t v = 0;
+    if (big) {
+        for (int i = 0; i < len; i++) v = (v << 8) | data[i];
+    } else {
+        for (int i = 0; i < len; i++) v |= (uint64_t)data[i] << (8 * i);
+    }
+    if (signed_) {
+        int hi = big ? 0 : len - 1;
+        if (data[hi] & 0x80) {
+            if (len < 8) v |= ~(((uint64_t)1 << (8 * len)) - 1); // 符号扩展
+            return px_int((int64_t)v);
+        }
+    }
+    return px_int((int64_t)v);
 }
 
 // ==================== 并发原语（M4.2） ====================
@@ -8105,6 +8200,13 @@ static int px_conn_tls_handshake(PxConn* c) {
     int oc = mbedtls_ssl_conf_own_cert(conf, &g_srv_cert, &g_srv_key);
     pthread_mutex_unlock(&g_srv_tls_mu);
     if (oc != 0) return -1;
+    // M30：服务端 https 连接池——全局 TLS 会话缓存共享给所有连接（Session ID 恢复）
+    if (g_srv_tls_cache_init) {
+        mbedtls_ssl_conf_session_cache(conf, &g_srv_tls_cache,
+                                       mbedtls_ssl_cache_get, mbedtls_ssl_cache_set);
+    }
+    // TLS 1.2 会话票据（与客户端 M25 票据恢复对偶）
+    mbedtls_ssl_conf_session_tickets(conf, MBEDTLS_SSL_SESSION_TICKETS_ENABLED);
     if (mbedtls_ssl_setup(ssl, conf) != 0) return -1;
     mbedtls_ssl_set_bio(ssl, &c->fd, mbedtls_net_send, mbedtls_net_recv, NULL);
     int ret;
@@ -8216,6 +8318,13 @@ static LXValue bi_tls_server(LXValue* args, int nargs, void* ctx) {
         mbedtls_strerror(rc1 != 0 ? rc1 : rc2, eb, sizeof(eb));
         pthread_mutex_unlock(&g_srv_tls_mu);
         px_error("tls_server: 证书/私钥解析失败: %s", eb);
+    }
+    // M30：初始化服务端 TLS 会话缓存（连接池）
+    if (!g_srv_tls_cache_init) {
+        mbedtls_ssl_cache_init(&g_srv_tls_cache);
+        mbedtls_ssl_cache_set_max_entries(&g_srv_tls_cache, 128);
+        mbedtls_ssl_cache_set_timeout(&g_srv_tls_cache, 86400);
+        g_srv_tls_cache_init = 1;
     }
     g_srv_tls_ready = 1;
     pthread_mutex_unlock(&g_srv_tls_mu);

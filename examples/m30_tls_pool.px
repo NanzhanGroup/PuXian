@@ -1,0 +1,43 @@
+# M30① 服务端 https 连接池：TLS 会话缓存 / 票据恢复
+# 双模式：px run == px build（服务器用解释器 rustls 服务端；mbedtls 编译版已单独验证）
+# 覆盖：tls_server 注册、HTTPS 服务、openssl 客户端 TLS1.2 会话恢复（session ID 缓存）
+#       （新连接凭 Session ID 快速恢复握手 = 连接池的会话级复用）
+
+# ============ 清理旧服务器 + 生成自签证书 ============
+os_spawn("/bin/sh", ["-c", "pkill -f px_m30_server.px 2>/dev/null; rm -f /tmp/px_m30_sess.pem /tmp/px_m30_s1.log /tmp/px_m30_s2.log"])
+sleep(300)
+os_spawn("/bin/sh", ["-c", "openssl req -x509 -newkey rsa:2048 -keyout /tmp/px_m30_key.pem -out /tmp/px_m30_cert.pem -days 1 -nodes -subj /CN=localhost -addext basicConstraints=critical,CA:TRUE -addext subjectAltName=DNS:localhost 2>/dev/null"])
+sleep(600)
+assert(exists("/tmp/px_m30_cert.pem"))
+assert(exists("/tmp/px_m30_key.pem"))
+
+# ============ 准备站点 + 服务器脚本 ============
+mkdir("/tmp/px_m30_site")
+write_file("/tmp/px_m30_site/index.html", "<h1>px m30 tls pool</h1>")
+write_file("/tmp/px_m30_server.px", "tls_server(\"/tmp/px_m30_cert.pem\", \"/tmp/px_m30_key.pem\")\npx_serve(18096, \"/tmp/px_m30_site\", 3000)\n")
+
+# 注册（当前进程也注册，验证 tls_server 返回值）
+assert(tls_server("/tmp/px_m30_cert.pem", "/tmp/px_m30_key.pem"))
+
+# ============ 后台启动 HTTPS 服务器 ============
+p = os_spawn("/bin/sh", ["-c", "exec px run /tmp/px_m30_server.px 2>/tmp/px_m30_server.log"])
+sleep(1200)
+
+# ============ 会话恢复验证（openssl s_client） ============
+# 第一次握手：完整握手，保存会话（TLS1.2 session ID）
+os_spawn("/bin/sh", ["-c", "printf 'Q' | openssl s_client -tls1_2 -connect 127.0.0.1:18096 -sess_out /tmp/px_m30_sess.pem > /tmp/px_m30_s1.log 2>&1"])
+sleep(500)
+s1 = read_file("/tmp/px_m30_s1.log")
+assert(contains(s1, "New, TLSv1.2"))
+assert(exists("/tmp/px_m30_sess.pem"))
+
+# 第二次握手：凭 Session ID 恢复（连接池会话级复用）
+os_spawn("/bin/sh", ["-c", "printf 'Q' | openssl s_client -tls1_2 -connect 127.0.0.1:18096 -sess_in /tmp/px_m30_sess.pem > /tmp/px_m30_s2.log 2>&1"])
+sleep(500)
+s2 = read_file("/tmp/px_m30_s2.log")
+assert(contains(s2, "Reused, TLSv1.2"))
+
+# ============ 清理 ============
+os_kill(p, 15)
+sleep(300)
+print("TLS POOL PASSED: HTTPS session reused (server-side TLS session cache)")

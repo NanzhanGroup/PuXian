@@ -13,8 +13,43 @@
 use crate::lexer::Lexer;
 use crate::token::{TokenKind};
 
-/// 格式化源码；失败返回词法错误
+/// 缩进风格
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum IndentStyle {
+    Spaces(usize),
+    Tab,
+}
+
+/// 字符串引号风格
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum QuoteStyle {
+    Double,
+    Single,
+}
+
+/// 格式化选项（M30：px fmt 配置化）
+#[derive(Clone, Debug)]
+pub struct FormatOptions {
+    pub indent: IndentStyle,
+    pub quote: QuoteStyle,
+}
+
+impl Default for FormatOptions {
+    fn default() -> Self {
+        FormatOptions {
+            indent: IndentStyle::Spaces(4),
+            quote: QuoteStyle::Double,
+        }
+    }
+}
+
+/// 格式化源码（默认选项：4 空格缩进 + 双引号）；失败返回词法错误
 pub fn format(src: &str) -> Result<String, String> {
+    format_with(src, &FormatOptions::default())
+}
+
+/// 按配置格式化源码
+pub fn format_with(src: &str, opts: &FormatOptions) -> Result<String, String> {
     let tokens = Lexer::new_with_comments(src)
         .tokenize()
         .map_err(|e| e.to_string())?;
@@ -94,7 +129,7 @@ pub fn format(src: &str) -> Result<String, String> {
         // 普通 token
         if at_line_start {
             for _ in 0..level {
-                out.push_str("    ");
+                out.push_str(&indent_str(&opts.indent));
             }
             at_line_start = false;
         } else if let (Some(p), Some(p2)) = (&prev, &prev2) {
@@ -103,7 +138,7 @@ pub fn format(src: &str) -> Result<String, String> {
             }
         }
 
-        out.push_str(&render(&kind));
+        out.push_str(&render(&kind, opts.quote));
         if let Some(p) = prev.take() {
             prev2 = Some(p);
         }
@@ -260,7 +295,7 @@ fn is_unary_context(prev: &TokenKind) -> bool {
 }
 
 /// 渲染 token 文本
-fn render(kind: &TokenKind) -> String {
+fn render(kind: &TokenKind, quote: QuoteStyle) -> String {
     use TokenKind::*;
     match kind {
         Int(v) => v.to_string(),
@@ -273,18 +308,24 @@ fn render(kind: &TokenKind) -> String {
                 s
             }
         }
-        Str(v) => escape_str(v),
+        Str(v) => escape_str(v, quote),
         Ident(v) => v.clone(),
         k => k.to_string(),
     }
 }
 
-/// 字符串重转义为双引号字面量
-fn escape_str(s: &str) -> String {
-    let mut out = String::from("\"");
+/// 字符串重转义为指定引号风格的字面量
+fn escape_str(s: &str, quote: QuoteStyle) -> String {
+    let (open, close) = match quote {
+        QuoteStyle::Double => ('"', '"'),
+        QuoteStyle::Single => ('\'', '\''),
+    };
+    let mut out = String::new();
+    out.push(open);
     for c in s.chars() {
         match c {
-            '"' => out.push_str("\\\""),
+            '"' if quote == QuoteStyle::Double => out.push_str("\\\""),
+            '\'' if quote == QuoteStyle::Single => out.push_str("\\'"),
             '\\' => out.push_str("\\\\"),
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
@@ -293,9 +334,18 @@ fn escape_str(s: &str) -> String {
             c => out.push(c),
         }
     }
-    out.push('"');
+    out.push(close);
     out
 }
+
+/// 缩进字符串（M30：空格数或 tab）
+fn indent_str(style: &IndentStyle) -> String {
+    match style {
+        IndentStyle::Spaces(n) => " ".repeat(*n),
+        IndentStyle::Tab => "\t".to_string(),
+    }
+}
+
 
 fn trim_trailing_spaces(out: &mut String) {
     while out.ends_with(' ') {
@@ -535,5 +585,35 @@ mod tests {
         assert!(d.contains("-bad\n"), "应含删除行: {}", d);
         assert!(d.contains("+good\n"), "应含新增行: {}", d);
         assert!(d.contains("@@"), "应含 hunk 头: {}", d);
+    }
+
+    #[test]
+    #[test]
+    fn test_fmt_options_indent_quote() {
+        // M30 配置化：indent 空格数 / tab / 引号风格
+        let src = "def f():\n    if true:\n        print(\"hi\")\n";
+        let opts = FormatOptions {
+            indent: IndentStyle::Spaces(2),
+            quote: QuoteStyle::Double,
+        };
+        let out = format_with(src, &opts).unwrap();
+        assert!(out.contains("  if true:"), "2 空格缩进");
+        assert!(out.contains("    print(\"hi\")"), "4 空格二级缩进");
+        let opts_tab = FormatOptions {
+            indent: IndentStyle::Tab,
+            quote: QuoteStyle::Double,
+        };
+        let out2 = format_with(src, &opts_tab).unwrap();
+        assert!(out2.contains("\tif true:"), "tab 缩进");
+        let opts_sq = FormatOptions {
+            indent: IndentStyle::Spaces(4),
+            quote: QuoteStyle::Single,
+        };
+        let out3 = format_with(src, &opts_sq).unwrap();
+        assert!(out3.contains("'hi'"), "单引号");
+        assert!(!out3.contains("\"hi\""), "无双引号");
+        // 配置化幂等
+        let again = format_with(&out, &opts).unwrap();
+        assert_eq!(out, again, "配置化格式幂等");
     }
 }

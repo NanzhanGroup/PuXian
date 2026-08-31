@@ -505,22 +505,45 @@ fn check_expr(ctx: &mut FnCtx<'_>, expr: &Expr, diags: &mut Vec<LintDiag>) {
             check_expr(ctx, then, diags);
             check_expr(ctx, else_, diags);
         }
-        Expr::ListComp {
-            expr,
-            var,
-            iterable,
-            cond,
-            ..
-        } => {
-            check_expr(ctx, iterable, diags);
+        Expr::ListComp { expr, clauses, cond, .. } => {
+            for cl in clauses {
+                check_expr(ctx, &cl.iterable, diags);
+            }
             let mut sub = FnCtx {
                 declared: ctx.declared.clone(),
                 used: ctx.used.clone(),
                 read_only: ctx.read_only.clone(),
                 known: ctx.known,
             };
-            sub.declare(var);
+            for cl in clauses {
+                for v in &cl.vars {
+                    sub.declare(v);
+                }
+            }
             check_expr(&mut sub, expr, diags);
+            if let Some(c) = cond {
+                check_expr(&mut sub, c, diags);
+            }
+            ctx.used.extend(sub.used);
+            ctx.declared.extend(sub.declared);
+        }
+        Expr::DictComp { key, value, clauses, cond, .. } => {
+            check_expr(ctx, key, diags);
+            check_expr(ctx, value, diags);
+            for cl in clauses {
+                check_expr(ctx, &cl.iterable, diags);
+            }
+            let mut sub = FnCtx {
+                declared: ctx.declared.clone(),
+                used: ctx.used.clone(),
+                read_only: ctx.read_only.clone(),
+                known: ctx.known,
+            };
+            for cl in clauses {
+                for v in &cl.vars {
+                    sub.declare(v);
+                }
+            }
             if let Some(c) = cond {
                 check_expr(&mut sub, c, diags);
             }

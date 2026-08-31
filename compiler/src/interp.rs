@@ -16,6 +16,12 @@ use crate::env::{Env, EnvRef};
 use crate::token::Pos;
 use crate::value::*;
 
+/// M30 推导式收集目标（列表 / 字典）
+enum CompSink<'a> {
+    List(&'a mut Vec<Value>),
+    Dict(Arc<Mutex<HashMap<String, Value>>>),
+}
+
 /// 全局 select 唤醒通道：所有 channel 操作后 notify，select 轮询醒来重试
 static SELECT_LOCK: Mutex<()> = Mutex::new(());
 static SELECT_CV: Condvar = Condvar::new();
@@ -350,6 +356,9 @@ impl Interpreter {
             ("bytes_find", Builtin::BytesFind),
             ("read_bytes", Builtin::ReadBytes),
             ("write_bytes", Builtin::WriteBytes),
+            // M30：字节序可控整数<->bytes（pxdb 存储基石）
+            ("int_to_bytes", Builtin::IntToBytes),
+            ("bytes_to_int", Builtin::BytesToInt),
             ("gc", Builtin::Gc),
             // M27 P0：WebServer 生产化（服务端 TLS / Session / 基础认证）
             ("tls_server", Builtin::TlsServer),
@@ -906,23 +915,36 @@ impl Interpreter {
                     self.eval_expr(else_, env)
                 }
             }
-            Expr::ListComp { expr, var, iterable, cond, pos } => {
-                let it = self.eval_expr(iterable, env)?;
-                let items = self.iter_values(&it, *pos)?;
+            Expr::ListComp { expr, clauses, cond, pos } => {
                 let mut out = Vec::new();
-                for item in items {
-                    let child = Env::new(Some(env.clone()));
-                    child.lock().unwrap().define(var, item);
-                    if let Some(c) = cond {
-                        let cv = self.eval_expr(c, &child)?;
-                        if !self.is_truthy(&cv, *pos)? {
-                            continue;
-                        }
-                    }
-                    let ev = self.eval_expr(expr, &child)?;
-                    out.push(ev);
-                }
+                self.eval_comp(
+                    clauses,
+                    0,
+                    &mut CompSink::List(&mut out),
+                    Some(expr),
+                    None,
+                    None,
+                    cond,
+                    env,
+                    *pos,
+                )?;
                 Ok(Value::new_list(out))
+            }
+            Expr::DictComp { key, value, clauses, cond, pos } => {
+                let map = Arc::new(Mutex::new(HashMap::new()));
+                self.eval_comp(
+                    clauses,
+                    0,
+                    &mut CompSink::Dict(map.clone()),
+                    None,
+                    Some(key),
+                    Some(value),
+                    cond,
+                    env,
+                    *pos,
+                )?;
+                let inner = map.lock().unwrap().clone();
+                Ok(Value::new_dict(inner))
             }
             Expr::Closure { params, ret_ty, body, pos, .. } => {
                 // 闭包体为 Block，取其 stmts 作为函数体
@@ -2100,6 +2122,108 @@ impl Interpreter {
         }
     }
 
+    // ==================== M30：推导式求值（多 for 嵌套 / 多变量解包 / 多 if） ====================
+
+    /// 绑定推导式子句变量（多变量解包：item 需为 list/tuple）
+    fn bind_comp_vars(
+        &mut self,
+        vars: &[String],
+        item: Value,
+        child: &Arc<Mutex<Env>>,
+        pos: Pos,
+    ) -> Result<(), LxError> {
+        if vars.len() == 1 {
+            child.lock().unwrap().define(&vars[0], item);
+            return Ok(());
+        }
+        let items: Vec<Value> = match item {
+            Value::List(l) => l.lock().unwrap().clone(),
+            Value::Tuple(t) => t.clone(),
+            _ => {
+                return Err(LxError::new(
+                    "R1002",
+                    format!(
+                        "推导式解包需要 list/tuple，实际是 {}",
+                        self.type_name(&item)
+                    ),
+                    Some(pos),
+                ))
+            }
+        };
+        for (i, vn) in vars.iter().enumerate() {
+            let v = items.get(i).cloned().unwrap_or(Value::Null);
+            child.lock().unwrap().define(vn, v);
+        }
+        Ok(())
+    }
+
+    /// 递归求值推导式：ci 为当前子句索引；最深层求值并收集
+    fn eval_comp(
+        &mut self,
+        clauses: &[CompClause],
+        ci: usize,
+        sink: &mut CompSink,
+        list_expr: Option<&Expr>,
+        dict_key: Option<&Expr>,
+        dict_val: Option<&Expr>,
+        cond: &Option<Box<Expr>>,
+        env: &Arc<Mutex<Env>>,
+        pos: Pos,
+    ) -> Result<(), LxError> {
+        if ci >= clauses.len() {
+            if let Some(c) = cond {
+                let cv = self.eval_expr(c, env)?;
+                if !self.is_truthy(&cv, pos)? {
+                    return Ok(());
+                }
+            }
+            match sink {
+                CompSink::List(out) => {
+                    let ev = self.eval_expr(list_expr.unwrap(), env)?;
+                    out.push(ev);
+                }
+                CompSink::Dict(map) => {
+                    let k = self.eval_expr(dict_key.unwrap(), env)?;
+                    let v = self.eval_expr(dict_val.unwrap(), env)?;
+                    let ks = match k {
+                        Value::Str(s) => s,
+                        _ => {
+                            return Err(LxError::new(
+                                "R1002",
+                                format!(
+                                    "字典推导键必须是字符串，实际是 {}",
+                                    self.type_name(&k)
+                                ),
+                                Some(pos),
+                            ))
+                        }
+                    };
+                    map.lock().unwrap().insert(ks, v);
+                }
+            }
+            return Ok(());
+        }
+        let cl = &clauses[ci];
+        let it = self.eval_expr(&cl.iterable, env)?;
+        let items = self.iter_values(&it, pos)?;
+        for item in items {
+            let child = Env::new(Some(env.clone()));
+            self.bind_comp_vars(&cl.vars, item, &child, pos)?;
+            self.eval_comp(
+                clauses,
+                ci + 1,
+                sink,
+                list_expr,
+                dict_key,
+                dict_val,
+                cond,
+                &child,
+                pos,
+            )?;
+        }
+        Ok(())
+    }
+
     pub fn is_truthy(&self, v: &Value, _pos: Pos) -> Result<bool, LxError> {
         match v {
             Value::Bool(b) => Ok(*b),
@@ -2578,6 +2702,52 @@ def main():
     set_timeout(fn(a, b) { got = a * b }, 20, 6, 7)
     sleep(80)
     assert(got == 42, "extra args passed")
+"#;
+        assert!(run_src(src).is_ok());
+    }
+
+    #[test]
+    fn test_m30_comp_multifor_unpack() {
+        // M30 推导式补全：多 for 嵌套 / 多变量解包 / 多 if / DictComp
+        let src = r#"
+def main():
+    let b = [x * y for x in [1, 2] for y in [10, 20, 30]]
+    assert(len(b) == 6 and b[0] == 10 and b[5] == 60, "multi for")
+    let pairs = [["a", 1], ["b", 2], ["c", 3]]
+    let ks = [k for k, v in pairs]
+    assert(ks == ["a", "b", "c"], "unpack keys")
+    let vs = [v * 10 for k, v in pairs if v > 1]
+    assert(vs == [20, 30], "unpack + if")
+    let c = [x + y for x in range(4) if x % 2 == 0 for y in range(3) if y > 0]
+    assert(c == [1, 2, 3, 4], "multi for + multi if")
+    let dc = {k: v * 2 for k, v in pairs}
+    assert(dc["a"] == 2 and dc["c"] == 6, "dict comp")
+    let dc2 = {k: v for k, v in pairs if v % 2 == 1}
+    assert(dc2 == {"a": 1, "c": 3}, "dict comp + if")
+    let m = {str(x) + str(y): x * y for x in [1, 2] for y in [3, 4]}
+    assert(m["13"] == 3 and m["24"] == 8, "dict comp nested")
+"#;
+        assert!(run_src(src).is_ok());
+    }
+
+    #[test]
+    fn test_m30_int_bytes_endian() {
+        // M30 字节序可控整数<->bytes：大/小端、补码、符号扩展、越界 null
+        let src = r#"
+def main():
+    assert(bytes_to_hex(int_to_bytes(0x01020304, 4)) == "01020304", "big default")
+    assert(bytes_to_hex(int_to_bytes(0x01020304, 4, "little")) == "04030201", "little")
+    assert(bytes_to_int(int_to_bytes(-1, 4, "big", true), "big", true) == -1, "neg rt")
+    assert(int_to_bytes(-1, 4) == null, "unsigned neg null")
+    assert(int_to_bytes(256, 1) == null, "overflow null")
+    assert(bytes_to_int(hex_to_bytes("ff"), "big", true) == -1, "sign extend")
+    assert(bytes_to_int(hex_to_bytes("ff"), "big", false) == 255, "unsigned")
+    assert(bytes_to_int(hex_to_bytes("80"), "big", true) == -128, "int8 min")
+    assert(bytes_to_int(hex_to_bytes("0180"), "little", true) == -32767, "little sign")
+    assert(bytes_to_int(hex_to_bytes("")) == null, "empty null")
+    assert(bytes_to_int(hex_to_bytes("010203040506070809")) == null, "len9 null")
+    let n = 987654321
+    assert(bytes_to_int(int_to_bytes(n, 4, "big"), "big") == n, "pxdb rt")
 "#;
         assert!(run_src(src).is_ok());
     }

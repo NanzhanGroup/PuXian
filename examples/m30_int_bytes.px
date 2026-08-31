@@ -1,0 +1,47 @@
+# M30② 字节序可控整数 <-> bytes 双模式验证
+# 运行: px run examples/m30_int_bytes.px == px build 后执行，stdout 逐字节一致
+
+# 大端/小端基础
+let b1 = int_to_bytes(0x01020304, 4)          # 默认 big
+assert(bytes_to_hex(b1) == "01020304")
+let b2 = int_to_bytes(0x01020304, 4, "little")
+assert(bytes_to_hex(b2) == "04030201")
+# round-trip
+assert(bytes_to_int(b1) == 0x01020304)
+assert(bytes_to_int(b2, "little") == 0x01020304)
+# 负数补码 signed
+let bn = int_to_bytes(-1, 4, "big", true)
+assert(bytes_to_hex(bn) == "ffffffff")
+assert(bytes_to_int(bn, "big", true) == -1)
+# 无符号负数 -> null
+let r = int_to_bytes(-1, 4)
+assert(r == null)
+# 越界 -> null
+assert(int_to_bytes(256, 1) == null)
+assert(int_to_bytes(128, 1, "big", true) == null)
+# 边界值
+assert(bytes_to_hex(int_to_bytes(127, 1, "big", true)) == "7f")
+assert(bytes_to_hex(int_to_bytes(-128, 1, "big", true)) == "80")
+assert(bytes_to_hex(int_to_bytes(255, 1)) == "ff")
+# little endian signed
+let b = int_to_bytes(-2, 2, "little", true)
+assert(bytes_to_hex(b) == "feff")
+assert(bytes_to_int(b, "little", true) == -2)
+# 8 字节
+let b8 = int_to_bytes(0x0102030405060708, 8)
+assert(bytes_to_hex(b8) == "0102030405060708")
+assert(bytes_to_int(b8) == 0x0102030405060708)
+# 符号扩展
+assert(bytes_to_int(hex_to_bytes("80"), "big", true) == -128)
+assert(bytes_to_int(hex_to_bytes("ff"), "big", true) == -1)
+assert(bytes_to_int(hex_to_bytes("ff"), "big", false) == 255)
+# 小端符号位
+assert(bytes_to_int(hex_to_bytes("0180"), "little", true) == -32767)
+# 长度 0 / >8 -> null
+assert(bytes_to_int(bytes("")) == null)
+assert(bytes_to_int(hex_to_bytes("010203040506070809")) == null)
+# pxdb 场景：定长整数存储 round-trip（随机读写基石）
+let n = 987654321
+let enc = int_to_bytes(n, 4, "big")
+assert(bytes_to_int(enc, "big") == n)
+print("ALL PASSED")

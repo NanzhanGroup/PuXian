@@ -213,10 +213,15 @@ pub fn tls_server_register(cert_pem: &str, key_pem: &str) -> Result<(), String> 
     };
     let certs = parse_certs(&cert_text)?;
     let key = parse_private_key(key_pem)?;
-    let cfg = rustls::ServerConfig::builder()
+    let mut cfg = rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, key)
         .map_err(|e| format!("TLS 配置失败: {}", e))?;
+    // M30：服务端 https 连接池——TLS 会话缓存（Session ID 缓存 + 票据）
+    // 新 HTTPS 连接可凭 Session ID / NewSessionTicket 快速恢复握手，省一次往返。
+    cfg.session_storage = rustls::server::ServerSessionMemoryCache::new(256);
+    cfg.ticketer = rustls::crypto::ring::Ticketer::new()
+        .map_err(|e| format!("TLS 票据生成失败: {}", e))?;
     *tls_server_lock().lock().unwrap() = Some(Arc::new(cfg));
     Ok(())
 }

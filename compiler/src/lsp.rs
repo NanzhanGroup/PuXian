@@ -391,12 +391,35 @@ fn collect_local_names(prog: &Program) -> Vec<String> {
                 walk_expr(then, out);
                 walk_expr(else_, out);
             }
-            ast::Expr::ListComp { expr, var, iterable, cond, .. } => {
-                if !out.contains(var) {
-                    out.push(var.clone());
+            ast::Expr::ListComp { expr, clauses, cond, .. } => {
+                for cl in clauses {
+                    for v in &cl.vars {
+                        if !out.contains(v) {
+                            out.push(v.clone());
+                        }
+                    }
                 }
                 walk_expr(expr, out);
-                walk_expr(iterable, out);
+                for cl in clauses {
+                    walk_expr(&cl.iterable, out);
+                }
+                if let Some(c) = cond {
+                    walk_expr(c, out);
+                }
+            }
+            ast::Expr::DictComp { key, value, clauses, cond, .. } => {
+                for cl in clauses {
+                    for v in &cl.vars {
+                        if !out.contains(v) {
+                            out.push(v.clone());
+                        }
+                    }
+                }
+                walk_expr(key, out);
+                walk_expr(value, out);
+                for cl in clauses {
+                    walk_expr(&cl.iterable, out);
+                }
                 if let Some(c) = cond {
                     walk_expr(c, out);
                 }

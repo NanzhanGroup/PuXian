@@ -269,6 +269,11 @@ pub enum Builtin {
     BytesFind,
     ReadBytes,
     WriteBytes,
+    // M30 P1：字节序可控整数↔bytes（pxdb 存储基石）
+    // int_to_bytes(n, size[, endian[, signed]]) → bytes|null（大/小端、补码/无符号）
+    // bytes_to_int(b[, endian[, signed]]) → int|null（长度 1..8，越界 null）
+    IntToBytes,
+    BytesToInt,
     // M22 P1：解释器循环引用回收（追踪式 GC）
     // gc() → int（强制运行一次垃圾回收；返回 0 = 有并发线程跳过，1 = 已执行）
     Gc,
@@ -449,6 +454,8 @@ impl Builtin {
             Builtin::BytesFind => "bytes_find",
             Builtin::ReadBytes => "read_bytes",
             Builtin::WriteBytes => "write_bytes",
+            Builtin::IntToBytes => "int_to_bytes",
+            Builtin::BytesToInt => "bytes_to_int",
             Builtin::Gc => "gc",
             Builtin::TlsServer => "tls_server",
             Builtin::SessionOpen => "session_open",

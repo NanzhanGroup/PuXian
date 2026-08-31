@@ -1224,7 +1224,7 @@ impl Parser {
         }
     }
 
-    /// 列表字面量 或 列表推导
+    /// 列表字面量 或 列表推导（M30：支持多 for 嵌套 / 多变量解包 / 多 if）
     fn parse_list_or_comp(&mut self) -> ParseResult<Expr> {
         let pos = self.advance().pos; // [
         if self.check(&TokenKind::RBracket) {
@@ -1232,23 +1232,13 @@ impl Parser {
             return Ok(Expr::List { items: Vec::new(), pos });
         }
         let first = self.parse_expr()?;
-        // 列表推导 [expr for x in xs if cond]
+        // 列表推导 [expr for x in xs if cond]（可多 for / 多 if / 多变量解包）
         if self.check(&TokenKind::For) {
-            self.advance();
-            let var = self.expect_ident("推导变量")?;
-            self.expect(TokenKind::In, "'in'")?;
-            let iterable = self.parse_expr()?;
-            let cond = if self.check(&TokenKind::If) {
-                self.advance();
-                Some(Box::new(self.parse_expr()?))
-            } else {
-                None
-            };
+            let (clauses, cond) = self.parse_comp_clauses()?;
             self.expect(TokenKind::RBracket, "']'")?;
             return Ok(Expr::ListComp {
                 expr: Box::new(first),
-                var,
-                iterable: Box::new(iterable),
+                clauses,
                 cond,
                 pos,
             });
@@ -1264,6 +1254,40 @@ impl Parser {
         }
         self.expect(TokenKind::RBracket, "']'")?;
         Ok(Expr::List { items, pos })
+    }
+
+/// 推导式变量列表：`ident (, ident)*`（多变量解包）
+    fn parse_comp_vars(&mut self) -> ParseResult<Vec<String>> {
+        let mut vars = vec![self.expect_ident("推导变量")?];
+        while self.check(&TokenKind::Comma) {
+            self.advance();
+            vars.push(self.expect_ident("推导变量")?);
+        }
+        Ok(vars)
+    }
+
+    /// 推导式子句：for/if 循环（供 DictComp 复用）
+    fn parse_comp_clauses(&mut self) -> ParseResult<(Vec<CompClause>, Option<Box<Expr>>)> {
+        let mut clauses: Vec<CompClause> = Vec::new();
+        let mut conds: Vec<Expr> = Vec::new();
+        loop {
+            if self.check(&TokenKind::For) {
+                self.advance();
+                let vars = self.parse_comp_vars()?;
+                self.expect(TokenKind::In, "'in'")?;
+                let iterable = self.parse_expr()?;
+                clauses.push(CompClause {
+                    vars,
+                    iterable: Box::new(iterable),
+                });
+            } else if self.check(&TokenKind::If) {
+                self.advance();
+                conds.push(self.parse_expr()?);
+            } else {
+                break;
+            }
+        }
+        Ok((clauses, fold_comp_conds(conds)))
     }
 
     /// 括号表达式 或 元组
@@ -1293,40 +1317,69 @@ impl Parser {
         }
     }
 
+    /// M30：扫描式判断花括号内容是否字典——第一个顶层 Colon 出现在顶层 Comma/换行/} 之前
+    fn brace_looks_like_dict(&self) -> bool {
+        let toks = &self.tokens;
+        let mut depth = 0i32;
+        let mut i = self.pos; // 当前 token 索引（{ 之后）
+        while i < toks.len() {
+            match &toks[i].kind {
+                TokenKind::Colon if depth == 0 => return true,
+                TokenKind::LParen | TokenKind::LBracket => depth += 1,
+                TokenKind::LBrace => depth += 1,
+                TokenKind::RParen | TokenKind::RBracket => {
+                    if depth > 0 {
+                        depth -= 1;
+                    }
+                }
+                TokenKind::RBrace if depth == 0 => return false,
+                TokenKind::Comma | TokenKind::Newline | TokenKind::Eof if depth == 0 => return false,
+                _ => {}
+            }
+            i += 1;
+        }
+        false
+    }
+
     /// 花括号：字典字面量 或 块表达式
     fn parse_brace(&mut self) -> ParseResult<Expr> {
         let pos = self.advance().pos; // {
         // 跳过 { 后的换行/缩进（支持多行 dict 字面量与多行块）
         self.skip_newlines();
         self.skip_brace_indents();
-        // 启发式判断字典：{ "key": ... 或 { ident: ...
-        let is_dict = match self.peek_kind() {
-            TokenKind::Str(_) | TokenKind::Ident(_) => {
-                matches!(self.peek2_kind(), TokenKind::Colon)
-            }
-            _ => false,
-        };
+        // M30：扫描式判断字典——第一个顶层 Colon 出现在顶层 Comma/换行/} 之前 → dict
+        // （支持复杂键：{str(x)+str(y): ...} / {k: v for ...}；块表达式无顶层冒号不受影响）
+        let is_dict = self.brace_looks_like_dict();
         if is_dict {
-            let mut entries = Vec::new();
-            if !self.check(&TokenKind::RBrace) {
-                loop {
-                    if self.check(&TokenKind::RBrace) {
-                        break;
-                    }
-                    let k = self.parse_expr()?;
-                    self.expect(TokenKind::Colon, "':'")?;
-                    let v = self.parse_expr()?;
-                    entries.push((k, v));
-                    if self.check(&TokenKind::Comma) {
-                        self.advance();
-                        self.skip_newlines();
-                        self.skip_brace_indents();
-                        continue;
-                    }
-                    self.skip_newlines();
-                    self.skip_brace_indents();
+            let k = self.parse_expr()?;
+            self.expect(TokenKind::Colon, "':'")?;
+            let v = self.parse_expr()?;
+            // 字典推导 {k: v for k, v in items if cond}（M30 新增）
+            if self.check(&TokenKind::For) {
+                let (clauses, cond) = self.parse_comp_clauses()?;
+                self.expect(TokenKind::RBrace, "'}'")?;
+                return Ok(Expr::DictComp {
+                    key: Box::new(k),
+                    value: Box::new(v),
+                    clauses,
+                    cond,
+                    pos,
+                });
+            }
+            let mut entries = vec![(k, v)];
+            while self.check(&TokenKind::Comma) {
+                self.advance();
+                self.skip_newlines();
+                self.skip_brace_indents();
+                if self.check(&TokenKind::RBrace) {
                     break;
                 }
+                let k2 = self.parse_expr()?;
+                self.expect(TokenKind::Colon, "':'")?;
+                let v2 = self.parse_expr()?;
+                entries.push((k2, v2));
+                self.skip_newlines();
+                self.skip_brace_indents();
             }
             self.expect(TokenKind::RBrace, "'}'")?;
             Ok(Expr::Dict { entries, pos })
@@ -1676,11 +1729,29 @@ pub fn expr_pos(e: &Expr) -> Pos {
         | Expr::ForceUnwrap { pos, .. }
         | Expr::IfExpr { pos, .. }
         | Expr::ListComp { pos, .. }
+        | Expr::DictComp { pos, .. }
         | Expr::Closure { pos, .. }
         | Expr::Block { pos, .. }
         | Expr::Match { pos, .. }
         | Expr::Constructor { pos, .. } => *pos,
     }
+}
+
+/// 合并推导式多个 if 条件为 And 链（M30：多 if 子句）
+fn fold_comp_conds(conds: Vec<Expr>) -> Option<Box<Expr>> {
+    let mut iter = conds.into_iter();
+    let first = iter.next()?;
+    let mut acc = first;
+    for c in iter {
+        let p = expr_pos(&acc);
+        acc = Expr::Binary {
+            op: BinaryOp::And,
+            left: Box::new(acc),
+            right: Box::new(c),
+            pos: p,
+        };
+    }
+    Some(Box::new(acc))
 }
 
 /// 取语句位置
@@ -1826,8 +1897,9 @@ mod tests {
     fn test_list_comp() {
         let p = parse_ok("let xs = [x * 2 for x in items if x > 1]\n");
         match &p.items[0] {
-            Stmt::VarDecl { value: Some(Expr::ListComp { var, cond, .. }), .. } => {
-                assert_eq!(var, "x");
+            Stmt::VarDecl { value: Some(Expr::ListComp { clauses, cond, .. }), .. } => {
+                assert_eq!(clauses.len(), 1);
+                assert_eq!(clauses[0].vars, vec!["x".to_string()]);
                 assert!(cond.is_some());
             }
             _ => panic!("期望 ListComp"),
@@ -1835,6 +1907,33 @@ mod tests {
     }
 
     #[test]
+
+    #[test]
+    fn test_dict_comp_parse() {
+        let p = parse_ok("let d = {k: v for k, v in pairs if v > 1}\n");
+        match &p.items[0] {
+            Stmt::VarDecl { value: Some(Expr::DictComp { clauses, cond, .. }), .. } => {
+                assert_eq!(clauses.len(), 1);
+                assert_eq!(clauses[0].vars, vec!["k".to_string(), "v".to_string()]);
+                assert!(cond.is_some());
+            }
+            _ => panic!("期望 DictComp"),
+        }
+    }
+
+    #[test]
+    fn test_comp_multifor_parse() {
+        let p = parse_ok("let m = [x * y for x in a for y in b if x > 1 if y < 3]\n");
+        match &p.items[0] {
+            Stmt::VarDecl { value: Some(Expr::ListComp { clauses, cond, .. }), .. } => {
+                assert_eq!(clauses.len(), 2);
+                assert_eq!(clauses[0].vars, vec!["x".to_string()]);
+                assert_eq!(clauses[1].vars, vec!["y".to_string()]);
+                assert!(cond.is_some());
+            }
+            _ => panic!("期望 ListComp"),
+        }
+    }
     fn test_precedence() {
         // 2 + 3 * 4 应解析为 2 + (3*4)
         let p = parse_ok("let r = 2 + 3 * 4\n");

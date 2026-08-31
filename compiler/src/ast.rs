@@ -277,11 +277,18 @@ pub enum Expr {
         else_: Box<Expr>,
         pos: Pos,
     },
-    /// 列表推导 [f(x) for x in xs if cond]
+    /// 列表推导 [f(x) for x in xs if cond]（M30 补全：多 for 子句嵌套 / 多变量解包）
     ListComp {
         expr: Box<Expr>,
-        var: String,
-        iterable: Box<Expr>,
+        clauses: Vec<CompClause>,
+        cond: Option<Box<Expr>>,
+        pos: Pos,
+    },
+    /// 字典推导 {k: v for k, v in items if cond}（M30 新增）
+    DictComp {
+        key: Box<Expr>,
+        value: Box<Expr>,
+        clauses: Vec<CompClause>,
         cond: Option<Box<Expr>>,
         pos: Pos,
     },
@@ -317,6 +324,13 @@ pub enum UnaryOp {
     Neg,
     Not,
     BitNot,
+}
+
+/// 推导式子句：`for var, var2 in iterable`（M30 支持多变量解包与多 for 嵌套）
+#[derive(Debug, Clone)]
+pub struct CompClause {
+    pub vars: Vec<String>,
+    pub iterable: Box<Expr>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

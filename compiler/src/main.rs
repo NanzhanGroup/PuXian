@@ -581,10 +581,43 @@ fn run_fmt(args: &[String]) -> ExitCode {
     let write_back = args.iter().any(|a| a == "-w" || a == "--write");
     let check_only = args.iter().any(|a| a == "--check");
     let diff_only = args.iter().any(|a| a == "--diff");
+    // M30：配置化 —— --indent N|tab / --quote double|single / --config FILE；自动发现 .pxfmt.toml
+    let mut cfg = fmt::FormatOptions::default();
+    if let Some(p) = discover_fmt_config(args) {
+        match parse_fmt_config(&p) {
+            Ok(c) => cfg = c,
+            Err(e) => {
+                eprintln!("错误: 解析 {} 失败: {}", p, e);
+                return ExitCode::from(2);
+            }
+        }
+    }
+    if let Some(v) = arg_value(args, "--indent") {
+        match v.as_str() {
+            "tab" => cfg.indent = fmt::IndentStyle::Tab,
+            s => match s.parse::<usize>() {
+                Ok(n) if n >= 1 && n <= 16 => cfg.indent = fmt::IndentStyle::Spaces(n),
+                _ => {
+                    eprintln!("错误: --indent 需为 1..16 或 tab，实际是 {}", s);
+                    return ExitCode::from(2);
+                }
+            },
+        }
+    }
+    if let Some(v) = arg_value(args, "--quote") {
+        match v.as_str() {
+            "double" | "d" => cfg.quote = fmt::QuoteStyle::Double,
+            "single" | "s" => cfg.quote = fmt::QuoteStyle::Single,
+            _ => {
+                eprintln!("错误: --quote 需为 double/single，实际是 {}", v);
+                return ExitCode::from(2);
+            }
+        }
+    }
     let file = match args.iter().skip(2).find(|a| !a.starts_with('-')) {
         Some(f) => f.clone(),
         None => {
-            eprintln!("用法: {} fmt <file.px> [-w] [--check] [--diff]", NAME);
+            eprintln!("用法: {} fmt <file.px> [-w] [--check] [--diff] [--indent N|tab] [--quote double|single] [--config FILE]", NAME);
             return ExitCode::from(2);
         }
     };
@@ -596,7 +629,7 @@ fn run_fmt(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let formatted = match fmt::format(&src) {
+    let formatted = match fmt::format_with(&src, &cfg) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("格式化失败: {}", e);
@@ -633,6 +666,76 @@ fn run_fmt(args: &[String]) -> ExitCode {
         print!("{}", formatted);
         ExitCode::SUCCESS
     }
+}
+
+/// M30：取命令行参数值（--key value）
+fn arg_value(args: &[String], key: &str) -> Option<String> {
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == key && i + 1 < args.len() {
+            return Some(args[i + 1].clone());
+        }
+        i += 1;
+    }
+    None
+}
+
+/// M30：自动发现 .pxfmt.toml（从文件目录向上逐级查找；--config 显式指定优先）
+fn discover_fmt_config(args: &[String]) -> Option<String> {
+    if let Some(v) = arg_value(args, "--config") {
+        return Some(v);
+    }
+    let file = args.iter().skip(2).find(|a| !a.starts_with('-'))?;
+    let mut dir = std::path::Path::new(file)
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    loop {
+        let cand = dir.join(".pxfmt.toml");
+        if cand.is_file() {
+            return Some(cand.to_string_lossy().to_string());
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    None
+}
+
+/// M30：解析 .pxfmt.toml（TOML 子集：indent = 4 | "tab"；quote = "single" | "double"）
+fn parse_fmt_config(path: &str) -> Result<fmt::FormatOptions, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut opts = fmt::FormatOptions::default();
+    for line in text.lines() {
+        let l = line.trim();
+        if l.is_empty() || l.starts_with('#') {
+            continue;
+        }
+        if let Some(eq) = l.find('=') {
+            let k = l[..eq].trim();
+            let v = l[eq + 1..].trim().trim_matches('"').trim_matches('\'');
+            match k {
+                "indent" => {
+                    if v == "tab" {
+                        opts.indent = fmt::IndentStyle::Tab;
+                    } else {
+                        let n: usize = v.parse().map_err(|_| format!("indent 值无效: {}", v))?;
+                        if n < 1 || n > 16 {
+                            return Err(format!("indent 需在 1..16，实际是 {}", n));
+                        }
+                        opts.indent = fmt::IndentStyle::Spaces(n);
+                    }
+                }
+                "quote" => match v {
+                    "single" => opts.quote = fmt::QuoteStyle::Single,
+                    "double" => opts.quote = fmt::QuoteStyle::Double,
+                    _ => return Err(format!("quote 需为 single/double，实际是 {}", v)),
+                },
+                _ => {}
+            }
+        }
+    }
+    Ok(opts)
 }
 
 /// 静态检查入口（M6）

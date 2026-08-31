@@ -280,10 +280,25 @@ fn render_expr(expr: &Expr, level: usize, out: &mut String) {
             render_expr(then, level + 1, out);
             render_expr(else_, level + 1, out);
         }
-        Expr::ListComp { expr, var, iterable, cond, pos } => {
-            out.push_str(&format!("list-comp for {} @ {}\n", var, pos));
+        Expr::ListComp { expr, clauses, cond, pos } => {
+            let vars: Vec<String> = clauses.iter().map(|c| c.vars.join(",")).collect();
+            out.push_str(&format!("list-comp for {} @ {}\n", vars.join(" | "), pos));
             render_expr(expr, level + 1, out);
-            render_expr(iterable, level + 1, out);
+            for cl in clauses {
+                render_expr(&cl.iterable, level + 1, out);
+            }
+            if let Some(c) = cond {
+                render_expr(c, level + 1, out);
+            }
+        }
+        Expr::DictComp { key, value, clauses, cond, pos } => {
+            let vars: Vec<String> = clauses.iter().map(|c| c.vars.join(",")).collect();
+            out.push_str(&format!("dict-comp for {} @ {}\n", vars.join(" | "), pos));
+            render_expr(key, level + 1, out);
+            render_expr(value, level + 1, out);
+            for cl in clauses {
+                render_expr(&cl.iterable, level + 1, out);
+            }
             if let Some(c) = cond {
                 render_expr(c, level + 1, out);
             }

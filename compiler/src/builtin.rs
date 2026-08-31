@@ -1822,7 +1822,8 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             }
             let s = expect_str(&args[0], "hex_to_bytes", pos)?;
             match hex_decode(s) {
-                Ok(bytes) => Ok(Value::Str(String::from_utf8_lossy(&bytes).to_string())),
+                // M30 修复：hex 解码返回真正的 bytes 类型（M23 引入 bytes 后的正确语义）
+                Ok(bytes) => Ok(Value::Bytes(bytes)),
                 Err(_) => Ok(Value::Null),
             }
         }
@@ -2321,6 +2322,144 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
                     Some(pos),
                 )),
             }
+        }
+
+        // ==================== M30 P1：字节序可控整数↔bytes（pxdb 存储基石） ====================
+        // int_to_bytes(n, size[, endian[, signed]]) → bytes|null
+        //   size 1..8；endian "big"/"little"（"be"/"le" 也接受，默认 big）
+        //   signed=false（默认）：范围 [0, 2^(8s)-1]；signed=true：[-2^(8s-1), 2^(8s-1)-1]
+        //   负数以补码编码；越界返回 null
+        Builtin::IntToBytes => {
+            if args.len() < 2 || args.len() > 4 {
+                return Err(err("int_to_bytes 需要 (n, size[, endian[, signed]]) 参数", pos));
+            }
+            let n = expect_int(&args[0], "int_to_bytes", pos)?;
+            let size = expect_int(&args[1], "int_to_bytes", pos)?;
+            let endian = if args.len() >= 3 {
+                expect_str(&args[2], "int_to_bytes", pos)?.to_lowercase()
+            } else {
+                "big".to_string()
+            };
+            let signed = if args.len() >= 4 {
+                match &args[3] {
+                    Value::Bool(b) => *b,
+                    v => {
+                        return Err(err(
+                            format!("int_to_bytes 的 signed 需要 bool，实际是 {}", interp.type_name(v)),
+                            pos,
+                        ))
+                    }
+                }
+            } else {
+                false
+            };
+            let big = match endian.as_str() {
+                "big" | "be" => true,
+                "little" | "le" => false,
+                other => {
+                    return Err(err(
+                        format!("int_to_bytes 的 endian 需为 big/little，实际是 {}", other),
+                        pos,
+                    ))
+                }
+            };
+            if size < 1 || size > 8 {
+                return Err(err("int_to_bytes 的 size 必须在 1..8", pos));
+            }
+            let bits = (size * 8) as u32;
+            let mask: u64 = if size == 8 {
+                u64::MAX
+            } else {
+                (1u64 << bits) - 1
+            };
+            // 范围检查
+            if signed {
+                if size < 8 {
+                    let lo = -(1i64 << (bits - 1));
+                    let hi = (1i64 << (bits - 1)) - 1;
+                    if n < lo || n > hi {
+                        return Ok(Value::Null);
+                    }
+                }
+                // size == 8：i64 全范围合法
+            } else if n < 0 {
+                return Ok(Value::Null);
+            } else if size < 8 && (n as u64) > mask {
+                return Ok(Value::Null);
+            }
+            let mut v = (n as i64 as u64) & mask; // 负数补码截断
+            let mut out = vec![0u8; size as usize];
+            for i in 0..size as usize {
+                let shift = if big { (size as usize - 1 - i) * 8 } else { i * 8 };
+                out[i] = ((v >> shift) & 0xFF) as u8;
+            }
+            Ok(Value::Bytes(out))
+        }
+        // bytes_to_int(b[, endian[, signed]]) → int|null（长度 1..8；非法长度/越界 null）
+        Builtin::BytesToInt => {
+            if args.len() < 1 || args.len() > 3 {
+                return Err(err("bytes_to_int 需要 (bytes[, endian[, signed]]) 参数", pos));
+            }
+            let b = match &args[0] {
+                Value::Bytes(b) => b.clone(),
+                v => {
+                    return Err(err(
+                        format!("bytes_to_int 需要 bytes，实际是 {}", interp.type_name(v)),
+                        pos,
+                    ))
+                }
+            };
+            let endian = if args.len() >= 2 {
+                expect_str(&args[1], "bytes_to_int", pos)?.to_lowercase()
+            } else {
+                "big".to_string()
+            };
+            let signed = if args.len() >= 3 {
+                match &args[2] {
+                    Value::Bool(b) => *b,
+                    v => {
+                        return Err(err(
+                            format!("bytes_to_int 的 signed 需要 bool，实际是 {}", interp.type_name(v)),
+                            pos,
+                        ))
+                    }
+                }
+            } else {
+                false
+            };
+            let big = match endian.as_str() {
+                "big" | "be" => true,
+                "little" | "le" => false,
+                other => {
+                    return Err(err(
+                        format!("bytes_to_int 的 endian 需为 big/little，实际是 {}", other),
+                        pos,
+                    ))
+                }
+            };
+            if b.is_empty() || b.len() > 8 {
+                return Ok(Value::Null);
+            }
+            let mut v: u64 = 0;
+            if big {
+                for &x in &b {
+                    v = (v << 8) | x as u64;
+                }
+            } else {
+                for (i, &x) in b.iter().enumerate() {
+                    v |= (x as u64) << (8 * i);
+                }
+            }
+            if signed {
+                let hi = if big { 0 } else { b.len() - 1 };
+                if b[hi] & 0x80 != 0 {
+                    if b.len() < 8 {
+                        v |= !(((1u64 << (8 * b.len())) - 1) & u64::MAX);
+                    }
+                    return Ok(Value::Int(v as i64));
+                }
+            }
+            Ok(Value::Int(v as i64))
         }
 
         // ==================== M22 P1：解释器循环引用回收 ====================
