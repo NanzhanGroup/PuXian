@@ -27,7 +27,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::{Read, Seek, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
@@ -538,45 +538,112 @@ pub fn px_serve(port: i64, docroot: &str, timeout_ms: i64, opts: Option<&Value>)
     Ok(())
 }
 
-/// 处理单个 HTTP 连接：读请求 → 路径映射/穿越防护 → 静态文件或 .px 脚本 → 响应。
+/// 请求 ID 全局序号（每请求生成唯一 ID：px-<unixms>-<seq>）
+static REQ_ID_SEQ: AtomicI64 = AtomicI64::new(0);
+
+fn new_request_id() -> String {
+    let ms = now_secs() * 1000;
+    let seq = REQ_ID_SEQ.fetch_add(1, Ordering::SeqCst);
+    format!("px-{}-{}", ms, seq)
+}
+
+/// 处理单个 HTTP 连接：keep-alive 循环——同一连接连续处理多个请求，
+/// 直到客户端 Connection: close / 空闲超时 / 出错。每请求独立日志 + 请求 ID。
 fn handle_px_conn(
     conn: &mut SConn,
     root: &Path,
     port: i64,
     o: &PxServeOpts,
 ) -> Result<(), String> {
-    let (req, method, _body, body_tmp) = match read_http_conn(conn, o) {
-        Ok(x) => x,
-        Err(e) if e == "PAYLOAD_TOO_LARGE" => {
-            // M27：请求体超限 → 413 Payload Too Large
-            let _ = send_response(conn, 413, &[], b"413 Payload Too Large", false);
-            return finish_conn(conn, None);
+    loop {
+        // keep-alive：空闲读超时 15s（客户端保持连接但长时间无请求 → 关闭）
+        conn.set_read_timeout(Some(Duration::from_secs(15))).ok();
+        let (req, method, _body, body_tmp) = match read_http_conn(conn, o) {
+            Ok(x) => x,
+            Err(e) if e == "PAYLOAD_TOO_LARGE" => {
+                let _ = send_response(conn, 413, &[], b"413 Payload Too Large", false, false);
+                return finish_conn(conn, None);
+            }
+            Err(e) if e == "连接已关闭" || e.contains("超时") || e.contains("TimedOut") || e.contains("WouldBlock") => {
+                // keep-alive 自然结束（客户端关闭 / 空闲超时）；此时未读到完整请求，无 body_tmp
+                return finish_conn(conn, None);
+            }
+            Err(e) => return Err(e),
+        };
+        // 客户端 keep-alive 判定（Connection: close → 处理后关闭；HTTP/1.1 默认 keep）
+        let keep = request_keep_alive(&req);
+        let ok = handle_one_request(conn, &req, &method, root, port, o, keep)?;
+        finish_conn(conn, body_tmp)?;
+        if !ok || !keep {
+            return Ok(());
         }
-        Err(e) => return Err(e),
-    };
-    let path = req_str(&req, "path").unwrap_or_else(|| "/".to_string());
+    }
+}
 
-    // M28：路由表非空 → 优先匹配路由（method+path 模式 + :id 参数 + 中间件链）；
-    //      未匹配回退 docroot 文件映射（PHP 模式，向后兼容）
+/// 请求是否要求 keep-alive（默认 true；Connection: close → false）
+fn request_keep_alive(req: &Value) -> bool {
+    if let Value::Dict(d) = req {
+        if let Some(Value::Dict(h)) = d.lock().unwrap().get("headers").cloned() {
+            let h = h.lock().unwrap();
+            for (k, v) in h.iter() {
+                if k.eq_ignore_ascii_case("connection") {
+                    if let Value::Str(s) = v {
+                        return !s.trim().eq_ignore_ascii_case("close");
+                    }
+                }
+            }
+        }
+    }
+    true
+}
+
+/// 处理单个请求（路由 / 静态文件 / .px 脚本）。返回是否继续 keep-alive。
+fn handle_one_request(
+    conn: &mut SConn,
+    req: &Value,
+    method: &str,
+    root: &Path,
+    port: i64,
+    o: &PxServeOpts,
+    keep_alive: bool,
+) -> Result<bool, String> {
+    let path = req_str(req, "path").unwrap_or_else(|| "/".to_string());
+    let req_id = new_request_id();
+    // M29：请求 ID 注入 REQUEST + 响应头 X-Request-Id（链路追踪）
+    if let Value::Dict(d) = req {
+        let mut g = d.lock().unwrap();
+        g.insert("request_id".into(), Value::Str(req_id.clone()));
+    }
+    let head_only = method == "HEAD";
+    let remote = conn_peer(conn);
+
+    // M28：路由表非空 → 优先匹配路由（method+path 模式 + :id 参数 + 中间件链）
     if has_routes() {
-        if let Some(()) = try_route_dispatch(conn, &req, &method, method == "HEAD")? {
-            return finish_conn(conn, body_tmp);
+        if let Some(()) = try_route_dispatch(conn, req, method, head_only, &req_id, &remote, keep_alive)? {
+            return Ok(keep_alive);
         }
     }
 
     let start = std::time::Instant::now();
+    let mut status = 500;
+    let mut bytes_out = 0usize;
 
     // 1. 路径解析 + 目录隔离（穿越防护）
     let fs_path = match resolve_path(root, &path) {
         Ok(p) => p,
         Err(e) => {
-            let (status, msg) = if e == "FORBIDDEN" {
+            let (st, msg) = if e == "FORBIDDEN" {
                 (403, "403 Forbidden: 路径穿越被拒绝")
             } else {
                 (404, "404 Not Found")
             };
-            let _ = send_response(conn, status, &[], msg.as_bytes(), method == "HEAD");
-            return finish_conn(conn, body_tmp);
+            let mut hd = vec![("X-Request-Id".into(), req_id.clone())];
+            if head_only { hd.push(("Content-Length".into(), msg.len().to_string())); }
+            let _ = send_response(conn, st, &hd, msg.as_bytes(), head_only, keep_alive);
+            status = st;
+            bytes_out = msg.len();
+            log_access(&req_id, &remote, method, &path, status, bytes_out, start.elapsed().as_millis());
+            return Ok(keep_alive);
         }
     };
 
@@ -597,8 +664,11 @@ fn handle_px_conn(
     let target = match target {
         Some(t) if t.is_file() => t,
         _ => {
-            let _ = send_response(conn, 404, &[], b"404 Not Found", method == "HEAD");
-            return finish_conn(conn, body_tmp);
+            let mut hd = vec![("X-Request-Id".into(), req_id.clone())];
+            if head_only { hd.push(("Content-Length".into(), "13".into())); }
+            let _ = send_response(conn, 404, &hd, b"404 Not Found", head_only, keep_alive);
+            log_access(&req_id, &remote, method, &path, 404, 13, start.elapsed().as_millis());
+            return Ok(keep_alive);
         }
     };
 
@@ -608,9 +678,9 @@ fn handle_px_conn(
         .and_then(|e| e.to_str())
         .map(|e| e.eq_ignore_ascii_case("px"))
         .unwrap_or(false);
-    let (status, headers, body) = if is_px {
-        match exec_script(&target, &req, root, port, o) {
-            Ok((st, hd, bd)) => (st, hd, bd),
+    if is_px {
+        let (st, mut headers, body) = match exec_script(&target, req, root, port, o) {
+            Ok(x) => x,
             Err(e) if e == "TIMEOUT" => {
                 eprintln!("[px-serve] 脚本超时 {} (>{}ms)", target.display(), o.timeout_ms);
                 (
@@ -627,21 +697,376 @@ fn handle_px_conn(
                     format!("500 Internal Server Error\n\n{}", e).into_bytes(),
                 )
             }
-        }
-    } else {
-        match std::fs::read(&target) {
-            Ok(data) => {
-                let ct = mime_type(&target.to_string_lossy());
-                (200, vec![("Content-Type".into(), ct.into())], data)
+        };
+        headers.retain(|(k, _)| !k.eq_ignore_ascii_case("x-request-id"));
+        headers.push(("X-Request-Id".into(), req_id.clone()));
+        let (st2, hd2, bd2) = maybe_gzip_response(st, headers, body, req);
+        let _ = send_response(conn, st2, &hd2, &bd2, head_only, keep_alive);
+        status = st2;
+        bytes_out = bd2.len();
+        let ms = start.elapsed().as_millis();
+        log_access(&req_id, &remote, method, &path, status, bytes_out, ms);
+        return Ok(keep_alive);
+    }
+
+    // 4. 静态文件：ETag / Last-Modified / 304 / Range + 流式发送（M29）
+    let r = send_static_file(conn, &target, req, head_only, keep_alive, &req_id, &remote, method, &path, start);
+    status = r.0;
+    bytes_out = r.1;
+    Ok(keep_alive)
+}
+
+/// M29：结构化访问日志（时间 remote method path status bytes ms req=id）
+fn log_access(req_id: &str, remote: &str, method: &str, path: &str, status: i64, bytes: usize, ms: u128) {
+    let t = now_secs();
+    eprintln!(
+        "[px-access] {} {} {} {} {} {} {}ms req={}",
+        t, remote, method, path, status, bytes, ms, req_id
+    );
+}
+
+/// M29c：gzip 响应压缩——Accept-Encoding: gzip 且 body > 1KB 且为文本类 → gzip + Content-Encoding
+fn maybe_gzip_response(
+    status: i64,
+    mut headers: Vec<(String, String)>,
+    body: Vec<u8>,
+    req: &Value,
+) -> (i64, Vec<(String, String)>, Vec<u8>) {
+    if status != 200 && status != 206 && status != 201 {
+        return (status, headers, body);
+    }
+    if body.len() < 1024 {
+        return (status, headers, body);
+    }
+    // 请求 Accept-Encoding 含 gzip？
+    let mut accept_gzip = false;
+    if let Value::Dict(d) = req {
+        if let Some(Value::Dict(h)) = d.lock().unwrap().get("headers").cloned() {
+            let h = h.lock().unwrap();
+            for (k, v) in h.iter() {
+                if k.eq_ignore_ascii_case("accept-encoding") {
+                    if let Value::Str(s) = v {
+                        accept_gzip = s.to_lowercase().contains("gzip");
+                    }
+                }
             }
-            Err(e) => (404, vec![], format!("404 Not Found: {}", e).into_bytes()),
+        }
+    }
+    if !accept_gzip {
+        return (status, headers, body);
+    }
+    // 文本类才压缩（image/video/zip 等二进制不再压缩）
+    let ct = headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+        .map(|(_, v)| v.to_lowercase())
+        .unwrap_or_default();
+    let compressible = ct.starts_with("text/")
+        || ct.contains("json")
+        || ct.contains("javascript")
+        || ct.contains("xml")
+        || ct.contains("svg")
+        || ct.contains("csv")
+        || ct.is_empty();
+    if !compressible {
+        return (status, headers, body);
+    }
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+    use std::io::Write as _;
+    let mut enc = GzEncoder::new(Vec::new(), Compression::new(6));
+    if enc.write_all(&body).is_err() {
+        return (status, headers, body);
+    }
+    match enc.finish() {
+        Ok(gz) => {
+            headers.retain(|(k, _)| !k.eq_ignore_ascii_case("content-encoding"));
+            headers.retain(|(k, _)| !k.eq_ignore_ascii_case("vary"));
+            headers.push(("Content-Encoding".into(), "gzip".into()));
+            headers.push(("Vary".into(), "Accept-Encoding".into()));
+            (status, headers, gz)
+        }
+        Err(_) => (status, headers, body),
+    }
+}
+
+/// M29b：静态文件响应——ETag / Last-Modified / 304 / Range + 流式发送。
+/// 返回 (status, 发送字节数)。
+fn send_static_file(
+    conn: &mut SConn,
+    target: &Path,
+    req: &Value,
+    head_only: bool,
+    keep_alive: bool,
+    req_id: &str,
+    remote: &str,
+    method: &str,
+    path: &str,
+    start: std::time::Instant,
+) -> (i64, usize) {
+    use std::io::Read as _;
+    let meta = match std::fs::metadata(target) {
+        Ok(m) => m,
+        Err(e) => {
+            let msg = format!("404 Not Found: {}", e);
+            let mut hd = vec![("X-Request-Id".into(), req_id.to_string())];
+            if head_only { hd.push(("Content-Length".into(), msg.len().to_string())); }
+            let _ = send_response(conn, 404, &hd, msg.as_bytes(), head_only, keep_alive);
+            log_access(req_id, remote, method, path, 404, msg.len(), start.elapsed().as_millis());
+            return (404, msg.len());
         }
     };
+    let size = meta.len();
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let etag = format!("\"px-{:x}-{:x}\"", mtime, size);
+    let last_mod = http_date(mtime);
+    let ct = mime_type(&target.to_string_lossy()).to_string();
 
-    let ms = start.elapsed().as_millis();
-    eprintln!("[px-serve] {} {} -> {} ({}ms)", method, path, status, ms);
-    let _ = send_response(conn, status, &headers, &body, method == "HEAD");
-    finish_conn(conn, body_tmp)
+    // 请求头查询（If-None-Match / If-Modified-Since / Range / Accept-Encoding）
+    let (if_none_match, if_mod_since, range, accept_gzip) = {
+        let mut inm = None;
+        let mut ims = None;
+        let mut rng = None;
+        let mut gz = false;
+        if let Value::Dict(d) = req {
+            if let Some(Value::Dict(h)) = d.lock().unwrap().get("headers").cloned() {
+                let h = h.lock().unwrap();
+                for (k, v) in h.iter() {
+                    if let Value::Str(s) = v {
+                        if k.eq_ignore_ascii_case("if-none-match") {
+                            inm = Some(s.clone());
+                        } else if k.eq_ignore_ascii_case("if-modified-since") {
+                            ims = Some(s.clone());
+                        } else if k.eq_ignore_ascii_case("range") {
+                            rng = Some(s.clone());
+                        } else if k.eq_ignore_ascii_case("accept-encoding") && s.to_lowercase().contains("gzip") {
+                            gz = true;
+                        }
+                    }
+                }
+            }
+        }
+        (inm, ims, rng, gz)
+    };
+
+    // 304：If-None-Match 匹配 ETag
+    if let Some(inm) = &if_none_match {
+        if inm.trim().eq(&etag) || inm.trim() == "*" {
+            let hd = vec![
+                ("ETag".into(), etag.clone()),
+                ("Last-Modified".into(), last_mod.clone()),
+                ("X-Request-Id".into(), req_id.to_string()),
+            ];
+            let _ = send_response(conn, 304, &hd, &[], head_only, keep_alive);
+            log_access(req_id, remote, method, path, 304, 0, start.elapsed().as_millis());
+            return (304, 0);
+        }
+    }
+    // 304：If-Modified-Since 且 mtime <= since
+    if let Some(ims) = &if_mod_since {
+        if let Some(since) = parse_http_date(ims) {
+            if mtime <= since {
+                let hd = vec![
+                    ("ETag".into(), etag.clone()),
+                    ("Last-Modified".into(), last_mod.clone()),
+                    ("X-Request-Id".into(), req_id.to_string()),
+                ];
+                let _ = send_response(conn, 304, &hd, &[], head_only, keep_alive);
+                log_access(req_id, remote, method, path, 304, 0, start.elapsed().as_millis());
+                return (304, 0);
+            }
+        }
+    }
+
+    // Range: bytes=start-end → 206 Partial Content
+    let mut start_b = 0u64;
+    let mut end_b = size.saturating_sub(1);
+    let mut status = 200;
+    let mut extra: Vec<(String, String)> = vec![
+        ("ETag".into(), etag),
+        ("Last-Modified".into(), last_mod),
+        ("X-Request-Id".into(), req_id.to_string()),
+    ];
+    if let Some(r) = &range {
+        if let Some((s, e)) = parse_range(r, size) {
+            start_b = s;
+            end_b = e;
+            status = 206;
+            extra.push(("Content-Range".into(), format!("bytes {}-{}/{}", s, e, size)));
+            extra.push(("Accept-Ranges".into(), "bytes".into()));
+        }
+    }
+    let seg_len = (end_b - start_b + 1) as usize;
+
+    // 响应头（HEAD 只发头）
+    let reason = status_reason(status);
+    let mut hd = format!(
+        "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: {}\r\nContent-Type: {}\r\n",
+        status, reason, seg_len, if keep_alive { "keep-alive" } else { "close" }, ct
+    );
+    for (k, v) in &extra {
+        hd.push_str(&format!("{}: {}\r\n", k, v));
+    }
+    if accept_gzip && size >= 1024 && ct.starts_with("text/") {
+        // 静态文本文件 gzip：仅当请求 Accept-Encoding: gzip
+        // （为保持与解释器一致 + 避免破坏 Range，仅对整文件 200 场景 gzip）
+        if status == 200 {
+            // 先读全文件压缩
+            if let Ok(mut f) = std::fs::File::open(target) {
+                let mut data = Vec::new();
+                if f.read_to_end(&mut data).is_ok() && data.len() >= 1024 {
+                    use flate2::write::GzEncoder;
+                    use flate2::Compression;
+                    use std::io::Write as _;
+                    let mut enc = GzEncoder::new(Vec::new(), Compression::new(6));
+                    if enc.write_all(&data).is_ok() {
+                        if let Ok(gz) = enc.finish() {
+                            hd.push_str("Content-Encoding: gzip\r\nVary: Accept-Encoding\r\n");
+                            let _ = conn.write_all(hd.as_bytes());
+                            let _ = conn.flush();
+                            if !head_only {
+                                let _ = conn.write_all(&gz);
+                            }
+                            let _ = conn.flush();
+                            let n = if head_only { 0 } else { gz.len() };
+                            log_access(req_id, remote, method, path, 200, n, start.elapsed().as_millis());
+                            return (200, n);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    hd.push_str("\r\n");
+    let _ = conn.write_all(hd.as_bytes());
+    let _ = conn.flush();
+    if !head_only {
+        // 流式发送：64KB 块，从 start_b 到 end_b（大文件不占内存）
+        let mut f = match std::fs::File::open(target) {
+            Ok(f) => f,
+            Err(e) => {
+                let msg = format!("404 Not Found: {}", e);
+                let mut h2 = vec![("X-Request-Id".into(), req_id.to_string())];
+                if head_only { h2.push(("Content-Length".into(), msg.len().to_string())); }
+                let _ = send_response(conn, 404, &h2, msg.as_bytes(), head_only, keep_alive);
+                log_access(req_id, remote, method, path, 404, msg.len(), start.elapsed().as_millis());
+                return (404, msg.len());
+            }
+        };
+        let _ = f.seek(std::io::SeekFrom::Start(start_b));
+        let mut remain = seg_len;
+        let mut chunk = vec![0u8; 65536];
+        while remain > 0 {
+            let want = remain.min(chunk.len());
+            let n = f.read(&mut chunk[..want]).unwrap_or(0);
+            if n == 0 {
+                break;
+            }
+            if conn.write_all(&chunk[..n]).is_err() {
+                break;
+            }
+            remain -= n;
+        }
+        let _ = conn.flush();
+        let sent = seg_len - remain;
+        log_access(req_id, remote, method, path, status, sent, start.elapsed().as_millis());
+        return (status, sent);
+    }
+    log_access(req_id, remote, method, path, status, 0, start.elapsed().as_millis());
+    (status, 0)
+}
+
+/// HTTP date（RFC 7231 IMF-fixdate：Sun, 06 Nov 1994 08:49:37 GMT）——用 tztime 民用算法
+fn http_date(ts: i64) -> String {
+    let (y, m, d, h, mi, s, wd) = crate::tztime::civil_breakdown(ts, 0);
+    const WD: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const MO: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    format!(
+        "{}, {:02} {} {} {:02}:{:02}:{:02} GMT",
+        WD[wd as usize],
+        d,
+        MO[(m - 1) as usize],
+        y,
+        h,
+        mi,
+        s
+    )
+}
+
+/// 解析 HTTP date（IMF-fixdate / RFC 850 / asctime）→ epoch 秒；失败 → None
+fn parse_http_date(s: &str) -> Option<i64> {
+    let s = s.trim();
+    // IMF-fixdate: Sun, 06 Nov 1994 08:49:37 GMT
+    let parts: Vec<&str> = s.split(|c: char| c == ' ' || c == ',').filter(|p| !p.is_empty()).collect();
+    if parts.len() < 6 {
+        return None;
+    }
+    // 常见格式： [Sun,] 06 Nov 1994 08:49:37 GMT（weekday 可能省略）
+    let mut i = 0usize;
+    let day: i64 = if parts[0].parse::<i64>().is_ok() {
+        parts[0].parse().ok()?
+    } else {
+        // 第一个是星期几（如 "Thu"）
+        i = 1;
+        if parts.len() < 6 {
+            return None;
+        }
+        parts[1].parse().ok()?
+    };
+    let mon = parts.get(i + 1)?;
+    let year: i64 = parts.get(i + 2)?.parse().ok()?;
+    let hms = parts.get(i + 3)?;
+    let mo = match *mon {
+        "Jan" => 1, "Feb" => 2, "Mar" => 3, "Apr" => 4, "May" => 5, "Jun" => 6,
+        "Jul" => 7, "Aug" => 8, "Sep" => 9, "Oct" => 10, "Nov" => 11, "Dec" => 12,
+        _ => return None,
+    };
+    let hm: Vec<&str> = hms.split(':').collect();
+    if hm.len() != 3 {
+        return None;
+    }
+    let h: i64 = hm[0].parse().ok()?;
+    let mi: i64 = hm[1].parse().ok()?;
+    let sec: i64 = hm[2].parse().ok()?;
+    let days = crate::tztime::days_from_civil(year, mo, day);
+    Some(days * 86400 + h * 3600 + mi * 60 + sec)
+}
+
+/// 解析 Range: bytes=start-end（单段）；不支持/非法 → None
+fn parse_range(r: &str, size: u64) -> Option<(u64, u64)> {
+    let r = r.trim();
+    let b = r.strip_prefix("bytes=")?;
+    let b = b.trim();
+    let dash = b.find('-')?;
+    let s_str = b[..dash].trim();
+    let e_str = b[dash + 1..].trim();
+    if s_str.is_empty() {
+        // suffix range: bytes=-N → 最后 N 字节
+        let n: u64 = e_str.parse().ok()?;
+        if n == 0 || size == 0 {
+            return None;
+        }
+        let s = size.saturating_sub(n);
+        return Some((s, size - 1));
+    }
+    let s: u64 = s_str.parse().ok()?;
+    if s >= size {
+        return None;
+    }
+    let e = if e_str.is_empty() {
+        size - 1
+    } else {
+        e_str.parse::<u64>().ok()?.min(size - 1)
+    };
+    if e < s {
+        return None;
+    }
+    Some((s, e))
 }
 
 /// 请求收尾：删除 body 落盘临时文件 + 清理线程局部状态
@@ -1014,15 +1439,17 @@ pub fn send_response(
     headers: &[(String, String)],
     body: &[u8],
     head_only: bool,
+    keep_alive: bool,
 ) -> Result<(), String> {
     let mut resp = Vec::new();
     let reason = status_reason(status);
     resp.extend_from_slice(
         format!(
-            "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: close\r\n",
+            "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: {}\r\n",
             status,
             reason,
-            body.len()
+            body.len(),
+            if keep_alive { "keep-alive" } else { "close" }
         )
         .as_bytes(),
     );
@@ -1283,14 +1710,27 @@ pub fn has_routes() -> bool {
 }
 
 /// 请求处理中的路由分支：匹配 → 执行；未匹配 → None（回退文件映射）
-fn try_route_dispatch(conn: &mut SConn, req: &Value, method: &str, head_only: bool) -> Result<Option<()>, String> {
+fn try_route_dispatch(
+    conn: &mut SConn,
+    req: &Value,
+    method: &str,
+    head_only: bool,
+    req_id: &str,
+    remote: &str,
+    keep_alive: bool,
+) -> Result<Option<()>, String> {
     let path = req_str(req, "path").unwrap_or_else(|| "/".to_string());
     if let Some((handler, params)) = match_route(method, &path) {
         let start = std::time::Instant::now();
-        let (status, headers, body) = run_route_pipeline(handler, params, req);
+        let (mut status, mut headers, body) = run_route_pipeline(handler, params, req);
+        headers.retain(|(k, _)| !k.eq_ignore_ascii_case("x-request-id"));
+        headers.push(("X-Request-Id".into(), req_id.to_string()));
+        let (st2, hd2, bd2) = maybe_gzip_response(status, headers, body, req);
+        status = st2;
+        headers = hd2;
         let ms = start.elapsed().as_millis();
-        eprintln!("[px-serve] [route] {} {} -> {} ({}ms)", method, path, status, ms);
-        let _ = send_response(conn, status, &headers, &body, head_only);
+        log_access(req_id, remote, method, &path, status, bd2.len(), ms);
+        let _ = send_response(conn, status, &headers, &bd2, head_only, keep_alive);
         return Ok(Some(()));
     }
     Ok(None)
@@ -1354,6 +1794,39 @@ mod tests {
         // 默认
         let o2 = parse_opts(None, 1000);
         assert_eq!(o2.max_body_size, 10 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_http_date_roundtrip() {
+        // 2024-02-29 12:34:56 UTC = 1709210096
+        let ts = 1709210096i64;
+        let d = http_date(ts);
+        assert_eq!(d, "Thu, 29 Feb 2024 12:34:56 GMT");
+        let back = parse_http_date(&d);
+        assert_eq!(back, Some(ts));
+    }
+
+    #[test]
+    fn test_parse_range() {
+        assert_eq!(parse_range("bytes=0-4", 100), Some((0, 4)));
+        assert_eq!(parse_range("bytes=10-", 100), Some((10, 99)));
+        assert_eq!(parse_range("bytes=-5", 100), Some((95, 99)));
+        assert_eq!(parse_range("bytes=200-300", 100), None); // 越界
+        assert_eq!(parse_range("items=0-1", 100), None);
+        assert_eq!(parse_range("bytes=10-5", 100), None); // 反向
+    }
+
+    #[test]
+    fn test_request_keep_alive() {
+        let mut m = HashMap::new();
+        let mut h = HashMap::new();
+        h.insert("Connection".into(), Value::Str("close".into()));
+        m.insert("headers".into(), Value::Dict(Arc::new(Mutex::new(h))));
+        let req = Value::Dict(Arc::new(Mutex::new(m)));
+        assert!(!request_keep_alive(&req));
+        // 默认（无 Connection 头）→ keep
+        let req2 = Value::Dict(Arc::new(Mutex::new(HashMap::new())));
+        assert!(request_keep_alive(&req2));
     }
 
     #[test]

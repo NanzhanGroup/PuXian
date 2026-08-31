@@ -267,7 +267,8 @@ LXValue bi_middleware(LXValue* args, int nargs, void* ctx);
 int px_route_has(void);
 // 匹配路由并执行中间件链 + handler，发送响应。返回 1=已处理 / 0=未匹配。
 // conn 为 PxConn*（定义在下方 M27 段；用 void* 避免前向引用）
-int px_route_try_dispatch(void* conn, LXValue req, const char* method, int head_only);
+int px_route_try_dispatch(void* conn, LXValue req, const char* method, int head_only,
+                          int keep_alive, const char* req_id);
 // M28 P1：SQLite 绑定（runtime_sqlite.c）
 LXValue bi_sqlite_open(LXValue* args, int nargs, void* ctx);
 LXValue bi_sqlite_exec(LXValue* args, int nargs, void* ctx);

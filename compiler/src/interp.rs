@@ -373,6 +373,9 @@ impl Interpreter {
             ("sqlite_close", Builtin::SqliteClose),
             ("sqlite_escape", Builtin::SqliteEscape),
             ("sqlite_last_insert_rowid", Builtin::SqliteLastInsertRowid),
+            // M29：JSON 路径运算符（JSONB 基石）
+            ("json_path", Builtin::JsonPath),
+            ("json_path_set", Builtin::JsonPathSet),
         ];
         for (n, b) in names {
             g.define(n, Value::Builtin(*b));

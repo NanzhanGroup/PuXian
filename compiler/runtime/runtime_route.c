@@ -278,11 +278,17 @@ static void route_normalize(LXValue v, RouteResp* r) {
 }
 
 // 发送 HTTP 响应（PxConn 统一明文/TLS；HEAD 只发头）
-static void route_send(PxConn* conn, int status, const char* ct, const char* body, int body_len, int head_only) {
-    char head[512];
+static void route_send(PxConn* conn, int status, const char* ct, const char* body, int body_len,
+                       int head_only, int keep_alive, const char* extra_headers) {
+    char head[1536];
     int hl = snprintf(head, sizeof(head),
-        "HTTP/1.1 %d %s\r\nContent-Length: %d\r\nConnection: close\r\nContent-Type: %s\r\n\r\n",
-        status, route_status_reason(status), body_len, ct);
+        "HTTP/1.1 %d %s\r\nContent-Length: %d\r\nConnection: %s\r\nContent-Type: %s\r\n",
+        status, route_status_reason(status), body_len, keep_alive ? "keep-alive" : "close", ct);
+    if (extra_headers && *extra_headers) {
+        int l = (int)strlen(extra_headers);
+        if (hl + l < (int)sizeof(head)) { memcpy(head + hl, extra_headers, (size_t)l); hl += l; }
+    }
+    hl += snprintf(head + hl, sizeof(head) - (size_t)hl, "\r\n");
     px_conn_write(conn, head, (size_t)hl);
     if (!head_only && body_len > 0) px_conn_write(conn, body, (size_t)body_len);
 }
@@ -290,7 +296,8 @@ static void route_send(PxConn* conn, int status, const char* ct, const char* bod
 // ==================== 请求分派（runtime.c px_conn_worker 调用） ====================
 
 // 执行中间件链 + handler 并发送响应。返回 1 = 已处理（匹配到路由）；0 = 未匹配。
-int px_route_try_dispatch(void* connp, LXValue req, const char* method, int head_only) {
+int px_route_try_dispatch(void* connp, LXValue req, const char* method, int head_only,
+                          int keep_alive, const char* req_id) {
     PxConn* conn = (PxConn*)connp;
     LXValue path_v = px_dict_get(req, "path");
     if (path_v.type != PX_STR) return 0;
@@ -310,7 +317,7 @@ int px_route_try_dispatch(void* connp, LXValue req, const char* method, int head
             route_normalize(r, &rr);
             fprintf(stderr, "[px-serve] [route] %s %s -> %d (middleware)\n", method,
                     path_v.as.obj->as.str.data, rr.status);
-            route_send(conn, rr.status, rr.ct, rr.body, rr.body_len, head_only);
+            route_send(conn, rr.status, rr.ct, rr.body, rr.body_len, head_only, keep_alive, req_id);
             return 1;
         }
     }
@@ -323,6 +330,6 @@ int px_route_try_dispatch(void* connp, LXValue req, const char* method, int head
     route_normalize(r, &rr);
     fprintf(stderr, "[px-serve] [route] %s %s -> %d\n", method,
             path_v.as.obj->as.str.data, rr.status);
-    route_send(conn, rr.status, rr.ct, rr.body, rr.body_len, head_only);
+    route_send(conn, rr.status, rr.ct, rr.body, rr.body_len, head_only, keep_alive, req_id);
     return 1;
 }

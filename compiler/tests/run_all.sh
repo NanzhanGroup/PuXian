@@ -43,7 +43,7 @@ else
 fi
 
 echo "========== [3/4] 示例双模式回归 =========="
-EXAMPLES="hello fib struct match concurrent concurrent_m3 std_demo net_demo toolchain_demo p0_random_io p1_mutex_rwlock p2_crypto_hash p3_regex p4_http_server p5_px_serve p6_timer p7_aes_xml_zip"
+EXAMPLES="hello fib struct match concurrent concurrent_m3 std_demo net_demo toolchain_demo p0_random_io p1_mutex_rwlock p2_crypto_hash p3_regex p4_http_server p5_px_serve p6_timer p7_aes_xml_zip m29_jsonpath_web m29_webprod"
 for ex in $EXAMPLES; do
     f="../examples/$ex.px"
     if [ ! -f "$f" ]; then echo "⚠ 跳过（不存在）: $f"; continue; fi
@@ -86,7 +86,7 @@ if [ -f ../examples/https_demo.px ]; then
 fi
 
 echo "========== [4/4] 静态链接检查 =========="
-for ex in hello net_demo https_demo; do
+for ex in hello net_demo https_demo m29_jsonpath_web; do
     b="../examples/build/$ex"
     if [ -f "$b" ]; then
         if file "$b" | grep -q "statically linked"; then

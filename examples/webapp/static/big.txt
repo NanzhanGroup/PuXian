@@ -1,0 +1,4 @@
+普贤 PuXian M29 静态缓存测试文件
+This is a static file for ETag / Last-Modified / Range / keep-alive / gzip testing.
+0123456789 0123456789 0123456789 0123456789 0123456789 0123456789 0123456789
+abcdefghijklmnopqrstuvwxyz ABCDEFGHIJKLMNOPQRSTUVWXYZ

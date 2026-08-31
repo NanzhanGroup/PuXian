@@ -1105,6 +1105,31 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
                 Err(e) => Err(LxError::new("R2011", format!("json: {}", e), Some(pos))),
             }
         }
+        // ---- M29：JSON 路径运算符（JSONB 基石） ----
+        // json_path(json_or_str, "$.a[0].b") → 按路径取（支持 .key ["key"] [n] 负索引；取不到 → null）
+        Builtin::JsonPath => {
+            if args.len() != 2 {
+                return Err(err("json_path 需要 (json, path) 参数", pos));
+            }
+            let v = coerce_json_input(&args[0], "json_path", pos)?;
+            let path = expect_str(&args[1], "json_path", pos)?;
+            match json_path_get(&v, path) {
+                Some(x) => Ok(x),
+                None => Ok(Value::Null),
+            }
+        }
+        // json_path_set(json_or_str, path, value) → 返回更新后的新值（路径不存在自动创建 dict/list）
+        Builtin::JsonPathSet => {
+            if args.len() != 3 {
+                return Err(err("json_path_set 需要 (json, path, value) 参数", pos));
+            }
+            let v = coerce_json_input(&args[0], "json_path_set", pos)?;
+            let path = expect_str(&args[1], "json_path_set", pos)?;
+            match json_path_set(&v, path, &args[2]) {
+                Ok(x) => Ok(x),
+                Err(e) => Err(LxError::new("R2012", format!("json_path_set: {}", e), Some(pos))),
+            }
+        }
         // ---- std.time ----
         Builtin::Now => {
             use std::time::{SystemTime, UNIX_EPOCH};
@@ -4388,6 +4413,279 @@ pub(crate) fn json_stringify(v: &Value) -> Result<String, String> {
     }
 }
 
+/// M29：JSON 路径工具（JSONB 基石）
+/// 把输入归一化为 Value：JSON 字符串 → 解析；其他 Value 原样返回。
+pub(crate) fn coerce_json_input(v: &Value, fname: &str, pos: crate::token::Pos) -> Result<Value, LxError> {
+    if let Value::Str(s) = v {
+        match json_parse_value(s) {
+            Some(x) => Ok(x),
+            None => Err(LxError::new("R2013", format!("{}: 参数 1 不是合法 JSON", fname), Some(pos))),
+        }
+    } else {
+        Ok(v.clone())
+    }
+}
+
+/// 解析 JSON 路径 "$.a[0].b" / "a.b[0]" / "$["k"]" / "[0]" → 段列表
+/// 段：Field(String) 或 Index(isize)
+pub(crate) fn parse_json_path(path: &str) -> Result<Vec<JsonPathSeg>, String> {
+    let p = path.trim();
+    let mut segs = Vec::new();
+    let bytes = p.as_bytes();
+    let mut i = 0usize;
+    let n = bytes.len();
+    // 可选的 $ 前缀
+    if i < n && bytes[i] == b'$' {
+        i += 1;
+    }
+    while i < n {
+        let c = bytes[i];
+        match c {
+            b'.' => {
+                i += 1;
+                // .key 或 .["key"]
+                if i < n && bytes[i] == b'[' {
+                    let (key, ni) = parse_bracket_key(p, i)?;
+                    segs.push(JsonPathSeg::Field(key));
+                    i = ni;
+                } else {
+                    let start = i;
+                    while i < n && bytes[i] != b'.' && bytes[i] != b'[' {
+                        i += 1;
+                    }
+                    if i == start {
+                        return Err(format!("路径段为空（位置 {}）", i));
+                    }
+                    segs.push(JsonPathSeg::Field(p[start..i].to_string()));
+                }
+            }
+            b'[' => {
+                let (key, ni) = parse_bracket_key(p, i)?;
+                segs.push(JsonPathSeg::Field(key));
+                i = ni;
+            }
+            _ => {
+                // 无前缀：a.b[0]
+                let start = i;
+                while i < n && bytes[i] != b'.' && bytes[i] != b'[' {
+                    i += 1;
+                }
+                if i == start {
+                    return Err(format!("路径段为空（位置 {}）", i));
+                }
+                segs.push(JsonPathSeg::Field(p[start..i].to_string()));
+            }
+        }
+    }
+    Ok(segs)
+}
+
+/// 解析 [...] 段：["key"] 或 [n]（n 可为负）→ (key, 下一个下标)
+fn parse_bracket_key(p: &str, start: usize) -> Result<(String, usize), String> {
+    let bytes = p.as_bytes();
+    let n = bytes.len();
+    if start >= n || bytes[start] != b'[' {
+        return Err(format!("期望 '['（位置 {}）", start));
+    }
+    let mut i = start + 1;
+    if i < n && bytes[i] == b'"' {
+        // ["key"] 字符串键
+        i += 1;
+        let mut key = String::new();
+        while i < n && bytes[i] != b'"' {
+            if bytes[i] == b'\\' && i + 1 < n {
+                i += 1;
+            }
+            key.push(bytes[i] as char);
+            i += 1;
+        }
+        if i >= n || bytes[i] != b'"' {
+            return Err(format!("字符串键未闭合（位置 {}）", i));
+        }
+        i += 1;
+        if i >= n || bytes[i] != b']' {
+            return Err(format!("期望 ']'（位置 {}）", i));
+        }
+        Ok((key, i + 1))
+    } else {
+        // [n] 数字索引（含负）
+        let num_start = i;
+        if i < n && (bytes[i] == b'-' || bytes[i] == b'+') {
+            i += 1;
+        }
+        while i < n && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == num_start || i >= n || bytes[i] != b']' {
+            return Err(format!("期望数组索引（位置 {}）", num_start));
+        }
+        let num: i64 = p[num_start..i]
+            .parse()
+            .map_err(|_| format!("非法数组索引（位置 {}）", num_start))?;
+        Ok((format!("__idx__{}", num), i + 1))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum JsonPathSeg {
+    Field(String),
+    Index(i64),
+}
+
+/// 规范化段：parse_bracket_key 返回的 "__idx__<n>" 转成 Index
+fn norm_seg(seg: JsonPathSeg) -> JsonPathSeg {
+    match seg {
+        JsonPathSeg::Field(f) => {
+            if let Some(n) = f.strip_prefix("__idx__") {
+                if let Ok(i) = n.parse::<i64>() {
+                    return JsonPathSeg::Index(i);
+                }
+            }
+            JsonPathSeg::Field(f)
+        }
+        x => x,
+    }
+}
+
+/// 按路径取值：支持 dict 字段 / list 索引（负索引从尾数）。
+/// 取不到 → None。
+pub(crate) fn json_path_get(v: &Value, path: &str) -> Option<Value> {
+    let segs = parse_json_path(path).ok()?;
+    let mut cur = v.clone();
+    for seg in segs {
+        let seg = norm_seg(seg);
+        match seg {
+            JsonPathSeg::Field(f) => {
+                let next = match &cur {
+                    Value::Dict(d) => {
+                        let d = d.lock().unwrap();
+                        d.get(&f).cloned()
+                    }
+                    _ => None,
+                };
+                cur = next?;
+            }
+            JsonPathSeg::Index(i) => {
+                let next = match &cur {
+                    Value::List(l) => {
+                        let l = l.lock().unwrap();
+                        norm_index(i, l.len()).and_then(|idx| l.get(idx).cloned())
+                    }
+                    Value::Tuple(t) => {
+                        norm_index(i, t.len()).and_then(|idx| t.get(idx).cloned())
+                    }
+                    _ => None,
+                };
+                cur = next?;
+            }
+        }
+    }
+    Some(cur)
+}
+
+/// 负索引规范化
+fn norm_index(i: i64, len: usize) -> Option<usize> {
+    if i < 0 {
+        let x = len as i64 + i;
+        if x < 0 {
+            None
+        } else {
+            Some(x as usize)
+        }
+    } else {
+        let x = i as usize;
+        if x < len {
+            Some(x)
+        } else {
+            None
+        }
+    }
+}
+
+/// 深拷贝 Value（JSON 可序列化部分：Null/Bool/Int/Float/Str/List/Tuple/Dict/Bytes）
+pub(crate) fn json_deep_copy(v: &Value) -> Value {
+    match v {
+        Value::Null | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_) => v.clone(),
+        Value::List(l) => {
+            let l = l.lock().unwrap();
+            Value::new_list(l.iter().map(json_deep_copy).collect())
+        }
+        Value::Tuple(t) => Value::Tuple(t.iter().map(json_deep_copy).collect()),
+        Value::Dict(d) => {
+            let d = d.lock().unwrap();
+            let m: HashMap<String, Value> = d.iter().map(|(k, val)| (k.clone(), json_deep_copy(val))).collect();
+            Value::new_dict(m)
+        }
+        Value::Bytes(b) => Value::Bytes(b.clone()),
+        other => other.clone(),
+    }
+}
+
+/// 按路径设值：深拷贝 v，沿路径更新，返回新值。
+/// 路径不存在时自动创建中间 dict/list（数字段 → list 追加/扩展；字符串段 → dict）。
+pub(crate) fn json_path_set(v: &Value, path: &str, new_val: &Value) -> Result<Value, String> {
+    let segs: Vec<JsonPathSeg> = parse_json_path(path)?
+        .into_iter()
+        .map(norm_seg)
+        .collect();
+    if segs.is_empty() {
+        return Ok(new_val.clone());
+    }
+    Ok(set_at(&json_deep_copy(v), &segs, new_val))
+}
+
+/// 递归设置：在 base 的 segs[0..] 路径处写入 new_val
+fn set_at(base: &Value, segs: &[JsonPathSeg], new_val: &Value) -> Value {
+    if segs.is_empty() {
+        return new_val.clone();
+    }
+    let seg = &segs[0];
+    let rest = &segs[1..];
+    match seg {
+        JsonPathSeg::Field(f) => {
+            let mut m = match base {
+                Value::Dict(d) => {
+                    let d = d.lock().unwrap();
+                    d.clone()
+                }
+                _ => HashMap::new(),
+            };
+            let child = m.get(f).cloned().unwrap_or(Value::Null);
+            let nv = set_at(&child, rest, new_val);
+            m.insert(f.clone(), nv);
+            Value::new_dict(m)
+        }
+        JsonPathSeg::Index(i) => {
+            let mut items = match base {
+                Value::List(l) => {
+                    let l = l.lock().unwrap();
+                    l.clone()
+                }
+                _ => Vec::new(),
+            };
+            let len = items.len() as i64;
+            let idx = if *i < 0 { len + i } else { *i };
+            if idx < 0 {
+                // 负索引越界 → 插入到 0
+                let nv = set_at(&Value::Null, rest, new_val);
+                items.insert(0, nv);
+            } else if (idx as usize) < items.len() {
+                let child = items[idx as usize].clone();
+                let nv = set_at(&child, rest, new_val);
+                items[idx as usize] = nv;
+            } else {
+                // 越界：扩展到目标长度（null 填充），再设值
+                while (items.len() as i64) < idx {
+                    items.push(Value::Null);
+                }
+                let nv = set_at(&Value::Null, rest, new_val);
+                items.push(nv);
+            }
+            Value::new_list(items)
+        }
+    }
+}
+
 fn json_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -4692,5 +4990,92 @@ mod tests {
         };
         assert_eq!(d2["path"], Value::Str("/plain".into()));
         assert_eq!(d2["query"], Value::Str("".into()));
+    }
+}
+
+#[cfg(test)]
+mod tests_jsonpath {
+    use super::*;
+
+    fn jv(s: &str) -> Value {
+        json_parse_value(s).unwrap()
+    }
+
+    #[test]
+    fn test_json_path_get_basic() {
+        let v = jv(r#"{"a": [10, 20, {"b": "x"}], "user": {"name": "n", "tags": ["t1", "t2"]}}"#);
+        assert_eq!(json_path_get(&v, "$.a[1]").unwrap().to_string(), "20");
+        assert_eq!(json_path_get(&v, "$.a[2].b").unwrap().to_string(), "x");
+        assert_eq!(json_path_get(&v, "$.user.name").unwrap().to_string(), "n");
+        assert_eq!(json_path_get(&v, "$.user.tags[0]").unwrap().to_string(), "t1");
+        assert!(json_path_get(&v, "$.nope").is_none());
+    }
+
+    #[test]
+    fn test_json_path_get_variants() {
+        let v = jv(r#"{"a": [1, 2, 3], "k": "v"}"#);
+        // 负索引
+        assert_eq!(json_path_get(&v, "$.a[-1]").unwrap().to_string(), "3");
+        // 无 $ 前缀
+        assert_eq!(json_path_get(&v, "a[0]").unwrap().to_string(), "1");
+        // ["key"] 括号形式
+        assert_eq!(json_path_get(&v, r#"$["k"]"#).unwrap().to_string(), "v");
+        assert_eq!(json_path_get(&v, r#"$.a[0]"#).unwrap().to_string(), "1");
+        // 元组/越界
+        assert!(json_path_get(&v, "$.a[5]").is_none());
+        assert!(json_path_get(&v, "$.a[-9]").is_none());
+    }
+
+    #[test]
+    fn test_json_path_set_new_field() {
+        let v = jv(r#"{"a": 1}"#);
+        let d = json_path_set(&v, "$.b", &Value::Int(2)).unwrap();
+        assert_eq!(json_path_get(&d, "$.b").unwrap().to_string(), "2");
+        // 原值不变（不可变更新）
+        assert!(json_path_get(&v, "$.b").is_none());
+    }
+
+    #[test]
+    fn test_json_path_set_array_extend() {
+        let v = jv(r#"{"a": [1]}"#);
+        let d = json_path_set(&v, "$.a[2]", &Value::Str("z".into())).unwrap();
+        let items = json_path_get(&d, "$.a").unwrap();
+        if let Value::List(l) = items {
+            let l = l.lock().unwrap();
+            assert_eq!(l.len(), 3);
+            assert_eq!(l[0].to_string(), "1");
+            assert_eq!(l[1].to_string(), "null");
+            assert_eq!(l[2].to_string(), "z");
+        } else {
+            panic!("应为 list");
+        }
+    }
+
+    #[test]
+    fn test_json_path_set_deep_create() {
+        let v = jv(r#"{"a": [{}]}"#);
+        let d = json_path_set(&v, "$.a[0].deep.k", &Value::Bool(true)).unwrap();
+        assert_eq!(
+            json_path_get(&d, "$.a[0].deep.k").unwrap().to_string(),
+            "true"
+        );
+        assert!(json_path_get(&v, "$.a[0].deep").is_none());
+    }
+
+    #[test]
+    fn test_json_path_string_input() {
+        // 字符串输入也支持（builtin 层 coerce_json_input）
+        let v = jv(r#"{"k": [1, 2]}"#);
+        assert_eq!(json_path_get(&v, "$.k[0]").unwrap().to_string(), "1");
+    }
+
+    #[test]
+    fn test_json_path_roundtrip_stringify() {
+        let v = jv(r#"{"a": {"b": [1, 2, {"c": "x"}]}}"#);
+        let d = json_path_set(&v, "$.a.b[2].c", &Value::Str("y".into())).unwrap();
+        assert_eq!(
+            json_stringify(&d).unwrap(),
+            r#"{"a":{"b":[1,2,{"c":"y"}]}}"#
+        );
     }
 }

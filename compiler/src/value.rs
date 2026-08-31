@@ -312,6 +312,11 @@ pub enum Builtin {
     SqliteClose,
     SqliteEscape,
     SqliteLastInsertRowid,
+    // M29：JSON 路径运算符（JSONB 基石，清歌场景 A pxdb）
+    // json_path(json_or_str, "$.a[0].b") → Value|null（按路径取；支持 .key ["key"] [n] 负索引）
+    // json_path_set(json_or_str, path, value) → Value（返回更新后的新值；路径不存在自动创建）
+    JsonPath,
+    JsonPathSet,
 }
 
 impl Builtin {
@@ -465,6 +470,8 @@ impl Builtin {
             Builtin::SqliteClose => "sqlite_close",
             Builtin::SqliteEscape => "sqlite_escape",
             Builtin::SqliteLastInsertRowid => "sqlite_last_insert_rowid",
+            Builtin::JsonPath => "json_path",
+            Builtin::JsonPathSet => "json_path_set",
         }
     }
 }

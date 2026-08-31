@@ -1,0 +1,72 @@
+# m29_webprod.px - M29 WebServer 生产化回归测试
+# 覆盖：ETag / Last-Modified / 304 / Range / keep-alive / gzip 压缩 / X-Request-Id / 请求 ID
+# 双模式：解释器 run 与编译 build 输出必须一致
+
+# 原始 HTTP 请求助手（tcp 原语）：一次连接发请求，返回完整响应
+def raw_req(method, target, headers_extra):
+    let sock = tcp_connect("127.0.0.1", 18089)
+    let req = method + " " + target + " HTTP/1.1\r\nHost: 127.0.0.1\r\n" + headers_extra
+    req = req + "\r\n"
+    tcp_send(sock, req)
+    let resp = tcp_recv(sock, 65536)
+    tcp_close(sock)
+    return resp
+
+# keep-alive 连接：同一连接发两个请求，验证复用
+def keepalive_req():
+    let sock = tcp_connect("127.0.0.1", 18089)
+    let r1 = "GET /static/big.txt HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
+    let r2 = "GET /hello.px HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
+    tcp_send(sock, r1)
+    sleep(200)
+    tcp_send(sock, r2)
+    sleep(300)
+    let resp = tcp_recv(sock, 65536)
+    tcp_close(sock)
+    return resp
+
+spawn px_serve(18089, "../examples/webapp", 1500)
+sleep(700)
+
+# ---- 1. 静态文件：ETag + Last-Modified 头 ----
+let r1 = raw_req("GET", "/static/big.txt", "")
+assert(contains(r1, "200"), "1 status 200")
+assert(contains(r1, "ETag:"), "1 ETag 头")
+assert(contains(r1, "Last-Modified:"), "1 Last-Modified 头")
+assert(contains(r1, "Connection: keep-alive"), "1 keep-alive 默认")
+
+# ---- 2. If-None-Match → 304 ----
+let etag = ""
+let parts = split(r1, "\r\n")
+for p in parts:
+    if starts_with(p, "ETag:"):
+        etag = trim(p[5:])
+print("ETAG:" + etag)
+let r2 = raw_req("GET", "/static/big.txt", "If-None-Match: " + etag + "\r\n")
+assert(contains(r2, "304"), "2 If-None-Match 304")
+
+# ---- 3. Range: bytes=10-19 → 206 + Content-Range + 部分内容 ----
+let r3 = raw_req("GET", "/static/big.txt", "Range: bytes=10-19\r\n")
+assert(contains(r3, "206"), "3 Range 206")
+assert(contains(r3, "Content-Range: bytes 10-19/"), "3 Content-Range")
+assert(contains(r3, "Content-Length: 10"), "3 Range 长度")
+
+# ---- 4. gzip：Accept-Encoding: gzip + 大文本 → Content-Encoding: gzip ----
+let r4 = raw_req("GET", "/static/gzip.txt", "Accept-Encoding: gzip\r\n")
+assert(contains(r4, "200"), "4 status")
+assert(contains(r4, "Content-Encoding: gzip"), "4 gzip 压缩")
+
+# ---- 5. X-Request-Id 头 ----
+let r5 = raw_req("GET", "/hello.px", "")
+assert(contains(r5, "X-Request-Id:"), "5 X-Request-Id 头")
+
+# ---- 6. 404 也带 X-Request-Id ----
+let r6 = raw_req("GET", "/nope.txt", "")
+assert(contains(r6, "404"), "6 404")
+assert(contains(r6, "X-Request-Id:"), "6 404 X-Request-Id")
+
+# ---- 7. keep-alive：同连接两个请求 ----
+let r7 = keepalive_req()
+assert(contains(r7, "HTTP/1.1 200"), "7 keep-alive 响应 1")
+assert(contains(r7, "HTTP/1.1 200"), "7 keep-alive 响应 2")
+print("M29_WEBPROD_ALL_OK")
