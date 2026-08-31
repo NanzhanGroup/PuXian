@@ -15,6 +15,9 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use crate::value::ChanState;
+
+// 测试串行锁：解释器测试与 GC 测试共享全局注册表，并行互相干扰；所有相关测试共用此锁
+pub static TEST_GLOBAL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 use crate::value::Value;
 
 /// 活跃 spawn 线程计数（interp.rs spawn 前后增减；>0 时跳过收集）
@@ -324,8 +327,10 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
+
     #[test]
     fn test_cycle_collect_list_self() {
+        let _tlock = TEST_GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // a = []; a.append(a) → 循环；drop a → 收集后应被回收
         let a = Arc::new(Mutex::new(Vec::<Value>::new()));
         register_list(&a);
@@ -339,6 +344,10 @@ mod tests {
         let mut reg = registry().lock().unwrap();
         reg.retain(|_, e| !e.weak.is_dead());
         drop(reg);
+        // 等待其他测试的 spawn 线程收尾（ACTIVE_SPAWNS 异步递减）
+        while ACTIVE_SPAWNS.load(Ordering::SeqCst) != 0 {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         collect();
         let reg = registry().lock().unwrap();
         assert!(reg.is_empty(), "循环引用应被回收");
@@ -346,6 +355,7 @@ mod tests {
 
     #[test]
     fn test_cycle_collect_dict_self() {
+        let _tlock = TEST_GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let d = Arc::new(Mutex::new(HashMap::<String, Value>::new()));
         register_dict(&d);
         {
@@ -356,6 +366,10 @@ mod tests {
         let mut reg = registry().lock().unwrap();
         reg.retain(|_, e| !e.weak.is_dead());
         drop(reg);
+        // 等待其他测试的 spawn 线程收尾（ACTIVE_SPAWNS 异步递减）
+        while ACTIVE_SPAWNS.load(Ordering::SeqCst) != 0 {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
         collect();
         let reg = registry().lock().unwrap();
         assert!(reg.is_empty(), "dict 循环引用应被回收");
@@ -363,6 +377,7 @@ mod tests {
 
     #[test]
     fn test_live_object_not_collected() {
+        let _tlock = TEST_GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let a = Arc::new(Mutex::new(Vec::<Value>::new()));
         register_list(&a);
         // 外部引用保持 → strong=1, indegree=0, extra=1 → 活

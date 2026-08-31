@@ -15,6 +15,8 @@ pub enum Value {
     Int(i64),
     Float(f64),
     Str(String),
+    /// M23b：二进制安全字节串（带长度，可含任意字节含 NUL；存储/加密基石）
+    Bytes(Vec<u8>),
     Bool(bool),
     Null,
     /// 可变列表（Arc<Mutex> 共享可变，方法 append/pop 等就地修改）
@@ -141,6 +143,10 @@ pub enum Builtin {
     TcpClose,
     HttpGet,
     HttpPost,
+    // M23c P1：HTTP 生产化——http_request(url, method, body?, headers?) → dict{status,headers,body}
+    //（keep-alive 连接池复用，同 host 连接复用）+ http_get_stream(url, chunk_handler) 流式下载
+    HttpRequest,
+    HttpGetStream,
     HttpServe,
     // M17 P1：.px 脚本执行机制（PHP/OpenResty 式应用平台）
     // px_exec(path, params?) —— 内嵌解释器执行 .px 脚本，捕获 print 输出返回（语言层嵌入 API）
@@ -216,6 +222,49 @@ pub enum Builtin {
     // ws_ping(conn) → bool（发送 ping 帧；对端应回 pong）
     // ws_recv(conn[, timeout_ms]) → str|null（可选超时：超时/断开 → null）
     WsPing,
+    // M23 P1：进程/信号（文殊场景收尾：外部工具编排、守护进程、优雅停机）
+    // os_pid() → int 当前进程 PID
+    // os_spawn(cmd, args) → int pid | null（fork+exec 启动子进程，不等待）
+    // os_wait(pid) → int 退出码（信号终止 → 128+sig；失败 → -1）
+    // os_kill(pid, sig) → bool（发送信号）
+    // signal(sig, handler) → bool（注册信号处理回调，信号到达时在新线程调 handler(sig)）
+    OsPid,
+    OsSpawn,
+    OsWait,
+    OsKill,
+    Signal,
+    // M23d P1：RSA 非对称加密（PKCS#1 v1.5；密钥/密文/签名均 hex 字符串）
+    // rsa_gen_key(bits) → dict{n,e,d,p,q}（hex；bits ≥ 512）
+    // rsa_encrypt(data, n, e) → hex 密文 | null（type 2；数据 ≤ 模长-11 字节）
+    // rsa_decrypt(ct_hex, n, d) → 明文 | null（type 2 解码）
+    // rsa_sign(data, n, d) → hex 签名 | null（type 1；直接签数据，不包 DigestInfo）
+    // rsa_verify(data, sig_hex, n, e) → bool
+    RsaGenKey,
+    RsaEncrypt,
+    RsaDecrypt,
+    RsaSign,
+    RsaVerify,
+    // M23b P1：二进制安全字节串（带长度字符串 / bytes；存储与加密基石）
+    // bytes(s) → bytes（字符串 UTF-8 字节原样）
+    // bytes_len(b) → int / bytes_get(b, i) → int|null / bytes_set(b, i, v) → bool
+    // bytes_slice(b, start, end) → bytes（负索引/越界 clamp，同切片语义）
+    // bytes_concat(a, b, ...) → bytes / bytes_append(a, b) → bytes
+    // bytes_to_str(b) → str（UTF-8 lossy）/ bytes_to_hex(b) → hex
+    // bytes_base64(b) → base64 / base64_to_bytes(s) → bytes|null（严格）
+    // bytes_find(b, sub) → int|null（子串下标）
+    // read_bytes(path) → bytes / write_bytes(path, b) → bool
+    Bytes,
+    BytesLen,
+    BytesGet,
+    BytesSet,
+    BytesSlice,
+    BytesConcat,
+    BytesToStr,
+    BytesBase64,
+    Base64ToBytes,
+    BytesFind,
+    ReadBytes,
+    WriteBytes,
     // M22 P1：解释器循环引用回收（追踪式 GC）
     // gc() → int（强制运行一次垃圾回收；返回 0 = 有并发线程跳过，1 = 已执行）
     Gc,
@@ -291,6 +340,8 @@ impl Builtin {
             Builtin::TcpClose => "tcp_close",
             Builtin::HttpGet => "http_get",
             Builtin::HttpPost => "http_post",
+            Builtin::HttpRequest => "http_request",
+            Builtin::HttpGetStream => "http_get_stream",
             Builtin::HttpServe => "http_serve",
             Builtin::PxExec => "px_exec",
             Builtin::PxServe => "px_serve",
@@ -325,6 +376,28 @@ impl Builtin {
             Builtin::WsRecv => "ws_recv",
             Builtin::WsClose => "ws_close",
             Builtin::WsPing => "ws_ping",
+            Builtin::OsPid => "os_pid",
+            Builtin::OsSpawn => "os_spawn",
+            Builtin::OsWait => "os_wait",
+            Builtin::OsKill => "os_kill",
+            Builtin::Signal => "signal",
+            Builtin::RsaGenKey => "rsa_gen_key",
+            Builtin::RsaEncrypt => "rsa_encrypt",
+            Builtin::RsaDecrypt => "rsa_decrypt",
+            Builtin::RsaSign => "rsa_sign",
+            Builtin::RsaVerify => "rsa_verify",
+            Builtin::Bytes => "bytes",
+            Builtin::BytesLen => "bytes_len",
+            Builtin::BytesGet => "bytes_get",
+            Builtin::BytesSet => "bytes_set",
+            Builtin::BytesSlice => "bytes_slice",
+            Builtin::BytesConcat => "bytes_concat",
+            Builtin::BytesToStr => "bytes_to_str",
+            Builtin::BytesBase64 => "bytes_base64",
+            Builtin::Base64ToBytes => "base64_to_bytes",
+            Builtin::BytesFind => "bytes_find",
+            Builtin::ReadBytes => "read_bytes",
+            Builtin::WriteBytes => "write_bytes",
             Builtin::Gc => "gc",
         }
     }
@@ -514,6 +587,7 @@ fn fmt_value(v: &Value) -> String {
         Value::Int(i) => i.to_string(),
         Value::Float(f) => fmt_float(*f),
         Value::Str(s) => s.clone(),
+        Value::Bytes(b) => format!("<bytes {}>", b.len()),
         Value::Bool(b) => b.to_string(),
         Value::Null => "null".to_string(),
         Value::List(items) => {
@@ -583,6 +657,7 @@ impl PartialEq for Value {
             (Value::Float(a), Value::Int(b)) => *a == (*b as f64),
             (Value::Float(a), Value::Float(b)) => a == b,
             (Value::Str(a), Value::Str(b)) => a == b,
+            (Value::Bytes(a), Value::Bytes(b)) => a == b,
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Null, Value::Null) => true,
             (Value::List(a), Value::List(b)) => *a.lock().unwrap() == *b.lock().unwrap(),

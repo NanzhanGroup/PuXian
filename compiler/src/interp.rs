@@ -259,6 +259,8 @@ impl Interpreter {
             ("tcp_close", Builtin::TcpClose),
             ("http_get", Builtin::HttpGet),
             ("http_post", Builtin::HttpPost),
+            ("http_request", Builtin::HttpRequest),
+            ("http_get_stream", Builtin::HttpGetStream),
             ("http_serve", Builtin::HttpServe),
             // M17 P1：.px 脚本执行机制（应用平台核心）
             ("px_exec", Builtin::PxExec),
@@ -300,6 +302,29 @@ impl Interpreter {
             ("ws_recv", Builtin::WsRecv),
             ("ws_close", Builtin::WsClose),
             ("ws_ping", Builtin::WsPing),
+            ("os_pid", Builtin::OsPid),
+            ("os_spawn", Builtin::OsSpawn),
+            ("os_wait", Builtin::OsWait),
+            ("os_kill", Builtin::OsKill),
+            ("signal", Builtin::Signal),
+            ("rsa_gen_key", Builtin::RsaGenKey),
+            ("rsa_encrypt", Builtin::RsaEncrypt),
+            ("rsa_decrypt", Builtin::RsaDecrypt),
+            ("rsa_sign", Builtin::RsaSign),
+            ("rsa_verify", Builtin::RsaVerify),
+            ("bytes", Builtin::Bytes),
+            ("bytes_len", Builtin::BytesLen),
+            ("bytes_get", Builtin::BytesGet),
+            ("bytes_set", Builtin::BytesSet),
+            ("bytes_slice", Builtin::BytesSlice),
+            ("bytes_concat", Builtin::BytesConcat),
+            ("bytes_to_str", Builtin::BytesToStr),
+            ("bytes_to_hex", Builtin::BytesToHex),
+            ("bytes_base64", Builtin::BytesBase64),
+            ("base64_to_bytes", Builtin::Base64ToBytes),
+            ("bytes_find", Builtin::BytesFind),
+            ("read_bytes", Builtin::ReadBytes),
+            ("write_bytes", Builtin::WriteBytes),
             ("gc", Builtin::Gc),
         ];
         for (n, b) in names {
@@ -1160,6 +1185,7 @@ impl Interpreter {
             Value::Int(_) => "int",
             Value::Float(_) => "float",
             Value::Str(_) => "string",
+            Value::Bytes(_) => "bytes",
             Value::Bool(_) => "bool",
             Value::Null => "null",
             Value::List(_) => "list",
@@ -2014,6 +2040,8 @@ mod tests {
     use crate::parser::Parser;
 
     fn run_src(src: &str) -> Result<i32, LxError> {
+        // 共享锁（gc.rs）：解释器测试与 GC 测试共用全局注册表，必须串行
+        let _tlock = crate::gc::TEST_GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tokens = Lexer::new(src)
             .tokenize()
             .map_err(|e| LxError::new("E0000", e.to_string(), None))?;
@@ -2401,6 +2429,43 @@ def main():
     tid = set_interval(tick, 20)
     sleep(300)
     assert(n == 5, "interval ran 5 times then stopped")
+"#;
+        assert!(run_src(src).is_ok());
+    }
+
+    #[test]
+    fn test_m23b_bytes_roundtrip() {
+        // M23b：二进制安全字节串（bytes 类型全套函数）
+        let src = r#"
+b = bytes("héllo")
+assert(bytes_len(b) == 6)
+assert(bytes_get(b, 1) == 0xc3)
+assert(bytes_get(b, -1) == 111)
+assert(bytes_get(b, 99) == null)
+b2 = bytes_set(b, 0, 72)
+assert(bytes_get(b2, 0) == 72)
+assert(bytes_get(b, 0) == 104)
+c = bytes("中文abc")
+assert(bytes_len(c) == 9)
+assert(bytes_to_str(bytes_slice(c, 0, 3)) == "中")
+assert(bytes_to_str(bytes_slice(c, -3, null)) == "abc")
+assert(bytes_len(bytes_slice(c, 5, 2)) == 0)
+cat = bytes_concat(bytes("ab"), "cd", bytes("ef"))
+assert(bytes_to_str(cat) == "abcdef")
+assert(bytes_to_hex(c) == "e4b8ade69687616263")
+b64 = bytes_base64(c)
+assert(bytes_to_str(base64_to_bytes(b64)) == "中文abc")
+assert(base64_to_bytes("!!!") == null)
+assert(bytes_find(c, bytes("文")) == 3)
+assert(bytes_find(c, "abc") == 6)
+assert(bytes_find(c, "xyz") == null)
+raw = base64_to_bytes("YQABAWI=")
+assert(raw != null)
+assert(bytes_len(raw) == 5)
+assert(bytes_get(raw, 1) == 0)
+assert(bytes_find(raw, base64_to_bytes("YQAB")) == 0)
+write_bytes("/tmp/px_ut_bytes.bin", raw)
+assert(bytes_to_hex(read_bytes("/tmp/px_ut_bytes.bin")) == bytes_to_hex(raw))
 "#;
         assert!(run_src(src).is_ok());
     }

@@ -1,0 +1,49 @@
+# M23d: RSA 非对称加密（双模式：px run == px build）
+# rsa_gen_key / rsa_encrypt / rsa_decrypt / rsa_sign / rsa_verify（PKCS#1 v1.5，hex 表示）
+
+def main():
+    # 生成 1024 位密钥
+    k = rsa_gen_key(1024)
+    assert k != null
+    assert k.n != null and k.e != null and k.d != null
+    assert len(k.n) > 0 and len(k.d) > 0
+    assert k.e == "10001"   # e = 65537
+
+    msg = "hello puxian rsa"
+
+    # 加密 → 解密 roundtrip
+    ct = rsa_encrypt(msg, k.n, k.e)
+    assert ct != null
+    assert len(ct) == 256   # 1024 位模长 = 128 字节 = 256 hex
+    pt = rsa_decrypt(ct, k.n, k.d)
+    assert pt == msg
+
+    # 签名 → 验证
+    sig = rsa_sign(msg, k.n, k.d)
+    assert sig != null
+    assert len(sig) == 256
+    assert rsa_verify(msg, sig, k.n, k.e) == true
+    # 篡改数据验证失败
+    assert rsa_verify("tampered", sig, k.n, k.e) == false
+    # 篡改签名验证失败
+    bad_sig = sig[0:254] + "00"
+    assert rsa_verify(msg, bad_sig, k.n, k.e) == false
+
+    # 数据过长 → null（模长 128 字节，最多 128-11=117 字节）
+    long = ""
+    for i in range(200):
+        long = long + "x"
+    assert rsa_encrypt(long, k.n, k.e) == null
+
+    # 非法 hex → null / false
+    assert rsa_encrypt("hi", "zz", k.e) == null
+    assert rsa_decrypt("00", "zz", "00") == null
+    assert rsa_verify("hi", "00", "zz", k.e) == false
+
+    # 空数据签名验证
+    sig2 = rsa_sign("", k.n, k.d)
+    assert sig2 != null
+    assert rsa_verify("", sig2, k.n, k.e) == true
+
+    print("RSA TESTS PASSED")
+    exit(0)

@@ -17,6 +17,93 @@ fn err(msg: impl Into<String>, pos: Pos) -> LxError {
     LxError::new("R1002", msg, Some(pos))
 }
 
+// ==================== M23 进程 / 信号 ====================
+// os_pid() / os_spawn(cmd, args) / os_wait(pid) / os_kill(pid, sig) / signal(sig, handler)
+// 双模式一致：退出码约定 正常退出=exit code，信号终止=128+信号号，失败=-1。
+// signal 用 self-pipe 模式：C 信号处理器只写 1 字节到管道（async-signal-safe），
+// 专用线程读管道 → 新线程 fork 解释器执行注册的普贤 handler(sig)。
+
+use std::os::unix::process::ExitStatusExt;
+
+unsafe extern "C" {
+    fn pipe(fds: *mut i32) -> i32;
+    fn write(fd: i32, buf: *const u8, n: usize) -> isize;
+    fn read(fd: i32, buf: *mut u8, n: usize) -> isize;
+    fn kill(pid: i32, sig: i32) -> i32;
+    fn signal(signum: i32, handler: usize) -> usize;
+}
+
+static SIG_PIPE: std::sync::OnceLock<(i32, i32)> = std::sync::OnceLock::new();
+static SIG_HANDLERS: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<i32, Value>>> =
+    std::sync::OnceLock::new();
+static SIG_INTERP: std::sync::OnceLock<Interpreter> = std::sync::OnceLock::new();
+static SIG_POS: std::sync::OnceLock<Pos> = std::sync::OnceLock::new();
+
+/// os_spawn 启动的子进程表（os_wait 取回并等待）
+fn proc_children() -> &'static std::sync::Mutex<std::collections::HashMap<u32, std::process::Child>> {
+    static M: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<u32, std::process::Child>>> =
+        std::sync::OnceLock::new();
+    M.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+extern "C" fn sig_bridge(sig: i32) {
+    if let Some((_, w)) = SIG_PIPE.get() {
+        let b = [sig as u8];
+        unsafe {
+            let _ = write(*w, b.as_ptr(), 1);
+        }
+    }
+}
+
+fn sig_pipe() -> (i32, i32) {
+    *SIG_PIPE.get_or_init(|| {
+        let mut fds = [0i32; 2];
+        unsafe {
+            pipe(fds.as_mut_ptr());
+        }
+        (fds[0], fds[1])
+    })
+}
+
+fn sig_handlers() -> &'static std::sync::Mutex<std::collections::HashMap<i32, Value>> {
+    SIG_HANDLERS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// 启动信号分发线程（首次 signal 调用时启动一次）
+fn ensure_signal_thread(interp: &mut Interpreter, pos: Pos) {
+    let (r, _w) = sig_pipe();
+    if SIG_INTERP.get().is_none() {
+        let _ = SIG_INTERP.set(interp.fork());
+        let _ = SIG_POS.set(pos);
+    }
+    static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let pos_c = pos;
+    thread::spawn(move || {
+        // 专用线程持有 fork 的解释器执行回调
+        let mut i = SIG_INTERP.get().unwrap().fork();
+        let mut buf = [0u8; 64];
+        loop {
+            let n = unsafe { read(r, buf.as_mut_ptr(), buf.len()) };
+            if n <= 0 {
+                continue;
+            }
+            for &s in &buf[..n as usize] {
+                let sig = s as i32;
+                let h = sig_handlers().lock().unwrap().get(&sig).cloned();
+                if let Some(h) = h {
+                    let arg = Value::Int(sig as i64);
+                    if let Err(e) = i.call_value(&h, &[arg], pos_c) {
+                        eprintln!("[signal {}] {}", sig, e);
+                    }
+                }
+            }
+        }
+    });
+}
+
 // ==================== M21 SSE 连接注册表 ====================
 // sse_serve(port, handler)：handler(req) 内/任意线程可 sse_send(conn, data) 推送，
 // handler 返回后连接保持打开，直到 sse_close(conn) 或对端断开（写失败自动清理）。
@@ -1213,6 +1300,55 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             }
         }
 
+        // ==================== M23c HTTP 生产化 ====================
+        // http_request(url, method, body?, headers?) → dict {status, headers, body}
+        //（keep-alive 连接池：同 host 连接复用；body/headers 可选）
+        Builtin::HttpRequest => {
+            if args.len() < 2 || args.len() > 4 {
+                return Err(err("http_request 需要 (url, method[, body[, headers]]) 参数", pos));
+            }
+            let url = expect_str(&args[0], "http_request", pos)?;
+            let method = expect_str(&args[1], "http_request", pos)?;
+            let body = match args.get(2) {
+                Some(Value::Str(s)) => Some(s.clone()),
+                Some(Value::Null) | None => None,
+                Some(v) => {
+                    return Err(err(format!("http_request 的 body 需要字符串，实际是 {}", interp.type_name(v)), pos))
+                }
+            };
+            let mut headers: HashMap<String, String> = HashMap::new();
+            if let Some(Value::Dict(d)) = args.get(3) {
+                for (k, v) in d.lock().unwrap().iter() {
+                    match v {
+                        Value::Str(sv) => {
+                            headers.insert(k.clone(), sv.clone());
+                        }
+                        _ => return Err(err(format!("http_request 的 headers 值需要字符串: {}", k), pos)),
+                    }
+                }
+            }
+            match http_request_full(&url, &method, body.as_deref(), &headers) {
+                Ok(d) => Ok(Value::new_dict(d)),
+                Err(e) => Err(LxError::new("R3009", format!("net: http_request 失败: {}", e), Some(pos))),
+            }
+        }
+        // http_get_stream(url, chunk_handler) → bool：流式下载，每块调 chunk_handler(块文本)；
+        // handler 返回 false 中止（返回 true=完整下载，false=被中止）
+        Builtin::HttpGetStream => {
+            if args.len() != 2 {
+                return Err(err("http_get_stream 需要 (url, chunk_handler) 参数", pos));
+            }
+            let url = expect_str(&args[0], "http_get_stream", pos)?;
+            let handler = args[1].clone();
+            if !matches!(handler, Value::Func(_)) {
+                return Err(err("http_get_stream 的 chunk_handler 必须是函数", pos));
+            }
+            match http_get_stream_impl(&url, interp, &handler, pos) {
+                Ok(complete) => Ok(Value::Bool(complete)),
+                Err(e) => Err(LxError::new("R3009", format!("net: http_get_stream 失败: {}", e), Some(pos))),
+            }
+        }
+
         Builtin::HttpServe => {
             if args.len() != 2 {
                 return Err(err("http_serve 需要 (port, handler) 参数", pos));
@@ -1760,6 +1896,356 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             Ok(Value::Bool(crate::ws::ws_ping(conn)))
         }
 
+        // ==================== M23 进程 / 信号 ====================
+        Builtin::OsPid => Ok(Value::Int(std::process::id() as i64)),
+        Builtin::OsSpawn => {
+            if args.len() != 2 {
+                return Err(err("os_spawn 需要 (cmd, args) 参数", pos));
+            }
+            let cmd = expect_str(&args[0], "os_spawn", pos)?;
+            let list = match &args[1] {
+                Value::List(l) => l.lock().unwrap().clone(),
+                _ => return Err(err("os_spawn 的 args 必须是字符串列表", pos)),
+            };
+            let mut cmd_args: Vec<String> = Vec::new();
+            for a in list {
+                match a {
+                    Value::Str(s) => cmd_args.push(s.clone()),
+                    _ => return Err(err("os_spawn 的 args 必须是字符串列表", pos)),
+                }
+            }
+            match std::process::Command::new(&cmd).args(&cmd_args).spawn() {
+                Ok(child) => {
+                    let pid = child.id();
+                    proc_children().lock().unwrap().insert(pid, child);
+                    Ok(Value::Int(pid as i64))
+                }
+                Err(_) => Ok(Value::Null), // 启动失败
+            }
+        }
+        Builtin::OsWait => {
+            if args.len() != 1 {
+                return Err(err("os_wait 需要 (pid) 参数", pos));
+            }
+            let pid = expect_int(&args[0], "os_wait", pos)?;
+            let mut m = proc_children().lock().unwrap();
+            match m.remove(&(pid as u32)) {
+                Some(mut child) => match child.wait() {
+                    Ok(st) => {
+                        if let Some(c) = st.code() {
+                            Ok(Value::Int(c as i64))
+                        } else if let Some(sig) = st.signal() {
+                            Ok(Value::Int(128 + sig as i64))
+                        } else {
+                            Ok(Value::Int(-1))
+                        }
+                    }
+                    Err(_) => Ok(Value::Int(-1)),
+                },
+                None => Ok(Value::Int(-1)), // 非 os_spawn 子进程无法 wait
+            }
+        }
+        Builtin::OsKill => {
+            if args.len() != 2 {
+                return Err(err("os_kill 需要 (pid, sig) 参数", pos));
+            }
+            let pid = expect_int(&args[0], "os_kill", pos)?;
+            let sig = expect_int(&args[1], "os_kill", pos)?;
+            let r = unsafe { kill(pid as i32, sig as i32) };
+            Ok(Value::Bool(r == 0))
+        }
+        Builtin::Signal => {
+            if args.len() != 2 {
+                return Err(err("signal 需要 (sig, handler) 参数", pos));
+            }
+            let sig = expect_int(&args[0], "signal", pos)?;
+            if sig < 1 || sig > 64 {
+                return Err(err("signal 的 sig 必须在 1..64", pos));
+            }
+            let handler = args[1].clone();
+            if !matches!(handler, Value::Func(_)) {
+                return Err(err("signal 的 handler 必须是函数", pos));
+            }
+            sig_handlers().lock().unwrap().insert(sig as i32, handler);
+            ensure_signal_thread(interp, pos);
+            unsafe {
+                signal(sig as i32, sig_bridge as usize);
+            }
+            Ok(Value::Bool(true))
+        }
+
+        // ==================== M23d RSA（PKCS#1 v1.5，密钥/密文/签名均 hex） ====================
+        Builtin::RsaGenKey => {
+            if args.len() != 1 {
+                return Err(err("rsa_gen_key 需要 (bits) 参数", pos));
+            }
+            let bits = expect_int(&args[0], "rsa_gen_key", pos)?;
+            if bits < 512 || bits > 4096 {
+                return Err(err("rsa_gen_key 的 bits 必须在 512..4096", pos));
+            }
+            match crate::rsa::rsa_gen_key(bits as usize) {
+                Some(items) => {
+                    let mut m = HashMap::new();
+                    for (k, v) in items {
+                        m.insert(k, Value::Str(v));
+                    }
+                    Ok(Value::new_dict(m))
+                }
+                None => Err(err("rsa_gen_key 生成密钥失败", pos)),
+            }
+        }
+        Builtin::RsaEncrypt => {
+            if args.len() != 3 {
+                return Err(err("rsa_encrypt 需要 (data, n_hex, e_hex) 参数", pos));
+            }
+            let data = bytes_of(&args[0]);
+            let n = expect_str(&args[1], "rsa_encrypt", pos)?;
+            let e = expect_str(&args[2], "rsa_encrypt", pos)?;
+            match crate::rsa::rsa_encrypt(&data, &n, &e) {
+                Some(ct) => Ok(Value::Str(ct)),
+                None => Ok(Value::Null), // 数据过长/密钥非法
+            }
+        }
+        Builtin::RsaDecrypt => {
+            if args.len() != 3 {
+                return Err(err("rsa_decrypt 需要 (ct_hex, n_hex, d_hex) 参数", pos));
+            }
+            let ct = expect_str(&args[0], "rsa_decrypt", pos)?;
+            let n = expect_str(&args[1], "rsa_decrypt", pos)?;
+            let d = expect_str(&args[2], "rsa_decrypt", pos)?;
+            match crate::rsa::rsa_decrypt(&ct, &n, &d) {
+                Some(pt) => Ok(Value::Str(String::from_utf8_lossy(&pt).to_string())),
+                None => Ok(Value::Null),
+            }
+        }
+        Builtin::RsaSign => {
+            if args.len() != 3 {
+                return Err(err("rsa_sign 需要 (data, n_hex, d_hex) 参数", pos));
+            }
+            let data = bytes_of(&args[0]);
+            let n = expect_str(&args[1], "rsa_sign", pos)?;
+            let d = expect_str(&args[2], "rsa_sign", pos)?;
+            match crate::rsa::rsa_sign(&data, &n, &d) {
+                Some(sig) => Ok(Value::Str(sig)),
+                None => Ok(Value::Null),
+            }
+        }
+        Builtin::RsaVerify => {
+            if args.len() != 4 {
+                return Err(err("rsa_verify 需要 (data, sig_hex, n_hex, e_hex) 参数", pos));
+            }
+            let data = bytes_of(&args[0]);
+            let sig = expect_str(&args[1], "rsa_verify", pos)?;
+            let n = expect_str(&args[2], "rsa_verify", pos)?;
+            let e = expect_str(&args[3], "rsa_verify", pos)?;
+            Ok(Value::Bool(crate::rsa::rsa_verify(&data, &sig, &n, &e)))
+        }
+
+        // ==================== M23b 二进制安全字节串 ====================
+        // bytes(s) → bytes（字符串 UTF-8 字节原样；Str/Bytes 均可）
+        Builtin::Bytes => {
+            if args.len() != 1 {
+                return Err(err("bytes 需要一个参数", pos));
+            }
+            Ok(Value::Bytes(bytes_of(&args[0])))
+        }
+        Builtin::BytesLen => {
+            if args.len() != 1 {
+                return Err(err("bytes_len 需要一个参数", pos));
+            }
+            match &args[0] {
+                Value::Bytes(b) => Ok(Value::Int(b.len() as i64)),
+                v => Err(err(
+                    format!("bytes_len 需要 bytes，实际是 {}", interp.type_name(v)),
+                    pos,
+                )),
+            }
+        }
+        Builtin::BytesGet => {
+            if args.len() != 2 {
+                return Err(err("bytes_get 需要 (bytes, index) 参数", pos));
+            }
+            let (b, i) = match (&args[0], &args[1]) {
+                (Value::Bytes(b), Value::Int(i)) => (b, *i),
+                (v, _) => {
+                    return Err(err(
+                        format!("bytes_get 需要 bytes 和 int，实际是 {}", interp.type_name(v)),
+                        pos,
+                    ))
+                }
+            };
+            let mut idx = i;
+            if idx < 0 {
+                idx += b.len() as i64;
+            }
+            if idx < 0 || idx >= b.len() as i64 {
+                return Ok(Value::Null);
+            }
+            Ok(Value::Int(b[idx as usize] as i64))
+        }
+        Builtin::BytesSet => {
+            // bytes_set(b, i, v) → bytes（函数式：返回修改后的新 bytes，原对象不变）
+            if args.len() != 3 {
+                return Err(err("bytes_set 需要 (bytes, index, value) 参数", pos));
+            }
+            let mut b = match &args[0] {
+                Value::Bytes(b) => b.clone(),
+                v => {
+                    return Err(err(
+                        format!("bytes_set 需要 bytes，实际是 {}", interp.type_name(v)),
+                        pos,
+                    ))
+                }
+            };
+            let i = expect_int(&args[1], "bytes_set", pos)?;
+            let v = expect_int(&args[2], "bytes_set", pos)?;
+            if v < 0 || v > 255 {
+                return Err(err("bytes_set 的值必须在 0..255", pos));
+            }
+            let mut idx = i;
+            if idx < 0 {
+                idx += b.len() as i64;
+            }
+            if idx < 0 || idx >= b.len() as i64 {
+                return Err(err("bytes_set 下标越界", pos));
+            }
+            b[idx as usize] = v as u8;
+            Ok(Value::Bytes(b))
+        }
+        Builtin::BytesSlice => {
+            // bytes_slice(b, start, end) → bytes；start/end 可为 null（省略）；负索引/越界 clamp
+            if args.len() < 1 || args.len() > 3 {
+                return Err(err("bytes_slice 需要 (bytes[, start[, end]]) 参数", pos));
+            }
+            let b = match &args[0] {
+                Value::Bytes(b) => b.clone(),
+                v => {
+                    return Err(err(
+                        format!("bytes_slice 需要 bytes，实际是 {}", interp.type_name(v)),
+                        pos,
+                    ))
+                }
+            };
+            let start = match args.get(1) {
+                None | Some(Value::Null) => None,
+                Some(Value::Int(i)) => Some(*i),
+                Some(_) => return Err(err("bytes_slice 的边界必须是整数或 null", pos)),
+            };
+            let end = match args.get(2) {
+                None | Some(Value::Null) => None,
+                Some(Value::Int(i)) => Some(*i),
+                Some(_) => return Err(err("bytes_slice 的边界必须是整数或 null", pos)),
+            };
+            let (a, bb) = bytes_slice_bounds(start, end, b.len() as i64);
+            Ok(Value::Bytes(b[a..bb].to_vec()))
+        }
+        Builtin::BytesConcat => {
+            // bytes_concat(a, b, ...) → bytes（Str/Bytes 混合均可，UTF-8 字节原样）
+            if args.len() < 1 {
+                return Err(err("bytes_concat 至少需要一个参数", pos));
+            }
+            let mut out = Vec::new();
+            for a in args {
+                out.extend_from_slice(&bytes_of(a));
+            }
+            Ok(Value::Bytes(out))
+        }
+        Builtin::BytesToStr => {
+            if args.len() != 1 {
+                return Err(err("bytes_to_str 需要一个参数", pos));
+            }
+            match &args[0] {
+                Value::Bytes(b) => Ok(Value::Str(String::from_utf8_lossy(b).to_string())),
+                v => Err(err(
+                    format!("bytes_to_str 需要 bytes，实际是 {}", interp.type_name(v)),
+                    pos,
+                )),
+            }
+        }
+        Builtin::BytesBase64 => {
+            if args.len() != 1 {
+                return Err(err("bytes_base64 需要一个参数", pos));
+            }
+            match &args[0] {
+                Value::Bytes(b) => Ok(Value::Str(base64_encode_bytes(b))),
+                v => Err(err(
+                    format!("bytes_base64 需要 bytes，实际是 {}", interp.type_name(v)),
+                    pos,
+                )),
+            }
+        }
+        Builtin::Base64ToBytes => {
+            if args.len() != 1 {
+                return Err(err("base64_to_bytes 需要一个参数", pos));
+            }
+            let s = expect_str(&args[0], "base64_to_bytes", pos)?;
+            match base64_decode_bytes(s) {
+                Some(b) => Ok(Value::Bytes(b)),
+                None => Ok(Value::Null), // 严格：非法 base64 → null
+            }
+        }
+        Builtin::BytesFind => {
+            // bytes_find(b, sub) → int|null（子串字节下标；sub 可为 bytes 或 str）
+            if args.len() != 2 {
+                return Err(err("bytes_find 需要 (bytes, sub) 参数", pos));
+            }
+            let b = match &args[0] {
+                Value::Bytes(b) => b.clone(),
+                v => {
+                    return Err(err(
+                        format!("bytes_find 需要 bytes，实际是 {}", interp.type_name(v)),
+                        pos,
+                    ))
+                }
+            };
+            let sub = bytes_of(&args[1]);
+            if sub.is_empty() {
+                return Ok(Value::Int(0));
+            }
+            let n = b.len();
+            let m = sub.len();
+            if m > n {
+                return Ok(Value::Null);
+            }
+            let mut i = 0;
+            while i + m <= n {
+                if &b[i..i + m] == &sub[..] {
+                    return Ok(Value::Int(i as i64));
+                }
+                i += 1;
+            }
+            Ok(Value::Null)
+        }
+        Builtin::ReadBytes => {
+            if args.len() != 1 {
+                return Err(err("read_bytes 需要一个路径参数", pos));
+            }
+            let p = expect_str(&args[0], "read_bytes", pos)?;
+            match std::fs::read(p) {
+                Ok(b) => Ok(Value::Bytes(b)),
+                Err(e) => Err(LxError::new(
+                    "R2001",
+                    format!("io: 读取文件失败 {}: {}", p, e),
+                    Some(pos),
+                )),
+            }
+        }
+        Builtin::WriteBytes => {
+            if args.len() != 2 {
+                return Err(err("write_bytes 需要 (路径, bytes) 参数", pos));
+            }
+            let p = expect_str(&args[0], "write_bytes", pos)?;
+            let data = bytes_of(&args[1]);
+            match std::fs::write(p, &data) {
+                Ok(_) => Ok(Value::Bool(true)),
+                Err(e) => Err(LxError::new(
+                    "R2002",
+                    format!("io: 写入文件失败 {}: {}", p, e),
+                    Some(pos),
+                )),
+            }
+        }
+
         // ==================== M22 P1：解释器循环引用回收 ====================
         Builtin::Gc => {
             if !args.is_empty() {
@@ -1862,8 +2348,35 @@ pub(crate) fn base64_decode_bytes(s: &str) -> Option<Vec<u8>> {
 fn bytes_of(v: &Value) -> Vec<u8> {
     match v {
         Value::Str(s) => s.clone().into_bytes(),
+        Value::Bytes(b) => b.clone(),
         other => other.to_string().into_bytes(),
     }
+}
+
+/// bytes_slice 边界归一化（负索引 + len；越界 clamp；start>end 空切片）——与 interp 切片语义一致
+fn bytes_slice_bounds(start: Option<i64>, end: Option<i64>, len: i64) -> (usize, usize) {
+    let a = match start {
+        None => 0,
+        Some(i) => {
+            if i < 0 {
+                (i + len).max(0)
+            } else {
+                i.min(len)
+            }
+        }
+    };
+    let b = match end {
+        None => len,
+        Some(i) => {
+            if i < 0 {
+                (i + len).max(0)
+            } else {
+                i.min(len)
+            }
+        }
+    };
+    let (a, b) = if a > b { (a, a) } else { (a, b) };
+    (a as usize, b as usize)
 }
 
 /// 字节 → 小写 hex
@@ -1965,89 +2478,216 @@ fn net_close(id: i64) {
 /// 处理单个 HTTP 连接：读请求 -> 解析 -> 调 handler -> 构造响应 -> 发送
 fn handle_http_conn(i: &mut Interpreter, stream: &mut TcpStream, handler: &Value, pos: Pos) -> Result<(), String> {
     use std::io::{Read, Write};
-    // 1. 读请求头（直到 \r\n\r\n），上限 64KB
-    let mut buf: Vec<u8> = Vec::new();
-    let mut tmp = [0u8; 4096];
-    let header_end;
+    // M23c：HTTP/1.1 keep-alive——同一连接循环处理多个请求，直到客户端关闭 / 请求带
+    // Connection: close / handler 返回 keep_alive:false / 空闲超时。
     loop {
-        let n = stream.read(&mut tmp).map_err(|e| format!("读请求失败: {}", e))?;
-        if n == 0 {
-            return Err("连接已关闭".into());
+        // 1. 读请求头（直到 \r\n\r\n），上限 64KB；keep-alive 空闲读超时 15s
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(15)))
+            .ok();
+        let mut buf: Vec<u8> = Vec::new();
+        let mut tmp = [0u8; 4096];
+        let header_end;
+        loop {
+            let n = match stream.read(&mut tmp) {
+                Ok(n) => n,
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    // keep-alive 空闲超时：正常关闭连接
+                    return Ok(());
+                }
+                Err(e) => return Err(format!("读请求失败: {}", e)),
+            };
+            if n == 0 {
+                // 客户端关闭：keep-alive 连接自然结束
+                return Ok(());
+            }
+            buf.extend_from_slice(&tmp[..n]);
+            if let Some(idx) = find_http_header_end(&buf) {
+                header_end = idx;
+                break;
+            }
+            if buf.len() > 65536 {
+                return Err("请求头超过 64KB".into());
+            }
         }
-        buf.extend_from_slice(&tmp[..n]);
-        if let Some(idx) = find_http_header_end(&buf) {
-            header_end = idx;
+        // 2. 解析请求行 + 头部
+        let head = String::from_utf8_lossy(&buf[..header_end]).to_string();
+        let remote = stream
+            .peer_addr()
+            .map(|a| a.to_string())
+            .unwrap_or_default();
+        let (req, content_length) = parse_http_request(&head, &remote)?;
+        // 3. 读 body（按 Content-Length；keep-alive 时 body 后还有下个请求，只读 body_len）
+        let body_off = header_end + 4;
+        let body = if content_length > 0 {
+            let mut rest = Vec::with_capacity(content_length);
+            let have = buf.len().saturating_sub(body_off);
+            if have >= content_length {
+                String::from_utf8_lossy(&buf[body_off..body_off + content_length]).to_string()
+            } else {
+                rest.extend_from_slice(&buf[body_off..]);
+                let mut tmp2 = [0u8; 4096];
+                while rest.len() < content_length {
+                    let n = stream.read(&mut tmp2).map_err(|e| format!("读 body 失败: {}", e))?;
+                    if n == 0 {
+                        break;
+                    }
+                    rest.extend_from_slice(&tmp2[..n]);
+                }
+                rest.truncate(content_length);
+                String::from_utf8_lossy(&rest).to_string()
+            }
+        } else {
+            String::new()
+        };
+        // 4. 填充 body / form（Content-Type 驱动：urlencoded / multipart）
+        if let Value::Dict(d) = &req {
+            let mut g = d.lock().unwrap();
+            g.insert("body".into(), Value::Str(body.clone()));
+            if !body.is_empty() {
+                if let Some(ct) = content_type_of(&g) {
+                    let lct = ct.to_lowercase();
+                    if lct.contains("application/x-www-form-urlencoded") {
+                        g.insert("form".into(), parse_form(&body));
+                    } else if lct.contains("multipart/form-data") {
+                        let (form, files) = parse_multipart(&body, &multipart_boundary(&ct));
+                        g.insert("form".into(), form);
+                        g.insert("files".into(), files);
+                    }
+                }
+            }
+        }
+        // 5. 调 handler
+        let method = req_method(&req);
+        let resp = i
+            .call_value(handler, &[req], pos)
+            .map_err(|e| format!("handler 出错: {}", e))?;
+        // 6. 发送响应：file 流式（大文件不占内存）或普通
+        if let Some(path) = resp_file_path(&resp) {
+            send_file_response(stream, &resp, &path)?;
+        } else {
+            let mut resp_bytes = build_http_response(&resp);
+            if method == "HEAD" {
+                if let Some(idx) = find_http_header_end(&resp_bytes) {
+                    resp_bytes.truncate(idx + 4);
+                }
+            }
+            stream
+                .write_all(&resp_bytes)
+                .map_err(|e| format!("发送响应失败: {}", e))?;
+            stream.flush().map_err(|e| format!("flush 失败: {}", e))?;
+        }
+        // 7. keep-alive 判定：客户端 Connection: close / handler keep_alive:false → 关闭
+        let client_keep = !request_wants_close(&head);
+        let server_keep = response_keep_alive(&resp);
+        if !client_keep || !server_keep {
             break;
         }
-        if buf.len() > 65536 {
-            return Err("请求头超过 64KB".into());
-        }
     }
-    // 2. 解析请求行 + 头部
-    let head = String::from_utf8_lossy(&buf[..header_end]).to_string();
-    let remote = stream
-        .peer_addr()
-        .map(|a| a.to_string())
-        .unwrap_or_default();
-    let (req, content_length) = parse_http_request(&head, &remote)?;
-    // 3. 读 body（按 Content-Length）
-    let body_off = header_end + 4;
-    let body = if content_length > 0 {
-        let mut rest = Vec::with_capacity(content_length);
-        let have = buf.len().saturating_sub(body_off);
-        if have >= content_length {
-            String::from_utf8_lossy(&buf[body_off..body_off + content_length]).to_string()
-        } else {
-            rest.extend_from_slice(&buf[body_off..]);
-            let mut tmp2 = [0u8; 4096];
-            while rest.len() < content_length {
-                let n = stream.read(&mut tmp2).map_err(|e| format!("读 body 失败: {}", e))?;
-                if n == 0 {
-                    break;
-                }
-                rest.extend_from_slice(&tmp2[..n]);
-            }
-            rest.truncate(content_length);
-            String::from_utf8_lossy(&rest).to_string()
-        }
-    } else {
-        String::new()
-    };
-    // 4. 填充 body / form（Content-Type 驱动：urlencoded / multipart）
-    if let Value::Dict(d) = &req {
-        let mut g = d.lock().unwrap();
-        g.insert("body".into(), Value::Str(body.clone()));
-        if !body.is_empty() {
-            if let Some(ct) = content_type_of(&g) {
-                let lct = ct.to_lowercase();
-                if lct.contains("application/x-www-form-urlencoded") {
-                    g.insert("form".into(), parse_form(&body));
-                } else if lct.contains("multipart/form-data") {
-                    let (form, files) = parse_multipart(&body, &multipart_boundary(&ct));
-                    g.insert("form".into(), form);
-                    g.insert("files".into(), files);
-                }
-            }
-        }
-    }
-    // 5. 调 handler
-    let method = req_method(&req);
-    let resp = i
-        .call_value(handler, &[req], pos)
-        .map_err(|e| format!("handler 出错: {}", e))?;
-    // 6. 构造响应并发送（HEAD 只发响应头，不带 body）
-    let mut resp_bytes = build_http_response(&resp);
-    if method == "HEAD" {
-        if let Some(idx) = find_http_header_end(&resp_bytes) {
-            resp_bytes.truncate(idx + 4);
-        }
-    }
-    stream
-        .write_all(&resp_bytes)
-        .map_err(|e| format!("发送响应失败: {}", e))?;
-    stream.flush().map_err(|e| format!("flush 失败: {}", e))?;
     Ok(())
 }
+
+/// 请求头是否带 Connection: close
+fn request_wants_close(head: &str) -> bool {
+    for line in head.split("\r\n").skip(1) {
+        if let Some(v) = line
+            .strip_prefix("Connection:")
+            .or_else(|| line.strip_prefix("connection:"))
+        {
+            return v.trim().eq_ignore_ascii_case("close");
+        }
+    }
+    false
+}
+
+/// 响应 dict 是否要求 keep-alive（默认 true；keep_alive:false 强制关闭）
+fn response_keep_alive(resp: &Value) -> bool {
+    if let Value::Dict(d) = resp {
+        let d = d.lock().unwrap();
+        return !matches!(d.get("keep_alive"), Some(Value::Bool(false)));
+    }
+    true
+}
+
+/// 响应 dict 的 "file" 路径（流式文件响应）
+fn resp_file_path(resp: &Value) -> Option<String> {
+    if let Value::Dict(d) = resp {
+        let d = d.lock().unwrap();
+        if let Some(Value::Str(p)) = d.get("file") {
+            return Some(p.clone());
+        }
+    }
+    None
+}
+
+/// 流式发送文件响应（Content-Length + 64KB 块，不整读进内存）
+fn send_file_response(stream: &mut TcpStream, resp: &Value, path: &str) -> Result<(), String> {
+    use std::io::Write;
+    let meta = std::fs::metadata(path).map_err(|e| format!("file 响应失败 {}: {}", path, e))?;
+    let len = meta.len();
+    // 状态码 + Content-Type（简单按扩展名）
+    let (status, content_type) = if let Value::Dict(d) = resp {
+        let d = d.lock().unwrap();
+        let st = match d.get("status") {
+            Some(Value::Int(s)) => *s,
+            _ => 200,
+        };
+        let ct = match d.get("content_type") {
+            Some(Value::Str(s)) => s.clone(),
+            _ => file_content_type(path),
+        };
+        (st, ct)
+    } else {
+        (200, file_content_type(path))
+    };
+    let reason = status_reason(status);
+    let mut hdr = format!(
+        "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n\r\n",
+        status, reason, len, content_type
+    );
+    stream
+        .write_all(hdr.as_bytes())
+        .map_err(|e| format!("发送文件响应头失败: {}", e))?;
+    let mut f = std::fs::File::open(path).map_err(|e| format!("打开文件失败 {}: {}", path, e))?;
+    use std::io::Read;
+    let mut chunk = vec![0u8; 65536];
+    loop {
+        let n = f.read(&mut chunk).map_err(|e| format!("读文件失败: {}", e))?;
+        if n == 0 {
+            break;
+        }
+        stream
+            .write_all(&chunk[..n])
+            .map_err(|e| format!("发送文件块失败: {}", e))?;
+    }
+    stream.flush().map_err(|e| format!("flush 失败: {}", e))
+}
+
+/// 简单 Content-Type 推断（按扩展名）
+fn file_content_type(path: &str) -> String {
+    let ext = path.rsplit('.').next().unwrap_or("").to_lowercase();
+    match ext.as_str() {
+        "html" | "htm" => "text/html; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "js" => "application/javascript; charset=utf-8",
+        "json" => "application/json; charset=utf-8",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        "ico" => "image/x-icon",
+        "txt" => "text/plain; charset=utf-8",
+        "xml" => "application/xml; charset=utf-8",
+        "zip" => "application/zip",
+        "pdf" => "application/pdf",
+        _ => "application/octet-stream",
+    }
+    .to_string()
+}
+
 
 /// 查找 \r\n\r\n 在缓冲区中的起始下标
 fn find_http_header_end(buf: &[u8]) -> Option<usize> {
@@ -2243,7 +2883,7 @@ fn hex_val(b: u8) -> Option<u8> {
 /// dict 响应支持 `gzip: true`（body gzip 压缩 + Content-Encoding: gzip）与
 /// `chunked: true`（chunked 传输编码，无 Content-Length）。
 fn build_http_response(v: &Value) -> Vec<u8> {
-    let (status, headers, body, gzip, chunked) = match v {
+    let (status, headers, body, gzip, chunked, keep_alive) = match v {
         Value::Dict(d) => {
             let d = d.lock().unwrap();
             let status = match d.get("status") {
@@ -2267,12 +2907,13 @@ fn build_http_response(v: &Value) -> Vec<u8> {
             };
             let gzip = matches!(d.get("gzip"), Some(Value::Bool(true)));
             let chunked = matches!(d.get("chunked"), Some(Value::Bool(true)));
-            (status, headers, body, gzip, chunked)
+            let keep_alive = !matches!(d.get("keep_alive"), Some(Value::Bool(false)));
+            (status, headers, body, gzip, chunked, keep_alive)
         }
-        Value::Str(s) => (200, String::new(), s.clone(), false, false),
-        Value::Int(st) => (*st, String::new(), String::new(), false, false),
-        Value::Null => (204, String::new(), String::new(), false, false),
-        other => (200, String::new(), other.to_string(), false, false),
+        Value::Str(s) => (200, String::new(), s.clone(), false, false, true),
+        Value::Int(st) => (*st, String::new(), String::new(), false, false, true),
+        Value::Null => (204, String::new(), String::new(), false, false, true),
+        other => (200, String::new(), other.to_string(), false, false, true),
     };
     let reason = status_reason(status);
     // body 预处理：gzip 压缩 / chunked 编码
@@ -2294,7 +2935,8 @@ fn build_http_response(v: &Value) -> Vec<u8> {
     if !chunked {
         resp.extend_from_slice(format!("Content-Length: {}\r\n", body_bytes.len()).as_bytes());
     }
-    resp.extend_from_slice(b"Connection: close\r\n");
+    // M23c：HTTP/1.1 默认 keep-alive；dict "keep_alive": false 强制关闭
+    resp.extend_from_slice(if keep_alive { b"Connection: keep-alive\r\n" } else { b"Connection: close\r\n" });
     if !headers.is_empty() {
         resp.extend_from_slice(headers.as_bytes());
     }
@@ -2386,6 +3028,456 @@ fn status_reason(code: i64) -> &'static str {
 
 /// HTTP 请求（M10：支持 http:// 与 https://，自动跟随重定向最多 5 次）
 /// 返回响应体。http/https 统一入口，GET/POST 均可。
+// ==================== M23c HTTP keep-alive 连接池（明文 http 同 host 复用） ====================
+use std::collections::HashMap as _HashMap;
+use std::net::TcpStream as _TcpStream;
+use std::sync::{Mutex as _Mutex, OnceLock as _OnceLock};
+
+type HttpPool = std::collections::HashMap<String, Vec<std::net::TcpStream>>;
+static HTTP_POOL: _OnceLock<_Mutex<HttpPool>> = _OnceLock::new();
+const POOL_PER_HOST: usize = 4;
+const POOL_TOTAL: usize = 64;
+
+fn http_pool() -> &'static _Mutex<HttpPool> {
+    HTTP_POOL.get_or_init(|| _Mutex::new(std::collections::HashMap::new()))
+}
+
+/// 从池取空闲连接（无则 None）
+fn pool_take(key: &str) -> Option<std::net::TcpStream> {
+    let mut pool = http_pool().lock().unwrap();
+    if let Some(v) = pool.get_mut(key) {
+        v.pop()
+    } else {
+        None
+    }
+}
+
+/// 归还连接（池容量限制；超限直接丢弃）
+fn pool_put(key: &str, stream: std::net::TcpStream) {
+    let mut pool = http_pool().lock().unwrap();
+    let total: usize = pool.values().map(|v| v.len()).sum();
+    if total >= POOL_TOTAL {
+        return;
+    }
+    let v = pool.entry(key.to_string()).or_default();
+    if v.len() < POOL_PER_HOST {
+        v.push(stream);
+    }
+}
+
+/// 解析 URL → (scheme, host, port, path, host_header)
+fn parse_url(url: &str) -> Result<(String, String, u16, String, String), String> {
+    let (scheme, rest) = if let Some(r) = url.strip_prefix("https://") {
+        ("https", r)
+    } else if let Some(r) = url.strip_prefix("http://") {
+        ("http", r)
+    } else {
+        return Err(format!("不支持的协议: {}（支持 http:// 与 https://）", url));
+    };
+    let (hostport, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, "/"),
+    };
+    let (host, port) = match hostport.find(':') {
+        Some(i) => (
+            hostport[..i].to_string(),
+            hostport[i + 1..]
+                .parse::<u16>()
+                .map_err(|_| format!("端口非法: {}", hostport))?,
+        ),
+        None => (
+            hostport.to_string(),
+            if scheme == "https" { 443u16 } else { 80u16 },
+        ),
+    };
+    if host.is_empty() {
+        return Err("主机名为空".to_string());
+    }
+    let host_header = if hostport.contains(':') {
+        hostport.to_string()
+    } else {
+        format!("{}:{}", host, port)
+    };
+    Ok((scheme.to_string(), host, port, path.to_string(), host_header))
+}
+
+/// 池化客户端：http_request(url, method, body?, headers?) → dict{status, headers, body}
+/// 明文 http 使用 keep-alive 连接池（同 host 复用）；https 每次新建（TLS 会话不复用）。
+fn http_request_full(
+    url: &str,
+    method: &str,
+    body: Option<&str>,
+    headers: &HashMap<String, String>,
+) -> Result<std::collections::HashMap<String, Value>, String> {
+    let (scheme, host, port, path, host_header) = parse_url(url)?;
+    let key = format!("{}:{}", host, port);
+    let mut req = format!(
+        "{} {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: PuXian/0.1\r\nConnection: keep-alive\r\n",
+        method, path, host_header
+    );
+    for (k, v) in headers {
+        req.push_str(&format!("{}: {}\r\n", k, v));
+    }
+    if let Some(b) = body {
+        if !headers.keys().any(|k| k.eq_ignore_ascii_case("content-type")) {
+            req.push_str("Content-Type: application/x-www-form-urlencoded\r\n");
+        }
+        req.push_str(&format!("Content-Length: {}\r\n", b.len()));
+    } else if headers.keys().any(|k| k.eq_ignore_ascii_case("content-length")) {
+        // 用户自定义头已含 Content-Length
+    }
+    req.push_str("\r\n");
+    if let Some(b) = body {
+        req.push_str(b);
+    }
+    // 尝试：池连接（失败丢弃重连 1 次）
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        let pooled = scheme == "http";
+        let mut st = if pooled {
+            match pool_take(&key) {
+                Some(s) => s,
+                None => {
+                    let addr = format!("{}:{}", host, port);
+                    std::net::TcpStream::connect(&addr)
+                        .map_err(|e| format!("连接 {} 失败: {}", addr, e))?
+                }
+            }
+        } else {
+            let addr = format!("{}:{}", host, port);
+            std::net::TcpStream::connect(&addr)
+                .map_err(|e| format!("连接 {} 失败: {}", addr, e))?
+        };
+        match http_exchange(&mut st, &req) {
+            Ok((status, headers_map, resp_body, location, keep_alive)) => {
+                // keep-alive 且可复用 → 归还连接池
+                if keep_alive && pooled {
+                    pool_put(&key, st);
+                }
+                let mut d = std::collections::HashMap::new();
+                d.insert("status".into(), Value::Int(status as i64));
+                let mut hm = std::collections::HashMap::new();
+                for (k, v) in &headers_map {
+                    hm.insert(k.clone(), Value::Str(v.clone()));
+                }
+                d.insert("headers".into(), Value::new_dict(hm));
+                d.insert("body".into(), Value::Str(resp_body.clone()));
+                if let Some(loc) = location {
+                    d.insert("location".into(), Value::Str(loc));
+                }
+                return Ok(d);
+            }
+            Err(e) => {
+                // 池连接可能已失效：重试一次新连接
+                if attempt == 1 && pooled {
+                    continue;
+                }
+                return Err(e);
+            }
+        }
+    }
+}
+
+/// 在已建立的连接上完成一次 HTTP 往返（keep-alive 安全：按 Content-Length/chunked 精确读）
+/// 返回 (status, headers, body, location, keep_alive)
+fn http_exchange(
+    stream: &mut std::net::TcpStream,
+    req: &str,
+) -> Result<(u16, std::collections::HashMap<String, String>, String, Option<String>, bool), String> {
+    use std::io::{Read, Write};
+    stream
+        .write_all(req.as_bytes())
+        .map_err(|e| format!("发送请求失败: {}", e))?;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(30)))
+        .ok();
+    // 读响应头
+    let mut buf: Vec<u8> = Vec::new();
+    let mut tmp = [0u8; 4096];
+    let header_end;
+    loop {
+        let n = stream.read(&mut tmp).map_err(|e| format!("读响应失败: {}", e))?;
+        if n == 0 {
+            return Err("响应连接已关闭".into());
+        }
+        buf.extend_from_slice(&tmp[..n]);
+        if let Some(idx) = find_http_header_end(&buf) {
+            header_end = idx;
+            break;
+        }
+        if buf.len() > 65536 {
+            return Err("响应头超过 64KB".into());
+        }
+    }
+    let head_str = String::from_utf8_lossy(&buf[..header_end]).to_string();
+    let status = head_str
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(0);
+    // 解析响应头
+    let mut headers_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut location = None;
+    let mut chunked = false;
+    let mut gzip = false;
+    let mut content_length: Option<usize> = None;
+    let mut keep_alive = true;
+    for line in head_str.lines().skip(1) {
+        let l = line.trim();
+        if let Some(ci) = l.find(':') {
+            let k = l[..ci].trim().to_string();
+            let v = l[ci + 1..].trim().to_string();
+            headers_map.insert(k.clone(), v.clone());
+            let lk = k.to_lowercase();
+            if lk == "content-length" {
+                content_length = v.parse().ok();
+            } else if lk == "transfer-encoding" && v.to_lowercase().contains("chunked") {
+                chunked = true;
+            } else if lk == "content-encoding" && v.to_lowercase().contains("gzip") {
+                gzip = true;
+            } else if lk == "connection" && v.to_lowercase().contains("close") {
+                keep_alive = false;
+            }
+        }
+        if let Some(v) = l
+            .strip_prefix("Location:")
+            .or_else(|| l.strip_prefix("location:"))
+        {
+            location = Some(v.trim().to_string());
+        }
+    }
+    // 读 body（精确：Content-Length 或 chunked）
+    let mut body_bytes: Vec<u8> = buf[header_end + 4..].to_vec();
+    if chunked {
+        // 继续读剩余 chunked 数据
+        loop {
+            if let Some(end) = find_chunked_end(&body_bytes) {
+                body_bytes.truncate(end);
+                break;
+            }
+            let n = stream.read(&mut tmp).map_err(|e| format!("读 chunked 失败: {}", e))?;
+            if n == 0 {
+                break;
+            }
+            body_bytes.extend_from_slice(&tmp[..n]);
+        }
+        body_bytes = decode_chunked(&body_bytes)?;
+    } else if let Some(cl) = content_length {
+        while body_bytes.len() < cl {
+            let n = stream.read(&mut tmp).map_err(|e| format!("读 body 失败: {}", e))?;
+            if n == 0 {
+                break;
+            }
+            body_bytes.extend_from_slice(&tmp[..n]);
+        }
+        body_bytes.truncate(cl);
+    }
+    // gzip 解压
+    if gzip {
+        use std::io::Read as _;
+        let mut d = flate2::read::GzDecoder::new(&body_bytes[..]);
+        let mut out = Vec::new();
+        d.read_to_end(&mut out)
+            .map_err(|e| format!("gzip 解压失败: {}", e))?;
+        body_bytes = out;
+    }
+    let body_str = String::from_utf8_lossy(&body_bytes).to_string();
+    Ok((status, headers_map, body_str, location, keep_alive))
+}
+
+/// 判断 chunked 数据是否已完整（结尾含 "0\r\n\r\n"）
+fn find_chunked_end(buf: &[u8]) -> Option<usize> {
+    if buf.len() >= 5 {
+        for i in 0..=buf.len() - 5 {
+            if &buf[i..i + 5] == b"0\r\n\r\n" {
+                return Some(i + 5);
+            }
+        }
+    }
+    None
+}
+
+/// http_get_stream(url, chunk_handler)：流式下载（Content-Length / chunked 分块回调）
+fn http_get_stream_impl(
+    url: &str,
+    interp: &mut Interpreter,
+    handler: &Value,
+    pos: Pos,
+) -> Result<bool, String> {
+    use std::io::{Read, Write};
+    let (scheme, host, port, path, host_header) = parse_url(url)?;
+    let mut req = format!(
+        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: PuXian/0.1\r\nConnection: close\r\n\r\n",
+        path, host_header
+    );
+    // 连接
+    let mut st = if scheme == "https" {
+        let raw = https_request(&host, port, &req)?; // https 一次性读（复用现有实现）
+        req.clear();
+        // 简化：https 流式走现有整包路径
+        let head_end = find_http_header_end(&raw).unwrap_or(0);
+        let mut body = raw[head_end + 4..].to_vec();
+        if is_chunked_header(&raw) {
+            body = decode_chunked(&body)?;
+        }
+        // 分块回调
+        return http_stream_chunks(interp, handler, &body, pos);
+    } else {
+        let addr = format!("{}:{}", host, port);
+        let mut s = std::net::TcpStream::connect(&addr)
+            .map_err(|e| format!("连接 {} 失败: {}", addr, e))?;
+        s.write_all(req.as_bytes())
+            .map_err(|e| format!("发送请求失败: {}", e))?;
+        s.set_read_timeout(Some(std::time::Duration::from_secs(60))).ok();
+        s
+    };
+    // 读响应头
+    let mut buf: Vec<u8> = Vec::new();
+    let mut tmp = [0u8; 8192];
+    let header_end;
+    loop {
+        let n = st.read(&mut tmp).map_err(|e| format!("读响应失败: {}", e))?;
+        if n == 0 {
+            return Err("响应连接已关闭".into());
+        }
+        buf.extend_from_slice(&tmp[..n]);
+        if let Some(idx) = find_http_header_end(&buf) {
+            header_end = idx;
+            break;
+        }
+        if buf.len() > 65536 {
+            return Err("响应头超过 64KB".into());
+        }
+    }
+    let head_str = String::from_utf8_lossy(&buf[..header_end]).to_string();
+    let chunked = head_str
+        .lines()
+        .skip(1)
+        .any(|l| l.to_lowercase().contains("transfer-encoding:") && l.to_lowercase().contains("chunked"));
+    let gzip = head_str
+        .lines()
+        .skip(1)
+        .any(|l| l.to_lowercase().contains("content-encoding:") && l.to_lowercase().contains("gzip"));
+    let content_length: Option<usize> = head_str
+        .lines()
+        .skip(1)
+        .find_map(|l| {
+            if let Some(v) = l.trim().strip_prefix("Content-Length:").or_else(|| l.trim().strip_prefix("content-length:")) {
+                v.trim().parse().ok()
+            } else {
+                None
+            }
+        });
+    // 流式读 body
+    let mut pending: Vec<u8> = buf[header_end + 4..].to_vec();
+    let mut complete = true;
+    if chunked {
+        // chunked 流式：按 chunk 边界切块
+        loop {
+            while !pending.is_empty() {
+                // 找下一个 chunk 头
+                if let Some(ci) = pending.windows(2).position(|w| w == b"\r\n") {
+                    let size_str = String::from_utf8_lossy(&pending[..ci]).to_string();
+                    let size = usize::from_str_radix(size_str.trim(), 16).unwrap_or(0);
+                    let chunk_start = ci + 2;
+                    if size == 0 {
+                        pending.clear();
+                        return Ok(complete);
+                    }
+                    if pending.len() >= chunk_start + size + 2 {
+                        let chunk = pending[chunk_start..chunk_start + size].to_vec();
+                        pending.drain(..chunk_start + size + 2);
+                        if gzip {
+                            // gzip 整体解压：收集后统一解压（流式 gzip 复杂，简化）
+                        }
+                        if !http_stream_chunks(interp, handler, &chunk, pos)? {
+                            complete = false;
+                            return Ok(false);
+                        }
+                    } else {
+                        break; // 数据不完整，继续读
+                    }
+                } else {
+                    break;
+                }
+            }
+            let n = st.read(&mut tmp).map_err(|e| format!("读流失败: {}", e))?;
+            if n == 0 {
+                break;
+            }
+            pending.extend_from_slice(&tmp[..n]);
+        }
+    } else {
+        // Content-Length / EOF 流式：64KB 块
+        while let Some(cl) = content_length {
+            if pending.len() >= cl {
+                pending.truncate(cl);
+                break;
+            }
+            let n = st.read(&mut tmp).map_err(|e| format!("读流失败: {}", e))?;
+            if n == 0 {
+                break;
+            }
+            pending.extend_from_slice(&tmp[..n]);
+        }
+        // 无 Content-Length：读到 EOF
+        if content_length.is_none() {
+            loop {
+                let n = st.read(&mut tmp).map_err(|e| format!("读流失败: {}", e))?;
+                if n == 0 {
+                    break;
+                }
+                pending.extend_from_slice(&tmp[..n]);
+            }
+        }
+        // 分块回调（64KB）
+        let mut off = 0;
+        while off < pending.len() {
+            let end = (off + 65536).min(pending.len());
+            let chunk = pending[off..end].to_vec();
+            if gzip {
+                // gzip 无法分块解压：整包解压后单块回调
+                use std::io::Read as _;
+                let mut d = flate2::read::GzDecoder::new(&pending[..]);
+                let mut out = Vec::new();
+                d.read_to_end(&mut out).map_err(|e| format!("gzip 解压失败: {}", e))?;
+                if !http_stream_chunks(interp, handler, &out, pos)? {
+                    return Ok(false);
+                }
+                return Ok(true);
+            }
+            if !http_stream_chunks(interp, handler, &chunk, pos)? {
+                return Ok(false);
+            }
+            off = end;
+        }
+    }
+    Ok(complete)
+}
+
+/// 分块回调 helper
+fn http_stream_chunks(interp: &mut Interpreter, handler: &Value, data: &[u8], pos: Pos) -> Result<bool, String> {
+    let chunk = String::from_utf8_lossy(data).to_string();
+    let v = interp
+        .call_value(handler, &[Value::Str(chunk)], pos)
+        .map_err(|e| format!("chunk_handler 出错: {}", e))?;
+    match v {
+        Value::Bool(b) => Ok(b),
+        Value::Null => Ok(true),
+        _ => Ok(true),
+    }
+}
+
+/// 响应头是否 chunked（https 流式路径用）
+fn is_chunked_header(raw: &[u8]) -> bool {
+    let head = String::from_utf8_lossy(&raw[..find_http_header_end(raw).unwrap_or(0)]);
+    head.lines()
+        .skip(1)
+        .any(|l| l.to_lowercase().contains("transfer-encoding:") && l.to_lowercase().contains("chunked"))
+}
+
 fn http_request(url: &str, method: &str, body: Option<&str>) -> Result<String, String> {
     let mut cur = url.to_string();
     for _ in 0..5 {

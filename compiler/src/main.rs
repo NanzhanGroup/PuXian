@@ -35,6 +35,7 @@ mod module;
 mod parser;
 mod pkg;
 mod regex;
+mod rsa;
 mod test;
 mod token;
 mod value;
@@ -683,6 +684,7 @@ fn run_build(file: &str) -> ExitCode {
         "runtime_xml.c",
         "runtime_zip.c",
         "runtime_ws.c",
+        "runtime_rsa.c",
     ];
     let mut ok_copy = true;
     for f in rt_files {
@@ -726,6 +728,7 @@ fn run_build(file: &str) -> ExitCode {
         .arg(build_dir.join("runtime_xml.c"))
         .arg(build_dir.join("runtime_zip.c"))
         .arg(build_dir.join("runtime_ws.c"))
+        .arg(build_dir.join("runtime_rsa.c"))
         .arg(build_dir.join("miniz.c"))
         .arg(build_dir.join("miniz_tinfl.c"))
         .arg(build_dir.join("miniz_tdef.c"))

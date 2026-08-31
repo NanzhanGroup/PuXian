@@ -22,6 +22,7 @@ typedef enum {
     PX_INT,
     PX_FLOAT,
     PX_STR,
+    PX_BYTES,   // M23b：二进制安全字节串（带长度，可含 NUL；union 复用 str 的 data/len）
     PX_LIST,
     PX_DICT,
     PX_FUNC,    // 用户函数（编译为 C 函数）
@@ -96,6 +97,8 @@ LXValue px_int(int64_t i);
 LXValue px_float(double f);
 LXValue px_str(const char* s);
 LXValue px_str_len(const char* s, int len);
+// M23b：二进制安全字节串构造（复制 len 字节，可含 NUL）
+LXValue px_bytes_len(const void* data, int len);
 LXValue px_list(int cap);
 LXValue px_list_n(LXValue* items, int n);
 LXValue px_dict(void);
@@ -183,6 +186,12 @@ LXValue bi_ws_send(LXValue* args, int nargs, void* ctx);
 LXValue bi_ws_recv(LXValue* args, int nargs, void* ctx);
 LXValue bi_ws_close(LXValue* args, int nargs, void* ctx);
 LXValue bi_ws_ping(LXValue* args, int nargs, void* ctx);
+// M23d P1：RSA 非对称加密（实现 runtime_rsa.c）
+LXValue bi_rsa_gen_key(LXValue* args, int nargs, void* ctx);
+LXValue bi_rsa_encrypt(LXValue* args, int nargs, void* ctx);
+LXValue bi_rsa_decrypt(LXValue* args, int nargs, void* ctx);
+LXValue bi_rsa_sign(LXValue* args, int nargs, void* ctx);
+LXValue bi_rsa_verify(LXValue* args, int nargs, void* ctx);
 LXValue ws_conn_worker(LXValue* args, int nargs, void* ctx);
 const char* px_val_cstr(LXValue v);
 

@@ -1,0 +1,66 @@
+# M23b 二进制安全字节串（双模式：px run == px build）
+def main():
+    # bytes 构造：字符串 → UTF-8 字节
+    b = bytes("héllo")
+    assert bytes_len(b) == 6          # é 是 2 字节
+    assert bytes_get(b, 0) == 104     # 'h'
+    assert bytes_get(b, 1) == 0xc3    # é 首字节
+    assert bytes_get(b, 99) == null   # 越界 → null
+    assert bytes_get(b, -1) == 111    # 负索引 = 末尾 'o'
+
+    # bytes_set：函数式返回新 bytes
+    b2 = bytes_set(b, 0, 72)          # 'h' → 'H'
+    assert bytes_get(b2, 0) == 72
+    assert bytes_get(b, 0) == 104     # 原对象不变
+
+    # bytes_slice：字节级切片（含中文）
+    c = bytes("中文abc")
+    assert bytes_len(c) == 9          # 中(3)+文(3)+abc(3)
+    s1 = bytes_slice(c, 0, 3)
+    assert bytes_to_str(s1) == "中"
+    s2 = bytes_slice(c, 3, null)
+    assert bytes_to_str(s2) == "文abc"
+    s3 = bytes_slice(c, -3, null)     # 负索引
+    assert bytes_to_str(s3) == "abc"
+    s4 = bytes_slice(c, 5, 2)         # start > end → 空
+    assert bytes_len(s4) == 0
+
+    # bytes_concat：混合 bytes/str
+    cat = bytes_concat(bytes("ab"), "cd", bytes("ef"))
+    assert bytes_to_str(cat) == "abcdef"
+
+    # bytes_to_hex（复用 M22）：中文 UTF-8 3 字节 + ascii
+    h = bytes_to_hex(c)
+    assert h == "e4b8ade69687616263"
+
+    # base64 往返
+    b64 = bytes_base64(c)
+    back = base64_to_bytes(b64)
+    assert bytes_to_str(back) == "中文abc"
+    assert base64_to_bytes("!!!非法!!!") == null
+
+    # bytes_find
+    assert bytes_find(c, bytes("文")) == 3
+    assert bytes_find(c, "abc") == 6
+    assert bytes_find(c, "xyz") == null
+    assert bytes_find(c, "") == 0
+
+    # NUL 字节安全（二进制核心场景；普贤字符串不支持 \x 转义，用 base64 构造）
+    raw = base64_to_bytes("YQABAWI=")   # "a\x00\x01\x02b"
+    assert raw != null
+    assert bytes_len(raw) == 5
+    assert bytes_get(raw, 0) == 97      # 'a'
+    assert bytes_get(raw, 1) == 0       # NUL
+    assert bytes_get(raw, 2) == 1
+    assert bytes_get(raw, 3) == 2
+    assert bytes_find(raw, base64_to_bytes("YQAB")) == 0  # a\0\1
+    assert bytes_find(raw, bytes("b")) == 4
+
+    # 文件读写（二进制）
+    write_bytes("/tmp/px_bytes_test.bin", raw)
+    back2 = read_bytes("/tmp/px_bytes_test.bin")
+    assert bytes_len(back2) == 5
+    assert bytes_to_hex(back2) == bytes_to_hex(raw)
+
+    print("BYTES TESTS PASSED")
+    exit(0)

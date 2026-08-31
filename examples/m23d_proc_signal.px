@@ -1,0 +1,45 @@
+# M23d: 进程/信号（双模式：px run == px build）
+# os_pid / os_spawn / os_wait / os_kill / signal
+
+def on_usr1(s):
+    print("caught signal", s)
+
+def main():
+    # os_pid
+    pid = os_pid()
+    assert pid > 0
+
+    # os_spawn + os_wait：正常退出
+    p = os_spawn("/bin/echo", ["hello"])
+    assert p != null
+    code = os_wait(p)
+    assert code == 0
+
+    # 非零退出码
+    p2 = os_spawn("/bin/sh", ["-c", "exit 3"])
+    assert p2 != null
+    code2 = os_wait(p2)
+    assert code2 == 3
+
+    # 信号终止：128 + 信号号（SIGTERM=15）
+    p3 = os_spawn("/bin/sh", ["-c", "kill -TERM $$"])
+    assert p3 != null
+    code3 = os_wait(p3)
+    assert code3 == 143
+
+    # os_kill：spawn sleep，kill SIGTERM
+    p4 = os_spawn("/bin/sleep", ["5"])
+    assert p4 != null
+    ok = os_kill(p4, 15)
+    assert ok == true
+    code4 = os_wait(p4)
+    assert code4 == 143
+
+    # signal：注册 SIGUSR1(10) handler，向自己发信号
+    signal(10, on_usr1)
+    ok2 = os_kill(pid, 10)
+    assert ok2 == true
+    sleep(200)
+
+    print("PROC-SIGNAL TESTS PASSED")
+    exit(0)

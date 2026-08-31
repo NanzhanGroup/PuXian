@@ -1,0 +1,76 @@
+# M23c: HTTP keep-alive + 流式 + 连接池（双模式：px run == px build）
+# http_request(url, method, body?, headers?) → dict{status,headers,body}（keep-alive 连接池）
+# http_get_stream(url, chunk_handler) 流式下载；服务端 keep-alive 循环 + file 流式响应
+
+conns = 0
+
+def handler(req):
+    conns = conns + 1
+    p = req.path
+    if p == "/status":
+        return {"status": 201, "body": "created", "headers": {"X-Test": "px"}}
+    if p == "/echo":
+        return {"status": 200, "body": req.body}
+    if p == "/file":
+        return {"status": 200, "file": "/tmp/px_http_file.txt"}
+    if p == "/count":
+        return {"status": 200, "body": str(conns)}
+    return {"status": 404, "body": "not found"}
+
+total = 0
+chunks = 0
+
+def on_chunk(c):
+    total = total + len(c)
+    chunks = chunks + 1
+    return true
+
+def main():
+    # 生成测试文件（约 300KB；普贤不支持字符串乘法，用循环拼接）
+    s = ""
+    chunk = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    for i in range(2560):
+        s = s + chunk
+    write_file("/tmp/px_http_file.txt", s)
+    flen = len(s)
+
+    # 起 HTTP 服务（spawn 线程）
+    spawn http_serve(8899, handler)
+    sleep(400)
+
+    # 1. http_request：状态码 + 自定义头
+    r = http_request("http://127.0.0.1:8899/status", "GET")
+    assert r.status == 201
+    assert r.body == "created"
+    assert r.headers["X-Test"] == "px"
+
+    # 2. POST 回显
+    r2 = http_request("http://127.0.0.1:8899/echo", "POST", "hello-echo")
+    assert r2.status == 200
+    assert r2.body == "hello-echo"
+
+    # 3. file 流式响应（整包下载验证内容一致）
+    r3 = http_request("http://127.0.0.1:8899/file", "GET")
+    assert r3.status == 200
+    assert len(r3.body) == flen
+
+    # 4. http_get_stream 流式下载：chunk 回调
+    ok = http_get_stream("http://127.0.0.1:8899/file", on_chunk)
+    assert ok == true
+    assert total == flen
+    assert chunks >= 1
+
+    # 5. keep-alive 连接池：同一 host 连续 5 次请求（连接复用）
+    c0 = conns
+    for i in range(5):
+        rc = http_request("http://127.0.0.1:8899/count", "GET")
+        assert rc.status == 200
+    assert conns >= c0 + 5
+
+    # 6. 404
+    r4 = http_request("http://127.0.0.1:8899/nope", "GET")
+    assert r4.status == 404
+    assert r4.body == "not found"
+
+    print("HTTP-ADV TESTS PASSED")
+    exit(0)
