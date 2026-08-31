@@ -161,6 +161,18 @@ void lx_register_builtins(void);
 LXValue lx_get_global(const char* name);
 void lx_set_global(const char* name, LXValue v);
 
+// ==================== M19 P1：AES / XML / zip ====================
+// 实现文件：runtime_aes.c（mbedtls）、runtime_xml.c、runtime_zip.c（miniz）
+LXValue bi_aes_encrypt(LXValue* args, int nargs, void* ctx);
+LXValue bi_aes_decrypt(LXValue* args, int nargs, void* ctx);
+LXValue bi_aes_gcm_encrypt(LXValue* args, int nargs, void* ctx);
+LXValue bi_aes_gcm_decrypt(LXValue* args, int nargs, void* ctx);
+LXValue bi_xml_parse(LXValue* args, int nargs, void* ctx);
+LXValue bi_xml_escape(LXValue* args, int nargs, void* ctx);
+LXValue bi_xml_unescape(LXValue* args, int nargs, void* ctx);
+LXValue bi_zip_pack(LXValue* args, int nargs, void* ctx);
+LXValue bi_zip_unpack(LXValue* args, int nargs, void* ctx);
+
 // ==================== 输出 ====================
 
 void lx_print_value(LXValue v, bool newline);

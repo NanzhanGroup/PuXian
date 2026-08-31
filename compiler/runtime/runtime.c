@@ -3236,6 +3236,18 @@ void lx_register_builtins(void) {
     lx_set_global("set_timeout", lx_native("set_timeout", bi_set_timeout));
     lx_set_global("set_interval", lx_native("set_interval", bi_set_interval));
     lx_set_global("clear_timer", lx_native("clear_timer", bi_clear_timer));
+    // M19 P1：AES 加密（企微回调加解密 / 数据落盘加密 / Cookie 签名）
+    lx_set_global("aes_encrypt", lx_native("aes_encrypt", bi_aes_encrypt));
+    lx_set_global("aes_decrypt", lx_native("aes_decrypt", bi_aes_decrypt));
+    lx_set_global("aes_gcm_encrypt", lx_native("aes_gcm_encrypt", bi_aes_gcm_encrypt));
+    lx_set_global("aes_gcm_decrypt", lx_native("aes_gcm_decrypt", bi_aes_gcm_decrypt));
+    // M19 P1：XML 解析（企微回调 Encrypt 报文 / 配置文件 / 文档）
+    lx_set_global("xml_parse", lx_native("xml_parse", bi_xml_parse));
+    lx_set_global("xml_escape", lx_native("xml_escape", bi_xml_escape));
+    lx_set_global("xml_unescape", lx_native("xml_unescape", bi_xml_unescape));
+    // M19 P1：zip 打包/解压（docx/xlsx/pptx 是 zip+xml，文档工具基石）
+    lx_set_global("zip_pack", lx_native("zip_pack", bi_zip_pack));
+    lx_set_global("zip_unpack", lx_native("zip_unpack", bi_zip_unpack));
 }
 
 // ==================== 并发原语（M4.2） ====================

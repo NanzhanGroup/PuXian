@@ -15,6 +15,7 @@
 //!               px pkg               （包管理器：init/add/install/list/remove）
 
 mod ast;
+mod aes;
 mod ast_view;
 mod bench;
 mod builtin;
@@ -36,7 +37,10 @@ mod regex;
 mod test;
 mod token;
 mod value;
+
 mod web;
+mod xml;
+mod zip;
 
 use std::env as os_env;
 use std::process::ExitCode;
@@ -668,36 +672,68 @@ fn run_build(file: &str) -> ExitCode {
         return ExitCode::from(1);
     }
 
-    // 复制 runtime.h / runtime.c 到构建目录
+    // 复制 runtime.h / runtime.c / M19 模块（AES/XML/zip）/ miniz 到构建目录
     let runtime_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("runtime");
-    let rt_h = runtime_dir.join("runtime.h");
-    let rt_c = runtime_dir.join("runtime.c");
-    let dst_h = build_dir.join("runtime.h");
-    let dst_c = build_dir.join("runtime.c");
-    if let (Ok(h), Ok(c)) = (std::fs::read(&rt_h), std::fs::read(&rt_c)) {
-        let _ = std::fs::write(&dst_h, h);
-        let _ = std::fs::write(&dst_c, c);
-    } else {
-        eprintln!("错误: 找不到 runtime.h/runtime.c（{}）", runtime_dir.display());
+    let rt_files = [
+        "runtime.h",
+        "runtime.c",
+        "runtime_aes.c",
+        "runtime_xml.c",
+        "runtime_zip.c",
+    ];
+    let mut ok_copy = true;
+    for f in rt_files {
+        let src = runtime_dir.join(f);
+        let dst = build_dir.join(f);
+        match std::fs::read(&src) {
+            Ok(c) => {
+                if std::fs::write(&dst, c).is_err() {
+                    ok_copy = false;
+                }
+            }
+            Err(_) => ok_copy = false,
+        }
+    }
+    if !ok_copy {
+        eprintln!("错误: 找不到 runtime 文件（{}）", runtime_dir.display());
         return ExitCode::from(1);
     }
+    // miniz 第三方库（M19 zip：raw deflate）
+    let miniz_dir = runtime_dir.join("third_party").join("miniz");
+    let miniz_srcs = ["miniz.c", "miniz_tinfl.c", "miniz_tdef.c"];
+    for f in miniz_srcs {
+        let src = miniz_dir.join(f);
+        let dst = build_dir.join(f);
+        if let Ok(c) = std::fs::read(&src) {
+            let _ = std::fs::write(&dst, c);
+        }
+    }
 
-    // gcc 编译（-static 静态链接；-pthread 支持并发原语；-lmbedtls 支持 HTTPS）
-    // mbedtls 静态库位于 compiler/runtime/mbedtls/（M10 HTTPS）
+    // gcc 编译（-static 静态链接；-pthread 支持并发原语；-lmbedtls 支持 HTTPS/AES）
+    // mbedtls 静态库位于 compiler/runtime/mbedtls/（M10 HTTPS / M19 AES）
     let mbedtls_dir = runtime_dir.join("mbedtls");
     let mbedtls_lib = mbedtls_dir.join("lib");
-    let gcc_out = std::process::Command::new("gcc")
+    let mut gcc_cmd = std::process::Command::new("gcc");
+    gcc_cmd
         .args(["-static", "-O2", "-pthread", "-o"])
         .arg(&out_path)
         .arg(&c_path)
-        .arg(&dst_c)
+        .arg(build_dir.join("runtime.c"))
+        .arg(build_dir.join("runtime_aes.c"))
+        .arg(build_dir.join("runtime_xml.c"))
+        .arg(build_dir.join("runtime_zip.c"))
+        .arg(build_dir.join("miniz.c"))
+        .arg(build_dir.join("miniz_tinfl.c"))
+        .arg(build_dir.join("miniz_tdef.c"))
+        .arg("-I")
+        .arg(miniz_dir.clone())
         .arg("-I")
         .arg(mbedtls_dir.join("include"))
         .arg(mbedtls_lib.join("libmbedtls.a"))
         .arg(mbedtls_lib.join("libmbedx509.a"))
         .arg(mbedtls_lib.join("libmbedcrypto.a"))
-        .arg("-lm")
-        .output();
+        .arg("-lm");
+    let gcc_out = gcc_cmd.output();
 
     match gcc_out {
         Ok(o) if o.status.success() => {

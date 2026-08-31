@@ -240,6 +240,18 @@ impl Interpreter {
             ("set_timeout", Builtin::SetTimeout),
             ("set_interval", Builtin::SetInterval),
             ("clear_timer", Builtin::ClearTimer),
+            // M19 P1：AES 加密（企微回调加解密 / 数据落盘加密）
+            ("aes_encrypt", Builtin::AesEncrypt),
+            ("aes_decrypt", Builtin::AesDecrypt),
+            ("aes_gcm_encrypt", Builtin::AesGcmEncrypt),
+            ("aes_gcm_decrypt", Builtin::AesGcmDecrypt),
+            // M19 P1：XML 解析（企微回调 Encrypt 报文 / 配置文件）
+            ("xml_parse", Builtin::XmlParse),
+            ("xml_escape", Builtin::XmlEscape),
+            ("xml_unescape", Builtin::XmlUnescape),
+            // M19 P1：zip 打包/解压（文档工具基石）
+            ("zip_pack", Builtin::ZipPack),
+            ("zip_unpack", Builtin::ZipUnpack),
         ];
         for (n, b) in names {
             g.define(n, Value::Builtin(*b));

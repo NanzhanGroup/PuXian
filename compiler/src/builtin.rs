@@ -1038,7 +1038,205 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             c.insert(id);
             Ok(Value::Bool(true))
         }
+        // ---- M19 P1：AES 加密（企微回调加解密 / 数据落盘加密 / Cookie 签名）----
+        // aes_encrypt(data, key, iv) → hex（AES-CBC-PKCS7；key 16/24/32 字节 → 128/192/256 位）
+        Builtin::AesEncrypt => {
+            if args.len() != 3 {
+                return Err(err("aes_encrypt 需要 3 个参数: (data, key, iv)", pos));
+            }
+            let data = bytes_of(&args[0]);
+            let key = bytes_of(&args[1]);
+            let iv = bytes_of(&args[2]);
+            let ct = crate::aes::cbc_encrypt(&data, &key, &iv).map_err(|e| err(e, pos))?;
+            Ok(Value::Str(hex_encode(&ct)))
+        }
+        // aes_decrypt(hex, key, iv) → str 或 null（padding 非法 / 非 UTF-8 → null）
+        Builtin::AesDecrypt => {
+            if args.len() != 3 {
+                return Err(err("aes_decrypt 需要 3 个参数: (hex, key, iv)", pos));
+            }
+            let ct = match hex_decode(expect_str(&args[0], "aes_decrypt", pos)?) {
+                Ok(c) => c,
+                Err(_) => return Ok(Value::Null), // 非法 hex → null（与编译模式一致）
+            };
+            let key = bytes_of(&args[1]);
+            let iv = bytes_of(&args[2]);
+            match crate::aes::cbc_decrypt(&ct, &key, &iv).map_err(|e| err(e, pos))? {
+                Some(pt) => match String::from_utf8(pt) {
+                    Ok(s) => Ok(Value::Str(s)),
+                    Err(_) => Ok(Value::Null),
+                },
+                None => Ok(Value::Null),
+            }
+        }
+        // aes_gcm_encrypt(data, key, iv) → hex（密文 + 16 字节 tag）
+        Builtin::AesGcmEncrypt => {
+            if args.len() != 3 {
+                return Err(err("aes_gcm_encrypt 需要 3 个参数: (data, key, iv)", pos));
+            }
+            let data = bytes_of(&args[0]);
+            let key = bytes_of(&args[1]);
+            let iv = bytes_of(&args[2]);
+            let (ct, tag) = crate::aes::gcm_encrypt(&data, &key, &iv).map_err(|e| err(e, pos))?;
+            let mut out = ct;
+            out.extend_from_slice(&tag);
+            Ok(Value::Str(hex_encode(&out)))
+        }
+        // aes_gcm_decrypt(hex, key, iv) → str 或 null（tag 校验失败 → null）
+        Builtin::AesGcmDecrypt => {
+            if args.len() != 3 {
+                return Err(err("aes_gcm_decrypt 需要 3 个参数: (hex, key, iv)", pos));
+            }
+            let all = match hex_decode(expect_str(&args[0], "aes_gcm_decrypt", pos)?) {
+                Ok(c) => c,
+                Err(_) => return Ok(Value::Null), // 非法 hex → null（与编译模式一致）
+            };
+            if all.len() < 16 {
+                return Ok(Value::Null);
+            }
+            let (ct, tag) = all.split_at(all.len() - 16);
+            let key = bytes_of(&args[1]);
+            let iv = bytes_of(&args[2]);
+            match crate::aes::gcm_decrypt(ct, &key, &iv, tag).map_err(|e| err(e, pos))? {
+                Some(pt) => match String::from_utf8(pt) {
+                    Ok(s) => Ok(Value::Str(s)),
+                    Err(_) => Ok(Value::Null),
+                },
+                None => Ok(Value::Null),
+            }
+        }
+        // ---- M19 P1：XML 解析（企微回调 Encrypt 报文 / 配置文件 / 文档）----
+        // xml_parse(xml) → dict{name, attrs, children, text} 或 null
+        Builtin::XmlParse => {
+            if args.len() != 1 {
+                return Err(err("xml_parse 需要 1 个参数", pos));
+            }
+            let s = expect_str(&args[0], "xml_parse", pos)?;
+            match crate::xml::parse(s) {
+                Ok(root) => Ok(xml_node_to_value(&root)),
+                Err(e) => Err(err(e, pos)),
+            }
+        }
+        // xml_escape(text) → str
+        Builtin::XmlEscape => {
+            if args.len() != 1 {
+                return Err(err("xml_escape 需要 1 个参数", pos));
+            }
+            Ok(Value::Str(crate::xml::escape(expect_str(&args[0], "xml_escape", pos)?)))
+        }
+        // xml_unescape(text) → str
+        Builtin::XmlUnescape => {
+            if args.len() != 1 {
+                return Err(err("xml_unescape 需要 1 个参数", pos));
+            }
+            Ok(Value::Str(crate::xml::unescape(expect_str(&args[0], "xml_unescape", pos)?)))
+        }
+        // ---- M19 P1：zip 打包/解压（docx/xlsx/pptx 是 zip+xml，文档工具基石）----
+        // zip_pack(files, out_path) → bool（files: dict{路径→内容}，deflate 压缩）
+        Builtin::ZipPack => {
+            if args.len() != 2 {
+                return Err(err("zip_pack 需要 2 个参数: (files, out_path)", pos));
+            }
+            let d = match &args[0] {
+                Value::Dict(m) => m.clone(),
+                _ => return Err(err("zip_pack 第一个参数须为 dict{路径→内容}", pos)),
+            };
+            let out_path = expect_str(&args[1], "zip_pack", pos)?.to_string();
+            let files: Vec<(String, Vec<u8>)> = {
+                let map = d.lock().unwrap();
+                map.iter()
+                    .map(|(k, v)| (k.clone(), bytes_of(v)))
+                    .collect()
+            };
+            crate::zip::pack(&files, &out_path).map_err(|e| err(e, pos))?;
+            Ok(Value::Bool(true))
+        }
+        // zip_unpack(zip_path, out_dir) → int（解压文件数，防路径穿越）
+        Builtin::ZipUnpack => {
+            if args.len() != 2 {
+                return Err(err("zip_unpack 需要 2 个参数: (zip_path, out_dir)", pos));
+            }
+            let zp = expect_str(&args[0], "zip_unpack", pos)?.to_string();
+            let od = expect_str(&args[1], "zip_unpack", pos)?.to_string();
+            let names = crate::zip::unpack(&zp, &od).map_err(|e| err(e, pos))?;
+            Ok(Value::Int(names.len() as i64))
+        }
     }
+}
+
+// ==================== M19 辅助（hex / 字节） ====================
+
+/// 任意值 → 字节（字符串取 UTF-8 字节，其余按 to_string）
+fn bytes_of(v: &Value) -> Vec<u8> {
+    match v {
+        Value::Str(s) => s.clone().into_bytes(),
+        other => other.to_string().into_bytes(),
+    }
+}
+
+/// 字节 → 小写 hex
+fn hex_encode(data: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut s = String::with_capacity(data.len() * 2);
+    for b in data {
+        s.push(HEX[(b >> 4) as usize] as char);
+        s.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    s
+}
+
+/// hex → 字节（允许空白，非法返回 Err）
+fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
+    let clean: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+    if clean.len() % 2 != 0 {
+        return Err("hex 字符串长度必须为偶数".to_string());
+    }
+    let mut out = Vec::with_capacity(clean.len() / 2);
+    let b = clean.as_bytes();
+    for i in (0..b.len()).step_by(2) {
+        let hi = (b[i] as char).to_digit(16).ok_or("hex 含非法字符")? as u8;
+        let lo = (b[i + 1] as char).to_digit(16).ok_or("hex 含非法字符")? as u8;
+        out.push((hi << 4) | lo);
+    }
+    Ok(out)
+}
+
+/// xml_parse 结果 → PuXian Value（dict 树）
+fn xml_node_to_value(n: &crate::xml::XmlNode) -> Value {
+    let map = std::collections::HashMap::new();
+    let d = Value::Dict(std::sync::Arc::new(std::sync::Mutex::new(map)));
+    let attrs_map = std::collections::HashMap::new();
+    let ad = Value::Dict(std::sync::Arc::new(std::sync::Mutex::new(attrs_map)));
+    if let Value::Dict(am) = &ad {
+        let mut am = am.lock().unwrap();
+        for (k, v) in &n.attrs {
+            am.insert(k.clone(), Value::Str(v.clone()));
+        }
+    }
+    let children_list = Value::List(std::sync::Arc::new(std::sync::Mutex::new(Vec::new())));
+    let mut text = String::new();
+    if let Value::List(cl) = &children_list {
+        let mut cl = cl.lock().unwrap();
+        for child in &n.children {
+            match child {
+                crate::xml::XmlChild::Elem(e) => {
+                    cl.push(xml_node_to_value(e));
+                }
+                crate::xml::XmlChild::Text(t) => {
+                    cl.push(Value::Str(t.clone()));
+                    text.push_str(t);
+                }
+            }
+        }
+    }
+    if let Value::Dict(dm) = &d {
+        let mut dm = dm.lock().unwrap();
+        dm.insert("name".to_string(), Value::Str(n.name.clone()));
+        dm.insert("attrs".to_string(), ad);
+        dm.insert("children".to_string(), children_list);
+        dm.insert("text".to_string(), Value::Str(text));
+    }
+    d
 }
 
 // ==================== std.net 辅助（Rust 实现） ====================

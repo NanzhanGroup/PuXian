@@ -1244,6 +1244,9 @@ impl Parser {
     /// 花括号：字典字面量 或 块表达式
     fn parse_brace(&mut self) -> ParseResult<Expr> {
         let pos = self.advance().pos; // {
+        // 跳过 { 后的换行/缩进（支持多行 dict 字面量与多行块）
+        self.skip_newlines();
+        self.skip_brace_indents();
         // 启发式判断字典：{ "key": ... 或 { ident: ...
         let is_dict = match self.peek_kind() {
             TokenKind::Str(_) | TokenKind::Ident(_) => {
@@ -1255,14 +1258,21 @@ impl Parser {
             let mut entries = Vec::new();
             if !self.check(&TokenKind::RBrace) {
                 loop {
+                    if self.check(&TokenKind::RBrace) {
+                        break;
+                    }
                     let k = self.parse_expr()?;
                     self.expect(TokenKind::Colon, "':'")?;
                     let v = self.parse_expr()?;
                     entries.push((k, v));
                     if self.check(&TokenKind::Comma) {
                         self.advance();
+                        self.skip_newlines();
+                        self.skip_brace_indents();
                         continue;
                     }
+                    self.skip_newlines();
+                    self.skip_brace_indents();
                     break;
                 }
             }

@@ -1,0 +1,100 @@
+# p7_aes_xml_zip.px - M19 AES 加密 / XML 解析 / zip 打包解压回归测试
+# 覆盖：AES-CBC(128/256) + PKCS7、AES-GCM(256) + tag 校验、XML 解析（CDATA/实体/属性/嵌套）、
+#       XML 转义、zip round-trip（deflate + store + 嵌套路径 + 空文件）、企微回调 AES+XML 组合场景
+# 双模式要求：解释器 run 与编译 build 输出必须逐字节一致
+
+# ---- 1. AES-CBC(256) round-trip + 错误密钥 ----
+key = "0123456789abcdef0123456789abcdef"
+iv = "1234567890abcdef"
+data = "Hello PuXian 中文 AES-256-CBC"
+ct = aes_encrypt(data, key, iv)
+assert(ct != data, "1a 密文不应等于明文")
+assert(len(ct) % 32 == 0, "1b 密文 hex 长度为 16 字节块的 2 倍")
+pt = aes_decrypt(ct, key, iv)
+assert(pt == data, "1c CBC round-trip 明文恢复")
+bad = aes_decrypt(ct, "00000000000000000000000000000000", iv)
+assert(bad == null, "1d 错误密钥 → null")
+assert(aes_decrypt("abc", key, iv) == null, "1e 非法 hex → null")
+print("1. AES-CBC(256) round-trip OK, ct_hex_len =", len(ct))
+
+# ---- 2. AES-CBC(128) round-trip ----
+key16 = "0123456789abcdef"
+ct16 = aes_encrypt(data, key16, iv)
+assert(aes_decrypt(ct16, key16, iv) == data, "2a AES-128 round-trip")
+assert(aes_decrypt(ct16, key, iv) == null, "2b 密钥长度不匹配 → null")
+print("2. AES-CBC(128) round-trip OK")
+
+# ---- 3. AES-GCM(256) round-trip + tag 篡改 ----
+keyg = "0123456789abcdef0123456789abcdef"
+ivg = "cafebabefacedb"
+g = aes_gcm_encrypt(data, keyg, ivg)
+assert(len(g) > len(ct), "3a GCM 输出含 16 字节 tag（hex 更长）")
+assert(aes_gcm_decrypt(g, keyg, ivg) == data, "3b GCM round-trip")
+assert(aes_gcm_decrypt(g, keyg, "cafebabefaceda") == null, "3c IV 不同 → tag 校验失败 → null")
+assert(aes_gcm_decrypt(g, "00000000000000000000000000000000", ivg) == null, "3d 错误密钥 → null")
+print("3. AES-GCM(256) round-trip OK")
+
+# ---- 4. XML 解析：企微回调报文（CDATA + 嵌套） ----
+wx_xml = '<?xml version="1.0" encoding="UTF-8"?><xml><ToUserName><![CDATA[wxid_abc]]></ToUserName><Encrypt><![CDATA[abc123xyz]]></Encrypt><AgentID><![CDATA[1000002]]></AgentID></xml>'
+doc = xml_parse(wx_xml)
+assert(doc["name"] == "xml", "4a 根元素名")
+assert(len(doc["attrs"]) == 0, "4b 根无属性")
+assert(doc["children"][0]["name"] == "ToUserName", "4c 子元素名")
+assert(doc["children"][0]["children"][0] == "wxid_abc", "4d CDATA 文本")
+assert(doc["children"][1]["children"][0] == "abc123xyz", "4e Encrypt 文本")
+assert(doc["children"][2]["children"][0] == "1000002", "4f AgentID 文本")
+print("4. XML 解析（企微回调报文）OK")
+
+# ---- 5. XML 属性 + 实体解码 + 自闭合 + 文本拼接 ----
+cfg = '<config id="42" name="a&amp;b"><item key="x">text &lt;tag&gt;</item><empty/><item key="y">中文内容</item></config>'
+doc2 = xml_parse(cfg)
+assert(doc2["name"] == "config", "5a 根元素名")
+assert(doc2["attrs"]["id"] == "42", "5b 属性 id")
+assert(doc2["attrs"]["name"] == "a&b", "5c 属性实体解码")
+assert(doc2["children"][0]["name"] == "item", "5d 子元素")
+assert(doc2["children"][0]["attrs"]["key"] == "x", "5e 子元素属性")
+assert(doc2["children"][0]["children"][0] == "text <tag>", "5f 文本实体解码")
+assert(doc2["children"][1]["name"] == "empty", "5g 自闭合元素")
+assert(len(doc2["children"][1]["children"]) == 0, "5h 自闭合无子节点")
+assert(doc2["children"][2]["children"][0] == "中文内容", "5i 中文文本")
+print("5. XML 属性/实体/自闭合 OK")
+
+# ---- 6. XML escape / unescape ----
+assert(xml_escape("<a&b>\"'") == "&lt;a&amp;b&gt;&quot;&apos;", "6a escape")
+assert(xml_unescape("&lt;a&amp;b&gt; &#65;&#x42;") == "<a&b> AB", "6b unescape 数字实体")
+assert(xml_unescape(xml_escape("<x&y>")) == "<x&y>", "6c escape/unescape round-trip")
+print("6. XML 转义 OK")
+
+# ---- 7. zip round-trip（deflate + store + 嵌套路径 + 空文件） ----
+zip_path = "/tmp/p7_m19.zip"
+out_dir = "/tmp/p7_m19_out"
+big = ""
+for i in range(5000):
+    big = big + "A"
+files = {
+    "hello.txt": "Hello PuXian 中文 zip!",
+    "big.txt": big,                       # 高重复 → deflate 压缩路径
+    "dir/nested.txt": "nested content",
+    "empty.txt": "",
+}
+r1 = zip_pack(files, zip_path)
+assert(r1 == true, "7a zip_pack 返回 true")
+n = zip_unpack(zip_path, out_dir)
+assert(n == 4, "7b 解压 4 个文件，实际 " + str(n))
+assert(read_file(out_dir + "/hello.txt") == files["hello.txt"], "7c hello.txt 内容")
+assert(read_file(out_dir + "/big.txt") == files["big.txt"], "7d big.txt 内容（deflate 路径）")
+assert(read_file(out_dir + "/dir/nested.txt") == files["dir/nested.txt"], "7e 嵌套路径内容")
+assert(read_file(out_dir + "/empty.txt") == "", "7f 空文件")
+print("7. zip round-trip OK, unpacked =", n, "files")
+
+# ---- 8. 场景组合：企微回调 明文XML → AES加密 → 解密 → XML解析取字段 ----
+plain = '<xml><ToUserName><![CDATA[wxid_x]]></ToUserName><Content><![CDATA[你好，普贤]]></Content></xml>'
+enc = aes_encrypt(plain, key, iv)
+dec = aes_decrypt(enc, key, iv)
+assert(dec == plain, "8a 回调报文 CBC round-trip")
+doc3 = xml_parse(dec)
+assert(doc3["children"][0]["children"][0] == "wxid_x", "8b 回调 ToUserName")
+assert(doc3["children"][1]["children"][0] == "你好，普贤", "8c 回调 Content 中文")
+print("8. 企微回调 AES+XML 组合 OK")
+
+print("P7 AES-XML-ZIP TESTS PASSED")

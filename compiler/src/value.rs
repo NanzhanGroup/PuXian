@@ -153,6 +153,24 @@ pub enum Builtin {
     SetTimeout,
     SetInterval,
     ClearTimer,
+    // M19 P1：AES 加密（企微回调加解密 / 数据落盘加密 / Cookie 签名）
+    // aes_encrypt(data, key, iv) → hex（AES-CBC-PKCS7，key 16/24/32 字节 → 128/192/256 位）
+    // aes_decrypt(hex, key, iv) → str 或 null（padding 非法 / 非 UTF-8 → null）
+    // aes_gcm_encrypt(data, key, iv) → hex（密文 + 16 字节 tag）
+    // aes_gcm_decrypt(hex, key, iv) → str 或 null（tag 校验失败 → null）
+    AesEncrypt,
+    AesDecrypt,
+    AesGcmEncrypt,
+    AesGcmDecrypt,
+    // M19 P1：XML 解析（企微回调 Encrypt 报文 / 配置文件 / 文档）
+    // xml_parse(xml) → dict{name, attrs, children, text} 或 null；xml_escape / xml_unescape
+    XmlParse,
+    XmlEscape,
+    XmlUnescape,
+    // M19 P1：zip 打包/解压（docx/xlsx/pptx 本质是 zip+xml，文档工具基石）
+    // zip_pack(files, out_path) → bool；zip_unpack(zip_path, out_dir) → int 解压文件数
+    ZipPack,
+    ZipUnpack,
 }
 
 impl Builtin {
@@ -231,6 +249,15 @@ impl Builtin {
             Builtin::SetTimeout => "set_timeout",
             Builtin::SetInterval => "set_interval",
             Builtin::ClearTimer => "clear_timer",
+            Builtin::AesEncrypt => "aes_encrypt",
+            Builtin::AesDecrypt => "aes_decrypt",
+            Builtin::AesGcmEncrypt => "aes_gcm_encrypt",
+            Builtin::AesGcmDecrypt => "aes_gcm_decrypt",
+            Builtin::XmlParse => "xml_parse",
+            Builtin::XmlEscape => "xml_escape",
+            Builtin::XmlUnescape => "xml_unescape",
+            Builtin::ZipPack => "zip_pack",
+            Builtin::ZipUnpack => "zip_unpack",
         }
     }
 }
