@@ -16,7 +16,15 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
     match b {
         Builtin::Print => {
             let parts: Vec<String> = args.iter().map(|v| v.to_string()).collect();
-            println!("{}", parts.join(" "));
+            let line = parts.join(" ");
+            // M17：px_exec 内嵌执行时捕获 print 输出（output 缓冲区），否则写 stdout
+            if let Some(out) = &interp.output {
+                let mut buf = out.lock().unwrap();
+                buf.extend_from_slice(line.as_bytes());
+                buf.push(b'\n');
+            } else {
+                println!("{}", line);
+            }
             Ok(Value::Null)
         }
         Builtin::Len => {
@@ -929,6 +937,44 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             }
             Ok(Value::Null) // 不可达：incoming() 无限迭代
         }
+
+        Builtin::PxExec => {
+            // px_exec(path, params?)：内嵌解释器执行 .px 脚本，捕获 print 输出返回
+            if args.len() < 1 || args.len() > 2 {
+                return Err(err("px_exec 需要 (path[, params]) 参数", pos));
+            }
+            let path = expect_str(&args[0], "px_exec", pos)?;
+            let params = match args.get(1) {
+                Some(Value::Dict(d)) => d.lock().unwrap().clone(),
+                Some(Value::Null) | None => HashMap::new(),
+                Some(other) => {
+                    return Err(err(
+                        format!("px_exec 的 params 需要 dict，实际为 {}", interp.type_name(other)),
+                        pos,
+                    ))
+                }
+            };
+            match crate::web::px_exec(path, &params) {
+                Ok(v) => Ok(v),
+                Err(e) => Err(LxError::new("R3011", format!("px_exec: {}", e), Some(pos))),
+            }
+        }
+        Builtin::PxServe => {
+            // px_serve(port, docroot[, timeout_ms])：PHP 式应用服务器（静态文件 + .px 脚本）
+            if args.len() < 2 || args.len() > 3 {
+                return Err(err("px_serve 需要 (port, docroot[, timeout_ms]) 参数", pos));
+            }
+            let port = expect_int(&args[0], "px_serve", pos)?;
+            let docroot = expect_str(&args[1], "px_serve", pos)?;
+            let timeout_ms = match args.get(2) {
+                Some(Value::Int(t)) => *t,
+                _ => 10000,
+            };
+            crate::web::px_serve(port, docroot, timeout_ms.max(1)).map_err(|e| {
+                LxError::new("R3012", format!("px_serve: {}", e), Some(pos))
+            })?;
+            Ok(Value::Null) // 不可达：阻塞 accept
+        }
     }
 }
 
@@ -1068,7 +1114,7 @@ fn find_http_header_end(buf: &[u8]) -> Option<usize> {
 }
 
 /// 解析 HTTP 请求头：返回 (请求 dict, Content-Length)
-fn parse_http_request(head: &str, remote: &str) -> Result<(Value, usize), String> {
+pub(crate) fn parse_http_request(head: &str, remote: &str) -> Result<(Value, usize), String> {
     let mut lines = head.split("\r\n");
     let req_line = lines.next().ok_or("空请求")?;
     let mut parts = req_line.split_whitespace();
@@ -1107,7 +1153,7 @@ fn parse_http_request(head: &str, remote: &str) -> Result<(Value, usize), String
 }
 
 /// 解析 application/x-www-form-urlencoded 表单 -> dict
-fn parse_form(body: &str) -> Value {
+pub(crate) fn parse_form(body: &str) -> Value {
     let mut m = HashMap::new();
     for pair in body.split('&') {
         if pair.is_empty() {
@@ -1123,7 +1169,7 @@ fn parse_form(body: &str) -> Value {
 }
 
 /// 从 req dict 的 headers 中取 Content-Type 头
-fn content_type_of(g: &HashMap<String, Value>) -> Option<String> {
+pub(crate) fn content_type_of(g: &HashMap<String, Value>) -> Option<String> {
     if let Some(Value::Dict(h)) = g.get("headers") {
         let h = h.lock().unwrap();
         for (k, v) in h.iter() {
@@ -1148,7 +1194,7 @@ fn req_method(req: &Value) -> String {
 }
 
 /// 从 multipart Content-Type 中提取 boundary
-fn multipart_boundary(ct: &str) -> String {
+pub(crate) fn multipart_boundary(ct: &str) -> String {
     for part in ct.split(';') {
         let p = part.trim();
         if let Some(rest) = p.strip_prefix("boundary=") {
@@ -1160,7 +1206,7 @@ fn multipart_boundary(ct: &str) -> String {
 
 /// 解析 multipart/form-data -> (form dict, files dict)
 /// files: filename -> 文件内容；form: 普通字段（name -> value）
-fn parse_multipart(body: &str, boundary: &str) -> (Value, Value) {
+pub(crate) fn parse_multipart(body: &str, boundary: &str) -> (Value, Value) {
     let mut form: HashMap<String, Value> = HashMap::new();
     let mut files: HashMap<String, Value> = HashMap::new();
     let delim = format!("--{}", boundary);
@@ -1207,7 +1253,7 @@ fn extract_mime_attr(line: &str, key: &str) -> Option<String> {
 }
 
 /// URL 解码：+ -> 空格，%XX -> 字节
-fn url_decode(s: &str) -> String {
+pub(crate) fn url_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -1583,41 +1629,48 @@ impl<'a> JsonParser<'a> {
     }
     fn parse_string(&mut self) -> Result<String, String> {
         self.expect(b'"')?;
-        let mut s = String::new();
+        // 按原始字节累积，最后统一 UTF-8 解码（修复多字节中文逐字节转 latin-1 乱码）
+        let mut bytes: Vec<u8> = Vec::new();
         while let Some(c) = self.peek() {
             self.idx += 1;
             match c {
-                b'"' => return Ok(s),
+                b'"' => {
+                    return String::from_utf8(bytes)
+                        .map_err(|_| "字符串包含非法 UTF-8 字节".to_string());
+                }
                 b'\\' => {
                     let esc = self
                         .peek()
                         .ok_or_else(|| "字符串转义不完整".to_string())?;
                     self.idx += 1;
                     match esc {
-                        b'"' => s.push('"'),
-                        b'\\' => s.push('\\'),
-                        b'/' => s.push('/'),
-                        b'n' => s.push('\n'),
-                        b't' => s.push('\t'),
-                        b'r' => s.push('\r'),
-                        b'b' => s.push('\u{8}'),
-                        b'f' => s.push('\u{c}'),
+                        b'"' => bytes.push(b'"'),
+                        b'\\' => bytes.push(b'\\'),
+                        b'/' => bytes.push(b'/'),
+                        b'n' => bytes.push(b'\n'),
+                        b't' => bytes.push(b'\t'),
+                        b'r' => bytes.push(b'\r'),
+                        b'b' => bytes.push(0x08),
+                        b'f' => bytes.push(0x0c),
                         b'u' => {
                             if self.idx + 4 > self.bytes.len() {
                                 return Err("\\u 转义不完整".to_string());
                             }
                             let hex = std::str::from_utf8(&self.bytes[self.idx..self.idx + 4])
                                 .map_err(|_| "\\u 非法".to_string())?;
-                            let code = u32::from_str_radix(hex, 16).map_err(|_| "\\u 非法".to_string())?;
+                            let code = u32::from_str_radix(hex, 16)
+                                .map_err(|_| "\\u 非法".to_string())?;
                             self.idx += 4;
-                            s.push(char::from_u32(code).unwrap_or('\u{fffd}'));
+                            if let Some(ch) = char::from_u32(code) {
+                                let mut tmp = [0u8; 4];
+                                bytes.extend_from_slice(ch.encode_utf8(&mut tmp).as_bytes());
+                            }
                         }
                         _ => return Err(format!("非法转义 \\{}", esc as char)),
                     }
                 }
                 _ => {
-                    // 逐字节收集（JSON 字符串应为 ASCII/UTF-8 字节）
-                    s.push(c as char);
+                    bytes.push(c);
                 }
             }
         }
@@ -1665,7 +1718,7 @@ impl<'a> JsonParser<'a> {
 }
 
 /// Value → JSON 字符串
-fn json_stringify(v: &Value) -> Result<String, String> {
+pub(crate) fn json_stringify(v: &Value) -> Result<String, String> {
     match v {
         Value::Null => Ok("null".to_string()),
         Value::Bool(b) => Ok(if *b { "true".to_string() } else { "false".to_string() }),

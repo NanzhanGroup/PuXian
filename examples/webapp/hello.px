@@ -1,0 +1,5 @@
+# hello.px - GET 参数演示（/hello.px?name=东月）
+let name = GET.get("name")
+if name == null or name == "":
+    name = "世界"
+print("你好，" + name)

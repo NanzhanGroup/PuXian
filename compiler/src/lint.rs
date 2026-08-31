@@ -754,6 +754,8 @@ pub fn builtin_names() -> HashSet<String> {
         Builtin::HttpGet,
         Builtin::HttpPost,
         Builtin::HttpServe,
+        Builtin::PxExec,
+        Builtin::PxServe,
     ];
     all.iter().map(|b| b.name().to_string()).collect()
 }

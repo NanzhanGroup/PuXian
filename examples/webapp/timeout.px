@@ -1,0 +1,3 @@
+# timeout.px - 死循环脚本 → 服务器超时控制（504），不拖垮服务器
+while true:
+    sleep(100)

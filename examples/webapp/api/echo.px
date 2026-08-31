@@ -1,0 +1,5 @@
+# api/echo.px - POST 表单 + RESPONSE 全局变量（精确控制状态码/头/体）
+# curl -d "a=1&b=2" http://127.0.0.1:PORT/api/echo.px
+let a = POST["a"]
+let b = POST["b"]
+RESPONSE = {"status": 200, "headers": {"Content-Type": "application/json"}, "body": "{\"a\": \"" + a + "\", \"b\": \"" + b + "\"}"}

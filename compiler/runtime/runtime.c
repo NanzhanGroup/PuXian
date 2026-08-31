@@ -24,6 +24,8 @@
 #include <signal.h>
 #include <ucontext.h>
 #include <sys/mman.h>
+#include <sys/wait.h>
+#include <poll.h>
 #include <stdatomic.h>
 
 // M10 HTTPS：mbedtls 静态库（compiler/runtime/mbedtls/）
@@ -49,6 +51,9 @@ static LXValue bi_tcp_close(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_get(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_post(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_serve(LXValue* args, int nargs, void* ctx);
+// M17 .px 脚本执行机制（应用平台）
+static LXValue bi_px_exec(LXValue* args, int nargs, void* ctx);
+static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx);
 
 // M10 HTTPS 内部辅助
 static char* lx_http_request(const char* url, const char* method, const char* body, int* out_len);
@@ -3220,6 +3225,9 @@ void lx_register_builtins(void) {
     lx_set_global("http_get", lx_native("http_get", bi_http_get));
     lx_set_global("http_post", lx_native("http_post", bi_http_post));
     lx_set_global("http_serve", lx_native("http_serve", bi_http_serve));
+    // M17 .px 脚本执行机制
+    lx_set_global("px_exec", lx_native("px_exec", bi_px_exec));
+    lx_set_global("px_serve", lx_native("px_serve", bi_px_serve));
 }
 
 // ==================== 并发原语（M4.2） ====================
@@ -4430,4 +4438,498 @@ static LXValue bi_http_serve(LXValue* args, int nargs, void* ctx) {
         lx_spawn(http_conn_worker, &arg, 1);
     }
     return lx_null(); // 不可达
+}
+
+// ==================== M17 .px 脚本执行机制（编译模式） ====================
+// 与解释器模式（Rust web.rs）行为一致：静态文件 + .px 脚本执行（进程池雏形，
+// fork+exec `px run`，子进程隔离 + 超时 kill，天然满足安全需求）。
+// 双模式可跑同一套 .px 应用（PX_INIT_GLOBALS 环境变量传递 REQUEST/GET/POST/SERVER）。
+
+// 单调时钟毫秒（超时计算）
+static long long lx_mono_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+// MIME 类型表（静态文件）
+static const char* lx_mime_type(const char* path) {
+    const char* dot = strrchr(path, '.');
+    if (!dot) return "application/octet-stream";
+    if (strcasecmp(dot, ".html") == 0 || strcasecmp(dot, ".htm") == 0) return "text/html; charset=utf-8";
+    if (strcasecmp(dot, ".css") == 0) return "text/css; charset=utf-8";
+    if (strcasecmp(dot, ".js") == 0 || strcasecmp(dot, ".mjs") == 0) return "application/javascript; charset=utf-8";
+    if (strcasecmp(dot, ".json") == 0) return "application/json; charset=utf-8";
+    if (strcasecmp(dot, ".txt") == 0 || strcasecmp(dot, ".md") == 0) return "text/plain; charset=utf-8";
+    if (strcasecmp(dot, ".xml") == 0 || strcasecmp(dot, ".svg") == 0) return "text/xml; charset=utf-8";
+    if (strcasecmp(dot, ".csv") == 0) return "text/csv; charset=utf-8";
+    if (strcasecmp(dot, ".png") == 0) return "image/png";
+    if (strcasecmp(dot, ".jpg") == 0 || strcasecmp(dot, ".jpeg") == 0) return "image/jpeg";
+    if (strcasecmp(dot, ".gif") == 0) return "image/gif";
+    if (strcasecmp(dot, ".webp") == 0) return "image/webp";
+    if (strcasecmp(dot, ".ico") == 0) return "image/x-icon";
+    if (strcasecmp(dot, ".bmp") == 0) return "image/bmp";
+    if (strcasecmp(dot, ".pdf") == 0) return "application/pdf";
+    if (strcasecmp(dot, ".woff") == 0) return "font/woff";
+    if (strcasecmp(dot, ".woff2") == 0) return "font/woff2";
+    if (strcasecmp(dot, ".ttf") == 0) return "font/ttf";
+    if (strcasecmp(dot, ".wasm") == 0) return "application/wasm";
+    if (strcasecmp(dot, ".zip") == 0) return "application/zip";
+    if (strcasecmp(dot, ".mp3") == 0) return "audio/mpeg";
+    if (strcasecmp(dot, ".mp4") == 0) return "video/mp4";
+    if (strcasecmp(dot, ".webm") == 0) return "video/webm";
+    return "application/octet-stream";
+}
+
+// px 解释器二进制定位：PX_BIN 环境变量优先，否则 PATH 中的 "px"
+static const char* lx_px_bin(void) {
+    const char* b = getenv("PX_BIN");
+    return (b && *b) ? b : "px";
+}
+
+// 子进程执行 `px run <path>` 并捕获 stdout（进程池雏形：隔离 + 超时 kill）
+// env_json：PX_INIT_GLOBALS 环境变量（JSON dict，解释器注入全局变量）
+// dump_response：1 时设置 PX_DUMP_RESPONSE=1（px_serve 用：脚本 RESPONSE 序列化到 stdout 尾部）
+// timeout_ms<=0 无限等待。返回 0=完成, 1=超时, 2=启动失败。
+static int lx_run_px_child(const char* path, const char* env_json, int dump_response,
+                           int timeout_ms, char** out, int* out_len, int* exit_code) {
+    int pfd[2];
+    if (pipe(pfd) != 0) return 2;
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pfd[0]); close(pfd[1]);
+        return 2;
+    }
+    if (pid == 0) {
+        close(pfd[0]);
+        dup2(pfd[1], STDOUT_FILENO);
+        close(pfd[1]);
+        if (env_json && *env_json) setenv("PX_INIT_GLOBALS", env_json, 1);
+        else unsetenv("PX_INIT_GLOBALS");
+        if (dump_response) setenv("PX_DUMP_RESPONSE", "1", 1);
+        else unsetenv("PX_DUMP_RESPONSE");
+        execlp(lx_px_bin(), "px", "run", path, (char*)NULL);
+        dprintf(STDERR_FILENO, "px: 找不到 px 解释器（设置 PX_BIN 或加入 PATH）\n");
+        _exit(127);
+    }
+    close(pfd[1]);
+    int cap = 65536;
+    char* buf = xmalloc((size_t)cap);
+    int total = 0;
+    int timedout = 0;
+    long long t0 = lx_mono_ms();
+    for (;;) {
+        if (timeout_ms > 0) {
+            long long now = lx_mono_ms();
+            int rem = timeout_ms - (int)(now - t0);
+            if (rem <= 0) { timedout = 1; break; }
+            struct pollfd pp = { pfd[0], POLLIN, 0 };
+            int r = poll(&pp, 1, rem);
+            if (r == 0) { timedout = 1; break; }
+            if (r < 0) { if (errno == EINTR) continue; break; }
+        }
+        ssize_t n = read(pfd[0], buf + total, (size_t)(cap - 1 - total));
+        if (n <= 0) break;
+        total += (int)n;
+        if (total >= cap - 1) break;
+    }
+    if (timedout) kill(pid, SIGKILL);
+    close(pfd[0]);
+    int status = 0;
+    waitpid(pid, &status, 0);
+    buf[total] = 0;
+    *out = buf;
+    *out_len = total;
+    if (exit_code) {
+        if (WIFEXITED(status)) *exit_code = WEXITSTATUS(status);
+        else *exit_code = 1;
+    }
+    return timedout ? 1 : (WIFEXITED(status) ? 0 : 2);
+}
+
+// urlencoded → dict（GET 查询串 / POST 表单共用）
+static LXValue lx_parse_urlenc(const char* body) {
+    LXValue d = lx_dict();
+    char* copy = xmalloc(strlen(body) + 1);
+    strcpy(copy, body);
+    char* save = NULL;
+    char* pair = strtok_r(copy, "&", &save);
+    while (pair) {
+        char* eq = strchr(pair, '=');
+        if (eq) {
+            *eq = 0;
+            char* k = lx_url_decode(pair);
+            char* v = lx_url_decode(eq + 1);
+            lx_dict_set(d, k, lx_str(v));
+            xfree(k); xfree(v);
+        } else {
+            char* k = lx_url_decode(pair);
+            lx_dict_set(d, k, lx_str(""));
+            xfree(k);
+        }
+        pair = strtok_r(NULL, "&", &save);
+    }
+    xfree(copy);
+    return d;
+}
+
+// 发送 HTTP 响应（HEAD 只发响应头）
+static void lx_px_send(int fd, int status, const char* ct, const char* body, int body_len, int head_only) {
+    const char* reason = lx_http_status_reason(status);
+    char head[1024];
+    int off = snprintf(head, sizeof(head),
+                       "HTTP/1.1 %d %s\r\nContent-Length: %d\r\nConnection: close\r\n",
+                       status, reason, body_len);
+    if (ct && *ct) off += snprintf(head + off, sizeof(head) - (size_t)off, "Content-Type: %s\r\n", ct);
+    off += snprintf(head + off, sizeof(head) - (size_t)off, "\r\n");
+    send(fd, head, off, 0);
+    if (!head_only && body_len > 0) send(fd, body, body_len, 0);
+}
+
+// 连接处理线程（lx_spawn 注册）：args[0] = fd
+static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) return lx_null();
+    int fd = (int)args[0].as.i;
+
+    // 1. 读请求头（直到 \r\n\r\n，上限 64KB）
+    char buf[65536];
+    int len = 0;
+    int header_end = -1;
+    while (len < (int)sizeof(buf) - 1) {
+        ssize_t n = recv(fd, buf + len, (size_t)((int)sizeof(buf) - 1 - len), 0);
+        if (n <= 0) break;
+        len += (int)n;
+        buf[len] = 0;
+        char* sep = strstr(buf, "\r\n\r\n");
+        if (sep) { header_end = (int)(sep - buf); break; }
+    }
+    if (header_end < 0 || len == 0) { close(fd); return lx_null(); }
+
+    // 2. 请求行
+    char* head = buf;
+    char* sp1 = strchr(head, ' ');
+    if (!sp1) { close(fd); return lx_null(); }
+    *sp1 = 0;
+    char* method = head;
+    char* target = sp1 + 1;
+    char* sp2 = strchr(target, ' ');
+    if (sp2) *sp2 = 0;
+    char path[2048] = {0}, query[2048] = {0};
+    char* q = strchr(target, '?');
+    char* dec;
+    if (q) {
+        *q = 0;
+        dec = lx_url_decode(target); snprintf(path, sizeof(path), "%s", dec ? dec : target); xfree(dec);
+        dec = lx_url_decode(q + 1); snprintf(query, sizeof(query), "%s", dec ? dec : q + 1); xfree(dec);
+    } else {
+        dec = lx_url_decode(target); snprintf(path, sizeof(path), "%s", dec ? dec : target); xfree(dec);
+    }
+
+    // 3. 头部 + Content-Length
+    LXValue headers = lx_dict();
+    int content_length = 0;
+    char* hline = sp2 ? sp2 + 1 : target + strlen(target);
+    char* nl0 = strchr(hline, '\n');
+    hline = nl0 ? nl0 + 1 : head + len;
+    while (hline && *hline && *hline != '\r' && *hline != '\n') {
+        char* eol = strstr(hline, "\r\n");
+        if (!eol) eol = strchr(hline, '\n');
+        int linelen = eol ? (int)(eol - hline) : (int)strlen(hline);
+        char line[4096];
+        int cl = linelen < 4095 ? linelen : 4095;
+        memcpy(line, hline, (size_t)cl); line[cl] = 0;
+        char* colon = strchr(line, ':');
+        if (colon) {
+            *colon = 0;
+            char* k = line;
+            char* v = colon + 1;
+            while (*v == ' ') v++;
+            char* ve = v + strlen(v);
+            while (ve > v && (ve[-1] == ' ' || ve[-1] == '\r')) ve--;
+            *ve = 0;
+            if (strcasecmp(k, "Content-Length") == 0) content_length = atoi(v);
+            lx_dict_set(headers, k, lx_str(v));
+        }
+        hline = eol ? eol + 2 : hline + strlen(hline);
+    }
+
+    // 4. 读 body
+    char body_buf[65536] = {0};
+    int body_len = 0;
+    if (content_length > 0) {
+        int body_off = header_end + 4;
+        int have = len - body_off;
+        if (have > 0) {
+            int take = have < content_length ? have : content_length;
+            if (take > (int)sizeof(body_buf) - 1) take = (int)sizeof(body_buf) - 1;
+            memcpy(body_buf, buf + body_off, (size_t)take);
+            body_len = take;
+        }
+        while (body_len < content_length && body_len < (int)sizeof(body_buf) - 1) {
+            ssize_t n = recv(fd, body_buf + body_len, (size_t)((int)sizeof(body_buf) - 1 - body_len), 0);
+            if (n <= 0) break;
+            body_len += (int)n;
+        }
+        if (body_len > content_length) body_len = content_length;
+        body_buf[body_len] = 0;
+    }
+
+    // 5. 请求 dict + form/files（Content-Type 驱动）
+    LXValue req = lx_dict();
+    lx_dict_set(req, "method", lx_str(method));
+    lx_dict_set(req, "target", lx_str(target));
+    lx_dict_set(req, "path", lx_str(path));
+    lx_dict_set(req, "query", lx_str(query));
+    lx_dict_set(req, "version", lx_str("HTTP/1.1"));
+    lx_dict_set(req, "headers", headers);
+    lx_dict_set(req, "body", lx_str_len(body_buf, body_len));
+    LXValue form = lx_dict();
+    {
+        struct sockaddr_in raddr;
+        socklen_t rl = sizeof(raddr);
+        if (getpeername(fd, (struct sockaddr*)&raddr, &rl) == 0) {
+            char rbuf[64];
+            snprintf(rbuf, sizeof(rbuf), "%s:%d", inet_ntoa(raddr.sin_addr), ntohs(raddr.sin_port));
+            lx_dict_set(req, "remote", lx_str(rbuf));
+        } else {
+            lx_dict_set(req, "remote", lx_str(""));
+        }
+    }
+    LXValue ct_v = lx_dict_get_ci(headers, "Content-Type");
+    const char* ct = (ct_v.type == LX_STR) ? ct_v.as.obj->as.str.data : "";
+    if (body_len > 0) {
+        if (strstr(ct, "multipart/form-data")) {
+            char* boundary = lx_mime_boundary(ct);
+            if (boundary) {
+                lx_parse_multipart(req, body_buf, body_len, boundary);
+                xfree(boundary);
+            }
+        } else if (strstr(ct, "application/x-www-form-urlencoded")) {
+            form = lx_parse_urlenc(body_buf);
+            lx_dict_set(req, "form", form);
+        }
+    }
+
+    // 6. 路径映射 + 目录隔离（穿越防护：拒绝 ".." 路径段）
+    LXValue root_v = lx_get_global("__px_docroot");
+    const char* docroot = (root_v.type == LX_STR) ? root_v.as.obj->as.str.data : ".";
+    LXValue tout_v = lx_get_global("__px_timeout");
+    int timeout_ms = (tout_v.type == LX_INT) ? (int)tout_v.as.i : 10000;
+    LXValue port_v = lx_get_global("__px_port");
+    int port = (port_v.type == LX_INT) ? (int)port_v.as.i : 0;
+
+    const char* pp = path;
+    while (*pp) {
+        if (pp[0] == '.' && pp[1] == '.' && (pp[2] == 0 || pp[2] == '/')) {
+            lx_px_send(fd, 403, "text/plain; charset=utf-8", "403 Forbidden: 路径穿越被拒绝", 30, strcmp(method, "HEAD") == 0);
+            close(fd);
+            return lx_null();
+        }
+        pp++;
+    }
+    char full[4096];
+    snprintf(full, sizeof(full), "%s%s", docroot, path);
+
+    struct stat st;
+    if (stat(full, &st) != 0) {
+        lx_px_send(fd, 404, "text/plain; charset=utf-8", "404 Not Found", 13, strcmp(method, "HEAD") == 0);
+        close(fd);
+        return lx_null();
+    }
+    // 目录 → index.px / index.html
+    char fpath[4096];
+    if (S_ISDIR(st.st_mode)) {
+        snprintf(fpath, sizeof(fpath), "%s/index.px", full);
+        if (stat(fpath, &st) != 0) {
+            snprintf(fpath, sizeof(fpath), "%s/index.html", full);
+            if (stat(fpath, &st) != 0) {
+                lx_px_send(fd, 404, "text/plain; charset=utf-8", "404 Not Found", 13, strcmp(method, "HEAD") == 0);
+                close(fd);
+                return lx_null();
+            }
+        }
+    } else {
+        snprintf(fpath, sizeof(fpath), "%s", full);
+    }
+
+    int head_only = strcmp(method, "HEAD") == 0;
+    int is_px = strstr(fpath, ".px") != NULL && strcmp(fpath + strlen(fpath) - 3, ".px") == 0;
+
+    if (is_px) {
+        // ---- .px 脚本执行：fork + exec `px run`，PX_INIT_GLOBALS 传递请求上下文 ----
+        LXValue get = lx_parse_urlenc(query);
+        LXValue post = lx_dict_get(req, "form");
+        if (post.type != LX_DICT) post = lx_dict();
+        LXValue server = lx_dict();
+        lx_dict_set(server, "port", lx_int(port));
+        lx_dict_set(server, "docroot", lx_str(docroot));
+        lx_dict_set(server, "script", lx_str(fpath));
+        lx_dict_set(server, "px", lx_str("0.1.0"));
+        LXValue env = lx_dict();
+        lx_dict_set(env, "REQUEST", req);
+        lx_dict_set(env, "GET", get);
+        lx_dict_set(env, "POST", post);
+        lx_dict_set(env, "SERVER", server);
+        LXValue j = lx_call(lx_get_global("json_stringify"), &env, 1);
+        char* env_json = (j.type == LX_STR) ? strdup(j.as.obj->as.str.data) : NULL;
+
+        char* out = NULL;
+        int out_len = 0, exit_code = 0;
+        int rc = lx_run_px_child(fpath, env_json, 1, timeout_ms, &out, &out_len, &exit_code);
+        if (env_json) free(env_json);
+        if (rc == 1) {
+            char msg[128];
+            int ml = snprintf(msg, sizeof(msg), "504 Gateway Timeout: 脚本执行超时（>%dms）", timeout_ms);
+            lx_px_send(fd, 504, "text/plain; charset=utf-8", msg, ml, head_only);
+        } else if (exit_code != 0) {
+            char msg[70000];
+            int ml = snprintf(msg, sizeof(msg), "500 Internal Server Error\n\n%.60000s", out ? out : "");
+            lx_px_send(fd, 500, "text/plain; charset=utf-8", msg, ml, head_only);
+        } else {
+            // 解析脚本 RESPONSE 全局变量（px run 以 __PX_RESPONSE__:JSON 打印到 stdout 尾部）
+            int status = 200;
+            const char* ct = "text/html; charset=utf-8";
+            char* body = out;
+            int body_len = out_len;
+            char* marker = out ? strstr(out, "__PX_RESPONSE__:") : NULL;
+            if (marker) {
+                *marker = 0;
+                body_len = (int)(marker - out);
+                while (body_len > 0 && (body[body_len - 1] == '\n' || body[body_len - 1] == '\r')) body_len--;
+                char* jstr = marker + 16;  // strlen("__PX_RESPONSE__:")
+                LXValue jv = lx_str(jstr);
+                LXValue resp = lx_call(lx_get_global("json_parse"), &jv, 1);
+                if (resp.type == LX_DICT) {
+                    LXValue st = lx_dict_get(resp, "status");
+                    if (st.type == LX_INT) status = (int)st.as.i;
+                    LXValue b = lx_dict_get(resp, "body");
+                    if (b.type == LX_STR) {
+                        body = b.as.obj->as.str.data;
+                        body_len = b.as.obj->as.str.len;
+                    }
+                    LXValue h = lx_dict_get(resp, "headers");
+                    if (h.type == LX_DICT) {
+                        LXObject* ho = h.as.obj;
+                        for (int i = 0; i < ho->as.dict.len; i++) {
+                            if (strcasecmp(ho->as.dict.keys[i], "Content-Type") == 0 &&
+                                ho->as.dict.vals[i].type == LX_STR) {
+                                ct = ho->as.dict.vals[i].as.obj->as.str.data;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            lx_px_send(fd, status, ct, body ? body : "", body_len, head_only);
+        }
+        if (out) xfree(out);
+    } else {
+        // ---- 静态文件 ----
+        FILE* f = fopen(fpath, "rb");
+        if (!f) {
+            lx_px_send(fd, 404, "text/plain; charset=utf-8", "404 Not Found", 13, head_only);
+            close(fd);
+            return lx_null();
+        }
+        fseek(f, 0, SEEK_END);
+        long fsz = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        if (fsz < 0 || fsz > 65536) fsz = 65536;  // 静态文件上限 64KB
+        char* data = xmalloc((size_t)fsz + 1);
+        size_t got = fread(data, 1, (size_t)fsz, f);
+        fclose(f);
+        const char* ct2 = lx_mime_type(fpath);
+        lx_px_send(fd, 200, ct2, data, (int)got, head_only);
+        xfree(data);
+    }
+    close(fd);
+    return lx_null();
+}
+
+// px_serve(port, docroot[, timeout_ms])：阻塞 accept 循环（Go 风格），每连接 lx_spawn 处理
+static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 2 || nargs > 3) lx_error("px_serve 需要 (port, docroot[, timeout_ms]) 参数");
+    if (args[0].type != LX_INT) lx_error("px_serve 的 port 需要整数");
+    if (args[1].type != LX_STR) lx_error("px_serve 的 docroot 需要字符串");
+    const char* docroot = args[1].as.obj->as.str.data;
+    struct stat st;
+    if (stat(docroot, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        lx_error("px_serve: docroot 不是有效目录: %s", docroot);
+    }
+    int timeout_ms = 10000;
+    if (nargs == 3 && args[2].type == LX_INT) timeout_ms = (int)args[2].as.i;
+    if (timeout_ms < 1) timeout_ms = 1;
+    int port = (int)args[0].as.i;
+    // docroot / timeout / port 存全局表（GC 扫描根）
+    lx_set_global("__px_docroot", lx_str(docroot));
+    lx_set_global("__px_timeout", lx_int(timeout_ms));
+    lx_set_global("__px_port", lx_int(port));
+
+    int sfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sfd < 0) lx_error("px_serve: socket 创建失败");
+    int one = 1;
+    setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons((uint16_t)port);
+    if (bind(sfd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        close(sfd);
+        lx_error("px_serve: 绑定端口 %d 失败", port);
+    }
+    if (listen(sfd, 128) < 0) {
+        close(sfd);
+        lx_error("px_serve: listen 失败");
+    }
+    fprintf(stderr, "[px-serve] 普贤应用服务器 docroot=%s 端口=%d 超时=%dms\n", docroot, port, timeout_ms);
+    for (;;) {
+        int cfd = accept(sfd, NULL, NULL);
+        if (cfd < 0) continue;
+        LXValue arg = lx_int(cfd);
+        lx_spawn(px_conn_worker, &arg, 1);
+    }
+    return lx_null(); // 不可达
+}
+
+// px_exec(path, params?)：子进程执行 `px run` 并捕获 stdout
+// 文件不存在 → null；params dict → PX_INIT_GLOBALS 注入脚本全局变量
+static LXValue bi_px_exec(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || nargs > 2) lx_error("px_exec 需要 (path[, params]) 参数");
+    if (args[0].type != LX_STR) lx_error("px_exec 的 path 需要字符串");
+    const char* path = args[0].as.obj->as.str.data;
+    struct stat st;
+    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) return lx_null();
+    char* env_json = NULL;
+    LXValue params = (nargs == 2) ? args[1] : lx_null();
+    // params 为 dict 或 null/缺省 时都构建默认 env（与解释器模式一致：补默认
+    // REQUEST/GET/POST/SERVER 空值，Web 风格脚本在非 Web 语境下也能安全运行；
+    // dict 的键注入为全局变量，可覆盖默认 4 个）
+    if (params.type == LX_DICT || params.type == LX_NULL) {
+        LXValue env = lx_dict();
+        lx_dict_set(env, "REQUEST", lx_dict());
+        lx_dict_set(env, "GET", lx_dict());
+        lx_dict_set(env, "POST", lx_dict());
+        LXValue srv = lx_dict();
+        lx_dict_set(srv, "px", lx_str("0.1.0"));
+        lx_dict_set(env, "SERVER", srv);
+        if (params.type == LX_DICT) {
+            LXObject* o = params.as.obj;
+            for (int i = 0; i < o->as.dict.len; i++) {
+                lx_dict_set(env, o->as.dict.keys[i], o->as.dict.vals[i]);
+            }
+        }
+        LXValue j = lx_call(lx_get_global("json_stringify"), &env, 1);
+        if (j.type == LX_STR) env_json = strdup(j.as.obj->as.str.data);
+    }
+    char* out = NULL;
+    int out_len = 0, exit_code = 0;
+    int rc = lx_run_px_child(path, env_json, 0, 0, &out, &out_len, &exit_code);
+    if (env_json) free(env_json);
+    LXValue r = rc == 0 ? lx_str_len(out, out_len) : lx_str("");
+    if (out) xfree(out);
+    return r;
 }

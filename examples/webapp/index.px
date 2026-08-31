@@ -1,0 +1,7 @@
+# index.px - 普贤应用平台首页（访问 / 时自动执行目录下 index.px）
+# 脚本可读全局变量：REQUEST / GET / POST / SERVER（px_serve 注入）
+print("<h1>欢迎使用普贤应用平台</h1>")
+print("<p>当前路径: " + REQUEST["path"] + "</p>")
+print("<p>普贤版本: " + SERVER["px"] + "</p>")
+print("<p>客户端: " + REQUEST["remote"] + "</p>")
+print("<p><a href=\"/hello.px?name=东月\">问候示例</a> | <a href=\"/static/style.css\">静态 CSS</a> | <a href=\"/api/echo.px\">JSON API</a></p>")

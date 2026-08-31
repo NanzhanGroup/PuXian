@@ -142,6 +142,11 @@ pub enum Builtin {
     HttpGet,
     HttpPost,
     HttpServe,
+    // M17 P1：.px 脚本执行机制（PHP/OpenResty 式应用平台）
+    // px_exec(path, params?) —— 内嵌解释器执行 .px 脚本，捕获 print 输出返回（语言层嵌入 API）
+    // px_serve(port, docroot[, timeout_ms]) —— PHP 式应用服务器：静态文件 + .px 脚本执行
+    PxExec,
+    PxServe,
 }
 
 impl Builtin {
@@ -215,6 +220,8 @@ impl Builtin {
             Builtin::HttpGet => "http_get",
             Builtin::HttpPost => "http_post",
             Builtin::HttpServe => "http_serve",
+            Builtin::PxExec => "px_exec",
+            Builtin::PxServe => "px_serve",
         }
     }
 }

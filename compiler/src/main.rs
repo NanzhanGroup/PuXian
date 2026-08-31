@@ -36,6 +36,7 @@ mod regex;
 mod test;
 mod token;
 mod value;
+mod web;
 
 use std::env as os_env;
 use std::process::ExitCode;
@@ -295,6 +296,28 @@ fn resolve_modules(prog: ast::Program, base_dir: &str) -> ast::Program {
     let mut r = module::ModuleResolver::new(std::path::Path::new(base_dir));
     r.resolve(prog)
 }
+
+/// M17：Json → Value（PX_INIT_GLOBALS 环境变量注入全局变量用）
+fn json_to_value(j: &json::Json) -> crate::value::Value {
+    use crate::value::Value;
+    match j {
+        json::Json::Null => Value::Null,
+        json::Json::Bool(b) => Value::Bool(*b),
+        json::Json::Int(i) => Value::Int(*i),
+        json::Json::Float(f) => Value::Float(*f),
+        json::Json::Str(s) => Value::Str(s.clone()),
+        json::Json::Arr(items) => Value::List(std::sync::Arc::new(std::sync::Mutex::new(
+            items.iter().map(json_to_value).collect(),
+        ))),
+        json::Json::Obj(entries) => {
+            let mut m = std::collections::HashMap::new();
+            for (k, v) in entries {
+                m.insert(k.clone(), json_to_value(v));
+            }
+            Value::Dict(std::sync::Arc::new(std::sync::Mutex::new(m)))
+        }
+    }
+}
 /// 词法分析调试入口
 fn run_lex(file: &str) -> ExitCode {
     let tokens = match tokenize_file(file) {
@@ -545,8 +568,35 @@ fn run_script(file: &str) -> ExitCode {
         .unwrap_or_else(|| ".".to_string());
     let prog = resolve_modules(prog, &base_dir);
     let mut interp = interp::Interpreter::new();
+    // M17：PX_INIT_GLOBALS 环境变量 → 注入全局变量（JSON dict）。
+    // 编译模式 px_serve 用子进程 `px run` 执行 .px 脚本时，通过它传递 REQUEST/GET/POST/SERVER，
+    // 使双模式脚本行为一致。
+    if let Ok(init) = os_env::var("PX_INIT_GLOBALS") {
+        if !init.is_empty() {
+            if let Ok(j) = json::parse(&init) {
+                let v = json_to_value(&j);
+                if let crate::value::Value::Dict(d) = v {
+                    let mut g = interp.globals.lock().unwrap();
+                    for (k, v) in d.lock().unwrap().iter() {
+                        g.define(k, v.clone());
+                    }
+                }
+            }
+        }
+    }
     match interp.run_program(&prog) {
         Ok(code) => {
+            // M17：PX_DUMP_RESPONSE=1（编译模式 px_serve 的子进程）→ 把脚本设置的
+            // RESPONSE 全局变量序列化到 stdout 尾部（服务器解析为精确响应控制）
+            if os_env::var("PX_DUMP_RESPONSE").map(|v| v == "1").unwrap_or(false) {
+                if let Some(resp) = interp.globals.lock().unwrap().get("RESPONSE") {
+                    if !matches!(resp, crate::value::Value::Null) {
+                        if let Ok(s) = crate::builtin::json_stringify(&resp) {
+                            println!("__PX_RESPONSE__:{}", s);
+                        }
+                    }
+                }
+            }
             if code != 0 {
                 eprintln!("进程退出码: {}", code);
             }

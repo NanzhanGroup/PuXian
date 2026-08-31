@@ -1,0 +1,2 @@
+# include.px - px_exec 内嵌执行演示：params dict 的键注入为脚本全局变量
+print("内嵌执行: " + name + "，次数=" + str(count))

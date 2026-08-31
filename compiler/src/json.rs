@@ -158,37 +158,46 @@ impl<'a> Parser<'a> {
     }
     fn parse_string(&mut self) -> Result<String, String> {
         self.expect(b'"')?;
-        let mut s = String::new();
+        // 按原始字节累积，最后统一 UTF-8 解码：修复多字节字符（如中文）被
+        // 逐字节 `c as char` 转成 latin-1 字符的乱码问题
+        let mut bytes: Vec<u8> = Vec::new();
         while let Some(c) = self.peek() {
             self.idx += 1;
             match c {
-                b'"' => return Ok(s),
+                b'"' => {
+                    return String::from_utf8(bytes)
+                        .map_err(|_| "字符串包含非法 UTF-8 字节".to_string());
+                }
                 b'\\' => {
                     let esc = self.peek().ok_or_else(|| "字符串转义不完整".to_string())?;
                     self.idx += 1;
                     match esc {
-                        b'"' => s.push('"'),
-                        b'\\' => s.push('\\'),
-                        b'/' => s.push('/'),
-                        b'n' => s.push('\n'),
-                        b't' => s.push('\t'),
-                        b'r' => s.push('\r'),
-                        b'b' => s.push('\u{8}'),
-                        b'f' => s.push('\u{c}'),
+                        b'"' => bytes.push(b'"'),
+                        b'\\' => bytes.push(b'\\'),
+                        b'/' => bytes.push(b'/'),
+                        b'n' => bytes.push(b'\n'),
+                        b't' => bytes.push(b'\t'),
+                        b'r' => bytes.push(b'\r'),
+                        b'b' => bytes.push(0x08),
+                        b'f' => bytes.push(0x0c),
                         b'u' => {
                             if self.idx + 4 > self.bytes.len() {
                                 return Err("\\u 转义不完整".to_string());
                             }
                             let hex = std::str::from_utf8(&self.bytes[self.idx..self.idx + 4])
                                 .map_err(|_| "\\u 非法".to_string())?;
-                            let code = u32::from_str_radix(hex, 16).map_err(|_| "\\u 非法".to_string())?;
+                            let code = u32::from_str_radix(hex, 16)
+                                .map_err(|_| "\\u 非法".to_string())?;
                             self.idx += 4;
-                            s.push(char::from_u32(code).unwrap_or('\u{fffd}'));
+                            if let Some(ch) = char::from_u32(code) {
+                                let mut tmp = [0u8; 4];
+                                bytes.extend_from_slice(ch.encode_utf8(&mut tmp).as_bytes());
+                            }
                         }
                         _ => return Err(format!("非法转义 \\{}", esc as char)),
                     }
                 }
-                _ => s.push(c as char),
+                _ => bytes.push(c),
             }
         }
         Err("字符串未闭合".to_string())
@@ -356,6 +365,18 @@ mod tests {
     fn test_parse_unicode() {
         let v = parse(r#""\u4e2d\u6587""#).unwrap();
         assert_eq!(v.as_str(), Some("中文"));
+    }
+
+    #[test]
+    fn test_parse_utf8_direct() {
+        // 直接 UTF-8 中文（M17 修复：此前多字节被逐字节转 latin-1 乱码）
+        let v = parse("{\"name\": \"东月\"}").unwrap();
+        assert_eq!(v.get("name"), Some(&Json::Str("东月".to_string())));
+        let v2 = parse("\"你好，世界\"").unwrap();
+        assert_eq!(v2.as_str(), Some("你好，世界"));
+        // \u 转义与直接 UTF-8 混合
+        let v3 = parse(r#""\u4e1c\u6708月""#).unwrap();
+        assert_eq!(v3.as_str(), Some("东月月"));
     }
 
     #[test]

@@ -1,0 +1,2 @@
+普贤静态文件测试
+this is a static txt served by px_serve

@@ -101,6 +101,8 @@ pub struct Interpreter {
     pub impls: Arc<Mutex<HashMap<String, HashMap<String, Arc<Function>>>>>,
     loop_depth: usize,
     pub exit_code: i32,
+    /// print 输出捕获缓冲区（px_exec 内嵌执行用；None = 直接写 stdout）
+    pub output: Option<Arc<Mutex<Vec<u8>>>>,
 }
 
 impl Interpreter {
@@ -113,6 +115,7 @@ impl Interpreter {
             impls: Arc::new(Mutex::new(HashMap::new())),
             loop_depth: 0,
             exit_code: 0,
+            output: None,
         };
         interp.register_builtins();
         interp
@@ -128,6 +131,7 @@ impl Interpreter {
             impls: self.impls.clone(),
             loop_depth: 0,
             exit_code: 0,
+            output: None,
         }
     }
 
@@ -206,6 +210,9 @@ impl Interpreter {
             ("http_get", Builtin::HttpGet),
             ("http_post", Builtin::HttpPost),
             ("http_serve", Builtin::HttpServe),
+            // M17 P1：.px 脚本执行机制（应用平台核心）
+            ("px_exec", Builtin::PxExec),
+            ("px_serve", Builtin::PxServe),
         ];
         for (n, b) in names {
             g.define(n, Value::Builtin(*b));

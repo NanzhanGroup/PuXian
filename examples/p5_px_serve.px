@@ -1,0 +1,90 @@
+# p5_px_serve.px - M17 .px 脚本执行机制回归测试（px_serve 应用服务器 + px_exec 内嵌执行）
+# 双模式：解释器 run 与编译 build 输出必须一致
+# 覆盖：.px 脚本执行（REQUEST/GET/POST/SERVER 注入）、目录 index、静态文件、
+#       404 / 403（路径穿越防护）/ 500（脚本错误）/ 504（超时控制）、
+#       RESPONSE 全局变量（JSON API）、px_exec 语言层嵌入 API、GET query 中文
+
+# 原始 HTTP 请求助手（tcp 原语）：返回完整响应报文
+def raw_req(method, target, body, ctype):
+    let sock = tcp_connect("127.0.0.1", 18081)
+    let req = method + " " + target + " HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+    if body != "":
+        req = req + "Content-Type: " + ctype + "\r\nContent-Length: " + str(len(body)) + "\r\n"
+    req = req + "\r\n" + body
+    tcp_send(sock, req)
+    let resp = tcp_recv(sock, 65536)
+    tcp_close(sock)
+    return resp
+
+# 启动应用服务器（每请求独立线程；脚本超时 800ms）
+spawn px_serve(18081, "examples/webapp", 800)
+sleep(600)  # 等服务线程完成 bind
+
+# ---- 1. 目录 index：GET / → index.px 内嵌执行 ----
+let r1 = http_get("http://127.0.0.1:18081/")
+assert(contains(r1, "欢迎使用普贤应用平台"), "1 目录 index.px 执行")
+assert(contains(r1, "当前路径: /"), "1 REQUEST[path] 注入")
+
+# ---- 2. GET /hello.px?name=东月 query 中文参数 ----
+let r2 = http_get("http://127.0.0.1:18081/hello.px?name=%E4%B8%9C%E6%9C%88")
+assert(contains(r2, "你好，东月"), "2 GET query 中文注入")
+
+# ---- 3. GET /hello.px 缺省参数 ----
+let r3 = http_get("http://127.0.0.1:18081/hello.px")
+assert(contains(r3, "你好，世界"), "3 GET 缺省参数")
+
+# ---- 4. 静态文件 CSS（MIME 表） ----
+let r4 = http_get("http://127.0.0.1:18081/static/style.css")
+assert(contains(r4, "font-family"), "4 静态 CSS")
+
+# ---- 5. 静态文件 txt（中文内容） ----
+let r5 = http_get("http://127.0.0.1:18081/static/note.txt")
+assert(contains(r5, "普贤静态文件测试"), "5 静态 txt 中文")
+
+# ---- 6. POST /api/echo.px 表单 + RESPONSE 全局变量（JSON） ----
+let r6 = http_post("http://127.0.0.1:18081/api/echo.px", "a=1&b=2")
+assert(contains(r6, "\"a\": \"1\""), "6 POST 表单 + RESPONSE JSON")
+assert(contains(r6, "\"b\": \"2\""), "6 POST 表单 b")
+
+# ---- 7. 404：不存在的文件 ----
+let r7 = http_get("http://127.0.0.1:18081/noexist.px")
+assert(contains(r7, "404"), "7 404 不存在")
+
+# ---- 8. 路径穿越防护：/../etc/passwd ----
+let h8 = raw_req("GET", "/../etc/passwd", "", "")
+assert(contains(h8, "403"), "8 路径穿越 403")
+
+# ---- 9. 路径穿越防护：静态目录里的 .. ----
+let h9 = raw_req("GET", "/static/../hello.px", "", "")
+assert(contains(h9, "403"), "9 目录内穿越 403")
+
+# ---- 10. 500：脚本运行时错误（服务器不崩溃） ----
+let h10 = raw_req("GET", "/error.px", "", "")
+assert(contains(h10, "500"), "10 脚本错误 500")
+
+# ---- 11. 504：死循环脚本超时控制（不拖垮服务器） ----
+let h11 = raw_req("GET", "/timeout.px", "", "")
+assert(contains(h11, "504"), "11 脚本超时 504")
+# 超时后服务器仍可用
+let r11b = http_get("http://127.0.0.1:18081/hello.px?name=复活")
+assert(contains(r11b, "你好，复活"), "11 超时后服务器仍服务")
+
+# ---- 12. HEAD：静态文件不带 body ----
+let h12 = raw_req("HEAD", "/static/note.txt", "", "")
+assert(contains(h12, "200 OK"), "12 HEAD 状态 200")
+assert(contains(h12, "普贤静态文件测试") == false, "12 HEAD 不应带 body")
+
+# ---- 13. px_exec：语言层嵌入 API（内嵌解释器执行 + 捕获 print 输出） ----
+let inner = px_exec("examples/webapp/include.px", {"name": "东月", "count": 3})
+assert(inner == "内嵌执行: 东月，次数=3\n", "13 px_exec params 注入 + 捕获输出")
+let missing = px_exec("examples/webapp/no_such.px", {})
+assert(missing == null, "13 px_exec 文件不存在返回 null")
+# Web 风格脚本在非 Web 语境下安全运行（默认注入空 REQUEST/GET/POST/SERVER）
+let webish = px_exec("examples/webapp/hello.px", {})
+assert(webish == "你好，世界\n", "13 px_exec 默认 Web 变量注入")
+
+# ---- 14. SERVER 全局变量注入 ----
+let r14 = http_get("http://127.0.0.1:18081/")
+assert(contains(r14, "普贤版本"), "14 SERVER 注入")
+
+print("P5 PX-SERVE TESTS PASSED")
