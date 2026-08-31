@@ -1,0 +1,43 @@
+# M22 位运算 / 二进制数据视图（存储引擎序列化基石）
+# 运算符（& | ^ ~ << >>，M4 已具备）+ 新增 6 函数（int_to_hex/hex_to_int/bytes_to_hex/hex_to_bytes/bit_count/bit_length）
+print("=== 位运算运算符 ===")
+a = 0b1100
+b = 0b1010
+assert a & b == 0b1000
+assert a | b == 0b1110
+assert a ^ b == 0b0110
+assert ~a == -13
+assert (a << 2) == 0b110000
+assert (a >> 1) == 0b110
+print("ops OK")
+
+print("=== 二进制数据视图 ===")
+# int <-> hex（大端排序友好，存储 key）
+h = int_to_hex(42, 8)
+assert h == "0000002a"
+assert hex_to_int(h) == 42
+assert int_to_hex(-1, 8) == "ffffffff"
+assert int_to_hex(-255, 4) == "ff01"
+assert hex_to_int("xyz") == null
+print("int-hex OK")
+
+# 字节 <-> hex（传输载体）
+b = bytes_to_hex("hello")
+assert b == "68656c6c6f"
+assert hex_to_bytes(b) == "hello"
+assert hex_to_bytes("abc") == null
+print("bytes-hex OK")
+
+# popcount / bit length
+assert bit_count(0) == 0
+assert bit_count(255) == 8
+assert bit_count(-1) == 64
+assert bit_length(0) == 0
+assert bit_length(1) == 1
+assert bit_length(1024) == 11
+print("bit count/length OK")
+
+# 往返
+n = 123456789
+assert hex_to_int(int_to_hex(n, 8)) == n
+print("M22 BITWISE-DATA TESTS PASSED")

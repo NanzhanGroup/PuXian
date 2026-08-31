@@ -1,0 +1,15 @@
+# M22 解释器循环引用回收（追踪式 GC）+ gc() 强制回收
+# 场景：list/dict/chan 自引用循环 → 无外部引用时 gc() 断环回收
+print("gc run:", gc())
+a = []
+a.append(a)          # list 自引用循环
+print("len:", len(a))
+d = {"self": null}
+d["self"] = d        # dict 自引用循环
+print("d keys:", d.keys())
+c = chan[any](4)
+c.send(c)            # chan 传自己
+print("chan ok")
+r = gc()
+print("gc again:", r)
+print("M22 TRACING-GC TESTS PASSED")

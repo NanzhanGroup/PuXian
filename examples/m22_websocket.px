@@ -1,0 +1,34 @@
+# M22 WebSocket 自检（RFC 6455）：服务端 echo + 客户端往返
+# ws_serve(port, handler) / ws_connect(host, port, path) / ws_send / ws_recv / ws_close
+def handler(conn):
+    while true:
+        msg = ws_recv(conn)
+        if msg == null:
+            break
+        ws_send(conn, "echo:" + msg)
+    print("server conn closed")
+
+def serve():
+    ws_serve(19001, handler)
+
+spawn serve()
+sleep(300)
+conn = ws_connect("127.0.0.1", 19001, "/ws")
+if conn == null:
+    print("connect failed")
+    exit(1)
+ws_send(conn, "hello ws")
+assert ws_recv(conn) == "echo:hello ws"
+ws_send(conn, "中文消息测试")
+assert ws_recv(conn) == "echo:中文消息测试"
+# 大消息（>125 字节走 16 位扩展长度）
+big = ""
+for i in range(0, 1000):
+    big = big + "x"
+ws_send(conn, big)
+r = ws_recv(conn)
+assert len(r) == 1005 and r == "echo:" + big
+ws_close(conn)
+sleep(200)
+print("M22 WEBSOCKET TESTS PASSED")
+exit(0)
