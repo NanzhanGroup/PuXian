@@ -322,6 +322,19 @@ pub enum Builtin {
     // json_path_set(json_or_str, path, value) → Value（返回更新后的新值；路径不存在自动创建）
     JsonPath,
     JsonPathSet,
+    // M31 P2：安全/多租户/防爆破三件套
+    // sandbox_enter(opts{memory_mb, deny, drop_priv}) → bool：进程级沙箱
+    //   memory_mb：内存上限（setrlimit RLIMIT_AS = 当前 VSS + memory_mb）
+    //   deny：禁用的内置函数名列表（后续调用该函数报错"沙箱：函数 X 已被禁用"）
+    //   drop_priv：root 降权到 nobody(uid/gid 65534)
+    // vhost(host, docroot|handler) → bool：虚拟主机（Host 头路由，多域名共服）
+    //   host 支持 "a.com" / "a.com:8080" / "*"（默认）；docroot 为根目录（str）
+    //   或 handler 为函数（该域所有请求交给 handler(req)）
+    // rate_limit(key, max, window_sec) → bool：滑动窗口限流（true 放行 / false 超限）
+    //   服务端内置：px_serve opts{rate_limit:{max,window_sec}} 按 IP 限流 → 429
+    SandboxEnter,
+    Vhost,
+    RateLimit,
 }
 
 impl Builtin {
@@ -479,6 +492,9 @@ impl Builtin {
             Builtin::SqliteLastInsertRowid => "sqlite_last_insert_rowid",
             Builtin::JsonPath => "json_path",
             Builtin::JsonPathSet => "json_path_set",
+            Builtin::SandboxEnter => "sandbox_enter",
+            Builtin::Vhost => "vhost",
+            Builtin::RateLimit => "rate_limit",
         }
     }
 }

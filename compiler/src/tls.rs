@@ -222,6 +222,9 @@ pub fn tls_server_register(cert_pem: &str, key_pem: &str) -> Result<(), String> 
     cfg.session_storage = rustls::server::ServerSessionMemoryCache::new(256);
     cfg.ticketer = rustls::crypto::ring::Ticketer::new()
         .map_err(|e| format!("TLS 票据生成失败: {}", e))?;
+    // M31.4a：HTTP/2 预检——ALPN 固定 http/1.1。
+    // 客户端 TLS 握手时探测 h2，明确协商到 http/1.1（不声明 h2 → 不会进入 HTTP/2 帧模式）。
+    cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
     *tls_server_lock().lock().unwrap() = Some(Arc::new(cfg));
     Ok(())
 }

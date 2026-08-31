@@ -385,6 +385,10 @@ impl Interpreter {
             // M29：JSON 路径运算符（JSONB 基石）
             ("json_path", Builtin::JsonPath),
             ("json_path_set", Builtin::JsonPathSet),
+            // M31：沙箱安全 / 虚拟主机 / 限流防爆破
+            ("sandbox_enter", Builtin::SandboxEnter),
+            ("vhost", Builtin::Vhost),
+            ("rate_limit", Builtin::RateLimit),
         ];
         for (n, b) in names {
             g.define(n, Value::Builtin(*b));

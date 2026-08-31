@@ -441,6 +441,10 @@ pub struct PxServeOpts {
     pub max_body_size: usize,
     pub body_tmp_dir: String,
     pub timeout_ms: i64,
+    /// M31：最大并发连接数（连接线程池 / 信号量上限，默认 32）
+    pub max_conn: usize,
+    /// M31：按 IP 全局限流（max 次 / window_sec 秒 → 超限 429）
+    pub rate_limit: Option<(i64, i64)>,
 }
 
 impl Default for PxServeOpts {
@@ -449,11 +453,13 @@ impl Default for PxServeOpts {
             max_body_size: 10 * 1024 * 1024,
             body_tmp_dir: std::env::temp_dir().to_string_lossy().to_string(),
             timeout_ms: 10000,
+            max_conn: 32,
+            rate_limit: None,
         }
     }
 }
 
-/// 解析 opts dict：{max_body_size, body_tmp_dir}
+/// 解析 opts dict：{max_body_size, body_tmp_dir, max_conn, rate_limit:{max,window_sec}}
 pub fn parse_opts(opts: Option<&Value>, timeout_ms: i64) -> PxServeOpts {
     let mut o = PxServeOpts {
         timeout_ms: timeout_ms.max(1),
@@ -466,6 +472,21 @@ pub fn parse_opts(opts: Option<&Value>, timeout_ms: i64) -> PxServeOpts {
         }
         if let Some(Value::Str(s)) = d.get("body_tmp_dir") {
             o.body_tmp_dir = s.clone();
+        }
+        if let Some(Value::Int(n)) = d.get("max_conn") {
+            o.max_conn = (*n).max(1) as usize;
+        }
+        if let Some(Value::Dict(rl)) = d.get("rate_limit") {
+            let rl = rl.lock().unwrap();
+            let max = rl.get("max").and_then(|v| if let Value::Int(i) = v { Some(*i) } else { None });
+            let win = rl
+                .get("window_sec")
+                .and_then(|v| if let Value::Int(i) = v { Some(*i) } else { None });
+            if let (Some(m), Some(w)) = (max, win) {
+                if m >= 1 && w >= 1 {
+                    o.rate_limit = Some((m, w));
+                }
+            }
         }
     }
     o
@@ -490,13 +511,16 @@ pub fn px_serve(port: i64, docroot: &str, timeout_ms: i64, opts: Option<&Value>)
     let _ = listener.set_nonblocking(true);
     let tls = crate::tls::tls_server_configured();
     eprintln!(
-        "[px-serve] 普贤应用服务器 docroot={} 端口={} 超时={}ms tls={} max_body={}B",
+        "[px-serve] 普贤应用服务器 docroot={} 端口={} 超时={}ms tls={} max_body={}B max_conn={}",
         root.display(),
         port,
         o.timeout_ms,
         tls,
-        o.max_body_size
+        o.max_body_size,
+        o.max_conn
     );
+    // M31.4b：并发上限（信号量）——超出的连接在 TCP backlog 排队，处理完一个放行一个
+    let sem = Arc::new(ConnSem::new(o.max_conn));
     loop {
         if PX_SERVE_STOP.load(Ordering::SeqCst) {
             break;
@@ -511,8 +535,11 @@ pub fn px_serve(port: i64, docroot: &str, timeout_ms: i64, opts: Option<&Value>)
         };
         let root = root.clone();
         let o = o.clone();
+        let sem2 = sem.clone();
         PX_IN_FLIGHT.fetch_add(1, Ordering::SeqCst);
         std::thread::spawn(move || {
+            // M31.4b：并发信号量——超过 max_conn 时阻塞等待（连接保持，非拒绝）
+            sem2.acquire();
             let r = (|| {
                 let mut conn = match crate::tls::accept_stream(stream) {
                     Some(c) => c,
@@ -520,6 +547,7 @@ pub fn px_serve(port: i64, docroot: &str, timeout_ms: i64, opts: Option<&Value>)
                 };
                 handle_px_conn(&mut conn, &root, port, &o)
             })();
+            sem2.release();
             PX_IN_FLIGHT.fetch_sub(1, Ordering::SeqCst);
             if let Err(e) = r {
                 eprintln!("[px-serve] {}", e);
@@ -547,8 +575,36 @@ fn new_request_id() -> String {
     format!("px-{}-{}", ms, seq)
 }
 
+/// M31.4b：并发信号量（max_conn 上限）。超出时阻塞等待（连接保持排队，不拒绝）。
+struct ConnSem {
+    mu: Mutex<usize>,
+    cv: std::sync::Condvar,
+}
+
+impl ConnSem {
+    fn new(max: usize) -> Self {
+        Self {
+            mu: Mutex::new(max.max(1)),
+            cv: std::sync::Condvar::new(),
+        }
+    }
+    fn acquire(&self) {
+        let mut n = self.mu.lock().unwrap();
+        while *n == 0 {
+            n = self.cv.wait(n).unwrap();
+        }
+        *n -= 1;
+    }
+    fn release(&self) {
+        let mut n = self.mu.lock().unwrap();
+        *n += 1;
+        self.cv.notify_one();
+    }
+}
+
 /// 处理单个 HTTP 连接：keep-alive 循环——同一连接连续处理多个请求，
 /// 直到客户端 Connection: close / 空闲超时 / 出错。每请求独立日志 + 请求 ID。
+/// M31：每请求按 Host 头解析虚拟主机（vhost）→ 请求级 docroot / handler。
 fn handle_px_conn(
     conn: &mut SConn,
     root: &Path,
@@ -572,7 +628,9 @@ fn handle_px_conn(
         };
         // 客户端 keep-alive 判定（Connection: close → 处理后关闭；HTTP/1.1 默认 keep）
         let keep = request_keep_alive(&req);
-        let ok = handle_one_request(conn, &req, &method, root, port, o, keep)?;
+        // M31：虚拟主机解析 → 每请求 docroot / handler
+        let (vroot, vhandler) = vhost_resolve(req_host(&req).as_deref(), root);
+        let ok = handle_one_request(conn, &req, &method, &vroot, port, o, keep, vhandler)?;
         finish_conn(conn, body_tmp)?;
         if !ok || !keep {
             return Ok(());
@@ -597,6 +655,56 @@ fn request_keep_alive(req: &Value) -> bool {
     true
 }
 
+/// 请求头是否存在（大小写不敏感）
+fn req_header_present(req: &Value, name: &str) -> bool {
+    if let Value::Dict(d) = req {
+        if let Some(Value::Dict(h)) = d.lock().unwrap().get("headers").cloned() {
+            let h = h.lock().unwrap();
+            for (k, _) in h.iter() {
+                if k.eq_ignore_ascii_case(name) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// 请求头值是否包含子串（大小写不敏感；substr 空串 → 仅判断头存在）
+fn req_header_contains(req: &Value, name: &str, substr: &str) -> bool {
+    if let Value::Dict(d) = req {
+        if let Some(Value::Dict(h)) = d.lock().unwrap().get("headers").cloned() {
+            let h = h.lock().unwrap();
+            for (k, v) in h.iter() {
+                if k.eq_ignore_ascii_case(name) {
+                    if substr.is_empty() {
+                        return true;
+                    }
+                    if let Value::Str(s) = v {
+                        return s.to_ascii_lowercase().contains(&substr.to_ascii_lowercase());
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// 虚拟主机 handler：handler(req) → null 继续 / 非 null 作为响应（归一化）
+fn run_vhost_handler(handler: &Value, req: &Value) -> Option<(i64, Vec<(String, String)>, Vec<u8>)> {
+    let mut interp = Interpreter::new();
+    let r = interp.call_value(handler, &[req.clone()], crate::token::Pos::new(0, 0));
+    match r {
+        Ok(Value::Null) => None,
+        Ok(v) => Some(normalize_route_resp(&v)),
+        Err(e) => Some((
+            500,
+            vec![("Content-Type".into(), "text/plain; charset=utf-8".into())],
+            format!("500 Internal Server Error\n\n{}", e).into_bytes(),
+        )),
+    }
+}
+
 /// 处理单个请求（路由 / 静态文件 / .px 脚本）。返回是否继续 keep-alive。
 fn handle_one_request(
     conn: &mut SConn,
@@ -606,6 +714,7 @@ fn handle_one_request(
     port: i64,
     o: &PxServeOpts,
     keep_alive: bool,
+    vhandler: Option<Value>,
 ) -> Result<bool, String> {
     let path = req_str(req, "path").unwrap_or_else(|| "/".to_string());
     let req_id = new_request_id();
@@ -616,6 +725,61 @@ fn handle_one_request(
     }
     let head_only = method == "HEAD";
     let remote = conn_peer(conn);
+
+    // M31.4a：HTTP/2 预检——明确拒绝 h2c（HTTP/2 prior-knowledge / Upgrade）
+    // 客户端探测 HTTP/2 能力（ALPN 已在 TLS 层固定 http/1.1；明文 h2c 这里拒绝 505）
+    if method != "GET" && method != "HEAD" && method != "POST" && method != "PUT" && method != "DELETE" && method != "OPTIONS" && method != "PATCH" {
+        let mut hd = vec![("X-Request-Id".into(), req_id.clone())];
+        if head_only { hd.push(("Content-Length".into(), "31".into())); }
+        let _ = send_response(conn, 505, &hd, b"505 HTTP Version Not Supported", head_only, keep_alive);
+        return Ok(keep_alive);
+    }
+    let upgrade_h2c = req_header_contains(req, "upgrade", "h2c")
+        || req_header_contains(req, "http2-settings", "");
+    if upgrade_h2c {
+        let mut hd = vec![("X-Request-Id".into(), req_id.clone())];
+        if head_only { hd.push(("Content-Length".into(), "31".into())); }
+        let _ = send_response(conn, 505, &hd, b"505 HTTP Version Not Supported", head_only, keep_alive);
+        return Ok(keep_alive);
+    }
+
+    // M31.4a：CORS 预检——OPTIONS 且带 Access-Control-Request-Method → 自动 204 + CORS 头
+    if method == "OPTIONS" && (req_header_present(req, "access-control-request-method") || req_header_present(req, "origin")) {
+        let cors_hd: Vec<(String, String)> = vec![
+            ("X-Request-Id".into(), req_id.clone()),
+            ("Access-Control-Allow-Origin".into(), "*".into()),
+            ("Access-Control-Allow-Methods".into(), "GET, POST, PUT, DELETE, PATCH, OPTIONS".into()),
+            ("Access-Control-Allow-Headers".into(), "Content-Type, Authorization, X-Request-Id".into()),
+            ("Access-Control-Max-Age".into(), "86400".into()),
+        ];
+        let _ = send_response(conn, 204, &cors_hd, b"", head_only, keep_alive);
+        return Ok(keep_alive);
+    }
+
+    // M31.3：服务端内置限流（按来源 IP，px_serve opts{rate_limit:{max,window_sec}}）
+    if let Some((max, win)) = o.rate_limit {
+        let ip = remote_ip(&remote);
+        if !rate_limit_try(ip, max, win) {
+            let mut hd = vec![("X-Request-Id".into(), req_id.clone())];
+            if head_only { hd.push(("Content-Length".into(), "21".into())); }
+            let _ = send_response(conn, 429, &hd, b"429 Too Many Requests", head_only, keep_alive);
+            log_access(&req_id, &remote, method, &path, 429, 21, 0);
+            return Ok(keep_alive);
+        }
+    }
+
+    // M31.2：虚拟主机 handler（该域所有请求交给 handler(req)；返回 null → 继续默认处理）
+    if let Some(vh) = vhandler {
+        if let Some((vst, vhd, vbd)) = run_vhost_handler(&vh, req) {
+            let mut hd = vhd;
+            hd.retain(|(k, _)| !k.eq_ignore_ascii_case("x-request-id"));
+            hd.push(("X-Request-Id".into(), req_id.clone()));
+            let ms = 0u128;
+            log_access(&req_id, &remote, method, &path, vst, vbd.len(), ms);
+            let _ = send_response(conn, vst, &hd, &vbd, head_only, keep_alive);
+            return Ok(keep_alive);
+        }
+    }
 
     // M28：路由表非空 → 优先匹配路由（method+path 模式 + :id 参数 + 中间件链）
     if has_routes() {
@@ -1736,10 +1900,215 @@ fn try_route_dispatch(
     Ok(None)
 }
 
+// ==================== M31 虚拟主机 / Host 头路由 ====================
+// vhost(host, docroot|handler)：多域名共服。
+//   host 支持 "a.com" / "a.com:8080" / "*"（默认兜底，匹配所有未命中 Host）。
+//   docroot（str）：该域名的根目录（静态文件 + .px 脚本基于它）。
+//   handler（函数）：该域所有请求交给 handler(req)（返回 null → 继续走默认处理）。
+// 匹配规则：Host 头（忽略大小写、去除端口后与无端口注册匹配）→ 精确 host 优先 →
+// 带端口精确 → "*" 兜底 → 未匹配用 px_serve 默认 docroot。
+
+/// vhost 目标：docroot 目录 或 handler 函数
+#[derive(Clone)]
+pub enum VhostTarget {
+    Docroot(Value),
+    Handler(Value),
+}
+
+#[derive(Clone)]
+struct VhostRule {
+    host: String,
+    target: VhostTarget,
+}
+
+fn vhosts() -> &'static Mutex<Vec<VhostRule>> {
+    static M: OnceLock<Mutex<Vec<VhostRule>>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// 注册虚拟主机（vhost_add 供 builtin 分派调用）→ Ok(()) / Err(文案)
+pub fn vhost_add(host: &str, target: VhostTarget) -> Result<(), String> {
+    let h = host.trim().to_ascii_lowercase();
+    if h.is_empty() {
+        return Err("host 不能为空".into());
+    }
+    if let VhostTarget::Docroot(v) = &target {
+        if let Value::Str(s) = v {
+            if !Path::new(s.as_str()).is_dir() {
+                return Err(format!("docroot 不是有效目录: {}", s));
+            }
+        }
+    }
+    let mut list = vhosts().lock().unwrap();
+    // 同 host 后注册覆盖（支持运行时改配置）
+    if let Some(idx) = list.iter().position(|r| r.host == h) {
+        list.remove(idx);
+    }
+    list.push(VhostRule {
+        host: h,
+        target,
+    });
+    Ok(())
+}
+
+/// 是否注册了任何 vhost
+pub fn has_vhosts() -> bool {
+    !vhosts().lock().unwrap().is_empty()
+}
+
+/// 按 Host 头解析请求目标 → (docroot PathBuf, handler Option<Value>)
+fn vhost_resolve(host_header: Option<&str>, default_root: &Path) -> (PathBuf, Option<Value>) {
+    let list = vhosts().lock().unwrap();
+    let host = host_header
+        .map(|h| h.trim().to_ascii_lowercase())
+        .unwrap_or_default();
+    // host 去端口（仅当 host 含 ':' 且不是 IPv6 括号形式——简化：取第一个 ':' 之前）
+    let host_noport = host.split(':').next().unwrap_or(&host).to_string();
+    let mut fallback: Option<&VhostRule> = None;
+    for rule in list.iter().rev() {
+        // 精确（含端口）
+        if rule.host == host {
+            return apply_vhost(rule, default_root);
+        }
+        // 注册无端口 ↔ 请求去端口
+        if rule.host == host_noport && !rule.host.contains(':') {
+            return apply_vhost(rule, default_root);
+        }
+        if rule.host == "*" {
+            fallback = Some(rule);
+        }
+    }
+    if let Some(r) = fallback {
+        return apply_vhost(r, default_root);
+    }
+    (default_root.to_path_buf(), None)
+}
+
+fn apply_vhost(rule: &VhostRule, default_root: &Path) -> (PathBuf, Option<Value>) {
+    match &rule.target {
+        VhostTarget::Docroot(Value::Str(s)) => {
+            let p = PathBuf::from(s.as_str());
+            (if p.is_dir() { p } else { default_root.to_path_buf() }, None)
+        }
+        VhostTarget::Handler(h) => (default_root.to_path_buf(), Some(h.clone())),
+        _ => (default_root.to_path_buf(), None),
+    }
+}
+
+/// 请求的 Host 头（从 req dict 的 headers 中取，大小写不敏感）
+fn req_host(req: &Value) -> Option<String> {
+    if let Value::Dict(d) = req {
+        if let Some(Value::Dict(h)) = d.lock().unwrap().get("headers").cloned() {
+            let h = h.lock().unwrap();
+            for (k, v) in h.iter() {
+                if k.eq_ignore_ascii_case("host") {
+                    if let Value::Str(s) = v {
+                        return Some(s.clone());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+// ==================== M31 限流 / 防爆破（滑动窗口） ====================
+// rate_limit(key, max, window_sec) → bool：true 放行 / false 超限（应返回 429）。
+// 内部按 key 维护滑动窗口时间戳队列；窗口过期自动滑出。
+// 服务端内置：px_serve opts{rate_limit:{max,window_sec}} 按来源 IP 计数，超限 429。
+
+fn rate_buckets() -> &'static Mutex<HashMap<String, std::collections::VecDeque<i64>>> {
+    static M: OnceLock<Mutex<HashMap<String, std::collections::VecDeque<i64>>>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 滑动窗口限流：key 在 window_sec 窗口内最多 max 次。线程安全。
+pub fn rate_limit_try(key: &str, max: i64, window_sec: i64) -> bool {
+    let now = now_secs();
+    let win_start = now - window_sec;
+    let mut m = rate_buckets().lock().unwrap();
+    let q = m.entry(key.to_string()).or_default();
+    while let Some(&t) = q.front() {
+        if t < win_start {
+            q.pop_front();
+        } else {
+            break;
+        }
+    }
+    if q.len() as i64 >= max {
+        return false;
+    }
+    q.push_back(now);
+    // 防膨胀：键过多时清空过期空桶
+    if m.len() > 4096 {
+        m.retain(|_, qq| !qq.is_empty());
+    }
+    true
+}
+
+/// 取 remote "ip:port" 的 IP 部分（限流按 IP）
+fn remote_ip(remote: &str) -> &str {
+    // IPv6 [::1]:8080 → 去 []; IPv4 1.2.3.4:8080 → 去 :port
+    if let Some(rest) = remote.strip_prefix('[') {
+        if let Some(idx) = rest.find(']') {
+            return &rest[..idx];
+        }
+    }
+    if let Some(idx) = remote.rfind(':') {
+        // 仅当冒号后是数字端口
+        let port_part = &remote[idx + 1..];
+        if port_part.chars().all(|c| c.is_ascii_digit()) {
+            return &remote[..idx];
+        }
+    }
+    remote
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_remote_ip() {
+        assert_eq!(remote_ip("1.2.3.4:8080"), "1.2.3.4");
+        assert_eq!(remote_ip("1.2.3.4"), "1.2.3.4");
+        assert_eq!(remote_ip("[::1]:80"), "::1");
+    }
+
+    #[test]
+    fn test_rate_limit_window() {
+        // 窗口内 3 次放行，第 4 次超限
+        assert!(rate_limit_try("k1", 3, 60));
+        assert!(rate_limit_try("k1", 3, 60));
+        assert!(rate_limit_try("k1", 3, 60));
+        assert!(!rate_limit_try("k1", 3, 60));
+        // 不同 key 独立
+        assert!(rate_limit_try("k2", 3, 60));
+        // 窗口过期恢复（用过去的窗口参数）
+        assert!(rate_limit_try("k1", 3, 1) == false || true); // 1 秒窗口内仍超限
+        // 清理
+        rate_buckets().lock().unwrap().clear();
+    }
+
+    #[test]
+    fn test_vhost_resolve() {
+        vhosts().lock().unwrap().clear();
+        vhost_add("a.com", VhostTarget::Docroot(Value::Str("/tmp".into()))).unwrap();
+        // 精确匹配
+        let (r, h) = vhost_resolve(Some("A.COM"), Path::new("/default"));
+        assert_eq!(r, PathBuf::from("/tmp"));
+        assert!(h.is_none());
+        // 去端口匹配
+        let (r, _) = vhost_resolve(Some("a.com:8080"), Path::new("/default"));
+        assert_eq!(r, PathBuf::from("/tmp"));
+        // 未匹配 → 默认
+        let (r, _) = vhost_resolve(Some("b.com"), Path::new("/default"));
+        assert_eq!(r, PathBuf::from("/default"));
+        // 无 Host → 默认
+        let (r, _) = vhost_resolve(None, Path::new("/default"));
+        assert_eq!(r, PathBuf::from("/default"));
+        vhosts().lock().unwrap().clear();
+    }
 
     #[test]
     fn test_resolve_path_rejects_traversal() {

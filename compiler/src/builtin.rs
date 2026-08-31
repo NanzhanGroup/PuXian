@@ -417,6 +417,10 @@ fn handle_sse_conn(
 
 /// 调用内置函数
 pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: Pos) -> Result<Value, LxError> {
+    // M31 沙箱安全：危险函数禁限（sandbox_enter 的 deny 列表 → 调用报错）
+    if let Err(e) = crate::sandbox::check(b.name()) {
+        return Err(LxError::new("R2201", e, Some(pos)));
+    }
     match b {
         Builtin::Print => {
             let parts: Vec<String> = args.iter().map(|v| v.to_string()).collect();
@@ -1129,6 +1133,81 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
                 Ok(x) => Ok(x),
                 Err(e) => Err(LxError::new("R2012", format!("json_path_set: {}", e), Some(pos))),
             }
+        }
+        // ---- M31 沙箱安全：sandbox_enter(opts{memory_mb, deny, drop_priv}) → bool ----
+        Builtin::SandboxEnter => {
+            if args.len() != 1 {
+                return Err(err("sandbox_enter 需要 (opts) 参数", pos));
+            }
+            let mut memory_mb: Option<u64> = None;
+            let mut deny: Vec<String> = Vec::new();
+            let mut drop_priv = false;
+            match &args[0] {
+                Value::Dict(d) => {
+                    let g = d.lock().unwrap();
+                    if let Some(mb) = g.get("memory_mb") {
+                        match mb {
+                            Value::Int(i) if *i > 0 => memory_mb = Some(*i as u64),
+                            _ => return Err(err("sandbox_enter: memory_mb 需要正整数", pos)),
+                        }
+                    }
+                    if let Some(dn) = g.get("deny") {
+                        match dn {
+                            Value::List(l) => {
+                                for v in l.lock().unwrap().iter() {
+                                    match v {
+                                        Value::Str(s) => deny.push(s.clone()),
+                                        _ => return Err(err("sandbox_enter: deny 需要 list[str]", pos)),
+                                    }
+                                }
+                            }
+                            _ => return Err(err("sandbox_enter: deny 需要 list[str]", pos)),
+                        }
+                    }
+                    if let Some(dp) = g.get("drop_priv") {
+                        match dp {
+                            Value::Bool(b) => drop_priv = *b,
+                            _ => return Err(err("sandbox_enter: drop_priv 需要 bool", pos)),
+                        }
+                    }
+                }
+                _ => return Err(err("sandbox_enter 的 opts 需要 dict", pos)),
+            }
+            match crate::sandbox::enter(memory_mb, &deny, drop_priv) {
+                Ok(b) => Ok(Value::Bool(b)),
+                Err(e) => Err(LxError::new("R2201", e, Some(pos))),
+            }
+        }
+        // ---- M31 虚拟主机：vhost(host, docroot|handler) → bool ----
+        Builtin::Vhost => {
+            if args.len() != 2 {
+                return Err(err("vhost 需要 (host, docroot|handler) 参数", pos));
+            }
+            let host = expect_str(&args[0], "vhost", pos)?;
+            let ok = match &args[1] {
+                Value::Str(_) => crate::web::vhost_add(host, crate::web::VhostTarget::Docroot(args[1].clone())),
+                v @ (Value::Func(_) | Value::Builtin(_)) => {
+                    crate::web::vhost_add(host, crate::web::VhostTarget::Handler(v.clone()))
+                }
+                _ => return Err(err("vhost 的第二参数需要 docroot 字符串或 handler 函数", pos)),
+            };
+            match ok {
+                Ok(()) => Ok(Value::Bool(true)),
+                Err(e) => Err(LxError::new("R2203", format!("vhost: {}", e), Some(pos))),
+            }
+        }
+        // ---- M31 限流/防爆破：rate_limit(key, max, window_sec) → bool ----
+        Builtin::RateLimit => {
+            if args.len() != 3 {
+                return Err(err("rate_limit 需要 (key, max, window_sec) 参数", pos));
+            }
+            let key = expect_str(&args[0], "rate_limit", pos)?;
+            let max = expect_int(&args[1], "rate_limit", pos)?;
+            let window = expect_int(&args[2], "rate_limit", pos)?;
+            if max < 1 || window < 1 {
+                return Err(err("rate_limit: max 与 window_sec 需要正整数", pos));
+            }
+            Ok(Value::Bool(crate::web::rate_limit_try(key, max, window)))
         }
         // ---- std.time ----
         Builtin::Now => {

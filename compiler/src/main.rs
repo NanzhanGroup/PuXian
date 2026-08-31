@@ -37,6 +37,7 @@ mod parser;
 mod pkg;
 mod regex;
 mod rsa;
+mod sandbox;
 mod sqlite;
 mod test;
 mod tls;

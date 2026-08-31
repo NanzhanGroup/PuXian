@@ -11,3 +11,5 @@ rusqlite = { version = "0.40.2", features = ["bundled", "modern_sqlite"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "tls12", "logging", "std"] }
 rustls-pki-types = "1"
 webpki-roots = "0.26"
+# M31 沙箱安全：setrlimit 内存上限 + setuid/setgid 权限降级（libc 由 rustls/ring 间接依赖，显式声明零额外成本）
+libc = "0.2"

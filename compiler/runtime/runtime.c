@@ -25,6 +25,7 @@
 #include <ucontext.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
+#include <sys/resource.h>  // M31 沙箱：setrlimit RLIMIT_AS
 #include <poll.h>
 #include <stdatomic.h>
 #include <execinfo.h>
@@ -66,6 +67,59 @@ static LXValue bi_session_set(LXValue* args, int nargs, void* ctx);
 static LXValue bi_session_del(LXValue* args, int nargs, void* ctx);
 static LXValue bi_session_destroy(LXValue* args, int nargs, void* ctx);
 static LXValue bi_basic_auth(LXValue* args, int nargs, void* ctx);
+
+// ==================== M31 安全 / 多租户 / 并发（沙箱 / 虚拟主机 / 限流 / 连接线程池） ====================
+// 沙箱：deny 表（禁用的内置函数名；sandbox_enter 激活后 px_call native 分派检查）
+#define PX_SANDBOX_DENY_MAX 64
+static char g_sandbox_deny[PX_SANDBOX_DENY_MAX][64];
+static int g_sandbox_deny_count = 0;
+static int g_sandbox_active = 0;
+// px_serve opts：限流（max 次 / window_sec 秒，按 IP；0 = 未启用）
+static long long g_px_rate_max = 0;
+static long long g_px_rate_window = 0;
+// 虚拟主机表（vhost(host, docroot|handler)）
+#define MAX_VHOSTS 32
+typedef struct {
+    char host[128];
+    int has_root;
+    char root[1024];
+    int has_handler;
+    LXValue handler;       // handler 函数（px_set_global 保护防 GC 回收）
+    int active;
+} PxVhost;
+static PxVhost g_vhosts[MAX_VHOSTS];
+static pthread_mutex_t g_vhost_mu = PTHREAD_MUTEX_INITIALIZER;
+static int g_vhost_handler_seq = 0;
+// 限流滑动窗口（链表：key → 时间戳环形缓冲）
+#define PX_RATE_MAX_BUCKETS 4096
+typedef struct RateBucket {
+    char key[128];
+    long long* times;      // 环形时间戳
+    int head, count, cap;
+    struct RateBucket* next;
+} RateBucket;
+static RateBucket* g_rate_head = NULL;
+static int g_rate_buckets = 0;
+static pthread_mutex_t g_rate_mu = PTHREAD_MUTEX_INITIALIZER;
+// M31.4b：连接线程池（突破 spawn 64 槽位：连接处理线程不占 spawn 槽位）
+#define PX_POOL_MAX 256
+static pthread_t g_pool_threads[PX_POOL_MAX];
+static int g_pool_fds[PX_POOL_MAX];       // 环形队列（cfd）
+static int g_pool_head = 0, g_pool_tail = 0, g_pool_count = 0;
+static int g_pool_size = 0;
+static pthread_mutex_t g_pool_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_pool_cond = PTHREAD_COND_INITIALIZER;
+static LXValue bi_sandbox_enter(LXValue* args, int nargs, void* ctx);
+static LXValue bi_vhost(LXValue* args, int nargs, void* ctx);
+static LXValue bi_rate_limit(LXValue* args, int nargs, void* ctx);
+static int px_vhost_resolve(const char* host_hdr, const char* default_root,
+                            char* out_root, int out_root_sz, LXValue* out_handler, int* has_handler);
+static void px_pool_push(int fd);
+static void* px_pool_worker(void* arg);
+static void px_vhost_normalize(LXValue v, int* status, const char** ct, const char** body, int* body_len);
+static void px_vhost_docroot_store(const char* root);
+static const char* px_vhost_docroot(void);
+static int px_rate_limit_try(const char* key, long long max, long long window_sec);
 
 // 前向声明：xmalloc/xfree 在 gc_block_stop 定义之前使用（M11 自由链表分配器）
 static void gc_block_stop(sigset_t* old);
@@ -1814,7 +1868,18 @@ int px_len(LXValue v) {
 
 LXValue px_call(LXValue fn, LXValue* args, int nargs) {
     if (fn.type == PX_FUNC) return fn.as.obj->as.func.fn(args, nargs, fn.as.obj->as.func.ctx);
-    if (fn.type == PX_NATIVE) return fn.as.obj->as.native.fn(args, nargs, NULL);
+    if (fn.type == PX_NATIVE) {
+        // M31 沙箱安全：危险函数禁限（sandbox_enter deny 列表 → 调用报错，双模式同文案）
+        if (g_sandbox_active && g_sandbox_deny_count > 0) {
+            const char* nm = fn.as.obj->as.native.name;
+            for (int i = 0; i < g_sandbox_deny_count; i++) {
+                if (strcmp(g_sandbox_deny[i], nm) == 0) {
+                    px_error("沙箱：函数 %s 已被禁用", nm);
+                }
+            }
+        }
+        return fn.as.obj->as.native.fn(args, nargs, NULL);
+    }
     px_error("无法调用非函数: %s", px_type_name(fn));
     return px_null();
 }
@@ -4098,6 +4163,10 @@ void px_register_builtins(void) {
     // M17 .px 脚本执行机制
     px_set_global("px_exec", px_native("px_exec", bi_px_exec));
     px_set_global("px_serve", px_native("px_serve", bi_px_serve));
+    // M31 安全/多租户/防爆破：沙箱 / 虚拟主机 / 限流
+    px_set_global("sandbox_enter", px_native("sandbox_enter", bi_sandbox_enter));
+    px_set_global("vhost", px_native("vhost", bi_vhost));
+    px_set_global("rate_limit", px_native("rate_limit", bi_rate_limit));
     // M18 后台定时任务 / 定时器原语
     px_set_global("set_timeout", px_native("set_timeout", bi_set_timeout));
     px_set_global("set_interval", px_native("set_interval", bi_set_interval));
@@ -8207,6 +8276,9 @@ static int px_conn_tls_handshake(PxConn* c) {
     }
     // TLS 1.2 会话票据（与客户端 M25 票据恢复对偶）
     mbedtls_ssl_conf_session_tickets(conf, MBEDTLS_SSL_SESSION_TICKETS_ENABLED);
+    // M31.4a：HTTP/2 预检——ALPN 固定 http/1.1（客户端探测 h2 时明确协商 http/1.1）
+    static const char* alpn_list[] = { "http/1.1", NULL };
+    mbedtls_ssl_conf_alpn_protocols(conf, alpn_list);
     if (mbedtls_ssl_setup(ssl, conf) != 0) return -1;
     mbedtls_ssl_set_bio(ssl, &c->fd, mbedtls_net_send, mbedtls_net_recv, NULL);
     int ret;
@@ -8923,6 +8995,81 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
             }
         }
 
+        // M31.4a：HTTP/2 预检——明确拒绝 h2c（Upgrade: h2c / HTTP2-Settings 探测）
+        {
+            LXValue upg = px_header_get(&headers, "Upgrade");
+            if (upg.type == PX_STR && strcasestr(upg.as.obj->as.str.data, "h2c")) {
+                char extra[256];
+                snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
+                px_px_send_ex(fd, 505, "text/plain; charset=utf-8", "505 HTTP Version Not Supported",
+                              31, strcmp(method, "HEAD") == 0, client_keep_alive, extra);
+                goto req_done;
+            }
+        }
+        // M31.4a：CORS 预检——OPTIONS + Access-Control-Request-Method/Origin → 204 + CORS 头
+        if (strcmp(method, "OPTIONS") == 0 &&
+            (px_header_get(&headers, "Access-Control-Request-Method").type == PX_STR ||
+             px_header_get(&headers, "Origin").type == PX_STR)) {
+            char extra[512];
+            snprintf(extra, sizeof(extra),
+                     "X-Request-Id: %s\r\nAccess-Control-Allow-Origin: *\r\n"
+                     "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, PATCH, OPTIONS\r\n"
+                     "Access-Control-Allow-Headers: Content-Type, Authorization, X-Request-Id\r\n"
+                     "Access-Control-Max-Age: 86400\r\n", req_id);
+            px_px_send_ex(fd, 204, "text/plain; charset=utf-8", "", 0,
+                          strcmp(method, "HEAD") == 0, client_keep_alive, extra);
+            goto req_done;
+        }
+        // M31.3：服务端内置限流（按 IP；px_serve opts{rate_limit:{max,window_sec}} → 429）
+        if (g_px_rate_max > 0 && g_px_rate_window > 0) {
+            char ipbuf[64];
+            {
+                LXValue rmt = px_dict_get(req, "remote");
+                const char* rs = (rmt.type == PX_STR) ? rmt.as.obj->as.str.data : "";
+                snprintf(ipbuf, sizeof(ipbuf), "%s", rs);
+                char* colon = strrchr(ipbuf, ':');
+                if (colon && colon[1] >= '0' && colon[1] <= '9') *colon = 0; // 去端口
+                if (ipbuf[0] == '[') { char* br = strchr(ipbuf, ']'); if (br) { br++; *br = 0; memmove(ipbuf, ipbuf + 1, strlen(ipbuf)); } }
+            }
+            if (!px_rate_limit_try(ipbuf, g_px_rate_max, g_px_rate_window)) {
+                char extra[256];
+                snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
+                px_px_send_ex(fd, 429, "text/plain; charset=utf-8", "429 Too Many Requests",
+                              21, strcmp(method, "HEAD") == 0, client_keep_alive, extra);
+                goto req_done;
+            }
+        }
+        // M31.2：虚拟主机（Host 头路由）——docroot 覆盖 + handler 优先（null → 继续默认）
+        {
+            LXValue root_v = px_get_global("__px_docroot");
+            const char* def_root = (root_v.type == PX_STR) ? root_v.as.obj->as.str.data : ".";
+            char vroot[1024];
+            snprintf(vroot, sizeof(vroot), "%s", def_root);
+            LXValue vhandler;
+            int has_vhandler = 0;
+            LXValue host_hdr = px_header_get(&headers, "Host");
+            const char* host_hdrs = (host_hdr.type == PX_STR) ? host_hdr.as.obj->as.str.data : NULL;
+            if (px_vhost_resolve(host_hdrs, def_root, vroot, sizeof(vroot), &vhandler, &has_vhandler)) {
+                if (has_vhandler) {
+                    LXValue r = px_call(vhandler, &req, 1);
+                    if (r.type != PX_NULL) {
+                        int vst = 200;
+                        const char* vct = "text/plain; charset=utf-8";
+                        const char* vbody = "";
+                        int vblen = 0;
+                        px_vhost_normalize(r, &vst, &vct, &vbody, &vblen);
+                        char extra[256];
+                        snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
+                        px_px_send_ex(fd, vst, vct, vbody, vblen,
+                                      strcmp(method, "HEAD") == 0, client_keep_alive, extra);
+                        goto req_done;
+                    }
+                }
+            }
+            // 每请求重置 docroot（命中 vhost → vhost root；未命中 → 默认）
+            px_vhost_docroot_store(vroot);
+        }
+
         // M28：路由表非空 → 优先匹配路由（method+path 模式 + :id 参数 + 中间件链）
         if (px_route_has()) {
             char extra[256];
@@ -8934,8 +9081,8 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         }
 
         // 6. 路径映射 + 目录隔离（穿越防护：拒绝 ".." 路径段）
-        LXValue root_v = px_get_global("__px_docroot");
-        const char* docroot = (root_v.type == PX_STR) ? root_v.as.obj->as.str.data : ".";
+        // M31.2：docroot 已由 vhost 解析覆盖（__thread 存储，见 px_vhost_docroot_store）
+        const char* docroot = px_vhost_docroot();
         LXValue tout_v = px_get_global("__px_timeout");
         int timeout_ms = (tout_v.type == PX_INT) ? (int)tout_v.as.i : 10000;
         LXValue port_v = px_get_global("__px_port");
@@ -9206,6 +9353,323 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
     return px_null();
 }
 
+// ==================== M31 沙箱安全 / 虚拟主机 / 限流 ====================
+// sandbox_enter(opts{memory_mb, deny, drop_priv}) → bool
+//   memory_mb：setrlimit(RLIMIT_AS) = 当前 VSS + memory_mb（新增上限）
+//   deny：禁用的内置函数名列表（px_call native 分派检查）
+//   drop_priv：root 降权 nobody(65534)；非 root 请求 → false（不生效）
+static LXValue bi_sandbox_enter(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("sandbox_enter 需要 (opts) 参数");
+    if (args[0].type != PX_DICT) px_error("sandbox_enter 的 opts 需要 dict");
+    long long memory_mb = 0;
+    int drop_priv = 0;
+    // deny 列表先收集（临时数组，最多 64 项）
+    char deny_tmp[PX_SANDBOX_DENY_MAX][64];
+    int deny_n = 0;
+    LXValue mb = px_dict_get(args[0], "memory_mb");
+    if (mb.type == PX_INT && mb.as.i > 0) memory_mb = mb.as.i;
+    else if (mb.type != PX_NULL) px_error("sandbox_enter: memory_mb 需要正整数");
+    LXValue dp = px_dict_get(args[0], "drop_priv");
+    if (dp.type == PX_BOOL) drop_priv = dp.as.b ? 1 : 0;
+    else if (dp.type != PX_NULL) px_error("sandbox_enter: drop_priv 需要 bool");
+    LXValue dn = px_dict_get(args[0], "deny");
+    if (dn.type == PX_LIST) {
+        LXObject* o = dn.as.obj;
+        for (int i = 0; i < o->as.list.len; i++) {
+            LXValue it = o->as.list.items[i];
+            if (it.type != PX_STR) px_error("sandbox_enter: deny 需要 list[str]");
+            if (deny_n >= PX_SANDBOX_DENY_MAX) break;
+            snprintf(deny_tmp[deny_n], 64, "%s", it.as.obj->as.str.data);
+            deny_n++;
+        }
+    } else if (dn.type != PX_NULL) px_error("sandbox_enter: deny 需要 list[str]");
+    // drop_priv 前置检查：非 root 且请求降权 → false（不生效）
+    if (drop_priv && geteuid() != 0) return px_bool(false);
+    // memory：RLIMIT_AS = 当前 VSS + memory_mb
+    if (memory_mb > 0) {
+        long long vss = 0;
+        FILE* f = fopen("/proc/self/statm", "r");
+        if (f) {
+            long long pages = 0;
+            if (fscanf(f, "%lld", &pages) == 1) vss = pages * 4096LL;
+            fclose(f);
+        }
+        struct rlimit rl;
+        rl.rlim_cur = rl.rlim_max = (rlim_t)(vss + memory_mb * 1024LL * 1024LL);
+        if (setrlimit(RLIMIT_AS, &rl) != 0) {
+            px_error("沙箱：设置内存上限失败（memory_mb=%lld）", memory_mb);
+        }
+    }
+    // deny：填入全局表并激活
+    if (deny_n > 0) {
+        for (int i = 0; i < deny_n; i++) {
+            if (g_sandbox_deny_count < PX_SANDBOX_DENY_MAX) {
+                snprintf(g_sandbox_deny[g_sandbox_deny_count++], 64, "%s", deny_tmp[i]);
+            }
+        }
+    }
+    g_sandbox_active = 1;
+    // drop_priv：root → nobody（setgid 先于 setuid）
+    if (drop_priv) {
+        setgid(65534);
+        setuid(65534);
+    }
+    return px_bool(true);
+}
+
+// vhost(host, docroot|handler) → bool：多域名共服（Host 头路由）
+static LXValue bi_vhost(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) px_error("vhost 需要 (host, docroot|handler) 参数");
+    if (args[0].type != PX_STR) px_error("vhost 的 host 需要字符串");
+    const char* host = args[0].as.obj->as.str.data;
+    if (!*host) px_error("vhost: host 不能为空");
+    // 小写 host
+    char hbuf[128];
+    snprintf(hbuf, sizeof(hbuf), "%s", host);
+    for (int i = 0; hbuf[i]; i++) {
+        if (hbuf[i] >= 'A' && hbuf[i] <= 'Z') hbuf[i] = (char)(hbuf[i] - 'A' + 'a');
+    }
+    int has_root = 0, has_handler = 0;
+    char root[1024] = {0};
+    LXValue handler = px_null();
+    if (args[1].type == PX_STR) {
+        snprintf(root, sizeof(root), "%s", args[1].as.obj->as.str.data);
+        struct stat st;
+        if (stat(root, &st) != 0 || !S_ISDIR(st.st_mode)) px_error("vhost: docroot 不是有效目录: %s", root);
+        has_root = 1;
+    } else if (args[1].type == PX_FUNC || args[1].type == PX_NATIVE) {
+        handler = args[1];
+        has_handler = 1;
+    } else {
+        px_error("vhost 的第二参数需要 docroot 字符串或 handler 函数");
+    }
+    pthread_mutex_lock(&g_vhost_mu);
+    int slot = -1;
+    for (int i = 0; i < MAX_VHOSTS; i++) {
+        if (g_vhosts[i].active && strcmp(g_vhosts[i].host, hbuf) == 0) { slot = i; break; }
+    }
+    if (slot < 0) {
+        for (int i = 0; i < MAX_VHOSTS; i++) if (!g_vhosts[i].active) { slot = i; break; }
+    }
+    if (slot < 0) {
+        pthread_mutex_unlock(&g_vhost_mu);
+        px_error("虚拟主机数量超出上限 %d", MAX_VHOSTS);
+    }
+    // 清旧（handler 全局保护名释放）
+    if (g_vhosts[slot].active && g_vhosts[slot].has_handler) {
+        char gname[48];
+        snprintf(gname, sizeof(gname), "__px_vhost_handler_%d", slot);
+        px_set_global(gname, px_null());
+    }
+    memset(&g_vhosts[slot], 0, sizeof(PxVhost));
+    snprintf(g_vhosts[slot].host, sizeof(g_vhosts[slot].host), "%s", hbuf);
+    g_vhosts[slot].has_root = has_root;
+    g_vhosts[slot].has_handler = has_handler;
+    if (has_root) snprintf(g_vhosts[slot].root, sizeof(g_vhosts[slot].root), "%s", root);
+    if (has_handler) {
+        g_vhosts[slot].handler = handler;
+        // 注册到全局表保护（保守 GC 只扫描全局表 + 线程栈）
+        char gname[48];
+        snprintf(gname, sizeof(gname), "__px_vhost_handler_%d", slot);
+        px_set_global(gname, handler);
+    }
+    g_vhosts[slot].active = 1;
+    pthread_mutex_unlock(&g_vhost_mu);
+    return px_bool(true);
+}
+
+// 按 Host 头解析 vhost → 输出 docroot（out_root，未命中填 default_root）+ handler
+// 返回 1 = 命中 vhost（含 "*" 兜底）；0 = 未命中（用默认 docroot）
+static int px_vhost_resolve(const char* host_hdr, const char* default_root,
+                            char* out_root, int out_root_sz, LXValue* out_handler, int* has_handler) {
+    snprintf(out_root, (size_t)out_root_sz, "%s", default_root);
+    *has_handler = 0;
+    if (out_handler) *out_handler = px_null();
+    pthread_mutex_lock(&g_vhost_mu);
+    int has_any = 0;
+    for (int i = 0; i < MAX_VHOSTS; i++) if (g_vhosts[i].active) { has_any = 1; break; }
+    if (!has_any) {
+        pthread_mutex_unlock(&g_vhost_mu);
+        return 0;
+    }
+    // host 头（小写 + 去端口）
+    char hbuf[256] = {0};
+    if (host_hdr) {
+        snprintf(hbuf, sizeof(hbuf), "%s", host_hdr);
+        for (int i = 0; hbuf[i]; i++) {
+            if (hbuf[i] >= 'A' && hbuf[i] <= 'Z') hbuf[i] = (char)(hbuf[i] - 'A' + 'a');
+        }
+    }
+    char host_noport[256] = {0};
+    {
+        const char* colon = strchr(hbuf, ':');
+        if (colon) {
+            int l = (int)(colon - hbuf);
+            if (l > 255) l = 255;
+            memcpy(host_noport, hbuf, (size_t)l);
+            host_noport[l] = 0;
+        } else {
+            snprintf(host_noport, sizeof(host_noport), "%s", hbuf);
+        }
+    }
+    int fallback_slot = -1;
+    int hit = 0;
+    // 从后往前（后注册覆盖）
+    for (int i = MAX_VHOSTS - 1; i >= 0; i--) {
+        if (!g_vhosts[i].active) continue;
+        const char* rh = g_vhosts[i].host;
+        if (strcmp(rh, hbuf) == 0) { hit = 1; }
+        else if (!strchr(rh, ':') && strcmp(rh, host_noport) == 0 && *host_noport) { hit = 1; }
+        else if (strcmp(rh, "*") == 0 && fallback_slot < 0) { fallback_slot = i; continue; }
+        else continue;
+        if (g_vhosts[i].has_root) snprintf(out_root, (size_t)out_root_sz, "%s", g_vhosts[i].root);
+        if (g_vhosts[i].has_handler) {
+            *has_handler = 1;
+            if (out_handler) *out_handler = g_vhosts[i].handler;
+        }
+        pthread_mutex_unlock(&g_vhost_mu);
+        return 1;
+    }
+    if (fallback_slot >= 0) {
+        if (g_vhosts[fallback_slot].has_root)
+            snprintf(out_root, (size_t)out_root_sz, "%s", g_vhosts[fallback_slot].root);
+        if (g_vhosts[fallback_slot].has_handler) {
+            *has_handler = 1;
+            if (out_handler) *out_handler = g_vhosts[fallback_slot].handler;
+        }
+        pthread_mutex_unlock(&g_vhost_mu);
+        return 1;
+    }
+    pthread_mutex_unlock(&g_vhost_mu);
+    return 0;
+}
+
+// ==================== M31 限流 / 防爆破（滑动窗口） ====================
+// rate_limit(key, max, window_sec) → bool：true 放行 / false 超限
+
+// __thread 当前请求 docroot（vhost 解析覆盖；每请求重置）
+static __thread char g_vroot_tls[1024] = {0};
+static __thread int g_vroot_tls_set = 0;
+
+static void px_vhost_docroot_store(const char* root) {
+    snprintf(g_vroot_tls, sizeof(g_vroot_tls), "%s", (root && *root) ? root : ".");
+    g_vroot_tls_set = 1;
+}
+
+static const char* px_vhost_docroot(void) {
+    return g_vroot_tls_set ? g_vroot_tls : ".";
+}
+
+// vhost handler 响应归一化（同解释器 normalize_route_resp）：
+// int → 状态码；str → 200 text/plain；dict{status,headers,body} → 完整控制；其他 → px_to_string
+static void px_vhost_normalize(LXValue v, int* status, const char** ct, const char** body, int* body_len) {
+    *status = 200;
+    *ct = "text/plain; charset=utf-8";
+    *body = "";
+    *body_len = 0;
+    if (v.type == PX_INT) {
+        *status = (int)v.as.i;
+    } else if (v.type == PX_STR) {
+        *body = v.as.obj->as.str.data;
+        *body_len = v.as.obj->as.str.len;
+    } else if (v.type == PX_DICT) {
+        LXValue st = px_dict_get(v, "status");
+        if (st.type == PX_INT) *status = (int)st.as.i;
+        LXValue b = px_dict_get(v, "body");
+        if (b.type == PX_STR) {
+            *body = b.as.obj->as.str.data;
+            *body_len = b.as.obj->as.str.len;
+        } else if (b.type == PX_BYTES) {
+            *body = (const char*)b.as.obj->as.str.data;
+            *body_len = b.as.obj->as.str.len;
+            *ct = "application/octet-stream";
+        } else if (b.type == PX_NULL) {
+            *body = "";
+            *body_len = 0;
+        }
+        LXValue h = px_dict_get(v, "headers");
+        if (h.type == PX_DICT) {
+            LXValue ctv = px_dict_get_ci(h, "Content-Type");
+            if (ctv.type == PX_STR) *ct = ctv.as.obj->as.str.data;
+        }
+    } else {
+        char* s = px_to_string(v);
+        static __thread char vh_buf[4096];
+        snprintf(vh_buf, sizeof(vh_buf), "%s", s ? s : "");
+        if (s) xfree(s);
+        *body = vh_buf;
+        *body_len = (int)strlen(vh_buf);
+    }
+}
+
+static int rate_bucket_find(const char* key, RateBucket** out) {
+    for (RateBucket* b = g_rate_head; b; b = b->next) {
+        if (strcmp(b->key, key) == 0) { *out = b; return 1; }
+    }
+    return 0;
+}
+
+static int px_rate_limit_try(const char* key, long long max, long long window_sec) {
+    pthread_mutex_lock(&g_rate_mu);
+    RateBucket* b = NULL;
+    if (!rate_bucket_find(key, &b)) {
+        // 新建桶（防膨胀：超上限清空所有空桶）
+        if (g_rate_buckets >= PX_RATE_MAX_BUCKETS) {
+            RateBucket** pp = &g_rate_head;
+            while (*pp) {
+                RateBucket* cur = *pp;
+                if (cur->count == 0) {
+                    *pp = cur->next;
+                    xfree(cur->times);
+                    xfree(cur);
+                    g_rate_buckets--;
+                } else {
+                    pp = &cur->next;
+                }
+            }
+        }
+        b = xmalloc(sizeof(RateBucket));
+        memset(b, 0, sizeof(*b));
+        int cap = (int)max < 64 ? 64 : (int)(max + 16);
+        if (cap > 100000) cap = 100000;
+        b->times = xmalloc(sizeof(long long) * (size_t)cap);
+        b->cap = cap;
+        snprintf(b->key, sizeof(b->key), "%s", key);
+        b->next = g_rate_head;
+        g_rate_head = b;
+        g_rate_buckets++;
+    }
+    long long now = (long long)time(NULL);
+    long long win_start = now - window_sec;
+    // 滑出过期
+    while (b->count > 0 && b->times[b->head] < win_start) {
+        b->head = (b->head + 1) % b->cap;
+        b->count--;
+    }
+    if (b->count >= (int)max) {
+        pthread_mutex_unlock(&g_rate_mu);
+        return 0;
+    }
+    int idx = (b->head + b->count) % b->cap;
+    b->times[idx] = now;
+    b->count++;
+    pthread_mutex_unlock(&g_rate_mu);
+    return 1;
+}
+
+static LXValue bi_rate_limit(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 3) px_error("rate_limit 需要 (key, max, window_sec) 参数");
+    if (args[0].type != PX_STR) px_error("rate_limit 的 key 需要字符串");
+    if (args[1].type != PX_INT || args[2].type != PX_INT) px_error("rate_limit 的 max/window_sec 需要整数");
+    long long max = args[1].as.i;
+    long long win = args[2].as.i;
+    if (max < 1 || win < 1) px_error("rate_limit: max 与 window_sec 需要正整数");
+    return px_bool(px_rate_limit_try(args[0].as.obj->as.str.data, max, win));
+}
+
 static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 2 || nargs > 4) px_error("px_serve 需要 (port, docroot[, timeout_ms[, opts]]) 参数");
@@ -9220,11 +9684,25 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     if (nargs >= 3 && args[2].type == PX_INT) timeout_ms = (int)args[2].as.i;
     if (timeout_ms < 1) timeout_ms = 1;
     int port = (int)args[0].as.i;
-    // M27：opts = {max_body_size, body_tmp_dir}
+    // M27/M31：opts = {max_body_size, body_tmp_dir, max_conn, rate_limit:{max,window_sec}}
     g_px_max_body = 10 * 1024 * 1024;
+    int max_conn = 32;
+    g_px_rate_max = 0;
+    g_px_rate_window = 0;
     if (nargs >= 4 && args[3].type == PX_DICT) {
         LXValue mb = px_dict_get(args[3], "max_body_size");
         if (mb.type == PX_INT) g_px_max_body = (int)(mb.as.i >= 1024 ? mb.as.i : 1024);
+        LXValue mc = px_dict_get(args[3], "max_conn");
+        if (mc.type == PX_INT && mc.as.i >= 1) max_conn = (int)(mc.as.i > PX_POOL_MAX ? PX_POOL_MAX : mc.as.i);
+        LXValue rl = px_dict_get(args[3], "rate_limit");
+        if (rl.type == PX_DICT) {
+            LXValue rm = px_dict_get(rl, "max");
+            LXValue rw = px_dict_get(rl, "window_sec");
+            if (rm.type == PX_INT && rw.type == PX_INT && rm.as.i >= 1 && rw.as.i >= 1) {
+                g_px_rate_max = rm.as.i;
+                g_px_rate_window = rw.as.i;
+            }
+        }
     }
     // docroot / timeout / port 存全局表（GC 扫描根）
     px_set_global("__px_docroot", px_str(docroot));
@@ -9254,8 +9732,17 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     signal(SIGINT, px_sigstop_handler);
     signal(SIGTERM, px_sigstop_handler);
     px_session_sweep();
-    fprintf(stderr, "[px-serve] 普贤应用服务器 docroot=%s 端口=%d 超时=%dms tls=%d max_body=%d\n",
-            docroot, port, timeout_ms, g_srv_tls_ready, g_px_max_body);
+    fprintf(stderr, "[px-serve] 普贤应用服务器 docroot=%s 端口=%d 超时=%dms tls=%d max_body=%d max_conn=%d\n",
+            docroot, port, timeout_ms, g_srv_tls_ready, g_px_max_body, max_conn);
+    // M31.4b：并发模型升级——连接线程池（不占 spawn 槽位，突破 64 上限）
+    // 预派生 max_conn 个常驻 worker：accept 只把 cfd 放队列，worker 取队列处理。
+    g_pool_size = max_conn;
+    for (int i = 0; i < g_pool_size; i++) {
+        if (pthread_create(&g_pool_threads[i], NULL, px_pool_worker, NULL) != 0) {
+            g_pool_size = i;
+            px_error("px_serve: 创建连接线程池失败");
+        }
+    }
     for (;;) {
         if (g_px_stop) break;
         int cfd = accept(sfd, NULL, NULL);
@@ -9263,18 +9750,81 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
             if (g_px_stop) break;
             continue;
         }
-        LXValue arg = px_int(cfd);
-        px_spawn(px_conn_worker, &arg, 1);
+        px_pool_push(cfd);
     }
     g_px_listen_fd = -1;
     close(sfd);
-    // 等待在途请求（最多 5s）
+    // 停止 worker：广播唤醒 → worker 处理完当前连接/清空队列后退出 → join
+    pthread_mutex_lock(&g_pool_mu);
+    pthread_cond_broadcast(&g_pool_cond);
+    pthread_mutex_unlock(&g_pool_mu);
+    for (int i = 0; i < g_pool_size; i++) pthread_join(g_pool_threads[i], NULL);
+    g_pool_size = 0;
+    // 等待在途请求（最多 5s；连接线程池已 join，正常已归零）
     for (int i = 0; i < 100 && g_px_inflight > 0; i++) {
         struct timespec ts = {0, 50 * 1000 * 1000};
         nanosleep(&ts, NULL);
     }
     fprintf(stderr, "[px-serve] 优雅关闭完成（在途 %d）\n", g_px_inflight);
     return px_null();
+}
+
+// ==================== M31.4b 连接线程池（常驻 worker，不占 spawn 槽位） ====================
+// accept 线程 → 队列 → worker 线程 px_conn_worker。队列满时 accept 阻塞等待（TCP backlog 排队）。
+
+static void px_pool_push(int fd) {
+    pthread_mutex_lock(&g_pool_mu);
+    while (g_pool_count >= PX_POOL_MAX) {
+        pthread_cond_wait(&g_pool_cond, &g_pool_mu);
+    }
+    g_pool_fds[g_pool_tail] = fd;
+    g_pool_tail = (g_pool_tail + 1) % PX_POOL_MAX;
+    g_pool_count++;
+    pthread_cond_signal(&g_pool_cond);
+    pthread_mutex_unlock(&g_pool_mu);
+}
+
+static void* px_pool_worker(void* arg) {
+    (void)arg;
+    // 常驻线程：注册到 GC 槽位（GC 可暂停/扫描本线程栈上对象）
+    pthread_mutex_lock(&g_gc_mu);
+    if (!g_gc_env_inited) gc_init_env();
+    g_active_threads++;
+    int slot = -1;
+    for (int i = 0; i < MAX_SPAWN_THREADS; i++) {
+        if (!g_threads[i].in_use) { slot = i; break; }
+    }
+    if (slot >= 0) {
+        g_threads[slot].tid = pthread_self();
+        g_threads[slot].in_use = 1;
+        g_threads[slot].paused = 0;
+        g_threads[slot].is_main = 0;
+        g_threads[slot].epoch = 0;
+        g_threads[slot].tmp_root = NULL;
+    }
+    pthread_mutex_unlock(&g_gc_mu);
+    for (;;) {
+        pthread_mutex_lock(&g_pool_mu);
+        while (g_pool_count == 0 && !g_px_stop) {
+            pthread_cond_wait(&g_pool_cond, &g_pool_mu);
+        }
+        if (g_pool_count == 0 && g_px_stop) {
+            pthread_mutex_unlock(&g_pool_mu);
+            break;
+        }
+        int fd = g_pool_fds[g_pool_head];
+        g_pool_head = (g_pool_head + 1) % PX_POOL_MAX;
+        g_pool_count--;
+        pthread_cond_broadcast(&g_pool_cond);
+        pthread_mutex_unlock(&g_pool_mu);
+        LXValue arg = px_int(fd);
+        px_conn_worker(&arg, 1, NULL);
+    }
+    pthread_mutex_lock(&g_gc_mu);
+    g_active_threads--;
+    gc_unregister_thread(pthread_self());
+    pthread_mutex_unlock(&g_gc_mu);
+    return NULL;
 }
 
 // px_exec(path, params?)：子进程执行 `px run` 并捕获 stdout

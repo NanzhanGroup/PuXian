@@ -1,0 +1,78 @@
+# M31 虚拟主机 + 限流集成 + HTTP/2 预检 + CORS（网络验证，双模式一致）
+# vhost(host, docroot|handler)：多域名共服（Host 头路由）
+# rate_limit 集成：px_serve opts{rate_limit:{max,window_sec}} 按 IP 限流 → 429
+# HTTP/2 预检：Upgrade: h2c → 505；CORS 预检 OPTIONS → 204
+
+PORT = 18131
+PORT2 = 18132
+A = "/tmp/px_vhost_a"
+B = "/tmp/px_vhost_b"
+D = "/tmp/px_vhost_def"
+
+mkdir(A)
+mkdir(B)
+mkdir(D)
+write_file(A + "/index.txt", "SITE-A")
+write_file(B + "/index.txt", "SITE-B")
+write_file(D + "/index.txt", "SITE-DEF")
+
+# 虚拟主机：a.test → A，b.test → B，h.test → handler
+vhost("a.test", A)
+vhost("b.test", B)
+
+def hhandler(req):
+    return "hello from handler"
+vhost("h.test", hhandler)
+
+def serve():
+    px_serve(PORT, D, 10000)
+spawn serve()
+sleep(300)
+
+def get(host, path):
+    h = json_parse("{}")
+    if host != "":
+        h.set("Host", host)
+    return http_request("http://127.0.0.1:" + str(PORT) + path, "GET", "", h)
+
+r = get("a.test", "/index.txt")
+assert(r["status"] == 200 and r["body"] == "SITE-A")
+print("vhost a.test:", str(r["status"]), r["body"])
+
+r = get("b.test", "/index.txt")
+assert(r["status"] == 200 and r["body"] == "SITE-B")
+print("vhost b.test:", str(r["status"]), r["body"])
+
+r = get("unknown.test", "/index.txt")
+assert(r["status"] == 200 and r["body"] == "SITE-DEF")
+print("default docroot:", str(r["status"]), r["body"])
+
+r = get("h.test", "/anything")
+assert(r["status"] == 200 and r["body"] == "hello from handler")
+print("vhost handler:", str(r["status"]), r["body"])
+
+# CORS 预检（OPTIONS + Access-Control-Request-Method → 204）
+cors_h = {"Origin": "http://x.com", "Access-Control-Request-Method": "GET"}
+r = http_request("http://127.0.0.1:" + str(PORT) + "/index.txt", "OPTIONS", "", cors_h)
+assert(r["status"] == 204)
+print("CORS preflight:", str(r["status"]))
+
+# HTTP/2 预检：h2c 升级探测 → 505
+h2c_h = {"Upgrade": "h2c", "Connection": "Upgrade, HTTP2-Settings"}
+r = http_request("http://127.0.0.1:" + str(PORT) + "/index.txt", "GET", "", h2c_h)
+assert(r["status"] == 505)
+print("h2c rejected:", str(r["status"]))
+
+# 限流集成：max=3 / 60s → 第 4 次 429（同一来源 IP）
+def serve2():
+    px_serve(PORT2, D, 10000, {"rate_limit": {"max": 3, "window_sec": 60}})
+spawn serve2()
+sleep(300)
+
+st = []
+for i in range(4):
+    r = http_request("http://127.0.0.1:" + str(PORT2) + "/index.txt", "GET")
+    st.append(r["status"])
+assert(st[0] == 200 and st[1] == 200 and st[2] == 200 and st[3] == 429)
+print("rate_limit 429:", str(st[0]), str(st[1]), str(st[2]), str(st[3]))
+print("ALL OK")
