@@ -39,6 +39,7 @@ mod token;
 mod value;
 
 mod web;
+mod ws;
 mod xml;
 mod zip;
 
@@ -680,6 +681,7 @@ fn run_build(file: &str) -> ExitCode {
         "runtime_aes.c",
         "runtime_xml.c",
         "runtime_zip.c",
+        "runtime_ws.c",
     ];
     let mut ok_copy = true;
     for f in rt_files {
@@ -722,6 +724,7 @@ fn run_build(file: &str) -> ExitCode {
         .arg(build_dir.join("runtime_aes.c"))
         .arg(build_dir.join("runtime_xml.c"))
         .arg(build_dir.join("runtime_zip.c"))
+        .arg(build_dir.join("runtime_ws.c"))
         .arg(build_dir.join("miniz.c"))
         .arg(build_dir.join("miniz_tinfl.c"))
         .arg(build_dir.join("miniz_tdef.c"))

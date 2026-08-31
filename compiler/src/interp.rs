@@ -292,6 +292,11 @@ impl Interpreter {
             ("hex_to_bytes", Builtin::HexToBytes),
             ("bit_count", Builtin::BitCount),
             ("bit_length", Builtin::BitLength),
+            ("ws_serve", Builtin::WsServe),
+            ("ws_connect", Builtin::WsConnect),
+            ("ws_send", Builtin::WsSend),
+            ("ws_recv", Builtin::WsRecv),
+            ("ws_close", Builtin::WsClose),
         ];
         for (n, b) in names {
             g.define(n, Value::Builtin(*b));

@@ -1441,6 +1441,104 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
                 Ok(Value::Int((64 - n.leading_zeros()) as i64))
             }
         }
+
+        // ==================== M22 P1：WebSocket（RFC 6455） ====================
+        Builtin::WsServe => {
+            if args.len() != 2 {
+                return Err(err("ws_serve 需要 (port, handler) 参数", pos));
+            }
+            let port = expect_int(&args[0], "ws_serve", pos)?;
+            let handler = args[1].clone();
+            if !matches!(handler, Value::Func(_)) {
+                return Err(err("ws_serve 的 handler 必须是函数", pos));
+            }
+            let addr = format!("0.0.0.0:{}", port);
+            let listener = TcpListener::bind(&addr)
+                .map_err(|e| LxError::new("R3010", format!("net: 监听端口失败 {}: {}", addr, e), Some(pos)))?;
+            let srv = interp.fork();
+            for stream in listener.incoming() {
+                let mut stream = match stream {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+                // 握手失败直接关闭该连接
+                if crate::ws::server_handshake(&mut stream).is_err() {
+                    continue;
+                }
+                let h = handler.clone();
+                let mut ci = srv.fork();
+                std::thread::spawn(move || {
+                    // 注册连接（读写独立句柄）
+                    let id = match stream.try_clone() {
+                        Ok(w) => crate::ws::ws_register(stream, w),
+                        Err(_) => return,
+                    };
+                    // 调 handler(conn)：handler 内 ws_recv 阻塞读 / ws_send 推送
+                    let arg = Value::Int(id);
+                    if let Err(e) = ci.call_value(&h, &[arg], pos) {
+                        eprintln!("[ws] handler 出错: {}", e);
+                    }
+                    // handler 返回后保持连接（后台线程可 ws_send），直到 ws_close/对端断开
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    // 连接断开时 ws_recv 已自动清理；这里兜底清理已关闭连接
+                    let closed = {
+                        let m = crate::ws::ws_conns().lock().unwrap();
+                        m.get(&id).map(|c| c.closed.load(std::sync::atomic::Ordering::SeqCst)).unwrap_or(true)
+                    };
+                    if closed {
+                        crate::ws::ws_unregister(id);
+                    }
+                });
+            }
+            Ok(Value::Null) // 不可达
+        }
+        Builtin::WsConnect => {
+            if args.len() != 3 {
+                return Err(err("ws_connect 需要 (host, port, path) 参数", pos));
+            }
+            let host = expect_str(&args[0], "ws_connect", pos)?.to_string();
+            let port = expect_int(&args[1], "ws_connect", pos)?;
+            let path = expect_str(&args[2], "ws_connect", pos)?.to_string();
+            let addr = format!("{}:{}", host, port);
+            let mut stream = TcpStream::connect(&addr)
+                .map_err(|e| LxError::new("R3010", format!("net: 连接 {} 失败: {}", addr, e), Some(pos)))?;
+            if let Err(e) = crate::ws::client_handshake(&mut stream, &host, port as u16, &path) {
+                return Ok(Value::Null); // 握手失败 → null（与编译模式一致）
+            }
+            let (id, _rx) = match stream.try_clone() {
+                Ok(w) => crate::ws::ws_register_client(stream, w),
+                Err(_) => return Ok(Value::Null),
+            };
+            Ok(Value::Int(id))
+        }
+        Builtin::WsSend => {
+            if args.len() != 2 {
+                return Err(err("ws_send 需要 (conn, data) 参数", pos));
+            }
+            let conn = expect_int(&args[0], "ws_send", pos)?;
+            let data = match &args[1] {
+                Value::Str(s) => s.clone(),
+                other => other.to_string(),
+            };
+            Ok(Value::Bool(crate::ws::ws_send(conn, &data)))
+        }
+        Builtin::WsRecv => {
+            if args.len() != 1 {
+                return Err(err("ws_recv 需要 (conn) 参数", pos));
+            }
+            let conn = expect_int(&args[0], "ws_recv", pos)?;
+            match crate::ws::ws_recv(conn) {
+                Some(msg) => Ok(Value::Str(msg)),
+                None => Ok(Value::Null),
+            }
+        }
+        Builtin::WsClose => {
+            if args.len() != 1 {
+                return Err(err("ws_close 需要 (conn) 参数", pos));
+            }
+            let conn = expect_int(&args[0], "ws_close", pos)?;
+            Ok(Value::Bool(crate::ws::ws_close(conn)))
+        }
     }
 }
 

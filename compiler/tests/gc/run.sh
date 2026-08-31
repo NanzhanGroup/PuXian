@@ -8,19 +8,21 @@ cd "$(dirname "$0")/../.."   # compiler/
 MB="runtime/mbedtls"
 MZ="runtime/third_party/miniz"
 M19="runtime/runtime_aes.c runtime/runtime_xml.c runtime/runtime_zip.c $MZ/miniz.c $MZ/miniz_tinfl.c $MZ/miniz_tdef.c"
-gcc -std=c99 -O2 -Iruntime -I$MB/include -I$MZ tests/gc/test_gc.c runtime/runtime.c $M19 \
+# M22 WebSocket 模块（RFC 6455，mbedtls sha1）
+M22="runtime/runtime_ws.c"
+gcc -std=c99 -O2 -Iruntime -I$MB/include -I$MZ tests/gc/test_gc.c runtime/runtime.c $M19 $M22 \
     $MB/lib/libmbedtls.a $MB/lib/libmbedx509.a $MB/lib/libmbedcrypto.a \
     -o /tmp/test_gc -lpthread -lm
 /tmp/test_gc
 echo "---"
 echo "并发 GC 测试（M11）："
-gcc -std=c99 -O2 -Iruntime -I$MB/include -I$MZ tests/gc/test_gc_concurrent.c runtime/runtime.c $M19 \
+gcc -std=c99 -O2 -Iruntime -I$MB/include -I$MZ tests/gc/test_gc_concurrent.c runtime/runtime.c $M19 $M22 \
     $MB/lib/libmbedtls.a $MB/lib/libmbedx509.a $MB/lib/libmbedcrypto.a \
     -o /tmp/test_gc_conc -lpthread -lm
 /tmp/test_gc_conc
 echo "---"
 echo "GC 演示（编译模式 + 内存对照）："
-gcc -std=c99 -O2 -Iexamples/build -Iruntime -I$MB/include -I$MZ examples/build/gc_demo.c runtime/runtime.c $M19 \
+gcc -std=c99 -O2 -Iexamples/build -Iruntime -I$MB/include -I$MZ examples/build/gc_demo.c runtime/runtime.c $M19 $M22 \
     $MB/lib/libmbedtls.a $MB/lib/libmbedx509.a $MB/lib/libmbedcrypto.a \
     -o /tmp/gc_demo -lpthread -lm 2>/dev/null || true
 echo "（用 examples/ 下 px build gc_demo.px 生成后运行 ./build/gc_demo 验证）"

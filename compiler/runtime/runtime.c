@@ -2293,6 +2293,9 @@ static const char* val_cstr(LXValue v) {
     return tmp;
 }
 
+// 跨模块版本（runtime_ws.c 等外部模块用；val_cstr 为 static 不可见）
+const char* px_val_cstr(LXValue v) { return val_cstr(v); }
+
 static void bytes_to_hex(const unsigned char* in, size_t len, char* out) {
     static const char HEX[] = "0123456789abcdef";
     for (size_t i = 0; i < len; i++) {
@@ -3682,6 +3685,12 @@ void px_register_builtins(void) {
     px_set_global("hex_to_bytes", px_native("hex_to_bytes", bi_hex_to_bytes));
     px_set_global("bit_count", px_native("bit_count", bi_bit_count));
     px_set_global("bit_length", px_native("bit_length", bi_bit_length));
+    // M22 P1：WebSocket（RFC 6455，微信/QQ/飞书长连接 / LLM 流式 / 实时推送）
+    px_set_global("ws_serve", px_native("ws_serve", bi_ws_serve));
+    px_set_global("ws_connect", px_native("ws_connect", bi_ws_connect));
+    px_set_global("ws_send", px_native("ws_send", bi_ws_send));
+    px_set_global("ws_recv", px_native("ws_recv", bi_ws_recv));
+    px_set_global("ws_close", px_native("ws_close", bi_ws_close));
 }
 
 // ==================== 并发原语（M4.2） ====================

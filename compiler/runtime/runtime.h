@@ -175,6 +175,16 @@ LXValue bi_xml_unescape(LXValue* args, int nargs, void* ctx);
 LXValue bi_zip_pack(LXValue* args, int nargs, void* ctx);
 LXValue bi_zip_unpack(LXValue* args, int nargs, void* ctx);
 
+// ==================== M22 P1：WebSocket（RFC 6455） ====================
+// 实现文件：runtime_ws.c（mbedtls sha1 握手 + 帧协议 + 连接注册表）
+LXValue bi_ws_serve(LXValue* args, int nargs, void* ctx);
+LXValue bi_ws_connect(LXValue* args, int nargs, void* ctx);
+LXValue bi_ws_send(LXValue* args, int nargs, void* ctx);
+LXValue bi_ws_recv(LXValue* args, int nargs, void* ctx);
+LXValue bi_ws_close(LXValue* args, int nargs, void* ctx);
+LXValue ws_conn_worker(LXValue* args, int nargs, void* ctx);
+const char* px_val_cstr(LXValue v);
+
 // ==================== 输出 ====================
 
 void px_print_value(LXValue v, bool newline);

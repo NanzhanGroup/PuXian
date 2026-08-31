@@ -196,6 +196,16 @@ pub enum Builtin {
     HexToBytes,
     BitCount,
     BitLength,
+    // M22 P1：WebSocket（RFC 6455，微信/QQ/飞书长连接 / LLM 流式 / 实时推送）
+    // ws_serve(port, handler) —— 服务端：每连接握手后调 handler(conn)
+    // ws_connect(host, port, path) → int conn | null（客户端握手）
+    // ws_send(conn, data) → bool（文本帧）；ws_recv(conn) → str|null（阻塞读一条消息）
+    // ws_close(conn) → bool（发送 close 帧并关闭）
+    WsServe,
+    WsConnect,
+    WsSend,
+    WsRecv,
+    WsClose,
 }
 
 impl Builtin {
@@ -294,6 +304,11 @@ impl Builtin {
             Builtin::HexToBytes => "hex_to_bytes",
             Builtin::BitCount => "bit_count",
             Builtin::BitLength => "bit_length",
+            Builtin::WsServe => "ws_serve",
+            Builtin::WsConnect => "ws_connect",
+            Builtin::WsSend => "ws_send",
+            Builtin::WsRecv => "ws_recv",
+            Builtin::WsClose => "ws_close",
         }
     }
 }
