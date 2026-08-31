@@ -1267,6 +1267,88 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             }
             Ok(Value::Bool(crate::web::rate_limit_try(key, max, window)))
         }
+        // ==================== M33：HTTP/3 预研——UDP 基础设施（QUIC 底层 UDP） ====================
+        // udp_open([port]) → int（bind 0.0.0.0:port；port 缺省/0 → 系统分配；返回 socket id）
+        // udp_send(sock, ip, port, data) → int（发送字节数）
+        // udp_recv(sock, maxlen) → dict{data, ip, port} | null（阻塞接收）
+        // udp_close(sock) → bool
+        Builtin::UdpOpen => {
+            if args.len() > 1 {
+                return Err(err("udp_open 需要 (port) 参数", pos));
+            }
+            let port = if args.is_empty() {
+                0
+            } else {
+                expect_int(&args[0], "udp_open", pos)?
+            };
+            if port < 0 || port > 65535 {
+                return Err(err("udp_open 端口范围 0-65535", pos));
+            }
+            let addr = format!("0.0.0.0:{}", port);
+            match std::net::UdpSocket::bind(&addr) {
+                Ok(s) => {
+                    let id = udp_alloc(s);
+                    Ok(Value::Int(id))
+                }
+                Err(e) => Err(err(format!("udp_open 绑定 {} 失败: {}", addr, e), pos)),
+            }
+        }
+        Builtin::UdpSend => {
+            if args.len() != 4 {
+                return Err(err("udp_send 需要 (sock, ip, port, data) 参数", pos));
+            }
+            let sock = expect_int(&args[0], "udp_send", pos)?;
+            let ip = expect_str(&args[1], "udp_send", pos)?;
+            let port = expect_int(&args[2], "udp_send", pos)?;
+            let data: Vec<u8> = match &args[3] {
+                Value::Str(s) => s.clone().into_bytes(),
+                Value::Bytes(b) => b.clone(),
+                _ => return Err(err("udp_send 的 data 需要 str/bytes", pos)),
+            };
+            let s = match udp_get(sock) {
+                Some(s) => s,
+                None => return Err(err("udp_send: 无效 socket id", pos)),
+            };
+            let dst = format!("{}:{}", ip, port);
+            match s.send_to(&data, &dst) {
+                Ok(n) => Ok(Value::Int(n as i64)),
+                Err(e) => Err(err(format!("udp_send 失败: {}", e), pos)),
+            }
+        }
+        Builtin::UdpRecv => {
+            if args.len() != 2 {
+                return Err(err("udp_recv 需要 (sock, maxlen) 参数", pos));
+            }
+            let sock = expect_int(&args[0], "udp_recv", pos)?;
+            let maxlen = expect_int(&args[1], "udp_recv", pos)?;
+            if maxlen < 1 {
+                return Err(err("udp_recv 的 maxlen 需要正整数", pos));
+            }
+            let s = match udp_get(sock) {
+                Some(s) => s,
+                None => return Err(err("udp_recv: 无效 socket id", pos)),
+            };
+            let mut buf = vec![0u8; maxlen as usize];
+            match s.recv_from(&mut buf) {
+                Ok((n, src)) => {
+                    buf.truncate(n);
+                    let d = Value::Dict(Arc::new(Mutex::new(HashMap::from([
+                        ("data".to_string(), Value::Bytes(buf)),
+                        ("ip".to_string(), Value::Str(src.ip().to_string())),
+                        ("port".to_string(), Value::Int(src.port() as i64)),
+                    ]))));
+                    Ok(d)
+                }
+                Err(e) => Err(err(format!("udp_recv 失败: {}", e), pos)),
+            }
+        }
+        Builtin::UdpClose => {
+            if args.len() != 1 {
+                return Err(err("udp_close 需要 (sock) 参数", pos));
+            }
+            let sock = expect_int(&args[0], "udp_close", pos)?;
+            Ok(Value::Bool(udp_remove(sock)))
+        }
         Builtin::GenNext => {
             if args.len() != 1 {
                 return Err(err("gen_next 需要一个参数", pos));
@@ -2748,15 +2830,22 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
         }
 
         // ==================== M27 P0：WebServer 生产化四件套 ====================
-        // ① 服务端 TLS：tls_server(cert_pem, key_pem) → bool（PEM 路径或内容）
+        // ① 服务端 TLS：tls_server(cert_pem, key_pem[, hostname]) → bool（PEM 路径或内容）
         //    注册后 px_serve / ws_serve / sse_serve 自动 HTTPS / WSS / SSE-over-TLS
+        //    M33：带 hostname 注册多证书 → TLS SNI 按 ClientHello 域名选择证书；
+        //    无 hostname 的作为默认证书（无 SNI / 未匹配时使用）
         Builtin::TlsServer => {
-            if args.len() != 2 {
-                return Err(err("tls_server 需要 (cert_pem, key_pem) 参数", pos));
+            if args.len() != 2 && args.len() != 3 {
+                return Err(err("tls_server 需要 (cert_pem, key_pem[, hostname]) 参数", pos));
             }
             let cert = expect_str(&args[0], "tls_server", pos)?;
             let key = expect_str(&args[1], "tls_server", pos)?;
-            crate::tls::tls_server_register(cert, key).map_err(|e| err(e, pos))?;
+            let hostname = if args.len() == 3 {
+                Some(expect_str(&args[2], "tls_server", pos)?.to_string())
+            } else {
+                None
+            };
+            crate::tls::tls_server_register(cert, key, hostname.as_deref()).map_err(|e| err(e, pos))?;
             Ok(Value::Bool(true))
         }
         // ③ Cookie/Session：session_open() → str（读 REQUEST.cookie[pxsid] 复用/新建；
@@ -2823,11 +2912,12 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
         }
 
         // ==================== M28 P1：路由表 + 中间件 ====================
-        // route(method, pattern, handler) → bool：注册路由（method "*" 匹配任意）
+        // route(method, pattern, handler[, opts]) → bool：注册路由（method "*" 匹配任意）
         // pattern: /api/users /api/users/:id /files/*（:name 路径参数；* 通配剩余）
+        // opts（M33）：{rate_limit:{max, window_sec}} → 该路由按来源 IP 独立限流（超限 429）
         Builtin::Route => {
-            if args.len() != 3 {
-                return Err(err("route 需要 (method, pattern, handler) 参数", pos));
+            if args.len() != 3 && args.len() != 4 {
+                return Err(err("route 需要 (method, pattern, handler[, opts]) 参数", pos));
             }
             let method = expect_str(&args[0], "route", pos)?;
             let pattern = expect_str(&args[1], "route", pos)?;
@@ -2835,7 +2925,28 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             if !matches!(handler, Value::Func(_)) {
                 return Err(err("route 的 handler 必须是函数", pos));
             }
-            crate::web::route_add(method, pattern, handler).map_err(|e| err(e, pos))?;
+            // M33.1：per-route 限流——opts{rate_limit:{max,window_sec}}
+            let mut rate_limit = None;
+            if args.len() == 4 {
+                if let Value::Dict(d) = &args[3] {
+                    let d = d.lock().unwrap();
+                    if let Some(Value::Dict(rl)) = d.get("rate_limit") {
+                        let rl = rl.lock().unwrap();
+                        let max = rl.get("max").and_then(|v| if let Value::Int(i) = v { Some(*i) } else { None });
+                        let win = rl
+                            .get("window_sec")
+                            .and_then(|v| if let Value::Int(i) = v { Some(*i) } else { None });
+                        if let (Some(m), Some(w)) = (max, win) {
+                            if m >= 1 && w >= 1 {
+                                rate_limit = Some((m, w));
+                            }
+                        }
+                    }
+                } else {
+                    return Err(err("route 的第 4 参数 opts 需要 dict", pos));
+                }
+            }
+            crate::web::route_add(method, pattern, handler, rate_limit).map_err(|e| err(e, pos))?;
             Ok(Value::Bool(true))
         }
         // middleware(fn) → bool：注册中间件（fn(req) → null 继续 / 非 null 短路）
@@ -3195,6 +3306,23 @@ fn net_alloc_stream(s: TcpStream) -> i64 {
 fn net_close(id: i64) {
     net_streams().lock().unwrap().remove(&id);
     net_listeners().lock().unwrap().remove(&id);
+}
+
+// ==================== M33：UDP 基础设施（HTTP/3/QUIC 预研） ====================
+static UDP_SOCKS: OnceLock<Mutex<HashMap<i64, std::net::UdpSocket>>> = OnceLock::new();
+fn udp_socks() -> &'static Mutex<HashMap<i64, std::net::UdpSocket>> {
+    UDP_SOCKS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+fn udp_alloc(s: std::net::UdpSocket) -> i64 {
+    let id = NET_NEXT.fetch_add(1, Ordering::SeqCst);
+    udp_socks().lock().unwrap().insert(id, s);
+    id
+}
+fn udp_get(id: i64) -> Option<std::net::UdpSocket> {
+    udp_socks().lock().unwrap().get(&id).and_then(|s| s.try_clone().ok())
+}
+fn udp_remove(id: i64) -> bool {
+    udp_socks().lock().unwrap().remove(&id).is_some()
 }
 
 // ==================== M16 HTTP 服务端框架（解释器模式） ====================

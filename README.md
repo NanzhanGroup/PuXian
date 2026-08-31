@@ -22,7 +22,7 @@
 | ⏱ 定时器 | `set_timeout` / `set_interval` / `clear_timer`（一次性/周期回调，可变参数透传，回调内并发原语安全） |
 | 🧹 内存 | 编译模式 C 运行时内置保守标记-清除 GC（循环引用可回收，自动触发）+ **slab 分配器**（21 档 size-class 槽位复用）；解释器侧**追踪式 GC** 回收循环引用（list/dict/chan/**闭包 Func↔Env 循环**）+ `gc()` 强制回收 |
 | 🧩 模块化 | `import std.*` / `import foo.bar` / `from foo import x` / 相对路径导入；`px pkg` 包管理（init/add/install/list/remove） |
-| 🌐 网络 | HTTP 客户端（**HTTPS TLS 1.2/1.3** + gzip/chunked 自动解码 + **http/https 连接池复用** + **TLS 会话票据恢复** + **流式 gzip 边下边解**）+ **HTTP 服务端**（`http_serve` gzip/chunked/keep-alive/流式 + **`px_serve` 服务端 TLS**：`tls_server` 注册后 HTTPS/WSS/SSE-over-TLS + 请求体大小可配 + 413 + 大 body 落盘 + **优雅关闭** SIGINT/SIGTERM）+ **WebSocket**（RFC 6455，心跳/超时，**`ws://`/`wss://` 一行连接**）+ **SSE** 服务端/客户端（**断线自动重连**，带 Last-Event-ID）+ TCP 全功能 |
+| 🌐 网络 | HTTP 客户端（**HTTPS TLS 1.2/1.3** + gzip/chunked 自动解码 + **http/https 连接池复用** + **TLS 会话票据恢复** + **流式 gzip 边下边解**）+ **HTTP 服务端**（`http_serve` gzip/chunked/keep-alive/流式 + **`px_serve` 服务端 TLS**：`tls_server(cert,key[,hostname])` 注册后 HTTPS/WSS/SSE-over-TLS + **TLS SNI 多证书按域名选择** + 请求体大小可配 + 413 + 大 body 落盘 + **优雅关闭** + **per-route 限流**（路由粒度 429）+ **访问日志落盘轮转** + **Alt-Svc 通告**）+ **WebSocket**（RFC 6455，心跳/超时，**`ws://`/`wss://` 一行连接**）+ **SSE** 服务端/客户端（**断线自动重连**，带 Last-Event-ID）+ **UDP**（udp_open/send/recv/close，QUIC 预研地基）+ TCP 全功能 |
 | 🛡 加密/文档 | **AES-CBC-PKCS7 / AES-GCM**、**RSA**（PKCS#1 v1.5）、**XML** 解析/转义/**生成**（xml_build）、**zip** 打包/解压、**base64**、sha256 / xxhash |
 | 🔢 语言能力 | 切片语法 `a[i:j]` / `a[i:j:k]`（步长/反转，str 按 UTF-8 字符）、**生成器表达式** `(x for x in xs)`（`gen_next` 逐项 / for-in / `list()` 转换）、位运算 + 二进制数据视图（int_to_hex / bytes_to_hex / bit_count / bit_length）、正则表达式、锁原语（mutex / rwlock）、文件随机读写 + fsync、进程/信号（os_spawn / os_wait / signal） |
 | 🚀 应用平台 | **.px 脚本执行机制**（`px_serve` PHP/OpenResty 式应用服务器：Cookie/Session/基础认证 + 服务端 TLS + 优雅关闭、`px_exec` 语言层嵌入 API）+ **.px 进程池**（编译模式预派生 `px --worker` 解释器常驻复用，PHP-FPM 风格，**脚本/二进制变更自动滚动重启热更新**） |
@@ -86,7 +86,7 @@ px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
 | [docs/requirements.md](docs/requirements.md) | 需求与设计讨论（动机、取舍、双模式架构） |
 | [docs/plan.md](docs/plan.md) | 开发方案（语言命名、里程碑规划、语言要点） |
 | [docs/spec.md](docs/spec.md) | 语言规格说明书（词法 / 语法 / 语义 / 标准库） |
-| [docs/PROGRESS.md](docs/PROGRESS.md) | 开发进度（M0–M32 产出与验证记录，含 M33 候选） |
+| [docs/PROGRESS.md](docs/PROGRESS.md) | 开发进度（M0–M33 产出与验证记录，含 M34 候选） |
 
 ---
 
@@ -127,6 +127,7 @@ px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
 | M30 | 服务端 https 连接池（TLS 会话缓存/票据恢复，openssl Reused 验证）+ 字节序可控整数↔bytes（int_to_bytes/bytes_to_int，pxdb 基石）+ 推导式语法补全（多 for/多变量解包/多 if/DictComp）+ fmt 配置化（--indent/--quote/.pxfmt.toml） | ✅ |
 | M31 | 沙箱安全（sandbox_enter：内存限制 setrlimit / 危险函数禁限 deny / 权限降级）+ 虚拟主机（vhost Host 头路由多域名共服）+ 限流防爆破（rate_limit 滑动窗口 + px_serve 按 IP 429）+ HTTP/2 预检（ALPN 固定 http/1.1 / h2c 505 / CORS 204）+ 并发模型升级（连接线程池突破 64 槽位，80 并发全 200） | ✅ |
 | M32 | ws:// wss:// 一行连接（ws_connect("ws://…"/"wss://…")，wss 走 TLS）+ SSE 自动重连（sse_connect(url, reconnect_ms)，断线带 Last-Event-ID 重连）+ 进程池热更新（.px 脚本/px 二进制 mtime 变化自动滚动重启 worker）+ 生成器表达式（(expr for x in xs)，gen_next 逐项 / for-in / list() 转换） | ✅ |
+| M33 | per-route 限流（route 第 4 参数 opts{rate_limit} 路由粒度 429，独立桶）+ TLS SNI（tls_server(cert,key,hostname) 多证书按域名选择）+ 访问日志落盘轮转（px_serve opts{access_log}，>10MB 切 .1/.2/.3）+ HTTP/3 QUIC 预研（udp_open/send/recv/close + Alt-Svc 通告 + 报告） | ✅ |
 
 ---
 

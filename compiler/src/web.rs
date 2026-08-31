@@ -445,6 +445,10 @@ pub struct PxServeOpts {
     pub max_conn: usize,
     /// M31：按 IP 全局限流（max 次 / window_sec 秒 → 超限 429）
     pub rate_limit: Option<(i64, i64)>,
+    /// M33：结构化访问日志落盘（路径；None = 仅 stderr）
+    pub access_log: Option<String>,
+    /// M33：HTTP/3 通告（Alt-Svc 响应头值；如 "h3=\":443\""；None = 不发）
+    pub alt_svc: Option<String>,
 }
 
 impl Default for PxServeOpts {
@@ -455,11 +459,13 @@ impl Default for PxServeOpts {
             timeout_ms: 10000,
             max_conn: 32,
             rate_limit: None,
+            access_log: None,
+            alt_svc: None,
         }
     }
 }
 
-/// 解析 opts dict：{max_body_size, body_tmp_dir, max_conn, rate_limit:{max,window_sec}}
+/// 解析 opts dict：{max_body_size, body_tmp_dir, max_conn, rate_limit:{max,window_sec}, access_log, alt_svc}
 pub fn parse_opts(opts: Option<&Value>, timeout_ms: i64) -> PxServeOpts {
     let mut o = PxServeOpts {
         timeout_ms: timeout_ms.max(1),
@@ -488,6 +494,12 @@ pub fn parse_opts(opts: Option<&Value>, timeout_ms: i64) -> PxServeOpts {
                 }
             }
         }
+        if let Some(Value::Str(s)) = d.get("access_log") {
+            o.access_log = Some(s.clone());
+        }
+        if let Some(Value::Str(s)) = d.get("alt_svc") {
+            o.alt_svc = Some(s.clone());
+        }
     }
     o
 }
@@ -510,6 +522,9 @@ pub fn px_serve(port: i64, docroot: &str, timeout_ms: i64, opts: Option<&Value>)
     install_stop_handlers();
     let _ = listener.set_nonblocking(true);
     let tls = crate::tls::tls_server_configured();
+    // M33：启动时配置 access log 落盘 + Alt-Svc 通告
+    set_access_log(o.access_log.clone());
+    set_alt_svc(o.alt_svc.clone());
     eprintln!(
         "[px-serve] 普贤应用服务器 docroot={} 端口={} 超时={}ms tls={} max_body={}B max_conn={}",
         root.display(),
@@ -881,12 +896,53 @@ fn handle_one_request(
 }
 
 /// M29：结构化访问日志（时间 remote method path status bytes ms req=id）
+/// M33：落盘——px_serve opts{access_log:"path"} 时写文件 + 大小轮转（10MB → .1/.2/.3）
+const ACCESS_LOG_MAX: u64 = 10 * 1024 * 1024;
+#[derive(Clone)]
+struct AccessLogState {
+    path: String,
+}
+static ACCESS_LOG: OnceLock<Mutex<Option<AccessLogState>>> = OnceLock::new();
+fn access_log_state() -> &'static Mutex<Option<AccessLogState>> {
+    ACCESS_LOG.get_or_init(|| Mutex::new(None))
+}
+
+/// px_serve 启动时配置 access log 落盘路径
+pub fn set_access_log(path: Option<String>) {
+    *access_log_state().lock().unwrap() = path.map(|p| AccessLogState { path: p });
+}
+
+fn access_log_rotate(state: &AccessLogState) {
+    // 当前文件 > 10MB → 轮转 .1/.2/.3（保留 3 份）
+    let p = &state.path;
+    let sz = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+    if sz < ACCESS_LOG_MAX {
+        return;
+    }
+    for i in (1..=3).rev() {
+        let src = if i == 1 { p.clone() } else { format!("{}.{}", p, i - 1) };
+        let dst = format!("{}.{}", p, i);
+        if std::fs::metadata(&src).is_ok() {
+            let _ = std::fs::rename(&src, &dst);
+        }
+    }
+}
+
 fn log_access(req_id: &str, remote: &str, method: &str, path: &str, status: i64, bytes: usize, ms: u128) {
     let t = now_secs();
-    eprintln!(
-        "[px-access] {} {} {} {} {} {} {}ms req={}",
+    let line = format!(
+        "[px-access] {} {} {} {} {} {} {}ms req={}\n",
         t, remote, method, path, status, bytes, ms, req_id
     );
+    eprint!("{}", line);
+    // M33：落盘（追加 + 轮转）
+    if let Some(st) = access_log_state().lock().unwrap().clone() {
+        access_log_rotate(&st);
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&st.path) {
+            use std::io::Write;
+            let _ = f.write_all(line.as_bytes());
+        }
+    }
 }
 
 /// M29c：gzip 响应压缩——Accept-Encoding: gzip 且 body > 1KB 且为文本类 → gzip + Content-Encoding
@@ -1075,6 +1131,19 @@ fn send_static_file(
     );
     for (k, v) in &extra {
         hd.push_str(&format!("{}: {}\r\n", k, v));
+    }
+    // M33.4：Alt-Svc 通告（HTTP/3 协商；px_serve opts{alt_svc}）
+    if let Some(alt) = alt_svc_value() {
+        let mut dup = false;
+        for (k, _) in &extra {
+            if k.eq_ignore_ascii_case("alt-svc") {
+                dup = true;
+                break;
+            }
+        }
+        if !dup {
+            hd.push_str(&format!("Alt-Svc: {}\r\n", alt));
+        }
     }
     if accept_gzip && size >= 1024 && ct.starts_with("text/") {
         // 静态文本文件 gzip：仅当请求 Accept-Encoding: gzip
@@ -1627,6 +1696,19 @@ pub fn send_response(
     if !has_ct {
         resp.extend_from_slice(b"Content-Type: text/plain; charset=utf-8\r\n");
     }
+    // M33.4：HTTP/3 通告——px_serve opts{alt_svc} 时统一注入 Alt-Svc 头
+    if let Some(alt) = alt_svc_value() {
+        let mut dup = false;
+        for (k, _) in headers {
+            if k.eq_ignore_ascii_case("alt-svc") {
+                dup = true;
+                break;
+            }
+        }
+        if !dup {
+            resp.extend_from_slice(format!("Alt-Svc: {}\r\n", alt).as_bytes());
+        }
+    }
     resp.extend_from_slice(b"\r\n");
     if !head_only {
         resp.extend_from_slice(body);
@@ -1635,6 +1717,18 @@ pub fn send_response(
         .map_err(|e| format!("发送响应失败: {}", e))?;
     conn.flush().map_err(|e| format!("flush 失败: {}", e))?;
     Ok(())
+}
+
+/// M33.4：Alt-Svc 通告（HTTP/3 协商机制；px_serve opts{alt_svc:"h3=\":443\""}）
+static ALT_SVC: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+fn alt_svc_lock() -> &'static Mutex<Option<String>> {
+    ALT_SVC.get_or_init(|| Mutex::new(None))
+}
+pub fn set_alt_svc(v: Option<String>) {
+    *alt_svc_lock().lock().unwrap() = v;
+}
+fn alt_svc_value() -> Option<String> {
+    alt_svc_lock().lock().unwrap().clone()
 }
 
 fn status_reason(code: i64) -> &'static str {
@@ -1685,6 +1779,10 @@ struct RouteEntry {
     method: String,
     segs: Vec<RouteSeg>,
     handler: Value,
+    /// 路由唯一 key（限流桶前缀）："METHOD pattern"
+    key: String,
+    /// M33：per-route 限流（max 次 / window_sec 秒，按来源 IP → 超限 429）
+    rate_limit: Option<(i64, i64)>,
 }
 
 static ROUTES: OnceLock<Mutex<Vec<RouteEntry>>> = OnceLock::new();
@@ -1724,13 +1822,21 @@ fn parse_pattern(pattern: &str) -> Result<Vec<RouteSeg>, String> {
     Ok(segs)
 }
 
-/// route(method, pattern, handler) → bool
-pub fn route_add(method: &str, pattern: &str, handler: Value) -> Result<(), String> {
+/// route(method, pattern, handler[, rate_limit]) → bool
+/// rate_limit: Option<(max, window_sec)> —— 该路由独立限流（按来源 IP）
+pub fn route_add(
+    method: &str,
+    pattern: &str,
+    handler: Value,
+    rate_limit: Option<(i64, i64)>,
+) -> Result<(), String> {
     let segs = parse_pattern(pattern)?;
     routes().lock().unwrap().push(RouteEntry {
         method: method.to_uppercase(),
+        key: format!("{} {}", method.to_uppercase(), pattern),
         segs,
         handler,
+        rate_limit,
     });
     Ok(())
 }
@@ -1741,8 +1847,8 @@ pub fn middleware_add(handler: Value) -> Result<(), String> {
     Ok(())
 }
 
-/// 匹配路由：返回 (handler, params dict)。path 已 URL 解码。
-fn match_route(method: &str, path: &str) -> Option<(Value, Value)> {
+/// 匹配路由：返回 (handler, params dict, rate_limit, route_key)。path 已 URL 解码。
+fn match_route(method: &str, path: &str) -> Option<(Value, Value, Option<(i64, i64)>, String)> {
     let rs = routes().lock().unwrap();
     if rs.is_empty() {
         return None;
@@ -1784,8 +1890,10 @@ fn match_route(method: &str, path: &str) -> Option<(Value, Value)> {
         // 全部段消费完且路径也消费完（或末尾通配）
         if ok && pi >= parts.len() {
             let handler = r.handler.clone();
+            let rl = r.rate_limit;
+            let key = r.key.clone();
             let pd = Value::Dict(Arc::new(Mutex::new(params)));
-            return Some((handler, pd));
+            return Some((handler, pd, rl, key));
         }
     }
     None
@@ -1884,7 +1992,20 @@ fn try_route_dispatch(
     keep_alive: bool,
 ) -> Result<Option<()>, String> {
     let path = req_str(req, "path").unwrap_or_else(|| "/".to_string());
-    if let Some((handler, params)) = match_route(method, &path) {
+    if let Some((handler, params, route_rl, route_key)) = match_route(method, &path) {
+        // M33.1：per-route 限流——匹配路由后按 "路由|IP" 计数（各路由独立桶），超限 429
+        if let Some((max, win)) = route_rl {
+            let key = format!("route:{}|{}", route_key, remote_ip(remote));
+            if !rate_limit_try(&key, max, win) {
+                let mut hd = vec![("X-Request-Id".into(), req_id.to_string())];
+                if head_only {
+                    hd.push(("Content-Length".into(), "21".to_string()));
+                }
+                let _ = send_response(conn, 429, &hd, b"429 Too Many Requests", head_only, keep_alive);
+                log_access(req_id, remote, method, &path, 429, 21, 0);
+                return Ok(Some(()));
+            }
+        }
         let start = std::time::Instant::now();
         let (mut status, mut headers, body) = run_route_pipeline(handler, params, req);
         headers.retain(|(k, _)| !k.eq_ignore_ascii_case("x-request-id"));

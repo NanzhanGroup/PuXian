@@ -271,6 +271,13 @@ int px_gc_stats(int* live, int* total);
 // ==================== M28 P1：路由表 + 中间件（runtime_route.c） ====================
 LXValue bi_route(LXValue* args, int nargs, void* ctx);
 LXValue bi_middleware(LXValue* args, int nargs, void* ctx);
+// M31 限流（M33 供 per-route 限流使用）：true 放行 / false 超限
+int px_rate_limit_try(const char* key, long long max, long long window_sec);
+// M33：access log 落盘路径 + Alt-Svc 通告（runtime.c 定义，runtime_route.c 引用）
+extern char g_px_access_log[1024];
+extern char g_px_alt_svc[256];
+// M33：结构化访问日志（stderr + 落盘 + 轮转；runtime_route.c 的 per-route 429 共用）
+void px_access_log(const char* fmt, ...);
 // 路由表非空？（决定 px_serve 是否走路由优先）
 int px_route_has(void);
 // 匹配路由并执行中间件链 + handler，发送响应。返回 1=已处理 / 0=未匹配。

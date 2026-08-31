@@ -1,0 +1,54 @@
+# M33② TLS SNI：tls_server(cert, key, hostname) 多证书按 ClientHello 域名选择
+# 带 hostname 注册进 SNI 表；无 hostname 为默认证书（无 SNI / 未匹配时使用）
+# 验证：openssl s_client -servername 选到对应 CN 证书（双模式一致）
+PORT = 18142
+os_spawn("/bin/sh", ["-c", "rm -f /tmp/px_m33_*.pem /tmp/px_m33_*.log /tmp/px_m33_*.txt"])
+sleep(300)
+
+# 生成 3 个自签证书（不同 CN）
+os_spawn("/bin/sh", ["-c", "openssl req -x509 -newkey rsa:2048 -keyout /tmp/px_m33_key_d.pem -out /tmp/px_m33_cert_d.pem -days 1 -nodes -subj /CN=default.test 2>/dev/null"])
+os_spawn("/bin/sh", ["-c", "openssl req -x509 -newkey rsa:2048 -keyout /tmp/px_m33_key_a.pem -out /tmp/px_m33_cert_a.pem -days 1 -nodes -subj /CN=a.test 2>/dev/null"])
+os_spawn("/bin/sh", ["-c", "openssl req -x509 -newkey rsa:2048 -keyout /tmp/px_m33_key_b.pem -out /tmp/px_m33_cert_b.pem -days 1 -nodes -subj /CN=b.test 2>/dev/null"])
+sleep(900)
+assert(exists("/tmp/px_m33_cert_a.pem"))
+assert(exists("/tmp/px_m33_cert_b.pem"))
+
+# 当前进程注册（验证 tls_server 3 参数可用 + spawn 服务）
+assert(tls_server("/tmp/px_m33_cert_d.pem", "/tmp/px_m33_key_d.pem"))
+assert(tls_server("/tmp/px_m33_cert_a.pem", "/tmp/px_m33_key_a.pem", "a.test"))
+assert(tls_server("/tmp/px_m33_cert_b.pem", "/tmp/px_m33_key_b.pem", "b.test"))
+
+def serve():
+    px_serve(PORT, "/tmp", 5000)
+spawn serve()
+sleep(1000)
+
+# SNI a.test → 证书 CN=a.test
+os_spawn("/bin/sh", ["-c", "printf 'Q' | openssl s_client -connect 127.0.0.1:" + str(PORT) + " -servername a.test 2>/dev/null | grep subject > /tmp/px_m33_sni_a.txt"])
+sleep(500)
+sa = read_file("/tmp/px_m33_sni_a.txt")
+assert(contains(sa, "CN=a.test"))
+print("SNI a.test:", trim(sa))
+
+# SNI b.test → 证书 CN=b.test
+os_spawn("/bin/sh", ["-c", "printf 'Q' | openssl s_client -connect 127.0.0.1:" + str(PORT) + " -servername b.test 2>/dev/null | grep subject > /tmp/px_m33_sni_b.txt"])
+sleep(500)
+sb = read_file("/tmp/px_m33_sni_b.txt")
+assert(contains(sb, "CN=b.test"))
+print("SNI b.test:", trim(sb))
+
+# 无 SNI → 默认证书 CN=default.test
+os_spawn("/bin/sh", ["-c", "printf 'Q' | openssl s_client -connect 127.0.0.1:" + str(PORT) + " 2>/dev/null | grep subject > /tmp/px_m33_sni_def.txt"])
+sleep(500)
+sd = read_file("/tmp/px_m33_sni_def.txt")
+assert(contains(sd, "CN=default.test"))
+print("SNI default:", trim(sd))
+
+# 未注册域名 → 默认证书（SNI 未匹配回落）
+os_spawn("/bin/sh", ["-c", "printf 'Q' | openssl s_client -connect 127.0.0.1:" + str(PORT) + " -servername unknown.test 2>/dev/null | grep subject > /tmp/px_m33_sni_unk.txt"])
+sleep(500)
+su = read_file("/tmp/px_m33_sni_unk.txt")
+assert(contains(su, "CN=default.test"))
+print("SNI unknown fallback:", trim(su))
+
+print("M33_SNI_OK")

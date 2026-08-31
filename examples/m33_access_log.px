@@ -1,0 +1,46 @@
+# M33③ 结构化访问日志落盘：px_serve opts{access_log:"path"} → 文件 + 大小轮转
+# 每请求一行 [px-access]（同 stderr 格式），文件追加 + >10MB 轮转 .1/.2/.3
+PORT = 18143
+D = "/tmp/px_m33_al"
+LOG = "/tmp/px_m33_access.log"
+mkdir(D)
+write_file(D + "/index.txt", "HELLO-ACCESS-LOG")
+os_spawn("/bin/sh", ["-c", "rm -f /tmp/px_m33_access.log*"])
+sleep(200)
+
+def serve():
+    px_serve(PORT, D, 10000, {"access_log": LOG})
+spawn serve()
+sleep(300)
+
+# 请求 3 次静态文件 + 1 次 404（都应有日志行）
+for i in range(3):
+    r = http_request("http://127.0.0.1:" + str(PORT) + "/index.txt", "GET")
+    assert(r["status"] == 200)
+r = http_request("http://127.0.0.1:" + str(PORT) + "/nope.txt", "GET")
+assert(r["status"] == 404)
+
+sleep(300)
+assert(exists(LOG), "access log 文件已创建")
+log = read_file(LOG)
+lines = log.split("\n")
+count = 0
+for ln in lines:
+    if starts_with(ln, "[px-access]") and contains(ln, "req=px-"):
+        count = count + 1
+assert(count >= 4, "access log 行数 >= 4")
+print("access log lines:", count)
+
+# 校验日志内容格式（时间 remote method path status bytes ms req=id）
+sample = ""
+for ln in lines:
+    if starts_with(ln, "[px-access]"):
+        sample = ln
+        break
+parts = sample.split(" ")
+assert(len(parts) >= 9, "日志字段完整")
+assert(parts[5] == "200" or parts[5] == "404", "状态码")
+assert(parts[0] == "[px-access]")
+print("sample:", sample)
+
+print("M33_ACCESS_LOG_OK")

@@ -391,6 +391,11 @@ impl Interpreter {
             ("rate_limit", Builtin::RateLimit),
             ("gen_next", Builtin::GenNext),
             ("list", Builtin::List),
+            // M33：HTTP/3 预研——UDP 基础设施
+            ("udp_open", Builtin::UdpOpen),
+            ("udp_send", Builtin::UdpSend),
+            ("udp_recv", Builtin::UdpRecv),
+            ("udp_close", Builtin::UdpClose),
         ];
         for (n, b) in names {
             g.define(n, Value::Builtin(*b));

@@ -1,15 +1,21 @@
 //! M27 P0-1：服务端 TLS（HTTPS / WSS / SSE-over-TLS）
 //!
-//! 语言层 API（builtin.rs 分派）：`tls_server(cert_pem, key_pem) -> bool`
+//! 语言层 API（builtin.rs 分派）：`tls_server(cert_pem, key_pem[, hostname]) -> bool`
 //! - cert_pem / key_pem 为 PEM 文件路径，或直接 PEM 内容（含 "-----BEGIN" 前缀）
 //! - 注册后 px_serve / ws_serve / sse_serve 自动接受 TLS 连接（双模式一致）
+//! - M33：多次调用注册多证书；带 hostname 的按 TLS SNI（ClientHello 域名）选择证书，
+//!   无 hostname 的作为默认证书（无 SNI / 未匹配时使用）。
 //!
 //! 连接抽象：`SConn`（Plain / Tls 统一 Read+Write），服务端 accept 后若已注册
 //! 服务端 TLS 配置则先做 TLS 握手，否则透传明文。
 
+use std::collections::HashMap;
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
+
+use rustls::server::ClientHello;
+use rustls::sign::CertifiedKey;
 
 /// 服务端 TLS 连接：明文 TCP 或 rustls 服务端会话。
 /// 内部为 Arc<Mutex>：try_clone 可安全共享（sse_send / ws 读写独立句柄场景）。
@@ -114,11 +120,44 @@ impl std::io::Write for SConn {
     }
 }
 
-/// 进程级服务端 TLS 配置（可重复注册覆盖）
+/// M33：SNI 证书表（hostname → 证书；None = 默认）
+#[derive(Clone)]
+struct CertEntry {
+    /// 关联的域名（None = 默认证书）
+    hostname: Option<String>,
+    /// 证书链 + 签名密钥（rustls CertifiedKey）
+    ck: Arc<CertifiedKey>,
+}
+
+/// 按 SNI 解析证书的 resolver（rustls ResolvesServerCert）
+#[derive(Debug)]
+struct SniResolver {
+    /// 带域名的证书（按 hostname 小写查）
+    by_name: HashMap<String, Arc<CertifiedKey>>,
+    /// 默认证书（无 SNI / 未匹配）
+    default: Arc<CertifiedKey>,
+}
+
+impl rustls::server::ResolvesServerCert for SniResolver {
+    fn resolve(&self, client_hello: ClientHello) -> Option<Arc<CertifiedKey>> {
+        if let Some(name) = client_hello.server_name() {
+            if let Some(ck) = self.by_name.get(&name.to_ascii_lowercase()) {
+                return Some(ck.clone());
+            }
+        }
+        Some(self.default.clone())
+    }
+}
+
 static TLS_SERVER: OnceLock<Mutex<Option<Arc<rustls::ServerConfig>>>> = OnceLock::new();
 
 fn tls_server_lock() -> &'static Mutex<Option<Arc<rustls::ServerConfig>>> {
     TLS_SERVER.get_or_init(|| Mutex::new(None))
+}
+
+static TLS_CERTS: OnceLock<Mutex<Vec<CertEntry>>> = OnceLock::new();
+fn tls_certs() -> &'static Mutex<Vec<CertEntry>> {
+    TLS_CERTS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
 /// 是否已注册服务端 TLS 配置
@@ -128,6 +167,41 @@ pub fn tls_server_configured() -> bool {
 
 fn tls_server_config() -> Option<Arc<rustls::ServerConfig>> {
     tls_server_lock().lock().unwrap().clone()
+}
+
+/// 根据当前证书表重建 ServerConfig（证书 / 会话缓存 / 票据 / ALPN 公共配置）
+fn rebuild_server_config() -> Result<(), String> {
+    let entries = tls_certs().lock().unwrap().clone();
+    if entries.is_empty() {
+        *tls_server_lock().lock().unwrap() = None;
+        return Ok(());
+    }
+    // 默认证书：最后注册的无 hostname 证书，若全带域名则取第一条
+    let mut default: Option<Arc<CertifiedKey>> = None;
+    for e in entries.iter() {
+        if e.hostname.is_none() {
+            default = Some(e.ck.clone());
+        }
+    }
+    let default = default.unwrap_or_else(|| entries[0].ck.clone());
+    let mut by_name = HashMap::new();
+    for e in entries.iter() {
+        if let Some(h) = &e.hostname {
+            by_name.insert(h.to_ascii_lowercase(), e.ck.clone());
+        }
+    }
+    let resolver = Arc::new(SniResolver { by_name, default });
+    let mut cfg = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_cert_resolver(resolver);
+    // M30：服务端 https 连接池——TLS 会话缓存（Session ID 缓存 + 票据）
+    cfg.session_storage = rustls::server::ServerSessionMemoryCache::new(256);
+    cfg.ticketer = rustls::crypto::ring::Ticketer::new()
+        .map_err(|e| format!("TLS 票据生成失败: {}", e))?;
+    // M31.4a：HTTP/2 预检——ALPN 固定 http/1.1。
+    cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
+    *tls_server_lock().lock().unwrap() = Some(Arc::new(cfg));
+    Ok(())
 }
 
 // ==================== PEM 解析（不引入 rustls-pemfile） ====================
@@ -219,8 +293,9 @@ fn parse_private_key(input: &str) -> Result<rustls::pki_types::PrivateKeyDer<'st
     Err("未找到私钥（-----BEGIN PRIVATE KEY----- 或 -----BEGIN RSA PRIVATE KEY-----）".into())
 }
 
-/// 注册服务端 TLS 配置（cert/key 为 PEM 路径或 PEM 内容）
-pub fn tls_server_register(cert_pem: &str, key_pem: &str) -> Result<(), String> {
+/// 注册服务端 TLS 证书（cert/key 为 PEM 路径或 PEM 内容；hostname 可选 → SNI）
+/// 多次调用注册多证书：带 hostname 按 ClientHello SNI 选择；无 hostname 为默认证书。
+pub fn tls_server_register(cert_pem: &str, key_pem: &str, hostname: Option<&str>) -> Result<(), String> {
     let cert_text = if cert_pem.contains("-----BEGIN") {
         cert_pem.to_string()
     } else {
@@ -229,20 +304,26 @@ pub fn tls_server_register(cert_pem: &str, key_pem: &str) -> Result<(), String> 
     };
     let certs = parse_certs(&cert_text)?;
     let key = parse_private_key(key_pem)?;
-    let mut cfg = rustls::ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(certs, key)
-        .map_err(|e| format!("TLS 配置失败: {}", e))?;
-    // M30：服务端 https 连接池——TLS 会话缓存（Session ID 缓存 + 票据）
-    // 新 HTTPS 连接可凭 Session ID / NewSessionTicket 快速恢复握手，省一次往返。
-    cfg.session_storage = rustls::server::ServerSessionMemoryCache::new(256);
-    cfg.ticketer = rustls::crypto::ring::Ticketer::new()
-        .map_err(|e| format!("TLS 票据生成失败: {}", e))?;
-    // M31.4a：HTTP/2 预检——ALPN 固定 http/1.1。
-    // 客户端 TLS 握手时探测 h2，明确协商到 http/1.1（不声明 h2 → 不会进入 HTTP/2 帧模式）。
-    cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
-    *tls_server_lock().lock().unwrap() = Some(Arc::new(cfg));
-    Ok(())
+    // CertifiedKey：证书链 + 签名密钥（rustls 内部用于握手签名）
+    let signing_key = rustls::crypto::ring::sign::any_supported_type(&key)
+        .map_err(|e| format!("私钥解析失败: {}", e))?;
+    let ck = Arc::new(CertifiedKey {
+        cert: certs,
+        key: signing_key,
+        ocsp: None,
+    });
+    let hostname = hostname.map(|h| h.trim().trim_end_matches('.').to_ascii_lowercase());
+    {
+        let mut table = tls_certs().lock().unwrap();
+        // 同名覆盖（hostname 相同或无 hostname 的默认证书）
+        if let Some(hn) = &hostname {
+            table.retain(|e| e.hostname.as_deref() != Some(hn.as_str()));
+        } else {
+            table.retain(|e| e.hostname.is_none());
+        }
+        table.push(CertEntry { hostname, ck });
+    }
+    rebuild_server_config()
 }
 
 /// accept 一个已建立的 TCP 连接：若已注册服务端 TLS 则做 TLS 握手，否则明文。
@@ -343,11 +424,12 @@ mod tests {
         tls_server_register(
             cert.as_bytes().is_empty().then(|| "").unwrap_or(""),
             "",
+            None,
         )
         .unwrap_err(); // 空参数应报错
         let cert_path = dir.join("cert.pem");
         let key_path = dir.join("key.pem");
-        tls_server_register(cert_path.to_str().unwrap(), key_path.to_str().unwrap()).unwrap();
+        tls_server_register(cert_path.to_str().unwrap(), key_path.to_str().unwrap(), None).unwrap();
         assert!(tls_server_configured());
 
         // 客户端用 rustls + 不校验证书（测试目的）连接

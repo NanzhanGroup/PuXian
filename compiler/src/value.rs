@@ -356,6 +356,15 @@ pub enum Builtin {
     // list(x) → list（list/range/gen/tuple → list；str → chars；dict → keys）
     GenNext,
     List,
+    // M33：HTTP/3 / QUIC 预研——UDP 基础设施（QUIC 底层是 UDP socket）
+    // udp_open(port) → int（bind 0.0.0.0:port；返回 socket id）
+    // udp_send(sock, ip, port, data) → int（发送字节数）
+    // udp_recv(sock, maxlen) → dict{data, ip, port} | null（阻塞接收）
+    // udp_close(sock) → bool
+    UdpOpen,
+    UdpSend,
+    UdpRecv,
+    UdpClose,
 }
 
 impl Builtin {
@@ -518,6 +527,10 @@ impl Builtin {
             Builtin::RateLimit => "rate_limit",
             Builtin::GenNext => "gen_next",
             Builtin::List => "list",
+            Builtin::UdpOpen => "udp_open",
+            Builtin::UdpSend => "udp_send",
+            Builtin::UdpRecv => "udp_recv",
+            Builtin::UdpClose => "udp_close",
         }
     }
 }

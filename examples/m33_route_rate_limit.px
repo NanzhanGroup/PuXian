@@ -1,0 +1,49 @@
+# M33① per-route 限流：route(method, pattern, handler, opts{rate_limit:{max,window_sec}})
+# 该路由按来源 IP 独立限流（超限 429）；其他路由 / 静态文件不受影响（双模式一致）
+PORT = 18141
+D = "/tmp/px_m33_rl"
+mkdir(D)
+write_file(D + "/index.txt", "OK")
+
+def limited(req, params):
+    return "limited ok"
+route("GET", "/api/limited", limited, {"rate_limit": {"max": 2, "window_sec": 60}})
+
+def free(req, params):
+    return "free ok"
+route("GET", "/api/free", free)
+
+def serve():
+    px_serve(PORT, D, 10000)
+spawn serve()
+sleep(300)
+
+# 限流路由：前 2 次 200，第 3 次 429（同来源 IP）
+st = []
+for i in range(3):
+    r = http_request("http://127.0.0.1:" + str(PORT) + "/api/limited", "GET")
+    st.append(r["status"])
+assert(st[0] == 200 and st[1] == 200 and st[2] == 429)
+print("per-route limit:", str(st[0]), str(st[1]), str(st[2]))
+
+# 未限流路由不受影响（同 IP 仍 200）
+r = http_request("http://127.0.0.1:" + str(PORT) + "/api/free", "GET")
+assert(r["status"] == 200)
+print("free route:", str(r["status"]))
+
+# 静态文件也不受影响
+r = http_request("http://127.0.0.1:" + str(PORT) + "/index.txt", "GET")
+assert(r["status"] == 200 and r["body"] == "OK")
+print("static ok:", str(r["status"]))
+
+# 路径参数路由 + 限流（:id 段）也能独立限流
+def byid(req, params):
+    return "id=" + params["id"]
+route("GET", "/api/item/:id", byid, {"rate_limit": {"max": 1, "window_sec": 60}})
+r1 = http_request("http://127.0.0.1:" + str(PORT) + "/api/item/7", "GET")
+r2 = http_request("http://127.0.0.1:" + str(PORT) + "/api/item/7", "GET")
+assert(r1["status"] == 200 and r1["body"] == "id=7")
+assert(r2["status"] == 429)
+print("param route limit:", str(r1["status"]), str(r2["status"]))
+
+print("M33_ROUTE_RATE_LIMIT_OK")

@@ -56,6 +56,15 @@ static mbedtls_x509_crt g_srv_cert;
 static mbedtls_pk_context g_srv_key;
 static int g_srv_tls_ready = 0;
 static pthread_mutex_t g_srv_tls_mu = PTHREAD_MUTEX_INITIALIZER;
+// M33：TLS SNI 多证书表（tls_server(cert, key, hostname) 多次注册；按 ClientHello SNI 选证书）
+#define PX_MAX_SNI_CERTS 16
+typedef struct {
+    char hostname[256];
+    mbedtls_x509_crt cert;
+    mbedtls_pk_context key;
+    int active;
+} PxSniCert;
+static PxSniCert g_sni_certs[PX_MAX_SNI_CERTS];
 // M30：服务端 https 连接池——TLS 会话缓存（Session ID + 票据），新连接快速恢复握手
 static mbedtls_ssl_cache_context g_srv_tls_cache;
 static int g_srv_tls_cache_init = 0;
@@ -77,6 +86,9 @@ static int g_sandbox_active = 0;
 // px_serve opts：限流（max 次 / window_sec 秒，按 IP；0 = 未启用）
 static long long g_px_rate_max = 0;
 static long long g_px_rate_window = 0;
+// M33：access log 落盘路径（px_serve opts{access_log}；空 = 仅 stderr）+ Alt-Svc 通告
+char g_px_access_log[1024] = {0};
+char g_px_alt_svc[256] = {0};
 // 虚拟主机表（vhost(host, docroot|handler)）
 #define MAX_VHOSTS 32
 typedef struct {
@@ -121,7 +133,7 @@ static void* px_pool_worker(void* arg);
 static void px_vhost_normalize(LXValue v, int* status, const char** ct, const char** body, int* body_len);
 static void px_vhost_docroot_store(const char* root);
 static const char* px_vhost_docroot(void);
-static int px_rate_limit_try(const char* key, long long max, long long window_sec);
+int px_rate_limit_try(const char* key, long long max, long long window_sec);
 
 // 前向声明：xmalloc/xfree 在 gc_block_stop 定义之前使用（M11 自由链表分配器）
 static void gc_block_stop(sigset_t* old);
@@ -134,6 +146,11 @@ static LXValue bi_tcp_connect(LXValue* args, int nargs, void* ctx);
 static LXValue bi_tcp_send(LXValue* args, int nargs, void* ctx);
 static LXValue bi_tcp_recv(LXValue* args, int nargs, void* ctx);
 static LXValue bi_tcp_close(LXValue* args, int nargs, void* ctx);
+// M33：UDP 基础设施（HTTP/3/QUIC 预研）
+static LXValue bi_udp_open(LXValue* args, int nargs, void* ctx);
+static LXValue bi_udp_send(LXValue* args, int nargs, void* ctx);
+static LXValue bi_udp_recv(LXValue* args, int nargs, void* ctx);
+static LXValue bi_udp_close(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_get(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_post(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_serve(LXValue* args, int nargs, void* ctx);
@@ -4184,6 +4201,11 @@ void px_register_builtins(void) {
     px_set_global("tcp_send", px_native("tcp_send", bi_tcp_send));
     px_set_global("tcp_recv", px_native("tcp_recv", bi_tcp_recv));
     px_set_global("tcp_close", px_native("tcp_close", bi_tcp_close));
+    // M33：UDP 基础设施（HTTP/3/QUIC 预研）
+    px_set_global("udp_open", px_native("udp_open", bi_udp_open));
+    px_set_global("udp_send", px_native("udp_send", bi_udp_send));
+    px_set_global("udp_recv", px_native("udp_recv", bi_udp_recv));
+    px_set_global("udp_close", px_native("udp_close", bi_udp_close));
     px_set_global("http_get", px_native("http_get", bi_http_get));
     px_set_global("http_post", px_native("http_post", bi_http_post));
     px_set_global("http_serve", px_native("http_serve", bi_http_serve));
@@ -5461,6 +5483,99 @@ static LXValue bi_tcp_close(LXValue* args, int nargs, void* ctx) {
     if (nargs != 1 || args[0].type != PX_INT) px_error("tcp_close 需要 (id) 参数");
     close((int)args[0].as.i);
     return px_null();
+}
+
+// ==================== M33：UDP 基础设施（HTTP/3/QUIC 预研；与解释器 builtin.rs 一致） ====================
+// udp_open([port]) → int（bind 0.0.0.0:port；缺省/0 → 系统分配）
+// udp_send(sock, ip, port, data) → int；udp_recv(sock, maxlen) → dict{data,ip,port} | null
+// udp_close(sock) → bool
+static LXValue bi_udp_open(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs > 1) px_error("udp_open 需要 (port) 参数");
+    int port = (nargs == 1 && args[0].type == PX_INT) ? (int)args[0].as.i : 0;
+    if (port < 0 || port > 65535) px_error("udp_open 端口范围 0-65535");
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) px_error("udp_open: 创建 socket 失败");
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons((uint16_t)port);
+    if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        int e = errno;
+        close(fd);
+        px_error("udp_open: 绑定端口 %d 失败 (%d)", port, e);
+    }
+    return px_int(fd);
+}
+
+static LXValue bi_udp_send(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 4 || args[0].type != PX_INT || args[1].type != PX_STR || args[2].type != PX_INT) {
+        px_error("udp_send 需要 (sock, ip, port, data) 参数");
+    }
+    int fd = (int)args[0].as.i;
+    const char* ip = args[1].as.obj->as.str.data;
+    int port = (int)args[2].as.i;
+    const char* data;
+    int len;
+    if (args[3].type == PX_STR || args[3].type == PX_BYTES) {
+        data = args[3].as.obj->as.str.data;
+        len = args[3].as.obj->as.str.len;
+    } else {
+        px_error("udp_send 的 data 需要 str/bytes");
+    }
+    struct sockaddr_in dst;
+    memset(&dst, 0, sizeof(dst));
+    dst.sin_family = AF_INET;
+    dst.sin_port = htons((uint16_t)port);
+    if (inet_pton(AF_INET, ip, &dst.sin_addr) != 1) {
+        struct addrinfo hints, *res = NULL;
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_DGRAM;
+        char portstr[16];
+        snprintf(portstr, sizeof(portstr), "%d", port);
+        if (getaddrinfo(ip, portstr, &hints, &res) != 0 || !res) px_error("udp_send: 解析主机失败 %s", ip);
+        memcpy(&dst, res->ai_addr, res->ai_addrlen);
+        freeaddrinfo(res);
+    }
+    int n = (int)sendto(fd, data, (size_t)len, 0, (struct sockaddr*)&dst, sizeof(dst));
+    if (n < 0) px_error("udp_send 失败 (errno=%d)", errno);
+    return px_int(n);
+}
+
+static LXValue bi_udp_recv(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2 || args[0].type != PX_INT || args[1].type != PX_INT) {
+        px_error("udp_recv 需要 (sock, maxlen) 参数");
+    }
+    int fd = (int)args[0].as.i;
+    int maxlen = (int)args[1].as.i;
+    if (maxlen < 1) px_error("udp_recv 的 maxlen 需要正整数");
+    char* buf = xmalloc((size_t)maxlen + 1);
+    struct sockaddr_in src;
+    socklen_t slen = sizeof(src);
+    int n = (int)recvfrom(fd, buf, (size_t)maxlen, 0, (struct sockaddr*)&src, &slen);
+    if (n < 0) {
+        xfree(buf);
+        return px_null();
+    }
+    LXValue r = px_dict();
+    px_dict_set(r, "data", px_bytes_len(buf, n));
+    char ip[64] = {0};
+    inet_ntop(AF_INET, &src.sin_addr, ip, sizeof(ip));
+    px_dict_set(r, "ip", px_str(ip));
+    px_dict_set(r, "port", px_int(ntohs(src.sin_port)));
+    xfree(buf);
+    return r;
+}
+
+static LXValue bi_udp_close(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_INT) px_error("udp_close 需要 (sock) 参数");
+    close((int)args[0].as.i);
+    return px_bool(true);
 }
 
 // ==================== M23c/M24 HTTP keep-alive 连接池 + 客户端（双模式：与解释器 builtin.rs 一致） ====================
@@ -7145,6 +7260,12 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
                 px_dict_set(req, "remote", px_str(""));
             }
         }
+        // M33：访问日志统一 remote 字段（与解释器 log_access 一致：时间 remote method path status bytes ms req=id）
+        const char* log_remote = "unknown";
+        {
+            LXValue lr = px_dict_get(req, "remote");
+            if (lr.type == PX_STR) log_remote = lr.as.obj->as.str.data;
+        }
         LXValue ct_v = px_dict_get_ci(headers, "Content-Type");
         const char* ct = (ct_v.type == PX_STR) ? ct_v.as.obj->as.str.data : "";
         if (body_len > 0) {
@@ -8439,6 +8560,29 @@ static LXValue px_parse_urlenc(const char* body) {
 
 // 发送 HTTP 响应（HEAD 只发响应头）
 // ==================== M27 P0：PxConn 连接抽象（明文/TLS 统一） ====================
+// M33：TLS SNI 回调——按 ClientHello 域名从 g_sni_certs 选证书（无匹配 → 默认证书，返回 0）
+static int px_sni_cb(void* p_ctx, mbedtls_ssl_context* ssl, const unsigned char* name, size_t len) {
+    (void)p_ctx;
+    char host[256];
+    size_t cl = len < 255 ? len : 255;
+    memcpy(host, name, cl);
+    host[cl] = 0;
+    int slot = -1;
+    pthread_mutex_lock(&g_srv_tls_mu);
+    for (int i = 0; i < PX_MAX_SNI_CERTS; i++) {
+        if (g_sni_certs[i].active && strcasecmp(g_sni_certs[i].hostname, host) == 0) {
+            slot = i;
+            break;
+        }
+    }
+    int rc = 0;
+    if (slot >= 0) {
+        rc = mbedtls_ssl_set_hs_own_cert(ssl, &g_sni_certs[slot].cert, &g_sni_certs[slot].key);
+    }
+    pthread_mutex_unlock(&g_srv_tls_mu);
+    return rc;
+}
+
 // 服务端 TLS：accept 后 px_conn_init 做 mbedtls 服务端握手（若 tls_server 已注册）。
 static int px_conn_tls_handshake(PxConn* c) {
     mbedtls_ssl_context* ssl = (mbedtls_ssl_context*)c->ssl;
@@ -8455,6 +8599,8 @@ static int px_conn_tls_handshake(PxConn* c) {
     int oc = mbedtls_ssl_conf_own_cert(conf, &g_srv_cert, &g_srv_key);
     pthread_mutex_unlock(&g_srv_tls_mu);
     if (oc != 0) return -1;
+    // M33：TLS SNI——按 ClientHello 域名选择证书（多证书共服）
+    mbedtls_ssl_conf_sni(conf, px_sni_cb, NULL);
     // M30：服务端 https 连接池——全局 TLS 会话缓存共享给所有连接（Session ID 恢复）
     if (g_srv_tls_cache_init) {
         mbedtls_ssl_conf_session_cache(conf, &g_srv_tls_cache,
@@ -8526,7 +8672,17 @@ ssize_t px_conn_read(PxConn* c, void* buf, size_t n) {
 
 ssize_t px_conn_write(PxConn* c, const void* buf, size_t n) {
     if (c->closed) return -1;
-    if (!c->is_tls) return send(c->fd, buf, n, MSG_NOSIGNAL);
+    if (!c->is_tls) {
+        // M33 修复：send 可能部分发送（TCP 缓冲满/非阻塞）→ 循环发送到写完，
+        // 否则响应头/体错位（客户端读到上一响应残留字节，双模式不一致根因之一）
+        size_t sent = 0;
+        while (sent < n) {
+            ssize_t k = send(c->fd, (const char*)buf + sent, n - sent, MSG_NOSIGNAL);
+            if (k <= 0) return sent > 0 ? (ssize_t)sent : -1;
+            sent += (size_t)k;
+        }
+        return (ssize_t)sent;
+    }
     size_t off = 0;
     while (off < n) {
         int ret = mbedtls_ssl_write((mbedtls_ssl_context*)c->ssl,
@@ -8558,28 +8714,79 @@ void px_conn_close(PxConn* c) {
     if (c->owned) c->is_tls = 0;
 }
 
-// tls_server(cert, key)：注册服务端 TLS（cert/key 为 PEM 路径或 PEM 内容）→ bool
+// tls_server(cert, key[, hostname])：注册服务端 TLS（cert/key 为 PEM 路径或 PEM 内容）→ bool
+// M33：带 hostname → 加入 SNI 证书表（按 ClientHello 域名选择）；无 hostname → 默认证书。
 static LXValue bi_tls_server(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2 || args[0].type != PX_STR || args[1].type != PX_STR) {
+    if (nargs != 2 && nargs != 3) {
+        px_error("tls_server 需要 (cert_pem, key_pem[, hostname]) 参数");
+    }
+    if (args[0].type != PX_STR || args[1].type != PX_STR) {
         px_error("tls_server 需要 (cert_pem, key_pem) 参数");
     }
     const char* cert = args[0].as.obj->as.str.data;
     const char* key = args[1].as.obj->as.str.data;
+    const char* hostname = (nargs == 3 && args[2].type == PX_STR)
+        ? args[2].as.obj->as.str.data : NULL;
     pthread_mutex_lock(&g_srv_tls_mu);
-    mbedtls_x509_crt_init(&g_srv_cert);
-    mbedtls_pk_init(&g_srv_key);
-    int rc1 = strstr(cert, "-----BEGIN")
-        ? mbedtls_x509_crt_parse(&g_srv_cert, (const unsigned char*)cert, strlen(cert) + 1)
-        : mbedtls_x509_crt_parse_file(&g_srv_cert, cert);
-    int rc2 = strstr(key, "-----BEGIN")
-        ? mbedtls_pk_parse_key(&g_srv_key, (const unsigned char*)key, strlen(key) + 1, NULL, 0, NULL, NULL)
-        : mbedtls_pk_parse_keyfile(&g_srv_key, key, NULL, NULL, NULL);
-    if (rc1 != 0 || rc2 != 0) {
-        char eb[256];
-        mbedtls_strerror(rc1 != 0 ? rc1 : rc2, eb, sizeof(eb));
-        pthread_mutex_unlock(&g_srv_tls_mu);
-        px_error("tls_server: 证书/私钥解析失败: %s", eb);
+    int rc1, rc2;
+    if (hostname && *hostname) {
+        // SNI 证书：找同名覆盖或空槽
+        int slot = -1;
+        for (int i = 0; i < PX_MAX_SNI_CERTS; i++) {
+            if (g_sni_certs[i].active && strcasecmp(g_sni_certs[i].hostname, hostname) == 0) { slot = i; break; }
+            if (!g_sni_certs[i].active && slot < 0) slot = i;
+        }
+        if (slot < 0) {
+            pthread_mutex_unlock(&g_srv_tls_mu);
+            px_error("SNI 证书数量超出上限 %d", PX_MAX_SNI_CERTS);
+        }
+        if (g_sni_certs[slot].active) {
+            mbedtls_x509_crt_free(&g_sni_certs[slot].cert);
+            mbedtls_pk_free(&g_sni_certs[slot].key);
+        }
+        memset(&g_sni_certs[slot], 0, sizeof(PxSniCert));
+        mbedtls_x509_crt_init(&g_sni_certs[slot].cert);
+        mbedtls_pk_init(&g_sni_certs[slot].key);
+        rc1 = strstr(cert, "-----BEGIN")
+            ? mbedtls_x509_crt_parse(&g_sni_certs[slot].cert, (const unsigned char*)cert, strlen(cert) + 1)
+            : mbedtls_x509_crt_parse_file(&g_sni_certs[slot].cert, cert);
+        rc2 = strstr(key, "-----BEGIN")
+            ? mbedtls_pk_parse_key(&g_sni_certs[slot].key, (const unsigned char*)key, strlen(key) + 1, NULL, 0, NULL, NULL)
+            : mbedtls_pk_parse_keyfile(&g_sni_certs[slot].key, key, NULL, NULL, NULL);
+        if (rc1 != 0 || rc2 != 0) {
+            char eb[256];
+            mbedtls_strerror(rc1 != 0 ? rc1 : rc2, eb, sizeof(eb));
+            pthread_mutex_unlock(&g_srv_tls_mu);
+            px_error("tls_server(%s): 证书/私钥解析失败: %s", hostname, eb);
+        }
+        // 域名规范化（小写、去尾点）
+        snprintf(g_sni_certs[slot].hostname, sizeof(g_sni_certs[slot].hostname), "%s", hostname);
+        size_t hl = strlen(g_sni_certs[slot].hostname);
+        for (size_t i = 0; i < hl; i++) {
+            char c = g_sni_certs[slot].hostname[i];
+            if (c >= 'A' && c <= 'Z') g_sni_certs[slot].hostname[i] = (char)(c - 'A' + 'a');
+        }
+        while (hl > 0 && g_sni_certs[slot].hostname[hl - 1] == '.') { g_sni_certs[slot].hostname[--hl] = 0; }
+        g_sni_certs[slot].active = 1;
+    } else {
+        // 默认证书（覆盖）
+        mbedtls_x509_crt_free(&g_srv_cert);
+        mbedtls_pk_free(&g_srv_key);
+        mbedtls_x509_crt_init(&g_srv_cert);
+        mbedtls_pk_init(&g_srv_key);
+        rc1 = strstr(cert, "-----BEGIN")
+            ? mbedtls_x509_crt_parse(&g_srv_cert, (const unsigned char*)cert, strlen(cert) + 1)
+            : mbedtls_x509_crt_parse_file(&g_srv_cert, cert);
+        rc2 = strstr(key, "-----BEGIN")
+            ? mbedtls_pk_parse_key(&g_srv_key, (const unsigned char*)key, strlen(key) + 1, NULL, 0, NULL, NULL)
+            : mbedtls_pk_parse_keyfile(&g_srv_key, key, NULL, NULL, NULL);
+        if (rc1 != 0 || rc2 != 0) {
+            char eb[256];
+            mbedtls_strerror(rc1 != 0 ? rc1 : rc2, eb, sizeof(eb));
+            pthread_mutex_unlock(&g_srv_tls_mu);
+            px_error("tls_server: 证书/私钥解析失败: %s", eb);
+        }
     }
     // M30：初始化服务端 TLS 会话缓存（连接池）
     if (!g_srv_tls_cache_init) {
@@ -8898,6 +9105,37 @@ static LXValue bi_basic_auth(LXValue* args, int nargs, void* ctx) {
     return px_bool(false);
 }
 
+// M33：结构化访问日志落盘——stderr 输出 + 写文件（px_serve opts{access_log}）+ 大小轮转
+#define PX_ACCESS_LOG_MAX (10 * 1024 * 1024)
+void px_access_log(const char* fmt, ...) {
+    char line[2048];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+    fputs(line, stderr);
+    if (!g_px_access_log[0]) return;
+    // 轮转：>10MB → .1/.2/.3（保留 3 份）
+    struct stat st;
+    if (stat(g_px_access_log, &st) == 0 && st.st_size > PX_ACCESS_LOG_MAX) {
+        for (int i = 3; i >= 1; i--) {
+            char src[1100], dst[1100];
+            if (i == 1) {
+                snprintf(src, sizeof(src), "%s", g_px_access_log);
+            } else {
+                snprintf(src, sizeof(src), "%s.%d", g_px_access_log, i - 1);
+            }
+            snprintf(dst, sizeof(dst), "%s.%d", g_px_access_log, i);
+            if (access(src, F_OK) == 0) rename(src, dst);
+        }
+    }
+    int fd = open(g_px_access_log, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd >= 0) {
+        (void)write(fd, line, strlen(line));
+        close(fd);
+    }
+}
+
 static void px_px_send_ex(int fd, int status, const char* ct, const char* body, int body_len,
                           int head_only, int keep_alive, const char* extra_headers) {
     const char* reason = px_http_status_reason(status);
@@ -8909,6 +9147,10 @@ static void px_px_send_ex(int fd, int status, const char* ct, const char* body, 
     if (extra_headers && *extra_headers) {
         int l = (int)strlen(extra_headers);
         if (off + l < (int)sizeof(head)) { memcpy(head + off, extra_headers, (size_t)l); off += l; }
+    }
+    // M33：Alt-Svc 通告（HTTP/3 协商；px_serve opts{alt_svc}，extra 未含时统一注入）
+    if (g_px_alt_svc[0] && !(extra_headers && strstr(extra_headers, "Alt-Svc:"))) {
+        off += snprintf(head + off, sizeof(head) - (size_t)off, "Alt-Svc: %s\r\n", g_px_alt_svc);
     }
     off += snprintf(head + off, sizeof(head) - (size_t)off, "\r\n");
     if (g_cur_conn && g_cur_conn->is_tls) {
@@ -9170,6 +9412,12 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
                 px_dict_set(req, "remote", px_str(""));
             }
         }
+        // M33：访问日志统一 remote 字段（与解释器 log_access 一致：时间 remote method path status bytes ms req=id）
+        const char* log_remote = "unknown";
+        {
+            LXValue lr = px_dict_get(req, "remote");
+            if (lr.type == PX_STR) log_remote = lr.as.obj->as.str.data;
+        }
         LXValue ct_v = px_dict_get_ci(headers, "Content-Type");
         const char* ct = (ct_v.type == PX_STR) ? ct_v.as.obj->as.str.data : "";
         if (body_len > 0 && body_buf) {
@@ -9226,6 +9474,8 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
                 snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
                 px_px_send_ex(fd, 429, "text/plain; charset=utf-8", "429 Too Many Requests",
                               21, strcmp(method, "HEAD") == 0, client_keep_alive, extra);
+                px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
+                        (long long)time(NULL), ipbuf, method, path, 429, 21, req_id);
                 goto req_done;
             }
         }
@@ -9265,7 +9515,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
             char extra[256];
             snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
             if (px_route_try_dispatch(&conn, req, method, strcmp(method, "HEAD") == 0,
-                                      client_keep_alive, extra)) {
+                                      client_keep_alive, req_id)) {
                 goto req_done;
             }
         }
@@ -9289,6 +9539,8 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
             char extra[256];
             snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
             px_px_send_ex(fd, 403, "text/plain; charset=utf-8", "403 Forbidden: 路径穿越被拒绝", 30, head_only, client_keep_alive, extra);
+            px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
+                    (long long)time(NULL), log_remote, method, path, 403, 30, req_id);
             goto req_done;
         }
         char full[4096];
@@ -9299,6 +9551,8 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
             char extra[256];
             snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
             px_px_send_ex(fd, 404, "text/plain; charset=utf-8", "404 Not Found", 13, head_only, client_keep_alive, extra);
+            px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
+                    (long long)time(NULL), log_remote, method, path, 404, 13, req_id);
             goto req_done;
         }
         char fpath[4096];
@@ -9310,6 +9564,8 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
                     char extra[256];
                     snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
                     px_px_send_ex(fd, 404, "text/plain; charset=utf-8", "404 Not Found", 13, head_only, client_keep_alive, extra);
+                    px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
+                            (long long)time(NULL), log_remote, method, path, 404, 13, req_id);
                     goto req_done;
                 }
             }
@@ -9403,9 +9659,9 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
             script_done:
                 if (out) xfree(out);
             }
-            // M29c：结构化访问日志
-            fprintf(stderr, "[px-access] %lld %s %s %s %d %d req=%s\n",
-                    (long long)time(NULL), "script", method, path, 200, 0, req_id);
+            // M29c：结构化访问日志（M33：落盘 + 轮转；格式同解释器：时间 remote method path status bytes ms req=id）
+            px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
+                    (long long)time(NULL), log_remote, method, path, 200, 0, req_id);
         } else {
             // ---- 静态文件：ETag / Last-Modified / 304 / Range + 流式（M29b） ----
             struct stat fst;
@@ -9413,6 +9669,8 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
                 char extra[256];
                 snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
                 px_px_send_ex(fd, 404, "text/plain; charset=utf-8", "404 Not Found", 13, head_only, client_keep_alive, extra);
+                px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
+                        (long long)time(NULL), log_remote, method, path, 404, 13, req_id);
                 goto req_done;
             }
             long long fsz = (long long)fst.st_size;
@@ -9459,6 +9717,10 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
             char extra[1024];
             int eo = snprintf(extra, sizeof(extra), "ETag: %s\r\nLast-Modified: %s\r\nX-Request-Id: %s\r\n",
                               etag, last_mod, req_id);
+            // M33.4：Alt-Svc 通告（HTTP/3 协商；px_serve opts{alt_svc}）
+            if (g_px_alt_svc[0]) {
+                eo += snprintf(extra + eo, sizeof(extra) - (size_t)eo, "Alt-Svc: %s\r\n", g_px_alt_svc);
+            }
             if (is_range) {
                 eo += snprintf(extra + eo, sizeof(extra) - (size_t)eo,
                                "Content-Range: bytes %lld-%lld/%lld\r\nAccept-Ranges: bytes\r\n",
@@ -9525,9 +9787,10 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
                     fclose(f);
                 }
             }
-            // M29c：结构化访问日志
-            fprintf(stderr, "[px-access] %lld %s %s %s %d %lld req=%s\n",
-                    (long long)time(NULL), "static", method, path, status, seg_len, req_id);
+            // M29c：结构化访问日志（M33：落盘 + 轮转）
+            // M29c：结构化访问日志（M33：落盘 + 轮转；格式同解释器）
+            px_access_log("[px-access] %lld %s %s %s %d %lld 0ms req=%s\n",
+                    (long long)time(NULL), log_remote, method, path, status, seg_len, req_id);
         }
 
     req_done:
@@ -9801,7 +10064,7 @@ static int rate_bucket_find(const char* key, RateBucket** out) {
     return 0;
 }
 
-static int px_rate_limit_try(const char* key, long long max, long long window_sec) {
+int px_rate_limit_try(const char* key, long long max, long long window_sec) {
     pthread_mutex_lock(&g_rate_mu);
     RateBucket* b = NULL;
     if (!rate_bucket_find(key, &b)) {
@@ -9922,11 +10185,13 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     if (nargs >= 3 && args[2].type == PX_INT) timeout_ms = (int)args[2].as.i;
     if (timeout_ms < 1) timeout_ms = 1;
     int port = (int)args[0].as.i;
-    // M27/M31：opts = {max_body_size, body_tmp_dir, max_conn, rate_limit:{max,window_sec}}
+    // M27/M31/M33：opts = {max_body_size, body_tmp_dir, max_conn, rate_limit:{max,window_sec}, access_log, alt_svc}
     g_px_max_body = 10 * 1024 * 1024;
     int max_conn = 32;
     g_px_rate_max = 0;
     g_px_rate_window = 0;
+    g_px_access_log[0] = 0;
+    g_px_alt_svc[0] = 0;
     if (nargs >= 4 && args[3].type == PX_DICT) {
         LXValue mb = px_dict_get(args[3], "max_body_size");
         if (mb.type == PX_INT) g_px_max_body = (int)(mb.as.i >= 1024 ? mb.as.i : 1024);
@@ -9941,6 +10206,12 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
                 g_px_rate_window = rw.as.i;
             }
         }
+        LXValue al = px_dict_get(args[3], "access_log");
+        if (al.type == PX_STR) snprintf(g_px_access_log, sizeof(g_px_access_log), "%s",
+                                        al.as.obj->as.str.data);
+        LXValue asvc = px_dict_get(args[3], "alt_svc");
+        if (asvc.type == PX_STR) snprintf(g_px_alt_svc, sizeof(g_px_alt_svc), "%s",
+                                          asvc.as.obj->as.str.data);
     }
     // docroot / timeout / port 存全局表（GC 扫描根）
     px_set_global("__px_docroot", px_str(docroot));

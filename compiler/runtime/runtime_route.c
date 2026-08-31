@@ -31,6 +31,11 @@ typedef struct {
     PxRouteSeg segs[32];
     int nsegs;
     LXValue handler;
+    // 路由 key（限流桶前缀）："METHOD pattern"
+    char pattern[300];
+    // M33：per-route 限流（按来源 IP；max 次 / window_sec 秒 → 超限 429；0 = 未启用）
+    long long rate_max;
+    long long rate_window;
     int active;
 } PxRoute;
 
@@ -70,10 +75,11 @@ static void route_parse_pattern(const char* pattern, PxRouteSeg* segs, int* nseg
     }
 }
 
-// route(method, pattern, handler) → bool
+// route(method, pattern, handler[, opts]) → bool
+// opts（M33）：{rate_limit:{max,window_sec}} → 该路由按来源 IP 独立限流（超限 429）
 LXValue bi_route(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 3) px_error("route 需要 (method, pattern, handler) 参数");
+    if (nargs != 3 && nargs != 4) px_error("route 需要 (method, pattern, handler[, opts]) 参数");
     if (args[0].type != PX_STR || args[1].type != PX_STR) px_error("route 的 method/pattern 需要字符串");
     if (args[2].type != PX_FUNC) px_error("route 的 handler 必须是函数");
     char err[256] = {0};
@@ -81,6 +87,20 @@ LXValue bi_route(LXValue* args, int nargs, void* ctx) {
     int nsegs = 0;
     route_parse_pattern(args[1].as.obj->as.str.data, segs, &nsegs, err, sizeof(err));
     if (err[0]) px_error("%s", err);
+    // M33.1：解析 opts{rate_limit:{max,window_sec}}
+    long long rate_max = 0, rate_window = 0;
+    if (nargs == 4) {
+        if (args[3].type != PX_DICT) px_error("route 的第 4 参数 opts 需要 dict");
+        LXValue rl = px_dict_get(args[3], "rate_limit");
+        if (rl.type == PX_DICT) {
+            LXValue m = px_dict_get(rl, "max");
+            LXValue w = px_dict_get(rl, "window_sec");
+            if (m.type == PX_INT && w.type == PX_INT && m.as.i >= 1 && w.as.i >= 1) {
+                rate_max = m.as.i;
+                rate_window = w.as.i;
+            }
+        }
+    }
     pthread_mutex_lock(&g_route_mu);
     int slot = -1;
     for (int i = 0; i < MAX_ROUTES; i++) if (!g_routes[i].active) { slot = i; break; }
@@ -104,6 +124,14 @@ LXValue bi_route(LXValue* args, int nargs, void* ctx) {
     memcpy(g_routes[slot].segs, segs, sizeof(PxRouteSeg) * (size_t)nsegs);
     g_routes[slot].nsegs = nsegs;
     g_routes[slot].handler = args[2];
+    // 路由 key：大写 method + " " + pattern（限流桶前缀）
+    {
+        const char* mkey = g_routes[slot].method[0] ? g_routes[slot].method : "*";
+        snprintf(g_routes[slot].pattern, sizeof(g_routes[slot].pattern), "%s %s",
+                 mkey, args[1].as.obj->as.str.data);
+    }
+    g_routes[slot].rate_max = rate_max;
+    g_routes[slot].rate_window = rate_window;
     g_routes[slot].active = 1;
     pthread_mutex_unlock(&g_route_mu);
     return px_bool(true);
@@ -134,8 +162,10 @@ int px_route_has(void) {
     return has;
 }
 
-// 匹配路由：成功返回 1 并输出 handler/params；失败 0
-static int route_match(const char* method, const char* path, LXValue* handler_out, LXValue* params_out) {
+// 匹配路由：成功返回 1 并输出 handler/params/限流配置/路由 key；失败 0
+static int route_match(const char* method, const char* path, LXValue* handler_out,
+                       LXValue* params_out, long long* rate_max_out, long long* rate_window_out,
+                       const char** pattern_out) {
     int found = 0;
     pthread_mutex_lock(&g_route_mu);
     // 大写 method
@@ -183,6 +213,9 @@ static int route_match(const char* method, const char* path, LXValue* handler_ou
         if (ok && pi >= nparts) {
             if (handler_out) *handler_out = g_routes[i].handler;
             if (params_out) *params_out = params;
+            if (rate_max_out) *rate_max_out = g_routes[i].rate_max;
+            if (rate_window_out) *rate_window_out = g_routes[i].rate_window;
+            if (pattern_out) *pattern_out = g_routes[i].pattern;
             found = 1;
         }
     }
@@ -302,7 +335,36 @@ int px_route_try_dispatch(void* connp, LXValue req, const char* method, int head
     LXValue path_v = px_dict_get(req, "path");
     if (path_v.type != PX_STR) return 0;
     LXValue handler, params;
-    if (!route_match(method, path_v.as.obj->as.str.data, &handler, &params)) return 0;
+    long long rate_max = 0, rate_window = 0;
+    const char* route_pattern = NULL;
+    if (!route_match(method, path_v.as.obj->as.str.data, &handler, &params,
+                     &rate_max, &rate_window, &route_pattern)) return 0;
+
+    // M33.1：per-route 限流——匹配路由后按 "路由|IP" 计数（各路由独立桶），超限 429
+    if (rate_max > 0 && rate_window > 0) {
+        char ipbuf[64];
+        LXValue rmt = px_dict_get(req, "remote");
+        const char* rs = (rmt.type == PX_STR) ? rmt.as.obj->as.str.data : "";
+        snprintf(ipbuf, sizeof(ipbuf), "%s", rs);
+        char* colon = strrchr(ipbuf, ':');
+        if (colon && colon[1] >= '0' && colon[1] <= '9') *colon = 0; // 去端口
+        if (ipbuf[0] == '[') { char* br = strchr(ipbuf, ']'); if (br) { br++; *br = 0; memmove(ipbuf, ipbuf + 1, strlen(ipbuf)); } }
+        char rkey[420];
+        snprintf(rkey, sizeof(rkey), "route:%s|%s",
+                 route_pattern ? route_pattern : "?", ipbuf);
+        if (!px_rate_limit_try(rkey, rate_max, rate_window)) {
+            char extra[512];
+            int el = snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
+            if (g_px_alt_svc[0]) el += snprintf(extra + el, sizeof(extra) - (size_t)el, "Alt-Svc: %s\r\n", g_px_alt_svc);
+            route_send(conn, 429, "text/plain; charset=utf-8", "429 Too Many Requests", 21,
+                       head_only, keep_alive, extra);
+            // M33：per-route 429 也记访问日志（格式同解释器）
+            px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
+                    (long long)time(NULL), ipbuf, method,
+                    path_v.as.obj->as.str.data, 429, 21, req_id);
+            return 1;
+        }
+    }
 
     // 中间件链：fn(req) → null 继续 / 非 null 短路
     pthread_mutex_lock(&g_route_mu);
@@ -317,7 +379,9 @@ int px_route_try_dispatch(void* connp, LXValue req, const char* method, int head
             route_normalize(r, &rr);
             fprintf(stderr, "[px-serve] [route] %s %s -> %d (middleware)\n", method,
                     path_v.as.obj->as.str.data, rr.status);
-            route_send(conn, rr.status, rr.ct, rr.body, rr.body_len, head_only, keep_alive, req_id);
+            char rsp_extra[512];
+            snprintf(rsp_extra, sizeof(rsp_extra), "X-Request-Id: %s\r\n", req_id);
+            route_send(conn, rr.status, rr.ct, rr.body, rr.body_len, head_only, keep_alive, rsp_extra);
             return 1;
         }
     }
@@ -330,6 +394,8 @@ int px_route_try_dispatch(void* connp, LXValue req, const char* method, int head
     route_normalize(r, &rr);
     fprintf(stderr, "[px-serve] [route] %s %s -> %d\n", method,
             path_v.as.obj->as.str.data, rr.status);
-    route_send(conn, rr.status, rr.ct, rr.body, rr.body_len, head_only, keep_alive, req_id);
+    char rsp_extra[512];
+    snprintf(rsp_extra, sizeof(rsp_extra), "X-Request-Id: %s\r\n", req_id);
+    route_send(conn, rr.status, rr.ct, rr.body, rr.body_len, head_only, keep_alive, rsp_extra);
     return 1;
 }

@@ -1,0 +1,43 @@
+# M33④ HTTP/3 / QUIC 预研：UDP 基础设施 + Alt-Svc 通告
+# UDP：udp_open/udp_send/udp_recv/udp_close（QUIC 底层是 UDP socket）
+# Alt-Svc：px_serve opts{alt_svc:"h3=\":443\""} → 响应头通告（HTTP/3 协商机制）
+PORT = 18144
+D = "/tmp/px_m33_udp"
+mkdir(D)
+write_file(D + "/index.txt", "UDP-ALT")
+
+# ============ UDP echo（A bind 固定端口，B 发 → A 收 → A 回发 → B 收） ============
+a = udp_open(18145)
+b = udp_open(0)
+n = udp_send(b, "127.0.0.1", 18145, "hello-udp")
+assert(n == 9, "udp_send 字节数")
+r = udp_recv(a, 64)
+assert(r != null)
+assert(bytes_to_str(r["data"]) == "hello-udp")
+assert(r["ip"] == "127.0.0.1")
+assert(r["port"] > 0)
+print("udp recv:", bytes_to_str(r["data"]), "from", r["ip"] + ":" + str(r["port"]))
+
+n2 = udp_send(a, "127.0.0.1", r["port"], "pong")
+assert(n2 == 4)
+r2 = udp_recv(b, 64)
+assert(bytes_to_str(r2["data"]) == "pong")
+print("udp echo:", bytes_to_str(r2["data"]))
+udp_close(a)
+udp_close(b)
+
+# ============ Alt-Svc 通告（HTTP/3 协商） ============
+def serve():
+    px_serve(PORT, D, 10000, {"alt_svc": "h3=\":443\""})
+spawn serve()
+sleep(300)
+
+r = http_request("http://127.0.0.1:" + str(PORT) + "/index.txt", "GET")
+assert(r["status"] == 200)
+hs = r["headers"]
+# Alt-Svc 响应头（服务器统一注入；键为原始大小写）
+alt = hs["Alt-Svc"]
+assert(alt == "h3=\":443\"", "Alt-Svc 响应头")
+print("Alt-Svc:", alt)
+
+print("M33_UDP_ALT_SVC_OK")
