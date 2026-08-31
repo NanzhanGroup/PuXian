@@ -120,6 +120,9 @@ pub struct LxError {
     pub code: &'static str,
     pub msg: String,
     pub pos: Option<Pos>,
+    /// M39：错误传播控制流（x? 遇 Err/null 时携带要返回给调用方的值；
+    /// 非真实错误——函数边界捕获后转为正常返回值，模拟 Rust `?` 语义）
+    pub propagate: Option<Value>,
 }
 
 impl LxError {
@@ -128,6 +131,16 @@ impl LxError {
             code,
             msg: msg.into(),
             pos,
+            propagate: None,
+        }
+    }
+    /// M39：构造错误传播（? 运算符内部使用）
+    pub fn propagate(v: Value) -> Self {
+        LxError {
+            code: "R-PROP",
+            msg: "错误传播".to_string(),
+            pos: None,
+            propagate: Some(v),
         }
     }
     fn r1001(name: &str, pos: Pos) -> Self {
@@ -414,6 +427,10 @@ impl Interpreter {
             // M38：UDP echo 服务端 + WS 自动重连
             ("udp_serve", Builtin::UdpServe),
             ("ws_connect_auto", Builtin::WsConnectAuto),
+            // M39：Result/Option 构造函数（spec §3.5；Some(x)=x，None 即 null）
+            ("Ok", Builtin::Ok_),
+            ("Err", Builtin::Err_),
+            ("Some", Builtin::Some_),
         ];
         for (n, b) in names {
             g.define(n, Value::Builtin(*b));
@@ -425,16 +442,49 @@ impl Interpreter {
     pub fn run_program(&mut self, prog: &Program) -> Result<i32, LxError> {
         let g = self.globals.clone();
         for stmt in &prog.items {
-            match self.exec_stmt(stmt, &g)? {
-                Flow::Normal => {}
-                _ => return Err(LxError::r1005("顶层语句出现非法控制流", Pos::new(0, 0))),
+            match self.exec_stmt(stmt, &g) {
+                Ok(Flow::Normal) => {}
+                Ok(_) => return Err(LxError::r1005("顶层语句出现非法控制流", Pos::new(0, 0))),
+                // M39：顶层 ? 遇 Err/null（propagate）→ 明确报错（顶层无函数边界可传播）
+                Err(e) if e.propagate.is_some() => {
+                    return Err(LxError::new(
+                        "R1004",
+                        "顶层不能使用错误传播 ?（仅函数内可用）",
+                        Some(Pos::new(0, 0)),
+                    ));
+                }
+                Err(e) => return Err(e),
             }
         }
         let main = g.lock().unwrap().get("main");
         if let Some(m) = main {
-            let v = self.call_value(&m, &[], Pos::new(0, 0))?;
-            if let Value::Int(code) = v {
-                self.exit_code = code as i32;
+            let v = match self.call_value(&m, &[], Pos::new(0, 0)) {
+                Ok(v) => v,
+                // M39：? 传播到 main 顶层——Err → 打印错误退出 1；null（None）→ 正常退出
+                Err(e) if e.propagate.is_some() => {
+                    if let Some(pv) = e.propagate {
+                        if let Value::Result { ok: false, value } = &pv {
+                            eprintln!("错误: {}", value.to_string());
+                            self.exit_code = 1;
+                        }
+                    }
+                    return Ok(self.exit_code);
+                }
+                Err(e) => return Err(e),
+            };
+            // main 返回值：Int → 退出码；Result 解包（Ok(v) → v；Err(e) → 打印错误 + 1）
+            match v {
+                Value::Int(code) => self.exit_code = code as i32,
+                Value::Result { ok: true, value } => {
+                    if let Value::Int(code) = *value {
+                        self.exit_code = code as i32;
+                    }
+                }
+                Value::Result { ok: false, value } => {
+                    eprintln!("错误: {}", value.to_string());
+                    self.exit_code = 1;
+                }
+                _ => {}
             }
         }
         Ok(self.exit_code)
@@ -915,22 +965,35 @@ impl Interpreter {
                 }
             }
             Expr::Try { expr, pos } => {
+                // M39：? 完整语义（spec §3.5）
+                //  - Err(e) → 立即返回 Err(e)（传播给调用方）
+                //  - null（None）→ 立即返回 null（传播）
+                //  - Ok(v) → 解包为 v
+                //  - 其他普通值 → 原样返回（视为成功）
                 let v = self.eval_expr(expr, env)?;
                 match v {
-                    Value::Null => Err(LxError::new(
-                        "R1004",
-                        "错误传播 ?: 无法解包 null（Result/Option 支持 M3 完善）",
-                        Some(*pos),
-                    )),
+                    Value::Result { ok: false, value } => {
+                        return Err(LxError::propagate(Value::Result { ok: false, value }));
+                    }
+                    Value::Null => return Err(LxError::propagate(Value::Null)),
+                    Value::Result { ok: true, value } => Ok(*value),
                     _ => Ok(v),
                 }
             }
             Expr::ForceUnwrap { expr, pos } => {
+                // M39：! 增强（Rust unwrap 语义）
+                //  - Ok(v) → 解包 v；Err(e) → R1004；null → R1004；其他 → 原值
                 let v = self.eval_expr(expr, env)?;
                 match v {
                     Value::Null => Err(LxError::new(
                         "R1004",
                         "强制解包 !: 值为 null",
+                        Some(*pos),
+                    )),
+                    Value::Result { ok: true, value } => Ok(*value),
+                    Value::Result { ok: false, value } => Err(LxError::new(
+                        "R1004",
+                        format!("强制解包 !: 值为 Err({})", value.to_string()),
                         Some(*pos),
                     )),
                     _ => Ok(v),
@@ -1315,12 +1378,15 @@ impl Interpreter {
         } else {
             f.body.clone()
         };
-        match self.exec_block(&body, &call_env)? {
-            Flow::Return(v) => Ok(v),
-            Flow::Normal => Ok(Value::Null),
-            Flow::Break | Flow::Continue => {
+        match self.exec_block(&body, &call_env) {
+            Ok(Flow::Return(v)) => Ok(v),
+            Ok(Flow::Normal) => Ok(Value::Null),
+            Ok(Flow::Break | Flow::Continue) => {
                 Err(LxError::new("R1005", format!("函数 {} 内出现非法控制流", f.name), Some(pos)))
             }
+            // M39：? 错误传播在函数边界转为正常返回值（Err/None 返回给调用方）
+            Err(e) if e.propagate.is_some() => Ok(e.propagate.unwrap()),
+            Err(e) => Err(e),
         }
     }
 
@@ -1348,6 +1414,57 @@ impl Interpreter {
             Value::Mutex(m) => self.call_mutex_method(m, name, args, pos),
             Value::RWLock(rw) => self.call_rwlock_method(rw, name, args, pos),
             Value::Tuple(t) => self.call_tuple_method(t, name, args, pos),
+            // M39：Result 方法（is_ok / is_err / unwrap / err / ok）
+            Value::Result { ok, value } => {
+                let ok = *ok;
+                let value = value.clone();
+                match name {
+                    "is_ok" => {
+                        if !args.is_empty() {
+                            return Err(LxError::r1005("is_ok 不接受参数", pos));
+                        }
+                        Ok(Value::Bool(ok))
+                    }
+                    "is_err" => {
+                        if !args.is_empty() {
+                            return Err(LxError::r1005("is_err 不接受参数", pos));
+                        }
+                        Ok(Value::Bool(!ok))
+                    }
+                    "unwrap" => {
+                        if ok {
+                            Ok(*value)
+                        } else {
+                            Err(LxError::new(
+                                "R1004",
+                                format!("unwrap 失败: Err({})", value.to_string()),
+                                Some(pos),
+                            ))
+                        }
+                    }
+                    "ok" => {
+                        // Ok(v) → Some(v)=v；Err(_) → null
+                        if ok {
+                            Ok(*value)
+                        } else {
+                            Ok(Value::Null)
+                        }
+                    }
+                    "err" => {
+                        // Err(e) → e；Ok(_) → null
+                        if ok {
+                            Ok(Value::Null)
+                        } else {
+                            Ok(*value)
+                        }
+                    }
+                    _ => Err(LxError::new(
+                        "R1007",
+                        format!("Result 没有方法 '{}'", name),
+                        Some(pos),
+                    )),
+                }
+            }
             _ => Err(LxError::new(
                 "R1007",
                 format!("类型 {} 没有方法 '{}'", self.type_name(recv), name),
@@ -1377,6 +1494,7 @@ impl Interpreter {
             Value::RWLock(_) => "rwlock",
             Value::TypeRef(_) => "type",
             Value::Gen(_) => "generator",
+            Value::Result { .. } => "result",
         }
     }
 
@@ -2876,5 +2994,108 @@ def main():
     assert(bytes_to_int(int_to_bytes(n, 4, "big"), "big") == n, "pxdb rt")
 "#;
         assert!(run_src(src).is_ok());
+    }
+
+    // ==================== M39：Result / Option ====================
+
+    #[test]
+    fn test_m39_result_basic() {
+        // Ok/Err 构造 + 方法 + Some(x)=x（None 即 null）+ type
+        let src = r#"
+def main():
+    let a = Ok(42)
+    assert(type(a) == "result", "type result")
+    assert(a.is_ok() == true, "is_ok")
+    assert(a.is_err() == false, "is_err")
+    assert(a.unwrap() == 42, "unwrap")
+    assert(a.ok() == 42, "ok method")
+    assert(a.err() == null, "err method on ok")
+    let b = Err("oops")
+    assert(b.is_err() == true, "is_err2")
+    assert(b.err() == "oops", "err method")
+    assert(b.ok() == null, "ok method on err")
+    let s = Some(7)
+    assert(s == 7, "some is value")
+    assert(Some(null) == null, "some null is null")
+    assert(type(Some(7)) == "int", "some keeps type")
+    assert(Ok(1) == Ok(1), "result eq")
+    assert(Err("x") != Ok("x"), "ok vs err ne")
+"#;
+        assert!(run_src(src).is_ok());
+    }
+
+    #[test]
+    fn test_m39_propagate() {
+        // ? 传播：Err 链式传播到 main 顶层（main 返回 Result）
+        let src = r#"
+def safe_div(a, b):
+    if b == 0:
+        return Err("division by zero")
+    return Ok(a // b)
+
+def calc(x):
+    y = safe_div(10, x)?
+    return Ok(y + 1)
+
+def main():
+    r = calc(2)
+    assert(r.is_ok(), "calc ok")
+    assert(r.unwrap() == 6, "calc value")
+    r2 = calc(0)
+    assert(r2.is_err(), "calc err")
+    assert(r2.err() == "division by zero", "err msg")
+    # ? 解包普通值（非 Result/null）→ 原样
+    let z = 5?
+    assert(z == 5, "plain value")
+    return Ok(0)
+"#;
+        assert!(run_src(src).is_ok());
+    }
+
+    #[test]
+    fn test_m39_force_unwrap() {
+        // ! 解包：Ok → 值；null → R1004
+        let src = r#"
+def main():
+    let okv = Ok(9)!
+    assert(okv == 9, "unwrap ok")
+    return Ok(0)
+"#;
+        assert!(run_src(src).is_ok());
+        // null 强制解包 → 报错
+        let bad = r#"
+def main():
+    let x = null!
+    return Ok(0)
+"#;
+        assert!(run_src(bad).is_err());
+        // Err 强制解包 → 报错
+        let bad2 = r#"
+def main():
+    let x = Err("bad")!
+    return Ok(0)
+"#;
+        assert!(run_src(bad2).is_err());
+    }
+
+    #[test]
+    fn test_m39_main_err_exit() {
+        // main 返回 Err → 顶层打印错误退出 1
+        let src = r#"
+def fail():
+    return Err("boom")
+
+def main():
+    x = fail()?
+    return Ok(0)
+"#;
+        let r = run_src(src);
+        assert!(r.is_ok());
+        assert_eq!(r.unwrap(), 1, "Err main exit code 1");
+        // 顶层 ? 传播（非函数内）→ 明确报错
+        let bad = r#"
+let x = Err("top")?
+"#;
+        assert!(run_src(bad).is_err());
     }
 }

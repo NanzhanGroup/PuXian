@@ -30,7 +30,7 @@ udp_close(b)
 def serve():
     px_serve(PORT, D, 10000, {"alt_svc": "h3=\":443\""})
 spawn serve()
-sleep(300)
+sleep(1000)
 
 r = http_request("http://127.0.0.1:" + str(PORT) + "/index.txt", "GET")
 assert(r["status"] == 200)

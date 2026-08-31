@@ -648,6 +648,7 @@ static bool px_value_is_obj(LXValue v) {
         case PX_ENUM:
         case PX_TUPLE:
         case PX_CHAN:
+        case PX_RESULT:
             return true;
         default:
             return false;
@@ -678,6 +679,7 @@ static void px_obj_free(LXObject* o) {
             xfree(o->as.enum_inst.variant);
             break;
         case PX_TUPLE: xfree(o->as.tuple.items); break;
+        case PX_RESULT: break;  // value 内嵌 LXValue（非指针），子对象由 GC 管理
         case PX_CHAN:
             xfree(o->as.chan.buf);
             pthread_mutex_destroy(&o->as.chan.mu);
@@ -739,6 +741,13 @@ static void gc_mark_obj(GCHash* set, LXObject* o) {
                 LXValue* items = cur->as.tuple.items;
                 for (int i = 0; i < cur->as.tuple.len; i++) {
                     if (px_value_is_obj(items[i]) && items[i].as.obj) PUSH_OBJ(items[i].as.obj);
+                }
+                break;
+            }
+            case PX_RESULT: {
+                // M39：Result 载荷递归标记（Ok 的 T / Err 的 E）
+                if (px_value_is_obj(cur->as.result.value) && cur->as.result.value.as.obj) {
+                    PUSH_OBJ(cur->as.result.value.as.obj);
                 }
                 break;
             }
@@ -1337,6 +1346,7 @@ const char* px_type_name(LXValue v) {
         case PX_MUTEX: return "mutex";
         case PX_RWLOCK: return "rwlock";
         case PX_GEN: return "generator";
+        case PX_RESULT: return "result";
     }
     return "unknown";
 }
@@ -1374,11 +1384,24 @@ LXValue px_gen_lazy(LXValue seq, LXValue transform, LXValue filter) {
 }
 
 // 惰性 seq 取第 i 个元素（list 索引；C 端 range 已物化为 list）
+static void px_gen_materialize(LXObject* o);
+
 static LXValue px_lazy_seq_get(LXValue seq, int i, int* has) {
     if (seq.type == PX_LIST) {
         if (i >= 0 && i < seq.as.obj->as.list.len) {
             *has = 1;
             return seq.as.obj->as.list.items[i];
+        }
+    }
+    // M39 修复（M34 遗留）：惰性生成器的 seq 支持嵌套生成器（gen of gen）
+    // ——先物化内层生成器，再按下标取项
+    if (seq.type == PX_GEN) {
+        LXObject* go = seq.as.obj;
+        if (go->as.gen.is_lazy) px_gen_materialize(go);
+        LXValue l = go->as.gen.list;
+        if (l.type == PX_LIST && i >= 0 && i < l.as.obj->as.list.len) {
+            *has = 1;
+            return l.as.obj->as.list.items[i];
         }
     }
     *has = 0;
@@ -1426,6 +1449,38 @@ LXValue px_gen_next(LXValue g) {
     }
     return px_null();
 }
+
+// ==================== M39 Result（spec §3.5 错误处理唯一通道） ====================
+
+LXValue px_ok(LXValue v) {
+    LXValue r;
+    r.type = PX_RESULT;
+    LXObject* o = xmalloc(sizeof(LXObject));
+    o->type = PX_RESULT;
+    o->gc_mark = 0;
+    o->as.result.ok = 1;
+    o->as.result.value = v;
+    r.as.obj = o;
+    gc_register(o, sizeof(LXObject));
+    return r;
+}
+LXValue px_err(LXValue v) {
+    LXValue r;
+    r.type = PX_RESULT;
+    LXObject* o = xmalloc(sizeof(LXObject));
+    o->type = PX_RESULT;
+    o->gc_mark = 0;
+    o->as.result.ok = 0;
+    o->as.result.value = v;
+    r.as.obj = o;
+    gc_register(o, sizeof(LXObject));
+    return r;
+}
+bool px_is_result(LXValue v) { return v.type == PX_RESULT; }
+bool px_result_ok(LXValue v) { return v.as.obj->as.result.ok; }
+LXValue px_result_unwrap(LXValue v) { return v.as.obj->as.result.value; }
+// Some(x) = x（Option 无运行时包装：None 即 null）
+LXValue px_some(LXValue v) { return v; }
 
 // ==================== 错误 ====================
 
@@ -1535,6 +1590,20 @@ void px_print_value(LXValue v, bool newline) {
             break;
         }
         case PX_ENUM: printf("%s.%s", v.as.obj->as.enum_inst.type_name, v.as.obj->as.enum_inst.variant); break;
+        case PX_RESULT: {
+            // M39：Ok(42) / Err("x")
+            LXObject* o = v.as.obj;
+            if (o->as.result.ok) {
+                printf("Ok(");
+                px_print_value(o->as.result.value, false);
+                printf(")");
+            } else {
+                printf("Err(");
+                px_print_value(o->as.result.value, false);
+                printf(")");
+            }
+            break;
+        }
         default: printf("?"); break;
     }
     if (newline) printf("\n");
@@ -1702,6 +1771,11 @@ static int compare_values(LXValue a, LXValue b) {
         return na < nb ? -1 : (na > nb ? 1 : 0);
     }
     if (a.type == PX_NULL && b.type == PX_NULL) return 0;
+    // M39：Result 相等——ok 标志相同 + 载荷递归比较
+    if (a.type == PX_RESULT && b.type == PX_RESULT) {
+        if (a.as.obj->as.result.ok != b.as.obj->as.result.ok) return a.as.obj->as.result.ok ? 1 : -1;
+        return compare_values(a.as.obj->as.result.value, b.as.obj->as.result.value);
+    }
     // 默认按类型名比较，保证可比性
     return strcmp(px_type_name(a), px_type_name(b));
 }
@@ -2168,6 +2242,30 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
             return v;
         }
     }
+    // M39：Result 方法（is_ok / is_err / unwrap / ok / err）
+    if (obj.type == PX_RESULT) {
+        if (strcmp(name, "is_ok") == 0) {
+            if (nargs != 0) px_error("is_ok 不接受参数");
+            return px_bool(obj.as.obj->as.result.ok);
+        }
+        if (strcmp(name, "is_err") == 0) {
+            if (nargs != 0) px_error("is_err 不接受参数");
+            return px_bool(!obj.as.obj->as.result.ok);
+        }
+        if (strcmp(name, "unwrap") == 0) {
+            if (nargs != 0) px_error("unwrap 不接受参数");
+            if (obj.as.obj->as.result.ok) return obj.as.obj->as.result.value;
+            px_error("unwrap 失败: Err(%s)", px_to_string(obj.as.obj->as.result.value));
+        }
+        if (strcmp(name, "ok") == 0) {
+            // Ok(v) → Some(v)=v；Err(_) → null
+            return obj.as.obj->as.result.ok ? obj.as.obj->as.result.value : px_null();
+        }
+        if (strcmp(name, "err") == 0) {
+            // Err(e) → e；Ok(_) → null
+            return obj.as.obj->as.result.ok ? px_null() : obj.as.obj->as.result.value;
+        }
+    }
     px_error("对象 %s 没有方法 %s", px_type_name(obj), name);
     return px_null();
 }
@@ -2202,6 +2300,23 @@ static LXValue bi_print(LXValue* args, int nargs, void* ctx) {
     }
     printf("\n");
     return px_null();
+}
+
+// M39：Result/Option 构造函数（spec §3.5；Some(x) = x，None 即 null）
+static LXValue bi_ok(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("Ok 需要 1 个参数");
+    return px_ok(args[0]);
+}
+static LXValue bi_err(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("Err 需要 1 个参数");
+    return px_err(args[0]);
+}
+static LXValue bi_some(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("Some 需要 1 个参数");
+    return args[0];
 }
 
 static LXValue bi_len(LXValue* args, int nargs, void* ctx) {
@@ -3931,6 +4046,16 @@ static void json_stringify_value(JOut* o, LXValue v) {
             jout_append(o, "}");
             break;
         }
+        case PX_RESULT: {
+            // M39：Result 序列化为 {"ok":bool,"value":...}（保留 Ok/Err 结构）
+            LXObject* ob = v.as.obj;
+            jout_append(o, "{\"ok\":");
+            jout_append(o, ob->as.result.ok ? "true" : "false");
+            jout_append(o, ",\"value\":");
+            json_stringify_value(o, ob->as.result.value);
+            jout_append(o, "}");
+            break;
+        }
         default: px_error("json: 无法序列化类型 %s", px_type_name(v));
     }
 }
@@ -4074,6 +4199,12 @@ static LXValue json_value_copy(LXValue v) {
                 px_dict_set(r, o->as.dict.keys[i], json_value_copy(o->as.dict.vals[i]));
             }
             return r;
+        }
+        case PX_RESULT: {
+            // M39：Result 深拷贝（Ok/Err 标志 + 载荷递归）
+            LXObject* o = v.as.obj;
+            if (o->as.result.ok) return px_ok(json_value_copy(o->as.result.value));
+            return px_err(json_value_copy(o->as.result.value));
         }
         default: return v;
     }
@@ -4250,6 +4381,10 @@ static LXValue bi_reduce(LXValue* args, int nargs, void* ctx) {
 
 void px_register_builtins(void) {
     px_set_global("print", px_native("print", bi_print));
+    // M39：Result/Option 构造函数
+    px_set_global("Ok", px_native("Ok", bi_ok));
+    px_set_global("Err", px_native("Err", bi_err));
+    px_set_global("Some", px_native("Some", bi_some));
     px_set_global("len", px_native("len", bi_len));
     px_set_global("range", px_native("range", bi_range));
     px_set_global("type", px_native("type", bi_type));

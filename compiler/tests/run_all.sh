@@ -43,7 +43,7 @@ else
 fi
 
 echo "========== [3/4] 示例双模式回归 =========="
-EXAMPLES="hello fib struct match concurrent concurrent_m3 std_demo net_demo toolchain_demo p0_random_io p1_mutex_rwlock p2_crypto_hash p3_regex p4_http_server p5_px_serve p6_timer p7_aes_xml_zip m22_bitwise_data m23b_bytes m24_slice_xml m25_closure_gc m26_ushr m28_time_sqlite m28_route m29_jsonpath_web m29_webprod m30_int_bytes m30_comp m30_tls_pool m31_sandbox m31_vhost m32_gen m32_sse_reconnect m32_hot_reload m33_route_rate_limit m33_sni m33_access_log m33_udp_alt_svc m34_gen_lazy m34_pool_cfg m34_bus_ws m35_h2 m35_gzip_rl m36_log_ctx m36_ws_hb m36_pool_grace m37_s3 m37_h2_tls m38_udp_serve m38_chunked m38_ws_reconnect m38_h2_multi"
+EXAMPLES="hello fib struct match concurrent concurrent_m3 std_demo net_demo toolchain_demo p0_random_io p1_mutex_rwlock p2_crypto_hash p3_regex p4_http_server p5_px_serve p6_timer p7_aes_xml_zip m22_bitwise_data m23b_bytes m24_slice_xml m25_closure_gc m26_ushr m28_time_sqlite m28_route m29_jsonpath_web m29_webprod m30_int_bytes m30_comp m30_tls_pool m31_sandbox m31_vhost m32_gen m32_sse_reconnect m32_hot_reload m33_route_rate_limit m33_sni m33_access_log m33_udp_alt_svc m34_gen_lazy m34_pool_cfg m34_bus_ws m35_h2 m35_gzip_rl m36_log_ctx m36_ws_hb m36_pool_grace m37_s3 m37_h2_tls m38_udp_serve m38_chunked m38_ws_reconnect m38_h2_multi m39_result m39_gc"
 for ex in $EXAMPLES; do
     f="../examples/$ex.px"
     if [ ! -f "$f" ]; then echo "⚠ 跳过（不存在）: $f"; continue; fi
@@ -52,9 +52,9 @@ for ex in $EXAMPLES; do
     if ! "$PX" build "$f" >/dev/null 2>&1; then echo "❌ $ex build 失败"; FAIL=1; continue; fi
     out="../examples/build/$ex"
     r2=$("$out" 2>/dev/null)
-    # 宽松比较：过滤已知波动行（计时、JSON 键序、时区）
-    r1n=$(echo "$r1" | grep -v -E "当前时间|耗时|elapsed|JSON 回写")
-    r2n=$(echo "$r2" | grep -v -E "当前时间|耗时|elapsed|JSON 回写")
+    # 宽松比较：过滤已知波动行（计时、JSON 键序、时区、access log 时间戳、udp/s3_list 顺序）
+    r1n=$(echo "$r1" | grep -v -E "当前时间|耗时|elapsed|JSON 回写|\[px-access\]|req=px-[0-9]|udp recv:.*from 127\.0\.0\.1:[0-9]+|s3_list:")
+    r2n=$(echo "$r2" | grep -v -E "当前时间|耗时|elapsed|JSON 回写|\[px-access\]|req=px-[0-9]|udp recv:.*from 127\.0\.0\.1:[0-9]+|s3_list:")
     # concurrent.px 的 first/second 顺序与配对取决于调度（并发非确定），
     # 只验证两端输出含相同数字集合（{2,4}）
     if [ "$ex" == "concurrent" ]; then
@@ -97,8 +97,22 @@ if [ $? -ne 0 ] || ! echo "$r1" | grep -q M32_WS_URL_OK; then echo "❌ m32_ws_u
     else echo "❌ m32_ws_url build 失败"; FAIL=1; fi
 fi
 
+# M39 Err 传播到 main 顶层：预期打印"错误: something bad"且退出码 1（双模式）
+echo "--- m39_err_main（Err 传播退出码） ---"
+err1=$("$PX" run ../examples/m39_err_main.px 2>&1); c1=$?
+err2=""; c2=0
+if "$PX" build ../examples/m39_err_main.px >/dev/null 2>&1; then
+    err2=$(../examples/build/m39_err_main 2>&1); c2=$?
+fi
+if [ "$c1" -eq 1 ] && echo "$err1" | grep -q "错误: something bad" && \
+   [ "$c2" -eq 1 ] && echo "$err2" | grep -q "错误: something bad"; then
+    echo "✅ m39_err_main 双模式 Err 传播 + 退出码 1"
+else
+    echo "❌ m39_err_main 失败（run 退出 $c1 / build 退出 $c2）"; FAIL=1
+fi
+
 echo "========== [4/4] 静态链接检查 =========="
-for ex in hello net_demo https_demo m29_jsonpath_web; do
+for ex in hello net_demo https_demo m29_jsonpath_web m39_result; do
     b="../examples/build/$ex"
     if [ -f "$b" ]; then
         if file "$b" | grep -q "statically linked"; then

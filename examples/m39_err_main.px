@@ -1,0 +1,8 @@
+# M39 验证：main 返回 Err → 打印错误退出 1
+def fail():
+    return Err("something bad")
+
+def main():
+    x = fail()?        # Err 传播
+    print(x)
+    return Ok(0)

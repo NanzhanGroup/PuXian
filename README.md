@@ -24,7 +24,7 @@
 | 🧩 模块化 | `import std.*` / `import foo.bar` / `from foo import x` / 相对路径导入；`px pkg` 包管理（init/add/install/list/remove） |
 | 🌐 网络 | HTTP 客户端（**HTTPS TLS 1.2/1.3** + gzip/chunked 自动解码 + **http/https 连接池复用** + **TLS 会话票据恢复** + **流式 gzip 边下边解**）+ **HTTP 服务端**（`http_serve` gzip/chunked/keep-alive/流式 + **`px_serve` 服务端 TLS**：`tls_server(cert,key[,hostname])` 注册后 HTTPS/WSS/SSE-over-TLS + **TLS SNI 多证书按域名选择** + 请求体大小可配 + 413 + 大 body 落盘 + **优雅关闭** + **per-route 限流**（路由粒度 429）+ **访问日志落盘轮转** + **Alt-Svc 通告**）+ **WebSocket**（RFC 6455，心跳/超时，**`ws://`/`wss://` 一行连接**）+ **SSE** 服务端/客户端（**断线自动重连**，带 Last-Event-ID）+ **UDP**（udp_open/send/recv/close，QUIC 预研地基）+ TCP 全功能 |
 | 🛡 加密/文档 | **AES-CBC-PKCS7 / AES-GCM**、**RSA**（PKCS#1 v1.5）、**XML** 解析/转义/**生成**（xml_build）、**zip** 打包/解压、**base64**、sha256 / xxhash |
-| 🔢 语言能力 | 切片语法 `a[i:j]` / `a[i:j:k]`（步长/反转，str 按 UTF-8 字符）、**生成器表达式** `(x for x in xs)`（**惰性**：单层 for 延迟求值 / `gen_next` 逐项 / for-in / `list()` 转换）、位运算 + 二进制数据视图（int_to_hex / bytes_to_hex / bit_count / bit_length）、正则表达式、锁原语（mutex / rwlock）、文件随机读写 + fsync、进程/信号（os_spawn / os_wait / signal） |
+| 🔢 语言能力 | 切片语法 `a[i:j]` / `a[i:j:k]`（步长/反转，str 按 UTF-8 字符）、**生成器表达式** `(x for x in xs)`（**惰性**：单层 for 延迟求值 / `gen_next` 逐项 / for-in / `list()` 转换）、位运算 + 二进制数据视图（int_to_hex / bytes_to_hex / bit_count / bit_length）、正则表达式、锁原语（mutex / rwlock）、文件随机读写 + fsync、进程/信号（os_spawn / os_wait / signal）、**Result/Option 错误处理**（`Ok(x)`/`Err(e)`/`Some(x)` 构造，`?` 错误传播——Err/None 立即返回、`!` 强制解包、is_ok/is_err/unwrap 方法，spec 唯一错误通道） |
 | 🚀 应用平台 | **.px 脚本执行机制**（`px_serve` PHP/OpenResty 式应用服务器：Cookie/Session/基础认证 + 服务端 TLS + 优雅关闭、`px_exec` 语言层嵌入 API）+ **.px 进程池**（编译模式预派生 `px --worker` 解释器常驻复用，PHP-FPM 风格，**脚本/二进制变更自动滚动重启热更新**） |
 | 🔧 工具链 | `px fmt`（`-w` 写回 / `--check` 检查 / `--diff` 打印 unified diff）/ `px lint` / `px test` / `px bench` / `px doc` / `px ast` 全内置 |
 | 🤖 AI 接入 | `px lsp`（语言服务器）、`px mcp`（MCP 服务器），AI 客户端可直接驱动 |
@@ -86,7 +86,7 @@ px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
 | [docs/requirements.md](docs/requirements.md) | 需求与设计讨论（动机、取舍、双模式架构） |
 | [docs/plan.md](docs/plan.md) | 开发方案（语言命名、里程碑规划、语言要点） |
 | [docs/spec.md](docs/spec.md) | 语言规格说明书（词法 / 语法 / 语义 / 标准库） |
-| [docs/PROGRESS.md](docs/PROGRESS.md) | 开发进度（M0–M38 全部完成，39 个里程碑） |
+| [docs/PROGRESS.md](docs/PROGRESS.md) | 开发进度（M0–M39 全部完成，40 个里程碑；M39 打通 Result/Option 错误处理唯一通道） |
 
 ---
 
@@ -133,6 +133,7 @@ px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
 | M36 | 日志增强（log_json JSON 行 + log_daily 按天轮转）+ 请求上下文（ctx_set/get/clear 线程局部中间件传值）+ WS 心跳配置化（ws_serve opts{heartbeat} 自动保活）+ 进程池优雅关闭（SIGTERM 清理 px --worker 孤儿） | ✅ |
 | M37 | HTTP/2 over TLS（ALPN h2 协商）+ 响应压缩配置（gzip_level/gzip_min_bytes）+ 客户端 http_request 增强（retries/timeout/proxy）+ S3/MinIO 对象存储（AWS SigV4：s3_put/get/delete/list） | ✅ |
 | M38 | WS 客户端自动重连（ws_connect_auto 断线重连）+ HTTP/2 多流（同一连接多 stream 并发）+ 请求体流式限制（chunked 解码 + 超限 413）+ UDP echo 服务端（udp_serve） | ✅ |
+| M39 | Result/Option 错误处理唯一通道（Ok/Err/Some 构造 + `?` 传播 + `!` 解包 + Result 方法 + main 返回语义）——自举硬前置 | ✅ |
 
 ---
 

@@ -52,6 +52,9 @@ pub enum Value {
     TypeRef(TypeRefKind),
     /// 生成器对象（M32：生成器表达式 (x for x in xs)；M34：惰性——单层 for 延迟求值）
     Gen(Arc<Mutex<GenObj>>),
+    /// Result 值（M39：Ok(T) | Err(E)，spec §3.5 错误处理唯一通道；
+    /// Option 无运行时包装：None 即 null，Some(x) 即 x 本身）
+    Result { ok: bool, value: Box<Value> },
 }
 
 /// 生成器对象：物化结果 + 游标 +（M34 惰性）序列 + 变换/过滤闭包
@@ -414,6 +417,11 @@ pub enum Builtin {
     UdpServe,
     // M38：WebSocket 客户端自动重连（ws_connect_auto(url, reconnect_ms)：断线自动重连）
     WsConnectAuto,
+    // M39：Result/Option 构造函数（spec §3.5 错误处理唯一通道）
+    // Ok(x) → Result{ok:true, x}；Err(e) → Result{ok:false, e}；Some(x) → x（None 即 null）
+    Ok_,
+    Err_,
+    Some_,
 }
 
 impl Builtin {
@@ -594,6 +602,9 @@ impl Builtin {
             Builtin::S3List => "s3_list",
             Builtin::UdpServe => "udp_serve",
             Builtin::WsConnectAuto => "ws_connect_auto",
+            Builtin::Ok_ => "Ok",
+            Builtin::Err_ => "Err",
+            Builtin::Some_ => "Some",
         }
     }
 }
@@ -833,6 +844,13 @@ fn fmt_value(v: &Value) -> String {
                 g.cursor
             )
         }
+        Value::Result { ok, value } => {
+            if *ok {
+                format!("Ok({})", fmt_value(value))
+            } else {
+                format!("Err({})", fmt_value(value))
+            }
+        }
     }
 }
 
@@ -883,6 +901,10 @@ impl PartialEq for Value {
                 let (ga, gb) = (a.lock().unwrap(), b.lock().unwrap());
                 ga.materialized == gb.materialized
             }
+            (
+                Value::Result { ok: a_ok, value: a_v },
+                Value::Result { ok: b_ok, value: b_v },
+            ) => a_ok == b_ok && a_v == b_v,
             _ => false,
         }
     }

@@ -38,7 +38,7 @@ def s3mock(req):
 def s3server():
     http_serve(PORT, s3mock)
 spawn s3server()
-sleep(400)
+sleep(1000)
 
 # ============ s3_put ============
 ok = s3_put(EP, "bucket1", "dir/file1.txt", "hello-s3", AK, SK)

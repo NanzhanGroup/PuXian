@@ -3349,6 +3349,33 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             let db = expect_int(&args[0], "sqlite_last_insert_rowid", pos)?;
             Ok(Value::Int(crate::sqlite::sqlite_last_insert_rowid(db)))
         }
+        // M39：Result/Option 构造函数（spec §3.5）
+        // Ok(x) → Result{ok:true, x}；Err(e) → Result{ok:false, e}；Some(x) → x（None 即 null）
+        Builtin::Ok_ => {
+            if args.len() != 1 {
+                return Err(err("Ok 需要 1 个参数", pos));
+            }
+            Ok(Value::Result {
+                ok: true,
+                value: Box::new(args[0].clone()),
+            })
+        }
+        Builtin::Err_ => {
+            if args.len() != 1 {
+                return Err(err("Err 需要 1 个参数", pos));
+            }
+            Ok(Value::Result {
+                ok: false,
+                value: Box::new(args[0].clone()),
+            })
+        }
+        Builtin::Some_ => {
+            if args.len() != 1 {
+                return Err(err("Some 需要 1 个参数", pos));
+            }
+            // Option 无运行时包装：Some(x) = x（None 即 null）
+            Ok(args[0].clone())
+        }
     }
 }
 
@@ -5353,6 +5380,14 @@ pub(crate) fn json_stringify(v: &Value) -> Result<String, String> {
                 .collect::<Result<_, String>>()?;
             parts.sort();
             Ok(format!("{{{}}}", parts.join(",")))
+        }
+        // M39：Result 序列化为 {"ok":bool,"value":...}（与 C 端 json 一致）
+        Value::Result { ok, value } => {
+            Ok(format!(
+                "{{\"ok\":{},\"value\":{}}}",
+                if *ok { "true" } else { "false" },
+                json_stringify(value)?
+            ))
         }
         _ => Err(format!("无法序列化为 JSON: {}", v)),
     }

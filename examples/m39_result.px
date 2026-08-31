@@ -1,0 +1,91 @@
+# M39：Result / Option 错误处理（spec §3.5）
+# Ok(T) | Err(E) 构造 + `?` 传播 + `!` 强制解包 + is_ok/is_err/unwrap
+
+# ---- 基础构造 ----
+let a = Ok(42)
+print(type(a))        # result
+print(a)              # Ok(42)
+print(a.is_ok())      # true
+print(a.is_err())     # false
+print(a.unwrap())     # 42
+
+let b = Err("oops")
+print(b.is_err())     # true
+print(b)              # Err(oops)
+
+# Some(x) = x，None 即 null（Option 无运行时包装）
+let s = Some(7)
+print(s)              # 7
+print(Some(null))     # null
+print(type(s))        # int
+
+# ---- `?` 错误传播：Err 链式传播 ----
+def safe_div(a, b):
+    if b == 0:
+        return Err("division by zero")
+    return Ok(a // b)     # 整数除法（float 打印格式双模式有差异，用 int 保证逐字节一致）
+
+def calc(x):
+    y = safe_div(10, x)?      # Err 则立即返回 Err，否则解包
+    return Ok(y + 1)
+
+# 嵌套传播：三层函数链
+def level3():
+    return Err("deep error")
+
+def level2():
+    let v = level3()?
+    return Ok(v + 1)
+
+def level1():
+    let v = level2()?
+    return Ok(v * 2)
+
+# 可选链 + Result 组合（?. 遇 null 短路）
+def maybe(v):
+    if v == null:
+        return null          # Option 语义：None 即 null
+    return Ok(v * 10)
+
+def main():
+    r = calc(2)               # Ok(6)
+    print(r)
+    print(r.is_ok())
+
+    r2 = calc(0)              # Err("division by zero") 一路传播
+    print(r2)
+    print(r2.is_err())
+
+    # `!` 强制解包
+    let okv = safe_div(9, 3)!
+    print(okv)                # 3
+
+    # 嵌套传播：Err("deep error") 穿透 level1/level2
+    let deep = level1()
+    print(deep)               # Err(deep error)
+    print(deep.is_err())
+
+    # ? 解包普通值 / Option（null → 传播；非 null → 原值）
+    let plain = 5?
+    print(plain)              # 5
+
+    # 可选链：Ok 值 + ? 解包
+    let mv = maybe(7)
+    print(mv)                 # Ok(70)
+    let mv2 = mv?             # ? 解包 Ok → 70
+    print(mv2)                # 70
+    let mn = maybe(null)
+    print(mn)                 # null
+
+    # Result 放入容器 + json 序列化
+    let lst = [Ok(1), Err("e2")]
+    print(lst[0])             # Ok(1)
+    print(len(lst))           # 2
+    print(json_stringify(Ok(1)))   # {"ok":true,"value":1}
+    print(json_stringify(Err("x")))  # {"ok":false,"value":"x"}
+
+    # 方法链
+    print(str(Ok(5).unwrap()) + "!")   # 5!
+
+    # main 返回 Result（顶层解包：Ok → 值；Err → 打印错误退出 1）
+    return Ok(0)

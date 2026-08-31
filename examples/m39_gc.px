@@ -1,0 +1,20 @@
+# M39 验证：Result 载荷对象在 GC 下存活（编译模式内存压力）
+def main():
+    # Result 载荷是 list 对象，循环创建+GC 后引用仍有效
+    let r = Ok([1, 2, 3, 4, 5])
+    let e = Err(["err", "code"])
+    for i in range(50):
+        # 制造垃圾：大量临时 Result
+        let tmp = Ok(list(range(100)))
+        let _ = tmp.unwrap()
+        gc()
+    # 载荷对象未被 GC 误回收
+    assert(r.is_ok(), "ok alive")
+    let v = r.unwrap()
+    assert(len(v) == 5, "list len")
+    assert(v[4] == 5, "list item")
+    assert(e.is_err(), "err alive")
+    let ev = e.err()
+    assert(ev[0] == "err", "err payload")
+    print("m39 GC OK")
+    return Ok(0)

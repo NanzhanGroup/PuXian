@@ -25,6 +25,9 @@ pub struct Codegen {
     // 顶层全局名（M18 修复：函数内赋值到全局变量应生成 px_get/set_global，
     // 而非被 collect_assign_vars 预声明为函数局部变量 → null + 1 运行时错误）
     globals: HashSet<String>,
+    // M39：当前函数错误传播标签栈（? 运算符用 goto 跳转到函数末尾的错误返回点）
+    // 元素 = 标签名（如 "px_err_5"），同时派生传播变量 px_err_N_val / px_err_N_proped
+    err_labels: Vec<String>,
     uid: usize,
     closure_id: usize,
 }
@@ -40,6 +43,7 @@ impl Codegen {
             vars: HashMap::new(),
             var_types: HashMap::new(),
             globals: HashSet::new(),
+            err_labels: Vec::new(),
             uid: 0,
             closure_id: 0,
         }
@@ -70,7 +74,8 @@ impl Codegen {
         let mut out = String::new();
         out.push_str("/* 由普贤 (PuXian) 编译器自动生成 — px build */\n");
         out.push_str("#include \"runtime.h\"\n");
-        out.push_str("#include <string.h>\n\n");
+        out.push_str("#include <string.h>\n");
+        out.push_str("#include <stdio.h>\n\n");
 
         // 第一遍：收集类型表
         self.collect_types(prog)?;
@@ -157,13 +162,29 @@ impl Codegen {
         // 调用顶层 main()
         if let Some(f) = top_defs.iter().find(|f| f.name == "main") {
             let cname = format!("fn_{}", self.func_cname(&f.name));
+            // M39：main 返回值语义——Result 解包（Ok(v) → v；Err(e) → 打印错误退出 1），
+            // Int → 退出码；其他 → 0（与解释器 run_program 一致）
             out.push_str(&format!(
-                "    {{ LXValue _r = {}(NULL, 0, NULL); (void)_r; }}\n",
+                "    {{ LXValue _r = {}(NULL, 0, NULL); int _code = 0;\n",
                 cname
             ));
+            out.push_str("      if (px_is_result(_r)) {\n");
+            out.push_str("        if (!px_result_ok(_r)) {\n");
+            out.push_str("          fprintf(stderr, \"错误: %s\\n\", px_to_string(px_result_unwrap(_r)));\n");
+            out.push_str("          _code = 1;\n");
+            out.push_str("        } else {\n");
+            out.push_str("          LXValue _uv = px_result_unwrap(_r);\n");
+            out.push_str("          if (_uv.type == PX_INT) _code = (int)_uv.as.i;\n");
+            out.push_str("        }\n");
+            out.push_str("      } else if (_r.type == PX_INT) {\n");
+            out.push_str("        _code = (int)_r.as.i;\n");
+            out.push_str("      }\n");
+            out.push_str("      return _code;\n");
+            out.push_str("    }\n");
+        } else {
+            out.push_str("    return 0;\n");
         }
-
-        out.push_str("    return 0;\n}\n");
+        out.push_str("}\n");
 
         // 合并闭包定义（放在所有函数定义之前，避免使用前未声明）
         let mut final_out = String::new();
@@ -260,12 +281,20 @@ impl Codegen {
             let v = self.new_var(name);
             s.push_str(&format!("    LXValue {} = px_null();\n", v));
         }
+        // M39：? 错误传播支持——函数级错误标签 + 传播变量（Err/None → goto 到函数末尾统一返回）
+        let err_tag = format!("px_err_{}", self.uid());
+        self.err_labels.push(err_tag.clone());
+        s.push_str(&format!("    LXValue {}_val = px_null();\n", err_tag));
+        s.push_str(&format!("    int {}_proped = 0;\n", err_tag));
         // 函数体
         for stmt in &f.body {
             s.push_str(&self.gen_stmt(stmt, 1)?);
         }
+        s.push_str(&format!("{}:\n", err_tag));
+        s.push_str(&format!("    if ({}_proped) return {}_val;\n", err_tag, err_tag));
         s.push_str("    return px_null();\n");
         s.push_str("}\n");
+        self.err_labels.pop();
         // 恢复外层变量表
         self.vars = saved_vars;
         self.var_types = saved_types;
@@ -910,19 +939,31 @@ impl Codegen {
             }
             Expr::Try { expr, .. } => {
                 let e = self.gen_expr(expr)?;
-                // MVP：直接返回（null 视为错误）
                 let t = self.tmp();
-                Ok(format!(
-                    "({{ LXValue {} = {}; if (px_is_null({})) px_error(\"unwrap null value\"); {}; }})",
-                    t, e, t, t
-                ))
+                // M39：? 完整语义（spec §3.5）
+                //  - Err(e) → 立即返回 Err(e)（goto 函数错误标签，传播给调用方）
+                //  - null（None）→ 立即返回 null（传播）
+                //  - Ok(v) → 解包为 v；其他普通值 → 原样返回
+                if let Some(tag) = self.err_labels.last().cloned() {
+                    Ok(format!(
+                        "({{ LXValue {t} = {e}; if (px_is_result({t})) {{ if (!px_result_ok({t})) {{ {tag}_val = {t}; {tag}_proped = 1; goto {tag}; }} {t} = px_result_unwrap({t}); }} else if (px_is_null({t})) {{ {tag}_val = px_null(); {tag}_proped = 1; goto {tag}; }} {t}; }})",
+                        t = t, e = e, tag = tag
+                    ))
+                } else {
+                    // 顶层：? 遇 Err/null 直接报错（顶层无函数边界可传播）
+                    Ok(format!(
+                        "({{ LXValue {} = {}; if (px_is_result({}) && !px_result_ok({})) px_error(\"错误传播 ?: 顶层不能传播 Err\"); if (px_is_null({})) px_error(\"错误传播 ?: 顶层不能传播 null\"); if (px_is_result({})) {} = px_result_unwrap({}); {}; }})",
+                        t, e, t, t, t, t, t, t, t
+                    ))
+                }
             }
             Expr::ForceUnwrap { expr, .. } => {
                 let e = self.gen_expr(expr)?;
                 let t = self.tmp();
+                // M39：! 增强（Rust unwrap）——Ok(v) 解包；Err/null → 运行时错误
                 Ok(format!(
-                    "({{ LXValue {} = {}; if (px_is_null({})) px_error(\"force unwrap null\"); {}; }})",
-                    t, e, t, t
+                    "({{ LXValue {} = {}; if (px_is_result({})) {{ if (!px_result_ok({})) px_error(\"force unwrap Err\"); {} = px_result_unwrap({}); }} if (px_is_null({})) px_error(\"force unwrap null\"); {}; }})",
+                    t, e, t, t, t, t, t, t
                 ))
             }
             Expr::IfExpr { cond, then, else_, .. } => {
@@ -1353,8 +1394,17 @@ impl Codegen {
             ));
         }
         let b = self.gen_expr(body)?;
+        // M39：闭包也支持 ? 错误传播（错误标签 + 传播变量）
+        let err_tag = format!("px_err_{}", self.uid());
+        self.err_labels.push(err_tag.clone());
+        fdef.push_str(&format!("    LXValue {}_val = px_null();\n", err_tag));
+        fdef.push_str(&format!("    int {}_proped = 0;\n", err_tag));
         fdef.push_str(&format!("    return {};\n", b));
+        fdef.push_str(&format!("{}:\n", err_tag));
+        fdef.push_str(&format!("    if ({}_proped) return {}_val;\n", err_tag, err_tag));
+        fdef.push_str("    return px_null();\n");
         fdef.push_str("}\n");
+        self.err_labels.pop();
         self.closures.push_str(&fdef);
         self.vars = saved_vars;
         self.var_types = saved_types;
@@ -1432,5 +1482,35 @@ mod tests {
         // 赋值必须有目标变量（M4 修复的 bug：不能生成裸 " = 42;"）
         assert!(!c.contains("     = px_int(42LL);"));
         assert!(c.contains("_v1 = px_int(42LL);"));
+    }
+
+    // ==================== M39：Result / ? 传播 ====================
+
+    #[test]
+    fn test_gen_result_try() {
+        // ? 在函数内生成错误标签 + 传播变量（goto 到函数末尾）
+        let c = gen_code(
+            "def safe_div(a, b):\n    if b == 0:\n        return Err(\"z\")\n    return Ok(a // b)\n\ndef calc(x):\n    y = safe_div(10, x)?\n    return Ok(y + 1)\n\ndef main():\n    return Ok(0)\n",
+        );
+        assert!(c.contains("_val = px_null();"), "传播变量声明");
+        assert!(c.contains("_proped = 0;"), "传播标志声明");
+        assert!(c.contains("px_err_"), "错误标签");
+        assert!(c.contains("px_result_ok"), "Result 判断");
+        assert!(c.contains("px_result_unwrap"), "Result 解包");
+        assert!(c.contains("goto px_err_"), "goto 传播");
+        assert!(c.contains("_proped) return px_err_"), "错误返回点");
+        // main 返回值语义：Err → 打印错误退出 1
+        assert!(c.contains("错误: %s"), "main Err 打印");
+        assert!(c.contains("_code = 1"), "main Err 退出码 1");
+    }
+
+    #[test]
+    fn test_gen_result_force_unwrap() {
+        // ! 生成 Result 解包 + Err/null 报错
+        let c = gen_code("def main():\n    let x = Ok(9)!\n    return Ok(0)\n");
+        assert!(c.contains("px_is_result"));
+        assert!(c.contains("px_result_unwrap"));
+        assert!(c.contains("force unwrap Err"));
+        assert!(c.contains("force unwrap null"));
     }
 }

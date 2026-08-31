@@ -35,6 +35,7 @@ typedef enum {
     PX_MUTEX,   // 互斥锁（M13：P1 锁原语）
     PX_RWLOCK,  // 读写锁（M13：读多写少）
     PX_GEN,     // 生成器（M32：生成器表达式延迟物化）
+    PX_RESULT,  // Result 值（M39：Ok(T) | Err(E)，spec §3.5 错误处理唯一通道）
 } LXType;
 
 typedef struct LXValue LXValue;
@@ -97,6 +98,10 @@ struct LXObject {
             LXValue  transform;      // 变换闭包 fn(x){expr}
             LXValue  filter;         // 过滤闭包 fn(x){cond}（PX_NULL = 全通过）
         } gen;
+        struct {
+            int      ok;             // M39：1 = Ok(T)，0 = Err(E)
+            LXValue  value;          // 载荷（Ok 的 T 或 Err 的 E）
+        } result;
     } as;
 };
 
@@ -123,6 +128,13 @@ LXValue px_gen_from_list(LXValue list);
 // M34：惰性生成器（单层 for 延迟求值：seq 不展开，transform/filter 闭包 gen_next 时调用）
 LXValue px_gen_lazy(LXValue seq, LXValue transform, LXValue filter);
 LXValue px_gen_next(LXValue g);
+// M39：Result 构造 / 判断 / 解包（spec §3.5）
+LXValue px_ok(LXValue v);
+LXValue px_err(LXValue v);
+LXValue px_some(LXValue v);
+bool    px_is_result(LXValue v);
+bool    px_result_ok(LXValue v);
+LXValue px_result_unwrap(LXValue v);
 
 // ==================== 类型判断 ====================
 
