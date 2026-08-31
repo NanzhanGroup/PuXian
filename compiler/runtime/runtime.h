@@ -139,6 +139,7 @@ LXValue px_bitor(LXValue a, LXValue b);
 LXValue px_bitxor(LXValue a, LXValue b);
 LXValue px_shl(LXValue a, LXValue b);
 LXValue px_shr(LXValue a, LXValue b);
+LXValue px_ushr(LXValue a, LXValue b);
 
 // ==================== 容器操作 ====================
 
@@ -189,6 +190,8 @@ LXValue bi_ws_send(LXValue* args, int nargs, void* ctx);
 LXValue bi_ws_recv(LXValue* args, int nargs, void* ctx);
 LXValue bi_ws_close(LXValue* args, int nargs, void* ctx);
 LXValue bi_ws_ping(LXValue* args, int nargs, void* ctx);
+// M26：内置自动心跳（定时 ping + 死链检测）
+LXValue bi_ws_heartbeat(LXValue* args, int nargs, void* ctx);
 // M23d P1：RSA 非对称加密（实现 runtime_rsa.c）
 LXValue bi_rsa_gen_key(LXValue* args, int nargs, void* ctx);
 LXValue bi_rsa_encrypt(LXValue* args, int nargs, void* ctx);

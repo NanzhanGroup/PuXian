@@ -1,0 +1,14 @@
+# M26: SSE 客户端 https（本地自签 https 端点 + PX_TLS_CA_FILE 追加信任）
+# 运行前：PX_TLS_CA_FILE=/tmp/sse_tls/ca.pem（自签 CA）
+conn = sse_connect("https://127.0.0.1:19443/events")
+print("connected =", conn != null)
+if conn == null:
+    exit(1)
+e1 = sse_read(conn)
+print("e1 =", e1["event"], "|", e1["data"], "|", e1["id"])
+e2 = sse_read(conn)
+print("e2 =", e2["event"], "|", e2["data"])
+e3 = sse_read(conn)
+print("e3 =", e3["event"], "|", e3["data"])
+print("closed =", sse_close(conn))
+print("done")

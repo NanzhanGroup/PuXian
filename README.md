@@ -86,7 +86,7 @@ px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
 | [docs/requirements.md](docs/requirements.md) | 需求与设计讨论（动机、取舍、双模式架构） |
 | [docs/plan.md](docs/plan.md) | 开发方案（语言命名、里程碑规划、语言要点） |
 | [docs/spec.md](docs/spec.md) | 语言规格说明书（词法 / 语法 / 语义 / 标准库） |
-| [docs/PROGRESS.md](docs/PROGRESS.md) | 开发进度（M0–M25 产出与验证记录，含 M26 候选） |
+| [docs/PROGRESS.md](docs/PROGRESS.md) | 开发进度（M0–M26 产出与验证记录，含 M27 候选） |
 
 ---
 
@@ -120,6 +120,7 @@ px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
 | M23 | 网络/存储/安全收尾：SSE 客户端 + WS 心跳/超时 + 二进制安全 bytes + HTTP keep-alive/连接池/流式 + 进程/信号 + RSA | ✅ |
 | M24 | XML 生成 + 切片步长 + https 连接池复用 + HTTP 流式 gzip 解压 | ✅ |
 | M25 | 闭包循环回收 + .px 进程池化 + TLS 会话票据恢复 + fmt --diff | ✅ |
+| M26 | 无符号右移 `>>>` + WebSocket 内置心跳 + SSE 客户端 https + 远程包 registry | ✅ |
 
 ---
 
@@ -156,6 +157,11 @@ px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
 - `m23d_proc_signal.px` / `m23d_rsa.px` —— 进程/信号 / RSA
 - `m24_slice_xml.px` —— 切片步长 + XML 生成
 - `m24_http_adv.px` —— https 连接池 + HTTP 流式 gzip
+- `m25_closure_gc.px` —— 闭包循环回收
+- `m25_tls_resume.px` —— TLS 会话票据恢复
+- `m26_ushr.px` —— 无符号右移 `>>>`
+- `m26_ws_heartbeat.px` —— WebSocket 内置心跳
+- `m26_sse_https.px` —— SSE 客户端 https（需本地 https SSE 端点 + PX_TLS_CA_FILE）
 
 ```bash
 px run examples/fib.px
@@ -200,4 +206,4 @@ px build examples/fib.px -o /tmp/fib && /tmp/fib
 - 目标平台：仅 Linux（x86_64 / aarch64）；
 - 编译模式产物为静态链接二进制（`ldd` 显示 `statically linked`）；
 - C 运行时内部符号统一使用 `px_` / `PX_` 前缀（M20 全量迁移完成），第三方库（mbedtls / miniz）保留各自前缀；
-- 回归基线：`cargo test` 153/153、并发 GC 60/60 稳定、示例双模式逐字节一致。
+- 回归基线：`cargo test` 157/157、并发 GC 60/60 稳定、示例双模式逐字节一致。

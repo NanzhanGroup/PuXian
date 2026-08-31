@@ -1,0 +1,27 @@
+# M26: ws_heartbeat 内置自动心跳（双模式）
+def handler(conn):
+    while true:
+        msg = ws_recv(conn)
+        if msg == null:
+            break
+        ws_send(conn, "echo:" + msg)
+    print("server conn closed")
+
+def serve():
+    ws_serve(19090, handler)
+
+spawn serve()
+sleep(300)
+conn = ws_connect("127.0.0.1", 19090, "/ws")
+print("connected =", conn != null)
+# 每 300ms ping 保活；3s 无任何帧（含 pong）判死链
+print("heartbeat_started =", ws_heartbeat(conn, 300, 3000))
+# 心跳运行期间正常收发（连接保持）
+ws_send(conn, "hello")
+print("recv1 =", ws_recv(conn, 2000))
+sleep(1100)   # 心跳已跑 3+ 轮，连接应保活
+ws_send(conn, "world")
+print("recv2 =", ws_recv(conn, 2000))
+ws_close(conn)
+sleep(200)
+print("done")

@@ -326,6 +326,7 @@ impl Interpreter {
             ("ws_recv", Builtin::WsRecv),
             ("ws_close", Builtin::WsClose),
             ("ws_ping", Builtin::WsPing),
+            ("ws_heartbeat", Builtin::WsHeartbeat),
             ("os_pid", Builtin::OsPid),
             ("os_spawn", Builtin::OsSpawn),
             ("os_wait", Builtin::OsWait),
@@ -1825,6 +1826,7 @@ impl Interpreter {
             AssignOp::BitXor => BinaryOp::BitXor,
             AssignOp::Shl => BinaryOp::Shl,
             AssignOp::Shr => BinaryOp::Shr,
+            AssignOp::ShrU => BinaryOp::ShrU,
         };
         self.eval_binary(binop, old, new, pos)
     }
@@ -1853,7 +1855,7 @@ impl Interpreter {
         use BinaryOp::*;
         match op {
             Add => self.bin_add(l, r, pos),
-            Sub | Mul | Div | IntDiv | Mod | Pow | Shl | Shr | BitAnd | BitOr | BitXor => {
+            Sub | Mul | Div | IntDiv | Mod | Pow | Shl | Shr | ShrU | BitAnd | BitOr | BitXor => {
                 self.bin_numeric(op, l, r, pos)
             }
             Eq => Ok(Value::Bool(l == r)),
@@ -1913,6 +1915,7 @@ impl Interpreter {
                     },
                     Shl => Ok(Value::Int(a.wrapping_shl(*b as u32))),
                     Shr => Ok(Value::Int(a.wrapping_shr(*b as u32))),
+                    ShrU => Ok(Value::Int((*a as u64).wrapping_shr(*b as u32) as i64)),
                     BitAnd => Ok(Value::Int(a & b)),
                     BitOr => Ok(Value::Int(a | b)),
                     BitXor => Ok(Value::Int(a ^ b)),

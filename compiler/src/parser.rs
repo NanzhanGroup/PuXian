@@ -267,6 +267,7 @@ impl Parser {
             TokenKind::BitXorAssign => Some(AssignOp::BitXor),
             TokenKind::ShlAssign => Some(AssignOp::Shl),
             TokenKind::ShrAssign => Some(AssignOp::Shr),
+            TokenKind::ShrUAssign => Some(AssignOp::ShrU),
             _ => None,
         };
         if let Some(op) = op {
@@ -910,6 +911,7 @@ impl Parser {
             let op = match self.peek_kind() {
                 TokenKind::Shl => BinaryOp::Shl,
                 TokenKind::Shr => BinaryOp::Shr,
+                TokenKind::ShrU => BinaryOp::ShrU,
                 _ => break,
             };
             let pos = self.advance().pos;

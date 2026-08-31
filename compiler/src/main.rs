@@ -249,8 +249,8 @@ fn run_pkg(args: &[String]) -> ExitCode {
 fn print_pkg_usage() {
     println!("普贤包管理器 (px pkg)");
     println!("  px pkg init [--name NAME]       初始化项目（生成 px.toml）");
-    println!("  px pkg add <path> [--name 别名]  添加本地依赖（复制到 .px_modules/）");
-    println!("  px pkg install                  按 px.toml 安装依赖");
+    println!("  px pkg add <path|url> [--name 别名]  添加依赖：本地路径复制；URL（http/https）远程下载（zip 解压 / .px 单文件）");
+    println!("  px pkg install                  按 px.toml 安装依赖（URL 依赖带缓存与可选 #sha256 校验）");
     println!("  px pkg list                     列出依赖");
     println!("  px pkg remove <name>            移除依赖");
 }

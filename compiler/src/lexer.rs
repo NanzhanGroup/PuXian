@@ -711,7 +711,16 @@ impl Lexer {
             '>' => {
                 if self.peek() == Some('>') {
                     self.advance();
-                    if self.peek() == Some('=') {
+                    if self.peek() == Some('>') {
+                        // >>>（无符号右移）或 >>>=
+                        self.advance();
+                        if self.peek() == Some('=') {
+                            self.advance();
+                            Token::new(ShrUAssign, pos)
+                        } else {
+                            Token::new(ShrU, pos)
+                        }
+                    } else if self.peek() == Some('=') {
                         self.advance();
                         Token::new(ShrAssign, pos)
                     } else {

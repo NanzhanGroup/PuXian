@@ -124,10 +124,10 @@ static SSE_NEXT_ID: AtomicI64 = AtomicI64::new(1);
 // sse_connect(url) → int conn | null：HTTP GET 连接 SSE 服务端（校验 200 + text/event-stream）
 // sse_read(conn) → dict{event?, data, id?, retry?} | null：阻塞读一条事件（断开/超时 → null）
 // sse_close(conn) → bool：关闭客户端连接
-// 说明：sse_connect 仅支持 http://（长连接 + 流式读取需要原始 TCP；https 需 TLS 不在此列）。
+// M26：sse_connect 支持 http:// 与 https://（https 走 rustls，复用 Conn 枚举统一读写）。
 
 struct SseClient {
-    reader: Mutex<TcpStream>,
+    reader: Mutex<Conn>,
     pending: Mutex<Vec<u8>>,
 }
 
@@ -192,9 +192,15 @@ fn sse_take_event(pending: &mut Vec<u8>) -> Option<String> {
     None
 }
 
-/// sse_connect(url) → conn id 或 null（仅 http://）
+/// sse_connect(url) → conn id 或 null（支持 http:// 与 https://）
 fn sse_client_connect(url: &str) -> Option<i64> {
-    let rest = url.strip_prefix("http://")?;
+    let (scheme, rest) = if let Some(r) = url.strip_prefix("https://") {
+        ("https", r)
+    } else if let Some(r) = url.strip_prefix("http://") {
+        ("http", r)
+    } else {
+        return None;
+    };
     let (hostport, path) = match rest.find('/') {
         Some(i) => (&rest[..i], &rest[i..]),
         None => (rest, "/"),
@@ -207,25 +213,32 @@ fn sse_client_connect(url: &str) -> Option<i64> {
             hostport[..i].to_string(),
             hostport[i + 1..].parse::<u16>().ok()?,
         ),
-        None => (hostport.to_string(), 80u16),
+        None => (hostport.to_string(), if scheme == "https" { 443u16 } else { 80u16 }),
     };
     let host_header = if hostport.contains(':') {
         hostport.to_string()
     } else {
         format!("{}:{}", host, port)
     };
-    let mut stream = TcpStream::connect(format!("{}:{}", host, port)).ok()?;
+    let mut conn = if scheme == "https" {
+        match https_connect(&host, port) {
+            Ok(t) => Conn::Tls(t),
+            Err(_) => return None,
+        }
+    } else {
+        Conn::Plain(TcpStream::connect(format!("{}:{}", host, port)).ok()?)
+    };
     let req = format!(
         "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: PuXian/0.1\r\nAccept: text/event-stream\r\nConnection: close\r\nCache-Control: no-cache\r\n\r\n",
         path, host_header
     );
-    stream.write_all(req.as_bytes()).ok()?;
+    conn.write_all(req.as_bytes()).ok()?;
     // 读响应头（直到 \r\n\r\n，上限 64KB）
     let mut buf: Vec<u8> = Vec::new();
     let mut tmp = [0u8; 4096];
     let mut header_end = None;
     while buf.len() < 65536 {
-        let n = stream.read(&mut tmp).ok()?;
+        let n = conn.read(&mut tmp).ok()?;
         if n == 0 {
             break;
         }
@@ -265,7 +278,7 @@ fn sse_client_connect(url: &str) -> Option<i64> {
         m.insert(
             id,
             SseClient {
-                reader: Mutex::new(stream),
+                reader: Mutex::new(conn),
                 pending: Mutex::new(std::mem::take(&mut pending)),
             },
         );
@@ -1906,6 +1919,15 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             let conn = expect_int(&args[0], "ws_ping", pos)?;
             Ok(Value::Bool(crate::ws::ws_ping(conn)))
         }
+        Builtin::WsHeartbeat => {
+            if args.len() != 3 {
+                return Err(err("ws_heartbeat 需要 (conn, interval_ms, timeout_ms) 参数", pos));
+            }
+            let conn = expect_int(&args[0], "ws_heartbeat", pos)?;
+            let interval = expect_int(&args[1], "ws_heartbeat", pos)?;
+            let timeout = expect_int(&args[2], "ws_heartbeat", pos)?;
+            Ok(Value::Bool(crate::ws::ws_heartbeat(conn, interval, timeout)))
+        }
 
         // ==================== M23 进程 / 信号 ====================
         Builtin::OsPid => Ok(Value::Int(std::process::id() as i64)),
@@ -3117,10 +3139,70 @@ fn pool_put(key: &str, conn: PooledConn) {
 /// 随 ClientConfig 共享，同 host 连续连接自动会话恢复（省去完整握手 RTT）。
 static TLS_CLIENT_CONFIG: _OnceLock<std::sync::Arc<rustls::ClientConfig>> = _OnceLock::new();
 
+/// M26：从 PEM 文件（或单个 DER）加载追加信任的 CA 证书列表（PX_TLS_CA_FILE 用）。
+/// 支持 PEM（可多个块）与原始 DER 两种格式；PEM 块手工 base64 解码（不引入 crate）。
+pub fn load_ca_der(path: &str) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>, String> {
+    let data = std::fs::read(path).map_err(|e| format!("读取失败: {}", e))?;
+    let b64_decode = |s: &str| -> Option<Vec<u8>> {
+        let mut out = Vec::with_capacity(s.len() / 4 * 3);
+        let mut acc: u32 = 0;
+        let mut nbits = 0u32;
+        for c in s.bytes() {
+            let v = match c {
+                b'A'..=b'Z' => c - b'A',
+                b'a'..=b'z' => c - b'a' + 26,
+                b'0'..=b'9' => c - b'0' + 52,
+                b'+' => 62,
+                b'/' => 63,
+                b'=' | b'\r' | b'\n' | b' ' | b'\t' => continue,
+                _ => return None,
+            };
+            acc = (acc << 6) | v as u32;
+            nbits += 6;
+            if nbits >= 8 {
+                nbits -= 8;
+                out.push((acc >> nbits) as u8);
+                acc &= (1u32 << nbits) - 1;
+            }
+        }
+        Some(out)
+    };
+    let text = String::from_utf8_lossy(&data);
+    if text.contains("-----BEGIN CERTIFICATE-----") {
+        let mut certs = Vec::new();
+        let mut rest: &str = &text;
+        while let Some(begin) = rest.find("-----BEGIN CERTIFICATE-----") {
+            let after = &rest[begin + 28..];
+            let end = after.find("-----END CERTIFICATE-----").ok_or("PEM 块不完整")?;
+            let b64 = &after[..end];
+            let der = b64_decode(b64).ok_or("base64 解码失败")?;
+            certs.push(rustls::pki_types::CertificateDer::from(der));
+            rest = &after[end + 24..];
+        }
+        if certs.is_empty() {
+            return Err("未找到 PEM 证书块".into());
+        }
+        Ok(certs)
+    } else {
+        Ok(vec![rustls::pki_types::CertificateDer::from(data)])
+    }
+}
+
 fn https_connect(host: &str, port: u16) -> Result<TlsClient, String> {
     let cfg = TLS_CLIENT_CONFIG.get_or_init(|| {
         let mut roots = rustls::RootCertStore::empty();
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        // M26：PX_TLS_CA_FILE 环境变量追加信任的 CA（企业内网自签证书场景）
+        if let Ok(p) = std::env::var("PX_TLS_CA_FILE") {
+            match load_ca_der(&p) {
+                Ok(certs) => {
+                    for der in certs {
+                        let _ = roots.add(der);
+                    }
+                }
+                Err(e) => eprintln!("[px] PX_TLS_CA_FILE 加载失败 {}: {}", p, e),
+            }
+        }
         std::sync::Arc::new(
             rustls::ClientConfig::builder()
                 .with_root_certificates(roots)

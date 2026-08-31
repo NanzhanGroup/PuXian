@@ -358,6 +358,7 @@ impl Codegen {
                                     AssignOp::BitXor => format!("px_bitxor(px_get_global(\"{}\"), {})", name, rhs),
                                     AssignOp::Shl => format!("px_shl(px_get_global(\"{}\"), {})", name, rhs),
                                     AssignOp::Shr => format!("px_shr(px_get_global(\"{}\"), {})", name, rhs),
+                                    AssignOp::ShrU => format!("px_ushr(px_get_global(\"{}\"), {})", name, rhs),
                                 };
                                 return Ok(format!(
                                     "{}px_set_global(\"{}\", {});\n",
@@ -379,6 +380,7 @@ impl Codegen {
                             AssignOp::BitXor => format!("px_bitxor({}, {})", v, rhs),
                             AssignOp::Shl => format!("px_shl({}, {})", v, rhs),
                             AssignOp::Shr => format!("px_shr({}, {})", v, rhs),
+                            AssignOp::ShrU => format!("px_ushr({}, {})", v, rhs),
                         };
                         Ok(format!("{} {} = {};\n", pad, v, full))
                     }
@@ -871,6 +873,7 @@ impl Codegen {
                     BinaryOp::BitXor => "px_bitxor",
                     BinaryOp::Shl => "px_shl",
                     BinaryOp::Shr => "px_shr",
+                    BinaryOp::ShrU => "px_ushr",
                     _ => "px_add",
                 };
                 Ok(format!("{}({}, {})", f, l, r))

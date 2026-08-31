@@ -206,6 +206,7 @@ fn is_unary_context(prev: &TokenKind) -> bool {
             | BitXor
             | Shl
             | Shr
+            | ShrU
             | Assign
             | PlusAssign
             | MinusAssign
@@ -219,6 +220,7 @@ fn is_unary_context(prev: &TokenKind) -> bool {
             | BitXorAssign
             | ShlAssign
             | ShrAssign
+            | ShrUAssign
             | Pipe
             | NullCoalesce
             | Arrow

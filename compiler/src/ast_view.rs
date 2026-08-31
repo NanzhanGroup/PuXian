@@ -369,6 +369,7 @@ fn op_name(op: AssignOp) -> &'static str {
         AssignOp::BitXor => "^=",
         AssignOp::Shl => "<<=",
         AssignOp::Shr => ">>=",
+        AssignOp::ShrU => ">>>=",
     }
 }
 
@@ -402,5 +403,6 @@ fn binary_name(op: BinaryOp) -> &'static str {
         BinaryOp::BitXor => "^",
         BinaryOp::Shl => "<<",
         BinaryOp::Shr => ">>",
+        BinaryOp::ShrU => ">>>",
     }
 }

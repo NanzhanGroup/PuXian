@@ -157,6 +157,7 @@ pub enum AssignOp {
     BitXor,
     Shl,
     Shr,
+    ShrU,
 }
 
 // ==================== 表达式 ====================
@@ -340,6 +341,7 @@ pub enum BinaryOp {
     BitXor,
     Shl,
     Shr,
+    ShrU,
 }
 
 #[derive(Debug, Clone)]

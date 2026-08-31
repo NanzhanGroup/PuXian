@@ -36,8 +36,24 @@ static struct {
     int active;        // 槽位占用
     int client;        // 1 = 客户端连接（发送需掩码）；0 = 服务端连接
     int closed;        // 已发送/收到 close（停止使用）
+    long long last_activity; // 最近读到任何帧的时间（毫秒，0=未初始化；ws_heartbeat 超时检测）
+    int hb_active;           // 心跳线程已启动（防重复）
 } g_ws_conns[MAX_WS_CONNS];
 static int64_t g_ws_next_id = 1;
+
+// 当前毫秒时间戳
+static long long ws_now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+// 标记最近活动时间（读到任何帧时调用；持锁）
+static void ws_mark_activity(int idx) {
+    if (idx >= 0 && idx < MAX_WS_CONNS) {
+        g_ws_conns[idx].last_activity = ws_now_ms();
+    }
+}
 
 static int ws_find(int64_t id) {
     for (int i = 0; i < MAX_WS_CONNS; i++) {
@@ -368,6 +384,8 @@ LXValue ws_conn_worker(LXValue* args, int nargs, void* ctx) {
     g_ws_conns[slot].active = 1;
     g_ws_conns[slot].client = 0;
     g_ws_conns[slot].closed = 0;
+    g_ws_conns[slot].last_activity = 0;
+    g_ws_conns[slot].hb_active = 0;
     pthread_mutex_unlock(&g_ws_mu);
     // 3. 调 handler(conn)
     LXValue handler = px_get_global("__ws_handler");
@@ -381,6 +399,13 @@ LXValue ws_conn_worker(LXValue* args, int nargs, void* ctx) {
         unsigned char* payload = NULL;
         size_t plen = 0;
         int opcode = ws_read_frame(fd, &fin, &payload, &plen);
+        // 心跳：读到任何帧（含 pong）即更新最近活动时间
+        {
+            pthread_mutex_lock(&g_ws_mu);
+            int a_idx = ws_find(conn);
+            if (a_idx >= 0) g_ws_conns[a_idx].last_activity = ws_now_ms();
+            pthread_mutex_unlock(&g_ws_mu);
+        }
         if (opcode < 0) break;  // EOF / 错误 / shutdown
         if (opcode == WS_OP_PING) {
             ws_send_frame(fd, WS_OP_PONG, payload, plen, 0);
@@ -439,6 +464,8 @@ LXValue bi_ws_connect(LXValue* args, int nargs, void* ctx) {
     g_ws_conns[slot].active = 1;
     g_ws_conns[slot].client = 1;
     g_ws_conns[slot].closed = 0;
+    g_ws_conns[slot].last_activity = 0;
+    g_ws_conns[slot].hb_active = 0;
     pthread_mutex_unlock(&g_ws_mu);
     return px_int(conn);
 }
@@ -515,6 +542,13 @@ LXValue bi_ws_recv(LXValue* args, int nargs, void* ctx) {
         unsigned char* payload = NULL;
         size_t plen = 0;
         int opcode = ws_read_frame(fd, &fin, &payload, &plen);
+        // 心跳：读到任何帧（含 pong）即更新最近活动时间
+        {
+            pthread_mutex_lock(&g_ws_mu);
+            int a_idx = ws_find(conn);
+            if (a_idx >= 0) g_ws_conns[a_idx].last_activity = ws_now_ms();
+            pthread_mutex_unlock(&g_ws_mu);
+        }
         if (opcode < 0) {
             if (payload) free(payload);
             if (msg) free(msg);
@@ -599,5 +633,105 @@ LXValue bi_ws_ping(LXValue* args, int nargs, void* ctx) {
         pthread_mutex_unlock(&g_ws_mu);
         return px_bool(false);
     }
+    return px_bool(true);
+}
+
+// ==================== M26 ws_heartbeat：内置自动心跳 ====================
+// ws_heartbeat(conn, interval_ms, timeout_ms) → bool
+// - 每 interval_ms 发送 ping 帧保活（对端应回 pong；ws_recv 读到帧即刷新活动时间）；
+// - 超过 timeout_ms 未读到任何帧（含 pong）→ 判定死链：shutdown+close 并清理注册
+//   （阻塞中的 ws_recv 返回 null，应用层可感知断线）。
+// 连接不存在/已关闭 → false；同连接重复调用 → true（已启动，不重复起线程）。
+// 与解释器 ws.rs::ws_heartbeat 语义一致（双模式）。
+
+struct ws_hb_arg {
+    int64_t conn;
+    long long interval;
+    long long timeout;
+};
+
+static void* ws_heartbeat_thread(void* arg) {
+    struct ws_hb_arg* a = (struct ws_hb_arg*)arg;
+    int64_t conn = a->conn;
+    long long interval = a->interval;
+    long long timeout = a->timeout;
+    free(a);
+    for (;;) {
+        struct timespec ts;
+        ts.tv_sec = interval / 1000;
+        ts.tv_nsec = (long)(interval % 1000) * 1000000L;
+        nanosleep(&ts, NULL);
+        pthread_mutex_lock(&g_ws_mu);
+        int idx = ws_find(conn);
+        if (idx < 0 || g_ws_conns[idx].closed) {
+            if (idx >= 0) g_ws_conns[idx].hb_active = 0;
+            pthread_mutex_unlock(&g_ws_mu);
+            return NULL; // 连接已移除/关闭
+        }
+        int fd = g_ws_conns[idx].fd;
+        int is_client = g_ws_conns[idx].client;
+        long long last = g_ws_conns[idx].last_activity;
+        long long now = ws_now_ms();
+        pthread_mutex_unlock(&g_ws_mu);
+        // 1) 发 ping（不持锁做 IO）
+        int pr = ws_send_frame(fd, WS_OP_PING, NULL, 0, is_client);
+        // 2) 超时检测：写失败 或 超时未活动 → 死链
+        int dead = 0;
+        if (pr < 0) {
+            dead = 1;
+        } else if (last > 0 && now - last > timeout) {
+            dead = 1;
+        }
+        if (dead) {
+            shutdown(fd, SHUT_RDWR);
+            close(fd);
+            pthread_mutex_lock(&g_ws_mu);
+            idx = ws_find(conn);
+            if (idx >= 0) {
+                g_ws_conns[idx].active = 0;
+                g_ws_conns[idx].fd = -1;
+                g_ws_conns[idx].hb_active = 0;
+            }
+            pthread_mutex_unlock(&g_ws_mu);
+            return NULL;
+        }
+    }
+}
+
+LXValue bi_ws_heartbeat(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 3 || args[0].type != PX_INT)
+        px_error("ws_heartbeat 需要 (conn, interval_ms, timeout_ms) 参数");
+    int64_t conn = args[0].as.i;
+    long long interval = (args[1].type == PX_INT) ? args[1].as.i : 10000;
+    long long timeout = (args[2].type == PX_INT) ? args[2].as.i : 60000;
+    if (interval <= 0) interval = 10000;
+    if (timeout <= 0) timeout = 60000;
+    pthread_mutex_lock(&g_ws_mu);
+    int idx = ws_find(conn);
+    if (idx < 0 || g_ws_conns[idx].closed) {
+        pthread_mutex_unlock(&g_ws_mu);
+        return px_bool(false);
+    }
+    if (g_ws_conns[idx].hb_active) {
+        pthread_mutex_unlock(&g_ws_mu);
+        return px_bool(true); // 已启动
+    }
+    g_ws_conns[idx].hb_active = 1;
+    pthread_mutex_unlock(&g_ws_mu);
+    struct ws_hb_arg* a = (struct ws_hb_arg*)malloc(sizeof(struct ws_hb_arg));
+    a->conn = conn;
+    a->interval = interval;
+    a->timeout = timeout;
+    pthread_t th;
+    if (pthread_create(&th, NULL, ws_heartbeat_thread, a) != 0) {
+        free(a);
+        pthread_mutex_lock(&g_ws_mu);
+        idx = ws_find(conn);
+        if (idx >= 0) g_ws_conns[idx].hb_active = 0;
+        pthread_mutex_unlock(&g_ws_mu);
+        return px_bool(false);
+    }
+    pthread_detach(th);
     return px_bool(true);
 }

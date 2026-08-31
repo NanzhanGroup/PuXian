@@ -13,6 +13,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::thread;
 use std::time::Duration;
 
 /// WebSocket 连接：读写用独立 try_clone 句柄（ws_recv 阻塞读不阻塞 ws_send）
@@ -21,6 +22,8 @@ pub struct WsConn {
     pub write: Mutex<TcpStream>,
     pub closed: AtomicBool,
     pub close_tx: mpsc::Sender<()>,
+    /// 最近一次读到任何帧的时间（毫秒时间戳，0=未初始化）；ws_heartbeat 超时检测用
+    pub last_activity: AtomicI64,
 }
 
 type ConnMap = HashMap<i64, Arc<WsConn>>;
@@ -31,6 +34,14 @@ pub fn ws_conns() -> &'static Mutex<ConnMap> {
 }
 
 static WS_NEXT_ID: AtomicI64 = AtomicI64::new(1);
+
+/// 当前毫秒时间戳
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
 
 /// 注册连接，返回 conn id
 pub fn ws_register(read: TcpStream, write: TcpStream) -> i64 {
@@ -43,6 +54,7 @@ pub fn ws_register(read: TcpStream, write: TcpStream) -> i64 {
             write: Mutex::new(write),
             closed: AtomicBool::new(false),
             close_tx,
+            last_activity: AtomicI64::new(0),
         }),
     );
     id
@@ -59,6 +71,7 @@ pub fn ws_register_client(read: TcpStream, write: TcpStream) -> (i64, mpsc::Rece
             write: Mutex::new(write),
             closed: AtomicBool::new(false),
             close_tx,
+            last_activity: AtomicI64::new(0),
         }),
     );
     (id, close_rx)
@@ -332,6 +345,76 @@ pub fn ws_ping(conn: i64) -> bool {
     }
 }
 
+/// 心跳线程注册表（conn id → 运行标志），防止同连接重复启动
+fn ws_heartbeats() -> &'static Mutex<HashMap<i64, Arc<AtomicBool>>> {
+    static M: OnceLock<Mutex<HashMap<i64, Arc<AtomicBool>>>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// ws_heartbeat(conn, interval_ms, timeout_ms)：为连接启动自动心跳（内置保活）。
+/// - 每 interval_ms 发送一个 ping 帧（对端回 pong，应用层 ws_recv 自动应答/更新活动时间）；
+/// - 若超过 timeout_ms 未读到任何帧（含 pong），判定死链：shutdown 连接 + 标记关闭
+///   （阻塞中的 ws_recv 返回 null，应用层可感知断线）。
+/// 连接不存在/已关闭 → false；同连接重复调用 → true（已启动，不重复起线程）。
+pub fn ws_heartbeat(conn: i64, interval_ms: i64, timeout_ms: i64) -> bool {
+    let Some(c) = ws_get(conn) else { return false };
+    if c.closed.load(Ordering::SeqCst) {
+        return false;
+    }
+    {
+        let mut m = ws_heartbeats().lock().unwrap();
+        if m.get(&conn).map(|f| f.load(Ordering::SeqCst)).unwrap_or(false) {
+            return true; // 已启动
+        }
+        m.insert(conn, Arc::new(AtomicBool::new(true)));
+    }
+    let interval = if interval_ms > 0 { interval_ms as u64 } else { 10_000 };
+    let timeout = if timeout_ms > 0 { timeout_ms as u64 } else { 60_000 };
+    thread::spawn(move || {
+        loop {
+            thread::sleep(Duration::from_millis(interval));
+            let c = match ws_get(conn) {
+                Some(c) => c,
+                None => break, // 连接已被移除（ws_close / 断开）
+            };
+            if c.closed.load(Ordering::SeqCst) {
+                break;
+            }
+            // 1) 发 ping 保活
+            let frame = encode_frame(OP_PING, &[]);
+            let mut dead = false;
+            {
+                let mut w = match c.write.lock() {
+                    Ok(w) => w,
+                    Err(_) => {
+                        dead = true;
+                        return;
+                    }
+                };
+                if w.write_all(&frame).and_then(|_| w.flush()).is_err() {
+                    dead = true;
+                }
+            }
+            if dead {
+                ws_mark_closed(&c, conn);
+                break;
+            }
+            // 2) 超时检测：超过 timeout 未读到任何帧 → 死链
+            let last = c.last_activity.load(Ordering::SeqCst);
+            if last > 0 && now_millis().saturating_sub(last) > timeout as i64 {
+                let _ = c
+                    .write
+                    .lock()
+                    .map(|mut w| w.shutdown(std::net::Shutdown::Both));
+                ws_mark_closed(&c, conn);
+                break;
+            }
+        }
+        ws_heartbeats().lock().unwrap().remove(&conn);
+    });
+    true
+}
+
 /// ws_recv(conn[, timeout_ms])：读一条完整消息（自动重组分片、回复 ping）。
 /// timeout_ms 缺省 → 阻塞；指定 → 帧边界等待超时返回 None（连接状态完好，可继续使用）。
 /// 关闭/错误 → None。
@@ -380,6 +463,8 @@ pub fn ws_recv(conn: i64, timeout_ms: Option<i64>) -> Option<String> {
                 return None;
             }
         };
+        // 心跳：读到任何帧（含 pong）即更新最近活动时间
+        c.last_activity.store(now_millis(), Ordering::SeqCst);
         match opcode {
             OP_PING => {
                 // 自动回 pong

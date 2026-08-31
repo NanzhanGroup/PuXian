@@ -104,6 +104,8 @@ pub enum TokenKind {
     BitXorAssign,// ^=
     ShlAssign,   // <<=
     ShrAssign,   // >>=
+    ShrU,        // >>>（无符号右移，逻辑右移）
+    ShrUAssign,  // >>>=
     Pipe,        // |>
     OptionalChain, // ?.
     NullCoalesce,  // ??
@@ -168,7 +170,7 @@ impl fmt::Display for TokenKind {
             StarAssign => "*=", SlashAssign => "/=", IntDivAssign => "//=",
             ModAssign => "%=", PowAssign => "**=", BitAndAssign => "&=",
             BitOrAssign => "|=", BitXorAssign => "^=", ShlAssign => "<<=",
-            ShrAssign => ">>=", Pipe => "|>", OptionalChain => "?.", NullCoalesce => "??",
+            ShrAssign => ">>=", ShrU => ">>>", ShrUAssign => ">>>=", Pipe => "|>", OptionalChain => "?.", NullCoalesce => "??",
             Question => "?", Colon => ":", Arrow => "->", Dot => ".", Bang => "!",
             LParen => "(", RParen => ")", LBracket => "[", RBracket => "]",
             LBrace => "{", RBrace => "}", Comma => ",",

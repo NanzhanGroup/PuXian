@@ -1430,6 +1430,13 @@ LXValue px_bitor(LXValue a, LXValue b) { return px_int(int_val(a) | int_val(b));
 LXValue px_bitxor(LXValue a, LXValue b) { return px_int(int_val(a) ^ int_val(b)); }
 LXValue px_shl(LXValue a, LXValue b) { return px_int(int_val(a) << int_val(b)); }
 LXValue px_shr(LXValue a, LXValue b) { return px_int(int_val(a) >> int_val(b)); }
+LXValue px_ushr(LXValue a, LXValue b) {
+    // 无符号（逻辑）右移：按 uint64 解释后右移，再转回 int64。
+    // 移位量对 64 取模（与解释器 wrapping_shr 一致；负移位量按无符号取模）。
+    uint64_t v = (uint64_t)int_val(a);
+    uint64_t sh = (uint64_t)int_val(b) & 63u;
+    return px_int((int64_t)(v >> sh));
+}
 
 static int compare_values(LXValue a, LXValue b) {
     if (a.type == PX_INT && b.type == PX_INT) {
@@ -3863,6 +3870,7 @@ void px_register_builtins(void) {
     px_set_global("ws_recv", px_native("ws_recv", bi_ws_recv));
     px_set_global("ws_close", px_native("ws_close", bi_ws_close));
     px_set_global("ws_ping", px_native("ws_ping", bi_ws_ping));
+    px_set_global("ws_heartbeat", px_native("ws_heartbeat", bi_ws_heartbeat));
     // M22 P1：强制垃圾回收（解释器追踪式 GC / 编译模式保守标记-清除）
     px_set_global("gc", px_native("gc", bi_gc));
     // M23 P1：进程/信号（文殊场景收尾：外部工具编排、守护进程、优雅停机）
@@ -5776,6 +5784,21 @@ static void px_ensure_cacert(void) {
             }
         }
     }
+    // M26：PX_TLS_CA_FILE 环境变量追加信任的 CA（企业内网自签证书场景；PEM 或 DER）
+    {
+        const char* extra = getenv("PX_TLS_CA_FILE");
+        if (extra && *extra) {
+            static int extra_loaded = 0;
+            if (!extra_loaded) {
+                extra_loaded = 1;
+                if (mbedtls_x509_crt_parse_file(&g_cacert, extra) == 0) {
+                    g_cacert_loaded = 1;
+                } else {
+                    fprintf(stderr, "[px] PX_TLS_CA_FILE 加载失败: %s\n", extra);
+                }
+            }
+        }
+    }
     pthread_mutex_unlock(&g_cacert_mu);
 }
 
@@ -6790,10 +6813,10 @@ static int sse_alloc_slot(void) {
 }
 
 // ==================== M23 SSE 客户端（编译模式，与解释器 builtin.rs 双模式一致） ====================
-// sse_connect(url) → int conn | null（仅 http://；GET 握手校验 200 + text/event-stream）
+// sse_connect(url) → int conn | null（http:// 与 https://；GET 握手校验 200 + text/event-stream）
 // sse_read(conn) → dict{event,data,id,retry} | null（阻塞读一条事件；断开 → null）
 // sse_close(conn) → bool（同时处理服务端/客户端注册表）
-// 客户端注册表：fd 读端 + pending 字节缓冲（已读未解析），锁保护。
+// 客户端注册表：fd 读端 + pending 字节缓冲（已读未解析），锁保护；https 会话存 HttpsSession*。
 
 #define MAX_SSE_CLIENTS 256
 static pthread_mutex_t g_sse_cli_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -6801,6 +6824,7 @@ static struct {
     int fd;
     int64_t id;
     int active;
+    HttpsSession* tls;        // 非空 = https（mbedtls 会话；fd 为底层 TCP）
     unsigned char* pending;   // 已读未解析缓冲
     int pend_len;
     int pend_cap;
@@ -7101,13 +7125,15 @@ static LXValue bi_sse_close(LXValue* args, int nargs, void* ctx) {
             return px_bool(false);
         }
         int cfd = g_sse_clients[cidx].fd;
+        HttpsSession* ctl = g_sse_clients[cidx].tls;
         g_sse_clients[cidx].active = 0;
+        g_sse_clients[cidx].tls = NULL;
         if (g_sse_clients[cidx].pending) xfree(g_sse_clients[cidx].pending);
         g_sse_clients[cidx].pending = NULL;
         g_sse_clients[cidx].pend_len = g_sse_clients[cidx].pend_cap = 0;
         pthread_mutex_unlock(&g_sse_cli_mu);
         shutdown(cfd, SHUT_RDWR);
-        close(cfd);
+        if (ctl) https_close(ctl); else close(cfd);
         return px_bool(true);
     }
     int fd = g_sse_conns[idx].fd;
@@ -7185,10 +7211,18 @@ static LXValue bi_sse_connect(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1 || args[0].type != PX_STR) px_error("sse_connect 需要 (url) 参数");
     const char* url = args[0].as.obj->as.str.data;
-    if (strncmp(url, "http://", 7) != 0) return px_null(); // 仅 http
-    const char* rest = url + 7;
+    int is_https = 0;
+    const char* rest;
+    if (strncmp(url, "https://", 8) == 0) {
+        is_https = 1;
+        rest = url + 8;
+    } else if (strncmp(url, "http://", 7) == 0) {
+        rest = url + 7;
+    } else {
+        return px_null(); // 仅支持 http:// 与 https://
+    }
     char host[256];
-    int port = 80;
+    int port = is_https ? 443 : 80;
     const char* path = "/";
     const char* slash = strchr(rest, '/');
     int hl;
@@ -7207,16 +7241,24 @@ static LXValue bi_sse_connect(LXValue* args, int nargs, void* ctx) {
         port = atoi(colon + 1);
         if (port <= 0) return px_null();
     }
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return px_null();
-    struct hostent* he = gethostbyname(host);
-    if (!he) { close(fd); return px_null(); }
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons((uint16_t)port);
-    memcpy(&addr.sin_addr, he->h_addr, (size_t)he->h_length);
-    if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) { close(fd); return px_null(); }
+    int fd = -1;
+    HttpsSession* tls = NULL;
+    if (is_https) {
+        tls = https_connect(host, port);
+        if (!tls) return px_null();
+        fd = tls->net.fd;
+    } else {
+        fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (fd < 0) return px_null();
+        struct hostent* he = gethostbyname(host);
+        if (!he) { close(fd); return px_null(); }
+        struct sockaddr_in addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons((uint16_t)port);
+        memcpy(&addr.sin_addr, he->h_addr, (size_t)he->h_length);
+        if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) { close(fd); return px_null(); }
+    }
     char req[8192];
     char hosthdr[512];
     if (colon) snprintf(hosthdr, sizeof(hosthdr), "%s:%d", host, port);
@@ -7224,13 +7266,16 @@ static LXValue bi_sse_connect(LXValue* args, int nargs, void* ctx) {
     int rl = snprintf(req, sizeof(req),
         "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: PuXian/0.1\r\nAccept: text/event-stream\r\nConnection: close\r\nCache-Control: no-cache\r\n\r\n",
         path, hosthdr);
-    if (rl <= 0 || send(fd, req, rl, MSG_NOSIGNAL) < 0) { close(fd); return px_null(); }
+    if (rl <= 0 || conn_send(tls, fd, req, rl) < 0) {
+        if (tls) https_close(tls); else close(fd);
+        return px_null();
+    }
     // 读响应头（直到 \r\n\r\n，上限 64KB）
     unsigned char hbuf[65536];
     int hn = 0;
     int header_end = -1;
     while (hn < (int)sizeof(hbuf)) {
-        int n = recv(fd, hbuf + hn, (int)sizeof(hbuf) - hn, 0);
+        int n = conn_recv(tls, fd, (char*)(hbuf + hn), (int)sizeof(hbuf) - hn);
         if (n <= 0) break;
         hn += n;
         for (int i = 0; i + 3 < hn; i++) {
@@ -7241,7 +7286,10 @@ static LXValue bi_sse_connect(LXValue* args, int nargs, void* ctx) {
         }
         if (header_end >= 0) break;
     }
-    if (header_end < 0) { close(fd); return px_null(); }
+    if (header_end < 0) {
+        if (tls) https_close(tls); else close(fd);
+        return px_null();
+    }
     char* hstr = xmalloc((size_t)header_end + 1);
     memcpy(hstr, hbuf, (size_t)header_end);
     hstr[header_end] = 0;
@@ -7257,18 +7305,22 @@ static LXValue bi_sse_connect(LXValue* args, int nargs, void* ctx) {
         if (strstr(ctp, "text/event-stream")) ct_ok = 1;
     }
     xfree(hstr);
-    if (status != 200 || !ct_ok) { close(fd); return px_null(); }
+    if (status != 200 || !ct_ok) {
+        if (tls) https_close(tls); else close(fd);
+        return px_null();
+    }
     // 注册（剩余字节进 pending）
     pthread_mutex_lock(&g_sse_cli_mu);
     int slot = sse_cli_alloc_slot();
     if (slot < 0) {
         pthread_mutex_unlock(&g_sse_cli_mu);
-        close(fd);
+        if (tls) https_close(tls); else close(fd);
         return px_null();
     }
     int64_t id = g_sse_cli_next_id++;
     int remain = hn - header_end;
     g_sse_clients[slot].fd = fd;
+    g_sse_clients[slot].tls = tls;
     g_sse_clients[slot].id = id;
     g_sse_clients[slot].active = 1;
     if (remain > 0) {
@@ -7317,19 +7369,26 @@ static LXValue bi_sse_read(LXValue* args, int nargs, void* ctx) {
             }
         }
         pthread_mutex_unlock(&g_sse_cli_mu);
-        // 阻塞读更多
+        // 阻塞读更多（https 走 mbedtls）
         unsigned char tmp[4096];
-        int n = recv(fd, tmp, sizeof(tmp), 0);
+        HttpsSession* tls = NULL;
+        pthread_mutex_lock(&g_sse_cli_mu);
+        if (g_sse_clients[idx].active) tls = g_sse_clients[idx].tls;
+        pthread_mutex_unlock(&g_sse_cli_mu);
+        int n = conn_recv(tls, fd, (char*)tmp, (int)sizeof(tmp));
         if (n <= 0) {
             pthread_mutex_lock(&g_sse_cli_mu);
+            HttpsSession* t2 = NULL;
             if (g_sse_clients[idx].active) {
                 g_sse_clients[idx].active = 0;
                 if (g_sse_clients[idx].pending) xfree(g_sse_clients[idx].pending);
                 g_sse_clients[idx].pending = NULL;
                 g_sse_clients[idx].pend_len = g_sse_clients[idx].pend_cap = 0;
+                t2 = g_sse_clients[idx].tls;
+                g_sse_clients[idx].tls = NULL;
             }
             pthread_mutex_unlock(&g_sse_cli_mu);
-            close(fd);
+            if (t2) https_close(t2); else close(fd);
             return px_null();
         }
         pthread_mutex_lock(&g_sse_cli_mu);

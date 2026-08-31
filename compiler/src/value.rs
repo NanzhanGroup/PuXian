@@ -223,7 +223,9 @@ pub enum Builtin {
     // M23 P1：WebSocket 心跳/超时（长连接保活）
     // ws_ping(conn) → bool（发送 ping 帧；对端应回 pong）
     // ws_recv(conn[, timeout_ms]) → str|null（可选超时：超时/断开 → null）
+    // M26：ws_heartbeat(conn, interval_ms, timeout_ms) → bool（内置自动心跳：定时 ping + 死链检测）
     WsPing,
+    WsHeartbeat,
     // M23 P1：进程/信号（文殊场景收尾：外部工具编排、守护进程、优雅停机）
     // os_pid() → int 当前进程 PID
     // os_spawn(cmd, args) → int pid | null（fork+exec 启动子进程，不等待）
@@ -379,6 +381,7 @@ impl Builtin {
             Builtin::WsRecv => "ws_recv",
             Builtin::WsClose => "ws_close",
             Builtin::WsPing => "ws_ping",
+            Builtin::WsHeartbeat => "ws_heartbeat",
             Builtin::OsPid => "os_pid",
             Builtin::OsSpawn => "os_spawn",
             Builtin::OsWait => "os_wait",
