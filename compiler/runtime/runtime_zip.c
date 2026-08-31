@@ -37,11 +37,11 @@ static unsigned rd_u32(const unsigned char* d, int o) {
 
 // 取字符串字节与长度
 static const char* zstr(LXValue v) {
-    if (v.type != LX_STR) lx_error("期望字符串，实际是 %s", lx_type_name(v));
+    if (v.type != PX_STR) px_error("期望字符串，实际是 %s", px_type_name(v));
     return v.as.obj->as.str.data;
 }
 static int zstrlen(LXValue v) {
-    if (v.type != LX_STR) lx_error("期望字符串，实际是 %s", lx_type_name(v));
+    if (v.type != PX_STR) px_error("期望字符串，实际是 %s", px_type_name(v));
     return v.as.obj->as.str.len;
 }
 
@@ -75,8 +75,8 @@ static int z_raw_inflate(const unsigned char* in, int inlen, unsigned char* out,
 // zip_pack(files, out_path) → bool
 LXValue bi_zip_pack(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2) lx_error("zip_pack 需要 2 个参数: (files, out_path)");
-    if (args[0].type != LX_DICT) lx_error("zip_pack 第一个参数须为 dict{路径→内容}");
+    if (nargs != 2) px_error("zip_pack 需要 2 个参数: (files, out_path)");
+    if (args[0].type != PX_DICT) px_error("zip_pack 第一个参数须为 dict{路径→内容}");
     const char* out_path = zstr(args[1]);
     LXObject* d = args[0].as.obj;
     ZBuf out = {0};
@@ -87,7 +87,7 @@ LXValue bi_zip_pack(LXValue* args, int nargs, void* ctx) {
         const char* content = zstr(v);
         int clen = zstrlen(v);
         if (name[0] == '\0' || name[0] == '/' || strstr(name, "..") != NULL)
-            lx_error("zip 条目路径非法: '%s'", name);
+            px_error("zip 条目路径非法: '%s'", name);
         unsigned crc = mz_crc32(0, (const mz_uint8*)content, (size_t)clen);
         // deflate level 6；若压缩反而变大则退回 store
         int bound = (int)mz_compressBound((mz_ulong)clen);
@@ -147,13 +147,13 @@ LXValue bi_zip_pack(LXValue* args, int nargs, void* ctx) {
     zbuf_u32(&out, (unsigned)cd_offset);
     zbuf_u16(&out, 0);             // comment len
     FILE* f = fopen(out_path, "wb");
-    if (!f) lx_error("zip 写入失败 %s", out_path);
+    if (!f) px_error("zip 写入失败 %s", out_path);
     int ok = fwrite(out.data, 1, out.len, f) == (size_t)out.len;
     fclose(f);
     if (cd.data) free(cd.data);
     if (out.data) free(out.data);
-    if (!ok) lx_error("zip 写入失败 %s", out_path);
-    return lx_bool(true);
+    if (!ok) px_error("zip 写入失败 %s", out_path);
+    return px_bool(true);
 }
 
 // 创建父目录（递归）
@@ -173,17 +173,17 @@ static void z_mkdirs(const char* path) {
 // zip_unpack(zip_path, out_dir) → int（解压文件数）
 LXValue bi_zip_unpack(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2) lx_error("zip_unpack 需要 2 个参数: (zip_path, out_dir)");
+    if (nargs != 2) px_error("zip_unpack 需要 2 个参数: (zip_path, out_dir)");
     const char* zip_path = zstr(args[0]);
     const char* out_dir = zstr(args[1]);
     // 读整个 zip
     FILE* f = fopen(zip_path, "rb");
-    if (!f) lx_error("zip 读取失败 %s", zip_path);
+    if (!f) px_error("zip 读取失败 %s", zip_path);
     fseek(f, 0, SEEK_END);
     long fsize = ftell(f);
     fseek(f, 0, SEEK_SET);
     unsigned char* data = (unsigned char*)malloc(fsize > 0 ? fsize : 1);
-    if (fsize > 0 && fread(data, 1, fsize, f) != (size_t)fsize) { fclose(f); free(data); lx_error("zip 读取失败 %s", zip_path); }
+    if (fsize > 0 && fread(data, 1, fsize, f) != (size_t)fsize) { fclose(f); free(data); px_error("zip 读取失败 %s", zip_path); }
     fclose(f);
     // 找 EOCD
     int eocd = -1;
@@ -191,15 +191,15 @@ LXValue bi_zip_unpack(LXValue* args, int nargs, void* ctx) {
     for (int i = fsize - 4; i >= start; i--) {
         if (data[i] == 'P' && data[i + 1] == 'K' && data[i + 2] == 5 && data[i + 3] == 6) { eocd = i; break; }
     }
-    if (eocd < 0) { free(data); lx_error("zip 缺少 EOCD"); }
+    if (eocd < 0) { free(data); px_error("zip 缺少 EOCD"); }
     int entries = (int)rd_u16(data, eocd + 10);
     int cd_size = (int)rd_u32(data, eocd + 12);
     int cd_off = (int)rd_u32(data, eocd + 16);
-    if (cd_off + cd_size > fsize) { free(data); lx_error("zip 中央目录越界"); }
+    if (cd_off + cd_size > fsize) { free(data); px_error("zip 中央目录越界"); }
     int count = 0;
     int pos = cd_off;
     for (int i = 0; i < entries; i++) {
-        if (pos + 46 > fsize || data[pos] != 'P' || data[pos + 1] != 'K') { free(data); lx_error("zip 中央目录条目损坏"); }
+        if (pos + 46 > fsize || data[pos] != 'P' || data[pos + 1] != 'K') { free(data); px_error("zip 中央目录条目损坏"); }
         int entry_start = pos;
         int method = (int)rd_u16(data, pos + 10);
         int comp_size = (int)rd_u32(data, pos + 20);
@@ -209,7 +209,7 @@ LXValue bi_zip_unpack(LXValue* args, int nargs, void* ctx) {
         int comment_len = (int)rd_u16(data, pos + 32);
         int local_off = (int)rd_u32(data, pos + 42);
         unsigned crc = rd_u32(data, entry_start + 16);
-        if (pos + 46 + name_len > fsize) { free(data); lx_error("zip 中央目录条目越界"); }
+        if (pos + 46 + name_len > fsize) { free(data); px_error("zip 中央目录条目越界"); }
         char* name = (char*)malloc(name_len + 1);
         memcpy(name, data + pos + 46, name_len);
         name[name_len] = '\0';
@@ -222,42 +222,42 @@ LXValue bi_zip_unpack(LXValue* args, int nargs, void* ctx) {
             if (k + 1 < name_len && name[k] == '.' && name[k + 1] == '.')
                 if (k == 0 || name[k - 1] == '/') unsafe = 1;
         }
-        if (unsafe) { free(data); lx_error("zip 条目路径非法: '%s'", name); }
+        if (unsafe) { free(data); px_error("zip 条目路径非法: '%s'", name); }
         // 读取 local header 与数据
-        if (local_off + 30 > fsize || data[local_off] != 'P' || data[local_off + 1] != 'K') { free(name); free(data); lx_error("zip 本地文件头损坏"); }
+        if (local_off + 30 > fsize || data[local_off] != 'P' || data[local_off + 1] != 'K') { free(name); free(data); px_error("zip 本地文件头损坏"); }
         int l_name_len = (int)rd_u16(data, local_off + 26);
         int l_extra_len = (int)rd_u16(data, local_off + 28);
         int data_start = local_off + 30 + l_name_len + l_extra_len;
-        if (data_start + comp_size > fsize) { free(name); free(data); lx_error("zip 文件数据越界"); }
+        if (data_start + comp_size > fsize) { free(name); free(data); px_error("zip 文件数据越界"); }
         // 解压
         unsigned char* content = (unsigned char*)malloc(uncomp_size > 0 ? uncomp_size : 1);
         int content_len;
         if (method == 0) {
-            if (comp_size != uncomp_size) { free(name); free(content); free(data); lx_error("zip store 长度不符"); }
+            if (comp_size != uncomp_size) { free(name); free(content); free(data); px_error("zip store 长度不符"); }
             memcpy(content, data + data_start, comp_size);
             content_len = comp_size;
         } else if (method == 8) {
             if (z_raw_inflate(data + data_start, comp_size, content, uncomp_size, &content_len) != 0) {
-                free(name); free(content); free(data); lx_error("zip 解压失败: '%s'", name);
+                free(name); free(content); free(data); px_error("zip 解压失败: '%s'", name);
             }
         } else {
             free(name); free(content); free(data);
-            lx_error("zip 不支持的压缩方法: %d", method);
+            px_error("zip 不支持的压缩方法: %d", method);
         }
-        if (content_len != uncomp_size) { free(name); free(content); free(data); lx_error("zip 解压长度不符"); }
-        if (mz_crc32(0, content, (size_t)content_len) != crc) { free(name); free(content); free(data); lx_error("zip CRC32 校验失败: '%s'", name); }
+        if (content_len != uncomp_size) { free(name); free(content); free(data); px_error("zip 解压长度不符"); }
+        if (mz_crc32(0, content, (size_t)content_len) != crc) { free(name); free(content); free(data); px_error("zip CRC32 校验失败: '%s'", name); }
         // 写文件
         char full[4096];
         snprintf(full, sizeof(full), "%s/%s", out_dir, name);
         z_mkdirs(full);
         FILE* wf = fopen(full, "wb");
-        if (!wf) { free(name); free(content); free(data); lx_error("zip 写入文件失败 %s", full); }
+        if (!wf) { free(name); free(content); free(data); px_error("zip 写入文件失败 %s", full); }
         int wok = fwrite(content, 1, content_len, wf) == (size_t)content_len;
         fclose(wf);
         free(name); free(content);
-        if (!wok) { free(data); lx_error("zip 写入文件失败 %s", full); }
+        if (!wok) { free(data); px_error("zip 写入文件失败 %s", full); }
         count++;
     }
     free(data);
-    return lx_int(count);
+    return px_int(count);
 }

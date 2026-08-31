@@ -60,8 +60,8 @@ static LXValue bi_set_interval(LXValue* args, int nargs, void* ctx);
 static LXValue bi_clear_timer(LXValue* args, int nargs, void* ctx);
 
 // M10 HTTPS 内部辅助
-static char* lx_http_request(const char* url, const char* method, const char* body, int* out_len);
-static int lx_https_request(const char* host, int port, const char* req, char** out, int* out_len);
+static char* px_http_request(const char* url, const char* method, const char* body, int* out_len);
+static int px_https_request(const char* host, int port, const char* req, char** out, int* out_len);
 
 // ==================== 内存分配（M11：mmap/munmap，无 glibc 堆锁） ====================
 // M11 并发 GC：sweep 会释放对象，而其他线程可能正在 malloc/free 中被 GC 信号挂起
@@ -158,7 +158,7 @@ static int g_paused_count = 0;      // 已暂停线程数（调试用；控制�
 static volatile int g_gc_resume = 0;// （保留字段，控制流以 epoch 为准）
 static volatile int g_gc_epoch = 0; // GC 轮次号：每轮开始/结束各 ++，handler 等待其变化
 static volatile int g_gc_stop_in_progress = 0; // 本轮 GC 是否在进行中（handler 用其区分过期堆积信号）
-static volatile pthread_t g_gc_executor = 0;   // 当前 GC 主线程（执行 lx_gc_collect 的线程）；handler 用它自检防自打断
+static volatile pthread_t g_gc_executor = 0;   // 当前 GC 主线程（执行 px_gc_collect 的线程）；handler 用它自检防自打断
 static int g_gc_runs = 0;
 static int g_gc_freed = 0;
 static int g_gc_skips = 0;
@@ -246,17 +246,17 @@ static void gc_debug(const char* fmt, ...) {
     (void)write(2, buf, (size_t)n);
 }
 
-static bool lx_value_is_obj(LXValue v) {
+static bool px_value_is_obj(LXValue v) {
     switch (v.type) {
-        case LX_STR:
-        case LX_LIST:
-        case LX_DICT:
-        case LX_FUNC:
-        case LX_NATIVE:
-        case LX_STRUCT:
-        case LX_ENUM:
-        case LX_TUPLE:
-        case LX_CHAN:
+        case PX_STR:
+        case PX_LIST:
+        case PX_DICT:
+        case PX_FUNC:
+        case PX_NATIVE:
+        case PX_STRUCT:
+        case PX_ENUM:
+        case PX_TUPLE:
+        case PX_CHAN:
             return true;
         default:
             return false;
@@ -264,39 +264,39 @@ static bool lx_value_is_obj(LXValue v) {
 }
 
 // 释放对象内部子分配 + 对象本体（sweep 阶段调用）
-static void lx_obj_free(LXObject* o) {
+static void px_obj_free(LXObject* o) {
     switch (o->type) {
-        case LX_STR: xfree(o->as.str.data); break;
-        case LX_LIST: xfree(o->as.list.items); break;
-        case LX_DICT:
+        case PX_STR: xfree(o->as.str.data); break;
+        case PX_LIST: xfree(o->as.list.items); break;
+        case PX_DICT:
             for (int i = 0; i < o->as.dict.len; i++) xfree(o->as.dict.keys[i]);
             xfree(o->as.dict.keys);
             xfree(o->as.dict.vals);
             break;
-        case LX_FUNC: xfree(o->as.func.name); break;
-        case LX_NATIVE: xfree(o->as.native.name); break;
-        case LX_STRUCT:
+        case PX_FUNC: xfree(o->as.func.name); break;
+        case PX_NATIVE: xfree(o->as.native.name); break;
+        case PX_STRUCT:
             xfree(o->as.struct_inst.type_name);
             for (int i = 0; i < o->as.struct_inst.nfields; i++) xfree(o->as.struct_inst.fnames[i]);
             xfree(o->as.struct_inst.fnames);
             xfree(o->as.struct_inst.fvals);
             break;
-        case LX_ENUM:
+        case PX_ENUM:
             xfree(o->as.enum_inst.type_name);
             xfree(o->as.enum_inst.variant);
             break;
-        case LX_TUPLE: xfree(o->as.tuple.items); break;
-        case LX_CHAN:
+        case PX_TUPLE: xfree(o->as.tuple.items); break;
+        case PX_CHAN:
             xfree(o->as.chan.buf);
             pthread_mutex_destroy(&o->as.chan.mu);
             pthread_cond_destroy(&o->as.chan.cv_send);
             pthread_cond_destroy(&o->as.chan.cv_recv);
             break;
-        case LX_MUTEX:
+        case PX_MUTEX:
             pthread_mutex_destroy(&o->as.mutex.mu);
             pthread_cond_destroy(&o->as.mutex.cv);
             break;
-        case LX_RWLOCK:
+        case PX_RWLOCK:
             pthread_mutex_destroy(&o->as.rwlock.mu);
             pthread_cond_destroy(&o->as.rwlock.cv);
             break;
@@ -322,40 +322,40 @@ static void gc_mark_obj(GCHash* set, LXObject* o) {
         cur->gc_mark = 1;
         g_gc_marked++;
         switch (cur->type) {
-            case LX_LIST: {
+            case PX_LIST: {
                 LXValue* items = cur->as.list.items;
                 for (int i = 0; i < cur->as.list.len; i++) {
-                    if (lx_value_is_obj(items[i]) && items[i].as.obj) PUSH_OBJ(items[i].as.obj);
+                    if (px_value_is_obj(items[i]) && items[i].as.obj) PUSH_OBJ(items[i].as.obj);
                 }
                 break;
             }
-            case LX_DICT: {
+            case PX_DICT: {
                 LXValue* vals = cur->as.dict.vals;
                 for (int i = 0; i < cur->as.dict.len; i++) {
-                    if (lx_value_is_obj(vals[i]) && vals[i].as.obj) PUSH_OBJ(vals[i].as.obj);
+                    if (px_value_is_obj(vals[i]) && vals[i].as.obj) PUSH_OBJ(vals[i].as.obj);
                 }
                 break;
             }
-            case LX_STRUCT: {
+            case PX_STRUCT: {
                 LXValue* fvals = cur->as.struct_inst.fvals;
                 for (int i = 0; i < cur->as.struct_inst.nfields; i++) {
-                    if (lx_value_is_obj(fvals[i]) && fvals[i].as.obj) PUSH_OBJ(fvals[i].as.obj);
+                    if (px_value_is_obj(fvals[i]) && fvals[i].as.obj) PUSH_OBJ(fvals[i].as.obj);
                 }
                 break;
             }
-            case LX_TUPLE: {
+            case PX_TUPLE: {
                 LXValue* items = cur->as.tuple.items;
                 for (int i = 0; i < cur->as.tuple.len; i++) {
-                    if (lx_value_is_obj(items[i]) && items[i].as.obj) PUSH_OBJ(items[i].as.obj);
+                    if (px_value_is_obj(items[i]) && items[i].as.obj) PUSH_OBJ(items[i].as.obj);
                 }
                 break;
             }
-            case LX_CHAN: {
+            case PX_CHAN: {
                 // M11：并发下无锁保守扫描（chan.buf 元素为单 word 原子读写，误标仅推迟回收）
                 LXValue* buf = cur->as.chan.buf;
                 int phys = cur->as.chan.cap > 0 ? cur->as.chan.cap : 1;
                 for (int i = 0; i < phys; i++) {
-                    if (lx_value_is_obj(buf[i]) && buf[i].as.obj) PUSH_OBJ(buf[i].as.obj);
+                    if (px_value_is_obj(buf[i]) && buf[i].as.obj) PUSH_OBJ(buf[i].as.obj);
                 }
                 break;
             }
@@ -410,7 +410,7 @@ static void gc_scan_stack(GCHash* set) {
 static void gc_stop_handler(int sig, siginfo_t* si, void* ctx) {
     (void)sig; (void)si;
     pthread_t me = pthread_self();
-    // M11 修复⑤：若我是当前 GC 执行者（正在跑 lx_gc_collect），忽略暂停信号——
+    // M11 修复⑤：若我是当前 GC 执行者（正在跑 px_gc_collect），忽略暂停信号——
     // 否则延迟信号在本轮 GC 执行中投递，handler 自旋等 epoch，而 epoch 只有
     // 本线程自己能推进 → 死锁（依赖 5 秒兜底才恢复，每轮 GC 卡 5 秒）。
     if (g_gc_executor && pthread_equal(g_gc_executor, me)) return;
@@ -554,7 +554,7 @@ static void gc_scan_thread_stack(GCHash* set, pthread_t tid, ucontext_t* uc) {
 }
 
 // 主回收入口：mark + sweep（M11：spawn 活跃时 stop-the-world）
-void lx_gc_collect(void) {
+void px_gc_collect(void) {
     // M11 修复④：GC 执行期间屏蔽自己的 SIG_GC_STOP——防止上一轮"延迟信号"
     // 在本轮 GC 执行中投递（handler 会自旋等 epoch，而 epoch 只有本线程能推进
     // → 卡死/5 秒空转）。先拿锁再屏蔽：等锁期间不屏蔽（可被其他 GC 正常暂停），
@@ -632,7 +632,7 @@ void lx_gc_collect(void) {
         if (g_gc_debug) (void)write(2, "[mk] hash\n", 10);
         // 根1：全局表
         for (int i = 0; i < g_len; i++) {
-            if (lx_value_is_obj(g_vals[i]) && g_vals[i].as.obj) gc_mark_obj(&set, g_vals[i].as.obj);
+            if (px_value_is_obj(g_vals[i]) && g_vals[i].as.obj) gc_mark_obj(&set, g_vals[i].as.obj);
         }
         if (g_gc_debug) (void)write(2, "[mk] globals\n", 13);
         // 根2：本线程（GC 执行者）暂存根
@@ -661,7 +661,7 @@ void lx_gc_collect(void) {
                 o->gc_mark = 0;
                 g_objs[w++] = o;
             } else {
-                lx_obj_free(o);
+                px_obj_free(o);
                 freed++;
             }
         }
@@ -703,7 +703,7 @@ void lx_gc_collect(void) {
     for (int i = 0; i < g_obj_count; i++) gc_hash_insert(&set, (uintptr_t)g_objs[i]);
     g_gc_marked = 0;
     for (int i = 0; i < g_len; i++) {
-        if (lx_value_is_obj(g_vals[i]) && g_vals[i].as.obj) gc_mark_obj(&set, g_vals[i].as.obj);
+        if (px_value_is_obj(g_vals[i]) && g_vals[i].as.obj) gc_mark_obj(&set, g_vals[i].as.obj);
     }
     if (g_tmp_root) gc_mark_obj(&set, g_tmp_root);
     ucontext_t uc;
@@ -717,7 +717,7 @@ void lx_gc_collect(void) {
             o->gc_mark = 0;
             g_objs[w++] = o;
         } else {
-            lx_obj_free(o);
+            px_obj_free(o);
             freed++;
         }
     }
@@ -750,10 +750,10 @@ static void gc_register(LXObject* o, long long est) {
     int need = (g_obj_count >= g_gc_threshold) ||
                (g_gc_trigger_bytes && g_alloc_bytes >= g_gc_trigger_bytes);
     pthread_mutex_unlock(&g_gc_mu);
-    if (need) lx_gc_collect();
+    if (need) px_gc_collect();
 }
 
-int lx_gc_stats(int* live, int* total) {
+int px_gc_stats(int* live, int* total) {
     pthread_mutex_lock(&g_gc_mu);
     if (live) *live = g_obj_count;
     if (total) *total = g_gc_freed;
@@ -763,7 +763,7 @@ int lx_gc_stats(int* live, int* total) {
 }
 
 // 调试辅助：对象是否仍注册在对象表（未回收）
-int lx_gc_contains(LXObject* o) {
+int px_gc_contains(LXObject* o) {
     pthread_mutex_lock(&g_gc_mu);
     int found = 0;
     for (int i = 0; i < g_obj_count; i++) {
@@ -775,15 +775,15 @@ int lx_gc_contains(LXObject* o) {
 
 // ==================== 值构造 ====================
 
-LXValue lx_null(void) { LXValue v; v.type = LX_NULL; v.as.i = 0; return v; }
-LXValue lx_bool(bool b) { LXValue v; v.type = LX_BOOL; v.as.b = b; return v; }
-LXValue lx_int(int64_t i) { LXValue v; v.type = LX_INT; v.as.i = i; return v; }
-LXValue lx_float(double f) { LXValue v; v.type = LX_FLOAT; v.as.f = f; return v; }
+LXValue px_null(void) { LXValue v; v.type = PX_NULL; v.as.i = 0; return v; }
+LXValue px_bool(bool b) { LXValue v; v.type = PX_BOOL; v.as.b = b; return v; }
+LXValue px_int(int64_t i) { LXValue v; v.type = PX_INT; v.as.i = i; return v; }
+LXValue px_float(double f) { LXValue v; v.type = PX_FLOAT; v.as.f = f; return v; }
 
-LXValue lx_str_len(const char* s, int len) {
-    LXValue v; v.type = LX_STR;
+LXValue px_str_len(const char* s, int len) {
+    LXValue v; v.type = PX_STR;
     LXObject* o = xmalloc(sizeof(LXObject));
-    o->type = LX_STR;
+    o->type = PX_STR;
     char* d = xmalloc(len + 1);
     memcpy(d, s, len); d[len] = 0;
     o->as.str.data = d; o->as.str.len = len;
@@ -792,12 +792,12 @@ LXValue lx_str_len(const char* s, int len) {
     return v;
 }
 
-LXValue lx_str(const char* s) { return lx_str_len(s, (int)strlen(s)); }
+LXValue px_str(const char* s) { return px_str_len(s, (int)strlen(s)); }
 
-LXValue lx_list(int cap) {
-    LXValue v; v.type = LX_LIST;
+LXValue px_list(int cap) {
+    LXValue v; v.type = PX_LIST;
     LXObject* o = xmalloc(sizeof(LXObject));
-    o->type = LX_LIST;
+    o->type = PX_LIST;
     o->as.list.items = xmalloc(sizeof(LXValue) * (cap > 0 ? cap : 8));
     o->as.list.len = 0; o->as.list.cap = cap > 0 ? cap : 8;
     v.as.obj = o;
@@ -805,16 +805,16 @@ LXValue lx_list(int cap) {
     return v;
 }
 
-LXValue lx_list_n(LXValue* items, int n) {
-    LXValue v = lx_list(n);
-    for (int i = 0; i < n; i++) lx_list_push(v, items[i]);
+LXValue px_list_n(LXValue* items, int n) {
+    LXValue v = px_list(n);
+    for (int i = 0; i < n; i++) px_list_push(v, items[i]);
     return v;
 }
 
-LXValue lx_dict(void) {
-    LXValue v; v.type = LX_DICT;
+LXValue px_dict(void) {
+    LXValue v; v.type = PX_DICT;
     LXObject* o = xmalloc(sizeof(LXObject));
-    o->type = LX_DICT;
+    o->type = PX_DICT;
     o->as.dict.keys = xmalloc(sizeof(char*) * 8);
     o->as.dict.vals = xmalloc(sizeof(LXValue) * 8);
     o->as.dict.len = 0; o->as.dict.cap = 8;
@@ -823,30 +823,30 @@ LXValue lx_dict(void) {
     return v;
 }
 
-LXValue lx_func(const char* name, LXFuncPtr fn, void* ctx) {
-    LXValue v; v.type = LX_FUNC;
+LXValue px_func(const char* name, LXFuncPtr fn, void* ctx) {
+    LXValue v; v.type = PX_FUNC;
     LXObject* o = xmalloc(sizeof(LXObject));
-    o->type = LX_FUNC;
+    o->type = PX_FUNC;
     o->as.func.name = xstrdup(name); o->as.func.fn = fn; o->as.func.ctx = ctx;
     v.as.obj = o;
     gc_register(o, sizeof(LXObject) + strlen(name) + 1);
     return v;
 }
 
-LXValue lx_native(const char* name, LXFuncPtr fn) {
-    LXValue v; v.type = LX_NATIVE;
+LXValue px_native(const char* name, LXFuncPtr fn) {
+    LXValue v; v.type = PX_NATIVE;
     LXObject* o = xmalloc(sizeof(LXObject));
-    o->type = LX_NATIVE;
+    o->type = PX_NATIVE;
     o->as.native.name = xstrdup(name); o->as.native.fn = fn;
     v.as.obj = o;
     gc_register(o, sizeof(LXObject) + strlen(name) + 1);
     return v;
 }
 
-LXValue lx_struct(const char* type_name, char** fnames, LXValue* fvals, int nfields) {
-    LXValue v; v.type = LX_STRUCT;
+LXValue px_struct(const char* type_name, char** fnames, LXValue* fvals, int nfields) {
+    LXValue v; v.type = PX_STRUCT;
     LXObject* o = xmalloc(sizeof(LXObject));
-    o->type = LX_STRUCT;
+    o->type = PX_STRUCT;
     o->as.struct_inst.type_name = xstrdup(type_name);
     o->as.struct_inst.fnames = xmalloc(sizeof(char*) * (nfields ? nfields : 1));
     o->as.struct_inst.fvals = xmalloc(sizeof(LXValue) * (nfields ? nfields : 1));
@@ -862,10 +862,10 @@ LXValue lx_struct(const char* type_name, char** fnames, LXValue* fvals, int nfie
     return v;
 }
 
-LXValue lx_enum(const char* type_name, const char* variant) {
-    LXValue v; v.type = LX_ENUM;
+LXValue px_enum(const char* type_name, const char* variant) {
+    LXValue v; v.type = PX_ENUM;
     LXObject* o = xmalloc(sizeof(LXObject));
-    o->type = LX_ENUM;
+    o->type = PX_ENUM;
     o->as.enum_inst.type_name = xstrdup(type_name);
     o->as.enum_inst.variant = xstrdup(variant);
     v.as.obj = o;
@@ -873,10 +873,10 @@ LXValue lx_enum(const char* type_name, const char* variant) {
     return v;
 }
 
-LXValue lx_tuple(LXValue* items, int len) {
-    LXValue v; v.type = LX_TUPLE;
+LXValue px_tuple(LXValue* items, int len) {
+    LXValue v; v.type = PX_TUPLE;
     LXObject* o = xmalloc(sizeof(LXObject));
-    o->type = LX_TUPLE;
+    o->type = PX_TUPLE;
     o->as.tuple.items = xmalloc(sizeof(LXValue) * (len ? len : 1));
     for (int i = 0; i < len; i++) o->as.tuple.items[i] = items[i];
     o->as.tuple.len = len;
@@ -887,45 +887,45 @@ LXValue lx_tuple(LXValue* items, int len) {
 
 // ==================== 类型判断 ====================
 
-bool lx_is_null(LXValue v) { return v.type == LX_NULL; }
+bool px_is_null(LXValue v) { return v.type == PX_NULL; }
 
-bool lx_is_truthy(LXValue v) {
+bool px_is_truthy(LXValue v) {
     switch (v.type) {
-        case LX_NULL: return false;
-        case LX_BOOL: return v.as.b;
-        case LX_INT: return v.as.i != 0;
-        case LX_FLOAT: return v.as.f != 0.0;
-        case LX_STR: return v.as.obj->as.str.len > 0;
-        case LX_LIST: return v.as.obj->as.list.len > 0;
-        case LX_DICT: return v.as.obj->as.dict.len > 0;
+        case PX_NULL: return false;
+        case PX_BOOL: return v.as.b;
+        case PX_INT: return v.as.i != 0;
+        case PX_FLOAT: return v.as.f != 0.0;
+        case PX_STR: return v.as.obj->as.str.len > 0;
+        case PX_LIST: return v.as.obj->as.list.len > 0;
+        case PX_DICT: return v.as.obj->as.dict.len > 0;
         default: return true;
     }
 }
 
-const char* lx_type_name(LXValue v) {
+const char* px_type_name(LXValue v) {
     switch (v.type) {
-        case LX_NULL: return "null";
-        case LX_BOOL: return "bool";
-        case LX_INT: return "int";
-        case LX_FLOAT: return "float";
-        case LX_STR: return "string";
-        case LX_LIST: return "list";
-        case LX_DICT: return "dict";
-        case LX_FUNC: return "function";
-        case LX_NATIVE: return "native";
-        case LX_STRUCT: return "struct";
-        case LX_ENUM: return "enum";
-        case LX_TUPLE: return "tuple";
-        case LX_CHAN: return "chan";
-        case LX_MUTEX: return "mutex";
-        case LX_RWLOCK: return "rwlock";
+        case PX_NULL: return "null";
+        case PX_BOOL: return "bool";
+        case PX_INT: return "int";
+        case PX_FLOAT: return "float";
+        case PX_STR: return "string";
+        case PX_LIST: return "list";
+        case PX_DICT: return "dict";
+        case PX_FUNC: return "function";
+        case PX_NATIVE: return "native";
+        case PX_STRUCT: return "struct";
+        case PX_ENUM: return "enum";
+        case PX_TUPLE: return "tuple";
+        case PX_CHAN: return "chan";
+        case PX_MUTEX: return "mutex";
+        case PX_RWLOCK: return "rwlock";
     }
     return "unknown";
 }
 
 // ==================== 错误 ====================
 
-void lx_error(const char* fmt, ...) {
+void px_error(const char* fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     fprintf(stderr, "运行时错误: ");
@@ -937,7 +937,7 @@ void lx_error(const char* fmt, ...) {
 
 // ==================== 字符串工具 ====================
 
-int lx_unicode_len(const char* s) {
+int px_unicode_len(const char* s) {
     int n = 0;
     for (const unsigned char* p = (const unsigned char*)s; *p; p++) {
         if ((*p & 0xC0) != 0x80) n++;  // 非连续字节 = 新字符
@@ -948,7 +948,7 @@ int lx_unicode_len(const char* s) {
 // 简单数字转字符串（int/float）
 static char num_buf[64];
 static const char* fmt_num(LXValue v) {
-    if (v.type == LX_INT) {
+    if (v.type == PX_INT) {
         snprintf(num_buf, sizeof(num_buf), "%lld", (long long)v.as.i);
     } else {
         snprintf(num_buf, sizeof(num_buf), "%g", v.as.f);
@@ -978,278 +978,278 @@ static char* escape_str(const char* s, int len) {
     return out;
 }
 
-void lx_print_value(LXValue v, bool newline) {
+void px_print_value(LXValue v, bool newline) {
     switch (v.type) {
-        case LX_NULL: printf("null"); break;
-        case LX_BOOL: printf(v.as.b ? "true" : "false"); break;
-        case LX_INT: printf("%lld", (long long)v.as.i); break;
-        case LX_FLOAT: printf("%g", v.as.f); break;
-        case LX_STR: fwrite(v.as.obj->as.str.data, 1, v.as.obj->as.str.len, stdout); break;
-        case LX_LIST: {
+        case PX_NULL: printf("null"); break;
+        case PX_BOOL: printf(v.as.b ? "true" : "false"); break;
+        case PX_INT: printf("%lld", (long long)v.as.i); break;
+        case PX_FLOAT: printf("%g", v.as.f); break;
+        case PX_STR: fwrite(v.as.obj->as.str.data, 1, v.as.obj->as.str.len, stdout); break;
+        case PX_LIST: {
             printf("[");
             LXObject* o = v.as.obj;
             for (int i = 0; i < o->as.list.len; i++) {
                 if (i) printf(", ");
-                lx_print_value(o->as.list.items[i], false);
+                px_print_value(o->as.list.items[i], false);
             }
             printf("]");
             break;
         }
-        case LX_TUPLE: {
+        case PX_TUPLE: {
             printf("(");
             LXObject* o = v.as.obj;
             for (int i = 0; i < o->as.tuple.len; i++) {
                 if (i) printf(", ");
-                lx_print_value(o->as.tuple.items[i], false);
+                px_print_value(o->as.tuple.items[i], false);
             }
             printf(")");
             break;
         }
-        case LX_DICT: {
+        case PX_DICT: {
             printf("{");
             LXObject* o = v.as.obj;
             for (int i = 0; i < o->as.dict.len; i++) {
                 if (i) printf(", ");
                 printf("\"%s\": ", o->as.dict.keys[i]);
-                lx_print_value(o->as.dict.vals[i], false);
+                px_print_value(o->as.dict.vals[i], false);
             }
             printf("}");
             break;
         }
-        case LX_FUNC: printf("<fn %s>", v.as.obj->as.func.name); break;
-        case LX_NATIVE: printf("<native %s>", v.as.obj->as.native.name); break;
-        case LX_STRUCT: {
+        case PX_FUNC: printf("<fn %s>", v.as.obj->as.func.name); break;
+        case PX_NATIVE: printf("<native %s>", v.as.obj->as.native.name); break;
+        case PX_STRUCT: {
             LXObject* o = v.as.obj;
             printf("%s(", o->as.struct_inst.type_name);
             for (int i = 0; i < o->as.struct_inst.nfields; i++) {
                 if (i) printf(", ");
                 printf("%s=", o->as.struct_inst.fnames[i]);
-                lx_print_value(o->as.struct_inst.fvals[i], false);
+                px_print_value(o->as.struct_inst.fvals[i], false);
             }
             printf(")");
             break;
         }
-        case LX_ENUM: printf("%s.%s", v.as.obj->as.enum_inst.type_name, v.as.obj->as.enum_inst.variant); break;
+        case PX_ENUM: printf("%s.%s", v.as.obj->as.enum_inst.type_name, v.as.obj->as.enum_inst.variant); break;
         default: printf("?"); break;
     }
     if (newline) printf("\n");
 }
 
-char* lx_to_string(LXValue v) {
+char* px_to_string(LXValue v) {
     static char* buf = NULL;
     static int cap = 0;
     // 简化：针对 int/float 直接用 num_buf，字符串用转义缓冲
-    if (v.type == LX_INT || v.type == LX_FLOAT) return (char*)fmt_num(v);
-    if (v.type == LX_BOOL) return v.as.b ? (char*)"true" : (char*)"false";
-    if (v.type == LX_NULL) return (char*)"null";
-    if (v.type == LX_STR) return (char*)v.as.obj->as.str.data;
+    if (v.type == PX_INT || v.type == PX_FLOAT) return (char*)fmt_num(v);
+    if (v.type == PX_BOOL) return v.as.b ? (char*)"true" : (char*)"false";
+    if (v.type == PX_NULL) return (char*)"null";
+    if (v.type == PX_STR) return (char*)v.as.obj->as.str.data;
     // 其他类型：写临时文件流
     FILE* tmp = tmpfile();
-    if (tmp) { lx_print_value(v, false); fflush(tmp); }
+    if (tmp) { px_print_value(v, false); fflush(tmp); }
     return (char*)"<object>";
 }
 
 // ==================== 运算 ====================
 
 static double num_val(LXValue v) {
-    return v.type == LX_INT ? (double)v.as.i : v.as.f;
+    return v.type == PX_INT ? (double)v.as.i : v.as.f;
 }
 static int64_t int_val(LXValue v) {
-    if (v.type == LX_INT) return v.as.i;
-    if (v.type == LX_FLOAT) return (int64_t)v.as.f;
-    lx_error("期望整数，实际是 %s", lx_type_name(v));
+    if (v.type == PX_INT) return v.as.i;
+    if (v.type == PX_FLOAT) return (int64_t)v.as.f;
+    px_error("期望整数，实际是 %s", px_type_name(v));
     return 0;
 }
 
-LXValue lx_add(LXValue a, LXValue b) {
-    if (a.type == LX_STR && b.type == LX_STR) {
+LXValue px_add(LXValue a, LXValue b) {
+    if (a.type == PX_STR && b.type == PX_STR) {
         int la = a.as.obj->as.str.len, lb = b.as.obj->as.str.len;
         char* d = xmalloc(la + lb + 1);
         memcpy(d, a.as.obj->as.str.data, la);
         memcpy(d + la, b.as.obj->as.str.data, lb);
         d[la + lb] = 0;
-        return lx_str_len(d, la + lb);
+        return px_str_len(d, la + lb);
     }
-    if (a.type == LX_INT && b.type == LX_INT) return lx_int(a.as.i + b.as.i);
-    if (a.type == LX_FLOAT || b.type == LX_FLOAT) return lx_float(num_val(a) + num_val(b));
-    if (a.type == LX_LIST && b.type == LX_LIST) {
-        LXValue r = lx_list(a.as.obj->as.list.len + b.as.obj->as.list.len);
+    if (a.type == PX_INT && b.type == PX_INT) return px_int(a.as.i + b.as.i);
+    if (a.type == PX_FLOAT || b.type == PX_FLOAT) return px_float(num_val(a) + num_val(b));
+    if (a.type == PX_LIST && b.type == PX_LIST) {
+        LXValue r = px_list(a.as.obj->as.list.len + b.as.obj->as.list.len);
         LXObject* ro = r.as.obj; LXObject* ao = a.as.obj; LXObject* bo = b.as.obj;
-        for (int i = 0; i < ao->as.list.len; i++) lx_list_push(r, ao->as.list.items[i]);
-        for (int i = 0; i < bo->as.list.len; i++) lx_list_push(r, bo->as.list.items[i]);
+        for (int i = 0; i < ao->as.list.len; i++) px_list_push(r, ao->as.list.items[i]);
+        for (int i = 0; i < bo->as.list.len; i++) px_list_push(r, bo->as.list.items[i]);
         (void)ro;
         return r;
     }
-    lx_error("无法相加: %s + %s", lx_type_name(a), lx_type_name(b));
-    return lx_null();
+    px_error("无法相加: %s + %s", px_type_name(a), px_type_name(b));
+    return px_null();
 }
 
-LXValue lx_sub(LXValue a, LXValue b) {
-    if (a.type == LX_INT && b.type == LX_INT) return lx_int(a.as.i - b.as.i);
-    if (a.type == LX_FLOAT || b.type == LX_FLOAT) return lx_float(num_val(a) - num_val(b));
-    lx_error("无法相减: %s - %s", lx_type_name(a), lx_type_name(b));
-    return lx_null();
+LXValue px_sub(LXValue a, LXValue b) {
+    if (a.type == PX_INT && b.type == PX_INT) return px_int(a.as.i - b.as.i);
+    if (a.type == PX_FLOAT || b.type == PX_FLOAT) return px_float(num_val(a) - num_val(b));
+    px_error("无法相减: %s - %s", px_type_name(a), px_type_name(b));
+    return px_null();
 }
 
-LXValue lx_mul(LXValue a, LXValue b) {
-    if (a.type == LX_INT && b.type == LX_INT) return lx_int(a.as.i * b.as.i);
-    if (a.type == LX_FLOAT || b.type == LX_FLOAT) return lx_float(num_val(a) * num_val(b));
-    if (a.type == LX_STR && b.type == LX_INT) {
+LXValue px_mul(LXValue a, LXValue b) {
+    if (a.type == PX_INT && b.type == PX_INT) return px_int(a.as.i * b.as.i);
+    if (a.type == PX_FLOAT || b.type == PX_FLOAT) return px_float(num_val(a) * num_val(b));
+    if (a.type == PX_STR && b.type == PX_INT) {
         int n = (int)b.as.i;
         int len = a.as.obj->as.str.len;
         char* d = xmalloc(len * n + 1);
         for (int i = 0; i < n; i++) memcpy(d + i * len, a.as.obj->as.str.data, len);
         d[len * n] = 0;
-        return lx_str_len(d, len * n);
+        return px_str_len(d, len * n);
     }
-    lx_error("无法相乘: %s * %s", lx_type_name(a), lx_type_name(b));
-    return lx_null();
+    px_error("无法相乘: %s * %s", px_type_name(a), px_type_name(b));
+    return px_null();
 }
 
-LXValue lx_div(LXValue a, LXValue b) {
+LXValue px_div(LXValue a, LXValue b) {
     double d = num_val(b);
-    if (d == 0) lx_error("除零错误");
-    return lx_float(num_val(a) / d);
+    if (d == 0) px_error("除零错误");
+    return px_float(num_val(a) / d);
 }
 
-LXValue lx_idiv(LXValue a, LXValue b) {
+LXValue px_idiv(LXValue a, LXValue b) {
     int64_t d = int_val(b);
-    if (d == 0) lx_error("除零错误");
-    return lx_int(int_val(a) / d);
+    if (d == 0) px_error("除零错误");
+    return px_int(int_val(a) / d);
 }
 
-LXValue lx_mod(LXValue a, LXValue b) {
+LXValue px_mod(LXValue a, LXValue b) {
     int64_t d = int_val(b);
-    if (d == 0) lx_error("取模除零错误");
-    if (a.type == LX_FLOAT || b.type == LX_FLOAT) return lx_float(fmod(num_val(a), num_val(b)));
-    return lx_int(int_val(a) % d);
+    if (d == 0) px_error("取模除零错误");
+    if (a.type == PX_FLOAT || b.type == PX_FLOAT) return px_float(fmod(num_val(a), num_val(b)));
+    return px_int(int_val(a) % d);
 }
 
-LXValue lx_pow(LXValue a, LXValue b) {
-    if (a.type == LX_INT && b.type == LX_INT && b.as.i >= 0) {
+LXValue px_pow(LXValue a, LXValue b) {
+    if (a.type == PX_INT && b.type == PX_INT && b.as.i >= 0) {
         int64_t r = 1;
         for (int64_t i = 0; i < b.as.i; i++) r *= a.as.i;
-        return lx_int(r);
+        return px_int(r);
     }
-    return lx_float(pow(num_val(a), num_val(b)));
+    return px_float(pow(num_val(a), num_val(b)));
 }
 
-LXValue lx_neg(LXValue a) {
-    if (a.type == LX_INT) return lx_int(-a.as.i);
-    if (a.type == LX_FLOAT) return lx_float(-a.as.f);
-    lx_error("无法取负: -%s", lx_type_name(a));
-    return lx_null();
+LXValue px_neg(LXValue a) {
+    if (a.type == PX_INT) return px_int(-a.as.i);
+    if (a.type == PX_FLOAT) return px_float(-a.as.f);
+    px_error("无法取负: -%s", px_type_name(a));
+    return px_null();
 }
 
-LXValue lx_not(LXValue a) { return lx_bool(!lx_is_truthy(a)); }
-LXValue lx_bitnot(LXValue a) { return lx_int(~int_val(a)); }
-LXValue lx_bitand(LXValue a, LXValue b) { return lx_int(int_val(a) & int_val(b)); }
-LXValue lx_bitor(LXValue a, LXValue b) { return lx_int(int_val(a) | int_val(b)); }
-LXValue lx_bitxor(LXValue a, LXValue b) { return lx_int(int_val(a) ^ int_val(b)); }
-LXValue lx_shl(LXValue a, LXValue b) { return lx_int(int_val(a) << int_val(b)); }
-LXValue lx_shr(LXValue a, LXValue b) { return lx_int(int_val(a) >> int_val(b)); }
+LXValue px_not(LXValue a) { return px_bool(!px_is_truthy(a)); }
+LXValue px_bitnot(LXValue a) { return px_int(~int_val(a)); }
+LXValue px_bitand(LXValue a, LXValue b) { return px_int(int_val(a) & int_val(b)); }
+LXValue px_bitor(LXValue a, LXValue b) { return px_int(int_val(a) | int_val(b)); }
+LXValue px_bitxor(LXValue a, LXValue b) { return px_int(int_val(a) ^ int_val(b)); }
+LXValue px_shl(LXValue a, LXValue b) { return px_int(int_val(a) << int_val(b)); }
+LXValue px_shr(LXValue a, LXValue b) { return px_int(int_val(a) >> int_val(b)); }
 
 static int compare_values(LXValue a, LXValue b) {
-    if (a.type == LX_INT && b.type == LX_INT) {
+    if (a.type == PX_INT && b.type == PX_INT) {
         return a.as.i < b.as.i ? -1 : (a.as.i > b.as.i ? 1 : 0);
     }
-    if ((a.type == LX_INT || a.type == LX_FLOAT) && (b.type == LX_INT || b.type == LX_FLOAT)) {
+    if ((a.type == PX_INT || a.type == PX_FLOAT) && (b.type == PX_INT || b.type == PX_FLOAT)) {
         double x = num_val(a), y = num_val(b);
         return x < y ? -1 : (x > y ? 1 : 0);
     }
-    if (a.type == LX_STR && b.type == LX_STR) {
+    if (a.type == PX_STR && b.type == PX_STR) {
         int la = a.as.obj->as.str.len, lb = b.as.obj->as.str.len;
         int m = la < lb ? la : lb;
         int c = memcmp(a.as.obj->as.str.data, b.as.obj->as.str.data, m);
         if (c != 0) return c < 0 ? -1 : 1;
         return la < lb ? -1 : (la > lb ? 1 : 0);
     }
-    if (a.type == LX_BOOL && b.type == LX_BOOL) {
+    if (a.type == PX_BOOL && b.type == PX_BOOL) {
         return a.as.b == b.as.b ? 0 : (a.as.b ? 1 : -1);
     }
-    if (a.type == LX_ENUM && b.type == LX_ENUM) {
+    if (a.type == PX_ENUM && b.type == PX_ENUM) {
         return strcmp(a.as.obj->as.enum_inst.variant, b.as.obj->as.enum_inst.variant);
     }
-    if ((a.type == LX_LIST || a.type == LX_TUPLE) && (b.type == LX_LIST || b.type == LX_TUPLE)) {
-        int na = (a.type == LX_LIST) ? a.as.obj->as.list.len : a.as.obj->as.tuple.len;
-        int nb = (b.type == LX_LIST) ? b.as.obj->as.list.len : b.as.obj->as.tuple.len;
+    if ((a.type == PX_LIST || a.type == PX_TUPLE) && (b.type == PX_LIST || b.type == PX_TUPLE)) {
+        int na = (a.type == PX_LIST) ? a.as.obj->as.list.len : a.as.obj->as.tuple.len;
+        int nb = (b.type == PX_LIST) ? b.as.obj->as.list.len : b.as.obj->as.tuple.len;
         int m = na < nb ? na : nb;
         for (int i = 0; i < m; i++) {
-            LXValue x = (a.type == LX_LIST) ? a.as.obj->as.list.items[i] : a.as.obj->as.tuple.items[i];
-            LXValue y = (b.type == LX_LIST) ? b.as.obj->as.list.items[i] : b.as.obj->as.tuple.items[i];
+            LXValue x = (a.type == PX_LIST) ? a.as.obj->as.list.items[i] : a.as.obj->as.tuple.items[i];
+            LXValue y = (b.type == PX_LIST) ? b.as.obj->as.list.items[i] : b.as.obj->as.tuple.items[i];
             int c = compare_values(x, y);
             if (c != 0) return c;
         }
         return na < nb ? -1 : (na > nb ? 1 : 0);
     }
-    if (a.type == LX_NULL && b.type == LX_NULL) return 0;
+    if (a.type == PX_NULL && b.type == PX_NULL) return 0;
     // 默认按类型名比较，保证可比性
-    return strcmp(lx_type_name(a), lx_type_name(b));
+    return strcmp(px_type_name(a), px_type_name(b));
 }
 
-LXValue lx_eq(LXValue a, LXValue b) {
+LXValue px_eq(LXValue a, LXValue b) {
     // 数值跨类型相等：1 == 1.0
-    if ((a.type == LX_INT || a.type == LX_FLOAT) && (b.type == LX_INT || b.type == LX_FLOAT))
-        return lx_bool(num_val(a) == num_val(b));
-    return lx_bool(compare_values(a, b) == 0);
+    if ((a.type == PX_INT || a.type == PX_FLOAT) && (b.type == PX_INT || b.type == PX_FLOAT))
+        return px_bool(num_val(a) == num_val(b));
+    return px_bool(compare_values(a, b) == 0);
 }
-LXValue lx_ne(LXValue a, LXValue b) { return lx_bool(compare_values(a, b) != 0); }
-LXValue lx_lt(LXValue a, LXValue b) { return lx_bool(compare_values(a, b) < 0); }
-LXValue lx_le(LXValue a, LXValue b) { return lx_bool(compare_values(a, b) <= 0); }
-LXValue lx_gt(LXValue a, LXValue b) { return lx_bool(compare_values(a, b) > 0); }
-LXValue lx_ge(LXValue a, LXValue b) { return lx_bool(compare_values(a, b) >= 0); }
+LXValue px_ne(LXValue a, LXValue b) { return px_bool(compare_values(a, b) != 0); }
+LXValue px_lt(LXValue a, LXValue b) { return px_bool(compare_values(a, b) < 0); }
+LXValue px_le(LXValue a, LXValue b) { return px_bool(compare_values(a, b) <= 0); }
+LXValue px_gt(LXValue a, LXValue b) { return px_bool(compare_values(a, b) > 0); }
+LXValue px_ge(LXValue a, LXValue b) { return px_bool(compare_values(a, b) >= 0); }
 
-LXValue lx_and(LXValue a, LXValue b) {
-    return lx_is_truthy(a) ? b : a;  // 短路由 codegen 保证
+LXValue px_and(LXValue a, LXValue b) {
+    return px_is_truthy(a) ? b : a;  // 短路由 codegen 保证
 }
-LXValue lx_or(LXValue a, LXValue b) {
-    return lx_is_truthy(a) ? a : b;
+LXValue px_or(LXValue a, LXValue b) {
+    return px_is_truthy(a) ? a : b;
 }
 
 // ==================== 容器操作 ====================
 
-LXValue lx_index(LXValue obj, LXValue idx) {
-    if (obj.type == LX_LIST) {
+LXValue px_index(LXValue obj, LXValue idx) {
+    if (obj.type == PX_LIST) {
         int i = (int)int_val(idx);
         int len = obj.as.obj->as.list.len;
         if (i < 0) i += len;
-        if (i < 0 || i >= len) lx_error("列表索引越界: %d (len=%d)", i, len);
+        if (i < 0 || i >= len) px_error("列表索引越界: %d (len=%d)", i, len);
         return obj.as.obj->as.list.items[i];
     }
-    if (obj.type == LX_TUPLE) {
+    if (obj.type == PX_TUPLE) {
         int i = (int)int_val(idx);
         int len = obj.as.obj->as.tuple.len;
         if (i < 0) i += len;
-        if (i < 0 || i >= len) lx_error("元组索引越界: %d", i);
+        if (i < 0 || i >= len) px_error("元组索引越界: %d", i);
         return obj.as.obj->as.tuple.items[i];
     }
-    if (obj.type == LX_STR) {
+    if (obj.type == PX_STR) {
         int i = (int)int_val(idx);
         int len = obj.as.obj->as.str.len;
         if (i < 0) i += len;
-        if (i < 0 || i >= len) lx_error("字符串索引越界: %d", i);
+        if (i < 0 || i >= len) px_error("字符串索引越界: %d", i);
         // 返回单字符（按字节；中文需要字节切片，MVP 简化）
         char buf[8] = {0};
         buf[0] = obj.as.obj->as.str.data[i];
-        return lx_str(buf);
+        return px_str(buf);
     }
-    if (obj.type == LX_DICT) {
-        if (idx.type == LX_STR) {
-            return lx_dict_get(obj, idx.as.obj->as.str.data);
+    if (obj.type == PX_DICT) {
+        if (idx.type == PX_STR) {
+            return px_dict_get(obj, idx.as.obj->as.str.data);
         }
-        lx_error("字典索引需要字符串键");
+        px_error("字典索引需要字符串键");
     }
-    lx_error("无法索引: %s", lx_type_name(obj));
-    return lx_null();
+    px_error("无法索引: %s", px_type_name(obj));
+    return px_null();
 }
 
-void lx_index_set(LXValue obj, LXValue idx, LXValue val) {
-    if (obj.type == LX_LIST) {
+void px_index_set(LXValue obj, LXValue idx, LXValue val) {
+    if (obj.type == PX_LIST) {
         int i = (int)int_val(idx);
         int len = obj.as.obj->as.list.len;
         if (i < 0) i += len;
-        if (i < 0 || i >= len) lx_error("列表索引越界: %d", i);
-        // M11：与 GC 互斥（见 lx_list_push 注释）。注意：必须先拿锁再屏蔽信号——
+        if (i < 0 || i >= len) px_error("列表索引越界: %d", i);
+        // M11：与 GC 互斥（见 px_list_push 注释）。注意：必须先拿锁再屏蔽信号——
         // 等锁期间不能屏蔽 SIG_GC_STOP，否则 GC 无法暂停该线程（信号 pending），
         // 导致 stop-the-world 空转/降级/漏扫描。
         sigset_t old;
@@ -1260,35 +1260,35 @@ void lx_index_set(LXValue obj, LXValue idx, LXValue val) {
         pthread_mutex_unlock(&g_gc_mu);
         return;
     }
-    if (obj.type == LX_DICT) {
-        if (idx.type == LX_STR) {
-            lx_dict_set(obj, idx.as.obj->as.str.data, val);   // 内部已互斥
+    if (obj.type == PX_DICT) {
+        if (idx.type == PX_STR) {
+            px_dict_set(obj, idx.as.obj->as.str.data, val);   // 内部已互斥
             return;
         }
-        lx_error("字典索引需要字符串键");
+        px_error("字典索引需要字符串键");
     }
-    lx_error("无法索引赋值: %s", lx_type_name(obj));
+    px_error("无法索引赋值: %s", px_type_name(obj));
 }
 
-LXValue lx_field(LXValue obj, const char* name) {
-    if (obj.type == LX_STRUCT) {
+LXValue px_field(LXValue obj, const char* name) {
+    if (obj.type == PX_STRUCT) {
         LXObject* o = obj.as.obj;
         for (int i = 0; i < o->as.struct_inst.nfields; i++) {
             if (strcmp(o->as.struct_inst.fnames[i], name) == 0) return o->as.struct_inst.fvals[i];
         }
-        lx_error("结构体 %s 没有字段 %s", o->as.struct_inst.type_name, name);
+        px_error("结构体 %s 没有字段 %s", o->as.struct_inst.type_name, name);
     }
-    if (obj.type == LX_DICT) return lx_dict_get(obj, name);
-    lx_error("无法取字段: %s.%s", lx_type_name(obj), name);
-    return lx_null();
+    if (obj.type == PX_DICT) return px_dict_get(obj, name);
+    px_error("无法取字段: %s.%s", px_type_name(obj), name);
+    return px_null();
 }
 
-void lx_field_set(LXValue obj, const char* name, LXValue val) {
-    if (obj.type == LX_STRUCT) {
+void px_field_set(LXValue obj, const char* name, LXValue val) {
+    if (obj.type == PX_STRUCT) {
         LXObject* o = obj.as.obj;
         for (int i = 0; i < o->as.struct_inst.nfields; i++) {
             if (strcmp(o->as.struct_inst.fnames[i], name) == 0) {
-                // M11：与 GC 互斥（见 lx_list_push 注释）
+                // M11：与 GC 互斥（见 px_list_push 注释）
                 sigset_t old;
                 pthread_mutex_lock(&g_gc_mu);
                 gc_block_stop(&old);
@@ -1298,12 +1298,12 @@ void lx_field_set(LXValue obj, const char* name, LXValue val) {
                 return;
             }
         }
-        lx_error("结构体 %s 没有字段 %s", o->as.struct_inst.type_name, name);
+        px_error("结构体 %s 没有字段 %s", o->as.struct_inst.type_name, name);
     }
-    lx_error("无法字段赋值: %s.%s", lx_type_name(obj), name);
+    px_error("无法字段赋值: %s.%s", px_type_name(obj), name);
 }
 
-void lx_list_push(LXValue list, LXValue val) {
+void px_list_push(LXValue list, LXValue val) {
     LXObject* o = list.as.obj;
     // M11：对象结构修改与 GC 标记/清扫通过 g_gc_mu 互斥（消除数据竞争）。
     // 必须先拿锁再屏蔽信号：等锁期间若屏蔽 SIG_GC_STOP，GC 无法暂停本线程
@@ -1321,9 +1321,9 @@ void lx_list_push(LXValue list, LXValue val) {
     pthread_mutex_unlock(&g_gc_mu);
 }
 
-void lx_dict_set(LXValue dict, const char* key, LXValue val) {
+void px_dict_set(LXValue dict, const char* key, LXValue val) {
     LXObject* o = dict.as.obj;
-    // M11：与 GC 通过 g_gc_mu 互斥（见 lx_list_push 注释）。先拿锁再屏蔽信号。
+    // M11：与 GC 通过 g_gc_mu 互斥（见 px_list_push 注释）。先拿锁再屏蔽信号。
     sigset_t old;
     pthread_mutex_lock(&g_gc_mu);
     gc_block_stop(&old);
@@ -1347,15 +1347,15 @@ void lx_dict_set(LXValue dict, const char* key, LXValue val) {
     pthread_mutex_unlock(&g_gc_mu);
 }
 
-LXValue lx_dict_get(LXValue dict, const char* key) {
+LXValue px_dict_get(LXValue dict, const char* key) {
     LXObject* o = dict.as.obj;
     for (int i = 0; i < o->as.dict.len; i++) {
         if (strcmp(o->as.dict.keys[i], key) == 0) return o->as.dict.vals[i];
     }
-    return lx_null();
+    return px_null();
 }
 
-bool lx_dict_has(LXValue dict, const char* key) {
+bool px_dict_has(LXValue dict, const char* key) {
     LXObject* o = dict.as.obj;
     for (int i = 0; i < o->as.dict.len; i++) {
         if (strcmp(o->as.dict.keys[i], key) == 0) return true;
@@ -1363,23 +1363,23 @@ bool lx_dict_has(LXValue dict, const char* key) {
     return false;
 }
 
-int lx_len(LXValue v) {
+int px_len(LXValue v) {
     switch (v.type) {
-        case LX_STR: return lx_unicode_len(v.as.obj->as.str.data);
-        case LX_LIST: return v.as.obj->as.list.len;
-        case LX_DICT: return v.as.obj->as.dict.len;
-        case LX_TUPLE: return v.as.obj->as.tuple.len;
-        default: lx_error("len 不支持类型 %s", lx_type_name(v)); return 0;
+        case PX_STR: return px_unicode_len(v.as.obj->as.str.data);
+        case PX_LIST: return v.as.obj->as.list.len;
+        case PX_DICT: return v.as.obj->as.dict.len;
+        case PX_TUPLE: return v.as.obj->as.tuple.len;
+        default: px_error("len 不支持类型 %s", px_type_name(v)); return 0;
     }
 }
 
 // ==================== 调用 ====================
 
-LXValue lx_call(LXValue fn, LXValue* args, int nargs) {
-    if (fn.type == LX_FUNC) return fn.as.obj->as.func.fn(args, nargs, fn.as.obj->as.func.ctx);
-    if (fn.type == LX_NATIVE) return fn.as.obj->as.native.fn(args, nargs, NULL);
-    lx_error("无法调用非函数: %s", lx_type_name(fn));
-    return lx_null();
+LXValue px_call(LXValue fn, LXValue* args, int nargs) {
+    if (fn.type == PX_FUNC) return fn.as.obj->as.func.fn(args, nargs, fn.as.obj->as.func.ctx);
+    if (fn.type == PX_NATIVE) return fn.as.obj->as.native.fn(args, nargs, NULL);
+    px_error("无法调用非函数: %s", px_type_name(fn));
+    return px_null();
 }
 
 // 以 self 为第一参数调用全局函数（字符串方法转发）
@@ -1387,66 +1387,66 @@ static LXValue call_with_self(const char* fn, LXValue self, LXValue* args, int n
     LXValue* a = xmalloc(sizeof(LXValue) * (nargs + 1));
     a[0] = self;
     for (int i = 0; i < nargs; i++) a[i+1] = args[i];
-    LXValue r = lx_call(lx_get_global(fn), a, nargs + 1);
+    LXValue r = px_call(px_get_global(fn), a, nargs + 1);
     xfree(a);
     return r;
 }
 
-LXValue lx_method(LXValue obj, const char* name, LXValue* args, int nargs) {
+LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
     // 通道方法
-    if (obj.type == LX_CHAN) {
+    if (obj.type == PX_CHAN) {
         if (strcmp(name, "send") == 0) {
-            if (nargs != 1) lx_error("send 需要 1 个参数");
-            return lx_chan_send(obj, args[0]);
+            if (nargs != 1) px_error("send 需要 1 个参数");
+            return px_chan_send(obj, args[0]);
         }
-        if (strcmp(name, "recv") == 0) return lx_chan_recv(obj);
-        if (strcmp(name, "close") == 0) { lx_chan_close(obj); return lx_null(); }
+        if (strcmp(name, "recv") == 0) return px_chan_recv(obj);
+        if (strcmp(name, "close") == 0) { px_chan_close(obj); return px_null(); }
     }
     // 互斥锁方法（M13）
-    if (obj.type == LX_MUTEX) {
-        if (strcmp(name, "lock") == 0) return lx_mutex_lock(obj);
-        if (strcmp(name, "unlock") == 0) return lx_mutex_unlock(obj);
-        if (strcmp(name, "try_lock") == 0) return lx_mutex_try_lock(obj);
+    if (obj.type == PX_MUTEX) {
+        if (strcmp(name, "lock") == 0) return px_mutex_lock(obj);
+        if (strcmp(name, "unlock") == 0) return px_mutex_unlock(obj);
+        if (strcmp(name, "try_lock") == 0) return px_mutex_try_lock(obj);
         if (strcmp(name, "with") == 0) {
-            if (nargs != 1) lx_error("mutex.with 需要 1 个函数参数");
-            lx_mutex_lock(obj);
-            LXValue r = lx_call(args[0], NULL, 0);
-            lx_mutex_unlock(obj);
+            if (nargs != 1) px_error("mutex.with 需要 1 个函数参数");
+            px_mutex_lock(obj);
+            LXValue r = px_call(args[0], NULL, 0);
+            px_mutex_unlock(obj);
             return r;
         }
     }
     // 读写锁方法（M13）
-    if (obj.type == LX_RWLOCK) {
-        if (strcmp(name, "rlock") == 0) return lx_rwlock_rlock(obj);
-        if (strcmp(name, "runlock") == 0) return lx_rwlock_runlock(obj);
-        if (strcmp(name, "wlock") == 0) return lx_rwlock_wlock(obj);
-        if (strcmp(name, "wunlock") == 0) return lx_rwlock_wunlock(obj);
-        if (strcmp(name, "try_rlock") == 0) return lx_rwlock_try_rlock(obj);
-        if (strcmp(name, "try_wlock") == 0) return lx_rwlock_try_wlock(obj);
+    if (obj.type == PX_RWLOCK) {
+        if (strcmp(name, "rlock") == 0) return px_rwlock_rlock(obj);
+        if (strcmp(name, "runlock") == 0) return px_rwlock_runlock(obj);
+        if (strcmp(name, "wlock") == 0) return px_rwlock_wlock(obj);
+        if (strcmp(name, "wunlock") == 0) return px_rwlock_wunlock(obj);
+        if (strcmp(name, "try_rlock") == 0) return px_rwlock_try_rlock(obj);
+        if (strcmp(name, "try_wlock") == 0) return px_rwlock_try_wlock(obj);
         if (strcmp(name, "with_read") == 0) {
-            if (nargs != 1) lx_error("rwlock.with_read 需要 1 个函数参数");
-            lx_rwlock_rlock(obj);
-            LXValue r = lx_call(args[0], NULL, 0);
-            lx_rwlock_runlock(obj);
+            if (nargs != 1) px_error("rwlock.with_read 需要 1 个函数参数");
+            px_rwlock_rlock(obj);
+            LXValue r = px_call(args[0], NULL, 0);
+            px_rwlock_runlock(obj);
             return r;
         }
         if (strcmp(name, "with_write") == 0) {
-            if (nargs != 1) lx_error("rwlock.with_write 需要 1 个函数参数");
-            lx_rwlock_wlock(obj);
-            LXValue r = lx_call(args[0], NULL, 0);
-            lx_rwlock_wunlock(obj);
+            if (nargs != 1) px_error("rwlock.with_write 需要 1 个函数参数");
+            px_rwlock_wlock(obj);
+            LXValue r = px_call(args[0], NULL, 0);
+            px_rwlock_wunlock(obj);
             return r;
         }
     }
     // 字符串方法
-    if (obj.type == LX_STR) {
+    if (obj.type == PX_STR) {
         if (strcmp(name, "upper") == 0 || strcmp(name, "to_upper") == 0) {
             return call_with_self("to_upper", obj, args, nargs);
         }
         if (strcmp(name, "lower") == 0 || strcmp(name, "to_lower") == 0) {
             return call_with_self("to_lower", obj, args, nargs);
         }
-        if (strcmp(name, "len") == 0) return lx_int(lx_len(obj));
+        if (strcmp(name, "len") == 0) return px_int(px_len(obj));
         if (strcmp(name, "trim") == 0) return call_with_self("trim", obj, args, nargs);
         if (strcmp(name, "split") == 0) return call_with_self("split", obj, args, nargs);
         if (strcmp(name, "contains") == 0) return call_with_self("contains", obj, args, nargs);
@@ -1454,71 +1454,71 @@ LXValue lx_method(LXValue obj, const char* name, LXValue* args, int nargs) {
         if (strcmp(name, "starts_with") == 0) return call_with_self("starts_with", obj, args, nargs);
         if (strcmp(name, "ends_with") == 0) return call_with_self("ends_with", obj, args, nargs);
     }
-    if (obj.type == LX_LIST) {
+    if (obj.type == PX_LIST) {
         if (strcmp(name, "append") == 0) {
-            if (nargs != 1) lx_error("append 需要 1 个参数");
-            lx_list_push(obj, args[0]);
-            return lx_null();
+            if (nargs != 1) px_error("append 需要 1 个参数");
+            px_list_push(obj, args[0]);
+            return px_null();
         }
-        if (strcmp(name, "len") == 0) return lx_int(lx_len(obj));
-        if (strcmp(name, "push") == 0) { lx_list_push(obj, args[0]); return lx_null(); }
+        if (strcmp(name, "len") == 0) return px_int(px_len(obj));
+        if (strcmp(name, "push") == 0) { px_list_push(obj, args[0]); return px_null(); }
         if (strcmp(name, "contains") == 0) {
-            if (nargs < 1) lx_error("contains 需要 1 个参数");
+            if (nargs < 1) px_error("contains 需要 1 个参数");
             LXObject* o = obj.as.obj;
             for (int i = 0; i < o->as.list.len; i++) {
-                if (lx_eq(o->as.list.items[i], args[0]).as.b) return lx_bool(true);
+                if (px_eq(o->as.list.items[i], args[0]).as.b) return px_bool(true);
             }
-            return lx_bool(false);
+            return px_bool(false);
         }
         if (strcmp(name, "join") == 0) return call_with_self("join", args[0], &obj, 1);
     }
-    if (obj.type == LX_DICT) {
+    if (obj.type == PX_DICT) {
         if (strcmp(name, "get") == 0) {
-            if (nargs < 1) lx_error("get 需要 1 个参数");
-            return lx_dict_get(obj, args[0].as.obj->as.str.data);
+            if (nargs < 1) px_error("get 需要 1 个参数");
+            return px_dict_get(obj, args[0].as.obj->as.str.data);
         }
         if (strcmp(name, "set") == 0) {
-            if (nargs < 2) lx_error("set 需要 2 个参数");
-            lx_dict_set(obj, args[0].as.obj->as.str.data, args[1]);
-            return lx_null();
+            if (nargs < 2) px_error("set 需要 2 个参数");
+            px_dict_set(obj, args[0].as.obj->as.str.data, args[1]);
+            return px_null();
         }
-        if (strcmp(name, "len") == 0) return lx_int(lx_len(obj));
+        if (strcmp(name, "len") == 0) return px_int(px_len(obj));
         if (strcmp(name, "has") == 0 || strcmp(name, "contains") == 0) {
-            if (nargs < 1) lx_error("has 需要 1 个参数");
-            return lx_bool(lx_dict_has(obj, args[0].as.obj->as.str.data));
+            if (nargs < 1) px_error("has 需要 1 个参数");
+            return px_bool(px_dict_has(obj, args[0].as.obj->as.str.data));
         }
         if (strcmp(name, "keys") == 0) {
             LXObject* o = obj.as.obj;
-            LXValue r = lx_list(0);
-            for (int i = 0; i < o->as.dict.len; i++) lx_list_push(r, lx_str(o->as.dict.keys[i]));
+            LXValue r = px_list(0);
+            for (int i = 0; i < o->as.dict.len; i++) px_list_push(r, px_str(o->as.dict.keys[i]));
             return r;
         }
         if (strcmp(name, "remove") == 0) {
-            if (nargs < 1) lx_error("remove 需要 1 个参数");
-            LXValue v = lx_dict_get(obj, args[0].as.obj->as.str.data);
-            lx_dict_set(obj, args[0].as.obj->as.str.data, lx_null()); // 简化：置 null 表示删除
+            if (nargs < 1) px_error("remove 需要 1 个参数");
+            LXValue v = px_dict_get(obj, args[0].as.obj->as.str.data);
+            px_dict_set(obj, args[0].as.obj->as.str.data, px_null()); // 简化：置 null 表示删除
             return v;
         }
     }
-    lx_error("对象 %s 没有方法 %s", lx_type_name(obj), name);
-    return lx_null();
+    px_error("对象 %s 没有方法 %s", px_type_name(obj), name);
+    return px_null();
 }
 
 // ==================== 全局表 ====================
 
-LXValue lx_get_global(const char* name) {
+LXValue px_get_global(const char* name) {
     for (int i = 0; i < g_len; i++) {
         if (strcmp(g_keys[i], name) == 0) return g_vals[i];
     }
-    lx_error("未定义变量: %s", name);
-    return lx_null();
+    px_error("未定义变量: %s", name);
+    return px_null();
 }
 
-void lx_set_global(const char* name, LXValue v) {
+void px_set_global(const char* name, LXValue v) {
     for (int i = 0; i < g_len; i++) {
         if (strcmp(g_keys[i], name) == 0) { g_vals[i] = v; return; }
     }
-    if (g_len >= GLOBAL_CAP) lx_error("全局表溢出");
+    if (g_len >= GLOBAL_CAP) px_error("全局表溢出");
     g_keys[g_len] = xstrdup(name);
     g_vals[g_len] = v;
     g_len++;
@@ -1530,16 +1530,16 @@ static LXValue bi_print(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     for (int i = 0; i < nargs; i++) {
         if (i) printf(" ");
-        lx_print_value(args[i], false);
+        px_print_value(args[i], false);
     }
     printf("\n");
-    return lx_null();
+    return px_null();
 }
 
 static LXValue bi_len(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) lx_error("len 需要一个参数");
-    return lx_int(lx_len(args[0]));
+    if (nargs != 1) px_error("len 需要一个参数");
+    return px_int(px_len(args[0]));
 }
 
 static LXValue bi_range(LXValue* args, int nargs, void* ctx) {
@@ -1548,92 +1548,92 @@ static LXValue bi_range(LXValue* args, int nargs, void* ctx) {
     if (nargs == 1) { end = int_val(args[0]); }
     else if (nargs == 2) { start = int_val(args[0]); end = int_val(args[1]); }
     else if (nargs == 3) { start = int_val(args[0]); end = int_val(args[1]); step = int_val(args[2]); }
-    else lx_error("range 需要 1-3 个参数");
-    if (step == 0) lx_error("range step 不能为 0");
-    LXValue r = lx_list(0);
-    if (step > 0) for (int64_t i = start; i < end; i += step) lx_list_push(r, lx_int(i));
-    else for (int64_t i = start; i > end; i += step) lx_list_push(r, lx_int(i));
+    else px_error("range 需要 1-3 个参数");
+    if (step == 0) px_error("range step 不能为 0");
+    LXValue r = px_list(0);
+    if (step > 0) for (int64_t i = start; i < end; i += step) px_list_push(r, px_int(i));
+    else for (int64_t i = start; i > end; i += step) px_list_push(r, px_int(i));
     return r;
 }
 
 static LXValue bi_type(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) lx_error("type 需要一个参数");
-    return lx_str(lx_type_name(args[0]));
+    if (nargs != 1) px_error("type 需要一个参数");
+    return px_str(px_type_name(args[0]));
 }
 
 static LXValue bi_str(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) lx_error("str 需要一个参数");
+    if (nargs != 1) px_error("str 需要一个参数");
     // 字符串原样返回，数字转字符串
-    if (args[0].type == LX_STR) return args[0];
-    if (args[0].type == LX_INT || args[0].type == LX_FLOAT) return lx_str(fmt_num(args[0]));
-    if (args[0].type == LX_BOOL) return lx_str(args[0].as.b ? "true" : "false");
-    if (args[0].type == LX_NULL) return lx_str("null");
-    lx_error("str 不支持类型 %s", lx_type_name(args[0]));
-    return lx_null();
+    if (args[0].type == PX_STR) return args[0];
+    if (args[0].type == PX_INT || args[0].type == PX_FLOAT) return px_str(fmt_num(args[0]));
+    if (args[0].type == PX_BOOL) return px_str(args[0].as.b ? "true" : "false");
+    if (args[0].type == PX_NULL) return px_str("null");
+    px_error("str 不支持类型 %s", px_type_name(args[0]));
+    return px_null();
 }
 
 static LXValue bi_int(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) lx_error("int 需要一个参数");
+    if (nargs != 1) px_error("int 需要一个参数");
     LXValue a = args[0];
-    if (a.type == LX_INT) return a;
-    if (a.type == LX_FLOAT) return lx_int((int64_t)a.as.f);
-    if (a.type == LX_BOOL) return lx_int(a.as.b ? 1 : 0);
-    if (a.type == LX_STR) { return lx_int(atoll(a.as.obj->as.str.data)); }
-    lx_error("int 不支持类型 %s", lx_type_name(a));
-    return lx_null();
+    if (a.type == PX_INT) return a;
+    if (a.type == PX_FLOAT) return px_int((int64_t)a.as.f);
+    if (a.type == PX_BOOL) return px_int(a.as.b ? 1 : 0);
+    if (a.type == PX_STR) { return px_int(atoll(a.as.obj->as.str.data)); }
+    px_error("int 不支持类型 %s", px_type_name(a));
+    return px_null();
 }
 
 static LXValue bi_float(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) lx_error("float 需要一个参数");
+    if (nargs != 1) px_error("float 需要一个参数");
     LXValue a = args[0];
-    if (a.type == LX_FLOAT) return a;
-    if (a.type == LX_INT) return lx_float((double)a.as.i);
-    if (a.type == LX_STR) return lx_float(atof(a.as.obj->as.str.data));
-    lx_error("float 不支持类型 %s", lx_type_name(a));
-    return lx_null();
+    if (a.type == PX_FLOAT) return a;
+    if (a.type == PX_INT) return px_float((double)a.as.i);
+    if (a.type == PX_STR) return px_float(atof(a.as.obj->as.str.data));
+    px_error("float 不支持类型 %s", px_type_name(a));
+    return px_null();
 }
 
 static LXValue bi_bool(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) lx_error("bool 需要一个参数");
-    return lx_bool(lx_is_truthy(args[0]));
+    if (nargs != 1) px_error("bool 需要一个参数");
+    return px_bool(px_is_truthy(args[0]));
 }
 
 static LXValue bi_assert(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1) lx_error("assert 需要 1-2 个参数");
-    if (!lx_is_truthy(args[0])) {
-        if (nargs >= 2 && args[1].type == LX_STR) lx_error("断言失败: %s", args[1].as.obj->as.str.data);
-        else lx_error("断言失败");
+    if (nargs < 1) px_error("assert 需要 1-2 个参数");
+    if (!px_is_truthy(args[0])) {
+        if (nargs >= 2 && args[1].type == PX_STR) px_error("断言失败: %s", args[1].as.obj->as.str.data);
+        else px_error("断言失败");
     }
-    return lx_null();
+    return px_null();
 }
 
 static LXValue bi_panic(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs >= 1 && args[0].type == LX_STR) lx_error("%s", args[0].as.obj->as.str.data);
-    lx_error("panic");
-    return lx_null();
+    if (nargs >= 1 && args[0].type == PX_STR) px_error("%s", args[0].as.obj->as.str.data);
+    px_error("panic");
+    return px_null();
 }
 
 static LXValue bi_sleep(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1) lx_error("sleep 需要 1 个参数");
+    if (nargs < 1) px_error("sleep 需要 1 个参数");
     int64_t ms = int_val(args[0]);
     struct timespec ts;
     ts.tv_sec = ms / 1000;
     ts.tv_nsec = (ms % 1000) * 1000000L;
     nanosleep(&ts, NULL);
-    return lx_null();
+    return px_null();
 }
 
 static LXValue bi_to_upper(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1 || args[0].type != LX_STR) lx_error("to_upper 需要一个字符串参数");
+    if (nargs != 1 || args[0].type != PX_STR) px_error("to_upper 需要一个字符串参数");
     const char* s = args[0].as.obj->as.str.data;
     int len = (int)strlen(s);
     char* d = xmalloc(len + 1);
@@ -1642,12 +1642,12 @@ static LXValue bi_to_upper(LXValue* args, int nargs, void* ctx) {
         d[i] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c;
     }
     d[len] = 0;
-    return lx_str(d);
+    return px_str(d);
 }
 
 static LXValue bi_to_lower(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1 || args[0].type != LX_STR) lx_error("to_lower 需要一个字符串参数");
+    if (nargs != 1 || args[0].type != PX_STR) px_error("to_lower 需要一个字符串参数");
     const char* s = args[0].as.obj->as.str.data;
     int len = (int)strlen(s);
     char* d = xmalloc(len + 1);
@@ -1656,42 +1656,42 @@ static LXValue bi_to_lower(LXValue* args, int nargs, void* ctx) {
         d[i] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
     }
     d[len] = 0;
-    return lx_str(d);
+    return px_str(d);
 }
 
 static LXValue bi_trim(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1 || args[0].type != LX_STR) lx_error("trim 需要一个字符串参数");
+    if (nargs != 1 || args[0].type != PX_STR) px_error("trim 需要一个字符串参数");
     const char* s = args[0].as.obj->as.str.data;
     while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
     int len = (int)strlen(s);
     while (len > 0 && (s[len-1] == ' ' || s[len-1] == '\t' || s[len-1] == '\n' || s[len-1] == '\r')) len--;
-    return lx_str_len(s, len);
+    return px_str_len(s, len);
 }
 
 static LXValue bi_now_ms(LXValue* args, int nargs, void* ctx) {
     (void)args; (void)nargs; (void)ctx;
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    return lx_int((int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000L);
+    return px_int((int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000L);
 }
 
 static LXValue bi_abs(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) lx_error("abs 需要一个参数");
+    if (nargs != 1) px_error("abs 需要一个参数");
     LXValue a = args[0];
-    if (a.type == LX_INT) return lx_int(a.as.i < 0 ? -a.as.i : a.as.i);
-    if (a.type == LX_FLOAT) return lx_float(fabs(a.as.f));
-    lx_error("abs 不支持类型 %s", lx_type_name(a));
-    return lx_null();
+    if (a.type == PX_INT) return px_int(a.as.i < 0 ? -a.as.i : a.as.i);
+    if (a.type == PX_FLOAT) return px_float(fabs(a.as.f));
+    px_error("abs 不支持类型 %s", px_type_name(a));
+    return px_null();
 }
 
 static LXValue bi_min(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1) lx_error("min 需要至少 1 个参数");
+    if (nargs < 1) px_error("min 需要至少 1 个参数");
     LXValue m = args[0];
     for (int i = 1; i < nargs; i++) {
-        LXValue c = lx_lt(args[i], m);
+        LXValue c = px_lt(args[i], m);
         if (c.as.b) m = args[i];
     }
     return m;
@@ -1699,10 +1699,10 @@ static LXValue bi_min(LXValue* args, int nargs, void* ctx) {
 
 static LXValue bi_max(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1) lx_error("max 需要至少 1 个参数");
+    if (nargs < 1) px_error("max 需要至少 1 个参数");
     LXValue m = args[0];
     for (int i = 1; i < nargs; i++) {
-        LXValue c = lx_gt(args[i], m);
+        LXValue c = px_gt(args[i], m);
         if (c.as.b) m = args[i];
     }
     return m;
@@ -1710,51 +1710,51 @@ static LXValue bi_max(LXValue* args, int nargs, void* ctx) {
 
 static LXValue bi_sum(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) lx_error("sum 需要 1 个参数");
+    if (nargs != 1) px_error("sum 需要 1 个参数");
     LXValue v = args[0];
-    if (v.type != LX_LIST) lx_error("sum 需要一个列表");
+    if (v.type != PX_LIST) px_error("sum 需要一个列表");
     LXObject* o = v.as.obj;
-    LXValue r = lx_int(0);
-    for (int i = 0; i < o->as.list.len; i++) r = lx_add(r, o->as.list.items[i]);
+    LXValue r = px_int(0);
+    for (int i = 0; i < o->as.list.len; i++) r = px_add(r, o->as.list.items[i]);
     return r;
 }
 
 static LXValue bi_sqrt(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) lx_error("sqrt 需要一个参数");
-    return lx_float(sqrt(num_val(args[0])));
+    if (nargs != 1) px_error("sqrt 需要一个参数");
+    return px_float(sqrt(num_val(args[0])));
 }
 
 // ==================== M5 标准库内置函数 ====================
 
 static LXValue bi_input(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs >= 1 && args[0].type == LX_STR) {
+    if (nargs >= 1 && args[0].type == PX_STR) {
         fwrite(args[0].as.obj->as.str.data, 1, args[0].as.obj->as.str.len, stdout);
         fflush(stdout);
     }
     char buf[4096];
-    if (!fgets(buf, sizeof(buf), stdin)) return lx_str("");
+    if (!fgets(buf, sizeof(buf), stdin)) return px_str("");
     int len = (int)strlen(buf);
     while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r')) len--;
-    return lx_str_len(buf, len);
+    return px_str_len(buf, len);
 }
 
 static LXValue bi_exit(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    int code = (nargs >= 1 && args[0].type == LX_INT) ? (int)args[0].as.i : 0;
+    int code = (nargs >= 1 && args[0].type == PX_INT) ? (int)args[0].as.i : 0;
     exit(code);
-    return lx_null();
+    return px_null();
 }
 
 // split(s, sep) -> [str]；sep 为空按空白切分
 static LXValue bi_split(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || nargs > 2 || args[0].type != LX_STR) lx_error("split 需要 1-2 个参数（字符串, [分隔符]）");
+    if (nargs < 1 || nargs > 2 || args[0].type != PX_STR) px_error("split 需要 1-2 个参数（字符串, [分隔符]）");
     const char* s = args[0].as.obj->as.str.data;
-    const char* sep = (nargs >= 2 && args[1].type == LX_STR) ? args[1].as.obj->as.str.data : " ";
+    const char* sep = (nargs >= 2 && args[1].type == PX_STR) ? args[1].as.obj->as.str.data : " ";
     int sep_len = (int)strlen(sep);
-    LXValue r = lx_list(0);
+    LXValue r = px_list(0);
     if (sep_len == 0) {
         // 按空白切分
         const char* p = s;
@@ -1763,7 +1763,7 @@ static LXValue bi_split(LXValue* args, int nargs, void* ctx) {
             if (!*p) break;
             const char* start = p;
             while (*p && !(*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
-            lx_list_push(r, lx_str_len(start, (int)(p - start)));
+            px_list_push(r, px_str_len(start, (int)(p - start)));
         }
         return r;
     }
@@ -1771,10 +1771,10 @@ static LXValue bi_split(LXValue* args, int nargs, void* ctx) {
     while (1) {
         const char* hit = strstr(p, sep);
         if (!hit) {
-            lx_list_push(r, lx_str(p));
+            px_list_push(r, px_str(p));
             break;
         }
-        lx_list_push(r, lx_str_len(p, (int)(hit - p)));
+        px_list_push(r, px_str_len(p, (int)(hit - p)));
         p = hit + sep_len;
     }
     return r;
@@ -1783,54 +1783,54 @@ static LXValue bi_split(LXValue* args, int nargs, void* ctx) {
 // join(sep, list) -> str
 static LXValue bi_join(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2 || args[0].type != LX_STR) lx_error("join 需要 2 个参数（分隔符, 列表）");
+    if (nargs != 2 || args[0].type != PX_STR) px_error("join 需要 2 个参数（分隔符, 列表）");
     const char* sep = args[0].as.obj->as.str.data;
     int sep_len = (int)strlen(sep);
-    if (args[1].type != LX_LIST && args[1].type != LX_TUPLE) lx_error("join 第二参数需要 list/tuple");
+    if (args[1].type != PX_LIST && args[1].type != PX_TUPLE) px_error("join 第二参数需要 list/tuple");
     LXObject* o = args[1].as.obj;
-    int n = (args[1].type == LX_LIST) ? o->as.list.len : o->as.tuple.len;
+    int n = (args[1].type == PX_LIST) ? o->as.list.len : o->as.tuple.len;
     // 先计算总长
     size_t total = 1;
     for (int i = 0; i < n; i++) {
-        LXValue item = (args[1].type == LX_LIST) ? o->as.list.items[i] : o->as.tuple.items[i];
-        char* ts = lx_to_string(item);
+        LXValue item = (args[1].type == PX_LIST) ? o->as.list.items[i] : o->as.tuple.items[i];
+        char* ts = px_to_string(item);
         total += strlen(ts) + (i ? sep_len : 0);
     }
     char* out = xmalloc(total);
     out[0] = 0;
     for (int i = 0; i < n; i++) {
         if (i) strncat(out, sep, sep_len);
-        LXValue item = (args[1].type == LX_LIST) ? o->as.list.items[i] : o->as.tuple.items[i];
-        char* ts = lx_to_string(item);
+        LXValue item = (args[1].type == PX_LIST) ? o->as.list.items[i] : o->as.tuple.items[i];
+        char* ts = px_to_string(item);
         strcat(out, ts);
     }
-    return lx_str(out);
+    return px_str(out);
 }
 
 // contains(容器, 元素) -> bool（字符串/列表）
 static LXValue bi_contains(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2) lx_error("contains 需要 2 个参数");
-    if (args[0].type == LX_STR) {
-        if (args[1].type != LX_STR) return lx_bool(false);
-        return lx_bool(strstr(args[0].as.obj->as.str.data, args[1].as.obj->as.str.data) != NULL);
+    if (nargs != 2) px_error("contains 需要 2 个参数");
+    if (args[0].type == PX_STR) {
+        if (args[1].type != PX_STR) return px_bool(false);
+        return px_bool(strstr(args[0].as.obj->as.str.data, args[1].as.obj->as.str.data) != NULL);
     }
-    if (args[0].type == LX_LIST) {
+    if (args[0].type == PX_LIST) {
         LXObject* o = args[0].as.obj;
         for (int i = 0; i < o->as.list.len; i++) {
-            if (lx_eq(o->as.list.items[i], args[1]).as.b) return lx_bool(true);
+            if (px_eq(o->as.list.items[i], args[1]).as.b) return px_bool(true);
         }
-        return lx_bool(false);
+        return px_bool(false);
     }
-    lx_error("contains 不支持类型 %s", lx_type_name(args[0]));
-    return lx_null();
+    px_error("contains 不支持类型 %s", px_type_name(args[0]));
+    return px_null();
 }
 
 // replace(s, old, new) -> str
 static LXValue bi_replace(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 3 || args[0].type != LX_STR || args[1].type != LX_STR || args[2].type != LX_STR)
-        lx_error("replace 需要 3 个字符串参数");
+    if (nargs != 3 || args[0].type != PX_STR || args[1].type != PX_STR || args[2].type != PX_STR)
+        px_error("replace 需要 3 个字符串参数");
     const char* s = args[0].as.obj->as.str.data;
     const char* old = args[1].as.obj->as.str.data;
     const char* nw = args[2].as.obj->as.str.data;
@@ -1850,46 +1850,46 @@ static LXValue bi_replace(LXValue* args, int nargs, void* ctx) {
         strcat(out, nw);
         p = hit + old_len;
     }
-    return lx_str(out);
+    return px_str(out);
 }
 
 static LXValue bi_starts_with(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2 || args[0].type != LX_STR || args[1].type != LX_STR) lx_error("starts_with 需要 2 个字符串参数");
+    if (nargs != 2 || args[0].type != PX_STR || args[1].type != PX_STR) px_error("starts_with 需要 2 个字符串参数");
     const char* s = args[0].as.obj->as.str.data;
     const char* p = args[1].as.obj->as.str.data;
     size_t lp = strlen(p);
-    return lx_bool(strncmp(s, p, lp) == 0);
+    return px_bool(strncmp(s, p, lp) == 0);
 }
 
 static LXValue bi_ends_with(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2 || args[0].type != LX_STR || args[1].type != LX_STR) lx_error("ends_with 需要 2 个字符串参数");
+    if (nargs != 2 || args[0].type != PX_STR || args[1].type != PX_STR) px_error("ends_with 需要 2 个字符串参数");
     const char* s = args[0].as.obj->as.str.data;
     const char* p = args[1].as.obj->as.str.data;
     size_t ls = strlen(s), lp = strlen(p);
-    if (lp > ls) return lx_bool(false);
-    return lx_bool(memcmp(s + ls - lp, p, lp) == 0);
+    if (lp > ls) return px_bool(false);
+    return px_bool(memcmp(s + ls - lp, p, lp) == 0);
 }
 
 static LXValue bi_pow(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2) lx_error("pow 需要 2 个参数");
-    if (args[0].type == LX_INT && args[1].type == LX_INT && args[1].as.i >= 0) {
+    if (nargs != 2) px_error("pow 需要 2 个参数");
+    if (args[0].type == PX_INT && args[1].type == PX_INT && args[1].as.i >= 0) {
         int64_t r = 1;
         for (int64_t i = 0; i < args[1].as.i; i++) r *= args[0].as.i;
-        return lx_int(r);
+        return px_int(r);
     }
-    return lx_float(pow(num_val(args[0]), num_val(args[1])));
+    return px_float(pow(num_val(args[0]), num_val(args[1])));
 }
 
 // sorted(list) -> list（按 compare_values 排序，冒泡）
 static LXValue bi_sorted(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1 || args[0].type != LX_LIST) lx_error("sorted 需要一个列表");
+    if (nargs != 1 || args[0].type != PX_LIST) px_error("sorted 需要一个列表");
     LXObject* o = args[0].as.obj;
-    LXValue r = lx_list(o->as.list.len);
-    for (int i = 0; i < o->as.list.len; i++) lx_list_push(r, o->as.list.items[i]);
+    LXValue r = px_list(o->as.list.len);
+    for (int i = 0; i < o->as.list.len; i++) px_list_push(r, o->as.list.items[i]);
     LXObject* ro = r.as.obj;
     for (int i = 0; i < ro->as.list.len; i++) {
         for (int j = i + 1; j < ro->as.list.len; j++) {
@@ -1905,39 +1905,39 @@ static LXValue bi_sorted(LXValue* args, int nargs, void* ctx) {
 
 static LXValue bi_reversed(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) lx_error("reversed 需要一个参数");
-    if (args[0].type == LX_LIST) {
+    if (nargs != 1) px_error("reversed 需要一个参数");
+    if (args[0].type == PX_LIST) {
         LXObject* o = args[0].as.obj;
-        LXValue r = lx_list(o->as.list.len);
-        for (int i = o->as.list.len - 1; i >= 0; i--) lx_list_push(r, o->as.list.items[i]);
+        LXValue r = px_list(o->as.list.len);
+        for (int i = o->as.list.len - 1; i >= 0; i--) px_list_push(r, o->as.list.items[i]);
         return r;
     }
-    if (args[0].type == LX_TUPLE) {
+    if (args[0].type == PX_TUPLE) {
         LXObject* o = args[0].as.obj;
-        LXValue r = lx_list(o->as.tuple.len);
-        for (int i = o->as.tuple.len - 1; i >= 0; i--) lx_list_push(r, o->as.tuple.items[i]);
+        LXValue r = px_list(o->as.tuple.len);
+        for (int i = o->as.tuple.len - 1; i >= 0; i--) px_list_push(r, o->as.tuple.items[i]);
         return r;
     }
-    if (args[0].type == LX_STR) {
+    if (args[0].type == PX_STR) {
         const char* s = args[0].as.obj->as.str.data;
         int len = (int)strlen(s);
         char* d = xmalloc(len + 1);
         for (int i = 0; i < len; i++) d[i] = s[len - 1 - i];
         d[len] = 0;
-        return lx_str(d);
+        return px_str(d);
     }
-    lx_error("reversed 不支持类型 %s", lx_type_name(args[0]));
-    return lx_null();
+    px_error("reversed 不支持类型 %s", px_type_name(args[0]));
+    return px_null();
 }
 
 // ---- std.io / std.fs ----
 
 static LXValue bi_read_file(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1 || args[0].type != LX_STR) lx_error("read_file 需要一个路径参数");
+    if (nargs != 1 || args[0].type != PX_STR) px_error("read_file 需要一个路径参数");
     const char* path = args[0].as.obj->as.str.data;
     FILE* f = fopen(path, "rb");
-    if (!f) lx_error("io: 读取文件失败 %s", path);
+    if (!f) px_error("io: 读取文件失败 %s", path);
     fseek(f, 0, SEEK_END);
     long sz = ftell(f);
     fseek(f, 0, SEEK_SET);
@@ -1945,37 +1945,37 @@ static LXValue bi_read_file(LXValue* args, int nargs, void* ctx) {
     size_t rd = fread(buf, 1, sz, f);
     buf[rd] = 0;
     fclose(f);
-    return lx_str_len(buf, (int)rd);
+    return px_str_len(buf, (int)rd);
 }
 
 static LXValue bi_write_file(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2 || args[0].type != LX_STR) lx_error("write_file 需要 (路径, 内容)");
+    if (nargs != 2 || args[0].type != PX_STR) px_error("write_file 需要 (路径, 内容)");
     const char* path = args[0].as.obj->as.str.data;
     const char* content;
     int clen;
-    if (args[1].type == LX_STR) { content = args[1].as.obj->as.str.data; clen = args[1].as.obj->as.str.len; }
-    else { content = lx_to_string(args[1]); clen = (int)strlen(content); }
+    if (args[1].type == PX_STR) { content = args[1].as.obj->as.str.data; clen = args[1].as.obj->as.str.len; }
+    else { content = px_to_string(args[1]); clen = (int)strlen(content); }
     FILE* f = fopen(path, "wb");
-    if (!f) lx_error("io: 写入文件失败 %s", path);
+    if (!f) px_error("io: 写入文件失败 %s", path);
     fwrite(content, 1, clen, f);
     fclose(f);
-    return lx_null();
+    return px_null();
 }
 
 static LXValue bi_append_file(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2 || args[0].type != LX_STR) lx_error("append_file 需要 (路径, 内容)");
+    if (nargs != 2 || args[0].type != PX_STR) px_error("append_file 需要 (路径, 内容)");
     const char* path = args[0].as.obj->as.str.data;
     const char* content;
     int clen;
-    if (args[1].type == LX_STR) { content = args[1].as.obj->as.str.data; clen = args[1].as.obj->as.str.len; }
-    else { content = lx_to_string(args[1]); clen = (int)strlen(content); }
+    if (args[1].type == PX_STR) { content = args[1].as.obj->as.str.data; clen = args[1].as.obj->as.str.len; }
+    else { content = px_to_string(args[1]); clen = (int)strlen(content); }
     FILE* f = fopen(path, "ab");
-    if (!f) lx_error("io: 追加写入失败 %s", path);
+    if (!f) px_error("io: 追加写入失败 %s", path);
     fwrite(content, 1, clen, f);
     fclose(f);
-    return lx_null();
+    return px_null();
 }
 
 // ---- M12 P0：文件随机读写 + fsync（WAL / 增量日志基石）----
@@ -1983,19 +1983,19 @@ static LXValue bi_append_file(LXValue* args, int nargs, void* ctx) {
 // （offset 超出 EOF 返回空串；读不足 length 返回实际读到的字节）
 static LXValue bi_read_at(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 3 || args[0].type != LX_STR) lx_error("read_at 需要 (路径, 偏移, 长度)");
+    if (nargs != 3 || args[0].type != PX_STR) px_error("read_at 需要 (路径, 偏移, 长度)");
     const char* path = args[0].as.obj->as.str.data;
     int64_t offset = int_val(args[1]);
     int length = (int)int_val(args[2]);
-    if (length < 0) lx_error("read_at 长度不能为负");
-    if (length == 0) return lx_str("");
+    if (length < 0) px_error("read_at 长度不能为负");
+    if (length == 0) return px_str("");
     int fd = open(path, O_RDONLY);
-    if (fd < 0) lx_error("io: 打开文件失败 %s: %s", path, strerror(errno));
+    if (fd < 0) px_error("io: 打开文件失败 %s: %s", path, strerror(errno));
     char* buf = xmalloc((size_t)length);
     ssize_t rd = pread(fd, buf, (size_t)length, (off_t)offset);
     close(fd);
-    if (rd < 0) { xfree(buf); lx_error("io: 随机读失败 %s: %s", path, strerror(errno)); }
-    LXValue r = lx_str_len(buf, (int)rd);
+    if (rd < 0) { xfree(buf); px_error("io: 随机读失败 %s: %s", path, strerror(errno)); }
+    LXValue r = px_str_len(buf, (int)rd);
     xfree(buf);
     return r;
 }
@@ -2004,60 +2004,60 @@ static LXValue bi_read_at(LXValue* args, int nargs, void* ctx) {
 // 文件不存在自动创建；offset 超过 EOF 时中间为空洞（读回 0），WAL 增量写友好
 static LXValue bi_write_at(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 3 || args[0].type != LX_STR) lx_error("write_at 需要 (路径, 偏移, 内容)");
+    if (nargs != 3 || args[0].type != PX_STR) px_error("write_at 需要 (路径, 偏移, 内容)");
     const char* path = args[0].as.obj->as.str.data;
     int64_t offset = int_val(args[1]);
     const char* content;
     int clen;
-    if (args[2].type == LX_STR) { content = args[2].as.obj->as.str.data; clen = args[2].as.obj->as.str.len; }
-    else { content = lx_to_string(args[2]); clen = (int)strlen(content); }
+    if (args[2].type == PX_STR) { content = args[2].as.obj->as.str.data; clen = args[2].as.obj->as.str.len; }
+    else { content = px_to_string(args[2]); clen = (int)strlen(content); }
     int fd = open(path, O_WRONLY | O_CREAT, 0644);
-    if (fd < 0) lx_error("io: 打开文件失败 %s: %s", path, strerror(errno));
+    if (fd < 0) px_error("io: 打开文件失败 %s: %s", path, strerror(errno));
     ssize_t wr = pwrite(fd, content, (size_t)clen, (off_t)offset);
     close(fd);
-    if (wr < 0) lx_error("io: 随机写失败 %s: %s", path, strerror(errno));
-    return lx_int((int64_t)wr);
+    if (wr < 0) px_error("io: 随机写失败 %s: %s", path, strerror(errno));
+    return px_int((int64_t)wr);
 }
 
 // file_size(path) → int：文件字节数
 static LXValue bi_file_size(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1 || args[0].type != LX_STR) lx_error("file_size 需要一个路径参数");
+    if (nargs != 1 || args[0].type != PX_STR) px_error("file_size 需要一个路径参数");
     const char* path = args[0].as.obj->as.str.data;
     struct stat st;
-    if (stat(path, &st) != 0) lx_error("io: 获取文件大小失败 %s: %s", path, strerror(errno));
-    return lx_int((int64_t)st.st_size);
+    if (stat(path, &st) != 0) px_error("io: 获取文件大小失败 %s: %s", path, strerror(errno));
+    return px_int((int64_t)st.st_size);
 }
 
 // fsync_file(path) → null：将文件数据刷入磁盘（WAL 落盘保证）
 static LXValue bi_fsync_file(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1 || args[0].type != LX_STR) lx_error("fsync_file 需要一个路径参数");
+    if (nargs != 1 || args[0].type != PX_STR) px_error("fsync_file 需要一个路径参数");
     const char* path = args[0].as.obj->as.str.data;
     int fd = open(path, O_RDWR);
     if (fd < 0) fd = open(path, O_RDONLY); // 只读权限文件也允许 fsync（Linux/POSIX）
-    if (fd < 0) lx_error("io: 打开文件失败 %s: %s", path, strerror(errno));
+    if (fd < 0) px_error("io: 打开文件失败 %s: %s", path, strerror(errno));
     int rc = fsync(fd);
     close(fd);
-    if (rc != 0) lx_error("io: fsync 失败 %s: %s", path, strerror(errno));
-    return lx_null();
+    if (rc != 0) px_error("io: fsync 失败 %s: %s", path, strerror(errno));
+    return px_null();
 }
 
 // truncate_file(path, size) → null：截断/扩展文件到指定大小（日志轮转、预分配）
 static LXValue bi_truncate_file(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2 || args[0].type != LX_STR) lx_error("truncate_file 需要 (路径, 大小)");
+    if (nargs != 2 || args[0].type != PX_STR) px_error("truncate_file 需要 (路径, 大小)");
     const char* path = args[0].as.obj->as.str.data;
     int64_t size = int_val(args[1]);
-    if (truncate(path, (off_t)size) != 0) lx_error("io: 截断文件失败 %s: %s", path, strerror(errno));
-    return lx_null();
+    if (truncate(path, (off_t)size) != 0) px_error("io: 截断文件失败 %s: %s", path, strerror(errno));
+    return px_null();
 }
 
 // ==================== M14 P1：crypto 哈希（签名校验 / 缓存 key / 数据指纹） ====================
 
 // 取任意值的字符串表示（与解释器 to_string 一致：str 原样，其余 str(v)）
 static const char* val_cstr(LXValue v) {
-    if (v.type == LX_STR) return v.as.obj->as.str.data;
+    if (v.type == PX_STR) return v.as.obj->as.str.data;
     static char tmp[64];
     snprintf(tmp, sizeof(tmp), "%s", fmt_num(v));
     return tmp;
@@ -2075,14 +2075,14 @@ static void bytes_to_hex(const unsigned char* in, size_t len, char* out) {
 // sha256(data) → 64 字符小写 hex 字符串（mbedtls 实现，与解释器一致）
 static LXValue bi_sha256(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) lx_error("sha256 需要一个参数");
+    if (nargs != 1) px_error("sha256 需要一个参数");
     const char* data = val_cstr(args[0]);
     unsigned char digest[32];
     if (mbedtls_sha256((const unsigned char*)data, strlen(data), digest, 0) != 0)
-        lx_error("sha256 计算失败");
+        px_error("sha256 计算失败");
     char hex[65];
     bytes_to_hex(digest, 32, hex);
-    return lx_str(hex);
+    return px_str(hex);
 }
 
 // ---- XXH64（xxHash, seed=0）----
@@ -2163,9 +2163,9 @@ static uint64_t xxh64(const unsigned char* data, size_t len) {
 // xxhash(data) → int（XXH64, seed=0；高速指纹/取模分片）
 static LXValue bi_xxhash(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) lx_error("xxhash 需要一个参数");
+    if (nargs != 1) px_error("xxhash 需要一个参数");
     const char* data = val_cstr(args[0]);
-    return lx_int((int64_t)xxh64((const unsigned char*)data, strlen(data)));
+    return px_int((int64_t)xxh64((const unsigned char*)data, strlen(data)));
 }
 
 
@@ -2669,95 +2669,95 @@ static void r_split(RNode* root, const unsigned char* text, int len, LXValue lis
             rcand_free(&l);
         }
         if (s < 0) break;
-        lx_list_push(list, lx_str_len((const char*)text + pos, s - pos));
+        px_list_push(list, px_str_len((const char*)text + pos, s - pos));
         pos = e;
     }
-    lx_list_push(list, lx_str_len((const char*)text + pos, len - pos));
+    px_list_push(list, px_str_len((const char*)text + pos, len - pos));
 }
 
 // ---- 内置函数 ----
 static LXValue bi_regex_find(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2) lx_error("regex_find 需要 2 个参数: (pattern, text)");
+    if (nargs != 2) px_error("regex_find 需要 2 个参数: (pattern, text)");
     const char* pat = val_cstr(args[0]);
     const char* text = val_cstr(args[1]);
     int tlen = (int)strlen(text);
     char err[160];
     err[0] = 0;
     RNode* root = rcompile(pat, err, sizeof(err));
-    if (!root) lx_error("regex: %s", err);
+    if (!root) px_error("regex: %s", err);
     int s, e;
     int64_t g[RG_N];
     int found = rsearch_from(root, (const unsigned char*)text, tlen, 0, &s, &e, g);
     rp_free(root);
-    if (found) return lx_str_len(text + s, e - s);
-    return lx_null();
+    if (found) return px_str_len(text + s, e - s);
+    return px_null();
 }
 
 static LXValue bi_regex_match(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2) lx_error("regex_match 需要 2 个参数: (pattern, text)");
+    if (nargs != 2) px_error("regex_match 需要 2 个参数: (pattern, text)");
     const char* pat = val_cstr(args[0]);
     const char* text = val_cstr(args[1]);
     char err[160];
     err[0] = 0;
     RNode* root = rcompile(pat, err, sizeof(err));
-    if (!root) lx_error("regex: %s", err);
+    if (!root) px_error("regex: %s", err);
     int64_t g[RG_N];
     int found = rfullmatch(root, (const unsigned char*)text, (int)strlen(text), g);
     rp_free(root);
-    return lx_bool(found != 0);
+    return px_bool(found != 0);
 }
 
 static LXValue bi_regex_search(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2) lx_error("regex_search 需要 2 个参数: (pattern, text)");
+    if (nargs != 2) px_error("regex_search 需要 2 个参数: (pattern, text)");
     const char* pat = val_cstr(args[0]);
     const char* text = val_cstr(args[1]);
     int tlen = (int)strlen(text);
     char err[160];
     err[0] = 0;
     RNode* root = rcompile(pat, err, sizeof(err));
-    if (!root) lx_error("regex: %s", err);
+    if (!root) px_error("regex: %s", err);
     int s, e;
     int64_t g[RG_N];
     int found = rsearch_from(root, (const unsigned char*)text, tlen, 0, &s, &e, g);
     rp_free(root);
-    if (!found) return lx_null();
-    LXValue d = lx_dict();
-    lx_dict_set(d, "match", lx_str_len(text + s, e - s));
-    lx_dict_set(d, "start", lx_int(s));
-    lx_dict_set(d, "end", lx_int(e));
-    LXValue gl = lx_list(0);
+    if (!found) return px_null();
+    LXValue d = px_dict();
+    px_dict_set(d, "match", px_str_len(text + s, e - s));
+    px_dict_set(d, "start", px_int(s));
+    px_dict_set(d, "end", px_int(e));
+    LXValue gl = px_list(0);
     for (int i = 1; i < RG_N; i++) {
         if (g[i] != -1) {
             int gs = (int)(g[i] >> 32), ge = (int)(g[i] & 0xffffffff);
-            lx_list_push(gl, lx_str_len(text + gs, ge - gs));
+            px_list_push(gl, px_str_len(text + gs, ge - gs));
         } else {
-            lx_list_push(gl, lx_null());
+            px_list_push(gl, px_null());
         }
     }
-    lx_dict_set(d, "groups", gl);
+    px_dict_set(d, "groups", gl);
     return d;
 }
 
 static LXValue bi_regex_find_all(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2) lx_error("regex_find_all 需要 2 个参数: (pattern, text)");
+    if (nargs != 2) px_error("regex_find_all 需要 2 个参数: (pattern, text)");
     const char* pat = val_cstr(args[0]);
     const char* text = val_cstr(args[1]);
     int tlen = (int)strlen(text);
     char err[160];
     err[0] = 0;
     RNode* root = rcompile(pat, err, sizeof(err));
-    if (!root) lx_error("regex: %s", err);
-    LXValue r = lx_list(0);
+    if (!root) px_error("regex: %s", err);
+    LXValue r = px_list(0);
     int pos = 0;
     while (pos <= tlen) {
         int s, e;
         int64_t g[RG_N];
         if (!rsearch_from(root, (const unsigned char*)text, tlen, pos, &s, &e, g)) break;
-        lx_list_push(r, lx_str_len(text + s, e - s));
+        px_list_push(r, px_str_len(text + s, e - s));
         pos = (e == s) ? s + 1 : e;
     }
     rp_free(root);
@@ -2766,7 +2766,7 @@ static LXValue bi_regex_find_all(LXValue* args, int nargs, void* ctx) {
 
 static LXValue bi_regex_replace(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 3) lx_error("regex_replace 需要 3 个参数: (pattern, text, repl)");
+    if (nargs != 3) px_error("regex_replace 需要 3 个参数: (pattern, text, repl)");
     const char* pat = val_cstr(args[0]);
     const char* text = val_cstr(args[1]);
     const char* repl = val_cstr(args[2]);
@@ -2774,26 +2774,26 @@ static LXValue bi_regex_replace(LXValue* args, int nargs, void* ctx) {
     char err[160];
     err[0] = 0;
     RNode* root = rcompile(pat, err, sizeof(err));
-    if (!root) lx_error("regex: %s", err);
+    if (!root) px_error("regex: %s", err);
     RStrBuf out = {0, 0, 0};
     r_replace(root, (const unsigned char*)text, tlen, repl, &out);
     rp_free(root);
-    LXValue v = lx_str_len(out.data ? out.data : "", out.len);
+    LXValue v = px_str_len(out.data ? out.data : "", out.len);
     if (out.data) xfree(out.data);
     return v;
 }
 
 static LXValue bi_regex_split(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2) lx_error("regex_split 需要 2 个参数: (pattern, text)");
+    if (nargs != 2) px_error("regex_split 需要 2 个参数: (pattern, text)");
     const char* pat = val_cstr(args[0]);
     const char* text = val_cstr(args[1]);
     int tlen = (int)strlen(text);
     char err[160];
     err[0] = 0;
     RNode* root = rcompile(pat, err, sizeof(err));
-    if (!root) lx_error("regex: %s", err);
-    LXValue r = lx_list(0);
+    if (!root) px_error("regex: %s", err);
+    LXValue r = px_list(0);
     r_split(root, (const unsigned char*)text, tlen, r);
     rp_free(root);
     return r;
@@ -2801,22 +2801,22 @@ static LXValue bi_regex_split(LXValue* args, int nargs, void* ctx) {
 
 static LXValue bi_exists(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1 || args[0].type != LX_STR) lx_error("exists 需要一个路径参数");
+    if (nargs != 1 || args[0].type != PX_STR) px_error("exists 需要一个路径参数");
     struct stat st;
-    return lx_bool(stat(args[0].as.obj->as.str.data, &st) == 0);
+    return px_bool(stat(args[0].as.obj->as.str.data, &st) == 0);
 }
 
 static LXValue bi_list_dir(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1 || args[0].type != LX_STR) lx_error("list_dir 需要一个路径参数");
+    if (nargs != 1 || args[0].type != PX_STR) px_error("list_dir 需要一个路径参数");
     const char* path = args[0].as.obj->as.str.data;
     DIR* d = opendir(path);
-    if (!d) lx_error("fs: 读取目录失败 %s", path);
-    LXValue r = lx_list(0);
+    if (!d) px_error("fs: 读取目录失败 %s", path);
+    LXValue r = px_list(0);
     struct dirent* e;
     while ((e = readdir(d)) != NULL) {
         if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
-        lx_list_push(r, lx_str(e->d_name));
+        px_list_push(r, px_str(e->d_name));
     }
     closedir(d);
     // 简单排序
@@ -2835,7 +2835,7 @@ static LXValue bi_list_dir(LXValue* args, int nargs, void* ctx) {
 
 static LXValue bi_mkdir(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1 || args[0].type != LX_STR) lx_error("mkdir 需要一个路径参数");
+    if (nargs != 1 || args[0].type != PX_STR) px_error("mkdir 需要一个路径参数");
     const char* path = args[0].as.obj->as.str.data;
     // 递归创建
     char tmp[1024];
@@ -2849,15 +2849,15 @@ static LXValue bi_mkdir(LXValue* args, int nargs, void* ctx) {
         }
     }
     mkdir(tmp, 0755);
-    return lx_null();
+    return px_null();
 }
 
 static LXValue bi_remove(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1 || args[0].type != LX_STR) lx_error("remove 需要一个路径参数");
+    if (nargs != 1 || args[0].type != PX_STR) px_error("remove 需要一个路径参数");
     const char* path = args[0].as.obj->as.str.data;
-    if (remove(path) != 0 && rmdir(path) != 0) lx_error("fs: 删除失败 %s", path);
-    return lx_null();
+    if (remove(path) != 0 && rmdir(path) != 0) px_error("fs: 删除失败 %s", path);
+    return px_null();
 }
 
 // ---- std.json ----
@@ -2919,71 +2919,71 @@ static LXValue json_parse_value(JsonCtx* j) {
     json_ws(j);
     if (*j->p == '{') {
         j->p++;
-        LXValue d = lx_dict();
+        LXValue d = px_dict();
         json_ws(j);
         if (*j->p == '}') { j->p++; return d; }
         while (1) {
             json_ws(j);
-            if (*j->p != '"') lx_error("json: 期望对象键");
+            if (*j->p != '"') px_error("json: 期望对象键");
             j->p++;
             char* key = json_str_raw(j);
             json_ws(j);
-            if (*j->p != ':') lx_error("json: 期望 ':'");
+            if (*j->p != ':') px_error("json: 期望 ':'");
             j->p++;
             LXValue v = json_parse_value(j);
-            lx_dict_set(d, key, v);
+            px_dict_set(d, key, v);
             xfree(key);
             json_ws(j);
             if (*j->p == ',') { j->p++; continue; }
             if (*j->p == '}') { j->p++; break; }
-            lx_error("json: 对象解析失败");
+            px_error("json: 对象解析失败");
         }
         return d;
     }
     if (*j->p == '[') {
         j->p++;
-        LXValue a = lx_list(0);
+        LXValue a = px_list(0);
         json_ws(j);
         if (*j->p == ']') { j->p++; return a; }
         while (1) {
             LXValue v = json_parse_value(j);
-            lx_list_push(a, v);
+            px_list_push(a, v);
             json_ws(j);
             if (*j->p == ',') { j->p++; continue; }
             if (*j->p == ']') { j->p++; break; }
-            lx_error("json: 数组解析失败");
+            px_error("json: 数组解析失败");
         }
         return a;
     }
     if (*j->p == '"') {
         j->p++;
         char* s = json_str_raw(j);
-        LXValue r = lx_str(s);
+        LXValue r = px_str(s);
         xfree(s);
         return r;
     }
-    if (strncmp(j->p, "true", 4) == 0) { j->p += 4; return lx_bool(true); }
-    if (strncmp(j->p, "false", 5) == 0) { j->p += 5; return lx_bool(false); }
-    if (strncmp(j->p, "null", 4) == 0) { j->p += 4; return lx_null(); }
+    if (strncmp(j->p, "true", 4) == 0) { j->p += 4; return px_bool(true); }
+    if (strncmp(j->p, "false", 5) == 0) { j->p += 5; return px_bool(false); }
+    if (strncmp(j->p, "null", 4) == 0) { j->p += 4; return px_null(); }
     // 数字
     char* end;
     long long iv = strtoll(j->p, &end, 10);
     if (end != j->p && (*end == 0 || *end == ',' || *end == '}' || *end == ']' || *end == ' ' || *end == '\t' || *end == '\n' || *end == '\r')) {
         j->p = end;
-        return lx_int(iv);
+        return px_int(iv);
     }
     double dv = strtod(j->p, &end);
     if (end != j->p) {
         j->p = end;
-        return lx_float(dv);
+        return px_float(dv);
     }
-    lx_error("json: 无法解析");
-    return lx_null();
+    px_error("json: 无法解析");
+    return px_null();
 }
 
 static LXValue bi_json_parse(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1 || args[0].type != LX_STR) lx_error("json_parse 需要一个字符串参数");
+    if (nargs != 1 || args[0].type != PX_STR) px_error("json_parse 需要一个字符串参数");
     JsonCtx j = { args[0].as.obj->as.str.data };
     LXValue r = json_parse_value(&j);
     return r;
@@ -3021,22 +3021,22 @@ static void jout_escape(JOut* o, const char* s) {
 }
 static void json_stringify_value(JOut* o, LXValue v) {
     switch (v.type) {
-        case LX_NULL: jout_append(o, "null"); break;
-        case LX_BOOL: jout_append(o, v.as.b ? "true" : "false"); break;
-        case LX_INT: {
+        case PX_NULL: jout_append(o, "null"); break;
+        case PX_BOOL: jout_append(o, v.as.b ? "true" : "false"); break;
+        case PX_INT: {
             char tmp[32];
             snprintf(tmp, sizeof(tmp), "%lld", (long long)v.as.i);
             jout_append(o, tmp);
             break;
         }
-        case LX_FLOAT: {
+        case PX_FLOAT: {
             char tmp[64];
             snprintf(tmp, sizeof(tmp), "%g", v.as.f);
             jout_append(o, tmp);
             break;
         }
-        case LX_STR: jout_escape(o, v.as.obj->as.str.data); break;
-        case LX_LIST: {
+        case PX_STR: jout_escape(o, v.as.obj->as.str.data); break;
+        case PX_LIST: {
             jout_append(o, "[");
             LXObject* ob = v.as.obj;
             for (int i = 0; i < ob->as.list.len; i++) {
@@ -3046,7 +3046,7 @@ static void json_stringify_value(JOut* o, LXValue v) {
             jout_append(o, "]");
             break;
         }
-        case LX_TUPLE: {
+        case PX_TUPLE: {
             jout_append(o, "[");
             LXObject* ob = v.as.obj;
             for (int i = 0; i < ob->as.tuple.len; i++) {
@@ -3056,7 +3056,7 @@ static void json_stringify_value(JOut* o, LXValue v) {
             jout_append(o, "]");
             break;
         }
-        case LX_DICT: {
+        case PX_DICT: {
             jout_append(o, "{");
             LXObject* ob = v.as.obj;
             for (int i = 0; i < ob->as.dict.len; i++) {
@@ -3068,16 +3068,16 @@ static void json_stringify_value(JOut* o, LXValue v) {
             jout_append(o, "}");
             break;
         }
-        default: lx_error("json: 无法序列化类型 %s", lx_type_name(v));
+        default: px_error("json: 无法序列化类型 %s", px_type_name(v));
     }
 }
 static LXValue bi_json_stringify(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) lx_error("json_stringify 需要一个参数");
+    if (nargs != 1) px_error("json_stringify 需要一个参数");
     JOut o = { NULL, 0, 0 };
     o.buf = xmalloc(64); o.cap = 64; o.buf[0] = 0;
     json_stringify_value(&o, args[0]);
-    LXValue r = lx_str(o.buf);
+    LXValue r = px_str(o.buf);
     xfree(o.buf);
     return r;
 }
@@ -3093,161 +3093,161 @@ static LXValue bi_now(LXValue* args, int nargs, void* ctx) {
     snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d",
              tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
              tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
-    return lx_str(buf);
+    return px_str(buf);
 }
 
 // ---- std.os ----
 
 static LXValue bi_env(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1 || args[0].type != LX_STR) lx_error("env 需要一个变量名");
+    if (nargs != 1 || args[0].type != PX_STR) px_error("env 需要一个变量名");
     const char* v = getenv(args[0].as.obj->as.str.data);
-    return v ? lx_str(v) : lx_null();
+    return v ? px_str(v) : px_null();
 }
 
 static LXValue bi_args(LXValue* args, int nargs, void* ctx) {
     (void)args; (void)nargs; (void)ctx;
     // 编译版不保留原始 argv，返回空列表（脚本版返回 args）
-    return lx_list(0);
+    return px_list(0);
 }
 
 // ---- std.collections（高阶函数） ----
 
 static LXValue bi_map(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2 || args[0].type != LX_LIST) lx_error("map 需要 (list, fn)");
+    if (nargs != 2 || args[0].type != PX_LIST) px_error("map 需要 (list, fn)");
     LXObject* o = args[0].as.obj;
     LXValue fn = args[1];
-    LXValue r = lx_list(0);
+    LXValue r = px_list(0);
     for (int i = 0; i < o->as.list.len; i++) {
         LXValue item = o->as.list.items[i];
-        LXValue res = lx_call(fn, &item, 1);
-        lx_list_push(r, res);
+        LXValue res = px_call(fn, &item, 1);
+        px_list_push(r, res);
     }
     return r;
 }
 
 static LXValue bi_filter(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2 || args[0].type != LX_LIST) lx_error("filter 需要 (list, fn)");
+    if (nargs != 2 || args[0].type != PX_LIST) px_error("filter 需要 (list, fn)");
     LXObject* o = args[0].as.obj;
     LXValue fn = args[1];
-    LXValue r = lx_list(0);
+    LXValue r = px_list(0);
     for (int i = 0; i < o->as.list.len; i++) {
         LXValue item = o->as.list.items[i];
-        LXValue res = lx_call(fn, &item, 1);
-        if (lx_is_truthy(res)) lx_list_push(r, item);
+        LXValue res = px_call(fn, &item, 1);
+        if (px_is_truthy(res)) px_list_push(r, item);
     }
     return r;
 }
 
 static LXValue bi_reduce(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 2 || nargs > 3 || args[0].type != LX_LIST) lx_error("reduce 需要 (list, fn, [init])");
+    if (nargs < 2 || nargs > 3 || args[0].type != PX_LIST) px_error("reduce 需要 (list, fn, [init])");
     LXObject* o = args[0].as.obj;
     LXValue fn = args[1];
-    LXValue acc = (nargs >= 3) ? args[2] : lx_int(0);
+    LXValue acc = (nargs >= 3) ? args[2] : px_int(0);
     for (int i = 0; i < o->as.list.len; i++) {
         LXValue item = o->as.list.items[i];
         LXValue pair[2] = { acc, item };
-        acc = lx_call(fn, pair, 2);
+        acc = px_call(fn, pair, 2);
     }
     return acc;
 }
 
-void lx_register_builtins(void) {
-    lx_set_global("print", lx_native("print", bi_print));
-    lx_set_global("len", lx_native("len", bi_len));
-    lx_set_global("range", lx_native("range", bi_range));
-    lx_set_global("type", lx_native("type", bi_type));
-    lx_set_global("str", lx_native("str", bi_str));
-    lx_set_global("int", lx_native("int", bi_int));
-    lx_set_global("float", lx_native("float", bi_float));
-    lx_set_global("bool", lx_native("bool", bi_bool));
-    lx_set_global("assert", lx_native("assert", bi_assert));
-    lx_set_global("panic", lx_native("panic", bi_panic));
-    lx_set_global("sleep", lx_native("sleep", bi_sleep));
-    lx_set_global("to_upper", lx_native("to_upper", bi_to_upper));
-    lx_set_global("to_lower", lx_native("to_lower", bi_to_lower));
-    lx_set_global("trim", lx_native("trim", bi_trim));
-    lx_set_global("now_ms", lx_native("now_ms", bi_now_ms));
-    lx_set_global("abs", lx_native("abs", bi_abs));
-    lx_set_global("min", lx_native("min", bi_min));
-    lx_set_global("max", lx_native("max", bi_max));
-    lx_set_global("sum", lx_native("sum", bi_sum));
-    lx_set_global("sqrt", lx_native("sqrt", bi_sqrt));
+void px_register_builtins(void) {
+    px_set_global("print", px_native("print", bi_print));
+    px_set_global("len", px_native("len", bi_len));
+    px_set_global("range", px_native("range", bi_range));
+    px_set_global("type", px_native("type", bi_type));
+    px_set_global("str", px_native("str", bi_str));
+    px_set_global("int", px_native("int", bi_int));
+    px_set_global("float", px_native("float", bi_float));
+    px_set_global("bool", px_native("bool", bi_bool));
+    px_set_global("assert", px_native("assert", bi_assert));
+    px_set_global("panic", px_native("panic", bi_panic));
+    px_set_global("sleep", px_native("sleep", bi_sleep));
+    px_set_global("to_upper", px_native("to_upper", bi_to_upper));
+    px_set_global("to_lower", px_native("to_lower", bi_to_lower));
+    px_set_global("trim", px_native("trim", bi_trim));
+    px_set_global("now_ms", px_native("now_ms", bi_now_ms));
+    px_set_global("abs", px_native("abs", bi_abs));
+    px_set_global("min", px_native("min", bi_min));
+    px_set_global("max", px_native("max", bi_max));
+    px_set_global("sum", px_native("sum", bi_sum));
+    px_set_global("sqrt", px_native("sqrt", bi_sqrt));
     // M5 标准库
-    lx_set_global("input", lx_native("input", bi_input));
-    lx_set_global("exit", lx_native("exit", bi_exit));
-    lx_set_global("split", lx_native("split", bi_split));
-    lx_set_global("join", lx_native("join", bi_join));
-    lx_set_global("contains", lx_native("contains", bi_contains));
-    lx_set_global("replace", lx_native("replace", bi_replace));
-    lx_set_global("starts_with", lx_native("starts_with", bi_starts_with));
-    lx_set_global("ends_with", lx_native("ends_with", bi_ends_with));
-    lx_set_global("pow", lx_native("pow", bi_pow));
-    lx_set_global("sorted", lx_native("sorted", bi_sorted));
-    lx_set_global("reversed", lx_native("reversed", bi_reversed));
-    lx_set_global("read_file", lx_native("read_file", bi_read_file));
-    lx_set_global("write_file", lx_native("write_file", bi_write_file));
-    lx_set_global("append_file", lx_native("append_file", bi_append_file));
+    px_set_global("input", px_native("input", bi_input));
+    px_set_global("exit", px_native("exit", bi_exit));
+    px_set_global("split", px_native("split", bi_split));
+    px_set_global("join", px_native("join", bi_join));
+    px_set_global("contains", px_native("contains", bi_contains));
+    px_set_global("replace", px_native("replace", bi_replace));
+    px_set_global("starts_with", px_native("starts_with", bi_starts_with));
+    px_set_global("ends_with", px_native("ends_with", bi_ends_with));
+    px_set_global("pow", px_native("pow", bi_pow));
+    px_set_global("sorted", px_native("sorted", bi_sorted));
+    px_set_global("reversed", px_native("reversed", bi_reversed));
+    px_set_global("read_file", px_native("read_file", bi_read_file));
+    px_set_global("write_file", px_native("write_file", bi_write_file));
+    px_set_global("append_file", px_native("append_file", bi_append_file));
     // M12 P0：文件随机读写 + fsync（WAL / 增量日志基石）
-    lx_set_global("read_at", lx_native("read_at", bi_read_at));
-    lx_set_global("write_at", lx_native("write_at", bi_write_at));
-    lx_set_global("file_size", lx_native("file_size", bi_file_size));
-    lx_set_global("fsync_file", lx_native("fsync_file", bi_fsync_file));
-    lx_set_global("truncate_file", lx_native("truncate_file", bi_truncate_file));
+    px_set_global("read_at", px_native("read_at", bi_read_at));
+    px_set_global("write_at", px_native("write_at", bi_write_at));
+    px_set_global("file_size", px_native("file_size", bi_file_size));
+    px_set_global("fsync_file", px_native("fsync_file", bi_fsync_file));
+    px_set_global("truncate_file", px_native("truncate_file", bi_truncate_file));
     // M14 P1：crypto 哈希
-    lx_set_global("sha256", lx_native("sha256", bi_sha256));
-    lx_set_global("xxhash", lx_native("xxhash", bi_xxhash));
+    px_set_global("sha256", px_native("sha256", bi_sha256));
+    px_set_global("xxhash", px_native("xxhash", bi_xxhash));
     // M15 P1：正则表达式（文本解析 / 日志分析 / 参数抽取）
-    lx_set_global("regex_find", lx_native("regex_find", bi_regex_find));
-    lx_set_global("regex_match", lx_native("regex_match", bi_regex_match));
-    lx_set_global("regex_search", lx_native("regex_search", bi_regex_search));
-    lx_set_global("regex_find_all", lx_native("regex_find_all", bi_regex_find_all));
-    lx_set_global("regex_replace", lx_native("regex_replace", bi_regex_replace));
-    lx_set_global("regex_split", lx_native("regex_split", bi_regex_split));
-    lx_set_global("exists", lx_native("exists", bi_exists));
-    lx_set_global("list_dir", lx_native("list_dir", bi_list_dir));
-    lx_set_global("mkdir", lx_native("mkdir", bi_mkdir));
-    lx_set_global("remove", lx_native("remove", bi_remove));
-    lx_set_global("json_parse", lx_native("json_parse", bi_json_parse));
-    lx_set_global("json_stringify", lx_native("json_stringify", bi_json_stringify));
-    lx_set_global("now", lx_native("now", bi_now));
-    lx_set_global("env", lx_native("env", bi_env));
-    lx_set_global("args", lx_native("args", bi_args));
-    lx_set_global("map", lx_native("map", bi_map));
-    lx_set_global("filter", lx_native("filter", bi_filter));
-    lx_set_global("reduce", lx_native("reduce", bi_reduce));
+    px_set_global("regex_find", px_native("regex_find", bi_regex_find));
+    px_set_global("regex_match", px_native("regex_match", bi_regex_match));
+    px_set_global("regex_search", px_native("regex_search", bi_regex_search));
+    px_set_global("regex_find_all", px_native("regex_find_all", bi_regex_find_all));
+    px_set_global("regex_replace", px_native("regex_replace", bi_regex_replace));
+    px_set_global("regex_split", px_native("regex_split", bi_regex_split));
+    px_set_global("exists", px_native("exists", bi_exists));
+    px_set_global("list_dir", px_native("list_dir", bi_list_dir));
+    px_set_global("mkdir", px_native("mkdir", bi_mkdir));
+    px_set_global("remove", px_native("remove", bi_remove));
+    px_set_global("json_parse", px_native("json_parse", bi_json_parse));
+    px_set_global("json_stringify", px_native("json_stringify", bi_json_stringify));
+    px_set_global("now", px_native("now", bi_now));
+    px_set_global("env", px_native("env", bi_env));
+    px_set_global("args", px_native("args", bi_args));
+    px_set_global("map", px_native("map", bi_map));
+    px_set_global("filter", px_native("filter", bi_filter));
+    px_set_global("reduce", px_native("reduce", bi_reduce));
     // std.net（M5.2）
-    lx_set_global("tcp_listen", lx_native("tcp_listen", bi_tcp_listen));
-    lx_set_global("tcp_accept", lx_native("tcp_accept", bi_tcp_accept));
-    lx_set_global("tcp_connect", lx_native("tcp_connect", bi_tcp_connect));
-    lx_set_global("tcp_send", lx_native("tcp_send", bi_tcp_send));
-    lx_set_global("tcp_recv", lx_native("tcp_recv", bi_tcp_recv));
-    lx_set_global("tcp_close", lx_native("tcp_close", bi_tcp_close));
-    lx_set_global("http_get", lx_native("http_get", bi_http_get));
-    lx_set_global("http_post", lx_native("http_post", bi_http_post));
-    lx_set_global("http_serve", lx_native("http_serve", bi_http_serve));
+    px_set_global("tcp_listen", px_native("tcp_listen", bi_tcp_listen));
+    px_set_global("tcp_accept", px_native("tcp_accept", bi_tcp_accept));
+    px_set_global("tcp_connect", px_native("tcp_connect", bi_tcp_connect));
+    px_set_global("tcp_send", px_native("tcp_send", bi_tcp_send));
+    px_set_global("tcp_recv", px_native("tcp_recv", bi_tcp_recv));
+    px_set_global("tcp_close", px_native("tcp_close", bi_tcp_close));
+    px_set_global("http_get", px_native("http_get", bi_http_get));
+    px_set_global("http_post", px_native("http_post", bi_http_post));
+    px_set_global("http_serve", px_native("http_serve", bi_http_serve));
     // M17 .px 脚本执行机制
-    lx_set_global("px_exec", lx_native("px_exec", bi_px_exec));
-    lx_set_global("px_serve", lx_native("px_serve", bi_px_serve));
+    px_set_global("px_exec", px_native("px_exec", bi_px_exec));
+    px_set_global("px_serve", px_native("px_serve", bi_px_serve));
     // M18 后台定时任务 / 定时器原语
-    lx_set_global("set_timeout", lx_native("set_timeout", bi_set_timeout));
-    lx_set_global("set_interval", lx_native("set_interval", bi_set_interval));
-    lx_set_global("clear_timer", lx_native("clear_timer", bi_clear_timer));
+    px_set_global("set_timeout", px_native("set_timeout", bi_set_timeout));
+    px_set_global("set_interval", px_native("set_interval", bi_set_interval));
+    px_set_global("clear_timer", px_native("clear_timer", bi_clear_timer));
     // M19 P1：AES 加密（企微回调加解密 / 数据落盘加密 / Cookie 签名）
-    lx_set_global("aes_encrypt", lx_native("aes_encrypt", bi_aes_encrypt));
-    lx_set_global("aes_decrypt", lx_native("aes_decrypt", bi_aes_decrypt));
-    lx_set_global("aes_gcm_encrypt", lx_native("aes_gcm_encrypt", bi_aes_gcm_encrypt));
-    lx_set_global("aes_gcm_decrypt", lx_native("aes_gcm_decrypt", bi_aes_gcm_decrypt));
+    px_set_global("aes_encrypt", px_native("aes_encrypt", bi_aes_encrypt));
+    px_set_global("aes_decrypt", px_native("aes_decrypt", bi_aes_decrypt));
+    px_set_global("aes_gcm_encrypt", px_native("aes_gcm_encrypt", bi_aes_gcm_encrypt));
+    px_set_global("aes_gcm_decrypt", px_native("aes_gcm_decrypt", bi_aes_gcm_decrypt));
     // M19 P1：XML 解析（企微回调 Encrypt 报文 / 配置文件 / 文档）
-    lx_set_global("xml_parse", lx_native("xml_parse", bi_xml_parse));
-    lx_set_global("xml_escape", lx_native("xml_escape", bi_xml_escape));
-    lx_set_global("xml_unescape", lx_native("xml_unescape", bi_xml_unescape));
+    px_set_global("xml_parse", px_native("xml_parse", bi_xml_parse));
+    px_set_global("xml_escape", px_native("xml_escape", bi_xml_escape));
+    px_set_global("xml_unescape", px_native("xml_unescape", bi_xml_unescape));
     // M19 P1：zip 打包/解压（docx/xlsx/pptx 是 zip+xml，文档工具基石）
-    lx_set_global("zip_pack", lx_native("zip_pack", bi_zip_pack));
-    lx_set_global("zip_unpack", lx_native("zip_unpack", bi_zip_unpack));
+    px_set_global("zip_pack", px_native("zip_pack", bi_zip_pack));
+    px_set_global("zip_unpack", px_native("zip_unpack", bi_zip_unpack));
 }
 
 // ==================== 并发原语（M4.2） ====================
@@ -3256,99 +3256,99 @@ void lx_register_builtins(void) {
 static pthread_mutex_t g_sel_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_sel_cv = PTHREAD_COND_INITIALIZER;
 
-void lx_select_signal(void) {
+void px_select_signal(void) {
     pthread_mutex_lock(&g_sel_mu);
     pthread_cond_broadcast(&g_sel_cv);
     pthread_mutex_unlock(&g_sel_mu);
 }
 
-void lx_select_wait(void) {
+void px_select_wait(void) {
     pthread_mutex_lock(&g_sel_mu);
     pthread_cond_wait(&g_sel_cv, &g_sel_mu);
     pthread_mutex_unlock(&g_sel_mu);
 }
 
-bool lx_is_chan(LXValue v) { return v.type == LX_CHAN; }
-bool lx_is_mutex(LXValue v) { return v.type == LX_MUTEX; }
-bool lx_is_rwlock(LXValue v) { return v.type == LX_RWLOCK; }
+bool px_is_chan(LXValue v) { return v.type == PX_CHAN; }
+bool px_is_mutex(LXValue v) { return v.type == PX_MUTEX; }
+bool px_is_rwlock(LXValue v) { return v.type == PX_RWLOCK; }
 
 // ==================== 锁原语（M13：mutex / rwlock） ====================
 // 与解释器语义对齐：pthread_mutex + condvar 实现真正阻塞（非忙等）
 // rwlock 写优先：writer_waiting > 0 时阻塞新读者，防止读饿死写
 
-static LXObject* lx_mutex_obj(LXValue m, const char* op) {
-    if (m.type != LX_MUTEX) lx_error("%s: 目标不是互斥锁（%s）", op, lx_type_name(m));
+static LXObject* px_mutex_obj(LXValue m, const char* op) {
+    if (m.type != PX_MUTEX) px_error("%s: 目标不是互斥锁（%s）", op, px_type_name(m));
     return m.as.obj;
 }
 
-LXValue lx_mutex_create(void) {
+LXValue px_mutex_create(void) {
     LXObject* o = xcalloc(1, sizeof(LXObject));
-    o->type = LX_MUTEX;
+    o->type = PX_MUTEX;
     o->as.mutex.locked = 0;
     pthread_mutex_init(&o->as.mutex.mu, NULL);
     pthread_cond_init(&o->as.mutex.cv, NULL);
-    LXValue v; v.type = LX_MUTEX; v.as.obj = o;
+    LXValue v; v.type = PX_MUTEX; v.as.obj = o;
     gc_register(o, sizeof(LXObject));
     return v;
 }
 
-LXValue lx_mutex_lock(LXValue m) {
-    LXObject* o = lx_mutex_obj(m, "lock");
+LXValue px_mutex_lock(LXValue m) {
+    LXObject* o = px_mutex_obj(m, "lock");
     pthread_mutex_lock(&o->as.mutex.mu);
     while (o->as.mutex.locked) pthread_cond_wait(&o->as.mutex.cv, &o->as.mutex.mu);
     o->as.mutex.locked = 1;
     pthread_mutex_unlock(&o->as.mutex.mu);
-    return lx_null();
+    return px_null();
 }
 
-LXValue lx_mutex_try_lock(LXValue m) {
-    LXObject* o = lx_mutex_obj(m, "try_lock");
+LXValue px_mutex_try_lock(LXValue m) {
+    LXObject* o = px_mutex_obj(m, "try_lock");
     pthread_mutex_lock(&o->as.mutex.mu);
     int ok = 0;
     if (!o->as.mutex.locked) { o->as.mutex.locked = 1; ok = 1; }
     pthread_mutex_unlock(&o->as.mutex.mu);
-    return lx_bool(ok);
+    return px_bool(ok);
 }
 
-LXValue lx_mutex_unlock(LXValue m) {
-    LXObject* o = lx_mutex_obj(m, "unlock");
+LXValue px_mutex_unlock(LXValue m) {
+    LXObject* o = px_mutex_obj(m, "unlock");
     pthread_mutex_lock(&o->as.mutex.mu);
     o->as.mutex.locked = 0;
     pthread_cond_signal(&o->as.mutex.cv);
     pthread_mutex_unlock(&o->as.mutex.mu);
-    return lx_null();
+    return px_null();
 }
 
-static LXObject* lx_rwlock_obj(LXValue m, const char* op) {
-    if (m.type != LX_RWLOCK) lx_error("%s: 目标不是读写锁（%s）", op, lx_type_name(m));
+static LXObject* px_rwlock_obj(LXValue m, const char* op) {
+    if (m.type != PX_RWLOCK) px_error("%s: 目标不是读写锁（%s）", op, px_type_name(m));
     return m.as.obj;
 }
 
-LXValue lx_rwlock_create(void) {
+LXValue px_rwlock_create(void) {
     LXObject* o = xcalloc(1, sizeof(LXObject));
-    o->type = LX_RWLOCK;
+    o->type = PX_RWLOCK;
     o->as.rwlock.readers = 0;
     o->as.rwlock.writer = 0;
     o->as.rwlock.writer_waiting = 0;
     pthread_mutex_init(&o->as.rwlock.mu, NULL);
     pthread_cond_init(&o->as.rwlock.cv, NULL);
-    LXValue v; v.type = LX_RWLOCK; v.as.obj = o;
+    LXValue v; v.type = PX_RWLOCK; v.as.obj = o;
     gc_register(o, sizeof(LXObject));
     return v;
 }
 
-LXValue lx_rwlock_rlock(LXValue m) {
-    LXObject* o = lx_rwlock_obj(m, "rlock");
+LXValue px_rwlock_rlock(LXValue m) {
+    LXObject* o = px_rwlock_obj(m, "rlock");
     pthread_mutex_lock(&o->as.rwlock.mu);
     while (o->as.rwlock.writer || o->as.rwlock.writer_waiting > 0)
         pthread_cond_wait(&o->as.rwlock.cv, &o->as.rwlock.mu);
     o->as.rwlock.readers++;
     pthread_mutex_unlock(&o->as.rwlock.mu);
-    return lx_null();
+    return px_null();
 }
 
-LXValue lx_rwlock_try_rlock(LXValue m) {
-    LXObject* o = lx_rwlock_obj(m, "try_rlock");
+LXValue px_rwlock_try_rlock(LXValue m) {
+    LXObject* o = px_rwlock_obj(m, "try_rlock");
     pthread_mutex_lock(&o->as.rwlock.mu);
     int ok = 0;
     if (!o->as.rwlock.writer && o->as.rwlock.writer_waiting == 0) {
@@ -3356,20 +3356,20 @@ LXValue lx_rwlock_try_rlock(LXValue m) {
         ok = 1;
     }
     pthread_mutex_unlock(&o->as.rwlock.mu);
-    return lx_bool(ok);
+    return px_bool(ok);
 }
 
-LXValue lx_rwlock_runlock(LXValue m) {
-    LXObject* o = lx_rwlock_obj(m, "runlock");
+LXValue px_rwlock_runlock(LXValue m) {
+    LXObject* o = px_rwlock_obj(m, "runlock");
     pthread_mutex_lock(&o->as.rwlock.mu);
     if (o->as.rwlock.readers > 0) o->as.rwlock.readers--;
     if (o->as.rwlock.readers == 0) pthread_cond_broadcast(&o->as.rwlock.cv);
     pthread_mutex_unlock(&o->as.rwlock.mu);
-    return lx_null();
+    return px_null();
 }
 
-LXValue lx_rwlock_wlock(LXValue m) {
-    LXObject* o = lx_rwlock_obj(m, "wlock");
+LXValue px_rwlock_wlock(LXValue m) {
+    LXObject* o = px_rwlock_obj(m, "wlock");
     pthread_mutex_lock(&o->as.rwlock.mu);
     o->as.rwlock.writer_waiting++;
     while (o->as.rwlock.writer || o->as.rwlock.readers > 0)
@@ -3377,11 +3377,11 @@ LXValue lx_rwlock_wlock(LXValue m) {
     o->as.rwlock.writer_waiting--;
     o->as.rwlock.writer = 1;
     pthread_mutex_unlock(&o->as.rwlock.mu);
-    return lx_null();
+    return px_null();
 }
 
-LXValue lx_rwlock_try_wlock(LXValue m) {
-    LXObject* o = lx_rwlock_obj(m, "try_wlock");
+LXValue px_rwlock_try_wlock(LXValue m) {
+    LXObject* o = px_rwlock_obj(m, "try_wlock");
     pthread_mutex_lock(&o->as.rwlock.mu);
     int ok = 0;
     if (!o->as.rwlock.writer && o->as.rwlock.readers == 0) {
@@ -3389,21 +3389,21 @@ LXValue lx_rwlock_try_wlock(LXValue m) {
         ok = 1;
     }
     pthread_mutex_unlock(&o->as.rwlock.mu);
-    return lx_bool(ok);
+    return px_bool(ok);
 }
 
-LXValue lx_rwlock_wunlock(LXValue m) {
-    LXObject* o = lx_rwlock_obj(m, "wunlock");
+LXValue px_rwlock_wunlock(LXValue m) {
+    LXObject* o = px_rwlock_obj(m, "wunlock");
     pthread_mutex_lock(&o->as.rwlock.mu);
     o->as.rwlock.writer = 0;
     pthread_cond_broadcast(&o->as.rwlock.cv);
     pthread_mutex_unlock(&o->as.rwlock.mu);
-    return lx_null();
+    return px_null();
 }
 
-LXValue lx_chan_create(int cap) {
+LXValue px_chan_create(int cap) {
     LXObject* o = xcalloc(1, sizeof(LXObject));
-    o->type = LX_CHAN;
+    o->type = PX_CHAN;
     o->as.chan.cap = cap;
     o->as.chan.len = 0;
     o->as.chan.head = 0;
@@ -3414,19 +3414,19 @@ LXValue lx_chan_create(int cap) {
     pthread_mutex_init(&o->as.chan.mu, NULL);
     pthread_cond_init(&o->as.chan.cv_send, NULL);
     pthread_cond_init(&o->as.chan.cv_recv, NULL);
-    LXValue v; v.type = LX_CHAN; v.as.obj = o;
+    LXValue v; v.type = PX_CHAN; v.as.obj = o;
     gc_register(o, sizeof(LXObject) + (size_t)phys * sizeof(LXValue));
     return v;
 }
 
-LXValue lx_chan_send(LXValue ch, LXValue val) {
-    if (ch.type != LX_CHAN) lx_error("send: 目标不是通道（%s）", lx_type_name(ch));
+LXValue px_chan_send(LXValue ch, LXValue val) {
+    if (ch.type != PX_CHAN) px_error("send: 目标不是通道（%s）", px_type_name(ch));
     LXObject* o = ch.as.obj;
     pthread_mutex_lock(&o->as.chan.mu);
     while (1) {
         if (o->as.chan.closed) {
             pthread_mutex_unlock(&o->as.chan.mu);
-            lx_error("R1011: 向已关闭的通道发送");
+            px_error("R1011: 向已关闭的通道发送");
         }
         if (o->as.chan.cap == 0) {
             // 无缓冲：等待接收者就绪
@@ -3435,7 +3435,7 @@ LXValue lx_chan_send(LXValue ch, LXValue val) {
                 o->as.chan.len = 1;
                 pthread_cond_signal(&o->as.chan.cv_recv);
                 pthread_mutex_unlock(&o->as.chan.mu);
-                lx_select_signal();
+                px_select_signal();
                 return val;
             }
             pthread_cond_wait(&o->as.chan.cv_send, &o->as.chan.mu);
@@ -3447,7 +3447,7 @@ LXValue lx_chan_send(LXValue ch, LXValue val) {
                 o->as.chan.len++;
                 pthread_cond_signal(&o->as.chan.cv_recv);
                 pthread_mutex_unlock(&o->as.chan.mu);
-                lx_select_signal();
+                px_select_signal();
                 return val;
             }
             pthread_cond_wait(&o->as.chan.cv_send, &o->as.chan.mu);
@@ -3455,8 +3455,8 @@ LXValue lx_chan_send(LXValue ch, LXValue val) {
     }
 }
 
-LXValue lx_chan_recv(LXValue ch) {
-    if (ch.type != LX_CHAN) lx_error("recv: 目标不是通道（%s）", lx_type_name(ch));
+LXValue px_chan_recv(LXValue ch) {
+    if (ch.type != PX_CHAN) px_error("recv: 目标不是通道（%s）", px_type_name(ch));
     LXObject* o = ch.as.obj;
     pthread_mutex_lock(&o->as.chan.mu);
     while (1) {
@@ -3473,12 +3473,12 @@ LXValue lx_chan_recv(LXValue ch) {
                 pthread_cond_signal(&o->as.chan.cv_send);
             }
             pthread_mutex_unlock(&o->as.chan.mu);
-            lx_select_signal();
+            px_select_signal();
             return v;
         }
         if (o->as.chan.closed) {
             pthread_mutex_unlock(&o->as.chan.mu);
-            lx_error("R1011: 从已关闭且为空的通道接收");
+            px_error("R1011: 从已关闭且为空的通道接收");
         }
         if (o->as.chan.cap == 0) o->as.chan.recv_waiting++;
         pthread_cond_wait(&o->as.chan.cv_recv, &o->as.chan.mu);
@@ -3488,8 +3488,8 @@ LXValue lx_chan_recv(LXValue ch) {
     }
 }
 
-bool lx_chan_try_recv(LXValue ch, LXValue* out) {
-    if (ch.type != LX_CHAN) lx_error("recv: 目标不是通道（%s）", lx_type_name(ch));
+bool px_chan_try_recv(LXValue ch, LXValue* out) {
+    if (ch.type != PX_CHAN) px_error("recv: 目标不是通道（%s）", px_type_name(ch));
     LXObject* o = ch.as.obj;
     bool ok = false;
     pthread_mutex_lock(&o->as.chan.mu);
@@ -3506,19 +3506,19 @@ bool lx_chan_try_recv(LXValue ch, LXValue* out) {
         ok = true;
     }
     pthread_mutex_unlock(&o->as.chan.mu);
-    if (ok) lx_select_signal();
+    if (ok) px_select_signal();
     return ok;
 }
 
-void lx_chan_close(LXValue ch) {
-    if (ch.type != LX_CHAN) lx_error("close: 目标不是通道（%s）", lx_type_name(ch));
+void px_chan_close(LXValue ch) {
+    if (ch.type != PX_CHAN) px_error("close: 目标不是通道（%s）", px_type_name(ch));
     LXObject* o = ch.as.obj;
     pthread_mutex_lock(&o->as.chan.mu);
     o->as.chan.closed = 1;
     pthread_cond_broadcast(&o->as.chan.cv_send);
     pthread_cond_broadcast(&o->as.chan.cv_recv);
     pthread_mutex_unlock(&o->as.chan.mu);
-    lx_select_signal();
+    px_select_signal();
 }
 
 // ==================== spawn（pthread） ====================
@@ -3531,7 +3531,7 @@ typedef struct {
 
 static void* spawn_thread(void* p) {
     SpawnJob* job = (SpawnJob*)p;
-    // M11 修复①（创建窗口）：新线程自注册——槽位已由 lx_spawn 预留（in_use=1, tid=0）。
+    // M11 修复①（创建窗口）：新线程自注册——槽位已由 px_spawn 预留（in_use=1, tid=0）。
     // 必须在调用 fn（分配/持有对象）之前把真实 tid 写入槽位；否则 GC 会因
     // "tid==0 创建中"跳过本线程，而它已在运行普贤代码 → 其栈上对象被 sweep 误回收
     // （use-after-free，即此前偶发 SIGSEGV 的根因）。
@@ -3558,7 +3558,7 @@ static void* spawn_thread(void* p) {
     return NULL;
 }
 
-void lx_spawn(LXFuncPtr fn, LXValue* args, int nargs) {
+void px_spawn(LXFuncPtr fn, LXValue* args, int nargs) {
     pthread_mutex_lock(&g_gc_mu);   // M8：创建前先标记活跃（防止主线程 GC 误判）
     if (!g_gc_env_inited) gc_init_env();
     g_active_threads++;
@@ -3580,7 +3580,7 @@ void lx_spawn(LXFuncPtr fn, LXValue* args, int nargs) {
         g_active_threads--;
     }
     pthread_mutex_unlock(&g_gc_mu);
-    if (slot < 0) lx_error("spawn: 并发线程数超出上限 %d", MAX_SPAWN_THREADS);
+    if (slot < 0) px_error("spawn: 并发线程数超出上限 %d", MAX_SPAWN_THREADS);
     SpawnJob* job = xmalloc(sizeof(SpawnJob));
     job->fn = fn;
     job->nargs = nargs;
@@ -3592,7 +3592,7 @@ void lx_spawn(LXFuncPtr fn, LXValue* args, int nargs) {
         g_active_threads--;
         if (slot >= 0) g_threads[slot].in_use = 0;
         pthread_mutex_unlock(&g_gc_mu);
-        lx_error("spawn: 创建线程失败");
+        px_error("spawn: 创建线程失败");
     }
     if (slot >= 0) {
         pthread_mutex_lock(&g_gc_mu);
@@ -3602,14 +3602,14 @@ void lx_spawn(LXFuncPtr fn, LXValue* args, int nargs) {
     pthread_detach(t);
 }
 
-void lx_spawn_name(const char* fname, LXValue* args, int nargs) {
-    LXValue fn = lx_get_global(fname);
-    if (fn.type == LX_FUNC) {
-        lx_spawn(fn.as.obj->as.func.fn, args, nargs);
-    } else if (fn.type == LX_NATIVE) {
-        lx_spawn(fn.as.obj->as.native.fn, args, nargs);
+void px_spawn_name(const char* fname, LXValue* args, int nargs) {
+    LXValue fn = px_get_global(fname);
+    if (fn.type == PX_FUNC) {
+        px_spawn(fn.as.obj->as.func.fn, args, nargs);
+    } else if (fn.type == PX_NATIVE) {
+        px_spawn(fn.as.obj->as.native.fn, args, nargs);
     } else {
-        lx_error("spawn: 未找到函数 %s", fname);
+        px_error("spawn: 未找到函数 %s", fname);
     }
 }
 
@@ -3698,7 +3698,7 @@ static void* timer_thread(void* p) {
     do {
         timer_sleep_ms(job->ms);
         if (!timer_still_active(id)) break;   // 取消检查（每次 tick 前）
-        LXValue r = lx_call(fn, args_stack, nargs);
+        LXValue r = px_call(fn, args_stack, nargs);
         (void)r;
     } while (periodic);
 
@@ -3721,14 +3721,14 @@ static int64_t px_timer_create(int periodic, LXValue fn, LXValue* args, int narg
     for (int i = 0; i < MAX_TIMERS; i++) if (g_timers[i].id == 0) { slot = i; break; }
     if (slot < 0) {
         pthread_mutex_unlock(&g_timer_mu);
-        lx_error("定时器数量超出上限 %d", MAX_TIMERS);
+        px_error("定时器数量超出上限 %d", MAX_TIMERS);
     }
     int64_t id = ++g_next_timer_id;
     g_timers[slot].id = id;
     g_timers[slot].active = 1;
     pthread_mutex_unlock(&g_timer_mu);
 
-    // GC 槽位预留（同 lx_spawn：同一临界区内 g_active_threads++ + 预留槽位）
+    // GC 槽位预留（同 px_spawn：同一临界区内 g_active_threads++ + 预留槽位）
     pthread_mutex_lock(&g_gc_mu);
     if (!g_gc_env_inited) gc_init_env();
     g_active_threads++;
@@ -3745,7 +3745,7 @@ static int64_t px_timer_create(int periodic, LXValue fn, LXValue* args, int narg
         g_active_threads--;   // 槽位满回滚
     }
     pthread_mutex_unlock(&g_gc_mu);
-    if (gslot < 0) lx_error("定时器: 并发线程数超出上限 %d", MAX_SPAWN_THREADS);
+    if (gslot < 0) px_error("定时器: 并发线程数超出上限 %d", MAX_SPAWN_THREADS);
 
     TimerJob* job = xmalloc(sizeof(TimerJob));
     job->id = id;
@@ -3765,7 +3765,7 @@ static int64_t px_timer_create(int periodic, LXValue fn, LXValue* args, int narg
         pthread_mutex_lock(&g_timer_mu);
         g_timers[slot].id = 0;
         pthread_mutex_unlock(&g_timer_mu);
-        lx_error("定时器: 创建线程失败");
+        px_error("定时器: 创建线程失败");
     }
     if (gslot >= 0) {
         pthread_mutex_lock(&g_gc_mu);
@@ -3778,40 +3778,40 @@ static int64_t px_timer_create(int periodic, LXValue fn, LXValue* args, int narg
 
 static LXValue bi_set_timeout(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 2) lx_error("set_timeout 需要 (fn, ms[, ...args]) 参数");
-    if (args[0].type != LX_FUNC && args[0].type != LX_NATIVE)
-        lx_error("set_timeout: 第一个参数必须是函数");
+    if (nargs < 2) px_error("set_timeout 需要 (fn, ms[, ...args]) 参数");
+    if (args[0].type != PX_FUNC && args[0].type != PX_NATIVE)
+        px_error("set_timeout: 第一个参数必须是函数");
     int64_t ms = int_val(args[1]);
-    if (ms < 0) lx_error("set_timeout: 间隔不能为负数");
+    if (ms < 0) px_error("set_timeout: 间隔不能为负数");
     int64_t id = px_timer_create(0, args[0], args + 2, nargs - 2, ms);
-    return lx_int(id);
+    return px_int(id);
 }
 
 static LXValue bi_set_interval(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 2) lx_error("set_interval 需要 (fn, ms[, ...args]) 参数");
-    if (args[0].type != LX_FUNC && args[0].type != LX_NATIVE)
-        lx_error("set_interval: 第一个参数必须是函数");
+    if (nargs < 2) px_error("set_interval 需要 (fn, ms[, ...args]) 参数");
+    if (args[0].type != PX_FUNC && args[0].type != PX_NATIVE)
+        px_error("set_interval: 第一个参数必须是函数");
     int64_t ms = int_val(args[1]);
-    if (ms < 0) lx_error("set_interval: 间隔不能为负数");
+    if (ms < 0) px_error("set_interval: 间隔不能为负数");
     int64_t id = px_timer_create(1, args[0], args + 2, nargs - 2, ms);
-    return lx_int(id);
+    return px_int(id);
 }
 
 static LXValue bi_clear_timer(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) lx_error("clear_timer 需要 1 个参数");
+    if (nargs != 1) px_error("clear_timer 需要 1 个参数");
     int64_t id = int_val(args[0]);
     pthread_mutex_lock(&g_timer_mu);
     for (int i = 0; i < MAX_TIMERS; i++) {
         if (g_timers[i].id == id && g_timers[i].active) {
             g_timers[i].active = 0;
             pthread_mutex_unlock(&g_timer_mu);
-            return lx_bool(1);
+            return px_bool(1);
         }
     }
     pthread_mutex_unlock(&g_timer_mu);
-    return lx_bool(0);
+    return px_bool(0);
 }
 
 // ==================== std.net（M5.2）：TCP + HTTP 客户端 ====================
@@ -3828,10 +3828,10 @@ static int sock_send_all(int fd, const char* data, int len) {
 
 static LXValue bi_tcp_listen(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1 || args[0].type != LX_INT) lx_error("tcp_listen 需要 (port) 参数");
+    if (nargs != 1 || args[0].type != PX_INT) px_error("tcp_listen 需要 (port) 参数");
     int port = (int)args[0].as.i;
     int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) lx_error("net: 创建 socket 失败");
+    if (fd < 0) px_error("net: 创建 socket 失败");
     int opt = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     struct sockaddr_in addr;
@@ -3841,29 +3841,29 @@ static LXValue bi_tcp_listen(LXValue* args, int nargs, void* ctx) {
     addr.sin_port = htons((uint16_t)port);
     if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
         close(fd);
-        lx_error("net: 监听端口 %d 失败", port);
+        px_error("net: 监听端口 %d 失败", port);
     }
     if (listen(fd, 16) < 0) {
         close(fd);
-        lx_error("net: listen 失败");
+        px_error("net: listen 失败");
     }
-    return lx_int(fd);
+    return px_int(fd);
 }
 
 static LXValue bi_tcp_accept(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1 || args[0].type != LX_INT) lx_error("tcp_accept 需要 (listener_id) 参数");
+    if (nargs != 1 || args[0].type != PX_INT) px_error("tcp_accept 需要 (listener_id) 参数");
     int lfd = (int)args[0].as.i;
     struct sockaddr_in cli;
     socklen_t cli_len = sizeof(cli);
     int cfd = accept(lfd, (struct sockaddr*)&cli, &cli_len);
-    if (cfd < 0) lx_error("net: accept 失败");
-    return lx_int(cfd);
+    if (cfd < 0) px_error("net: accept 失败");
+    return px_int(cfd);
 }
 
 static LXValue bi_tcp_connect(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2 || args[0].type != LX_STR || args[1].type != LX_INT) lx_error("tcp_connect 需要 (host, port) 参数");
+    if (nargs != 2 || args[0].type != PX_STR || args[1].type != PX_INT) px_error("tcp_connect 需要 (host, port) 参数");
     const char* host = args[0].as.obj->as.str.data;
     int port = (int)args[1].as.i;
     struct addrinfo hints, *res = NULL;
@@ -3872,56 +3872,56 @@ static LXValue bi_tcp_connect(LXValue* args, int nargs, void* ctx) {
     hints.ai_socktype = SOCK_STREAM;
     char portstr[16];
     snprintf(portstr, sizeof(portstr), "%d", port);
-    if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) lx_error("net: 解析主机失败 %s", host);
+    if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) px_error("net: 解析主机失败 %s", host);
     int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (fd < 0) { freeaddrinfo(res); lx_error("net: 创建 socket 失败"); }
+    if (fd < 0) { freeaddrinfo(res); px_error("net: 创建 socket 失败"); }
     if (connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
         int e = errno;
         freeaddrinfo(res);
         close(fd);
-        lx_error("net: 连接 %s:%d 失败 (%d)", host, port, e);
+        px_error("net: 连接 %s:%d 失败 (%d)", host, port, e);
     }
     freeaddrinfo(res);
-    return lx_int(fd);
+    return px_int(fd);
 }
 
 static LXValue bi_tcp_send(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2 || args[0].type != LX_INT) lx_error("tcp_send 需要 (conn_id, data) 参数");
+    if (nargs != 2 || args[0].type != PX_INT) px_error("tcp_send 需要 (conn_id, data) 参数");
     int fd = (int)args[0].as.i;
     const char* data;
     int len;
-    if (args[1].type == LX_STR) { data = args[1].as.obj->as.str.data; len = args[1].as.obj->as.str.len; }
-    else { data = lx_to_string(args[1]); len = (int)strlen(data); }
+    if (args[1].type == PX_STR) { data = args[1].as.obj->as.str.data; len = args[1].as.obj->as.str.len; }
+    else { data = px_to_string(args[1]); len = (int)strlen(data); }
     int n = sock_send_all(fd, data, len);
-    if (n < 0) lx_error("net: 发送失败");
-    return lx_int(n);
+    if (n < 0) px_error("net: 发送失败");
+    return px_int(n);
 }
 
 static LXValue bi_tcp_recv(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2 || args[0].type != LX_INT || args[1].type != LX_INT) lx_error("tcp_recv 需要 (conn_id, maxlen) 参数");
+    if (nargs != 2 || args[0].type != PX_INT || args[1].type != PX_INT) px_error("tcp_recv 需要 (conn_id, maxlen) 参数");
     int fd = (int)args[0].as.i;
     int maxlen = (int)args[1].as.i;
     if (maxlen <= 0) maxlen = 1;
     char* buf = xmalloc(maxlen + 1);
     int n = (int)recv(fd, buf, maxlen, 0);
-    if (n <= 0) { xfree(buf); return lx_str(""); }
+    if (n <= 0) { xfree(buf); return px_str(""); }
     buf[n] = 0;
-    LXValue r = lx_str_len(buf, n);
+    LXValue r = px_str_len(buf, n);
     xfree(buf);
     return r;
 }
 
 static LXValue bi_tcp_close(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1 || args[0].type != LX_INT) lx_error("tcp_close 需要 (id) 参数");
+    if (nargs != 1 || args[0].type != PX_INT) px_error("tcp_close 需要 (id) 参数");
     close((int)args[0].as.i);
-    return lx_null();
+    return px_null();
 }
 
 // ==================== M10 HTTP / HTTPS 客户端 ====================
-// 统一 http/https GET/POST：lx_http_request(url, method, body) → malloc 响应体
+// 统一 http/https GET/POST：px_http_request(url, method, body) → malloc 响应体
 // 自动跟随重定向（最多 5 次）；https 走 mbedtls（静态链接，保持静态二进制）
 
 // mbedtls 全局 CA 证书缓存（避免每次解析 CA bundle）
@@ -3929,7 +3929,7 @@ static pthread_mutex_t g_cacert_mu = PTHREAD_MUTEX_INITIALIZER;
 static mbedtls_x509_crt g_cacert;
 static int g_cacert_loaded = 0;
 
-static void lx_ensure_cacert(void) {
+static void px_ensure_cacert(void) {
     pthread_mutex_lock(&g_cacert_mu);
     if (!g_cacert_loaded) {
         mbedtls_x509_crt_init(&g_cacert);
@@ -3951,7 +3951,7 @@ static void lx_ensure_cacert(void) {
 }
 
 // mbedtls HTTPS 请求：返回 malloc 响应（含响应头+体），*out_len 输出长度；0=成功
-static int lx_https_request(const char* host, int port, const char* req, char** out, int* out_len) {
+static int px_https_request(const char* host, int port, const char* req, char** out, int* out_len) {
     mbedtls_net_context server_fd;
     mbedtls_ssl_context ssl;
     mbedtls_ssl_config conf;
@@ -3974,7 +3974,7 @@ static int lx_https_request(const char* host, int port, const char* req, char** 
     ret = mbedtls_net_connect(&server_fd, host, portstr, MBEDTLS_NET_PROTO_TCP);
     if (ret != 0) { ret = -1002; goto cleanup; }
 
-    lx_ensure_cacert();
+    px_ensure_cacert();
     ret = mbedtls_ssl_config_defaults(&conf, MBEDTLS_SSL_IS_CLIENT,
         MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT);
     if (ret != 0) { ret = -1003; goto cleanup; }
@@ -4031,13 +4031,13 @@ cleanup:
 }
 
 // 单次 HTTP 往返：返回 malloc 响应（响应头+体），解析状态码与 Location
-static char* lx_http_once(const char* url, const char* method, const char* body,
+static char* px_http_once(const char* url, const char* method, const char* body,
     int* out_len, int* out_status, char* loc, int loc_cap) {
     int is_https = 0;
     const char* rest;
     if (strncmp(url, "https://", 8) == 0) { is_https = 1; rest = url + 8; }
     else if (strncmp(url, "http://", 7) == 0) { rest = url + 7; }
-    else { lx_error("net: 不支持的协议: %s", url); return NULL; }
+    else { px_error("net: 不支持的协议: %s", url); return NULL; }
 
     char host[256];
     int hostlen = 0;
@@ -4046,12 +4046,12 @@ static char* lx_http_once(const char* url, const char* method, const char* body,
         hostlen++;
     }
     host[hostlen] = 0;
-    if (hostlen == 0) { lx_error("net: 主机名为空"); return NULL; }
+    if (hostlen == 0) { px_error("net: 主机名为空"); return NULL; }
     int port = is_https ? 443 : 80;
     const char* p = rest + hostlen;
     if (*p == ':') {
         port = atoi(p + 1);
-        if (port <= 0 || port > 65535) { lx_error("net: 端口非法"); return NULL; }
+        if (port <= 0 || port > 65535) { px_error("net: 端口非法"); return NULL; }
         const char* q = p + 1;
         while (*q && *q != '/') q++;
         p = q;
@@ -4077,8 +4077,8 @@ static char* lx_http_once(const char* url, const char* method, const char* body,
     char* resp = NULL;
     int resp_len = 0;
     if (is_https) {
-        int r = lx_https_request(host, port, req, &resp, &resp_len);
-        if (r != 0) { lx_error("net: HTTPS 请求失败 (%d) %s", r, host); return NULL; }
+        int r = px_https_request(host, port, req, &resp, &resp_len);
+        if (r != 0) { px_error("net: HTTPS 请求失败 (%d) %s", r, host); return NULL; }
     } else {
         // 明文 http
         struct addrinfo hints, *res = NULL;
@@ -4087,13 +4087,13 @@ static char* lx_http_once(const char* url, const char* method, const char* body,
         hints.ai_socktype = SOCK_STREAM;
         char portstr[16];
         snprintf(portstr, sizeof(portstr), "%d", port);
-        if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) { lx_error("net: 解析主机失败 %s", host); return NULL; }
+        if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) { px_error("net: 解析主机失败 %s", host); return NULL; }
         int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-        if (fd < 0) { freeaddrinfo(res); lx_error("net: 创建 socket 失败"); return NULL; }
+        if (fd < 0) { freeaddrinfo(res); px_error("net: 创建 socket 失败"); return NULL; }
         if (connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
             freeaddrinfo(res);
             close(fd);
-            lx_error("net: 连接 %s:%d 失败", host, port);
+            px_error("net: 连接 %s:%d 失败", host, port);
             return NULL;
         }
         freeaddrinfo(res);
@@ -4143,21 +4143,21 @@ static char* lx_http_once(const char* url, const char* method, const char* body,
 }
 
 // 统一 HTTP 请求：自动跟随重定向（最多 5 次），返回 malloc 响应体
-static char* lx_http_request(const char* url, const char* method, const char* body, int* out_len) {
+static char* px_http_request(const char* url, const char* method, const char* body, int* out_len) {
     char cur[2048];
     snprintf(cur, sizeof(cur), "%s", url);
     for (int i = 0; i < 5; i++) {
         char loc[1024];
         int status = 0;
         int len = 0;
-        char* resp = lx_http_once(cur, method, body, &len, &status, loc, sizeof(loc));
+        char* resp = px_http_once(cur, method, body, &len, &status, loc, sizeof(loc));
         if (status >= 300 && status < 400 && loc[0]) {
             char next[2048];
             if (strncmp(loc, "http://", 7) == 0 || strncmp(loc, "https://", 8) == 0) {
                 snprintf(next, sizeof(next), "%s", loc);
             } else if (loc[0] == '/') {
                 const char* s = strstr(cur, "://");
-                if (!s) { xfree(resp); lx_error("net: 非法 URL"); return NULL; }
+                if (!s) { xfree(resp); px_error("net: 非法 URL"); return NULL; }
                 const char* hp = s + 3;
                 const char* hp_end = strchr(hp, '/');
                 int hplen = hp_end ? (int)(hp_end - hp) : (int)strlen(hp);
@@ -4188,18 +4188,18 @@ static char* lx_http_request(const char* url, const char* method, const char* bo
         *out_len = body_len;
         return r;
     }
-    lx_error("net: 重定向次数过多（>5）");
+    px_error("net: 重定向次数过多（>5）");
     return NULL;
 }
 
 // http_get(url) → 响应体（支持 http/https，自动跟随重定向）
 static LXValue bi_http_get(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1 || args[0].type != LX_STR) lx_error("http_get 需要 (url) 参数");
+    if (nargs != 1 || args[0].type != PX_STR) px_error("http_get 需要 (url) 参数");
     const char* url = args[0].as.obj->as.str.data;
     int len = 0;
-    char* body = lx_http_request(url, "GET", NULL, &len);
-    LXValue r = lx_str_len(body, len);
+    char* body = px_http_request(url, "GET", NULL, &len);
+    LXValue r = px_str_len(body, len);
     xfree(body);
     return r;
 }
@@ -4207,21 +4207,21 @@ static LXValue bi_http_get(LXValue* args, int nargs, void* ctx) {
 // http_post(url, body) → 响应体（支持 http/https，自动跟随重定向）
 static LXValue bi_http_post(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2 || args[0].type != LX_STR || args[1].type != LX_STR) lx_error("http_post 需要 (url, body) 参数");
+    if (nargs != 2 || args[0].type != PX_STR || args[1].type != PX_STR) px_error("http_post 需要 (url, body) 参数");
     const char* url = args[0].as.obj->as.str.data;
     const char* body = args[1].as.obj->as.str.data;
     int len = 0;
-    char* resp = lx_http_request(url, "POST", body, &len);
-    LXValue r = lx_str_len(resp, len);
+    char* resp = px_http_request(url, "POST", body, &len);
+    LXValue r = px_str_len(resp, len);
     xfree(resp);
     return r;
 }
 
 // ==================== M16 HTTP 服务端（编译模式，与并发 GC 兼容） ====================
-// http_serve(port, handler)：socket 监听 + accept 循环，每连接 lx_spawn 一个处理线程。
-// 连接线程经 lx_spawn 注册进 GC 槽位 → 并发 GC 会暂停/扫描其栈，安全。
+// http_serve(port, handler)：socket 监听 + accept 循环，每连接 px_spawn 一个处理线程。
+// 连接线程经 px_spawn 注册进 GC 槽位 → 并发 GC 会暂停/扫描其栈，安全。
 
-static int lx_http_hexv(char c) {
+static int px_http_hexv(char c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
     if (c >= 'A' && c <= 'F') return c - 'A' + 10;
@@ -4229,7 +4229,7 @@ static int lx_http_hexv(char c) {
 }
 
 // URL 解码（+ → 空格，%XX → 字节）；返回 xmalloc 缓冲，调用者 xfree
-static char* lx_url_decode(const char* s) {
+static char* px_url_decode(const char* s) {
     int n = (int)strlen(s);
     char* out = xmalloc(n + 1);
     int oi = 0;
@@ -4237,7 +4237,7 @@ static char* lx_url_decode(const char* s) {
         if (s[i] == '+') {
             out[oi++] = ' ';
         } else if (s[i] == '%' && i + 2 < n) {
-            int h = lx_http_hexv(s[i + 1]), l = lx_http_hexv(s[i + 2]);
+            int h = px_http_hexv(s[i + 1]), l = px_http_hexv(s[i + 2]);
             if (h >= 0 && l >= 0) {
                 out[oi++] = (char)(h * 16 + l);
                 i += 2;
@@ -4253,17 +4253,17 @@ static char* lx_url_decode(const char* s) {
 }
 
 // 大小写不敏感查找 dict 键（HTTP 头名不区分大小写）
-static LXValue lx_dict_get_ci(LXValue d, const char* key) {
-    if (d.type != LX_DICT) return lx_null();
+static LXValue px_dict_get_ci(LXValue d, const char* key) {
+    if (d.type != PX_DICT) return px_null();
     LXObject* o = d.as.obj;
     for (int i = 0; i < o->as.dict.len; i++) {
         if (strcasecmp(o->as.dict.keys[i], key) == 0) return o->as.dict.vals[i];
     }
-    return lx_null();
+    return px_null();
 }
 
 // 从 multipart Content-Type 提取 boundary（xmalloc，调用者 xfree）
-static char* lx_mime_boundary(const char* ct) {
+static char* px_mime_boundary(const char* ct) {
     const char* p = strstr(ct, "boundary=");
     if (!p) return NULL;
     p += 9;
@@ -4281,7 +4281,7 @@ static char* lx_mime_boundary(const char* ct) {
 }
 
 // 从 Content-Disposition 行提取 name="..." / filename="..."（xmalloc，调用者 xfree）
-static char* lx_mime_attr(const char* line, const char* key) {
+static char* px_mime_attr(const char* line, const char* key) {
     char needle[64];
     snprintf(needle, sizeof(needle), "%s\"", key);
     char* p = strstr(line, needle);
@@ -4297,9 +4297,9 @@ static char* lx_mime_attr(const char* line, const char* key) {
 }
 
 // multipart/form-data 解析：设置 req["form"]（普通字段）与 req["files"]（filename -> 内容）
-static void lx_parse_multipart(LXValue req, const char* body, int body_len, const char* boundary) {
-    LXValue form = lx_dict();
-    LXValue files = lx_dict();
+static void px_parse_multipart(LXValue req, const char* body, int body_len, const char* boundary) {
+    LXValue form = px_dict();
+    LXValue files = px_dict();
     char delim[512];
     snprintf(delim, sizeof(delim), "--%s", boundary);
     int dlen = (int)strlen(delim);
@@ -4332,9 +4332,9 @@ static void lx_parse_multipart(LXValue req, const char* body, int body_len, cons
         char* line = strtok_r(head, "\r\n", &save);
         while (line) {
             if (strncasecmp(line, "Content-Disposition:", 20) == 0) {
-                char* n = lx_mime_attr(line, "name=");
+                char* n = px_mime_attr(line, "name=");
                 if (n) { snprintf(name, sizeof(name), "%s", n); xfree(n); }
-                char* f = lx_mime_attr(line, "filename=");
+                char* f = px_mime_attr(line, "filename=");
                 if (f) { snprintf(filename, sizeof(filename), "%s", f); xfree(f); }
             }
             line = strtok_r(NULL, "\r\n", &save);
@@ -4344,17 +4344,17 @@ static void lx_parse_multipart(LXValue req, const char* body, int body_len, cons
         if (clen > 0 && cs[clen - 1] == '\n') clen--;
         if (clen > 0 && cs[clen - 1] == '\r') clen--;
         if (filename[0]) {
-            lx_dict_set(files, filename, lx_str_len(cs, clen));
+            px_dict_set(files, filename, px_str_len(cs, clen));
         } else if (name[0]) {
-            lx_dict_set(form, name, lx_str_len(cs, clen));
+            px_dict_set(form, name, px_str_len(cs, clen));
         }
         p = ce;
     }
-    lx_dict_set(req, "form", form);
-    lx_dict_set(req, "files", files);
+    px_dict_set(req, "form", form);
+    px_dict_set(req, "files", files);
 }
 
-static const char* lx_http_status_reason(int code) {
+static const char* px_http_status_reason(int code) {
     switch (code) {
         case 200: return "OK";
         case 201: return "Created";
@@ -4378,38 +4378,38 @@ static const char* lx_http_status_reason(int code) {
 }
 
 // 构造 HTTP 响应报文（xmalloc，调用者 xfree）
-static char* lx_http_build_response(LXValue v) {
+static char* px_http_build_response(LXValue v) {
     int status = 200;
     const char* body = "";
     int body_len = 0;
     char extra_headers[4096] = {0};
-    if (v.type == LX_DICT) {
-        LXValue st = lx_dict_get(v, "status");
-        if (st.type == LX_INT) status = (int)st.as.i;
-        LXValue b = lx_dict_get(v, "body");
-        if (b.type == LX_STR) {
+    if (v.type == PX_DICT) {
+        LXValue st = px_dict_get(v, "status");
+        if (st.type == PX_INT) status = (int)st.as.i;
+        LXValue b = px_dict_get(v, "body");
+        if (b.type == PX_STR) {
             body = b.as.obj->as.str.data;
             body_len = b.as.obj->as.str.len;
         }
-        LXValue h = lx_dict_get(v, "headers");
-        if (h.type == LX_DICT) {
+        LXValue h = px_dict_get(v, "headers");
+        if (h.type == PX_DICT) {
             LXObject* ho = h.as.obj;
             int off = 0;
             for (int i = 0; i < ho->as.dict.len && off < (int)sizeof(extra_headers) - 64; i++) {
-                if (ho->as.dict.vals[i].type != LX_STR) continue;
+                if (ho->as.dict.vals[i].type != PX_STR) continue;
                 off += snprintf(extra_headers + off, sizeof(extra_headers) - (size_t)off,
                                 "%s: %s\r\n", ho->as.dict.keys[i], ho->as.dict.vals[i].as.obj->as.str.data);
             }
         }
-    } else if (v.type == LX_STR) {
+    } else if (v.type == PX_STR) {
         body = v.as.obj->as.str.data;
         body_len = v.as.obj->as.str.len;
-    } else if (v.type == LX_INT) {
+    } else if (v.type == PX_INT) {
         status = (int)v.as.i;
-    } else if (v.type == LX_NULL) {
+    } else if (v.type == PX_NULL) {
         status = 204;
     }
-    const char* reason = lx_http_status_reason(status);
+    const char* reason = px_http_status_reason(status);
     int has_ct = strstr(extra_headers, "Content-Type") != NULL || strstr(extra_headers, "content-type") != NULL;
     char* out = xmalloc(8192 + body_len);
     int off = 0;
@@ -4434,10 +4434,10 @@ static char* lx_http_build_response(LXValue v) {
     return out;
 }
 
-// 连接处理线程（lx_spawn 注册）：args[0] = fd
+// 连接处理线程（px_spawn 注册）：args[0] = fd
 static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) return lx_null();
+    if (nargs != 1) return px_null();
     int fd = (int)args[0].as.i;
 
     // 1. 读请求头（直到 \r\n\r\n，上限 64KB）
@@ -4457,7 +4457,7 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
     }
     if (header_end < 0 || len == 0) {
         close(fd);
-        return lx_null();
+        return px_null();
     }
 
     // 2. 解析请求行：METHOD SP target SP version
@@ -4465,7 +4465,7 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
     char* sp1 = strchr(head, ' ');
     if (!sp1) {
         close(fd);
-        return lx_null();
+        return px_null();
     }
     *sp1 = 0;
     char* method = head;
@@ -4485,20 +4485,20 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
     char* dec;
     if (q) {
         *q = 0;
-        dec = lx_url_decode(target);
+        dec = px_url_decode(target);
         snprintf(path, sizeof(path), "%s", dec ? dec : target);
         xfree(dec);
-        dec = lx_url_decode(q + 1);
+        dec = px_url_decode(q + 1);
         snprintf(query, sizeof(query), "%s", dec ? dec : q + 1);
         xfree(dec);
     } else {
-        dec = lx_url_decode(target);
+        dec = px_url_decode(target);
         snprintf(path, sizeof(path), "%s", dec ? dec : target);
         xfree(dec);
     }
 
     // 3. 头部 + Content-Length
-    LXValue headers = lx_dict();
+    LXValue headers = px_dict();
     int content_length = 0;
     char* hline = sp2 ? sp2 + 1 : target + strlen(target);
     char* nl0 = strchr(hline, '\n');
@@ -4521,7 +4521,7 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
             while (ve > v && (ve[-1] == ' ' || ve[-1] == '\r')) ve--;
             *ve = 0;
             if (strcasecmp(k, "Content-Length") == 0) content_length = atoi(v);
-            lx_dict_set(headers, k, lx_str(v));
+            px_dict_set(headers, k, px_str(v));
         }
         hline = eol ? eol + 2 : hline + strlen(hline);
     }
@@ -4548,34 +4548,34 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
     }
 
     // 5. 构造请求 dict
-    LXValue req = lx_dict();
-    lx_dict_set(req, "method", lx_str(method));
-    lx_dict_set(req, "target", lx_str(target));
-    lx_dict_set(req, "path", lx_str(path));
-    lx_dict_set(req, "query", lx_str(query));
-    lx_dict_set(req, "version", lx_str(version));
-    lx_dict_set(req, "headers", headers);
-    lx_dict_set(req, "body", lx_str_len(body_buf, body_len));
-    LXValue form = lx_dict();
+    LXValue req = px_dict();
+    px_dict_set(req, "method", px_str(method));
+    px_dict_set(req, "target", px_str(target));
+    px_dict_set(req, "path", px_str(path));
+    px_dict_set(req, "query", px_str(query));
+    px_dict_set(req, "version", px_str(version));
+    px_dict_set(req, "headers", headers);
+    px_dict_set(req, "body", px_str_len(body_buf, body_len));
+    LXValue form = px_dict();
     {
         struct sockaddr_in raddr;
         socklen_t rl = sizeof(raddr);
         if (getpeername(fd, (struct sockaddr*)&raddr, &rl) == 0) {
             char rbuf[64];
             snprintf(rbuf, sizeof(rbuf), "%s:%d", inet_ntoa(raddr.sin_addr), ntohs(raddr.sin_port));
-            lx_dict_set(req, "remote", lx_str(rbuf));
+            px_dict_set(req, "remote", px_str(rbuf));
         } else {
-            lx_dict_set(req, "remote", lx_str(""));
+            px_dict_set(req, "remote", px_str(""));
         }
     }
     // form / files 解析（Content-Type 驱动）
-    LXValue ct_v = lx_dict_get_ci(headers, "Content-Type");
-    const char* ct = (ct_v.type == LX_STR) ? ct_v.as.obj->as.str.data : "";
+    LXValue ct_v = px_dict_get_ci(headers, "Content-Type");
+    const char* ct = (ct_v.type == PX_STR) ? ct_v.as.obj->as.str.data : "";
     if (body_len > 0) {
         if (strstr(ct, "multipart/form-data")) {
-            char* boundary = lx_mime_boundary(ct);
+            char* boundary = px_mime_boundary(ct);
             if (boundary) {
-                lx_parse_multipart(req, body_buf, body_len, boundary);
+                px_parse_multipart(req, body_buf, body_len, boundary);
                 xfree(boundary);
             }
         } else if (strstr(ct, "application/x-www-form-urlencoded")) {
@@ -4588,32 +4588,32 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
                 char* eq = strchr(pair, '=');
                 if (eq) {
                     *eq = 0;
-                    char* kv = lx_url_decode(pair);
-                    char* vv = lx_url_decode(eq + 1);
-                    lx_dict_set(form, kv, lx_str(vv));
+                    char* kv = px_url_decode(pair);
+                    char* vv = px_url_decode(eq + 1);
+                    px_dict_set(form, kv, px_str(vv));
                     xfree(kv);
                     xfree(vv);
                 } else {
-                    char* kv = lx_url_decode(pair);
-                    lx_dict_set(form, kv, lx_str(""));
+                    char* kv = px_url_decode(pair);
+                    px_dict_set(form, kv, px_str(""));
                     xfree(kv);
                 }
                 pair = strtok_r(NULL, "&", &save);
             }
             xfree(fcopy);
-            lx_dict_set(req, "form", form);
+            px_dict_set(req, "form", form);
         }
     }
 
     // 6. 调 handler
-    LXValue handler = lx_get_global("__http_handler");
-    LXValue resp = lx_null();
-    if (handler.type == LX_FUNC || handler.type == LX_NATIVE) {
-        resp = lx_call(handler, &req, 1);
+    LXValue handler = px_get_global("__http_handler");
+    LXValue resp = px_null();
+    if (handler.type == PX_FUNC || handler.type == PX_NATIVE) {
+        resp = px_call(handler, &req, 1);
     }
 
     // 7. 构造响应并发送（HEAD 只发响应头，不带 body）
-    char* out = lx_http_build_response(resp);
+    char* out = px_http_build_response(resp);
     if (out) {
         if (strcmp(method, "HEAD") == 0) {
             char* sep = strstr(out, "\r\n\r\n");
@@ -4623,20 +4623,20 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
         xfree(out);
     }
     close(fd);
-    return lx_null();
+    return px_null();
 }
 
-// http_serve(port, handler)：阻塞 accept 循环（Go 风格），每连接 lx_spawn 处理
+// http_serve(port, handler)：阻塞 accept 循环（Go 风格），每连接 px_spawn 处理
 static LXValue bi_http_serve(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2 || args[0].type != LX_INT) lx_error("http_serve 需要 (port, handler) 参数");
+    if (nargs != 2 || args[0].type != PX_INT) px_error("http_serve 需要 (port, handler) 参数");
     LXValue handler = args[1];
-    if (handler.type != LX_FUNC && handler.type != LX_NATIVE) lx_error("http_serve 的 handler 必须是函数");
+    if (handler.type != PX_FUNC && handler.type != PX_NATIVE) px_error("http_serve 的 handler 必须是函数");
     // handler 存入全局表（GC 扫描根），连接线程经全局表取回
-    lx_set_global("__http_handler", handler);
+    px_set_global("__http_handler", handler);
     int port = (int)args[0].as.i;
     int sfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sfd < 0) lx_error("http_serve: socket 创建失败");
+    if (sfd < 0) px_error("http_serve: socket 创建失败");
     int one = 1;
     setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
     struct sockaddr_in addr;
@@ -4646,19 +4646,19 @@ static LXValue bi_http_serve(LXValue* args, int nargs, void* ctx) {
     addr.sin_port = htons((uint16_t)port);
     if (bind(sfd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
         close(sfd);
-        lx_error("http_serve: 绑定端口 %d 失败", port);
+        px_error("http_serve: 绑定端口 %d 失败", port);
     }
     if (listen(sfd, 128) < 0) {
         close(sfd);
-        lx_error("http_serve: listen 失败");
+        px_error("http_serve: listen 失败");
     }
     for (;;) {
         int cfd = accept(sfd, NULL, NULL);
         if (cfd < 0) continue;
-        LXValue arg = lx_int(cfd);
-        lx_spawn(http_conn_worker, &arg, 1);
+        LXValue arg = px_int(cfd);
+        px_spawn(http_conn_worker, &arg, 1);
     }
-    return lx_null(); // 不可达
+    return px_null(); // 不可达
 }
 
 // ==================== M17 .px 脚本执行机制（编译模式） ====================
@@ -4667,14 +4667,14 @@ static LXValue bi_http_serve(LXValue* args, int nargs, void* ctx) {
 // 双模式可跑同一套 .px 应用（PX_INIT_GLOBALS 环境变量传递 REQUEST/GET/POST/SERVER）。
 
 // 单调时钟毫秒（超时计算）
-static long long lx_mono_ms(void) {
+static long long px_mono_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
 // MIME 类型表（静态文件）
-static const char* lx_mime_type(const char* path) {
+static const char* px_mime_type(const char* path) {
     const char* dot = strrchr(path, '.');
     if (!dot) return "application/octet-stream";
     if (strcasecmp(dot, ".html") == 0 || strcasecmp(dot, ".htm") == 0) return "text/html; charset=utf-8";
@@ -4703,7 +4703,7 @@ static const char* lx_mime_type(const char* path) {
 }
 
 // px 解释器二进制定位：PX_BIN 环境变量优先，否则 PATH 中的 "px"
-static const char* lx_px_bin(void) {
+static const char* px_px_bin(void) {
     const char* b = getenv("PX_BIN");
     return (b && *b) ? b : "px";
 }
@@ -4712,7 +4712,7 @@ static const char* lx_px_bin(void) {
 // env_json：PX_INIT_GLOBALS 环境变量（JSON dict，解释器注入全局变量）
 // dump_response：1 时设置 PX_DUMP_RESPONSE=1（px_serve 用：脚本 RESPONSE 序列化到 stdout 尾部）
 // timeout_ms<=0 无限等待。返回 0=完成, 1=超时, 2=启动失败。
-static int lx_run_px_child(const char* path, const char* env_json, int dump_response,
+static int px_run_px_child(const char* path, const char* env_json, int dump_response,
                            int timeout_ms, char** out, int* out_len, int* exit_code) {
     int pfd[2];
     if (pipe(pfd) != 0) return 2;
@@ -4729,7 +4729,7 @@ static int lx_run_px_child(const char* path, const char* env_json, int dump_resp
         else unsetenv("PX_INIT_GLOBALS");
         if (dump_response) setenv("PX_DUMP_RESPONSE", "1", 1);
         else unsetenv("PX_DUMP_RESPONSE");
-        execlp(lx_px_bin(), "px", "run", path, (char*)NULL);
+        execlp(px_px_bin(), "px", "run", path, (char*)NULL);
         dprintf(STDERR_FILENO, "px: 找不到 px 解释器（设置 PX_BIN 或加入 PATH）\n");
         _exit(127);
     }
@@ -4738,10 +4738,10 @@ static int lx_run_px_child(const char* path, const char* env_json, int dump_resp
     char* buf = xmalloc((size_t)cap);
     int total = 0;
     int timedout = 0;
-    long long t0 = lx_mono_ms();
+    long long t0 = px_mono_ms();
     for (;;) {
         if (timeout_ms > 0) {
-            long long now = lx_mono_ms();
+            long long now = px_mono_ms();
             int rem = timeout_ms - (int)(now - t0);
             if (rem <= 0) { timedout = 1; break; }
             struct pollfd pp = { pfd[0], POLLIN, 0 };
@@ -4769,8 +4769,8 @@ static int lx_run_px_child(const char* path, const char* env_json, int dump_resp
 }
 
 // urlencoded → dict（GET 查询串 / POST 表单共用）
-static LXValue lx_parse_urlenc(const char* body) {
-    LXValue d = lx_dict();
+static LXValue px_parse_urlenc(const char* body) {
+    LXValue d = px_dict();
     char* copy = xmalloc(strlen(body) + 1);
     strcpy(copy, body);
     char* save = NULL;
@@ -4779,13 +4779,13 @@ static LXValue lx_parse_urlenc(const char* body) {
         char* eq = strchr(pair, '=');
         if (eq) {
             *eq = 0;
-            char* k = lx_url_decode(pair);
-            char* v = lx_url_decode(eq + 1);
-            lx_dict_set(d, k, lx_str(v));
+            char* k = px_url_decode(pair);
+            char* v = px_url_decode(eq + 1);
+            px_dict_set(d, k, px_str(v));
             xfree(k); xfree(v);
         } else {
-            char* k = lx_url_decode(pair);
-            lx_dict_set(d, k, lx_str(""));
+            char* k = px_url_decode(pair);
+            px_dict_set(d, k, px_str(""));
             xfree(k);
         }
         pair = strtok_r(NULL, "&", &save);
@@ -4795,8 +4795,8 @@ static LXValue lx_parse_urlenc(const char* body) {
 }
 
 // 发送 HTTP 响应（HEAD 只发响应头）
-static void lx_px_send(int fd, int status, const char* ct, const char* body, int body_len, int head_only) {
-    const char* reason = lx_http_status_reason(status);
+static void px_px_send(int fd, int status, const char* ct, const char* body, int body_len, int head_only) {
+    const char* reason = px_http_status_reason(status);
     char head[1024];
     int off = snprintf(head, sizeof(head),
                        "HTTP/1.1 %d %s\r\nContent-Length: %d\r\nConnection: close\r\n",
@@ -4807,10 +4807,10 @@ static void lx_px_send(int fd, int status, const char* ct, const char* body, int
     if (!head_only && body_len > 0) send(fd, body, body_len, 0);
 }
 
-// 连接处理线程（lx_spawn 注册）：args[0] = fd
+// 连接处理线程（px_spawn 注册）：args[0] = fd
 static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) return lx_null();
+    if (nargs != 1) return px_null();
     int fd = (int)args[0].as.i;
 
     // 1. 读请求头（直到 \r\n\r\n，上限 64KB）
@@ -4825,12 +4825,12 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         char* sep = strstr(buf, "\r\n\r\n");
         if (sep) { header_end = (int)(sep - buf); break; }
     }
-    if (header_end < 0 || len == 0) { close(fd); return lx_null(); }
+    if (header_end < 0 || len == 0) { close(fd); return px_null(); }
 
     // 2. 请求行
     char* head = buf;
     char* sp1 = strchr(head, ' ');
-    if (!sp1) { close(fd); return lx_null(); }
+    if (!sp1) { close(fd); return px_null(); }
     *sp1 = 0;
     char* method = head;
     char* target = sp1 + 1;
@@ -4841,14 +4841,14 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
     char* dec;
     if (q) {
         *q = 0;
-        dec = lx_url_decode(target); snprintf(path, sizeof(path), "%s", dec ? dec : target); xfree(dec);
-        dec = lx_url_decode(q + 1); snprintf(query, sizeof(query), "%s", dec ? dec : q + 1); xfree(dec);
+        dec = px_url_decode(target); snprintf(path, sizeof(path), "%s", dec ? dec : target); xfree(dec);
+        dec = px_url_decode(q + 1); snprintf(query, sizeof(query), "%s", dec ? dec : q + 1); xfree(dec);
     } else {
-        dec = lx_url_decode(target); snprintf(path, sizeof(path), "%s", dec ? dec : target); xfree(dec);
+        dec = px_url_decode(target); snprintf(path, sizeof(path), "%s", dec ? dec : target); xfree(dec);
     }
 
     // 3. 头部 + Content-Length
-    LXValue headers = lx_dict();
+    LXValue headers = px_dict();
     int content_length = 0;
     char* hline = sp2 ? sp2 + 1 : target + strlen(target);
     char* nl0 = strchr(hline, '\n');
@@ -4870,7 +4870,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
             while (ve > v && (ve[-1] == ' ' || ve[-1] == '\r')) ve--;
             *ve = 0;
             if (strcasecmp(k, "Content-Length") == 0) content_length = atoi(v);
-            lx_dict_set(headers, k, lx_str(v));
+            px_dict_set(headers, k, px_str(v));
         }
         hline = eol ? eol + 2 : hline + strlen(hline);
     }
@@ -4897,55 +4897,55 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
     }
 
     // 5. 请求 dict + form/files（Content-Type 驱动）
-    LXValue req = lx_dict();
-    lx_dict_set(req, "method", lx_str(method));
-    lx_dict_set(req, "target", lx_str(target));
-    lx_dict_set(req, "path", lx_str(path));
-    lx_dict_set(req, "query", lx_str(query));
-    lx_dict_set(req, "version", lx_str("HTTP/1.1"));
-    lx_dict_set(req, "headers", headers);
-    lx_dict_set(req, "body", lx_str_len(body_buf, body_len));
-    LXValue form = lx_dict();
+    LXValue req = px_dict();
+    px_dict_set(req, "method", px_str(method));
+    px_dict_set(req, "target", px_str(target));
+    px_dict_set(req, "path", px_str(path));
+    px_dict_set(req, "query", px_str(query));
+    px_dict_set(req, "version", px_str("HTTP/1.1"));
+    px_dict_set(req, "headers", headers);
+    px_dict_set(req, "body", px_str_len(body_buf, body_len));
+    LXValue form = px_dict();
     {
         struct sockaddr_in raddr;
         socklen_t rl = sizeof(raddr);
         if (getpeername(fd, (struct sockaddr*)&raddr, &rl) == 0) {
             char rbuf[64];
             snprintf(rbuf, sizeof(rbuf), "%s:%d", inet_ntoa(raddr.sin_addr), ntohs(raddr.sin_port));
-            lx_dict_set(req, "remote", lx_str(rbuf));
+            px_dict_set(req, "remote", px_str(rbuf));
         } else {
-            lx_dict_set(req, "remote", lx_str(""));
+            px_dict_set(req, "remote", px_str(""));
         }
     }
-    LXValue ct_v = lx_dict_get_ci(headers, "Content-Type");
-    const char* ct = (ct_v.type == LX_STR) ? ct_v.as.obj->as.str.data : "";
+    LXValue ct_v = px_dict_get_ci(headers, "Content-Type");
+    const char* ct = (ct_v.type == PX_STR) ? ct_v.as.obj->as.str.data : "";
     if (body_len > 0) {
         if (strstr(ct, "multipart/form-data")) {
-            char* boundary = lx_mime_boundary(ct);
+            char* boundary = px_mime_boundary(ct);
             if (boundary) {
-                lx_parse_multipart(req, body_buf, body_len, boundary);
+                px_parse_multipart(req, body_buf, body_len, boundary);
                 xfree(boundary);
             }
         } else if (strstr(ct, "application/x-www-form-urlencoded")) {
-            form = lx_parse_urlenc(body_buf);
-            lx_dict_set(req, "form", form);
+            form = px_parse_urlenc(body_buf);
+            px_dict_set(req, "form", form);
         }
     }
 
     // 6. 路径映射 + 目录隔离（穿越防护：拒绝 ".." 路径段）
-    LXValue root_v = lx_get_global("__px_docroot");
-    const char* docroot = (root_v.type == LX_STR) ? root_v.as.obj->as.str.data : ".";
-    LXValue tout_v = lx_get_global("__px_timeout");
-    int timeout_ms = (tout_v.type == LX_INT) ? (int)tout_v.as.i : 10000;
-    LXValue port_v = lx_get_global("__px_port");
-    int port = (port_v.type == LX_INT) ? (int)port_v.as.i : 0;
+    LXValue root_v = px_get_global("__px_docroot");
+    const char* docroot = (root_v.type == PX_STR) ? root_v.as.obj->as.str.data : ".";
+    LXValue tout_v = px_get_global("__px_timeout");
+    int timeout_ms = (tout_v.type == PX_INT) ? (int)tout_v.as.i : 10000;
+    LXValue port_v = px_get_global("__px_port");
+    int port = (port_v.type == PX_INT) ? (int)port_v.as.i : 0;
 
     const char* pp = path;
     while (*pp) {
         if (pp[0] == '.' && pp[1] == '.' && (pp[2] == 0 || pp[2] == '/')) {
-            lx_px_send(fd, 403, "text/plain; charset=utf-8", "403 Forbidden: 路径穿越被拒绝", 30, strcmp(method, "HEAD") == 0);
+            px_px_send(fd, 403, "text/plain; charset=utf-8", "403 Forbidden: 路径穿越被拒绝", 30, strcmp(method, "HEAD") == 0);
             close(fd);
-            return lx_null();
+            return px_null();
         }
         pp++;
     }
@@ -4954,9 +4954,9 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
 
     struct stat st;
     if (stat(full, &st) != 0) {
-        lx_px_send(fd, 404, "text/plain; charset=utf-8", "404 Not Found", 13, strcmp(method, "HEAD") == 0);
+        px_px_send(fd, 404, "text/plain; charset=utf-8", "404 Not Found", 13, strcmp(method, "HEAD") == 0);
         close(fd);
-        return lx_null();
+        return px_null();
     }
     // 目录 → index.px / index.html
     char fpath[4096];
@@ -4965,9 +4965,9 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         if (stat(fpath, &st) != 0) {
             snprintf(fpath, sizeof(fpath), "%s/index.html", full);
             if (stat(fpath, &st) != 0) {
-                lx_px_send(fd, 404, "text/plain; charset=utf-8", "404 Not Found", 13, strcmp(method, "HEAD") == 0);
+                px_px_send(fd, 404, "text/plain; charset=utf-8", "404 Not Found", 13, strcmp(method, "HEAD") == 0);
                 close(fd);
-                return lx_null();
+                return px_null();
             }
         }
     } else {
@@ -4979,34 +4979,34 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
 
     if (is_px) {
         // ---- .px 脚本执行：fork + exec `px run`，PX_INIT_GLOBALS 传递请求上下文 ----
-        LXValue get = lx_parse_urlenc(query);
-        LXValue post = lx_dict_get(req, "form");
-        if (post.type != LX_DICT) post = lx_dict();
-        LXValue server = lx_dict();
-        lx_dict_set(server, "port", lx_int(port));
-        lx_dict_set(server, "docroot", lx_str(docroot));
-        lx_dict_set(server, "script", lx_str(fpath));
-        lx_dict_set(server, "px", lx_str("0.1.0"));
-        LXValue env = lx_dict();
-        lx_dict_set(env, "REQUEST", req);
-        lx_dict_set(env, "GET", get);
-        lx_dict_set(env, "POST", post);
-        lx_dict_set(env, "SERVER", server);
-        LXValue j = lx_call(lx_get_global("json_stringify"), &env, 1);
-        char* env_json = (j.type == LX_STR) ? strdup(j.as.obj->as.str.data) : NULL;
+        LXValue get = px_parse_urlenc(query);
+        LXValue post = px_dict_get(req, "form");
+        if (post.type != PX_DICT) post = px_dict();
+        LXValue server = px_dict();
+        px_dict_set(server, "port", px_int(port));
+        px_dict_set(server, "docroot", px_str(docroot));
+        px_dict_set(server, "script", px_str(fpath));
+        px_dict_set(server, "px", px_str("0.1.0"));
+        LXValue env = px_dict();
+        px_dict_set(env, "REQUEST", req);
+        px_dict_set(env, "GET", get);
+        px_dict_set(env, "POST", post);
+        px_dict_set(env, "SERVER", server);
+        LXValue j = px_call(px_get_global("json_stringify"), &env, 1);
+        char* env_json = (j.type == PX_STR) ? strdup(j.as.obj->as.str.data) : NULL;
 
         char* out = NULL;
         int out_len = 0, exit_code = 0;
-        int rc = lx_run_px_child(fpath, env_json, 1, timeout_ms, &out, &out_len, &exit_code);
+        int rc = px_run_px_child(fpath, env_json, 1, timeout_ms, &out, &out_len, &exit_code);
         if (env_json) free(env_json);
         if (rc == 1) {
             char msg[128];
             int ml = snprintf(msg, sizeof(msg), "504 Gateway Timeout: 脚本执行超时（>%dms）", timeout_ms);
-            lx_px_send(fd, 504, "text/plain; charset=utf-8", msg, ml, head_only);
+            px_px_send(fd, 504, "text/plain; charset=utf-8", msg, ml, head_only);
         } else if (exit_code != 0) {
             char msg[70000];
             int ml = snprintf(msg, sizeof(msg), "500 Internal Server Error\n\n%.60000s", out ? out : "");
-            lx_px_send(fd, 500, "text/plain; charset=utf-8", msg, ml, head_only);
+            px_px_send(fd, 500, "text/plain; charset=utf-8", msg, ml, head_only);
         } else {
             // 解析脚本 RESPONSE 全局变量（px run 以 __PX_RESPONSE__:JSON 打印到 stdout 尾部）
             int status = 200;
@@ -5019,22 +5019,22 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
                 body_len = (int)(marker - out);
                 while (body_len > 0 && (body[body_len - 1] == '\n' || body[body_len - 1] == '\r')) body_len--;
                 char* jstr = marker + 16;  // strlen("__PX_RESPONSE__:")
-                LXValue jv = lx_str(jstr);
-                LXValue resp = lx_call(lx_get_global("json_parse"), &jv, 1);
-                if (resp.type == LX_DICT) {
-                    LXValue st = lx_dict_get(resp, "status");
-                    if (st.type == LX_INT) status = (int)st.as.i;
-                    LXValue b = lx_dict_get(resp, "body");
-                    if (b.type == LX_STR) {
+                LXValue jv = px_str(jstr);
+                LXValue resp = px_call(px_get_global("json_parse"), &jv, 1);
+                if (resp.type == PX_DICT) {
+                    LXValue st = px_dict_get(resp, "status");
+                    if (st.type == PX_INT) status = (int)st.as.i;
+                    LXValue b = px_dict_get(resp, "body");
+                    if (b.type == PX_STR) {
                         body = b.as.obj->as.str.data;
                         body_len = b.as.obj->as.str.len;
                     }
-                    LXValue h = lx_dict_get(resp, "headers");
-                    if (h.type == LX_DICT) {
+                    LXValue h = px_dict_get(resp, "headers");
+                    if (h.type == PX_DICT) {
                         LXObject* ho = h.as.obj;
                         for (int i = 0; i < ho->as.dict.len; i++) {
                             if (strcasecmp(ho->as.dict.keys[i], "Content-Type") == 0 &&
-                                ho->as.dict.vals[i].type == LX_STR) {
+                                ho->as.dict.vals[i].type == PX_STR) {
                                 ct = ho->as.dict.vals[i].as.obj->as.str.data;
                                 break;
                             }
@@ -5042,16 +5042,16 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
                     }
                 }
             }
-            lx_px_send(fd, status, ct, body ? body : "", body_len, head_only);
+            px_px_send(fd, status, ct, body ? body : "", body_len, head_only);
         }
         if (out) xfree(out);
     } else {
         // ---- 静态文件 ----
         FILE* f = fopen(fpath, "rb");
         if (!f) {
-            lx_px_send(fd, 404, "text/plain; charset=utf-8", "404 Not Found", 13, head_only);
+            px_px_send(fd, 404, "text/plain; charset=utf-8", "404 Not Found", 13, head_only);
             close(fd);
-            return lx_null();
+            return px_null();
         }
         fseek(f, 0, SEEK_END);
         long fsz = ftell(f);
@@ -5060,36 +5060,36 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         char* data = xmalloc((size_t)fsz + 1);
         size_t got = fread(data, 1, (size_t)fsz, f);
         fclose(f);
-        const char* ct2 = lx_mime_type(fpath);
-        lx_px_send(fd, 200, ct2, data, (int)got, head_only);
+        const char* ct2 = px_mime_type(fpath);
+        px_px_send(fd, 200, ct2, data, (int)got, head_only);
         xfree(data);
     }
     close(fd);
-    return lx_null();
+    return px_null();
 }
 
-// px_serve(port, docroot[, timeout_ms])：阻塞 accept 循环（Go 风格），每连接 lx_spawn 处理
+// px_serve(port, docroot[, timeout_ms])：阻塞 accept 循环（Go 风格），每连接 px_spawn 处理
 static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 2 || nargs > 3) lx_error("px_serve 需要 (port, docroot[, timeout_ms]) 参数");
-    if (args[0].type != LX_INT) lx_error("px_serve 的 port 需要整数");
-    if (args[1].type != LX_STR) lx_error("px_serve 的 docroot 需要字符串");
+    if (nargs < 2 || nargs > 3) px_error("px_serve 需要 (port, docroot[, timeout_ms]) 参数");
+    if (args[0].type != PX_INT) px_error("px_serve 的 port 需要整数");
+    if (args[1].type != PX_STR) px_error("px_serve 的 docroot 需要字符串");
     const char* docroot = args[1].as.obj->as.str.data;
     struct stat st;
     if (stat(docroot, &st) != 0 || !S_ISDIR(st.st_mode)) {
-        lx_error("px_serve: docroot 不是有效目录: %s", docroot);
+        px_error("px_serve: docroot 不是有效目录: %s", docroot);
     }
     int timeout_ms = 10000;
-    if (nargs == 3 && args[2].type == LX_INT) timeout_ms = (int)args[2].as.i;
+    if (nargs == 3 && args[2].type == PX_INT) timeout_ms = (int)args[2].as.i;
     if (timeout_ms < 1) timeout_ms = 1;
     int port = (int)args[0].as.i;
     // docroot / timeout / port 存全局表（GC 扫描根）
-    lx_set_global("__px_docroot", lx_str(docroot));
-    lx_set_global("__px_timeout", lx_int(timeout_ms));
-    lx_set_global("__px_port", lx_int(port));
+    px_set_global("__px_docroot", px_str(docroot));
+    px_set_global("__px_timeout", px_int(timeout_ms));
+    px_set_global("__px_port", px_int(port));
 
     int sfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sfd < 0) lx_error("px_serve: socket 创建失败");
+    if (sfd < 0) px_error("px_serve: socket 创建失败");
     int one = 1;
     setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
     struct sockaddr_in addr;
@@ -5099,58 +5099,58 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     addr.sin_port = htons((uint16_t)port);
     if (bind(sfd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
         close(sfd);
-        lx_error("px_serve: 绑定端口 %d 失败", port);
+        px_error("px_serve: 绑定端口 %d 失败", port);
     }
     if (listen(sfd, 128) < 0) {
         close(sfd);
-        lx_error("px_serve: listen 失败");
+        px_error("px_serve: listen 失败");
     }
     fprintf(stderr, "[px-serve] 普贤应用服务器 docroot=%s 端口=%d 超时=%dms\n", docroot, port, timeout_ms);
     for (;;) {
         int cfd = accept(sfd, NULL, NULL);
         if (cfd < 0) continue;
-        LXValue arg = lx_int(cfd);
-        lx_spawn(px_conn_worker, &arg, 1);
+        LXValue arg = px_int(cfd);
+        px_spawn(px_conn_worker, &arg, 1);
     }
-    return lx_null(); // 不可达
+    return px_null(); // 不可达
 }
 
 // px_exec(path, params?)：子进程执行 `px run` 并捕获 stdout
 // 文件不存在 → null；params dict → PX_INIT_GLOBALS 注入脚本全局变量
 static LXValue bi_px_exec(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || nargs > 2) lx_error("px_exec 需要 (path[, params]) 参数");
-    if (args[0].type != LX_STR) lx_error("px_exec 的 path 需要字符串");
+    if (nargs < 1 || nargs > 2) px_error("px_exec 需要 (path[, params]) 参数");
+    if (args[0].type != PX_STR) px_error("px_exec 的 path 需要字符串");
     const char* path = args[0].as.obj->as.str.data;
     struct stat st;
-    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) return lx_null();
+    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) return px_null();
     char* env_json = NULL;
-    LXValue params = (nargs == 2) ? args[1] : lx_null();
+    LXValue params = (nargs == 2) ? args[1] : px_null();
     // params 为 dict 或 null/缺省 时都构建默认 env（与解释器模式一致：补默认
     // REQUEST/GET/POST/SERVER 空值，Web 风格脚本在非 Web 语境下也能安全运行；
     // dict 的键注入为全局变量，可覆盖默认 4 个）
-    if (params.type == LX_DICT || params.type == LX_NULL) {
-        LXValue env = lx_dict();
-        lx_dict_set(env, "REQUEST", lx_dict());
-        lx_dict_set(env, "GET", lx_dict());
-        lx_dict_set(env, "POST", lx_dict());
-        LXValue srv = lx_dict();
-        lx_dict_set(srv, "px", lx_str("0.1.0"));
-        lx_dict_set(env, "SERVER", srv);
-        if (params.type == LX_DICT) {
+    if (params.type == PX_DICT || params.type == PX_NULL) {
+        LXValue env = px_dict();
+        px_dict_set(env, "REQUEST", px_dict());
+        px_dict_set(env, "GET", px_dict());
+        px_dict_set(env, "POST", px_dict());
+        LXValue srv = px_dict();
+        px_dict_set(srv, "px", px_str("0.1.0"));
+        px_dict_set(env, "SERVER", srv);
+        if (params.type == PX_DICT) {
             LXObject* o = params.as.obj;
             for (int i = 0; i < o->as.dict.len; i++) {
-                lx_dict_set(env, o->as.dict.keys[i], o->as.dict.vals[i]);
+                px_dict_set(env, o->as.dict.keys[i], o->as.dict.vals[i]);
             }
         }
-        LXValue j = lx_call(lx_get_global("json_stringify"), &env, 1);
-        if (j.type == LX_STR) env_json = strdup(j.as.obj->as.str.data);
+        LXValue j = px_call(px_get_global("json_stringify"), &env, 1);
+        if (j.type == PX_STR) env_json = strdup(j.as.obj->as.str.data);
     }
     char* out = NULL;
     int out_len = 0, exit_code = 0;
-    int rc = lx_run_px_child(path, env_json, 0, 0, &out, &out_len, &exit_code);
+    int rc = px_run_px_child(path, env_json, 0, 0, &out, &out_len, &exit_code);
     if (env_json) free(env_json);
-    LXValue r = rc == 0 ? lx_str_len(out, out_len) : lx_str("");
+    LXValue r = rc == 0 ? px_str_len(out, out_len) : px_str("");
     if (out) xfree(out);
     return r;
 }

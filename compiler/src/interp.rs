@@ -2304,7 +2304,7 @@ def main():
 
     #[test]
     fn test_timer_callback_modifies_global_from_named_fn() {
-        // M18 顺带修复的编译器 bug：命名函数内修改全局变量（编译模式 lx_get/set_global）
+        // M18 顺带修复的编译器 bug：命名函数内修改全局变量（编译模式 px_get/set_global）
         let src = r#"
 n = 0
 def inc():

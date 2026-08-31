@@ -22,7 +22,7 @@ pub struct Codegen {
     vars: HashMap<String, String>,
     // 简单类型推断：变量名 → 结构体类型名（用于方法静态分派）
     var_types: HashMap<String, String>,
-    // 顶层全局名（M18 修复：函数内赋值到全局变量应生成 lx_get/set_global，
+    // 顶层全局名（M18 修复：函数内赋值到全局变量应生成 px_get/set_global，
     // 而非被 collect_assign_vars 预声明为函数局部变量 → null + 1 运行时错误）
     globals: HashSet<String>,
     uid: usize,
@@ -123,13 +123,13 @@ impl Codegen {
 
         // 第三遍：生成 main()
         out.push_str("int main(void) {\n");
-        out.push_str("    lx_register_builtins();\n");
+        out.push_str("    px_register_builtins();\n");
 
         // 注册顶层函数
         for f in &top_defs {
             let cname = format!("fn_{}", self.func_cname(&f.name));
             out.push_str(&format!(
-                "    lx_set_global(\"{}\", lx_func(\"{}\", {}, NULL));\n",
+                "    px_set_global(\"{}\", px_func(\"{}\", {}, NULL));\n",
                 f.name, f.name, cname
             ));
         }
@@ -138,7 +138,7 @@ impl Codegen {
         for (type_name, m) in &impl_list {
             let fname = format!("fn_{}_{}", self.func_cname(type_name), self.func_cname(&m.name));
             out.push_str(&format!(
-                "    lx_set_global(\"{}.{}\", lx_func(\"{}.{}\", {}, NULL));\n",
+                "    px_set_global(\"{}.{}\", px_func(\"{}.{}\", {}, NULL));\n",
                 type_name, m.name, type_name, m.name, fname
             ));
         }
@@ -239,14 +239,14 @@ impl Codegen {
         for (i, p) in f.params.iter().enumerate() {
             let v = self.new_var(&p.name);
             s.push_str(&format!(
-                "    LXValue {} = (nargs > {}) ? args[{}] : lx_null();\n",
+                "    LXValue {} = (nargs > {}) ? args[{}] : px_null();\n",
                 v, i, i
             ));
         }
         // 预扫描：函数体内赋值（x = ... / x += ...）的变量视为局部变量（Python 语义）
-        // 避免生成全局 lx_set_global / lx_get_global 导致状态泄漏与复合赋值丢失
+        // 避免生成全局 px_set_global / px_get_global 导致状态泄漏与复合赋值丢失
         // M18 修复：顶层全局名（self.globals）不声明为局部——函数内修改全局变量
-        // 应走 lx_get_global/lx_set_global（与解释器语义一致）；否则全局变量在函数内
+        // 应走 px_get_global/px_set_global（与解释器语义一致）；否则全局变量在函数内
         // 被初始化为局部 null，`n = n + 1` 报"无法相加: null + int"。
         let mut assign_names: Vec<String> = Vec::new();
         Self::collect_assign_vars(&f.body, &mut assign_names);
@@ -258,13 +258,13 @@ impl Codegen {
                 continue; // 顶层全局变量：函数内赋值更新全局
             }
             let v = self.new_var(name);
-            s.push_str(&format!("    LXValue {} = lx_null();\n", v));
+            s.push_str(&format!("    LXValue {} = px_null();\n", v));
         }
         // 函数体
         for stmt in &f.body {
             s.push_str(&self.gen_stmt(stmt, 1)?);
         }
-        s.push_str("    return lx_null();\n");
+        s.push_str("    return px_null();\n");
         s.push_str("}\n");
         // 恢复外层变量表
         self.vars = saved_vars;
@@ -307,7 +307,7 @@ impl Codegen {
                 let v = self.new_var(name);
                 let rhs = match value {
                     Some(e) => self.gen_expr(e)?,
-                    None => "lx_null()".to_string(),
+                    None => "px_null()".to_string(),
                 };
                 // 类型推断：结构体构造（Expr::Call 形式 Point(1,2) 或 Constructor）
                 if let Some(e) = value {
@@ -340,52 +340,52 @@ impl Codegen {
                                 // 全局变量（M18 修复：复合赋值须先读全局再运算再写回）
                                 if *op == AssignOp::Assign {
                                     return Ok(format!(
-                                        "{}lx_set_global(\"{}\", {});\n",
+                                        "{}px_set_global(\"{}\", {});\n",
                                         pad, name, rhs
                                     ));
                                 }
                                 let full = match op {
                                     AssignOp::Assign => rhs.clone(),
-                                    AssignOp::Plus => format!("lx_add(lx_get_global(\"{}\"), {})", name, rhs),
-                                    AssignOp::Minus => format!("lx_sub(lx_get_global(\"{}\"), {})", name, rhs),
-                                    AssignOp::Star => format!("lx_mul(lx_get_global(\"{}\"), {})", name, rhs),
-                                    AssignOp::Slash => format!("lx_div(lx_get_global(\"{}\"), {})", name, rhs),
-                                    AssignOp::IntDiv => format!("lx_idiv(lx_get_global(\"{}\"), {})", name, rhs),
-                                    AssignOp::Mod => format!("lx_mod(lx_get_global(\"{}\"), {})", name, rhs),
-                                    AssignOp::Pow => format!("lx_pow(lx_get_global(\"{}\"), {})", name, rhs),
-                                    AssignOp::BitAnd => format!("lx_bitand(lx_get_global(\"{}\"), {})", name, rhs),
-                                    AssignOp::BitOr => format!("lx_bitor(lx_get_global(\"{}\"), {})", name, rhs),
-                                    AssignOp::BitXor => format!("lx_bitxor(lx_get_global(\"{}\"), {})", name, rhs),
-                                    AssignOp::Shl => format!("lx_shl(lx_get_global(\"{}\"), {})", name, rhs),
-                                    AssignOp::Shr => format!("lx_shr(lx_get_global(\"{}\"), {})", name, rhs),
+                                    AssignOp::Plus => format!("px_add(px_get_global(\"{}\"), {})", name, rhs),
+                                    AssignOp::Minus => format!("px_sub(px_get_global(\"{}\"), {})", name, rhs),
+                                    AssignOp::Star => format!("px_mul(px_get_global(\"{}\"), {})", name, rhs),
+                                    AssignOp::Slash => format!("px_div(px_get_global(\"{}\"), {})", name, rhs),
+                                    AssignOp::IntDiv => format!("px_idiv(px_get_global(\"{}\"), {})", name, rhs),
+                                    AssignOp::Mod => format!("px_mod(px_get_global(\"{}\"), {})", name, rhs),
+                                    AssignOp::Pow => format!("px_pow(px_get_global(\"{}\"), {})", name, rhs),
+                                    AssignOp::BitAnd => format!("px_bitand(px_get_global(\"{}\"), {})", name, rhs),
+                                    AssignOp::BitOr => format!("px_bitor(px_get_global(\"{}\"), {})", name, rhs),
+                                    AssignOp::BitXor => format!("px_bitxor(px_get_global(\"{}\"), {})", name, rhs),
+                                    AssignOp::Shl => format!("px_shl(px_get_global(\"{}\"), {})", name, rhs),
+                                    AssignOp::Shr => format!("px_shr(px_get_global(\"{}\"), {})", name, rhs),
                                 };
                                 return Ok(format!(
-                                    "{}lx_set_global(\"{}\", {});\n",
+                                    "{}px_set_global(\"{}\", {});\n",
                                     pad, name, full
                                 ));
                             }
                         };
                         let full = match op {
                             AssignOp::Assign => rhs,
-                            AssignOp::Plus => format!("lx_add({}, {})", v, rhs),
-                            AssignOp::Minus => format!("lx_sub({}, {})", v, rhs),
-                            AssignOp::Star => format!("lx_mul({}, {})", v, rhs),
-                            AssignOp::Slash => format!("lx_div({}, {})", v, rhs),
-                            AssignOp::IntDiv => format!("lx_idiv({}, {})", v, rhs),
-                            AssignOp::Mod => format!("lx_mod({}, {})", v, rhs),
-                            AssignOp::Pow => format!("lx_pow({}, {})", v, rhs),
-                            AssignOp::BitAnd => format!("lx_bitand({}, {})", v, rhs),
-                            AssignOp::BitOr => format!("lx_bitor({}, {})", v, rhs),
-                            AssignOp::BitXor => format!("lx_bitxor({}, {})", v, rhs),
-                            AssignOp::Shl => format!("lx_shl({}, {})", v, rhs),
-                            AssignOp::Shr => format!("lx_shr({}, {})", v, rhs),
+                            AssignOp::Plus => format!("px_add({}, {})", v, rhs),
+                            AssignOp::Minus => format!("px_sub({}, {})", v, rhs),
+                            AssignOp::Star => format!("px_mul({}, {})", v, rhs),
+                            AssignOp::Slash => format!("px_div({}, {})", v, rhs),
+                            AssignOp::IntDiv => format!("px_idiv({}, {})", v, rhs),
+                            AssignOp::Mod => format!("px_mod({}, {})", v, rhs),
+                            AssignOp::Pow => format!("px_pow({}, {})", v, rhs),
+                            AssignOp::BitAnd => format!("px_bitand({}, {})", v, rhs),
+                            AssignOp::BitOr => format!("px_bitor({}, {})", v, rhs),
+                            AssignOp::BitXor => format!("px_bitxor({}, {})", v, rhs),
+                            AssignOp::Shl => format!("px_shl({}, {})", v, rhs),
+                            AssignOp::Shr => format!("px_shr({}, {})", v, rhs),
                         };
                         Ok(format!("{} {} = {};\n", pad, v, full))
                     }
                     Expr::Field { obj, name, .. } => {
                         let o = self.gen_expr(obj)?;
                         Ok(format!(
-                            "{}lx_field_set({}, \"{}\", {});\n",
+                            "{}px_field_set({}, \"{}\", {});\n",
                             pad, o, name, rhs
                         ))
                     }
@@ -393,7 +393,7 @@ impl Codegen {
                         let o = self.gen_expr(obj)?;
                         let i = self.gen_expr(index)?;
                         Ok(format!(
-                            "{}lx_index_set({}, {}, {});\n",
+                            "{}px_index_set({}, {}, {});\n",
                             pad, o, i, rhs
                         ))
                     }
@@ -409,7 +409,7 @@ impl Codegen {
                 for (i, (cond, body)) in branches.iter().enumerate() {
                     let c = self.gen_expr(cond)?;
                     let kw = if i == 0 { "if" } else { "else if" };
-                    s.push_str(&format!("{}{} (lx_is_truthy({})) {{\n", pad, kw, c));
+                    s.push_str(&format!("{}{} (px_is_truthy({})) {{\n", pad, kw, c));
                     for st in body {
                         s.push_str(&self.gen_stmt(st, indent + 1)?);
                     }
@@ -426,7 +426,7 @@ impl Codegen {
             }
             Stmt::While { cond, body, .. } => {
                 let c = self.gen_expr(cond)?;
-                let mut s = format!("{}while (lx_is_truthy({})) {{\n", pad, c);
+                let mut s = format!("{}while (px_is_truthy({})) {{\n", pad, c);
                 for st in body {
                     s.push_str(&self.gen_stmt(st, indent + 1)?);
                 }
@@ -460,7 +460,7 @@ impl Codegen {
                         let e = self.gen_expr(e)?;
                         Ok(format!("{}return {};\n", pad, e))
                     }
-                    None => Ok(format!("{}return lx_null();\n", pad)),
+                    None => Ok(format!("{}return px_null();\n", pad)),
                 }
             }
             Stmt::Break { .. } => Ok(format!("{}break;\n", pad)),
@@ -468,16 +468,16 @@ impl Codegen {
             Stmt::Empty { .. } => Ok(String::new()),
             Stmt::ChanDecl { name, elem_ty: _, pos: _ } => {
                 let v = self.new_var(name);
-                Ok(format!("{}LXValue {} = lx_chan_create(0);\n", pad, v))
+                Ok(format!("{}LXValue {} = px_chan_create(0);\n", pad, v))
             }
             Stmt::Send { chan, value, pos: _ } => {
                 let c = self.gen_expr(chan)?;
                 let v = self.gen_expr(value)?;
-                Ok(format!("{}lx_chan_send({}, {});\n", pad, c, v))
+                Ok(format!("{}px_chan_send({}, {});\n", pad, c, v))
             }
             Stmt::Recv { chan, pos: _ } => {
                 let c = self.gen_expr(chan)?;
-                Ok(format!("{}lx_chan_recv({});\n", pad, c))
+                Ok(format!("{}px_chan_recv({});\n", pad, c))
             }
             Stmt::Spawn { expr, pos: _ } => {
                 match expr.as_ref() {
@@ -488,7 +488,7 @@ impl Codegen {
                                 parts.push(self.gen_expr(a)?);
                             }
                             Ok(format!(
-                                "{}lx_spawn_name(\"{}\", (LXValue[]){{{}}}, {});\n",
+                                "{}px_spawn_name(\"{}\", (LXValue[]){{{}}}, {});\n",
                                 pad,
                                 fname,
                                 parts.join(", "),
@@ -578,7 +578,7 @@ impl Codegen {
             shuffle.push_str("}\n");
             s.push_str(&shuffle);
         }
-        s.push_str(&format!("{}    LXValue _rv{} = lx_null();\n", pad, uid));
+        s.push_str(&format!("{}    LXValue _rv{} = px_null();\n", pad, uid));
         s.push_str(&format!("{}    int _picked{} = -1;\n", pad, uid));
         s.push_str(&format!(
             "{}    for (int _k{} = 0; _k{} < {}; _k{}++) {{\n",
@@ -589,7 +589,7 @@ impl Codegen {
             pad, uid, uid, uid
         ));
         s.push_str(&format!(
-            "{}        if (lx_chan_try_recv(_chans{}[_idx{}], &_rv{})) {{ _picked{} = _idx{}; break; }}\n",
+            "{}        if (px_chan_try_recv(_chans{}[_idx{}], &_rv{})) {{ _picked{} = _idx{}; break; }}\n",
             pad, uid, uid, uid, uid, uid
         ));
         s.push_str(&format!("{}    }}\n", pad));
@@ -626,7 +626,7 @@ impl Codegen {
         }
 
         // 无 else：阻塞等待后重试
-        s.push_str(&format!("{}    lx_select_wait();\n", pad));
+        s.push_str(&format!("{}    px_select_wait();\n", pad));
         s.push_str(&format!("{}}}\n", pad));
         s.push_str(&format!("{}goto _sel_retry_{};\n", pad, uid));
         s.push_str(&format!("{}_sel_done_{}: ;\n", pad, uid));
@@ -640,18 +640,18 @@ impl Codegen {
 
     fn gen_expr(&mut self, expr: &Expr) -> Result<String, String> {
         match expr {
-            Expr::Int { value, .. } => Ok(format!("lx_int({}LL)", value)),
-            Expr::Float { value, .. } => Ok(format!("lx_float({})", value)),
-            Expr::Str { value, .. } => Ok(format!("lx_str(\"{}\")", self.escape_str(value))),
-            Expr::Bool { value, .. } => Ok(format!("lx_bool({})", if *value { "true" } else { "false" })),
-            Expr::Null { .. } => Ok("lx_null()".to_string()),
+            Expr::Int { value, .. } => Ok(format!("px_int({}LL)", value)),
+            Expr::Float { value, .. } => Ok(format!("px_float({})", value)),
+            Expr::Str { value, .. } => Ok(format!("px_str(\"{}\")", self.escape_str(value))),
+            Expr::Bool { value, .. } => Ok(format!("px_bool({})", if *value { "true" } else { "false" })),
+            Expr::Null { .. } => Ok("px_null()".to_string()),
             Expr::List { items, .. } => {
                 let mut parts = Vec::new();
                 for it in items {
                     parts.push(self.gen_expr(it)?);
                 }
                 Ok(format!(
-                    "lx_list_n((LXValue[]){{{}}}, {})",
+                    "px_list_n((LXValue[]){{{}}}, {})",
                     parts.join(", "),
                     parts.len()
                 ))
@@ -662,19 +662,19 @@ impl Codegen {
                     parts.push(self.gen_expr(it)?);
                 }
                 Ok(format!(
-                    "lx_tuple((LXValue[]){{{}}}, {})",
+                    "px_tuple((LXValue[]){{{}}}, {})",
                     parts.join(", "),
                     parts.len()
                 ))
             }
             Expr::Dict { entries, .. } => {
-                let mut s = format!("({{ LXValue _d = lx_dict(); ");
+                let mut s = format!("({{ LXValue _d = px_dict(); ");
                 for (k, v) in entries {
                     let ke = self.gen_expr(k)?;
                     let ve = self.gen_expr(v)?;
                     // 键转字符串：MVP 支持字符串键
                     s.push_str(&format!(
-                        "{{ LXValue _k = {}; if (_k.type == LX_STR) lx_dict_set(_d, _k.as.obj->as.str.data, {}); }} ",
+                        "{{ LXValue _k = {}; if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, {}); }} ",
                         ke, ve
                     ));
                 }
@@ -686,31 +686,31 @@ impl Codegen {
                     Ok(v.clone())
                 } else {
                     // 内置函数 / 全局
-                    Ok(format!("lx_get_global(\"{}\")", name))
+                    Ok(format!("px_get_global(\"{}\")", name))
                 }
             }
             Expr::Field { obj, name, .. } => {
                 // enum 变体访问：Color.Red
                 if let Expr::Var { name: oname, .. } = obj.as_ref() {
                     if self.enums.contains_key(oname) {
-                        return Ok(format!("lx_enum(\"{}\", \"{}\")", oname, name));
+                        return Ok(format!("px_enum(\"{}\", \"{}\")", oname, name));
                     }
                 }
                 let o = self.gen_expr(obj)?;
-                Ok(format!("lx_field({}, \"{}\")", o, name))
+                Ok(format!("px_field({}, \"{}\")", o, name))
             }
             Expr::OptionalField { obj, name, .. } => {
                 let o = self.gen_expr(obj)?;
                 let t = self.tmp();
                 Ok(format!(
-                    "({{ LXValue {} = {}; lx_is_null({}) ? lx_null() : lx_field({}, \"{}\"); }})",
+                    "({{ LXValue {} = {}; px_is_null({}) ? px_null() : px_field({}, \"{}\"); }})",
                     t, o, t, o, name
                 ))
             }
             Expr::Index { obj, index, .. } => {
                 let o = self.gen_expr(obj)?;
                 let i = self.gen_expr(index)?;
-                Ok(format!("lx_index({}, {})", o, i))
+                Ok(format!("px_index({}, {})", o, i))
             }
             Expr::Call { callee, args, .. } => {
                 // 通道构造：chan[T](cap) / chan[T]() 解析为 Call(Var("chan"))
@@ -721,14 +721,14 @@ impl Codegen {
                             Some(a) => format!("(int)({}).as.i", self.gen_expr(a)?),
                             None => "0".to_string(),
                         };
-                        return Ok(format!("lx_chan_create({})", cap));
+                        return Ok(format!("px_chan_create({})", cap));
                     }
                     // M13：锁构造 mutex() / rwlock()
                     if cname == "mutex" {
-                        return Ok("lx_mutex_create()".to_string());
+                        return Ok("px_mutex_create()".to_string());
                     }
                     if cname == "rwlock" {
-                        return Ok("lx_rwlock_create()".to_string());
+                        return Ok("px_rwlock_create()".to_string());
                     }
                 }
                 // 结构体/枚举构造：Point(1,2) 解析为 Call(Var("Point"))
@@ -743,7 +743,7 @@ impl Codegen {
                         }
                         let fnames: Vec<String> = fields.iter().map(|f| format!("\"{}\"", f)).collect();
                         return Ok(format!(
-                            "lx_struct(\"{}\", (char*[]){{{}}}, (LXValue[]){{{}}}, {})",
+                            "px_struct(\"{}\", (char*[]){{{}}}, (LXValue[]){{{}}}, {})",
                             cname,
                             fnames.join(", "),
                             parts.join(", "),
@@ -755,7 +755,7 @@ impl Codegen {
                             return Err(format!("枚举 {} 构造需要一个变体名", cname));
                         }
                         let v = self.gen_expr(&args[0])?;
-                        return Ok(format!("lx_enum(\"{}\", ({}).as.obj->as.enum_inst.variant)", cname, v));
+                        return Ok(format!("px_enum(\"{}\", ({}).as.obj->as.enum_inst.variant)", cname, v));
                     }
                 }
                 // 方法调用：obj.method(args)
@@ -790,7 +790,7 @@ impl Codegen {
                         parts.push(self.gen_expr(a)?);
                     }
                     return Ok(format!(
-                        "lx_method({}, \"{}\", (LXValue[]){{{}}}, {})",
+                        "px_method({}, \"{}\", (LXValue[]){{{}}}, {})",
                         o,
                         name,
                         parts.join(", "),
@@ -804,7 +804,7 @@ impl Codegen {
                     parts.push(self.gen_expr(a)?);
                 }
                 Ok(format!(
-                    "lx_call({}, (LXValue[]){{{}}}, {})",
+                    "px_call({}, (LXValue[]){{{}}}, {})",
                     c,
                     parts.join(", "),
                     parts.len()
@@ -813,9 +813,9 @@ impl Codegen {
             Expr::Unary { op, operand, .. } => {
                 let o = self.gen_expr(operand)?;
                 match op {
-                    UnaryOp::Neg => Ok(format!("lx_neg({})", o)),
-                    UnaryOp::Not => Ok(format!("lx_not({})", o)),
-                    UnaryOp::BitNot => Ok(format!("lx_bitnot({})", o)),
+                    UnaryOp::Neg => Ok(format!("px_neg({})", o)),
+                    UnaryOp::Not => Ok(format!("px_not({})", o)),
+                    UnaryOp::BitNot => Ok(format!("px_bitnot({})", o)),
                 }
             }
             Expr::Binary { op, left, right, .. } => {
@@ -825,37 +825,37 @@ impl Codegen {
                 if *op == BinaryOp::And {
                     let t = self.tmp();
                     return Ok(format!(
-                        "({{ LXValue {} = {}; lx_is_truthy({}) ? {} : {}; }})",
+                        "({{ LXValue {} = {}; px_is_truthy({}) ? {} : {}; }})",
                         t, l, t, r, t
                     ));
                 }
                 if *op == BinaryOp::Or {
                     let t = self.tmp();
                     return Ok(format!(
-                        "({{ LXValue {} = {}; lx_is_truthy({}) ? {} : {}; }})",
+                        "({{ LXValue {} = {}; px_is_truthy({}) ? {} : {}; }})",
                         t, l, t, t, r
                     ));
                 }
                 let f = match op {
-                    BinaryOp::Add => "lx_add",
-                    BinaryOp::Sub => "lx_sub",
-                    BinaryOp::Mul => "lx_mul",
-                    BinaryOp::Div => "lx_div",
-                    BinaryOp::IntDiv => "lx_idiv",
-                    BinaryOp::Mod => "lx_mod",
-                    BinaryOp::Pow => "lx_pow",
-                    BinaryOp::Eq => "lx_eq",
-                    BinaryOp::Ne => "lx_ne",
-                    BinaryOp::Lt => "lx_lt",
-                    BinaryOp::Le => "lx_le",
-                    BinaryOp::Gt => "lx_gt",
-                    BinaryOp::Ge => "lx_ge",
-                    BinaryOp::BitAnd => "lx_bitand",
-                    BinaryOp::BitOr => "lx_bitor",
-                    BinaryOp::BitXor => "lx_bitxor",
-                    BinaryOp::Shl => "lx_shl",
-                    BinaryOp::Shr => "lx_shr",
-                    _ => "lx_add",
+                    BinaryOp::Add => "px_add",
+                    BinaryOp::Sub => "px_sub",
+                    BinaryOp::Mul => "px_mul",
+                    BinaryOp::Div => "px_div",
+                    BinaryOp::IntDiv => "px_idiv",
+                    BinaryOp::Mod => "px_mod",
+                    BinaryOp::Pow => "px_pow",
+                    BinaryOp::Eq => "px_eq",
+                    BinaryOp::Ne => "px_ne",
+                    BinaryOp::Lt => "px_lt",
+                    BinaryOp::Le => "px_le",
+                    BinaryOp::Gt => "px_gt",
+                    BinaryOp::Ge => "px_ge",
+                    BinaryOp::BitAnd => "px_bitand",
+                    BinaryOp::BitOr => "px_bitor",
+                    BinaryOp::BitXor => "px_bitxor",
+                    BinaryOp::Shl => "px_shl",
+                    BinaryOp::Shr => "px_shr",
+                    _ => "px_add",
                 };
                 Ok(format!("{}({}, {})", f, l, r))
             }
@@ -869,14 +869,14 @@ impl Codegen {
                         parts.push(self.gen_expr(a)?);
                     }
                     Ok(format!(
-                        "lx_call({}, (LXValue[]){{{}}}, {})",
+                        "px_call({}, (LXValue[]){{{}}}, {})",
                         c,
                         parts.join(", "),
                         parts.len()
                     ))
                 } else {
                     let f = self.gen_expr(func)?;
-                    Ok(format!("lx_call({}, (LXValue[]){{{}}}, 1)", f, v))
+                    Ok(format!("px_call({}, (LXValue[]){{{}}}, 1)", f, v))
                 }
             }
             Expr::NullCoalesce { left, right, .. } => {
@@ -884,7 +884,7 @@ impl Codegen {
                 let r = self.gen_expr(right)?;
                 let t = self.tmp();
                 Ok(format!(
-                    "({{ LXValue {} = {}; lx_is_null({}) ? {} : {}; }})",
+                    "({{ LXValue {} = {}; px_is_null({}) ? {} : {}; }})",
                     t, l, t, r, t
                 ))
             }
@@ -893,7 +893,7 @@ impl Codegen {
                 // MVP：直接返回（null 视为错误）
                 let t = self.tmp();
                 Ok(format!(
-                    "({{ LXValue {} = {}; if (lx_is_null({})) lx_error(\"unwrap null value\"); {}; }})",
+                    "({{ LXValue {} = {}; if (px_is_null({})) px_error(\"unwrap null value\"); {}; }})",
                     t, e, t, t
                 ))
             }
@@ -901,7 +901,7 @@ impl Codegen {
                 let e = self.gen_expr(expr)?;
                 let t = self.tmp();
                 Ok(format!(
-                    "({{ LXValue {} = {}; if (lx_is_null({})) lx_error(\"force unwrap null\"); {}; }})",
+                    "({{ LXValue {} = {}; if (px_is_null({})) px_error(\"force unwrap null\"); {}; }})",
                     t, e, t, t
                 ))
             }
@@ -911,7 +911,7 @@ impl Codegen {
                 let b = self.gen_expr(else_)?;
                 let t = self.tmp();
                 Ok(format!(
-                    "({{ LXValue {}; if (lx_is_truthy({})) {{ {} = {}; }} else {{ {} = {}; }} {}; }})",
+                    "({{ LXValue {}; if (px_is_truthy({})) {{ {} = {}; }} else {{ {} = {}; }} {}; }})",
                     t, c, t, a, t, b, t
                 ))
             }
@@ -933,7 +933,7 @@ impl Codegen {
                     None => { self.vars.remove(var); }
                 }
                 let mut s = format!(
-                    "({{ LXValue {} = lx_list(0); LXValue {} = {}; ",
+                    "({{ LXValue {} = px_list(0); LXValue {} = {}; ",
                     rv, iv, it
                 );
                 s.push_str(&format!(
@@ -945,11 +945,11 @@ impl Codegen {
                     lcvar, iv, idx
                 ));
                 if let Some(c) = cond_c {
-                    s.push_str(&format!("if (lx_is_truthy({})) {{ ", c));
-                    s.push_str(&format!("lx_list_push({}, {}); ", rv, e));
+                    s.push_str(&format!("if (px_is_truthy({})) {{ ", c));
+                    s.push_str(&format!("px_list_push({}, {}); ", rv, e));
                     s.push_str("} ");
                 } else {
-                    s.push_str(&format!("lx_list_push({}, {}); ", rv, e));
+                    s.push_str(&format!("px_list_push({}, {}); ", rv, e));
                 }
                 s.push_str("} ");
                 s.push_str(&format!("{}; }})", rv));
@@ -975,7 +975,7 @@ impl Codegen {
                 for (i, p) in params.iter().enumerate() {
                     let v = self.new_var(&p.name);
                     fdef.push_str(&format!(
-                        "    LXValue {} = (nargs > {}) ? args[{}] : lx_null();\n",
+                        "    LXValue {} = (nargs > {}) ? args[{}] : px_null();\n",
                         v, i, i
                     ));
                 }
@@ -986,12 +986,12 @@ impl Codegen {
                 self.closures.push_str(&fdef);
                 self.vars = saved_vars;
                 self.var_types = saved_types;
-                Ok(format!("lx_func(\"<closure{}>\", {}, NULL)", cid, fnname))
+                Ok(format!("px_func(\"<closure{}>\", {}, NULL)", cid, fnname))
             }
             Expr::Block { stmts, .. } => {
                 // 块表达式：执行语句，返回最后一个表达式的值
                 let mut s = String::from("({ ");
-                s.push_str("LXValue _blk = lx_null(); ");
+                s.push_str("LXValue _blk = px_null(); ");
                 for st in stmts {
                     if let Stmt::ExprStmt { expr, .. } = st {
                         let e = self.gen_expr(expr)?;
@@ -1030,7 +1030,7 @@ impl Codegen {
                     }
                     let fnames: Vec<String> = fields.iter().map(|f| format!("\"{}\"", f)).collect();
                     Ok(format!(
-                        "lx_struct(\"{}\", (char*[]){{{}}}, (LXValue[]){{{}}}, {})",
+                        "px_struct(\"{}\", (char*[]){{{}}}, (LXValue[]){{{}}}, {})",
                         name,
                         fnames.join(", "),
                         parts.join(", "),
@@ -1042,7 +1042,7 @@ impl Codegen {
                         return Err(format!("枚举 {} 构造需要一个变体名", name));
                     }
                     let v = self.gen_expr(&args[0])?;
-                    Ok(format!("lx_enum(\"{}\", ({}).as.obj->as.enum_inst.variant)", name, v))
+                    Ok(format!("px_enum(\"{}\", ({}).as.obj->as.enum_inst.variant)", name, v))
                 } else {
                     // 普通函数调用（大写开头变量当函数）
                     let mut parts = Vec::new();
@@ -1050,7 +1050,7 @@ impl Codegen {
                         parts.push(self.gen_expr(a)?);
                     }
                     Ok(format!(
-                        "lx_call(lx_get_global(\"{}\"), (LXValue[]){{{}}}, {})",
+                        "px_call(px_get_global(\"{}\"), (LXValue[]){{{}}}, {})",
                         name,
                         parts.join(", "),
                         parts.len()
@@ -1065,13 +1065,13 @@ impl Codegen {
         match &arm.pattern {
             Pattern::Literal(expr) => {
                 let e = self.gen_expr(expr)?;
-                Ok(format!("lx_is_truthy(lx_eq({}, {}))", subject, e))
+                Ok(format!("px_is_truthy(px_eq({}, {}))", subject, e))
             }
             Pattern::Binding(name) => {
                 // 大写开头 = 枚举变体匹配；小写 = 变量绑定（绑定在 body 中用）
                 if name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
                     Ok(format!(
-                        "({}.type == LX_ENUM && strcmp({}.as.obj->as.enum_inst.variant, \"{}\") == 0)",
+                        "({}.type == PX_ENUM && strcmp({}.as.obj->as.enum_inst.variant, \"{}\") == 0)",
                         subject, subject, name
                     ))
                 } else {
@@ -1093,7 +1093,7 @@ impl Codegen {
             }
             Pattern::Constructor(name, _) => {
                 Ok(format!(
-                    "({}.type == LX_ENUM && strcmp({}.as.obj->as.enum_inst.variant, \"{}\") == 0)",
+                    "({}.type == PX_ENUM && strcmp({}.as.obj->as.enum_inst.variant, \"{}\") == 0)",
                     subject, subject, name
                 ))
             }
@@ -1133,15 +1133,15 @@ mod tests {
     fn test_gen_basic() {
         let c = gen_code("let x = 1 + 2\nprint(x)\n");
         assert!(c.contains("int main(void)"));
-        assert!(c.contains("lx_add"));
+        assert!(c.contains("px_add"));
     }
 
     #[test]
     fn test_gen_chan_create() {
         let c = gen_code("let ch = chan[int](4)\nch.send(1)\nlet v = ch.recv()\n");
-        assert!(c.contains("lx_chan_create(4)"));
-        // send/recv 方法调用 → 运行时 lx_method 分派（lx_method 内部调用 lx_chan_send/recv）
-        assert!(c.contains("lx_method"));
+        assert!(c.contains("px_chan_create(4)"));
+        // send/recv 方法调用 → 运行时 px_method 分派（px_method 内部调用 px_chan_send/recv）
+        assert!(c.contains("px_method"));
         assert!(c.contains("\"send\""));
         assert!(c.contains("\"recv\""));
     }
@@ -1151,7 +1151,7 @@ mod tests {
         let c = gen_code(
             "def worker(id: int, ch):\n    ch.send(id)\nlet ch = chan[int](1)\nspawn worker(1, ch)\n",
         );
-        assert!(c.contains("lx_spawn_name"));
+        assert!(c.contains("px_spawn_name"));
         assert!(c.contains("fn_worker"));
     }
 
@@ -1160,7 +1160,7 @@ mod tests {
         let c = gen_code(
             "select:\n    case x = ch.recv():\n        print(x)\n    case _:\n        print(\"empty\")\n",
         );
-        assert!(c.contains("lx_chan_try_recv"));
+        assert!(c.contains("px_chan_try_recv"));
         assert!(c.contains("_sel_retry_"));
         assert!(c.contains("goto _sel_done_"));
     }
@@ -1169,7 +1169,7 @@ mod tests {
     fn test_gen_assign_local() {
         let c = gen_code("var got = 0\ngot = 42\nprint(got)\n");
         // 赋值必须有目标变量（M4 修复的 bug：不能生成裸 " = 42;"）
-        assert!(!c.contains("     = lx_int(42LL);"));
-        assert!(c.contains("_v1 = lx_int(42LL);"));
+        assert!(!c.contains("     = px_int(42LL);"));
+        assert!(c.contains("_v1 = px_int(42LL);"));
     }
 }

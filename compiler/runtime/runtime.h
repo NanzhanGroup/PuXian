@@ -1,8 +1,8 @@
 // 普贤 (PuXian) C 运行时库 — runtime.h
 // M4 编译模式：动态值系统 + 内置函数
 // MVP 策略：值对象不自动释放（进程退出回收），后续 M6 加 GC
-#ifndef LX_RUNTIME_H
-#define LX_RUNTIME_H
+#ifndef PX_RUNTIME_H
+#define PX_RUNTIME_H
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -17,21 +17,21 @@ extern "C" {
 // ==================== 值类型 ====================
 
 typedef enum {
-    LX_NULL = 0,
-    LX_BOOL,
-    LX_INT,
-    LX_FLOAT,
-    LX_STR,
-    LX_LIST,
-    LX_DICT,
-    LX_FUNC,    // 用户函数（编译为 C 函数）
-    LX_NATIVE,  // 内置函数
-    LX_STRUCT,  // 结构体实例
-    LX_ENUM,    // 枚举值
-    LX_TUPLE,   // 元组
-    LX_CHAN,    // 通道（并发原语）
-    LX_MUTEX,   // 互斥锁（M13：P1 锁原语）
-    LX_RWLOCK,  // 读写锁（M13：读多写少）
+    PX_NULL = 0,
+    PX_BOOL,
+    PX_INT,
+    PX_FLOAT,
+    PX_STR,
+    PX_LIST,
+    PX_DICT,
+    PX_FUNC,    // 用户函数（编译为 C 函数）
+    PX_NATIVE,  // 内置函数
+    PX_STRUCT,  // 结构体实例
+    PX_ENUM,    // 枚举值
+    PX_TUPLE,   // 元组
+    PX_CHAN,    // 通道（并发原语）
+    PX_MUTEX,   // 互斥锁（M13：P1 锁原语）
+    PX_RWLOCK,  // 读写锁（M13：读多写少）
 } LXType;
 
 typedef struct LXValue LXValue;
@@ -90,76 +90,76 @@ struct LXObject {
 
 // ==================== 值构造 ====================
 
-LXValue lx_null(void);
-LXValue lx_bool(bool b);
-LXValue lx_int(int64_t i);
-LXValue lx_float(double f);
-LXValue lx_str(const char* s);
-LXValue lx_str_len(const char* s, int len);
-LXValue lx_list(int cap);
-LXValue lx_list_n(LXValue* items, int n);
-LXValue lx_dict(void);
-LXValue lx_func(const char* name, LXFuncPtr fn, void* ctx);
-LXValue lx_native(const char* name, LXFuncPtr fn);
-LXValue lx_struct(const char* type_name, char** fnames, LXValue* fvals, int nfields);
-LXValue lx_enum(const char* type_name, const char* variant);
-LXValue lx_tuple(LXValue* items, int len);
+LXValue px_null(void);
+LXValue px_bool(bool b);
+LXValue px_int(int64_t i);
+LXValue px_float(double f);
+LXValue px_str(const char* s);
+LXValue px_str_len(const char* s, int len);
+LXValue px_list(int cap);
+LXValue px_list_n(LXValue* items, int n);
+LXValue px_dict(void);
+LXValue px_func(const char* name, LXFuncPtr fn, void* ctx);
+LXValue px_native(const char* name, LXFuncPtr fn);
+LXValue px_struct(const char* type_name, char** fnames, LXValue* fvals, int nfields);
+LXValue px_enum(const char* type_name, const char* variant);
+LXValue px_tuple(LXValue* items, int len);
 
 // ==================== 类型判断 ====================
 
-bool lx_is_null(LXValue v);
-bool lx_is_truthy(LXValue v);
-const char* lx_type_name(LXValue v);
+bool px_is_null(LXValue v);
+bool px_is_truthy(LXValue v);
+const char* px_type_name(LXValue v);
 
 // ==================== 运算 ====================
 
-LXValue lx_add(LXValue a, LXValue b);
-LXValue lx_sub(LXValue a, LXValue b);
-LXValue lx_mul(LXValue a, LXValue b);
-LXValue lx_div(LXValue a, LXValue b);
-LXValue lx_idiv(LXValue a, LXValue b);
-LXValue lx_mod(LXValue a, LXValue b);
-LXValue lx_pow(LXValue a, LXValue b);
-LXValue lx_neg(LXValue a);
-LXValue lx_not(LXValue a);
-LXValue lx_eq(LXValue a, LXValue b);
-LXValue lx_ne(LXValue a, LXValue b);
-LXValue lx_lt(LXValue a, LXValue b);
-LXValue lx_le(LXValue a, LXValue b);
-LXValue lx_gt(LXValue a, LXValue b);
-LXValue lx_ge(LXValue a, LXValue b);
-LXValue lx_and(LXValue a, LXValue b);
-LXValue lx_or(LXValue a, LXValue b);
-LXValue lx_bitnot(LXValue a);
-LXValue lx_bitand(LXValue a, LXValue b);
-LXValue lx_bitor(LXValue a, LXValue b);
-LXValue lx_bitxor(LXValue a, LXValue b);
-LXValue lx_shl(LXValue a, LXValue b);
-LXValue lx_shr(LXValue a, LXValue b);
+LXValue px_add(LXValue a, LXValue b);
+LXValue px_sub(LXValue a, LXValue b);
+LXValue px_mul(LXValue a, LXValue b);
+LXValue px_div(LXValue a, LXValue b);
+LXValue px_idiv(LXValue a, LXValue b);
+LXValue px_mod(LXValue a, LXValue b);
+LXValue px_pow(LXValue a, LXValue b);
+LXValue px_neg(LXValue a);
+LXValue px_not(LXValue a);
+LXValue px_eq(LXValue a, LXValue b);
+LXValue px_ne(LXValue a, LXValue b);
+LXValue px_lt(LXValue a, LXValue b);
+LXValue px_le(LXValue a, LXValue b);
+LXValue px_gt(LXValue a, LXValue b);
+LXValue px_ge(LXValue a, LXValue b);
+LXValue px_and(LXValue a, LXValue b);
+LXValue px_or(LXValue a, LXValue b);
+LXValue px_bitnot(LXValue a);
+LXValue px_bitand(LXValue a, LXValue b);
+LXValue px_bitor(LXValue a, LXValue b);
+LXValue px_bitxor(LXValue a, LXValue b);
+LXValue px_shl(LXValue a, LXValue b);
+LXValue px_shr(LXValue a, LXValue b);
 
 // ==================== 容器操作 ====================
 
-LXValue lx_index(LXValue obj, LXValue idx);
-void lx_index_set(LXValue obj, LXValue idx, LXValue val);
-LXValue lx_field(LXValue obj, const char* name);
-void lx_field_set(LXValue obj, const char* name, LXValue val);
-void lx_list_push(LXValue list, LXValue val);
-void lx_dict_set(LXValue dict, const char* key, LXValue val);
-LXValue lx_dict_get(LXValue dict, const char* key);
-bool lx_dict_has(LXValue dict, const char* key);
-int lx_len(LXValue v);
+LXValue px_index(LXValue obj, LXValue idx);
+void px_index_set(LXValue obj, LXValue idx, LXValue val);
+LXValue px_field(LXValue obj, const char* name);
+void px_field_set(LXValue obj, const char* name, LXValue val);
+void px_list_push(LXValue list, LXValue val);
+void px_dict_set(LXValue dict, const char* key, LXValue val);
+LXValue px_dict_get(LXValue dict, const char* key);
+bool px_dict_has(LXValue dict, const char* key);
+int px_len(LXValue v);
 
 // ==================== 调用 ====================
 
-LXValue lx_call(LXValue fn, LXValue* args, int nargs);
+LXValue px_call(LXValue fn, LXValue* args, int nargs);
 // 方法调用：obj.method(args...)
-LXValue lx_method(LXValue obj, const char* name, LXValue* args, int nargs);
+LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs);
 
 // ==================== 内置函数注册 ====================
 
-void lx_register_builtins(void);
-LXValue lx_get_global(const char* name);
-void lx_set_global(const char* name, LXValue v);
+void px_register_builtins(void);
+LXValue px_get_global(const char* name);
+void px_set_global(const char* name, LXValue v);
 
 // ==================== M19 P1：AES / XML / zip ====================
 // 实现文件：runtime_aes.c（mbedtls）、runtime_xml.c、runtime_zip.c（miniz）
@@ -175,64 +175,64 @@ LXValue bi_zip_unpack(LXValue* args, int nargs, void* ctx);
 
 // ==================== 输出 ====================
 
-void lx_print_value(LXValue v, bool newline);
-char* lx_to_string(LXValue v);  // 返回静态缓冲（每次调用覆盖）
-int lx_unicode_len(const char* s);
+void px_print_value(LXValue v, bool newline);
+char* px_to_string(LXValue v);  // 返回静态缓冲（每次调用覆盖）
+int px_unicode_len(const char* s);
 
 // ==================== 并发原语（M4.2） ====================
 
-// 通道：lx_chan_create(cap) —— cap=0 无缓冲（rendezvous），cap>0 有缓冲
-LXValue lx_chan_create(int cap);
-LXValue lx_chan_send(LXValue ch, LXValue v);  // 阻塞发送（满则等待，关闭报错）
-LXValue lx_chan_recv(LXValue ch);             // 阻塞接收（空则等待，关闭且空报错）
-bool lx_chan_try_recv(LXValue ch, LXValue* out); // 非阻塞尝试（select 用）
-void lx_chan_close(LXValue ch);               // 关闭：唤醒等待者
-bool lx_is_chan(LXValue v);
+// 通道：px_chan_create(cap) —— cap=0 无缓冲（rendezvous），cap>0 有缓冲
+LXValue px_chan_create(int cap);
+LXValue px_chan_send(LXValue ch, LXValue v);  // 阻塞发送（满则等待，关闭报错）
+LXValue px_chan_recv(LXValue ch);             // 阻塞接收（空则等待，关闭且空报错）
+bool px_chan_try_recv(LXValue ch, LXValue* out); // 非阻塞尝试（select 用）
+void px_chan_close(LXValue ch);               // 关闭：唤醒等待者
+bool px_is_chan(LXValue v);
 
 // ==================== 锁原语（M13：mutex / rwlock） ====================
 // 互斥锁：同一时刻一个持有者；读写锁：多读者并行 + 写优先（防读饿死写）
-LXValue lx_mutex_create(void);
-LXValue lx_mutex_lock(LXValue m);
-LXValue lx_mutex_unlock(LXValue m);
-LXValue lx_mutex_try_lock(LXValue m);   // 成功 true / 失败 false
-LXValue lx_rwlock_create(void);
-LXValue lx_rwlock_rlock(LXValue m);
-LXValue lx_rwlock_runlock(LXValue m);
-LXValue lx_rwlock_wlock(LXValue m);
-LXValue lx_rwlock_wunlock(LXValue m);
-LXValue lx_rwlock_try_rlock(LXValue m);
-LXValue lx_rwlock_try_wlock(LXValue m);
-bool lx_is_mutex(LXValue v);
-bool lx_is_rwlock(LXValue v);
+LXValue px_mutex_create(void);
+LXValue px_mutex_lock(LXValue m);
+LXValue px_mutex_unlock(LXValue m);
+LXValue px_mutex_try_lock(LXValue m);   // 成功 true / 失败 false
+LXValue px_rwlock_create(void);
+LXValue px_rwlock_rlock(LXValue m);
+LXValue px_rwlock_runlock(LXValue m);
+LXValue px_rwlock_wlock(LXValue m);
+LXValue px_rwlock_wunlock(LXValue m);
+LXValue px_rwlock_try_rlock(LXValue m);
+LXValue px_rwlock_try_wlock(LXValue m);
+bool px_is_mutex(LXValue v);
+bool px_is_rwlock(LXValue v);
 
-// spawn：在线程中执行 lx_func(fn, args, nargs)，args 由运行时拷贝（调用后可释放）
-void lx_spawn(LXFuncPtr fn, LXValue* args, int nargs);
-// 通用入口：spawn 函数名（由 codegen 调用 lx_spawn_name）
-void lx_spawn_name(const char* fname, LXValue* args, int nargs);
+// spawn：在线程中执行 px_func(fn, args, nargs)，args 由运行时拷贝（调用后可释放）
+void px_spawn(LXFuncPtr fn, LXValue* args, int nargs);
+// 通用入口：spawn 函数名（由 codegen 调用 px_spawn_name）
+void px_spawn_name(const char* fname, LXValue* args, int nargs);
 
 // select：阻塞等待任一通道可接收（返回索引），chan 活动后由运行时自动唤醒
-int lx_select_wait_any(LXValue* chans, int n);
+int px_select_wait_any(LXValue* chans, int n);
 // select 休眠（无 else 分支时循环等待）
-void lx_select_wait(void);
+void px_select_wait(void);
 // 通道活动通知（send/recv/close 后调用，唤醒 select）
-void lx_select_signal(void);
+void px_select_signal(void);
 
 // ==================== 运行时错误 ====================
 
-void lx_error(const char* fmt, ...) __attribute__((noreturn));
+void px_error(const char* fmt, ...) __attribute__((noreturn));
 
 // ==================== GC（M8：值对象自动释放） ====================
 // 保守标记-清除：所有 LXObject 注册到全局对象表，分配累计超阈值自动触发回收。
 // 根集合 = 全局表 + 当前线程栈（保守扫描）+ 暂存根（刚创建对象）。
 // 并发（spawn 线程活跃）时自动跳过回收（保持正确性），线程全部退出后自动恢复。
-void lx_gc_collect(void);
+void px_gc_collect(void);
 // 返回 GC 次数；live 输出当前存活对象数，total 输出累计回收对象数
-int lx_gc_stats(int* live, int* total);
+int px_gc_stats(int* live, int* total);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif // LX_RUNTIME_H
+#endif // PX_RUNTIME_H
 // 调试辅助：对象是否仍注册在对象表（未回收）
-int lx_gc_contains(LXObject* o);
+int px_gc_contains(LXObject* o);

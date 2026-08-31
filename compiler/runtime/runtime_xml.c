@@ -180,7 +180,7 @@ static int xml_parse_content(XmlP* p, const char* name, LXValue children, XBuf* 
                 int rel = xp_find(p, "]]>");
                 if (rel < 0) return 0;
                 // CDATA：原样文本（不解码实体），作为独立文本节点
-                lx_list_push(children, lx_str_len(p->s + p->pos, rel));
+                px_list_push(children, px_str_len(p->s + p->pos, rel));
                 p->pos += rel + 3;
             } else if (xp_starts(p, "<?")) {
                 int rel = xp_find(p, "?>");
@@ -189,12 +189,12 @@ static int xml_parse_content(XmlP* p, const char* name, LXValue children, XBuf* 
             } else {
                 if (textbuf->len > 0) {
                     char* dec = xml_decode_entities(textbuf->data, textbuf->len);
-                    lx_list_push(children, lx_str(dec));
+                    px_list_push(children, px_str(dec));
                     free(dec);
                     textbuf->len = 0; if (textbuf->data) textbuf->data[0] = '\0';
                 }
                 LXValue child = xml_parse_element(p);
-                lx_list_push(children, child);
+                px_list_push(children, child);
             }
         } else {
             char c = (char)xp_next(p);
@@ -205,59 +205,59 @@ static int xml_parse_content(XmlP* p, const char* name, LXValue children, XBuf* 
 
 // 解析一个元素（pos 指向 '<'）
 static LXValue xml_parse_element(XmlP* p) {
-    if (xp_next(p) != '<') lx_error("XML 解析错误：期望 '<'");
+    if (xp_next(p) != '<') px_error("XML 解析错误：期望 '<'");
     int ns; int nl = xml_parse_name(p, &ns);
-    if (nl == 0) lx_error("XML 解析错误：缺少标签名");
+    if (nl == 0) px_error("XML 解析错误：缺少标签名");
     char* name = xml_slice(p->s, ns, nl);
 
-    LXValue node = lx_dict();
-    LXValue attrs = lx_dict();
+    LXValue node = px_dict();
+    LXValue attrs = px_dict();
     // 属性
     for (;;) {
         xp_eat_ws(p);
         int c = xp_peek(p);
         if (c == '>' || c == '/') break;
-        if (c < 0) { free(name); lx_error("XML 解析错误：标签未闭合"); }
+        if (c < 0) { free(name); px_error("XML 解析错误：标签未闭合"); }
         int ks; int kl = xml_parse_name(p, &ks);
-        if (kl == 0) { free(name); lx_error("XML 解析错误：属性名缺失"); }
+        if (kl == 0) { free(name); px_error("XML 解析错误：属性名缺失"); }
         xp_eat_ws(p);
-        if (xp_next(p) != '=') { free(name); lx_error("XML 解析错误：属性缺少 '='"); }
+        if (xp_next(p) != '=') { free(name); px_error("XML 解析错误：属性缺少 '='"); }
         xp_eat_ws(p);
         int q = xp_next(p);
-        if (q != '"' && q != '\'') { free(name); lx_error("XML 解析错误：属性值必须用引号括起"); }
+        if (q != '"' && q != '\'') { free(name); px_error("XML 解析错误：属性值必须用引号括起"); }
         int vstart = p->pos;
         while (p->pos < p->len && p->s[p->pos] != q) p->pos++;
-        if (p->pos >= p->len) { free(name); lx_error("XML 解析错误：属性值未闭合"); }
+        if (p->pos >= p->len) { free(name); px_error("XML 解析错误：属性值未闭合"); }
         char* key = xml_slice(p->s, ks, kl);
         char* rawv = xml_slice(p->s, vstart, p->pos - vstart);
         p->pos++;
         char* val = xml_decode_entities(rawv, (int)strlen(rawv));
-        lx_dict_set(attrs, key, lx_str(val));
+        px_dict_set(attrs, key, px_str(val));
         free(key); free(rawv); free(val);
     }
-    lx_dict_set(node, "name", lx_str(name));
-    lx_dict_set(node, "attrs", attrs);
+    px_dict_set(node, "name", px_str(name));
+    px_dict_set(node, "attrs", attrs);
 
     if (xp_peek(p) == '/') {
         xp_next(p);
-        if (xp_next(p) != '>') { free(name); lx_error("XML 解析错误：自闭合标签格式错误"); }
-        lx_dict_set(node, "children", lx_list(0));
-        lx_dict_set(node, "text", lx_str(""));
+        if (xp_next(p) != '>') { free(name); px_error("XML 解析错误：自闭合标签格式错误"); }
+        px_dict_set(node, "children", px_list(0));
+        px_dict_set(node, "text", px_str(""));
         free(name);
         return node;
     }
-    if (xp_next(p) != '>') { free(name); lx_error("XML 解析错误：标签未以 '>' 结束"); }
+    if (xp_next(p) != '>') { free(name); px_error("XML 解析错误：标签未以 '>' 结束"); }
 
-    LXValue children = lx_list(0);
+    LXValue children = px_list(0);
     XBuf textbuf = {0};
     if (!xml_parse_content(p, name, children, &textbuf)) {
         free(name);
         if (textbuf.data) free(textbuf.data);
-        lx_error("XML 解析错误：元素 <%s> 未闭合或结束标签不匹配", name);
+        px_error("XML 解析错误：元素 <%s> 未闭合或结束标签不匹配", name);
     }
     if (textbuf.len > 0) {
         char* dec = xml_decode_entities(textbuf.data, textbuf.len);
-        lx_list_push(children, lx_str(dec));
+        px_list_push(children, px_str(dec));
         free(dec);
         textbuf.len = 0;
     }
@@ -266,13 +266,13 @@ static LXValue xml_parse_element(XmlP* p) {
     XBuf tbuf = {0};
     for (int i = 0; i < children.as.obj->as.list.len; i++) {
         LXValue item = children.as.obj->as.list.items[i];
-        if (item.type == LX_STR) {
+        if (item.type == PX_STR) {
             for (int k = 0; k < item.as.obj->as.str.len; k++)
                 xbuf_push(&tbuf, item.as.obj->as.str.data[k]);
         }
     }
-    lx_dict_set(node, "children", children);
-    lx_dict_set(node, "text", tbuf.data ? lx_str(tbuf.data) : lx_str(""));
+    px_dict_set(node, "children", children);
+    px_dict_set(node, "text", tbuf.data ? px_str(tbuf.data) : px_str(""));
     if (tbuf.data) free(tbuf.data);
     free(name);
     return node;
@@ -281,21 +281,21 @@ static LXValue xml_parse_element(XmlP* p) {
 // xml_parse(xml) → dict 或报错
 LXValue bi_xml_parse(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) lx_error("xml_parse 需要 1 个参数");
-    if (args[0].type != LX_STR) lx_error("xml_parse 期望字符串");
+    if (nargs != 1) px_error("xml_parse 需要 1 个参数");
+    if (args[0].type != PX_STR) px_error("xml_parse 期望字符串");
     XmlP p = { args[0].as.obj->as.str.data, args[0].as.obj->as.str.len, 0 };
-    if (!xml_skip_misc(&p)) lx_error("XML 解析错误：注释/处理指令未闭合");
-    if (xp_peek(&p) != '<') lx_error("XML 解析错误：缺少根元素");
+    if (!xml_skip_misc(&p)) px_error("XML 解析错误：注释/处理指令未闭合");
+    if (xp_peek(&p) != '<') px_error("XML 解析错误：缺少根元素");
     LXValue root = xml_parse_element(&p);
-    if (!xml_skip_misc(&p)) lx_error("XML 解析错误：根元素后存在非法内容");
+    if (!xml_skip_misc(&p)) px_error("XML 解析错误：根元素后存在非法内容");
     return root;
 }
 
 // xml_escape(text) → str
 LXValue bi_xml_escape(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) lx_error("xml_escape 需要 1 个参数");
-    if (args[0].type != LX_STR) lx_error("xml_escape 期望字符串");
+    if (nargs != 1) px_error("xml_escape 需要 1 个参数");
+    if (args[0].type != PX_STR) px_error("xml_escape 期望字符串");
     const char* s = args[0].as.obj->as.str.data;
     int len = args[0].as.obj->as.str.len;
     XBuf out = {0};
@@ -310,7 +310,7 @@ LXValue bi_xml_escape(LXValue* args, int nargs, void* ctx) {
             default: xbuf_push(&out, c); break;
         }
     }
-    LXValue r = out.data ? lx_str(out.data) : lx_str("");
+    LXValue r = out.data ? px_str(out.data) : px_str("");
     if (out.data) free(out.data);
     return r;
 }
@@ -318,12 +318,12 @@ LXValue bi_xml_escape(LXValue* args, int nargs, void* ctx) {
 // xml_unescape(text) → str
 LXValue bi_xml_unescape(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) lx_error("xml_unescape 需要 1 个参数");
-    if (args[0].type != LX_STR) lx_error("xml_unescape 期望字符串");
+    if (nargs != 1) px_error("xml_unescape 需要 1 个参数");
+    if (args[0].type != PX_STR) px_error("xml_unescape 期望字符串");
     const char* s = args[0].as.obj->as.str.data;
     int len = args[0].as.obj->as.str.len;
     char* dec = xml_decode_entities(s, len);
-    LXValue r = lx_str(dec);
+    LXValue r = px_str(dec);
     free(dec);
     return r;
 }
