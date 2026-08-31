@@ -151,6 +151,11 @@ static LXValue bi_udp_open(LXValue* args, int nargs, void* ctx);
 static LXValue bi_udp_send(LXValue* args, int nargs, void* ctx);
 static LXValue bi_udp_recv(LXValue* args, int nargs, void* ctx);
 static LXValue bi_udp_close(LXValue* args, int nargs, void* ctx);
+// M34：事件总线（pub/sub）
+static LXValue bi_event_bus(LXValue* args, int nargs, void* ctx);
+static LXValue bi_bus_subscribe(LXValue* args, int nargs, void* ctx);
+static LXValue bi_bus_publish(LXValue* args, int nargs, void* ctx);
+static LXValue bi_bus_unsubscribe(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_get(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_post(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_serve(LXValue* args, int nargs, void* ctx);
@@ -1314,7 +1319,7 @@ const char* px_type_name(LXValue v) {
     return "unknown";
 }
 
-// ==================== M32 生成器（创建时物化） ====================
+// ==================== M32/M34 生成器 ====================
 
 LXValue px_gen_from_list(LXValue list) {
     LXObject* o = xmalloc(sizeof(LXObject));
@@ -1322,15 +1327,76 @@ LXValue px_gen_from_list(LXValue list) {
     o->type = PX_GEN;
     o->as.gen.list = list;
     o->as.gen.cursor = 0;
+    o->as.gen.is_lazy = 0;
     LXValue v;
     v.type = PX_GEN;
     v.as.obj = o;
     return v;
 }
 
+// M34：惰性生成器——seq（list/range）不展开，transform/filter 闭包在 gen_next 时逐项调用。
+LXValue px_gen_lazy(LXValue seq, LXValue transform, LXValue filter) {
+    LXObject* o = xmalloc(sizeof(LXObject));
+    memset(o, 0, sizeof(LXObject));
+    o->type = PX_GEN;
+    o->as.gen.list = px_list(0);   // 物化缓冲（for-in / list / len 时展开）
+    o->as.gen.cursor = 0;
+    o->as.gen.is_lazy = 1;
+    o->as.gen.seq = seq;
+    o->as.gen.transform = transform;
+    o->as.gen.filter = filter;
+    LXValue v;
+    v.type = PX_GEN;
+    v.as.obj = o;
+    return v;
+}
+
+// 惰性 seq 取第 i 个元素（list 索引；C 端 range 已物化为 list）
+static LXValue px_lazy_seq_get(LXValue seq, int i, int* has) {
+    if (seq.type == PX_LIST) {
+        if (i >= 0 && i < seq.as.obj->as.list.len) {
+            *has = 1;
+            return seq.as.obj->as.list.items[i];
+        }
+    }
+    *has = 0;
+    return px_null();
+}
+
+// 惰性生成器剩余项全部物化到 list（for-in / list() / len / 索引时调用，保持 M32 行为一致）
+static void px_gen_materialize(LXObject* o) {
+    if (!o->as.gen.is_lazy) return;
+    o->as.gen.is_lazy = 0;
+    for (;;) {
+        int has = 0;
+        LXValue x = px_lazy_seq_get(o->as.gen.seq, o->as.gen.cursor, &has);
+        o->as.gen.cursor++;
+        if (!has) break;
+        if (o->as.gen.filter.type == PX_FUNC) {
+            LXValue keep = px_call(o->as.gen.filter, &x, 1);
+            if (!px_is_truthy(keep)) continue;
+        }
+        LXValue r = px_call(o->as.gen.transform, &x, 1);
+        px_list_push(o->as.gen.list, r);
+    }
+}
+
 LXValue px_gen_next(LXValue g) {
     if (g.type != PX_GEN) px_error("gen_next 需要生成器对象");
     LXObject* o = g.as.obj;
+    if (o->as.gen.is_lazy) {
+        for (;;) {
+            int has = 0;
+            LXValue x = px_lazy_seq_get(o->as.gen.seq, o->as.gen.cursor, &has);
+            o->as.gen.cursor++;
+            if (!has) { o->as.gen.is_lazy = 0; return px_null(); }
+            if (o->as.gen.filter.type == PX_FUNC) {
+                LXValue keep = px_call(o->as.gen.filter, &x, 1);
+                if (!px_is_truthy(keep)) continue;
+            }
+            return px_call(o->as.gen.transform, &x, 1);
+        }
+    }
     if (o->as.gen.list.type == PX_LIST && o->as.gen.cursor < o->as.gen.list.as.obj->as.list.len) {
         LXValue r = o->as.gen.list.as.obj->as.list.items[o->as.gen.cursor];
         o->as.gen.cursor++;
@@ -1640,7 +1706,11 @@ LXValue px_or(LXValue a, LXValue b) {
 // ==================== 容器操作 ====================
 
 LXValue px_index(LXValue obj, LXValue idx) {
-    if (obj.type == PX_GEN) obj = obj.as.obj->as.gen.list;
+    if (obj.type == PX_GEN) {
+        // M34：惰性生成器先物化剩余（索引语义需要全量结果）
+        if (obj.as.obj->as.gen.is_lazy) px_gen_materialize(obj.as.obj);
+        obj = obj.as.obj->as.gen.list;
+    }
     if (obj.type == PX_LIST) {
         int i = (int)int_val(idx);
         int len = obj.as.obj->as.list.len;
@@ -1906,7 +1976,10 @@ int px_len(LXValue v) {
         case PX_LIST: return v.as.obj->as.list.len;
         case PX_DICT: return v.as.obj->as.dict.len;
         case PX_TUPLE: return v.as.obj->as.tuple.len;
-        case PX_GEN: return v.as.obj->as.gen.list.as.obj->as.list.len;
+        case PX_GEN:
+            // M34：惰性生成器先物化剩余（len 需要全量）
+            if (v.as.obj->as.gen.is_lazy) px_gen_materialize(v.as.obj);
+            return v.as.obj->as.gen.list.as.obj->as.list.len;
         default: px_error("len 不支持类型 %s", px_type_name(v)); return 0;
     }
 }
@@ -4206,6 +4279,11 @@ void px_register_builtins(void) {
     px_set_global("udp_send", px_native("udp_send", bi_udp_send));
     px_set_global("udp_recv", px_native("udp_recv", bi_udp_recv));
     px_set_global("udp_close", px_native("udp_close", bi_udp_close));
+    // M34：事件总线（pub/sub，跨线程）
+    px_set_global("event_bus", px_native("event_bus", bi_event_bus));
+    px_set_global("bus_subscribe", px_native("bus_subscribe", bi_bus_subscribe));
+    px_set_global("bus_publish", px_native("bus_publish", bi_bus_publish));
+    px_set_global("bus_unsubscribe", px_native("bus_unsubscribe", bi_bus_unsubscribe));
     px_set_global("http_get", px_native("http_get", bi_http_get));
     px_set_global("http_post", px_native("http_post", bi_http_post));
     px_set_global("http_serve", px_native("http_serve", bi_http_serve));
@@ -4260,6 +4338,8 @@ void px_register_builtins(void) {
     px_set_global("ws_serve", px_native("ws_serve", bi_ws_serve));
     px_set_global("ws_connect", px_native("ws_connect", bi_ws_connect));
     px_set_global("ws_send", px_native("ws_send", bi_ws_send));
+    // M34：WebSocket 服务端广播（群发）
+    px_set_global("ws_broadcast", px_native("ws_broadcast", bi_ws_broadcast));
     px_set_global("ws_recv", px_native("ws_recv", bi_ws_recv));
     px_set_global("ws_close", px_native("ws_close", bi_ws_close));
     px_set_global("ws_ping", px_native("ws_ping", bi_ws_ping));
@@ -5576,6 +5656,135 @@ static LXValue bi_udp_close(LXValue* args, int nargs, void* ctx) {
     if (nargs != 1 || args[0].type != PX_INT) px_error("udp_close 需要 (sock) 参数");
     close((int)args[0].as.i);
     return px_bool(true);
+}
+
+// ==================== M34：事件总线（pub/sub，跨线程；与解释器 builtin.rs 一致） ====================
+// event_bus() → int；bus_subscribe(bus, topic, fn) → bool；bus_publish(bus, topic, data) → int（同步回调数）
+// bus_unsubscribe(bus, topic, fn) → bool（按函数对象指针身份移除）
+#define PX_BUS_MAX 64
+#define PX_BUS_TOPIC_MAX 32
+#define PX_BUS_SUB_MAX 16
+typedef struct {
+    char topic[64];
+    LXValue fns[PX_BUS_SUB_MAX];
+    int nfns;
+    int active;
+} PxBusTopic;
+typedef struct {
+    int active;
+    int64_t id;
+    PxBusTopic topics[PX_BUS_TOPIC_MAX];
+    int ntopics;
+} PxBus;
+static PxBus g_px_buses[PX_BUS_MAX];
+static int64_t g_px_bus_seq = 1;
+static pthread_mutex_t g_bus_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static LXValue bi_event_bus(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 0) px_error("event_bus 不需要参数");
+    pthread_mutex_lock(&g_bus_mu);
+    int slot = -1;
+    for (int i = 0; i < PX_BUS_MAX; i++) if (!g_px_buses[i].active) { slot = i; break; }
+    if (slot < 0) {
+        pthread_mutex_unlock(&g_bus_mu);
+        px_error("事件总线数量超出上限 %d", PX_BUS_MAX);
+    }
+    int64_t id = g_px_bus_seq++;
+    memset(&g_px_buses[slot], 0, sizeof(PxBus));
+    g_px_buses[slot].active = 1;
+    g_px_buses[slot].id = id;
+    pthread_mutex_unlock(&g_bus_mu);
+    return px_int(id);
+}
+
+static PxBus* bus_find(int64_t id) {
+    for (int i = 0; i < PX_BUS_MAX; i++) {
+        if (g_px_buses[i].active && g_px_buses[i].id == id) return &g_px_buses[i];
+    }
+    return NULL;
+}
+
+static PxBusTopic* bus_topic_find_or_new(PxBus* b, const char* topic) {
+    for (int i = 0; i < b->ntopics; i++) {
+        if (b->topics[i].active && strcmp(b->topics[i].topic, topic) == 0) return &b->topics[i];
+    }
+    if (b->ntopics >= PX_BUS_TOPIC_MAX) return NULL;
+    PxBusTopic* t = &b->topics[b->ntopics++];
+    memset(t, 0, sizeof(*t));
+    snprintf(t->topic, sizeof(t->topic), "%s", topic);
+    t->active = 1;
+    return t;
+}
+
+static LXValue bi_bus_subscribe(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 3 || args[0].type != PX_INT || args[1].type != PX_STR || args[2].type != PX_FUNC) {
+        px_error("bus_subscribe 需要 (bus, topic, fn) 参数");
+    }
+    pthread_mutex_lock(&g_bus_mu);
+    PxBus* b = bus_find(args[0].as.i);
+    if (!b) { pthread_mutex_unlock(&g_bus_mu); px_error("bus_subscribe: 无效 bus id"); }
+    PxBusTopic* t = bus_topic_find_or_new(b, args[1].as.obj->as.str.data);
+    if (!t || t->nfns >= PX_BUS_SUB_MAX) {
+        pthread_mutex_unlock(&g_bus_mu);
+        px_error("bus_subscribe: 主题订阅者超出上限 %d", PX_BUS_SUB_MAX);
+    }
+    t->fns[t->nfns++] = args[2];
+    pthread_mutex_unlock(&g_bus_mu);
+    return px_bool(true);
+}
+
+static LXValue bi_bus_publish(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 3 || args[0].type != PX_INT || args[1].type != PX_STR) {
+        px_error("bus_publish 需要 (bus, topic, data) 参数");
+    }
+    // 快照订阅者（锁外回调，避免持锁执行用户代码）
+    LXValue fns[PX_BUS_SUB_MAX];
+    int n = 0;
+    pthread_mutex_lock(&g_bus_mu);
+    PxBus* b = bus_find(args[0].as.i);
+    if (!b) { pthread_mutex_unlock(&g_bus_mu); px_error("bus_publish: 无效 bus id"); }
+    for (int i = 0; i < b->ntopics; i++) {
+        if (b->topics[i].active && strcmp(b->topics[i].topic, args[1].as.obj->as.str.data) == 0) {
+            for (int j = 0; j < b->topics[i].nfns && n < PX_BUS_SUB_MAX; j++) fns[n++] = b->topics[i].fns[j];
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_bus_mu);
+    LXValue call_args[2];
+    call_args[0] = px_str(args[1].as.obj->as.str.data);
+    call_args[1] = args[2];
+    for (int i = 0; i < n; i++) (void)px_call(fns[i], call_args, 2);
+    return px_int(n);
+}
+
+static LXValue bi_bus_unsubscribe(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 3 || args[0].type != PX_INT || args[1].type != PX_STR || args[2].type != PX_FUNC) {
+        px_error("bus_unsubscribe 需要 (bus, topic, fn) 参数");
+    }
+    int removed = 0;
+    pthread_mutex_lock(&g_bus_mu);
+    PxBus* b = bus_find(args[0].as.i);
+    if (b) {
+        for (int i = 0; i < b->ntopics; i++) {
+            PxBusTopic* t = &b->topics[i];
+            if (!t->active || strcmp(t->topic, args[1].as.obj->as.str.data) != 0) continue;
+            for (int j = 0; j < t->nfns; j++) {
+                if (t->fns[j].as.obj == args[2].as.obj) {
+                    memmove(&t->fns[j], &t->fns[j + 1], (size_t)(t->nfns - j - 1) * sizeof(LXValue));
+                    t->nfns--;
+                    removed = 1;
+                    break;
+                }
+            }
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_bus_mu);
+    return px_bool(removed);
 }
 
 // ==================== M23c/M24 HTTP keep-alive 连接池 + 客户端（双模式：与解释器 builtin.rs 一致） ====================
@@ -8192,11 +8401,14 @@ static const char* px_px_bin(void) {
 
 // ==================== M25 .px 进程池（PHP-FPM 风格） ====================
 // M17 的每请求 fork+exec `px run` 开销（fork + exec + 解释器启动）较大；
-// M25 预派生 PX_POOL_SIZE 个 `px --worker` 解释器进程常驻复用：
+// M25 预派生 N 个 `px --worker` 解释器进程常驻复用：
 //   父进程把任务帧（4 字节大端长度 + path\0env_json\0dump\0timeout）写入空闲
 //   worker stdin；worker 执行目标脚本，把结果帧（exit_code\0output）写回 stdout。
 // 超时 → SIGKILL + 补位；worker 崩溃 → 补位重试，最终回退旧 fork+exec 路径保底。
-#define PX_POOL_SIZE 4
+// M34 配置化：worker 数（PX_POOL_WORKERS，默认 4）+ 空闲回收（PX_POOL_IDLE_MS，0=不回收）
+//           + 每 worker 最大请求数（PX_POOL_MAX_REQ，0=不限，防泄漏滚动重启）
+#define PX_POOL_SIZE_MAX 16
+static int g_px_pool_size = 4;
 
 // 兜底路径前置声明（定义在本节之后）
 static int px_run_px_child(const char* path, const char* env_json, int dump_response,
@@ -8209,9 +8421,12 @@ typedef struct {
     int alive;
     int busy;
     int gen;      // M32：代际（热更新滚动重启计数）
+    // M34 配置化：空闲起始时间（ms，空闲回收用）+ 已处理请求数（max_req 滚动重启用）
+    long long idle_since_ms;
+    int req_count;
 } PXWorker;
 
-static PXWorker g_px_pool[PX_POOL_SIZE];
+static PXWorker g_px_pool[PX_POOL_SIZE_MAX];
 static pthread_mutex_t g_px_pool_mu = PTHREAD_MUTEX_INITIALIZER;
 static int g_px_pool_ready = 0;
 // M32 进程池热更新：脚本/二进制 mtime 变化 → 标记 reload → 空闲 worker 滚动重启
@@ -8255,6 +8470,8 @@ static int px_pool_spawn(PXWorker* w) {
     w->alive = 1;
     w->busy = 0;
     w->gen = g_pool_gen;
+    w->idle_since_ms = 0;
+    w->req_count = 0;
     return 0;
 }
 
@@ -8262,9 +8479,18 @@ static int px_pool_spawn(PXWorker* w) {
 static void px_pool_init_lazy(void) {
     pthread_mutex_lock(&g_px_pool_mu);
     if (!g_px_pool_ready) {
-        for (int i = 0; i < PX_POOL_SIZE; i++) {
+        // M34 配置化：worker 数 / 空闲回收 / 最大请求数（环境变量，px_serve 启动可覆盖）
+        const char* pw = getenv("PX_POOL_WORKERS");
+        if (pw && atoi(pw) >= 1) {
+            int n = atoi(pw);
+            if (n > PX_POOL_SIZE_MAX) n = PX_POOL_SIZE_MAX;
+            g_px_pool_size = n;
+        }
+        for (int i = 0; i < g_px_pool_size; i++) {
             g_px_pool[i].alive = 0;
             g_px_pool[i].busy = 0;
+            g_px_pool[i].idle_since_ms = 0;
+            g_px_pool[i].req_count = 0;
             if (px_pool_spawn(&g_px_pool[i]) != 0) g_px_pool[i].alive = 0;
         }
         g_px_pool_ready = 1;
@@ -8272,16 +8498,42 @@ static void px_pool_init_lazy(void) {
     pthread_mutex_unlock(&g_px_pool_mu);
 }
 
-// 取空闲 worker 下标（无空闲 -1）
+// M34：取当前时间毫秒（进程池空闲回收用）
+static long long px_now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+// 取空闲 worker 下标（无空闲 -1）；M34：空闲超时 worker 先退役补位
 static int px_pool_take(void) {
     pthread_mutex_lock(&g_px_pool_mu);
+    long long now = px_now_ms();
+    long long idle_ms = 0;
+    const char* pi = getenv("PX_POOL_IDLE_MS");
+    if (pi && atoll(pi) > 0) idle_ms = atoll(pi);
     int idx = -1;
-    for (int i = 0; i < PX_POOL_SIZE; i++) {
-        if (g_px_pool[i].alive && !g_px_pool[i].busy) {
-            g_px_pool[i].busy = 1;
-            idx = i;
+    for (int i = 0; i < g_px_pool_size; i++) {
+        if (!g_px_pool[i].alive || g_px_pool[i].busy) continue;
+        // M34 空闲回收：空闲超时 → kill + 补位（新 worker 接当前任务）
+        if (idle_ms > 0 && g_px_pool[i].idle_since_ms > 0 &&
+            now - g_px_pool[i].idle_since_ms > idle_ms) {
+            PXWorker w = g_px_pool[i];
+            g_px_pool[i].alive = 0;
+            if (w.pid > 0) kill(w.pid, SIGKILL);
+            if (w.in_fd > 0) close(w.in_fd);
+            if (w.out_fd > 0) close(w.out_fd);
+            g_px_pool[i].idle_since_ms = 0;
+            if (px_pool_spawn(&g_px_pool[i]) == 0) {
+                g_px_pool[i].busy = 1;
+                idx = i;
+            }
             break;
         }
+        g_px_pool[i].busy = 1;
+        g_px_pool[i].idle_since_ms = 0;
+        idx = i;
+        break;
     }
     pthread_mutex_unlock(&g_px_pool_mu);
     return idx;
@@ -8289,12 +8541,22 @@ static int px_pool_take(void) {
 
 static void px_pool_release(int idx) {
     pthread_mutex_lock(&g_px_pool_mu);
-    if (idx >= 0 && idx < PX_POOL_SIZE) {
+    if (idx >= 0 && idx < g_px_pool_size) {
         g_px_pool[idx].busy = 0;
+        g_px_pool[idx].req_count++;
+        g_px_pool[idx].idle_since_ms = px_now_ms();
+        // M34：max_req 超限 → 退役补位（防泄漏滚动重启）
+        const char* mr = getenv("PX_POOL_MAX_REQ");
+        long long max_req = mr ? atoll(mr) : 0;
+        int retire = 0;
+        if (max_req > 0 && g_px_pool[idx].req_count >= max_req) retire = 1;
         // M32 热更新：该 worker 是旧代 → 处理完当前任务后滚动重启（kill + 补位）
-        if (g_px_pool_reload && g_px_pool[idx].gen < g_pool_gen) {
+        if (g_px_pool_reload && g_px_pool[idx].gen < g_pool_gen) retire = 1;
+        if (retire) {
             PXWorker w = g_px_pool[idx];
             g_px_pool[idx].alive = 0;
+            g_px_pool[idx].req_count = 0;
+            g_px_pool[idx].idle_since_ms = 0;
             if (w.pid > 0) kill(w.pid, SIGKILL);
             if (w.in_fd > 0) close(w.in_fd);
             if (w.out_fd > 0) close(w.out_fd);
@@ -8302,7 +8564,7 @@ static void px_pool_release(int idx) {
         }
         // 全部 worker 已是新代 → 清除 reload 标志
         int all_new = 1;
-        for (int i = 0; i < PX_POOL_SIZE; i++) {
+        for (int i = 0; i < g_px_pool_size; i++) {
             if (g_px_pool[i].alive && g_px_pool[i].gen < g_pool_gen) { all_new = 0; break; }
         }
         if (all_new) g_px_pool_reload = 0;
@@ -8340,7 +8602,7 @@ static void px_pool_check_hot_reload(const char* path) {
 // 杀掉并补位 worker（调用方此后不得再引用该下标）
 static void px_pool_respawn(int idx) {
     pthread_mutex_lock(&g_px_pool_mu);
-    if (idx < 0 || idx >= PX_POOL_SIZE) { pthread_mutex_unlock(&g_px_pool_mu); return; }
+    if (idx < 0 || idx >= g_px_pool_size) { pthread_mutex_unlock(&g_px_pool_mu); return; }
     PXWorker w = g_px_pool[idx];
     g_px_pool[idx].alive = 0;
     g_px_pool[idx].busy = 0;
@@ -10139,6 +10401,8 @@ static LXValue bi_list(LXValue* args, int nargs, void* ctx) {
     if (v.type == PX_LIST) return v;
     if (v.type == PX_TUPLE) return px_list_n(v.as.obj->as.tuple.items, v.as.obj->as.tuple.len);
     if (v.type == PX_GEN) {
+        // M34：惰性生成器先物化剩余（list() 需要全量）
+        if (v.as.obj->as.gen.is_lazy) px_gen_materialize(v.as.obj);
         return v.as.obj->as.gen.list;
     }
     if (v.type == PX_STR) {

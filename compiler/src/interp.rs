@@ -396,6 +396,12 @@ impl Interpreter {
             ("udp_send", Builtin::UdpSend),
             ("udp_recv", Builtin::UdpRecv),
             ("udp_close", Builtin::UdpClose),
+            // M34：WS 服务端广播 + 事件总线
+            ("ws_broadcast", Builtin::WsBroadcast),
+            ("event_bus", Builtin::BusNew),
+            ("bus_subscribe", Builtin::BusSubscribe),
+            ("bus_publish", Builtin::BusPublish),
+            ("bus_unsubscribe", Builtin::BusUnsubscribe),
         ];
         for (n, b) in names {
             g.define(n, Value::Builtin(*b));
@@ -942,7 +948,53 @@ impl Interpreter {
                 Ok(Value::new_list(out))
             }
             Expr::GenExp { expr, clauses, cond, pos } => {
-                // M32 生成器表达式：创建时物化（双模式一致），gen_next/for-in/list 逐项消费
+                // M34 惰性生成器：单层 for + 单变量 → 真延迟（seq 不展开 range，gen_next 逐项求值）
+                // transform/filter 为捕获闭包 fn(x){expr/cond}（捕获外层变量，Rust 支持）
+                // 注意：iterable 为生成器（嵌套生成器）时退化物化（惰性 seq 索引需 interp，复杂度高）
+                let iterable_lazy_ok = if clauses.len() == 1 && clauses[0].vars.len() == 1 {
+                    let it = self.eval_expr(&clauses[0].iterable, env)?;
+                    !matches!(it, Value::Gen(_))
+                } else {
+                    false
+                };
+                if iterable_lazy_ok {
+                    let xname = clauses[0].vars[0].clone();
+                    let iterable = self.eval_expr(&clauses[0].iterable, env)?;
+                    let mut mk_closure = |body: &Expr, pos: Pos| -> Result<Value, LxError> {
+                        self.eval_expr(
+                            &Expr::Closure {
+                                params: vec![Param {
+                                    name: xname.clone(),
+                                    ty: None,
+                                    default: None,
+                                    pos,
+                                }],
+                                ret_ty: None,
+                                body: Box::new(body.clone()),
+                                captures: vec![],
+                                pos,
+                            },
+                            env,
+                        )
+                    };
+                    let transform = mk_closure(expr, *pos)?;
+                    let filter = match cond {
+                        Some(c) => Some(mk_closure(c, *pos)?),
+                        None => None,
+                    };
+                    let obj = crate::value::GenObj {
+                        materialized: Vec::new(),
+                        cursor: 0,
+                        lazy: Some(crate::value::LazyGen {
+                            seq: iterable,
+                            cursor: 0,
+                            transform,
+                            filter,
+                        }),
+                    };
+                    return Ok(Value::Gen(Arc::new(Mutex::new(obj))));
+                }
+                // M32 物化路径（多层 for / 多变量解包）
                 let mut out = Vec::new();
                 self.eval_comp(
                     clauses,
@@ -958,6 +1010,7 @@ impl Interpreter {
                 let obj = crate::value::GenObj {
                     materialized: out,
                     cursor: 0,
+                    lazy: None,
                 };
                 Ok(Value::Gen(std::sync::Arc::new(std::sync::Mutex::new(obj))))
             }
@@ -2151,8 +2204,10 @@ impl Interpreter {
                 .map(|k| Value::Str(k.clone()))
                 .collect()),
             Value::Gen(g) => {
-                // M32：生成器物化结果迭代
-                Ok(g.lock().unwrap().materialized.clone())
+                // M32：生成器物化结果迭代（M34：惰性生成器先物化剩余，保持 for-in 行为一致）
+                let mut gg = g.lock().unwrap();
+                crate::builtin::gen_materialize_lazy(&mut gg, self, pos)?;
+                Ok(gg.materialized.clone())
             }
             _ => Err(LxError::new("R1002", "此类型不可迭代", Some(pos))),
         }

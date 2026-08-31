@@ -27,6 +27,9 @@ pub struct WsConn {
     pub close_tx: mpsc::Sender<()>,
     /// 最近一次读到任何帧的时间（毫秒时间戳，0=未初始化）；ws_heartbeat 超时检测用
     pub last_activity: AtomicI64,
+    /// M34：1 = 客户端连接（ws_connect）；0 = 服务端连接（ws_serve accept）。
+    /// ws_broadcast 只广播服务端连接（避免回环：客户端连接也广播会把帧发回自身对端）。
+    pub is_client: AtomicBool,
 }
 
 type ConnMap = HashMap<i64, Arc<WsConn>>;
@@ -58,6 +61,7 @@ pub fn ws_register(read: SConn, write: SConn) -> i64 {
             closed: AtomicBool::new(false),
             close_tx,
             last_activity: AtomicI64::new(0),
+            is_client: AtomicBool::new(false),
         }),
     );
     id
@@ -75,6 +79,7 @@ pub fn ws_register_client(read: SConn, write: SConn) -> (i64, mpsc::Receiver<()>
             closed: AtomicBool::new(false),
             close_tx,
             last_activity: AtomicI64::new(0),
+            is_client: AtomicBool::new(true),
         }),
     );
     (id, close_rx)
@@ -329,6 +334,24 @@ pub fn ws_send(conn: i64, data: &str) -> bool {
             false
         }
     }
+}
+
+/// M34：ws_broadcast(data) → int —— 向 ws_serve 全部活跃**服务端**连接群发文本帧，返回成功数。
+/// 只广播服务端连接（is_client=false）：避免回环（客户端连接也广播会把帧发回自身对端）。
+pub fn ws_broadcast(data: &str) -> i64 {
+    let conns: Vec<(i64, bool)> = ws_conns()
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(id, c)| (*id, c.is_client.load(Ordering::SeqCst)))
+        .collect();
+    let mut ok = 0;
+    for (id, is_client) in conns {
+        if !is_client && ws_send(id, data) {
+            ok += 1;
+        }
+    }
+    ok
 }
 
 /// ws_ping(conn)：发送 ping 帧（心跳保活；对端应回 pong，可从 ws_recv 路径自动应答）。

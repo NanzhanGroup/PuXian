@@ -91,6 +91,11 @@ struct LXObject {
         struct {
             LXValue  list;           // 物化后的列表
             int      cursor;         // gen_next 游标
+            // M34 惰性生成器：is_lazy=1 时从 seq 逐项取（不展开），filter 检查 + transform 求值
+            int      is_lazy;
+            LXValue  seq;            // 迭代源（list / range）
+            LXValue  transform;      // 变换闭包 fn(x){expr}
+            LXValue  filter;         // 过滤闭包 fn(x){cond}（PX_NULL = 全通过）
         } gen;
     } as;
 };
@@ -115,6 +120,8 @@ LXValue px_enum(const char* type_name, const char* variant);
 LXValue px_tuple(LXValue* items, int len);
 // M32：生成器对象（创建时物化，gen_next 逐项消费）
 LXValue px_gen_from_list(LXValue list);
+// M34：惰性生成器（单层 for 延迟求值：seq 不展开，transform/filter 闭包 gen_next 时调用）
+LXValue px_gen_lazy(LXValue seq, LXValue transform, LXValue filter);
 LXValue px_gen_next(LXValue g);
 
 // ==================== 类型判断 ====================
@@ -198,6 +205,8 @@ LXValue bi_zip_unpack(LXValue* args, int nargs, void* ctx);
 LXValue bi_ws_serve(LXValue* args, int nargs, void* ctx);
 LXValue bi_ws_connect(LXValue* args, int nargs, void* ctx);
 LXValue bi_ws_send(LXValue* args, int nargs, void* ctx);
+// M34：ws_broadcast(data) → int（向全部活跃连接群发）
+LXValue bi_ws_broadcast(LXValue* args, int nargs, void* ctx);
 LXValue bi_ws_recv(LXValue* args, int nargs, void* ctx);
 LXValue bi_ws_close(LXValue* args, int nargs, void* ctx);
 LXValue bi_ws_ping(LXValue* args, int nargs, void* ctx);

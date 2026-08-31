@@ -1,0 +1,76 @@
+# M34③④ 事件总线（pub/sub）+ WebSocket 服务端广播（双模式一致）
+# event_bus() / bus_subscribe / bus_publish（同步回调订阅者，跨线程可用）/ bus_unsubscribe
+# ws_broadcast(data) → int：向 ws_serve 全部活跃连接群发
+
+PORT = 18161
+
+# ============ 事件总线 ============
+bus = event_bus()
+received = []
+
+def on_order(topic, data):
+    received.append(topic + ":" + data)
+
+def on_alert(topic, data):
+    received.append("ALERT:" + data)
+
+bus_subscribe(bus, "order", on_order)
+bus_subscribe(bus, "alert", on_alert)
+
+n = bus_publish(bus, "order", "A001")
+assert(n == 1)
+n = bus_publish(bus, "alert", "high")
+assert(n == 1)
+bus_publish(bus, "order", "A002")
+assert(received == ["order:A001", "ALERT:high", "order:A002"])
+print("event bus:", str(received[0]), str(received[1]), str(received[2]))
+
+# 退订后不再回调
+bus_unsubscribe(bus, "order", on_order)
+n = bus_publish(bus, "order", "A003")
+assert(n == 0)
+assert(len(received) == 3)
+print("unsubscribe ok:", str(n))
+
+# 跨线程发布（spawn 线程同步回调订阅者）
+def publisher():
+    bus_publish(bus, "alert", "from-thread")
+spawn publisher()
+sleep(200)
+assert(len(received) == 4 and contains(received[3], "from-thread"))
+print("cross-thread publish:", received[3])
+
+# ============ WebSocket 服务端广播 ============
+def wshandler(conn):
+    while true:
+        msg = ws_recv(conn)
+        if msg == null:
+            break
+        ws_send(conn, "ack:" + msg)
+
+def serve_ws():
+    ws_serve(PORT, wshandler)
+spawn serve_ws()
+sleep(500)
+
+c1 = ws_connect("ws://127.0.0.1:" + str(PORT) + "/ws")
+c2 = ws_connect("ws://127.0.0.1:" + str(PORT) + "/ws")
+assert(c1 != null and c2 != null, "两个 WS 客户端连接")
+
+# 服务器进程广播给全部活跃连接
+def broadcaster():
+    sleep(300)
+    n = ws_broadcast("announcement")
+    assert(n >= 2, "广播至少 2 个连接")
+spawn broadcaster()
+
+# 两个客户端都收到广播（ws_recv 带超时）
+m1 = ws_recv(c1, 3000)
+m2 = ws_recv(c2, 3000)
+assert(m1 == "announcement" and m2 == "announcement")
+print("ws broadcast:", m1, m2)
+
+ws_close(c1)
+ws_close(c2)
+sleep(200)
+print("M34_BUS_WS_OK")

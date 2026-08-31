@@ -511,7 +511,9 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
                 }
                 Value::Chan(c) => c.inner.lock().unwrap().buf.len() as i64,
                 Value::Gen(g) => {
-                    g.lock().unwrap().materialized.len() as i64
+                    let mut gg = g.lock().unwrap();
+                    gen_materialize_lazy(&mut gg, interp, pos)?;
+                    gg.materialized.len() as i64
                 }
                 _ => return Err(err(format!("len 不支持类型 {}", interp.type_name(&args[0])), pos)),
             };
@@ -1349,6 +1351,82 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             let sock = expect_int(&args[0], "udp_close", pos)?;
             Ok(Value::Bool(udp_remove(sock)))
         }
+        // ==================== M34：事件总线（pub/sub，跨线程） ====================
+        // event_bus() → int；bus_subscribe(bus, topic, fn)；bus_publish(bus, topic, data) → int（同步回调数）
+        // bus_unsubscribe(bus, topic, fn) → bool（按函数身份移除）
+        Builtin::BusNew => {
+            if !args.is_empty() {
+                return Err(err("event_bus 不需要参数", pos));
+            }
+            let id = BUS_NEXT.fetch_add(1, Ordering::SeqCst);
+            event_buses()
+                .lock()
+                .unwrap()
+                .insert(id, Arc::new(Mutex::new(HashMap::new())));
+            Ok(Value::Int(id))
+        }
+        Builtin::BusSubscribe => {
+            if args.len() != 3 {
+                return Err(err("bus_subscribe 需要 (bus, topic, fn) 参数", pos));
+            }
+            let bus = expect_int(&args[0], "bus_subscribe", pos)?;
+            let topic = expect_str(&args[1], "bus_subscribe", pos)?.to_string();
+            let f = args[2].clone();
+            if !matches!(f, Value::Func(_)) {
+                return Err(err("bus_subscribe 的 fn 必须是函数", pos));
+            }
+            match event_buses().lock().unwrap().get(&bus).cloned() {
+                Some(b) => {
+                    b.lock().unwrap().entry(topic).or_default().push(f);
+                    Ok(Value::Bool(true))
+                }
+                None => Err(err("bus_subscribe: 无效 bus id", pos)),
+            }
+        }
+        Builtin::BusPublish => {
+            if args.len() != 3 {
+                return Err(err("bus_publish 需要 (bus, topic, data) 参数", pos));
+            }
+            let bus = expect_int(&args[0], "bus_publish", pos)?;
+            let topic = expect_str(&args[1], "bus_publish", pos)?.to_string();
+            let data = args[2].clone();
+            match event_buses().lock().unwrap().get(&bus).cloned() {
+                Some(b) => {
+                    let subs = b.lock().unwrap().get(&topic).cloned().unwrap_or_default();
+                    let mut count = 0;
+                    for f in subs {
+                        let call_args = [Value::Str(topic.clone()), data.clone()];
+                        interp.call_value(&f, &call_args, pos)?;
+                        count += 1;
+                    }
+                    Ok(Value::Int(count))
+                }
+                None => Err(err("bus_publish: 无效 bus id", pos)),
+            }
+        }
+        Builtin::BusUnsubscribe => {
+            if args.len() != 3 {
+                return Err(err("bus_unsubscribe 需要 (bus, topic, fn) 参数", pos));
+            }
+            let bus = expect_int(&args[0], "bus_unsubscribe", pos)?;
+            let topic = expect_str(&args[1], "bus_unsubscribe", pos)?.to_string();
+            let f = args[2].clone();
+            match event_buses().lock().unwrap().get(&bus).cloned() {
+                Some(b) => {
+                    let mut b = b.lock().unwrap();
+                    let Some(subs) = b.get_mut(&topic) else {
+                        return Ok(Value::Bool(false));
+                    };
+                    let before = subs.len();
+                    subs.retain(|s| match (s, &f) {
+                        (Value::Func(a), Value::Func(b2)) => !Arc::ptr_eq(a, b2),
+                        _ => true,
+                    });
+                    Ok(Value::Bool(subs.len() < before))
+                }
+                None => Err(err("bus_unsubscribe: 无效 bus id", pos)),
+            }
+        }
         Builtin::GenNext => {
             if args.len() != 1 {
                 return Err(err("gen_next 需要一个参数", pos));
@@ -1356,6 +1434,32 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             match &args[0] {
                 Value::Gen(g) => {
                     let mut gg = g.lock().unwrap();
+                    // M34：惰性生成器——从 seq 逐项取（不展开 range），filter 检查 + transform 求值
+                    if gg.lazy.is_some() {
+                        loop {
+                            let v = lazy_seq_get(&gg.lazy.as_ref().unwrap().seq, gg.lazy.as_ref().unwrap().cursor);
+                            gg.lazy.as_mut().unwrap().cursor += 1;
+                            let x = match v {
+                                Some(x) => x,
+                                None => {
+                                    gg.lazy = None;
+                                    return Ok(Value::Null);
+                                }
+                            };
+                            let (transform, filter) = {
+                                let lg = gg.lazy.as_ref().unwrap();
+                                (lg.transform.clone(), lg.filter.clone())
+                            };
+                            if let Some(f) = &filter {
+                                let keep = interp.call_value(f, &[x.clone()], pos)?;
+                                if !interp.is_truthy(&keep, pos)? {
+                                    continue;
+                                }
+                            }
+                            let r = interp.call_value(&transform, &[x], pos)?;
+                            return Ok(r);
+                        }
+                    }
                     let cur = gg.cursor;
                     let got = gg.materialized.get(cur).cloned();
                     if got.is_some() {
@@ -1394,7 +1498,9 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
                     out
                 }
                 Value::Gen(g) => {
-                    g.lock().unwrap().materialized.clone()
+                    let mut gg = g.lock().unwrap();
+                    gen_materialize_lazy(&mut gg, interp, pos)?;
+                    gg.materialized.clone()
                 }
                 Value::Dict(d) => d
                     .lock().unwrap()
@@ -2290,6 +2396,17 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
                 other => other.to_string(),
             };
             Ok(Value::Bool(crate::ws::ws_send(conn, &data)))
+        }
+        // M34：ws_broadcast(data) → int —— 向 ws_serve 全部活跃连接群发
+        Builtin::WsBroadcast => {
+            if args.len() != 1 {
+                return Err(err("ws_broadcast 需要 (data) 参数", pos));
+            }
+            let data = match &args[0] {
+                Value::Str(s) => s.clone(),
+                other => other.to_string(),
+            };
+            Ok(Value::Int(crate::ws::ws_broadcast(&data)))
         }
         Builtin::WsRecv => {
             let timeout_ms = match args.len() {
@@ -3308,7 +3425,7 @@ fn net_close(id: i64) {
     net_listeners().lock().unwrap().remove(&id);
 }
 
-// ==================== M33：UDP 基础设施（HTTP/3/QUIC 预研） ====================
+// ==================== M32：UDP 基础设施（HTTP/3/QUIC 预研） ====================
 static UDP_SOCKS: OnceLock<Mutex<HashMap<i64, std::net::UdpSocket>>> = OnceLock::new();
 fn udp_socks() -> &'static Mutex<HashMap<i64, std::net::UdpSocket>> {
     UDP_SOCKS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -3323,6 +3440,62 @@ fn udp_get(id: i64) -> Option<std::net::UdpSocket> {
 }
 fn udp_remove(id: i64) -> bool {
     udp_socks().lock().unwrap().remove(&id).is_some()
+}
+
+// ==================== M34：事件总线（pub/sub，跨线程） ====================
+// bus_id → (topic → 订阅者函数列表)；bus_publish 在调用线程同步回调
+static EVENT_BUSES: OnceLock<Mutex<HashMap<i64, Arc<Mutex<HashMap<String, Vec<Value>>>>>>> = OnceLock::new();
+fn event_buses() -> &'static Mutex<HashMap<i64, Arc<Mutex<HashMap<String, Vec<Value>>>>>> {
+    EVENT_BUSES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+static BUS_NEXT: AtomicI64 = AtomicI64::new(1);
+
+// ==================== M34：惰性生成器辅助（单层 for 延迟求值） ====================
+/// 惰性 seq 取第 i 个元素（list 索引 / range 逐数计算，不展开）
+fn lazy_seq_get(seq: &Value, i: usize) -> Option<Value> {
+    match seq {
+        Value::List(l) => l.lock().unwrap().get(i).cloned(),
+        Value::Range { start, end, step } => {
+            let cur = start + step * i as i64;
+            if (*step > 0 && cur < *end) || (*step < 0 && cur > *end) {
+                Some(Value::Int(cur))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// 惰性生成器剩余项全部物化到 materialized（for-in / list() / len / 索引时调用，
+/// 保持 M32 行为一致）；物化后 lazy 清空。
+pub fn gen_materialize_lazy(
+    gg: &mut crate::value::GenObj,
+    interp: &mut Interpreter,
+    pos: Pos,
+) -> Result<(), LxError> {
+    if gg.lazy.is_none() {
+        return Ok(());
+    }
+    let mut lg = gg.lazy.take().unwrap();
+    loop {
+        let v = lazy_seq_get(&lg.seq, lg.cursor);
+        lg.cursor += 1;
+        match v {
+            None => break,
+            Some(x) => {
+                if let Some(f) = &lg.filter {
+                    let keep = interp.call_value(f, &[x.clone()], pos)?;
+                    if !interp.is_truthy(&keep, pos)? {
+                        continue;
+                    }
+                }
+                let r = interp.call_value(&lg.transform, &[x], pos)?;
+                gg.materialized.push(r);
+            }
+        }
+    }
+    Ok(())
 }
 
 // ==================== M16 HTTP 服务端框架（解释器模式） ====================

@@ -1,0 +1,26 @@
+# M34② 进程池配置化：worker 数（PX_POOL_WORKERS）/ 空闲回收（PX_POOL_IDLE_MS）
+# / 每 worker 最大请求数（PX_POOL_MAX_REQ，防泄漏滚动重启）
+# 编译模式生效（px_serve 执行 .px 脚本走 px --worker 进程池，懒初始化）
+# 验证：配置化不破坏脚本执行（worker 数由环境变量控制，见 run_all.sh 设置）
+PORT = 18162
+D = "/tmp/px_m34_pool"
+mkdir(D)
+write_file(D + "/hello.px", "print('pool-hello')")
+write_file(D + "/index.html", "STATIC")
+
+def serve():
+    px_serve(PORT, D, 10000)
+spawn serve()
+sleep(300)
+
+# 请求脚本多次（触发进程池任务分发）
+for i in range(3):
+    r = http_request("http://127.0.0.1:" + str(PORT) + "/hello.px", "GET")
+    assert(r["status"] == 200 and contains(r["body"], "pool-hello"), "脚本执行返回内容")
+
+# 静态文件不受影响
+r = http_request("http://127.0.0.1:" + str(PORT) + "/index.html", "GET")
+assert(r["status"] == 200 and r["body"] == "STATIC")
+
+print("pool exec x3 + static ok")
+print("M34_POOL_CFG_OK")

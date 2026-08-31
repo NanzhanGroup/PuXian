@@ -50,21 +50,42 @@ pub enum Value {
     RWLock(RWLockRef),
     /// 类型对象（Color.Red 枚举构造 / Point(1,2) 结构体构造）
     TypeRef(TypeRefKind),
-    /// 生成器对象（M32：生成器表达式 (x for x in xs)；创建时物化，gen_next 逐项消费）
+    /// 生成器对象（M32：生成器表达式 (x for x in xs)；M34：惰性——单层 for 延迟求值）
     Gen(Arc<Mutex<GenObj>>),
 }
 
-/// 生成器对象：物化结果 + 游标
-/// - 创建时立即求值（双模式一致：Rust 解释器 / C 编译同一语义）
-/// - cursor 记录 gen_next 已取到的位置（Python 生成器语义：耗尽后 null）
+/// 生成器对象：物化结果 + 游标 +（M34 惰性）序列 + 变换/过滤闭包
+/// - M32：创建时立即物化（多层/解包场景），cursor 记录 gen_next 位置（Python 语义：耗尽后 null）
+/// - M34：单层 for 惰性——保存 seq（不展开 range）+ transform/filter 普贤闭包，
+///   gen_next 逐项求值（真延迟）；for-in / list() / len 时先物化剩余保持行为一致
 pub struct GenObj {
     pub materialized: Vec<Value>,
     pub cursor: usize,
+    pub lazy: Option<LazyGen>,
+}
+
+/// M34 惰性生成器状态：从 seq 逐项取 → filter 检查 → transform 求值
+#[derive(Clone)]
+pub struct LazyGen {
+    /// 迭代源：list / range（不展开）
+    pub seq: Value,
+    /// 已消费位置
+    pub cursor: usize,
+    /// 变换闭包 fn(x){expr}
+    pub transform: Value,
+    /// 过滤闭包 fn(x){cond}（None = 全通过）
+    pub filter: Option<Value>,
 }
 
 impl std::fmt::Debug for GenObj {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Gen(items={}, cursor={})", self.materialized.len(), self.cursor)
+        write!(
+            f,
+            "Gen(items={}, cursor={}, lazy={})",
+            self.materialized.len(),
+            self.cursor,
+            self.lazy.is_some()
+        )
     }
 }
 
@@ -365,6 +386,16 @@ pub enum Builtin {
     UdpSend,
     UdpRecv,
     UdpClose,
+    // M34：WebSocket 服务端广播 + 事件总线（pub/sub）
+    // ws_broadcast(data) → int：向 ws_serve 全部活跃连接群发，返回成功数
+    // event_bus() → int（创建事件总线）；bus_subscribe(bus, topic, fn) → bool
+    // bus_publish(bus, topic, data) → int（同步调用所有订阅者 fn(topic, data)）
+    // bus_unsubscribe(bus, topic, fn) → bool
+    WsBroadcast,
+    BusNew,
+    BusSubscribe,
+    BusPublish,
+    BusUnsubscribe,
 }
 
 impl Builtin {
@@ -531,6 +562,11 @@ impl Builtin {
             Builtin::UdpSend => "udp_send",
             Builtin::UdpRecv => "udp_recv",
             Builtin::UdpClose => "udp_close",
+            Builtin::WsBroadcast => "ws_broadcast",
+            Builtin::BusNew => "event_bus",
+            Builtin::BusSubscribe => "bus_subscribe",
+            Builtin::BusPublish => "bus_publish",
+            Builtin::BusUnsubscribe => "bus_unsubscribe",
         }
     }
 }

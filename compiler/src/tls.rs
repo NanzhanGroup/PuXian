@@ -51,11 +51,16 @@ impl SConn {
             inner: Arc::new(Mutex::new(SConnInner::Tls(Box::new(t)))),
         }
     }
-    /// 克隆句柄（共享同一底层连接；sse_send 等跨线程写场景）
+    /// 克隆句柄：明文 → 独立底层句柄（内核共享 socket，读写并发不互斥；
+    /// M34 修复：原共享 inner Mutex 导致"一端阻塞读 + 另一端写"死锁，ws_broadcast 场景）；
+    /// TLS → 共享会话（rustls 会话单线程，读写必须串行，由 WsConn 的读写 Mutex 串行化）。
     pub fn try_clone(&self) -> std::io::Result<Self> {
-        Ok(SConn {
-            inner: self.inner.clone(),
-        })
+        match &*self.inner.lock().unwrap() {
+            SConnInner::Plain(s) => Ok(SConn::plain(s.try_clone()?)),
+            SConnInner::Tls(_) | SConnInner::TlsClient(_) => Ok(SConn {
+                inner: self.inner.clone(),
+            }),
+        }
     }
     pub fn shutdown(&mut self) {
         let mut g = self.inner.lock().unwrap();

@@ -1,0 +1,57 @@
+# M34① 惰性生成器：单层 for 延迟求值（transform/filter 闭包 gen_next 时调用）
+# 创建时不求值输出（惰性）；gen_next 逐项产出；for-in / list() / len 自动物化
+# 双模式一致：Rust 解释器（range 不展开真惰性）+ C 编译（seq 物化但 transform/filter 延迟）
+
+# 1. 基本惰性：创建时不求值 transform
+g = (x * 2 for x in [1, 2, 3])
+assert(gen_next(g) == 2)
+assert(gen_next(g) == 4)
+assert(gen_next(g) == 6)
+assert(gen_next(g) == null)
+print("lazy gen_next: 2 4 6 null")
+
+# 2. filter 惰性（跳过不满足项）
+g2 = (x for x in [1, 2, 3, 4, 5, 6] if x % 2 == 0)
+out = []
+v = gen_next(g2)
+while v != null:
+    out.append(v)
+    v = gen_next(g2)
+assert(out == [2, 4, 6])
+print("lazy filter:", str(out[0]), str(out[1]), str(out[2]))
+
+# 3. 捕获外层全局变量（transform 引用外部 k）
+k = 10
+g3 = (x + k for x in [1, 2])
+assert(gen_next(g3) == 11)
+assert(gen_next(g3) == 12)
+assert(gen_next(g3) == null)
+print("lazy capture global:", "11 12")
+
+# 4. for-in / list() / len 自动物化剩余
+g4 = (x * x for x in [1, 2, 3])
+assert(list(g4) == [1, 4, 9])
+g5 = (x + 1 for x in [10, 20])
+s = 0
+for v in g5:
+    s = s + v
+assert(s == 32)
+g6 = (x for x in [7, 8, 9])
+assert(len(g6) == 3)
+print("lazy materialize: list/for/len ok")
+
+# 5. range 迭代（Rust 端不展开真惰性；C 端 range 物化但输出一致）
+g7 = (x * 3 for x in range(4))
+assert(gen_next(g7) == 0)
+assert(gen_next(g7) == 3)
+assert(gen_next(g7) == 6)
+assert(gen_next(g7) == 9)
+assert(gen_next(g7) == null)
+print("lazy range: 0 3 6 9")
+
+# 6. 多层 for 仍物化（M32 语义保持）
+g8 = (x + y for x in [1, 2] for y in [10, 20])
+assert(list(g8) == [11, 21, 12, 22])
+print("multi-for materialized:", "11 21 12 22")
+
+print("M34_GEN_LAZY_OK")

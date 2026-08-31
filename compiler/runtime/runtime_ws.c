@@ -697,8 +697,7 @@ LXValue bi_ws_send(LXValue* args, int nargs, void* ctx) {
     if (!c) return px_bool(false);
     const char* data = px_val_cstr(args[1]);
     int ok = (ws_send_frame(c, WS_OP_TEXT, (const unsigned char*)data, strlen(data), is_client) == 0);
-    if (!ok) {
-        // 写失败：标记关闭 + 清理
+    if (!ok) {        // 写失败：标记关闭 + 清理
         pthread_mutex_lock(&g_ws_mu);
         int idx = ws_find(conn);
         if (idx >= 0) {
@@ -712,6 +711,25 @@ LXValue bi_ws_send(LXValue* args, int nargs, void* ctx) {
         pthread_mutex_unlock(&g_ws_mu);
     }
     return px_bool(ok);
+}
+
+// M34：ws_broadcast(data) → int —— 向 ws_serve 全部活跃**服务端**连接群发文本帧，返回成功数
+// 只广播服务端连接（client=0）：避免回环（客户端连接也广播会把帧发回自身对端）
+LXValue bi_ws_broadcast(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("ws_broadcast 需要 (data) 参数");
+    const char* data = px_val_cstr(args[0]);
+    size_t dlen = strlen(data);
+    int ok = 0;
+    pthread_mutex_lock(&g_ws_mu);
+    for (int i = 0; i < MAX_WS_CONNS; i++) {
+        if (!g_ws_conns[i].active || g_ws_conns[i].closed || g_ws_conns[i].fd < 0) continue;
+        if (g_ws_conns[i].client) continue;  // M34：只广播服务端连接
+        PxConn* c = g_ws_conns[i].conn;
+        if (c && ws_send_frame(c, WS_OP_TEXT, (const unsigned char*)data, dlen, 0) == 0) ok++;
+    }
+    pthread_mutex_unlock(&g_ws_mu);
+    return px_int(ok);
 }
 
 // ws_recv(conn) → str | null（阻塞读一条完整消息；自动重组分片、回复 ping）

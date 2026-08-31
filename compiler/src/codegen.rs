@@ -1016,8 +1016,23 @@ impl Codegen {
                 Ok(full)
             }
             Expr::GenExp { expr, clauses, cond, .. } => {
-                // M32 生成器表达式：立即物化为列表 + px_gen_from_list 包装为生成器对象
-                //（双模式一致：Rust 解释器同样创建时物化；gen_next 逐项消费）
+                // M34：单层 for + 单变量 → 惰性生成器（seq 不展开，transform/filter 闭包延迟求值）
+                // 注意：transform/filter 闭包无捕获（C 端限制），只引用迭代变量/全局；
+                // 引用外层局部变量时编译期无法捕获 → 用户需避免（解释器支持捕获）。
+                if clauses.len() == 1 && clauses[0].vars.len() == 1 {
+                    let xname = clauses[0].vars[0].clone();
+                    let seq_val = self.gen_expr(&clauses[0].iterable)?;
+                    let transform_val = self.gen_lambda(&[xname.clone()], expr)?;
+                    let filter_val = match cond {
+                        Some(c) => self.gen_lambda(&[xname], c)?,
+                        None => "px_null()".to_string(),
+                    };
+                    return Ok(format!(
+                        "px_gen_lazy({}, {}, {})",
+                        seq_val, transform_val, filter_val
+                    ));
+                }
+                // M32 物化路径（多层 for / 多变量解包）
                 let rv = self.tmp();
                 let mut its = Vec::new();
                 let mut ivs = Vec::new();
@@ -1280,8 +1295,7 @@ impl Codegen {
     }
 
     // 生成 match 模式条件
-    fn gen_pattern_cond(&mut self, arm: &MatchArm, subject: String) -> Result<String, String> {
-        match &arm.pattern {
+    fn gen_pattern_cond(&mut self, arm: &MatchArm, subject: String) -> Result<String, String> {        match &arm.pattern {
             Pattern::Literal(expr) => {
                 let e = self.gen_expr(expr)?;
                 Ok(format!("px_is_truthy(px_eq({}, {}))", subject, e))
@@ -1317,6 +1331,34 @@ impl Codegen {
                 ))
             }
         }
+    }
+
+    /// M34：生成无捕获闭包函数（fn_closure_N）+ 返回其函数值 px_func(...)。
+    /// 用于惰性生成器的 transform/filter（fn(x){expr/cond}）。
+    fn gen_lambda(&mut self, params: &[String], body: &Expr) -> Result<String, String> {
+        self.closure_id += 1;
+        let cid = self.closure_id;
+        let fnname = format!("fn_closure_{}", cid);
+        let mut fdef = format!("static LXValue {}(LXValue* args, int nargs, void* ctx) {{\n", fnname);
+        fdef.push_str("    (void)ctx;\n");
+        let saved_vars = self.vars.clone();
+        let saved_types = self.var_types.clone();
+        self.vars.clear();
+        self.var_types.clear();
+        for (i, p) in params.iter().enumerate() {
+            let v = self.new_var(p);
+            fdef.push_str(&format!(
+                "    LXValue {} = (nargs > {}) ? args[{}] : px_null();\n",
+                v, i, i
+            ));
+        }
+        let b = self.gen_expr(body)?;
+        fdef.push_str(&format!("    return {};\n", b));
+        fdef.push_str("}\n");
+        self.closures.push_str(&fdef);
+        self.vars = saved_vars;
+        self.var_types = saved_types;
+        Ok(format!("px_func(\"<closure{}>\", {}, NULL)", cid, fnname))
     }
 
     fn escape_str(&self, s: &str) -> String {
