@@ -2296,6 +2296,29 @@ impl Interpreter {
         }
         let cl = &clauses[ci];
         let it = self.eval_expr(&cl.iterable, env)?;
+        // M35：range 流式迭代（不物化中间列表，大 range 推导式不炸内存）；
+        // 其他可迭代类型保持物化（list/tuple/str/dict/gen）。
+        if let Value::Range { start, end, step } = &it {
+            let mut cur = *start;
+            while (*step > 0 && cur < *end) || (*step < 0 && cur > *end) {
+                let item = Value::Int(cur);
+                let child = Env::new(Some(env.clone()));
+                self.bind_comp_vars(&cl.vars, item, &child, pos)?;
+                self.eval_comp(
+                    clauses,
+                    ci + 1,
+                    sink,
+                    list_expr,
+                    dict_key,
+                    dict_val,
+                    cond,
+                    &child,
+                    pos,
+                )?;
+                cur += *step;
+            }
+            return Ok(());
+        }
         let items = self.iter_values(&it, pos)?;
         for item in items {
             let child = Env::new(Some(env.clone()));

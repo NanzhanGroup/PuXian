@@ -49,6 +49,7 @@ mod web;
 mod ws;
 mod xml;
 mod zip;
+mod h2;
 
 use std::sync::{Arc, Mutex};
 
@@ -1034,6 +1035,7 @@ fn run_build(file: &str) -> ExitCode {
         "runtime_rsa.c",
         "runtime_sqlite.c",
         "runtime_route.c",
+        "runtime_h2.c",
     ];
     let mut ok_copy = true;
     for f in rt_files {
@@ -1105,6 +1107,7 @@ fn run_build(file: &str) -> ExitCode {
         .arg(build_dir.join("runtime_rsa.c"))
         .arg(build_dir.join("runtime_sqlite.c"))
         .arg(build_dir.join("runtime_route.c"))
+        .arg(build_dir.join("runtime_h2.c"))
         .args(sqlite_src.iter())
         .arg(build_dir.join("miniz.c"))
         .arg(build_dir.join("miniz_tinfl.c"))

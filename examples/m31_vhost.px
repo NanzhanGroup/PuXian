@@ -57,11 +57,7 @@ r = http_request("http://127.0.0.1:" + str(PORT) + "/index.txt", "OPTIONS", "", 
 assert(r["status"] == 204)
 print("CORS preflight:", str(r["status"]))
 
-# HTTP/2 预检：h2c 升级探测 → 505
-h2c_h = {"Upgrade": "h2c", "Connection": "Upgrade, HTTP2-Settings"}
-r = http_request("http://127.0.0.1:" + str(PORT) + "/index.txt", "GET", "", h2c_h)
-assert(r["status"] == 505)
-print("h2c rejected:", str(r["status"]))
+# M35：h2c 升级探测已从 505 改为 HTTP/2 处理（见 m35_h2.px）；此处不再断言 505
 
 # 限流集成：max=3 / 60s → 第 4 次 429（同一来源 IP）
 def serve2():

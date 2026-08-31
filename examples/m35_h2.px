@@ -1,0 +1,50 @@
+# M35③ HTTP/2 最小服务端（h2c Upgrade + HPACK + 帧层；python h2 客户端验证）
+# 双模式一致：解释器 Rust h2.rs + 编译 C runtime_h2.c
+PORT = 18163
+D = "/tmp/px_m35_h2"
+mkdir(D)
+write_file(D + "/index.html", "H2-STATIC")
+# python h2 测试客户端（h2c upgrade → preface → SETTINGS → HEADERS(GET) → 校验响应）
+write_file("/tmp/h2_client.py", '''
+import socket, time, sys
+port = int(sys.argv[1])
+s = socket.create_connection(("127.0.0.1", port), timeout=5)
+s.settimeout(4)
+# h2c upgrade（HTTP/1.1 + Upgrade）
+req = b"GET /hello HTTP/1.1\\r\\nHost: 127.0.0.1:" + str(port).encode() + b"\\r\\nConnection: Upgrade\\r\\nUpgrade: h2c\\r\\nHTTP2-Settings: AAMAAABkAAQCAAAAAAIAAAAA\\r\\n\\r\\n"
+s.sendall(req)
+time.sleep(0.3)
+# connection preface
+s.sendall(b"PRI * HTTP/2.0\\r\\n\\r\\nSM\\r\\n\\r\\n")
+# SETTINGS 帧（ty=4 flags=0 len=0）
+s.sendall(b"\\x00\\x00\\x00\\x04\\x00\\x00\\x00\\x00\\x00")
+# HEADERS 帧：stream=1 END_HEADERS|END_STREAM(0x05) len=10；HPACK: 82(:method GET) 86(:scheme http) 84(:path /) 44 05 hello
+s.sendall(b"\\x00\\x00\\x0a\\x01\\x05\\x00\\x00\\x00\\x01\\x82\\x86\\x84\\x44\\x05hello")
+time.sleep(0.5)
+data = b""
+try:
+    while True:
+        chunk = s.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+        if b"PuXian HTTP/2" in data:
+            break
+except Exception:
+    pass
+s.close()
+ok = b"HTTP/1.1 101" in data and b"PuXian HTTP/2" in data and b"method=GET" in data
+print("H2_CLIENT_OK" if ok else "H2_CLIENT_FAIL")
+''')
+
+def serve():
+    px_serve(PORT, D, 10000)
+spawn serve()
+sleep(400)
+
+os_spawn("/bin/sh", ["-c", "python3 /tmp/h2_client.py " + str(PORT) + " > /tmp/m35_h2_res.txt 2>&1"])
+sleep(1200)
+res = read_file("/tmp/m35_h2_res.txt")
+print("h2 client:", res)
+assert(contains(res, "H2_CLIENT_OK"), "HTTP/2 端到端")
+print("M35_H2_OK")

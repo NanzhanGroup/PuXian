@@ -1,0 +1,53 @@
+# M35① 请求体 gzip 解压 + M35④ 多维度限流 / 白名单（双模式一致）
+PORT = 18164
+D = "/tmp/px_m35_gz"
+mkdir(D)
+write_file(D + "/index.html", "GZ-OK")
+
+def echo(req, params):
+    return req["body"]
+route("POST", "/echo", echo)
+
+# 服务器：请求体 gzip 自动解压（Content-Encoding: gzip）+ 多维限流 key=ip|path（max 2/60s）
+def serve():
+    px_serve(PORT, D, 10000, {"rate_limit": {"max": 2, "window_sec": 60, "key": "ip|path"}})
+spawn serve()
+sleep(400)
+
+# ============ ① 请求体 gzip 解压（curl 发送 gzip 压缩 body） ============
+write_file("/tmp/px_gz_in.txt", "hello-gzip-request")
+os_spawn("/bin/sh", ["-c", "gzip -c /tmp/px_gz_in.txt > /tmp/px_gz_in.gz"])
+sleep(400)
+os_spawn("/bin/sh", ["-c", "curl -s -X POST --data-binary @/tmp/px_gz_in.gz -H 'Content-Encoding: gzip' -H 'Content-Type: text/plain' http://127.0.0.1:" + str(PORT) + "/echo > /tmp/px_gz_out.txt"])
+sleep(900)
+out = read_file("/tmp/px_gz_out.txt")
+assert(out == "hello-gzip-request", "gzip 请求体解压")
+print("gzip body echo:", out)
+
+# ============ ② 多维限流（key=ip|path：各 path 独立计数） ============
+# /echo 已用 1 次（gzip 请求）→ 再 1 次 → 第 3 次 429
+r1 = http_request("http://127.0.0.1:" + str(PORT) + "/echo", "POST", "a")
+assert(r1["status"] == 200)
+r2 = http_request("http://127.0.0.1:" + str(PORT) + "/echo", "POST", "b")
+assert(r2["status"] == 429, "ip|path 第 3 次应 429")
+print("multi-dim limit /echo:", str(r1["status"]), str(r2["status"]))
+
+# /index.html 独立计数（path 不同 → 不受 /echo 影响）
+r = http_request("http://127.0.0.1:" + str(PORT) + "/index.html", "GET")
+assert(r["status"] == 200)
+print("independent path:", str(r["status"]))
+
+# ============ ③ 白名单放行 ============
+PORT2 = 18165
+def serve2():
+    px_serve(PORT2, D, 10000, {"rate_limit": {"max": 1, "window_sec": 60, "whitelist": ["127.0.0.1"]}})
+spawn serve2()
+sleep(400)
+ok = []
+for i in range(3):
+    r = http_request("http://127.0.0.1:" + str(PORT2) + "/index.html", "GET")
+    ok.append(r["status"])
+assert(ok[0] == 200 and ok[1] == 200 and ok[2] == 200, "白名单全放行")
+print("whitelist:", str(ok[0]), str(ok[1]), str(ok[2]))
+
+print("M35_GZIP_RL_OK")

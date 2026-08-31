@@ -86,6 +86,11 @@ static int g_sandbox_active = 0;
 // px_serve opts：限流（max 次 / window_sec 秒，按 IP；0 = 未启用）
 static long long g_px_rate_max = 0;
 static long long g_px_rate_window = 0;
+// M35：多维度限流——key 组合模式（ip / ip|ua / ip|path / ip|ua|path）+ 白名单 IP
+static char g_px_rate_key_mode[32] = "ip";
+#define PX_RATE_WL_MAX 64
+static char g_px_rate_whitelist[PX_RATE_WL_MAX][64];
+static int g_px_rate_whitelist_n = 0;
 // M33：access log 落盘路径（px_serve opts{access_log}；空 = 仅 stderr）+ Alt-Svc 通告
 char g_px_access_log[1024] = {0};
 char g_px_alt_svc[256] = {0};
@@ -9640,6 +9645,19 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         }
 
         // 5. 请求 dict + form/files（Content-Type 驱动）
+        // M35：请求体 gzip 自动解压（Content-Encoding: gzip → body_buf 解压后供 REQUEST.body/form）
+        if (body_len > 0 && body_buf) {
+            LXValue ce = px_header_get(&headers, "Content-Encoding");
+            if (ce.type == PX_STR && strcasestr(ce.as.obj->as.str.data, "gzip")) {
+                int olen = 0;
+                char* dec = px_gzip_decompress(body_buf, body_len, &olen);
+                if (dec) {
+                    xfree(body_buf);
+                    body_buf = dec;
+                    body_len = olen;
+                }
+            }
+        }
         LXValue req = px_dict();
         px_dict_set(req, "method", px_str(method));
         px_dict_set(req, "target", px_str(target));
@@ -9695,14 +9713,18 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
             }
         }
 
-        // M31.4a：HTTP/2 预检——明确拒绝 h2c（Upgrade: h2c / HTTP2-Settings 探测）
+        // M35：HTTP/2——h2c Upgrade（Upgrade: h2c + HTTP2-Settings）→ 升级为 h2 帧连接；
+        // prior knowledge（请求行 "PRI * HTTP/2.0"）→ 直接 h2。进入帧循环后整连接为 h2。
         {
             LXValue upg = px_header_get(&headers, "Upgrade");
-            if (upg.type == PX_STR && strcasestr(upg.as.obj->as.str.data, "h2c")) {
-                char extra[256];
-                snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
-                px_px_send_ex(fd, 505, "text/plain; charset=utf-8", "505 HTTP Version Not Supported",
-                              31, strcmp(method, "HEAD") == 0, client_keep_alive, extra);
+            int is_h2c = upg.type == PX_STR && strcasestr(upg.as.obj->as.str.data, "h2c");
+            int is_pri = strncmp(target, "PRI * HTTP/2.0", 14) == 0;
+            if (is_h2c || is_pri) {
+                // 请求头后缓冲残留（body 后到 len 的字节，可能含 client preface 前几字节）
+                const unsigned char* residual = (const unsigned char*)buf + (header_end + 4) + content_length;
+                int rlen = 0;
+                if (len > (header_end + 4) + content_length) rlen = len - ((header_end + 4) + content_length);
+                px_h2_handle(&conn, is_h2c ? 1 : 0, residual, rlen);
                 goto req_done;
             }
         }
@@ -9731,14 +9753,36 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
                 if (colon && colon[1] >= '0' && colon[1] <= '9') *colon = 0; // 去端口
                 if (ipbuf[0] == '[') { char* br = strchr(ipbuf, ']'); if (br) { br++; *br = 0; memmove(ipbuf, ipbuf + 1, strlen(ipbuf)); } }
             }
-            if (!px_rate_limit_try(ipbuf, g_px_rate_max, g_px_rate_window)) {
-                char extra[256];
-                snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
-                px_px_send_ex(fd, 429, "text/plain; charset=utf-8", "429 Too Many Requests",
-                              21, strcmp(method, "HEAD") == 0, client_keep_alive, extra);
-                px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
-                        (long long)time(NULL), ipbuf, method, path, 429, 21, req_id);
-                goto req_done;
+            // M35：白名单 IP 直接放行（不计数）
+            int whitelisted = 0;
+            for (int wi = 0; wi < g_px_rate_whitelist_n; wi++) {
+                if (strcmp(g_px_rate_whitelist[wi], ipbuf) == 0) { whitelisted = 1; break; }
+            }
+            if (!whitelisted) {
+                // M35：多维 key（ip / ip|ua / ip|path / ip|ua|path）
+                char rkey[512];
+                snprintf(rkey, sizeof(rkey), "%s", ipbuf);
+                if (strstr(g_px_rate_key_mode, "ua")) {
+                    LXValue uav = px_header_get(&headers, "User-Agent");
+                    const char* ua = (uav.type == PX_STR) ? uav.as.obj->as.str.data : "";
+                    char tmp[512];
+                    snprintf(tmp, sizeof(tmp), "%s|%s", rkey, ua);
+                    snprintf(rkey, sizeof(rkey), "%s", tmp);
+                }
+                if (strstr(g_px_rate_key_mode, "path")) {
+                    char tmp[700];
+                    snprintf(tmp, sizeof(tmp), "%s|%s", rkey, path);
+                    snprintf(rkey, sizeof(rkey), "%s", tmp);
+                }
+                if (!px_rate_limit_try(rkey, g_px_rate_max, g_px_rate_window)) {
+                    char extra[256];
+                    snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
+                    px_px_send_ex(fd, 429, "text/plain; charset=utf-8", "429 Too Many Requests",
+                                  21, strcmp(method, "HEAD") == 0, client_keep_alive, extra);
+                    px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
+                            (long long)time(NULL), ipbuf, method, path, 429, 21, req_id);
+                    goto req_done;
+                }
             }
         }
         // M31.2：虚拟主机（Host 头路由）——docroot 覆盖 + handler 优先（null → 继续默认）
@@ -10454,6 +10498,8 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     int max_conn = 32;
     g_px_rate_max = 0;
     g_px_rate_window = 0;
+    snprintf(g_px_rate_key_mode, sizeof(g_px_rate_key_mode), "ip");
+    g_px_rate_whitelist_n = 0;
     g_px_access_log[0] = 0;
     g_px_alt_svc[0] = 0;
     if (nargs >= 4 && args[3].type == PX_DICT) {
@@ -10468,6 +10514,22 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
             if (rm.type == PX_INT && rw.type == PX_INT && rm.as.i >= 1 && rw.as.i >= 1) {
                 g_px_rate_max = rm.as.i;
                 g_px_rate_window = rw.as.i;
+            }
+            // M35：key 维度 + 白名单 IP
+            LXValue rk = px_dict_get(rl, "key");
+            if (rk.type == PX_STR) snprintf(g_px_rate_key_mode, sizeof(g_px_rate_key_mode), "%s",
+                                            rk.as.obj->as.str.data);
+            LXValue wl = px_dict_get(rl, "whitelist");
+            if (wl.type == PX_LIST) {
+                g_px_rate_whitelist_n = 0;
+                int wn = wl.as.obj->as.list.len;
+                for (int i = 0; i < wn && g_px_rate_whitelist_n < PX_RATE_WL_MAX; i++) {
+                    LXValue item = wl.as.obj->as.list.items[i];
+                    if (item.type == PX_STR) {
+                        snprintf(g_px_rate_whitelist[g_px_rate_whitelist_n++],
+                                 sizeof(g_px_rate_whitelist[0]), "%s", item.as.obj->as.str.data);
+                    }
+                }
             }
         }
         LXValue al = px_dict_get(args[3], "access_log");

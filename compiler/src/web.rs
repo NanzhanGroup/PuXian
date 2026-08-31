@@ -443,12 +443,23 @@ pub struct PxServeOpts {
     pub timeout_ms: i64,
     /// M31：最大并发连接数（连接线程池 / 信号量上限，默认 32）
     pub max_conn: usize,
-    /// M31：按 IP 全局限流（max 次 / window_sec 秒 → 超限 429）
-    pub rate_limit: Option<(i64, i64)>,
+    /// M31/M35：限流配置（max 次 / window_sec 秒；key 组合维度；白名单 IP 放行）
+    pub rate_limit: Option<RateLimitConfig>,
     /// M33：结构化访问日志落盘（路径；None = 仅 stderr）
     pub access_log: Option<String>,
     /// M33：HTTP/3 通告（Alt-Svc 响应头值；如 "h3=\":443\""；None = 不发）
     pub alt_svc: Option<String>,
+}
+
+/// M35：多维度限流配置
+#[derive(Clone)]
+pub struct RateLimitConfig {
+    pub max: i64,
+    pub window_sec: i64,
+    /// 限流 key 维度：ip / ip|ua / ip|path / ip|ua|path（默认 ip）
+    pub key_mode: String,
+    /// 白名单 IP（命中直接放行，不计数）
+    pub whitelist: Vec<String>,
 }
 
 impl Default for PxServeOpts {
@@ -490,7 +501,26 @@ pub fn parse_opts(opts: Option<&Value>, timeout_ms: i64) -> PxServeOpts {
                 .and_then(|v| if let Value::Int(i) = v { Some(*i) } else { None });
             if let (Some(m), Some(w)) = (max, win) {
                 if m >= 1 && w >= 1 {
-                    o.rate_limit = Some((m, w));
+                    // M35：key 维度（ip / ip|ua / ip|path / ip|ua|path）+ 白名单 IP
+                    let key_mode = match rl.get("key") {
+                        Some(Value::Str(s)) => s.to_lowercase(),
+                        _ => "ip".to_string(),
+                    };
+                    let whitelist = match rl.get("whitelist") {
+                        Some(Value::List(l)) => l
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .filter_map(|v| if let Value::Str(s) = v { Some(s.clone()) } else { None })
+                            .collect(),
+                        _ => vec![],
+                    };
+                    o.rate_limit = Some(RateLimitConfig {
+                        max: m,
+                        window_sec: w,
+                        key_mode,
+                        whitelist,
+                    });
                 }
             }
         }
@@ -629,7 +659,7 @@ fn handle_px_conn(
     loop {
         // keep-alive：空闲读超时 15s（客户端保持连接但长时间无请求 → 关闭）
         conn.set_read_timeout(Some(Duration::from_secs(15))).ok();
-        let (req, method, _body, body_tmp) = match read_http_conn(conn, o) {
+        let (req, method, _body, body_tmp, residual) = match read_http_conn(conn, o) {
             Ok(x) => x,
             Err(e) if e == "PAYLOAD_TOO_LARGE" => {
                 let _ = send_response(conn, 413, &[], b"413 Payload Too Large", false, false);
@@ -643,6 +673,16 @@ fn handle_px_conn(
         };
         // 客户端 keep-alive 判定（Connection: close → 处理后关闭；HTTP/1.1 默认 keep）
         let keep = request_keep_alive(&req);
+        // M35：HTTP/2 —— h2c Upgrade（Upgrade: h2c + HTTP2-Settings）→ 升级为 h2 帧连接；
+        // prior knowledge（请求行 "PRI * HTTP/2.0"）→ 直接 h2。进入帧循环后整连接为 h2。
+        if req_header_contains(&req, "upgrade", "h2c") {
+            crate::h2::h2_serve(conn, true, &residual)?;
+            return finish_conn(conn, body_tmp);
+        }
+        if method == "PRI" {
+            crate::h2::h2_serve(conn, false, &residual)?;
+            return finish_conn(conn, body_tmp);
+        }
         // M31：虚拟主机解析 → 每请求 docroot / handler
         let (vroot, vhandler) = vhost_resolve(req_host(&req).as_deref(), root);
         let ok = handle_one_request(conn, &req, &method, &vroot, port, o, keep, vhandler)?;
@@ -771,18 +811,23 @@ fn handle_one_request(
         return Ok(keep_alive);
     }
 
-    // M31.3：服务端内置限流（按来源 IP，px_serve opts{rate_limit:{max,window_sec}}）
-    if let Some((max, win)) = o.rate_limit {
+    // M31.3/M35：服务端内置限流（px_serve opts{rate_limit:{max,window_sec,key,whitelist}}）
+    if let Some(rl) = &o.rate_limit {
         let ip = remote_ip(&remote);
-        if !rate_limit_try(ip, max, win) {
-            let mut hd = vec![("X-Request-Id".into(), req_id.clone())];
-            if head_only { hd.push(("Content-Length".into(), "21".into())); }
-            let _ = send_response(conn, 429, &hd, b"429 Too Many Requests", head_only, keep_alive);
-            log_access(&req_id, &remote, method, &path, 429, 21, 0);
-            return Ok(keep_alive);
+        // M35：白名单 IP 直接放行（不计数）
+        let whitelisted = rl.whitelist.iter().any(|w| w == &ip);
+        if !whitelisted {
+            // M35：多维 key（ip / ip|ua / ip|path / ip|ua|path）
+            let key = build_rate_key(rl, &ip, &path, req);
+            if !rate_limit_try(&key, rl.max, rl.window_sec) {
+                let mut hd = vec![("X-Request-Id".into(), req_id.clone())];
+                if head_only { hd.push(("Content-Length".into(), "21".into())); }
+                let _ = send_response(conn, 429, &hd, b"429 Too Many Requests", head_only, keep_alive);
+                log_access(&req_id, &remote, method, &path, 429, 21, 0);
+                return Ok(keep_alive);
+            }
         }
     }
-
     // M31.2：虚拟主机 handler（该域所有请求交给 handler(req)；返回 null → 继续默认处理）
     if let Some(vh) = vhandler {
         if let Some((vst, vhd, vbd)) = run_vhost_handler(&vh, req) {
@@ -893,6 +938,16 @@ fn handle_one_request(
     status = r.0;
     bytes_out = r.1;
     Ok(keep_alive)
+}
+
+/// M35：gzip 解压字节（请求体自动解压；失败返回 Err 保持原样）
+fn gunzip_bytes(data: &[u8]) -> Result<Vec<u8>, String> {
+    use std::io::Read as _;
+    let mut d = flate2::read::GzDecoder::new(data);
+    let mut out = Vec::new();
+    d.read_to_end(&mut out)
+        .map_err(|e| format!("gzip 解压失败: {}", e))?;
+    Ok(out)
 }
 
 /// M29：结构化访问日志（时间 remote method path status bytes ms req=id）
@@ -1423,7 +1478,7 @@ fn exec_script(
 pub fn read_http_conn(
     conn: &mut SConn,
     o: &PxServeOpts,
-) -> Result<(Value, String, Vec<u8>, Option<PathBuf>), String> {
+) -> Result<(Value, String, Vec<u8>, Option<PathBuf>, Vec<u8>), String> {
     let mut buf: Vec<u8> = Vec::new();
     let mut tmp = [0u8; 8192];
     let header_end;
@@ -1447,7 +1502,19 @@ pub fn read_http_conn(
     let remote = conn_peer(conn);
     let (req, content_length) = parse_http_request(&head, &remote)?;
     let body_off = header_end + 4;
-    let (body_bytes, body_tmp) = read_body(conn, &buf[body_off..], content_length, o)?;
+    let (mut body_bytes, body_tmp) = read_body(conn, &buf[body_off..], content_length, o)?;
+    // M35：HTTP/2 h2c——请求头后缓冲的残留字节（client preface 前几字节）回传给 h2 处理
+    let extra: Vec<u8> = if buf.len() > body_off + content_length {
+        buf[body_off + content_length..].to_vec()
+    } else {
+        Vec::new()
+    };
+    // M35：请求体 gzip 自动解压（Content-Encoding: gzip → 解压后供 REQUEST.body / form 使用）
+    if !body_bytes.is_empty() && req_header_contains(&req, "content-encoding", "gzip") {
+        if let Ok(dec) = gunzip_bytes(&body_bytes) {
+            body_bytes = dec;
+        }
+    }
     if let Value::Dict(d) = &req {
         let mut g = d.lock().unwrap();
         g.insert("body".into(), Value::Str(String::from_utf8_lossy(&body_bytes).to_string()));
@@ -1488,7 +1555,7 @@ pub fn read_http_conn(
         }
     }
     let method = req_str(&req, "method").unwrap_or_default();
-    Ok((req, method, body_bytes, body_tmp))
+    Ok((req, method, body_bytes, body_tmp, extra))
 }
 
 /// 连接对端地址（TLS 或明文）
@@ -2134,6 +2201,39 @@ fn req_host(req: &Value) -> Option<String> {
 }
 
 // ==================== M31 限流 / 防爆破（滑动窗口） ====================
+
+/// M35：按 key 模式构造限流 key（ip / ip|ua / ip|path / ip|ua|path）
+fn build_rate_key(rl: &RateLimitConfig, ip: &str, path: &str, req: &Value) -> String {
+    let ua = req_header_str(req, "user-agent").unwrap_or_default();
+    let mut key = ip.to_string();
+    if rl.key_mode.contains("ua") {
+        key.push('|');
+        key.push_str(&ua);
+    }
+    if rl.key_mode.contains("path") {
+        key.push('|');
+        key.push_str(path);
+    }
+    key
+}
+
+/// 取请求头值（小写匹配，返回首值）
+fn req_header_str(req: &Value, name: &str) -> Option<String> {
+    if let Value::Dict(d) = req {
+        if let Some(Value::Dict(h)) = d.lock().unwrap().get("headers").cloned() {
+            let h = h.lock().unwrap();
+            for (k, v) in h.iter() {
+                if k.eq_ignore_ascii_case(name) {
+                    if let Value::Str(s) = v {
+                        return Some(s.clone());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 // rate_limit(key, max, window_sec) → bool：true 放行 / false 超限（应返回 429）。
 // 内部按 key 维护滑动窗口时间戳队列；窗口过期自动滑出。
 // 服务端内置：px_serve opts{rate_limit:{max,window_sec}} 按来源 IP 计数，超限 429。

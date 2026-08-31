@@ -86,7 +86,7 @@ px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
 | [docs/requirements.md](docs/requirements.md) | 需求与设计讨论（动机、取舍、双模式架构） |
 | [docs/plan.md](docs/plan.md) | 开发方案（语言命名、里程碑规划、语言要点） |
 | [docs/spec.md](docs/spec.md) | 语言规格说明书（词法 / 语法 / 语义 / 标准库） |
-| [docs/PROGRESS.md](docs/PROGRESS.md) | 开发进度（M0–M34 产出与验证记录，含 M35 候选） |
+| [docs/PROGRESS.md](docs/PROGRESS.md) | 开发进度（M0–M35 产出与验证记录，含 M36 候选） |
 
 ---
 
@@ -129,6 +129,7 @@ px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
 | M32 | ws:// wss:// 一行连接（ws_connect("ws://…"/"wss://…")，wss 走 TLS）+ SSE 自动重连（sse_connect(url, reconnect_ms)，断线带 Last-Event-ID 重连）+ 进程池热更新（.px 脚本/px 二进制 mtime 变化自动滚动重启 worker）+ 生成器表达式（(expr for x in xs)，gen_next 逐项 / for-in / list() 转换） | ✅ |
 | M33 | per-route 限流（route 第 4 参数 opts{rate_limit} 路由粒度 429，独立桶）+ TLS SNI（tls_server(cert,key,hostname) 多证书按域名选择）+ 访问日志落盘轮转（px_serve opts{access_log}，>10MB 切 .1/.2/.3）+ HTTP/3 QUIC 预研（udp_open/send/recv/close + Alt-Svc 通告 + 报告） | ✅ |
 | M34 | 惰性生成器（单层 for 真延迟：seq 不展开 + transform/filter 闭包逐项求值）+ 进程池配置化（PX_POOL_WORKERS / IDLE_MS / MAX_REQ）+ WS 服务端广播（ws_broadcast 群发，修复 SConn 读写锁死锁）+ 事件总线（event_bus / bus_subscribe / bus_publish / bus_unsubscribe） | ✅ |
+| M35 | 请求体 gzip 解压（Content-Encoding: gzip 自动解压）+ 推导式 range 流式迭代 + HTTP/2 最小服务端（h2c Upgrade + HPACK/Huffman + 帧层）+ 多维限流 / 白名单（key 组合 + whitelist） | ✅ |
 
 ---
 
