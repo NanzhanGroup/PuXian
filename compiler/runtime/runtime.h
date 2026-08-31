@@ -143,8 +143,9 @@ LXValue px_shr(LXValue a, LXValue b);
 // ==================== 容器操作 ====================
 
 LXValue px_index(LXValue obj, LXValue idx);
-// M21：切片 a[start:end]（start/end 为 null 表示省略；str 按 UTF-8 字符、list/tuple 复制）
-LXValue px_slice(LXValue obj, LXValue start, LXValue end);
+// M21/M24：切片 a[start:end] / a[start:end:step]（start/end/step 为 null 表示省略；
+// str 按 UTF-8 字符、list/tuple/bytes 取元素；step<0 反向，step=0 报错）
+LXValue px_slice(LXValue obj, LXValue start, LXValue end, LXValue step);
 void px_index_set(LXValue obj, LXValue idx, LXValue val);
 LXValue px_field(LXValue obj, const char* name);
 void px_field_set(LXValue obj, const char* name, LXValue val);
@@ -175,6 +176,8 @@ LXValue bi_aes_gcm_decrypt(LXValue* args, int nargs, void* ctx);
 LXValue bi_xml_parse(LXValue* args, int nargs, void* ctx);
 LXValue bi_xml_escape(LXValue* args, int nargs, void* ctx);
 LXValue bi_xml_unescape(LXValue* args, int nargs, void* ctx);
+// M24：xml_build(node) → str（与 xml_parse 结构对称的 XML 生成）
+LXValue bi_xml_build(LXValue* args, int nargs, void* ctx);
 LXValue bi_zip_pack(LXValue* args, int nargs, void* ctx);
 LXValue bi_zip_unpack(LXValue* args, int nargs, void* ctx);
 

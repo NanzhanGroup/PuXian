@@ -170,9 +170,11 @@ pub enum Builtin {
     AesGcmDecrypt,
     // M19 P1：XML 解析（企微回调 Encrypt 报文 / 配置文件 / 文档）
     // xml_parse(xml) → dict{name, attrs, children, text} 或 null；xml_escape / xml_unescape
+    // M24：xml_build(node) → str（从 dict 树生成 XML，与 xml_parse 结构对称）
     XmlParse,
     XmlEscape,
     XmlUnescape,
+    XmlBuild,
     // M19 P1：zip 打包/解压（docx/xlsx/pptx 本质是 zip+xml，文档工具基石）
     // zip_pack(files, out_path) → bool；zip_unpack(zip_path, out_dir) → int 解压文件数
     ZipPack,
@@ -355,6 +357,7 @@ impl Builtin {
             Builtin::XmlParse => "xml_parse",
             Builtin::XmlEscape => "xml_escape",
             Builtin::XmlUnescape => "xml_unescape",
+            Builtin::XmlBuild => "xml_build",
             Builtin::ZipPack => "zip_pack",
             Builtin::ZipUnpack => "zip_unpack",
             Builtin::Base64Encode => "base64_encode",

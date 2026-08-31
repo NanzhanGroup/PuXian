@@ -466,13 +466,16 @@ fn check_expr(ctx: &mut FnCtx<'_>, expr: &Expr, diags: &mut Vec<LintDiag>) {
             check_expr(ctx, obj, diags);
             check_expr(ctx, index, diags);
         }
-        Expr::Slice { obj, start, end, .. } => {
+        Expr::Slice { obj, start, end, step, .. } => {
             check_expr(ctx, obj, diags);
             if let Some(s) = start {
                 check_expr(ctx, s, diags);
             }
             if let Some(e) = end {
                 check_expr(ctx, e, diags);
+            }
+            if let Some(k) = step {
+                check_expr(ctx, k, diags);
             }
         }
         Expr::Call { callee, args, .. } => {

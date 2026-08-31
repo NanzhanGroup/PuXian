@@ -712,7 +712,7 @@ impl Codegen {
                 let i = self.gen_expr(index)?;
                 Ok(format!("px_index({}, {})", o, i))
             }
-            Expr::Slice { obj, start, end, .. } => {
+            Expr::Slice { obj, start, end, step, .. } => {
                 let o = self.gen_expr(obj)?;
                 let s = match start {
                     Some(e) => self.gen_expr(e)?,
@@ -722,7 +722,11 @@ impl Codegen {
                     Some(e) => self.gen_expr(e)?,
                     None => "px_null()".to_string(),
                 };
-                Ok(format!("px_slice({}, {}, {})", o, s, e2))
+                let k = match step {
+                    Some(e) => self.gen_expr(e)?,
+                    None => "px_null()".to_string(),
+                };
+                Ok(format!("px_slice({}, {}, {}, {})", o, s, e2, k))
             }
             Expr::Call { callee, args, .. } => {
                 // 通道构造：chan[T](cap) / chan[T]() 解析为 Call(Var("chan"))

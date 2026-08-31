@@ -353,13 +353,16 @@ fn collect_local_names(prog: &Program) -> Vec<String> {
                 walk_expr(obj, out);
                 walk_expr(index, out);
             }
-            ast::Expr::Slice { obj, start, end, .. } => {
+            ast::Expr::Slice { obj, start, end, step, .. } => {
                 walk_expr(obj, out);
                 if let Some(s) = start {
                     walk_expr(s, out);
                 }
                 if let Some(e) = end {
                     walk_expr(e, out);
+                }
+                if let Some(k) = step {
+                    walk_expr(k, out);
                 }
             }
             ast::Expr::Call { callee, args, .. } => {

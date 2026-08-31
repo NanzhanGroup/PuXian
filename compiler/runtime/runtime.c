@@ -99,6 +99,11 @@ static int blen(LXValue v);
 // M10 HTTPS 内部辅助
 static char* px_http_request(const char* url, const char* method, const char* body, int* out_len);
 static int px_https_request(const char* host, int port, const char* req, char** out, int* out_len);
+// M24 https 连接池：TLS 会话复用。CA 证书缓存定义在此（M10 区 px_ensure_cacert 使用，前向声明）。
+static pthread_mutex_t g_cacert_mu = PTHREAD_MUTEX_INITIALIZER;
+static mbedtls_x509_crt g_cacert;
+static int g_cacert_loaded = 0;
+static void px_ensure_cacert(void);
 // M21 gzip / chunked 辅助（px_http_request 客户端解码用，定义在后方）
 static char* px_gzip_decompress(const char* in, int inlen, int* outlen);
 static char* px_chunked_decode(const char* in, int inlen, int* outlen);
@@ -1527,66 +1532,109 @@ LXValue px_index(LXValue obj, LXValue idx) {
     return px_null();
 }
 
-// ==================== M21 切片 a[start:end] ====================
-// start/end 为 PX_NULL 表示省略；负索引从尾部算；越界 clamp；start>end 空切片。
-// str 按 UTF-8 字符切（与解释器字符语义一致，中文正常）；list/tuple 复制返回新对象。
+// ==================== M21/M24 切片 a[start:end] / a[start:end:step] ====================
+// start/end/step 为 PX_NULL 表示省略；负索引从尾部算；越界 clamp；step<0 反向，step=0 报错。
+// str 按 UTF-8 字符切（与解释器字符语义一致，中文正常）；list/tuple/bytes 取元素返回新对象。
 
-static int slice_start(int64_t v, int len) {
-    if (v < 0) { v += len; if (v < 0) v = 0; }
-    if (v > len) v = len;
-    return (int)v;
-}
-static int slice_end(int64_t v, int len) {
-    if (v < 0) { v += len; if (v < 0) v = 0; }
-    if (v > len) v = len;
-    return (int)v;
-}
-
-// UTF-8 字符串中第 n 个字符的字节偏移（n 在 [0, nchars]，跳过前 n 个字符后到达的位置）
-static int utf8_char_offset(const char* s, int blen, int n) {
-    int off = 0, c = 0;
-    while (off < blen && c < n) {
-        // 跳过当前字符：起始字节 + 后续连续字节（0x80-0xBF）
-        off++;
-        while (off < blen && ((unsigned char)s[off] & 0xC0) == 0x80) off++;
-        c++;
+// M24：切片边界调整（Python slice_adjust 语义，与解释器 Rust adjust 逐字节一致）
+// v<0 先 +len；再按步长方向 clamp：step>0 → [0,len]，step<0 → [-1,len-1]
+static int64_t px_slice_adjust(int64_t v, int len, int64_t step) {
+    if (v < 0) v += len;
+    if (step > 0) {
+        if (v < 0) v = 0;
+        if (v > len) v = len;
+    } else {
+        if (v < -1) v = -1;
+        if (v > len - 1) v = len - 1;
     }
-    return off;
+    return v;
 }
 
-LXValue px_slice(LXValue obj, LXValue start, LXValue end) {
-    int64_t s = start.type == PX_NULL ? INT64_MIN : int_val(start);
-    int64_t e = end.type == PX_NULL ? INT64_MIN : int_val(end);
-    if (obj.type == PX_LIST) {
-        int len = obj.as.obj->as.list.len;
-        int a = s == INT64_MIN ? 0 : slice_start(s, len);
-        int b = e == INT64_MIN ? len : slice_end(e, len);
-        if (a > b) a = b;
-        LXValue r = px_list(b - a);
-        for (int i = a; i < b; i++) px_list_push(r, obj.as.obj->as.list.items[i]);
+LXValue px_slice(LXValue obj, LXValue start, LXValue end, LXValue step) {
+    // Python slice.indices(len) 语义（与解释器 interp.rs slice_indices 逐字节一致）：
+    //   step 缺省=1，step=0 报错；step>0 时 start 缺省 0、end 缺省 len；
+    //   step<0 时 start 缺省 len-1、end 缺省 -1（取到索引 0 含）；
+    //   负边界 +len 后按步长方向 clamp。
+    int s_missing = start.type == PX_NULL;
+    int e_missing = end.type == PX_NULL;
+    int k_missing = step.type == PX_NULL;
+    int64_t k_in = k_missing ? 1 : int_val(step);
+    if (k_in == 0) px_error("切片步长不能为 0");
+
+    int len, kind = 0; // 0=list 1=tuple 2=str 3=bytes
+    if (obj.type == PX_LIST) { kind = 0; len = obj.as.obj->as.list.len; }
+    else if (obj.type == PX_TUPLE) { kind = 1; len = obj.as.obj->as.tuple.len; }
+    else if (obj.type == PX_STR) { kind = 2; len = px_unicode_len(obj.as.obj->as.str.data); }
+    else if (obj.type == PX_BYTES) { kind = 3; len = obj.as.obj->as.str.len; }
+    else { px_error("无法切片: %s", px_type_name(obj)); return px_null(); }
+
+    int64_t s = s_missing ? (k_in < 0 ? len - 1 : 0) : px_slice_adjust(int_val(start), len, k_in);
+    int64_t e = e_missing ? (k_in < 0 ? -1 : len) : px_slice_adjust(int_val(end), len, k_in);
+
+    // 元素个数
+    int n = 0;
+    if (k_in > 0) { for (int64_t i = s; i < e; i += k_in) n++; }
+    else { for (int64_t i = s; i > e; i += k_in) n++; }
+
+    if (kind == 0) { // list
+        LXValue r = px_list(n);
+        if (k_in > 0) { for (int64_t i = s; i < e; i += k_in) px_list_push(r, obj.as.obj->as.list.items[(int)i]); }
+        else { for (int64_t i = s; i > e; i += k_in) px_list_push(r, obj.as.obj->as.list.items[(int)i]); }
         return r;
     }
-    if (obj.type == PX_TUPLE) {
-        int len = obj.as.obj->as.tuple.len;
-        int a = s == INT64_MIN ? 0 : slice_start(s, len);
-        int b = e == INT64_MIN ? len : slice_end(e, len);
-        if (a > b) a = b;
-        return px_tuple(obj.as.obj->as.tuple.items + a, b - a);
+    if (kind == 1) { // tuple
+        LXValue* items = xmalloc(sizeof(LXValue) * (size_t)(n > 0 ? n : 1));
+        int j = 0;
+        if (k_in > 0) { for (int64_t i = s; i < e; i += k_in) items[j++] = obj.as.obj->as.tuple.items[(int)i]; }
+        else { for (int64_t i = s; i > e; i += k_in) items[j++] = obj.as.obj->as.tuple.items[(int)i]; }
+        LXValue r = px_tuple(items, j);
+        xfree(items);
+        return r;
     }
-    if (obj.type == PX_STR) {
+    if (kind == 3) { // bytes（按字节）
         const char* data = obj.as.obj->as.str.data;
-        int blen = obj.as.obj->as.str.len;
-        int nchars = 0;
-        for (int i = 0; i < blen; i++) if (((unsigned char)data[i] & 0xC0) != 0x80) nchars++;
-        int a = s == INT64_MIN ? 0 : slice_start(s, nchars);
-        int b = e == INT64_MIN ? nchars : slice_end(e, nchars);
-        if (a > b) a = b;
-        int boff_a = utf8_char_offset(data, blen, a);
-        int boff_b = utf8_char_offset(data, blen, b);
-        return px_str_len(data + boff_a, boff_b - boff_a);
+        char* out = xmalloc((size_t)(n + 1));
+        int j = 0;
+        if (k_in > 0) { for (int64_t i = s; i < e; i += k_in) out[j++] = data[(int)i]; }
+        else { for (int64_t i = s; i > e; i += k_in) out[j++] = data[(int)i]; }
+        LXValue r = px_bytes_len(out, j);
+        xfree(out);
+        return r;
     }
-    px_error("无法切片: %s", px_type_name(obj));
-    return px_null();
+    // str：按 UTF-8 字符收集（预构建字符字节偏移表）
+    const char* data = obj.as.obj->as.str.data;
+    int blen = obj.as.obj->as.str.len;
+    int* offs = xmalloc(sizeof(int) * (size_t)(len + 1));
+    int boff = 0;
+    offs[0] = 0;
+    for (int c = 0; c < len; c++) {
+        boff++;
+        while (boff < blen && ((unsigned char)data[boff] & 0xC0) == 0x80) boff++;
+        offs[c + 1] = boff;
+    }
+    int total = 0;
+    if (k_in > 0) { for (int64_t i = s; i < e; i += k_in) total += offs[(int)i + 1] - offs[(int)i]; }
+    else { for (int64_t i = s; i > e; i += k_in) total += offs[(int)i + 1] - offs[(int)i]; }
+    char* out = xmalloc((size_t)(total + 1));
+    int oi = 0;
+    if (k_in > 0) {
+        for (int64_t i = s; i < e; i += k_in) {
+            int cl = offs[(int)i + 1] - offs[(int)i];
+            memcpy(out + oi, data + offs[(int)i], (size_t)cl);
+            oi += cl;
+        }
+    } else {
+        for (int64_t i = s; i > e; i += k_in) {
+            int cl = offs[(int)i + 1] - offs[(int)i];
+            memcpy(out + oi, data + offs[(int)i], (size_t)cl);
+            oi += cl;
+        }
+    }
+    out[oi] = 0;
+    LXValue r = px_str_len(out, oi);
+    xfree(out);
+    xfree(offs);
+    return r;
 }
 
 void px_index_set(LXValue obj, LXValue idx, LXValue val) {
@@ -3787,6 +3835,7 @@ void px_register_builtins(void) {
     px_set_global("xml_parse", px_native("xml_parse", bi_xml_parse));
     px_set_global("xml_escape", px_native("xml_escape", bi_xml_escape));
     px_set_global("xml_unescape", px_native("xml_unescape", bi_xml_unescape));
+    px_set_global("xml_build", px_native("xml_build", bi_xml_build));
     // M19 P1：zip 打包/解压（docx/xlsx/pptx 是 zip+xml，文档工具基石）
     px_set_global("zip_pack", px_native("zip_pack", bi_zip_pack));
     px_set_global("zip_unpack", px_native("zip_unpack", bi_zip_unpack));
@@ -4922,42 +4971,134 @@ static LXValue bi_tcp_close(LXValue* args, int nargs, void* ctx) {
     return px_null();
 }
 
-// ==================== M23c HTTP keep-alive 连接池 + 客户端（双模式：与解释器 builtin.rs 一致） ====================
+// ==================== M23c/M24 HTTP keep-alive 连接池 + 客户端（双模式：与解释器 builtin.rs 一致） ====================
 // http_request(url, method, body?, headers?) → dict{status, headers, body}
 // http_get_stream(url, chunk_handler) → bool（流式下载分块回调）
+// M24：https 也池化——已握手的 mbedtls TLS 会话（含 conf/ctr_drbg/entropy 生命周期）随槽位缓存复用。
 #define HTTP_POOL_MAX_HOSTS 32
 #define HTTP_POOL_PER_HOST 4
-static pthread_mutex_t g_hpool_mu = PTHREAD_MUTEX_INITIALIZER;
-static struct { char key[256]; int fds[HTTP_POOL_PER_HOST]; int n; } g_hpool[HTTP_POOL_MAX_HOSTS];
 
-static int hpool_take(const char* key) {
+// TLS 会话（建立连接即完成握手；可跨请求复用）
+typedef struct {
+    mbedtls_net_context net;         // TCP fd
+    mbedtls_ssl_context ssl;
+    mbedtls_ssl_config conf;
+    mbedtls_ctr_drbg_context ctr_drbg;
+    mbedtls_entropy_context entropy;
+} HttpsSession;
+
+// 建立 HTTPS 连接（TCP + TLS 握手完成）；失败返回 NULL
+static HttpsSession* https_connect(const char* host, int port) {
+    HttpsSession* s = (HttpsSession*)xmalloc(sizeof(HttpsSession));
+    memset(s, 0, sizeof(*s));
+    mbedtls_net_init(&s->net);
+    mbedtls_ssl_init(&s->ssl);
+    mbedtls_ssl_config_init(&s->conf);
+    mbedtls_ctr_drbg_init(&s->ctr_drbg);
+    mbedtls_entropy_init(&s->entropy);
+    const char* pers = "px_https";
+    char portstr[16];
+    snprintf(portstr, sizeof(portstr), "%d", port);
+    int ret;
+    if ((ret = mbedtls_ctr_drbg_seed(&s->ctr_drbg, mbedtls_entropy_func, &s->entropy,
+                                     (const unsigned char*)pers, strlen(pers))) != 0) goto fail;
+    if ((ret = mbedtls_net_connect(&s->net, host, portstr, MBEDTLS_NET_PROTO_TCP)) != 0) goto fail;
+    px_ensure_cacert();
+    if ((ret = mbedtls_ssl_config_defaults(&s->conf, MBEDTLS_SSL_IS_CLIENT,
+                                           MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT)) != 0) goto fail;
+    mbedtls_ssl_conf_authmode(&s->conf, g_cacert_loaded ? MBEDTLS_SSL_VERIFY_REQUIRED : MBEDTLS_SSL_VERIFY_NONE);
+    mbedtls_ssl_conf_ca_chain(&s->conf, &g_cacert, NULL);
+    mbedtls_ssl_conf_rng(&s->conf, mbedtls_ctr_drbg_random, &s->ctr_drbg);
+    mbedtls_ssl_conf_min_version(&s->conf, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_3);
+    if ((ret = mbedtls_ssl_setup(&s->ssl, &s->conf)) != 0) goto fail;
+    mbedtls_ssl_set_hostname(&s->ssl, host);
+    mbedtls_ssl_set_bio(&s->ssl, &s->net, mbedtls_net_send, mbedtls_net_recv, NULL);
+    int guard = 0;
+    while ((ret = mbedtls_ssl_handshake(&s->ssl)) != 0) {
+        if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) goto fail;
+        if (++guard > 40) goto fail;
+    }
+    return s;
+fail:
+    mbedtls_net_free(&s->net);
+    mbedtls_ssl_free(&s->ssl);
+    mbedtls_ssl_config_free(&s->conf);
+    mbedtls_ctr_drbg_free(&s->ctr_drbg);
+    mbedtls_entropy_free(&s->entropy);
+    xfree(s);
+    return NULL;
+}
+
+static void https_close(HttpsSession* s) {
+    if (!s) return;
+    mbedtls_net_free(&s->net);
+    mbedtls_ssl_free(&s->ssl);
+    mbedtls_ssl_config_free(&s->conf);
+    mbedtls_ctr_drbg_free(&s->ctr_drbg);
+    mbedtls_entropy_free(&s->entropy);
+    xfree(s);
+}
+
+// 统一发送（tls 非空走 mbedtls，否则走 fd send）
+static int conn_send(HttpsSession* tls, int fd, const char* data, int len) {
+    if (!tls) return sock_send_all(fd, data, len);
+    int sent = 0;
+    while (sent < len) {
+        int w = mbedtls_ssl_write(&tls->ssl, (const unsigned char*)data + sent, (size_t)(len - sent));
+        if (w == MBEDTLS_ERR_SSL_WANT_WRITE || w == MBEDTLS_ERR_SSL_WANT_READ) continue;
+        if (w < 0) return -1;
+        sent += w;
+    }
+    return sent;
+}
+static int conn_recv(HttpsSession* tls, int fd, char* buf, int len) {
+    if (!tls) return (int)recv(fd, buf, (size_t)len, 0);
+    for (;;) {
+        int n = mbedtls_ssl_read(&tls->ssl, (unsigned char*)buf, (size_t)len);
+        if (n == MBEDTLS_ERR_SSL_WANT_READ || n == MBEDTLS_ERR_SSL_WANT_WRITE) continue;
+        return n;
+    }
+}
+
+// 池槽位：明文 fd 或 TLS 会话
+typedef struct {
+    int is_tls;
+    int fd;
+    HttpsSession* tls;
+} HPoolSlot;
+static pthread_mutex_t g_hpool_mu = PTHREAD_MUTEX_INITIALIZER;
+static struct { char key[256]; int n; HPoolSlot slots[HTTP_POOL_PER_HOST]; } g_hpool[HTTP_POOL_MAX_HOSTS];
+
+static int hpool_take(const char* key, HPoolSlot* out) {
     pthread_mutex_lock(&g_hpool_mu);
     for (int i = 0; i < HTTP_POOL_MAX_HOSTS; i++) {
         if (g_hpool[i].n > 0 && strcmp(g_hpool[i].key, key) == 0) {
-            int fd = g_hpool[i].fds[--g_hpool[i].n];
+            *out = g_hpool[i].slots[--g_hpool[i].n];
             pthread_mutex_unlock(&g_hpool_mu);
-            return fd;
+            return 0;
         }
     }
     pthread_mutex_unlock(&g_hpool_mu);
     return -1;
 }
-static void hpool_put(const char* key, int fd) {
+static void hpool_put(const char* key, HPoolSlot s) {
     pthread_mutex_lock(&g_hpool_mu);
     for (int i = 0; i < HTTP_POOL_MAX_HOSTS; i++) {
         if (strcmp(g_hpool[i].key, key) == 0 || g_hpool[i].n == 0) {
             if (g_hpool[i].n == 0) { strncpy(g_hpool[i].key, key, 255); g_hpool[i].key[255] = 0; }
             if (g_hpool[i].n < HTTP_POOL_PER_HOST) {
-                g_hpool[i].fds[g_hpool[i].n++] = fd;
+                g_hpool[i].slots[g_hpool[i].n++] = s;
             } else {
-                close(fd);
+                if (s.tls) https_close(s.tls);
+                close(s.fd);
             }
             pthread_mutex_unlock(&g_hpool_mu);
             return;
         }
     }
     pthread_mutex_unlock(&g_hpool_mu);
-    close(fd);
+    if (s.tls) https_close(s.tls);
+    close(s.fd);
 }
 
 // 解析 http(s) URL：is_https / host / port / path
@@ -4997,19 +5138,21 @@ static int hconnect(const char* host, int port) {
     return fd;
 }
 
-// 在已连接 fd 上完成一次 HTTP 往返（keep-alive 安全：按 Content-Length/chunked 精确读）
-// 成功返回 0，body malloc；失败返回 -1（连接不可复用）
-static int h_exchange(int fd, const char* req, int rlen,
+// 在已建立连接上完成一次 HTTP 往返（keep-alive 安全：按 Content-Length/chunked 精确读）
+// 支持明文 fd 与 TLS 会话（M24 https 连接池）。成功返回 0，body malloc；失败返回 -1。
+static int h_exchange(HPoolSlot* slot, const char* req, int rlen,
                       int* out_status, LXValue* out_headers,
                       char** out_body, int* out_body_len, int* out_keep_alive) {
-    if (sock_send_all(fd, req, rlen) < 0) return -1;
+    int fd = slot->fd;
+    HttpsSession* tls = slot->is_tls ? slot->tls : NULL;
+    if (conn_send(tls, fd, req, rlen) < 0) return -1;
     // 读响应头
     int cap = 16384, len = 0;
     char* buf = xmalloc(cap);
     int header_end = -1;
     for (;;) {
         if (len + 4096 > cap) { cap *= 2; buf = xrealloc(buf, cap); }
-        int n = (int)recv(fd, buf + len, 4096, 0);
+        int n = conn_recv(tls, fd, buf + len, 4096);
         if (n <= 0) { xfree(buf); return -1; }
         len += n;
         buf[len] = 0;
@@ -5061,19 +5204,18 @@ static int h_exchange(int fd, const char* req, int rlen,
         for (;;) {
             if (body_buf && bl >= 5 && memcmp(body_buf + bl - 5, "0\r\n\r\n", 5) == 0) break;
             body_buf = xrealloc(body_buf, bl + 4096);
-            int n = (int)recv(fd, body_buf + bl, 4096, 0);
+            int n = conn_recv(tls, fd, body_buf + bl, 4096);
             if (n <= 0) break;
             bl += n;
         }
         char* dec = px_chunked_decode(body_buf, bl, &body_len);
         if (dec) { xfree(body_buf); body_buf = dec; }
     } else if (content_length >= 0) {
-        int need = content_length - (have > 0 ? (have < content_length ? have : content_length) : 0);
         int copied = have > 0 ? (have < content_length ? have : content_length) : 0;
         body_buf = xmalloc((size_t)content_length + 1);
         if (copied > 0) memcpy(body_buf, buf + header_end + 4, (size_t)copied);
         while (copied < content_length) {
-            int n = (int)recv(fd, body_buf + copied, (size_t)(content_length - copied), 0);
+            int n = conn_recv(tls, fd, body_buf + copied, (size_t)(content_length - copied));
             if (n <= 0) break;
             copied += n;
         }
@@ -5085,7 +5227,7 @@ static int h_exchange(int fd, const char* req, int rlen,
         if (bl > 0) { body_buf = xmalloc(bl); memcpy(body_buf, buf + header_end + 4, (size_t)bl); }
         for (;;) {
             body_buf = xrealloc(body_buf, bl + 4096);
-            int n = (int)recv(fd, body_buf + bl, 4096, 0);
+            int n = conn_recv(tls, fd, body_buf + bl, 4096);
             if (n <= 0) break;
             bl += n;
         }
@@ -5144,11 +5286,19 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
     rlen += snprintf(req + rlen, sizeof(req) - rlen, "\r\n");
     if (body) { memcpy(req + rlen, body, strlen(body)); rlen += (int)strlen(body); }
     for (int attempt = 0; attempt < 2; attempt++) {
-        int fd = -1;
-        if (!is_https) fd = hpool_take(key);
-        if (fd < 0) {
-            fd = hconnect(host, port);
-            if (fd < 0) {
+        HPoolSlot slot;
+        if (hpool_take(key, &slot) != 0) {
+            // 池中无空闲连接：新建（http 明文 TCP；https TLS 握手）
+            slot.is_tls = is_https;
+            slot.fd = -1;
+            slot.tls = NULL;
+            if (is_https) {
+                slot.tls = https_connect(host, port);
+                slot.fd = slot.tls ? slot.tls->net.fd : -1;
+            } else {
+                slot.fd = hconnect(host, port);
+            }
+            if (slot.fd < 0) {
                 if (attempt == 0) continue;
                 px_error("net: 连接 %s:%d 失败", host, port);
             }
@@ -5156,9 +5306,9 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
         int status = 0, body_len = 0, keep_alive = 1;
         LXValue headers = px_null();
         char* resp_body = NULL;
-        if (h_exchange(fd, req, rlen, &status, &headers, &resp_body, &body_len, &keep_alive) == 0) {
-            if (keep_alive && !is_https) hpool_put(key, fd);
-            else close(fd);
+        if (h_exchange(&slot, req, rlen, &status, &headers, &resp_body, &body_len, &keep_alive) == 0) {
+            if (keep_alive) hpool_put(key, slot);
+            else { if (slot.tls) https_close(slot.tls); close(slot.fd); }
             LXValue d = px_dict();
             px_dict_set(d, "status", px_int(status));
             px_dict_set(d, "headers", headers);
@@ -5166,14 +5316,160 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
             if (resp_body) xfree(resp_body);
             return d;
         }
-        close(fd);
+        if (slot.tls) https_close(slot.tls);
+        close(slot.fd);
         if (attempt == 0) continue; // 池连接失效重试
         px_error("net: http_request 失败: 连接关闭");
     }
     return px_null();
 }
 
+// ==================== M24：流式 gzip 解压器（http_get_stream 边收边解） ====================
+// 基于 miniz mz_inflate（raw deflate，-15），增量喂入压缩字节，解压输出累积到内部缓冲。
+// 状态机：0=gzip 头解析 → 1=deflate → 2=尾部(CRC32+ISIZE 8 字节) → 3=完成。
+typedef struct {
+    mz_stream s;
+    int state;        // 0 头 / 1 deflate / 2 尾 / 3 done
+    int init;         // mz_inflateInit2 已调用
+    int err;
+    unsigned char hdr[4096];  // 头累积缓冲
+    int hdr_len;
+    int tail;         // 尾部已跳过字节
+    unsigned char* out;
+    int out_len, out_cap;
+} GzStream;
+
+static void gz_stream_init(GzStream* g) { memset(g, 0, sizeof(*g)); }
+static void gz_stream_free(GzStream* g) {
+    if (g->init) mz_inflateEnd(&g->s);
+    if (g->out) xfree(g->out);
+    g->out = NULL;
+    g->out_len = g->out_cap = 0;
+}
+
+// 取走全部解压输出（缓冲清零，调用者 xfree）
+static unsigned char* gz_stream_take(GzStream* g, int* len) {
+    unsigned char* r = g->out;
+    *len = g->out_len;
+    g->out = NULL;
+    g->out_len = g->out_cap = 0;
+    return r;
+}
+
+static void gz_append(GzStream* g, const unsigned char* data, int n) {
+    if (g->out_len + n > g->out_cap) {
+        int nc = g->out_cap ? g->out_cap : 4096;
+        while (nc < g->out_len + n) nc *= 2;
+        g->out = (unsigned char*)xrealloc(g->out, (size_t)nc);
+        g->out_cap = nc;
+    }
+    memcpy(g->out + g->out_len, data, (size_t)n);
+    g->out_len += n;
+}
+
+// 从 hdr 缓冲计算 gzip 头总长度（含扩展字段）；数据不足返回 -1
+static int gz_header_size(const unsigned char* b, int n) {
+    if (n < 10) return -1;
+    if (b[0] != 0x1F || b[1] != 0x8B || b[2] != 8) return -1;
+    int total = 10, pos = 10;
+    unsigned char flg = b[3];
+    if (flg & 4) {
+        if (pos + 2 > n) return -1;
+        int xlen = b[pos] | (b[pos + 1] << 8);
+        total += 2 + xlen; pos += 2 + xlen;
+    }
+    if (flg & 8) {
+        int i = pos;
+        while (i < n && b[i]) i++;
+        if (i >= n) return -1;
+        total += i - pos + 1; pos = i + 1;
+    }
+    if (flg & 16) {
+        int i = pos;
+        while (i < n && b[i]) i++;
+        if (i >= n) return -1;
+        total += i - pos + 1; pos = i + 1;
+    }
+    if (flg & 2) total += 2;
+    return total;
+}
+
+// 喂输入压缩字节；解压输出累积（调用者 gz_stream_take 取走）。返回 0 正常 / -1 损坏。
+static int gz_stream_feed(GzStream* g, const unsigned char* in, int inlen) {
+    if (g->err) return -1;
+    int ipos = 0;
+    while (ipos < inlen) {
+        if (g->state == 0) {
+            // 累积头部直到完整
+            int room = (int)sizeof(g->hdr) - g->hdr_len;
+            int take = inlen - ipos;
+            if (take > room) take = room;
+            memcpy(g->hdr + g->hdr_len, in + ipos, (size_t)take);
+            g->hdr_len += take;
+            ipos += take;
+            int hsize = gz_header_size(g->hdr, g->hdr_len);
+            if (hsize < 0) {
+                if (g->hdr_len >= (int)sizeof(g->hdr)) { g->err = 1; return -1; }
+                continue; // 头还不完整，等更多数据
+            }
+            if (hsize > g->hdr_len) continue; // 扩展字段还不完整
+            // 头完整：把头部之后的数据留出（回退给 deflate 处理）
+            int extra = g->hdr_len - hsize;
+            if (extra > 0) {
+                memmove(g->hdr, g->hdr + hsize, (size_t)extra);
+                g->hdr_len = extra;
+            } else {
+                g->hdr_len = 0;
+            }
+            if (mz_inflateInit2(&g->s, -15) != MZ_OK) { g->err = 1; return -1; }
+            g->init = 1;
+            g->state = 1;
+            if (extra > 0) {
+                // 头部后紧跟的数据：递归喂（用 hdr 缓冲中的数据）
+                int r = gz_stream_feed(g, g->hdr, g->hdr_len);
+                g->hdr_len = 0;
+                if (r < 0) return -1;
+            }
+            continue;
+        }
+        if (g->state == 1) {
+            g->s.next_in = (unsigned char*)(in + ipos);
+            g->s.avail_in = (mz_ulong)(inlen - ipos);
+            for (;;) {
+                unsigned char tmp[65536];
+                g->s.next_out = tmp;
+                g->s.avail_out = sizeof(tmp);
+                size_t before_in = g->s.avail_in;
+                int r = mz_inflate(&g->s, MZ_NO_FLUSH);
+                int produced = (int)sizeof(tmp) - (int)g->s.avail_out;
+                if (produced > 0) gz_append(g, tmp, produced);
+                if (r == MZ_STREAM_END) {
+                    ipos = inlen - (int)g->s.avail_in;
+                    g->state = 2;
+                    break;
+                }
+                if (r != MZ_OK) { g->err = 1; return -1; }
+                if (g->s.avail_in == 0) { ipos = inlen; break; }      // 输入耗尽等更多
+                if (produced == 0) { g->err = 1; return -1; }          // 无进展 = 损坏
+                (void)before_in;
+            }
+            continue;
+        }
+        if (g->state == 2) {
+            int need = 8 - g->tail;
+            int take = inlen - ipos;
+            if (take > need) take = need;
+            g->tail += take;
+            ipos += take;
+            if (g->tail >= 8) g->state = 3;
+            continue;
+        }
+        break; // state==3 done
+    }
+    return 0;
+}
 // http_get_stream(url, chunk_handler) → bool：流式下载，分块调 handler(块文本)
+// M24：支持 https（TLS 连接）+ gzip 流式解压（边收边解，不等完整下载）
 static LXValue bi_http_get_stream(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 2) px_error("http_get_stream 需要 (url, chunk_handler) 参数");
@@ -5185,25 +5481,33 @@ static LXValue bi_http_get_stream(LXValue* args, int nargs, void* ctx) {
     int port = 80;
     const char* path = "/";
     hparse_url(url, &is_https, host, sizeof(host), &port, &path);
-    int fd = hconnect(host, port);
-    if (fd < 0) px_error("net: 连接 %s:%d 失败", host, port);
+    HPoolSlot slot;
+    slot.is_tls = is_https;
+    slot.fd = -1;
+    slot.tls = NULL;
+    if (is_https) { slot.tls = https_connect(host, port); slot.fd = slot.tls ? slot.tls->net.fd : -1; }
+    else slot.fd = hconnect(host, port);
+    if (slot.fd < 0) px_error("net: 连接 %s:%d 失败", host, port);
+    int fd = slot.fd;
+    HttpsSession* tls = slot.is_tls ? slot.tls : NULL;
     char req[8192];
     int rlen = snprintf(req, sizeof(req),
         "GET %s HTTP/1.1\r\nHost: %s:%d\r\nUser-Agent: PuXian/0.1\r\nConnection: close\r\n\r\n",
         path, host, port);
-    if (sock_send_all(fd, req, rlen) < 0) { close(fd); px_error("net: 发送请求失败"); }
+    if (conn_send(tls, fd, req, rlen) < 0) { if (tls) https_close(tls); else close(fd); px_error("net: 发送请求失败"); }
     // 读响应头
     int cap = 16384, len = 0;
     char* buf = xmalloc(cap);
     int header_end = -1;
     for (;;) {
         if (len + 4096 > cap) { cap *= 2; buf = xrealloc(buf, cap); }
-        int n = (int)recv(fd, buf + len, 4096, 0);
-        if (n <= 0) { xfree(buf); close(fd); px_error("net: 读取响应失败"); }
+        int n = conn_recv(tls, fd, buf + len, 4096);
+        if (n <= 0) { xfree(buf); if (tls) https_close(tls); else close(fd); px_error("net: 读取响应失败"); }
         len += n;
         buf[len] = 0;
         char* sep = strstr(buf, "\r\n\r\n");
         if (sep) { header_end = (int)(sep - buf); break; }
+        if (len > 65536) { xfree(buf); if (tls) https_close(tls); else close(fd); px_error("net: 响应头超过 64KB"); }
     }
     int chunked = 0, gzip = 0, content_length = -1;
     char* hline = buf;
@@ -5232,13 +5536,39 @@ static LXValue bi_http_get_stream(LXValue* args, int nargs, void* ctx) {
     int pending_len = len - pending_off;
     char* pending = NULL;
     if (pending_len > 0) { pending = xmalloc(pending_len); memcpy(pending, buf + pending_off, (size_t)pending_len); }
-    int chunk_cap = pending_len > 0 ? pending_len : 4096;
+    // M24：gzip 流式解压器
+    GzStream gz;
+    int gz_active = gzip ? 1 : 0;
+    if (gz_active) gz_stream_init(&gz);
+    char* obuf = xmalloc(65536);
+    int olen = 0;
+
+    // 输出缓冲满 64KB → 回调 handler
+#define STREAM_FLUSH() do { \
+        if (olen > 0) { \
+            LXValue arg = px_str_len(obuf, olen); \
+            LXValue rv = px_call(handler, &arg, 1); \
+            if (rv.type == PX_BOOL && !rv.as.b) { complete = false; } \
+            olen = 0; \
+        } \
+    } while (0)
+    // 喂 gzip 解压器 → 解压输出累积到 obuf 并 flush
+#define STREAM_FEED_GZ(data, n) do { \
+        if (gz_stream_feed(&gz, (const unsigned char*)(data), (n)) < 0) { complete = false; goto stream_done; } \
+        if (gz.out_len > 0) { \
+            int tlen = 0; \
+            unsigned char* t = gz_stream_take(&gz, &tlen); \
+            for (int ti = 0; ti < tlen; ti++) { \
+                obuf[olen++] = (char)t[ti]; \
+                if (olen >= 65536) STREAM_FLUSH(); \
+            } \
+            xfree(t); \
+        } \
+    } while (0)
+
     if (chunked) {
-        // chunked：按 chunk 边界切块回调
-        char* acc = NULL;
-        int acc_len = 0, acc_cap = 0;
+        // chunked：按 chunk 边界切块；gzip 时块喂给解压器
         for (;;) {
-            // 找 chunk 头
             int ci = -1;
             for (int i = 0; i + 1 < pending_len; i++) {
                 if (pending[i] == '\r' && pending[i + 1] == '\n') { ci = i; break; }
@@ -5252,18 +5582,15 @@ static LXValue bi_http_get_stream(LXValue* args, int nargs, void* ctx) {
                 int cstart = ci + 2;
                 if (csize == 0) { complete = true; break; }
                 if (pending_len >= cstart + csize + 2) {
-                    // 完整块
                     int bl = csize;
-                    if (gzip) { // 追加累积
-                        acc = xrealloc(acc, acc_len + bl);
-                        memcpy(acc + acc_len, pending + cstart, (size_t)bl);
-                        acc_len += bl;
+                    if (gz_active) {
+                        STREAM_FEED_GZ(pending + cstart, bl);
+                        if (!complete) goto stream_done;
                     } else {
                         LXValue arg = px_str_len(pending + cstart, bl);
                         LXValue rv = px_call(handler, &arg, 1);
-                        if (rv.type == PX_BOOL && !rv.as.b) { complete = false; break; }
+                        if (rv.type == PX_BOOL && !rv.as.b) { complete = false; goto stream_done; }
                     }
-                    // 移除已处理
                     int rest = pending_len - (cstart + csize + 2);
                     memmove(pending, pending + cstart + csize + 2, (size_t)rest);
                     pending_len = rest;
@@ -5272,58 +5599,55 @@ static LXValue bi_http_get_stream(LXValue* args, int nargs, void* ctx) {
             }
             // 数据不完整：继续读
             pending = xrealloc(pending, pending_len + 4096);
-            int n = (int)recv(fd, pending + pending_len, 4096, 0);
+            int n = conn_recv(tls, fd, pending + pending_len, 4096);
             if (n <= 0) break;
             pending_len += n;
-        }
-        if (gzip && acc_len > 0) {
-            int dl = 0;
-            char* dec = px_gzip_decompress(acc, acc_len, &dl);
-            if (dec) {
-                LXValue arg = px_str_len(dec, dl);
-                LXValue rv = px_call(handler, &arg, 1);
-                if (rv.type == PX_BOOL && !rv.as.b) complete = false;
-                xfree(dec);
-            }
-            xfree(acc);
         }
     } else {
-        // Content-Length / EOF 流式：64KB 块回调
+        // Content-Length / EOF：边读边处理（64KB 块）
         int have_cl = content_length >= 0;
-        char* all = NULL;
-        int all_len = 0;
-        while (have_cl ? (pending_len < content_length) : true) {
-            if (have_cl && pending_len >= content_length) break;
-            if (pending_len + 4096 > chunk_cap) { chunk_cap = pending_len + 65536; }
-            pending = xrealloc(pending, chunk_cap);
-            int n = (int)recv(fd, pending + pending_len, 4096, 0);
-            if (n <= 0) break;
-            pending_len += n;
-        }
-        if (gzip) {
-            int dl = 0;
-            char* dec = px_gzip_decompress(pending, pending_len, &dl);
-            if (dec) {
-                LXValue arg = px_str_len(dec, dl);
-                LXValue rv = px_call(handler, &arg, 1);
-                if (rv.type == PX_BOOL && !rv.as.b) complete = false;
-                xfree(dec);
-            }
-        } else {
-            int off = 0;
-            while (off < pending_len) {
-                int bl = pending_len - off;
-                if (bl > 65536) bl = 65536;
+        // 先处理已有 pending
+        int off = 0;
+        while (off < pending_len && complete) {
+            int bl = pending_len - off;
+            if (bl > 65536) bl = 65536;
+            if (gz_active) {
+                STREAM_FEED_GZ(pending + off, bl);
+            } else {
                 LXValue arg = px_str_len(pending + off, bl);
                 LXValue rv = px_call(handler, &arg, 1);
                 if (rv.type == PX_BOOL && !rv.as.b) { complete = false; break; }
-                off += bl;
+            }
+            off += bl;
+        }
+        // 继续读网络
+        while (complete) {
+            if (have_cl && pending_len >= content_length) break;
+            char tmp[65536];
+            int want = (int)sizeof(tmp);
+            if (have_cl && content_length - pending_len < want) want = content_length - pending_len;
+            int n = conn_recv(tls, fd, tmp, want);
+            if (n <= 0) break;
+            pending_len += n;
+            if (gz_active) {
+                STREAM_FEED_GZ(tmp, n);
+            } else {
+                LXValue arg = px_str_len(tmp, n);
+                LXValue rv = px_call(handler, &arg, 1);
+                if (rv.type == PX_BOOL && !rv.as.b) { complete = false; break; }
             }
         }
     }
+    // 收尾：gzip 剩余输出（正常路径；错误路径经 goto stream_done 跳过）
+    if (gz_active) {
+        STREAM_FLUSH();
+    }
+stream_done:
+    if (gz_active) { gz_stream_free(&gz); }
+    if (obuf) xfree(obuf);
     if (pending) xfree(pending);
     if (buf) xfree(buf);
-    close(fd);
+    if (tls) https_close(tls); else close(fd);
     return px_bool(complete);
 }
 
@@ -5331,10 +5655,7 @@ static LXValue bi_http_get_stream(LXValue* args, int nargs, void* ctx) {
 // 统一 http/https GET/POST：px_http_request(url, method, body) → malloc 响应体
 // 自动跟随重定向（最多 5 次）；https 走 mbedtls（静态链接，保持静态二进制）
 
-// mbedtls 全局 CA 证书缓存（避免每次解析 CA bundle）
-static pthread_mutex_t g_cacert_mu = PTHREAD_MUTEX_INITIALIZER;
-static mbedtls_x509_crt g_cacert;
-static int g_cacert_loaded = 0;
+// mbedtls 全局 CA 证书缓存（定义在文件顶部声明区，M24 https 连接池与 M10 px_https_request 共用）
 
 static void px_ensure_cacert(void) {
     pthread_mutex_lock(&g_cacert_mu);

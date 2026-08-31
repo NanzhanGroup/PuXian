@@ -58,31 +58,53 @@ fn shuffle<T>(v: &mut [T]) {
     }
 }
 
-/// M21：切片边界归一化（Python 语义：负索引从尾部算，越界 clamp，start>end 空切片）
-/// 返回 (start, end) 均为 [0, len] 且 start <= end 的 usize 下标。
-fn normalize_slice(start: Option<i64>, end: Option<i64>, len: i64) -> (usize, usize) {
-    let a = match start {
-        None => 0,
-        Some(i) => {
-            if i < 0 {
-                (i + len).max(0)
-            } else {
-                i.min(len)
-            }
+/// M21/M24：切片边界归一化（Python 语义：负索引从尾部算，越界 clamp，start>end 空切片）
+/// M24 扩展步长：支持 a[i:j:k]（k<0 反向，k=0 报错）。
+/// 返回 (start, stop, step)，生成索引规则：
+///   step>0：i = start; while i < stop: 取 i; i += step
+///   step<0：i = start; while i > stop: 取 i; i += step
+fn slice_indices(
+    start: Option<i64>,
+    end: Option<i64>,
+    step: Option<i64>,
+    len: i64,
+) -> Result<(i64, i64, i64), String> {
+    let step = step.unwrap_or(1);
+    if step == 0 {
+        return Err("切片步长不能为 0".to_string());
+    }
+    let adjust = |v: i64| -> i64 {
+        let mut r = v;
+        if r < 0 {
+            r += len;
+        }
+        if step > 0 {
+            r.clamp(0, len)
+        } else {
+            r.clamp(-1, len - 1)
         }
     };
-    let b = match end {
-        None => len,
-        Some(i) => {
-            if i < 0 {
-                (i + len).max(0)
+    let s = match start {
+        None => {
+            if step < 0 {
+                len - 1
             } else {
-                i.min(len)
+                0
             }
         }
+        Some(i) => adjust(i),
     };
-    let (a, b) = if a > b { (a, a) } else { (a, b) };
-    (a as usize, b as usize)
+    let e = match end {
+        None => {
+            if step < 0 {
+                -1
+            } else {
+                len
+            }
+        }
+        Some(i) => adjust(i),
+    };
+    Ok((s, e, step))
 }
 
 // ==================== 运行时错误 ====================
@@ -278,6 +300,8 @@ impl Interpreter {
             ("xml_parse", Builtin::XmlParse),
             ("xml_escape", Builtin::XmlEscape),
             ("xml_unescape", Builtin::XmlUnescape),
+            // M24：XML 生成（与 xml_parse 结构对称，企微回调响应 / 文档生成）
+            ("xml_build", Builtin::XmlBuild),
             // M19 P1：zip 打包/解压（文档工具基石）
             ("zip_pack", Builtin::ZipPack),
             ("zip_unpack", Builtin::ZipUnpack),
@@ -742,7 +766,7 @@ impl Interpreter {
                 let iv = self.eval_expr(index, env)?;
                 self.eval_index(&ov, &iv, *pos)
             }
-            Expr::Slice { obj, start, end, pos } => {
+            Expr::Slice { obj, start, end, step, pos } => {
                 let ov = self.eval_expr(obj, env)?;
                 let sv = match start {
                     Some(e) => Some(self.eval_expr(e, env)?),
@@ -752,7 +776,11 @@ impl Interpreter {
                     Some(e) => Some(self.eval_expr(e, env)?),
                     None => None,
                 };
-                self.eval_slice(&ov, sv, ev, *pos)
+                let kv = match step {
+                    Some(e) => Some(self.eval_expr(e, env)?),
+                    None => None,
+                };
+                self.eval_slice(&ov, sv, ev, kv, *pos)
             }
             Expr::Call { callee, args, pos } => self.eval_call(callee, args, env, *pos),
             Expr::Unary { op, operand, pos } => {
@@ -1638,12 +1666,14 @@ impl Interpreter {
         }
     }
 
-    /// M21：切片 a[start:end]（str 按字符、list/tuple 返回新对象；负索引从尾部算）
+    /// M21/M24：切片 a[start:end] / a[start:end:step]（str 按字符、list/tuple/bytes 取元素；
+    /// 负索引从尾部算；step<0 反向；step=0 报错）
     fn eval_slice(
         &mut self,
         obj: &Value,
         start: Option<Value>,
         end: Option<Value>,
+        step: Option<Value>,
         pos: Pos,
     ) -> Result<Value, LxError> {
         fn bound(v: Option<Value>, pos: Pos) -> Result<Option<i64>, LxError> {
@@ -1656,23 +1686,45 @@ impl Interpreter {
         }
         let s = bound(start, pos)?;
         let e = bound(end, pos)?;
+        let k = bound(step, pos)?;
+        // 收集目标索引序列（Python slice.indices 语义）
+        let pick = |len: i64| -> Result<Vec<usize>, LxError> {
+            let (a, b, st) =
+                slice_indices(s, e, k, len).map_err(|m| LxError::new("R1002", m, Some(pos)))?;
+            let mut idxs = Vec::new();
+            if st > 0 {
+                let mut i = a;
+                while i < b {
+                    idxs.push(i as usize);
+                    i += st;
+                }
+            } else {
+                let mut i = a;
+                while i > b {
+                    idxs.push(i as usize);
+                    i += st;
+                }
+            }
+            Ok(idxs)
+        };
         match obj {
             Value::Str(st) => {
                 let chars: Vec<char> = st.chars().collect();
-                let len = chars.len() as i64;
-                let (a, b) = normalize_slice(s, e, len);
-                Ok(Value::Str(chars[a..b].iter().collect()))
+                let idxs = pick(chars.len() as i64)?;
+                Ok(Value::Str(idxs.iter().map(|&i| chars[i]).collect()))
+            }
+            Value::Bytes(b) => {
+                let idxs = pick(b.len() as i64)?;
+                Ok(Value::Bytes(idxs.iter().map(|&i| b[i]).collect()))
             }
             Value::List(l) => {
-                let len = l.lock().unwrap().len() as i64;
-                let (a, b) = normalize_slice(s, e, len);
-                let items = l.lock().unwrap()[a..b].to_vec();
-                Ok(Value::new_list(items))
+                let items = l.lock().unwrap().clone();
+                let idxs = pick(items.len() as i64)?;
+                Ok(Value::new_list(idxs.iter().map(|&i| items[i].clone()).collect()))
             }
             Value::Tuple(t) => {
-                let len = t.len() as i64;
-                let (a, b) = normalize_slice(s, e, len);
-                Ok(Value::Tuple(t[a..b].to_vec()))
+                let idxs = pick(t.len() as i64)?;
+                Ok(Value::Tuple(idxs.iter().map(|&i| t[i].clone()).collect()))
             }
             _ => Err(LxError::new("R1002", "此类型不支持切片", Some(pos))),
         }

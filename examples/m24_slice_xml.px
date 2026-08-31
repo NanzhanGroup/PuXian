@@ -1,0 +1,57 @@
+# M24a: 切片步长 a[i:j:k] + XML 生成 xml_build（双模式：px run == px build）
+# 切片步长：Python 语义（step>0 正向 / step<0 反向 / step=0 报错；str 按 UTF-8 字符）
+# xml_build：与 xml_parse 结构对称的 XML 生成（dict{name, attrs?, children?, text?} 或 str 纯文本）
+
+# ---------- 切片步长 ----------
+l = [0, 1, 2, 3, 4, 5]
+assert l[::2] == [0, 2, 4]                 # 正向步长
+assert l[1:5:2] == [1, 3]
+assert l[::-1] == [5, 4, 3, 2, 1, 0]       # 反转
+assert l[5:0:-1] == [5, 4, 3, 2, 1]        # 负步长 end 不含
+assert l[4::-1] == [4, 3, 2, 1, 0]         # 负步长到开头
+assert l[:2:-1] == [5, 4, 3]               # 负步长 start 缺省 = len-1
+assert l[-1:-4:-1] == [5, 4, 3]            # 负索引 + 负步长
+assert l[::] == [0, 1, 2, 3, 4, 5]         # 完整复制
+assert l[2:2] == []                        # 空切片
+assert l[0:5:-1] == []                     # 正 start 负步长 → 空
+
+s = "abcdef"
+assert s[::2] == "ace"
+assert s[::-1] == "fedcba"
+assert s[1:5:2] == "bd"
+zh = "中文测试"
+assert zh[::-1] == "试测文"                # UTF-8 字符级反转
+assert zh[::2] == "中测"
+
+t = (10, 20, 30, 40)
+assert t[::-1] == (40, 30, 20, 10)
+assert t[3:0:-1] == (40, 30, 20)
+
+b = bytes("hello")
+assert bytes_to_str(b[::-1]) == "olleh"
+assert bytes_to_str(b[::2]) == "hlo"
+
+# ---------- XML 生成 ----------
+root = {"name": "a", "attrs": {"b": "x&y", "id": "1"}, "children": [{"name": "c"}, "txt"], "text": "tail"}
+out = xml_build(root)
+assert out == "<a b=\"x&amp;y\" id=\"1\"><c/>txttail</a>"
+
+# 往返：生成 → 解析 → 字段一致
+p = xml_parse(out)
+assert p.name == "a"
+assert p.attrs.b == "x&y"
+assert p.attrs.id == "1"
+assert p.text == "txttail"
+
+# 纯文本节点 + 空元素 + 嵌套
+assert xml_build("hi < there") == "hi &lt; there"
+assert xml_build({"name": "empty"}) == "<empty/>"
+n2 = {"name": "r", "children": [{"name": "x", "attrs": {"k": "v"}}]}
+assert xml_build(n2) == "<r><x k=\"v\"/></r>"
+
+# 属性值类型：int / bool / null
+n3 = {"name": "m", "attrs": {"n": 3, "ok": true, "z": null}}
+assert xml_build(n3) == "<m n=\"3\" ok=\"true\" z=\"\"/>"
+
+print("M24 SLICE-XML TESTS PASSED")
+exit(0)

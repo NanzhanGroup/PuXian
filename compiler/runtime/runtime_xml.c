@@ -1,7 +1,9 @@
 // 普贤 (PuXian) M19 XML 内置函数（编译模式，与解释器 Rust 输出结构一致）
 // - xml_parse(xml) → dict{name, attrs, children, text} 或报错（解析失败）
 // - xml_escape(text) / xml_unescape(text)：实体转义/反转义
+// - xml_build(node) → str（M24：与 xml_parse 结构对称的 XML 生成）
 #include "runtime.h"
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -326,4 +328,110 @@ LXValue bi_xml_unescape(LXValue* args, int nargs, void* ctx) {
     LXValue r = px_str(dec);
     free(dec);
     return r;
+}
+
+// ==================== M24：XML 生成（xml_build） ====================
+// xml_build(node) → str；node 为 dict{name, attrs?, children?, text?} 或 str（纯文本）。
+// 与解释器 Rust xml.rs build 逐字节一致：
+//   - 属性键排序输出（strcmp），值只接受 字符串/int/bool/null（float 报错）
+//   - 文本与属性值均用 bi_xml_escape 转义（& < > " ' 全部转义）
+//   - 空元素（无 children 且无 text）输出自闭合 <name attrs.../>
+//   - text 非字符串时静默忽略（与解释器一致）
+
+static void xbuf_push_str(XBuf* b, const char* s) {
+    while (*s) xbuf_push(b, *s++);
+}
+
+static LXValue xml_build_node(LXValue node) {
+    if (node.type == PX_STR) {
+        // 纯文本节点 → 转义文本
+        return bi_xml_escape(&node, 1, NULL);
+    }
+    if (node.type != PX_DICT) {
+        px_error("xml_build: 节点必须是 dict 或 str，实际是 %s", px_type_name(node));
+        return px_null();
+    }
+    LXValue name_v = px_dict_get(node, "name");
+    if (name_v.type != PX_STR) px_error("xml_build: 节点 dict 缺少字符串 name");
+    const char* name = name_v.as.obj->as.str.data;
+
+    // 属性（键排序）
+    XBuf attr_s = {0};
+    LXValue attrs = px_dict_get(node, "attrs");
+    if (attrs.type == PX_DICT) {
+        LXObject* ao = attrs.as.obj;
+        int n = ao->as.dict.len;
+        char** keys = (char**)malloc(sizeof(char*) * (size_t)(n > 0 ? n : 1));
+        int* idx = (int*)malloc(sizeof(int) * (size_t)(n > 0 ? n : 1));
+        for (int i = 0; i < n; i++) { keys[i] = ao->as.dict.keys[i]; idx[i] = i; }
+        // 插入排序（属性数通常很少）
+        for (int i = 1; i < n; i++) {
+            char* k = keys[i]; int id = idx[i]; int j = i - 1;
+            while (j >= 0 && strcmp(keys[j], k) > 0) { keys[j + 1] = keys[j]; idx[j + 1] = idx[j]; j--; }
+            keys[j + 1] = k; idx[j + 1] = id;
+        }
+        for (int i = 0; i < n; i++) {
+            int id = idx[i];
+            LXValue v = ao->as.dict.vals[id];
+            const char* vs = NULL;
+            char numbuf[64];
+            if (v.type == PX_STR) vs = v.as.obj->as.str.data;
+            else if (v.type == PX_INT) { snprintf(numbuf, sizeof(numbuf), "%lld", (long long)v.as.i); vs = numbuf; }
+            else if (v.type == PX_BOOL) { vs = v.as.b ? "true" : "false"; }
+            else if (v.type == PX_NULL) { vs = ""; }
+            else { px_error("xml_build: 属性 %s 值必须是字符串/int/bool/null，实际是 %s",
+                            ao->as.dict.keys[id], px_type_name(v)); }
+            LXValue sv = px_str(vs);
+            LXValue escv = bi_xml_escape(&sv, 1, NULL);
+            xbuf_push(&attr_s, ' ');
+            xbuf_push_str(&attr_s, ao->as.dict.keys[id]);
+            xbuf_push_str(&attr_s, "=\"");
+            xbuf_push_str(&attr_s, escv.as.obj->as.str.data);
+            xbuf_push(&attr_s, '"');
+        }
+        free(keys);
+        free(idx);
+    }
+
+    // 子节点 + 文本
+    XBuf inner = {0};
+    LXValue children = px_dict_get(node, "children");
+    if (children.type == PX_LIST) {
+        LXObject* lo = children.as.obj;
+        for (int i = 0; i < lo->as.list.len; i++) {
+            LXValue child = xml_build_node(lo->as.list.items[i]);
+            if (child.type == PX_STR) xbuf_push_str(&inner, child.as.obj->as.str.data);
+        }
+    }
+    LXValue text = px_dict_get(node, "text");
+    if (text.type == PX_STR) {
+        LXValue escv = bi_xml_escape(&text, 1, NULL);
+        xbuf_push_str(&inner, escv.as.obj->as.str.data);
+    }
+
+    XBuf out = {0};
+    xbuf_push(&out, '<');
+    xbuf_push_str(&out, name);
+    if (attr_s.data) xbuf_push_str(&out, attr_s.data);
+    if (inner.len == 0) {
+        xbuf_push_str(&out, "/>");
+    } else {
+        xbuf_push(&out, '>');
+        xbuf_push_str(&out, inner.data ? inner.data : "");
+        xbuf_push_str(&out, "</");
+        xbuf_push_str(&out, name);
+        xbuf_push(&out, '>');
+    }
+    LXValue r = out.data ? px_str(out.data) : px_str("");
+    if (out.data) free(out.data);
+    if (attr_s.data) free(attr_s.data);
+    if (inner.data) free(inner.data);
+    return r;
+}
+
+// xml_build(node) → str
+LXValue bi_xml_build(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("xml_build 需要 1 个参数");
+    return xml_build_node(args[0]);
 }

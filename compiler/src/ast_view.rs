@@ -227,7 +227,7 @@ fn render_expr(expr: &Expr, level: usize, out: &mut String) {
             render_expr(obj, level + 1, out);
             render_expr(index, level + 1, out);
         }
-        Expr::Slice { obj, start, end, pos } => {
+        Expr::Slice { obj, start, end, step, pos } => {
             out.push_str(&format!("slice @ {}\n", pos));
             render_expr(obj, level + 1, out);
             if let Some(s) = start {
@@ -235,6 +235,9 @@ fn render_expr(expr: &Expr, level: usize, out: &mut String) {
             }
             if let Some(e) = end {
                 render_expr(e, level + 1, out);
+            }
+            if let Some(k) = step {
+                render_expr(k, level + 1, out);
             }
         }
         Expr::Call { callee, args, pos } => {

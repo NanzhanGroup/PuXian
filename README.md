@@ -22,9 +22,9 @@
 | ⏱ 定时器 | `set_timeout` / `set_interval` / `clear_timer`（一次性/周期回调，可变参数透传，回调内并发原语安全） |
 | 🧹 内存 | 编译模式 C 运行时内置保守标记-清除 GC（循环引用可回收，自动触发）+ **slab 分配器**（21 档 size-class 槽位复用）；解释器侧**追踪式 GC** 回收循环引用 |
 | 🧩 模块化 | `import std.*` / `import foo.bar` / `from foo import x` / 相对路径导入；`px pkg` 包管理（init/add/install/list/remove） |
-| 🌐 网络 | HTTP 客户端（**HTTPS TLS 1.2/1.3** + gzip/chunked 自动解码）+ **HTTP 服务端**（`http_serve`，含 gzip/chunked 响应）+ **WebSocket**（RFC 6455）+ **SSE** 服务端（LLM 流式推送基石）+ TCP 全功能 |
-| 🛡 加密/文档 | **AES-CBC-PKCS7 / AES-GCM**、**XML** 解析/转义、**zip** 打包/解压、**base64**、sha256 / xxhash |
-| 🔢 语言能力 | 切片语法 `a[i:j]`（str 按 UTF-8 字符）、位运算 + 二进制数据视图（int_to_hex / bytes_to_hex / bit_count / bit_length）、正则表达式、锁原语（mutex / rwlock）、文件随机读写 + fsync |
+| 🌐 网络 | HTTP 客户端（**HTTPS TLS 1.2/1.3** + gzip/chunked 自动解码 + **http/https 连接池复用** + **流式 gzip 边下边解**）+ **HTTP 服务端**（`http_serve`，含 gzip/chunked 响应、keep-alive、file 流式）+ **WebSocket**（RFC 6455，心跳/超时）+ **SSE** 服务端/客户端（LLM 流式推送基石）+ TCP 全功能 |
+| 🛡 加密/文档 | **AES-CBC-PKCS7 / AES-GCM**、**RSA**（PKCS#1 v1.5）、**XML** 解析/转义/**生成**（xml_build）、**zip** 打包/解压、**base64**、sha256 / xxhash |
+| 🔢 语言能力 | 切片语法 `a[i:j]` / `a[i:j:k]`（步长/反转，str 按 UTF-8 字符）、位运算 + 二进制数据视图（int_to_hex / bytes_to_hex / bit_count / bit_length）、正则表达式、锁原语（mutex / rwlock）、文件随机读写 + fsync、进程/信号（os_spawn / os_wait / signal） |
 | 🚀 应用平台 | **.px 脚本执行机制**（`px_serve` PHP/OpenResty 式应用服务器、`px_exec` 语言层嵌入 API） |
 | 🔧 工具链 | `px fmt` / `px lint` / `px test` / `px bench` / `px doc` / `px ast` 全内置 |
 | 🤖 AI 接入 | `px lsp`（语言服务器）、`px mcp`（MCP 服务器），AI 客户端可直接驱动 |
@@ -86,7 +86,7 @@ px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
 | [docs/requirements.md](docs/requirements.md) | 需求与设计讨论（动机、取舍、双模式架构） |
 | [docs/plan.md](docs/plan.md) | 开发方案（语言命名、里程碑规划、语言要点） |
 | [docs/spec.md](docs/spec.md) | 语言规格说明书（词法 / 语法 / 语义 / 标准库） |
-| [docs/PROGRESS.md](docs/PROGRESS.md) | 开发进度（M0–M22 产出与验证记录，含 M23 候选） |
+| [docs/PROGRESS.md](docs/PROGRESS.md) | 开发进度（M0–M24 产出与验证记录，含 M25 候选） |
 
 ---
 
@@ -117,6 +117,8 @@ px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
 | M20 | C 运行时内部符号统一（lx_/LX_ → px_/PX_） | ✅ |
 | M21 | HTTP chunked + gzip + 切片语法 + base64 + SSE | ✅ |
 | M22 | slab 分配器 + 解释器追踪式 GC + WebSocket + 位运算/二进制数据视图 | ✅ |
+| M23 | 网络/存储/安全收尾：SSE 客户端 + WS 心跳/超时 + 二进制安全 bytes + HTTP keep-alive/连接池/流式 + 进程/信号 + RSA | ✅ |
+| M24 | XML 生成 + 切片步长 + https 连接池复用 + HTTP 流式 gzip 解压 | ✅ |
 
 ---
 
@@ -147,6 +149,12 @@ px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
 - `m22_bitwise_data.px` —— 位运算/二进制数据视图
 - `m22_websocket.px` —— WebSocket 客户端
 - `m22_tracing_gc.px` —— 解释器循环引用回收
+- `m23a_sse_ws.px` —— SSE 客户端 + WebSocket 心跳/超时
+- `m23b_bytes.px` —— 二进制安全字节串
+- `m23c_http_adv.px` —— HTTP keep-alive/连接池/流式
+- `m23d_proc_signal.px` / `m23d_rsa.px` —— 进程/信号 / RSA
+- `m24_slice_xml.px` —— 切片步长 + XML 生成
+- `m24_http_adv.px` —— https 连接池 + HTTP 流式 gzip
 
 ```bash
 px run examples/fib.px
@@ -160,7 +168,7 @@ px build examples/fib.px -o /tmp/fib && /tmp/fib
 ```
 ├── compiler/          # 编译器本体（Rust）
 │   ├── src/           # lexer / parser / ast / interp / codegen / fmt / lint / test / bench / doc / lsp / mcp / pkg / module ...
-│   ├── runtime/       # C 运行时（runtime.c / runtime.h / runtime_aes.c / runtime_xml.c / runtime_zip.c / runtime_ws.c，含 GC + slab 分配器；mbedtls / third_party/miniz 第三方库）
+│   ├── runtime/       # C 运行时（runtime.c / runtime.h / runtime_aes.c / runtime_xml.c / runtime_zip.c / runtime_ws.c / runtime_rsa.c，含 GC + slab 分配器 + HTTP 连接池；mbedtls / third_party/miniz 第三方库）
 │   └── tests/         # 测试（含 GC 单元测试）
 ├── docs/              # 需求 / 方案 / 规格 / 进度
 ├── examples/          # 示例程序（.px）
@@ -191,4 +199,4 @@ px build examples/fib.px -o /tmp/fib && /tmp/fib
 - 目标平台：仅 Linux（x86_64 / aarch64）；
 - 编译模式产物为静态链接二进制（`ldd` 显示 `statically linked`）；
 - C 运行时内部符号统一使用 `px_` / `PX_` 前缀（M20 全量迁移完成），第三方库（mbedtls / miniz）保留各自前缀；
-- 回归基线：`cargo test` 144/144、并发 GC 60/60 稳定、示例双模式逐字节一致。
+- 回归基线：`cargo test` 153/153、并发 GC 60/60 稳定、示例双模式逐字节一致。

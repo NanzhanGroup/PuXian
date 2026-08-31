@@ -1,11 +1,14 @@
-//! 普贤 (PuXian) XML 解析模块（M19）
+//! 普贤 (PuXian) XML 模块（M19 解析 / M24 生成）
 //!
 //! 零依赖标准库实现，与编译模式（C runtime）输出结构一致：
 //! - xml_parse(xml) → dict{name, attrs, children, text} 或 null
 //! - xml_escape / xml_unescape：文本与属性值实体转义
+//! - xml_build(node) → str（M24：从 dict 树生成 XML，与 xml_parse 结构对称）
 //!
 //! 支持：元素/属性（单双引号）/文本/注释/CDATA/自闭合/处理指令/DOCTYPE 跳过/
 //!       命名空间前缀（按普通名称）/数字与预定义实体。文本内容字节透传。
+
+use crate::value::Value;
 
 /// XML 元素节点
 #[derive(Debug, Clone)]
@@ -358,6 +361,148 @@ pub fn escape(s: &str) -> String {
 /// 反转义 XML 实体
 pub fn unescape(s: &str) -> String {
     decode_entities(s)
+}
+
+// ==================== M24：XML 生成（xml_build） ====================
+// 与 xml_parse 返回结构对称：node dict{name, attrs?, children?, text?} 或 str（纯文本）。
+//   name: str（标签名，必填）
+//   attrs: dict{str→str}（属性值转义 " < > & '）
+//   children: list（子节点：dict 或 str，按序生成）
+//   text: str（元素文本，转义 < > &；有 children 时 text 排在 children 之后）
+// 空元素（无 children 且无 text）输出自闭合 <name attrs.../>。
+
+/// 生成元素文本（dict 节点）→ XML 字符串
+fn build_node(node: &Value) -> Result<String, String> {
+    match node {
+        Value::Str(s) => Ok(escape(s)),
+        Value::Dict(d) => {
+            let d = d.lock().unwrap();
+            let name = match d.get("name") {
+                Some(Value::Str(n)) => n.clone(),
+                _ => return Err("xml_build: 节点 dict 缺少字符串 name".to_string()),
+            };
+            // 属性
+            let mut attr_s = String::new();
+            if let Some(Value::Dict(attrs)) = d.get("attrs") {
+                let attrs = attrs.lock().unwrap();
+                // 保持插入序（HashMap 无序，但生成结果只要求可解析，不必与解释器逐字符一致？
+                // 双模式要求逐字节一致：解释器 HashMap 迭代序不稳定 → 需要稳定排序！
+                let mut keys: Vec<&String> = attrs.keys().collect();
+                keys.sort();
+                for k in keys {
+                    let v = match &attrs[k] {
+                        Value::Str(s) => s.clone(),
+                        Value::Int(i) => i.to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        Value::Null => String::new(),
+                        other => return Err(format!(
+                            "xml_build: 属性 {} 值必须是字符串，实际是 {}",
+                            k, other
+                        )),
+                    };
+                    attr_s.push_str(&format!(" {}=\"{}\"", k, escape_attr(&v)));
+                }
+            }
+            // 子节点
+            let mut inner = String::new();
+            if let Some(Value::List(children)) = d.get("children") {
+                let children = children.lock().unwrap();
+                for c in children.iter() {
+                    inner.push_str(&build_node(c)?);
+                }
+            }
+            if let Some(Value::Str(text)) = d.get("text") {
+                inner.push_str(&escape(text));
+            }
+            if inner.is_empty() {
+                Ok(format!("<{}{}/>", name, attr_s))
+            } else {
+                Ok(format!("<{}{}>{}</{}>", name, attr_s, inner, name))
+            }
+        }
+        other => Err(format!("xml_build: 不支持节点类型 {}", other)),
+    }
+}
+
+/// 属性值转义（& < > " ' 全部转义，保证属性可安全包裹）
+fn escape_attr(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// xml_build(node) → XML 字符串（node 必须为 dict 或 str）
+pub fn build(node: &Value) -> Result<String, String> {
+    build_node(node)
+}
+
+#[cfg(test)]
+mod tests_build {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn dict(m: HashMap<String, Value>) -> Value {
+        Value::new_dict(m)
+    }
+
+    fn node(name: &str) -> Value {
+        let mut m = HashMap::new();
+        m.insert("name".to_string(), Value::Str(name.to_string()));
+        dict(m)
+    }
+
+    #[test]
+    fn test_build_empty() {
+        assert_eq!(build(&node("root")).unwrap(), "<root/>");
+    }
+
+    #[test]
+    fn test_build_attrs_children_text() {
+        // <a id="1" b="x&amp;y">hi<b/>!</a>
+        let mut m = HashMap::new();
+        m.insert("name".to_string(), Value::Str("a".to_string()));
+        let mut attrs = HashMap::new();
+        attrs.insert("id".to_string(), Value::Str("1".to_string()));
+        attrs.insert("b".to_string(), Value::Str("x&y".to_string()));
+        m.insert("attrs".to_string(), dict(attrs));
+        m.insert("children".to_string(), Value::new_list(vec![node("b")]));
+        m.insert("text".to_string(), Value::Str("hi!".to_string()));
+        let out = build(&dict(m)).unwrap();
+        assert_eq!(out, "<a b=\"x&amp;y\" id=\"1\"><b/>hi!</a>");
+        // 可再解析回来
+        let parsed = parse(&out).unwrap();
+        assert_eq!(parsed.name, "a");
+    }
+
+    #[test]
+    fn test_build_escape_text() {
+        let mut m = HashMap::new();
+        m.insert("name".to_string(), Value::Str("p".to_string()));
+        m.insert("text".to_string(), Value::Str("a<b&c>d".to_string()));
+        assert_eq!(build(&dict(m)).unwrap(), "<p>a&lt;b&amp;c&gt;d</p>");
+    }
+
+    #[test]
+    fn test_build_str_node() {
+        assert_eq!(build(&Value::Str("plain & text".to_string())).unwrap(), "plain &amp; text");
+    }
+
+    #[test]
+    fn test_build_error() {
+        let mut m = HashMap::new();
+        m.insert("name".to_string(), Value::Int(1));
+        assert!(build(&dict(m)).is_err());
+        assert!(build(&Value::Int(1)).is_err());
+    }
 }
 
 #[cfg(test)]

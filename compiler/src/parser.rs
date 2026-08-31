@@ -1036,35 +1036,43 @@ impl Parser {
                 }
                 TokenKind::LBracket => {
                     let pos = self.advance().pos;
-                    // M21：切片语法 a[i:j] / a[:j] / a[i:] / a[:]（冒号在 [ ] 内）
+                    // M21/M24：切片语法 a[i:j] / a[:j] / a[i:] / a[:] / a[i:j:k] / a[::k] / a[::-1]
+                    // 解析：'[' expr? (':' expr?)? (':' expr?)? ']'
                     if self.check(&TokenKind::Colon) {
+                        // 无 start：[:j] / [::k] / [::]
                         self.advance();
-                        let end = if self.check(&TokenKind::RBracket) {
-                            None
+                        let end = self.parse_slice_bound()?;
+                        let step = if self.check(&TokenKind::Colon) {
+                            self.advance();
+                            self.parse_slice_bound()?
                         } else {
-                            Some(Box::new(self.parse_expr()?))
+                            None
                         };
                         self.expect(TokenKind::RBracket, "']'")?;
                         expr = Expr::Slice {
                             obj: Box::new(expr),
                             start: None,
                             end,
+                            step,
                             pos,
                         };
                     } else {
                         let first = self.parse_expr()?;
                         if self.check(&TokenKind::Colon) {
                             self.advance();
-                            let end = if self.check(&TokenKind::RBracket) {
-                                None
+                            let end = self.parse_slice_bound()?;
+                            let step = if self.check(&TokenKind::Colon) {
+                                self.advance();
+                                self.parse_slice_bound()?
                             } else {
-                                Some(Box::new(self.parse_expr()?))
+                                None
                             };
                             self.expect(TokenKind::RBracket, "']'")?;
                             expr = Expr::Slice {
                                 obj: Box::new(expr),
                                 start: Some(Box::new(first)),
                                 end,
+                                step,
                                 pos,
                             };
                         } else {
@@ -1113,6 +1121,15 @@ impl Parser {
             }
         }
         Ok(expr)
+    }
+
+    // M24：切片边界（冒号后的一段）：']' 或 ':' 表示省略（None），否则解析表达式
+    fn parse_slice_bound(&mut self) -> ParseResult<Option<Box<Expr>>> {
+        if self.check(&TokenKind::RBracket) || self.check(&TokenKind::Colon) {
+            Ok(None)
+        } else {
+            Ok(Some(Box::new(self.parse_expr()?)))
+        }
     }
 
     fn parse_call_args(&mut self) -> ParseResult<Vec<Expr>> {

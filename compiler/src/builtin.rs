@@ -1571,6 +1571,17 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             }
             Ok(Value::Str(crate::xml::unescape(expect_str(&args[0], "xml_unescape", pos)?)))
         }
+        // ---- M24：XML 生成（与 xml_parse 结构对称）----
+        // xml_build(node) → str；node 为 dict{name, attrs?, children?, text?} 或 str（纯文本）
+        Builtin::XmlBuild => {
+            if args.len() != 1 {
+                return Err(err("xml_build 需要 1 个参数", pos));
+            }
+            match crate::xml::build(&args[0]) {
+                Ok(s) => Ok(Value::Str(s)),
+                Err(e) => Err(err(e, pos)),
+            }
+        }
         // ---- M19 P1：zip 打包/解压（docx/xlsx/pptx 是 zip+xml，文档工具基石）----
         // zip_pack(files, out_path) → bool（files: dict{路径→内容}，deflate 压缩）
         Builtin::ZipPack => {
@@ -3028,12 +3039,48 @@ fn status_reason(code: i64) -> &'static str {
 
 /// HTTP 请求（M10：支持 http:// 与 https://，自动跟随重定向最多 5 次）
 /// 返回响应体。http/https 统一入口，GET/POST 均可。
-// ==================== M23c HTTP keep-alive 连接池（明文 http 同 host 复用） ====================
-use std::collections::HashMap as _HashMap;
-use std::net::TcpStream as _TcpStream;
+// ==================== M23c/M24 HTTP keep-alive 连接池（http 与 https 同 host 复用） ====================
 use std::sync::{Mutex as _Mutex, OnceLock as _OnceLock};
 
-type HttpPool = std::collections::HashMap<String, Vec<std::net::TcpStream>>;
+/// M24：TLS 客户端连接（rustls StreamOwned 持有全部 TLS 状态，'static 可入池）
+type TlsClient = rustls::StreamOwned<rustls::ClientConnection, std::net::TcpStream>;
+
+/// 池槽位：明文 TCP 或 TLS 会话
+enum PooledConn {
+    Plain(std::net::TcpStream),
+    Tls(TlsClient),
+}
+
+/// 统一读写连接（http_exchange / 流式 reader 使用）
+enum Conn {
+    Plain(std::net::TcpStream),
+    Tls(TlsClient),
+}
+
+impl std::io::Read for Conn {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            Conn::Plain(s) => s.read(buf),
+            Conn::Tls(t) => t.read(buf),
+        }
+    }
+}
+impl std::io::Write for Conn {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            Conn::Plain(s) => s.write(buf),
+            Conn::Tls(t) => t.write(buf),
+        }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            Conn::Plain(s) => s.flush(),
+            Conn::Tls(t) => t.flush(),
+        }
+    }
+}
+
+type HttpPool = std::collections::HashMap<String, Vec<PooledConn>>;
 static HTTP_POOL: _OnceLock<_Mutex<HttpPool>> = _OnceLock::new();
 const POOL_PER_HOST: usize = 4;
 const POOL_TOTAL: usize = 64;
@@ -3043,7 +3090,7 @@ fn http_pool() -> &'static _Mutex<HttpPool> {
 }
 
 /// 从池取空闲连接（无则 None）
-fn pool_take(key: &str) -> Option<std::net::TcpStream> {
+fn pool_take(key: &str) -> Option<PooledConn> {
     let mut pool = http_pool().lock().unwrap();
     if let Some(v) = pool.get_mut(key) {
         v.pop()
@@ -3053,7 +3100,7 @@ fn pool_take(key: &str) -> Option<std::net::TcpStream> {
 }
 
 /// 归还连接（池容量限制；超限直接丢弃）
-fn pool_put(key: &str, stream: std::net::TcpStream) {
+fn pool_put(key: &str, conn: PooledConn) {
     let mut pool = http_pool().lock().unwrap();
     let total: usize = pool.values().map(|v| v.len()).sum();
     if total >= POOL_TOTAL {
@@ -3061,8 +3108,24 @@ fn pool_put(key: &str, stream: std::net::TcpStream) {
     }
     let v = pool.entry(key.to_string()).or_default();
     if v.len() < POOL_PER_HOST {
-        v.push(stream);
+        v.push(conn);
     }
+}
+
+/// M24：建立 HTTPS 连接（TLS 握手，rustls 内置 webpki-roots 根证书）
+fn https_connect(host: &str, port: u16) -> Result<TlsClient, String> {
+    let mut roots = rustls::RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let cfg = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let server_name = rustls::pki_types::ServerName::try_from(host.to_string())
+        .map_err(|_| format!("非法主机名: {}", host))?;
+    let sock = std::net::TcpStream::connect((host, port))
+        .map_err(|e| format!("连接 {}:{} 失败: {}", host, port, e))?;
+    let conn = rustls::ClientConnection::new(std::sync::Arc::new(cfg), server_name)
+        .map_err(|e| format!("TLS 初始化失败: {}", e))?;
+    Ok(rustls::StreamOwned::new(conn, sock))
 }
 
 /// 解析 URL → (scheme, host, port, path, host_header)
@@ -3130,30 +3193,33 @@ fn http_request_full(
     if let Some(b) = body {
         req.push_str(b);
     }
-    // 尝试：池连接（失败丢弃重连 1 次）
+    // 尝试：池连接（失败丢弃重连 1 次）；http 与 https 均池化复用（M24）
     let mut attempt = 0;
     loop {
         attempt += 1;
-        let pooled = scheme == "http";
-        let mut st = if pooled {
-            match pool_take(&key) {
-                Some(s) => s,
-                None => {
+        let mut st = match pool_take(&key) {
+            Some(PooledConn::Plain(s)) => Conn::Plain(s),
+            Some(PooledConn::Tls(t)) => Conn::Tls(t),
+            None => {
+                if scheme == "https" {
+                    Conn::Tls(https_connect(&host, port)?)
+                } else {
                     let addr = format!("{}:{}", host, port);
-                    std::net::TcpStream::connect(&addr)
-                        .map_err(|e| format!("连接 {} 失败: {}", addr, e))?
+                    Conn::Plain(
+                        std::net::TcpStream::connect(&addr)
+                            .map_err(|e| format!("连接 {} 失败: {}", addr, e))?,
+                    )
                 }
             }
-        } else {
-            let addr = format!("{}:{}", host, port);
-            std::net::TcpStream::connect(&addr)
-                .map_err(|e| format!("连接 {} 失败: {}", addr, e))?
         };
         match http_exchange(&mut st, &req) {
             Ok((status, headers_map, resp_body, location, keep_alive)) => {
                 // keep-alive 且可复用 → 归还连接池
-                if keep_alive && pooled {
-                    pool_put(&key, st);
+                if keep_alive {
+                    match st {
+                        Conn::Plain(s) => pool_put(&key, PooledConn::Plain(s)),
+                        Conn::Tls(t) => pool_put(&key, PooledConn::Tls(t)),
+                    }
                 }
                 let mut d = std::collections::HashMap::new();
                 d.insert("status".into(), Value::Int(status as i64));
@@ -3169,8 +3235,8 @@ fn http_request_full(
                 return Ok(d);
             }
             Err(e) => {
-                // 池连接可能已失效：重试一次新连接
-                if attempt == 1 && pooled {
+                // 池连接可能已失效：重试一次新连接（http/https 均池化）
+                if attempt == 1 {
                     continue;
                 }
                 return Err(e);
@@ -3180,18 +3246,18 @@ fn http_request_full(
 }
 
 /// 在已建立的连接上完成一次 HTTP 往返（keep-alive 安全：按 Content-Length/chunked 精确读）
-/// 返回 (status, headers, body, location, keep_alive)
+/// 返回 (status, headers, body, location, keep_alive)；支持明文 TCP 与 TLS（M24 https 池化）
 fn http_exchange(
-    stream: &mut std::net::TcpStream,
+    stream: &mut Conn,
     req: &str,
 ) -> Result<(u16, std::collections::HashMap<String, String>, String, Option<String>, bool), String> {
     use std::io::{Read, Write};
     stream
         .write_all(req.as_bytes())
         .map_err(|e| format!("发送请求失败: {}", e))?;
-    stream
-        .set_read_timeout(Some(std::time::Duration::from_secs(30)))
-        .ok();
+    if let Conn::Plain(s) = stream {
+        s.set_read_timeout(Some(std::time::Duration::from_secs(30))).ok();
+    }
     // 读响应头
     let mut buf: Vec<u8> = Vec::new();
     let mut tmp = [0u8; 4096];
@@ -3299,7 +3365,130 @@ fn find_chunked_end(buf: &[u8]) -> Option<usize> {
     None
 }
 
-/// http_get_stream(url, chunk_handler)：流式下载（Content-Length / chunked 分块回调）
+/// M24：底层字节源（pending 缓冲起步 + 网络补充，内部 8KB 缓冲支持高效单字节读）
+struct NetReader<'a> {
+    st: &'a mut Conn,
+    pending: &'a mut Vec<u8>,
+    buf: [u8; 8192],
+    buf_len: usize,
+    buf_pos: usize,
+    eof: bool,
+}
+
+impl std::io::Read for NetReader<'_> {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        // 先消费内部缓冲
+        if self.buf_pos < self.buf_len {
+            let n = (self.buf_len - self.buf_pos).min(out.len());
+            out[..n].copy_from_slice(&self.buf[self.buf_pos..self.buf_pos + n]);
+            self.buf_pos += n;
+            return Ok(n);
+        }
+        // 再消费 pending
+        if !self.pending.is_empty() {
+            let n = self.pending.len().min(out.len());
+            out[..n].copy_from_slice(&self.pending[..n]);
+            self.pending.drain(..n);
+            return Ok(n);
+        }
+        if self.eof {
+            return Ok(0);
+        }
+        let n = match self.st.read(&mut self.buf) {
+            Ok(0) => {
+                self.eof = true;
+                0
+            }
+            Ok(n) => {
+                self.buf_len = n;
+                self.buf_pos = 0;
+                let take = n.min(out.len());
+                out[..take].copy_from_slice(&self.buf[..take]);
+                self.buf_pos = take;
+                take
+            }
+            Err(e) => return Err(e),
+        };
+        Ok(n)
+    }
+}
+
+/// M24：chunked 传输编码解码 reader（从底层字节源解析 chunk 边界，输出 chunk 负载字节流）
+struct ChunkedReader<'a> {
+    inner: NetReader<'a>,
+    chunk_remaining: usize,
+    need_crlf: bool,
+    done: bool,
+}
+
+impl std::io::Read for ChunkedReader<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.done {
+            return Ok(0);
+        }
+        // 跳过上一个 chunk 数据后的 \r\n
+        if self.need_crlf {
+            let mut two = [0u8; 2];
+            let mut got = 0;
+            while got < 2 {
+                let n = self.inner.read(&mut two[got..2])?;
+                if n == 0 {
+                    return Ok(0); // 流提前结束
+                }
+                got += n;
+            }
+            self.need_crlf = false;
+        }
+        if self.chunk_remaining > 0 {
+            let want = self.chunk_remaining.min(buf.len());
+            let n = self.inner.read(&mut buf[..want])?;
+            self.chunk_remaining -= n;
+            if self.chunk_remaining == 0 {
+                self.need_crlf = true;
+            }
+            return Ok(n);
+        }
+        // 读 chunk 头（hex 尺寸行，直到 \r\n）
+        let mut head: Vec<u8> = Vec::new();
+        let mut byte = [0u8; 1];
+        loop {
+            let n = self.inner.read(&mut byte)?;
+            if n == 0 {
+                return Ok(0);
+            }
+            head.push(byte[0]);
+            if head.len() >= 2 && head[head.len() - 2] == b'\r' && head[head.len() - 1] == b'\n' {
+                break;
+            }
+            if head.len() > 8192 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "chunk 头过长",
+                ));
+            }
+        }
+        let line = String::from_utf8_lossy(&head[..head.len() - 2]);
+        let size_str = line.split(';').next().unwrap_or("").trim();
+        let size = usize::from_str_radix(size_str, 16)
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "chunk 尺寸非法"))?;
+        if size == 0 {
+            self.done = true;
+            return Ok(0);
+        }
+        self.chunk_remaining = size;
+        // 递归读 chunk 数据
+        let want = self.chunk_remaining.min(buf.len());
+        let n = self.inner.read(&mut buf[..want])?;
+        self.chunk_remaining -= n;
+        if self.chunk_remaining == 0 {
+            self.need_crlf = true;
+        }
+        Ok(n)
+    }
+}
+
+/// http_get_stream(url, chunk_handler)：流式下载（Content-Length / chunked / gzip 均流式）
+/// M24：https 支持（TLS 连接）+ gzip 流式解压（边下边解，不等待完整下载）
 fn http_get_stream_impl(
     url: &str,
     interp: &mut Interpreter,
@@ -3308,31 +3497,22 @@ fn http_get_stream_impl(
 ) -> Result<bool, String> {
     use std::io::{Read, Write};
     let (scheme, host, port, path, host_header) = parse_url(url)?;
-    let mut req = format!(
+    let req = format!(
         "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: PuXian/0.1\r\nConnection: close\r\n\r\n",
         path, host_header
     );
-    // 连接
-    let mut st = if scheme == "https" {
-        let raw = https_request(&host, port, &req)?; // https 一次性读（复用现有实现）
-        req.clear();
-        // 简化：https 流式走现有整包路径
-        let head_end = find_http_header_end(&raw).unwrap_or(0);
-        let mut body = raw[head_end + 4..].to_vec();
-        if is_chunked_header(&raw) {
-            body = decode_chunked(&body)?;
-        }
-        // 分块回调
-        return http_stream_chunks(interp, handler, &body, pos);
+    // 连接（http 明文 TCP；https TLS 握手）
+    let mut st: Conn = if scheme == "https" {
+        Conn::Tls(https_connect(&host, port)?)
     } else {
         let addr = format!("{}:{}", host, port);
         let mut s = std::net::TcpStream::connect(&addr)
             .map_err(|e| format!("连接 {} 失败: {}", addr, e))?;
-        s.write_all(req.as_bytes())
-            .map_err(|e| format!("发送请求失败: {}", e))?;
         s.set_read_timeout(Some(std::time::Duration::from_secs(60))).ok();
-        s
+        Conn::Plain(s)
     };
+    st.write_all(req.as_bytes())
+        .map_err(|e| format!("发送请求失败: {}", e))?;
     // 读响应头
     let mut buf: Vec<u8> = Vec::new();
     let mut tmp = [0u8; 8192];
@@ -3364,97 +3544,63 @@ fn http_get_stream_impl(
         .lines()
         .skip(1)
         .find_map(|l| {
-            if let Some(v) = l.trim().strip_prefix("Content-Length:").or_else(|| l.trim().strip_prefix("content-length:")) {
+            if let Some(v) = l
+                .trim()
+                .strip_prefix("Content-Length:")
+                .or_else(|| l.trim().strip_prefix("content-length:"))
+            {
                 v.trim().parse().ok()
             } else {
                 None
             }
         });
-    // 流式读 body
+    // 构造 body 字节源（pending 起步）：chunked 解码 or 原始流（按 Content-Length 截断）
     let mut pending: Vec<u8> = buf[header_end + 4..].to_vec();
-    let mut complete = true;
-    if chunked {
-        // chunked 流式：按 chunk 边界切块
-        loop {
-            while !pending.is_empty() {
-                // 找下一个 chunk 头
-                if let Some(ci) = pending.windows(2).position(|w| w == b"\r\n") {
-                    let size_str = String::from_utf8_lossy(&pending[..ci]).to_string();
-                    let size = usize::from_str_radix(size_str.trim(), 16).unwrap_or(0);
-                    let chunk_start = ci + 2;
-                    if size == 0 {
-                        pending.clear();
-                        return Ok(complete);
-                    }
-                    if pending.len() >= chunk_start + size + 2 {
-                        let chunk = pending[chunk_start..chunk_start + size].to_vec();
-                        pending.drain(..chunk_start + size + 2);
-                        if gzip {
-                            // gzip 整体解压：收集后统一解压（流式 gzip 复杂，简化）
-                        }
-                        if !http_stream_chunks(interp, handler, &chunk, pos)? {
-                            complete = false;
-                            return Ok(false);
-                        }
-                    } else {
-                        break; // 数据不完整，继续读
-                    }
-                } else {
-                    break;
-                }
-            }
-            let n = st.read(&mut tmp).map_err(|e| format!("读流失败: {}", e))?;
-            if n == 0 {
-                break;
-            }
-            pending.extend_from_slice(&tmp[..n]);
-        }
+    let base: Box<dyn Read + '_> = if chunked {
+        Box::new(ChunkedReader {
+            inner: NetReader {
+                st: &mut st,
+                pending: &mut pending,
+                buf: [0u8; 8192],
+                buf_len: 0,
+                buf_pos: 0,
+                eof: false,
+            },
+            chunk_remaining: 0,
+            need_crlf: false,
+            done: false,
+        })
     } else {
-        // Content-Length / EOF 流式：64KB 块
-        while let Some(cl) = content_length {
-            if pending.len() >= cl {
-                pending.truncate(cl);
-                break;
-            }
-            let n = st.read(&mut tmp).map_err(|e| format!("读流失败: {}", e))?;
-            if n == 0 {
-                break;
-            }
-            pending.extend_from_slice(&tmp[..n]);
+        let nr = NetReader {
+            st: &mut st,
+            pending: &mut pending,
+            buf: [0u8; 8192],
+            buf_len: 0,
+            buf_pos: 0,
+            eof: false,
+        };
+        match content_length {
+            Some(cl) => Box::new(nr.take(cl as u64)),
+            None => Box::new(nr),
         }
-        // 无 Content-Length：读到 EOF
-        if content_length.is_none() {
-            loop {
-                let n = st.read(&mut tmp).map_err(|e| format!("读流失败: {}", e))?;
-                if n == 0 {
-                    break;
-                }
-                pending.extend_from_slice(&tmp[..n]);
-            }
+    };
+    // 流式读取：gzip 边下边解，否则原样分块；均按 64KB 回调 handler
+    let mut rd: Box<dyn Read + '_> = if gzip {
+        Box::new(flate2::read::GzDecoder::new(base))
+    } else {
+        base
+    };
+    let mut out = vec![0u8; 65536];
+    loop {
+        let n = rd.read(&mut out).map_err(|e| format!("读流失败: {}", e))?;
+        if n == 0 {
+            break;
         }
-        // 分块回调（64KB）
-        let mut off = 0;
-        while off < pending.len() {
-            let end = (off + 65536).min(pending.len());
-            let chunk = pending[off..end].to_vec();
-            if gzip {
-                // gzip 无法分块解压：整包解压后单块回调
-                use std::io::Read as _;
-                let mut d = flate2::read::GzDecoder::new(&pending[..]);
-                let mut out = Vec::new();
-                d.read_to_end(&mut out).map_err(|e| format!("gzip 解压失败: {}", e))?;
-                if !http_stream_chunks(interp, handler, &out, pos)? {
-                    return Ok(false);
-                }
-                return Ok(true);
-            }
-            if !http_stream_chunks(interp, handler, &chunk, pos)? {
-                return Ok(false);
-            }
-            off = end;
+        if !http_stream_chunks(interp, handler, &out[..n], pos)? {
+            return Ok(false);
         }
     }
-    Ok(complete)
+    Ok(true)
 }
 
 /// 分块回调 helper
@@ -3470,13 +3616,7 @@ fn http_stream_chunks(interp: &mut Interpreter, handler: &Value, data: &[u8], po
     }
 }
 
-/// 响应头是否 chunked（https 流式路径用）
-fn is_chunked_header(raw: &[u8]) -> bool {
-    let head = String::from_utf8_lossy(&raw[..find_http_header_end(raw).unwrap_or(0)]);
-    head.lines()
-        .skip(1)
-        .any(|l| l.to_lowercase().contains("transfer-encoding:") && l.to_lowercase().contains("chunked"))
-}
+/// 响应头是否 chunked（已并入 http_get_stream_impl 统一流式流程；此辅助不再使用）
 
 fn http_request(url: &str, method: &str, body: Option<&str>) -> Result<String, String> {
     let mut cur = url.to_string();

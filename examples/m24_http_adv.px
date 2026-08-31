@@ -1,0 +1,68 @@
+# M24b: https 连接池复用 + HTTP 流式 gzip 解压（双模式：px run == px build）
+# https 连接池：http_request 同 host 复用已握手 TLS 连接（明文 http 复用 M23c 连接池）
+# http_get_stream 流式 gzip：边下载边解压，不等待完整数据（Content-Length / chunked 均支持）
+
+# 生成约 320KB 测试文本
+big = ""
+chunk = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+for i in range(2560):
+    big = big + chunk
+
+def handler(req):
+    p = req.path
+    if p == "/gz":
+        return {"status": 200, "body": big, "gzip": true}
+    if p == "/cgz":
+        return {"status": 200, "body": big, "gzip": true, "chunked": true}
+    if p == "/plain":
+        return {"status": 200, "body": big}
+    return {"status": 404, "body": "no"}
+
+spawn http_serve(8891, handler)
+sleep(400)
+
+total = 0
+chunks = 0
+
+def on_chunk(c):
+    total = total + len(c)
+    chunks = chunks + 1
+    return true
+
+# 1. gzip 流式解压（Content-Length 响应）
+total = 0
+chunks = 0
+ok = http_get_stream("http://127.0.0.1:8891/gz", on_chunk)
+assert ok == true
+assert total == len(big)
+assert chunks >= 1
+
+# 2. chunked + gzip 组合流式解压
+total = 0
+chunks = 0
+ok = http_get_stream("http://127.0.0.1:8891/cgz", on_chunk)
+assert ok == true
+assert total == len(big)
+
+# 3. 普通流式（回归）
+total = 0
+ok = http_get_stream("http://127.0.0.1:8891/plain", on_chunk)
+assert ok == true
+assert total == len(big)
+
+# 4. http_request 整包 gzip（回归）
+r = http_request("http://127.0.0.1:8891/gz", "GET")
+assert r.status == 200
+assert len(r.body) == len(big)
+
+# 5. https 连接池：外网同 host 连续请求（TLS 连接复用；明文池 M23c 已验证）
+h1 = http_request("https://www.baidu.com/", "GET")
+assert h1.status == 200
+h2 = http_request("https://www.baidu.com/", "GET")
+assert h2.status == 200
+h3 = http_request("https://www.baidu.com/", "GET")
+assert h3.status == 200
+assert len(h1.body) > 0
+
+print("M24 HTTP-ADV TESTS PASSED")
+exit(0)
