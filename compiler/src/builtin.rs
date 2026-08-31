@@ -898,6 +898,37 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
                 Err(e) => Err(LxError::new("R3009", format!("net: http_post 失败: {}", e), Some(pos))),
             }
         }
+
+        Builtin::HttpServe => {
+            if args.len() != 2 {
+                return Err(err("http_serve 需要 (port, handler) 参数", pos));
+            }
+            let port = expect_int(&args[0], "http_serve", pos)?;
+            let handler = args[1].clone();
+            if !matches!(handler, Value::Func(_)) {
+                return Err(err("http_serve 的 handler 必须是函数", pos));
+            }
+            let addr = format!("0.0.0.0:{}", port);
+            let listener = TcpListener::bind(&addr)
+                .map_err(|e| LxError::new("R3010", format!("net: 监听端口失败 {}: {}", addr, e), Some(pos)))?;
+            // M16：HTTP 服务端框架——阻塞 accept 循环（Go 风格 ListenAndServe），每连接一个处理线程
+            let srv = interp.fork();
+            let mut i = srv;
+            for stream in listener.incoming() {
+                let mut stream = match stream {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+                let h = handler.clone();
+                let mut ci = i.fork();
+                std::thread::spawn(move || {
+                    if let Err(e) = handle_http_conn(&mut ci, &mut stream, &h, pos) {
+                        eprintln!("[http] {}", e);
+                    }
+                });
+            }
+            Ok(Value::Null) // 不可达：incoming() 无限迭代
+        }
     }
 }
 
@@ -931,6 +962,356 @@ fn net_alloc_stream(s: TcpStream) -> i64 {
 fn net_close(id: i64) {
     net_streams().lock().unwrap().remove(&id);
     net_listeners().lock().unwrap().remove(&id);
+}
+
+// ==================== M16 HTTP 服务端框架（解释器模式） ====================
+// http_serve(port, handler)：阻塞 accept 循环，每连接一个处理线程。
+// handler(req_dict) -> 响应 dict{status, headers, body} / str / int。
+
+/// 处理单个 HTTP 连接：读请求 -> 解析 -> 调 handler -> 构造响应 -> 发送
+fn handle_http_conn(i: &mut Interpreter, stream: &mut TcpStream, handler: &Value, pos: Pos) -> Result<(), String> {
+    use std::io::{Read, Write};
+    // 1. 读请求头（直到 \r\n\r\n），上限 64KB
+    let mut buf: Vec<u8> = Vec::new();
+    let mut tmp = [0u8; 4096];
+    let header_end;
+    loop {
+        let n = stream.read(&mut tmp).map_err(|e| format!("读请求失败: {}", e))?;
+        if n == 0 {
+            return Err("连接已关闭".into());
+        }
+        buf.extend_from_slice(&tmp[..n]);
+        if let Some(idx) = find_http_header_end(&buf) {
+            header_end = idx;
+            break;
+        }
+        if buf.len() > 65536 {
+            return Err("请求头超过 64KB".into());
+        }
+    }
+    // 2. 解析请求行 + 头部
+    let head = String::from_utf8_lossy(&buf[..header_end]).to_string();
+    let remote = stream
+        .peer_addr()
+        .map(|a| a.to_string())
+        .unwrap_or_default();
+    let (req, content_length) = parse_http_request(&head, &remote)?;
+    // 3. 读 body（按 Content-Length）
+    let body_off = header_end + 4;
+    let body = if content_length > 0 {
+        let mut rest = Vec::with_capacity(content_length);
+        let have = buf.len().saturating_sub(body_off);
+        if have >= content_length {
+            String::from_utf8_lossy(&buf[body_off..body_off + content_length]).to_string()
+        } else {
+            rest.extend_from_slice(&buf[body_off..]);
+            let mut tmp2 = [0u8; 4096];
+            while rest.len() < content_length {
+                let n = stream.read(&mut tmp2).map_err(|e| format!("读 body 失败: {}", e))?;
+                if n == 0 {
+                    break;
+                }
+                rest.extend_from_slice(&tmp2[..n]);
+            }
+            rest.truncate(content_length);
+            String::from_utf8_lossy(&rest).to_string()
+        }
+    } else {
+        String::new()
+    };
+    // 4. 填充 body / form（Content-Type 驱动：urlencoded / multipart）
+    if let Value::Dict(d) = &req {
+        let mut g = d.lock().unwrap();
+        g.insert("body".into(), Value::Str(body.clone()));
+        if !body.is_empty() {
+            if let Some(ct) = content_type_of(&g) {
+                let lct = ct.to_lowercase();
+                if lct.contains("application/x-www-form-urlencoded") {
+                    g.insert("form".into(), parse_form(&body));
+                } else if lct.contains("multipart/form-data") {
+                    let (form, files) = parse_multipart(&body, &multipart_boundary(&ct));
+                    g.insert("form".into(), form);
+                    g.insert("files".into(), files);
+                }
+            }
+        }
+    }
+    // 5. 调 handler
+    let method = req_method(&req);
+    let resp = i
+        .call_value(handler, &[req], pos)
+        .map_err(|e| format!("handler 出错: {}", e))?;
+    // 6. 构造响应并发送（HEAD 只发响应头，不带 body）
+    let mut resp_bytes = build_http_response(&resp);
+    if method == "HEAD" {
+        if let Some(idx) = resp_bytes.find("\r\n\r\n") {
+            resp_bytes.truncate(idx + 4);
+        }
+    }
+    stream
+        .write_all(resp_bytes.as_bytes())
+        .map_err(|e| format!("发送响应失败: {}", e))?;
+    stream.flush().map_err(|e| format!("flush 失败: {}", e))?;
+    Ok(())
+}
+
+/// 查找 \r\n\r\n 在缓冲区中的起始下标
+fn find_http_header_end(buf: &[u8]) -> Option<usize> {
+    if buf.len() >= 4 {
+        for i in 0..=buf.len() - 4 {
+            if &buf[i..i + 4] == b"\r\n\r\n" {
+                return Some(i);
+            }
+        }
+    }
+    None
+}
+
+/// 解析 HTTP 请求头：返回 (请求 dict, Content-Length)
+fn parse_http_request(head: &str, remote: &str) -> Result<(Value, usize), String> {
+    let mut lines = head.split("\r\n");
+    let req_line = lines.next().ok_or("空请求")?;
+    let mut parts = req_line.split_whitespace();
+    let method = parts.next().ok_or("请求行缺少方法")?.to_string();
+    let target = parts.next().ok_or("请求行缺少路径")?.to_string();
+    let version = parts.next().unwrap_or("HTTP/1.1").to_string();
+    let (path, query) = match target.find('?') {
+        Some(idx) => (url_decode(&target[..idx]), url_decode(&target[idx + 1..])),
+        None => (url_decode(&target), String::new()),
+    };
+    let mut headers = HashMap::new();
+    let mut content_length = 0usize;
+    for line in lines {
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(ci) = line.find(':') {
+            let k = line[..ci].trim().to_string();
+            let v = line[ci + 1..].trim().to_string();
+            if k.eq_ignore_ascii_case("content-length") {
+                content_length = v.parse().unwrap_or(0);
+            }
+            headers.insert(k, Value::Str(v));
+        }
+    }
+    let mut d = HashMap::new();
+    d.insert("method".into(), Value::Str(method));
+    d.insert("target".into(), Value::Str(target));
+    d.insert("path".into(), Value::Str(path));
+    d.insert("query".into(), Value::Str(query));
+    d.insert("version".into(), Value::Str(version));
+    d.insert("headers".into(), Value::Dict(Arc::new(Mutex::new(headers))));
+    d.insert("form".into(), Value::Dict(Arc::new(Mutex::new(HashMap::new()))));
+    d.insert("remote".into(), Value::Str(remote.to_string()));
+    Ok((Value::Dict(Arc::new(Mutex::new(d))), content_length))
+}
+
+/// 解析 application/x-www-form-urlencoded 表单 -> dict
+fn parse_form(body: &str) -> Value {
+    let mut m = HashMap::new();
+    for pair in body.split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+        let (k, v) = match pair.find('=') {
+            Some(idx) => (&pair[..idx], &pair[idx + 1..]),
+            None => (pair, ""),
+        };
+        m.insert(url_decode(k), Value::Str(url_decode(v)));
+    }
+    Value::Dict(Arc::new(Mutex::new(m)))
+}
+
+/// 从 req dict 的 headers 中取 Content-Type 头
+fn content_type_of(g: &HashMap<String, Value>) -> Option<String> {
+    if let Some(Value::Dict(h)) = g.get("headers") {
+        let h = h.lock().unwrap();
+        for (k, v) in h.iter() {
+            if k.eq_ignore_ascii_case("content-type") {
+                if let Value::Str(s) = v {
+                    return Some(s.clone());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 取请求方法（HEAD/GET/POST...）
+fn req_method(req: &Value) -> String {
+    if let Value::Dict(d) = req {
+        if let Some(Value::Str(s)) = d.lock().unwrap().get("method") {
+            return s.clone();
+        }
+    }
+    String::new()
+}
+
+/// 从 multipart Content-Type 中提取 boundary
+fn multipart_boundary(ct: &str) -> String {
+    for part in ct.split(';') {
+        let p = part.trim();
+        if let Some(rest) = p.strip_prefix("boundary=") {
+            return rest.trim().trim_matches('"').to_string();
+        }
+    }
+    "----WebKitFormBoundary".to_string() // 兜底，正常请求必有 boundary
+}
+
+/// 解析 multipart/form-data -> (form dict, files dict)
+/// files: filename -> 文件内容；form: 普通字段（name -> value）
+fn parse_multipart(body: &str, boundary: &str) -> (Value, Value) {
+    let mut form: HashMap<String, Value> = HashMap::new();
+    let mut files: HashMap<String, Value> = HashMap::new();
+    let delim = format!("--{}", boundary);
+    for part in body.split(&delim) {
+        let part = part.strip_prefix("\r\n").unwrap_or(part);
+        let part = part.strip_suffix("\r\n").unwrap_or(part);
+        if part.is_empty() || part == "--" {
+            continue;
+        }
+        if let Some(idx) = part.find("\r\n\r\n") {
+            let head = &part[..idx];
+            let content = &part[idx + 4..];
+            let mut name: Option<String> = None;
+            let mut filename: Option<String> = None;
+            for line in head.split("\r\n") {
+                if line.to_lowercase().starts_with("content-disposition:") {
+                    name = extract_mime_attr(line, "name=");
+                    filename = extract_mime_attr(line, "filename=");
+                }
+            }
+            match (filename, name) {
+                (Some(f), _) => {
+                    files.insert(f, Value::Str(content.to_string()));
+                }
+                (None, Some(n)) => {
+                    form.insert(n, Value::Str(content.to_string()));
+                }
+                _ => {}
+            }
+        }
+    }
+    (
+        Value::Dict(Arc::new(Mutex::new(form))),
+        Value::Dict(Arc::new(Mutex::new(files))),
+    )
+}
+
+/// 从 Content-Disposition 行提取 name="..." / filename="..." 属性值
+fn extract_mime_attr(line: &str, key: &str) -> Option<String> {
+    let needle = format!("{key}\"");
+    let start = line.find(&needle)? + needle.len();
+    let end = line[start..].find('"')? + start;
+    Some(line[start..end].to_string())
+}
+
+/// URL 解码：+ -> 空格，%XX -> 字节
+fn url_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len() => {
+                if let (Some(h), Some(l)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2])) {
+                    out.push(h * 16 + l);
+                    i += 3;
+                } else {
+                    out.push(b'%');
+                    i += 1;
+                }
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// 根据 handler 返回值构造 HTTP 响应报文
+fn build_http_response(v: &Value) -> String {
+    let (status, headers, body) = match v {
+        Value::Dict(d) => {
+            let d = d.lock().unwrap();
+            let status = match d.get("status") {
+                Some(Value::Int(s)) => *s,
+                Some(Value::Float(f)) => *f as i64,
+                _ => 200,
+            };
+            let body = match d.get("body") {
+                Some(Value::Str(s)) => s.clone(),
+                Some(Value::Null) | None => String::new(),
+                Some(other) => other.to_string(),
+            };
+            let headers = match d.get("headers") {
+                Some(Value::Dict(h)) => {
+                    let h = h.lock().unwrap();
+                    h.iter()
+                        .map(|(k, v)| format!("{}: {}\r\n", k, v))
+                        .collect::<String>()
+                }
+                _ => String::new(),
+            };
+            (status, headers, body)
+        }
+        Value::Str(s) => (200, String::new(), s.clone()),
+        Value::Int(st) => (*st, String::new(), String::new()),
+        Value::Null => (204, String::new(), String::new()),
+        other => (200, String::new(), other.to_string()),
+    };
+    let reason = status_reason(status);
+    let mut resp = String::new();
+    resp.push_str(&format!("HTTP/1.1 {} {}\r\n", status, reason));
+    resp.push_str(&format!("Content-Length: {}\r\n", body.len()));
+    resp.push_str("Connection: close\r\n");
+    if !headers.is_empty() {
+        resp.push_str(&headers);
+    }
+    if !headers.to_lowercase().contains("content-type") {
+        resp.push_str("Content-Type: text/plain; charset=utf-8\r\n");
+    }
+    resp.push_str("\r\n");
+    resp.push_str(&body);
+    resp
+}
+
+fn status_reason(code: i64) -> &'static str {
+    match code {
+        200 => "OK",
+        201 => "Created",
+        202 => "Accepted",
+        204 => "No Content",
+        301 => "Moved Permanently",
+        302 => "Found",
+        304 => "Not Modified",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        409 => "Conflict",
+        500 => "Internal Server Error",
+        501 => "Not Implemented",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        _ => "OK",
+    }
 }
 
 /// HTTP 请求（M10：支持 http:// 与 https://，自动跟随重定向最多 5 次）
@@ -1482,5 +1863,122 @@ mod tests {
     fn test_http_once_rejects_bad_scheme() {
         let e = http_once("ftp://x.com/", "GET", None).unwrap_err();
         assert!(e.contains("不支持的协议"));
+    }
+
+    #[test]
+    fn test_http_parse_request() {
+        let head = "GET /api/user?page=1&size=10 HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n";
+        let (req, cl) = parse_http_request(head, "127.0.0.1:1").unwrap();
+        assert_eq!(cl, 0);
+        let d = match &req {
+            Value::Dict(d) => d.lock().unwrap().clone(),
+            _ => panic!("req 不是 dict"),
+        };
+        assert_eq!(d["method"], Value::Str("GET".into()));
+        assert_eq!(d["target"], Value::Str("/api/user?page=1&size=10".into()));
+        assert_eq!(d["path"], Value::Str("/api/user".into()));
+        assert_eq!(d["query"], Value::Str("page=1&size=10".into()));
+        assert_eq!(d["version"], Value::Str("HTTP/1.1".into()));
+        assert_eq!(d["remote"], Value::Str("127.0.0.1:1".into()));
+        let hs = match &d["headers"] {
+            Value::Dict(h) => h.lock().unwrap().clone(),
+            _ => panic!("headers 不是 dict"),
+        };
+        assert_eq!(hs["Host"], Value::Str("localhost".into()));
+    }
+
+    #[test]
+    fn test_http_parse_request_content_length() {
+        let head = "POST /submit HTTP/1.1\r\nContent-Length: 11\r\n";
+        let (_, cl) = parse_http_request(head, "").unwrap();
+        assert_eq!(cl, 11);
+        // 无 Content-Length
+        let (_, cl) = parse_http_request("GET / HTTP/1.1\r\n", "").unwrap();
+        assert_eq!(cl, 0);
+    }
+
+    #[test]
+    fn test_http_form_parse() {
+        let form = parse_form("name=abc&msg=hello+world&tag=%E4%B8%AD");
+        let d = match &form {
+            Value::Dict(d) => d.lock().unwrap().clone(),
+            _ => panic!("form 不是 dict"),
+        };
+        assert_eq!(d["name"], Value::Str("abc".into()));
+        assert_eq!(d["msg"], Value::Str("hello world".into()));
+        assert_eq!(d["tag"], Value::Str("中".into()));
+        assert_eq!(url_decode("a+b%20c"), "a b c");
+    }
+
+    #[test]
+    fn test_http_build_response() {
+        // dict 响应
+        let mut h = HashMap::new();
+        h.insert("Content-Type".into(), Value::Str("application/json".into()));
+        let mut d = HashMap::new();
+        d.insert("status".into(), Value::Int(201));
+        d.insert("body".into(), Value::Str("{\"ok\":1}".into()));
+        d.insert("headers".into(), Value::Dict(Arc::new(Mutex::new(h))));
+        let r = build_http_response(&Value::Dict(Arc::new(Mutex::new(d))));
+        assert!(r.starts_with("HTTP/1.1 201 Created\r\n"));
+        assert!(r.contains("Content-Length: 8\r\n"));
+        assert!(r.contains("Content-Type: application/json\r\n"));
+        assert!(r.ends_with("\r\n\r\n{\"ok\":1}"));
+
+        // str 响应
+        let r = build_http_response(&Value::Str("hi".into()));
+        assert!(r.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(r.contains("Content-Type: text/plain; charset=utf-8\r\n"));
+        assert!(r.ends_with("\r\n\r\nhi"));
+
+        // int 响应
+        let r = build_http_response(&Value::Int(404));
+        assert!(r.starts_with("HTTP/1.1 404 Not Found\r\n"));
+    }
+
+    #[test]
+    fn test_http_find_header_end() {
+        assert_eq!(find_http_header_end(b"GET / HTTP/1.1\r\n\r\n"), Some(14));
+        assert_eq!(find_http_header_end(b"GET / HTTP/1.1\r\nHost: a\r\n\r\nbody"), Some(23));
+        assert_eq!(find_http_header_end(b"GET /"), None);
+    }
+
+    #[test]
+    fn test_http_multipart_parse() {
+        let body = "--TB\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\nhello\r\n--TB\r\nContent-Disposition: form-data; name=\"file1\"; filename=\"a.txt\"\r\nContent-Type: text/plain\r\n\r\nfile content 123\r\n--TB--\r\n";
+        let (form, files) = parse_multipart(body, "TB");
+        let fd = match &form {
+            Value::Dict(d) => d.lock().unwrap().clone(),
+            _ => panic!("form 不是 dict"),
+        };
+        let fsd = match &files {
+            Value::Dict(d) => d.lock().unwrap().clone(),
+            _ => panic!("files 不是 dict"),
+        };
+        assert_eq!(fd["title"], Value::Str("hello".into()));
+        assert_eq!(fsd["a.txt"], Value::Str("file content 123".into()));
+        assert_eq!(multipart_boundary("multipart/form-data; boundary=TB"), "TB");
+        assert_eq!(multipart_boundary("multipart/form-data; boundary=\"quoted\""), "quoted");
+    }
+
+    #[test]
+    fn test_http_path_query_decode() {
+        // path/query 百分号解码 + '+' → 空格
+        let head = "GET /%E4%B8%AD%E6%96%87?kw=hello+world&n=%E4%B8%AD HTTP/1.1\r\n";
+        let (req, _) = parse_http_request(head, "").unwrap();
+        let d = match &req {
+            Value::Dict(d) => d.lock().unwrap().clone(),
+            _ => panic!("req 不是 dict"),
+        };
+        assert_eq!(d["path"], Value::Str("/中文".into()));
+        assert_eq!(d["query"], Value::Str("kw=hello world&n=中".into()));
+        // 无 query 时
+        let (req2, _) = parse_http_request("GET /plain HTTP/1.1\r\n", "").unwrap();
+        let d2 = match &req2 {
+            Value::Dict(d) => d.lock().unwrap().clone(),
+            _ => panic!("req2 不是 dict"),
+        };
+        assert_eq!(d2["path"], Value::Str("/plain".into()));
+        assert_eq!(d2["query"], Value::Str("".into()));
     }
 }

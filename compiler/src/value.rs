@@ -141,6 +141,7 @@ pub enum Builtin {
     TcpClose,
     HttpGet,
     HttpPost,
+    HttpServe,
 }
 
 impl Builtin {
@@ -213,6 +214,7 @@ impl Builtin {
             Builtin::TcpClose => "tcp_close",
             Builtin::HttpGet => "http_get",
             Builtin::HttpPost => "http_post",
+            Builtin::HttpServe => "http_serve",
         }
     }
 }

@@ -119,7 +119,7 @@ impl Interpreter {
     }
 
     /// 创建供子协程（线程）使用的解释器副本：共享 globals 与类型表，独立 loop_depth/exit_code
-    fn fork(&self) -> Interpreter {
+    pub(crate) fn fork(&self) -> Interpreter {
         Interpreter {
             globals: self.globals.clone(),
             structs: self.structs.clone(),
@@ -205,6 +205,7 @@ impl Interpreter {
             ("tcp_close", Builtin::TcpClose),
             ("http_get", Builtin::HttpGet),
             ("http_post", Builtin::HttpPost),
+            ("http_serve", Builtin::HttpServe),
         ];
         for (n, b) in names {
             g.define(n, Value::Builtin(*b));

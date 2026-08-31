@@ -48,6 +48,7 @@ static LXValue bi_tcp_recv(LXValue* args, int nargs, void* ctx);
 static LXValue bi_tcp_close(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_get(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_post(LXValue* args, int nargs, void* ctx);
+static LXValue bi_http_serve(LXValue* args, int nargs, void* ctx);
 
 // M10 HTTPS 内部辅助
 static char* lx_http_request(const char* url, const char* method, const char* body, int* out_len);
@@ -3218,6 +3219,7 @@ void lx_register_builtins(void) {
     lx_set_global("tcp_close", lx_native("tcp_close", bi_tcp_close));
     lx_set_global("http_get", lx_native("http_get", bi_http_get));
     lx_set_global("http_post", lx_native("http_post", bi_http_post));
+    lx_set_global("http_serve", lx_native("http_serve", bi_http_serve));
 }
 
 // ==================== 并发原语（M4.2） ====================
@@ -3574,8 +3576,13 @@ void lx_spawn(LXFuncPtr fn, LXValue* args, int nargs) {
 
 void lx_spawn_name(const char* fname, LXValue* args, int nargs) {
     LXValue fn = lx_get_global(fname);
-    if (fn.type != LX_FUNC) lx_error("spawn: 未找到函数 %s", fname);
-    lx_spawn(fn.as.obj->as.func.fn, args, nargs);
+    if (fn.type == LX_FUNC) {
+        lx_spawn(fn.as.obj->as.func.fn, args, nargs);
+    } else if (fn.type == LX_NATIVE) {
+        lx_spawn(fn.as.obj->as.native.fn, args, nargs);
+    } else {
+        lx_error("spawn: 未找到函数 %s", fname);
+    }
 }
 
 // ==================== std.net（M5.2）：TCP + HTTP 客户端 ====================
@@ -3979,4 +3986,448 @@ static LXValue bi_http_post(LXValue* args, int nargs, void* ctx) {
     LXValue r = lx_str_len(resp, len);
     xfree(resp);
     return r;
+}
+
+// ==================== M16 HTTP 服务端（编译模式，与并发 GC 兼容） ====================
+// http_serve(port, handler)：socket 监听 + accept 循环，每连接 lx_spawn 一个处理线程。
+// 连接线程经 lx_spawn 注册进 GC 槽位 → 并发 GC 会暂停/扫描其栈，安全。
+
+static int lx_http_hexv(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+// URL 解码（+ → 空格，%XX → 字节）；返回 xmalloc 缓冲，调用者 xfree
+static char* lx_url_decode(const char* s) {
+    int n = (int)strlen(s);
+    char* out = xmalloc(n + 1);
+    int oi = 0;
+    for (int i = 0; i < n; i++) {
+        if (s[i] == '+') {
+            out[oi++] = ' ';
+        } else if (s[i] == '%' && i + 2 < n) {
+            int h = lx_http_hexv(s[i + 1]), l = lx_http_hexv(s[i + 2]);
+            if (h >= 0 && l >= 0) {
+                out[oi++] = (char)(h * 16 + l);
+                i += 2;
+            } else {
+                out[oi++] = s[i];
+            }
+        } else {
+            out[oi++] = s[i];
+        }
+    }
+    out[oi] = 0;
+    return out;
+}
+
+// 大小写不敏感查找 dict 键（HTTP 头名不区分大小写）
+static LXValue lx_dict_get_ci(LXValue d, const char* key) {
+    if (d.type != LX_DICT) return lx_null();
+    LXObject* o = d.as.obj;
+    for (int i = 0; i < o->as.dict.len; i++) {
+        if (strcasecmp(o->as.dict.keys[i], key) == 0) return o->as.dict.vals[i];
+    }
+    return lx_null();
+}
+
+// 从 multipart Content-Type 提取 boundary（xmalloc，调用者 xfree）
+static char* lx_mime_boundary(const char* ct) {
+    const char* p = strstr(ct, "boundary=");
+    if (!p) return NULL;
+    p += 9;
+    while (*p == ' ') p++;
+    char* out = xmalloc(256);
+    int i = 0;
+    if (*p == '"') {
+        p++;
+        while (*p && *p != '"' && i < 255) out[i++] = *p++;
+    } else {
+        while (*p && *p != ';' && *p != ' ' && *p != '\r' && *p != '\n' && i < 255) out[i++] = *p++;
+    }
+    out[i] = 0;
+    return out;
+}
+
+// 从 Content-Disposition 行提取 name="..." / filename="..."（xmalloc，调用者 xfree）
+static char* lx_mime_attr(const char* line, const char* key) {
+    char needle[64];
+    snprintf(needle, sizeof(needle), "%s\"", key);
+    char* p = strstr(line, needle);
+    if (!p) return NULL;
+    p += strlen(needle);
+    char* e = strchr(p, '"');
+    if (!e) return NULL;
+    int len = (int)(e - p);
+    char* out = xmalloc((size_t)len + 1);
+    memcpy(out, p, (size_t)len);
+    out[len] = 0;
+    return out;
+}
+
+// multipart/form-data 解析：设置 req["form"]（普通字段）与 req["files"]（filename -> 内容）
+static void lx_parse_multipart(LXValue req, const char* body, int body_len, const char* boundary) {
+    LXValue form = lx_dict();
+    LXValue files = lx_dict();
+    char delim[512];
+    snprintf(delim, sizeof(delim), "--%s", boundary);
+    int dlen = (int)strlen(delim);
+    const char* p = body;
+    const char* end = body + body_len;
+    while (p < end) {
+        if (p + 2 <= end && p[0] == '\r' && p[1] == '\n') p += 2;
+        if ((size_t)(end - p) < (size_t)dlen) break;
+        if (memcmp(p, delim, (size_t)dlen) != 0) break;
+        p += dlen;
+        if (p + 2 <= end && p[0] == '-' && p[1] == '-') break;  // 收尾 boundary
+        if (p + 2 <= end && p[0] == '\r' && p[1] == '\n') p += 2;
+        const char* hs = p;
+        const char* sep = NULL;
+        for (const char* s = p; s + 4 <= end; s++) {
+            if (s[0] == '\r' && s[1] == '\n' && s[2] == '\r' && s[3] == '\n') { sep = s; break; }
+        }
+        if (!sep) break;
+        const char* cs = sep + 4;
+        const char* ce = cs;
+        for (const char* s = cs; s + dlen + 2 <= end; s++) {
+            if (s[0] == '\r' && s[1] == '\n' && memcmp(s + 2, delim, (size_t)dlen) == 0) { ce = s; break; }
+        }
+        if (ce == cs) ce = end;
+        char name[256] = {0}, filename[512] = {0};
+        char* head = xmalloc((size_t)(sep - hs) + 1);
+        memcpy(head, hs, (size_t)(sep - hs));
+        head[sep - hs] = 0;
+        char* save = NULL;
+        char* line = strtok_r(head, "\r\n", &save);
+        while (line) {
+            if (strncasecmp(line, "Content-Disposition:", 20) == 0) {
+                char* n = lx_mime_attr(line, "name=");
+                if (n) { snprintf(name, sizeof(name), "%s", n); xfree(n); }
+                char* f = lx_mime_attr(line, "filename=");
+                if (f) { snprintf(filename, sizeof(filename), "%s", f); xfree(f); }
+            }
+            line = strtok_r(NULL, "\r\n", &save);
+        }
+        xfree(head);
+        int clen = (int)(ce - cs);
+        if (clen > 0 && cs[clen - 1] == '\n') clen--;
+        if (clen > 0 && cs[clen - 1] == '\r') clen--;
+        if (filename[0]) {
+            lx_dict_set(files, filename, lx_str_len(cs, clen));
+        } else if (name[0]) {
+            lx_dict_set(form, name, lx_str_len(cs, clen));
+        }
+        p = ce;
+    }
+    lx_dict_set(req, "form", form);
+    lx_dict_set(req, "files", files);
+}
+
+static const char* lx_http_status_reason(int code) {
+    switch (code) {
+        case 200: return "OK";
+        case 201: return "Created";
+        case 202: return "Accepted";
+        case 204: return "No Content";
+        case 301: return "Moved Permanently";
+        case 302: return "Found";
+        case 304: return "Not Modified";
+        case 400: return "Bad Request";
+        case 401: return "Unauthorized";
+        case 403: return "Forbidden";
+        case 404: return "Not Found";
+        case 405: return "Method Not Allowed";
+        case 409: return "Conflict";
+        case 500: return "Internal Server Error";
+        case 501: return "Not Implemented";
+        case 502: return "Bad Gateway";
+        case 503: return "Service Unavailable";
+        default: return "OK";
+    }
+}
+
+// 构造 HTTP 响应报文（xmalloc，调用者 xfree）
+static char* lx_http_build_response(LXValue v) {
+    int status = 200;
+    const char* body = "";
+    int body_len = 0;
+    char extra_headers[4096] = {0};
+    if (v.type == LX_DICT) {
+        LXValue st = lx_dict_get(v, "status");
+        if (st.type == LX_INT) status = (int)st.as.i;
+        LXValue b = lx_dict_get(v, "body");
+        if (b.type == LX_STR) {
+            body = b.as.obj->as.str.data;
+            body_len = b.as.obj->as.str.len;
+        }
+        LXValue h = lx_dict_get(v, "headers");
+        if (h.type == LX_DICT) {
+            LXObject* ho = h.as.obj;
+            int off = 0;
+            for (int i = 0; i < ho->as.dict.len && off < (int)sizeof(extra_headers) - 64; i++) {
+                if (ho->as.dict.vals[i].type != LX_STR) continue;
+                off += snprintf(extra_headers + off, sizeof(extra_headers) - (size_t)off,
+                                "%s: %s\r\n", ho->as.dict.keys[i], ho->as.dict.vals[i].as.obj->as.str.data);
+            }
+        }
+    } else if (v.type == LX_STR) {
+        body = v.as.obj->as.str.data;
+        body_len = v.as.obj->as.str.len;
+    } else if (v.type == LX_INT) {
+        status = (int)v.as.i;
+    } else if (v.type == LX_NULL) {
+        status = 204;
+    }
+    const char* reason = lx_http_status_reason(status);
+    int has_ct = strstr(extra_headers, "Content-Type") != NULL || strstr(extra_headers, "content-type") != NULL;
+    char* out = xmalloc(8192 + body_len);
+    int off = 0;
+    off += snprintf(out + off, 8192 + body_len - off, "HTTP/1.1 %d %s\r\n", status, reason);
+    off += snprintf(out + off, 8192 + body_len - off, "Content-Length: %d\r\n", body_len);
+    off += snprintf(out + off, 8192 + body_len - off, "Connection: close\r\n");
+    if (extra_headers[0]) {
+        int l = (int)strlen(extra_headers);
+        memcpy(out + off, extra_headers, (size_t)l);
+        off += l;
+    }
+    if (!has_ct) {
+        off += snprintf(out + off, 8192 + body_len - off, "Content-Type: text/plain; charset=utf-8\r\n");
+    }
+    memcpy(out + off, "\r\n", 2);
+    off += 2;
+    if (body_len > 0) {
+        memcpy(out + off, body, (size_t)body_len);
+        off += body_len;
+    }
+    out[off] = 0;
+    return out;
+}
+
+// 连接处理线程（lx_spawn 注册）：args[0] = fd
+static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) return lx_null();
+    int fd = (int)args[0].as.i;
+
+    // 1. 读请求头（直到 \r\n\r\n，上限 64KB）
+    char buf[65536];
+    int len = 0;
+    int header_end = -1;
+    while (len < (int)sizeof(buf) - 1) {
+        ssize_t n = recv(fd, buf + len, (size_t)((int)sizeof(buf) - 1 - len), 0);
+        if (n <= 0) break;
+        len += (int)n;
+        buf[len] = 0;
+        char* sep = strstr(buf, "\r\n\r\n");
+        if (sep) {
+            header_end = (int)(sep - buf);
+            break;
+        }
+    }
+    if (header_end < 0 || len == 0) {
+        close(fd);
+        return lx_null();
+    }
+
+    // 2. 解析请求行：METHOD SP target SP version
+    char* head = buf;
+    char* sp1 = strchr(head, ' ');
+    if (!sp1) {
+        close(fd);
+        return lx_null();
+    }
+    *sp1 = 0;
+    char* method = head;
+    char* target = sp1 + 1;
+    char* sp2 = strchr(target, ' ');
+    char version[16] = "HTTP/1.1";
+    if (sp2) {
+        *sp2 = 0;
+        const char* ver = sp2 + 1;
+        int vlen = 0;
+        while (ver[vlen] && ver[vlen] != '\r' && ver[vlen] != '\n' && vlen < 15) vlen++;
+        memcpy(version, ver, (size_t)vlen);
+        version[vlen] = 0;
+    }
+    char path[2048] = {0}, query[2048] = {0};
+    char* q = strchr(target, '?');
+    char* dec;
+    if (q) {
+        *q = 0;
+        dec = lx_url_decode(target);
+        snprintf(path, sizeof(path), "%s", dec ? dec : target);
+        xfree(dec);
+        dec = lx_url_decode(q + 1);
+        snprintf(query, sizeof(query), "%s", dec ? dec : q + 1);
+        xfree(dec);
+    } else {
+        dec = lx_url_decode(target);
+        snprintf(path, sizeof(path), "%s", dec ? dec : target);
+        xfree(dec);
+    }
+
+    // 3. 头部 + Content-Length
+    LXValue headers = lx_dict();
+    int content_length = 0;
+    char* hline = sp2 ? sp2 + 1 : target + strlen(target);
+    char* nl0 = strchr(hline, '\n');
+    hline = nl0 ? nl0 + 1 : head + len;
+    while (hline && *hline && *hline != '\r' && *hline != '\n') {
+        char* eol = strstr(hline, "\r\n");
+        if (!eol) eol = strchr(hline, '\n');
+        int linelen = eol ? (int)(eol - hline) : (int)strlen(hline);
+        char line[4096];
+        int cl = linelen < 4095 ? linelen : 4095;
+        memcpy(line, hline, (size_t)cl);
+        line[cl] = 0;
+        char* colon = strchr(line, ':');
+        if (colon) {
+            *colon = 0;
+            char* k = line;
+            char* v = colon + 1;
+            while (*v == ' ') v++;
+            char* ve = v + strlen(v);
+            while (ve > v && (ve[-1] == ' ' || ve[-1] == '\r')) ve--;
+            *ve = 0;
+            if (strcasecmp(k, "Content-Length") == 0) content_length = atoi(v);
+            lx_dict_set(headers, k, lx_str(v));
+        }
+        hline = eol ? eol + 2 : hline + strlen(hline);
+    }
+
+    // 4. 读 body（Content-Length）
+    char body_buf[65536] = {0};
+    int body_len = 0;
+    if (content_length > 0) {
+        int body_off = header_end + 4;
+        int have = len - body_off;
+        if (have > 0) {
+            int take = have < content_length ? have : content_length;
+            if (take > (int)sizeof(body_buf) - 1) take = (int)sizeof(body_buf) - 1;
+            memcpy(body_buf, buf + body_off, (size_t)take);
+            body_len = take;
+        }
+        while (body_len < content_length && body_len < (int)sizeof(body_buf) - 1) {
+            ssize_t n = recv(fd, body_buf + body_len, (size_t)((int)sizeof(body_buf) - 1 - body_len), 0);
+            if (n <= 0) break;
+            body_len += (int)n;
+        }
+        if (body_len > content_length) body_len = content_length;
+        body_buf[body_len] = 0;
+    }
+
+    // 5. 构造请求 dict
+    LXValue req = lx_dict();
+    lx_dict_set(req, "method", lx_str(method));
+    lx_dict_set(req, "target", lx_str(target));
+    lx_dict_set(req, "path", lx_str(path));
+    lx_dict_set(req, "query", lx_str(query));
+    lx_dict_set(req, "version", lx_str(version));
+    lx_dict_set(req, "headers", headers);
+    lx_dict_set(req, "body", lx_str_len(body_buf, body_len));
+    LXValue form = lx_dict();
+    {
+        struct sockaddr_in raddr;
+        socklen_t rl = sizeof(raddr);
+        if (getpeername(fd, (struct sockaddr*)&raddr, &rl) == 0) {
+            char rbuf[64];
+            snprintf(rbuf, sizeof(rbuf), "%s:%d", inet_ntoa(raddr.sin_addr), ntohs(raddr.sin_port));
+            lx_dict_set(req, "remote", lx_str(rbuf));
+        } else {
+            lx_dict_set(req, "remote", lx_str(""));
+        }
+    }
+    // form / files 解析（Content-Type 驱动）
+    LXValue ct_v = lx_dict_get_ci(headers, "Content-Type");
+    const char* ct = (ct_v.type == LX_STR) ? ct_v.as.obj->as.str.data : "";
+    if (body_len > 0) {
+        if (strstr(ct, "multipart/form-data")) {
+            char* boundary = lx_mime_boundary(ct);
+            if (boundary) {
+                lx_parse_multipart(req, body_buf, body_len, boundary);
+                xfree(boundary);
+            }
+        } else if (strstr(ct, "application/x-www-form-urlencoded")) {
+            char* fcopy = xmalloc((size_t)body_len + 1);
+            memcpy(fcopy, body_buf, (size_t)body_len);
+            fcopy[body_len] = 0;
+            char* save = NULL;
+            char* pair = strtok_r(fcopy, "&", &save);
+            while (pair) {
+                char* eq = strchr(pair, '=');
+                if (eq) {
+                    *eq = 0;
+                    char* kv = lx_url_decode(pair);
+                    char* vv = lx_url_decode(eq + 1);
+                    lx_dict_set(form, kv, lx_str(vv));
+                    xfree(kv);
+                    xfree(vv);
+                } else {
+                    char* kv = lx_url_decode(pair);
+                    lx_dict_set(form, kv, lx_str(""));
+                    xfree(kv);
+                }
+                pair = strtok_r(NULL, "&", &save);
+            }
+            xfree(fcopy);
+            lx_dict_set(req, "form", form);
+        }
+    }
+
+    // 6. 调 handler
+    LXValue handler = lx_get_global("__http_handler");
+    LXValue resp = lx_null();
+    if (handler.type == LX_FUNC || handler.type == LX_NATIVE) {
+        resp = lx_call(handler, &req, 1);
+    }
+
+    // 7. 构造响应并发送（HEAD 只发响应头，不带 body）
+    char* out = lx_http_build_response(resp);
+    if (out) {
+        if (strcmp(method, "HEAD") == 0) {
+            char* sep = strstr(out, "\r\n\r\n");
+            if (sep) sep[4] = 0;
+        }
+        send(fd, out, (int)strlen(out), 0);
+        xfree(out);
+    }
+    close(fd);
+    return lx_null();
+}
+
+// http_serve(port, handler)：阻塞 accept 循环（Go 风格），每连接 lx_spawn 处理
+static LXValue bi_http_serve(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2 || args[0].type != LX_INT) lx_error("http_serve 需要 (port, handler) 参数");
+    LXValue handler = args[1];
+    if (handler.type != LX_FUNC && handler.type != LX_NATIVE) lx_error("http_serve 的 handler 必须是函数");
+    // handler 存入全局表（GC 扫描根），连接线程经全局表取回
+    lx_set_global("__http_handler", handler);
+    int port = (int)args[0].as.i;
+    int sfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sfd < 0) lx_error("http_serve: socket 创建失败");
+    int one = 1;
+    setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons((uint16_t)port);
+    if (bind(sfd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        close(sfd);
+        lx_error("http_serve: 绑定端口 %d 失败", port);
+    }
+    if (listen(sfd, 128) < 0) {
+        close(sfd);
+        lx_error("http_serve: listen 失败");
+    }
+    for (;;) {
+        int cfd = accept(sfd, NULL, NULL);
+        if (cfd < 0) continue;
+        LXValue arg = lx_int(cfd);
+        lx_spawn(http_conn_worker, &arg, 1);
+    }
+    return lx_null(); // 不可达
 }

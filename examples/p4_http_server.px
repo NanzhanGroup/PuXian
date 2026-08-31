@@ -1,0 +1,90 @@
+# p4_http_server.px - M16 HTTP 服务端框架回归测试（解释器 run 与编译 build 输出必须一致）
+# 覆盖：GET 路由、query 解析、POST form（urlencoded）、404 状态、JSON 响应头、
+#       HEAD（无 body）、multipart/form-data（字段+文件）、URL 解码（+ 与 %XX、中文路径）
+# 端口 18080：客户端 http_get/http_post + tcp 原语发原始请求
+
+def handler(req):
+    let method = req["method"]
+    let path = req["path"]
+    let query = req["query"]
+    if path == "/" and method == "GET":
+        return "hello from puxian"
+    if path == "/api/user":
+        return {"status": 200, "body": "user:" + query, "headers": {"Content-Type": "application/json"}}
+    if path == "/form" and method == "POST":
+        let f = req["form"]
+        return {"status": 200, "body": "name=" + f["name"] + " msg=" + f["msg"]}
+    if path == "/status":
+        return 404
+    if path == "/echo":
+        return {"status": 200, "body": "echo:" + req["body"]}
+    if path == "/head":
+        return {"status": 200, "body": "HEAD-BODY-SHOULD-NOT-APPEAR"}
+    if path == "/upload" and method == "POST":
+        let f = req["form"]
+        let fs = req["files"]
+        return {"status": 200, "body": "title=" + f["title"] + " file=" + fs["a.txt"]}
+    if path == "/encode":
+        return {"status": 200, "body": "path=" + path + " q=" + query}
+    if path == "/中文":
+        return {"status": 200, "body": "cn-path-ok"}
+    return {"status": 404, "body": "not found"}
+
+# 原始 HTTP 请求助手（tcp 原语）：返回完整响应报文
+def raw_req(method, target, body, ctype):
+    let sock = tcp_connect("127.0.0.1", 18080)
+    let req = method + " " + target + " HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+    if body != "":
+        req = req + "Content-Type: " + ctype + "\r\nContent-Length: " + str(len(body)) + "\r\n"
+    req = req + "\r\n" + body
+    tcp_send(sock, req)
+    let resp = tcp_recv(sock, 65536)
+    tcp_close(sock)
+    return resp
+
+spawn http_serve(18080, handler)
+sleep(400)  # 等服务线程完成 bind
+
+# ---- 1. GET / 文本响应 ----
+let r1 = http_get("http://127.0.0.1:18080/")
+assert(r1 == "hello from puxian", "1 GET / 文本响应")
+
+# ---- 2. GET /api/user?page=1&size=10 query 解析 ----
+let r2 = http_get("http://127.0.0.1:18080/api/user?page=1&size=10")
+assert(r2 == "user:page=1&size=10", "2 GET query 解析")
+
+# ---- 3. POST /form urlencoded 表单解析 ----
+let r3 = http_post("http://127.0.0.1:18080/form", "name=px&msg=hello+world")
+assert(r3 == "name=px msg=hello world", "3 POST form urlencoded")
+
+# ---- 4. int 响应 = 状态码（404 空 body） ----
+let r4 = http_get("http://127.0.0.1:18080/status")
+assert(r4 == "", "4 int 状态码响应 404 body 空")
+
+# ---- 5. dict 响应 404 路由 ----
+let r5 = http_get("http://127.0.0.1:18080/nope")
+assert(r5 == "not found", "5 dict 404 路由")
+
+# ---- 6. POST body 原样回显 ----
+let r6 = http_post("http://127.0.0.1:18080/echo", "raw-body-123")
+assert(r6 == "echo:raw-body-123", "6 POST body 回显")
+
+# ---- 7. HEAD：响应只含头部，不带 body ----
+let h7 = raw_req("HEAD", "/head", "", "")
+assert(contains(h7, "HEAD-BODY-SHOULD-NOT-APPEAR") == false, "7 HEAD 响应不应包含 body")
+assert(contains(h7, "200 OK"), "7 HEAD 状态 200")
+
+# ---- 8. multipart/form-data：字段 + 文件上传 ----
+let mp = "--TB\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\nhello\r\n--TB\r\nContent-Disposition: form-data; name=\"file1\"; filename=\"a.txt\"\r\nContent-Type: text/plain\r\n\r\nfile content 123\r\n--TB--\r\n"
+let h8 = raw_req("POST", "/upload", mp, "multipart/form-data; boundary=TB")
+assert(contains(h8, "title=hello file=file content 123"), "8 multipart 字段+文件解析")
+
+# ---- 9. URL 解码：query 的 + 与 %XX ----
+let h9 = raw_req("GET", "/encode?kw=hello+world&n=%E4%B8%AD%E6%96%87", "", "")
+assert(contains(h9, "path=/encode q=kw=hello world&n=中文"), "9 query URL 解码")
+
+# ---- 10. URL 解码：中文路径 ----
+let h10 = raw_req("GET", "/%E4%B8%AD%E6%96%87", "", "")
+assert(contains(h10, "cn-path-ok"), "10 中文路径解码路由")
+
+print("P4 HTTP SERVER TESTS PASSED")
