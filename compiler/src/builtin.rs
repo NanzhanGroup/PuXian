@@ -1,7 +1,11 @@
 //! 普贤 (PuXian) 内置函数实现（spec.md §10.2）
 //! 自由函数（非方法）分派
 
-use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
@@ -11,6 +15,124 @@ use crate::value::{Builtin, Value};
 
 fn err(msg: impl Into<String>, pos: Pos) -> LxError {
     LxError::new("R1002", msg, Some(pos))
+}
+
+// ==================== M21 SSE 连接注册表 ====================
+// sse_serve(port, handler)：handler(req) 内/任意线程可 sse_send(conn, data) 推送，
+// handler 返回后连接保持打开，直到 sse_close(conn) 或对端断开（写失败自动清理）。
+
+struct SseConn {
+    stream: Arc<Mutex<std::net::TcpStream>>,
+    close_tx: mpsc::Sender<()>,
+}
+
+fn sse_conns() -> &'static Mutex<HashMap<i64, SseConn>> {
+    static M: OnceLock<Mutex<HashMap<i64, SseConn>>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+static SSE_NEXT_ID: AtomicI64 = AtomicI64::new(1);
+
+/// 编码 SSE 帧：str → `data: xxx\n\n`；dict 支持 {event, data, id, retry}
+fn sse_frame(data: &Value) -> String {
+    match data {
+        Value::Str(s) => {
+            let mut f = String::new();
+            for line in s.split('\n') {
+                f.push_str(&format!("data: {}\n", line));
+            }
+            f.push('\n');
+            f
+        }
+        Value::Dict(d) => {
+            let d = d.lock().unwrap();
+            let mut f = String::new();
+            if let Some(Value::Str(id)) = d.get("id") {
+                f.push_str(&format!("id: {}\n", id));
+            }
+            if let Some(Value::Str(ev)) = d.get("event") {
+                f.push_str(&format!("event: {}\n", ev));
+            }
+            if let Some(Value::Int(r)) = d.get("retry") {
+                f.push_str(&format!("retry: {}\n", r));
+            }
+            match d.get("data") {
+                Some(Value::Str(s)) => {
+                    for line in s.split('\n') {
+                        f.push_str(&format!("data: {}\n", line));
+                    }
+                }
+                Some(Value::Null) | None => {}
+                Some(other) => f.push_str(&format!("data: {}\n", other)),
+            }
+            f.push('\n');
+            f
+        }
+        other => format!("data: {}\n\n", other),
+    }
+}
+
+/// 处理单个 SSE 连接：读请求 → 解析 → 发响应头 → 注册连接 → 调 handler → 保持到关闭
+fn handle_sse_conn(
+    i: &mut Interpreter,
+    stream: &mut TcpStream,
+    handler: &Value,
+    pos: Pos,
+) -> Result<(), String> {
+    // 1. 读请求头（直到 \r\n\r\n，上限 64KB）
+    let mut buf: Vec<u8> = Vec::new();
+    let mut tmp = [0u8; 4096];
+    let header_end;
+    loop {
+        let n = stream.read(&mut tmp).map_err(|e| format!("读请求失败: {}", e))?;
+        if n == 0 {
+            return Err("连接已关闭".into());
+        }
+        buf.extend_from_slice(&tmp[..n]);
+        if let Some(idx) = find_http_header_end(&buf) {
+            header_end = idx;
+            break;
+        }
+        if buf.len() > 65536 {
+            return Err("请求头超过 64KB".into());
+        }
+    }
+    // 2. 解析请求
+    let head = String::from_utf8_lossy(&buf[..header_end]).to_string();
+    let remote = stream
+        .peer_addr()
+        .map(|a| a.to_string())
+        .unwrap_or_default();
+    let (req, _cl) = parse_http_request(&head, &remote)?;
+    // 3. 分配连接 ID 并注入 req["conn"]
+    let conn_id = SSE_NEXT_ID.fetch_add(1, Ordering::SeqCst);
+    if let Value::Dict(d) = &req {
+        d.lock().unwrap().insert("conn".into(), Value::Int(conn_id));
+    }
+    // 4. 发送 SSE 响应头（连接保持，直到 sse_close）
+    let hdr = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n";
+    stream.write_all(hdr.as_bytes()).map_err(|e| format!("发送响应头失败: {}", e))?;
+    stream.flush().ok();
+    // 5. 注册连接（共享写端；sse_send 任意线程可写）
+    let (close_tx, close_rx) = mpsc::channel::<()>();
+    {
+        let mut m = sse_conns().lock().unwrap();
+        m.insert(
+            conn_id,
+            SseConn {
+                stream: Arc::new(Mutex::new(stream.try_clone().map_err(|e| e.to_string())?)),
+                close_tx,
+            },
+        );
+    }
+    // 6. 调 handler（handler 内/后台线程可 sse_send；出错不中断连接）
+    if let Err(e) = i.call_value(handler, &[req], pos) {
+        eprintln!("[sse] handler 出错: {}", e);
+    }
+    // 7. 保持连接：等待 sse_close 信号（对端断开时 sse_send 写失败自动唤醒）
+    let _ = close_rx.recv();
+    sse_conns().lock().unwrap().remove(&conn_id);
+    Ok(())
 }
 
 /// 调用内置函数
@@ -1161,7 +1283,185 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             let names = crate::zip::unpack(&zp, &od).map_err(|e| err(e, pos))?;
             Ok(Value::Int(names.len() as i64))
         }
+
+        // ==================== M21 P1：base64 编解码 ====================
+        Builtin::Base64Encode => {
+            if args.len() != 1 {
+                return Err(err("base64_encode 需要一个参数", pos));
+            }
+            let data = bytes_of(&args[0]);
+            Ok(Value::Str(base64_encode_bytes(&data)))
+        }
+        Builtin::Base64Decode => {
+            if args.len() != 1 {
+                return Err(err("base64_decode 需要一个参数", pos));
+            }
+            let s = expect_str(&args[0], "base64_decode", pos)?;
+            match base64_decode_bytes(s) {
+                Some(bytes) => Ok(Value::Str(String::from_utf8_lossy(&bytes).to_string())),
+                None => Ok(Value::Null),
+            }
+        }
+
+        // ==================== M21 P1：SSE 服务端 ====================
+        Builtin::SseServe => {
+            if args.len() != 2 {
+                return Err(err("sse_serve 需要 (port, handler) 参数", pos));
+            }
+            let port = expect_int(&args[0], "sse_serve", pos)?;
+            let handler = args[1].clone();
+            if !matches!(handler, Value::Func(_)) {
+                return Err(err("sse_serve 的 handler 必须是函数", pos));
+            }
+            let addr = format!("0.0.0.0:{}", port);
+            let listener = TcpListener::bind(&addr)
+                .map_err(|e| LxError::new("R3010", format!("net: 监听端口失败 {}: {}", addr, e), Some(pos)))?;
+            let srv = interp.fork();
+            let mut i = srv;
+            for stream in listener.incoming() {
+                let mut stream = match stream {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+                let h = handler.clone();
+                let mut ci = i.fork();
+                std::thread::spawn(move || {
+                    if let Err(e) = handle_sse_conn(&mut ci, &mut stream, &h, pos) {
+                        eprintln!("[sse] {}", e);
+                    }
+                });
+            }
+            Ok(Value::Null) // 不可达：incoming() 无限迭代
+        }
+        Builtin::SseSend => {
+            if args.len() != 2 {
+                return Err(err("sse_send 需要 (conn, data) 参数", pos));
+            }
+            let conn = expect_int(&args[0], "sse_send", pos)?;
+            let frame = sse_frame(&args[1]);
+            let mut m = sse_conns().lock().unwrap();
+            if !m.contains_key(&conn) {
+                return Ok(Value::Bool(false)); // 连接不存在/已关闭
+            }
+            let mut write_ok = false;
+            {
+                let c = m.get(&conn).unwrap();
+                let mut st = c.stream.lock().unwrap();
+                write_ok = st.write_all(frame.as_bytes()).is_ok();
+                if write_ok {
+                    let _ = st.flush();
+                }
+            }
+            if !write_ok {
+                // 对端断开：唤醒连接线程清理并移除
+                if let Some(c) = m.get(&conn) {
+                    let _ = c.close_tx.send(());
+                }
+                m.remove(&conn);
+                Ok(Value::Bool(false))
+            } else {
+                Ok(Value::Bool(true))
+            }
+        }
+        Builtin::SseClose => {
+            if args.len() != 1 {
+                return Err(err("sse_close 需要 (conn) 参数", pos));
+            }
+            let conn = expect_int(&args[0], "sse_close", pos)?;
+            let mut m = sse_conns().lock().unwrap();
+            if let Some(c) = m.remove(&conn) {
+                let _ = c.close_tx.send(());
+                Ok(Value::Bool(true))
+            } else {
+                Ok(Value::Bool(false))
+            }
+        }
     }
+}
+
+// ==================== M21 辅助：base64 ====================
+
+/// RFC 4648 标准 Base64 编码（带 padding）
+pub(crate) fn base64_encode_bytes(data: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    let mut i = 0;
+    while i + 3 <= data.len() {
+        let n = ((data[i] as u32) << 16) | ((data[i + 1] as u32) << 8) | (data[i + 2] as u32);
+        out.push(T[((n >> 18) & 63) as usize] as char);
+        out.push(T[((n >> 12) & 63) as usize] as char);
+        out.push(T[((n >> 6) & 63) as usize] as char);
+        out.push(T[(n & 63) as usize] as char);
+        i += 3;
+    }
+    let rem = data.len() - i;
+    if rem == 1 {
+        let n = (data[i] as u32) << 16;
+        out.push(T[((n >> 18) & 63) as usize] as char);
+        out.push(T[((n >> 12) & 63) as usize] as char);
+        out.push('=');
+        out.push('=');
+    } else if rem == 2 {
+        let n = ((data[i] as u32) << 16) | ((data[i + 1] as u32) << 8);
+        out.push(T[((n >> 18) & 63) as usize] as char);
+        out.push(T[((n >> 12) & 63) as usize] as char);
+        out.push(T[((n >> 6) & 63) as usize] as char);
+        out.push('=');
+    }
+    out
+}
+
+/// RFC 4648 标准 Base64 解码（严格：非法字符 / 长度非法 → None；容忍缺失/正确 padding）
+pub(crate) fn base64_decode_bytes(s: &str) -> Option<Vec<u8>> {
+    fn val(c: u8) -> Option<u32> {
+        match c {
+            b'A'..=b'Z' => Some((c - b'A') as u32),
+            b'a'..=b'z' => Some((c - b'a' + 26) as u32),
+            b'0'..=b'9' => Some((c - b'0' + 52) as u32),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let bytes = s.as_bytes();
+    if bytes.is_empty() {
+        return Some(Vec::new());
+    }
+    // 去尾部 padding（最多 2 个）
+    let mut n = bytes.len();
+    let mut pad = 0;
+    while n > 0 && bytes[n - 1] == b'=' {
+        pad += 1;
+        n -= 1;
+    }
+    if pad > 2 || (n % 4) == 1 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(n / 4 * 3 + 2);
+    let mut q = [0u32; 4];
+    let mut qi = 0usize;
+    for &c in &bytes[..n] {
+        q[qi] = val(c)?;
+        qi += 1;
+        if qi == 4 {
+            let v = (q[0] << 18) | (q[1] << 12) | (q[2] << 6) | q[3];
+            out.push((v >> 16) as u8);
+            out.push((v >> 8) as u8);
+            out.push(v as u8);
+            qi = 0;
+        }
+    }
+    if qi == 2 {
+        let v = (q[0] << 18) | (q[1] << 12);
+        out.push((v >> 16) as u8);
+    } else if qi == 3 {
+        let v = (q[0] << 18) | (q[1] << 12) | (q[2] << 6);
+        out.push((v >> 16) as u8);
+        out.push((v >> 8) as u8);
+    } else if qi != 0 {
+        return None;
+    }
+    Some(out)
 }
 
 // ==================== M19 辅助（hex / 字节） ====================
@@ -1240,11 +1540,6 @@ fn xml_node_to_value(n: &crate::xml::XmlNode) -> Value {
 }
 
 // ==================== std.net 辅助（Rust 实现） ====================
-
-use std::collections::HashMap;
-use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::OnceLock;
 
 static NET_LISTENERS: OnceLock<Mutex<HashMap<i64, TcpListener>>> = OnceLock::new();
 static NET_STREAMS: OnceLock<Mutex<HashMap<i64, TcpStream>>> = OnceLock::new();
@@ -1351,12 +1646,12 @@ fn handle_http_conn(i: &mut Interpreter, stream: &mut TcpStream, handler: &Value
     // 6. 构造响应并发送（HEAD 只发响应头，不带 body）
     let mut resp_bytes = build_http_response(&resp);
     if method == "HEAD" {
-        if let Some(idx) = resp_bytes.find("\r\n\r\n") {
+        if let Some(idx) = find_http_header_end(&resp_bytes) {
             resp_bytes.truncate(idx + 4);
         }
     }
     stream
-        .write_all(resp_bytes.as_bytes())
+        .write_all(&resp_bytes)
         .map_err(|e| format!("发送响应失败: {}", e))?;
     stream.flush().map_err(|e| format!("flush 失败: {}", e))?;
     Ok(())
@@ -1552,8 +1847,11 @@ fn hex_val(b: u8) -> Option<u8> {
 }
 
 /// 根据 handler 返回值构造 HTTP 响应报文
-fn build_http_response(v: &Value) -> String {
-    let (status, headers, body) = match v {
+/// M21：构造 HTTP 响应字节流。
+/// dict 响应支持 `gzip: true`（body gzip 压缩 + Content-Encoding: gzip）与
+/// `chunked: true`（chunked 传输编码，无 Content-Length）。
+fn build_http_response(v: &Value) -> Vec<u8> {
+    let (status, headers, body, gzip, chunked) = match v {
         Value::Dict(d) => {
             let d = d.lock().unwrap();
             let status = match d.get("status") {
@@ -1575,27 +1873,100 @@ fn build_http_response(v: &Value) -> String {
                 }
                 _ => String::new(),
             };
-            (status, headers, body)
+            let gzip = matches!(d.get("gzip"), Some(Value::Bool(true)));
+            let chunked = matches!(d.get("chunked"), Some(Value::Bool(true)));
+            (status, headers, body, gzip, chunked)
         }
-        Value::Str(s) => (200, String::new(), s.clone()),
-        Value::Int(st) => (*st, String::new(), String::new()),
-        Value::Null => (204, String::new(), String::new()),
-        other => (200, String::new(), other.to_string()),
+        Value::Str(s) => (200, String::new(), s.clone(), false, false),
+        Value::Int(st) => (*st, String::new(), String::new(), false, false),
+        Value::Null => (204, String::new(), String::new(), false, false),
+        other => (200, String::new(), other.to_string(), false, false),
     };
     let reason = status_reason(status);
-    let mut resp = String::new();
-    resp.push_str(&format!("HTTP/1.1 {} {}\r\n", status, reason));
-    resp.push_str(&format!("Content-Length: {}\r\n", body.len()));
-    resp.push_str("Connection: close\r\n");
+    // body 预处理：gzip 压缩 / chunked 编码
+    let mut body_bytes = body.into_bytes();
+    let mut extra_header = String::new();
+    if gzip {
+        use std::io::Write;
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(6));
+        let _ = enc.write_all(&body_bytes);
+        body_bytes = enc.finish().unwrap_or_default();
+        extra_header.push_str("Content-Encoding: gzip\r\n");
+    }
+    if chunked {
+        body_bytes = encode_chunked(&body_bytes);
+        extra_header.push_str("Transfer-Encoding: chunked\r\n");
+    }
+    let mut resp = Vec::with_capacity(body_bytes.len() + 512);
+    resp.extend_from_slice(format!("HTTP/1.1 {} {}\r\n", status, reason).as_bytes());
+    if !chunked {
+        resp.extend_from_slice(format!("Content-Length: {}\r\n", body_bytes.len()).as_bytes());
+    }
+    resp.extend_from_slice(b"Connection: close\r\n");
     if !headers.is_empty() {
-        resp.push_str(&headers);
+        resp.extend_from_slice(headers.as_bytes());
     }
+    resp.extend_from_slice(extra_header.as_bytes());
     if !headers.to_lowercase().contains("content-type") {
-        resp.push_str("Content-Type: text/plain; charset=utf-8\r\n");
+        resp.extend_from_slice(b"Content-Type: text/plain; charset=utf-8\r\n");
     }
-    resp.push_str("\r\n");
-    resp.push_str(&body);
+    resp.extend_from_slice(b"\r\n");
+    resp.extend_from_slice(&body_bytes);
     resp
+}
+
+/// M21：chunked 传输编码（固定 4096 块）
+fn encode_chunked(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len() + data.len() / 16 + 64);
+    if data.is_empty() {
+        out.extend_from_slice(b"0\r\n\r\n");
+        return out;
+    }
+    let mut i = 0;
+    while i < data.len() {
+        let end = (i + 4096).min(data.len());
+        out.extend_from_slice(format!("{:x}\r\n", end - i).as_bytes());
+        out.extend_from_slice(&data[i..end]);
+        out.extend_from_slice(b"\r\n");
+        i = end;
+    }
+    out.extend_from_slice(b"0\r\n\r\n");
+    out
+}
+
+/// M21：解码 chunked 传输编码（字节级）
+fn decode_chunked(data: &[u8]) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    let n = data.len();
+    loop {
+        let start = i;
+        while i < n && data[i] != b'\r' {
+            i += 1;
+        }
+        if i >= n {
+            return Err("chunked: 缺少 chunk 大小行".into());
+        }
+        let size_line = String::from_utf8_lossy(&data[start..i]).to_string();
+        i += 2; // 跳过 \r\n
+        let size_hex = size_line.split(';').next().unwrap_or("").trim();
+        let size = usize::from_str_radix(size_hex, 16)
+            .map_err(|_| format!("chunked: 非法块大小 '{}'", size_hex))?;
+        if size == 0 {
+            break; // 终止块，忽略 trailer
+        }
+        if i + size > n {
+            return Err("chunked: 数据不完整".into());
+        }
+        out.extend_from_slice(&data[i..i + size]);
+        i += size;
+        if i + 2 <= n && data[i] == b'\r' && data[i + 1] == b'\n' {
+            i += 2;
+        } else {
+            return Err("chunked: 缺少块尾 CRLF".into());
+        }
+    }
+    Ok(out)
 }
 
 fn status_reason(code: i64) -> &'static str {
@@ -1732,29 +2103,54 @@ fn http_once(url: &str, method: &str, body: Option<&str>) -> Result<(u16, String
             .map_err(|e| format!("读取响应失败: {}", e))?;
         resp
     };
-    let resp_str = String::from_utf8_lossy(&resp).to_string();
-    let (head, body_str) = match resp_str.find("\r\n\r\n") {
-        Some(i) => (&resp_str[..i], resp_str[i + 4..].to_string()),
-        None => (&resp_str[..], resp_str.clone()),
+    // M21：字节级解析响应头（gzip 二进制 body 不能被 UTF-8 lossy 破坏）
+    let (head, mut body_bytes) = match find_http_header_end(&resp) {
+        Some(i) => (&resp[..i], resp[i + 4..].to_vec()),
+        None => (resp.as_slice(), Vec::new()),
     };
+    let head_str = String::from_utf8_lossy(head).to_string();
     // 状态码
-    let status = head
+    let status = head_str
         .lines()
         .next()
         .and_then(|l| l.split_whitespace().nth(1))
         .and_then(|s| s.parse::<u16>().ok())
         .unwrap_or(0);
-    // Location 头（重定向）
+    // 头解析：Location / Transfer-Encoding / Content-Encoding
     let mut location = None;
-    for line in head.lines().skip(1) {
-        if let Some(v) = line
+    let mut chunked = false;
+    let mut gzip = false;
+    for line in head_str.lines().skip(1) {
+        let l = line.trim();
+        if let Some(v) = l
             .strip_prefix("Location:")
-            .or_else(|| line.strip_prefix("location:"))
+            .or_else(|| l.strip_prefix("location:"))
         {
             location = Some(v.trim().to_string());
         }
+        let lc = l.to_lowercase();
+        if lc.starts_with("transfer-encoding:") && lc.contains("chunked") {
+            chunked = true;
+        }
+        if lc.starts_with("content-encoding:") && lc.contains("gzip") {
+            gzip = true;
+        }
     }
-    Ok((status, head.to_string(), body_str, location))
+    // chunked 解码
+    if chunked {
+        body_bytes = decode_chunked(&body_bytes)?;
+    }
+    // gzip 解压
+    if gzip {
+        use std::io::Read;
+        let mut d = flate2::read::GzDecoder::new(&body_bytes[..]);
+        let mut out = Vec::new();
+        d.read_to_end(&mut out)
+            .map_err(|e| format!("gzip 解压失败: {}", e))?;
+        body_bytes = out;
+    }
+    let body_str = String::from_utf8_lossy(&body_bytes).to_string();
+    Ok((status, head_str, body_str, location))
 }
 
 /// HTTPS 请求（rustls TLS 1.2/1.3，内置 webpki-roots 根证书）
@@ -2234,20 +2630,48 @@ mod tests {
         d.insert("body".into(), Value::Str("{\"ok\":1}".into()));
         d.insert("headers".into(), Value::Dict(Arc::new(Mutex::new(h))));
         let r = build_http_response(&Value::Dict(Arc::new(Mutex::new(d))));
-        assert!(r.starts_with("HTTP/1.1 201 Created\r\n"));
-        assert!(r.contains("Content-Length: 8\r\n"));
-        assert!(r.contains("Content-Type: application/json\r\n"));
-        assert!(r.ends_with("\r\n\r\n{\"ok\":1}"));
+        let rs = String::from_utf8_lossy(&r).to_string();
+        assert!(rs.starts_with("HTTP/1.1 201 Created\r\n"));
+        assert!(rs.contains("Content-Length: 8\r\n"));
+        assert!(rs.contains("Content-Type: application/json\r\n"));
+        assert!(rs.ends_with("\r\n\r\n{\"ok\":1}"));
 
         // str 响应
         let r = build_http_response(&Value::Str("hi".into()));
-        assert!(r.starts_with("HTTP/1.1 200 OK\r\n"));
-        assert!(r.contains("Content-Type: text/plain; charset=utf-8\r\n"));
-        assert!(r.ends_with("\r\n\r\nhi"));
+        let rs = String::from_utf8_lossy(&r).to_string();
+        assert!(rs.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(rs.contains("Content-Type: text/plain; charset=utf-8\r\n"));
+        assert!(rs.ends_with("\r\n\r\nhi"));
 
         // int 响应
         let r = build_http_response(&Value::Int(404));
-        assert!(r.starts_with("HTTP/1.1 404 Not Found\r\n"));
+        let rs = String::from_utf8_lossy(&r).to_string();
+        assert!(rs.starts_with("HTTP/1.1 404 Not Found\r\n"));
+
+        // M21：gzip + chunked
+        let mut d = HashMap::new();
+        d.insert("body".into(), Value::Str("hello hello hello".into()));
+        d.insert("gzip".into(), Value::Bool(true));
+        d.insert("chunked".into(), Value::Bool(true));
+        let r = build_http_response(&Value::Dict(Arc::new(Mutex::new(d))));
+        let rs = String::from_utf8_lossy(&r).to_string();
+        assert!(rs.contains("Content-Encoding: gzip\r\n"), "{:?}", rs);
+        assert!(rs.contains("Transfer-Encoding: chunked\r\n"), "{:?}", rs);
+        assert!(!rs.contains("Content-Length:"), "{:?}", rs);
+        assert!(rs.ends_with("0\r\n\r\n"), "{:?}", rs);
+    }
+
+    #[test]
+    fn test_http_chunked_roundtrip() {
+        // chunked 编码 → 解码 round-trip
+        let data = b"hello world, chunked encoding test data here!";
+        let enc = encode_chunked(data);
+        let dec = decode_chunked(&enc).unwrap();
+        assert_eq!(dec, data);
+        // 空数据
+        assert_eq!(decode_chunked(b"0\r\n\r\n").unwrap(), b"");
+        // 非法
+        assert!(decode_chunked(b"zz\r\nabc").is_err());
     }
 
     #[test]

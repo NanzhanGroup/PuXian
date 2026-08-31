@@ -1,0 +1,61 @@
+# p9_http_adv.px - M21 chunked + gzip + SSE 回归测试
+# 覆盖：服务端 gzip 压缩响应（Content-Encoding: gzip）、chunked 传输编码、gzip+chunked 组合
+#       （客户端 http_get 自动解压/解码）；SSE 服务端 sse_serve + sse_send（str/dict 事件）
+#       + sse_close，客户端经 http_get 读取 SSE 帧文本
+# 双模式要求：解释器 run 与编译 build 输出必须逐字节一致
+
+def start_http_server():
+    http_serve(39091, fn(req) {
+        p = req["path"]
+        if p == "/gzip":
+            return {"body": "hello gzip world", "gzip": true}
+        if p == "/chunked":
+            return {"body": "hello chunked world", "chunked": true}
+        if p == "/both":
+            return {"body": "hello both world", "gzip": true, "chunked": true}
+        return {"status": 404, "body": "not found"}
+    })
+
+def start_sse_server():
+    sse_serve(39092, fn(req) {
+        conn = req["conn"]
+        sse_send(conn, "第一条")
+        sse_send(conn, {"event": "msg", "data": "第二条", "id": "1"})
+        sse_send(conn, {"data": "多行\n数据"})
+        sse_close(conn)
+    })
+
+def main():
+    spawn start_http_server()
+    spawn start_sse_server()
+    sleep(300)
+
+    # ---------- gzip 自动解压 ----------
+    r1 = http_get("http://127.0.0.1:39091/gzip")
+    assert(r1 == "hello gzip world", "gzip 响应自动解压")
+
+    # ---------- chunked 自动解码 ----------
+    r2 = http_get("http://127.0.0.1:39091/chunked")
+    assert(r2 == "hello chunked world", "chunked 响应自动解码")
+
+    # ---------- gzip + chunked 组合 ----------
+    r3 = http_get("http://127.0.0.1:39091/both")
+    assert(r3 == "hello both world", "gzip+chunked 组合")
+
+    # ---------- 404 未变 ----------
+    r4 = http_get("http://127.0.0.1:39091/nope")
+    assert(r4 == "not found", "404 body 正常")
+
+    # ---------- SSE 流式推送 ----------
+    sse_txt = http_get("http://127.0.0.1:39092/stream")
+    assert(contains(sse_txt, "data: 第一条"), "SSE 帧1")
+    assert(contains(sse_txt, "event: msg"), "SSE 事件名")
+    assert(contains(sse_txt, "id: 1"), "SSE id")
+    assert(contains(sse_txt, "data: 第二条"), "SSE 帧2")
+    assert(contains(sse_txt, "data: 多行"), "SSE 多行1")
+    assert(contains(sse_txt, "data: 数据"), "SSE 多行2")
+    # 连接已关闭后 sse_close → false
+    assert(sse_close(999999) == false, "已关闭连接 sse_close 返回 false")
+
+    print("P9 HTTP-ADV (CHUNKED+GZIP+SSE) TESTS PASSED")
+

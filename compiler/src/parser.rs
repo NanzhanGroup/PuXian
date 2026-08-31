@@ -1036,13 +1036,46 @@ impl Parser {
                 }
                 TokenKind::LBracket => {
                     let pos = self.advance().pos;
-                    let index = self.parse_expr()?;
-                    self.expect(TokenKind::RBracket, "']'")?;
-                    expr = Expr::Index {
-                        obj: Box::new(expr),
-                        index: Box::new(index),
-                        pos,
-                    };
+                    // M21：切片语法 a[i:j] / a[:j] / a[i:] / a[:]（冒号在 [ ] 内）
+                    if self.check(&TokenKind::Colon) {
+                        self.advance();
+                        let end = if self.check(&TokenKind::RBracket) {
+                            None
+                        } else {
+                            Some(Box::new(self.parse_expr()?))
+                        };
+                        self.expect(TokenKind::RBracket, "']'")?;
+                        expr = Expr::Slice {
+                            obj: Box::new(expr),
+                            start: None,
+                            end,
+                            pos,
+                        };
+                    } else {
+                        let first = self.parse_expr()?;
+                        if self.check(&TokenKind::Colon) {
+                            self.advance();
+                            let end = if self.check(&TokenKind::RBracket) {
+                                None
+                            } else {
+                                Some(Box::new(self.parse_expr()?))
+                            };
+                            self.expect(TokenKind::RBracket, "']'")?;
+                            expr = Expr::Slice {
+                                obj: Box::new(expr),
+                                start: Some(Box::new(first)),
+                                end,
+                                pos,
+                            };
+                        } else {
+                            self.expect(TokenKind::RBracket, "']'")?;
+                            expr = Expr::Index {
+                                obj: Box::new(expr),
+                                index: Box::new(first),
+                                pos,
+                            };
+                        }
+                    }
                 }
                 TokenKind::Dot => {
                     let pos = self.advance().pos;
@@ -1614,6 +1647,7 @@ pub fn expr_pos(e: &Expr) -> Pos {
         | Expr::Field { pos, .. }
         | Expr::OptionalField { pos, .. }
         | Expr::Index { pos, .. }
+        | Expr::Slice { pos, .. }
         | Expr::Call { pos, .. }
         | Expr::Unary { pos, .. }
         | Expr::Binary { pos, .. }

@@ -466,6 +466,15 @@ fn check_expr(ctx: &mut FnCtx<'_>, expr: &Expr, diags: &mut Vec<LintDiag>) {
             check_expr(ctx, obj, diags);
             check_expr(ctx, index, diags);
         }
+        Expr::Slice { obj, start, end, .. } => {
+            check_expr(ctx, obj, diags);
+            if let Some(s) = start {
+                check_expr(ctx, s, diags);
+            }
+            if let Some(e) = end {
+                check_expr(ctx, e, diags);
+            }
+        }
         Expr::Call { callee, args, .. } => {
             // 方法调用 obj.m(...) 的 obj 是 Field/Var
             check_expr(ctx, callee, diags);
@@ -759,6 +768,11 @@ pub fn builtin_names() -> HashSet<String> {
         Builtin::SetTimeout,
         Builtin::SetInterval,
         Builtin::ClearTimer,
+        Builtin::Base64Encode,
+        Builtin::Base64Decode,
+        Builtin::SseServe,
+        Builtin::SseSend,
+        Builtin::SseClose,
     ];
     all.iter().map(|b| b.name().to_string()).collect()
 }

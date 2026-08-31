@@ -171,6 +171,18 @@ pub enum Builtin {
     // zip_pack(files, out_path) → bool；zip_unpack(zip_path, out_dir) → int 解压文件数
     ZipPack,
     ZipUnpack,
+    // M21 P1：base64 编解码（字节传输 / 数据落盘 / 数据 URI）
+    // base64_encode(data) → str（RFC 4648 标准，带 padding）
+    // base64_decode(b64) → str 或 null（非法输入返回 null，不抛错）
+    Base64Encode,
+    Base64Decode,
+    // M21 P1：SSE 服务端（LLM 流式推送 / 实时通知 / 服务器推送）
+    // sse_serve(port, handler) —— 启动 SSE 服务器（每连接一线程，handler 内可 sse_send）
+    // sse_send(conn, data) —— 向指定连接发送 SSE 帧（任意线程可调用）
+    // sse_close(conn) —— 结束 SSE 连接
+    SseServe,
+    SseSend,
+    SseClose,
 }
 
 impl Builtin {
@@ -258,6 +270,11 @@ impl Builtin {
             Builtin::XmlUnescape => "xml_unescape",
             Builtin::ZipPack => "zip_pack",
             Builtin::ZipUnpack => "zip_unpack",
+            Builtin::Base64Encode => "base64_encode",
+            Builtin::Base64Decode => "base64_decode",
+            Builtin::SseServe => "sse_serve",
+            Builtin::SseSend => "sse_send",
+            Builtin::SseClose => "sse_close",
         }
     }
 }

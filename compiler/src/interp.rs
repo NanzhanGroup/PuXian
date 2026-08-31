@@ -58,6 +58,33 @@ fn shuffle<T>(v: &mut [T]) {
     }
 }
 
+/// M21：切片边界归一化（Python 语义：负索引从尾部算，越界 clamp，start>end 空切片）
+/// 返回 (start, end) 均为 [0, len] 且 start <= end 的 usize 下标。
+fn normalize_slice(start: Option<i64>, end: Option<i64>, len: i64) -> (usize, usize) {
+    let a = match start {
+        None => 0,
+        Some(i) => {
+            if i < 0 {
+                (i + len).max(0)
+            } else {
+                i.min(len)
+            }
+        }
+    };
+    let b = match end {
+        None => len,
+        Some(i) => {
+            if i < 0 {
+                (i + len).max(0)
+            } else {
+                i.min(len)
+            }
+        }
+    };
+    let (a, b) = if a > b { (a, a) } else { (a, b) };
+    (a as usize, b as usize)
+}
+
 // ==================== 运行时错误 ====================
 
 #[derive(Debug, Clone)]
@@ -252,6 +279,13 @@ impl Interpreter {
             // M19 P1：zip 打包/解压（文档工具基石）
             ("zip_pack", Builtin::ZipPack),
             ("zip_unpack", Builtin::ZipUnpack),
+            // M21 P1：base64 编解码
+            ("base64_encode", Builtin::Base64Encode),
+            ("base64_decode", Builtin::Base64Decode),
+            // M21 P1：SSE 服务端（LLM 流式推送 / 实时通知）
+            ("sse_serve", Builtin::SseServe),
+            ("sse_send", Builtin::SseSend),
+            ("sse_close", Builtin::SseClose),
         ];
         for (n, b) in names {
             g.define(n, Value::Builtin(*b));
@@ -665,6 +699,18 @@ impl Interpreter {
                 let ov = self.eval_expr(obj, env)?;
                 let iv = self.eval_expr(index, env)?;
                 self.eval_index(&ov, &iv, *pos)
+            }
+            Expr::Slice { obj, start, end, pos } => {
+                let ov = self.eval_expr(obj, env)?;
+                let sv = match start {
+                    Some(e) => Some(self.eval_expr(e, env)?),
+                    None => None,
+                };
+                let ev = match end {
+                    Some(e) => Some(self.eval_expr(e, env)?),
+                    None => None,
+                };
+                self.eval_slice(&ov, sv, ev, *pos)
             }
             Expr::Call { callee, args, pos } => self.eval_call(callee, args, env, *pos),
             Expr::Unary { op, operand, pos } => {
@@ -1546,6 +1592,46 @@ impl Interpreter {
                 Ok(n)
             }
             _ => Err(LxError::r1002("索引必须是整数", pos)),
+        }
+    }
+
+    /// M21：切片 a[start:end]（str 按字符、list/tuple 返回新对象；负索引从尾部算）
+    fn eval_slice(
+        &mut self,
+        obj: &Value,
+        start: Option<Value>,
+        end: Option<Value>,
+        pos: Pos,
+    ) -> Result<Value, LxError> {
+        fn bound(v: Option<Value>, pos: Pos) -> Result<Option<i64>, LxError> {
+            match v {
+                None => Ok(None),
+                Some(Value::Int(i)) => Ok(Some(i)),
+                Some(Value::Null) => Ok(None),
+                Some(_) => Err(LxError::r1002("切片边界必须是整数", pos)),
+            }
+        }
+        let s = bound(start, pos)?;
+        let e = bound(end, pos)?;
+        match obj {
+            Value::Str(st) => {
+                let chars: Vec<char> = st.chars().collect();
+                let len = chars.len() as i64;
+                let (a, b) = normalize_slice(s, e, len);
+                Ok(Value::Str(chars[a..b].iter().collect()))
+            }
+            Value::List(l) => {
+                let len = l.lock().unwrap().len() as i64;
+                let (a, b) = normalize_slice(s, e, len);
+                let items = l.lock().unwrap()[a..b].to_vec();
+                Ok(Value::List(Arc::new(Mutex::new(items))))
+            }
+            Value::Tuple(t) => {
+                let len = t.len() as i64;
+                let (a, b) = normalize_slice(s, e, len);
+                Ok(Value::Tuple(t[a..b].to_vec()))
+            }
+            _ => Err(LxError::new("R1002", "此类型不支持切片", Some(pos))),
         }
     }
 

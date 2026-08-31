@@ -27,6 +27,7 @@
 #include <sys/wait.h>
 #include <poll.h>
 #include <stdatomic.h>
+#include "miniz.h"   // M21 gzip 压缩/解压（raw deflate + gzip 容器，M19 zip 同源）
 
 // M10 HTTPS：mbedtls 静态库（compiler/runtime/mbedtls/）
 #include "mbedtls/net_sockets.h"
@@ -58,10 +59,17 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx);
 static LXValue bi_set_timeout(LXValue* args, int nargs, void* ctx);
 static LXValue bi_set_interval(LXValue* args, int nargs, void* ctx);
 static LXValue bi_clear_timer(LXValue* args, int nargs, void* ctx);
+// M21 P1：SSE 服务端（LLM 流式推送 / 实时通知）
+static LXValue bi_sse_serve(LXValue* args, int nargs, void* ctx);
+static LXValue bi_sse_send(LXValue* args, int nargs, void* ctx);
+static LXValue bi_sse_close(LXValue* args, int nargs, void* ctx);
 
 // M10 HTTPS 内部辅助
 static char* px_http_request(const char* url, const char* method, const char* body, int* out_len);
 static int px_https_request(const char* host, int port, const char* req, char** out, int* out_len);
+// M21 gzip / chunked 辅助（px_http_request 客户端解码用，定义在后方）
+static char* px_gzip_decompress(const char* in, int inlen, int* outlen);
+static char* px_chunked_decode(const char* in, int inlen, int* outlen);
 
 // ==================== 内存分配（M11：mmap/munmap，无 glibc 堆锁） ====================
 // M11 并发 GC：sweep 会释放对象，而其他线程可能正在 malloc/free 中被 GC 信号挂起
@@ -1243,6 +1251,68 @@ LXValue px_index(LXValue obj, LXValue idx) {
     return px_null();
 }
 
+// ==================== M21 切片 a[start:end] ====================
+// start/end 为 PX_NULL 表示省略；负索引从尾部算；越界 clamp；start>end 空切片。
+// str 按 UTF-8 字符切（与解释器字符语义一致，中文正常）；list/tuple 复制返回新对象。
+
+static int slice_start(int64_t v, int len) {
+    if (v < 0) { v += len; if (v < 0) v = 0; }
+    if (v > len) v = len;
+    return (int)v;
+}
+static int slice_end(int64_t v, int len) {
+    if (v < 0) { v += len; if (v < 0) v = 0; }
+    if (v > len) v = len;
+    return (int)v;
+}
+
+// UTF-8 字符串中第 n 个字符的字节偏移（n 在 [0, nchars]，跳过前 n 个字符后到达的位置）
+static int utf8_char_offset(const char* s, int blen, int n) {
+    int off = 0, c = 0;
+    while (off < blen && c < n) {
+        // 跳过当前字符：起始字节 + 后续连续字节（0x80-0xBF）
+        off++;
+        while (off < blen && ((unsigned char)s[off] & 0xC0) == 0x80) off++;
+        c++;
+    }
+    return off;
+}
+
+LXValue px_slice(LXValue obj, LXValue start, LXValue end) {
+    int64_t s = start.type == PX_NULL ? INT64_MIN : int_val(start);
+    int64_t e = end.type == PX_NULL ? INT64_MIN : int_val(end);
+    if (obj.type == PX_LIST) {
+        int len = obj.as.obj->as.list.len;
+        int a = s == INT64_MIN ? 0 : slice_start(s, len);
+        int b = e == INT64_MIN ? len : slice_end(e, len);
+        if (a > b) a = b;
+        LXValue r = px_list(b - a);
+        for (int i = a; i < b; i++) px_list_push(r, obj.as.obj->as.list.items[i]);
+        return r;
+    }
+    if (obj.type == PX_TUPLE) {
+        int len = obj.as.obj->as.tuple.len;
+        int a = s == INT64_MIN ? 0 : slice_start(s, len);
+        int b = e == INT64_MIN ? len : slice_end(e, len);
+        if (a > b) a = b;
+        return px_tuple(obj.as.obj->as.tuple.items + a, b - a);
+    }
+    if (obj.type == PX_STR) {
+        const char* data = obj.as.obj->as.str.data;
+        int blen = obj.as.obj->as.str.len;
+        int nchars = 0;
+        for (int i = 0; i < blen; i++) if (((unsigned char)data[i] & 0xC0) != 0x80) nchars++;
+        int a = s == INT64_MIN ? 0 : slice_start(s, nchars);
+        int b = e == INT64_MIN ? nchars : slice_end(e, nchars);
+        if (a > b) a = b;
+        int boff_a = utf8_char_offset(data, blen, a);
+        int boff_b = utf8_char_offset(data, blen, b);
+        return px_str_len(data + boff_a, boff_b - boff_a);
+    }
+    px_error("无法切片: %s", px_type_name(obj));
+    return px_null();
+}
+
 void px_index_set(LXValue obj, LXValue idx, LXValue val) {
     if (obj.type == PX_LIST) {
         int i = (int)int_val(idx);
@@ -2070,6 +2140,96 @@ static void bytes_to_hex(const unsigned char* in, size_t len, char* out) {
         out[i * 2 + 1] = HEX[in[i] & 0x0F];
     }
     out[len * 2] = '\0';
+}
+
+// ==================== M21 base64（RFC 4648 标准，带 padding） ====================
+
+static const char B64_TBL[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+static int b64_val(char c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+
+// base64_encode(data) → str（RFC 4648 标准，带 padding；非字符串自动字符串化）
+static LXValue bi_base64_encode(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("base64_encode 需要一个参数");
+    const char* data = val_cstr(args[0]);
+    int len = (int)strlen(data);
+    int olen = ((len + 2) / 3) * 4;
+    char* out = xmalloc((size_t)olen + 1);
+    int oi = 0, i = 0;
+    while (i + 3 <= len) {
+        unsigned n = ((unsigned char)data[i] << 16) | ((unsigned char)data[i+1] << 8) | (unsigned char)data[i+2];
+        out[oi++] = B64_TBL[(n >> 18) & 63];
+        out[oi++] = B64_TBL[(n >> 12) & 63];
+        out[oi++] = B64_TBL[(n >> 6) & 63];
+        out[oi++] = B64_TBL[n & 63];
+        i += 3;
+    }
+    int rem = len - i;
+    if (rem == 1) {
+        unsigned n = (unsigned char)data[i] << 16;
+        out[oi++] = B64_TBL[(n >> 18) & 63];
+        out[oi++] = B64_TBL[(n >> 12) & 63];
+        out[oi++] = '='; out[oi++] = '=';
+    } else if (rem == 2) {
+        unsigned n = ((unsigned char)data[i] << 16) | ((unsigned char)data[i+1] << 8);
+        out[oi++] = B64_TBL[(n >> 18) & 63];
+        out[oi++] = B64_TBL[(n >> 12) & 63];
+        out[oi++] = B64_TBL[(n >> 6) & 63];
+        out[oi++] = '=';
+    }
+    out[oi] = 0;
+    LXValue r = px_str_len(out, oi);
+    xfree(out);
+    return r;
+}
+
+// base64_decode(b64) → str 或 null（非法输入返回 null，不抛错）
+static LXValue bi_base64_decode(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("base64_decode 需要一个参数");
+    const char* s = val_cstr(args[0]);
+    int n = (int)strlen(s);
+    int pad = 0;
+    while (n > 0 && s[n-1] == '=') { pad++; n--; }
+    if (pad > 2 || (n % 4) == 1) return px_null();
+    int cap = (n / 4) * 3 + 3;
+    char* out = xmalloc((size_t)cap + 1);
+    int oi = 0, i = 0, q[4], qi = 0;
+    while (i < n) {
+        int v = b64_val(s[i]);
+        if (v < 0) { xfree(out); return px_null(); }
+        q[qi++] = v;
+        if (qi == 4) {
+            unsigned vv = ((unsigned)q[0] << 18) | ((unsigned)q[1] << 12) | ((unsigned)q[2] << 6) | (unsigned)q[3];
+            out[oi++] = (char)((vv >> 16) & 0xFF);
+            out[oi++] = (char)((vv >> 8) & 0xFF);
+            out[oi++] = (char)(vv & 0xFF);
+            qi = 0;
+        }
+        i++;
+    }
+    if (qi == 2) {
+        unsigned vv = ((unsigned)q[0] << 18) | ((unsigned)q[1] << 12);
+        out[oi++] = (char)((vv >> 16) & 0xFF);
+    } else if (qi == 3) {
+        unsigned vv = ((unsigned)q[0] << 18) | ((unsigned)q[1] << 12) | ((unsigned)q[2] << 6);
+        out[oi++] = (char)((vv >> 16) & 0xFF);
+        out[oi++] = (char)((vv >> 8) & 0xFF);
+    } else if (qi != 0) {
+        xfree(out); return px_null();
+    }
+    out[oi] = 0;
+    LXValue r = px_str_len(out, oi);
+    xfree(out);
+    return r;
 }
 
 // sha256(data) → 64 字符小写 hex 字符串（mbedtls 实现，与解释器一致）
@@ -3248,6 +3408,13 @@ void px_register_builtins(void) {
     // M19 P1：zip 打包/解压（docx/xlsx/pptx 是 zip+xml，文档工具基石）
     px_set_global("zip_pack", px_native("zip_pack", bi_zip_pack));
     px_set_global("zip_unpack", px_native("zip_unpack", bi_zip_unpack));
+    // M21 P1：base64 编解码
+    px_set_global("base64_encode", px_native("base64_encode", bi_base64_encode));
+    px_set_global("base64_decode", px_native("base64_decode", bi_base64_decode));
+    // M21 P1：SSE 服务端（LLM 流式推送 / 实时通知）
+    px_set_global("sse_serve", px_native("sse_serve", bi_sse_serve));
+    px_set_global("sse_send", px_native("sse_send", bi_sse_send));
+    px_set_global("sse_close", px_native("sse_close", bi_sse_close));
 }
 
 // ==================== 并发原语（M4.2） ====================
@@ -4179,13 +4346,47 @@ static char* px_http_request(const char* url, const char* method, const char* bo
         // 分离响应体
         char* body_start = resp;
         char* sep = strstr(resp, "\r\n\r\n");
+        char* head_end = sep ? sep : resp + len;
         if (sep) body_start = sep + 4;
         int body_len = (int)(resp + len - body_start);
-        char* r = xmalloc(body_len + 1);
-        memcpy(r, body_start, body_len);
-        r[body_len] = 0;
+        // M21：chunked / gzip 自动解码（客户端完整性）
+        char* body_buf = xmalloc(body_len + 1);
+        memcpy(body_buf, body_start, body_len);
+        body_buf[body_len] = 0;
+        int chunked = 0, gzip = 0;
+        char* hp = resp;
+        while (hp < head_end) {
+            char* eol = strstr(hp, "\r\n");
+            char* e = eol && eol < head_end ? eol : head_end;
+            int llen = (int)(e - hp);
+            if (llen > 0) {
+                char line[1024];
+                int cl = llen < 1023 ? llen : 1023;
+                memcpy(line, hp, (size_t)cl);
+                line[cl] = 0;
+                if (strncasecmp(line, "Transfer-Encoding:", 18) == 0 && strcasestr(line, "chunked")) chunked = 1;
+                if (strncasecmp(line, "Content-Encoding:", 17) == 0 && strcasestr(line, "gzip")) gzip = 1;
+            }
+            if (!eol || eol >= head_end) break;
+            hp = eol + 2;
+        }
+        int final_len = body_len;
+        char* final_buf = body_buf;
+        if (chunked) {
+            char* dec = px_chunked_decode(body_buf, body_len, &final_len);
+            if (dec) { xfree(body_buf); final_buf = dec; }
+        }
+        if (gzip) {
+            char* dec = px_gzip_decompress(final_buf, final_len, &final_len);
+            if (dec) { if (final_buf != body_buf) xfree(final_buf); final_buf = dec; }
+        }
+        char* r = xmalloc(final_len + 1);
+        memcpy(r, final_buf, (size_t)final_len);
+        r[final_len] = 0;
+        if (final_buf != body_buf) xfree(final_buf);
+        xfree(body_buf);
         xfree(resp);
-        *out_len = body_len;
+        *out_len = final_len;
         return r;
     }
     px_error("net: 重定向次数过多（>5）");
@@ -4378,11 +4579,151 @@ static const char* px_http_status_reason(int code) {
 }
 
 // 构造 HTTP 响应报文（xmalloc，调用者 xfree）
-static char* px_http_build_response(LXValue v) {
+// ==================== M21 gzip / chunked（HTTP 客户端 + 服务端） ====================
+
+// gzip 压缩：10 字节头 + raw deflate + CRC32 + ISIZE。返回 xmalloc，调用者 xfree；失败返回 NULL。
+static char* px_gzip_compress(const char* in, int inlen, int* outlen) {
+    mz_stream s;
+    memset(&s, 0, sizeof(s));
+    if (mz_deflateInit2(&s, 6, MZ_DEFLATED, -15, 8, MZ_DEFAULT_STRATEGY) != MZ_OK) return NULL;
+    int bound = (int)mz_compressBound((mz_ulong)inlen);
+    int cap = bound + 18;
+    char* out = xmalloc((size_t)cap);
+    int off = 0;
+    out[off++] = 0x1F; out[off++] = 0x8B; out[off++] = 8; out[off++] = 0;
+    out[off++] = 0; out[off++] = 0; out[off++] = 0; out[off++] = 0;
+    out[off++] = 0; out[off++] = 0;  // MTIME=0, XFL=0, OS=0
+    s.next_in = (const unsigned char*)in;
+    s.avail_in = (mz_ulong)inlen;
+    s.next_out = (unsigned char*)out + off;
+    s.avail_out = (mz_ulong)bound;
+    int r = mz_deflate(&s, MZ_FINISH);
+    mz_deflateEnd(&s);
+    if (r != MZ_STREAM_END) { xfree(out); return NULL; }
+    off += (int)s.total_out;
+    mz_ulong crc = mz_crc32(0, (const unsigned char*)in, (mz_ulong)inlen);
+    out[off++] = (char)(crc & 0xFF);
+    out[off++] = (char)((crc >> 8) & 0xFF);
+    out[off++] = (char)((crc >> 16) & 0xFF);
+    out[off++] = (char)((crc >> 24) & 0xFF);
+    unsigned isize = (unsigned)inlen;
+    out[off++] = (char)(isize & 0xFF);
+    out[off++] = (char)((isize >> 8) & 0xFF);
+    out[off++] = (char)((isize >> 16) & 0xFF);
+    out[off++] = (char)((isize >> 24) & 0xFF);
+    *outlen = off;
+    return out;
+}
+
+// gzip 解压（支持 FLG 头扩展 FEXTRA/FNAME/FCOMMENT/FHCRC）。返回 xmalloc，失败返回 NULL。
+static char* px_gzip_decompress(const char* in, int inlen, int* outlen) {
+    if (inlen < 18 || (unsigned char)in[0] != 0x1F || (unsigned char)in[1] != 0x8B) return NULL;
+    unsigned char flg = (unsigned char)in[3];
+    int hdr = 10;
+    if (flg & 4) { int xl = (unsigned char)in[hdr] | ((unsigned char)in[hdr+1] << 8); hdr += 2 + xl; }
+    if (flg & 8) { while (hdr < inlen && in[hdr]) hdr++; hdr++; }
+    if (flg & 16) { while (hdr < inlen && in[hdr]) hdr++; hdr++; }
+    if (flg & 2) hdr += 2;
+    if (hdr + 8 > inlen) return NULL;
+    int clen = inlen - hdr - 8;
+    mz_stream s;
+    memset(&s, 0, sizeof(s));
+    if (mz_inflateInit2(&s, -15) != MZ_OK) return NULL;
+    int cap = inlen * 3 + 4096;
+    char* out = xmalloc((size_t)cap);
+    s.next_in = (const unsigned char*)in + hdr;
+    s.avail_in = (mz_ulong)clen;
+    s.next_out = (unsigned char*)out;
+    s.avail_out = (mz_ulong)cap;
+    int r;
+    for (;;) {
+        r = mz_inflate(&s, MZ_FINISH);
+        if (r == MZ_STREAM_END) break;
+        if (r != MZ_OK) { mz_inflateEnd(&s); xfree(out); return NULL; }
+        int used = (int)(s.next_out - (unsigned char*)out);
+        int nc = cap * 2;
+        char* nout = xrealloc(out, (size_t)nc);
+        s.next_out = (unsigned char*)nout + used;
+        s.avail_out = (mz_ulong)(nc - used);
+        out = nout;
+        cap = nc;
+    }
+    mz_inflateEnd(&s);
+    *outlen = (int)s.total_out;
+    return out;
+}
+
+// chunked 传输编码。返回 xmalloc，调用者 xfree。
+static char* px_chunked_encode(const char* in, int inlen, int* outlen) {
+    if (inlen <= 0) {
+        char* out = xmalloc(8);
+        memcpy(out, "0\r\n\r\n", 5);
+        *outlen = 5;
+        return out;
+    }
+    int cap = inlen + inlen / 16 + 64;
+    char* out = xmalloc((size_t)cap);
+    int oi = 0, i = 0;
+    while (i < inlen) {
+        int chunk = inlen - i;
+        if (chunk > 4096) chunk = 4096;
+        oi += snprintf(out + oi, (size_t)(cap - oi), "%x\r\n", chunk);
+        memcpy(out + oi, in + i, (size_t)chunk);
+        oi += chunk;
+        memcpy(out + oi, "\r\n", 2);
+        oi += 2;
+        i += chunk;
+    }
+    memcpy(out + oi, "0\r\n\r\n", 5);
+    oi += 5;
+    *outlen = oi;
+    return out;
+}
+
+// chunked 解码。返回 xmalloc，调用者 xfree；失败返回 NULL。
+static char* px_chunked_decode(const char* in, int inlen, int* outlen) {
+    int cap = inlen + 1;
+    char* out = xmalloc((size_t)cap);
+    int oi = 0, i = 0;
+    while (i < inlen) {
+        int start = i;
+        while (i < inlen && in[i] != '\r') i++;
+        if (i >= inlen) break;
+        char size_line[64];
+        int sl = i - start;
+        if (sl > 63) sl = 63;
+        memcpy(size_line, in + start, (size_t)sl);
+        size_line[sl] = 0;
+        i += 2;  // \r\n
+        char* semi = strchr(size_line, ';');
+        if (semi) *semi = 0;
+        char* endp = NULL;
+        long size = strtol(size_line, &endp, 16);
+        if (!endp || *endp != 0 || size < 0) break;
+        if (size == 0) break;
+        if (i + size > inlen) break;
+        if (oi + size >= cap) {
+            while (oi + size >= cap) cap *= 2;
+            out = xrealloc(out, (size_t)cap);
+        }
+        memcpy(out + oi, in + i, (size_t)size);
+        oi += (int)size;
+        i += (int)size;
+        if (i + 2 <= inlen && in[i] == '\r' && in[i+1] == '\n') i += 2;
+        else break;
+    }
+    out[oi] = 0;
+    *outlen = oi;
+    return out;
+}
+
+static char* px_http_build_response(LXValue v, int* out_len) {
     int status = 200;
     const char* body = "";
     int body_len = 0;
     char extra_headers[4096] = {0};
+    int gzip = 0, chunked = 0;
+    // （M21：gzip/chunked 标志解析同上）
     if (v.type == PX_DICT) {
         LXValue st = px_dict_get(v, "status");
         if (st.type == PX_INT) status = (int)st.as.i;
@@ -4401,6 +4742,11 @@ static char* px_http_build_response(LXValue v) {
                                 "%s: %s\r\n", ho->as.dict.keys[i], ho->as.dict.vals[i].as.obj->as.str.data);
             }
         }
+        // M21：gzip / chunked 标志
+        LXValue gz = px_dict_get(v, "gzip");
+        if (gz.type == PX_BOOL && gz.as.b) gzip = 1;
+        LXValue ch = px_dict_get(v, "chunked");
+        if (ch.type == PX_BOOL && ch.as.b) chunked = 1;
     } else if (v.type == PX_STR) {
         body = v.as.obj->as.str.data;
         body_len = v.as.obj->as.str.len;
@@ -4409,17 +4755,35 @@ static char* px_http_build_response(LXValue v) {
     } else if (v.type == PX_NULL) {
         status = 204;
     }
+    // body 预处理：gzip 压缩 / chunked 编码
+    char* owned = NULL;
+    if (gzip) {
+        char* gz = px_gzip_compress(body, body_len, &body_len);
+        if (gz) { owned = gz; body = gz; }
+    }
+    if (chunked) {
+        char* chd = px_chunked_encode(body, body_len, &body_len);
+        if (chd) { if (owned) xfree(owned); owned = chd; body = chd; }
+    }
     const char* reason = px_http_status_reason(status);
     int has_ct = strstr(extra_headers, "Content-Type") != NULL || strstr(extra_headers, "content-type") != NULL;
     char* out = xmalloc(8192 + body_len);
     int off = 0;
     off += snprintf(out + off, 8192 + body_len - off, "HTTP/1.1 %d %s\r\n", status, reason);
-    off += snprintf(out + off, 8192 + body_len - off, "Content-Length: %d\r\n", body_len);
+    if (!chunked) {
+        off += snprintf(out + off, 8192 + body_len - off, "Content-Length: %d\r\n", body_len);
+    }
     off += snprintf(out + off, 8192 + body_len - off, "Connection: close\r\n");
     if (extra_headers[0]) {
         int l = (int)strlen(extra_headers);
         memcpy(out + off, extra_headers, (size_t)l);
         off += l;
+    }
+    if (gzip) {
+        off += snprintf(out + off, 8192 + body_len - off, "Content-Encoding: gzip\r\n");
+    }
+    if (chunked) {
+        off += snprintf(out + off, 8192 + body_len - off, "Transfer-Encoding: chunked\r\n");
     }
     if (!has_ct) {
         off += snprintf(out + off, 8192 + body_len - off, "Content-Type: text/plain; charset=utf-8\r\n");
@@ -4431,6 +4795,8 @@ static char* px_http_build_response(LXValue v) {
         off += body_len;
     }
     out[off] = 0;
+    if (owned) xfree(owned);
+    if (out_len) *out_len = off;
     return out;
 }
 
@@ -4612,14 +4978,15 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
         resp = px_call(handler, &req, 1);
     }
 
-    // 7. 构造响应并发送（HEAD 只发响应头，不带 body）
-    char* out = px_http_build_response(resp);
+    // 7. 构造响应并发送（HEAD 只发响应头，不带 body；二进制 body 用 out_len 发送）
+    int out_len = 0;
+    char* out = px_http_build_response(resp, &out_len);
     if (out) {
         if (strcmp(method, "HEAD") == 0) {
             char* sep = strstr(out, "\r\n\r\n");
-            if (sep) sep[4] = 0;
+            if (sep) out_len = (int)(sep - out) + 4;
         }
-        send(fd, out, (int)strlen(out), 0);
+        if (out_len > 0) send(fd, out, out_len, 0);
         xfree(out);
     }
     close(fd);
@@ -4659,6 +5026,314 @@ static LXValue bi_http_serve(LXValue* args, int nargs, void* ctx) {
         px_spawn(http_conn_worker, &arg, 1);
     }
     return px_null(); // 不可达
+}
+
+// ==================== M21 SSE 服务端（编译模式，与并发 GC 兼容） ====================
+// sse_serve(port, handler)：accept 循环，每连接 px_spawn 处理线程。
+// 连接线程：解析请求 → 发 SSE 响应头 → 注册连接(conn id) → 调 handler（req 注入 conn）
+//           → handler 返回后保持连接（recv 阻塞），直到 sse_close(conn)（shutdown 唤醒）
+//           或对端断开（recv 返回 0/错误）。
+// sse_send(conn, data)：注册表 + 锁，任意线程可推送；写失败自动清理。
+// sse_close(conn)：shutdown 唤醒连接线程，清理注册。
+
+#define MAX_SSE_CONNS 256
+static pthread_mutex_t g_sse_mu = PTHREAD_MUTEX_INITIALIZER;
+static struct { int fd; int64_t id; int active; } g_sse_conns[MAX_SSE_CONNS];
+static int64_t g_sse_next_id = 1;
+
+static int sse_find(int64_t id) {
+    for (int i = 0; i < MAX_SSE_CONNS; i++) {
+        if (g_sse_conns[i].active && g_sse_conns[i].id == id) return i;
+    }
+    return -1;
+}
+
+static int sse_alloc_slot(void) {
+    for (int i = 0; i < MAX_SSE_CONNS; i++) {
+        if (!g_sse_conns[i].active) return i;
+    }
+    return -1;
+}
+
+// SSE 帧编码：str → `data: xxx\n\n`；dict → event/data/id/retry。返回 xmalloc，调用者 xfree。
+static char* sse_frame_c(LXValue data) {
+    char* out = xmalloc(8192);
+    int off = 0;
+    if (data.type == PX_STR) {
+        const char* s = data.as.obj->as.str.data;
+        int n = data.as.obj->as.str.len;
+        int start = 0;
+        for (int i = 0; i <= n; i++) {
+            if (i == n || s[i] == '\n') {
+                off += snprintf(out + off, 8192 - off, "data: %.*s\n", i - start, s + start);
+                start = i + 1;
+            }
+        }
+        off += snprintf(out + off, 8192 - off, "\n");
+    } else if (data.type == PX_DICT) {
+        LXObject* o = data.as.obj;
+        for (int i = 0; i < o->as.dict.len; i++) {
+            const char* k = o->as.dict.keys[i];
+            LXValue v = o->as.dict.vals[i];
+            if (strcmp(k, "id") == 0 && v.type == PX_STR) {
+                off += snprintf(out + off, 8192 - off, "id: %s\n", v.as.obj->as.str.data);
+            } else if (strcmp(k, "event") == 0 && v.type == PX_STR) {
+                off += snprintf(out + off, 8192 - off, "event: %s\n", v.as.obj->as.str.data);
+            } else if (strcmp(k, "retry") == 0 && v.type == PX_INT) {
+                off += snprintf(out + off, 8192 - off, "retry: %lld\n", (long long)v.as.i);
+            } else if (strcmp(k, "data") == 0) {
+                if (v.type == PX_STR) {
+                    const char* s = v.as.obj->as.str.data;
+                    int n = v.as.obj->as.str.len;
+                    int start = 0;
+                    for (int j = 0; j <= n; j++) {
+                        if (j == n || s[j] == '\n') {
+                            off += snprintf(out + off, 8192 - off, "data: %.*s\n", j - start, s + start);
+                            start = j + 1;
+                        }
+                    }
+                } else if (v.type != PX_NULL) {
+                    off += snprintf(out + off, 8192 - off, "data: %s\n", val_cstr(v));
+                }
+            }
+        }
+        off += snprintf(out + off, 8192 - off, "\n");
+    } else {
+        off += snprintf(out + off, 8192 - off, "data: %s\n\n", val_cstr(data));
+    }
+    out[off] = 0;
+    return out;
+}
+
+// SSE 连接线程（px_spawn 注册进 GC 槽位）：args[0] = fd
+static LXValue sse_conn_worker(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) return px_null();
+    int fd = (int)args[0].as.i;
+
+    // 1. 读请求头（直到 \r\n\r\n，上限 64KB）
+    char buf[65536];
+    int len = 0;
+    int header_end = -1;
+    while (len < (int)sizeof(buf) - 1) {
+        ssize_t n = recv(fd, buf + len, (size_t)((int)sizeof(buf) - 1 - len), 0);
+        if (n <= 0) break;
+        len += (int)n;
+        buf[len] = 0;
+        char* sep = strstr(buf, "\r\n\r\n");
+        if (sep) { header_end = (int)(sep - buf); break; }
+    }
+    if (header_end < 0 || len == 0) { close(fd); return px_null(); }
+
+    // 2. 解析请求行：METHOD SP target SP version
+    char* head = buf;
+    char* sp1 = strchr(head, ' ');
+    if (!sp1) { close(fd); return px_null(); }
+    *sp1 = 0;
+    char* method = head;
+    char* target = sp1 + 1;
+    char* sp2 = strchr(target, ' ');
+    char version[16] = "HTTP/1.1";
+    if (sp2) {
+        *sp2 = 0;
+        const char* ver = sp2 + 1;
+        int vlen = 0;
+        while (ver[vlen] && ver[vlen] != '\r' && ver[vlen] != '\n' && vlen < 15) vlen++;
+        memcpy(version, ver, (size_t)vlen);
+        version[vlen] = 0;
+    }
+    char path[2048] = {0}, query[2048] = {0};
+    char* q = strchr(target, '?');
+    char* dec;
+    if (q) {
+        *q = 0;
+        dec = px_url_decode(target);
+        snprintf(path, sizeof(path), "%s", dec ? dec : target);
+        xfree(dec);
+        dec = px_url_decode(q + 1);
+        snprintf(query, sizeof(query), "%s", dec ? dec : q + 1);
+        xfree(dec);
+    } else {
+        dec = px_url_decode(target);
+        snprintf(path, sizeof(path), "%s", dec ? dec : target);
+        xfree(dec);
+    }
+
+    // 3. 头部
+    LXValue headers = px_dict();
+    char* hline = sp2 ? sp2 + 1 : target + strlen(target);
+    char* nl0 = strchr(hline, '\n');
+    hline = nl0 ? nl0 + 1 : head + len;
+    while (hline && *hline && *hline != '\r' && *hline != '\n') {
+        char* eol = strstr(hline, "\r\n");
+        if (!eol) eol = strchr(hline, '\n');
+        int linelen = eol ? (int)(eol - hline) : (int)strlen(hline);
+        char line[4096];
+        int cl = linelen < 4095 ? linelen : 4095;
+        memcpy(line, hline, (size_t)cl);
+        line[cl] = 0;
+        char* colon = strchr(line, ':');
+        if (colon) {
+            *colon = 0;
+            char* k = line;
+            char* v = colon + 1;
+            while (*v == ' ') v++;
+            char* ve = v + strlen(v);
+            while (ve > v && (ve[-1] == ' ' || ve[-1] == '\r')) ve--;
+            *ve = 0;
+            px_dict_set(headers, k, px_str(v));
+        }
+        hline = eol ? eol + 2 : hline + strlen(hline);
+    }
+
+    // 4. 构造请求 dict（SSE 无 body，简化）
+    LXValue req = px_dict();
+    px_dict_set(req, "method", px_str(method));
+    px_dict_set(req, "target", px_str(target));
+    px_dict_set(req, "path", px_str(path));
+    px_dict_set(req, "query", px_str(query));
+    px_dict_set(req, "version", px_str(version));
+    px_dict_set(req, "headers", headers);
+    px_dict_set(req, "body", px_str(""));
+    px_dict_set(req, "form", px_dict());
+    {
+        struct sockaddr_in raddr;
+        socklen_t rl = sizeof(raddr);
+        if (getpeername(fd, (struct sockaddr*)&raddr, &rl) == 0) {
+            char rbuf[64];
+            snprintf(rbuf, sizeof(rbuf), "%s:%d", inet_ntoa(raddr.sin_addr), ntohs(raddr.sin_port));
+            px_dict_set(req, "remote", px_str(rbuf));
+        } else {
+            px_dict_set(req, "remote", px_str(""));
+        }
+    }
+
+    // 5. 分配 conn id + 注册（防 fd 复用：注册后才接受 sse_send）
+    pthread_mutex_lock(&g_sse_mu);
+    int64_t conn = g_sse_next_id++;
+    int slot = sse_alloc_slot();
+    if (slot < 0) {
+        pthread_mutex_unlock(&g_sse_mu);
+        close(fd);
+        return px_null();
+    }
+    g_sse_conns[slot].fd = fd;
+    g_sse_conns[slot].id = conn;
+    g_sse_conns[slot].active = 1;
+    pthread_mutex_unlock(&g_sse_mu);
+    px_dict_set(req, "conn", px_int(conn));
+
+    // 6. 发 SSE 响应头（连接保持，直到 sse_close / 对端断开）
+    const char* hdr = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n";
+    send(fd, hdr, (int)strlen(hdr), MSG_NOSIGNAL);
+
+    // 7. 调 handler（req 注入 conn；handler 内/后台线程可 sse_send）
+    LXValue handler = px_get_global("__sse_handler");
+    if (handler.type == PX_FUNC || handler.type == PX_NATIVE) {
+        px_call(handler, &req, 1);
+    }
+
+    // 8. 保持连接：recv 阻塞直到 sse_close（shutdown 唤醒）或对端断开
+    char rb[64];
+    while (recv(fd, rb, sizeof(rb), 0) > 0) {}
+
+    // 9. 清理注册 + 关闭（只在仍注册时 close，避免与 sse_close 重复关闭）
+    int closed = 0;
+    pthread_mutex_lock(&g_sse_mu);
+    for (int i = 0; i < MAX_SSE_CONNS; i++) {
+        if (g_sse_conns[i].active && g_sse_conns[i].fd == fd) {
+            g_sse_conns[i].active = 0;
+            g_sse_conns[i].fd = -1;
+            closed = 1;
+        }
+    }
+    pthread_mutex_unlock(&g_sse_mu);
+    if (closed) close(fd);
+    return px_null();
+}
+
+// sse_serve(port, handler)：阻塞 accept 循环
+static LXValue bi_sse_serve(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2 || args[0].type != PX_INT) px_error("sse_serve 需要 (port, handler) 参数");
+    LXValue handler = args[1];
+    if (handler.type != PX_FUNC && handler.type != PX_NATIVE) px_error("sse_serve 的 handler 必须是函数");
+    // handler 存入全局表（GC 扫描根），连接线程经全局表取回
+    px_set_global("__sse_handler", handler);
+    int port = (int)args[0].as.i;
+    int sfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sfd < 0) px_error("sse_serve: socket 创建失败");
+    int one = 1;
+    setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons((uint16_t)port);
+    if (bind(sfd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        close(sfd);
+        px_error("sse_serve: 绑定端口 %d 失败", port);
+    }
+    if (listen(sfd, 128) < 0) {
+        close(sfd);
+        px_error("sse_serve: listen 失败");
+    }
+    for (;;) {
+        int cfd = accept(sfd, NULL, NULL);
+        if (cfd < 0) continue;
+        LXValue arg = px_int(cfd);
+        px_spawn(sse_conn_worker, &arg, 1);
+    }
+    return px_null(); // 不可达
+}
+
+// sse_send(conn, data) → bool（连接不存在/写失败返回 false）
+static LXValue bi_sse_send(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2 || args[0].type != PX_INT) px_error("sse_send 需要 (conn, data) 参数");
+    int64_t conn = args[0].as.i;
+    char* frame = sse_frame_c(args[1]);
+    pthread_mutex_lock(&g_sse_mu);
+    int idx = sse_find(conn);
+    if (idx < 0) {
+        pthread_mutex_unlock(&g_sse_mu);
+        xfree(frame);
+        return px_bool(false);
+    }
+    int fd = g_sse_conns[idx].fd;
+    ssize_t w = send(fd, frame, (int)strlen(frame), MSG_NOSIGNAL);
+    if (w < 0) {
+        g_sse_conns[idx].active = 0;
+        g_sse_conns[idx].fd = -1;
+        shutdown(fd, SHUT_RDWR);
+        close(fd);
+        pthread_mutex_unlock(&g_sse_mu);
+        xfree(frame);
+        return px_bool(false);
+    }
+    pthread_mutex_unlock(&g_sse_mu);
+    xfree(frame);
+    return px_bool(true);
+}
+
+// sse_close(conn) → bool
+static LXValue bi_sse_close(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_INT) px_error("sse_close 需要 (conn) 参数");
+    int64_t conn = args[0].as.i;
+    pthread_mutex_lock(&g_sse_mu);
+    int idx = sse_find(conn);
+    if (idx < 0) {
+        pthread_mutex_unlock(&g_sse_mu);
+        return px_bool(false);
+    }
+    int fd = g_sse_conns[idx].fd;
+    g_sse_conns[idx].active = 0;
+    g_sse_conns[idx].fd = -1;
+    shutdown(fd, SHUT_RDWR);
+    close(fd);
+    pthread_mutex_unlock(&g_sse_mu);
+    return px_bool(true);
 }
 
 // ==================== M17 .px 脚本执行机制（编译模式） ====================

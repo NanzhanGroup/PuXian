@@ -220,6 +220,13 @@ pub enum Expr {
         index: Box<Expr>,
         pos: Pos,
     },
+    /// 切片 a[start:end]（start/end 可省略；M21）
+    Slice {
+        obj: Box<Expr>,
+        start: Option<Box<Expr>>,
+        end: Option<Box<Expr>>,
+        pos: Pos,
+    },
     /// 调用 f(args) / obj.method(args)
     Call {
         callee: Box<Expr>,

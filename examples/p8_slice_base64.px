@@ -1,0 +1,62 @@
+# M21 P1：切片语法 + base64 编解码（双模式一致验证）
+# px run p8_slice_base64.px 与 px build 产物输出逐字节一致
+
+def main():
+    # ---------- 切片语法 ----------
+    s = "hello world"
+    assert(s[0:5] == "hello", "s[0:5]")
+    assert(s[:5] == "hello", "s[:5]")
+    assert(s[6:] == "world", "s[6:]")
+    assert(s[:] == "hello world", "s[:]")
+    assert(s[-5:] == "world", "s[-5:]")
+    assert(s[0:-6] == "hello", "s[0:-6]")
+    assert(s[2:7] == "llo w", "s[2:7]")
+    assert(s[100:200] == "", "越界 clamp 空")
+    assert(s[5:2] == "", "start>end 空")
+
+    # 中文（UTF-8 字符语义）
+    c = "普贤语言"
+    assert(c[0:2] == "普贤", "中文切片 [0:2]")
+    assert(c[1:] == "贤语言", "中文切片 [1:]")
+    assert(len(c[1:3]) == 2, "中文切片长度")
+
+    # list 切片（返回新列表）
+    l = [0, 1, 2, 3, 4, 5]
+    assert(l[1:4] == [1, 2, 3], "list[1:4]")
+    assert(l[:3] == [0, 1, 2], "list[:3]")
+    assert(l[3:] == [3, 4, 5], "list[3:]")
+    assert(l[-2:] == [4, 5], "list[-2:]")
+    l2 = l[1:3]
+    l2.append(99)
+    assert(len(l) == 6, "切片是新列表（原列表不变）")
+    assert(l2 == [1, 2, 99], "切片独立修改")
+
+    # tuple 切片
+    t = (10, 20, 30, 40)
+    assert(t[1:3] == (20, 30), "tuple[1:3]")
+
+    # 变量边界
+    a = 1
+    b = 3
+    assert(s[a:b+1] == "ell", "变量边界切片")
+
+    # ---------- base64 ----------
+    assert(base64_encode("") == "", "base64 空串")
+    assert(base64_encode("a") == "YQ==", "base64 a")
+    assert(base64_encode("ab") == "YWI=", "base64 ab")
+    assert(base64_encode("abc") == "YWJj", "base64 abc")
+    assert(base64_encode("hello world") == "aGVsbG8gd29ybGQ=", "base64 hello world")
+    assert(base64_encode("普贤语言") == "5pmu6LSk6K+t6KiA", "base64 中文")
+
+    assert(base64_decode("YQ==") == "a", "base64 解码 a")
+    assert(base64_decode("YWI=") == "ab", "base64 解码 ab")
+    assert(base64_decode("YWJj") == "abc", "base64 解码 abc")
+    assert(base64_decode("aGVsbG8gd29ybGQ=") == "hello world", "base64 解码 hello")
+    assert(base64_decode("5pmu6LSk6K+t6KiA") == "普贤语言", "base64 解码中文")
+    assert(base64_decode("!!!") == null, "非法输入返回 null")
+
+    # 非字符串自动字符串化
+    assert(base64_encode(123) == base64_encode("123"), "base64 数字归一化")
+
+    print("P8 SLICE+BASE64 TESTS PASSED")
+
