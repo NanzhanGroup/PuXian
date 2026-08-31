@@ -147,6 +147,12 @@ pub enum Builtin {
     // px_serve(port, docroot[, timeout_ms]) —— PHP 式应用服务器：静态文件 + .px 脚本执行
     PxExec,
     PxServe,
+    // M18 P1：后台定时任务 / 定时器原语（TTL 过期扫描 / 定期快照落盘 / 会话清理）
+    // set_timeout(fn, ms, ...args) → int 一次性定时器；set_interval(fn, ms, ...args) → int 周期定时器
+    // clear_timer(id) → bool 取消定时器（已执行/已取消返回 false）
+    SetTimeout,
+    SetInterval,
+    ClearTimer,
 }
 
 impl Builtin {
@@ -222,6 +228,9 @@ impl Builtin {
             Builtin::HttpServe => "http_serve",
             Builtin::PxExec => "px_exec",
             Builtin::PxServe => "px_serve",
+            Builtin::SetTimeout => "set_timeout",
+            Builtin::SetInterval => "set_interval",
+            Builtin::ClearTimer => "clear_timer",
         }
     }
 }

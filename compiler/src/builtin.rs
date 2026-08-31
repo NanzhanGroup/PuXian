@@ -2,6 +2,8 @@
 //! 自由函数（非方法）分派
 
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 use crate::interp::{Interpreter, LxError};
 use crate::token::Pos;
@@ -974,6 +976,67 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
                 LxError::new("R3012", format!("px_serve: {}", e), Some(pos))
             })?;
             Ok(Value::Null) // 不可达：阻塞 accept
+        }
+
+        // ==================== M18 P1：后台定时任务 / 定时器原语 ====================
+        // set_timeout(fn, ms, ...args) → int：一次性定时器，ms 毫秒后调用 fn(...args)
+        // set_interval(fn, ms, ...args) → int：周期定时器，每 ms 毫秒调用一次 fn(...args)
+        // clear_timer(id) → bool：取消定时器（已执行/已取消返回 false）
+        // 语义：回调在独立线程执行（与主线程并发），执行前检查取消标记；
+        //       set_interval 固定节奏（执行耗时不计入间隔，不堆积）；回调内可安全使用
+        //       全局变量 / chan / 锁 / spawn（共享 globals 与类型表）。
+        Builtin::SetTimeout | Builtin::SetInterval => {
+            if args.len() < 2 {
+                return Err(err(
+                    "set_timeout/set_interval 需要 (fn, ms[, ...args]) 参数",
+                    pos,
+                ));
+            }
+            let fv = args[0].clone();
+            if !matches!(fv, Value::Func(_)) {
+                return Err(err("定时器第一个参数必须是函数", pos));
+            }
+            let ms = expect_int(&args[1], "定时器", pos)?;
+            if ms < 0 {
+                return Err(err("定时器间隔不能为负数", pos));
+            }
+            let extra = args[2..].to_vec();
+            let periodic = matches!(b, Builtin::SetInterval);
+            let timers = interp.timers.clone();
+            let id = timers.next_id.fetch_add(1, Ordering::SeqCst) + 1;
+            let interp = interp.fork();
+            thread::spawn(move || {
+                let mut i = interp;
+                loop {
+                    std::thread::sleep(Duration::from_millis(ms as u64));
+                    // 取消检查（执行前）
+                    if timers.canceled.lock().unwrap().contains(&id) {
+                        timers.canceled.lock().unwrap().remove(&id);
+                        return;
+                    }
+                    if let Err(e) = i.call_value(&fv, &extra, pos) {
+                        eprintln!("[定时器 {}] {}", id, e);
+                    }
+                    if !periodic {
+                        // 一次性：执行完毕，清理 id（后续 clear_timer 返回 false）
+                        timers.canceled.lock().unwrap().remove(&id);
+                        return;
+                    }
+                }
+            });
+            Ok(Value::Int(id))
+        }
+        Builtin::ClearTimer => {
+            if args.len() != 1 {
+                return Err(err("clear_timer 需要 1 个参数", pos));
+            }
+            let id = expect_int(&args[0], "clear_timer", pos)?;
+            let mut c = interp.timers.canceled.lock().unwrap();
+            if c.contains(&id) {
+                return Ok(Value::Bool(false));
+            }
+            c.insert(id);
+            Ok(Value::Bool(true))
         }
     }
 }

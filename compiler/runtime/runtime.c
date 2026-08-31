@@ -54,6 +54,10 @@ static LXValue bi_http_serve(LXValue* args, int nargs, void* ctx);
 // M17 .px 脚本执行机制（应用平台）
 static LXValue bi_px_exec(LXValue* args, int nargs, void* ctx);
 static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx);
+// M18 后台定时任务 / 定时器原语
+static LXValue bi_set_timeout(LXValue* args, int nargs, void* ctx);
+static LXValue bi_set_interval(LXValue* args, int nargs, void* ctx);
+static LXValue bi_clear_timer(LXValue* args, int nargs, void* ctx);
 
 // M10 HTTPS 内部辅助
 static char* lx_http_request(const char* url, const char* method, const char* body, int* out_len);
@@ -3228,6 +3232,10 @@ void lx_register_builtins(void) {
     // M17 .px 脚本执行机制
     lx_set_global("px_exec", lx_native("px_exec", bi_px_exec));
     lx_set_global("px_serve", lx_native("px_serve", bi_px_serve));
+    // M18 后台定时任务 / 定时器原语
+    lx_set_global("set_timeout", lx_native("set_timeout", bi_set_timeout));
+    lx_set_global("set_interval", lx_native("set_interval", bi_set_interval));
+    lx_set_global("clear_timer", lx_native("clear_timer", bi_clear_timer));
 }
 
 // ==================== 并发原语（M4.2） ====================
@@ -3591,6 +3599,207 @@ void lx_spawn_name(const char* fname, LXValue* args, int nargs) {
     } else {
         lx_error("spawn: 未找到函数 %s", fname);
     }
+}
+
+// ==================== M18 后台定时任务 / 定时器原语 ====================
+// set_timeout(fn, ms, ...args)：一次性定时器；set_interval(fn, ms, ...args)：周期定时器
+// clear_timer(id)：取消（返回是否取消成功）。
+// 每个定时器一个 pthread（注册进 GC 槽位）：回调执行期间可被并发 GC 暂停/扫描；
+// 线程栈上持有 fn/args 副本 → 回调函数与参数对象保持可达，不会被 sweep 误回收。
+// 固定节奏：sleep 在循环顶部，回调执行耗时不计入间隔（不堆积）。
+
+#define MAX_TIMERS 128
+typedef struct {
+    int64_t id;      // >0 有效；0 = 空槽
+    int active;      // 1=生效中；clear_timer 置 0（取消标记）
+} TimerSlot;
+static TimerSlot g_timers[MAX_TIMERS];
+static pthread_mutex_t g_timer_mu = PTHREAD_MUTEX_INITIALIZER;
+static int64_t g_next_timer_id = 0;
+
+typedef struct {
+    int64_t id;
+    int periodic;    // 1=interval，0=timeout
+    int64_t ms;
+    LXValue fn;      // 回调函数值
+    LXValue* args;   // 调用参数（堆；线程栈上做副本保证 GC 可达）
+    int nargs;
+} TimerJob;
+
+static void timer_sleep_ms(int64_t ms) {
+    struct timespec req, rem;
+    req.tv_sec = ms / 1000;
+    req.tv_nsec = (ms % 1000) * 1000000L;
+    while (req.tv_sec > 0 || req.tv_nsec > 0) {
+        if (nanosleep(&req, &rem) == 0) break;
+        req = rem;   // EINTR（含 GC 暂停信号）→ 继续睡剩余时间
+    }
+}
+
+// 查询定时器是否仍生效（1=继续，0=被取消/槽已释放）
+static int timer_still_active(int64_t id) {
+    pthread_mutex_lock(&g_timer_mu);
+    for (int i = 0; i < MAX_TIMERS; i++) {
+        if (g_timers[i].id == id) {
+            int a = g_timers[i].active;
+            pthread_mutex_unlock(&g_timer_mu);
+            return a;
+        }
+    }
+    pthread_mutex_unlock(&g_timer_mu);
+    return 0;
+}
+
+// 释放定时器槽位（timeout 执行完毕 / 定时器线程退出）
+static void timer_release_slot(int64_t id) {
+    pthread_mutex_lock(&g_timer_mu);
+    for (int i = 0; i < MAX_TIMERS; i++) {
+        if (g_timers[i].id == id) {
+            g_timers[i].active = 0;
+            g_timers[i].id = 0;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_timer_mu);
+}
+
+static void* timer_thread(void* p) {
+    TimerJob* job = (TimerJob*)p;
+    // M11：自注册真实 tid 到 GC 槽位（槽位已由 timer_create 预留 in_use=1, tid=0）
+    pthread_mutex_lock(&g_gc_mu);
+    for (int i = 0; i < MAX_SPAWN_THREADS; i++) {
+        if (g_threads[i].in_use && (uintptr_t)g_threads[i].tid == 0) {
+            g_threads[i].tid = pthread_self();
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_gc_mu);
+
+    // 栈上持有 fn/args 副本：GC 保守扫描本线程栈时回调对象保持可达
+    LXValue fn = job->fn;
+    LXValue args_stack[16];
+    int nargs = job->nargs < 16 ? job->nargs : 16;
+    for (int i = 0; i < nargs; i++) args_stack[i] = job->args[i];
+    int64_t id = job->id;
+    int periodic = job->periodic;
+
+    do {
+        timer_sleep_ms(job->ms);
+        if (!timer_still_active(id)) break;   // 取消检查（每次 tick 前）
+        LXValue r = lx_call(fn, args_stack, nargs);
+        (void)r;
+    } while (periodic);
+
+    timer_release_slot(id);
+
+    // 注销：先持锁再释放 job（与 spawn_thread 相同的退出窗口处理）
+    pthread_mutex_lock(&g_gc_mu);
+    g_active_threads--;
+    gc_unregister_thread(pthread_self());
+    pthread_mutex_unlock(&g_gc_mu);
+    xfree(job->args);
+    xfree(job);
+    return NULL;
+}
+
+// 创建定时器：periodic=1 周期 / 0 一次性；返回定时器 id
+static int64_t px_timer_create(int periodic, LXValue fn, LXValue* args, int nargs, int64_t ms) {
+    pthread_mutex_lock(&g_timer_mu);
+    int slot = -1;
+    for (int i = 0; i < MAX_TIMERS; i++) if (g_timers[i].id == 0) { slot = i; break; }
+    if (slot < 0) {
+        pthread_mutex_unlock(&g_timer_mu);
+        lx_error("定时器数量超出上限 %d", MAX_TIMERS);
+    }
+    int64_t id = ++g_next_timer_id;
+    g_timers[slot].id = id;
+    g_timers[slot].active = 1;
+    pthread_mutex_unlock(&g_timer_mu);
+
+    // GC 槽位预留（同 lx_spawn：同一临界区内 g_active_threads++ + 预留槽位）
+    pthread_mutex_lock(&g_gc_mu);
+    if (!g_gc_env_inited) gc_init_env();
+    g_active_threads++;
+    int gslot = -1;
+    for (int i = 0; i < MAX_SPAWN_THREADS; i++) if (!g_threads[i].in_use) { gslot = i; break; }
+    if (gslot >= 0) {
+        g_threads[gslot].tid = (pthread_t)0;
+        g_threads[gslot].in_use = 1;
+        g_threads[gslot].paused = 0;
+        g_threads[gslot].is_main = 0;
+        g_threads[gslot].epoch = 0;
+        g_threads[gslot].tmp_root = NULL;
+    } else {
+        g_active_threads--;   // 槽位满回滚
+    }
+    pthread_mutex_unlock(&g_gc_mu);
+    if (gslot < 0) lx_error("定时器: 并发线程数超出上限 %d", MAX_SPAWN_THREADS);
+
+    TimerJob* job = xmalloc(sizeof(TimerJob));
+    job->id = id;
+    job->periodic = periodic;
+    job->ms = ms;
+    job->fn = fn;
+    job->nargs = nargs;
+    job->args = xmalloc(sizeof(LXValue) * (nargs > 0 ? nargs : 1));
+    if (nargs > 0) memcpy(job->args, args, sizeof(LXValue) * nargs);
+
+    pthread_t t;
+    if (pthread_create(&t, NULL, timer_thread, job) != 0) {
+        pthread_mutex_lock(&g_gc_mu);
+        g_active_threads--;
+        if (gslot >= 0) g_threads[gslot].in_use = 0;
+        pthread_mutex_unlock(&g_gc_mu);
+        pthread_mutex_lock(&g_timer_mu);
+        g_timers[slot].id = 0;
+        pthread_mutex_unlock(&g_timer_mu);
+        lx_error("定时器: 创建线程失败");
+    }
+    if (gslot >= 0) {
+        pthread_mutex_lock(&g_gc_mu);
+        g_threads[gslot].tid = t;
+        pthread_mutex_unlock(&g_gc_mu);
+    }
+    pthread_detach(t);
+    return id;
+}
+
+static LXValue bi_set_timeout(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 2) lx_error("set_timeout 需要 (fn, ms[, ...args]) 参数");
+    if (args[0].type != LX_FUNC && args[0].type != LX_NATIVE)
+        lx_error("set_timeout: 第一个参数必须是函数");
+    int64_t ms = int_val(args[1]);
+    if (ms < 0) lx_error("set_timeout: 间隔不能为负数");
+    int64_t id = px_timer_create(0, args[0], args + 2, nargs - 2, ms);
+    return lx_int(id);
+}
+
+static LXValue bi_set_interval(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 2) lx_error("set_interval 需要 (fn, ms[, ...args]) 参数");
+    if (args[0].type != LX_FUNC && args[0].type != LX_NATIVE)
+        lx_error("set_interval: 第一个参数必须是函数");
+    int64_t ms = int_val(args[1]);
+    if (ms < 0) lx_error("set_interval: 间隔不能为负数");
+    int64_t id = px_timer_create(1, args[0], args + 2, nargs - 2, ms);
+    return lx_int(id);
+}
+
+static LXValue bi_clear_timer(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) lx_error("clear_timer 需要 1 个参数");
+    int64_t id = int_val(args[0]);
+    pthread_mutex_lock(&g_timer_mu);
+    for (int i = 0; i < MAX_TIMERS; i++) {
+        if (g_timers[i].id == id && g_timers[i].active) {
+            g_timers[i].active = 0;
+            pthread_mutex_unlock(&g_timer_mu);
+            return lx_bool(1);
+        }
+    }
+    pthread_mutex_unlock(&g_timer_mu);
+    return lx_bool(0);
 }
 
 // ==================== std.net（M5.2）：TCP + HTTP 客户端 ====================

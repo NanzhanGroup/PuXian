@@ -5,6 +5,7 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use crate::ast::*;
 use crate::token::Pos;
@@ -21,6 +22,9 @@ pub struct Codegen {
     vars: HashMap<String, String>,
     // 简单类型推断：变量名 → 结构体类型名（用于方法静态分派）
     var_types: HashMap<String, String>,
+    // 顶层全局名（M18 修复：函数内赋值到全局变量应生成 lx_get/set_global，
+    // 而非被 collect_assign_vars 预声明为函数局部变量 → null + 1 运行时错误）
+    globals: HashSet<String>,
     uid: usize,
     closure_id: usize,
 }
@@ -35,6 +39,7 @@ impl Codegen {
             impls: HashMap::new(),
             vars: HashMap::new(),
             var_types: HashMap::new(),
+            globals: HashSet::new(),
             uid: 0,
             closure_id: 0,
         }
@@ -69,6 +74,24 @@ impl Codegen {
 
         // 第一遍：收集类型表
         self.collect_types(prog)?;
+
+        // M18 修复：收集顶层全局名（函数 + 顶层变量赋值），供函数内赋值判定
+        for stmt in &prog.items {
+            match stmt {
+                Stmt::FuncDef { name, .. } => {
+                    self.globals.insert(name.clone());
+                }
+                Stmt::VarDecl { name, .. } => {
+                    self.globals.insert(name.clone());
+                }
+                Stmt::Assign { target, .. } => {
+                    if let Expr::Var { name, .. } = target {
+                        self.globals.insert(name.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
 
         // 第二遍：生成函数定义（顶层 def + impl 方法）
         let mut top_defs: Vec<FuncDef> = Vec::new();
@@ -222,11 +245,17 @@ impl Codegen {
         }
         // 预扫描：函数体内赋值（x = ... / x += ...）的变量视为局部变量（Python 语义）
         // 避免生成全局 lx_set_global / lx_get_global 导致状态泄漏与复合赋值丢失
+        // M18 修复：顶层全局名（self.globals）不声明为局部——函数内修改全局变量
+        // 应走 lx_get_global/lx_set_global（与解释器语义一致）；否则全局变量在函数内
+        // 被初始化为局部 null，`n = n + 1` 报"无法相加: null + int"。
         let mut assign_names: Vec<String> = Vec::new();
         Self::collect_assign_vars(&f.body, &mut assign_names);
         for name in &assign_names {
             if self.var_of(name).is_some() {
                 continue; // 已是参数/已声明
+            }
+            if self.globals.contains(name) {
+                continue; // 顶层全局变量：函数内赋值更新全局
             }
             let v = self.new_var(name);
             s.push_str(&format!("    LXValue {} = lx_null();\n", v));
@@ -308,10 +337,31 @@ impl Codegen {
                         let v = match self.var_of(name) {
                             Some(v) => v.clone(),
                             None => {
-                                // 全局变量
+                                // 全局变量（M18 修复：复合赋值须先读全局再运算再写回）
+                                if *op == AssignOp::Assign {
+                                    return Ok(format!(
+                                        "{}lx_set_global(\"{}\", {});\n",
+                                        pad, name, rhs
+                                    ));
+                                }
+                                let full = match op {
+                                    AssignOp::Assign => rhs.clone(),
+                                    AssignOp::Plus => format!("lx_add(lx_get_global(\"{}\"), {})", name, rhs),
+                                    AssignOp::Minus => format!("lx_sub(lx_get_global(\"{}\"), {})", name, rhs),
+                                    AssignOp::Star => format!("lx_mul(lx_get_global(\"{}\"), {})", name, rhs),
+                                    AssignOp::Slash => format!("lx_div(lx_get_global(\"{}\"), {})", name, rhs),
+                                    AssignOp::IntDiv => format!("lx_idiv(lx_get_global(\"{}\"), {})", name, rhs),
+                                    AssignOp::Mod => format!("lx_mod(lx_get_global(\"{}\"), {})", name, rhs),
+                                    AssignOp::Pow => format!("lx_pow(lx_get_global(\"{}\"), {})", name, rhs),
+                                    AssignOp::BitAnd => format!("lx_bitand(lx_get_global(\"{}\"), {})", name, rhs),
+                                    AssignOp::BitOr => format!("lx_bitor(lx_get_global(\"{}\"), {})", name, rhs),
+                                    AssignOp::BitXor => format!("lx_bitxor(lx_get_global(\"{}\"), {})", name, rhs),
+                                    AssignOp::Shl => format!("lx_shl(lx_get_global(\"{}\"), {})", name, rhs),
+                                    AssignOp::Shr => format!("lx_shr(lx_get_global(\"{}\"), {})", name, rhs),
+                                };
                                 return Ok(format!(
                                     "{}lx_set_global(\"{}\", {});\n",
-                                    pad, name, rhs
+                                    pad, name, full
                                 ));
                             }
                         };

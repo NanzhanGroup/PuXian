@@ -1,0 +1,58 @@
+# p6_timer.px - M18 后台定时任务 / 定时器原语回归测试（解释器 run 与编译 build 输出必须一致）
+# 覆盖：set_timeout 一次性 / set_interval 周期 / clear_timer 取消（返回值语义）/
+#       可变参数透传 / 定时器回调修改全局（命名函数）/ 定时器与 chan 协同（TTL 扫描雏形）
+# 设计：回调只改全局状态（不 print，避免异步输出顺序不确定），主线程 sleep 后统一断言输出
+
+# ---- 1. set_timeout 一次性：两个回调都执行（加法交换律 → 结果确定） ----
+count = 0
+set_timeout(fn() { count = count + 1 }, 30)
+set_timeout(fn() { count = count + 10 }, 20)
+sleep(120)
+print("t1 timeout sum  =", count)          # 11
+
+# ---- 2. clear_timer 取消未到期 + 返回值语义 ----
+flag = 0
+tid = set_timeout(fn() { flag = 1 }, 30)
+r1 = clear_timer(tid)
+r2 = clear_timer(tid)
+sleep(80)
+print("t2 cancel ret   =", r1, r2, "flag:", flag)   # true false flag: 0
+
+# ---- 3. set_interval 周期执行：回调内计数到 5 后 clear 自己（确定性停止） ----
+n = 0
+tid2 = -1
+def tick():
+    n = n + 1
+    if n >= 5:
+        clear_timer(tid2)
+tid2 = set_interval(tick, 20)
+sleep(300)
+print("t3 interval cnt =", n)              # 5
+
+# ---- 4. 可变参数透传给回调 ----
+got = 0
+set_timeout(fn(a, b) { got = a * b }, 20, 6, 7)
+sleep(80)
+print("t4 extra args   =", got)            # 42
+
+# ---- 5. 命名函数回调修改全局（顺带验证 M18 修复的编译模式 bug） ----
+g = 0
+tid3 = -1
+def bump():
+    g = g + 1
+    if g >= 3:
+        clear_timer(tid3)
+tid3 = set_interval(bump, 20)
+sleep(200)
+print("t5 named fn     =", g)              # 3（回调内 clear 自己）
+
+# ---- 6. 定时器与 chan 协同（TTL 过期扫描雏形：定时器把到期 key 写入 chan） ----
+expired = chan[str](4)
+def scan():
+    expired.send("sess_1")
+    expired.send("sess_2")
+set_timeout(scan, 30)
+sleep(100)
+let e1 = expired.recv()
+let e2 = expired.recv()
+print("t6 chan+timer   =", e1, e2)         # sess_1 sess_2

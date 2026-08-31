@@ -4,8 +4,10 @@
 //!   并发模型：OS 线程 1:1 映射（语义等价 M:N 协程，v1 实现；后续可换 green thread）
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::fmt;
+use std::sync::atomic::AtomicI64;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
@@ -17,6 +19,23 @@ use crate::value::*;
 /// 全局 select 唤醒通道：所有 channel 操作后 notify，select 轮询醒来重试
 static SELECT_LOCK: Mutex<()> = Mutex::new(());
 static SELECT_CV: Condvar = Condvar::new();
+
+/// M18 定时器状态：跨线程共享（set_timeout/set_interval 的线程与主线程）
+/// - next_id：原子分配定时器 id（从 1 递增）
+/// - canceled：已取消的定时器 id 集合（回调执行前检查；一次性定时器执行后移除）
+pub struct TimerState {
+    pub next_id: AtomicI64,
+    pub canceled: Mutex<HashSet<i64>>,
+}
+
+impl TimerState {
+    pub fn new() -> Arc<TimerState> {
+        Arc::new(TimerState {
+            next_id: AtomicI64::new(0),
+            canceled: Mutex::new(HashSet::new()),
+        })
+    }
+}
 
 /// 唤醒所有阻塞中的 select
 fn notify_select() {
@@ -103,6 +122,8 @@ pub struct Interpreter {
     pub exit_code: i32,
     /// print 输出捕获缓冲区（px_exec 内嵌执行用；None = 直接写 stdout）
     pub output: Option<Arc<Mutex<Vec<u8>>>>,
+    /// M18 定时器状态（set_timeout / set_interval / clear_timer 共享）
+    pub timers: Arc<TimerState>,
 }
 
 impl Interpreter {
@@ -116,6 +137,7 @@ impl Interpreter {
             loop_depth: 0,
             exit_code: 0,
             output: None,
+            timers: TimerState::new(),
         };
         interp.register_builtins();
         interp
@@ -132,6 +154,7 @@ impl Interpreter {
             loop_depth: 0,
             exit_code: 0,
             output: None,
+            timers: self.timers.clone(),
         }
     }
 
@@ -213,6 +236,10 @@ impl Interpreter {
             // M17 P1：.px 脚本执行机制（应用平台核心）
             ("px_exec", Builtin::PxExec),
             ("px_serve", Builtin::PxServe),
+            // M18 P1：后台定时任务 / 定时器原语
+            ("set_timeout", Builtin::SetTimeout),
+            ("set_interval", Builtin::SetInterval),
+            ("clear_timer", Builtin::ClearTimer),
         ];
         for (n, b) in names {
             g.define(n, Value::Builtin(*b));
@@ -2210,6 +2237,83 @@ def main():
     sleep(50)
     let body = http_get("http://127.0.0.1:7894/")
     assert(body == "{\"ok\":true}", "http_get body")
+"#;
+        assert!(run_src(src).is_ok());
+    }
+
+    // ==================== M18 定时器测试 ====================
+
+    #[test]
+    fn test_timer_set_timeout_once() {
+        // set_timeout 一次性：两个回调都执行，加法交换律保证确定性
+        let src = r#"
+count = 0
+def main():
+    set_timeout(fn() { count = count + 1 }, 30)
+    set_timeout(fn() { count = count + 10 }, 20)
+    sleep(120)
+    assert(count == 11, "both timeouts ran")
+"#;
+        assert!(run_src(src).is_ok());
+    }
+
+    #[test]
+    fn test_timer_clear_timeout() {
+        // clear_timer 取消未到期定时器；返回值语义：首次 true，再次 false
+        let src = r#"
+flag = 0
+def main():
+    let tid = set_timeout(fn() { flag = 1 }, 30)
+    assert(clear_timer(tid), "cancel pending")
+    assert(not clear_timer(tid), "already canceled")
+    sleep(80)
+    assert(flag == 0, "callback suppressed")
+"#;
+        assert!(run_src(src).is_ok());
+    }
+
+    #[test]
+    fn test_timer_set_interval_self_clear() {
+        // set_interval 周期执行：回调内计数到 5 后 clear 自己 → 确定性停止
+        let src = r#"
+n = 0
+tid = -1
+def tick():
+    n = n + 1
+    if n >= 5:
+        clear_timer(tid)
+def main():
+    tid = set_interval(tick, 20)
+    sleep(300)
+    assert(n == 5, "interval ran 5 times then stopped")
+"#;
+        assert!(run_src(src).is_ok());
+    }
+
+    #[test]
+    fn test_timer_callback_modifies_global_from_named_fn() {
+        // M18 顺带修复的编译器 bug：命名函数内修改全局变量（编译模式 lx_get/set_global）
+        let src = r#"
+n = 0
+def inc():
+    n = n + 1
+def main():
+    inc()
+    inc()
+    assert(n == 2, "named fn modifies global")
+"#;
+        assert!(run_src(src).is_ok());
+    }
+
+    #[test]
+    fn test_timer_extra_args_passed() {
+        // set_timeout 可变参数透传给回调
+        let src = r#"
+got = 0
+def main():
+    set_timeout(fn(a, b) { got = a * b }, 20, 6, 7)
+    sleep(80)
+    assert(got == 42, "extra args passed")
 "#;
         assert!(run_src(src).is_ok());
     }

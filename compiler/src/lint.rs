@@ -756,6 +756,9 @@ pub fn builtin_names() -> HashSet<String> {
         Builtin::HttpServe,
         Builtin::PxExec,
         Builtin::PxServe,
+        Builtin::SetTimeout,
+        Builtin::SetInterval,
+        Builtin::ClearTimer,
     ];
     all.iter().map(|b| b.name().to_string()).collect()
 }
