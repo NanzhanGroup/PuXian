@@ -286,6 +286,12 @@ impl Interpreter {
             ("sse_serve", Builtin::SseServe),
             ("sse_send", Builtin::SseSend),
             ("sse_close", Builtin::SseClose),
+            ("int_to_hex", Builtin::IntToHex),
+            ("hex_to_int", Builtin::HexToInt),
+            ("bytes_to_hex", Builtin::BytesToHex),
+            ("hex_to_bytes", Builtin::HexToBytes),
+            ("bit_count", Builtin::BitCount),
+            ("bit_length", Builtin::BitLength),
         ];
         for (n, b) in names {
             g.define(n, Value::Builtin(*b));

@@ -1376,6 +1376,71 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
                 Ok(Value::Bool(false))
             }
         }
+
+        // ==================== M22 P1：位运算 / 二进制数据视图 ====================
+        Builtin::IntToHex => {
+            if args.len() != 2 {
+                return Err(err("int_to_hex 需要 (n, width) 参数", pos));
+            }
+            let n = expect_int(&args[0], "int_to_hex", pos)?;
+            let w = expect_int(&args[1], "int_to_hex", pos)?;
+            if w < 1 || w > 16 {
+                return Err(err("int_to_hex 的 width 必须在 1..16", pos));
+            }
+            // 负数按补码：取低 4*width 位
+            let mask = if w >= 16 { u64::MAX } else { (1u64 << (4 * w)) - 1 };
+            let v = (n as u64) & mask;
+            Ok(Value::Str(format!("{:0width$x}", v, width = w as usize)))
+        }
+        Builtin::HexToInt => {
+            if args.len() != 1 {
+                return Err(err("hex_to_int 需要一个参数", pos));
+            }
+            let s = expect_str(&args[0], "hex_to_int", pos)?;
+            let clean: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+            if clean.is_empty() || clean.len() > 16 {
+                return Ok(Value::Null);
+            }
+            match i64::from_str_radix(&clean, 16) {
+                Ok(v) => Ok(Value::Int(v)),
+                Err(_) => Ok(Value::Null),
+            }
+        }
+        Builtin::BytesToHex => {
+            if args.len() != 1 {
+                return Err(err("bytes_to_hex 需要一个参数", pos));
+            }
+            let data = bytes_of(&args[0]);
+            Ok(Value::Str(hex_encode(&data)))
+        }
+        Builtin::HexToBytes => {
+            if args.len() != 1 {
+                return Err(err("hex_to_bytes 需要一个参数", pos));
+            }
+            let s = expect_str(&args[0], "hex_to_bytes", pos)?;
+            match hex_decode(s) {
+                Ok(bytes) => Ok(Value::Str(String::from_utf8_lossy(&bytes).to_string())),
+                Err(_) => Ok(Value::Null),
+            }
+        }
+        Builtin::BitCount => {
+            if args.len() != 1 {
+                return Err(err("bit_count 需要一个参数", pos));
+            }
+            let n = expect_int(&args[0], "bit_count", pos)?;
+            Ok(Value::Int(n.count_ones() as i64))
+        }
+        Builtin::BitLength => {
+            if args.len() != 1 {
+                return Err(err("bit_length 需要一个参数", pos));
+            }
+            let n = expect_int(&args[0], "bit_length", pos)?;
+            if n <= 0 {
+                Ok(Value::Int(0))
+            } else {
+                Ok(Value::Int((64 - n.leading_zeros()) as i64))
+            }
+        }
     }
 }
 

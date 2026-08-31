@@ -183,6 +183,19 @@ pub enum Builtin {
     SseServe,
     SseSend,
     SseClose,
+    // M22 P1：位运算 / 二进制数据视图（存储引擎序列化基石；运算符 & | ^ ~ << >> 已具备）
+    // int_to_hex(n, width) → str（固定宽度小写 hex，负数按补码）
+    // hex_to_int(hex) → int 或 null（非法 → null）
+    // bytes_to_hex(data) → str（字节 → 小写 hex）
+    // hex_to_bytes(hex) → str 或 null（hex → 原始字节，非法 → null）
+    // bit_count(n) → int（popcount：二进制中 1 的个数）
+    // bit_length(n) → int（二进制位数：floor(log2(n))+1；n<=0 → 0）
+    IntToHex,
+    HexToInt,
+    BytesToHex,
+    HexToBytes,
+    BitCount,
+    BitLength,
 }
 
 impl Builtin {
@@ -275,6 +288,12 @@ impl Builtin {
             Builtin::SseServe => "sse_serve",
             Builtin::SseSend => "sse_send",
             Builtin::SseClose => "sse_close",
+            Builtin::IntToHex => "int_to_hex",
+            Builtin::HexToInt => "hex_to_int",
+            Builtin::BytesToHex => "bytes_to_hex",
+            Builtin::HexToBytes => "hex_to_bytes",
+            Builtin::BitCount => "bit_count",
+            Builtin::BitLength => "bit_length",
         }
     }
 }

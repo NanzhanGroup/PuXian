@@ -71,36 +71,196 @@ static int px_https_request(const char* host, int port, const char* req, char** 
 static char* px_gzip_decompress(const char* in, int inlen, int* outlen);
 static char* px_chunked_decode(const char* in, int inlen, int* outlen);
 
-// ==================== 内存分配（M11：mmap/munmap，无 glibc 堆锁） ====================
+// ==================== 内存分配（M22：size-class slab 子分配器 + 大对象 mmap 兜底） ====================
 // M11 并发 GC：sweep 会释放对象，而其他线程可能正在 malloc/free 中被 GC 信号挂起
 // （持有 glibc 堆锁）→ GC 主线程 free 会死锁。因此对象与子分配全部改用
-// mmap/munmap（纯 syscall，无用户态堆锁）：信号挂起在 mmap/munmap 中不持有堆锁，
-// GC 释放不会与"被挂起的分配线程"互相阻塞。
-// 已知限制：每次分配映射一页（4KB/对象），大量小对象场景内存放大（如 20 万对象
-// ≈ 800MB）。slab/子分配器优化列入 M12。
+// mmap + 自管 slab（无 glibc 堆锁）：信号挂起在 mmap/munmap 中不持有堆锁。
+// M22 优化（解决 M11.3 已知限制①"mmap 每对象一页 ≈4KB/对象 内存放大"）：
+//   小对象（≤16KB）按 size-class 从 slab 槽位分配（16/24/32/48/64/96/128/192/256/
+//   384/512/768/1024/1536/2048/3072/4096/6144/8192/12288/16384），一页多槽共享；
+//   超过最大 class 回落 mmap（每分配一映射，带大小头）。
+//   M11.3 曾试"无锁 slab"失败（空闲栈 next 被覆盖 = 无锁竞态）→ M22 改用互斥锁保护，
+//   持锁期间屏蔽 SIG_GC_STOP（gc_block_stop，与 list/dict 结构修改函数同一模式）：
+//   持锁线程不会被 GC 暂停 → GC 主线程（sweep 时 xfree）不会等待被暂停线程持有的锁。
+//   对象表 g_objs 与 GC 逻辑不变，slab 仅是底层内存提供者；槽位复用只发生在 sweep
+//   （stop-the-world，无并发分配）之后，杜绝 use-after-free。
 
-static void* xmalloc(size_t n) {
-    if (n <= 0) n = 1;
-    size_t pg = 4096;
+#define PX_PAGE 4096
+#define SLAB_MAX_CLASS 16384          // 超过此大小 → mmap 兜底
+#define SLAB_CLASS_COUNT 21
+static const size_t slab_classes[SLAB_CLASS_COUNT] = {
+    16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768,
+    1024, 1536, 2048, 3072, 4096, 6144, 8192, 12288, 16384
+};
+
+typedef struct Slab {
+    struct Slab* next;      // 同 class 链表
+    void* base;             // mmap 映射起点（含头部）
+    size_t class_size;      // 槽大小（= class 值）
+    size_t slot_count;      // 槽总数
+    size_t free_count;      // 空闲槽数（0 → 不可分配，需新 slab）
+    void* free_head;        // 空闲链表头（槽内首 word 存 next，NULL 结束）
+} Slab;
+
+static pthread_mutex_t g_slab_mu = PTHREAD_MUTEX_INITIALIZER;
+static Slab* g_slab_heads[SLAB_CLASS_COUNT] = {0};
+// 地址 → slab 反查（xfree/xrealloc 定位）：按 base 升序，二分查找
+static Slab** g_slab_ranges = NULL;
+static size_t g_slab_range_count = 0;
+static size_t g_slab_range_cap = 0;
+
+// 反查数组的裸分配：slab_create 在持 g_slab_mu 期间调用，不能走 xmalloc（会重入锁）
+static void* slab_raw_alloc(size_t n) {
+    size_t pg = PX_PAGE;
     size_t total = (n + sizeof(size_t) + pg - 1) & ~(size_t)(pg - 1);
     void* p = mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (p == MAP_FAILED) { fprintf(stderr, "lx: 内存不足\n"); exit(1); }
-    *(size_t*)p = total;   // 记录映射大小（xfree/xrealloc 使用）
+    *(size_t*)p = total;
     return (char*)p + sizeof(size_t);
 }
-
-static void xfree(void* p) {
+static void slab_raw_free(void* p) {
     if (!p) return;
     size_t total = *(size_t*)((char*)p - sizeof(size_t));
     munmap((char*)p - sizeof(size_t), total);
 }
 
+static int slab_class_index(size_t n) {
+    for (int i = 0; i < SLAB_CLASS_COUNT; i++) {
+        if (n <= slab_classes[i]) return i;
+    }
+    return -1;  // 大对象
+}
+
+static int slab_cmp(const void* a, const void* b) {
+    const Slab* sa = *(const Slab* const*)a;
+    const Slab* sb = *(const Slab* const*)b;
+    if (sa->base < sb->base) return -1;
+    if (sa->base > sb->base) return 1;
+    return 0;
+}
+
+// 创建新 slab（调用方须持 g_slab_mu）：映射可容纳 ≥4 槽的页数，初始化空闲链表
+static Slab* slab_create(size_t class_size, int class_idx) {
+    size_t slot_count = (4 * class_size + PX_PAGE - 1) / PX_PAGE;  // 至少 4 槽的页数
+    size_t pages = slot_count < 1 ? 1 : slot_count;
+    size_t slab_bytes = pages * PX_PAGE;
+    // 头部对齐：Slab 结构体放映射起点，槽区紧随其后（8 字节对齐）
+    size_t header = (sizeof(Slab) + 7) & ~(size_t)7;
+    size_t slots_in_bytes = (slab_bytes - header) / class_size;
+    if (slots_in_bytes < 1) slots_in_bytes = 1;
+    void* p = mmap(NULL, slab_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) { fprintf(stderr, "lx: 内存不足\n"); exit(1); }
+    Slab* s = (Slab*)p;
+    s->next = g_slab_heads[class_idx];
+    s->base = p;
+    s->class_size = class_size;
+    s->slot_count = slots_in_bytes;
+    s->free_count = slots_in_bytes;
+    s->free_head = NULL;
+    char* slots = (char*)p + header;
+    // 空闲链表：从后往前串（槽内首 word 存 next）
+    void* head = NULL;
+    for (size_t i = slots_in_bytes; i > 0; i--) {
+        void* slot = slots + (i - 1) * class_size;
+        *(void**)slot = head;
+        head = slot;
+    }
+    s->free_head = head;
+    g_slab_heads[class_idx] = s;
+    // 插入反查数组（保持按 base 升序）
+    if (g_slab_range_count >= g_slab_range_cap) {
+        size_t ncap = g_slab_range_cap ? g_slab_range_cap * 2 : 64;
+        Slab** nr = (Slab**)slab_raw_alloc(ncap * sizeof(Slab*));
+        if (g_slab_ranges) { memcpy(nr, g_slab_ranges, g_slab_range_count * sizeof(Slab*)); slab_raw_free(g_slab_ranges); }
+        g_slab_ranges = nr;
+        g_slab_range_cap = ncap;
+    }
+    size_t pos = 0;
+    while (pos < g_slab_range_count && g_slab_ranges[pos]->base < p) pos++;
+    memmove(&g_slab_ranges[pos + 1], &g_slab_ranges[pos], (g_slab_range_count - pos) * sizeof(Slab*));
+    g_slab_ranges[pos] = s;
+    g_slab_range_count++;
+    return s;
+}
+
+// 指针 → slab（二分；返回 NULL 表示 mmap 大对象）
+static Slab* slab_find(const void* p) {
+    if (g_slab_range_count == 0) return NULL;
+    size_t lo = 0, hi = g_slab_range_count;
+    while (lo < hi) {
+        size_t mid = (lo + hi) / 2;
+        Slab* s = g_slab_ranges[mid];
+        if (p < s->base) hi = mid;
+        else {
+            size_t header = (sizeof(Slab) + 7) & ~(size_t)7;
+            void* end = (char*)s->base + ((header + s->slot_count * s->class_size + PX_PAGE - 1) & ~(size_t)(PX_PAGE - 1));
+            if ((const char*)p < (const char*)end) return s;
+            lo = mid + 1;
+        }
+    }
+    return NULL;
+}
+
+static void* xmalloc(size_t n) {
+    if (n <= 0) n = 1;
+    int ci = slab_class_index(n);
+    if (ci < 0) {  // 大对象：mmap 每分配一映射（带大小头，行为同 M11）
+        size_t pg = PX_PAGE;
+        size_t total = (n + sizeof(size_t) + pg - 1) & ~(size_t)(pg - 1);
+        void* p = mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (p == MAP_FAILED) { fprintf(stderr, "lx: 内存不足\n"); exit(1); }
+        *(size_t*)p = total;
+        return (char*)p + sizeof(size_t);
+    }
+    size_t cs = slab_classes[ci];
+    sigset_t old;
+    gc_block_stop(&old);
+    pthread_mutex_lock(&g_slab_mu);
+    Slab* s = g_slab_heads[ci];
+    if (!s || s->free_count == 0) s = slab_create(cs, ci);
+    void* slot = s->free_head;
+    s->free_head = *(void**)slot;
+    s->free_count--;
+    pthread_mutex_unlock(&g_slab_mu);
+    gc_unblock_stop(&old);
+    memset(slot, 0, cs);   // 清零：gc_mark 等字段依赖零初始化
+    return slot;
+}
+
+static void xfree(void* p) {
+    if (!p) return;
+    sigset_t old;
+    gc_block_stop(&old);
+    pthread_mutex_lock(&g_slab_mu);
+    Slab* s = slab_find(p);
+    if (s) {
+        *(void**)p = s->free_head;
+        s->free_head = p;
+        s->free_count++;
+        pthread_mutex_unlock(&g_slab_mu);
+        gc_unblock_stop(&old);
+        return;
+    }
+    pthread_mutex_unlock(&g_slab_mu);
+    gc_unblock_stop(&old);
+    size_t total = *(size_t*)((char*)p - sizeof(size_t));
+    munmap((char*)p - sizeof(size_t), total);
+}
+
+// 分配容量（xrealloc 用：slab → class 大小；mmap → 记录大小）
+static size_t xalloc_cap(const void* p) {
+    Slab* s = slab_find(p);
+    if (s) return s->class_size;
+    return *(size_t*)((char*)p - sizeof(size_t)) - sizeof(size_t);
+}
+
 static void* xrealloc(void* p, size_t n) {
     if (!p) return xmalloc(n);
-    size_t old_size = *(size_t*)((char*)p - sizeof(size_t)) - sizeof(size_t);
-    if (n <= old_size) return p;   // 容量足够，不缩小
+    if (n <= 0) n = 1;
+    size_t cap = xalloc_cap(p);
+    if (n <= cap) return p;   // 容量足够，不缩小
     void* np = xmalloc(n);
-    memcpy(np, p, old_size);
+    memcpy(np, p, cap < n ? cap : n);
     xfree(p);
     return np;
 }
@@ -2232,6 +2392,106 @@ static LXValue bi_base64_decode(LXValue* args, int nargs, void* ctx) {
     return r;
 }
 
+// ==================== M22 P1：位运算 / 二进制数据视图 ====================
+// int_to_hex(n, width) → str（固定宽度小写 hex，负数按补码取低 4*width 位）
+static LXValue bi_int_to_hex(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) px_error("int_to_hex 需要 (n, width) 参数");
+    int64_t n = int_val(args[0]);
+    int64_t w = int_val(args[1]);
+    if (w < 1 || w > 16) px_error("int_to_hex 的 width 必须在 1..16");
+    uint64_t mask = (w >= 16) ? ~0ULL : ((1ULL << (4 * (int)w)) - 1);
+    uint64_t v = (uint64_t)n & mask;
+    char out[40];
+    snprintf(out, sizeof(out), "%0*llx", (int)w, (unsigned long long)v);
+    return px_str(out);
+}
+
+// hex_to_int(hex) → int 或 null（非法 → null；允许空白）
+static LXValue bi_hex_to_int(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("hex_to_int 需要一个参数");
+    const char* s = val_cstr(args[0]);
+    while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r') s++;
+    if (*s == '\0') return px_null();
+    char* end = NULL;
+    errno = 0;
+    long long v = strtoll(s, &end, 16);
+    while (end && (*end == ' ' || *end == '\t' || *end == '\n' || *end == '\r')) end++;
+    if (errno != 0 || end == s || (end && *end != '\0')) return px_null();
+    return px_int((int64_t)v);
+}
+
+// bytes_to_hex(data) → str（字节 → 小写 hex；非字符串自动字符串化）
+static LXValue bi_bytes_to_hex(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("bytes_to_hex 需要一个参数");
+    const char* data = val_cstr(args[0]);
+    size_t len = strlen(data);
+    char* out = xmalloc(len * 2 + 1);
+    bytes_to_hex((const unsigned char*)data, len, out);
+    LXValue r = px_str(out);
+    xfree(out);
+    return r;
+}
+
+// hex_to_bytes(hex) → str 或 null（hex → 原始字节；非法/奇数长度 → null）
+static LXValue bi_hex_to_bytes(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("hex_to_bytes 需要一个参数");
+    const char* s = val_cstr(args[0]);
+    size_t n = strlen(s);
+    char* clean = xmalloc(n + 1);
+    size_t m = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (s[i] != ' ' && s[i] != '\t' && s[i] != '\n' && s[i] != '\r') clean[m++] = s[i];
+    }
+    clean[m] = 0;
+    if (m % 2 != 0 || m == 0) { xfree(clean); return px_null(); }
+    size_t olen = m / 2;
+    char* out = xmalloc(olen + 1);
+    for (size_t i = 0; i < m; i += 2) {
+        int hi = -1, lo = -1;
+        char c = clean[i];
+        if (c >= '0' && c <= '9') hi = c - '0';
+        else if (c >= 'a' && c <= 'f') hi = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F') hi = c - 'A' + 10;
+        c = clean[i + 1];
+        if (c >= '0' && c <= '9') lo = c - '0';
+        else if (c >= 'a' && c <= 'f') lo = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F') lo = c - 'A' + 10;
+        if (hi < 0 || lo < 0) { xfree(clean); xfree(out); return px_null(); }
+        out[i / 2] = (char)((hi << 4) | lo);
+    }
+    out[olen] = 0;
+    xfree(clean);
+    LXValue r = px_str_len(out, (int)olen);
+    xfree(out);
+    return r;
+}
+
+// bit_count(n) → int（popcount：二进制中 1 的个数）
+static LXValue bi_bit_count(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("bit_count 需要一个参数");
+    uint64_t v = (uint64_t)int_val(args[0]);
+    int c = 0;
+    while (v) { v &= v - 1; c++; }
+    return px_int(c);
+}
+
+// bit_length(n) → int（二进制位数；n<=0 → 0）
+static LXValue bi_bit_length(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("bit_length 需要一个参数");
+    int64_t n = int_val(args[0]);
+    if (n <= 0) return px_int(0);
+    int bits = 0;
+    uint64_t v = (uint64_t)n;
+    while (v) { bits++; v >>= 1; }
+    return px_int(bits);
+}
+
 // sha256(data) → 64 字符小写 hex 字符串（mbedtls 实现，与解释器一致）
 static LXValue bi_sha256(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
@@ -3415,6 +3675,13 @@ void px_register_builtins(void) {
     px_set_global("sse_serve", px_native("sse_serve", bi_sse_serve));
     px_set_global("sse_send", px_native("sse_send", bi_sse_send));
     px_set_global("sse_close", px_native("sse_close", bi_sse_close));
+    // M22 P1：位运算 / 二进制数据视图（存储引擎序列化基石）
+    px_set_global("int_to_hex", px_native("int_to_hex", bi_int_to_hex));
+    px_set_global("hex_to_int", px_native("hex_to_int", bi_hex_to_int));
+    px_set_global("bytes_to_hex", px_native("bytes_to_hex", bi_bytes_to_hex));
+    px_set_global("hex_to_bytes", px_native("hex_to_bytes", bi_hex_to_bytes));
+    px_set_global("bit_count", px_native("bit_count", bi_bit_count));
+    px_set_global("bit_length", px_native("bit_length", bi_bit_length));
 }
 
 // ==================== 并发原语（M4.2） ====================
