@@ -39,6 +39,30 @@
 #include "mbedtls/error.h"
 #include "mbedtls/sha256.h"
 
+// M27 P0：服务端 TLS + WebServer 生产化
+// - tls_server(cert, key)：注册进程级服务端 TLS（px_serve/sse_serve/ws_serve 自动 TLS）
+// - g_cur_conn：当前线程处理中的连接（px_px_send 等旧 fd 接口自动转发 TLS 写）
+// - g_px_stop / g_px_listen_fd：优雅关闭（SIGINT/SIGTERM → 停止 accept）
+// - g_px_max_body：请求体大小上限（px_serve opts.max_body_size）
+__thread PxConn* g_cur_conn = NULL;
+static volatile sig_atomic_t g_px_stop = 0;
+static volatile sig_atomic_t g_px_listen_fd = -1;
+static int g_px_max_body = 10 * 1024 * 1024;
+volatile int g_px_inflight = 0;  // px_serve 在途请求数（优雅关闭等待归零；runtime_ws.c 共享）
+static long long g_px_body_seq = 0;       // body 落盘临时文件序号
+static mbedtls_x509_crt g_srv_cert;
+static mbedtls_pk_context g_srv_key;
+static int g_srv_tls_ready = 0;
+static pthread_mutex_t g_srv_tls_mu = PTHREAD_MUTEX_INITIALIZER;
+static LXValue bi_tls_server(LXValue* args, int nargs, void* ctx);
+static LXValue bi_session_open(LXValue* args, int nargs, void* ctx);
+static LXValue bi_session_id(LXValue* args, int nargs, void* ctx);
+static LXValue bi_session_get(LXValue* args, int nargs, void* ctx);
+static LXValue bi_session_set(LXValue* args, int nargs, void* ctx);
+static LXValue bi_session_del(LXValue* args, int nargs, void* ctx);
+static LXValue bi_session_destroy(LXValue* args, int nargs, void* ctx);
+static LXValue bi_basic_auth(LXValue* args, int nargs, void* ctx);
+
 // 前向声明：xmalloc/xfree 在 gc_block_stop 定义之前使用（M11 自由链表分配器）
 static void gc_block_stop(sigset_t* old);
 static void gc_unblock_stop(const sigset_t* old);
@@ -3871,6 +3895,15 @@ void px_register_builtins(void) {
     px_set_global("ws_close", px_native("ws_close", bi_ws_close));
     px_set_global("ws_ping", px_native("ws_ping", bi_ws_ping));
     px_set_global("ws_heartbeat", px_native("ws_heartbeat", bi_ws_heartbeat));
+    // M27 P0：WebServer 生产化四件套（服务端 TLS / Session / 基础认证）
+    px_set_global("tls_server", px_native("tls_server", bi_tls_server));
+    px_set_global("session_open", px_native("session_open", bi_session_open));
+    px_set_global("session_id", px_native("session_id", bi_session_id));
+    px_set_global("session_get", px_native("session_get", bi_session_get));
+    px_set_global("session_set", px_native("session_set", bi_session_set));
+    px_set_global("session_del", px_native("session_del", bi_session_del));
+    px_set_global("session_destroy", px_native("session_destroy", bi_session_destroy));
+    px_set_global("basic_auth", px_native("basic_auth", bi_basic_auth));
     // M22 P1：强制垃圾回收（解释器追踪式 GC / 编译模式保守标记-清除）
     px_set_global("gc", px_native("gc", bi_gc));
     // M23 P1：进程/信号（文殊场景收尾：外部工具编排、守护进程、优雅停机）
@@ -5349,6 +5382,7 @@ static int h_exchange(HPoolSlot* slot, const char* req, int rlen,
         if (dec) { xfree(body_buf); body_buf = dec; }
     }
     if (body_buf) body_buf[body_len] = 0;
+    *out_status = status;  // M27 修复：M23c 遗留——状态码解析后未回传（http_request 一直返回 0）
     *out_body = body_buf;
     *out_body_len = body_len;
     *out_keep_alive = keep_alive;
@@ -6795,7 +6829,7 @@ static LXValue bi_http_serve(LXValue* args, int nargs, void* ctx) {
 
 #define MAX_SSE_CONNS 256
 static pthread_mutex_t g_sse_mu = PTHREAD_MUTEX_INITIALIZER;
-static struct { int fd; int64_t id; int active; } g_sse_conns[MAX_SSE_CONNS];
+static struct { int fd; int64_t id; int active; PxConn* conn; } g_sse_conns[MAX_SSE_CONNS];
 static int64_t g_sse_next_id = 1;
 
 static int sse_find(int64_t id) {
@@ -6901,20 +6935,30 @@ static LXValue sse_conn_worker(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) return px_null();
     int fd = (int)args[0].as.i;
+    // M27：TLS 握手（若 tls_server 注册）→ PxConn 统一读写（堆分配共享给 sse_send）
+    PxConn* c = xmalloc(sizeof(PxConn));
+    if (px_conn_init(c, fd) != 0) { xfree(c); return px_null(); }
+    g_cur_conn = c;
+    __sync_fetch_and_add(&g_px_inflight, 1);
 
     // 1. 读请求头（直到 \r\n\r\n，上限 64KB）
     char buf[65536];
     int len = 0;
     int header_end = -1;
     while (len < (int)sizeof(buf) - 1) {
-        ssize_t n = recv(fd, buf + len, (size_t)((int)sizeof(buf) - 1 - len), 0);
+        ssize_t n = px_conn_read(c, buf + len, (size_t)((int)sizeof(buf) - 1 - len));
         if (n <= 0) break;
         len += (int)n;
         buf[len] = 0;
         char* sep = strstr(buf, "\r\n\r\n");
         if (sep) { header_end = (int)(sep - buf); break; }
     }
-    if (header_end < 0 || len == 0) { close(fd); return px_null(); }
+    if (header_end < 0 || len == 0) {
+        px_conn_close(c);  // 对象保留（closed 标记），避免并发 ws/sse 使用悬垂指针
+        __sync_fetch_and_sub(&g_px_inflight, 1);
+        g_cur_conn = NULL;
+        return px_null();
+    }
 
     // 2. 解析请求行：METHOD SP target SP version
     char* head = buf;
@@ -7011,12 +7055,13 @@ static LXValue sse_conn_worker(LXValue* args, int nargs, void* ctx) {
     g_sse_conns[slot].fd = fd;
     g_sse_conns[slot].id = conn;
     g_sse_conns[slot].active = 1;
+    g_sse_conns[slot].conn = c;
     pthread_mutex_unlock(&g_sse_mu);
     px_dict_set(req, "conn", px_int(conn));
 
     // 6. 发 SSE 响应头（连接保持，直到 sse_close / 对端断开）
     const char* hdr = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n";
-    send(fd, hdr, (int)strlen(hdr), MSG_NOSIGNAL);
+    px_conn_write(c, hdr, strlen(hdr));
 
     // 7. 调 handler（req 注入 conn；handler 内/后台线程可 sse_send）
     LXValue handler = px_get_global("__sse_handler");
@@ -7024,9 +7069,9 @@ static LXValue sse_conn_worker(LXValue* args, int nargs, void* ctx) {
         px_call(handler, &req, 1);
     }
 
-    // 8. 保持连接：recv 阻塞直到 sse_close（shutdown 唤醒）或对端断开
+    // 8. 保持连接：read 阻塞直到 sse_close（shutdown 唤醒）或对端断开
     char rb[64];
-    while (recv(fd, rb, sizeof(rb), 0) > 0) {}
+    while (px_conn_read(c, rb, sizeof(rb)) > 0) {}
 
     // 9. 清理注册 + 关闭（只在仍注册时 close，避免与 sse_close 重复关闭）
     int closed = 0;
@@ -7039,7 +7084,17 @@ static LXValue sse_conn_worker(LXValue* args, int nargs, void* ctx) {
         }
     }
     pthread_mutex_unlock(&g_sse_mu);
-    if (closed) close(fd);
+    if (closed) {
+        // 置空共享 conn 指针（sse_send 已不可再写该连接）
+        pthread_mutex_lock(&g_sse_mu);
+        for (int j = 0; j < MAX_SSE_CONNS; j++) {
+            if (g_sse_conns[j].conn == c) g_sse_conns[j].conn = NULL;
+        }
+        pthread_mutex_unlock(&g_sse_mu);
+        px_conn_close(c);  // 对象保留（closed 标记），避免并发 ws/sse 使用悬垂指针
+        __sync_fetch_and_sub(&g_px_inflight, 1);
+        g_cur_conn = NULL;
+    }
     return px_null();
 }
 
@@ -7091,13 +7146,19 @@ static LXValue bi_sse_send(LXValue* args, int nargs, void* ctx) {
         xfree(frame);
         return px_bool(false);
     }
+    PxConn* pc = g_sse_conns[idx].conn;
+    if (!pc) {
+        pthread_mutex_unlock(&g_sse_mu);
+        xfree(frame);
+        return px_bool(false);
+    }
     int fd = g_sse_conns[idx].fd;
-    ssize_t w = send(fd, frame, (int)strlen(frame), MSG_NOSIGNAL);
+    ssize_t w = px_conn_write(pc, frame, strlen(frame));
     if (w < 0) {
         g_sse_conns[idx].active = 0;
         g_sse_conns[idx].fd = -1;
-        shutdown(fd, SHUT_RDWR);
-        close(fd);
+        g_sse_conns[idx].conn = NULL;
+        px_conn_close(pc);  // 对象保留
         pthread_mutex_unlock(&g_sse_mu);
         xfree(frame);
         return px_bool(false);
@@ -7773,6 +7834,445 @@ static LXValue px_parse_urlenc(const char* body) {
 }
 
 // 发送 HTTP 响应（HEAD 只发响应头）
+// ==================== M27 P0：PxConn 连接抽象（明文/TLS 统一） ====================
+// 服务端 TLS：accept 后 px_conn_init 做 mbedtls 服务端握手（若 tls_server 已注册）。
+static int px_conn_tls_handshake(PxConn* c) {
+    mbedtls_ssl_context* ssl = (mbedtls_ssl_context*)c->ssl;
+    mbedtls_ssl_config* conf = (mbedtls_ssl_config*)c->conf;
+    mbedtls_ctr_drbg_context* drbg = (mbedtls_ctr_drbg_context*)c->ctr_drbg;
+    mbedtls_entropy_context* ent = (mbedtls_entropy_context*)c->entropy;
+    const char* pers = "px_server";
+    if (mbedtls_ctr_drbg_seed(drbg, mbedtls_entropy_func, ent,
+                              (const unsigned char*)pers, strlen(pers)) != 0) return -1;
+    if (mbedtls_ssl_config_defaults(conf, MBEDTLS_SSL_IS_SERVER,
+                                    MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT) != 0) return -1;
+    mbedtls_ssl_conf_rng(conf, mbedtls_ctr_drbg_random, drbg);
+    pthread_mutex_lock(&g_srv_tls_mu);
+    int oc = mbedtls_ssl_conf_own_cert(conf, &g_srv_cert, &g_srv_key);
+    pthread_mutex_unlock(&g_srv_tls_mu);
+    if (oc != 0) return -1;
+    if (mbedtls_ssl_setup(ssl, conf) != 0) return -1;
+    mbedtls_ssl_set_bio(ssl, &c->fd, mbedtls_net_send, mbedtls_net_recv, NULL);
+    int ret;
+    while ((ret = mbedtls_ssl_handshake(ssl)) != 0) {
+        if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) return -1;
+    }
+    return 0;
+}
+
+// 初始化连接（fd 上 TLS 握手若已注册服务端证书；失败返回 -1，连接应关闭）
+int px_conn_init(PxConn* c, int fd) {
+    memset(c, 0, sizeof(*c));
+    c->fd = fd;
+    c->is_tls = 0;
+    c->rlen = 0; c->roff = 0;
+    if (!g_srv_tls_ready) return 0; // 明文
+    c->ssl = malloc(sizeof(mbedtls_ssl_context));
+    c->conf = malloc(sizeof(mbedtls_ssl_config));
+    c->ctr_drbg = malloc(sizeof(mbedtls_ctr_drbg_context));
+    c->entropy = malloc(sizeof(mbedtls_entropy_context));
+    if (!c->ssl || !c->conf || !c->ctr_drbg || !c->entropy) {
+        close(fd);
+        c->fd = -1;
+        return -1;
+    }
+    mbedtls_ssl_init((mbedtls_ssl_context*)c->ssl);
+    mbedtls_ssl_config_init((mbedtls_ssl_config*)c->conf);
+    mbedtls_ctr_drbg_init((mbedtls_ctr_drbg_context*)c->ctr_drbg);
+    mbedtls_entropy_init((mbedtls_entropy_context*)c->entropy);
+    if (px_conn_tls_handshake(c) != 0) {
+        px_conn_close(c);
+        return -1;
+    }
+    c->is_tls = 1;
+    return 0;
+}
+
+// 读：TLS 带缓冲（SSL_read 一次多读；已缓冲数据先出）
+ssize_t px_conn_read(PxConn* c, void* buf, size_t n) {
+    if (c->closed) return -1;
+    if (!c->is_tls) return recv(c->fd, buf, n, 0);
+    if (c->roff < c->rlen) {
+        size_t avail = (size_t)(c->rlen - c->roff);
+        size_t take = avail < n ? avail : n;
+        memcpy(buf, c->rbuf + c->roff, take);
+        c->roff += (int)take;
+        return (ssize_t)take;
+    }
+    c->rlen = 0; c->roff = 0;
+    int ret = mbedtls_ssl_read((mbedtls_ssl_context*)c->ssl, c->rbuf, (size_t)sizeof(c->rbuf));
+    if (ret <= 0) return ret; // 0=EOF, <0=错误
+    c->rlen = ret;
+    size_t take = (size_t)ret < n ? (size_t)ret : n;
+    memcpy(buf, c->rbuf, take);
+    c->roff = (int)take;
+    return (ssize_t)take;
+}
+
+ssize_t px_conn_write(PxConn* c, const void* buf, size_t n) {
+    if (c->closed) return -1;
+    if (!c->is_tls) return send(c->fd, buf, n, MSG_NOSIGNAL);
+    size_t off = 0;
+    while (off < n) {
+        int ret = mbedtls_ssl_write((mbedtls_ssl_context*)c->ssl,
+                                    (const unsigned char*)buf + off, n - off);
+        if (ret == MBEDTLS_ERR_SSL_WANT_WRITE || ret == MBEDTLS_ERR_SSL_WANT_READ) continue;
+        if (ret <= 0) return -1;
+        off += (size_t)ret;
+    }
+    return (ssize_t)off;
+}
+
+void px_conn_close(PxConn* c) {
+    if (!c) return;
+    if (c->closed) return;  // 幂等：已关闭
+    c->closed = 1;
+    if (c->is_tls) {
+        mbedtls_ssl_close_notify((mbedtls_ssl_context*)c->ssl);
+        mbedtls_ssl_free((mbedtls_ssl_context*)c->ssl);
+        mbedtls_ssl_config_free((mbedtls_ssl_config*)c->conf);
+        mbedtls_ctr_drbg_free((mbedtls_ctr_drbg_context*)c->ctr_drbg);
+        mbedtls_entropy_free((mbedtls_entropy_context*)c->entropy);
+        free(c->ssl); free(c->conf); free(c->ctr_drbg); free(c->entropy);
+        c->ssl = c->conf = c->ctr_drbg = c->entropy = NULL;
+    }
+    if (c->fd >= 0) { close(c->fd); c->fd = -1; }
+    c->is_tls = 0;
+}
+
+// tls_server(cert, key)：注册服务端 TLS（cert/key 为 PEM 路径或 PEM 内容）→ bool
+static LXValue bi_tls_server(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2 || args[0].type != PX_STR || args[1].type != PX_STR) {
+        px_error("tls_server 需要 (cert_pem, key_pem) 参数");
+    }
+    const char* cert = args[0].as.obj->as.str.data;
+    const char* key = args[1].as.obj->as.str.data;
+    pthread_mutex_lock(&g_srv_tls_mu);
+    mbedtls_x509_crt_init(&g_srv_cert);
+    mbedtls_pk_init(&g_srv_key);
+    int rc1 = strstr(cert, "-----BEGIN")
+        ? mbedtls_x509_crt_parse(&g_srv_cert, (const unsigned char*)cert, strlen(cert) + 1)
+        : mbedtls_x509_crt_parse_file(&g_srv_cert, cert);
+    int rc2 = strstr(key, "-----BEGIN")
+        ? mbedtls_pk_parse_key(&g_srv_key, (const unsigned char*)key, strlen(key) + 1, NULL, 0, NULL, NULL)
+        : mbedtls_pk_parse_keyfile(&g_srv_key, key, NULL, NULL, NULL);
+    if (rc1 != 0 || rc2 != 0) {
+        char eb[256];
+        mbedtls_strerror(rc1 != 0 ? rc1 : rc2, eb, sizeof(eb));
+        pthread_mutex_unlock(&g_srv_tls_mu);
+        px_error("tls_server: 证书/私钥解析失败: %s", eb);
+    }
+    g_srv_tls_ready = 1;
+    pthread_mutex_unlock(&g_srv_tls_mu);
+    return px_bool(true);
+}
+
+// ==================== M27 P0：优雅关闭（SIGINT/SIGTERM） ====================
+static void px_sigstop_handler(int sig) {
+    (void)sig;
+    g_px_stop = 1;
+    int fd = (int)g_px_listen_fd;
+    if (fd >= 0) shutdown(fd, SHUT_RDWR);
+}
+
+// ==================== M27 P0：Cookie / Session（跨请求共享，文件存储） ====================
+#define PX_SESSION_TTL 7200
+#define PX_SESSION_NAME "pxsid"
+
+// 解析 Cookie 头 "a=1; b=2" → dict；返回 px_dict
+static LXValue px_parse_cookie(const char* header) {
+    LXValue d = px_dict();
+    if (!header) return d;
+    const char* p = header;
+    while (*p) {
+        while (*p == ' ' || *p == ';') p++;
+        const char* eq = strchr(p, '=');
+        if (!eq) break;
+        char k[256]; int kl = (int)(eq - p);
+        if (kl > 255) kl = 255;
+        memcpy(k, p, (size_t)kl); k[kl] = 0;
+        const char* v = eq + 1;
+        while (*v == ' ') v++;
+        const char* semi = strchr(v, ';');
+        int vl = semi ? (int)(semi - v) : (int)strlen(v);
+        while (vl > 0 && (v[vl-1] == ' ' || v[vl-1] == '\r')) vl--;
+        if (vl > 0 && v[0] == '"' && v[vl-1] == '"') { v++; vl -= 2; }
+        char vbuf[1024]; if (vl > 1023) vl = 1023;
+        memcpy(vbuf, v, (size_t)vl); vbuf[vl] = 0;
+        px_dict_set(d, k, px_str(vbuf));
+        p = semi ? semi + 1 : v + strlen(v);
+    }
+    return d;
+}
+
+// 从 headers dict 取指定头（大小写不敏感）→ str 或 null
+static LXValue px_header_get(const LXValue* headers, const char* name) {
+    if (headers->type != PX_DICT) return px_null();
+    LXObject* o = headers->as.obj;
+    for (int i = 0; i < o->as.dict.len; i++) {
+        if (strcasecmp(o->as.dict.keys[i], name) == 0) return o->as.dict.vals[i];
+    }
+    return px_null();
+}
+
+// 读整个文件（≤16MB）→ 1 成功 / 0 失败
+static int px_read_whole_file(const char* path, char** out, int* out_len) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return 0;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz < 0 || sz > 16 * 1024 * 1024) { fclose(f); return 0; }
+    char* buf = xmalloc((size_t)sz + 1);
+    size_t got = fread(buf, 1, (size_t)sz, f);
+    fclose(f);
+    buf[got] = 0;
+    *out = buf;
+    *out_len = (int)got;
+    return 1;
+}
+
+// session 存储：文件 /tmp/px_sessions/<sid>.json（worker 进程间共享，flock 并发安全）
+static const char* px_session_dir(void) {
+    static char dir[512];
+    if (!dir[0]) {
+        const char* e = getenv("PX_SESSION_DIR");
+        snprintf(dir, sizeof(dir), "%s", e && *e ? e : "/tmp/px_sessions");
+        mkdir(dir, 0700);
+    }
+    return dir;
+}
+
+static void px_session_path(char* out, size_t n, const char* sid) {
+    snprintf(out, n, "%s/%s.json", px_session_dir(), sid);
+}
+
+// 读 session 文件 → dict{data, exp} 或 null
+static LXValue px_session_read(const char* sid) {
+    char path[1024];
+    px_session_path(path, sizeof(path), sid);
+    char* data = NULL; int len = 0;
+    if (!px_read_whole_file(path, &data, &len)) return px_null();
+    LXValue v = px_str_len(data, len);
+    xfree(data);
+    LXValue j = px_call(px_get_global("json_parse"), &v, 1);
+    if (j.type != PX_DICT) return px_null();
+    return j;
+}
+
+static int px_session_valid(const LXValue* sess, long long now) {
+    if (sess->type != PX_DICT) return 0;
+    LXValue exp = px_dict_get(*sess, "exp");
+    return exp.type == PX_INT && exp.as.i > now;
+}
+
+// 写 session 文件（原子：tmp + rename；flock 串行）
+static void px_session_write(const char* sid, const LXValue* sess) {
+    char path[1024], tmp[1080];
+    px_session_path(path, sizeof(path), sid);
+    snprintf(tmp, sizeof(tmp), "%s.tmp.%d", path, (int)getpid());
+    LXValue j = px_call(px_get_global("json_stringify"), (LXValue*)sess, 1);
+    if (j.type != PX_STR) return;
+    FILE* f = fopen(tmp, "wb");
+    if (!f) return;
+    int fl = j.as.obj->as.str.len;
+    if (fwrite(j.as.obj->as.str.data, 1, (size_t)fl, f) != (size_t)fl) {
+        fclose(f); unlink(tmp); return;
+    }
+    fclose(f);
+    rename(tmp, path);
+}
+
+// 清理过期 session（px_serve 启动时）
+static void px_session_sweep(void) {
+    DIR* d = opendir(px_session_dir());
+    if (!d) return;
+    long long now = (long long)time(NULL);
+    struct dirent* e;
+    while ((e = readdir(d)) != NULL) {
+        if (e->d_name[0] == '.') continue;
+        char sid[512]; strncpy(sid, e->d_name, sizeof(sid) - 8);
+        char* dot = strstr(sid, ".json");
+        if (!dot) continue;
+        *dot = 0;
+        LXValue sess = px_session_read(sid);
+        if (!px_session_valid(&sess, now)) {
+            char path[1024]; px_session_path(path, sizeof(path), sid);
+            unlink(path);
+        }
+    }
+    closedir(d);
+}
+
+// 生成新 session id（时间 + pid + 计数器 hex）
+static void px_new_session_id(char* out, size_t n) {
+    static long long seq = 0;
+    long long s = __sync_fetch_and_add(&seq, 1);
+    snprintf(out, n, "%llx%llx%llx",
+             (unsigned long long)time(NULL), (unsigned long long)getpid(), (unsigned long long)s);
+}
+
+// thread-local：当前请求 session id / 待注入 Set-Cookie / 基础认证失败 realm
+static __thread char g_cur_sid[256];
+static __thread int g_cur_sid_set = 0;
+static __thread char g_session_cookie[512];
+static __thread int g_session_cookie_set = 0;
+static __thread char g_auth_realm[128];
+static __thread int g_auth_realm_set = 0;
+
+// 重置请求线程局部状态（每请求结束调用）
+static void px_reset_request_state(void) {
+    g_cur_sid_set = 0;
+    g_cur_sid[0] = 0;
+    g_session_cookie_set = 0;
+    g_session_cookie[0] = 0;
+    g_auth_realm_set = 0;
+    g_auth_realm[0] = 0;
+}
+
+// session_open()：读 REQUEST.cookie[pxsid] 复用/新建；新会话 Set-Cookie 记录待注入
+// （worker 内 session 数据存文件，跨 worker 共享；Set-Cookie 经 PX_DUMP_RESPONSE 回传父进程）
+static LXValue bi_session_open(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 0) px_error("session_open 不需要参数");
+    LXValue req = px_get_global("REQUEST");
+    const char* sid = "";
+    if (req.type == PX_DICT) {
+        LXValue ck = px_dict_get(req, "cookie");
+        if (ck.type == PX_DICT) {
+            LXValue v = px_dict_get(ck, PX_SESSION_NAME);
+            if (v.type == PX_STR) sid = v.as.obj->as.str.data;
+        }
+    }
+    long long now = (long long)time(NULL);
+    if (sid && *sid && strlen(sid) < 256) {
+        LXValue sess = px_session_read(sid);
+        if (px_session_valid(&sess, now)) {
+            // 续期 + 复用
+            LXValue exp = px_int(now + PX_SESSION_TTL);
+            px_dict_set(sess, "exp", exp);
+            px_session_write(sid, &sess);
+            strncpy(g_cur_sid, sid, sizeof(g_cur_sid) - 1);
+            g_cur_sid_set = 1;
+            return px_str(sid);
+        }
+    }
+    char nid[256];
+    px_new_session_id(nid, sizeof(nid));
+    LXValue data = px_dict();
+    LXValue sess = px_dict();
+    px_dict_set(sess, "data", data);
+    px_dict_set(sess, "exp", px_int(now + PX_SESSION_TTL));
+    px_session_write(nid, &sess);
+    snprintf(g_session_cookie, sizeof(g_session_cookie),
+             "%s=%s; Path=/; HttpOnly", PX_SESSION_NAME, nid);
+    g_session_cookie_set = 1;
+    strncpy(g_cur_sid, nid, sizeof(g_cur_sid) - 1);
+    g_cur_sid_set = 1;
+    return px_str(nid);
+}
+
+// 当前 session data dict（未 open / 已过期 → null）
+static LXValue px_cur_session_data(void) {
+    if (!g_cur_sid_set) return px_null();
+    long long now = (long long)time(NULL);
+    LXValue sess = px_session_read(g_cur_sid);
+    if (!px_session_valid(&sess, now)) return px_null();
+    return px_dict_get(sess, "data");
+}
+
+static LXValue bi_session_id(LXValue* args, int nargs, void* ctx) {
+    (void)args; (void)nargs; (void)ctx;
+    if (g_cur_sid_set && *g_cur_sid) return px_str(g_cur_sid);
+    return px_null();
+}
+
+static LXValue bi_session_get(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_STR) px_error("session_get 需要 (key) 参数");
+    LXValue data = px_cur_session_data();
+    if (data.type != PX_DICT) return px_null();
+    return px_dict_get(data, args[0].as.obj->as.str.data);
+}
+
+static LXValue bi_session_set(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2 || args[0].type != PX_STR) px_error("session_set 需要 (key, value) 参数");
+    if (!g_cur_sid_set) return px_bool(false);
+    LXValue sess = px_session_read(g_cur_sid);
+    long long now = (long long)time(NULL);
+    if (!px_session_valid(&sess, now)) {
+        sess = px_dict();
+        px_dict_set(sess, "data", px_dict());
+        px_dict_set(sess, "exp", px_int(now + PX_SESSION_TTL));
+    }
+    LXValue data = px_dict_get(sess, "data");
+    if (data.type != PX_DICT) { data = px_dict(); px_dict_set(sess, "data", data); }
+    px_dict_set(data, args[0].as.obj->as.str.data, args[1]);
+    px_session_write(g_cur_sid, &sess);
+    return px_bool(true);
+}
+
+static LXValue bi_session_del(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_STR) px_error("session_del 需要 (key) 参数");
+    LXValue data = px_cur_session_data();
+    if (data.type != PX_DICT) return px_bool(false);
+    LXValue sess = px_session_read(g_cur_sid);
+    LXValue nd = px_dict();
+    LXObject* o = data.as.obj;
+    for (int i = 0; i < o->as.dict.len; i++) {
+        if (strcmp(o->as.dict.keys[i], args[0].as.obj->as.str.data) != 0)
+            px_dict_set(nd, o->as.dict.keys[i], o->as.dict.vals[i]);
+    }
+    px_dict_set(sess, "data", nd);
+    px_session_write(g_cur_sid, &sess);
+    return px_bool(true);
+}
+
+static LXValue bi_session_destroy(LXValue* args, int nargs, void* ctx) {
+    (void)args; (void)nargs; (void)ctx;
+    if (!g_cur_sid_set) return px_bool(false);
+    char path[1024];
+    px_session_path(path, sizeof(path), g_cur_sid);
+    int rc = unlink(path) == 0;
+    g_cur_sid_set = 0;
+    g_cur_sid[0] = 0;
+    return px_bool(rc);
+}
+
+// basic_auth(user, pass)：校验 Authorization: Basic；失败记录 realm（响应 401 注入）
+static LXValue bi_basic_auth(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2 || args[0].type != PX_STR || args[1].type != PX_STR) {
+        px_error("basic_auth 需要 (user, pass) 参数");
+    }
+    LXValue req = px_get_global("REQUEST");
+    LXValue hdr = px_null();
+    if (req.type == PX_DICT) {
+        LXValue headers = px_dict_get(req, "headers");
+        if (headers.type == PX_DICT) hdr = px_header_get(&headers, "Authorization");
+    }
+    if (hdr.type == PX_STR) {
+        const char* h = hdr.as.obj->as.str.data;
+        if (strncasecmp(h, "Basic ", 6) == 0) {
+            // base64 解码 user:pass
+            LXValue b64 = px_str(h + 6);
+            LXValue decoded = px_call(px_get_global("base64_decode"), &b64, 1);
+            if (decoded.type == PX_STR) {
+                char expect[512];
+                snprintf(expect, sizeof(expect), "%s:%s",
+                         args[0].as.obj->as.str.data, args[1].as.obj->as.str.data);
+                if (strcmp(decoded.as.obj->as.str.data, expect) == 0) return px_bool(true);
+            }
+        }
+    }
+    strncpy(g_auth_realm, "px", sizeof(g_auth_realm) - 1);
+    g_auth_realm_set = 1;
+    return px_bool(false);
+}
+
 static void px_px_send(int fd, int status, const char* ct, const char* body, int body_len, int head_only) {
     const char* reason = px_http_status_reason(status);
     char head[1024];
@@ -7781,8 +8281,13 @@ static void px_px_send(int fd, int status, const char* ct, const char* body, int
                        status, reason, body_len);
     if (ct && *ct) off += snprintf(head + off, sizeof(head) - (size_t)off, "Content-Type: %s\r\n", ct);
     off += snprintf(head + off, sizeof(head) - (size_t)off, "\r\n");
-    send(fd, head, off, 0);
-    if (!head_only && body_len > 0) send(fd, body, body_len, 0);
+    if (g_cur_conn && g_cur_conn->is_tls) {
+        px_conn_write(g_cur_conn, head, (size_t)off);
+        if (!head_only && body_len > 0) px_conn_write(g_cur_conn, body, (size_t)body_len);
+    } else {
+        send(fd, head, off, 0);
+        if (!head_only && body_len > 0) send(fd, body, body_len, 0);
+    }
 }
 
 // 连接处理线程（px_spawn 注册）：args[0] = fd
@@ -7790,25 +8295,33 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) return px_null();
     int fd = (int)args[0].as.i;
+    // M27：TLS 握手（若 tls_server 注册）→ PxConn 统一读写
+    PxConn conn;
+    char body_tmp_path[1024] = {0};
+    int body_tmp_file = -1;
+    char* body_buf = NULL;
+    if (px_conn_init(&conn, fd) != 0) { return px_null(); }
+    g_cur_conn = &conn;
+    __sync_fetch_and_add(&g_px_inflight, 1);
 
     // 1. 读请求头（直到 \r\n\r\n，上限 64KB）
     char buf[65536];
     int len = 0;
     int header_end = -1;
     while (len < (int)sizeof(buf) - 1) {
-        ssize_t n = recv(fd, buf + len, (size_t)((int)sizeof(buf) - 1 - len), 0);
+        ssize_t n = px_conn_read(&conn, buf + len, (size_t)((int)sizeof(buf) - 1 - len));
         if (n <= 0) break;
         len += (int)n;
         buf[len] = 0;
         char* sep = strstr(buf, "\r\n\r\n");
         if (sep) { header_end = (int)(sep - buf); break; }
     }
-    if (header_end < 0 || len == 0) { close(fd); return px_null(); }
+    if (header_end < 0 || len == 0) { px_conn_close(&conn); close(fd); return px_null(); }
 
     // 2. 请求行
     char* head = buf;
     char* sp1 = strchr(head, ' ');
-    if (!sp1) { close(fd); return px_null(); }
+    if (!sp1) { px_conn_close(&conn); close(fd); return px_null(); }
     *sp1 = 0;
     char* method = head;
     char* target = sp1 + 1;
@@ -7853,25 +8366,50 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         hline = eol ? eol + 2 : hline + strlen(hline);
     }
 
-    // 4. 读 body
-    char body_buf[65536] = {0};
+    // 4. 读 body（M27：max_body_size 限制 → 413；>1MB 落盘临时文件防内存溢出）
     int body_len = 0;
     if (content_length > 0) {
+        if (content_length > g_px_max_body) {
+            px_px_send(fd, 413, "text/plain; charset=utf-8", "413 Payload Too Large", 24, 0);
+            goto px_done;
+        }
         int body_off = header_end + 4;
         int have = len - body_off;
-        if (have > 0) {
-            int take = have < content_length ? have : content_length;
-            if (take > (int)sizeof(body_buf) - 1) take = (int)sizeof(body_buf) - 1;
-            memcpy(body_buf, buf + body_off, (size_t)take);
-            body_len = take;
+        if (have > 0 && have > content_length) have = content_length;
+        if (content_length > 1024 * 1024) {
+            // 大 body → 落盘（REQUEST.body_tmp 给出路径）
+            const char* tmpdir = getenv("PX_BODY_TMP_DIR");
+            if (!tmpdir || !*tmpdir) tmpdir = "/tmp";
+            snprintf(body_tmp_path, sizeof(body_tmp_path), "%s/px_body_%d_%d.tmp",
+                     tmpdir, (int)getpid(), (int)__sync_fetch_and_add(&g_px_body_seq, 1));
+            body_tmp_file = open(body_tmp_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+            if (body_tmp_file < 0) {
+                px_px_send(fd, 500, "text/plain; charset=utf-8", "500 创建 body 临时文件失败", 26, 0);
+                goto px_done;
+            }
+            if (have > 0) (void)write(body_tmp_file, buf + body_off, (size_t)have);
+            int remaining = content_length - have;
+            char tmpb[16384];
+            while (remaining > 0) {
+                ssize_t n = px_conn_read(&conn, tmpb, sizeof(tmpb));
+                if (n <= 0) break;
+                (void)write(body_tmp_file, tmpb, (size_t)n);
+                remaining -= (int)n;
+            }
+            close(body_tmp_file);
+            body_tmp_file = -1;
+        } else {
+            body_buf = xmalloc((size_t)content_length + 1);
+            int got = have;
+            if (have > 0) memcpy(body_buf, buf + body_off, (size_t)have);
+            while (got < content_length) {
+                ssize_t n = px_conn_read(&conn, body_buf + got, (size_t)(content_length - got));
+                if (n <= 0) break;
+                got += (int)n;
+            }
+            body_len = got;
+            body_buf[body_len] = 0;
         }
-        while (body_len < content_length && body_len < (int)sizeof(body_buf) - 1) {
-            ssize_t n = recv(fd, body_buf + body_len, (size_t)((int)sizeof(body_buf) - 1 - body_len), 0);
-            if (n <= 0) break;
-            body_len += (int)n;
-        }
-        if (body_len > content_length) body_len = content_length;
-        body_buf[body_len] = 0;
     }
 
     // 5. 请求 dict + form/files（Content-Type 驱动）
@@ -7882,7 +8420,21 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
     px_dict_set(req, "query", px_str(query));
     px_dict_set(req, "version", px_str("HTTP/1.1"));
     px_dict_set(req, "headers", headers);
-    px_dict_set(req, "body", px_str_len(body_buf, body_len));
+    if (body_tmp_path[0]) {
+        px_dict_set(req, "body", px_str(""));
+        px_dict_set(req, "body_tmp", px_str(body_tmp_path));
+    } else {
+        px_dict_set(req, "body", px_str_len(body_buf, body_len));
+    }
+    // M27：Cookie 解析 → REQUEST.cookie（session_open / 应用层直接用）
+    {
+        LXValue ckv = px_header_get(&headers, "Cookie");
+        if (ckv.type == PX_STR) {
+            px_dict_set(req, "cookie", px_parse_cookie(ckv.as.obj->as.str.data));
+        } else {
+            px_dict_set(req, "cookie", px_dict());
+        }
+    }
     LXValue form = px_dict();
     {
         struct sockaddr_in raddr;
@@ -7897,7 +8449,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
     }
     LXValue ct_v = px_dict_get_ci(headers, "Content-Type");
     const char* ct = (ct_v.type == PX_STR) ? ct_v.as.obj->as.str.data : "";
-    if (body_len > 0) {
+    if (body_len > 0 && body_buf) {
         if (strstr(ct, "multipart/form-data")) {
             char* boundary = px_mime_boundary(ct);
             if (boundary) {
@@ -7922,8 +8474,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
     while (*pp) {
         if (pp[0] == '.' && pp[1] == '.' && (pp[2] == 0 || pp[2] == '/')) {
             px_px_send(fd, 403, "text/plain; charset=utf-8", "403 Forbidden: 路径穿越被拒绝", 30, strcmp(method, "HEAD") == 0);
-            close(fd);
-            return px_null();
+            goto px_done;
         }
         pp++;
     }
@@ -7933,8 +8484,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
     struct stat st;
     if (stat(full, &st) != 0) {
         px_px_send(fd, 404, "text/plain; charset=utf-8", "404 Not Found", 13, strcmp(method, "HEAD") == 0);
-        close(fd);
-        return px_null();
+        goto px_done;
     }
     // 目录 → index.px / index.html
     char fpath[4096];
@@ -7987,6 +8537,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
             px_px_send(fd, 500, "text/plain; charset=utf-8", msg, ml, head_only);
         } else {
             // 解析脚本 RESPONSE 全局变量（px run 以 __PX_RESPONSE__:JSON 打印到 stdout 尾部）
+            fprintf(stderr, "[dbg] px_pool_run rc=%d exit=%d outlen=%d out=%.200s\n", rc, exit_code, out_len, out ? out : "(null)");
             int status = 200;
             const char* ct = "text/html; charset=utf-8";
             char* body = out;
@@ -8028,8 +8579,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         FILE* f = fopen(fpath, "rb");
         if (!f) {
             px_px_send(fd, 404, "text/plain; charset=utf-8", "404 Not Found", 13, head_only);
-            close(fd);
-            return px_null();
+            goto px_done;
         }
         fseek(f, 0, SEEK_END);
         long fsz = ftell(f);
@@ -8042,14 +8592,21 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         px_px_send(fd, 200, ct2, data, (int)got, head_only);
         xfree(data);
     }
-    close(fd);
+px_done:
+    if (body_tmp_path[0]) unlink(body_tmp_path);
+    if (body_tmp_file >= 0) close(body_tmp_file);
+    if (body_buf) xfree(body_buf);
+    px_reset_request_state();
+    px_conn_close(&conn);
+    __sync_fetch_and_sub(&g_px_inflight, 1);
+    g_cur_conn = NULL;
     return px_null();
 }
 
 // px_serve(port, docroot[, timeout_ms])：阻塞 accept 循环（Go 风格），每连接 px_spawn 处理
 static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 2 || nargs > 3) px_error("px_serve 需要 (port, docroot[, timeout_ms]) 参数");
+    if (nargs < 2 || nargs > 4) px_error("px_serve 需要 (port, docroot[, timeout_ms[, opts]]) 参数");
     if (args[0].type != PX_INT) px_error("px_serve 的 port 需要整数");
     if (args[1].type != PX_STR) px_error("px_serve 的 docroot 需要字符串");
     const char* docroot = args[1].as.obj->as.str.data;
@@ -8058,9 +8615,15 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
         px_error("px_serve: docroot 不是有效目录: %s", docroot);
     }
     int timeout_ms = 10000;
-    if (nargs == 3 && args[2].type == PX_INT) timeout_ms = (int)args[2].as.i;
+    if (nargs >= 3 && args[2].type == PX_INT) timeout_ms = (int)args[2].as.i;
     if (timeout_ms < 1) timeout_ms = 1;
     int port = (int)args[0].as.i;
+    // M27：opts = {max_body_size, body_tmp_dir}
+    g_px_max_body = 10 * 1024 * 1024;
+    if (nargs >= 4 && args[3].type == PX_DICT) {
+        LXValue mb = px_dict_get(args[3], "max_body_size");
+        if (mb.type == PX_INT) g_px_max_body = (int)(mb.as.i >= 1024 ? mb.as.i : 1024);
+    }
     // docroot / timeout / port 存全局表（GC 扫描根）
     px_set_global("__px_docroot", px_str(docroot));
     px_set_global("__px_timeout", px_int(timeout_ms));
@@ -8083,14 +8646,33 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
         close(sfd);
         px_error("px_serve: listen 失败");
     }
-    fprintf(stderr, "[px-serve] 普贤应用服务器 docroot=%s 端口=%d 超时=%dms\n", docroot, port, timeout_ms);
+    // M27：优雅关闭（SIGINT/SIGTERM → 停止 accept，等待在途请求）
+    g_px_stop = 0;
+    g_px_listen_fd = sfd;
+    signal(SIGINT, px_sigstop_handler);
+    signal(SIGTERM, px_sigstop_handler);
+    px_session_sweep();
+    fprintf(stderr, "[px-serve] 普贤应用服务器 docroot=%s 端口=%d 超时=%dms tls=%d max_body=%d\n",
+            docroot, port, timeout_ms, g_srv_tls_ready, g_px_max_body);
     for (;;) {
+        if (g_px_stop) break;
         int cfd = accept(sfd, NULL, NULL);
-        if (cfd < 0) continue;
+        if (cfd < 0) {
+            if (g_px_stop) break;
+            continue;
+        }
         LXValue arg = px_int(cfd);
         px_spawn(px_conn_worker, &arg, 1);
     }
-    return px_null(); // 不可达
+    g_px_listen_fd = -1;
+    close(sfd);
+    // 等待在途请求（最多 5s）
+    for (int i = 0; i < 100 && g_px_inflight > 0; i++) {
+        struct timespec ts = {0, 50 * 1000 * 1000};
+        nanosleep(&ts, NULL);
+    }
+    fprintf(stderr, "[px-serve] 优雅关闭完成（在途 %d）\n", g_px_inflight);
+    return px_null();
 }
 
 // px_exec(path, params?)：子进程执行 `px run` 并捕获 stdout

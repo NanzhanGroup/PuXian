@@ -9,6 +9,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <pthread.h>
+#include <sys/types.h>   // ssize_t（PxConn 读写返回）
 
 #ifdef __cplusplus
 extern "C" {
@@ -256,6 +257,31 @@ void px_error(const char* fmt, ...) __attribute__((noreturn));
 void px_gc_collect(void);
 // 返回 GC 次数；live 输出当前存活对象数，total 输出累计回收对象数
 int px_gc_stats(int* live, int* total);
+
+// ==================== M27 P0：服务端 TLS / PxConn 连接抽象 ====================
+// PxConn 统一明文/TLS 连接（px_serve / sse_serve / ws_serve 服务端用）：
+// TLS 成员用 void* 保持 runtime.h 不依赖 mbedtls 头文件（runtime.c 内转型使用）。
+typedef struct PxConn {
+    int fd;
+    int is_tls;        // 1 = TLS（已握手）
+    void* ssl;         // mbedtls_ssl_context*
+    void* conf;        // mbedtls_ssl_config*
+    void* ctr_drbg;    // mbedtls_ctr_drbg_context*
+    void* entropy;     // mbedtls_entropy_context*
+    unsigned char rbuf[16384]; // TLS 读缓冲（SSL_read 一次可多读）
+    int rlen, roff;
+    int closed;        // 连接已关闭（px_conn_close 置 1；对象保留避免并发 use-after-free）
+} PxConn;
+
+// 初始化（fd 上做 TLS 握手若服务端 TLS 已注册；失败返回 -1）
+int px_conn_init(PxConn* c, int fd);
+ssize_t px_conn_read(PxConn* c, void* buf, size_t n);
+ssize_t px_conn_write(PxConn* c, const void* buf, size_t n);
+void px_conn_close(PxConn* c);
+// 当前线程正在处理的连接（px_px_send 等旧 fd 接口自动转发 TLS 写）
+extern __thread PxConn* g_cur_conn;
+// 在途请求数（px_serve/sse_serve/ws_serve 连接线程计数；优雅关闭等待归零）
+extern volatile int g_px_inflight;
 
 #ifdef __cplusplus
 }

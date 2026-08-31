@@ -38,6 +38,7 @@ static struct {
     int closed;        // 已发送/收到 close（停止使用）
     long long last_activity; // 最近读到任何帧的时间（毫秒，0=未初始化；ws_heartbeat 超时检测）
     int hb_active;           // 心跳线程已启动（防重复）
+    PxConn* conn;            // M27：连接对象（明文/TLS 统一读写；TLS 时共享指针）
 } g_ws_conns[MAX_WS_CONNS];
 static int64_t g_ws_next_id = 1;
 
@@ -82,6 +83,24 @@ static int ws_get_fd(int64_t id, int* is_client) {
     return fd;
 }
 
+// M27：取连接对象（TLS/明文统一；不持锁做 IO）。返回 NULL 表示不存在/已关闭。
+static PxConn* ws_get_conn(int64_t id, int* is_client) {
+    PxConn* c = NULL;
+    pthread_mutex_lock(&g_ws_mu);
+    int idx = ws_find(id);
+    if (idx >= 0 && !g_ws_conns[idx].closed) {
+        c = g_ws_conns[idx].conn;
+        if (is_client) *is_client = g_ws_conns[idx].client;
+    }
+    pthread_mutex_unlock(&g_ws_mu);
+    return c;
+}
+
+// M27：连接对象是否有 TLS 读缓冲（ws_recv 超时 poll 前检查：缓冲有数据则无需 poll）
+static int ws_conn_has_buffered(PxConn* c) {
+    return c && c->is_tls && c->roff < c->rlen;
+}
+
 // ==================== base64（握手 Accept 计算用，本地副本） ====================
 static const char WS_B64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -120,10 +139,10 @@ static void ws_b64_encode(const unsigned char* in, size_t len, char* out) {
 #define WS_OP_PONG 0xA
 
 // 精确读 n 字节（阻塞；EOF/错误返回 -1，EINTR 重试）
-static int ws_read_exact(int fd, unsigned char* buf, size_t n) {
+static int ws_read_exact(PxConn* c, unsigned char* buf, size_t n) {
     size_t off = 0;
     while (off < n) {
-        ssize_t r = recv(fd, buf + off, n - off, 0);
+        ssize_t r = px_conn_read(c, buf + off, n - off);
         if (r == 0) return -1;
         if (r < 0) {
             if (errno == EINTR) continue;
@@ -135,29 +154,29 @@ static int ws_read_exact(int fd, unsigned char* buf, size_t n) {
 }
 
 // 读一帧：返回 opcode（<0 错误）；fin/payload 由出参给出。payload malloc，调用者 free。
-static int ws_read_frame(int fd, int* fin, unsigned char** payload, size_t* plen) {
+static int ws_read_frame(PxConn* c, int* fin, unsigned char** payload, size_t* plen) {
     unsigned char h[2];
-    if (ws_read_exact(fd, h, 2) < 0) return -1;
+    if (ws_read_exact(c, h, 2) < 0) return -1;
     *fin = (h[0] & 0x80) ? 1 : 0;
     int opcode = h[0] & 0x0F;
     int masked = (h[1] & 0x80) ? 1 : 0;
     uint64_t len = h[1] & 0x7F;
     if (len == 126) {
         unsigned char ext[2];
-        if (ws_read_exact(fd, ext, 2) < 0) return -1;
+        if (ws_read_exact(c, ext, 2) < 0) return -1;
         len = ((uint64_t)ext[0] << 8) | ext[1];
     } else if (len == 127) {
         unsigned char ext[8];
-        if (ws_read_exact(fd, ext, 8) < 0) return -1;
+        if (ws_read_exact(c, ext, 8) < 0) return -1;
         len = 0;
         for (int i = 0; i < 8; i++) len = (len << 8) | ext[i];
     }
     if (len > 64ULL * 1024 * 1024) return -1;
     unsigned char mask[4] = {0, 0, 0, 0};
-    if (masked && ws_read_exact(fd, mask, 4) < 0) return -1;
+    if (masked && ws_read_exact(c, mask, 4) < 0) return -1;
     unsigned char* p = (unsigned char*)malloc((size_t)len + 1);
     if (len > 0) {
-        if (ws_read_exact(fd, p, (size_t)len) < 0) { free(p); return -1; }
+        if (ws_read_exact(c, p, (size_t)len) < 0) { free(p); return -1; }
         if (masked) {
             for (size_t i = 0; i < len; i++) p[i] ^= mask[i & 3];
         }
@@ -169,7 +188,7 @@ static int ws_read_frame(int fd, int* fin, unsigned char** payload, size_t* plen
 }
 
 // 编码并发送一帧（mask_out=1 时客户端掩码）。返回 0 成功。
-static int ws_send_frame(int fd, int opcode, const unsigned char* data, size_t len, int mask_out) {
+static int ws_send_frame(PxConn* c, int opcode, const unsigned char* data, size_t len, int mask_out) {
     unsigned char hdr[14];
     size_t hl = 2;
     hdr[0] = (unsigned char)(0x80 | opcode);  // FIN=1
@@ -200,13 +219,13 @@ static int ws_send_frame(int fd, int opcode, const unsigned char* data, size_t l
         // 掩码后的载荷
         unsigned char* tmp = (unsigned char*)malloc(len ? len : 1);
         for (size_t i = 0; i < len; i++) tmp[i] = data[i] ^ mask[i & 3];
-        if (send(fd, hdr, (int)hl, MSG_NOSIGNAL) < 0) { free(tmp); return -1; }
-        if (len > 0 && send(fd, tmp, (int)len, MSG_NOSIGNAL) < 0) { free(tmp); return -1; }
+        if (px_conn_write(c, hdr, hl) < 0) { free(tmp); return -1; }
+        if (len > 0 && px_conn_write(c, tmp, len) < 0) { free(tmp); return -1; }
         free(tmp);
         return 0;
     }
-    if (send(fd, hdr, (int)hl, MSG_NOSIGNAL) < 0) return -1;
-    if (len > 0 && send(fd, data, (int)len, MSG_NOSIGNAL) < 0) return -1;
+    if (px_conn_write(c, hdr, hl) < 0) return -1;
+    if (len > 0 && px_conn_write(c, data, len) < 0) return -1;
     return 0;
 }
 
@@ -214,12 +233,33 @@ static int ws_send_frame(int fd, int opcode, const unsigned char* data, size_t l
 #define WS_GUID "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 // 读 HTTP 头直到 \r\n\r\n（上限 64KB）。返回 0 成功；buf/len 出参（malloc）。
-static int ws_read_http_header(int fd, char** out, int* out_len) {
+// 明文 fd 版本（客户端握手 ws_client_handshake 用）
+static int ws_read_http_header_fd(int fd, char** out, int* out_len) {
     char* buf = (char*)malloc(65536);
     int len = 0;
     int header_end = -1;
     while (len < 65535) {
         ssize_t n = recv(fd, buf + len, (size_t)(65535 - len), 0);
+        if (n <= 0) break;
+        len += (int)n;
+        buf[len] = 0;
+        char* sep = strstr(buf, "\r\n\r\n");
+        if (sep) { header_end = (int)(sep - buf); break; }
+    }
+    if (header_end < 0) { free(buf); return -1; }
+    buf[header_end] = 0;
+    *out = buf;
+    *out_len = header_end;
+    return 0;
+}
+
+// PxConn 版本（服务端/客户端统一；TLS 支持）
+static int ws_read_http_header(PxConn* c, char** out, int* out_len) {
+    char* buf = (char*)malloc(65536);
+    int len = 0;
+    int header_end = -1;
+    while (len < 65535) {
+        ssize_t n = px_conn_read(c, buf + len, (size_t)(65535 - len));
         if (n <= 0) break;
         len += (int)n;
         buf[len] = 0;
@@ -271,10 +311,10 @@ static void ws_accept_key(const char* key, char* out) {
 }
 
 // 服务端握手：读请求 → 校验 → 发 101。返回 0 成功。
-static int ws_server_handshake(int fd) {
+static int ws_server_handshake(PxConn* c) {
     char* head = NULL;
     int hlen = 0;
-    if (ws_read_http_header(fd, &head, &hlen) < 0) return -1;
+    if (ws_read_http_header(c, &head, &hlen) < 0) return -1;
     if (strncmp(head, "GET ", 4) != 0) { free(head); return -1; }
     char* key = ws_header_value(head, "Sec-WebSocket-Key");
     char* upgrade = ws_header_value(head, "Upgrade");
@@ -292,7 +332,7 @@ static int ws_server_handshake(int fd) {
     int rl = snprintf(resp, sizeof(resp),
         "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n",
         accept);
-    if (send(fd, resp, rl, MSG_NOSIGNAL) < 0) return -1;
+    if (px_conn_write(c, resp, (size_t)rl) < 0) return -1;
     return 0;
 }
 
@@ -315,7 +355,7 @@ static int ws_client_handshake(int fd, const char* host, int port, const char* p
     if (send(fd, req, rl, MSG_NOSIGNAL) < 0) return -1;
     char* head = NULL;
     int hlen = 0;
-    if (ws_read_http_header(fd, &head, &hlen) < 0) return -1;
+    if (ws_read_http_header_fd(fd, &head, &hlen) < 0) return -1;
     if (strstr(head, " 101 ") == NULL) { free(head); return -1; }
     char* got = ws_header_value(head, "Sec-WebSocket-Accept");
     free(head);
@@ -368,14 +408,26 @@ LXValue ws_conn_worker(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) return px_null();
     int fd = (int)args[0].as.i;
+    // M27：TLS 握手（若 tls_server 注册）→ PxConn 统一读写（堆分配共享给 ws_send 等）
+    PxConn* c = malloc(sizeof(PxConn));
+    if (px_conn_init(c, fd) != 0) { free(c); return px_null(); }
+    g_cur_conn = c;
+    __sync_fetch_and_add(&g_px_inflight, 1);
     // 1. 握手
-    if (ws_server_handshake(fd) < 0) { close(fd); return px_null(); }
+    if (ws_server_handshake(c) < 0) {
+        px_conn_close(c);  // 对象保留（closed 标记）
+        __sync_fetch_and_sub(&g_px_inflight, 1);
+        g_cur_conn = NULL;
+        return px_null();
+    }
     // 2. 注册
     pthread_mutex_lock(&g_ws_mu);
     int slot = ws_alloc_slot();
     if (slot < 0) {
         pthread_mutex_unlock(&g_ws_mu);
-        close(fd);
+        px_conn_close(c);  // 对象保留
+        __sync_fetch_and_sub(&g_px_inflight, 1);
+        g_cur_conn = NULL;
         return px_null();
     }
     int64_t conn = g_ws_next_id++;
@@ -386,6 +438,7 @@ LXValue ws_conn_worker(LXValue* args, int nargs, void* ctx) {
     g_ws_conns[slot].closed = 0;
     g_ws_conns[slot].last_activity = 0;
     g_ws_conns[slot].hb_active = 0;
+    g_ws_conns[slot].conn = c;
     pthread_mutex_unlock(&g_ws_mu);
     // 3. 调 handler(conn)
     LXValue handler = px_get_global("__ws_handler");
@@ -398,7 +451,7 @@ LXValue ws_conn_worker(LXValue* args, int nargs, void* ctx) {
         int fin = 0;
         unsigned char* payload = NULL;
         size_t plen = 0;
-        int opcode = ws_read_frame(fd, &fin, &payload, &plen);
+        int opcode = ws_read_frame(c, &fin, &payload, &plen);
         // 心跳：读到任何帧（含 pong）即更新最近活动时间
         {
             pthread_mutex_lock(&g_ws_mu);
@@ -408,9 +461,9 @@ LXValue ws_conn_worker(LXValue* args, int nargs, void* ctx) {
         }
         if (opcode < 0) break;  // EOF / 错误 / shutdown
         if (opcode == WS_OP_PING) {
-            ws_send_frame(fd, WS_OP_PONG, payload, plen, 0);
+            ws_send_frame(c, WS_OP_PONG, payload, plen, 0);
         } else if (opcode == WS_OP_CLOSE) {
-            ws_send_frame(fd, WS_OP_CLOSE, NULL, 0, 0);
+            ws_send_frame(c, WS_OP_CLOSE, NULL, 0, 0);
             break;
         }
         // 文本/二进制/继续帧：handler 已返回，丢弃
@@ -428,7 +481,16 @@ LXValue ws_conn_worker(LXValue* args, int nargs, void* ctx) {
         }
     }
     pthread_mutex_unlock(&g_ws_mu);
-    if (closed) close(fd);
+    if (closed) {
+        pthread_mutex_lock(&g_ws_mu);
+        for (int j = 0; j < MAX_WS_CONNS; j++) {
+            if (g_ws_conns[j].conn == c) g_ws_conns[j].conn = NULL;
+        }
+        pthread_mutex_unlock(&g_ws_mu);
+        px_conn_close(c);  // 对象保留（closed 标记）
+        __sync_fetch_and_sub(&g_px_inflight, 1);
+        g_cur_conn = NULL;
+    }
     return px_null();
 }
 
@@ -458,6 +520,11 @@ LXValue bi_ws_connect(LXValue* args, int nargs, void* ctx) {
         close(fd);
         return px_null();
     }
+    PxConn* cc = malloc(sizeof(PxConn));
+    memset(cc, 0, sizeof(PxConn));
+    cc->fd = fd;
+    cc->is_tls = 0;
+    cc->rlen = cc->roff = 0;
     int64_t conn = g_ws_next_id++;
     g_ws_conns[slot].fd = fd;
     g_ws_conns[slot].id = conn;
@@ -466,6 +533,7 @@ LXValue bi_ws_connect(LXValue* args, int nargs, void* ctx) {
     g_ws_conns[slot].closed = 0;
     g_ws_conns[slot].last_activity = 0;
     g_ws_conns[slot].hb_active = 0;
+    g_ws_conns[slot].conn = cc;
     pthread_mutex_unlock(&g_ws_mu);
     return px_int(conn);
 }
@@ -476,10 +544,10 @@ LXValue bi_ws_send(LXValue* args, int nargs, void* ctx) {
     if (nargs != 2 || args[0].type != PX_INT) px_error("ws_send 需要 (conn, data) 参数");
     int64_t conn = args[0].as.i;
     int is_client = 0;
-    int fd = ws_get_fd(conn, &is_client);
-    if (fd < 0) return px_bool(false);
+    PxConn* c = ws_get_conn(conn, &is_client);
+    if (!c) return px_bool(false);
     const char* data = px_val_cstr(args[1]);
-    int ok = (ws_send_frame(fd, WS_OP_TEXT, (const unsigned char*)data, strlen(data), is_client) == 0);
+    int ok = (ws_send_frame(c, WS_OP_TEXT, (const unsigned char*)data, strlen(data), is_client) == 0);
     if (!ok) {
         // 写失败：标记关闭 + 清理
         pthread_mutex_lock(&g_ws_mu);
@@ -487,8 +555,9 @@ LXValue bi_ws_send(LXValue* args, int nargs, void* ctx) {
         if (idx >= 0) {
             g_ws_conns[idx].active = 0;
             g_ws_conns[idx].fd = -1;
-            shutdown(fd, SHUT_RDWR);
-            close(fd);
+            g_ws_conns[idx].conn = NULL;
+            shutdown(c->fd, SHUT_RDWR);
+            px_conn_close(c);  // 对象保留
         }
         pthread_mutex_unlock(&g_ws_mu);
     }
@@ -507,16 +576,17 @@ LXValue bi_ws_recv(LXValue* args, int nargs, void* ctx) {
     }
     int64_t conn = args[0].as.i;
     int is_client = 0;
-    int fd = ws_get_fd(conn, &is_client);
-    if (fd < 0) return px_null();
+    PxConn* c = ws_get_conn(conn, &is_client);
+    if (!c) return px_null();
     unsigned char* msg = NULL;
     size_t mlen = 0, mcap = 0;
     for (;;) {
         // M23：可选超时 —— 每帧等待前 poll（控制帧/分片间同样生效）。
         // 超时返回 null（连接状态完好可继续使用）；对端关闭检测（HUP/ERR 且无数据）。
-        if (timeout_ms >= 0) {
+        // M27：TLS 读缓冲有数据则跳过 poll（缓冲已就绪，无需等底层可读）。
+        if (timeout_ms >= 0 && !ws_conn_has_buffered(c)) {
             struct pollfd pfd;
-            pfd.fd = fd;
+            pfd.fd = c->fd;
             pfd.events = POLLIN;
             int pr = poll(&pfd, 1, timeout_ms);
             if (pr == 0) {
@@ -532,16 +602,16 @@ LXValue bi_ws_recv(LXValue* args, int nargs, void* ctx) {
                 if (msg) free(msg);
                 pthread_mutex_lock(&g_ws_mu);
                 int idx = ws_find(conn);
-                if (idx >= 0) { g_ws_conns[idx].active = 0; g_ws_conns[idx].fd = -1; }
+                if (idx >= 0) { g_ws_conns[idx].active = 0; g_ws_conns[idx].fd = -1; g_ws_conns[idx].conn = NULL; }
                 pthread_mutex_unlock(&g_ws_mu);
-                close(fd);
+                px_conn_close(c);  // 对象保留
                 return px_null();
             }
         }
         int fin = 0;
         unsigned char* payload = NULL;
         size_t plen = 0;
-        int opcode = ws_read_frame(fd, &fin, &payload, &plen);
+        int opcode = ws_read_frame(c, &fin, &payload, &plen);
         // 心跳：读到任何帧（含 pong）即更新最近活动时间
         {
             pthread_mutex_lock(&g_ws_mu);
@@ -555,23 +625,25 @@ LXValue bi_ws_recv(LXValue* args, int nargs, void* ctx) {
             // 连接断开：清理注册
             pthread_mutex_lock(&g_ws_mu);
             int idx = ws_find(conn);
-            if (idx >= 0) { g_ws_conns[idx].active = 0; g_ws_conns[idx].fd = -1; close(fd); }
+            if (idx >= 0) { g_ws_conns[idx].active = 0; g_ws_conns[idx].fd = -1; g_ws_conns[idx].conn = NULL; }
             pthread_mutex_unlock(&g_ws_mu);
+            px_conn_close(c);  // 对象保留
             return px_null();
         }
         if (opcode == WS_OP_PING) {
-            ws_send_frame(fd, WS_OP_PONG, payload, plen, is_client);
+            ws_send_frame(c, WS_OP_PONG, payload, plen, is_client);
             free(payload);
             continue;
         }
         if (opcode == WS_OP_CLOSE) {
-            ws_send_frame(fd, WS_OP_CLOSE, NULL, 0, is_client);
+            ws_send_frame(c, WS_OP_CLOSE, NULL, 0, is_client);
             free(payload);
             if (msg) free(msg);
             pthread_mutex_lock(&g_ws_mu);
             int idx = ws_find(conn);
-            if (idx >= 0) { g_ws_conns[idx].active = 0; g_ws_conns[idx].fd = -1; close(fd); }
+            if (idx >= 0) { g_ws_conns[idx].active = 0; g_ws_conns[idx].fd = -1; g_ws_conns[idx].conn = NULL; }
             pthread_mutex_unlock(&g_ws_mu);
+            px_conn_close(c);  // 对象保留
             return px_null();
         }
         if (opcode == WS_OP_TEXT || opcode == WS_OP_BINARY || opcode == WS_OP_CONT) {
@@ -601,18 +673,19 @@ LXValue bi_ws_close(LXValue* args, int nargs, void* ctx) {
     if (nargs != 1 || args[0].type != PX_INT) px_error("ws_close 需要 (conn) 参数");
     int64_t conn = args[0].as.i;
     int is_client = 0;
-    int fd = ws_get_fd(conn, &is_client);
-    if (fd < 0) return px_bool(false);
-    ws_send_frame(fd, WS_OP_CLOSE, (const unsigned char*)"\x03\xe8", 2, is_client);
-    shutdown(fd, SHUT_RDWR);
+    PxConn* c = ws_get_conn(conn, &is_client);
+    if (!c) return px_bool(false);
+    ws_send_frame(c, WS_OP_CLOSE, (const unsigned char*)"\x03\xe8", 2, is_client);
+    shutdown(c->fd, SHUT_RDWR);
     pthread_mutex_lock(&g_ws_mu);
     int idx = ws_find(conn);
     if (idx >= 0) {
         g_ws_conns[idx].active = 0;
         g_ws_conns[idx].fd = -1;
+        g_ws_conns[idx].conn = NULL;
     }
     pthread_mutex_unlock(&g_ws_mu);
-    close(fd);
+    px_conn_close(c);  // 对象保留
     return px_bool(true);
 }
 
@@ -622,15 +695,15 @@ LXValue bi_ws_ping(LXValue* args, int nargs, void* ctx) {
     if (nargs != 1 || args[0].type != PX_INT) px_error("ws_ping 需要 (conn) 参数");
     int64_t conn = args[0].as.i;
     int is_client = 0;
-    int fd = ws_get_fd(conn, &is_client);
-    if (fd < 0) return px_bool(false);
-    if (ws_send_frame(fd, WS_OP_PING, NULL, 0, is_client) < 0) {
-        shutdown(fd, SHUT_RDWR);
-        close(fd);
+    PxConn* c = ws_get_conn(conn, &is_client);
+    if (!c) return px_bool(false);
+    if (ws_send_frame(c, WS_OP_PING, NULL, 0, is_client) < 0) {
+        shutdown(c->fd, SHUT_RDWR);
         pthread_mutex_lock(&g_ws_mu);
         int idx = ws_find(conn);
-        if (idx >= 0) { g_ws_conns[idx].active = 0; g_ws_conns[idx].fd = -1; }
+        if (idx >= 0) { g_ws_conns[idx].active = 0; g_ws_conns[idx].fd = -1; g_ws_conns[idx].conn = NULL; }
         pthread_mutex_unlock(&g_ws_mu);
+        px_conn_close(c);  // 对象保留
         return px_bool(false);
     }
     return px_bool(true);
@@ -669,12 +742,13 @@ static void* ws_heartbeat_thread(void* arg) {
             return NULL; // 连接已移除/关闭
         }
         int fd = g_ws_conns[idx].fd;
+        PxConn* c = g_ws_conns[idx].conn;
         int is_client = g_ws_conns[idx].client;
         long long last = g_ws_conns[idx].last_activity;
         long long now = ws_now_ms();
         pthread_mutex_unlock(&g_ws_mu);
         // 1) 发 ping（不持锁做 IO）
-        int pr = ws_send_frame(fd, WS_OP_PING, NULL, 0, is_client);
+        int pr = (c && !g_ws_conns[idx].closed) ? ws_send_frame(c, WS_OP_PING, NULL, 0, is_client) : -1;
         // 2) 超时检测：写失败 或 超时未活动 → 死链
         int dead = 0;
         if (pr < 0) {
@@ -684,15 +758,16 @@ static void* ws_heartbeat_thread(void* arg) {
         }
         if (dead) {
             shutdown(fd, SHUT_RDWR);
-            close(fd);
             pthread_mutex_lock(&g_ws_mu);
             idx = ws_find(conn);
             if (idx >= 0) {
                 g_ws_conns[idx].active = 0;
                 g_ws_conns[idx].fd = -1;
+                g_ws_conns[idx].conn = NULL;
                 g_ws_conns[idx].hb_active = 0;
             }
             pthread_mutex_unlock(&g_ws_mu);
+            if (c) px_conn_close(c);  // 对象保留
             return NULL;
         }
     }

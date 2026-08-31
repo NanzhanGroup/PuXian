@@ -22,10 +22,10 @@
 | ⏱ 定时器 | `set_timeout` / `set_interval` / `clear_timer`（一次性/周期回调，可变参数透传，回调内并发原语安全） |
 | 🧹 内存 | 编译模式 C 运行时内置保守标记-清除 GC（循环引用可回收，自动触发）+ **slab 分配器**（21 档 size-class 槽位复用）；解释器侧**追踪式 GC** 回收循环引用（list/dict/chan/**闭包 Func↔Env 循环**）+ `gc()` 强制回收 |
 | 🧩 模块化 | `import std.*` / `import foo.bar` / `from foo import x` / 相对路径导入；`px pkg` 包管理（init/add/install/list/remove） |
-| 🌐 网络 | HTTP 客户端（**HTTPS TLS 1.2/1.3** + gzip/chunked 自动解码 + **http/https 连接池复用** + **TLS 会话票据恢复**（同 host 断连重连缩短握手）+ **流式 gzip 边下边解**）+ **HTTP 服务端**（`http_serve`，含 gzip/chunked 响应、keep-alive、file 流式）+ **WebSocket**（RFC 6455，心跳/超时）+ **SSE** 服务端/客户端（LLM 流式推送基石）+ TCP 全功能 |
+| 🌐 网络 | HTTP 客户端（**HTTPS TLS 1.2/1.3** + gzip/chunked 自动解码 + **http/https 连接池复用** + **TLS 会话票据恢复** + **流式 gzip 边下边解**）+ **HTTP 服务端**（`http_serve` gzip/chunked/keep-alive/流式 + **`px_serve` 服务端 TLS**：`tls_server` 注册后 HTTPS/WSS/SSE-over-TLS + 请求体大小可配 + 413 + 大 body 落盘 + **优雅关闭** SIGINT/SIGTERM）+ **WebSocket**（RFC 6455，心跳/超时）+ **SSE** 服务端/客户端（LLM 流式推送基石）+ TCP 全功能 |
 | 🛡 加密/文档 | **AES-CBC-PKCS7 / AES-GCM**、**RSA**（PKCS#1 v1.5）、**XML** 解析/转义/**生成**（xml_build）、**zip** 打包/解压、**base64**、sha256 / xxhash |
 | 🔢 语言能力 | 切片语法 `a[i:j]` / `a[i:j:k]`（步长/反转，str 按 UTF-8 字符）、位运算 + 二进制数据视图（int_to_hex / bytes_to_hex / bit_count / bit_length）、正则表达式、锁原语（mutex / rwlock）、文件随机读写 + fsync、进程/信号（os_spawn / os_wait / signal） |
-| 🚀 应用平台 | **.px 脚本执行机制**（`px_serve` PHP/OpenResty 式应用服务器、`px_exec` 语言层嵌入 API）+ **.px 进程池**（编译模式预派生 `px --worker` 解释器常驻复用，PHP-FPM 风格，超时 kill/崩溃补位） |
+| 🚀 应用平台 | **.px 脚本执行机制**（`px_serve` PHP/OpenResty 式应用服务器：Cookie/Session/基础认证 + 服务端 TLS + 优雅关闭、`px_exec` 语言层嵌入 API）+ **.px 进程池**（编译模式预派生 `px --worker` 解释器常驻复用，PHP-FPM 风格） |
 | 🔧 工具链 | `px fmt`（`-w` 写回 / `--check` 检查 / `--diff` 打印 unified diff）/ `px lint` / `px test` / `px bench` / `px doc` / `px ast` 全内置 |
 | 🤖 AI 接入 | `px lsp`（语言服务器）、`px mcp`（MCP 服务器），AI 客户端可直接驱动 |
 | 📚 标准库 | io / fs / json / time / string / math / collections / os / net（含 .px 自举库） |
@@ -86,7 +86,7 @@ px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
 | [docs/requirements.md](docs/requirements.md) | 需求与设计讨论（动机、取舍、双模式架构） |
 | [docs/plan.md](docs/plan.md) | 开发方案（语言命名、里程碑规划、语言要点） |
 | [docs/spec.md](docs/spec.md) | 语言规格说明书（词法 / 语法 / 语义 / 标准库） |
-| [docs/PROGRESS.md](docs/PROGRESS.md) | 开发进度（M0–M26 产出与验证记录，含 M27 候选） |
+| [docs/PROGRESS.md](docs/PROGRESS.md) | 开发进度（M0–M27 产出与验证记录，含 M28 候选） |
 
 ---
 
@@ -121,6 +121,7 @@ px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
 | M24 | XML 生成 + 切片步长 + https 连接池复用 + HTTP 流式 gzip 解压 | ✅ |
 | M25 | 闭包循环回收 + .px 进程池化 + TLS 会话票据恢复 + fmt --diff | ✅ |
 | M26 | 无符号右移 `>>>` + WebSocket 内置心跳 + SSE 客户端 https + 远程包 registry | ✅ |
+| M27 | WebServer 生产化 P0：服务端 TLS（HTTPS/WSS/SSE-TLS）+ 请求体大小可配/413/落盘 + Cookie/Session/基础认证 + 优雅关闭 | ✅ |
 
 ---
 
@@ -162,6 +163,8 @@ px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
 - `m26_ushr.px` —— 无符号右移 `>>>`
 - `m26_ws_heartbeat.px` —— WebSocket 内置心跳
 - `m26_sse_https.px` —— SSE 客户端 https（需本地 https SSE 端点 + PX_TLS_CA_FILE）
+- `m27a_webprod.px` —— WebServer 生产化：Session / 基础认证 / 请求体限制 / 优雅关闭
+- `m27b_tls_serve.px` —— 服务端 TLS（HTTPS；需 PX_TLS_CA_FILE 信任自签）
 
 ```bash
 px run examples/fib.px
@@ -206,4 +209,4 @@ px build examples/fib.px -o /tmp/fib && /tmp/fib
 - 目标平台：仅 Linux（x86_64 / aarch64）；
 - 编译模式产物为静态链接二进制（`ldd` 显示 `statically linked`）；
 - C 运行时内部符号统一使用 `px_` / `PX_` 前缀（M20 全量迁移完成），第三方库（mbedtls / miniz）保留各自前缀；
-- 回归基线：`cargo test` 157/157、并发 GC 60/60 稳定、示例双模式逐字节一致。
+- 回归基线：`cargo test` 162/162、GC 单线程 + 并发 ALL PASSED、示例双模式逐字节一致、编译产物 statically linked。

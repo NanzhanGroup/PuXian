@@ -109,7 +109,7 @@ fn ensure_signal_thread(interp: &mut Interpreter, pos: Pos) {
 // handler 返回后连接保持打开，直到 sse_close(conn) 或对端断开（写失败自动清理）。
 
 struct SseConn {
-    stream: Arc<Mutex<std::net::TcpStream>>,
+    stream: Arc<Mutex<crate::tls::SConn>>,
     close_tx: mpsc::Sender<()>,
 }
 
@@ -357,7 +357,7 @@ fn sse_frame(data: &Value) -> String {
 /// 处理单个 SSE 连接：读请求 → 解析 → 发响应头 → 注册连接 → 调 handler → 保持到关闭
 fn handle_sse_conn(
     i: &mut Interpreter,
-    stream: &mut TcpStream,
+    stream: &mut crate::tls::SConn,
     handler: &Value,
     pos: Pos,
 ) -> Result<(), String> {
@@ -381,10 +381,7 @@ fn handle_sse_conn(
     }
     // 2. 解析请求
     let head = String::from_utf8_lossy(&buf[..header_end]).to_string();
-    let remote = stream
-        .peer_addr()
-        .map(|a| a.to_string())
-        .unwrap_or_default();
+    let remote = stream.peer_addr_str();
     let (req, _cl) = parse_http_request(&head, &remote)?;
     // 3. 分配连接 ID 并注入 req["conn"]
     let conn_id = SSE_NEXT_ID.fetch_add(1, Ordering::SeqCst);
@@ -397,12 +394,13 @@ fn handle_sse_conn(
     stream.flush().ok();
     // 5. 注册连接（共享写端；sse_send 任意线程可写）
     let (close_tx, close_rx) = mpsc::channel::<()>();
+    let peer = stream.try_clone().map_err(|e| e.to_string())?;
     {
         let mut m = sse_conns().lock().unwrap();
         m.insert(
             conn_id,
             SseConn {
-                stream: Arc::new(Mutex::new(stream.try_clone().map_err(|e| e.to_string())?)),
+                stream: Arc::new(Mutex::new(peer)),
                 close_tx,
             },
         );
@@ -1415,9 +1413,10 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             }
         }
         Builtin::PxServe => {
-            // px_serve(port, docroot[, timeout_ms])：PHP 式应用服务器（静态文件 + .px 脚本）
-            if args.len() < 2 || args.len() > 3 {
-                return Err(err("px_serve 需要 (port, docroot[, timeout_ms]) 参数", pos));
+            // px_serve(port, docroot[, timeout_ms[, opts]])：PHP 式应用服务器（静态文件 + .px 脚本）
+            // M27：opts = {max_body_size, body_tmp_dir}；tls_server 注册后自动 HTTPS；SIGINT/SIGTERM 优雅关闭
+            if args.len() < 2 || args.len() > 4 {
+                return Err(err("px_serve 需要 (port, docroot[, timeout_ms[, opts]]) 参数", pos));
             }
             let port = expect_int(&args[0], "px_serve", pos)?;
             let docroot = expect_str(&args[1], "px_serve", pos)?;
@@ -1425,10 +1424,17 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
                 Some(Value::Int(t)) => *t,
                 _ => 10000,
             };
-            crate::web::px_serve(port, docroot, timeout_ms.max(1)).map_err(|e| {
+            let opts = match args.get(3) {
+                Some(Value::Dict(_)) => Some(&args[3]),
+                Some(_) => {
+                    return Err(err("px_serve 的 opts 需要 dict", pos));
+                }
+                None => None,
+            };
+            crate::web::px_serve(port, docroot, timeout_ms, opts).map_err(|e| {
                 LxError::new("R3012", format!("px_serve: {}", e), Some(pos))
             })?;
-            Ok(Value::Null) // 不可达：阻塞 accept
+            Ok(Value::Null) // 优雅关闭后返回
         }
 
         // ==================== M18 P1：后台定时任务 / 定时器原语 ====================
@@ -1646,6 +1652,7 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
         }
 
         // ==================== M21 P1：SSE 服务端 ====================
+        // M27：tls_server(cert, key) 注册后自动 SSE-over-TLS（SConn 统一读写）
         Builtin::SseServe => {
             if args.len() != 2 {
                 return Err(err("sse_serve 需要 (port, handler) 参数", pos));
@@ -1661,14 +1668,19 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             let srv = interp.fork();
             let mut i = srv;
             for stream in listener.incoming() {
-                let mut stream = match stream {
+                let stream = match stream {
                     Ok(s) => s,
                     Err(_) => continue,
+                };
+                // accept_stream：对已 accept 的 TCP 连接做 TLS 握手（若注册）→ SConn
+                let mut conn = match crate::tls::accept_stream(stream) {
+                    Some(c) => c,
+                    None => continue,
                 };
                 let h = handler.clone();
                 let mut ci = i.fork();
                 std::thread::spawn(move || {
-                    if let Err(e) = handle_sse_conn(&mut ci, &mut stream, &h, pos) {
+                    if let Err(e) = handle_sse_conn(&mut ci, &mut conn, &h, pos) {
                         eprintln!("[sse] {}", e);
                     }
                 });
@@ -1809,6 +1821,7 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
         }
 
         // ==================== M22 P1：WebSocket（RFC 6455） ====================
+        // M27：tls_server(cert, key) 注册后 ws_serve 自动 WSS（TLS 握手后跑 WS 协议）
         Builtin::WsServe => {
             if args.len() != 2 {
                 return Err(err("ws_serve 需要 (port, handler) 参数", pos));
@@ -1823,20 +1836,24 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
                 .map_err(|e| LxError::new("R3010", format!("net: 监听端口失败 {}: {}", addr, e), Some(pos)))?;
             let srv = interp.fork();
             for stream in listener.incoming() {
-                let mut stream = match stream {
+                let stream = match stream {
                     Ok(s) => s,
                     Err(_) => continue,
                 };
+                let mut conn = match crate::tls::accept_stream(stream) {
+                    Some(c) => c,
+                    None => continue, // TLS 握手失败
+                };
                 // 握手失败直接关闭该连接
-                if crate::ws::server_handshake(&mut stream).is_err() {
+                if crate::ws::server_handshake(&mut conn).is_err() {
                     continue;
                 }
                 let h = handler.clone();
                 let mut ci = srv.fork();
                 std::thread::spawn(move || {
                     // 注册连接（读写独立句柄）
-                    let id = match stream.try_clone() {
-                        Ok(w) => crate::ws::ws_register(stream, w),
+                    let id = match conn.try_clone() {
+                        Ok(w) => crate::ws::ws_register(conn, w),
                         Err(_) => return,
                     };
                     // 调 handler(conn)：handler 内 ws_recv 阻塞读 / ws_send 推送
@@ -1871,10 +1888,12 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             if let Err(_e) = crate::ws::client_handshake(&mut stream, &host, port as u16, &path) {
                 return Ok(Value::Null); // 握手失败 → null（与编译模式一致）
             }
-            let (id, _rx) = match stream.try_clone() {
-                Ok(w) => crate::ws::ws_register_client(stream, w),
+            // 明文客户端：SConn::plain 包装注册
+            let sc = match crate::tls::SConn::plain_try_clone(&stream) {
+                Ok(w) => w,
                 Err(_) => return Ok(Value::Null),
             };
+            let (id, _rx) = crate::ws::ws_register_client(crate::tls::SConn::plain(stream), sc);
             Ok(Value::Int(id))
         }
         Builtin::WsSend => {
@@ -2286,6 +2305,81 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             }
             let ran = crate::gc::collect();
             Ok(Value::Int(if ran { 1 } else { 0 }))
+        }
+
+        // ==================== M27 P0：WebServer 生产化四件套 ====================
+        // ① 服务端 TLS：tls_server(cert_pem, key_pem) → bool（PEM 路径或内容）
+        //    注册后 px_serve / ws_serve / sse_serve 自动 HTTPS / WSS / SSE-over-TLS
+        Builtin::TlsServer => {
+            if args.len() != 2 {
+                return Err(err("tls_server 需要 (cert_pem, key_pem) 参数", pos));
+            }
+            let cert = expect_str(&args[0], "tls_server", pos)?;
+            let key = expect_str(&args[1], "tls_server", pos)?;
+            crate::tls::tls_server_register(cert, key).map_err(|e| err(e, pos))?;
+            Ok(Value::Bool(true))
+        }
+        // ③ Cookie/Session：session_open() → str（读 REQUEST.cookie[pxsid] 复用/新建；
+        //    新会话 Set-Cookie 自动注入响应头）；session_id() → str|null
+        Builtin::SessionOpen => {
+            if !args.is_empty() {
+                return Err(err("session_open 不需要参数", pos));
+            }
+            let req = interp
+                .globals
+                .lock()
+                .unwrap()
+                .get("REQUEST")
+                .unwrap_or(Value::Null);
+            Ok(Value::Str(crate::web::session_open_with(&req)))
+        }
+        Builtin::SessionId => {
+            if !args.is_empty() {
+                return Err(err("session_id 不需要参数", pos));
+            }
+            Ok(crate::web::session_id_value())
+        }
+        Builtin::SessionGet => {
+            if args.len() != 1 {
+                return Err(err("session_get 需要 (key) 参数", pos));
+            }
+            let key = expect_str(&args[0], "session_get", pos)?;
+            Ok(crate::web::session_get_value(key))
+        }
+        Builtin::SessionSet => {
+            if args.len() != 2 {
+                return Err(err("session_set 需要 (key, value) 参数", pos));
+            }
+            let key = expect_str(&args[0], "session_set", pos)?.to_string();
+            Ok(Value::Bool(crate::web::session_set_value(&key, args[1].clone())))
+        }
+        Builtin::SessionDel => {
+            if args.len() != 1 {
+                return Err(err("session_del 需要 (key) 参数", pos));
+            }
+            let key = expect_str(&args[0], "session_del", pos)?;
+            Ok(Value::Bool(crate::web::session_del_value(key)))
+        }
+        Builtin::SessionDestroy => {
+            if !args.is_empty() {
+                return Err(err("session_destroy 不需要参数", pos));
+            }
+            Ok(Value::Bool(crate::web::session_destroy_value()))
+        }
+        // ③ 基础认证：basic_auth(user, pass) → bool（失败自动 401 + WWW-Authenticate）
+        Builtin::BasicAuth => {
+            if args.len() != 2 {
+                return Err(err("basic_auth 需要 (user, pass) 参数", pos));
+            }
+            let user = expect_str(&args[0], "basic_auth", pos)?;
+            let pass = expect_str(&args[1], "basic_auth", pos)?;
+            let req = interp
+                .globals
+                .lock()
+                .unwrap()
+                .get("REQUEST")
+                .unwrap_or(Value::Null);
+            Ok(Value::Bool(crate::web::basic_auth_with(&req, user, pass)))
         }
     }
 }
@@ -4089,6 +4183,13 @@ impl<'a> JsonParser<'a> {
 }
 
 /// Value → JSON 字符串
+/// 解析 JSON 字符串 → Value（session 文件读取等内部用；失败 → None）
+pub(crate) fn json_parse_value(s: &str) -> Option<Value> {
+    let mut p = JsonParser { bytes: s.as_bytes(), idx: 0 };
+    p.skip_ws();
+    p.parse_value().ok()
+}
+
 pub(crate) fn json_stringify(v: &Value) -> Result<String, String> {
     match v {
         Value::Null => Ok("null".to_string()),

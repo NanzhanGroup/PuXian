@@ -351,6 +351,15 @@ impl Interpreter {
             ("read_bytes", Builtin::ReadBytes),
             ("write_bytes", Builtin::WriteBytes),
             ("gc", Builtin::Gc),
+            // M27 P0：WebServer 生产化（服务端 TLS / Session / 基础认证）
+            ("tls_server", Builtin::TlsServer),
+            ("session_open", Builtin::SessionOpen),
+            ("session_id", Builtin::SessionId),
+            ("session_get", Builtin::SessionGet),
+            ("session_set", Builtin::SessionSet),
+            ("session_del", Builtin::SessionDel),
+            ("session_destroy", Builtin::SessionDestroy),
+            ("basic_auth", Builtin::BasicAuth),
         ];
         for (n, b) in names {
             g.define(n, Value::Builtin(*b));

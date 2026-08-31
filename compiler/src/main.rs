@@ -37,6 +37,7 @@ mod pkg;
 mod regex;
 mod rsa;
 mod test;
+mod tls;
 mod token;
 mod value;
 
@@ -44,6 +45,8 @@ mod web;
 mod ws;
 mod xml;
 mod zip;
+
+use std::sync::{Arc, Mutex};
 
 use std::env as os_env;
 use std::io::Write;
@@ -400,11 +403,64 @@ fn run_script_worker_task(path: &str, env_json: &str, dump_response: bool) -> (i
         }
     };
     if dump_response {
-        if let Some(resp) = interp.globals.lock().unwrap().get("RESPONSE") {
-            if !matches!(resp, crate::value::Value::Null) {
-                if let Ok(s) = crate::builtin::json_stringify(&resp) {
-                    out.extend_from_slice(format!("__PX_RESPONSE__:{}\n", s).as_bytes());
+        // M27：合并 session Set-Cookie / basic_auth 401 注入（与 web.rs exec_script 一致）
+        let (cookies, auth) = crate::web::take_response_injections();
+        let mut resp = interp.globals.lock().unwrap().get("RESPONSE");
+        let has_inject = !cookies.is_empty() || auth.is_some();
+        if resp.is_some() || has_inject {
+            if resp.is_none() {
+                let mut m = std::collections::HashMap::new();
+                m.insert("status".to_string(), crate::value::Value::Int(200));
+                m.insert(
+                    "headers".to_string(),
+                    crate::value::Value::Dict(Arc::new(Mutex::new(
+                        std::collections::HashMap::new(),
+                    ))),
+                );
+                resp = Some(crate::value::Value::Dict(Arc::new(Mutex::new(m))));
+            }
+            if let Some(crate::value::Value::Dict(d)) = &resp {
+                let mut d = d.lock().unwrap();
+                if let Some(realm) = &auth {
+                    let is200 = d
+                        .get("status")
+                        .map(|s| matches!(s, crate::value::Value::Int(200)))
+                        .unwrap_or(true);
+                    if is200 {
+                        d.insert("status".to_string(), crate::value::Value::Int(401));
+                    }
+                    let mut h = d.get("headers").cloned().unwrap_or_else(|| {
+                        crate::value::Value::Dict(Arc::new(Mutex::new(
+                            std::collections::HashMap::new(),
+                        )))
+                    });
+                    if let crate::value::Value::Dict(hd) = &h {
+                        hd.lock().unwrap().insert(
+                            "WWW-Authenticate".to_string(),
+                            crate::value::Value::Str(format!("Basic realm=\"{}\"", realm)),
+                        );
+                    }
+                    d.insert("headers".to_string(), h);
                 }
+                if !cookies.is_empty() {
+                    let mut h = d.get("headers").cloned().unwrap_or_else(|| {
+                        crate::value::Value::Dict(Arc::new(Mutex::new(
+                            std::collections::HashMap::new(),
+                        )))
+                    });
+                    if let crate::value::Value::Dict(hd) = &h {
+                        for c in &cookies {
+                            hd.lock().unwrap().insert(
+                                "Set-Cookie".to_string(),
+                                crate::value::Value::Str(c.clone()),
+                            );
+                        }
+                    }
+                    d.insert("headers".to_string(), h);
+                }
+            }
+            if let Ok(s) = crate::builtin::json_stringify(&resp.unwrap()) {
+                out.extend_from_slice(format!("__PX_RESPONSE__:{}\n", s).as_bytes());
             }
         }
     }
@@ -726,12 +782,65 @@ fn run_script(file: &str) -> ExitCode {
         Ok(code) => {
             // M17：PX_DUMP_RESPONSE=1（编译模式 px_serve 的子进程）→ 把脚本设置的
             // RESPONSE 全局变量序列化到 stdout 尾部（服务器解析为精确响应控制）
+            // M27：合并 session Set-Cookie / basic_auth 401 注入（与 web.rs exec_script 一致）
             if os_env::var("PX_DUMP_RESPONSE").map(|v| v == "1").unwrap_or(false) {
-                if let Some(resp) = interp.globals.lock().unwrap().get("RESPONSE") {
-                    if !matches!(resp, crate::value::Value::Null) {
-                        if let Ok(s) = crate::builtin::json_stringify(&resp) {
-                            println!("__PX_RESPONSE__:{}", s);
+                let (cookies, auth) = crate::web::take_response_injections();
+                let mut resp = interp.globals.lock().unwrap().get("RESPONSE");
+                let has_inject = !cookies.is_empty() || auth.is_some();
+                if resp.is_some() || has_inject {
+                    if resp.is_none() {
+                        let mut m = std::collections::HashMap::new();
+                        m.insert("status".to_string(), crate::value::Value::Int(200));
+                        m.insert(
+                            "headers".to_string(),
+                            crate::value::Value::Dict(Arc::new(Mutex::new(
+                                std::collections::HashMap::new(),
+                            ))),
+                        );
+                        resp = Some(crate::value::Value::Dict(Arc::new(Mutex::new(m))));
+                    }
+                    if let Some(crate::value::Value::Dict(d)) = &resp {
+                        let mut d = d.lock().unwrap();
+                        if let Some(realm) = &auth {
+                            let is200 = d
+                                .get("status")
+                                .map(|s| matches!(s, crate::value::Value::Int(200)))
+                                .unwrap_or(true);
+                            if is200 {
+                                d.insert("status".to_string(), crate::value::Value::Int(401));
+                            }
+                            let mut h = d.get("headers").cloned().unwrap_or_else(|| {
+                                crate::value::Value::Dict(Arc::new(Mutex::new(
+                                    std::collections::HashMap::new(),
+                                )))
+                            });
+                            if let crate::value::Value::Dict(hd) = &h {
+                                hd.lock().unwrap().insert(
+                                    "WWW-Authenticate".to_string(),
+                                    crate::value::Value::Str(format!("Basic realm=\"{}\"", realm)),
+                                );
+                            }
+                            d.insert("headers".to_string(), h);
                         }
+                        if !cookies.is_empty() {
+                            let mut h = d.get("headers").cloned().unwrap_or_else(|| {
+                                crate::value::Value::Dict(Arc::new(Mutex::new(
+                                    std::collections::HashMap::new(),
+                                )))
+                            });
+                            if let crate::value::Value::Dict(hd) = &h {
+                                for c in &cookies {
+                                    hd.lock().unwrap().insert(
+                                        "Set-Cookie".to_string(),
+                                        crate::value::Value::Str(c.clone()),
+                                    );
+                                }
+                            }
+                            d.insert("headers".to_string(), h);
+                        }
+                    }
+                    if let Ok(s) = crate::builtin::json_stringify(&resp.unwrap()) {
+                        println!("__PX_RESPONSE__:{}", s);
                     }
                 }
             }

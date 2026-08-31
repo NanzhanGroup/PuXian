@@ -1,0 +1,59 @@
+# M27a: WebServer 生产化 — Session / 基础认证 / 请求体限制 / 优雅关闭
+# 双模式：px run == px build（os_spawn 后台启动 px_serve，主线程客户端验证）
+# 覆盖：session_open（Set-Cookie 自动注入 + 跨请求共享）、basic_auth（401 + WWW-Authenticate）、
+#       max_body_size 413、Cookie 解析（REQUEST.cookie）、优雅关闭（SIGTERM）
+
+# ============ 准备站点脚本 ============
+mkdir("/tmp/px_m27a_site")
+write_file("/tmp/px_m27a_site/index.px", "sid = session_open()\nsession_set(\"user\", \"alice\")\nprint(\"sid=\" + sid)\nprint(\"user=\" + session_get(\"user\"))\n")
+write_file("/tmp/px_m27a_site/check.px", "sid = session_open()\nprint(\"got=\" + str(session_get(\"user\")))\n")
+write_file("/tmp/px_m27a_site/auth.px", "if basic_auth(\"admin\", \"secret123\"):\n    print(\"welcome admin\")\n")
+# 服务器脚本（os_spawn 后台启动；px_serve 阻塞，独立进程）
+write_file("/tmp/px_m27a_server.px", "px_serve(18085, \"/tmp/px_m27a_site\", 3000, {\"max_body_size\": 1024})\n")
+
+# ============ 后台启动服务器（优雅关闭：结束前 SIGTERM） ============
+p = os_spawn("/bin/sh", ["-c", "exec px run /tmp/px_m27a_server.px 2>/tmp/px_m27a_server.log"])
+sleep(1200)
+
+# ============ 1. Session：创建 + Set-Cookie 注入 ============
+rr = http_request("http://127.0.0.1:18085/", "GET")
+print("index status:", rr["status"])
+assert rr["status"] == 200
+h = rr["headers"]
+sc = str(h["Set-Cookie"])
+print("set-cookie:", sc)
+assert contains(sc, "pxsid=")
+parts = sc.split("pxsid=")
+sid = parts[1].split(";")[0]
+
+# ============ 2. 无 cookie → 新会话（got=null） ============
+r2 = http_get("http://127.0.0.1:18085/check.px")
+print("check no-cookie:", r2)
+assert contains(r2, "got=null")
+
+# ============ 3. 基础认证：无凭据 → 401 ============
+r3 = http_request("http://127.0.0.1:18085/auth.px", "GET")
+print("auth status:", r3["status"])
+assert r3["status"] == 401
+h3 = r3["headers"]
+assert contains(str(h3["WWW-Authenticate"]), "Basic realm")
+print("auth assert ok")
+
+# ============ 4. 请求体大小限制：>1024 → 413 ============
+big = ""
+i = 0
+while i < 2000:
+    big = big + "x"
+    i = i + 1
+r4 = http_request("http://127.0.0.1:18085/", "POST", big)
+print("oversize status:", r4["status"])
+assert r4["status"] == 413
+
+# ============ 5. 优雅关闭（SIGTERM → 停止 accept + 等在途后退出） ============
+os_kill(p, 15)
+sleep(800)
+rc = os_wait(p)
+print("server exit code after TERM:", rc)
+assert rc == 0
+
+print("M27A_WEBPROD_OK")

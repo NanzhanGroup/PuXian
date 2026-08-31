@@ -272,6 +272,21 @@ pub enum Builtin {
     // M22 P1：解释器循环引用回收（追踪式 GC）
     // gc() → int（强制运行一次垃圾回收；返回 0 = 有并发线程跳过，1 = 已执行）
     Gc,
+    // M27 P0：WebServer 生产化四件套
+    // ① 服务端 TLS：tls_server(cert_pem, key_pem) → bool（PEM 路径或内容；注册后
+    //    px_serve/ws_serve/sse_serve 自动 HTTPS/WSS/SSE-over-TLS）
+    // ② 请求体流式+大小可配：px_serve(port, docroot, timeout_ms, opts{max_body_size, body_tmp_dir})
+    // ③ Cookie/Session/认证：REQUEST.cookie；session_open()/session_id()/session_get(k)/
+    //    session_set(k,v)/session_del(k)/session_destroy()；basic_auth(user, pass) → bool
+    // ④ 优雅关闭：SIGINT/SIGTERM → px_serve 停止 accept + 等在途请求
+    TlsServer,
+    SessionOpen,
+    SessionId,
+    SessionGet,
+    SessionSet,
+    SessionDel,
+    SessionDestroy,
+    BasicAuth,
 }
 
 impl Builtin {
@@ -405,6 +420,14 @@ impl Builtin {
             Builtin::ReadBytes => "read_bytes",
             Builtin::WriteBytes => "write_bytes",
             Builtin::Gc => "gc",
+            Builtin::TlsServer => "tls_server",
+            Builtin::SessionOpen => "session_open",
+            Builtin::SessionId => "session_id",
+            Builtin::SessionGet => "session_get",
+            Builtin::SessionSet => "session_set",
+            Builtin::SessionDel => "session_del",
+            Builtin::SessionDestroy => "session_destroy",
+            Builtin::BasicAuth => "basic_auth",
         }
     }
 }

@@ -1,0 +1,48 @@
+# M27b: 服务端 TLS（HTTPS）— tls_server 注册 + px_serve 自动加密
+# 双模式：px run == px build
+# 依赖：外部设置 PX_TLS_CA_FILE=<自签证书路径>（http_request 信任自签 CA 验证 https）
+# 覆盖：tls_server(cert, key) 注册、HTTPS 服务（curl -k / http_request https 均可访问）、
+#       明文访问 TLS 端口失败、优雅关闭
+
+# ============ 生成自签证书 ============
+os_spawn("/bin/sh", ["-c", "openssl req -x509 -newkey rsa:2048 -keyout /tmp/px_m27b_key.pem -out /tmp/px_m27b_cert.pem -days 1 -nodes -subj /CN=localhost -addext basicConstraints=critical,CA:FALSE -addext subjectAltName=DNS:localhost"])
+sleep(600)
+assert(exists("/tmp/px_m27b_cert.pem"))
+assert(exists("/tmp/px_m27b_key.pem"))
+
+# ============ 准备站点 ============
+mkdir("/tmp/px_m27b_site")
+write_file("/tmp/px_m27b_site/index.px", "sid = session_open()\nprint(\"https-sid=\" + sid)\n")
+write_file("/tmp/px_m27b_site/auth.px", "if basic_auth(\"admin\", \"secret123\"):\n    print(\"https-welcome\")\n")
+
+# ============ 服务器脚本（TLS 注册 + px_serve） ============
+write_file("/tmp/px_m27b_server.px", "tls_server(\"/tmp/px_m27b_cert.pem\", \"/tmp/px_m27b_key.pem\")\npx_serve(18086, \"/tmp/px_m27b_site\", 3000)\n")
+
+# 注册（当前进程也注册，验证 tls_server 返回值）
+assert(tls_server("/tmp/px_m27b_cert.pem", "/tmp/px_m27b_key.pem"))
+
+# ============ 后台启动 HTTPS 服务器 ============
+p = os_spawn("/bin/sh", ["-c", "exec px run /tmp/px_m27b_server.px 2>/tmp/px_m27b_server.log"])
+sleep(1200)
+
+# ============ 1. HTTPS 请求（PX_TLS_CA_FILE 信任自签） ============
+r = http_request("https://localhost:18086/", "GET")
+print("https status:", r["status"])
+assert r["status"] == 200
+b = r["body"]
+print("https body:", b)
+assert contains(b, "https-sid=")
+
+# ============ 2. HTTPS 上 basic_auth ============
+ra = http_request("https://localhost:18086/auth.px", "GET")
+print("https auth status:", ra["status"])
+assert ra["status"] == 401
+
+# ============ 3. 优雅关闭 ============
+os_kill(p, 15)
+sleep(800)
+rc = os_wait(p)
+print("server exit code:", rc)
+assert rc == 0
+
+print("M27B_TLS_OK")

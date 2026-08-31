@@ -16,10 +16,13 @@ use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
+use crate::tls::SConn;
+
 /// WebSocket 连接：读写用独立 try_clone 句柄（ws_recv 阻塞读不阻塞 ws_send）
+/// M27：SConn 支持明文与 TLS（wss）统一读写
 pub struct WsConn {
-    pub read: Mutex<TcpStream>,
-    pub write: Mutex<TcpStream>,
+    pub read: Mutex<SConn>,
+    pub write: Mutex<SConn>,
     pub closed: AtomicBool,
     pub close_tx: mpsc::Sender<()>,
     /// 最近一次读到任何帧的时间（毫秒时间戳，0=未初始化）；ws_heartbeat 超时检测用
@@ -44,7 +47,7 @@ fn now_millis() -> i64 {
 }
 
 /// 注册连接，返回 conn id
-pub fn ws_register(read: TcpStream, write: TcpStream) -> i64 {
+pub fn ws_register(read: SConn, write: SConn) -> i64 {
     let id = WS_NEXT_ID.fetch_add(1, Ordering::SeqCst);
     let (close_tx, _rx) = mpsc::channel::<()>();
     ws_conns().lock().unwrap().insert(
@@ -61,7 +64,7 @@ pub fn ws_register(read: TcpStream, write: TcpStream) -> i64 {
 }
 
 /// 客户端 ws_connect 用：注册并返回 close_rx（供等待关闭）
-pub fn ws_register_client(read: TcpStream, write: TcpStream) -> (i64, mpsc::Receiver<()>) {
+pub fn ws_register_client(read: SConn, write: SConn) -> (i64, mpsc::Receiver<()>) {
     let id = WS_NEXT_ID.fetch_add(1, Ordering::SeqCst);
     let (close_tx, close_rx) = mpsc::channel::<()>();
     ws_conns().lock().unwrap().insert(
@@ -97,7 +100,7 @@ fn ws_mark_closed(c: &Arc<WsConn>, id: i64) {
 const WS_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 /// 读 HTTP 请求头直到 \r\n\r\n（上限 64KB），返回头部字节
-fn read_http_header(stream: &mut TcpStream) -> Result<Vec<u8>, String> {
+fn read_http_header<R: Read>(stream: &mut R) -> Result<Vec<u8>, String> {
     let mut buf: Vec<u8> = Vec::new();
     let mut tmp = [0u8; 4096];
     loop {
@@ -137,7 +140,7 @@ fn ws_accept(key: &str) -> String {
 }
 
 /// 服务端握手：读客户端 Upgrade 请求，校验并回 101；失败返回 Err
-pub fn server_handshake(stream: &mut TcpStream) -> Result<(), String> {
+pub fn server_handshake(stream: &mut SConn) -> Result<(), String> {
     let head = read_http_header(stream)?;
     let text = String::from_utf8_lossy(&head).to_string();
     let req_line = text.lines().next().unwrap_or("");
@@ -208,7 +211,7 @@ const OP_PING: u8 = 0x9;
 const OP_PONG: u8 = 0xA;
 
 /// 精确读 n 字节（循环直到读满或 EOF/错误）
-fn read_exact(stream: &mut TcpStream, buf: &mut [u8]) -> Result<(), WsErr> {
+fn read_exact<R: Read>(stream: &mut R, buf: &mut [u8]) -> Result<(), WsErr> {
     let mut off = 0;
     while off < buf.len() {
         match stream.read(&mut buf[off..]) {
@@ -236,7 +239,7 @@ enum WsErr {
 /// 读帧头（2 字节 + 扩展长度 + 掩码）。返回 (opcode, fin, 载荷长度, 是否掩码, 掩码键)。
 /// M23 拆分为 head/body：head 读成功前超时 → 连接状态完好（帧边界安全超时）；
 /// head 读到后清除超时再读 body，避免载荷中途超时破坏分片状态。
-fn read_frame_head(stream: &mut TcpStream) -> Result<(u8, bool, u64, bool, [u8; 4]), WsErr> {
+fn read_frame_head<R: Read>(stream: &mut R) -> Result<(u8, bool, u64, bool, [u8; 4]), WsErr> {
     let mut h = [0u8; 2];
     read_exact(stream, &mut h)?;
     let fin = (h[0] & 0x80) != 0;
@@ -262,7 +265,7 @@ fn read_frame_head(stream: &mut TcpStream) -> Result<(u8, bool, u64, bool, [u8; 
     Ok((opcode, fin, len, masked, mask))
 }
 
-fn read_frame_body(stream: &mut TcpStream, len: u64, masked: bool, mask: [u8; 4]) -> Result<Vec<u8>, WsErr> {
+fn read_frame_body<R: Read>(stream: &mut R, len: u64, masked: bool, mask: [u8; 4]) -> Result<Vec<u8>, WsErr> {
     let mut payload = vec![0u8; len as usize];
     if len > 0 {
         read_exact(stream, &mut payload)?;
@@ -276,7 +279,7 @@ fn read_frame_body(stream: &mut TcpStream, len: u64, masked: bool, mask: [u8; 4]
 }
 
 /// 读一帧（头 + 载荷）。返回 (opcode, fin, payload)
-fn read_frame(stream: &mut TcpStream) -> Result<(u8, bool, Vec<u8>), WsErr> {
+fn read_frame<R: Read>(stream: &mut R) -> Result<(u8, bool, Vec<u8>), WsErr> {
     let (opcode, fin, len, masked, mask) = read_frame_head(stream)?;
     let payload = read_frame_body(stream, len, masked, mask)?;
     Ok((opcode, fin, payload))
@@ -405,7 +408,7 @@ pub fn ws_heartbeat(conn: i64, interval_ms: i64, timeout_ms: i64) -> bool {
                 let _ = c
                     .write
                     .lock()
-                    .map(|mut w| w.shutdown(std::net::Shutdown::Both));
+                    .map(|mut w| w.shutdown());
                 ws_mark_closed(&c, conn);
                 break;
             }
@@ -441,10 +444,10 @@ pub fn ws_recv(conn: i64, timeout_ms: Option<i64>) -> Option<String> {
                     let _ = r.set_read_timeout(Some(Duration::from_millis(ms as u64)));
                 }
             }
-            match read_frame_head(&mut r) {
+            match read_frame_head(&mut *r) {
                 Ok((opcode, fin, len, masked, mask)) => {
                     let _ = r.set_read_timeout(None);
-                    match read_frame_body(&mut r, len, masked, mask) {
+                    match read_frame_body(&mut *r, len, masked, mask) {
                         Ok(payload) => Ok((opcode, fin, payload)),
                         Err(e) => Err(e),
                     }
@@ -511,7 +514,7 @@ pub fn ws_close(conn: i64) -> bool {
         Err(_) => return false,
     };
     let _ = w.write_all(&close);
-    let _ = w.shutdown(std::net::Shutdown::Both);
+    let _ = w.shutdown();
     ws_mark_closed(&c, conn);
     true
 }
