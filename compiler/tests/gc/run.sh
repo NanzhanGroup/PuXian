@@ -12,19 +12,28 @@ M19="runtime/runtime_aes.c runtime/runtime_xml.c runtime/runtime_zip.c $MZ/miniz
 M22="runtime/runtime_ws.c"
 # M23d RSA 模块（mbedtls 非对称）
 M23D="runtime/runtime_rsa.c"
-gcc -std=c99 -O2 -Iruntime -I$MB/include -I$MZ tests/gc/test_gc.c runtime/runtime.c $M19 $M22 $M23D \
+# M28 SQLite（runtime_sqlite.c + sqlite3 静态库）+ 路由（runtime_route.c）
+M28S="runtime/runtime_sqlite.c runtime/runtime_route.c"
+M28O="runtime/third_party/sqlite3/sqlite3.o"
+M28I="-Iruntime/third_party/sqlite3"
+if [ ! -f "$M28O" ]; then
+    echo "预编译 sqlite3.o（首次约 3 分钟）..."
+    gcc -O2 -pthread -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_FOREIGN_KEYS=1 \
+        -c runtime/third_party/sqlite3/sqlite3.c -o "$M28O"
+fi
+gcc -std=c99 -O2 -Iruntime -I$MB/include -I$MZ tests/gc/test_gc.c runtime/runtime.c $M19 $M22 $M23D $M28I $M28S $M28O \
     $MB/lib/libmbedtls.a $MB/lib/libmbedx509.a $MB/lib/libmbedcrypto.a \
     -o /tmp/test_gc -lpthread -lm
 /tmp/test_gc
 echo "---"
 echo "并发 GC 测试（M11）："
-gcc -std=c99 -O2 -Iruntime -I$MB/include -I$MZ tests/gc/test_gc_concurrent.c runtime/runtime.c $M19 $M22 $M23D \
+gcc -std=c99 -O2 -Iruntime -I$MB/include -I$MZ tests/gc/test_gc_concurrent.c runtime/runtime.c $M19 $M22 $M23D $M28I $M28S $M28O \
     $MB/lib/libmbedtls.a $MB/lib/libmbedx509.a $MB/lib/libmbedcrypto.a \
     -o /tmp/test_gc_conc -lpthread -lm
 /tmp/test_gc_conc
 echo "---"
 echo "GC 演示（编译模式 + 内存对照）："
-gcc -std=c99 -O2 -Iexamples/build -Iruntime -I$MB/include -I$MZ examples/build/gc_demo.c runtime/runtime.c $M19 $M22 $M23D \
+gcc -std=c99 -O2 -Iexamples/build -Iruntime -I$MB/include -I$MZ examples/build/gc_demo.c runtime/runtime.c $M19 $M22 $M23D $M28I $M28S $M28O \
     $MB/lib/libmbedtls.a $MB/lib/libmbedx509.a $MB/lib/libmbedcrypto.a \
     -o /tmp/gc_demo -lpthread -lm 2>/dev/null || true
 echo "（用 examples/ 下 px build gc_demo.px 生成后运行 ./build/gc_demo 验证）"

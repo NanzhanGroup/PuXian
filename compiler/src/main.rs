@@ -20,6 +20,7 @@ mod ast_view;
 mod bench;
 mod builtin;
 mod codegen;
+mod cron;
 mod crypto;
 mod doc;
 mod env;
@@ -36,9 +37,11 @@ mod parser;
 mod pkg;
 mod regex;
 mod rsa;
+mod sqlite;
 mod test;
 mod tls;
 mod token;
+mod tztime;
 mod value;
 
 mod web;
@@ -925,6 +928,8 @@ fn run_build(file: &str) -> ExitCode {
         "runtime_zip.c",
         "runtime_ws.c",
         "runtime_rsa.c",
+        "runtime_sqlite.c",
+        "runtime_route.c",
     ];
     let mut ok_copy = true;
     for f in rt_files {
@@ -958,6 +963,31 @@ fn run_build(file: &str) -> ExitCode {
     // mbedtls 静态库位于 compiler/runtime/mbedtls/（M10 HTTPS / M19 AES）
     let mbedtls_dir = runtime_dir.join("mbedtls");
     let mbedtls_lib = mbedtls_dir.join("lib");
+    // M28 P1：SQLite（third_party/sqlite3 的 sqlite3.c amalgamation）
+    // -DSQLITE_OMIT_LOAD_EXTENSION 禁动态扩展（安全）；THREADSAFE 默认开
+    let sqlite3_dir = runtime_dir.join("third_party").join("sqlite3");
+    let sqlite3_c = build_dir.join("sqlite3.c");
+    // M28：sqlite3.o 预编译缓存（third_party/sqlite3/sqlite3.o）——存在则跳过
+    // sqlite3.c 全量编译约 3 分钟，20 个示例全量 build 会拖垮回归；
+    // 预编译 .o 后每个示例 build 秒级完成。若无缓存则退回编译 .c（CI 首跑）。
+    let mut sqlite_src: Vec<std::path::PathBuf> = Vec::new();
+    let cached_o = sqlite3_dir.join("sqlite3.o");
+    if cached_o.is_file() {
+        let dst_o = build_dir.join("sqlite3.o");
+        if let Ok(c) = std::fs::read(&cached_o) {
+            let _ = std::fs::write(&dst_o, c);
+            sqlite_src.push(dst_o);
+        }
+    }
+    if sqlite_src.is_empty() {
+        if let Ok(c) = std::fs::read(sqlite3_dir.join("sqlite3.c")) {
+            let _ = std::fs::write(&sqlite3_c, c);
+            sqlite_src.push(sqlite3_c);
+        }
+    }
+    if let Ok(h) = std::fs::read(sqlite3_dir.join("sqlite3.h")) {
+        let _ = std::fs::write(build_dir.join("sqlite3.h"), h);
+    }
     let mut gcc_cmd = std::process::Command::new("gcc");
     gcc_cmd
         .args(["-static", "-O2", "-pthread", "-o"])
@@ -969,9 +999,16 @@ fn run_build(file: &str) -> ExitCode {
         .arg(build_dir.join("runtime_zip.c"))
         .arg(build_dir.join("runtime_ws.c"))
         .arg(build_dir.join("runtime_rsa.c"))
+        .arg(build_dir.join("runtime_sqlite.c"))
+        .arg(build_dir.join("runtime_route.c"))
+        .args(sqlite_src.iter())
         .arg(build_dir.join("miniz.c"))
         .arg(build_dir.join("miniz_tinfl.c"))
         .arg(build_dir.join("miniz_tdef.c"))
+        .arg("-DSQLITE_OMIT_LOAD_EXTENSION")
+        .arg("-DSQLITE_DEFAULT_FOREIGN_KEYS=1")
+        .arg("-I")
+        .arg(build_dir.clone())
         .arg("-I")
         .arg(miniz_dir.clone())
         .arg("-I")
@@ -979,7 +1016,8 @@ fn run_build(file: &str) -> ExitCode {
         .arg(mbedtls_lib.join("libmbedtls.a"))
         .arg(mbedtls_lib.join("libmbedx509.a"))
         .arg(mbedtls_lib.join("libmbedcrypto.a"))
-        .arg("-lm");
+        .arg("-lm")
+        .arg("-ldl");
     let gcc_out = gcc_cmd.output();
 
     match gcc_out {

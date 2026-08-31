@@ -1,0 +1,83 @@
+# M28 示例：时间时区 + SQLite 绑定（确定性部分，双模式逐字节一致）
+# 运行：px run m28_time_sqlite.px == px build m28_time_sqlite.px
+
+print("== 时间 / 时区 ==")
+# time_format：UTC + 固定偏移
+assert time_format(0, "%Y-%m-%d %H:%M:%S", "UTC") == "1970-01-01 00:00:00"
+assert time_format(1709890245, "%Y-%m-%d %H:%M:%S %a %A", "UTC") == "2024-03-08 09:30:45 Fri Friday"
+assert time_format(1709890245, "%Y-%m-%d %H:%M:%S %z %Z", "+08:00") == "2024-03-08 17:30:45 +0800 +0800"
+assert time_format(1709890245, "%H:%M:%S", "-05:30") == "04:00:45"
+assert time_format(1709890245, "%Y %j %b %B %p", "UTC") == "2024 068 Mar March AM"
+assert time_format(1709890245, "%I:%M %p", "UTC") == "09:30 AM"
+assert time_format(1709890245, "100%%", "UTC") == "100%"
+print("time_format OK")
+
+# time_parse：解析回 epoch 秒（round-trip）
+assert time_parse("2024-03-08 09:30:45", "%Y-%m-%d %H:%M:%S", "UTC") == 1709890245
+assert time_parse("2024-03-08 17:30:45", "%Y-%m-%d %H:%M:%S", "+08:00") == 1709890245
+assert time_parse("2024-03-08 17:30:45 +0800", "%Y-%m-%d %H:%M:%S %z", "UTC") == 1709890245
+assert time_parse("2024/03/08 09:30:45", "%Y/%m/%d %H:%M:%S", "UTC") == 1709890245
+assert time_parse("09:30:45", "%H:%M:%S", "UTC") == 34245  # 缺省年月日取 1970-01-01
+assert time_parse("2024-02-30 00:00:00", "%Y-%m-%d %H:%M:%S", "UTC") == null  # 非法日期
+assert time_parse("bad", "%Y-%m-%d", "UTC") == null
+print("time_parse OK")
+
+# tz_offset
+assert tz_offset("UTC") == 0
+assert tz_offset("+08:00") == 28800
+assert tz_offset("-05:30") == -19800
+assert tz_offset("+0800") == 28800
+assert tz_offset("bogus") == null
+print("tz_offset OK")
+
+print("== SQLite 绑定 ==")
+# 内存库 CRUD
+db = sqlite_open(":memory:")
+assert type(db) == "int" and db > 0
+sqlite_exec(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, score REAL, data BLOB, ok INTEGER)")
+sqlite_exec(db, "INSERT INTO t(name, score, data, ok) VALUES ('alice', 90.5, x'0102', 1), ('bob', 88.0, x'FF', 0)")
+assert sqlite_last_insert_rowid(db) == 2
+
+rows = sqlite_query(db, "SELECT id, name, score, data, ok FROM t ORDER BY id")
+assert len(rows) == 2
+r0 = rows[0]
+assert r0["name"] == "alice"
+assert r0["score"] == 90.5
+assert bytes_to_hex(r0["data"]) == "0102"
+assert r0["ok"] == 1
+
+# 位置参数绑定（list → ?）
+rows = sqlite_query(db, "SELECT name FROM t WHERE score >= ?", [89])
+assert len(rows) == 1 and rows[0]["name"] == "alice"
+
+# 命名参数绑定（dict → :name）
+rows = sqlite_query(db, "SELECT name FROM t WHERE name = :n", {"n": "bob"})
+assert len(rows) == 1 and rows[0]["name"] == "bob"
+
+# BLOB 二进制安全（含 NUL）
+sqlite_exec(db, "CREATE TABLE b(v BLOB)")
+sqlite_exec(db, "INSERT INTO b(v) VALUES (?)", [bytes("a\u{0}b")])
+rows = sqlite_query(db, "SELECT v FROM b")
+assert bytes_to_hex(rows[0]["v"]) == "610062"
+
+# 更新 + 事务
+sqlite_exec(db, "UPDATE t SET score = 100 WHERE name = 'alice'")
+rows = sqlite_query(db, "SELECT score FROM t WHERE name = 'alice'")
+assert rows[0]["score"] == 100
+sqlite_exec(db, "BEGIN")
+sqlite_exec(db, "DELETE FROM t WHERE name = 'bob'")
+sqlite_exec(db, "ROLLBACK")
+rows = sqlite_query(db, "SELECT count(*) AS n FROM t")
+assert rows[0]["n"] == 2
+
+# 错误处理：非法 SQL → null；非法句柄 → null
+assert sqlite_query(db, "SELECT * FROM no_such_table") == null
+assert sqlite_query(999, "SELECT 1") == null
+assert sqlite_exec(999, "SELECT 1") == null
+
+# 转义
+assert sqlite_escape("it's") == "it''s"
+assert sqlite_close(db) == true
+print("SQLite OK")
+
+print("M28 时间/时区 + SQLite 全部通过")

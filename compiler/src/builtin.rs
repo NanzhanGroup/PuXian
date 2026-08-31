@@ -2381,6 +2381,165 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
                 .unwrap_or(Value::Null);
             Ok(Value::Bool(crate::web::basic_auth_with(&req, user, pass)))
         }
+
+        // ==================== M28 P1：路由表 + 中间件 ====================
+        // route(method, pattern, handler) → bool：注册路由（method "*" 匹配任意）
+        // pattern: /api/users /api/users/:id /files/*（:name 路径参数；* 通配剩余）
+        Builtin::Route => {
+            if args.len() != 3 {
+                return Err(err("route 需要 (method, pattern, handler) 参数", pos));
+            }
+            let method = expect_str(&args[0], "route", pos)?;
+            let pattern = expect_str(&args[1], "route", pos)?;
+            let handler = args[2].clone();
+            if !matches!(handler, Value::Func(_)) {
+                return Err(err("route 的 handler 必须是函数", pos));
+            }
+            crate::web::route_add(method, pattern, handler).map_err(|e| err(e, pos))?;
+            Ok(Value::Bool(true))
+        }
+        // middleware(fn) → bool：注册中间件（fn(req) → null 继续 / 非 null 短路）
+        Builtin::Middleware => {
+            if args.len() != 1 {
+                return Err(err("middleware 需要 (fn) 参数", pos));
+            }
+            let handler = args[0].clone();
+            if !matches!(handler, Value::Func(_)) {
+                return Err(err("middleware 的参数必须是函数", pos));
+            }
+            crate::web::middleware_add(handler).map_err(|e| err(e, pos))?;
+            Ok(Value::Bool(true))
+        }
+
+        // ==================== M28 P1：时间 / 时区 ====================
+        // time_format(ts, fmt[, tz]) → str（tz 默认 "UTC"；支持 "+08:00"/"-05:30"）
+        Builtin::TimeFormat => {
+            if args.len() < 2 || args.len() > 3 {
+                return Err(err("time_format 需要 (ts, fmt[, tz]) 参数", pos));
+            }
+            let ts = expect_int(&args[0], "time_format", pos)?;
+            let fmt = expect_str(&args[1], "time_format", pos)?;
+            let tz = if args.len() == 3 { expect_str(&args[2], "time_format", pos)? } else { "UTC" };
+            Ok(Value::Str(crate::tztime::time_format(ts, fmt, tz)))
+        }
+        // time_parse(str, fmt[, tz]) → int|null（解析失败 → null）
+        Builtin::TimeParse => {
+            if args.len() < 2 || args.len() > 3 {
+                return Err(err("time_parse 需要 (str, fmt[, tz]) 参数", pos));
+            }
+            let s = expect_str(&args[0], "time_parse", pos)?;
+            let fmt = expect_str(&args[1], "time_parse", pos)?;
+            let tz = if args.len() == 3 { expect_str(&args[2], "time_parse", pos)? } else { "UTC" };
+            match crate::tztime::time_parse(s, fmt, tz) {
+                Some(ts) => Ok(Value::Int(ts)),
+                None => Ok(Value::Null),
+            }
+        }
+        // tz_offset(tz) → int（偏移秒；非法 → null）
+        Builtin::TzOffset => {
+            if args.len() != 1 {
+                return Err(err("tz_offset 需要 (tz) 参数", pos));
+            }
+            let tz = expect_str(&args[0], "tz_offset", pos)?;
+            match crate::tztime::tz_offset(tz) {
+                Some(off) => Ok(Value::Int(off)),
+                None => Ok(Value::Null),
+            }
+        }
+
+        // ==================== M28 P1：cron 定时调度 ====================
+        // cron(expr, fn, ...args) → int：6 字段（秒 分 时 日 月 周）
+        // 后台每秒 tick 匹配触发；clear_timer(id) 取消
+        Builtin::Cron => {
+            if args.len() < 2 {
+                return Err(err("cron 需要 (expr, fn[, ...args]) 参数", pos));
+            }
+            let expr = expect_str(&args[0], "cron", pos)?;
+            let fv = args[1].clone();
+            if !matches!(fv, Value::Func(_)) {
+                return Err(err("cron 第二个参数必须是函数", pos));
+            }
+            let extra = args[2..].to_vec();
+            let spec = crate::cron::parse_cron(expr).map_err(|e| err(e, pos))?;
+            let timers = interp.timers.clone();
+            let id = timers.next_id.fetch_add(1, Ordering::SeqCst) + 1;
+            let interp = interp.fork();
+            std::thread::spawn(move || {
+                let mut i = interp;
+                loop {
+                    std::thread::sleep(Duration::from_millis(1000));
+                    // 取消检查
+                    if timers.canceled.lock().unwrap().contains(&id) {
+                        timers.canceled.lock().unwrap().remove(&id);
+                        return;
+                    }
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+                    if crate::cron::cron_match(&spec, now, 0) {
+                        if let Err(e) = i.call_value(&fv, &extra, pos) {
+                            eprintln!("[cron {}] {}", id, e);
+                        }
+                    }
+                }
+            });
+            Ok(Value::Int(id))
+        }
+
+        // ==================== M28 P1：SQLite 绑定 ====================
+        // sqlite_open(path) → int|null（打开失败 → null）
+        Builtin::SqliteOpen => {
+            if args.len() != 1 {
+                return Err(err("sqlite_open 需要 (path) 参数", pos));
+            }
+            let path = expect_str(&args[0], "sqlite_open", pos)?;
+            Ok(crate::sqlite::sqlite_open(path))
+        }
+        // sqlite_exec(db, sql[, params]) → int 受影响行数 | null
+        Builtin::SqliteExec => {
+            if args.len() < 2 || args.len() > 3 {
+                return Err(err("sqlite_exec 需要 (db, sql[, params]) 参数", pos));
+            }
+            let db = expect_int(&args[0], "sqlite_exec", pos)?;
+            let sql = expect_str(&args[1], "sqlite_exec", pos)?;
+            let params = if args.len() == 3 { Some(&args[2]) } else { None };
+            Ok(crate::sqlite::sqlite_exec(db, sql, params))
+        }
+        // sqlite_query(db, sql[, params]) → list[dict]|null
+        Builtin::SqliteQuery => {
+            if args.len() < 2 || args.len() > 3 {
+                return Err(err("sqlite_query 需要 (db, sql[, params]) 参数", pos));
+            }
+            let db = expect_int(&args[0], "sqlite_query", pos)?;
+            let sql = expect_str(&args[1], "sqlite_query", pos)?;
+            let params = if args.len() == 3 { Some(&args[2]) } else { None };
+            Ok(crate::sqlite::sqlite_query(db, sql, params))
+        }
+        // sqlite_close(db) → bool
+        Builtin::SqliteClose => {
+            if args.len() != 1 {
+                return Err(err("sqlite_close 需要 (db) 参数", pos));
+            }
+            let db = expect_int(&args[0], "sqlite_close", pos)?;
+            Ok(Value::Bool(crate::sqlite::sqlite_close(db)))
+        }
+        // sqlite_escape(s) → str
+        Builtin::SqliteEscape => {
+            if args.len() != 1 {
+                return Err(err("sqlite_escape 需要 (s) 参数", pos));
+            }
+            let s = expect_str(&args[0], "sqlite_escape", pos)?;
+            Ok(Value::Str(crate::sqlite::sqlite_escape(s)))
+        }
+        // sqlite_last_insert_rowid(db) → int
+        Builtin::SqliteLastInsertRowid => {
+            if args.len() != 1 {
+                return Err(err("sqlite_last_insert_rowid 需要 (db) 参数", pos));
+            }
+            let db = expect_int(&args[0], "sqlite_last_insert_rowid", pos)?;
+            Ok(Value::Int(crate::sqlite::sqlite_last_insert_rowid(db)))
+        }
     }
 }
 

@@ -156,6 +156,8 @@ void px_dict_set(LXValue dict, const char* key, LXValue val);
 LXValue px_dict_get(LXValue dict, const char* key);
 bool px_dict_has(LXValue dict, const char* key);
 int px_len(LXValue v);
+// 大小写不敏感取 dict 键（HTTP 头等场景；未找到返回 px_null）——M28 起公共
+LXValue px_dict_get_ci(LXValue d, const char* key);
 
 // ==================== 调用 ====================
 
@@ -257,6 +259,27 @@ void px_error(const char* fmt, ...) __attribute__((noreturn));
 void px_gc_collect(void);
 // 返回 GC 次数；live 输出当前存活对象数，total 输出累计回收对象数
 int px_gc_stats(int* live, int* total);
+
+// ==================== M28 P1：路由表 + 中间件（runtime_route.c） ====================
+LXValue bi_route(LXValue* args, int nargs, void* ctx);
+LXValue bi_middleware(LXValue* args, int nargs, void* ctx);
+// 路由表非空？（决定 px_serve 是否走路由优先）
+int px_route_has(void);
+// 匹配路由并执行中间件链 + handler，发送响应。返回 1=已处理 / 0=未匹配。
+// conn 为 PxConn*（定义在下方 M27 段；用 void* 避免前向引用）
+int px_route_try_dispatch(void* conn, LXValue req, const char* method, int head_only);
+// M28 P1：SQLite 绑定（runtime_sqlite.c）
+LXValue bi_sqlite_open(LXValue* args, int nargs, void* ctx);
+LXValue bi_sqlite_exec(LXValue* args, int nargs, void* ctx);
+LXValue bi_sqlite_query(LXValue* args, int nargs, void* ctx);
+LXValue bi_sqlite_close(LXValue* args, int nargs, void* ctx);
+LXValue bi_sqlite_escape(LXValue* args, int nargs, void* ctx);
+LXValue bi_sqlite_last_insert_rowid(LXValue* args, int nargs, void* ctx);
+// M28 P1：时间时区 + cron（runtime.c 内实现）
+LXValue bi_time_format(LXValue* args, int nargs, void* ctx);
+LXValue bi_time_parse(LXValue* args, int nargs, void* ctx);
+LXValue bi_tz_offset(LXValue* args, int nargs, void* ctx);
+LXValue bi_cron(LXValue* args, int nargs, void* ctx);
 
 // ==================== M27 P0：服务端 TLS / PxConn 连接抽象 ====================
 // PxConn 统一明文/TLS 连接（px_serve / sse_serve / ws_serve 服务端用）：

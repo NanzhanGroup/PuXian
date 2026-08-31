@@ -17,7 +17,7 @@ def raw_req(method, target, body, ctype):
     return resp
 
 # 启动应用服务器（每请求独立线程；脚本超时 800ms）
-spawn px_serve(18081, "examples/webapp", 800)
+spawn px_serve(18081, "../examples/webapp", 800)
 sleep(600)  # 等服务线程完成 bind
 
 # ---- 1. 目录 index：GET / → index.px 内嵌执行 ----
@@ -75,12 +75,12 @@ assert(contains(h12, "200 OK"), "12 HEAD 状态 200")
 assert(contains(h12, "普贤静态文件测试") == false, "12 HEAD 不应带 body")
 
 # ---- 13. px_exec：语言层嵌入 API（内嵌解释器执行 + 捕获 print 输出） ----
-let inner = px_exec("examples/webapp/include.px", {"name": "东月", "count": 3})
+let inner = px_exec("../examples/webapp/include.px", {"name": "东月", "count": 3})
 assert(inner == "内嵌执行: 东月，次数=3\n", "13 px_exec params 注入 + 捕获输出")
-let missing = px_exec("examples/webapp/no_such.px", {})
+let missing = px_exec("../examples/webapp/no_such.px", {})
 assert(missing == null, "13 px_exec 文件不存在返回 null")
 # Web 风格脚本在非 Web 语境下安全运行（默认注入空 REQUEST/GET/POST/SERVER）
-let webish = px_exec("examples/webapp/hello.px", {})
+let webish = px_exec("../examples/webapp/hello.px", {})
 assert(webish == "你好，世界\n", "13 px_exec 默认 Web 变量注入")
 
 # ---- 14. SERVER 全局变量注入 ----

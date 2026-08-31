@@ -87,6 +87,11 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx);
 static LXValue bi_set_timeout(LXValue* args, int nargs, void* ctx);
 static LXValue bi_set_interval(LXValue* args, int nargs, void* ctx);
 static LXValue bi_clear_timer(LXValue* args, int nargs, void* ctx);
+// M28 P1：时间时区 + cron（定义在文件尾部 M28 区块）
+LXValue bi_time_format(LXValue* args, int nargs, void* ctx);
+LXValue bi_time_parse(LXValue* args, int nargs, void* ctx);
+LXValue bi_tz_offset(LXValue* args, int nargs, void* ctx);
+LXValue bi_cron(LXValue* args, int nargs, void* ctx);
 // M21 P1：SSE 服务端（LLM 流式推送 / 实时通知）
 static LXValue bi_sse_serve(LXValue* args, int nargs, void* ctx);
 static LXValue bi_sse_send(LXValue* args, int nargs, void* ctx);
@@ -3904,6 +3909,22 @@ void px_register_builtins(void) {
     px_set_global("session_del", px_native("session_del", bi_session_del));
     px_set_global("session_destroy", px_native("session_destroy", bi_session_destroy));
     px_set_global("basic_auth", px_native("basic_auth", bi_basic_auth));
+    // M28 P1：路由表 + 中间件（runtime_route.c）
+    px_set_global("route", px_native("route", bi_route));
+    px_set_global("middleware", px_native("middleware", bi_middleware));
+    // M28 P1：SQLite 绑定（runtime_sqlite.c）
+    px_set_global("sqlite_open", px_native("sqlite_open", bi_sqlite_open));
+    px_set_global("sqlite_exec", px_native("sqlite_exec", bi_sqlite_exec));
+    px_set_global("sqlite_query", px_native("sqlite_query", bi_sqlite_query));
+    px_set_global("sqlite_close", px_native("sqlite_close", bi_sqlite_close));
+    px_set_global("sqlite_escape", px_native("sqlite_escape", bi_sqlite_escape));
+    px_set_global("sqlite_last_insert_rowid", px_native("sqlite_last_insert_rowid", bi_sqlite_last_insert_rowid));
+    // M28 P1：时间 / 时区
+    px_set_global("time_format", px_native("time_format", bi_time_format));
+    px_set_global("time_parse", px_native("time_parse", bi_time_parse));
+    px_set_global("tz_offset", px_native("tz_offset", bi_tz_offset));
+    // M28 P1：cron 定时调度
+    px_set_global("cron", px_native("cron", bi_cron));
     // M22 P1：强制垃圾回收（解释器追踪式 GC / 编译模式保守标记-清除）
     px_set_global("gc", px_native("gc", bi_gc));
     // M23 P1：进程/信号（文殊场景收尾：外部工具编排、守护进程、优雅停机）
@@ -6177,7 +6198,7 @@ static char* px_url_decode(const char* s) {
 }
 
 // 大小写不敏感查找 dict 键（HTTP 头名不区分大小写）
-static LXValue px_dict_get_ci(LXValue d, const char* key) {
+LXValue px_dict_get_ci(LXValue d, const char* key) {
     if (d.type != PX_DICT) return px_null();
     LXObject* o = d.as.obj;
     for (int i = 0; i < o->as.dict.len; i++) {
@@ -8462,6 +8483,20 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         }
     }
 
+    // M28：路由表非空 → 优先匹配路由（method+path 模式 + :id 参数 + 中间件链）
+    if (px_route_has()) {
+        if (px_route_try_dispatch(&conn, req, method, strcmp(method, "HEAD") == 0)) {
+            if (body_tmp_path[0]) unlink(body_tmp_path);
+            if (body_tmp_file >= 0) close(body_tmp_file);
+            if (body_buf) xfree(body_buf);
+            px_reset_request_state();
+            px_conn_close(&conn);
+            __sync_fetch_and_sub(&g_px_inflight, 1);
+            g_cur_conn = NULL;
+            return px_null();
+        }
+    }
+
     // 6. 路径映射 + 目录隔离（穿越防护：拒绝 ".." 路径段）
     LXValue root_v = px_get_global("__px_docroot");
     const char* docroot = (root_v.type == PX_STR) ? root_v.as.obj->as.str.data : ".";
@@ -8713,4 +8748,526 @@ static LXValue bi_px_exec(LXValue* args, int nargs, void* ctx) {
     LXValue r = rc == 0 ? px_str_len(out, out_len) : px_str("");
     if (out) xfree(out);
     return r;
+}
+
+// ==================== M28 P1：时间 / 时区 ====================
+// 纯整数民用日历算法（与解释器 tztime.rs 逐字节一致，双模式确定性）：
+// Howard Hinnant days_from_civil / civil_from_days；时区仅 UTC + 固定偏移。
+// time_format(ts, fmt[, tz]) → str；time_parse(str, fmt[, tz]) → int|null；tz_offset(tz) → int
+
+// days_from_civil(y, m, d) → 1970-01-01 起天数
+static int64_t px_days_from_civil(int64_t y, int64_t m, int64_t d) {
+    if (m <= 2) y -= 1;
+    int64_t era = (y >= 0 ? y : y - 399) / 400;
+    int64_t yoe = y - era * 400;
+    int64_t mp = (m + 9) % 12;
+    int64_t doy = (153 * mp + 2) / 5 + d - 1;
+    int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + doe - 719468;
+}
+
+// civil_from_days(z) → (y, m, d)
+static void px_civil_from_days(int64_t z, int64_t* y, int64_t* m, int64_t* d) {
+    z += 719468;
+    int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+    int64_t doe = z - era * 146097;
+    int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    int64_t yy = yoe + era * 400;
+    int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    int64_t mp = (5 * doy + 2) / 153;
+    int64_t dd = doy - (153 * mp + 2) / 5 + 1;
+    int64_t mm = mp < 10 ? mp + 3 : mp - 9;
+    *y = mm <= 2 ? yy + 1 : yy;
+    *m = mm;
+    *d = dd;
+}
+
+// tz → 偏移秒；非法返回 0（UTC）
+static int64_t px_tz_off(const char* tz) {
+    if (!tz || !*tz) return 0;
+    if (strcasecmp(tz, "utc") == 0 || strcmp(tz, "Z") == 0) return 0;
+    if (tz[0] != '+' && tz[0] != '-') return 0;
+    int64_t sign = tz[0] == '-' ? -1 : 1;
+    const char* rest = tz + 1;
+    int64_t hh = 0, mm = 0;
+    const char* colon = strchr(rest, ':');
+    if (colon) {
+        hh = atoll(rest);
+        mm = atoll(colon + 1);
+    } else if (strlen(rest) == 4) {
+        char hb[3] = {rest[0], rest[1], 0};
+        char mb[3] = {rest[2], rest[3], 0};
+        hh = atoll(hb);
+        mm = atoll(mb);
+    } else {
+        hh = atoll(rest);
+    }
+    if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return 0;
+    return sign * (hh * 3600 + mm * 60);
+}
+
+// 拆解 epoch 秒 → (y, mo, d, h, mi, s, wd[0=Sun])
+static void px_breakdown(int64_t ts, int64_t off, int64_t* y, int64_t* mo, int64_t* d,
+                         int64_t* h, int64_t* mi, int64_t* s, int64_t* wd) {
+    int64_t local = ts + off;
+    int64_t days = local >= 0 ? local / 86400 : -((-local + 86399) / 86400);
+    int64_t secs = local - days * 86400;
+    if (secs < 0) { secs += 86400; days -= 1; }
+    px_civil_from_days(days, y, mo, d);
+    *h = secs / 3600;
+    *mi = (secs % 3600) / 60;
+    *s = secs % 60;
+    // 1970-01-01 = 周四(4)
+    int64_t w = (4 + days) % 7;
+    if (w < 0) w += 7;
+    *wd = w;
+}
+
+static const char* PX_WEEKDAYS_S[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
+static const char* PX_WEEKDAYS_F[] = {"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
+static const char* PX_MONTHS_S[] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
+static const char* PX_MONTHS_F[] = {"January","February","March","April","May","June","July","August","September","October","November","December"};
+
+// time_format(ts, fmt[, tz]) → str
+LXValue bi_time_format(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 2 || nargs > 3) px_error("time_format 需要 (ts, fmt[, tz]) 参数");
+    if (args[0].type != PX_INT || args[1].type != PX_STR) px_error("time_format 参数类型错误");
+    int64_t off = 0;
+    if (nargs == 3 && args[2].type == PX_STR) off = px_tz_off(args[2].as.obj->as.str.data);
+    int64_t y, mo, d, h, mi, s, wd;
+    px_breakdown(args[0].as.i, off, &y, &mo, &d, &h, &mi, &s, &wd);
+    const char* fmt = args[1].as.obj->as.str.data;
+    char out[512];
+    int oi = 0;
+    for (const char* p = fmt; *p && oi < 500; p++) {
+        if (*p == '%' && p[1]) {
+            p++;
+            switch (*p) {
+                case 'Y': oi += snprintf(out + oi, 512 - oi, "%04lld", (long long)y); break;
+                case 'y': oi += snprintf(out + oi, 512 - oi, "%02lld", (long long)(y % 100 + (y < 0 ? 100 : 0) - (y < 0 ? 100 : 0))); break;
+                case 'm': oi += snprintf(out + oi, 512 - oi, "%02lld", (long long)mo); break;
+                case 'd': oi += snprintf(out + oi, 512 - oi, "%02lld", (long long)d); break;
+                case 'H': oi += snprintf(out + oi, 512 - oi, "%02lld", (long long)h); break;
+                case 'M': oi += snprintf(out + oi, 512 - oi, "%02lld", (long long)mi); break;
+                case 'S': oi += snprintf(out + oi, 512 - oi, "%02lld", (long long)s); break;
+                case 'j': {
+                    int64_t doy = px_days_from_civil(y, mo, d) - px_days_from_civil(y, 1, 1) + 1;
+                    oi += snprintf(out + oi, 512 - oi, "%03lld", (long long)doy);
+                    break;
+                }
+                case 'a': oi += snprintf(out + oi, 512 - oi, "%s", PX_WEEKDAYS_S[wd]); break;
+                case 'A': oi += snprintf(out + oi, 512 - oi, "%s", PX_WEEKDAYS_F[wd]); break;
+                case 'b': case 'h': oi += snprintf(out + oi, 512 - oi, "%s", PX_MONTHS_S[mo - 1]); break;
+                case 'B': oi += snprintf(out + oi, 512 - oi, "%s", PX_MONTHS_F[mo - 1]); break;
+                case 'p': oi += snprintf(out + oi, 512 - oi, "%s", h < 12 ? "AM" : "PM"); break;
+                case 'z': {
+                    int64_t a = off < 0 ? -off : off;
+                    oi += snprintf(out + oi, 512 - oi, "%c%02lld%02lld", off < 0 ? '-' : '+',
+                                   (long long)(a / 3600), (long long)((a % 3600) / 60));
+                    break;
+                }
+                case 'Z': {
+                    if (off == 0) {
+                        oi += snprintf(out + oi, 512 - oi, "UTC");
+                    } else {
+                        int64_t a = off < 0 ? -off : off;
+                        oi += snprintf(out + oi, 512 - oi, "%c%02lld%02lld", off < 0 ? '-' : '+',
+                                       (long long)(a / 3600), (long long)((a % 3600) / 60));
+                    }
+                    break;
+                }
+                case 'I': {
+                    int64_t h12 = h % 12;
+                    oi += snprintf(out + oi, 512 - oi, "%02lld", (long long)(h12 == 0 ? 12 : h12));
+                    break;
+                }
+                case '%': out[oi++] = '%'; break;
+                default: out[oi++] = '%'; out[oi++] = *p; break;
+            }
+        } else {
+            out[oi++] = *p;
+        }
+    }
+    out[oi] = 0;
+    return px_str(out);
+}
+
+// 读连续数字（最多 max 位）→ 成功返回 1 并更新 idx
+static int px_read_int(const char* b, int len, int* idx, int max, int64_t* v) {
+    int i = *idx;
+    int start = i;
+    while (i < len && b[i] >= '0' && b[i] <= '9' && (i - start) < max) i++;
+    if (i == start) return 0;
+    *v = atoll(b + start);
+    *idx = i;
+    return 1;
+}
+
+// time_parse(str, fmt[, tz]) → int|null
+LXValue bi_time_parse(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 2 || nargs > 3) px_error("time_parse 需要 (str, fmt[, tz]) 参数");
+    if (args[0].type != PX_STR || args[1].type != PX_STR) px_error("time_parse 参数类型错误");
+    int64_t off = 0;
+    if (nargs == 3 && args[2].type == PX_STR) off = px_tz_off(args[2].as.obj->as.str.data);
+    const char* s = args[0].as.obj->as.str.data;
+    int slen = args[0].as.obj->as.str.len;
+    const char* fmt = args[1].as.obj->as.str.data;
+    int si = 0, fi = 0;
+    int64_t year = 1970, mon = 1, day = 1, hour = 0, minute = 0, sec = 0;
+    int64_t parsed_z = 0;
+    int have_z = 0;
+    while (fmt[fi]) {
+        if (fmt[fi] == '%' && fmt[fi + 1]) {
+            fi++;
+            switch (fmt[fi]) {
+                case 'Y': if (!px_read_int(s, slen, &si, 4, &year)) return px_null(); break;
+                case 'y': {
+                    int64_t v;
+                    if (!px_read_int(s, slen, &si, 2, &v)) return px_null();
+                    year = v < 69 ? 2000 + v : 1900 + v;
+                    break;
+                }
+                case 'm': if (!px_read_int(s, slen, &si, 2, &mon)) return px_null(); break;
+                case 'd': if (!px_read_int(s, slen, &si, 2, &day)) return px_null(); break;
+                case 'H': case 'I': if (!px_read_int(s, slen, &si, 2, &hour)) return px_null(); break;
+                case 'M': if (!px_read_int(s, slen, &si, 2, &minute)) return px_null(); break;
+                case 'S': if (!px_read_int(s, slen, &si, 2, &sec)) return px_null(); break;
+                case 'z': case 'Z': {
+                    if (si < slen && (s[si] == '+' || s[si] == '-')) {
+                        int end = si + 5;
+                        if (si + 3 < slen && s[si + 3] == ':') end = si + 6;
+                        if (end > slen) return px_null();
+                        char buf[16];
+                        memcpy(buf, s + si, (size_t)(end - si));
+                        buf[end - si] = 0;
+                        parsed_z = px_tz_off(buf);
+                        have_z = 1;
+                        si = end;
+                    } else if (si + 2 < slen && strncmp(s + si, "UTC", 3) == 0) {
+                        parsed_z = 0;
+                        have_z = 1;
+                        si += 3;
+                    }
+                    break;
+                }
+                default:
+                    if (si < slen && s[si] == fmt[fi]) si++;
+                    break;
+            }
+        } else {
+            if (fmt[fi] == ' ') {
+                while (si < slen && s[si] == ' ') si++;
+            } else {
+                if (si >= slen || s[si] != fmt[fi]) return px_null();
+                si++;
+            }
+        }
+        fi++;
+    }
+    if (mon < 1 || mon > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || sec > 60) return px_null();
+    int64_t use_off = have_z ? parsed_z : off;
+    int64_t days = px_days_from_civil(year, mon, day);
+    // 校验日真实存在
+    int64_t y2, m2, d2;
+    px_civil_from_days(days, &y2, &m2, &d2);
+    if (y2 != year || m2 != mon || d2 != day) return px_null();
+    return px_int(days * 86400 + hour * 3600 + minute * 60 + sec - use_off);
+}
+
+// tz_offset(tz) → int|null
+LXValue bi_tz_offset(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_STR) px_error("tz_offset 需要 (tz) 参数");
+    const char* tz = args[0].as.obj->as.str.data;
+    // 非法时区 → null（与解释器一致）；合法返回偏移
+    if (strcasecmp(tz, "utc") == 0 || strcmp(tz, "Z") == 0) return px_int(0);
+    if (tz[0] != '+' && tz[0] != '-') return px_null();
+    const char* rest = tz + 1;
+    int ok = 0;
+    if (strchr(rest, ':')) ok = 1;
+    else if (strlen(rest) == 4 || strlen(rest) == 2 || strlen(rest) == 1) ok = 1;
+    if (!ok) return px_null();
+    int64_t off = px_tz_off(tz);
+    // px_tz_off 非法返回 0；此处区分"合法 0 偏移"与"非法"
+    if (strchr(rest, ':')) {
+        const char* colon = strchr(rest, ':');
+        int64_t hh = atoll(rest), mm = atoll(colon + 1);
+        if (hh > 23 || mm > 59) return px_null();
+    } else if (strlen(rest) == 4) {
+        int64_t hh = atoll(rest);
+        if (hh > 23) return px_null();
+    }
+    return px_int(off);
+}
+
+// ==================== M28 P1：cron 定时调度 ====================
+// cron(expr, fn, ...args) → int：6 字段（秒 分 时 日 月 周；周 0/7=周日）
+// 每 cron 任务一个线程，每秒 tick 检查匹配 → px_call 触发；clear_timer(id) 取消。
+// 表达式解析与解释器 cron.rs 同一语义（*/n、a,b、a-b、a-b/n、固定值；日/周双受限 OR）。
+
+typedef struct {
+    int64_t id;
+    int active;
+    char expr[256];
+    // 位集合
+    unsigned char sec[60];
+    unsigned char min[60];
+    unsigned char hour[24];
+    unsigned char dom[32];
+    unsigned char mon[13];
+    unsigned char dow[7];
+    int dom_limited, dow_limited;
+    LXValue fn;
+    LXValue* args;
+    int nargs;
+} CronJob;
+
+#define MAX_CRON 64
+static CronJob g_crons[MAX_CRON];
+static pthread_mutex_t g_cron_mu = PTHREAD_MUTEX_INITIALIZER;
+static int64_t g_cron_next_id = 0;
+
+// 解析单个 cron 字段 → 位集合（bits 长度 max-min+1；成功返回 1）
+static int cron_parse_field(const char* expr, int min, int max, unsigned char* bits) {
+    memset(bits, 0, (size_t)(max - min + 1));
+    char buf[256];
+    snprintf(buf, sizeof(buf), "%s", expr);
+    int any = 0;
+    char* save = NULL;
+    for (char* part = strtok_r(buf, ",", &save); part; part = strtok_r(NULL, ",", &save)) {
+        if (!*part) return 0;
+        if (strcmp(part, "*") == 0) {
+            for (int v = min; v <= max; v++) bits[v - min] = 1;
+            any = 1;
+            continue;
+        }
+        char* slash = strchr(part, '/');
+        char range[128];
+        int step = 1;
+        if (slash) {
+            *slash = 0;
+            step = atoi(slash + 1);
+            if (step <= 0) return 0;
+        }
+        snprintf(range, sizeof(range), "%s", part);
+        int64_t lo, hi;
+        char* dash = strchr(range, '-');
+        if (strcmp(range, "*") == 0) {
+            lo = min; hi = max;
+        } else if (dash) {
+            *dash = 0;
+            lo = atoll(range);
+            hi = atoll(dash + 1);
+        } else {
+            lo = hi = atoll(range);
+        }
+        if (lo < min || hi > max || lo > hi) return 0;
+        for (int64_t v = lo; v <= hi; v += step) bits[v - min] = 1;
+        any = 1;
+    }
+    return any;
+}
+
+static int cron_parse_expr(const char* expr, CronJob* job) {
+    char buf[256];
+    snprintf(buf, sizeof(buf), "%s", expr);
+    char* parts[6];
+    int n = 0;
+    char* save = NULL;
+    for (char* t = strtok_r(buf, " \t", &save); t && n < 6; t = strtok_r(NULL, " \t", &save)) {
+        parts[n++] = t;
+    }
+    if (n != 6) return 0;
+    if (!cron_parse_field(parts[0], 0, 59, job->sec)) return 0;
+    if (!cron_parse_field(parts[1], 0, 59, job->min)) return 0;
+    if (!cron_parse_field(parts[2], 0, 23, job->hour)) return 0;
+    unsigned char dom_raw[32] = {0}, mon_raw[13] = {0};
+    if (!cron_parse_field(parts[3], 1, 31, dom_raw)) return 0;
+    if (!cron_parse_field(parts[4], 1, 12, mon_raw)) return 0;
+    unsigned char dow8[8] = {0};
+    if (!cron_parse_field(parts[5], 0, 7, dow8)) return 0;
+    memset(job->dom, 0, sizeof(job->dom));
+    for (int i = 1; i <= 31; i++) job->dom[i] = dom_raw[i - 1];
+    memset(job->mon, 0, sizeof(job->mon));
+    for (int i = 1; i <= 12; i++) job->mon[i] = mon_raw[i - 1];
+    memset(job->dow, 0, sizeof(job->dow));
+    for (int i = 0; i < 8; i++) if (dow8[i]) job->dow[i % 7] = 1;
+    job->dom_limited = strcmp(parts[3], "*") != 0;
+    job->dow_limited = strcmp(parts[5], "*") != 0;
+    return 1;
+}
+
+static int cron_match(const CronJob* job, int64_t ts) {
+    int64_t y, mo, d, h, mi, s, wd;
+    px_breakdown(ts, 0, &y, &mo, &d, &h, &mi, &s, &wd);
+    if (!job->sec[s] || !job->min[mi] || !job->hour[h] || !job->mon[mo]) return 0;
+    int dom_ok = job->dom[d];
+    int dow_ok = job->dow[wd];
+    if (job->dom_limited && job->dow_limited) return dom_ok || dow_ok;
+    if (job->dom_limited) return dom_ok;
+    if (job->dow_limited) return dow_ok;
+    return 1;
+}
+
+static int cron_still_active(int64_t id) {
+    pthread_mutex_lock(&g_cron_mu);
+    int a = 0;
+    for (int i = 0; i < MAX_CRON; i++) {
+        if (g_crons[i].active && g_crons[i].id == id) { a = g_crons[i].active; break; }
+    }
+    pthread_mutex_unlock(&g_cron_mu);
+    return a;
+}
+
+static void cron_release(int64_t id) {
+    pthread_mutex_lock(&g_cron_mu);
+    for (int i = 0; i < MAX_CRON; i++) {
+        if (g_crons[i].active && g_crons[i].id == id) {
+            g_crons[i].active = 0;
+            g_crons[i].id = 0;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_cron_mu);
+    // 释放 g_timers 槽位（clear_timer 的取消标记消费后清理）
+    pthread_mutex_lock(&g_timer_mu);
+    for (int i = 0; i < MAX_TIMERS; i++) {
+        if (g_timers[i].id == id) {
+            g_timers[i].active = 0;
+            g_timers[i].id = 0;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_timer_mu);
+}
+
+// cron 任务线程：每秒 tick 检查匹配 → 触发回调
+static void* cron_thread(void* p) {
+    CronJob* job = (CronJob*)p;
+    // 注册 GC 槽位（同 timer_thread）
+    pthread_mutex_lock(&g_gc_mu);
+    for (int i = 0; i < MAX_SPAWN_THREADS; i++) {
+        if (g_threads[i].in_use && (uintptr_t)g_threads[i].tid == 0) {
+            g_threads[i].tid = pthread_self();
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_gc_mu);
+    LXValue fn = job->fn;
+    LXValue args_stack[16];
+    int nargs = job->nargs < 16 ? job->nargs : 16;
+    for (int i = 0; i < nargs; i++) args_stack[i] = job->args[i];
+    int64_t id = job->id;
+    for (;;) {
+        struct timespec ts = {1, 0};
+        nanosleep(&ts, NULL);
+        // 与 set_timeout/set_interval 同一取消机制（clear_timer 统一生效）
+        if (!timer_still_active(id)) break;
+        int64_t now = (int64_t)time(NULL);
+        if (cron_match(job, now)) {
+            LXValue r = px_call(fn, args_stack, nargs);
+            (void)r;
+        }
+    }
+    cron_release(id);
+    pthread_mutex_lock(&g_gc_mu);
+    g_active_threads--;
+    gc_unregister_thread(pthread_self());
+    pthread_mutex_unlock(&g_gc_mu);
+    if (job->args) xfree(job->args);
+    xfree(job);
+    return NULL;
+}
+
+// cron(expr, fn, ...args) → int
+LXValue bi_cron(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 2) px_error("cron 需要 (expr, fn[, ...args]) 参数");
+    if (args[0].type != PX_STR || args[1].type != PX_FUNC) px_error("cron 参数类型错误");
+    pthread_mutex_lock(&g_cron_mu);
+    int slot = -1;
+    for (int i = 0; i < MAX_CRON; i++) if (!g_crons[i].active) { slot = i; break; }
+    if (slot < 0) {
+        pthread_mutex_unlock(&g_cron_mu);
+        px_error("cron 任务数量超出上限 %d", MAX_CRON);
+    }
+    // id 与 set_timeout 同一序列 + g_timers 槽位 → clear_timer(id) 统一取消
+    int64_t id;
+    pthread_mutex_lock(&g_timer_mu);
+    int tslot = -1;
+    for (int i = 0; i < MAX_TIMERS; i++) if (g_timers[i].id == 0) { tslot = i; break; }
+    if (tslot < 0) {
+        pthread_mutex_unlock(&g_timer_mu);
+        pthread_mutex_unlock(&g_cron_mu);
+        px_error("定时器数量超出上限 %d", MAX_TIMERS);
+    }
+    id = ++g_next_timer_id;
+    g_timers[tslot].id = id;
+    g_timers[tslot].active = 1;
+    pthread_mutex_unlock(&g_timer_mu);
+    memset(&g_crons[slot], 0, sizeof(CronJob));
+    g_crons[slot].id = id;
+    g_crons[slot].active = 1;
+    snprintf(g_crons[slot].expr, sizeof(g_crons[slot].expr), "%s", args[0].as.obj->as.str.data);
+    pthread_mutex_unlock(&g_cron_mu);
+
+    // 解析表达式（非法 → 回滚 + 报错）
+    if (!cron_parse_expr(args[0].as.obj->as.str.data, &g_crons[slot])) {
+        pthread_mutex_lock(&g_cron_mu);
+        g_crons[slot].active = 0;
+        g_crons[slot].id = 0;
+        pthread_mutex_unlock(&g_cron_mu);
+        pthread_mutex_lock(&g_timer_mu);
+        for (int i = 0; i < MAX_TIMERS; i++) {
+            if (g_timers[i].id == id) { g_timers[i].active = 0; g_timers[i].id = 0; break; }
+        }
+        pthread_mutex_unlock(&g_timer_mu);
+        px_error("cron 表达式非法: %s", args[0].as.obj->as.str.data);
+    }
+
+    // GC 槽位预留（同 px_timer_create）
+    pthread_mutex_lock(&g_gc_mu);
+    if (!g_gc_env_inited) gc_init_env();
+    g_active_threads++;
+    int gslot = -1;
+    for (int i = 0; i < MAX_SPAWN_THREADS; i++) if (!g_threads[i].in_use) { gslot = i; break; }
+    if (gslot >= 0) {
+        memset(&g_threads[gslot], 0, sizeof(g_threads[gslot]));
+        g_threads[gslot].in_use = 1;
+        g_threads[gslot].is_main = 0;
+    } else {
+        g_active_threads--;
+    }
+    pthread_mutex_unlock(&g_gc_mu);
+    if (gslot < 0) {
+        cron_release(id);
+        px_error("cron: 并发线程数超出上限 %d", MAX_SPAWN_THREADS);
+    }
+
+    CronJob* job = (CronJob*)malloc(sizeof(CronJob));
+    memcpy(job, &g_crons[slot], sizeof(CronJob));
+    job->fn = args[1];
+    job->nargs = nargs - 2;
+    job->args = (LXValue*)malloc(sizeof(LXValue) * (job->nargs > 0 ? job->nargs : 1));
+    if (job->nargs > 0) memcpy(job->args, args + 2, sizeof(LXValue) * (size_t)job->nargs);
+    pthread_t t;
+    if (pthread_create(&t, NULL, cron_thread, job) != 0) {
+        pthread_mutex_lock(&g_gc_mu);
+        g_active_threads--;
+        if (gslot >= 0) g_threads[gslot].in_use = 0;
+        pthread_mutex_unlock(&g_gc_mu);
+        cron_release(id);
+        free(job->args);
+        free(job);
+        px_error("cron: 创建线程失败");
+    }
+    if (gslot >= 0) {
+        pthread_mutex_lock(&g_gc_mu);
+        g_threads[gslot].tid = t;
+        pthread_mutex_unlock(&g_gc_mu);
+    }
+    pthread_detach(t);
+    return px_int(id);
 }

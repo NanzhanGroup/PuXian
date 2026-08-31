@@ -10,13 +10,27 @@
 set -u
 cd "$(dirname "$0")/.."   # compiler/
 PX=./target/debug/px
+# M17：编译模式 .px 脚本执行依赖 px 解释器（PX_BIN 或 PATH）→ 指向当前构建
+export PX_BIN="$(pwd)/target/debug/px"
+export PATH="$(pwd)/target/debug:$PATH"
+# cargo 可能不在默认 PATH（setsid/CI 环境）→ 自动探测
+if [ -x /root/.cargo/bin/cargo ]; then
+    CARGO=/root/.cargo/bin/cargo
+else
+    CARGO=cargo
+fi
 FAIL=0
 
 echo "========== [1/4] Rust 单元测试 =========="
-if ! cargo test 2>&1 | tail -3 | grep -q "0 failed"; then
-    echo "❌ cargo test 失败"; FAIL=1
+# --test-threads=1：解释器/GC 测试共享全局状态（gc collect / 路由表 / SQLite 句柄），
+# 并行跑会互相干扰（历史 flaky，M23 部分加锁未覆盖全部）→ 单线程串行稳定；
+# --release：release 二进制已预编译（无 target 锁竞争 / 编译慢问题）
+if ! timeout 600 $CARGO test --release -- --test-threads=1 >/tmp/cargo_test.log 2>&1; then
+    echo "❌ cargo test 失败（退出码 $?，日志 /tmp/cargo_test.log）"; FAIL=1
+elif ! grep -q "0 failed" /tmp/cargo_test.log; then
+    echo "❌ cargo test 失败（test result 非 0 failed）"; tail -5 /tmp/cargo_test.log; FAIL=1
 else
-    echo "✅ cargo test 通过"
+    echo "✅ cargo test 通过（$(grep "test result" /tmp/cargo_test.log | tail -1 | grep -oE "[0-9]+ passed")）"
 fi
 
 echo "========== [2/4] C 级 GC 测试 =========="

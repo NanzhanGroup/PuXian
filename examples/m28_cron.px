@@ -1,0 +1,27 @@
+# M28 示例：cron 定时调度（6 字段：秒 分 时 日 月 周）
+# cron("*/1 * * * * *", fn) 每秒触发；sleep 2.5s 后计数应 >= 2；clear_timer 取消后不再触发。
+# 运行：px run m28_cron.px == px build m28_cron.px（计时范围断言）
+
+count = 0
+cron("*/1 * * * * *", fn () {
+    count = count + 1
+})
+
+# 等待 2.5 秒（每秒应触发 1 次）
+sleep(2500)
+n1 = count
+print("cron 2.5s 内触发次数: " + str(n1))
+assert(n1 >= 2, "cron 应至少触发 2 次")
+
+# 取消后不再触发
+tid = 0
+count2 = 0
+tid = cron("*/1 * * * * *", fn () {
+    count2 = count2 + 1
+})
+clear_timer(tid)
+sleep(2200)
+print("取消后触发次数: " + str(count2))
+assert(count2 == 0, "clear_timer 后 cron 不应再触发")
+
+print("M28 cron 定时调度通过")

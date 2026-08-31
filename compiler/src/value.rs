@@ -287,6 +287,31 @@ pub enum Builtin {
     SessionDel,
     SessionDestroy,
     BasicAuth,
+    // M28 P1：路由表 + 中间件（WebServer 生产化）
+    // route(method, pattern, handler) → bool：注册路由（:id 参数 / * 通配）
+    // middleware(fn) → bool：注册中间件（fn(req) → null 继续 / 非 null 短路）
+    Route,
+    Middleware,
+    // M28 P1：时间 / 时区（日志时间戳 / 到期计算 / TZ 转换）
+    // time_format(ts, fmt[, tz]) → str（%Y-%m-%d %H:%M:%S %z 等；tz 默认 UTC，支持 +08:00）
+    // time_parse(str, fmt[, tz]) → int|null（解析回 epoch 秒，失败 null）
+    // tz_offset(tz) → int（时区偏移秒）
+    TimeFormat,
+    TimeParse,
+    TzOffset,
+    // M28 P1：cron 定时调度（6 字段：秒 分 时 日 月 周）
+    // cron(expr, fn, ...args) → int（后台每秒 tick 匹配触发；clear_timer(id) 取消）
+    Cron,
+    // M28 P1：SQLite 绑定（SQL 执行 + 参数绑定 + 结果集）
+    // sqlite_open(path) → int|null / sqlite_exec(db, sql) → int
+    // sqlite_query(db, sql[, params]) → list[dict]|null（params: list→? / dict→:name）
+    // sqlite_close(db) → bool / sqlite_escape(s) → str
+    SqliteOpen,
+    SqliteExec,
+    SqliteQuery,
+    SqliteClose,
+    SqliteEscape,
+    SqliteLastInsertRowid,
 }
 
 impl Builtin {
@@ -428,6 +453,18 @@ impl Builtin {
             Builtin::SessionDel => "session_del",
             Builtin::SessionDestroy => "session_destroy",
             Builtin::BasicAuth => "basic_auth",
+            Builtin::Route => "route",
+            Builtin::Middleware => "middleware",
+            Builtin::TimeFormat => "time_format",
+            Builtin::TimeParse => "time_parse",
+            Builtin::TzOffset => "tz_offset",
+            Builtin::Cron => "cron",
+            Builtin::SqliteOpen => "sqlite_open",
+            Builtin::SqliteExec => "sqlite_exec",
+            Builtin::SqliteQuery => "sqlite_query",
+            Builtin::SqliteClose => "sqlite_close",
+            Builtin::SqliteEscape => "sqlite_escape",
+            Builtin::SqliteLastInsertRowid => "sqlite_last_insert_rowid",
         }
     }
 }

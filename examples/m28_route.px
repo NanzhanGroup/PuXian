@@ -1,0 +1,111 @@
+# M28 示例：路由表 + 中间件（WebServer 生产化）
+# 启动内置 px_serve（spawn 后台），用 http_request 客户端验证：
+#   - method+path 模式路由（GET/POST）
+#   - :id 路径参数
+#   - * 通配段
+#   - 中间件链（鉴权短路 + 日志继续）
+# 运行：px run m28_route.px == px build m28_route.px
+
+PORT = 18781
+
+# ---- 中间件1：日志（返回 null 继续） ----
+def mw_log(req):
+    print("MW log: " + req["method"] + " " + req["path"])
+    return null
+middleware(mw_log)
+
+# ---- 中间件2：鉴权（/admin 需要 Authorization 头） ----
+def mw_auth(req):
+    path = req["path"]
+    if starts_with(path, "/admin"):
+        hdr = req["headers"]
+        auth = null
+        if hdr != null:
+            auth = hdr.get("Authorization")
+        if auth == null or auth != "Bearer token123":
+            return 401   # 短路：401 Unauthorized
+    return null
+middleware(mw_auth)
+
+# ---- 路由：GET /api/users/:id → params["id"] ----
+def get_user(req, params):
+    name = ""
+    if params["id"] == "1":
+        name = "alice"
+    elif params["id"] == "2":
+        name = "bob"
+    return {"status": 200, "headers": {"Content-Type": "application/json"}, "body": '{"id": ' + params["id"] + ', "name": "' + name + '"}'}
+route("GET", "/api/users/:id", get_user)
+
+# ---- 路由：POST /api/users（创建，body 回显） ----
+def post_user(req, params):
+    body = req["body"]
+    return {"status": 201, "headers": {"Content-Type": "application/json"}, "body": '{"created": ' + body + '}'}
+route("POST", "/api/users", post_user)
+
+# ---- 路由：GET /files/* → 通配段 ----
+def get_file(req, params):
+    return "file: " + params["wildcard"]
+route("GET", "/files/*", get_file)
+
+# ---- 路由：GET /health → int 状态码 ----
+def health(req, params):
+    return 200
+route("GET", "/health", health)
+
+# ---- 路由：method * 通配（OPTIONS） ----
+def ping(req, params):
+    return "pong"
+route("*", "/ping", ping)
+
+# ---- 路由：GET /admin（中间件鉴权保护） ----
+def admin(req, params):
+    return "admin secret"
+route("GET", "/admin", admin)
+
+# ---- 后台启动服务器 ----
+def serve():
+    px_serve(PORT, ".", 10000)
+spawn serve()
+sleep(500)
+
+# ---- 客户端验证 ----
+# 1. 路由 + :id 参数
+r = http_request("http://127.0.0.1:" + str(PORT) + "/api/users/1", "GET")
+assert(r["status"] == 200)
+assert(r["body"] == '{"id": 1, "name": "alice"}')
+
+# 2. POST + body
+r = http_request("http://127.0.0.1:" + str(PORT) + "/api/users", "POST", "42")
+assert(r["status"] == 201)
+assert(r["body"] == '{"created": 42}')
+
+# 3. * 通配段
+r = http_request("http://127.0.0.1:" + str(PORT) + "/files/a/b/c.txt", "GET")
+assert(r["status"] == 200)
+assert(r["body"] == "file: a/b/c.txt")
+
+# 4. int 状态码
+r = http_request("http://127.0.0.1:" + str(PORT) + "/health", "GET")
+assert(r["status"] == 200)
+
+# 5. method * 通配
+r = http_request("http://127.0.0.1:" + str(PORT) + "/ping", "OPTIONS")
+assert(r["status"] == 200)
+assert(r["body"] == "pong")
+
+# 6. 未匹配路由 → 回退文件映射（无该文件 → 404）
+r = http_request("http://127.0.0.1:" + str(PORT) + "/no_such_route", "GET")
+assert(r["status"] == 404)
+
+# 7. 中间件鉴权：/admin 无 token → 401
+r = http_request("http://127.0.0.1:" + str(PORT) + "/admin", "GET")
+assert(r["status"] == 401)
+
+# 8. 中间件鉴权：带正确 token → 200
+r = http_request("http://127.0.0.1:" + str(PORT) + "/admin", "GET", "", {"Authorization": "Bearer token123"})
+assert(r["status"] == 200)
+assert(r["body"] == "admin secret")
+
+# 9. 中间件日志：前两次请求应打印 2 行 MW log
+print("M28 路由 + 中间件全部通过")

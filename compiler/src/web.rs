@@ -555,6 +555,15 @@ fn handle_px_conn(
         Err(e) => return Err(e),
     };
     let path = req_str(&req, "path").unwrap_or_else(|| "/".to_string());
+
+    // M28：路由表非空 → 优先匹配路由（method+path 模式 + :id 参数 + 中间件链）；
+    //      未匹配回退 docroot 文件映射（PHP 模式，向后兼容）
+    if has_routes() {
+        if let Some(()) = try_route_dispatch(conn, &req, &method, method == "HEAD")? {
+            return finish_conn(conn, body_tmp);
+        }
+    }
+
     let start = std::time::Instant::now();
 
     // 1. 路径解析 + 目录隔离（穿越防护）
@@ -1061,6 +1070,232 @@ fn status_reason(code: i64) -> &'static str {
         _ => "OK",
     }
 }
+
+// ==================== M28：路由表 + 中间件链 ====================
+// route(method, pattern, handler)：注册路由。pattern 支持
+//   - 字面段 /api/users
+//   - 参数段 :id → params["id"]
+//   - 通配段 *  → 匹配任意剩余路径（含 /）
+// method 支持 "GET"/"POST"/... 或 "*"（任意方法）
+// middleware(fn)：注册中间件（按注册顺序执行）。fn(req) 返回 null 表示继续，
+//   返回非 null（int/str/dict）直接短路作为响应。
+// 优先级：路由表非空时优先匹配路由；未匹配回退 docroot 文件映射（PHP 模式）。
+
+/// 路由段
+#[derive(Debug, Clone)]
+enum RouteSeg {
+    Lit(String),
+    Param(String),
+    Wild,
+}
+
+/// 路由条目
+struct RouteEntry {
+    method: String,
+    segs: Vec<RouteSeg>,
+    handler: Value,
+}
+
+static ROUTES: OnceLock<Mutex<Vec<RouteEntry>>> = OnceLock::new();
+static MIDDLEWARES: OnceLock<Mutex<Vec<Value>>> = OnceLock::new();
+
+fn routes() -> &'static Mutex<Vec<RouteEntry>> {
+    ROUTES.get_or_init(|| Mutex::new(Vec::new()))
+}
+fn middlewares() -> &'static Mutex<Vec<Value>> {
+    MIDDLEWARES.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// 清空路由/中间件（测试与 px_serve 重启隔离）
+pub fn reset_routes() {
+    routes().lock().unwrap().clear();
+    middlewares().lock().unwrap().clear();
+}
+
+/// 解析 pattern → 段列表（/api/users/:id/*）
+fn parse_pattern(pattern: &str) -> Result<Vec<RouteSeg>, String> {
+    let mut segs = Vec::new();
+    for part in pattern.trim_start_matches('/').split('/') {
+        if part.is_empty() {
+            continue;
+        }
+        if part == "*" {
+            segs.push(RouteSeg::Wild);
+        } else if let Some(name) = part.strip_prefix(':') {
+            if name.is_empty() {
+                return Err(format!("路由参数名不能为空: {}", pattern));
+            }
+            segs.push(RouteSeg::Param(name.to_string()));
+        } else {
+            segs.push(RouteSeg::Lit(part.to_string()));
+        }
+    }
+    Ok(segs)
+}
+
+/// route(method, pattern, handler) → bool
+pub fn route_add(method: &str, pattern: &str, handler: Value) -> Result<(), String> {
+    let segs = parse_pattern(pattern)?;
+    routes().lock().unwrap().push(RouteEntry {
+        method: method.to_uppercase(),
+        segs,
+        handler,
+    });
+    Ok(())
+}
+
+/// middleware(fn) → bool
+pub fn middleware_add(handler: Value) -> Result<(), String> {
+    middlewares().lock().unwrap().push(handler);
+    Ok(())
+}
+
+/// 匹配路由：返回 (handler, params dict)。path 已 URL 解码。
+fn match_route(method: &str, path: &str) -> Option<(Value, Value)> {
+    let rs = routes().lock().unwrap();
+    if rs.is_empty() {
+        return None;
+    }
+    let m = method.to_uppercase();
+    let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+    for r in rs.iter() {
+        if r.method != "*" && r.method != m {
+            continue;
+        }
+        let mut params = HashMap::new();
+        let mut ok = true;
+        let mut pi = 0usize;
+        for seg in &r.segs {
+            match seg {
+                RouteSeg::Lit(l) => {
+                    if pi >= parts.len() || parts[pi] != l {
+                        ok = false;
+                        break;
+                    }
+                    pi += 1;
+                }
+                RouteSeg::Param(name) => {
+                    if pi >= parts.len() || parts[pi].is_empty() {
+                        ok = false;
+                        break;
+                    }
+                    params.insert(name.clone(), Value::Str(parts[pi].to_string()));
+                    pi += 1;
+                }
+                RouteSeg::Wild => {
+                    // 匹配剩余全部（含空）
+                    let rest = parts[pi..].join("/");
+                    params.insert("wildcard".to_string(), Value::Str(rest));
+                    pi = parts.len();
+                }
+            }
+        }
+        // 全部段消费完且路径也消费完（或末尾通配）
+        if ok && pi >= parts.len() {
+            let handler = r.handler.clone();
+            let pd = Value::Dict(Arc::new(Mutex::new(params)));
+            return Some((handler, pd));
+        }
+    }
+    None
+}
+
+/// 路由响应归一化：Value → (status, headers, body)
+/// 约定同 RESPONSE：int → 状态码；null → 204；str → 200 text/plain；
+/// dict{status, headers, body} → 完整控制
+fn normalize_route_resp(v: &Value) -> (i64, Vec<(String, String)>, Vec<u8>) {
+    match v {
+        Value::Int(s) => (*s, vec![], vec![]),
+        Value::Null => (204, vec![], vec![]),
+        Value::Str(s) => (
+            200,
+            vec![("Content-Type".into(), "text/plain; charset=utf-8".into())],
+            s.clone().into_bytes(),
+        ),
+        Value::Dict(d) => {
+            let d = d.lock().unwrap();
+            let status = match d.get("status") {
+                Some(Value::Int(s)) => *s,
+                Some(Value::Float(f)) => *f as i64,
+                _ => 200,
+            };
+            let body = match d.get("body") {
+                Some(Value::Str(s)) => s.clone().into_bytes(),
+                Some(Value::Bytes(b)) => b.clone(),
+                Some(Value::Null) | None => vec![],
+                Some(o) => o.to_string().into_bytes(),
+            };
+            let headers = match d.get("headers") {
+                Some(Value::Dict(h)) => {
+                    let h = h.lock().unwrap();
+                    h.iter().map(|(k, v)| (k.clone(), v.to_string())).collect()
+                }
+                _ => vec![("Content-Type".into(), "text/html; charset=utf-8".into())],
+            };
+            (status, headers, body)
+        }
+        _ => (
+            200,
+            vec![("Content-Type".into(), "text/plain; charset=utf-8".into())],
+            v.to_string().into_bytes(),
+        ),
+    }
+}
+
+/// 执行路由 handler（含中间件链）。返回响应三元组。
+/// 中间件 fn(req) → null 继续 / 非 null 短路；handler(req, params) → 响应。
+fn run_route_pipeline(
+    handler: Value,
+    params: Value,
+    req: &Value,
+) -> (i64, Vec<(String, String)>, Vec<u8>) {
+    let mut interp = Interpreter::new();
+    // 中间件链
+    let mws: Vec<Value> = middlewares().lock().unwrap().clone();
+    for mw in mws {
+        let r = interp.call_value(&mw, &[req.clone()], crate::token::Pos::new(0, 0));
+        match r {
+            Ok(Value::Null) => continue,
+            Ok(v) => return normalize_route_resp(&v), // 短路
+            Err(e) => {
+                return (
+                    500,
+                    vec![("Content-Type".into(), "text/plain; charset=utf-8".into())],
+                    format!("500 Middleware Error\n\n{}", e).into_bytes(),
+                );
+            }
+        }
+    }
+    // handler
+    match interp.call_value(&handler, &[req.clone(), params], crate::token::Pos::new(0, 0)) {
+        Ok(v) => normalize_route_resp(&v),
+        Err(e) => (
+            500,
+            vec![("Content-Type".into(), "text/plain; charset=utf-8".into())],
+            format!("500 Internal Server Error\n\n{}", e).into_bytes(),
+        ),
+    }
+}
+
+/// 路由是否已注册（决定 px_serve 是否走路由优先）
+pub fn has_routes() -> bool {
+    !routes().lock().unwrap().is_empty()
+}
+
+/// 请求处理中的路由分支：匹配 → 执行；未匹配 → None（回退文件映射）
+fn try_route_dispatch(conn: &mut SConn, req: &Value, method: &str, head_only: bool) -> Result<Option<()>, String> {
+    let path = req_str(req, "path").unwrap_or_else(|| "/".to_string());
+    if let Some((handler, params)) = match_route(method, &path) {
+        let start = std::time::Instant::now();
+        let (status, headers, body) = run_route_pipeline(handler, params, req);
+        let ms = start.elapsed().as_millis();
+        eprintln!("[px-serve] [route] {} {} -> {} ({}ms)", method, path, status, ms);
+        let _ = send_response(conn, status, &headers, &body, head_only);
+        return Ok(Some(()));
+    }
+    Ok(None)
+}
+
 
 #[cfg(test)]
 mod tests {

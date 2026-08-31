@@ -86,7 +86,7 @@ px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
 | [docs/requirements.md](docs/requirements.md) | 需求与设计讨论（动机、取舍、双模式架构） |
 | [docs/plan.md](docs/plan.md) | 开发方案（语言命名、里程碑规划、语言要点） |
 | [docs/spec.md](docs/spec.md) | 语言规格说明书（词法 / 语法 / 语义 / 标准库） |
-| [docs/PROGRESS.md](docs/PROGRESS.md) | 开发进度（M0–M27 产出与验证记录，含 M28 候选） |
+| [docs/PROGRESS.md](docs/PROGRESS.md) | 开发进度（M0–M28 产出与验证记录，含 M29 候选） |
 
 ---
 
@@ -122,6 +122,7 @@ px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
 | M25 | 闭包循环回收 + .px 进程池化 + TLS 会话票据恢复 + fmt --diff | ✅ |
 | M26 | 无符号右移 `>>>` + WebSocket 内置心跳 + SSE 客户端 https + 远程包 registry | ✅ |
 | M27 | WebServer 生产化 P0：服务端 TLS（HTTPS/WSS/SSE-TLS）+ 请求体大小可配/413/落盘 + Cookie/Session/基础认证 + 优雅关闭 | ✅ |
+| M28 | P1 写业务四件套：路由表+中间件（method+path 模式 / :id 参数 / * 通配 / 中间件链）+ 时间时区（time_format/time_parse/tz_offset）+ cron 调度（6 字段）+ SQLite 绑定（sqlite_open/exec/query/close，参数绑定+结果集） | ✅ |
 
 ---
 
@@ -164,6 +165,9 @@ px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
 - `m26_ws_heartbeat.px` —— WebSocket 内置心跳
 - `m26_sse_https.px` —— SSE 客户端 https（需本地 https SSE 端点 + PX_TLS_CA_FILE）
 - `m27a_webprod.px` —— WebServer 生产化：Session / 基础认证 / 请求体限制 / 优雅关闭
+- `m28_time_sqlite.px` —— 时间时区（time_format/time_parse/tz_offset）+ SQLite（CRUD/参数绑定/BLOB）
+- `m28_route.px` —— 路由表 + 中间件链（:id 参数 / * 通配 / 鉴权短路）
+- `m28_cron.px` —— cron 定时调度（6 字段 / clear_timer 取消）
 - `m27b_tls_serve.px` —— 服务端 TLS（HTTPS；需 PX_TLS_CA_FILE 信任自签）
 
 ```bash

@@ -360,6 +360,19 @@ impl Interpreter {
             ("session_del", Builtin::SessionDel),
             ("session_destroy", Builtin::SessionDestroy),
             ("basic_auth", Builtin::BasicAuth),
+            // M28 P1：路由表 + 中间件 / 时间时区 / cron / SQLite
+            ("route", Builtin::Route),
+            ("middleware", Builtin::Middleware),
+            ("time_format", Builtin::TimeFormat),
+            ("time_parse", Builtin::TimeParse),
+            ("tz_offset", Builtin::TzOffset),
+            ("cron", Builtin::Cron),
+            ("sqlite_open", Builtin::SqliteOpen),
+            ("sqlite_exec", Builtin::SqliteExec),
+            ("sqlite_query", Builtin::SqliteQuery),
+            ("sqlite_close", Builtin::SqliteClose),
+            ("sqlite_escape", Builtin::SqliteEscape),
+            ("sqlite_last_insert_rowid", Builtin::SqliteLastInsertRowid),
         ];
         for (n, b) in names {
             g.define(n, Value::Builtin(*b));
