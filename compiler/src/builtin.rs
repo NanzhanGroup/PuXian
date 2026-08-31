@@ -33,6 +33,188 @@ fn sse_conns() -> &'static Mutex<HashMap<i64, SseConn>> {
 
 static SSE_NEXT_ID: AtomicI64 = AtomicI64::new(1);
 
+// ==================== M23 SSE 客户端 ====================
+// sse_connect(url) → int conn | null：HTTP GET 连接 SSE 服务端（校验 200 + text/event-stream）
+// sse_read(conn) → dict{event?, data, id?, retry?} | null：阻塞读一条事件（断开/超时 → null）
+// sse_close(conn) → bool：关闭客户端连接
+// 说明：sse_connect 仅支持 http://（长连接 + 流式读取需要原始 TCP；https 需 TLS 不在此列）。
+
+struct SseClient {
+    reader: Mutex<TcpStream>,
+    pending: Mutex<Vec<u8>>,
+}
+
+fn sse_clients() -> &'static Mutex<HashMap<i64, SseClient>> {
+    static M: OnceLock<Mutex<HashMap<i64, SseClient>>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+static SSE_CLIENT_NEXT_ID: AtomicI64 = AtomicI64::new(1);
+
+/// 解析一条 SSE 事件文本（field: value 行），返回 dict
+fn sse_parse_event(text: &str) -> Value {
+    let mut event = String::from("message");
+    let mut data: Vec<String> = Vec::new();
+    let mut id: Option<String> = None;
+    let mut retry: Option<i64> = None;
+    for line in text.lines() {
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        let (field, value) = match line.find(':') {
+            Some(i) => (
+                &line[..i],
+                line[i + 1..].strip_prefix(' ').unwrap_or(&line[i + 1..]),
+            ),
+            None => (line, ""),
+        };
+        match field {
+            "event" => event = value.to_string(),
+            "data" => data.push(value.to_string()),
+            "id" => id = Some(value.to_string()),
+            "retry" => retry = value.trim().parse::<i64>().ok(),
+            _ => {}
+        }
+    }
+    let mut m = HashMap::new();
+    m.insert("event".into(), Value::Str(event));
+    m.insert("data".into(), Value::Str(data.join("\n")));
+    if let Some(i) = id {
+        m.insert("id".into(), Value::Str(i));
+    }
+    if let Some(r) = retry {
+        m.insert("retry".into(), Value::Int(r));
+    }
+    Value::Dict(Arc::new(Mutex::new(m)))
+}
+
+/// 从 pending 缓冲中取出一条完整事件（按空行分隔）；不足返回 None（缓冲保留）
+fn sse_take_event(pending: &mut Vec<u8>) -> Option<String> {
+    for i in 0..pending.len() {
+        if pending[i] == b'\n' {
+            if i + 1 < pending.len() && pending[i + 1] == b'\n' {
+                let ev = String::from_utf8_lossy(&pending[..i]).to_string();
+                pending.drain(..i + 2);
+                return Some(ev);
+            }
+            if i + 2 < pending.len() && pending[i + 1] == b'\r' && pending[i + 2] == b'\n' {
+                let ev = String::from_utf8_lossy(&pending[..i]).to_string();
+                pending.drain(..i + 3);
+                return Some(ev);
+            }
+        }
+    }
+    None
+}
+
+/// sse_connect(url) → conn id 或 null（仅 http://）
+fn sse_client_connect(url: &str) -> Option<i64> {
+    let rest = url.strip_prefix("http://")?;
+    let (hostport, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, "/"),
+    };
+    if hostport.is_empty() {
+        return None;
+    }
+    let (host, port) = match hostport.find(':') {
+        Some(i) => (
+            hostport[..i].to_string(),
+            hostport[i + 1..].parse::<u16>().ok()?,
+        ),
+        None => (hostport.to_string(), 80u16),
+    };
+    let host_header = if hostport.contains(':') {
+        hostport.to_string()
+    } else {
+        format!("{}:{}", host, port)
+    };
+    let mut stream = TcpStream::connect(format!("{}:{}", host, port)).ok()?;
+    let req = format!(
+        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: PuXian/0.1\r\nAccept: text/event-stream\r\nConnection: close\r\nCache-Control: no-cache\r\n\r\n",
+        path, host_header
+    );
+    stream.write_all(req.as_bytes()).ok()?;
+    // 读响应头（直到 \r\n\r\n，上限 64KB）
+    let mut buf: Vec<u8> = Vec::new();
+    let mut tmp = [0u8; 4096];
+    let mut header_end = None;
+    while buf.len() < 65536 {
+        let n = stream.read(&mut tmp).ok()?;
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&tmp[..n]);
+        if let Some(idx) = find_http_header_end(&buf) {
+            header_end = Some(idx);
+            break;
+        }
+    }
+    let idx = header_end?;
+    let head = String::from_utf8_lossy(&buf[..idx]).to_string();
+    let status = head
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(0);
+    if status != 200 {
+        return None;
+    }
+    // Content-Type 校验：text/event-stream 放行；其他明确 Content-Type 拒绝
+    let mut ct_ok = true;
+    for line in head.lines().skip(1) {
+        let l = line.trim();
+        if l.to_lowercase().starts_with("content-type:") {
+            ct_ok = l.to_lowercase().contains("text/event-stream");
+        }
+    }
+    if !ct_ok {
+        return None;
+    }
+    // 剩余字节（头之后）作为初始 pending
+    let mut pending: Vec<u8> = buf[idx + 4..].to_vec();
+    let id = SSE_CLIENT_NEXT_ID.fetch_add(1, Ordering::SeqCst);
+    {
+        let mut m = sse_clients().lock().unwrap();
+        m.insert(
+            id,
+            SseClient {
+                reader: Mutex::new(stream),
+                pending: Mutex::new(std::mem::take(&mut pending)),
+            },
+        );
+    }
+    Some(id)
+}
+
+/// sse_read(conn) → 事件 dict 或 null（阻塞读一条；断开 → null）
+fn sse_client_read(conn: i64) -> Option<Value> {
+    let mut m = sse_clients().lock().unwrap();
+    let c = m.get_mut(&conn)?;
+    loop {
+        {
+            let mut p = c.pending.lock().unwrap();
+            if let Some(ev) = sse_take_event(&mut p) {
+                return Some(sse_parse_event(&ev));
+            }
+        }
+        let mut tmp = [0u8; 8192];
+        let n = {
+            let mut r = c.reader.lock().unwrap();
+            match r.read(&mut tmp) {
+                Ok(0) => return None, // 对端关闭
+                Ok(n) => n,
+                Err(_) => return None,
+            }
+        };
+        c.pending.lock().unwrap().extend_from_slice(&tmp[..n]);
+    }
+}
+
+/// sse_close(conn) → bool：关闭客户端 SSE 连接
+fn sse_client_close(conn: i64) -> bool {
+    sse_clients().lock().unwrap().remove(&conn).is_some()
+}
+
 /// 编码 SSE 帧：str → `data: xxx\n\n`；dict 支持 {event, data, id, retry}
 fn sse_frame(data: &Value) -> String {
     match data {
@@ -1368,12 +1550,36 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
                 return Err(err("sse_close 需要 (conn) 参数", pos));
             }
             let conn = expect_int(&args[0], "sse_close", pos)?;
-            let mut m = sse_conns().lock().unwrap();
-            if let Some(c) = m.remove(&conn) {
-                let _ = c.close_tx.send(());
-                Ok(Value::Bool(true))
-            } else {
-                Ok(Value::Bool(false))
+            // 服务端连接
+            {
+                let mut m = sse_conns().lock().unwrap();
+                if let Some(c) = m.remove(&conn) {
+                    let _ = c.close_tx.send(());
+                    return Ok(Value::Bool(true));
+                }
+            }
+            // 客户端连接
+            Ok(Value::Bool(sse_client_close(conn)))
+        }
+        // ==================== M23 SSE 客户端（流式消费 / 事件订阅） ====================
+        Builtin::SseConnect => {
+            if args.len() != 1 {
+                return Err(err("sse_connect 需要 (url) 参数", pos));
+            }
+            let url = expect_str(&args[0], "sse_connect", pos)?;
+            match sse_client_connect(&url) {
+                Some(id) => Ok(Value::Int(id)),
+                None => Ok(Value::Null),
+            }
+        }
+        Builtin::SseRead => {
+            if args.len() != 1 {
+                return Err(err("sse_read 需要 (conn) 参数", pos));
+            }
+            let conn = expect_int(&args[0], "sse_read", pos)?;
+            match sse_client_read(conn) {
+                Some(v) => Ok(v),
+                None => Ok(Value::Null),
             }
         }
 
@@ -1502,7 +1708,7 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             let addr = format!("{}:{}", host, port);
             let mut stream = TcpStream::connect(&addr)
                 .map_err(|e| LxError::new("R3010", format!("net: 连接 {} 失败: {}", addr, e), Some(pos)))?;
-            if let Err(e) = crate::ws::client_handshake(&mut stream, &host, port as u16, &path) {
+            if let Err(_e) = crate::ws::client_handshake(&mut stream, &host, port as u16, &path) {
                 return Ok(Value::Null); // 握手失败 → null（与编译模式一致）
             }
             let (id, _rx) = match stream.try_clone() {
@@ -1523,11 +1729,18 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             Ok(Value::Bool(crate::ws::ws_send(conn, &data)))
         }
         Builtin::WsRecv => {
-            if args.len() != 1 {
-                return Err(err("ws_recv 需要 (conn) 参数", pos));
-            }
+            let timeout_ms = match args.len() {
+                1 => None,
+                2 => {
+                    let ms = expect_int(&args[1], "ws_recv", pos)?;
+                    Some(ms)
+                }
+                _ => {
+                    return Err(err("ws_recv 需要 (conn) 或 (conn, timeout_ms) 参数", pos));
+                }
+            };
             let conn = expect_int(&args[0], "ws_recv", pos)?;
-            match crate::ws::ws_recv(conn) {
+            match crate::ws::ws_recv(conn, timeout_ms) {
                 Some(msg) => Ok(Value::Str(msg)),
                 None => Ok(Value::Null),
             }
@@ -1538,6 +1751,13 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             }
             let conn = expect_int(&args[0], "ws_close", pos)?;
             Ok(Value::Bool(crate::ws::ws_close(conn)))
+        }
+        Builtin::WsPing => {
+            if args.len() != 1 {
+                return Err(err("ws_ping 需要 (conn) 参数", pos));
+            }
+            let conn = expect_int(&args[0], "ws_ping", pos)?;
+            Ok(Value::Bool(crate::ws::ws_ping(conn)))
         }
 
         // ==================== M22 P1：解释器循环引用回收 ====================

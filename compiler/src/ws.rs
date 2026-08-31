@@ -13,6 +13,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 /// WebSocket 连接：读写用独立 try_clone 句柄（ws_recv 阻塞读不阻塞 ws_send）
 pub struct WsConn {
@@ -194,21 +195,35 @@ const OP_PING: u8 = 0x9;
 const OP_PONG: u8 = 0xA;
 
 /// 精确读 n 字节（循环直到读满或 EOF/错误）
-fn read_exact(stream: &mut TcpStream, buf: &mut [u8]) -> Result<(), String> {
+fn read_exact(stream: &mut TcpStream, buf: &mut [u8]) -> Result<(), WsErr> {
     let mut off = 0;
     while off < buf.len() {
         match stream.read(&mut buf[off..]) {
-            Ok(0) => return Err("连接已关闭".into()),
+            Ok(0) => return Err(WsErr::Closed),
             Ok(n) => off += n,
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(e) => return Err(format!("读失败: {}", e)),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock
+                || e.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                return Err(WsErr::Timeout)
+            }
+            Err(e) => return Err(WsErr::Io(format!("读失败: {}", e))),
         }
     }
     Ok(())
 }
 
-/// 读一帧（读 2 字节头 → 扩展长度 → 掩码 → 载荷）。返回 (opcode, fin, payload)
-fn read_frame(stream: &mut TcpStream) -> Result<(u8, bool, Vec<u8>), String> {
+/// 帧读取错误：Closed（对端关闭）/ Timeout（读超时，连接状态完好）/ Io（其他）
+enum WsErr {
+    Closed,
+    Timeout,
+    Io(String),
+}
+
+/// 读帧头（2 字节 + 扩展长度 + 掩码）。返回 (opcode, fin, 载荷长度, 是否掩码, 掩码键)。
+/// M23 拆分为 head/body：head 读成功前超时 → 连接状态完好（帧边界安全超时）；
+/// head 读到后清除超时再读 body，避免载荷中途超时破坏分片状态。
+fn read_frame_head(stream: &mut TcpStream) -> Result<(u8, bool, u64, bool, [u8; 4]), WsErr> {
     let mut h = [0u8; 2];
     read_exact(stream, &mut h)?;
     let fin = (h[0] & 0x80) != 0;
@@ -225,12 +240,16 @@ fn read_frame(stream: &mut TcpStream) -> Result<(u8, bool, Vec<u8>), String> {
         len = u64::from_be_bytes(ext);
     }
     if len > 64 * 1024 * 1024 {
-        return Err("帧载荷超过 64MB".into());
+        return Err(WsErr::Io("帧载荷超过 64MB".into()));
     }
     let mut mask = [0u8; 4];
     if masked {
         read_exact(stream, &mut mask)?;
     }
+    Ok((opcode, fin, len, masked, mask))
+}
+
+fn read_frame_body(stream: &mut TcpStream, len: u64, masked: bool, mask: [u8; 4]) -> Result<Vec<u8>, WsErr> {
     let mut payload = vec![0u8; len as usize];
     if len > 0 {
         read_exact(stream, &mut payload)?;
@@ -240,6 +259,13 @@ fn read_frame(stream: &mut TcpStream) -> Result<(u8, bool, Vec<u8>), String> {
             }
         }
     }
+    Ok(payload)
+}
+
+/// 读一帧（头 + 载荷）。返回 (opcode, fin, payload)
+fn read_frame(stream: &mut TcpStream) -> Result<(u8, bool, Vec<u8>), WsErr> {
+    let (opcode, fin, len, masked, mask) = read_frame_head(stream)?;
+    let payload = read_frame_body(stream, len, masked, mask)?;
     Ok((opcode, fin, payload))
 }
 
@@ -284,20 +310,68 @@ pub fn ws_send(conn: i64, data: &str) -> bool {
     }
 }
 
-/// ws_recv(conn)：读一条完整消息（自动重组分片、回复 ping）；关闭/错误 → None
-pub fn ws_recv(conn: i64) -> Option<String> {
+/// ws_ping(conn)：发送 ping 帧（心跳保活；对端应回 pong，可从 ws_recv 路径自动应答）。
+/// 失败（连接已关闭/写错误）→ false
+pub fn ws_ping(conn: i64) -> bool {
+    let Some(c) = ws_get(conn) else { return false };
+    if c.closed.load(Ordering::SeqCst) {
+        return false;
+    }
+    let frame = encode_frame(OP_PING, &[]);
+    let mut w = match c.write.lock() {
+        Ok(w) => w,
+        Err(_) => return false,
+    };
+    let r = w.write_all(&frame).and_then(|_| w.flush());
+    match r {
+        Ok(_) => true,
+        Err(_) => {
+            ws_mark_closed(&c, conn);
+            false
+        }
+    }
+}
+
+/// ws_recv(conn[, timeout_ms])：读一条完整消息（自动重组分片、回复 ping）。
+/// timeout_ms 缺省 → 阻塞；指定 → 帧边界等待超时返回 None（连接状态完好，可继续使用）。
+/// 关闭/错误 → None。
+pub fn ws_recv(conn: i64, timeout_ms: Option<i64>) -> Option<String> {
     let Some(c) = ws_get(conn) else { return None };
     if c.closed.load(Ordering::SeqCst) {
         return None;
     }
     let mut msg: Vec<u8> = Vec::new();
     loop {
+        // 仅在本轮循环起始（等待新帧头）时应用超时；读到帧头后清除，
+        // 避免载荷传输中途超时破坏分片/连接状态。
+        let timed = msg.is_empty() && timeout_ms.is_some();
         let frame = {
             let mut r = match c.read.lock() {
                 Ok(r) => r,
                 Err(_) => return None,
             };
-            read_frame(&mut r)
+            if timed {
+                let ms = timeout_ms.unwrap();
+                if ms <= 0 {
+                    let _ = r.set_read_timeout(None);
+                } else {
+                    let _ = r.set_read_timeout(Some(Duration::from_millis(ms as u64)));
+                }
+            }
+            match read_frame_head(&mut r) {
+                Ok((opcode, fin, len, masked, mask)) => {
+                    let _ = r.set_read_timeout(None);
+                    match read_frame_body(&mut r, len, masked, mask) {
+                        Ok(payload) => Ok((opcode, fin, payload)),
+                        Err(e) => Err(e),
+                    }
+                }
+                Err(WsErr::Timeout) => {
+                    let _ = r.set_read_timeout(None);
+                    return None; // 帧边界超时：连接完好，不标记关闭
+                }
+                Err(e) => Err(e),
+            }
         };
         let (opcode, fin, payload) = match frame {
             Ok(f) => f,

@@ -182,6 +182,7 @@ LXValue bi_ws_connect(LXValue* args, int nargs, void* ctx);
 LXValue bi_ws_send(LXValue* args, int nargs, void* ctx);
 LXValue bi_ws_recv(LXValue* args, int nargs, void* ctx);
 LXValue bi_ws_close(LXValue* args, int nargs, void* ctx);
+LXValue bi_ws_ping(LXValue* args, int nargs, void* ctx);
 LXValue ws_conn_worker(LXValue* args, int nargs, void* ctx);
 const char* px_val_cstr(LXValue v);
 

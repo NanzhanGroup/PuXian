@@ -64,6 +64,9 @@ static LXValue bi_clear_timer(LXValue* args, int nargs, void* ctx);
 static LXValue bi_sse_serve(LXValue* args, int nargs, void* ctx);
 static LXValue bi_sse_send(LXValue* args, int nargs, void* ctx);
 static LXValue bi_sse_close(LXValue* args, int nargs, void* ctx);
+// M23 P1：SSE 客户端（流式消费 / 事件订阅）
+static LXValue bi_sse_connect(LXValue* args, int nargs, void* ctx);
+static LXValue bi_sse_read(LXValue* args, int nargs, void* ctx);
 // M22 P1：强制垃圾回收（gc()）
 static LXValue bi_gc(LXValue* args, int nargs, void* ctx);
 
@@ -3739,6 +3742,9 @@ void px_register_builtins(void) {
     px_set_global("sse_serve", px_native("sse_serve", bi_sse_serve));
     px_set_global("sse_send", px_native("sse_send", bi_sse_send));
     px_set_global("sse_close", px_native("sse_close", bi_sse_close));
+    // M23 P1：SSE 客户端（流式消费 / 事件订阅）
+    px_set_global("sse_connect", px_native("sse_connect", bi_sse_connect));
+    px_set_global("sse_read", px_native("sse_read", bi_sse_read));
     // M22 P1：位运算 / 二进制数据视图（存储引擎序列化基石）
     px_set_global("int_to_hex", px_native("int_to_hex", bi_int_to_hex));
     px_set_global("hex_to_int", px_native("hex_to_int", bi_hex_to_int));
@@ -3752,6 +3758,7 @@ void px_register_builtins(void) {
     px_set_global("ws_send", px_native("ws_send", bi_ws_send));
     px_set_global("ws_recv", px_native("ws_recv", bi_ws_recv));
     px_set_global("ws_close", px_native("ws_close", bi_ws_close));
+    px_set_global("ws_ping", px_native("ws_ping", bi_ws_ping));
     // M22 P1：强制垃圾回收（解释器追踪式 GC / 编译模式保守标记-清除）
     px_set_global("gc", px_native("gc", bi_gc));
 }
@@ -5414,6 +5421,39 @@ static int sse_alloc_slot(void) {
     return -1;
 }
 
+// ==================== M23 SSE 客户端（编译模式，与解释器 builtin.rs 双模式一致） ====================
+// sse_connect(url) → int conn | null（仅 http://；GET 握手校验 200 + text/event-stream）
+// sse_read(conn) → dict{event,data,id,retry} | null（阻塞读一条事件；断开 → null）
+// sse_close(conn) → bool（同时处理服务端/客户端注册表）
+// 客户端注册表：fd 读端 + pending 字节缓冲（已读未解析），锁保护。
+
+#define MAX_SSE_CLIENTS 256
+static pthread_mutex_t g_sse_cli_mu = PTHREAD_MUTEX_INITIALIZER;
+static struct {
+    int fd;
+    int64_t id;
+    int active;
+    unsigned char* pending;   // 已读未解析缓冲
+    int pend_len;
+    int pend_cap;
+} g_sse_clients[MAX_SSE_CLIENTS];
+static int64_t g_sse_cli_next_id = 1;
+
+static int sse_cli_find(int64_t id) {
+    for (int i = 0; i < MAX_SSE_CLIENTS; i++) {
+        if (g_sse_clients[i].active && g_sse_clients[i].id == id) return i;
+    }
+    return -1;
+}
+
+static int sse_cli_alloc_slot(void) {
+    for (int i = 0; i < MAX_SSE_CLIENTS; i++) {
+        if (!g_sse_clients[i].active) return i;
+    }
+    return -1;
+}
+
+
 // SSE 帧编码：str → `data: xxx\n\n`；dict → event/data/id/retry。返回 xmalloc，调用者 xfree。
 static char* sse_frame_c(LXValue data) {
     char* out = xmalloc(8192);
@@ -5675,16 +5715,32 @@ static LXValue bi_sse_send(LXValue* args, int nargs, void* ctx) {
     return px_bool(true);
 }
 
-// sse_close(conn) → bool
+// sse_close(conn) → bool（服务端连接 shutdown 唤醒；客户端连接直接关闭）
 static LXValue bi_sse_close(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1 || args[0].type != PX_INT) px_error("sse_close 需要 (conn) 参数");
     int64_t conn = args[0].as.i;
+    // 服务端连接
     pthread_mutex_lock(&g_sse_mu);
     int idx = sse_find(conn);
     if (idx < 0) {
         pthread_mutex_unlock(&g_sse_mu);
-        return px_bool(false);
+        // 客户端连接
+        pthread_mutex_lock(&g_sse_cli_mu);
+        int cidx = sse_cli_find(conn);
+        if (cidx < 0) {
+            pthread_mutex_unlock(&g_sse_cli_mu);
+            return px_bool(false);
+        }
+        int cfd = g_sse_clients[cidx].fd;
+        g_sse_clients[cidx].active = 0;
+        if (g_sse_clients[cidx].pending) xfree(g_sse_clients[cidx].pending);
+        g_sse_clients[cidx].pending = NULL;
+        g_sse_clients[cidx].pend_len = g_sse_clients[cidx].pend_cap = 0;
+        pthread_mutex_unlock(&g_sse_cli_mu);
+        shutdown(cfd, SHUT_RDWR);
+        close(cfd);
+        return px_bool(true);
     }
     int fd = g_sse_conns[idx].fd;
     g_sse_conns[idx].active = 0;
@@ -5693,6 +5749,240 @@ static LXValue bi_sse_close(LXValue* args, int nargs, void* ctx) {
     close(fd);
     pthread_mutex_unlock(&g_sse_mu);
     return px_bool(true);
+}
+
+// 解析 SSE 事件文本（field: value 行）为 dict
+static LXValue sse_parse_event_c(const char* text, int len) {
+    LXValue d = px_dict();
+    px_dict_set(d, "event", px_str("message"));
+    char* data_buf = xmalloc(len + 1);
+    int data_len = 0;
+    char* id_buf = xmalloc(len + 1);
+    int has_id = 0;
+    char* event_buf = xmalloc(len + 1);
+    int has_event = 0;
+    int has_retry = 0;
+    long long retry = 0;
+    int start = 0;
+    for (int i = 0; i <= len; i++) {
+        if (i == len || text[i] == '\n') {
+            int ll = i - start;
+            if (ll > 0 && text[start + ll - 1] == '\r') ll--;
+            const char* line = text + start;
+            int colon = -1;
+            for (int j = 0; j < ll; j++) {
+                if (line[j] == ':') { colon = j; break; }
+            }
+            if (colon >= 0) {
+                const char* value = line + colon + 1;
+                int vlen = ll - colon - 1;
+                if (vlen > 0 && *value == ' ') { value++; vlen--; }
+                if (colon == 5 && strncmp(line, "event", 5) == 0) {
+                    memcpy(event_buf, value, vlen);
+                    event_buf[vlen] = 0;
+                    has_event = 1;
+                } else if (colon == 4 && strncmp(line, "data", 4) == 0) {
+                    if (data_len > 0) data_buf[data_len++] = '\n';
+                    memcpy(data_buf + data_len, value, vlen);
+                    data_len += vlen;
+                } else if (colon == 2 && strncmp(line, "id", 2) == 0) {
+                    memcpy(id_buf, value, vlen);
+                    id_buf[vlen] = 0;
+                    has_id = 1;
+                } else if (colon == 5 && strncmp(line, "retry", 5) == 0) {
+                    char tmp[64];
+                    int tl = vlen < 63 ? vlen : 63;
+                    memcpy(tmp, value, tl);
+                    tmp[tl] = 0;
+                    retry = atoll(tmp);
+                    has_retry = 1;
+                }
+            }
+            start = i + 1;
+        }
+    }
+    if (has_event) px_dict_set(d, "event", px_str(event_buf));
+    if (has_id) px_dict_set(d, "id", px_str(id_buf));
+    if (has_retry) px_dict_set(d, "retry", px_int(retry));
+    if (data_len > 0) px_dict_set(d, "data", px_str_len(data_buf, data_len));
+    else px_dict_set(d, "data", px_str(""));
+    xfree(data_buf);
+    xfree(id_buf);
+    xfree(event_buf);
+    return d;
+}
+
+// sse_connect(url) → conn id | null
+static LXValue bi_sse_connect(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_STR) px_error("sse_connect 需要 (url) 参数");
+    const char* url = args[0].as.obj->as.str.data;
+    if (strncmp(url, "http://", 7) != 0) return px_null(); // 仅 http
+    const char* rest = url + 7;
+    char host[256];
+    int port = 80;
+    const char* path = "/";
+    const char* slash = strchr(rest, '/');
+    int hl;
+    if (slash) {
+        hl = (int)(slash - rest);
+        path = slash;
+    } else {
+        hl = (int)strlen(rest);
+    }
+    if (hl <= 0 || hl >= (int)sizeof(host)) return px_null();
+    memcpy(host, rest, hl);
+    host[hl] = 0;
+    char* colon = strchr(host, ':');
+    if (colon) {
+        *colon = 0;
+        port = atoi(colon + 1);
+        if (port <= 0) return px_null();
+    }
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return px_null();
+    struct hostent* he = gethostbyname(host);
+    if (!he) { close(fd); return px_null(); }
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((uint16_t)port);
+    memcpy(&addr.sin_addr, he->h_addr, (size_t)he->h_length);
+    if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) { close(fd); return px_null(); }
+    char req[8192];
+    char hosthdr[512];
+    if (colon) snprintf(hosthdr, sizeof(hosthdr), "%s:%d", host, port);
+    else snprintf(hosthdr, sizeof(hosthdr), "%s", host);
+    int rl = snprintf(req, sizeof(req),
+        "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: PuXian/0.1\r\nAccept: text/event-stream\r\nConnection: close\r\nCache-Control: no-cache\r\n\r\n",
+        path, hosthdr);
+    if (rl <= 0 || send(fd, req, rl, MSG_NOSIGNAL) < 0) { close(fd); return px_null(); }
+    // 读响应头（直到 \r\n\r\n，上限 64KB）
+    unsigned char hbuf[65536];
+    int hn = 0;
+    int header_end = -1;
+    while (hn < (int)sizeof(hbuf)) {
+        int n = recv(fd, hbuf + hn, (int)sizeof(hbuf) - hn, 0);
+        if (n <= 0) break;
+        hn += n;
+        for (int i = 0; i + 3 < hn; i++) {
+            if (hbuf[i] == '\r' && hbuf[i+1] == '\n' && hbuf[i+2] == '\r' && hbuf[i+3] == '\n') {
+                header_end = i + 4;
+                break;
+            }
+        }
+        if (header_end >= 0) break;
+    }
+    if (header_end < 0) { close(fd); return px_null(); }
+    char* hstr = xmalloc((size_t)header_end + 1);
+    memcpy(hstr, hbuf, (size_t)header_end);
+    hstr[header_end] = 0;
+    int status = 0;
+    char* sp = strchr(hstr, ' ');
+    if (sp) status = atoi(sp + 1);
+    int ct_ok = 0;
+    char* ctp = strstr(hstr, "Content-Type:");
+    if (!ctp) ctp = strstr(hstr, "content-type:");
+    if (ctp) {
+        ctp += 14;
+        while (*ctp == ' ') ctp++;
+        if (strstr(ctp, "text/event-stream")) ct_ok = 1;
+    }
+    xfree(hstr);
+    if (status != 200 || !ct_ok) { close(fd); return px_null(); }
+    // 注册（剩余字节进 pending）
+    pthread_mutex_lock(&g_sse_cli_mu);
+    int slot = sse_cli_alloc_slot();
+    if (slot < 0) {
+        pthread_mutex_unlock(&g_sse_cli_mu);
+        close(fd);
+        return px_null();
+    }
+    int64_t id = g_sse_cli_next_id++;
+    int remain = hn - header_end;
+    g_sse_clients[slot].fd = fd;
+    g_sse_clients[slot].id = id;
+    g_sse_clients[slot].active = 1;
+    if (remain > 0) {
+        g_sse_clients[slot].pend_cap = remain + 64;
+        g_sse_clients[slot].pending = xmalloc((size_t)g_sse_clients[slot].pend_cap);
+        memcpy(g_sse_clients[slot].pending, hbuf + header_end, (size_t)remain);
+        g_sse_clients[slot].pend_len = remain;
+    } else {
+        g_sse_clients[slot].pending = NULL;
+        g_sse_clients[slot].pend_len = g_sse_clients[slot].pend_cap = 0;
+    }
+    pthread_mutex_unlock(&g_sse_cli_mu);
+    return px_int(id);
+}
+
+// sse_read(conn) → 事件 dict | null（阻塞读一条；断开 → null）
+static LXValue bi_sse_read(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_INT) px_error("sse_read 需要 (conn) 参数");
+    int64_t conn = args[0].as.i;
+    int fd = -1;
+    int idx = -1;
+    pthread_mutex_lock(&g_sse_cli_mu);
+    idx = sse_cli_find(conn);
+    if (idx < 0) { pthread_mutex_unlock(&g_sse_cli_mu); return px_null(); }
+    fd = g_sse_clients[idx].fd;
+    pthread_mutex_unlock(&g_sse_cli_mu);
+    for (;;) {
+        // 尝试从 pending 取完整事件（\n\n 或 \r\n\r\n）
+        pthread_mutex_lock(&g_sse_cli_mu);
+        if (g_sse_clients[idx].active && g_sse_clients[idx].pending && g_sse_clients[idx].pend_len > 0) {
+            unsigned char* p = g_sse_clients[idx].pending;
+            int n = g_sse_clients[idx].pend_len;
+            int found = -1, sep = 0;
+            for (int i = 0; i < n; i++) {
+                if (p[i] == '\n' && i + 1 < n && p[i+1] == '\n') { found = i; sep = 2; break; }
+                if (p[i] == '\n' && i + 2 < n && p[i+1] == '\r' && p[i+2] == '\n') { found = i; sep = 3; break; }
+            }
+            if (found >= 0) {
+                LXValue ev = sse_parse_event_c((const char*)p, found);
+                int newlen = n - (found + sep);
+                memmove(p, p + found + sep, (size_t)newlen);
+                g_sse_clients[idx].pend_len = newlen;
+                pthread_mutex_unlock(&g_sse_cli_mu);
+                return ev;
+            }
+        }
+        pthread_mutex_unlock(&g_sse_cli_mu);
+        // 阻塞读更多
+        unsigned char tmp[4096];
+        int n = recv(fd, tmp, sizeof(tmp), 0);
+        if (n <= 0) {
+            pthread_mutex_lock(&g_sse_cli_mu);
+            if (g_sse_clients[idx].active) {
+                g_sse_clients[idx].active = 0;
+                if (g_sse_clients[idx].pending) xfree(g_sse_clients[idx].pending);
+                g_sse_clients[idx].pending = NULL;
+                g_sse_clients[idx].pend_len = g_sse_clients[idx].pend_cap = 0;
+            }
+            pthread_mutex_unlock(&g_sse_cli_mu);
+            close(fd);
+            return px_null();
+        }
+        pthread_mutex_lock(&g_sse_cli_mu);
+        if (!g_sse_clients[idx].active) {
+            pthread_mutex_unlock(&g_sse_cli_mu);
+            return px_null();
+        }
+        if (g_sse_clients[idx].pend_len + n > g_sse_clients[idx].pend_cap) {
+            int ncap = g_sse_clients[idx].pend_cap ? g_sse_clients[idx].pend_cap * 2 : (n + 64);
+            if (ncap < g_sse_clients[idx].pend_len + n) ncap = g_sse_clients[idx].pend_len + n + 64;
+            unsigned char* np = xmalloc((size_t)ncap);
+            if (g_sse_clients[idx].pend_len > 0)
+                memcpy(np, g_sse_clients[idx].pending, (size_t)g_sse_clients[idx].pend_len);
+            if (g_sse_clients[idx].pending) xfree(g_sse_clients[idx].pending);
+            g_sse_clients[idx].pending = np;
+            g_sse_clients[idx].pend_cap = ncap;
+        }
+        memcpy(g_sse_clients[idx].pending + g_sse_clients[idx].pend_len, tmp, (size_t)n);
+        g_sse_clients[idx].pend_len += n;
+        pthread_mutex_unlock(&g_sse_cli_mu);
+    }
 }
 
 // ==================== M17 .px 脚本执行机制（编译模式） ====================

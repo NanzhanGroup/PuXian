@@ -286,6 +286,8 @@ impl Interpreter {
             ("sse_serve", Builtin::SseServe),
             ("sse_send", Builtin::SseSend),
             ("sse_close", Builtin::SseClose),
+            ("sse_connect", Builtin::SseConnect),
+            ("sse_read", Builtin::SseRead),
             ("int_to_hex", Builtin::IntToHex),
             ("hex_to_int", Builtin::HexToInt),
             ("bytes_to_hex", Builtin::BytesToHex),
@@ -297,6 +299,7 @@ impl Interpreter {
             ("ws_send", Builtin::WsSend),
             ("ws_recv", Builtin::WsRecv),
             ("ws_close", Builtin::WsClose),
+            ("ws_ping", Builtin::WsPing),
             ("gc", Builtin::Gc),
         ];
         for (n, b) in names {

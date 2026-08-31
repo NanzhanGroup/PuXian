@@ -23,6 +23,7 @@
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <netdb.h>
+#include <poll.h>
 #include <pthread.h>
 #include "mbedtls/sha1.h"
 
@@ -470,7 +471,13 @@ LXValue bi_ws_send(LXValue* args, int nargs, void* ctx) {
 // ws_recv(conn) → str | null（阻塞读一条完整消息；自动重组分片、回复 ping）
 LXValue bi_ws_recv(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1 || args[0].type != PX_INT) px_error("ws_recv 需要 (conn) 参数");
+    if (nargs < 1 || nargs > 2 || args[0].type != PX_INT)
+        px_error("ws_recv 需要 (conn) 或 (conn, timeout_ms) 参数");
+    int timeout_ms = -1;
+    if (nargs == 2) {
+        if (args[1].type != PX_INT) px_error("ws_recv 的 timeout_ms 必须是整数");
+        timeout_ms = (int)args[1].as.i;
+    }
     int64_t conn = args[0].as.i;
     int is_client = 0;
     int fd = ws_get_fd(conn, &is_client);
@@ -478,6 +485,32 @@ LXValue bi_ws_recv(LXValue* args, int nargs, void* ctx) {
     unsigned char* msg = NULL;
     size_t mlen = 0, mcap = 0;
     for (;;) {
+        // M23：可选超时 —— 每帧等待前 poll（控制帧/分片间同样生效）。
+        // 超时返回 null（连接状态完好可继续使用）；对端关闭检测（HUP/ERR 且无数据）。
+        if (timeout_ms >= 0) {
+            struct pollfd pfd;
+            pfd.fd = fd;
+            pfd.events = POLLIN;
+            int pr = poll(&pfd, 1, timeout_ms);
+            if (pr == 0) {
+                // 超时：不标记关闭，连接完好
+                if (msg) free(msg);
+                return px_null();
+            }
+            if (pr < 0) {
+                if (msg) free(msg);
+                return px_null();
+            }
+            if ((pfd.revents & (POLLHUP | POLLERR)) && !(pfd.revents & POLLIN)) {
+                if (msg) free(msg);
+                pthread_mutex_lock(&g_ws_mu);
+                int idx = ws_find(conn);
+                if (idx >= 0) { g_ws_conns[idx].active = 0; g_ws_conns[idx].fd = -1; }
+                pthread_mutex_unlock(&g_ws_mu);
+                close(fd);
+                return px_null();
+            }
+        }
         int fin = 0;
         unsigned char* payload = NULL;
         size_t plen = 0;
@@ -546,5 +579,25 @@ LXValue bi_ws_close(LXValue* args, int nargs, void* ctx) {
     }
     pthread_mutex_unlock(&g_ws_mu);
     close(fd);
+    return px_bool(true);
+}
+
+// ws_ping(conn) → bool（发送 ping 帧；心跳保活，对端应回 pong）
+LXValue bi_ws_ping(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_INT) px_error("ws_ping 需要 (conn) 参数");
+    int64_t conn = args[0].as.i;
+    int is_client = 0;
+    int fd = ws_get_fd(conn, &is_client);
+    if (fd < 0) return px_bool(false);
+    if (ws_send_frame(fd, WS_OP_PING, NULL, 0, is_client) < 0) {
+        shutdown(fd, SHUT_RDWR);
+        close(fd);
+        pthread_mutex_lock(&g_ws_mu);
+        int idx = ws_find(conn);
+        if (idx >= 0) { g_ws_conns[idx].active = 0; g_ws_conns[idx].fd = -1; }
+        pthread_mutex_unlock(&g_ws_mu);
+        return px_bool(false);
+    }
     return px_bool(true);
 }

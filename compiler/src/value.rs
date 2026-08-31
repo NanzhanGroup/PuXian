@@ -183,6 +183,12 @@ pub enum Builtin {
     SseServe,
     SseSend,
     SseClose,
+    // M23 P1：SSE 客户端（LLM 流式消费 / 事件订阅，网络层收尾）
+    // sse_connect(url) → int conn | null（HTTP GET 握手，校验 text/event-stream）
+    // sse_read(conn) → dict{event,data,id,retry} | null（阻塞读一条事件；断开 → null）
+    // sse_close(conn) → bool（关闭客户端连接）
+    SseConnect,
+    SseRead,
     // M22 P1：位运算 / 二进制数据视图（存储引擎序列化基石；运算符 & | ^ ~ << >> 已具备）
     // int_to_hex(n, width) → str（固定宽度小写 hex，负数按补码）
     // hex_to_int(hex) → int 或 null（非法 → null）
@@ -206,6 +212,10 @@ pub enum Builtin {
     WsSend,
     WsRecv,
     WsClose,
+    // M23 P1：WebSocket 心跳/超时（长连接保活）
+    // ws_ping(conn) → bool（发送 ping 帧；对端应回 pong）
+    // ws_recv(conn[, timeout_ms]) → str|null（可选超时：超时/断开 → null）
+    WsPing,
     // M22 P1：解释器循环引用回收（追踪式 GC）
     // gc() → int（强制运行一次垃圾回收；返回 0 = 有并发线程跳过，1 = 已执行）
     Gc,
@@ -301,6 +311,8 @@ impl Builtin {
             Builtin::SseServe => "sse_serve",
             Builtin::SseSend => "sse_send",
             Builtin::SseClose => "sse_close",
+            Builtin::SseConnect => "sse_connect",
+            Builtin::SseRead => "sse_read",
             Builtin::IntToHex => "int_to_hex",
             Builtin::HexToInt => "hex_to_int",
             Builtin::BytesToHex => "bytes_to_hex",
@@ -312,6 +324,7 @@ impl Builtin {
             Builtin::WsSend => "ws_send",
             Builtin::WsRecv => "ws_recv",
             Builtin::WsClose => "ws_close",
+            Builtin::WsPing => "ws_ping",
             Builtin::Gc => "gc",
         }
     }
