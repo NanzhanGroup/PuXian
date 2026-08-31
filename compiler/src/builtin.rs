@@ -1500,6 +1500,43 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             Ok(Value::Bool(st == 204 || st == 200))
         }
         // s3_list(endpoint, bucket, prefix, ak, sk) → list（对象 key）
+        // ==================== M38：UDP echo 服务端 ====================
+        // udp_serve(port, handler)：handler(ip, port, data) → 响应（str/bytes）发送回对端；null 不回
+        Builtin::UdpServe => {
+            if args.len() != 2 {
+                return Err(err("udp_serve 需要 (port, handler) 参数", pos));
+            }
+            let port = expect_int(&args[0], "udp_serve", pos)?;
+            let handler = args[1].clone();
+            if !matches!(handler, Value::Func(_)) {
+                return Err(err("udp_serve 的 handler 必须是函数", pos));
+            }
+            let addr = format!("0.0.0.0:{}", port);
+            let sock = std::net::UdpSocket::bind(&addr)
+                .map_err(|e| err(format!("udp_serve 绑定 {} 失败: {}", addr, e), pos))?;
+            let mut buf = vec![0u8; 65535];
+            loop {
+                let (n, src) = match sock.recv_from(&mut buf) {
+                    Ok(x) => x,
+                    Err(_) => continue,
+                };
+                let data = String::from_utf8_lossy(&buf[..n]).to_string();
+                let call_args = [
+                    Value::Str(src.ip().to_string()),
+                    Value::Int(src.port() as i64),
+                    Value::Str(data.clone()),
+                ];
+                let r = interp.call_value(&handler, &call_args, pos)?;
+                if !matches!(r, Value::Null) {
+                    let resp: Vec<u8> = match &r {
+                        Value::Str(x) => x.clone().into_bytes(),
+                        Value::Bytes(b) => b.clone(),
+                        _ => r.to_string().into_bytes(),
+                    };
+                    let _ = sock.send_to(&resp, src);
+                }
+            }
+        }
         Builtin::S3List => {
             if args.len() != 5 {
                 return Err(err("s3_list 需要 (endpoint, bucket, prefix, ak, sk) 参数", pos));
@@ -2440,74 +2477,14 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             }
             Ok(Value::Null) // 不可达
         }
+
         Builtin::WsConnect => {
-            // M32：支持一行连接 ws_connect("ws://host:port/path") / "wss://..."（wss 走 TLS）
+            // M32/M38：支持一行连接 ws_connect("ws://host:port/path") / "wss://..."（wss 走 TLS）
             if args.len() == 1 {
                 if let Value::Str(url) = &args[0] {
                     let url = url.clone();
-                    // 解析 URL
-                    let (is_tls, rest) = if let Some(r) = url.strip_prefix("wss://") {
-                        (true, r)
-                    } else if let Some(r) = url.strip_prefix("ws://") {
-                        (false, r)
-                    } else {
-                        return Ok(Value::Null);
-                    };
-                    let (hostport, path) = match rest.find('/') {
-                        Some(i) => (rest[..i].to_string(), rest[i..].to_string()),
-                        None => (rest.to_string(), "/".to_string()),
-                    };
-                    if hostport.is_empty() {
-                        return Ok(Value::Null);
-                    }
-                    let (host, port) = match hostport.find(':') {
-                        Some(i) => (
-                            hostport[..i].to_string(),
-                            hostport[i + 1..].parse::<u16>().map_err(|_| {
-                                LxError::new("R3010", format!("net: 无效端口 {}", hostport), Some(pos))
-                            })?,
-                        ),
-                        None => (hostport.clone(), if is_tls { 443u16 } else { 80u16 }),
-                    };
-                    let host_header = if hostport.contains(':') {
-                        hostport.clone()
-                    } else {
-                        format!("{}:{}", host, port)
-                    };
-                    if is_tls {
-                        let t = https_connect(&host, port).map_err(|e| {
-                            LxError::new("R3010", format!("net: TLS 连接 {} 失败: {}", host, e), Some(pos))
-                        })?;
-                        let mut conn = Conn::Tls(t);
-                        if let Err(_e) = crate::ws::client_handshake(&mut conn, &host, port, &path) {
-                            return Ok(Value::Null); // 握手失败 → null
-                        }
-                        // 注册：SConn::client_tls（读写共享同一 TLS 会话）
-                        match conn {
-                            Conn::Tls(tc) => {
-                                let sc = crate::tls::SConn::client_tls(tc);
-                                let w = sc.try_clone().map_err(|e| {
-                                    LxError::new("R3010", format!("net: 克隆连接失败: {}", e), Some(pos))
-                                })?;
-                                let (id, _rx) = crate::ws::ws_register_client(sc, w);
-                                return Ok(Value::Int(id));
-                            }
-                            _ => return Ok(Value::Null),
-                        }
-                    } else {
-                        let addr = format!("{}:{}", host, port);
-                        let mut stream = TcpStream::connect(&addr).map_err(|e| {
-                            LxError::new("R3010", format!("net: 连接 {} 失败: {}", addr, e), Some(pos))
-                        })?;
-                        if let Err(_e) = crate::ws::client_handshake(&mut stream, &host, port, &path) {
-                            return Ok(Value::Null);
-                        }
-                        let sc = match crate::tls::SConn::plain_try_clone(&stream) {
-                            Ok(w) => w,
-                            Err(_) => return Ok(Value::Null),
-                        };
-                        let (id, _rx) =
-                            crate::ws::ws_register_client(crate::tls::SConn::plain(stream), sc);
+                    if let Some((sc, w)) = ws_connect_raw(&url) {
+                        let (id, _rx) = crate::ws::ws_register_client(sc, w);
                         return Ok(Value::Int(id));
                     }
                 }
@@ -2532,6 +2509,23 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             };
             let (id, _rx) = crate::ws::ws_register_client(crate::tls::SConn::plain(stream), sc);
             Ok(Value::Int(id))
+        }
+        // M38：ws_connect_auto(url, reconnect_ms) → conn（断线自动重连）
+        Builtin::WsConnectAuto => {
+            if args.len() != 2 {
+                return Err(err("ws_connect_auto 需要 (url, reconnect_ms) 参数", pos));
+            }
+            let url = expect_str(&args[0], "ws_connect_auto", pos)?;
+            let ms = expect_int(&args[1], "ws_connect_auto", pos)?;
+            if ms <= 0 {
+                return Err(err("ws_connect_auto 的 reconnect_ms 需要正整数", pos));
+            }
+            if let Some((sc, w)) = ws_connect_raw(url) {
+                let (id, _rx) = crate::ws::ws_register_client(sc, w);
+                crate::ws::ws_set_reconnect(id, url.to_string(), ms);
+                return Ok(Value::Int(id));
+            }
+            Ok(Value::Null)
         }
         Builtin::WsSend => {
             if args.len() != 2 {
@@ -4419,6 +4413,50 @@ fn parse_url(url: &str) -> Result<(String, String, u16, String, String), String>
 
 /// 池化客户端：http_request(url, method, body?, headers?) → dict{status, headers, body}
 /// 明文 http 使用 keep-alive 连接池（同 host 复用）；https 每次新建（TLS 会话不复用）。
+/// M38：ws:// wss:// 一行连接核心（提取供 ws_connect / ws_connect_auto / ws_recv 断线重连复用）
+pub(crate) fn ws_connect_raw(url: &str) -> Option<(crate::tls::SConn, crate::tls::SConn)> {
+    let (is_tls, rest) = if let Some(r) = url.strip_prefix("wss://") {
+        (true, r)
+    } else if let Some(r) = url.strip_prefix("ws://") {
+        (false, r)
+    } else {
+        return None;
+    };
+    let (hostport, path) = match rest.find('/') {
+        Some(i) => (rest[..i].to_string(), rest[i..].to_string()),
+        None => (rest.to_string(), "/".to_string()),
+    };
+    if hostport.is_empty() {
+        return None;
+    }
+    let (host, port) = match hostport.find(':') {
+        Some(i) => (
+            hostport[..i].to_string(),
+            hostport[i + 1..].parse::<u16>().ok()?,
+        ),
+        None => (hostport.clone(), if is_tls { 443u16 } else { 80u16 }),
+    };
+    if is_tls {
+        let t = https_connect(&host, port).ok()?;
+        let mut conn = Conn::Tls(t);
+        crate::ws::client_handshake(&mut conn, &host, port, &path).ok()?;
+        match conn {
+            Conn::Tls(tc) => {
+                let sc = crate::tls::SConn::client_tls(tc);
+                let w = sc.try_clone().ok()?;
+                Some((sc, w))
+            }
+            _ => None,
+        }
+    } else {
+        let addr = format!("{}:{}", host, port);
+        let mut stream = TcpStream::connect(&addr).ok()?;
+        crate::ws::client_handshake(&mut stream, &host, port, &path).ok()?;
+        let sc = crate::tls::SConn::plain_try_clone(&stream).ok()?;
+        Some((crate::tls::SConn::plain(stream), sc))
+    }
+}
+
 /// M37：http_request 客户端选项（重试 / 超时 / 代理）
 #[derive(Default)]
 pub struct HttpReqOpts {

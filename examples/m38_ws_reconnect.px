@@ -1,0 +1,42 @@
+# M38① WebSocket 客户端自动重连：ws_connect_auto(url, reconnect_ms)（断线自动重连）
+# 双模式一致：Rust ws.rs WS_RECONNECT + ws_recv 重连；C runtime_ws.c 明文重连
+PORT = 18178
+
+def handler(conn):
+    while true:
+        msg = ws_recv(conn)
+        if msg == null:
+            break
+        if msg == "kick-me":
+            # 服务器主动断开 → 客户端断线触发自动重连
+            ws_close(conn)
+            break
+        ws_send(conn, "ack:" + msg)
+
+def serve():
+    ws_serve(PORT, handler)
+spawn serve()
+sleep(500)
+
+c = ws_connect_auto("ws://127.0.0.1:" + str(PORT) + "/ws", 300)
+assert(c != null, "自动重连连接")
+
+# 正常收发
+ws_send(c, "hello")
+assert(ws_recv(c, 3000) == "ack:hello")
+print("conn ok")
+
+# 服务器踢掉连接 → ws_recv 读到 close → 自动重连（300ms）
+ws_send(c, "kick-me")
+sleep(500)
+# 触发重连：ws_recv 读到 close → 重连成功 → continue → 新连接无消息超时返回 null
+v = ws_recv(c, 2500)
+# 重连已完成，新连接上继续收发
+ws_send(c, "after-reconnect")
+m = ws_recv(c, 3000)
+assert(m == "ack:after-reconnect", "重连后继续收发，实际 " + str(m))
+print("auto reconnect:", m)
+
+ws_close(c)
+sleep(200)
+print("M38_WS_RECONNECT_OK")

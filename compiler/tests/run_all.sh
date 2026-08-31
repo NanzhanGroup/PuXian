@@ -43,7 +43,7 @@ else
 fi
 
 echo "========== [3/4] 示例双模式回归 =========="
-EXAMPLES="hello fib struct match concurrent concurrent_m3 std_demo net_demo toolchain_demo p0_random_io p1_mutex_rwlock p2_crypto_hash p3_regex p4_http_server p5_px_serve p6_timer p7_aes_xml_zip m22_bitwise_data m23b_bytes m24_slice_xml m25_closure_gc m26_ushr m28_time_sqlite m28_route m29_jsonpath_web m29_webprod m30_int_bytes m30_comp m30_tls_pool m31_sandbox m31_vhost m32_gen m32_sse_reconnect m32_hot_reload m33_route_rate_limit m33_sni m33_access_log m33_udp_alt_svc m34_gen_lazy m34_pool_cfg m34_bus_ws m35_h2 m35_gzip_rl m36_log_ctx m36_ws_hb m36_pool_grace m37_s3 m37_h2_tls"
+EXAMPLES="hello fib struct match concurrent concurrent_m3 std_demo net_demo toolchain_demo p0_random_io p1_mutex_rwlock p2_crypto_hash p3_regex p4_http_server p5_px_serve p6_timer p7_aes_xml_zip m22_bitwise_data m23b_bytes m24_slice_xml m25_closure_gc m26_ushr m28_time_sqlite m28_route m29_jsonpath_web m29_webprod m30_int_bytes m30_comp m30_tls_pool m31_sandbox m31_vhost m32_gen m32_sse_reconnect m32_hot_reload m33_route_rate_limit m33_sni m33_access_log m33_udp_alt_svc m34_gen_lazy m34_pool_cfg m34_bus_ws m35_h2 m35_gzip_rl m36_log_ctx m36_ws_hb m36_pool_grace m37_s3 m37_h2_tls m38_udp_serve m38_chunked m38_ws_reconnect m38_h2_multi"
 for ex in $EXAMPLES; do
     f="../examples/$ex.px"
     if [ ! -f "$f" ]; then echo "⚠ 跳过（不存在）: $f"; continue; fi

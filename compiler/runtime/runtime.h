@@ -204,6 +204,8 @@ LXValue bi_zip_unpack(LXValue* args, int nargs, void* ctx);
 // 实现文件：runtime_ws.c（mbedtls sha1 握手 + 帧协议 + 连接注册表）
 LXValue bi_ws_serve(LXValue* args, int nargs, void* ctx);
 LXValue bi_ws_connect(LXValue* args, int nargs, void* ctx);
+// M38：ws_connect_auto(url, reconnect_ms) → conn（断线自动重连）
+LXValue bi_ws_connect_auto(LXValue* args, int nargs, void* ctx);
 LXValue bi_ws_send(LXValue* args, int nargs, void* ctx);
 // M34：ws_broadcast(data) → int（向全部活跃连接群发）
 LXValue bi_ws_broadcast(LXValue* args, int nargs, void* ctx);

@@ -411,6 +411,9 @@ impl Interpreter {
             ("s3_get", Builtin::S3Get),
             ("s3_delete", Builtin::S3Delete),
             ("s3_list", Builtin::S3List),
+            // M38：UDP echo 服务端 + WS 自动重连
+            ("udp_serve", Builtin::UdpServe),
+            ("ws_connect_auto", Builtin::WsConnectAuto),
         ];
         for (n, b) in names {
             g.define(n, Value::Builtin(*b));

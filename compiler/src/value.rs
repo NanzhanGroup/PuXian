@@ -410,6 +410,10 @@ pub enum Builtin {
     S3Get,
     S3Delete,
     S3List,
+    // M38：UDP echo 服务端（udp_serve(port, handler)：handler(ip, port, data) → 响应发送回对端）
+    UdpServe,
+    // M38：WebSocket 客户端自动重连（ws_connect_auto(url, reconnect_ms)：断线自动重连）
+    WsConnectAuto,
 }
 
 impl Builtin {
@@ -588,6 +592,8 @@ impl Builtin {
             Builtin::S3Get => "s3_get",
             Builtin::S3Delete => "s3_delete",
             Builtin::S3List => "s3_list",
+            Builtin::UdpServe => "udp_serve",
+            Builtin::WsConnectAuto => "ws_connect_auto",
         }
     }
 }

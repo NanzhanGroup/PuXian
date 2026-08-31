@@ -86,7 +86,7 @@ px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
 | [docs/requirements.md](docs/requirements.md) | 需求与设计讨论（动机、取舍、双模式架构） |
 | [docs/plan.md](docs/plan.md) | 开发方案（语言命名、里程碑规划、语言要点） |
 | [docs/spec.md](docs/spec.md) | 语言规格说明书（词法 / 语法 / 语义 / 标准库） |
-| [docs/PROGRESS.md](docs/PROGRESS.md) | 开发进度（M0–M37 产出与验证记录，含 M38 候选） |
+| [docs/PROGRESS.md](docs/PROGRESS.md) | 开发进度（M0–M38 全部完成，39 个里程碑） |
 
 ---
 
@@ -132,6 +132,7 @@ px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
 | M35 | 请求体 gzip 解压（Content-Encoding: gzip 自动解压）+ 推导式 range 流式迭代 + HTTP/2 最小服务端（h2c Upgrade + HPACK/Huffman + 帧层）+ 多维限流 / 白名单（key 组合 + whitelist） | ✅ |
 | M36 | 日志增强（log_json JSON 行 + log_daily 按天轮转）+ 请求上下文（ctx_set/get/clear 线程局部中间件传值）+ WS 心跳配置化（ws_serve opts{heartbeat} 自动保活）+ 进程池优雅关闭（SIGTERM 清理 px --worker 孤儿） | ✅ |
 | M37 | HTTP/2 over TLS（ALPN h2 协商）+ 响应压缩配置（gzip_level/gzip_min_bytes）+ 客户端 http_request 增强（retries/timeout/proxy）+ S3/MinIO 对象存储（AWS SigV4：s3_put/get/delete/list） | ✅ |
+| M38 | WS 客户端自动重连（ws_connect_auto 断线重连）+ HTTP/2 多流（同一连接多 stream 并发）+ 请求体流式限制（chunked 解码 + 超限 413）+ UDP echo 服务端（udp_serve） | ✅ |
 
 ---
 

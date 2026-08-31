@@ -1,0 +1,23 @@
+# M38④ UDP echo 服务端：udp_serve(port, handler)（handler(ip, port, data) → 响应回对端）
+# 双模式一致：Rust UdpServe + C bi_udp_serve
+PORT = 18176
+
+def uhandler(ip, port, data):
+    return "echo:" + data
+
+def serve():
+    udp_serve(PORT, uhandler)
+spawn serve()
+sleep(400)
+
+# 客户端：udp_send → udp_recv 验证 echo
+s = udp_open(0)
+n = udp_send(s, "127.0.0.1", PORT, "hello-udp-serve")
+assert(n == 15)
+r = udp_recv(s, 64)
+assert(r != null)
+assert(bytes_to_str(r["data"]) == "echo:hello-udp-serve")
+print("udp echo:", bytes_to_str(r["data"]))
+udp_close(s)
+
+print("M38_UDP_SERVE_OK")

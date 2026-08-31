@@ -1588,7 +1588,13 @@ pub fn read_http_conn(
     let remote = conn_peer(conn);
     let (req, content_length) = parse_http_request(&head, &remote)?;
     let body_off = header_end + 4;
-    let (mut body_bytes, body_tmp) = read_body(conn, &buf[body_off..], content_length, o)?;
+    // M38：Transfer-Encoding: chunked 请求体 → 流式解码 + 大小限制（max_body_size）
+    let chunked = req_header_contains(&req, "transfer-encoding", "chunked");
+    let (mut body_bytes, body_tmp) = if chunked {
+        read_chunked_body(conn, &buf[body_off..], o.max_body_size)?
+    } else {
+        read_body(conn, &buf[body_off..], content_length, o)?
+    };
     // M35：HTTP/2 h2c——请求头后缓冲的残留字节（client preface 前几字节）回传给 h2 处理
     let extra: Vec<u8> = if buf.len() > body_off + content_length {
         buf[body_off + content_length..].to_vec()
@@ -1650,6 +1656,77 @@ fn conn_peer(conn: &SConn) -> String {
 }
 
 /// 流式读取 body：大小限制（超限 → Err PAYLOAD_TOO_LARGE）+ 大 body 落盘。
+/// M38：读取 chunked 请求体（Transfer-Encoding: chunked）——流式解码 + 大小限制
+/// 格式：<hex-size>\r\n<data>\r\n ... 0\r\n\r\n
+fn read_chunked_body(
+    conn: &mut SConn,
+    have: &[u8],
+    max_body: usize,
+) -> Result<(Vec<u8>, Option<PathBuf>), String> {
+    let mut collected: Vec<u8> = Vec::new();
+    let mut pending: Vec<u8> = have.to_vec();
+    let mut tmp_file: Option<(std::fs::File, PathBuf)> = None;
+    loop {
+        // 读一行（chunk 大小）
+        let mut line = String::new();
+        loop {
+            if let Some(pos) = pending.iter().position(|&b| b == b'\n') {
+                line = String::from_utf8_lossy(&pending[..pos]).trim().to_string();
+                pending.drain(..pos + 1);
+                break;
+            }
+            let mut chunk = [0u8; 1024];
+            let n = conn
+                .read(&mut chunk)
+                .map_err(|e| format!("读 chunked body 失败: {}", e))?;
+            if n == 0 {
+                return Err("chunked body 读取中断".into());
+            }
+            pending.extend_from_slice(&chunk[..n]);
+        }
+        let size_str = line.split(';').next().unwrap_or("").trim();
+        let size = usize::from_str_radix(size_str, 16).map_err(|_| "chunk 大小非法".to_string())?;
+        if size == 0 {
+            break; // 结束
+        }
+        // 读 size 字节数据 + 尾部 CRLF
+        while pending.len() < size + 2 {
+            let mut chunk = [0u8; 8192];
+            let n = conn
+                .read(&mut chunk)
+                .map_err(|e| format!("读 chunk 数据失败: {}", e))?;
+            if n == 0 {
+                return Err("chunk 数据读取中断".into());
+            }
+            pending.extend_from_slice(&chunk[..n]);
+        }
+        if collected.len() + size > max_body {
+            return Err("PAYLOAD_TOO_LARGE".into());
+        }
+        let data = &pending[..size];
+        if tmp_file.is_none() && collected.len() + size > BODY_TMP_THRESHOLD {
+            let dir = std::env::temp_dir();
+            let path = dir.join(format!("px_body_{}_{}.tmp", std::process::id(), now_secs()));
+            let f = std::fs::File::create(&path).map_err(|e| format!("创建 body 临时文件失败: {}", e))?;
+            if !collected.is_empty() {
+                use std::io::Write as _;
+                let mut f2 = &f;
+                let _ = (&mut f2).write_all(&collected);
+            }
+            tmp_file = Some((f, path));
+        }
+        match &mut tmp_file {
+            Some((f, _)) => {
+                use std::io::Write as _;
+                let _ = f.write_all(data);
+            }
+            None => collected.extend_from_slice(data),
+        }
+        pending.drain(..size + 2); // 数据 + CRLF
+    }
+    Ok((collected, tmp_file.map(|(_, p)| p)))
+}
+
 fn read_body(
     conn: &mut SConn,
     have: &[u8],

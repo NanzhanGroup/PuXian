@@ -48,6 +48,10 @@ static struct {
     void* hs;                // M32：wss 客户端 HttpsSession*（关闭时释放）
 } g_ws_conns[MAX_WS_CONNS];
 static int64_t g_ws_next_id = 1;
+// M38：客户端自动重连配置（conn id → url/重连间隔 ms；明文 ws:// 重连）
+static char g_ws_reconnect_url[MAX_WS_CONNS][512];
+static long long g_ws_reconnect_ms[MAX_WS_CONNS];
+static int g_ws_reconnect_set[MAX_WS_CONNS];
 
 // 当前毫秒时间戳
 static long long ws_now_ms(void) {
@@ -738,6 +742,63 @@ LXValue bi_ws_send(LXValue* args, int nargs, void* ctx) {
     return px_bool(ok);
 }
 
+// M38：ws_connect_auto(url, reconnect_ms) → conn（断线自动重连；明文 ws:// 重连）
+LXValue bi_ws_connect_auto(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2 || args[0].type != PX_STR || args[1].type != PX_INT)
+        px_error("ws_connect_auto 需要 (url, reconnect_ms) 参数");
+    const char* url = args[0].as.obj->as.str.data;
+    long long ms = args[1].as.i;
+    if (ms <= 0) px_error("ws_connect_auto 的 reconnect_ms 需要正整数");
+    if (strncmp(url, "wss://", 6) == 0) px_error("ws_connect_auto 暂支持 ws://（明文重连）");
+    if (strncmp(url, "ws://", 5) != 0) return px_null();
+    const char* rest = url + 5;
+    const char* slash = strchr(rest, '/');
+    char hbuf[512];
+    int hl;
+    const char* path = "/";
+    if (slash) { hl = (int)(slash - rest); path = slash; }
+    else hl = (int)strlen(rest);
+    if (hl <= 0 || hl >= (int)sizeof(hbuf)) return px_null();
+    memcpy(hbuf, rest, (size_t)hl); hbuf[hl] = 0;
+    int port = 80;
+    char* colon = strchr(hbuf, ':');
+    if (colon) { *colon = 0; port = atoi(colon + 1); if (port <= 0) return px_null(); }
+    if (!hbuf[0]) return px_null();
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return px_null();
+    struct hostent* he = gethostbyname(hbuf);
+    if (!he) { close(fd); return px_null(); }
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((uint16_t)port);
+    memcpy(&addr.sin_addr, he->h_addr, (size_t)he->h_length);
+    if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) { close(fd); return px_null(); }
+    if (ws_client_handshake(fd, hbuf, port, path) < 0) { close(fd); return px_null(); }
+    PxConn* cc = malloc(sizeof(PxConn));
+    memset(cc, 0, sizeof(PxConn));
+    cc->fd = fd; cc->is_tls = 0; cc->rlen = cc->roff = 0;
+    pthread_mutex_lock(&g_ws_mu);
+    int slot = ws_alloc_slot();
+    if (slot < 0) { pthread_mutex_unlock(&g_ws_mu); close(fd); free(cc); return px_null(); }
+    int64_t conn = g_ws_next_id++;
+    g_ws_conns[slot].fd = fd;
+    g_ws_conns[slot].id = conn;
+    g_ws_conns[slot].active = 1;
+    g_ws_conns[slot].client = 1;
+    g_ws_conns[slot].closed = 0;
+    g_ws_conns[slot].last_activity = 0;
+    g_ws_conns[slot].hb_active = 0;
+    g_ws_conns[slot].conn = cc;
+    g_ws_conns[slot].hs = NULL;
+    snprintf(g_ws_reconnect_url[slot], sizeof(g_ws_reconnect_url[0]), "%s", url);
+    g_ws_reconnect_ms[slot] = ms;
+    g_ws_reconnect_set[slot] = 1;
+    pthread_mutex_unlock(&g_ws_mu);
+    return px_int(conn);
+}
+
 // M34：ws_broadcast(data) → int —— 向 ws_serve 全部活跃**服务端**连接群发文本帧，返回成功数
 // 只广播服务端连接（client=0）：避免回环（客户端连接也广播会把帧发回自身对端）
 LXValue bi_ws_broadcast(LXValue* args, int nargs, void* ctx) {
@@ -758,6 +819,74 @@ LXValue bi_ws_broadcast(LXValue* args, int nargs, void* ctx) {
 }
 
 // ws_recv(conn) → str | null（阻塞读一条完整消息；自动重组分片、回复 ping）
+
+// M38：客户端自动重连（ws_connect_auto 配置；明文 ws://）——重连并替换 slot 句柄
+// 成功返回 1 且 *cpp 指向新连接；失败返回 0
+static int ws_auto_reconnect(int64_t conn, PxConn** cpp) {
+    pthread_mutex_lock(&g_ws_mu);
+    int idx = ws_find(conn);
+    long long rms = (idx >= 0) ? g_ws_reconnect_ms[idx] : 0;
+    if (idx < 0 || !g_ws_reconnect_set[idx] || !g_ws_reconnect_url[idx][0]) {
+        pthread_mutex_unlock(&g_ws_mu);
+        return 0;
+    }
+    // 关闭旧连接
+    if (g_ws_conns[idx].fd >= 0) { close(g_ws_conns[idx].fd); g_ws_conns[idx].fd = -1; }
+    if (g_ws_conns[idx].conn) px_conn_close(g_ws_conns[idx].conn);
+    g_ws_conns[idx].active = 0;
+    pthread_mutex_unlock(&g_ws_mu);
+    struct timespec ts = { rms / 1000, (rms % 1000) * 1000000L };
+    nanosleep(&ts, NULL);
+    pthread_mutex_lock(&g_ws_mu);
+    // 重连窗口期 slot 保持 id（active 已清），直接用原 slot
+    int s2 = idx;
+    if (s2 < 0 || !g_ws_reconnect_url[s2][0]) { pthread_mutex_unlock(&g_ws_mu); return 0; }
+    const char* ru = g_ws_reconnect_url[s2] + 5; // ws://
+    const char* rslash = strchr(ru, '/');
+    char rh[256]; int rhl;
+    const char* rpath = "/";
+    if (rslash) { rhl = (int)(rslash - ru); rpath = rslash; }
+    else rhl = (int)strlen(ru);
+    int ok = 0;
+    if (rhl < 255) {
+        memcpy(rh, ru, (size_t)rhl); rh[rhl] = 0;
+        int rp = 80;
+        char* rc = strchr(rh, ':');
+        if (rc) { *rc = 0; rp = atoi(rc + 1); if (rp <= 0) rp = 80; }
+        int nfd = socket(AF_INET, SOCK_STREAM, 0);
+        if (nfd >= 0) {
+            struct hostent* rh2 = gethostbyname(rh);
+            struct sockaddr_in ra;
+            memset(&ra, 0, sizeof(ra));
+            ra.sin_family = AF_INET;
+            ra.sin_port = htons((uint16_t)rp);
+            memcpy(&ra.sin_addr, rh2 ? rh2->h_addr : NULL, rh2 ? (size_t)rh2->h_length : 0);
+            if (rh2 && connect(nfd, (struct sockaddr*)&ra, sizeof(ra)) == 0 &&
+                ws_client_handshake(nfd, rh, rp, rpath) == 0) {
+                PxConn* nc = malloc(sizeof(PxConn));
+                memset(nc, 0, sizeof(PxConn));
+                nc->fd = nfd; nc->is_tls = 0; nc->rlen = nc->roff = 0;
+                g_ws_conns[s2].fd = nfd;
+                g_ws_conns[s2].conn = nc;
+                g_ws_conns[s2].active = 1;
+                g_ws_conns[s2].closed = 0;
+                pthread_mutex_unlock(&g_ws_mu);
+                px_conn_close(*cpp);
+                *cpp = nc;
+                ok = 1;
+            } else {
+                close(nfd);
+                pthread_mutex_unlock(&g_ws_mu);
+            }
+        } else {
+            pthread_mutex_unlock(&g_ws_mu);
+        }
+    } else {
+        pthread_mutex_unlock(&g_ws_mu);
+    }
+    return ok;
+}
+
 LXValue bi_ws_recv(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 1 || nargs > 2 || args[0].type != PX_INT)
@@ -793,10 +922,13 @@ LXValue bi_ws_recv(LXValue* args, int nargs, void* ctx) {
             }
             if ((pfd.revents & (POLLHUP | POLLERR)) && !(pfd.revents & POLLIN)) {
                 if (msg) free(msg);
+                // M38：客户端自动重连
+                if (ws_auto_reconnect(conn, &c)) {
+                    continue;
+                }
                 pthread_mutex_lock(&g_ws_mu);
-                int idx = ws_find(conn);
-                if (idx >= 0) { g_ws_conns[idx].active = 0; g_ws_conns[idx].fd = -1; g_ws_conns[idx].conn = NULL;
-            ws_free_hs_locked(idx); }
+                int idx2 = ws_find(conn);
+                if (idx2 >= 0) { g_ws_conns[idx2].active = 0; g_ws_conns[idx2].fd = -1; g_ws_conns[idx2].conn = NULL; ws_free_hs_locked(idx2); }
                 pthread_mutex_unlock(&g_ws_mu);
                 px_conn_close(c);  // 对象保留
                 return px_null();
@@ -832,6 +964,11 @@ LXValue bi_ws_recv(LXValue* args, int nargs, void* ctx) {
         }
         if (opcode == WS_OP_CLOSE) {
             ws_send_frame(c, WS_OP_CLOSE, NULL, 0, is_client);
+            // M38：客户端自动重连（服务器主动断开场景）
+            if (ws_auto_reconnect(conn, &c)) {
+                free(payload);
+                continue;
+            }
             free(payload);
             if (msg) free(msg);
             pthread_mutex_lock(&g_ws_mu);

@@ -1,0 +1,31 @@
+# M38③ 请求体流式限制：Transfer-Encoding: chunked 请求体解码 + 大小限制（max_body_size → 413）
+# 双模式一致：Rust read_chunked_body + C chunked 解码
+PORT = 18177
+D = "/tmp/px_m38_chunked"
+mkdir(D)
+write_file(D + "/index.html", "CHUNK")
+
+def echo(req, params):
+    return req["body"]
+route("POST", "/echo", echo)
+
+def serve():
+    px_serve(PORT, D, 10000, {"max_body_size": 1024})
+spawn serve()
+sleep(400)
+
+# curl 发送 chunked POST（--data-binary 自动 chunked）
+os_spawn("/bin/sh", ["-c", "curl -s -X POST -H 'Transfer-Encoding: chunked' --data-binary 'hello-chunked-body' http://127.0.0.1:" + str(PORT) + "/echo > /tmp/m38_chunk_out.txt 2>&1"])
+sleep(900)
+out = read_file("/tmp/m38_chunk_out.txt")
+assert(out == "hello-chunked-body", "chunked body 解码")
+print("chunked echo:", out)
+
+# 超限 → 413（max_body_size=1024，发送 2000 字节 chunked）
+os_spawn("/bin/sh", ["-c", "head -c 2000 /dev/zero | tr '\\0' 'a' > /tmp/m38_big.txt; curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Transfer-Encoding: chunked' --data-binary @/tmp/m38_big.txt http://127.0.0.1:" + str(PORT) + "/echo > /tmp/m38_413.txt 2>&1"])
+sleep(900)
+code = read_file("/tmp/m38_413.txt")
+assert(code == "413", "chunked 超限 413，实际 " + code)
+print("chunked 413:", code)
+
+print("M38_CHUNKED_OK")

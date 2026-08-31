@@ -41,6 +41,17 @@ pub fn ws_conns() -> &'static Mutex<ConnMap> {
 
 static WS_NEXT_ID: AtomicI64 = AtomicI64::new(1);
 
+/// M38：客户端自动重连配置（conn_id → (url, 重连间隔 ms)）
+static WS_RECONNECT: OnceLock<Mutex<HashMap<i64, (String, i64)>>> = OnceLock::new();
+fn ws_reconnects() -> &'static Mutex<HashMap<i64, (String, i64)>> {
+    WS_RECONNECT.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// M38：注册自动重连（ws_connect_auto 用；断线后 ws_recv 自动重连）
+pub fn ws_set_reconnect(conn: i64, url: String, ms: i64) {
+    ws_reconnects().lock().unwrap().insert(conn, (url, ms));
+}
+
 /// 当前毫秒时间戳
 fn now_millis() -> i64 {
     std::time::SystemTime::now()
@@ -490,6 +501,10 @@ pub fn ws_recv(conn: i64, timeout_ms: Option<i64>) -> Option<String> {
         let (opcode, fin, payload) = match frame {
             Ok(f) => f,
             Err(_) => {
+                // M38：客户端自动重连——断线后按配置重连（复用原 conn id，替换读写句柄）
+                if ws_try_reconnect(conn, &c) {
+                    continue; // 重连后继续读
+                }
                 ws_mark_closed(&c, conn);
                 return None;
             }
@@ -508,6 +523,10 @@ pub fn ws_recv(conn: i64, timeout_ms: Option<i64>) -> Option<String> {
                 continue;
             }
             OP_CLOSE => {
+                // M38：close 帧也走自动重连（服务器主动断开场景）
+                if ws_try_reconnect(conn, &c) {
+                    continue;
+                }
                 // 回 close 并关闭
                 let close = encode_frame(OP_CLOSE, &[]);
                 let mut w = match c.write.lock() {
@@ -526,6 +545,39 @@ pub fn ws_recv(conn: i64, timeout_ms: Option<i64>) -> Option<String> {
             }
             _ => { /* 忽略未知 opcode（含 PONG） */ }
         }
+    }
+}
+
+/// M38：客户端自动重连（ws_connect_auto 配置；断线/close 后按间隔重连，复用原 conn id）
+fn ws_try_reconnect(conn: i64, c: &Arc<WsConn>) -> bool {
+    let rc = ws_reconnects().lock().unwrap().get(&conn).cloned();
+    let Some((url, ms)) = rc else { return false };
+    let old = ws_conns().lock().unwrap().remove(&conn);
+    std::thread::sleep(Duration::from_millis(ms.max(1) as u64));
+    if let Some((nr, nw)) = crate::builtin::ws_connect_raw(&url) {
+        let mut nr2 = nr;
+        let mut nw2 = nw;
+        {
+            let mut r = match c.read.lock() {
+                Ok(r) => r,
+                Err(_) => return false,
+            };
+            std::mem::swap(&mut *r, &mut nr2);
+        }
+        {
+            let mut w = match c.write.lock() {
+                Ok(w) => w,
+                Err(_) => return false,
+            };
+            std::mem::swap(&mut *w, &mut nw2);
+        }
+        c.closed.store(false, Ordering::SeqCst);
+        // 重新注册连接（同一 id）
+        ws_conns().lock().unwrap().insert(conn, c.clone());
+        let _ = old;
+        true
+    } else {
+        false
     }
 }
 

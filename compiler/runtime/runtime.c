@@ -176,6 +176,8 @@ static LXValue bi_s3_put(LXValue* args, int nargs, void* ctx);
 static LXValue bi_s3_get(LXValue* args, int nargs, void* ctx);
 static LXValue bi_s3_delete(LXValue* args, int nargs, void* ctx);
 static LXValue bi_s3_list(LXValue* args, int nargs, void* ctx);
+// M38：UDP echo 服务端
+static LXValue bi_udp_serve(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_get(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_post(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_serve(LXValue* args, int nargs, void* ctx);
@@ -4339,6 +4341,8 @@ void px_register_builtins(void) {
     px_set_global("s3_get", px_native("s3_get", bi_s3_get));
     px_set_global("s3_delete", px_native("s3_delete", bi_s3_delete));
     px_set_global("s3_list", px_native("s3_list", bi_s3_list));
+    // M38：UDP echo 服务端
+    px_set_global("udp_serve", px_native("udp_serve", bi_udp_serve));
     px_set_global("http_get", px_native("http_get", bi_http_get));
     px_set_global("http_post", px_native("http_post", bi_http_post));
     px_set_global("http_serve", px_native("http_serve", bi_http_serve));
@@ -4392,6 +4396,8 @@ void px_register_builtins(void) {
     // M22 P1：WebSocket（RFC 6455，微信/QQ/飞书长连接 / LLM 流式 / 实时推送）
     px_set_global("ws_serve", px_native("ws_serve", bi_ws_serve));
     px_set_global("ws_connect", px_native("ws_connect", bi_ws_connect));
+    // M38：WS 客户端自动重连
+    px_set_global("ws_connect_auto", px_native("ws_connect_auto", bi_ws_connect_auto));
     px_set_global("ws_send", px_native("ws_send", bi_ws_send));
     // M34：WebSocket 服务端广播（群发）
     px_set_global("ws_broadcast", px_native("ws_broadcast", bi_ws_broadcast));
@@ -5752,6 +5758,54 @@ static LXValue bi_udp_close(LXValue* args, int nargs, void* ctx) {
     if (nargs != 1 || args[0].type != PX_INT) px_error("udp_close 需要 (sock) 参数");
     close((int)args[0].as.i);
     return px_bool(true);
+}
+
+// M38：udp_serve(port, handler)——UDP echo 服务端（handler(ip, port, data) → 响应发送回对端）
+static LXValue bi_udp_serve(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2 || args[0].type != PX_INT) px_error("udp_serve 需要 (port, handler) 参数");
+    LXValue handler = args[1];
+    if (handler.type != PX_FUNC && handler.type != PX_NATIVE) px_error("udp_serve 的 handler 必须是函数");
+    int port = (int)args[0].as.i;
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) px_error("udp_serve: socket 创建失败");
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons((uint16_t)port);
+    if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        close(fd);
+        px_error("udp_serve: 绑定端口 %d 失败", port);
+    }
+    char buf[65536];
+    for (;;) {
+        struct sockaddr_in src;
+        socklen_t slen = sizeof(src);
+        int n = (int)recvfrom(fd, buf, sizeof(buf), 0, (struct sockaddr*)&src, &slen);
+        if (n < 0) continue;
+        buf[n] = 0;
+        char ip[64];
+        inet_ntop(AF_INET, &src.sin_addr, ip, sizeof(ip));
+        LXValue hargs[3];
+        hargs[0] = px_str(ip);
+        hargs[1] = px_int(ntohs(src.sin_port));
+        hargs[2] = px_str_len(buf, n);
+        LXValue r = px_call(handler, hargs, 3);
+        if (r.type != PX_NULL) {
+            const char* resp;
+            int rlen;
+            if (r.type == PX_STR || r.type == PX_BYTES) {
+                resp = r.as.obj->as.str.data;
+                rlen = r.as.obj->as.str.len;
+            } else {
+                resp = px_to_string(r);
+                rlen = (int)strlen(resp);
+            }
+            (void)sendto(fd, resp, (size_t)rlen, 0, (struct sockaddr*)&src, sizeof(src));
+        }
+    }
+    return px_null(); // 不可达
 }
 
 // ==================== M34：事件总线（pub/sub，跨线程；与解释器 builtin.rs 一致） ====================
@@ -10013,7 +10067,84 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
 
         // 4. 读 body（M27：max_body_size 限制 → 413；>1MB 落盘临时文件防内存溢出）
         int body_len = 0;
-        if (content_length > 0) {
+        // M38：Transfer-Encoding: chunked 请求体 → 流式解码 + 大小限制（max_body_size）
+        LXValue te_v = px_header_get(&headers, "Transfer-Encoding");
+        int is_chunked = te_v.type == PX_STR && strcasestr(te_v.as.obj->as.str.data, "chunked");
+        if (is_chunked) {
+            int body_off = header_end + 4;
+            int pend_len = len - body_off;
+            char* pend = buf + body_off;
+            int pend_pos = 0;
+            body_buf = xmalloc((size_t)g_px_max_body + 1);
+            int blen = 0;
+            int overflow = 0;
+            for (;;) {
+                // 读 chunk 大小行（hex\r\n）
+                char line[128];
+                int llen = 0;
+                for (;;) {
+                    // 找 pend 中换行
+                    int found = -1;
+                    for (int i = pend_pos; i < pend_len; i++) {
+                        if (pend[i] == '\n') { found = i; break; }
+                    }
+                    if (found >= 0) {
+                        int take = found - pend_pos;
+                        if (take > 120) take = 120;
+                        if (llen + take < 120) { memcpy(line + llen, pend + pend_pos, (size_t)take); llen += take; }
+                        line[llen] = 0; // M38：终止字符串（strtoll 需要）
+                        // 去尾部 \r
+                        if (llen > 0 && line[llen - 1] == '\r') line[llen - 1] = 0;
+                        pend_pos = found + 1;
+                        break;
+                    }
+                    // pend 无换行 → 读 conn 补
+                    if (pend_pos < pend_len) { pend_len -= pend_pos; memmove(pend, pend + pend_pos, (size_t)pend_len); pend_pos = 0; }
+                    char tmpb[512];
+                    ssize_t n = px_conn_read(&conn, tmpb, sizeof(tmpb));
+                    if (n <= 0) break;
+                    // 追加到 pend（扩大？用静态缓冲；简化：直接处理）
+                    // 简化：把读到的数据追加到 pend 缓冲（buf 后空间足够 64KB）
+                    if (pend_len + (int)n < 65536) {
+                        memcpy(pend + pend_len, tmpb, (size_t)n);
+                        pend_len += (int)n;
+                    }
+                }
+                // 解析大小（十六进制）
+                long long csize = 0;
+                {
+                    char* semi = strchr(line, ';');
+                    if (semi) *semi = 0;
+                    char* endp = NULL;
+                    csize = strtoll(line, &endp, 16);
+                }
+                if (csize == 0) break;
+                if (blen + csize > g_px_max_body) { overflow = 1; break; }
+                // 读 csize 字节 + CRLF
+                while (pend_len - pend_pos < csize + 2) {
+                    char tmpb[8192];
+                    ssize_t n = px_conn_read(&conn, tmpb, sizeof(tmpb));
+                    if (n <= 0) break;
+                    if (pend_len + (int)n < 65536) {
+                        memcpy(pend + pend_len, tmpb, (size_t)n);
+                        pend_len += (int)n;
+                    }
+                }
+                if (pend_len - pend_pos < csize) break;
+                memcpy(body_buf + blen, pend + pend_pos, (size_t)csize);
+                blen += (int)csize;
+                pend_pos += (int)csize + 2; // 数据 + CRLF
+            }
+            if (overflow) {
+                xfree(body_buf);
+                body_buf = NULL;
+                char extra[256];
+                snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
+                px_px_send_ex(fd, 413, "text/plain; charset=utf-8", "413 Payload Too Large", 24, 0, 0, extra);
+                goto req_done;
+            }
+            body_len = blen;
+        } else if (content_length > 0) {
             if (content_length > g_px_max_body) {
                 char extra[256];
                 snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);

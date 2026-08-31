@@ -1,0 +1,50 @@
+# M38② HTTP/2 多流：同一连接多个 stream 请求并发（HEADERS 各自响应）
+# 双模式一致：h2_serve 帧循环按 stream id 独立响应
+PORT = 18179
+D = "/tmp/px_m38_h2m"
+mkdir(D)
+write_file(D + "/index.html", "H2M")
+
+def serve():
+    px_serve(PORT, D, 10000)
+spawn serve()
+sleep(400)
+
+# python h2 客户端：同一连接发 stream 1 + stream 3 两个 HEADERS → 两个响应
+write_file("/tmp/h2_multi_client.py", '''
+import socket, time, sys
+port = int(sys.argv[1])
+s = socket.create_connection(("127.0.0.1", port), timeout=5)
+s.settimeout(4)
+# h2c upgrade
+s.sendall(b"GET / HTTP/1.1\\r\\nHost: x\\r\\nConnection: Upgrade\\r\\nUpgrade: h2c\\r\\nHTTP2-Settings: AAMAAABkAAQCAAAAAAIAAAAA\\r\\n\\r\\n")
+time.sleep(0.3)
+s.sendall(b"PRI * HTTP/2.0\\r\\n\\r\\nSM\\r\\n\\r\\n")
+s.sendall(b"\\x00\\x00\\x00\\x04\\x00\\x00\\x00\\x00\\x00")  # SETTINGS
+# stream 1: GET /one（HPACK: 82 86 44 03 one = :method GET + :scheme http + :path /one）
+s.sendall(b"\\x00\\x00\\x07\\x01\\x05\\x00\\x00\\x00\\x01\\x82\\x86\\x44\\x03one")
+# stream 3: GET /two（82 86 44 03 two）
+s.sendall(b"\\x00\\x00\\x07\\x01\\x05\\x00\\x00\\x00\\x03\\x82\\x86\\x44\\x03two")
+time.sleep(0.5)
+data = b""
+try:
+    while True:
+        chunk = s.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+        # 两个响应都收到
+        if data.count(b"PuXian HTTP/2") >= 2:
+            break
+except Exception:
+    pass
+s.close()
+ok = data.count(b"path=one") >= 1 and data.count(b"path=two") >= 1
+print("H2_MULTI_OK" if ok else "H2_MULTI_FAIL")
+''')
+os_spawn("/bin/sh", ["-c", "python3 /tmp/h2_multi_client.py " + str(PORT) + " > /tmp/m38_h2m.txt 2>&1"])
+sleep(1500)
+res = read_file("/tmp/m38_h2m.txt")
+print("h2 multi:", res)
+assert(contains(res, "H2_MULTI_OK"), "HTTP/2 多流")
+print("M38_H2_MULTI_OK")
