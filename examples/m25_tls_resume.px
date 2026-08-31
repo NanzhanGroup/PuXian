@@ -1,0 +1,18 @@
+# M25 TLS 会话票据恢复（RFC 5077 session ticket）
+# 同 host 连续并发请求 → 连接池同 host 上限 4 → 第 5/6 连接新建时
+# 命中已保存的会话票据（解释器 rustls 共享 ClientConfig；编译版 mbedtls 按 host 保存会话）。
+# 服务端支持则握手缩短（0/1-RTT），不支持自动回退完整握手（安全性不变）。
+# 需要外网访问（www.baidu.com）。
+let done = chan[any](6)
+def worker(d):
+    let r = http_request("https://www.baidu.com/", "GET")
+    d.send(r.status)
+for i in range(6):
+    spawn worker(done)
+let ok = 0
+for i in range(6):
+    let s = done.recv()
+    if s == 200:
+        ok = ok + 1
+assert ok == 6
+print("M25 TLS RESUME TESTS PASSED")

@@ -460,6 +460,8 @@ impl Interpreter {
                     closure: env.clone(),
                     implicit_return: false,
                 });
+                // M25：闭包循环回收——注册函数（含其闭包环境）
+                crate::gc::register_func(&f);
                 env.lock().unwrap().define(name, Value::Func(f));
                 Ok(Flow::Normal)
             }
@@ -505,6 +507,7 @@ impl Interpreter {
                         closure: self.globals.clone(),
                         implicit_return: false,
                     });
+                    crate::gc::register_func(&f);
                     map.insert(m.name.clone(), f);
                 }
                 self.impls.lock().unwrap().insert(type_name.clone(), map);
@@ -912,6 +915,7 @@ impl Interpreter {
                     closure: env.clone(),
                     implicit_return: true,
                 });
+                crate::gc::register_func(&f);
                 Ok(Value::Func(f))
             }
             Expr::Block { stmts, pos } => {

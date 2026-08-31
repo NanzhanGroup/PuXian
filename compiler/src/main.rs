@@ -46,6 +46,7 @@ mod xml;
 mod zip;
 
 use std::env as os_env;
+use std::io::Write;
 use std::process::ExitCode;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -172,6 +173,7 @@ fn main() -> ExitCode {
         Some("lsp") => ExitCode::from(lsp::run_lsp().clamp(0, 255) as u8),
         Some("pkg") => run_pkg(&args),
         Some("mcp") => ExitCode::from(mcp::run_mcp().clamp(0, 255) as u8),
+        Some("--worker") => run_worker(),
         Some(other) => {
             eprintln!("未知子命令: {}", other);
             print_usage();
@@ -325,6 +327,128 @@ fn json_to_value(j: &json::Json) -> crate::value::Value {
         }
     }
 }
+
+// ==================== M25 .px 进程池 worker（px --worker） ====================
+// 编译模式 px_serve 的 .px 脚本执行从"每请求 fork+exec `px run`"升级为
+// "预派生 N 个 `px --worker` 解释器进程复用"（PHP-FPM 风格进程池）：
+//   - 每个 worker 常驻，从 stdin 读"长度前缀任务帧"：path\0env_json\0dump\0timeout_ms
+//   - 执行目标脚本（捕获 print 输出、注入全局变量、可选 RESPONSE dump）
+//   - 向 stdout 写"长度前缀结果帧"：exit_code\0output
+// 帧长度 4 字节大端；父进程负责超时 kill / 崩溃补位（见 runtime.c px_pool_*）。
+
+/// 读一个长度前缀帧；EOF 返回 None
+fn read_frame(r: &mut impl std::io::Read) -> std::io::Result<Option<Vec<u8>>> {
+    let mut lenb = [0u8; 4];
+    match r.read_exact(&mut lenb) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(e) => return Err(e),
+    }
+    let len = u32::from_be_bytes(lenb) as usize;
+    if len == 0 || len > 128 * 1024 * 1024 {
+        return Ok(None);
+    }
+    let mut buf = vec![0u8; len];
+    r.read_exact(&mut buf)?;
+    Ok(Some(buf))
+}
+
+/// 执行单个 worker 任务：返回 (退出码, 捕获的输出字节)
+fn run_script_worker_task(path: &str, env_json: &str, dump_response: bool) -> (i32, Vec<u8>) {
+    let src = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => return (1, format!("无法读取文件 {}: {}\n", path, e).into_bytes()),
+    };
+    let tokens = match lexer::Lexer::new(&src).tokenize() {
+        Ok(t) => t,
+        Err(e) => return (1, format!("{}\n", e).into_bytes()),
+    };
+    let mut parser = parser::Parser::new(tokens);
+    let prog = match parser.parse_program() {
+        Ok(p) => p,
+        Err(e) => return (1, format!("{}\n", e).into_bytes()),
+    };
+    let base_dir = std::path::Path::new(path)
+        .parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| ".".to_string());
+    let prog = resolve_modules(prog, &base_dir);
+    let mut interp = interp::Interpreter::new();
+    interp.output = Some(std::sync::Arc::new(std::sync::Mutex::new(Vec::new())));
+    if !env_json.is_empty() {
+        if let Ok(j) = json::parse(env_json) {
+            let v = json_to_value(&j);
+            if let crate::value::Value::Dict(d) = v {
+                let mut g = interp.globals.lock().unwrap();
+                for (k, v) in d.lock().unwrap().iter() {
+                    g.define(k, v.clone());
+                }
+            }
+        }
+    }
+    let result = interp.run_program(&prog);
+    let mut out = interp
+        .output
+        .take()
+        .map(|o| o.lock().unwrap().clone())
+        .unwrap_or_default();
+    let code = match result {
+        Ok(c) => c,
+        Err(e) => {
+            out.extend_from_slice(format!("运行时错误: {}\n", e).as_bytes());
+            1
+        }
+    };
+    if dump_response {
+        if let Some(resp) = interp.globals.lock().unwrap().get("RESPONSE") {
+            if !matches!(resp, crate::value::Value::Null) {
+                if let Ok(s) = crate::builtin::json_stringify(&resp) {
+                    out.extend_from_slice(format!("__PX_RESPONSE__:{}\n", s).as_bytes());
+                }
+            }
+        }
+    }
+    (code, out)
+}
+
+/// `px --worker`：进程池 worker 主循环（由编译模式 px_serve 的池管理进程派生）
+fn run_worker() -> ExitCode {
+    let stdin = std::io::stdin();
+    let mut rin = stdin.lock();
+    let stdout = std::io::stdout();
+    let mut wout = stdout.lock();
+    loop {
+        let frame = match read_frame(&mut rin) {
+            Ok(Some(f)) => f,
+            _ => break,
+        };
+        let parts: Vec<&[u8]> = frame.split(|&b| b == 0).collect();
+        if parts.len() < 4 {
+            continue;
+        }
+        let path = String::from_utf8_lossy(parts[0]).to_string();
+        let env_json = String::from_utf8_lossy(parts[1]).to_string();
+        let dump = parts[2] == b"1";
+        // parts[3] = timeout_ms（信息性；父进程负责超时 kill）
+        let (code, out) = run_script_worker_task(&path, &env_json, dump);
+        let mut payload = Vec::new();
+        payload.extend_from_slice(code.to_string().as_bytes());
+        payload.push(0);
+        payload.extend_from_slice(&out);
+        let len = payload.len() as u32;
+        if wout.write_all(&len.to_be_bytes()).is_err() {
+            break;
+        }
+        if wout.write_all(&payload).is_err() {
+            break;
+        }
+        if wout.flush().is_err() {
+            break;
+        }
+    }
+    ExitCode::SUCCESS
+}
+
 /// 词法分析调试入口
 fn run_lex(file: &str) -> ExitCode {
     let tokens = match tokenize_file(file) {
@@ -397,10 +521,11 @@ fn run_ast(file: &str) -> ExitCode {
 fn run_fmt(args: &[String]) -> ExitCode {
     let write_back = args.iter().any(|a| a == "-w" || a == "--write");
     let check_only = args.iter().any(|a| a == "--check");
+    let diff_only = args.iter().any(|a| a == "--diff");
     let file = match args.iter().skip(2).find(|a| !a.starts_with('-')) {
         Some(f) => f.clone(),
         None => {
-            eprintln!("用法: {} fmt <file.px> [-w] [--check]", NAME);
+            eprintln!("用法: {} fmt <file.px> [-w] [--check] [--diff]", NAME);
             return ExitCode::from(2);
         }
     };
@@ -420,7 +545,13 @@ fn run_fmt(args: &[String]) -> ExitCode {
         }
     };
 
-    if check_only {
+    if diff_only {
+        // M25：--diff 不写回，打印 unified diff（无差异输出为空，退出 0）
+        if formatted != src {
+            print!("{}", fmt::unified_diff(&src, &formatted));
+        }
+        ExitCode::SUCCESS
+    } else if check_only {
         if formatted == src {
             println!("{}: 格式正确", file);
             ExitCode::SUCCESS

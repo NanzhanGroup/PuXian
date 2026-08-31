@@ -47,4 +47,14 @@ impl Env {
             false
         }
     }
+
+    /// M25 GC：枚举本环境全部变量（追踪式 GC 遍历闭包环境边用）
+    pub fn iter_vars(&self) -> impl Iterator<Item = (&String, &Value)> {
+        self.vars.iter()
+    }
+
+    /// M25 GC：清空本环境全部变量（断闭包循环用）
+    pub fn clear_vars(&mut self) {
+        self.vars.clear();
+    }
 }

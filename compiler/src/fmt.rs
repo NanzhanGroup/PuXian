@@ -301,6 +301,127 @@ fn trim_trailing_spaces(out: &mut String) {
     }
 }
 
+// ==================== M25：px fmt --diff（unified diff） ====================
+// 与 gofmt -d / black --diff 同语义：不写回文件，打印统一格式差异（供 CI/人工审查）。
+
+/// 行级 LCS 最长公共子序列（O(n*m)，格式化场景行数有限，足够）
+fn lcs_table(a: &[&str], b: &[&str]) -> Vec<Vec<usize>> {
+    let n = a.len();
+    let m = b.len();
+    let mut dp = vec![vec![0usize; m + 1]; n + 1];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            dp[i][j] = if a[i] == b[j] {
+                dp[i + 1][j + 1] + 1
+            } else {
+                dp[i + 1][j].max(dp[i][j + 1])
+            };
+        }
+    }
+    dp
+}
+
+/// 生成 unified diff（@@ hunk 头 + 上下文 3 行）。无差异返回空串。
+pub fn unified_diff(orig: &str, new: &str) -> String {
+    let a: Vec<&str> = orig.lines().collect();
+    let b: Vec<&str> = new.lines().collect();
+    if a == b {
+        return String::new();
+    }
+    let dp = lcs_table(&a, &b);
+    // 回溯得到 op 序列：0=同, 1=删, 2=增
+    let mut ops: Vec<(u8, &str)> = Vec::new();
+    let (mut i, mut j) = (0usize, 0usize);
+    while i < a.len() && j < b.len() {
+        if a[i] == b[j] {
+            ops.push((0, a[i]));
+            i += 1;
+            j += 1;
+        } else if dp[i + 1][j] >= dp[i][j + 1] {
+            ops.push((1, a[i]));
+            i += 1;
+        } else {
+            ops.push((2, b[j]));
+            j += 1;
+        }
+    }
+    while i < a.len() {
+        ops.push((1, a[i]));
+        i += 1;
+    }
+    while j < b.len() {
+        ops.push((2, b[j]));
+        j += 1;
+    }
+
+    // 变化点分组：间隔（连续同行数）≥ 2*ctx 则拆成独立 hunk
+    let ctx = 3usize;
+    let changes: Vec<usize> = ops
+        .iter()
+        .enumerate()
+        .filter(|(_, op)| op.0 != 0)
+        .map(|(k, _)| k)
+        .collect();
+    let mut out = String::new();
+    out.push_str("--- original\n");
+    out.push_str("+++ formatted\n");
+    let mut gi = 0usize;
+    while gi < changes.len() {
+        let mut gj = gi + 1;
+        while gj < changes.len() && changes[gj] - changes[gj - 1] < 2 * ctx + 1 {
+            gj += 1;
+        }
+        let first = changes[gi];
+        let last = changes[gj - 1];
+        let start = first.saturating_sub(ctx);
+        let end = (last + ctx + 1).min(ops.len());
+        emit_hunk(&mut out, &ops, start, end);
+        gi = gj;
+    }
+    out
+}
+
+fn emit_hunk(out: &mut String, ops: &[(u8, &str)], start: usize, end: usize) {
+    // 计算 hunk 起始行号（1-based）：遍历 start 之前的 op
+    let (mut o_line, mut n_line) = (1usize, 1usize);
+    for op in ops.iter().take(start) {
+        match op.0 {
+            0 => {
+                o_line += 1;
+                n_line += 1;
+            }
+            1 => o_line += 1,
+            _ => n_line += 1,
+        }
+    }
+    // 统计 hunk 内行数（含上下文）
+    let (mut o_count, mut n_count) = (0usize, 0usize);
+    for op in ops.iter().take(end).skip(start) {
+        match op.0 {
+            0 => {
+                o_count += 1;
+                n_count += 1;
+            }
+            1 => o_count += 1,
+            _ => n_count += 1,
+        }
+    }
+    out.push_str(&format!(
+        "@@ -{},{} +{},{} @@\n",
+        o_line,
+        o_count.max(1),
+        n_line,
+        n_count.max(1)
+    ));
+    for (_, op) in ops.iter().enumerate().take(end).skip(start) {
+        match op.0 {
+            0 => out.push_str(&format!(" {}\n", op.1)),
+            1 => out.push_str(&format!("-{}\n", op.1)),
+            _ => out.push_str(&format!("+{}\n", op.1)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -395,5 +516,22 @@ mod tests {
         let once = format(src).unwrap();
         let twice = format(&once).unwrap();
         assert_eq!(once, twice, "fmt 应幂等");
+    }
+
+    #[test]
+    fn test_diff_empty_when_same() {
+        let src = "let a = 1\nlet b = 2\n";
+        assert_eq!(unified_diff(src, src), "", "相同内容无 diff");
+    }
+
+    #[test]
+    fn test_diff_basic_hunks() {
+        let orig = "line1\nline2\nline3\nbad\nline5\nline6\nline7\n";
+        let new = "line1\nline2\nline3\ngood\nline5\nline6\nline7\n";
+        let d = unified_diff(orig, new);
+        assert!(d.starts_with("--- original\n+++ formatted\n"), "{}", d);
+        assert!(d.contains("-bad\n"), "应含删除行: {}", d);
+        assert!(d.contains("+good\n"), "应含新增行: {}", d);
+        assert!(d.contains("@@"), "应含 hunk 头: {}", d);
     }
 }

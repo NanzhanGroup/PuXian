@@ -1,0 +1,24 @@
+# M25 闭包循环回收（解释器追踪式 GC）+ gc() 强制回收
+# 场景：函数内创建"闭包环境捕获闭包自身"的 Func→Env→Func 纯循环，
+#       函数返回后无外部持有 → gc() 断环回收（不泄漏）。
+# 双模式一致：编译模式闭包为独立 C 函数（无捕获），行为等价。
+
+def make_selfref():
+    # 自引用闭包循环：g 的闭包环境捕获 g 自身
+    let g = null
+    g = fn() { return 0 }
+    return null   # 返回后该循环无外部持有 → 追踪式 GC 可回收
+
+def make_outer():
+    let h = fn() { return 42 }
+    return h
+
+# 制造大量闭包循环垃圾（解释器注册表累积 → 触发收集）
+for i in range(300):
+    make_selfref()
+
+# 活跃闭包必须存活（未被误回收）
+let k = make_outer()
+gc()
+assert(k() == 42, "活跃闭包未被误回收")
+print("M25 CLOSURE GC TESTS PASSED")

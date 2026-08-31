@@ -3113,17 +3113,25 @@ fn pool_put(key: &str, conn: PooledConn) {
 }
 
 /// M24：建立 HTTPS 连接（TLS 握手，rustls 内置 webpki-roots 根证书）
+/// M25：全局共享同一个 Arc<ClientConfig>——rustls 的会话存储（session tickets）
+/// 随 ClientConfig 共享，同 host 连续连接自动会话恢复（省去完整握手 RTT）。
+static TLS_CLIENT_CONFIG: _OnceLock<std::sync::Arc<rustls::ClientConfig>> = _OnceLock::new();
+
 fn https_connect(host: &str, port: u16) -> Result<TlsClient, String> {
-    let mut roots = rustls::RootCertStore::empty();
-    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let cfg = rustls::ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
+    let cfg = TLS_CLIENT_CONFIG.get_or_init(|| {
+        let mut roots = rustls::RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        std::sync::Arc::new(
+            rustls::ClientConfig::builder()
+                .with_root_certificates(roots)
+                .with_no_client_auth(),
+        )
+    });
     let server_name = rustls::pki_types::ServerName::try_from(host.to_string())
         .map_err(|_| format!("非法主机名: {}", host))?;
     let sock = std::net::TcpStream::connect((host, port))
         .map_err(|e| format!("连接 {}:{} 失败: {}", host, port, e))?;
-    let conn = rustls::ClientConnection::new(std::sync::Arc::new(cfg), server_name)
+    let conn = rustls::ClientConnection::new(cfg.clone(), server_name)
         .map_err(|e| format!("TLS 初始化失败: {}", e))?;
     Ok(rustls::StreamOwned::new(conn, sock))
 }

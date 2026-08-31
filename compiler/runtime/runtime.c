@@ -4985,9 +4985,79 @@ typedef struct {
     mbedtls_ssl_config conf;
     mbedtls_ctr_drbg_context ctr_drbg;
     mbedtls_entropy_context entropy;
+    char skey[256];                  // M25：host:port（关闭时保存会话票据用）
 } HttpsSession;
 
-// 建立 HTTPS 连接（TCP + TLS 握手完成）；失败返回 NULL
+// ==================== M25 TLS 会话票据恢复（RFC 5077 session ticket） ====================
+// 连接池复用的是"活着"的 TLS 连接；连接关闭（服务器断开/池满淘汰/请求失败）后，
+// 下次同 host 新建连接若走完整握手，多 1~2 个 RTT。M25 保存每个 host:port 最近一次
+// 协商的 mbedtls_ssl_session（含 session ticket），新建连接时 set_session 尝试恢复握手
+// （服务器不支持/票据过期 → mbedtls 自动回退完整握手，安全性不变）。
+// Rust 端（解释器）：全局共享 Arc<ClientConfig>（rustls 会话存储随 Arc 共享）→ 同样恢复。
+
+#define HTTPS_SAVED_MAX 32
+typedef struct {
+    char key[256];
+    mbedtls_ssl_session session;
+    int has;
+} HSavedTls;
+static HSavedTls g_saved_tls[HTTPS_SAVED_MAX];
+static pthread_mutex_t g_saved_tls_mu = PTHREAD_MUTEX_INITIALIZER;
+
+// M25 诊断（定义在下方；此处前置声明供 saved_tls_store 使用）
+static void px_tls_debug(const char* fmt, ...);
+
+// mbedtls 3.6 的 mbedtls_ssl_session_copy 为内部导出符号（未在公共头声明）；
+// 此处按源码原型补前置声明（libmbedtls.a 已含该符号），避免隐式声明告警。
+int mbedtls_ssl_session_copy(mbedtls_ssl_session* dst, const mbedtls_ssl_session* src);
+
+// 保存某 host 的会话（拷贝语义；覆盖旧值）
+static void saved_tls_store(const char* key, const mbedtls_ssl_session* s) {
+    pthread_mutex_lock(&g_saved_tls_mu);
+    int slot = -1;
+    for (int i = 0; i < HTTPS_SAVED_MAX; i++) {
+        if (g_saved_tls[i].has && strcmp(g_saved_tls[i].key, key) == 0) { slot = i; break; }
+        if (slot < 0 && !g_saved_tls[i].has) slot = i;
+    }
+    if (slot < 0) { pthread_mutex_unlock(&g_saved_tls_mu); return; }
+    if (!g_saved_tls[slot].has) {
+        mbedtls_ssl_session_init(&g_saved_tls[slot].session);
+        strncpy(g_saved_tls[slot].key, key, 255);
+        g_saved_tls[slot].key[255] = 0;
+    } else {
+        mbedtls_ssl_session_free(&g_saved_tls[slot].session);
+        mbedtls_ssl_session_init(&g_saved_tls[slot].session);
+    }
+    if (mbedtls_ssl_session_copy(&g_saved_tls[slot].session, s) == 0) {
+        g_saved_tls[slot].has = 1;
+        px_tls_debug("tls %s 已保存会话票据", key);
+    }
+    pthread_mutex_unlock(&g_saved_tls_mu);
+}// 取出某 host 的会话（拷贝到 out；无则返回 -1）
+static int saved_tls_take(const char* key, mbedtls_ssl_session* out) {
+    pthread_mutex_lock(&g_saved_tls_mu);
+    int rc = -1;
+    for (int i = 0; i < HTTPS_SAVED_MAX; i++) {
+        if (g_saved_tls[i].has && strcmp(g_saved_tls[i].key, key) == 0) {
+            if (mbedtls_ssl_session_copy(out, &g_saved_tls[i].session) == 0) rc = 0;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_saved_tls_mu);
+    return rc;
+}
+
+// M25 诊断：PX_TLS_DEBUG=1 时打印 TLS 会话票据行为（不影响正常输出）
+static void px_tls_debug(const char* fmt, ...) {
+    if (!getenv("PX_TLS_DEBUG")) return;
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    fprintf(stderr, "\n");
+}
+
+// 建立 HTTPS 连接（TCP + TLS 握手完成；尝试会话票据恢复）；失败返回 NULL
 static HttpsSession* https_connect(const char* host, int port) {
     HttpsSession* s = (HttpsSession*)xmalloc(sizeof(HttpsSession));
     memset(s, 0, sizeof(*s));
@@ -5010,13 +5080,35 @@ static HttpsSession* https_connect(const char* host, int port) {
     mbedtls_ssl_conf_ca_chain(&s->conf, &g_cacert, NULL);
     mbedtls_ssl_conf_rng(&s->conf, mbedtls_ctr_drbg_random, &s->ctr_drbg);
     mbedtls_ssl_conf_min_version(&s->conf, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_3);
+    // M25：显式开启会话票据（TLS 1.2 静态票据；TLS 1.3 客户端自动接受 NewSessionTicket）
+    mbedtls_ssl_conf_session_tickets(&s->conf, MBEDTLS_SSL_SESSION_TICKETS_ENABLED);
     if ((ret = mbedtls_ssl_setup(&s->ssl, &s->conf)) != 0) goto fail;
     mbedtls_ssl_set_hostname(&s->ssl, host);
     mbedtls_ssl_set_bio(&s->ssl, &s->net, mbedtls_net_send, mbedtls_net_recv, NULL);
+    // M25：尝试用保存的会话票据恢复握手（服务器拒绝则自动完整握手）
+    char skey[300];
+    snprintf(skey, sizeof(skey), "%s:%d", host, port);
+    snprintf(s->skey, sizeof(s->skey), "%s", skey);
+    mbedtls_ssl_session saved;
+    mbedtls_ssl_session_init(&saved);
+    if (saved_tls_take(skey, &saved) == 0) {
+        mbedtls_ssl_set_session(&s->ssl, &saved);
+        px_tls_debug("tls %s 恢复握手（已存票据）", skey);
+    }
+    mbedtls_ssl_session_free(&saved);
     int guard = 0;
     while ((ret = mbedtls_ssl_handshake(&s->ssl)) != 0) {
         if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) goto fail;
         if (++guard > 40) goto fail;
+    }
+    // M25：握手完成即保存本次会话（供下次连接恢复；TLS 1.3 票据在 close 时再补存）
+    {
+        mbedtls_ssl_session fresh;
+        mbedtls_ssl_session_init(&fresh);
+        if (mbedtls_ssl_get_session(&s->ssl, &fresh) == 0) {
+            saved_tls_store(skey, &fresh);
+        }
+        mbedtls_ssl_session_free(&fresh);
     }
     return s;
 fail:
@@ -5031,6 +5123,15 @@ fail:
 
 static void https_close(HttpsSession* s) {
     if (!s) return;
+    // M25：关闭前补存会话（TLS 1.3 NewSessionTicket 常在首轮读时到达）
+    if (s->skey[0]) {
+        mbedtls_ssl_session cur;
+        mbedtls_ssl_session_init(&cur);
+        if (mbedtls_ssl_get_session(&s->ssl, &cur) == 0) {
+            saved_tls_store(s->skey, &cur);
+        }
+        mbedtls_ssl_session_free(&cur);
+    }
     mbedtls_net_free(&s->net);
     mbedtls_ssl_free(&s->ssl);
     mbedtls_ssl_config_free(&s->conf);
@@ -7299,7 +7400,234 @@ static const char* px_px_bin(void) {
     return (b && *b) ? b : "px";
 }
 
-// 子进程执行 `px run <path>` 并捕获 stdout（进程池雏形：隔离 + 超时 kill）
+// ==================== M25 .px 进程池（PHP-FPM 风格） ====================
+// M17 的每请求 fork+exec `px run` 开销（fork + exec + 解释器启动）较大；
+// M25 预派生 PX_POOL_SIZE 个 `px --worker` 解释器进程常驻复用：
+//   父进程把任务帧（4 字节大端长度 + path\0env_json\0dump\0timeout）写入空闲
+//   worker stdin；worker 执行目标脚本，把结果帧（exit_code\0output）写回 stdout。
+// 超时 → SIGKILL + 补位；worker 崩溃 → 补位重试，最终回退旧 fork+exec 路径保底。
+#define PX_POOL_SIZE 4
+
+// 兜底路径前置声明（定义在本节之后）
+static int px_run_px_child(const char* path, const char* env_json, int dump_response,
+                           int timeout_ms, char** out, int* out_len, int* exit_code);
+
+typedef struct {
+    pid_t pid;
+    int in_fd;    // 父→worker（worker stdin）
+    int out_fd;   // worker→父（worker stdout）
+    int alive;
+    int busy;
+} PXWorker;
+
+static PXWorker g_px_pool[PX_POOL_SIZE];
+static pthread_mutex_t g_px_pool_mu = PTHREAD_MUTEX_INITIALIZER;
+static int g_px_pool_ready = 0;
+
+// 派生一个 `px --worker` 进程（返回值 0 成功）
+static int px_pool_spawn(PXWorker* w) {
+    int in_pipe[2] = {-1, -1}, out_pipe[2] = {-1, -1};
+    if (pipe(in_pipe) != 0 || pipe(out_pipe) != 0) {
+        if (in_pipe[0] >= 0) { close(in_pipe[0]); close(in_pipe[1]); }
+        if (out_pipe[0] >= 0) { close(out_pipe[0]); close(out_pipe[1]); }
+        return -1;
+    }
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(in_pipe[0]); close(in_pipe[1]);
+        close(out_pipe[0]); close(out_pipe[1]);
+        return -1;
+    }
+    if (pid == 0) {
+        dup2(in_pipe[0], STDIN_FILENO);
+        dup2(out_pipe[1], STDOUT_FILENO);
+        close(in_pipe[0]); close(in_pipe[1]);
+        close(out_pipe[0]); close(out_pipe[1]);
+        // 关闭继承的其他 fd（监听 socket、连接 fd、其他 worker 管道）：
+        // 防止 worker 持有监听端口 / 管道写端导致 EOF 误判（M25 进程池）
+        close_range(3, ~0U, 0);
+        execlp(px_px_bin(), "px", "--worker", (char*)NULL);
+        dprintf(STDERR_FILENO, "px: 找不到 px 解释器（设置 PX_BIN 或加入 PATH）\n");
+        _exit(127);
+    }
+    close(in_pipe[0]);
+    close(out_pipe[1]);
+    w->pid = pid;
+    w->in_fd = in_pipe[1];
+    w->out_fd = out_pipe[0];
+    w->alive = 1;
+    w->busy = 0;
+    return 0;
+}
+
+// 惰性初始化池（首次 px_pool_run 时）
+static void px_pool_init_lazy(void) {
+    pthread_mutex_lock(&g_px_pool_mu);
+    if (!g_px_pool_ready) {
+        for (int i = 0; i < PX_POOL_SIZE; i++) {
+            g_px_pool[i].alive = 0;
+            g_px_pool[i].busy = 0;
+            if (px_pool_spawn(&g_px_pool[i]) != 0) g_px_pool[i].alive = 0;
+        }
+        g_px_pool_ready = 1;
+    }
+    pthread_mutex_unlock(&g_px_pool_mu);
+}
+
+// 取空闲 worker 下标（无空闲 -1）
+static int px_pool_take(void) {
+    pthread_mutex_lock(&g_px_pool_mu);
+    int idx = -1;
+    for (int i = 0; i < PX_POOL_SIZE; i++) {
+        if (g_px_pool[i].alive && !g_px_pool[i].busy) {
+            g_px_pool[i].busy = 1;
+            idx = i;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_px_pool_mu);
+    return idx;
+}
+
+static void px_pool_release(int idx) {
+    pthread_mutex_lock(&g_px_pool_mu);
+    if (idx >= 0 && idx < PX_POOL_SIZE) g_px_pool[idx].busy = 0;
+    pthread_mutex_unlock(&g_px_pool_mu);
+}
+
+// 杀掉并补位 worker（调用方此后不得再引用该下标）
+static void px_pool_respawn(int idx) {
+    pthread_mutex_lock(&g_px_pool_mu);
+    if (idx < 0 || idx >= PX_POOL_SIZE) { pthread_mutex_unlock(&g_px_pool_mu); return; }
+    PXWorker w = g_px_pool[idx];
+    g_px_pool[idx].alive = 0;
+    g_px_pool[idx].busy = 0;
+    if (w.pid > 0) kill(w.pid, SIGKILL);
+    if (w.in_fd > 0) close(w.in_fd);
+    if (w.out_fd > 0) close(w.out_fd);
+    if (px_pool_spawn(&g_px_pool[idx]) != 0) g_px_pool[idx].alive = 0;
+    pthread_mutex_unlock(&g_px_pool_mu);
+}
+
+// 管道/文件 fd 全量写（进程池任务帧用；sock_send_all 的 send() 不适用于管道）
+static int px_write_all(int fd, const char* data, int len) {
+    int sent = 0;
+    while (sent < len) {
+        ssize_t n = write(fd, data + sent, (size_t)(len - sent));
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        sent += (int)n;
+    }
+    return sent;
+}
+
+// 写任务帧（4 字节大端长度 + path\0env_json\0dump\0timeout_ms）
+static int px_pool_send_task(int idx, const char* path, const char* env_json,
+                             int dump_response, int timeout_ms) {
+    char payload[65536];
+    int plen = snprintf(payload, sizeof(payload), "%s%c%s%c%c%c%d",
+                        path, 0,
+                        env_json ? env_json : "", 0,
+                        dump_response ? '1' : '0', 0,
+                        timeout_ms);
+    if (plen < 0 || plen >= (int)sizeof(payload)) return -1;
+    PXWorker* w = &g_px_pool[idx];
+    uint32_t len = (uint32_t)plen;
+    uint8_t hdr[4] = { (uint8_t)(len >> 24), (uint8_t)(len >> 16),
+                       (uint8_t)(len >> 8), (uint8_t)len };
+    // 管道 fd 不能用 send()（ENOTSOCK），用 write 循环
+    if (px_write_all(w->in_fd, (const char*)hdr, 4) < 0) return -1;
+    if (px_write_all(w->in_fd, payload, plen) < 0) return -1;
+    return 0;
+}
+
+// 读结果帧（带总超时）。返回 0=成功, 1=超时, 2=失败。
+// 成功时 *out 指向 malloc 缓冲（调用方 xfree），*out_len 为输出字节数，*exit_code 为退出码。
+static int px_pool_recv_result(int idx, char** out, int* out_len, int* exit_code, int timeout_ms) {
+    PXWorker* w = &g_px_pool[idx];
+    long long t0 = px_mono_ms();
+    uint8_t hdr[4];
+    int got = 0;
+    while (got < 4) {
+        if (timeout_ms > 0) {
+            long long now = px_mono_ms();
+            int rem = timeout_ms - (int)(now - t0);
+            if (rem <= 0) return 1;
+            struct pollfd pp = { w->out_fd, POLLIN, 0 };
+            int r = poll(&pp, 1, rem);
+            if (r == 0) return 1;
+            if (r < 0) { if (errno == EINTR) continue; return 2; }
+        }
+        ssize_t n = read(w->out_fd, hdr + got, 4 - got);
+        if (n <= 0) return 2;
+        got += (int)n;
+    }
+    uint32_t len = ((uint32_t)hdr[0] << 24) | ((uint32_t)hdr[1] << 16) |
+                   ((uint32_t)hdr[2] << 8) | hdr[3];
+    if (len == 0 || len > 128u * 1024u * 1024u) return 2;
+    char* buf = xmalloc((size_t)len + 1);
+    int total = 0;
+    while (total < (int)len) {
+        if (timeout_ms > 0) {
+            long long now = px_mono_ms();
+            int rem = timeout_ms - (int)(now - t0);
+            if (rem <= 0) { xfree(buf); return 1; }
+            struct pollfd pp = { w->out_fd, POLLIN, 0 };
+            int r = poll(&pp, 1, rem);
+            if (r == 0) { xfree(buf); return 1; }
+            if (r < 0) { if (errno == EINTR) continue; xfree(buf); return 2; }
+        }
+        ssize_t n = read(w->out_fd, buf + total, (size_t)(len - total));
+        if (n <= 0) { xfree(buf); return 2; }
+        total += (int)n;
+    }
+    buf[total] = 0;
+    char* sep = memchr(buf, 0, (size_t)total);
+    if (!sep) { xfree(buf); return 2; }
+    int prefix_len = (int)(sep - buf) + 1;
+    if (exit_code) *exit_code = atoi(buf);
+    int outlen = total - prefix_len;
+    memmove(buf, sep + 1, (size_t)outlen);
+    buf[outlen] = 0;
+    *out = buf;
+    *out_len = outlen;
+    return 0;
+}
+
+// 进程池执行 .px 脚本（px_serve / px_exec 统一入口；取代每请求 fork+exec）：
+// 返回 0=完成, 1=超时, 2=失败。无空闲 worker / 崩溃重试后回退 px_run_px_child 保底。
+static int px_pool_run(const char* path, const char* env_json, int dump_response,
+                       int timeout_ms, char** out, int* out_len, int* exit_code) {
+    px_pool_init_lazy();
+    for (int attempt = 0; attempt < 3; attempt++) {
+        int idx = px_pool_take();
+        if (idx < 0) {
+            return px_run_px_child(path, env_json, dump_response, timeout_ms, out, out_len, exit_code);
+        }
+        if (px_pool_send_task(idx, path, env_json, dump_response, timeout_ms) != 0) {
+            px_pool_respawn(idx);
+            if (attempt >= 2) {
+                return px_run_px_child(path, env_json, dump_response, timeout_ms, out, out_len, exit_code);
+            }
+            continue;
+        }
+        int rc = px_pool_recv_result(idx, out, out_len, exit_code, timeout_ms);
+        if (rc == 0) {
+            px_pool_release(idx);
+            return 0;
+        }
+        px_pool_respawn(idx);
+        if (rc == 1) return 1;  // 超时：脚本卡死，回退也超时，直接报超时
+        if (attempt >= 2) {
+            return px_run_px_child(path, env_json, dump_response, timeout_ms, out, out_len, exit_code);
+        }
+    }
+    return 2;
+}
+
+// 子进程执行 `px run <path>` 并捕获 stdout（进程池满/兜底路径：隔离 + 超时 kill）
 // env_json：PX_INIT_GLOBALS 环境变量（JSON dict，解释器注入全局变量）
 // dump_response：1 时设置 PX_DUMP_RESPONSE=1（px_serve 用：脚本 RESPONSE 序列化到 stdout 尾部）
 // timeout_ms<=0 无限等待。返回 0=完成, 1=超时, 2=启动失败。
@@ -7588,7 +7916,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
 
         char* out = NULL;
         int out_len = 0, exit_code = 0;
-        int rc = px_run_px_child(fpath, env_json, 1, timeout_ms, &out, &out_len, &exit_code);
+        int rc = px_pool_run(fpath, env_json, 1, timeout_ms, &out, &out_len, &exit_code);
         if (env_json) free(env_json);
         if (rc == 1) {
             char msg[128];
@@ -7739,7 +8067,7 @@ static LXValue bi_px_exec(LXValue* args, int nargs, void* ctx) {
     }
     char* out = NULL;
     int out_len = 0, exit_code = 0;
-    int rc = px_run_px_child(path, env_json, 0, 0, &out, &out_len, &exit_code);
+    int rc = px_pool_run(path, env_json, 0, 0, &out, &out_len, &exit_code);
     if (env_json) free(env_json);
     LXValue r = rc == 0 ? px_str_len(out, out_len) : px_str("");
     if (out) xfree(out);
