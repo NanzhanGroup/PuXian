@@ -206,6 +206,9 @@ pub enum Builtin {
     WsSend,
     WsRecv,
     WsClose,
+    // M22 P1：解释器循环引用回收（追踪式 GC）
+    // gc() → int（强制运行一次垃圾回收；返回 0 = 有并发线程跳过，1 = 已执行）
+    Gc,
 }
 
 impl Builtin {
@@ -309,14 +312,37 @@ impl Builtin {
             Builtin::WsSend => "ws_send",
             Builtin::WsRecv => "ws_recv",
             Builtin::WsClose => "ws_close",
+            Builtin::Gc => "gc",
         }
+    }
+}
+
+/// 容器构造辅助（M22 循环引用回收：创建时注册 Weak 到 GC 注册表）
+impl Value {
+    pub fn new_list(inner: Vec<Value>) -> Value {
+        let arc = Arc::new(Mutex::new(inner));
+        crate::gc::register_list(&arc);
+        Value::List(arc)
+    }
+    pub fn new_dict(inner: HashMap<String, Value>) -> Value {
+        let arc = Arc::new(Mutex::new(inner));
+        crate::gc::register_dict(&arc);
+        Value::Dict(arc)
+    }
+    pub fn new_struct_fields(fields: HashMap<String, Value>) -> Arc<Mutex<HashMap<String, Value>>> {
+        let arc = Arc::new(Mutex::new(fields));
+        crate::gc::register_struct(&arc);
+        arc
+    }
+    pub fn new_chan(chan: ChanRef) -> Value {
+        crate::gc::register_chan(&chan);
+        Value::Chan(chan)
     }
 }
 
 /// 用户函数
 #[derive(Debug)]
-pub struct Function {
-    pub name: String,
+pub struct Function {    pub name: String,
     pub params: Vec<Param>,
     #[allow(dead_code)]
     pub ret_ty: Option<TypeExpr>,

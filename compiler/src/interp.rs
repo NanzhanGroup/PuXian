@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::fmt;
-use std::sync::atomic::AtomicI64;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
@@ -297,6 +297,7 @@ impl Interpreter {
             ("ws_send", Builtin::WsSend),
             ("ws_recv", Builtin::WsRecv),
             ("ws_close", Builtin::WsClose),
+            ("gc", Builtin::Gc),
         ];
         for (n, b) in names {
             g.define(n, Value::Builtin(*b));
@@ -477,11 +478,13 @@ impl Interpreter {
                 }
                 let interp = self.fork();
                 let pos_c = *pos;
+                crate::gc::ACTIVE_SPAWNS.fetch_add(1, Ordering::SeqCst);
                 thread::spawn(move || {
                     let mut i = interp;
                     if let Err(e) = i.call_value(&fv, &arg_vals, pos_c) {
                         eprintln!("[协程] {}", e);
                     }
+                    crate::gc::ACTIVE_SPAWNS.fetch_sub(1, Ordering::SeqCst);
                 });
                 Ok(Flow::Normal)
             }
@@ -496,7 +499,7 @@ impl Interpreter {
                     }),
                     cv: Condvar::new(),
                 });
-                env.lock().unwrap().define(name, Value::Chan(ch));
+                env.lock().unwrap().define(name, Value::new_chan(ch));
                 Ok(Flow::Normal)
             }
             Stmt::Send { chan, value, pos } => {
@@ -665,7 +668,7 @@ impl Interpreter {
                 for it in items {
                     v.push(self.eval_expr(it, env)?);
                 }
-                Ok(Value::List(Arc::new(Mutex::new(v))))
+                Ok(Value::new_list(v))
             }
             Expr::Tuple { items, pos: _ } => {
                 let mut v = Vec::new();
@@ -685,7 +688,7 @@ impl Interpreter {
                     let vv = self.eval_expr(v, env)?;
                     m.insert(key, vv);
                 }
-                Ok(Value::Dict(Arc::new(Mutex::new(m))))
+                Ok(Value::new_dict(m))
             }
             Expr::Var { name, pos } => {
                 let v = env.lock().unwrap().get(name);
@@ -834,7 +837,7 @@ impl Interpreter {
                     let ev = self.eval_expr(expr, &child)?;
                     out.push(ev);
                 }
-                Ok(Value::List(Arc::new(Mutex::new(out))))
+                Ok(Value::new_list(out))
             }
             Expr::Closure { params, ret_ty, body, pos, .. } => {
                 // 闭包体为 Block，取其 stmts 作为函数体
@@ -907,7 +910,7 @@ impl Interpreter {
                         }),
                         cv: Condvar::new(),
                     });
-                    return Ok(Value::Chan(ch));
+                    return Ok(Value::new_chan(ch));
                 }
                 if name == "mutex" {
                     // M13：互斥锁构造 mutex()
@@ -941,7 +944,7 @@ impl Interpreter {
                 }
                 Ok(Value::StructInstance {
                     type_name: name.clone(),
-                    fields: Arc::new(Mutex::new(fields)),
+                    fields: Value::new_struct_fields(fields),
                 })
             }
         }
@@ -976,7 +979,7 @@ impl Interpreter {
                     }),
                     cv: Condvar::new(),
                 });
-                return Ok(Value::Chan(ch));
+                return Ok(Value::new_chan(ch));
             }
             // M13：锁构造 mutex() / rwlock()（与 chan 同构）
             if name == "mutex" {
@@ -1033,7 +1036,7 @@ impl Interpreter {
                 }
                 Ok(Value::StructInstance {
                     type_name: name.clone(),
-                    fields: Arc::new(Mutex::new(fields)),
+                    fields: Value::new_struct_fields(fields),
                 })
             }
             Value::TypeRef(TypeRefKind::Enum(name)) => {
@@ -1179,9 +1182,9 @@ impl Interpreter {
             "len" => Ok(Value::Int(s.chars().count() as i64)),
             "split" => {
                 let sep = self.expect_str_arg(args, 0, "split", pos)?;
-                Ok(Value::List(Arc::new(Mutex::new(
+                Ok(Value::new_list(
                     s.split(&sep).map(|x| Value::Str(x.to_string())).collect(),
-                ))))
+                ))
             }
             "contains" => {
                 let sub = self.expect_str_arg(args, 0, "contains", pos)?;
@@ -1274,11 +1277,11 @@ impl Interpreter {
             }
             "keys" => {
                 let ks: Vec<Value> = d.lock().unwrap().keys().map(|k| Value::Str(k.clone())).collect();
-                Ok(Value::List(Arc::new(Mutex::new(ks))))
+                Ok(Value::new_list(ks))
             }
             "values" => {
                 let vs: Vec<Value> = d.lock().unwrap().values().cloned().collect();
-                Ok(Value::List(Arc::new(Mutex::new(vs))))
+                Ok(Value::new_list(vs))
             }
             "has" | "contains" => {
                 let k = self.expect_str_arg(args, 0, "has", pos)?;
@@ -1635,7 +1638,7 @@ impl Interpreter {
                 let len = l.lock().unwrap().len() as i64;
                 let (a, b) = normalize_slice(s, e, len);
                 let items = l.lock().unwrap()[a..b].to_vec();
-                Ok(Value::List(Arc::new(Mutex::new(items))))
+                Ok(Value::new_list(items))
             }
             Value::Tuple(t) => {
                 let len = t.len() as i64;
@@ -1785,7 +1788,7 @@ impl Interpreter {
             (Value::List(a), Value::List(b)) => {
                 let mut out = a.lock().unwrap().clone();
                 out.extend(b.lock().unwrap().iter().cloned());
-                Ok(Value::List(Arc::new(Mutex::new(out))))
+                Ok(Value::new_list(out))
             }
             _ => Err(LxError::r1002(
                 format!("+ 不支持: {} + {}", self.type_name(&l), self.type_name(&r)),

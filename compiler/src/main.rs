@@ -24,6 +24,7 @@ mod crypto;
 mod doc;
 mod env;
 mod fmt;
+mod gc;
 mod interp;
 mod json;
 mod lexer;

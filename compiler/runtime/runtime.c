@@ -27,6 +27,7 @@
 #include <sys/wait.h>
 #include <poll.h>
 #include <stdatomic.h>
+#include <execinfo.h>
 #include "miniz.h"   // M21 gzip 压缩/解压（raw deflate + gzip 容器，M19 zip 同源）
 
 // M10 HTTPS：mbedtls 静态库（compiler/runtime/mbedtls/）
@@ -63,6 +64,8 @@ static LXValue bi_clear_timer(LXValue* args, int nargs, void* ctx);
 static LXValue bi_sse_serve(LXValue* args, int nargs, void* ctx);
 static LXValue bi_sse_send(LXValue* args, int nargs, void* ctx);
 static LXValue bi_sse_close(LXValue* args, int nargs, void* ctx);
+// M22 P1：强制垃圾回收（gc()）
+static LXValue bi_gc(LXValue* args, int nargs, void* ctx);
 
 // M10 HTTPS 内部辅助
 static char* px_http_request(const char* url, const char* method, const char* body, int* out_len);
@@ -100,6 +103,7 @@ typedef struct Slab {
     size_t slot_count;      // 槽总数
     size_t free_count;      // 空闲槽数（0 → 不可分配，需新 slab）
     void* free_head;        // 空闲链表头（槽内首 word 存 next，NULL 结束）
+    unsigned char* in_use;  // 调试：槽占用位图（1=已分配），检测双重分配/释放
 } Slab;
 
 static pthread_mutex_t g_slab_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -157,6 +161,8 @@ static Slab* slab_create(size_t class_size, int class_idx) {
     s->slot_count = slots_in_bytes;
     s->free_count = slots_in_bytes;
     s->free_head = NULL;
+    s->in_use = (unsigned char*)slab_raw_alloc(slots_in_bytes);
+    memset(s->in_use, 0, slots_in_bytes);
     char* slots = (char*)p + header;
     // 空闲链表：从后往前串（槽内首 word 存 next）
     void* head = NULL;
@@ -184,12 +190,27 @@ static Slab* slab_create(size_t class_size, int class_idx) {
 }
 
 // 指针 → slab（二分；返回 NULL 表示 mmap 大对象）
-static Slab* slab_find(const void* p) {
+// 注意：g_slab_ranges 在 slab_create（持 g_slab_mu）中 memmove 维护；
+// 外部调用（xrealloc→xalloc_cap）必须经 slab_find（持锁）读取，防撕裂读竞态。
+static Slab* slab_find_locked(const void* p) {
     if (g_slab_range_count == 0) return NULL;
+    // 防御：检测 ranges 数组损坏（并发竞态/越界写），避免返回垃圾 Slab* 导致 xfree 误判
+    if (g_slab_range_count > g_slab_range_cap) {
+        fprintf(stderr, "SLAB CORRUPT: count=%zu cap=%zu\n", g_slab_range_count, g_slab_range_cap);
+        abort();
+    }
     size_t lo = 0, hi = g_slab_range_count;
     while (lo < hi) {
         size_t mid = (lo + hi) / 2;
         Slab* s = g_slab_ranges[mid];
+        if ((uintptr_t)s < 0x10000 || ((uintptr_t)s & 7) != 0 ||
+            s->base != (void*)s || s->class_size < 16 || s->class_size > SLAB_MAX_CLASS ||
+            s->slot_count == 0 || s->slot_count > 1024) {
+            fprintf(stderr, "SLAB CORRUPT: ranges[%zu]=%p count=%zu cap=%zu p=%p base=%p cs=%zu slots=%zu\n",
+                    mid, (void*)s, g_slab_range_count, g_slab_range_cap, p,
+                    s->base, s->class_size, s->slot_count);
+            abort();
+        }
         if (p < s->base) hi = mid;
         else {
             size_t header = (sizeof(Slab) + 7) & ~(size_t)7;
@@ -199,6 +220,17 @@ static Slab* slab_find(const void* p) {
         }
     }
     return NULL;
+}
+
+// 线程安全版（供 xalloc_cap 等未持 g_slab_mu 的调用方）
+static Slab* slab_find(const void* p) {
+    sigset_t old;
+    gc_block_stop(&old);
+    pthread_mutex_lock(&g_slab_mu);
+    Slab* s = slab_find_locked(p);
+    pthread_mutex_unlock(&g_slab_mu);
+    gc_unblock_stop(&old);
+    return s;
 }
 
 static void* xmalloc(size_t n) {
@@ -219,6 +251,10 @@ static void* xmalloc(size_t n) {
     Slab* s = g_slab_heads[ci];
     if (!s || s->free_count == 0) s = slab_create(cs, ci);
     void* slot = s->free_head;
+    size_t header = (sizeof(Slab) + 7) & ~(size_t)7;
+    size_t idx = ((const char*)slot - ((const char*)s->base + header)) / cs;
+    if (s->in_use[idx]) { fprintf(stderr, "SLAB BUG: double-alloc slot %zu class %zu\n", idx, cs); abort(); }
+    s->in_use[idx] = 1;
     s->free_head = *(void**)slot;
     s->free_count--;
     pthread_mutex_unlock(&g_slab_mu);
@@ -232,8 +268,24 @@ static void xfree(void* p) {
     sigset_t old;
     gc_block_stop(&old);
     pthread_mutex_lock(&g_slab_mu);
-    Slab* s = slab_find(p);
+    Slab* s = slab_find_locked(p);
     if (s) {
+        size_t header = (sizeof(Slab) + 7) & ~(size_t)7;
+        size_t off = (const char*)p - ((const char*)s->base + header);
+        size_t idx = off / s->class_size;
+        int aligned = (off % s->class_size == 0);
+        if (!aligned || idx >= s->slot_count) {
+            fprintf(stderr, "SLAB BUG: bad-free p=%p slab=%p class=%zu off=%zu idx=%zu aligned=%d\n",
+                    p, s->base, s->class_size, off, idx, aligned);
+            abort();
+        }
+        if (!s->in_use[idx]) {
+            // 槽已空闲（double-free）：幂等忽略，不重复入链（防空闲链表环 → 双重分配）
+            pthread_mutex_unlock(&g_slab_mu);
+            gc_unblock_stop(&old);
+            return;
+        }
+        s->in_use[idx] = 0;
         *(void**)p = s->free_head;
         s->free_head = p;
         s->free_count++;
@@ -595,6 +647,11 @@ static void gc_stop_handler(int sig, siginfo_t* si, void* ctx) {
         if (g_gc_debug) { char dbg[96]; int dn = snprintf(dbg, sizeof(dbg), "[stop-expired] tid=%lx\n", (unsigned long)me); (void)write(2, dbg, (size_t)dn); }
         return;
     }
+    // M22 修复：堆积实时信号重入保护——若本线程已在本轮暂停（首次信号已保存用户态上下文
+    // 并自旋），后续堆积信号（gc_block_stop 阻塞期间 GC 重发累积）直接忽略返回，
+    // 禁止重入覆盖 ti->uc（否则寄存器扫描拿到的是信号处理器自旋状态 → 丢用户态寄存器
+    // → 活跃对象漏标被误回收 → use-after-free，即并发 GC 偶发崩溃根因）。
+    if (ti->paused && ti->epoch == g_gc_epoch) return;
     if (g_gc_debug) {
         char dbg[128];
         int dn = snprintf(dbg, sizeof(dbg), "[stop] tid=%lx\n", (unsigned long)me);
@@ -790,6 +847,10 @@ void px_gc_collect(void) {
                 gc_unblock_stop(&gc_old);
                 return;
             }
+            // M22：重发间隔加小延时，避免对长时间屏蔽信号的线程狂轰信号（实时信号排队 →
+            // 解除屏蔽时堆积触发 → 信号处理器重入覆盖 ucontext，丢用户态寄存器）。
+            struct timespec ts = {0, 200000};   // 200us
+            nanosleep(&ts, NULL);
             sched_yield();
         }
         // 3) 标记
@@ -3691,6 +3752,16 @@ void px_register_builtins(void) {
     px_set_global("ws_send", px_native("ws_send", bi_ws_send));
     px_set_global("ws_recv", px_native("ws_recv", bi_ws_recv));
     px_set_global("ws_close", px_native("ws_close", bi_ws_close));
+    // M22 P1：强制垃圾回收（解释器追踪式 GC / 编译模式保守标记-清除）
+    px_set_global("gc", px_native("gc", bi_gc));
+}
+
+// gc() → int：强制运行一次垃圾回收（与解释器 gc() 双模式一致）
+static LXValue bi_gc(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 0) px_error("gc 不需要参数");
+    px_gc_collect();
+    return px_int(1);
 }
 
 // ==================== 并发原语（M4.2） ====================
@@ -3874,8 +3945,13 @@ LXValue px_chan_send(LXValue ch, LXValue val) {
         if (o->as.chan.cap == 0) {
             // 无缓冲：等待接收者就绪
             if (o->as.chan.recv_waiting > 0) {
+                // M22 修复：写 buf 元素（LXValue 多字节非原子）期间屏蔽 GC 暂停信号，
+                // 防 GC 扫描 chan 读到半写入值 → 活跃对象漏标被误回收
+                sigset_t old;
+                gc_block_stop(&old);
                 o->as.chan.buf[0] = val;
                 o->as.chan.len = 1;
+                gc_unblock_stop(&old);
                 pthread_cond_signal(&o->as.chan.cv_recv);
                 pthread_mutex_unlock(&o->as.chan.mu);
                 px_select_signal();
@@ -3886,8 +3962,11 @@ LXValue px_chan_send(LXValue ch, LXValue val) {
             // 有缓冲：满则等待
             if (o->as.chan.len < o->as.chan.cap) {
                 int tail = (o->as.chan.head + o->as.chan.len) % o->as.chan.cap;
+                sigset_t old;
+                gc_block_stop(&old);
                 o->as.chan.buf[tail] = val;
                 o->as.chan.len++;
+                gc_unblock_stop(&old);
                 pthread_cond_signal(&o->as.chan.cv_recv);
                 pthread_mutex_unlock(&o->as.chan.mu);
                 px_select_signal();
@@ -4650,7 +4729,11 @@ static char* px_http_request(const char* url, const char* method, const char* bo
         char* final_buf = body_buf;
         if (chunked) {
             char* dec = px_chunked_decode(body_buf, body_len, &final_len);
-            if (dec) { xfree(body_buf); final_buf = dec; }
+            if (dec) {
+                xfree(body_buf);
+                body_buf = NULL;   // 防止清理阶段重复释放（M22 修复：原代码此处悬垂指针导致 double-free）
+                final_buf = dec;
+            }
         }
         if (gzip) {
             char* dec = px_gzip_decompress(final_buf, final_len, &final_len);
@@ -4660,7 +4743,7 @@ static char* px_http_request(const char* url, const char* method, const char* bo
         memcpy(r, final_buf, (size_t)final_len);
         r[final_len] = 0;
         if (final_buf != body_buf) xfree(final_buf);
-        xfree(body_buf);
+        if (body_buf) xfree(body_buf);
         xfree(resp);
         *out_len = final_len;
         return r;

@@ -314,7 +314,7 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
                 .filter(|x| !x.is_empty())
                 .map(|x| Value::Str(x.to_string()))
                 .collect();
-            Ok(Value::List(Arc::new(Mutex::new(parts))))
+            Ok(Value::new_list(parts))
         }
         Builtin::Join => {
             if args.len() != 2 {
@@ -404,7 +404,7 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             };
             let mut sorted = items;
             sorted.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
-            Ok(Value::List(Arc::new(Mutex::new(sorted))))
+            Ok(Value::new_list(sorted))
         }
         Builtin::Reversed => {
             if args.len() != 1 {
@@ -417,7 +417,7 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
                 _ => return Err(err("reversed 参数类型不支持", pos)),
             };
             items.reverse();
-            Ok(Value::List(Arc::new(Mutex::new(items))))
+            Ok(Value::new_list(items))
         }
         Builtin::Sum => {
             if args.len() != 1 {
@@ -708,8 +708,8 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
                     map.insert("match".to_string(), Value::Str(text[m.start..m.end].to_string()));
                     map.insert("start".to_string(), Value::Int(m.start as i64));
                     map.insert("end".to_string(), Value::Int(m.end as i64));
-                    map.insert("groups".to_string(), Value::List(Arc::new(Mutex::new(groups))));
-                    Value::Dict(Arc::new(Mutex::new(map)))
+                    map.insert("groups".to_string(), Value::new_list(groups));
+                    Value::new_dict(map)
                 }
                 None => Value::Null,
             })
@@ -728,7 +728,7 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
                 .into_iter()
                 .map(|m| Value::Str(text[m.start..m.end].to_string()))
                 .collect();
-            Ok(Value::List(Arc::new(Mutex::new(items))))
+            Ok(Value::new_list(items))
         }
         // regex_replace(pattern, text, repl) → str（$1-$9 捕获组、$$ 字面 $）
         Builtin::RegexReplace => {
@@ -752,7 +752,7 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             let re = crate::regex::Regex::new(pat)
                 .map_err(|e| LxError::new("R1007", format!("regex: {}", e), Some(pos)))?;
             let items: Vec<Value> = re.split(text).into_iter().map(Value::Str).collect();
-            Ok(Value::List(Arc::new(Mutex::new(items))))
+            Ok(Value::new_list(items))
         }
         Builtin::ListDir => {
             if args.len() != 1 {
@@ -766,7 +766,7 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
                         names.push(Value::Str(e.file_name().to_string_lossy().to_string()));
                     }
                     names.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
-                    Ok(Value::List(Arc::new(Mutex::new(names))))
+                    Ok(Value::new_list(names))
                 }
                 Err(e) => Err(LxError::new(
                     "R2004",
@@ -847,7 +847,7 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
         }
         Builtin::Args => {
             let a: Vec<Value> = std::env::args().skip(1).map(Value::Str).collect();
-            Ok(Value::List(Arc::new(Mutex::new(a))))
+            Ok(Value::new_list(a))
         }
         // ---- std.collections（高阶函数） ----
         Builtin::Map => {
@@ -860,7 +860,7 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             for it in &items {
                 out.push(interp.call_value(&f, &[it.clone()], pos)?);
             }
-            Ok(Value::List(Arc::new(Mutex::new(out))))
+            Ok(Value::new_list(out))
         }
         Builtin::Filter => {
             if args.len() != 2 {
@@ -875,7 +875,7 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
                     out.push(it.clone());
                 }
             }
-            Ok(Value::List(Arc::new(Mutex::new(out))))
+            Ok(Value::new_list(out))
         }
         Builtin::Reduce => {
             if args.len() < 2 || args.len() > 3 {
@@ -1539,6 +1539,15 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             let conn = expect_int(&args[0], "ws_close", pos)?;
             Ok(Value::Bool(crate::ws::ws_close(conn)))
         }
+
+        // ==================== M22 P1：解释器循环引用回收 ====================
+        Builtin::Gc => {
+            if !args.is_empty() {
+                return Err(err("gc 不需要参数", pos));
+            }
+            let ran = crate::gc::collect();
+            Ok(Value::Int(if ran { 1 } else { 0 }))
+        }
     }
 }
 
@@ -1865,10 +1874,10 @@ pub(crate) fn parse_http_request(head: &str, remote: &str) -> Result<(Value, usi
     d.insert("path".into(), Value::Str(path));
     d.insert("query".into(), Value::Str(query));
     d.insert("version".into(), Value::Str(version));
-    d.insert("headers".into(), Value::Dict(Arc::new(Mutex::new(headers))));
-    d.insert("form".into(), Value::Dict(Arc::new(Mutex::new(HashMap::new()))));
+    d.insert("headers".into(), Value::new_dict(headers));
+    d.insert("form".into(), Value::new_dict(HashMap::new()));
     d.insert("remote".into(), Value::Str(remote.to_string()));
-    Ok((Value::Dict(Arc::new(Mutex::new(d))), content_length))
+    Ok((Value::new_dict(d), content_length))
 }
 
 /// 解析 application/x-www-form-urlencoded 表单 -> dict
@@ -1884,7 +1893,7 @@ pub(crate) fn parse_form(body: &str) -> Value {
         };
         m.insert(url_decode(k), Value::Str(url_decode(v)));
     }
-    Value::Dict(Arc::new(Mutex::new(m)))
+    Value::new_dict(m)
 }
 
 /// 从 req dict 的 headers 中取 Content-Type 头
@@ -1958,8 +1967,8 @@ pub(crate) fn parse_multipart(body: &str, boundary: &str) -> (Value, Value) {
         }
     }
     (
-        Value::Dict(Arc::new(Mutex::new(form))),
-        Value::Dict(Arc::new(Mutex::new(files))),
+        Value::new_dict(form),
+        Value::new_dict(files),
     )
 }
 
@@ -2373,7 +2382,7 @@ impl<'a> JsonParser<'a> {
                 self.skip_ws();
                 if self.peek() == Some(b'}') {
                     self.idx += 1;
-                    return Ok(Value::Dict(Arc::new(Mutex::new(map))));
+                    return Ok(Value::new_dict(map));
                 }
                 loop {
                     self.skip_ws();
@@ -2394,7 +2403,7 @@ impl<'a> JsonParser<'a> {
                         _ => return Err(format!("对象解析失败，位置 {}", self.idx)),
                     }
                 }
-                Ok(Value::Dict(Arc::new(Mutex::new(map))))
+                Ok(Value::new_dict(map))
             }
             Some(b'[') => {
                 self.idx += 1;
@@ -2402,7 +2411,7 @@ impl<'a> JsonParser<'a> {
                 self.skip_ws();
                 if self.peek() == Some(b']') {
                     self.idx += 1;
-                    return Ok(Value::List(Arc::new(Mutex::new(arr))));
+                    return Ok(Value::new_list(arr));
                 }
                 loop {
                     let v = self.parse_value()?;
@@ -2419,7 +2428,7 @@ impl<'a> JsonParser<'a> {
                         _ => return Err(format!("数组解析失败，位置 {}", self.idx)),
                     }
                 }
-                Ok(Value::List(Arc::new(Mutex::new(arr))))
+                Ok(Value::new_list(arr))
             }
             Some(b'"') => Ok(Value::Str(self.parse_string()?)),
             Some(b't') => {
@@ -2791,8 +2800,8 @@ mod tests {
         let mut d = HashMap::new();
         d.insert("status".into(), Value::Int(201));
         d.insert("body".into(), Value::Str("{\"ok\":1}".into()));
-        d.insert("headers".into(), Value::Dict(Arc::new(Mutex::new(h))));
-        let r = build_http_response(&Value::Dict(Arc::new(Mutex::new(d))));
+        d.insert("headers".into(), Value::new_dict(h));
+        let r = build_http_response(&Value::new_dict(d));
         let rs = String::from_utf8_lossy(&r).to_string();
         assert!(rs.starts_with("HTTP/1.1 201 Created\r\n"));
         assert!(rs.contains("Content-Length: 8\r\n"));
@@ -2816,7 +2825,7 @@ mod tests {
         d.insert("body".into(), Value::Str("hello hello hello".into()));
         d.insert("gzip".into(), Value::Bool(true));
         d.insert("chunked".into(), Value::Bool(true));
-        let r = build_http_response(&Value::Dict(Arc::new(Mutex::new(d))));
+        let r = build_http_response(&Value::new_dict(d));
         let rs = String::from_utf8_lossy(&r).to_string();
         assert!(rs.contains("Content-Encoding: gzip\r\n"), "{:?}", rs);
         assert!(rs.contains("Transfer-Encoding: chunked\r\n"), "{:?}", rs);
