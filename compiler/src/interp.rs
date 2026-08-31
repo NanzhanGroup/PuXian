@@ -177,6 +177,13 @@ impl Interpreter {
             // M14 P1：crypto 哈希
             ("sha256", Builtin::Sha256),
             ("xxhash", Builtin::Xxhash),
+            // M15 P1：正则表达式
+            ("regex_find", Builtin::RegexFind),
+            ("regex_match", Builtin::RegexMatch),
+            ("regex_search", Builtin::RegexSearch),
+            ("regex_find_all", Builtin::RegexFindAll),
+            ("regex_replace", Builtin::RegexReplace),
+            ("regex_split", Builtin::RegexSplit),
             ("exists", Builtin::Exists),
             ("list_dir", Builtin::ListDir),
             ("mkdir", Builtin::Mkdir),

@@ -1,0 +1,67 @@
+# p3_regex.px - M15 正则表达式回归测试（解释器 run 与编译 build 输出必须一致）
+# 覆盖：字面量/锚点/字符类/预定义类/量词/分组/交替/find/match/search/find_all/replace/split
+# ---- 1. 字面量 + 锚点 ----
+assert(regex_match("abc", "abc"), "1a 字面量整体匹配")
+assert(not regex_match("abc", "abx"), "1b 不匹配")
+assert(not regex_match("^abc$", "xabc"), "1c 锚点^")
+assert(regex_match("^abc$", "abc"), "1d 锚点^$")
+
+# ---- 2. 字符类 ----
+assert(regex_match("[a-z]+", "hello"), "2a [a-z]+")
+assert(not regex_match("[a-z]+", "Hello"), "2b 大写不匹配")
+assert(regex_match("[^0-9]+", "abc!"), "2c 取反类")
+assert(regex_match("[a-z0-9_]+", "var_42"), "2d 混合类")
+assert(regex_match("\\d+", "12345"), "2e \\d+")
+assert(not regex_match("\\d+", "12a45"), "2f \\d 不匹配字母")
+assert(regex_match("\\w+", "abc_123"), "2g \\w+")
+assert(regex_match("\\s+", " \t\n"), "2h \\s+")
+
+# ---- 3. 量词 + 回溯 ----
+assert(regex_match("a+", "aaa"), "3a a+")
+assert(not regex_match("a{2,3}", "aaaa"), "3b {2,3} 超限")
+assert(regex_match("a{2,3}", "aaa"), "3c {2,3}")
+assert(regex_match("a{2,}", "aaaa"), "3d {2,}")
+assert(regex_match("colou?r", "colour"), "3e 可选量词")
+assert(regex_match("(a|ab)+", "ab"), "3f 交替+回溯")
+assert(regex_match("a*ab", "aaab"), "3g 贪婪回溯")
+
+# ---- 4. find ----
+assert(regex_find("\\d+", "价格 123 元") == "123", "4a find 提取数字")
+assert(regex_find("(\\w+)@(\\w+)", "mail: foo@bar.com") == "foo@bar", "4b find 带组")
+
+# ---- 5. search 返回结构 ----
+let m = regex_search("(\\w+)@(\\w+)", "mail: foo@bar.com")
+assert(m != null, "5a search 命中")
+assert(m["match"] == "foo@bar", "5b match 字段")
+assert(m["start"] == 6, "5c start 字段")
+assert(m["end"] == 13, "5d end 字段")
+let gs = m["groups"]
+assert(gs[0] == "foo", "5e 组1")
+assert(gs[1] == "bar", "5f 组2")
+assert(regex_search("zzz", "abc") == null, "5g 未命中返回 null")
+
+# ---- 6. find_all ----
+let all = regex_find_all("\\d+", "a1b22c333")
+assert(all.len() == 3, "6a find_all 数量")
+assert(all[0] == "1" and all[1] == "22" and all[2] == "333", "6b find_all 内容")
+
+# ---- 7. replace（含捕获组引用） ----
+assert(regex_replace("(\\w+)@(\\w+)", "foo@bar x@y", "$2.$1") == "bar.foo y.x", "7a 捕获组替换")
+assert(regex_replace("\\d+", "a1b22", "[#]") == "a[#]b[#]", "7b 全量替换")
+assert(regex_replace("o", "foo", "0") == "f00", "7c 单字符替换")
+
+# ---- 8. split ----
+let parts = regex_split("[,\\s]+", "a, b  c")
+assert(parts.len() == 3, "8a split 数量")
+assert(parts[0] == "a" and parts[1] == "b" and parts[2] == "c", "8b split 内容")
+let parts2 = regex_split(",", ",a,")
+assert(parts2[0] == "" and parts2[1] == "a" and parts2[2] == "", "8c split 空段")
+
+# ---- 9. 中文场景(字节透传 + \d 提取) ----
+assert(regex_match("^苹果(\\d+)元$", "苹果12元"), "9a 中文+组")
+assert(regex_find("价格\\d+", "苹果价格12元") == "价格12", "9b 中文提取")
+
+# ---- 10. 锚点 $ 与结尾 ----
+assert(regex_find("\\d+$", "版本 v1.2.3") == "3", "10a 结尾数字")
+
+print("p3_regex: ALL PASSED")

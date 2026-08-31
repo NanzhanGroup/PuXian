@@ -108,6 +108,13 @@ pub enum Builtin {
     // M14 P1：crypto 哈希（签名校验 / 缓存 key / 数据指纹）
     Sha256,
     Xxhash,
+    // M15 P1：正则表达式（文本解析 / 日志分析 / 参数抽取）
+    RegexFind,
+    RegexMatch,
+    RegexSearch,
+    RegexFindAll,
+    RegexReplace,
+    RegexSplit,
     // std.fs
     Exists,
     ListDir,
@@ -180,6 +187,12 @@ impl Builtin {
             Builtin::TruncateFile => "truncate_file",
             Builtin::Sha256 => "sha256",
             Builtin::Xxhash => "xxhash",
+            Builtin::RegexFind => "regex_find",
+            Builtin::RegexMatch => "regex_match",
+            Builtin::RegexSearch => "regex_search",
+            Builtin::RegexFindAll => "regex_find_all",
+            Builtin::RegexReplace => "regex_replace",
+            Builtin::RegexSplit => "regex_split",
             Builtin::Exists => "exists",
             Builtin::ListDir => "list_dir",
             Builtin::Mkdir => "mkdir",

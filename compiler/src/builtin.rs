@@ -526,6 +526,102 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             };
             Ok(Value::Int(crate::crypto::xxh64(&data) as i64))
         }
+        // ---- M15 P1：正则表达式（文本解析 / 日志分析 / 参数抽取）----
+        // regex_find(pattern, text) → 第一个匹配串或 null
+        Builtin::RegexFind => {
+            if args.len() != 2 {
+                return Err(err("regex_find 需要 2 个参数: (pattern, text)", pos));
+            }
+            let pat = expect_str(&args[0], "regex_find", pos)?;
+            let text = expect_str(&args[1], "regex_find", pos)?;
+            let re = crate::regex::Regex::new(pat)
+                .map_err(|e| LxError::new("R1007", format!("regex: {}", e), Some(pos)))?;
+            Ok(match re.search(text) {
+                Some(m) => Value::Str(text[m.start..m.end].to_string()),
+                None => Value::Null,
+            })
+        }
+        // regex_match(pattern, text) → bool（整体匹配）
+        Builtin::RegexMatch => {
+            if args.len() != 2 {
+                return Err(err("regex_match 需要 2 个参数: (pattern, text)", pos));
+            }
+            let pat = expect_str(&args[0], "regex_match", pos)?;
+            let text = expect_str(&args[1], "regex_match", pos)?;
+            let re = crate::regex::Regex::new(pat)
+                .map_err(|e| LxError::new("R1007", format!("regex: {}", e), Some(pos)))?;
+            Ok(Value::Bool(re.full_match(text).is_some()))
+        }
+        // regex_search(pattern, text) → dict{match,start,end,groups} 或 null
+        Builtin::RegexSearch => {
+            if args.len() != 2 {
+                return Err(err("regex_search 需要 2 个参数: (pattern, text)", pos));
+            }
+            let pat = expect_str(&args[0], "regex_search", pos)?;
+            let text = expect_str(&args[1], "regex_search", pos)?;
+            let re = crate::regex::Regex::new(pat)
+                .map_err(|e| LxError::new("R1007", format!("regex: {}", e), Some(pos)))?;
+            Ok(match re.search(text) {
+                Some(m) => {
+                    let groups: Vec<Value> = m
+                        .groups
+                        .iter()
+                        .skip(1)
+                        .map(|g| match g {
+                            Some(s) => Value::Str(text[s.0..s.1].to_string()),
+                            None => Value::Null,
+                        })
+                        .collect();
+                    let mut map = std::collections::HashMap::new();
+                    map.insert("match".to_string(), Value::Str(text[m.start..m.end].to_string()));
+                    map.insert("start".to_string(), Value::Int(m.start as i64));
+                    map.insert("end".to_string(), Value::Int(m.end as i64));
+                    map.insert("groups".to_string(), Value::List(Arc::new(Mutex::new(groups))));
+                    Value::Dict(Arc::new(Mutex::new(map)))
+                }
+                None => Value::Null,
+            })
+        }
+        // regex_find_all(pattern, text) → [匹配串...]
+        Builtin::RegexFindAll => {
+            if args.len() != 2 {
+                return Err(err("regex_find_all 需要 2 个参数: (pattern, text)", pos));
+            }
+            let pat = expect_str(&args[0], "regex_find_all", pos)?;
+            let text = expect_str(&args[1], "regex_find_all", pos)?;
+            let re = crate::regex::Regex::new(pat)
+                .map_err(|e| LxError::new("R1007", format!("regex: {}", e), Some(pos)))?;
+            let items: Vec<Value> = re
+                .find_all(text)
+                .into_iter()
+                .map(|m| Value::Str(text[m.start..m.end].to_string()))
+                .collect();
+            Ok(Value::List(Arc::new(Mutex::new(items))))
+        }
+        // regex_replace(pattern, text, repl) → str（$1-$9 捕获组、$$ 字面 $）
+        Builtin::RegexReplace => {
+            if args.len() != 3 {
+                return Err(err("regex_replace 需要 3 个参数: (pattern, text, repl)", pos));
+            }
+            let pat = expect_str(&args[0], "regex_replace", pos)?;
+            let text = expect_str(&args[1], "regex_replace", pos)?;
+            let repl = expect_str(&args[2], "regex_replace", pos)?;
+            let re = crate::regex::Regex::new(pat)
+                .map_err(|e| LxError::new("R1007", format!("regex: {}", e), Some(pos)))?;
+            Ok(Value::Str(re.replace(text, repl)))
+        }
+        // regex_split(pattern, text) → [片段...]（分隔符丢弃）
+        Builtin::RegexSplit => {
+            if args.len() != 2 {
+                return Err(err("regex_split 需要 2 个参数: (pattern, text)", pos));
+            }
+            let pat = expect_str(&args[0], "regex_split", pos)?;
+            let text = expect_str(&args[1], "regex_split", pos)?;
+            let re = crate::regex::Regex::new(pat)
+                .map_err(|e| LxError::new("R1007", format!("regex: {}", e), Some(pos)))?;
+            let items: Vec<Value> = re.split(text).into_iter().map(Value::Str).collect();
+            Ok(Value::List(Arc::new(Mutex::new(items))))
+        }
         Builtin::ListDir => {
             if args.len() != 1 {
                 return Err(err("list_dir 需要一个路径参数", pos));

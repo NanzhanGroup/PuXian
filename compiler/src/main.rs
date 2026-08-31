@@ -32,6 +32,7 @@ mod mcp;
 mod module;
 mod parser;
 mod pkg;
+mod regex;
 mod test;
 mod token;
 mod value;

@@ -2158,6 +2158,637 @@ static LXValue bi_xxhash(LXValue* args, int nargs, void* ctx) {
     return lx_int((int64_t)xxh64((const unsigned char*)data, strlen(data)));
 }
 
+
+// ==================== M15 P1：正则表达式（与解释器 regex.rs 同一回溯算法） ====================
+// 候选列表法：rmatch 返回节点从 pos 起的所有 (end, groups) 候选，贪心优先（次数多在前）。
+// 支持：字面量/./字符类/\d\w\s(及取反)/量词 * + ? {n,m}/锚点 ^$/(捕获组 9 个)/交替 |/转义
+
+enum { RN_CHAR = 0, RN_ANY, RN_CLASS, RN_SEQ, RN_ALT, RN_REP, RN_GROUP, RN_START, RN_END };
+#define RG_N 10
+
+typedef struct RNode {
+    int type;
+    unsigned char ch;        // RN_CHAR
+    unsigned char* cls_lo;   // RN_CLASS
+    unsigned char* cls_hi;
+    int ncls;
+    int neg;
+    struct RNode** kids;     // RN_SEQ / RN_ALT
+    int nkids;
+    struct RNode* child;     // RN_REP / RN_GROUP
+    int min, max;            // RN_REP
+    int gidx;                // RN_GROUP
+} RNode;
+
+typedef struct { int end; int64_t groups[RG_N]; } RCand;
+typedef struct { RCand* items; int len, cap; } RCandList;
+
+static RCandList rcand_new(void) { RCandList l = {0, 0, 0}; return l; }
+static void rcand_add(RCandList* l, int end, const int64_t* g) {
+    if (l->len >= l->cap) { l->cap = l->cap ? l->cap * 2 : 8; l->items = xrealloc(l->items, sizeof(RCand) * l->cap); }
+    l->items[l->len].end = end;
+    if (g) memcpy(l->items[l->len].groups, g, sizeof(int64_t) * RG_N);
+    l->len++;
+}
+static void rcand_free(RCandList* l) { if (l->items) { xfree(l->items); l->items = NULL; } l->len = l->cap = 0; }
+static void rcand_extend(RCandList* dst, RCandList* src) {
+    for (int i = 0; i < src->len; i++) rcand_add(dst, src->items[i].end, src->items[i].groups);
+}
+
+// ---- 解析 ----
+typedef struct { const unsigned char* b; int len; int pos; int groups; char err[160]; } RParser;
+
+static int rp_peek(RParser* p) { return p->pos < p->len ? p->b[p->pos] : -1; }
+static RNode* rp_new(int type) { RNode* n = xmalloc(sizeof(RNode)); memset(n, 0, sizeof(RNode)); n->type = type; return n; }
+static void rp_add_kid(RNode* n, RNode* k) {
+    n->kids = xrealloc(n->kids, sizeof(RNode*) * (n->nkids + 1));
+    n->kids[n->nkids++] = k;
+}
+static void rp_free(RNode* n) {
+    if (!n) return;
+    if (n->kids) { for (int i = 0; i < n->nkids; i++) rp_free(n->kids[i]); xfree(n->kids); }
+    if (n->child) rp_free(n->child);
+    if (n->cls_lo) xfree(n->cls_lo);
+    if (n->cls_hi) xfree(n->cls_hi);
+    xfree(n);
+}
+
+static RNode* rp_parse_alt(RParser* p);
+static RNode* rp_parse_seq(RParser* p);
+static RNode* rp_parse_repeat(RParser* p);
+static RNode* rp_parse_atom(RParser* p);
+static RNode* rp_parse_class(RParser* p);
+static RNode* rp_parse_escape(RParser* p);
+static int rp_parse_class_elem(RParser* p, unsigned char* lo, unsigned char* hi);
+
+static int rp_parse_class_elem(RParser* p, unsigned char* lo, unsigned char* hi) {
+    int c = rp_peek(p);
+    if (c < 0) { snprintf(p->err, sizeof(p->err), "字符类提前结束"); return -1; }
+    if (c == '\\') {
+        p->pos++;
+        int e = rp_peek(p);
+        if (e < 0) { snprintf(p->err, sizeof(p->err), "转义提前结束"); return -1; }
+        p->pos++;
+        switch (e) {
+            case 'd': lo[0] = '0'; hi[0] = '9'; return 1;
+            case 'w': lo[0]='0';hi[0]='9'; lo[1]='A';hi[1]='Z'; lo[2]='a';hi[2]='z'; lo[3]='_';hi[3]='_'; return 4;
+            case 's': lo[0]=' ';hi[0]=' '; lo[1]='\t';hi[1]='\t'; lo[2]='\n';hi[2]='\n'; lo[3]='\r';hi[3]='\r'; lo[4]=0x0b;hi[4]=0x0b; lo[5]=0x0c;hi[5]=0x0c; return 6;
+            default: {
+                unsigned char ch = (unsigned char)e;
+                switch (e) { case 'n': ch = '\n'; break; case 't': ch = '\t'; break; case 'r': ch = '\r'; break; case '0': ch = 0; break; case 'f': ch = 0x0c; break; case 'v': ch = 0x0b; break; }
+                lo[0] = ch; hi[0] = ch; return 1;
+            }
+        }
+    }
+    p->pos++;
+    lo[0] = (unsigned char)c; hi[0] = (unsigned char)c;
+    return 1;
+}
+
+static RNode* rp_parse_class(RParser* p) {
+    p->pos++; // '['
+    int neg = 0;
+    if (rp_peek(p) == '^') { neg = 1; p->pos++; }
+    unsigned char lo[256], hi[256];
+    int ncls = 0, first = 1;
+    for (;;) {
+        int c = rp_peek(p);
+        if (c < 0) { snprintf(p->err, sizeof(p->err), "字符类缺少 ]"); return NULL; }
+        if (c == ']' && !first) { p->pos++; break; }
+        first = 0;
+        unsigned char elo[10], ehi[10];
+        int n = rp_parse_class_elem(p, elo, ehi);
+        if (n < 0) return NULL;
+        if (n == 1 && rp_peek(p) == '-' && p->pos + 1 < p->len && p->b[p->pos + 1] != ']') {
+            p->pos++; // '-'
+            unsigned char elo2[10], ehi2[10];
+            int n2 = rp_parse_class_elem(p, elo2, ehi2);
+            if (n2 < 0) return NULL;
+            if (n2 != 1) { snprintf(p->err, sizeof(p->err), "字符范围右端不能是转义类"); return NULL; }
+            if (ehi2[0] < elo[0]) { snprintf(p->err, sizeof(p->err), "字符范围 hi < lo"); return NULL; }
+            if (ncls < 256) { lo[ncls] = elo[0]; hi[ncls] = ehi2[0]; ncls++; }
+        } else {
+            for (int i = 0; i < n && ncls < 256; i++) { lo[ncls] = elo[i]; hi[ncls] = ehi[i]; ncls++; }
+        }
+    }
+    if (ncls == 0) { snprintf(p->err, sizeof(p->err), "空字符类"); return NULL; }
+    RNode* nd = rp_new(RN_CLASS);
+    nd->cls_lo = xmalloc(ncls);
+    nd->cls_hi = xmalloc(ncls);
+    memcpy(nd->cls_lo, lo, ncls);
+    memcpy(nd->cls_hi, hi, ncls);
+    nd->ncls = ncls;
+    nd->neg = neg;
+    return nd;
+}
+
+static RNode* rp_parse_escape(RParser* p) {
+    p->pos++; // '\\'
+    int e = rp_peek(p);
+    if (e < 0) { snprintf(p->err, sizeof(p->err), "转义字符缺失"); return NULL; }
+    p->pos++;
+    switch (e) {
+        case 'd': case 'D': case 'w': case 'W': case 's': case 'S': {
+            RNode* n = rp_new(RN_CLASS);
+            unsigned char lo[10], hi[10];
+            int cnt = 0, neg = 0;
+            switch (e) {
+                case 'd': lo[0]='0'; hi[0]='9'; cnt = 1; break;
+                case 'D': lo[0]='0'; hi[0]='9'; cnt = 1; neg = 1; break;
+                case 'w': lo[0]='0';hi[0]='9'; lo[1]='A';hi[1]='Z'; lo[2]='a';hi[2]='z'; lo[3]='_';hi[3]='_'; cnt = 4; break;
+                case 'W': lo[0]='0';hi[0]='9'; lo[1]='A';hi[1]='Z'; lo[2]='a';hi[2]='z'; lo[3]='_';hi[3]='_'; cnt = 4; neg = 1; break;
+                case 's': lo[0]=' ';hi[0]=' '; lo[1]='\t';hi[1]='\t'; lo[2]='\n';hi[2]='\n'; lo[3]='\r';hi[3]='\r'; lo[4]=0x0b;hi[4]=0x0b; lo[5]=0x0c;hi[5]=0x0c; cnt = 6; break;
+                case 'S': lo[0]=' ';hi[0]=' '; lo[1]='\t';hi[1]='\t'; lo[2]='\n';hi[2]='\n'; lo[3]='\r';hi[3]='\r'; lo[4]=0x0b;hi[4]=0x0b; lo[5]=0x0c;hi[5]=0x0c; cnt = 6; neg = 1; break;
+                default: break;
+            }
+            n->cls_lo = xmalloc(cnt);
+            n->cls_hi = xmalloc(cnt);
+            memcpy(n->cls_lo, lo, cnt);
+            memcpy(n->cls_hi, hi, cnt);
+            n->ncls = cnt;
+            n->neg = neg;
+            return n;
+        }
+        case 'n': { RNode* n = rp_new(RN_CHAR); n->ch = '\n'; return n; }
+        case 't': { RNode* n = rp_new(RN_CHAR); n->ch = '\t'; return n; }
+        case 'r': { RNode* n = rp_new(RN_CHAR); n->ch = '\r'; return n; }
+        case '0': { RNode* n = rp_new(RN_CHAR); n->ch = 0; return n; }
+        case 'f': { RNode* n = rp_new(RN_CHAR); n->ch = 0x0c; return n; }
+        case 'v': { RNode* n = rp_new(RN_CHAR); n->ch = 0x0b; return n; }
+        case '.': case '*': case '+': case '?': case '(': case ')': case '[': case ']':
+        case '{': case '}': case '|': case '^': case '$': case '\\': case '/': {
+            RNode* n = rp_new(RN_CHAR); n->ch = (unsigned char)e; return n;
+        }
+        default: snprintf(p->err, sizeof(p->err), "未知转义 \\%c", e); return NULL;
+    }
+}
+
+static RNode* rp_parse_atom(RParser* p) {
+    int c = rp_peek(p);
+    if (c < 0) { snprintf(p->err, sizeof(p->err), "意外的结尾"); return NULL; }
+    switch (c) {
+        case '(': {
+            p->pos++;
+            RNode* node = rp_parse_alt(p);
+            if (!node) return NULL;
+            if (rp_peek(p) != ')') { rp_free(node); snprintf(p->err, sizeof(p->err), "缺少 )"); return NULL; }
+            p->pos++;
+            if (p->groups >= 9) { rp_free(node); snprintf(p->err, sizeof(p->err), "捕获组最多 9 个"); return NULL; }
+            p->groups++;
+            RNode* g = rp_new(RN_GROUP);
+            g->child = node;
+            g->gidx = p->groups;
+            return g;
+        }
+        case '[': return rp_parse_class(p);
+        case '.': p->pos++; return rp_new(RN_ANY);
+        case '^': p->pos++; return rp_new(RN_START);
+        case '$': p->pos++; return rp_new(RN_END);
+        case '\\': return rp_parse_escape(p);
+        case ')': snprintf(p->err, sizeof(p->err), "意外的 )"); return NULL;
+        default: p->pos++; { RNode* n = rp_new(RN_CHAR); n->ch = (unsigned char)c; return n; }
+    }
+}
+
+static RNode* rp_parse_repeat(RParser* p) {
+    RNode* atom = rp_parse_atom(p);
+    if (!atom) return NULL;
+    int c = rp_peek(p);
+    if (c == '*') { p->pos++; RNode* r = rp_new(RN_REP); r->child = atom; r->min = 0; r->max = -1; return r; }
+    if (c == '+') { p->pos++; RNode* r = rp_new(RN_REP); r->child = atom; r->min = 1; r->max = -1; return r; }
+    if (c == '?') { p->pos++; RNode* r = rp_new(RN_REP); r->child = atom; r->min = 0; r->max = 1; return r; }
+    if (c == '{') {
+        int save = p->pos;
+        p->pos++;
+        int min = 0, got = 0;
+        while (rp_peek(p) >= '0' && rp_peek(p) <= '9') { min = min * 10 + (rp_peek(p) - '0'); p->pos++; got = 1; }
+        if (!got) { p->pos = save; return atom; }
+        int max = -1;
+        c = rp_peek(p);
+        if (c == '}') { p->pos++; max = min; }
+        else if (c == ',') {
+            p->pos++;
+            if (rp_peek(p) == '}') { p->pos++; max = -1; }
+            else {
+                int m2 = 0, got2 = 0;
+                while (rp_peek(p) >= '0' && rp_peek(p) <= '9') { m2 = m2 * 10 + (rp_peek(p) - '0'); p->pos++; got2 = 1; }
+                if (!got2 || rp_peek(p) != '}') { p->pos = save; return atom; }
+                p->pos++;
+                max = m2;
+            }
+        } else { p->pos = save; return atom; }
+        if (max != -1 && max < min) { snprintf(p->err, sizeof(p->err), "{n,m} 中 m 不能小于 n"); rp_free(atom); return NULL; }
+        RNode* r = rp_new(RN_REP);
+        r->child = atom;
+        r->min = min;
+        r->max = max;
+        return r;
+    }
+    return atom;
+}
+
+static RNode* rp_parse_seq(RParser* p) {
+    RNode* n = rp_new(RN_SEQ);
+    for (;;) {
+        int c = rp_peek(p);
+        if (c < 0 || c == '|' || c == ')') break;
+        RNode* r = rp_parse_repeat(p);
+        if (!r) { rp_free(n); return NULL; }
+        rp_add_kid(n, r);
+    }
+    if (n->nkids == 1) { RNode* k = n->kids[0]; xfree(n->kids); xfree(n); return k; }
+    return n;
+}
+
+static RNode* rp_parse_alt(RParser* p) {
+    RNode* n = rp_new(RN_ALT);
+    RNode* s = rp_parse_seq(p);
+    if (!s) { rp_free(n); return NULL; }
+    rp_add_kid(n, s);
+    while (rp_peek(p) == '|') {
+        p->pos++;
+        s = rp_parse_seq(p);
+        if (!s) { rp_free(n); return NULL; }
+        rp_add_kid(n, s);
+    }
+    if (n->nkids == 1) { RNode* k = n->kids[0]; xfree(n->kids); xfree(n); return k; }
+    return n;
+}
+
+static RNode* rcompile(const char* pat, char* errbuf, int errsz) {
+    RParser p;
+    memset(&p, 0, sizeof(p));
+    p.b = (const unsigned char*)pat;
+    p.len = (int)strlen(pat);
+    RNode* root = rp_parse_alt(&p);
+    if (root && p.pos != p.len) {
+        snprintf(errbuf, errsz, "正则语法错误: 位置 %d 处意外的字符", p.pos);
+        rp_free(root);
+        return NULL;
+    }
+    if (!root && errbuf) snprintf(errbuf, errsz, "%s", p.err);
+    return root;
+}
+
+// ---- 匹配（候选列表回溯，与 Rust 端同序） ----
+static RCandList rmatch(RNode* n, const unsigned char* text, int len, int pos, const int64_t* groups);
+
+static RCandList rmatch(RNode* n, const unsigned char* text, int len, int pos, const int64_t* groups) {
+    RCandList out = rcand_new();
+    switch (n->type) {
+        case RN_CHAR:
+            if (pos < len && text[pos] == n->ch) rcand_add(&out, pos + 1, groups);
+            break;
+        case RN_ANY:
+            if (pos < len && text[pos] != '\n') rcand_add(&out, pos + 1, groups);
+            break;
+        case RN_CLASS:
+            if (pos < len) {
+                unsigned char ch = text[pos];
+                int hit = 0;
+                for (int i = 0; i < n->ncls; i++) if (ch >= n->cls_lo[i] && ch <= n->cls_hi[i]) { hit = 1; break; }
+                if (hit != n->neg) rcand_add(&out, pos + 1, groups);
+            }
+            break;
+        case RN_START:
+            if (pos == 0) rcand_add(&out, pos, groups);
+            break;
+        case RN_END:
+            if (pos == len) rcand_add(&out, pos, groups);
+            break;
+        case RN_ALT:
+            for (int i = 0; i < n->nkids; i++) {
+                RCandList sub = rmatch(n->kids[i], text, len, pos, groups);
+                rcand_extend(&out, &sub);
+                rcand_free(&sub);
+            }
+            break;
+        case RN_GROUP: {
+            int64_t g[RG_N];
+            memcpy(g, groups, sizeof(g));
+            g[n->gidx] = ((int64_t)pos << 32) | (unsigned)pos;
+            RCandList sub = rmatch(n->child, text, len, pos, g);
+            for (int i = 0; i < sub.len; i++) {
+                int64_t gg[RG_N];
+                memcpy(gg, sub.items[i].groups, sizeof(gg));
+                gg[n->gidx] = ((int64_t)pos << 32) | (unsigned)sub.items[i].end;
+                rcand_add(&out, sub.items[i].end, gg);
+            }
+            rcand_free(&sub);
+            break;
+        }
+        case RN_REP: {
+            // BFS：all 记录 (end, groups, level)；贪心优先 = level 降序
+            typedef struct { int end; int64_t groups[RG_N]; int level; } RRepCand;
+            RRepCand* all = NULL;
+            int all_len = 0, all_cap = 0;
+            RRepCand* frontier = NULL;
+            int flen = 0, fcap = 0;
+            // level 0
+            all = xrealloc(all, sizeof(RRepCand) * (all_len + 1));
+            all[all_len].end = pos; memcpy(all[all_len].groups, groups, sizeof(int64_t) * RG_N); all[all_len].level = 0; all_len++;
+            frontier = xrealloc(frontier, sizeof(RRepCand) * (flen + 1));
+            frontier[flen].end = pos; memcpy(frontier[flen].groups, groups, sizeof(int64_t) * RG_N); flen++;
+            int level = 0;
+            for (;;) {
+                if (n->max >= 0 && level >= n->max) break;
+                RRepCand* next = NULL;
+                int nlen = 0;
+                for (int fi = 0; fi < flen; fi++) {
+                    RCandList sub = rmatch(n->child, text, len, frontier[fi].end, frontier[fi].groups);
+                    for (int si = 0; si < sub.len; si++) {
+                        if (sub.items[si].end > frontier[fi].end) {
+                            int dup = 0;
+                            for (int ni = 0; ni < nlen; ni++) {
+                                if (next[ni].end == sub.items[si].end &&
+                                    memcmp(next[ni].groups, sub.items[si].groups, sizeof(int64_t) * RG_N) == 0) { dup = 1; break; }
+                            }
+                            if (!dup) {
+                                next = xrealloc(next, sizeof(RRepCand) * (nlen + 1));
+                                next[nlen].end = sub.items[si].end;
+                                memcpy(next[nlen].groups, sub.items[si].groups, sizeof(int64_t) * RG_N);
+                                nlen++;
+                            }
+                        }
+                    }
+                    rcand_free(&sub);
+                }
+                if (nlen == 0) { if (next) xfree(next); break; }
+                level++;
+                for (int i = 0; i < nlen; i++) {
+                    all = xrealloc(all, sizeof(RRepCand) * (all_len + 1));
+                    all[all_len].end = next[i].end;
+                    memcpy(all[all_len].groups, next[i].groups, sizeof(int64_t) * RG_N);
+                    all[all_len].level = level;
+                    all_len++;
+                }
+                if (frontier) xfree(frontier);
+                frontier = next;
+                flen = nlen;
+            }
+            // 插入排序：level 降序（贪心优先，稳定）
+            for (int i = 1; i < all_len; i++) {
+                RRepCand key = all[i];
+                int j = i - 1;
+                while (j >= 0 && all[j].level < key.level) { all[j + 1] = all[j]; j--; }
+                all[j + 1] = key;
+            }
+            for (int i = 0; i < all_len; i++) {
+                if (all[i].level >= n->min) rcand_add(&out, all[i].end, all[i].groups);
+            }
+            if (all) xfree(all);
+            if (frontier) xfree(frontier);
+            break;
+        }
+        case RN_SEQ: {
+            RCandList cur = rcand_new();
+            rcand_add(&cur, pos, groups);
+            for (int i = 0; i < n->nkids; i++) {
+                RCandList next = rcand_new();
+                for (int j = 0; j < cur.len; j++) {
+                    RCandList sub = rmatch(n->kids[i], text, len, cur.items[j].end, cur.items[j].groups);
+                    rcand_extend(&next, &sub);
+                    rcand_free(&sub);
+                }
+                rcand_free(&cur);
+                cur = next;
+                if (cur.len == 0) break;
+            }
+            return cur;
+        }
+    }
+    return out;
+}
+
+// ---- 顶层搜索 ----
+static int rsearch_from(RNode* root, const unsigned char* text, int len, int start, int* out_s, int* out_e, int64_t* out_g) {
+    int64_t g0[RG_N];
+    for (int i = 0; i < RG_N; i++) g0[i] = -1;
+    for (int s = start; s <= len; s++) {
+        RCandList l = rmatch(root, text, len, s, g0);
+        if (l.len > 0) {
+            *out_s = s;
+            *out_e = l.items[0].end;
+            memcpy(out_g, l.items[0].groups, sizeof(int64_t) * RG_N);
+            out_g[0] = ((int64_t)s << 32) | (unsigned)(*out_e);
+            rcand_free(&l);
+            return 1;
+        }
+        rcand_free(&l);
+    }
+    return 0;
+}
+
+static int rfullmatch(RNode* root, const unsigned char* text, int len, int64_t* out_g) {
+    int64_t g0[RG_N];
+    for (int i = 0; i < RG_N; i++) g0[i] = -1;
+    RCandList l = rmatch(root, text, len, 0, g0);
+    int found = 0;
+    for (int i = 0; i < l.len; i++) {
+        if (l.items[i].end == len) {
+            memcpy(out_g, l.items[i].groups, sizeof(int64_t) * RG_N);
+            out_g[0] = 0; // start=0
+            out_g[0] = ((int64_t)0 << 32) | (unsigned)len;
+            found = 1;
+            break;
+        }
+    }
+    rcand_free(&l);
+    return found;
+}
+
+// ---- 字符串构建 ----
+typedef struct { char* data; int len, cap; } RStrBuf;
+static void rsb_append(RStrBuf* b, const char* s, int n) {
+    if (n <= 0) return;
+    if (b->len + n > b->cap) {
+        int nc = b->cap ? b->cap * 2 : 64;
+        while (nc < b->len + n) nc *= 2;
+        b->data = xrealloc(b->data, nc);
+        b->cap = nc;
+    }
+    memcpy(b->data + b->len, s, n);
+    b->len += n;
+}
+
+static void r_expand_repl(const char* repl, const int64_t* g, const unsigned char* text, int tlen, RStrBuf* out) {
+    int rl = (int)strlen(repl);
+    for (int i = 0; i < rl; i++) {
+        if (repl[i] == '$' && i + 1 < rl) {
+            char c = repl[i + 1];
+            if (c == '$') { rsb_append(out, "$", 1); i++; continue; }
+            if (c >= '0' && c <= '9') {
+                int idx = c - '0';
+                if (idx < RG_N && g[idx] != -1) {
+                    int s = (int)(g[idx] >> 32);
+                    int e = (int)(g[idx] & 0xffffffff);
+                    if (s >= 0 && s <= e && e <= tlen) rsb_append(out, (const char*)text + s, e - s);
+                }
+                i++;
+                continue;
+            }
+        }
+        rsb_append(out, repl + i, 1);
+    }
+}
+
+static void r_replace(RNode* root, const unsigned char* text, int len, const char* repl, RStrBuf* out) {
+    int pos = 0;
+    while (pos <= len) {
+        int s, e;
+        int64_t g[RG_N];
+        if (!rsearch_from(root, text, len, pos, &s, &e, g)) break;
+        rsb_append(out, (const char*)text + pos, s - pos);
+        g[0] = ((int64_t)s << 32) | (unsigned)e;
+        r_expand_repl(repl, g, text, len, out);
+        pos = (e == s) ? s + 1 : e;
+        if (e == s && pos <= len) rsb_append(out, (const char*)text + s, 1);
+    }
+    rsb_append(out, (const char*)text + pos, len - pos);
+}
+
+static void r_split(RNode* root, const unsigned char* text, int len, LXValue list) {
+    int pos = 0;
+    while (pos <= len) {
+        int s = -1, e = -1;
+        for (int start = pos; start <= len; start++) {
+            int64_t g0[RG_N];
+            for (int i = 0; i < RG_N; i++) g0[i] = -1;
+            RCandList l = rmatch(root, text, len, start, g0);
+            if (l.len > 0 && l.items[0].end > start) { s = start; e = l.items[0].end; rcand_free(&l); break; }
+            rcand_free(&l);
+        }
+        if (s < 0) break;
+        lx_list_push(list, lx_str_len((const char*)text + pos, s - pos));
+        pos = e;
+    }
+    lx_list_push(list, lx_str_len((const char*)text + pos, len - pos));
+}
+
+// ---- 内置函数 ----
+static LXValue bi_regex_find(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) lx_error("regex_find 需要 2 个参数: (pattern, text)");
+    const char* pat = val_cstr(args[0]);
+    const char* text = val_cstr(args[1]);
+    int tlen = (int)strlen(text);
+    char err[160];
+    err[0] = 0;
+    RNode* root = rcompile(pat, err, sizeof(err));
+    if (!root) lx_error("regex: %s", err);
+    int s, e;
+    int64_t g[RG_N];
+    int found = rsearch_from(root, (const unsigned char*)text, tlen, 0, &s, &e, g);
+    rp_free(root);
+    if (found) return lx_str_len(text + s, e - s);
+    return lx_null();
+}
+
+static LXValue bi_regex_match(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) lx_error("regex_match 需要 2 个参数: (pattern, text)");
+    const char* pat = val_cstr(args[0]);
+    const char* text = val_cstr(args[1]);
+    char err[160];
+    err[0] = 0;
+    RNode* root = rcompile(pat, err, sizeof(err));
+    if (!root) lx_error("regex: %s", err);
+    int64_t g[RG_N];
+    int found = rfullmatch(root, (const unsigned char*)text, (int)strlen(text), g);
+    rp_free(root);
+    return lx_bool(found != 0);
+}
+
+static LXValue bi_regex_search(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) lx_error("regex_search 需要 2 个参数: (pattern, text)");
+    const char* pat = val_cstr(args[0]);
+    const char* text = val_cstr(args[1]);
+    int tlen = (int)strlen(text);
+    char err[160];
+    err[0] = 0;
+    RNode* root = rcompile(pat, err, sizeof(err));
+    if (!root) lx_error("regex: %s", err);
+    int s, e;
+    int64_t g[RG_N];
+    int found = rsearch_from(root, (const unsigned char*)text, tlen, 0, &s, &e, g);
+    rp_free(root);
+    if (!found) return lx_null();
+    LXValue d = lx_dict();
+    lx_dict_set(d, "match", lx_str_len(text + s, e - s));
+    lx_dict_set(d, "start", lx_int(s));
+    lx_dict_set(d, "end", lx_int(e));
+    LXValue gl = lx_list(0);
+    for (int i = 1; i < RG_N; i++) {
+        if (g[i] != -1) {
+            int gs = (int)(g[i] >> 32), ge = (int)(g[i] & 0xffffffff);
+            lx_list_push(gl, lx_str_len(text + gs, ge - gs));
+        } else {
+            lx_list_push(gl, lx_null());
+        }
+    }
+    lx_dict_set(d, "groups", gl);
+    return d;
+}
+
+static LXValue bi_regex_find_all(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) lx_error("regex_find_all 需要 2 个参数: (pattern, text)");
+    const char* pat = val_cstr(args[0]);
+    const char* text = val_cstr(args[1]);
+    int tlen = (int)strlen(text);
+    char err[160];
+    err[0] = 0;
+    RNode* root = rcompile(pat, err, sizeof(err));
+    if (!root) lx_error("regex: %s", err);
+    LXValue r = lx_list(0);
+    int pos = 0;
+    while (pos <= tlen) {
+        int s, e;
+        int64_t g[RG_N];
+        if (!rsearch_from(root, (const unsigned char*)text, tlen, pos, &s, &e, g)) break;
+        lx_list_push(r, lx_str_len(text + s, e - s));
+        pos = (e == s) ? s + 1 : e;
+    }
+    rp_free(root);
+    return r;
+}
+
+static LXValue bi_regex_replace(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 3) lx_error("regex_replace 需要 3 个参数: (pattern, text, repl)");
+    const char* pat = val_cstr(args[0]);
+    const char* text = val_cstr(args[1]);
+    const char* repl = val_cstr(args[2]);
+    int tlen = (int)strlen(text);
+    char err[160];
+    err[0] = 0;
+    RNode* root = rcompile(pat, err, sizeof(err));
+    if (!root) lx_error("regex: %s", err);
+    RStrBuf out = {0, 0, 0};
+    r_replace(root, (const unsigned char*)text, tlen, repl, &out);
+    rp_free(root);
+    LXValue v = lx_str_len(out.data ? out.data : "", out.len);
+    if (out.data) xfree(out.data);
+    return v;
+}
+
+static LXValue bi_regex_split(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) lx_error("regex_split 需要 2 个参数: (pattern, text)");
+    const char* pat = val_cstr(args[0]);
+    const char* text = val_cstr(args[1]);
+    int tlen = (int)strlen(text);
+    char err[160];
+    err[0] = 0;
+    RNode* root = rcompile(pat, err, sizeof(err));
+    if (!root) lx_error("regex: %s", err);
+    LXValue r = lx_list(0);
+    r_split(root, (const unsigned char*)text, tlen, r);
+    rp_free(root);
+    return r;
+}
+
 static LXValue bi_exists(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1 || args[0].type != LX_STR) lx_error("exists 需要一个路径参数");
@@ -2559,6 +3190,13 @@ void lx_register_builtins(void) {
     // M14 P1：crypto 哈希
     lx_set_global("sha256", lx_native("sha256", bi_sha256));
     lx_set_global("xxhash", lx_native("xxhash", bi_xxhash));
+    // M15 P1：正则表达式（文本解析 / 日志分析 / 参数抽取）
+    lx_set_global("regex_find", lx_native("regex_find", bi_regex_find));
+    lx_set_global("regex_match", lx_native("regex_match", bi_regex_match));
+    lx_set_global("regex_search", lx_native("regex_search", bi_regex_search));
+    lx_set_global("regex_find_all", lx_native("regex_find_all", bi_regex_find_all));
+    lx_set_global("regex_replace", lx_native("regex_replace", bi_regex_replace));
+    lx_set_global("regex_split", lx_native("regex_split", bi_regex_split));
     lx_set_global("exists", lx_native("exists", bi_exists));
     lx_set_global("list_dir", lx_native("list_dir", bi_list_dir));
     lx_set_global("mkdir", lx_native("mkdir", bi_mkdir));
