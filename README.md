@@ -86,7 +86,7 @@ px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
 | [docs/requirements.md](docs/requirements.md) | 需求与设计讨论（动机、取舍、双模式架构） |
 | [docs/plan.md](docs/plan.md) | 开发方案（语言命名、里程碑规划、语言要点） |
 | [docs/spec.md](docs/spec.md) | 语言规格说明书（词法 / 语法 / 语义 / 标准库） |
-| [docs/PROGRESS.md](docs/PROGRESS.md) | 开发进度（M0–M28 产出与验证记录，含 M29 候选） |
+| [docs/PROGRESS.md](docs/PROGRESS.md) | 开发进度（M0–M29 产出与验证记录，含 M30 候选） |
 
 ---
 
@@ -123,6 +123,7 @@ px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
 | M26 | 无符号右移 `>>>` + WebSocket 内置心跳 + SSE 客户端 https + 远程包 registry | ✅ |
 | M27 | WebServer 生产化 P0：服务端 TLS（HTTPS/WSS/SSE-TLS）+ 请求体大小可配/413/落盘 + Cookie/Session/基础认证 + 优雅关闭 | ✅ |
 | M28 | P1 写业务四件套：路由表+中间件（method+path 模式 / :id 参数 / * 通配 / 中间件链）+ 时间时区（time_format/time_parse/tz_offset）+ cron 调度（6 字段）+ SQLite 绑定（sqlite_open/exec/query/close，参数绑定+结果集） | ✅ |
+| M29 | WebServer 生产化 P1：JSON 路径运算符（json_path/json_path_set，JSONB 基石）+ 静态缓存头（ETag/Last-Modified/304）+ Range（206/Content-Range）+ 结构化访问日志 + 请求 ID（X-Request-Id）+ px_serve keep-alive/gzip/静态文件流式 | ✅ |
 
 ---
 
