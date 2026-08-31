@@ -453,6 +453,10 @@ pub struct PxServeOpts {
     pub log_json: bool,
     /// M36：access log 按天轮转（文件名带日期 YYYYMMDD 后缀）
     pub log_daily: bool,
+    /// M37：gzip 响应压缩级别（1-9，默认 6）
+    pub gzip_level: u32,
+    /// M37：gzip 响应最小压缩体积阈值（字节，默认 1024）
+    pub gzip_min_bytes: usize,
 }
 
 /// M35：多维度限流配置
@@ -478,6 +482,8 @@ impl Default for PxServeOpts {
             alt_svc: None,
             log_json: false,
             log_daily: false,
+            gzip_level: 6,
+            gzip_min_bytes: 1024,
         }
     }
 }
@@ -542,6 +548,16 @@ pub fn parse_opts(opts: Option<&Value>, timeout_ms: i64) -> PxServeOpts {
         if let Some(Value::Bool(b)) = d.get("log_daily") {
             o.log_daily = *b;
         }
+        if let Some(Value::Int(n)) = d.get("gzip_level") {
+            if (1..=9).contains(n) {
+                o.gzip_level = *n as u32;
+            }
+        }
+        if let Some(Value::Int(n)) = d.get("gzip_min_bytes") {
+            if *n >= 1 {
+                o.gzip_min_bytes = *n as usize;
+            }
+        }
     }
     o
 }
@@ -567,6 +583,7 @@ pub fn px_serve(port: i64, docroot: &str, timeout_ms: i64, opts: Option<&Value>)
     // M33：启动时配置 access log 落盘 + Alt-Svc 通告
     set_access_log(o.access_log.clone(), o.log_json, o.log_daily);
     set_alt_svc(o.alt_svc.clone());
+    set_gzip_cfg(o.gzip_level, o.gzip_min_bytes);
     eprintln!(
         "[px-serve] 普贤应用服务器 docroot={} 端口={} 超时={}ms tls={} max_body={}B max_conn={}",
         root.display(),
@@ -602,6 +619,12 @@ pub fn px_serve(port: i64, docroot: &str, timeout_ms: i64, opts: Option<&Value>)
                     Some(c) => c,
                     None => return Ok(()), // TLS 握手失败
                 };
+                // M37：TLS ALPN 协商 h2 → 直接 HTTP/2（prior knowledge 帧循环）
+                if conn.alpn_h2() {
+                    let r = crate::h2::h2_serve(&mut conn, false, &[]);
+                    let _ = conn.shutdown();
+                    return r;
+                }
                 handle_px_conn(&mut conn, &root, port, &o)
             })();
             sem2.release();
@@ -1053,7 +1076,16 @@ fn log_access(req_id: &str, remote: &str, method: &str, path: &str, status: i64,
     }
 }
 
-/// M29c：gzip 响应压缩——Accept-Encoding: gzip 且 body > 1KB 且为文本类 → gzip + Content-Encoding
+/// M37：gzip 响应压缩配置（px_serve opts{gzip_level, gzip_min_bytes}）
+static GZIP_CFG: OnceLock<Mutex<(u32, usize)>> = OnceLock::new();
+fn gzip_cfg() -> &'static Mutex<(u32, usize)> {
+    GZIP_CFG.get_or_init(|| Mutex::new((6, 1024)))
+}
+pub fn set_gzip_cfg(level: u32, min_bytes: usize) {
+    *gzip_cfg().lock().unwrap() = (level, min_bytes);
+}
+
+/// M29c：gzip 响应压缩——Accept-Encoding: gzip 且 body > 阈值且为文本类 → gzip + Content-Encoding
 fn maybe_gzip_response(
     status: i64,
     mut headers: Vec<(String, String)>,
@@ -1063,7 +1095,8 @@ fn maybe_gzip_response(
     if status != 200 && status != 206 && status != 201 {
         return (status, headers, body);
     }
-    if body.len() < 1024 {
+    let (gzip_level, gzip_min) = *gzip_cfg().lock().unwrap();
+    if body.len() < gzip_min {
         return (status, headers, body);
     }
     // 请求 Accept-Encoding 含 gzip？
@@ -1102,7 +1135,7 @@ fn maybe_gzip_response(
     use flate2::write::GzEncoder;
     use flate2::Compression;
     use std::io::Write as _;
-    let mut enc = GzEncoder::new(Vec::new(), Compression::new(6));
+    let mut enc = GzEncoder::new(Vec::new(), Compression::new(gzip_level));
     if enc.write_all(&body).is_err() {
         return (status, headers, body);
     }

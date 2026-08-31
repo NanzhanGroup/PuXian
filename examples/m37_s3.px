@@ -1,0 +1,67 @@
+# M37④ S3/MinIO 对象存储客户端（AWS SigV4；本地模拟 S3 服务器验证）
+# s3_put / s3_get / s3_delete / s3_list（endpoint + 签名请求）
+PORT = 18171
+EP = "http://127.0.0.1:" + str(PORT)
+AK = "testkey"
+SK = "testsecret"
+store = json_parse("{}")
+
+# 本地模拟 S3 服务器（检查 SigV4 签名头 + 模拟 ListBucket XML）
+def s3mock(req):
+    method = req["method"]
+    path = req["path"]
+    hdrs = req["headers"]
+    # 签名请求必须带 AWS4-HMAC-SHA256 认证头
+    auth = ""
+    if hdrs.has("Authorization"):
+        auth = hdrs["Authorization"]
+    if not contains(auth, "AWS4-HMAC-SHA256") or not contains(auth, "Signature="):
+        return {"status": 403, "body": "MissingAuth"}
+    if method == "PUT":
+        store.set(path, req["body"])
+        return {"status": 200, "body": "OK"}
+    if method == "GET" and (contains(path, "list-type=2") or contains(req["query"], "list-type=2")):
+        keys = ""
+        for k in store:
+            keys = keys + "<Contents><Key>" + k + "</Key></Contents>"
+        return {"status": 200, "body": "<ListBucketResult>" + keys + "</ListBucketResult>"}
+    if method == "GET":
+        if store.has(path):
+            return {"status": 200, "body": store.get(path, "")}
+        return {"status": 404, "body": "NotFound"}
+    if method == "DELETE":
+        if store.has(path):
+            store.remove(path)
+        return {"status": 204, "body": ""}
+    return {"status": 405, "body": "Method"}
+
+def s3server():
+    http_serve(PORT, s3mock)
+spawn s3server()
+sleep(400)
+
+# ============ s3_put ============
+ok = s3_put(EP, "bucket1", "dir/file1.txt", "hello-s3", AK, SK)
+assert(ok, "s3_put")
+print("s3_put ok")
+
+# ============ s3_get ============
+data = s3_get(EP, "bucket1", "dir/file1.txt", AK, SK)
+assert(data == "hello-s3", "s3_get roundtrip")
+print("s3_get:", data)
+
+# ============ s3_list ============
+ok = s3_put(EP, "bucket1", "dir/file2.txt", "second", AK, SK)
+assert(ok)
+keys = s3_list(EP, "bucket1", "dir/", AK, SK)
+assert(len(keys) == 2 and (contains(keys[0], "file1.txt") or contains(keys[1], "file1.txt")), "s3_list")
+print("s3_list:", keys[0], keys[1])
+
+# ============ s3_delete ============
+ok = s3_delete(EP, "bucket1", "dir/file1.txt", AK, SK)
+assert(ok)
+d = s3_get(EP, "bucket1", "dir/file1.txt", AK, SK)
+assert(d == null, "删除后取回 null")
+print("s3_delete ok")
+
+print("M37_S3_OK")

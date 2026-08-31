@@ -94,6 +94,21 @@ impl SConn {
             SConnInner::TlsClient(t) => t.sock.set_read_timeout(dur),
         }
     }
+    /// M37：TLS 握手协商的 ALPN 是否为 h2（HTTP/2 over TLS）
+    pub fn alpn_h2(&self) -> bool {
+        let g = self.inner.lock().unwrap();
+        match &*g {
+            SConnInner::Plain(_) => false,
+            SConnInner::Tls(t) => t.conn
+                .alpn_protocol()
+                .map(|p| p == b"h2")
+                .unwrap_or(false),
+            SConnInner::TlsClient(t) => t.conn
+                .alpn_protocol()
+                .map(|p| p == b"h2")
+                .unwrap_or(false),
+        }
+    }
 }
 
 impl std::io::Read for SConn {
@@ -203,8 +218,8 @@ fn rebuild_server_config() -> Result<(), String> {
     cfg.session_storage = rustls::server::ServerSessionMemoryCache::new(256);
     cfg.ticketer = rustls::crypto::ring::Ticketer::new()
         .map_err(|e| format!("TLS 票据生成失败: {}", e))?;
-    // M31.4a：HTTP/2 预检——ALPN 固定 http/1.1。
-    cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
+    // M31.4a/M37：ALPN 声明 h2 + http/1.1（客户端可选 HTTP/2；M37.1 握手后按协商协议分发）
+    cfg.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
     *tls_server_lock().lock().unwrap() = Some(Arc::new(cfg));
     Ok(())
 }

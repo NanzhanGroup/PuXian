@@ -406,6 +406,11 @@ impl Interpreter {
             ("ctx_set", Builtin::CtxSet),
             ("ctx_get", Builtin::CtxGet),
             ("ctx_clear", Builtin::CtxClear),
+            // M37：S3/MinIO
+            ("s3_put", Builtin::S3Put),
+            ("s3_get", Builtin::S3Get),
+            ("s3_delete", Builtin::S3Delete),
+            ("s3_list", Builtin::S3List),
         ];
         for (n, b) in names {
             g.define(n, Value::Builtin(*b));

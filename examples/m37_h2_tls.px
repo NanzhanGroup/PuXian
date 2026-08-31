@@ -1,0 +1,57 @@
+# M37① HTTP/2 over TLS（ALPN h2）：tls_server 注册后 HTTPS 连接按 ALPN 协商 h2 → 帧处理
+PORT = 18175
+D = "/tmp/px_m37_h2"
+mkdir(D)
+write_file(D + "/index.html", "H2TLS")
+
+# 自签证书
+os_spawn("/bin/sh", ["-c", "rm -f /tmp/px_m37_h2_*.pem; openssl req -x509 -newkey rsa:2048 -keyout /tmp/px_m37_h2_key.pem -out /tmp/px_m37_h2_cert.pem -days 1 -nodes -subj /CN=localhost 2>/dev/null"])
+sleep(900)
+assert(exists("/tmp/px_m37_h2_cert.pem"))
+
+assert(tls_server("/tmp/px_m37_h2_cert.pem", "/tmp/px_m37_h2_key.pem"))
+
+def serve():
+    px_serve(PORT, D, 10000)
+spawn serve()
+sleep(800)
+
+# python h2 TLS 客户端：ALPN h2 → preface + SETTINGS + HEADERS(GET) → 校验 h2 响应
+write_file("/tmp/h2_tls_client.py", '''
+import ssl, socket, sys, time
+port = int(sys.argv[1])
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
+ctx.set_alpn_protocols(["h2", "http/1.1"])
+s = socket.create_connection(("127.0.0.1", port), timeout=5)
+t = ctx.wrap_socket(s, server_hostname="localhost")
+alpn = t.selected_alpn_protocol()
+t.settimeout(3)
+# connection preface + SETTINGS + HEADERS(stream 1, GET /hello)
+t.sendall(b"PRI * HTTP/2.0\\r\\n\\r\\nSM\\r\\n\\r\\n")
+t.sendall(b"\\x00\\x00\\x00\\x04\\x00\\x00\\x00\\x00\\x00")
+t.sendall(b"\\x00\\x00\\x0a\\x01\\x05\\x00\\x00\\x00\\x01\\x82\\x86\\x84\\x44\\x05hello")
+time.sleep(0.5)
+data = b""
+try:
+    while True:
+        chunk = t.recv(4096)
+        if not chunk:
+            break
+        data += chunk
+        if b"PuXian HTTP/2" in data:
+            break
+except Exception:
+    pass
+t.close()
+ok = alpn == "h2" and b"PuXian HTTP/2" in data and b"path=hello" in data
+print("H2_TLS_OK" if ok else "H2_TLS_FAIL alpn=" + str(alpn))
+''')
+
+os_spawn("/bin/sh", ["-c", "python3 /tmp/h2_tls_client.py " + str(PORT) + " > /tmp/m37_h2tls_res.txt 2>&1"])
+sleep(1500)
+res = read_file("/tmp/m37_h2tls_res.txt")
+print("h2 tls:", res)
+assert(contains(res, "H2_TLS_OK"), "HTTP/2 over TLS")
+print("M37_H2_TLS_OK")

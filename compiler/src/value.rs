@@ -401,6 +401,15 @@ pub enum Builtin {
     CtxSet,
     CtxGet,
     CtxClear,
+    // M37：S3/MinIO 对象存储客户端（AWS SigV4）
+    // s3_put(endpoint, bucket, key, data, ak, sk) → bool
+    // s3_get(endpoint, bucket, key, ak, sk) → str|null
+    // s3_delete(endpoint, bucket, key, ak, sk) → bool
+    // s3_list(endpoint, bucket, prefix, ak, sk) → list
+    S3Put,
+    S3Get,
+    S3Delete,
+    S3List,
 }
 
 impl Builtin {
@@ -575,6 +584,10 @@ impl Builtin {
             Builtin::CtxSet => "ctx_set",
             Builtin::CtxGet => "ctx_get",
             Builtin::CtxClear => "ctx_clear",
+            Builtin::S3Put => "s3_put",
+            Builtin::S3Get => "s3_get",
+            Builtin::S3Delete => "s3_delete",
+            Builtin::S3List => "s3_list",
         }
     }
 }

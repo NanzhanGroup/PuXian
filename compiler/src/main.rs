@@ -50,6 +50,7 @@ mod ws;
 mod xml;
 mod zip;
 mod h2;
+mod s3;
 
 use std::sync::{Arc, Mutex};
 

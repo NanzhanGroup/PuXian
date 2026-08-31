@@ -1454,6 +1454,85 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
             CTX.with(|c| c.borrow_mut().clear());
             Ok(Value::Bool(true))
         }
+        // ==================== M37：S3/MinIO 对象存储（AWS SigV4） ====================
+        // s3_put(endpoint, bucket, key, data, ak, sk) → bool
+        Builtin::S3Put => {
+            if args.len() != 6 {
+                return Err(err("s3_put 需要 (endpoint, bucket, key, data, ak, sk) 参数", pos));
+            }
+            let ep = expect_str(&args[0], "s3_put", pos)?;
+            let bucket = expect_str(&args[1], "s3_put", pos)?;
+            let key = expect_str(&args[2], "s3_put", pos)?;
+            let data = expect_str(&args[3], "s3_put", pos)?;
+            let ak = expect_str(&args[4], "s3_put", pos)?;
+            let sk = expect_str(&args[5], "s3_put", pos)?;
+            let (st, _) = crate::s3::s3_execute("PUT", ep, bucket, key, "", data, ak, sk).map_err(|e| err(e, pos))?;
+            Ok(Value::Bool(st == 200 || st == 204))
+        }
+        // s3_get(endpoint, bucket, key, ak, sk) → str|null
+        Builtin::S3Get => {
+            if args.len() != 5 {
+                return Err(err("s3_get 需要 (endpoint, bucket, key, ak, sk) 参数", pos));
+            }
+            let ep = expect_str(&args[0], "s3_get", pos)?;
+            let bucket = expect_str(&args[1], "s3_get", pos)?;
+            let key = expect_str(&args[2], "s3_get", pos)?;
+            let ak = expect_str(&args[3], "s3_get", pos)?;
+            let sk = expect_str(&args[4], "s3_get", pos)?;
+            let (st, body) = crate::s3::s3_execute("GET", ep, bucket, key, "", "", ak, sk).map_err(|e| err(e, pos))?;
+            if st == 200 {
+                Ok(Value::Str(body))
+            } else {
+                Ok(Value::Null)
+            }
+        }
+        // s3_delete(endpoint, bucket, key, ak, sk) → bool
+        Builtin::S3Delete => {
+            if args.len() != 5 {
+                return Err(err("s3_delete 需要 (endpoint, bucket, key, ak, sk) 参数", pos));
+            }
+            let ep = expect_str(&args[0], "s3_delete", pos)?;
+            let bucket = expect_str(&args[1], "s3_delete", pos)?;
+            let key = expect_str(&args[2], "s3_delete", pos)?;
+            let ak = expect_str(&args[3], "s3_delete", pos)?;
+            let sk = expect_str(&args[4], "s3_delete", pos)?;
+            let (st, _) = crate::s3::s3_execute("DELETE", ep, bucket, key, "", "", ak, sk).map_err(|e| err(e, pos))?;
+            Ok(Value::Bool(st == 204 || st == 200))
+        }
+        // s3_list(endpoint, bucket, prefix, ak, sk) → list（对象 key）
+        Builtin::S3List => {
+            if args.len() != 5 {
+                return Err(err("s3_list 需要 (endpoint, bucket, prefix, ak, sk) 参数", pos));
+            }
+            let ep = expect_str(&args[0], "s3_list", pos)?;
+            let bucket = expect_str(&args[1], "s3_list", pos)?;
+            let prefix = expect_str(&args[2], "s3_list", pos)?;
+            let ak = expect_str(&args[3], "s3_list", pos)?;
+            let sk = expect_str(&args[4], "s3_list", pos)?;
+            let query = format!("list-type=2&prefix={}", prefix);
+            let (st, body) = crate::s3::s3_execute("GET", ep, bucket, "", &query, "", ak, sk).map_err(|e| err(e, pos))?;
+            if st != 200 {
+                return Ok(Value::Null);
+            }
+            // 解析 ListBucketResult XML：提取 <Key>...</Key>
+            let mut keys = Vec::new();
+            let bytes = body.as_bytes();
+            let mut i = 0;
+            while i + 5 <= bytes.len() {
+                if &bytes[i..i + 5] == b"<Key>" {
+                    let mut j = i + 5;
+                    while j < bytes.len() && bytes[j..].starts_with(b"</Key>") == false {
+                        j += 1;
+                    }
+                    let k = String::from_utf8_lossy(&bytes[i + 5..j]).to_string();
+                    keys.push(Value::Str(k));
+                    i = j + 6;
+                } else {
+                    i += 1;
+                }
+            }
+            Ok(Value::new_list(keys))
+        }
         Builtin::GenNext => {
             if args.len() != 1 {
                 return Err(err("gen_next 需要一个参数", pos));
@@ -1776,7 +1855,23 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
                     }
                 }
             }
-            match http_request_full(&url, &method, body.as_deref(), &headers) {
+            // M37：opts{retries, timeout_ms, proxy}
+            let mut req_opts = HttpReqOpts::default();
+            if let Some(Value::Dict(od)) = args.get(4) {
+                let od = od.lock().unwrap();
+                if let Some(Value::Int(r)) = od.get("retries") {
+                    req_opts.retries = (*r).max(0) as u32;
+                }
+                if let Some(Value::Int(t)) = od.get("timeout_ms") {
+                    if *t > 0 {
+                        req_opts.timeout_ms = Some(*t as u64);
+                    }
+                }
+                if let Some(Value::Str(p)) = od.get("proxy") {
+                    req_opts.proxy = Some(p.clone());
+                }
+            }
+            match http_request_full(&url, &method, body.as_deref(), &headers, &req_opts) {
                 Ok(d) => Ok(Value::new_dict(d)),
                 Err(e) => Err(LxError::new("R3009", format!("net: http_request 失败: {}", e), Some(pos))),
             }
@@ -4275,6 +4370,18 @@ fn https_connect(host: &str, port: u16) -> Result<TlsClient, String> {
 }
 
 /// 解析 URL → (scheme, host, port, path, host_header)
+
+/// M37：解析代理地址 "host:port"（缺省端口 8080）
+fn parse_proxy(p: &str) -> Result<(String, u16), String> {
+    if let Some(ci) = p.rfind(':') {
+        let h = &p[..ci];
+        if let Ok(pp) = p[ci + 1..].parse::<u16>() {
+            return Ok((h.to_string(), pp));
+        }
+    }
+    Ok((p.to_string(), 8080))
+}
+
 fn parse_url(url: &str) -> Result<(String, String, u16, String, String), String> {
     let (scheme, rest) = if let Some(r) = url.strip_prefix("https://") {
         ("https", r)
@@ -4312,17 +4419,34 @@ fn parse_url(url: &str) -> Result<(String, String, u16, String, String), String>
 
 /// 池化客户端：http_request(url, method, body?, headers?) → dict{status, headers, body}
 /// 明文 http 使用 keep-alive 连接池（同 host 复用）；https 每次新建（TLS 会话不复用）。
-fn http_request_full(
+/// M37：http_request 客户端选项（重试 / 超时 / 代理）
+#[derive(Default)]
+pub struct HttpReqOpts {
+    pub retries: u32,
+    pub timeout_ms: Option<u64>,
+    pub proxy: Option<String>,
+}
+
+pub(crate) fn http_request_full(
     url: &str,
     method: &str,
     body: Option<&str>,
     headers: &HashMap<String, String>,
+    opts: &HttpReqOpts,
 ) -> Result<std::collections::HashMap<String, Value>, String> {
     let (scheme, host, port, path, host_header) = parse_url(url)?;
     let key = format!("{}:{}", host, port);
+    // M37：代理——连接代理地址，请求行用绝对 URL
+    let (conn_host, conn_port, req_target) = match &opts.proxy {
+        Some(p) => {
+            let (ph, pp) = parse_proxy(p)?;
+            (ph, pp, format!("{}://{}:{}{}", scheme, host, port, path))
+        }
+        None => (host.clone(), port, path.clone()),
+    };
     let mut req = format!(
         "{} {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: PuXian/0.1\r\nConnection: keep-alive\r\n",
-        method, path, host_header
+        method, req_target, host_header
     );
     for (k, v) in headers {
         req.push_str(&format!("{}: {}\r\n", k, v));
@@ -4348,9 +4472,9 @@ fn http_request_full(
             Some(PooledConn::Tls(t)) => Conn::Tls(t),
             None => {
                 if scheme == "https" {
-                    Conn::Tls(https_connect(&host, port)?)
+                    Conn::Tls(https_connect(&conn_host, conn_port)?)
                 } else {
-                    let addr = format!("{}:{}", host, port);
+                    let addr = format!("{}:{}", conn_host, conn_port);
                     Conn::Plain(
                         std::net::TcpStream::connect(&addr)
                             .map_err(|e| format!("连接 {} 失败: {}", addr, e))?,
@@ -4358,7 +4482,7 @@ fn http_request_full(
                 }
             }
         };
-        match http_exchange(&mut st, &req) {
+        match http_exchange(&mut st, &req, opts.timeout_ms) {
             Ok((status, headers_map, resp_body, location, keep_alive)) => {
                 // keep-alive 且可复用 → 归还连接池
                 if keep_alive {
@@ -4381,8 +4505,8 @@ fn http_request_full(
                 return Ok(d);
             }
             Err(e) => {
-                // 池连接可能已失效：重试一次新连接（http/https 均池化）
-                if attempt == 1 {
+                // M37：重试次数可配（默认 1 次池失效重连）
+                if attempt <= opts.retries as usize {
                     continue;
                 }
                 return Err(e);
@@ -4396,13 +4520,18 @@ fn http_request_full(
 fn http_exchange(
     stream: &mut Conn,
     req: &str,
+    timeout_ms: Option<u64>,
 ) -> Result<(u16, std::collections::HashMap<String, String>, String, Option<String>, bool), String> {
     use std::io::{Read, Write};
     stream
         .write_all(req.as_bytes())
         .map_err(|e| format!("发送请求失败: {}", e))?;
+    let to = timeout_ms.map(std::time::Duration::from_millis).unwrap_or(std::time::Duration::from_secs(30));
     if let Conn::Plain(s) = stream {
-        s.set_read_timeout(Some(std::time::Duration::from_secs(30))).ok();
+        s.set_read_timeout(Some(to)).ok();
+    }
+    if let Conn::Tls(t) = stream {
+        t.sock.set_read_timeout(Some(to)).ok();
     }
     // 读响应头
     let mut buf: Vec<u8> = Vec::new();

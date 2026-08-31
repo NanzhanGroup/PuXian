@@ -97,6 +97,9 @@ char g_px_alt_svc[256] = {0};
 // M36：access log JSON 行格式 + 按天轮转（日期后缀）
 int g_px_log_json = 0;
 int g_px_log_daily = 0;
+// M37：gzip 响应压缩配置（级别 1-9 / 最小体积阈值）
+int g_px_gzip_level = 6;
+int g_px_gzip_min = 1024;
 // 虚拟主机表（vhost(host, docroot|handler)）
 #define MAX_VHOSTS 32
 typedef struct {
@@ -168,6 +171,11 @@ static LXValue bi_bus_unsubscribe(LXValue* args, int nargs, void* ctx);
 static LXValue bi_ctx_set(LXValue* args, int nargs, void* ctx);
 static LXValue bi_ctx_get(LXValue* args, int nargs, void* ctx);
 static LXValue bi_ctx_clear(LXValue* args, int nargs, void* ctx);
+// M37：S3/MinIO 对象存储（AWS SigV4）
+static LXValue bi_s3_put(LXValue* args, int nargs, void* ctx);
+static LXValue bi_s3_get(LXValue* args, int nargs, void* ctx);
+static LXValue bi_s3_delete(LXValue* args, int nargs, void* ctx);
+static LXValue bi_s3_list(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_get(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_post(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_serve(LXValue* args, int nargs, void* ctx);
@@ -1751,6 +1759,16 @@ LXValue px_index(LXValue obj, LXValue idx) {
         if (idx.type == PX_STR) {
             return px_dict_get(obj, idx.as.obj->as.str.data);
         }
+        // M37：dict 整数索引 → 返回第 i 个键（for-in dict 用 px_len/px_index 遍历，与解释器 keys 一致）
+        if (idx.type == PX_INT) {
+            LXObject* o = obj.as.obj;
+            int i = (int)idx.as.i;
+            if (i < 0) i += o->as.dict.len;
+            if (i >= 0 && i < o->as.dict.len) {
+                return px_str(o->as.dict.keys[i]);
+            }
+            px_error("字典索引越界: %d (len=%d)", i, o->as.dict.len);
+        }
         px_error("字典索引需要字符串键");
     }
     px_error("无法索引: %s", px_type_name(obj));
@@ -2128,9 +2146,23 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
             return r;
         }
         if (strcmp(name, "remove") == 0) {
+            // M37 修复：C 端 dict.remove 真删除（原"置 null"导致键残留：has() 仍 true、keys() 仍列出）
             if (nargs < 1) px_error("remove 需要 1 个参数");
-            LXValue v = px_dict_get(obj, args[0].as.obj->as.str.data);
-            px_dict_set(obj, args[0].as.obj->as.str.data, px_null()); // 简化：置 null 表示删除
+            LXObject* o = obj.as.obj;
+            const char* key = args[0].as.obj->as.str.data;
+            LXValue v = px_null();
+            for (int i = 0; i < o->as.dict.len; i++) {
+                if (strcmp(o->as.dict.keys[i], key) == 0) {
+                    v = o->as.dict.vals[i];
+                    // 收缩：后续元素前移
+                    for (int j = i; j < o->as.dict.len - 1; j++) {
+                        o->as.dict.keys[j] = o->as.dict.keys[j + 1];
+                        o->as.dict.vals[j] = o->as.dict.vals[j + 1];
+                    }
+                    o->as.dict.len--;
+                    break;
+                }
+            }
             return v;
         }
     }
@@ -4302,6 +4334,11 @@ void px_register_builtins(void) {
     px_set_global("ctx_set", px_native("ctx_set", bi_ctx_set));
     px_set_global("ctx_get", px_native("ctx_get", bi_ctx_get));
     px_set_global("ctx_clear", px_native("ctx_clear", bi_ctx_clear));
+    // M37：S3/MinIO
+    px_set_global("s3_put", px_native("s3_put", bi_s3_put));
+    px_set_global("s3_get", px_native("s3_get", bi_s3_get));
+    px_set_global("s3_delete", px_native("s3_delete", bi_s3_delete));
+    px_set_global("s3_list", px_native("s3_list", bi_s3_list));
     px_set_global("http_get", px_native("http_get", bi_http_get));
     px_set_global("http_post", px_native("http_post", bi_http_post));
     px_set_global("http_serve", px_native("http_serve", bi_http_serve));
@@ -5623,6 +5660,7 @@ static LXValue bi_ctx_clear(LXValue* args, int nargs, void* ctx) {
     return px_bool(true);
 }
 
+
 // ==================== M33：UDP 基础设施（HTTP/3/QUIC 预研；与解释器 builtin.rs 一致） ====================
 // udp_open([port]) → int（bind 0.0.0.0:port；缺省/0 → 系统分配）
 // udp_send(sock, ip, port, data) → int；udp_recv(sock, maxlen) → dict{data,ip,port} | null
@@ -6253,7 +6291,8 @@ static int h_exchange(HPoolSlot* slot, const char* req, int rlen,
 // http_request(url, method, body?, headers?) → dict{status, headers, body}
 static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 2 || nargs > 4) px_error("http_request 需要 (url, method[, body[, headers]]) 参数");
+    // M37：http_request(url, method[, body[, headers[, opts{retries,timeout_ms,proxy}]]])
+    if (nargs < 2 || nargs > 5) px_error("http_request 需要 (url, method[, body[, headers[, opts]]]) 参数");
     const char* url = val_cstr(args[0]);
     const char* method = val_cstr(args[1]);
     const char* body = NULL;
@@ -6268,17 +6307,50 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
                             ho->as.dict.keys[i], ho->as.dict.vals[i].as.obj->as.str.data);
         }
     }
+    // M37：opts{retries, timeout_ms, proxy}
+    int retries = 1;
+    int timeout_ms = 30000;
+    char proxy[256] = {0};
+    if (nargs >= 5 && args[4].type == PX_DICT) {
+        LXValue rv = px_dict_get(args[4], "retries");
+        if (rv.type == PX_INT && rv.as.i >= 0) retries = (int)rv.as.i + 1;
+        LXValue tv = px_dict_get(args[4], "timeout_ms");
+        if (tv.type == PX_INT && tv.as.i > 0) timeout_ms = (int)tv.as.i;
+        LXValue pv = px_dict_get(args[4], "proxy");
+        if (pv.type == PX_STR) snprintf(proxy, sizeof(proxy), "%s", pv.as.obj->as.str.data);
+    }
     int is_https = 0;
     char host[256];
     int port = 80;
     const char* path = "/";
     hparse_url(url, &is_https, host, sizeof(host), &port, &path);
+    // M37：代理——连接代理地址，请求行用绝对 URL
+    char conn_host[256];
+    int conn_port = is_https ? 443 : 80;
+    char req_target[1024];
+    if (proxy[0]) {
+        const char* pc = strrchr(proxy, ':');
+        if (pc) {
+            int pl = (int)(pc - proxy);
+            if (pl > 0 && pl < 255) { memcpy(conn_host, proxy, (size_t)pl); conn_host[pl] = 0; }
+            else snprintf(conn_host, sizeof(conn_host), "%s", proxy);
+            conn_port = atoi(pc + 1);
+        } else {
+            snprintf(conn_host, sizeof(conn_host), "%s", proxy);
+            conn_port = 8080;
+        }
+        snprintf(req_target, sizeof(req_target), "%s://%s:%d%s", is_https ? "https" : "http", host, port, path);
+    } else {
+        snprintf(conn_host, sizeof(conn_host), "%s", host);
+        conn_port = port;
+        snprintf(req_target, sizeof(req_target), "%s", path);
+    }
     char key[300];
     snprintf(key, sizeof(key), "%s:%d", host, port);
     char req[16384];
     int rlen = snprintf(req, sizeof(req),
         "%s %s HTTP/1.1\r\nHost: %s:%d\r\nUser-Agent: PuXian/0.1\r\nConnection: keep-alive\r\n",
-        method, path, host, port);
+        method, req_target, host, port);
     if (extra_headers[0]) { memcpy(req + rlen, extra_headers, strlen(extra_headers)); rlen += (int)strlen(extra_headers); }
     if (body) {
         if (!strcasestr(extra_headers, "Content-Length")) {
@@ -6288,7 +6360,8 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
     }
     rlen += snprintf(req + rlen, sizeof(req) - rlen, "\r\n");
     if (body) { memcpy(req + rlen, body, strlen(body)); rlen += (int)strlen(body); }
-    for (int attempt = 0; attempt < 2; attempt++) {
+    int max_attempts = retries;
+    for (int attempt = 0; attempt < max_attempts; attempt++) {
         HPoolSlot slot;
         if (hpool_take(key, &slot) != 0) {
             // 池中无空闲连接：新建（http 明文 TCP；https TLS 握手）
@@ -6296,15 +6369,19 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
             slot.fd = -1;
             slot.tls = NULL;
             if (is_https) {
-                slot.tls = https_connect(host, port);
+                slot.tls = https_connect(conn_host, conn_port);
                 slot.fd = slot.tls ? slot.tls->net.fd : -1;
             } else {
-                slot.fd = hconnect(host, port);
+                slot.fd = hconnect(conn_host, conn_port);
             }
             if (slot.fd < 0) {
-                if (attempt == 0) continue;
-                px_error("net: 连接 %s:%d 失败", host, port);
+                if (attempt < max_attempts - 1) continue;
+                px_error("net: 连接 %s:%d 失败", conn_host, conn_port);
             }
+            // M37：超时配置（SO_RCVTIMEO）
+            struct timeval tv = { timeout_ms / 1000, (timeout_ms % 1000) * 1000 };
+            setsockopt(slot.fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+            setsockopt(slot.fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
         }
         int status = 0, body_len = 0, keep_alive = 1;
         LXValue headers = px_null();
@@ -6321,10 +6398,212 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
         }
         if (slot.tls) https_close(slot.tls);
         close(slot.fd);
-        if (attempt == 0) continue; // 池连接失效重试
+        if (attempt < max_attempts - 1) continue; // 池连接失效重试
         px_error("net: http_request 失败: 连接关闭");
     }
     return px_null();
+}
+
+// ==================== M37：S3/MinIO（AWS SigV4；与解释器 s3.rs 一致） ====================
+// HMAC-SHA256（mbedtls sha256 + 标准 HMAC 块处理）
+static void px_hmac_sha256(const unsigned char* key, int klen,
+                           const unsigned char* data, int dlen, unsigned char out[32]) {
+    unsigned char k[64];
+    memset(k, 0, 64);
+    if (klen > 64) {
+        mbedtls_sha256(key, (size_t)klen, k, 0);
+    } else {
+        memcpy(k, key, (size_t)klen);
+    }
+    unsigned char ipad[64], opad[64];
+    for (int i = 0; i < 64; i++) { ipad[i] = k[i] ^ 0x36; opad[i] = k[i] ^ 0x5c; }
+    unsigned char* inner = malloc(64 + (size_t)dlen);
+    memcpy(inner, ipad, 64);
+    memcpy(inner + 64, data, (size_t)dlen);
+    unsigned char h1[32];
+    mbedtls_sha256(inner, 64 + (size_t)dlen, h1, 0);
+    free(inner);
+    unsigned char* outer = malloc(96);
+    memcpy(outer, opad, 64);
+    memcpy(outer + 64, h1, 32);
+    mbedtls_sha256(outer, 96, out, 0);
+    free(outer);
+}
+
+static void px_sha256_hex(const char* data, int dlen, char* out) {
+    unsigned char d[32];
+    mbedtls_sha256((const unsigned char*)data, (size_t)dlen, d, 0);
+    for (int i = 0; i < 32; i++) sprintf(out + i * 2, "%02x", d[i]);
+    out[64] = 0;
+}
+
+// SigV4 签名 → Authorization 头（写入 out）
+static void px_sigv4(const char* method, const char* host, const char* path, const char* query,
+                     const char* amz_date, const char* date_stamp,
+                     const char* payload_hash, const char* ak, const char* sk,
+                     char* out, int outsz) {
+    // canonical headers: host + x-amz-content-sha256 + x-amz-date（排序）
+    char ch[1024];
+    snprintf(ch, sizeof(ch), "host:%s\nx-amz-content-sha256:%s\nx-amz-date:%s\n",
+             host, payload_hash, amz_date);
+    const char* signed_h = "host;x-amz-content-sha256;x-amz-date";
+    char canonical[2048];
+    snprintf(canonical, sizeof(canonical), "%s\n%s\n%s\n%s\n%s\n%s",
+             method, path, query, ch, signed_h, payload_hash);
+    char chash[65];
+    px_sha256_hex(canonical, (int)strlen(canonical), chash);
+    char scope[128];
+    snprintf(scope, sizeof(scope), "%s/us-east-1/s3/aws4_request", date_stamp);
+    char sts[2048];
+    snprintf(sts, sizeof(sts), "AWS4-HMAC-SHA256\n%s\n%s\n%s", amz_date, scope, chash);
+    // HMAC 链
+    char ksec[128];
+    snprintf(ksec, sizeof(ksec), "AWS4%s", sk);
+    unsigned char kd[32], kr[32], ks[32], ksg[32], sig[32];
+    px_hmac_sha256((const unsigned char*)ksec, (int)strlen(ksec),
+                   (const unsigned char*)date_stamp, (int)strlen(date_stamp), kd);
+    px_hmac_sha256(kd, 32, (const unsigned char*)"us-east-1", 9, kr);
+    px_hmac_sha256(kr, 32, (const unsigned char*)"s3", 2, ks);
+    px_hmac_sha256(ks, 32, (const unsigned char*)"aws4_request", 12, ksg);
+    px_hmac_sha256(ksg, 32, (const unsigned char*)sts, (int)strlen(sts), sig);
+    char sighex[65];
+    for (int i = 0; i < 32; i++) sprintf(sighex + i * 2, "%02x", sig[i]);
+    sighex[64] = 0;
+    snprintf(out, (size_t)outsz, "AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",
+             ak, scope, signed_h, sighex);
+}
+
+// 构造并发送 S3 请求 → 返回 (status, body)
+static int px_s3_exec(const char* endpoint, const char* method, const char* bucket, const char* key,
+                      const char* query, const char* body, const char* ak, const char* sk,
+                      char* body_out, int body_out_sz) {
+    // URL 解析
+    int is_https = 0;
+    char host[256];
+    int port = 80;
+    const char* ep = endpoint;
+    if (strncmp(ep, "https://", 8) == 0) { is_https = 1; ep += 8; port = 443; }
+    else if (strncmp(ep, "http://", 7) == 0) ep += 7;
+    const char* slash = strchr(ep, '/');
+    int hl = slash ? (int)(slash - ep) : (int)strlen(ep);
+    if (hl > 255) hl = 255;
+    memcpy(host, ep, (size_t)hl); host[hl] = 0;
+    char* colon = strchr(host, ':');
+    if (colon) { port = atoi(colon + 1); *colon = 0; }
+    char path[1024];
+    snprintf(path, sizeof(path), "/%s/%s", bucket, key ? key : "");
+    char pbody[4096];
+    int blen = body ? (int)strlen(body) : 0;
+    memcpy(pbody, body ? body : "", (size_t)blen);
+    // 时间
+    time_t now = time(NULL);
+    struct tm tmv;
+    gmtime_r(&now, &tmv);
+    char date_stamp[16], amz_date[32];
+    snprintf(date_stamp, sizeof(date_stamp), "%04d%02d%02d", tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday);
+    snprintf(amz_date, sizeof(amz_date), "%04d%02d%02dT%02d%02d%02dZ",
+             tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday, tmv.tm_hour, tmv.tm_min, tmv.tm_sec);
+    // payload hash
+    char phash[65];
+    px_sha256_hex(pbody, blen, phash);
+    char auth[1024];
+    px_sigv4(method, host, path, query, amz_date, date_stamp, phash, ak, sk, auth, sizeof(auth));
+    // HTTP 请求
+    char req[8192];
+    int rlen = snprintf(req, sizeof(req),
+        "%s %s%s%s HTTP/1.1\r\nHost: %s\r\nUser-Agent: PuXian/0.1\r\nConnection: close\r\n"
+        "Content-Type: application/octet-stream\r\n"
+        "x-amz-date: %s\r\nx-amz-content-sha256: %s\r\nAuthorization: %s\r\n"
+        "Content-Length: %d\r\n\r\n",
+        method, path, query[0] ? "?" : "", query,
+        host, amz_date, phash, auth, blen);
+    if (blen > 0 && rlen + blen < (int)sizeof(req)) {
+        memcpy(req + rlen, pbody, (size_t)blen);
+        rlen += blen;
+    }
+    HPoolSlot slot;
+    slot.is_tls = is_https;
+    slot.fd = -1;
+    slot.tls = NULL;
+    if (is_https) {
+        slot.tls = https_connect(host, port);
+        slot.fd = slot.tls ? slot.tls->net.fd : -1;
+    } else {
+        slot.fd = hconnect(host, port);
+    }
+    if (slot.fd < 0) return 0;
+    int status = 0, resp_len = 0, keep = 0;
+    LXValue hdrs = px_null();
+    char* resp = NULL;
+    if (h_exchange(&slot, req, rlen, &status, &hdrs, &resp, &resp_len, &keep) == 0) {
+        if (body_out && resp && body_out_sz > 0) {
+            int cp = resp_len < body_out_sz - 1 ? resp_len : body_out_sz - 1;
+            memcpy(body_out, resp, (size_t)cp);
+            body_out[cp] = 0;
+        }
+        if (resp) xfree(resp);
+    }
+    if (slot.tls) https_close(slot.tls);
+    close(slot.fd);
+    return status;
+}
+
+static LXValue bi_s3_put(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 6) px_error("s3_put 需要 (endpoint, bucket, key, data, ak, sk) 参数");
+    char out[8] = {0};
+    int st = px_s3_exec(val_cstr(args[0]), "PUT", val_cstr(args[1]), val_cstr(args[2]),
+                        "", val_cstr(args[3]), val_cstr(args[4]), val_cstr(args[5]), out, sizeof(out));
+    return px_bool(st == 200 || st == 204);
+}
+
+static LXValue bi_s3_get(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 5) px_error("s3_get 需要 (endpoint, bucket, key, ak, sk) 参数");
+    char* body = malloc(1048576);
+    int st = px_s3_exec(val_cstr(args[0]), "GET", val_cstr(args[1]), val_cstr(args[2]),
+                        "", "", val_cstr(args[3]), val_cstr(args[4]), body, 1048576);
+    LXValue r = (st == 200) ? px_str(body) : px_null();
+    free(body);
+    return r;
+}
+
+static LXValue bi_s3_delete(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 5) px_error("s3_delete 需要 (endpoint, bucket, key, ak, sk) 参数");
+    char out[8] = {0};
+    int st = px_s3_exec(val_cstr(args[0]), "DELETE", val_cstr(args[1]), val_cstr(args[2]),
+                        "", "", val_cstr(args[3]), val_cstr(args[4]), out, sizeof(out));
+    return px_bool(st == 204 || st == 200 || st == 404);
+}
+
+static LXValue bi_s3_list(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 5) px_error("s3_list 需要 (endpoint, bucket, prefix, ak, sk) 参数");
+    char query[512];
+    snprintf(query, sizeof(query), "list-type=2&prefix=%s", val_cstr(args[2]));
+    char* body = malloc(1048576);
+    int st = px_s3_exec(val_cstr(args[0]), "GET", val_cstr(args[1]), "",
+                        query, "", val_cstr(args[3]), val_cstr(args[4]), body, 1048576);
+    LXValue l = px_list(0);
+    if (st == 200) {
+        // 提取 <Key>...</Key>
+        const char* p = body;
+        while ((p = strstr(p, "<Key>")) != NULL) {
+            p += 5;
+            const char* e = strstr(p, "</Key>");
+            if (!e) break;
+            int klen = (int)(e - p);
+            char key[1024];
+            int kl = klen < 1023 ? klen : 1023;
+            memcpy(key, p, (size_t)kl);
+            key[kl] = 0;
+            px_list_push(l, px_str(key));
+            p = e + 6;
+        }
+    }
+    free(body);
+    return l;
 }
 
 // ==================== M24：流式 gzip 解压器（http_get_stream 边收边解） ====================
@@ -6479,11 +6758,44 @@ static LXValue bi_http_get_stream(LXValue* args, int nargs, void* ctx) {
     const char* url = val_cstr(args[0]);
     LXValue handler = args[1];
     if (handler.type != PX_FUNC && handler.type != PX_NATIVE) px_error("http_get_stream 的 chunk_handler 必须是函数");
+    // M37：opts{retries, timeout_ms, proxy}
+    int retries = 1;
+    int timeout_ms = 30000;
+    char proxy[256] = {0};
+    if (nargs >= 5 && args[4].type == PX_DICT) {
+        LXValue rv = px_dict_get(args[4], "retries");
+        if (rv.type == PX_INT && rv.as.i >= 0) retries = (int)rv.as.i + 1;
+        LXValue tv = px_dict_get(args[4], "timeout_ms");
+        if (tv.type == PX_INT && tv.as.i > 0) timeout_ms = (int)tv.as.i;
+        LXValue pv = px_dict_get(args[4], "proxy");
+        if (pv.type == PX_STR) snprintf(proxy, sizeof(proxy), "%s", pv.as.obj->as.str.data);
+    }
     int is_https = 0;
     char host[256];
     int port = 80;
     const char* path = "/";
     hparse_url(url, &is_https, host, sizeof(host), &port, &path);
+    // M37：代理——连接代理地址，请求行用绝对 URL
+    char conn_host[256];
+    int conn_port = is_https ? 443 : 80;
+    char req_target[1024];
+    if (proxy[0]) {
+        const char* pc = strrchr(proxy, ':');
+        if (pc) {
+            int pl = (int)(pc - proxy);
+            if (pl > 0 && pl < 255) { memcpy(conn_host, proxy, (size_t)pl); conn_host[pl] = 0; }
+            else snprintf(conn_host, sizeof(conn_host), "%s", proxy);
+            conn_port = atoi(pc + 1);
+        } else {
+            snprintf(conn_host, sizeof(conn_host), "%s", proxy);
+            conn_port = 8080;
+        }
+        snprintf(req_target, sizeof(req_target), "%s://%s:%d%s", is_https ? "https" : "http", host, port, path);
+    } else {
+        snprintf(conn_host, sizeof(conn_host), "%s", host);
+        conn_port = port;
+        snprintf(req_target, sizeof(req_target), "%s", path);
+    }
     HPoolSlot slot;
     slot.is_tls = is_https;
     slot.fd = -1;
@@ -7168,7 +7480,10 @@ static const char* px_http_status_reason(int code) {
 static char* px_gzip_compress(const char* in, int inlen, int* outlen) {
     mz_stream s;
     memset(&s, 0, sizeof(s));
-    if (mz_deflateInit2(&s, 6, MZ_DEFLATED, -15, 8, MZ_DEFAULT_STRATEGY) != MZ_OK) return NULL;
+    int lvl = g_px_gzip_level;
+    if (lvl < 1) lvl = 1;
+    if (lvl > 9) lvl = 9;
+    if (mz_deflateInit2(&s, lvl, MZ_DEFLATED, -15, 8, MZ_DEFAULT_STRATEGY) != MZ_OK) return NULL;
     int bound = (int)mz_compressBound((mz_ulong)inlen);
     int cap = bound + 18;
     char* out = xmalloc((size_t)cap);
@@ -8929,7 +9244,8 @@ static int px_conn_tls_handshake(PxConn* c) {
     // TLS 1.2 会话票据（与客户端 M25 票据恢复对偶）
     mbedtls_ssl_conf_session_tickets(conf, MBEDTLS_SSL_SESSION_TICKETS_ENABLED);
     // M31.4a：HTTP/2 预检——ALPN 固定 http/1.1（客户端探测 h2 时明确协商 http/1.1）
-    static const char* alpn_list[] = { "http/1.1", NULL };
+    // M31.4a/M37：ALPN 声明 h2 + http/1.1（客户端可选 HTTP/2；握手后按协商协议分发）
+    static const char* alpn_list[] = { "h2", "http/1.1", NULL };
     mbedtls_ssl_conf_alpn_protocols(conf, alpn_list);
     if (mbedtls_ssl_setup(ssl, conf) != 0) return -1;
     mbedtls_ssl_set_bio(ssl, &c->fd, mbedtls_net_send, mbedtls_net_recv, NULL);
@@ -9577,7 +9893,7 @@ static int px_parse_range(const char* r, long long size, long long* start, long 
 
 // 响应体是否应 gzip（Accept-Encoding: gzip 且为文本类）
 static int px_resp_gzipable(LXValue* headers, const char* ct, int body_len) {
-    if (body_len < 1024) return 0;
+    if (body_len < g_px_gzip_min) return 0;
     LXValue ae = px_header_get(headers, "Accept-Encoding");
     if (ae.type != PX_STR || !strstr(ae.as.obj->as.str.data, "gzip")) return 0;
     if (!ct || !*ct) return 1;
@@ -9597,6 +9913,18 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
     if (px_conn_init(&conn, fd) != 0) { return px_null(); }
     g_cur_conn = &conn;
     __sync_fetch_and_add(&g_px_inflight, 1);
+
+    // M37：TLS ALPN 协商 h2 → 直接 HTTP/2（prior knowledge 帧循环，整连接为 h2）
+    if (conn.is_tls) {
+        const char* alpn = mbedtls_ssl_get_alpn_protocol((mbedtls_ssl_context*)conn.ssl);
+        if (alpn && strcmp(alpn, "h2") == 0) {
+            px_h2_handle(&conn, 0, NULL, 0);
+            px_conn_close(&conn);
+            __sync_fetch_and_sub(&g_px_inflight, 1);
+            g_cur_conn = NULL;
+            return px_null();
+        }
+    }
 
     // M29d：keep-alive 循环——同一连接连续处理多个请求，直到客户端
     // Connection: close / 空闲超时（15s）/ 出错。
@@ -10590,6 +10918,8 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     g_px_alt_svc[0] = 0;
     g_px_log_json = 0;
     g_px_log_daily = 0;
+    g_px_gzip_level = 6;
+    g_px_gzip_min = 1024;
     if (nargs >= 4 && args[3].type == PX_DICT) {
         LXValue mb = px_dict_get(args[3], "max_body_size");
         if (mb.type == PX_INT) g_px_max_body = (int)(mb.as.i >= 1024 ? mb.as.i : 1024);
@@ -10630,6 +10960,10 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
         if (lj.type == PX_BOOL) g_px_log_json = lj.as.b ? 1 : 0;
         LXValue ld = px_dict_get(args[3], "log_daily");
         if (ld.type == PX_BOOL) g_px_log_daily = ld.as.b ? 1 : 0;
+        LXValue gl = px_dict_get(args[3], "gzip_level");
+        if (gl.type == PX_INT && gl.as.i >= 1 && gl.as.i <= 9) g_px_gzip_level = (int)gl.as.i;
+        LXValue gm = px_dict_get(args[3], "gzip_min_bytes");
+        if (gm.type == PX_INT && gm.as.i >= 1) g_px_gzip_min = (int)gm.as.i;
     }
     // docroot / timeout / port 存全局表（GC 扫描根）
     px_set_global("__px_docroot", px_str(docroot));
