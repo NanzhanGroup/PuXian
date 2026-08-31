@@ -1,0 +1,19 @@
+# M36④ 进程池：.px 脚本执行（px --worker 进程池）+ 优雅关闭验证（run_all.sh 特殊段）
+# 优雅关闭：SIGTERM 后清理 px --worker 子进程（本示例触发进程池，run_all.sh 负责 kill+检查）
+PORT = 18168
+D = "/tmp/px_m36_pool"
+mkdir(D)
+write_file(D + "/hello.px", "print('pool-grace')")
+
+def serve():
+    px_serve(PORT, D, 10000)
+spawn serve()
+sleep(400)
+
+# 触发进程池（.px 脚本执行 x3）
+for i in range(3):
+    r = http_request("http://127.0.0.1:" + str(PORT) + "/hello.px", "GET")
+    assert(r["status"] == 200 and contains(r["body"], "pool-grace"))
+
+print("pool exec x3 ok")
+print("M36_POOL_GRACE_OK")

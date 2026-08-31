@@ -1,0 +1,30 @@
+# M36③ WebSocket 服务端心跳配置化：ws_serve(port, handler, {heartbeat:{interval_ms,timeout_ms}})
+# 服务端每连接自动启用心跳（ping 保活 + 超时检测），连接长时间空闲仍可收发
+PORT = 18167
+
+def handler(conn):
+    while true:
+        msg = ws_recv(conn, 3000)
+        if msg == null:
+            break
+        ws_send(conn, "ack:" + msg)
+    print("server conn closed")
+
+def serve():
+    ws_serve(PORT, handler, {"heartbeat": {"interval_ms": 400, "timeout_ms": 3000}})
+spawn serve()
+sleep(500)
+
+c = ws_connect("ws://127.0.0.1:" + str(PORT) + "/ws")
+assert(c != null)
+
+# 客户端等待 1.5s（服务端已发约 3 次 ping 心跳）→ 连接仍可用
+sleep(1500)
+ws_send(c, "alive")
+m = ws_recv(c, 3000)
+assert(m == "ack:alive", "心跳后连接仍可收发")
+print("heartbeat keepalive:", m)
+
+ws_close(c)
+sleep(300)
+print("M36_WS_HB_OK")

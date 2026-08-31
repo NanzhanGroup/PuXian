@@ -396,6 +396,11 @@ pub enum Builtin {
     BusSubscribe,
     BusPublish,
     BusUnsubscribe,
+    // M36：请求上下文（线程局部：中间件 ctx_set 传值，handler ctx_get 读取；每请求自动清除）
+    // ctx_set(key, value) / ctx_get(key) / ctx_clear()
+    CtxSet,
+    CtxGet,
+    CtxClear,
 }
 
 impl Builtin {
@@ -567,6 +572,9 @@ impl Builtin {
             Builtin::BusSubscribe => "bus_subscribe",
             Builtin::BusPublish => "bus_publish",
             Builtin::BusUnsubscribe => "bus_unsubscribe",
+            Builtin::CtxSet => "ctx_set",
+            Builtin::CtxGet => "ctx_get",
+            Builtin::CtxClear => "ctx_clear",
         }
     }
 }

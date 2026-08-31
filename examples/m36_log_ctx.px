@@ -1,0 +1,51 @@
+# M36① 请求上下文（ctx_set/ctx_get/ctx_clear）+ 日志增强（log_json/log_daily）
+PORT = 18166
+D = "/tmp/px_m36_ctx"
+LOG = "/tmp/px_m36_access.log"
+mkdir(D)
+write_file(D + "/index.html", "CTX-OK")
+os_spawn("/bin/sh", ["-c", "rm -f /tmp/px_m36_access.log*"])
+sleep(200)
+
+# ============ 请求上下文：中间件 ctx_set → handler ctx_get（线程局部，每请求独立） ============
+def mw(req):
+    # 中间件：设置上下文（如用户/会话信息）
+    ctx_set("user", "alice")
+    ctx_set("role", "admin")
+    return null
+
+middleware(mw)
+
+def whoami(req, params):
+    return ctx_get("user") + ":" + ctx_get("role")
+route("GET", "/whoami", whoami)
+
+# 服务器：access_log JSON 格式 + 按天轮转
+def serve():
+    px_serve(PORT, D, 10000, {"access_log": LOG, "log_json": true, "log_daily": true})
+spawn serve()
+sleep(400)
+
+r = http_request("http://127.0.0.1:" + str(PORT) + "/whoami", "GET")
+assert(r["status"] == 200 and r["body"] == "alice:admin")
+print("ctx middleware->handler:", r["body"])
+
+# 静态文件（触发访问日志）
+r = http_request("http://127.0.0.1:" + str(PORT) + "/index.html", "GET")
+assert(r["status"] == 200)
+
+sleep(300)
+# 日志 JSON 格式 + 按天文件名（LOG.YYYYMMDD，UTC）
+daily_file = LOG + "." + time_format(now_ms()//1000, "%Y%m%d")
+assert(exists(daily_file), "按天日志文件")
+log = read_file(daily_file)
+lines = log.split("\n")
+json_count = 0
+for ln in lines:
+    if contains(ln, '"status"') and contains(ln, '"req"'):
+        json_count = json_count + 1
+assert(json_count >= 2, "JSON 日志行数")
+print("log json lines:", str(json_count))
+print("log file:", daily_file)
+
+print("M36_LOG_CTX_OK")

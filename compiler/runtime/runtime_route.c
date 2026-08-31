@@ -382,6 +382,14 @@ int px_route_try_dispatch(void* connp, LXValue req, const char* method, int head
             char rsp_extra[512];
             snprintf(rsp_extra, sizeof(rsp_extra), "X-Request-Id: %s\r\n", req_id);
             route_send(conn, rr.status, rr.ct, rr.body, rr.body_len, head_only, keep_alive, rsp_extra);
+            // M36：route 响应统一访问日志（与解释器 log_access 一致）
+            {
+                LXValue rmt = px_dict_get(req, "remote");
+                const char* lr = (rmt.type == PX_STR) ? rmt.as.obj->as.str.data : "-";
+                px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
+                        (long long)time(NULL), lr, method,
+                        path_v.as.obj->as.str.data, rr.status, rr.body_len, req_id);
+            }
             return 1;
         }
     }
@@ -397,5 +405,13 @@ int px_route_try_dispatch(void* connp, LXValue req, const char* method, int head
     char rsp_extra[512];
     snprintf(rsp_extra, sizeof(rsp_extra), "X-Request-Id: %s\r\n", req_id);
     route_send(conn, rr.status, rr.ct, rr.body, rr.body_len, head_only, keep_alive, rsp_extra);
+    // M36：route 响应统一访问日志（与解释器 log_access 一致）
+    {
+        LXValue rmt = px_dict_get(req, "remote");
+        const char* lr = (rmt.type == PX_STR) ? rmt.as.obj->as.str.data : "-";
+        px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
+                (long long)time(NULL), lr, method,
+                path_v.as.obj->as.str.data, rr.status, rr.body_len, req_id);
+    }
     return 1;
 }

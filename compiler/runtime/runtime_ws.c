@@ -416,12 +416,29 @@ static int ws_client_handshake_px(PxConn* c, const char* host, int port, const c
 // ==================== 语言层 API ====================
 
 // ws_serve(port, handler)：阻塞 accept 循环（Go 风格）
+// M36：服务端自动心跳配置（ws_serve opts{heartbeat:{interval_ms,timeout_ms}}）
+static long long g_ws_hb_interval = 0;
+static long long g_ws_hb_timeout = 60000;
+
 LXValue bi_ws_serve(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2 || args[0].type != PX_INT) px_error("ws_serve 需要 (port, handler) 参数");
+    // M36：ws_serve(port, handler[, opts{heartbeat:{interval_ms,timeout_ms}}])
+    if (nargs < 2 || nargs > 3 || args[0].type != PX_INT) px_error("ws_serve 需要 (port, handler[, opts]) 参数");
     LXValue handler = args[1];
     if (handler.type != PX_FUNC && handler.type != PX_NATIVE) px_error("ws_serve 的 handler 必须是函数");
     px_set_global("__ws_handler", handler);
+    // M36：心跳配置
+    g_ws_hb_interval = 0;
+    g_ws_hb_timeout = 60000;
+    if (nargs >= 3 && args[2].type == PX_DICT) {
+        LXValue hb = px_dict_get(args[2], "heartbeat");
+        if (hb.type == PX_DICT) {
+            LXValue iv = px_dict_get(hb, "interval_ms");
+            if (iv.type == PX_INT && iv.as.i > 0) g_ws_hb_interval = iv.as.i;
+            LXValue to = px_dict_get(hb, "timeout_ms");
+            if (to.type == PX_INT && to.as.i > 0) g_ws_hb_timeout = to.as.i;
+        }
+    }
     int port = (int)args[0].as.i;
     int sfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sfd < 0) px_error("ws_serve: socket 创建失败");
@@ -486,6 +503,14 @@ LXValue ws_conn_worker(LXValue* args, int nargs, void* ctx) {
     g_ws_conns[slot].hb_active = 0;
     g_ws_conns[slot].conn = c;
     pthread_mutex_unlock(&g_ws_mu);
+    // M36：服务端自动心跳（ws_serve opts{heartbeat:{interval_ms,timeout_ms}}）
+    if (g_ws_hb_interval > 0) {
+        LXValue hb_args[3];
+        hb_args[0] = px_int(conn);
+        hb_args[1] = px_int(g_ws_hb_interval);
+        hb_args[2] = px_int(g_ws_hb_timeout);
+        (void)bi_ws_heartbeat(hb_args, 3, NULL);
+    }
     // 3. 调 handler(conn)
     LXValue handler = px_get_global("__ws_handler");
     if (handler.type == PX_FUNC || handler.type == PX_NATIVE) {

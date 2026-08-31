@@ -1427,6 +1427,33 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
                 None => Err(err("bus_unsubscribe: 无效 bus id", pos)),
             }
         }
+        // ==================== M36：请求上下文（线程局部） ====================
+        // ctx_set(key, value) / ctx_get(key) / ctx_clear()
+        // 中间件/脚本处理内共享：每请求线程独立，px_serve 请求开始自动清除。
+        Builtin::CtxSet => {
+            if args.len() != 2 {
+                return Err(err("ctx_set 需要 (key, value) 参数", pos));
+            }
+            let key = expect_str(&args[0], "ctx_set", pos)?.to_string();
+            CTX.with(|c| {
+                c.borrow_mut().insert(key, args[1].clone());
+            });
+            Ok(Value::Bool(true))
+        }
+        Builtin::CtxGet => {
+            if args.len() != 1 {
+                return Err(err("ctx_get 需要 (key) 参数", pos));
+            }
+            let key = expect_str(&args[0], "ctx_get", pos)?;
+            Ok(CTX.with(|c| c.borrow().get(key).cloned().unwrap_or(Value::Null)))
+        }
+        Builtin::CtxClear => {
+            if !args.is_empty() {
+                return Err(err("ctx_clear 不需要参数", pos));
+            }
+            CTX.with(|c| c.borrow_mut().clear());
+            Ok(Value::Bool(true))
+        }
         Builtin::GenNext => {
             if args.len() != 1 {
                 return Err(err("gen_next 需要一个参数", pos));
@@ -2241,14 +2268,32 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
         // ==================== M22 P1：WebSocket（RFC 6455） ====================
         // M27：tls_server(cert, key) 注册后 ws_serve 自动 WSS（TLS 握手后跑 WS 协议）
         Builtin::WsServe => {
-            if args.len() != 2 {
-                return Err(err("ws_serve 需要 (port, handler) 参数", pos));
+            // M36：ws_serve(port, handler[, opts{heartbeat:{interval_ms,timeout_ms}}]) 自动心跳
+            if args.len() < 2 || args.len() > 3 {
+                return Err(err("ws_serve 需要 (port, handler[, opts]) 参数", pos));
             }
             let port = expect_int(&args[0], "ws_serve", pos)?;
             let handler = args[1].clone();
             if !matches!(handler, Value::Func(_)) {
                 return Err(err("ws_serve 的 handler 必须是函数", pos));
             }
+            // M36：heartbeat 配置（服务端每连接自动启用心跳）
+            let hb_interval = args.get(2).and_then(|o| match o {
+                Value::Dict(d) => d
+                    .lock()
+                    .unwrap()
+                    .get("heartbeat")
+                    .and_then(|v| if let Value::Dict(h) = v { Some(h.lock().unwrap().get("interval_ms").and_then(|x| if let Value::Int(i) = x { Some(*i) } else { None }).unwrap_or(0)) } else { None }),
+                _ => None,
+            });
+            let hb_timeout = args.get(2).and_then(|o| match o {
+                Value::Dict(d) => d
+                    .lock()
+                    .unwrap()
+                    .get("heartbeat")
+                    .and_then(|v| if let Value::Dict(h) = v { Some(h.lock().unwrap().get("timeout_ms").and_then(|x| if let Value::Int(i) = x { Some(*i) } else { None }).unwrap_or(0)) } else { None }),
+                _ => None,
+            });
             let addr = format!("0.0.0.0:{}", port);
             let listener = TcpListener::bind(&addr)
                 .map_err(|e| LxError::new("R3010", format!("net: 监听端口失败 {}: {}", addr, e), Some(pos)))?;
@@ -2268,12 +2313,19 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
                 }
                 let h = handler.clone();
                 let mut ci = srv.fork();
+                let hbi = hb_interval.unwrap_or(0);
+                let hbt = hb_timeout.unwrap_or(0);
                 std::thread::spawn(move || {
                     // 注册连接（读写独立句柄）
                     let id = match conn.try_clone() {
                         Ok(w) => crate::ws::ws_register(conn, w),
                         Err(_) => return,
                     };
+                    // M36：服务端自动心跳（opts{heartbeat:{interval_ms,timeout_ms}}）
+                    if hbi > 0 {
+                        let hb_id = id;
+                        let _ = crate::ws::ws_heartbeat(hb_id, hbi, hbt);
+                    }
                     // 调 handler(conn)：handler 内 ws_recv 阻塞读 / ws_send 推送
                     let arg = Value::Int(id);
                     if let Err(e) = ci.call_value(&h, &[arg], pos) {
@@ -3449,6 +3501,16 @@ fn event_buses() -> &'static Mutex<HashMap<i64, Arc<Mutex<HashMap<String, Vec<Va
     EVENT_BUSES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 static BUS_NEXT: AtomicI64 = AtomicI64::new(1);
+
+// ==================== M36：请求上下文（线程局部） ====================
+std::thread_local! {
+    static CTX: std::cell::RefCell<HashMap<String, Value>> = std::cell::RefCell::new(HashMap::new());
+}
+
+/// 请求开始/结束时清除上下文（px_serve 调用；防跨请求泄漏）
+pub fn ctx_clear_all() {
+    CTX.with(|c| c.borrow_mut().clear());
+}
 
 // ==================== M34：惰性生成器辅助（单层 for 延迟求值） ====================
 /// 惰性 seq 取第 i 个元素（list 索引 / range 逐数计算，不展开）

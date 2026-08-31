@@ -402,6 +402,10 @@ impl Interpreter {
             ("bus_subscribe", Builtin::BusSubscribe),
             ("bus_publish", Builtin::BusPublish),
             ("bus_unsubscribe", Builtin::BusUnsubscribe),
+            // M36：请求上下文（线程局部）
+            ("ctx_set", Builtin::CtxSet),
+            ("ctx_get", Builtin::CtxGet),
+            ("ctx_clear", Builtin::CtxClear),
         ];
         for (n, b) in names {
             g.define(n, Value::Builtin(*b));

@@ -449,6 +449,10 @@ pub struct PxServeOpts {
     pub access_log: Option<String>,
     /// M33：HTTP/3 通告（Alt-Svc 响应头值；如 "h3=\":443\""；None = 不发）
     pub alt_svc: Option<String>,
+    /// M36：access log JSON 行格式（{ts,remote,method,path,status,bytes,ms,req}）
+    pub log_json: bool,
+    /// M36：access log 按天轮转（文件名带日期 YYYYMMDD 后缀）
+    pub log_daily: bool,
 }
 
 /// M35：多维度限流配置
@@ -472,6 +476,8 @@ impl Default for PxServeOpts {
             rate_limit: None,
             access_log: None,
             alt_svc: None,
+            log_json: false,
+            log_daily: false,
         }
     }
 }
@@ -530,6 +536,12 @@ pub fn parse_opts(opts: Option<&Value>, timeout_ms: i64) -> PxServeOpts {
         if let Some(Value::Str(s)) = d.get("alt_svc") {
             o.alt_svc = Some(s.clone());
         }
+        if let Some(Value::Bool(b)) = d.get("log_json") {
+            o.log_json = *b;
+        }
+        if let Some(Value::Bool(b)) = d.get("log_daily") {
+            o.log_daily = *b;
+        }
     }
     o
 }
@@ -553,7 +565,7 @@ pub fn px_serve(port: i64, docroot: &str, timeout_ms: i64, opts: Option<&Value>)
     let _ = listener.set_nonblocking(true);
     let tls = crate::tls::tls_server_configured();
     // M33：启动时配置 access log 落盘 + Alt-Svc 通告
-    set_access_log(o.access_log.clone());
+    set_access_log(o.access_log.clone(), o.log_json, o.log_daily);
     set_alt_svc(o.alt_svc.clone());
     eprintln!(
         "[px-serve] 普贤应用服务器 docroot={} 端口={} 超时={}ms tls={} max_body={}B max_conn={}",
@@ -771,6 +783,8 @@ fn handle_one_request(
     keep_alive: bool,
     vhandler: Option<Value>,
 ) -> Result<bool, String> {
+    // M36：每请求清除线程局部上下文（防跨请求泄漏）
+    crate::builtin::ctx_clear_all();
     let path = req_str(req, "path").unwrap_or_else(|| "/".to_string());
     let req_id = new_request_id();
     // M29：请求 ID 注入 REQUEST + 响应头 X-Request-Id（链路追踪）
@@ -956,15 +970,46 @@ const ACCESS_LOG_MAX: u64 = 10 * 1024 * 1024;
 #[derive(Clone)]
 struct AccessLogState {
     path: String,
+    /// M36：JSON 行格式
+    json: bool,
+    /// M36：按天轮转（文件名带日期后缀）
+    daily: bool,
+    /// 当前日期（daily 用，YYYYMMDD）
+    day: String,
 }
 static ACCESS_LOG: OnceLock<Mutex<Option<AccessLogState>>> = OnceLock::new();
 fn access_log_state() -> &'static Mutex<Option<AccessLogState>> {
     ACCESS_LOG.get_or_init(|| Mutex::new(None))
 }
 
-/// px_serve 启动时配置 access log 落盘路径
-pub fn set_access_log(path: Option<String>) {
-    *access_log_state().lock().unwrap() = path.map(|p| AccessLogState { path: p });
+/// 当前日期 YYYYMMDD（UTC 民用日历）
+fn today_str() -> String {
+    let t = now_secs() as i64;
+    let (y, m, d) = crate::tztime::civil_from_days(t / 86400);
+    format!("{:04}{:02}{:02}", y, m, d)
+}
+
+/// px_serve 启动时配置 access log 落盘路径 + 格式（JSON / 按天轮转）
+pub fn set_access_log(path: Option<String>, json: bool, daily: bool) {
+    *access_log_state().lock().unwrap() = path.map(|p| AccessLogState {
+        path: p,
+        json,
+        daily,
+        day: today_str(),
+    });
+}
+
+/// 当前落盘文件路径（daily 时带日期后缀；跨天切换）
+fn access_log_file(st: &mut AccessLogState) -> String {
+    if st.daily {
+        let t = today_str();
+        if t != st.day {
+            st.day = t;
+        }
+        format!("{}.{}", st.path, st.day)
+    } else {
+        st.path.clone()
+    }
 }
 
 fn access_log_rotate(state: &AccessLogState) {
@@ -985,15 +1030,23 @@ fn access_log_rotate(state: &AccessLogState) {
 
 fn log_access(req_id: &str, remote: &str, method: &str, path: &str, status: i64, bytes: usize, ms: u128) {
     let t = now_secs();
-    let line = format!(
-        "[px-access] {} {} {} {} {} {} {}ms req={}\n",
-        t, remote, method, path, status, bytes, ms, req_id
-    );
+    let mut st = access_log_state().lock().unwrap().clone();
+    let line = match &st {
+        Some(s) if s.json => format!(
+            "{{\"ts\":{},\"remote\":\"{}\",\"method\":\"{}\",\"path\":\"{}\",\"status\":{},\"bytes\":{},\"ms\":{},\"req\":\"{}\"}}\n",
+            t, remote, method, path, status, bytes, ms, req_id
+        ),
+        _ => format!(
+            "[px-access] {} {} {} {} {} {} {}ms req={}\n",
+            t, remote, method, path, status, bytes, ms, req_id
+        ),
+    };
     eprint!("{}", line);
-    // M33：落盘（追加 + 轮转）
-    if let Some(st) = access_log_state().lock().unwrap().clone() {
+    // M33/M36：落盘（追加 + 大小轮转 + 按天切换）
+    if let Some(mut st) = st {
         access_log_rotate(&st);
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&st.path) {
+        let file = access_log_file(&mut st);
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&file) {
             use std::io::Write;
             let _ = f.write_all(line.as_bytes());
         }

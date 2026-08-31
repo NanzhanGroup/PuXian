@@ -94,6 +94,9 @@ static int g_px_rate_whitelist_n = 0;
 // M33：access log 落盘路径（px_serve opts{access_log}；空 = 仅 stderr）+ Alt-Svc 通告
 char g_px_access_log[1024] = {0};
 char g_px_alt_svc[256] = {0};
+// M36：access log JSON 行格式 + 按天轮转（日期后缀）
+int g_px_log_json = 0;
+int g_px_log_daily = 0;
 // 虚拟主机表（vhost(host, docroot|handler)）
 #define MAX_VHOSTS 32
 typedef struct {
@@ -161,6 +164,10 @@ static LXValue bi_event_bus(LXValue* args, int nargs, void* ctx);
 static LXValue bi_bus_subscribe(LXValue* args, int nargs, void* ctx);
 static LXValue bi_bus_publish(LXValue* args, int nargs, void* ctx);
 static LXValue bi_bus_unsubscribe(LXValue* args, int nargs, void* ctx);
+// M36：请求上下文（线程局部）
+static LXValue bi_ctx_set(LXValue* args, int nargs, void* ctx);
+static LXValue bi_ctx_get(LXValue* args, int nargs, void* ctx);
+static LXValue bi_ctx_clear(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_get(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_post(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_serve(LXValue* args, int nargs, void* ctx);
@@ -2298,8 +2305,10 @@ static LXValue bi_trim(LXValue* args, int nargs, void* ctx) {
 
 static LXValue bi_now_ms(LXValue* args, int nargs, void* ctx) {
     (void)args; (void)nargs; (void)ctx;
+    // M36 修复：C 端 now_ms 用 CLOCK_REALTIME（Unix 毫秒），与解释器 SystemTime 一致
+    // （原用 CLOCK_MONOTONIC 导致双模式时间基准不一致：now_ms()/1000 无法算日期）
     struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
+    clock_gettime(CLOCK_REALTIME, &ts);
     return px_int((int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000L);
 }
 
@@ -4289,6 +4298,10 @@ void px_register_builtins(void) {
     px_set_global("bus_subscribe", px_native("bus_subscribe", bi_bus_subscribe));
     px_set_global("bus_publish", px_native("bus_publish", bi_bus_publish));
     px_set_global("bus_unsubscribe", px_native("bus_unsubscribe", bi_bus_unsubscribe));
+    // M36：请求上下文（线程局部）
+    px_set_global("ctx_set", px_native("ctx_set", bi_ctx_set));
+    px_set_global("ctx_get", px_native("ctx_get", bi_ctx_get));
+    px_set_global("ctx_clear", px_native("ctx_clear", bi_ctx_clear));
     px_set_global("http_get", px_native("http_get", bi_http_get));
     px_set_global("http_post", px_native("http_post", bi_http_post));
     px_set_global("http_serve", px_native("http_serve", bi_http_serve));
@@ -5568,6 +5581,46 @@ static LXValue bi_tcp_close(LXValue* args, int nargs, void* ctx) {
     if (nargs != 1 || args[0].type != PX_INT) px_error("tcp_close 需要 (id) 参数");
     close((int)args[0].as.i);
     return px_null();
+}
+
+
+// ==================== M36：请求上下文（线程局部；与解释器 builtin.rs 一致） ====================
+// ctx_set(key, value) / ctx_get(key) / ctx_clear()
+// 线程局部（__thread）：每请求线程独立，px_conn_worker 请求开始自动清除
+#define PX_CTX_MAX 64
+static __thread char g_px_ctx_keys[PX_CTX_MAX][64];
+static __thread LXValue g_px_ctx_vals[PX_CTX_MAX];
+static __thread int g_px_ctx_n = 0;
+
+static LXValue bi_ctx_set(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2 || args[0].type != PX_STR) px_error("ctx_set 需要 (key, value) 参数");
+    const char* key = args[0].as.obj->as.str.data;
+    for (int i = 0; i < g_px_ctx_n; i++) {
+        if (strcmp(g_px_ctx_keys[i], key) == 0) { g_px_ctx_vals[i] = args[1]; return px_bool(true); }
+    }
+    if (g_px_ctx_n >= PX_CTX_MAX) px_error("ctx_set: 上下文条目超出上限 %d", PX_CTX_MAX);
+    snprintf(g_px_ctx_keys[g_px_ctx_n], sizeof(g_px_ctx_keys[0]), "%s", key);
+    g_px_ctx_vals[g_px_ctx_n] = args[1];
+    g_px_ctx_n++;
+    return px_bool(true);
+}
+
+static LXValue bi_ctx_get(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_STR) px_error("ctx_get 需要 (key) 参数");
+    const char* key = args[0].as.obj->as.str.data;
+    for (int i = 0; i < g_px_ctx_n; i++) {
+        if (strcmp(g_px_ctx_keys[i], key) == 0) return g_px_ctx_vals[i];
+    }
+    return px_null();
+}
+
+static LXValue bi_ctx_clear(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 0) px_error("ctx_clear 不需要参数");
+    g_px_ctx_n = 0;
+    return px_bool(true);
 }
 
 // ==================== M33：UDP 基础设施（HTTP/3/QUIC 预研；与解释器 builtin.rs 一致） ====================
@@ -9374,31 +9427,62 @@ static LXValue bi_basic_auth(LXValue* args, int nargs, void* ctx) {
 
 // M33：结构化访问日志落盘——stderr 输出 + 写文件（px_serve opts{access_log}）+ 大小轮转
 #define PX_ACCESS_LOG_MAX (10 * 1024 * 1024)
+// M36：普通行 → JSON 行（[px-access] ts remote method path status bytes ms req=id）
+static void px_access_log_jsonify(const char* line, char* out, size_t n) {
+    long long ts = 0, status = 0, bytes = 0;
+    char remote[128] = "", method[32] = "", path[512] = "", ms[32] = "", req[128] = "";
+    sscanf(line, "[px-access] %lld %127s %31s %511s %lld %lld %31s req=%127s",
+           &ts, remote, method, path, &status, &bytes, ms, req);
+    snprintf(out, n,
+             "{\"ts\":%lld,\"remote\":\"%s\",\"method\":\"%s\",\"path\":\"%s\","
+             "\"status\":%lld,\"bytes\":%lld,\"ms\":%s,\"req\":\"%s\"}\n",
+             ts, remote, method, path, status, bytes, ms, req);
+}
+
 void px_access_log(const char* fmt, ...) {
     char line[2048];
+    char out_line[2048];
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(line, sizeof(line), fmt, ap);
     va_end(ap);
-    fputs(line, stderr);
+    // M36：JSON 行格式（从普通行转 JSON，供 log_json:true 使用）
+    if (g_px_log_json && strncmp(line, "[px-access]", 11) == 0) {
+        px_access_log_jsonify(line, out_line, sizeof(out_line));
+        fputs(out_line, stderr);
+    } else {
+        fputs(line, stderr);
+    }
     if (!g_px_access_log[0]) return;
+    // M36：按天轮转——文件名带日期后缀（YYYYMMDD）
+    char logpath[1100];
+    if (g_px_log_daily) {
+        time_t now = time(NULL);
+        struct tm tmv;
+        gmtime_r(&now, &tmv);
+        snprintf(logpath, sizeof(logpath), "%s.%04d%02d%02d", g_px_access_log,
+                 tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday);
+    } else {
+        snprintf(logpath, sizeof(logpath), "%s", g_px_access_log);
+    }
     // 轮转：>10MB → .1/.2/.3（保留 3 份）
     struct stat st;
-    if (stat(g_px_access_log, &st) == 0 && st.st_size > PX_ACCESS_LOG_MAX) {
+    if (stat(logpath, &st) == 0 && st.st_size > PX_ACCESS_LOG_MAX) {
         for (int i = 3; i >= 1; i--) {
             char src[1100], dst[1100];
             if (i == 1) {
-                snprintf(src, sizeof(src), "%s", g_px_access_log);
+                snprintf(src, sizeof(src), "%s", logpath);
             } else {
-                snprintf(src, sizeof(src), "%s.%d", g_px_access_log, i - 1);
+                snprintf(src, sizeof(src), "%s.%d", logpath, i - 1);
             }
-            snprintf(dst, sizeof(dst), "%s.%d", g_px_access_log, i);
+            snprintf(dst, sizeof(dst), "%s.%d", logpath, i);
             if (access(src, F_OK) == 0) rename(src, dst);
         }
     }
-    int fd = open(g_px_access_log, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    int fd = open(logpath, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd >= 0) {
-        (void)write(fd, line, strlen(line));
+        const char* w = g_px_log_json ? out_line : line;
+        (void)write(fd, w, strlen(w));
         close(fd);
     }
 }
@@ -9596,6 +9680,8 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         // M29c：请求 ID（X-Request-Id 链路追踪）
         char req_id[64];
         px_new_req_id(req_id, sizeof(req_id));
+        // M36：每请求清除线程局部上下文（防跨请求泄漏）
+        g_px_ctx_n = 0;
 
         // 4. 读 body（M27：max_body_size 限制 → 413；>1MB 落盘临时文件防内存溢出）
         int body_len = 0;
@@ -10502,6 +10588,8 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     g_px_rate_whitelist_n = 0;
     g_px_access_log[0] = 0;
     g_px_alt_svc[0] = 0;
+    g_px_log_json = 0;
+    g_px_log_daily = 0;
     if (nargs >= 4 && args[3].type == PX_DICT) {
         LXValue mb = px_dict_get(args[3], "max_body_size");
         if (mb.type == PX_INT) g_px_max_body = (int)(mb.as.i >= 1024 ? mb.as.i : 1024);
@@ -10538,6 +10626,10 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
         LXValue asvc = px_dict_get(args[3], "alt_svc");
         if (asvc.type == PX_STR) snprintf(g_px_alt_svc, sizeof(g_px_alt_svc), "%s",
                                           asvc.as.obj->as.str.data);
+        LXValue lj = px_dict_get(args[3], "log_json");
+        if (lj.type == PX_BOOL) g_px_log_json = lj.as.b ? 1 : 0;
+        LXValue ld = px_dict_get(args[3], "log_daily");
+        if (ld.type == PX_BOOL) g_px_log_daily = ld.as.b ? 1 : 0;
     }
     // docroot / timeout / port 存全局表（GC 扫描根）
     px_set_global("__px_docroot", px_str(docroot));
@@ -10601,6 +10693,39 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
         nanosleep(&ts, NULL);
     }
     fprintf(stderr, "[px-serve] 优雅关闭完成（在途 %d）\n", g_px_inflight);
+    // M36：进程池优雅关闭——清理 .px 执行进程池 worker（px --worker 子进程）
+    // 先 SIGTERM（让 worker 有机会结束当前任务），短暂等待后 SIGKILL 兜底，避免孤儿进程
+    if (g_px_pool_ready) {
+        pthread_mutex_lock(&g_px_pool_mu);
+        for (int i = 0; i < g_px_pool_size; i++) {
+            if (g_px_pool[i].alive && g_px_pool[i].pid > 0) kill(g_px_pool[i].pid, SIGTERM);
+        }
+        pthread_mutex_unlock(&g_px_pool_mu);
+        // 等待 worker 退出（最多 3s）
+        for (int i = 0; i < 60; i++) {
+            int any = 0;
+            pthread_mutex_lock(&g_px_pool_mu);
+            for (int j = 0; j < g_px_pool_size; j++) {
+                if (g_px_pool[j].alive && g_px_pool[j].pid > 0) { any = 1; break; }
+            }
+            pthread_mutex_unlock(&g_px_pool_mu);
+            if (!any) break;
+            struct timespec ts = {0, 50 * 1000 * 1000};
+            nanosleep(&ts, NULL);
+        }
+        // 强制清理残留
+        pthread_mutex_lock(&g_px_pool_mu);
+        for (int i = 0; i < g_px_pool_size; i++) {
+            if (g_px_pool[i].alive && g_px_pool[i].pid > 0) {
+                kill(g_px_pool[i].pid, SIGKILL);
+                if (g_px_pool[i].in_fd > 0) close(g_px_pool[i].in_fd);
+                if (g_px_pool[i].out_fd > 0) close(g_px_pool[i].out_fd);
+                g_px_pool[i].alive = 0;
+            }
+        }
+        g_px_pool_ready = 0;
+        pthread_mutex_unlock(&g_px_pool_mu);
+    }
     return px_null();
 }
 
