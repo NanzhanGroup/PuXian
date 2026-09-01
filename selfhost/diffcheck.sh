@@ -196,7 +196,71 @@ check_file() {
     fi
 }
 
+# ---- M-B5：值系统/作用域/模块对拍 ----
+#   解释器执行 value/env/module 用例（v0*.px），断言全 [PASS] 无 [FAIL]/运行时错误
+#   --build：额外编译并运行编译版（双模式验证）
+prepare_m5_modtest() {
+    # v03_module.px 依赖的临时目录结构（对齐 Rust module.rs 测试场景）
+    local d=/tmp/px_m5_modtest
+    if [ ! -d "$d" ]; then
+        mkdir -p "$d/pkg" "$d/lib" "$d/stdlib"
+        echo 'def mylib_fn(): return 1' > "$d/mylib.px"
+        echo 'def tool(): return 2' > "$d/pkg/tools.px"
+        echo 'def libfn(): return 3' > "$d/lib/mod.px"
+        echo 'def unique(): return 4' > "$d/stdlib/collections.px"
+    fi
+}
+
+check_value_case() {
+    local f="$1" mode="$2"
+    local base; base="$(basename "$f" .px)"
+    echo "── value 对拍: $f ($mode)"
+    local out
+    if [ "$mode" = "build" ]; then
+        local bdir; bdir="$(dirname "$f")/build"
+        if ! "$PX" build "$f" >/dev/null 2>&1; then
+            echo "    ❌ $base 编译失败"
+            return 1
+        fi
+        out=$("$bdir/$base" 2>&1)
+    else
+        out=$("$PX" run "$f" 2>&1)
+    fi
+    local fails errs passes
+    fails=$(echo "$out" | grep -cE '^\[FAIL\]' || true)
+    errs=$(echo "$out" | grep -cE '运行时错误|错误 \[' || true)
+    passes=$(echo "$out" | grep -cE '^\[PASS\]' || true)
+    if [ "$fails" = "0" ] && [ "$errs" = "0" ]; then
+        echo "    ✅ $base $passes PASS"
+        return 0
+    else
+        echo "    ❌ $base：$fails FAIL / $errs 错误"
+        echo "$out" | grep -E '^\[FAIL\]|运行时错误|错误 \[' | head -5
+        return 1
+    fi
+}
+
 # ---- 入口 ----
+if [ "${1:-}" = "--value" ]; then
+    VAL_MODE="run"
+    shift
+    if [ "${1:-}" = "--build" ]; then VAL_MODE="build"; shift; fi
+    prepare_m5_modtest
+    fail=0
+    echo "── 值系统对拍（M-B5，value/env/module）──"
+    for f in "$(dirname "$0")"/cases/v0*.px; do
+        [ -e "$f" ] || continue
+        check_value_case "$f" "$VAL_MODE" || fail=1
+    done
+    if [ "$fail" = "0" ]; then
+        echo "值系统对拍全部通过 ✅"
+        exit 0
+    else
+        echo "存在失败 ❌"
+        exit 1
+    fi
+fi
+
 if [ "${1:-}" = "--errors" ]; then
     shift
     fail=0
@@ -223,7 +287,9 @@ if [ "${1:-}" = "--parser" ]; then
         check_parser_file "$1"
     else
         for f in "$(dirname "$0")"/cases/*.px; do
-            [ -e "$f" ] && check_parser_file "$f"
+            [ -e "$f" ] || continue
+            case "$(basename "$f")" in v0*.px) continue;; esac  # M-B5 用例走 --value
+            check_parser_file "$f"
         done
     fi
     exit 0
@@ -237,7 +303,9 @@ if [ "${1:-}" = "--lexer" ]; then
         check_lexer_file "$1" "$LEXER_MODE"
     else
         for f in "$(dirname "$0")"/cases/*.px; do
-            [ -e "$f" ] && check_lexer_file "$f" "$LEXER_MODE"
+            [ -e "$f" ] || continue
+            case "$(basename "$f")" in v0*.px) continue;; esac  # M-B5 用例走 --value
+            check_lexer_file "$f" "$LEXER_MODE"
         done
     fi
     exit 0

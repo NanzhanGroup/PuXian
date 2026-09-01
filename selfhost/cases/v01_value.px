@@ -1,0 +1,249 @@
+# ============================================================
+# M-B5 对拍用例 v01：值系统（value.px）vs 内置行为
+# 运行: px run selfhost/cases/v01_value.px
+# 断言 v_type/v_str/v_eq/v_cmp/v_arith/v_truthy 与 Rust 内置逐字节一致
+# 输出 [PASS]/[FAIL]，diffcheck --value 检查全 PASS
+# ============================================================
+import "../value.px"
+
+# ---- 对拍框架 ----
+let g_pass = 0
+let g_fail = 0
+
+def check(name, cond):
+    if cond:
+        g_pass += 1
+        print("[PASS] " + name)
+    else:
+        g_fail += 1
+        print("[FAIL] " + name)
+
+# 通用断言：内置 str(v) vs v_str(v)；内置 type(v) vs v_type(v)
+def check_value(name, v):
+    check(name + " v_type", v_type(v) == type(v))
+    check(name + " v_str", v_str(v) == str(v))
+
+# ============================================================
+print("== v_type / v_str 原子类型 ==")
+check_value("int", 42)
+check_value("neg int", -7)
+check_value("float 整", 3.0)
+check_value("float 小", 3.14)
+check_value("float 大", 1e15)
+check_value("float 超大", 1e16)
+check_value("float 负", -2.5)
+check_value("float 0.5", 0.5)
+check_value("float sci", 1.5e10)
+# inf/-inf：运行时生成（超大浮点字面量在编译模式 C 字面量溢出，见 MINI_SUBSET §八）
+let bigv = 1e16
+let f_inf = bigv
+for i in range(40):
+    f_inf = f_inf * bigv
+check_value("float inf", f_inf)
+check_value("float -inf", 0 - f_inf)
+check_value("float 0.0", 0.0)
+check_value("float -0.0", -0.0)
+check_value("float tiny", 1e-10)
+check_value("str", "hello")
+check_value("str 中文", "普贤px")
+check_value("str 转义", "a\"b\\c\nd\te")
+check_value("bool true", true)
+check_value("bool false", false)
+check_value("null", null)
+check_value("int max", 9223372036854775807)
+
+# ============================================================
+print("== v_str 容器 ==")
+check_value("list", [1, 2.5, "a", true, null])
+check_value("list 空", [])
+check_value("list 嵌套", [1, [2, 3], {"k": [4, 5]}])
+check_value("list 字符串元素", ["a\"b", "x\ny"])
+check_value("tuple", (1, "x"))
+check_value("tuple 单元素", (1,))
+check_value("tuple 空", ())
+check_value("dict", {"b": 2, "a": 1})
+check_value("dict 键排序边界", {"a": 1, "a1": 2})
+check_value("dict 键排序2", {"ab": 1, "a": 2})
+check_value("dict 嵌套", {"a": {"b": 1}, "c": [1, 2]})
+check_value("dict 多键", {"z": 1, "y": 2, "a": 3})
+# 空 dict（{} 字面量是空块=null，用占位创建）
+let ed = {"_": 0}
+ed.remove("_")
+check_value("dict 空", ed)
+check_value("range", range(1, 5, 2))
+check_value("range 默认", range(3))
+check_value("gen", (x for x in [1, 2, 3]))
+check_value("闭包 fn", fn(x) { x * 2 })
+check_value("builtin", print)
+
+# ============================================================
+print("== v_type 对象类型 ==")
+enum Color:
+    Red
+    Green
+    Blue
+struct Point:
+    x: int
+    y: int
+check_value("enum 值", Color.Red)
+check_value("enum type", Color.Green)
+check_value("struct 实例", Point(1, 2))
+check_value("struct type", Point(3, 4))
+# 注：类型对象（type(Color)）编译模式不可用（codegen 不注册类型名到全局），
+#     见 MINI_SUBSET §八；此处跳过
+check_value("result Ok", Ok(42))
+check_value("result Err", Err("bad"))
+check_value("result 嵌套", Ok([1, 2]))
+
+# ============================================================
+print("== v_eq 相等矩阵 ==")
+def check_eq(name, a, b, expect):
+    check(name + " v_eq", v_eq(a, b) == expect)
+    check(name + " 内置", (a == b) == expect)
+
+check_eq("int==int", 1, 1, true)
+check_eq("int!=int", 1, 2, false)
+check_eq("int==float", 1, 1.0, true)
+check_eq("int!=float", 1, 1.5, false)
+check_eq("float==float", 2.5, 2.5, true)
+check_eq("str==str", "a", "a", true)
+check_eq("null==null", null, null, true)
+check_eq("bool==bool", true, true, true)
+check_eq("bool!=int", true, 1, false)
+check_eq("list==list", [1, 2], [1, 2], true)
+check_eq("list!=list", [1], [2], false)
+check_eq("list 嵌套", [1, [2]], [1, [2]], true)
+check_eq("list 嵌套不等", [1, [2]], [1, [3]], false)
+check_eq("dict==dict", {"a": 1}, {"a": 1}, true)
+check_eq("dict!=dict", {"a": 1}, {"a": 2}, false)
+check_eq("dict 键序无关", {"a": 1, "b": 2}, {"b": 2, "a": 1}, true)
+check_eq("enum==enum", Color.Red, Color.Red, true)
+check_eq("enum!=enum", Color.Red, Color.Blue, false)
+check_eq("Ok==Ok", Ok(1), Ok(1), true)
+check_eq("Ok!=Err", Ok(1), Err(1), false)
+check_eq("tuple==tuple", (1, 2), (1, 2), true)
+check_eq("str!=int", "1", 1, false)
+
+# ============================================================
+print("== v_cmp 顺序比较 ==")
+def check_cmp(name, a, b, expect):
+    let r = v_cmp(a, b)
+    check(name + " v_cmp", r == expect)
+    # 内置对照：< > 组合
+    if expect == -1:
+        check(name + " 内置<", (a < b) == true and (a > b) == false)
+    elif expect == 1:
+        check(name + " 内置>", (a > b) == true and (a < b) == false)
+    else:
+        check(name + " 内置==", (a < b) == false and (a > b) == false)
+
+check_cmp("int<int", 1, 2, -1)
+check_cmp("int>int", 3, 2, 1)
+check_cmp("int==int", 5, 5, 0)
+check_cmp("int<float", 1, 1.5, -1)
+check_cmp("float<int", 2.5, 2, 1)
+check_cmp("float<float", 1.0, 1.0, 0)
+check_cmp("str<str", "abc", "abd", -1)
+check_cmp("str>str", "z", "a", 1)
+check_cmp("负数", -3, -2, -1)
+check_cmp("负float", -1.5, -1.0, -1)
+
+# 不支持比较的类型 → null（对齐 bin_compare 报错前的检测）
+check("list cmp 不支持", v_cmp([1], [2]) == null)
+check("dict cmp 不支持", v_cmp({"a": 1}, {"a": 1}) == null)
+check("bool cmp 不支持", v_cmp(true, false) == null)
+check("null cmp 不支持", v_cmp(null, null) == null)
+
+# ============================================================
+print("== v_arith 算术 ==")
+def check_arith(name, op, a, b, expect):
+    let r = v_arith(op, a, b)
+    if r["ok"]:
+        check(name + " v_arith", r["v"] == expect)
+        check(name + " str", str(r["v"]) == str(expect))
+    else:
+        check(name + " v_arith 错误", false)
+
+check_arith("int+int", "+", 7, 2, 9)
+check_arith("int+float", "+", 1, 2.5, 3.5)
+check_arith("float+float", "+", 1.5, 2.5, 4.0)
+check_arith("str+str", "+", "a", "b", "ab")
+check_arith("list+list", "+", [1, 2], [3], [1, 2, 3])
+check_arith("int-int", "-", 7, 2, 5)
+check_arith("int*int", "*", 7, 2, 14)
+check_arith("int/int", "/", 7, 2, 3.5)
+check_arith("int//int", "//", 7, 2, 3)
+check_arith("neg//", "//", -7, 2, -4)
+check_arith("neg//2", "//", 7, -2, -3)
+check_arith("int%int", "%", 7, 3, 1)
+check_arith("neg%", "%", -7, 3, 2)
+check_arith("pow", "**", 2, 10, 1024)
+check_arith("pow 负指数", "**", 2, -1, 0.5)
+# pow 溢出转 float：与语言级 10**20 一致（避免超大浮点字面量）
+let rb_big = v_arith("**", 10, 20)
+let native_big = 10 ** 20
+check("pow 大 ok", rb_big["ok"])
+check("pow 大 值一致", str(rb_big["v"]) == str(native_big))
+check_arith("shl", "<<", 1, 4, 16)
+check_arith("shr", ">>", 16, 2, 4)
+check_arith("shru", ">>>", -1, 1, 9223372036854775807)
+check_arith("and", "&", 5, 3, 1)
+check_arith("or", "|", 5, 3, 7)
+check_arith("xor", "^", 5, 3, 6)
+check_arith("float+int", "+", 2.5, 1, 3.5)
+check_arith("float*float", "*", 2.5, 2.0, 5.0)
+check_arith("float/", "/", 7.0, 2, 3.5)
+check_arith("float//", "//", 5.5, 2, 2)
+check_arith("float//neg", "//", -5.5, 2, -3)
+check_arith("float%", "%", 5.5, 2, 1.5)
+check_arith("float**", "**", 2.0, 0.5, 1.4142135623730951)
+
+# 错误场景
+def check_arith_err(name, op, a, b):
+    let r = v_arith(op, a, b)
+    check(name + " 报错", not r["ok"])
+
+check_arith_err("div by zero int", "/", 7, 0)
+check_arith_err("idiv by zero", "//", 7, 0)
+check_arith_err("mod by zero", "%", 7, 0)
+check_arith_err("div by zero float", "/", 7.0, 0.0)
+check_arith_err("str*int 不支持", "*", "ab", 3)
+check_arith_err("int+str 不支持", "+", 1, "a")
+check_arith_err("str+int 不支持", "+", "a", 1)
+check_arith_err("list+int 不支持", "+", [1], 1)
+check_arith_err("str>> 不支持", ">>", "a", 1)
+check_arith_err("float&int 位运算不支持", "&", 1.5, 1)
+check_arith_err("dict+dict 不支持", "+", {"a": 1}, {"b": 2})
+
+# 除零错误消息对齐
+let r0 = v_arith("/", 7, 0)
+check("除零错误消息", not r0["ok"] and r0["err"] == "除零错误")
+let r1 = v_arith("+", 1, "a")
+check("+ 不支持消息", not r1["ok"] and r1["err"] == "+ 不支持: int + string")
+
+# ============================================================
+print("== v_truthy 真值 ==")
+def check_truthy(name, v, expect):
+    check(name + " v_truthy", v_truthy(v) == expect)
+    check(name + " 内置bool", bool(v) == expect)
+
+check_truthy("null", null, false)
+check_truthy("false", false, false)
+check_truthy("true", true, true)
+check_truthy("0", 0, false)
+check_truthy("1", 1, true)
+check_truthy("-1", -1, true)
+check_truthy("0.0", 0.0, false)
+check_truthy("0.5", 0.5, true)
+check_truthy("空串", "", false)
+check_truthy("非空串", "a", true)
+check_truthy("空list", [], false)
+check_truthy("非空list", [0], true)
+check_truthy("空dict", ed, false)
+check_truthy("非空dict", {"a": 1}, true)
+
+# ============================================================
+print("")
+print("结果: " + str(g_pass) + " PASS / " + str(g_fail) + " FAIL")
+if g_fail > 0:
+    exit(1)

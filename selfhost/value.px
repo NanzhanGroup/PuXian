@@ -1,0 +1,255 @@
+# ============================================================
+# M-B5 值系统（value.px）—— PuXian 版运行时值语义
+# ------------------------------------------------------------
+# 对齐 Rust 编译器：
+#   - interp.rs type_name        → v_type
+#   - value.rs fmt_value/fmt_float → v_str
+#   - value.rs PartialEq         → v_eq
+#   - interp.rs bin_compare      → v_cmp
+#   - interp.rs bin_add/bin_numeric → v_arith / v_add
+#   - interp.rs truthy（bool 转换）→ v_truthy
+# ------------------------------------------------------------
+# 设计：
+#   - 原子类型（int/float/str/bool/null）直接透传内置 str()/type()（已与 Rust 对齐）
+#   - 容器（list/dict/tuple）显式递归渲染（自举解释器必须自己掌控的语义）
+#   - v_arith 返回 {"ok": bool, "v": 值, "err": 错误消息}（对齐 Rust 的 Result<Value, LxError>）
+# 对拍：selfhost/cases/v01_value.px 逐项断言 v_xxx 与内置行为一致
+# ============================================================
+
+# ---- 类型名（对齐 interp.rs type_name）----
+# PuXian 内置 type() 返回字符串与 Rust type_name 完全一致（int/float/string/bool/null/
+# list/dict/tuple/range/builtin/fn/enum/struct/result/type/generator）
+def v_type(v):
+    return type(v)
+
+# ---- 字符串渲染（对齐 fmt_value + fmt_float）----
+# 原子类型透传内置 str()（浮点格式已对齐 fmt_float：整值且 |f|<1e15 补 .0）
+# 容器显式递归：
+#   list  [a, b, c]
+#   tuple (a, b) / (a) / ()
+#   dict  {k: v}——注意：按完整 "k: v" 字符串排序（对齐 Rust parts.sort()，
+#         而非按键排序！例如 {"a":1,"a1":2} → {a1: 2, a: 1}）
+def v_str(v):
+    let t = type(v)
+    if t == "list":
+        let parts = []
+        for item in v:
+            parts.append(v_str(item))
+        return "[" + join(", ", parts) + "]"
+    elif t == "tuple":
+        let parts = []
+        for item in v:
+            parts.append(v_str(item))
+        return "(" + join(", ", parts) + ")"
+    elif t == "dict":
+        let parts = []
+        let ks = v.keys()
+        for k in ks:
+            parts.append(k + ": " + v_str(v[k]))
+        let sp = sorted(parts)
+        return "{" + join(", ", sp) + "}"
+    else:
+        return str(v)
+
+# ---- 相等比较（对齐 value.rs PartialEq）----
+# int/float 跨类型数值比较；容器逐元素/逐键；其余类型语言级 == 兜底
+def v_eq(a, b):
+    let ta = type(a)
+    let tb = type(b)
+    if ta == "int" and tb == "int":
+        return a == b
+    if ta == "int" and tb == "float":
+        return float(a) == b
+    if ta == "float" and tb == "int":
+        return a == float(b)
+    if ta == "float" and tb == "float":
+        return a == b
+    if ta == "string" and tb == "string":
+        return a == b
+    if ta == "bool" and tb == "bool":
+        return a == b
+    if ta == "null" and tb == "null":
+        return true
+    if ta == "list" and tb == "list":
+        if len(a) != len(b):
+            return false
+        for i in range(len(a)):
+            if not v_eq(a[i], b[i]):
+                return false
+        return true
+    if ta == "tuple" and tb == "tuple":
+        if len(a) != len(b):
+            return false
+        for i in range(len(a)):
+            if not v_eq(a[i], b[i]):
+                return false
+        return true
+    if ta == "dict" and tb == "dict":
+        let ka = a.keys()
+        if len(ka) != len(b.keys()):
+            return false
+        for k in ka:
+            if not b.has(k):
+                return false
+            if not v_eq(a[k], b[k]):
+                return false
+        return true
+    # enum / result / range / gen / fn 等：语言级 ==（已对齐 PartialEq）
+    return a == b
+
+# ---- 顺序比较（对齐 interp.rs bin_compare）----
+# 返回 -1 / 0 / 1；不支持的类型返回 null（调用方负责报"比较不支持"）
+def v_cmp(a, b):
+    let ta = type(a)
+    let tb = type(b)
+    if ta == "int" and tb == "int":
+        if a < b:
+            return -1
+        if a > b:
+            return 1
+        return 0
+    # int/float 混合 → 转 float 比较
+    if (ta == "int" or ta == "float") and (tb == "int" or tb == "float"):
+        let af = a
+        let bf = b
+        if ta == "int":
+            af = float(a)
+        if tb == "int":
+            bf = float(b)
+        if af < bf:
+            return -1
+        if af > bf:
+            return 1
+        return 0
+    if ta == "string" and tb == "string":
+        if a < b:
+            return -1
+        if a > b:
+            return 1
+        return 0
+    return null
+
+# ---- 算术（对齐 interp.rs bin_add + bin_numeric）----
+# 返回 {"ok": true, "v": 结果} 或 {"ok": false, "err": 消息}
+def v_arith(op, a, b):
+    let ta = type(a)
+    let tb = type(b)
+    if op == "+":
+        # bin_add：int/float 数值加法、字符串拼接、list 拼接
+        if ta == "int" and tb == "int":
+            return {"ok": true, "v": a + b}
+        if ta == "int" and tb == "float":
+            return {"ok": true, "v": float(a) + b}
+        if ta == "float" and tb == "int":
+            return {"ok": true, "v": a + float(b)}
+        if ta == "float" and tb == "float":
+            return {"ok": true, "v": a + b}
+        if ta == "string" and tb == "string":
+            return {"ok": true, "v": a + b}
+        if ta == "list" and tb == "list":
+            let out = []
+            for item in a:
+                out.append(item)
+            for item in b:
+                out.append(item)
+            return {"ok": true, "v": out}
+        return {"ok": false, "err": "+ 不支持: " + ta + " + " + tb}
+    if ta == "int" and tb == "int":
+        return v_int_op(op, a, b)
+    # 至少一个 float 或非数值：as_f64 转换后浮点运算
+    return v_float_op(op, a, b)
+
+# int op int（对齐 bin_numeric Int 分支）
+def v_int_op(op, a, b):
+    if op == "-":
+        return {"ok": true, "v": a - b}
+    if op == "*":
+        return {"ok": true, "v": a * b}
+    if op == "/":
+        if b == 0:
+            return {"ok": false, "err": "除零错误"}
+        return {"ok": true, "v": a / b}
+    if op == "//":
+        if b == 0:
+            return {"ok": false, "err": "除零错误"}
+        return {"ok": true, "v": a // b}
+    if op == "%":
+        if b == 0:
+            return {"ok": false, "err": "除零错误"}
+        return {"ok": true, "v": a % b}
+    if op == "**":
+        # checked_pow：溢出自动转 float（语言级 ** 已实现）
+        return {"ok": true, "v": a ** b}
+    if op == "<<":
+        return {"ok": true, "v": a << b}
+    if op == ">>":
+        return {"ok": true, "v": a >> b}
+    if op == ">>>":
+        return {"ok": true, "v": a >>> b}
+    if op == "&":
+        return {"ok": true, "v": a & b}
+    if op == "|":
+        return {"ok": true, "v": a | b}
+    if op == "^":
+        return {"ok": true, "v": a ^ b}
+    return {"ok": false, "err": "未知运算符 " + op}
+
+# float 参与（对齐 bin_numeric 非 Int/Int 分支）
+def v_float_op(op, a, b):
+    let ta = type(a)
+    let tb = type(b)
+    if ta != "int" and ta != "float":
+        return {"ok": false, "err": "需要数值"}
+    if tb != "int" and tb != "float":
+        return {"ok": false, "err": "需要数值"}
+    let af = a
+    let bf = b
+    if ta == "int":
+        af = float(a)
+    if tb == "int":
+        bf = float(b)
+    if op == "-":
+        return {"ok": true, "v": af - bf}
+    if op == "*":
+        return {"ok": true, "v": af * bf}
+    if op == "/":
+        if bf == 0.0:
+            return {"ok": false, "err": "除零错误"}
+        return {"ok": true, "v": af / bf}
+    if op == "//":
+        if bf == 0.0:
+            return {"ok": false, "err": "除零错误"}
+        return {"ok": true, "v": af // bf}
+    if op == "%":
+        return {"ok": true, "v": af % bf}
+    if op == "**":
+        return {"ok": true, "v": af ** bf}
+    # 位运算要求整数操作数
+    return {"ok": false, "err": "此运算符要求整数操作数"}
+
+# ---- 真值（对齐 bool() 转换）----
+# null/false/0/0.0/""/[]/空dict → false；其余 true
+def v_truthy(v):
+    let t = type(v)
+    if t == "null":
+        return false
+    if t == "bool":
+        return v
+    if t == "int":
+        return v != 0
+    if t == "float":
+        return v != 0.0
+    if t == "string":
+        return len(v) > 0
+    if t == "list":
+        return len(v) > 0
+    if t == "dict":
+        return len(v) > 0
+    return true
+
+# ---- 类型转换（对齐 int()/float()）----
+def v_int(v):
+    return int(v)
+
+def v_float(v):
+    return float(v)

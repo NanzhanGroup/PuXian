@@ -1,0 +1,120 @@
+# ============================================================
+# M-B5 模块加载（module.px）—— PuXian 版 import 路径解析
+# ------------------------------------------------------------
+# 对齐 Rust module.rs：
+#   ModuleResolver::find_module_path → module_find / module_candidates
+#   ModuleResolver::new 搜索路径     → module_search_paths
+#   loaded 缓存                     → loader 状态（loaded dict）
+#   循环导入检测                    → loader 的 stack
+# ------------------------------------------------------------
+# 三类导入（spec §8.1-8.5）：
+#   1. import std.collections        → stdlib 目录（stdlib/a/b.px → stdlib/a/mod.px）
+#   2. import foo.bar                → 用户点分包（base/foo/bar.px → base/foo/bar/mod.px → 单段 base/foo.px）
+#   3. import "path/to/file.px"      → 相对路径（base_dir 下）
+# 注意：PuXian 的 from import 只支持点分模块名（不支持字符串路径）
+# 对拍：selfhost/cases/v03_module.px
+# ============================================================
+
+# ---- 构建搜索路径（对齐 ModuleResolver::new）----
+# base_dir → .px_modules → .px_modules 下每个子目录
+def module_search_paths(base_dir):
+    let paths = [base_dir]
+    let mods_dir = base_dir + "/.px_modules"
+    if exists(mods_dir):
+        paths.append(mods_dir)
+        let entries = list_dir(mods_dir)
+        for entry in entries:
+            paths.append(entry)
+    return paths
+
+# ---- 路径候选（对齐 find_module_path 的路径拼接规则）----
+# module: list of 段；base_dir: 主文件目录；stdlib: stdlib 目录
+# 返回候选路径 list（按优先级）
+def module_candidates(module, base_dir, stdlib):
+    let out = []
+    if len(module) == 1 and (contains(module[0], "/") or contains(module[0], ".px")):
+        # 相对路径导入：import "path/to/file.px"
+        out.append(base_dir + "/" + module[0])
+        return out
+    if module[0] == "std":
+        # std.a.b → stdlib/a/b.px → stdlib/a/mod.px
+        let p = stdlib
+        for i in range(1, len(module)):
+            p = p + "/" + module[i]
+        out.append(p + ".px")
+        out.append(p + "/mod.px")
+        return out
+    # 用户点分包：base/foo/bar.px → base/foo/bar/mod.px
+    # （单段模块 base/foo.px 已被 p + ".px" 覆盖，p = base/foo）
+    let p = base_dir
+    for seg in module:
+        p = p + "/" + seg
+    out.append(p + ".px")
+    out.append(p + "/mod.px")
+    return out
+
+# ---- 找到第一个存在的候选；找不到返回 null ----
+def module_find(module, base_dir, stdlib):
+    let cands = module_candidates(module, base_dir, stdlib)
+    for c in cands:
+        if exists(c):
+            return c
+    return null
+
+# ---- 加载器状态：缓存 + 循环检测 ----
+# loader: {"base_dir", "stdlib", "search_paths", "loaded": {key: path}, "stack": [key]}
+def loader_new(base_dir, stdlib):
+    return {
+        "base_dir": base_dir,
+        "stdlib": stdlib,
+        "search_paths": module_search_paths(base_dir),
+        "loaded": {"_": 0},
+        "stack": []
+    }
+
+# 注册已加载模块（清除占位键）
+def loader_mark_loaded(loader, key, path):
+    let ld = loader["loaded"]
+    if ld.has("_"):
+        ld.remove("_")
+    ld[key] = path
+
+# 是否已加载
+def loader_is_loaded(loader, key):
+    let ld = loader["loaded"]
+    if ld.has("_"):
+        return false
+    return ld.has(key)
+
+# ---- 加载单个模块（路径解析 + 缓存 + 循环检测）----
+# 返回 {"ok": true, "path": 路径, "cached": bool} 或 {"ok": false, "err": 消息}
+# 注意：递归子 import 的解析需要 lexer/parser（后续里程碑），
+#       M-B5 只做路径解析 + 缓存 + 循环检测框架
+def loader_load(loader, module, base_dir):
+    if len(module) == 0:
+        return {"ok": false, "err": "空模块"}
+    let key = join(".", module)
+    # 缓存命中
+    if loader_is_loaded(loader, key):
+        let ld = loader["loaded"]
+        return {"ok": true, "path": ld[key], "cached": true}
+    # 循环检测
+    if contains(loader["stack"], key):
+        return {"ok": false, "err": "循环导入: " + key}
+    # 路径解析（用户模块在搜索路径链上找；std 用 stdlib 目录）
+    let path = null
+    if module[0] == "std":
+        path = module_find(module, base_dir, loader["stdlib"])
+    else:
+        # 用户点分包：先搜当前目录，再搜 search_paths 链
+        for base in loader["search_paths"]:
+            path = module_find(module, base, loader["stdlib"])
+            if path != null:
+                break
+    if path == null:
+        if module[0] != "std":
+            return {"ok": false, "err": "[module] 警告: 找不到模块 '" + key + "'（已跳过）"}
+        # std 模块缺失 → 静默跳过（可能是纯 builtin 实现）
+        return {"ok": false, "err": ""}
+    loader_mark_loaded(loader, key, path)
+    return {"ok": true, "path": path, "cached": false}

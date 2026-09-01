@@ -1517,7 +1517,126 @@ static const char* fmt_num(LXValue v) {
     return num_buf;
 }
 
+// ---- 字符串构建（M-B5：值格式化用；原位于 regex 替换处，提前复用） ----
+typedef struct { char* data; int len, cap; } RStrBuf;
+static void rsb_append(RStrBuf* b, const char* s, int n) {
+    if (n <= 0) return;
+    if (b->len + n > b->cap) {
+        int nc = b->cap ? b->cap * 2 : 64;
+        while (nc < b->len + n) nc *= 2;
+        b->data = xrealloc(b->data, nc);
+        b->cap = nc;
+    }
+    memcpy(b->data + b->len, s, n);
+    b->len += n;
+}
+static char* rsb_done(RStrBuf* b) {
+    char* out = xmalloc(b->len + 1);
+    if (b->len > 0) memcpy(out, b->data, b->len);
+    out[b->len] = 0;
+    xfree(b->data);
+    return out;
+}
+static int px_cmp_cstr(const void* a, const void* b) {
+    return strcmp(*(const char* const*)a, *(const char* const*)b);
+}
+
 // ==================== 输出 ====================
+
+// ---- M-B5：值格式化（对齐 Rust value.rs fmt_value）----
+// 递归渲染 list/dict/tuple/enum/struct/result/gen；原子类型直接格式化
+// 返回 malloc 字符串（调用方 free）
+// 注意：dict 按完整 "k: v" 字符串排序（对齐 Rust parts.sort()，而非按键排序）
+static char* px_fmt_value(LXValue v) {
+    RStrBuf b = {0};
+    switch (v.type) {
+        case PX_NULL: rsb_append(&b, "null", 4); break;
+        case PX_BOOL: rsb_append(&b, v.as.b ? "true" : "false", v.as.b ? 4 : 5); break;
+        case PX_INT: { char t[32]; int n = snprintf(t, sizeof(t), "%lld", (long long)v.as.i); rsb_append(&b, t, n); break; }
+        case PX_FLOAT: { const char* t = fmt_num(v); rsb_append(&b, t, (int)strlen(t)); break; }
+        case PX_STR: rsb_append(&b, v.as.obj->as.str.data, v.as.obj->as.str.len); break;
+        case PX_BYTES: { char t[64]; int n = snprintf(t, sizeof(t), "<bytes %d>", v.as.obj->as.str.len); rsb_append(&b, t, n); break; }
+        case PX_LIST: {
+            LXObject* o = v.as.obj;
+            rsb_append(&b, "[", 1);
+            for (int i = 0; i < o->as.list.len; i++) {
+                if (i) rsb_append(&b, ", ", 2);
+                char* s = px_fmt_value(o->as.list.items[i]);
+                rsb_append(&b, s, (int)strlen(s));
+                xfree(s);
+            }
+            rsb_append(&b, "]", 1);
+            break;
+        }
+        case PX_TUPLE: {
+            LXObject* o = v.as.obj;
+            rsb_append(&b, "(", 1);
+            for (int i = 0; i < o->as.tuple.len; i++) {
+                if (i) rsb_append(&b, ", ", 2);
+                char* s = px_fmt_value(o->as.tuple.items[i]);
+                rsb_append(&b, s, (int)strlen(s));
+                xfree(s);
+            }
+            rsb_append(&b, ")", 1);
+            break;
+        }
+        case PX_DICT: {
+            LXObject* o = v.as.obj;
+            int n = o->as.dict.len;
+            char** parts = n > 0 ? xmalloc(n * sizeof(char*)) : NULL;
+            for (int i = 0; i < n; i++) {
+                char* vs = px_fmt_value(o->as.dict.vals[i]);
+                int klen = (int)strlen(o->as.dict.keys[i]);
+                int vlen = (int)strlen(vs);
+                parts[i] = xmalloc((size_t)klen + vlen + 4);
+                memcpy(parts[i], o->as.dict.keys[i], klen);
+                parts[i][klen] = ':'; parts[i][klen + 1] = ' ';
+                memcpy(parts[i] + klen + 2, vs, vlen);
+                parts[i][klen + vlen + 2] = 0;
+                xfree(vs);
+            }
+            if (n > 1) qsort(parts, (size_t)n, sizeof(char*), px_cmp_cstr);
+            rsb_append(&b, "{", 1);
+            for (int i = 0; i < n; i++) {
+                if (i) rsb_append(&b, ", ", 2);
+                rsb_append(&b, parts[i], (int)strlen(parts[i]));
+                xfree(parts[i]);
+            }
+            rsb_append(&b, "}", 1);
+            xfree(parts);
+            break;
+        }
+        case PX_FUNC: { char t[256]; int n = snprintf(t, sizeof(t), "<fn %s>", v.as.obj->as.func.name); rsb_append(&b, t, n); break; }
+        case PX_NATIVE: { char t[256]; int n = snprintf(t, sizeof(t), "<builtin %s>", v.as.obj->as.native.name); rsb_append(&b, t, n); break; }
+        case PX_STRUCT: { char t[256]; int n = snprintf(t, sizeof(t), "<struct %s>", v.as.obj->as.struct_inst.type_name); rsb_append(&b, t, n); break; }
+        case PX_ENUM: { char t[256]; int n = snprintf(t, sizeof(t), "%s.%s", v.as.obj->as.enum_inst.type_name, v.as.obj->as.enum_inst.variant); rsb_append(&b, t, n); break; }
+        case PX_RESULT: {
+            LXObject* o = v.as.obj;
+            char* s = px_fmt_value(o->as.result.value);
+            if (o->as.result.ok) {
+                rsb_append(&b, "Ok(", 3);
+                rsb_append(&b, s, (int)strlen(s));
+                rsb_append(&b, ")", 1);
+            } else {
+                rsb_append(&b, "Err(", 4);
+                rsb_append(&b, s, (int)strlen(s));
+                rsb_append(&b, ")", 1);
+            }
+            xfree(s);
+            break;
+        }
+        case PX_GEN: {
+            LXObject* o = v.as.obj;
+            char t[128];
+            int n = snprintf(t, sizeof(t), "<gen %d items, cursor=%d>",
+                             o->as.gen.list.as.obj->as.list.len, o->as.gen.cursor);
+            rsb_append(&b, t, n);
+            break;
+        }
+        default: rsb_append(&b, "?", 1); break;
+    }
+    return rsb_done(&b);
+}
 
 static char* escape_str(const char* s, int len) {
     char* out = xmalloc(len * 4 + 1);
@@ -1540,74 +1659,10 @@ static char* escape_str(const char* s, int len) {
 }
 
 void px_print_value(LXValue v, bool newline) {
-    switch (v.type) {
-        case PX_NULL: printf("null"); break;
-        case PX_BOOL: printf(v.as.b ? "true" : "false"); break;
-        case PX_INT: printf("%lld", (long long)v.as.i); break;
-        case PX_FLOAT: printf("%g", v.as.f); break;
-        case PX_STR: fwrite(v.as.obj->as.str.data, 1, v.as.obj->as.str.len, stdout); break;
-        case PX_BYTES: printf("<bytes %d>", v.as.obj->as.str.len); break;
-        case PX_LIST: {
-            printf("[");
-            LXObject* o = v.as.obj;
-            for (int i = 0; i < o->as.list.len; i++) {
-                if (i) printf(", ");
-                px_print_value(o->as.list.items[i], false);
-            }
-            printf("]");
-            break;
-        }
-        case PX_TUPLE: {
-            printf("(");
-            LXObject* o = v.as.obj;
-            for (int i = 0; i < o->as.tuple.len; i++) {
-                if (i) printf(", ");
-                px_print_value(o->as.tuple.items[i], false);
-            }
-            printf(")");
-            break;
-        }
-        case PX_DICT: {
-            printf("{");
-            LXObject* o = v.as.obj;
-            for (int i = 0; i < o->as.dict.len; i++) {
-                if (i) printf(", ");
-                printf("\"%s\": ", o->as.dict.keys[i]);
-                px_print_value(o->as.dict.vals[i], false);
-            }
-            printf("}");
-            break;
-        }
-        case PX_FUNC: printf("<fn %s>", v.as.obj->as.func.name); break;
-        case PX_NATIVE: printf("<native %s>", v.as.obj->as.native.name); break;
-        case PX_STRUCT: {
-            LXObject* o = v.as.obj;
-            printf("%s(", o->as.struct_inst.type_name);
-            for (int i = 0; i < o->as.struct_inst.nfields; i++) {
-                if (i) printf(", ");
-                printf("%s=", o->as.struct_inst.fnames[i]);
-                px_print_value(o->as.struct_inst.fvals[i], false);
-            }
-            printf(")");
-            break;
-        }
-        case PX_ENUM: printf("%s.%s", v.as.obj->as.enum_inst.type_name, v.as.obj->as.enum_inst.variant); break;
-        case PX_RESULT: {
-            // M39：Ok(42) / Err("x")
-            LXObject* o = v.as.obj;
-            if (o->as.result.ok) {
-                printf("Ok(");
-                px_print_value(o->as.result.value, false);
-                printf(")");
-            } else {
-                printf("Err(");
-                px_print_value(o->as.result.value, false);
-                printf(")");
-            }
-            break;
-        }
-        default: printf("?"); break;
-    }
+    // M-B5：统一用 px_fmt_value（对齐 Rust fmt_value），保证 print 与 str() 容器渲染一致
+    char* s = px_fmt_value(v);
+    printf("%s", s);
+    xfree(s);
     if (newline) printf("\n");
 }
 
@@ -1689,16 +1744,31 @@ LXValue px_div(LXValue a, LXValue b) {
 }
 
 LXValue px_idiv(LXValue a, LXValue b) {
+    // M-B5：对齐 Rust div_euclid / floor 语义
+    //   int//int：欧几里得除法（余数非负 0<=r<|d|）-7//2=-4, 7//-2=-3, -7//-2=4
+    //   float 参与：floor(af/bf) 转 int（-5.5//2=-3）
+    if (a.type == PX_FLOAT || b.type == PX_FLOAT) {
+        double d = num_val(b);
+        if (d == 0.0) px_error("除零错误");
+        return px_int((int64_t)floor(num_val(a) / d));
+    }
     int64_t d = int_val(b);
     if (d == 0) px_error("除零错误");
-    return px_int(int_val(a) / d);
+    int64_t n = int_val(a);
+    int64_t r = n % d;
+    if (r < 0) r += (d < 0 ? -d : d);  // 欧几里得余数（非负）
+    return px_int((n - r) / d);        // 精确整除（对齐 div_euclid 商）
 }
 
 LXValue px_mod(LXValue a, LXValue b) {
     int64_t d = int_val(b);
     if (d == 0) px_error("取模除零错误");
     if (a.type == PX_FLOAT || b.type == PX_FLOAT) return px_float(fmod(num_val(a), num_val(b)));
-    return px_int(int_val(a) % d);
+    // M-B5：对齐 Rust rem_euclid（余数非负）-7%3=2, 7%-3=1, -7%-3=2
+    int64_t n = int_val(a);
+    int64_t r = n % d;
+    if (r < 0) r += (d < 0 ? -d : d);
+    return px_int(r);
 }
 
 LXValue px_pow(LXValue a, LXValue b) {
@@ -1773,6 +1843,25 @@ static int compare_values(LXValue a, LXValue b) {
         return na < nb ? -1 : (na > nb ? 1 : 0);
     }
     if (a.type == PX_NULL && b.type == PX_NULL) return 0;
+    // M-B5：dict 相等——键集合相同 + 每键值递归相等（对齐 Rust HashMap PartialEq；
+    // 原缺此分支导致 dict == 恒 true，`{"a":1} == {"a":2}` 错误）
+    if (a.type == PX_DICT && b.type == PX_DICT) {
+        LXObject* oa = a.as.obj;
+        LXObject* ob = b.as.obj;
+        if (oa->as.dict.len != ob->as.dict.len)
+            return oa->as.dict.len < ob->as.dict.len ? -1 : 1;
+        for (int i = 0; i < oa->as.dict.len; i++) {
+            const char* k = oa->as.dict.keys[i];
+            LXValue* bv = NULL;
+            for (int j = 0; j < ob->as.dict.len; j++) {
+                if (strcmp(ob->as.dict.keys[j], k) == 0) { bv = &ob->as.dict.vals[j]; break; }
+            }
+            if (!bv) return 1;  // b 缺键 → a > b（不相等）
+            int c = compare_values(oa->as.dict.vals[i], *bv);
+            if (c != 0) return c;
+        }
+        return 0;
+    }
     // M39：Result 相等——ok 标志相同 + 载荷递归比较
     if (a.type == PX_RESULT && b.type == PX_RESULT) {
         if (a.as.obj->as.result.ok != b.as.obj->as.result.ok) return a.as.obj->as.result.ok ? 1 : -1;
@@ -2405,13 +2494,12 @@ static LXValue bi_type(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_str(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) px_error("str 需要一个参数");
-    // 字符串原样返回，数字转字符串
-    if (args[0].type == PX_STR) return args[0];
-    if (args[0].type == PX_INT || args[0].type == PX_FLOAT) return px_str(fmt_num(args[0]));
-    if (args[0].type == PX_BOOL) return px_str(args[0].as.b ? "true" : "false");
-    if (args[0].type == PX_NULL) return px_str("null");
-    px_error("str 不支持类型 %s", px_type_name(args[0]));
-    return px_null();
+    // M-B5：统一用 px_fmt_value——str() 支持全部类型（list/dict/enum/struct/result 等），
+    // 对齐 Rust 内置 str()（fmt_value 渲染）
+    char* s = px_fmt_value(args[0]);
+    LXValue r = px_str(s);
+    xfree(s);
+    return r;
 }
 
 static LXValue bi_int(LXValue* args, int nargs, void* ctx) {
@@ -3640,20 +3728,6 @@ static int rfullmatch(RNode* root, const unsigned char* text, int len, int64_t* 
     }
     rcand_free(&l);
     return found;
-}
-
-// ---- 字符串构建 ----
-typedef struct { char* data; int len, cap; } RStrBuf;
-static void rsb_append(RStrBuf* b, const char* s, int n) {
-    if (n <= 0) return;
-    if (b->len + n > b->cap) {
-        int nc = b->cap ? b->cap * 2 : 64;
-        while (nc < b->len + n) nc *= 2;
-        b->data = xrealloc(b->data, nc);
-        b->cap = nc;
-    }
-    memcpy(b->data + b->len, s, n);
-    b->len += n;
 }
 
 static void r_expand_repl(const char* repl, const int64_t* g, const unsigned char* text, int tlen, RStrBuf* out) {

@@ -139,3 +139,15 @@
 | 8 | **大指数浮点 str() 显示**（>=1e16） | PuXian str(1.5e308) 展开为 1500...000（无指数），Rust f64 Debug 显示 1.5e308 | 源码避免 >=1e16 浮点字面量；对拍用例（s09）已规避，M-B6 处理 codegen 浮点表示 |
 | 9 | **noncharacter 字符串 Debug 显示**（U+FFFE/FFFF、U+10FFFE/10FFFF 等） | Rust escape_debug 转义为 \\u{10ffff}，PuXian rust_str_debug 直接显示字符 | 源码避免 noncharacter（s09 已规避） |
 | 10 | **编译版 inf 浮点常量** | codegen 生成 `px_float(inf)`，C 里 `inf` 未定义导致编译失败 | M-B6 codegen 处理（改 INFINITY）；s09 的 build golden 留空（diffcheck 容错） |
+
+## 九、M-B5 新增已知限制（value/env/module 实测暴露，自举写代码必须规避）
+
+| # | 限制 | 现象 | 规避 |
+|---|---|---|---|
+| 1 | **`{}` 字面量是空块=null，不是空 dict** | `type({})`=\"null\"；`let d = {}` 后 `d[\"k\"]=v` 报\"索引赋值目标不支持\"（对 null 赋值） | 空 dict 用 `{\"_\": 0}` 创建后 `remove(\"_\")`；dict 字面量必须有至少一个键值对 |
+| 2 | **共享引用 dict 比较死循环**（解释器） | `let b = a; a == b`（同一 dict 引用）无限递归被杀（Rust HashMap PartialEq 自引用）；独立构造的 dict 比较正常 | 禁止比较共享引用的 dict（env 的 parent 链不要直接 `==` 比较，用行为验证）；测试脚本规避 |
+| 3 | **编译模式类型对象不可用**（TypeRef） | `type(Color)` / 把 enum/struct 类型名作为值传参 → 编译版报\"未定义变量: Color\"（codegen 不注册类型名到全局，仅内联 px_enum/px_struct 构造） | enum/struct 类型名只用于构造（`Color.Red`、`Point(1,2)`），不作值传递；对拍用例跳过 type 对象断言 |
+| 4 | **编译模式 range() 物化为 list** | `str(range(3))` 编译版 \"[0, 1, 2]\" vs 解释器 \"range(0, 3, 1)\" | range 只用于 `for` 迭代，不打印/转字符串；对拍用例不跨模式对比 range 的 str |
+| 5 | **编译模式闭包显示名带序号** | `str(fn(x){x})` 编译版 \"\<fn \<closure2\>\>\" vs 解释器 \"\<fn \<closure\>\>\" | 不依赖闭包显示名（语义不受影响） |
+| 6 | **dict 键必须字符串**（语言级） | 整数键 `d[1]` 编译/解释均按字符串键 \"1\" 处理（`keys()` 返回 [\"1\"]） | 显式 `str(k)` 作键 |
+| 7 | **模块顶层 `let` 不导出**（import 只导出 def/struct/enum/trait/impl/const） | `import` 后访问模块的顶层 `let` 变量 → 未定义 | 模块导出常量用 `const` 关键字；函数/类型定义自动导出 |

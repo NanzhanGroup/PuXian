@@ -1,0 +1,111 @@
+# ============================================================
+# M-B5 对拍用例 v03：模块加载（module.px）
+# 运行: px run selfhost/cases/v03_module.px
+# 断言 module_candidates / module_find / loader 对齐 Rust module.rs：
+#   - 相对路径 / std.* / 用户点分包 候选路径规则
+#   - find 返回第一个存在的候选
+#   - loader 缓存 + 循环导入检测
+# 依赖：/tmp/px_m5_modtest 目录结构（见 diffcheck --value 的准备脚本）
+# 输出 [PASS]/[FAIL]，diffcheck --value 检查全 PASS
+# ============================================================
+import "../module.px"
+
+let g_pass = 0
+let g_fail = 0
+
+def check(name, cond):
+    if cond:
+        g_pass += 1
+        print("[PASS] " + name)
+    else:
+        g_fail += 1
+        print("[FAIL] " + name)
+
+let BASE = "/tmp/px_m5_modtest"
+let STDLIB = BASE + "/stdlib"
+
+# ============================================================
+print("== module_candidates 候选路径 ==")
+# 相对路径导入
+let c1 = module_candidates(["sub/file.px"], BASE, STDLIB)
+check("相对路径候选", c1 == [BASE + "/sub/file.px"])
+# 相对路径含 .px 后缀
+let c1b = module_candidates(["dir/x.px"], BASE, STDLIB)
+check("相对路径含.px", c1b == [BASE + "/dir/x.px"])
+# std 模块：std.a.b → a/b.px → a/b/mod.px
+let c2 = module_candidates(["std", "a", "b"], BASE, STDLIB)
+check("std 候选", c2 == [STDLIB + "/a/b.px", STDLIB + "/a/b/mod.px"])
+# std 单层
+let c2b = module_candidates(["std", "collections"], BASE, STDLIB)
+check("std 单层候选", c2b == [STDLIB + "/collections.px", STDLIB + "/collections/mod.px"])
+# 用户点分包
+let c3 = module_candidates(["pkg", "tools"], BASE, STDLIB)
+check("用户点分候选", c3 == [BASE + "/pkg/tools.px", BASE + "/pkg/tools/mod.px"])
+# 用户单段模块
+let c4 = module_candidates(["mylib"], BASE, STDLIB)
+check("用户单段候选", c4 == [BASE + "/mylib.px", BASE + "/mylib/mod.px"])
+# 用户目录 mod.px 形式
+let c5 = module_candidates(["lib"], BASE, STDLIB)
+check("用户 mod.px 候选", c5 == [BASE + "/lib.px", BASE + "/lib/mod.px"])
+
+# ============================================================
+print("== module_find 存在性查找 ==")
+let f1 = module_find(["mylib"], BASE, STDLIB)
+check("find 单段文件", f1 == BASE + "/mylib.px")
+let f2 = module_find(["pkg", "tools"], BASE, STDLIB)
+check("find 点分文件", f2 == BASE + "/pkg/tools.px")
+let f3 = module_find(["lib"], BASE, STDLIB)
+check("find mod.px 目录", f3 == BASE + "/lib/mod.px")
+let f4 = module_find(["std", "collections"], BASE, STDLIB)
+check("find std 模块", f4 == STDLIB + "/collections.px")
+let f5 = module_find(["nope"], BASE, STDLIB)
+check("find 不存在 null", f5 == null)
+let f6 = module_find(["missing/file.px"], BASE, STDLIB)
+check("find 相对路径不存在", f6 == null)
+let f7 = module_find(["std", "nope"], BASE, STDLIB)
+check("find std 不存在", f7 == null)
+
+# ============================================================
+print("== loader 缓存与循环检测 ==")
+let ld = loader_new(BASE, STDLIB)
+check("loader loaded 初始未加载", not loader_is_loaded(ld, "mylib"))
+check("loader search_paths 含 base", ld["search_paths"][0] == BASE)
+
+# 首次加载
+let r1 = loader_load(ld, ["mylib"], BASE)
+check("首次加载 ok", r1["ok"])
+check("首次加载非缓存", not r1["cached"])
+check("首次加载路径", r1["path"] == BASE + "/mylib.px")
+
+# 缓存命中
+let r2 = loader_load(ld, ["mylib"], BASE)
+check("二次加载 cached", r2["ok"] and r2["cached"])
+
+# 缺失模块（用户）→ 警告
+let r3 = loader_load(ld, ["ghost"], BASE)
+check("缺失用户模块 err", not r3["ok"])
+check("缺失警告消息", contains(r3["err"], "找不到模块 'ghost'"))
+
+# std 缺失 → 静默（err 空）
+let r4 = loader_load(ld, ["std", "nope"], BASE)
+check("std 缺失静默", not r4["ok"] and r4["err"] == "")
+
+# 循环检测：手动压栈模拟递归加载
+let ld2 = loader_new(BASE, STDLIB)
+ld2["stack"].append("a.b")
+let r5 = loader_load(ld2, ["a", "b"], BASE)
+check("循环导入检测", not r5["ok"] and contains(r5["err"], "循环导入: a.b"))
+# 弹出后恢复
+ld2["stack"] = []
+let r6 = loader_load(ld2, ["mylib"], BASE)
+check("弹栈后可加载", r6["ok"])
+
+# 空模块
+let r7 = loader_load(ld2, [], BASE)
+check("空模块 err", not r7["ok"])
+
+# ============================================================
+print("")
+print("结果: " + str(g_pass) + " PASS / " + str(g_fail) + " FAIL")
+if g_fail > 0:
+    exit(1)

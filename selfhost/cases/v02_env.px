@@ -1,0 +1,117 @@
+# ============================================================
+# M-B5 对拍用例 v02：作用域环境（env.px）
+# 运行: px run selfhost/cases/v02_env.px
+# 断言 env_new/define/get/set/has/items/clear 对齐 Rust env.rs 语义：
+#   - get 沿链向上（子可读父，父不可读子）
+#   - set 就近赋值（找到第一个含该名的环境写入）
+# 输出 [PASS]/[FAIL]，diffcheck --value 检查全 PASS
+# ============================================================
+import "../env.px"
+
+let g_pass = 0
+let g_fail = 0
+
+def check(name, cond):
+    if cond:
+        g_pass += 1
+        print("[PASS] " + name)
+    else:
+        g_fail += 1
+        print("[FAIL] " + name)
+
+# ============================================================
+print("== env_new 创建 ==")
+let e = env_new(null)
+check("env 类型 dict", type(e) == "dict")
+check("env 有 vars", e["vars"] != null)
+check("env parent null", e["parent"] == null)
+check("env vars 空", len(e["vars"]) == 0)
+
+# ============================================================
+print("== env_define / env_get（单层） ==")
+env_define(e, "x", 42)
+env_define(e, "name", "px")
+let g1 = env_get(e, "x")
+check("get x found", g1["found"])
+check("get x value", g1["value"] == 42)
+let g2 = env_get(e, "name")
+check("get name value", g2["value"] == "px")
+let g3 = env_get(e, "nope")
+check("get 不存在 found=false", not g3["found"])
+check("get 不存在 value=null", g3["value"] == null)
+check("has x", env_has(e, "x"))
+check("has nope", not env_has(e, "nope"))
+check("has_local x", env_has_local(e, "x"))
+check("has_local nope", not env_has_local(e, "nope"))
+
+# ============================================================
+print("== 父子链（子可读父） ==")
+let child = env_new(e)
+# 注意：不能直接比较 child["parent"] == e（共享引用 dict 比较会死循环，
+# 见 MINI_SUBSET 已知限制）；用 env_get 链行为验证 parent 关系
+check("child 读父变量", env_get(child, "x")["value"] == 42)
+check("child 读父 name", env_get(child, "name")["value"] == "px")
+check("child has 父变量", env_has(child, "x"))
+check("child has_local 父变量=否", not env_has_local(child, "x"))
+
+# 父不可读子
+env_define(child, "only_child", 7)
+check("父读子变量=否", not env_get(e, "only_child")["found"])
+check("父 has 子变量=否", not env_has(e, "only_child"))
+
+# 子定义同名变量（遮蔽）
+env_define(child, "x", 100)
+check("子遮蔽 x", env_get(child, "x")["value"] == 100)
+check("父 x 不变", env_get(e, "x")["value"] == 42)
+
+# ============================================================
+print("== env_set 就近赋值 ==")
+# 子环境赋值 x：应写进子（就近）
+let ok1 = env_set(child, "x", 999)
+check("set 子 x 成功", ok1)
+check("子 x=999", env_get(child, "x")["value"] == 999)
+check("父 x 仍 42", env_get(e, "x")["value"] == 42)
+
+# 子环境赋值 name（父的变量）：就近找到父并写入
+let ok2 = env_set(child, "name", "newpx")
+check("set name 成功", ok2)
+check("父 name 被改", env_get(e, "name")["value"] == "newpx")
+
+# 子环境赋值不存在的变量：false
+let ok3 = env_set(child, "ghost", 1)
+check("set 不存在=false", not ok3)
+check("ghost 未创建", not env_has(child, "ghost"))
+
+# ============================================================
+print("== 三层链 ==")
+let grand = env_new(child)
+check("孙读爷", env_get(grand, "x")["value"] == 999)
+env_set(grand, "name", "deep")
+check("孙就近改爷 name", env_get(e, "name")["value"] == "deep")
+check("孙改的是爷层", env_get(child, "name")["value"] == "deep")
+
+# ============================================================
+print("== env_items / env_clear ==")
+let items = env_items(e)
+check("items 是 list", type(items) == "list")
+# e 有 x/name 两个变量（items 每项 [name, value]）
+let item_names = []
+for it in items:
+    item_names.append(it[0])
+check("items 含 x", contains(item_names, "x"))
+check("items 含 name", contains(item_names, "name"))
+check("items 数量 2", len(items) == 2)
+
+env_clear(e)
+check("clear 后 vars 空", len(e["vars"]) == 0)
+check("clear 后 get x 未找到", not env_get(e, "x")["found"])
+# 子环境仍可读到自己的变量（父清空不影响子）
+check("clear 后子读自己 x", env_get(child, "x")["value"] == 999)
+# 但父的 name 被清了，子读不到 name 了（就近链断了）
+check("clear 后子读不到爷 name", not env_get(child, "name")["found"])
+
+# ============================================================
+print("")
+print("结果: " + str(g_pass) + " PASS / " + str(g_fail) + " FAIL")
+if g_fail > 0:
+    exit(1)
