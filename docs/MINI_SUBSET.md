@@ -98,7 +98,9 @@
 3. **回归**：`cargo test --release -- --test-threads=1` 205/205（M-B1 实测）
 4. **自举证明**：M-B8 阶段三步 diff
 
-## 七、M-B1 实测发现并修复的编译器缺陷（已并入主线）
+## 七、自举实测发现并修复的编译器缺陷（已并入主线）
+
+### M-B1（能力门禁暴露）
 
 | 缺陷 | 位置 | 修复 |
 |---|---|---|
@@ -108,3 +110,24 @@
 | dict.values 方法缺失 / dict.get 默认值参数缺失 | runtime.c px_method | 补齐 |
 | struct 方法（impl）px_method 不支持 | runtime.c px_method | 查全局 "Type.method" 绑定 self |
 | 全局表溢出（GLOBAL_CAP=256 太小） | runtime.c | 256 → 4096 |
+
+### M-B2（lexer 自举重写暴露）
+
+| 缺陷 | 位置 | 修复 |
+|---|---|---|
+| **编译版 args() 返回空列表**（不保留命令行参数，自举 lexer 无法取输入文件） | runtime.c bi_args | `px_args_init(argc, argv)` 保存 + bi_args 返回 |
+| **编译版 list.pop 缺失**（缩进栈 pop 崩溃） | runtime.c px_method | PX_LIST 分支补 pop（与解释器一致） |
+| **编译版字符串索引按字节**（与解释器字符语义、px_len 不一致；中文索引错位、for-in 错乱） | runtime.c px_index PX_STR | 按 UTF-8 字符索引（px_unicode_len + 字节定位） |
+| **codegen 作用域：while 块内 `let` 变量块外不可见**（解释器提升、codegen 未提升 → `_v59 undeclared`） | codegen.rs | 未修（写代码时变量声明移到循环外规避；待 M 后补） |
+| **解释器 split 丢弃空段**（vs Rust split 保留空段：`split("a,,b",",")` 解释器 2 段、Rust 3 段） | interp.rs split | 未修（lexer 已绕开：ctrl 表用遍历不 split）；待修 |
+
+## 八、M-B2 新增已知限制（自举写代码必须规避）
+
+| # | 限制 | 现象 | 规避 |
+|---|---|---|---|
+| 1 | **多行 list/dict 字面量不支持** | `let d = {\n...}` 报"意外的 token: 换行" | 集合字面量必须单行（长表用字符串/循环构造） |
+| 2 | **编译版浮点 str() 用 `%g`**（与解释器/Rust Display 不一致） | `str(1e-7)`="1e-07"、`str(123456789.123)`="1.23457e+08" 丢精度、`str(1e20)` 错误 | 源码避免极小/极大/高精度浮点字面量；对拍用例不含此类 |
+| 3 | **编译版 NUL 字符串截断**（C 字符串本质） | `"\u{0}"` 编译版变空串；对拍含 NUL 字面量的文件时输出 `""` vs `"\0"` | 源码避免 NUL 字面量（rust_str_debug 用 `c < "\u{1}"` 判断 NUL 绕开） |
+| 4 | **单行 if 语句不支持**（`if x: y`） | 报"期望 换行，实际得到 return" | 一律用 if 块 |
+| 5 | **函数调用参数不能跨行** | 多行调用参数报错 | 单行调用 |
+| 6 | **exit(n) 不终止执行**（仅设退出码） | `exit(1)` 后代码继续跑 | 报错用 `panic` 立即终止（err 函数先 print 再 panic） |

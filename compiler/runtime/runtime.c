@@ -1822,13 +1822,33 @@ LXValue px_index(LXValue obj, LXValue idx) {
         return obj.as.obj->as.tuple.items[i];
     }
     if (obj.type == PX_STR) {
+        // M-B2 修复：字符串索引按 UTF-8 字符（与解释器字符语义、px_len 一致；原按字节导致中文错位）
         int i = (int)int_val(idx);
-        int len = obj.as.obj->as.str.len;
-        if (i < 0) i += len;
-        if (i < 0 || i >= len) px_error("字符串索引越界: %d", i);
-        // 返回单字符（按字节；中文需要字节切片，MVP 简化）
+        int ulen = px_unicode_len(obj.as.obj->as.str.data);
+        if (i < 0) i += ulen;
+        if (i < 0 || i >= ulen) px_error("字符串索引越界: %d", i);
+        const unsigned char* p = (const unsigned char*)obj.as.obj->as.str.data;
+        int count = 0;
+        while (count < i) {
+            unsigned char cc = *p;
+            int cl2 = 1;
+            if ((cc & 0x80) == 0) cl2 = 1;
+            else if ((cc & 0xE0) == 0xC0) cl2 = 2;
+            else if ((cc & 0xF0) == 0xE0) cl2 = 3;
+            else if ((cc & 0xF8) == 0xF0) cl2 = 4;
+            else cl2 = 1;
+            p += cl2;
+            count++;
+        }
+        unsigned char c0 = *p;
+        int clen = 1;
+        if ((c0 & 0x80) == 0) clen = 1;
+        else if ((c0 & 0xE0) == 0xC0) clen = 2;
+        else if ((c0 & 0xF0) == 0xE0) clen = 3;
+        else if ((c0 & 0xF8) == 0xF0) clen = 4;
+        else clen = 1;
         char buf[8] = {0};
-        buf[0] = obj.as.obj->as.str.data[i];
+        memcpy(buf, p, clen);
         return px_str(buf);
     }
     if (obj.type == PX_DICT) {
@@ -2199,6 +2219,14 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
             return px_bool(false);
         }
         if (strcmp(name, "join") == 0) return call_with_self("join", args[0], &obj, 1);
+        // M-B2：C 端 list.pop 缺失（自举 lexer 缩进栈用），与解释器一致
+        if (strcmp(name, "pop") == 0) {
+            if (nargs != 0) px_error("pop 不接受参数");
+            LXObject* o = obj.as.obj;
+            if (o->as.list.len == 0) px_error("pop 空列表");
+            o->as.list.len--;
+            return o->as.list.items[o->as.list.len];
+        }
     }
     if (obj.type == PX_DICT) {
         if (strcmp(name, "get") == 0) {
@@ -4356,10 +4384,22 @@ static LXValue bi_env(LXValue* args, int nargs, void* ctx) {
     return v ? px_str(v) : px_null();
 }
 
+// M-B2 修复：编译版保存原始命令行参数（自举 lexer 需要 args() 取输入文件）
+static char** g_px_argv = NULL;
+static int g_px_argc = 0;
+
+void px_args_init(int argc, char** argv) {
+    g_px_argc = argc;
+    g_px_argv = argv;
+}
+
 static LXValue bi_args(LXValue* args, int nargs, void* ctx) {
     (void)args; (void)nargs; (void)ctx;
-    // 编译版不保留原始 argv，返回空列表（脚本版返回 args）
-    return px_list(0);
+    LXValue l = px_list(0);
+    for (int i = 0; i < g_px_argc; i++) {
+        px_list_push(l, px_str(g_px_argv[i]));
+    }
+    return l;
 }
 
 // ---- std.collections（高阶函数） ----

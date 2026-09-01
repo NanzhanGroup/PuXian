@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# PuXian 自举对拍框架（M-B1）
+# PuXian 自举对拍框架（M-B1 + M-B2）
 # ------------------------------------------------------------
 # 用途：同一输入，Rust 版编译器 vs PuXian 版编译器输出逐字节一致
 #   lex   → token 流
@@ -12,6 +12,7 @@
 #   ./diffcheck.sh <file.px>          # 基线模式：Rust 版输出存 golden（PuXian 版未就绪时）
 #   ./diffcheck.sh <file.px> --check  # 对拍模式：Rust 版 vs PuXian 版（自举编译器就绪后）
 #   ./diffcheck.sh --all              # 对拍 cases/ 下全部用例
+#   ./diffcheck.sh --lexer [--build] [file.px]  # M-B2：PuXian lexer 对拍 token 流
 # ------------------------------------------------------------
 # 对拍契约（Mini 子集规范 §五）：
 #   lex   ：token 序列规范化后逐 token 一致（去行首空白/压缩连续空格/保留顺序与值）
@@ -44,6 +45,28 @@ norm_c() {
     # 规范化 C 源码：去掉生成注释头（含路径）与行尾空白
     grep -vE '^/\* 由普贤' \
         | sed -E 's/[[:space:]]+$//'
+}
+
+# ---- M-B2：PuXian lexer 对拍 ----
+#   run 模式：解释器执行 selfhost/lexer.px <file>
+#   build 模式：编译版 selfhost/build/lexer <file>
+check_lexer_file() {
+    local f="$1" mode="$2"
+    local base
+    base="$(basename "$f" .px)"
+    echo "── lexer 对拍: $f ($mode)"
+    if [ "$mode" = "build" ]; then
+        "$(dirname "$0")/build/lexer" "$f" 2>&1 | norm_tokens > "$WORK/$base.px.tokens"
+    else
+        "$PX" run "$(dirname "$0")/lexer.px" "$f" 2>&1 | norm_tokens > "$WORK/$base.px.tokens"
+    fi
+    norm_tokens < "$GOLDEN_DIR/$base.tokens" > "$WORK/$base.gold.tokens"
+    if diff -q "$WORK/$base.px.tokens" "$WORK/$base.gold.tokens" >/dev/null 2>&1; then
+        echo "    ✅ $base token 流一致"
+    else
+        echo "    ❌ $base 有差异"
+        diff "$WORK/$base.px.tokens" "$WORK/$base.gold.tokens" | head -10
+    fi
 }
 
 check_file() {
@@ -127,6 +150,21 @@ check_file() {
     fi
 }
 
+# ---- 入口 ----
+if [ "${1:-}" = "--lexer" ]; then
+    LEXER_MODE="run"
+    shift
+    if [ "${1:-}" = "--build" ]; then LEXER_MODE="build"; shift; fi
+    if [ -n "${1:-}" ]; then
+        check_lexer_file "$1" "$LEXER_MODE"
+    else
+        for f in "$(dirname "$0")"/cases/*.px; do
+            [ -e "$f" ] && check_lexer_file "$f" "$LEXER_MODE"
+        done
+    fi
+    exit 0
+fi
+
 if [ "${1:-}" = "--all" ]; then
     for f in "$(dirname "$0")"/cases/*.px; do
         [ -e "$f" ] || { echo "cases/ 下无用例"; exit 0; }
@@ -135,6 +173,6 @@ if [ "${1:-}" = "--all" ]; then
 elif [ -n "${1:-}" ]; then
     check_file "$1"
 else
-    echo "用法: $0 <file.px> | --all"
+    echo "用法: $0 <file.px> | --all | --lexer [--build] [file.px]"
     exit 1
 fi

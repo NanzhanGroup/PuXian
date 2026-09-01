@@ -15,3 +15,7 @@ examples/build/
 .idea/
 *.swp
 .DS_Store
+
+# 自举编译产物
+selfhost/build/
+selfhost/cases/build/

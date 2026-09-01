@@ -197,6 +197,7 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs);
 void px_register_builtins(void);
 LXValue px_get_global(const char* name);
 void px_set_global(const char* name, LXValue v);
+void px_args_init(int argc, char** argv);
 
 // ==================== M19 P1：AES / XML / zip ====================
 // 实现文件：runtime_aes.c（mbedtls）、runtime_xml.c、runtime_zip.c（miniz）

@@ -127,7 +127,8 @@ impl Codegen {
         }
 
         // 第三遍：生成 main()
-        out.push_str("int main(void) {\n");
+        out.push_str("int main(int argc, char** argv) {\n");
+        out.push_str("    px_args_init(argc, argv);\n");
         out.push_str("    px_register_builtins();\n");
 
         // 注册顶层函数
@@ -189,7 +190,7 @@ impl Codegen {
         // 合并闭包定义（放在所有函数定义之前，避免使用前未声明）
         let mut final_out = String::new();
         let main_part = out.clone();
-        if let Some(pos) = main_part.find("int main(void)") {
+        if let Some(pos) = main_part.find("int main(") {
             let head = &main_part[..pos];
             let tail = &main_part[pos..];
             // 在 head 中第一个函数定义（static LXValue）之前插入闭包定义
@@ -1454,7 +1455,7 @@ mod tests {
     #[test]
     fn test_gen_basic() {
         let c = gen_code("let x = 1 + 2\nprint(x)\n");
-        assert!(c.contains("int main(void)"));
+        assert!(c.contains("int main(int argc, char** argv)"));
         assert!(c.contains("px_add"));
     }
 
