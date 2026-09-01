@@ -1,0 +1,21 @@
+info
+warn
+error
+eq: true
+tag I: I
+tag W: W
+tag E: E
+tag ?: ?
+code A: 1
+code B: 2
+code OK: true
+kind: str
+a: [1, 2, 3]
+b: [1, 2, 3]
+append eq: true
+rows: [[10], [20]]
+m: {k: [99]}
+bag: [7]
+cmp: false
+cmp2: false
+sugar ok

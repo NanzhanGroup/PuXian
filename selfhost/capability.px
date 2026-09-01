@@ -516,6 +516,54 @@ check("wr _private/helper.px → null（私有段）", wr_parse_file("_private/h
 check("wr hello.txt → null（非 .px）", wr_parse_file("hello.txt") == null)
 
 # ============================================================
+section("19. 语言糖打包（M44：简化枚举 + 列表追加简写）")
+# ============================================================
+# M44.1：type X const (A = v, B = v) 一行式带值枚举
+type LogLevel const (Info = "info", Warn = "warn", Err = "error")
+check("M44 常量访问字符串值", LogLevel.Info == "info" and LogLevel.Warn == "warn" and LogLevel.Err == "error")
+type Code const (A = 1, B = 2, OK = true)
+check("M44 常量访问整数/布尔值", Code.A == 1 and Code.B == 2 and Code.OK == true)
+# match case 按绑定值匹配（PatLiteral → 值比较）
+def lg_tag(lv):
+    let r = match lv:
+        case LogLevel.Info:
+            "I"
+        case LogLevel.Warn:
+            "W"
+        case _:
+            "?"
+    return r
+check("M44 match 按值匹配", lg_tag(LogLevel.Warn) == "W" and lg_tag("x") == "?")
+# 与无值 enum 并存
+enum SugarKind:
+    Int
+    Str
+check("M44 与无值 enum 并存", SugarKind.Int != null)
+# M44.2：`a <- 4` ≡ a.append(4)
+var sl = []
+sl <- 1
+sl <- 2
+sl <- 3
+check("M44 <- Var 目标追加", sl == [1, 2, 3])
+var sl2 = []
+sl2.append(1)
+sl2.append(2)
+sl2.append(3)
+check("M44 <- 与 append 等价", sl == sl2)
+var slm = {"k": []}
+slm["k"] <- 9
+check("M44 <- Index/dict 目标", slm["k"] == [9])
+var slr = [[], []]
+slr[1] <- 7
+check("M44 <- 嵌套 list 目标", slr[1] == [7])
+struct SugarBag:
+    items: list
+let sbag = SugarBag([])
+sbag.items <- 5
+check("M44 <- Field 目标", sbag.items == [5])
+check("M44 比较运算不受影响", (5 < -1) == false and (5 < 1) == false and (-1 < 5) == true)
+
+# ============================================================
 # 汇总
 # ============================================================
 print("")

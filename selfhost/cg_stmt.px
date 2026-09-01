@@ -46,6 +46,10 @@ def cg_gen_stmt(stmt, indent):
         var rhs = cg_gen_expr(stmt[3])
         let tgt = stmt[1]
         let op = stmt[2]
+        # M44：列表追加简写 `a <- 4` ≡ a.append(4)
+        if op == "Append":
+            let o = cg_gen_expr(tgt)
+            return pad + "(void)(px_method(" + o + ", \"append\", (LXValue[]){" + rhs + "}, 1));\n"
         let tty = tgt[0]
         if tty == "Var":
             let name = rust_unescape(tgt[1])

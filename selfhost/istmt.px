@@ -81,6 +81,20 @@ def i_exec_stmt(stmt, env):
         return i_exec_struct(stmt, env)
     if ty == "EnumDef":
         return i_exec_enum(stmt, env)
+    if ty == "TypeConst":
+        # M44：type X const (A = v, B = v) —— 注册 name → {variant: 值}
+        let tname = rust_unescape(stmt[1])
+        let d = it_new_dict()
+        var ti = 0
+        while ti < len(stmt[2]):
+            let item = stmt[2][ti]
+            let vr = i_eval_expr(item[2], env)
+            if vr.is_err():
+                return Err(vr.err())
+            d[rust_unescape(item[1])] = vr.unwrap()
+            ti += 1
+        g_const_enums[tname] = d
+        return Ok(null)
     if ty == "TraitDef":
         # ["TraitDef", name, methods, pos]
         let name = rust_unescape(stmt[1])
@@ -223,6 +237,16 @@ def i_exec_impl(stmt, env):
 
 # ---------- 赋值（对齐 assign） ----------
 def i_assign(target, op, v, env, pos):
+    if op == "Append":
+        # M44：列表追加简写 `a <- 4` ≡ a.append(4)（Var/Field/Index 目标均可，list 引用语义）
+        let tr = i_eval_expr(target, env)
+        if tr.is_err():
+            return Err(tr.err())
+        let tv = tr.unwrap()
+        if i_type_name(tv) != "list":
+            return Err(i_r1007("<- 目标必须是 list（实际是 " + i_type_name(tv) + "）", pos))
+        tv.append(v)
+        return Ok(null)
     if target[0] == "Var":
         let name = rust_unescape(target[1])
         if op == "Assign":

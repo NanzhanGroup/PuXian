@@ -1,0 +1,88 @@
+# M44：语言糖打包用例（简化枚举 + 列表追加简写）
+# 验证：type X const 一行式带值枚举 + `a <- 4` 追加简写
+#       （编译/解释双模式输出逐字节一致）
+
+# ---- M44.1 简化枚举：type X const (A = v, B = v) ----
+type LogLevel const (Info = "info", Warn = "warn", Err = "error")
+
+def level_tag(lv):
+    let r = match lv:
+        case LogLevel.Info:
+            "I"
+        case LogLevel.Warn:
+            "W"
+        case LogLevel.Err:
+            "E"
+        case _:
+            "?"
+    return r
+
+# 与无值 enum 并存
+enum Kind:
+    Int
+    Str
+
+# ---- M44.2 列表追加简写 `a <- 4` ----
+struct Bag:
+    items: list
+
+def main():
+    # M44.1：常量访问
+    print(LogLevel.Info)
+    print(LogLevel.Warn)
+    print(LogLevel.Err)
+    print("eq: " + str(LogLevel.Info == "info"))
+    print("tag I: " + level_tag(LogLevel.Info))
+    print("tag W: " + level_tag(LogLevel.Warn))
+    print("tag E: " + level_tag(LogLevel.Err))
+    print("tag ?: " + level_tag("other"))
+
+    # 整数/浮点/布尔值枚举
+    type Code const (A = 1, B = 2, OK = true)
+    print("code A: " + str(Code.A))
+    print("code B: " + str(Code.B))
+    print("code OK: " + str(Code.OK))
+
+    # 与无值 enum 并存（kind 匹配不受影响）
+    let k = Kind.Str
+    let kdesc = match k:
+        case Int:
+            "int"
+        case Str:
+            "str"
+    print("kind: " + kdesc)
+
+    # M44.2：Var 目标
+    let a = []
+    a <- 1
+    a <- 2
+    a <- 3
+    print("a: " + str(a))
+
+    # 与 append 等价
+    let b = []
+    b.append(1)
+    b.append(2)
+    b.append(3)
+    print("b: " + str(b))
+    print("append eq: " + str(a == b))
+
+    # Index 目标（嵌套列表 / dict）
+    let rows = [[], []]
+    rows[0] <- 10
+    rows[1] <- 20
+    print("rows: " + str(rows))
+    let m = {"k": []}
+    m["k"] <- 99
+    print("m: " + str(m))
+
+    # Field 目标（struct）
+    let bag = Bag([])
+    bag.items <- 7
+    print("bag: " + str(bag.items))
+
+    # 比较运算不受影响（`<` 与 `-` 之间保留空格仍是比较）
+    let x = 5
+    print("cmp: " + str(x < -3))
+    print("cmp2: " + str(x < -1))
+    print("sugar ok")
