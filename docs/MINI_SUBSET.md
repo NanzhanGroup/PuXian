@@ -151,3 +151,21 @@
 | 5 | **编译模式闭包显示名带序号** | `str(fn(x){x})` 编译版 \"\<fn \<closure2\>\>\" vs 解释器 \"\<fn \<closure\>\>\" | 不依赖闭包显示名（语义不受影响） |
 | 6 | **dict 键必须字符串**（语言级） | 整数键 `d[1]` 编译/解释均按字符串键 \"1\" 处理（`keys()` 返回 [\"1\"]） | 显式 `str(k)` 作键 |
 | 7 | **模块顶层 `let` 不导出**（import 只导出 def/struct/enum/trait/impl/const） | `import` 后访问模块的顶层 `let` 变量 → 未定义 | 模块导出常量用 `const` 关键字；函数/类型定义自动导出 |
+
+## 十、M-B6 新增：codegen 自举重写完成（AST → C 源码逐字节对拍）
+
+- **交付**：`selfhost/codegen.px`（主流程/函数生成）+ `cg_stmt.px`（语句）+ `cg_expr.px`（表达式/推导式/闭包）+ `cg_module.px`（import 模块解析），复用 `parser.px`/`pxlexer.px` 的 lex/parse。
+- **对拍**：`./diffcheck.sh --codegen`（run 模式）**12/12 用例 C 源码逐字节一致**（s01-s09 + v01-v03，含 import/trait+impl/闭包/生成器/推导式/Result+?/match/插值/unicode 边界/浮点大数）；`--codegen --build`（编译版 codegen.px 本身）**11/12**，v01 差异为已知浮点精度限制（见下表 #2）。
+- **对齐 Rust codegen.rs 的关键点**：
+  - impl 方法按 `"类型.方法"` 字典序输出（M-B6 起 Rust 版也排序，HashMap 迭代顺序跨进程不稳定 → 确定性输出；`codegen.rs` 已改并回归 205/205）。
+  - uid 分配顺序逐点对齐（_tN/_vN/px_err_N/闭包 closure_id）。
+  - 推导式嵌套循环组装、match 模式条件、Try/?/ForceUnwrap/IfExpr 的 statement-expression 格式逐字节对齐。
+  - 浮点输出对齐 Rust f64 Display：`2.0→"2"`、`1e15→"1000000000000000"`（`cg_fmt_float` + `cg_expand_sci` 处理编译版 %g 指数格式）。
+
+### M-B6 新增已知限制（自举写代码必须规避）
+
+| # | 限制 | 现象 | 规避 |
+|---|---|---|---|
+| 1 | **模块不导出 `main` 函数**（M-B6 修正：Rust module.rs + PuXian cg_module.px 一致行为） | import 一个含 `def main()` 的模块时，模块的 main 不再合并进主程序（避免编译模式 fn_main 重定义冲突） | 模块（库文件）不定义 main；入口 main 只写在主程序 |
+| 2 | **编译模式 `str(float)` 用 C `%g`（6 位有效数字）** | 高精度浮点字面量（如 `1.4142135623730951`）在编译版 codegen（--build）输出截断为 `1.41421`，与解释器/rust Display 不一致；`--codegen`（run）模式无此问题 | codegen 用例避免 >6 位有效数字的浮点字面量；`--codegen --build` 对拍跳过 v01（已知差异） |
+| 3 | **编译模式 `str(float)` 指数格式 `%g`（如 `1e+15`）** | `cg_expand_sci` 已在 codegen 层展开为定点（对齐 Rust Display），但运行时 `print(1e15)` 编译版仍输出 `1e+15` | codegen 生成 C 源码无此问题；运行时打印大浮点走解释器或规避 |

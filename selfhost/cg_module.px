@@ -1,0 +1,239 @@
+# ============================================================
+# M-B6: cg_module.px —— import 模块解析（AST 级合并，对齐 Rust module.rs）
+# ------------------------------------------------------------
+# 被 codegen.px import；函数引用主文件全局（p_toks/p_pos/rust_unescape 等）。
+# 对齐 Rust module::ModuleResolver::resolve：
+#   - import 不执行顶层语句，只合并定义类语句（def/struct/enum/trait/impl/const）
+#   - 模块定义插到主 AST 最前（Import 之后、任何语句之前），用户优先（执行序覆盖）
+#   - std 模块同名定义去重（std_defined）；用户定义始终保留
+#   - 递归加载子 import；loaded 缓存避免重复
+# 对拍：含 import 的用例（s08）C 源码与 Rust 版逐字节一致
+# ============================================================
+
+# ---------- 工具 ----------
+def cg_dirname(path):
+    let i = len(path) - 1
+    while i >= 0:
+        if path[i] == "/":
+            if i == 0:
+                return "/"
+            return path[0:i]
+        i -= 1
+    return "."
+
+# stdlib 目录定位：PX_STDLIB env → 候选路径（开发/安装布局）
+def cg_stdlib_dir():
+    let e = env("PX_STDLIB")
+    if e != null and exists(e):
+        return e
+    let cands = ["/data/code/puxian/stdlib", "../stdlib", "stdlib", "./stdlib", "../../stdlib"]
+    let i = 0
+    while i < len(cands):
+        let c = cands[i]
+        if exists(c):
+            return c
+        i += 1
+    return null
+
+# 根据模块路径查找源文件（相对路径 / std.* / 用户点分包）
+def cg_find_module_path(module, base_dir):
+    if len(module) == 0:
+        return null
+    # 相对路径导入：import "path/to/file.px"
+    if len(module) == 1 and (contains(module[0], "/") or contains(module[0], ".px")):
+        let rel = module[0]
+        let p = rel
+        if not (len(rel) > 0 and rel[0] == "/"):
+            p = base_dir + "/" + rel
+        if exists(p):
+            return p
+        return null
+    # std.*
+    if module[0] == "std":
+        if len(module) < 2:
+            return null
+        let dir = cg_stdlib_dir()
+        if dir == null:
+            return null
+        let p = dir
+        let si = 1
+        while si < len(module):
+            p += "/" + module[si]
+            si += 1
+        let f = p + ".px"
+        if exists(f):
+            return f
+        let m = p + "/mod.px"
+        if exists(m):
+            return m
+        return null
+    # 用户点分包：base_dir → .px_modules → 依赖子目录
+    let bases = [base_dir]
+    let mods = base_dir + "/.px_modules"
+    if exists(mods):
+        bases.append(mods)
+        let subdirs = list_dir(mods)
+        let di = 0
+        while di < len(subdirs):
+            let sub = subdirs[di]
+            let full = mods + "/" + sub
+            if exists(full) and not contains(sub, "."):
+                bases.append(full)
+            di += 1
+    let bi = 0
+    while bi < len(bases):
+        let base = bases[bi]
+        let p = base
+        let si = 0
+        while si < len(module):
+            p += "/" + module[si]
+            si += 1
+        let f = p + ".px"
+        if exists(f):
+            return f
+        let m = p + "/mod.px"
+        if exists(m):
+            return m
+        if len(module) == 1:
+            let single = base + "/" + module[0] + ".px"
+            if exists(single):
+                return single
+        bi += 1
+    return null
+
+# 顶层语句是否为定义类（可被模块导出）
+def cg_is_definition(st):
+    let ty = st[0]
+    if ty == "FuncDef":
+        # M-B6：模块不导出 main（避免编译模式 fn_main 重定义冲突）
+        if rust_unescape(st[1]) == "main":
+            return false
+        return true
+    if ty == "StructDef" or ty == "EnumDef" or ty == "TraitDef" or ty == "ImplDef":
+        return true
+    if ty == "VarDecl" and st[1] == "Const":
+        return true
+    return false
+
+# 定义名（impl 用 "impl::类型::trait" 近似键）
+def cg_def_name(st):
+    let ty = st[0]
+    if ty == "FuncDef" or ty == "StructDef" or ty == "EnumDef" or ty == "TraitDef":
+        return rust_unescape(st[1])
+    if ty == "VarDecl" and st[1] == "Const":
+        return rust_unescape(st[2])
+    if ty == "ImplDef":
+        let tn = rust_unescape(st[1])
+        let tr = st[2]
+        let ts = "None"
+        if tr != null:
+            ts = "Some(" + tr + ")"
+        return "impl::" + tn + "::" + ts
+    return null
+
+# 加载单个模块：解析 → 递归子 import → 提取定义
+def cg_load_module(module, names, base_dir, out, std_defined):
+    # module/names 元素是 AST 字符串字段（debug 格式带引号），先还原
+    let m2 = []
+    let ni = 0
+    while ni < len(module):
+        m2.append(rust_unescape(module[ni]))
+        ni += 1
+    module = m2
+    let n2 = []
+    let ni2 = 0
+    while ni2 < len(names):
+        n2.append(rust_unescape(names[ni2]))
+        ni2 += 1
+    names = n2
+    if len(module) == 0:
+        return
+    let is_std = module[0] == "std"
+    let key = join(".", module)
+    if loaded.has(key):
+        return
+    let path = cg_find_module_path(module, base_dir)
+    if path == null:
+        # std 模块缺失 → 静默跳过；用户模块缺失 → 打印警告
+        if module[0] != "std":
+            print("[module] 警告: 找不到模块 '" + key + "'（已跳过）")
+        return
+    loaded[key] = path
+    let src = read_file(path)
+    p_toks = lex_tokens(src)
+    p_pos = 0
+    let sprog = parse_program()
+    # 递归：模块内部 import（以模块所在目录为基准）
+    let mod_dir = cg_dirname(path)
+    let inner_imports = []
+    let ii = 0
+    while ii < len(sprog[1]):
+        let st = sprog[1][ii]
+        if st[0] == "Import":
+            inner_imports.append([st[1], st[2]])
+        ii += 1
+    let jj = 0
+    while jj < len(inner_imports):
+        cg_load_module(inner_imports[jj][0], inner_imports[jj][1], mod_dir, out, std_defined)
+        jj += 1
+    # 提取定义类语句（选择性导入只保留列出的名字）
+    let selective = len(names) > 0
+    let ki = 0
+    while ki < len(sprog[1]):
+        let st = sprog[1][ki]
+        if st[0] == "Import":
+            ki += 1
+            continue
+        if not cg_is_definition(st):
+            ki += 1
+            continue
+        let name = cg_def_name(st)
+        if name == null:
+            out.append(st)
+        else:
+            if selective:
+                if len(name) >= 5 and name[0:5] == "impl::":
+                    ki += 1
+                    continue
+                if not contains(names, name):
+                    ki += 1
+                    continue
+            if is_std:
+                if std_defined.has(name):
+                    ki += 1
+                    continue
+                std_defined[name] = true
+            out.append(st)
+        ki += 1
+
+# 解析并合并程序的所有 import（返回新 Program）
+def cg_resolve_modules(prog, base_dir):
+    let items = prog[1]
+    if len(items) == 0:
+        return prog
+    let extra = []
+    let std_defined = cg_new_dict()
+    loaded = cg_new_dict()
+    let imports = []
+    let i = 0
+    while i < len(items):
+        let st = items[i]
+        if st[0] == "Import":
+            imports.append([st[1], st[2]])
+        i += 1
+    let li = 0
+    while li < len(imports):
+        cg_load_module(imports[li][0], imports[li][1], base_dir, extra, std_defined)
+        li += 1
+    if len(extra) == 0:
+        return prog
+    let new_items = []
+    let ei = 0
+    while ei < len(extra):
+        new_items.append(extra[ei])
+        ei += 1
+    let ii = 0
+    while ii < len(items):
+        new_items.append(items[ii])
+        ii += 1
+    return ["Program", new_items]

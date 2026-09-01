@@ -196,6 +196,30 @@ check_file() {
     fi
 }
 
+# ---- M-B6：PuXian codegen 对拍 ----
+#   解释器执行 selfhost/codegen.px <file> 输出 C 源码，与 golden/*.c 对比
+#   --build：编译版 selfhost/build/codegen <file>（验证 codegen.px 在 Mini 子集内）
+check_codegen_file() {
+    local f="$1" mode="$2"
+    local base
+    base="$(basename "$f" .px)"
+    echo "── codegen 对拍: $f ($mode)"
+    local out
+    if [ "$mode" = "build" ]; then
+        out=$("$(dirname "$0")/build/codegen" "$f" 2>&1)
+    else
+        out=$("$PX" run "$(dirname "$0")/codegen.px" "$f" 2>&1)
+    fi
+    norm_c <<< "$out" > "$WORK/$base.px.c"
+    norm_c < "$GOLDEN_DIR/$base.c" > "$WORK/$base.gold.c" 2>/dev/null || { echo "    ⚠️ 无 golden，先生成"; return; }
+    if diff -q "$WORK/$base.px.c" "$WORK/$base.gold.c" >/dev/null 2>&1; then
+        echo "    ✅ $base C 源码一致"
+    else
+        echo "    ❌ $base C 源码有差异"
+        diff "$WORK/$base.px.c" "$WORK/$base.gold.c" | head -10
+    fi
+}
+
 # ---- M-B5：值系统/作用域/模块对拍 ----
 #   解释器执行 value/env/module 用例（v0*.px），断言全 [PASS] 无 [FAIL]/运行时错误
 #   --build：额外编译并运行编译版（双模式验证）
@@ -280,6 +304,21 @@ if [ "${1:-}" = "--errors" ]; then
     fi
 fi
 
+
+if [ "${1:-}" = "--codegen" ]; then
+    shift
+    CODEGEN_MODE="run"
+    if [ "${1:-}" = "--build" ]; then CODEGEN_MODE="build"; shift; fi
+    if [ -n "${1:-}" ]; then
+        check_codegen_file "$1" "$CODEGEN_MODE"
+    else
+        for f in "$(dirname "$0")"/cases/*.px; do
+            [ -e "$f" ] || continue
+            check_codegen_file "$f" "$CODEGEN_MODE"
+        done
+    fi
+    exit 0
+fi
 
 if [ "${1:-}" = "--parser" ]; then
     shift

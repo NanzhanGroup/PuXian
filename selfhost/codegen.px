@@ -1,0 +1,529 @@
+# ============================================================
+# M-B6: codegen 用 PuXian 重写（自举第四步）—— AST → C 源码
+# ------------------------------------------------------------
+# 对拍契约（MINI_SUBSET §五 build 层）：Rust 版 px build 生成的
+# C 源码（golden/*.c）与本 codegen.px 输出逐字节一致。
+# 用法：
+#   px run codegen.px <file.px>   # 输出 C 源码到 stdout
+# 架构：
+#   - 复用 parser.px 的 lex/parse（import；全局状态在本文件声明，
+#     parser/pxlexer 函数运行时查主文件全局表）
+#   - cg_stmt.px：语句生成（gen_stmt/gen_select）
+#   - cg_expr.px：表达式生成（gen_expr/gen_pattern_cond/gen_lambda）
+# 对齐 Rust compiler/src/codegen.rs（M-B6 起 impl 方法按
+# "类型.方法" 字典序输出，保证跨进程确定性）
+# ============================================================
+import "parser.px"
+import "cg_stmt.px"
+import "cg_expr.px"
+import "cg_module.px"
+
+# ---------- lex/parser 全局状态（主文件声明；import 不注册模块顶层 let） ----------
+let g_src = ""
+let g_len = 0
+let g_pos = 0
+let g_line = 1
+let g_col = 1
+let g_indent_stack = [0]
+let g_at_line_start = true
+let g_toks = []
+let g_count = 0
+let g_pending = []
+let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn": "fn", "struct": "struct", "enum": "enum", "trait": "trait", "impl": "impl", "match": "match", "case": "case", "if": "if", "elif": "elif", "else": "else", "for": "for", "while": "while", "in": "in", "and": "and", "or": "or", "not": "not", "return": "return", "break": "break", "continue": "continue", "import": "import", "from": "from", "pub": "pub", "as": "as", "spawn": "spawn", "chan": "chan", "send": "send", "recv": "recv", "select": "select", "true": "true", "false": "false", "null": "null", "None": "null", "self": "self", "capture": "capture"}
+let CTRL_ALL = "\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}\u{8}\u{b}\u{c}\u{e}\u{f}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1a}\u{1b}\u{1c}\u{1d}\u{1e}\u{1f}\u{7f}\u{80}\u{81}\u{82}\u{83}\u{84}\u{85}\u{86}\u{87}\u{88}\u{89}\u{8a}\u{8b}\u{8c}\u{8d}\u{8e}\u{8f}\u{90}\u{91}\u{92}\u{93}\u{94}\u{95}\u{96}\u{97}\u{98}\u{99}\u{9a}\u{9b}\u{9c}\u{9d}\u{9e}\u{9f}"
+let p_toks = []
+let p_pos = 0
+
+# ---------- codegen 全局状态 ----------
+let cg_closures = ""
+let cg_structs = {"_": 0}
+let cg_enums = {"_": 0}
+let cg_impls = {"_": 0}
+let cg_vars = {"_": 0}
+let cg_var_types = {"_": 0}
+let cg_globals = []
+let cg_err_labels = []
+let cg_uidc = 0
+let cg_closure_id = 0
+let loaded = {"_": 0}
+
+# ---------- 工具 ----------
+# 空 dict 创建（PuXian 限制：{} 是空块=null，非空 dict）
+def cg_new_dict():
+    let d = {"_": 0}
+    d.remove("_")
+    return d
+
+def cg_dict_copy(d):
+    let out = cg_new_dict()
+    let ks = d.keys()
+    let i = 0
+    while i < len(ks):
+        out[ks[i]] = d[ks[i]]
+        i += 1
+    return out
+
+def cg_uid():
+    cg_uidc = cg_uidc + 1
+    return cg_uidc
+
+def cg_tmp():
+    return "_t" + str(cg_uid())
+
+def cg_new_var(name):
+    let v = "_v" + str(cg_uid())
+    cg_vars[name] = v
+    return v
+
+def cg_var_of(name):
+    if cg_vars.has(name):
+        return cg_vars[name]
+    return null
+
+def cg_func_cname(name):
+    let out = ""
+    let i = 0
+    while i < len(name):
+        let c = name[i]
+        let a = c >= "a" and c <= "z"
+        let b = c >= "A" and c <= "Z"
+        let d = c >= "0" and c <= "9"
+        if a or b or d:
+            out += c
+        else:
+            out += "_"
+        i += 1
+    return out
+
+def cg_find(s, sub):
+    let n = len(s)
+    let m = len(sub)
+    let i = 0
+    while i + m <= n:
+        let j = 0
+        let ok = true
+        while j < m:
+            if s[i + j] != sub[j]:
+                ok = false
+                break
+            j += 1
+        if ok:
+            return i
+        i += 1
+    return -1
+
+def cg_pad(n):
+    let s = ""
+    let i = 0
+    while i < n:
+        s += "    "
+        i += 1
+    return s
+
+# 字符串 debug 格式（rust_str_debug，带引号）→ 原始字符串
+def rust_unescape(s):
+    let body = s[1:len(s) - 1]
+    let out = ""
+    let i = 0
+    while i < len(body):
+        let c = body[i]
+        if c == "\\":
+            let nxt = body[i + 1]
+            if nxt == "n":
+                out += "\n"
+                i += 2
+            elif nxt == "t":
+                out += "\t"
+                i += 2
+            elif nxt == "r":
+                out += "\r"
+                i += 2
+            elif nxt == "0":
+                out += "\u{0}"
+                i += 2
+            elif nxt == "\"":
+                out += "\""
+                i += 2
+            elif nxt == "\\":
+                out += "\\"
+                i += 2
+            elif nxt == "u":
+                let j = i + 3
+                let hex = ""
+                while j < len(body) and body[j] != "}":
+                    hex += body[j]
+                    j += 1
+                out += hex_to_char(hex)
+                i = j + 1
+            else:
+                out += nxt
+                i += 2
+        else:
+            out += c
+            i += 1
+    return out
+
+# 对齐 Rust codegen.escape_str（原始字符串 → C 字面量转义）
+def cg_escape_str(s):
+    let out = ""
+    let i = 0
+    while i < len(s):
+        let c = s[i]
+        if c == "\\":
+            out += "\\\\"
+        elif c == "\"":
+            out += "\\\""
+        elif c == "\n":
+            out += "\\n"
+        elif c == "\r":
+            out += "\\r"
+        elif c == "\t":
+            out += "\\t"
+        else:
+            out += c
+        i += 1
+    return out
+
+# 指数格式展开（编译版 C 运行时 %g 输出 "1.5e+10" → Rust f64 Display 定点 "15000000000"）
+def cg_pad_zeros(n):
+    let s = ""
+    let i = 0
+    while i < n:
+        s += "0"
+        i += 1
+    return s
+
+def cg_expand_sci(s):
+    let ei = -1
+    let i = 0
+    while i < len(s):
+        if s[i] == "e" or s[i] == "E":
+            ei = i
+            break
+        i += 1
+    if ei < 0:
+        return s
+    let mant = s[0:ei]
+    let exp_s = s[ei + 1:len(s)]
+    let sign = 1
+    if len(exp_s) > 0 and exp_s[0] == "+":
+        exp_s = exp_s[1:len(exp_s)]
+    elif len(exp_s) > 0 and exp_s[0] == "-":
+        sign = -1
+        exp_s = exp_s[1:len(exp_s)]
+    let exp = int(exp_s) * sign
+    let neg = false
+    if len(mant) > 0 and mant[0] == "-":
+        neg = true
+        mant = mant[1:len(mant)]
+    let mant_int = ""
+    let mant_frac = ""
+    let dot = -1
+    let di = 0
+    while di < len(mant):
+        if mant[di] == ".":
+            dot = di
+            break
+        di += 1
+    if dot < 0:
+        mant_int = mant
+    else:
+        mant_int = mant[0:dot]
+        mant_frac = mant[dot + 1:len(mant)]
+    let digits = mant_int + mant_frac
+    let point = len(mant_int) + exp
+    let out = ""
+    if point <= 0:
+        out = "0." + cg_pad_zeros(0 - point) + digits
+    elif point >= len(digits):
+        out = digits + cg_pad_zeros(point - len(digits))
+    else:
+        out = digits[0:point] + "." + digits[point:len(digits)]
+    if neg:
+        return "-" + out
+    return out
+
+# 对齐 Rust f64 Display（codegen 里 px_float({}) 用 Display：2.0 → "2"；1e15 → "1000000000000000"）
+def cg_fmt_float(v):
+    let s = str(v)
+    if s == "inf" or s == "-inf" or s == "nan":
+        return s
+    s = cg_expand_sci(s)
+    let n = len(s)
+    if n >= 2 and s[n - 2:n] == ".0":
+        return s[0:n - 2]
+    return s
+
+# ---------- 类型表收集 ----------
+def cg_collect_types(prog):
+    let items = prog[1]
+    let i = 0
+    while i < len(items):
+        let st = items[i]
+        let ty = st[0]
+        if ty == "StructDef":
+            let fnames = []
+            let fi = 0
+            while fi < len(st[2]):
+                fnames.append(rust_unescape(st[2][fi][1]))
+                fi += 1
+            cg_structs[rust_unescape(st[1])] = fnames
+        elif ty == "EnumDef":
+            let vnames = []
+            let vi = 0
+            while vi < len(st[2]):
+                vnames.append(rust_unescape(st[2][vi][1]))
+                vi += 1
+            cg_enums[rust_unescape(st[1])] = vnames
+        elif ty == "ImplDef":
+            let tn = rust_unescape(st[1])
+            if cg_impls.has(tn):
+                let mi = 0
+                while mi < len(st[3]):
+                    cg_impls[tn].append(st[3][mi])
+                    mi += 1
+            else:
+                cg_impls[tn] = st[3]
+        i += 1
+
+# ---------- 收集赋值目标变量（递归 if/for/while） ----------
+def cg_collect_assign_vars(stmts, out):
+    let i = 0
+    while i < len(stmts):
+        let st = stmts[i]
+        let ty = st[0]
+        if ty == "Assign":
+            let tgt = st[1]
+            if tgt[0] == "Var":
+                let name = rust_unescape(tgt[1])
+                if not contains(out, name):
+                    out.append(name)
+        elif ty == "If":
+            let brs = st[1]
+            let bi = 0
+            while bi < len(brs):
+                cg_collect_assign_vars(brs[bi][1], out)
+                bi += 1
+            if st[2] != null:
+                cg_collect_assign_vars(st[2], out)
+        elif ty == "For":
+            cg_collect_assign_vars(st[3], out)
+        elif ty == "While":
+            cg_collect_assign_vars(st[2], out)
+        i += 1
+
+# ---------- 函数生成 ----------
+def cg_gen_func(f):
+    let cname = "fn_" + cg_func_cname(rust_unescape(f[1]))
+    return cg_gen_func_named(f, cname)
+
+def cg_gen_func_named(f, cname):
+    let s = "static LXValue " + cname + "(LXValue* args, int nargs, void* ctx) {\n"
+    s += "    (void)ctx;\n"
+    let saved_vars = cg_dict_copy(cg_vars)
+    let saved_types = cg_dict_copy(cg_var_types)
+    cg_vars = cg_new_dict()
+    cg_var_types = cg_new_dict()
+    # 参数绑定
+    let params = f[2]
+    let i = 0
+    while i < len(params):
+        let p = params[i]
+        let v = cg_new_var(rust_unescape(p[1]))
+        let default_c = "px_null()"
+        if p[3] != null:
+            default_c = cg_gen_expr(p[3])
+        s += "    LXValue " + v + " = (nargs > " + str(i) + ") ? args[" + str(i) + "] : " + default_c + ";\n"
+        i += 1
+    # 预扫描：函数体内赋值变量（Python 语义局部变量；顶层全局名除外）
+    let assign_names = []
+    cg_collect_assign_vars(f[4], assign_names)
+    let ai = 0
+    while ai < len(assign_names):
+        let name = assign_names[ai]
+        if cg_var_of(name) != null:
+            ai += 1
+            continue
+        if contains(cg_globals, name):
+            ai += 1
+            continue
+        let v = cg_new_var(name)
+        s += "    LXValue " + v + " = px_null();\n"
+        ai += 1
+    # M39：? 错误传播标签
+    let err_tag = "px_err_" + str(cg_uid())
+    cg_err_labels.append(err_tag)
+    s += "    LXValue " + err_tag + "_val = px_null();\n"
+    s += "    int " + err_tag + "_proped = 0;\n"
+    # 函数体
+    let body = f[4]
+    let bi = 0
+    while bi < len(body):
+        s += cg_gen_stmt(body[bi], 1)
+        bi += 1
+    s += err_tag + ":\n"
+    s += "    if (" + err_tag + "_proped) return " + err_tag + "_val;\n"
+    s += "    return px_null();\n"
+    s += "}\n"
+    cg_err_labels = cg_err_labels[0:len(cg_err_labels) - 1]
+    cg_vars = saved_vars
+    cg_var_types = saved_types
+    return s
+
+# ---------- generate 主流程 ----------
+def cg_generate(prog):
+    let out = "/* 由普贤 (PuXian) 编译器自动生成 — px build */\n#include \"runtime.h\"\n#include <string.h>\n#include <stdio.h>\n\n"
+    cg_closures = ""
+    cg_structs = cg_new_dict()
+    cg_enums = cg_new_dict()
+    cg_impls = cg_new_dict()
+    cg_vars = cg_new_dict()
+    cg_var_types = cg_new_dict()
+    cg_globals = []
+    cg_err_labels = []
+    cg_uidc = 0
+    cg_closure_id = 0
+    cg_collect_types(prog)
+    # 收集顶层全局名（函数 + 顶层变量赋值）
+    let items = prog[1]
+    let i = 0
+    while i < len(items):
+        let st = items[i]
+        let ty = st[0]
+        if ty == "FuncDef":
+            cg_globals.append(rust_unescape(st[1]))
+        elif ty == "VarDecl":
+            cg_globals.append(rust_unescape(st[2]))
+        elif ty == "Assign":
+            let tgt = st[1]
+            if tgt[0] == "Var":
+                cg_globals.append(rust_unescape(tgt[1]))
+        i += 1
+    # impl 方法列表（M-B6：按 "类型.方法" 字典序排序，确定性输出）
+    let impl_list = []
+    let tnames = cg_impls.keys()
+    let ti = 0
+    while ti < len(tnames):
+        let type_name = tnames[ti]
+        let methods = cg_impls[type_name]
+        let mi = 0
+        while mi < len(methods):
+            impl_list.append([type_name, methods[mi]])
+            mi += 1
+        ti += 1
+    # 插入排序（按 "类型.方法" 字典序，与 Rust sort_by 一致）
+    let si = 1
+    while si < len(impl_list):
+        let j = si
+        while j > 0:
+            let ka = impl_list[j - 1][0] + "." + rust_unescape(impl_list[j - 1][1][1])
+            let kb = impl_list[j][0] + "." + rust_unescape(impl_list[j][1][1])
+            if kb < ka:
+                let tmp2 = impl_list[j]
+                impl_list[j] = impl_list[j - 1]
+                impl_list[j - 1] = tmp2
+            j -= 1
+        si += 1
+    # 生成 impl 方法函数（先于顶层函数，静态分派需要前置定义）
+    let ii = 0
+    while ii < len(impl_list):
+        let type_name = impl_list[ii][0]
+        let m = impl_list[ii][1]
+        let fname = "fn_" + cg_func_cname(type_name) + "_" + cg_func_cname(rust_unescape(m[1]))
+        out += cg_gen_func_named(m, fname)
+        out += "\n"
+        ii += 1
+    # 生成顶层 def 函数
+    let di = 0
+    while di < len(items):
+        let st = items[di]
+        if st[0] == "FuncDef":
+            out += cg_gen_func(st)
+            out += "\n"
+        di += 1
+    # main()
+    out += "int main(int argc, char** argv) {\n"
+    out += "    px_args_init(argc, argv);\n"
+    out += "    px_register_builtins();\n"
+    # 注册顶层函数
+    let ri = 0
+    while ri < len(items):
+        let st = items[ri]
+        if st[0] == "FuncDef":
+            let fname = rust_unescape(st[1])
+            let cname = "fn_" + cg_func_cname(fname)
+            out += "    px_set_global(\"" + fname + "\", px_func(\"" + fname + "\", " + cname + ", NULL));\n"
+        ri += 1
+    # 注册 impl 方法为 "Type.method"
+    let ii2 = 0
+    while ii2 < len(impl_list):
+        let type_name = impl_list[ii2][0]
+        let m = impl_list[ii2][1]
+        let mname = rust_unescape(m[1])
+        let fname = "fn_" + cg_func_cname(type_name) + "_" + cg_func_cname(mname)
+        out += "    px_set_global(\"" + type_name + "." + mname + "\", px_func(\"" + type_name + "." + mname + "\", " + fname + ", NULL));\n"
+        ii2 += 1
+    # 执行顶层语句（除定义/import 外）
+    let si2 = 0
+    while si2 < len(items):
+        let st = items[si2]
+        let ty = st[0]
+        if ty != "FuncDef" and ty != "StructDef" and ty != "EnumDef" and ty != "TraitDef" and ty != "ImplDef" and ty != "Import":
+            out += cg_gen_stmt(st, 1)
+        si2 += 1
+    # 调用顶层 main()
+    let has_main = false
+    let mi3 = 0
+    while mi3 < len(items):
+        let st = items[mi3]
+        if st[0] == "FuncDef" and rust_unescape(st[1]) == "main":
+            has_main = true
+            break
+        mi3 += 1
+    if has_main:
+        let cname = "fn_main"
+        out += "    { LXValue _r = " + cname + "(NULL, 0, NULL); int _code = 0;\n"
+        out += "      if (px_is_result(_r)) {\n"
+        out += "        if (!px_result_ok(_r)) {\n"
+        out += "          fprintf(stderr, \"错误: %s\\n\", px_to_string(px_result_unwrap(_r)));\n"
+        out += "          _code = 1;\n"
+        out += "        } else {\n"
+        out += "          LXValue _uv = px_result_unwrap(_r);\n"
+        out += "          if (_uv.type == PX_INT) _code = (int)_uv.as.i;\n"
+        out += "        }\n"
+        out += "      } else if (_r.type == PX_INT) {\n"
+        out += "        _code = (int)_r.as.i;\n"
+        out += "      }\n"
+        out += "      return _code;\n"
+        out += "    }\n"
+    else:
+        out += "    return 0;\n"
+    out += "}\n"
+    # 合并闭包定义（放在所有函数定义之前）
+    let pos = cg_find(out, "int main(")
+    if pos >= 0:
+        let head = out[0:pos]
+        let tail = out[pos:len(out)]
+        let fpos = cg_find(head, "static LXValue")
+        let final_out = ""
+        if fpos >= 0:
+            final_out = head[0:fpos] + cg_closures + "\n" + head[fpos:len(head)] + tail
+        else:
+            final_out = head + cg_closures + "\n" + tail
+        return final_out
+    return out
+
+# ---------- 入口 ----------
+def main():
+    let f = args()[len(args()) - 1]
+    let base_dir = cg_dirname(f)
+    p_toks = lex_tokens(read_file(f))
+    p_pos = 0
+    let ast = parse_program()
+    let prog = cg_resolve_modules(ast, base_dir)
+    let out = cg_generate(prog)
+    # print 会追加一个换行：去掉末尾 \n 避免多一个空行（对齐 Rust 版写文件）
+    let n = len(out)
+    if n > 0 and out[n - 1] == "\n":
+        out = out[0:n - 1]
+    print(out)

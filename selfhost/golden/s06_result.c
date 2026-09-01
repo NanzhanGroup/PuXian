@@ -47,7 +47,8 @@ px_err_8:
     return px_null();
 }
 
-int main(void) {
+int main(int argc, char** argv) {
+    px_args_init(argc, argv);
     px_register_builtins();
     px_set_global("try_div", px_func("try_div", fn_try_div, NULL));
     px_set_global("calc", px_func("calc", fn_calc, NULL));

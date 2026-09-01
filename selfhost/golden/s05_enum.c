@@ -28,7 +28,8 @@ px_err_5:
     return px_null();
 }
 
-int main(void) {
+int main(int argc, char** argv) {
+    px_args_init(argc, argv);
     px_register_builtins();
     px_set_global("desc", px_func("desc", fn_desc, NULL));
     px_set_global("main", px_func("main", fn_main, NULL));

@@ -1,0 +1,304 @@
+# ============================================================
+# M-B6: cg_stmt.px —— 语句生成（对齐 Rust codegen.gen_stmt）
+# ------------------------------------------------------------
+# 被 codegen.px import；函数引用主文件全局状态（cg_vars 等）。
+# 全局变量/函数命名：cg_ 前缀避免与主文件/parser 冲突。
+# ============================================================
+
+# ---------- 语句生成 ----------
+def cg_gen_stmt(stmt, indent):
+    let pad = cg_pad(indent)
+    let ty = stmt[0]
+    if ty == "VarDecl":
+        let name = rust_unescape(stmt[2])
+        let rhs = "px_null()"
+        if stmt[4] != null:
+            rhs = cg_gen_expr(stmt[4])
+        # 顶层 let 变量（globals 且不在函数内）→ 全局变量
+        if contains(cg_globals, name) and len(cg_err_labels) == 0:
+            return pad + "px_set_global(\"" + name + "\", " + rhs + ");\n"
+        let v = cg_new_var(name)
+        # 类型推断：struct 构造
+        if stmt[4] != null:
+            let e = stmt[4]
+            let cname = null
+            if e[0] == "Constructor":
+                cname = rust_unescape(e[1])
+            elif e[0] == "Call":
+                let callee = e[1]
+                if callee[0] == "Var":
+                    cname = rust_unescape(callee[1])
+            if cname != null:
+                if cg_structs.has(cname):
+                    cg_var_types[name] = cname
+        return pad + "LXValue " + v + " = " + rhs + ";\n"
+    if ty == "Assign":
+        let rhs = cg_gen_expr(stmt[3])
+        let tgt = stmt[1]
+        let op = stmt[2]
+        let tty = tgt[0]
+        if tty == "Var":
+            let name = rust_unescape(tgt[1])
+            let v = cg_var_of(name)
+            if v == null:
+                # 全局变量
+                if op == "Assign":
+                    return pad + "px_set_global(\"" + name + "\", " + rhs + ");\n"
+                let full = cg_assign_op_global(op, name, rhs)
+                return pad + "px_set_global(\"" + name + "\", " + full + ");\n"
+            let full = cg_assign_op_local(op, v, rhs)
+            return pad + " " + v + " = " + full + ";\n"
+        if tty == "Field":
+            let o = cg_gen_expr(tgt[1])
+            let fname = rust_unescape(tgt[2])
+            return pad + "px_field_set(" + o + ", \"" + fname + "\", " + rhs + ");\n"
+        if tty == "Index":
+            let o = cg_gen_expr(tgt[1])
+            let i = cg_gen_expr(tgt[2])
+            return pad + "px_index_set(" + o + ", " + i + ", " + rhs + ");\n"
+        return "不支持的赋值目标"
+    if ty == "ExprStmt":
+        let e = cg_gen_expr(stmt[1])
+        return pad + "(void)(" + e + ");\n"
+    if ty == "If":
+        let s = ""
+        let brs = stmt[1]
+        let bi = 0
+        while bi < len(brs):
+            let c = cg_gen_expr(brs[bi][0])
+            let kw = "if"
+            if bi > 0:
+                kw = "else if"
+            s += pad + kw + " (px_is_truthy(" + c + ")) {\n"
+            let body = brs[bi][1]
+            let si = 0
+            while si < len(body):
+                s += cg_gen_stmt(body[si], indent + 1)
+                si += 1
+            s += pad + "}\n"
+            bi += 1
+        if stmt[2] != null:
+            s += pad + "else {\n"
+            let eb = stmt[2]
+            let ei = 0
+            while ei < len(eb):
+                s += cg_gen_stmt(eb[ei], indent + 1)
+                ei += 1
+            s += pad + "}\n"
+        return s
+    if ty == "While":
+        let c = cg_gen_expr(stmt[1])
+        let s = pad + "while (px_is_truthy(" + c + ")) {\n"
+        let body = stmt[2]
+        let bi = 0
+        while bi < len(body):
+            s += cg_gen_stmt(body[bi], indent + 1)
+            bi += 1
+        s += pad + "}\n"
+        return s
+    if ty == "For":
+        let it = cg_gen_expr(stmt[2])
+        let it_var = cg_tmp()
+        let idx_var = cg_tmp()
+        let v = cg_new_var(rust_unescape(stmt[1]))
+        let s = pad + "LXValue " + it_var + " = " + it + ";\n"
+        s += pad + "for (int " + idx_var + " = 0; " + idx_var + " < px_len(" + it_var + "); " + idx_var + "++) {\n"
+        s += pad + "    LXValue " + v + " = px_index(" + it_var + ", px_int(" + idx_var + "));\n"
+        let body = stmt[3]
+        let bi = 0
+        while bi < len(body):
+            s += cg_gen_stmt(body[bi], indent + 1)
+            bi += 1
+        s += pad + "}\n"
+        return s
+    if ty == "Return":
+        if stmt[1] != null:
+            let e = cg_gen_expr(stmt[1])
+            return pad + "return " + e + ";\n"
+        return pad + "return px_null();\n"
+    if ty == "Break":
+        return pad + "break;\n"
+    if ty == "Continue":
+        return pad + "continue;\n"
+    if ty == "Empty":
+        return ""
+    if ty == "ChanDecl":
+        let v = cg_new_var(rust_unescape(stmt[1]))
+        return pad + "LXValue " + v + " = px_chan_create(0);\n"
+    if ty == "Send":
+        let c = cg_gen_expr(stmt[1])
+        let v = cg_gen_expr(stmt[2])
+        return pad + "px_chan_send(" + c + ", " + v + ");\n"
+    if ty == "Recv":
+        let c = cg_gen_expr(stmt[1])
+        return pad + "px_chan_recv(" + c + ");\n"
+    if ty == "Spawn":
+        let ex = stmt[1]
+        if ex[0] == "Call":
+            let callee = ex[1]
+            if callee[0] == "Var":
+                let fname = rust_unescape(callee[1])
+                let parts = []
+                let args = ex[2]
+                let ai = 0
+                while ai < len(args):
+                    parts.append(cg_gen_expr(args[ai]))
+                    ai += 1
+                return pad + "px_spawn_name(\"" + fname + "\", (LXValue[]){" + join(", ", parts) + "}, " + str(len(parts)) + ");\n"
+            return "编译模式 spawn 仅支持直接函数调用（方法调用请用 `lx run`）"
+        return "编译模式 spawn 仅支持函数调用表达式"
+    if ty == "Select":
+        return cg_gen_select(stmt[1], stmt[2], indent)
+    if ty == "Import":
+        return pad + "/* import 忽略（MVP） */\n"
+    # StructDef/EnumDef/TraitDef/ImplDef/FuncDef → 空（顶层在 generate 处理）
+    return ""
+
+# 复合赋值：全局变量（先读全局再运算再写回）
+def cg_assign_op_global(op, name, rhs):
+    if op == "Assign":
+        return rhs
+    if op == "Plus":
+        return "px_add(px_get_global(\"" + name + "\"), " + rhs + ")"
+    if op == "Minus":
+        return "px_sub(px_get_global(\"" + name + "\"), " + rhs + ")"
+    if op == "Star":
+        return "px_mul(px_get_global(\"" + name + "\"), " + rhs + ")"
+    if op == "Slash":
+        return "px_div(px_get_global(\"" + name + "\"), " + rhs + ")"
+    if op == "IntDiv":
+        return "px_idiv(px_get_global(\"" + name + "\"), " + rhs + ")"
+    if op == "Mod":
+        return "px_mod(px_get_global(\"" + name + "\"), " + rhs + ")"
+    if op == "Pow":
+        return "px_pow(px_get_global(\"" + name + "\"), " + rhs + ")"
+    if op == "BitAnd":
+        return "px_bitand(px_get_global(\"" + name + "\"), " + rhs + ")"
+    if op == "BitOr":
+        return "px_bitor(px_get_global(\"" + name + "\"), " + rhs + ")"
+    if op == "BitXor":
+        return "px_bitxor(px_get_global(\"" + name + "\"), " + rhs + ")"
+    if op == "Shl":
+        return "px_shl(px_get_global(\"" + name + "\"), " + rhs + ")"
+    if op == "Shr":
+        return "px_shr(px_get_global(\"" + name + "\"), " + rhs + ")"
+    if op == "ShrU":
+        return "px_ushr(px_get_global(\"" + name + "\"), " + rhs + ")"
+    return rhs
+
+# 复合赋值：局部变量
+def cg_assign_op_local(op, v, rhs):
+    if op == "Assign":
+        return rhs
+    if op == "Plus":
+        return "px_add(" + v + ", " + rhs + ")"
+    if op == "Minus":
+        return "px_sub(" + v + ", " + rhs + ")"
+    if op == "Star":
+        return "px_mul(" + v + ", " + rhs + ")"
+    if op == "Slash":
+        return "px_div(" + v + ", " + rhs + ")"
+    if op == "IntDiv":
+        return "px_idiv(" + v + ", " + rhs + ")"
+    if op == "Mod":
+        return "px_mod(" + v + ", " + rhs + ")"
+    if op == "Pow":
+        return "px_pow(" + v + ", " + rhs + ")"
+    if op == "BitAnd":
+        return "px_bitand(" + v + ", " + rhs + ")"
+    if op == "BitOr":
+        return "px_bitor(" + v + ", " + rhs + ")"
+    if op == "BitXor":
+        return "px_bitxor(" + v + ", " + rhs + ")"
+    if op == "Shl":
+        return "px_shl(" + v + ", " + rhs + ")"
+    if op == "Shr":
+        return "px_shr(" + v + ", " + rhs + ")"
+    if op == "ShrU":
+        return "px_ushr(" + v + ", " + rhs + ")"
+    return rhs
+
+# ---------- select 生成（M4.2） ----------
+def cg_gen_select(arms, else_branch, indent):
+    let pad = cg_pad(indent)
+    let n = len(arms)
+    if n == 0:
+        return "select 至少需要一个 case 分支"
+    let uid = cg_uid()
+    let s = ""
+    let saved_vars = cg_dict_copy(cg_vars)
+    let saved_types = cg_dict_copy(cg_var_types)
+    # 为每个 arm 求值 chan 表达式（循环外只求值一次）
+    let chan_parts = []
+    let ci = 0
+    while ci < n:
+        let ex = arms[ci][1]
+        if ex[0] == "Call":
+            let callee = ex[1]
+            if callee[0] == "Field":
+                let mname = rust_unescape(callee[2])
+                if mname == "recv":
+                    chan_parts.append(cg_gen_expr(callee[1]))
+                    ci += 1
+                    continue
+                return "select case 仅支持 ch.recv()（不支持 ." + mname + "）"
+            return "select case 仅支持 ch.recv()"
+        return "select case 仅支持 ch.recv()"
+    s += pad + "LXValue _chans" + str(uid) + "[" + str(n) + "] = {" + join(", ", chan_parts) + "};\n"
+    s += pad + "_sel_retry_" + str(uid) + ": {\n"
+    let order_init = []
+    let oi = 0
+    while oi < n:
+        order_init.append(str(oi))
+        oi += 1
+    s += pad + "    int _ord" + str(uid) + "[" + str(n) + "] = {" + join(", ", order_init) + "};\n"
+    if n > 1:
+        let shuffle = pad + "    for (int _i" + str(uid) + " = " + str(n) + " - 1; _i" + str(uid) + " > 0; _i" + str(uid) + "--) { "
+        shuffle += "int _j" + str(uid) + " = rand() % (_i" + str(uid) + " + 1); "
+        shuffle += "int _t" + str(uid) + " = _ord" + str(uid) + "[_i" + str(uid) + "]; _ord" + str(uid) + "[_i" + str(uid) + "] = _ord" + str(uid) + "[_j" + str(uid) + "]; _ord" + str(uid) + "[_j" + str(uid) + "] = _t" + str(uid) + "; "
+        shuffle += "}\n"
+        s += shuffle
+    s += pad + "    LXValue _rv" + str(uid) + " = px_null();\n"
+    s += pad + "    int _picked" + str(uid) + " = -1;\n"
+    s += pad + "    for (int _k" + str(uid) + " = 0; _k" + str(uid) + " < " + str(n) + "; _k" + str(uid) + "++) {\n"
+    s += pad + "        int _idx" + str(uid) + " = _ord" + str(uid) + "[_k" + str(uid) + "];\n"
+    s += pad + "        if (px_chan_try_recv(_chans" + str(uid) + "[_idx" + str(uid) + "], &_rv" + str(uid) + ")) { _picked" + str(uid) + " = _idx" + str(uid) + "; break; }\n"
+    s += pad + "    }\n"
+    # 命中：执行对应 arm body
+    s += pad + "    if (_picked" + str(uid) + " >= 0) {\n"
+    let ai = 0
+    while ai < n:
+        let bind = arms[ai][0]
+        let body = arms[ai][2]
+        let cond = "if (_picked" + str(uid) + " == " + str(ai) + ")"
+        if ai > 0:
+            cond = "else if (_picked" + str(uid) + " == " + str(ai) + ")"
+        s += pad + "        " + cond + " {\n"
+        if bind != null:
+            let v = cg_new_var(rust_unescape(bind))
+            s += pad + "            LXValue " + v + " = _rv" + str(uid) + ";\n"
+        let bi = 0
+        while bi < len(body):
+            s += cg_gen_stmt(body[bi], indent + 3)
+            bi += 1
+        s += pad + "        }\n"
+        ai += 1
+    s += pad + "        goto _sel_done_" + str(uid) + ";\n"
+    s += pad + "    }\n"
+    # else 分支
+    if else_branch != null:
+        s += pad + "    {\n"
+        let ei = 0
+        while ei < len(else_branch):
+            s += cg_gen_stmt(else_branch[ei], indent + 2)
+            ei += 1
+        s += pad + "        goto _sel_done_" + str(uid) + ";\n"
+        s += pad + "    }\n"
+    # 无 else：阻塞等待后重试
+    s += pad + "    px_select_wait();\n"
+    s += pad + "}\n"
+    s += pad + "goto _sel_retry_" + str(uid) + ";\n"
+    s += pad + "_sel_done_" + str(uid) + ": ;\n"
+    cg_vars = saved_vars
+    cg_var_types = saved_types
+    return s

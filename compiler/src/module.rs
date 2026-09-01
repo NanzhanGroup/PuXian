@@ -214,6 +214,13 @@ impl ModuleResolver {
                 }
                 _ => None,
             };
+            // M-B6：模块不导出 main（避免 import 后编译模式 fn_main 重定义冲突；
+            // 模块是库，不应定义程序入口）
+            if let Stmt::FuncDef { name, .. } = &stmt {
+                if name == "main" {
+                    continue;
+                }
+            }
             match name {
                 Some(n) => {
                     // 选择性导入：只保留显式列出的顶层符号（impl 无名字可匹配，跳过）

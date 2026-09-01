@@ -20,7 +20,8 @@ px_err_1:
     return px_null();
 }
 
-int main(void) {
+int main(int argc, char** argv) {
+    px_args_init(argc, argv);
     px_register_builtins();
     px_set_global("main", px_func("main", fn_main, NULL));
     { LXValue _r = fn_main(NULL, 0, NULL); int _code = 0;

@@ -1,0 +1,528 @@
+# ============================================================
+# M-B6: cg_expr.px —— 表达式生成（对齐 Rust codegen.gen_expr）
+# ------------------------------------------------------------
+# 被 codegen.px import；函数引用主文件全局状态。
+# 推导式公共逻辑抽为 cg_comp_* 辅助（uid 消耗顺序与 Rust 一致）。
+# ============================================================
+
+# ---------- 推导式公共：收集 clauses（生成 iterable/迭代变量/绑定） ----------
+def cg_comp_collect(clauses):
+    let r = {"_": 0}
+    r.remove("_")
+    r["its"] = []
+    r["ivs"] = []
+    r["itms"] = []
+    r["idxs"] = []
+    r["binds"] = []
+    r["saved_all"] = []
+    let ci = 0
+    while ci < len(clauses):
+        let cl = clauses[ci]
+        let it = cg_gen_expr(cl[2])
+        r["its"].append(it)
+        r["ivs"].append(cg_tmp())
+        r["itms"].append(cg_tmp())
+        r["idxs"].append(cg_tmp())
+        let bind = ""
+        let saved = []
+        if len(cl[1]) == 1:
+            let lcvar = "_cv" + str(cg_uid())
+            let vn = rust_unescape(cl[1][0])
+            let sv = null
+            if cg_vars.has(vn):
+                sv = cg_vars[vn]
+            cg_vars[vn] = lcvar
+            saved.append([vn, sv])
+            bind = "LXValue " + lcvar + " = " + r["itms"][len(r["itms"]) - 1] + "; "
+        else:
+            let vi = 0
+            while vi < len(cl[1]):
+                let vn = rust_unescape(cl[1][vi])
+                let lcvar = "_cv" + str(cg_uid()) + "_" + str(vi)
+                let sv = null
+                if cg_vars.has(vn):
+                    sv = cg_vars[vn]
+                cg_vars[vn] = lcvar
+                saved.append([vn, sv])
+                bind += "LXValue " + lcvar + " = px_index(" + r["itms"][len(r["itms"]) - 1] + ", px_int(" + str(vi) + ")); "
+                vi += 1
+        r["binds"].append(bind)
+        r["saved_all"].append(saved)
+        ci += 1
+    return r
+
+def cg_comp_restore(saved_all):
+    let i = 0
+    while i < len(saved_all):
+        let saved = saved_all[i]
+        let j = 0
+        while j < len(saved):
+            let vn = saved[j][0]
+            let sv = saved[j][1]
+            if sv == null:
+                cg_vars.remove(vn)
+            else:
+                cg_vars[vn] = sv
+            j += 1
+        i += 1
+
+# 组装嵌套循环（从内到外）；put 是每层迭代体
+def cg_comp_body(r, cond_c, put):
+    let body = ""
+    if cond_c != null:
+        body = "if (px_is_truthy(" + cond_c + ")) { " + put + "} "
+    else:
+        body = put
+    let n = len(r["its"])
+    let i = n - 1
+    while i >= 0:
+        let inner_decl = ""
+        if i + 1 < n:
+            inner_decl = "LXValue " + r["ivs"][i + 1] + " = " + r["its"][i + 1] + "; "
+        body = "for (int " + r["idxs"][i] + "=0; " + r["idxs"][i] + "<px_len(" + r["ivs"][i] + "); " + r["idxs"][i] + "++) { LXValue " + r["itms"][i] + " = px_index(" + r["ivs"][i] + ", px_int(" + r["idxs"][i] + ")); " + r["binds"][i] + inner_decl + body + " } "
+        i -= 1
+    return body
+
+# ---------- 表达式生成 ----------
+def cg_gen_expr(expr):
+    let ty = expr[0]
+    if ty == "Int":
+        return "px_int(" + str(expr[1]) + "LL)"
+    if ty == "Float":
+        return "px_float(" + cg_fmt_float(expr[1]) + ")"
+    if ty == "Str":
+        return "px_str(\"" + cg_escape_str(rust_unescape(expr[1])) + "\")"
+    if ty == "Bool":
+        if expr[1]:
+            return "px_bool(true)"
+        return "px_bool(false)"
+    if ty == "Null":
+        return "px_null()"
+    if ty == "List":
+        let parts = []
+        let items = expr[1]
+        let i = 0
+        while i < len(items):
+            parts.append(cg_gen_expr(items[i]))
+            i += 1
+        return "px_list_n((LXValue[]){" + join(", ", parts) + "}, " + str(len(parts)) + ")"
+    if ty == "Tuple":
+        let parts = []
+        let items = expr[1]
+        let i = 0
+        while i < len(items):
+            parts.append(cg_gen_expr(items[i]))
+            i += 1
+        return "px_tuple((LXValue[]){" + join(", ", parts) + "}, " + str(len(parts)) + ")"
+    if ty == "Dict":
+        let s = "({ LXValue _d = px_dict(); "
+        let entries = expr[1]
+        let i = 0
+        while i < len(entries):
+            let ke = cg_gen_expr(entries[i][0])
+            let ve = cg_gen_expr(entries[i][1])
+            s += "{ LXValue _k = " + ke + "; if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, " + ve + "); } "
+            i += 1
+        s += "_d; })"
+        return s
+    if ty == "Var":
+        let name = rust_unescape(expr[1])
+        let v = cg_var_of(name)
+        if v != null:
+            return v
+        return "px_get_global(\"" + name + "\")"
+    if ty == "Field":
+        let obj = expr[1]
+        let fname = rust_unescape(expr[2])
+        # enum 变体访问：Color.Red
+        if obj[0] == "Var":
+            let oname = rust_unescape(obj[1])
+            if cg_enums.has(oname):
+                return "px_enum(\"" + oname + "\", \"" + fname + "\")"
+        let o = cg_gen_expr(obj)
+        return "px_field(" + o + ", \"" + fname + "\")"
+    if ty == "OptionalField":
+        let o = cg_gen_expr(expr[1])
+        let t = cg_tmp()
+        let fname = rust_unescape(expr[2])
+        return "({ LXValue " + t + " = " + o + "; px_is_null(" + t + ") ? px_null() : px_field(" + o + ", \"" + fname + "\"); })"
+    if ty == "Index":
+        let o = cg_gen_expr(expr[1])
+        let i = cg_gen_expr(expr[2])
+        return "px_index(" + o + ", " + i + ")"
+    if ty == "Slice":
+        let o = cg_gen_expr(expr[1])
+        let s = "px_null()"
+        if expr[2] != null:
+            s = cg_gen_expr(expr[2])
+        let e = "px_null()"
+        if expr[3] != null:
+            e = cg_gen_expr(expr[3])
+        let k = "px_null()"
+        if expr[4] != null:
+            k = cg_gen_expr(expr[4])
+        return "px_slice(" + o + ", " + s + ", " + e + ", " + k + ")"
+    if ty == "Call":
+        let callee = expr[1]
+        let args = expr[2]
+        if callee[0] == "Var":
+            let cname = rust_unescape(callee[1])
+            if cname == "chan":
+                let cap = "0"
+                if len(args) > 0:
+                    if args[0][0] == "Int":
+                        cap = str(args[0][1])
+                    else:
+                        cap = "(int)(" + cg_gen_expr(args[0]) + ").as.i"
+                return "px_chan_create(" + cap + ")"
+            if cname == "mutex":
+                return "px_mutex_create()"
+            if cname == "rwlock":
+                return "px_rwlock_create()"
+            # 结构体/枚举构造
+            if cg_structs.has(cname):
+                let fields = cg_structs[cname]
+                if len(fields) != len(args):
+                    return "结构体 " + cname + " 需要 " + str(len(fields)) + " 个字段，给出 " + str(len(args))
+                let parts = []
+                let ai = 0
+                while ai < len(args):
+                    parts.append(cg_gen_expr(args[ai]))
+                    ai += 1
+                let fnames = []
+                let fi = 0
+                while fi < len(fields):
+                    fnames.append("\"" + fields[fi] + "\"")
+                    fi += 1
+                return "px_struct(\"" + cname + "\", (char*[]){" + join(", ", fnames) + "}, (LXValue[]){" + join(", ", parts) + "}, " + str(len(fields)) + ")"
+            if cg_enums.has(cname):
+                if len(args) != 1:
+                    return "枚举 " + cname + " 构造需要一个变体名"
+                let v = cg_gen_expr(args[0])
+                return "px_enum(\"" + cname + "\", (" + v + ").as.obj->as.enum_inst.variant)"
+        # 方法调用
+        if callee[0] == "Field":
+            let obj = callee[1]
+            let mname = rust_unescape(callee[2])
+            # 静态分派：已知类型 + impl 方法
+            let static_type = null
+            if obj[0] == "Var":
+                let oname = rust_unescape(obj[1])
+                if cg_var_types.has(oname):
+                    static_type = cg_var_types[oname]
+            if static_type != null and cg_impls.has(static_type):
+                let methods = cg_impls[static_type]
+                let has_m = false
+                let mi = 0
+                while mi < len(methods):
+                    if rust_unescape(methods[mi][1]) == mname:
+                        has_m = true
+                        break
+                    mi += 1
+                if has_m:
+                    let o = cg_gen_expr(obj)
+                    let parts = [o]
+                    let ai = 0
+                    while ai < len(args):
+                        parts.append(cg_gen_expr(args[ai]))
+                        ai += 1
+                    let fnname = "fn_" + cg_func_cname(static_type) + "_" + cg_func_cname(mname)
+                    return fnname + "((LXValue[]){" + join(", ", parts) + "}, " + str(len(parts)) + ", NULL)"
+            # 运行时方法分派
+            let o = cg_gen_expr(obj)
+            let parts = []
+            let ai = 0
+            while ai < len(args):
+                parts.append(cg_gen_expr(args[ai]))
+                ai += 1
+            return "px_method(" + o + ", \"" + mname + "\", (LXValue[]){" + join(", ", parts) + "}, " + str(len(parts)) + ")"
+        # 普通调用
+        let c = cg_gen_expr(callee)
+        let parts = []
+        let ai = 0
+        while ai < len(args):
+            parts.append(cg_gen_expr(args[ai]))
+            ai += 1
+        return "px_call(" + c + ", (LXValue[]){" + join(", ", parts) + "}, " + str(len(parts)) + ")"
+    if ty == "Unary":
+        let o = cg_gen_expr(expr[2])
+        let op = expr[1]
+        if op == "Neg":
+            return "px_neg(" + o + ")"
+        if op == "Not":
+            return "px_not(" + o + ")"
+        return "px_bitnot(" + o + ")"
+    if ty == "Binary":
+        let l = cg_gen_expr(expr[2])
+        let r = cg_gen_expr(expr[3])
+        let op = expr[1]
+        if op == "And":
+            let t = cg_tmp()
+            return "({ LXValue " + t + " = " + l + "; px_is_truthy(" + t + ") ? " + r + " : " + t + "; })"
+        if op == "Or":
+            let t = cg_tmp()
+            return "({ LXValue " + t + " = " + l + "; px_is_truthy(" + t + ") ? " + t + " : " + r + "; })"
+        let f = cg_binop_cname(op)
+        return f + "(" + l + ", " + r + ")"
+    if ty == "Pipe":
+        let v = cg_gen_expr(expr[1])
+        let func = expr[2]
+        if func[0] == "Call":
+            let c = cg_gen_expr(func[1])
+            let parts = [v]
+            let ai = 0
+            while ai < len(func[2]):
+                parts.append(cg_gen_expr(func[2][ai]))
+                ai += 1
+            return "px_call(" + c + ", (LXValue[]){" + join(", ", parts) + "}, " + str(len(parts)) + ")"
+        let f = cg_gen_expr(func)
+        return "px_call(" + f + ", (LXValue[]){" + v + "}, 1)"
+    if ty == "NullCoalesce":
+        let l = cg_gen_expr(expr[1])
+        let r = cg_gen_expr(expr[2])
+        let t = cg_tmp()
+        return "({ LXValue " + t + " = " + l + "; px_is_null(" + t + ") ? " + r + " : " + t + "; })"
+    if ty == "Try":
+        let e = cg_gen_expr(expr[1])
+        let t = cg_tmp()
+        if len(cg_err_labels) > 0:
+            let tag = cg_err_labels[len(cg_err_labels) - 1]
+            return "({ LXValue " + t + " = " + e + "; if (px_is_result(" + t + ")) { if (!px_result_ok(" + t + ")) { " + tag + "_val = " + t + "; " + tag + "_proped = 1; goto " + tag + "; } " + t + " = px_result_unwrap(" + t + "); } else if (px_is_null(" + t + ")) { " + tag + "_val = px_null(); " + tag + "_proped = 1; goto " + tag + "; } " + t + "; })"
+        return "({ LXValue " + t + " = " + e + "; if (px_is_result(" + t + ") && !px_result_ok(" + t + ")) px_error(\"错误传播 ?: 顶层不能传播 Err\"); if (px_is_null(" + t + ")) px_error(\"错误传播 ?: 顶层不能传播 null\"); if (px_is_result(" + t + ")) " + t + " = px_result_unwrap(" + t + "); " + t + "; })"
+    if ty == "ForceUnwrap":
+        let e = cg_gen_expr(expr[1])
+        let t = cg_tmp()
+        return "({ LXValue " + t + " = " + e + "; if (px_is_result(" + t + ")) { if (!px_result_ok(" + t + ")) px_error(\"force unwrap Err\"); " + t + " = px_result_unwrap(" + t + "); } if (px_is_null(" + t + ")) px_error(\"force unwrap null\"); " + t + "; })"
+    if ty == "IfExpr":
+        let c = cg_gen_expr(expr[1])
+        let a = cg_gen_expr(expr[2])
+        let b = cg_gen_expr(expr[3])
+        let t = cg_tmp()
+        return "({ LXValue " + t + "; if (px_is_truthy(" + c + ")) { " + t + " = " + a + "; } else { " + t + " = " + b + "; } " + t + "; })"
+    if ty == "ListComp":
+        let rv = cg_tmp()
+        let r = cg_comp_collect(expr[2])
+        let e = cg_gen_expr(expr[1])
+        let cond_c = null
+        if expr[3] != null:
+            cond_c = cg_gen_expr(expr[3])
+        cg_comp_restore(r["saved_all"])
+        let put = "px_list_push(" + rv + ", " + e + "); "
+        let body = cg_comp_body(r, cond_c, put)
+        return "({ LXValue " + rv + " = px_list(0); LXValue " + r["ivs"][0] + " = " + r["its"][0] + "; " + body + " " + rv + "; })"
+    if ty == "GenExp":
+        let clauses = expr[2]
+        if len(clauses) == 1 and len(clauses[0][1]) == 1:
+            let xname = rust_unescape(clauses[0][1][0])
+            let seq_val = cg_gen_expr(clauses[0][2])
+            let transform_val = cg_gen_lambda([xname], expr[1])
+            let filter_val = "px_null()"
+            if expr[3] != null:
+                filter_val = cg_gen_lambda([xname], expr[3])
+            return "px_gen_lazy(" + seq_val + ", " + transform_val + ", " + filter_val + ")"
+        # M32 物化路径
+        let rv = cg_tmp()
+        let r = cg_comp_collect(clauses)
+        let e = cg_gen_expr(expr[1])
+        let cond_c = null
+        if expr[3] != null:
+            cond_c = cg_gen_expr(expr[3])
+        cg_comp_restore(r["saved_all"])
+        let put = "px_list_push(" + rv + ", " + e + "); "
+        let body = cg_comp_body(r, cond_c, put)
+        return "({ LXValue " + rv + " = px_list(0); LXValue " + r["ivs"][0] + " = " + r["its"][0] + "; " + body + " px_gen_from_list(" + rv + "); })"
+    if ty == "DictComp":
+        let rv = cg_tmp()
+        let r = cg_comp_collect(expr[3])
+        let ke = cg_gen_expr(expr[1])
+        let ve = cg_gen_expr(expr[2])
+        let cond_c = null
+        if expr[4] != null:
+            cond_c = cg_gen_expr(expr[4])
+        cg_comp_restore(r["saved_all"])
+        let put = "{ LXValue _k = " + ke + "; LXValue _v = " + ve + "; if (_k.type == PX_STR) px_dict_set(" + rv + ", _k.as.obj->as.str.data, _v); } "
+        let body = cg_comp_body(r, cond_c, put)
+        return "({ LXValue " + rv + " = px_dict(); LXValue " + r["ivs"][0] + " = " + r["its"][0] + "; " + body + " " + rv + "; })"
+    if ty == "Closure":
+        cg_closure_id = cg_closure_id + 1
+        let cid = cg_closure_id
+        let fnname = "fn_closure_" + str(cid)
+        let fdef = "static LXValue " + fnname + "(LXValue* args, int nargs, void* ctx) {\n"
+        fdef += "    (void)ctx;\n"
+        let saved_vars = cg_dict_copy(cg_vars)
+        let saved_types = cg_dict_copy(cg_var_types)
+        cg_vars = cg_new_dict()
+        cg_var_types = cg_new_dict()
+        let params = expr[1]
+        let pi = 0
+        while pi < len(params):
+            let v = cg_new_var(rust_unescape(params[pi][1]))
+            fdef += "    LXValue " + v + " = (nargs > " + str(pi) + ") ? args[" + str(pi) + "] : px_null();\n"
+            pi += 1
+        let b = cg_gen_expr(expr[3])
+        fdef += "    return " + b + ";\n"
+        fdef += "}\n"
+        cg_closures += fdef
+        cg_vars = saved_vars
+        cg_var_types = saved_types
+        return "px_func(\"<closure" + str(cid) + ">\", " + fnname + ", NULL)"
+    if ty == "Block":
+        let s = "({ "
+        s += "LXValue _blk = px_null(); "
+        let stmts = expr[1]
+        let si = 0
+        while si < len(stmts):
+            let st = stmts[si]
+            if st[0] == "ExprStmt":
+                let e = cg_gen_expr(st[1])
+                s += "_blk = " + e + "; "
+            else:
+                s += cg_gen_stmt(st, 0)
+            si += 1
+        s += "_blk; })"
+        return s
+    if ty == "Match":
+        let sub = cg_gen_expr(expr[1])
+        let t = cg_tmp()
+        let s = "({ LXValue " + t + " = " + sub + "; "
+        let arms = expr[2]
+        let first = true
+        let ai = 0
+        while ai < len(arms):
+            let cond_c = cg_gen_pattern_cond(arms[ai][1], t)
+            let body_c = cg_gen_expr(arms[ai][3])
+            let kw = "if"
+            if not first:
+                kw = "else if"
+            s += kw + " (" + cond_c + ") { " + t + " = " + body_c + "; } "
+            first = false
+            ai += 1
+        s += t + "; })"
+        return s
+    if ty == "Constructor":
+        let name = rust_unescape(expr[1])
+        let args = expr[2]
+        if cg_structs.has(name):
+            let fields = cg_structs[name]
+            if len(fields) != len(args):
+                return "结构体 " + name + " 需要 " + str(len(fields)) + " 个字段，给出 " + str(len(args))
+            let parts = []
+            let ai = 0
+            while ai < len(args):
+                parts.append(cg_gen_expr(args[ai]))
+                ai += 1
+            let fnames = []
+            let fi = 0
+            while fi < len(fields):
+                fnames.append("\"" + fields[fi] + "\"")
+                fi += 1
+            return "px_struct(\"" + name + "\", (char*[]){" + join(", ", fnames) + "}, (LXValue[]){" + join(", ", parts) + "}, " + str(len(fields)) + ")"
+        if cg_enums.has(name):
+            if len(args) != 1:
+                return "枚举 " + name + " 构造需要一个变体名"
+            let v = cg_gen_expr(args[0])
+            return "px_enum(\"" + name + "\", (" + v + ").as.obj->as.enum_inst.variant)"
+        let parts = []
+        let ai = 0
+        while ai < len(args):
+            parts.append(cg_gen_expr(args[ai]))
+            ai += 1
+        return "px_call(px_get_global(\"" + name + "\"), (LXValue[]){" + join(", ", parts) + "}, " + str(len(parts)) + ")"
+    return "px_null()"
+
+# ---------- 二元运算符 → C 函数 ----------
+def cg_binop_cname(op):
+    if op == "Add":
+        return "px_add"
+    if op == "Sub":
+        return "px_sub"
+    if op == "Mul":
+        return "px_mul"
+    if op == "Div":
+        return "px_div"
+    if op == "IntDiv":
+        return "px_idiv"
+    if op == "Mod":
+        return "px_mod"
+    if op == "Pow":
+        return "px_pow"
+    if op == "Eq":
+        return "px_eq"
+    if op == "Ne":
+        return "px_ne"
+    if op == "Lt":
+        return "px_lt"
+    if op == "Le":
+        return "px_le"
+    if op == "Gt":
+        return "px_gt"
+    if op == "Ge":
+        return "px_ge"
+    if op == "BitAnd":
+        return "px_bitand"
+    if op == "BitOr":
+        return "px_bitor"
+    if op == "BitXor":
+        return "px_bitxor"
+    if op == "Shl":
+        return "px_shl"
+    if op == "Shr":
+        return "px_shr"
+    if op == "ShrU":
+        return "px_ushr"
+    return "px_add"
+
+# ---------- match 模式条件 ----------
+def cg_gen_pattern_cond(pattern, subject):
+    let pty = pattern[0]
+    if pty == "PatLiteral":
+        let e = cg_gen_expr(pattern[1])
+        return "px_is_truthy(px_eq(" + subject + ", " + e + "))"
+    if pty == "PatBinding":
+        let name = rust_unescape(pattern[1])
+        if len(name) > 0 and name[0] >= "A" and name[0] <= "Z":
+            return "(" + subject + ".type == PX_ENUM && strcmp(" + subject + ".as.obj->as.enum_inst.variant, \"" + name + "\") == 0)"
+        return "true"
+    if pty == "PatWildcard":
+        return "true"
+    if pty == "PatTuple":
+        let items = pattern[1]
+        if len(items) > 0:
+            return cg_gen_pattern_cond(items[0], subject)
+        return "true"
+    if pty == "PatConstructor":
+        let name = rust_unescape(pattern[1])
+        return "(" + subject + ".type == PX_ENUM && strcmp(" + subject + ".as.obj->as.enum_inst.variant, \"" + name + "\") == 0)"
+    return "true"
+
+# ---------- M34：无捕获闭包函数（生成器 transform/filter） ----------
+def cg_gen_lambda(params, body):
+    cg_closure_id = cg_closure_id + 1
+    let cid = cg_closure_id
+    let fnname = "fn_closure_" + str(cid)
+    let fdef = "static LXValue " + fnname + "(LXValue* args, int nargs, void* ctx) {\n"
+    fdef += "    (void)ctx;\n"
+    let saved_vars = cg_dict_copy(cg_vars)
+    let saved_types = cg_dict_copy(cg_var_types)
+    cg_vars = cg_new_dict()
+    cg_var_types = cg_new_dict()
+    let pi = 0
+    while pi < len(params):
+        let v = cg_new_var(params[pi])
+        fdef += "    LXValue " + v + " = (nargs > " + str(pi) + ") ? args[" + str(pi) + "] : px_null();\n"
+        pi += 1
+    let b = cg_gen_expr(body)
+    let err_tag = "px_err_" + str(cg_uid())
+    cg_err_labels.append(err_tag)
+    fdef += "    LXValue " + err_tag + "_val = px_null();\n"
+    fdef += "    int " + err_tag + "_proped = 0;\n"
+    fdef += "    return " + b + ";\n"
+    fdef += err_tag + ":\n"
+    fdef += "    if (" + err_tag + "_proped) return " + err_tag + "_val;\n"
+    fdef += "    return px_null();\n"
+    fdef += "}\n"
+    cg_err_labels = cg_err_labels[0:len(cg_err_labels) - 1]
+    cg_closures += fdef
+    cg_vars = saved_vars
+    cg_var_types = saved_types
+    return "px_func(\"<closure" + str(cid) + ">\", " + fnname + ", NULL)"

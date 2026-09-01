@@ -113,6 +113,12 @@ impl Codegen {
                 impl_list.push((type_name.clone(), m.clone()));
             }
         }
+        // M-B6：确定性输出——impl 方法按 "类型.方法" 字典序排序
+        // （HashMap 迭代顺序跨进程不稳定，会导致生成的 C 源码顺序随机、golden 对拍失败；
+        //  自举要求 Rust 版与 PuXian 版输出逐字节一致，必须先固定顺序）
+        impl_list.sort_by(|a, b| {
+            format!("{}.{}", a.0, a.1.name).cmp(&format!("{}.{}", b.0, b.1.name))
+        });
         for (type_name, m) in &impl_list {
             let fname = format!("fn_{}_{}", self.func_cname(type_name), self.func_cname(&m.name));
             let fdef = self.gen_func_named(m, &fname)?;
