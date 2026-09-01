@@ -1,0 +1,10 @@
+# Mini 子集用例 s07：字符串插值
+def main():
+    let name = "px"
+    let ver = 2
+    let d = {"k": 3}
+    print("hello ${name}")
+    print("v${ver}")
+    print("${1 + 2 * 3}")
+    print("${d["k"]}")
+    print("${name.upper()}")

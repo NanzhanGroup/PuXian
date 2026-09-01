@@ -1,0 +1,13 @@
+# Mini 子集用例 s01：算术 + 变量 + 函数
+def add(a, b):
+    return a + b
+
+def main():
+    let x = 21
+    let y = add(x, 21)
+    print(y)
+    print(x * 2 + 1)
+    print(100 - 3 * 30)
+    print(7 // 2)
+    print(7 % 3)
+    print(2 ** 10)

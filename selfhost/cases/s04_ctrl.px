@@ -1,0 +1,21 @@
+# Mini 子集用例 s04：控制流 + 推导式
+def main():
+    let acc = 0
+    for i in range(5):
+        acc += i
+    print(acc)
+    let w = 0
+    while w < 3:
+        w += 1
+    print(w)
+    let bc = 0
+    for i in range(10):
+        if i == 2:
+            continue
+        if i == 5:
+            break
+        bc += 1
+    print(bc)
+    print([x * x for x in range(5)])
+    print([x for x in range(6) if x % 2 == 0])
+    print({str(x): x for x in range(3)})

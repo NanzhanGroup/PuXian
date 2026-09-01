@@ -1,0 +1,467 @@
+Program {
+ items: [
+ EnumDef {
+ name: "Kind",
+ variants: [
+ EnumVariant {
+ name: "Int",
+ fields: [],
+ pos: Pos {
+ line: 3,
+ col: 5,
+ },
+ },
+ EnumVariant {
+ name: "Str",
+ fields: [],
+ pos: Pos {
+ line: 4,
+ col: 5,
+ },
+ },
+ EnumVariant {
+ name: "Call",
+ fields: [],
+ pos: Pos {
+ line: 5,
+ col: 5,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 2,
+ col: 1,
+ },
+ },
+ StructDef {
+ name: "Node",
+ fields: [
+ StructField {
+ name: "kind",
+ ty: Named(
+ "Kind",
+ Pos {
+ line: 8,
+ col: 11,
+ },
+ ),
+ pos: Pos {
+ line: 8,
+ col: 5,
+ },
+ },
+ StructField {
+ name: "value",
+ ty: Named(
+ "int",
+ Pos {
+ line: 9,
+ col: 12,
+ },
+ ),
+ pos: Pos {
+ line: 9,
+ col: 5,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 7,
+ col: 1,
+ },
+ },
+ FuncDef {
+ name: "desc",
+ params: [
+ Param {
+ name: "n",
+ ty: None,
+ default: None,
+ pos: Pos {
+ line: 11,
+ col: 10,
+ },
+ },
+ ],
+ ret_ty: None,
+ body: [
+ VarDecl {
+ kind: Let,
+ name: "r",
+ ty: None,
+ value: Some(
+ Match {
+ subject: Field {
+ obj: Var {
+ name: "n",
+ pos: Pos {
+ line: 12,
+ col: 19,
+ },
+ },
+ name: "kind",
+ pos: Pos {
+ line: 12,
+ col: 20,
+ },
+ },
+ arms: [
+ MatchArm {
+ pattern: Constructor(
+ "Int",
+ [],
+ ),
+ guard: None,
+ body: Block {
+ stmts: [
+ ExprStmt {
+ expr: Binary {
+ op: Add,
+ left: Str {
+ value: "int:",
+ pos: Pos {
+ line: 14,
+ col: 13,
+ },
+ },
+ right: Call {
+ callee: Var {
+ name: "str",
+ pos: Pos {
+ line: 14,
+ col: 22,
+ },
+ },
+ args: [
+ Field {
+ obj: Var {
+ name: "n",
+ pos: Pos {
+ line: 14,
+ col: 26,
+ },
+ },
+ name: "value",
+ pos: Pos {
+ line: 14,
+ col: 27,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 14,
+ col: 25,
+ },
+ },
+ pos: Pos {
+ line: 14,
+ col: 20,
+ },
+ },
+ pos: Pos {
+ line: 14,
+ col: 20,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 14,
+ col: 20,
+ },
+ },
+ pos: Pos {
+ line: 12,
+ col: 13,
+ },
+ },
+ MatchArm {
+ pattern: Constructor(
+ "Str",
+ [],
+ ),
+ guard: None,
+ body: Block {
+ stmts: [
+ ExprStmt {
+ expr: Str {
+ value: "str",
+ pos: Pos {
+ line: 16,
+ col: 13,
+ },
+ },
+ pos: Pos {
+ line: 16,
+ col: 13,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 16,
+ col: 13,
+ },
+ },
+ pos: Pos {
+ line: 12,
+ col: 13,
+ },
+ },
+ MatchArm {
+ pattern: Constructor(
+ "Call",
+ [],
+ ),
+ guard: None,
+ body: Block {
+ stmts: [
+ ExprStmt {
+ expr: Str {
+ value: "call",
+ pos: Pos {
+ line: 18,
+ col: 13,
+ },
+ },
+ pos: Pos {
+ line: 18,
+ col: 13,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 18,
+ col: 13,
+ },
+ },
+ pos: Pos {
+ line: 12,
+ col: 13,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 12,
+ col: 13,
+ },
+ },
+ ),
+ pos: Pos {
+ line: 12,
+ col: 5,
+ },
+ },
+ Return {
+ value: Some(
+ Var {
+ name: "r",
+ pos: Pos {
+ line: 19,
+ col: 12,
+ },
+ },
+ ),
+ pos: Pos {
+ line: 19,
+ col: 5,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 11,
+ col: 1,
+ },
+ },
+ FuncDef {
+ name: "main",
+ params: [],
+ ret_ty: None,
+ body: [
+ VarDecl {
+ kind: Let,
+ name: "n1",
+ ty: None,
+ value: Some(
+ Call {
+ callee: Var {
+ name: "Node",
+ pos: Pos {
+ line: 22,
+ col: 14,
+ },
+ },
+ args: [
+ Field {
+ obj: Var {
+ name: "Kind",
+ pos: Pos {
+ line: 22,
+ col: 19,
+ },
+ },
+ name: "Int",
+ pos: Pos {
+ line: 22,
+ col: 23,
+ },
+ },
+ Int {
+ value: 42,
+ pos: Pos {
+ line: 22,
+ col: 29,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 22,
+ col: 18,
+ },
+ },
+ ),
+ pos: Pos {
+ line: 22,
+ col: 5,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 23,
+ col: 5,
+ },
+ },
+ args: [
+ Call {
+ callee: Var {
+ name: "desc",
+ pos: Pos {
+ line: 23,
+ col: 11,
+ },
+ },
+ args: [
+ Var {
+ name: "n1",
+ pos: Pos {
+ line: 23,
+ col: 16,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 23,
+ col: 15,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 23,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 23,
+ col: 10,
+ },
+ },
+ VarDecl {
+ kind: Let,
+ name: "n2",
+ ty: None,
+ value: Some(
+ Call {
+ callee: Var {
+ name: "Node",
+ pos: Pos {
+ line: 24,
+ col: 14,
+ },
+ },
+ args: [
+ Field {
+ obj: Var {
+ name: "Kind",
+ pos: Pos {
+ line: 24,
+ col: 19,
+ },
+ },
+ name: "Call",
+ pos: Pos {
+ line: 24,
+ col: 23,
+ },
+ },
+ Int {
+ value: 0,
+ pos: Pos {
+ line: 24,
+ col: 30,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 24,
+ col: 18,
+ },
+ },
+ ),
+ pos: Pos {
+ line: 24,
+ col: 5,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 25,
+ col: 5,
+ },
+ },
+ args: [
+ Call {
+ callee: Var {
+ name: "desc",
+ pos: Pos {
+ line: 25,
+ col: 11,
+ },
+ },
+ args: [
+ Var {
+ name: "n2",
+ pos: Pos {
+ line: 25,
+ col: 16,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 25,
+ col: 15,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 25,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 25,
+ col: 10,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 21,
+ col: 1,
+ },
+ },
+ ],
+}
+语法分析成功：4 条顶层语句

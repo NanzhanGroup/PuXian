@@ -1,0 +1,422 @@
+# ============================================================
+# M-B1 前置门禁：写编译器所需语言能力自检（PuXian 版）
+# 来源：BOOTSTRAP_PLAN §二.3 语言能力检查清单
+#  字符串处理 / 正则 / JSON / 文件IO / 进程调用(gcc) / 错误处理(Result+?)
+# 运行：px run selfhost/capability.px
+#       编译模式：px build selfhost/capability.px && selfhost/build/capability
+# 验证：解释器 + 编译模式输出逐字节一致，且全 PASS
+# ============================================================
+
+# ---- 自检框架 ----
+let g_pass = 0
+let g_fail = 0
+let g_fails = []
+
+def check(name, cond):
+    if cond:
+        g_pass += 1
+        print("[PASS] " + name)
+    else:
+        g_fail += 1
+        g_fails.append(name)
+        print("[FAIL] " + name)
+
+def section(title):
+    print("")
+    print("== " + title + " ==")
+
+# ============================================================
+section("1. 字符串处理")
+# ============================================================
+let s = "  hello,world,px  "
+check("trim 去除首尾空格", trim(s) == "hello,world,px")
+let parts = split("a,b,c", ",")
+check("split 分割", len(parts) == 3 and parts[0] == "a" and parts[2] == "c")
+check("join 拼接", join("-", ["x", "y", "z"]) == "x-y-z")
+check("replace 替换", replace("hello world", "world", "px") == "hello px")
+check("to_upper", to_upper("abc") == "ABC")
+check("to_lower", to_lower("XYZ") == "xyz")
+check("startswith", starts_with("puxian", "pu"))
+check("endswith", ends_with("puxian", "ian"))
+check("contains 子串", contains("puxian", "xi"))
+check("len 字符串长度", len("普贤px") == 4)
+check("str 数值转字符串", str(42) == "42" and str(3.5) == "3.5")
+check("int 字符串转整数", int("42") == 42)
+# 字符串索引与切片
+let t = "abcdef"
+check("字符串索引", t[0] == "a" and t[5] == "f")
+check("字符串切片", t[1:4] == "bcd")
+check("字符串负数索引", t[-1] == "f")
+# 拼接
+check("字符串 + 拼接", "px" + "-" + "lang" == "px-lang")
+# 重复（字符串乘法 * 当前不支持，用循环拼接实现）
+def repeat_str(s, n):
+    let r = ""
+    for i in range(n):
+        r += s
+    return r
+check("字符串重复(循环)", repeat_str("ab", 3) == "ababab")
+
+# ============================================================
+section("2. 正则表达式（自研引擎）")
+# ============================================================
+check("regex_match 匹配", regex_match("^[a-z]+$", "puxian"))
+check("regex_match 不匹配", not regex_match("^[0-9]+$", "puxian"))
+let m = regex_search("(\\w+)@(\\w+)", "contact a@b.com now")
+check("regex_search 分组", m != null and m["match"] == "a@b" and m["groups"][0] == "a" and m["groups"][1] == "b")
+check("regex_replace 替换", regex_replace("\\d+", "id-123", "#") == "id-#")
+let rs = regex_split("[,\\s]+", "a, b  c")
+check("regex_split 分割", len(rs) == 3 and rs[2] == "c")
+let all = regex_find_all("\\d+", "a1b22c333")
+check("regex_find_all 全部", len(all) == 3)
+
+# ============================================================
+section("3. JSON")
+# ============================================================
+let obj = json_parse("{\"name\": \"px\", \"v\": [1, 2, 3], \"ok\": true}")
+check("json_parse 对象", obj["name"] == "px" and obj["ok"] == true)
+check("json_parse 数组", obj["v"][2] == 3)
+let enc = json_stringify({"a": 1, "b": [true, null, "x"]})
+let back = json_parse(enc)
+check("json_stringify/decode 往返", back["a"] == 1 and back["b"][0] == true and back["b"][1] == null)
+let jp = json_path("{\"user\": {\"name\": \"px\", \"tags\": [\"c\", \"go\"]}}", "$.user.tags[1]")
+check("json_path 路径查询", jp == "go")
+let jp2 = json_path(enc, "$.b[2]")
+check("json_path 字符串", jp2 == "x")
+
+# ============================================================
+section("4. 文件 IO")
+# ============================================================
+let tmp = "/tmp/px_b1_cap.txt"
+write_file(tmp, "line1\nline2\n")
+check("write_file + read_file", read_file(tmp) == "line1\nline2\n")
+append_file(tmp, "line3\n")
+check("append_file 追加", read_file(tmp) == "line1\nline2\nline3\n")
+check("exists 存在", exists(tmp))
+check("file_size 大小", file_size(tmp) == 18)
+let lines = split(read_file(tmp), "\n")
+check("读文件按行分割", lines[0] == "line1" and lines[2] == "line3")
+remove(tmp)
+check("remove 删除", not exists(tmp))
+# 目录
+let d = "/tmp/px_b1_dir"
+mkdir(d)
+write_file(d + "/a.txt", "A")
+write_file(d + "/b.txt", "B")
+let entries = list_dir(d)
+check("list_dir 目录列举", len(entries) >= 2)
+check("list_dir 包含文件", contains(entries, "a.txt") and contains(entries, "b.txt"))
+remove(d + "/a.txt")
+remove(d + "/b.txt")
+remove(d)
+
+# ============================================================
+section("5. 进程调用（os_spawn → gcc 工具链）")
+# ============================================================
+# 验证 os_spawn 能调用外部进程（写编译器需要调 gcc）
+let pid = os_spawn("/bin/echo", ["b1-proc-ok"])
+check("os_spawn 返回 PID", pid != null and pid > 0)
+let code = os_wait(pid)
+check("os_wait 退出码", code == 0)
+# 验证 gcc 可用（自举后端依赖）
+let gcc_pid = os_spawn("gcc", ["--version"])
+check("gcc 可用（自举后端）", gcc_pid != null)
+os_wait(gcc_pid)
+# 环境变量
+let home = env("HOME")
+check("env 环境变量", home != null and len(home) > 0)
+
+# ============================================================
+section("6. Result / Option 错误处理（M39）")
+# ============================================================
+let a = Ok(42)
+check("Ok 构造", type(a) == "result" and a.is_ok())
+check("Result 解包 unwrap", a.unwrap() == 42)
+let b = Err("boom")
+check("Err 构造", b.is_err())
+check("Result err 方法", b.err() == "boom")
+# 嵌套解包
+let c = Ok(Ok(7))
+check("Result 嵌套", c.unwrap().unwrap() == 7)
+# Some/None
+check("Some 构造", Some(5) == 5 and Some(null) == null)
+# ? 传播（写编译器核心：失败快速返回）
+def try_div(x, y):
+    if y == 0:
+        return Err("div0")
+    return Ok(x // y)
+
+def chain(x):
+    let v = try_div(x, 2)?
+    let w = try_div(v, 3)?
+    return Ok(w + 1)
+
+let r1 = chain(12)
+check("? 传播成功链", r1.is_ok() and r1.unwrap() == 3)
+def chain_err():
+    let v = try_div(10, 0)?
+    return Ok(v)
+
+let r2 = chain_err()
+check("? 传播错误返回", r2.is_err() and r2.err() == "div0")
+# ! 强制解包
+let d = Ok(99)
+check("! 强制解包", d! == 99)
+# Result 的 JSON 序列化
+let ej = json_stringify(Ok(5))
+check("Result json", contains(ej, "\"ok\"") and contains(ej, "5"))
+
+# ============================================================
+section("7. 字符串插值（M40）")
+# ============================================================
+let name = "px"
+let ver = 1
+let kv = {"k": 2, "k1": 3}
+check("插值-变量", "hello ${name}" == "hello px")
+check("插值-表达式", "${1 + 2 * 3}" == "7")
+check("插值-混合", "v${ver}.${name}" == "v1.px")
+let kv_v = kv["k"]
+check("插值-属性/索引", "${kv_v}" == "2")
+check("插值-转义", "\${name}" == "$" + "{name}")
+let kn = "k" + str(ver)
+check("插值-嵌套", "${kv[kn]}" == "3")
+
+# ============================================================
+section("8. enum + match（AST 表示）")
+# ============================================================
+enum TokenKind:
+    Int
+    Ident
+    Str
+    Kw
+    Eof
+
+def kind_name(k):
+    let r = match k:
+        case Int:
+            "int"
+        case Ident:
+            "ident"
+        case Str:
+            "str"
+        case Kw:
+            "kw"
+        case Eof:
+            "eof"
+    return r
+
+check("enum 构造+match 基础", kind_name(TokenKind.Ident) == "ident")
+check("enum 相等比较", TokenKind.Int == TokenKind.Int)
+check("enum 不相等", TokenKind.Int != TokenKind.Eof)
+# AST 节点表示：无 payload enum（判别）+ struct（载荷）
+# 注：data enum（带值变体）当前为半成品（payload 不存实际值），
+#     自举编译器 AST 用「enum 判别 + struct 载荷」组合（Mini 子集锁定）
+enum ExprKind:
+    Number
+    StrLit
+    Call
+    BinOp
+
+struct AstNode:
+    kind: ExprKind
+    value: int
+    name: str
+    args: list
+
+let n1 = AstNode(ExprKind.Number, 7, "", [])
+check("enum+struct 表示 AST 节点", n1.kind == ExprKind.Number and n1.value == 7)
+let call = AstNode(ExprKind.Call, 0, "fib", [1, 2])
+check("struct 载荷 args", call.name == "fib" and len(call.args) == 2)
+# match 判别分发（自举编译器核心模式）
+def node_desc(node):
+    let r = match node.kind:
+        case Number:
+            "num:" + str(node.value)
+        case StrLit:
+            "str"
+        case Call:
+            "call:" + node.name
+        case BinOp:
+            "bin"
+    return r
+check("match 分发 AST 节点", node_desc(n1) == "num:7")
+check("match 分发 call", node_desc(call) == "call:fib")
+
+# ============================================================
+section("9. list / dict 容器")
+# ============================================================
+let lst = [1, 2, 3]
+lst.append(4)
+check("list append", len(lst) == 4 and lst[3] == 4)
+check("list 切片", lst[1:3] == [2, 3])
+check("list 负数索引", lst[-1] == 4)
+check("list contains", contains(lst, 3) and not contains(lst, 99))
+let rev = reversed(lst)
+check("reversed 反转", rev[0] == 4 and rev[3] == 1)
+check("sorted 排序", sorted([3, 1, 2]) == [1, 2, 3])
+let dct = {"a": 1, "b": 2}
+dct["c"] = 3
+check("dict 增改", dct["c"] == 3 and len(dct) == 3)
+let ks = dct.keys()
+check("dict keys", contains(ks, "a") and contains(ks, "c"))
+let vs = dct.values()
+check("dict values", len(vs) == 3)
+check("dict has", dct.has("b") and not dct.has("z"))
+check("dict remove", dct.remove("a") and not dct.has("a"))
+check("dict get 默认值", dct.get("zz", 9) == 9)
+# 二维嵌套
+let matrix = [[1, 2], [3, 4]]
+check("二维列表", matrix[1][0] == 3)
+let deep = {"x": {"y": [{"z": 42}]}}
+check("深嵌套访问", deep["x"]["y"][0]["z"] == 42)
+
+# ============================================================
+section("10. 函数/闭包/高阶函数/递归")
+# ============================================================
+# 递归
+def fact(n):
+    if n <= 1:
+        return 1
+    return n * fact(n - 1)
+check("递归 fact", fact(5) == 120)
+# 高阶函数
+check("map", map([1, 2, 3], fn(x) { x * 2 }) == [2, 4, 6])
+check("filter", filter([1, 2, 3, 4], fn(x) { x > 2 }) == [3, 4])
+check("reduce", reduce([1, 2, 3, 4], fn(a, b) { a + b }, 0) == 10)
+# 闭包：编译模式仅支持无捕获闭包（捕获外部变量在 C 后端不可用，Mini 子集排除）
+def make_outer():
+    let f = fn() { return 42 }
+    return f
+let k = make_outer()
+check("闭包（无捕获）", k() == 42)
+# 默认参数
+def greet(who, punct = "!"):
+    return "hi " + who + punct
+check("默认参数", greet("px") == "hi px!" and greet("px", "?") == "hi px?")
+# 可变参数：当前不支持 *args（spec 超前，Mini 子集排除）→ 用 list 参数
+def sum_all(xs):
+    let t = 0
+    for x in xs:
+        t += x
+    return t
+check("list 参数聚合", sum_all([1, 2, 3, 4]) == 10)
+# 关键字参数
+def cfg(host, port = 8080, tls = false):
+    if tls:
+        return host + ":" + str(port) + "s"
+    return host + ":" + str(port)
+check("关键字参数", cfg("localhost") == "localhost:8080")
+check("关键字参数-tls", cfg("localhost", 8080, true) == "localhost:8080s")
+
+# ============================================================
+section("11. 控制流")
+# ============================================================
+# for + range
+let acc = 0
+for i in range(5):
+    acc += i
+check("for range 累加", acc == 10)
+# while
+let w = 0
+while w < 3:
+    w += 1
+check("while 循环", w == 3)
+# break / continue
+let bc = 0
+for i in range(10):
+    if i == 2:
+        continue
+    if i == 5:
+        break
+    bc += 1
+check("break/continue", bc == 4)
+# 列表推导式
+check("列表推导式", [x * x for x in range(5)] == [0, 1, 4, 9, 16])
+check("推导式带条件", [x for x in range(6) if x % 2 == 0] == [0, 2, 4])
+# dict 推导式
+let dc = {str(x): x for x in range(3)}
+check("dict 推导式", dc["1"] == 1 and dc["2"] == 2)
+# 生成器表达式
+let g = (x * 2 for x in range(4))
+check("生成器 gen_next", gen_next(g) == 0 and gen_next(g) == 2)
+let g2 = (x for x in range(3))
+check("生成器 list 转换", list(g2) == [0, 1, 2])
+# 三元/可选链/空合并
+let t1 = if true: 5 else: 9
+check("三元表达式", t1 == 5)
+let d1 = {"a": {"b": 42}}
+check("可选链 ?.", d1?.a?.b == 42)
+let d2 = {"a": null}
+check("可选链短路", d2?.a?.b == null)
+check("空合并 ??", (d2["a"] ?? 99) == 99)
+# match 表达式
+let mv = match 3:
+    case 1:
+        "one"
+    case 3:
+        "three"
+    case _:
+        "other"
+check("match 表达式", mv == "three")
+
+# ============================================================
+section("12. 模块 / import")
+# ============================================================
+import std.collections
+let uq = unique([1, 2, 2, 3, 3, 3])
+check("import 模块函数", uq == [1, 2, 3])
+let fl = flatten([[1, 2], [3]])
+check("import flatten", fl == [1, 2, 3])
+
+# ============================================================
+section("13. 类型系统（Rust 风格）")
+# ============================================================
+struct Point:
+    x: float
+    y: float
+
+let p = Point(3.0, 4.0)
+check("struct 构造", p.x == 3.0 and p.y == 4.0)
+# trait + impl（扩展方法）
+trait Shape:
+    def area(self) -> float:
+
+impl Shape for Point:
+    def area(self) -> float:
+        return self.x * self.y
+
+check("trait impl 扩展方法", p.area() == 12.0)
+# 类型标注
+def typed(x: int, s: str) -> str:
+    return s + str(x)
+check("类型标注函数", typed(5, "n=") == "n=5")
+# let/const/var
+let lv = 1
+const cv = 2
+var vv = 3
+vv += 1
+check("let/const/var", lv == 1 and cv == 2 and vv == 4)
+
+# ============================================================
+section("14. 位运算 / 进制")
+# ============================================================
+check("位与", (0b1100 & 0b1010) == 0b1000)
+check("位或", (0b1100 | 0b1010) == 0b1110)
+check("位移", (1 << 4) == 16 and (16 >> 2) == 4)
+check("hex 转换", hex_to_int("ff") == 255 and int_to_hex(255, 2) == "ff")
+let bb = int_to_bytes(258, 2)
+check("bytes 转换", bytes_to_int(bb) == 258 and type(bb) == "bytes")
+
+# ============================================================
+# 汇总
+# ============================================================
+print("")
+print("========== 能力自检汇总 ==========")
+print("PASS: " + str(g_pass) + "  FAIL: " + str(g_fail))
+if g_fail > 0:
+    print("失败项：")
+    for f in g_fails:
+        print("  - " + f)
+    exit(1)
+else:
+    print("门禁通过：写编译器所需能力全部具备 ✅")

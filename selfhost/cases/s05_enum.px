@@ -1,0 +1,25 @@
+# Mini 子集用例 s05：enum + match + struct
+enum Kind:
+    Int
+    Str
+    Call
+
+struct Node:
+    kind: Kind
+    value: int
+
+def desc(n):
+    let r = match n.kind:
+        case Int:
+            "int:" + str(n.value)
+        case Str:
+            "str"
+        case Call:
+            "call"
+    return r
+
+def main():
+    let n1 = Node(Kind.Int, 42)
+    print(desc(n1))
+    let n2 = Node(Kind.Call, 0)
+    print(desc(n2))

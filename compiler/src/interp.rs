@@ -2047,10 +2047,10 @@ impl Interpreter {
             Expr::Index { obj, index, .. } => {
                 let ov = self.eval_expr(obj, env)?;
                 let iv = self.eval_expr(index, env)?;
-                let old = self.eval_index(&ov, &iv, pos)?;
                 let nv = if op == AssignOp::Assign {
                     v
                 } else {
+                    let old = self.eval_index(&ov, &iv, pos)?;
                     self.apply_assign_op(op, old, v, pos)?
                 };
                 match &ov {

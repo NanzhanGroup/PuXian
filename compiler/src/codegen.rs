@@ -259,9 +259,14 @@ impl Codegen {
         // 参数绑定
         for (i, p) in f.params.iter().enumerate() {
             let v = self.new_var(&p.name);
+            // M-B1 修复：默认参数值（此前缺省参数一律 px_null，导致默认参数在编译模式失效）
+            let default_c = match &p.default {
+                Some(d) => self.gen_expr(d)?,
+                None => "px_null()".to_string(),
+            };
             s.push_str(&format!(
-                "    LXValue {} = (nargs > {}) ? args[{}] : px_null();\n",
-                v, i, i
+                "    LXValue {} = (nargs > {}) ? args[{}] : {};\n",
+                v, i, i, default_c
             ));
         }
         // 预扫描：函数体内赋值（x = ... / x += ...）的变量视为局部变量（Python 语义）
@@ -333,11 +338,17 @@ impl Codegen {
         let pad = "    ".repeat(indent);
         match stmt {
             Stmt::VarDecl { name, value, .. } => {
-                let v = self.new_var(name);
                 let rhs = match value {
                     Some(e) => self.gen_expr(e)?,
                     None => "px_null()".to_string(),
                 };
+                // 顶层 let 变量（self.globals 且不在函数内）→ 全局变量：
+                // 与解释器语义一致（函数内可通过 px_get/set_global 访问/修改顶层变量）。
+                // M-B1 修复：此前生成局部变量导致跨函数访问顶层 let 报"未定义变量"。
+                if self.globals.contains(name) && self.err_labels.is_empty() {
+                    return Ok(format!("{}px_set_global(\"{}\", {});\n", pad, name, rhs));
+                }
+                let v = self.new_var(name);
                 // 类型推断：结构体构造（Expr::Call 形式 Point(1,2) 或 Constructor）
                 if let Some(e) = value {
                     let cname = match e {
@@ -1481,7 +1492,9 @@ mod tests {
         let c = gen_code("var got = 0\ngot = 42\nprint(got)\n");
         // 赋值必须有目标变量（M4 修复的 bug：不能生成裸 " = 42;"）
         assert!(!c.contains("     = px_int(42LL);"));
-        assert!(c.contains("_v1 = px_int(42LL);"));
+        // M-B1 修复：顶层 var 是全局变量（解释器语义），生成 px_set_global
+        assert!(c.contains("px_set_global(\"got\", px_int(0LL));"));
+        assert!(c.contains("px_set_global(\"got\", px_int(42LL));"));
     }
 
     // ==================== M39：Result / ? 传播 ====================

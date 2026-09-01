@@ -1,0 +1,13 @@
+# Mini 子集用例 s02：字符串处理
+def main():
+    let s = "hello,world"
+    let parts = split(s, ",")
+    print(len(parts))
+    print(parts[0])
+    print(parts[1])
+    print(join("-", parts))
+    print(to_upper(s))
+    print(trim("  px  "))
+    print(replace(s, "world", "px"))
+    print(contains(s, "wor"))
+    print(len(s))

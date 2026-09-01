@@ -1,0 +1,19 @@
+# Mini 子集用例 s06：Result + ? 错误传播
+def try_div(a, b):
+    if b == 0:
+        return Err("div0")
+    return Ok(a // b)
+
+def calc(x):
+    let v = try_div(x, 2)?
+    return Ok(v + 1)
+
+def main():
+    let r = calc(10)
+    print(r.is_ok())
+    print(r.unwrap())
+    let e = try_div(1, 0)
+    print(e.is_err())
+    print(e.err())
+    let okv = Ok(7)
+    print(okv!)

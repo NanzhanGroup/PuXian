@@ -1,0 +1,573 @@
+Program {
+ items: [
+ FuncDef {
+ name: "try_div",
+ params: [
+ Param {
+ name: "a",
+ ty: None,
+ default: None,
+ pos: Pos {
+ line: 2,
+ col: 13,
+ },
+ },
+ Param {
+ name: "b",
+ ty: None,
+ default: None,
+ pos: Pos {
+ line: 2,
+ col: 16,
+ },
+ },
+ ],
+ ret_ty: None,
+ body: [
+ If {
+ branches: [
+ (
+ Binary {
+ op: Eq,
+ left: Var {
+ name: "b",
+ pos: Pos {
+ line: 3,
+ col: 8,
+ },
+ },
+ right: Int {
+ value: 0,
+ pos: Pos {
+ line: 3,
+ col: 13,
+ },
+ },
+ pos: Pos {
+ line: 3,
+ col: 10,
+ },
+ },
+ [
+ Return {
+ value: Some(
+ Call {
+ callee: Var {
+ name: "Err",
+ pos: Pos {
+ line: 4,
+ col: 16,
+ },
+ },
+ args: [
+ Str {
+ value: "div0",
+ pos: Pos {
+ line: 4,
+ col: 20,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 4,
+ col: 19,
+ },
+ },
+ ),
+ pos: Pos {
+ line: 4,
+ col: 9,
+ },
+ },
+ ],
+ ),
+ ],
+ else_branch: None,
+ pos: Pos {
+ line: 3,
+ col: 5,
+ },
+ },
+ Return {
+ value: Some(
+ Call {
+ callee: Var {
+ name: "Ok",
+ pos: Pos {
+ line: 5,
+ col: 12,
+ },
+ },
+ args: [
+ Binary {
+ op: IntDiv,
+ left: Var {
+ name: "a",
+ pos: Pos {
+ line: 5,
+ col: 15,
+ },
+ },
+ right: Var {
+ name: "b",
+ pos: Pos {
+ line: 5,
+ col: 20,
+ },
+ },
+ pos: Pos {
+ line: 5,
+ col: 17,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 5,
+ col: 14,
+ },
+ },
+ ),
+ pos: Pos {
+ line: 5,
+ col: 5,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 2,
+ col: 1,
+ },
+ },
+ FuncDef {
+ name: "calc",
+ params: [
+ Param {
+ name: "x",
+ ty: None,
+ default: None,
+ pos: Pos {
+ line: 7,
+ col: 10,
+ },
+ },
+ ],
+ ret_ty: None,
+ body: [
+ VarDecl {
+ kind: Let,
+ name: "v",
+ ty: None,
+ value: Some(
+ Try {
+ expr: Call {
+ callee: Var {
+ name: "try_div",
+ pos: Pos {
+ line: 8,
+ col: 13,
+ },
+ },
+ args: [
+ Var {
+ name: "x",
+ pos: Pos {
+ line: 8,
+ col: 21,
+ },
+ },
+ Int {
+ value: 2,
+ pos: Pos {
+ line: 8,
+ col: 24,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 8,
+ col: 20,
+ },
+ },
+ pos: Pos {
+ line: 8,
+ col: 26,
+ },
+ },
+ ),
+ pos: Pos {
+ line: 8,
+ col: 5,
+ },
+ },
+ Return {
+ value: Some(
+ Call {
+ callee: Var {
+ name: "Ok",
+ pos: Pos {
+ line: 9,
+ col: 12,
+ },
+ },
+ args: [
+ Binary {
+ op: Add,
+ left: Var {
+ name: "v",
+ pos: Pos {
+ line: 9,
+ col: 15,
+ },
+ },
+ right: Int {
+ value: 1,
+ pos: Pos {
+ line: 9,
+ col: 19,
+ },
+ },
+ pos: Pos {
+ line: 9,
+ col: 17,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 9,
+ col: 14,
+ },
+ },
+ ),
+ pos: Pos {
+ line: 9,
+ col: 5,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 7,
+ col: 1,
+ },
+ },
+ FuncDef {
+ name: "main",
+ params: [],
+ ret_ty: None,
+ body: [
+ VarDecl {
+ kind: Let,
+ name: "r",
+ ty: None,
+ value: Some(
+ Call {
+ callee: Var {
+ name: "calc",
+ pos: Pos {
+ line: 12,
+ col: 13,
+ },
+ },
+ args: [
+ Int {
+ value: 10,
+ pos: Pos {
+ line: 12,
+ col: 18,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 12,
+ col: 17,
+ },
+ },
+ ),
+ pos: Pos {
+ line: 12,
+ col: 5,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 13,
+ col: 5,
+ },
+ },
+ args: [
+ Call {
+ callee: Field {
+ obj: Var {
+ name: "r",
+ pos: Pos {
+ line: 13,
+ col: 11,
+ },
+ },
+ name: "is_ok",
+ pos: Pos {
+ line: 13,
+ col: 12,
+ },
+ },
+ args: [],
+ pos: Pos {
+ line: 13,
+ col: 18,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 13,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 13,
+ col: 10,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 14,
+ col: 5,
+ },
+ },
+ args: [
+ Call {
+ callee: Field {
+ obj: Var {
+ name: "r",
+ pos: Pos {
+ line: 14,
+ col: 11,
+ },
+ },
+ name: "unwrap",
+ pos: Pos {
+ line: 14,
+ col: 12,
+ },
+ },
+ args: [],
+ pos: Pos {
+ line: 14,
+ col: 19,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 14,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 14,
+ col: 10,
+ },
+ },
+ VarDecl {
+ kind: Let,
+ name: "e",
+ ty: None,
+ value: Some(
+ Call {
+ callee: Var {
+ name: "try_div",
+ pos: Pos {
+ line: 15,
+ col: 13,
+ },
+ },
+ args: [
+ Int {
+ value: 1,
+ pos: Pos {
+ line: 15,
+ col: 21,
+ },
+ },
+ Int {
+ value: 0,
+ pos: Pos {
+ line: 15,
+ col: 24,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 15,
+ col: 20,
+ },
+ },
+ ),
+ pos: Pos {
+ line: 15,
+ col: 5,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 16,
+ col: 5,
+ },
+ },
+ args: [
+ Call {
+ callee: Field {
+ obj: Var {
+ name: "e",
+ pos: Pos {
+ line: 16,
+ col: 11,
+ },
+ },
+ name: "is_err",
+ pos: Pos {
+ line: 16,
+ col: 12,
+ },
+ },
+ args: [],
+ pos: Pos {
+ line: 16,
+ col: 19,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 16,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 16,
+ col: 10,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 17,
+ col: 5,
+ },
+ },
+ args: [
+ Call {
+ callee: Field {
+ obj: Var {
+ name: "e",
+ pos: Pos {
+ line: 17,
+ col: 11,
+ },
+ },
+ name: "err",
+ pos: Pos {
+ line: 17,
+ col: 12,
+ },
+ },
+ args: [],
+ pos: Pos {
+ line: 17,
+ col: 16,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 17,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 17,
+ col: 10,
+ },
+ },
+ VarDecl {
+ kind: Let,
+ name: "okv",
+ ty: None,
+ value: Some(
+ Call {
+ callee: Var {
+ name: "Ok",
+ pos: Pos {
+ line: 18,
+ col: 15,
+ },
+ },
+ args: [
+ Int {
+ value: 7,
+ pos: Pos {
+ line: 18,
+ col: 18,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 18,
+ col: 17,
+ },
+ },
+ ),
+ pos: Pos {
+ line: 18,
+ col: 5,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 19,
+ col: 5,
+ },
+ },
+ args: [
+ ForceUnwrap {
+ expr: Var {
+ name: "okv",
+ pos: Pos {
+ line: 19,
+ col: 11,
+ },
+ },
+ pos: Pos {
+ line: 19,
+ col: 14,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 19,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 19,
+ col: 10,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 11,
+ col: 1,
+ },
+ },
+ ],
+}
+语法分析成功：3 条顶层语句
