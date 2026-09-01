@@ -1,0 +1,208 @@
+# ============================================================
+# M-B3: AST dump——把 PuXian 版 parser 产出的 AST 树渲染成
+#       Rust `{:#?}` Debug 格式文本（对拍契约见 MINI_SUBSET §五）
+# ------------------------------------------------------------
+# AST 节点表示（list，保序）：
+#   [type, v1, v2, ...]  按 Rust Debug 字段顺序
+# 字符串字段统一存 rust_str_debug 格式（带引号，原样输出）
+# 枚举/数字/bool 存原始值（dump 时 str() 转换）
+# Pos 存 [line, col]
+# ============================================================
+
+# ---------- 节点布局表：[字段名或 null, 渲染类型] ----------
+# 渲染类型：s=字符串(已格式化) r=原样值 n=节点 o=Option<节点> os=Option<字符串>
+#          l=节点列表 ls=字符串列表 p=Pos
+#          lt2=元组(节点,节点)列表(Dict entries) lt2b=元组(节点,节点列表)列表(If branches)
+#          lt3=元组(Option<String>,节点,节点列表)列表(Select arms)
+#          lp=Param列表 lsf=StructField列表 lev=EnumVariant列表 lfd=FuncDef列表
+#          lc=CompClause列表 lma=MatchArm列表 tl=类型列表 lpl=Pattern列表
+# ---------- 辅助 ----------
+def pad(n):
+    let s = ""
+    let i = 0
+    while i < n:
+        s += " "
+        i += 1
+    return s
+
+def dump_node(node, ind):
+    let ty = node[0]
+    let entry = LAYOUT[ty]
+    let disp = entry[0]
+    let layout = entry[1]
+    if len(layout) == 0:
+        return disp
+    let tuple_style = layout[0][0] == null
+    let lines = []
+    if tuple_style:
+        lines.append(disp + "(")
+    else:
+        lines.append(disp + " {")
+    let i = 0
+    while i < len(layout):
+        let f = layout[i]
+        let fval = node[i + 1]
+        let d = dump_field(fval, f[1], ind + 4)
+        if tuple_style:
+            lines.append(pad(ind + 4) + d + ",")
+        else:
+            lines.append(pad(ind + 4) + f[0] + ": " + d + ",")
+        i += 1
+    if tuple_style:
+        lines.append(pad(ind) + ")")
+    else:
+        lines.append(pad(ind) + "}")
+    return join("\n", lines)
+
+def dump_list(v, ind):
+    if len(v) == 0:
+        return "[]"
+    let parts = []
+    let i = 0
+    while i < len(v):
+        parts.append(pad(ind + 4) + dump_node(v[i], ind + 4) + ",")
+        i += 1
+    return "[\n" + join("\n", parts) + "\n" + pad(ind) + "]"
+
+def dump_str_list(v, ind):
+    if len(v) == 0:
+        return "[]"
+    let parts = []
+    let i = 0
+    while i < len(v):
+        parts.append(pad(ind + 4) + v[i] + ",")
+        i += 1
+    return "[\n" + join("\n", parts) + "\n" + pad(ind) + "]"
+
+def dump_ty_list(v, ind):
+    if len(v) == 0:
+        return "[]"
+    let parts = []
+    let i = 0
+    while i < len(v):
+        parts.append(pad(ind + 4) + dump_node(v[i], ind + 4) + ",")
+        i += 1
+    return "[\n" + join("\n", parts) + "\n" + pad(ind) + "]"
+
+def dump_pat_list(v, ind):
+    if len(v) == 0:
+        return "[]"
+    let parts = []
+    let i = 0
+    while i < len(v):
+        parts.append(pad(ind + 4) + dump_node(v[i], ind + 4) + ",")
+        i += 1
+    return "[\n" + join("\n", parts) + "\n" + pad(ind) + "]"
+
+def dump_opt_node(v, ind):
+    if v == null:
+        return "None"
+    return "Some(\n" + pad(ind + 4) + dump_node(v, ind + 4) + ",\n" + pad(ind) + ")"
+
+def dump_opt_str(v, ind):
+    if v == null:
+        return "None"
+    return "Some(\n" + pad(ind + 4) + v + ",\n" + pad(ind) + ")"
+
+def dump_opt_list(v, ind):
+    if v == null:
+        return "None"
+    return "Some(\n" + pad(ind + 4) + dump_list(v, ind + 4) + ",\n" + pad(ind) + ")"
+
+def dump_pos(v, ind):
+    return "Pos {\n" + pad(ind + 4) + "line: " + str(v[0]) + ",\n" + pad(ind + 4) + "col: " + str(v[1]) + ",\n" + pad(ind) + "}"
+
+# (Expr, Expr) 元组列表：Dict.entries
+def dump_t2_list(v, ind):
+    if len(v) == 0:
+        return "[]"
+    let parts = []
+    let i = 0
+    while i < len(v):
+        let e = v[i]
+        parts.append(pad(ind + 4) + "(\n" + pad(ind + 8) + dump_node(e[0], ind + 8) + ",\n" + pad(ind + 8) + dump_node(e[1], ind + 8) + ",\n" + pad(ind + 4) + "),")
+        i += 1
+    return "[\n" + join("\n", parts) + "\n" + pad(ind) + "]"
+
+# (Expr, Vec<Stmt>) 元组列表：If.branches
+def dump_t2b_list(v, ind):
+    if len(v) == 0:
+        return "[]"
+    let parts = []
+    let i = 0
+    while i < len(v):
+        let e = v[i]
+        parts.append(pad(ind + 4) + "(\n" + pad(ind + 8) + dump_node(e[0], ind + 8) + ",\n" + pad(ind + 8) + dump_list(e[1], ind + 8) + ",\n" + pad(ind + 4) + "),")
+        i += 1
+    return "[\n" + join("\n", parts) + "\n" + pad(ind) + "]"
+
+# (Option<String>, Expr, Vec<Stmt>) 元组列表：Select.arms
+def dump_t3_list(v, ind):
+    if len(v) == 0:
+        return "[]"
+    let parts = []
+    let i = 0
+    while i < len(v):
+        let e = v[i]
+        let b = e[0]
+        let bs = "None"
+        if b != null:
+            bs = "Some(\n" + pad(ind + 12) + b + ",\n" + pad(ind + 8) + ")"
+        parts.append(pad(ind + 4) + "(\n" + pad(ind + 8) + bs + ",\n" + pad(ind + 8) + dump_node(e[1], ind + 8) + ",\n" + pad(ind + 8) + dump_list(e[2], ind + 8) + ",\n" + pad(ind + 4) + "),")
+        i += 1
+    return "[\n" + join("\n", parts) + "\n" + pad(ind) + "]"
+
+def fmt_float(v):
+    let s = str(v)
+    if not contains(s, ".") and not contains(s, "e") and not contains(s, "E"):
+        return s + ".0"
+    return s
+
+def dump_field(v, kind, ind):
+    if kind == "s":
+        return v
+    if kind == "r":
+        return str(v)
+    if kind == "f":
+        return fmt_float(v)
+    if kind == "n":
+        return dump_node(v, ind)
+    if kind == "o":
+        return dump_opt_node(v, ind)
+    if kind == "os":
+        return dump_opt_str(v, ind)
+    if kind == "ol":
+        return dump_opt_list(v, ind)
+    if kind == "l":
+        return dump_list(v, ind)
+    if kind == "ls":
+        return dump_str_list(v, ind)
+    if kind == "tl":
+        return dump_ty_list(v, ind)
+    if kind == "lpl":
+        return dump_pat_list(v, ind)
+    if kind == "lp":
+        return dump_list(v, ind)
+    if kind == "lsf":
+        return dump_list(v, ind)
+    if kind == "lev":
+        return dump_list(v, ind)
+    if kind == "lfd":
+        return dump_list(v, ind)
+    if kind == "lc":
+        return dump_list(v, ind)
+    if kind == "lma":
+        return dump_list(v, ind)
+    if kind == "lt2":
+        return dump_t2_list(v, ind)
+    if kind == "lt2b":
+        return dump_t2b_list(v, ind)
+    if kind == "lt3":
+        return dump_t3_list(v, ind)
+    if kind == "p":
+        return dump_pos(v, ind)
+    return str(v)
+
+# ---------- 顶层入口 ----------
+def dump_program(ast):
+    return dump_node(ast, 0)

@@ -1,0 +1,82 @@
+# Mini 子集用例 s08：全面语法覆盖（M-B3 parser 压测）
+import std.collections
+from std.fs import read_file
+
+const MAX_N = 100
+
+enum Shape:
+    Circle
+    Square
+
+struct Point:
+    x: int
+    y: int
+
+trait Area:
+    def area() -> float:
+
+impl Area for Point:
+    def area() -> float:
+        return 1.5
+
+def greet(name: str, times: int = 2) -> str:
+    let msg = "hi ${name}"
+    let i = 0
+    while i < times:
+        msg += "!"
+        i += 1
+    return msg
+
+def process(xs):
+    let doubled = [x * 2 for x in xs if x > 0]
+    let odds = [x for x in range(10) if x % 2 == 1 if x != 5]
+    let pairs = {str(k): k for k, v in xs.items()}
+    let first = xs[0]
+    let last = xs[-1]
+    let mid = xs[1:3]
+    let all = xs[:]
+    let rev = xs[::-1]
+    let steps = xs[::2]
+    return [doubled, odds, pairs, first, last, mid, all, rev, steps]
+
+def use_ops(a, b):
+    let pipe = a |> double
+    let nc = a ?? 42
+    let opt = a?.name
+    let forced = a!
+    let prop = a!.b.c
+    let idx = a[0][1]
+    return pipe + nc + len(opt) + forced + prop + idx
+
+def double(x):
+    return x * 2
+
+def main():
+    let shapes = [Shape.Circle, Shape.Square]
+    let p = Point(3, 4)
+    let r = match shapes[0]:
+        case Circle:
+            "circle"
+        case Square:
+            "square"
+    print(r)
+    print(p.area())
+    print(greet("px"))
+    print(greet("px", 3))
+    print(process([1, -2, 3, 4]))
+    print(use_ops(5, 6))
+    let add = fn(a, b) { a + b }
+    print(add(1, 2))
+    let sq = fn(x): x * x
+    print(sq(9))
+    let gen = (i * i for i in range(4))
+    print(list(gen))
+    print(0x1F)
+    print(0b1010)
+    print(2.5e2)
+    print(-7)
+    print(not true)
+    print(5 // 2)
+    print(2 ** 8)
+    print(1 << 4)
+    print(255 >> 2)

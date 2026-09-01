@@ -89,7 +89,11 @@
 | build | C 源码 | 逐字节一致（仅去除生成头注释与行尾空白） |
 | run | stdout | 逐字节一致 |
 
-**golden 基线**：`selfhost/golden/` 已保存 s01-s07 用例的 Rust 版输出（M-B1 实测），PuXian 版编译器每完成一个组件即对拍验证。
+**golden 基线**：`selfhost/golden/` 已保存 s01-s08 用例的 Rust 版输出（M-B1 7 例 + M-B3 s08），PuXian 版编译器每完成一个组件即对拍验证。
+
+**对拍命令**：
+- `./selfhost/diffcheck.sh --lexer [--build]` → M-B2：PuXian lexer token 流 vs golden
+- `./selfhost/diffcheck.sh --parser` → M-B3：PuXian parser AST dump vs golden
 
 ## 六、验证方法
 
@@ -131,3 +135,4 @@
 | 4 | **单行 if 语句不支持**（`if x: y`） | 报"期望 换行，实际得到 return" | 一律用 if 块 |
 | 5 | **函数调用参数不能跨行** | 多行调用参数报错 | 单行调用 |
 | 6 | **exit(n) 不终止执行**（仅设退出码） | `exit(1)` 后代码继续跑 | 报错用 `panic` 立即终止（err 函数先 print 再 panic） |
+| 7 | **编译版 AST dump 超大文件内存受限** | `build/parser 解析 >2 万行 AST 的源码` 被 kill（字符串拼接峰值内存）；解释器版可过 | 自举 codegen 消费 AST 树不 dump，不受影响；对拍用例规模内正常 |

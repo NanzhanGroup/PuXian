@@ -1,0 +1,1258 @@
+# ============================================================
+# M-B3: parser 用 PuXian 重写（自举第二步）
+# ------------------------------------------------------------
+# 对拍契约：px parse <file> 输出的 AST（Rust `{:#?}` 格式）与 Rust 版
+# 规范化后一致（MINI_SUBSET §五）。token 流由 pxlexer.px 提供。
+# 用法：px run parser.px <file.px>
+# ============================================================
+import "pxlexer.px"
+import "astdump.px"
+
+# ---------- lex 全局状态（供 pxlexer 函数引用；import 不注册顶层 let） ----------
+let g_src = ""
+let g_len = 0
+let g_pos = 0
+let g_line = 1
+let g_col = 1
+let g_indent_stack = [0]
+let g_at_line_start = true
+let g_toks = []
+let g_count = 0
+let g_pending = []
+let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn": "fn", "struct": "struct", "enum": "enum", "trait": "trait", "impl": "impl", "match": "match", "case": "case", "if": "if", "elif": "elif", "else": "else", "for": "for", "while": "while", "in": "in", "and": "and", "or": "or", "not": "not", "return": "return", "break": "break", "continue": "continue", "import": "import", "from": "from", "pub": "pub", "as": "as", "spawn": "spawn", "chan": "chan", "send": "send", "recv": "recv", "select": "select", "true": "true", "false": "false", "null": "null", "None": "null", "self": "self", "capture": "capture"}
+let CTRL_ALL = "\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}\u{8}\u{b}\u{c}\u{e}\u{f}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1a}\u{1b}\u{1c}\u{1d}\u{1e}\u{1f}\u{7f}\u{80}\u{81}\u{82}\u{83}\u{84}\u{85}\u{86}\u{87}\u{88}\u{89}\u{8a}\u{8b}\u{8c}\u{8d}\u{8e}\u{8f}\u{90}\u{91}\u{92}\u{93}\u{94}\u{95}\u{96}\u{97}\u{98}\u{99}\u{9a}\u{9b}\u{9c}\u{9d}\u{9e}\u{9f}"
+
+let LAYOUT = {
+    "Program": ["Program", [["items", "l"]]],
+    "VarDecl": ["VarDecl", [["kind", "r"], ["name", "s"], ["ty", "o"], ["value", "o"], ["pos", "p"]]],
+    "Assign": ["Assign", [["target", "n"], ["op", "r"], ["value", "n"], ["pos", "p"]]],
+    "ExprStmt": ["ExprStmt", [["expr", "n"], ["pos", "p"]]],
+    "If": ["If", [["branches", "lt2b"], ["else_branch", "ol"], ["pos", "p"]]],
+    "For": ["For", [["var", "s"], ["iterable", "n"], ["body", "l"], ["pos", "p"]]],
+    "While": ["While", [["cond", "n"], ["body", "l"], ["pos", "p"]]],
+    "Return": ["Return", [["value", "o"], ["pos", "p"]]],
+    "Break": ["Break", [["pos", "p"]]],
+    "Continue": ["Continue", [["pos", "p"]]],
+    "FuncDef": ["FuncDef", [["name", "s"], ["params", "lp"], ["ret_ty", "o"], ["body", "l"], ["pos", "p"]]],
+    "StructDef": ["StructDef", [["name", "s"], ["fields", "lsf"], ["pos", "p"]]],
+    "EnumDef": ["EnumDef", [["name", "s"], ["variants", "lev"], ["pos", "p"]]],
+    "TraitDef": ["TraitDef", [["name", "s"], ["methods", "lfd"], ["pos", "p"]]],
+    "ImplDef": ["ImplDef", [["type_name", "s"], ["trait_name", "os"], ["methods", "lfd"], ["pos", "p"]]],
+    "Import": ["Import", [["module", "ls"], ["names", "ls"], ["pos", "p"]]],
+    "Spawn": ["Spawn", [["expr", "n"], ["pos", "p"]]],
+    "ChanDecl": ["ChanDecl", [["name", "s"], ["elem_ty", "o"], ["pos", "p"]]],
+    "Send": ["Send", [["chan", "n"], ["value", "n"], ["pos", "p"]]],
+    "Recv": ["Recv", [["chan", "n"], ["pos", "p"]]],
+    "Select": ["Select", [["arms", "lt3"], ["else_branch", "ol"], ["pos", "p"]]],
+    "Empty": ["Empty", [["pos", "p"]]],
+    "Int": ["Int", [["value", "r"], ["pos", "p"]]],
+    "Float": ["Float", [["value", "f"], ["pos", "p"]]],
+    "Str": ["Str", [["value", "s"], ["pos", "p"]]],
+    "Bool": ["Bool", [["value", "r"], ["pos", "p"]]],
+    "Null": ["Null", [["pos", "p"]]],
+    "List": ["List", [["items", "l"], ["pos", "p"]]],
+    "Tuple": ["Tuple", [["items", "l"], ["pos", "p"]]],
+    "Dict": ["Dict", [["entries", "lt2"], ["pos", "p"]]],
+    "Var": ["Var", [["name", "s"], ["pos", "p"]]],
+    "Field": ["Field", [["obj", "n"], ["name", "s"], ["pos", "p"]]],
+    "OptionalField": ["OptionalField", [["obj", "n"], ["name", "s"], ["pos", "p"]]],
+    "Index": ["Index", [["obj", "n"], ["index", "n"], ["pos", "p"]]],
+    "Slice": ["Slice", [["obj", "n"], ["start", "o"], ["end", "o"], ["step", "o"], ["pos", "p"]]],
+    "Call": ["Call", [["callee", "n"], ["args", "l"], ["pos", "p"]]],
+    "Unary": ["Unary", [["op", "r"], ["operand", "n"], ["pos", "p"]]],
+    "Binary": ["Binary", [["op", "r"], ["left", "n"], ["right", "n"], ["pos", "p"]]],
+    "Pipe": ["Pipe", [["value", "n"], ["func", "n"], ["pos", "p"]]],
+    "NullCoalesce": ["NullCoalesce", [["left", "n"], ["right", "n"], ["pos", "p"]]],
+    "Try": ["Try", [["expr", "n"], ["pos", "p"]]],
+    "ForceUnwrap": ["ForceUnwrap", [["expr", "n"], ["pos", "p"]]],
+    "IfExpr": ["IfExpr", [["cond", "n"], ["then", "n"], ["else_", "n"], ["pos", "p"]]],
+    "ListComp": ["ListComp", [["expr", "n"], ["clauses", "lc"], ["cond", "o"], ["pos", "p"]]],
+    "DictComp": ["DictComp", [["key", "n"], ["value", "n"], ["clauses", "lc"], ["cond", "o"], ["pos", "p"]]],
+    "GenExp": ["GenExp", [["expr", "n"], ["clauses", "lc"], ["cond", "o"], ["pos", "p"]]],
+    "Closure": ["Closure", [["params", "lp"], ["ret_ty", "o"], ["body", "n"], ["captures", "ls"], ["pos", "p"]]],
+    "Block": ["Block", [["stmts", "l"], ["pos", "p"]]],
+    "Match": ["Match", [["subject", "n"], ["arms", "lma"], ["pos", "p"]]],
+    "Constructor": ["Constructor", [["name", "s"], ["args", "l"], ["pos", "p"]]],
+    "Param": ["Param", [["name", "s"], ["ty", "o"], ["default", "o"], ["pos", "p"]]],
+    "StructField": ["StructField", [["name", "s"], ["ty", "n"], ["pos", "p"]]],
+    "EnumVariant": ["EnumVariant", [["name", "s"], ["fields", "tl"], ["pos", "p"]]],
+    "MatchArm": ["MatchArm", [["pattern", "n"], ["guard", "o"], ["body", "n"], ["pos", "p"]]],
+    "CompClause": ["CompClause", [["vars", "ls"], ["iterable", "n"]]],
+    "PatLiteral": ["Literal", [[null, "n"]]],
+    "PatBinding": ["Binding", [[null, "s"]]],
+    "PatWildcard": ["Wildcard", []],
+    "PatTuple": ["Tuple", [[null, "lpl"]]],
+    "PatConstructor": ["Constructor", [[null, "s"], [null, "lpl"]]],
+    "TyNamed": ["Named", [[null, "s"], [null, "p"]]],
+    "TyOptional": ["Optional", [[null, "n"], [null, "p"]]],
+    "TyList": ["List", [[null, "n"], [null, "p"]]],
+    "TyDict": ["Dict", [[null, "n"], [null, "n"], [null, "p"]]],
+    "TyTuple": ["Tuple", [[null, "tl"], [null, "p"]]],
+    "TyFunc": ["Func", [[null, "tl"], [null, "n"], [null, "p"]]],
+    "TyGeneric": ["Generic", [[null, "s"], [null, "tl"], [null, "p"]]],
+}
+
+# ---------- parser 状态 ----------
+let p_toks = []
+let p_pos = 0
+
+# ---------- 工具 ----------
+def pk():
+    return p_toks[p_pos][0]
+
+def pv():
+    return p_toks[p_pos][1]
+
+def pline():
+    return p_toks[p_pos][2]
+
+def pcol():
+    return p_toks[p_pos][3]
+
+def ppos():
+    return [p_toks[p_pos][2], p_toks[p_pos][3]]
+
+def adv():
+    let t = p_toks[p_pos]
+    if p_pos + 1 < len(p_toks):
+        p_pos += 1
+    return t
+
+def chk(k):
+    return pk() == k
+
+def chk2(k):
+    if p_pos + 1 < len(p_toks):
+        return p_toks[p_pos + 1][0] == k
+    return false
+
+def expect(k, what):
+    if chk(k):
+        return adv()
+    perr("E2001", "期望 " + what + "，实际得到 " + pk())
+
+def expect_ident(what):
+    if pk() == "标识符":
+        let v = pv()
+        adv()
+        return v
+    perr("E2001", "期望" + what + "，实际得到 " + pk())
+
+def is_name_kind(k):
+    let ns = ["let", "var", "const", "def", "fn", "struct", "enum", "trait", "impl", "match", "case", "if", "elif", "else", "for", "while", "in", "return", "break", "continue", "import", "from", "pub", "as", "spawn", "chan", "send", "recv", "select", "true", "false", "null", "self", "type", "capture"]
+    let i = 0
+    while i < len(ns):
+        if ns[i] == k:
+            return true
+        i += 1
+    return false
+
+def expect_name(what):
+    if pk() == "标识符":
+        let v = pv()
+        adv()
+        return v
+    if is_name_kind(pk()):
+        let v = pk()
+        adv()
+        return v
+    perr("E2001", "期望" + what + "，实际得到 " + pk())
+
+def perr(code, msg):
+    print("错误: " + str(pline()) + ":" + str(pcol()) + ": 语法错误 " + code + ": " + msg)
+    panic("parse " + code)
+
+def skip_newlines():
+    while chk("换行"):
+        adv()
+
+def skip_brace_indents():
+    while chk("缩进") or chk("去缩进"):
+        adv()
+
+def skip_newlines_in_block():
+    while chk("换行"):
+        adv()
+
+def node_pos(node):
+    return node[len(node) - 1]
+
+def qstr(s):
+    return rust_str_debug(s)
+
+# ---------- 程序 ----------
+def parse_program():
+    let items = []
+    skip_newlines()
+    while not chk("EOF"):
+        items.append(parse_stmt())
+        skip_newlines()
+    return ["Program", items]
+
+# ---------- 语句 ----------
+def parse_stmt():
+    let k = pk()
+    if k == "let":
+        return parse_var_decl("Let")
+    if k == "var":
+        return parse_var_decl("Var")
+    if k == "const":
+        return parse_var_decl("Const")
+    if k == "if":
+        return parse_if()
+    if k == "for":
+        return parse_for()
+    if k == "while":
+        return parse_while()
+    if k == "def":
+        return parse_func_def()
+    if k == "struct":
+        return parse_struct_def()
+    if k == "enum":
+        return parse_enum_def()
+    if k == "trait":
+        return parse_trait_def()
+    if k == "impl":
+        return parse_impl_def()
+    if k == "import":
+        return parse_import()
+    if k == "from":
+        return parse_import_from()
+    if k == "return":
+        let pos = ppos()
+        adv()
+        if chk("换行") or chk("去缩进") or chk("EOF"):
+            return ["Return", null, pos]
+        let value = parse_expr()
+        return ["Return", value, pos]
+    if k == "break":
+        let pos = ppos()
+        adv()
+        return ["Break", pos]
+    if k == "continue":
+        let pos = ppos()
+        adv()
+        return ["Continue", pos]
+    if k == "spawn":
+        let pos = ppos()
+        adv()
+        let expr = parse_expr()
+        return ["Spawn", expr, pos]
+    if k == "select":
+        return parse_select()
+    if k == "fn":
+        let expr = parse_expr()
+        let pos = node_pos(expr)
+        return ["ExprStmt", expr, pos]
+    return parse_assign_or_expr()
+
+def parse_var_decl(kind):
+    let pos = ppos()
+    adv()
+    if chk("("):
+        perr("E2001", "解构声明 let (a, b) = ... 尚未支持（v0.1 后续版本）")
+    let name = expect_ident("变量名")
+    let ty = null
+    if chk(":"):
+        adv()
+        ty = parse_type()
+    let value = null
+    if chk("="):
+        adv()
+        value = parse_expr()
+    return ["VarDecl", kind, qstr(name), ty, value, pos]
+
+def parse_assign_or_expr():
+    let expr = parse_expr()
+    let pos = node_pos(expr)
+    let op = null
+    let k = pk()
+    if k == "=":
+        op = "Assign"
+    elif k == "+=":
+        op = "Plus"
+    elif k == "-=":
+        op = "Minus"
+    elif k == "*=":
+        op = "Star"
+    elif k == "/=":
+        op = "Slash"
+    elif k == "//=":
+        op = "IntDiv"
+    elif k == "%=":
+        op = "Mod"
+    elif k == "**=":
+        op = "Pow"
+    elif k == "&=":
+        op = "BitAnd"
+    elif k == "|=":
+        op = "BitOr"
+    elif k == "^=":
+        op = "BitXor"
+    elif k == "<<=":
+        op = "Shl"
+    elif k == ">>=":
+        op = "Shr"
+    elif k == ">>>=":
+        op = "ShrU"
+    if op != null:
+        adv()
+        let value = parse_expr()
+        return ["Assign", expr, op, value, pos]
+    return ["ExprStmt", expr, pos]
+
+def parse_if():
+    let pos = ppos()
+    adv()
+    let cond = parse_expr()
+    expect(":", "':'")
+    expect("换行", "换行")
+    let body = parse_block()
+    let branches = [[cond, body]]
+    let else_branch = null
+    while true:
+        if chk("elif"):
+            adv()
+            let c = parse_expr()
+            expect(":", "':'")
+            expect("换行", "换行")
+            let b = parse_block()
+            branches.append([c, b])
+        elif chk("else"):
+            adv()
+            expect(":", "':'")
+            expect("换行", "换行")
+            else_branch = parse_block()
+            break
+        else:
+            break
+    return ["If", branches, else_branch, pos]
+
+def parse_for():
+    let pos = ppos()
+    adv()
+    let lv = expect_ident("循环变量")
+    expect("in", "'in'")
+    let iterable = parse_expr()
+    expect(":", "':'")
+    expect("换行", "换行")
+    let body = parse_block()
+    return ["For", qstr(lv), iterable, body, pos]
+
+def parse_while():
+    let pos = ppos()
+    adv()
+    let cond = parse_expr()
+    expect(":", "':'")
+    expect("换行", "换行")
+    let body = parse_block()
+    return ["While", cond, body, pos]
+
+def parse_block():
+    expect("缩进", "缩进块")
+    let stmts = []
+    while true:
+        skip_newlines_in_block()
+        if chk("去缩进") or chk("EOF"):
+            break
+        stmts.append(parse_stmt())
+    if chk("EOF"):
+        perr("E2001", "代码块未正确结束（缺少去缩进）")
+    expect("去缩进", "去缩进")
+    return stmts
+
+def parse_func_def():
+    let pos = ppos()
+    adv()
+    let name = expect_ident("函数名")
+    let params = parse_params()
+    let ret_ty = null
+    if chk("->"):
+        adv()
+        ret_ty = parse_type()
+    expect(":", "':'")
+    expect("换行", "换行")
+    let body = parse_block()
+    return ["FuncDef", qstr(name), params, ret_ty, body, pos]
+
+def parse_struct_def():
+    let pos = ppos()
+    adv()
+    let name = expect_ident("结构体名")
+    expect(":", "':'")
+    expect("换行", "换行")
+    expect("缩进", "缩进块")
+    let fields = []
+    while true:
+        skip_newlines_in_block()
+        if chk("去缩进") or chk("EOF"):
+            break
+        let fpos = ppos()
+        let fname = expect_ident("字段名")
+        expect(":", "':'")
+        let fty = parse_type()
+        fields.append(["StructField", qstr(fname), fty, fpos])
+        if not chk("换行") and not chk("去缩进"):
+            perr("E2001", "结构体字段后期望换行")
+    if chk("EOF"):
+        perr("E2001", "结构体定义未正确结束")
+    expect("去缩进", "去缩进")
+    return ["StructDef", qstr(name), fields, pos]
+
+def parse_enum_def():
+    let pos = ppos()
+    adv()
+    let name = expect_ident("枚举名")
+    expect(":", "':'")
+    expect("换行", "换行")
+    expect("缩进", "缩进块")
+    let variants = []
+    while true:
+        skip_newlines_in_block()
+        if chk("去缩进") or chk("EOF"):
+            break
+        let vpos = ppos()
+        let vname = expect_ident("变体名")
+        let fields = []
+        if chk("("):
+            adv()
+            if not chk(")"):
+                while true:
+                    fields.append(parse_type())
+                    if chk(","):
+                        adv()
+                        continue
+                    break
+            expect(")", "')'")
+        variants.append(["EnumVariant", qstr(vname), fields, vpos])
+        if not chk("换行") and not chk("去缩进"):
+            perr("E2001", "枚举变体后期望换行")
+    if chk("EOF"):
+        perr("E2001", "枚举定义未正确结束")
+    expect("去缩进", "去缩进")
+    return ["EnumDef", qstr(name), variants, pos]
+
+def parse_trait_def():
+    let pos = ppos()
+    adv()
+    let name = expect_ident("trait 名")
+    expect(":", "':'")
+    expect("换行", "换行")
+    expect("缩进", "缩进块")
+    let methods = []
+    while true:
+        skip_newlines_in_block()
+        if chk("去缩进") or chk("EOF"):
+            break
+        let mpos = ppos()
+        if not chk("def"):
+            perr("E2001", "trait 内只允许 def 方法")
+        adv()
+        let mname = expect_ident("方法名")
+        let mparams = parse_params()
+        let mret = null
+        if chk("->"):
+            adv()
+            mret = parse_type()
+        expect(":", "':'")
+        let body = []
+        if chk("换行"):
+            adv()
+            if chk("缩进"):
+                body = parse_block()
+        methods.append(["FuncDef", qstr(mname), mparams, mret, body, mpos])
+        if not chk("换行") and not chk("去缩进"):
+            perr("E2001", "trait 方法后期望换行")
+    if chk("EOF"):
+        perr("E2001", "trait 定义未正确结束")
+    expect("去缩进", "去缩进")
+    return ["TraitDef", qstr(name), methods, pos]
+
+def parse_impl_def():
+    let pos = ppos()
+    adv()
+    let first = expect_ident("类型名或 trait 名")
+    let trait_name = null
+    let type_name = first
+    if chk("for"):
+        adv()
+        type_name = expect_ident("类型名")
+        trait_name = qstr(first)
+    expect(":", "':'")
+    expect("换行", "换行")
+    expect("缩进", "缩进块")
+    let methods = []
+    while true:
+        skip_newlines_in_block()
+        if chk("去缩进") or chk("EOF"):
+            break
+        let mpos = ppos()
+        if not chk("def"):
+            perr("E2001", "impl 内只允许 def 方法")
+        adv()
+        let mname = expect_ident("方法名")
+        let mparams = parse_params()
+        let mret = null
+        if chk("->"):
+            adv()
+            mret = parse_type()
+        expect(":", "':'")
+        expect("换行", "换行")
+        let mbody = parse_block()
+        methods.append(["FuncDef", qstr(mname), mparams, mret, mbody, mpos])
+    if chk("EOF"):
+        perr("E2001", "impl 定义未正确结束")
+    expect("去缩进", "去缩进")
+    return ["ImplDef", qstr(type_name), trait_name, methods, pos]
+
+def parse_import():
+    let pos = ppos()
+    adv()
+    if pk() == "字符串":
+        let path = pv()
+        adv()
+        return ["Import", [path], [], pos]
+    let module = []
+    while true:
+        module.append(qstr(expect_ident("模块名")))
+        if chk("."):
+            adv()
+            continue
+        break
+    return ["Import", module, [], pos]
+
+def parse_import_from():
+    let pos = ppos()
+    adv()
+    let module = []
+    while true:
+        module.append(qstr(expect_ident("模块名")))
+        if chk("."):
+            adv()
+            continue
+        break
+    expect("import", "'import'")
+    let names = []
+    while true:
+        names.append(qstr(expect_ident("导入名")))
+        if chk(","):
+            adv()
+            continue
+        break
+    return ["Import", module, names, pos]
+
+def parse_select():
+    let pos = ppos()
+    adv()
+    expect(":", "':'")
+    expect("换行", "换行")
+    expect("缩进", "缩进块")
+    let arms = []
+    let else_branch = null
+    while true:
+        skip_newlines_in_block()
+        if chk("去缩进") or chk("EOF"):
+            break
+        expect("case", "'case'")
+        if pk() == "标识符" and pv() == "_":
+            let save = p_pos
+            adv()
+            if chk(":"):
+                adv()
+                expect("换行", "换行")
+                else_branch = parse_case_body()
+                continue
+            else:
+                p_pos = save
+        let binding = null
+        if pk() == "标识符" and chk2("="):
+            binding = qstr(expect_ident("绑定变量"))
+            expect("=", "'='")
+        let arm_expr = parse_expr()
+        expect(":", "':'")
+        expect("换行", "换行")
+        let body = parse_case_body()
+        arms.append([binding, arm_expr, body])
+    if chk("EOF"):
+        perr("E2001", "select 定义未正确结束")
+    expect("去缩进", "去缩进")
+    return ["Select", arms, else_branch, pos]
+
+def parse_case_body():
+    if chk("缩进"):
+        return parse_block()
+    let expr = parse_expr()
+    let pos = node_pos(expr)
+    return [["ExprStmt", expr, pos]]
+
+# ---------- 参数 ----------
+def parse_params():
+    expect("(", "'('")
+    let params = []
+    if not chk(")"):
+        while true:
+            let pos = ppos()
+            let name = expect_name("参数名")
+            let ty = null
+            if chk(":"):
+                adv()
+                ty = parse_type()
+            let default = null
+            if chk("="):
+                adv()
+                default = parse_expr()
+            params.append(["Param", qstr(name), ty, default, pos])
+            if chk(","):
+                adv()
+                continue
+            break
+    expect(")", "')'")
+    return params
+
+# ---------- 表达式（Pratt 解析） ----------
+def parse_expr():
+    return parse_pipe()
+
+def parse_pipe():
+    let left = parse_null_coalesce()
+    while chk("|>"):
+        let pos = ppos()
+        adv()
+        let right = parse_null_coalesce()
+        left = ["Pipe", left, right, pos]
+    return left
+
+def parse_null_coalesce():
+    let left = parse_or()
+    while chk("??"):
+        let pos = ppos()
+        adv()
+        let right = parse_or()
+        left = ["NullCoalesce", left, right, pos]
+    return left
+
+def parse_or():
+    let left = parse_and()
+    while chk("or"):
+        let pos = ppos()
+        adv()
+        let right = parse_and()
+        left = ["Binary", "Or", left, right, pos]
+    return left
+
+def parse_and():
+    let left = parse_comparison()
+    while chk("and"):
+        let pos = ppos()
+        adv()
+        let right = parse_comparison()
+        left = ["Binary", "And", left, right, pos]
+    return left
+
+def parse_comparison():
+    let left = parse_bitor()
+    while true:
+        let op = null
+        if chk("=="):
+            op = "Eq"
+        elif chk("!="):
+            op = "Ne"
+        elif chk("<"):
+            op = "Lt"
+        elif chk("<="):
+            op = "Le"
+        elif chk(">"):
+            op = "Gt"
+        elif chk(">="):
+            op = "Ge"
+        if op == null:
+            break
+        let pos = ppos()
+        adv()
+        let right = parse_bitor()
+        left = ["Binary", op, left, right, pos]
+    return left
+
+def parse_bitor():
+    let left = parse_bitxor()
+    while chk("|"):
+        let pos = ppos()
+        adv()
+        let right = parse_bitxor()
+        left = ["Binary", "BitOr", left, right, pos]
+    return left
+
+def parse_bitxor():
+    let left = parse_bitand()
+    while chk("^"):
+        let pos = ppos()
+        adv()
+        let right = parse_bitand()
+        left = ["Binary", "BitXor", left, right, pos]
+    return left
+
+def parse_bitand():
+    let left = parse_shift()
+    while chk("&"):
+        let pos = ppos()
+        adv()
+        let right = parse_shift()
+        left = ["Binary", "BitAnd", left, right, pos]
+    return left
+
+def parse_shift():
+    let left = parse_add()
+    while true:
+        let op = null
+        if chk("<<"):
+            op = "Shl"
+        elif chk(">>"):
+            op = "Shr"
+        elif chk(">>>"):
+            op = "ShrU"
+        if op == null:
+            break
+        let pos = ppos()
+        adv()
+        let right = parse_add()
+        left = ["Binary", op, left, right, pos]
+    return left
+
+def parse_add():
+    let left = parse_mul()
+    while true:
+        let op = null
+        if chk("+"):
+            op = "Add"
+        elif chk("-"):
+            op = "Sub"
+        if op == null:
+            break
+        let pos = ppos()
+        adv()
+        let right = parse_mul()
+        left = ["Binary", op, left, right, pos]
+    return left
+
+def parse_mul():
+    let left = parse_pow()
+    while true:
+        let op = null
+        if chk("*"):
+            op = "Mul"
+        elif chk("/"):
+            op = "Div"
+        elif chk("//"):
+            op = "IntDiv"
+        elif chk("%"):
+            op = "Mod"
+        if op == null:
+            break
+        let pos = ppos()
+        adv()
+        let right = parse_pow()
+        left = ["Binary", op, left, right, pos]
+    return left
+
+def parse_pow():
+    let left = parse_unary()
+    if chk("**"):
+        let pos = ppos()
+        adv()
+        let right = parse_pow()
+        return ["Binary", "Pow", left, right, pos]
+    return left
+
+def parse_unary():
+    let k = pk()
+    if k == "-":
+        let pos = ppos()
+        adv()
+        let operand = parse_unary()
+        return ["Unary", "Neg", operand, pos]
+    if k == "not":
+        let pos = ppos()
+        adv()
+        let operand = parse_unary()
+        return ["Unary", "Not", operand, pos]
+    if k == "~":
+        let pos = ppos()
+        adv()
+        let operand = parse_unary()
+        return ["Unary", "BitNot", operand, pos]
+    return parse_postfix()
+
+def parse_postfix():
+    let expr = parse_primary()
+    while true:
+        let k = pk()
+        if k == "(":
+            let pos = ppos()
+            let args = parse_call_args()
+            expr = ["Call", expr, args, pos]
+        elif k == "[":
+            let pos = ppos()
+            adv()
+            if chk(":"):
+                adv()
+                let end = parse_slice_bound()
+                let step = null
+                if chk(":"):
+                    adv()
+                    step = parse_slice_bound()
+                expect("]", "']'")
+                expr = ["Slice", expr, null, end, step, pos]
+            else:
+                let first = parse_expr()
+                if chk(":"):
+                    adv()
+                    let end = parse_slice_bound()
+                    let step = null
+                    if chk(":"):
+                        adv()
+                        step = parse_slice_bound()
+                    expect("]", "']'")
+                    expr = ["Slice", expr, first, end, step, pos]
+                else:
+                    expect("]", "']'")
+                    expr = ["Index", expr, first, pos]
+        elif k == ".":
+            let pos = ppos()
+            adv()
+            let name = expect_name("成员名")
+            expr = ["Field", expr, qstr(name), pos]
+        elif k == "?.":
+            let pos = ppos()
+            adv()
+            let name = expect_name("成员名")
+            expr = ["OptionalField", expr, qstr(name), pos]
+        elif k == "!":
+            let pos = ppos()
+            adv()
+            expr = ["ForceUnwrap", expr, pos]
+        elif k == "?":
+            let pos = ppos()
+            adv()
+            expr = ["Try", expr, pos]
+        else:
+            break
+    return expr
+
+def parse_slice_bound():
+    if chk("]") or chk(":"):
+        return null
+    return parse_expr()
+
+def parse_call_args():
+    expect("(", "'('")
+    let args = []
+    if not chk(")"):
+        while true:
+            args.append(parse_expr())
+            if chk(","):
+                adv()
+                continue
+            break
+    expect(")", "')'")
+    return args
+
+# ---------- 原子表达式 ----------
+def parse_primary():
+    let k = pk()
+    if k == "整数":
+        let pos = ppos()
+        let v = int(pv())
+        adv()
+        return ["Int", v, pos]
+    if k == "浮点":
+        let pos = ppos()
+        let v = float(pv())
+        adv()
+        return ["Float", v, pos]
+    if k == "字符串":
+        let pos = ppos()
+        let v = pv()
+        adv()
+        return ["Str", v, pos]
+    if k == "true":
+        let pos = ppos()
+        adv()
+        return ["Bool", true, pos]
+    if k == "false":
+        let pos = ppos()
+        adv()
+        return ["Bool", false, pos]
+    if k == "null":
+        let pos = ppos()
+        adv()
+        return ["Null", pos]
+    if k == "self":
+        let pos = ppos()
+        adv()
+        return ["Var", "\"self\"", pos]
+    if k == "标识符":
+        let pos = ppos()
+        let name = pv()
+        adv()
+        return ["Var", qstr(name), pos]
+    if k == "[":
+        return parse_list_or_comp()
+    if k == "(":
+        return parse_paren_or_tuple()
+    if k == "{":
+        return parse_brace()
+    if k == "fn":
+        return parse_closure()
+    if k == "match":
+        return parse_match_expr()
+    if k == "if":
+        return parse_if_expr()
+    if k == "chan":
+        let pos = ppos()
+        adv()
+        let callee = ["Var", "\"chan\"", pos]
+        if chk("["):
+            adv()
+            parse_type()
+            expect("]", "']'")
+        if chk("("):
+            let args = parse_call_args()
+            callee = ["Call", callee, args, pos]
+        return callee
+    perr("E2001", "意外的 token: " + k)
+    return null
+
+def parse_list_or_comp():
+    let pos = ppos()
+    adv()
+    if chk("]"):
+        adv()
+        return ["List", [], pos]
+    let first = parse_expr()
+    if chk("for"):
+        let clauses = parse_comp_clauses()
+        expect("]", "']'")
+        return ["ListComp", first, clauses[0], clauses[1], pos]
+    let items = [first]
+    while chk(","):
+        adv()
+        if chk("]"):
+            break
+        items.append(parse_expr())
+    expect("]", "']'")
+    return ["List", items, pos]
+
+def parse_comp_vars():
+    let vars = [qstr(expect_ident("推导变量"))]
+    while chk(","):
+        adv()
+        vars.append(qstr(expect_ident("推导变量")))
+    return vars
+
+def parse_comp_clauses():
+    let clauses = []
+    let conds = []
+    while true:
+        if chk("for"):
+            adv()
+            let vars = parse_comp_vars()
+            expect("in", "'in'")
+            let iterable = parse_expr()
+            clauses.append(["CompClause", vars, iterable])
+        elif chk("if"):
+            adv()
+            conds.append(parse_expr())
+        else:
+            break
+    return [clauses, fold_comp_conds(conds)]
+
+def fold_comp_conds(conds):
+    if len(conds) == 0:
+        return null
+    let acc = conds[0]
+    let i = 1
+    while i < len(conds):
+        let p = node_pos(acc)
+        acc = ["Binary", "And", acc, conds[i], p]
+        i += 1
+    return acc
+
+def parse_paren_or_tuple():
+    let pos = ppos()
+    adv()
+    if chk(")"):
+        adv()
+        return ["Tuple", [], pos]
+    let first = parse_expr()
+    if chk("for"):
+        let clauses = parse_comp_clauses()
+        expect(")", "')'")
+        return ["GenExp", first, clauses[0], clauses[1], pos]
+    if chk(","):
+        let items = [first]
+        while chk(","):
+            adv()
+            if chk(")"):
+                break
+            items.append(parse_expr())
+        expect(")", "')'")
+        return ["Tuple", items, pos]
+    expect(")", "')'")
+    return first
+
+def brace_looks_like_dict():
+    let depth = 0
+    let i = p_pos
+    while i < len(p_toks):
+        let k = p_toks[i][0]
+        if k == ":" and depth == 0:
+            return true
+        if k == "(" or k == "[" or k == "{":
+            depth += 1
+        elif k == ")" or k == "]":
+            if depth > 0:
+                depth -= 1
+        elif k == "}" and depth == 0:
+            return false
+        elif (k == "," or k == "换行" or k == "EOF") and depth == 0:
+            return false
+        i += 1
+    return false
+
+def parse_brace():
+    let pos = ppos()
+    adv()
+    skip_newlines()
+    skip_brace_indents()
+    let is_dict = brace_looks_like_dict()
+    if is_dict:
+        let k = parse_expr()
+        expect(":", "':'")
+        let v = parse_expr()
+        if chk("for"):
+            let clauses = parse_comp_clauses()
+            expect("}", "'}'")
+            return ["DictComp", k, v, clauses[0], clauses[1], pos]
+        let entries = [[k, v]]
+        while chk(","):
+            adv()
+            skip_newlines()
+            skip_brace_indents()
+            if chk("}"):
+                break
+            let k2 = parse_expr()
+            expect(":", "':'")
+            let v2 = parse_expr()
+            entries.append([k2, v2])
+            skip_newlines()
+            skip_brace_indents()
+        expect("}", "'}'")
+        return ["Dict", entries, pos]
+    let stmts = []
+    skip_newlines()
+    skip_brace_indents()
+    while not chk("}") and not chk("EOF"):
+        stmts.append(parse_stmt())
+        skip_newlines()
+        skip_brace_indents()
+    expect("}", "'}'")
+    return ["Block", stmts, pos]
+
+def parse_closure():
+    let pos = ppos()
+    adv()
+    let params = parse_params()
+    let ret_ty = null
+    if chk("->"):
+        adv()
+        ret_ty = parse_type()
+    let captures = []
+    if chk("capture"):
+        adv()
+        while true:
+            captures.append(qstr(expect_ident("捕获变量")))
+            if chk(","):
+                adv()
+                continue
+            break
+    let body = null
+    if chk("{"):
+        let bpos = ppos()
+        adv()
+        let stmts = []
+        skip_newlines()
+        skip_brace_indents()
+        while not chk("}") and not chk("EOF"):
+            stmts.append(parse_stmt())
+            skip_newlines()
+            skip_brace_indents()
+        expect("}", "'}'")
+        body = ["Block", stmts, bpos]
+    elif chk(":"):
+        adv()
+        body = parse_expr()
+    else:
+        perr("E2001", "匿名函数体期望 '{' 或 ':'")
+    return ["Closure", params, ret_ty, body, captures, pos]
+
+def parse_match_expr():
+    let pos = ppos()
+    adv()
+    let subject = parse_expr()
+    expect(":", "':'")
+    expect("换行", "换行")
+    expect("缩进", "缩进块")
+    let arms = []
+    while true:
+        skip_newlines_in_block()
+        if chk("去缩进") or chk("EOF"):
+            break
+        expect("case", "'case'")
+        let pattern = parse_pattern()
+        let guard = null
+        if chk("if"):
+            adv()
+            guard = parse_expr()
+        expect(":", "':'")
+        expect("换行", "换行")
+        let body = null
+        if chk("缩进"):
+            let stmts = parse_block()
+            let bpos = null
+            if len(stmts) > 0:
+                bpos = node_pos(stmts[0])
+            else:
+                bpos = pos
+            body = ["Block", stmts, bpos]
+        else:
+            body = parse_expr()
+        arms.append(["MatchArm", pattern, guard, body, pos])
+    if chk("EOF"):
+        perr("E2001", "match 表达式未正确结束")
+    expect("去缩进", "去缩进")
+    return ["Match", subject, arms, pos]
+
+def parse_if_expr():
+    let pos = ppos()
+    adv()
+    let cond = parse_expr()
+    expect(":", "':'")
+    let then = parse_expr()
+    expect("else", "'else'")
+    expect(":", "':'")
+    let else_ = parse_expr()
+    return ["IfExpr", cond, then, else_, pos]
+
+# ---------- 模式 ----------
+def parse_pattern():
+    let k = pk()
+    if k == "整数" or k == "浮点" or k == "字符串" or k == "true" or k == "false" or k == "null":
+        let expr = parse_primary()
+        return ["PatLiteral", expr]
+    if k == "标识符":
+        let name = pv()
+        let p = ppos()
+        adv()
+        if chk("("):
+            adv()
+            let fields = []
+            if not chk(")"):
+                while true:
+                    fields.append(parse_pattern())
+                    if chk(","):
+                        adv()
+                        continue
+                    break
+            expect(")", "')'")
+            return ["PatConstructor", qstr(name), fields]
+        if name == "_":
+            return ["PatWildcard"]
+        if is_upper(name):
+            return ["PatConstructor", qstr(name), []]
+        return ["PatBinding", qstr(name)]
+    if k == "(":
+        adv()
+        let items = []
+        if not chk(")"):
+            while true:
+                items.append(parse_pattern())
+                if chk(","):
+                    adv()
+                    continue
+                break
+        expect(")", "')'")
+        return ["PatTuple", items]
+    perr("E2001", "无效的模式: " + k)
+    return null
+
+def is_upper(s):
+    if len(s) == 0:
+        return false
+    let c = s[0]
+    return c >= "A" and c <= "Z"
+
+# ---------- 类型 ----------
+def parse_type():
+    let ty = parse_type_base()
+    if chk("?"):
+        let pos = ppos()
+        adv()
+        return ["TyOptional", ty, pos]
+    return ty
+
+def parse_type_base():
+    let k = pk()
+    if k == "标识符":
+        let name = pv()
+        let pos = ppos()
+        adv()
+        if chk("["):
+            adv()
+            let inner = parse_type()
+            expect("]", "']'")
+            if name == "list":
+                return ["TyList", inner, pos]
+            return ["TyGeneric", qstr(name), [inner], pos]
+        return ["TyNamed", qstr(name), pos]
+    if k == "[":
+        let pos = ppos()
+        adv()
+        let inner = parse_type()
+        expect("]", "']'")
+        return ["TyList", inner, pos]
+    if k == "{":
+        let pos = ppos()
+        adv()
+        let kt = parse_type()
+        expect(":", "':'")
+        let vt = parse_type()
+        expect("}", "'}'")
+        return ["TyDict", kt, vt, pos]
+    if k == "(":
+        let pos = ppos()
+        adv()
+        let items = []
+        if not chk(")"):
+            while true:
+                items.append(parse_type())
+                if chk(","):
+                    adv()
+                    continue
+                break
+        expect(")", "')'")
+        if chk("->"):
+            adv()
+            let ret = parse_type()
+            return ["TyFunc", items, ret, pos]
+        return ["TyTuple", items, pos]
+    perr("E2001", "无效的类型: " + k)
+    return null
+
+# ---------- 入口 ----------
+def main():
+    let f = args()[len(args()) - 1]
+    p_toks = lex_tokens(read_file(f))
+    p_pos = 0
+    let ast = parse_program()
+    print(dump_program(ast))
+    print("语法分析成功：" + str(len(ast[1])) + " 条顶层语句")

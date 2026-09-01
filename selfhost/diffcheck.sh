@@ -47,6 +47,23 @@ norm_c() {
         | sed -E 's/[[:space:]]+$//'
 }
 
+# ---- M-B3：PuXian parser 对拍 ----
+#   解释器执行 selfhost/parser.px <file>，AST dump 与 golden/*.ast 对比
+check_parser_file() {
+    local f="$1"
+    local base
+    base="$(basename "$f" .px)"
+    echo "── parser 对拍: $f"
+    "$PX" run "$(dirname "$0")/parser.px" "$f" 2>&1 | norm_ast > "$WORK/$base.px.ast"
+    norm_ast < "$GOLDEN_DIR/$base.ast" > "$WORK/$base.gold.ast" 2>/dev/null || { echo "    ⚠️ 无 golden，先生成"; return; }
+    if diff -q "$WORK/$base.px.ast" "$WORK/$base.gold.ast" >/dev/null 2>&1; then
+        echo "    ✅ $base AST 一致"
+    else
+        echo "    ❌ $base 有差异"
+        diff "$WORK/$base.px.ast" "$WORK/$base.gold.ast" | head -10
+    fi
+}
+
 # ---- M-B2：PuXian lexer 对拍 ----
 #   run 模式：解释器执行 selfhost/lexer.px <file>
 #   build 模式：编译版 selfhost/build/lexer <file>
@@ -151,6 +168,18 @@ check_file() {
 }
 
 # ---- 入口 ----
+if [ "${1:-}" = "--parser" ]; then
+    shift
+    if [ -n "${1:-}" ]; then
+        check_parser_file "$1"
+    else
+        for f in "$(dirname "$0")"/cases/*.px; do
+            [ -e "$f" ] && check_parser_file "$f"
+        done
+    fi
+    exit 0
+fi
+
 if [ "${1:-}" = "--lexer" ]; then
     LEXER_MODE="run"
     shift
