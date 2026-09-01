@@ -17,7 +17,7 @@
 def i_exec_stmt(stmt, env):
     let ty = stmt[0]
     if ty == "VarDecl":
-        let v = null
+        var v = null
         if stmt[4] != null:
             let r = i_eval_expr(stmt[4], env)
             if r.is_err():
@@ -53,7 +53,7 @@ def i_exec_stmt(stmt, env):
         g_loop_depth -= 1
         return r
     if ty == "Return":
-        let v = null
+        var v = null
         if stmt[1] != null:
             let r = i_eval_expr(stmt[1], env)
             if r.is_err():
@@ -104,7 +104,7 @@ def i_exec_stmt(stmt, env):
 # ---------- if（对齐 exec_stmt If） ----------
 def i_exec_if(stmt, env):
     # ["If", branches([[cond, body]...]), else_branch, pos]
-    let bi = 0
+    var bi = 0
     while bi < len(stmt[1]):
         let br = stmt[1][bi]
         let cr = i_eval_expr(br[0], env)
@@ -123,7 +123,7 @@ def i_exec_for(varname, iterable, body, env, pos):
     if ivr.is_err():
         return Err(ivr.err())
     let items = ivr.unwrap()
-    let ii = 0
+    var ii = 0
     while ii < len(items):
         env_define(env, varname, items[ii])
         let r = i_exec_block(body, env)
@@ -163,7 +163,7 @@ def i_exec_while(stmt, env):
 
 # ---------- 语句块（不新建作用域，Python 语义） ----------
 def i_exec_block(body, env):
-    let i = 0
+    var i = 0
     while i < len(body):
         let r = i_exec_stmt(body[i], env)
         if r.is_err():
@@ -179,7 +179,7 @@ def i_exec_struct(stmt, env):
     # ["StructDef", name, fields, pos]  fields: [["StructField", name, ty, pos]]
     let name = rust_unescape(stmt[1])
     let fields = []
-    let i = 0
+    var i = 0
     while i < len(stmt[2]):
         let f = stmt[2][i]
         fields.append({"name": rust_unescape(f[1]), "ty": f[2]})
@@ -193,7 +193,7 @@ def i_exec_enum(stmt, env):
     # ["EnumDef", name, variants, pos]  variants: [["EnumVariant", name, fields, pos]]
     let name = rust_unescape(stmt[1])
     let vs = []
-    let i = 0
+    var i = 0
     while i < len(stmt[2]):
         vs.append(rust_unescape(stmt[2][i][1]))
         i += 1
@@ -205,10 +205,10 @@ def i_exec_enum(stmt, env):
 def i_exec_impl(stmt, env):
     # ["ImplDef", type_name, trait_name, methods, pos]
     let tn = rust_unescape(stmt[1])
-    let m = it_new_dict()
+    var m = it_new_dict()
     if g_impls.has(tn):
         m = g_impls[tn]
-    let i = 0
+    var i = 0
     while i < len(stmt[3]):
         let fd = stmt[3][i]
         let mname = rust_unescape(fd[1])
@@ -243,9 +243,9 @@ def i_assign(target, op, v, env, pos):
         let t = i_type_name(ov)
         if t != "struct" and t != "dict":
             return Err(i_r1007("赋值目标不是可写对象", pos))
-        let nv = v
+        var nv = v
         if op != "Assign":
-            let old = null
+            var old = null
             if t == "struct":
                 if ov["__fields__"].has(fname):
                     old = ov["__fields__"][fname]
@@ -275,8 +275,8 @@ def i_assign(target, op, v, env, pos):
             let ar = i_as_index(iv, len(ov), pos)
             if ar.is_err():
                 return Err(ar.err())
-            let i = ar.unwrap()
-            let nv = v
+            var i = ar.unwrap()
+            var nv = v
             if op != "Assign":
                 let rr = i_apply_assign_op(op, ov[i], v, pos)
                 if rr.is_err():
@@ -287,9 +287,9 @@ def i_assign(target, op, v, env, pos):
         if t == "dict":
             if type(iv) != "string":
                 return Err(i_r1002("字典键必须是字符串", pos))
-            let nv = v
+            var nv = v
             if op != "Assign":
-                let old = null
+                var old = null
                 if ov.has(iv):
                     old = ov[iv]
                 let rr = i_apply_assign_op(op, old, v, pos)
@@ -305,7 +305,7 @@ def i_assign(target, op, v, env, pos):
 def i_apply_assign_op(op, old, new, pos):
     if op == "Assign":
         return Ok(new)
-    let bop = null
+    var bop = null
     if op == "Plus":
         bop = "Add"
     if op == "Minus":

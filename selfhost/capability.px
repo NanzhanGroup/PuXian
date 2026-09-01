@@ -8,9 +8,9 @@
 # ============================================================
 
 # ---- 自检框架 ----
-let g_pass = 0
-let g_fail = 0
-let g_fails = []
+var g_pass = 0
+var g_fail = 0
+var g_fails = []
 
 def check(name, cond):
     if cond:
@@ -28,9 +28,9 @@ def section(title):
 # ============================================================
 section("1. 字符串处理")
 # ============================================================
-let s = "  hello,world,px  "
+var s = "  hello,world,px  "
 check("trim 去除首尾空格", trim(s) == "hello,world,px")
-let parts = split("a,b,c", ",")
+var parts = split("a,b,c", ",")
 check("split 分割", len(parts) == 3 and parts[0] == "a" and parts[2] == "c")
 check("join 拼接", join("-", ["x", "y", "z"]) == "x-y-z")
 check("replace 替换", replace("hello world", "world", "px") == "hello px")
@@ -43,7 +43,7 @@ check("len 字符串长度", len("普贤px") == 4)
 check("str 数值转字符串", str(42) == "42" and str(3.5) == "3.5")
 check("int 字符串转整数", int("42") == 42)
 # 字符串索引与切片
-let t = "abcdef"
+var t = "abcdef"
 check("字符串索引", t[0] == "a" and t[5] == "f")
 check("字符串切片", t[1:4] == "bcd")
 check("字符串负数索引", t[-1] == "f")
@@ -51,7 +51,7 @@ check("字符串负数索引", t[-1] == "f")
 check("字符串 + 拼接", "px" + "-" + "lang" == "px-lang")
 # 重复（字符串乘法 * 当前不支持，用循环拼接实现）
 def repeat_str(s, n):
-    let r = ""
+    var r = ""
     for i in range(n):
         r += s
     return r
@@ -62,48 +62,48 @@ section("2. 正则表达式（自研引擎）")
 # ============================================================
 check("regex_match 匹配", regex_match("^[a-z]+$", "puxian"))
 check("regex_match 不匹配", not regex_match("^[0-9]+$", "puxian"))
-let m = regex_search("(\\w+)@(\\w+)", "contact a@b.com now")
+var m = regex_search("(\\w+)@(\\w+)", "contact a@b.com now")
 check("regex_search 分组", m != null and m["match"] == "a@b" and m["groups"][0] == "a" and m["groups"][1] == "b")
 check("regex_replace 替换", regex_replace("\\d+", "id-123", "#") == "id-#")
-let rs = regex_split("[,\\s]+", "a, b  c")
+var rs = regex_split("[,\\s]+", "a, b  c")
 check("regex_split 分割", len(rs) == 3 and rs[2] == "c")
-let all = regex_find_all("\\d+", "a1b22c333")
+var all = regex_find_all("\\d+", "a1b22c333")
 check("regex_find_all 全部", len(all) == 3)
 
 # ============================================================
 section("3. JSON")
 # ============================================================
-let obj = json_parse("{\"name\": \"px\", \"v\": [1, 2, 3], \"ok\": true}")
+var obj = json_parse("{\"name\": \"px\", \"v\": [1, 2, 3], \"ok\": true}")
 check("json_parse 对象", obj["name"] == "px" and obj["ok"] == true)
 check("json_parse 数组", obj["v"][2] == 3)
-let enc = json_stringify({"a": 1, "b": [true, null, "x"]})
-let back = json_parse(enc)
+var enc = json_stringify({"a": 1, "b": [true, null, "x"]})
+var back = json_parse(enc)
 check("json_stringify/decode 往返", back["a"] == 1 and back["b"][0] == true and back["b"][1] == null)
-let jp = json_path("{\"user\": {\"name\": \"px\", \"tags\": [\"c\", \"go\"]}}", "$.user.tags[1]")
+var jp = json_path("{\"user\": {\"name\": \"px\", \"tags\": [\"c\", \"go\"]}}", "$.user.tags[1]")
 check("json_path 路径查询", jp == "go")
-let jp2 = json_path(enc, "$.b[2]")
+var jp2 = json_path(enc, "$.b[2]")
 check("json_path 字符串", jp2 == "x")
 
 # ============================================================
 section("4. 文件 IO")
 # ============================================================
-let tmp = "/tmp/px_b1_cap.txt"
+var tmp = "/tmp/px_b1_cap.txt"
 write_file(tmp, "line1\nline2\n")
 check("write_file + read_file", read_file(tmp) == "line1\nline2\n")
 append_file(tmp, "line3\n")
 check("append_file 追加", read_file(tmp) == "line1\nline2\nline3\n")
 check("exists 存在", exists(tmp))
 check("file_size 大小", file_size(tmp) == 18)
-let lines = split(read_file(tmp), "\n")
+var lines = split(read_file(tmp), "\n")
 check("读文件按行分割", lines[0] == "line1" and lines[2] == "line3")
 remove(tmp)
 check("remove 删除", not exists(tmp))
 # 目录
-let d = "/tmp/px_b1_dir"
+var d = "/tmp/px_b1_dir"
 mkdir(d)
 write_file(d + "/a.txt", "A")
 write_file(d + "/b.txt", "B")
-let entries = list_dir(d)
+var entries = list_dir(d)
 check("list_dir 目录列举", len(entries) >= 2)
 check("list_dir 包含文件", contains(entries, "a.txt") and contains(entries, "b.txt"))
 remove(d + "/a.txt")
@@ -114,29 +114,29 @@ remove(d)
 section("5. 进程调用（os_spawn → gcc 工具链）")
 # ============================================================
 # 验证 os_spawn 能调用外部进程（写编译器需要调 gcc）
-let pid = os_spawn("/bin/echo", ["b1-proc-ok"])
+var pid = os_spawn("/bin/echo", ["b1-proc-ok"])
 check("os_spawn 返回 PID", pid != null and pid > 0)
-let code = os_wait(pid)
+var code = os_wait(pid)
 check("os_wait 退出码", code == 0)
 # 验证 gcc 可用（自举后端依赖）
-let gcc_pid = os_spawn("gcc", ["--version"])
+var gcc_pid = os_spawn("gcc", ["--version"])
 check("gcc 可用（自举后端）", gcc_pid != null)
 os_wait(gcc_pid)
 # 环境变量
-let home = env("HOME")
+var home = env("HOME")
 check("env 环境变量", home != null and len(home) > 0)
 
 # ============================================================
 section("6. Result / Option 错误处理（M39）")
 # ============================================================
-let a = Ok(42)
+var a = Ok(42)
 check("Ok 构造", type(a) == "result" and a.is_ok())
 check("Result 解包 unwrap", a.unwrap() == 42)
-let b = Err("boom")
+var b = Err("boom")
 check("Err 构造", b.is_err())
 check("Result err 方法", b.err() == "boom")
 # 嵌套解包
-let c = Ok(Ok(7))
+var c = Ok(Ok(7))
 check("Result 嵌套", c.unwrap().unwrap() == 7)
 # Some/None
 check("Some 构造", Some(5) == 5 and Some(null) == null)
@@ -148,37 +148,37 @@ def try_div(x, y):
 
 def chain(x):
     let v = try_div(x, 2)?
-    let w = try_div(v, 3)?
+    var w = try_div(v, 3)?
     return Ok(w + 1)
 
-let r1 = chain(12)
+var r1 = chain(12)
 check("? 传播成功链", r1.is_ok() and r1.unwrap() == 3)
 def chain_err():
     let v = try_div(10, 0)?
     return Ok(v)
 
-let r2 = chain_err()
+var r2 = chain_err()
 check("? 传播错误返回", r2.is_err() and r2.err() == "div0")
 # ! 强制解包
-let d = Ok(99)
+var d = Ok(99)
 check("! 强制解包", d! == 99)
 # Result 的 JSON 序列化
-let ej = json_stringify(Ok(5))
+var ej = json_stringify(Ok(5))
 check("Result json", contains(ej, "\"ok\"") and contains(ej, "5"))
 
 # ============================================================
 section("7. 字符串插值（M40）")
 # ============================================================
-let name = "px"
-let ver = 1
-let kv = {"k": 2, "k1": 3}
+var name = "px"
+var ver = 1
+var kv = {"k": 2, "k1": 3}
 check("插值-变量", "hello ${name}" == "hello px")
 check("插值-表达式", "${1 + 2 * 3}" == "7")
 check("插值-混合", "v${ver}.${name}" == "v1.px")
-let kv_v = kv["k"]
+var kv_v = kv["k"]
 check("插值-属性/索引", "${kv_v}" == "2")
 check("插值-转义", "\${name}" == "$" + "{name}")
-let kn = "k" + str(ver)
+var kn = "k" + str(ver)
 check("插值-嵌套", "${kv[kn]}" == "3")
 
 # ============================================================
@@ -192,7 +192,7 @@ enum TokenKind:
     Eof
 
 def kind_name(k):
-    let r = match k:
+    var r = match k:
         case Int:
             "int"
         case Ident:
@@ -223,13 +223,13 @@ struct AstNode:
     name: str
     args: list
 
-let n1 = AstNode(ExprKind.Number, 7, "", [])
+var n1 = AstNode(ExprKind.Number, 7, "", [])
 check("enum+struct 表示 AST 节点", n1.kind == ExprKind.Number and n1.value == 7)
-let call = AstNode(ExprKind.Call, 0, "fib", [1, 2])
+var call = AstNode(ExprKind.Call, 0, "fib", [1, 2])
 check("struct 载荷 args", call.name == "fib" and len(call.args) == 2)
 # match 判别分发（自举编译器核心模式）
 def node_desc(node):
-    let r = match node.kind:
+    var r = match node.kind:
         case Number:
             "num:" + str(node.value)
         case StrLit:
@@ -245,29 +245,29 @@ check("match 分发 call", node_desc(call) == "call:fib")
 # ============================================================
 section("9. list / dict 容器")
 # ============================================================
-let lst = [1, 2, 3]
+var lst = [1, 2, 3]
 lst.append(4)
 check("list append", len(lst) == 4 and lst[3] == 4)
 check("list 切片", lst[1:3] == [2, 3])
 check("list 负数索引", lst[-1] == 4)
 check("list contains", contains(lst, 3) and not contains(lst, 99))
-let rev = reversed(lst)
+var rev = reversed(lst)
 check("reversed 反转", rev[0] == 4 and rev[3] == 1)
 check("sorted 排序", sorted([3, 1, 2]) == [1, 2, 3])
-let dct = {"a": 1, "b": 2}
+var dct = {"a": 1, "b": 2}
 dct["c"] = 3
 check("dict 增改", dct["c"] == 3 and len(dct) == 3)
-let ks = dct.keys()
+var ks = dct.keys()
 check("dict keys", contains(ks, "a") and contains(ks, "c"))
-let vs = dct.values()
+var vs = dct.values()
 check("dict values", len(vs) == 3)
 check("dict has", dct.has("b") and not dct.has("z"))
 check("dict remove", dct.remove("a") and not dct.has("a"))
 check("dict get 默认值", dct.get("zz", 9) == 9)
 # 二维嵌套
-let matrix = [[1, 2], [3, 4]]
+var matrix = [[1, 2], [3, 4]]
 check("二维列表", matrix[1][0] == 3)
-let deep = {"x": {"y": [{"z": 42}]}}
+var deep = {"x": {"y": [{"z": 42}]}}
 check("深嵌套访问", deep["x"]["y"][0]["z"] == 42)
 
 # ============================================================
@@ -287,7 +287,7 @@ check("reduce", reduce([1, 2, 3, 4], fn(a, b) { a + b }, 0) == 10)
 def make_outer():
     let f = fn() { return 42 }
     return f
-let k = make_outer()
+var k = make_outer()
 check("闭包（无捕获）", k() == 42)
 # 默认参数
 def greet(who, punct = "!"):
@@ -295,7 +295,7 @@ def greet(who, punct = "!"):
 check("默认参数", greet("px") == "hi px!" and greet("px", "?") == "hi px?")
 # 可变参数：当前不支持 *args（spec 超前，Mini 子集排除）→ 用 list 参数
 def sum_all(xs):
-    let t = 0
+    var t = 0
     for x in xs:
         t += x
     return t
@@ -312,17 +312,17 @@ check("关键字参数-tls", cfg("localhost", 8080, true) == "localhost:8080s")
 section("11. 控制流")
 # ============================================================
 # for + range
-let acc = 0
+var acc = 0
 for i in range(5):
     acc += i
 check("for range 累加", acc == 10)
 # while
-let w = 0
+var w = 0
 while w < 3:
     w += 1
 check("while 循环", w == 3)
 # break / continue
-let bc = 0
+var bc = 0
 for i in range(10):
     if i == 2:
         continue
@@ -334,23 +334,23 @@ check("break/continue", bc == 4)
 check("列表推导式", [x * x for x in range(5)] == [0, 1, 4, 9, 16])
 check("推导式带条件", [x for x in range(6) if x % 2 == 0] == [0, 2, 4])
 # dict 推导式
-let dc = {str(x): x for x in range(3)}
+var dc = {str(x): x for x in range(3)}
 check("dict 推导式", dc["1"] == 1 and dc["2"] == 2)
 # 生成器表达式
-let g = (x * 2 for x in range(4))
+var g = (x * 2 for x in range(4))
 check("生成器 gen_next", gen_next(g) == 0 and gen_next(g) == 2)
-let g2 = (x for x in range(3))
+var g2 = (x for x in range(3))
 check("生成器 list 转换", list(g2) == [0, 1, 2])
 # 三元/可选链/空合并
-let t1 = if true: 5 else: 9
+var t1 = if true: 5 else: 9
 check("三元表达式", t1 == 5)
-let d1 = {"a": {"b": 42}}
+var d1 = {"a": {"b": 42}}
 check("可选链 ?.", d1?.a?.b == 42)
-let d2 = {"a": null}
+var d2 = {"a": null}
 check("可选链短路", d2?.a?.b == null)
 check("空合并 ??", (d2["a"] ?? 99) == 99)
 # match 表达式
-let mv = match 3:
+var mv = match 3:
     case 1:
         "one"
     case 3:
@@ -363,9 +363,9 @@ check("match 表达式", mv == "three")
 section("12. 模块 / import")
 # ============================================================
 import std.collections
-let uq = unique([1, 2, 2, 3, 3, 3])
+var uq = unique([1, 2, 2, 3, 3, 3])
 check("import 模块函数", uq == [1, 2, 3])
-let fl = flatten([[1, 2], [3]])
+var fl = flatten([[1, 2], [3]])
 check("import flatten", fl == [1, 2, 3])
 
 # ============================================================
@@ -375,7 +375,7 @@ struct Point:
     x: float
     y: float
 
-let p = Point(3.0, 4.0)
+var p = Point(3.0, 4.0)
 check("struct 构造", p.x == 3.0 and p.y == 4.0)
 # trait + impl（扩展方法）
 trait Shape:
@@ -391,7 +391,7 @@ def typed(x: int, s: str) -> str:
     return s + str(x)
 check("类型标注函数", typed(5, "n=") == "n=5")
 # let/const/var
-let lv = 1
+var lv = 1
 const cv = 2
 var vv = 3
 vv += 1
@@ -404,7 +404,7 @@ check("位与", (0b1100 & 0b1010) == 0b1000)
 check("位或", (0b1100 | 0b1010) == 0b1110)
 check("位移", (1 << 4) == 16 and (16 >> 2) == 4)
 check("hex 转换", hex_to_int("ff") == 255 and int_to_hex(255, 2) == "ff")
-let bb = int_to_bytes(258, 2)
+var bb = int_to_bytes(258, 2)
 check("bytes 转换", bytes_to_int(bb) == 258 and type(bb) == "bytes")
 
 # ============================================================

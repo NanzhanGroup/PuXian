@@ -20,9 +20,9 @@ def it_new_dict():
     return d
 
 def it_dict_copy(d):
-    let out = it_new_dict()
+    var out = it_new_dict()
     let ks = d.keys()
-    let i = 0
+    var i = 0
     while i < len(ks):
         out[ks[i]] = d[ks[i]]
         i += 1
@@ -30,7 +30,7 @@ def it_dict_copy(d):
 
 # 路径目录名（对齐 Rust Path::parent 常用场景）
 def it_dirname(path):
-    let i = len(path) - 1
+    var i = len(path) - 1
     while i >= 0:
         if path[i] == "/":
             if i == 0:
@@ -43,10 +43,10 @@ def it_dirname(path):
 def it_find(s, sub):
     let n = len(s)
     let m = len(sub)
-    let i = 0
+    var i = 0
     while i + m <= n:
-        let j = 0
-        let ok = true
+        var j = 0
+        var ok = true
         while j < m:
             if s[i + j] != sub[j]:
                 ok = false
@@ -61,8 +61,8 @@ def it_find(s, sub):
 # 对齐 codegen.px rust_unescape（AST 字段为 debug 格式）
 def rust_unescape(s):
     let body = s[1:len(s) - 1]
-    let out = ""
-    let i = 0
+    var out = ""
+    var i = 0
     while i < len(body):
         let c = body[i]
         if c == "\\":
@@ -86,8 +86,8 @@ def rust_unescape(s):
                 out += "\\"
                 i += 2
             elif nxt == "u":
-                let j = i + 3
-                let hex = ""
+                var j = i + 3
+                var hex = ""
                 while j < len(body) and body[j] != "}":
                     hex += body[j]
                     j += 1

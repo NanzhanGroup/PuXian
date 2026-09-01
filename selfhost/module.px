@@ -38,7 +38,7 @@ def module_candidates(module, base_dir, stdlib):
         return out
     if module[0] == "std":
         # std.a.b → stdlib/a/b.px → stdlib/a/mod.px
-        let p = stdlib
+        var p = stdlib
         for i in range(1, len(module)):
             p = p + "/" + module[i]
         out.append(p + ".px")
@@ -46,7 +46,7 @@ def module_candidates(module, base_dir, stdlib):
         return out
     # 用户点分包：base/foo/bar.px → base/foo/bar/mod.px
     # （单段模块 base/foo.px 已被 p + ".px" 覆盖，p = base/foo）
-    let p = base_dir
+    var p = base_dir
     for seg in module:
         p = p + "/" + seg
     out.append(p + ".px")
@@ -102,7 +102,7 @@ def loader_load(loader, module, base_dir):
     if contains(loader["stack"], key):
         return {"ok": false, "err": "循环导入: " + key}
     # 路径解析（用户模块在搜索路径链上找；std 用 stdlib 目录）
-    let path = null
+    var path = null
     if module[0] == "std":
         path = module_find(module, base_dir, loader["stdlib"])
     else:

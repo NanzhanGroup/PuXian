@@ -7,8 +7,8 @@
 import "../value.px"
 
 # ---- 对拍框架 ----
-let g_pass = 0
-let g_fail = 0
+let mut g_pass =0
+let mut g_fail =0
 
 def check(name, cond):
     if cond:
@@ -36,7 +36,7 @@ check_value("float 0.5", 0.5)
 check_value("float sci", 1.5e10)
 # inf/-inf：运行时生成（超大浮点字面量在编译模式 C 字面量溢出，见 MINI_SUBSET §八）
 let bigv = 1e16
-let f_inf = bigv
+let mut f_inf =bigv
 for i in range(40):
     f_inf = f_inf * bigv
 check_value("float inf", f_inf)

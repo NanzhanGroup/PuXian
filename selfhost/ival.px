@@ -43,14 +43,14 @@ def i_to_str(v):
     let t = i_type_name(v)
     if t == "list":
         let parts = []
-        let i = 0
+        var i = 0
         while i < len(v):
             parts.append(i_to_str(v[i]))
             i += 1
         return "[" + join(", ", parts) + "]"
     if t == "tuple":
         let parts = []
-        let i = 0
+        var i = 0
         while i < len(v):
             parts.append(i_to_str(v[i]))
             i += 1
@@ -58,7 +58,7 @@ def i_to_str(v):
     if t == "dict":
         let parts = []
         let ks = v.keys()
-        let i = 0
+        var i = 0
         while i < len(ks):
             parts.append(ks[i] + ": " + i_to_str(v[ks[i]]))
             i += 1
@@ -86,8 +86,8 @@ def i_to_str(v):
 # 浮点渲染（对齐 value.rs fmt_float）：
 #   整值且有限且 |f| < 1e15 → 确保 ".0" 后缀（编译模式 str(float) 用 %g 会丢 .0）
 def i_fmt_float(f):
-    let s = str(f)
-    let absf = f
+    var s = str(f)
+    var absf = f
     if f < 0.0:
         absf = -f
     let is_int_val = f == int(f)
@@ -139,7 +139,7 @@ def i_eq(a, b):
     if ta == "list" and tb == "list":
         if len(a) != len(b):
             return false
-        let i = 0
+        var i = 0
         while i < len(a):
             if not i_eq(a[i], b[i]):
                 return false
@@ -148,7 +148,7 @@ def i_eq(a, b):
     if ta == "tuple" and tb == "tuple":
         if len(a) != len(b):
             return false
-        let i = 0
+        var i = 0
         while i < len(a):
             if not i_eq(a[i], b[i]):
                 return false
@@ -159,7 +159,7 @@ def i_eq(a, b):
         let ka = a.keys()
         if len(ka) != len(b.keys()):
             return false
-        let i = 0
+        var i = 0
         while i < len(ka):
             let k = ka[i]
             if not b.has(k):
@@ -182,7 +182,7 @@ def i_eq(a, b):
         let ka = fa.keys()
         if len(ka) != len(fb.keys()):
             return false
-        let i = 0
+        var i = 0
         while i < len(ka):
             let k = ka[i]
             if not fb.has(k):
@@ -215,8 +215,8 @@ def i_iter(v, pos):
     if t == "tuple":
         return Ok(list(v))
     if t == "string":
-        let out = []
-        let i = 0
+        var out = []
+        var i = 0
         while i < len(v):
             out.append(v[i])
             i += 1
@@ -232,7 +232,7 @@ def i_iter(v, pos):
 # ---------- 索引 ----------
 def i_as_index(idx, n, pos):
     if type(idx) == "int":
-        let i = idx
+        var i = idx
         if i < 0:
             i = i + n
             if i < 0:
@@ -249,13 +249,13 @@ def i_index(v, idx, pos):
         let r = i_as_index(idx, n, pos)
         if r.is_err():
             return Err(r.err())
-        let i = r.unwrap()
+        var i = r.unwrap()
         if i >= n:
             return Err(i_r1003("列表索引越界", pos))
         return Ok(v[i])
     if t == "string":
         let chars = []
-        let ci = 0
+        var ci = 0
         while ci < len(v):
             chars.append(v[ci])
             ci += 1
@@ -263,7 +263,7 @@ def i_index(v, idx, pos):
         let r = i_as_index(idx, n, pos)
         if r.is_err():
             return Err(r.err())
-        let i = r.unwrap()
+        var i = r.unwrap()
         if i >= n:
             return Err(i_r1003("字符串索引越界", pos))
         return Ok(chars[i])
@@ -301,12 +301,12 @@ def i_field(v, name, pos):
 # ---------- 切片 ----------
 # 返回 {"ok": bool, "idxs": [...], "err": msg}
 def i_slice_indices(start, end, step, n):
-    let st = 1
+    var st = 1
     if step != null:
         st = step
     if st == 0:
         return {"ok": false, "idxs": [], "err": "切片步长不能为 0"}
-    let s = 0
+    var s = 0
     if start == null:
         if st < 0:
             s = n - 1
@@ -326,7 +326,7 @@ def i_slice_indices(start, end, step, n):
                 s = -1
             if s > n - 1:
                 s = n - 1
-    let e = 0
+    var e = 0
     if end == null:
         if st < 0:
             e = -1
@@ -348,12 +348,12 @@ def i_slice_indices(start, end, step, n):
                 e = n - 1
     let idxs = []
     if st > 0:
-        let i = s
+        var i = s
         while i < e:
             idxs.append(i)
             i += st
     else:
-        let i = s
+        var i = s
         while i > e:
             idxs.append(i)
             i += st
@@ -363,15 +363,15 @@ def i_slice(v, start, end, step, pos):
     let t = i_type_name(v)
     if t == "string":
         let chars = []
-        let ci = 0
+        var ci = 0
         while ci < len(v):
             chars.append(v[ci])
             ci += 1
         let r = i_slice_indices(start, end, step, len(chars))
         if not r["ok"]:
             return Err(i_r1002(r["err"], pos))
-        let out = ""
-        let ii = 0
+        var out = ""
+        var ii = 0
         while ii < len(r["idxs"]):
             out += chars[r["idxs"][ii]]
             ii += 1
@@ -380,8 +380,8 @@ def i_slice(v, start, end, step, pos):
         let r = i_slice_indices(start, end, step, len(v))
         if not r["ok"]:
             return Err(i_r1002(r["err"], pos))
-        let out = []
-        let ii = 0
+        var out = []
+        var ii = 0
         while ii < len(r["idxs"]):
             out.append(v[r["idxs"][ii]])
             ii += 1
@@ -390,8 +390,8 @@ def i_slice(v, start, end, step, pos):
         let r = i_slice_indices(start, end, step, len(v))
         if not r["ok"]:
             return Err(i_r1002(r["err"], pos))
-        let out = []
-        let ii = 0
+        var out = []
+        var ii = 0
         while ii < len(r["idxs"]):
             out.append(v[r["idxs"][ii]])
             ii += 1
@@ -451,12 +451,12 @@ def i_bin_add(l, r, pos):
     if tl == "string" and tr == "string":
         return Ok(l + r)
     if tl == "list" and tr == "list":
-        let out = []
-        let i = 0
+        var out = []
+        var i = 0
         while i < len(l):
             out.append(l[i])
             i += 1
-        let j = 0
+        var j = 0
         while j < len(r):
             out.append(r[j])
             j += 1
@@ -505,7 +505,7 @@ def i_bin_numeric(op, l, r, pos):
     if br.is_err():
         return Err(br.err())
     let a = ar.unwrap()
-    let b = br.unwrap()
+    var b = br.unwrap()
     if op == "Sub":
         return Ok(a - b)
     if op == "Mul":
@@ -545,7 +545,7 @@ def i_bin_compare(op, l, r, pos):
     let rn = tr == "int" or tr == "float"
     if ln and rn:
         let a = float(l)
-        let b = float(r)
+        var b = float(r)
         if op == "Lt":
             return Ok(a < b)
         if op == "Le":

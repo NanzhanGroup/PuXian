@@ -22,7 +22,7 @@ def i_eval_expr(node, env):
         return Ok(null)
     if ty == "List":
         let out = []
-        let i = 0
+        var i = 0
         while i < len(node[1]):
             let r = i_eval_expr(node[1][i], env)
             if r.is_err():
@@ -32,7 +32,7 @@ def i_eval_expr(node, env):
         return Ok(out)
     if ty == "Tuple":
         let out = []
-        let i = 0
+        var i = 0
         while i < len(node[1]):
             let r = i_eval_expr(node[1][i], env)
             if r.is_err():
@@ -42,13 +42,13 @@ def i_eval_expr(node, env):
         return Ok(tuple(out))
     if ty == "Dict":
         let d = it_new_dict()
-        let i = 0
+        var i = 0
         while i < len(node[1]):
             let e = node[1][i]
             let kr = i_eval_expr(e[0], env)
             if kr.is_err():
                 return Err(kr.err())
-            let kv = kr.unwrap()
+            var kv = kr.unwrap()
             if type(kv) != "string":
                 return Err(i_r1002("字典键必须是字符串", node[2]))
             let vr = i_eval_expr(e[1], env)
@@ -88,32 +88,32 @@ def i_eval_expr(node, env):
         let or_ = i_eval_expr(node[1], env)
         if or_.is_err():
             return Err(or_.err())
-        let sv = null
+        var sv = null
         if node[2] != null:
             let sr = i_eval_expr(node[2], env)
             if sr.is_err():
                 return Err(sr.err())
             sv = sr.unwrap()
-        let ev = null
+        var ev = null
         if node[3] != null:
             let er = i_eval_expr(node[3], env)
             if er.is_err():
                 return Err(er.err())
             ev = er.unwrap()
-        let kv = null
+        var kv = null
         if node[4] != null:
             let kr = i_eval_expr(node[4], env)
             if kr.is_err():
                 return Err(kr.err())
             kv = kr.unwrap()
         # 边界 null 视为缺省（对齐 Rust bound()）
-        let st = sv
+        var st = sv
         if sv != null and sv == null:
             st = null
-        let en = ev
+        var en = ev
         if ev != null and ev == null:
             en = null
-        let sp = kv
+        var sp = kv
         if kv != null and kv == null:
             sp = null
         return i_slice(or_.unwrap(), st, en, sp, node[5])
@@ -140,7 +140,7 @@ def i_eval_expr(node, env):
         let r = i_eval_expr(node[1], env)
         if r.is_err():
             return Err(r.err())
-        let v = r.unwrap()
+        var v = r.unwrap()
         if v == null:
             return Err(i_prop(null))
         if i_type_name(v) == "result":
@@ -152,7 +152,7 @@ def i_eval_expr(node, env):
         let r = i_eval_expr(node[1], env)
         if r.is_err():
             return Err(r.err())
-        let v = r.unwrap()
+        var v = r.unwrap()
         if v == null:
             return Err(i_r1004("强制解包 !: 值为 null", node[2]))
         if i_type_name(v) == "result":
@@ -190,7 +190,7 @@ def i_eval_expr(node, env):
         return Ok(it_gen(out, 0))
     if ty == "Closure":
         # ["Closure", params, ret_ty, body, captures, pos]
-        let stmts = []
+        var stmts = []
         let body = node[3]
         if body[0] == "Block":
             stmts = body[1]
@@ -200,8 +200,8 @@ def i_eval_expr(node, env):
     if ty == "Block":
         # ["Block", stmts, pos]
         let child = env_new(env)
-        let last = null
-        let i = 0
+        var last = null
+        var i = 0
         while i < len(node[1]):
             let s = node[1][i]
             if s[0] == "ExprStmt":
@@ -225,8 +225,8 @@ def i_eval_expr(node, env):
         let sr = i_eval_expr(node[1], env)
         if sr.is_err():
             return Err(sr.err())
-        let sv = sr.unwrap()
-        let ai = 0
+        var sv = sr.unwrap()
+        var ai = 0
         while ai < len(node[2]):
             let arm = node[2][ai]
             let child = env_new(env)
@@ -249,7 +249,7 @@ def i_eval_call(node, env):
     if callee[0] == "Var":
         let cname = rust_unescape(callee[1])
         if cname == "chan":
-            let cap = 0
+            var cap = 0
             if len(args) > 0:
                 let ar = i_eval_expr(args[0], env)
                 if ar.is_err():
@@ -269,7 +269,7 @@ def i_eval_call(node, env):
         if or_.is_err():
             return Err(or_.err())
         let arg_vals = []
-        let ai = 0
+        var ai = 0
         while ai < len(args):
             let ar = i_eval_expr(args[ai], env)
             if ar.is_err():
@@ -282,7 +282,7 @@ def i_eval_call(node, env):
     if cr.is_err():
         return Err(cr.err())
     let arg_vals = []
-    let ai = 0
+    var ai = 0
     while ai < len(args):
         let ar = i_eval_expr(args[ai], env)
         if ar.is_err():
@@ -330,7 +330,7 @@ def i_eval_pipe(node, env):
     let vr = i_eval_expr(node[1], env)
     if vr.is_err():
         return Err(vr.err())
-    let v = vr.unwrap()
+    var v = vr.unwrap()
     let fn_ = node[2]
     if fn_[0] == "Call":
         if fn_[1][0] == "Field":
@@ -340,7 +340,7 @@ def i_eval_pipe(node, env):
             return Err(cr.err())
         let cv = cr.unwrap()
         let arg_vals = [v]
-        let ai = 0
+        var ai = 0
         while ai < len(fn_[2]):
             let ar = i_eval_expr(fn_[2][ai], env)
             if ar.is_err():
@@ -390,8 +390,8 @@ def i_eval_comp(clauses, ci, sink, list_expr, dict_key, dict_val, cond, env, pos
     let ivr = i_iter(it, pos)
     if ivr.is_err():
         return Err(ivr.err())
-    let items = ivr.unwrap()
-    let ii = 0
+    var items = ivr.unwrap()
+    var ii = 0
     while ii < len(items):
         let child = env_new(env)
         let bvr = i_bind_comp_vars(cl[1], items[ii], child, pos)
@@ -411,9 +411,9 @@ def i_bind_comp_vars(vars_, item, child, pos):
     let t = i_type_name(item)
     if t != "list" and t != "tuple":
         return Err(i_r1002("推导式解包需要 list/tuple，实际是 " + t, pos))
-    let i = 0
+    var i = 0
     while i < len(vars_):
-        let v = null
+        var v = null
         if i < len(item):
             v = item[i]
         env_define(child, rust_unescape(vars_[i]), v)
@@ -440,7 +440,7 @@ def i_match_pattern(pat, v, env, pos):
         return Ok(true)
     if pty == "PatTuple":
         # ["PatTuple", patterns]
-        let items = []
+        var items = []
         let t = i_type_name(v)
         if t == "tuple":
             items = list(v)
@@ -450,7 +450,7 @@ def i_match_pattern(pat, v, env, pos):
             return Ok(false)
         if len(pat[1]) != len(items):
             return Ok(false)
-        let i = 0
+        var i = 0
         while i < len(pat[1]):
             let mr = i_match_pattern(pat[1][i], items[i], env, pos)
             if mr.is_err():

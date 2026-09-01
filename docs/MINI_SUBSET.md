@@ -17,7 +17,7 @@
 - 运算符全套、注释 `#`、缩进块（indent/dedent）
 
 ### 2.2 语句
-- `let` / `var` / `const` 变量声明（**顶层 let/var 即全局变量**，函数内可读写）
+- `let`（默认不可变）/ `let mut` / `var`（≡ let mut）/ `const` 变量声明（**顶层 let/var 即全局变量**，函数内可读写；M41.2 起对 let 赋值 = 编译错误 E3002）
 - `def` 函数定义（支持默认参数值、类型标注可选、`->` 返回类型）
 - `if / elif / else`（含 if 表达式 `let x = if cond: a else: b`）
 - `for x in xs`（list/dict/range/生成器/字符串）、`while`、`break`、`continue`
@@ -70,7 +70,7 @@
 | 9 | `lambda` 关键字 | spec 明确禁止（用 fn） | `fn(x) { ... }` |
 | 10 | 异常 try/throw | spec 明确不做 | **Result + `?`**（唯一错误通道） |
 | 11 | 多行 fn 匿名函数 | `fn(x):\n  body` 语法错误 | 单行 fn 或块 `fn(x) { ... }` |
-| 12 | 类型标注强制检查（空安全/不可变） | 未实现（纯标注，不检查） | 自举后由 PuXian 编译器自己实现 |
+| 12 | 类型标注强制检查（空安全/不可变） | 不可变已实现（M41.2：E3002，let 默认不可变、let mut/var 可变、对 let 赋值编译报错）；空安全 E3003 / 泛型 E3007 待 M41.3/M41.4 | 自举后由 PuXian 编译器自己实现（M41 进行中） |
 
 ## 四、已知限制（不影响子集内程序，记录在案）
 

@@ -14,7 +14,7 @@ def i_call_builtin(name, args, pos):
     # ---- 值感知类 ----
     if name == "print":
         let parts = []
-        let i = 0
+        var i = 0
         while i < len(args):
             parts.append(i_to_str(args[i]))
             i += 1
@@ -86,7 +86,7 @@ def i_call_builtin(name, args, pos):
         if len(args) < 1 or len(args) > 2:
             return Err(i_r1002("assert 需要 1-2 个参数", pos))
         if not i_truthy(args[0]):
-            let msg = "断言失败"
+            var msg = "断言失败"
             if len(args) > 1:
                 msg = i_to_str(args[1])
             return Err(i_r1003(msg, pos))
@@ -97,7 +97,7 @@ def i_call_builtin(name, args, pos):
         if type(args[0]) != "string":
             return Err(i_r1002("join 分隔符需要 string", pos))
         let parts = []
-        let i = 0
+        var i = 0
         while i < len(args[1]):
             parts.append(i_to_str(args[1][i]))
             i += 1
@@ -109,7 +109,7 @@ def i_call_builtin(name, args, pos):
         if t0 == "string":
             return Ok(contains(args[0], args[1]))
         if t0 == "list":
-            let i = 0
+            var i = 0
             while i < len(args[0]):
                 if i_eq(args[0][i], args[1]):
                     return Ok(true)
@@ -216,7 +216,7 @@ def i_call_builtin(name, args, pos):
     if name == "json_path_set":
         return Ok(json_path_set(args[0], args[1], args[2]))
     if name == "os_spawn":
-        return Ok(os_spawn(args[0]))
+        return Ok(os_spawn(args[0], args[1]))
     if name == "os_wait":
         return Ok(os_wait(args[0]))
     if name == "os_kill":
@@ -309,9 +309,9 @@ def i_builtin_float(args, pos):
 
 # ---------- range（对齐 builtin.rs Range） ----------
 def i_builtin_range(args, pos):
-    let start = 0
-    let end = 0
-    let step = 1
+    var start = 0
+    var end = 0
+    var step = 1
     if len(args) == 1:
         end = args[0]
     elif len(args) == 2:
@@ -337,14 +337,14 @@ def i_builtin_sorted(args, pos):
     if t != "list" and t != "tuple":
         return Err(i_r1002("sorted 参数需要 list/tuple", pos))
     let items = []
-    let i = 0
+    var i = 0
     while i < len(args[0]):
         items.append(args[0][i])
         i += 1
     let n = len(items)
-    let ii = 0
+    var ii = 0
     while ii < n:
-        let j = 0
+        var j = 0
         while j < n - 1 - ii:
             if i_to_str(items[j]) > i_to_str(items[j + 1]):
                 let tmp = items[j]
@@ -361,12 +361,12 @@ def i_builtin_reversed(args, pos):
     let t = i_type_name(args[0])
     let items = []
     if t == "list" or t == "tuple":
-        let i = 0
+        var i = 0
         while i < len(args[0]):
             items.append(args[0][i])
             i += 1
     elif t == "string":
-        let i = 0
+        var i = 0
         while i < len(args[0]):
             items.append(args[0][i])
             i += 1
@@ -374,7 +374,7 @@ def i_builtin_reversed(args, pos):
         return Err(i_r1002("reversed 参数类型不支持", pos))
     let n = len(items)
     let out = []
-    let i = n - 1
+    var i = n - 1
     while i >= 0:
         out.append(items[i])
         i -= 1
@@ -387,8 +387,8 @@ def i_builtin_sum(args, pos):
     let t = i_type_name(args[0])
     if t != "list" and t != "tuple":
         return Err(i_r1002("sum 参数需要 list/tuple", pos))
-    let acc = 0
-    let i = 0
+    var acc = 0
+    var i = 0
     while i < len(args[0]):
         let r = i_bin_add(acc, args[0][i], pos)
         if r.is_err():
@@ -400,11 +400,11 @@ def i_builtin_sum(args, pos):
 # ---------- map（对齐 builtin Map：f(x) 收集） ----------
 def i_builtin_map(args, pos):
     if len(args) != 2:
-        return Err(i_r1002("map 需要 (函数, 列表) 两个参数", pos))
+        return Err(i_r1002("map 需要 (列表, 函数) 两个参数", pos))
     let out = []
-    let i = 0
-    while i < len(args[1]):
-        let r = i_call_value(args[0], [args[1][i]], pos)
+    var i = 0
+    while i < len(args[0]):
+        let r = i_call_value(args[1], [args[0][i]], pos)
         if r.is_err():
             return Err(r.err())
         out.append(r.unwrap())
@@ -414,28 +414,31 @@ def i_builtin_map(args, pos):
 # ---------- filter（对齐 builtin Filter：f(x) 真值保留） ----------
 def i_builtin_filter(args, pos):
     if len(args) != 2:
-        return Err(i_r1002("filter 需要 (函数, 列表) 两个参数", pos))
+        return Err(i_r1002("filter 需要 (列表, 函数) 两个参数", pos))
     let out = []
-    let i = 0
-    while i < len(args[1]):
-        let r = i_call_value(args[0], [args[1][i]], pos)
+    var i = 0
+    while i < len(args[0]):
+        let r = i_call_value(args[1], [args[0][i]], pos)
         if r.is_err():
             return Err(r.err())
         if i_truthy(r.unwrap()):
-            out.append(args[1][i])
+            out.append(args[0][i])
         i += 1
     return Ok(out)
 
 # ---------- reduce（对齐 builtin Reduce：二元折叠） ----------
 def i_builtin_reduce(args, pos):
-    if len(args) != 2:
-        return Err(i_r1002("reduce 需要 (函数, 列表) 两个参数", pos))
-    if len(args[1]) == 0:
+    if len(args) < 2 or len(args) > 3:
+        return Err(i_r1002("reduce 需要 (列表, 函数, [初始值])", pos))
+    let lst = args[0]
+    if len(lst) == 0:
         return Ok(null)
-    let acc = args[1][0]
-    let i = 1
-    while i < len(args[1]):
-        let r = i_call_value(args[0], [acc, args[1][i]], pos)
+    var acc = 0
+    if len(args) >= 3:
+        acc = args[2]
+    var i = 0
+    while i < len(lst):
+        let r = i_call_value(args[1], [acc, lst[i]], pos)
         if r.is_err():
             return Err(r.err())
         acc = r.unwrap()

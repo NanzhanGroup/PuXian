@@ -6,7 +6,7 @@ Program {
  ret_ty: None,
  body: [
  VarDecl {
- kind: Let,
+ kind: Mut,
  name: "acc",
  ty: None,
  value: Some(
@@ -14,7 +14,7 @@ Program {
  value: 0,
  pos: Pos {
  line: 3,
- col: 15,
+ col: 19,
  },
  },
  ),
@@ -104,7 +104,7 @@ Program {
  },
  },
  VarDecl {
- kind: Let,
+ kind: Mut,
  name: "w",
  ty: None,
  value: Some(
@@ -112,7 +112,7 @@ Program {
  value: 0,
  pos: Pos {
  line: 7,
- col: 13,
+ col: 16,
  },
  },
  ),
@@ -200,7 +200,7 @@ Program {
  },
  },
  VarDecl {
- kind: Let,
+ kind: Mut,
  name: "bc",
  ty: None,
  value: Some(
@@ -208,7 +208,7 @@ Program {
  value: 0,
  pos: Pos {
  line: 11,
- col: 14,
+ col: 17,
  },
  },
  ),

@@ -234,7 +234,7 @@ Program {
  ),
  body: [
  VarDecl {
- kind: Let,
+ kind: Mut,
  name: "msg",
  ty: None,
  value: Some(
@@ -246,7 +246,7 @@ Program {
  value: "hi ",
  pos: Pos {
  line: 23,
- col: 15,
+ col: 19,
  },
  },
  right: Call {
@@ -254,7 +254,7 @@ Program {
  name: "str",
  pos: Pos {
  line: 23,
- col: 15,
+ col: 19,
  },
  },
  args: [
@@ -262,30 +262,30 @@ Program {
  name: "name",
  pos: Pos {
  line: 23,
- col: 21,
+ col: 25,
  },
  },
  ],
  pos: Pos {
  line: 23,
- col: 15,
+ col: 19,
  },
  },
  pos: Pos {
  line: 23,
- col: 15,
+ col: 19,
  },
  },
  right: Str {
  value: "",
  pos: Pos {
  line: 23,
- col: 15,
+ col: 19,
  },
  },
  pos: Pos {
  line: 23,
- col: 15,
+ col: 19,
  },
  },
  ),
@@ -295,7 +295,7 @@ Program {
  },
  },
  VarDecl {
- kind: Let,
+ kind: Mut,
  name: "i",
  ty: None,
  value: Some(
@@ -303,7 +303,7 @@ Program {
  value: 0,
  pos: Pos {
  line: 24,
- col: 13,
+ col: 16,
  },
  },
  ),
