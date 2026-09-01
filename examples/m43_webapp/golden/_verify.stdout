@@ -1,0 +1,27 @@
+[mw] GET /
+[PASS] GET / 路由（index.px）
+[mw] GET /healthz
+[PASS] GET /healthz
+[PASS] healthz json ok
+[mw] GET /p/42
+[PASS] GET /p/:id 参数
+[mw] POST /login
+[PASS] POST /login
+[mw] GET /api/items
+[PASS] GET /api/items 子目录
+[PASS] 静态文件 hello.txt
+[mw] GET /admin
+[PASS] 中间件拦截 401
+[PASS] 404 兜底
+[mw] POST /login
+[mw] POST /login
+[mw] POST /login
+[mw] POST /login
+[mw] POST /login
+[mw] POST /login
+[mw] POST /login
+[mw] POST /login
+[mw] POST /login
+[PASS] 限流 429（10/60）
+
+结果: 10 PASS / 0 FAIL

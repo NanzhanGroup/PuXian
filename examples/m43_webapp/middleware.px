@@ -1,0 +1,9 @@
+# 全局中间件（可选，文件约定名 middleware.px → 导出 global_middleware）
+# 语义：只在路由匹配后、handler 前执行（px_route_try_dispatch 内部）
+# 返回 null → 继续执行 handler；非 null → 短路作为响应
+# 示例：记录访问 + 拦截 /admin 前缀路由（401 短路）
+def global_middleware(req):
+    print("[mw] " + req["method"] + " " + req["path"])
+    if starts_with(req["path"], "/admin"):
+        return {"status": 401, "body": "unauthorized"}
+    return null

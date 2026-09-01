@@ -1,0 +1,77 @@
+# ============================================================
+# examples/m43_webapp/_verify.px —— 文件即路由端到端验证（M43）
+# ------------------------------------------------------------
+# 起服务（px_serve：route 分派 + 静态 + 404）→ http_request 断言
+# 全端点（GET/POST/:id/子目录/静态/中间件/限流）
+# 运行：tools/pxc build examples/m43_webapp/_verify.px
+#       && examples/m43_webapp/build/_verify
+# 输出 == golden（examples/m43_webapp/golden/_verify.stdout）
+# ============================================================
+import "generated_routes"
+
+# 执行 routegen 生成的路由注册（import 只合并定义，须显式调用）
+register_routes()
+
+var g_pass = 0
+var g_fail = 0
+
+def check(name, cond):
+    if cond:
+        g_pass += 1
+        print("[PASS] " + name)
+    else:
+        g_fail += 1
+        print("[FAIL] " + name)
+
+def main():
+    spawn px_serve(19002, "examples/m43_webapp/static")
+    sleep(500)
+
+    # 1. GET /（index.px → GET /）
+    let r = http_request("http://127.0.0.1:19002/", "GET")
+    check("GET / 路由（index.px）", r["status"] == 200 and contains(r["body"], "文件即路由主页"))
+
+    # 2. GET /healthz
+    let r2 = http_request("http://127.0.0.1:19002/healthz", "GET")
+    check("GET /healthz", r2["status"] == 200)
+    let d2 = json_parse(r2["body"])
+    check("healthz json ok", d2["ok"] == true)
+
+    # 3. GET /p/:id 路由参数
+    let r3 = http_request("http://127.0.0.1:19002/p/42", "GET")
+    check("GET /p/:id 参数", r3["status"] == 200 and contains(r3["body"], "p=42"))
+
+    # 4. POST /login（JSON 回显）
+    let r4 = http_request("http://127.0.0.1:19002/login", "POST", "{\"user\":\"px\"}")
+    check("POST /login", r4["status"] == 200 and contains(r4["body"], "login"))
+
+    # 5. GET /api/items（子目录前缀路由）
+    let r5 = http_request("http://127.0.0.1:19002/api/items", "GET")
+    check("GET /api/items 子目录", r5["status"] == 200 and contains(r5["body"], "甲"))
+
+    # 6. 静态文件（px_serve docroot=static/ 服务）
+    let r6 = http_request("http://127.0.0.1:19002/hello.txt", "GET")
+    check("静态文件 hello.txt", r6["status"] == 200 and contains(r6["body"], "static"))
+
+    # 7. 中间件拦截（GET /admin 有路由，但 global_middleware 对 /admin 前缀短路 401）
+    let r7 = http_request("http://127.0.0.1:19002/admin", "GET")
+    check("中间件拦截 401", r7["status"] == 401 and contains(r7["body"], "unauthorized"))
+
+    # 8. 404 兜底（px_serve docroot 无文件）
+    let r8 = http_request("http://127.0.0.1:19002/nope", "GET")
+    check("404 兜底", r8["status"] == 404)
+
+    # 9. 限流 429（POST /login 已打 1 次，再连打 11 次 → 超 10/60 → 429）
+    var hits429 = 0
+    var hi = 0
+    while hi < 11:
+        let rr = http_request("http://127.0.0.1:19002/login", "POST", "x")
+        if rr["status"] == 429:
+            hits429 += 1
+        hi += 1
+    check("限流 429（10/60）", hits429 >= 1)
+
+    print("")
+    print("结果: " + str(g_pass) + " PASS / " + str(g_fail) + " FAIL")
+    if g_fail > 0:
+        exit(1)

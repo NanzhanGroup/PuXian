@@ -1,0 +1,3 @@
+# GET /admin —— 中间件拦截演示（global_middleware 对 /admin 前缀短路 401）
+def get_admin(req, params):
+    return {"status": 200, "body": "admin panel"}

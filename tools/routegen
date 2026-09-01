@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# ============================================================
+# tools/routegen —— 文件即路由生成器入口（M43）
+# ------------------------------------------------------------
+# 用法：tools/routegen <app_dir>
+# 底层：bootstrap/pxi run tools/routegen.px（解释器无 argv，用 PX_APP_DIR 传参）
+# 功能：扫描应用目录 *.px → std.webroute.wr_parse_file 解析路由
+#       → 扫描 handler 顶部 `# rate_limit: max/window` 注释（限流）
+#       → 检测 middleware.px → 生成 <app_dir>/generated_routes.px
+# 约定：应用目录只放 .px 文件与子目录（static/、build/、_开头 自动跳过）
+# ============================================================
+set -u
+ROUTE_HOME="$(cd "$(dirname "$0")/.." && pwd)"
+APP_DIR="${1:-}"
+if [ -z "$APP_DIR" ]; then
+    echo "用法: tools/routegen <app_dir>" >&2
+    echo "示例: tools/routegen examples/m43_webapp" >&2
+    exit 1
+fi
+[ -d "$APP_DIR" ] || { echo "错误: 应用目录不存在: $APP_DIR" >&2; exit 1; }
+PX_APP_DIR="$APP_DIR" "$ROUTE_HOME/bootstrap/pxi" run "$ROUTE_HOME/tools/routegen.px"

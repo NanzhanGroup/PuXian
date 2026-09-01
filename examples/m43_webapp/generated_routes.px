@@ -1,0 +1,17 @@
+# 由 routegen 自动生成（tools/routegen.px），勿手改
+import "api/get_items.px"
+import "get_admin.px"
+import "get_healthz.px"
+import "get_p_#id.px"
+import "index.px"
+import "post_login.px"
+import "middleware.px"
+
+def register_routes():
+    middleware(global_middleware)
+    route("GET", "/api/items", api_get_items)
+    route("GET", "/admin", get_admin)
+    route("GET", "/healthz", get_healthz)
+    route("GET", "/p/:id", get_p_id)
+    route("GET", "/", index)
+    route("POST", "/login", post_login, {"rate_limit": {"max": 10, "window_sec": 60}})

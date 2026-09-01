@@ -28,6 +28,9 @@ def section(title):
 # ---- M42：显式 C 库 import（FFI 平台杠杆）----
 import "c/sqlite3"
 
+# ---- M43：文件即路由（std.webroute，wr_parse_file 规则）----
+import std.webroute
+
 extern def sqlite_open(path: str) -> int
 extern def sqlite_exec(db: int, sql: str) -> int
 extern def sqlite_query(db: int, sql: str) -> list
@@ -483,6 +486,34 @@ check("C-FFI 查询第一行", frows[0]["id"] == 1 and frows[0]["name"] == "甲"
 check("C-FFI 查询第二行", frows[1]["id"] == 2 and frows[1]["name"] == "乙")
 check("C-FFI sqlite_escape", sqlite_escape("O'Reilly") == "O''Reilly")
 check("C-FFI sqlite_close", sqlite_close(fdb) == true)
+
+# ============================================================
+section("18. 文件即路由（M43 std.webroute）")
+# ============================================================
+# wr_parse_file：文件名（相对应用根）→ {method, pattern, fnname} 或 null
+# 方法前缀 + _ 段拆分 + #name→:name + index 默认首页 + 特殊文件/私有/static 跳过
+var wr1 = wr_parse_file("index.px")
+check("wr index.px → GET /", wr1["method"] == "GET" and wr1["pattern"] == "/" and wr1["fnname"] == "index")
+var wr2 = wr_parse_file("get_healthz.px")
+check("wr get_healthz.px → GET /healthz", wr2["method"] == "GET" and wr2["pattern"] == "/healthz" and wr2["fnname"] == "get_healthz")
+var wr3 = wr_parse_file("get_p_#id.px")
+check("wr get_p_#id.px → GET /p/:id", wr3["method"] == "GET" and wr3["pattern"] == "/p/:id" and wr3["fnname"] == "get_p_id")
+var wr4 = wr_parse_file("post_login.px")
+check("wr post_login.px → POST /login", wr4["method"] == "POST" and wr4["pattern"] == "/login" and wr4["fnname"] == "post_login")
+var wr5 = wr_parse_file("api/get_items.px")
+check("wr api/get_items.px → GET /api/items", wr5["method"] == "GET" and wr5["pattern"] == "/api/items" and wr5["fnname"] == "api_get_items")
+var wr6 = wr_parse_file("about.px")
+check("wr about.px → GET /about（无方法前缀）", wr6["method"] == "GET" and wr6["pattern"] == "/about" and wr6["fnname"] == "about")
+var wr7 = wr_parse_file("user_profile.px")
+check("wr user_profile.px → GET /user_profile（首段非方法保持字面）", wr7["method"] == "GET" and wr7["pattern"] == "/user_profile" and wr7["fnname"] == "user_profile")
+var wr8 = wr_parse_file("get.px")
+check("wr get.px → GET /（方法前缀无 rest）", wr8["method"] == "GET" and wr8["pattern"] == "/" and wr8["fnname"] == "get")
+check("wr main.px → null（特殊文件）", wr_parse_file("main.px") == null)
+check("wr middleware.px → null（特殊文件）", wr_parse_file("middleware.px") == null)
+check("wr generated_routes.px → null（特殊文件）", wr_parse_file("generated_routes.px") == null)
+check("wr static/x.px → null（静态目录）", wr_parse_file("static/x.px") == null)
+check("wr _private/helper.px → null（私有段）", wr_parse_file("_private/helper.px") == null)
+check("wr hello.txt → null（非 .px）", wr_parse_file("hello.txt") == null)
 
 # ============================================================
 # 汇总

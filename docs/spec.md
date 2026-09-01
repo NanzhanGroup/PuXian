@@ -442,6 +442,23 @@ import "c/sqlite3"            # M42：显式 C 库 import（FFI）
   ```
 - 新增 C 库 = runtime 绑定文件 + `px_ffi_register` + 语言层 extern 声明（三处）。
 
+#### 8.2.2 文件即路由（M43，对应"清歌的建议 P0-2"）
+- 应用目录约定：**文件名即路由、目录即应用**（PHP 式框架形态），构建期由 `tools/routegen.px` 扫描应用目录 → 生成 `generated_routes.px`（import + `route()` 注册，由入口显式调用 `register_routes()`）。
+- 文件名 → 路由规则（`std.webroute.wr_parse_file`，纯函数，相对应用根路径）：
+  - `index.px` → `GET /`（默认首页）；`get.px` → `GET /`（方法前缀无 rest）
+  - `get_healthz.px` → `GET /healthz`：首段（第一个 `_` 前）∈ 方法表 `{get,post,put,delete,patch,head,options,all}` → 方法前缀，其余按 `_` 拆段连接
+  - `get_p_#id.px` → `GET /p/:id`：`#name` 段 → `:name` 路由参数；段 `*` → 通配
+  - `post_login.px` → `POST /login`；`api/get_items.px` → `GET /api/items`（子目录前缀路由）
+  - fnname = 相对路径去 `.px`、`/` → `_`、`#` 移除（`api/get_items.px` → `api_get_items`；全局唯一）
+  - 无方法前缀 → GET，文件名按字面做路径（`user_profile.px` → `GET /user_profile`）
+  - 非路由文件：`main`/`middleware`/`generated_routes`、任意 `_` 开头段（私有）、`static/` 目录、非 `.px`
+- `middleware.px`（导出 `global_middleware(req)`，返回 null 继续 / 非 null 短路响应）→ 生成 `middleware(global_middleware)` 全局注册
+- handler 顶部 20 行内 `# rate_limit: max/window_sec` 注释 → 生成 per-route 限流 opts（`route(..., {"rate_limit": {"max": N, "window_sec": M}})`）
+- handler 签名约定：`def <fnname>(req, params)`（params 为路由参数 dict，runtime 已支持）
+- 入口 `main.px`：`import "generated_routes"` + 显式调用 `register_routes()`（import 只合并定义不执行）→ `spawn px_serve(port, docroot)`（route 分派优先 + docroot 静态文件 + 404）
+- 约束：fnname 全局唯一、method+pattern 唯一（routegen 重复检测报错）
+- 与 C-FFI（8.2.1）同属构建期/运行期分离：routegen 构建期生成、运行时纯注册表分派
+
 ### 8.3 可见性
 - 默认私有（模块内可见）
 - `pub` 导出：`pub def`、`pub struct`、`pub enum`、`pub trait`

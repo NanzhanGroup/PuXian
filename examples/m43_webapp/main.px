@@ -1,0 +1,22 @@
+# ============================================================
+# examples/m43_webapp/main.px —— 文件即路由示例应用入口（M43）
+# ------------------------------------------------------------
+# 生成路由：PX_APP_DIR=examples/m43_webapp bootstrap/pxi run tools/routegen.px
+#           （或 tools/routegen examples/m43_webapp）
+# 运行：tools/pxc build examples/m43_webapp/main.px
+#       && examples/m43_webapp/build/main
+# 端点（文件即路由）：GET /（index.px）GET /healthz GET /p/:id
+#       POST /login（限流 10/60）GET /api/items（子目录）+ 中间件 + 静态
+# 服务：px_serve(port, docroot=static) —— route 分派优先 + 静态文件 + 404
+#       （route 分派只在 px_serve 的 px_conn_worker 生效，http_serve 不走路由）
+# 说明：docroot 相对路径依赖从仓库根运行（MVP 约定）
+# ============================================================
+import "generated_routes"
+
+# 执行 routegen 生成的路由注册（import 只合并定义，须显式调用）
+register_routes()
+
+def main():
+    spawn px_serve(19000, "examples/m43_webapp/static")
+    while true:
+        sleep(1000)
