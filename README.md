@@ -86,7 +86,7 @@ px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
 | [docs/requirements.md](docs/requirements.md) | 需求与设计讨论（动机、取舍、双模式架构） |
 | [docs/plan.md](docs/plan.md) | 开发方案（语言命名、里程碑规划、语言要点） |
 | [docs/spec.md](docs/spec.md) | 语言规格说明书（词法 / 语法 / 语义 / 标准库） |
-| [docs/PROGRESS.md](docs/PROGRESS.md) | 开发进度（M0–M39 全部完成，40 个里程碑；M39 打通 Result/Option 错误处理唯一通道） |
+| [docs/PROGRESS.md](docs/PROGRESS.md) | 开发进度（M0–M40 全部完成，41 个里程碑；M40 字符串插值 `${expr}`，自举前最后一个语言糖） |
 
 ---
 
@@ -134,6 +134,7 @@ px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
 | M37 | HTTP/2 over TLS（ALPN h2 协商）+ 响应压缩配置（gzip_level/gzip_min_bytes）+ 客户端 http_request 增强（retries/timeout/proxy）+ S3/MinIO 对象存储（AWS SigV4：s3_put/get/delete/list） | ✅ |
 | M38 | WS 客户端自动重连（ws_connect_auto 断线重连）+ HTTP/2 多流（同一连接多 stream 并发）+ 请求体流式限制（chunked 解码 + 超限 413）+ UDP echo 服务端（udp_serve） | ✅ |
 | M39 | Result/Option 错误处理唯一通道（Ok/Err/Some 构造 + `?` 传播 + `!` 解包 + Result 方法 + main 返回语义）——自举硬前置 | ✅ |
+| M40 | 字符串插值 `${expr}`（普通/多行字符串内插值，词法层展开为 `str(expr)` 拼接，双模式一致；嵌套插值 / `\${` 转义 / 限定规则）——自举前最后一个语言糖 | ✅ |
 
 ---
 

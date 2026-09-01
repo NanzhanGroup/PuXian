@@ -34,6 +34,9 @@ pub struct Lexer {
     tokens: Vec<Token>,
     /// 保留注释模式（px fmt 使用）：注释以 TokenKind::Comment 输出，不跳过
     pub preserve_comments: bool,
+    /// 字符串插值展开产生的中间 token（Plus / str( / 表达式 / ) / Plus）
+    /// 由 scan_string / scan_multiline_string 压入，next_token 依次取出
+    pending: Vec<Token>,
 }
 
 /// 关键字表（spec §2.4）
@@ -94,6 +97,7 @@ impl Lexer {
             at_line_start: true,
             tokens: Vec::new(),
             preserve_comments: false,
+            pending: Vec::new(),
         }
     }
 
@@ -266,6 +270,10 @@ impl Lexer {
     // ---- 主循环 ----
 
     fn next_token(&mut self) -> LexResult<Token> {
+        // 字符串插值展开产生的中间 token 优先取出（不重新扫描源码）
+        if !self.pending.is_empty() {
+            return Ok(self.pending.remove(0));
+        }
         if self.at_line_start {
             self.handle_line_start()?;
         }
@@ -307,7 +315,7 @@ impl Lexer {
 
         // 字符串
         if c == '"' || c == '\'' {
-            return self.scan_string();
+            return self.scan_string(true);
         }
 
         // 数字
@@ -442,30 +450,34 @@ impl Lexer {
 
     // ---- 字符串 ----
 
-    fn scan_string(&mut self) -> LexResult<Token> {
+    /// 扫描普通字符串（interp=true 时支持 ${expr} 插值，展开为 str(expr) 拼接）
+    /// 返回本字符串产生的第一个 token；其余中间 token 压入 self.pending 队列
+    /// 扫描普通字符串（interp=true 时支持 ${expr} 插值，展开为 str(expr) 拼接）
+    /// 返回本字符串产生的第一个 token；其余中间 token 压入 self.pending 队列
+    fn scan_string(&mut self, interp: bool) -> LexResult<Token> {
+        let toks = self.scan_string_tokens(interp)?;
+        let first = toks[0].clone();
+        self.pending.extend(toks.into_iter().skip(1));
+        Ok(first)
+    }
+
+    /// 扫描普通字符串，返回完整 token 列表（含插值展开；供嵌套场景直接收集）
+    fn scan_string_tokens(&mut self, interp: bool) -> LexResult<Vec<Token>> {
         let pos = self.here();
-        // 原始字符串 r"..." / r'...'
-        // 注意：r 是标识符，遇到 r 时 scan_ident 会先吃掉。所以这里处理方式：
-        // 在 scan_ident 中不处理 r 前缀，而是让 scan_string 只在当前字符是 " 或 ' 时被调用。
-        // 因此 r"..." 的 r 会被当作标识符 r 扫描，然后 "..." 被当作普通字符串。
-        // 这是简化：spec §2.5 的 r"..." 原始字符串暂不在此处实现（后续版本）。
-        // —— 以上为原设计说明；此处我们真正实现 r 前缀：在 next_token 里识别。
-        // 由于 scan_ident 先于 scan_operator 且 r 是标识符，r"..." 会拆成 ident r + 字符串。
-        // 为正确支持，这里保留标记：如果调用方传入了 raw=true 则由调用方处理。
-        // 简化处理：当前 scan_string 只处理普通与多行字符串。
         let quote = self.advance().unwrap();
         // 多行字符串 """ 或 '''
         if quote == '"' && self.peek() == Some('"') && self.peek2() == Some('"') {
             self.advance();
             self.advance();
-            return self.scan_multiline_string('"', pos);
+            return self.scan_multiline_string_tokens('"', pos, interp);
         }
         if quote == '\'' && self.peek() == Some('\'') && self.peek2() == Some('\'') {
             self.advance();
             self.advance();
-            return self.scan_multiline_string('\'', pos);
+            return self.scan_multiline_string_tokens('\'', pos, interp);
         }
-        // 普通字符串
+        // 普通字符串（单行）
+        let mut out: Vec<Token> = Vec::new();
         let mut s = String::new();
         loop {
             match self.peek() {
@@ -491,16 +503,32 @@ impl Lexer {
                         pos,
                     })
                 }
+                Some('$') if interp && self.peek2() == Some('{') => {
+                    // 插值开始：flush 文本段 → + str( → 表达式 → ) → +
+                    self.advance(); // $
+                    self.advance(); // {
+                    out.push(Token::new(TokenKind::Str(std::mem::take(&mut s)), pos));
+                    out.push(Token::new(TokenKind::Plus, pos));
+                    out.push(Token::new(TokenKind::Ident("str".to_string()), pos));
+                    out.push(Token::new(TokenKind::LParen, pos));
+                    let expr = self.scan_interp_expr(pos)?;
+                    out.extend(expr);
+                    out.push(Token::new(TokenKind::RParen, pos));
+                    out.push(Token::new(TokenKind::Plus, pos));
+                }
                 Some(c) => {
                     s.push(c);
                     self.advance();
                 }
             }
         }
-        Ok(Token::new(TokenKind::Str(s), pos))
+        out.push(Token::new(TokenKind::Str(s), pos));
+        Ok(out)
     }
 
-    fn scan_multiline_string(&mut self, quote: char, pos: Pos) -> LexResult<Token> {
+    /// 扫描多行字符串（interp=true 时支持 ${expr} 插值），返回完整 token 列表
+    fn scan_multiline_string_tokens(&mut self, quote: char, pos: Pos, interp: bool) -> LexResult<Vec<Token>> {
+        let mut out: Vec<Token> = Vec::new();
         let mut s = String::new();
         loop {
             match self.peek() {
@@ -521,13 +549,84 @@ impl Lexer {
                     let esc = self.scan_escape(pos)?;
                     s.push_str(&esc);
                 }
+                Some('$') if interp && self.peek2() == Some('{') => {
+                    self.advance(); // $
+                    self.advance(); // {
+                    out.push(Token::new(TokenKind::Str(std::mem::take(&mut s)), pos));
+                    out.push(Token::new(TokenKind::Plus, pos));
+                    out.push(Token::new(TokenKind::Ident("str".to_string()), pos));
+                    out.push(Token::new(TokenKind::LParen, pos));
+                    let expr = self.scan_interp_expr(pos)?;
+                    out.extend(expr);
+                    out.push(Token::new(TokenKind::RParen, pos));
+                    out.push(Token::new(TokenKind::Plus, pos));
+                }
                 Some(c) => {
                     s.push(c);
                     self.advance();
                 }
             }
         }
-        Ok(Token::new(TokenKind::Str(s), pos))
+        out.push(Token::new(TokenKind::Str(s), pos));
+        Ok(out)
+    }
+
+    /// 扫描字符串插值 ${...} 内的表达式 token 序列（消费到匹配的 }）
+    /// 限定：不支持 {} 字面量（dict/set）、注释、跨行；表达式内字符串字面量支持嵌套插值
+    fn scan_interp_expr(&mut self, str_pos: Pos) -> LexResult<Vec<Token>> {
+        let mut toks: Vec<Token> = Vec::new();
+        loop {
+            match self.peek() {
+                None => {
+                    return Err(LexError {
+                        code: "E1002",
+                        msg: "字符串插值 ${ 未闭合（缺少 }）".to_string(),
+                        pos: str_pos,
+                    })
+                }
+                Some('}') => {
+                    self.advance();
+                    break;
+                }
+                Some('{') => {
+                    return Err(self.err(
+                        "E1006",
+                        "插值表达式不支持 {} 字面量（dict/set），请先用变量保存",
+                    ))
+                }
+                Some('\n') => {
+                    return Err(LexError {
+                        code: "E1002",
+                        msg: "字符串插值表达式不能跨行".to_string(),
+                        pos: str_pos,
+                    })
+                }
+                Some('#') => {
+                    return Err(self.err("E1006", "插值表达式不支持注释"))
+                }
+                Some(c) if c == ' ' || c == '\t' => {
+                    self.advance();
+                }
+                Some(c) if c == '"' || c == '\'' => {
+                    // 表达式内的字符串字面量：支持嵌套插值（递归展开）
+                    let t = self.scan_string_tokens(true)?;
+                    toks.extend(t);
+                }
+                Some(c) if c.is_ascii_digit() => {
+                    let t = self.scan_number()?;
+                    toks.push(t);
+                }
+                Some(c) if is_ident_start(c) => {
+                    let t = self.scan_ident()?;
+                    toks.push(t);
+                }
+                Some(_) => {
+                    let t = self.scan_operator()?;
+                    toks.push(t);
+                }
+            }
+        }
+        Ok(toks)
     }
 
     /// 解析转义序列，返回解码后的字符串
@@ -551,6 +650,7 @@ impl Lexer {
             '"' => "\"",
             '\'' => "'",
             '0' => "\0",
+            '$' => "$", // \${ 转义为字面 ${（字符串插值用）
             'u' => {
                 // \u{XXXX}
                 self.advance(); // u
@@ -814,6 +914,81 @@ mod tests {
         assert!(t.contains(&TokenKind::Str("hi\n".into())));
         assert!(t.contains(&TokenKind::Str("a".into())));
         assert!(t.contains(&TokenKind::Str("multi\nline".into())));
+    }
+
+    #[test]
+    fn test_string_interp() {
+        // "a${x}b" → Str("a") + str( x ) + Str("b")
+        let t = toks("\"a${x}b\"");
+        assert_eq!(t[0], TokenKind::Str("a".into()));
+        assert_eq!(t[1], TokenKind::Plus);
+        assert_eq!(t[2], TokenKind::Ident("str".into()));
+        assert_eq!(t[3], TokenKind::LParen);
+        assert_eq!(t[4], TokenKind::Ident("x".into()));
+        assert_eq!(t[5], TokenKind::RParen);
+        assert_eq!(t[6], TokenKind::Plus);
+        assert_eq!(t[7], TokenKind::Str("b".into()));
+    }
+
+    #[test]
+    fn test_string_interp_expr() {
+        // "${1 + 2}" → Str("") + str( 1 + 2 ) + Str("")（末尾含 Eof）
+        let t = toks("\"${1 + 2}\"");
+        assert_eq!(t[0], TokenKind::Str("".into()));
+        assert_eq!(t[2], TokenKind::Ident("str".into()));
+        assert_eq!(t[4], TokenKind::Int(1));
+        assert_eq!(t[5], TokenKind::Plus);
+        assert_eq!(t[6], TokenKind::Int(2));
+        assert_eq!(t[8], TokenKind::Plus);
+        assert_eq!(t[9], TokenKind::Str("".into()));
+    }
+
+    #[test]
+    fn test_string_interp_nested() {
+        // "${"a${i}b"}" → 表达式内字符串字面量递归展开为 "a" + str(i) + "b"
+        let t = toks("\"${\"a${i}b\"}\"");
+        assert_eq!(t[0], TokenKind::Str("".into()));   // 外层空前缀
+        assert_eq!(t[2], TokenKind::Ident("str".into()));
+        assert_eq!(t[4], TokenKind::Str("a".into()));  // 内层第一文本段
+        assert_eq!(t[8], TokenKind::Ident("i".into()));
+        assert_eq!(t[11], TokenKind::Str("b".into()));
+        assert_eq!(t[14], TokenKind::Str("".into()));  // 外层空后缀
+    }
+
+    #[test]
+    fn test_string_interp_escape() {
+        // "\${x}" → 字面 ${x}（\$ 转义），无插值展开（t[0]=Str，t[1]=Eof）
+        let t = toks("\"\\${x}\"");
+        assert_eq!(t[0], TokenKind::Str("${x}".into()));
+        assert_eq!(t.len(), 2);
+        // 裸 $（非 { 前缀）原样
+        let t2 = toks("\"price $5\"");
+        assert_eq!(t2[0], TokenKind::Str("price $5".into()));
+    }
+
+    #[test]
+    fn test_string_interp_multiline() {
+        let t = toks("\"\"\"a${x}b\"\"\"");
+        assert_eq!(t[0], TokenKind::Str("a".into()));
+        assert_eq!(t[1], TokenKind::Plus);
+        assert_eq!(t[4], TokenKind::Ident("x".into()));
+        assert_eq!(t[7], TokenKind::Str("b".into()));
+    }
+
+    #[test]
+    fn test_string_interp_errors() {
+        // 未闭合
+        assert!(Lexer::new("print(\"${x\")").tokenize().is_err());
+        // 跨行
+        assert!(Lexer::new("print(\"${x\ny}\")").tokenize().is_err());
+        // {} 字面量
+        let r = Lexer::new("print(\"${ {1:2} }\")").tokenize();
+        assert!(r.is_err());
+        assert_eq!(r.unwrap_err().code, "E1006");
+        // 注释
+        let r = Lexer::new("print(\"${x #c}\")").tokenize();
+        assert!(r.is_err());
+        assert_eq!(r.unwrap_err().code, "E1006");
     }
 
     #[test]
