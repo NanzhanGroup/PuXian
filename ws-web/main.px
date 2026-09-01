@@ -1,0 +1,51 @@
+# ============================================================
+# ws-web —— 用 PuXian 写的第一个生产应用（M-B9b 开工骨架）
+# ------------------------------------------------------------
+# 语言面：Mini 子集（docs/MINI_SUBSET.md，自举编译器锁定）
+# 运行：
+#   ./run.sh                     # 解释执行（开发调试）
+#   ./build.sh && ./build/ws-web # 编译为静态二进制（生产）
+# 端点：
+#   GET  /healthz     健康检查 → {"ok": true, "uptime": ms}
+#   GET  /api/time    服务器时间戳
+#   GET  /api/items   列出全部记录（SQLite 持久化）
+#   POST /api/items   新增记录（body: JSON {"name": "..."}）
+# 注意：Mini 子集禁止多行 list/dict 字面量 → 所有容器单行书写
+# ============================================================
+
+# ---- 全局状态（顶层 var 即全局变量，函数内可读写）----
+db = sqlite_open("ws-web.db")
+started_at = now_ms()
+port = 8080
+
+def init_db():
+    sqlite_exec(db, "CREATE TABLE IF NOT EXISTS items(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, ts INTEGER)")
+
+def json_resp(obj):
+    return {"status": 200, "body": json_stringify(obj), "headers": {"Content-Type": "application/json"}}
+
+def handle_request(req):
+    p = req.path
+    if p == "/healthz":
+        return json_resp({"ok": true, "uptime": now_ms() - started_at})
+    if p == "/api/time":
+        return json_resp({"ts": now_ms()})
+    if p == "/api/items":
+        rows = sqlite_query(db, "SELECT id, name, ts FROM items ORDER BY id")
+        items = []
+        for r in rows:
+            items.append({"id": r["id"], "name": r["name"], "ts": r["ts"]})
+        return json_resp({"items": items})
+    if p == "/api/items/add":
+        sqlite_exec(db, "INSERT INTO items(name, ts) VALUES (?, ?)", [req.body, now_ms()])
+        return json_resp({"ok": true, "id": sqlite_last_insert_rowid(db)})
+    return {"status": 404, "body": json_stringify({"error": "not found"}), "headers": {"Content-Type": "application/json"}}
+
+def main():
+    init_db()
+    print("ws-web listening on http://127.0.0.1:" + str(port))
+    spawn http_serve(port, handle_request)
+    while true:
+        sleep(1000)
+
+main()

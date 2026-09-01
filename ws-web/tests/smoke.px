@@ -1,0 +1,49 @@
+# ============================================================
+# ws-web 骨架冒烟测试：起服务 → 请求端点 → 断言
+# 模式参考 examples/m23c_http_adv.px（http_serve + http_request）
+# 运行：./tools/pxc run ws-web/tests/smoke.px
+# ============================================================
+
+db = sqlite_open(":memory:")
+sqlite_exec(db, "CREATE TABLE IF NOT EXISTS items(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, ts INTEGER)")
+sqlite_exec(db, "INSERT INTO items(name, ts) VALUES ('demo', 100)")
+
+def json_resp(obj):
+    return {"status": 200, "body": json_stringify(obj), "headers": {"Content-Type": "application/json"}}
+
+def handle_request(req):
+    p = req.path
+    if p == "/healthz":
+        return json_resp({"ok": true})
+    if p == "/api/items":
+        rows = sqlite_query(db, "SELECT id, name, ts FROM items ORDER BY id")
+        items = []
+        for r in rows:
+            items.append({"id": r["id"], "name": r["name"], "ts": r["ts"]})
+        return json_resp({"items": items})
+    return {"status": 404, "body": json_stringify({"error": "not found"}), "headers": {"Content-Type": "application/json"}}
+
+def main():
+    spawn http_serve(18999, handle_request)
+    sleep(500)
+
+    # 1. 健康检查
+    r = http_request("http://127.0.0.1:18999/healthz", "GET")
+    assert r.status == 200
+    d = json_parse(r.body)
+    assert d["ok"] == true
+
+    # 2. 列表 API（SQLite 数据经 JSON 返回）
+    r2 = http_request("http://127.0.0.1:18999/api/items", "GET")
+    assert r2.status == 200
+    d2 = json_parse(r2.body)
+    assert len(d2["items"]) == 1
+    assert d2["items"][0]["name"] == "demo"
+
+    # 3. 404 兜底
+    r3 = http_request("http://127.0.0.1:18999/nope", "GET")
+    assert r3.status == 404
+
+    print("✅ ws-web smoke 全部通过（healthz / items / 404）")
+
+main()
