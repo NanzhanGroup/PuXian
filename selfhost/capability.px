@@ -25,6 +25,15 @@ def section(title):
     print("")
     print("== " + title + " ==")
 
+# ---- M42：显式 C 库 import（FFI 平台杠杆）----
+import "c/sqlite3"
+
+extern def sqlite_open(path: str) -> int
+extern def sqlite_exec(db: int, sql: str) -> int
+extern def sqlite_query(db: int, sql: str) -> list
+extern def sqlite_close(db: int) -> bool
+extern def sqlite_escape(s: str) -> str
+
 # ============================================================
 section("1. 字符串处理")
 # ============================================================
@@ -459,6 +468,21 @@ check("泛型结构体 Pair[A,B]", gp.x == 1 and gp.y == "一")
 # 泛型与类型标注混用（渐进：标注不参与运行时）
 var gnums: list[int] = [5, 6, 7]
 check("泛型+类型标注", first(gnums) == 5)
+
+# ============================================================
+section("17. C-FFI 显式 C 库 import（M42）")
+# ============================================================
+# import "c/sqlite3" + extern def → ffi_call C 桥（编译/解释双模式一致）
+var fdb = sqlite_open(":memory:")
+check("C-FFI sqlite_open 返回句柄", type(fdb) == "int" and fdb > 0)
+sqlite_exec(fdb, "CREATE TABLE t (id INT, name TEXT)")
+sqlite_exec(fdb, "INSERT INTO t VALUES (1, '甲'), (2, '乙')")
+var frows = sqlite_query(fdb, "SELECT id, name FROM t ORDER BY id")
+check("C-FFI sqlite_query 返回行数", len(frows) == 2)
+check("C-FFI 查询第一行", frows[0]["id"] == 1 and frows[0]["name"] == "甲")
+check("C-FFI 查询第二行", frows[1]["id"] == 2 and frows[1]["name"] == "乙")
+check("C-FFI sqlite_escape", sqlite_escape("O'Reilly") == "O''Reilly")
+check("C-FFI sqlite_close", sqlite_close(fdb) == true)
 
 # ============================================================
 # 汇总

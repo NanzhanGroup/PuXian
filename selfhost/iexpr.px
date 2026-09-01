@@ -254,6 +254,20 @@ def i_eval_call(node, env):
     # chan/mutex/rwlock 构造（callee 为 Var）
     if callee[0] == "Var":
         let cname = rust_unescape(callee[1])
+        # M42：extern def → FFI 调用（统一走 ffi_call C 桥，与编译模式一致）
+        if i_ffi.has(cname):
+            let decl_params = i_ffi[cname]
+            if len(args) != len(decl_params):
+                return Err(i_r1002("FFI 函数 " + cname + " 需要 " + str(len(decl_params)) + " 个参数，给出 " + str(len(args)), pos))
+            let arg_vals = []
+            var ai = 0
+            while ai < len(args):
+                let ar = i_eval_expr(args[ai], env)
+                if ar.is_err():
+                    return Err(ar.err())
+                arg_vals.append(ar.unwrap())
+                ai += 1
+            return i_builtin_ffi_call([cname, arg_vals], pos)
         if cname == "chan":
             var cap = 0
             if len(args) > 0:

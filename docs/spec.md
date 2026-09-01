@@ -419,7 +419,28 @@ import std.io
 import std.net.http
 from std.collections import HashMap
 import "path/to/file.px"      # 相对路径导入（脚本模式）
+import "c/sqlite3"            # M42：显式 C 库 import（FFI）
 ```
+
+#### 8.2.1 显式 C 库 import（M42，对应"清歌的建议 P2-7"）
+- `import "c/xxx"`：声明导入 C 库（路径以 `c/` 开头、不以 `.px` 结尾）→ 不加载 .px 文件，函数由 `extern def` 声明。
+- `extern def name(params) -> ret`：C 函数声明（无 body、单行、返回类型用 `->` 与普通 def 一致）。
+- 调用：extern 函数像普通函数一样调用，统一经 **FFI C 桥 `ffi_call(name, args_list)`**（runtime_ffi.c 注册表）——编译模式与解释模式行为一致。
+- 类型映射（MVP）：`int`↔i64、`float`↔f64、`str`↔char*（UTF-8）、`bytes`↔(ptr,len)、`ptr`/句柄↔int 自增 id、list/dict 直接透传（绑定函数为 LXValue 接口）。
+- 参数签名编译期校验（个数不符 → 编译错误 E3004）。
+- 示例：
+  ```python
+  import "c/sqlite3"
+  extern def sqlite_open(path: str) -> int
+  extern def sqlite_exec(db: int, sql: str) -> int
+  extern def sqlite_query(db: int, sql: str) -> list
+
+  def main():
+      let db = sqlite_open(":memory:")
+      sqlite_exec(db, "CREATE TABLE t (id INT)")
+      print(sqlite_query(db, "SELECT COUNT(*) c FROM t")[0]["c"])
+  ```
+- 新增 C 库 = runtime 绑定文件 + `px_ffi_register` + 语言层 extern 声明（三处）。
 
 ### 8.3 可见性
 - 默认私有（模块内可见）
@@ -599,7 +620,7 @@ error[E3001]: type mismatch: expected int, got str
 | 12 | 属性 / 魔法方法（__xxx__） | 隐式行为违背"显式优于隐式" |
 | 13 | 动态 monkey-patching | 破坏确定性 |
 | 14 | 多范式自由混用 | 单一范式，禁止花式混搭 |
-| 15 | CGO/FFI | v0.1 不做，后续经 ABI 白名单 |
+| 15 | CGO/FFI | ✅ **M42 已实现**（`import "c/xxx"` + `extern def` + FFI 注册表，双模式一致） |
 | 16 | 构建脚本（Makefile/CMake） | `px build` 一条命令，无需构建系统 |
 | 17 | set 类型 | v0.1 用 list/map 组合（可后续加） |
 | 18 | 联合类型 / 函数重载 | enum / 泛型替代 |

@@ -19,7 +19,7 @@ var g_at_line_start = true
 var g_toks = []
 var g_count = 0
 var g_pending = []
-let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn": "fn", "struct": "struct", "enum": "enum", "trait": "trait", "impl": "impl", "match": "match", "case": "case", "if": "if", "elif": "elif", "else": "else", "for": "for", "while": "while", "in": "in", "and": "and", "or": "or", "not": "not", "return": "return", "break": "break", "continue": "continue", "import": "import", "from": "from", "pub": "pub", "as": "as", "spawn": "spawn", "chan": "chan", "send": "send", "recv": "recv", "select": "select", "true": "true", "false": "false", "null": "null", "None": "null", "self": "self", "capture": "capture"}
+let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn": "fn", "struct": "struct", "enum": "enum", "trait": "trait", "impl": "impl", "match": "match", "case": "case", "if": "if", "elif": "elif", "else": "else", "for": "for", "while": "while", "in": "in", "and": "and", "or": "or", "not": "not", "return": "return", "break": "break", "continue": "continue", "import": "import", "from": "from", "pub": "pub", "as": "as", "spawn": "spawn", "chan": "chan", "send": "send", "recv": "recv", "select": "select", "true": "true", "false": "false", "null": "null", "None": "null", "self": "self", "capture": "capture", "extern": "extern"}
 let CTRL_ALL = "\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}\u{8}\u{b}\u{c}\u{e}\u{f}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1a}\u{1b}\u{1c}\u{1d}\u{1e}\u{1f}\u{7f}\u{80}\u{81}\u{82}\u{83}\u{84}\u{85}\u{86}\u{87}\u{88}\u{89}\u{8a}\u{8b}\u{8c}\u{8d}\u{8e}\u{8f}\u{90}\u{91}\u{92}\u{93}\u{94}\u{95}\u{96}\u{97}\u{98}\u{99}\u{9a}\u{9b}\u{9c}\u{9d}\u{9e}\u{9f}"
 
 let LAYOUT = {
@@ -39,6 +39,7 @@ let LAYOUT = {
     "TraitDef": ["TraitDef", [["name", "s"], ["methods", "lfd"], ["pos", "p"]]],
     "ImplDef": ["ImplDef", [["type_name", "s"], ["trait_name", "os"], ["methods", "lfd"], ["pos", "p"]]],
     "Import": ["Import", [["module", "ls"], ["names", "ls"], ["pos", "p"]]],
+    "ExternDef": ["ExternDef", [["name", "s"], ["params", "lp"], ["ret_ty", "o"], ["pos", "p"]]],
     "Spawn": ["Spawn", [["expr", "n"], ["pos", "p"]]],
     "ChanDecl": ["ChanDecl", [["name", "s"], ["elem_ty", "o"], ["pos", "p"]]],
     "Send": ["Send", [["chan", "n"], ["value", "n"], ["pos", "p"]]],
@@ -155,7 +156,7 @@ def expect_ident(what):
     perr("E2001", "期望" + what + "，实际得到 " + pk_display())
 
 def is_name_kind(k):
-    let ns = ["let", "var", "const", "def", "fn", "struct", "enum", "trait", "impl", "match", "case", "if", "elif", "else", "for", "while", "in", "return", "break", "continue", "import", "from", "pub", "as", "spawn", "chan", "send", "recv", "select", "true", "false", "null", "self", "type", "capture"]
+    let ns = ["let", "var", "const", "def", "fn", "struct", "enum", "trait", "impl", "match", "case", "if", "elif", "else", "for", "while", "in", "return", "break", "continue", "import", "from", "pub", "as", "spawn", "chan", "send", "recv", "select", "true", "false", "null", "self", "type", "capture", "extern"]
     var i = 0
     while i < len(ns):
         if ns[i] == k:
@@ -222,6 +223,8 @@ def parse_stmt():
         return parse_while()
     if k == "def":
         return parse_func_def()
+    if k == "extern":
+        return parse_extern_def()
     if k == "struct":
         return parse_struct_def()
     if k == "enum":
@@ -417,6 +420,20 @@ def parse_func_def():
     expect("换行", "换行")
     var body = parse_block()
     return ["FuncDef", qstr(name), params, ret_ty, body, pos, tps]
+
+# M42：extern def —— C 函数声明（FFI，无 body，单行）
+#   extern def name(a: int, b: str) : int
+def parse_extern_def():
+    let pos = ppos()
+    adv()
+    expect("def", "'def'")
+    let name = expect_ident("函数名")
+    let params = parse_params()
+    var ret_ty = null
+    if chk("->"):
+        adv()
+        ret_ty = parse_type()
+    return ["ExternDef", qstr(name), params, ret_ty, pos]
 
 def parse_struct_def():
     let pos = ppos()

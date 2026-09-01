@@ -167,6 +167,17 @@ def cg_gen_expr(expr):
         let args = expr[2]
         if callee[0] == "Var":
             let cname = rust_unescape(callee[1])
+            # M42：extern def → FFI 调用（统一走 ffi_call C 桥，双模式一致）
+            if cg_ffi.has(cname):
+                let decl_params = cg_ffi[cname]
+                if len(args) != len(decl_params):
+                    cg_perr("E3004", "FFI 函数 " + cname + " 需要 " + str(len(decl_params)) + " 个参数，给出 " + str(len(args)))
+                let parts = []
+                var ai = 0
+                while ai < len(args):
+                    parts.append(cg_gen_expr(args[ai]))
+                    ai += 1
+                return "px_call(px_get_global(\"ffi_call\"), (LXValue[]){px_str(\"" + cname + "\"), px_list_n((LXValue[]){" + join(", ", parts) + "}, " + str(len(parts)) + ")}, 2)"
             if cname == "chan":
                 var cap = "0"
                 if len(args) > 0:
