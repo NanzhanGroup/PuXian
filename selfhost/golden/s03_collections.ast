@@ -485,21 +485,36 @@ Program {
  },
  args: [
  Call {
- callee: Field {
- obj: Var {
- name: "d",
+ callee: Var {
+ name: "sorted",
  pos: Pos {
  line: 14,
  col: 11,
  },
  },
+ args: [
+ Call {
+ callee: Field {
+ obj: Var {
+ name: "d",
+ pos: Pos {
+ line: 14,
+ col: 18,
+ },
+ },
  name: "keys",
  pos: Pos {
  line: 14,
- col: 12,
+ col: 19,
  },
  },
  args: [],
+ pos: Pos {
+ line: 14,
+ col: 24,
+ },
+ },
+ ],
  pos: Pos {
  line: 14,
  col: 17,
@@ -527,24 +542,39 @@ Program {
  },
  args: [
  Call {
- callee: Field {
- obj: Var {
- name: "d",
+ callee: Var {
+ name: "sorted",
  pos: Pos {
  line: 15,
  col: 11,
  },
  },
+ args: [
+ Call {
+ callee: Field {
+ obj: Var {
+ name: "d",
+ pos: Pos {
+ line: 15,
+ col: 18,
+ },
+ },
  name: "values",
  pos: Pos {
  line: 15,
- col: 12,
+ col: 19,
  },
  },
  args: [],
  pos: Pos {
  line: 15,
- col: 19,
+ col: 26,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 15,
+ col: 17,
  },
  },
  ],

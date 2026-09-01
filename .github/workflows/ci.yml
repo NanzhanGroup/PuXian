@@ -1,0 +1,69 @@
+name: PuXian CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  regression:
+    name: 自举回归（PuXian-only）
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 检查引导二进制
+        run: |
+          chmod +x bootstrap/pxc bootstrap/pxi bootstrap/pxl bootstrap/pxpar
+          ./bootstrap/pxc --version 2>/dev/null || ./bootstrap/pxc build examples/hello.px >/dev/null
+          echo "✅ 引导二进制就绪"
+
+      - name: 工具链冒烟（build + run）
+        run: |
+          ./tools/pxc build examples/hello.px | tail -1
+          ./examples/build/hello | head -1
+          ./tools/pxc run examples/hello.px | head -1
+          ./tools/pxc lex examples/hello.px | head -3
+          ./tools/pxc parse examples/hello.px | head -3
+
+      - name: 对拍回归 — 词法（--lexer）
+        run: ./selfhost/diffcheck.sh --lexer 2>&1 | tail -3
+
+      - name: 对拍回归 — 语法（--parser）
+        run: ./selfhost/diffcheck.sh --parser 2>&1 | tail -3
+
+      - name: 对拍回归 — 错误场景（--errors）
+        run: ./selfhost/diffcheck.sh --errors 2>&1 | tail -3
+
+      - name: 对拍回归 — codegen（--codegen）
+        run: ./selfhost/diffcheck.sh --codegen 2>&1 | tail -5
+
+      - name: 对拍回归 — 值系统（--value）
+        run: ./selfhost/diffcheck.sh --value 2>&1 | tail -3
+
+      - name: 对拍回归 — 解释器（--interp）
+        run: ./selfhost/diffcheck.sh --interp 2>&1 | tail -3
+
+      - name: 自举证明（pxc 编译 compiler.px 与基准一致）
+        run: |
+          cd selfhost
+          ./bootstrap_prove.sh 2>&1 | tail -6
+
+  examples:
+    name: 示例编译运行
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+      - name: 编译并运行关键示例
+        run: |
+          chmod +x bootstrap/pxc bootstrap/pxi tools/pxc
+          for ex in examples/fib.px examples/match.px examples/struct.px; do
+            [ -f "$ex" ] || continue
+            echo "── $ex"
+            ./tools/pxc build "$ex" 2>&1 | tail -1
+          done
+          ./examples/build/fib | head -3

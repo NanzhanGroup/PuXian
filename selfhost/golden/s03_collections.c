@@ -18,8 +18,8 @@ static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     px_index_set(_v3, px_str("c"), px_int(3LL));
     (void)(px_call(px_get_global("print"), (LXValue[]){px_index(_v3, px_str("c"))}, 1));
     (void)(px_call(px_get_global("print"), (LXValue[]){px_method(_v3, "has", (LXValue[]){px_str("a")}, 1)}, 1));
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_method(_v3, "keys", (LXValue[]){}, 0)}, 1));
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_method(_v3, "values", (LXValue[]){}, 0)}, 1));
+    (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("sorted"), (LXValue[]){px_method(_v3, "keys", (LXValue[]){}, 0)}, 1)}, 1));
+    (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("sorted"), (LXValue[]){px_method(_v3, "values", (LXValue[]){}, 0)}, 1)}, 1));
     (void)(px_call(px_get_global("print"), (LXValue[]){px_method(_v3, "get", (LXValue[]){px_str("zz"), px_int(9LL)}, 2)}, 1));
 px_err_1:
     if (px_err_1_proped) return px_err_1_val;

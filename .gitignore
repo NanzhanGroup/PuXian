@@ -1,8 +1,15 @@
-# Rust 编译产物
-compiler/target/
+# ============================================================
+# PuXian 仓库忽略规则（M-B9a：Rust 已退役，自举引导链）
+# ============================================================
+
+# Rust 编译产物（archive 保留源码，不参与构建）
+archive/rust-compiler/target/
 
 # 编译模式产物（生成的 C 源码与二进制）
 examples/build/
+selfhost/build/
+selfhost/cases/build/
+ws-web/build/
 
 # 备份文件
 *.bak
@@ -16,6 +23,5 @@ examples/build/
 *.swp
 .DS_Store
 
-# 自举编译产物
-selfhost/build/
-selfhost/cases/build/
+# 自举临时产物
+/tmp/
