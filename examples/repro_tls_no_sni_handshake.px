@@ -1,0 +1,67 @@
+# ============================================================
+# [ws-web-blocker 复现] TLS 服务器对「无 SNI 的 ClientHello」直接握手失败
+# ------------------------------------------------------------
+# 现象：ws-web（PuXian 生产 Web 服务器）灰度时，curl 访问 https://127.0.0.1/
+#       （IP 地址不发 SNI）报 ssl/tls alert handshake failure(40)；
+#       访问域名（带 SNI）正常。openssl s_client 同样：无 SNI 失败、带 SNI 成功。
+# 根因：runtime tls_server(cert,key,host) 仅按 SNI 匹配证书，ClientHello 无 SNI
+#       时无默认证书回退 → 直接 alert 40。
+# 期望：无 SNI 应使用默认证书（首个注册证书）继续握手，返回 HTTP 200。
+# 实际：无 SNI → handshake failure；带 SNI → 200。
+# 复现（编译模式，与 ws-web 生产一致）：
+#   ./tools/pxc build examples/repro_tls_no_sni_handshake.px
+#   examples/build/repro_tls_no_sni_handshake
+# ============================================================
+
+# ---- 1. 生成自签证书（SAN: localhost + test.local）----
+os_spawn("/bin/sh", ["-c", "openssl req -x509 -newkey rsa:2048 -keyout /tmp/px_tls_sni_key.pem -out /tmp/px_tls_sni_cert.pem -days 1 -nodes -subj /CN=localhost -addext subjectAltName=DNS:localhost,DNS:test.local"])
+sleep(500)
+
+# ---- 2. 站点 + 独立服务器脚本（SNI 注册 test.local，编译为二进制）----
+mkdir("/tmp/px_tls_sni_site")
+write_file("/tmp/px_tls_sni_site/index.html", "<h1>SNI-OK</h1>")
+write_file("/tmp/px_tls_sni_server.px", "tls_server(\"/tmp/px_tls_sni_cert.pem\", \"/tmp/px_tls_sni_key.pem\", \"test.local\")\npx_serve(18447, \"/tmp/px_tls_sni_site\", 3000)\n")
+os_spawn("/bin/sh", ["-c", "cd /data/code/PuXian && ./tools/pxc build /tmp/px_tls_sni_server.px"])
+sleep(3000)
+
+# ---- 3. 后台启动 TLS 服务器（编译产物，与 ws-web 同 runtime；pxc build 输出到 /tmp/build/）----
+p = os_spawn("/tmp/build/px_tls_sni_server", [])
+sleep(1200)
+
+# ---- 4. 复现：curl 无 SNI（IP 直连）----
+os_spawn("/bin/sh", ["-c", "curl -sk --max-time 5 https://127.0.0.1:18447/ -o /tmp/px_tls_sni_nosni.out -w '%{http_code} %{errormsg}' > /tmp/px_tls_sni_nosni.code 2>&1"])
+sleep(800)
+nosni = read_file("/tmp/px_tls_sni_nosni.code")
+if exists("/tmp/px_tls_sni_nosni.out"):
+    nosni_body = read_file("/tmp/px_tls_sni_nosni.out")
+else:
+    nosni_body = "(无输出文件: 握手阶段即失败)"
+
+# ---- 5. 对照：curl 带 SNI（--resolve）----
+os_spawn("/bin/sh", ["-c", "curl -sk --max-time 5 --resolve test.local:18447:127.0.0.1 https://test.local:18447/ -o /tmp/px_tls_sni_sni.out -w '%{http_code}' > /tmp/px_tls_sni_sni.code 2>&1"])
+sleep(800)
+sni = read_file("/tmp/px_tls_sni_sni.code")
+if exists("/tmp/px_tls_sni_sni.out"):
+    sni_body = read_file("/tmp/px_tls_sni_sni.out")
+else:
+    sni_body = "(无输出文件)"
+
+# ---- 6. 输出 期望 vs 实际 ----
+print("========== 复现结果 ==========")
+print("[无SNI] curl https://127.0.0.1:18447/")
+print("  期望: 200 <h1>SNI-OK</h1> (默认证书继续握手)")
+print("  实际:", nosni, "/", nosni_body)
+print("[带SNI] curl https://test.local:18447/ (--resolve)")
+print("  期望: 200 <h1>SNI-OK</h1>")
+print("  实际:", sni, "/", sni_body)
+
+if contains(nosni, "handshake failure") or contains(nosni, "000"):
+    print(">>> BUG 复现：无 SNI ClientHello 握手失败（alert 40）")
+else:
+    print(">>> 通过：无 SNI 正常（已修复或未复现）")
+
+# ---- 7. 清理 ----
+os_kill(p, 15)
+sleep(500)
+os_wait(p)
+print("REPRO_DONE")
