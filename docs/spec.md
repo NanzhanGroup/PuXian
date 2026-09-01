@@ -174,7 +174,7 @@ def calc() -> Result[int]:
 - `?` 运算符：表达式后加 `?`，若为 Err/None 立即 return，否则解包。
 - 使用 `?` 的函数，返回类型必须为 Result/Option（或可空），否则编译错误。
 
-### 3.6 泛型
+### 3.6 泛型（✅ 已实现 M41.4：定义级泛型，类型擦除渐进）
 ```python
 def first[T](items: list[T]) -> T:
     return items[0]

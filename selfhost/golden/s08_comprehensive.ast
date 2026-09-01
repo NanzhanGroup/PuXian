@@ -1,2511 +1,2519 @@
 Program {
- items: [
- Import {
- module: [
- "std",
- "collections",
- ],
- names: [],
- pos: Pos {
- line: 2,
- col: 1,
- },
- },
- Import {
- module: [
- "std",
- "fs",
- ],
- names: [
- "read_file",
- ],
- pos: Pos {
- line: 3,
- col: 1,
- },
- },
- VarDecl {
- kind: Const,
- name: "MAX_N",
- ty: None,
- value: Some(
- Int {
- value: 100,
- pos: Pos {
- line: 5,
- col: 15,
- },
- },
- ),
- pos: Pos {
- line: 5,
- col: 1,
- },
- },
- EnumDef {
- name: "Shape",
- variants: [
- EnumVariant {
- name: "Circle",
- fields: [],
- pos: Pos {
- line: 8,
- col: 5,
- },
- },
- EnumVariant {
- name: "Square",
- fields: [],
- pos: Pos {
- line: 9,
- col: 5,
- },
- },
- ],
- pos: Pos {
- line: 7,
- col: 1,
- },
- },
- StructDef {
- name: "Point",
- fields: [
- StructField {
- name: "x",
- ty: Named(
- "int",
- Pos {
- line: 12,
- col: 8,
- },
- ),
- pos: Pos {
- line: 12,
- col: 5,
- },
- },
- StructField {
- name: "y",
- ty: Named(
- "int",
- Pos {
- line: 13,
- col: 8,
- },
- ),
- pos: Pos {
- line: 13,
- col: 5,
- },
- },
- ],
- pos: Pos {
- line: 11,
- col: 1,
- },
- },
- TraitDef {
- name: "Area",
- methods: [
- FuncDef {
- name: "area",
- params: [],
- ret_ty: Some(
- Named(
- "float",
- Pos {
- line: 16,
- col: 19,
- },
- ),
- ),
- body: [],
- pos: Pos {
- line: 16,
- col: 5,
- },
- },
- ],
- pos: Pos {
- line: 15,
- col: 1,
- },
- },
- ImplDef {
- type_name: "Point",
- trait_name: Some(
- "Area",
- ),
- methods: [
- FuncDef {
- name: "area",
- params: [],
- ret_ty: Some(
- Named(
- "float",
- Pos {
- line: 19,
- col: 19,
- },
- ),
- ),
- body: [
- Return {
- value: Some(
- Float {
- value: 1.5,
- pos: Pos {
- line: 20,
- col: 16,
- },
- },
- ),
- pos: Pos {
- line: 20,
- col: 9,
- },
- },
- ],
- pos: Pos {
- line: 19,
- col: 5,
- },
- },
- ],
- pos: Pos {
- line: 18,
- col: 1,
- },
- },
- FuncDef {
- name: "greet",
- params: [
- Param {
- name: "name",
- ty: Some(
- Named(
- "str",
- Pos {
- line: 22,
- col: 17,
- },
- ),
- ),
- default: None,
- pos: Pos {
- line: 22,
- col: 11,
- },
- },
- Param {
- name: "times",
- ty: Some(
- Named(
- "int",
- Pos {
- line: 22,
- col: 29,
- },
- ),
- ),
- default: Some(
- Int {
- value: 2,
- pos: Pos {
- line: 22,
- col: 35,
- },
- },
- ),
- pos: Pos {
- line: 22,
- col: 22,
- },
- },
- ],
- ret_ty: Some(
- Named(
- "str",
- Pos {
- line: 22,
- col: 41,
- },
- ),
- ),
- body: [
- VarDecl {
- kind: Mut,
- name: "msg",
- ty: None,
- value: Some(
- Binary {
- op: Add,
- left: Binary {
- op: Add,
- left: Str {
- value: "hi ",
- pos: Pos {
- line: 23,
- col: 19,
- },
- },
- right: Call {
- callee: Var {
- name: "str",
- pos: Pos {
- line: 23,
- col: 19,
- },
- },
- args: [
- Var {
- name: "name",
- pos: Pos {
- line: 23,
- col: 25,
- },
- },
- ],
- pos: Pos {
- line: 23,
- col: 19,
- },
- },
- pos: Pos {
- line: 23,
- col: 19,
- },
- },
- right: Str {
- value: "",
- pos: Pos {
- line: 23,
- col: 19,
- },
- },
- pos: Pos {
- line: 23,
- col: 19,
- },
- },
- ),
- pos: Pos {
- line: 23,
- col: 5,
- },
- },
- VarDecl {
- kind: Mut,
- name: "i",
- ty: None,
- value: Some(
- Int {
- value: 0,
- pos: Pos {
- line: 24,
- col: 16,
- },
- },
- ),
- pos: Pos {
- line: 24,
- col: 5,
- },
- },
- While {
- cond: Binary {
- op: Lt,
- left: Var {
- name: "i",
- pos: Pos {
- line: 25,
- col: 11,
- },
- },
- right: Var {
- name: "times",
- pos: Pos {
- line: 25,
- col: 15,
- },
- },
- pos: Pos {
- line: 25,
- col: 13,
- },
- },
- body: [
- Assign {
- target: Var {
- name: "msg",
- pos: Pos {
- line: 26,
- col: 9,
- },
- },
- op: Plus,
- value: Str {
- value: "!",
- pos: Pos {
- line: 26,
- col: 16,
- },
- },
- pos: Pos {
- line: 26,
- col: 9,
- },
- },
- Assign {
- target: Var {
- name: "i",
- pos: Pos {
- line: 27,
- col: 9,
- },
- },
- op: Plus,
- value: Int {
- value: 1,
- pos: Pos {
- line: 27,
- col: 14,
- },
- },
- pos: Pos {
- line: 27,
- col: 9,
- },
- },
- ],
- pos: Pos {
- line: 25,
- col: 5,
- },
- },
- Return {
- value: Some(
- Var {
- name: "msg",
- pos: Pos {
- line: 28,
- col: 12,
- },
- },
- ),
- pos: Pos {
- line: 28,
- col: 5,
- },
- },
- ],
- pos: Pos {
- line: 22,
- col: 1,
- },
- },
- FuncDef {
- name: "process",
- params: [
- Param {
- name: "xs",
- ty: None,
- default: None,
- pos: Pos {
- line: 30,
- col: 13,
- },
- },
- ],
- ret_ty: None,
- body: [
- VarDecl {
- kind: Let,
- name: "doubled",
- ty: None,
- value: Some(
- ListComp {
- expr: Binary {
- op: Mul,
- left: Var {
- name: "x",
- pos: Pos {
- line: 31,
- col: 20,
- },
- },
- right: Int {
- value: 2,
- pos: Pos {
- line: 31,
- col: 24,
- },
- },
- pos: Pos {
- line: 31,
- col: 22,
- },
- },
- clauses: [
- CompClause {
- vars: [
- "x",
- ],
- iterable: Var {
- name: "xs",
- pos: Pos {
- line: 31,
- col: 35,
- },
- },
- },
- ],
- cond: Some(
- Binary {
- op: Gt,
- left: Var {
- name: "x",
- pos: Pos {
- line: 31,
- col: 41,
- },
- },
- right: Int {
- value: 0,
- pos: Pos {
- line: 31,
- col: 45,
- },
- },
- pos: Pos {
- line: 31,
- col: 43,
- },
- },
- ),
- pos: Pos {
- line: 31,
- col: 19,
- },
- },
- ),
- pos: Pos {
- line: 31,
- col: 5,
- },
- },
- VarDecl {
- kind: Let,
- name: "odds",
- ty: None,
- value: Some(
- ListComp {
- expr: Var {
- name: "x",
- pos: Pos {
- line: 32,
- col: 17,
- },
- },
- clauses: [
- CompClause {
- vars: [
- "x",
- ],
- iterable: Call {
- callee: Var {
- name: "range",
- pos: Pos {
- line: 32,
- col: 28,
- },
- },
- args: [
- Int {
- value: 10,
- pos: Pos {
- line: 32,
- col: 34,
- },
- },
- ],
- pos: Pos {
- line: 32,
- col: 33,
- },
- },
- },
- ],
- cond: Some(
- Binary {
- op: And,
- left: Binary {
- op: Eq,
- left: Binary {
- op: Mod,
- left: Var {
- name: "x",
- pos: Pos {
- line: 32,
- col: 41,
- },
- },
- right: Int {
- value: 2,
- pos: Pos {
- line: 32,
- col: 45,
- },
- },
- pos: Pos {
- line: 32,
- col: 43,
- },
- },
- right: Int {
- value: 1,
- pos: Pos {
- line: 32,
- col: 50,
- },
- },
- pos: Pos {
- line: 32,
- col: 47,
- },
- },
- right: Binary {
- op: Ne,
- left: Var {
- name: "x",
- pos: Pos {
- line: 32,
- col: 55,
- },
- },
- right: Int {
- value: 5,
- pos: Pos {
- line: 32,
- col: 60,
- },
- },
- pos: Pos {
- line: 32,
- col: 57,
- },
- },
- pos: Pos {
- line: 32,
- col: 47,
- },
- },
- ),
- pos: Pos {
- line: 32,
- col: 16,
- },
- },
- ),
- pos: Pos {
- line: 32,
- col: 5,
- },
- },
- VarDecl {
- kind: Let,
- name: "pairs",
- ty: None,
- value: Some(
- DictComp {
- key: Call {
- callee: Var {
- name: "str",
- pos: Pos {
- line: 33,
- col: 18,
- },
- },
- args: [
- Var {
- name: "k",
- pos: Pos {
- line: 33,
- col: 22,
- },
- },
- ],
- pos: Pos {
- line: 33,
- col: 21,
- },
- },
- value: Var {
- name: "k",
- pos: Pos {
- line: 33,
- col: 26,
- },
- },
- clauses: [
- CompClause {
- vars: [
- "k",
- "v",
- ],
- iterable: Call {
- callee: Field {
- obj: Var {
- name: "xs",
- pos: Pos {
- line: 33,
- col: 40,
- },
- },
- name: "items",
- pos: Pos {
- line: 33,
- col: 42,
- },
- },
- args: [],
- pos: Pos {
- line: 33,
- col: 48,
- },
- },
- },
- ],
- cond: None,
- pos: Pos {
- line: 33,
- col: 17,
- },
- },
- ),
- pos: Pos {
- line: 33,
- col: 5,
- },
- },
- VarDecl {
- kind: Let,
- name: "first",
- ty: None,
- value: Some(
- Index {
- obj: Var {
- name: "xs",
- pos: Pos {
- line: 34,
- col: 17,
- },
- },
- index: Int {
- value: 0,
- pos: Pos {
- line: 34,
- col: 20,
- },
- },
- pos: Pos {
- line: 34,
- col: 19,
- },
- },
- ),
- pos: Pos {
- line: 34,
- col: 5,
- },
- },
- VarDecl {
- kind: Let,
- name: "last",
- ty: None,
- value: Some(
- Index {
- obj: Var {
- name: "xs",
- pos: Pos {
- line: 35,
- col: 16,
- },
- },
- index: Unary {
- op: Neg,
- operand: Int {
- value: 1,
- pos: Pos {
- line: 35,
- col: 20,
- },
- },
- pos: Pos {
- line: 35,
- col: 19,
- },
- },
- pos: Pos {
- line: 35,
- col: 18,
- },
- },
- ),
- pos: Pos {
- line: 35,
- col: 5,
- },
- },
- VarDecl {
- kind: Let,
- name: "mid",
- ty: None,
- value: Some(
- Slice {
- obj: Var {
- name: "xs",
- pos: Pos {
- line: 36,
- col: 15,
- },
- },
- start: Some(
- Int {
- value: 1,
- pos: Pos {
- line: 36,
- col: 18,
- },
- },
- ),
- end: Some(
- Int {
- value: 3,
- pos: Pos {
- line: 36,
- col: 20,
- },
- },
- ),
- step: None,
- pos: Pos {
- line: 36,
- col: 17,
- },
- },
- ),
- pos: Pos {
- line: 36,
- col: 5,
- },
- },
- VarDecl {
- kind: Let,
- name: "all",
- ty: None,
- value: Some(
- Slice {
- obj: Var {
- name: "xs",
- pos: Pos {
- line: 37,
- col: 15,
- },
- },
- start: None,
- end: None,
- step: None,
- pos: Pos {
- line: 37,
- col: 17,
- },
- },
- ),
- pos: Pos {
- line: 37,
- col: 5,
- },
- },
- VarDecl {
- kind: Let,
- name: "rev",
- ty: None,
- value: Some(
- Slice {
- obj: Var {
- name: "xs",
- pos: Pos {
- line: 38,
- col: 15,
- },
- },
- start: None,
- end: None,
- step: Some(
- Unary {
- op: Neg,
- operand: Int {
- value: 1,
- pos: Pos {
- line: 38,
- col: 21,
- },
- },
- pos: Pos {
- line: 38,
- col: 20,
- },
- },
- ),
- pos: Pos {
- line: 38,
- col: 17,
- },
- },
- ),
- pos: Pos {
- line: 38,
- col: 5,
- },
- },
- VarDecl {
- kind: Let,
- name: "steps",
- ty: None,
- value: Some(
- Slice {
- obj: Var {
- name: "xs",
- pos: Pos {
- line: 39,
- col: 17,
- },
- },
- start: None,
- end: None,
- step: Some(
- Int {
- value: 2,
- pos: Pos {
- line: 39,
- col: 22,
- },
- },
- ),
- pos: Pos {
- line: 39,
- col: 19,
- },
- },
- ),
- pos: Pos {
- line: 39,
- col: 5,
- },
- },
- Return {
- value: Some(
- List {
- items: [
- Var {
- name: "doubled",
- pos: Pos {
- line: 40,
- col: 13,
- },
- },
- Var {
- name: "odds",
- pos: Pos {
- line: 40,
- col: 22,
- },
- },
- Var {
- name: "pairs",
- pos: Pos {
- line: 40,
- col: 28,
- },
- },
- Var {
- name: "first",
- pos: Pos {
- line: 40,
- col: 35,
- },
- },
- Var {
- name: "last",
- pos: Pos {
- line: 40,
- col: 42,
- },
- },
- Var {
- name: "mid",
- pos: Pos {
- line: 40,
- col: 48,
- },
- },
- Var {
- name: "all",
- pos: Pos {
- line: 40,
- col: 53,
- },
- },
- Var {
- name: "rev",
- pos: Pos {
- line: 40,
- col: 58,
- },
- },
- Var {
- name: "steps",
- pos: Pos {
- line: 40,
- col: 63,
- },
- },
- ],
- pos: Pos {
- line: 40,
- col: 12,
- },
- },
- ),
- pos: Pos {
- line: 40,
- col: 5,
- },
- },
- ],
- pos: Pos {
- line: 30,
- col: 1,
- },
- },
- FuncDef {
- name: "use_ops",
- params: [
- Param {
- name: "a",
- ty: None,
- default: None,
- pos: Pos {
- line: 42,
- col: 13,
- },
- },
- Param {
- name: "b",
- ty: None,
- default: None,
- pos: Pos {
- line: 42,
- col: 16,
- },
- },
- ],
- ret_ty: None,
- body: [
- VarDecl {
- kind: Let,
- name: "pipe",
- ty: None,
- value: Some(
- Pipe {
- value: Var {
- name: "a",
- pos: Pos {
- line: 43,
- col: 16,
- },
- },
- func: Var {
- name: "double",
- pos: Pos {
- line: 43,
- col: 21,
- },
- },
- pos: Pos {
- line: 43,
- col: 18,
- },
- },
- ),
- pos: Pos {
- line: 43,
- col: 5,
- },
- },
- VarDecl {
- kind: Let,
- name: "nc",
- ty: None,
- value: Some(
- NullCoalesce {
- left: Var {
- name: "a",
- pos: Pos {
- line: 44,
- col: 14,
- },
- },
- right: Int {
- value: 42,
- pos: Pos {
- line: 44,
- col: 19,
- },
- },
- pos: Pos {
- line: 44,
- col: 16,
- },
- },
- ),
- pos: Pos {
- line: 44,
- col: 5,
- },
- },
- VarDecl {
- kind: Let,
- name: "opt",
- ty: None,
- value: Some(
- OptionalField {
- obj: Var {
- name: "a",
- pos: Pos {
- line: 45,
- col: 15,
- },
- },
- name: "name",
- pos: Pos {
- line: 45,
- col: 16,
- },
- },
- ),
- pos: Pos {
- line: 45,
- col: 5,
- },
- },
- VarDecl {
- kind: Let,
- name: "forced",
- ty: None,
- value: Some(
- ForceUnwrap {
- expr: Var {
- name: "a",
- pos: Pos {
- line: 46,
- col: 18,
- },
- },
- pos: Pos {
- line: 46,
- col: 19,
- },
- },
- ),
- pos: Pos {
- line: 46,
- col: 5,
- },
- },
- VarDecl {
- kind: Let,
- name: "prop",
- ty: None,
- value: Some(
- Field {
- obj: Field {
- obj: ForceUnwrap {
- expr: Var {
- name: "a",
- pos: Pos {
- line: 47,
- col: 16,
- },
- },
- pos: Pos {
- line: 47,
- col: 17,
- },
- },
- name: "b",
- pos: Pos {
- line: 47,
- col: 18,
- },
- },
- name: "c",
- pos: Pos {
- line: 47,
- col: 20,
- },
- },
- ),
- pos: Pos {
- line: 47,
- col: 5,
- },
- },
- VarDecl {
- kind: Let,
- name: "idx",
- ty: None,
- value: Some(
- Index {
- obj: Index {
- obj: Var {
- name: "a",
- pos: Pos {
- line: 48,
- col: 15,
- },
- },
- index: Int {
- value: 0,
- pos: Pos {
- line: 48,
- col: 17,
- },
- },
- pos: Pos {
- line: 48,
- col: 16,
- },
- },
- index: Int {
- value: 1,
- pos: Pos {
- line: 48,
- col: 20,
- },
- },
- pos: Pos {
- line: 48,
- col: 19,
- },
- },
- ),
- pos: Pos {
- line: 48,
- col: 5,
- },
- },
- Return {
- value: Some(
- Binary {
- op: Add,
- left: Binary {
- op: Add,
- left: Binary {
- op: Add,
- left: Binary {
- op: Add,
- left: Binary {
- op: Add,
- left: Var {
- name: "pipe",
- pos: Pos {
- line: 49,
- col: 12,
- },
- },
- right: Var {
- name: "nc",
- pos: Pos {
- line: 49,
- col: 19,
- },
- },
- pos: Pos {
- line: 49,
- col: 17,
- },
- },
- right: Call {
- callee: Var {
- name: "len",
- pos: Pos {
- line: 49,
- col: 24,
- },
- },
- args: [
- Var {
- name: "opt",
- pos: Pos {
- line: 49,
- col: 28,
- },
- },
- ],
- pos: Pos {
- line: 49,
- col: 27,
- },
- },
- pos: Pos {
- line: 49,
- col: 22,
- },
- },
- right: Var {
- name: "forced",
- pos: Pos {
- line: 49,
- col: 35,
- },
- },
- pos: Pos {
- line: 49,
- col: 33,
- },
- },
- right: Var {
- name: "prop",
- pos: Pos {
- line: 49,
- col: 44,
- },
- },
- pos: Pos {
- line: 49,
- col: 42,
- },
- },
- right: Var {
- name: "idx",
- pos: Pos {
- line: 49,
- col: 51,
- },
- },
- pos: Pos {
- line: 49,
- col: 49,
- },
- },
- ),
- pos: Pos {
- line: 49,
- col: 5,
- },
- },
- ],
- pos: Pos {
- line: 42,
- col: 1,
- },
- },
- FuncDef {
- name: "double",
- params: [
- Param {
- name: "x",
- ty: None,
- default: None,
- pos: Pos {
- line: 51,
- col: 12,
- },
- },
- ],
- ret_ty: None,
- body: [
- Return {
- value: Some(
- Binary {
- op: Mul,
- left: Var {
- name: "x",
- pos: Pos {
- line: 52,
- col: 12,
- },
- },
- right: Int {
- value: 2,
- pos: Pos {
- line: 52,
- col: 16,
- },
- },
- pos: Pos {
- line: 52,
- col: 14,
- },
- },
- ),
- pos: Pos {
- line: 52,
- col: 5,
- },
- },
- ],
- pos: Pos {
- line: 51,
- col: 1,
- },
- },
- FuncDef {
- name: "main",
- params: [],
- ret_ty: None,
- body: [
- VarDecl {
- kind: Let,
- name: "shapes",
- ty: None,
- value: Some(
- List {
- items: [
- Field {
- obj: Var {
- name: "Shape",
- pos: Pos {
- line: 55,
- col: 19,
- },
- },
- name: "Circle",
- pos: Pos {
- line: 55,
- col: 24,
- },
- },
- Field {
- obj: Var {
- name: "Shape",
- pos: Pos {
- line: 55,
- col: 33,
- },
- },
- name: "Square",
- pos: Pos {
- line: 55,
- col: 38,
- },
- },
- ],
- pos: Pos {
- line: 55,
- col: 18,
- },
- },
- ),
- pos: Pos {
- line: 55,
- col: 5,
- },
- },
- VarDecl {
- kind: Let,
- name: "p",
- ty: None,
- value: Some(
- Call {
- callee: Var {
- name: "Point",
- pos: Pos {
- line: 56,
- col: 13,
- },
- },
- args: [
- Int {
- value: 3,
- pos: Pos {
- line: 56,
- col: 19,
- },
- },
- Int {
- value: 4,
- pos: Pos {
- line: 56,
- col: 22,
- },
- },
- ],
- pos: Pos {
- line: 56,
- col: 18,
- },
- },
- ),
- pos: Pos {
- line: 56,
- col: 5,
- },
- },
- VarDecl {
- kind: Let,
- name: "r",
- ty: None,
- value: Some(
- Match {
- subject: Index {
- obj: Var {
- name: "shapes",
- pos: Pos {
- line: 57,
- col: 19,
- },
- },
- index: Int {
- value: 0,
- pos: Pos {
- line: 57,
- col: 26,
- },
- },
- pos: Pos {
- line: 57,
- col: 25,
- },
- },
- arms: [
- MatchArm {
- pattern: Constructor(
- "Circle",
- [],
- ),
- guard: None,
- body: Block {
- stmts: [
- ExprStmt {
- expr: Str {
- value: "circle",
- pos: Pos {
- line: 59,
- col: 13,
- },
- },
- pos: Pos {
- line: 59,
- col: 13,
- },
- },
- ],
- pos: Pos {
- line: 59,
- col: 13,
- },
- },
- pos: Pos {
- line: 57,
- col: 13,
- },
- },
- MatchArm {
- pattern: Constructor(
- "Square",
- [],
- ),
- guard: None,
- body: Block {
- stmts: [
- ExprStmt {
- expr: Str {
- value: "square",
- pos: Pos {
- line: 61,
- col: 13,
- },
- },
- pos: Pos {
- line: 61,
- col: 13,
- },
- },
- ],
- pos: Pos {
- line: 61,
- col: 13,
- },
- },
- pos: Pos {
- line: 57,
- col: 13,
- },
- },
- ],
- pos: Pos {
- line: 57,
- col: 13,
- },
- },
- ),
- pos: Pos {
- line: 57,
- col: 5,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 62,
- col: 5,
- },
- },
- args: [
- Var {
- name: "r",
- pos: Pos {
- line: 62,
- col: 11,
- },
- },
- ],
- pos: Pos {
- line: 62,
- col: 10,
- },
- },
- pos: Pos {
- line: 62,
- col: 10,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 63,
- col: 5,
- },
- },
- args: [
- Call {
- callee: Field {
- obj: Var {
- name: "p",
- pos: Pos {
- line: 63,
- col: 11,
- },
- },
- name: "area",
- pos: Pos {
- line: 63,
- col: 12,
- },
- },
- args: [],
- pos: Pos {
- line: 63,
- col: 17,
- },
- },
- ],
- pos: Pos {
- line: 63,
- col: 10,
- },
- },
- pos: Pos {
- line: 63,
- col: 10,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 64,
- col: 5,
- },
- },
- args: [
- Call {
- callee: Var {
- name: "greet",
- pos: Pos {
- line: 64,
- col: 11,
- },
- },
- args: [
- Str {
- value: "px",
- pos: Pos {
- line: 64,
- col: 17,
- },
- },
- ],
- pos: Pos {
- line: 64,
- col: 16,
- },
- },
- ],
- pos: Pos {
- line: 64,
- col: 10,
- },
- },
- pos: Pos {
- line: 64,
- col: 10,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 65,
- col: 5,
- },
- },
- args: [
- Call {
- callee: Var {
- name: "greet",
- pos: Pos {
- line: 65,
- col: 11,
- },
- },
- args: [
- Str {
- value: "px",
- pos: Pos {
- line: 65,
- col: 17,
- },
- },
- Int {
- value: 3,
- pos: Pos {
- line: 65,
- col: 23,
- },
- },
- ],
- pos: Pos {
- line: 65,
- col: 16,
- },
- },
- ],
- pos: Pos {
- line: 65,
- col: 10,
- },
- },
- pos: Pos {
- line: 65,
- col: 10,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 66,
- col: 5,
- },
- },
- args: [
- Call {
- callee: Var {
- name: "process",
- pos: Pos {
- line: 66,
- col: 11,
- },
- },
- args: [
- List {
- items: [
- Int {
- value: 1,
- pos: Pos {
- line: 66,
- col: 20,
- },
- },
- Unary {
- op: Neg,
- operand: Int {
- value: 2,
- pos: Pos {
- line: 66,
- col: 24,
- },
- },
- pos: Pos {
- line: 66,
- col: 23,
- },
- },
- Int {
- value: 3,
- pos: Pos {
- line: 66,
- col: 27,
- },
- },
- Int {
- value: 4,
- pos: Pos {
- line: 66,
- col: 30,
- },
- },
- ],
- pos: Pos {
- line: 66,
- col: 19,
- },
- },
- ],
- pos: Pos {
- line: 66,
- col: 18,
- },
- },
- ],
- pos: Pos {
- line: 66,
- col: 10,
- },
- },
- pos: Pos {
- line: 66,
- col: 10,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 67,
- col: 5,
- },
- },
- args: [
- Call {
- callee: Var {
- name: "use_ops",
- pos: Pos {
- line: 67,
- col: 11,
- },
- },
- args: [
- Int {
- value: 5,
- pos: Pos {
- line: 67,
- col: 19,
- },
- },
- Int {
- value: 6,
- pos: Pos {
- line: 67,
- col: 22,
- },
- },
- ],
- pos: Pos {
- line: 67,
- col: 18,
- },
- },
- ],
- pos: Pos {
- line: 67,
- col: 10,
- },
- },
- pos: Pos {
- line: 67,
- col: 10,
- },
- },
- VarDecl {
- kind: Let,
- name: "add",
- ty: None,
- value: Some(
- Closure {
- params: [
- Param {
- name: "a",
- ty: None,
- default: None,
- pos: Pos {
- line: 68,
- col: 18,
- },
- },
- Param {
- name: "b",
- ty: None,
- default: None,
- pos: Pos {
- line: 68,
- col: 21,
- },
- },
- ],
- ret_ty: None,
- body: Block {
- stmts: [
- ExprStmt {
- expr: Binary {
- op: Add,
- left: Var {
- name: "a",
- pos: Pos {
- line: 68,
- col: 26,
- },
- },
- right: Var {
- name: "b",
- pos: Pos {
- line: 68,
- col: 30,
- },
- },
- pos: Pos {
- line: 68,
- col: 28,
- },
- },
- pos: Pos {
- line: 68,
- col: 28,
- },
- },
- ],
- pos: Pos {
- line: 68,
- col: 24,
- },
- },
- captures: [],
- pos: Pos {
- line: 68,
- col: 15,
- },
- },
- ),
- pos: Pos {
- line: 68,
- col: 5,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 69,
- col: 5,
- },
- },
- args: [
- Call {
- callee: Var {
- name: "add",
- pos: Pos {
- line: 69,
- col: 11,
- },
- },
- args: [
- Int {
- value: 1,
- pos: Pos {
- line: 69,
- col: 15,
- },
- },
- Int {
- value: 2,
- pos: Pos {
- line: 69,
- col: 18,
- },
- },
- ],
- pos: Pos {
- line: 69,
- col: 14,
- },
- },
- ],
- pos: Pos {
- line: 69,
- col: 10,
- },
- },
- pos: Pos {
- line: 69,
- col: 10,
- },
- },
- VarDecl {
- kind: Let,
- name: "sq",
- ty: None,
- value: Some(
- Closure {
- params: [
- Param {
- name: "x",
- ty: None,
- default: None,
- pos: Pos {
- line: 70,
- col: 17,
- },
- },
- ],
- ret_ty: None,
- body: Binary {
- op: Mul,
- left: Var {
- name: "x",
- pos: Pos {
- line: 70,
- col: 21,
- },
- },
- right: Var {
- name: "x",
- pos: Pos {
- line: 70,
- col: 25,
- },
- },
- pos: Pos {
- line: 70,
- col: 23,
- },
- },
- captures: [],
- pos: Pos {
- line: 70,
- col: 14,
- },
- },
- ),
- pos: Pos {
- line: 70,
- col: 5,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 71,
- col: 5,
- },
- },
- args: [
- Call {
- callee: Var {
- name: "sq",
- pos: Pos {
- line: 71,
- col: 11,
- },
- },
- args: [
- Int {
- value: 9,
- pos: Pos {
- line: 71,
- col: 14,
- },
- },
- ],
- pos: Pos {
- line: 71,
- col: 13,
- },
- },
- ],
- pos: Pos {
- line: 71,
- col: 10,
- },
- },
- pos: Pos {
- line: 71,
- col: 10,
- },
- },
- VarDecl {
- kind: Let,
- name: "gen",
- ty: None,
- value: Some(
- GenExp {
- expr: Binary {
- op: Mul,
- left: Var {
- name: "i",
- pos: Pos {
- line: 72,
- col: 16,
- },
- },
- right: Var {
- name: "i",
- pos: Pos {
- line: 72,
- col: 20,
- },
- },
- pos: Pos {
- line: 72,
- col: 18,
- },
- },
- clauses: [
- CompClause {
- vars: [
- "i",
- ],
- iterable: Call {
- callee: Var {
- name: "range",
- pos: Pos {
- line: 72,
- col: 31,
- },
- },
- args: [
- Int {
- value: 4,
- pos: Pos {
- line: 72,
- col: 37,
- },
- },
- ],
- pos: Pos {
- line: 72,
- col: 36,
- },
- },
- },
- ],
- cond: None,
- pos: Pos {
- line: 72,
- col: 15,
- },
- },
- ),
- pos: Pos {
- line: 72,
- col: 5,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 73,
- col: 5,
- },
- },
- args: [
- Call {
- callee: Var {
- name: "list",
- pos: Pos {
- line: 73,
- col: 11,
- },
- },
- args: [
- Var {
- name: "gen",
- pos: Pos {
- line: 73,
- col: 16,
- },
- },
- ],
- pos: Pos {
- line: 73,
- col: 15,
- },
- },
- ],
- pos: Pos {
- line: 73,
- col: 10,
- },
- },
- pos: Pos {
- line: 73,
- col: 10,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 74,
- col: 5,
- },
- },
- args: [
- Int {
- value: 31,
- pos: Pos {
- line: 74,
- col: 11,
- },
- },
- ],
- pos: Pos {
- line: 74,
- col: 10,
- },
- },
- pos: Pos {
- line: 74,
- col: 10,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 75,
- col: 5,
- },
- },
- args: [
- Int {
- value: 10,
- pos: Pos {
- line: 75,
- col: 11,
- },
- },
- ],
- pos: Pos {
- line: 75,
- col: 10,
- },
- },
- pos: Pos {
- line: 75,
- col: 10,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 76,
- col: 5,
- },
- },
- args: [
- Float {
- value: 250.0,
- pos: Pos {
- line: 76,
- col: 11,
- },
- },
- ],
- pos: Pos {
- line: 76,
- col: 10,
- },
- },
- pos: Pos {
- line: 76,
- col: 10,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 77,
- col: 5,
- },
- },
- args: [
- Unary {
- op: Neg,
- operand: Int {
- value: 7,
- pos: Pos {
- line: 77,
- col: 12,
- },
- },
- pos: Pos {
- line: 77,
- col: 11,
- },
- },
- ],
- pos: Pos {
- line: 77,
- col: 10,
- },
- },
- pos: Pos {
- line: 77,
- col: 10,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 78,
- col: 5,
- },
- },
- args: [
- Unary {
- op: Not,
- operand: Bool {
- value: true,
- pos: Pos {
- line: 78,
- col: 15,
- },
- },
- pos: Pos {
- line: 78,
- col: 11,
- },
- },
- ],
- pos: Pos {
- line: 78,
- col: 10,
- },
- },
- pos: Pos {
- line: 78,
- col: 10,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 79,
- col: 5,
- },
- },
- args: [
- Binary {
- op: IntDiv,
- left: Int {
- value: 5,
- pos: Pos {
- line: 79,
- col: 11,
- },
- },
- right: Int {
- value: 2,
- pos: Pos {
- line: 79,
- col: 16,
- },
- },
- pos: Pos {
- line: 79,
- col: 13,
- },
- },
- ],
- pos: Pos {
- line: 79,
- col: 10,
- },
- },
- pos: Pos {
- line: 79,
- col: 10,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 80,
- col: 5,
- },
- },
- args: [
- Binary {
- op: Pow,
- left: Int {
- value: 2,
- pos: Pos {
- line: 80,
- col: 11,
- },
- },
- right: Int {
- value: 8,
- pos: Pos {
- line: 80,
- col: 16,
- },
- },
- pos: Pos {
- line: 80,
- col: 13,
- },
- },
- ],
- pos: Pos {
- line: 80,
- col: 10,
- },
- },
- pos: Pos {
- line: 80,
- col: 10,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 81,
- col: 5,
- },
- },
- args: [
- Binary {
- op: Shl,
- left: Int {
- value: 1,
- pos: Pos {
- line: 81,
- col: 11,
- },
- },
- right: Int {
- value: 4,
- pos: Pos {
- line: 81,
- col: 16,
- },
- },
- pos: Pos {
- line: 81,
- col: 13,
- },
- },
- ],
- pos: Pos {
- line: 81,
- col: 10,
- },
- },
- pos: Pos {
- line: 81,
- col: 10,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 82,
- col: 5,
- },
- },
- args: [
- Binary {
- op: Shr,
- left: Int {
- value: 255,
- pos: Pos {
- line: 82,
- col: 11,
- },
- },
- right: Int {
- value: 2,
- pos: Pos {
- line: 82,
- col: 18,
- },
- },
- pos: Pos {
- line: 82,
- col: 15,
- },
- },
- ],
- pos: Pos {
- line: 82,
- col: 10,
- },
- },
- pos: Pos {
- line: 82,
- col: 10,
- },
- },
- ],
- pos: Pos {
- line: 54,
- col: 1,
- },
- },
- ],
+    items: [
+        Import {
+            module: [
+                "std",
+                "collections",
+            ],
+            names: [],
+            pos: Pos {
+                line: 2,
+                col: 1,
+            },
+        },
+        Import {
+            module: [
+                "std",
+                "fs",
+            ],
+            names: [
+                "read_file",
+            ],
+            pos: Pos {
+                line: 3,
+                col: 1,
+            },
+        },
+        VarDecl {
+            kind: Const,
+            name: "MAX_N",
+            ty: None,
+            value: Some(
+                Int {
+                    value: 100,
+                    pos: Pos {
+                        line: 5,
+                        col: 15,
+                    },
+                },
+            ),
+            pos: Pos {
+                line: 5,
+                col: 1,
+            },
+        },
+        EnumDef {
+            name: "Shape",
+            variants: [
+                EnumVariant {
+                    name: "Circle",
+                    fields: [],
+                    pos: Pos {
+                        line: 8,
+                        col: 5,
+                    },
+                },
+                EnumVariant {
+                    name: "Square",
+                    fields: [],
+                    pos: Pos {
+                        line: 9,
+                        col: 5,
+                    },
+                },
+            ],
+            pos: Pos {
+                line: 7,
+                col: 1,
+            },
+        },
+        StructDef {
+            name: "Point",
+            fields: [
+                StructField {
+                    name: "x",
+                    ty: Named(
+                        "int",
+                        Pos {
+                            line: 12,
+                            col: 8,
+                        },
+                    ),
+                    pos: Pos {
+                        line: 12,
+                        col: 5,
+                    },
+                },
+                StructField {
+                    name: "y",
+                    ty: Named(
+                        "int",
+                        Pos {
+                            line: 13,
+                            col: 8,
+                        },
+                    ),
+                    pos: Pos {
+                        line: 13,
+                        col: 5,
+                    },
+                },
+            ],
+            pos: Pos {
+                line: 11,
+                col: 1,
+            },
+            type_params: [],
+        },
+        TraitDef {
+            name: "Area",
+            methods: [
+                FuncDef {
+                    name: "area",
+                    params: [],
+                    ret_ty: Some(
+                        Named(
+                            "float",
+                            Pos {
+                                line: 16,
+                                col: 19,
+                            },
+                        ),
+                    ),
+                    body: [],
+                    pos: Pos {
+                        line: 16,
+                        col: 5,
+                    },
+                    type_params: [],
+                },
+            ],
+            pos: Pos {
+                line: 15,
+                col: 1,
+            },
+        },
+        ImplDef {
+            type_name: "Point",
+            trait_name: Some(
+                "Area",
+            ),
+            methods: [
+                FuncDef {
+                    name: "area",
+                    params: [],
+                    ret_ty: Some(
+                        Named(
+                            "float",
+                            Pos {
+                                line: 19,
+                                col: 19,
+                            },
+                        ),
+                    ),
+                    body: [
+                        Return {
+                            value: Some(
+                                Float {
+                                    value: 1.5,
+                                    pos: Pos {
+                                        line: 20,
+                                        col: 16,
+                                    },
+                                },
+                            ),
+                            pos: Pos {
+                                line: 20,
+                                col: 9,
+                            },
+                        },
+                    ],
+                    pos: Pos {
+                        line: 19,
+                        col: 5,
+                    },
+                    type_params: [],
+                },
+            ],
+            pos: Pos {
+                line: 18,
+                col: 1,
+            },
+        },
+        FuncDef {
+            name: "greet",
+            params: [
+                Param {
+                    name: "name",
+                    ty: Some(
+                        Named(
+                            "str",
+                            Pos {
+                                line: 22,
+                                col: 17,
+                            },
+                        ),
+                    ),
+                    default: None,
+                    pos: Pos {
+                        line: 22,
+                        col: 11,
+                    },
+                },
+                Param {
+                    name: "times",
+                    ty: Some(
+                        Named(
+                            "int",
+                            Pos {
+                                line: 22,
+                                col: 29,
+                            },
+                        ),
+                    ),
+                    default: Some(
+                        Int {
+                            value: 2,
+                            pos: Pos {
+                                line: 22,
+                                col: 35,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 22,
+                        col: 22,
+                    },
+                },
+            ],
+            ret_ty: Some(
+                Named(
+                    "str",
+                    Pos {
+                        line: 22,
+                        col: 41,
+                    },
+                ),
+            ),
+            body: [
+                VarDecl {
+                    kind: Mut,
+                    name: "msg",
+                    ty: None,
+                    value: Some(
+                        Binary {
+                            op: Add,
+                            left: Binary {
+                                op: Add,
+                                left: Str {
+                                    value: "hi ",
+                                    pos: Pos {
+                                        line: 23,
+                                        col: 19,
+                                    },
+                                },
+                                right: Call {
+                                    callee: Var {
+                                        name: "str",
+                                        pos: Pos {
+                                            line: 23,
+                                            col: 19,
+                                        },
+                                    },
+                                    args: [
+                                        Var {
+                                            name: "name",
+                                            pos: Pos {
+                                                line: 23,
+                                                col: 25,
+                                            },
+                                        },
+                                    ],
+                                    pos: Pos {
+                                        line: 23,
+                                        col: 19,
+                                    },
+                                },
+                                pos: Pos {
+                                    line: 23,
+                                    col: 19,
+                                },
+                            },
+                            right: Str {
+                                value: "",
+                                pos: Pos {
+                                    line: 23,
+                                    col: 19,
+                                },
+                            },
+                            pos: Pos {
+                                line: 23,
+                                col: 19,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 23,
+                        col: 5,
+                    },
+                },
+                VarDecl {
+                    kind: Mut,
+                    name: "i",
+                    ty: None,
+                    value: Some(
+                        Int {
+                            value: 0,
+                            pos: Pos {
+                                line: 24,
+                                col: 16,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 24,
+                        col: 5,
+                    },
+                },
+                While {
+                    cond: Binary {
+                        op: Lt,
+                        left: Var {
+                            name: "i",
+                            pos: Pos {
+                                line: 25,
+                                col: 11,
+                            },
+                        },
+                        right: Var {
+                            name: "times",
+                            pos: Pos {
+                                line: 25,
+                                col: 15,
+                            },
+                        },
+                        pos: Pos {
+                            line: 25,
+                            col: 13,
+                        },
+                    },
+                    body: [
+                        Assign {
+                            target: Var {
+                                name: "msg",
+                                pos: Pos {
+                                    line: 26,
+                                    col: 9,
+                                },
+                            },
+                            op: Plus,
+                            value: Str {
+                                value: "!",
+                                pos: Pos {
+                                    line: 26,
+                                    col: 16,
+                                },
+                            },
+                            pos: Pos {
+                                line: 26,
+                                col: 9,
+                            },
+                        },
+                        Assign {
+                            target: Var {
+                                name: "i",
+                                pos: Pos {
+                                    line: 27,
+                                    col: 9,
+                                },
+                            },
+                            op: Plus,
+                            value: Int {
+                                value: 1,
+                                pos: Pos {
+                                    line: 27,
+                                    col: 14,
+                                },
+                            },
+                            pos: Pos {
+                                line: 27,
+                                col: 9,
+                            },
+                        },
+                    ],
+                    pos: Pos {
+                        line: 25,
+                        col: 5,
+                    },
+                },
+                Return {
+                    value: Some(
+                        Var {
+                            name: "msg",
+                            pos: Pos {
+                                line: 28,
+                                col: 12,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 28,
+                        col: 5,
+                    },
+                },
+            ],
+            pos: Pos {
+                line: 22,
+                col: 1,
+            },
+            type_params: [],
+        },
+        FuncDef {
+            name: "process",
+            params: [
+                Param {
+                    name: "xs",
+                    ty: None,
+                    default: None,
+                    pos: Pos {
+                        line: 30,
+                        col: 13,
+                    },
+                },
+            ],
+            ret_ty: None,
+            body: [
+                VarDecl {
+                    kind: Let,
+                    name: "doubled",
+                    ty: None,
+                    value: Some(
+                        ListComp {
+                            expr: Binary {
+                                op: Mul,
+                                left: Var {
+                                    name: "x",
+                                    pos: Pos {
+                                        line: 31,
+                                        col: 20,
+                                    },
+                                },
+                                right: Int {
+                                    value: 2,
+                                    pos: Pos {
+                                        line: 31,
+                                        col: 24,
+                                    },
+                                },
+                                pos: Pos {
+                                    line: 31,
+                                    col: 22,
+                                },
+                            },
+                            clauses: [
+                                CompClause {
+                                    vars: [
+                                        "x",
+                                    ],
+                                    iterable: Var {
+                                        name: "xs",
+                                        pos: Pos {
+                                            line: 31,
+                                            col: 35,
+                                        },
+                                    },
+                                },
+                            ],
+                            cond: Some(
+                                Binary {
+                                    op: Gt,
+                                    left: Var {
+                                        name: "x",
+                                        pos: Pos {
+                                            line: 31,
+                                            col: 41,
+                                        },
+                                    },
+                                    right: Int {
+                                        value: 0,
+                                        pos: Pos {
+                                            line: 31,
+                                            col: 45,
+                                        },
+                                    },
+                                    pos: Pos {
+                                        line: 31,
+                                        col: 43,
+                                    },
+                                },
+                            ),
+                            pos: Pos {
+                                line: 31,
+                                col: 19,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 31,
+                        col: 5,
+                    },
+                },
+                VarDecl {
+                    kind: Let,
+                    name: "odds",
+                    ty: None,
+                    value: Some(
+                        ListComp {
+                            expr: Var {
+                                name: "x",
+                                pos: Pos {
+                                    line: 32,
+                                    col: 17,
+                                },
+                            },
+                            clauses: [
+                                CompClause {
+                                    vars: [
+                                        "x",
+                                    ],
+                                    iterable: Call {
+                                        callee: Var {
+                                            name: "range",
+                                            pos: Pos {
+                                                line: 32,
+                                                col: 28,
+                                            },
+                                        },
+                                        args: [
+                                            Int {
+                                                value: 10,
+                                                pos: Pos {
+                                                    line: 32,
+                                                    col: 34,
+                                                },
+                                            },
+                                        ],
+                                        pos: Pos {
+                                            line: 32,
+                                            col: 33,
+                                        },
+                                    },
+                                },
+                            ],
+                            cond: Some(
+                                Binary {
+                                    op: And,
+                                    left: Binary {
+                                        op: Eq,
+                                        left: Binary {
+                                            op: Mod,
+                                            left: Var {
+                                                name: "x",
+                                                pos: Pos {
+                                                    line: 32,
+                                                    col: 41,
+                                                },
+                                            },
+                                            right: Int {
+                                                value: 2,
+                                                pos: Pos {
+                                                    line: 32,
+                                                    col: 45,
+                                                },
+                                            },
+                                            pos: Pos {
+                                                line: 32,
+                                                col: 43,
+                                            },
+                                        },
+                                        right: Int {
+                                            value: 1,
+                                            pos: Pos {
+                                                line: 32,
+                                                col: 50,
+                                            },
+                                        },
+                                        pos: Pos {
+                                            line: 32,
+                                            col: 47,
+                                        },
+                                    },
+                                    right: Binary {
+                                        op: Ne,
+                                        left: Var {
+                                            name: "x",
+                                            pos: Pos {
+                                                line: 32,
+                                                col: 55,
+                                            },
+                                        },
+                                        right: Int {
+                                            value: 5,
+                                            pos: Pos {
+                                                line: 32,
+                                                col: 60,
+                                            },
+                                        },
+                                        pos: Pos {
+                                            line: 32,
+                                            col: 57,
+                                        },
+                                    },
+                                    pos: Pos {
+                                        line: 32,
+                                        col: 47,
+                                    },
+                                },
+                            ),
+                            pos: Pos {
+                                line: 32,
+                                col: 16,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 32,
+                        col: 5,
+                    },
+                },
+                VarDecl {
+                    kind: Let,
+                    name: "pairs",
+                    ty: None,
+                    value: Some(
+                        DictComp {
+                            key: Call {
+                                callee: Var {
+                                    name: "str",
+                                    pos: Pos {
+                                        line: 33,
+                                        col: 18,
+                                    },
+                                },
+                                args: [
+                                    Var {
+                                        name: "k",
+                                        pos: Pos {
+                                            line: 33,
+                                            col: 22,
+                                        },
+                                    },
+                                ],
+                                pos: Pos {
+                                    line: 33,
+                                    col: 21,
+                                },
+                            },
+                            value: Var {
+                                name: "k",
+                                pos: Pos {
+                                    line: 33,
+                                    col: 26,
+                                },
+                            },
+                            clauses: [
+                                CompClause {
+                                    vars: [
+                                        "k",
+                                        "v",
+                                    ],
+                                    iterable: Call {
+                                        callee: Field {
+                                            obj: Var {
+                                                name: "xs",
+                                                pos: Pos {
+                                                    line: 33,
+                                                    col: 40,
+                                                },
+                                            },
+                                            name: "items",
+                                            pos: Pos {
+                                                line: 33,
+                                                col: 42,
+                                            },
+                                        },
+                                        args: [],
+                                        pos: Pos {
+                                            line: 33,
+                                            col: 48,
+                                        },
+                                    },
+                                },
+                            ],
+                            cond: None,
+                            pos: Pos {
+                                line: 33,
+                                col: 17,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 33,
+                        col: 5,
+                    },
+                },
+                VarDecl {
+                    kind: Let,
+                    name: "first",
+                    ty: None,
+                    value: Some(
+                        Index {
+                            obj: Var {
+                                name: "xs",
+                                pos: Pos {
+                                    line: 34,
+                                    col: 17,
+                                },
+                            },
+                            index: Int {
+                                value: 0,
+                                pos: Pos {
+                                    line: 34,
+                                    col: 20,
+                                },
+                            },
+                            pos: Pos {
+                                line: 34,
+                                col: 19,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 34,
+                        col: 5,
+                    },
+                },
+                VarDecl {
+                    kind: Let,
+                    name: "last",
+                    ty: None,
+                    value: Some(
+                        Index {
+                            obj: Var {
+                                name: "xs",
+                                pos: Pos {
+                                    line: 35,
+                                    col: 16,
+                                },
+                            },
+                            index: Unary {
+                                op: Neg,
+                                operand: Int {
+                                    value: 1,
+                                    pos: Pos {
+                                        line: 35,
+                                        col: 20,
+                                    },
+                                },
+                                pos: Pos {
+                                    line: 35,
+                                    col: 19,
+                                },
+                            },
+                            pos: Pos {
+                                line: 35,
+                                col: 18,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 35,
+                        col: 5,
+                    },
+                },
+                VarDecl {
+                    kind: Let,
+                    name: "mid",
+                    ty: None,
+                    value: Some(
+                        Slice {
+                            obj: Var {
+                                name: "xs",
+                                pos: Pos {
+                                    line: 36,
+                                    col: 15,
+                                },
+                            },
+                            start: Some(
+                                Int {
+                                    value: 1,
+                                    pos: Pos {
+                                        line: 36,
+                                        col: 18,
+                                    },
+                                },
+                            ),
+                            end: Some(
+                                Int {
+                                    value: 3,
+                                    pos: Pos {
+                                        line: 36,
+                                        col: 20,
+                                    },
+                                },
+                            ),
+                            step: None,
+                            pos: Pos {
+                                line: 36,
+                                col: 17,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 36,
+                        col: 5,
+                    },
+                },
+                VarDecl {
+                    kind: Let,
+                    name: "all",
+                    ty: None,
+                    value: Some(
+                        Slice {
+                            obj: Var {
+                                name: "xs",
+                                pos: Pos {
+                                    line: 37,
+                                    col: 15,
+                                },
+                            },
+                            start: None,
+                            end: None,
+                            step: None,
+                            pos: Pos {
+                                line: 37,
+                                col: 17,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 37,
+                        col: 5,
+                    },
+                },
+                VarDecl {
+                    kind: Let,
+                    name: "rev",
+                    ty: None,
+                    value: Some(
+                        Slice {
+                            obj: Var {
+                                name: "xs",
+                                pos: Pos {
+                                    line: 38,
+                                    col: 15,
+                                },
+                            },
+                            start: None,
+                            end: None,
+                            step: Some(
+                                Unary {
+                                    op: Neg,
+                                    operand: Int {
+                                        value: 1,
+                                        pos: Pos {
+                                            line: 38,
+                                            col: 21,
+                                        },
+                                    },
+                                    pos: Pos {
+                                        line: 38,
+                                        col: 20,
+                                    },
+                                },
+                            ),
+                            pos: Pos {
+                                line: 38,
+                                col: 17,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 38,
+                        col: 5,
+                    },
+                },
+                VarDecl {
+                    kind: Let,
+                    name: "steps",
+                    ty: None,
+                    value: Some(
+                        Slice {
+                            obj: Var {
+                                name: "xs",
+                                pos: Pos {
+                                    line: 39,
+                                    col: 17,
+                                },
+                            },
+                            start: None,
+                            end: None,
+                            step: Some(
+                                Int {
+                                    value: 2,
+                                    pos: Pos {
+                                        line: 39,
+                                        col: 22,
+                                    },
+                                },
+                            ),
+                            pos: Pos {
+                                line: 39,
+                                col: 19,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 39,
+                        col: 5,
+                    },
+                },
+                Return {
+                    value: Some(
+                        List {
+                            items: [
+                                Var {
+                                    name: "doubled",
+                                    pos: Pos {
+                                        line: 40,
+                                        col: 13,
+                                    },
+                                },
+                                Var {
+                                    name: "odds",
+                                    pos: Pos {
+                                        line: 40,
+                                        col: 22,
+                                    },
+                                },
+                                Var {
+                                    name: "pairs",
+                                    pos: Pos {
+                                        line: 40,
+                                        col: 28,
+                                    },
+                                },
+                                Var {
+                                    name: "first",
+                                    pos: Pos {
+                                        line: 40,
+                                        col: 35,
+                                    },
+                                },
+                                Var {
+                                    name: "last",
+                                    pos: Pos {
+                                        line: 40,
+                                        col: 42,
+                                    },
+                                },
+                                Var {
+                                    name: "mid",
+                                    pos: Pos {
+                                        line: 40,
+                                        col: 48,
+                                    },
+                                },
+                                Var {
+                                    name: "all",
+                                    pos: Pos {
+                                        line: 40,
+                                        col: 53,
+                                    },
+                                },
+                                Var {
+                                    name: "rev",
+                                    pos: Pos {
+                                        line: 40,
+                                        col: 58,
+                                    },
+                                },
+                                Var {
+                                    name: "steps",
+                                    pos: Pos {
+                                        line: 40,
+                                        col: 63,
+                                    },
+                                },
+                            ],
+                            pos: Pos {
+                                line: 40,
+                                col: 12,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 40,
+                        col: 5,
+                    },
+                },
+            ],
+            pos: Pos {
+                line: 30,
+                col: 1,
+            },
+            type_params: [],
+        },
+        FuncDef {
+            name: "use_ops",
+            params: [
+                Param {
+                    name: "a",
+                    ty: None,
+                    default: None,
+                    pos: Pos {
+                        line: 42,
+                        col: 13,
+                    },
+                },
+                Param {
+                    name: "b",
+                    ty: None,
+                    default: None,
+                    pos: Pos {
+                        line: 42,
+                        col: 16,
+                    },
+                },
+            ],
+            ret_ty: None,
+            body: [
+                VarDecl {
+                    kind: Let,
+                    name: "pipe",
+                    ty: None,
+                    value: Some(
+                        Pipe {
+                            value: Var {
+                                name: "a",
+                                pos: Pos {
+                                    line: 43,
+                                    col: 16,
+                                },
+                            },
+                            func: Var {
+                                name: "double",
+                                pos: Pos {
+                                    line: 43,
+                                    col: 21,
+                                },
+                            },
+                            pos: Pos {
+                                line: 43,
+                                col: 18,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 43,
+                        col: 5,
+                    },
+                },
+                VarDecl {
+                    kind: Let,
+                    name: "nc",
+                    ty: None,
+                    value: Some(
+                        NullCoalesce {
+                            left: Var {
+                                name: "a",
+                                pos: Pos {
+                                    line: 44,
+                                    col: 14,
+                                },
+                            },
+                            right: Int {
+                                value: 42,
+                                pos: Pos {
+                                    line: 44,
+                                    col: 19,
+                                },
+                            },
+                            pos: Pos {
+                                line: 44,
+                                col: 16,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 44,
+                        col: 5,
+                    },
+                },
+                VarDecl {
+                    kind: Let,
+                    name: "opt",
+                    ty: None,
+                    value: Some(
+                        OptionalField {
+                            obj: Var {
+                                name: "a",
+                                pos: Pos {
+                                    line: 45,
+                                    col: 15,
+                                },
+                            },
+                            name: "name",
+                            pos: Pos {
+                                line: 45,
+                                col: 16,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 45,
+                        col: 5,
+                    },
+                },
+                VarDecl {
+                    kind: Let,
+                    name: "forced",
+                    ty: None,
+                    value: Some(
+                        ForceUnwrap {
+                            expr: Var {
+                                name: "a",
+                                pos: Pos {
+                                    line: 46,
+                                    col: 18,
+                                },
+                            },
+                            pos: Pos {
+                                line: 46,
+                                col: 19,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 46,
+                        col: 5,
+                    },
+                },
+                VarDecl {
+                    kind: Let,
+                    name: "prop",
+                    ty: None,
+                    value: Some(
+                        Field {
+                            obj: Field {
+                                obj: ForceUnwrap {
+                                    expr: Var {
+                                        name: "a",
+                                        pos: Pos {
+                                            line: 47,
+                                            col: 16,
+                                        },
+                                    },
+                                    pos: Pos {
+                                        line: 47,
+                                        col: 17,
+                                    },
+                                },
+                                name: "b",
+                                pos: Pos {
+                                    line: 47,
+                                    col: 18,
+                                },
+                            },
+                            name: "c",
+                            pos: Pos {
+                                line: 47,
+                                col: 20,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 47,
+                        col: 5,
+                    },
+                },
+                VarDecl {
+                    kind: Let,
+                    name: "idx",
+                    ty: None,
+                    value: Some(
+                        Index {
+                            obj: Index {
+                                obj: Var {
+                                    name: "a",
+                                    pos: Pos {
+                                        line: 48,
+                                        col: 15,
+                                    },
+                                },
+                                index: Int {
+                                    value: 0,
+                                    pos: Pos {
+                                        line: 48,
+                                        col: 17,
+                                    },
+                                },
+                                pos: Pos {
+                                    line: 48,
+                                    col: 16,
+                                },
+                            },
+                            index: Int {
+                                value: 1,
+                                pos: Pos {
+                                    line: 48,
+                                    col: 20,
+                                },
+                            },
+                            pos: Pos {
+                                line: 48,
+                                col: 19,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 48,
+                        col: 5,
+                    },
+                },
+                Return {
+                    value: Some(
+                        Binary {
+                            op: Add,
+                            left: Binary {
+                                op: Add,
+                                left: Binary {
+                                    op: Add,
+                                    left: Binary {
+                                        op: Add,
+                                        left: Binary {
+                                            op: Add,
+                                            left: Var {
+                                                name: "pipe",
+                                                pos: Pos {
+                                                    line: 49,
+                                                    col: 12,
+                                                },
+                                            },
+                                            right: Var {
+                                                name: "nc",
+                                                pos: Pos {
+                                                    line: 49,
+                                                    col: 19,
+                                                },
+                                            },
+                                            pos: Pos {
+                                                line: 49,
+                                                col: 17,
+                                            },
+                                        },
+                                        right: Call {
+                                            callee: Var {
+                                                name: "len",
+                                                pos: Pos {
+                                                    line: 49,
+                                                    col: 24,
+                                                },
+                                            },
+                                            args: [
+                                                Var {
+                                                    name: "opt",
+                                                    pos: Pos {
+                                                        line: 49,
+                                                        col: 28,
+                                                    },
+                                                },
+                                            ],
+                                            pos: Pos {
+                                                line: 49,
+                                                col: 27,
+                                            },
+                                        },
+                                        pos: Pos {
+                                            line: 49,
+                                            col: 22,
+                                        },
+                                    },
+                                    right: Var {
+                                        name: "forced",
+                                        pos: Pos {
+                                            line: 49,
+                                            col: 35,
+                                        },
+                                    },
+                                    pos: Pos {
+                                        line: 49,
+                                        col: 33,
+                                    },
+                                },
+                                right: Var {
+                                    name: "prop",
+                                    pos: Pos {
+                                        line: 49,
+                                        col: 44,
+                                    },
+                                },
+                                pos: Pos {
+                                    line: 49,
+                                    col: 42,
+                                },
+                            },
+                            right: Var {
+                                name: "idx",
+                                pos: Pos {
+                                    line: 49,
+                                    col: 51,
+                                },
+                            },
+                            pos: Pos {
+                                line: 49,
+                                col: 49,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 49,
+                        col: 5,
+                    },
+                },
+            ],
+            pos: Pos {
+                line: 42,
+                col: 1,
+            },
+            type_params: [],
+        },
+        FuncDef {
+            name: "double",
+            params: [
+                Param {
+                    name: "x",
+                    ty: None,
+                    default: None,
+                    pos: Pos {
+                        line: 51,
+                        col: 12,
+                    },
+                },
+            ],
+            ret_ty: None,
+            body: [
+                Return {
+                    value: Some(
+                        Binary {
+                            op: Mul,
+                            left: Var {
+                                name: "x",
+                                pos: Pos {
+                                    line: 52,
+                                    col: 12,
+                                },
+                            },
+                            right: Int {
+                                value: 2,
+                                pos: Pos {
+                                    line: 52,
+                                    col: 16,
+                                },
+                            },
+                            pos: Pos {
+                                line: 52,
+                                col: 14,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 52,
+                        col: 5,
+                    },
+                },
+            ],
+            pos: Pos {
+                line: 51,
+                col: 1,
+            },
+            type_params: [],
+        },
+        FuncDef {
+            name: "main",
+            params: [],
+            ret_ty: None,
+            body: [
+                VarDecl {
+                    kind: Let,
+                    name: "shapes",
+                    ty: None,
+                    value: Some(
+                        List {
+                            items: [
+                                Field {
+                                    obj: Var {
+                                        name: "Shape",
+                                        pos: Pos {
+                                            line: 55,
+                                            col: 19,
+                                        },
+                                    },
+                                    name: "Circle",
+                                    pos: Pos {
+                                        line: 55,
+                                        col: 24,
+                                    },
+                                },
+                                Field {
+                                    obj: Var {
+                                        name: "Shape",
+                                        pos: Pos {
+                                            line: 55,
+                                            col: 33,
+                                        },
+                                    },
+                                    name: "Square",
+                                    pos: Pos {
+                                        line: 55,
+                                        col: 38,
+                                    },
+                                },
+                            ],
+                            pos: Pos {
+                                line: 55,
+                                col: 18,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 55,
+                        col: 5,
+                    },
+                },
+                VarDecl {
+                    kind: Let,
+                    name: "p",
+                    ty: None,
+                    value: Some(
+                        Call {
+                            callee: Var {
+                                name: "Point",
+                                pos: Pos {
+                                    line: 56,
+                                    col: 13,
+                                },
+                            },
+                            args: [
+                                Int {
+                                    value: 3,
+                                    pos: Pos {
+                                        line: 56,
+                                        col: 19,
+                                    },
+                                },
+                                Int {
+                                    value: 4,
+                                    pos: Pos {
+                                        line: 56,
+                                        col: 22,
+                                    },
+                                },
+                            ],
+                            pos: Pos {
+                                line: 56,
+                                col: 18,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 56,
+                        col: 5,
+                    },
+                },
+                VarDecl {
+                    kind: Let,
+                    name: "r",
+                    ty: None,
+                    value: Some(
+                        Match {
+                            subject: Index {
+                                obj: Var {
+                                    name: "shapes",
+                                    pos: Pos {
+                                        line: 57,
+                                        col: 19,
+                                    },
+                                },
+                                index: Int {
+                                    value: 0,
+                                    pos: Pos {
+                                        line: 57,
+                                        col: 26,
+                                    },
+                                },
+                                pos: Pos {
+                                    line: 57,
+                                    col: 25,
+                                },
+                            },
+                            arms: [
+                                MatchArm {
+                                    pattern: Constructor(
+                                        "Circle",
+                                        [],
+                                    ),
+                                    guard: None,
+                                    body: Block {
+                                        stmts: [
+                                            ExprStmt {
+                                                expr: Str {
+                                                    value: "circle",
+                                                    pos: Pos {
+                                                        line: 59,
+                                                        col: 13,
+                                                    },
+                                                },
+                                                pos: Pos {
+                                                    line: 59,
+                                                    col: 13,
+                                                },
+                                            },
+                                        ],
+                                        pos: Pos {
+                                            line: 59,
+                                            col: 13,
+                                        },
+                                    },
+                                    pos: Pos {
+                                        line: 57,
+                                        col: 13,
+                                    },
+                                },
+                                MatchArm {
+                                    pattern: Constructor(
+                                        "Square",
+                                        [],
+                                    ),
+                                    guard: None,
+                                    body: Block {
+                                        stmts: [
+                                            ExprStmt {
+                                                expr: Str {
+                                                    value: "square",
+                                                    pos: Pos {
+                                                        line: 61,
+                                                        col: 13,
+                                                    },
+                                                },
+                                                pos: Pos {
+                                                    line: 61,
+                                                    col: 13,
+                                                },
+                                            },
+                                        ],
+                                        pos: Pos {
+                                            line: 61,
+                                            col: 13,
+                                        },
+                                    },
+                                    pos: Pos {
+                                        line: 57,
+                                        col: 13,
+                                    },
+                                },
+                            ],
+                            pos: Pos {
+                                line: 57,
+                                col: 13,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 57,
+                        col: 5,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 62,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Var {
+                                name: "r",
+                                pos: Pos {
+                                    line: 62,
+                                    col: 11,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 62,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 62,
+                        col: 10,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 63,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Call {
+                                callee: Field {
+                                    obj: Var {
+                                        name: "p",
+                                        pos: Pos {
+                                            line: 63,
+                                            col: 11,
+                                        },
+                                    },
+                                    name: "area",
+                                    pos: Pos {
+                                        line: 63,
+                                        col: 12,
+                                    },
+                                },
+                                args: [],
+                                pos: Pos {
+                                    line: 63,
+                                    col: 17,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 63,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 63,
+                        col: 10,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 64,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Call {
+                                callee: Var {
+                                    name: "greet",
+                                    pos: Pos {
+                                        line: 64,
+                                        col: 11,
+                                    },
+                                },
+                                args: [
+                                    Str {
+                                        value: "px",
+                                        pos: Pos {
+                                            line: 64,
+                                            col: 17,
+                                        },
+                                    },
+                                ],
+                                pos: Pos {
+                                    line: 64,
+                                    col: 16,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 64,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 64,
+                        col: 10,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 65,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Call {
+                                callee: Var {
+                                    name: "greet",
+                                    pos: Pos {
+                                        line: 65,
+                                        col: 11,
+                                    },
+                                },
+                                args: [
+                                    Str {
+                                        value: "px",
+                                        pos: Pos {
+                                            line: 65,
+                                            col: 17,
+                                        },
+                                    },
+                                    Int {
+                                        value: 3,
+                                        pos: Pos {
+                                            line: 65,
+                                            col: 23,
+                                        },
+                                    },
+                                ],
+                                pos: Pos {
+                                    line: 65,
+                                    col: 16,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 65,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 65,
+                        col: 10,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 66,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Call {
+                                callee: Var {
+                                    name: "process",
+                                    pos: Pos {
+                                        line: 66,
+                                        col: 11,
+                                    },
+                                },
+                                args: [
+                                    List {
+                                        items: [
+                                            Int {
+                                                value: 1,
+                                                pos: Pos {
+                                                    line: 66,
+                                                    col: 20,
+                                                },
+                                            },
+                                            Unary {
+                                                op: Neg,
+                                                operand: Int {
+                                                    value: 2,
+                                                    pos: Pos {
+                                                        line: 66,
+                                                        col: 24,
+                                                    },
+                                                },
+                                                pos: Pos {
+                                                    line: 66,
+                                                    col: 23,
+                                                },
+                                            },
+                                            Int {
+                                                value: 3,
+                                                pos: Pos {
+                                                    line: 66,
+                                                    col: 27,
+                                                },
+                                            },
+                                            Int {
+                                                value: 4,
+                                                pos: Pos {
+                                                    line: 66,
+                                                    col: 30,
+                                                },
+                                            },
+                                        ],
+                                        pos: Pos {
+                                            line: 66,
+                                            col: 19,
+                                        },
+                                    },
+                                ],
+                                pos: Pos {
+                                    line: 66,
+                                    col: 18,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 66,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 66,
+                        col: 10,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 67,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Call {
+                                callee: Var {
+                                    name: "use_ops",
+                                    pos: Pos {
+                                        line: 67,
+                                        col: 11,
+                                    },
+                                },
+                                args: [
+                                    Int {
+                                        value: 5,
+                                        pos: Pos {
+                                            line: 67,
+                                            col: 19,
+                                        },
+                                    },
+                                    Int {
+                                        value: 6,
+                                        pos: Pos {
+                                            line: 67,
+                                            col: 22,
+                                        },
+                                    },
+                                ],
+                                pos: Pos {
+                                    line: 67,
+                                    col: 18,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 67,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 67,
+                        col: 10,
+                    },
+                },
+                VarDecl {
+                    kind: Let,
+                    name: "add",
+                    ty: None,
+                    value: Some(
+                        Closure {
+                            params: [
+                                Param {
+                                    name: "a",
+                                    ty: None,
+                                    default: None,
+                                    pos: Pos {
+                                        line: 68,
+                                        col: 18,
+                                    },
+                                },
+                                Param {
+                                    name: "b",
+                                    ty: None,
+                                    default: None,
+                                    pos: Pos {
+                                        line: 68,
+                                        col: 21,
+                                    },
+                                },
+                            ],
+                            ret_ty: None,
+                            body: Block {
+                                stmts: [
+                                    ExprStmt {
+                                        expr: Binary {
+                                            op: Add,
+                                            left: Var {
+                                                name: "a",
+                                                pos: Pos {
+                                                    line: 68,
+                                                    col: 26,
+                                                },
+                                            },
+                                            right: Var {
+                                                name: "b",
+                                                pos: Pos {
+                                                    line: 68,
+                                                    col: 30,
+                                                },
+                                            },
+                                            pos: Pos {
+                                                line: 68,
+                                                col: 28,
+                                            },
+                                        },
+                                        pos: Pos {
+                                            line: 68,
+                                            col: 28,
+                                        },
+                                    },
+                                ],
+                                pos: Pos {
+                                    line: 68,
+                                    col: 24,
+                                },
+                            },
+                            captures: [],
+                            pos: Pos {
+                                line: 68,
+                                col: 15,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 68,
+                        col: 5,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 69,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Call {
+                                callee: Var {
+                                    name: "add",
+                                    pos: Pos {
+                                        line: 69,
+                                        col: 11,
+                                    },
+                                },
+                                args: [
+                                    Int {
+                                        value: 1,
+                                        pos: Pos {
+                                            line: 69,
+                                            col: 15,
+                                        },
+                                    },
+                                    Int {
+                                        value: 2,
+                                        pos: Pos {
+                                            line: 69,
+                                            col: 18,
+                                        },
+                                    },
+                                ],
+                                pos: Pos {
+                                    line: 69,
+                                    col: 14,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 69,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 69,
+                        col: 10,
+                    },
+                },
+                VarDecl {
+                    kind: Let,
+                    name: "sq",
+                    ty: None,
+                    value: Some(
+                        Closure {
+                            params: [
+                                Param {
+                                    name: "x",
+                                    ty: None,
+                                    default: None,
+                                    pos: Pos {
+                                        line: 70,
+                                        col: 17,
+                                    },
+                                },
+                            ],
+                            ret_ty: None,
+                            body: Binary {
+                                op: Mul,
+                                left: Var {
+                                    name: "x",
+                                    pos: Pos {
+                                        line: 70,
+                                        col: 21,
+                                    },
+                                },
+                                right: Var {
+                                    name: "x",
+                                    pos: Pos {
+                                        line: 70,
+                                        col: 25,
+                                    },
+                                },
+                                pos: Pos {
+                                    line: 70,
+                                    col: 23,
+                                },
+                            },
+                            captures: [],
+                            pos: Pos {
+                                line: 70,
+                                col: 14,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 70,
+                        col: 5,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 71,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Call {
+                                callee: Var {
+                                    name: "sq",
+                                    pos: Pos {
+                                        line: 71,
+                                        col: 11,
+                                    },
+                                },
+                                args: [
+                                    Int {
+                                        value: 9,
+                                        pos: Pos {
+                                            line: 71,
+                                            col: 14,
+                                        },
+                                    },
+                                ],
+                                pos: Pos {
+                                    line: 71,
+                                    col: 13,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 71,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 71,
+                        col: 10,
+                    },
+                },
+                VarDecl {
+                    kind: Let,
+                    name: "gen",
+                    ty: None,
+                    value: Some(
+                        GenExp {
+                            expr: Binary {
+                                op: Mul,
+                                left: Var {
+                                    name: "i",
+                                    pos: Pos {
+                                        line: 72,
+                                        col: 16,
+                                    },
+                                },
+                                right: Var {
+                                    name: "i",
+                                    pos: Pos {
+                                        line: 72,
+                                        col: 20,
+                                    },
+                                },
+                                pos: Pos {
+                                    line: 72,
+                                    col: 18,
+                                },
+                            },
+                            clauses: [
+                                CompClause {
+                                    vars: [
+                                        "i",
+                                    ],
+                                    iterable: Call {
+                                        callee: Var {
+                                            name: "range",
+                                            pos: Pos {
+                                                line: 72,
+                                                col: 31,
+                                            },
+                                        },
+                                        args: [
+                                            Int {
+                                                value: 4,
+                                                pos: Pos {
+                                                    line: 72,
+                                                    col: 37,
+                                                },
+                                            },
+                                        ],
+                                        pos: Pos {
+                                            line: 72,
+                                            col: 36,
+                                        },
+                                    },
+                                },
+                            ],
+                            cond: None,
+                            pos: Pos {
+                                line: 72,
+                                col: 15,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 72,
+                        col: 5,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 73,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Call {
+                                callee: Var {
+                                    name: "list",
+                                    pos: Pos {
+                                        line: 73,
+                                        col: 11,
+                                    },
+                                },
+                                args: [
+                                    Var {
+                                        name: "gen",
+                                        pos: Pos {
+                                            line: 73,
+                                            col: 16,
+                                        },
+                                    },
+                                ],
+                                pos: Pos {
+                                    line: 73,
+                                    col: 15,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 73,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 73,
+                        col: 10,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 74,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Int {
+                                value: 31,
+                                pos: Pos {
+                                    line: 74,
+                                    col: 11,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 74,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 74,
+                        col: 10,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 75,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Int {
+                                value: 10,
+                                pos: Pos {
+                                    line: 75,
+                                    col: 11,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 75,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 75,
+                        col: 10,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 76,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Float {
+                                value: 250.0,
+                                pos: Pos {
+                                    line: 76,
+                                    col: 11,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 76,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 76,
+                        col: 10,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 77,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Unary {
+                                op: Neg,
+                                operand: Int {
+                                    value: 7,
+                                    pos: Pos {
+                                        line: 77,
+                                        col: 12,
+                                    },
+                                },
+                                pos: Pos {
+                                    line: 77,
+                                    col: 11,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 77,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 77,
+                        col: 10,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 78,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Unary {
+                                op: Not,
+                                operand: Bool {
+                                    value: true,
+                                    pos: Pos {
+                                        line: 78,
+                                        col: 15,
+                                    },
+                                },
+                                pos: Pos {
+                                    line: 78,
+                                    col: 11,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 78,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 78,
+                        col: 10,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 79,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Binary {
+                                op: IntDiv,
+                                left: Int {
+                                    value: 5,
+                                    pos: Pos {
+                                        line: 79,
+                                        col: 11,
+                                    },
+                                },
+                                right: Int {
+                                    value: 2,
+                                    pos: Pos {
+                                        line: 79,
+                                        col: 16,
+                                    },
+                                },
+                                pos: Pos {
+                                    line: 79,
+                                    col: 13,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 79,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 79,
+                        col: 10,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 80,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Binary {
+                                op: Pow,
+                                left: Int {
+                                    value: 2,
+                                    pos: Pos {
+                                        line: 80,
+                                        col: 11,
+                                    },
+                                },
+                                right: Int {
+                                    value: 8,
+                                    pos: Pos {
+                                        line: 80,
+                                        col: 16,
+                                    },
+                                },
+                                pos: Pos {
+                                    line: 80,
+                                    col: 13,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 80,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 80,
+                        col: 10,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 81,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Binary {
+                                op: Shl,
+                                left: Int {
+                                    value: 1,
+                                    pos: Pos {
+                                        line: 81,
+                                        col: 11,
+                                    },
+                                },
+                                right: Int {
+                                    value: 4,
+                                    pos: Pos {
+                                        line: 81,
+                                        col: 16,
+                                    },
+                                },
+                                pos: Pos {
+                                    line: 81,
+                                    col: 13,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 81,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 81,
+                        col: 10,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 82,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Binary {
+                                op: Shr,
+                                left: Int {
+                                    value: 255,
+                                    pos: Pos {
+                                        line: 82,
+                                        col: 11,
+                                    },
+                                },
+                                right: Int {
+                                    value: 2,
+                                    pos: Pos {
+                                        line: 82,
+                                        col: 18,
+                                    },
+                                },
+                                pos: Pos {
+                                    line: 82,
+                                    col: 15,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 82,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 82,
+                        col: 10,
+                    },
+                },
+            ],
+            pos: Pos {
+                line: 54,
+                col: 1,
+            },
+            type_params: [],
+        },
+    ],
 }
 语法分析成功：12 条顶层语句

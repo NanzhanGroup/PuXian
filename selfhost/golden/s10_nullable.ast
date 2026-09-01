@@ -1,513 +1,514 @@
 Program {
- items: [
- VarDecl {
- kind: Var,
- name: "a",
- ty: Some(
- Optional(
- Named(
- "int",
- Pos {
- line: 3,
- col: 8,
- },
- ),
- Pos {
- line: 3,
- col: 11,
- },
- ),
- ),
- value: Some(
- Null {
- pos: Pos {
- line: 3,
- col: 15,
- },
- },
- ),
- pos: Pos {
- line: 3,
- col: 1,
- },
- },
- VarDecl {
- kind: Var,
- name: "b",
- ty: Some(
- Optional(
- Named(
- "int",
- Pos {
- line: 4,
- col: 8,
- },
- ),
- Pos {
- line: 4,
- col: 11,
- },
- ),
- ),
- value: Some(
- Int {
- value: 42,
- pos: Pos {
- line: 4,
- col: 15,
- },
- },
- ),
- pos: Pos {
- line: 4,
- col: 1,
- },
- },
- VarDecl {
- kind: Var,
- name: "c",
- ty: Some(
- Named(
- "int",
- Pos {
- line: 5,
- col: 8,
- },
- ),
- ),
- value: Some(
- Int {
- value: 7,
- pos: Pos {
- line: 5,
- col: 14,
- },
- },
- ),
- pos: Pos {
- line: 5,
- col: 1,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 6,
- col: 1,
- },
- },
- args: [
- Str {
- value: "a==null:",
- pos: Pos {
- line: 6,
- col: 7,
- },
- },
- Binary {
- op: Eq,
- left: Var {
- name: "a",
- pos: Pos {
- line: 6,
- col: 19,
- },
- },
- right: Null {
- pos: Pos {
- line: 6,
- col: 24,
- },
- },
- pos: Pos {
- line: 6,
- col: 21,
- },
- },
- ],
- pos: Pos {
- line: 6,
- col: 6,
- },
- },
- pos: Pos {
- line: 6,
- col: 6,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 7,
- col: 1,
- },
- },
- args: [
- Str {
- value: "b??0:",
- pos: Pos {
- line: 7,
- col: 7,
- },
- },
- NullCoalesce {
- left: Var {
- name: "b",
- pos: Pos {
- line: 7,
- col: 16,
- },
- },
- right: Int {
- value: 0,
- pos: Pos {
- line: 7,
- col: 21,
- },
- },
- pos: Pos {
- line: 7,
- col: 18,
- },
- },
- ],
- pos: Pos {
- line: 7,
- col: 6,
- },
- },
- pos: Pos {
- line: 7,
- col: 6,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 8,
- col: 1,
- },
- },
- args: [
- Str {
- value: "b!=null:",
- pos: Pos {
- line: 8,
- col: 7,
- },
- },
- Binary {
- op: Ne,
- left: Var {
- name: "b",
- pos: Pos {
- line: 8,
- col: 19,
- },
- },
- right: Null {
- pos: Pos {
- line: 8,
- col: 24,
- },
- },
- pos: Pos {
- line: 8,
- col: 21,
- },
- },
- ],
- pos: Pos {
- line: 8,
- col: 6,
- },
- },
- pos: Pos {
- line: 8,
- col: 6,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 9,
- col: 1,
- },
- },
- args: [
- Str {
- value: "c:",
- pos: Pos {
- line: 9,
- col: 7,
- },
- },
- Var {
- name: "c",
- pos: Pos {
- line: 9,
- col: 13,
- },
- },
- ],
- pos: Pos {
- line: 9,
- col: 6,
- },
- },
- pos: Pos {
- line: 9,
- col: 6,
- },
- },
- VarDecl {
- kind: Var,
- name: "d",
- ty: None,
- value: Some(
- Null {
- pos: Pos {
- line: 11,
- col: 9,
- },
- },
- ),
- pos: Pos {
- line: 11,
- col: 1,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 12,
- col: 1,
- },
- },
- args: [
- Str {
- value: "d==null:",
- pos: Pos {
- line: 12,
- col: 7,
- },
- },
- Binary {
- op: Eq,
- left: Var {
- name: "d",
- pos: Pos {
- line: 12,
- col: 19,
- },
- },
- right: Null {
- pos: Pos {
- line: 12,
- col: 24,
- },
- },
- pos: Pos {
- line: 12,
- col: 21,
- },
- },
- ],
- pos: Pos {
- line: 12,
- col: 6,
- },
- },
- pos: Pos {
- line: 12,
- col: 6,
- },
- },
- FuncDef {
- name: "maybe",
- params: [
- Param {
- name: "v",
- ty: Some(
- Optional(
- Named(
- "int",
- Pos {
- line: 14,
- col: 14,
- },
- ),
- Pos {
- line: 14,
- col: 17,
- },
- ),
- ),
- default: None,
- pos: Pos {
- line: 14,
- col: 11,
- },
- },
- ],
- ret_ty: Some(
- Optional(
- Named(
- "int",
- Pos {
- line: 14,
- col: 23,
- },
- ),
- Pos {
- line: 14,
- col: 26,
- },
- ),
- ),
- body: [
- Return {
- value: Some(
- Var {
- name: "v",
- pos: Pos {
- line: 15,
- col: 12,
- },
- },
- ),
- pos: Pos {
- line: 15,
- col: 5,
- },
- },
- ],
- pos: Pos {
- line: 14,
- col: 1,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 16,
- col: 1,
- },
- },
- args: [
- Str {
- value: "maybe:",
- pos: Pos {
- line: 16,
- col: 7,
- },
- },
- NullCoalesce {
- left: Call {
- callee: Var {
- name: "maybe",
- pos: Pos {
- line: 16,
- col: 17,
- },
- },
- args: [
- Null {
- pos: Pos {
- line: 16,
- col: 23,
- },
- },
- ],
- pos: Pos {
- line: 16,
- col: 22,
- },
- },
- right: Unary {
- op: Neg,
- operand: Int {
- value: 1,
- pos: Pos {
- line: 16,
- col: 33,
- },
- },
- pos: Pos {
- line: 16,
- col: 32,
- },
- },
- pos: Pos {
- line: 16,
- col: 29,
- },
- },
- NullCoalesce {
- left: Call {
- callee: Var {
- name: "maybe",
- pos: Pos {
- line: 16,
- col: 36,
- },
- },
- args: [
- Int {
- value: 9,
- pos: Pos {
- line: 16,
- col: 42,
- },
- },
- ],
- pos: Pos {
- line: 16,
- col: 41,
- },
- },
- right: Unary {
- op: Neg,
- operand: Int {
- value: 1,
- pos: Pos {
- line: 16,
- col: 49,
- },
- },
- pos: Pos {
- line: 16,
- col: 48,
- },
- },
- pos: Pos {
- line: 16,
- col: 45,
- },
- },
- ],
- pos: Pos {
- line: 16,
- col: 6,
- },
- },
- pos: Pos {
- line: 16,
- col: 6,
- },
- },
- ],
+    items: [
+        VarDecl {
+            kind: Var,
+            name: "a",
+            ty: Some(
+                Optional(
+                    Named(
+                        "int",
+                        Pos {
+                            line: 3,
+                            col: 8,
+                        },
+                    ),
+                    Pos {
+                        line: 3,
+                        col: 11,
+                    },
+                ),
+            ),
+            value: Some(
+                Null {
+                    pos: Pos {
+                        line: 3,
+                        col: 15,
+                    },
+                },
+            ),
+            pos: Pos {
+                line: 3,
+                col: 1,
+            },
+        },
+        VarDecl {
+            kind: Var,
+            name: "b",
+            ty: Some(
+                Optional(
+                    Named(
+                        "int",
+                        Pos {
+                            line: 4,
+                            col: 8,
+                        },
+                    ),
+                    Pos {
+                        line: 4,
+                        col: 11,
+                    },
+                ),
+            ),
+            value: Some(
+                Int {
+                    value: 42,
+                    pos: Pos {
+                        line: 4,
+                        col: 15,
+                    },
+                },
+            ),
+            pos: Pos {
+                line: 4,
+                col: 1,
+            },
+        },
+        VarDecl {
+            kind: Var,
+            name: "c",
+            ty: Some(
+                Named(
+                    "int",
+                    Pos {
+                        line: 5,
+                        col: 8,
+                    },
+                ),
+            ),
+            value: Some(
+                Int {
+                    value: 7,
+                    pos: Pos {
+                        line: 5,
+                        col: 14,
+                    },
+                },
+            ),
+            pos: Pos {
+                line: 5,
+                col: 1,
+            },
+        },
+        ExprStmt {
+            expr: Call {
+                callee: Var {
+                    name: "print",
+                    pos: Pos {
+                        line: 6,
+                        col: 1,
+                    },
+                },
+                args: [
+                    Str {
+                        value: "a==null:",
+                        pos: Pos {
+                            line: 6,
+                            col: 7,
+                        },
+                    },
+                    Binary {
+                        op: Eq,
+                        left: Var {
+                            name: "a",
+                            pos: Pos {
+                                line: 6,
+                                col: 19,
+                            },
+                        },
+                        right: Null {
+                            pos: Pos {
+                                line: 6,
+                                col: 24,
+                            },
+                        },
+                        pos: Pos {
+                            line: 6,
+                            col: 21,
+                        },
+                    },
+                ],
+                pos: Pos {
+                    line: 6,
+                    col: 6,
+                },
+            },
+            pos: Pos {
+                line: 6,
+                col: 6,
+            },
+        },
+        ExprStmt {
+            expr: Call {
+                callee: Var {
+                    name: "print",
+                    pos: Pos {
+                        line: 7,
+                        col: 1,
+                    },
+                },
+                args: [
+                    Str {
+                        value: "b??0:",
+                        pos: Pos {
+                            line: 7,
+                            col: 7,
+                        },
+                    },
+                    NullCoalesce {
+                        left: Var {
+                            name: "b",
+                            pos: Pos {
+                                line: 7,
+                                col: 16,
+                            },
+                        },
+                        right: Int {
+                            value: 0,
+                            pos: Pos {
+                                line: 7,
+                                col: 21,
+                            },
+                        },
+                        pos: Pos {
+                            line: 7,
+                            col: 18,
+                        },
+                    },
+                ],
+                pos: Pos {
+                    line: 7,
+                    col: 6,
+                },
+            },
+            pos: Pos {
+                line: 7,
+                col: 6,
+            },
+        },
+        ExprStmt {
+            expr: Call {
+                callee: Var {
+                    name: "print",
+                    pos: Pos {
+                        line: 8,
+                        col: 1,
+                    },
+                },
+                args: [
+                    Str {
+                        value: "b!=null:",
+                        pos: Pos {
+                            line: 8,
+                            col: 7,
+                        },
+                    },
+                    Binary {
+                        op: Ne,
+                        left: Var {
+                            name: "b",
+                            pos: Pos {
+                                line: 8,
+                                col: 19,
+                            },
+                        },
+                        right: Null {
+                            pos: Pos {
+                                line: 8,
+                                col: 24,
+                            },
+                        },
+                        pos: Pos {
+                            line: 8,
+                            col: 21,
+                        },
+                    },
+                ],
+                pos: Pos {
+                    line: 8,
+                    col: 6,
+                },
+            },
+            pos: Pos {
+                line: 8,
+                col: 6,
+            },
+        },
+        ExprStmt {
+            expr: Call {
+                callee: Var {
+                    name: "print",
+                    pos: Pos {
+                        line: 9,
+                        col: 1,
+                    },
+                },
+                args: [
+                    Str {
+                        value: "c:",
+                        pos: Pos {
+                            line: 9,
+                            col: 7,
+                        },
+                    },
+                    Var {
+                        name: "c",
+                        pos: Pos {
+                            line: 9,
+                            col: 13,
+                        },
+                    },
+                ],
+                pos: Pos {
+                    line: 9,
+                    col: 6,
+                },
+            },
+            pos: Pos {
+                line: 9,
+                col: 6,
+            },
+        },
+        VarDecl {
+            kind: Var,
+            name: "d",
+            ty: None,
+            value: Some(
+                Null {
+                    pos: Pos {
+                        line: 11,
+                        col: 9,
+                    },
+                },
+            ),
+            pos: Pos {
+                line: 11,
+                col: 1,
+            },
+        },
+        ExprStmt {
+            expr: Call {
+                callee: Var {
+                    name: "print",
+                    pos: Pos {
+                        line: 12,
+                        col: 1,
+                    },
+                },
+                args: [
+                    Str {
+                        value: "d==null:",
+                        pos: Pos {
+                            line: 12,
+                            col: 7,
+                        },
+                    },
+                    Binary {
+                        op: Eq,
+                        left: Var {
+                            name: "d",
+                            pos: Pos {
+                                line: 12,
+                                col: 19,
+                            },
+                        },
+                        right: Null {
+                            pos: Pos {
+                                line: 12,
+                                col: 24,
+                            },
+                        },
+                        pos: Pos {
+                            line: 12,
+                            col: 21,
+                        },
+                    },
+                ],
+                pos: Pos {
+                    line: 12,
+                    col: 6,
+                },
+            },
+            pos: Pos {
+                line: 12,
+                col: 6,
+            },
+        },
+        FuncDef {
+            name: "maybe",
+            params: [
+                Param {
+                    name: "v",
+                    ty: Some(
+                        Optional(
+                            Named(
+                                "int",
+                                Pos {
+                                    line: 14,
+                                    col: 14,
+                                },
+                            ),
+                            Pos {
+                                line: 14,
+                                col: 17,
+                            },
+                        ),
+                    ),
+                    default: None,
+                    pos: Pos {
+                        line: 14,
+                        col: 11,
+                    },
+                },
+            ],
+            ret_ty: Some(
+                Optional(
+                    Named(
+                        "int",
+                        Pos {
+                            line: 14,
+                            col: 23,
+                        },
+                    ),
+                    Pos {
+                        line: 14,
+                        col: 26,
+                    },
+                ),
+            ),
+            body: [
+                Return {
+                    value: Some(
+                        Var {
+                            name: "v",
+                            pos: Pos {
+                                line: 15,
+                                col: 12,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 15,
+                        col: 5,
+                    },
+                },
+            ],
+            pos: Pos {
+                line: 14,
+                col: 1,
+            },
+            type_params: [],
+        },
+        ExprStmt {
+            expr: Call {
+                callee: Var {
+                    name: "print",
+                    pos: Pos {
+                        line: 16,
+                        col: 1,
+                    },
+                },
+                args: [
+                    Str {
+                        value: "maybe:",
+                        pos: Pos {
+                            line: 16,
+                            col: 7,
+                        },
+                    },
+                    NullCoalesce {
+                        left: Call {
+                            callee: Var {
+                                name: "maybe",
+                                pos: Pos {
+                                    line: 16,
+                                    col: 17,
+                                },
+                            },
+                            args: [
+                                Null {
+                                    pos: Pos {
+                                        line: 16,
+                                        col: 23,
+                                    },
+                                },
+                            ],
+                            pos: Pos {
+                                line: 16,
+                                col: 22,
+                            },
+                        },
+                        right: Unary {
+                            op: Neg,
+                            operand: Int {
+                                value: 1,
+                                pos: Pos {
+                                    line: 16,
+                                    col: 33,
+                                },
+                            },
+                            pos: Pos {
+                                line: 16,
+                                col: 32,
+                            },
+                        },
+                        pos: Pos {
+                            line: 16,
+                            col: 29,
+                        },
+                    },
+                    NullCoalesce {
+                        left: Call {
+                            callee: Var {
+                                name: "maybe",
+                                pos: Pos {
+                                    line: 16,
+                                    col: 36,
+                                },
+                            },
+                            args: [
+                                Int {
+                                    value: 9,
+                                    pos: Pos {
+                                        line: 16,
+                                        col: 42,
+                                    },
+                                },
+                            ],
+                            pos: Pos {
+                                line: 16,
+                                col: 41,
+                            },
+                        },
+                        right: Unary {
+                            op: Neg,
+                            operand: Int {
+                                value: 1,
+                                pos: Pos {
+                                    line: 16,
+                                    col: 49,
+                                },
+                            },
+                            pos: Pos {
+                                line: 16,
+                                col: 48,
+                            },
+                        },
+                        pos: Pos {
+                            line: 16,
+                            col: 45,
+                        },
+                    },
+                ],
+                pos: Pos {
+                    line: 16,
+                    col: 6,
+                },
+            },
+            pos: Pos {
+                line: 16,
+                col: 6,
+            },
+        },
+    ],
 }
 语法分析成功：11 条顶层语句

@@ -1,0 +1,1183 @@
+Program {
+    items: [
+        FuncDef {
+            name: "first",
+            params: [
+                Param {
+                    name: "items",
+                    ty: Some(
+                        List(
+                            Named(
+                                "T",
+                                Pos {
+                                    line: 5,
+                                    col: 26,
+                                },
+                            ),
+                            Pos {
+                                line: 5,
+                                col: 21,
+                            },
+                        ),
+                    ),
+                    default: None,
+                    pos: Pos {
+                        line: 5,
+                        col: 14,
+                    },
+                },
+            ],
+            ret_ty: Some(
+                Named(
+                    "T",
+                    Pos {
+                        line: 5,
+                        col: 33,
+                    },
+                ),
+            ),
+            body: [
+                Return {
+                    value: Some(
+                        Index {
+                            obj: Var {
+                                name: "items",
+                                pos: Pos {
+                                    line: 6,
+                                    col: 12,
+                                },
+                            },
+                            index: Int {
+                                value: 0,
+                                pos: Pos {
+                                    line: 6,
+                                    col: 18,
+                                },
+                            },
+                            pos: Pos {
+                                line: 6,
+                                col: 17,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 6,
+                        col: 5,
+                    },
+                },
+            ],
+            pos: Pos {
+                line: 5,
+                col: 1,
+            },
+            type_params: [
+                "T",
+            ],
+        },
+        FuncDef {
+            name: "swap2",
+            params: [
+                Param {
+                    name: "k",
+                    ty: Some(
+                        Named(
+                            "K",
+                            Pos {
+                                line: 9,
+                                col: 20,
+                            },
+                        ),
+                    ),
+                    default: None,
+                    pos: Pos {
+                        line: 9,
+                        col: 17,
+                    },
+                },
+                Param {
+                    name: "v",
+                    ty: Some(
+                        Named(
+                            "V",
+                            Pos {
+                                line: 9,
+                                col: 26,
+                            },
+                        ),
+                    ),
+                    default: None,
+                    pos: Pos {
+                        line: 9,
+                        col: 23,
+                    },
+                },
+            ],
+            ret_ty: Some(
+                Named(
+                    "V",
+                    Pos {
+                        line: 9,
+                        col: 32,
+                    },
+                ),
+            ),
+            body: [
+                Return {
+                    value: Some(
+                        Var {
+                            name: "v",
+                            pos: Pos {
+                                line: 10,
+                                col: 12,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 10,
+                        col: 5,
+                    },
+                },
+            ],
+            pos: Pos {
+                line: 9,
+                col: 1,
+            },
+            type_params: [
+                "K",
+                "V",
+            ],
+        },
+        FuncDef {
+            name: "max2",
+            params: [
+                Param {
+                    name: "a",
+                    ty: Some(
+                        Named(
+                            "T",
+                            Pos {
+                                line: 12,
+                                col: 28,
+                            },
+                        ),
+                    ),
+                    default: None,
+                    pos: Pos {
+                        line: 12,
+                        col: 25,
+                    },
+                },
+                Param {
+                    name: "b",
+                    ty: Some(
+                        Named(
+                            "T",
+                            Pos {
+                                line: 12,
+                                col: 34,
+                            },
+                        ),
+                    ),
+                    default: None,
+                    pos: Pos {
+                        line: 12,
+                        col: 31,
+                    },
+                },
+            ],
+            ret_ty: Some(
+                Named(
+                    "T",
+                    Pos {
+                        line: 12,
+                        col: 40,
+                    },
+                ),
+            ),
+            body: [
+                If {
+                    branches: [
+                        (
+                            Binary {
+                                op: Gt,
+                                left: Var {
+                                    name: "a",
+                                    pos: Pos {
+                                        line: 13,
+                                        col: 8,
+                                    },
+                                },
+                                right: Var {
+                                    name: "b",
+                                    pos: Pos {
+                                        line: 13,
+                                        col: 12,
+                                    },
+                                },
+                                pos: Pos {
+                                    line: 13,
+                                    col: 10,
+                                },
+                            },
+                            [
+                                Return {
+                                    value: Some(
+                                        Var {
+                                            name: "a",
+                                            pos: Pos {
+                                                line: 14,
+                                                col: 16,
+                                            },
+                                        },
+                                    ),
+                                    pos: Pos {
+                                        line: 14,
+                                        col: 9,
+                                    },
+                                },
+                            ],
+                        ),
+                    ],
+                    else_branch: None,
+                    pos: Pos {
+                        line: 13,
+                        col: 5,
+                    },
+                },
+                Return {
+                    value: Some(
+                        Var {
+                            name: "b",
+                            pos: Pos {
+                                line: 15,
+                                col: 12,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 15,
+                        col: 5,
+                    },
+                },
+            ],
+            pos: Pos {
+                line: 12,
+                col: 1,
+            },
+            type_params: [
+                "T: Comparable",
+            ],
+        },
+        StructDef {
+            name: "Box",
+            fields: [
+                StructField {
+                    name: "value",
+                    ty: Named(
+                        "T",
+                        Pos {
+                            line: 19,
+                            col: 12,
+                        },
+                    ),
+                    pos: Pos {
+                        line: 19,
+                        col: 5,
+                    },
+                },
+                StructField {
+                    name: "tag",
+                    ty: Named(
+                        "str",
+                        Pos {
+                            line: 20,
+                            col: 10,
+                        },
+                    ),
+                    pos: Pos {
+                        line: 20,
+                        col: 5,
+                    },
+                },
+            ],
+            pos: Pos {
+                line: 18,
+                col: 1,
+            },
+            type_params: [
+                "T",
+            ],
+        },
+        StructDef {
+            name: "Pair",
+            fields: [
+                StructField {
+                    name: "x",
+                    ty: Named(
+                        "A",
+                        Pos {
+                            line: 23,
+                            col: 8,
+                        },
+                    ),
+                    pos: Pos {
+                        line: 23,
+                        col: 5,
+                    },
+                },
+                StructField {
+                    name: "y",
+                    ty: Named(
+                        "B",
+                        Pos {
+                            line: 24,
+                            col: 8,
+                        },
+                    ),
+                    pos: Pos {
+                        line: 24,
+                        col: 5,
+                    },
+                },
+            ],
+            pos: Pos {
+                line: 22,
+                col: 1,
+            },
+            type_params: [
+                "A",
+                "B",
+            ],
+        },
+        ExprStmt {
+            expr: Call {
+                callee: Var {
+                    name: "print",
+                    pos: Pos {
+                        line: 27,
+                        col: 1,
+                    },
+                },
+                args: [
+                    Str {
+                        value: "first-int:",
+                        pos: Pos {
+                            line: 27,
+                            col: 7,
+                        },
+                    },
+                    Call {
+                        callee: Var {
+                            name: "first",
+                            pos: Pos {
+                                line: 27,
+                                col: 21,
+                            },
+                        },
+                        args: [
+                            List {
+                                items: [
+                                    Int {
+                                        value: 10,
+                                        pos: Pos {
+                                            line: 27,
+                                            col: 28,
+                                        },
+                                    },
+                                    Int {
+                                        value: 20,
+                                        pos: Pos {
+                                            line: 27,
+                                            col: 32,
+                                        },
+                                    },
+                                    Int {
+                                        value: 30,
+                                        pos: Pos {
+                                            line: 27,
+                                            col: 36,
+                                        },
+                                    },
+                                ],
+                                pos: Pos {
+                                    line: 27,
+                                    col: 27,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 27,
+                            col: 26,
+                        },
+                    },
+                ],
+                pos: Pos {
+                    line: 27,
+                    col: 6,
+                },
+            },
+            pos: Pos {
+                line: 27,
+                col: 6,
+            },
+        },
+        ExprStmt {
+            expr: Call {
+                callee: Var {
+                    name: "print",
+                    pos: Pos {
+                        line: 28,
+                        col: 1,
+                    },
+                },
+                args: [
+                    Str {
+                        value: "first-str:",
+                        pos: Pos {
+                            line: 28,
+                            col: 7,
+                        },
+                    },
+                    Call {
+                        callee: Var {
+                            name: "first",
+                            pos: Pos {
+                                line: 28,
+                                col: 21,
+                            },
+                        },
+                        args: [
+                            List {
+                                items: [
+                                    Str {
+                                        value: "甲",
+                                        pos: Pos {
+                                            line: 28,
+                                            col: 28,
+                                        },
+                                    },
+                                    Str {
+                                        value: "乙",
+                                        pos: Pos {
+                                            line: 28,
+                                            col: 33,
+                                        },
+                                    },
+                                    Str {
+                                        value: "丙",
+                                        pos: Pos {
+                                            line: 28,
+                                            col: 38,
+                                        },
+                                    },
+                                ],
+                                pos: Pos {
+                                    line: 28,
+                                    col: 27,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 28,
+                            col: 26,
+                        },
+                    },
+                ],
+                pos: Pos {
+                    line: 28,
+                    col: 6,
+                },
+            },
+            pos: Pos {
+                line: 28,
+                col: 6,
+            },
+        },
+        ExprStmt {
+            expr: Call {
+                callee: Var {
+                    name: "print",
+                    pos: Pos {
+                        line: 29,
+                        col: 1,
+                    },
+                },
+                args: [
+                    Str {
+                        value: "first-nested:",
+                        pos: Pos {
+                            line: 29,
+                            col: 7,
+                        },
+                    },
+                    Index {
+                        obj: Call {
+                            callee: Var {
+                                name: "first",
+                                pos: Pos {
+                                    line: 29,
+                                    col: 24,
+                                },
+                            },
+                            args: [
+                                List {
+                                    items: [
+                                        List {
+                                            items: [
+                                                Int {
+                                                    value: 1,
+                                                    pos: Pos {
+                                                        line: 29,
+                                                        col: 32,
+                                                    },
+                                                },
+                                                Int {
+                                                    value: 2,
+                                                    pos: Pos {
+                                                        line: 29,
+                                                        col: 35,
+                                                    },
+                                                },
+                                            ],
+                                            pos: Pos {
+                                                line: 29,
+                                                col: 31,
+                                            },
+                                        },
+                                        List {
+                                            items: [
+                                                Int {
+                                                    value: 3,
+                                                    pos: Pos {
+                                                        line: 29,
+                                                        col: 40,
+                                                    },
+                                                },
+                                                Int {
+                                                    value: 4,
+                                                    pos: Pos {
+                                                        line: 29,
+                                                        col: 43,
+                                                    },
+                                                },
+                                            ],
+                                            pos: Pos {
+                                                line: 29,
+                                                col: 39,
+                                            },
+                                        },
+                                    ],
+                                    pos: Pos {
+                                        line: 29,
+                                        col: 30,
+                                    },
+                                },
+                            ],
+                            pos: Pos {
+                                line: 29,
+                                col: 29,
+                            },
+                        },
+                        index: Int {
+                            value: 1,
+                            pos: Pos {
+                                line: 29,
+                                col: 48,
+                            },
+                        },
+                        pos: Pos {
+                            line: 29,
+                            col: 47,
+                        },
+                    },
+                ],
+                pos: Pos {
+                    line: 29,
+                    col: 6,
+                },
+            },
+            pos: Pos {
+                line: 29,
+                col: 6,
+            },
+        },
+        ExprStmt {
+            expr: Call {
+                callee: Var {
+                    name: "print",
+                    pos: Pos {
+                        line: 30,
+                        col: 1,
+                    },
+                },
+                args: [
+                    Str {
+                        value: "swap:",
+                        pos: Pos {
+                            line: 30,
+                            col: 7,
+                        },
+                    },
+                    Call {
+                        callee: Var {
+                            name: "swap2",
+                            pos: Pos {
+                                line: 30,
+                                col: 16,
+                            },
+                        },
+                        args: [
+                            Int {
+                                value: 1,
+                                pos: Pos {
+                                    line: 30,
+                                    col: 22,
+                                },
+                            },
+                            Str {
+                                value: "one",
+                                pos: Pos {
+                                    line: 30,
+                                    col: 25,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 30,
+                            col: 21,
+                        },
+                    },
+                ],
+                pos: Pos {
+                    line: 30,
+                    col: 6,
+                },
+            },
+            pos: Pos {
+                line: 30,
+                col: 6,
+            },
+        },
+        ExprStmt {
+            expr: Call {
+                callee: Var {
+                    name: "print",
+                    pos: Pos {
+                        line: 31,
+                        col: 1,
+                    },
+                },
+                args: [
+                    Str {
+                        value: "max2-int:",
+                        pos: Pos {
+                            line: 31,
+                            col: 7,
+                        },
+                    },
+                    Call {
+                        callee: Var {
+                            name: "max2",
+                            pos: Pos {
+                                line: 31,
+                                col: 20,
+                            },
+                        },
+                        args: [
+                            Int {
+                                value: 3,
+                                pos: Pos {
+                                    line: 31,
+                                    col: 25,
+                                },
+                            },
+                            Int {
+                                value: 7,
+                                pos: Pos {
+                                    line: 31,
+                                    col: 28,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 31,
+                            col: 24,
+                        },
+                    },
+                ],
+                pos: Pos {
+                    line: 31,
+                    col: 6,
+                },
+            },
+            pos: Pos {
+                line: 31,
+                col: 6,
+            },
+        },
+        ExprStmt {
+            expr: Call {
+                callee: Var {
+                    name: "print",
+                    pos: Pos {
+                        line: 32,
+                        col: 1,
+                    },
+                },
+                args: [
+                    Str {
+                        value: "max2-str:",
+                        pos: Pos {
+                            line: 32,
+                            col: 7,
+                        },
+                    },
+                    Call {
+                        callee: Var {
+                            name: "max2",
+                            pos: Pos {
+                                line: 32,
+                                col: 20,
+                            },
+                        },
+                        args: [
+                            Str {
+                                value: "香蕉",
+                                pos: Pos {
+                                    line: 32,
+                                    col: 25,
+                                },
+                            },
+                            Str {
+                                value: "苹果",
+                                pos: Pos {
+                                    line: 32,
+                                    col: 31,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 32,
+                            col: 24,
+                        },
+                    },
+                ],
+                pos: Pos {
+                    line: 32,
+                    col: 6,
+                },
+            },
+            pos: Pos {
+                line: 32,
+                col: 6,
+            },
+        },
+        VarDecl {
+            kind: Let,
+            name: "bx",
+            ty: None,
+            value: Some(
+                Call {
+                    callee: Var {
+                        name: "Box",
+                        pos: Pos {
+                            line: 34,
+                            col: 10,
+                        },
+                    },
+                    args: [
+                        Int {
+                            value: 42,
+                            pos: Pos {
+                                line: 34,
+                                col: 14,
+                            },
+                        },
+                        Str {
+                            value: "盒子",
+                            pos: Pos {
+                                line: 34,
+                                col: 18,
+                            },
+                        },
+                    ],
+                    pos: Pos {
+                        line: 34,
+                        col: 13,
+                    },
+                },
+            ),
+            pos: Pos {
+                line: 34,
+                col: 1,
+            },
+        },
+        ExprStmt {
+            expr: Call {
+                callee: Var {
+                    name: "print",
+                    pos: Pos {
+                        line: 35,
+                        col: 1,
+                    },
+                },
+                args: [
+                    Str {
+                        value: "Box.value:",
+                        pos: Pos {
+                            line: 35,
+                            col: 7,
+                        },
+                    },
+                    Field {
+                        obj: Var {
+                            name: "bx",
+                            pos: Pos {
+                                line: 35,
+                                col: 21,
+                            },
+                        },
+                        name: "value",
+                        pos: Pos {
+                            line: 35,
+                            col: 23,
+                        },
+                    },
+                ],
+                pos: Pos {
+                    line: 35,
+                    col: 6,
+                },
+            },
+            pos: Pos {
+                line: 35,
+                col: 6,
+            },
+        },
+        ExprStmt {
+            expr: Call {
+                callee: Var {
+                    name: "print",
+                    pos: Pos {
+                        line: 36,
+                        col: 1,
+                    },
+                },
+                args: [
+                    Str {
+                        value: "Box.tag:",
+                        pos: Pos {
+                            line: 36,
+                            col: 7,
+                        },
+                    },
+                    Field {
+                        obj: Var {
+                            name: "bx",
+                            pos: Pos {
+                                line: 36,
+                                col: 19,
+                            },
+                        },
+                        name: "tag",
+                        pos: Pos {
+                            line: 36,
+                            col: 21,
+                        },
+                    },
+                ],
+                pos: Pos {
+                    line: 36,
+                    col: 6,
+                },
+            },
+            pos: Pos {
+                line: 36,
+                col: 6,
+            },
+        },
+        VarDecl {
+            kind: Let,
+            name: "bx2",
+            ty: None,
+            value: Some(
+                Call {
+                    callee: Var {
+                        name: "Box",
+                        pos: Pos {
+                            line: 38,
+                            col: 11,
+                        },
+                    },
+                    args: [
+                        Str {
+                            value: "内层",
+                            pos: Pos {
+                                line: 38,
+                                col: 15,
+                            },
+                        },
+                        Str {
+                            value: "s",
+                            pos: Pos {
+                                line: 38,
+                                col: 21,
+                            },
+                        },
+                    ],
+                    pos: Pos {
+                        line: 38,
+                        col: 14,
+                    },
+                },
+            ),
+            pos: Pos {
+                line: 38,
+                col: 1,
+            },
+        },
+        ExprStmt {
+            expr: Call {
+                callee: Var {
+                    name: "print",
+                    pos: Pos {
+                        line: 39,
+                        col: 1,
+                    },
+                },
+                args: [
+                    Str {
+                        value: "Box2.value:",
+                        pos: Pos {
+                            line: 39,
+                            col: 7,
+                        },
+                    },
+                    Field {
+                        obj: Var {
+                            name: "bx2",
+                            pos: Pos {
+                                line: 39,
+                                col: 22,
+                            },
+                        },
+                        name: "value",
+                        pos: Pos {
+                            line: 39,
+                            col: 25,
+                        },
+                    },
+                ],
+                pos: Pos {
+                    line: 39,
+                    col: 6,
+                },
+            },
+            pos: Pos {
+                line: 39,
+                col: 6,
+            },
+        },
+        VarDecl {
+            kind: Let,
+            name: "pair",
+            ty: None,
+            value: Some(
+                Call {
+                    callee: Var {
+                        name: "Pair",
+                        pos: Pos {
+                            line: 41,
+                            col: 12,
+                        },
+                    },
+                    args: [
+                        Int {
+                            value: 1,
+                            pos: Pos {
+                                line: 41,
+                                col: 17,
+                            },
+                        },
+                        Str {
+                            value: "一",
+                            pos: Pos {
+                                line: 41,
+                                col: 20,
+                            },
+                        },
+                    ],
+                    pos: Pos {
+                        line: 41,
+                        col: 16,
+                    },
+                },
+            ),
+            pos: Pos {
+                line: 41,
+                col: 1,
+            },
+        },
+        ExprStmt {
+            expr: Call {
+                callee: Var {
+                    name: "print",
+                    pos: Pos {
+                        line: 42,
+                        col: 1,
+                    },
+                },
+                args: [
+                    Str {
+                        value: "Pair:",
+                        pos: Pos {
+                            line: 42,
+                            col: 7,
+                        },
+                    },
+                    Field {
+                        obj: Var {
+                            name: "pair",
+                            pos: Pos {
+                                line: 42,
+                                col: 16,
+                            },
+                        },
+                        name: "x",
+                        pos: Pos {
+                            line: 42,
+                            col: 20,
+                        },
+                    },
+                    Field {
+                        obj: Var {
+                            name: "pair",
+                            pos: Pos {
+                                line: 42,
+                                col: 24,
+                            },
+                        },
+                        name: "y",
+                        pos: Pos {
+                            line: 42,
+                            col: 28,
+                        },
+                    },
+                ],
+                pos: Pos {
+                    line: 42,
+                    col: 6,
+                },
+            },
+            pos: Pos {
+                line: 42,
+                col: 6,
+            },
+        },
+        VarDecl {
+            kind: Var,
+            name: "nums",
+            ty: Some(
+                List(
+                    Named(
+                        "int",
+                        Pos {
+                            line: 45,
+                            col: 16,
+                        },
+                    ),
+                    Pos {
+                        line: 45,
+                        col: 11,
+                    },
+                ),
+            ),
+            value: Some(
+                List {
+                    items: [
+                        Int {
+                            value: 5,
+                            pos: Pos {
+                                line: 45,
+                                col: 24,
+                            },
+                        },
+                        Int {
+                            value: 6,
+                            pos: Pos {
+                                line: 45,
+                                col: 27,
+                            },
+                        },
+                        Int {
+                            value: 7,
+                            pos: Pos {
+                                line: 45,
+                                col: 30,
+                            },
+                        },
+                    ],
+                    pos: Pos {
+                        line: 45,
+                        col: 23,
+                    },
+                },
+            ),
+            pos: Pos {
+                line: 45,
+                col: 1,
+            },
+        },
+        ExprStmt {
+            expr: Call {
+                callee: Var {
+                    name: "print",
+                    pos: Pos {
+                        line: 46,
+                        col: 1,
+                    },
+                },
+                args: [
+                    Str {
+                        value: "typed-first:",
+                        pos: Pos {
+                            line: 46,
+                            col: 7,
+                        },
+                    },
+                    Call {
+                        callee: Var {
+                            name: "first",
+                            pos: Pos {
+                                line: 46,
+                                col: 23,
+                            },
+                        },
+                        args: [
+                            Var {
+                                name: "nums",
+                                pos: Pos {
+                                    line: 46,
+                                    col: 29,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 46,
+                            col: 28,
+                        },
+                    },
+                ],
+                pos: Pos {
+                    line: 46,
+                    col: 6,
+                },
+            },
+            pos: Pos {
+                line: 46,
+                col: 6,
+            },
+        },
+    ],
+}
+语法分析成功：20 条顶层语句

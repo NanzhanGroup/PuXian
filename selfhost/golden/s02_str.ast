@@ -1,485 +1,486 @@
 Program {
- items: [
- FuncDef {
- name: "main",
- params: [],
- ret_ty: None,
- body: [
- VarDecl {
- kind: Let,
- name: "s",
- ty: None,
- value: Some(
- Str {
- value: "hello,world",
- pos: Pos {
- line: 3,
- col: 13,
- },
- },
- ),
- pos: Pos {
- line: 3,
- col: 5,
- },
- },
- VarDecl {
- kind: Let,
- name: "parts",
- ty: None,
- value: Some(
- Call {
- callee: Var {
- name: "split",
- pos: Pos {
- line: 4,
- col: 17,
- },
- },
- args: [
- Var {
- name: "s",
- pos: Pos {
- line: 4,
- col: 23,
- },
- },
- Str {
- value: ",",
- pos: Pos {
- line: 4,
- col: 26,
- },
- },
- ],
- pos: Pos {
- line: 4,
- col: 22,
- },
- },
- ),
- pos: Pos {
- line: 4,
- col: 5,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 5,
- col: 5,
- },
- },
- args: [
- Call {
- callee: Var {
- name: "len",
- pos: Pos {
- line: 5,
- col: 11,
- },
- },
- args: [
- Var {
- name: "parts",
- pos: Pos {
- line: 5,
- col: 15,
- },
- },
- ],
- pos: Pos {
- line: 5,
- col: 14,
- },
- },
- ],
- pos: Pos {
- line: 5,
- col: 10,
- },
- },
- pos: Pos {
- line: 5,
- col: 10,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 6,
- col: 5,
- },
- },
- args: [
- Index {
- obj: Var {
- name: "parts",
- pos: Pos {
- line: 6,
- col: 11,
- },
- },
- index: Int {
- value: 0,
- pos: Pos {
- line: 6,
- col: 17,
- },
- },
- pos: Pos {
- line: 6,
- col: 16,
- },
- },
- ],
- pos: Pos {
- line: 6,
- col: 10,
- },
- },
- pos: Pos {
- line: 6,
- col: 10,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 7,
- col: 5,
- },
- },
- args: [
- Index {
- obj: Var {
- name: "parts",
- pos: Pos {
- line: 7,
- col: 11,
- },
- },
- index: Int {
- value: 1,
- pos: Pos {
- line: 7,
- col: 17,
- },
- },
- pos: Pos {
- line: 7,
- col: 16,
- },
- },
- ],
- pos: Pos {
- line: 7,
- col: 10,
- },
- },
- pos: Pos {
- line: 7,
- col: 10,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 8,
- col: 5,
- },
- },
- args: [
- Call {
- callee: Var {
- name: "join",
- pos: Pos {
- line: 8,
- col: 11,
- },
- },
- args: [
- Str {
- value: "-",
- pos: Pos {
- line: 8,
- col: 16,
- },
- },
- Var {
- name: "parts",
- pos: Pos {
- line: 8,
- col: 21,
- },
- },
- ],
- pos: Pos {
- line: 8,
- col: 15,
- },
- },
- ],
- pos: Pos {
- line: 8,
- col: 10,
- },
- },
- pos: Pos {
- line: 8,
- col: 10,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 9,
- col: 5,
- },
- },
- args: [
- Call {
- callee: Var {
- name: "to_upper",
- pos: Pos {
- line: 9,
- col: 11,
- },
- },
- args: [
- Var {
- name: "s",
- pos: Pos {
- line: 9,
- col: 20,
- },
- },
- ],
- pos: Pos {
- line: 9,
- col: 19,
- },
- },
- ],
- pos: Pos {
- line: 9,
- col: 10,
- },
- },
- pos: Pos {
- line: 9,
- col: 10,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 10,
- col: 5,
- },
- },
- args: [
- Call {
- callee: Var {
- name: "trim",
- pos: Pos {
- line: 10,
- col: 11,
- },
- },
- args: [
- Str {
- value: " px ",
- pos: Pos {
- line: 10,
- col: 16,
- },
- },
- ],
- pos: Pos {
- line: 10,
- col: 15,
- },
- },
- ],
- pos: Pos {
- line: 10,
- col: 10,
- },
- },
- pos: Pos {
- line: 10,
- col: 10,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 11,
- col: 5,
- },
- },
- args: [
- Call {
- callee: Var {
- name: "replace",
- pos: Pos {
- line: 11,
- col: 11,
- },
- },
- args: [
- Var {
- name: "s",
- pos: Pos {
- line: 11,
- col: 19,
- },
- },
- Str {
- value: "world",
- pos: Pos {
- line: 11,
- col: 22,
- },
- },
- Str {
- value: "px",
- pos: Pos {
- line: 11,
- col: 31,
- },
- },
- ],
- pos: Pos {
- line: 11,
- col: 18,
- },
- },
- ],
- pos: Pos {
- line: 11,
- col: 10,
- },
- },
- pos: Pos {
- line: 11,
- col: 10,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 12,
- col: 5,
- },
- },
- args: [
- Call {
- callee: Var {
- name: "contains",
- pos: Pos {
- line: 12,
- col: 11,
- },
- },
- args: [
- Var {
- name: "s",
- pos: Pos {
- line: 12,
- col: 20,
- },
- },
- Str {
- value: "wor",
- pos: Pos {
- line: 12,
- col: 23,
- },
- },
- ],
- pos: Pos {
- line: 12,
- col: 19,
- },
- },
- ],
- pos: Pos {
- line: 12,
- col: 10,
- },
- },
- pos: Pos {
- line: 12,
- col: 10,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 13,
- col: 5,
- },
- },
- args: [
- Call {
- callee: Var {
- name: "len",
- pos: Pos {
- line: 13,
- col: 11,
- },
- },
- args: [
- Var {
- name: "s",
- pos: Pos {
- line: 13,
- col: 15,
- },
- },
- ],
- pos: Pos {
- line: 13,
- col: 14,
- },
- },
- ],
- pos: Pos {
- line: 13,
- col: 10,
- },
- },
- pos: Pos {
- line: 13,
- col: 10,
- },
- },
- ],
- pos: Pos {
- line: 2,
- col: 1,
- },
- },
- ],
+    items: [
+        FuncDef {
+            name: "main",
+            params: [],
+            ret_ty: None,
+            body: [
+                VarDecl {
+                    kind: Let,
+                    name: "s",
+                    ty: None,
+                    value: Some(
+                        Str {
+                            value: "hello,world",
+                            pos: Pos {
+                                line: 3,
+                                col: 13,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 3,
+                        col: 5,
+                    },
+                },
+                VarDecl {
+                    kind: Let,
+                    name: "parts",
+                    ty: None,
+                    value: Some(
+                        Call {
+                            callee: Var {
+                                name: "split",
+                                pos: Pos {
+                                    line: 4,
+                                    col: 17,
+                                },
+                            },
+                            args: [
+                                Var {
+                                    name: "s",
+                                    pos: Pos {
+                                        line: 4,
+                                        col: 23,
+                                    },
+                                },
+                                Str {
+                                    value: ",",
+                                    pos: Pos {
+                                        line: 4,
+                                        col: 26,
+                                    },
+                                },
+                            ],
+                            pos: Pos {
+                                line: 4,
+                                col: 22,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 4,
+                        col: 5,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 5,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Call {
+                                callee: Var {
+                                    name: "len",
+                                    pos: Pos {
+                                        line: 5,
+                                        col: 11,
+                                    },
+                                },
+                                args: [
+                                    Var {
+                                        name: "parts",
+                                        pos: Pos {
+                                            line: 5,
+                                            col: 15,
+                                        },
+                                    },
+                                ],
+                                pos: Pos {
+                                    line: 5,
+                                    col: 14,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 5,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 5,
+                        col: 10,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 6,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Index {
+                                obj: Var {
+                                    name: "parts",
+                                    pos: Pos {
+                                        line: 6,
+                                        col: 11,
+                                    },
+                                },
+                                index: Int {
+                                    value: 0,
+                                    pos: Pos {
+                                        line: 6,
+                                        col: 17,
+                                    },
+                                },
+                                pos: Pos {
+                                    line: 6,
+                                    col: 16,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 6,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 6,
+                        col: 10,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 7,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Index {
+                                obj: Var {
+                                    name: "parts",
+                                    pos: Pos {
+                                        line: 7,
+                                        col: 11,
+                                    },
+                                },
+                                index: Int {
+                                    value: 1,
+                                    pos: Pos {
+                                        line: 7,
+                                        col: 17,
+                                    },
+                                },
+                                pos: Pos {
+                                    line: 7,
+                                    col: 16,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 7,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 7,
+                        col: 10,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 8,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Call {
+                                callee: Var {
+                                    name: "join",
+                                    pos: Pos {
+                                        line: 8,
+                                        col: 11,
+                                    },
+                                },
+                                args: [
+                                    Str {
+                                        value: "-",
+                                        pos: Pos {
+                                            line: 8,
+                                            col: 16,
+                                        },
+                                    },
+                                    Var {
+                                        name: "parts",
+                                        pos: Pos {
+                                            line: 8,
+                                            col: 21,
+                                        },
+                                    },
+                                ],
+                                pos: Pos {
+                                    line: 8,
+                                    col: 15,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 8,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 8,
+                        col: 10,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 9,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Call {
+                                callee: Var {
+                                    name: "to_upper",
+                                    pos: Pos {
+                                        line: 9,
+                                        col: 11,
+                                    },
+                                },
+                                args: [
+                                    Var {
+                                        name: "s",
+                                        pos: Pos {
+                                            line: 9,
+                                            col: 20,
+                                        },
+                                    },
+                                ],
+                                pos: Pos {
+                                    line: 9,
+                                    col: 19,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 9,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 9,
+                        col: 10,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 10,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Call {
+                                callee: Var {
+                                    name: "trim",
+                                    pos: Pos {
+                                        line: 10,
+                                        col: 11,
+                                    },
+                                },
+                                args: [
+                                    Str {
+                                        value: "  px  ",
+                                        pos: Pos {
+                                            line: 10,
+                                            col: 16,
+                                        },
+                                    },
+                                ],
+                                pos: Pos {
+                                    line: 10,
+                                    col: 15,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 10,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 10,
+                        col: 10,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 11,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Call {
+                                callee: Var {
+                                    name: "replace",
+                                    pos: Pos {
+                                        line: 11,
+                                        col: 11,
+                                    },
+                                },
+                                args: [
+                                    Var {
+                                        name: "s",
+                                        pos: Pos {
+                                            line: 11,
+                                            col: 19,
+                                        },
+                                    },
+                                    Str {
+                                        value: "world",
+                                        pos: Pos {
+                                            line: 11,
+                                            col: 22,
+                                        },
+                                    },
+                                    Str {
+                                        value: "px",
+                                        pos: Pos {
+                                            line: 11,
+                                            col: 31,
+                                        },
+                                    },
+                                ],
+                                pos: Pos {
+                                    line: 11,
+                                    col: 18,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 11,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 11,
+                        col: 10,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 12,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Call {
+                                callee: Var {
+                                    name: "contains",
+                                    pos: Pos {
+                                        line: 12,
+                                        col: 11,
+                                    },
+                                },
+                                args: [
+                                    Var {
+                                        name: "s",
+                                        pos: Pos {
+                                            line: 12,
+                                            col: 20,
+                                        },
+                                    },
+                                    Str {
+                                        value: "wor",
+                                        pos: Pos {
+                                            line: 12,
+                                            col: 23,
+                                        },
+                                    },
+                                ],
+                                pos: Pos {
+                                    line: 12,
+                                    col: 19,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 12,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 12,
+                        col: 10,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 13,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Call {
+                                callee: Var {
+                                    name: "len",
+                                    pos: Pos {
+                                        line: 13,
+                                        col: 11,
+                                    },
+                                },
+                                args: [
+                                    Var {
+                                        name: "s",
+                                        pos: Pos {
+                                            line: 13,
+                                            col: 15,
+                                        },
+                                    },
+                                ],
+                                pos: Pos {
+                                    line: 13,
+                                    col: 14,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 13,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 13,
+                        col: 10,
+                    },
+                },
+            ],
+            pos: Pos {
+                line: 2,
+                col: 1,
+            },
+            type_params: [],
+        },
+    ],
 }
 语法分析成功：1 条顶层语句

@@ -33,8 +33,8 @@ let LAYOUT = {
     "Return": ["Return", [["value", "o"], ["pos", "p"]]],
     "Break": ["Break", [["pos", "p"]]],
     "Continue": ["Continue", [["pos", "p"]]],
-    "FuncDef": ["FuncDef", [["name", "s"], ["params", "lp"], ["ret_ty", "o"], ["body", "l"], ["pos", "p"]]],
-    "StructDef": ["StructDef", [["name", "s"], ["fields", "lsf"], ["pos", "p"]]],
+    "FuncDef": ["FuncDef", [["name", "s"], ["params", "lp"], ["ret_ty", "o"], ["body", "l"], ["pos", "p"], ["type_params", "ls"]]],
+    "StructDef": ["StructDef", [["name", "s"], ["fields", "lsf"], ["pos", "p"], ["type_params", "ls"]]],
     "EnumDef": ["EnumDef", [["name", "s"], ["variants", "lev"], ["pos", "p"]]],
     "TraitDef": ["TraitDef", [["name", "s"], ["methods", "lfd"], ["pos", "p"]]],
     "ImplDef": ["ImplDef", [["type_name", "s"], ["trait_name", "os"], ["methods", "lfd"], ["pos", "p"]]],
@@ -381,10 +381,33 @@ def parse_block():
     expect("去缩进", "去缩进")
     return stmts
 
+def parse_type_params():
+    # 泛型参数列表（可选，M41.4）：def first[T](...) / struct Box[T]:
+    # 元素存 rust 字符串：无约束 "T"，有约束 "T: Trait"（约束仅记录，类型擦除渐进不检查）
+    let tps = []
+    if not chk("["):
+        return tps
+    adv()
+    while true:
+        let tp = expect_ident("泛型参数名")
+        var item = tp
+        if chk(":"):
+            adv()
+            let tr = expect_ident("泛型约束名")
+            item = tp + ": " + tr
+        tps.append(qstr(item))
+        if chk(","):
+            adv()
+            continue
+        break
+    expect("]", "']'")
+    return tps
+
 def parse_func_def():
     let pos = ppos()
     adv()
     let name = expect_ident("函数名")
+    let tps = parse_type_params()
     let params = parse_params()
     var ret_ty = null
     if chk("->"):
@@ -393,12 +416,13 @@ def parse_func_def():
     expect(":", "':'")
     expect("换行", "换行")
     var body = parse_block()
-    return ["FuncDef", qstr(name), params, ret_ty, body, pos]
+    return ["FuncDef", qstr(name), params, ret_ty, body, pos, tps]
 
 def parse_struct_def():
     let pos = ppos()
     adv()
     let name = expect_ident("结构体名")
+    let tps = parse_type_params()
     expect(":", "':'")
     expect("换行", "换行")
     expect("缩进", "缩进块")
@@ -417,7 +441,7 @@ def parse_struct_def():
     if chk("EOF"):
         perr("E2001", "结构体定义未正确结束")
     expect("去缩进", "去缩进")
-    return ["StructDef", qstr(name), fields, pos]
+    return ["StructDef", qstr(name), fields, pos, tps]
 
 def parse_enum_def():
     let pos = ppos()
@@ -480,7 +504,7 @@ def parse_trait_def():
             adv()
             if chk("缩进"):
                 body = parse_block()
-        methods.append(["FuncDef", qstr(mname), mparams, mret, body, mpos])
+        methods.append(["FuncDef", qstr(mname), mparams, mret, body, mpos, []])
         if not chk("换行") and not chk("去缩进"):
             perr("E2001", "trait 方法后期望换行")
     if chk("EOF"):
@@ -519,7 +543,7 @@ def parse_impl_def():
         expect(":", "':'")
         expect("换行", "换行")
         let mbody = parse_block()
-        methods.append(["FuncDef", qstr(mname), mparams, mret, mbody, mpos])
+        methods.append(["FuncDef", qstr(mname), mparams, mret, mbody, mpos, []])
     if chk("EOF"):
         perr("E2001", "impl 定义未正确结束")
     expect("去缩进", "去缩进")
