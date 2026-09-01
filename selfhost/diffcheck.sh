@@ -264,7 +264,89 @@ check_value_case() {
     fi
 }
 
+# ---- M-B7：interp 对拍（tree-walking 解释器） ----
+#   run 模式：解释器执行 selfhost/interp.px <file>（Rust px 解释执行 interp）
+#   build 模式：编译版 selfhost/build/interp <file>（验证 interp.px 在 Mini 子集内）
+# 对拍契约（MINI_SUBSET §五 run 层）：
+#   s0*.px → stdout 与 golden/*.stdout 逐字节一致
+#   v0*.px → 全 [PASS] 无 [FAIL]/运行时错误
+# 已知差异：s08（语法覆盖用例，Rust 版本身运行报错，非 run 用例）；--build 的 v01（编译模式浮点 %g 精度）
+check_interp_stdout() {
+    local f="$1" mode="$2"
+    local base; base="$(basename "$f" .px)"
+    echo "── interp 对拍: $f ($mode)"
+    local out
+    if [ "$mode" = "build" ]; then
+        out=$("$(dirname "$0")/build/interp" "$f" 2>&1)
+    else
+        out=$("$PX" run "$(dirname "$0")/interp.px" "$f" 2>&1)
+    fi
+    echo "$out" > "$WORK/$base.px.stdout"
+    if diff -q "$WORK/$base.px.stdout" "$GOLDEN_DIR/$base.stdout" >/dev/null 2>&1; then
+        echo "    ✅ $base stdout 一致"
+        return 0
+    else
+        echo "    ❌ $base stdout 有差异"
+        diff "$GOLDEN_DIR/$base.stdout" "$WORK/$base.px.stdout" | head -6
+        return 1
+    fi
+}
+
+check_interp_value() {
+    local f="$1" mode="$2"
+    local base; base="$(basename "$f" .px)"
+    echo "── interp 对拍: $f ($mode)"
+    local out
+    if [ "$mode" = "build" ]; then
+        out=$("$(dirname "$0")/build/interp" "$f" 2>&1)
+    else
+        out=$("$PX" run "$(dirname "$0")/interp.px" "$f" 2>&1)
+    fi
+    local fails errs passes
+    fails=$(echo "$out" | grep -cE '^\[FAIL\]' || true)
+    errs=$(echo "$out" | grep -cE '运行时错误|错误 \[' || true)
+    passes=$(echo "$out" | grep -cE '^\[PASS\]' || true)
+    if [ "$fails" = "0" ] && [ "$errs" = "0" ]; then
+        echo "    ✅ $base $passes PASS"
+        return 0
+    else
+        echo "    ❌ $base：$fails FAIL / $errs 错误"
+        echo "$out" | grep -E '^\[FAIL\]|运行时错误|错误 \[' | head -4
+        return 1
+    fi
+}
+
 # ---- 入口 ----
+if [ "${1:-}" = "--interp" ]; then
+    shift
+    INTERP_MODE="run"
+    if [ "${1:-}" = "--build" ]; then INTERP_MODE="build"; shift; fi
+    fail=0
+    echo "── interp 对拍（M-B7，tree-walking 解释器）──"
+    for f in "$(dirname "$0")"/cases/s*.px; do
+        [ -e "$f" ] || continue
+        case "$(basename "$f")" in
+            s08_comprehensive.px) continue;;  # 语法覆盖用例，Rust 版本身运行报错（非 run 用例）
+        esac
+        check_interp_stdout "$f" "$INTERP_MODE" || fail=1
+    done
+    for f in "$(dirname "$0")"/cases/v0*.px; do
+        [ -e "$f" ] || continue
+        if [ "$INTERP_MODE" = "build" ] && [ "$(basename "$f")" = "v01_value.px" ]; then
+            echo "── interp 对拍: $f (build，已知浮点 %g 精度差异，跳过)"
+            continue
+        fi
+        check_interp_value "$f" "$INTERP_MODE" || fail=1
+    done
+    if [ "$fail" = "0" ]; then
+        echo "interp 对拍全部通过 ✅"
+        exit 0
+    else
+        echo "存在失败 ❌"
+        exit 1
+    fi
+fi
+
 if [ "${1:-}" = "--value" ]; then
     VAL_MODE="run"
     shift

@@ -169,3 +169,21 @@
 | 1 | **模块不导出 `main` 函数**（M-B6 修正：Rust module.rs + PuXian cg_module.px 一致行为） | import 一个含 `def main()` 的模块时，模块的 main 不再合并进主程序（避免编译模式 fn_main 重定义冲突） | 模块（库文件）不定义 main；入口 main 只写在主程序 |
 | 2 | **编译模式 `str(float)` 用 C `%g`（6 位有效数字）** | 高精度浮点字面量（如 `1.4142135623730951`）在编译版 codegen（--build）输出截断为 `1.41421`，与解释器/rust Display 不一致；`--codegen`（run）模式无此问题 | codegen 用例避免 >6 位有效数字的浮点字面量；`--codegen --build` 对拍跳过 v01（已知差异） |
 | 3 | **编译模式 `str(float)` 指数格式 `%g`（如 `1e+15`）** | `cg_expand_sci` 已在 codegen 层展开为定点（对齐 Rust Display），但运行时 `print(1e15)` 编译版仍输出 `1e+15` | codegen 生成 C 源码无此问题；运行时打印大浮点走解释器或规避 |
+
+## 十一、M-B7 新增：interp 自举重写完成（tree-walking 解释器，run 层对拍）
+
+- **交付**：`selfhost/interp.px`（主入口/内置注册）+ `it_util.px`（工具/值包装）+ `i_err.px`（错误）+ `ival.px`（值层）+ `icall.px`（调用/方法）+ `ibuiltin.px`（内置分发）+ `iexpr.px`（表达式/推导式/match）+ `istmt.px`（语句/赋值）。复用 `parser.px`/`pxlexer.px`/`cg_module.px`。
+- **对拍**：`./diffcheck.sh --interp [--build]` —— s01-s07/s09 **stdout 逐字节一致**（run + build 双模式 8/8），v01-v03 **全 PASS**（259/39/26）；`--build` 验证 interp.px 本身在 Mini 子集内（可被 codegen 编译）。
+- **值表示**：原生值（int/float/str/bool/null/list/dict/tuple/result/range/bytes）直接透传（PuXian 语义已与 Rust 对齐）；用户函数/结构体/枚举/类型对象/生成器/内置函数用 dict 包装（`__ufn__`/`__struct__`/`__enum__`/`__typeref__`/`__gen__`/`__builtin__`）。
+- **错误传播**：eval 返回 `Result`，`Err({"__err__":...})` 真实错误 / `Err({"__prop__":v})` `?` 传播；仅在 `i_call_function` 边界把 `__prop__` 转为正常返回值（对齐 M39 propagate 语义）。
+- **语言增强（自举必需）**：新增 **`tuple(list/tuple) → tuple`** 内置函数（Rust builtin.rs + C runtime bi_tuple 双模式）——PuXian 原本无法动态构造 tuple 值（`tuple([1,2])` 报"未定义变量"），自举 interp 求值 Tuple 字面量/切片必须。已双模式对齐（`tuple([1,2,3])` → `(1, 2, 3)`）。
+- **修复的 Rust/C 端缺陷**：无（本轮纯 PuXian 侧）。
+- **interp 已知限制（写代码规避）**：
+
+| # | 限制 | 现象 | 规避 |
+|---|---|---|---|
+| 1 | 并发语句（spawn/send/recv/select/chan/mutex/rwlock）interp 不支持 | 报"interp 不支持 X（Mini 子集排除）" | Mini 子集不含并发；自举源码不用 |
+| 2 | 内置函数运行时失败（read_file 权限错等）在 interp 内终止（PuXian 无异常捕获） | 错误不可被用户代码 `?` 传播 | read_file 预检查 exists()；对拍用例不含失败路径 |
+| 3 | 编译模式 `str(float)` 用 `%g`（6 位有效数字） | `--interp --build` 对拍 v01 的 float** 精度差异 | 同 §十.2；对拍跳过 v01 build |
+| 4 | 用户 dict 含保留键（`__struct__` 等 `__` 前缀）会被误判为包装值 | 类型/渲染按包装值处理 | 用户 dict 键避免 `__` 前缀 |
+| 5 | 闭包显示名 `<fn <closure>>`（解释器模式） | 与编译模式 `<fn <closureN>>` 不同 | 不依赖闭包显示名（同 §九.5） |

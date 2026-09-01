@@ -1,0 +1,443 @@
+# ============================================================
+# M-B7: ibuiltin.px —— interp 内置函数分发（对齐 builtin.rs Mini 子集部分）
+# ------------------------------------------------------------
+# 内置函数值表示为 {"__builtin__": name}，eval Call 节点检测到后调
+# i_call_builtin 分发。
+# 策略：
+#   1. 值感知类（参数可能含包装值 / 需 i_ 语义）→ 本文件内实现
+#   2. 直接转发类（参数为原生值，行为已双模式对齐）→ Ok(同名内置调用)
+#   3. 可失败类（read_file/int 转换等）→ 预检查返回 Err（对齐 Rust 错误消息）
+# ============================================================
+
+# ---------- 主分发 ----------
+def i_call_builtin(name, args, pos):
+    # ---- 值感知类 ----
+    if name == "print":
+        let parts = []
+        let i = 0
+        while i < len(args):
+            parts.append(i_to_str(args[i]))
+            i += 1
+        print(join(" ", parts))
+        return Ok(null)
+    if name == "str":
+        if len(args) != 1:
+            return Err(i_r1002("str 需要一个参数", pos))
+        return Ok(i_to_str(args[0]))
+    if name == "type":
+        if len(args) != 1:
+            return Err(i_r1002("type 需要一个参数", pos))
+        return Ok(i_type_name(args[0]))
+    if name == "bool":
+        if len(args) != 1:
+            return Err(i_r1002("bool 需要一个参数", pos))
+        return Ok(i_truthy(args[0]))
+    if name == "len":
+        return i_builtin_len(args, pos)
+    if name == "int":
+        return i_builtin_int(args, pos)
+    if name == "float":
+        return i_builtin_float(args, pos)
+    if name == "range":
+        return i_builtin_range(args, pos)
+    if name == "sorted":
+        return i_builtin_sorted(args, pos)
+    if name == "reversed":
+        return i_builtin_reversed(args, pos)
+    if name == "sum":
+        return i_builtin_sum(args, pos)
+    if name == "abs":
+        if len(args) != 1:
+            return Err(i_r1002("abs 需要一个参数", pos))
+        let t = i_type_name(args[0])
+        if t == "int":
+            if args[0] < 0:
+                return Ok(-args[0])
+            return Ok(args[0])
+        if t == "float":
+            if args[0] < 0.0:
+                return Ok(-args[0])
+            return Ok(args[0])
+        return Err(i_r1002("abs 参数需要数值", pos))
+    if name == "min":
+        if len(args) != 2:
+            return Err(i_r1002("min 需要两个参数", pos))
+        let c = i_bin_compare("Lt", args[0], args[1], pos)
+        if c.is_err():
+            return Err(c.err())
+        if c.unwrap():
+            return Ok(args[0])
+        return Ok(args[1])
+    if name == "max":
+        if len(args) != 2:
+            return Err(i_r1002("max 需要两个参数", pos))
+        let c = i_bin_compare("Gt", args[0], args[1], pos)
+        if c.is_err():
+            return Err(c.err())
+        if c.unwrap():
+            return Ok(args[0])
+        return Ok(args[1])
+    if name == "pow":
+        if len(args) != 2:
+            return Err(i_r1002("pow 需要两个参数", pos))
+        let r = i_eval_binary("Pow", args[0], args[1], pos)
+        return r
+    if name == "assert":
+        if len(args) < 1 or len(args) > 2:
+            return Err(i_r1002("assert 需要 1-2 个参数", pos))
+        if not i_truthy(args[0]):
+            let msg = "断言失败"
+            if len(args) > 1:
+                msg = i_to_str(args[1])
+            return Err(i_r1003(msg, pos))
+        return Ok(null)
+    if name == "join":
+        if len(args) != 2:
+            return Err(i_r1002("join 需要 (分隔符, 列表) 两个参数", pos))
+        if type(args[0]) != "string":
+            return Err(i_r1002("join 分隔符需要 string", pos))
+        let parts = []
+        let i = 0
+        while i < len(args[1]):
+            parts.append(i_to_str(args[1][i]))
+            i += 1
+        return Ok(join(args[0], parts))
+    if name == "contains":
+        if len(args) != 2:
+            return Err(i_r1002("contains 需要两个参数", pos))
+        let t0 = i_type_name(args[0])
+        if t0 == "string":
+            return Ok(contains(args[0], args[1]))
+        if t0 == "list":
+            let i = 0
+            while i < len(args[0]):
+                if i_eq(args[0][i], args[1]):
+                    return Ok(true)
+                i += 1
+            return Ok(false)
+        return Err(i_r1002("contains 参数类型不支持", pos))
+    if name == "split":
+        if len(args) != 2:
+            return Err(i_r1002("split 需要 (字符串, 分隔符) 两个参数", pos))
+        if type(args[0]) != "string" or type(args[1]) != "string":
+            return Err(i_r1002("split 参数需要 string", pos))
+        return Ok(args[0].split(args[1]))
+    if name == "trim":
+        if len(args) != 1:
+            return Err(i_r1002("trim 需要一个参数", pos))
+        if type(args[0]) != "string":
+            return Err(i_r1002("trim 参数需要 string", pos))
+        return Ok(args[0].trim())
+    if name == "to_upper":
+        if len(args) != 1:
+            return Err(i_r1002("to_upper 需要一个参数", pos))
+        return Ok(args[0].upper())
+    if name == "to_lower":
+        if len(args) != 1:
+            return Err(i_r1002("to_lower 需要一个参数", pos))
+        return Ok(args[0].lower())
+    if name == "replace":
+        if len(args) != 3:
+            return Err(i_r1002("replace 需要 3 个参数", pos))
+        return Ok(args[0].replace(args[1], args[2]))
+    if name == "starts_with":
+        if len(args) != 2:
+            return Err(i_r1002("starts_with 需要两个参数", pos))
+        return Ok(args[0].starts_with(args[1]))
+    if name == "ends_with":
+        if len(args) != 2:
+            return Err(i_r1002("ends_with 需要两个参数", pos))
+        return Ok(args[0].ends_with(args[1]))
+    if name == "list":
+        if len(args) != 1:
+            return Err(i_r1002("list 需要一个参数", pos))
+        let t = i_type_name(args[0])
+        if t == "generator":
+            return Ok(args[0]["__gen__"])
+        return Ok(list(args[0]))
+    if name == "tuple":
+        if len(args) != 1:
+            return Err(i_r1002("tuple 需要一个参数", pos))
+        let t = i_type_name(args[0])
+        if t == "list" or t == "tuple":
+            return Ok(tuple(args[0]))
+        return Err(i_r1002("tuple 参数需要 list/tuple", pos))
+    if name == "dict":
+        return Ok(it_new_dict())
+    if name == "map":
+        return i_builtin_map(args, pos)
+    if name == "filter":
+        return i_builtin_filter(args, pos)
+    if name == "reduce":
+        return i_builtin_reduce(args, pos)
+    # ---- 直接转发类（行为已双模式对齐，参数为原生值） ----
+    if name == "read_file":
+        if len(args) != 1:
+            return Err(i_r1002("read_file 需要一个路径参数", pos))
+        if not exists(args[0]):
+            return Err(i_err("R2001", "io: 读取文件失败 " + args[0] + ": No such file or directory (os error 2)", pos))
+        return Ok(read_file(args[0]))
+    if name == "write_file":
+        return Ok(write_file(args[0], args[1]))
+    if name == "append_file":
+        return Ok(append_file(args[0], args[1]))
+    if name == "exists":
+        return Ok(exists(args[0]))
+    if name == "remove":
+        return Ok(remove(args[0]))
+    if name == "mkdir":
+        return Ok(mkdir(args[0]))
+    if name == "list_dir":
+        return Ok(list_dir(args[0]))
+    if name == "file_size":
+        return Ok(file_size(args[0]))
+    if name == "read_bytes":
+        return Ok(read_bytes(args[0]))
+    if name == "write_bytes":
+        return Ok(write_bytes(args[0], args[1]))
+    if name == "regex_match":
+        return Ok(regex_match(args[0], args[1]))
+    if name == "regex_find":
+        return Ok(regex_find(args[0], args[1]))
+    if name == "regex_search":
+        return Ok(regex_search(args[0], args[1]))
+    if name == "regex_find_all":
+        return Ok(regex_find_all(args[0], args[1]))
+    if name == "regex_replace":
+        return Ok(regex_replace(args[0], args[1], args[2]))
+    if name == "regex_split":
+        return Ok(regex_split(args[0], args[1]))
+    if name == "json_parse":
+        return Ok(json_parse(args[0]))
+    if name == "json_stringify":
+        return Ok(json_stringify(args[0]))
+    if name == "json_path":
+        return Ok(json_path(args[0], args[1]))
+    if name == "json_path_set":
+        return Ok(json_path_set(args[0], args[1], args[2]))
+    if name == "os_spawn":
+        return Ok(os_spawn(args[0]))
+    if name == "os_wait":
+        return Ok(os_wait(args[0]))
+    if name == "os_kill":
+        return Ok(os_kill(args[0]))
+    if name == "env":
+        return Ok(env(args[0]))
+    if name == "now":
+        return Ok(now())
+    if name == "sleep":
+        sleep(args[0])
+        return Ok(null)
+    if name == "exit":
+        return Ok(exit(args[0]))
+    if name == "hex_to_int":
+        return Ok(hex_to_int(args[0]))
+    if name == "int_to_hex":
+        return Ok(int_to_hex(args[0], args[1]))
+    if name == "int_to_bytes":
+        return Ok(int_to_bytes(args[0], args[1], args[2]))
+    if name == "bytes_to_int":
+        return Ok(bytes_to_int(args[0]))
+    if name == "Ok":
+        if len(args) == 0:
+            return Ok(Ok(null))
+        return Ok(Ok(args[0]))
+    if name == "Err":
+        if len(args) == 0:
+            return Ok(Err(null))
+        return Ok(Err(args[0]))
+    if name == "Some":
+        if len(args) == 0:
+            return Ok(null)
+        return Ok(args[0])
+    return Err(i_r1002("未知内置函数: " + name, pos))
+
+# ---------- len（对齐 builtin.rs Len） ----------
+def i_builtin_len(args, pos):
+    if len(args) != 1:
+        return Err(i_r1002("len 需要一个参数", pos))
+    let t = i_type_name(args[0])
+    if t == "string":
+        return Ok(len(args[0]))
+    if t == "list" or t == "tuple":
+        return Ok(len(args[0]))
+    if t == "dict":
+        return Ok(len(args[0].keys()))
+    if t == "generator":
+        return Ok(len(args[0]["__gen__"]))
+    if t == "bytes":
+        return Ok(len(args[0]))
+    if t == "range":
+        return Ok(len(list(args[0])))
+    return Err(i_r1002("len 不支持类型 " + t, pos))
+
+# ---------- int（对齐 builtin.rs Int） ----------
+def i_builtin_int(args, pos):
+    if len(args) != 1:
+        return Err(i_r1002("int 需要一个参数", pos))
+    let t = i_type_name(args[0])
+    if t == "int":
+        return Ok(args[0])
+    if t == "float":
+        return Ok(int(args[0]))
+    if t == "bool":
+        if args[0]:
+            return Ok(1)
+        return Ok(0)
+    if t == "string":
+        let s = args[0].trim()
+        if s == "":
+            return Err(i_r1002("无法将 '" + args[0] + "' 转为 int", pos))
+        let n = int(s)
+        return Ok(n)
+    return Err(i_r1002("int 不支持此类型", pos))
+
+# ---------- float（对齐 builtin.rs Float） ----------
+def i_builtin_float(args, pos):
+    if len(args) != 1:
+        return Err(i_r1002("float 需要一个参数", pos))
+    let t = i_type_name(args[0])
+    if t == "int":
+        return Ok(float(args[0]))
+    if t == "float":
+        return Ok(args[0])
+    if t == "string":
+        let s = args[0].trim()
+        let f = float(s)
+        return Ok(f)
+    return Err(i_r1002("float 不支持此类型", pos))
+
+# ---------- range（对齐 builtin.rs Range） ----------
+def i_builtin_range(args, pos):
+    let start = 0
+    let end = 0
+    let step = 1
+    if len(args) == 1:
+        end = args[0]
+    elif len(args) == 2:
+        start = args[0]
+        end = args[1]
+    elif len(args) == 3:
+        start = args[0]
+        end = args[1]
+        step = args[2]
+    else:
+        return Err(i_r1002("range 需要 1-3 个参数", pos))
+    if type(start) != "int" or type(end) != "int" or type(step) != "int":
+        return Err(i_r1002("range 参数需要整数", pos))
+    if step == 0:
+        return Err(i_r1006("range step 不能为 0", pos))
+    return Ok(range(start, end, step))
+
+# ---------- sorted（对齐 builtin.rs Sorted：按 to_string 排序） ----------
+def i_builtin_sorted(args, pos):
+    if len(args) != 1:
+        return Err(i_r1002("sorted 需要一个参数", pos))
+    let t = i_type_name(args[0])
+    if t != "list" and t != "tuple":
+        return Err(i_r1002("sorted 参数需要 list/tuple", pos))
+    let items = []
+    let i = 0
+    while i < len(args[0]):
+        items.append(args[0][i])
+        i += 1
+    let n = len(items)
+    let ii = 0
+    while ii < n:
+        let j = 0
+        while j < n - 1 - ii:
+            if i_to_str(items[j]) > i_to_str(items[j + 1]):
+                let tmp = items[j]
+                items[j] = items[j + 1]
+                items[j + 1] = tmp
+            j += 1
+        ii += 1
+    return Ok(items)
+
+# ---------- reversed（对齐 builtin.rs Reversed） ----------
+def i_builtin_reversed(args, pos):
+    if len(args) != 1:
+        return Err(i_r1002("reversed 需要一个参数", pos))
+    let t = i_type_name(args[0])
+    let items = []
+    if t == "list" or t == "tuple":
+        let i = 0
+        while i < len(args[0]):
+            items.append(args[0][i])
+            i += 1
+    elif t == "string":
+        let i = 0
+        while i < len(args[0]):
+            items.append(args[0][i])
+            i += 1
+    else:
+        return Err(i_r1002("reversed 参数类型不支持", pos))
+    let n = len(items)
+    let out = []
+    let i = n - 1
+    while i >= 0:
+        out.append(items[i])
+        i -= 1
+    return Ok(out)
+
+# ---------- sum（对齐 builtin.rs Sum：从 0 累加） ----------
+def i_builtin_sum(args, pos):
+    if len(args) != 1:
+        return Err(i_r1002("sum 需要一个参数", pos))
+    let t = i_type_name(args[0])
+    if t != "list" and t != "tuple":
+        return Err(i_r1002("sum 参数需要 list/tuple", pos))
+    let acc = 0
+    let i = 0
+    while i < len(args[0]):
+        let r = i_bin_add(acc, args[0][i], pos)
+        if r.is_err():
+            return Err(r.err())
+        acc = r.unwrap()
+        i += 1
+    return Ok(acc)
+
+# ---------- map（对齐 builtin Map：f(x) 收集） ----------
+def i_builtin_map(args, pos):
+    if len(args) != 2:
+        return Err(i_r1002("map 需要 (函数, 列表) 两个参数", pos))
+    let out = []
+    let i = 0
+    while i < len(args[1]):
+        let r = i_call_value(args[0], [args[1][i]], pos)
+        if r.is_err():
+            return Err(r.err())
+        out.append(r.unwrap())
+        i += 1
+    return Ok(out)
+
+# ---------- filter（对齐 builtin Filter：f(x) 真值保留） ----------
+def i_builtin_filter(args, pos):
+    if len(args) != 2:
+        return Err(i_r1002("filter 需要 (函数, 列表) 两个参数", pos))
+    let out = []
+    let i = 0
+    while i < len(args[1]):
+        let r = i_call_value(args[0], [args[1][i]], pos)
+        if r.is_err():
+            return Err(r.err())
+        if i_truthy(r.unwrap()):
+            out.append(args[1][i])
+        i += 1
+    return Ok(out)
+
+# ---------- reduce（对齐 builtin Reduce：二元折叠） ----------
+def i_builtin_reduce(args, pos):
+    if len(args) != 2:
+        return Err(i_r1002("reduce 需要 (函数, 列表) 两个参数", pos))
+    if len(args[1]) == 0:
+        return Ok(null)
+    let acc = args[1][0]
+    let i = 1
+    while i < len(args[1]):
+        let r = i_call_value(args[0], [acc, args[1][i]], pos)
+        if r.is_err():
+            return Err(r.err())
+        acc = r.unwrap()
+        i += 1
+    return Ok(acc)

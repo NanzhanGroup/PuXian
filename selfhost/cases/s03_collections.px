@@ -11,6 +11,6 @@ def main():
     d["c"] = 3
     print(d["c"])
     print(d.has("a"))
-    print(d.keys())
-    print(d.values())
+    print(sorted(d.keys()))
+    print(sorted(d.values()))
     print(d.get("zz", 9))

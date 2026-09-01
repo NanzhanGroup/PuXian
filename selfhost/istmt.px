@@ -1,0 +1,335 @@
+# ============================================================
+# M-B7: istmt.px —— interp 语句执行（对齐 interp.rs exec_stmt）
+# ------------------------------------------------------------
+# 执行结果（Result 载荷）：
+#   null                                    → Normal
+#   {"__flow__": "return", "value": v}      → Return(v)
+#   {"__flow__": "break"}                   → Break
+#   {"__flow__": "continue"}                → Continue
+# 错误：Err({"__err__": ...}) / Err({"__prop__": v})
+# ------------------------------------------------------------
+# 作用域：if/for/while 沿用 Python 语义（不新建作用域），
+# 与 Rust exec_block 一致。闭包/函数调用新建 env（env_new）。
+# 并发语句（spawn/send/recv/select/chan）Mini 子集排除 → 报错。
+# ============================================================
+
+# ---------- 语句分发 ----------
+def i_exec_stmt(stmt, env):
+    let ty = stmt[0]
+    if ty == "VarDecl":
+        let v = null
+        if stmt[4] != null:
+            let r = i_eval_expr(stmt[4], env)
+            if r.is_err():
+                return Err(r.err())
+            v = r.unwrap()
+        env_define(env, rust_unescape(stmt[2]), v)
+        return Ok(null)
+    if ty == "Assign":
+        let vr = i_eval_expr(stmt[3], env)
+        if vr.is_err():
+            return Err(vr.err())
+        return i_assign(stmt[1], stmt[2], vr.unwrap(), env, stmt[4])
+    if ty == "ExprStmt":
+        let r = i_eval_expr(stmt[1], env)
+        if r.is_err():
+            return Err(r.err())
+        return Ok(null)
+    if ty == "If":
+        return i_exec_if(stmt, env)
+    if ty == "For":
+        # ["For", var, iterable, body, pos]
+        let ir = i_eval_expr(stmt[2], env)
+        if ir.is_err():
+            return Err(ir.err())
+        let it = ir.unwrap()
+        g_loop_depth += 1
+        let r = i_exec_for(rust_unescape(stmt[1]), it, stmt[3], env, stmt[4])
+        g_loop_depth -= 1
+        return r
+    if ty == "While":
+        g_loop_depth += 1
+        let r = i_exec_while(stmt, env)
+        g_loop_depth -= 1
+        return r
+    if ty == "Return":
+        let v = null
+        if stmt[1] != null:
+            let r = i_eval_expr(stmt[1], env)
+            if r.is_err():
+                return Err(r.err())
+            v = r.unwrap()
+        return Ok({"__flow__": "return", "value": v})
+    if ty == "Break":
+        if g_loop_depth == 0:
+            return Err(i_r1005("break 出现在循环外", stmt[1]))
+        return Ok({"__flow__": "break"})
+    if ty == "Continue":
+        if g_loop_depth == 0:
+            return Err(i_r1005("continue 出现在循环外", stmt[1]))
+        return Ok({"__flow__": "continue"})
+    if ty == "FuncDef":
+        # ["FuncDef", name, params, ret_ty, body, pos]
+        let name = rust_unescape(stmt[1])
+        env_define(env, name, it_ufn(name, stmt[2], stmt[3], stmt[4], env, false))
+        return Ok(null)
+    if ty == "StructDef":
+        return i_exec_struct(stmt, env)
+    if ty == "EnumDef":
+        return i_exec_enum(stmt, env)
+    if ty == "TraitDef":
+        # ["TraitDef", name, methods, pos]
+        let name = rust_unescape(stmt[1])
+        g_traits[name] = stmt[2]
+        return Ok(null)
+    if ty == "ImplDef":
+        return i_exec_impl(stmt, env)
+    if ty == "Import":
+        # 模块已在解析阶段合并（cg_resolve_modules），此处忽略
+        return Ok(null)
+    if ty == "Empty":
+        return Ok(null)
+    if ty == "Spawn":
+        return Err(i_r1002("interp 不支持 spawn（Mini 子集排除）", stmt[2]))
+    if ty == "ChanDecl":
+        return Err(i_r1002("interp 不支持 chan 声明（Mini 子集排除）", stmt[2]))
+    if ty == "Send":
+        return Err(i_r1002("interp 不支持 send（Mini 子集排除）", stmt[3]))
+    if ty == "Recv":
+        return Err(i_r1002("interp 不支持 recv（Mini 子集排除）", stmt[2]))
+    if ty == "Select":
+        return Err(i_r1002("interp 不支持 select（Mini 子集排除）", stmt[3]))
+    return Err(i_r1002("未知语句节点: " + ty, [0, 0]))
+
+# ---------- if（对齐 exec_stmt If） ----------
+def i_exec_if(stmt, env):
+    # ["If", branches([[cond, body]...]), else_branch, pos]
+    let bi = 0
+    while bi < len(stmt[1]):
+        let br = stmt[1][bi]
+        let cr = i_eval_expr(br[0], env)
+        if cr.is_err():
+            return Err(cr.err())
+        if i_truthy(cr.unwrap()):
+            return i_exec_block(br[1], env)
+        bi += 1
+    if stmt[2] != null:
+        return i_exec_block(stmt[2], env)
+    return Ok(null)
+
+# ---------- for（对齐 exec_for） ----------
+def i_exec_for(varname, iterable, body, env, pos):
+    let ivr = i_iter(iterable, pos)
+    if ivr.is_err():
+        return Err(ivr.err())
+    let items = ivr.unwrap()
+    let ii = 0
+    while ii < len(items):
+        env_define(env, varname, items[ii])
+        let r = i_exec_block(body, env)
+        if r.is_err():
+            return Err(r.err())
+        let fl = r.unwrap()
+        if fl != null and type(fl) == "dict" and fl.has("__flow__"):
+            if fl["__flow__"] == "break":
+                break
+            if fl["__flow__"] == "return":
+                return Ok(fl)
+            if fl["__flow__"] == "continue":
+                ii += 1
+                continue
+        ii += 1
+    return Ok(null)
+
+# ---------- while（对齐 exec_stmt While） ----------
+def i_exec_while(stmt, env):
+    # ["While", cond, body, pos]
+    while true:
+        let cr = i_eval_expr(stmt[1], env)
+        if cr.is_err():
+            return Err(cr.err())
+        if not i_truthy(cr.unwrap()):
+            break
+        let r = i_exec_block(stmt[2], env)
+        if r.is_err():
+            return Err(r.err())
+        let fl = r.unwrap()
+        if fl != null and type(fl) == "dict" and fl.has("__flow__"):
+            if fl["__flow__"] == "break":
+                break
+            if fl["__flow__"] == "return":
+                return Ok(fl)
+    return Ok(null)
+
+# ---------- 语句块（不新建作用域，Python 语义） ----------
+def i_exec_block(body, env):
+    let i = 0
+    while i < len(body):
+        let r = i_exec_stmt(body[i], env)
+        if r.is_err():
+            return Err(r.err())
+        let fl = r.unwrap()
+        if fl != null and type(fl) == "dict" and fl.has("__flow__"):
+            return Ok(fl)
+        i += 1
+    return Ok(null)
+
+# ---------- struct 定义 ----------
+def i_exec_struct(stmt, env):
+    # ["StructDef", name, fields, pos]  fields: [["StructField", name, ty, pos]]
+    let name = rust_unescape(stmt[1])
+    let fields = []
+    let i = 0
+    while i < len(stmt[2]):
+        let f = stmt[2][i]
+        fields.append({"name": rust_unescape(f[1]), "ty": f[2]})
+        i += 1
+    g_structs[name] = {"fields": fields}
+    env_define(env, name, it_typeref("struct", name))
+    return Ok(null)
+
+# ---------- enum 定义 ----------
+def i_exec_enum(stmt, env):
+    # ["EnumDef", name, variants, pos]  variants: [["EnumVariant", name, fields, pos]]
+    let name = rust_unescape(stmt[1])
+    let vs = []
+    let i = 0
+    while i < len(stmt[2]):
+        vs.append(rust_unescape(stmt[2][i][1]))
+        i += 1
+    g_enums[name] = vs
+    env_define(env, name, it_typeref("enum", name))
+    return Ok(null)
+
+# ---------- impl 定义（对齐 exec_stmt ImplDef：closure=globals） ----------
+def i_exec_impl(stmt, env):
+    # ["ImplDef", type_name, trait_name, methods, pos]
+    let tn = rust_unescape(stmt[1])
+    let m = it_new_dict()
+    if g_impls.has(tn):
+        m = g_impls[tn]
+    let i = 0
+    while i < len(stmt[3]):
+        let fd = stmt[3][i]
+        let mname = rust_unescape(fd[1])
+        m[mname] = it_ufn(mname, fd[2], fd[3], fd[4], g_globals, false)
+        i += 1
+    g_impls[tn] = m
+    return Ok(null)
+
+# ---------- 赋值（对齐 assign） ----------
+def i_assign(target, op, v, env, pos):
+    if target[0] == "Var":
+        let name = rust_unescape(target[1])
+        if op == "Assign":
+            if not env_set(env, name, v):
+                env_define(env, name, v)
+            return Ok(null)
+        let gr = env_get(env, name)
+        if not gr["found"]:
+            return Err(i_r1001(name, pos))
+        let nr = i_apply_assign_op(op, gr["value"], v, pos)
+        if nr.is_err():
+            return Err(nr.err())
+        env_set(env, name, nr.unwrap())
+        return Ok(null)
+    if target[0] == "Field":
+        # ["Field", obj, name, pos]
+        let or_ = i_eval_expr(target[1], env)
+        if or_.is_err():
+            return Err(or_.err())
+        let ov = or_.unwrap()
+        let fname = rust_unescape(target[2])
+        let t = i_type_name(ov)
+        if t != "struct" and t != "dict":
+            return Err(i_r1007("赋值目标不是可写对象", pos))
+        let nv = v
+        if op != "Assign":
+            let old = null
+            if t == "struct":
+                if ov["__fields__"].has(fname):
+                    old = ov["__fields__"][fname]
+            else:
+                if ov.has(fname):
+                    old = ov[fname]
+            let ar = i_apply_assign_op(op, old, v, pos)
+            if ar.is_err():
+                return Err(ar.err())
+            nv = ar.unwrap()
+        if t == "struct":
+            ov["__fields__"][fname] = nv
+        else:
+            ov[fname] = nv
+        return Ok(null)
+    if target[0] == "Index":
+        let or_ = i_eval_expr(target[1], env)
+        if or_.is_err():
+            return Err(or_.err())
+        let ov = or_.unwrap()
+        let ir = i_eval_expr(target[2], env)
+        if ir.is_err():
+            return Err(ir.err())
+        let iv = ir.unwrap()
+        let t = i_type_name(ov)
+        if t == "list":
+            let ar = i_as_index(iv, len(ov), pos)
+            if ar.is_err():
+                return Err(ar.err())
+            let i = ar.unwrap()
+            let nv = v
+            if op != "Assign":
+                let rr = i_apply_assign_op(op, ov[i], v, pos)
+                if rr.is_err():
+                    return Err(rr.err())
+                nv = rr.unwrap()
+            ov[i] = nv
+            return Ok(null)
+        if t == "dict":
+            if type(iv) != "string":
+                return Err(i_r1002("字典键必须是字符串", pos))
+            let nv = v
+            if op != "Assign":
+                let old = null
+                if ov.has(iv):
+                    old = ov[iv]
+                let rr = i_apply_assign_op(op, old, v, pos)
+                if rr.is_err():
+                    return Err(rr.err())
+                nv = rr.unwrap()
+            ov[iv] = nv
+            return Ok(null)
+        return Err(i_r1002("索引赋值目标不支持", pos))
+    return Err(i_r1002("非法赋值目标", pos))
+
+# ---------- 复合赋值运算符 → 二元运算符（对齐 apply_assign_op） ----------
+def i_apply_assign_op(op, old, new, pos):
+    if op == "Assign":
+        return Ok(new)
+    let bop = null
+    if op == "Plus":
+        bop = "Add"
+    if op == "Minus":
+        bop = "Sub"
+    if op == "Star":
+        bop = "Mul"
+    if op == "Slash":
+        bop = "Div"
+    if op == "IntDiv":
+        bop = "IntDiv"
+    if op == "Mod":
+        bop = "Mod"
+    if op == "Pow":
+        bop = "Pow"
+    if op == "BitAnd":
+        bop = "BitAnd"
+    if op == "BitOr":
+        bop = "BitOr"
+    if op == "BitXor":
+        bop = "BitXor"
+    if op == "Shl":
+        bop = "Shl"
+    if op == "Shr":
+        bop = "Shr"
+    if op == "ShrU":
+        bop = "ShrU"
+    return i_eval_binary(bop, old, new, pos)

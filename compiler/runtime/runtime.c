@@ -137,6 +137,7 @@ static LXValue bi_vhost(LXValue* args, int nargs, void* ctx);
 static LXValue bi_rate_limit(LXValue* args, int nargs, void* ctx);
 static LXValue bi_gen_next(LXValue* args, int nargs, void* ctx);
 static LXValue bi_list(LXValue* args, int nargs, void* ctx);
+static LXValue bi_tuple(LXValue* args, int nargs, void* ctx);
 static int px_vhost_resolve(const char* host_hdr, const char* default_root,
                             char* out_root, int out_root_sz, LXValue* out_handler, int* has_handler);
 static void px_pool_push(int fd);
@@ -4637,6 +4638,7 @@ void px_register_builtins(void) {
     // M32 生成器表达式：gen_next 逐项取值 / list 转列表
     px_set_global("gen_next", px_native("gen_next", bi_gen_next));
     px_set_global("list", px_native("list", bi_list));
+    px_set_global("tuple", px_native("tuple", bi_tuple));
     // M18 后台定时任务 / 定时器原语
     px_set_global("set_timeout", px_native("set_timeout", bi_set_timeout));
     px_set_global("set_interval", px_native("set_interval", bi_set_interval));
@@ -11299,6 +11301,17 @@ static LXValue bi_list(LXValue* args, int nargs, void* ctx) {
     }
     // range：C 端 range() 已物化为 list（bi_range 直接返回 list）
     px_error("list 不支持类型 %s", px_type_name(v));
+    return px_null();
+}
+
+// M-B7：tuple(list/tuple) → tuple（自举 interp 动态构造 tuple 值）
+static LXValue bi_tuple(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("tuple 需要 1 个参数");
+    LXValue v = args[0];
+    if (v.type == PX_LIST) return px_tuple(v.as.obj->as.list.items, v.as.obj->as.list.len);
+    if (v.type == PX_TUPLE) return v;
+    px_error("tuple 参数需要 list/tuple");
     return px_null();
 }
 

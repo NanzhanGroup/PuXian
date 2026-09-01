@@ -1,0 +1,131 @@
+# ============================================================
+# M-B7: interp 用 PuXian 重写（自举第五步）—— tree-walking 解释器
+# ------------------------------------------------------------
+# 对拍契约（MINI_SUBSET §五 run 层）：解释执行 Mini 子集用例，
+# stdout 与 Rust 版 px run 逐字节一致。
+# 用法：
+#   px run interp.px <file.px>          # 解释执行 file.px
+#   px build interp.px → build/interp   # 编译版解释器
+# 架构：
+#   - 复用 parser.px/pxlexer.px（lex/parse）+ cg_module.px（import 合并）
+#   - it_util.px  工具（cg_new_dict/rust_unescape/值包装）
+#   - i_err.px    错误构造（对齐 LxError）
+#   - ival.px     值层（type_name/fmt_value/迭代/索引/切片/运算符）
+#   - icall.px    调用（call_value/call_function/call_method）
+#   - ibuiltin.px 内置函数分发
+#   - iexpr.px    表达式求值
+#   - istmt.px    语句执行
+# 值表示：原生值直接透传（PuXian 语义已与 Rust 对齐）；用户函数/结构体/
+# 枚举/类型对象/生成器/内置函数用 dict 包装（__ufn__/__struct__/__enum__/
+# __typeref__/__gen__/__builtin__）。
+# 错误：Result Err 传播（__err__ 真实错误 / __prop__ ? 传播），
+# 仅在 i_call_function 边界把 __prop__ 转为正常返回值（对齐 M39 语义）。
+# ============================================================
+import "parser.px"
+import "env.px"
+import "cg_module.px"
+import "it_util.px"
+import "i_err.px"
+import "ival.px"
+import "icall.px"
+import "ibuiltin.px"
+import "iexpr.px"
+import "istmt.px"
+
+# ---------- lex/parser 全局状态（主文件声明；import 不合并模块顶层 let） ----------
+let g_src = ""
+let g_len = 0
+let g_pos = 0
+let g_line = 1
+let g_col = 1
+let g_indent_stack = [0]
+let g_at_line_start = true
+let g_toks = []
+let g_count = 0
+let g_pending = []
+let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn": "fn", "struct": "struct", "enum": "enum", "trait": "trait", "impl": "impl", "match": "match", "case": "case", "if": "if", "elif": "elif", "else": "else", "for": "for", "while": "while", "in": "in", "and": "and", "or": "or", "not": "not", "return": "return", "break": "break", "continue": "continue", "import": "import", "from": "from", "pub": "pub", "as": "as", "spawn": "spawn", "chan": "chan", "send": "send", "recv": "recv", "select": "select", "true": "true", "false": "false", "null": "null", "None": "null", "self": "self", "capture": "capture"}
+let CTRL_ALL = "\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}\u{8}\u{b}\u{c}\u{e}\u{f}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1a}\u{1b}\u{1c}\u{1d}\u{1e}\u{1f}\u{7f}\u{80}\u{81}\u{82}\u{83}\u{84}\u{85}\u{86}\u{87}\u{88}\u{89}\u{8a}\u{8b}\u{8c}\u{8d}\u{8e}\u{8f}\u{90}\u{91}\u{92}\u{93}\u{94}\u{95}\u{96}\u{97}\u{98}\u{99}\u{9a}\u{9b}\u{9c}\u{9d}\u{9e}\u{9f}"
+let p_toks = []
+let p_pos = 0
+let loaded = {"_": 0}
+
+# ---------- interp 全局状态 ----------
+let g_globals = null
+let g_structs = it_new_dict()
+let g_enums = it_new_dict()
+let g_traits = it_new_dict()
+let g_impls = it_new_dict()
+let g_loop_depth = 0
+let g_exit_code = 0
+
+# ---------- 内置函数注册（Mini 子集 §2.5 白名单） ----------
+def i_register_builtins():
+    let names = ["print", "str", "type", "bool", "len", "int", "float", "range", "sorted", "reversed", "sum", "abs", "min", "max", "pow", "assert", "join", "contains", "split", "trim", "to_upper", "to_lower", "replace", "starts_with", "ends_with", "list", "tuple", "dict", "map", "filter", "reduce", "read_file", "write_file", "append_file", "exists", "remove", "mkdir", "list_dir", "file_size", "read_bytes", "write_bytes", "regex_match", "regex_find", "regex_search", "regex_find_all", "regex_replace", "regex_split", "json_parse", "json_stringify", "json_path", "json_path_set", "os_spawn", "os_wait", "os_kill", "env", "now", "sleep", "exit", "hex_to_int", "int_to_hex", "int_to_bytes", "bytes_to_int", "Ok", "Err", "Some"]
+    let i = 0
+    while i < len(names):
+        env_define(g_globals, names[i], it_builtin(names[i]))
+        i += 1
+
+# ---------- 程序入口（对齐 run_program） ----------
+def i_run_program(prog):
+    let items = prog[1]
+    let i = 0
+    while i < len(items):
+        let r = i_exec_stmt(items[i], g_globals)
+        if r.is_err():
+            let e = r.err()
+            if e.has("__prop__"):
+                return Err(i_r1004("顶层不能使用错误传播 ?（仅函数内可用）", [0, 0]))
+            return Err(e)
+        let fl = r.unwrap()
+        if fl != null and type(fl) == "dict" and fl.has("__flow__"):
+            return Err(i_r1005("顶层语句出现非法控制流", [0, 0]))
+        i += 1
+    let mr = env_get(g_globals, "main")
+    if mr["found"]:
+        let vr = i_call_value(mr["value"], [], [0, 0])
+        if vr.is_err():
+            let e = vr.err()
+            if e.has("__prop__"):
+                let pv = e["__prop__"]
+                if i_type_name(pv) == "result" and pv.is_err():
+                    print("错误: " + i_to_str(pv.err()))
+                    g_exit_code = 1
+                return Ok(null)
+            return Err(e)
+        let v = vr.unwrap()
+        let t = i_type_name(v)
+        if t == "int":
+            g_exit_code = v
+        elif t == "result":
+            if v.is_ok():
+                let ov = v.unwrap()
+                if i_type_name(ov) == "int":
+                    g_exit_code = ov
+            else:
+                print("错误: " + i_to_str(v.err()))
+                g_exit_code = 1
+    return Ok(null)
+
+# ---------- 入口 ----------
+def main():
+    let f = args()[len(args()) - 1]
+    let base_dir = it_dirname(f)
+    p_toks = lex_tokens(read_file(f))
+    p_pos = 0
+    let ast = parse_program()
+    let prog = cg_resolve_modules(ast, base_dir)
+    g_globals = env_new(null)
+    g_structs = it_new_dict()
+    g_enums = it_new_dict()
+    g_traits = it_new_dict()
+    g_impls = it_new_dict()
+    g_loop_depth = 0
+    g_exit_code = 0
+    i_register_builtins()
+    let r = i_run_program(prog)
+    if r.is_err():
+        let e = r.err()
+        print("运行时错误: " + i_err_display(e))
+        return 1
+    return g_exit_code

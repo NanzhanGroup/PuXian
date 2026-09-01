@@ -404,6 +404,8 @@ impl Interpreter {
             ("rate_limit", Builtin::RateLimit),
             ("gen_next", Builtin::GenNext),
             ("list", Builtin::List),
+            // M-B7：tuple 动态构造（自举 interp 需要）
+            ("tuple", Builtin::Tuple),
             // M33：HTTP/3 预研——UDP 基础设施
             ("udp_open", Builtin::UdpOpen),
             ("udp_send", Builtin::UdpSend),

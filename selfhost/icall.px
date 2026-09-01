@@ -1,0 +1,298 @@
+# ============================================================
+# M-B7: icall.px —— interp 调用层（对齐 interp.rs 调用/方法/内置）
+# ------------------------------------------------------------
+# 对齐项：
+#   call_value → i_call_value
+#   call_function → i_call_function（含默认参数/self 绑定/隐式返回/错误传播边界）
+#   call_method → i_call_method
+#   builtin 调用（builtin.rs call_builtin 的 Mini 子集部分）→ i_call_builtin
+# ------------------------------------------------------------
+# 关键：i_call_function 是"函数边界"——用户代码 ? 传播（__prop__）在此
+# 捕获转为正常返回值（对齐 Rust LxError::propagate 边界语义）。
+# 内置函数失败（如 read_file 不存在）在 PuXian 里是运行时错误（不可捕获），
+# interp 对已知可失败的做预检查返回 Err；其余直接转发（记录已知限制）。
+# ============================================================
+
+# ---------- 调用任意可调用值（对齐 call_value） ----------
+def i_call_value(cv, args, pos):
+    let t = i_type_name(cv)
+    if t == "fn":
+        return i_call_function(cv["__ufn__"], args, null, pos)
+    if t == "builtin":
+        return i_call_builtin(cv["__builtin__"], args, pos)
+    if t == "type":
+        if cv["__typeref__"] == "struct":
+            let name = cv["name"]
+            if not g_structs.has(name):
+                return Err(i_r1002("未知结构体: '" + name + "'", pos))
+            let sdef = g_structs[name]
+            let fields = it_new_dict()
+            let fi = 0
+            while fi < len(sdef["fields"]):
+                let fname = sdef["fields"][fi]["name"]
+                if fi < len(args):
+                    fields[fname] = args[fi]
+                else:
+                    fields[fname] = null
+                fi += 1
+            if len(args) > len(sdef["fields"]):
+                return Err(i_r1005("结构体 " + name + " 字段过多", pos))
+            return Ok(it_struct(name, fields))
+        return Err(i_r1004("枚举类型 " + cv["name"] + " 不能直接调用（用 " + cv["name"] + ".Variant）", pos))
+    return Err(i_r1004("值不可调用: " + i_to_str(cv), pos))
+
+# ---------- 调用用户函数（对齐 call_function） ----------
+def i_call_function(fd, args, selfv, pos):
+    let call_env = env_new(fd["closure"])
+    if selfv != null:
+        env_define(call_env, "self", selfv)
+    let idx = 0
+    let pi = 0
+    let nparams = len(fd["params"])
+    while pi < nparams:
+        let p = fd["params"][pi]
+        let pname = rust_unescape(p[1])
+        if pname == "self":
+            pi += 1
+            continue
+        if idx < len(args):
+            env_define(call_env, pname, args[idx])
+            idx += 1
+        else:
+            let dflt = p[3]
+            if dflt != null:
+                let dvr = i_eval_expr(dflt, fd["closure"])
+                if dvr.is_err():
+                    let e = dvr.err()
+                    if e.has("__prop__"):
+                        return Ok(e["__prop__"])
+                    return Err(e)
+                env_define(call_env, pname, dvr.unwrap())
+            else:
+                return Err(i_r1005("调用 " + fd["name"] + " 缺少参数 '" + pname + "'", pos))
+        pi += 1
+    if idx < len(args):
+        return Err(i_r1005("调用 " + fd["name"] + " 参数过多（" + str(len(args)) + " 个实参，" + str(nparams) + " 个形参）", pos))
+    # 闭包隐式返回：body 最后 ExprStmt 转 Return（构造闭包时已做，这里直接执行）
+    let r = i_exec_block(fd["body"], call_env)
+    if r.is_err():
+        let e = r.err()
+        if e.has("__prop__"):
+            return Ok(e["__prop__"])
+        return Err(e)
+    let fl = r.unwrap()
+    if fl == null:
+        return Ok(null)
+    if type(fl) == "dict" and fl.has("__flow__"):
+        if fl["__flow__"] == "return":
+            return Ok(fl["value"])
+        return Err(i_r1005("函数 " + fd["name"] + " 内出现非法控制流", pos))
+    return Ok(null)
+
+# ---------- 方法分派（对齐 call_method） ----------
+def i_call_method(rcv, name, args, pos):
+    let t = i_type_name(rcv)
+    if t == "string":
+        return i_str_method(rcv, name, args, pos)
+    if t == "list":
+        return i_list_method(rcv, name, args, pos)
+    if t == "dict":
+        return i_dict_method(rcv, name, args, pos)
+    if t == "result":
+        return i_result_method(rcv, name, args, pos)
+    if t == "struct":
+        let tn = rcv["__struct__"]
+        if g_impls.has(tn) and g_impls[tn].has(name):
+            return i_call_function(g_impls[tn][name], args, rcv, pos)
+        return Err(i_r1007("结构体 " + tn + " 没有方法 '" + name + "'", pos))
+    if t == "tuple":
+        if name == "len":
+            return Ok(len(rcv))
+        return Err(i_r1007("tuple 没有方法 '" + name + "'", pos))
+    return Err(i_r1007("类型 " + t + " 没有方法 '" + name + "'", pos))
+
+# 期望字符串参数（对齐 expect_str_arg）
+def i_expect_str_arg(args, idx, mname, pos):
+    if idx < len(args) and type(args[idx]) == "string":
+        return Ok(args[idx])
+    return Err(i_r1002("方法 " + mname + " 参数 " + str(idx + 1) + " 需要 string", pos))
+
+# ---- string 方法（对齐 call_str_method） ----
+def i_str_method(s, name, args, pos):
+    if name == "upper":
+        return Ok(s.upper())
+    if name == "lower":
+        return Ok(s.lower())
+    if name == "trim":
+        return Ok(s.trim())
+    if name == "len":
+        return Ok(len(s))
+    if name == "split":
+        let r = i_expect_str_arg(args, 0, "split", pos)
+        if r.is_err():
+            return Err(r.err())
+        return Ok(s.split(r.unwrap()))
+    if name == "contains":
+        let r = i_expect_str_arg(args, 0, "contains", pos)
+        if r.is_err():
+            return Err(r.err())
+        return Ok(s.contains(r.unwrap()))
+    if name == "replace":
+        let r0 = i_expect_str_arg(args, 0, "replace", pos)
+        if r0.is_err():
+            return Err(r0.err())
+        let r1 = i_expect_str_arg(args, 1, "replace", pos)
+        if r1.is_err():
+            return Err(r1.err())
+        return Ok(s.replace(r0.unwrap(), r1.unwrap()))
+    if name == "starts_with":
+        let r = i_expect_str_arg(args, 0, "starts_with", pos)
+        if r.is_err():
+            return Err(r.err())
+        return Ok(s.starts_with(r.unwrap()))
+    if name == "ends_with":
+        let r = i_expect_str_arg(args, 0, "ends_with", pos)
+        if r.is_err():
+            return Err(r.err())
+        return Ok(s.ends_with(r.unwrap()))
+    return Err(i_r1007("string 没有方法 '" + name + "'", pos))
+
+# ---- list 方法（对齐 call_list_method） ----
+def i_list_method(l, name, args, pos):
+    if name == "len":
+        return Ok(len(l))
+    if name == "append" or name == "push":
+        if len(args) == 0:
+            return Err(i_r1005("list.append 需要一个参数", pos))
+        l.append(args[0])
+        return Ok(null)
+    if name == "pop":
+        if len(l) == 0:
+            return Err(i_r1003("pop 空列表", pos))
+        return Ok(l.pop())
+    if name == "join":
+        let r = i_expect_str_arg(args, 0, "join", pos)
+        if r.is_err():
+            return Err(r.err())
+        let sep = r.unwrap()
+        let parts = []
+        let i = 0
+        while i < len(l):
+            parts.append(i_to_str(l[i]))
+            i += 1
+        return Ok(join(sep, parts))
+    if name == "contains":
+        if len(args) == 0:
+            return Err(i_r1005("list.contains 需要一个参数", pos))
+        let i = 0
+        while i < len(l):
+            if i_eq(l[i], args[0]):
+                return Ok(true)
+            i += 1
+        return Ok(false)
+    if name == "reverse":
+        let n = len(l)
+        let i = 0
+        while i < n // 2:
+            let tmp = l[i]
+            l[i] = l[n - 1 - i]
+            l[n - 1 - i] = tmp
+            i += 1
+        return Ok(null)
+    if name == "sort":
+        let n = len(l)
+        let i = 0
+        while i < n:
+            let j = 0
+            while j < n - 1 - i:
+                if i_to_str(l[j]) > i_to_str(l[j + 1]):
+                    let tmp = l[j]
+                    l[j] = l[j + 1]
+                    l[j + 1] = tmp
+                j += 1
+            i += 1
+        return Ok(null)
+    if name == "index":
+        if len(args) == 0:
+            return Err(i_r1005("list.index 需要一个参数", pos))
+        let i = 0
+        while i < len(l):
+            if i_eq(l[i], args[0]):
+                return Ok(i)
+            i += 1
+        return Err(i_r1003("list.index 未找到元素", pos))
+    return Err(i_r1007("list 没有方法 '" + name + "'", pos))
+
+# ---- dict 方法（对齐 call_dict_method） ----
+def i_dict_method(d, name, args, pos):
+    if name == "len":
+        return Ok(len(d.keys()))
+    if name == "get":
+        let r = i_expect_str_arg(args, 0, "get", pos)
+        if r.is_err():
+            return Err(r.err())
+        let k = r.unwrap()
+        if d.has(k):
+            return Ok(d[k])
+        if len(args) > 1:
+            return Ok(args[1])
+        return Ok(null)
+    if name == "set" or name == "put":
+        let r = i_expect_str_arg(args, 0, "set", pos)
+        if r.is_err():
+            return Err(r.err())
+        let v = null
+        if len(args) > 1:
+            v = args[1]
+        d[r.unwrap()] = v
+        return Ok(null)
+    if name == "keys":
+        return Ok(d.keys())
+    if name == "values":
+        let out = []
+        let ks = d.keys()
+        let i = 0
+        while i < len(ks):
+            out.append(d[ks[i]])
+            i += 1
+        return Ok(out)
+    if name == "has" or name == "contains":
+        let r = i_expect_str_arg(args, 0, "has", pos)
+        if r.is_err():
+            return Err(r.err())
+        return Ok(d.has(r.unwrap()))
+    if name == "remove":
+        let r = i_expect_str_arg(args, 0, "remove", pos)
+        if r.is_err():
+            return Err(r.err())
+        let k = r.unwrap()
+        if d.has(k):
+            let v = d[k]
+            d.remove(k)
+            return Ok(v)
+        return Err(i_r1008("字典没有键 '" + k + "'", pos))
+    return Err(i_r1007("dict 没有方法 '" + name + "'", pos))
+
+# ---- result 方法（对齐 call_method 的 Result 分支） ----
+def i_result_method(r, name, args, pos):
+    if name == "is_ok":
+        if len(args) != 0:
+            return Err(i_r1005("is_ok 不接受参数", pos))
+        return Ok(r.is_ok())
+    if name == "is_err":
+        if len(args) != 0:
+            return Err(i_r1005("is_err 不接受参数", pos))
+        return Ok(r.is_err())
+    if name == "unwrap":
+        if r.is_err():
+            return Err(i_r1004("unwrap 失败: Err(" + i_to_str(r.err()) + ")", pos))
+        return Ok(r.unwrap())
+    if name == "ok":
+        if r.is_ok():
+            return Ok(r.ok())
+        return Ok(null)
+    if name == "err":
+        if r.is_err():
+            return Ok(r.err())
+        return Ok(null)
+    return Err(i_r1007("Result 没有方法 '" + name + "'", pos))

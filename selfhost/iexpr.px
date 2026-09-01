@@ -1,0 +1,482 @@
+# ============================================================
+# M-B7: iexpr.px —— interp 表达式求值（对齐 interp.rs eval_expr）
+# ------------------------------------------------------------
+# AST 为 parser.px 输出的结构化 list（字段顺序见 parser.px LAYOUT）。
+# eval 函数返回 Result（Ok(value) / Err(errval)）：
+#   errval 为 {"__err__": ...}（真实错误）或 {"__prop__": v}（? 传播）
+# 子表达式错误用 ? 传播（仅 i_call_function 边界区分 __prop__）。
+# ============================================================
+
+def i_eval_expr(node, env):
+    let ty = node[0]
+    if ty == "Int":
+        return Ok(node[1])
+    if ty == "Float":
+        return Ok(node[1])
+    if ty == "Str":
+        # 字符串 token 值为 rust_str_debug 格式（带引号），需解码
+        return Ok(rust_unescape(node[1]))
+    if ty == "Bool":
+        return Ok(node[1])
+    if ty == "Null":
+        return Ok(null)
+    if ty == "List":
+        let out = []
+        let i = 0
+        while i < len(node[1]):
+            let r = i_eval_expr(node[1][i], env)
+            if r.is_err():
+                return Err(r.err())
+            out.append(r.unwrap())
+            i += 1
+        return Ok(out)
+    if ty == "Tuple":
+        let out = []
+        let i = 0
+        while i < len(node[1]):
+            let r = i_eval_expr(node[1][i], env)
+            if r.is_err():
+                return Err(r.err())
+            out.append(r.unwrap())
+            i += 1
+        return Ok(tuple(out))
+    if ty == "Dict":
+        let d = it_new_dict()
+        let i = 0
+        while i < len(node[1]):
+            let e = node[1][i]
+            let kr = i_eval_expr(e[0], env)
+            if kr.is_err():
+                return Err(kr.err())
+            let kv = kr.unwrap()
+            if type(kv) != "string":
+                return Err(i_r1002("字典键必须是字符串", node[2]))
+            let vr = i_eval_expr(e[1], env)
+            if vr.is_err():
+                return Err(vr.err())
+            d[kv] = vr.unwrap()
+            i += 1
+        return Ok(d)
+    if ty == "Var":
+        let name = rust_unescape(node[1])
+        let r = env_get(env, name)
+        if r["found"]:
+            return Ok(r["value"])
+        return Err(i_r1001(name, node[2]))
+    if ty == "Field":
+        let or_ = i_eval_expr(node[1], env)
+        if or_.is_err():
+            return Err(or_.err())
+        return i_field(or_.unwrap(), rust_unescape(node[2]), node[3])
+    if ty == "OptionalField":
+        let or_ = i_eval_expr(node[1], env)
+        if or_.is_err():
+            return Err(or_.err())
+        let ov = or_.unwrap()
+        if ov == null:
+            return Ok(null)
+        return i_field(ov, rust_unescape(node[2]), node[3])
+    if ty == "Index":
+        let or_ = i_eval_expr(node[1], env)
+        if or_.is_err():
+            return Err(or_.err())
+        let ir = i_eval_expr(node[2], env)
+        if ir.is_err():
+            return Err(ir.err())
+        return i_index(or_.unwrap(), ir.unwrap(), node[3])
+    if ty == "Slice":
+        let or_ = i_eval_expr(node[1], env)
+        if or_.is_err():
+            return Err(or_.err())
+        let sv = null
+        if node[2] != null:
+            let sr = i_eval_expr(node[2], env)
+            if sr.is_err():
+                return Err(sr.err())
+            sv = sr.unwrap()
+        let ev = null
+        if node[3] != null:
+            let er = i_eval_expr(node[3], env)
+            if er.is_err():
+                return Err(er.err())
+            ev = er.unwrap()
+        let kv = null
+        if node[4] != null:
+            let kr = i_eval_expr(node[4], env)
+            if kr.is_err():
+                return Err(kr.err())
+            kv = kr.unwrap()
+        # 边界 null 视为缺省（对齐 Rust bound()）
+        let st = sv
+        if sv != null and sv == null:
+            st = null
+        let en = ev
+        if ev != null and ev == null:
+            en = null
+        let sp = kv
+        if kv != null and kv == null:
+            sp = null
+        return i_slice(or_.unwrap(), st, en, sp, node[5])
+    if ty == "Call":
+        return i_eval_call(node, env)
+    if ty == "Unary":
+        let r = i_eval_expr(node[2], env)
+        if r.is_err():
+            return Err(r.err())
+        return i_eval_unary(node[1], r.unwrap(), node[3])
+    if ty == "Binary":
+        return i_eval_binary_node(node, env)
+    if ty == "Pipe":
+        return i_eval_pipe(node, env)
+    if ty == "NullCoalesce":
+        let lr = i_eval_expr(node[1], env)
+        if lr.is_err():
+            return Err(lr.err())
+        let l = lr.unwrap()
+        if l == null:
+            return i_eval_expr(node[2], env)
+        return Ok(l)
+    if ty == "Try":
+        let r = i_eval_expr(node[1], env)
+        if r.is_err():
+            return Err(r.err())
+        let v = r.unwrap()
+        if v == null:
+            return Err(i_prop(null))
+        if i_type_name(v) == "result":
+            if v.is_err():
+                return Err(i_prop(v))
+            return Ok(v.unwrap())
+        return Ok(v)
+    if ty == "ForceUnwrap":
+        let r = i_eval_expr(node[1], env)
+        if r.is_err():
+            return Err(r.err())
+        let v = r.unwrap()
+        if v == null:
+            return Err(i_r1004("强制解包 !: 值为 null", node[2]))
+        if i_type_name(v) == "result":
+            if v.is_ok():
+                return Ok(v.unwrap())
+            return Err(i_r1004("强制解包 !: 值为 Err(" + i_to_str(v.err()) + ")", node[2]))
+        return Ok(v)
+    if ty == "IfExpr":
+        let cr = i_eval_expr(node[1], env)
+        if cr.is_err():
+            return Err(cr.err())
+        if i_truthy(cr.unwrap()):
+            return i_eval_expr(node[2], env)
+        return i_eval_expr(node[3], env)
+    if ty == "ListComp":
+        # ["ListComp", expr, clauses, cond, pos]
+        let out = []
+        let r = i_eval_comp(node[2], 0, out, node[1], null, null, node[3], env, node[4])
+        if r.is_err():
+            return Err(r.err())
+        return Ok(out)
+    if ty == "DictComp":
+        # ["DictComp", key, value, clauses, cond, pos]
+        let d = it_new_dict()
+        let r = i_eval_comp(node[3], 0, d, null, node[1], node[2], node[4], env, node[5])
+        if r.is_err():
+            return Err(r.err())
+        return Ok(d)
+    if ty == "GenExp":
+        # ["GenExp", expr, clauses, cond, pos]  —— interp 简化：一律物化
+        let out = []
+        let r = i_eval_comp(node[2], 0, out, node[1], null, null, node[3], env, node[4])
+        if r.is_err():
+            return Err(r.err())
+        return Ok(it_gen(out, 0))
+    if ty == "Closure":
+        # ["Closure", params, ret_ty, body, captures, pos]
+        let stmts = []
+        let body = node[3]
+        if body[0] == "Block":
+            stmts = body[1]
+        else:
+            stmts = [["ExprStmt", body, body[len(body) - 1]]]
+        return Ok(it_ufn("<closure>", node[1], node[2], stmts, env, true))
+    if ty == "Block":
+        # ["Block", stmts, pos]
+        let child = env_new(env)
+        let last = null
+        let i = 0
+        while i < len(node[1]):
+            let s = node[1][i]
+            if s[0] == "ExprStmt":
+                let r = i_eval_expr(s[1], child)
+                if r.is_err():
+                    return Err(r.err())
+                last = r.unwrap()
+            else:
+                let r = i_exec_stmt(s, child)
+                if r.is_err():
+                    return Err(r.err())
+                let fl = r.unwrap()
+                if fl != null and type(fl) == "dict" and fl.has("__flow__"):
+                    if fl["__flow__"] == "return":
+                        return Ok(fl["value"])
+                    return Err(i_r1005("块内出现非法控制流", node[2]))
+            i += 1
+        return Ok(last)
+    if ty == "Match":
+        # ["Match", subject, arms, pos]
+        let sr = i_eval_expr(node[1], env)
+        if sr.is_err():
+            return Err(sr.err())
+        let sv = sr.unwrap()
+        let ai = 0
+        while ai < len(node[2]):
+            let arm = node[2][ai]
+            let child = env_new(env)
+            let mr = i_match_pattern(arm[1], sv, child, node[3])
+            if mr.is_err():
+                return Err(mr.err())
+            if mr.unwrap():
+                return i_eval_expr(arm[3], child)
+            ai += 1
+        return Err(i_r1003("match 未匹配任何分支（非穷尽）：" + i_to_str(sv), node[3]))
+    return Err(i_r1002("未知表达式节点: " + ty, [0, 0]))
+
+# ---------- 调用表达式（对齐 eval_call） ----------
+def i_eval_call(node, env):
+    # node: ["Call", callee, args, pos]
+    let callee = node[1]
+    let args = node[2]
+    let pos = node[3]
+    # chan/mutex/rwlock 构造（callee 为 Var）
+    if callee[0] == "Var":
+        let cname = rust_unescape(callee[1])
+        if cname == "chan":
+            let cap = 0
+            if len(args) > 0:
+                let ar = i_eval_expr(args[0], env)
+                if ar.is_err():
+                    return Err(ar.err())
+                let cv = ar.unwrap()
+                if type(cv) != "int" or cv < 0:
+                    return Err(i_r1002("通道容量必须是非负整数", pos))
+                cap = cv
+            return Err(i_r1002("interp 不支持通道（Mini 子集排除）", pos))
+        if cname == "mutex":
+            return Err(i_r1002("interp 不支持 mutex（Mini 子集排除）", pos))
+        if cname == "rwlock":
+            return Err(i_r1002("interp 不支持 rwlock（Mini 子集排除）", pos))
+    # 方法调用 obj.method(args)
+    if callee[0] == "Field":
+        let or_ = i_eval_expr(callee[1], env)
+        if or_.is_err():
+            return Err(or_.err())
+        let arg_vals = []
+        let ai = 0
+        while ai < len(args):
+            let ar = i_eval_expr(args[ai], env)
+            if ar.is_err():
+                return Err(ar.err())
+            arg_vals.append(ar.unwrap())
+            ai += 1
+        return i_call_method(or_.unwrap(), rust_unescape(callee[2]), arg_vals, pos)
+    # 普通调用
+    let cr = i_eval_expr(callee, env)
+    if cr.is_err():
+        return Err(cr.err())
+    let arg_vals = []
+    let ai = 0
+    while ai < len(args):
+        let ar = i_eval_expr(args[ai], env)
+        if ar.is_err():
+            return Err(ar.err())
+        arg_vals.append(ar.unwrap())
+        ai += 1
+    return i_call_value(cr.unwrap(), arg_vals, pos)
+
+# ---------- 二元运算（短路处理，对齐 eval_expr Binary） ----------
+def i_eval_binary_node(node, env):
+    let op = node[1]
+    if op == "And":
+        let lr = i_eval_expr(node[2], env)
+        if lr.is_err():
+            return Err(lr.err())
+        let l = lr.unwrap()
+        if not i_truthy(l):
+            return Ok(false)
+        let rr = i_eval_expr(node[3], env)
+        if rr.is_err():
+            return Err(rr.err())
+        return Ok(i_truthy(rr.unwrap()))
+    if op == "Or":
+        let lr = i_eval_expr(node[2], env)
+        if lr.is_err():
+            return Err(lr.err())
+        let l = lr.unwrap()
+        if i_truthy(l):
+            return Ok(true)
+        let rr = i_eval_expr(node[3], env)
+        if rr.is_err():
+            return Err(rr.err())
+        return Ok(i_truthy(rr.unwrap()))
+    let lr = i_eval_expr(node[2], env)
+    if lr.is_err():
+        return Err(lr.err())
+    let rr = i_eval_expr(node[3], env)
+    if rr.is_err():
+        return Err(rr.err())
+    return i_eval_binary(op, lr.unwrap(), rr.unwrap(), node[4])
+
+# ---------- 管道（对齐 eval_expr Pipe） ----------
+def i_eval_pipe(node, env):
+    # node: ["Pipe", value, func, pos]
+    let vr = i_eval_expr(node[1], env)
+    if vr.is_err():
+        return Err(vr.err())
+    let v = vr.unwrap()
+    let fn_ = node[2]
+    if fn_[0] == "Call":
+        if fn_[1][0] == "Field":
+            return Err(i_r1004("管道暂不支持方法调用（M2）", node[3]))
+        let cr = i_eval_expr(fn_[1], env)
+        if cr.is_err():
+            return Err(cr.err())
+        let cv = cr.unwrap()
+        let arg_vals = [v]
+        let ai = 0
+        while ai < len(fn_[2]):
+            let ar = i_eval_expr(fn_[2][ai], env)
+            if ar.is_err():
+                return Err(ar.err())
+            arg_vals.append(ar.unwrap())
+            ai += 1
+        return i_call_value(cv, arg_vals, node[3])
+    let fr = i_eval_expr(fn_, env)
+    if fr.is_err():
+        return Err(fr.err())
+    return i_call_value(fr.unwrap(), [v], node[3])
+
+# ---------- 推导式（对齐 eval_comp，简化：一律物化收集） ----------
+# clauses: [["CompClause", vars, iterable], ...]
+# sink：list（收集元素）或 dict（收集键值，dict 模式下 list_expr=null）
+def i_eval_comp(clauses, ci, sink, list_expr, dict_key, dict_val, cond, env, pos):
+    if ci >= len(clauses):
+        if cond != null:
+            let cr = i_eval_expr(cond, env)
+            if cr.is_err():
+                return Err(cr.err())
+            if not i_truthy(cr.unwrap()):
+                return Ok(null)
+        if type(sink) == "list":
+            let er = i_eval_expr(list_expr, env)
+            if er.is_err():
+                return Err(er.err())
+            sink.append(er.unwrap())
+        else:
+            let kr = i_eval_expr(dict_key, env)
+            if kr.is_err():
+                return Err(kr.err())
+            let k = kr.unwrap()
+            if type(k) != "string":
+                return Err(i_r1002("字典推导键必须是字符串，实际是 " + i_type_name(k), pos))
+            let vr = i_eval_expr(dict_val, env)
+            if vr.is_err():
+                return Err(vr.err())
+            sink[k] = vr.unwrap()
+        return Ok(null)
+    let cl = clauses[ci]
+    let itr = i_eval_expr(cl[2], env)
+    if itr.is_err():
+        return Err(itr.err())
+    let it = itr.unwrap()
+    # 迭代
+    let ivr = i_iter(it, pos)
+    if ivr.is_err():
+        return Err(ivr.err())
+    let items = ivr.unwrap()
+    let ii = 0
+    while ii < len(items):
+        let child = env_new(env)
+        let bvr = i_bind_comp_vars(cl[1], items[ii], child, pos)
+        if bvr.is_err():
+            return Err(bvr.err())
+        let rr = i_eval_comp(clauses, ci + 1, sink, list_expr, dict_key, dict_val, cond, child, pos)
+        if rr.is_err():
+            return Err(rr.err())
+        ii += 1
+    return Ok(null)
+
+# 绑定推导式变量（对齐 bind_comp_vars：单变量直接绑定，多变量解包）
+def i_bind_comp_vars(vars_, item, child, pos):
+    if len(vars_) == 1:
+        env_define(child, rust_unescape(vars_[0]), item)
+        return Ok(null)
+    let t = i_type_name(item)
+    if t != "list" and t != "tuple":
+        return Err(i_r1002("推导式解包需要 list/tuple，实际是 " + t, pos))
+    let i = 0
+    while i < len(vars_):
+        let v = null
+        if i < len(item):
+            v = item[i]
+        env_define(child, rust_unescape(vars_[i]), v)
+        i += 1
+    return Ok(null)
+
+# ---------- 模式匹配（对齐 match_pattern） ----------
+# 注意：parser.px 生成的模式节点类型带 Pat 前缀
+#   （PatLiteral/PatBinding/PatWildcard/PatTuple/PatConstructor，
+#    LAYOUT 的显示名去掉前缀）
+def i_match_pattern(pat, v, env, pos):
+    let pty = pat[0]
+    if pty == "PatLiteral":
+        # ["PatLiteral", expr]
+        let lr = i_eval_expr(pat[1], env)
+        if lr.is_err():
+            return Err(lr.err())
+        return Ok(i_eq(lr.unwrap(), v))
+    if pty == "PatBinding":
+        # ["PatBinding", name]
+        env_define(env, rust_unescape(pat[1]), v)
+        return Ok(true)
+    if pty == "PatWildcard":
+        return Ok(true)
+    if pty == "PatTuple":
+        # ["PatTuple", patterns]
+        let items = []
+        let t = i_type_name(v)
+        if t == "tuple":
+            items = list(v)
+        elif t == "list":
+            items = v
+        else:
+            return Ok(false)
+        if len(pat[1]) != len(items):
+            return Ok(false)
+        let i = 0
+        while i < len(pat[1]):
+            let mr = i_match_pattern(pat[1][i], items[i], env, pos)
+            if mr.is_err():
+                return Err(mr.err())
+            if not mr.unwrap():
+                return Ok(false)
+            i += 1
+        return Ok(true)
+    if pty == "PatConstructor":
+        # ["PatConstructor", name, sub_patterns]
+        let name = rust_unescape(pat[1])
+        let t = i_type_name(v)
+        if t == "enum":
+            if v["variant"] != name:
+                return Ok(false)
+            let payload = v["payload"]
+            if len(pat[2]) == 0:
+                return Ok(true)
+            if payload == null:
+                return Ok(false)
+            return i_match_pattern(pat[2][0], payload, env, pos)
+        if t == "struct":
+            if v["__struct__"] != name:
+                return Ok(false)
+            if len(pat[2]) == 0:
+                return Ok(true)
+            return Ok(false)
+        return Ok(false)
+    return Ok(false)

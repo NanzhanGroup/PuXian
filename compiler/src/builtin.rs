@@ -1613,6 +1613,17 @@ pub fn call_builtin(interp: &mut Interpreter, b: Builtin, args: &[Value], pos: P
                 _ => Err(err("gen_next 需要生成器对象", pos)),
             }
         }
+        Builtin::Tuple => {
+            if args.len() != 1 {
+                return Err(err("tuple 需要一个参数", pos));
+            }
+            let items = match &args[0] {
+                Value::List(l) => l.lock().unwrap().clone(),
+                Value::Tuple(t) => t.clone(),
+                _ => return Err(err("tuple 参数需要 list/tuple", pos)),
+            };
+            Ok(Value::Tuple(items))
+        }
         Builtin::List => {
             if args.len() != 1 {
                 return Err(err("list 需要一个参数", pos));
