@@ -1485,6 +1485,8 @@ LXValue px_some(LXValue v) { return v; }
 // ==================== 错误 ====================
 
 void px_error(const char* fmt, ...) {
+    // 先刷新 stdout 缓冲：print 输出在管道/重定向下是全缓冲，exit 前不刷会丢
+    fflush(stdout);
     va_list ap;
     va_start(ap, fmt);
     fprintf(stderr, "运行时错误: ");

@@ -100,6 +100,22 @@ let p_pos = 0
 def pk():
     return p_toks[p_pos][0]
 
+def pk_display():
+    # 对齐 Rust TokenKind Display（kind + 值），供错误消息使用
+    let k = p_toks[p_pos][0]
+    let v = p_toks[p_pos][1]
+    if k == "整数":
+        return "整数 " + v
+    if k == "浮点":
+        return "浮点 " + v
+    if k == "字符串":
+        return "字符串 " + rust_str_debug(v)
+    if k == "标识符":
+        return "标识符 " + v
+    if k == "注释":
+        return "注释 " + v
+    return k
+
 def pv():
     return p_toks[p_pos][1]
 
@@ -129,14 +145,14 @@ def chk2(k):
 def expect(k, what):
     if chk(k):
         return adv()
-    perr("E2001", "期望 " + what + "，实际得到 " + pk())
+    perr("E2001", "期望 " + what + "，实际得到 " + pk_display())
 
 def expect_ident(what):
     if pk() == "标识符":
         let v = pv()
         adv()
         return v
-    perr("E2001", "期望" + what + "，实际得到 " + pk())
+    perr("E2001", "期望" + what + "，实际得到 " + pk_display())
 
 def is_name_kind(k):
     let ns = ["let", "var", "const", "def", "fn", "struct", "enum", "trait", "impl", "match", "case", "if", "elif", "else", "for", "while", "in", "return", "break", "continue", "import", "from", "pub", "as", "spawn", "chan", "send", "recv", "select", "true", "false", "null", "self", "type", "capture"]
@@ -156,10 +172,10 @@ def expect_name(what):
         let v = pk()
         adv()
         return v
-    perr("E2001", "期望" + what + "，实际得到 " + pk())
+    perr("E2001", "期望" + what + "，实际得到 " + pk_display())
 
 def perr(code, msg):
-    print("错误: " + str(pline()) + ":" + str(pcol()) + ": 语法错误 " + code + ": " + msg)
+    print(str(pline()) + ":" + str(pcol()) + ": 语法错误 " + code + ": " + msg)
     panic("parse " + code)
 
 def skip_newlines():
@@ -919,7 +935,7 @@ def parse_primary():
             let args = parse_call_args()
             callee = ["Call", callee, args, pos]
         return callee
-    perr("E2001", "意外的 token: " + k)
+    perr("E2001", "意外的 token: " + pk_display())
     return null
 
 def parse_list_or_comp():
@@ -1182,7 +1198,7 @@ def parse_pattern():
                 break
         expect(")", "')'")
         return ["PatTuple", items]
-    perr("E2001", "无效的模式: " + k)
+    perr("E2001", "无效的模式: " + pk_display())
     return null
 
 def is_upper(s):
@@ -1245,7 +1261,7 @@ def parse_type_base():
             let ret = parse_type()
             return ["TyFunc", items, ret, pos]
         return ["TyTuple", items, pos]
-    perr("E2001", "无效的类型: " + k)
+    perr("E2001", "无效的类型: " + pk_display())
     return null
 
 # ---------- 入口 ----------

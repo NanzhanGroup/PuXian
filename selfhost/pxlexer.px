@@ -201,6 +201,12 @@ def scan_radix_token(radix, pos_line, pos_col):
         j += 1
     return ["整数", str(v), pos_line, pos_col]
 
+def strip_leading_zeros(s):
+    let i = 0
+    while i < len(s) - 1 and s[i] == "0":
+        i += 1
+    return s[i:]
+
 def scan_number_token():
     let pos_line = g_line
     let pos_col = g_col
@@ -251,6 +257,9 @@ def scan_number_token():
         if ends_with(fs, ".0"):
             fs = fs[0:len(fs) - 2]
         return ["浮点", fs, pos_line, pos_col]
+    let norm = strip_leading_zeros(clean)
+    if len(norm) > 19 or (len(norm) == 19 and norm > "9223372036854775807"):
+        err("E1004", "无效整数: " + digits)
     return ["整数", str(int(clean)), pos_line, pos_col]
 
 # ---------- 字符串 ----------
@@ -438,9 +447,45 @@ def scan_escape(str_pos_line, str_pos_col):
         if peek() != "}":
             err("E1005", "Unicode 转义缺少 }")
         advance()
+        if hex == "":
+            err("E1005", "Unicode 转义无效")
+        let cp = hex_to_int(hex)
+        if cp == null or cp > 0xFFFFFFFF:
+            err("E1005", "Unicode 转义无效")
+        if cp > 0x10FFFF or (cp >= 0xD800 and cp <= 0xDFFF):
+            return hex_to_char("FFFD")
         return hex_to_char(hex)
     err("E1005", "非法转义序列 \\" + c)
     return ""
+
+# ---------- char debug 表示（对齐 Rust char {:?}） ----------
+def int_to_hex_nopad(n):
+    let hex_chars = "0123456789abcdef"
+    let s = ""
+    while n > 0:
+        s = hex_chars[n % 16] + s
+        n = n // 16
+    if s == "":
+        return "0"
+    return s
+
+def char_debug(c):
+    if c == "'":
+        return "'\\''"
+    if c == "\\":
+        return "'\\\\'"
+    if c == "\n":
+        return "'\\n'"
+    if c == "\r":
+        return "'\\r'"
+    if c == "\t":
+        return "'\\t'"
+    if c == "\u{0}":
+        return "'\\0'"
+    let code = ctrl_codepoint(c)
+    if code >= 0:
+        return "'\\u{" + int_to_hex_nopad(code) + "}'"
+    return "'" + c + "'"
 
 # ---------- 字符串 debug 表示（对齐 Rust {:?}） ----------
 def rust_str_debug(s):
@@ -626,7 +671,7 @@ def scan_operator_token():
             advance()
             return ["??", "", pos_line, pos_col]
         return ["?", "", pos_line, pos_col]
-    err("E1001", "非法字符: " + c)
+    err("E1001", "非法字符: " + char_debug(c))
     return ["", "", pos_line, pos_col]
 
 # ---------- 主循环 ----------

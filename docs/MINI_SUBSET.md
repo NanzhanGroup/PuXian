@@ -136,3 +136,6 @@
 | 5 | **函数调用参数不能跨行** | 多行调用参数报错 | 单行调用 |
 | 6 | **exit(n) 不终止执行**（仅设退出码） | `exit(1)` 后代码继续跑 | 报错用 `panic` 立即终止（err 函数先 print 再 panic） |
 | 7 | **编译版 AST dump 超大文件内存受限** | `build/parser 解析 >2 万行 AST 的源码` 被 kill（字符串拼接峰值内存）；解释器版可过 | 自举 codegen 消费 AST 树不 dump，不受影响；对拍用例规模内正常 |
+| 8 | **大指数浮点 str() 显示**（>=1e16） | PuXian str(1.5e308) 展开为 1500...000（无指数），Rust f64 Debug 显示 1.5e308 | 源码避免 >=1e16 浮点字面量；对拍用例（s09）已规避，M-B6 处理 codegen 浮点表示 |
+| 9 | **noncharacter 字符串 Debug 显示**（U+FFFE/FFFF、U+10FFFE/10FFFF 等） | Rust escape_debug 转义为 \\u{10ffff}，PuXian rust_str_debug 直接显示字符 | 源码避免 noncharacter（s09 已规避） |
+| 10 | **编译版 inf 浮点常量** | codegen 生成 `px_float(inf)`，C 里 `inf` 未定义导致编译失败 | M-B6 codegen 处理（改 INFINITY）；s09 的 build golden 留空（diffcheck 容错） |

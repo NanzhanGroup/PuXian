@@ -1,0 +1,21 @@
+# s09: 边界值对拍（数字溢出边界 / unicode 码点边界 / 浮点 inf）
+def main():
+    let a = 9223372036854775807
+    let b = 00000000000000000000000123
+    let c = 1e999
+    let d = 250.0
+    # 1.5e308 大指数：Rust f64 Debug 显示 1.5e308，PuXian str(float) 展开（语言层差异，见 MINI_SUBSET 八）
+    let e = 3.14
+    let s1 = "\u{FFFD}"
+    let s2 = "\u{D800}"
+    let s3 = "\u{110000}"
+    # U+10FFFF（noncharacter）：Rust escape_debug 显示 \u{10ffff}，
+    # PuXian rust_str_debug 暂不对齐（见 MINI_SUBSET 八 已知限制），此处不测
+    print(a)
+    print(b)
+    print(c)
+    print(d)
+    print(e)
+    print(s1)
+    print(s2)
+    print(s3)

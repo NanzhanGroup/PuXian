@@ -13,6 +13,8 @@
 #   ./diffcheck.sh <file.px> --check  # 对拍模式：Rust 版 vs PuXian 版（自举编译器就绪后）
 #   ./diffcheck.sh --all              # 对拍 cases/ 下全部用例
 #   ./diffcheck.sh --lexer [--build] [file.px]  # M-B2：PuXian lexer 对拍 token 流
+#   ./diffcheck.sh --parser [file.px]          # M-B3：PuXian parser 对拍 AST
+#   ./diffcheck.sh --errors                    # M-B4：错误场景对拍（cases_bad/）
 # ------------------------------------------------------------
 # 对拍契约（Mini 子集规范 §五）：
 #   lex   ：token 序列规范化后逐 token 一致（去行首空白/压缩连续空格/保留顺序与值）
@@ -45,6 +47,33 @@ norm_c() {
     # 规范化 C 源码：去掉生成注释头（含路径）与行尾空白
     grep -vE '^/\* 由普贤' \
         | sed -E 's/[[:space:]]+$//'
+}
+
+# ---- M-B4：错误场景对拍 ----
+#   同一坏输入，Rust 版 px lex/parse 首行错误消息 vs PuXian 版 lexer/parser 首行错误消息
+#   契约：PuXian 版 err/perr 输出格式与 Rust 版逐字节一致
+#     lex   ：错误: pos: 词法错误 code: msg（Rust px lex 带前缀）
+#     parse ：pos: 语法错误 code: msg（Rust px parse 不带前缀）
+check_error_file() {
+    local f="$1" kind="$2"
+    local base; base=$(basename "$f")
+    local rust_out px_out
+    if [ "$kind" = "lex" ]; then
+        rust_out=$("$PX" lex "$f" 2>&1 | head -1)
+        px_out=$("$PX" run "$(dirname "$0")/lexer.px" "$f" 2>&1 | head -1)
+    else
+        rust_out=$("$PX" parse "$f" 2>&1 | head -1)
+        px_out=$("$PX" run "$(dirname "$0")/parser.px" "$f" 2>&1 | head -1)
+    fi
+    if [ "$rust_out" = "$px_out" ]; then
+        echo "    ✅ $base"
+    else
+        echo "    ❌ $base"
+        echo "      Rust: $rust_out"
+        echo "      PX  : $px_out"
+        return 1
+    fi
+    return 0
 }
 
 # ---- M-B3：PuXian parser 对拍 ----
@@ -168,6 +197,26 @@ check_file() {
 }
 
 # ---- 入口 ----
+if [ "${1:-}" = "--errors" ]; then
+    shift
+    fail=0
+    echo "── 错误场景对拍（M-B4，cases_bad/）──"
+    for f in "$(dirname "$0")"/cases_bad/lex_b*.px; do
+        [ -e "$f" ] && check_error_file "$f" lex || fail=1
+    done
+    for f in "$(dirname "$0")"/cases_bad/parse_b*.px; do
+        [ -e "$f" ] && check_error_file "$f" parse || fail=1
+    done
+    if [ "$fail" = "0" ]; then
+        echo "错误场景全部一致 ✅"
+        exit 0
+    else
+        echo "存在不一致 ❌"
+        exit 1
+    fi
+fi
+
+
 if [ "${1:-}" = "--parser" ]; then
     shift
     if [ -n "${1:-}" ]; then
@@ -202,6 +251,6 @@ if [ "${1:-}" = "--all" ]; then
 elif [ -n "${1:-}" ]; then
     check_file "$1"
 else
-    echo "用法: $0 <file.px> | --all | --lexer [--build] [file.px]"
+    echo "用法: $0 <file.px> | --all | --lexer [--build] [file.px] | --parser [file.px] | --errors"
     exit 1
 fi

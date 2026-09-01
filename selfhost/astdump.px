@@ -154,6 +154,8 @@ def dump_t3_list(v, ind):
 
 def fmt_float(v):
     let s = str(v)
+    if s == "inf" or s == "-inf":
+        return s
     if not contains(s, ".") and not contains(s, "e") and not contains(s, "E"):
         return s + ".0"
     return s

@@ -1,0 +1,384 @@
+Program {
+ items: [
+ FuncDef {
+ name: "main",
+ params: [],
+ ret_ty: None,
+ body: [
+ VarDecl {
+ kind: Let,
+ name: "a",
+ ty: None,
+ value: Some(
+ Int {
+ value: 9223372036854775807,
+ pos: Pos {
+ line: 3,
+ col: 13,
+ },
+ },
+ ),
+ pos: Pos {
+ line: 3,
+ col: 5,
+ },
+ },
+ VarDecl {
+ kind: Let,
+ name: "b",
+ ty: None,
+ value: Some(
+ Int {
+ value: 123,
+ pos: Pos {
+ line: 4,
+ col: 13,
+ },
+ },
+ ),
+ pos: Pos {
+ line: 4,
+ col: 5,
+ },
+ },
+ VarDecl {
+ kind: Let,
+ name: "c",
+ ty: None,
+ value: Some(
+ Float {
+ value: inf,
+ pos: Pos {
+ line: 5,
+ col: 13,
+ },
+ },
+ ),
+ pos: Pos {
+ line: 5,
+ col: 5,
+ },
+ },
+ VarDecl {
+ kind: Let,
+ name: "d",
+ ty: None,
+ value: Some(
+ Float {
+ value: 250.0,
+ pos: Pos {
+ line: 6,
+ col: 13,
+ },
+ },
+ ),
+ pos: Pos {
+ line: 6,
+ col: 5,
+ },
+ },
+ VarDecl {
+ kind: Let,
+ name: "e",
+ ty: None,
+ value: Some(
+ Float {
+ value: 3.14,
+ pos: Pos {
+ line: 8,
+ col: 13,
+ },
+ },
+ ),
+ pos: Pos {
+ line: 8,
+ col: 5,
+ },
+ },
+ VarDecl {
+ kind: Let,
+ name: "s1",
+ ty: None,
+ value: Some(
+ Str {
+ value: "�",
+ pos: Pos {
+ line: 9,
+ col: 14,
+ },
+ },
+ ),
+ pos: Pos {
+ line: 9,
+ col: 5,
+ },
+ },
+ VarDecl {
+ kind: Let,
+ name: "s2",
+ ty: None,
+ value: Some(
+ Str {
+ value: "�",
+ pos: Pos {
+ line: 10,
+ col: 14,
+ },
+ },
+ ),
+ pos: Pos {
+ line: 10,
+ col: 5,
+ },
+ },
+ VarDecl {
+ kind: Let,
+ name: "s3",
+ ty: None,
+ value: Some(
+ Str {
+ value: "�",
+ pos: Pos {
+ line: 11,
+ col: 14,
+ },
+ },
+ ),
+ pos: Pos {
+ line: 11,
+ col: 5,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 14,
+ col: 5,
+ },
+ },
+ args: [
+ Var {
+ name: "a",
+ pos: Pos {
+ line: 14,
+ col: 11,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 14,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 14,
+ col: 10,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 15,
+ col: 5,
+ },
+ },
+ args: [
+ Var {
+ name: "b",
+ pos: Pos {
+ line: 15,
+ col: 11,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 15,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 15,
+ col: 10,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 16,
+ col: 5,
+ },
+ },
+ args: [
+ Var {
+ name: "c",
+ pos: Pos {
+ line: 16,
+ col: 11,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 16,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 16,
+ col: 10,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 17,
+ col: 5,
+ },
+ },
+ args: [
+ Var {
+ name: "d",
+ pos: Pos {
+ line: 17,
+ col: 11,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 17,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 17,
+ col: 10,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 18,
+ col: 5,
+ },
+ },
+ args: [
+ Var {
+ name: "e",
+ pos: Pos {
+ line: 18,
+ col: 11,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 18,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 18,
+ col: 10,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 19,
+ col: 5,
+ },
+ },
+ args: [
+ Var {
+ name: "s1",
+ pos: Pos {
+ line: 19,
+ col: 11,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 19,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 19,
+ col: 10,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 20,
+ col: 5,
+ },
+ },
+ args: [
+ Var {
+ name: "s2",
+ pos: Pos {
+ line: 20,
+ col: 11,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 20,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 20,
+ col: 10,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 21,
+ col: 5,
+ },
+ },
+ args: [
+ Var {
+ name: "s3",
+ pos: Pos {
+ line: 21,
+ col: 11,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 21,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 21,
+ col: 10,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 2,
+ col: 1,
+ },
+ },
+ ],
+}
+语法分析成功：1 条顶层语句
