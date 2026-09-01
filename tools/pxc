@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+# ============================================================
+# pxc —— PuXian 版工具链（M-B9a：Rust 版退役后的用户入口）
+# ------------------------------------------------------------
+# 基于自举产物（bootstrap/pxc 编译器 + bootstrap/pxi 解释器），
+# 完全无需 Rust 工具链。行为对齐 Rust 版 px：
+#   pxc build <file.px>            编译为静态二进制（<dir>/build/<name>）
+#   pxc run <file.px> [args...]    解释执行
+#   pxc lex <file.px>              打印 Token 流（调试，走 PuXian lexer）
+#   pxc parse <file.px>            打印 AST（调试，走 PuXian parser）
+#   pxc --version / -v             输出版本号
+#   pxc help                       帮助
+# 说明：
+#   - build 模式：bootstrap/pxc 生成 C 源码 → 复制 runtime → gcc 静态编译，
+#     命令参数与 Rust 版 run_build 完全一致（-static -O2 -pthread + sqlite/miniz/mbedtls）
+#   - 对拍契约（MINI_SUBSET §五）：build 产物与 Rust 版 px build 逐字节一致
+#   - 版本：随 PuXian 编译器演进，用 SELFHOST_VER 标记自举里程碑
+# ============================================================
+set -u
+PXC_HOME="$(cd "$(dirname "$0")/.." && pwd)"
+PXC_BIN="$PXC_HOME/bootstrap/pxc"
+PXI_BIN="$PXC_HOME/bootstrap/pxi"
+PXL_BIN="$PXC_HOME/bootstrap/pxl"     # lexer.px 编译版（pxc lex 用）
+PXPAR_BIN="$PXC_HOME/bootstrap/pxpar" # parser.px 编译版（pxc parse 用）
+RT_DIR="$PXC_HOME/runtime"
+SELFHOST_VER="0.1.0"
+SELFHOST_MILESTONE="M-B9a"
+
+usage() {
+    cat <<EOF
+pxc $(echo "$SELFHOST_VER") (普贤 PuXian · selfhosted $SELFHOST_MILESTONE)
+
+用法:
+  pxc build <file.px>             编译为静态二进制（输出 <目录>/build/<name>）
+  pxc run <file.px> [args...]     解释执行
+  pxc lex <file.px>               词法分析并打印 Token 流（调试）
+  pxc parse <file.px>             语法分析并打印 AST（调试）
+  pxc --version                   输出版本号
+  pxc help                        显示本帮助
+EOF
+}
+
+# 复制 runtime 依赖到构建目录（对齐 Rust run_build 的 10 个 rt 文件 + miniz + sqlite + mbedtls）
+copy_runtime() {
+    local build_dir="$1"
+    local f
+    for f in runtime.h runtime.c runtime_aes.c runtime_xml.c runtime_zip.c \
+             runtime_ws.c runtime_rsa.c runtime_sqlite.c runtime_route.c runtime_h2.c; do
+        [ -f "$RT_DIR/$f" ] || { echo "错误: 缺少 runtime 文件 $RT_DIR/$f" >&2; return 1; }
+        cp "$RT_DIR/$f" "$build_dir/"
+    done
+    # miniz（zip raw deflate）
+    for f in miniz.c miniz_tinfl.c miniz_tdef.c; do
+        cp "$RT_DIR/third_party/miniz/$f" "$build_dir/" 2>/dev/null
+    done
+    # sqlite3：优先预编译 .o，否则退回全量 .c（CI 首跑会编译）
+    if [ -f "$RT_DIR/third_party/sqlite3/sqlite3.o" ]; then
+        cp "$RT_DIR/third_party/sqlite3/sqlite3.o" "$build_dir/"
+    else
+        cp "$RT_DIR/third_party/sqlite3/sqlite3.c" "$build_dir/"
+    fi
+    cp "$RT_DIR/third_party/sqlite3/sqlite3.h" "$build_dir/"
+    return 0
+}
+
+# build：AST → C → gcc 静态二进制（对齐 Rust run_build）
+cmd_build() {
+    local file="$1"
+    [ -f "$file" ] || { echo "错误: 无法读取文件 $file" >&2; return 1; }
+    local base parent build_dir
+    base="$(basename "$file" .px)"
+    parent="$(cd "$(dirname "$file")" && pwd)"
+    build_dir="$parent/build"
+    mkdir -p "$build_dir"
+
+    local c_path="$build_dir/$base.c"
+    local out_path="$build_dir/$base"
+
+    # 1) PuXian 版编译器生成 C 源码（stdout）
+    "$PXC_BIN" build "$file" > "$c_path" 2>/dev/null || {
+        echo "错误: 编译失败（$file）" >&2
+        # 重跑拿错误信息
+        "$PXC_BIN" build "$file" 2>&1 | head -20 >&2
+        return 1
+    }
+    # 2) 复制 runtime 依赖
+    copy_runtime "$build_dir" || return 1
+    # 3) gcc 静态编译（参数对齐 Rust run_build）
+    local mbedtls_inc="$RT_DIR/mbedtls/include"
+    local mbedtls_lib="$RT_DIR/mbedtls/lib"
+    local sqlite_src="$build_dir/sqlite3.o"
+    [ -f "$sqlite_src" ] || sqlite_src="$build_dir/sqlite3.c"
+    gcc -static -O2 -pthread -o "$out_path" \
+        "$c_path" \
+        "$build_dir/runtime.c" \
+        "$build_dir/runtime_aes.c" \
+        "$build_dir/runtime_xml.c" \
+        "$build_dir/runtime_zip.c" \
+        "$build_dir/runtime_ws.c" \
+        "$build_dir/runtime_rsa.c" \
+        "$build_dir/runtime_sqlite.c" \
+        "$build_dir/runtime_route.c" \
+        "$build_dir/runtime_h2.c" \
+        "$sqlite_src" \
+        "$build_dir/miniz.c" "$build_dir/miniz_tinfl.c" "$build_dir/miniz_tdef.c" \
+        -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_FOREIGN_KEYS=1 \
+        -I"$build_dir" -I"$RT_DIR/third_party/miniz" -I"$mbedtls_inc" \
+        "$mbedtls_lib/libmbedtls.a" "$mbedtls_lib/libmbedx509.a" "$mbedtls_lib/libmbedcrypto.a" \
+        -lm -ldl || {
+        echo "gcc 编译失败: $out_path" >&2
+        return 1
+    }
+    local size
+    size=$(stat -c %s "$out_path" 2>/dev/null || echo 0)
+    echo "编译成功: $out_path （$size 字节）"
+    return 0
+}
+
+cmd_run() {
+    local file="$1"; shift
+    # pxi 取最后一个参数为文件；其余参数透传（当前 Mini 子集解释器仅支持单文件）
+    "$PXI_BIN" "$file" "$@" 2>&1
+}
+
+cmd_lex() {
+    local file="$1"
+    "$PXL_BIN" "$file" 2>&1
+}
+
+cmd_parse() {
+    local file="$1"
+    "$PXPAR_BIN" "$file" 2>&1
+}
+
+# ---- 入口 ----
+cmd="${1:-help}"
+case "$cmd" in
+    build) shift; [ $# -ge 1 ] || { echo "用法: pxc build <file.px>" >&2; exit 1; }; cmd_build "$1" ;;
+    run)   shift; [ $# -ge 1 ] || { echo "用法: pxc run <file.px>" >&2; exit 1; }; cmd_run "$@" ;;
+    lex)   shift; [ $# -ge 1 ] || { echo "用法: pxc lex <file.px>" >&2; exit 1; }; cmd_lex "$1" ;;
+    parse) shift; [ $# -ge 1 ] || { echo "用法: pxc parse <file.px>" >&2; exit 1; }; cmd_parse "$1" ;;
+    --version|-v) echo "pxc $SELFHOST_VER (普贤 PuXian · selfhosted $SELFHOST_MILESTONE)";;
+    help|--help|-h) usage ;;
+    *) echo "未知子命令: $cmd" >&2; usage >&2; exit 1 ;;
+esac
