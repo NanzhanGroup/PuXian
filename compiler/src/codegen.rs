@@ -1438,6 +1438,10 @@ impl Codegen {
                 '\n' => out.push_str("\\n"),
                 '\r' => out.push_str("\\r"),
                 '\t' => out.push_str("\\t"),
+                // NUL：C 运行时字符串按 strlen 截断（px_str），无法表达 NUL；
+                // 与编译版（selfhost codegen.px，C 运行时字符串 NUL 截断）保持一致，
+                // 丢弃 NUL（对齐 M-B8 自举证明；含 NUL 字符串双模式行为一致）
+                '\0' => {}
                 _ => out.push(c),
             }
         }

@@ -1,0 +1,58 @@
+# ============================================================
+# M-B8: compiler.px —— PuXian 版完整编译器 CLI（自举证明）
+# ------------------------------------------------------------
+# 完整流水线：read → lex(pxlexer) → parse(parser) → resolve(import)
+#            → generate(codegen) → C 源码到 stdout
+# 用法：
+#   px run compiler.px build <file.px>   # 解释模式
+#   build/compiler build <file.px>       # 编译模式（自举）
+# 说明：主文件声明全部全局状态（import 不注册模块顶层 let），
+#       import codegen.px 提供函数（parser/pxlexer/cg_* 全链）。
+# 对拍契约（MINI_SUBSET §五 build 层）：输出 C 源码 norm_c 后与
+#       Rust 版 `px build <file.px>` 产物逐字节一致。
+# ============================================================
+import "codegen.px"
+
+# ---------- 全局状态（主文件声明；import 不注册模块顶层 let）----------
+let g_src = ""
+let g_len = 0
+let g_pos = 0
+let g_line = 1
+let g_col = 1
+let g_indent_stack = [0]
+let g_at_line_start = true
+let g_toks = []
+let g_count = 0
+let g_pending = []
+let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn": "fn", "struct": "struct", "enum": "enum", "trait": "trait", "impl": "impl", "match": "match", "case": "case", "if": "if", "elif": "elif", "else": "else", "for": "for", "while": "while", "in": "in", "and": "and", "or": "or", "not": "not", "return": "return", "break": "break", "continue": "continue", "import": "import", "from": "from", "pub": "pub", "as": "as", "spawn": "spawn", "chan": "chan", "send": "send", "recv": "recv", "select": "select", "true": "true", "false": "false", "null": "null", "None": "null", "self": "self", "capture": "capture"}
+let CTRL_ALL = "\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}\u{8}\u{b}\u{c}\u{e}\u{f}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1a}\u{1b}\u{1c}\u{1d}\u{1e}\u{1f}\u{7f}\u{80}\u{81}\u{82}\u{83}\u{84}\u{85}\u{86}\u{87}\u{88}\u{89}\u{8a}\u{8b}\u{8c}\u{8d}\u{8e}\u{8f}\u{90}\u{91}\u{92}\u{93}\u{94}\u{95}\u{96}\u{97}\u{98}\u{99}\u{9a}\u{9b}\u{9c}\u{9d}\u{9e}\u{9f}"
+let p_toks = []
+let p_pos = 0
+let cg_closures = ""
+let cg_structs = {"_": 0}
+let cg_enums = {"_": 0}
+let cg_impls = {"_": 0}
+let cg_vars = {"_": 0}
+let cg_var_types = {"_": 0}
+let cg_globals = []
+let cg_err_labels = []
+let cg_uidc = 0
+let cg_closure_id = 0
+let loaded = {"_": 0}
+
+# ---------- 入口 ----------
+def main():
+    let a = args()
+    # 支持：compiler.px <file>  /  compiler.px build <file>  /  compiler.px --xxx <file>
+    let f = a[len(a) - 1]
+    let base_dir = cg_dirname(f)
+    p_toks = lex_tokens(read_file(f))
+    p_pos = 0
+    let ast = parse_program()
+    let prog = cg_resolve_modules(ast, base_dir)
+    let out = cg_generate(prog)
+    # print 会追加一个换行：去掉末尾 \n 避免多一个空行（对齐 Rust 版写文件）
+    let n = len(out)
+    if n > 0 and out[n - 1] == "\n":
+        out = out[0:n - 1]
+    print(out)

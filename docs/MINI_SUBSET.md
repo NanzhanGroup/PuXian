@@ -187,3 +187,21 @@
 | 3 | 编译模式 `str(float)` 用 `%g`（6 位有效数字） | `--interp --build` 对拍 v01 的 float** 精度差异 | 同 §十.2；对拍跳过 v01 build |
 | 4 | 用户 dict 含保留键（`__struct__` 等 `__` 前缀）会被误判为包装值 | 类型/渲染按包装值处理 | 用户 dict 键避免 `__` 前缀 |
 | 5 | 闭包显示名 `<fn <closure>>`（解释器模式） | 与编译模式 `<fn <closureN>>` 不同 | 不依赖闭包显示名（同 §九.5） |
+
+## 十二、M-B8 新增：自举证明完成（PuXian 版编译器编译自己，两步 diff 一致）
+
+- **交付**：`selfhost/compiler.px`（PuXian 版完整编译器 CLI：`import codegen.px` + 主文件声明 25 个全局状态 + `main()`，完整流水线 read→lex→parse→resolve(import)→generate→C 源码输出 stdout）+ `selfhost/bootstrap_prove.sh`（自举证明脚本）。
+- **自举证明（经典三步）**：`./selfhost/bootstrap_prove.sh`
+  1. Rust 版 `px build compiler.px` → 编译器 A（`build/compiler`，3.87MB 静态二进制，17s）——同时证明 compiler.px 全链在 Mini 子集内；
+  2. 编译器 A 运行 `build compiler.px` → B.c（C 产物，约 348KB/6003 行，需 ~3.5min）；
+  3. **A.c（Rust 版产物）与 B.c（A 产物）norm_c 后逐字节一致（6002 行 0 差异）→ 自举成立** 🎉
+- **强化（M-B9 前置）**：B.c 用 gcc 编译成 B 二进制（`build/compiler_B`），B 再编译 compiler.px → B2.c，与 B.c 一致（完全自举闭环）。
+- **NUL 处理统一（自举逼出的修复）**：Rust codegen.rs `escape_str` + PuXian `cg_escape_str` 对 NUL 一律**丢弃**（编译版 C 运行时字符串按 strlen 截断，无法表达 NUL；统一为丢弃使含 NUL 字面量的源码双模式行为一致、C 产物逐字节对齐）。旧行为：Rust 版把 NUL 原样写入 C 源码（`px_str("<NUL>")`），编译版截断成 `px_str("")` → 自举 diff 3 处差异。修复后消除。
+- **回归**：`--codegen` 解释模式对拍通过（s02_str 验证 cg_escape_str 改动无破坏）；`cargo test` 205/205。
+
+### M-B8 新增已知限制（自举写代码必须规避）
+
+| # | 限制 | 现象 | 规避 |
+|---|---|---|---|
+| 1 | **编译版编译器（A/B 二进制）无法正确解析含 NUL 的源码字符串**（C 运行时字符串 NUL 截断，M-B2 §八.3 的延伸） | A 编译含 `"\u{0}"` 字面量的源码时，AST 里 NUL 变空串 | 编译器源码本身含 `"\u{0}"` 字面量（rust_unescape/scan_escape/char_debug）——Rust 版可解析但编译版截断，**自举产物 diff 由 escape_str 双端丢弃 NUL 统一**；写编译器源码避免依赖 NUL 运行时语义 |
+| 2 | **编译版编译器编译自己需 ~3.5min / 1.6GB 内存**（C 运行时解释执行 PuXian 编译器逻辑，解析 ~120KB 源码 + import 链） | `build/compiler build compiler.px` 耗时 3-4 分钟、峰值内存 1.6GB | bootstrap_prove.sh 已设 900s 超时；CI/日常不重复跑（产物缓存） |

@@ -179,6 +179,10 @@ def cg_escape_str(s):
             out += "\\r"
         elif c == "\t":
             out += "\\t"
+        elif c == "\u{0}":
+            # NUL：编译版字符串按 strlen 截断无法表达 NUL；与 Rust codegen.rs
+            # escape_str（NUL 丢弃）保持一致（M-B8 自举证明）
+            out += ""
         else:
             out += c
         i += 1
