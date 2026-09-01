@@ -9579,7 +9579,9 @@ static int px_conn_tls_handshake(PxConn* c) {
     mbedtls_ssl_conf_session_tickets(conf, MBEDTLS_SSL_SESSION_TICKETS_ENABLED);
     // M31.4a：HTTP/2 预检——ALPN 固定 http/1.1（客户端探测 h2 时明确协商 http/1.1）
     // M31.4a/M37：ALPN 声明 h2 + http/1.1（客户端可选 HTTP/2；握手后按协商协议分发）
-    static const char* alpn_list[] = { "h2", "http/1.1", NULL };
+    // M-B9b：固定 http/1.1 —— vhost handler 仅在 http/1.1 路径生效；h2 帧循环（M37）绕过 vhost，
+    //         生产 Web 服务（ws-web 多站点/deny/SPA/反代）必须走 handler，故 ALPN 只声明 http/1.1。
+    static const char* alpn_list[] = { "http/1.1", NULL };
     mbedtls_ssl_conf_alpn_protocols(conf, alpn_list);
     if (mbedtls_ssl_setup(ssl, conf) != 0) return -1;
     mbedtls_ssl_set_bio(ssl, &c->fd, mbedtls_net_send, mbedtls_net_recv, NULL);
