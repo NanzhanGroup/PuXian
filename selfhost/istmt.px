@@ -73,6 +73,10 @@ def i_exec_stmt(stmt, env):
         let name = rust_unescape(stmt[1])
         env_define(env, name, it_ufn(name, stmt[2], stmt[3], stmt[4], env, false))
         return Ok(null)
+    if ty == "ExternDef":
+        # M42：extern def → FFI 声明（name → params），调用走 ffi_call C 桥
+        i_ffi[rust_unescape(stmt[1])] = stmt[2]
+        return Ok(null)
     if ty == "StructDef":
         return i_exec_struct(stmt, env)
     if ty == "EnumDef":

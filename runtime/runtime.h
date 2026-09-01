@@ -120,6 +120,11 @@ LXValue px_list_n(LXValue* items, int n);
 LXValue px_dict(void);
 LXValue px_func(const char* name, LXFuncPtr fn, void* ctx);
 LXValue px_native(const char* name, LXFuncPtr fn);
+
+// M42：FFI 注册表（runtime_ffi.c）—— 显式 C 库 import 的 C 桥
+void    px_ffi_register(const char* name, LXFuncPtr fn);
+bool    px_ffi_has(const char* name);
+LXValue bi_ffi_call(LXValue* args, int nargs, void* ctx);   // ffi_call(name, args_list)
 LXValue px_struct(const char* type_name, char** fnames, LXValue* fvals, int nfields);
 LXValue px_enum(const char* type_name, const char* variant);
 LXValue px_tuple(LXValue* items, int len);

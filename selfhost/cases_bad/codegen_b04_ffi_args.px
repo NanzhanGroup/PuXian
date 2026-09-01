@@ -1,0 +1,7 @@
+# px 2026
+# M42 E3004：extern def 声明参数个数与实际调用不匹配 = 编译错误
+import "c/sqlite3"
+extern def sqlite_open(path: str) -> int
+def main():
+    let db = sqlite_open(":memory:", 2)
+    print(db)

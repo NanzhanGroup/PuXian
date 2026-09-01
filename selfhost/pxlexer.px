@@ -23,7 +23,7 @@ var g_count = 0
 var g_pending = []   # 插值产生的中间 token：[kind, val, line, col]
 
 # ---------- 关键字表（spec §2.4，None 别名 null，type 是普通标识符） ----------
-let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn": "fn", "struct": "struct", "enum": "enum", "trait": "trait", "impl": "impl", "match": "match", "case": "case", "if": "if", "elif": "elif", "else": "else", "for": "for", "while": "while", "in": "in", "and": "and", "or": "or", "not": "not", "return": "return", "break": "break", "continue": "continue", "import": "import", "from": "from", "pub": "pub", "as": "as", "spawn": "spawn", "chan": "chan", "send": "send", "recv": "recv", "select": "select", "true": "true", "false": "false", "null": "null", "None": "null", "self": "self", "capture": "capture"}
+let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn": "fn", "struct": "struct", "enum": "enum", "trait": "trait", "impl": "impl", "match": "match", "case": "case", "if": "if", "elif": "elif", "else": "else", "for": "for", "while": "while", "in": "in", "and": "and", "or": "or", "not": "not", "return": "return", "break": "break", "continue": "continue", "import": "import", "from": "from", "pub": "pub", "as": "as", "spawn": "spawn", "chan": "chan", "send": "send", "recv": "recv", "select": "select", "true": "true", "false": "false", "null": "null", "None": "null", "self": "self", "capture": "capture", "extern": "extern"}
 
 # ---------- 控制字符表（0x01-0x1f 除 \n\t\r\0，0x7f-0x9f） ----------
 # 单行字符串拼接 61 个控制字符（顺序即码点映射基准，见 ctrl_codepoint）

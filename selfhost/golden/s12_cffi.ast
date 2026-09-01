@@ -1,0 +1,631 @@
+Program {
+    items: [
+        Import {
+            module: [
+                "c/sqlite3",
+            ],
+            names: [],
+            pos: Pos {
+                line: 4,
+                col: 1,
+            },
+        },
+        ExternDef {
+            name: "sqlite_open",
+            params: [
+                Param {
+                    name: "path",
+                    ty: Some(
+                        Named(
+                            "str",
+                            Pos {
+                                line: 6,
+                                col: 30,
+                            },
+                        ),
+                    ),
+                    default: None,
+                    pos: Pos {
+                        line: 6,
+                        col: 24,
+                    },
+                },
+            ],
+            ret_ty: Some(
+                Named(
+                    "int",
+                    Pos {
+                        line: 6,
+                        col: 38,
+                    },
+                ),
+            ),
+            pos: Pos {
+                line: 6,
+                col: 1,
+            },
+        },
+        ExternDef {
+            name: "sqlite_exec",
+            params: [
+                Param {
+                    name: "db",
+                    ty: Some(
+                        Named(
+                            "int",
+                            Pos {
+                                line: 7,
+                                col: 28,
+                            },
+                        ),
+                    ),
+                    default: None,
+                    pos: Pos {
+                        line: 7,
+                        col: 24,
+                    },
+                },
+                Param {
+                    name: "sql",
+                    ty: Some(
+                        Named(
+                            "str",
+                            Pos {
+                                line: 7,
+                                col: 38,
+                            },
+                        ),
+                    ),
+                    default: None,
+                    pos: Pos {
+                        line: 7,
+                        col: 33,
+                    },
+                },
+            ],
+            ret_ty: Some(
+                Named(
+                    "int",
+                    Pos {
+                        line: 7,
+                        col: 46,
+                    },
+                ),
+            ),
+            pos: Pos {
+                line: 7,
+                col: 1,
+            },
+        },
+        ExternDef {
+            name: "sqlite_query",
+            params: [
+                Param {
+                    name: "db",
+                    ty: Some(
+                        Named(
+                            "int",
+                            Pos {
+                                line: 8,
+                                col: 29,
+                            },
+                        ),
+                    ),
+                    default: None,
+                    pos: Pos {
+                        line: 8,
+                        col: 25,
+                    },
+                },
+                Param {
+                    name: "sql",
+                    ty: Some(
+                        Named(
+                            "str",
+                            Pos {
+                                line: 8,
+                                col: 39,
+                            },
+                        ),
+                    ),
+                    default: None,
+                    pos: Pos {
+                        line: 8,
+                        col: 34,
+                    },
+                },
+            ],
+            ret_ty: Some(
+                Named(
+                    "list",
+                    Pos {
+                        line: 8,
+                        col: 47,
+                    },
+                ),
+            ),
+            pos: Pos {
+                line: 8,
+                col: 1,
+            },
+        },
+        ExternDef {
+            name: "sqlite_close",
+            params: [
+                Param {
+                    name: "db",
+                    ty: Some(
+                        Named(
+                            "int",
+                            Pos {
+                                line: 9,
+                                col: 29,
+                            },
+                        ),
+                    ),
+                    default: None,
+                    pos: Pos {
+                        line: 9,
+                        col: 25,
+                    },
+                },
+            ],
+            ret_ty: Some(
+                Named(
+                    "bool",
+                    Pos {
+                        line: 9,
+                        col: 37,
+                    },
+                ),
+            ),
+            pos: Pos {
+                line: 9,
+                col: 1,
+            },
+        },
+        ExternDef {
+            name: "sqlite_escape",
+            params: [
+                Param {
+                    name: "s",
+                    ty: Some(
+                        Named(
+                            "str",
+                            Pos {
+                                line: 10,
+                                col: 29,
+                            },
+                        ),
+                    ),
+                    default: None,
+                    pos: Pos {
+                        line: 10,
+                        col: 26,
+                    },
+                },
+            ],
+            ret_ty: Some(
+                Named(
+                    "str",
+                    Pos {
+                        line: 10,
+                        col: 37,
+                    },
+                ),
+            ),
+            pos: Pos {
+                line: 10,
+                col: 1,
+            },
+        },
+        FuncDef {
+            name: "main",
+            params: [],
+            ret_ty: None,
+            body: [
+                VarDecl {
+                    kind: Let,
+                    name: "db",
+                    ty: None,
+                    value: Some(
+                        Call {
+                            callee: Var {
+                                name: "sqlite_open",
+                                pos: Pos {
+                                    line: 13,
+                                    col: 14,
+                                },
+                            },
+                            args: [
+                                Str {
+                                    value: ":memory:",
+                                    pos: Pos {
+                                        line: 13,
+                                        col: 26,
+                                    },
+                                },
+                            ],
+                            pos: Pos {
+                                line: 13,
+                                col: 25,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 13,
+                        col: 5,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "sqlite_exec",
+                            pos: Pos {
+                                line: 14,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Var {
+                                name: "db",
+                                pos: Pos {
+                                    line: 14,
+                                    col: 17,
+                                },
+                            },
+                            Str {
+                                value: "CREATE TABLE t (id INT, name TEXT)",
+                                pos: Pos {
+                                    line: 14,
+                                    col: 21,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 14,
+                            col: 16,
+                        },
+                    },
+                    pos: Pos {
+                        line: 14,
+                        col: 16,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "sqlite_exec",
+                            pos: Pos {
+                                line: 15,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Var {
+                                name: "db",
+                                pos: Pos {
+                                    line: 15,
+                                    col: 17,
+                                },
+                            },
+                            Str {
+                                value: "INSERT INTO t VALUES (1, '甲'), (2, '乙')",
+                                pos: Pos {
+                                    line: 15,
+                                    col: 21,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 15,
+                            col: 16,
+                        },
+                    },
+                    pos: Pos {
+                        line: 15,
+                        col: 16,
+                    },
+                },
+                VarDecl {
+                    kind: Let,
+                    name: "rows",
+                    ty: None,
+                    value: Some(
+                        Call {
+                            callee: Var {
+                                name: "sqlite_query",
+                                pos: Pos {
+                                    line: 16,
+                                    col: 16,
+                                },
+                            },
+                            args: [
+                                Var {
+                                    name: "db",
+                                    pos: Pos {
+                                        line: 16,
+                                        col: 29,
+                                    },
+                                },
+                                Str {
+                                    value: "SELECT id, name FROM t ORDER BY id",
+                                    pos: Pos {
+                                        line: 16,
+                                        col: 33,
+                                    },
+                                },
+                            ],
+                            pos: Pos {
+                                line: 16,
+                                col: 28,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 16,
+                        col: 5,
+                    },
+                },
+                For {
+                    var: "row",
+                    iterable: Var {
+                        name: "rows",
+                        pos: Pos {
+                            line: 17,
+                            col: 16,
+                        },
+                    },
+                    body: [
+                        ExprStmt {
+                            expr: Call {
+                                callee: Var {
+                                    name: "print",
+                                    pos: Pos {
+                                        line: 18,
+                                        col: 9,
+                                    },
+                                },
+                                args: [
+                                    Index {
+                                        obj: Var {
+                                            name: "row",
+                                            pos: Pos {
+                                                line: 18,
+                                                col: 15,
+                                            },
+                                        },
+                                        index: Str {
+                                            value: "id",
+                                            pos: Pos {
+                                                line: 18,
+                                                col: 19,
+                                            },
+                                        },
+                                        pos: Pos {
+                                            line: 18,
+                                            col: 18,
+                                        },
+                                    },
+                                    Index {
+                                        obj: Var {
+                                            name: "row",
+                                            pos: Pos {
+                                                line: 18,
+                                                col: 26,
+                                            },
+                                        },
+                                        index: Str {
+                                            value: "name",
+                                            pos: Pos {
+                                                line: 18,
+                                                col: 30,
+                                            },
+                                        },
+                                        pos: Pos {
+                                            line: 18,
+                                            col: 29,
+                                        },
+                                    },
+                                ],
+                                pos: Pos {
+                                    line: 18,
+                                    col: 14,
+                                },
+                            },
+                            pos: Pos {
+                                line: 18,
+                                col: 14,
+                            },
+                        },
+                    ],
+                    pos: Pos {
+                        line: 17,
+                        col: 5,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 19,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Binary {
+                                op: Add,
+                                left: Str {
+                                    value: "escape: ",
+                                    pos: Pos {
+                                        line: 19,
+                                        col: 11,
+                                    },
+                                },
+                                right: Call {
+                                    callee: Var {
+                                        name: "sqlite_escape",
+                                        pos: Pos {
+                                            line: 19,
+                                            col: 24,
+                                        },
+                                    },
+                                    args: [
+                                        Str {
+                                            value: "O'Reilly",
+                                            pos: Pos {
+                                                line: 19,
+                                                col: 38,
+                                            },
+                                        },
+                                    ],
+                                    pos: Pos {
+                                        line: 19,
+                                        col: 37,
+                                    },
+                                },
+                                pos: Pos {
+                                    line: 19,
+                                    col: 22,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 19,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 19,
+                        col: 10,
+                    },
+                },
+                VarDecl {
+                    kind: Let,
+                    name: "ok",
+                    ty: None,
+                    value: Some(
+                        Call {
+                            callee: Var {
+                                name: "sqlite_close",
+                                pos: Pos {
+                                    line: 20,
+                                    col: 14,
+                                },
+                            },
+                            args: [
+                                Var {
+                                    name: "db",
+                                    pos: Pos {
+                                        line: 20,
+                                        col: 27,
+                                    },
+                                },
+                            ],
+                            pos: Pos {
+                                line: 20,
+                                col: 26,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 20,
+                        col: 5,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 21,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Binary {
+                                op: Add,
+                                left: Str {
+                                    value: "closed: ",
+                                    pos: Pos {
+                                        line: 21,
+                                        col: 11,
+                                    },
+                                },
+                                right: Call {
+                                    callee: Var {
+                                        name: "str",
+                                        pos: Pos {
+                                            line: 21,
+                                            col: 24,
+                                        },
+                                    },
+                                    args: [
+                                        Var {
+                                            name: "ok",
+                                            pos: Pos {
+                                                line: 21,
+                                                col: 28,
+                                            },
+                                        },
+                                    ],
+                                    pos: Pos {
+                                        line: 21,
+                                        col: 27,
+                                    },
+                                },
+                                pos: Pos {
+                                    line: 21,
+                                    col: 22,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 21,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 21,
+                        col: 10,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 22,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Str {
+                                value: "ffi ok",
+                                pos: Pos {
+                                    line: 22,
+                                    col: 11,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 22,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 22,
+                        col: 10,
+                    },
+                },
+            ],
+            pos: Pos {
+                line: 12,
+                col: 1,
+            },
+            type_params: [],
+        },
+    ],
+}
+语法分析成功：7 条顶层语句

@@ -29,7 +29,7 @@ var g_at_line_start = true
 var g_toks = []
 var g_count = 0
 var g_pending = []
-let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn": "fn", "struct": "struct", "enum": "enum", "trait": "trait", "impl": "impl", "match": "match", "case": "case", "if": "if", "elif": "elif", "else": "else", "for": "for", "while": "while", "in": "in", "and": "and", "or": "or", "not": "not", "return": "return", "break": "break", "continue": "continue", "import": "import", "from": "from", "pub": "pub", "as": "as", "spawn": "spawn", "chan": "chan", "send": "send", "recv": "recv", "select": "select", "true": "true", "false": "false", "null": "null", "None": "null", "self": "self", "capture": "capture"}
+let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn": "fn", "struct": "struct", "enum": "enum", "trait": "trait", "impl": "impl", "match": "match", "case": "case", "if": "if", "elif": "elif", "else": "else", "for": "for", "while": "while", "in": "in", "and": "and", "or": "or", "not": "not", "return": "return", "break": "break", "continue": "continue", "import": "import", "from": "from", "pub": "pub", "as": "as", "spawn": "spawn", "chan": "chan", "send": "send", "recv": "recv", "select": "select", "true": "true", "false": "false", "null": "null", "None": "null", "self": "self", "capture": "capture", "extern": "extern"}
 let CTRL_ALL = "\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}\u{8}\u{b}\u{c}\u{e}\u{f}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1a}\u{1b}\u{1c}\u{1d}\u{1e}\u{1f}\u{7f}\u{80}\u{81}\u{82}\u{83}\u{84}\u{85}\u{86}\u{87}\u{88}\u{89}\u{8a}\u{8b}\u{8c}\u{8d}\u{8e}\u{8f}\u{90}\u{91}\u{92}\u{93}\u{94}\u{95}\u{96}\u{97}\u{98}\u{99}\u{9a}\u{9b}\u{9c}\u{9d}\u{9e}\u{9f}"
 var p_toks = []
 var p_pos = 0
@@ -43,6 +43,7 @@ var cg_vars = {"_": 0}
 var cg_var_types = {"_": 0}
 var cg_immutables = {"_": 0}
 var cg_nonnull = {"_": 0}
+var cg_ffi = {"_": 0}
 var cg_globals = []
 var cg_err_labels = []
 var cg_uidc = 0
@@ -432,6 +433,7 @@ def cg_generate(prog):
     cg_var_types = cg_new_dict()
     cg_immutables = cg_new_dict()
     cg_nonnull = cg_new_dict()
+    cg_ffi = cg_new_dict()
     cg_globals = []
     cg_err_labels = []
     cg_uidc = 0
@@ -445,6 +447,9 @@ def cg_generate(prog):
         let ty = st[0]
         if ty == "FuncDef":
             cg_globals.append(rust_unescape(st[1]))
+        elif ty == "ExternDef":
+            # M42：extern def → FFI 声明表（name → params），调用生成 ffi_call 桥
+            cg_ffi[rust_unescape(st[1])] = st[2]
         elif ty == "VarDecl":
             cg_globals.append(rust_unescape(st[2]))
             if st[1] == "Let" or st[1] == "Const":
@@ -523,7 +528,7 @@ def cg_generate(prog):
     while si2 < len(items):
         let st = items[si2]
         let ty = st[0]
-        if ty != "FuncDef" and ty != "StructDef" and ty != "EnumDef" and ty != "TraitDef" and ty != "ImplDef" and ty != "Import":
+        if ty != "FuncDef" and ty != "StructDef" and ty != "EnumDef" and ty != "TraitDef" and ty != "ImplDef" and ty != "Import" and ty != "ExternDef":
             out += cg_gen_stmt(st, 1)
         si2 += 1
     # 调用顶层 main()

@@ -1,0 +1,22 @@
+# M42：C-FFI 端到端用例（显式 C 库 import）
+# 验证：import "c/sqlite3" + extern def + ffi_call C 桥
+#       （编译/解释双模式输出一致，走同一 runtime 注册表）
+import "c/sqlite3"
+
+extern def sqlite_open(path: str) -> int
+extern def sqlite_exec(db: int, sql: str) -> int
+extern def sqlite_query(db: int, sql: str) -> list
+extern def sqlite_close(db: int) -> bool
+extern def sqlite_escape(s: str) -> str
+
+def main():
+    let db = sqlite_open(":memory:")
+    sqlite_exec(db, "CREATE TABLE t (id INT, name TEXT)")
+    sqlite_exec(db, "INSERT INTO t VALUES (1, '甲'), (2, '乙')")
+    let rows = sqlite_query(db, "SELECT id, name FROM t ORDER BY id")
+    for row in rows:
+        print(row["id"], row["name"])
+    print("escape: " + sqlite_escape("O'Reilly"))
+    let ok = sqlite_close(db)
+    print("closed: " + str(ok))
+    print("ffi ok")

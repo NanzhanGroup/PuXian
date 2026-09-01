@@ -109,6 +109,8 @@ def cg_is_definition(st):
         if rust_unescape(st[1]) == "main":
             return false
         return true
+    if ty == "ExternDef":
+        return true
     if ty == "StructDef" or ty == "EnumDef" or ty == "TraitDef" or ty == "ImplDef":
         return true
     if ty == "VarDecl" and st[1] == "Const":
@@ -118,7 +120,7 @@ def cg_is_definition(st):
 # 定义名（impl 用 "impl::类型::trait" 近似键）
 def cg_def_name(st):
     let ty = st[0]
-    if ty == "FuncDef" or ty == "StructDef" or ty == "EnumDef" or ty == "TraitDef":
+    if ty == "FuncDef" or ty == "StructDef" or ty == "EnumDef" or ty == "TraitDef" or ty == "ExternDef":
         return rust_unescape(st[1])
     if ty == "VarDecl" and st[1] == "Const":
         return rust_unescape(st[2])
@@ -147,6 +149,9 @@ def cg_load_module(module, names, base_dir, out, std_defined):
         ni2 += 1
     names = n2
     if len(module) == 0:
+        return
+    # M42：显式 C 库 import（import "c/xxx"）→ 不加载 .px 文件，由语言层 extern def 声明函数
+    if len(module) == 1 and len(module[0]) > 2 and module[0][0:2] == "c/" and not contains(module[0], ".px"):
         return
     let is_std = module[0] == "std"
     let key = join(".", module)

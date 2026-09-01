@@ -4704,6 +4704,15 @@ void px_register_builtins(void) {
     px_set_global("sqlite_close", px_native("sqlite_close", bi_sqlite_close));
     px_set_global("sqlite_escape", px_native("sqlite_escape", bi_sqlite_escape));
     px_set_global("sqlite_last_insert_rowid", px_native("sqlite_last_insert_rowid", bi_sqlite_last_insert_rowid));
+    // M42：FFI C 桥（runtime_ffi.c）—— ffi_call(name, args_list)
+    px_set_global("ffi_call", px_native("ffi_call", bi_ffi_call));
+    // M42：已链 C 库绑定进 FFI 注册表（语言层 extern def 按名字查找）
+    px_ffi_register("sqlite_open", bi_sqlite_open);
+    px_ffi_register("sqlite_exec", bi_sqlite_exec);
+    px_ffi_register("sqlite_query", bi_sqlite_query);
+    px_ffi_register("sqlite_close", bi_sqlite_close);
+    px_ffi_register("sqlite_escape", bi_sqlite_escape);
+    px_ffi_register("sqlite_last_insert_rowid", bi_sqlite_last_insert_rowid);
     // M28 P1：时间 / 时区
     px_set_global("time_format", px_native("time_format", bi_time_format));
     px_set_global("time_parse", px_native("time_parse", bi_time_parse));

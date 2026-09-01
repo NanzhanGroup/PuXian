@@ -251,6 +251,9 @@ def i_call_builtin(name, args, pos):
         return Ok(json_path_set(args[0], args[1], args[2]))
     if name == "os_spawn":
         return Ok(os_spawn(args[0], args[1]))
+    if name == "ffi_call":
+        # M42：FFI C 桥 —— ffi_call(name, args_list) 调 runtime 注册的 C 绑定
+        return i_builtin_ffi_call(args, pos)
     if name == "os_wait":
         return Ok(os_wait(args[0]))
     if name == "os_kill":
@@ -288,6 +291,19 @@ def i_call_builtin(name, args, pos):
             return Ok(null)
         return Ok(args[0])
     return Err(i_r1002("未知内置函数: " + name, pos))
+
+# M42：FFI 调用（extern def 走 C 桥）
+# args: [name(str), fn_args(list)] → ffi_call(name, args_list) → runtime 注册的 C 绑定
+# 双模式统一：编译模式 codegen 生成 px_call(px_get_global("ffi_call"), ...)，
+# 解释模式经此函数转发到同一 C 桥（pxi 已链 runtime_ffi.c）。
+def i_builtin_ffi_call(args, pos):
+    if len(args) != 2:
+        return Err(i_r1002("ffi_call 需要 (name, args_list) 参数", pos))
+    if type(args[0]) != "string":
+        return Err(i_r1002("ffi_call 的 name 需要字符串", pos))
+    if type(args[1]) != "list":
+        return Err(i_r1002("ffi_call 的 args 需要列表", pos))
+    return Ok(ffi_call(args[0], args[1]))
 
 # ---------- len（对齐 builtin.rs Len） ----------
 def i_builtin_len(args, pos):
