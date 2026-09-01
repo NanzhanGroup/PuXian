@@ -400,7 +400,7 @@ select:
 v0.1 不提供锁原语，用 channel 实现互斥（Go 哲学）。`std.sync.Mutex` 后续加入标准库。
 
 ### 7.5 调度
-- M:N 协程调度，运行时用 Rust 实现，天然规避 GIL
+- M:N 协程调度，运行时用 C 实现（runtime.c，M-B9a Rust 版已退役）
 - 目标：10 万级协程
 - 协程栈：动态增长（起始 8KB）
 
