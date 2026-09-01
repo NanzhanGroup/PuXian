@@ -8,42 +8,32 @@
 - **语法 = Python 子集**：AI 在海量 Python 语料上训练，语法越像 Python，AI 生成的代码准确率越高；
 - **类型 = Rust 风格**：渐进类型（不写类型直接跑，写类型拿性能）、枚举、模式匹配、Option/Result；
 - **并发 = Go 风格**：`spawn` + `channel` + `select`，协程真并发；
-- **出身 = C 编译器**：编译后端生成 C 源码，经 gcc 静态编译为**零依赖单二进制**（无 Go/Google、无 Rust/Mozilla 色彩，信创/政府场景友好）；
-- **AI 协议层内置**：fmt / lint / test / bench / doc / LSP / MCP 全套工具链，AI 与 IDE 零配置接入。
+- **出身 = C 编译器**：编译后端生成 C 源码，经 gcc 静态编译为**零依赖单二进制**（无 Go/Google、无 Rust/Mozilla 色彩，信创/政府场景友好）。
 
 ---
 
-## 特性一览
+## 🎉 当前状态：编译器已自举
 
-| 维度 | 能力 |
-|------|------|
-| 🏃 双模式 | 脚本模式（解释执行，秒起） / 编译模式（生成 C → gcc 静态二进制，接近 C 性能），`run` 与 `build` 逐字节一致 |
-| 🔀 并发 | `spawn` 真并发、`channel` 阻塞通信、`select` 随机就绪 + **并发 GC**（stop-the-world 全量回收，线程安全） |
-| ⏱ 定时器 | `set_timeout` / `set_interval` / `clear_timer`（一次性/周期回调，可变参数透传，回调内并发原语安全） |
-| 🧹 内存 | 编译模式 C 运行时内置保守标记-清除 GC（循环引用可回收，自动触发）+ **slab 分配器**（21 档 size-class 槽位复用）；解释器侧**追踪式 GC** 回收循环引用（list/dict/chan/**闭包 Func↔Env 循环**）+ `gc()` 强制回收 |
-| 🧩 模块化 | `import std.*` / `import foo.bar` / `from foo import x` / 相对路径导入；`px pkg` 包管理（init/add/install/list/remove） |
-| 🌐 网络 | HTTP 客户端（**HTTPS TLS 1.2/1.3** + gzip/chunked 自动解码 + **http/https 连接池复用** + **TLS 会话票据恢复** + **流式 gzip 边下边解**）+ **HTTP 服务端**（`http_serve` gzip/chunked/keep-alive/流式 + **`px_serve` 服务端 TLS**：`tls_server(cert,key[,hostname])` 注册后 HTTPS/WSS/SSE-over-TLS + **TLS SNI 多证书按域名选择** + 请求体大小可配 + 413 + 大 body 落盘 + **优雅关闭** + **per-route 限流**（路由粒度 429）+ **访问日志落盘轮转** + **Alt-Svc 通告**）+ **WebSocket**（RFC 6455，心跳/超时，**`ws://`/`wss://` 一行连接**）+ **SSE** 服务端/客户端（**断线自动重连**，带 Last-Event-ID）+ **UDP**（udp_open/send/recv/close，QUIC 预研地基）+ TCP 全功能 |
-| 🛡 加密/文档 | **AES-CBC-PKCS7 / AES-GCM**、**RSA**（PKCS#1 v1.5）、**XML** 解析/转义/**生成**（xml_build）、**zip** 打包/解压、**base64**、sha256 / xxhash |
-| 🔢 语言能力 | 切片语法 `a[i:j]` / `a[i:j:k]`（步长/反转，str 按 UTF-8 字符）、**生成器表达式** `(x for x in xs)`（**惰性**：单层 for 延迟求值 / `gen_next` 逐项 / for-in / `list()` 转换）、位运算 + 二进制数据视图（int_to_hex / bytes_to_hex / bit_count / bit_length）、正则表达式、锁原语（mutex / rwlock）、文件随机读写 + fsync、进程/信号（os_spawn / os_wait / signal）、**Result/Option 错误处理**（`Ok(x)`/`Err(e)`/`Some(x)` 构造，`?` 错误传播——Err/None 立即返回、`!` 强制解包、is_ok/is_err/unwrap 方法，spec 唯一错误通道） |
-| 🚀 应用平台 | **.px 脚本执行机制**（`px_serve` PHP/OpenResty 式应用服务器：Cookie/Session/基础认证 + 服务端 TLS + 优雅关闭、`px_exec` 语言层嵌入 API）+ **.px 进程池**（编译模式预派生 `px --worker` 解释器常驻复用，PHP-FPM 风格，**脚本/二进制变更自动滚动重启热更新**） |
-| 🔧 工具链 | `px fmt`（`-w` 写回 / `--check` 检查 / `--diff` 打印 unified diff）/ `px lint` / `px test` / `px bench` / `px doc` / `px ast` 全内置 |
-| 🤖 AI 接入 | `px lsp`（语言服务器）、`px mcp`（MCP 服务器），AI 客户端可直接驱动 |
-| 📚 标准库 | io / fs / json / time / string / math / collections / os / net（含 .px 自举库） |
+| 状态 | 说明 |
+|---|---|
+| ✅ **自举完成（M-B8）** | **PuXian 编译器由 PuXian 自己写成**：`lexer / parser / codegen / interp / 值系统` 五大核心全部用 `.px` 重写，自举证明 A.c == B.c == B2.c 逐字节一致 |
+| ✅ **Rust 版已退役（M-B9a）** | Rust 源码归档至 `archive/rust-compiler/`（只读），**新工具链 `tools/pxc` 完全无需 Rust**，基于自举二进制运行 |
+| ✅ **CI 已接入** | GitHub Actions：每次提交自动跑回归 + 自举证明 + 示例编译 + ws-web 冒烟 |
+| 🔄 **ws-web 开发中（M-B9b）** | 用 PuXian 写第一个生产应用（HTTP + SQLite 服务），见 `ws-web/` |
+
+> 现在克隆仓库即可用 `tools/pxc` 编译/运行 PuXian 程序，**不需要安装 Rust**。
 
 ---
 
 ## 快速开始
 
-### 构建编译器（Rust 工具链）
+### 准备（唯一依赖：gcc + make）
 
 ```bash
-cd compiler
-cargo build --release
-# 产物：target/release/px
+# Linux（x86_64 / aarch64），确认 gcc 可用
+which gcc
+# 仓库自带自举工具链（bootstrap/pxc 编译器 + runtime C 运行时），克隆即用
 ```
-
-> M10 起解释器依赖 rustls + webpki-roots（纯 Rust TLS），**首次构建需联网拉取依赖**（crates.io 或镜像）；
-> 编译模式内嵌 mbedtls 静态库（`compiler/runtime/mbedtls/`，随仓库提交），克隆即能 `px build` HTTPS 程序。
 
 ### Hello World
 
@@ -55,177 +45,186 @@ def main():
 ```
 
 ```bash
-px run hello.px              # 脚本模式：解释执行，秒起
-px build hello.px -o hello   # 编译模式：生成 C → gcc 静态二进制
-./hello                      # 直接运行，零依赖
+./tools/pxc run hello.px              # 脚本模式：解释执行，秒起
+./tools/pxc build hello.px            # 编译模式：生成 C → gcc 静态二进制
+./hello/build/hello                   # 直接运行，零依赖（产物在 <目录>/build/）
 ```
 
-### CLI 一览
+### CLI 一览（`tools/pxc`）
 
 | 命令 | 说明 |
+|---|---|
+| `pxc build <file.px>` | 编译为静态二进制（输出 `<目录>/build/<name>`） |
+| `pxc run <file.px> [args...]` | 脚本模式执行 |
+| `pxc lex <file.px>` | 打印 Token 流（调试，走 PuXian lexer） |
+| `pxc parse <file.px>` | 打印 AST（调试，走 PuXian parser） |
+| `pxc --version` / `-v` | 输出版本号 |
+| `pxc help` | 帮助 |
+
+> **工具链现状说明**：自举版 `pxc` 当前提供上表核心命令；Rust 版曾有的 `fmt / lint / test / bench / doc / lsp / mcp / pkg` 等完整工具链，其源码保留在 `archive/rust-compiler/`（只读归档，可作参考或按需用 PuXian 重写恢复）。
+
+---
+
+## 特性一览
+
+| 维度 | 能力 |
 |------|------|
-| `px run <file.px>` | 脚本模式执行 |
-| `px build <file.px> -o out` | 编译为静态二进制 |
-| `px repl` | 交互式 REPL |
-| `px fmt <file.px>` | 代码格式化（`-w` 写回 / `--check` 检查 / `--diff` 打印 unified diff） |
-| `px lint <file.px>` | 静态检查（`--strict` 时 Warning 也失败） |
-| `px test <file.px>` | 测试运行器（`def test_*`） |
-| `px bench <file.px> <func>` | 基准测试（`--count` / `--repeat`） |
-| `px doc <file.px>` | 文档生成（`--output out.md`） |
-| `px ast <file.px>` | 树形查看 AST |
-| `px lsp` | 语言服务器（LSP 协议） |
-| `px mcp` | MCP 服务器（AI 工具调用） |
-| `px pkg ...` | 包管理：`init` / `add` / `install` / `list` / `remove` |
+| 🏃 双模式 | 脚本模式（解释执行，秒起）/ 编译模式（生成 C → gcc 静态二进制，接近 C 性能），`run` 与 `build` 产物逐字节一致 |
+| 🔀 并发 | `spawn` 真并发、`channel` 阻塞通信、`select` 随机就绪 + **并发 GC**（stop-the-world 全量回收，线程安全） |
+| ⏱ 定时器 | `set_timeout` / `set_interval` / `clear_timer`（一次性/周期回调，可变参数透传，回调内并发原语安全） |
+| 🧹 内存 | 编译模式 C 运行时内置保守标记-清除 GC（循环引用可回收，自动触发）+ **slab 分配器**（21 档 size-class 槽位复用）；解释器侧**追踪式 GC** 回收循环引用（list/dict/chan/**闭包 Func↔Env 循环**）+ `gc()` 强制回收 |
+| 🧩 模块化 | `import std.*` / `import foo.bar` / `from foo import x` / 相对路径导入 |
+| 🌐 网络 | HTTP 客户端（**HTTPS TLS 1.2/1.3** + gzip/chunked 自动解码 + **http/https 连接池复用** + **TLS 会话票据恢复** + **流式 gzip 边下边解**）+ **HTTP 服务端**（`http_serve` gzip/chunked/keep-alive/流式 + **`px_serve` 服务端 TLS**：`tls_server(cert,key[,hostname])` 注册后 HTTPS/WSS/SSE-over-TLS + **TLS SNI 多证书按域名选择** + 请求体大小可配 + 413 + 大 body 落盘 + **优雅关闭** + **per-route 限流**（路由粒度 429）+ **访问日志落盘轮转** + **Alt-Svc 通告**）+ **WebSocket**（RFC 6455，心跳/超时，**`ws://`/`wss://` 一行连接**）+ **SSE** 服务端/客户端（**断线自动重连**，带 Last-Event-ID）+ **UDP**（udp_open/send/recv/close，QUIC 预研地基）+ TCP 全功能 |
+| 🛡 加密/文档 | **AES-CBC-PKCS7 / AES-GCM**、**RSA**（PKCS#1 v1.5）、**XML** 解析/转义/**生成**（xml_build）、**zip** 打包/解压、**base64**、sha256 / xxhash、**SQLite**（open/exec/query/close，参数绑定+结果集） |
+| 🔢 语言能力 | 切片语法 `a[i:j]` / `a[i:j:k]`（步长/反转，str 按 UTF-8 字符）、**生成器表达式** `(x for x in xs)`（**惰性**：单层 for 延迟求值 / `gen_next` 逐项 / for-in / `list()` 转换）、位运算 + 二进制数据视图（int_to_hex / bytes_to_hex / bit_count / bit_length）、正则表达式、锁原语（mutex / rwlock）、文件随机读写 + fsync、进程/信号（os_spawn / os_wait / signal）、**Result/Option 错误处理**（`Ok(x)`/`Err(e)`/`Some(x)` 构造，`?` 错误传播——Err/None 立即返回、`!` 强制解包、is_ok/is_err/unwrap 方法，spec 唯一错误通道）、字符串插值 `${expr}`、推导式、可选链 `?.`、空合并 `??`、管道 `\|>` |
+| 🚀 应用平台 | **.px 脚本执行机制**（`px_serve` PHP/OpenResty 式应用服务器：Cookie/Session/基础认证 + 服务端 TLS + 优雅关闭、`px_exec` 语言层嵌入 API）+ **.px 进程池**（编译模式预派生 worker 解释器常驻复用，PHP-FPM 风格，**脚本/二进制变更自动滚动重启热更新**）+ 路由表+中间件（method+path 模式 / `:id` 参数 / `*` 通配 / 中间件链）+ cron 调度（6 字段）+ JSON 路径（json_path/json_path_set） |
+| 📚 标准库 | `stdlib/collections.px`（sorted/reversed/map/filter/reduce/unique/group_by）+ 内置注册表白名单（见 MINI_SUBSET §2.5） |
 
 ---
 
-## 文档
+## 自举（Bootstrapping）
 
-| 文档 | 说明 |
-|------|------|
-| [docs/requirements.md](docs/requirements.md) | 需求与设计讨论（动机、取舍、双模式架构） |
-| [docs/plan.md](docs/plan.md) | 开发方案（语言命名、里程碑规划、语言要点） |
-| [docs/spec.md](docs/spec.md) | 语言规格说明书（词法 / 语法 / 语义 / 标准库） |
-| [docs/PROGRESS.md](docs/PROGRESS.md) | 开发进度（M0–M40 全部完成，41 个里程碑；M40 字符串插值 `${expr}`，自举前最后一个语言糖） |
+PuXian 最与众不同的地方：**它的编译器是它自己写的**。2025 年完成了一轮完整自举：
 
----
+### 自举链路（Bootstrap Chain）
 
-## 里程碑进度
-
-| 阶段 | 内容 | 状态 |
-|------|------|------|
-| M0 | 需求、方案、规格文档 | ✅ |
-| M1 | 词法分析 + 语法分析 | ✅ |
-| M2 | 脚本模式解释器 | ✅ |
-| M3 | 并发运行时（spawn/channel/select） | ✅ |
-| M4 | C 代码生成（编译模式） | ✅ |
-| M5 | 标准库（io/fs/json/time/string/math/collections/os/net） | ✅ |
-| M6 | AI 工具链（fmt/lint/test/bench/doc/ast） | ✅ |
-| M7 | LSP / MCP（AI 协议接入） | ✅ |
-| M8 | GC 值对象自动释放（编译模式 C 运行时） | ✅ |
-| M9 | 包管理器 / 模块化（px pkg + import 多文件） | ✅ |
-| M10 | HTTPS（std.net 加密网络：TLS 1.2/1.3 + 重定向 + POST） | ✅ |
-| M11 | 并发 GC（spawn 活跃时 stop-the-world 全量回收） | ✅ |
-| M12 | 文件随机读写 + fsync（存储基石） | ✅ |
-| M13 | 锁原语：mutex / rwlock | ✅ |
-| M14 | crypto 哈希：sha256 / xxhash | ✅ |
-| M15 | 正则表达式（回溯引擎） | ✅ |
-| M16 | HTTP 服务端框架（http_serve） | ✅ |
-| M17 | .px 脚本执行机制（px_serve / px_exec，PHP 式应用平台） | ✅ |
-| M18 | 后台定时任务/定时器（set_timeout / set_interval / clear_timer） | ✅ |
-| M19 | AES 加密 + XML 解析 + zip 打包/解压 | ✅ |
-| M20 | C 运行时内部符号统一（lx_/LX_ → px_/PX_） | ✅ |
-| M21 | HTTP chunked + gzip + 切片语法 + base64 + SSE | ✅ |
-| M22 | slab 分配器 + 解释器追踪式 GC + WebSocket + 位运算/二进制数据视图 | ✅ |
-| M23 | 网络/存储/安全收尾：SSE 客户端 + WS 心跳/超时 + 二进制安全 bytes + HTTP keep-alive/连接池/流式 + 进程/信号 + RSA | ✅ |
-| M24 | XML 生成 + 切片步长 + https 连接池复用 + HTTP 流式 gzip 解压 | ✅ |
-| M25 | 闭包循环回收 + .px 进程池化 + TLS 会话票据恢复 + fmt --diff | ✅ |
-| M26 | 无符号右移 `>>>` + WebSocket 内置心跳 + SSE 客户端 https + 远程包 registry | ✅ |
-| M27 | WebServer 生产化 P0：服务端 TLS（HTTPS/WSS/SSE-TLS）+ 请求体大小可配/413/落盘 + Cookie/Session/基础认证 + 优雅关闭 | ✅ |
-| M28 | P1 写业务四件套：路由表+中间件（method+path 模式 / :id 参数 / * 通配 / 中间件链）+ 时间时区（time_format/time_parse/tz_offset）+ cron 调度（6 字段）+ SQLite 绑定（sqlite_open/exec/query/close，参数绑定+结果集） | ✅ |
-| M29 | WebServer 生产化 P1：JSON 路径运算符（json_path/json_path_set，JSONB 基石）+ 静态缓存头（ETag/Last-Modified/304）+ Range（206/Content-Range）+ 结构化访问日志 + 请求 ID（X-Request-Id）+ px_serve keep-alive/gzip/静态文件流式 | ✅ |
-| M30 | 服务端 https 连接池（TLS 会话缓存/票据恢复，openssl Reused 验证）+ 字节序可控整数↔bytes（int_to_bytes/bytes_to_int，pxdb 基石）+ 推导式语法补全（多 for/多变量解包/多 if/DictComp）+ fmt 配置化（--indent/--quote/.pxfmt.toml） | ✅ |
-| M31 | 沙箱安全（sandbox_enter：内存限制 setrlimit / 危险函数禁限 deny / 权限降级）+ 虚拟主机（vhost Host 头路由多域名共服）+ 限流防爆破（rate_limit 滑动窗口 + px_serve 按 IP 429）+ HTTP/2 预检（ALPN 固定 http/1.1 / h2c 505 / CORS 204）+ 并发模型升级（连接线程池突破 64 槽位，80 并发全 200） | ✅ |
-| M32 | ws:// wss:// 一行连接（ws_connect("ws://…"/"wss://…")，wss 走 TLS）+ SSE 自动重连（sse_connect(url, reconnect_ms)，断线带 Last-Event-ID 重连）+ 进程池热更新（.px 脚本/px 二进制 mtime 变化自动滚动重启 worker）+ 生成器表达式（(expr for x in xs)，gen_next 逐项 / for-in / list() 转换） | ✅ |
-| M33 | per-route 限流（route 第 4 参数 opts{rate_limit} 路由粒度 429，独立桶）+ TLS SNI（tls_server(cert,key,hostname) 多证书按域名选择）+ 访问日志落盘轮转（px_serve opts{access_log}，>10MB 切 .1/.2/.3）+ HTTP/3 QUIC 预研（udp_open/send/recv/close + Alt-Svc 通告 + 报告） | ✅ |
-| M34 | 惰性生成器（单层 for 真延迟：seq 不展开 + transform/filter 闭包逐项求值）+ 进程池配置化（PX_POOL_WORKERS / IDLE_MS / MAX_REQ）+ WS 服务端广播（ws_broadcast 群发，修复 SConn 读写锁死锁）+ 事件总线（event_bus / bus_subscribe / bus_publish / bus_unsubscribe） | ✅ |
-| M35 | 请求体 gzip 解压（Content-Encoding: gzip 自动解压）+ 推导式 range 流式迭代 + HTTP/2 最小服务端（h2c Upgrade + HPACK/Huffman + 帧层）+ 多维限流 / 白名单（key 组合 + whitelist） | ✅ |
-| M36 | 日志增强（log_json JSON 行 + log_daily 按天轮转）+ 请求上下文（ctx_set/get/clear 线程局部中间件传值）+ WS 心跳配置化（ws_serve opts{heartbeat} 自动保活）+ 进程池优雅关闭（SIGTERM 清理 px --worker 孤儿） | ✅ |
-| M37 | HTTP/2 over TLS（ALPN h2 协商）+ 响应压缩配置（gzip_level/gzip_min_bytes）+ 客户端 http_request 增强（retries/timeout/proxy）+ S3/MinIO 对象存储（AWS SigV4：s3_put/get/delete/list） | ✅ |
-| M38 | WS 客户端自动重连（ws_connect_auto 断线重连）+ HTTP/2 多流（同一连接多 stream 并发）+ 请求体流式限制（chunked 解码 + 超限 413）+ UDP echo 服务端（udp_serve） | ✅ |
-| M39 | Result/Option 错误处理唯一通道（Ok/Err/Some 构造 + `?` 传播 + `!` 解包 + Result 方法 + main 返回语义）——自举硬前置 | ✅ |
-| M40 | 字符串插值 `${expr}`（普通/多行字符串内插值，词法层展开为 `str(expr)` 拼接，双模式一致；嵌套插值 / `\${` 转义 / 限定规则）——自举前最后一个语言糖 | ✅ |
-
----
-
-## 示例
-
-`examples/` 目录：
-
-- `hello.px` —— Hello World（管道操作符）
-- `fib.px` —— 斐波那契
-- `struct.px` —— 结构体
-- `match.px` —— 模式匹配
-- `concurrent.px` / `concurrent_m3.px` —— 并发（spawn / channel / select）
-- `gc_demo.px` —— GC 演示（内存对照）
-- `net_demo.px` —— HTTP 客户端
-- `https_demo.px` —— HTTPS（TLS）
-- `std_demo.px` —— 标准库
-- `toolchain_demo.px` —— 工具链演示
-- `p0_random_io.px` —— 文件随机读写 + fsync
-- `p1_mutex_rwlock.px` —— 锁原语
-- `p2_crypto_hash.px` —— sha256 / xxhash
-- `p3_regex.px` —— 正则表达式
-- `p4_http_server.px` —— HTTP 服务端
-- `p5_px_serve.px` —— .px 脚本应用服务器
-- `p6_timer.px` —— 定时器
-- `p7_aes_xml_zip.px` —— AES + XML + zip
-- `p8_slice_base64.px` —— 切片 + base64
-- `p9_http_adv.px` —— gzip/chunked/SSE
-- `m22_bitwise_data.px` —— 位运算/二进制数据视图
-- `m22_websocket.px` —— WebSocket 客户端
-- `m22_tracing_gc.px` —— 解释器循环引用回收
-- `m23a_sse_ws.px` —— SSE 客户端 + WebSocket 心跳/超时
-- `m23b_bytes.px` —— 二进制安全字节串
-- `m23c_http_adv.px` —— HTTP keep-alive/连接池/流式
-- `m23d_proc_signal.px` / `m23d_rsa.px` —— 进程/信号 / RSA
-- `m24_slice_xml.px` —— 切片步长 + XML 生成
-- `m24_http_adv.px` —— https 连接池 + HTTP 流式 gzip
-- `m25_closure_gc.px` —— 闭包循环回收
-- `m25_tls_resume.px` —— TLS 会话票据恢复
-- `m26_ushr.px` —— 无符号右移 `>>>`
-- `m26_ws_heartbeat.px` —— WebSocket 内置心跳
-- `m26_sse_https.px` —— SSE 客户端 https（需本地 https SSE 端点 + PX_TLS_CA_FILE）
-- `m27a_webprod.px` —— WebServer 生产化：Session / 基础认证 / 请求体限制 / 优雅关闭
-- `m28_time_sqlite.px` —— 时间时区（time_format/time_parse/tz_offset）+ SQLite（CRUD/参数绑定/BLOB）
-- `m28_route.px` —— 路由表 + 中间件链（:id 参数 / * 通配 / 鉴权短路）
-- `m28_cron.px` —— cron 定时调度（6 字段 / clear_timer 取消）
-- `m27b_tls_serve.px` —— 服务端 TLS（HTTPS；需 PX_TLS_CA_FILE 信任自签）
-- `m30_int_bytes.px` —— 字节序可控整数↔bytes（int_to_bytes/bytes_to_int：大小端/补码/符号扩展/越界）
-- `m30_comp.px` —— 推导式语法补全（多 for 嵌套 / 多变量解包 / 多 if / DictComp）
-- `m30_tls_pool.px` —— 服务端 https 连接池（TLS 会话缓存/票据恢复，openssl Reused 验证）
-
-```bash
-px run examples/fib.px
-px build examples/fib.px -o /tmp/fib && /tmp/fib
 ```
+selfhost/*.px（PuXian 源码）───编译───► bootstrap/pxc（编译器二进制，入库）
+                                          │ 编译任何 .px
+                                          ▼
+                                     C 源码 + runtime/ ──gcc──► 静态二进制
+```
+
+| 组件 | 说明 |
+|---|---|
+| `bootstrap/pxc` | PuXian 版编译器（静态二进制，由 `selfhost/compiler.px` 编译而来，随仓库提交） |
+| `bootstrap/pxi` | PuXian 版解释器（由 `selfhost/interp.px` 编译而来） |
+| `bootstrap/pxl` / `pxpar` | PuXian 版 lexer / parser（调试用） |
+| `selfhost/compiler.px` | **编译器源码（PuXian 自己）**：import codegen.px（pxlexer→parser→cg_module→codegen）全链 |
+| `selfhost/golden/compiler.c` | 自举基准（6003 行 C）：引导编译器编译自身的一次性产物 |
+| `selfhost/bootstrap_prove.sh` | 自举证明：`bootstrap/pxc` 编译 `compiler.px` 与基准逐字节 diff |
+
+### 自举证明（经典三步）
+
+1. 编译器 A（`bootstrap/pxc`）运行 `build compiler.px` → 生成 B.c；
+2. `B.c` 与基准 `golden/compiler.c` **逐字节一致（6002 行 0 差异）** → 自举成立；
+3. 强化闭环：B.c 经 gcc 编成 B 二进制 → B 再编译 compiler.px → B2.c，**A.c == B.c == B2.c 三者完全一致**。
+
+CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
+
+### Mini 子集（语言面锁定）
+
+自举期间语言被锁定为 **Mini 子集**（`docs/MINI_SUBSET.md`，语法基线 M40，图灵完备最小面）：只准修 bug 不准加特性。PuXian 版编译器只需正确编译该子集（自身源码即在子集内）。
+
+> **已知限制**：编译模式 `str(float)` 大浮点 %g 精度（>6 位有效数字截断）；编译版无法解析含 NUL 的源码字符串；编译自己需 ~3.5min/1.6GB（C 运行时解释执行 PuXian 编译器逻辑）；编译版解释器仅 Mini 子集内置白名单（`sqlite_*/http_*` 等生产内置只在编译模式可用）。详见 MINI_SUBSET §八~§十二。
 
 ---
 
 ## 目录结构
 
 ```
-├── compiler/          # 编译器本体（Rust）
-│   ├── src/           # lexer / parser / ast / interp / codegen / fmt / lint / test / bench / doc / lsp / mcp / pkg / module ...
-│   ├── runtime/       # C 运行时（runtime.c / runtime.h / runtime_aes.c / runtime_xml.c / runtime_zip.c / runtime_ws.c / runtime_rsa.c，含 GC + slab 分配器 + HTTP 连接池；mbedtls / third_party/miniz 第三方库）
-│   └── tests/         # 测试（含 GC 单元测试）
-├── docs/              # 需求 / 方案 / 规格 / 进度
-├── examples/          # 示例程序（.px）
-└── stdlib/            # 标准库自举（.px）
+├── bootstrap/              # 自举引导二进制（pxc 编译器 / pxi 解释器 / pxl lexer / pxpar parser，静态 ELF）
+├── tools/pxc               # 用户入口：build / run / lex / parse / --version（bash 包装，零 Rust 依赖）
+├── selfhost/               # 自举工程（核心！）
+│   ├── compiler.px         #   PuXian 版完整编译器 CLI（import codegen.px 全链）
+│   ├── codegen.px + cg_*.px #   codegen 模块（AST → C）
+│   ├── interp.px + i*.px   #   解释器模块（tree-walking）
+│   ├── lexer.px pxlexer.px #   词法分析器
+│   ├── parser.px           #   语法分析器
+│   ├── value.px env.px module.px  # 值系统 / 作用域 / 模块加载
+│   ├── capability.px       #   能力自检（110/110）
+│   ├── cases/ + golden/    #   对拍用例（s01-s09 + v01-v03）与基准产物
+│   ├── cases_bad/          #   错误场景（lex 14 + parse 9）
+│   └── diffcheck.sh / bootstrap_prove.sh  # 对拍框架 / 自举证明
+├── runtime/                # C 运行时（runtime.c/h + aes/xml/zip/ws/rsa/sqlite/route/h2 + mbedtls + third_party）
+├── stdlib/                 # 标准库（collections.px）
+├── ws-web/                 # 第一个生产应用（M-B9b，清歌负责）：HTTP + SQLite 服务骨架
+├── examples/               # 74 个示例（hello / fib / match / 并发 / 网络 / TLS / SQLite / 推导式 ...）
+├── archive/rust-compiler/  # Rust 版编译器源码归档（只读，自举前的实现，git 历史保留）
+├── docs/                   # 文档（规格 / Mini 子集 / 自举计划 / 进度）
+└── .github/workflows/ci.yml # CI：回归 + 自举证明 + 示例编译 + ws-web 冒烟
 ```
 
 ---
 
-## 架构
+## 文档
 
-```
-源码 (Python-like .px)
-   │
-   ├─→ 解释器（AST 直译）→ 脚本模式：秒起、无编译
-   │
-   └─→ C 代码生成 → gcc/clang → 静态二进制（编译模式）
-        │
-        └─ runtime.c：对象模型 + 协程调度 + 保守标记-清除 GC + slab 分配器
-```
-
-- 前端（词法 / 语法 / AST）同一套，双模式共享语义，`run` 与 `build` 行为一致；
-- 编译器本体用 Rust 实现（内存安全，AI 生成质量高）；编译后端输出 C，最终二进制链 gcc，信创场景干净。
+| 文档 | 说明 |
+|---|---|
+| [docs/spec.md](docs/spec.md) | 语言规格说明书（词法 / 语法 / 语义 / 标准库） |
+| [docs/MINI_SUBSET.md](docs/MINI_SUBSET.md) | **Mini 子集规范**（自举编译器语言面锁定：支持特性 / 明确排除 / 已知限制） |
+| [docs/BOOTSTRAP_PLAN.md](docs/BOOTSTRAP_PLAN.md) | 自举计划（M-B1 → M-B9 里程碑 + 进度表） |
+| [docs/PROGRESS.md](docs/PROGRESS.md) | 功能开发进度（M0–M40） |
+| [docs/DEV_HISTORY.md](docs/DEV_HISTORY.md) | 开发历史 |
+| [docs/requirements.md](docs/requirements.md) | 需求与设计讨论（动机、取舍、双模式架构） |
+| [ws-web/README.md](ws-web/README.md) | 第一个生产应用：快速开始 + 10 条避坑清单 + 协作协议 |
 
 ---
 
-## 备注
+## 里程碑进度
 
-- 目标平台：仅 Linux（x86_64 / aarch64）；
-- 编译模式产物为静态链接二进制（`ldd` 显示 `statically linked`）；
-- C 运行时内部符号统一使用 `px_` / `PX_` 前缀（M20 全量迁移完成），第三方库（mbedtls / miniz）保留各自前缀；
-- 回归基线：`cargo test` 188/188、GC 单线程 + 并发 ALL PASSED、示例双模式逐字节一致、编译产物 statically linked。
+### 功能开发（M0–M40，Rust 时代，全部完成 ✅）
+
+| 阶段 | 内容 |
+|---|---|
+| M0–M9 | 需求/方案/规格 → 词法+语法 → 解释器 → 并发运行时 → C 代码生成 → 标准库 → AI 工具链（fmt/lint/test/bench/doc/ast）→ LSP/MCP → GC 值对象 → 包管理/模块化 |
+| M10–M19 | HTTPS（TLS 1.2/1.3）→ 并发 GC → 文件随机读写+fsync → 锁原语 → sha256/xxhash → 正则 → HTTP 服务端框架 → .px 脚本执行机制 → 定时器 → AES/XML/zip |
+| M20–M29 | C 运行时符号统一 → chunked/gzip/切片/base64/SSE → slab 分配器+追踪式 GC+WebSocket+位运算 → 网络/存储/安全收尾 → XML 生成+切片步长+连接池 → 闭包循环回收+进程池+TLS 票据恢复 → `>>>`+WS 心跳+远程 registry → 服务端 TLS+请求体限制+Session → 路由/时间时区/cron/SQLite → JSON 路径+静态缓存头+Range+访问日志+请求 ID |
+| M30–M40 | 服务端 https 连接池+字节序整数↔bytes+推导式补全+fmt 配置化 → 沙箱+虚拟主机+限流+HTTP/2 预检+连接线程池 → ws/wss 一行连接+SSE 重连+进程池热更新+生成器 → per-route 限流+TLS SNI+访问日志轮转+QUIC 预研 → 惰性生成器+进程池配置化+WS 广播+事件总线 → gzip 解压+推导式 range+HTTP/2 最小服务端+多维限流 → 日志增强+请求上下文+WS 心跳配置+优雅关闭 → HTTP/2 over TLS+响应压缩+S3 → WS 自动重连+HTTP/2 多流+UDP echo → **Result/Option 唯一错误通道** → **字符串插值 `${expr}`** |
+
+### 自举（M-B1 → M-B9，全部 ✅，M-B9b 进行中）
+
+| 里程碑 | 内容 | 结果 |
+|---|---|---|
+| M-B1 | 能力门禁 + Mini 子集 + 对拍框架 | 能力自检 110/110 |
+| M-B2 | lexer 用 PuXian 重写 | token 流对拍 9/9 |
+| M-B3 | parser 用 PuXian 重写 | AST 对拍 8/8（双模式） |
+| M-B4 | parser 错误处理/恢复 | 错误场景 23/23（双模式） |
+| M-B5 | value/env/module 值系统 | 对拍 v01-v03 双模式全过 |
+| M-B6 | codegen 用 PuXian 重写 | C 源码对拍 12/12（双模式） |
+| M-B7 | interp 用 PuXian 重写 | stdout 8/8 + v01-v03 全 PASS |
+| M-B8 | **自举证明** | **A.c == B.c == B2.c 逐字节一致** 🎉 |
+| M-B9a | 退役 Rust 版 + 接入 CI + 引导链 | `tools/pxc` 全链路可用，CI 四 job |
+| M-B9b | ws-web（第一个生产应用） | 🔄 进行中（清歌负责） |
+
+---
+
+## 示例
+
+`examples/` 目录（74 个），快速上手：
+
+```bash
+# 解释运行
+./tools/pxc run examples/fib.px
+./tools/pxc run examples/match.px
+./tools/pxc run examples/m39_result.px
+./tools/pxc run examples/m40_str_interp.px
+
+# 编译为静态二进制
+./tools/pxc build examples/fib.px && ./examples/build/fib
+./tools/pxc build examples/m28_time_sqlite.px && ./examples/build/m28_time_sqlite
+```
+
+- `hello.px` —— Hello World（管道操作符）
+- `fib.px` —— 斐波那契 / `match.px` —— 模式匹配
+- `concurrent.px` —— 并发（spawn / channel / select）
+- `m39_result.px` —— Result/Option 错误处理（`?` / `!`）
+- `m40_str_interp.px` —— 字符串插值 `${expr}`
+- `m28_time_sqlite.px` —— 时间时区 + SQLite（CRUD/参数绑定）
+- `m28_route.px` —— 路由表 + 中间件链（:id 参数 / * 通配）
+- `m29_webprod.px` —— WebServer 生产化（静态缓存头 / Range / 请求 ID）
+- `m30_comp.px` —— 推导式语法补全（多 for / 多 if / DictComp）
+- `m32_gen.px` —— 生成器表达式（惰性求值）
+- `m37_s3.px` —— S3/MinIO 对象存储（AWS SigV4）
+- `m38_h2_multi.px` —— HTTP/2 多流
+- `m39_gc.px` —— GC 演示 / `m22_tracing_gc.px` —— 循环引用回收
+- `m28_cron.px` —— cron 定时调度 / `m33_route_rate_limit.px` —— 限流
+- ... 完整列表见 `examples/`
+
+---
+
+## 生态与合作
+
+- **ws-web**（`ws-web/`）：第一个生产应用，HTTP + SQLite 服务，用于真实场景 dogfooding 验证 PuXian。
+- **语言缺陷上报**：发现问题请写最小复现用例（单个 .px + 期望/实际输出），标注 `ws-web-blocker` 优先处理。
+- **协作分工**：清歌负责用 PuXian 写应用（M-B9b），东月负责编译器维护 + 响应 blocker issue。
