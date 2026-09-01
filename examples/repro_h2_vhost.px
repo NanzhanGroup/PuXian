@@ -1,0 +1,52 @@
+# ============================================================
+# [ws-web-blocker] TLS ALPN 协商 h2 时绕过 vhost handler —— 最小复现
+# ------------------------------------------------------------
+# 仓库：NanzhanGroup/PuXian   环境：runtime C 版（M37 引入 h2 帧循环）
+# 发现：ws-web（PuXian 写的生产 Web 服务器）灰度时，浏览器（偏好 HTTP/2）
+#       请求 https://qg.wsai.chat 返回「调试页」而不是站点内容。
+# 根因：TLS 握手 ALPN 协商到 h2 后，runtime 走 px_h2_handle 帧循环
+#       （runtime.c:10253），该路径【不调用 vhost(host, handler) 注册的
+#       handler】，直接按默认 docroot 处理 → 多站点/deny/SPA/反代全失效。
+#       而 http/1.1 路径（px_conn_worker）每请求都先 px_vhost_resolve。
+# 修复：runtime/runtime.c ALPN 列表固定为 { "http/1.1" }（vhost handler
+#       仅在 http/1.1 路径生效；h2 帧循环尚未接入 vhost 路由）。
+#
+# ================= 期望输出 vs 实际输出 =================
+# 请求：curl --http2 -k -H "Host: a.test" https://127.0.0.1:18443/
+#  期望输出（修复后，协商 http/1.1）：{"vhost":"ok"}
+#  实际输出（修复前，协商 h2）    ：调试页/默认 docroot 响应（非 handler 输出）
+# ========================================================
+#
+# 运行（编译模式）：
+#   1) 生成自签证书（CN=a.test）：
+#        openssl req -x509 -newkey rsa:2048 -keyout server.key -out server.crt \
+#           -days 30 -nodes -subj "/CN=a.test"
+#   2) ./build.sh && ./build/repro_h2_vhost
+#   3) 另一终端复现：
+#        curl --http2 -k -H "Host: a.test" https://127.0.0.1:18443/
+#      （修复前返回非 handler 输出；修复后返回 {"vhost":"ok"}）
+#   4) 退出：Ctrl-C（优雅关闭）
+# ============================================================
+
+PORT = 18443
+CERT = "/tmp/px_h2_repro/server.crt"
+KEY  = "/tmp/px_h2_repro/server.key"
+DOCROOT = "/tmp/px_h2_docroot"
+
+mkdir(DOCROOT)
+write_file(DOCROOT + "/index.html", "<h1>DEFAULT DOCROOT</h1>")
+
+# vhost handler：与 ws-web 生产用法一致，返回完整响应 dict
+def hhandler(req):
+    return {"status": 200, "body": "{\"vhost\":\"ok\"}", "headers": {"Content-Type": "application/json"}}
+
+def main():
+    # 注册 vhost：a.test → handler（多站点/deny/SPA/反代都在 handler 内）
+    vhost("a.test", hhandler)
+    # 注册 TLS（ALPN 由 runtime 决定：修复前 {h2, http/1.1}，修复后 {http/1.1}）
+    tls_server(CERT, KEY)
+    # 主服务：默认 docroot 仅作「h2 绕过 vhost 时」的对照输出
+    px_serve(PORT, DOCROOT, 10000, {})
+    print("server exited")
+
+main()
