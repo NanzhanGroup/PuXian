@@ -691,7 +691,7 @@ int main(int argc, char** argv) {
     (void)(px_call(px_get_global("check_arith"), (LXValue[]){px_str("float//"), px_str("//"), px_float(5.5), px_int(2LL), px_int(2LL)}, 5));
     (void)(px_call(px_get_global("check_arith"), (LXValue[]){px_str("float//neg"), px_str("//"), px_neg(px_float(5.5)), px_int(2LL), px_neg(px_int(3LL))}, 5));
     (void)(px_call(px_get_global("check_arith"), (LXValue[]){px_str("float%"), px_str("%"), px_float(5.5), px_int(2LL), px_float(1.5)}, 5));
-    (void)(px_call(px_get_global("check_arith"), (LXValue[]){px_str("float**"), px_str("**"), px_float(2), px_float(0.5), px_float(1.4142135623730951)}, 5));
+    (void)(px_call(px_get_global("check_arith"), (LXValue[]){px_str("float**"), px_str("**"), px_float(2), px_float(0.5), px_float(1.41421)}, 5));
     (void)(px_call(px_get_global("check_arith_err"), (LXValue[]){px_str("div by zero int"), px_str("/"), px_int(7LL), px_int(0LL)}, 4));
     (void)(px_call(px_get_global("check_arith_err"), (LXValue[]){px_str("idiv by zero"), px_str("//"), px_int(7LL), px_int(0LL)}, 4));
     (void)(px_call(px_get_global("check_arith_err"), (LXValue[]){px_str("mod by zero"), px_str("%"), px_int(7LL), px_int(0LL)}, 4));

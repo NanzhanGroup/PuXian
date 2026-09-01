@@ -12,7 +12,7 @@
 
 # ---------- 工具 ----------
 def cg_dirname(path):
-    let i = len(path) - 1
+    var i = len(path) - 1
     while i >= 0:
         if path[i] == "/":
             if i == 0:
@@ -27,7 +27,7 @@ def cg_stdlib_dir():
     if e != null and exists(e):
         return e
     let cands = ["/data/code/puxian/stdlib", "../stdlib", "stdlib", "./stdlib", "../../stdlib"]
-    let i = 0
+    var i = 0
     while i < len(cands):
         let c = cands[i]
         if exists(c):
@@ -42,7 +42,7 @@ def cg_find_module_path(module, base_dir):
     # 相对路径导入：import "path/to/file.px"
     if len(module) == 1 and (contains(module[0], "/") or contains(module[0], ".px")):
         let rel = module[0]
-        let p = rel
+        var p = rel
         if not (len(rel) > 0 and rel[0] == "/"):
             p = base_dir + "/" + rel
         if exists(p):
@@ -55,8 +55,8 @@ def cg_find_module_path(module, base_dir):
         let dir = cg_stdlib_dir()
         if dir == null:
             return null
-        let p = dir
-        let si = 1
+        var p = dir
+        var si = 1
         while si < len(module):
             p += "/" + module[si]
             si += 1
@@ -73,18 +73,18 @@ def cg_find_module_path(module, base_dir):
     if exists(mods):
         bases.append(mods)
         let subdirs = list_dir(mods)
-        let di = 0
+        var di = 0
         while di < len(subdirs):
             let sub = subdirs[di]
             let full = mods + "/" + sub
             if exists(full) and not contains(sub, "."):
                 bases.append(full)
             di += 1
-    let bi = 0
+    var bi = 0
     while bi < len(bases):
         let base = bases[bi]
-        let p = base
-        let si = 0
+        var p = base
+        var si = 0
         while si < len(module):
             p += "/" + module[si]
             si += 1
@@ -125,7 +125,7 @@ def cg_def_name(st):
     if ty == "ImplDef":
         let tn = rust_unescape(st[1])
         let tr = st[2]
-        let ts = "None"
+        var ts = "None"
         if tr != null:
             ts = "Some(" + tr + ")"
         return "impl::" + tn + "::" + ts
@@ -135,13 +135,13 @@ def cg_def_name(st):
 def cg_load_module(module, names, base_dir, out, std_defined):
     # module/names 元素是 AST 字符串字段（debug 格式带引号），先还原
     let m2 = []
-    let ni = 0
+    var ni = 0
     while ni < len(module):
         m2.append(rust_unescape(module[ni]))
         ni += 1
     module = m2
     let n2 = []
-    let ni2 = 0
+    var ni2 = 0
     while ni2 < len(names):
         n2.append(rust_unescape(names[ni2]))
         ni2 += 1
@@ -166,19 +166,19 @@ def cg_load_module(module, names, base_dir, out, std_defined):
     # 递归：模块内部 import（以模块所在目录为基准）
     let mod_dir = cg_dirname(path)
     let inner_imports = []
-    let ii = 0
+    var ii = 0
     while ii < len(sprog[1]):
         let st = sprog[1][ii]
         if st[0] == "Import":
             inner_imports.append([st[1], st[2]])
         ii += 1
-    let jj = 0
+    var jj = 0
     while jj < len(inner_imports):
         cg_load_module(inner_imports[jj][0], inner_imports[jj][1], mod_dir, out, std_defined)
         jj += 1
     # 提取定义类语句（选择性导入只保留列出的名字）
     let selective = len(names) > 0
-    let ki = 0
+    var ki = 0
     while ki < len(sprog[1]):
         let st = sprog[1][ki]
         if st[0] == "Import":
@@ -215,24 +215,24 @@ def cg_resolve_modules(prog, base_dir):
     let std_defined = cg_new_dict()
     loaded = cg_new_dict()
     let imports = []
-    let i = 0
+    var i = 0
     while i < len(items):
         let st = items[i]
         if st[0] == "Import":
             imports.append([st[1], st[2]])
         i += 1
-    let li = 0
+    var li = 0
     while li < len(imports):
         cg_load_module(imports[li][0], imports[li][1], base_dir, extra, std_defined)
         li += 1
     if len(extra) == 0:
         return prog
     let new_items = []
-    let ei = 0
+    var ei = 0
     while ei < len(extra):
         new_items.append(extra[ei])
         ei += 1
-    let ii = 0
+    var ii = 0
     while ii < len(items):
         new_items.append(items[ii])
         ii += 1

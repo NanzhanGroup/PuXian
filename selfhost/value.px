@@ -110,8 +110,8 @@ def v_cmp(a, b):
         return 0
     # int/float 混合 → 转 float 比较
     if (ta == "int" or ta == "float") and (tb == "int" or tb == "float"):
-        let af = a
-        let bf = b
+        var af = a
+        var bf = b
         if ta == "int":
             af = float(a)
         if tb == "int":
@@ -202,8 +202,8 @@ def v_float_op(op, a, b):
         return {"ok": false, "err": "需要数值"}
     if tb != "int" and tb != "float":
         return {"ok": false, "err": "需要数值"}
-    let af = a
-    let bf = b
+    var af = a
+    var bf = b
     if ta == "int":
         af = float(a)
     if tb == "int":

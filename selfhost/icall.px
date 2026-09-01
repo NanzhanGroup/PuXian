@@ -27,7 +27,7 @@ def i_call_value(cv, args, pos):
                 return Err(i_r1002("未知结构体: '" + name + "'", pos))
             let sdef = g_structs[name]
             let fields = it_new_dict()
-            let fi = 0
+            var fi = 0
             while fi < len(sdef["fields"]):
                 let fname = sdef["fields"][fi]["name"]
                 if fi < len(args):
@@ -46,8 +46,8 @@ def i_call_function(fd, args, selfv, pos):
     let call_env = env_new(fd["closure"])
     if selfv != null:
         env_define(call_env, "self", selfv)
-    let idx = 0
-    let pi = 0
+    var idx = 0
+    var pi = 0
     let nparams = len(fd["params"])
     while pi < nparams:
         let p = fd["params"][pi]
@@ -176,7 +176,7 @@ def i_list_method(l, name, args, pos):
             return Err(r.err())
         let sep = r.unwrap()
         let parts = []
-        let i = 0
+        var i = 0
         while i < len(l):
             parts.append(i_to_str(l[i]))
             i += 1
@@ -184,7 +184,7 @@ def i_list_method(l, name, args, pos):
     if name == "contains":
         if len(args) == 0:
             return Err(i_r1005("list.contains 需要一个参数", pos))
-        let i = 0
+        var i = 0
         while i < len(l):
             if i_eq(l[i], args[0]):
                 return Ok(true)
@@ -192,7 +192,7 @@ def i_list_method(l, name, args, pos):
         return Ok(false)
     if name == "reverse":
         let n = len(l)
-        let i = 0
+        var i = 0
         while i < n // 2:
             let tmp = l[i]
             l[i] = l[n - 1 - i]
@@ -201,9 +201,9 @@ def i_list_method(l, name, args, pos):
         return Ok(null)
     if name == "sort":
         let n = len(l)
-        let i = 0
+        var i = 0
         while i < n:
-            let j = 0
+            var j = 0
             while j < n - 1 - i:
                 if i_to_str(l[j]) > i_to_str(l[j + 1]):
                     let tmp = l[j]
@@ -215,7 +215,7 @@ def i_list_method(l, name, args, pos):
     if name == "index":
         if len(args) == 0:
             return Err(i_r1005("list.index 需要一个参数", pos))
-        let i = 0
+        var i = 0
         while i < len(l):
             if i_eq(l[i], args[0]):
                 return Ok(i)
@@ -241,7 +241,7 @@ def i_dict_method(d, name, args, pos):
         let r = i_expect_str_arg(args, 0, "set", pos)
         if r.is_err():
             return Err(r.err())
-        let v = null
+        var v = null
         if len(args) > 1:
             v = args[1]
         d[r.unwrap()] = v
@@ -251,7 +251,7 @@ def i_dict_method(d, name, args, pos):
     if name == "values":
         let out = []
         let ks = d.keys()
-        let i = 0
+        var i = 0
         while i < len(ks):
             out.append(d[ks[i]])
             i += 1
@@ -267,7 +267,7 @@ def i_dict_method(d, name, args, pos):
             return Err(r.err())
         let k = r.unwrap()
         if d.has(k):
-            let v = d[k]
+            var v = d[k]
             d.remove(k)
             return Ok(v)
         return Err(i_r1008("字典没有键 '" + k + "'", pos))

@@ -10,8 +10,8 @@
 # ============================================================
 import "../module.px"
 
-let g_pass = 0
-let g_fail = 0
+let mut g_pass =0
+let mut g_fail =0
 
 def check(name, cond):
     if cond:

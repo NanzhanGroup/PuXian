@@ -18,8 +18,8 @@
 #          lc=CompClause列表 lma=MatchArm列表 tl=类型列表 lpl=Pattern列表
 # ---------- 辅助 ----------
 def pad(n):
-    let s = ""
-    let i = 0
+    var s = ""
+    var i = 0
     while i < n:
         s += " "
         i += 1
@@ -38,7 +38,7 @@ def dump_node(node, ind):
         lines.append(disp + "(")
     else:
         lines.append(disp + " {")
-    let i = 0
+    var i = 0
     while i < len(layout):
         let f = layout[i]
         let fval = node[i + 1]
@@ -58,7 +58,7 @@ def dump_list(v, ind):
     if len(v) == 0:
         return "[]"
     let parts = []
-    let i = 0
+    var i = 0
     while i < len(v):
         parts.append(pad(ind + 4) + dump_node(v[i], ind + 4) + ",")
         i += 1
@@ -68,7 +68,7 @@ def dump_str_list(v, ind):
     if len(v) == 0:
         return "[]"
     let parts = []
-    let i = 0
+    var i = 0
     while i < len(v):
         parts.append(pad(ind + 4) + v[i] + ",")
         i += 1
@@ -78,7 +78,7 @@ def dump_ty_list(v, ind):
     if len(v) == 0:
         return "[]"
     let parts = []
-    let i = 0
+    var i = 0
     while i < len(v):
         parts.append(pad(ind + 4) + dump_node(v[i], ind + 4) + ",")
         i += 1
@@ -88,7 +88,7 @@ def dump_pat_list(v, ind):
     if len(v) == 0:
         return "[]"
     let parts = []
-    let i = 0
+    var i = 0
     while i < len(v):
         parts.append(pad(ind + 4) + dump_node(v[i], ind + 4) + ",")
         i += 1
@@ -117,7 +117,7 @@ def dump_t2_list(v, ind):
     if len(v) == 0:
         return "[]"
     let parts = []
-    let i = 0
+    var i = 0
     while i < len(v):
         let e = v[i]
         parts.append(pad(ind + 4) + "(\n" + pad(ind + 8) + dump_node(e[0], ind + 8) + ",\n" + pad(ind + 8) + dump_node(e[1], ind + 8) + ",\n" + pad(ind + 4) + "),")
@@ -129,7 +129,7 @@ def dump_t2b_list(v, ind):
     if len(v) == 0:
         return "[]"
     let parts = []
-    let i = 0
+    var i = 0
     while i < len(v):
         let e = v[i]
         parts.append(pad(ind + 4) + "(\n" + pad(ind + 8) + dump_node(e[0], ind + 8) + ",\n" + pad(ind + 8) + dump_list(e[1], ind + 8) + ",\n" + pad(ind + 4) + "),")
@@ -141,11 +141,11 @@ def dump_t3_list(v, ind):
     if len(v) == 0:
         return "[]"
     let parts = []
-    let i = 0
+    var i = 0
     while i < len(v):
         let e = v[i]
         let b = e[0]
-        let bs = "None"
+        var bs = "None"
         if b != null:
             bs = "Some(\n" + pad(ind + 12) + b + ",\n" + pad(ind + 8) + ")"
         parts.append(pad(ind + 4) + "(\n" + pad(ind + 8) + bs + ",\n" + pad(ind + 8) + dump_node(e[1], ind + 8) + ",\n" + pad(ind + 8) + dump_list(e[2], ind + 8) + ",\n" + pad(ind + 4) + "),")
@@ -153,7 +153,7 @@ def dump_t3_list(v, ind):
     return "[\n" + join("\n", parts) + "\n" + pad(ind) + "]"
 
 def fmt_float(v):
-    let s = str(v)
+    var s = str(v)
     if s == "inf" or s == "-inf":
         return s
     if not contains(s, ".") and not contains(s, "e") and not contains(s, "E"):

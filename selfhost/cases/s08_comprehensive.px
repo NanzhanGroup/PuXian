@@ -20,8 +20,8 @@ impl Area for Point:
         return 1.5
 
 def greet(name: str, times: int = 2) -> str:
-    let msg = "hi ${name}"
-    let i = 0
+    let mut msg = "hi ${name}"
+    let mut i =0
     while i < times:
         msg += "!"
         i += 1

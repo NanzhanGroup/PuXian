@@ -9,16 +9,16 @@ import "pxlexer.px"
 import "astdump.px"
 
 # ---------- lex 全局状态（供 pxlexer 函数引用；import 不注册顶层 let） ----------
-let g_src = ""
-let g_len = 0
-let g_pos = 0
-let g_line = 1
-let g_col = 1
-let g_indent_stack = [0]
-let g_at_line_start = true
-let g_toks = []
-let g_count = 0
-let g_pending = []
+var g_src = ""
+var g_len = 0
+var g_pos = 0
+var g_line = 1
+var g_col = 1
+var g_indent_stack = [0]
+var g_at_line_start = true
+var g_toks = []
+var g_count = 0
+var g_pending = []
 let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn": "fn", "struct": "struct", "enum": "enum", "trait": "trait", "impl": "impl", "match": "match", "case": "case", "if": "if", "elif": "elif", "else": "else", "for": "for", "while": "while", "in": "in", "and": "and", "or": "or", "not": "not", "return": "return", "break": "break", "continue": "continue", "import": "import", "from": "from", "pub": "pub", "as": "as", "spawn": "spawn", "chan": "chan", "send": "send", "recv": "recv", "select": "select", "true": "true", "false": "false", "null": "null", "None": "null", "self": "self", "capture": "capture"}
 let CTRL_ALL = "\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}\u{8}\u{b}\u{c}\u{e}\u{f}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1a}\u{1b}\u{1c}\u{1d}\u{1e}\u{1f}\u{7f}\u{80}\u{81}\u{82}\u{83}\u{84}\u{85}\u{86}\u{87}\u{88}\u{89}\u{8a}\u{8b}\u{8c}\u{8d}\u{8e}\u{8f}\u{90}\u{91}\u{92}\u{93}\u{94}\u{95}\u{96}\u{97}\u{98}\u{99}\u{9a}\u{9b}\u{9c}\u{9d}\u{9e}\u{9f}"
 
@@ -93,8 +93,8 @@ let LAYOUT = {
 }
 
 # ---------- parser 状态 ----------
-let p_toks = []
-let p_pos = 0
+var p_toks = []
+var p_pos = 0
 
 # ---------- 工具 ----------
 def pk():
@@ -156,7 +156,7 @@ def expect_ident(what):
 
 def is_name_kind(k):
     let ns = ["let", "var", "const", "def", "fn", "struct", "enum", "trait", "impl", "match", "case", "if", "elif", "else", "for", "while", "in", "return", "break", "continue", "import", "from", "pub", "as", "spawn", "chan", "send", "recv", "select", "true", "false", "null", "self", "type", "capture"]
-    let i = 0
+    var i = 0
     while i < len(ns):
         if ns[i] == k:
             return true
@@ -239,7 +239,7 @@ def parse_stmt():
         adv()
         if chk("换行") or chk("去缩进") or chk("EOF"):
             return ["Return", null, pos]
-        let value = parse_expr()
+        var value = parse_expr()
         return ["Return", value, pos]
     if k == "break":
         let pos = ppos()
@@ -252,12 +252,12 @@ def parse_stmt():
     if k == "spawn":
         let pos = ppos()
         adv()
-        let expr = parse_expr()
+        var expr = parse_expr()
         return ["Spawn", expr, pos]
     if k == "select":
         return parse_select()
     if k == "fn":
-        let expr = parse_expr()
+        var expr = parse_expr()
         let pos = node_pos(expr)
         return ["ExprStmt", expr, pos]
     return parse_assign_or_expr()
@@ -265,23 +265,27 @@ def parse_stmt():
 def parse_var_decl(kind):
     let pos = ppos()
     adv()
+    # M41.2: let mut 支持（let 默认不可变，let mut/var 可变）
+    if kind == "Let" and chk("标识符") and pv() == "mut":
+        adv()
+        kind = "Mut"
     if chk("("):
         perr("E2001", "解构声明 let (a, b) = ... 尚未支持（v0.1 后续版本）")
     let name = expect_ident("变量名")
-    let ty = null
+    var ty = null
     if chk(":"):
         adv()
         ty = parse_type()
-    let value = null
+    var value = null
     if chk("="):
         adv()
         value = parse_expr()
     return ["VarDecl", kind, qstr(name), ty, value, pos]
 
 def parse_assign_or_expr():
-    let expr = parse_expr()
+    var expr = parse_expr()
     let pos = node_pos(expr)
-    let op = null
+    var op = null
     let k = pk()
     if k == "=":
         op = "Assign"
@@ -313,7 +317,7 @@ def parse_assign_or_expr():
         op = "ShrU"
     if op != null:
         adv()
-        let value = parse_expr()
+        var value = parse_expr()
         return ["Assign", expr, op, value, pos]
     return ["ExprStmt", expr, pos]
 
@@ -323,9 +327,9 @@ def parse_if():
     let cond = parse_expr()
     expect(":", "':'")
     expect("换行", "换行")
-    let body = parse_block()
+    var body = parse_block()
     let branches = [[cond, body]]
-    let else_branch = null
+    var else_branch = null
     while true:
         if chk("elif"):
             adv()
@@ -352,7 +356,7 @@ def parse_for():
     let iterable = parse_expr()
     expect(":", "':'")
     expect("换行", "换行")
-    let body = parse_block()
+    var body = parse_block()
     return ["For", qstr(lv), iterable, body, pos]
 
 def parse_while():
@@ -361,7 +365,7 @@ def parse_while():
     let cond = parse_expr()
     expect(":", "':'")
     expect("换行", "换行")
-    let body = parse_block()
+    var body = parse_block()
     return ["While", cond, body, pos]
 
 def parse_block():
@@ -382,13 +386,13 @@ def parse_func_def():
     adv()
     let name = expect_ident("函数名")
     let params = parse_params()
-    let ret_ty = null
+    var ret_ty = null
     if chk("->"):
         adv()
         ret_ty = parse_type()
     expect(":", "':'")
     expect("换行", "换行")
-    let body = parse_block()
+    var body = parse_block()
     return ["FuncDef", qstr(name), params, ret_ty, body, pos]
 
 def parse_struct_def():
@@ -466,12 +470,12 @@ def parse_trait_def():
         adv()
         let mname = expect_ident("方法名")
         let mparams = parse_params()
-        let mret = null
+        var mret = null
         if chk("->"):
             adv()
             mret = parse_type()
         expect(":", "':'")
-        let body = []
+        var body = []
         if chk("换行"):
             adv()
             if chk("缩进"):
@@ -488,8 +492,8 @@ def parse_impl_def():
     let pos = ppos()
     adv()
     let first = expect_ident("类型名或 trait 名")
-    let trait_name = null
-    let type_name = first
+    var trait_name = null
+    var type_name = first
     if chk("for"):
         adv()
         type_name = expect_ident("类型名")
@@ -508,7 +512,7 @@ def parse_impl_def():
         adv()
         let mname = expect_ident("方法名")
         let mparams = parse_params()
-        let mret = null
+        var mret = null
         if chk("->"):
             adv()
             mret = parse_type()
@@ -564,7 +568,7 @@ def parse_select():
     expect("换行", "换行")
     expect("缩进", "缩进块")
     let arms = []
-    let else_branch = null
+    var else_branch = null
     while true:
         skip_newlines_in_block()
         if chk("去缩进") or chk("EOF"):
@@ -580,14 +584,14 @@ def parse_select():
                 continue
             else:
                 p_pos = save
-        let binding = null
+        var binding = null
         if pk() == "标识符" and chk2("="):
             binding = qstr(expect_ident("绑定变量"))
             expect("=", "'='")
         let arm_expr = parse_expr()
         expect(":", "':'")
         expect("换行", "换行")
-        let body = parse_case_body()
+        var body = parse_case_body()
         arms.append([binding, arm_expr, body])
     if chk("EOF"):
         perr("E2001", "select 定义未正确结束")
@@ -597,7 +601,7 @@ def parse_select():
 def parse_case_body():
     if chk("缩进"):
         return parse_block()
-    let expr = parse_expr()
+    var expr = parse_expr()
     let pos = node_pos(expr)
     return [["ExprStmt", expr, pos]]
 
@@ -609,11 +613,11 @@ def parse_params():
         while true:
             let pos = ppos()
             let name = expect_name("参数名")
-            let ty = null
+            var ty = null
             if chk(":"):
                 adv()
                 ty = parse_type()
-            let default = null
+            var default = null
             if chk("="):
                 adv()
                 default = parse_expr()
@@ -630,7 +634,7 @@ def parse_expr():
     return parse_pipe()
 
 def parse_pipe():
-    let left = parse_null_coalesce()
+    var left = parse_null_coalesce()
     while chk("|>"):
         let pos = ppos()
         adv()
@@ -639,7 +643,7 @@ def parse_pipe():
     return left
 
 def parse_null_coalesce():
-    let left = parse_or()
+    var left = parse_or()
     while chk("??"):
         let pos = ppos()
         adv()
@@ -648,7 +652,7 @@ def parse_null_coalesce():
     return left
 
 def parse_or():
-    let left = parse_and()
+    var left = parse_and()
     while chk("or"):
         let pos = ppos()
         adv()
@@ -657,7 +661,7 @@ def parse_or():
     return left
 
 def parse_and():
-    let left = parse_comparison()
+    var left = parse_comparison()
     while chk("and"):
         let pos = ppos()
         adv()
@@ -666,9 +670,9 @@ def parse_and():
     return left
 
 def parse_comparison():
-    let left = parse_bitor()
+    var left = parse_bitor()
     while true:
-        let op = null
+        var op = null
         if chk("=="):
             op = "Eq"
         elif chk("!="):
@@ -690,7 +694,7 @@ def parse_comparison():
     return left
 
 def parse_bitor():
-    let left = parse_bitxor()
+    var left = parse_bitxor()
     while chk("|"):
         let pos = ppos()
         adv()
@@ -699,7 +703,7 @@ def parse_bitor():
     return left
 
 def parse_bitxor():
-    let left = parse_bitand()
+    var left = parse_bitand()
     while chk("^"):
         let pos = ppos()
         adv()
@@ -708,7 +712,7 @@ def parse_bitxor():
     return left
 
 def parse_bitand():
-    let left = parse_shift()
+    var left = parse_shift()
     while chk("&"):
         let pos = ppos()
         adv()
@@ -717,9 +721,9 @@ def parse_bitand():
     return left
 
 def parse_shift():
-    let left = parse_add()
+    var left = parse_add()
     while true:
-        let op = null
+        var op = null
         if chk("<<"):
             op = "Shl"
         elif chk(">>"):
@@ -735,9 +739,9 @@ def parse_shift():
     return left
 
 def parse_add():
-    let left = parse_mul()
+    var left = parse_mul()
     while true:
-        let op = null
+        var op = null
         if chk("+"):
             op = "Add"
         elif chk("-"):
@@ -751,9 +755,9 @@ def parse_add():
     return left
 
 def parse_mul():
-    let left = parse_pow()
+    var left = parse_pow()
     while true:
-        let op = null
+        var op = null
         if chk("*"):
             op = "Mul"
         elif chk("/"):
@@ -771,7 +775,7 @@ def parse_mul():
     return left
 
 def parse_pow():
-    let left = parse_unary()
+    var left = parse_unary()
     if chk("**"):
         let pos = ppos()
         adv()
@@ -799,7 +803,7 @@ def parse_unary():
     return parse_postfix()
 
 def parse_postfix():
-    let expr = parse_primary()
+    var expr = parse_primary()
     while true:
         let k = pk()
         if k == "(":
@@ -812,7 +816,7 @@ def parse_postfix():
             if chk(":"):
                 adv()
                 let end = parse_slice_bound()
-                let step = null
+                var step = null
                 if chk(":"):
                     adv()
                     step = parse_slice_bound()
@@ -823,7 +827,7 @@ def parse_postfix():
                 if chk(":"):
                     adv()
                     let end = parse_slice_bound()
-                    let step = null
+                    var step = null
                     if chk(":"):
                         adv()
                         step = parse_slice_bound()
@@ -926,7 +930,7 @@ def parse_primary():
     if k == "chan":
         let pos = ppos()
         adv()
-        let callee = ["Var", "\"chan\"", pos]
+        var callee = ["Var", "\"chan\"", pos]
         if chk("["):
             adv()
             parse_type()
@@ -985,8 +989,8 @@ def parse_comp_clauses():
 def fold_comp_conds(conds):
     if len(conds) == 0:
         return null
-    let acc = conds[0]
-    let i = 1
+    var acc = conds[0]
+    var i = 1
     while i < len(conds):
         let p = node_pos(acc)
         acc = ["Binary", "And", acc, conds[i], p]
@@ -1017,8 +1021,8 @@ def parse_paren_or_tuple():
     return first
 
 def brace_looks_like_dict():
-    let depth = 0
-    let i = p_pos
+    var depth = 0
+    var i = p_pos
     while i < len(p_toks):
         let k = p_toks[i][0]
         if k == ":" and depth == 0:
@@ -1078,7 +1082,7 @@ def parse_closure():
     let pos = ppos()
     adv()
     let params = parse_params()
-    let ret_ty = null
+    var ret_ty = null
     if chk("->"):
         adv()
         ret_ty = parse_type()
@@ -1091,9 +1095,9 @@ def parse_closure():
                 adv()
                 continue
             break
-    let body = null
+    var body = null
     if chk("{"):
-        let bpos = ppos()
+        var bpos = ppos()
         adv()
         let stmts = []
         skip_newlines()
@@ -1125,16 +1129,16 @@ def parse_match_expr():
             break
         expect("case", "'case'")
         let pattern = parse_pattern()
-        let guard = null
+        var guard = null
         if chk("if"):
             adv()
             guard = parse_expr()
         expect(":", "':'")
         expect("换行", "换行")
-        let body = null
+        var body = null
         if chk("缩进"):
             let stmts = parse_block()
-            let bpos = null
+            var bpos = null
             if len(stmts) > 0:
                 bpos = node_pos(stmts[0])
             else:
@@ -1163,7 +1167,7 @@ def parse_if_expr():
 def parse_pattern():
     let k = pk()
     if k == "整数" or k == "浮点" or k == "字符串" or k == "true" or k == "false" or k == "null":
-        let expr = parse_primary()
+        var expr = parse_primary()
         return ["PatLiteral", expr]
     if k == "标识符":
         let name = pv()
@@ -1209,7 +1213,7 @@ def is_upper(s):
 
 # ---------- 类型 ----------
 def parse_type():
-    let ty = parse_type_base()
+    var ty = parse_type_base()
     if chk("?"):
         let pos = ppos()
         adv()

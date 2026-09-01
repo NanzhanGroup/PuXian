@@ -1,14 +1,14 @@
 # Mini 子集用例 s04：控制流 + 推导式
 def main():
-    let acc = 0
+    let mut acc = 0
     for i in range(5):
         acc += i
     print(acc)
-    let w = 0
+    let mut w =0
     while w < 3:
         w += 1
     print(w)
-    let bc = 0
+    let mut bc =0
     for i in range(10):
         if i == 2:
             continue

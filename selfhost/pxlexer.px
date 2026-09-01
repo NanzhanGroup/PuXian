@@ -11,16 +11,16 @@
 # ============================================================
 
 # ---------- 全局状态（顶层 let = 全局变量） ----------
-let g_src = ""
-let g_len = 0
-let g_pos = 0
-let g_line = 1
-let g_col = 1
-let g_indent_stack = [0]
-let g_at_line_start = true
-let g_toks = []   # 结构化 token 列表 [kind, val, line, col]
-let g_count = 0
-let g_pending = []   # 插值产生的中间 token：[kind, val, line, col]
+var g_src = ""
+var g_len = 0
+var g_pos = 0
+var g_line = 1
+var g_col = 1
+var g_indent_stack = [0]
+var g_at_line_start = true
+var g_toks = []   # 结构化 token 列表 [kind, val, line, col]
+var g_count = 0
+var g_pending = []   # 插值产生的中间 token：[kind, val, line, col]
 
 # ---------- 关键字表（spec §2.4，None 别名 null，type 是普通标识符） ----------
 let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn": "fn", "struct": "struct", "enum": "enum", "trait": "trait", "impl": "impl", "match": "match", "case": "case", "if": "if", "elif": "elif", "else": "else", "for": "for", "while": "while", "in": "in", "and": "and", "or": "or", "not": "not", "return": "return", "break": "break", "continue": "continue", "import": "import", "from": "from", "pub": "pub", "as": "as", "spawn": "spawn", "chan": "chan", "send": "send", "recv": "recv", "select": "select", "true": "true", "false": "false", "null": "null", "None": "null", "self": "self", "capture": "capture"}
@@ -98,7 +98,7 @@ def is_ident_continue(c):
 
 def digit_val(c):
     let table = "0123456789abcdefABCDEF"
-    let i = 0
+    var i = 0
     while i < len(table):
         if table[i] == c:
             if i >= 16:
@@ -109,7 +109,7 @@ def digit_val(c):
 
 # ---------- 行首缩进处理 ----------
 def handle_line_start():
-    let indent = 0
+    var indent = 0
     while true:
         indent = 0
         while peek() == " ":
@@ -141,11 +141,11 @@ def handle_line_start():
 
 # ---------- 注释 ----------
 def skip_comment():
-    let text = ""
+    var text = ""
     if peek2() == "|":
         text += advance()
         text += advance()
-        let depth = 1
+        var depth = 1
         while depth > 0:
             let c = peek()
             if c == "":
@@ -169,7 +169,7 @@ def skip_comment():
 def scan_ident_token():
     let pos_line = g_line
     let pos_col = g_col
-    let s = ""
+    var s = ""
     while is_ident_continue(peek()):
         s += advance()
     if KEYWORDS.has(s):
@@ -180,19 +180,19 @@ def scan_ident_token():
 def scan_radix_token(radix, pos_line, pos_col):
     advance()  # 0
     advance()  # x/b/o
-    let digits = ""
+    var digits = ""
     while is_alnum(peek()) or peek() == "_":
         digits += advance()
     if len(digits) == 0:
         err("E1004", "进制字面量缺少数字（基数 " + str(radix) + "）")
-    let clean = ""
-    let i = 0
+    var clean = ""
+    var i = 0
     while i < len(digits):
         if digits[i] != "_":
             clean += digits[i]
         i += 1
-    let v = 0
-    let j = 0
+    var v = 0
+    var j = 0
     while j < len(clean):
         let d = digit_val(clean[j])
         if d < 0 or d >= radix:
@@ -202,7 +202,7 @@ def scan_radix_token(radix, pos_line, pos_col):
     return ["整数", str(v), pos_line, pos_col]
 
 def strip_leading_zeros(s):
-    let i = 0
+    var i = 0
     while i < len(s) - 1 and s[i] == "0":
         i += 1
     return s[i:]
@@ -218,10 +218,10 @@ def scan_number_token():
             return scan_radix_token(2, pos_line, pos_col)
         if p2 == "o" or p2 == "O":
             return scan_radix_token(8, pos_line, pos_col)
-    let digits = ""
+    var digits = ""
     while is_digit(peek()) or peek() == "_":
         digits += advance()
-    let is_float = false
+    var is_float = false
     if peek() == "." and is_digit(peek2()):
         is_float = true
         digits += "."
@@ -232,7 +232,7 @@ def scan_number_token():
         let save_pos = g_pos
         let save_line = g_line
         let save_col = g_col
-        let exp = ""
+        var exp = ""
         exp += advance()
         if peek() == "+" or peek() == "-":
             exp += advance()
@@ -245,15 +245,15 @@ def scan_number_token():
             g_pos = save_pos
             g_line = save_line
             g_col = save_col
-    let clean = ""
-    let i = 0
+    var clean = ""
+    var i = 0
     while i < len(digits):
         if digits[i] != "_":
             clean += digits[i]
         i += 1
     if is_float:
-        let v = float(clean)
-        let fs = str(v)
+        var v = float(clean)
+        var fs = str(v)
         if ends_with(fs, ".0"):
             fs = fs[0:len(fs) - 2]
         return ["浮点", fs, pos_line, pos_col]
@@ -266,7 +266,7 @@ def scan_number_token():
 def scan_string(interp):
     let toks = scan_string_tokens(interp)
     emit_token(toks[0])
-    let i = 1
+    var i = 1
     while i < len(toks):
         g_pending.append(toks[i])
         i += 1
@@ -283,8 +283,8 @@ def scan_string_tokens(interp):
         advance()
         advance()
         return scan_multiline_string_tokens("'", pos_line, pos_col, interp)
-    let out = []
-    let s = ""
+    var out = []
+    var s = ""
     while true:
         let c = peek()
         if c == "":
@@ -304,7 +304,7 @@ def scan_string_tokens(interp):
             out.append(["标识符", "str", pos_line, pos_col])
             out.append(["(", "", pos_line, pos_col])
             let expr = scan_interp_expr(pos_line, pos_col)
-            let k = 0
+            var k = 0
             while k < len(expr):
                 out.append(expr[k])
                 k += 1
@@ -318,8 +318,8 @@ def scan_string_tokens(interp):
     return out
 
 def scan_multiline_string_tokens(quote, pos_line, pos_col, interp):
-    let out = []
-    let s = ""
+    var out = []
+    var s = ""
     while true:
         let c = peek()
         if c == "":
@@ -339,7 +339,7 @@ def scan_multiline_string_tokens(quote, pos_line, pos_col, interp):
             out.append(["标识符", "str", pos_line, pos_col])
             out.append(["(", "", pos_line, pos_col])
             let expr = scan_interp_expr(pos_line, pos_col)
-            let k = 0
+            var k = 0
             while k < len(expr):
                 out.append(expr[k])
                 k += 1
@@ -371,7 +371,7 @@ def scan_interp_expr(str_pos_line, str_pos_col):
             advance()
         elif c == "\"" or c == "'":
             let t = scan_string_tokens(true)
-            let k = 0
+            var k = 0
             while k < len(t):
                 toks.append(t[k])
                 k += 1
@@ -436,7 +436,7 @@ def scan_escape(str_pos_line, str_pos_col):
         if peek() != "{":
             err("E1005", "Unicode 转义须为 \\u{XXXX} 形式")
         advance()
-        let hex = ""
+        var hex = ""
         while peek() != "" and peek() != "}":
             let h = peek()
             if is_hex_digit(h):
@@ -461,7 +461,7 @@ def scan_escape(str_pos_line, str_pos_col):
 # ---------- char debug 表示（对齐 Rust char {:?}） ----------
 def int_to_hex_nopad(n):
     let hex_chars = "0123456789abcdef"
-    let s = ""
+    var s = ""
     while n > 0:
         s = hex_chars[n % 16] + s
         n = n // 16
@@ -489,8 +489,8 @@ def char_debug(c):
 
 # ---------- 字符串 debug 表示（对齐 Rust {:?}） ----------
 def rust_str_debug(s):
-    let out = "\""
-    let i = 0
+    var out = "\""
+    var i = 0
     while i < len(s):
         let c = s[i]
         if c == "\n":
@@ -518,7 +518,7 @@ def rust_str_debug(s):
     return out
 
 def ctrl_codepoint(c):
-    let idx = 0
+    var idx = 0
     while idx < len(CTRL_ALL):
         if CTRL_ALL[idx] == c:
             if idx < 28:
@@ -533,7 +533,7 @@ def ctrl_codepoint(c):
 
 def ctrl_hex(c):
     let h = int_to_hex(ctrl_codepoint(c), 16)
-    let i = 0
+    var i = 0
     while i < len(h) and h[i] == "0":
         i += 1
     if i == len(h):
@@ -716,8 +716,28 @@ def next_token():
     return true
 
 
+# ---------- M41.1：edition 版本化（spec §14） ----------
+# 源码首行可声明：# px 2026
+# 当前工具链最新稳定版：px 2026；声明 edition 高于 2026 → 报错 E-EDITION
+def check_edition(src):
+    var i = 0
+    var n = len(src)
+    var line = ""
+    while i < n and src[i] != "\n":
+        line += src[i]
+        i += 1
+    let t = trim(line)
+    let parts = t.split(" ")
+    if len(parts) >= 3 and parts[0] == "#" and parts[1] == "px":
+        let year_s = parts[2]
+        if len(year_s) == 4 and is_digit(year_s[0]) and is_digit(year_s[1]) and is_digit(year_s[2]) and is_digit(year_s[3]):
+            let year = int(year_s)
+            if year > 2026:
+                err("E-EDITION", "源码声明 edition px " + year_s + " 高于当前工具链支持（px 2026），请升级编译器")
+
 # ---------- 入口（供 parser 等复用） ----------
 def lex_tokens(src):
+    check_edition(src)
     g_src = src
     g_len = len(src)
     g_pos = 0
@@ -728,7 +748,7 @@ def lex_tokens(src):
     g_toks = []
     g_count = 0
     g_pending = []
-    let running = true
+    var running = true
     while running:
         running = next_token()
     return g_toks

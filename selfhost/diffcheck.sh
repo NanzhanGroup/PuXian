@@ -64,6 +64,8 @@ check_error_file() {
     local out
     if [ "$kind" = "lex" ]; then
         out=$("$PXL" "$f" 2>&1 | head -1)
+    elif [ "$kind" = "codegen" ]; then
+        out=$("$PXC" build "$f" 2>&1 | head -1)
     else
         out=$("$PXPAR" "$f" 2>&1 | head -1)
     fi
@@ -322,6 +324,9 @@ if [ "${1:-}" = "--errors" ]; then
     done
     for f in "$(dirname "$0")"/cases_bad/parse_b*.px; do
         [ -e "$f" ] && check_error_file "$f" parse || fail=1
+    done
+    for f in "$(dirname "$0")"/cases_bad/codegen_b*.px; do
+        [ -e "$f" ] && check_error_file "$f" codegen || fail=1
     done
     if [ "$fail" = "0" ]; then echo "错误场景全部一致 ✅"; exit 0; else echo "存在不一致 ❌"; exit 1; fi
 fi
