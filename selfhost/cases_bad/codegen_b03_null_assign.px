@@ -1,0 +1,5 @@
+# px 2026
+# M41.3 E3003：对非空类型变量赋 null = 编译错误
+var a: int = 1
+a = null
+print(a)

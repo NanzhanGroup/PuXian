@@ -1,0 +1,16 @@
+# px 2026
+# M41.3 空安全正例：T? 可空类型 + 渐进类型（编译模式通过，E3003 不触发）
+var a: int? = null
+var b: int? = 42
+var c: int = 7
+print("a==null:", a == null)
+print("b??0:", b ?? 0)
+print("b!=null:", b != null)
+print("c:", c)
+# 无标注变量（any）可赋 null，保持脚本宽松（渐进类型不查）
+var d = null
+print("d==null:", d == null)
+# 可空参数/返回
+def maybe(v: int?) -> int?:
+    return v
+print("maybe:", maybe(null) ?? -1, maybe(9) ?? -1)

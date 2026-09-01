@@ -14,6 +14,13 @@ def cg_gen_stmt(stmt, indent):
         # M41.2：let/const 默认不可变 → E3002（let mut/var 可变）
         if stmt[1] == "Let" or stmt[1] == "Const":
             cg_mark_immutable(name)
+        # M41.3：空安全 E3003——显式非空类型标注 + null 初始化 = 编译错误
+        # 渐进类型：仅显式标注非空类型时检查；省略标注（any）/TyOptional 不查
+        let decl_ty = stmt[3]
+        if cg_is_nonnull_ty(decl_ty):
+            cg_nonnull[name] = 1
+            if cg_is_null_lit(stmt[4]):
+                cg_perr("E3003", "无法将 null 赋给非可空类型 '" + cg_ty_name(decl_ty) + "'（可空类型请用 " + cg_ty_name(decl_ty) + "? 声明）")
         var rhs = "px_null()"
         if stmt[4] != null:
             rhs = cg_gen_expr(stmt[4])
@@ -45,6 +52,9 @@ def cg_gen_stmt(stmt, indent):
             # M41.2：对不可变变量赋值 → E3002
             if cg_is_immutable(name):
                 cg_perr("E3002", "对不可变变量 '" + name + "' 赋值（let 默认不可变，需用 let mut/var 声明可变）")
+            # M41.3：对显式非空类型变量赋 null → E3003
+            if cg_is_null_lit(stmt[3]) and cg_nonnull.has(name):
+                cg_perr("E3003", "无法将 null 赋给非可空类型变量 '" + name + "'（可空类型请声明为 " + name + ": T?）")
             let v = cg_var_of(name)
             if v == null:
                 # 全局变量

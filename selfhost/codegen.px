@@ -42,6 +42,7 @@ var cg_impls = {"_": 0}
 var cg_vars = {"_": 0}
 var cg_var_types = {"_": 0}
 var cg_immutables = {"_": 0}
+var cg_nonnull = {"_": 0}
 var cg_globals = []
 var cg_err_labels = []
 var cg_uidc = 0
@@ -91,6 +92,37 @@ def cg_is_immutable(name):
 def cg_perr(code, msg):
     print("编译错误 " + code + ": " + msg)
     exit(1)
+
+# M41.3：空安全 E3003——null 赋给非可空类型 = 编译错误
+# 渐进类型：仅显式标注非空类型时检查；省略标注（any）/TyOptional 不查
+def cg_is_nonnull_ty(ty):
+    if ty == null:
+        return false
+    if ty[0] == "TyOptional":
+        return false
+    return true
+
+# 表达式是否为 null 字面量（字面量级检查，保守渐进）
+def cg_is_null_lit(e):
+    if e == null:
+        return false
+    if e[0] == "Null":
+        return true
+    return false
+
+# 类型显示名（错误消息用）
+def cg_ty_name(ty):
+    if ty == null:
+        return "any"
+    if ty[0] == "TyOptional":
+        return cg_ty_name(ty[1]) + "?"
+    if ty[0] == "TyNamed":
+        return rust_unescape(ty[1])
+    if ty[0] == "TyList":
+        return "list[" + cg_ty_name(ty[1]) + "]"
+    if ty[0] == "TyDict":
+        return "{" + cg_ty_name(ty[1]) + ": " + cg_ty_name(ty[2]) + "}"
+    return "any"
 
 def cg_func_cname(name):
     var out = ""
@@ -399,6 +431,7 @@ def cg_generate(prog):
     cg_vars = cg_new_dict()
     cg_var_types = cg_new_dict()
     cg_immutables = cg_new_dict()
+    cg_nonnull = cg_new_dict()
     cg_globals = []
     cg_err_labels = []
     cg_uidc = 0

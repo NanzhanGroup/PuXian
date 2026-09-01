@@ -196,6 +196,12 @@ def i_eval_expr(node, env):
             stmts = body[1]
         else:
             stmts = [["ExprStmt", body, body[len(body) - 1]]]
+        # M41.2 修复：闭包隐式返回——body 最后 ExprStmt 转 Return（注释声明的语义，原实现漏做）
+        let n_last = len(stmts)
+        if n_last > 0:
+            let lst = stmts[n_last - 1]
+            if lst[0] == "ExprStmt":
+                stmts[n_last - 1] = ["Return", lst[1], lst[2]]
         return Ok(it_ufn("<closure>", node[1], node[2], stmts, env, true))
     if ty == "Block":
         # ["Block", stmts, pos]

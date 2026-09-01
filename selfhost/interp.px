@@ -60,7 +60,7 @@ var g_exit_code = 0
 
 # ---------- 内置函数注册（Mini 子集 §2.5 白名单） ----------
 def i_register_builtins():
-    let names = ["print", "str", "type", "bool", "len", "int", "float", "range", "sorted", "reversed", "sum", "abs", "min", "max", "pow", "assert", "join", "contains", "split", "trim", "to_upper", "to_lower", "replace", "starts_with", "ends_with", "list", "tuple", "dict", "map", "filter", "reduce", "read_file", "write_file", "append_file", "exists", "remove", "mkdir", "list_dir", "file_size", "read_bytes", "write_bytes", "regex_match", "regex_find", "regex_search", "regex_find_all", "regex_replace", "regex_split", "json_parse", "json_stringify", "json_path", "json_path_set", "os_spawn", "os_wait", "os_kill", "env", "now", "sleep", "exit", "hex_to_int", "int_to_hex", "int_to_bytes", "bytes_to_int", "Ok", "Err", "Some"]
+    let names = ["print", "str", "type", "bool", "len", "int", "float", "range", "sorted", "reversed", "sum", "abs", "min", "max", "pow", "assert", "join", "contains", "split", "trim", "to_upper", "to_lower", "replace", "starts_with", "ends_with", "list", "tuple", "dict", "map", "filter", "reduce", "read_file", "write_file", "append_file", "exists", "remove", "mkdir", "list_dir", "file_size", "read_bytes", "write_bytes", "regex_match", "regex_find", "regex_search", "regex_find_all", "regex_replace", "regex_split", "json_parse", "json_stringify", "json_path", "json_path_set", "os_spawn", "os_wait", "os_kill", "env", "now", "sleep", "exit", "hex_to_int", "int_to_hex", "int_to_bytes", "bytes_to_int", "gen_next", "Ok", "Err", "Some"]
     var i = 0
     while i < len(names):
         env_define(g_globals, names[i], it_builtin(names[i]))
