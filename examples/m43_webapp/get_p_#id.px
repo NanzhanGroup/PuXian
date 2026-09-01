@@ -1,0 +1,4 @@
+# GET /p/:id —— 路由参数演示（文件名 get_p_#id.px → /p/:id → fnname get_p_id）
+def get_p_id(req, params):
+    let id = params["id"]
+    return {"status": 200, "body": "p=" + id, "headers": {"Content-Type": "text/plain; charset=utf-8"}}

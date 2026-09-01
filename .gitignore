@@ -7,6 +7,7 @@ archive/rust-compiler/target/
 
 # 编译模式产物（生成的 C 源码与二进制）
 examples/build/
+examples/*/build/
 selfhost/build/
 selfhost/cases/build/
 selfhost/cases_bad/build/
