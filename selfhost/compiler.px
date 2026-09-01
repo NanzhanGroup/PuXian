@@ -35,6 +35,7 @@ var cg_impls = {"_": 0}
 var cg_vars = {"_": 0}
 var cg_var_types = {"_": 0}
 var cg_immutables = {"_": 0}
+var cg_nonnull = {"_": 0}
 var cg_globals = []
 var cg_err_labels = []
 var cg_uidc = 0

@@ -1,0 +1,4 @@
+# px 2026
+# M41.3 E3003：null 赋给非可空类型 = 编译错误（显式类型标注 int 非空）
+let a: int = null
+print(a)

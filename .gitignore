@@ -9,6 +9,7 @@ archive/rust-compiler/target/
 examples/build/
 selfhost/build/
 selfhost/cases/build/
+selfhost/cases_bad/build/
 ws-web/build/
 
 # 备份文件

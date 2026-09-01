@@ -148,6 +148,19 @@ def i_call_builtin(name, args, pos):
         if len(args) != 2:
             return Err(i_r1002("ends_with 需要两个参数", pos))
         return Ok(args[0].ends_with(args[1]))
+    if name == "gen_next":
+        # M41.2 补：解释器生成器 gen_next（对齐 C 层 bi_gen_next 逐项取值语义）
+        let g = args[0]
+        if len(args) != 1:
+            return Err(i_r1002("gen_next 需要一个生成器参数", pos))
+        if i_type_name(g) != "generator":
+            return Err(i_r1002("gen_next 需要生成器对象", pos))
+        let items = g["__gen__"]
+        let c = g["cursor"]
+        if c < len(items):
+            g["cursor"] = c + 1
+            return Ok(items[c])
+        return Ok(null)
     if name == "list":
         if len(args) != 1:
             return Err(i_r1002("list 需要一个参数", pos))
@@ -164,6 +177,27 @@ def i_call_builtin(name, args, pos):
         return Err(i_r1002("tuple 参数需要 list/tuple", pos))
     if name == "dict":
         return Ok(it_new_dict())
+    if name == "unique":
+        # std.collections.unique：去重保持顺序
+        let out = []
+        var ui = 0
+        while ui < len(args[0]):
+            if not contains(out, args[0][ui]):
+                out.append(args[0][ui])
+            ui += 1
+        return Ok(out)
+    if name == "flatten":
+        # std.collections.flatten：嵌套列表展平一层
+        let out = []
+        var fi = 0
+        while fi < len(args[0]):
+            let sub = args[0][fi]
+            var fj = 0
+            while fj < len(sub):
+                out.append(sub[fj])
+                fj += 1
+            fi += 1
+        return Ok(out)
     if name == "map":
         return i_builtin_map(args, pos)
     if name == "filter":
@@ -235,7 +269,10 @@ def i_call_builtin(name, args, pos):
     if name == "int_to_hex":
         return Ok(int_to_hex(args[0], args[1]))
     if name == "int_to_bytes":
-        return Ok(int_to_bytes(args[0], args[1], args[2]))
+        # C 层 int_to_bytes(n, size[, endian[, signed]])：2-4 参，按实参数量透传
+        if len(args) >= 3:
+            return Ok(int_to_bytes(args[0], args[1], args[2]))
+        return Ok(int_to_bytes(args[0], args[1]))
     if name == "bytes_to_int":
         return Ok(bytes_to_int(args[0]))
     if name == "Ok":
