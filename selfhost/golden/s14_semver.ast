@@ -1,0 +1,2062 @@
+Program {
+ items: [
+ Import {
+ module: [
+ "std",
+ "semver",
+ ],
+ names: [],
+ pos: Pos {
+ line: 3,
+ col: 1,
+ },
+ },
+ FuncDef {
+ name: "main",
+ params: [],
+ ret_ty: None,
+ body: [
+ VarDecl {
+ kind: Let,
+ name: "p",
+ ty: None,
+ value: Some(
+ Call {
+ callee: Var {
+ name: "sv_parse",
+ pos: Pos {
+ line: 7,
+ col: 13,
+ },
+ },
+ args: [
+ Str {
+ value: "1.2.3-alpha.1+build5",
+ pos: Pos {
+ line: 7,
+ col: 22,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 7,
+ col: 21,
+ },
+ },
+ ),
+ pos: Pos {
+ line: 7,
+ col: 5,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 8,
+ col: 5,
+ },
+ },
+ args: [
+ Binary {
+ op: Add,
+ left: Binary {
+ op: Add,
+ left: Binary {
+ op: Add,
+ left: Binary {
+ op: Add,
+ left: Binary {
+ op: Add,
+ left: Str {
+ value: "major: ",
+ pos: Pos {
+ line: 8,
+ col: 11,
+ },
+ },
+ right: Call {
+ callee: Var {
+ name: "str",
+ pos: Pos {
+ line: 8,
+ col: 23,
+ },
+ },
+ args: [
+ Index {
+ obj: Var {
+ name: "p",
+ pos: Pos {
+ line: 8,
+ col: 27,
+ },
+ },
+ index: Str {
+ value: "major",
+ pos: Pos {
+ line: 8,
+ col: 29,
+ },
+ },
+ pos: Pos {
+ line: 8,
+ col: 28,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 8,
+ col: 26,
+ },
+ },
+ pos: Pos {
+ line: 8,
+ col: 21,
+ },
+ },
+ right: Str {
+ value: " minor: ",
+ pos: Pos {
+ line: 8,
+ col: 41,
+ },
+ },
+ pos: Pos {
+ line: 8,
+ col: 39,
+ },
+ },
+ right: Call {
+ callee: Var {
+ name: "str",
+ pos: Pos {
+ line: 8,
+ col: 54,
+ },
+ },
+ args: [
+ Index {
+ obj: Var {
+ name: "p",
+ pos: Pos {
+ line: 8,
+ col: 58,
+ },
+ },
+ index: Str {
+ value: "minor",
+ pos: Pos {
+ line: 8,
+ col: 60,
+ },
+ },
+ pos: Pos {
+ line: 8,
+ col: 59,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 8,
+ col: 57,
+ },
+ },
+ pos: Pos {
+ line: 8,
+ col: 52,
+ },
+ },
+ right: Str {
+ value: " patch: ",
+ pos: Pos {
+ line: 8,
+ col: 72,
+ },
+ },
+ pos: Pos {
+ line: 8,
+ col: 70,
+ },
+ },
+ right: Call {
+ callee: Var {
+ name: "str",
+ pos: Pos {
+ line: 8,
+ col: 85,
+ },
+ },
+ args: [
+ Index {
+ obj: Var {
+ name: "p",
+ pos: Pos {
+ line: 8,
+ col: 89,
+ },
+ },
+ index: Str {
+ value: "patch",
+ pos: Pos {
+ line: 8,
+ col: 91,
+ },
+ },
+ pos: Pos {
+ line: 8,
+ col: 90,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 8,
+ col: 88,
+ },
+ },
+ pos: Pos {
+ line: 8,
+ col: 83,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 8,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 8,
+ col: 10,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 9,
+ col: 5,
+ },
+ },
+ args: [
+ Binary {
+ op: Add,
+ left: Binary {
+ op: Add,
+ left: Binary {
+ op: Add,
+ left: Str {
+ value: "pre: ",
+ pos: Pos {
+ line: 9,
+ col: 11,
+ },
+ },
+ right: Index {
+ obj: Var {
+ name: "p",
+ pos: Pos {
+ line: 9,
+ col: 21,
+ },
+ },
+ index: Str {
+ value: "pre",
+ pos: Pos {
+ line: 9,
+ col: 23,
+ },
+ },
+ pos: Pos {
+ line: 9,
+ col: 22,
+ },
+ },
+ pos: Pos {
+ line: 9,
+ col: 19,
+ },
+ },
+ right: Str {
+ value: " build: ",
+ pos: Pos {
+ line: 9,
+ col: 32,
+ },
+ },
+ pos: Pos {
+ line: 9,
+ col: 30,
+ },
+ },
+ right: Index {
+ obj: Var {
+ name: "p",
+ pos: Pos {
+ line: 9,
+ col: 45,
+ },
+ },
+ index: Str {
+ value: "build",
+ pos: Pos {
+ line: 9,
+ col: 47,
+ },
+ },
+ pos: Pos {
+ line: 9,
+ col: 46,
+ },
+ },
+ pos: Pos {
+ line: 9,
+ col: 43,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 9,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 9,
+ col: 10,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 10,
+ col: 5,
+ },
+ },
+ args: [
+ Binary {
+ op: Add,
+ left: Binary {
+ op: Add,
+ left: Binary {
+ op: Add,
+ left: Binary {
+ op: Add,
+ left: Binary {
+ op: Add,
+ left: Str {
+ value: "bad: ",
+ pos: Pos {
+ line: 10,
+ col: 11,
+ },
+ },
+ right: Call {
+ callee: Var {
+ name: "str",
+ pos: Pos {
+ line: 10,
+ col: 21,
+ },
+ },
+ args: [
+ Binary {
+ op: Eq,
+ left: Call {
+ callee: Var {
+ name: "sv_parse",
+ pos: Pos {
+ line: 10,
+ col: 25,
+ },
+ },
+ args: [
+ Str {
+ value: "1.2",
+ pos: Pos {
+ line: 10,
+ col: 34,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 10,
+ col: 33,
+ },
+ },
+ right: Null {
+ pos: Pos {
+ line: 10,
+ col: 44,
+ },
+ },
+ pos: Pos {
+ line: 10,
+ col: 41,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 10,
+ col: 24,
+ },
+ },
+ pos: Pos {
+ line: 10,
+ col: 19,
+ },
+ },
+ right: Str {
+ value: " ",
+ pos: Pos {
+ line: 10,
+ col: 52,
+ },
+ },
+ pos: Pos {
+ line: 10,
+ col: 50,
+ },
+ },
+ right: Call {
+ callee: Var {
+ name: "str",
+ pos: Pos {
+ line: 10,
+ col: 58,
+ },
+ },
+ args: [
+ Binary {
+ op: Eq,
+ left: Call {
+ callee: Var {
+ name: "sv_parse",
+ pos: Pos {
+ line: 10,
+ col: 62,
+ },
+ },
+ args: [
+ Str {
+ value: "01.2.3",
+ pos: Pos {
+ line: 10,
+ col: 71,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 10,
+ col: 70,
+ },
+ },
+ right: Null {
+ pos: Pos {
+ line: 10,
+ col: 84,
+ },
+ },
+ pos: Pos {
+ line: 10,
+ col: 81,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 10,
+ col: 61,
+ },
+ },
+ pos: Pos {
+ line: 10,
+ col: 56,
+ },
+ },
+ right: Str {
+ value: " ",
+ pos: Pos {
+ line: 10,
+ col: 92,
+ },
+ },
+ pos: Pos {
+ line: 10,
+ col: 90,
+ },
+ },
+ right: Call {
+ callee: Var {
+ name: "str",
+ pos: Pos {
+ line: 10,
+ col: 98,
+ },
+ },
+ args: [
+ Binary {
+ op: Eq,
+ left: Call {
+ callee: Var {
+ name: "sv_parse",
+ pos: Pos {
+ line: 10,
+ col: 102,
+ },
+ },
+ args: [
+ Str {
+ value: "1.2.3-01",
+ pos: Pos {
+ line: 10,
+ col: 111,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 10,
+ col: 110,
+ },
+ },
+ right: Null {
+ pos: Pos {
+ line: 10,
+ col: 126,
+ },
+ },
+ pos: Pos {
+ line: 10,
+ col: 123,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 10,
+ col: 101,
+ },
+ },
+ pos: Pos {
+ line: 10,
+ col: 96,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 10,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 10,
+ col: 10,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 13,
+ col: 5,
+ },
+ },
+ args: [
+ Binary {
+ op: Add,
+ left: Str {
+ value: "cmp 1.2.3 vs 1.2.10: ",
+ pos: Pos {
+ line: 13,
+ col: 11,
+ },
+ },
+ right: Call {
+ callee: Var {
+ name: "str",
+ pos: Pos {
+ line: 13,
+ col: 37,
+ },
+ },
+ args: [
+ Call {
+ callee: Var {
+ name: "sv_cmp",
+ pos: Pos {
+ line: 13,
+ col: 41,
+ },
+ },
+ args: [
+ Str {
+ value: "1.2.3",
+ pos: Pos {
+ line: 13,
+ col: 48,
+ },
+ },
+ Str {
+ value: "1.2.10",
+ pos: Pos {
+ line: 13,
+ col: 57,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 13,
+ col: 47,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 13,
+ col: 40,
+ },
+ },
+ pos: Pos {
+ line: 13,
+ col: 35,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 13,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 13,
+ col: 10,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 14,
+ col: 5,
+ },
+ },
+ args: [
+ Binary {
+ op: Add,
+ left: Str {
+ value: "cmp 1.0.0-alpha vs 1.0.0: ",
+ pos: Pos {
+ line: 14,
+ col: 11,
+ },
+ },
+ right: Call {
+ callee: Var {
+ name: "str",
+ pos: Pos {
+ line: 14,
+ col: 42,
+ },
+ },
+ args: [
+ Call {
+ callee: Var {
+ name: "sv_cmp",
+ pos: Pos {
+ line: 14,
+ col: 46,
+ },
+ },
+ args: [
+ Str {
+ value: "1.0.0-alpha",
+ pos: Pos {
+ line: 14,
+ col: 53,
+ },
+ },
+ Str {
+ value: "1.0.0",
+ pos: Pos {
+ line: 14,
+ col: 68,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 14,
+ col: 52,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 14,
+ col: 45,
+ },
+ },
+ pos: Pos {
+ line: 14,
+ col: 40,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 14,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 14,
+ col: 10,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 15,
+ col: 5,
+ },
+ },
+ args: [
+ Binary {
+ op: Add,
+ left: Str {
+ value: "cmp alpha.2 vs alpha.10: ",
+ pos: Pos {
+ line: 15,
+ col: 11,
+ },
+ },
+ right: Call {
+ callee: Var {
+ name: "str",
+ pos: Pos {
+ line: 15,
+ col: 41,
+ },
+ },
+ args: [
+ Call {
+ callee: Var {
+ name: "sv_cmp",
+ pos: Pos {
+ line: 15,
+ col: 45,
+ },
+ },
+ args: [
+ Str {
+ value: "1.0.0-alpha.2",
+ pos: Pos {
+ line: 15,
+ col: 52,
+ },
+ },
+ Str {
+ value: "1.0.0-alpha.10",
+ pos: Pos {
+ line: 15,
+ col: 69,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 15,
+ col: 51,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 15,
+ col: 44,
+ },
+ },
+ pos: Pos {
+ line: 15,
+ col: 39,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 15,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 15,
+ col: 10,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 16,
+ col: 5,
+ },
+ },
+ args: [
+ Binary {
+ op: Add,
+ left: Str {
+ value: "cmp 1 vs alpha: ",
+ pos: Pos {
+ line: 16,
+ col: 11,
+ },
+ },
+ right: Call {
+ callee: Var {
+ name: "str",
+ pos: Pos {
+ line: 16,
+ col: 32,
+ },
+ },
+ args: [
+ Call {
+ callee: Var {
+ name: "sv_cmp",
+ pos: Pos {
+ line: 16,
+ col: 36,
+ },
+ },
+ args: [
+ Str {
+ value: "1.0.0-1",
+ pos: Pos {
+ line: 16,
+ col: 43,
+ },
+ },
+ Str {
+ value: "1.0.0-alpha",
+ pos: Pos {
+ line: 16,
+ col: 54,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 16,
+ col: 42,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 16,
+ col: 35,
+ },
+ },
+ pos: Pos {
+ line: 16,
+ col: 30,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 16,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 16,
+ col: 10,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 19,
+ col: 5,
+ },
+ },
+ args: [
+ Binary {
+ op: Add,
+ left: Binary {
+ op: Add,
+ left: Binary {
+ op: Add,
+ left: Str {
+ value: "^1.2.0: ",
+ pos: Pos {
+ line: 19,
+ col: 11,
+ },
+ },
+ right: Call {
+ callee: Var {
+ name: "str",
+ pos: Pos {
+ line: 19,
+ col: 24,
+ },
+ },
+ args: [
+ Call {
+ callee: Var {
+ name: "sv_satisfies",
+ pos: Pos {
+ line: 19,
+ col: 28,
+ },
+ },
+ args: [
+ Str {
+ value: "1.2.5",
+ pos: Pos {
+ line: 19,
+ col: 41,
+ },
+ },
+ Str {
+ value: "^1.2.0",
+ pos: Pos {
+ line: 19,
+ col: 50,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 19,
+ col: 40,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 19,
+ col: 27,
+ },
+ },
+ pos: Pos {
+ line: 19,
+ col: 22,
+ },
+ },
+ right: Str {
+ value: " ",
+ pos: Pos {
+ line: 19,
+ col: 63,
+ },
+ },
+ pos: Pos {
+ line: 19,
+ col: 61,
+ },
+ },
+ right: Call {
+ callee: Var {
+ name: "str",
+ pos: Pos {
+ line: 19,
+ col: 69,
+ },
+ },
+ args: [
+ Call {
+ callee: Var {
+ name: "sv_satisfies",
+ pos: Pos {
+ line: 19,
+ col: 73,
+ },
+ },
+ args: [
+ Str {
+ value: "2.0.0",
+ pos: Pos {
+ line: 19,
+ col: 86,
+ },
+ },
+ Str {
+ value: "^1.2.0",
+ pos: Pos {
+ line: 19,
+ col: 95,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 19,
+ col: 85,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 19,
+ col: 72,
+ },
+ },
+ pos: Pos {
+ line: 19,
+ col: 67,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 19,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 19,
+ col: 10,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 20,
+ col: 5,
+ },
+ },
+ args: [
+ Binary {
+ op: Add,
+ left: Binary {
+ op: Add,
+ left: Binary {
+ op: Add,
+ left: Str {
+ value: "^0.2.3: ",
+ pos: Pos {
+ line: 20,
+ col: 11,
+ },
+ },
+ right: Call {
+ callee: Var {
+ name: "str",
+ pos: Pos {
+ line: 20,
+ col: 24,
+ },
+ },
+ args: [
+ Call {
+ callee: Var {
+ name: "sv_satisfies",
+ pos: Pos {
+ line: 20,
+ col: 28,
+ },
+ },
+ args: [
+ Str {
+ value: "0.2.9",
+ pos: Pos {
+ line: 20,
+ col: 41,
+ },
+ },
+ Str {
+ value: "^0.2.3",
+ pos: Pos {
+ line: 20,
+ col: 50,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 20,
+ col: 40,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 20,
+ col: 27,
+ },
+ },
+ pos: Pos {
+ line: 20,
+ col: 22,
+ },
+ },
+ right: Str {
+ value: " ",
+ pos: Pos {
+ line: 20,
+ col: 63,
+ },
+ },
+ pos: Pos {
+ line: 20,
+ col: 61,
+ },
+ },
+ right: Call {
+ callee: Var {
+ name: "str",
+ pos: Pos {
+ line: 20,
+ col: 69,
+ },
+ },
+ args: [
+ Call {
+ callee: Var {
+ name: "sv_satisfies",
+ pos: Pos {
+ line: 20,
+ col: 73,
+ },
+ },
+ args: [
+ Str {
+ value: "0.3.0",
+ pos: Pos {
+ line: 20,
+ col: 86,
+ },
+ },
+ Str {
+ value: "^0.2.3",
+ pos: Pos {
+ line: 20,
+ col: 95,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 20,
+ col: 85,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 20,
+ col: 72,
+ },
+ },
+ pos: Pos {
+ line: 20,
+ col: 67,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 20,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 20,
+ col: 10,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 21,
+ col: 5,
+ },
+ },
+ args: [
+ Binary {
+ op: Add,
+ left: Binary {
+ op: Add,
+ left: Binary {
+ op: Add,
+ left: Str {
+ value: "~1.2.3: ",
+ pos: Pos {
+ line: 21,
+ col: 11,
+ },
+ },
+ right: Call {
+ callee: Var {
+ name: "str",
+ pos: Pos {
+ line: 21,
+ col: 24,
+ },
+ },
+ args: [
+ Call {
+ callee: Var {
+ name: "sv_satisfies",
+ pos: Pos {
+ line: 21,
+ col: 28,
+ },
+ },
+ args: [
+ Str {
+ value: "1.2.9",
+ pos: Pos {
+ line: 21,
+ col: 41,
+ },
+ },
+ Str {
+ value: "~1.2.3",
+ pos: Pos {
+ line: 21,
+ col: 50,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 21,
+ col: 40,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 21,
+ col: 27,
+ },
+ },
+ pos: Pos {
+ line: 21,
+ col: 22,
+ },
+ },
+ right: Str {
+ value: " ",
+ pos: Pos {
+ line: 21,
+ col: 63,
+ },
+ },
+ pos: Pos {
+ line: 21,
+ col: 61,
+ },
+ },
+ right: Call {
+ callee: Var {
+ name: "str",
+ pos: Pos {
+ line: 21,
+ col: 69,
+ },
+ },
+ args: [
+ Call {
+ callee: Var {
+ name: "sv_satisfies",
+ pos: Pos {
+ line: 21,
+ col: 73,
+ },
+ },
+ args: [
+ Str {
+ value: "1.3.0",
+ pos: Pos {
+ line: 21,
+ col: 86,
+ },
+ },
+ Str {
+ value: "~1.2.3",
+ pos: Pos {
+ line: 21,
+ col: 95,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 21,
+ col: 85,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 21,
+ col: 72,
+ },
+ },
+ pos: Pos {
+ line: 21,
+ col: 67,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 21,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 21,
+ col: 10,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 22,
+ col: 5,
+ },
+ },
+ args: [
+ Binary {
+ op: Add,
+ left: Binary {
+ op: Add,
+ left: Binary {
+ op: Add,
+ left: Str {
+ value: "1.2.x: ",
+ pos: Pos {
+ line: 22,
+ col: 11,
+ },
+ },
+ right: Call {
+ callee: Var {
+ name: "str",
+ pos: Pos {
+ line: 22,
+ col: 23,
+ },
+ },
+ args: [
+ Call {
+ callee: Var {
+ name: "sv_satisfies",
+ pos: Pos {
+ line: 22,
+ col: 27,
+ },
+ },
+ args: [
+ Str {
+ value: "1.2.9",
+ pos: Pos {
+ line: 22,
+ col: 40,
+ },
+ },
+ Str {
+ value: "1.2.x",
+ pos: Pos {
+ line: 22,
+ col: 49,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 22,
+ col: 39,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 22,
+ col: 26,
+ },
+ },
+ pos: Pos {
+ line: 22,
+ col: 21,
+ },
+ },
+ right: Str {
+ value: " ",
+ pos: Pos {
+ line: 22,
+ col: 61,
+ },
+ },
+ pos: Pos {
+ line: 22,
+ col: 59,
+ },
+ },
+ right: Call {
+ callee: Var {
+ name: "str",
+ pos: Pos {
+ line: 22,
+ col: 67,
+ },
+ },
+ args: [
+ Call {
+ callee: Var {
+ name: "sv_satisfies",
+ pos: Pos {
+ line: 22,
+ col: 71,
+ },
+ },
+ args: [
+ Str {
+ value: "1.3.0",
+ pos: Pos {
+ line: 22,
+ col: 84,
+ },
+ },
+ Str {
+ value: "1.2.x",
+ pos: Pos {
+ line: 22,
+ col: 93,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 22,
+ col: 83,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 22,
+ col: 70,
+ },
+ },
+ pos: Pos {
+ line: 22,
+ col: 65,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 22,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 22,
+ col: 10,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 23,
+ col: 5,
+ },
+ },
+ args: [
+ Binary {
+ op: Add,
+ left: Binary {
+ op: Add,
+ left: Binary {
+ op: Add,
+ left: Str {
+ value: "exact: ",
+ pos: Pos {
+ line: 23,
+ col: 11,
+ },
+ },
+ right: Call {
+ callee: Var {
+ name: "str",
+ pos: Pos {
+ line: 23,
+ col: 23,
+ },
+ },
+ args: [
+ Call {
+ callee: Var {
+ name: "sv_satisfies",
+ pos: Pos {
+ line: 23,
+ col: 27,
+ },
+ },
+ args: [
+ Str {
+ value: "1.2.3",
+ pos: Pos {
+ line: 23,
+ col: 40,
+ },
+ },
+ Str {
+ value: "1.2.3",
+ pos: Pos {
+ line: 23,
+ col: 49,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 23,
+ col: 39,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 23,
+ col: 26,
+ },
+ },
+ pos: Pos {
+ line: 23,
+ col: 21,
+ },
+ },
+ right: Str {
+ value: " ",
+ pos: Pos {
+ line: 23,
+ col: 61,
+ },
+ },
+ pos: Pos {
+ line: 23,
+ col: 59,
+ },
+ },
+ right: Call {
+ callee: Var {
+ name: "str",
+ pos: Pos {
+ line: 23,
+ col: 67,
+ },
+ },
+ args: [
+ Call {
+ callee: Var {
+ name: "sv_satisfies",
+ pos: Pos {
+ line: 23,
+ col: 71,
+ },
+ },
+ args: [
+ Str {
+ value: "1.2.4",
+ pos: Pos {
+ line: 23,
+ col: 84,
+ },
+ },
+ Str {
+ value: "1.2.3",
+ pos: Pos {
+ line: 23,
+ col: 93,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 23,
+ col: 83,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 23,
+ col: 70,
+ },
+ },
+ pos: Pos {
+ line: 23,
+ col: 65,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 23,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 23,
+ col: 10,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 24,
+ col: 5,
+ },
+ },
+ args: [
+ Binary {
+ op: Add,
+ left: Str {
+ value: "pre reject: ",
+ pos: Pos {
+ line: 24,
+ col: 11,
+ },
+ },
+ right: Call {
+ callee: Var {
+ name: "str",
+ pos: Pos {
+ line: 24,
+ col: 28,
+ },
+ },
+ args: [
+ Call {
+ callee: Var {
+ name: "sv_satisfies",
+ pos: Pos {
+ line: 24,
+ col: 32,
+ },
+ },
+ args: [
+ Str {
+ value: "1.2.3-alpha",
+ pos: Pos {
+ line: 24,
+ col: 45,
+ },
+ },
+ Str {
+ value: "1.2.3",
+ pos: Pos {
+ line: 24,
+ col: 60,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 24,
+ col: 44,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 24,
+ col: 31,
+ },
+ },
+ pos: Pos {
+ line: 24,
+ col: 26,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 24,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 24,
+ col: 10,
+ },
+ },
+ VarDecl {
+ kind: Let,
+ name: "versions",
+ ty: None,
+ value: Some(
+ List {
+ items: [
+ Str {
+ value: "1.2.0",
+ pos: Pos {
+ line: 27,
+ col: 21,
+ },
+ },
+ Str {
+ value: "1.2.5",
+ pos: Pos {
+ line: 27,
+ col: 30,
+ },
+ },
+ Str {
+ value: "2.0.0",
+ pos: Pos {
+ line: 27,
+ col: 39,
+ },
+ },
+ Str {
+ value: "1.0.0",
+ pos: Pos {
+ line: 27,
+ col: 48,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 27,
+ col: 20,
+ },
+ },
+ ),
+ pos: Pos {
+ line: 27,
+ col: 5,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 28,
+ col: 5,
+ },
+ },
+ args: [
+ Binary {
+ op: Add,
+ left: Str {
+ value: "best ^1.2.0: ",
+ pos: Pos {
+ line: 28,
+ col: 11,
+ },
+ },
+ right: Call {
+ callee: Var {
+ name: "sv_best",
+ pos: Pos {
+ line: 28,
+ col: 29,
+ },
+ },
+ args: [
+ Var {
+ name: "versions",
+ pos: Pos {
+ line: 28,
+ col: 37,
+ },
+ },
+ Str {
+ value: "^1.2.0",
+ pos: Pos {
+ line: 28,
+ col: 47,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 28,
+ col: 36,
+ },
+ },
+ pos: Pos {
+ line: 28,
+ col: 27,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 28,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 28,
+ col: 10,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 29,
+ col: 5,
+ },
+ },
+ args: [
+ Binary {
+ op: Add,
+ left: Str {
+ value: "best ^2.0.0: ",
+ pos: Pos {
+ line: 29,
+ col: 11,
+ },
+ },
+ right: Call {
+ callee: Var {
+ name: "sv_best",
+ pos: Pos {
+ line: 29,
+ col: 29,
+ },
+ },
+ args: [
+ Var {
+ name: "versions",
+ pos: Pos {
+ line: 29,
+ col: 37,
+ },
+ },
+ Str {
+ value: "^2.0.0",
+ pos: Pos {
+ line: 29,
+ col: 47,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 29,
+ col: 36,
+ },
+ },
+ pos: Pos {
+ line: 29,
+ col: 27,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 29,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 29,
+ col: 10,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 30,
+ col: 5,
+ },
+ },
+ args: [
+ Binary {
+ op: Add,
+ left: Str {
+ value: "best ^0.5.0: ",
+ pos: Pos {
+ line: 30,
+ col: 11,
+ },
+ },
+ right: Call {
+ callee: Var {
+ name: "str",
+ pos: Pos {
+ line: 30,
+ col: 29,
+ },
+ },
+ args: [
+ Binary {
+ op: Eq,
+ left: Call {
+ callee: Var {
+ name: "sv_best",
+ pos: Pos {
+ line: 30,
+ col: 33,
+ },
+ },
+ args: [
+ Var {
+ name: "versions",
+ pos: Pos {
+ line: 30,
+ col: 41,
+ },
+ },
+ Str {
+ value: "^0.5.0",
+ pos: Pos {
+ line: 30,
+ col: 51,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 30,
+ col: 40,
+ },
+ },
+ right: Null {
+ pos: Pos {
+ line: 30,
+ col: 64,
+ },
+ },
+ pos: Pos {
+ line: 30,
+ col: 61,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 30,
+ col: 32,
+ },
+ },
+ pos: Pos {
+ line: 30,
+ col: 27,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 30,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 30,
+ col: 10,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 31,
+ col: 5,
+ },
+ },
+ args: [
+ Binary {
+ op: Add,
+ left: Str {
+ value: "best ~1.2: ",
+ pos: Pos {
+ line: 31,
+ col: 11,
+ },
+ },
+ right: Call {
+ callee: Var {
+ name: "sv_best",
+ pos: Pos {
+ line: 31,
+ col: 27,
+ },
+ },
+ args: [
+ List {
+ items: [
+ Str {
+ value: "1.2.0",
+ pos: Pos {
+ line: 31,
+ col: 36,
+ },
+ },
+ Str {
+ value: "1.2.9",
+ pos: Pos {
+ line: 31,
+ col: 45,
+ },
+ },
+ Str {
+ value: "1.3.0",
+ pos: Pos {
+ line: 31,
+ col: 54,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 31,
+ col: 35,
+ },
+ },
+ Str {
+ value: "~1.2",
+ pos: Pos {
+ line: 31,
+ col: 64,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 31,
+ col: 34,
+ },
+ },
+ pos: Pos {
+ line: 31,
+ col: 25,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 31,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 31,
+ col: 10,
+ },
+ },
+ ExprStmt {
+ expr: Call {
+ callee: Var {
+ name: "print",
+ pos: Pos {
+ line: 32,
+ col: 5,
+ },
+ },
+ args: [
+ Str {
+ value: "semver ok",
+ pos: Pos {
+ line: 32,
+ col: 11,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 32,
+ col: 10,
+ },
+ },
+ pos: Pos {
+ line: 32,
+ col: 10,
+ },
+ },
+ ],
+ pos: Pos {
+ line: 5,
+ col: 1,
+ },
+ type_params: [],
+ },
+ ],
+}
+语法分析成功：2 条顶层语句

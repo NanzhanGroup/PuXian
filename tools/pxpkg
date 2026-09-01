@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# ============================================================
+# tools/pxpkg —— PuXian 版包管理器入口（M45 registry 版本化）
+# ------------------------------------------------------------
+# 用法：
+#   pxpkg init [--name NAME]            初始化项目（生成 px.toml）
+#   pxpkg add <spec> [--name ALIAS]     添加依赖（name@range / 路径 / URL）
+#   pxpkg install [--locked]            按 px.toml 安装 + 写/校验 px.pkg.lock
+#   pxpkg list                          列出依赖与安装状态
+#   pxpkg remove <name>                 移除依赖
+# 环境变量：
+#   PX_REGISTRY    registry 目录（结构 <name>/<version>/<name>.px），semver 范围依赖需要
+#   在应用目录内运行（或 PXPKG_DIR 指定）
+# 底层：bootstrap/pxi run tools/pxpkg.px（解释器无 argv，用环境变量传参）
+# ============================================================
+set -u
+PKG_HOME="$(cd "$(dirname "$0")/.." && pwd)"
+CMD="${1:-help}"
+shift 2>/dev/null || true
+
+# 解析通用选项：--dir <path>
+DIR="."
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --dir) DIR="${2:-.}"; shift 2 ;;
+        *) break ;;
+    esac
+done
+
+run_px() {
+    local pxc=""
+    PXPKG_DIR="$DIR" PXPKG_CMD="$1" PXPKG_ARG1="${2:-}" PXPKG_ARG2="${3:-}" \
+        "$PKG_HOME/bootstrap/pxi" run "$PKG_HOME/tools/pxpkg.px"
+}
+
+case "$CMD" in
+    init)
+        NAME=""
+        [ "${1:-}" = "--name" ] && NAME="${2:-}"
+        run_px init "$NAME" ;;
+    add)
+        [ $# -ge 1 ] || { echo "用法: pxpkg add <spec> [--name ALIAS]" >&2; exit 1; }
+        SPEC="$1"; ALIAS=""
+        [ "${2:-}" = "--name" ] && ALIAS="${3:-}"
+        run_px add "$SPEC" "$ALIAS" ;;
+    install)
+        run_px install "${1:-}" ;;
+    list)
+        run_px list ;;
+    remove)
+        [ $# -ge 1 ] || { echo "用法: pxpkg remove <name>" >&2; exit 1; }
+        run_px remove "$1" ;;
+    --version|-v)
+        echo "pxpkg 0.1.0 (普贤 PuXian · M45 registry 版本化)" ;;
+    help|--help|-h|*)
+        cat <<'EOF'
+pxpkg —— PuXian 包管理器（M45）
+
+用法:
+  pxpkg init [--name NAME]        初始化项目（生成 px.toml）
+  pxpkg add <spec> [--name ALIAS] 添加依赖：mylib@^1.2.0 | 本地路径 | http(s) URL
+  pxpkg install [--locked]        安装依赖 + 写/校验 px.pkg.lock（可复现构建）
+  pxpkg list                      列出依赖与安装状态
+  pxpkg remove <name>             移除依赖
+  pxpkg --version                 输出版本号
+
+环境变量:
+  PX_REGISTRY  registry 目录（结构 <name>/<version>/<name>.px），semver 范围依赖需要
+
+示例:
+  PX_REGISTRY=/path/registry pxpkg add mylib@^1.2.0
+  PX_REGISTRY=/path/registry pxpkg install
+  PX_REGISTRY=/path/registry pxpkg install --locked
+EOF
+        ;;
+esac

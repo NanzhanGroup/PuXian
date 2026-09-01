@@ -249,6 +249,12 @@ def i_call_builtin(name, args, pos):
         return Ok(json_path(args[0], args[1]))
     if name == "json_path_set":
         return Ok(json_path_set(args[0], args[1], args[2]))
+    if name == "sha256":
+        # M45：完整性哈希（lockfile 校验；runtime.c 已注册，pxi 直调）
+        return Ok(sha256(args[0]))
+    if name == "http_get":
+        # M45：远程依赖下载（runtime.c 已注册，pxi 直调）
+        return Ok(http_get(args[0]))
     if name == "os_spawn":
         return Ok(os_spawn(args[0], args[1]))
     if name == "ffi_call":

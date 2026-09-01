@@ -54,6 +54,7 @@
 | 进程 | os_spawn os_wait os_kill env |
 | 容器 | range type sorted reversed map filter reduce list dict keys/values/has/get/remove/append（方法） |
 | 进制 | hex_to_int int_to_hex int_to_bytes bytes_to_int |
+| 哈希/网络 | sha256 http_get（M45：lockfile 完整性校验 + 远程依赖下载）|
 | Result | Ok Err is_ok is_err unwrap ok err |
 | 其他 | now sleep print assert exit |
 

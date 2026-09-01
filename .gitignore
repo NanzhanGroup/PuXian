@@ -13,6 +13,10 @@ selfhost/cases/build/
 selfhost/cases_bad/build/
 ws-web/build/
 
+# M45 演示应用动态生成物（verify.sh 每次重建）
+examples/m45_pkgdemo/app/
+examples/m45_pkgdemo/registry_empty/
+
 # 备份文件
 *.bak
 *.bak.*
