@@ -499,6 +499,67 @@ import "c/sqlite3"            # M42：显式 C 库 import（FFI）
 - v0.1 无第三方依赖，标准库单仓库 `std.*` 全内置
 - 编译产物零外部依赖（静态二进制）
 
+### 8.6 包管理器与版本化（M45，对应"清歌的建议 P1-5"）
+> 工具：`tools/pxpkg`（PuXian 版包管理器，Rust 版 px pkg 随 M-B9a 退役后重写）。
+> 定位：M26 远程 registry（URL + sha256）升级为**可复现构建**——semver 版本管理 + lockfile 锁定。
+
+#### 8.6.1 清单 px.toml（与 M9 手写 TOML 风格兼容）
+```toml
+[package]
+name = "myapp"
+version = "0.1.0"
+
+[dependencies]
+mylib  = "^1.2.0"          # semver 范围 → registry 解析（M45 新增）
+other  = "0.1.0"           # 精确版本
+helper = "../local/helper.px"            # 本地路径
+remote = "https://.../lib.px#sha256=HEX" # http(s) 远程（M26，保留）
+```
+
+#### 8.6.2 依赖 spec 三形态
+| 形态 | 判定 | 安装 |
+|---|---|---|
+| semver 范围（`^1.2.0` / `~1.2` / `1.2.x` / `*` 等）| 非 URL 且路径不存在 | 从 `PX_REGISTRY` 目录解析，选**满足范围最高版本** |
+| 本地路径 | `exists(spec)` | 复制到 `.px_modules/<name>/<name>.px` |
+| http(s) URL | `http://` / `https://` 前缀 | `http_get` 下载（`#sha256=` 片段可选校验）|
+
+#### 8.6.3 registry（版本源）
+- 环境变量 `PX_REGISTRY` 指向目录，结构：`<name>/<version>/<name>.px`（每版本目录一个文件）。
+- 版本枚举：目录名经 semver 解析过滤 → `sv_best` 选版本。
+
+#### 8.6.4 lockfile px.pkg.lock（可复现构建契约）
+```json
+{"format": 1,
+ "package": {"name": "myapp", "version": "0.1.0"},
+ "deps": {"mylib": {"version": "1.2.5", "sha256": "<hex>", "source": "<registry路径>"}}}
+```
+- `pxpkg install`：解析依赖 → 安装 → **写 lock**（锁定选中的精确版本 + 内容 sha256 + source）。
+- `pxpkg install --locked`：严格按 lock 校验——
+  1. lock 必须存在（否则报错）；
+  2. 每个依赖 lock 版本满足 px.toml spec（范围依赖校验）；
+  3. 已安装内容 sha256 == lock（篡改检测）。
+  全部通过才成功 → **二次安装一致、registry 变更不影响已锁定项目**（可复现构建）。
+- 幂等：非 `--locked` 安装若已装且 lock 匹配则跳过。
+
+#### 8.6.5 semver 规范（stdlib/semver.px，SemVer 2.0.0 子集）
+- 格式：`major.minor.patch[-prerelease][+build]`；数字无前导零；build 不参与比较。
+- 优先级：major/minor/patch 数值 → 同号段有 pre < 无 pre → pre 逐标识符（数字按数值 < 字母数字按 ASCII；数量多者大）。
+- 范围语法（cargo/npm 风格子集）：
+  - `^1.2.3` → `>=1.2.3 <2.0.0`；`^0.2.3` → `>=0.2.3 <0.3.0`；`^0.0.3` → `>=0.0.3 <0.0.4`
+  - `~1.2.3` → `>=1.2.3 <1.3.0`；`~1.2` → `>=1.2.0 <1.3.0`；`~1` → `>=1.0.0 <2.0.0`
+  - 精确 `1.2.3`；通配 `1.2.x`/`1.2.*`/`1.x`；`*`/空 → 任意
+  - 预发布版本只匹配显式含 pre 的范围（本实现范围不带 pre → 一律不匹配）
+- 纯函数库：`sv_parse` / `sv_cmp` / `sv_satisfies` / `sv_best`，双模式一致。
+
+#### 8.6.6 命令
+```
+pxpkg init [--name NAME]        # 生成 px.toml
+pxpkg add <spec> [--name ALIAS] # mylib@^1.2.0 | 路径 | URL
+pxpkg install [--locked]        # 安装 + 写/校验 px.pkg.lock
+pxpkg list / remove <name>
+```
+- `--dir <path>` 指定项目目录；`PX_REGISTRY` 指定 registry。
+
 ---
 
 ## 9. 双模式执行

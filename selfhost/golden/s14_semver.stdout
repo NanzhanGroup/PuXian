@@ -1,0 +1,18 @@
+major: 1 minor: 2 patch: 3
+pre: alpha.1 build: build5
+bad: true true true
+cmp 1.2.3 vs 1.2.10: -1
+cmp 1.0.0-alpha vs 1.0.0: -1
+cmp alpha.2 vs alpha.10: -1
+cmp 1 vs alpha: -1
+^1.2.0: true false
+^0.2.3: true false
+~1.2.3: true false
+1.2.x: true false
+exact: true false
+pre reject: false
+best ^1.2.0: 1.2.5
+best ^2.0.0: 2.0.0
+best ^0.5.0: true
+best ~1.2: 1.2.9
+semver ok

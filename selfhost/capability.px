@@ -31,6 +31,9 @@ import "c/sqlite3"
 # ---- M43：文件即路由（std.webroute，wr_parse_file 规则）----
 import std.webroute
 
+# ---- M45：registry 版本化（std.semver，semver 解析/比较/范围匹配）----
+import std.semver
+
 extern def sqlite_open(path: str) -> int
 extern def sqlite_exec(db: int, sql: str) -> int
 extern def sqlite_query(db: int, sql: str) -> list
@@ -562,6 +565,43 @@ let sbag = SugarBag([])
 sbag.items <- 5
 check("M44 <- Field 目标", sbag.items == [5])
 check("M44 比较运算不受影响", (5 < -1) == false and (5 < 1) == false and (-1 < 5) == true)
+
+# ============================================================
+section("20. registry 版本化（M45：semver 解析/比较/范围匹配）")
+# ============================================================
+# M45.1：sv_parse
+let sp1 = sv_parse("1.2.3")
+check("sv_parse 基础字段", sp1["major"] == 1 and sp1["minor"] == 2 and sp1["patch"] == 3 and sp1["pre"] == "" and sp1["build"] == "")
+let sp2 = sv_parse("1.2.3-alpha.1+build5")
+check("sv_parse pre+build", sp2["pre"] == "alpha.1" and sp2["build"] == "build5")
+check("sv_parse 非法版本拒绝", sv_parse("1.2") == null and sv_parse("1.2.3.4") == null and sv_parse("1.2.x") == null)
+check("sv_parse 前导零拒绝", sv_parse("01.2.3") == null and sv_parse("1.2.3-01") == null)
+check("sv_parse prerelease 合法", sv_parse("1.2.3-rc.1") != null and sv_parse("1.2.3-beta.2") != null)
+# M45.1：sv_cmp
+check("sv_cmp 相等", sv_cmp("1.2.3", "1.2.3") == 0)
+check("sv_cmp 数值比较（非字典序）", sv_cmp("1.2.3", "1.2.10") == -1 and sv_cmp("1.2.10", "1.2.3") == 1)
+check("sv_cmp major 主导", sv_cmp("1.10.0", "2.0.0") == -1)
+check("sv_cmp 预发布 < 正式版", sv_cmp("1.0.0-alpha", "1.0.0") == -1 and sv_cmp("1.0.0", "1.0.0-alpha") == 1)
+check("sv_cmp 标识符数量多者大", sv_cmp("1.0.0-alpha", "1.0.0-alpha.1") == -1)
+check("sv_cmp 数字标识符数值比较", sv_cmp("1.0.0-alpha.2", "1.0.0-alpha.10") == -1)
+check("sv_cmp 数字 < 字母数字", sv_cmp("1.0.0-1", "1.0.0-alpha") == -1)
+check("sv_cmp 字母数字按 ASCII", sv_cmp("1.0.0-alpha", "1.0.0-beta") == -1)
+# M45.1：sv_satisfies（^ / ~ / 精确 / 通配）
+check("sv_satisfies ^ 同 major", sv_satisfies("1.2.5", "^1.2.0") and not sv_satisfies("2.0.0", "^1.2.0"))
+check("sv_satisfies ^0 语义", sv_satisfies("0.2.9", "^0.2.3") and not sv_satisfies("0.3.0", "^0.2.3"))
+check("sv_satisfies ^0.0 语义", sv_satisfies("0.0.3", "^0.0.3") and not sv_satisfies("0.0.4", "^0.0.3"))
+check("sv_satisfies ~ minor 内", sv_satisfies("1.2.9", "~1.2.3") and not sv_satisfies("1.3.0", "~1.2.3"))
+check("sv_satisfies ~1.2 通配", sv_satisfies("1.2.0", "~1.2") and not sv_satisfies("1.3.0", "~1.2"))
+check("sv_satisfies 精确版本", sv_satisfies("1.2.3", "1.2.3") and not sv_satisfies("1.2.4", "1.2.3"))
+check("sv_satisfies 通配 x", sv_satisfies("1.2.9", "1.2.x") and not sv_satisfies("1.3.0", "1.2.x"))
+check("sv_satisfies 通配 1.x", sv_satisfies("1.5.0", "1.x") and not sv_satisfies("2.0.0", "1.x"))
+check("sv_satisfies * 任意", sv_satisfies("9.9.9", "*") and sv_satisfies("0.0.1", ""))
+check("sv_satisfies 预发布拒绝", not sv_satisfies("1.2.3-alpha", "1.2.3"))
+# M45.1：sv_best（选满足范围最高版本）
+check("sv_best ^1.2.0 选最高", sv_best(["1.2.0", "1.2.5", "2.0.0"], "^1.2.0") == "1.2.5")
+check("sv_best ^2.0.0", sv_best(["1.2.0", "1.2.5", "2.0.0"], "^2.0.0") == "2.0.0")
+check("sv_best ^0.2.0", sv_best(["0.2.0", "0.2.5", "0.3.0"], "^0.2.0") == "0.2.5")
+check("sv_best 无匹配返回 null", sv_best(["1.0.0", "1.2.0"], "^3.0.0") == null)
 
 # ============================================================
 # 汇总
