@@ -103,7 +103,8 @@ def i_call_method(rcv, name, args, pos):
     if t == "struct":
         let tn = rcv["__struct__"]
         if g_impls.has(tn) and g_impls[tn].has(name):
-            return i_call_function(g_impls[tn][name], args, rcv, pos)
+            # M41.2 修复：解包 __ufn__（it_ufn 返回 {"__ufn__": {...}}，对齐 i_call_value fn 分支）
+            return i_call_function(g_impls[tn][name]["__ufn__"], args, rcv, pos)
         return Err(i_r1007("结构体 " + tn + " 没有方法 '" + name + "'", pos))
     if t == "tuple":
         if name == "len":
