@@ -191,6 +191,9 @@ def dump_field(v, kind, ind):
         return dump_list(v, ind)
     if kind == "lfd":
         return dump_list(v, ind)
+    if kind == "ltci":
+        # M44：TypeConstItem 列表（简化枚举）
+        return dump_list(v, ind)
     if kind == "lc":
         return dump_list(v, ind)
     if kind == "lma":

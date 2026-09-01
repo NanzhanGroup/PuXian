@@ -636,6 +636,11 @@ def scan_operator_token():
             return ["!=", "", pos_line, pos_col]
         return ["!", "", pos_line, pos_col]
     if c == "<":
+        if peek() == "-":
+            # M44：列表追加简写 `a <- 4`（等价 a.append(4)）
+            # ⚠️ 与 `a < -b` 冲突：`<` 紧邻 `-` 无空格才构成 <-（现有代码 s < -1 有空格，安全）
+            advance()
+            return ["<-", "", pos_line, pos_col]
         if peek() == "<":
             advance()
             if peek() == "=":

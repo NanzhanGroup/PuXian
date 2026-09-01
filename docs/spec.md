@@ -223,6 +223,18 @@ enum Shape:
     Rect(w: float, h: float)
 ```
 
+#### 3.8.1 简化枚举（type X const 一行式带值枚举，M44）
+```python
+type LogLevel const (Info = "info", Warn = "warn", Err = "error")
+type Code const (A = 1, B = 2, OK = true)
+```
+- **语义**：声明一组命名常量（带值枚举），`LogLevel.Info` 求值返回绑定值 `"info"`。
+- 值是常量表达式（字面量为主）；支持任意标量类型（str/int/float/bool/null）。
+- **match 支持**：`case LogLevel.Info:` 按绑定值匹配（等价 `case "info":`）。
+- **与无值 `enum` 并存**：`enum Kind:` 走变体名匹配（px_enum），`type X const` 走值匹配，两者不冲突。
+- **实现**：编译模式值在编译期内联为 C 字面量；解释模式注册全局常量表。
+- ⚠️ `type` 仍是普通标识符（`type(x)` 内置函数不受影响）；仅 `type Name const (...)` 形态被识别为枚举声明。
+
 ### 3.9 trait（接口）
 - 只支持方法签名（v0.1 不做关联类型、默认方法）
 - 用于泛型约束与鸭子类型收拢
@@ -285,6 +297,20 @@ let (a, b) = pair      # 解构
 ### 5.2 赋值
 - `x = expr`、复合赋值 `x += 1` 等
 - 仅 `let mut` / `var` 可赋值
+
+#### 5.2.1 列表追加简写 `<-`（M44）
+```python
+var a = []
+a <- 1        # 等价 a.append(1)
+a <- 2
+# 支持 Var / 下标 / 成员目标
+rows[0] <- 10
+m["k"] <- 9
+obj.items <- 5
+```
+- `target <- expr` ≡ `target.append(expr)`，目标是 list 时原地追加；非 list 报运行时错误。
+- **语句级操作**（不是表达式运算符）：`x = a <- 4` 不支持。
+- ⚠️ **与 `a < -b` 的歧义**：`<` 紧邻 `-`（无空格）构成 `<-`；比较负数请保留空格 `a < -b`（Python 风格本就推荐空格）。
 
 ### 5.3 控制流
 ```python

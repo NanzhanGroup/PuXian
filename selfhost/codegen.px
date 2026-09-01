@@ -44,6 +44,7 @@ var cg_var_types = {"_": 0}
 var cg_immutables = {"_": 0}
 var cg_nonnull = {"_": 0}
 var cg_ffi = {"_": 0}
+var cg_const_enums = {"_": 0}  # M44：type X const 简化枚举（name → {variant: C表达式}）
 var cg_globals = []
 var cg_err_labels = []
 var cg_uidc = 0
@@ -334,6 +335,39 @@ def cg_collect_types(prog):
             else:
                 cg_impls[tn] = st[3]
         i += 1
+    # M44：type X const 简化枚举（递归收集，含函数体内声明）
+    # 值应为常量表达式（字面量为主）；cg_gen_expr 生成 C 表达式内联到使用处
+    cg_collect_consts(items)
+
+# ---------- M44：递归收集 TypeConst（顶层 + 函数体 + 嵌套块） ----------
+def cg_collect_consts(stmts):
+    var i = 0
+    while i < len(stmts):
+        let st = stmts[i]
+        let ty = st[0]
+        if ty == "TypeConst":
+            let tname = rust_unescape(st[1])
+            let d = cg_new_dict()
+            var ti = 0
+            while ti < len(st[2]):
+                let item = st[2][ti]
+                d[rust_unescape(item[1])] = cg_gen_expr(item[2])
+                ti += 1
+            cg_const_enums[tname] = d
+        elif ty == "FuncDef":
+            cg_collect_consts(st[4])
+        elif ty == "If":
+            var bi = 0
+            while bi < len(st[1]):
+                cg_collect_consts(st[1][bi][1])
+                bi += 1
+            if st[2] != null:
+                cg_collect_consts(st[2])
+        elif ty == "For":
+            cg_collect_consts(st[3])
+        elif ty == "While":
+            cg_collect_consts(st[2])
+        i += 1
 
 # ---------- 收集赋值目标变量（递归 if/for/while） ----------
 def cg_collect_assign_vars(stmts, out):
@@ -434,6 +468,7 @@ def cg_generate(prog):
     cg_immutables = cg_new_dict()
     cg_nonnull = cg_new_dict()
     cg_ffi = cg_new_dict()
+    cg_const_enums = cg_new_dict()
     cg_globals = []
     cg_err_labels = []
     cg_uidc = 0

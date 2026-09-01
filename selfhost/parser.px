@@ -36,6 +36,7 @@ let LAYOUT = {
     "FuncDef": ["FuncDef", [["name", "s"], ["params", "lp"], ["ret_ty", "o"], ["body", "l"], ["pos", "p"], ["type_params", "ls"]]],
     "StructDef": ["StructDef", [["name", "s"], ["fields", "lsf"], ["pos", "p"], ["type_params", "ls"]]],
     "EnumDef": ["EnumDef", [["name", "s"], ["variants", "lev"], ["pos", "p"]]],
+    "TypeConst": ["TypeConst", [["name", "s"], ["items", "ltci"], ["pos", "p"]]],
     "TraitDef": ["TraitDef", [["name", "s"], ["methods", "lfd"], ["pos", "p"]]],
     "ImplDef": ["ImplDef", [["type_name", "s"], ["trait_name", "os"], ["methods", "lfd"], ["pos", "p"]]],
     "Import": ["Import", [["module", "ls"], ["names", "ls"], ["pos", "p"]]],
@@ -77,6 +78,7 @@ let LAYOUT = {
     "Param": ["Param", [["name", "s"], ["ty", "o"], ["default", "o"], ["pos", "p"]]],
     "StructField": ["StructField", [["name", "s"], ["ty", "n"], ["pos", "p"]]],
     "EnumVariant": ["EnumVariant", [["name", "s"], ["fields", "tl"], ["pos", "p"]]],
+    "TypeConstItem": ["TypeConstItem", [["name", "s"], ["value", "n"], ["pos", "p"]]],
     "MatchArm": ["MatchArm", [["pattern", "n"], ["guard", "o"], ["body", "n"], ["pos", "p"]]],
     "CompClause": ["CompClause", [["vars", "ls"], ["iterable", "n"]]],
     "PatLiteral": ["Literal", [[null, "n"]]],
@@ -141,6 +143,12 @@ def chk(k):
 def chk2(k):
     if p_pos + 1 < len(p_toks):
         return p_toks[p_pos + 1][0] == k
+    return false
+
+def chk3(k):
+    # M44：type X const 前瞻（type 是普通标识符，需看第 3 个 token 才能确认是枚举声明）
+    if p_pos + 2 < len(p_toks):
+        return p_toks[p_pos + 2][0] == k
     return false
 
 def expect(k, what):
@@ -229,6 +237,12 @@ def parse_stmt():
         return parse_struct_def()
     if k == "enum":
         return parse_enum_def()
+    if k == "标识符" and pv() == "type":
+        # M44：简化枚举 `type X const (A = v, B = v)` 一行式
+        # type 是普通标识符（type() 内置函数在用），前瞻 3 token 确认是枚举声明
+        if chk2("标识符") and chk3("const"):
+            return parse_type_const()
+        return parse_assign_or_expr()
     if k == "trait":
         return parse_trait_def()
     if k == "impl":
@@ -292,6 +306,9 @@ def parse_assign_or_expr():
     let k = pk()
     if k == "=":
         op = "Assign"
+    elif k == "<-":
+        # M44：列表追加简写 `a <- 4` ≡ a.append(4)（语句级，非表达式运算符）
+        op = "Append"
     elif k == "+=":
         op = "Plus"
     elif k == "-=":
@@ -492,6 +509,30 @@ def parse_enum_def():
         perr("E2001", "枚举定义未正确结束")
     expect("去缩进", "去缩进")
     return ["EnumDef", qstr(name), variants, pos]
+
+# ---------- M44：简化枚举（带值一行式）type X const (A = v, B = v) ----------
+# 语义：Name.Variant → 绑定值（常量组）；支持 match case Name.Variant: 按值匹配
+# 与无值 enum Kind: 并存不冲突（Field 访问先查 const 表再回落 enum 表）
+def parse_type_const():
+    let pos = ppos()
+    adv()  # type
+    let name = expect_ident("枚举名")
+    expect("const", "'const'")  # const 是关键字 token
+    expect("(", "'('")
+    let items = []
+    if not chk(")"):
+        while true:
+            let ipos = ppos()
+            let vname = expect_ident("常量名")
+            expect("=", "'='")
+            let value = parse_expr()
+            items.append(["TypeConstItem", qstr(vname), value, ipos])
+            if chk(","):
+                adv()
+                continue
+            break
+    expect(")", "')'")
+    return ["TypeConst", qstr(name), items, pos]
 
 def parse_trait_def():
     let pos = ppos()
@@ -1214,6 +1255,12 @@ def parse_pattern():
         let name = pv()
         let p = ppos()
         adv()
+        if chk("."):
+            # M44：`case LogLevel.Info:` → PatLiteral(Field)（按绑定值匹配）
+            let fpos = ppos()
+            adv()
+            let mname = expect_name("成员名")
+            return ["PatLiteral", ["Field", ["Var", qstr(name), fpos], qstr(mname), fpos]]
         if chk("("):
             adv()
             let fields = []

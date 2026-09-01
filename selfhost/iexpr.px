@@ -64,6 +64,13 @@ def i_eval_expr(node, env):
             return Ok(r["value"])
         return Err(i_r1001(name, node[2]))
     if ty == "Field":
+        # M44：简化枚举 type X const 访问 LogLevel.Info → 绑定值
+        if node[1][0] == "Var":
+            let oname = rust_unescape(node[1][1])
+            if g_const_enums.has(oname):
+                let fname = rust_unescape(node[2])
+                if g_const_enums[oname].has(fname):
+                    return Ok(g_const_enums[oname][fname])
         let or_ = i_eval_expr(node[1], env)
         if or_.is_err():
             return Err(or_.err())

@@ -134,6 +134,11 @@ def cg_gen_expr(expr):
     if ty == "Field":
         let obj = expr[1]
         let fname = rust_unescape(expr[2])
+        # M44：简化枚举 type X const 访问 LogLevel.Info → 绑定值（常量内联）
+        if obj[0] == "Var":
+            let oname = rust_unescape(obj[1])
+            if cg_const_enums.has(oname) and cg_const_enums[oname].has(fname):
+                return cg_const_enums[oname][fname]
         # enum 变体访问：Color.Red
         if obj[0] == "Var":
             let oname = rust_unescape(obj[1])

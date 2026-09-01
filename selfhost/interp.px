@@ -58,6 +58,7 @@ var g_impls = it_new_dict()
 var g_loop_depth = 0
 var g_exit_code = 0
 var i_ffi = it_new_dict()
+var g_const_enums = it_new_dict()  # M44：type X const 简化枚举（name → {variant: 值}）
 
 # ---------- 内置函数注册（Mini 子集 §2.5 白名单） ----------
 def i_register_builtins():

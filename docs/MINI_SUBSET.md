@@ -24,7 +24,9 @@
 - `return`（含 `return Ok(v)` / `return Err(e)`）
 - `import std.collections`（模块函数合并进全局）
 - `struct` / `enum`（无载荷变体）/ `trait` / `impl`（扩展方法）
+- **`type X const (A = v, B = v)` 简化枚举**（M44，一行式带值枚举：`LogLevel.Info` → 绑定值；match `case LogLevel.Info:` 按值匹配；与无值 enum 并存）
 - 赋值：`=`、复合赋值 `+= -= *= //= %= **= &= |= ^= <<= >>=`、`d[k] = v`（**dict 新键赋值**，M-B1 已修复）
+- **`target <- expr` 列表追加简写**（M44，≡ `target.append(expr)`；Var/Field/Index 目标；语句级）
 - `assert`（可选）
 
 ### 2.3 表达式
