@@ -1,7 +1,7 @@
 # 普贤语言规格说明书（PX Specification）
 
 > 版本：v0.1.0-draft
-> 日期：2025-08-30
+> 日期：2026-08-30
 > 状态：M0 里程碑交付物，供 M1（词法/语法）直接实现
 > 关联文档：requirements.md（需求）、plan.md（方案）
 
@@ -611,8 +611,8 @@ error[E3001]: type mismatch: expected int, got str
 
 ## 14. 版本化与演进（edition）
 
-- 语法演进走 edition：`px 2025`、`px 2028`……
-- 源码首行可声明：`# px 2025`
+- 语法演进走 edition：`px 2026`、`px 2028`……
+- 源码首行可声明：`# px 2026`
 - 默认 edition = 当前 px 工具链最新稳定版
 - 新语法特性只进新 edition；旧 edition 语法永久兼容
 - 标准库 API 只做向后兼容增强，不 breaking
