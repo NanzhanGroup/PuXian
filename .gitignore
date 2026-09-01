@@ -25,3 +25,7 @@ ws-web/build/
 
 # 自举临时产物
 /tmp/
+
+# ws-web 构建产物与运行时数据库
+ws-web/tests/build/
+*.db
