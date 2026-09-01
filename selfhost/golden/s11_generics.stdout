@@ -1,0 +1,11 @@
+first-int: 10
+first-str: 甲
+first-nested: 2
+swap: one
+max2-int: 7
+max2-str: 香蕉
+Box.value: 42
+Box.tag: 盒子
+Box2.value: 内层
+Pair: 1 一
+typed-first: 5

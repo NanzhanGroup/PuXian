@@ -1,497 +1,498 @@
 Program {
- items: [
- FuncDef {
- name: "main",
- params: [],
- ret_ty: None,
- body: [
- VarDecl {
- kind: Let,
- name: "name",
- ty: None,
- value: Some(
- Str {
- value: "px",
- pos: Pos {
- line: 3,
- col: 16,
- },
- },
- ),
- pos: Pos {
- line: 3,
- col: 5,
- },
- },
- VarDecl {
- kind: Let,
- name: "ver",
- ty: None,
- value: Some(
- Int {
- value: 2,
- pos: Pos {
- line: 4,
- col: 15,
- },
- },
- ),
- pos: Pos {
- line: 4,
- col: 5,
- },
- },
- VarDecl {
- kind: Let,
- name: "d",
- ty: None,
- value: Some(
- Dict {
- entries: [
- (
- Str {
- value: "k",
- pos: Pos {
- line: 5,
- col: 14,
- },
- },
- Int {
- value: 3,
- pos: Pos {
- line: 5,
- col: 19,
- },
- },
- ),
- ],
- pos: Pos {
- line: 5,
- col: 13,
- },
- },
- ),
- pos: Pos {
- line: 5,
- col: 5,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 6,
- col: 5,
- },
- },
- args: [
- Binary {
- op: Add,
- left: Binary {
- op: Add,
- left: Str {
- value: "hello ",
- pos: Pos {
- line: 6,
- col: 11,
- },
- },
- right: Call {
- callee: Var {
- name: "str",
- pos: Pos {
- line: 6,
- col: 11,
- },
- },
- args: [
- Var {
- name: "name",
- pos: Pos {
- line: 6,
- col: 20,
- },
- },
- ],
- pos: Pos {
- line: 6,
- col: 11,
- },
- },
- pos: Pos {
- line: 6,
- col: 11,
- },
- },
- right: Str {
- value: "",
- pos: Pos {
- line: 6,
- col: 11,
- },
- },
- pos: Pos {
- line: 6,
- col: 11,
- },
- },
- ],
- pos: Pos {
- line: 6,
- col: 10,
- },
- },
- pos: Pos {
- line: 6,
- col: 10,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 7,
- col: 5,
- },
- },
- args: [
- Binary {
- op: Add,
- left: Binary {
- op: Add,
- left: Str {
- value: "v",
- pos: Pos {
- line: 7,
- col: 11,
- },
- },
- right: Call {
- callee: Var {
- name: "str",
- pos: Pos {
- line: 7,
- col: 11,
- },
- },
- args: [
- Var {
- name: "ver",
- pos: Pos {
- line: 7,
- col: 15,
- },
- },
- ],
- pos: Pos {
- line: 7,
- col: 11,
- },
- },
- pos: Pos {
- line: 7,
- col: 11,
- },
- },
- right: Str {
- value: "",
- pos: Pos {
- line: 7,
- col: 11,
- },
- },
- pos: Pos {
- line: 7,
- col: 11,
- },
- },
- ],
- pos: Pos {
- line: 7,
- col: 10,
- },
- },
- pos: Pos {
- line: 7,
- col: 10,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 8,
- col: 5,
- },
- },
- args: [
- Binary {
- op: Add,
- left: Binary {
- op: Add,
- left: Str {
- value: "",
- pos: Pos {
- line: 8,
- col: 11,
- },
- },
- right: Call {
- callee: Var {
- name: "str",
- pos: Pos {
- line: 8,
- col: 11,
- },
- },
- args: [
- Binary {
- op: Add,
- left: Int {
- value: 1,
- pos: Pos {
- line: 8,
- col: 14,
- },
- },
- right: Binary {
- op: Mul,
- left: Int {
- value: 2,
- pos: Pos {
- line: 8,
- col: 18,
- },
- },
- right: Int {
- value: 3,
- pos: Pos {
- line: 8,
- col: 22,
- },
- },
- pos: Pos {
- line: 8,
- col: 20,
- },
- },
- pos: Pos {
- line: 8,
- col: 16,
- },
- },
- ],
- pos: Pos {
- line: 8,
- col: 11,
- },
- },
- pos: Pos {
- line: 8,
- col: 11,
- },
- },
- right: Str {
- value: "",
- pos: Pos {
- line: 8,
- col: 11,
- },
- },
- pos: Pos {
- line: 8,
- col: 11,
- },
- },
- ],
- pos: Pos {
- line: 8,
- col: 10,
- },
- },
- pos: Pos {
- line: 8,
- col: 10,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 9,
- col: 5,
- },
- },
- args: [
- Binary {
- op: Add,
- left: Binary {
- op: Add,
- left: Str {
- value: "",
- pos: Pos {
- line: 9,
- col: 11,
- },
- },
- right: Call {
- callee: Var {
- name: "str",
- pos: Pos {
- line: 9,
- col: 11,
- },
- },
- args: [
- Index {
- obj: Var {
- name: "d",
- pos: Pos {
- line: 9,
- col: 14,
- },
- },
- index: Str {
- value: "k",
- pos: Pos {
- line: 9,
- col: 16,
- },
- },
- pos: Pos {
- line: 9,
- col: 15,
- },
- },
- ],
- pos: Pos {
- line: 9,
- col: 11,
- },
- },
- pos: Pos {
- line: 9,
- col: 11,
- },
- },
- right: Str {
- value: "",
- pos: Pos {
- line: 9,
- col: 11,
- },
- },
- pos: Pos {
- line: 9,
- col: 11,
- },
- },
- ],
- pos: Pos {
- line: 9,
- col: 10,
- },
- },
- pos: Pos {
- line: 9,
- col: 10,
- },
- },
- ExprStmt {
- expr: Call {
- callee: Var {
- name: "print",
- pos: Pos {
- line: 10,
- col: 5,
- },
- },
- args: [
- Binary {
- op: Add,
- left: Binary {
- op: Add,
- left: Str {
- value: "",
- pos: Pos {
- line: 10,
- col: 11,
- },
- },
- right: Call {
- callee: Var {
- name: "str",
- pos: Pos {
- line: 10,
- col: 11,
- },
- },
- args: [
- Call {
- callee: Field {
- obj: Var {
- name: "name",
- pos: Pos {
- line: 10,
- col: 14,
- },
- },
- name: "upper",
- pos: Pos {
- line: 10,
- col: 18,
- },
- },
- args: [],
- pos: Pos {
- line: 10,
- col: 24,
- },
- },
- ],
- pos: Pos {
- line: 10,
- col: 11,
- },
- },
- pos: Pos {
- line: 10,
- col: 11,
- },
- },
- right: Str {
- value: "",
- pos: Pos {
- line: 10,
- col: 11,
- },
- },
- pos: Pos {
- line: 10,
- col: 11,
- },
- },
- ],
- pos: Pos {
- line: 10,
- col: 10,
- },
- },
- pos: Pos {
- line: 10,
- col: 10,
- },
- },
- ],
- pos: Pos {
- line: 2,
- col: 1,
- },
- },
- ],
+    items: [
+        FuncDef {
+            name: "main",
+            params: [],
+            ret_ty: None,
+            body: [
+                VarDecl {
+                    kind: Let,
+                    name: "name",
+                    ty: None,
+                    value: Some(
+                        Str {
+                            value: "px",
+                            pos: Pos {
+                                line: 3,
+                                col: 16,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 3,
+                        col: 5,
+                    },
+                },
+                VarDecl {
+                    kind: Let,
+                    name: "ver",
+                    ty: None,
+                    value: Some(
+                        Int {
+                            value: 2,
+                            pos: Pos {
+                                line: 4,
+                                col: 15,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 4,
+                        col: 5,
+                    },
+                },
+                VarDecl {
+                    kind: Let,
+                    name: "d",
+                    ty: None,
+                    value: Some(
+                        Dict {
+                            entries: [
+                                (
+                                    Str {
+                                        value: "k",
+                                        pos: Pos {
+                                            line: 5,
+                                            col: 14,
+                                        },
+                                    },
+                                    Int {
+                                        value: 3,
+                                        pos: Pos {
+                                            line: 5,
+                                            col: 19,
+                                        },
+                                    },
+                                ),
+                            ],
+                            pos: Pos {
+                                line: 5,
+                                col: 13,
+                            },
+                        },
+                    ),
+                    pos: Pos {
+                        line: 5,
+                        col: 5,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 6,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Binary {
+                                op: Add,
+                                left: Binary {
+                                    op: Add,
+                                    left: Str {
+                                        value: "hello ",
+                                        pos: Pos {
+                                            line: 6,
+                                            col: 11,
+                                        },
+                                    },
+                                    right: Call {
+                                        callee: Var {
+                                            name: "str",
+                                            pos: Pos {
+                                                line: 6,
+                                                col: 11,
+                                            },
+                                        },
+                                        args: [
+                                            Var {
+                                                name: "name",
+                                                pos: Pos {
+                                                    line: 6,
+                                                    col: 20,
+                                                },
+                                            },
+                                        ],
+                                        pos: Pos {
+                                            line: 6,
+                                            col: 11,
+                                        },
+                                    },
+                                    pos: Pos {
+                                        line: 6,
+                                        col: 11,
+                                    },
+                                },
+                                right: Str {
+                                    value: "",
+                                    pos: Pos {
+                                        line: 6,
+                                        col: 11,
+                                    },
+                                },
+                                pos: Pos {
+                                    line: 6,
+                                    col: 11,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 6,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 6,
+                        col: 10,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 7,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Binary {
+                                op: Add,
+                                left: Binary {
+                                    op: Add,
+                                    left: Str {
+                                        value: "v",
+                                        pos: Pos {
+                                            line: 7,
+                                            col: 11,
+                                        },
+                                    },
+                                    right: Call {
+                                        callee: Var {
+                                            name: "str",
+                                            pos: Pos {
+                                                line: 7,
+                                                col: 11,
+                                            },
+                                        },
+                                        args: [
+                                            Var {
+                                                name: "ver",
+                                                pos: Pos {
+                                                    line: 7,
+                                                    col: 15,
+                                                },
+                                            },
+                                        ],
+                                        pos: Pos {
+                                            line: 7,
+                                            col: 11,
+                                        },
+                                    },
+                                    pos: Pos {
+                                        line: 7,
+                                        col: 11,
+                                    },
+                                },
+                                right: Str {
+                                    value: "",
+                                    pos: Pos {
+                                        line: 7,
+                                        col: 11,
+                                    },
+                                },
+                                pos: Pos {
+                                    line: 7,
+                                    col: 11,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 7,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 7,
+                        col: 10,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 8,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Binary {
+                                op: Add,
+                                left: Binary {
+                                    op: Add,
+                                    left: Str {
+                                        value: "",
+                                        pos: Pos {
+                                            line: 8,
+                                            col: 11,
+                                        },
+                                    },
+                                    right: Call {
+                                        callee: Var {
+                                            name: "str",
+                                            pos: Pos {
+                                                line: 8,
+                                                col: 11,
+                                            },
+                                        },
+                                        args: [
+                                            Binary {
+                                                op: Add,
+                                                left: Int {
+                                                    value: 1,
+                                                    pos: Pos {
+                                                        line: 8,
+                                                        col: 14,
+                                                    },
+                                                },
+                                                right: Binary {
+                                                    op: Mul,
+                                                    left: Int {
+                                                        value: 2,
+                                                        pos: Pos {
+                                                            line: 8,
+                                                            col: 18,
+                                                        },
+                                                    },
+                                                    right: Int {
+                                                        value: 3,
+                                                        pos: Pos {
+                                                            line: 8,
+                                                            col: 22,
+                                                        },
+                                                    },
+                                                    pos: Pos {
+                                                        line: 8,
+                                                        col: 20,
+                                                    },
+                                                },
+                                                pos: Pos {
+                                                    line: 8,
+                                                    col: 16,
+                                                },
+                                            },
+                                        ],
+                                        pos: Pos {
+                                            line: 8,
+                                            col: 11,
+                                        },
+                                    },
+                                    pos: Pos {
+                                        line: 8,
+                                        col: 11,
+                                    },
+                                },
+                                right: Str {
+                                    value: "",
+                                    pos: Pos {
+                                        line: 8,
+                                        col: 11,
+                                    },
+                                },
+                                pos: Pos {
+                                    line: 8,
+                                    col: 11,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 8,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 8,
+                        col: 10,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 9,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Binary {
+                                op: Add,
+                                left: Binary {
+                                    op: Add,
+                                    left: Str {
+                                        value: "",
+                                        pos: Pos {
+                                            line: 9,
+                                            col: 11,
+                                        },
+                                    },
+                                    right: Call {
+                                        callee: Var {
+                                            name: "str",
+                                            pos: Pos {
+                                                line: 9,
+                                                col: 11,
+                                            },
+                                        },
+                                        args: [
+                                            Index {
+                                                obj: Var {
+                                                    name: "d",
+                                                    pos: Pos {
+                                                        line: 9,
+                                                        col: 14,
+                                                    },
+                                                },
+                                                index: Str {
+                                                    value: "k",
+                                                    pos: Pos {
+                                                        line: 9,
+                                                        col: 16,
+                                                    },
+                                                },
+                                                pos: Pos {
+                                                    line: 9,
+                                                    col: 15,
+                                                },
+                                            },
+                                        ],
+                                        pos: Pos {
+                                            line: 9,
+                                            col: 11,
+                                        },
+                                    },
+                                    pos: Pos {
+                                        line: 9,
+                                        col: 11,
+                                    },
+                                },
+                                right: Str {
+                                    value: "",
+                                    pos: Pos {
+                                        line: 9,
+                                        col: 11,
+                                    },
+                                },
+                                pos: Pos {
+                                    line: 9,
+                                    col: 11,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 9,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 9,
+                        col: 10,
+                    },
+                },
+                ExprStmt {
+                    expr: Call {
+                        callee: Var {
+                            name: "print",
+                            pos: Pos {
+                                line: 10,
+                                col: 5,
+                            },
+                        },
+                        args: [
+                            Binary {
+                                op: Add,
+                                left: Binary {
+                                    op: Add,
+                                    left: Str {
+                                        value: "",
+                                        pos: Pos {
+                                            line: 10,
+                                            col: 11,
+                                        },
+                                    },
+                                    right: Call {
+                                        callee: Var {
+                                            name: "str",
+                                            pos: Pos {
+                                                line: 10,
+                                                col: 11,
+                                            },
+                                        },
+                                        args: [
+                                            Call {
+                                                callee: Field {
+                                                    obj: Var {
+                                                        name: "name",
+                                                        pos: Pos {
+                                                            line: 10,
+                                                            col: 14,
+                                                        },
+                                                    },
+                                                    name: "upper",
+                                                    pos: Pos {
+                                                        line: 10,
+                                                        col: 18,
+                                                    },
+                                                },
+                                                args: [],
+                                                pos: Pos {
+                                                    line: 10,
+                                                    col: 24,
+                                                },
+                                            },
+                                        ],
+                                        pos: Pos {
+                                            line: 10,
+                                            col: 11,
+                                        },
+                                    },
+                                    pos: Pos {
+                                        line: 10,
+                                        col: 11,
+                                    },
+                                },
+                                right: Str {
+                                    value: "",
+                                    pos: Pos {
+                                        line: 10,
+                                        col: 11,
+                                    },
+                                },
+                                pos: Pos {
+                                    line: 10,
+                                    col: 11,
+                                },
+                            },
+                        ],
+                        pos: Pos {
+                            line: 10,
+                            col: 10,
+                        },
+                    },
+                    pos: Pos {
+                        line: 10,
+                        col: 10,
+                    },
+                },
+            ],
+            pos: Pos {
+                line: 2,
+                col: 1,
+            },
+            type_params: [],
+        },
+    ],
 }
 语法分析成功：1 条顶层语句

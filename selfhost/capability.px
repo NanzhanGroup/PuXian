@@ -424,6 +424,43 @@ check("可空类型非 null + ?? 空合并", n_b ?? 0 == 5)
 check("非空类型正常", n_c == 9)
 
 # ============================================================
+section("16. M41.4 定义级泛型（类型擦除）")
+# ============================================================
+# 泛型函数 def first[T]：返回列表首元素
+def first[T](items: list[T]) -> T:
+    return items[0]
+
+# 泛型函数多参数 + 约束 T: Comparable（约束仅记录，渐进不强制）
+def swap2[K, V](k: K, v: V) -> V:
+    return v
+
+def max2[T: Comparable](a: T, b: T) -> T:
+    if a > b:
+        return a
+    return b
+
+# 泛型结构体 struct Box[T] / Pair[A, B]
+struct Box[T]:
+    value: T
+    tag: str
+
+struct Pair[A, B]:
+    x: A
+    y: B
+
+check("泛型函数 first[int]", first([10, 20, 30]) == 10)
+check("泛型函数 first[str]", first(["甲", "乙"]) == "甲")
+check("泛型函数 swap2 多参数", swap2(1, "one") == "one")
+check("泛型函数 max2 约束", max2(3, 7) == 7)
+var gb = Box("内容", "b")
+check("泛型结构体 Box[T]", gb.value == "内容" and gb.tag == "b")
+var gp = Pair(1, "一")
+check("泛型结构体 Pair[A,B]", gp.x == 1 and gp.y == "一")
+# 泛型与类型标注混用（渐进：标注不参与运行时）
+var gnums: list[int] = [5, 6, 7]
+check("泛型+类型标注", first(gnums) == 5)
+
+# ============================================================
 # 汇总
 # ============================================================
 print("")
