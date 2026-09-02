@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+### 新增 · M56 runtime http_unix 内建（ws-web 配套，非主线 HTTP/3 里程碑）
+
+- `http_unix(sock_path, url_path, method[, body[, headers]]) -> dict{status, headers, body}`
+  —— Unix domain socket HTTP 客户端内建（本地服务 / LLM 网关 / 容器 daemon 调用）：
+  每次新建 AF_UNIX 连接、`Connection: close` 用完即关；收发超时 180s（本地长响应）；
+  带 body 且未显式带 Content-Length 时自动补（Content-Type 可被 headers 覆盖）；
+  响应解析复用 h_exchange（与 http_get/http_post 同解析器）
+- 引入背景：ws-web LLM 接入 ws 词元缓存网关（unix socket 通道，key 零落盘）；
+  由清歌提交（runtime/runtime.c +73；ws-web 侧 llm.px / translate.px / main.px），
+  编号与主线 HTTP/3 里程碑并行插队 —— 本条目为 PuXian runtime 侧文档补齐
+
 ### 新增 · M54 HTTP/3 生产化（见 docs/M54_PLAN.md）
 
 - **TLS 1.3 会话恢复（1-RTT resumption）**：server SSL_CTX 开启 stateless session ticket；
