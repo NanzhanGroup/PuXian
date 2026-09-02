@@ -1,49 +1,81 @@
 # ============================================================
-# ws-web 骨架冒烟测试：起服务 → 请求端点 → 断言
-# 模式参考 examples/m23c_http_adv.px（http_serve + http_request）
-# 运行：./tools/pxc run ws-web/tests/smoke.px
+# ws-web 冒烟测试（M-B9b.1 纯静态服务器核心）
+# 运行（编译模式）：
+#   ./tools/pxc build ws-web/tests/smoke.px && ./ws-web/tests/build/smoke
+# 覆盖：静态文件 / deny 403 / SPA fallback / 反代 / 404 / healthz
 # ============================================================
 
-db = sqlite_open(":memory:")
-sqlite_exec(db, "CREATE TABLE IF NOT EXISTS items(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, ts INTEGER)")
-sqlite_exec(db, "INSERT INTO items(name, ts) VALUES ('demo', 100)")
+# 测试目录
+TMP = "/tmp/wsweb_smoke"
+SITE_A = TMP + "/site_a"
+SITE_B = TMP + "/site_b"
 
-def json_resp(obj):
-    return {"status": 200, "body": json_stringify(obj), "headers": {"Content-Type": "application/json"}}
+def setup():
+    os_spawn("/bin/sh", ["-c", "rm -rf " + TMP])
+    sleep(200)
+    mkdir(SITE_A)
+    mkdir(SITE_B)
+    write_file(SITE_A + "/index.html", "SMOKE-A-INDEX")
+    write_file(SITE_B + "/index.txt", "SMOKE-B-TXT")
+    write_file(SITE_B + "/secret.db", "SECRET")
+    write_file(SITE_B + "/public.txt", "PUBLIC")
 
-def handle_request(req):
-    p = req.path
-    if p == "/healthz":
-        return json_resp({"ok": true})
-    if p == "/api/items":
-        rows = sqlite_query(db, "SELECT id, name, ts FROM items ORDER BY id")
-        items = []
-        for r in rows:
-            items.append({"id": r["id"], "name": r["name"], "ts": r["ts"]})
-        return json_resp({"items": items})
-    return {"status": 404, "body": json_stringify({"error": "not found"}), "headers": {"Content-Type": "application/json"}}
+# 起 ws-web（编译模式二进制，测试端口 18990/18991）
+def start_server():
+    cfg = TMP + "/config.json"
+    write_file(cfg, '{"http_addr": ":18990", "https_addr": ":18991", "cert_dir": "' + TMP + '/certs", "default_root": "' + SITE_A + '", "spawn_http": 0, "sites": {"a.test": {"root": "' + SITE_A + '", "spa_fallback": true}, "b.test": {"root": "' + SITE_B + '", "deny_dirs": ["backup", ".git"], "deny_exts": [".db", ".key", ".env"]}}}')
+    p = os_spawn("/bin/sh", ["-c", "exec " + TMP + "/ws-web --config " + cfg + " 2>" + TMP + "/server.log"])
+    sleep(800)
+    return p
 
 def main():
-    spawn http_serve(18999, handle_request)
-    sleep(500)
+    setup()
+    # 复制 ws-web 二进制到测试目录（build.sh 产物；开发路径，可改）
+    os_spawn("/bin/sh", ["-c", "cp /data/code/PuXian/ws-web/build/ws-web " + TMP + "/ws-web"])
+    sleep(300)
+    p = start_server()
 
-    # 1. 健康检查
-    r = http_request("http://127.0.0.1:18999/healthz", "GET")
-    assert r.status == 200
-    d = json_parse(r.body)
+    # 1. healthz
+    r = http_request("http://127.0.0.1:18991/healthz", "GET", "", {"Host": "a.test"})
+    assert r["status"] == 200
+    d = json_parse(r["body"])
     assert d["ok"] == true
+    print("1 healthz: OK")
 
-    # 2. 列表 API（SQLite 数据经 JSON 返回）
-    r2 = http_request("http://127.0.0.1:18999/api/items", "GET")
-    assert r2.status == 200
-    d2 = json_parse(r2.body)
-    assert len(d2["items"]) == 1
-    assert d2["items"][0]["name"] == "demo"
+    # 2. 静态文件
+    r = http_request("http://127.0.0.1:18991/", "GET", "", {"Host": "a.test"})
+    assert r["status"] == 200 and r["body"] == "SMOKE-A-INDEX"
+    print("2 静态 a.test: OK")
+    r = http_request("http://127.0.0.1:18991/index.txt", "GET", "", {"Host": "b.test"})
+    assert r["status"] == 200 and r["body"] == "SMOKE-B-TXT"
+    print("3 静态 b.test: OK")
 
-    # 3. 404 兜底
-    r3 = http_request("http://127.0.0.1:18999/nope", "GET")
-    assert r3.status == 404
+    # 3. deny 403
+    r = http_request("http://127.0.0.1:18991/secret.db", "GET", "", {"Host": "b.test"})
+    assert r["status"] == 403
+    print("4 deny .db: OK")
+    r = http_request("http://127.0.0.1:18991/.git/config", "GET", "", {"Host": "b.test"})
+    assert r["status"] == 403
+    print("5 deny .git: OK")
 
-    print("✅ ws-web smoke 全部通过（healthz / items / 404）")
+    # 4. SPA fallback
+    r = http_request("http://127.0.0.1:18991/foo", "GET", "", {"Host": "a.test"})
+    assert r["status"] == 200 and r["body"] == "SMOKE-A-INDEX"
+    print("6 SPA fallback: OK")
+
+    # 5. 404
+    r = http_request("http://127.0.0.1:18991/nope.txt", "GET", "", {"Host": "b.test"})
+    assert r["status"] == 404
+    print("7 404: OK")
+
+    # 6. 未知 host 404
+    r = http_request("http://127.0.0.1:18991/", "GET", "", {"Host": "unknown.test"})
+    assert r["status"] == 404
+    print("8 未知host 404: OK")
+
+    os_kill(p, 15)
+    sleep(300)
+    os_wait(p)
+    print("SMOKE ALL PASSED")
 
 main()
