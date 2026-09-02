@@ -97,6 +97,8 @@ typedef struct {
     // M54-S2：0-RTT early data
     int            early_sent;      // quic_connect_0rtt 成功路径（握手未完成即返回）
     int            early_rejected;  // 服务端拒绝 early data（握手完成回调检测）
+    // M54-S3：连接迁移
+    int            hs_confirmed;    // 握手已确认（客户端收到 HANDSHAKE_DONE）——迁移前提
     // M53：server 多连接托管（收包路由线程 → 本连接处理线程）
     // 并发：队列 push/pop/free 统一持全局 g_quic_srv_mu；qcv 每连接独立（避免惊群）
     int              owner_listener;         // >0 = 由该 listener 托管
@@ -202,6 +204,14 @@ static int quic_handshake_completed_cb(ngtcp2_conn* conn, void* user_data) {
             if (qc->conn) ngtcp2_conn_tls_early_data_rejected(qc->conn);
         }
     }
+    return 0;
+}
+
+// M54-S3：握手确认（HANDSHAKE_DONE 到达/发出）——客户端发起连接迁移的前提（RFC 9000 §9）
+static int quic_hs_confirmed_cb(ngtcp2_conn* conn, void* user_data) {
+    (void)conn;
+    quic_conn* qc = (quic_conn*)user_data;
+    if (qc) qc->hs_confirmed = 1;
     return 0;
 }
 
@@ -460,7 +470,7 @@ static int quic_pump(quic_conn* qc, int64_t timeout_ms, int data_mode, int64_t w
             got_pkt = 1;
         }
         if (!got_pkt) continue;
-        // 更新 remote（服务端 accept 后可能变化，通常一致）
+        // 更新 remote（服务端 accept 后可能变化，通常一致；迁移时跟随对端新源）
         if (from.ss_family == AF_INET) {
             memcpy(&qc->remote_sa, &from, sizeof(from));
             qc->path.remote.addr = (struct sockaddr*)&qc->remote_sa;
@@ -664,6 +674,7 @@ static int quic_srv_new_conn(quic_listener* ql, const uint8_t* pkt, size_t rl,
     cb.recv_client_initial = ngtcp2_crypto_recv_client_initial_cb;
     cb.recv_crypto_data = ngtcp2_crypto_recv_crypto_data_cb;
     cb.handshake_completed = quic_handshake_completed_cb;
+    cb.handshake_confirmed = quic_hs_confirmed_cb;
     cb.encrypt = ngtcp2_crypto_encrypt_cb;
     cb.decrypt = ngtcp2_crypto_decrypt_cb;
     cb.hp_mask = ngtcp2_crypto_hp_mask_cb;
@@ -1010,7 +1021,14 @@ static void quic_srv_echo_cb(int64_t conn, void* ud) {
         for (;;) {
             int64_t got = px_quic_raw_recv_on(conn, sid, buf, (int)sizeof(buf), 100);
             if (got <= 0) break;
-            px_quic_raw_send_on(conn, sid, buf, (int)got, 0);
+            // M54-S3：迁移后新路径需 path validation —— writev_stream 在验证完成前可能
+            // 未发出（返回 <=0），pump 推进 PATH_CHALLENGE/RESPONSE 后重试补发。
+            int64_t sent = -1;
+            for (int t = 0; t < 10; t++) {
+                sent = px_quic_raw_send_on(conn, sid, buf, (int)got, 0);
+                if (sent > 0) break;
+                px_quic_raw_poll(conn, 400);   // 驱动验证/流控推进
+            }
         }
     }
 }
@@ -1154,6 +1172,7 @@ static LXValue bi_quic_accept(LXValue* args, int nargs, void* ctx) {
         cb.recv_client_initial = ngtcp2_crypto_recv_client_initial_cb;
         cb.recv_crypto_data = ngtcp2_crypto_recv_crypto_data_cb;
         cb.handshake_completed = quic_handshake_completed_cb;
+    cb.handshake_confirmed = quic_hs_confirmed_cb;
         cb.encrypt = ngtcp2_crypto_encrypt_cb;
         cb.decrypt = ngtcp2_crypto_decrypt_cb;
         cb.hp_mask = ngtcp2_crypto_hp_mask_cb;
@@ -1264,6 +1283,7 @@ static LXValue quic_conn_connect_impl(LXValue* args, int nargs, const char* sess
     cb.client_initial = ngtcp2_crypto_client_initial_cb;
     cb.recv_crypto_data = ngtcp2_crypto_recv_crypto_data_cb;
     cb.handshake_completed = quic_handshake_completed_cb;
+    cb.handshake_confirmed = quic_hs_confirmed_cb;
     cb.encrypt = ngtcp2_crypto_encrypt_cb;
     cb.decrypt = ngtcp2_crypto_decrypt_cb;
     cb.hp_mask = ngtcp2_crypto_hp_mask_cb;
@@ -1502,6 +1522,7 @@ static LXValue quic_conn_connect_0rtt_impl(LXValue* args, int nargs) {
     cb.client_initial = ngtcp2_crypto_client_initial_cb;
     cb.recv_crypto_data = ngtcp2_crypto_recv_crypto_data_cb;
     cb.handshake_completed = quic_handshake_completed_cb;
+    cb.handshake_confirmed = quic_hs_confirmed_cb;
     cb.encrypt = ngtcp2_crypto_encrypt_cb;
     cb.decrypt = ngtcp2_crypto_decrypt_cb;
     cb.hp_mask = ngtcp2_crypto_hp_mask_cb;
@@ -1686,6 +1707,107 @@ static LXValue bi_quic_conn_handshake_done(LXValue* args, int nargs, void* ctx) 
     quic_conn* qc = quic_get_conn(args[0].as.i);
     if (!qc || !qc->conn) return px_bool(false);
     return px_bool(qc->handshake_done ? true : false);
+}
+
+// ==================== M54-S3：连接迁移（client 换源 + server path 跟随） ====================
+// 语言 API：
+//   quic_migrate(conn, local_ip:str, local_port:int) -> bool
+//       连接迁移（client 换源）：新建 UDP fd 绑定新源端口 → 后续收发走新 fd（源端口
+//       变化 = NAT rebinding 语义）。服务器端收包路由按 DCID 定位同 conn（M53 单 fd 收包
+//       router + 逐包 from）→ ngtcp2 server 对"新源地址的包"自动做 path validation
+//       （PATH_CHALLENGE→PATH_RESPONSE），pump 更新 remote_sa → 回包发到新源 —— 同一
+//       QUIC 连接续传，无重新握手。
+//       注：不调 ngtcp2_conn_initiate_immediate_migration —— ngtcp2 1.25.90 该路径触发
+//       conn_reset_congestion_state→cc.reset→init_pacing_rate 断言 cstat->cwnd 崩溃（迁移
+//       新路径 pmtud 未初始化导致 cwnd=0）。MVP 以被动换源（客户端直接换 fd，ngtcp2
+//       视角路径不变、不做客户端主动迁移前置校验）完成迁移：客户端换源后照常发包，
+//       服务器完成新路径验证并跟随 —— 行为与 NAT rebinding 一致，RFC 9000 §9 允许。
+//       local_ip "" = INADDR_ANY；local_port 0 = 内核自动选。
+//   quic_conn_path(conn) -> str   当前对端地址 "ip:port"（迁移后服务器视角应变为新源）
+//   quic_conn_local(conn) -> str  当前本地地址 "ip:port"（迁移后源端口应变化，断言用）
+static LXValue bi_quic_migrate(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 3 || args[0].type != PX_INT || args[1].type != PX_STR || args[2].type != PX_INT)
+        px_error("quic_migrate 需要 (conn: int, local_ip: str, local_port: int)");
+    int64_t conn = args[0].as.i;
+    const char* lip = args[1].as.obj->as.str.data;
+    int lport = (int)args[2].as.i;
+    quic_conn* qc = quic_get_conn(conn);
+    if (!qc || !qc->conn || qc->owner_listener > 0) return px_bool(false);  // 仅 client 侧可迁移
+    // M54-S3：切换前先泵 ~300ms 冲刷旧路径在途包（ACK/控制帧），否则 close 旧 fd 后
+    // 迟到的旧源包会把服务器 remote_sa 回切到已关闭的旧地址（echo 回包发往死地址）。
+    quic_pump(qc, 300, 1, -1);
+    // 新建 UDP fd：bind 新源地址 → connect 原对端
+    int nfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (nfd < 0) return px_bool(false);
+    int one = 1;
+    setsockopt(nfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    struct sockaddr_in laddr;
+    memset(&laddr, 0, sizeof(laddr));
+    laddr.sin_family = AF_INET;
+    laddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (lip && *lip) inet_pton(AF_INET, lip, &laddr.sin_addr);
+    laddr.sin_port = htons((uint16_t)lport);
+    if (bind(nfd, (struct sockaddr*)&laddr, sizeof(laddr)) != 0) {
+        fprintf(stderr, "[quic] migrate: bind %s:%d fail\n", lip ? lip : "", lport);
+        close(nfd);
+        return px_bool(false);
+    }
+    if (connect(nfd, (struct sockaddr*)&qc->remote_sa, sizeof(qc->remote_sa)) != 0) {
+        fprintf(stderr, "[quic] migrate: connect fail\n");
+        close(nfd);
+        return px_bool(false);
+    }
+    // 切换 fd / 本地地址 / 路径（后续收发走新 fd；server 按 DCID 续传 + 新源验证跟随）
+    memset(&qc->local_sa, 0, sizeof(qc->local_sa));
+    socklen_t ll = sizeof(qc->local_sa);
+    getsockname(nfd, (struct sockaddr*)&qc->local_sa, &ll);
+    qc->path.local.addr = (struct sockaddr*)&qc->local_sa;
+    qc->path.local.addrlen = ll;
+    close(qc->fd);
+    qc->fd = nfd;
+    return px_bool(true);
+}
+
+// 地址 → "ip:port"（复用 px_quic_raw_peer_addr 逻辑，支持任意 sockaddr）
+static void quic_addr_to_str(const struct sockaddr_storage* sa, char* out, size_t n) {
+    out[0] = 0;
+    char ip[INET6_ADDRSTRLEN];
+    int port = 0;
+    if (sa->ss_family == AF_INET) {
+        struct sockaddr_in* sin = (struct sockaddr_in*)sa;
+        if (inet_ntop(AF_INET, &sin->sin_addr, ip, sizeof(ip))) port = ntohs(sin->sin_port);
+        else return;
+    } else if (sa->ss_family == AF_INET6) {
+        struct sockaddr_in6* sin6 = (struct sockaddr_in6*)sa;
+        if (inet_ntop(AF_INET6, &sin6->sin6_addr, ip, sizeof(ip))) port = ntohs(sin6->sin6_port);
+        else return;
+    } else {
+        return;
+    }
+    snprintf(out, n, "%s:%d", ip, port);
+}
+
+// quic_conn_path(conn) -> str：当前对端地址
+static LXValue bi_quic_conn_path(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || args[0].type != PX_INT) px_error("quic_conn_path 需要 (conn: int)");
+    quic_conn* qc = quic_get_conn(args[0].as.i);
+    if (!qc) return px_str("");
+    char buf[128];
+    quic_addr_to_str(&qc->remote_sa, buf, sizeof(buf));
+    return px_str(buf);
+}
+
+// quic_conn_local(conn) -> str：当前本地地址（client 迁移后源端口变化）
+static LXValue bi_quic_conn_local(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || args[0].type != PX_INT) px_error("quic_conn_local 需要 (conn: int)");
+    quic_conn* qc = quic_get_conn(args[0].as.i);
+    if (!qc) return px_str("");
+    char buf[128];
+    quic_addr_to_str(&qc->local_sa, buf, sizeof(buf));
+    return px_str(buf);
 }
 
 // ============================================================
@@ -2066,6 +2188,9 @@ void px_register_quic(void) {
     px_set_global("quic_connect_0rtt", px_native("quic_connect_0rtt", bi_quic_connect_0rtt));
     px_set_global("quic_0rtt_rejected", px_native("quic_0rtt_rejected", bi_quic_0rtt_rejected));
     px_set_global("quic_conn_handshake_done", px_native("quic_conn_handshake_done", bi_quic_conn_handshake_done));
+    px_set_global("quic_migrate", px_native("quic_migrate", bi_quic_migrate));
+    px_set_global("quic_conn_path", px_native("quic_conn_path", bi_quic_conn_path));
+    px_set_global("quic_conn_local", px_native("quic_conn_local", bi_quic_conn_local));
     px_ffi_register("quic_listen", bi_quic_listen);
     px_ffi_register("quic_accept", bi_quic_accept);
     px_ffi_register("quic_connect", bi_quic_connect);
@@ -2086,4 +2211,7 @@ void px_register_quic(void) {
     px_ffi_register("quic_connect_0rtt", bi_quic_connect_0rtt);
     px_ffi_register("quic_0rtt_rejected", bi_quic_0rtt_rejected);
     px_ffi_register("quic_conn_handshake_done", bi_quic_conn_handshake_done);
+    px_ffi_register("quic_migrate", bi_quic_migrate);
+    px_ffi_register("quic_conn_path", bi_quic_conn_path);
+    px_ffi_register("quic_conn_local", bi_quic_conn_local);
 }
