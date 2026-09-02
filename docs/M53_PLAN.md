@@ -51,7 +51,7 @@
 | S3 ✅ | runtime_h3.c：H3 PxHttpOut 输出抽象（复用 h3_send_fields）+ 托管连接回调（请求流 → req dict → runtime.c 接入桥 px_http_dispatch_h3 补全 query/cookie/form/version → 公共管道 → HEADERS/DATA 响应）；runtime_quic.c 显式回调 listener（px_quic_raw_h3_listen_cb）与对端地址（px_quic_raw_peer_addr）；H3 连接线程纳入并发 GC（px_gc_thread_enter/leave） | 本 commit：4 条 QUIC 连接并发 ×5 请求（路由 handler / :id+query / 静态 / 404 / 403）= 20 全 PASS 且与 HTTP/1.1 curl 同一管道输出一致（examples/m53_s3_pipe_verify.sh）；m52 QPACK ack 双端 PASS；m53_s1 echo 8 并发 PASS；m43_webapp 10 PASS == golden |
 | S4 ✅ | px_serve opts http3 + Alt-Svc 注入 + ws-web 支持 | px_serve(...,{http3:{port,cert,key}}) 单调用三栈合一（TCP+UDP 同端口）；Alt-Svc 自动通告 h3=":port"；ws-web config http3 支持；**aioquic（第三方 HTTP/3 实现）互操作 200 + 自研 client 双端一致** + SIGTERM 优雅关闭（本 commit，验证 examples/m53_s4_pxserve_h3_verify.sh） |
 | S5 ✅ | 全量回归：pxi 重建、capability、diffcheck --all/--errors、自举证明 B.c==golden、m4x 回归 | 本 commit：**bootstrap/pxi 重建**（interp.px 编译 + 当前 runtime 静态链接，9.03MB；解释器新增内置 h3_server_listen 等 M53 能力——examples/m53_s5_pxi_h3_smoke.px 解释模式自检 id>0 PASS）；**capability 解释 + 编译双模式各 253 PASS/0 FAIL 且输出逐字节一致**；**diffcheck --all rc=0 / --errors rc=0**（全量对拍全绿）；**自举证明 B.c==golden/compiler.c 逐字节一致**；**m4x 回归全 PASS**（m46/m47/m48/m49/m50/m51/m52，编译+解释双模式）+ m53_s1/s3/s4 端到端复验全 PASS（含 aioquic 第三方互操作） |
-| S6 | 文档：spec §8.14、ROADMAP、PROGRESS、README、CHANGELOG；一次 commit push | 里程碑闭合 |
+| S6 ✅ | 文档：spec §8.14、ROADMAP、README、CHANGELOG；一次 commit push | 本 commit：spec.md §8.14（HTTP/3 三栈合一规范）+ §8.8 过时陈述更新 + §8.13 代码围栏补齐；ROADMAP M53 移入已完成主线、能力基线/远期 M54+ 同步；README.md / README.en.md 网络行 + 里程碑 M41–M53 + 示例 m53；CHANGELOG [Unreleased] 记 M53（新增）+ M55（issue #2 修复）；**M53 里程碑闭合** |
 
 ## 四、风险与规避
 

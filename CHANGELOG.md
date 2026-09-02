@@ -6,6 +6,24 @@
 
 ## [Unreleased]
 
+### 新增 · M53 HTTP/3 三栈合一 WebServer（见 docs/M53_PLAN.md）
+
+- `px_serve(port, docroot, timeout, {http3: true | {port?, cert?, key?}})` 单调用同时托管
+  HTTP/1.1（TCP）+ HTTP/3（QUIC/UDP，缺省同端口），HTTP/1.1+HTTP/2+HTTP/3 共用同一
+  vhost/路由/限流/访问日志/静态/.px 管道；Alt-Svc 自动通告；SIGTERM 优雅关闭
+- 语言 API：`h3_server_listen(port, cert, key)`（HTTP/3 管道托管 listener）、
+  `quic_h3_listen(port, cert, key)`（QUIC raw listener，多连接托管地基）
+- QUIC 服务端多连接托管：单 fd 收包路由（DCID → 连接入包队列）+ 每连接处理线程 + PEM 证书加载
+- 请求管道与传输解耦：`PxHttpOut` 输出抽象（HTTP/1.1 与 HTTP/3 共用，纯重构响应字节零变化）
+- **HTTP/3 外部互操作打通**：aioquic（第三方独立实现）请求 PuXian H3 服务 200；修复 4 个
+  协议级缺陷（fin-only 流活性、无 body 请求、响应头字段名小写、响应流 FIN）
+- bootstrap/pxi 重建：解释器同能力支持 h3_server_listen / px_serve http3（S5 全量回归）
+
+### 修复 · M55 并发安全（issue #2）
+
+- 全局符号表/GC root 扫描互斥：px_set_global / px_get_global / struct 方法查找全程持锁、
+  g_len 原子化、stop-the-world 持锁扫 root —— 修复并发写全局变量 + GC 竞态崩溃
+
 ## [0.1.0] - 2026
 
 首个可公开版本：语言已自举（PuXian 编译器由 PuXian 自身编写），

@@ -98,7 +98,7 @@ def main():
 | ⏱ Timers | `set_timeout` / `set_interval` / `clear_timer` (one-shot/periodic callbacks, variadic argument pass-through, concurrency primitives are safe inside callbacks). |
 | 🧹 Memory | Build mode: C runtime with a conservative mark-and-sweep GC (cyclic references collectable, auto-triggered) + **slab allocator** (21 size-class slot reuse); interpreter side: **tracing GC** that collects cycles (list/dict/chan/**closure Func↔Env cycles**) + `gc()` forced collection. |
 | 🧩 Modularity | `import std.*` / `import foo.bar` / `from foo import x` / relative-path imports. |
-| 🌐 Networking | HTTP client (**HTTPS TLS 1.2/1.3** + gzip/chunked auto-decoding + **http/https connection-pool reuse** + **TLS session-ticket resumption** + **streaming gzip decode-as-you-download**) + **HTTP server** (`http_serve` with gzip/chunked/keep-alive/streaming + **`px_serve` server-side TLS**: `tls_server(cert,key[,hostname])` enables HTTPS/WSS/SSE-over-TLS + **TLS SNI multi-certificate selection by domain** + configurable request-body limits + 413 + large-body spooling to disk + **graceful shutdown** + **per-route rate limiting** (429 at route granularity) + **access-log file rotation** + **Alt-Svc advertisement**) + **WebSocket** (RFC 6455, heartbeat/timeouts, **one-line `ws://`/`wss://` connection**) + **SSE** server/client (**auto-reconnect on disconnect**, with Last-Event-ID) + **UDP** (udp_open/send/recv/close, groundwork for QUIC) + full-featured TCP. |
+| 🌐 Networking | HTTP client (**HTTPS TLS 1.2/1.3** + gzip/chunked auto-decoding + **http/https connection-pool reuse** + **TLS session-ticket resumption** + **streaming gzip decode-as-you-download**) + **HTTP server** (`http_serve` with gzip/chunked/keep-alive/streaming + **`px_serve` server-side TLS**: `tls_server(cert,key[,hostname])` enables HTTPS/WSS/SSE-over-TLS + **TLS SNI multi-certificate selection by domain** + configurable request-body limits + 413 + large-body spooling to disk + **graceful shutdown** + **per-route rate limiting** (429 at route granularity) + **access-log file rotation** + **Alt-Svc advertisement** + **HTTP/3 three-stack unification** (`px_serve(...,{http3:true|{port?,cert?,key?}})` hosts H3/QUIC on the same port — HTTP/1.1+HTTP/2+HTTP/3 share the same vhost/route/rate-limit/access-log/static/.px pipeline; `h3_server_listen` standalone H3 listener; **aioquic third-party interop**)) + **WebSocket** (RFC 6455, heartbeat/timeouts, **one-line `ws://`/`wss://` connection**) + **SSE** server/client (**auto-reconnect on disconnect**, with Last-Event-ID) + **UDP** (udp_open/send/recv/close) + full-featured TCP. |
 | 🛡 Crypto/Docs | **AES-CBC-PKCS7 / AES-GCM**, **RSA** (PKCS#1 v1.5), **XML** parse/escape/**generate** (xml_build), **zip** pack/unpack, **base64**, sha256 / xxhash, **SQLite** (open/exec/query/close, parameter binding + result sets). |
 | 🔢 Language | Slice syntax `a[i:j]` / `a[i:j:k]` (stride/reverse, strings sliced by UTF-8 chars), **generator expressions** `(x for x in xs)` (**lazy**: single-level for delayed evaluation / `gen_next` item-by-item / for-in / `list()` conversion), bitwise ops + binary-data views (int_to_hex / bytes_to_hex / bit_count / bit_length), regex, lock primitives (mutex / rwlock), random file I/O + fsync, process/signal (os_spawn / os_wait / signal), **Result/Option error handling** (`Ok(x)`/`Err(e)`/`Some(x)` constructors, `?` error propagation — Err/None returns immediately, `!` forced unwrap, is_ok/is_err/unwrap methods; the single error channel in the spec), string interpolation `${expr}`, comprehensions, optional chaining `?.`, null coalescing `??`, pipeline `\|>`. |
 | 🚀 Application platform | **`.px` script execution mechanism** (`px_serve`, a PHP/OpenResty-style application server: Cookie/Session/basic auth + server-side TLS + graceful shutdown; `px_exec`, a language-level embedding API) + **`.px` process pool** (build mode pre-forks worker interpreters that stay resident and are reused, PHP-FPM style; **hot-reload with automatic rolling restart on script/binary changes**) + route table & middleware (method+path patterns / `:id` params / `*` wildcards / middleware chains) + cron scheduling (6 fields) + JSON path (json_path / json_path_set). |
@@ -160,7 +160,7 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 │   ├── cases/ + golden/    #   differential test cases (s01-s09 + v01-v03) and golden artifacts
 │   ├── cases_bad/          #   error cases (lex 14 + parse 9)
 │   └── diffcheck.sh / bootstrap_prove.sh  # differential harness / bootstrap proof
-├── runtime/                # C runtime (runtime.c/h + aes/xml/zip/ws/rsa/sqlite/route/h2 + mbedtls + third_party)
+├── runtime/                # C runtime (runtime.c/h + aes/xml/zip/ws/rsa/sqlite/route/h2/h3/quic + mbedtls + third_party)
 ├── stdlib/                 # Standard library (collections.px)
 ├── ws-web/                 # First production application (M-B9b, dogfooding): HTTP + SQLite service skeleton
 ├── examples/               # 80+ examples (hello / fib / match / concurrency / networking / TLS / SQLite / comprehensions ...)
@@ -211,6 +211,18 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 | M-B9a | Retire the Rust version + wire up CI + bootstrap chain | `tools/pxc` fully usable end-to-end; CI four jobs |
 | M-B9b | ws-web (first production application) | 🔄 in progress (dogfooding validation) |
 
+### Native Development (M41–M53, post-bootstrap development in PuXian itself — all ✅)
+
+| Milestone | Scope |
+|---|---|
+| M41 | Type-system debt cleared: edition / immutability / null-safety / definition-level generics |
+| M42 | Explicit C library import (FFI platform leverage): `import "c/xxx"` + `extern def` |
+| M43 | File-as-route (routegen generates route registration at build time, PHP-style framework form) |
+| M44 | Language sugar: simplified enums (`type X const`) + list-append shorthand (`<-`) |
+| M45 | Registry versioning: semver library + pxpkg + px.pkg.lock reproducible builds |
+| M46–M52 | HTTP/3/QUIC full chain: QUIC transport → H3 semantic layer → QPACK (Huffman/static table/dynamic table/SETTINGS/multiplexing/decoder-stream ack) |
+| M53 | **HTTP/3 three-stack WebServer**: px_serve http3 (HTTP/1.1+HTTP/2+HTTP/3 share the public pipeline) + Alt-Svc + **aioquic third-party interop** |
+
 ---
 
 ## Examples
@@ -250,6 +262,9 @@ The `examples/` directory (80+ examples) for quick hands-on:
 - `m50_h3_mux_verify.sh` — HTTP/3 multiplexing loopback (3 bidirectional streams on one connection, concurrent request/response one-to-one without crosstalk, dual mode)
 - `m51_h3_qpack_wire_verify.sh` — QPACK session over real wire loopback (both ends open control/encoder/decoder QUIC unidirectional streams + SETTINGS negotiation; dynamic-table instructions travel over real unidirectional streams: request 1 inserts, request 2 reuses with zero additions, dual mode)
 - `m52_qpack_decack_verify.sh` — QPACK decoder-stream ack over the wire (RFC 9204 §4.4: receiver auto-sends Section Ack after decoding dynamic field sections, sender consumes peer decoder stream to advance Known Received Count, safe encoder-table eviction; bidirectional closed loop, dual mode)
+- `m53_s3_pipe_verify.sh` — HTTP/3 wired into the public HTTP pipeline (same-process px_serve + h3_server_listen dual stack; 4 QUIC connections × 5 requests byte-consistent with the HTTP/1.1 pipeline output)
+- `m53_s4_pxserve_h3_verify.sh` — **HTTP/3 three-stack end-to-end** (px_serve http3: HTTP/1.1 TCP + HTTP/3 UDP in one service; self-built client + **aioquic third-party interop** 200; automatic Alt-Svc; graceful shutdown on SIGTERM)
+- `m53_s5_pxi_h3_smoke.px` — self-check that the rebuilt pxi interpreter exposes h3_server_listen (id>0 PASS)
 - ... full list in `examples/`
 
 ---
