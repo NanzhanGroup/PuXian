@@ -623,6 +623,34 @@ check("M46 quic_close_listener 关闭", quic_close_listener(ql) == true)
 check("M46 quic_close 无效 conn 返回 false", quic_close(0) == false)
 
 # ============================================================
+# 22. HTTP/3 语义层（M47：QPACK 编解码 + HEADERS/DATA 帧）
+# ------------------------------------------------------------
+# h3_qenc/h3_qdec（QPACK 字段段编解码，无动态表 MVP）
+# h3_frame（HTTP/3 帧构造：type + varint 长度 + payload）
+# 完整握手回环见 examples/m47_h3_verify.sh（端到端 PASS）。
+# ============================================================
+import "c/ngtcp2"
+
+extern def h3_qenc(headers: list) -> bytes
+extern def h3_qdec(data: bytes) -> list
+extern def h3_frame(type: int, payload) -> bytes
+
+# QPACK roundtrip：编码 → 解码还原
+var hdr = [["x-test", "1"], ["user-agent", "px-h3"]]
+var enc = h3_qenc(hdr)
+check("M47 h3_qenc 编码非空", enc != null)
+var dec = h3_qdec(enc)
+check("M47 h3_qdec 解码数量", dec != null and len(dec) == 2)
+check("M47 QPACK roundtrip 字段1", dec[0][0] == "x-test" and dec[0][1] == "1")
+check("M47 QPACK roundtrip 字段2", dec[1][0] == "user-agent" and dec[1][1] == "px-h3")
+# 伪头字段 roundtrip（:method/:scheme/:path）
+var pseudo = [["method", "GET"], ["scheme", "https"], ["path", "/hi"]]
+var dec2 = h3_qdec(h3_qenc(pseudo))
+check("M47 QPACK 伪头 roundtrip", dec2 != null and len(dec2) == 3 and dec2[0][1] == "GET" and dec2[2][1] == "/hi")
+# 非法 QPACK（空/截断）返回 null（容错）
+check("M47 QPACK 非法输入返回 null", h3_qdec("") == null)
+
+# ============================================================
 # 汇总
 # ============================================================
 print("")

@@ -664,6 +664,74 @@ static LXValue bi_quic_close_listener(LXValue* args, int nargs, void* ctx) {
     return px_bool(true);
 }
 
+// ============================================================
+// raw 接口（M47：供 runtime_h3.c HTTP/3 语义层复用，绕开 LXValue）
+// 命名 px_quic_raw_*：直接操作 conn/listener id 与字节缓冲。
+// 复用上方 static 的 bi_* 注册函数与内部 quic_conn/listener 表。
+// ============================================================
+
+int64_t px_quic_raw_listen(int port) {
+    LXValue a[1]; a[0] = px_int(port);
+    LXValue r = bi_quic_listen(a, 1, NULL);
+    return r.type == PX_INT ? r.as.i : -1;
+}
+
+int64_t px_quic_raw_accept(int64_t listener, int timeout_ms) {
+    LXValue a[2]; a[0] = px_int(listener); a[1] = px_int(timeout_ms);
+    LXValue r = bi_quic_accept(a, 2, NULL);
+    return r.type == PX_INT ? r.as.i : -1;
+}
+
+int64_t px_quic_raw_connect(const char* ip, int port, const char* alpn) {
+    LXValue a[3];
+    a[0] = px_str(ip); a[1] = px_int(port); a[2] = px_str(alpn);
+    LXValue r = bi_quic_connect(a, 3, NULL);
+    return r.type == PX_INT ? r.as.i : -1;
+}
+
+// 发送字节（一次性尽量写完，内部处理流控）。返回写入字节数 / -1。
+int64_t px_quic_raw_send(int64_t conn, const uint8_t* data, int len) {
+    LXValue a[2];
+    a[0] = px_int(conn);
+    a[1] = px_bytes_len(data, len);
+    LXValue r = bi_quic_send(a, 2, NULL);
+    return r.type == PX_INT ? r.as.i : -1;
+}
+
+// 阻塞接收至多 maxlen 字节（最多等 timeout_ms；0 = 超时/对端关闭）。
+// 从内部 rbuf 取走并移除。返回实际字节数 / 0。
+int64_t px_quic_raw_recv(int64_t conn, uint8_t* out, int maxlen, int timeout_ms) {
+    quic_conn* qc = quic_get_conn(conn);
+    if (!qc || !qc->conn) return 0;
+    if (qc->rlen == 0 && !qc->peer_closed) {
+        int pr = quic_pump(qc, timeout_ms, 1);
+        if (pr != 0 && qc->rlen == 0) return 0;
+    }
+    if (qc->rlen == 0) return 0;
+    size_t take = qc->rlen;
+    if (maxlen > 0 && take > (size_t)maxlen) take = (size_t)maxlen;
+    if (take > 0 && out) memcpy(out, qc->rbuf, take);
+    if (take < qc->rlen) {
+        memmove(qc->rbuf, qc->rbuf + take, qc->rlen - take);
+        qc->rlen -= take;
+    } else {
+        qc->rlen = 0;
+    }
+    return (int64_t)take;
+}
+
+bool px_quic_raw_close(int64_t conn) {
+    LXValue a[1]; a[0] = px_int(conn);
+    LXValue r = bi_quic_close(a, 1, NULL);
+    return r.type == PX_BOOL && r.as.b;
+}
+
+bool px_quic_raw_close_listener(int64_t listener) {
+    LXValue a[1]; a[0] = px_int(listener);
+    LXValue r = bi_quic_close_listener(a, 1, NULL);
+    return r.type == PX_BOOL && r.as.b;
+}
+
 // ---------- 注册（runtime.c px_register_builtins 调用）----------
 void px_register_quic(void) {
     px_set_global("quic_listen", px_native("quic_listen", bi_quic_listen));

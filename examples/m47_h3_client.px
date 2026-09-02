@@ -1,0 +1,34 @@
+# ============================================================
+# M47 HTTP/3 语义层端到端：客户端（回环对拍用）
+# ------------------------------------------------------------
+# 流程：h3_client_connect（QUIC 握手）→ h3_client_send_request
+#       （HEADERS+QPACK 编码 :method/:scheme/:authority/:path + 自定义头 + DATA）
+#       → h3_client_read_response（收 :status + headers + body）
+# 验证：examples/m47_h3_verify.sh
+# ============================================================
+import "c/ngtcp2"
+
+extern def h3_client_connect(ip: str, port: int, alpn: str) -> int
+extern def h3_client_send_request(conn: int, method: str, scheme: str, authority: str, path: str, headers: list, body: str) -> bool
+extern def h3_client_read_response(conn: int, timeout_ms: int) -> dict
+extern def quic_close(conn: int) -> bool
+
+var c = h3_client_connect("127.0.0.1", 17997, "puxian")
+assert(c > 0, "client: h3_client_connect 失败")
+print("client: connected " + str(c))
+
+var ok = h3_client_send_request(c, "GET", "https", "localhost:17997", "/hello", [["user-agent", "px-h3"], ["x-test", "1"]], "")
+assert(ok, "client: h3_client_send_request 失败")
+print("client: request sent")
+
+var resp = h3_client_read_response(c, 8000)
+assert(resp != null, "client: h3_client_read_response 超时/失败")
+print("client: status=" + resp["status"])
+var hd = resp["headers"]
+print("client: content-type=" + hd["content-type"] + " x-px=" + hd["x-px"])
+print("client: body=[" + resp["body"] + "]")
+assert(resp["status"] == "200", "client: 期望 200")
+assert(resp["body"] == "echo-h3:/hello", "client: body 不匹配")
+
+quic_close(c)
+print("client: done")

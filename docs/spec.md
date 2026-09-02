@@ -583,6 +583,37 @@ extern def quic_close_listener(listener: int) -> bool
 - 工程说明：QUIC 栈静态编译进 pxc/pxi 产物（零依赖分发）；选型 quictls + ngtcp2 quictls 后端
   （OpenSSL 3.5 QUIC TLS 服务端存在集成问题，详见 docs/M46_PLAN.md 踩坑表）。
 
+### 8.8 HTTP/3 语义层（M47，QPACK + HEADERS/DATA 帧 + 请求/响应对拍）
+
+`import "c/ngtcp2"`（M46 之上）：在 QUIC 双向流上增加 HTTP/3 **语义层** ——
+QPACK 头压缩（RFC 9204 无动态表子集）+ HTTP/3 帧（HEADERS=0x01 / DATA=0x00）
++ 请求/响应对拍。完整 HTTP/3（QPACK 动态表/Huffman/静态表压缩、SETTINGS 控制流、
+多路复用、0-RTT/连接迁移、接入现有 HTTP 路由管道）列为 M48+。
+
+```
+import "c/ngtcp2"
+
+# QPACK 纯 codec（capability/测试用）
+extern def h3_qenc(headers: list) -> bytes          # 编码字段段（list of [name,value]）→ bytes
+extern def h3_qdec(data: bytes) -> list             # 解码字段段 → list of [name,value] | null
+extern def h3_frame(type: int, payload) -> bytes    # 构造一个 H3 帧（type + varint 长度 + payload）
+
+# HTTP/3 over QUIC（高层，复用 M46 quic_* 连接/流）
+extern def h3_serve_read_request(conn: int, timeout_ms: int) -> dict|null   # {method,scheme,authority,path,headers,body}
+extern def h3_serve_send_response(conn: int, status: int, headers: list, body: str) -> bool
+extern def h3_client_connect(ip: str, port: int, alpn: str) -> int          # = quic_connect
+extern def h3_client_send_request(conn: int, method: str, scheme: str, authority: str, path: str, headers: list, body: str) -> bool
+extern def h3_client_read_response(conn: int, timeout_ms: int) -> dict|null # {status,headers,body}
+```
+
+- **QPACK MVP**：Encoded Field Section 前缀（Required Insert Count=0 + Base=0 → `00 00`），
+  字段行仅 Literal Field Line with Literal Name（`001 0 0 | NameLen(3+)`），无 Huffman/静态/动态表。
+- **H3 帧**：type + length 用 QUIC varint（RFC 9000 §16）；请求 = HEADERS+DATA，响应 = HEADERS(:status)+DATA。
+- **边界**：MVP 约定单 DATA 帧界定消息（不依赖 FIN）；单条双向流（复用 M46 连接模型）。
+- 双模式一致：编译（pxc build）与解释（pxi run）走同一 C 桥（runtime_h3.c 注册进 FFI 表）。
+- 验证：`examples/m47_h3_verify.sh` 回环 PASS（QPACK 编解码 method/path/x-test 头 → 200 + echo-h3 体）；
+  capability section 22（6 项：roundtrip / 伪头 / 非法输入容错），187 PASS/0 FAIL 双模式逐字节一致。
+
 ---
 
 ## 9. 双模式执行
