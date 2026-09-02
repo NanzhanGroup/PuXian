@@ -1,4 +1,4 @@
-# ws-web —— 用 PuXian 写的新时代 Web 服务器（v0.5.0）
+# ws-web —— 用 PuXian 写的新时代 Web 服务器（v0.5.1）
 
 > 自举闭环的最后一环：用 PuXian 写 PuXian 生态的生产 Web 服务器。
 > 编译器已自举（M-B8），Rust 版已退役（M-B9a），全程使用 `tools/pxc` 工具链，**无需 Rust**。
@@ -13,6 +13,7 @@
   - **预热 + 热更**：启动后台构建、源文件变更自动重建（60s 轮询）
   - 提示词三层可配：内置硬规则 + 站点 `prompt/prompt_file` + 页级 front-matter `prompt`
 - 老纯静态站（无 `type`）**行为完全不变**，向后兼容
+- **v0.5.1**：页面模板新增可选占位 `{{ROOT}}`（当前语言首页根）、`{{SITE_NAME}}`、`{{FOOTER_NOTE}}`，取值来自 i18n 的 `site_name` / `footer_note`（缺省 fallback），便于品牌名与页脚随语言切换
 
 ## 快速开始
 
@@ -121,4 +122,4 @@ ws-web/
 ## 版本
 
 - 工具链：`./tools/pxc --version` → `pxc 0.1.0 (普贤 PuXian · selfhosted M-B9a)`
-- ws-web：`./build/ws-web --version` → `ws-web 0.5.0`
+- ws-web：`./build/ws-web --version` → `ws-web 0.5.1`

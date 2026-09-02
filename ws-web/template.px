@@ -96,7 +96,14 @@ def tmpl_apply(tpl, site, i18n, lang, deflang, langs, url_path, pu, meta, conten
     desc = meta["description"]
     if desc == "":
         desc = ui_get(i18n, "site_desc", "")
+    # v0.5.1：站点品牌/页脚注入（i18n 可覆盖，模板可选占位）
+    root_pre = lang_prefix(lang, deflang) + "/"
+    site_name = ui_get(i18n, "site_name", "PuXian")
+    footer_note = ui_get(i18n, "footer_note", "")
     t = tpl
+    t = replace(t, "{{ROOT}}", root_pre)
+    t = replace(t, "{{SITE_NAME}}", esc_html(site_name))
+    t = replace(t, "{{FOOTER_NOTE}}", esc_html(footer_note))
     t = replace(t, "{{TITLE}}", esc_attr(title))
     t = replace(t, "{{DESC}}", esc_attr(desc))
     t = replace(t, "{{LANG}}", lang)
