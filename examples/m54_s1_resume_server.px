@@ -1,0 +1,24 @@
+# ============================================================
+# M54 S1：TLS 1.3 会话恢复（1-RTT resumption）—— 服务端
+# ------------------------------------------------------------
+# quic_h3_listen 托管 listener（M53：单 fd 收包路由 + 自动 accept +
+# 每连接处理线程 + 默认 QUIC echo 回调）——同一 listener 服务多条顺序
+# 连接，stateless session ticket key 稳定 → 会话恢复可成功。
+#   连接 1：客户端全新握手并导出 TLS session
+#   连接 2：客户端恢复会话（应为 1-RTT resumption）
+# ============================================================
+import "c/ngtcp2"
+
+extern def quic_h3_listen(port: int, cert: str, key: str) -> int
+extern def quic_close_listener(listener: int) -> bool
+
+var l = quic_h3_listen(17997, "", "")
+assert(l > 0, "server: quic_h3_listen 失败")
+write_file("/tmp/m54s1.ready", "ready")
+
+var end = now_ms() + 15000
+while now_ms() < end:
+    sleep(200)
+
+quic_close_listener(l)
+print("server: ok")

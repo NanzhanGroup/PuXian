@@ -4,6 +4,9 @@
 //   quic_listen(port) -> int            服务端监听（UDP bind + 自签证书就绪）→ listener id | -1
 //   quic_accept(listener, timeout_ms) -> int  阻塞等 QUIC 连接（握手完成）→ conn id | -1 超时/失败
 //   quic_connect(ip, port, alpn) -> int 客户端连接（握手完成）→ conn id | -1 失败
+//   quic_connect_resume(ip, port, alpn, session) -> int  M54-S1：恢复 TLS 会话（1-RTT）
+//   quic_session_save(conn) -> str    M54-S1：导出 TLS session（hex，含 NewSessionTicket）
+//   quic_conn_resumed(conn) -> bool   M54-S1：本连接是否会话恢复（resumption）握手
 //   quic_send(conn, data) -> int        发送（当前双向流）→ 本次写入流字节数 | -1
 //   quic_recv(conn, maxlen) -> str      阻塞接收应用数据（截断到 maxlen）→ str（"" = 超时/对端关闭）
 //   quic_close(conn) -> bool
@@ -335,6 +338,9 @@ static SSL_CTX* quic_make_server_ctx(void) {
     SSL_CTX_set_ciphersuites(ctx, "TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256:TLS_CHACHA20_POLY1305_SHA256");
     SSL_CTX_set1_groups_list(ctx, "X25519:P-256");
     SSL_CTX_set_alpn_select_cb(ctx, quic_alpn_select_cb, NULL);
+    // M54-S1: TLS1.3 stateless session ticket（会话恢复前提）
+    SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_SERVER);
+    SSL_CTX_set_session_id_context(ctx, (const unsigned char*)"puxian-quic", 11);
     if (SSL_CTX_use_certificate(ctx, x509) != 1 ||
         SSL_CTX_use_PrivateKey(ctx, pkey) != 1) {
         fprintf(stderr, "[quic] server ctx use_cert/key FAIL\n");
@@ -498,6 +504,9 @@ static SSL_CTX* quic_make_server_ctx_cert(const char* certfile, const char* keyf
     SSL_CTX_set_ciphersuites(ctx, "TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256:TLS_CHACHA20_POLY1305_SHA256");
     SSL_CTX_set1_groups_list(ctx, "X25519:P-256");
     SSL_CTX_set_alpn_select_cb(ctx, quic_alpn_select_cb, NULL);
+    // M54-S1: TLS1.3 stateless session ticket（会话恢复前提）
+    SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_SERVER);
+    SSL_CTX_set_session_id_context(ctx, (const unsigned char*)"puxian-quic", 11);
     if (SSL_CTX_use_certificate_chain_file(ctx, certfile) != 1 ||
         SSL_CTX_use_PrivateKey_file(ctx, keyfile, SSL_FILETYPE_PEM) != 1) {
         fprintf(stderr, "[quic] h3 server ctx 加载证书失败 cert=%s key=%s\n", certfile, keyfile);
@@ -1160,9 +1169,12 @@ static LXValue bi_quic_accept(LXValue* args, int nargs, void* ctx) {
     }
 }
 
-// ---------- 客户端：quic_connect ----------
-static LXValue bi_quic_connect(LXValue* args, int nargs, void* ctx) {
-    (void)ctx;
+// M54-S1：hex 编解码（session 序列化传输用）前向声明
+static int quic_unhex(const char* in, size_t len, unsigned char* out);
+
+// ---------- 客户端：quic_connect / quic_connect_resume ----------
+// M54-S1：TLS1.3 会话恢复 —— impl 共用主体；sess_hex 非空 → SSL_set_session 恢复
+static LXValue quic_conn_connect_impl(LXValue* args, int nargs, const char* sess_hex) {
     if (nargs < 3 || args[0].type != PX_STR || args[1].type != PX_INT || args[2].type != PX_STR)
         px_error("quic_connect 需要 (ip: str, port: int, alpn: str)");
     const char* ip = args[0].as.obj->as.str.data;
@@ -1256,6 +1268,26 @@ static LXValue bi_quic_connect(LXValue* args, int nargs, void* ctx) {
         memcpy(proto + 1, alpn, alpnlen);
         SSL_set_alpn_protos(ssl, proto, (unsigned)alpnlen + 1);
     }
+    // M54-S1：TLS 会话恢复 —— 握手开始前恢复保存的 session（1-RTT resumption）
+    if (sess_hex && *sess_hex) {
+        size_t sl = strlen(sess_hex);
+        if (sl % 2 == 0 && sl > 0 && sl <= 262144) {
+            unsigned char* der = (unsigned char*)malloc(sl / 2);
+            int dlen = der ? quic_unhex(sess_hex, sl, der) : -1;
+            if (dlen > 0) {
+                const unsigned char* p = der;
+                SSL_SESSION* sess = d2i_SSL_SESSION(NULL, &p, (long)dlen);
+                if (sess) {
+                    if (SSL_set_session(ssl, sess) != 1)
+                        fprintf(stderr, "[quic] resume: SSL_set_session FAIL\n");
+                    SSL_SESSION_free(sess);
+                } else {
+                    fprintf(stderr, "[quic] resume: d2i_SSL_SESSION FAIL\n");
+                }
+            }
+            if (der) free(der);
+        }
+    }
     // quictls：SSL_CTX 已在 quic_make_client_ctx 时 configure，native handle = SSL*
     ngtcp2_conn_set_tls_native_handle(qc->conn, ssl);
     qc->conn_ref.get_conn = quic_get_conn_from_ref;
@@ -1277,6 +1309,85 @@ static LXValue bi_quic_connect(LXValue* args, int nargs, void* ctx) {
     }
     if (!quic_stream_new(qc, sid0, 0)) { /* 槽满，理论上不可能（首条）*/ }
     return px_int(cid);
+}
+// ---------- M54-S1：TLS 会话保存/恢复 语言层 API ----------
+static int quic_hexv(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+static void quic_hex(const unsigned char* in, size_t len, char* out) {
+    static const char* d = "0123456789abcdef";
+    for (size_t i = 0; i < len; i++) {
+        out[i * 2] = d[in[i] >> 4];
+        out[i * 2 + 1] = d[in[i] & 0xf];
+    }
+    out[len * 2] = 0;
+}
+static int quic_unhex(const char* in, size_t len, unsigned char* out) {
+    if (len % 2) return -1;
+    for (size_t i = 0; i < len; i += 2) {
+        int hi = quic_hexv(in[i]);
+        int lo = quic_hexv(in[i + 1]);
+        if (hi < 0 || lo < 0) return -1;
+        out[i / 2] = (unsigned char)((hi << 4) | lo);
+    }
+    return (int)(len / 2);
+}
+
+static LXValue bi_quic_connect(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    return quic_conn_connect_impl(args, nargs >= 4 ? 4 : 3, nargs >= 4 && args[3].type == PX_STR
+                                  ? args[3].as.obj->as.str.data : NULL);
+}
+
+static LXValue bi_quic_connect_resume(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 4 || args[0].type != PX_STR || args[1].type != PX_INT ||
+        args[2].type != PX_STR || args[3].type != PX_STR)
+        px_error("quic_connect_resume 需要 (ip: str, port: int, alpn: str, session: str)");
+    return quic_conn_connect_impl(args, 4, args[3].as.obj->as.str.data);
+}
+
+// quic_session_save(conn) -> str：握手完成后导出 TLS session（含 NewSessionTicket）
+// 的 hex 序列化（DER）。内部先泵至多 ~3s 等 server 的 NewSessionTicket 到达，
+// 保证返回的 session 可用于后续恢复。
+static LXValue bi_quic_session_save(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || args[0].type != PX_INT) px_error("quic_session_save 需要 (conn: int)");
+    quic_conn* qc = quic_get_conn(args[0].as.i);
+    if (!qc || !qc->ssl) return px_str("");
+    int waited = 0;
+    for (;;) {
+        SSL_SESSION* s0 = SSL_get0_session(qc->ssl);
+        if (s0 && SSL_SESSION_has_ticket(s0)) break;
+        if (qc->peer_closed || waited >= 3000) break;
+        int pr = quic_pump(qc, 500, 1, -1);
+        waited += 500;
+        if (pr == -2) break;   // 错误；超时(-1)/无数据(0) 继续等 ticket
+    }
+    SSL_SESSION* s = SSL_get1_session(qc->ssl);
+    if (!s) return px_str("");
+    unsigned char* der = NULL;
+    int dlen = i2d_SSL_SESSION(s, &der);
+    SSL_SESSION_free(s);
+    if (dlen <= 0 || !der) { if (der) OPENSSL_free(der); return px_str(""); }
+    char* hex = (char*)malloc((size_t)dlen * 2 + 1);
+    quic_hex(der, (size_t)dlen, hex);
+    OPENSSL_free(der);
+    LXValue r = px_str(hex);
+    free(hex);
+    return r;
+}
+
+// quic_conn_resumed(conn) -> bool：本连接是否为会话恢复（1-RTT）握手
+static LXValue bi_quic_conn_resumed(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || args[0].type != PX_INT) px_error("quic_conn_resumed 需要 (conn: int)");
+    quic_conn* qc = quic_get_conn(args[0].as.i);
+    if (!qc || !qc->ssl) return px_bool(false);
+    return px_bool(SSL_session_reused(qc->ssl) == 1);
 }
 
 // ============================================================
@@ -1650,6 +1761,9 @@ void px_register_quic(void) {
     px_set_global("quic_close", px_native("quic_close", bi_quic_close));
     px_set_global("quic_close_listener", px_native("quic_close_listener", bi_quic_close_listener));
     px_set_global("quic_h3_listen", px_native("quic_h3_listen", bi_quic_h3_listen));
+    px_set_global("quic_connect_resume", px_native("quic_connect_resume", bi_quic_connect_resume));
+    px_set_global("quic_session_save", px_native("quic_session_save", bi_quic_session_save));
+    px_set_global("quic_conn_resumed", px_native("quic_conn_resumed", bi_quic_conn_resumed));
     px_ffi_register("quic_listen", bi_quic_listen);
     px_ffi_register("quic_accept", bi_quic_accept);
     px_ffi_register("quic_connect", bi_quic_connect);
@@ -1663,4 +1777,7 @@ void px_register_quic(void) {
     px_ffi_register("quic_close", bi_quic_close);
     px_ffi_register("quic_close_listener", bi_quic_close_listener);
     px_ffi_register("quic_h3_listen", bi_quic_h3_listen);
+    px_ffi_register("quic_connect_resume", bi_quic_connect_resume);
+    px_ffi_register("quic_session_save", bi_quic_session_save);
+    px_ffi_register("quic_conn_resumed", bi_quic_conn_resumed);
 }

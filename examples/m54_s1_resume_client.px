@@ -1,0 +1,43 @@
+# ============================================================
+# M54 S1：TLS 1.3 会话恢复（1-RTT resumption）—— 客户端
+# ------------------------------------------------------------
+#   1) quic_connect 全新握手 → echo 校验 → quic_session_save 导出 TLS session
+#   2) quic_connect_resume 恢复该 session → quic_conn_resumed==true（核心断言）
+#      → echo 校验
+# 若 resumed=false：说明 ticket 未复用（全新握手），本验证 FAIL。
+# ============================================================
+import "c/ngtcp2"
+
+extern def quic_connect(ip: str, port: int, alpn: str) -> int
+extern def quic_connect_resume(ip: str, port: int, alpn: str, session: str) -> int
+extern def quic_session_save(conn: int) -> str
+extern def quic_conn_resumed(conn: int) -> bool
+extern def quic_send(conn: int, data: str) -> int
+extern def quic_recv(conn: int, maxlen: int) -> str
+extern def quic_close(conn: int) -> bool
+
+# ---- 第一次：全新握手（全握手，RTT 多）----
+var c1 = quic_connect("127.0.0.1", 17997, "puxian")
+assert(c1 > 0, "client: 首次连接失败")
+var m1 = "PING#1"
+var n1 = quic_send(c1, m1)
+assert(n1 > 0, "client: send#1 失败")
+var e1 = quic_recv(c1, 64)
+assert(e1 == m1, "client: echo#1 不匹配 got=[" + e1 + "]")
+var sess = quic_session_save(c1)
+assert(sess != "", "client: quic_session_save 返回空（未等到 NewSessionTicket）")
+quic_close(c1)
+print("client: first full handshake ok, session_len=" + str(len(sess)))
+
+# ---- 第二次：恢复会话（应 1-RTT resumption）----
+var c2 = quic_connect_resume("127.0.0.1", 17997, "puxian", sess)
+assert(c2 > 0, "client: 恢复连接失败")
+var resumed = quic_conn_resumed(c2)
+var m2 = "PING#2"
+assert(quic_send(c2, m2) > 0, "client: send#2 失败")
+var e2 = quic_recv(c2, 64)
+assert(e2 == m2, "client: echo#2 不匹配 got=[" + e2 + "]")
+print("client: resumed=" + str(resumed))
+assert(resumed == true, "client: 期望会话恢复（1-RTT resumption），实际全新握手")
+quic_close(c2)
+print("client: ok")
