@@ -163,7 +163,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 ├── ws-web/                 # 第一个生产应用（M-B9b，dogfooding）：HTTP + SQLite 服务骨架
 ├── examples/               # 80+ 个示例（hello / fib / match / 并发 / 网络 / TLS / SQLite / 推导式 ...）
 ├── archive/rust-compiler/  # Rust 版编译器源码归档（只读，自举前的实现，git 历史保留）
-├── docs/                   # 文档（规格 / Mini 子集 / 自举计划 / 进度）
+├── docs/                   # 文档（语言规格 spec / Mini 子集 / 路线图 ROADMAP）
 └── .github/workflows/ci.yml # CI：回归 + 自举证明 + 示例编译 + ws-web 冒烟
 ```
 
@@ -175,11 +175,11 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 |---|---|
 | [docs/spec.md](docs/spec.md) | 语言规格说明书（词法 / 语法 / 语义 / 标准库） |
 | [docs/MINI_SUBSET.md](docs/MINI_SUBSET.md) | **Mini 子集规范**（自举编译器语言面锁定：支持特性 / 明确排除 / 已知限制） |
-| [docs/BOOTSTRAP_PLAN.md](docs/BOOTSTRAP_PLAN.md) | 自举计划（M-B1 → M-B9 里程碑 + 进度表） |
-| [docs/PROGRESS.md](docs/PROGRESS.md) | 功能开发进度（M0–M40） |
-| [docs/DEV_HISTORY.md](docs/DEV_HISTORY.md) | 开发历史 |
-| [docs/requirements.md](docs/requirements.md) | 需求与设计讨论（动机、取舍、双模式架构） |
-| [ws-web/README.md](ws-web/README.md) | 第一个生产应用：快速开始 + 10 条避坑清单 + 协作协议 |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | 路线图（已完成里程碑 + 远期方向） |
+| [CHANGELOG.md](CHANGELOG.md) | 变更日志（按里程碑记录重要变更） |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献指南（构建 / 测试 / 提 PR 规范） |
+| [SECURITY.md](SECURITY.md) | 安全漏洞报告策略 |
+| [ws-web/README.md](ws-web/README.md) | 第一个生产应用：快速开始 + 10 条避坑清单 |
 
 ---
 
