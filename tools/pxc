@@ -46,7 +46,7 @@ copy_runtime() {
     local f
     for f in runtime.h runtime.c runtime_aes.c runtime_xml.c runtime_zip.c \
              runtime_ws.c runtime_rsa.c runtime_sqlite.c runtime_route.c runtime_h2.c \
-             runtime_ffi.c runtime_quic.c; do
+             runtime_ffi.c runtime_quic.c runtime_h3.c; do
         [ -f "$RT_DIR/$f" ] || { echo "错误: 缺少 runtime 文件 $RT_DIR/$f" >&2; return 1; }
         cp "$RT_DIR/$f" "$build_dir/"
     done
@@ -111,6 +111,7 @@ cmd_build() {
         "$build_dir/runtime_h2.c" \
         "$build_dir/runtime_ffi.c" \
         "$build_dir/runtime_quic.c" \
+        "$build_dir/runtime_h3.c" \
         "$sqlite_src" \
         "$build_dir/miniz.c" "$build_dir/miniz_tinfl.c" "$build_dir/miniz_tdef.c" \
         -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_FOREIGN_KEYS=1 \

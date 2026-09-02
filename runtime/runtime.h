@@ -126,6 +126,15 @@ void    px_ffi_register(const char* name, LXFuncPtr fn);
 bool    px_ffi_has(const char* name);
 LXValue bi_ffi_call(LXValue* args, int nargs, void* ctx);   // ffi_call(name, args_list)
 void    px_register_quic(void);                          // M46：QUIC 绑定（runtime_quic.c）
+void    px_register_h3(void);                            // M47：HTTP/3 语义层（runtime_h3.c）
+// M47：QUIC raw 接口（runtime_quic.c 导出，供 runtime_h3.c 复用底层收发）
+int64_t px_quic_raw_listen(int port);
+int64_t px_quic_raw_accept(int64_t listener, int timeout_ms);
+int64_t px_quic_raw_connect(const char* ip, int port, const char* alpn);
+int64_t px_quic_raw_send(int64_t conn, const uint8_t* data, int len);
+int64_t px_quic_raw_recv(int64_t conn, uint8_t* out, int maxlen, int timeout_ms);
+bool    px_quic_raw_close(int64_t conn);
+bool    px_quic_raw_close_listener(int64_t listener);
 LXValue px_struct(const char* type_name, char** fnames, LXValue* fvals, int nfields);
 LXValue px_enum(const char* type_name, const char* variant);
 LXValue px_tuple(LXValue* items, int len);

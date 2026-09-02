@@ -1,0 +1,40 @@
+# ============================================================
+# M47 HTTP/3 语义层端到端：服务端（回环对拍用）
+# ------------------------------------------------------------
+# 流程：quic_listen → quic_accept（QUIC 握手）→ h3_serve_read_request
+#       （收 HEADERS+DATA，QPACK 解码出 method/path/headers/body）
+#       → h3_serve_send_response（回 :status 200 + body）
+# 验证：examples/m47_h3_verify.sh
+# ============================================================
+import "c/ngtcp2"
+
+extern def quic_listen(port: int) -> int
+extern def quic_accept(listener: int, timeout_ms: int) -> int
+extern def quic_close(conn: int) -> bool
+extern def quic_close_listener(listener: int) -> bool
+
+extern def h3_serve_read_request(conn: int, timeout_ms: int) -> dict
+extern def h3_serve_send_response(conn: int, status: int, headers: list, body: str) -> bool
+
+var lst = quic_listen(17997)
+assert(lst > 0, "server: quic_listen 失败")
+print("server: listening 17997")
+var c = quic_accept(lst, 15000)
+assert(c > 0, "server: quic_accept 失败")
+print("server: accepted conn " + str(c))
+
+var req = h3_serve_read_request(c, 8000)
+assert(req != null, "server: h3_serve_read_request 超时/失败")
+print("server: method=" + req["method"] + " path=" + req["path"])
+print("server: scheme=" + req["scheme"] + " authority=" + req["authority"])
+print("server: body=[" + req["body"] + "]")
+var hd = req["headers"]
+print("server: x-test=" + hd["x-test"])
+
+var body = "echo-h3:" + req["path"]
+var ok = h3_serve_send_response(c, 200, [["content-type", "text/plain"], ["x-px", "1"]], body)
+print("server: response sent=" + str(ok))
+
+quic_close(c)
+quic_close_listener(lst)
+print("server: done")
