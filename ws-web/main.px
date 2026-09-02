@@ -50,6 +50,7 @@ h3_key = ""
 llm_cfg = {"_": 0}
 llm_cfg.remove("_")
 llm_key = ""
+llm_sock = ""
 llm_enabled = 0
 # ---- md 站点状态：host -> {"ready": 0/1, "building": 0/1} ----
 md_state = {"_": 0}

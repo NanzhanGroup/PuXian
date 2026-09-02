@@ -14,6 +14,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <sys/socket.h>
+#include <sys/un.h>       // M56: http_unix（Unix domain socket HTTP 客户端，本地网关/服务调用）
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
@@ -187,6 +188,7 @@ static LXValue bi_http_serve(LXValue* args, int nargs, void* ctx);
 // M23c P1：HTTP 生产化（http_request 连接池 / http_get_stream 流式下载）
 static LXValue bi_http_request(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_get_stream(LXValue* args, int nargs, void* ctx);
+static LXValue bi_http_unix(LXValue* args, int nargs, void* ctx); // M56
 // M17 .px 脚本执行机制（应用平台）
 static LXValue bi_px_exec(LXValue* args, int nargs, void* ctx);
 static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx);
@@ -4690,6 +4692,8 @@ void px_register_builtins(void) {
     // M23c P1：HTTP 生产化（http_request 连接池 / http_get_stream 流式下载）
     px_set_global("http_request", px_native("http_request", bi_http_request));
     px_set_global("http_get_stream", px_native("http_get_stream", bi_http_get_stream));
+    // M56：Unix domain socket HTTP 客户端（本地服务/LLM 网关/容器 daemon 等）
+    px_set_global("http_unix", px_native("http_unix", bi_http_unix));
     // M17 .px 脚本执行机制
     px_set_global("px_exec", px_native("px_exec", bi_px_exec));
     px_set_global("px_serve", px_native("px_serve", bi_px_serve));
@@ -6851,6 +6855,75 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
         px_error("net: http_request 失败: 连接关闭");
     }
     return px_null();
+}
+
+// M56：http_unix(socket_path, url_path, method[, body[, headers]]) → dict{status, headers, body}
+// Unix domain socket 上的 HTTP 客户端（本地服务/LLM 网关/容器 daemon 常用）。
+// 不池化：每次新建连接、Connection: close，用完即关（本地低频调用足够）。
+static LXValue bi_http_unix(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 3 || nargs > 5) px_error("http_unix 需要 (socket_path, url_path, method[, body[, headers]]) 参数");
+    const char* sock_path = val_cstr(args[0]);
+    const char* url_path = val_cstr(args[1]);
+    const char* method = val_cstr(args[2]);
+    const char* body = NULL;
+    if (nargs >= 4 && args[3].type == PX_STR) body = args[3].as.obj->as.str.data;
+    char extra_headers[4096] = {0};
+    if (nargs >= 5 && args[4].type == PX_DICT) {
+        LXObject* ho = args[4].as.obj;
+        int off = 0;
+        for (int i = 0; i < ho->as.dict.len && off < 4095; i++) {
+            if (ho->as.dict.vals[i].type != PX_STR) continue;
+            off += snprintf(extra_headers + off, 4096 - (size_t)off, "%s: %s\r\n",
+                            ho->as.dict.keys[i], ho->as.dict.vals[i].as.obj->as.str.data);
+        }
+    }
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) px_error("net: 创建 unix socket 失败");
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", sock_path);
+    if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+        int e = errno;
+        close(fd);
+        px_error("net: 连接 unix socket %s 失败 (%d)", sock_path, e);
+    }
+    // 本地网关可能响应慢（如 LLM 长文本），接收/发送超时放宽到 180s
+    struct timeval tv = { 180, 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    char req[16384];
+    int rlen = snprintf(req, sizeof(req),
+        "%s %s HTTP/1.1\r\nHost: localhost\r\nUser-Agent: PuXian/0.1\r\nConnection: close\r\n",
+        method, url_path);
+    if (extra_headers[0]) { memcpy(req + rlen, extra_headers, strlen(extra_headers)); rlen += (int)strlen(extra_headers); }
+    if (body) {
+        if (!strcasestr(extra_headers, "Content-Length")) {
+            rlen += snprintf(req + rlen, sizeof(req) - rlen,
+                "Content-Type: application/x-www-form-urlencoded\r\nContent-Length: %d\r\n", (int)strlen(body));
+        }
+    }
+    rlen += snprintf(req + rlen, sizeof(req) - rlen, "\r\n");
+    if (body) { memcpy(req + rlen, body, strlen(body)); rlen += (int)strlen(body); }
+    HPoolSlot slot;
+    slot.is_tls = 0;
+    slot.fd = fd;
+    slot.tls = NULL;
+    int status = 0, body_len = 0, keep_alive = 1;
+    LXValue headers = px_null();
+    char* resp_body = NULL;
+    if (h_exchange(&slot, req, rlen, &status, &headers, &resp_body, &body_len, &keep_alive) != 0) {
+        close(fd);
+        px_error("net: http_unix 请求失败: 连接关闭");
+    }
+    close(fd);
+    LXValue d = px_dict();
+    px_dict_set(d, "status", px_int(status));
+    px_dict_set(d, "headers", headers);
+    px_dict_set(d, "body", resp_body ? px_str_len(resp_body, body_len) : px_str(""));
+    if (resp_body) xfree(resp_body);
+    return d;
 }
 
 // ==================== M37：S3/MinIO（AWS SigV4；与解释器 s3.rs 一致） ====================

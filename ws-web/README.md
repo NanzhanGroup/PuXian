@@ -29,6 +29,12 @@
 export WS_WEB_LLM_KEY=sk-xxxx
 #   config 里 llm.provider 改为 openai-compat 并填 base_url/model 即可
 #   （或 --llm-key <secret> 加密写入 key 文件，不落 config.json）
+
+# 3b. 文殊 ws 生态网关（零 key 落盘）：走本机 token-cache 词元缓存
+#   config.llm 配 {"provider":"openai-compat","model":"purpose:code","ws_token_cache":true}
+#   ws-web 自动从 $WS_PATH/.env（默认 /data/app/ws/.env）读取 WS_TOKEN_CACHE_TOKEN
+#   与 WS_SOCK_DIR，经 unix socket 调用词元缓存网关（http_unix 内建，M56 runtime）
+#   → key 不落盘、统一缓存计费；socket 可用 config.llm.unix_socket 覆盖
 ```
 
 > ⚠️ 生产内置（`http_* / sqlite_* / tls_server / px_serve` 等）只在**编译模式**可用；
@@ -49,6 +55,8 @@ export WS_WEB_LLM_KEY=sk-xxxx
 | `llm.provider` | `mock`（默认，离线联调）或 `openai-compat` |
 | `llm.api_key_env` | key 环境变量名（推荐） |
 | `llm.key_file` | 加密 key 文件路径（`ws-web --llm-key <secret>` 生成） |
+| `llm.ws_token_cache` | `true`：走文殊 ws 词元缓存网关（读 $WS_PATH/.env，unix socket，key 零落盘） |
+| `llm.unix_socket` | 显式 unix socket 路径（配合 ws_token_cache 或直连本地 OpenAI 兼容网关） |
 
 ### md 站点目录约定（root 为 `sites.<host>.root`）
 
