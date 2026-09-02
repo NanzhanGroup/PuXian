@@ -6,6 +6,23 @@
 
 ## [Unreleased]
 
+### 新增 · M54 HTTP/3 生产化（见 docs/M54_PLAN.md）
+
+- **TLS 1.3 会话恢复（1-RTT resumption）**：server SSL_CTX 开启 stateless session ticket；
+  语言 API `quic_connect_resume(ip,port,alpn,session)` / `quic_session_save(conn)` /
+  `quic_conn_resumed(conn)` —— 二次连接确为 1-RTT 恢复（resumed=true）
+- **0-RTT early data**：server `SSL_CTX_set_max_early_data` + 收包路由登记客户端 Initial
+  DCID（修复 0-RTT 长头包被丢）；语言 API `quic_0rtt_save` / `quic_connect_0rtt`（握手完成
+  前即可 `quic_send`，tp 缺失自动降级 1-RTT）/ `quic_0rtt_rejected` /
+  `quic_conn_handshake_done`；H3 0-RTT 子集 `h3_server_listen_stateless`（静态表，幂等 GET）
+- **连接迁移**：`quic_migrate(conn, ip, port)` 新建 UDP fd 换源（NAT rebinding 语义）；
+  `quic_conn_path` / `quic_conn_local` 观测对端/本地地址；server 完成新路径
+  PATH_CHALLENGE 验证并跟随（同 conn 无重握手，echo 跨迁移续传）
+- **BLOCKED_STREAMS 流上限协商**：`quic_set_max_client_streams(listener, n)` 经 transport
+  params 下发对端；`quic_extend_max_streams(listener, add)` 发 MAX_STREAMS 放行；
+  `quic_streams_left(conn)` 剩余配额；`quic_open_stream` 达配额返回 -206（原吞为 -1）
+- bootstrap/pxi 重建：解释器同能力支持 M54 全部新内置（S5 全量回归 14 项端到端全 PASS）
+
 ### 新增 · M53 HTTP/3 三栈合一 WebServer（见 docs/M53_PLAN.md）
 
 - `px_serve(port, docroot, timeout, {http3: true | {port?, cert?, key?}})` 单调用同时托管
