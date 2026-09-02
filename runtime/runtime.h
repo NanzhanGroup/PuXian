@@ -127,6 +127,7 @@ bool    px_ffi_has(const char* name);
 LXValue bi_ffi_call(LXValue* args, int nargs, void* ctx);   // ffi_call(name, args_list)
 void    px_register_quic(void);                          // M46：QUIC 绑定（runtime_quic.c）
 void    px_register_h3(void);                            // M47：HTTP/3 语义层（runtime_h3.c）
+void    px_register_h3_qpack_dyn(void);                  // M49：QPACK 动态表 + SETTINGS（runtime_h3_qpack_dyn.c）
 // M47：QUIC raw 接口（runtime_quic.c 导出，供 runtime_h3.c 复用底层收发）
 int64_t px_quic_raw_listen(int port);
 int64_t px_quic_raw_accept(int64_t listener, int timeout_ms);
