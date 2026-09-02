@@ -235,6 +235,12 @@ static LXValue bi_open(LXValue* args, int nargs, void* ctx);
 static LXValue bi_close(LXValue* args, int nargs, void* ctx);
 static LXValue bi_ioctl(LXValue* args, int nargs, void* ctx);
 static LXValue bi_os_errno(LXValue* args, int nargs, void* ctx);
+// M57-S2：边缘设备层 fd 数据通道 + mmap 设备映射（read/write/mmap/munmap/mem_write）
+static LXValue bi_read(LXValue* args, int nargs, void* ctx);
+static LXValue bi_write(LXValue* args, int nargs, void* ctx);
+static LXValue bi_mmap(LXValue* args, int nargs, void* ctx);
+static LXValue bi_munmap(LXValue* args, int nargs, void* ctx);
+static LXValue bi_mem_write(LXValue* args, int nargs, void* ctx);
 // M30 P1：字节序可控整数↔bytes（pxdb 存储基石）
 static LXValue bi_int_to_bytes(LXValue* args, int nargs, void* ctx);
 static LXValue bi_bytes_to_int(LXValue* args, int nargs, void* ctx);
@@ -677,7 +683,15 @@ static bool px_value_is_obj(LXValue v) {
 static void px_obj_free(LXObject* o) {
     switch (o->type) {
         case PX_STR: xfree(o->as.str.data); break;
-        case PX_BYTES: xfree(o->as.str.data); break;
+        // M57-S2：mmap bytes（is_mmap=1）的 data 是 mmap 映射区 → munmap；普通 bytes → xfree
+        case PX_BYTES:
+            if (o->is_mmap) {
+                if (o->as.str.data && o->as.str.len > 0)
+                    munmap(o->as.str.data, (size_t)o->as.str.len);
+            } else {
+                xfree(o->as.str.data);
+            }
+            break;
         case PX_LIST: xfree(o->as.list.items); break;
         case PX_DICT:
             for (int i = 0; i < o->as.dict.len; i++) xfree(o->as.dict.keys[i]);
@@ -1177,6 +1191,7 @@ static void gc_register(LXObject* o, long long est) {
     pthread_mutex_lock(&g_gc_mu);
     if (!g_gc_env_inited) gc_init_env();
     o->gc_mark = 0;   // 关键：xmalloc 未清零，gc_mark 垃圾值=1 会导致 DFS 跳过该节点（子对象漏标）
+    o->is_mmap = 0;   // M57-S2：同上，is_mmap 垃圾值=1 会导致 sweep 误对普通 data 走 munmap
     if (g_obj_count >= g_obj_cap) {
         int ncap = g_obj_cap ? g_obj_cap * 2 : 8192;
         g_objs = xrealloc(g_objs, sizeof(LXObject*) * ncap);
@@ -3140,6 +3155,118 @@ static LXValue bi_os_errno(LXValue* args, int nargs, void* ctx) {
     return px_int((int64_t)errno);
 }
 
+// ==================== M57-S2：边缘设备层 fd 数据通道 + mmap 设备映射 ====================
+// 延续 M57-S1 的 fd 原语：S1 打通"打开设备 → ioctl 配置 → 关闭"，本步补齐
+//   ① fd 上的 read/write 数据通道（S1 注释承诺：read/write 在 fd 上的封装随 S2 设计；
+//      设备文件顺序读写/收发的通用入口，read(2)/write(2) 直通，与 socket 无关）
+//   ② mmap/munmap 设备映射：帧缓冲(/dev/fb0)/共享内存/DMA 缓冲 → bytes 视图，
+//      配合 ioctl 完成设备"配置 + 大数据块直接内存访问"双通道
+//   ③ mem_write：mmap 视图的语言层就地写（bytes_set 是 COW 复制语义改不了映射内存；
+//      帧缓冲写像素、共享内存写数据必须就地写底层映射区）
+// 生命周期设计（关键）：mmap 返回的 bytes 带 is_mmap 标志（LXObject 位域），其 data
+//   指向 mmap 映射区而非 xmalloc 堆块 → GC sweep 时 munmap 而非 xfree；munmap() 显式
+//   提前解除后置 data=NULL/len=0/is_mmap=0，防 double-unmap。
+// 语义：
+//   read(fd, maxlen) → bytes（实际读到的字节；0 长度 = EOF；失败 int -1 + os_errno()）
+//   write(fd, data)  → int（实际写入字节数；失败 -1 + os_errno()；data 为 bytes/str）
+//   mmap(fd, length[, offset]) → bytes（PROT_READ|PROT_WRITE + MAP_SHARED 活映射视图；
+//     GC 自动回收时 munmap；失败 int -1 + os_errno()；length 1..INT_MAX-1，offset 须页对齐）
+//   munmap(bytes) → bool（显式提前解除映射；非映射/已解除返回 false）
+//   mem_write(mmap_bytes, offset, data) → int（就地写映射视图 [offset..]，超长截断到视图尾）
+static LXValue bi_read(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) px_error("read 需要 (fd, maxlen) 参数");
+    if (args[0].type != PX_INT) px_error("read 的 fd 需要 int");
+    int64_t maxlen = int_val(args[1]);
+    if (maxlen <= 0 || maxlen > (int64_t)INT_MAX - 1) px_error("read 的 maxlen 需要 1..INT_MAX-1");
+    int fd = (int)args[0].as.i;
+    char* buf = xmalloc((size_t)maxlen + 1);
+    ssize_t n = read(fd, buf, (size_t)maxlen);
+    if (n < 0) {
+        int e = errno;
+        xfree(buf);
+        errno = e;
+        return px_int(-1);
+    }
+    LXValue r = px_bytes_len(buf, (int)n);   // n==0 → 空 bytes（EOF），类型上与 int -1 区分
+    xfree(buf);
+    return r;
+}
+
+static LXValue bi_write(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) px_error("write 需要 (fd, data) 参数");
+    if (args[0].type != PX_INT) px_error("write 的 fd 需要 int");
+    LXValue d = args[1];
+    if (d.type != PX_BYTES && d.type != PX_STR) px_error("write 的 data 需要 bytes/str");
+    int fd = (int)args[0].as.i;
+    const char* data = d.as.obj->as.str.data;
+    int len = d.as.obj->as.str.len;
+    ssize_t n;
+    do { n = write(fd, data, (size_t)len); } while (n < 0 && errno == EINTR);
+    if (n < 0) return px_int(-1);
+    return px_int((int64_t)n);
+}
+
+static LXValue bi_mmap(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 2 || nargs > 3) px_error("mmap 需要 (fd, length[, offset]) 参数");
+    if (args[0].type != PX_INT) px_error("mmap 的 fd 需要 int");
+    int64_t l = int_val(args[1]);
+    if (l <= 0 || l >= (int64_t)INT_MAX) px_error("mmap 的 length 需要 1..INT_MAX-1");
+    off_t off = 0;
+    if (nargs >= 3) {
+        if (args[2].type != PX_INT) px_error("mmap 的 offset 需要 int");
+        off = (off_t)args[2].as.i;
+    }
+    int fd = (int)args[0].as.i;
+    size_t len = (size_t)l;
+    void* p = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, off);
+    if (p == MAP_FAILED) return px_int(-1);
+    LXValue v; v.type = PX_BYTES;
+    LXObject* o = xmalloc(sizeof(LXObject));
+    o->type = PX_BYTES;
+    o->as.str.data = (char*)p;
+    o->as.str.len = (int)len;
+    v.as.obj = o;
+    gc_register(o, sizeof(LXObject) + len);  // 置 gc_mark=0/is_mmap=0 并注册（可能触发 GC；对象受 g_tmp_root 保护）
+    o->is_mmap = 1;                          // 注册后再标 mmap，防 sweep 在标记前误判回收
+    return v;
+}
+
+static LXValue bi_munmap(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("munmap 需要 (bytes) 参数");
+    if (args[0].type != PX_BYTES) px_error("munmap 需要 bytes，实际 %s", px_type_name(args[0]));
+    LXObject* o = args[0].as.obj;
+    if (!o->is_mmap || !o->as.str.data) return px_bool(false);   // 非映射 / 已解除
+    if (munmap(o->as.str.data, (size_t)o->as.str.len) != 0) return px_bool(false);
+    o->as.str.data = NULL;
+    o->as.str.len = 0;
+    o->is_mmap = 0;
+    return px_bool(true);
+}
+
+static LXValue bi_mem_write(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 3) px_error("mem_write 需要 (mmap_bytes, offset, data) 参数");
+    if (args[0].type != PX_BYTES) px_error("mem_write 的目标需要 bytes，实际 %s", px_type_name(args[0]));
+    LXObject* dst = args[0].as.obj;
+    if (!dst->is_mmap || !dst->as.str.data)
+        px_error("mem_write 的目标需要未解除的 mmap 映射视图（仅 mmap 返回的 bytes 可就地写；普通 bytes 用 bytes_set COW）");
+    int dlen = dst->as.str.len;
+    int64_t offv = int_val(args[1]);
+    if (offv < 0 || offv >= dlen) px_error("mem_write 的 offset 越界（len=%d offset=%lld）", dlen, (long long)offv);
+    LXValue src = args[2];
+    if (src.type != PX_BYTES && src.type != PX_STR) px_error("mem_write 的 data 需要 bytes/str");
+    const char* sdata = src.as.obj->as.str.data;
+    int slen = src.as.obj->as.str.len;
+    int room = dlen - (int)offv;
+    int n = slen < room ? slen : room;
+    if (n > 0) memcpy(dst->as.str.data + offv, sdata, (size_t)n);
+    return px_int((int64_t)n);
+}
+
 static void bytes_to_hex(const unsigned char* in, size_t len, char* out) {
     static const char HEX[] = "0123456789abcdef";
     for (size_t i = 0; i < len; i++) {
@@ -4717,6 +4844,12 @@ void px_register_builtins(void) {
     px_set_global("close", px_native("close", bi_close));
     px_set_global("ioctl", px_native("ioctl", bi_ioctl));
     px_set_global("os_errno", px_native("os_errno", bi_os_errno));
+    // M57-S2：边缘设备层 fd 数据通道 + mmap 设备映射（read/write/mmap/munmap/mem_write）
+    px_set_global("read", px_native("read", bi_read));
+    px_set_global("write", px_native("write", bi_write));
+    px_set_global("mmap", px_native("mmap", bi_mmap));
+    px_set_global("munmap", px_native("munmap", bi_munmap));
+    px_set_global("mem_write", px_native("mem_write", bi_mem_write));
     // M14 P1：crypto 哈希
     px_set_global("sha256", px_native("sha256", bi_sha256));
     px_set_global("xxhash", px_native("xxhash", bi_xxhash));

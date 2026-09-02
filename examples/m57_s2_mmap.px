@@ -1,0 +1,131 @@
+# ============================================================
+# M57 S2：边缘设备层 fd 数据通道 + mmap 设备映射 自检（编译模式）
+# ------------------------------------------------------------
+# 覆盖：
+#   A. fd read/write 数据通道（TCP socket 环回 + 文件 fd 顺序写 + 非法 fd errno）
+#   B. mmap 文件映射（MAP_SHARED）：整视图 / offset 页对齐子视图 /
+#      活映射双向可见（mem_write→read_at 可见；write_at→视图可见）/
+#      mem_write 超长截断到视图尾
+#   C. mmap 视图作 ioctl 就地 buffer（FIONREAD 内核写映射内存）
+#   D. munmap 显式解除（len=0 / 重复 munmap=false / 非映射 munmap=false）
+#   E. GC 自动回收 mmap 视图（循环 + gc()，验证 sweep 的 munmap 分支不崩）
+#   F. mmap/read/write 失败路径 errno（非法 fd → -1 + EBADF）
+# 常量：FIONREAD=0x541B  EBADF=9  ENOENT=2
+# ============================================================
+var FIONREAD = 0x541B
+var EBADF    = 9
+var TMP = "/tmp/m57_s2_map.bin"
+var ROW = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"   # 32 字节构造块
+
+# ---- A. fd read/write 数据通道 ----
+print("== A. fd read/write ==")
+var lfd = tcp_listen(19058)
+assert(lfd > 0, "tcp_listen 失败")
+var cfd = tcp_connect("127.0.0.1", 19058)
+assert(cfd > 0, "tcp_connect 失败")
+var sfd = tcp_accept(lfd)
+assert(sfd > 0, "tcp_accept 失败")
+# A1: write(cfd, str) → read(sfd) bytes（read 返回 bytes）
+var wn = write(cfd, "hello")
+assert(wn == 5, "write(cfd,\"hello\") 应=5 got=" + str(wn))
+var gotb = read(sfd, 64)
+assert(bytes_to_str(gotb) == "hello", "read 应得 hello got=[" + bytes_to_str(gotb) + "]")
+print("A: TCP write/read 环回 ok (" + str(wn) + "B)")
+# A2: 文件 fd 顺序写（构造 mmap 用 8KB 文件；write 直通文件 fd）
+var fmap = open(TMP, "w+")
+assert(fmap > 0, "open " + TMP + " 失败")
+var total = 0
+for i in range(256):
+    total = total + write(fmap, ROW)
+assert(total == 8192, "文件顺序写应 8192B got=" + str(total))
+print("A: 文件 fd 顺序写 8192B ok")
+# A3: 非法 fd 失败路径 → -1 + errno=EBADF
+var rbad = read(999999, 4)
+assert(rbad == -1, "read(非法fd) 期望 -1 got=" + str(rbad))
+assert(os_errno() == EBADF, "read 非法 fd errno=EBADF got=" + str(os_errno()))
+var wbad = write(999999, "x")
+assert(wbad == -1, "write(非法fd) 期望 -1 got=" + str(wbad))
+assert(os_errno() == EBADF, "write 非法 fd errno=EBADF got=" + str(os_errno()))
+print("A: read/write 非法 fd -> -1 errno=EBADF ok")
+
+# ---- B. mmap 文件映射（MAP_SHARED）----
+print("== B. mmap MAP_SHARED ==")
+# B1: 整视图 8192B，内容全 'A'
+var m8 = mmap(fmap, 8192)
+assert(bytes_len(m8) == 8192, "mmap len 应 8192 got=" + str(bytes_len(m8)))
+assert(bytes_get(m8, 0) == 65, "m8[0] 应 'A'(65)")
+assert(bytes_get(m8, 8191) == 65, "m8[8191] 应 'A'(65)")
+print("B: 整视图 8192B ok")
+# B2: offset 页对齐子视图（先把文件 4096..4099 改为 'B'，映射该区间）
+var wr = write_at(TMP, 4096, "BBBB")
+assert(wr == 4, "write_at 4096 应 4 got=" + str(wr))
+var m4v = mmap(fmap, 4, 4096)
+assert(bytes_to_str(m4v) == "BBBB", "offset 视图应 BBBB got=[" + bytes_to_str(m4v) + "]")
+assert(bytes_get(m8, 4096) == 66, "m8[4096] 应 'B'(66)（同文件多视图一致性）")
+print("B: offset=4096 页对齐子视图 ok")
+# B3a: mem_write 就地写映射区 → read_at 读文件可见（MAP_SHARED 写回 page cache）
+var mw = mem_write(m8, 0, "XY")
+assert(mw == 2, "mem_write 应写 2B got=" + str(mw))
+var back = read_at(TMP, 0, 2)
+assert(back == "XY", "mem_write 后 read_at 应 XY got=[" + back + "]")
+print("B: mem_write→read_at 可见（映射写回文件）ok")
+# B3b: write_at 写文件 → mmap 视图读可见（文件写 → 映射同步）
+var wr2 = write_at(TMP, 8000, "PQR")
+assert(wr2 == 3, "write_at 8000 应 3 got=" + str(wr2))
+assert(bytes_get(m8, 8000) == 80, "m8[8000] 应 'P'(80)")
+print("B: write_at→视图可见 ok")
+# B3c: mem_write 超长截断到视图尾（room=8192-8190=2）
+var mc = mem_write(m8, 8190, "ABCDE")
+assert(mc == 2, "mem_write 截断应 2 got=" + str(mc))
+assert(bytes_get(m8, 8190) == 65, "截断后 m8[8190] 应 'A'")
+assert(bytes_get(m8, 8191) == 66, "截断后 m8[8191] 应 'B'")
+print("B: mem_write 超长截断 ok")
+
+# ---- C. mmap 视图作 ioctl 就地 buffer ----
+print("== C. mmap 视图 ioctl buffer ==")
+var wn3 = write(cfd, "ZZZ")
+assert(wn3 == 3, "write cfd ZZZ 应 3 got=" + str(wn3))
+var ri = ioctl(sfd, FIONREAD, m8)
+assert(ri == 0, "ioctl FIONREAD 期望 0 got=" + str(ri))
+# FIONREAD 把 4B 小端 int 写入映射区前 4B；bytes_to_int 仅支持 1..8B，先 slice 出 4B 再解析
+var pend = bytes_to_int(bytes_slice(m8, 0, 4), "little")
+assert(pend == 3, "FIONREAD 经 mmap buffer 应 3 got=" + str(pend))
+print("C: FIONREAD 写入 mmap 映射区 -> " + str(pend) + " ok")
+var zb = read(sfd, 8)
+assert(bytes_to_str(zb) == "ZZZ", "收 ZZZ 失败 got=[" + bytes_to_str(zb) + "]")
+
+# ---- D. munmap 显式解除 ----
+print("== D. munmap ==")
+var um = munmap(m8)
+assert(um == true, "munmap(m8) 应 true got=" + str(um))
+assert(bytes_len(m8) == 0, "munmap 后 len 应 0 got=" + str(bytes_len(m8)))
+assert(munmap(m8) == false, "重复 munmap 应 false")
+assert(bytes_get(m8, 0) == null, "解除后 bytes_get 应越界 null")
+print("D: munmap 解除语义 ok")
+var um2 = munmap(m4v)
+assert(um2 == true, "munmap(m4v) 应 true")
+assert(munmap(bytes("abc")) == false, "非映射 bytes munmap 应 false")
+print("D: 非映射 munmap=false ok")
+
+# ---- E. GC 自动回收 mmap（sweep 的 munmap 分支）----
+print("== E. GC sweep munmap ==")
+var g = null
+for i in range(300):
+    g = mmap(fmap, 4096)
+    if i % 10 == 0:
+        gc()
+print("E: 300 轮 mmap + gc() 自动回收无崩 ok")
+
+# ---- F. mmap 失败路径 ----
+print("== F. mmap 失败 errno ==")
+var badm = mmap(999999, 4096)
+assert(badm == -1, "mmap(非法fd) 期望 -1 got=" + str(badm))
+assert(os_errno() == EBADF, "mmap 非法 fd errno=EBADF got=" + str(os_errno()))
+print("F: mmap(非法fd) -> -1 errno=EBADF ok")
+
+assert(close(cfd) == true, "close cfd 失败")
+assert(close(sfd) == true, "close sfd 失败")
+assert(close(lfd) == true, "close lfd 失败")
+assert(close(fmap) == true, "close fmap 失败")
+
+print("M57-S2 mmap OK")
