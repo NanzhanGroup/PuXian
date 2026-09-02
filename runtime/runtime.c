@@ -15,6 +15,7 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/un.h>       // M56: http_unix（Unix domain socket HTTP 客户端，本地网关/服务调用）
+#include <sys/ioctl.h>    // M57-S1: ioctl（i2c-dev/spi-dev/gpio/tty/网卡 设备控制）
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
@@ -229,6 +230,11 @@ static LXValue bi_base64_to_bytes(LXValue* args, int nargs, void* ctx);
 static LXValue bi_bytes_find(LXValue* args, int nargs, void* ctx);
 static LXValue bi_read_bytes(LXValue* args, int nargs, void* ctx);
 static LXValue bi_write_bytes(LXValue* args, int nargs, void* ctx);
+// M57-S1：边缘设备层 fd 原语（open/close/ioctl/os_errno）
+static LXValue bi_open(LXValue* args, int nargs, void* ctx);
+static LXValue bi_close(LXValue* args, int nargs, void* ctx);
+static LXValue bi_ioctl(LXValue* args, int nargs, void* ctx);
+static LXValue bi_os_errno(LXValue* args, int nargs, void* ctx);
 // M30 P1：字节序可控整数↔bytes（pxdb 存储基石）
 static LXValue bi_int_to_bytes(LXValue* args, int nargs, void* ctx);
 static LXValue bi_bytes_to_int(LXValue* args, int nargs, void* ctx);
@@ -3061,6 +3067,79 @@ static const char* val_cstr(LXValue v) {
 // 跨模块版本（runtime_ws.c 等外部模块用；val_cstr 为 static 不可见）
 const char* px_val_cstr(LXValue v) { return val_cstr(v); }
 
+// ==================== M57-S1：边缘设备层 fd 原语（open/close/ioctl/os_errno） ====================
+// 背景（M57 重定向为"边缘设备层支持"，与清歌嵌入式讨论结论一致）：
+//   Linux 用户态控制外设 90% 收敛到 open/read/write + ioctl + mmap；而 runtime
+//   文件 IO 是路径式（read_at/write_at 内部 open 用完即关），语言面**没有持久
+//   fd 句柄** → 本步补齐 open/close（fd 通道）+ ioctl（设备控制主入口，
+//   i2c-dev / spi-dev / gpio(老 ioctl) / tty / 网卡全走它）。read/write 在 fd
+//   上的封装随 S2（mmap）一并设计，S1 先打通"打开设备 → ioctl → 关闭"闭环。
+// 语义：
+//   open(path[, mode]) → fd(int)；失败返回 -1，os_errno() 查 errno
+//     mode: "r"=O_RDONLY(默认) "w"=O_WRONLY|O_CREAT|O_TRUNC "a"=O_WRONLY|O_CREAT|O_APPEND
+//           "rw"/"r+"=O_RDWR "w+"=O_RDWR|O_CREAT|O_TRUNC；设备文件典型 "r"（只读查询）/"rw"（读写控制）
+//   close(fd) → bool（是否成功关闭）
+//   ioctl(fd, request[, arg]) → int（ioctl 原始返回值；失败 -1 + os_errno()）
+//     arg 缺省/null → NULL（无数据 ioctl）
+//     arg int       → 整数值直接传递（驱动按 unsigned long 收值的整数型 ioctl）
+//     arg bytes/str → 就地 in/out 缓冲区（_IOR/_IOWR 类 ioctl 内核读写该内存；
+//                     调用后同一对象内容被更新，用 bytes_to_int 等读回）
+//   os_errno() → int（最近一次系统调用失败 errno，线程局部）
+//   request 为 32 位码（_IOC 编码，最高 2 位方向位可 >2^31；语言里用 0x 字面量/十进制均可）
+static LXValue bi_open(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || nargs > 2) px_error("open 需要 (path[, mode]) 参数");
+    const char* path = val_cstr(args[0]);
+    const char* mode = (nargs >= 2) ? val_cstr(args[1]) : "r";
+    int flags;
+    if (!strcmp(mode, "r") || !strcmp(mode, "rb")) flags = O_RDONLY;
+    else if (!strcmp(mode, "w") || !strcmp(mode, "wb")) flags = O_WRONLY | O_CREAT | O_TRUNC;
+    else if (!strcmp(mode, "a") || !strcmp(mode, "ab")) flags = O_WRONLY | O_CREAT | O_APPEND;
+    else if (!strcmp(mode, "rw") || !strcmp(mode, "r+")) flags = O_RDWR;
+    else if (!strcmp(mode, "w+")) flags = O_RDWR | O_CREAT | O_TRUNC;
+    else px_error("open 的 mode 不支持: %s（支持 r/w/a/rw/w+）", mode);
+    int fd = open(path, flags, 0644);
+    if (fd < 0) return px_int(-1);
+    return px_int((int64_t)fd);
+}
+
+static LXValue bi_close(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_INT) px_error("close 需要 (fd) 参数");
+    return px_bool(close((int)args[0].as.i) == 0);
+}
+
+static LXValue bi_ioctl(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 2 || nargs > 3) px_error("ioctl 需要 (fd, request[, arg]) 参数");
+    if (args[0].type != PX_INT) px_error("ioctl 的 fd 需要 int");
+    if (args[1].type != PX_INT) px_error("ioctl 的 request 需要 int");
+    int fd = (int)args[0].as.i;
+    // request 码为 32 位（_IOC(dir,type,nr,size) 编码于低 32 位，方向位在最高 2 位）
+    unsigned long req = (unsigned long)(uint32_t)args[1].as.i;
+    int rc;
+    if (nargs < 3 || args[2].type == PX_NULL) {
+        rc = ioctl(fd, req, (void*)0);
+    } else if (args[2].type == PX_INT) {
+        rc = ioctl(fd, req, (void*)(uintptr_t)args[2].as.i);
+    } else if (args[2].type == PX_STR || args[2].type == PX_BYTES) {
+        // 就地 in/out 缓冲区：驱动读写该对象 data（_IOR 类调用后内容被填充），
+        // bytes/str 对象是引用语义，调用方同一变量即可读回结果
+        rc = ioctl(fd, req, (void*)args[2].as.obj->as.str.data);
+    } else {
+        px_error("ioctl 的 arg 需要 int/bytes/str/null，实际 %s", px_type_name(args[2]));
+        rc = -1;
+    }
+    if (rc < 0) return px_int(-1);
+    return px_int((int64_t)rc);
+}
+
+static LXValue bi_os_errno(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 0) px_error("os_errno 不需要参数");
+    return px_int((int64_t)errno);
+}
+
 static void bytes_to_hex(const unsigned char* in, size_t len, char* out) {
     static const char HEX[] = "0123456789abcdef";
     for (size_t i = 0; i < len; i++) {
@@ -4633,6 +4712,11 @@ void px_register_builtins(void) {
     px_set_global("file_size", px_native("file_size", bi_file_size));
     px_set_global("fsync_file", px_native("fsync_file", bi_fsync_file));
     px_set_global("truncate_file", px_native("truncate_file", bi_truncate_file));
+    // M57-S1：边缘设备层 fd 原语（open/close/ioctl/os_errno）
+    px_set_global("open", px_native("open", bi_open));
+    px_set_global("close", px_native("close", bi_close));
+    px_set_global("ioctl", px_native("ioctl", bi_ioctl));
+    px_set_global("os_errno", px_native("os_errno", bi_os_errno));
     // M14 P1：crypto 哈希
     px_set_global("sha256", px_native("sha256", bi_sha256));
     px_set_global("xxhash", px_native("xxhash", bi_xxhash));
