@@ -28,4 +28,11 @@ int  px_qd_de_len(int64_t id);    // 对端镜像表条目 | -1
 int  px_qd_ins(int64_t id);       // 已 ingest 插入数 | -1
 int  px_qd_eout_len(int64_t id);  // eout 待发字节 | -1
 
+// ============ M52：解码器流指令线上处理（RFC 9204 §4.4 闭环）============
+int  px_qd_ack_sec(int64_t id, int64_t ric);   // Section Ack → KRC=max(KRC,ric) | 0|-1
+int  px_qd_ack_inc(int64_t id, int64_t inc);   // Insert Count Increment → KRC+=inc | 0|-1
+int64_t px_qd_krc(int64_t id);                 // 本端编码器 Known Received Count | -1
+int  px_qd_enc_last_ric(int64_t id);           // 最近编码字段段 RIC | -1
+int  px_qd_dec_last_ric(int64_t id);           // 最近成功解码字段段 RIC | -1
+
 #endif /* PX_RUNTIME_H3_QPACK_DYN_H */

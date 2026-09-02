@@ -1,0 +1,76 @@
+# ============================================================
+# M52 QPACK 解码器流 ack 线上化：服务端（RFC 9204 §4.4 闭环）
+# ------------------------------------------------------------
+# 流程：quic_listen → quic_accept → h3_conn_setup(c, 4096)
+#       → 循环 3 轮：serve_poll_stream（自动消费对端 uni：控制/编码器/解码器流
+#         ——其中解码器流解析 client 的 Section Ack → 推进本端 KRC）
+#         → read_request_stream（QPACK 解码，RIC>0 自动向 client 发 Section Ack）
+#         → send_response_stream（响应头 x-srv 每次新值 → 动态表插入/引用）
+# 关键断言（M52）：
+#   * server dec_sects>=1：本端确实向 client 发过 Section Ack（解码动态字段段）
+#   * server enc_acks>=1 / krc>=1：收到 client 对响应的 ack（编码表可安全驱逐）
+#   * 3 轮请求/响应字段全部还原正确
+# 验证：examples/m52_qpack_decack_verify.sh（编译+解释双模式）
+# ============================================================
+import "c/ngtcp2"
+
+extern def quic_listen(port: int) -> int
+extern def quic_accept(listener: int, timeout_ms: int) -> int
+extern def quic_close(conn: int) -> bool
+extern def quic_close_listener(listener: int) -> bool
+extern def h3_conn_setup(conn: int, qpack_cap: int) -> bool
+extern def h3_conn_close(conn: int) -> bool
+extern def h3_conn_peer(conn: int) -> dict
+extern def h3_conn_stats(conn: int) -> dict
+extern def h3_serve_poll_stream(conn: int, timeout_ms: int) -> int
+extern def h3_serve_read_request_stream(conn: int, sid: int, timeout_ms: int) -> dict
+extern def h3_serve_send_response_stream(conn: int, sid: int, status: int, headers: list, body: str) -> bool
+
+var lst = quic_listen(17997)
+assert(lst > 0, "server: quic_listen 失败")
+print("server: listening 17997")
+var c = quic_accept(lst, 15000)
+assert(c > 0, "server: quic_accept 失败")
+print("server: accepted conn " + str(c))
+
+var ok = h3_conn_setup(c, 4096)
+assert(ok, "server: h3_conn_setup 失败")
+var st0 = h3_conn_stats(c)
+print("server: setup ok ctrl=" + str(st0["ctrl_sid"]) + " enc=" + str(st0["enc_sid"]) + " dec=" + str(st0["dec_sid"]))
+
+var n = 0
+while n < 3:
+    var sid = h3_serve_poll_stream(c, 8000)
+    assert(sid >= 0, "server: poll 超时")
+    var req = h3_serve_read_request_stream(c, sid, 8000)
+    assert(req != null, "server: read_request 失败")
+    var want_path = "/ack-" + str(n + 1)
+    var want_tok = "tok-m52-" + str(n + 1)
+    print("server: req path=" + req["path"] + " token=" + req["headers"]["x-token"] + " round=" + req["headers"]["x-round"])
+    assert(req["path"] == want_path, "server: 路径还原错误 got=" + str(req["path"]))
+    assert(req["headers"]["x-token"] == want_tok, "server: x-token 还原错误")
+    assert(req["headers"]["x-round"] == "m52", "server: x-round 还原错误")
+    var body = "echo-ack:" + req["path"] + ":stream-" + str(sid)
+    var sok = h3_serve_send_response_stream(c, sid, 200, [["content-type", "text/plain"], ["x-px", "m52"], ["x-srv", "srv-" + str(n + 1)]], body)
+    assert(sok, "server: send_response 失败")
+    print("server: responded stream " + str(sid) + " body=[" + body + "]")
+    n = n + 1
+
+var d = h3_serve_poll_stream(c, 1200)
+if d >= 0:
+    var req2 = h3_serve_read_request_stream(c, d, 1500)
+    if req2 != null:
+        var ok2 = h3_serve_send_response_stream(c, d, 200, [["content-type", "text/plain"], ["x-px", "m52"], ["x-srv", "srv-tail"]], "tail")
+        print("server: drained extra request ok=" + str(ok2))
+
+var sts = h3_conn_stats(c)
+print("server: ack dec_sects=" + str(sts["dec_sects"]) + " dec_sent=" + str(sts["dec_sent"]) + " enc_acks=" + str(sts["enc_acks"]) + " krc=" + str(sts["krc"]))
+assert(sts["dec_sects"] >= 1, "server: 应已对动态字段段发过 Section Ack")
+assert(sts["dec_sent"] > 0, "server: 解码器流应有 ack 字节上线")
+assert(sts["enc_acks"] >= 1, "server: 应收到 client 的 Section Ack")
+assert(sts["krc"] >= 1, "server: 收到 ack 后 KRC 应推进")
+
+h3_conn_close(c)
+quic_close(c)
+quic_close_listener(lst)
+print("server: done")

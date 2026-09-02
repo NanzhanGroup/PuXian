@@ -120,6 +120,12 @@ static int64_t g_last_sid[H3_MAX_CONN];   // 旧 API 兼容：最近读请求/�
 //   Insert/SetCapacity 指令；解码器流 0x03 预留（MVP 不在线自动发 ack）。
 // QPACK 会话（px_qd_*，g_qds 句柄）承载本端编码表 + 对端镜像表。
 typedef struct {
+    int64_t sid;              // 已发动态字段段(ric>0)所在流
+    uint64_t ric;             // 该字段段 Required Insert Count（待对端 Section Ack）
+    int used;
+} h3_outack;
+
+typedef struct {
     int used;              // 会话已 setup
     int64_t qd;            // 本端 QPACK 会话 id | 0
     int64_t ctrl_sid;      // 本端控制流 sid
@@ -134,6 +140,11 @@ typedef struct {
     int64_t enc_sent;      // 本端编码器流累计发送字节
     int64_t enc_sects;     // 动态表编码的字段段计数
     int64_t blocked_cnt;   // 解码阻塞恢复次数
+    // M52：解码器流 ack 闭环（RFC 9204 §4.4）
+    h3_outack out_ack[H3_STREAM_SLOTS]; // 本端已发、待对端 ack 的动态字段段（每流最多一条在途）
+    int64_t dec_sent;      // 本端解码器流累计发送 ack 指令字节
+    int64_t dec_sects;     // 本端已发 Section Ack 的字段段数
+    int64_t enc_acks;      // 收对端解码器流指令数（Section Ack + Insert Count Increment）
 } h3conn_state;
 static h3conn_state g_h3st[H3_MAX_CONN];
 static h3conn_state* h3_st(int64_t conn) {
@@ -142,6 +153,108 @@ static h3conn_state* h3_st(int64_t conn) {
 
 // QUIC 流 id 次低位（0x2）：0=双向 / 1=单向（RFC 9000 §2.1；最低位 0x1 是发起者标志）
 static int h3_sid_is_uni(int64_t sid) { return (int)(sid & 2) ? 1 : 0; }
+
+// ==================== M52：解码器流 ack 闭环辅助 ====================
+// QPACK prefixed integer 解码（RFC 7541 §5.1，prefix=N bits）→ 值 + 返回使用字节数 | 0
+static int h3_qp_pref_dec(const uint8_t* p, int maxlen, int prefix_bits, uint64_t* out) {
+    if (maxlen < 1) return 0;
+    int mask = (1 << prefix_bits) - 1;
+    uint64_t v = p[0] & (uint64_t)mask;
+    if (v < (uint64_t)mask) { *out = v; return 1; }
+    if (maxlen < 2) return 0;
+    uint64_t m = 0; int off = 1;
+    for (;;) {
+        if (off >= maxlen) return 0;
+        v += (uint64_t)(p[off] & 0x7f) * (1ULL << m);
+        if ((p[off] & 0x80) == 0) break;
+        m += 7;
+        if (m > 62) return 0;
+        off++;
+    }
+    *out = v;
+    return off + 1;
+}
+
+// 登记本端已发字段段（ric>0）到 outstanding（同流覆盖——MVP 每流同步单条在途）
+static void h3_outack_push(h3conn_state* st, int64_t sid, uint64_t ric) {
+    if (!st || sid <= 0 || ric == 0) return;
+    for (int i = 0; i < H3_STREAM_SLOTS; i++)
+        if (st->out_ack[i].used && st->out_ack[i].sid == sid) {
+            st->out_ack[i].ric = ric; return;
+        }
+    for (int i = 0; i < H3_STREAM_SLOTS; i++)
+        if (!st->out_ack[i].used) {
+            st->out_ack[i].used = 1; st->out_ack[i].sid = sid; st->out_ack[i].ric = ric;
+            return;
+        }
+}
+// 取走（并清除）某流的 outstanding RIC（收到 Section Ack/Stream Cancel 时）→ 0 无
+static uint64_t h3_outack_take(h3conn_state* st, int64_t sid) {
+    if (!st || sid <= 0) return 0;
+    for (int i = 0; i < H3_STREAM_SLOTS; i++)
+        if (st->out_ack[i].used && st->out_ack[i].sid == sid) {
+            uint64_t ric = st->out_ack[i].ric;
+            st->out_ack[i].used = 0; st->out_ack[i].sid = 0; st->out_ack[i].ric = 0;
+            return ric;
+        }
+    return 0;
+}
+
+// 本端解码完对端字段段（ric>0）→ 在解码器流发 Section Ack（RFC 9204 §4.4.1）
+static void h3_send_dec_ack(int64_t conn, h3conn_state* st, int64_t sid, int64_t ric) {
+    if (!st || !st->used || st->qd <= 0 || st->dec_sid <= 0 || ric <= 0) return;
+    uint8_t buf[16];
+    int n = px_qd_dec_inst_section_ack(buf, (int)sizeof(buf), sid);
+    if (n <= 0) return;
+    if (px_quic_raw_send_on(conn, st->dec_sid, buf, n, 0) >= 0) {
+        st->dec_sent += n;
+        st->dec_sects++;
+    }
+}
+
+// 消费对端解码器流指令（数据不含流类型字节）：Section Ack / Stream Cancellation /
+// Insert Count Increment（RFC 9204 §4.4）。返回 0 正常 | -1 非法（连接级错误）。
+static int h3_decoder_ingest(int64_t conn, h3conn_state* st, const uint8_t* p, int n) {
+    (void)conn;
+    int off = 0;
+    while (off < n) {
+        uint8_t b0 = p[off];
+        int used = 0;
+        uint64_t v = 0;
+        if (b0 & 0x80) {
+            // Section Acknowledgment：1 + Stream ID (7+)。ack 提升 KRC 到该流最早
+            // 未确认字段段的 RIC（本端发送时按流登记过，RFC 9204 §4.4.1/§2.1.4）
+            int r = h3_qp_pref_dec(p + off, n - off, 7, &v);
+            if (r <= 0) return -1;
+            off += r;
+            uint64_t ric = h3_outack_take(st, (int64_t)v);
+            if (ric > 0) {
+                if (px_qd_ack_sec(st->qd, (int64_t)ric) != 0) return -1;
+                st->enc_acks++;
+            }
+            continue;   // 无 outstanding（重复/未知流 ack）→ 宽松忽略
+        } else if ((b0 & 0xC0) == 0x40) {
+            // Stream Cancellation：01 + Stream ID (6+)
+            int r = h3_qp_pref_dec(p + off, n - off, 6, &v);
+            if (r <= 0) return -1;
+            off += r;
+            (void)h3_outack_take(st, (int64_t)v);   // 该流引用全部取消（不推进 KRC）
+            continue;
+        } else if ((b0 & 0xC0) == 0x00) {
+            // Insert Count Increment：00 + Increment (6+)
+            int r = h3_qp_pref_dec(p + off, n - off, 6, &v);
+            if (r <= 0) return -1;
+            off += r;
+            if (px_qd_ack_inc(st->qd, (int64_t)v) != 0) return -1;
+            st->enc_acks++;
+            continue;
+        } else {
+            return -1;
+        }
+    }
+    return 0;
+}
+
 
 // 构造 SETTINGS 帧（完整帧，type=0x04）：payload = varint 键值对
 static int h3_build_settings_frame(uint8_t* out, int qcap, int blocked) {
@@ -284,7 +397,7 @@ static void h3_ctrl_ingest(int64_t conn, int64_t sid, h3conn_state* st,
 }
 
 // 处理一条对端单向流（数据已 recv 到 buf）：首见分类（0x00 控制 / 0x02 编码器 /
-// 0x03 解码器），随后按类型消费（SETTINGS 解析 / QPACK ingest / 丢弃）。
+// 0x03 解码器），随后按类型消费（SETTINGS 解析 / QPACK ingest / 解码器指令解析）。
 static int h3_consume_peer_uni(int64_t conn, int64_t sid, h3conn_state* st,
                                const uint8_t* buf, int n) {
     if (!st || !st->used || n <= 0) return -1;
@@ -306,8 +419,10 @@ static int h3_consume_peer_uni(int64_t conn, int64_t sid, h3conn_state* st,
         }
     } else if (sid == st->peer_ctrl) {
         if (dl > 0) h3_ctrl_ingest(conn, sid, st, d, dl);
+    } else if (sid == st->peer_dec) {
+        // M52：解码器流指令（Section Ack / Stream Cancel / Insert Count Increment）→ 推进 KRC
+        if (st->qd > 0 && dl > 0 && h3_decoder_ingest(conn, st, d, dl) != 0) return -1;
     }
-    // peer_dec：解码器流指令 MVP 不依赖 → 丢弃
     return 0;
 }
 
@@ -506,6 +621,9 @@ static bool h3_send_fields(int64_t conn, int64_t sid, LXValue fields, LXValue bo
                 st->enc_sent += en;
             }
             st->enc_sects++;
+            // M52：登记 outstanding（ric>0 → 对端须 Section Ack，RFC 9204 §2.2.2.1）
+            int ric = px_qd_enc_last_ric(st->qd);
+            if (ric > 0) h3_outack_push(st, sid, (uint64_t)ric);
         }
     } else {
         qn = px_h3_qenc(q, fo->as.list.items, fo->as.list.len);
@@ -542,6 +660,9 @@ static int h3_read_section(int64_t conn, int64_t sid, int64_t timeout_ms,
         fields = h3_c_fields_to_lx(names, vals, nls, vls, nf);
         h3_free_c_fields(names, vals, nf);
         free(names); free(vals); free(nls); free(vls);
+        // M52：解码完成 → ric>0 则向对端发 Section Ack（RFC 9204 §2.2.2.1：含动态引用必须 ack）
+        int dec_ric = px_qd_dec_last_ric(st->qd);
+        if (dec_ric > 0) h3_send_dec_ack(conn, st, sid, dec_ric);
     } else {
         fields = px_h3_qdec(hd, hlen);
     }
@@ -725,6 +846,10 @@ static LXValue bi_h3_conn_stats(LXValue* args, int nargs, void* ctx) {
     px_dict_set(d, "en_len", px_int(px_qd_en_len(st->qd)));    // 本端编码表条目
     px_dict_set(d, "de_len", px_int(px_qd_de_len(st->qd)));    // 对端镜像表条目
     px_dict_set(d, "ins", px_int(px_qd_ins(st->qd)));          // 已 ingest 插入数
+    px_dict_set(d, "krc", px_int(px_qd_krc(st->qd)));          // M52：本端编码器 Known Received Count
+    px_dict_set(d, "dec_sent", px_int(st->dec_sent));          // M52：本端解码器流已发 ack 字节
+    px_dict_set(d, "dec_sects", px_int(st->dec_sects));        // M52：本端已发 Section Ack 的字段段数
+    px_dict_set(d, "enc_acks", px_int(st->enc_acks));          // M52：收对端解码器流指令数
     return d;
 }
 
