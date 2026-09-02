@@ -37,9 +37,13 @@
 | M53 | HTTP/3 三栈合一 WebServer：`px_serve` opts.http3（HTTP/1.1+HTTP/2+HTTP/3 共用公共 HTTP 管道）+ Alt-Svc 通告 + **aioquic 外部互操作打通** + pxi 重建解释同能力 |
 | M54 | **HTTP/3 生产化**：TLS 1.3 会话恢复（1-RTT resumption）+ **0-RTT early data**（含收包路由 DCID 修复、H3 静态表子集）+ 连接迁移（client 换源 + server path 跟随 + PATH_CHALLENGE）+ BLOCKED_STREAMS 流上限协商（-206 阻塞 / MAX_STREAMS 放行）；语言 API 12 项；S5 全量回归（pxi 重建 + capability 双模式 + diffcheck + 自举 + 14 项端到端） |
 
+> **主线外已占用编号**（非 ROADMAP 功能里程碑，已记录于 CHANGELOG，勿复用）：
+> **M55** = issue #2 并发安全 hotfix（修复 · M55）；**M56** = ws-web 配套 runtime
+> `http_unix` 内建（新增 · M56）。主线后续功能里程碑从 **M57** 起排。
+
 ## 三、远期方向
 
-### M55+ · HTTP/3 深度生产化
+### M57+ · HTTP/3 深度生产化
 
 - 0-RTT + QPACK 动态表前缀（RFC 9204 深度语义）
 - 服务端主动迁移 / immediate migration（ngtcp2 1.25.90 cwnd 断言待上游修复）

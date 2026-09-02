@@ -934,6 +934,32 @@ extern def quic_streams_left(conn: int) -> int  # ngtcp2_conn_get_streams_bidi_l
 
 ---
 
+### 8.16 本地 HTTP 客户端内建 http_unix（M56，Unix domain socket）
+
+```
+# M56 新增：http_unix(socket_path, url_path, method[, body[, headers]]) → dict{status, headers, body}
+# Unix domain socket 上的 HTTP 客户端（本地服务 / LLM 网关 / 容器 daemon 调用），
+# 与 http_get/http_post（TCP/TLS）互补；响应解析复用 h_exchange（同一 HTTP/1.1 解析器）。
+http_unix("/tmp/llm.sock", "/v1/chat/completions", "POST",
+          '{"messages":[]}', {"Content-Type": "application/json"})   # → {status, headers, body}
+```
+
+- **签名**：`http_unix(socket_path: str, url_path: str, method: str[, body: str[, headers: dict]]) -> dict`。
+  `url_path` 为请求路径（含 query，不含 scheme/host）；`method` 任意（GET/POST/...）；
+  `headers` 为 `dict[str,str]`，逐行附加 `k: v\r\n`。
+- **连接语义**：每次新建 AF_UNIX SOCK_STREAM 连接，`Connection: close` 用完即关（不池化，
+  本地低频调用足够）；收发超时放宽至 180s（本地网关可能长响应，如 LLM 长文本生成）。
+- **请求组装**：`Host: localhost` + `User-Agent: PuXian/0.1`；带 body 且 headers 未显式含
+  Content-Length 时自动补 `Content-Type: application/x-www-form-urlencoded` + Content-Length
+  （显式传 headers 可覆盖，JSON 等场景自设 Content-Type）。
+- **返回 / 错误**：`{status: int, headers: dict, body: str}`；连接失败 panic（带 errno），
+  对端关闭等请求失败 panic `net: http_unix 请求失败`。
+- **背景与验证**：M56 由 ws-web LLM 接入词元缓存网关（unix socket 通道、key 零落盘）配套引入
+  （runtime.c 内建，ws-web/llm.px dogfood 调用）；pxi 重建后解释器同能力支持；无独立示例，
+  随 capability/diffcheck 双模式回归保障。
+
+---
+
 ## 9. 双模式执行
 
 ### 9.1 脚本模式
