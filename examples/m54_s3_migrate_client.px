@@ -1,0 +1,53 @@
+# ============================================================
+# M54 S3：连接迁移（client 换源 + server path 跟随）—— 客户端
+# ------------------------------------------------------------
+#   c = quic_connect → send M1 → echo M1（基准，记录本地源地址）
+#   quic_migrate(c, "127.0.0.1", 0)  → 换新源端口（旧 fd 关闭）
+#   send M2 → echo M2（核心：服务器把回包发到新源地址 = 迁移生效）
+#   断言：① migrate 成功；② 本地源端口确实变化（quic_conn_local）；
+#         ③ 迁移后 M2 echo 往返正常；④ 连接无重握手（handshake_done 仍 true、
+#         resumed 不变化、对端地址不变）—— 同一 QUIC 连接续传。
+# ============================================================
+import "c/ngtcp2"
+
+extern def quic_connect(ip: str, port: int, alpn: str) -> int
+extern def quic_migrate(conn: int, local_ip: str, local_port: int) -> bool
+extern def quic_conn_path(conn: int) -> str
+extern def quic_conn_local(conn: int) -> str
+extern def quic_conn_handshake_done(conn: int) -> bool
+extern def quic_send(conn: int, data: str) -> int
+extern def quic_recv(conn: int, maxlen: int) -> str
+extern def quic_close(conn: int) -> bool
+
+var c = quic_connect("127.0.0.1", 18000, "puxian")
+assert(c > 0, "client: 连接失败")
+assert(quic_conn_handshake_done(c) == true, "client: 首次连接应握手完成")
+
+var m1 = "MSG-1"
+assert(quic_send(c, m1) > 0, "client: send M1 失败")
+assert(quic_recv(c, 64) == m1, "client: echo M1 不匹配")
+
+var local0 = quic_conn_local(c)
+var peer0 = quic_conn_path(c)
+print("client: before migrate local=" + local0 + " peer=" + peer0)
+
+var ok = quic_migrate(c, "127.0.0.1", 0)
+assert(ok == true, "client: quic_migrate 失败")
+var local1 = quic_conn_local(c)
+print("client: after migrate  local=" + local1)
+assert(local1 != local0, "client: 迁移后本地地址未变化（源端口未换）")
+assert(quic_conn_path(c) == peer0, "client: 对端地址不应因迁移变化")
+
+# 迁移后立刻发送（同一连接，新源）
+var m2 = "MSG-2-AFTER-MIGRATE"
+assert(quic_send(c, m2) > 0, "client: send M2 失败")
+var e2 = quic_recv(c, 128)
+assert(e2 == m2, "client: echo M2 不匹配 got=[" + e2 + "]（服务器未把回包发到新源地址）")
+print("client: post-migration echo ok")
+
+# 连接健康：握手仍完成、无重连迹象
+assert(quic_conn_handshake_done(c) == true, "client: 迁移后握手状态异常")
+var m3 = "MSG-3-FINAL"
+assert(quic_send(c, m3) > 0 and quic_recv(c, 64) == m3, "client: M3 往返失败")
+quic_close(c)
+print("client: ok")

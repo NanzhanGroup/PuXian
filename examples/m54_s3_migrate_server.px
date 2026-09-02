@@ -1,0 +1,23 @@
+# ============================================================
+# M54 S3：连接迁移（client 换源 + server path 跟随）—— 服务端
+# ------------------------------------------------------------
+# 托管 quic_h3_listen echo listener（M53 单 fd 收包路由 + 每连接线程）。
+# client 迁移换源后：router 按 DCID 仍路由到同一 conn（无新连接/重握手），
+# conn 线程 pump 更新 remote_sa → echo 回包发到 client 新源地址。
+# 验证由 client 断言（迁移后从新 fd 收到 echo = 服务器已切换回包路径）。
+# ============================================================
+import "c/ngtcp2"
+
+extern def quic_h3_listen(port: int, cert: str, key: str) -> int
+extern def quic_close_listener(listener: int) -> bool
+
+var l = quic_h3_listen(18000, "", "")
+assert(l > 0, "server: quic_h3_listen 失败")
+write_file("/tmp/m54s3.ready", "ready")
+
+var end = now_ms() + 20000
+while now_ms() < end:
+    sleep(200)
+
+quic_close_listener(l)
+print("server: ok")
