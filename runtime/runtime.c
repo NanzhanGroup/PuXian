@@ -507,6 +507,13 @@ static char* xstrdup(const char* s) {
 static char* g_keys[GLOBAL_CAP];
 static LXValue g_vals[GLOBAL_CAP];
 static int g_len = 0;
+// M55/P0 修复（GitHub issue#2）：全局符号表互斥锁。px_serve 等并发场景多线程
+// 同时读写 g_keys/g_vals/g_len，且与 GC 根扫描（g_vals 遍历，见 px_gc_collect）
+// 不互斥 → g_len 非原子++、同槽覆盖、GC 扫到半写对象 → SEGV/内存损坏/优雅关闭
+// core。本锁使所有全局表访问串行化。持锁临界区一律先 gc_block_stop（协议同
+// g_gc_mu）：持锁线程不被 GC 暂停 → GC stop-the-world 取本锁时不会被"已暂停的
+// 持锁线程"卡死（无死锁）；锁序固定 g_gc_mu → g_globals_mu，无反向获取。
+static pthread_mutex_t g_globals_mu = PTHREAD_MUTEX_INITIALIZER;
 
 // ==================== GC（M8：保守标记-清除，值对象自动释放） ====================
 // 所有 LXObject 注册到全局对象表 g_objs。分配累计超阈值 → gc_collect()：
@@ -980,6 +987,11 @@ void px_gc_collect(void) {
 
     if (g_active_threads > 0) {
         // ===== M11 并发路径：stop-the-world =====
+        // M55/P0（issue#2）：暂停线程前先持 g_globals_mu。若在暂停线程后才取锁，
+        // 会等一个"临界区内被信号暂停、持锁未释放"的线程 → 死锁/GC 空转。先取锁
+        // （此刻线程均正常执行，持锁者会跑完释放，无暂停干扰）→ 再 stop-the-world
+        // → 根1 扫描全局表（独占）→ 扫完即释放，尽量缩短持锁时长。
+        pthread_mutex_lock(&g_globals_mu);
         pthread_t me = pthread_self();
         if (g_gc_debug) {
             char dbg[512]; int dn = 0;
@@ -1024,6 +1036,7 @@ void px_gc_collect(void) {
                 g_gc_stop_in_progress = 0;
                 __sync_synchronize();
                 while (g_paused_count > 0) sched_yield();
+                pthread_mutex_unlock(&g_globals_mu);   // M55：释放暂停前持有的全局表锁
                 pthread_mutex_unlock(&g_gc_mu);
                 g_gc_executor = 0;
                 gc_unblock_stop(&gc_old);
@@ -1041,10 +1054,12 @@ void px_gc_collect(void) {
         for (int i = 0; i < g_obj_count; i++) gc_hash_insert(&set, (uintptr_t)g_objs[i]);
         g_gc_marked = 0;
         if (g_gc_debug) (void)write(2, "[mk] hash\n", 10);
-        // 根1：全局表
+        // 根1：全局表（M55：GC 于暂停线程前已持 g_globals_mu，此处独占扫描，
+        // 防读到 px_set/get_global 半写对象；扫完立即释放，供恢复后的线程使用）
         for (int i = 0; i < g_len; i++) {
             if (px_value_is_obj(g_vals[i]) && g_vals[i].as.obj) gc_mark_obj(&set, g_vals[i].as.obj);
         }
+        pthread_mutex_unlock(&g_globals_mu);
         if (g_gc_debug) (void)write(2, "[mk] globals\n", 13);
         // 根2：本线程（GC 执行者）暂存根
         if (g_tmp_root) gc_mark_obj(&set, g_tmp_root);
@@ -1113,9 +1128,11 @@ void px_gc_collect(void) {
     gc_hash_init(&set, (size_t)g_obj_count * 2);
     for (int i = 0; i < g_obj_count; i++) gc_hash_insert(&set, (uintptr_t)g_objs[i]);
     g_gc_marked = 0;
+    pthread_mutex_lock(&g_globals_mu);
     for (int i = 0; i < g_len; i++) {
         if (px_value_is_obj(g_vals[i]) && g_vals[i].as.obj) gc_mark_obj(&set, g_vals[i].as.obj);
     }
+    pthread_mutex_unlock(&g_globals_mu);
     if (g_tmp_root) gc_mark_obj(&set, g_tmp_root);
     ucontext_t uc;
     getcontext(&uc);
@@ -2396,21 +2413,33 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
         }
     }
     // M-B1：struct 方法（impl 方法注册为全局 "Type.method"，方法绑定 self）
+    // M55/P0（issue#2）：全局表遍历与 px_set/get_global/GC 根扫描经 g_globals_mu
+    // 互斥。锁内仅查找并拷贝函数值；px_call 在锁外执行——其内部会拿 g_gc_mu，
+    // 避免 g_globals_mu→g_gc_mu 与 GC 的 g_gc_mu→g_globals_mu 反向死锁。
     if (obj.type == PX_STRUCT) {
         char buf[256];
         snprintf(buf, sizeof(buf), "%s.%s", obj.as.obj->as.struct_inst.type_name, name);
+        LXValue m = px_null();
+        bool m_found = false;
+        sigset_t old;
+        pthread_mutex_lock(&g_globals_mu);
+        gc_block_stop(&old);
         for (int i = 0; i < g_len; i++) {
-            if (strcmp(g_keys[i], buf) == 0) {
-                LXValue m = g_vals[i];
-                if (m.type == PX_FUNC || m.type == PX_NATIVE) {
-                    LXValue* argv = xmalloc(sizeof(LXValue) * (nargs + 1));
-                    argv[0] = obj; // self
-                    for (int j = 0; j < nargs; j++) argv[j + 1] = args[j];
-                    LXValue r = px_call(m, argv, nargs + 1);
-                    xfree(argv);
-                    return r;
-                }
+            if (strcmp(g_keys[i], buf) == 0 && (g_vals[i].type == PX_FUNC || g_vals[i].type == PX_NATIVE)) {
+                m = g_vals[i];
+                m_found = true;
+                break;
             }
+        }
+        gc_unblock_stop(&old);
+        pthread_mutex_unlock(&g_globals_mu);
+        if (m_found) {
+            LXValue* argv = xmalloc(sizeof(LXValue) * (nargs + 1));
+            argv[0] = obj; // self
+            for (int j = 0; j < nargs; j++) argv[j + 1] = args[j];
+            LXValue r = px_call(m, argv, nargs + 1);
+            xfree(argv);
+            return r;
         }
     }
     px_error("对象 %s 没有方法 %s", px_type_name(obj), name);
@@ -2420,21 +2449,52 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
 // ==================== 全局表 ====================
 
 LXValue px_get_global(const char* name) {
+    // M55/P0（issue#2）：与 px_set_global/GC 根扫描经 g_globals_mu 互斥。持锁 +
+    // 屏蔽 SIG_GC_STOP（协议同 g_gc_mu）：临界区不被 GC 暂停，stop-the-world 取
+    // 本锁不会被"已暂停持锁线程"卡死；确保读到完整值（锁内拷贝，解锁返回）。
+    sigset_t old;
+    pthread_mutex_lock(&g_globals_mu);
+    gc_block_stop(&old);
     for (int i = 0; i < g_len; i++) {
-        if (strcmp(g_keys[i], name) == 0) return g_vals[i];
+        if (strcmp(g_keys[i], name) == 0) {
+            LXValue v = g_vals[i];
+            gc_unblock_stop(&old);
+            pthread_mutex_unlock(&g_globals_mu);
+            return v;
+        }
     }
+    gc_unblock_stop(&old);
+    pthread_mutex_unlock(&g_globals_mu);
     px_error("未定义变量: %s", name);
     return px_null();
 }
 
 void px_set_global(const char* name, LXValue v) {
+    // M55/P0（issue#2）：写全局表全程持 g_globals_mu（含 g_len++ 与 key/val 槽位
+    // 写入），与 px_get_global 读、GC 根扫描互斥；g_len 在锁内更新保证原子可见。
+    // 错误路径先解锁再 px_error（px_error 不持锁返回，避免锁泄漏/死锁）。
+    sigset_t old;
+    pthread_mutex_lock(&g_globals_mu);
+    gc_block_stop(&old);
     for (int i = 0; i < g_len; i++) {
-        if (strcmp(g_keys[i], name) == 0) { g_vals[i] = v; return; }
+        if (strcmp(g_keys[i], name) == 0) {
+            g_vals[i] = v;
+            gc_unblock_stop(&old);
+            pthread_mutex_unlock(&g_globals_mu);
+            return;
+        }
     }
-    if (g_len >= GLOBAL_CAP) px_error("全局表溢出");
+    if (g_len >= GLOBAL_CAP) {
+        gc_unblock_stop(&old);
+        pthread_mutex_unlock(&g_globals_mu);
+        px_error("全局表溢出");
+        return;
+    }
     g_keys[g_len] = xstrdup(name);
     g_vals[g_len] = v;
     g_len++;
+    gc_unblock_stop(&old);
+    pthread_mutex_unlock(&g_globals_mu);
 }
 
 // ==================== 内置函数 ====================
