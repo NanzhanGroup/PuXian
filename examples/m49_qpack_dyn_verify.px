@@ -1,0 +1,86 @@
+# ============================================================
+# M49 QPACK 动态表 + SETTINGS 会话验证
+# ------------------------------------------------------------
+# 场景：模拟 HTTP/3 端点 A（encoder）+ B（decoder）：
+#   A.h3_qs_enc(headers) → 字段段字节 + take_enc 编码器流指令（Insert...）
+#   → 先把指令喂给 B（dec_ingest），再喂字段段（dec）→ 还原 headers
+#   A 复用同一 QPACK 会话多次编码 → 相同头不再发插入指令（动态表命中），
+#   字段段远短于 M48 无动态表 codec（h3_qenc 对照）
+# 同时验证 h3_settings_enc/dec（SETTINGS 帧字节精确 roundtrip）。
+# ============================================================
+import "c/ngtcp2"
+
+extern def h3_qs_open(max_capacity: int) -> int
+extern def h3_qs_close(sess: int) -> bool
+extern def h3_qs_enc(sess: int, headers: list) -> bytes
+extern def h3_qs_take_enc(sess: int) -> bytes
+extern def h3_qs_dec_ingest(sess: int, enc_stream: bytes) -> bool
+extern def h3_qs_dec(sess: int, section: bytes) -> list
+extern def h3_settings_enc(pairs: list) -> bytes
+extern def h3_settings_dec(frame: bytes) -> list
+extern def bytes_to_hex(data) -> str
+extern def h3_qenc(headers: list) -> bytes    # M48 无动态表对照
+
+def blen(data):
+    return len(bytes_to_hex(data)) // 2   # bytes 长度 = hex 串长度 / 2（整除保双模式一致）
+
+# ---- 1) 动态表会话：A 编码（第 1 次：插入动态表 + 字段段引用）----
+var a = h3_qs_open(4096)
+var b = h3_qs_open(4096)
+assert(a > 0 and b > 0, "会话打开失败")
+
+var req1 = [[":method", "GET"], [":path", "/index.html"], ["user-agent", "px-h3/1.0"], ["x-custom", "hello-dyn"]]
+var sec1 = h3_qs_enc(a, req1)
+var enc1 = h3_qs_take_enc(a)          # A 的编码器流指令（含 Insert 指令）
+print("req1 sec_len=" + str(blen(sec1)) + " enc_stream_len=" + str(blen(enc1)))
+print("req1 sec_hex=" + bytes_to_hex(sec1))
+assert(blen(enc1) > 0, "第 1 次编码应产生编码器流插入指令")
+
+# B 先处理编码器流，再解码字段段
+assert(h3_qs_dec_ingest(b, enc1), "B ingest 编码器流失败")
+var d1 = h3_qs_dec(b, sec1)
+assert(d1 != null and len(d1) == 4, "B 解码第 1 段失败 len=" + str(len(d1)))
+assert(d1[0][0] == ":method" and d1[0][1] == "GET", "B d1[0] 不符")
+assert(d1[2][0] == "user-agent" and d1[2][1] == "px-h3/1.0", "B d1[2] 不符")
+assert(d1[3][0] == "x-custom" and d1[3][1] == "hello-dyn", "B d1[3] 不符")
+print("roundtrip1=ok")
+
+# ---- 2) 动态表复用：第 2 次相同头 → 无新插入指令 + 字段段与首段同（动态引用）----
+var sec2 = h3_qs_enc(a, req1)
+var enc2 = h3_qs_take_enc(a)
+print("req2 sec_len=" + str(blen(sec2)) + " enc_stream_len=" + str(blen(enc2)))
+assert(blen(enc2) == 0, "第 2 次相同头不应再发插入指令")
+assert(blen(sec2) <= blen(sec1), "复用后字段段不应变长")
+var d2 = h3_qs_dec(b, sec2)
+assert(d2 != null and len(d2) == 4, "B 解码第 2 段失败")
+assert(d2[0][1] == "GET" and d2[3][1] == "hello-dyn", "B d2 内容不符")
+print("dynamic_reuse=ok")
+
+# ---- 3) 压缩收益对照：无动态表的 M48 codec 同头编码显著更长 ----
+var plain = h3_qenc(req1)
+print("static_only_sec_len=" + str(blen(plain)) + "  dyn_sec_len=" + str(blen(sec1)))
+assert(blen(sec1) < blen(plain), "动态表压缩应短于静态-only codec")
+print("compression=ok")
+
+# ---- 4) SETTINGS 帧：QPACK_MAX_TABLE_CAPACITY(0x01) + BLOCKED_STREAMS(0x07) ----
+var st = h3_settings_enc([[1, 4096], [7, 100]])
+print("settings_hex=" + bytes_to_hex(st))
+var sd = h3_settings_dec(st)
+assert(sd != null and len(sd) == 2, "SETTINGS 解码失败")
+assert(sd[0][0] == 1 and sd[0][1] == 4096, "QPACK_MAX_TABLE_CAPACITY 不符")
+assert(sd[1][0] == 7 and sd[1][1] == 100, "BLOCKED_STREAMS 不符")
+print("settings_roundtrip=ok")
+
+# ---- 5) 长连接多次不同请求：每轮可解（新字段插入、旧字段复用）----
+for i in range(3):
+    var secn = h3_qs_enc(a, [[":method", "POST"], [":path", "/api/" + str(i)], ["x-seq", str(i)]])
+    var encn = h3_qs_take_enc(a)
+    if blen(encn) > 0:
+        assert(h3_qs_dec_ingest(b, encn), "B ingest N 失败")
+    var dn = h3_qs_dec(b, secn)
+    assert(dn != null and len(dn) == 3 and dn[0][1] == "POST", "N 次解码失败 i=" + str(i))
+print("multi_req=ok")
+
+h3_qs_close(a)
+h3_qs_close(b)
+print("M49 QPACK 动态表 + SETTINGS verify PASS")

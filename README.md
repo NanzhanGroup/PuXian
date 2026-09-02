@@ -139,7 +139,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 ├── runtime/                # C 运行时（runtime.c/h + aes/xml/zip/ws/rsa/sqlite/route/h2 + mbedtls + third_party）
 ├── stdlib/                 # 标准库（collections.px）
 ├── ws-web/                 # 第一个生产应用（M-B9b，清歌负责）：HTTP + SQLite 服务骨架
-├── examples/               # 74 个示例（hello / fib / match / 并发 / 网络 / TLS / SQLite / 推导式 ...）
+├── examples/               # 80+ 个示例（hello / fib / match / 并发 / 网络 / TLS / SQLite / 推导式 ...）
 ├── archive/rust-compiler/  # Rust 版编译器源码归档（只读，自举前的实现，git 历史保留）
 ├── docs/                   # 文档（规格 / Mini 子集 / 自举计划 / 进度）
 └── .github/workflows/ci.yml # CI：回归 + 自举证明 + 示例编译 + ws-web 冒烟
@@ -191,7 +191,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 
 ## 示例
 
-`examples/` 目录（74 个），快速上手：
+`examples/` 目录（80+ 个），快速上手：
 
 ```bash
 # 解释运行
@@ -222,6 +222,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 - `m46_quic_verify.sh` —— QUIC 传输级回环（握手 + hello-quic-42 → echo）
 - `m47_h3_verify.sh` —— HTTP/3 语义层回环（QPACK 编解码 + HEADERS/DATA 帧 + 请求/响应，GET /hello → 200）
 - `m48_qpack_verify.sh` —— QPACK 完整 codec 字节精确自检（RFC Huffman 官方向量 + 静态表索引 + 容错，编译/解释双模式）
+- `m49_qpack_dyn_verify.sh` —— QPACK 动态表 + SETTINGS 会话字节精确自检（动态表复用/压缩收益/SETTINGS roundtrip，编译/解释双模式）
 - ... 完整列表见 `examples/`
 
 ---

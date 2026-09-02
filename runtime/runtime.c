@@ -4720,6 +4720,8 @@ void px_register_builtins(void) {
     px_register_quic();
     // M47：HTTP/3 语义层（runtime_h3.c）—— QPACK 编解码 + H3 帧 + 请求/响应对拍
     px_register_h3();
+    // M49：QPACK 动态表 + SETTINGS 帧（runtime_h3_qpack_dyn.c）—— 连接级 QPACK 会话
+    px_register_h3_qpack_dyn();
     // M28 P1：时间 / 时区
     px_set_global("time_format", px_native("time_format", bi_time_format));
     px_set_global("time_parse", px_native("time_parse", bi_time_parse));

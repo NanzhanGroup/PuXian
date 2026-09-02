@@ -589,7 +589,8 @@ extern def quic_close_listener(listener: int) -> bool
 QPACK 头压缩（RFC 9204 无动态表子集）+ HTTP/3 帧（HEADERS=0x01 / DATA=0x00）
 + 请求/响应对拍。完整 HTTP/3（QPACK 动态表/Huffman/静态表压缩、SETTINGS 控制流、
 多路复用、0-RTT/连接迁移、接入现有 HTTP 路由管道）原列为 M48+；其中 Huffman+静态表压缩
-已随 §8.9（M48）落地，动态表/SETTINGS/多路复用等仍为远期。
+已随 §8.9（M48）落地，动态表 + SETTINGS 帧已随 §8.10（M49）落地，多路复用/0-RTT/
+连接迁移/接入现有 HTTP 路由管道仍为远期。
 
 ```
 import "c/ngtcp2"
@@ -649,6 +650,50 @@ extern def hex_to_bytes(s: str) -> bytes    # hex → bytes | null（非法返�
 - 验证：`examples/m48_qpack_verify.sh` 双模式字节精确 PASS（RFC 向量/静态索引/roundtrip/容错，
   输出逐字节一致）+ capability section 23（15 项）202 PASS/0 FAIL 双模式逐字节一致；
   `examples/m47_h3_verify.sh` 回归 PASS（QPACK 重构不回归，编译+解释）。
+
+---
+
+### 8.10 QPACK 动态表 + SETTINGS（M49，RFC 9204 连接级会话）
+
+M48 无动态表 codec 升级为 **RFC 9204 全量 QPACK 会话**（`runtime/runtime_h3_qpack_dyn.c`，
+自包含实现：Huffman/前缀整数/静态表原语内嵌，不依赖 M48 模块内部 static）——动态表
+（容量上限 SETTINGS_QPACK_MAX_TABLE_CAPACITY、当前容量 SetCapacity、插入/驱逐/重复条目、
+绝对/相对/Post-Base 索引）、编码器流指令（Set Dynamic Table Capacity / Insert with Name
+Reference / Insert with Literal Name / Duplicate）、字段段完整前缀（Required Insert Count
+wrap 编码 + Base/Sign/DeltaBase + Post-Base 索引）、解码器流指令（Section Acknowledgment /
+Stream Cancellation / Insert Count Increment 字节级辅助），并补 HTTP/3 SETTINGS 帧
+编解码（RFC 9114 §7.2.8，键 0x01=QPACK_MAX_TABLE_CAPACITY、0x07=QPACK_BLOCKED_STREAMS，
+未知键跳过、重复键报错）。M48 无状态 h3_qenc/h3_qdec 行为不变（兼容）。
+
+```
+import "c/ngtcp2"
+
+# M49 新增：QPACK 连接级会话（encoder 动态表 + decoder 镜像，双端状态机）
+extern def h3_qs_open(max_capacity: int) -> int    # 打开 QPACK 会话 → 句柄 | -1
+extern def h3_qs_close(sess: int) -> bool
+extern def h3_qs_enc(sess: int, headers: list) -> bytes   # 编码字段段（自动插动态表）
+extern def h3_qs_take_enc(sess: int) -> bytes      # 取编码器流待发指令（取后清空）
+extern def h3_qs_dec_ingest(sess: int, enc_stream: bytes) -> bool  # 解码端处理编码流
+extern def h3_qs_dec(sess: int, section: bytes) -> list  # 解码字段段 → [[名,值]...] | null
+
+# M49 新增：HTTP/3 SETTINGS 帧编解码（RFC 9114 §7.2.8）
+extern def h3_settings_enc(pairs: list) -> bytes   # [[k:int,v:int]...] → SETTINGS 帧
+extern def h3_settings_dec(frame: bytes) -> list   # SETTINGS 帧 → [[k,v]...] | null
+```
+
+- **动态表**：容量字节上限、驱逐（容量不足按 FIFO 逐旧条目）、重复条目指令、编码端
+  引用跟踪（记录被引动态条目最大绝对索引 → 写 RIC）；同头复用第 2 轮不再发插入指令
+  （字段段显著短于 M48 静态-only codec）。
+- **SETTINGS 帧**：完整帧 type=0x04 + QUIC varint 长度 + 键值对；能力断言
+  `h3_settings_enc([[1,4096],[7,100]]) == 0406015000074064`。
+- **工程**：runtime.c 注册 px_register_h3_qpack_dyn、runtime.h 声明、tools/pxc
+  copy_runtime + gcc 链接列表加 runtime_h3_qpack_dyn.c/.h、bootstrap/pxi 重建
+  （解释模式同能力，interp codegen 内存峰值约 2.2GB）。
+- 验证：`examples/m49_qpack_dyn_verify.sh` 双模式字节精确 PASS（A/B 双会话：首轮插入
+  动态表、次轮同头命中动态索引指令空、压缩短于静态-only、SETTINGS roundtrip、多轮
+  请求、输出逐字节一致）+ capability section 24（≥10 项）217 PASS/0 FAIL 双模式
+  逐字节一致；`examples/m48_qpack_verify.sh` + `examples/m47_h3_verify.sh` 回归
+  PASS（不回归）。
 
 ---
 

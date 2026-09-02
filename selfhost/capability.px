@@ -700,6 +700,63 @@ check("M48 QPACK 动态表引用拒绝", h3_qdec(hex_to_bytes("0100c1")) == null
 check("M48 QPACK 动态 Indexed 拒绝", h3_qdec(hex_to_bytes("000080")) == null)
 
 # ============================================================
+# 24. QPACK 动态表 + SETTINGS（M49：RFC 9204 连接级会话）
+# ------------------------------------------------------------
+# runtime/runtime_h3_qpack_dyn.c：QPACK 会话（encoder 动态表 + decoder 镜像）、
+#   编码器流指令（Insert with Name Ref / Insert with Literal Name）、字段段
+#   动态引用（RIC wrap + Base + Indexed T=0），以及 HTTP/3 SETTINGS 帧
+#   （QPACK_MAX_TABLE_CAPACITY=0x01 / BLOCKED_STREAMS=0x07）。
+# 双模式一致：语言层 extern def h3_qs_*/h3_settings_* 走 FFI 表（px_ffi_register）。
+# ============================================================
+import "c/ngtcp2"
+
+extern def h3_qs_open(max_capacity: int) -> int
+extern def h3_qs_close(sess: int) -> bool
+extern def h3_qs_enc(sess: int, headers: list) -> bytes
+extern def h3_qs_take_enc(sess: int) -> bytes
+extern def h3_qs_dec_ingest(sess: int, enc_stream: bytes) -> bool
+extern def h3_qs_dec(sess: int, section: bytes) -> list
+extern def h3_settings_enc(pairs: list) -> bytes
+extern def h3_settings_dec(frame: bytes) -> list
+
+def qb_len(data):
+    return len(bytes_to_hex(data)) // 2
+
+# M49.1：会话打开/关闭
+var qa = h3_qs_open(4096)
+var qb = h3_qs_open(4096)
+check("M49 会话打开", qa > 0 and qb > 0)
+# M49.2：A 编码字段段（动态表插入指令入编码器流）+ 语义还原
+var m49h = [[":method", "GET"], [":path", "/idx.html"], ["user-agent", "px-h3/1.0"], ["x-m49", "dyn-ok"]]
+var m49s1 = h3_qs_enc(qa, m49h)
+var m49e1 = h3_qs_take_enc(qa)
+check("M49 首段产生编码器流指令", qb_len(m49e1) > 0)
+check("M49 B ingest 编码器流", h3_qs_dec_ingest(qb, m49e1))
+var m49d1 = h3_qs_dec(qb, m49s1)
+check("M49 会话 roundtrip 数量", m49d1 != null and len(m49d1) == 4)
+check("M49 会话 roundtrip 伪头", m49d1[0][1] == "GET" and m49d1[1][1] == "/idx.html")
+check("M49 会话 roundtrip 自定义", m49d1[2][1] == "px-h3/1.0" and m49d1[3][1] == "dyn-ok")
+# M49.3：同头复用 → 不再发插入指令（动态表命中）
+var m49s2 = h3_qs_enc(qa, m49h)
+var m49e2 = h3_qs_take_enc(qa)
+check("M49 同头复用无新指令", qb_len(m49e2) == 0)
+check("M49 同头复用字段段不增", qb_len(m49s2) <= qb_len(m49s1))
+check("M49 B 解码复用段", (h3_qs_dec(qb, m49s2) != null and len(h3_qs_dec(qb, m49s2)) == 4))
+# M49.4：压缩收益——动态表字段段 < M48 无动态表 h3_qenc 同头输出
+var m49plain = h3_qenc(m49h)
+check("M49 动态表压缩优于静态-only", qb_len(m49s1) < qb_len(m49plain))
+h3_qs_close(qa)
+h3_qs_close(qb)
+check("M49 会话关闭", true)
+# M49.5：SETTINGS 帧 roundtrip（QPACK_MAX_TABLE_CAPACITY/BLOCKED_STREAMS 字节精确）
+var m49st = h3_settings_enc([[1, 4096], [7, 100]])
+check("M49 SETTINGS 帧 hex", bytes_to_hex(m49st) == "0406015000074064")
+var m49sd = h3_settings_dec(m49st)
+check("M49 SETTINGS roundtrip 数量", m49sd != null and len(m49sd) == 2)
+check("M49 SETTINGS MAX_TABLE_CAPACITY", m49sd[0][0] == 1 and m49sd[0][1] == 4096)
+check("M49 SETTINGS BLOCKED_STREAMS", m49sd[1][0] == 7 and m49sd[1][1] == 100)
+
+# ============================================================
 # 汇总
 # ============================================================
 print("")
