@@ -25,6 +25,10 @@ default_root = "/data/www"
 access_log_path = ""
 spawn_http = 1
 log_ready = 0
+# M53-S4：HTTP/3（QUIC/UDP）—— config "http3": true|{port,cert,key}；0 = 关闭
+h3_port = 0
+h3_cert = ""
+h3_key = ""
 
 # ==================== 配置加载 ====================
 
@@ -70,6 +74,9 @@ def apply_config(c):
     default_root = "/data/www"
     access_log_path = ""
     spawn_http = 1
+    h3_port = 0
+    h3_cert = ""
+    h3_key = ""
     if c.has("http_addr"):
         http_port = parse_port(c["http_addr"], 80)
     if c.has("https_addr"):
@@ -84,6 +91,20 @@ def apply_config(c):
         spawn_http = c["spawn_http"]
     if c.has("sites"):
         cfg_sites = c["sites"]
+    # M53-S4：HTTP/3 —— http3=true（同 https_port，自签）或 {port?, cert?, key?}
+    if c.has("http3"):
+        h3o = c["http3"]
+        if h3o == true:
+            h3_port = https_port
+        else:
+            if h3o.has("port"):
+                h3_port = h3o["port"]
+            else:
+                h3_port = https_port
+            if h3o.has("cert"):
+                h3_cert = h3o["cert"]
+            if h3o.has("key"):
+                h3_key = h3o["key"]
     # 补 www 别名
     hosts = cfg_sites.keys()
     for h in hosts:
@@ -268,6 +289,10 @@ def register_tls():
 def serve_https():
     opts = {"_": 0}
     opts.remove("_")
+    # M53-S4：HTTP/3 随主服务同端口（UDP）启动，Alt-Svc 由 px_serve 自动通告
+    if h3_port > 0:
+        h3o = {"port": h3_port, "cert": h3_cert, "key": h3_key}
+        opts["http3"] = h3o
     px_serve(https_port, default_root, 10000, opts)
 
 def main():

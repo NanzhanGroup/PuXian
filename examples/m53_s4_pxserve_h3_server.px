@@ -1,0 +1,27 @@
+# ============================================================
+# M53 S4：px_serve opts.http3 —— 服务端（单调用三栈合一）
+# ------------------------------------------------------------
+# px_serve(18020, docroot, timeout, {http3:{port:18021}}) 一个调用同时托管：
+#   * HTTP/1.1（TCP :18020，px_serve 传统服务）
+#   * HTTP/3  （QUIC/UDP :18021，M53-S3 管道托管，runtime.c 内部自动启动）
+# 二者共享同一 vhost / 路由 / 限流 / access_log / 静态 docroot / .px 管道。
+# HTTP/3 开启后 Alt-Svc 头自动通告 h3=":18021"（未显式配置 alt_svc 时）。
+# 验证：examples/m53_s4_pxserve_h3_verify.sh
+#   * HTTP/1.1 curl 对照同一 route/docroot 输出
+#   * PuXian 自研 H3 client（多连接并发）响应与 HTTP/1.1 逐项一致
+#   * aioquic（Python 第三方独立 HTTP/3 实现）互操作 200 + body 一致
+#   * SIGTERM → px_serve 优雅关闭（含 H3 listener 回收），exit 0
+# ============================================================
+
+def api_hi(req, params):
+    return {"status": 200, "body": "s4-api:hi", "headers": {"Content-Type": "text/plain; charset=utf-8"}}
+
+def api_json(req, params):
+    return {"status": 200, "body": "json-api:" + str(params["id"]) + ":q=" + str(req["query"]), "headers": {"Content-Type": "text/plain; charset=utf-8"}}
+
+route("GET", "/api/hi", api_hi)
+route("GET", "/api/json/:id", api_json)
+
+# 静态 docroot 复用 m53_s3_docroot（hello.txt = "hello h3 static world"）
+write_file("/tmp/m53s4.ready", "ready")
+px_serve(18020, "examples/m53_s3_docroot", 10000, {"http3": {"port": 18021}})
