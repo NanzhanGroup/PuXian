@@ -588,7 +588,8 @@ extern def quic_close_listener(listener: int) -> bool
 `import "c/ngtcp2"`（M46 之上）：在 QUIC 双向流上增加 HTTP/3 **语义层** ——
 QPACK 头压缩（RFC 9204 无动态表子集）+ HTTP/3 帧（HEADERS=0x01 / DATA=0x00）
 + 请求/响应对拍。完整 HTTP/3（QPACK 动态表/Huffman/静态表压缩、SETTINGS 控制流、
-多路复用、0-RTT/连接迁移、接入现有 HTTP 路由管道）列为 M48+。
+多路复用、0-RTT/连接迁移、接入现有 HTTP 路由管道）原列为 M48+；其中 Huffman+静态表压缩
+已随 §8.9（M48）落地，动态表/SETTINGS/多路复用等仍为远期。
 
 ```
 import "c/ngtcp2"
@@ -613,6 +614,41 @@ extern def h3_client_read_response(conn: int, timeout_ms: int) -> dict|null # {s
 - 双模式一致：编译（pxc build）与解释（pxi run）走同一 C 桥（runtime_h3.c 注册进 FFI 表）。
 - 验证：`examples/m47_h3_verify.sh` 回环 PASS（QPACK 编解码 method/path/x-test 头 → 200 + echo-h3 体）；
   capability section 22（6 项：roundtrip / 伪头 / 非法输入容错），187 PASS/0 FAIL 双模式逐字节一致。
+
+### 8.9 QPACK 完整 codec（M48，Huffman + 静态表压缩）
+
+M47 内联 QPACK MVP 迁出为独立模块（`runtime/runtime_h3_qpack.c` + `tbl.h`），按 **RFC 9204**
+升级为无动态表子集的**完整编解码**：Huffman（RFC 7541 Appendix B，QPACK 复用同表）+ QPACK
+静态表（RFC 9204 Appendix A，99 项 0-98）索引压缩。仍无动态表（MaxTableCapacity=0：RIC/Base
+恒 0；解码遇动态表引用 → null）。纯 codec 语言接口不变，新增 Huffman 纯 codec。
+
+```
+import "c/ngtcp2"
+
+# M48 新增：Huffman 纯 codec（capability/互操作验证，RFC 7541 Appendix B）
+extern def h3_huff(s: str) -> bytes          # Huffman 编码 → bytes（末字节补 1 padding）
+extern def h3_unhuff(data: bytes) -> str    # Huffman 解码 → str | null（非法/EOS 拒绝）
+
+# M48：hex 纯函数进 FFI 表（字节精确断言用，双模式一致）
+extern def bytes_to_hex(data) -> str        # bytes/str → 小写 hex
+extern def hex_to_bytes(s: str) -> bytes    # hex → bytes | null（非法返回 null）
+
+# h3_qenc/h3_qdec 行为升级（接口不变）：
+#   - Indexed Field Line（T=1 静态表全匹配 → 单字节索引，如 [:method,GET] → 00 00 D1）
+#   - Literal Field Line with Name Reference（01 N=0 T=1 静态名 + 字面/Huffman 值）
+#   - Literal Field Line with Literal Name（001 名/值可 Huffman）
+#   - 动态表引用 / RIC≠0 / 非法 Huffman / 截断 → null（容错）
+```
+
+- **Huffman 表**：`runtime_h3_qpack_tbl.h`（自动生成，Kraft Σ2^-len≈1.0 校验 + RFC 7541
+  Appendix C 官方向量逐字节一致：www.example.com→`f1e3c2e5f23a6ba0ab90f4ff`、no-cache→
+  `a8eb10649cbf`、custom-key/custom-value 全命中）。
+- **静态表**：QPACK 99 项（RFC 9204 Appendix A，0-based；与 HPACK 表顺序不同）。
+- **工程**：QPACK 逻辑自 runtime_h3.c 迁出（净删 123 行），H3 高层请求/响应自动走新 codec；
+  tools/pxc 链 runtime_h3_qpack.c；bootstrap/pxi 重建（解释模式同能力）。
+- 验证：`examples/m48_qpack_verify.sh` 双模式字节精确 PASS（RFC 向量/静态索引/roundtrip/容错，
+  输出逐字节一致）+ capability section 23（15 项）202 PASS/0 FAIL 双模式逐字节一致；
+  `examples/m47_h3_verify.sh` 回归 PASS（QPACK 重构不回归，编译+解释）。
 
 ---
 

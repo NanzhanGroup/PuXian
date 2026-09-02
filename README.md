@@ -221,6 +221,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 - `m28_cron.px` —— cron 定时调度 / `m33_route_rate_limit.px` —— 限流
 - `m46_quic_verify.sh` —— QUIC 传输级回环（握手 + hello-quic-42 → echo）
 - `m47_h3_verify.sh` —— HTTP/3 语义层回环（QPACK 编解码 + HEADERS/DATA 帧 + 请求/响应，GET /hello → 200）
+- `m48_qpack_verify.sh` —— QPACK 完整 codec 字节精确自检（RFC Huffman 官方向量 + 静态表索引 + 容错，编译/解释双模式）
 - ... 完整列表见 `examples/`
 
 ---

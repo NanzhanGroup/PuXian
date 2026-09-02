@@ -1,0 +1,59 @@
+# ============================================================
+# M48 QPACK 完整 codec 端到端验证（Huffman + 静态表压缩）
+# ------------------------------------------------------------
+# 编译模式 + 解释模式双跑（examples/m48_qpack_verify.sh 对拍）：
+#   - Huffman 编码输出与 RFC 7541 Appendix C 官方向量逐字节一致
+#   - Huffman 解码还原官方向量字节串
+#   - QPACK 静态表索引压缩字节精确（[:method, GET] → 00 00 D1）
+#   - 全 codec roundtrip（静态/Name-Ref/Literal-Huffman）
+# 与 m46/m47 不同：本用例不依赖 QUIC 握手，纯 codec 快速自检。
+# ============================================================
+import "c/ngtcp2"
+
+extern def h3_huff(s: str) -> bytes
+extern def h3_unhuff(data: bytes) -> str
+extern def h3_qenc(headers: list) -> bytes
+extern def h3_qdec(data: bytes) -> list
+extern def bytes_to_hex(data) -> str
+extern def hex_to_bytes(s: str) -> bytes
+
+# 1) Huffman 官方向量（RFC 7541 Appendix C）
+var h1 = bytes_to_hex(h3_huff("www.example.com"))
+print("huff_www=" + h1)
+assert(h1 == "f1e3c2e5f23a6ba0ab90f4ff", "huff_www FAIL")
+
+var h2 = bytes_to_hex(h3_huff("no-cache"))
+print("huff_nocache=" + h2)
+assert(h2 == "a8eb10649cbf", "huff_nocache FAIL")
+
+var hd = h3_unhuff(hex_to_bytes("f1e3c2e5f23a6ba0ab90f4ff"))
+print("huff_dec=" + hd)
+assert(hd == "www.example.com", "huff_dec FAIL")
+
+# 2) 复杂串 Huffman roundtrip（中文/URL 保留字符）
+var complex_s = "px-h3://u:p@example.com:8443/路径?q=1&b=中文"
+var hrt = h3_unhuff(h3_huff(complex_s))
+print("huff_rt=" + hrt)
+assert(hrt == complex_s, "huff_rt FAIL")
+
+# 3) QPACK 静态表压缩：[:method, GET] → 00 00 D1（索引 17，字节精确）
+var q1 = bytes_to_hex(h3_qenc([[":method", "GET"]]))
+print("qenc_static=" + q1)
+assert(q1 == "0000d1", "qenc_static FAIL")
+
+var st = h3_qdec(hex_to_bytes("0000d1"))
+assert(st != null and len(st) == 1 and st[0][0] == ":method" and st[0][1] == "GET", "qdec_static FAIL")
+print("qdec_static=ok")
+
+# 4) 完整 codec roundtrip
+var full = [[":method", "GET"], [":scheme", "https"], [":path", "/index.html"], ["content-type", "text/html; charset=utf-8"], ["x-custom-48", "ab中文c"]]
+var fd = h3_qdec(h3_qenc(full))
+assert(fd != null and len(fd) == 5 and fd[0][0] == ":method" and fd[0][1] == "GET" and fd[4][1] == "ab中文c", "full roundtrip FAIL")
+print("full_rt=ok")
+
+# 5) 容错
+assert(h3_unhuff(hex_to_bytes("ff")) == null, "bad huff not null FAIL")
+assert(h3_qdec(hex_to_bytes("0100c1")) == null, "dynamic ref not rejected FAIL")
+print("fault_tolerance=ok")
+
+print("M48 QPACK codec verify PASS")
