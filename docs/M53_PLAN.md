@@ -46,8 +46,8 @@
 
 | 子步 | 内容 | 验证 |
 |---|---|---|
-| S1 | runtime_quic.c：h3 listener（外部证书）+ 单 fd 收包路由队列 + raw API | 编译 + m46/m47/m48/m49/m50/m51/m52 verify 回归（demo 路径不回归） |
-| S2 | runtime.c 管道抽取 PxHttpOut（纯重构，行为零变化） | HTTP/1.1 端到端：m27_webprod/m33_sni/p4_http_server/m43_webapp/p5_px_serve + capability |
+| S1 ✅ | runtime_quic.c：h3 listener（外部证书）+ 单 fd 收包路由队列 + raw API | commit `d328041`；8 进程并发 QUIC echo 全 PASS + close 优雅退出 + m46 回环回归 |
+| S2 ✅ | runtime.c 管道抽取 PxHttpOut（纯重构，行为零变化） | 本 commit：m43_webapp(10 PASS)/m33_sni/m33_route_rate_limit/m35_gzip_rl/capability(253 PASS) + 原始响应字节 old==new 逐字节一致（静态/gzip/304/Range/HEAD/.px/404/403/路由/429/CORS/keep-alive） |
 | S3 | runtime_h3.c：h3 server 连接托管线程（多连接），请求流 → req dict → 调 D3 管道 → H3 响应（复用 h3_send_fields） | 自 client 多连接并发 → 管道响应一致 |
 | S4 | px_serve opts http3 + Alt-Svc 注入 + ws-web 支持 | ws-web 起 h3 → aioquic + 自 client 双端 200 |
 | S5 | 全量回归：pxi 重建、capability、diffcheck --all/--errors、自举证明 B.c==golden、m4x 回归 | 全绿 |

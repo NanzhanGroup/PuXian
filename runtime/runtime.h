@@ -320,6 +320,7 @@ void px_gc_collect(void);
 int px_gc_stats(int* live, int* total);
 
 // ==================== M28 P1：路由表 + 中间件（runtime_route.c） ====================
+typedef struct PxHttpOut PxHttpOut;   // M53-S2：HTTP 输出抽象（结构体定义见下方 M27 段）
 LXValue bi_route(LXValue* args, int nargs, void* ctx);
 LXValue bi_middleware(LXValue* args, int nargs, void* ctx);
 // M31 限流（M33 供 per-route 限流使用）：true 放行 / false 超限
@@ -334,8 +335,8 @@ void px_access_log(const char* fmt, ...);
 // 路由表非空？（决定 px_serve 是否走路由优先）
 int px_route_has(void);
 // 匹配路由并执行中间件链 + handler，发送响应。返回 1=已处理 / 0=未匹配。
-// conn 为 PxConn*（定义在下方 M27 段；用 void* 避免前向引用）
-int px_route_try_dispatch(void* conn, LXValue req, const char* method, int head_only,
+// out 为 PxHttpOut*（M53-S2：HTTP/1.1 与 HTTP/3 共用输出抽象）
+int px_route_try_dispatch(PxHttpOut* out, LXValue req, const char* method, int head_only,
                           int keep_alive, const char* req_id);
 // M28 P1：SQLite 绑定（runtime_sqlite.c）
 LXValue bi_sqlite_open(LXValue* args, int nargs, void* ctx);
@@ -376,6 +377,31 @@ void px_conn_close(PxConn* c);
 extern __thread PxConn* g_cur_conn;
 // 在途请求数（px_serve/sse_serve/ws_serve 连接线程计数；优雅关闭等待归零）
 extern volatile int g_px_inflight;
+
+// ==================== M53-S2：HTTP 输出抽象（PxHttpOut） ====================
+// 请求管道（px_http_dispatch / px_route_try_dispatch）只面向 PxHttpOut 写响应，
+// 不直接触碰 fd/g_cur_conn —— 使 HTTP/1.1（TCP/TLS 文本头）与 HTTP/3（QUIC 流
+// H3 HEADERS/DATA 帧）共用同一套 vhost/路由/限流/日志/静态/.px 管道。
+//   respond：一次性完整响应（头 + body）；HEAD 由 head_only 控制不发 body
+//   begin/write/end：流式（大文件 Range 分段 / gzip 直发 / H3 DATA 分帧）
+//   impl：传输后端（HTTP/1.1 = PxConn*）
+typedef void (*PxOutRespondFn)(PxHttpOut* o, int status, const char* ct,
+                               const char* body, int body_len, int head_only,
+                               int keep_alive, const char* extra_headers);
+typedef void (*PxOutBeginFn)(PxHttpOut* o, int status, const char* ct,
+                             long long body_len, int head_only, int keep_alive,
+                             const char* extra_headers);
+typedef int  (*PxOutWriteFn)(PxHttpOut* o, const void* buf, size_t n);
+typedef void (*PxOutEndFn)(PxHttpOut* o);
+struct PxHttpOut {
+    void* impl;
+    PxOutRespondFn respond;  // 一次性完整响应
+    PxOutBeginFn begin;      // 流式：响应头（Content-Length: body_len）
+    PxOutWriteFn write;      // 流式：body 片段
+    PxOutEndFn end;          // 流式收尾（HTTP/1.1 no-op；H3 发 DATA FIN）
+};
+// HTTP/1.1 实现初始化（impl=PxConn*；明文/TLS 统一，行为与旧 px_px_send_ex 一致）
+void px_http_out_init_conn(PxHttpOut* o, PxConn* c);
 
 #ifdef __cplusplus
 }

@@ -5,8 +5,9 @@
 //     method "*" 匹配任意方法
 //   middleware(fn) → bool                    注册中间件（按注册顺序执行）
 //     fn(req) 返回 null 继续；非 null（int/str/dict）短路作为响应
-//   px_route_has() / px_route_try_dispatch(conn, req, method, head_only)
-//     —— 供 runtime.c px_conn_worker 调用：路由表非空且匹配 → 执行中间件链 + handler 并发送响应。
+//   px_route_has() / px_route_try_dispatch(PxHttpOut* out, req, method, head_only)
+//     —— 供 runtime.c px_http_dispatch 调用：路由表非空且匹配 → 执行中间件链 + handler
+//        并经 PxHttpOut 发送响应（M53-S2：HTTP/1.1 与 HTTP/3 共用输出抽象）。
 // 响应归一化（同解释器 normalize_route_resp）：
 //   int → 状态码（空 body）；null → 204；str → 200 text/plain；
 //   dict{status, headers, body} → 完整控制
@@ -224,33 +225,15 @@ static int route_match(const char* method, const char* path, LXValue* handler_ou
 }
 
 // ==================== 响应归一化 + 发送 ====================
-
-static const char* route_status_reason(int code) {
-    switch (code) {
-        case 200: return "OK";
-        case 201: return "Created";
-        case 202: return "Accepted";
-        case 204: return "No Content";
-        case 301: return "Moved Permanently";
-        case 302: return "Found";
-        case 304: return "Not Modified";
-        case 400: return "Bad Request";
-        case 401: return "Unauthorized";
-        case 403: return "Forbidden";
-        case 404: return "Not Found";
-        case 405: return "Method Not Allowed";
-        case 409: return "Conflict";
-        case 413: return "Payload Too Large";
-        case 500: return "Internal Server Error";
-        case 501: return "Not Implemented";
-        case 502: return "Bad Gateway";
-        case 503: return "Service Unavailable";
-        case 504: return "Gateway Timeout";
-        default: return "OK";
-    }
+// M53-S2：路由/中间件响应统一经 PxHttpOut 输出（status/ct/body/extra → HTTP/1.1 文本头
+// 或 HTTP/3 HEADERS+DATA 帧）；reason 表与 HTTP/1.1 管道共用 px_http_status_reason。
+static void route_send(PxHttpOut* out, int status, const char* ct, const char* body,
+                       int body_len, int head_only, int keep_alive,
+                       const char* extra_headers) {
+    out->respond(out, status, ct, body, body_len, head_only, keep_alive, extra_headers);
 }
 
-// 归一化响应值 → (status, content_type, body, body_len, headers 追加)
+// 归一化响应值 → (status, content_type, body, body_len)
 typedef struct {
     int status;
     const char* ct;      // 默认 Content-Type
@@ -310,28 +293,11 @@ static void route_normalize(LXValue v, RouteResp* r) {
     }
 }
 
-// 发送 HTTP 响应（PxConn 统一明文/TLS；HEAD 只发头）
-static void route_send(PxConn* conn, int status, const char* ct, const char* body, int body_len,
-                       int head_only, int keep_alive, const char* extra_headers) {
-    char head[1536];
-    int hl = snprintf(head, sizeof(head),
-        "HTTP/1.1 %d %s\r\nContent-Length: %d\r\nConnection: %s\r\nContent-Type: %s\r\n",
-        status, route_status_reason(status), body_len, keep_alive ? "keep-alive" : "close", ct);
-    if (extra_headers && *extra_headers) {
-        int l = (int)strlen(extra_headers);
-        if (hl + l < (int)sizeof(head)) { memcpy(head + hl, extra_headers, (size_t)l); hl += l; }
-    }
-    hl += snprintf(head + hl, sizeof(head) - (size_t)hl, "\r\n");
-    px_conn_write(conn, head, (size_t)hl);
-    if (!head_only && body_len > 0) px_conn_write(conn, body, (size_t)body_len);
-}
-
 // ==================== 请求分派（runtime.c px_conn_worker 调用） ====================
 
 // 执行中间件链 + handler 并发送响应。返回 1 = 已处理（匹配到路由）；0 = 未匹配。
-int px_route_try_dispatch(void* connp, LXValue req, const char* method, int head_only,
+int px_route_try_dispatch(PxHttpOut* out, LXValue req, const char* method, int head_only,
                           int keep_alive, const char* req_id) {
-    PxConn* conn = (PxConn*)connp;
     LXValue path_v = px_dict_get(req, "path");
     if (path_v.type != PX_STR) return 0;
     LXValue handler, params;
@@ -356,7 +322,7 @@ int px_route_try_dispatch(void* connp, LXValue req, const char* method, int head
             char extra[512];
             int el = snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
             if (g_px_alt_svc[0]) el += snprintf(extra + el, sizeof(extra) - (size_t)el, "Alt-Svc: %s\r\n", g_px_alt_svc);
-            route_send(conn, 429, "text/plain; charset=utf-8", "429 Too Many Requests", 21,
+            route_send(out, 429, "text/plain; charset=utf-8", "429 Too Many Requests", 21,
                        head_only, keep_alive, extra);
             // M33：per-route 429 也记访问日志（格式同解释器）
             px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
@@ -381,7 +347,7 @@ int px_route_try_dispatch(void* connp, LXValue req, const char* method, int head
                     path_v.as.obj->as.str.data, rr.status);
             char rsp_extra[512];
             snprintf(rsp_extra, sizeof(rsp_extra), "X-Request-Id: %s\r\n", req_id);
-            route_send(conn, rr.status, rr.ct, rr.body, rr.body_len, head_only, keep_alive, rsp_extra);
+            route_send(out, rr.status, rr.ct, rr.body, rr.body_len, head_only, keep_alive, rsp_extra);
             // M36：route 响应统一访问日志（与解释器 log_access 一致）
             {
                 LXValue rmt = px_dict_get(req, "remote");
@@ -404,7 +370,7 @@ int px_route_try_dispatch(void* connp, LXValue req, const char* method, int head
             path_v.as.obj->as.str.data, rr.status);
     char rsp_extra[512];
     snprintf(rsp_extra, sizeof(rsp_extra), "X-Request-Id: %s\r\n", req_id);
-    route_send(conn, rr.status, rr.ct, rr.body, rr.body_len, head_only, keep_alive, rsp_extra);
+    route_send(out, rr.status, rr.ct, rr.body, rr.body_len, head_only, keep_alive, rsp_extra);
     // M36：route 响应统一访问日志（与解释器 log_access 一致）
     {
         LXValue rmt = px_dict_get(req, "remote");
