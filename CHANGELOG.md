@@ -6,16 +6,23 @@
 
 ## [Unreleased]
 
-### 路线图 · M57 内容重定向（HTTP/3 深度生产化 → 健壮性加固）
+### 路线图 · M57 内容重定向（HTTP/3 深度生产化 → 健壮性加固 → 边缘设备层支持）
 
-- 原「M57+ · HTTP/3 深度生产化」三剩余项（QPACK 动态表前缀 / 服务端主动迁移·immediate
-  migration / 深度互操作扩展）**降级为搁置**：Chrome 2021 起禁用 QPACK 动态表、immediate
+- **HTTP/3 深度生产化剩余项**（QPACK 动态表前缀 / 服务端主动迁移·immediate migration /
+  深度互操作扩展）**降级为搁置**：Chrome 2021 起禁用 QPACK 动态表（容量=0）、immediate
   migration 连 ngtcp2 上游都未实现、深度互操作边际收益递减 —— 均无真实用户场景（详见
   `docs/ROADMAP.md` §三「搁置」评估注记）
-- **M57 重定向为主线下一里程碑「HTTP/3 / QUIC 健壮性加固（可靠性生产化）」**：协议 fuzz
-  （畸形包/超大帧/恶意 SETTINGS）+ 并发/内存安全审计（race+ASAN，收口 M55 issue#2 一类）
-  + 资源边界（慢客户端/半开连接/流与连接上限/OOM）+ 互操作边界回归 —— 把 H3 栈从
-  「能跑」推到「扛造」
+- **HTTP/3 / QUIC 健壮性加固**（曾于上版设为 M57 候选主线）**同步降级为搁置**：H3 目前
+  无真实用户（自签证书下浏览器退回 HTTP/1.1，不走本栈），给无人使用的栈做 fuzz / 并发
+  审计价值前提不成立（1→1.01 而非 0→1）；待 H3 出现真实用户（如 ws-web 配真证书公网/
+  浏览器实测）再捞回
+- **M57 重定向为主线下一条里程碑「边缘设备层支持（Linux 用户态）」**：与清歌嵌入式讨论
+  的落地结论（PuXian 只能到树莓派/网关/盒子等 Linux 边缘设备层；裸机 MCU 架构不符，
+  明确不做）——相对 H3 打磨属 **0→1 开新使用域**（物理世界接口）。S1 ioctl 胶水内建
+  （约 100–200 行 C，通吃 i2c/spi/gpio/tty/网卡）→ S2 mmap/munmap 设备映射 → S3
+  GPIO/I2C 示例 + x86 ioctl mock 验证 → S4 aarch64 交叉编译 + qemu 验证 + runtime 裁剪
+  开关 → S5 pxi 重建 + capability/diffcheck/自举全绿 → S6 文档；通用动态 FFI（dlsym）
+  等「任意 C 库即插即用」真需求再上
 
 ### 新增 · M56 runtime http_unix 内建（ws-web 配套，非主线 HTTP/3 里程碑）
 

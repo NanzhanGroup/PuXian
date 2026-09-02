@@ -43,18 +43,39 @@
 
 ## 三、远期方向
 
-### M57 · HTTP/3 / QUIC 健壮性加固（可靠性生产化）
+### M57 · 边缘设备层支持（Linux 用户态）
 
-> 主线 M46–M54 已把 HTTP/3 从传输 → 语义 → QPACK → 三栈合一 → 生产化四特性全部闭环；
-> M57 把 H3 栈从「能跑」推到「扛造」——系统化收口 M55（issue #2 并发崩溃）暴露的
-> 可靠性缺口，让 H3 真正可上生产。
+> 与清歌嵌入式讨论的落地结论：PuXian（runtime 含 GC/线程/动态值，编译模式=生成 C→gcc）
+> 在嵌入式方向只能到 **Linux 边缘设备层**（树莓派 / 网关 / 盒子）；裸机 MCU（STM32/ESP32）
+> 无 OS + 架构不符，明确不做。相比给暂无真实用户的 H3 栈做打磨（1→1.01），设备层是
+> **0→1 开新使用域**（物理世界接口：点灯 / 读传感器 / 控 I2C/SPI/GPIO/tty/网卡/帧缓冲），
+> 首刀成本低（ioctl 胶水约 100–200 行 C，走 M42 FFI 桥），复用 fd / bytes(ptr,len) /
+> 生成 C→gcc 交叉等既有资产；静态二进制免环境是边缘差异化卖点。
+>
+> 落地顺序（对齐清歌建议：先通用设备绑定，通用动态 FFI 等真需求再上）：
+
+- S1 ioctl 胶水内建：`ioctl(fd, request, arg)`（arg 支持 int / bytes → 通吃
+  i2c-dev / spi-dev / gpio(老 ioctl) / tty / 网卡；open/read/write 已被文件 IO 覆盖）
+- S2 mmap/munmap 语言内建：映射 fd（帧缓冲 / 共享内存 / DMA）→ bytes 视图
+- S3 GPIO / I2C 设备示例 + x86 ioctl mock 验证（无真板子，先用 mock 验胶水语义）
+- S4 交叉编译工具链：本地 aarch64 交叉编译 → qemu-aarch64 跑静态产物验证
+  + runtime 裁剪开关（--no-ssl 等，解开 mbedtls/sqlite3/openssl 平台依赖）
+- S5 pxi 重建 + capability / diffcheck / 自举全绿
+- S6 文档（spec §8.x + ROADMAP + CHANGELOG）
+- 明确不做：裸机 MCU（架构不符）；通用动态 FFI / dlsym（费劲，等「任意 C 库即插即用」
+  需求再上）
+
+### 搁置 · HTTP/3 / QUIC 健壮性加固（可靠性生产化）
+
+> 曾列为 M57 候选主线；评估后降级：H3 目前 **无真实用户**（自签证书下 Chrome/Firefox 直接
+> 退回 HTTP/1.1，不走本栈），给无人使用的栈做 fuzz / 并发审计价值前提不成立（1→1.01 而非
+> 0→1）。待 H3 出现真实用户（如 ws-web 配真证书公网/局域网浏览器实测）再捞回。
 
 - 协议 fuzz：QUIC / H3 / QPACK 解析器模糊测试（畸形包 / 超大帧 / 恶意 SETTINGS），零崩溃
 - 并发 / 内存安全审计：race + ASAN 全量回归；fd / 缓冲 / 会话生命周期核查
   （M55 issue#2 一类问题的系统性修复）
 - 资源边界：慢客户端 / 半开连接 / 流与连接上限的拒绝与回收；OOM 与超长响应边界
 - 互操作健壮性扩展（可选并入验证）：aioquic 畸形 / 边界场景回归
-- 验证：新增 capability 边界用例 + diffcheck / 自举全绿 + pxi 重建解释同能力
 
 ### 搁置 · HTTP/3 深度生产化剩余项（RFC 完备性洁癖，价值低）
 
