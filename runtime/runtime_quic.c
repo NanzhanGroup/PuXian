@@ -675,6 +675,9 @@ static void* quic_srv_conn_thr(void* arg) {
     int64_t cid = (int64_t)(intptr_t)arg;
     quic_conn* qc = quic_get_conn(cid);
     if (!qc) return NULL;
+    // M53-S3：注册并发 GC（连接回调构造普贤对象：请求 dict / 响应字段 / handler 调用）。
+    // 必须在本线程触碰任何普贤对象之前注册；leave 在清理完成、不再持有对象后调用。
+    px_gc_thread_enter();
     int lid = qc->owner_listener;
     quic_listener* ql = (lid > 0 && lid <= QUIC_MAX) ? &g_qlis[lid - 1] : NULL;
     int pr = quic_pump(qc, 10000, 0, -1);   // 泵到握手完成（最多 10s）
@@ -709,6 +712,7 @@ static void* quic_srv_conn_thr(void* arg) {
     }
     memset(qc, 0, sizeof(*qc));   // used=0 → 槽位可复用
     pthread_mutex_unlock(&g_quic_srv_mu);
+    px_gc_thread_leave();
     return NULL;
 }
 
@@ -862,6 +866,80 @@ int64_t px_quic_raw_h3_listen(int port, const char* cert, const char* key) {
     a[2] = px_str(key ? key : "");
     LXValue r = bi_quic_h3_listen(a, 3, NULL);
     return r.type == PX_INT ? r.as.i : -1;
+}
+
+// ==================== M53-S3：H3 listener（显式连接回调） ====================
+// 与 bi_quic_h3_listen 同构，但连接回调显式传入（runtime_h3.c 管道托管用它；
+// 避免依赖全局 g_quic_conn_cb 的调用顺序 —— echo/demo 与管道托管可并存多 listener）。
+// 注：与 bi_quic_h3_listen 主体保持同步（fd/证书/router 线程创建一致）。
+static int64_t quic_h3_listen_cb_impl(int port, const char* cert, const char* key,
+                                      quic_conn_cb cb, void* ud) {
+    if (!g_quic_init) {
+        ngtcp2_crypto_quictls_init();
+        OPENSSL_init_ssl(0, NULL);
+        OSSL_PROVIDER_load(NULL, "default");
+        g_quic_init = 1;
+    }
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return -1;
+    int one = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port = htons((uint16_t)port);
+    if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) != 0) { close(fd); return -1; }
+    SSL_CTX* sctx = quic_make_server_ctx_cert(cert, key);
+    if (!sctx) { close(fd); return -1; }
+    quic_listener ql0; memset(&ql0, 0, sizeof(ql0));
+    int64_t id = quic_alloc_listener(&ql0);
+    if (id < 0) { SSL_CTX_free(sctx); close(fd); return -1; }
+    quic_listener* ql = &g_qlis[id - 1];
+    ql->fd = fd;
+    ql->local = addr;
+    ql->ssl_ctx = sctx;
+    ql->used = 1;
+    ql->conn_cb = cb;
+    ql->conn_ud = ud;
+    ql->router_stop = 0;
+    ql->router_started = 1;
+    if (pthread_create(&ql->router_thr, NULL, quic_srv_router, (void*)(intptr_t)id) != 0) {
+        ql->router_started = 0;
+        SSL_CTX_free(sctx);
+        close(fd);
+        memset(ql, 0, sizeof(*ql));
+        return -1;
+    }
+    return id;
+}
+
+// raw：以显式连接回调启动 h3 server listener → listener id | -1
+int64_t px_quic_raw_h3_listen_cb(int port, const char* cert, const char* key,
+                                 px_quic_conn_cb cb, void* ud) {
+    return quic_h3_listen_cb_impl(port, cert, key, cb, ud);
+}
+
+// raw：连接对端地址 → "ip:port"（请求 remote 字段；连接已清理/无效 → 空串）
+void px_quic_raw_peer_addr(int64_t conn, char* out, size_t n) {
+    if (!out || n == 0) return;
+    out[0] = 0;
+    quic_conn* qc = quic_get_conn(conn);
+    if (!qc) return;
+    char ip[INET6_ADDRSTRLEN];
+    int port = 0;
+    if (qc->remote_sa.ss_family == AF_INET) {
+        struct sockaddr_in* sin = (struct sockaddr_in*)&qc->remote_sa;
+        if (inet_ntop(AF_INET, &sin->sin_addr, ip, sizeof(ip))) port = ntohs(sin->sin_port);
+        else return;
+    } else if (qc->remote_sa.ss_family == AF_INET6) {
+        struct sockaddr_in6* sin6 = (struct sockaddr_in6*)&qc->remote_sa;
+        if (inet_ntop(AF_INET6, &sin6->sin6_addr, ip, sizeof(ip))) port = ntohs(sin6->sin6_port);
+        else return;
+    } else {
+        return;
+    }
+    snprintf(out, n, "%s:%d", ip, port);
 }
 
 // 默认连接回调：QUIC 流 echo（S1 多连接路由验证用）

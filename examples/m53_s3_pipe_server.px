@@ -1,0 +1,36 @@
+# ============================================================
+# M53 S3：HTTP/3 接入公共 HTTP 管道 —— 服务端
+# ------------------------------------------------------------
+# 同进程双栈对照：px_serve（HTTP/1.1 TCP :18010）+ h3_server_listen
+# （HTTP/3 UDP :18011，M53-S3 管道托管）。二者共享 route 表与 docroot，
+# 验证 HTTP/1.1 与 HTTP/3 命中同一 vhost/路由/限流/静态/.px 管道。
+# 关键验证（客户端/verify 断言）：
+#   * 路由 handler：/api/hi → "h3-api:hi"（两协议 body 一致）
+#   * 路由 :id + query：/api/json/a?x=1 → JSON 含 id=a / q=x=1
+#   * 静态文件：/hello.txt → "hello h3 static world"（HTTP/1.1 curl 对照）
+#   * 404（未命中路由且文件不存在）与 403（路径穿越 ..）走同一管道
+# 验证：examples/m53_s3_pipe_verify.sh（编译+解释双模式 + HTTP/1.1 对照）
+# ============================================================
+import "c/ngtcp2"
+
+extern def h3_server_listen(port: int, cert: str, key: str) -> int
+
+def api_hi(req, params):
+    return {"status": 200, "body": "h3-api:hi", "headers": {"Content-Type": "text/plain; charset=utf-8"}}
+
+def api_json(req, params):
+    return {"status": 200, "body": "json-api:" + str(params["id"]) + ":q=" + str(req["query"]), "headers": {"Content-Type": "text/plain; charset=utf-8"}}
+
+route("GET", "/api/hi", api_hi)
+route("GET", "/api/json/:id", api_json)
+
+spawn px_serve(18010, "examples/m53_s3_docroot")
+var l = h3_server_listen(18011, "", "")
+assert(l > 0, "server: h3_server_listen 失败")
+write_file("/tmp/m53s3.ready", "ready")
+print("server: http/1.1 listening 18010 ; h3 pipe listening 18011 listener=" + str(l))
+
+var end = now_ms() + 25000
+while now_ms() < end:
+    sleep(200)
+print("server: done")

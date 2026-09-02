@@ -1,0 +1,82 @@
+# ============================================================
+# M53 S3：HTTP/3 接入公共 HTTP 管道 —— 客户端（多连接并发）
+# ------------------------------------------------------------
+# 4 条 QUIC 连接同时连 H3 server（验证托管 listener 多连接并发
+# 路由正确性），每条连接顺序请求：
+#   路由 handler /api/hi（→ 与 HTTP/1.1 相同 body "h3-api:hi"）
+#   路由 :id + query /api/json/<id>?x=1（→ JSON id/q 还原）
+#   静态 /hello.txt（→ 与 HTTP/1.1 curl 对照的 body）
+#   404 /nope（管道 404 文案）、403 路径穿越（/../ 拒绝）
+# 输出行固定格式供 verify.sh 与 HTTP/1.1 curl 结果 diff 对照。
+# ============================================================
+import "c/ngtcp2"
+
+extern def quic_connect(ip: str, port: int, alpn: str) -> int
+extern def quic_close(conn: int) -> bool
+extern def h3_conn_setup(conn: int, qpack_cap: int) -> bool
+extern def h3_conn_close(conn: int) -> bool
+extern def h3_client_open_stream(conn: int) -> int
+extern def h3_client_send_request_stream(conn: int, sid: int, method: str, scheme: str, authority: str, path: str, headers: list, body: str) -> bool
+extern def h3_client_read_response_stream(conn: int, sid: int, timeout_ms: int) -> dict
+
+def req(conn, tag, path, headers):
+    var s = h3_client_open_stream(conn)
+    assert(s > 0, "client[" + tag + "] open_stream 失败")
+    var sok = h3_client_send_request_stream(conn, s, "GET", "https", "localhost:18011", path, headers, "")
+    assert(sok, "client[" + tag + "] send 失败 " + path)
+    var r = h3_client_read_response_stream(conn, s, 8000)
+    assert(r != null, "client[" + tag + "] 响应缺失 " + path)
+    return r
+
+# 一条连接上的完整管道一致性序列
+def run_conn(conn, tag):
+    var ok = h3_conn_setup(conn, 4096)
+    assert(ok, "client[" + tag + "] h3_conn_setup 失败")
+    # 1) 路由 handler（与 HTTP/1.1 同一 route 表）
+    var r1 = req(conn, tag, "/api/hi", [])
+    assert(r1["status"] == "200", "client[" + tag + "] /api/hi 状态错误 got=" + str(r1["status"]))
+    assert(r1["body"] == "h3-api:hi", "client[" + tag + "] /api/hi body 错误 got=[" + str(r1["body"]) + "]")
+    print("H3 [" + tag + "] route /api/hi -> " + str(r1["status"]) + " body=[h3-api:hi]")
+    # 2) 路由 :id + query（query 由接入桥拆分并解码）
+    var r2 = req(conn, tag, "/api/json/p42?x=1&y=2", [])
+    assert(r2["status"] == "200", "client[" + tag + "] /api/json 状态错误")
+    assert(r2["body"] == "json-api:p42:q=x=1&y=2", "client[" + tag + "] /api/json body 错误 got=[" + str(r2["body"]) + "]")
+    print("H3 [" + tag + "] route /api/json/p42?x=1&y=2 -> " + str(r2["status"]) + " body=[" + r2["body"] + "]")
+    # 3) 静态文件（同 docroot → HTTP/1.1 curl 对照）
+    var r3 = req(conn, tag, "/hello.txt", [])
+    assert(r3["status"] == "200", "client[" + tag + "] /hello.txt 状态错误")
+    assert(r3["body"] == "hello h3 static world\n", "client[" + tag + "] /hello.txt body 错误")
+    print("H3 [" + tag + "] static /hello.txt -> " + str(r3["status"]) + " body=[hello h3 static world]")
+    # 4) 404（同管道文案）
+    var r4 = req(conn, tag, "/no-such-file", [])
+    assert(r4["status"] == "404", "client[" + tag + "] 404 状态错误 got=" + str(r4["status"]))
+    print("H3 [" + tag + "] 404 /no-such-file -> " + str(r4["status"]))
+    # 5) 403 路径穿越（同管道防护）
+    var r5 = req(conn, tag, "/../etc/passwd", [])
+    assert(r5["status"] == "403", "client[" + tag + "] 403 状态错误 got=" + str(r5["status"]))
+    print("H3 [" + tag + "] 403 /../etc/passwd -> " + str(r5["status"]))
+
+# 多连接并发：同时保持 4 条活跃连接（托管 listener 每连接一线程）
+var c0 = quic_connect("127.0.0.1", 18011, "puxian")
+var c1 = quic_connect("127.0.0.1", 18011, "puxian")
+var c2 = quic_connect("127.0.0.1", 18011, "puxian")
+var c3 = quic_connect("127.0.0.1", 18011, "puxian")
+assert(c0 > 0 and c1 > 0 and c2 > 0 and c3 > 0, "client: quic_connect 失败")
+print("client: 4 conns established " + str(c0) + " " + str(c1) + " " + str(c2) + " " + str(c3))
+
+run_conn(c0, "c0")
+run_conn(c1, "c1")
+run_conn(c2, "c2")
+run_conn(c3, "c3")
+
+# 收尾：优雅关闭各连接
+h3_conn_close(c0)
+quic_close(c0)
+h3_conn_close(c1)
+quic_close(c1)
+h3_conn_close(c2)
+quic_close(c2)
+h3_conn_close(c3)
+quic_close(c3)
+print("client: M53-S3 HTTP/3 pipe 多连接一致性 ALL PASS")
+print("client: done")
