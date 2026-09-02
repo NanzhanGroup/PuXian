@@ -35,3 +35,8 @@ examples/m45_pkgdemo/registry_empty/
 # ws-web 构建产物与运行时数据库
 ws-web/tests/build/
 *.db
+
+# ws-web md 站点运行时产物
+ws-web/test_site/out/
+ws-web/test_site/cache/
+ws-web/test_site/access.log

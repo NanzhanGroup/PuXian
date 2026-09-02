@@ -1,0 +1,227 @@
+# ============================================================
+# ws-web/http.px —— HTTP 层：vhost / deny / 静态 / 反代 / TLS / 日志
+# ------------------------------------------------------------
+# v0.5.0 模块化重构：从原 main.px 平移，行为不变；
+# 新增：md 模式站点从 root/out 产物目录服务，构建中返回 503。
+# 全局（main.px 声明）：cfg_sites / started_at / access_log_path /
+#   cert_dir / https_port / default_root / http_port / spawn_http / md_state
+# ============================================================
+
+def host_only(h):
+    i = 0
+    while i < len(h):
+        if h[i] == ":":
+            return h[0:i]
+        i += 1
+    return h
+
+def ext_of(path):
+    i = len(path) - 1
+    while i >= 0:
+        if path[i] == ".":
+            return path[i:]
+        i -= 1
+    return ""
+
+def content_type(path):
+    ext = ext_of(path)
+    if ext == ".html" or ext == ".htm":
+        return "text/html; charset=utf-8"
+    if ext == ".css":
+        return "text/css; charset=utf-8"
+    if ext == ".js":
+        return "application/javascript; charset=utf-8"
+    if ext == ".json":
+        return "application/json; charset=utf-8"
+    if ext == ".md":
+        return "text/markdown; charset=utf-8"
+    if ext == ".png":
+        return "image/png"
+    if ext == ".jpg" or ext == ".jpeg":
+        return "image/jpeg"
+    if ext == ".gif":
+        return "image/gif"
+    if ext == ".svg":
+        return "image/svg+xml"
+    if ext == ".ico":
+        return "image/x-icon"
+    if ext == ".webp":
+        return "image/webp"
+    if ext == ".txt":
+        return "text/plain; charset=utf-8"
+    if ext == ".xml":
+        return "application/xml; charset=utf-8"
+    if ext == ".pdf":
+        return "application/pdf"
+    if ext == ".zip":
+        return "application/zip"
+    if ext == ".gz" or ext == ".tgz":
+        return "application/gzip"
+    if ext == ".tar":
+        return "application/x-tar"
+    if ext == ".woff2":
+        return "font/woff2"
+    return "application/octet-stream"
+
+def write_access_log(host, method, path, status, ms):
+    if access_log_path == "":
+        return
+    line = str(now_ms() // 1000) + " " + host + " " + method + " " + path + " " + str(status) + " " + str(ms) + "ms\n"
+    append_file(access_log_path, line)
+
+def deny_check(site, path):
+    segs = split(path, "/")
+    for seg in segs:
+        if seg == "" or seg == ".well-known":
+            continue
+        if starts_with(seg, "."):
+            return true
+        if site.has("deny_dirs"):
+            dd = site["deny_dirs"]
+            for d in dd:
+                if contains(seg, d):
+                    return true
+    ext = ext_of(path)
+    if ext != "" and site.has("deny_exts"):
+        de = site["deny_exts"]
+        for e in de:
+            if ext == e:
+                return true
+    return false
+
+# md 站点实际文档根：root/out（产物）；纯静态站：root
+def site_docroot(site):
+    if site_is_md(site):
+        out = site["root"] + "/out"
+        if exists(out):
+            return out
+    return site["root"]
+
+def static_file(site, p):
+    root = site_docroot(site)
+    if contains(p, ".."):
+        return null
+    full = root + p
+    idx = full + "/index.html"
+    if exists(idx):
+        return {"status": 200, "body": read_file(idx), "headers": {"Content-Type": "text/html; charset=utf-8"}}
+    if exists(full):
+        return {"status": 200, "body": read_file(full), "headers": {"Content-Type": content_type(full)}}
+    # md 站点：静态资源直读 public/（无需复制进 out）
+    if site_is_md(site):
+        pu = site["root"] + "/public"
+        if exists(pu):
+            pfull = pu + p
+            if exists(pfull) and not contains(p, ".."):
+                return {"status": 200, "body": read_file(pfull), "headers": {"Content-Type": content_type(pfull)}}
+    return null
+
+def spa_fallback(site):
+    idx = site_docroot(site) + "/index.html"
+    if exists(idx):
+        return {"status": 200, "body": read_file(idx), "headers": {"Content-Type": "text/html; charset=utf-8"}}
+    return null
+
+def proxy_forward(target, prefix, req):
+    sub = req["path"][len(prefix):]
+    if sub == "" or not starts_with(sub, "/"):
+        sub = "/" + sub
+    url = target + sub
+    if req["query"] != "":
+        url = url + "?" + req["query"]
+    hdrs = {"_": 0}
+    hdrs.remove("_")
+    hs = req["headers"]
+    for k in hs.keys():
+        kl = to_lower(k)
+        if kl == "content-type" or kl == "authorization" or kl == "cookie" or kl == "x-requested-with":
+            hdrs[k] = hs[k]
+    resp = http_request(url, req["method"], req["body"], hdrs)
+    rh = {"_": 0}
+    rh.remove("_")
+    if resp["headers"].has("Content-Type"):
+        rh["Content-Type"] = resp["headers"]["Content-Type"]
+    return {"status": resp["status"], "body": resp["body"], "headers": rh}
+
+# md 站点是否已就绪可服务（构建完成）
+def md_site_ready(host):
+    if md_state.has(host) and md_state[host].has("ready") and md_state[host]["ready"] == 1:
+        return true
+    return false
+
+# 全链路 vhost handler
+def site_handler(req):
+    t0 = now_ms()
+    host = host_only(req["headers"]["Host"])
+    if host == "" or not cfg_sites.has(host):
+        return {"status": 404, "body": "not found", "headers": {"Content-Type": "text/plain; charset=utf-8"}}
+    site = cfg_sites[host]
+    p = req["path"]
+    if p == "/healthz":
+        r = {"status": 200, "body": json_stringify({"ok": true, "uptime": now_ms() - started_at}), "headers": {"Content-Type": "application/json"}}
+        write_access_log(host, req["method"], p, 200, now_ms() - t0)
+        return r
+    # md 站点：构建未就绪 → 503（预热很快；绝不回源泄漏 src/md）
+    if site_is_md(site):
+        if not md_site_ready(host):
+            write_access_log(host, req["method"], p, 503, now_ms() - t0)
+            return {"status": 503, "body": "site building, retry later", "headers": {"Content-Type": "text/plain; charset=utf-8"}}
+    # 1. 反代路由
+    if site.has("proxy_routes"):
+        prs = site["proxy_routes"]
+        for pr in prs:
+            if starts_with(p, pr["prefix"]):
+                r = proxy_forward(pr["target"], pr["prefix"], req)
+                write_access_log(host, req["method"], p, r["status"], now_ms() - t0)
+                return r
+    # 2. deny
+    if deny_check(site, p):
+        write_access_log(host, req["method"], p, 403, now_ms() - t0)
+        return {"status": 403, "body": "forbidden", "headers": {"Content-Type": "text/plain; charset=utf-8"}}
+    # 3. 静态文件（md 站从 out 服务）
+    r = static_file(site, p)
+    if r == null and site.has("spa_fallback") and site["spa_fallback"] == true:
+        r = spa_fallback(site)
+    if r == null:
+        write_access_log(host, req["method"], p, 404, now_ms() - t0)
+        return {"status": 404, "body": "not found", "headers": {"Content-Type": "text/plain; charset=utf-8"}}
+    write_access_log(host, req["method"], p, r["status"], now_ms() - t0)
+    return r
+
+# ==================== 80 → 301 ====================
+
+def redirect_http(req):
+    host = host_only(req["headers"]["Host"])
+    return {"status": 301, "headers": {"Location": "https://" + host + req["target"]}, "body": ""}
+
+# ==================== TLS / 启动 ====================
+
+def register_tls():
+    hosts = cfg_sites.keys()
+    any_cert = 0
+    for h in hosts:
+        crt = cert_dir + "/" + h + ".crt"
+        key = cert_dir + "/" + h + ".key"
+        if exists(crt) and exists(key):
+            tls_server(crt, key, h)
+            any_cert = 1
+    return any_cert
+
+def serve_https():
+    opts = {"_": 0}
+    opts.remove("_")
+    # M53-S4：HTTP/3 随主服务同端口（UDP）启动，Alt-Svc 由 px_serve 自动通告
+    if h3_port > 0:
+        h3o = {"port": h3_port, "cert": h3_cert, "key": h3_key}
+        opts["http3"] = h3o
+    px_serve(https_port, default_root, 10000, opts)
+
+# 注册全部 vhost（main 启动时调用一次）
+def setup_http():
+    hosts = cfg_sites.keys()
+    for h in hosts:
+        vhost(h, site_handler)
+    vhost("*", site_handler)
+    has_tls = register_tls()
+    if has_tls == 0:
+        print("ws-web: no certs in " + cert_dir + ", plain HTTP mode")

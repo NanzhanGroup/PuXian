@@ -1,0 +1,8 @@
+body { font-family: system-ui, sans-serif; max-width: 780px; margin: 2rem auto; line-height: 1.7; color: #222; }
+header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd; padding-bottom: 0.5rem; }
+.site-nav a { margin-right: 1rem; color: #1a6; text-decoration: none; }
+.site-nav a.active { font-weight: bold; color: #063; }
+.lang-switch a { margin-left: 0.5rem; color: #66c; }
+.lang-switch a.active { font-weight: bold; color: #003; }
+pre { background: #f4f4f4; padding: 0.8rem; border-radius: 6px; overflow-x: auto; }
+table { border-collapse: collapse; } td, th { border: 1px solid #ccc; padding: 0.3rem 0.7rem; }

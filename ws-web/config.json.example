@@ -5,25 +5,32 @@
   "default_root": "/data/www",
   "access_log": "/var/log/ws-web/access.log",
   "spawn_http": 1,
-  "http3": {
-    "cert": "/etc/nginx/ssl/wsai.chat.crt",
-    "key": "/etc/nginx/ssl/wsai.chat.key"
+  "http3": true,
+  "llm": {
+    "provider": "mock",
+    "base_url": "",
+    "model": "",
+    "api_key_env": "WS_WEB_LLM_KEY",
+    "key_file": "/etc/ws-web/llm.key.enc"
   },
   "sites": {
-    "wsai.chat": {
-      "root": "/data/www/wsai_chat",
+    "static.example.com": {
+      "root": "/data/www/static_site",
       "spa_fallback": true,
       "proxy_routes": [
-        { "prefix": "/wxcode/", "target": "http://127.0.0.1:8901" }
+        { "prefix": "/api/", "target": "http://127.0.0.1:8901" }
       ]
     },
-    "soft.wsai.chat": {
-      "root": "/data/www/soft_wsai_chat",
-      "deny_dirs": ["package.bak_", ".bak", "backup", ".git", ".svn", "node_modules"],
-      "deny_exts": [".db", ".sqlite", ".sqlite3", ".key", ".pem", ".p12", ".pfx", ".crt", ".csr", ".env", ".log", ".sh", ".md5", ".sha256", ".py"]
-    },
-    "mta-sts.wsai.chat": {
-      "root": "/data/www/mta_sts_wsai_chat"
+    "docs.example.com": {
+      "type": "md",
+      "root": "/data/www/docs_site",
+      "default_lang": "zh",
+      "langs": ["zh", "en", "ja"],
+      "public_url": "https://docs.example.com",
+      "nav": [
+        { "href": "/index.html", "i18n": "nav_home" },
+        { "href": "/learn.html", "i18n": "nav_learn" }
+      ]
     }
   }
 }

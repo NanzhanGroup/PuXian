@@ -1,0 +1,355 @@
+# ============================================================
+# ws-web/md_render.px —— Markdown 渲染器 + front-matter 解析
+# ------------------------------------------------------------
+# 支持官网/文档站子集：标题/段落/粗斜体/行内代码/链接/图片/列表/
+# 表格/代码围栏/引用/分割线 + front-matter(title/description/order)
+# 站内 .md 链接自动重写为当前语言 .html（prefix 为空=默认语言）
+# 不含完整 GFM（嵌套引用、HTML 内嵌不解析，由源文档纪律约束）
+# ============================================================
+
+# ---------- 基础字符串工具 ----------
+
+def esc_html(s):
+    s = replace(s, "&", "&amp;")
+    s = replace(s, "<", "&lt;")
+    s = replace(s, ">", "&gt;")
+    return s
+
+def find_ch(s, ch, start):
+    i = start
+    while i < len(s):
+        if s[i] == ch:
+            return i
+        i += 1
+    return -1
+
+def find_str(s, sub, start):
+    if sub == "":
+        return start
+    n = len(s)
+    m = len(sub)
+    i = start
+    while i + m <= n:
+        j = 0
+        while j < m:
+            if s[i + j] != sub[j]:
+                break
+            j += 1
+        if j == m:
+            return i
+        i += 1
+    return -1
+
+def is_digit_char(c):
+    return c >= "0" and c <= "9"
+
+def is_space_char(c):
+    return c == " " or c == "\t"
+
+def trim(s):
+    a = 0
+    b = len(s)
+    while a < b and is_space_char(s[a]):
+        a += 1
+    while b > a and is_space_char(s[b - 1]):
+        b -= 1
+    return s[a:b]
+
+# ---------- front-matter ----------
+
+def md_split_front(text):
+    meta = {"title": "", "description": "", "order": "0", "lang": ""}
+    body = text
+    if starts_with(text, "---\n"):
+        nl = find_str(text, "\n---\n", 4)
+        if nl > 0:
+            fm = text[4:nl]
+            body = text[nl + 5:]
+            fl = split(fm, "\n")
+            for line in fl:
+                colon = find_ch(line, ":", 0)
+                if colon <= 0:
+                    continue
+                k = trim(line[0:colon])
+                v = trim(line[colon + 1:])
+                if starts_with(v, "\"") and ends_with(v, "\""):
+                    v = v[1:len(v) - 1]
+                if k != "":
+                    meta[k] = v
+    return {"meta": meta, "body": body}
+
+# ---------- 行内标记 ----------
+
+def md_link_url(href, prefix):
+    # 站内 .md 链接 → 当前语言 .html（绝对 /x.md → prefix + /x.html）
+    h = href
+    frag = ""
+    hashp = find_ch(h, "#", 0)
+    if hashp >= 0:
+        frag = h[hashp:]
+        h = h[0:hashp]
+    if ends_with(h, ".md"):
+        h = h[0:len(h) - 3] + ".html"
+        if starts_with(h, "/"):
+            h = prefix + h
+    return h + frag
+
+def inline_html(s, prefix):
+    out = ""
+    n = len(s)
+    i = 0
+    while i < n:
+        c = s[i]
+        if c == "`":
+            j = find_ch(s, "`", i + 1)
+            if j > i:
+                out += "<code>" + esc_html(s[i + 1:j]) + "</code>"
+                i = j + 1
+                continue
+            out += esc_html(c)
+            i += 1
+            continue
+        if c == "!" and i + 1 < n and s[i + 1] == "[":
+            # ![alt](src)
+            cl = find_ch(s, "]", i + 2)
+            if cl > i and cl + 1 < n and s[cl + 1] == "(":
+                pr = find_ch(s, ")", cl + 2)
+                if pr > cl:
+                    alt = s[i + 2:cl]
+                    src = s[cl + 2:pr]
+                    out += "<img src=\"" + esc_html(md_link_url(src, prefix)) + "\" alt=\"" + esc_html(alt) + "\">"
+                    i = pr + 1
+                    continue
+            out += esc_html(c)
+            i += 1
+            continue
+        if c == "[":
+            cl = find_ch(s, "]", i + 1)
+            if cl > i and cl + 1 < n and s[cl + 1] == "(":
+                pr = find_ch(s, ")", cl + 2)
+                if pr > cl:
+                    txt = s[i + 1:cl]
+                    url = s[cl + 2:pr]
+                    out += "<a href=\"" + esc_html(md_link_url(url, prefix)) + "\">" + inline_html(txt, prefix) + "</a>"
+                    i = pr + 1
+                    continue
+            out += esc_html(c)
+            i += 1
+            continue
+        if c == "*":
+            if i + 1 < n and s[i + 1] == "*":
+                j = find_str(s, "**", i + 2)
+                if j > i:
+                    out += "<strong>" + inline_html(s[i + 2:j], prefix) + "</strong>"
+                    i = j + 2
+                    continue
+            else:
+                j = find_ch(s, "*", i + 1)
+                if j > i:
+                    out += "<em>" + inline_html(s[i + 1:j], prefix) + "</em>"
+                    i = j + 1
+                    continue
+            out += esc_html(c)
+            i += 1
+            continue
+        if c == "&":
+            out += "&amp;"
+            i += 1
+            continue
+        if c == "<":
+            out += "&lt;"
+            i += 1
+            continue
+        if c == ">":
+            out += "&gt;"
+            i += 1
+            continue
+        out += c
+        i += 1
+    return out
+
+# ---------- 块级渲染 ----------
+
+def is_hr_line(line):
+    t = trim(line)
+    if t == "---" or t == "***" or t == "___":
+        return true
+    return false
+
+def heading_level(line):
+    h = 0
+    while h < len(line) and line[h] == "#":
+        h += 1
+    if h == 0 or h > 6:
+        return 0
+    if h < len(line) and line[h] != " ":
+        return 0
+    return h
+
+def is_ul_line(line):
+    t = trim(line)
+    if starts_with(t, "- ") or starts_with(t, "* ") or starts_with(t, "+ "):
+        return true
+    return false
+
+def is_ol_line(line):
+    t = trim(line)
+    if len(t) == 0:
+        return false
+    if not is_digit_char(t[0]):
+        return false
+    p = find_ch(t, ".", 0)
+    if p > 0:
+        return is_digit_char(t[p - 1])
+    return false
+
+def is_table_sep(line):
+    # 形如 | --- | :---: | 的分隔行
+    t = trim(line)
+    if not contains(t, "-"):
+        return false
+    t = replace(t, "|", "")
+    t = replace(t, ":", "")
+    t = replace(t, "-", "")
+    t = replace(t, " ", "")
+    return t == ""
+
+def is_table_line(line):
+    return contains(trim(line), "|")
+
+def parse_table_cells(line):
+    t = trim(line)
+    if starts_with(t, "|"):
+        t = t[1:]
+    if ends_with(t, "|"):
+        t = t[0:len(t) - 1]
+    parts = split(t, "|")
+    cells = []
+    for p in parts:
+        cells.append(trim(p))
+    return cells
+
+def table_html(lines, prefix):
+    header = []
+    body_rows = []
+    data_start = 0
+    if len(lines) >= 2 and is_table_sep(lines[1]):
+        header = parse_table_cells(lines[0])
+        data_start = 2
+    else:
+        data_start = 0
+    i = data_start
+    while i < len(lines):
+        body_rows.append(parse_table_cells(lines[i]))
+        i += 1
+    out = "<table>\n"
+    if len(header) > 0:
+        out += "<thead><tr>"
+        for hc in header:
+            out += "<th>" + inline_html(hc, prefix) + "</th>"
+        out += "</tr></thead>\n"
+    out += "<tbody>\n"
+    for row in body_rows:
+        out += "<tr>"
+        for cell in row:
+            out += "<td>" + inline_html(cell, prefix) + "</td>"
+        out += "</tr>\n"
+    out += "</tbody></table>\n"
+    return out
+
+def list_item_text(line):
+    t = trim(line)
+    i = 0
+    while i < len(t) and (t[i] == "-" or t[i] == "*" or t[i] == "+" or is_digit_char(t[i]) or t[i] == "." or t[i] == " "):
+        i += 1
+    return trim(t[i:])
+
+# 入口：md 正文 → html
+def md_render(md, prefix):
+    lines = split(md, "\n")
+    html = ""
+    n = len(lines)
+    i = 0
+    while i < n:
+        line = lines[i]
+        t = trim(line)
+        if t == "":
+            i += 1
+            continue
+        # 代码围栏
+        if starts_with(t, "```"):
+            lang = trim(t[3:])
+            i += 1
+            buf = []
+            while i < n:
+                if starts_with(trim(lines[i]), "```"):
+                    i += 1
+                    break
+                buf.append(lines[i])
+                i += 1
+            code = join("\n", buf)
+            cls = ""
+            if lang != "":
+                cls = " class=\"language-" + lang + "\""
+            html += "<pre><code" + cls + ">" + esc_html(code) + "</code></pre>\n"
+            continue
+        # 标题
+        lv = heading_level(line)
+        if lv > 0:
+            content = trim(line[lv:])
+            html += "<h" + str(lv) + ">" + inline_html(content, prefix) + "</h" + str(lv) + ">\n"
+            i += 1
+            continue
+        # 分割线
+        if is_hr_line(line):
+            html += "<hr>\n"
+            i += 1
+            continue
+        # 引用
+        if starts_with(t, ">"):
+            buf = []
+            while i < n and starts_with(trim(lines[i]), ">"):
+                buf.append(trim(lines[i])[1:])
+                i += 1
+            html += "<blockquote><p>" + inline_html(join(" ", buf), prefix) + "</p></blockquote>\n"
+            continue
+        # 无序列表
+        if is_ul_line(line):
+            html += "<ul>\n"
+            while i < n and is_ul_line(lines[i]):
+                html += "<li>" + inline_html(list_item_text(lines[i]), prefix) + "</li>\n"
+                i += 1
+            html += "</ul>\n"
+            continue
+        # 有序列表
+        if is_ol_line(line):
+            html += "<ol>\n"
+            while i < n and is_ol_line(lines[i]):
+                html += "<li>" + inline_html(list_item_text(lines[i]), prefix) + "</li>\n"
+                i += 1
+            html += "</ol>\n"
+            continue
+        # 表格（以 | 开头）
+        if starts_with(t, "|") and is_table_line(line):
+            buf = []
+            while i < n and is_table_line(lines[i]):
+                buf.append(lines[i])
+                i += 1
+            html += table_html(buf, prefix)
+            continue
+        # 普通段落：收集连续行
+        buf = []
+        while i < n:
+            cur = lines[i]
+            ct = trim(cur)
+            if ct == "":
+                break
+            if starts_with(trim(cur), "```") or heading_level(cur) > 0 or is_hr_line(cur) or is_ul_line(cur) or is_ol_line(cur) or (starts_with(trim(cur), ">")) or (starts_with(trim(cur), "|") and is_table_line(cur)):
+                break
+            buf.append(trim(cur))
+            i += 1
+        if len(buf) > 0:
+            html += "<p>" + inline_html(join(" ", buf), prefix) + "</p>\n"
+            continue
+        i += 1
+    return html
