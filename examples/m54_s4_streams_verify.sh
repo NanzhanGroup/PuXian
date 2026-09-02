@@ -42,7 +42,7 @@ fi
 if ! grep -q "client: ok" /tmp/m54s4_client.log; then
     echo "❌ M54-S4: client 未完成"; exit 1
 fi
-grep -q -- "-206 STREAM_ID_BLOCKED" /tmp/m54s4_client.log \
+grep -q -- "open 3rd stream -> rv=-206" /tmp/m54s4_client.log \
     && grep -q "retry open 3rd stream -> sid=" /tmp/m54s4_client.log \
     || { echo "❌ M54-S4: 断言缺失"; exit 1; }
 echo "== server log =="
