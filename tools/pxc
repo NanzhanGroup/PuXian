@@ -46,7 +46,7 @@ copy_runtime() {
     local f
     for f in runtime.h runtime.c runtime_aes.c runtime_xml.c runtime_zip.c \
              runtime_ws.c runtime_rsa.c runtime_sqlite.c runtime_route.c runtime_h2.c \
-             runtime_ffi.c; do
+             runtime_ffi.c runtime_quic.c; do
         [ -f "$RT_DIR/$f" ] || { echo "错误: 缺少 runtime 文件 $RT_DIR/$f" >&2; return 1; }
         cp "$RT_DIR/$f" "$build_dir/"
     done
@@ -61,6 +61,13 @@ copy_runtime() {
         cp "$RT_DIR/third_party/sqlite3/sqlite3.c" "$build_dir/"
     fi
     cp "$RT_DIR/third_party/sqlite3/sqlite3.h" "$build_dir/"
+    # M46：QUIC 栈（ngtcp2 + OpenSSL 静态库与头文件）
+    mkdir -p "$build_dir/ngtcp2/include" "$build_dir/ngtcp2/lib" \
+             "$build_dir/openssl/include" "$build_dir/openssl/lib"
+    cp -r "$RT_DIR/third_party/ngtcp2/include/ngtcp2" "$build_dir/ngtcp2/include/"
+    cp "$RT_DIR/third_party/ngtcp2/lib/"*.a "$build_dir/ngtcp2/lib/"
+    cp -r "$RT_DIR/third_party/openssl/include/openssl" "$build_dir/openssl/include/"
+    cp "$RT_DIR/third_party/openssl/lib/"*.a "$build_dir/openssl/lib/"
     return 0
 }
 
@@ -103,11 +110,15 @@ cmd_build() {
         "$build_dir/runtime_route.c" \
         "$build_dir/runtime_h2.c" \
         "$build_dir/runtime_ffi.c" \
+        "$build_dir/runtime_quic.c" \
         "$sqlite_src" \
         "$build_dir/miniz.c" "$build_dir/miniz_tinfl.c" "$build_dir/miniz_tdef.c" \
         -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_FOREIGN_KEYS=1 \
         -I"$build_dir" -I"$RT_DIR/third_party/miniz" -I"$mbedtls_inc" \
+        -I"$build_dir/ngtcp2/include" -I"$build_dir/openssl/include" \
         "$mbedtls_lib/libmbedtls.a" "$mbedtls_lib/libmbedx509.a" "$mbedtls_lib/libmbedcrypto.a" \
+        "$build_dir/ngtcp2/lib/libngtcp2.a" "$build_dir/ngtcp2/lib/libngtcp2_crypto_quictls.a" \
+        "$build_dir/openssl/lib/libssl.a" "$build_dir/openssl/lib/libcrypto.a" \
         -lm -ldl || {
         echo "gcc 编译失败: $out_path" >&2
         return 1

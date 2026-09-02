@@ -1,0 +1,22 @@
+import "c/ngtcp2"
+
+extern def quic_listen(port: int) -> int
+extern def quic_accept(listener: int, timeout_ms: int) -> int
+extern def quic_send(conn: int, data: str) -> int
+extern def quic_recv(conn: int, maxlen: int) -> str
+extern def quic_close(conn: int) -> bool
+extern def quic_close_listener(listener: int) -> bool
+
+var lst = quic_listen(17999)
+assert(lst > 0, "server: quic_listen 失败")
+print("server: listening 17999")
+var c = quic_accept(lst, 15000)
+assert(c > 0, "server: quic_accept 失败")
+print("server: accepted conn " + str(c))
+var data = quic_recv(c, 2048)
+print("server: recv [" + data + "]")
+var n = quic_send(c, "echo:" + data)
+print("server: sent " + str(n) + " bytes")
+quic_close(c)
+quic_close_listener(lst)
+print("server: done")

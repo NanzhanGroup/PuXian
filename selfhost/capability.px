@@ -604,6 +604,25 @@ check("sv_best ^0.2.0", sv_best(["0.2.0", "0.2.5", "0.3.0"], "^0.2.0") == "0.2.5
 check("sv_best 无匹配返回 null", sv_best(["1.0.0", "1.2.0"], "^3.0.0") == null)
 
 # ============================================================
+# 21. QUIC 传输级 API（M46，import "c/ngtcp2"）
+# ------------------------------------------------------------
+# quic_listen/quic_accept/quic_connect/quic_send/quic_recv/
+# quic_close/quic_close_listener —— 基于 ngtcp2 + quictls 静态编译。
+# 完整握手回环见 examples/m46_quic_verify.sh（编译模式端到端 PASS）。
+# 此处验证 FFI 绑定可加载 + 基础生命周期（双模式一致）。
+# ============================================================
+import "c/ngtcp2"
+
+extern def quic_listen(port: int) -> int
+extern def quic_close_listener(listener: int) -> bool
+extern def quic_close(conn: int) -> bool
+
+var ql = quic_listen(17996)
+check("M46 quic_listen 返回有效 listener", ql > 0)
+check("M46 quic_close_listener 关闭", quic_close_listener(ql) == true)
+check("M46 quic_close 无效 conn 返回 false", quic_close(0) == false)
+
+# ============================================================
 # 汇总
 # ============================================================
 print("")

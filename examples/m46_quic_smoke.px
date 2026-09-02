@@ -1,0 +1,11 @@
+import "c/ngtcp2"
+
+extern def quic_listen(port: int) -> int
+extern def quic_close_listener(listener: int) -> bool
+
+var lst = quic_listen(17999)
+assert(lst > 0, "quic_listen 应返回有效 id")
+print("listen id = " + str(lst))
+var ok = quic_close_listener(lst)
+print("close = " + str(ok))
+print("M46 smoke OK")

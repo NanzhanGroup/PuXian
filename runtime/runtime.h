@@ -125,6 +125,7 @@ LXValue px_native(const char* name, LXFuncPtr fn);
 void    px_ffi_register(const char* name, LXFuncPtr fn);
 bool    px_ffi_has(const char* name);
 LXValue bi_ffi_call(LXValue* args, int nargs, void* ctx);   // ffi_call(name, args_list)
+void    px_register_quic(void);                          // M46：QUIC 绑定（runtime_quic.c）
 LXValue px_struct(const char* type_name, char** fnames, LXValue* fvals, int nfields);
 LXValue px_enum(const char* type_name, const char* variant);
 LXValue px_tuple(LXValue* items, int len);
