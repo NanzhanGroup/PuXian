@@ -224,6 +224,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 - `m48_qpack_verify.sh` —— QPACK 完整 codec 字节精确自检（RFC Huffman 官方向量 + 静态表索引 + 容错，编译/解释双模式）
 - `m49_qpack_dyn_verify.sh` —— QPACK 动态表 + SETTINGS 会话字节精确自检（动态表复用/压缩收益/SETTINGS roundtrip，编译/解释双模式）
 - `m50_h3_mux_verify.sh` —— HTTP/3 多路复用回环（同一连接 3 双向流并发请求/响应一一对应无串扰，编译/解释双模式）
+- `m51_h3_qpack_wire_verify.sh` —— QPACK 会话接入线上回环（双端开控制/编码器/解码器 3 条 QUIC 单向流 + SETTINGS 协商，动态表指令经真实单向流传输：请求 1 插入、请求 2 复用零新增，编译/解释双模式）
 - ... 完整列表见 `examples/`
 
 ---

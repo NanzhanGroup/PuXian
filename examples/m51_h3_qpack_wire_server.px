@@ -1,0 +1,72 @@
+# ============================================================
+# M51 QPACK 会话接入线上：服务端（HTTP/3 + QPACK 动态表走真实单向流）
+# ------------------------------------------------------------
+# 流程：quic_listen → quic_accept（QUIC 握手）
+#       → h3_conn_setup(s, 4096)：本端开 3 条单向流 + SETTINGS + QPACK 会话
+#       → 循环 h3_serve_poll_stream ×2（对端单向流自动分类消费：控制流解析
+#         SETTINGS、编码器流 ingest 动态表镜像）→ read_request_stream（QPACK
+#         动态表解码；编码器流与请求流无跨流顺序保证 → 阻塞时泵编码器流重试）
+#         → send_response_stream（响应头也动态表编码，encoder 指令走本端编码器流）
+# 关键断言：第一请求后对端编码器流字节 >0（client 动态表插入真实上线）；
+#           第二请求同头复用 → 对端编码器流字节不再增长；请求头还原正确。
+# 验证：examples/m51_h3_qpack_wire_verify.sh
+# ============================================================
+import "c/ngtcp2"
+
+extern def quic_listen(port: int) -> int
+extern def quic_accept(listener: int, timeout_ms: int) -> int
+extern def quic_close(conn: int) -> bool
+extern def quic_close_listener(listener: int) -> bool
+extern def h3_conn_setup(conn: int, qpack_cap: int) -> bool
+extern def h3_conn_close(conn: int) -> bool
+extern def h3_conn_peer(conn: int) -> dict
+extern def h3_conn_stats(conn: int) -> dict
+extern def h3_serve_poll_stream(conn: int, timeout_ms: int) -> int
+extern def h3_serve_read_request_stream(conn: int, sid: int, timeout_ms: int) -> dict
+extern def h3_serve_send_response_stream(conn: int, sid: int, status: int, headers: list, body: str) -> bool
+
+var lst = quic_listen(17999)
+assert(lst > 0, "server: quic_listen 失败")
+print("server: listening 17999")
+var c = quic_accept(lst, 15000)
+assert(c > 0, "server: quic_accept 失败")
+print("server: accepted conn " + str(c))
+
+var ok = h3_conn_setup(c, 4096)
+assert(ok, "server: h3_conn_setup 失败")
+var st0 = h3_conn_stats(c)
+print("server: setup ok ctrl=" + str(st0["ctrl_sid"]) + " enc=" + str(st0["enc_sid"]) + " dec=" + str(st0["dec_sid"]))
+
+var n = 0
+var enc_after_first = -1
+while n < 2:
+    var sid = h3_serve_poll_stream(c, 8000)
+    assert(sid >= 0, "server: poll 超时")
+    var req = h3_serve_read_request_stream(c, sid, 8000)
+    assert(req != null, "server: read_request 失败")
+    print("server: req path=" + req["path"] + " token=" + req["headers"]["x-token"])
+    assert(req["path"] == "/wire-a", "server: 路径还原错误")
+    assert(req["headers"]["x-token"] == "tok-abcdef0123456789-http3-qpack-wire", "server: x-token 还原错误")
+    var p = h3_conn_peer(c)
+    print("server: peer enc=" + str(p["peer_enc"]) + " qcap=" + str(p["peer_qcap"]) + " enc_bytes=" + str(p["peer_enc_bytes"]))
+    assert(p["peer_enc"] > 0, "server: 未发现对端编码器流")
+    assert(p["peer_qcap"] == 4096, "server: 对端 SETTINGS 容量协商错误")
+    if n == 0:
+        assert(p["peer_enc_bytes"] > 0, "server: 请求 1 应收到 client 动态表 Insert 指令")
+        enc_after_first = p["peer_enc_bytes"]
+    else:
+        assert(p["peer_enc_bytes"] == enc_after_first, "server: 请求 2 复用动态表，编码器流应零新增")
+    var body = "echo-wire:" + req["path"] + ":stream-" + str(sid)
+    var sok = h3_serve_send_response_stream(c, sid, 200, [["content-type", "text/plain"], ["x-px", "m51"]], body)
+    assert(sok, "server: send_response 失败")
+    print("server: responded stream " + str(sid) + " body=[" + body + "]")
+    n = n + 1
+
+var sts = h3_conn_stats(c)
+print("server: enc_sects=" + str(sts["enc_sects"]) + " enc_sent=" + str(sts["enc_sent"]) + " en_len=" + str(sts["en_len"]))
+assert(sts["enc_sects"] == 2, "server: 两个响应都应动态表编码")
+
+h3_conn_close(c)
+quic_close(c)
+quic_close_listener(lst)
+print("server: done")

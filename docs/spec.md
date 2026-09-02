@@ -735,6 +735,48 @@ extern def h3_serve_send_response_stream(conn: int, sid: int, status: int, heade
   各得独立响应，body=`echo-mux:<path>:stream-<sid>` 一一对应，client 输出逐字节一致）+
   capability section 25 + `examples/m47_h3_verify.sh`（旧 API 单流回归 PASS）。
 
+### 8.12 QPACK 会话接入线上（M51，编码器/解码器/控制流走真实 QUIC 单向流）
+
+M49 的 QPACK 动态表会话是**进程内 A/B 手递**（`h3_qs_take_enc` 取出的编码器指令手动喂对端
+`h3_qs_dec_ingest`）。M51 把它**接上真实线路**：每条 HTTP/3 连接按 RFC 9114 §6.2.1 建立三条
+**QUIC 单向流**（stream id 次低位=1：client 2,6,10… / server 3,7,11…）——控制流（必须是
+本端**第一条** uni 流，首字节 0x00，其上是 H3 帧：SETTINGS）、QPACK 编码器流（0x02，Insert/
+SetCapacity 等指令）、QPACK 解码器流（0x03，MVP 预留不自动发 ack）。字段段动态表编码跨网络
+真实生效：编码器指令经真实单向流传输、对端 ingest 镜像表；编码器流与请求流是**不同 QUIC 流、
+无跨流顺序保证** → 解码遇缺指令（blocked）时泵对端编码器流补齐后重试（RFC 9204 §4.2）。
+
+```python
+import "c/ngtcp2"
+
+# M51 新增：QUIC 单向流（HTTP/3 控制/编码器/解码器流）
+extern def quic_open_uni_stream(conn: int) -> int          # 本地 open uni 流 → sid | -1
+
+# M51 新增：连接级 HTTP/3 会话（自动开 3 条 uni + SETTINGS + QPACK 动态表）
+extern def h3_conn_setup(conn: int, qpack_cap: int) -> bool  # 幂等；之后请求/响应自动走动态表
+extern def h3_conn_close(conn: int) -> bool                  # 释放会话（QPACK 槽回收）
+extern def h3_conn_peer(conn: int) -> dict|null              # 对端状态（uni sid / SETTINGS / ingest 统计）
+extern def h3_conn_stats(conn: int) -> dict|null              # 本端统计（enc_sent/表大小/阻塞恢复）
+```
+
+- **接线模型**（复用 M49 `qd_sess` 双表状态机，每端一个会话）：本端编码字段段时 QPACK
+  encoder 指令（eout）flush 到本端编码器 uni 流；对端从编码器流读字节 `ingest` 进镜像表后
+  解码。SETTINGS（0x01=QPACK_MAX_TABLE_CAPACITY、0x07=QPACK_BLOCKED_STREAMS，RFC 9114
+  §7.2.8）从对端控制流自动解析（`h3_conn_peer` 可查）；MVP 自闭环假设两端容量同配（真实
+  互操作需等对端 SETTINGS 再启动编码 → 留待后续）。
+- **QPACK blocked 恢复**：`px_qd_dec` 返回 -2（RIC 超出已 ingest 指令）时，接收端按对端
+  uni 布局探测（对端首条 uni = 2 或 3，步进 4）读编码器流 ingest 后重试；连接状态记录
+  `blocked_cnt` 统计。
+- **旧 API 兼容**：未 `h3_conn_setup` 的连接走原无状态 codec（M47–M50 行为零变化）；
+  `h3_serve_poll_stream` 增强为自动消费对端 uni 流（bidi 请求流照旧返回），旧客户端不开
+  uni → 行为不变。
+- **运行时修复（真 bug）**：`quic_pump` 增 `want_sid` 参数——读指定流时不再因"其他流先有
+  数据"而空转不 recvfrom（M50 多流读路径的潜在死等隐患，M51 对端 uni 数据先于目标流到达
+  时暴露）；`QUIC_STREAM_MAX`/`H3_STREAM_SLOTS` 16→24（容纳 6 条 uni + bidi）。
+- **验证**：`examples/m51_h3_qpack_wire_verify.sh` 双模式 PASS——双端 setup 后：请求 1 插
+  动态表（对端编码器流字节>0）、请求 2 同头复用（编码器流**零新增**指令、字段段全动态索引）、
+  SETTINGS 容量经真实控制流协商（qcap=4096）、请求/响应字段跨线还原正确、client 输出逐字节
+  一致；capability section 26 + M46–M50 回归全 PASS。
+
 ---
 
 ## 9. 双模式执行

@@ -49,7 +49,8 @@ typedef struct {
 } quic_listener;
 
 // M50：多路复用——每连接多条双向流，各流独立 FIFO 接收缓冲
-#define QUIC_STREAM_MAX 16   // 每连接并发双向流槽（对齐 initial_max_streams_bidi=16）
+// M51：含单向流槽（HTTP/3 控制/编码器/解码器流）→ 上限提到 24
+#define QUIC_STREAM_MAX 24   // 每连接流槽（bidi 16 配额 + uni 若干）
 
 typedef struct {
     int64_t  sid;            // QUIC 流 id（client bidi 0,4,8…；server bidi 1,5,9…）
@@ -287,14 +288,21 @@ static SSL_CTX* quic_make_client_ctx(void) {
 // ---------- 事件泵：收包→喂 conn→发包，直到 handshake 或数据就绪或超时 ----------
 // mode: 0=握手模式（直到 handshake_done）; 1=数据模式（直到 rlen>0 或对端关闭）
 // 返回: 0 成功 / -1 超时 / -2 错误
-static int quic_pump(quic_conn* qc, int64_t timeout_ms, int data_mode) {
+// data_mode=1 时：want_sid>=0 → 泵到指定流有数据/FIN；want_sid<0 → 泵到任一流有数据
+static int quic_pump(quic_conn* qc, int64_t timeout_ms, int data_mode, int64_t want_sid) {
     struct pollfd pfd = { .fd = qc->fd, .events = POLLIN };
     int64_t deadline = quic_now() + (uint64_t)timeout_ms * NGTCP2_MILLISECONDS;
     for (;;) {
-        /* M50: data_mode 目标 = 任一活跃流有数据/FIN */
+        /* M50: data_mode 目标 = 活跃流有数据/FIN；M51: 读指定流需避免其他流数据导致空转 */
         if (data_mode) {
-            if (quic_any_data(qc) != NULL) return 0;
-            if (qc->peer_closed) return 0;
+            if (want_sid >= 0) {
+                quic_stream* t = quic_stream_slot(qc, want_sid);
+                if (t && (t->len > 0 || t->fin)) return 0;
+                if (qc->peer_closed) return 0;
+            } else {
+                if (quic_any_data(qc) != NULL) return 0;
+                if (qc->peer_closed) return 0;
+            }
         } else {
             if (qc->handshake_done) return 0;
         }
@@ -520,7 +528,7 @@ static LXValue bi_quic_accept(LXValue* args, int nargs, void* ctx) {
             SSL_free(ssl); ngtcp2_conn_del(qc->conn); qc->used = 0; return px_int(-1);
         }
         // 泵到握手完成
-        int pr2 = quic_pump(qc, timeout_ms, 0);
+        int pr2 = quic_pump(qc, timeout_ms, 0, -1);
         if (pr2 != 0) {
             fprintf(stderr, "[quic] accept pump rv=%d\n", pr2);
             SSL_free(ssl); ngtcp2_conn_del(qc->conn); qc->used = 0; return px_int(-1);
@@ -632,7 +640,7 @@ static LXValue bi_quic_connect(LXValue* args, int nargs, void* ctx) {
     SSL_set_app_data(ssl, &qc->conn_ref);
     SSL_set_connect_state(ssl);
     // 泵到握手完成（open_bidi_stream 需在对端参数已知后，即握手完成后）
-    int pr = quic_pump(qc, 10000, 0);
+    int pr = quic_pump(qc, 10000, 0, -1);
     if (pr != 0) {
         fprintf(stderr, "[quic] connect pump rv=%d\n", pr);
         SSL_free(ssl); SSL_CTX_free(cctx); close(fd); ngtcp2_conn_del(qc->conn); qc->used = 0; return px_int(-1);
@@ -677,7 +685,7 @@ static int64_t quic_write_stream_bytes(quic_conn* qc, int64_t sid,
         if (ndone > 0) { woff += (size_t)ndone; total += (int64_t)ndone; }
         if (ndone == 0 && n == 0) {
             // 流控阻塞：泵一次等 ACK 释放窗口
-            int pr = quic_pump(qc, 1000, 0);
+            int pr = quic_pump(qc, 1000, 0, -1);
             if (pr != 0) break;
         }
         spins++;
@@ -698,7 +706,7 @@ static int64_t quic_read_stream_bytes(quic_conn* qc, int64_t sid,
             int64_t remain = deadline - quic_now();
             if (remain <= 0) return 0;
             int ms = (int)((remain + NGTCP2_MILLISECONDS - 1) / NGTCP2_MILLISECONDS);
-            int pr = quic_pump(qc, ms, 1);
+            int pr = quic_pump(qc, ms, 1, sid);
             if (pr != 0) return 0;
             if (s->len > 0 || s->fin || qc->peer_closed) break;
         }
@@ -725,6 +733,22 @@ static LXValue bi_quic_open_stream(LXValue* args, int nargs, void* ctx) {
     int64_t sid = -1;
     int rv = ngtcp2_conn_open_bidi_stream(qc->conn, &sid, NULL);
     if (rv != 0 || sid < 0) return px_int(-1);
+    if (!quic_stream_new(qc, sid, 0)) return px_int(-1);
+    return px_int(sid);
+}
+
+// ---------- quic_open_uni_stream（新 M51：本地 open 一条单向流）----------
+// HTTP/3 用：控制流/编码器流/解码器流各占一条 uni（client 2,6,10… / server 3,7,11…，
+// 由 ngtcp2 按序分配，首条 uni 即控制流，符合 RFC 9114 §6.2.1）。
+static LXValue bi_quic_open_uni_stream(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || args[0].type != PX_INT) px_error("quic_open_uni_stream 需要 (conn: int)");
+    quic_conn* qc = quic_get_conn(args[0].as.i);
+    if (!qc || !qc->conn) return px_int(-1);
+    int64_t sid = -1;
+    int rv = ngtcp2_conn_open_uni_stream(qc->conn, &sid, NULL);
+    if (rv != 0 || sid < 0) return px_int(-1);
+    // 本地开 uni 只发不收：建本地槽以便 quic_write_stream_bytes 可写
     if (!quic_stream_new(qc, sid, 0)) return px_int(-1);
     return px_int(sid);
 }
@@ -772,7 +796,7 @@ static LXValue bi_quic_poll(LXValue* args, int nargs, void* ctx) {
     if (!qc || !qc->conn) return px_int(-1);
     int timeout_ms = (int)args[1].as.i;
     if (quic_any_data(qc) == NULL && !qc->peer_closed) {
-        int pr = quic_pump(qc, timeout_ms, 1);
+        int pr = quic_pump(qc, timeout_ms, 1, -1);
         if (pr != 0 && quic_any_data(qc) == NULL) return px_int(-1);
     }
     quic_stream* s = quic_any_data(qc);
@@ -788,7 +812,7 @@ static LXValue bi_quic_recv(LXValue* args, int nargs, void* ctx) {
     if (!qc || !qc->conn) return px_str("");
     int maxlen = (int)args[1].as.i;
     if (quic_any_data(qc) == NULL && !qc->peer_closed) {
-        int pr = quic_pump(qc, 5000, 1);
+        int pr = quic_pump(qc, 5000, 1, -1);
         if (pr != 0 && quic_any_data(qc) == NULL) return px_str("");
     }
     quic_stream* s = quic_any_data(qc);
@@ -881,6 +905,13 @@ int64_t px_quic_raw_open_stream(int64_t conn) {
     return r.type == PX_INT ? r.as.i : -1;
 }
 
+// M51：打开一条新单向流（本地发起）。返回 sid / -1。
+int64_t px_quic_raw_open_uni_stream(int64_t conn) {
+    LXValue a[1]; a[0] = px_int(conn);
+    LXValue r = bi_quic_open_uni_stream(a, 1, NULL);
+    return r.type == PX_INT ? r.as.i : -1;
+}
+
 // 写指定流（fin 预留；M50 MVP 以单 DATA 帧长度界定消息，不依赖 FIN，恒传 0）
 int64_t px_quic_raw_send_on(int64_t conn, int64_t sid, const uint8_t* data, int len, int fin) {
     (void)fin;
@@ -901,7 +932,7 @@ int64_t px_quic_raw_poll(int64_t conn, int timeout_ms) {
     quic_conn* qc = quic_get_conn(conn);
     if (!qc || !qc->conn) return -2;
     if (quic_any_data(qc) == NULL && !qc->peer_closed) {
-        int pr = quic_pump(qc, timeout_ms, 1);
+        int pr = quic_pump(qc, timeout_ms, 1, -1);
         if (pr != 0 && quic_any_data(qc) == NULL) return -1;
     }
     quic_stream* s = quic_any_data(qc);
@@ -930,7 +961,7 @@ int64_t px_quic_raw_recv(int64_t conn, uint8_t* out, int maxlen, int timeout_ms)
     quic_conn* qc = quic_get_conn(conn);
     if (!qc || !qc->conn) return 0;
     if (quic_any_data(qc) == NULL && !qc->peer_closed) {
-        int pr = quic_pump(qc, timeout_ms, 1);
+        int pr = quic_pump(qc, timeout_ms, 1, -1);
         if (pr != 0 && quic_any_data(qc) == NULL) return 0;
     }
     quic_stream* s = quic_any_data(qc);
@@ -965,6 +996,7 @@ void px_register_quic(void) {
     px_set_global("quic_accept", px_native("quic_accept", bi_quic_accept));
     px_set_global("quic_connect", px_native("quic_connect", bi_quic_connect));
     px_set_global("quic_open_stream", px_native("quic_open_stream", bi_quic_open_stream));
+    px_set_global("quic_open_uni_stream", px_native("quic_open_uni_stream", bi_quic_open_uni_stream));
     px_set_global("quic_send", px_native("quic_send", bi_quic_send));
     px_set_global("quic_send_stream", px_native("quic_send_stream", bi_quic_send_stream));
     px_set_global("quic_recv", px_native("quic_recv", bi_quic_recv));
@@ -976,6 +1008,7 @@ void px_register_quic(void) {
     px_ffi_register("quic_accept", bi_quic_accept);
     px_ffi_register("quic_connect", bi_quic_connect);
     px_ffi_register("quic_open_stream", bi_quic_open_stream);
+    px_ffi_register("quic_open_uni_stream", bi_quic_open_uni_stream);
     px_ffi_register("quic_send", bi_quic_send);
     px_ffi_register("quic_send_stream", bi_quic_send_stream);
     px_ffi_register("quic_recv", bi_quic_recv);

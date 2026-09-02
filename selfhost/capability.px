@@ -782,6 +782,34 @@ check("M50 quic_open_stream 无效 conn(未监听) → -1", quic_open_stream(3) 
 check("M50 quic_recv_stream 指定流无数据(超时短) → 空串", quic_recv_stream(3, 0, 16, 5) == "")
 
 # ============================================================
+# 26. HTTP/3 QPACK 会话接入线上（M51：QUIC 单向流 + h3_conn_* 连接会话）
+# ------------------------------------------------------------
+# runtime_quic.c：quic_open_uni_stream（HTTP/3 控制/编码器/解码器流 = QUIC 单向流，
+#   client 2,6,10… / server 3,7,11…）；runtime_h3.c：h3_conn_setup（每连接开 3 条
+#   uni 流：控制流=首条 uni + SETTINGS 帧、QPACK 编码器流、解码器流 + QPACK 动态表
+#   会话）/ h3_conn_close / h3_conn_peer（对端 uni 分类与 SETTINGS）/ h3_conn_stats
+#   （本端编码器流统计）；连接 setup 后请求/响应自动走 QPACK 动态表编解码，编码器
+#   指令经真实单向流传输，解码遇阻塞自动泵对端编码器流恢复。
+# 完整端到端线上验证见 examples/m51_h3_qpack_wire_verify.sh（编译+解释双模式）。
+# 本 section 覆盖无效句柄/未 setup 容错的纯函数断言。
+# ============================================================
+
+extern def quic_open_uni_stream(conn: int) -> int
+extern def h3_conn_setup(conn: int, qpack_cap: int) -> bool
+extern def h3_conn_close(conn: int) -> bool
+extern def h3_conn_peer(conn: int) -> dict
+extern def h3_conn_stats(conn: int) -> dict
+
+check("M51 quic_open_uni_stream 无效 conn → -1", quic_open_uni_stream(0) == -1)
+check("M51 quic_open_uni_stream 未连接 conn → -1", quic_open_uni_stream(3) == -1)
+check("M51 h3_conn_setup 无效 conn → false", h3_conn_setup(0, 4096) == false)
+check("M51 h3_conn_setup 未连接 conn → false", h3_conn_setup(3, 4096) == false)
+check("M51 h3_conn_close 未 setup → false", h3_conn_close(0) == false)
+check("M51 h3_conn_peer 无效/未 setup → null", h3_conn_peer(0) == null)
+check("M51 h3_conn_peer 未 setup conn → null", h3_conn_peer(3) == null)
+check("M51 h3_conn_stats 未 setup → null", h3_conn_stats(3) == null)
+
+# ============================================================
 # 汇总
 # ============================================================
 print("")

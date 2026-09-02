@@ -17,6 +17,7 @@
 #define _GNU_SOURCE
 #include "runtime.h"
 #include "runtime_h3_qpack.h"
+#include "runtime_h3_qpack_dyn.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,12 +25,20 @@
 #define H3_MAX_CONN 64
 #define H3_FRAME_HEADERS 0x01
 #define H3_FRAME_DATA    0x00
+#define H3_FRAME_SETTINGS 0x04   // M51：控制流 SETTINGS 帧（RFC 9114 §7.2.8）
 #define H3_BUF_MAX (1 << 20)   // 单帧/消息上限 1MB（MVP）
 #define H3_METHOD ":method"
 #define H3_SCHEME ":scheme"
 #define H3_AUTH   ":authority"
 #define H3_PATH   ":path"
 #define H3_STATUS ":status"
+// M51：SETTINGS 键（RFC 9114 §7.2.8）
+#define H3_SET_QPACK_MAX_TABLE_CAPACITY 0x01
+#define H3_SET_QPACK_BLOCKED_STREAMS    0x07
+// M51：单向流类型（RFC 9114 §6.2.1，流首字节 varint）
+#define H3_UT_CONTROL  0x00
+#define H3_UT_ENCODER  0x02
+#define H3_UT_DECODER  0x03
 
 // ==================== QUIC varint（RFC 9000 §16）====================
 static int h3_varint_enc(uint8_t* out, uint64_t v) {
@@ -93,7 +102,7 @@ static int h3_build_frame(uint8_t* out, int type, const uint8_t* payload, int pl
 
 // ==================== per-stream 接收缓冲（M50：多路复用）====================
 // 每条活跃双向流一个 H3 帧缓冲槽（按 sid 精确匹配线性槽，上限 H3_STREAM_SLOTS）。
-#define H3_STREAM_SLOTS 16
+#define H3_STREAM_SLOTS 24   // M51：含对端控制流等 uni 槽（对齐 QUIC_STREAM_MAX）
 
 typedef struct {
     int64_t sid;           // 绑定流 id
@@ -104,6 +113,68 @@ typedef struct {
 
 static h3connbuf g_h3buf[H3_MAX_CONN][H3_STREAM_SLOTS];
 static int64_t g_last_sid[H3_MAX_CONN];   // 旧 API 兼容：最近读请求/响应的流
+
+// ==================== M51：连接级 HTTP/3 会话（QPACK 动态表接入线上）====================
+// 已 setup 的连接：本端开 3 条单向流（RFC 9114 §6.2.1：控制流必须是本端第一条 uni 流），
+//   控制流首字节 0x00 + SETTINGS 帧（qcap / blocked）；编码器流 0x02 走 QPACK
+//   Insert/SetCapacity 指令；解码器流 0x03 预留（MVP 不在线自动发 ack）。
+// QPACK 会话（px_qd_*，g_qds 句柄）承载本端编码表 + 对端镜像表。
+typedef struct {
+    int used;              // 会话已 setup
+    int64_t qd;            // 本端 QPACK 会话 id | 0
+    int64_t ctrl_sid;      // 本端控制流 sid
+    int64_t enc_sid;       // 本端编码器流 sid
+    int64_t dec_sid;       // 本端解码器流 sid
+    int64_t peer_ctrl;     // 对端控制流 sid（已分类）| 0 未知
+    int64_t peer_enc;      // 对端编码器流 sid | 0 未知
+    int64_t peer_dec;      // 对端解码器流 sid | 0 未知
+    int64_t peer_qcap;     // 对端 SETTINGS QPACK_MAX_TABLE_CAPACITY | -1 未收
+    int64_t peer_blocked;  // 对端 SETTINGS QPACK_BLOCKED_STREAMS | -1 未收
+    int64_t peer_enc_bytes;// 对端编码器流已 ingest 字节
+    int64_t enc_sent;      // 本端编码器流累计发送字节
+    int64_t enc_sects;     // 动态表编码的字段段计数
+    int64_t blocked_cnt;   // 解码阻塞恢复次数
+} h3conn_state;
+static h3conn_state g_h3st[H3_MAX_CONN];
+static h3conn_state* h3_st(int64_t conn) {
+    return (conn > 0 && conn <= H3_MAX_CONN) ? &g_h3st[conn - 1] : NULL;
+}
+
+// QUIC 流 id 次低位（0x2）：0=双向 / 1=单向（RFC 9000 §2.1；最低位 0x1 是发起者标志）
+static int h3_sid_is_uni(int64_t sid) { return (int)(sid & 2) ? 1 : 0; }
+
+// 构造 SETTINGS 帧（完整帧，type=0x04）：payload = varint 键值对
+static int h3_build_settings_frame(uint8_t* out, int qcap, int blocked) {
+    uint8_t pl[64]; int po = 0;
+    uint8_t t[8]; int tn;
+    tn = h3_varint_enc(t, H3_SET_QPACK_MAX_TABLE_CAPACITY); memcpy(pl + po, t, (size_t)tn); po += tn;
+    tn = h3_varint_enc(t, (uint64_t)(qcap < 0 ? 0 : qcap)); memcpy(pl + po, t, (size_t)tn); po += tn;
+    tn = h3_varint_enc(t, H3_SET_QPACK_BLOCKED_STREAMS); memcpy(pl + po, t, (size_t)tn); po += tn;
+    tn = h3_varint_enc(t, (uint64_t)(blocked < 0 ? 0 : blocked)); memcpy(pl + po, t, (size_t)tn); po += tn;
+    int off = 0;
+    tn = h3_varint_enc(t, H3_FRAME_SETTINGS); memcpy(out + off, t, (size_t)tn); off += tn;
+    tn = h3_varint_enc(t, (uint64_t)po); memcpy(out + off, t, (size_t)tn); off += tn;
+    memcpy(out + off, pl, (size_t)po); off += po;
+    return off;
+}
+
+// 解析 SETTINGS 帧 payload（键值 varint 循环）→ 存 peer_qcap/peer_blocked
+static void h3_parse_settings_payload(const uint8_t* p, int plen, h3conn_state* st) {
+    int off = 0;
+    while (off < plen) {
+        uint64_t k = 0, v = 0;
+        int n1 = h3_varint_dec(p + off, plen - off, &k);
+        if (n1 <= 0) return;
+        off += n1;
+        if (off >= plen) return;
+        int n2 = h3_varint_dec(p + off, plen - off, &v);
+        if (n2 <= 0) return;
+        off += n2;
+        if (k == H3_SET_QPACK_MAX_TABLE_CAPACITY) st->peer_qcap = (int64_t)v;
+        else if (k == H3_SET_QPACK_BLOCKED_STREAMS) st->peer_blocked = (int64_t)v;
+        // 其他键忽略（RFC 9114 §7.2.8：未知 SETTINGS 必须忽略）
+    }
+}
 
 static h3connbuf* h3_buf_for(int64_t conn, int64_t sid) {
     if (conn <= 0 || conn > H3_MAX_CONN) return NULL;
@@ -184,6 +255,162 @@ static int h3_take_frame(int64_t conn, int64_t sid, uint8_t** payload, int* plen
         return t;
     }
 }
+// ==================== M51：QPACK/控制流线上接线（真实单向流）====================
+
+// 对端控制流数据缓存进该流帧缓冲并解析完整帧（SETTINGS 等）
+static void h3_ctrl_ingest(int64_t conn, int64_t sid, h3conn_state* st,
+                           const uint8_t* data, int len) {
+    h3connbuf* b = h3_buf_for(conn, sid);
+    if (!b) return;
+    if (b->len + len > b->cap) {
+        int nc = b->cap > 0 ? b->cap * 2 : 4096;
+        while (nc < b->len + len) nc *= 2;
+        uint8_t* nd = (uint8_t*)realloc(b->data, (size_t)nc);
+        if (!nd) return;
+        b->data = nd; b->cap = nc;
+    }
+    if (len > 0 && data) { memcpy(b->data + b->len, data, (size_t)len); b->len += len; }
+    for (;;) {
+        int po = 0, pl = 0;
+        int t = h3_buf_parse(b, &po, &pl);
+        if (t == -2) break;                 // 不完整：等更多数据
+        if (t == -1) { b->len = 0; break; } // 非法帧：丢弃该流缓冲
+        if (t == H3_FRAME_SETTINGS) h3_parse_settings_payload(b->data + po, pl, st);
+        int consumed = po + pl;
+        if (consumed < b->len) memmove(b->data, b->data + consumed, (size_t)(b->len - consumed));
+        b->len -= consumed;
+        if (b->len <= 0) break;
+    }
+}
+
+// 处理一条对端单向流（数据已 recv 到 buf）：首见分类（0x00 控制 / 0x02 编码器 /
+// 0x03 解码器），随后按类型消费（SETTINGS 解析 / QPACK ingest / 丢弃）。
+static int h3_consume_peer_uni(int64_t conn, int64_t sid, h3conn_state* st,
+                               const uint8_t* buf, int n) {
+    if (!st || !st->used || n <= 0) return -1;
+    int off = 0;
+    int known = (sid == st->peer_ctrl) || (sid == st->peer_enc) || (sid == st->peer_dec);
+    if (!known) {
+        int type = buf[0] & 0x3f;           // 流类型 varint（<64 单字节）
+        if (type == H3_UT_CONTROL) st->peer_ctrl = sid;
+        else if (type == H3_UT_ENCODER) st->peer_enc = sid;
+        else if (type == H3_UT_DECODER) st->peer_dec = sid;
+        else return 0;                       // 未知/保留类型：丢弃该流
+        off = 1;                             // 已消费流类型字节
+    }
+    const uint8_t* d = buf + off; int dl = n - off;
+    if (sid == st->peer_enc) {
+        if (st->qd > 0 && dl > 0) {
+            if (px_qd_ingest(st->qd, d, dl) != 0) return -1;   // 非法编码器指令
+            st->peer_enc_bytes += dl;
+        }
+    } else if (sid == st->peer_ctrl) {
+        if (dl > 0) h3_ctrl_ingest(conn, sid, st, d, dl);
+    }
+    // peer_dec：解码器流指令 MVP 不依赖 → 丢弃
+    return 0;
+}
+
+// 泵对端编码器流并 ingest（解码字段段遇阻塞 -2 时调用；编码器流与请求流是不同
+// QUIC 流、无跨流顺序保证，RFC 9204 以阻塞等待兜底）。对端编码器流未知时按
+// HTTP/3 uni 布局探测分类（对端首条 uni = 2/3，步进 4；MVP 双端各 3 条 uni）。
+// 注意：不能用 quic_poll 定位对端 uni（bidi 数据占住最小 sid 时 poll 不会换流），
+// 故直接按流 id 探测 recv（不存在/空的流立即返回 0）。返回 0 有进展 / -1 无进展。
+static int h3_ingest_peer_enc(int64_t conn, h3conn_state* st, int64_t timeout_ms) {
+    uint8_t buf[8192];
+    if (!st) return -1;
+    int64_t first = (st->ctrl_sid & 1) ? 2 : 3;   // 对端首条 uni（bit0=0 → 对端 server：3…）
+    for (int attempt = 0; attempt < 8; attempt++) {
+        if (st->peer_enc == 0) {
+            // 探测对端 uni 流（前 4 条足够 MVP）
+            for (int64_t s = first; s < first + 16; s += 4) {
+                int64_t n = px_quic_raw_recv_on(conn, s, buf, (int)sizeof(buf), 0);
+                if (n <= 0) continue;
+                int64_t before = st->peer_enc_bytes;
+                if (h3_consume_peer_uni(conn, s, st, buf, (int)n) != 0) return -1;
+                if (st->peer_enc_bytes != before) return 0;   // 已 ingest 到编码器指令（进展）
+            }
+        }
+        if (st->peer_enc > 0) {
+            int64_t n = px_quic_raw_recv_on(conn, st->peer_enc, buf, (int)sizeof(buf), 0);
+            if (n > 0) {
+                if (st->qd > 0 && px_qd_ingest(st->qd, buf, (int)n) != 0) return -1;
+                st->peer_enc_bytes += n;
+                return 0;
+            }
+            if (attempt >= 3) return -1;                 // enc 已空且等过
+            px_quic_raw_poll(conn, (int)(timeout_ms > 0 && timeout_ms < 2000 ? timeout_ms : 800));
+            continue;
+        }
+        // enc 流尚未出现：等待对端数据
+        if (attempt >= 6) return -1;
+        px_quic_raw_poll(conn, (int)(timeout_ms > 0 && timeout_ms < 2000 ? timeout_ms : 800));
+    }
+    return -1;
+}
+
+// 等任一对端双向流（请求流）有数据 → sid | -1 超时/出错。
+// 对端单向流自动分类消费（SETTINGS 解析 / QPACK ingest / 解码器丢弃）。
+static int64_t h3_poll_requests(int64_t conn, int64_t timeout_ms) {
+    h3conn_state* st = h3_st(conn);
+    uint8_t buf[8192];
+    int spins = 0;
+    for (;;) {
+        int64_t sid = px_quic_raw_poll(conn, (int)(timeout_ms > 0 ? timeout_ms : 500));
+        if (sid < 0) return sid;
+        if (!(sid & 2)) return sid;                     // bidi → 请求/响应流
+        if (!st || !st->used) {                          // 未 setup：防御性丢弃
+            while (px_quic_raw_recv_on(conn, sid, buf, (int)sizeof(buf), 0) > 0) {}
+            if (++spins > 20) return -1;
+            continue;
+        }
+        int64_t n = px_quic_raw_recv_on(conn, sid, buf, (int)sizeof(buf), 500);
+        if (n <= 0) { if (++spins > 20) return -1; continue; }
+        if (h3_consume_peer_uni(conn, sid, st, buf, (int)n) != 0) return -1;
+        timeout_ms = 2000;                              // 后续轮询短超时
+        if (++spins > 200) return -1;
+    }
+}
+
+// 字段列表 LXValue → C 字符串数组（strndup 堆拷贝；用 h3_free_c_fields 释放）
+static int h3_fields_to_c(LXValue fields, char** names, char** vals,
+                          int* nls, int* vls, int maxf) {
+    if (fields.type != PX_LIST) return -1;
+    LXObject* fo = fields.as.obj;
+    int nf = 0;
+    for (int i = 0; i < fo->as.list.len && nf < maxf; i++) {
+        LXValue it = fo->as.list.items[i];
+        if (it.type != PX_LIST) continue;
+        LXObject* p = it.as.obj;
+        if (p->as.list.len < 2) continue;
+        LXValue* kv = p->as.list.items;
+        if ((kv[0].type != PX_STR && kv[0].type != PX_BYTES)) continue;
+        if ((kv[1].type != PX_STR && kv[1].type != PX_BYTES)) continue;
+        int l0 = (int)kv[0].as.obj->as.str.len;
+        int l1 = (int)kv[1].as.obj->as.str.len;
+        names[nf] = strndup(kv[0].as.obj->as.str.data, (size_t)l0);
+        vals[nf] = strndup(kv[1].as.obj->as.str.data, (size_t)l1);
+        if (!names[nf] || !vals[nf]) { free(names[nf]); free(vals[nf]); return nf > 0 ? nf : -1; }
+        nls[nf] = l0; vls[nf] = l1;
+        nf++;
+    }
+    return nf;
+}
+static void h3_free_c_fields(char** names, char** vals, int nf) {
+    for (int i = 0; i < nf; i++) { free(names[i]); free(vals[i]); }
+}
+// C 字段数组 → LXValue 字段列表
+static LXValue h3_c_fields_to_lx(char** names, char** vals, int* nls, int* vls, int nf) {
+    LXValue fields = px_list(8);
+    for (int i = 0; i < nf; i++) {
+        LXValue pair = px_list(2);
+        px_list_push(pair, px_str_len(names[i] ? names[i] : "", nls[i]));
+        px_list_push(pair, px_str_len(vals[i] ? vals[i] : "", vls[i]));
+        px_list_push(fields, pair);
+    }
+    return fields;
+}
+
 // ==================== 语言层绑定 ====================
 
 // ---- 纯 codec（测试用）----
@@ -251,6 +478,8 @@ static void h3_append_headers(LXValue fields, LXValue headers_val) {
 }
 
 // 编码 fields 并以 HEADERS+DATA 两帧写到指定流
+// M51：连接已 setup → QPACK 动态表编码（encoder 指令 flush 到本端编码器单向流）；
+//      未 setup → 无状态 codec（M47–M50 行为不变）。
 static bool h3_send_fields(int64_t conn, int64_t sid, LXValue fields, LXValue body_val) {
     const uint8_t* bd = NULL; int blen = 0;
     if (body_val.type == PX_STR || body_val.type == PX_BYTES) {
@@ -261,8 +490,28 @@ static bool h3_send_fields(int64_t conn, int64_t sid, LXValue fields, LXValue bo
     uint8_t* f = (uint8_t*)malloc(H3_BUF_MAX + 16);
     if (!q || !f) { free(q); free(f); return false; }
     LXObject* fo = fields.as.obj;
-    int qn = px_h3_qenc(q, fo->as.list.items, fo->as.list.len);
-    int fn1 = h3_build_frame(f, H3_FRAME_HEADERS, q, qn > 0 ? qn : 0);
+    int qn;
+    h3conn_state* st = h3_st(conn);
+    if (st && st->used && st->qd > 0 && st->enc_sid > 0) {
+        char* names[512]; char* vals[512]; int nls[512], vls[512];
+        int nf = h3_fields_to_c(fields, names, vals, nls, vls, 512);
+        if (nf < 0) { free(q); free(f); return false; }
+        qn = px_qd_enc(st->qd, names, vals, nls, vls, nf, q, H3_BUF_MAX);
+        h3_free_c_fields(names, vals, nf);
+        if (qn >= 0) {
+            uint8_t eout[8192];
+            int en = px_qd_take_enc(st->qd, eout, (int)sizeof(eout));
+            if (en > 0) {
+                px_quic_raw_send_on(conn, st->enc_sid, eout, en, 0);
+                st->enc_sent += en;
+            }
+            st->enc_sects++;
+        }
+    } else {
+        qn = px_h3_qenc(q, fo->as.list.items, fo->as.list.len);
+    }
+    if (qn < 0) qn = 0;   // 原行为：编码失败发空字段段（理论不发生）
+    int fn1 = h3_build_frame(f, H3_FRAME_HEADERS, q, qn);
     int fn2 = h3_build_frame(f + fn1, H3_FRAME_DATA, bd, blen);
     int64_t sent = px_quic_raw_send_on(conn, sid, f, fn1 + fn2, 0);
     free(q); free(f);
@@ -270,13 +519,32 @@ static bool h3_send_fields(int64_t conn, int64_t sid, LXValue fields, LXValue bo
 }
 
 // 从指定流读一个完整消息（HEADERS 帧 + DATA 帧）→ 返回字段 list + body（heap）
-// 返回帧级状态：0 成功（*pfields/*pbody 已设）；-1 超时/关闭；-2 非法
+// M51：连接已 setup → QPACK 动态表解码（遇阻塞 -2 泵对端编码器流 ingest 后重试）；
+//      未 setup → 无状态 codec。返回帧级状态：0 成功；-1 超时/关闭；-2 非法。
 static int h3_read_section(int64_t conn, int64_t sid, int64_t timeout_ms,
                            LXValue* pfields, uint8_t** pbody, int* pblen) {
     uint8_t* hd = NULL; int hlen = 0;
     int t = h3_take_frame(conn, sid, &hd, &hlen, timeout_ms);
     if (t != H3_FRAME_HEADERS) { free(hd); return -1; }
-    LXValue fields = px_h3_qdec(hd, hlen);
+    LXValue fields;
+    h3conn_state* st = h3_st(conn);
+    if (st && st->used && st->qd > 0) {
+        char** names = NULL; char** vals = NULL; int* nls = NULL; int* vls = NULL;
+        int nf = -1, tries = 0;
+        for (;;) {
+            nf = px_qd_dec(st->qd, hd, hlen, &names, &vals, &nls, &vls);
+            if (nf >= 0) break;
+            if (nf != -2) { free(hd); return -2; }       // 非法字段段
+            if (++tries > 300) { free(hd); return -1; }  // 阻塞超时（防御）
+            if (h3_ingest_peer_enc(conn, st, 1500) != 0) { free(hd); return -1; }
+            st->blocked_cnt++;                           // 阻塞恢复
+        }
+        fields = h3_c_fields_to_lx(names, vals, nls, vls, nf);
+        h3_free_c_fields(names, vals, nf);
+        free(names); free(vals); free(nls); free(vls);
+    } else {
+        fields = px_h3_qdec(hd, hlen);
+    }
     free(hd);
     if (fields.type != PX_LIST) return -2;
     uint8_t* bd = NULL; int blen = 0;
@@ -377,16 +645,100 @@ static LXValue h3_make_request_fields(const char* method, const char* scheme,
     return fields;
 }
 
+// ==================== M51：连接级会话管理（QPACK 动态表接入线上）====================
+
+// h3_conn_setup(conn, qpack_cap:int) -> bool
+// 为连接建立 HTTP/3 会话：开 3 条单向流（控制流=首条 uni + SETTINGS、QPACK 编码器流、
+// 解码器流），建 QPACK 动态表会话。幂等。之后该连接请求/响应自动走动态表编解码。
+static LXValue bi_h3_conn_setup(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 2 || args[0].type != PX_INT || args[1].type != PX_INT)
+        px_error("h3_conn_setup 需要 (conn: int, qpack_cap: int)");
+    int64_t conn = args[0].as.i;
+    int64_t cap = args[1].as.i;
+    h3conn_state* st = h3_st(conn);
+    if (!st) return px_bool(false);
+    if (st->used) return px_bool(true);               // 幂等
+    int64_t ctrl = px_quic_raw_open_uni_stream(conn); // 首条 uni = 控制流（RFC 9114 §6.2.1）
+    if (ctrl < 0) return px_bool(false);
+    int64_t enc = px_quic_raw_open_uni_stream(conn);
+    if (enc < 0) return px_bool(false);
+    int64_t dec = px_quic_raw_open_uni_stream(conn);
+    if (dec < 0) return px_bool(false);
+    int64_t qd = px_qd_open(cap < 0 ? 0 : cap);
+    if (qd <= 0) return px_bool(false);
+    uint8_t buf[512];
+    buf[0] = H3_UT_CONTROL;
+    int n = h3_build_settings_frame(buf + 1, (int)(cap < 0 ? 0 : cap), 100);
+    px_quic_raw_send_on(conn, ctrl, buf, n + 1, 0);
+    uint8_t t1 = H3_UT_ENCODER;
+    px_quic_raw_send_on(conn, enc, &t1, 1, 0);
+    uint8_t t2 = H3_UT_DECODER;
+    px_quic_raw_send_on(conn, dec, &t2, 1, 0);
+    st->used = 1; st->qd = qd;
+    st->ctrl_sid = ctrl; st->enc_sid = enc; st->dec_sid = dec;
+    st->peer_qcap = -1; st->peer_blocked = -1;
+    return px_bool(true);
+}
+
+// h3_conn_close(conn) -> bool：关闭连接级会话（释放 QPACK 会话），连接本身不关
+static LXValue bi_h3_conn_close(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || args[0].type != PX_INT) return px_bool(false);
+    h3conn_state* st = h3_st(args[0].as.i);
+    if (!st || !st->used) return px_bool(false);
+    if (st->qd > 0) px_qd_close(st->qd);
+    memset(st, 0, sizeof(*st));
+    return px_bool(true);
+}
+
+// h3_conn_peer(conn) -> dict|null：对端 HTTP/3 会话状态（uni 流分类 / SETTINGS / ingest 统计）
+static LXValue bi_h3_conn_peer(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || args[0].type != PX_INT) return px_null();
+    h3conn_state* st = h3_st(args[0].as.i);
+    if (!st || !st->used) return px_null();
+    LXValue d = px_dict();
+    px_dict_set(d, "peer_ctrl", px_int(st->peer_ctrl));
+    px_dict_set(d, "peer_enc", px_int(st->peer_enc));
+    px_dict_set(d, "peer_dec", px_int(st->peer_dec));
+    px_dict_set(d, "peer_qcap", px_int(st->peer_qcap));
+    px_dict_set(d, "peer_blocked", px_int(st->peer_blocked));
+    px_dict_set(d, "peer_enc_bytes", px_int(st->peer_enc_bytes));
+    return d;
+}
+
+// h3_conn_stats(conn) -> dict|null：本端会话统计（QPACK 表大小 / 编码器流发送 / 阻塞恢复）
+static LXValue bi_h3_conn_stats(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || args[0].type != PX_INT) return px_null();
+    h3conn_state* st = h3_st(args[0].as.i);
+    if (!st || !st->used) return px_null();
+    LXValue d = px_dict();
+    px_dict_set(d, "qd", px_int(st->qd));
+    px_dict_set(d, "ctrl_sid", px_int(st->ctrl_sid));
+    px_dict_set(d, "enc_sid", px_int(st->enc_sid));
+    px_dict_set(d, "dec_sid", px_int(st->dec_sid));
+    px_dict_set(d, "enc_sent", px_int(st->enc_sent));   // 本端编码器流累计发送字节
+    px_dict_set(d, "enc_sects", px_int(st->enc_sects)); // 动态表编码字段段数
+    px_dict_set(d, "blocked_cnt", px_int(st->blocked_cnt));
+    px_dict_set(d, "en_len", px_int(px_qd_en_len(st->qd)));    // 本端编码表条目
+    px_dict_set(d, "de_len", px_int(px_qd_de_len(st->qd)));    // 对端镜像表条目
+    px_dict_set(d, "ins", px_int(px_qd_ins(st->qd)));          // 已 ingest 插入数
+    return d;
+}
+
 // ==================== 服务端多流 API（M50 新）====================
 
-// h3_serve_poll_stream(conn, timeout_ms) -> int：等任一对端流有数据/FIN → sid | -1
+// h3_serve_poll_stream(conn, timeout_ms) -> int：等任一对端双向流（请求流）有数据 → sid | -1。
+// M51 增强：对端单向流（控制/编码器/解码器）自动分类消费（SETTINGS 解析 / QPACK ingest）。
 static LXValue bi_h3_serve_poll_stream(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 2 || args[0].type != PX_INT || args[1].type != PX_INT)
         px_error("h3_serve_poll_stream 需要 (conn, timeout_ms)");
     int64_t conn = args[0].as.i;
     int64_t timeout = args[1].as.i;
-    int64_t sid = px_quic_raw_poll(conn, (int)timeout);
+    int64_t sid = h3_poll_requests(conn, timeout);
     return px_int(sid);
 }
 
@@ -566,6 +918,10 @@ void px_register_h3(void) {
     px_set_global("h3_client_send_request_stream", px_native("h3_client_send_request_stream", bi_h3_client_send_request_stream));
     px_set_global("h3_client_read_response", px_native("h3_client_read_response", bi_h3_client_read_response));
     px_set_global("h3_client_read_response_stream", px_native("h3_client_read_response_stream", bi_h3_client_read_response_stream));
+    px_set_global("h3_conn_setup", px_native("h3_conn_setup", bi_h3_conn_setup));
+    px_set_global("h3_conn_close", px_native("h3_conn_close", bi_h3_conn_close));
+    px_set_global("h3_conn_peer", px_native("h3_conn_peer", bi_h3_conn_peer));
+    px_set_global("h3_conn_stats", px_native("h3_conn_stats", bi_h3_conn_stats));
     px_ffi_register("h3_qenc", bi_h3_qenc);
     px_ffi_register("h3_qdec", bi_h3_qdec);
     px_ffi_register("h3_huff", bi_h3_huff);
@@ -582,4 +938,8 @@ void px_register_h3(void) {
     px_ffi_register("h3_client_send_request_stream", bi_h3_client_send_request_stream);
     px_ffi_register("h3_client_read_response", bi_h3_client_read_response);
     px_ffi_register("h3_client_read_response_stream", bi_h3_client_read_response_stream);
+    px_ffi_register("h3_conn_setup", bi_h3_conn_setup);
+    px_ffi_register("h3_conn_close", bi_h3_conn_close);
+    px_ffi_register("h3_conn_peer", bi_h3_conn_peer);
+    px_ffi_register("h3_conn_stats", bi_h3_conn_stats);
 }
