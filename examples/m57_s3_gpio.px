@@ -1,0 +1,51 @@
+# ============================================================
+# M57 S3：GPIO 芯片信息查询示例（真实板子运行；x86 无设备 SKIP）
+# ------------------------------------------------------------
+# 通过 /dev/gpiochipN 字符设备的 GPIO_GET_CHIPINFO_IOCTL（只读查询）演示
+# GPIO 控制的 ioctl 胶水：bytes buffer 就地填充内核结构体 gpiochip_info
+# （name[32] @0 | label[32] @32 | lines u32 @64，sizeof=68），语言读回解析。
+# 查询安全（只读），树莓派/网关/盒子均可跑；容器无 gpiochip 则 SKIP。
+# ============================================================
+var GPIO_GET_CHIPINFO = 0x8044b401
+
+def cstr_at(b, off, cap):
+    var n = 0
+    while n < cap:
+        if bytes_get(b, off + n) == 0:
+            break
+        n = n + 1
+    return bytes_to_str(bytes_slice(b, off, off + n))
+
+var paths = ["/dev/gpiochip0", "/dev/gpiochip1", "/dev/gpiochip2"]
+var fd = -1
+var chip = ""
+for p in paths:
+    var t = open(p, "rw")
+    if t > 0:
+        fd = t
+        chip = p
+        break
+if fd < 0:
+    print("GPIO: SKIP（无 /dev/gpiochip*，真实 GPIO ioctl 留板子环境验证）")
+    exit(0)
+
+var z2 = open("/dev/zero", "r")
+assert(z2 > 0, "open /dev/zero 失败")
+var buf = read(z2, 68)
+assert(close(z2) == true, "close /dev/zero 失败")
+assert(bytes_len(buf) == 68, "chipinfo buffer 应 68B")
+
+var rc = ioctl(fd, GPIO_GET_CHIPINFO, buf)
+if rc != 0:
+    print("GPIO: ioctl GPIO_GET_CHIPINFO 失败 errno=" + str(os_errno()) + "（权限/容器限制，SKIP）")
+    assert(close(fd) == true, "close fd 失败")
+    exit(0)
+
+var name = cstr_at(buf, 0, 32)
+var label = cstr_at(buf, 32, 32)
+var lines = bytes_to_int(bytes_slice(buf, 64, 68), "little")
+print("GPIO: " + chip + " name=[" + name + "] label=[" + label + "] lines=" + str(lines))
+assert(len(name) > 0, "chip name 不应为空")
+assert(lines > 0, "chip lines 应 > 0")
+assert(close(fd) == true, "close gpiochip fd 失败")
+print("GPIO OK")
