@@ -7877,10 +7877,14 @@ static const char* px_http_status_reason(int code) {
         case 404: return "Not Found";
         case 405: return "Method Not Allowed";
         case 409: return "Conflict";
+        case 413: return "Payload Too Large";
+        case 429: return "Too Many Requests";
+        case 431: return "Request Header Fields Too Large";
         case 500: return "Internal Server Error";
         case 501: return "Not Implemented";
         case 502: return "Bad Gateway";
         case 503: return "Service Unavailable";
+        case 504: return "Gateway Timeout";
         default: return "OK";
     }
 }
@@ -10217,12 +10221,19 @@ void px_access_log(const char* fmt, ...) {
     }
 }
 
-static void px_px_send_ex(int fd, int status, const char* ct, const char* body, int body_len,
-                          int head_only, int keep_alive, const char* extra_headers) {
+// ==================== M53-S2：PxHttpOut HTTP/1.1 实现 ====================
+// PxHttpOut（runtime.h）是请求管道与传输之间的输出抽象：HTTP/1.1 实现把
+// status/ct/body_len/extra 格式化为 HTTP/1.1 文本头经 PxConn 写出（明文/TLS 统一），
+// 与旧 px_px_send_ex/send(fd) 路径逐字节一致（含 Alt-Svc 注入去重）。
+// HTTP/3 实现（runtime_h3.c，S3）把同一参数编码为 HEADERS + DATA 帧 —— 管道无需改动。
+static void px_out11_begin(PxHttpOut* o, int status, const char* ct, long long body_len,
+                           int head_only, int keep_alive, const char* extra_headers) {
+    (void)head_only;  // HTTP/1.1 响应头总是带 Content-Length；HEAD 由上层不写 body 控制
+    PxConn* c = (PxConn*)o->impl;
     const char* reason = px_http_status_reason(status);
     char head[2048];
     int off = snprintf(head, sizeof(head),
-                       "HTTP/1.1 %d %s\r\nContent-Length: %d\r\nConnection: %s\r\n",
+                       "HTTP/1.1 %d %s\r\nContent-Length: %lld\r\nConnection: %s\r\n",
                        status, reason, body_len, keep_alive ? "keep-alive" : "close");
     if (ct && *ct) off += snprintf(head + off, sizeof(head) - (size_t)off, "Content-Type: %s\r\n", ct);
     if (extra_headers && *extra_headers) {
@@ -10234,18 +10245,34 @@ static void px_px_send_ex(int fd, int status, const char* ct, const char* body, 
         off += snprintf(head + off, sizeof(head) - (size_t)off, "Alt-Svc: %s\r\n", g_px_alt_svc);
     }
     off += snprintf(head + off, sizeof(head) - (size_t)off, "\r\n");
-    if (g_cur_conn && g_cur_conn->is_tls) {
-        px_conn_write(g_cur_conn, head, (size_t)off);
-        if (!head_only && body_len > 0) px_conn_write(g_cur_conn, body, (size_t)body_len);
-    } else {
-        send(fd, head, off, 0);
-        if (!head_only && body_len > 0) send(fd, body, body_len, 0);
-    }
+    px_conn_write(c, head, (size_t)off);
 }
 
-// 兼容旧签名（Connection: close，无额外头）
-static void px_px_send(int fd, int status, const char* ct, const char* body, int body_len, int head_only) {
-    px_px_send_ex(fd, status, ct, body, body_len, head_only, 0, NULL);
+static int px_out11_write(PxHttpOut* o, const void* buf, size_t n) {
+    if (n == 0) return 0;
+    PxConn* c = (PxConn*)o->impl;
+    return (int)px_conn_write(c, buf, n);
+}
+
+static void px_out11_end(PxHttpOut* o) {
+    (void)o;  // HTTP/1.1 无帧收尾（H3 在此发 DATA FIN）
+}
+
+static void px_out11_respond(PxHttpOut* o, int status, const char* ct, const char* body,
+                             int body_len, int head_only, int keep_alive,
+                             const char* extra_headers) {
+    o->begin(o, status, ct, (long long)body_len, head_only, keep_alive, extra_headers);
+    if (!head_only && body_len > 0) o->write(o, body, (size_t)body_len);
+    o->end(o);
+}
+
+void px_http_out_init_conn(PxHttpOut* o, PxConn* c) {
+    memset(o, 0, sizeof(*o));
+    o->impl = c;
+    o->respond = px_out11_respond;
+    o->begin = px_out11_begin;
+    o->write = px_out11_write;
+    o->end = px_out11_end;
 }
 
 // 请求头是否 Connection: close（keep-alive 判定）
@@ -10317,6 +10344,381 @@ static int px_resp_gzipable(LXValue* headers, const char* ct, int body_len) {
     return 0;
 }
 
+
+// ==================== M53-S2：公共请求管道（px_http_dispatch） ====================
+// req dict 就绪（method/path/query/headers/body/cookie/form/remote）→ 输出响应。
+// 纯重构自 px_conn_worker（HTTP/1.1 请求处理）：所有响应经 PxHttpOut 抽象写出，
+// 不再触碰 fd/g_cur_conn —— HTTP/1.1（TCP/TLS）与 HTTP/3（H3 帧）共用本管道。
+// 行为与重构前逐字节一致：CORS/限流/vhost/路由/静态(gzip/ETag/Range/304)/.px/访问日志全保留。
+static void px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
+                             const char* path, const char* query,
+                             int client_keep_alive, const char* req_id) {
+    LXValue headers = px_dict_get(req, "headers");
+    const char* log_remote = "unknown";
+    {
+        LXValue lr = px_dict_get(req, "remote");
+        if (lr.type == PX_STR) log_remote = lr.as.obj->as.str.data;
+    }
+    // M31.4a：CORS 预检——OPTIONS + Access-Control-Request-Method/Origin → 204 + CORS 头
+    if (strcmp(method, "OPTIONS") == 0 &&
+        (px_header_get(&headers, "Access-Control-Request-Method").type == PX_STR ||
+         px_header_get(&headers, "Origin").type == PX_STR)) {
+        char extra[512];
+        snprintf(extra, sizeof(extra),
+                 "X-Request-Id: %s\r\nAccess-Control-Allow-Origin: *\r\n"
+                 "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, PATCH, OPTIONS\r\n"
+                 "Access-Control-Allow-Headers: Content-Type, Authorization, X-Request-Id\r\n"
+                 "Access-Control-Max-Age: 86400\r\n", req_id);
+        pout->respond(pout, 204, "text/plain; charset=utf-8", "", 0,
+                      strcmp(method, "HEAD") == 0, client_keep_alive, extra);
+        return;
+    }
+    // M31.3：服务端内置限流（按 IP；px_serve opts{rate_limit:{max,window_sec}} → 429）
+    if (g_px_rate_max > 0 && g_px_rate_window > 0) {
+        char ipbuf[64];
+        {
+            LXValue rmt = px_dict_get(req, "remote");
+            const char* rs = (rmt.type == PX_STR) ? rmt.as.obj->as.str.data : "";
+            snprintf(ipbuf, sizeof(ipbuf), "%s", rs);
+            char* colon = strrchr(ipbuf, ':');
+            if (colon && colon[1] >= '0' && colon[1] <= '9') *colon = 0; // 去端口
+            if (ipbuf[0] == '[') { char* br = strchr(ipbuf, ']'); if (br) { br++; *br = 0; memmove(ipbuf, ipbuf + 1, strlen(ipbuf)); } }
+        }
+        // M35：白名单 IP 直接放行（不计数）
+        int whitelisted = 0;
+        for (int wi = 0; wi < g_px_rate_whitelist_n; wi++) {
+            if (strcmp(g_px_rate_whitelist[wi], ipbuf) == 0) { whitelisted = 1; break; }
+        }
+        if (!whitelisted) {
+            // M35：多维 key（ip / ip|ua / ip|path / ip|ua|path）
+            char rkey[512];
+            snprintf(rkey, sizeof(rkey), "%s", ipbuf);
+            if (strstr(g_px_rate_key_mode, "ua")) {
+                LXValue uav = px_header_get(&headers, "User-Agent");
+                const char* ua = (uav.type == PX_STR) ? uav.as.obj->as.str.data : "";
+                char tmp[512];
+                snprintf(tmp, sizeof(tmp), "%s|%s", rkey, ua);
+                snprintf(rkey, sizeof(rkey), "%s", tmp);
+            }
+            if (strstr(g_px_rate_key_mode, "path")) {
+                char tmp[700];
+                snprintf(tmp, sizeof(tmp), "%s|%s", rkey, path);
+                snprintf(rkey, sizeof(rkey), "%s", tmp);
+            }
+            if (!px_rate_limit_try(rkey, g_px_rate_max, g_px_rate_window)) {
+                char extra[256];
+                snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
+                pout->respond(pout, 429, "text/plain; charset=utf-8", "429 Too Many Requests",
+                              21, strcmp(method, "HEAD") == 0, client_keep_alive, extra);
+                px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
+                        (long long)time(NULL), ipbuf, method, path, 429, 21, req_id);
+                return;
+            }
+        }
+    }
+    // M31.2：虚拟主机（Host 头路由）——docroot 覆盖 + handler 优先（null → 继续默认）
+    {
+        LXValue root_v = px_get_global("__px_docroot");
+        const char* def_root = (root_v.type == PX_STR) ? root_v.as.obj->as.str.data : ".";
+        char vroot[1024];
+        snprintf(vroot, sizeof(vroot), "%s", def_root);
+        LXValue vhandler;
+        int has_vhandler = 0;
+        LXValue host_hdr = px_header_get(&headers, "Host");
+        const char* host_hdrs = (host_hdr.type == PX_STR) ? host_hdr.as.obj->as.str.data : NULL;
+        if (px_vhost_resolve(host_hdrs, def_root, vroot, sizeof(vroot), &vhandler, &has_vhandler)) {
+            if (has_vhandler) {
+                LXValue r = px_call(vhandler, &req, 1);
+                if (r.type != PX_NULL) {
+                    int vst = 200;
+                    const char* vct = "text/plain; charset=utf-8";
+                    const char* vbody = "";
+                    int vblen = 0;
+                    px_vhost_normalize(r, &vst, &vct, &vbody, &vblen);
+                    char extra[256];
+                    snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
+                    pout->respond(pout, vst, vct, vbody, vblen,
+                                  strcmp(method, "HEAD") == 0, client_keep_alive, extra);
+                    return;
+                }
+            }
+        }
+        // 每请求重置 docroot（命中 vhost → vhost root；未命中 → 默认）
+        px_vhost_docroot_store(vroot);
+    }
+
+    // M28：路由表非空 → 优先匹配路由（method+path 模式 + :id 参数 + 中间件链）
+    if (px_route_has()) {
+        char extra[256];
+        snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
+        if (px_route_try_dispatch(pout, req, method, strcmp(method, "HEAD") == 0,
+                                  client_keep_alive, req_id)) {
+            return;
+        }
+    }
+
+    // 6. 路径映射 + 目录隔离（穿越防护：拒绝 ".." 路径段）
+    // M31.2：docroot 已由 vhost 解析覆盖（__thread 存储，见 px_vhost_docroot_store）
+    const char* docroot = px_vhost_docroot();
+    LXValue tout_v = px_get_global("__px_timeout");
+    int timeout_ms = (tout_v.type == PX_INT) ? (int)tout_v.as.i : 10000;
+    LXValue port_v = px_get_global("__px_port");
+    int port = (port_v.type == PX_INT) ? (int)port_v.as.i : 0;
+
+    int head_only = strcmp(method, "HEAD") == 0;
+    const char* pp = path;
+    int forbid = 0;
+    while (*pp) {
+        if (pp[0] == '.' && pp[1] == '.' && (pp[2] == 0 || pp[2] == '/')) { forbid = 1; break; }
+        pp++;
+    }
+    if (forbid) {
+        char extra[256];
+        snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
+        pout->respond(pout, 403, "text/plain; charset=utf-8", "403 Forbidden: 路径穿越被拒绝", 30, head_only, client_keep_alive, extra);
+        px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
+                (long long)time(NULL), log_remote, method, path, 403, 30, req_id);
+        return;
+    }
+    char full[4096];
+    snprintf(full, sizeof(full), "%s%s", docroot, path);
+
+    struct stat st;
+    if (stat(full, &st) != 0) {
+        char extra[256];
+        snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
+        pout->respond(pout, 404, "text/plain; charset=utf-8", "404 Not Found", 13, head_only, client_keep_alive, extra);
+        px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
+                (long long)time(NULL), log_remote, method, path, 404, 13, req_id);
+        return;
+    }
+    char fpath[4096];
+    if (S_ISDIR(st.st_mode)) {
+        snprintf(fpath, sizeof(fpath), "%s/index.px", full);
+        if (stat(fpath, &st) != 0) {
+            snprintf(fpath, sizeof(fpath), "%s/index.html", full);
+            if (stat(fpath, &st) != 0) {
+                char extra[256];
+                snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
+                pout->respond(pout, 404, "text/plain; charset=utf-8", "404 Not Found", 13, head_only, client_keep_alive, extra);
+                px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
+                        (long long)time(NULL), log_remote, method, path, 404, 13, req_id);
+                return;
+            }
+        }
+    } else {
+        snprintf(fpath, sizeof(fpath), "%s", full);
+    }
+
+    int is_px = strstr(fpath, ".px") != NULL && strcmp(fpath + strlen(fpath) - 3, ".px") == 0;
+
+    if (is_px) {
+        // ---- .px 脚本执行：fork + exec `px run`，PX_INIT_GLOBALS 传递请求上下文 ----
+        LXValue get = px_parse_urlenc(query);
+        LXValue post = px_dict_get(req, "form");
+        if (post.type != PX_DICT) post = px_dict();
+        LXValue server = px_dict();
+        px_dict_set(server, "port", px_int(port));
+        px_dict_set(server, "docroot", px_str(docroot));
+        px_dict_set(server, "script", px_str(fpath));
+        px_dict_set(server, "px", px_str("0.1.0"));
+        LXValue env = px_dict();
+        px_dict_set(env, "REQUEST", req);
+        px_dict_set(env, "GET", get);
+        px_dict_set(env, "POST", post);
+        px_dict_set(env, "SERVER", server);
+        LXValue j = px_call(px_get_global("json_stringify"), &env, 1);
+        char* env_json = (j.type == PX_STR) ? strdup(j.as.obj->as.str.data) : NULL;
+
+        char* out = NULL;
+        int out_len = 0, exit_code = 0;
+        int rc = px_pool_run(fpath, env_json, 1, timeout_ms, &out, &out_len, &exit_code);
+        if (env_json) free(env_json);
+        char extra[256];
+        snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
+        if (rc == 1) {
+            char msg[128];
+            int ml = snprintf(msg, sizeof(msg), "504 Gateway Timeout: 脚本执行超时（>%dms）", timeout_ms);
+            pout->respond(pout, 504, "text/plain; charset=utf-8", msg, ml, head_only, client_keep_alive, extra);
+        } else if (exit_code != 0) {
+            char msg[70000];
+            int ml = snprintf(msg, sizeof(msg), "500 Internal Server Error\n\n%.60000s", out ? out : "");
+            pout->respond(pout, 500, "text/plain; charset=utf-8", msg, ml, head_only, client_keep_alive, extra);
+        } else {
+            int status = 200;
+            const char* ct2 = "text/html; charset=utf-8";
+            char* body = out;
+            int blen = out_len;
+            char* marker = out ? strstr(out, "__PX_RESPONSE__:") : NULL;
+            if (marker) {
+                *marker = 0;
+                blen = (int)(marker - out);
+                while (blen > 0 && (body[blen - 1] == '\n' || body[blen - 1] == '\r')) blen--;
+                char* jstr = marker + 16;
+                LXValue jv = px_str(jstr);
+                LXValue resp = px_call(px_get_global("json_parse"), &jv, 1);
+                if (resp.type == PX_DICT) {
+                    LXValue stv = px_dict_get(resp, "status");
+                    if (stv.type == PX_INT) status = (int)stv.as.i;
+                    LXValue b = px_dict_get(resp, "body");
+                    if (b.type == PX_STR) {
+                        body = b.as.obj->as.str.data;
+                        blen = b.as.obj->as.str.len;
+                    }
+                    LXValue h = px_dict_get(resp, "headers");
+                    if (h.type == PX_DICT) {
+                        LXObject* ho = h.as.obj;
+                        for (int i = 0; i < ho->as.dict.len; i++) {
+                            if (strcasecmp(ho->as.dict.keys[i], "Content-Type") == 0 &&
+                                ho->as.dict.vals[i].type == PX_STR) {
+                                ct2 = ho->as.dict.vals[i].as.obj->as.str.data;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            // M29：gzip 响应压缩（Accept-Encoding: gzip + 文本类 + >1KB）
+            char gz_extra[512];
+            int hdr_off = snprintf(gz_extra, sizeof(gz_extra), "X-Request-Id: %s\r\n", req_id);
+            if (px_resp_gzipable(&headers, ct2, blen)) {
+                int gzlen = 0;
+                char* gz = px_gzip_compress(body ? body : "", blen, &gzlen);
+                if (gz) {
+                    hdr_off += snprintf(gz_extra + hdr_off, sizeof(gz_extra) - (size_t)hdr_off,
+                                        "Content-Encoding: gzip\r\nVary: Accept-Encoding\r\n");
+                    pout->respond(pout, status, ct2, gz, gzlen, head_only, client_keep_alive, gz_extra);
+                    xfree(gz);
+                    goto script_done;
+                }
+            }
+            pout->respond(pout, status, ct2, body ? body : "", blen, head_only, client_keep_alive, gz_extra);
+        script_done:
+            if (out) xfree(out);
+        }
+        // M29c：结构化访问日志（M33：落盘 + 轮转；格式同解释器：时间 remote method path status bytes ms req=id）
+        px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
+                (long long)time(NULL), log_remote, method, path, 200, 0, req_id);
+    } else {
+        // ---- 静态文件：ETag / Last-Modified / 304 / Range + 流式（M29b） ----
+        struct stat fst;
+        if (stat(fpath, &fst) != 0) {
+            char extra[256];
+            snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
+            pout->respond(pout, 404, "text/plain; charset=utf-8", "404 Not Found", 13, head_only, client_keep_alive, extra);
+            px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
+                    (long long)time(NULL), log_remote, method, path, 404, 13, req_id);
+            return;
+        }
+        long long fsz = (long long)fst.st_size;
+        time_t mt = fst.st_mtime;
+        char etag[128], last_mod[64];
+        snprintf(etag, sizeof(etag), "\"px-%llx-%llx\"", (unsigned long long)mt, (unsigned long long)fsz);
+        px_http_date(mt, last_mod, sizeof(last_mod));
+
+        LXValue inm = px_header_get(&headers, "If-None-Match");
+        if ((inm.type == PX_STR && (strcmp(inm.as.obj->as.str.data, etag) == 0 ||
+                                    strcmp(inm.as.obj->as.str.data, "*") == 0))) {
+            char extra[512];
+            snprintf(extra, sizeof(extra), "ETag: %s\r\nLast-Modified: %s\r\nX-Request-Id: %s\r\n",
+                     etag, last_mod, req_id);
+            pout->respond(pout, 304, NULL, "", 0, head_only, client_keep_alive, extra);
+            return;
+        }
+        LXValue ims = px_header_get(&headers, "If-Modified-Since");
+        if (ims.type == PX_STR) {
+            struct tm tmv;
+            memset(&tmv, 0, sizeof(tmv));
+            const char* is = ims.as.obj->as.str.data;
+            if (strptime(is, "%a, %d %b %Y %H:%M:%S GMT", &tmv)) {
+                time_t since = timegm(&tmv);
+                if (mt <= since) {
+                    char extra[512];
+                    snprintf(extra, sizeof(extra), "ETag: %s\r\nLast-Modified: %s\r\nX-Request-Id: %s\r\n",
+                             etag, last_mod, req_id);
+                    pout->respond(pout, 304, NULL, "", 0, head_only, client_keep_alive, extra);
+                    return;
+                }
+            }
+        }
+
+        long long rstart = 0, rend = fsz - 1;
+        int is_range = 0;
+        LXValue rv = px_header_get(&headers, "Range");
+        if (rv.type == PX_STR && fsz > 0) {
+            if (px_parse_range(rv.as.obj->as.str.data, fsz, &rstart, &rend)) is_range = 1;
+        }
+        long long seg_len = rend - rstart + 1;
+        int status = is_range ? 206 : 200;
+        const char* ct2 = px_mime_type(fpath);
+        char extra[1024];
+        int eo = snprintf(extra, sizeof(extra), "ETag: %s\r\nLast-Modified: %s\r\nX-Request-Id: %s\r\n",
+                          etag, last_mod, req_id);
+        // M33.4：Alt-Svc 通告（HTTP/3 协商；px_serve opts{alt_svc}）
+        if (g_px_alt_svc[0]) {
+            eo += snprintf(extra + eo, sizeof(extra) - (size_t)eo, "Alt-Svc: %s\r\n", g_px_alt_svc);
+        }
+        if (is_range) {
+            eo += snprintf(extra + eo, sizeof(extra) - (size_t)eo,
+                           "Content-Range: bytes %lld-%lld/%lld\r\nAccept-Ranges: bytes\r\n",
+                           rstart, rend, fsz);
+        }
+
+        // gzip：整文件 200 + 文本 + Accept-Encoding: gzip + >1KB → 读全压缩
+        if (!is_range && px_resp_gzipable(&headers, ct2, (int)fsz)) {
+            char* data = xmalloc((size_t)fsz + 1);
+            FILE* gz_in = fopen(fpath, "rb");
+            if (gz_in) {
+                size_t got = fread(data, 1, (size_t)fsz, gz_in);
+                fclose(gz_in);
+                if (got == (size_t)fsz) {
+                    int gzlen = 0;
+                    char* gz = px_gzip_compress(data, (int)fsz, &gzlen);
+                    if (gz) {
+                        char hd_extra[1536];
+                        int heo = snprintf(hd_extra, sizeof(hd_extra),
+                                          "%sContent-Encoding: gzip\r\nVary: Accept-Encoding\r\n", extra);
+                        (void)heo;
+                        pout->begin(pout, 200, ct2, (long long)gzlen, head_only, client_keep_alive, hd_extra);
+                        if (!head_only) pout->write(pout, gz, (size_t)gzlen);
+                        pout->end(pout);
+                        xfree(gz);
+                        xfree(data);
+                        return;
+                    }
+                }
+                xfree(data);
+            }
+        }
+
+        // M53-S2：静态响应经 PxHttpOut（响应头 + 64KB 块流式文件段）
+        pout->begin(pout, status, ct2, seg_len, head_only, client_keep_alive, extra);
+        if (!head_only && seg_len > 0) {
+            FILE* f = fopen(fpath, "rb");
+            if (f) {
+                fseeko(f, (off_t)rstart, SEEK_SET);
+                long long remain = seg_len;
+                char chunk[65536];
+                while (remain > 0) {
+                    size_t want = (size_t)(remain < 65536 ? remain : 65536);
+                    size_t got = fread(chunk, 1, want, f);
+                    if (got == 0) break;
+                    pout->write(pout, chunk, got);
+                    remain -= (long long)got;
+                }
+                fclose(f);
+            }
+        }
+        pout->end(pout);
+        // M29c：结构化访问日志（M33：落盘 + 轮转）
+        // M29c：结构化访问日志（M33：落盘 + 轮转；格式同解释器）
+        px_access_log("[px-access] %lld %s %s %s %d %lld 0ms req=%s\n",
+                (long long)time(NULL), log_remote, method, path, status, seg_len, req_id);
+    }
+
+
+}
+
 // 连接处理线程（px_spawn 注册）：args[0] = fd
 static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
@@ -10327,6 +10729,8 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
     if (px_conn_init(&conn, fd) != 0) { return px_null(); }
     g_cur_conn = &conn;
     __sync_fetch_and_add(&g_px_inflight, 1);
+    PxHttpOut out;
+    px_http_out_init_conn(&out, &conn);
 
     // M37：TLS ALPN 协商 h2 → 直接 HTTP/2（prior knowledge 帧循环，整连接为 h2）
     if (conn.is_tls) {
@@ -10500,7 +10904,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
                 body_buf = NULL;
                 char extra[256];
                 snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
-                px_px_send_ex(fd, 413, "text/plain; charset=utf-8", "413 Payload Too Large", 24, 0, 0, extra);
+                out.respond(&out, 413, "text/plain; charset=utf-8", "413 Payload Too Large", 24, 0, 0, extra);
                 goto req_done;
             }
             body_len = blen;
@@ -10508,7 +10912,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
             if (content_length > g_px_max_body) {
                 char extra[256];
                 snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
-                px_px_send_ex(fd, 413, "text/plain; charset=utf-8", "413 Payload Too Large", 24, 0, 0, extra);
+                out.respond(&out, 413, "text/plain; charset=utf-8", "413 Payload Too Large", 24, 0, 0, extra);
                 goto req_done;
             }
             int body_off = header_end + 4;
@@ -10521,7 +10925,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
                          tmpdir, (int)getpid(), (int)__sync_fetch_and_add(&g_px_body_seq, 1));
                 body_tmp_file = open(body_tmp_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
                 if (body_tmp_file < 0) {
-                    px_px_send(fd, 500, "text/plain; charset=utf-8", "500 创建 body 临时文件失败", 26, 0);
+                    out.respond(&out, 500, "text/plain; charset=utf-8", "500 创建 body 临时文件失败", 26, 0, 0, NULL);
                     goto req_done;
                 }
                 if (have > 0) (void)write(body_tmp_file, buf + body_off, (size_t)have);
@@ -10597,12 +11001,6 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
                 px_dict_set(req, "remote", px_str(""));
             }
         }
-        // M33：访问日志统一 remote 字段（与解释器 log_access 一致：时间 remote method path status bytes ms req=id）
-        const char* log_remote = "unknown";
-        {
-            LXValue lr = px_dict_get(req, "remote");
-            if (lr.type == PX_STR) log_remote = lr.as.obj->as.str.data;
-        }
         LXValue ct_v = px_dict_get_ci(headers, "Content-Type");
         const char* ct = (ct_v.type == PX_STR) ? ct_v.as.obj->as.str.data : "";
         if (body_len > 0 && body_buf) {
@@ -10633,377 +11031,8 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
                 goto req_done;
             }
         }
-        // M31.4a：CORS 预检——OPTIONS + Access-Control-Request-Method/Origin → 204 + CORS 头
-        if (strcmp(method, "OPTIONS") == 0 &&
-            (px_header_get(&headers, "Access-Control-Request-Method").type == PX_STR ||
-             px_header_get(&headers, "Origin").type == PX_STR)) {
-            char extra[512];
-            snprintf(extra, sizeof(extra),
-                     "X-Request-Id: %s\r\nAccess-Control-Allow-Origin: *\r\n"
-                     "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, PATCH, OPTIONS\r\n"
-                     "Access-Control-Allow-Headers: Content-Type, Authorization, X-Request-Id\r\n"
-                     "Access-Control-Max-Age: 86400\r\n", req_id);
-            px_px_send_ex(fd, 204, "text/plain; charset=utf-8", "", 0,
-                          strcmp(method, "HEAD") == 0, client_keep_alive, extra);
-            goto req_done;
-        }
-        // M31.3：服务端内置限流（按 IP；px_serve opts{rate_limit:{max,window_sec}} → 429）
-        if (g_px_rate_max > 0 && g_px_rate_window > 0) {
-            char ipbuf[64];
-            {
-                LXValue rmt = px_dict_get(req, "remote");
-                const char* rs = (rmt.type == PX_STR) ? rmt.as.obj->as.str.data : "";
-                snprintf(ipbuf, sizeof(ipbuf), "%s", rs);
-                char* colon = strrchr(ipbuf, ':');
-                if (colon && colon[1] >= '0' && colon[1] <= '9') *colon = 0; // 去端口
-                if (ipbuf[0] == '[') { char* br = strchr(ipbuf, ']'); if (br) { br++; *br = 0; memmove(ipbuf, ipbuf + 1, strlen(ipbuf)); } }
-            }
-            // M35：白名单 IP 直接放行（不计数）
-            int whitelisted = 0;
-            for (int wi = 0; wi < g_px_rate_whitelist_n; wi++) {
-                if (strcmp(g_px_rate_whitelist[wi], ipbuf) == 0) { whitelisted = 1; break; }
-            }
-            if (!whitelisted) {
-                // M35：多维 key（ip / ip|ua / ip|path / ip|ua|path）
-                char rkey[512];
-                snprintf(rkey, sizeof(rkey), "%s", ipbuf);
-                if (strstr(g_px_rate_key_mode, "ua")) {
-                    LXValue uav = px_header_get(&headers, "User-Agent");
-                    const char* ua = (uav.type == PX_STR) ? uav.as.obj->as.str.data : "";
-                    char tmp[512];
-                    snprintf(tmp, sizeof(tmp), "%s|%s", rkey, ua);
-                    snprintf(rkey, sizeof(rkey), "%s", tmp);
-                }
-                if (strstr(g_px_rate_key_mode, "path")) {
-                    char tmp[700];
-                    snprintf(tmp, sizeof(tmp), "%s|%s", rkey, path);
-                    snprintf(rkey, sizeof(rkey), "%s", tmp);
-                }
-                if (!px_rate_limit_try(rkey, g_px_rate_max, g_px_rate_window)) {
-                    char extra[256];
-                    snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
-                    px_px_send_ex(fd, 429, "text/plain; charset=utf-8", "429 Too Many Requests",
-                                  21, strcmp(method, "HEAD") == 0, client_keep_alive, extra);
-                    px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
-                            (long long)time(NULL), ipbuf, method, path, 429, 21, req_id);
-                    goto req_done;
-                }
-            }
-        }
-        // M31.2：虚拟主机（Host 头路由）——docroot 覆盖 + handler 优先（null → 继续默认）
-        {
-            LXValue root_v = px_get_global("__px_docroot");
-            const char* def_root = (root_v.type == PX_STR) ? root_v.as.obj->as.str.data : ".";
-            char vroot[1024];
-            snprintf(vroot, sizeof(vroot), "%s", def_root);
-            LXValue vhandler;
-            int has_vhandler = 0;
-            LXValue host_hdr = px_header_get(&headers, "Host");
-            const char* host_hdrs = (host_hdr.type == PX_STR) ? host_hdr.as.obj->as.str.data : NULL;
-            if (px_vhost_resolve(host_hdrs, def_root, vroot, sizeof(vroot), &vhandler, &has_vhandler)) {
-                if (has_vhandler) {
-                    LXValue r = px_call(vhandler, &req, 1);
-                    if (r.type != PX_NULL) {
-                        int vst = 200;
-                        const char* vct = "text/plain; charset=utf-8";
-                        const char* vbody = "";
-                        int vblen = 0;
-                        px_vhost_normalize(r, &vst, &vct, &vbody, &vblen);
-                        char extra[256];
-                        snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
-                        px_px_send_ex(fd, vst, vct, vbody, vblen,
-                                      strcmp(method, "HEAD") == 0, client_keep_alive, extra);
-                        goto req_done;
-                    }
-                }
-            }
-            // 每请求重置 docroot（命中 vhost → vhost root；未命中 → 默认）
-            px_vhost_docroot_store(vroot);
-        }
-
-        // M28：路由表非空 → 优先匹配路由（method+path 模式 + :id 参数 + 中间件链）
-        if (px_route_has()) {
-            char extra[256];
-            snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
-            if (px_route_try_dispatch(&conn, req, method, strcmp(method, "HEAD") == 0,
-                                      client_keep_alive, req_id)) {
-                goto req_done;
-            }
-        }
-
-        // 6. 路径映射 + 目录隔离（穿越防护：拒绝 ".." 路径段）
-        // M31.2：docroot 已由 vhost 解析覆盖（__thread 存储，见 px_vhost_docroot_store）
-        const char* docroot = px_vhost_docroot();
-        LXValue tout_v = px_get_global("__px_timeout");
-        int timeout_ms = (tout_v.type == PX_INT) ? (int)tout_v.as.i : 10000;
-        LXValue port_v = px_get_global("__px_port");
-        int port = (port_v.type == PX_INT) ? (int)port_v.as.i : 0;
-
-        int head_only = strcmp(method, "HEAD") == 0;
-        const char* pp = path;
-        int forbid = 0;
-        while (*pp) {
-            if (pp[0] == '.' && pp[1] == '.' && (pp[2] == 0 || pp[2] == '/')) { forbid = 1; break; }
-            pp++;
-        }
-        if (forbid) {
-            char extra[256];
-            snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
-            px_px_send_ex(fd, 403, "text/plain; charset=utf-8", "403 Forbidden: 路径穿越被拒绝", 30, head_only, client_keep_alive, extra);
-            px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
-                    (long long)time(NULL), log_remote, method, path, 403, 30, req_id);
-            goto req_done;
-        }
-        char full[4096];
-        snprintf(full, sizeof(full), "%s%s", docroot, path);
-
-        struct stat st;
-        if (stat(full, &st) != 0) {
-            char extra[256];
-            snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
-            px_px_send_ex(fd, 404, "text/plain; charset=utf-8", "404 Not Found", 13, head_only, client_keep_alive, extra);
-            px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
-                    (long long)time(NULL), log_remote, method, path, 404, 13, req_id);
-            goto req_done;
-        }
-        char fpath[4096];
-        if (S_ISDIR(st.st_mode)) {
-            snprintf(fpath, sizeof(fpath), "%s/index.px", full);
-            if (stat(fpath, &st) != 0) {
-                snprintf(fpath, sizeof(fpath), "%s/index.html", full);
-                if (stat(fpath, &st) != 0) {
-                    char extra[256];
-                    snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
-                    px_px_send_ex(fd, 404, "text/plain; charset=utf-8", "404 Not Found", 13, head_only, client_keep_alive, extra);
-                    px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
-                            (long long)time(NULL), log_remote, method, path, 404, 13, req_id);
-                    goto req_done;
-                }
-            }
-        } else {
-            snprintf(fpath, sizeof(fpath), "%s", full);
-        }
-
-        int is_px = strstr(fpath, ".px") != NULL && strcmp(fpath + strlen(fpath) - 3, ".px") == 0;
-
-        if (is_px) {
-            // ---- .px 脚本执行：fork + exec `px run`，PX_INIT_GLOBALS 传递请求上下文 ----
-            LXValue get = px_parse_urlenc(query);
-            LXValue post = px_dict_get(req, "form");
-            if (post.type != PX_DICT) post = px_dict();
-            LXValue server = px_dict();
-            px_dict_set(server, "port", px_int(port));
-            px_dict_set(server, "docroot", px_str(docroot));
-            px_dict_set(server, "script", px_str(fpath));
-            px_dict_set(server, "px", px_str("0.1.0"));
-            LXValue env = px_dict();
-            px_dict_set(env, "REQUEST", req);
-            px_dict_set(env, "GET", get);
-            px_dict_set(env, "POST", post);
-            px_dict_set(env, "SERVER", server);
-            LXValue j = px_call(px_get_global("json_stringify"), &env, 1);
-            char* env_json = (j.type == PX_STR) ? strdup(j.as.obj->as.str.data) : NULL;
-
-            char* out = NULL;
-            int out_len = 0, exit_code = 0;
-            int rc = px_pool_run(fpath, env_json, 1, timeout_ms, &out, &out_len, &exit_code);
-            if (env_json) free(env_json);
-            char extra[256];
-            snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
-            if (rc == 1) {
-                char msg[128];
-                int ml = snprintf(msg, sizeof(msg), "504 Gateway Timeout: 脚本执行超时（>%dms）", timeout_ms);
-                px_px_send_ex(fd, 504, "text/plain; charset=utf-8", msg, ml, head_only, client_keep_alive, extra);
-            } else if (exit_code != 0) {
-                char msg[70000];
-                int ml = snprintf(msg, sizeof(msg), "500 Internal Server Error\n\n%.60000s", out ? out : "");
-                px_px_send_ex(fd, 500, "text/plain; charset=utf-8", msg, ml, head_only, client_keep_alive, extra);
-            } else {
-                int status = 200;
-                const char* ct2 = "text/html; charset=utf-8";
-                char* body = out;
-                int blen = out_len;
-                char* marker = out ? strstr(out, "__PX_RESPONSE__:") : NULL;
-                if (marker) {
-                    *marker = 0;
-                    blen = (int)(marker - out);
-                    while (blen > 0 && (body[blen - 1] == '\n' || body[blen - 1] == '\r')) blen--;
-                    char* jstr = marker + 16;
-                    LXValue jv = px_str(jstr);
-                    LXValue resp = px_call(px_get_global("json_parse"), &jv, 1);
-                    if (resp.type == PX_DICT) {
-                        LXValue stv = px_dict_get(resp, "status");
-                        if (stv.type == PX_INT) status = (int)stv.as.i;
-                        LXValue b = px_dict_get(resp, "body");
-                        if (b.type == PX_STR) {
-                            body = b.as.obj->as.str.data;
-                            blen = b.as.obj->as.str.len;
-                        }
-                        LXValue h = px_dict_get(resp, "headers");
-                        if (h.type == PX_DICT) {
-                            LXObject* ho = h.as.obj;
-                            for (int i = 0; i < ho->as.dict.len; i++) {
-                                if (strcasecmp(ho->as.dict.keys[i], "Content-Type") == 0 &&
-                                    ho->as.dict.vals[i].type == PX_STR) {
-                                    ct2 = ho->as.dict.vals[i].as.obj->as.str.data;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-                // M29：gzip 响应压缩（Accept-Encoding: gzip + 文本类 + >1KB）
-                char gz_extra[512];
-                int hdr_off = snprintf(gz_extra, sizeof(gz_extra), "X-Request-Id: %s\r\n", req_id);
-                if (px_resp_gzipable(&headers, ct2, blen)) {
-                    int gzlen = 0;
-                    char* gz = px_gzip_compress(body ? body : "", blen, &gzlen);
-                    if (gz) {
-                        hdr_off += snprintf(gz_extra + hdr_off, sizeof(gz_extra) - (size_t)hdr_off,
-                                            "Content-Encoding: gzip\r\nVary: Accept-Encoding\r\n");
-                        px_px_send_ex(fd, status, ct2, gz, gzlen, head_only, client_keep_alive, gz_extra);
-                        xfree(gz);
-                        goto script_done;
-                    }
-                }
-                px_px_send_ex(fd, status, ct2, body ? body : "", blen, head_only, client_keep_alive, gz_extra);
-            script_done:
-                if (out) xfree(out);
-            }
-            // M29c：结构化访问日志（M33：落盘 + 轮转；格式同解释器：时间 remote method path status bytes ms req=id）
-            px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
-                    (long long)time(NULL), log_remote, method, path, 200, 0, req_id);
-        } else {
-            // ---- 静态文件：ETag / Last-Modified / 304 / Range + 流式（M29b） ----
-            struct stat fst;
-            if (stat(fpath, &fst) != 0) {
-                char extra[256];
-                snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
-                px_px_send_ex(fd, 404, "text/plain; charset=utf-8", "404 Not Found", 13, head_only, client_keep_alive, extra);
-                px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
-                        (long long)time(NULL), log_remote, method, path, 404, 13, req_id);
-                goto req_done;
-            }
-            long long fsz = (long long)fst.st_size;
-            time_t mt = fst.st_mtime;
-            char etag[128], last_mod[64];
-            snprintf(etag, sizeof(etag), "\"px-%llx-%llx\"", (unsigned long long)mt, (unsigned long long)fsz);
-            px_http_date(mt, last_mod, sizeof(last_mod));
-
-            LXValue inm = px_header_get(&headers, "If-None-Match");
-            if ((inm.type == PX_STR && (strcmp(inm.as.obj->as.str.data, etag) == 0 ||
-                                        strcmp(inm.as.obj->as.str.data, "*") == 0))) {
-                char extra[512];
-                snprintf(extra, sizeof(extra), "ETag: %s\r\nLast-Modified: %s\r\nX-Request-Id: %s\r\n",
-                         etag, last_mod, req_id);
-                px_px_send_ex(fd, 304, NULL, "", 0, head_only, client_keep_alive, extra);
-                goto req_done;
-            }
-            LXValue ims = px_header_get(&headers, "If-Modified-Since");
-            if (ims.type == PX_STR) {
-                struct tm tmv;
-                memset(&tmv, 0, sizeof(tmv));
-                const char* is = ims.as.obj->as.str.data;
-                if (strptime(is, "%a, %d %b %Y %H:%M:%S GMT", &tmv)) {
-                    time_t since = timegm(&tmv);
-                    if (mt <= since) {
-                        char extra[512];
-                        snprintf(extra, sizeof(extra), "ETag: %s\r\nLast-Modified: %s\r\nX-Request-Id: %s\r\n",
-                                 etag, last_mod, req_id);
-                        px_px_send_ex(fd, 304, NULL, "", 0, head_only, client_keep_alive, extra);
-                        goto req_done;
-                    }
-                }
-            }
-
-            long long rstart = 0, rend = fsz - 1;
-            int is_range = 0;
-            LXValue rv = px_header_get(&headers, "Range");
-            if (rv.type == PX_STR && fsz > 0) {
-                if (px_parse_range(rv.as.obj->as.str.data, fsz, &rstart, &rend)) is_range = 1;
-            }
-            long long seg_len = rend - rstart + 1;
-            int status = is_range ? 206 : 200;
-            const char* ct2 = px_mime_type(fpath);
-            char extra[1024];
-            int eo = snprintf(extra, sizeof(extra), "ETag: %s\r\nLast-Modified: %s\r\nX-Request-Id: %s\r\n",
-                              etag, last_mod, req_id);
-            // M33.4：Alt-Svc 通告（HTTP/3 协商；px_serve opts{alt_svc}）
-            if (g_px_alt_svc[0]) {
-                eo += snprintf(extra + eo, sizeof(extra) - (size_t)eo, "Alt-Svc: %s\r\n", g_px_alt_svc);
-            }
-            if (is_range) {
-                eo += snprintf(extra + eo, sizeof(extra) - (size_t)eo,
-                               "Content-Range: bytes %lld-%lld/%lld\r\nAccept-Ranges: bytes\r\n",
-                               rstart, rend, fsz);
-            }
-
-            // gzip：整文件 200 + 文本 + Accept-Encoding: gzip + >1KB → 读全压缩
-            if (!is_range && px_resp_gzipable(&headers, ct2, (int)fsz)) {
-                char* data = xmalloc((size_t)fsz + 1);
-                FILE* gz_in = fopen(fpath, "rb");
-                if (gz_in) {
-                    size_t got = fread(data, 1, (size_t)fsz, gz_in);
-                    fclose(gz_in);
-                    if (got == (size_t)fsz) {
-                        int gzlen = 0;
-                        char* gz = px_gzip_compress(data, (int)fsz, &gzlen);
-                        if (gz) {
-                            char hd[2048];
-                            int ho = snprintf(hd, sizeof(hd),
-                                              "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: %s\r\nContent-Type: %s\r\n%sContent-Encoding: gzip\r\nVary: Accept-Encoding\r\n\r\n",
-                                              gzlen, client_keep_alive ? "keep-alive" : "close", ct2, extra);
-                            if (g_cur_conn && g_cur_conn->is_tls) {
-                                px_conn_write(g_cur_conn, hd, (size_t)ho);
-                                if (!head_only) px_conn_write(g_cur_conn, gz, (size_t)gzlen);
-                            } else {
-                                send(fd, hd, ho, 0);
-                                if (!head_only) send(fd, gz, (size_t)gzlen, 0);
-                            }
-                            xfree(gz);
-                            xfree(data);
-                            goto req_done;
-                        }
-                    }
-                    xfree(data);
-                }
-            }
-
-            // 响应头（HEAD 只发头）
-            char hd[2048];
-            int ho = snprintf(hd, sizeof(hd),
-                              "HTTP/1.1 %d %s\r\nContent-Length: %lld\r\nConnection: %s\r\nContent-Type: %s\r\n%s\r\n",
-                              status, px_http_status_reason(status), seg_len,
-                              client_keep_alive ? "keep-alive" : "close", ct2, extra);
-            if (g_cur_conn && g_cur_conn->is_tls) {
-                px_conn_write(g_cur_conn, hd, (size_t)ho);
-            } else {
-                send(fd, hd, ho, 0);
-            }
-            // 流式发送文件段（64KB 块，不整读进内存）
-            if (!head_only && seg_len > 0) {
-                FILE* f = fopen(fpath, "rb");
-                if (f) {
-                    fseeko(f, (off_t)rstart, SEEK_SET);
-                    long long remain = seg_len;
-                    char chunk[65536];
-                    while (remain > 0) {
-                        size_t want = (size_t)(remain < 65536 ? remain : 65536);
-                        size_t got = fread(chunk, 1, want, f);
-                        if (got == 0) break;
-                        if (g_cur_conn && g_cur_conn->is_tls) px_conn_write(g_cur_conn, chunk, got);
-                        else send(fd, chunk, (int)got, 0);
-                        remain -= (long long)got;
-                    }
-                    fclose(f);
-                }
-            }
-            // M29c：结构化访问日志（M33：落盘 + 轮转）
-            // M29c：结构化访问日志（M33：落盘 + 轮转；格式同解释器）
-            px_access_log("[px-access] %lld %s %s %s %d %lld 0ms req=%s\n",
-                    (long long)time(NULL), log_remote, method, path, status, seg_len, req_id);
-        }
-
+        // M53-S2：req 就绪 → 公共请求管道（CORS/限流/vhost/路由/静态/.px；输出经 PxHttpOut）
+        px_http_dispatch(&out, req, method, path, query, client_keep_alive, req_id);
     req_done:
         if (body_tmp_path[0]) unlink(body_tmp_path);
         if (body_tmp_file >= 0) close(body_tmp_file);
