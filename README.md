@@ -225,6 +225,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 - `m49_qpack_dyn_verify.sh` —— QPACK 动态表 + SETTINGS 会话字节精确自检（动态表复用/压缩收益/SETTINGS roundtrip，编译/解释双模式）
 - `m50_h3_mux_verify.sh` —— HTTP/3 多路复用回环（同一连接 3 双向流并发请求/响应一一对应无串扰，编译/解释双模式）
 - `m51_h3_qpack_wire_verify.sh` —— QPACK 会话接入线上回环（双端开控制/编码器/解码器 3 条 QUIC 单向流 + SETTINGS 协商，动态表指令经真实单向流传输：请求 1 插入、请求 2 复用零新增，编译/解释双模式）
+- `m52_qpack_decack_verify.sh` —— QPACK 解码器流 ack 线上化回环（RFC 9204 §4.4：接收方解码动态字段段自动发 Section Ack、发送方消费对端解码器流推进 Known Received Count、编码表驱逐安全化，双向闭环编译/解释双模式）
 - ... 完整列表见 `examples/`
 
 ---

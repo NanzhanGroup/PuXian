@@ -779,6 +779,47 @@ extern def h3_conn_stats(conn: int) -> dict|null              # 本端统计（e
 
 ---
 
+### 8.13 QPACK 解码器流 ack 线上化（M52，RFC 9204 §4.4 闭环 + 编码表驱逐安全化）
+
+# M52 新增：解码器流承载 Section Ack 的完整闭环 + Known Received Count
+
+extern def h3_conn_stats(conn: int) -> dict|null  # 增 krc/dec_sent/dec_sects/enc_acks 字段
+extern def h3_qs_krc(sess: int) -> int            # 本端编码器 Known Received Count
+extern def h3_qs_enc_ric(sess: int) -> int         # 最近编码字段段 RIC（>0 对端须 ack）
+extern def h3_qs_dec_ric(sess: int) -> int         # 最近解码字段段 RIC（>0 本端须发 ack）
+extern def h3_qs_ack_sec(sess: int, ric: int) -> bool  # Section Ack → KRC=max(KRC,ric)
+extern def h3_qs_ack_inc(sess: int, inc: int) -> bool  # Insert Count Increment → KRC+=inc
+extern def h3_qs_en_len(sess: int) -> int          # 本端编码表条目
+extern def h3_qs_de_len(sess: int) -> int          # 对端镜像表条目
+extern def h3_qs_ins(sess: int) -> int             # 已 ingest 插入计数
+```
+
+- **双向 ack 闭环模型**（RFC 9204 §4.4/§2.1.4/§2.2.2）：
+  - **接收方向**（本端解码对端字段段）：`h3_read_section` 解码成功且字段段 Required Insert
+    Count > 0（含动态引用）→ 立即在**本端解码器流**发 Section Ack（wire：`1` 1-bit + Stream ID
+    7-bit prefix，RFC 9204 §4.4.1 Figure 9）——本端 `dec_sents++/dec_sects++`。
+  - **发送方向**（本端编码字段段）：`h3_send_fields` 经 QPACK 会话编码成功后按流登记
+    outstanding（`h3conn_state.out_ack[sid]=RIC`，RFC 9204 §4.4.1 的 Section Ack 只带 stream id、
+    无 RIC——编码器靠发送时登记的 RIC 还原）；`h3_consume_peer_uni` 对 peer_dec 流解析指令：
+    Section Ack（`0x80` 头）→ out_ack_take(sid) → `px_qd_ack_sec(ric)`（KRC=max）；Stream
+    Cancellation（`01` 头）→ 移除该流 outstanding（不推 KRC）；Insert Count Increment（`00` 头）
+    → `px_qd_ack_inc(inc)`（KRC+=inc）。
+  - **Known Received Count（KRC）**：本端编码器已知对端确认的插入计数。h3_conn_stats.krc 可查。
+- **编码表驱逐安全化**（RFC 9204 §2.1.1/§2.2.2，修复 M51"全条目可驱逐"互操作缺陷）：编码器
+  插入需腾位时**只驱逐绝对索引 < KRC 的已确认条目**；未确认引用的条目不可驱逐 → 表满腾不出时
+  **放弃插入**（不写编码器流 Insert 指令，字段段走字面量/既有条目编码）——eout 与本地表严格
+  同步，保证 decoder 永不引用已驱逐条目。decoder 镜像表（de）无此约束（对端编码器已自行保证）。
+- **会话 RIC 跟踪**：qd_sess 记录 en_last_ric（编码）/dec_ric（解码）；语言层 h3_qs_enc_ric/
+  dec_ric/krc/en_len/de_len/ins 供断言；原纯函数 h3_qs_* / 未 setup 无状态路径语义零变化。
+- **验证**：`examples/m52_qpack_decack_verify.sh` 双模式 PASS——3 轮请求（x-token 每轮新值、
+  编码器先插表、字段段 RIC≥1）：双端 setup 后各自解码对方字段段发 Section Ack、各自 drain
+  消费对方 ack 推进 KRC（server dec_sects=3/enc_acks=3/krc=6，client dec_sects=3/enc_acks=3/
+  krc=10）、请求/响应字段跨线逐字节还原、client 输出双模式一致；capability section 27（qcap=120
+  驱逐受限：f1/f2 插 2 条、f3 表满无 ack 不插 en_len=2、ack_sec(2) 后 f4 驱逐 abs0 插 abs2、
+  Insert Count Increment 累计）+ M46–M51 回归全 PASS。
+
+---
+
 ## 9. 双模式执行
 
 ### 9.1 脚本模式

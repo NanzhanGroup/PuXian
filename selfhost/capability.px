@@ -810,6 +810,79 @@ check("M51 h3_conn_peer 未 setup conn → null", h3_conn_peer(3) == null)
 check("M51 h3_conn_stats 未 setup → null", h3_conn_stats(3) == null)
 
 # ============================================================
+# 27. QPACK 解码器流 ack / 驱逐安全（M52：RFC 9204 §4.4 闭环语义）
+# ------------------------------------------------------------
+# dyn.c 新增会话语义：
+#   * Known Received Count（KRC）：对端解码器流 Section Ack / Insert Count
+#     Increment 推进（h3_qs_ack_sec / h3_qs_ack_inc；krc 可查 h3_qs_krc）
+#   * 编码器驱逐安全（RFC 9204 §2.1.1/§2.2.2）：插入需腾位时只能驱逐
+#     绝对索引 < KRC 的已确认条目；未确认条目引用未解除前不可驱逐 →
+#     表满时不插入（字段走字面量），绝不让 decoder 引用已驱逐条目
+#   * RIC 跟踪：h3_qs_enc_ric（编码字段段 RIC）/ h3_qs_dec_ric（解码
+#     字段段 RIC——>0 表示上层必须发 Section Ack）
+# 完整线上闭环（解码器流真实传输 Section Ack）见
+# examples/m52_qpack_decack_verify.sh（编译+解释双模式端到端）。
+# ============================================================
+import "c/ngtcp2"
+
+extern def h3_qs_krc(sess: int) -> int
+extern def h3_qs_enc_ric(sess: int) -> int
+extern def h3_qs_dec_ric(sess: int) -> int
+extern def h3_qs_ack_sec(sess: int, ric: int) -> bool
+extern def h3_qs_ack_inc(sess: int, inc: int) -> bool
+extern def h3_qs_en_len(sess: int) -> int
+extern def h3_qs_de_len(sess: int) -> int
+extern def h3_qs_ins(sess: int) -> int
+
+# M52.1：编码器驱逐安全（小容量 120：x-tok+值条目 ≈ 42B，可容 2 条）
+var q27e = h3_qs_open(120)
+check("M52 驱逐测试会话打开", q27e > 0)
+check("M52 初始 KRC = 0", h3_qs_krc(q27e) == 0)
+var m52r1 = h3_qs_enc(q27e, [["x-tok", "tok-1"]])
+var m52o1 = h3_qs_take_enc(q27e)
+check("M52 f1 插入 abs0 产生编码器指令", qb_len(m52o1) > 0)
+check("M52 f1 字段段引用动态 RIC=1", h3_qs_enc_ric(q27e) == 1)
+check("M52 f1 后 en 表 1 条", h3_qs_en_len(q27e) == 1)
+var m52r2 = h3_qs_enc(q27e, [["x-tok", "tok-2"]])
+var m52o2 = h3_qs_take_enc(q27e)
+check("M52 f2 插入 abs1 RIC=2", h3_qs_enc_ric(q27e) == 2 and qb_len(m52o2) > 0)
+check("M52 f2 后 en 表 2 条", h3_qs_en_len(q27e) == 2)
+# f3：表满需驱逐 abs0，但 KRC=0（尚未 ack）→ 不可驱逐 → 不插入
+var m52r3 = h3_qs_enc(q27e, [["x-tok", "tok-3"]])
+var m52o3 = h3_qs_take_enc(q27e)
+check("M52 f3 驱逐受限：en 表仍 2 条", h3_qs_en_len(q27e) == 2)
+check("M52 f3 无新插入指令", qb_len(m52o3) == 0)
+check("M52 f3 RIC 仍 =2（引用已存在条目）", h3_qs_enc_ric(q27e) == 2)
+# 对端确认收到 RIC=2 字段段（Section Ack）→ KRC 提到 2
+check("M52 Section Ack 推进 KRC=2", h3_qs_ack_sec(q27e, 2) == true and h3_qs_krc(q27e) == 2)
+# f4：KRC=2 → abs0(<2) 可驱逐 → 插 abs2（表仍 2 条：abs1 + abs2）
+var m52r4 = h3_qs_enc(q27e, [["x-tok", "tok-4"]])
+var m52o4 = h3_qs_take_enc(q27e)
+check("M52 ack 后驱逐生效：en 表仍 2 条", h3_qs_en_len(q27e) == 2)
+check("M52 f4 插入新指令 + RIC=3", qb_len(m52o4) > 0 and h3_qs_enc_ric(q27e) == 3)
+# Insert Count Increment（RFC 9204 §4.4.3：KRC += inc）
+check("M52 Insert Count Increment KRC=4", h3_qs_ack_inc(q27e, 2) == true and h3_qs_krc(q27e) == 4)
+h3_qs_close(q27e)
+
+# M52.2：解码 RIC 跟踪（decoder 镜像表 + 字段段解码 → dec_ric>0 须发 Section Ack）
+var q27d = h3_qs_open(4096)
+check("M52 解码测试会话打开", q27d > 0)
+var m52ds1 = h3_qs_enc(q27d, [["x-tok", "tok-a"]])
+var m52do1 = h3_qs_take_enc(q27d)
+check("M52 decoder ingest abs0 指令", h3_qs_dec_ingest(q27d, m52do1))
+var m52d1 = h3_qs_dec(q27d, m52ds1)
+check("M52 decoder 还原 f1", m52d1 != null and len(m52d1) == 1 and m52d1[0][1] == "tok-a")
+check("M52 解码字段段 RIC=1 → 须发 Section Ack", h3_qs_dec_ric(q27d) == 1)
+check("M52 镜像表 de_len=1 / ins=1", h3_qs_de_len(q27d) == 1 and h3_qs_ins(q27d) == 1)
+var m52ds2 = h3_qs_enc(q27d, [["x-tok", "tok-b"]])
+var m52do2 = h3_qs_take_enc(q27d)
+check("M52 decoder ingest abs1 指令", h3_qs_dec_ingest(q27d, m52do2))
+var m52d2 = h3_qs_dec(q27d, m52ds2)
+check("M52 decoder 还原 f2 RIC=2", m52d2 != null and len(m52d2) == 1 and m52d2[0][1] == "tok-b" and h3_qs_dec_ric(q27d) == 2)
+check("M52 镜像表 de_len=2 / ins=2", h3_qs_de_len(q27d) == 2 and h3_qs_ins(q27d) == 2)
+h3_qs_close(q27d)
+
+# ============================================================
 # 汇总
 # ============================================================
 print("")

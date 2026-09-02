@@ -145,6 +145,9 @@ typedef struct {
     uint64_t de_next_abs;
     uint64_t de_ins;          // decoder 已处理插入计数（RIC wrap 还原用）
     int dec_blocked;          // M51：最近一次 qd_dec_section 是否因缺 encoder 指令而阻塞（de_ins<RIC）
+    uint64_t en_krc;          // M52：本端编码器 Known Received Count（对端解码器流 ack 推进，RFC 9204 §2.1.4）
+    uint64_t en_last_ric;     // M52：最近一次编码字段段的 Required Insert Count（上层登记 outstanding 用）
+    uint64_t dec_ric;         // M52：最近一次成功解码字段段的 Required Insert Count（>0 需发 Section Ack）
 } qd_sess;
 
 static qd_sess g_qds[QD_MAX_SESS];
@@ -339,8 +342,10 @@ static LXValue bi_qs_enc(LXValue* args, int nargs, void* ctx) {
         int esz = qd_entry_size2(f[i].n, f[i].nl, f[i].v, f[i].vl);
         if (esz > s->enc_cap) continue;
         if (s->en_len >= QD_ENT_MAX) continue;
-        // 容量驱逐（全条目可驱逐 MVP）
-        while (qd_tab_bytes(s->en, s->en_head, s->en_len) + esz > s->enc_cap && s->en_len > 0)
+        // 容量驱逐（M52：仅驱逐对端已 ack 的条目 abs < en_krc；未确认引用的条目不可驱逐，
+        // RFC 9204 §2.1.1/§2.2.2——驱逐必须先于 Insert 指令发出，保证 decoder 永不引用已驱逐条目）
+        while (qd_tab_bytes(s->en, s->en_head, s->en_len) + esz > s->enc_cap && s->en_len > 0 &&
+               s->en_next_abs - (uint64_t)s->en_len < s->en_krc)
             qd_tab_drop(s->en, &s->en_head, &s->en_len);
         if (qd_tab_bytes(s->en, s->en_head, s->en_len) + esz > s->enc_cap) continue;
         // 生成 Insert 指令（编码器流）
@@ -387,10 +392,12 @@ static LXValue bi_qs_enc(LXValue* args, int nargs, void* ctx) {
                 qd_str_out(&s->eout, &s->eout_len, &s->eout_cap, f[i].v, f[i].vl);
             }
         }
-        // 本地动态表插入
+        // 本地动态表插入（驱逐同上：仅已确认 abs < en_krc 可驱逐；插不下则放弃本条插入——
+        // 此时 eout 未写入该条指令，字段段已按字面量编码，两端状态一致）
         if (s->en_len >= QD_ENT_MAX) continue;
         int esz2 = qd_entry_size2(f[i].n, f[i].nl, f[i].v, f[i].vl);
-        while (qd_tab_bytes(s->en, s->en_head, s->en_len) + esz2 > s->enc_cap && s->en_len > 0)
+        while (qd_tab_bytes(s->en, s->en_head, s->en_len) + esz2 > s->enc_cap && s->en_len > 0 &&
+               s->en_next_abs - (uint64_t)s->en_len < s->en_krc)
             qd_tab_drop(s->en, &s->en_head, &s->en_len);
         if (qd_tab_bytes(s->en, s->en_head, s->en_len) + esz2 > s->enc_cap) continue;
         qd_tab_append(s->en, &s->en_head, &s->en_len, f[i].n, f[i].nl, f[i].v, f[i].vl);
@@ -409,6 +416,8 @@ static LXValue bi_qs_enc(LXValue* args, int nargs, void* ctx) {
         int didx = qd_dyn_find_name(s->en, s->en_head, s->en_len, s->en_next_abs, f[i].n, f[i].nl);
         if (didx >= 0) { if (didx + 1 > ric) ric = didx + 1; }
     }
+    // M52：记录本字段段 RIC（上层发 Section Ack 时按流登记 outstanding）
+    s->en_last_ric = (uint64_t)ric;
     // RIC 编码：EncInsertCount = (RIC==0?0:(RIC mod (2*MaxEntries))+1)，MaxEntries=floor(max_cap/32)
     uint64_t enc_ric = 0;
     if (ric > 0) {
@@ -701,6 +710,8 @@ static LXValue qd_dec_section(qd_sess* s, const uint8_t* p, int len) {
         if (ric == 0) return px_null();
         if ((int64_t)s->de_ins < ric) { s->dec_blocked = 1; return px_null(); }  // 阻塞：指令未到
     }
+    // M52：记录本字段段 RIC（>0 时上层须发 Section Ack，RFC 9204 §2.2.2.1）
+    s->dec_ric = (uint64_t)ric;
     int64_t base;
     if (sign) { base = ric - (int64_t)deltab - 1; if (base < 0) return px_null(); }
     else base = ric + (int64_t)deltab;
@@ -967,6 +978,69 @@ static LXValue bi_settings_dec(LXValue* args, int nargs, void* ctx) {
     return pairs;
 }
 
+// ==================== M52 语言层诊断（capability 断言用）====================
+// h3_qs_krc(sess) -> int：本端编码器 Known Received Count
+static LXValue bi_qs_krc(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || args[0].type != PX_INT) return px_int(-1);
+    qd_sess* s = qd_get(args[0].as.i);
+    return s ? px_int((int64_t)s->en_krc) : px_int(-1);
+}
+// h3_qs_enc_ric(sess) -> int：最近一次编码字段段 RIC
+static LXValue bi_qs_enc_ric(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || args[0].type != PX_INT) return px_int(-1);
+    qd_sess* s = qd_get(args[0].as.i);
+    return s ? px_int((int64_t)s->en_last_ric) : px_int(-1);
+}
+// h3_qs_dec_ric(sess) -> int：最近一次成功解码字段段 RIC
+static LXValue bi_qs_dec_ric(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || args[0].type != PX_INT) return px_int(-1);
+    qd_sess* s = qd_get(args[0].as.i);
+    return s ? px_int((int64_t)s->dec_ric) : px_int(-1);
+}
+// h3_qs_ack_sec(sess, ric) -> bool：处理 Section Ack（推进 KRC，RFC 9204 §4.4.1）
+static LXValue bi_qs_ack_sec(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 2 || args[0].type != PX_INT || args[1].type != PX_INT) return px_bool(false);
+    qd_sess* s = qd_get(args[0].as.i);
+    if (!s || args[1].as.i < 0) return px_bool(false);
+    if ((uint64_t)args[1].as.i > s->en_krc) s->en_krc = (uint64_t)args[1].as.i;
+    return px_bool(true);
+}
+// h3_qs_ack_inc(sess, inc) -> bool：处理 Insert Count Increment（KRC += inc，RFC 9204 §4.4.3）
+static LXValue bi_qs_ack_inc(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 2 || args[0].type != PX_INT || args[1].type != PX_INT) return px_bool(false);
+    qd_sess* s = qd_get(args[0].as.i);
+    if (!s || args[1].as.i < 0) return px_bool(false);
+    s->en_krc += (uint64_t)args[1].as.i;
+    return px_bool(true);
+}
+
+// h3_qs_en_len(sess) -> int：本端编码表条目
+static LXValue bi_qs_en_len(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || args[0].type != PX_INT) return px_int(-1);
+    qd_sess* s = qd_get(args[0].as.i);
+    return s ? px_int(s->en_len) : px_int(-1);
+}
+// h3_qs_de_len(sess) -> int：对端镜像表条目
+static LXValue bi_qs_de_len(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || args[0].type != PX_INT) return px_int(-1);
+    qd_sess* s = qd_get(args[0].as.i);
+    return s ? px_int(s->de_len) : px_int(-1);
+}
+// h3_qs_ins(sess) -> int：已 ingest 插入计数
+static LXValue bi_qs_ins(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || args[0].type != PX_INT) return px_int(-1);
+    qd_sess* s = qd_get(args[0].as.i);
+    return s ? px_int((int64_t)s->de_ins) : px_int(-1);
+}
+
 // ==================== 注册 ====================
 void px_register_h3_qpack_dyn(void) {
     px_set_global("h3_qs_open", px_native("h3_qs_open", bi_qs_open));
@@ -977,6 +1051,14 @@ void px_register_h3_qpack_dyn(void) {
     px_set_global("h3_qs_dec", px_native("h3_qs_dec", bi_qs_dec));
     px_set_global("h3_settings_enc", px_native("h3_settings_enc", bi_settings_enc));
     px_set_global("h3_settings_dec", px_native("h3_settings_dec", bi_settings_dec));
+    px_set_global("h3_qs_krc", px_native("h3_qs_krc", bi_qs_krc));
+    px_set_global("h3_qs_enc_ric", px_native("h3_qs_enc_ric", bi_qs_enc_ric));
+    px_set_global("h3_qs_dec_ric", px_native("h3_qs_dec_ric", bi_qs_dec_ric));
+    px_set_global("h3_qs_ack_sec", px_native("h3_qs_ack_sec", bi_qs_ack_sec));
+    px_set_global("h3_qs_ack_inc", px_native("h3_qs_ack_inc", bi_qs_ack_inc));
+    px_set_global("h3_qs_en_len", px_native("h3_qs_en_len", bi_qs_en_len));
+    px_set_global("h3_qs_de_len", px_native("h3_qs_de_len", bi_qs_de_len));
+    px_set_global("h3_qs_ins", px_native("h3_qs_ins", bi_qs_ins));
     px_ffi_register("h3_qs_open", bi_qs_open);
     px_ffi_register("h3_qs_close", bi_qs_close);
     px_ffi_register("h3_qs_enc", bi_qs_enc);
@@ -985,6 +1067,14 @@ void px_register_h3_qpack_dyn(void) {
     px_ffi_register("h3_qs_dec", bi_qs_dec);
     px_ffi_register("h3_settings_enc", bi_settings_enc);
     px_ffi_register("h3_settings_dec", bi_settings_dec);
+    px_ffi_register("h3_qs_krc", bi_qs_krc);
+    px_ffi_register("h3_qs_enc_ric", bi_qs_enc_ric);
+    px_ffi_register("h3_qs_dec_ric", bi_qs_dec_ric);
+    px_ffi_register("h3_qs_ack_sec", bi_qs_ack_sec);
+    px_ffi_register("h3_qs_ack_inc", bi_qs_ack_inc);
+    px_ffi_register("h3_qs_en_len", bi_qs_en_len);
+    px_ffi_register("h3_qs_de_len", bi_qs_de_len);
+    px_ffi_register("h3_qs_ins", bi_qs_ins);
 }
 
 // ============================================================
@@ -1085,3 +1175,33 @@ int px_qd_en_len(int64_t id)   { qd_sess* s = qd_get(id); return s ? s->en_len :
 int px_qd_de_len(int64_t id)   { qd_sess* s = qd_get(id); return s ? s->de_len : -1; }      // 对端镜像表条目
 int px_qd_ins(int64_t id)      { qd_sess* s = qd_get(id); return s ? (int)s->de_ins : -1; } // 已 ingest 插入数
 int px_qd_eout_len(int64_t id) { qd_sess* s = qd_get(id); return s ? s->eout_len : -1; }    // eout 待发字节
+
+// ============ M52：解码器流指令线上处理（本端作为编码器，消费对端解码器流）============
+// 注意：QPACK 解码器流指令（RFC 9204 §4.4）无 RIC 字段——Section Ack 只带 stream id；
+// 本端编码器按流登记过 outstanding 字段段的 RIC，收到 ack 时用登记的 RIC 提升 KRC。
+// 对端解码器流指令由 runtime_h3.c 解析后调用下列函数更新本端编码会话状态。
+
+// Section Acknowledgment：KRC = max(KRC, ric)（RFC 9204 §2.1.4）。返回 0 | -1。
+int px_qd_ack_sec(int64_t id, int64_t ric) {
+    qd_sess* s = qd_get(id);
+    if (!s || ric < 0) return -1;
+    if ((uint64_t)ric > s->en_krc) s->en_krc = (uint64_t)ric;
+    return 0;
+}
+
+// Insert Count Increment：KRC += increment（RFC 9204 §4.4.3）。返回 0 | -1。
+int px_qd_ack_inc(int64_t id, int64_t inc) {
+    qd_sess* s = qd_get(id);
+    if (!s || inc < 0) return -1;
+    s->en_krc += (uint64_t)inc;
+    return 0;
+}
+
+// 本端编码器 Known Received Count | -1。
+int64_t px_qd_krc(int64_t id) { qd_sess* s = qd_get(id); return s ? (int64_t)s->en_krc : -1; }
+
+// 最近一次编码字段段的 RIC | -1（发送方登记 outstanding 用）。
+int px_qd_enc_last_ric(int64_t id) { qd_sess* s = qd_get(id); return s ? (int)s->en_last_ric : -1; }
+
+// 最近一次成功解码字段段的 RIC | -1（>0 → 上层须发 Section Ack）。
+int px_qd_dec_last_ric(int64_t id) { qd_sess* s = qd_get(id); return s ? (int)s->dec_ric : -1; }
