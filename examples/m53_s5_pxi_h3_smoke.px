@@ -1,0 +1,13 @@
+# M53-S5：新 pxi（bootstrap/pxi）解释模式下 h3_server_listen 内置可用性自检
+# 证明 S5 "pxi 重建后解释器含 h3_server_listen/px_serve http3" —— 解释模式同能力。
+extern def h3_server_listen(port: int, cert: str, key: str) -> int
+
+def main():
+    var id = h3_server_listen(18199, "", "")
+    if id > 0:
+        print("S5-OK h3_server_listen interp listener id=" + str(id))
+    else:
+        print("S5-FAIL h3_server_listen id=" + str(id))
+        return 1
+    return 0
+
