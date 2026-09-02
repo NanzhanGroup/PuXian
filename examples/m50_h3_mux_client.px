@@ -1,0 +1,55 @@
+# ============================================================
+# M50 HTTP/3 多路复用端到端：客户端
+# ------------------------------------------------------------
+# 流程：h3_client_connect（QUIC 握手，自带首条双向流 sid 0）
+#       → h3_client_open_stream 再开 3 条请求流（4/8/12）
+#       → 3 个请求全部发出（不等响应 → 3 个在途并发）
+#       → 逐流 h3_client_read_response_stream 收各自响应
+# 关键断言：3 个响应体分别对应各自的 path 与流号 → 无串扰、真多路复用
+# 验证：examples/m50_h3_mux_verify.sh（编译+解释双模式输出逐字节一致）
+# ============================================================
+import "c/ngtcp2"
+
+extern def h3_client_connect(ip: str, port: int, alpn: str) -> int
+extern def h3_client_open_stream(conn: int) -> int
+extern def h3_client_send_request_stream(conn: int, sid: int, method: str, scheme: str, authority: str, path: str, headers: list, body: str) -> bool
+extern def h3_client_read_response_stream(conn: int, sid: int, timeout_ms: int) -> dict
+extern def quic_close(conn: int) -> bool
+
+var c = h3_client_connect("127.0.0.1", 17998, "puxian")
+assert(c > 0, "client: h3_client_connect 失败")
+print("client: connected " + str(c))
+
+# 再开 3 条请求流（connect 已占 sid 0，故 3 次 open 得 4/8/12）
+var s0 = h3_client_open_stream(c)
+var s1 = h3_client_open_stream(c)
+var s2 = h3_client_open_stream(c)
+assert(s0 > 0 and s1 > s0 and s2 > s1, "client: open_stream 失败")
+print("client: streams " + str(s0) + "," + str(s1) + "," + str(s2))
+
+# 三个请求全部发出（不等响应 → 在途并发）
+var ok = h3_client_send_request_stream(c, s0, "GET", "https", "localhost:17998", "/alpha", [["user-agent", "px-h3-mux"], ["x-req", "1"]], "body-alpha")
+assert(ok, "client: send s0 失败")
+ok = h3_client_send_request_stream(c, s1, "GET", "https", "localhost:17998", "/beta", [["user-agent", "px-h3-mux"], ["x-req", "2"]], "body-beta")
+assert(ok, "client: send s1 失败")
+ok = h3_client_send_request_stream(c, s2, "GET", "https", "localhost:17998", "/gamma", [["user-agent", "px-h3-mux"], ["x-req", "3"]], "body-gamma")
+assert(ok, "client: send s2 失败")
+print("client: 3 requests in flight")
+
+# 逐流收响应（固定顺序 → 输出确定，可双模式对拍）
+var r0 = h3_client_read_response_stream(c, s0, 8000)
+var r1 = h3_client_read_response_stream(c, s1, 8000)
+var r2 = h3_client_read_response_stream(c, s2, 8000)
+assert(r0 != null and r1 != null and r2 != null, "client: 响应缺失/超时")
+print("client: resp sid=" + str(r0["sid"]) + " status=" + r0["status"] + " body=[" + r0["body"] + "]")
+print("client: resp sid=" + str(r1["sid"]) + " status=" + r1["status"] + " body=[" + r1["body"] + "]")
+print("client: resp sid=" + str(r2["sid"]) + " status=" + r2["status"] + " body=[" + r2["body"] + "]")
+
+# 断言：每条响应对应各自请求（path/流号 一一对应 → 无串扰）
+assert(r0["status"] == "200" and r0["body"] == "echo-mux:/alpha:stream-" + str(s0), "client: s0 响应不匹配")
+assert(r1["status"] == "200" and r1["body"] == "echo-mux:/beta:stream-" + str(s1), "client: s1 响应不匹配")
+assert(r2["status"] == "200" and r2["body"] == "echo-mux:/gamma:stream-" + str(s2), "client: s2 响应不匹配")
+print("client: 3 responses multiplexed OK")
+
+quic_close(c)
+print("client: done")

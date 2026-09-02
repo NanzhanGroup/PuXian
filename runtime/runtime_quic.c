@@ -48,6 +48,18 @@ typedef struct {
     int            used;
 } quic_listener;
 
+// M50：多路复用——每连接多条双向流，各流独立 FIFO 接收缓冲
+#define QUIC_STREAM_MAX 16   // 每连接并发双向流槽（对齐 initial_max_streams_bidi=16）
+
+typedef struct {
+    int64_t  sid;            // QUIC 流 id（client bidi 0,4,8…；server bidi 1,5,9…）
+    uint8_t* buf;            // 该流接收缓冲（动态增长）
+    size_t   len, cap;
+    int      fin;            // 对端 FIN 已到
+    int      peer;           // 对端发起（本地被动建槽）
+    int      used;
+} quic_stream;
+
 typedef struct {
     int            fd;            // UDP socket
     ngtcp2_conn*   conn;
@@ -56,9 +68,7 @@ typedef struct {
     SSL*           ssl;
     ngtcp2_path    path;
     struct sockaddr_storage local_sa, remote_sa;
-    int64_t        stream_id;     // 当前双向流（客户端 open 的 bidi stream）
-    uint8_t        rbuf[QUIC_PKT_BUF];
-    size_t         rlen;          // 已收应用数据字节数
+    quic_stream    streams[QUIC_STREAM_MAX]; // M50：per-stream 接收缓冲
     int            handshake_done;
     int            peer_closed;
     int            used;
@@ -103,18 +113,82 @@ static int quic_handshake_completed_cb(ngtcp2_conn* conn, void* user_data) {
     return 0;
 }
 
+// ---------- per-stream 槽管理（M50）----------
+static quic_stream* quic_stream_slot(quic_conn* qc, int64_t sid) {
+    for (int i = 0; i < QUIC_STREAM_MAX; i++)
+        if (qc->streams[i].used && qc->streams[i].sid == sid) return &qc->streams[i];
+    return NULL;
+}
+
+static quic_stream* quic_stream_new(quic_conn* qc, int64_t sid, int peer) {
+    quic_stream* s = quic_stream_slot(qc, sid);
+    if (s) return s;
+    for (int i = 0; i < QUIC_STREAM_MAX; i++) {
+        if (!qc->streams[i].used) {
+            qc->streams[i].used = 1;
+            qc->streams[i].sid = sid;
+            qc->streams[i].buf = NULL;
+            qc->streams[i].len = qc->streams[i].cap = 0;
+            qc->streams[i].fin = 0;
+            qc->streams[i].peer = peer;
+            return &qc->streams[i];
+        }
+    }
+    return NULL;  // 槽满
+}
+
+static void quic_stream_free_all(quic_conn* qc) {
+    for (int i = 0; i < QUIC_STREAM_MAX; i++) {
+        if (qc->streams[i].buf) { free(qc->streams[i].buf); qc->streams[i].buf = NULL; }
+        qc->streams[i].used = 0;
+    }
+}
+
+// 任一流有数据/FIN → 返回 sid 最小者（确定性优先序）；无则 NULL
+static quic_stream* quic_any_data(quic_conn* qc) {
+    quic_stream* best = NULL;
+    for (int i = 0; i < QUIC_STREAM_MAX; i++) {
+        quic_stream* s = &qc->streams[i];
+        if (!s->used) continue;
+        if ((s->len > 0 || s->fin) && (!best || s->sid < best->sid)) best = s;
+    }
+    return best;
+}
+
+// 默认流 = 已存在流中 sid 最小者（单流 M46/M47 兼容语义）；无流返回 -1
+static int64_t quic_default_stream(quic_conn* qc) {
+    int64_t best = -1;
+    for (int i = 0; i < QUIC_STREAM_MAX; i++) {
+        quic_stream* s = &qc->streams[i];
+        if (!s->used) continue;
+        if (best < 0 || s->sid < best) best = s->sid;
+    }
+    return best;
+}
+
 static int quic_recv_stream_data_cb(ngtcp2_conn* conn, uint32_t flags,
                                     int64_t stream_id, uint64_t offset,
                                     const uint8_t* data, size_t datalen,
                                     void* user_data, void* stream_user_data) {
-    (void)conn; (void)flags; (void)offset; (void)stream_user_data;
+    (void)conn; (void)offset; (void)stream_user_data;
     quic_conn* qc = (quic_conn*)user_data;
-    // 记录对端使用的流（服务端 echo 用同一双向流）
-    if (qc->stream_id < 0) qc->stream_id = stream_id;
-    if (qc->rlen + datalen <= sizeof(qc->rbuf)) {
-        memcpy(qc->rbuf + qc->rlen, data, datalen);
-        qc->rlen += datalen;
+    quic_stream* s = quic_stream_slot(qc, stream_id);
+    if (!s) s = quic_stream_new(qc, stream_id, 1);   // 对端首见建槽
+    if (!s) return 0;
+    if (datalen > 0) {
+        if (s->len + datalen > s->cap) {
+            size_t ncap = s->cap ? s->cap : 4096;
+            while (ncap < s->len + datalen) ncap *= 2;
+            if (ncap > (1u << 22)) return 0;         // 单流缓冲上限 4MB
+            uint8_t* nb = (uint8_t*)realloc(s->buf, ncap);
+            if (!nb) return 0;
+            s->buf = nb;
+            s->cap = ncap;
+        }
+        memcpy(s->buf + s->len, data, datalen);
+        s->len += datalen;
     }
+    if (flags & NGTCP2_STREAM_DATA_FLAG_FIN) s->fin = 1;
     return 0;
 }
 
@@ -217,9 +291,9 @@ static int quic_pump(quic_conn* qc, int64_t timeout_ms, int data_mode) {
     struct pollfd pfd = { .fd = qc->fd, .events = POLLIN };
     int64_t deadline = quic_now() + (uint64_t)timeout_ms * NGTCP2_MILLISECONDS;
     for (;;) {
-        // 目标达成？
+        /* M50: data_mode 目标 = 任一活跃流有数据/FIN */
         if (data_mode) {
-            if (qc->rlen > 0) return 0;
+            if (quic_any_data(qc) != NULL) return 0;
             if (qc->peer_closed) return 0;
         } else {
             if (qc->handshake_done) return 0;
@@ -373,7 +447,6 @@ static LXValue bi_quic_accept(LXValue* args, int nargs, void* ctx) {
         quic_conn* qc = &g_qconns[cid - 1];
         qc->fd = ql->fd;
         qc->ssl_ctx = NULL;
-        qc->stream_id = -1;
         memcpy(&qc->remote_sa, &from, fromlen);
         memcpy(&qc->local_sa, &ql->local, sizeof(ql->local));
         qc->path.local.addr = (struct sockaddr*)&qc->local_sa;
@@ -484,7 +557,6 @@ static LXValue bi_quic_connect(LXValue* args, int nargs, void* ctx) {
     if (cid < 0) { fprintf(stderr, "[quic] connect: conn table full\n"); close(fd); return px_int(-1); }
     quic_conn* qc = &g_qconns[cid - 1];
     qc->fd = fd;
-    qc->stream_id = -1;
     memset(&qc->local_sa, 0, sizeof(qc->local_sa));
     socklen_t ll = sizeof(qc->local_sa);
     getsockname(fd, (struct sockaddr*)&qc->local_sa, &ll);
@@ -565,45 +637,44 @@ static LXValue bi_quic_connect(LXValue* args, int nargs, void* ctx) {
         fprintf(stderr, "[quic] connect pump rv=%d\n", pr);
         SSL_free(ssl); SSL_CTX_free(cctx); close(fd); ngtcp2_conn_del(qc->conn); qc->used = 0; return px_int(-1);
     }
-    // 打开双向流（stream 0）
-    rv = ngtcp2_conn_open_bidi_stream(qc->conn, &qc->stream_id, NULL);
-    if (rv != 0) {
+    /* M50：打开第一条双向流（client bidi id 从 0 开始，后续 quic_open_stream 每次 +4）*/
+    int64_t sid0 = -1;
+    rv = ngtcp2_conn_open_bidi_stream(qc->conn, &sid0, NULL);
+    if (rv != 0 || sid0 < 0) {
         fprintf(stderr, "[quic] connect: open_bidi_stream rv=%d (%s)\n", rv, ngtcp2_strerror(rv));
         SSL_free(ssl); SSL_CTX_free(cctx); close(fd); ngtcp2_conn_del(qc->conn); qc->used = 0; return px_int(-1);
     }
+    if (!quic_stream_new(qc, sid0, 0)) { /* 槽满，理论上不可能（首条）*/ }
     return px_int(cid);
 }
 
-// ---------- quic_send ----------
-static LXValue bi_quic_send(LXValue* args, int nargs, void* ctx) {
-    (void)ctx;
-    if (nargs < 2 || args[0].type != PX_INT) px_error("quic_send 需要 (conn: int, data: str)");
-    quic_conn* qc = quic_get_conn(args[0].as.i);
-    if (!qc || !qc->conn || qc->stream_id < 0) return px_int(-1);
-    const uint8_t* data;
-    size_t len;
-    if (args[1].type == PX_STR || args[1].type == PX_BYTES) {
-        data = (const uint8_t*)args[1].as.obj->as.str.data;
-        len = (size_t)args[1].as.obj->as.str.len;
-    } else { px_error("quic_send 的 data 需要 str"); return px_int(-1); }
+// ============================================================
+// 发送/接收（M50：per-stream；旧 quic_send/quic_recv = 默认流兼容）
+// ============================================================
+
+// 写指定流：尽量写完，内部处理流控。返回写入字节数 / -1。
+static int64_t quic_write_stream_bytes(quic_conn* qc, int64_t sid,
+                                       const uint8_t* data, size_t len) {
+    if (!qc || !qc->conn) return -1;
+    if (!quic_stream_slot(qc, sid)) return -1;      // 流不存在（未 open/未见对端）
     size_t woff = 0;
     int64_t total = 0;
     int spins = 0;
-    while (woff < len && spins < 8) {
+    while (woff < len && spins < 16) {
         uint8_t out[QUIC_PKT_BUF];
         ngtcp2_vec v = { (uint8_t*)data + woff, len - woff };
         ngtcp2_ssize ndone = 0;
         ngtcp2_ssize n = ngtcp2_conn_writev_stream(qc->conn, &qc->path, NULL,
                                                    out, sizeof(out), &ndone,
                                                    NGTCP2_WRITE_STREAM_FLAG_NONE,
-                                                   qc->stream_id, &v, 1, quic_now());
+                                                   sid, &v, 1, quic_now());
         if (n > 0) {
             sendto(qc->fd, out, (size_t)n, 0,
                    (struct sockaddr*)&qc->remote_sa, sizeof(qc->remote_sa));
         } else if (n < 0 && n != NGTCP2_ERR_WRITE_MORE) {
-            return px_int(-1);
+            return -1;
         }
-        if (ndone > 0) { woff += (size_t)ndone; total += ndone; }
+        if (ndone > 0) { woff += (size_t)ndone; total += (int64_t)ndone; }
         if (ndone == 0 && n == 0) {
             // 流控阻塞：泵一次等 ACK 释放窗口
             int pr = quic_pump(qc, 1000, 0);
@@ -611,10 +682,104 @@ static LXValue bi_quic_send(LXValue* args, int nargs, void* ctx) {
         }
         spins++;
     }
-    return px_int(total);
+    return total;
 }
 
-// ---------- quic_recv ----------
+// 从指定流读取：泵到该流有数据/FIN/超时。消费式拷出。返回字节数 / 0。
+static int64_t quic_read_stream_bytes(quic_conn* qc, int64_t sid,
+                                      uint8_t* out, int maxlen, int timeout_ms) {
+    if (!qc || !qc->conn) return 0;
+    quic_stream* s = quic_stream_slot(qc, sid);
+    if (!s) return 0;                                // 流不存在
+    if (s->len == 0 && !s->fin && !qc->peer_closed) {
+        // 需泵数据：可能命中其他流，循环泵直到本流有数据/FIN/超时
+        int64_t deadline = quic_now() + (uint64_t)timeout_ms * NGTCP2_MILLISECONDS;
+        for (;;) {
+            int64_t remain = deadline - quic_now();
+            if (remain <= 0) return 0;
+            int ms = (int)((remain + NGTCP2_MILLISECONDS - 1) / NGTCP2_MILLISECONDS);
+            int pr = quic_pump(qc, ms, 1);
+            if (pr != 0) return 0;
+            if (s->len > 0 || s->fin || qc->peer_closed) break;
+        }
+    }
+    if (s->len == 0) return 0;
+    size_t take = s->len;
+    if (maxlen > 0 && take > (size_t)maxlen) take = (size_t)maxlen;
+    if (take > 0 && out) memcpy(out, s->buf, take);
+    if (take < s->len) {
+        memmove(s->buf, s->buf + take, s->len - take);
+        s->len -= take;
+    } else {
+        s->len = 0;
+    }
+    return (int64_t)take;
+}
+
+// ---------- quic_open_stream（新 M50：本地 open 一条新双向流）----------
+static LXValue bi_quic_open_stream(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || args[0].type != PX_INT) px_error("quic_open_stream 需要 (conn: int)");
+    quic_conn* qc = quic_get_conn(args[0].as.i);
+    if (!qc || !qc->conn) return px_int(-1);
+    int64_t sid = -1;
+    int rv = ngtcp2_conn_open_bidi_stream(qc->conn, &sid, NULL);
+    if (rv != 0 || sid < 0) return px_int(-1);
+    if (!quic_stream_new(qc, sid, 0)) return px_int(-1);
+    return px_int(sid);
+}
+
+// ---------- quic_send（旧：写默认流，单流兼容）----------
+static LXValue bi_quic_send(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 2 || args[0].type != PX_INT) px_error("quic_send 需要 (conn: int, data: str)");
+    quic_conn* qc = quic_get_conn(args[0].as.i);
+    if (!qc || !qc->conn) return px_int(-1);
+    int64_t sid = quic_default_stream(qc);
+    if (sid < 0) return px_int(-1);
+    const uint8_t* data;
+    size_t len;
+    if (args[1].type == PX_STR || args[1].type == PX_BYTES) {
+        data = (const uint8_t*)args[1].as.obj->as.str.data;
+        len = (size_t)args[1].as.obj->as.str.len;
+    } else { px_error("quic_send 的 data 需要 str"); return px_int(-1); }
+    return px_int(quic_write_stream_bytes(qc, sid, data, len));
+}
+
+// ---------- quic_send_stream（新 M50：写指定流）----------
+static LXValue bi_quic_send_stream(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 3 || args[0].type != PX_INT || args[1].type != PX_INT)
+        px_error("quic_send_stream 需要 (conn: int, sid: int, data: str)");
+    quic_conn* qc = quic_get_conn(args[0].as.i);
+    if (!qc || !qc->conn) return px_int(-1);
+    int64_t sid = args[1].as.i;
+    const uint8_t* data;
+    size_t len;
+    if (args[2].type == PX_STR || args[2].type == PX_BYTES) {
+        data = (const uint8_t*)args[2].as.obj->as.str.data;
+        len = (size_t)args[2].as.obj->as.str.len;
+    } else { px_error("quic_send_stream 的 data 需要 str"); return px_int(-1); }
+    return px_int(quic_write_stream_bytes(qc, sid, data, len));
+}
+
+// ---------- quic_poll（新 M50：等任一活跃流有数据/FIN → sid）----------
+static LXValue bi_quic_poll(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 2 || args[0].type != PX_INT || args[1].type != PX_INT)
+        px_error("quic_poll 需要 (conn: int, timeout_ms: int)");
+    quic_conn* qc = quic_get_conn(args[0].as.i);
+    if (!qc || !qc->conn) return px_int(-1);
+    int timeout_ms = (int)args[1].as.i;
+    if (quic_any_data(qc) == NULL && !qc->peer_closed) {
+        int pr = quic_pump(qc, timeout_ms, 1);
+        if (pr != 0 && quic_any_data(qc) == NULL) return px_int(-1);
+    }
+    quic_stream* s = quic_any_data(qc);
+    return px_int(s ? s->sid : -1);
+}
+
+// ---------- quic_recv（旧：读默认流，单流兼容）----------
 static LXValue bi_quic_recv(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 2 || args[0].type != PX_INT || args[1].type != PX_INT)
@@ -622,21 +787,40 @@ static LXValue bi_quic_recv(LXValue* args, int nargs, void* ctx) {
     quic_conn* qc = quic_get_conn(args[0].as.i);
     if (!qc || !qc->conn) return px_str("");
     int maxlen = (int)args[1].as.i;
-    if (qc->rlen == 0 && !qc->peer_closed) {
+    if (quic_any_data(qc) == NULL && !qc->peer_closed) {
         int pr = quic_pump(qc, 5000, 1);
-        if (pr != 0 && qc->rlen == 0) return px_str("");
+        if (pr != 0 && quic_any_data(qc) == NULL) return px_str("");
     }
-    size_t take = qc->rlen;
+    quic_stream* s = quic_any_data(qc);
+    if (!s) return px_str("");
+    size_t take = s->len;
     if (maxlen > 0 && take > (size_t)maxlen) take = (size_t)maxlen;
-    LXValue r = px_str_len((const char*)qc->rbuf, (int)take);
-    // 移除已取部分
-    if (take < qc->rlen) {
-        memmove(qc->rbuf, qc->rbuf + take, qc->rlen - take);
-        qc->rlen -= take;
+    LXValue r = px_str_len((const char*)s->buf, (int)take);
+    if (take < s->len) {
+        memmove(s->buf, s->buf + take, s->len - take);
+        s->len -= take;
     } else {
-        qc->rlen = 0;
+        s->len = 0;
     }
     return r;
+}
+
+// ---------- quic_recv_stream（新 M50：读指定流）----------
+static LXValue bi_quic_recv_stream(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 4 || args[0].type != PX_INT || args[1].type != PX_INT ||
+        args[2].type != PX_INT || args[3].type != PX_INT)
+        px_error("quic_recv_stream 需要 (conn: int, sid: int, maxlen: int, timeout_ms: int)");
+    quic_conn* qc = quic_get_conn(args[0].as.i);
+    if (!qc || !qc->conn) return px_str("");
+    int64_t sid = args[1].as.i;
+    int maxlen = (int)args[2].as.i;
+    int timeout_ms = (int)args[3].as.i;
+    uint8_t tmp[4096];
+    int cap = (maxlen > 0 && maxlen < (int)sizeof(tmp)) ? maxlen : (int)sizeof(tmp);
+    int64_t got = quic_read_stream_bytes(qc, sid, tmp, cap, timeout_ms);
+    if (got <= 0) return px_str("");
+    return px_str_len((const char*)tmp, (int)got);
 }
 
 // ---------- quic_close ----------
@@ -648,6 +832,7 @@ static LXValue bi_quic_close(LXValue* args, int nargs, void* ctx) {
     if (qc->ssl) { SSL_free(qc->ssl); qc->ssl = NULL; }
     if (qc->ssl_ctx) { SSL_CTX_free(qc->ssl_ctx); qc->ssl_ctx = NULL; }
     if (qc->conn) { ngtcp2_conn_del(qc->conn); qc->conn = NULL; }
+    quic_stream_free_all(qc);
     close(qc->fd);
     memset(qc, 0, sizeof(*qc));
     return px_bool(true);
@@ -665,7 +850,7 @@ static LXValue bi_quic_close_listener(LXValue* args, int nargs, void* ctx) {
 }
 
 // ============================================================
-// raw 接口（M47：供 runtime_h3.c HTTP/3 语义层复用，绕开 LXValue）
+// raw 接口（M47+：供 runtime_h3.c HTTP/3 语义层复用，绕开 LXValue）
 // 命名 px_quic_raw_*：直接操作 conn/listener id 与字节缓冲。
 // 复用上方 static 的 bi_* 注册函数与内部 quic_conn/listener 表。
 // ============================================================
@@ -689,33 +874,75 @@ int64_t px_quic_raw_connect(const char* ip, int port, const char* alpn) {
     return r.type == PX_INT ? r.as.i : -1;
 }
 
-// 发送字节（一次性尽量写完，内部处理流控）。返回写入字节数 / -1。
-int64_t px_quic_raw_send(int64_t conn, const uint8_t* data, int len) {
-    LXValue a[2];
-    a[0] = px_int(conn);
-    a[1] = px_bytes_len(data, len);
-    LXValue r = bi_quic_send(a, 2, NULL);
+// M50：打开一条新双向流（本地发起）。返回 sid / -1。
+int64_t px_quic_raw_open_stream(int64_t conn) {
+    LXValue a[1]; a[0] = px_int(conn);
+    LXValue r = bi_quic_open_stream(a, 1, NULL);
     return r.type == PX_INT ? r.as.i : -1;
 }
 
-// 阻塞接收至多 maxlen 字节（最多等 timeout_ms；0 = 超时/对端关闭）。
-// 从内部 rbuf 取走并移除。返回实际字节数 / 0。
+// 写指定流（fin 预留；M50 MVP 以单 DATA 帧长度界定消息，不依赖 FIN，恒传 0）
+int64_t px_quic_raw_send_on(int64_t conn, int64_t sid, const uint8_t* data, int len, int fin) {
+    (void)fin;
+    quic_conn* qc = quic_get_conn(conn);
+    if (!qc) return -1;
+    return quic_write_stream_bytes(qc, sid, data, (size_t)len);
+}
+
+// 读指定流：消费式。返回实际字节数 / 0（超时/FIN/无数据）。
+int64_t px_quic_raw_recv_on(int64_t conn, int64_t sid, uint8_t* out, int maxlen, int timeout_ms) {
+    quic_conn* qc = quic_get_conn(conn);
+    if (!qc || !qc->conn) return 0;
+    return quic_read_stream_bytes(qc, sid, out, maxlen, timeout_ms);
+}
+
+// 等到任一活跃流有数据/FIN/新对端流 → 返回该 sid；超时 -1；错误 -2
+int64_t px_quic_raw_poll(int64_t conn, int timeout_ms) {
+    quic_conn* qc = quic_get_conn(conn);
+    if (!qc || !qc->conn) return -2;
+    if (quic_any_data(qc) == NULL && !qc->peer_closed) {
+        int pr = quic_pump(qc, timeout_ms, 1);
+        if (pr != 0 && quic_any_data(qc) == NULL) return -1;
+    }
+    quic_stream* s = quic_any_data(qc);
+    return s ? s->sid : -1;
+}
+
+// 默认流 = 最小活跃 sid（供 M47 旧 API 单流兼容定位）
+int64_t px_quic_raw_first_stream(int64_t conn) {
+    quic_conn* qc = quic_get_conn(conn);
+    if (!qc) return -1;
+    return quic_default_stream(qc);
+}
+
+// 发送字节（默认流：一次性尽量写完，内部处理流控）。返回写入字节数 / -1。
+int64_t px_quic_raw_send(int64_t conn, const uint8_t* data, int len) {
+    quic_conn* qc = quic_get_conn(conn);
+    if (!qc) return -1;
+    int64_t sid = quic_default_stream(qc);
+    if (sid < 0) return -1;
+    return quic_write_stream_bytes(qc, sid, data, (size_t)len);
+}
+
+// 阻塞接收至多 maxlen 字节（默认流；最多等 timeout_ms；0 = 超时/对端关闭）。
+// 从内部该流缓冲取走并移除。返回实际字节数 / 0。
 int64_t px_quic_raw_recv(int64_t conn, uint8_t* out, int maxlen, int timeout_ms) {
     quic_conn* qc = quic_get_conn(conn);
     if (!qc || !qc->conn) return 0;
-    if (qc->rlen == 0 && !qc->peer_closed) {
+    if (quic_any_data(qc) == NULL && !qc->peer_closed) {
         int pr = quic_pump(qc, timeout_ms, 1);
-        if (pr != 0 && qc->rlen == 0) return 0;
+        if (pr != 0 && quic_any_data(qc) == NULL) return 0;
     }
-    if (qc->rlen == 0) return 0;
-    size_t take = qc->rlen;
+    quic_stream* s = quic_any_data(qc);
+    if (!s) return 0;
+    size_t take = s->len;
     if (maxlen > 0 && take > (size_t)maxlen) take = (size_t)maxlen;
-    if (take > 0 && out) memcpy(out, qc->rbuf, take);
-    if (take < qc->rlen) {
-        memmove(qc->rbuf, qc->rbuf + take, qc->rlen - take);
-        qc->rlen -= take;
+    if (take > 0 && out) memcpy(out, s->buf, take);
+    if (take < s->len) {
+        memmove(s->buf, s->buf + take, s->len - take);
+        s->len -= take;
     } else {
-        qc->rlen = 0;
+        s->len = 0;
     }
     return (int64_t)take;
 }
@@ -737,15 +964,23 @@ void px_register_quic(void) {
     px_set_global("quic_listen", px_native("quic_listen", bi_quic_listen));
     px_set_global("quic_accept", px_native("quic_accept", bi_quic_accept));
     px_set_global("quic_connect", px_native("quic_connect", bi_quic_connect));
+    px_set_global("quic_open_stream", px_native("quic_open_stream", bi_quic_open_stream));
     px_set_global("quic_send", px_native("quic_send", bi_quic_send));
+    px_set_global("quic_send_stream", px_native("quic_send_stream", bi_quic_send_stream));
     px_set_global("quic_recv", px_native("quic_recv", bi_quic_recv));
+    px_set_global("quic_recv_stream", px_native("quic_recv_stream", bi_quic_recv_stream));
+    px_set_global("quic_poll", px_native("quic_poll", bi_quic_poll));
     px_set_global("quic_close", px_native("quic_close", bi_quic_close));
     px_set_global("quic_close_listener", px_native("quic_close_listener", bi_quic_close_listener));
     px_ffi_register("quic_listen", bi_quic_listen);
     px_ffi_register("quic_accept", bi_quic_accept);
     px_ffi_register("quic_connect", bi_quic_connect);
+    px_ffi_register("quic_open_stream", bi_quic_open_stream);
     px_ffi_register("quic_send", bi_quic_send);
+    px_ffi_register("quic_send_stream", bi_quic_send_stream);
     px_ffi_register("quic_recv", bi_quic_recv);
+    px_ffi_register("quic_recv_stream", bi_quic_recv_stream);
+    px_ffi_register("quic_poll", bi_quic_poll);
     px_ffi_register("quic_close", bi_quic_close);
     px_ffi_register("quic_close_listener", bi_quic_close_listener);
 }

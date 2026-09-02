@@ -90,22 +90,42 @@ static int h3_build_frame(uint8_t* out, int type, const uint8_t* payload, int pl
     return off;
 }
 
-// ==================== 连接级接收缓冲 ====================
+
+// ==================== per-stream 接收缓冲（M50：多路复用）====================
+// 每条活跃双向流一个 H3 帧缓冲槽（按 sid 精确匹配线性槽，上限 H3_STREAM_SLOTS）。
+#define H3_STREAM_SLOTS 16
+
 typedef struct {
+    int64_t sid;           // 绑定流 id
+    int used;              // 槽占用
     uint8_t* data;
     int len, cap;
 } h3connbuf;
-static h3connbuf g_h3buf[H3_MAX_CONN];
 
-static h3connbuf* h3_buf_for(int64_t conn) {
+static h3connbuf g_h3buf[H3_MAX_CONN][H3_STREAM_SLOTS];
+static int64_t g_last_sid[H3_MAX_CONN];   // 旧 API 兼容：最近读请求/响应的流
+
+static h3connbuf* h3_buf_for(int64_t conn, int64_t sid) {
     if (conn <= 0 || conn > H3_MAX_CONN) return NULL;
-    return &g_h3buf[conn - 1];
+    h3connbuf (*slots)[H3_STREAM_SLOTS] = &g_h3buf[conn - 1];
+    for (int i = 0; i < H3_STREAM_SLOTS; i++)
+        if ((*slots)[i].used && (*slots)[i].sid == sid) return &(*slots)[i];
+    for (int i = 0; i < H3_STREAM_SLOTS; i++) {
+        if (!(*slots)[i].used) {
+            (*slots)[i].used = 1;
+            (*slots)[i].sid = sid;
+            (*slots)[i].len = (*slots)[i].cap = 0;
+            (*slots)[i].data = NULL;
+            return &(*slots)[i];
+        }
+    }
+    return NULL;  // 槽满
 }
 
-// 追加读取：把 conn 上可用数据收进缓冲（非阻塞轮询至多 timeout_ms）。
-static int h3_buf_fill(int64_t conn, h3connbuf* b, int64_t timeout_ms) {
+// 追加读取：从 QUIC 指定流收数据进缓冲（至多等 timeout_ms）。
+static int h3_buf_fill(int64_t conn, int64_t sid, h3connbuf* b, int64_t timeout_ms) {
     uint8_t tmp[4096];
-    int64_t got = px_quic_raw_recv(conn, tmp, (int)sizeof(tmp), timeout_ms);
+    int64_t got = px_quic_raw_recv_on(conn, sid, tmp, (int)sizeof(tmp), (int)timeout_ms);
     if (got <= 0) return -1;   // 超时/关闭
     if (b->len + (int)got > b->cap) {
         int ncap = b->cap > 0 ? b->cap : 4096;
@@ -138,16 +158,16 @@ static int h3_buf_parse(h3connbuf* b, int* poff, int* plen) {
     return (int)type;
 }
 
-// 取一帧：阻塞等到缓冲内有完整帧（timeout_ms 上限）。消费式：读完从缓冲移除。
-static int h3_take_frame(int64_t conn, uint8_t** payload, int* plen, int64_t timeout_ms) {
-    h3connbuf* b = h3_buf_for(conn);
+// 取一帧（指定流）：阻塞等到该流缓冲内有完整帧（timeout_ms 上限）。消费式移除。
+static int h3_take_frame(int64_t conn, int64_t sid, uint8_t** payload, int* plen, int64_t timeout_ms) {
+    h3connbuf* b = h3_buf_for(conn, sid);
     if (!b) return -1;
     for (;;) {
         int po = 0, pl = 0;
         int t = h3_buf_parse(b, &po, &pl);
         if (t == -2) {
             if (b->len >= H3_BUF_MAX) return -2;
-            if (h3_buf_fill(conn, b, timeout_ms) != 0) return -1;
+            if (h3_buf_fill(conn, sid, b, timeout_ms) != 0) return -1;
             continue;
         }
         if (t == -1) return -2;
@@ -164,7 +184,6 @@ static int h3_take_frame(int64_t conn, uint8_t** payload, int* plen, int64_t tim
         return t;
     }
 }
-
 // ==================== 语言层绑定 ====================
 
 // ---- 纯 codec（测试用）----
@@ -210,72 +229,68 @@ static LXValue bi_h3_frame(LXValue* args, int nargs, void* ctx) {
     return r;
 }
 
-// ---- 请求/响应高层 ----
 
-// h3_serve_send_response(conn, status:int, headers:list, body:str) -> bool
-static LXValue bi_h3_serve_send_response(LXValue* args, int nargs, void* ctx) {
-    (void)ctx;
-    if (nargs < 4 || args[0].type != PX_INT || args[1].type != PX_INT)
-        px_error("h3_serve_send_response 需要 (conn, status:int, headers:list, body)");
-    int64_t conn = args[0].as.i;
-    int status = (int)args[1].as.i;
-    const uint8_t* bd = NULL; int blen = 0;
-    if (args[3].type == PX_STR || args[3].type == PX_BYTES) {
-        bd = (const uint8_t*)args[3].as.obj->as.str.data;
-        blen = args[3].as.obj->as.str.len;
-    } else if (args[3].type != PX_NULL) px_error("h3_serve_send_response 的 body 需要 str/bytes");
-    // 组装字段：[":status", n] + headers
-    LXValue fields = px_list(8);
-    char sb[16]; snprintf(sb, sizeof(sb), "%d", status);
-    LXValue pair0 = px_list(2);
-    px_list_push(pair0, px_str(H3_STATUS));
-    px_list_push(pair0, px_str(sb));
-    px_list_push(fields, pair0);
-    if (args[2].type == PX_LIST) {
-        LXObject* hd = args[2].as.obj;
-        for (int i = 0; i < hd->as.list.len; i++) {
-            LXValue it = hd->as.list.items[i];
-            if (it.type != PX_LIST) continue;
-            LXObject* ito = it.as.obj;
-            if (ito->as.list.len < 2) continue;
-            LXValue* kv = ito->as.list.items;
-            if (kv[0].type != PX_STR || kv[1].type != PX_STR) continue;
-            LXValue pair = px_list(2);
-            px_list_push(pair, kv[0]);
-            px_list_push(pair, kv[1]);
-            px_list_push(fields, pair);
-        }
+// ---- 请求/响应高层（M50：per-stream 多路复用；旧 API 兼容默认流）----
+
+// 追加 headers（list of [name,value]）到 fields 列表
+static void h3_append_headers(LXValue fields, LXValue headers_val) {
+    if (headers_val.type != PX_LIST) return;
+    LXObject* hd = headers_val.as.obj;
+    for (int i = 0; i < hd->as.list.len; i++) {
+        LXValue it = hd->as.list.items[i];
+        if (it.type != PX_LIST) continue;
+        LXObject* ito = it.as.obj;
+        if (ito->as.list.len < 2) continue;
+        LXValue* kv = ito->as.list.items;
+        if (kv[0].type != PX_STR || kv[1].type != PX_STR) continue;
+        LXValue pair = px_list(2);
+        px_list_push(pair, kv[0]);
+        px_list_push(pair, kv[1]);
+        px_list_push(fields, pair);
     }
+}
+
+// 编码 fields 并以 HEADERS+DATA 两帧写到指定流
+static bool h3_send_fields(int64_t conn, int64_t sid, LXValue fields, LXValue body_val) {
+    const uint8_t* bd = NULL; int blen = 0;
+    if (body_val.type == PX_STR || body_val.type == PX_BYTES) {
+        bd = (const uint8_t*)body_val.as.obj->as.str.data;
+        blen = body_val.as.obj->as.str.len;
+    } else if (body_val.type != PX_NULL) return false;
     uint8_t* q = (uint8_t*)malloc(H3_BUF_MAX);
     uint8_t* f = (uint8_t*)malloc(H3_BUF_MAX + 16);
-    if (!q || !f) { free(q); free(f); return px_bool(false); }
+    if (!q || !f) { free(q); free(f); return false; }
     LXObject* fo = fields.as.obj;
     int qn = px_h3_qenc(q, fo->as.list.items, fo->as.list.len);
     int fn1 = h3_build_frame(f, H3_FRAME_HEADERS, q, qn > 0 ? qn : 0);
     int fn2 = h3_build_frame(f + fn1, H3_FRAME_DATA, bd, blen);
-    int64_t sent = px_quic_raw_send(conn, f, fn1 + fn2);
+    int64_t sent = px_quic_raw_send_on(conn, sid, f, fn1 + fn2, 0);
     free(q); free(f);
-    return px_bool(sent >= 0);
+    return sent >= 0;
 }
 
-// h3_serve_read_request(conn, timeout_ms) -> dict|null
-static LXValue bi_h3_serve_read_request(LXValue* args, int nargs, void* ctx) {
-    (void)ctx;
-    if (nargs < 2 || args[0].type != PX_INT) px_error("h3_serve_read_request 需要 (conn, timeout_ms)");
-    int64_t conn = args[0].as.i;
-    int64_t timeout = args[1].as.i;
-    // 收 HEADERS 帧
+// 从指定流读一个完整消息（HEADERS 帧 + DATA 帧）→ 返回字段 list + body（heap）
+// 返回帧级状态：0 成功（*pfields/*pbody 已设）；-1 超时/关闭；-2 非法
+static int h3_read_section(int64_t conn, int64_t sid, int64_t timeout_ms,
+                           LXValue* pfields, uint8_t** pbody, int* pblen) {
     uint8_t* hd = NULL; int hlen = 0;
-    int t = h3_take_frame(conn, &hd, &hlen, timeout);
-    if (t != H3_FRAME_HEADERS) { free(hd); return px_null(); }
+    int t = h3_take_frame(conn, sid, &hd, &hlen, timeout_ms);
+    if (t != H3_FRAME_HEADERS) { free(hd); return -1; }
     LXValue fields = px_h3_qdec(hd, hlen);
     free(hd);
-    if (fields.type != PX_LIST) return px_null();
-    // 收 DATA 帧（body）
+    if (fields.type != PX_LIST) return -2;
     uint8_t* bd = NULL; int blen = 0;
-    t = h3_take_frame(conn, &bd, &blen, timeout);
-    if (t != H3_FRAME_DATA) { free(bd); return px_null(); }
-    // 组装 dict
+    t = h3_take_frame(conn, sid, &bd, &blen, timeout_ms);
+    if (t != H3_FRAME_DATA) { free(bd); return -1; }
+    *pfields = fields;
+    *pbody = bd;
+    *pblen = blen;
+    return 0;
+}
+
+// 请求字段 → dict（含 sid）
+static LXValue h3_fields_to_request(LXValue fields, int64_t sid,
+                                    const uint8_t* bd, int blen) {
     LXValue d = px_dict();
     LXValue hdr = px_dict();
     LXObject* fo = fields.as.obj;
@@ -298,91 +313,19 @@ static LXValue bi_h3_serve_read_request(LXValue* args, int nargs, void* ctx) {
             free(key);
         }
     }
+    px_dict_set(d, "sid", px_int(sid));
     px_dict_set(d, "method", px_str(method));
     px_dict_set(d, "scheme", px_str(scheme));
     px_dict_set(d, "authority", px_str(auth));
     px_dict_set(d, "path", px_str(path));
     px_dict_set(d, "headers", hdr);
     px_dict_set(d, "body", px_str_len((const char*)bd, blen));
-    free(bd);
     return d;
 }
 
-// h3_client_connect(ip:str, port:int, alpn:str) -> int
-static LXValue bi_h3_client_connect(LXValue* args, int nargs, void* ctx) {
-    (void)ctx;
-    if (nargs < 3 || args[0].type != PX_STR || args[1].type != PX_INT || args[2].type != PX_STR)
-        px_error("h3_client_connect 需要 (ip:str, port:int, alpn:str)");
-    const char* ip = args[0].as.obj->as.str.data;
-    int port = (int)args[1].as.i;
-    const char* alpn = args[2].as.obj->as.str.data;
-    int64_t c = px_quic_raw_connect(ip, port, alpn);
-    return px_int(c);
-}
-
-// h3_client_send_request(conn, method:str, scheme:str, authority:str, path:str, headers:list, body:str) -> bool
-static LXValue bi_h3_client_send_request(LXValue* args, int nargs, void* ctx) {
-    (void)ctx;
-    if (nargs < 7 || args[0].type != PX_INT) px_error("h3_client_send_request 需要 (conn, method, scheme, authority, path, headers, body)");
-    int64_t conn = args[0].as.i;
-    if (args[1].type != PX_STR || args[2].type != PX_STR || args[3].type != PX_STR || args[4].type != PX_STR)
-        return px_bool(false);
-    const char* method = args[1].as.obj->as.str.data;
-    const char* scheme = args[2].as.obj->as.str.data;
-    const char* auth = args[3].as.obj->as.str.data;
-    const char* path = args[4].as.obj->as.str.data;
-    LXValue fields = px_list(8);
-    LXValue p0 = px_list(2); px_list_push(p0, px_str(H3_METHOD)); px_list_push(p0, px_str(method)); px_list_push(fields, p0);
-    LXValue p1 = px_list(2); px_list_push(p1, px_str(H3_SCHEME)); px_list_push(p1, px_str(scheme)); px_list_push(fields, p1);
-    LXValue p2 = px_list(2); px_list_push(p2, px_str(H3_AUTH)); px_list_push(p2, px_str(auth)); px_list_push(fields, p2);
-    LXValue p3 = px_list(2); px_list_push(p3, px_str(H3_PATH)); px_list_push(p3, px_str(path)); px_list_push(fields, p3);
-    if (args[5].type == PX_LIST) {
-        LXObject* hd = args[5].as.obj;
-        for (int i = 0; i < hd->as.list.len; i++) {
-            LXValue it = hd->as.list.items[i];
-            if (it.type != PX_LIST) continue;
-            LXObject* ito = it.as.obj;
-            if (ito->as.list.len < 2) continue;
-            LXValue* kv = ito->as.list.items;
-            if (kv[0].type != PX_STR || kv[1].type != PX_STR) continue;
-            LXValue pair = px_list(2);
-            px_list_push(pair, kv[0]);
-            px_list_push(pair, kv[1]);
-            px_list_push(fields, pair);
-        }
-    }
-    const uint8_t* bd = NULL; int blen = 0;
-    if (args[6].type == PX_STR || args[6].type == PX_BYTES) {
-        bd = (const uint8_t*)args[6].as.obj->as.str.data;
-        blen = args[6].as.obj->as.str.len;
-    } else if (args[6].type != PX_NULL) return px_bool(false);
-    uint8_t* q = (uint8_t*)malloc(H3_BUF_MAX);
-    uint8_t* f = (uint8_t*)malloc(H3_BUF_MAX + 16);
-    if (!q || !f) { free(q); free(f); return px_bool(false); }
-    LXObject* fo = fields.as.obj;
-    int qn = px_h3_qenc(q, fo->as.list.items, fo->as.list.len);
-    int fn1 = h3_build_frame(f, H3_FRAME_HEADERS, q, qn > 0 ? qn : 0);
-    int fn2 = h3_build_frame(f + fn1, H3_FRAME_DATA, bd, blen);
-    int64_t sent = px_quic_raw_send(conn, f, fn1 + fn2);
-    free(q); free(f);
-    return px_bool(sent >= 0);
-}
-
-// h3_client_read_response(conn, timeout_ms) -> dict|null
-static LXValue bi_h3_client_read_response(LXValue* args, int nargs, void* ctx) {
-    (void)ctx;
-    if (nargs < 2 || args[0].type != PX_INT) px_error("h3_client_read_response 需要 (conn, timeout_ms)");
-    int64_t conn = args[0].as.i;
-    int64_t timeout = args[1].as.i;
-    uint8_t* hd = NULL; int hlen = 0;
-    int t = h3_take_frame(conn, &hd, &hlen, timeout);
-    if (t != H3_FRAME_HEADERS) { free(hd); return px_null(); }
-    LXValue fields = px_h3_qdec(hd, hlen);
-    free(hd);
-    if (fields.type != PX_LIST) return px_null();
-    uint8_t* bd = NULL; int blen = 0;
-    t = h3_take_frame(conn, &bd, &blen, timeout);
-    if (t != H3_FRAME_DATA) { free(bd); return px_null(); }
+// 响应字段 → dict（含 sid）
+static LXValue h3_fields_to_response(LXValue fields, int64_t sid,
+                                     const uint8_t* bd, int blen) {
     LXValue d = px_dict();
     LXValue hdr = px_dict();
     LXObject* fo = fields.as.obj;
@@ -402,9 +345,205 @@ static LXValue bi_h3_client_read_response(LXValue* args, int nargs, void* ctx) {
             free(key);
         }
     }
+    px_dict_set(d, "sid", px_int(sid));
     px_dict_set(d, "status", px_str(status));
     px_dict_set(d, "headers", hdr);
     px_dict_set(d, "body", px_str_len((const char*)bd, blen));
+    return d;
+}
+
+// 响应字段组装：[:status, n] + headers
+static LXValue h3_make_response_fields(int status, LXValue headers_val) {
+    LXValue fields = px_list(8);
+    char sb[16]; snprintf(sb, sizeof(sb), "%d", status);
+    LXValue pair0 = px_list(2);
+    px_list_push(pair0, px_str(H3_STATUS));
+    px_list_push(pair0, px_str(sb));
+    px_list_push(fields, pair0);
+    h3_append_headers(fields, headers_val);
+    return fields;
+}
+
+// 请求字段组装：伪头 + headers
+static LXValue h3_make_request_fields(const char* method, const char* scheme,
+                                      const char* auth, const char* path,
+                                      LXValue headers_val) {
+    LXValue fields = px_list(8);
+    LXValue p0 = px_list(2); px_list_push(p0, px_str(H3_METHOD)); px_list_push(p0, px_str(method)); px_list_push(fields, p0);
+    LXValue p1 = px_list(2); px_list_push(p1, px_str(H3_SCHEME)); px_list_push(p1, px_str(scheme)); px_list_push(fields, p1);
+    LXValue p2 = px_list(2); px_list_push(p2, px_str(H3_AUTH)); px_list_push(p2, px_str(auth)); px_list_push(fields, p2);
+    LXValue p3 = px_list(2); px_list_push(p3, px_str(H3_PATH)); px_list_push(p3, px_str(path)); px_list_push(fields, p3);
+    h3_append_headers(fields, headers_val);
+    return fields;
+}
+
+// ==================== 服务端多流 API（M50 新）====================
+
+// h3_serve_poll_stream(conn, timeout_ms) -> int：等任一对端流有数据/FIN → sid | -1
+static LXValue bi_h3_serve_poll_stream(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 2 || args[0].type != PX_INT || args[1].type != PX_INT)
+        px_error("h3_serve_poll_stream 需要 (conn, timeout_ms)");
+    int64_t conn = args[0].as.i;
+    int64_t timeout = args[1].as.i;
+    int64_t sid = px_quic_raw_poll(conn, (int)timeout);
+    return px_int(sid);
+}
+
+// h3_serve_read_request_stream(conn, sid, timeout_ms) -> dict|null
+static LXValue bi_h3_serve_read_request_stream(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 3 || args[0].type != PX_INT || args[1].type != PX_INT || args[2].type != PX_INT)
+        px_error("h3_serve_read_request_stream 需要 (conn, sid, timeout_ms)");
+    int64_t conn = args[0].as.i;
+    int64_t sid = args[1].as.i;
+    int64_t timeout = args[2].as.i;
+    LXValue fields; uint8_t* bd = NULL; int blen = 0;
+    int st = h3_read_section(conn, sid, timeout, &fields, &bd, &blen);
+    if (st != 0) return px_null();
+    LXValue d = h3_fields_to_request(fields, sid, bd, blen);
+    free(bd);
+    if (conn > 0 && conn <= H3_MAX_CONN) g_last_sid[conn - 1] = sid;
+    return d;
+}
+
+// h3_serve_send_response_stream(conn, sid, status:int, headers:list, body) -> bool
+static LXValue bi_h3_serve_send_response_stream(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 5 || args[0].type != PX_INT || args[1].type != PX_INT || args[2].type != PX_INT)
+        px_error("h3_serve_send_response_stream 需要 (conn, sid, status:int, headers:list, body)");
+    int64_t conn = args[0].as.i;
+    int64_t sid = args[1].as.i;
+    int status = (int)args[2].as.i;
+    LXValue fields = h3_make_response_fields(status, args[3]);
+    bool ok = h3_send_fields(conn, sid, fields, args[4]);
+    return px_bool(ok);
+}
+
+// ==================== 客户端多流 API（M50 新）====================
+
+// h3_client_open_stream(conn) -> int：open 一条新请求双向流
+static LXValue bi_h3_client_open_stream(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || args[0].type != PX_INT) px_error("h3_client_open_stream 需要 (conn)");
+    int64_t conn = args[0].as.i;
+    int64_t sid = px_quic_raw_open_stream(conn);
+    return px_int(sid);
+}
+
+// h3_client_send_request_stream(conn, sid, method, scheme, authority, path, headers, body) -> bool
+static LXValue bi_h3_client_send_request_stream(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 8 || args[0].type != PX_INT || args[1].type != PX_INT)
+        px_error("h3_client_send_request_stream 需要 (conn, sid, method, scheme, authority, path, headers, body)");
+    int64_t conn = args[0].as.i;
+    int64_t sid = args[1].as.i;
+    if (args[2].type != PX_STR || args[3].type != PX_STR || args[4].type != PX_STR || args[5].type != PX_STR)
+        return px_bool(false);
+    LXValue fields = h3_make_request_fields(args[2].as.obj->as.str.data,
+                                            args[3].as.obj->as.str.data,
+                                            args[4].as.obj->as.str.data,
+                                            args[5].as.obj->as.str.data, args[6]);
+    bool ok = h3_send_fields(conn, sid, fields, args[7]);
+    if (ok && conn > 0 && conn <= H3_MAX_CONN) g_last_sid[conn - 1] = sid;
+    return px_bool(ok);
+}
+
+// h3_client_read_response_stream(conn, sid, timeout_ms) -> dict|null
+static LXValue bi_h3_client_read_response_stream(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 3 || args[0].type != PX_INT || args[1].type != PX_INT || args[2].type != PX_INT)
+        px_error("h3_client_read_response_stream 需要 (conn, sid, timeout_ms)");
+    int64_t conn = args[0].as.i;
+    int64_t sid = args[1].as.i;
+    int64_t timeout = args[2].as.i;
+    LXValue fields; uint8_t* bd = NULL; int blen = 0;
+    int st = h3_read_section(conn, sid, timeout, &fields, &bd, &blen);
+    if (st != 0) return px_null();
+    LXValue d = h3_fields_to_response(fields, sid, bd, blen);
+    free(bd);
+    return d;
+}
+
+// ==================== 旧 API 兼容（M47 单流语义 = 默认流）====================
+
+// h3_serve_read_request(conn, timeout_ms) -> dict|null
+static LXValue bi_h3_serve_read_request(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 2 || args[0].type != PX_INT) px_error("h3_serve_read_request 需要 (conn, timeout_ms)");
+    int64_t conn = args[0].as.i;
+    int64_t timeout = args[1].as.i;
+    // 默认流：先等一条 peer 流出现（poll），再从该流读完整请求
+    int64_t sid = px_quic_raw_first_stream(conn);
+    if (sid < 0) sid = px_quic_raw_poll(conn, (int)timeout);
+    if (sid < 0) return px_null();
+    LXValue fields; uint8_t* bd = NULL; int blen = 0;
+    int st = h3_read_section(conn, sid, timeout, &fields, &bd, &blen);
+    if (st != 0) return px_null();
+    LXValue d = h3_fields_to_request(fields, sid, bd, blen);
+    free(bd);
+    if (conn > 0 && conn <= H3_MAX_CONN) g_last_sid[conn - 1] = sid;
+    return d;
+}
+
+// h3_serve_send_response(conn, status:int, headers:list, body:str) -> bool
+static LXValue bi_h3_serve_send_response(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 4 || args[0].type != PX_INT || args[1].type != PX_INT)
+        px_error("h3_serve_send_response 需要 (conn, status:int, headers:list, body)");
+    int64_t conn = args[0].as.i;
+    int status = (int)args[1].as.i;
+    int64_t sid = (conn > 0 && conn <= H3_MAX_CONN) ? g_last_sid[conn - 1] : -1;
+    if (sid < 0) sid = px_quic_raw_first_stream(conn);
+    if (sid < 0) return px_bool(false);
+    LXValue fields = h3_make_response_fields(status, args[2]);
+    bool ok = h3_send_fields(conn, sid, fields, args[3]);
+    return px_bool(ok);
+}
+
+// h3_client_connect(ip:str, port:int, alpn:str) -> int
+static LXValue bi_h3_client_connect(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 3 || args[0].type != PX_STR || args[1].type != PX_INT || args[2].type != PX_STR)
+        px_error("h3_client_connect 需要 (ip:str, port:int, alpn:str)");
+    const char* ip = args[0].as.obj->as.str.data;
+    int port = (int)args[1].as.i;
+    const char* alpn = args[2].as.obj->as.str.data;
+    int64_t c = px_quic_raw_connect(ip, port, alpn);
+    if (c > 0 && c <= H3_MAX_CONN) g_last_sid[c - 1] = -1;
+    return px_int(c);
+}
+
+// h3_client_send_request(conn, method, scheme, authority, path, headers, body) -> bool
+static LXValue bi_h3_client_send_request(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 7 || args[0].type != PX_INT) px_error("h3_client_send_request 需要 (conn, method, scheme, authority, path, headers, body)");
+    int64_t conn = args[0].as.i;
+    if (args[1].type != PX_STR || args[2].type != PX_STR || args[3].type != PX_STR || args[4].type != PX_STR)
+        return px_bool(false);
+    int64_t sid = px_quic_raw_first_stream(conn);   // 默认 = 首条流（M47 connect 已 open）
+    if (sid < 0) return px_bool(false);
+    LXValue fields = h3_make_request_fields(args[1].as.obj->as.str.data,
+                                            args[2].as.obj->as.str.data,
+                                            args[3].as.obj->as.str.data,
+                                            args[4].as.obj->as.str.data, args[5]);
+    bool ok = h3_send_fields(conn, sid, fields, args[6]);
+    if (ok && conn > 0 && conn <= H3_MAX_CONN) g_last_sid[conn - 1] = sid;
+    return px_bool(ok);
+}
+
+// h3_client_read_response(conn, timeout_ms) -> dict|null
+static LXValue bi_h3_client_read_response(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 2 || args[0].type != PX_INT) px_error("h3_client_read_response 需要 (conn, timeout_ms)");
+    int64_t conn = args[0].as.i;
+    int64_t timeout = args[1].as.i;
+    int64_t sid = (conn > 0 && conn <= H3_MAX_CONN) ? g_last_sid[conn - 1] : -1;
+    if (sid < 0) return px_null();
+    LXValue fields; uint8_t* bd = NULL; int blen = 0;
+    int st = h3_read_section(conn, sid, timeout, &fields, &bd, &blen);
+    if (st != 0) return px_null();
+    LXValue d = h3_fields_to_response(fields, sid, bd, blen);
     free(bd);
     return d;
 }
@@ -416,19 +555,31 @@ void px_register_h3(void) {
     px_set_global("h3_huff", px_native("h3_huff", bi_h3_huff));
     px_set_global("h3_unhuff", px_native("h3_unhuff", bi_h3_unhuff));
     px_set_global("h3_frame", px_native("h3_frame", bi_h3_frame));
-    px_set_global("h3_serve_send_response", px_native("h3_serve_send_response", bi_h3_serve_send_response));
     px_set_global("h3_serve_read_request", px_native("h3_serve_read_request", bi_h3_serve_read_request));
+    px_set_global("h3_serve_send_response", px_native("h3_serve_send_response", bi_h3_serve_send_response));
+    px_set_global("h3_serve_poll_stream", px_native("h3_serve_poll_stream", bi_h3_serve_poll_stream));
+    px_set_global("h3_serve_read_request_stream", px_native("h3_serve_read_request_stream", bi_h3_serve_read_request_stream));
+    px_set_global("h3_serve_send_response_stream", px_native("h3_serve_send_response_stream", bi_h3_serve_send_response_stream));
     px_set_global("h3_client_connect", px_native("h3_client_connect", bi_h3_client_connect));
+    px_set_global("h3_client_open_stream", px_native("h3_client_open_stream", bi_h3_client_open_stream));
     px_set_global("h3_client_send_request", px_native("h3_client_send_request", bi_h3_client_send_request));
+    px_set_global("h3_client_send_request_stream", px_native("h3_client_send_request_stream", bi_h3_client_send_request_stream));
     px_set_global("h3_client_read_response", px_native("h3_client_read_response", bi_h3_client_read_response));
+    px_set_global("h3_client_read_response_stream", px_native("h3_client_read_response_stream", bi_h3_client_read_response_stream));
     px_ffi_register("h3_qenc", bi_h3_qenc);
     px_ffi_register("h3_qdec", bi_h3_qdec);
     px_ffi_register("h3_huff", bi_h3_huff);
     px_ffi_register("h3_unhuff", bi_h3_unhuff);
     px_ffi_register("h3_frame", bi_h3_frame);
-    px_ffi_register("h3_serve_send_response", bi_h3_serve_send_response);
     px_ffi_register("h3_serve_read_request", bi_h3_serve_read_request);
+    px_ffi_register("h3_serve_send_response", bi_h3_serve_send_response);
+    px_ffi_register("h3_serve_poll_stream", bi_h3_serve_poll_stream);
+    px_ffi_register("h3_serve_read_request_stream", bi_h3_serve_read_request_stream);
+    px_ffi_register("h3_serve_send_response_stream", bi_h3_serve_send_response_stream);
     px_ffi_register("h3_client_connect", bi_h3_client_connect);
+    px_ffi_register("h3_client_open_stream", bi_h3_client_open_stream);
     px_ffi_register("h3_client_send_request", bi_h3_client_send_request);
+    px_ffi_register("h3_client_send_request_stream", bi_h3_client_send_request_stream);
     px_ffi_register("h3_client_read_response", bi_h3_client_read_response);
+    px_ffi_register("h3_client_read_response_stream", bi_h3_client_read_response_stream);
 }

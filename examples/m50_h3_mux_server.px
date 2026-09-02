@@ -1,0 +1,45 @@
+# ============================================================
+# M50 HTTP/3 多路复用端到端：服务端
+# ------------------------------------------------------------
+# 流程：quic_listen → quic_accept（QUIC 握手）
+#       → 循环 h3_serve_poll_stream（等任一新请求流有数据）
+#       → h3_serve_read_request_stream(sid)（按流收 HEADERS+DATA）
+#       → h3_serve_send_response_stream(sid)（按流回 :status 200 + body）
+# 关键：同一连接上多个双向流（client 并发发 3 个请求），服务端按
+#       sid 分拣处理、交错响应 → 多路复用（无串扰）。
+# 验证：examples/m50_h3_mux_verify.sh
+# ============================================================
+import "c/ngtcp2"
+
+extern def quic_listen(port: int) -> int
+extern def quic_accept(listener: int, timeout_ms: int) -> int
+extern def quic_close(conn: int) -> bool
+extern def quic_close_listener(listener: int) -> bool
+
+extern def h3_serve_poll_stream(conn: int, timeout_ms: int) -> int
+extern def h3_serve_read_request_stream(conn: int, sid: int, timeout_ms: int) -> dict
+extern def h3_serve_send_response_stream(conn: int, sid: int, status: int, headers: list, body: str) -> bool
+
+var lst = quic_listen(17998)
+assert(lst > 0, "server: quic_listen 失败")
+print("server: listening 17998")
+var c = quic_accept(lst, 15000)
+assert(c > 0, "server: quic_accept 失败")
+print("server: accepted conn " + str(c))
+
+var done = 0
+while done < 3:
+    var sid = h3_serve_poll_stream(c, 8000)
+    assert(sid >= 0, "server: poll 超时")
+    var req = h3_serve_read_request_stream(c, sid, 8000)
+    assert(req != null, "server: read_request 失败")
+    print("server: stream " + str(sid) + " method=" + req["method"] + " path=" + req["path"] + " body=[" + req["body"] + "]")
+    var body = "echo-mux:" + req["path"] + ":stream-" + str(sid)
+    var ok = h3_serve_send_response_stream(c, sid, 200, [["content-type", "text/plain"], ["x-px", "m50"]], body)
+    assert(ok, "server: send_response 失败")
+    print("server: responded stream " + str(sid))
+    done = done + 1
+
+quic_close(c)
+quic_close_listener(lst)
+print("server: done")
