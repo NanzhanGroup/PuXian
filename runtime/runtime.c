@@ -4713,6 +4713,8 @@ void px_register_builtins(void) {
     px_ffi_register("sqlite_close", bi_sqlite_close);
     px_ffi_register("sqlite_escape", bi_sqlite_escape);
     px_ffi_register("sqlite_last_insert_rowid", bi_sqlite_last_insert_rowid);
+    // M46：QUIC 传输级绑定（runtime_quic.c）—— 语言层 extern def quic_* 按名字查找
+    px_register_quic();
     // M28 P1：时间 / 时区
     px_set_global("time_format", px_native("time_format", bi_time_format));
     px_set_global("time_parse", px_native("time_parse", bi_time_parse));

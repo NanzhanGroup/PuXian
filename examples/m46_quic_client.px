@@ -1,0 +1,16 @@
+import "c/ngtcp2"
+
+extern def quic_connect(ip: str, port: int, alpn: str) -> int
+extern def quic_send(conn: int, data: str) -> int
+extern def quic_recv(conn: int, maxlen: int) -> str
+extern def quic_close(conn: int) -> bool
+
+var c = quic_connect("127.0.0.1", 17999, "puxian")
+assert(c > 0, "client: quic_connect 失败")
+print("client: connected " + str(c))
+var n = quic_send(c, "hello-quic-42")
+print("client: sent " + str(n))
+var echoed = quic_recv(c, 2048)
+print("client: recv [" + echoed + "]")
+quic_close(c)
+print("client: done")

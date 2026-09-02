@@ -560,6 +560,29 @@ pxpkg list / remove <name>
 ```
 - `--dir <path>` 指定项目目录；`PX_REGISTRY` 指定 registry。
 
+### 8.7 QUIC 传输级 API（M46，HTTP/3 应用验证）
+
+`import "c/ngtcp2"`（M42 FFI 实战）：ngtcp2（C QUIC 栈）+ quictls OpenSSL 静态编译进工具链，
+语言层提供 QUIC 传输级 API（对齐 udp_* 心智），本地回环端到端验证。
+
+```
+import "c/ngtcp2"
+
+extern def quic_listen(port: int) -> int          # 服务端监听（UDP bind + 自签证书）→ listener id | -1
+extern def quic_accept(listener: int, timeout_ms: int) -> int   # 阻塞等连接（QUIC 握手完成）→ conn id | -1
+extern def quic_connect(ip: str, port: int, alpn: str) -> int   # 客户端连接（握手完成）→ conn id | -1
+extern def quic_send(conn: int, data: str) -> int               # 发送（当前双向流）→ 写入流字节数 | -1
+extern def quic_recv(conn: int, maxlen: int) -> str             # 阻塞接收 → str（""=超时/对端关闭）
+extern def quic_close(conn: int) -> bool
+extern def quic_close_listener(listener: int) -> bool
+```
+
+- 语义：TLS 1.3（QUIC 内）自签证书（内存生成，MVP 不校验）、单条双向流（stream 0）、阻塞事件循环。
+- 双模式一致：编译（pxc build）与解释（pxi run）均走 C 桥 `bi_ffi_call`（M42 机制）。
+- 验证：`examples/m46_quic_verify.sh` 回环 PASS（握手 + `hello-quic-42` → `echo:hello-quic-42`）。
+- 工程说明：QUIC 栈静态编译进 pxc/pxi 产物（零依赖分发）；选型 quictls + ngtcp2 quictls 后端
+  （OpenSSL 3.5 QUIC TLS 服务端存在集成问题，详见 docs/M46_PLAN.md 踩坑表）。
+
 ---
 
 ## 9. 双模式执行
