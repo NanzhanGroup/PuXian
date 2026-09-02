@@ -1,0 +1,65 @@
+# ============================================================
+# M54 S4：BLOCKED_STREAMS 流控协商 —— 客户端
+# ------------------------------------------------------------
+# server transport params 上限 2（client 可开 bidi：流 0、4）：
+#   connect 已开流 0 → quic_open_stream 开流 4（成功）
+#   quic_open_stream 再开流 8 → -206 STREAM_ID_BLOCKED（阻塞，核心断言）
+#   quic_streams_left == 0（配额耗尽）
+#   发 "EXTEND-PLS"（流 0）→ server quic_extend_max_streams(+4) → 收 "OK"
+#   重试 quic_open_stream 开流 8 → 成功（MAX_STREAMS 放行，核心断言）
+#   新流上发数据往返验证
+# ============================================================
+import "c/ngtcp2"
+
+extern def quic_connect(ip: str, port: int, alpn: str) -> int
+extern def quic_open_stream(conn: int) -> int
+extern def quic_streams_left(conn: int) -> int
+extern def quic_send(conn: int, data: str) -> int
+extern def quic_recv(conn: int, maxlen: int) -> str
+extern def quic_send_stream(conn: int, sid: int, data: str) -> int
+extern def quic_recv_stream(conn: int, sid: int, maxlen: int, timeout_ms: int) -> str
+extern def quic_close(conn: int) -> bool
+
+var c = quic_connect("127.0.0.1", 18001, "puxian")
+assert(c > 0, "client: 连接失败")
+var left0 = quic_streams_left(c)
+print("client: after connect streams_left=" + str(left0))
+
+# 开第二条 bidi 流（流 4）→ 成功
+var s4 = quic_open_stream(c)
+print("client: open 2nd stream -> sid=" + str(s4))
+assert(s4 > 0, "client: 第 2 条流应成功")
+var left1 = quic_streams_left(c)
+print("client: after 2nd stream streams_left=" + str(left1))
+assert(left1 == 0, "client: 配额应耗尽（上限 2 已用 2）")
+
+# 第三条（流 8）→ 阻塞 -206
+var s8 = quic_open_stream(c)
+print("client: open 3rd stream -> rv=" + str(s8))
+assert(s8 == -206, "client: 期望 -206 STREAM_ID_BLOCKED，got=" + str(s8))
+
+# 通知 server 放行
+assert(quic_send(c, "EXTEND-PLS") > 0, "client: 发 EXTEND 失败")
+var ok = quic_recv(c, 64)
+print("client: extend resp=" + ok)
+assert(ok == "OK", "client: server 未确认放行")
+
+# 重试开第三条流 → 应成功（流 8）
+var s8b = quic_open_stream(c)
+print("client: retry open 3rd stream -> sid=" + str(s8b))
+assert(s8b > 0, "client: 放行后第三条流应成功")
+var left2 = quic_streams_left(c)
+print("client: after extend streams_left=" + str(left2))
+
+# 新流上数据往返验证（走 server echo）
+var m4 = "DATA-ON-4"
+assert(quic_send_stream(c, s4, m4) > 0, "client: s4 send 失败")
+assert(quic_recv_stream(c, s4, 64, 3000) == m4, "client: s4 echo 不匹配")
+var m8 = "DATA-ON-8"
+assert(quic_send_stream(c, s8b, m8) > 0, "client: s8 send 失败")
+assert(quic_recv_stream(c, s8b, 64, 3000) == m8, "client: s8 echo 不匹配")
+print("client: data roundtrip on stream4/8 ok")
+
+quic_send(c, "BYE")
+quic_close(c)
+print("client: ok")
