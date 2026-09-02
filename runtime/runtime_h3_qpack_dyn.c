@@ -144,6 +144,7 @@ typedef struct {
     qd_entry de[QD_ENT_MAX]; int de_head, de_len;
     uint64_t de_next_abs;
     uint64_t de_ins;          // decoder 已处理插入计数（RIC wrap 还原用）
+    int dec_blocked;          // M51：最近一次 qd_dec_section 是否因缺 encoder 指令而阻塞（de_ins<RIC）
 } qd_sess;
 
 static qd_sess g_qds[QD_MAX_SESS];
@@ -675,6 +676,7 @@ static int qd_str_in(const uint8_t* p, int len, int off, char** out, int* outl) 
 // 解码字段段 → list of [name,value] | null
 static LXValue qd_dec_section(qd_sess* s, const uint8_t* p, int len) {
     int off = 0, used = 0;
+    s->dec_blocked = 0;
     if (len < 2) return px_null();
     // RIC
     uint64_t encric = qd_pref_dec(p, len, 8, &used);
@@ -697,7 +699,7 @@ static LXValue qd_dec_section(qd_sess* s, const uint8_t* p, int len) {
         ric = maxwrap + (int64_t)encric - 1;
         if (ric > maxval) { if (ric <= full) return px_null(); ric -= full; }
         if (ric == 0) return px_null();
-        if ((int64_t)s->de_ins < ric) return px_null();  // 阻塞：指令未到 → 无法解码（MVP 同步模型应不会发生）
+        if ((int64_t)s->de_ins < ric) { s->dec_blocked = 1; return px_null(); }  // 阻塞：指令未到
     }
     int64_t base;
     if (sign) { base = ric - (int64_t)deltab - 1; if (base < 0) return px_null(); }
@@ -984,3 +986,102 @@ void px_register_h3_qpack_dyn(void) {
     px_ffi_register("h3_settings_enc", bi_settings_enc);
     px_ffi_register("h3_settings_dec", bi_settings_dec);
 }
+
+// ============================================================
+// M51：纯 C 会话接口（供 runtime_h3.c 线上接线调用——QPACK 动态表
+// 会话接入真实 QUIC 单向流）。薄封装：复用上方 bi_* 语言函数与 qd_*
+// 核心，零逻辑重复（M49 纯函数语义不变）。
+// ============================================================
+
+// 打开 QPACK 会话（cap = 本端 SETTINGS 声明的 QPACK_MAX_TABLE_CAPACITY）。
+// 返回会话 id（1..QD_MAX_SESS）| 0 失败。
+int64_t px_qd_open(int64_t cap) {
+    LXValue a[1]; a[0] = px_int(cap);
+    LXValue r = bi_qs_open(a, 1, NULL);
+    return (r.type == PX_INT) ? r.as.i : 0;
+}
+
+void px_qd_close(int64_t id) {
+    LXValue a[1]; a[0] = px_int(id);
+    (void)bi_qs_close(a, 1, NULL);
+}
+
+// 编码 nf 个字段（names/vals 各自独立字符串 + 长度）→ 字段段字节写 sect[scap]。
+// 返回字段段长度 | -1。编码器流指令累积进会话 eout（随后 px_qd_take_enc 取走发编码器流）。
+int px_qd_enc(int64_t id, char* const* names, char* const* vals,
+              int* nls, int* vls, int nf, uint8_t* sect, int scap) {
+    if (nf < 0 || nf > 512 || !sect || scap <= 0) return -1;
+    LXValue lst = px_list(8);
+    for (int i = 0; i < nf; i++) {
+        LXValue pair = px_list(2);
+        px_list_push(pair, px_str_len(names[i], nls[i]));
+        px_list_push(pair, px_str_len(vals[i], vls[i]));
+        px_list_push(lst, pair);
+    }
+    LXValue a[2]; a[0] = px_int(id); a[1] = lst;
+    LXValue r = bi_qs_enc(a, 2, NULL);
+    if (r.type != PX_BYTES && r.type != PX_STR) return -1;
+    int n = (int)r.as.obj->as.str.len;
+    if (n > scap) return -1;
+    if (n > 0) memcpy(sect, r.as.obj->as.str.data, (size_t)n);
+    return n;
+}
+
+// 取走会话 eout（编码器流待发指令），返回字节数 | -1（cap 不足/会话无效）。
+int px_qd_take_enc(int64_t id, uint8_t* out, int cap) {
+    qd_sess* s = qd_get(id);
+    if (!s || !out || cap <= 0) return -1;
+    int n = s->eout_len;
+    if (n > cap) return -1;
+    if (n > 0) memcpy(out, s->eout, (size_t)n);
+    s->eout_len = 0;
+    return n;
+}
+
+// 处理对端编码器流指令字节（更新 decoder 镜像表）。返回 0 成功 | -1 非法/会话无效。
+int px_qd_ingest(int64_t id, const uint8_t* p, int len) {
+    qd_sess* s = qd_get(id);
+    if (!s || !p || len < 0) return -1;
+    return qd_dec_ingest(s, p, len);
+}
+
+// 解码字段段 → names/vals/nls/vls（每项 malloc，调用方逐个 free 后 free 三个数组）。
+// 返回字段数；-1 非法（数据损坏）；-2 阻塞（RIC 超出已 ingest 指令 → 需先泵对端
+// 编码器流 ingest 更多字节后重试）。
+int px_qd_dec(int64_t id, const uint8_t* p, int len,
+              char*** names, char*** vals, int** nls, int** vls) {
+    qd_sess* s = qd_get(id);
+    if (!s || !p || !names || !vals || !nls || !vls) return -1;
+    LXValue r = qd_dec_section(s, p, len);
+    if (r.type == PX_NULL) return s->dec_blocked ? -2 : -1;
+    if (r.type != PX_LIST) return -1;
+    int nf = (int)r.as.obj->as.list.len;
+    char** nn = (char**)calloc((size_t)(nf > 0 ? nf : 1), sizeof(char*));
+    char** vv = (char**)calloc((size_t)(nf > 0 ? nf : 1), sizeof(char*));
+    int* nl = (int*)calloc((size_t)(nf > 0 ? nf : 1), sizeof(int));
+    int* vl = (int*)calloc((size_t)(nf > 0 ? nf : 1), sizeof(int));
+    if (!nn || !vv || !nl || !vl) { free(nn); free(vv); free(nl); free(vl); return -1; }
+    for (int i = 0; i < nf; i++) {
+        LXValue it = r.as.obj->as.list.items[i];
+        if (it.type != PX_LIST || it.as.obj->as.list.len < 2) continue;
+        LXValue* kv = it.as.obj->as.list.items;
+        if (kv[0].type == PX_STR || kv[0].type == PX_BYTES) {
+            int l0 = (int)kv[0].as.obj->as.str.len;
+            nn[i] = (char*)malloc((size_t)l0 + 1);
+            if (nn[i]) { memcpy(nn[i], kv[0].as.obj->as.str.data, (size_t)l0); nn[i][l0] = 0; nl[i] = l0; }
+        }
+        if (kv[1].type == PX_STR || kv[1].type == PX_BYTES) {
+            int l1 = (int)kv[1].as.obj->as.str.len;
+            vv[i] = (char*)malloc((size_t)l1 + 1);
+            if (vv[i]) { memcpy(vv[i], kv[1].as.obj->as.str.data, (size_t)l1); vv[i][l1] = 0; vl[i] = l1; }
+        }
+    }
+    *names = nn; *vals = vv; *nls = nl; *vls = vl;
+    return nf;
+}
+
+// 诊断/统计辅助：会话无效返回 -1。
+int px_qd_en_len(int64_t id)   { qd_sess* s = qd_get(id); return s ? s->en_len : -1; }      // 本端编码表条目
+int px_qd_de_len(int64_t id)   { qd_sess* s = qd_get(id); return s ? s->de_len : -1; }      // 对端镜像表条目
+int px_qd_ins(int64_t id)      { qd_sess* s = qd_get(id); return s ? (int)s->de_ins : -1; } // 已 ingest 插入数
+int px_qd_eout_len(int64_t id) { qd_sess* s = qd_get(id); return s ? s->eout_len : -1; }    // eout 待发字节
