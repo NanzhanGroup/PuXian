@@ -84,7 +84,7 @@
 | 子步 | 内容 | 验证 |
 |---|---|---|
 | S1 ✅ | D1 TLS1.3 会话恢复（resumption） | commit `57895b1`；client 二次连接 resumed=true + echo 正常；m53_s1 回归 8/8 |
-| S2 | D2 0-RTT early data（传输层 + H3 静态表子集） | 握手完成前 send 成功、server 提前收到；0-RTT GET 200 |
+| S2 | D2 0-RTT early data（传输层 + H3 静态表子集） | 传输层 echo + H3 0-RTT GET 200 双 PASS（见 commit） |
 | S3 | D3 连接迁移（client 换源 + server path validation） | msg 跨迁移续传；server 对端地址变更；无重握手 |
 | S4 | D4 BLOCKED_STREAMS 流控协商 | 上限 2 阻塞、extend 放行；MAX_STREAMS 生效；aioquic 200 回归 |
 | S5 | D5 pxi 重建 + capability/diffcheck/自举/全量回归 | 全绿 |
