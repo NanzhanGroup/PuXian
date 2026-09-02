@@ -151,6 +151,8 @@ int64_t px_quic_raw_h3_listen(int port, const char* cert, const char* key); // �
 int64_t px_quic_raw_h3_listen_cb(int port, const char* cert, const char* key,
                                  px_quic_conn_cb cb, void* ud);
 void    px_quic_raw_peer_addr(int64_t conn, char* out, size_t n);   // 连接对端 "ip:port"
+// M53-S4：指定流对端 FIN 是否已到（1=是/0=否或流不存在）—— H3 server 判请求无 body
+int     px_quic_raw_stream_fin(int64_t conn, int64_t sid);
 LXValue px_struct(const char* type_name, char** fnames, LXValue* fvals, int nfields);
 LXValue px_enum(const char* type_name, const char* variant);
 LXValue px_tuple(LXValue* items, int len);
@@ -413,6 +415,9 @@ void px_http_out_init_conn(PxHttpOut* o, PxConn* c);
 // （query 拆分+解码 / version="HTTP/3" / request_id / cookie / form / body gzip 解压）
 // 后送入公共管道 px_http_dispatch。req 需含 method/path/headers/body/remote（sid 等可选）。
 void px_http_dispatch_h3(PxHttpOut* pout, LXValue req, int client_keep_alive);
+// M53-S4：px_serve opts.http3 用 —— 以公共 HTTP 管道托管启动 H3（QUIC/UDP）listener。
+// cert/key 为空串 → 运行时自签（测试）；返回 listener id | -1（runtime_h3.c 定义）。
+int64_t px_h3_server_listen_pipe(int port, const char* cert, const char* key);
 
 #ifdef __cplusplus
 }

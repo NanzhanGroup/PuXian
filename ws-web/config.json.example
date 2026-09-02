@@ -5,6 +5,10 @@
   "default_root": "/data/www",
   "access_log": "/var/log/ws-web/access.log",
   "spawn_http": 1,
+  "http3": {
+    "cert": "/etc/nginx/ssl/wsai.chat.crt",
+    "key": "/etc/nginx/ssl/wsai.chat.key"
+  },
   "sites": {
     "wsai.chat": {
       "root": "/data/www/wsai_chat",

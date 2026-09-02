@@ -225,7 +225,11 @@ static quic_stream* quic_any_data(quic_conn* qc) {
     for (int i = 0; i < QUIC_STREAM_MAX; i++) {
         quic_stream* s = &qc->streams[i];
         if (!s->used) continue;
-        if ((s->len > 0 || s->fin) && (!best || s->sid < best->sid)) best = s;
+        // M53-S4：仅"有未读数据"的流视为活跃。fin-only 流（对端 FIN 已到、数据已读空）
+        // 此前也算活跃 → px_quic_raw_poll 恒返回已结束流 → H3 server 连接线程忙循环烧 CPU、
+        // close_listener join 永不返回（px_serve SIGTERM 优雅关闭挂死）。数据都在 len 中，
+        // fin 只是结束标记：len>0 已涵盖一切可读数据。
+        if (s->len > 0 && (!best || s->sid < best->sid)) best = s;
     }
     return best;
 }
@@ -942,6 +946,17 @@ void px_quic_raw_peer_addr(int64_t conn, char* out, size_t n) {
     snprintf(out, n, "%s:%d", ip, port);
 }
 
+// M53-S4：指定流对端 FIN 是否已到（1=是/0=否或流不存在）。H3 server 判请求无 body：
+// HEADERS 帧后流即结束（无 DATA 帧）→ body 空合法。
+int px_quic_raw_stream_fin(int64_t conn, int64_t sid) {
+    quic_conn* qc = quic_get_conn(conn);
+    if (!qc) return 0;
+    quic_stream* s = quic_stream_slot(qc, sid);
+    if (!s) return 0;
+    return s->fin ? 1 : 0;
+}
+
+
 // 默认连接回调：QUIC 流 echo（S1 多连接路由验证用）
 static void quic_srv_echo_cb(int64_t conn, void* ud) {
     (void)ud;
@@ -1527,10 +1542,27 @@ int64_t px_quic_raw_open_uni_stream(int64_t conn) {
 
 // 写指定流（fin 预留；M50 MVP 以单 DATA 帧长度界定消息，不依赖 FIN，恒传 0）
 int64_t px_quic_raw_send_on(int64_t conn, int64_t sid, const uint8_t* data, int len, int fin) {
-    (void)fin;
     quic_conn* qc = quic_get_conn(conn);
-    if (!qc) return -1;
-    return quic_write_stream_bytes(qc, sid, data, (size_t)len);
+    if (!qc || !qc->conn) return -1;
+    int64_t w = quic_write_stream_bytes(qc, sid, data, (size_t)len);
+    // M53-S4：HTTP/3 响应流结束需发 FIN（RFC 9114：响应以流结束结束）。数据全部写入后，
+    // 以 writev_stream(空数据 + NGTCP2_WRITE_STREAM_FLAG_FIN) 发出流结束 —— aioquic 等
+    // 标准客户端依赖 FIN 判定流结束；此前恒忽略 fin，标准客户端读响应永远等不到流结束而超时。
+    // 注：不用 ngtcp2_conn_shutdown_stream_write（那是 abrupt 中止，会丢弃未确认数据 = RST 语义）。
+    if (fin && w >= 0 && (w == len || len == 0)) {
+        uint8_t out[QUIC_PKT_BUF];
+        ngtcp2_ssize ndone = 0;
+        ngtcp2_vec v0 = { NULL, 0 };
+        ngtcp2_ssize n = ngtcp2_conn_writev_stream(qc->conn, &qc->path, NULL, out,
+                                                   sizeof(out), &ndone,
+                                                   NGTCP2_WRITE_STREAM_FLAG_FIN,
+                                                   sid, &v0, 0, quic_now());
+        if (n > 0) {
+            sendto(qc->fd, out, (size_t)n, 0,
+                   (struct sockaddr*)&qc->remote_sa, sizeof(qc->remote_sa));
+        }
+    }
+    return w;
 }
 
 // 读指定流：消费式。返回实际字节数 / 0（超时/FIN/无数据）。

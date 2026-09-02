@@ -94,6 +94,8 @@ static int g_px_rate_whitelist_n = 0;
 // M33：access log 落盘路径（px_serve opts{access_log}；空 = 仅 stderr）+ Alt-Svc 通告
 char g_px_access_log[1024] = {0};
 char g_px_alt_svc[256] = {0};
+// M53-S4：px_serve opts.http3 的 H3（QUIC/UDP）listener id（0 = 未启用；优雅关闭时回收）
+static long long g_px_h3_listener = 0;
 // M36：access log JSON 行格式 + 按天轮转（日期后缀）
 int g_px_log_json = 0;
 int g_px_log_daily = 0;
@@ -10791,6 +10793,14 @@ void px_http_dispatch_h3(PxHttpOut* pout, LXValue req, int client_keep_alive) {
     px_dict_set(req, "request_id", px_str(req_id));
     LXValue headers = px_dict_get(req, "headers");
     if (headers.type != PX_DICT) { headers = px_dict(); px_dict_set(req, "headers", headers); }
+    // M53-S4：HTTP/3 请求无 Host 头（RFC 9114 用 :authority）。补齐 headers["Host"] 使
+    // vhost/handler（ws-web site_handler 读 req.headers.Host）与 HTTP/1.1 行为一致。
+    {
+        LXValue av = px_dict_get(req, "authority");
+        if (av.type == PX_STR && px_header_get(&headers, "host").type == PX_NULL) {
+            px_dict_set(headers, "Host", av);
+        }
+    }
     LXValue body_v = px_dict_get(req, "body");
     // cookie（HTTP/1.1 worker 同款解析）
     if (px_dict_get(req, "cookie").type == PX_NULL) {
@@ -11547,6 +11557,11 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     if (nargs >= 3 && args[2].type == PX_INT) timeout_ms = (int)args[2].as.i;
     if (timeout_ms < 1) timeout_ms = 1;
     int port = (int)args[0].as.i;
+    // M53-S4：HTTP/3（QUIC/UDP）—— opts.http3 = true（自签）| {port?, cert?, key?}；port 默认=TCP port
+    int h3_enable = 0;
+    int h3_port = port;
+    char h3_cert[1024] = {0};
+    char h3_key[1024] = {0};
     // M27/M31/M33：opts = {max_body_size, body_tmp_dir, max_conn, rate_limit:{max,window_sec}, access_log, alt_svc}
     g_px_max_body = 10 * 1024 * 1024;
     int max_conn = 32;
@@ -11560,6 +11575,7 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     g_px_log_daily = 0;
     g_px_gzip_level = 6;
     g_px_gzip_min = 1024;
+    g_px_h3_listener = 0;
     if (nargs >= 4 && args[3].type == PX_DICT) {
         LXValue mb = px_dict_get(args[3], "max_body_size");
         if (mb.type == PX_INT) g_px_max_body = (int)(mb.as.i >= 1024 ? mb.as.i : 1024);
@@ -11604,6 +11620,19 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
         if (gl.type == PX_INT && gl.as.i >= 1 && gl.as.i <= 9) g_px_gzip_level = (int)gl.as.i;
         LXValue gm = px_dict_get(args[3], "gzip_min_bytes");
         if (gm.type == PX_INT && gm.as.i >= 1) g_px_gzip_min = (int)gm.as.i;
+        // M53-S4：opts.http3 —— bool true（自签证书）或 {port?, cert?, key?}
+        LXValue h3o = px_dict_get(args[3], "http3");
+        if (h3o.type == PX_BOOL && h3o.as.b) {
+            h3_enable = 1;
+        } else if (h3o.type == PX_DICT) {
+            h3_enable = 1;
+            LXValue hp = px_dict_get(h3o, "port");
+            if (hp.type == PX_INT && hp.as.i >= 1 && hp.as.i <= 65535) h3_port = (int)hp.as.i;
+            LXValue hc = px_dict_get(h3o, "cert");
+            if (hc.type == PX_STR) snprintf(h3_cert, sizeof(h3_cert), "%s", hc.as.obj->as.str.data);
+            LXValue hk = px_dict_get(h3o, "key");
+            if (hk.type == PX_STR) snprintf(h3_key, sizeof(h3_key), "%s", hk.as.obj->as.str.data);
+        }
     }
     // docroot / timeout / port 存全局表（GC 扫描根）
     px_set_global("__px_docroot", px_str(docroot));
@@ -11635,6 +11664,22 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     px_session_sweep();
     fprintf(stderr, "[px-serve] 普贤应用服务器 docroot=%s 端口=%d 超时=%dms tls=%d max_body=%d max_conn=%d\n",
             docroot, port, timeout_ms, g_srv_tls_ready, g_px_max_body, max_conn);
+    // M53-S4：HTTP/3（QUIC/UDP）—— 与 HTTP/1.1 同端口（UDP/TCP 不冲突，标准 443+443）或 http3.port；
+    // 请求经 runtime_h3.c 管道托管（h3_srv_pipe_cb）走与 HTTP/1.1 同一 vhost/路由/限流/静态/.px 管道。
+    if (h3_enable) {
+        int64_t lid = px_h3_server_listen_pipe(h3_port, h3_cert[0] ? h3_cert : "",
+                                               h3_key[0] ? h3_key : "");
+        if (lid > 0) {
+            g_px_h3_listener = lid;
+            // Alt-Svc 自动通告：http3 开启且未显式配置 alt_svc 时，默认 h3=":port"（客户端据此升级）
+            if (!g_px_alt_svc[0]) snprintf(g_px_alt_svc, sizeof(g_px_alt_svc), "h3=\":%d\"", h3_port);
+            fprintf(stderr, "[px-serve] HTTP/3 listening udp/%d listener=%lld alt_svc=%s\n",
+                    h3_port, (long long)lid, g_px_alt_svc);
+        } else {
+            fprintf(stderr, "[px-serve] 警告：HTTP/3 listener 启动失败（udp/%d 被占或证书不可用），仅提供 HTTP/1.1\n",
+                    h3_port);
+        }
+    }
     // M31.4b：并发模型升级——连接线程池（不占 spawn 槽位，突破 64 上限）
     // 预派生 max_conn 个常驻 worker：accept 只把 cfd 放队列，worker 取队列处理。
     g_pool_size = max_conn;
@@ -11655,6 +11700,12 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     }
     g_px_listen_fd = -1;
     close(sfd);
+    // M53-S4：优雅关闭 H3 listener（停收包路由线程 → 关托管连接 → 释放 UDP fd）
+    if (g_px_h3_listener > 0) {
+        px_quic_raw_close_listener(g_px_h3_listener);
+        fprintf(stderr, "[px-serve] HTTP/3 listener 已关闭\n");
+        g_px_h3_listener = 0;
+    }
     // 停止 worker：广播唤醒 → worker 处理完当前连接/清空队列后退出 → join
     pthread_mutex_lock(&g_pool_mu);
     pthread_cond_broadcast(&g_pool_cond);

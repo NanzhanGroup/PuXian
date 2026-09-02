@@ -19,6 +19,7 @@
 #include "runtime_h3_qpack.h"
 #include "runtime_h3_qpack_dyn.h"
 #include <stdio.h>
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -585,17 +586,29 @@ static void h3_append_headers(LXValue fields, LXValue headers_val) {
         if (ito->as.list.len < 2) continue;
         LXValue* kv = ito->as.list.items;
         if (kv[0].type != PX_STR || kv[1].type != PX_STR) continue;
+        // M53-S4 互操作修复：HTTP/3 要求头字段名小写（RFC 9114 §4.2；QPACK 静态/动态表
+        // 字段名亦小写）。管道 handler 返回的 "Content-Type"/"X-Request-Id" 大小写任意
+        // （HTTP/1.1 允许），编码为 H3 前统一 tolower —— 否则 aioquic 等严格实现报
+        // H3_MESSAGE_ERROR（Header contains invalid characters）拒收。
+        const char* _n = kv[0].as.obj->as.str.data;
+        int _nl = kv[0].as.obj->as.str.len;
+        char* lname = (char*)malloc((size_t)_nl + 1);
+        if (!lname) continue;
+        for (int _i = 0; _i < _nl; _i++) lname[_i] = (char)tolower((unsigned char)_n[_i]);
+        lname[_nl] = 0;
         LXValue pair = px_list(2);
-        px_list_push(pair, kv[0]);
+        px_list_push(pair, px_str(lname));
         px_list_push(pair, kv[1]);
         px_list_push(fields, pair);
+        free(lname);
     }
 }
 
 // 编码 fields 并以 HEADERS+DATA 两帧写到指定流
 // M51：连接已 setup → QPACK 动态表编码（encoder 指令 flush 到本端编码器单向流）；
 //      未 setup → 无状态 codec（M47–M50 行为不变）。
-static bool h3_send_fields(int64_t conn, int64_t sid, LXValue fields, LXValue body_val) {
+// fin=1：末字节后关闭本端写侧（响应流 FIN，RFC 9114）；请求侧暂传 0（帧边界界定消息）。
+static bool h3_send_fields(int64_t conn, int64_t sid, LXValue fields, LXValue body_val, int fin) {
     const uint8_t* bd = NULL; int blen = 0;
     if (body_val.type == PX_STR || body_val.type == PX_BYTES) {
         bd = (const uint8_t*)body_val.as.obj->as.str.data;
@@ -631,7 +644,7 @@ static bool h3_send_fields(int64_t conn, int64_t sid, LXValue fields, LXValue bo
     if (qn < 0) qn = 0;   // 原行为：编码失败发空字段段（理论不发生）
     int fn1 = h3_build_frame(f, H3_FRAME_HEADERS, q, qn);
     int fn2 = h3_build_frame(f + fn1, H3_FRAME_DATA, bd, blen);
-    int64_t sent = px_quic_raw_send_on(conn, sid, f, fn1 + fn2, 0);
+    int64_t sent = px_quic_raw_send_on(conn, sid, f, fn1 + fn2, fin);
     free(q); free(f);
     return sent >= 0;
 }
@@ -670,7 +683,18 @@ static int h3_read_section(int64_t conn, int64_t sid, int64_t timeout_ms,
     if (fields.type != PX_LIST) return -2;
     uint8_t* bd = NULL; int blen = 0;
     t = h3_take_frame(conn, sid, &bd, &blen, timeout_ms);
-    if (t != H3_FRAME_DATA) { free(bd); return -1; }
+    if (t != H3_FRAME_DATA) {
+        // M53-S4 互操作修复：GET 等无 body 请求 = HEADERS 帧后流即 FIN（无 DATA 帧）。
+        // 对端流已结束（fin 已到、数据已读空 → recv 立即返回 0）→ body 视为空，合法；
+        // 否则（超时/其他帧/协议错误）→ 失败。自研 client 总发 DATA 帧（含空 body），
+        // aioquic 等标准实现按 RFC 9114 不发空 DATA —— 此前强制要 DATA 帧导致标准
+        // 客户端请求被拒（read_section -1），是外部互操作失败根因之一。
+        if (t == -1 && px_quic_raw_stream_fin(conn, sid) == 1) {
+            free(bd); bd = NULL; blen = 0;   // 无 body：HEADERS + FIN
+        } else {
+            free(bd); return -1;
+        }
+    }
     *pfields = fields;
     *pbody = bd;
     *pblen = blen;
@@ -898,7 +922,7 @@ static LXValue bi_h3_serve_send_response_stream(LXValue* args, int nargs, void* 
     int64_t sid = args[1].as.i;
     int status = (int)args[2].as.i;
     LXValue fields = h3_make_response_fields(status, args[3]);
-    bool ok = h3_send_fields(conn, sid, fields, args[4]);
+    bool ok = h3_send_fields(conn, sid, fields, args[4], 1);
     return px_bool(ok);
 }
 
@@ -926,7 +950,7 @@ static LXValue bi_h3_client_send_request_stream(LXValue* args, int nargs, void* 
                                             args[3].as.obj->as.str.data,
                                             args[4].as.obj->as.str.data,
                                             args[5].as.obj->as.str.data, args[6]);
-    bool ok = h3_send_fields(conn, sid, fields, args[7]);
+    bool ok = h3_send_fields(conn, sid, fields, args[7], 0);
     if (ok && conn > 0 && conn <= H3_MAX_CONN) g_last_sid[conn - 1] = sid;
     return px_bool(ok);
 }
@@ -979,7 +1003,7 @@ static LXValue bi_h3_serve_send_response(LXValue* args, int nargs, void* ctx) {
     if (sid < 0) sid = px_quic_raw_first_stream(conn);
     if (sid < 0) return px_bool(false);
     LXValue fields = h3_make_response_fields(status, args[2]);
-    bool ok = h3_send_fields(conn, sid, fields, args[3]);
+    bool ok = h3_send_fields(conn, sid, fields, args[3], 1);
     return px_bool(ok);
 }
 
@@ -1009,7 +1033,7 @@ static LXValue bi_h3_client_send_request(LXValue* args, int nargs, void* ctx) {
                                             args[2].as.obj->as.str.data,
                                             args[3].as.obj->as.str.data,
                                             args[4].as.obj->as.str.data, args[5]);
-    bool ok = h3_send_fields(conn, sid, fields, args[6]);
+    bool ok = h3_send_fields(conn, sid, fields, args[6], 0);
     if (ok && conn > 0 && conn <= H3_MAX_CONN) g_last_sid[conn - 1] = sid;
     return px_bool(ok);
 }
@@ -1168,6 +1192,8 @@ static bool h3_send_response_big(int64_t conn, int64_t sid, LXValue fields,
         fn = h3_build_frame(f, H3_FRAME_DATA, NULL, 0);
         if (px_quic_raw_send_on(conn, sid, f, fn, 0) < 0) ok = false;
     }
+    // M53-S4：大响应结束 → 流 FIN（RFC 9114 响应以流结束结束；aioquic 等标准客户端依赖）
+    px_quic_raw_send_on(conn, sid, NULL, 0, 1);
     free(q); free(f);
     return ok;
 }
@@ -1177,7 +1203,7 @@ static void h3_out_send(h3_out_ctx* c) {
     int blen = c->head_only ? 0 : c->blen;
     if (blen <= H3_SEND_SINGLE_MAX) {
         LXValue bv = px_bytes_len(bd, blen);
-        h3_send_fields(c->conn, c->sid, c->fields, bv);
+        h3_send_fields(c->conn, c->sid, c->fields, bv, 1);
     } else {
         h3_send_response_big(c->conn, c->sid, c->fields, bd, blen);
     }
@@ -1241,6 +1267,12 @@ static void h3_srv_pipe_cb(int64_t conn, void* ud) {
         px_http_dispatch_h3(&out, req, 1);
         if (ctx.body) free(ctx.body);
     }
+}
+
+// M53-S4：px_serve opts.http3 内部入口 —— 公共 HTTP 管道托管 H3 listener
+// （与 h3_server_listen 同语义；runtime.c px_serve 启动时调用，实现三栈合一 WebServer）。
+int64_t px_h3_server_listen_pipe(int port, const char* cert, const char* key) {
+    return px_quic_raw_h3_listen_cb(port, cert ? cert : "", key ? key : "", h3_srv_pipe_cb, NULL);
 }
 
 // h3_server_listen(port:int[, cert:str, key:str]) -> int —— M53-S3：

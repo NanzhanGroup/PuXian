@@ -3,6 +3,10 @@
 > 自举闭环的最后一环：用 PuXian 写 PuXian 生态的第一个生产应用。
 > 编译器已自举（M-B8），Rust 版已退役（M-B9a），本应用全程使用 `tools/pxc` 工具链，**无需 Rust**。
 
+> **M53-S4**：服务端升级为 HTTP/1.1 + HTTP/2 + **HTTP/3** 三栈合一 —— config 加 `"http3": {port?, cert?, key?}`（缺省同 https 端口，证书复用 cert_dir 站点证书即可），
+> px_serve 自动在 UDP 同端口托管 HTTP/3 并通告 `Alt-Svc: h3=":port"`；HTTP/3 请求与 HTTP/1.1 共用同一 vhost/路由/限流/静态管道，
+> 已通过 aioquic（第三方独立 HTTP/3 实现）互操作验证。
+
 ## 快速开始
 
 ```bash
@@ -39,6 +43,7 @@
 - **JSON**：`json_parse / json_stringify / json_path / json_path_set`
 - **协程**：`spawn fn(...)` 起线程；`sleep(ms)` 休眠
 - **静态文件**：`px_serve(port, docroot, timeout)`（见 examples/m29_webprod.px）
+- **HTTP/3（QUIC/UDP）**：`px_serve(..., {http3: {port, cert, key}})` 三栈合一（M53，见 docs/M53_PLAN.md）
 
 ## 写 PuXian 必须规避的坑（Mini 子集，自举编译器锁定）
 
