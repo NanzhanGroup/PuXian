@@ -138,7 +138,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 │   └── diffcheck.sh / bootstrap_prove.sh  # 对拍框架 / 自举证明
 ├── runtime/                # C 运行时（runtime.c/h + aes/xml/zip/ws/rsa/sqlite/route/h2 + mbedtls + third_party）
 ├── stdlib/                 # 标准库（collections.px）
-├── ws-web/                 # 第一个生产应用（M-B9b，清歌负责）：HTTP + SQLite 服务骨架
+├── ws-web/                 # 第一个生产应用（M-B9b，dogfooding）：HTTP + SQLite 服务骨架
 ├── examples/               # 80+ 个示例（hello / fib / match / 并发 / 网络 / TLS / SQLite / 推导式 ...）
 ├── archive/rust-compiler/  # Rust 版编译器源码归档（只读，自举前的实现，git 历史保留）
 ├── docs/                   # 文档（规格 / Mini 子集 / 自举计划 / 进度）
@@ -185,7 +185,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 | M-B7 | interp 用 PuXian 重写 | stdout 8/8 + v01-v03 全 PASS |
 | M-B8 | **自举证明** | **A.c == B.c == B2.c 逐字节一致** 🎉 |
 | M-B9a | 退役 Rust 版 + 接入 CI + 引导链 | `tools/pxc` 全链路可用，CI 四 job |
-| M-B9b | ws-web（第一个生产应用） | 🔄 进行中（清歌负责） |
+| M-B9b | ws-web（第一个生产应用） | 🔄 进行中（dogfooding 验证） |
 
 ---
 
