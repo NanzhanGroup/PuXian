@@ -1,0 +1,86 @@
+# ============================================================
+# M57 S3：设备控制 ioctl 自检（x86 真实内核替身验证）
+# ------------------------------------------------------------
+# 背景：pxc build 产物为静态链接二进制 → LD_PRELOAD 注入不可行，
+#       "x86 ioctl mock" 改用内核自带的用户态可访问设备作 GPIO/I2C
+#       替身，走与 GPIO/I2C 完全相同的语言胶水路径：
+#         fd = open/socket → 构造 ABI buffer → ioctl(bytes/int 就地填充)
+#         → 解析内核写回数据
+#   A. 网络接口设备（loopback 替身）ifreq ioctl：
+#        SIOCGIFADDR   (0x8915)  lo → 就地填充 AF_INET + 127.0.0.1
+#        SIOCGIFFLAGS  (0x8913)  lo → IFF_LOOPBACK 置位
+#        SIOCGIFHWADDR (0x8927)  lo → family=ARPHRD_LOOPBACK + mac 全 0
+#   B. PTY 字符设备 ioctl：
+#        TIOCGPTN (0x80045430)  /dev/ptmx → int buffer 就地填充 pts 号
+# 结构体布局（x86_64，C 实验实测）：
+#   struct ifreq = 40B：ifr_name[0..16)，union 从 16 起
+#     SIOCGIFADDR → family(u16 LE)@16, IP(u32)@20
+#     SIOCGIFFLAGS→ flags(u16 LE)@16
+#     SIOCGIFHWADDR → family(u16 LE)@16, mac[6]@18
+# ============================================================
+var SIOCGIFADDR   = 0x8915
+var SIOCGIFFLAGS  = 0x8913
+var SIOCGIFHWADDR = 0x8927
+var TIOCGPTN      = 0x80045430
+var IFF_LOOPBACK  = 0x8
+var AF_INET       = 2
+var IFREQ_SZ      = 40
+
+var zfd = open("/dev/zero", "r")
+
+def mk_ifreq(name):
+    var n = bytes(name)
+    var rest = IFREQ_SZ - bytes_len(n)
+    return bytes_concat(n, read(zfd, rest))
+
+# ---- A. 网卡设备 ifreq ioctl（真实内核，loopback 替身）----
+print("== A. 网络接口设备 ifreq ioctl（lo，真实内核）==")
+var sfd = tcp_listen(19990)
+assert(sfd > 0, "tcp_listen 失败 errno=" + str(os_errno()))
+
+# A1: SIOCGIFADDR lo → family=AF_INET(2) + 127.0.0.1（bytes 就地填充结构体）
+var b1 = mk_ifreq("lo")
+var r1 = ioctl(sfd, SIOCGIFADDR, b1)
+assert(r1 == 0, "SIOCGIFADDR lo 应 0 got=" + str(r1) + " errno=" + str(os_errno()))
+var fam = bytes_to_int(bytes_slice(b1, 16, 18), "little")
+assert(fam == AF_INET, "lo family 应 AF_INET(2) got=" + str(fam))
+assert(bytes_get(b1, 20) == 127 and bytes_get(b1, 21) == 0 and bytes_get(b1, 22) == 0 and bytes_get(b1, 23) == 1, "lo IP 应 127.0.0.1")
+print("A1: SIOCGIFADDR lo -> family=" + str(fam) + " ip=127.0.0.1 ok")
+
+# A2: SIOCGIFFLAGS lo → IFF_LOOPBACK(0x8) 置位
+var b2 = mk_ifreq("lo")
+var r2 = ioctl(sfd, SIOCGIFFLAGS, b2)
+assert(r2 == 0, "SIOCGIFFLAGS lo 应 0 got=" + str(r2) + " errno=" + str(os_errno()))
+var fl = bytes_to_int(bytes_slice(b2, 16, 18), "little")
+assert((fl & IFF_LOOPBACK) != 0, "lo flags 应含 IFF_LOOPBACK got=" + str(fl))
+print("A2: SIOCGIFFLAGS lo -> flags=" + str(fl) + " (LOOPBACK 置位) ok")
+
+# A3: SIOCGIFHWADDR lo → family>0（ARPHRD_LOOPBACK）+ mac 全 0
+var b3 = mk_ifreq("lo")
+var r3 = ioctl(sfd, SIOCGIFHWADDR, b3)
+assert(r3 == 0, "SIOCGIFHWADDR lo 应 0 got=" + str(r3) + " errno=" + str(os_errno()))
+var hf = bytes_to_int(bytes_slice(b3, 16, 18), "little")
+assert(hf > 0, "lo hwaddr family 应非 0 got=" + str(hf))
+var macz = true
+for i in range(6):
+    if bytes_get(b3, 18 + i) != 0:
+        macz = false
+assert(macz, "lo mac 应全 0")
+print("A3: SIOCGIFHWADDR lo -> family=" + str(hf) + " mac=00:00:00:00:00:00 ok")
+assert(close(sfd) == true, "close socket fd 失败")
+print("A: 网络接口 ifreq ioctl 全过（结构体就地填充 + 解析）")
+
+# ---- B. PTY 字符设备 ioctl（真实内核）----
+print("== B. PTY 字符设备 ioctl ==")
+var pfd = open("/dev/ptmx", "rw")
+assert(pfd > 0, "open /dev/ptmx 失败 errno=" + str(os_errno()))
+var ib = int_to_bytes(0, 4, "little")
+var rp = ioctl(pfd, TIOCGPTN, ib)
+assert(rp == 0, "TIOCGPTN 应 0 got=" + str(rp) + " errno=" + str(os_errno()))
+var ptn = bytes_to_int(ib, "little")
+assert(ptn >= 0, "pty 号应 >=0 got=" + str(ptn))
+print("B: TIOCGPTN -> pts/" + str(ptn) + "（int buffer 就地填充）ok")
+assert(close(pfd) == true, "close ptmx 失败")
+assert(close(zfd) == true, "close /dev/zero 失败")
+
+print("M57-S3 devctl OK")

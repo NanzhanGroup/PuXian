@@ -1,0 +1,56 @@
+# ============================================================
+# M57 S3：I2C 设备读写示例（真实板子运行；x86 无设备 SKIP）
+# ------------------------------------------------------------
+# 通过 /dev/i2c-N 演示 I2C 控制的 ioctl 胶水：
+#   open(/dev/i2c-N) → ioctl(fd, I2C_SLAVE=0x0703, 0x48)【int 形态直传
+#   从地址】→ write(fd, 寄存器命令字节) → read(fd, n) 读回器件数据。
+# 0x48 为常见 I2C 从地址（ADC/温度传感器等）；真实器件读到原始字节
+# 打印不断言（型号相关）。无总线/无器件/无权限时打印 SKIP 不误报。
+# ============================================================
+var I2C_SLAVE = 0x0703
+
+var paths = ["/dev/i2c-1", "/dev/i2c-0", "/dev/i2c-2"]
+var fd = -1
+var bus = ""
+for p in paths:
+    var t = open(p, "rw")
+    if t > 0:
+        fd = t
+        bus = p
+        break
+if fd < 0:
+    print("I2C: SKIP（无 /dev/i2c-*，真实 I2C ioctl 留板子环境验证）")
+    exit(0)
+
+# int 形态 ioctl：从地址 0x48 直接以整数值传给内核（i2c-dev 约定）
+var rc = ioctl(fd, I2C_SLAVE, 0x48)
+if rc != 0:
+    print("I2C: ioctl I2C_SLAVE 0x48 失败 errno=" + str(os_errno()) + "（总线/权限，SKIP）")
+    assert(close(fd) == true, "close i2c fd 失败")
+    exit(0)
+print("I2C: " + bus + " slave=0x48 设置成功（ioctl int 形态）")
+
+# 写 1B 寄存器命令（0x00）后读 2B 器件数据
+var wr = write(fd, int_to_bytes(0, 1, "little"))
+if wr < 0:
+    print("I2C: 写命令失败 errno=" + str(os_errno()) + "（无器件/总线错误，SKIP）")
+    assert(close(fd) == true, "close i2c fd 失败")
+    exit(0)
+var dat = read(fd, 2)
+if dat == -1:
+    print("I2C: 无器件响应（read errno=" + str(os_errno()) + "），真实读留板子验证（SKIP）")
+    assert(close(fd) == true, "close i2c fd 失败")
+    exit(0)
+if bytes_len(dat) == 0:
+    print("I2C: 读回 0B（器件未就绪），SKIP")
+    assert(close(fd) == true, "close i2c fd 失败")
+    exit(0)
+
+var s = ""
+for i in range(bytes_len(dat)):
+    if i > 0:
+        s = s + ","
+    s = s + str(bytes_get(dat, i))
+print("I2C: 读回 " + str(bytes_len(dat)) + "B: [" + s + "]（原始字节，器件相关不断言）")
+assert(close(fd) == true, "close i2c fd 失败")
+print("I2C OK")
