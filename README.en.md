@@ -10,7 +10,7 @@ PuXian (`.px`) is a self-hosted programming language built from scratch, driven 
 - **Syntax = a Python subset**: AI models are trained on massive Python corpora — the closer a language's syntax is to Python, the higher the accuracy of AI-generated code.
 - **Types = Rust style**: gradual typing (no annotations → run immediately; add annotations → get performance), enums, pattern matching, Option/Result.
 - **Concurrency = Go style**: `spawn` + `channel` + `select`, true coroutine concurrency.
-- **Heritage = a C compiler**: the compilation backend emits C source code, which gcc turns into a **zero-dependency static binary** (free of Go/Google or Rust/Mozilla flavors — supply-chain neutral, trivial to deploy).
+- **Heritage = a C compiler**: the compilation backend emits C source code, which gcc turns into a **zero-dependency static binary** (supply-chain neutral, trivial to deploy).
 
 ---
 
