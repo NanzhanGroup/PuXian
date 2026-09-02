@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+### 路线图 · M57 内容重定向（HTTP/3 深度生产化 → 健壮性加固）
+
+- 原「M57+ · HTTP/3 深度生产化」三剩余项（QPACK 动态表前缀 / 服务端主动迁移·immediate
+  migration / 深度互操作扩展）**降级为搁置**：Chrome 2021 起禁用 QPACK 动态表、immediate
+  migration 连 ngtcp2 上游都未实现、深度互操作边际收益递减 —— 均无真实用户场景（详见
+  `docs/ROADMAP.md` §三「搁置」评估注记）
+- **M57 重定向为主线下一里程碑「HTTP/3 / QUIC 健壮性加固（可靠性生产化）」**：协议 fuzz
+  （畸形包/超大帧/恶意 SETTINGS）+ 并发/内存安全审计（race+ASAN，收口 M55 issue#2 一类）
+  + 资源边界（慢客户端/半开连接/流与连接上限/OOM）+ 互操作边界回归 —— 把 H3 栈从
+  「能跑」推到「扛造」
+
 ### 新增 · M56 runtime http_unix 内建（ws-web 配套，非主线 HTTP/3 里程碑）
 
 - `http_unix(sock_path, url_path, method[, body[, headers]]) -> dict{status, headers, body}`
