@@ -1,0 +1,22 @@
+# ============================================================
+# M53 S1：HTTP/3 server 多连接托管冒烟 —— 客户端
+# ------------------------------------------------------------
+# quic_connect 连托管 server → 发消息 → 等 echo 校验一致。
+# verify.sh 并发起 8 个本进程（8 条独立 QUIC 连接）。
+# ============================================================
+import "c/ngtcp2"
+
+extern def quic_connect(ip: str, port: int, alpn: str) -> int
+extern def quic_send(conn: int, data: str) -> int
+extern def quic_recv(conn: int, maxlen: int) -> str
+extern def quic_close(conn: int) -> bool
+
+var c = quic_connect("127.0.0.1", 17998, "puxian")
+assert(c > 0, "client: quic_connect 失败")
+var msg = "hello-s1-" + str(now_ms() % 100000)
+var n = quic_send(c, msg)
+assert(n > 0, "client: quic_send 失败")
+var echoed = quic_recv(c, 4096)
+assert(echoed == msg, "client: echo 不匹配 got=[" + str(echoed) + "] want=[" + msg + "]")
+quic_close(c)
+print("client: ok")

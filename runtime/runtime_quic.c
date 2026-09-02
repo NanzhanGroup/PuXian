@@ -41,10 +41,28 @@
 #define QUIC_SCIDLEN 8
 
 // ---------- 数据结构 ----------
+// M53：cid 路由表（服务端收包路由：按包 DCID 定位连接）
+typedef struct {
+    uint8_t cid[NGTCP2_MAX_CIDLEN];
+    size_t  cidlen;
+    int64_t conn;                  // g_qconns 槽（1 起）
+} quic_cid_entry;
+
+// M53：每连接处理回调（握手完成后由连接处理线程调用；ud 透传）
+typedef void (*quic_conn_cb)(int64_t conn, void* ud);
+
 typedef struct {
     int            fd;            // UDP socket
     struct sockaddr_in local;
     SSL_CTX*       ssl_ctx;       // 服务器 TLS 上下文（含自签证书）
+    // M53：h3 server 托管
+    quic_cid_entry cidtab[256];   // 本端签发 cid → conn（收包路由用）
+    int            cidtab_n;
+    pthread_t      router_thr;    // 收包路由线程
+    int            router_started;
+    int            router_stop;
+    quic_conn_cb   conn_cb;       // 每连接处理回调（NULL → 默认 echo）
+    void*          conn_ud;
     int            used;
 } quic_listener;
 
@@ -73,6 +91,17 @@ typedef struct {
     int            handshake_done;
     int            peer_closed;
     int            used;
+    // M53：server 多连接托管（收包路由线程 → 本连接处理线程）
+    // 并发：队列 push/pop/free 统一持全局 g_quic_srv_mu；qcv 每连接独立（避免惊群）
+    int              owner_listener;         // >0 = 由该 listener 托管
+    pthread_cond_t   qcv;
+    uint8_t**        qbufs;                  // 环形队列（每包 malloc）
+    int*             qlens;
+    struct sockaddr_storage* qfroms;
+    size_t           qcap, qhead, qtail, qn;
+    int              qclosed;
+    pthread_t        thr;                    // 连接处理线程
+    int              thr_started;
 } quic_conn;
 
 static ngtcp2_conn* quic_get_conn_from_ref(ngtcp2_crypto_conn_ref* ref) {
@@ -83,6 +112,9 @@ static ngtcp2_conn* quic_get_conn_from_ref(ngtcp2_crypto_conn_ref* ref) {
 static quic_listener g_qlis[QUIC_MAX];
 static quic_conn     g_qconns[QUIC_MAX];
 static int           g_quic_init = 0;
+
+// M53：server 托管全局锁（cid 路由表 + 收包队列 push/pop + conn 清理互斥）
+static pthread_mutex_t g_quic_srv_mu = PTHREAD_MUTEX_INITIALIZER;
 
 static uint64_t quic_now(void) {
     struct timespec tp;
@@ -97,13 +129,55 @@ static void quic_rand_cb(uint8_t* dest, size_t destlen,
     if (RAND_bytes(dest, (int)destlen) != 1) abort();
 }
 
+// M53：cid 路由表登记/查找/移除（listener 级；供收包路由线程按 DCID 定位 conn）
+// 并发：读写均持 g_quic_srv_mu（get_new_cid_cb 在处理线程触发，router 在收包线程触发）
+static void quic_cid_add(quic_listener* ql, const uint8_t* cid, size_t len, int64_t conn) {
+    if (!ql || len == 0 || len > NGTCP2_MAX_CIDLEN) return;
+    pthread_mutex_lock(&g_quic_srv_mu);
+    for (int i = 0; i < ql->cidtab_n; i++) {
+        if (ql->cidtab[i].cidlen == len && memcmp(ql->cidtab[i].cid, cid, len) == 0) {
+            ql->cidtab[i].conn = conn;   // 更新归属（cid 轮换后同值重绑）
+            pthread_mutex_unlock(&g_quic_srv_mu);
+            return;
+        }
+    }
+    if (ql->cidtab_n < 256) {
+        memcpy(ql->cidtab[ql->cidtab_n].cid, cid, len);
+        ql->cidtab[ql->cidtab_n].cidlen = len;
+        ql->cidtab[ql->cidtab_n].conn = conn;
+        ql->cidtab_n++;
+    }
+    pthread_mutex_unlock(&g_quic_srv_mu);
+}
+
+static int64_t quic_cid_find(quic_listener* ql, const uint8_t* cid, size_t len) {
+    if (!ql) return -1;
+    pthread_mutex_lock(&g_quic_srv_mu);
+    int64_t r = -1;
+    for (int i = 0; i < ql->cidtab_n; i++) {
+        if (ql->cidtab[i].cidlen == len && memcmp(ql->cidtab[i].cid, cid, len) == 0) {
+            r = ql->cidtab[i].conn;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_quic_srv_mu);
+    return r;
+}
+
 static int quic_get_new_cid_cb(ngtcp2_conn* conn, ngtcp2_cid* cid,
                                uint8_t* token, size_t cidlen, void* user_data) {
-    (void)conn; (void)user_data;
+    (void)conn;
+    quic_conn* qc = (quic_conn*)user_data;
+    if (cidlen > NGTCP2_MAX_CIDLEN) cidlen = NGTCP2_MAX_CIDLEN;
     if (RAND_bytes(cid->data, (int)cidlen) != 1) return NGTCP2_ERR_CALLBACK_FAILURE;
     cid->datalen = cidlen;
     if (RAND_bytes(token, NGTCP2_STATELESS_RESET_TOKENLEN) != 1)
         return NGTCP2_ERR_CALLBACK_FAILURE;
+    // M53：新 cid 登记进归属 listener 路由表（服务端收包路由需要）
+    if (qc && qc->owner_listener > 0 && qc->owner_listener <= QUIC_MAX) {
+        quic_listener* ql = &g_qlis[qc->owner_listener - 1];
+        if (ql->used) quic_cid_add(ql, cid->data, cidlen, qc - g_qconns + 1);
+    }
     return 0;
 }
 
@@ -289,9 +363,16 @@ static SSL_CTX* quic_make_client_ctx(void) {
 // mode: 0=握手模式（直到 handshake_done）; 1=数据模式（直到 rlen>0 或对端关闭）
 // 返回: 0 成功 / -1 超时 / -2 错误
 // data_mode=1 时：want_sid>=0 → 泵到指定流有数据/FIN；want_sid<0 → 泵到任一流有数据
+// M53：收包队列 pop 前向声明（托管 conn 泵用；定义见 M53 块）
+static int quic_q_pop(quic_conn* qc, uint8_t** pkt, int* plen,
+                      struct sockaddr_storage* from, int timeout_ms);
+
 static int quic_pump(quic_conn* qc, int64_t timeout_ms, int data_mode, int64_t want_sid) {
     struct pollfd pfd = { .fd = qc->fd, .events = POLLIN };
     int64_t deadline = quic_now() + (uint64_t)timeout_ms * NGTCP2_MILLISECONDS;
+    // M53：托管 conn（owner_listener>0）由收包路由线程投包 → 走队列取包；
+    // 普通 conn（demo accept/connect）保持原 poll+recvfrom 单 fd 语义。
+    int qmode = (qc->owner_listener > 0);
     for (;;) {
         /* M50: data_mode 目标 = 活跃流有数据/FIN；M51: 读指定流需避免其他流数据导致空转 */
         if (data_mode) {
@@ -317,30 +398,52 @@ static int quic_pump(quic_conn* qc, int64_t timeout_ms, int data_mode, int64_t w
             fprintf(stderr, "[quic] pump write_pkt rv=%zd (%s)\n", n, ngtcp2_strerror((int)n));
             return -2;
         }
+        if (qc->peer_closed) return data_mode ? 0 : -1;
         // 等待收包
         int64_t remain = deadline - quic_now();
         if (remain <= 0) return -1;
         int ms = (int)((remain + NGTCP2_MILLISECONDS - 1) / NGTCP2_MILLISECONDS);
-        int pr = poll(&pfd, 1, ms);
-        if (pr < 0) { if (errno == EINTR) continue; fprintf(stderr, "[quic] pump poll err=%s\n", strerror(errno)); return -2; }
-        if (pr == 0) return -1;  // 超时
-        // 收包
+        if (ms > 500) ms = 500;   // 分段等，避免长眠漏状态（qmode 需周期性 flush）
         uint8_t pkt[QUIC_PKT_BUF];
+        int plen = 0;
         struct sockaddr_storage from;
-        socklen_t fromlen = sizeof(from);
-        ssize_t rl = recvfrom(qc->fd, pkt, sizeof(pkt), 0,
-                              (struct sockaddr*)&from, &fromlen);
-        if (rl <= 0) { if (errno == EINTR || errno == EAGAIN) continue; fprintf(stderr, "[quic] pump recvfrom err=%s\n", strerror(errno)); return -2; }
+        memset(&from, 0, sizeof(from));
+        int got_pkt = 0;
+        if (qmode) {
+            uint8_t* qpkt = NULL; int qlen = 0;
+            int dv = quic_q_pop(qc, &qpkt, &qlen, &from, ms);
+            if (dv == 1) {
+                plen = qlen;
+                if (plen > (int)sizeof(pkt)) plen = (int)sizeof(pkt);
+                memcpy(pkt, qpkt, (size_t)plen);
+                free(qpkt);
+                got_pkt = 1;
+            } else if (dv == -1) {
+                return data_mode ? 0 : -1;   // qclosed
+            }
+            // dv==0 超时 → 继续（deadline 判超时）
+        } else {
+            int pr = poll(&pfd, 1, ms);
+            if (pr < 0) { if (errno == EINTR) continue; fprintf(stderr, "[quic] pump poll err=%s\n", strerror(errno)); return -2; }
+            if (pr == 0) return -1;  // 超时
+            socklen_t fromlen = sizeof(from);
+            ssize_t rl = recvfrom(qc->fd, pkt, sizeof(pkt), 0,
+                                  (struct sockaddr*)&from, &fromlen);
+            if (rl <= 0) { if (errno == EINTR || errno == EAGAIN) continue; fprintf(stderr, "[quic] pump recvfrom err=%s\n", strerror(errno)); return -2; }
+            plen = (int)rl;
+            got_pkt = 1;
+        }
+        if (!got_pkt) continue;
         // 更新 remote（服务端 accept 后可能变化，通常一致）
-        if (fromlen == sizeof(struct sockaddr_in)) {
-            memcpy(&qc->remote_sa, &from, fromlen);
+        if (from.ss_family == AF_INET) {
+            memcpy(&qc->remote_sa, &from, sizeof(from));
             qc->path.remote.addr = (struct sockaddr*)&qc->remote_sa;
-            qc->path.remote.addrlen = fromlen;
+            qc->path.remote.addrlen = sizeof(from);
         }
         // 过期定时器
         ngtcp2_conn_handle_expiry(qc->conn, quic_now());
         // 喂包
-        int rv = ngtcp2_conn_read_pkt(qc->conn, &qc->path, NULL, pkt, (size_t)rl,
+        int rv = ngtcp2_conn_read_pkt(qc->conn, &qc->path, NULL, pkt, (size_t)plen,
                                       quic_now());
         if (rv != 0) {
             fprintf(stderr, "[quic] read_pkt rv=%d (%s)\n", rv, ngtcp2_strerror(rv));
@@ -349,6 +452,433 @@ static int quic_pump(quic_conn* qc, int64_t timeout_ms, int data_mode, int64_t w
                 return data_mode ? 0 : -1;
             }
             return -2;
+        }
+    }
+}
+
+// ============================================================
+// M53：HTTP/3 server 多连接托管（收包路由 + 自动 accept + 每连接处理线程）
+// ------------------------------------------------------------
+// 背景：demo 级 quic_accept 每连接共享 listener fd 自行 recvfrom，多连接互相抢包。
+// M53 引入"单 fd 收包路由"：router 线程统一 recvfrom → 按包头 DCID 路由到对应
+// conn 的入包队列；每连接处理线程（quic_srv_conn_thr）消费队列泵 ngtcp2，
+// 握手完成后执行连接回调（默认 QUIC echo；HTTP/3 接入时由 runtime_h3.c 覆盖）。
+// 兼容性：旧 quic_accept / quic_pump 路径保持不变（m46–m52 不回归）。
+// ============================================================
+// 前向声明（定义于本段之后的 accept/listener 区）
+static int64_t quic_alloc_listener(quic_listener* ql);
+static quic_listener* quic_get_listener(int64_t id);
+static int64_t quic_alloc_conn(quic_conn* qc);
+static quic_conn* quic_get_conn(int64_t id);
+
+#define QUIC_QCAP 64
+
+// 全局连接回调（runtime_h3.c 在注册时设置；NULL → 默认 echo）
+static quic_conn_cb g_quic_conn_cb = NULL;
+static void*        g_quic_conn_ud = NULL;
+void px_quic_raw_h3_set_conn_cb(void (*cb)(int64_t conn, void* ud), void* ud) {
+    g_quic_conn_cb = cb;
+    g_quic_conn_ud = ud;
+}
+
+// 证书加载：cert/key 非空 → PEM 链/私钥；空 → 自签兜底（demo/测试）
+static SSL_CTX* quic_make_server_ctx_cert(const char* certfile, const char* keyfile) {
+    if (!certfile || !*certfile || !keyfile || !*keyfile)
+        return quic_make_server_ctx();
+    SSL_CTX* ctx = SSL_CTX_new(TLS_server_method());
+    if (!ctx) return NULL;
+    SSL_CTX_set_min_proto_version(ctx, TLS1_3_VERSION);
+    SSL_CTX_set_options(ctx, SSL_OP_SINGLE_ECDH_USE | SSL_OP_CIPHER_SERVER_PREFERENCE |
+                              SSL_OP_NO_ANTI_REPLAY);
+    SSL_CTX_set_mode(ctx, SSL_MODE_RELEASE_BUFFERS);
+    SSL_CTX_set_ciphersuites(ctx, "TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256:TLS_CHACHA20_POLY1305_SHA256");
+    SSL_CTX_set1_groups_list(ctx, "X25519:P-256");
+    SSL_CTX_set_alpn_select_cb(ctx, quic_alpn_select_cb, NULL);
+    if (SSL_CTX_use_certificate_chain_file(ctx, certfile) != 1 ||
+        SSL_CTX_use_PrivateKey_file(ctx, keyfile, SSL_FILETYPE_PEM) != 1) {
+        fprintf(stderr, "[quic] h3 server ctx 加载证书失败 cert=%s key=%s\n", certfile, keyfile);
+        ERR_print_errors_fp(stderr);
+        SSL_CTX_free(ctx);
+        return NULL;
+    }
+    if (ngtcp2_crypto_quictls_configure_server_context(ctx) != 0) {
+        fprintf(stderr, "[quic] h3 server ctx quictls configure FAIL\n");
+        SSL_CTX_free(ctx);
+        return NULL;
+    }
+    return ctx;
+}
+
+// 收包队列（push 由 router 线程、pop 由连接处理线程；统一持 g_quic_srv_mu）
+static int quic_q_init(quic_conn* qc) {
+    qc->qcap = QUIC_QCAP; qc->qhead = qc->qtail = qc->qn = 0; qc->qclosed = 0;
+    qc->qbufs = (uint8_t**)calloc(qc->qcap, sizeof(uint8_t*));
+    qc->qlens = (int*)calloc(qc->qcap, sizeof(int));
+    qc->qfroms = (struct sockaddr_storage*)calloc(qc->qcap, sizeof(struct sockaddr_storage));
+    if (!qc->qbufs || !qc->qlens || !qc->qfroms) {
+        if (qc->qbufs) free(qc->qbufs);
+        if (qc->qlens) free(qc->qlens);
+        if (qc->qfroms) free(qc->qfroms);
+        qc->qbufs = NULL; qc->qlens = NULL; qc->qfroms = NULL;
+        return -1;
+    }
+    pthread_cond_init(&qc->qcv, NULL);
+    return 0;
+}
+
+static void quic_q_push(quic_conn* qc, const uint8_t* pkt, int len,
+                        const struct sockaddr_storage* from) {
+    pthread_mutex_lock(&g_quic_srv_mu);
+    if (!qc || !qc->qbufs || qc->qclosed) { pthread_mutex_unlock(&g_quic_srv_mu); return; }
+    if (qc->qn >= qc->qcap) {   // 满：丢最旧（QUIC 会重传，MVP 可接受）
+        uint8_t* old = qc->qbufs[qc->qhead];
+        if (old) free(old);
+        qc->qbufs[qc->qhead] = NULL;
+        qc->qhead = (qc->qhead + 1) % qc->qcap;
+        qc->qn--;
+    }
+    size_t tail = (qc->qhead + qc->qn) % qc->qcap;
+    uint8_t* cp = (uint8_t*)malloc((size_t)len);
+    if (!cp) { pthread_mutex_unlock(&g_quic_srv_mu); return; }
+    memcpy(cp, pkt, (size_t)len);
+    qc->qbufs[tail] = cp;
+    qc->qlens[tail] = len;
+    if (from) qc->qfroms[tail] = *from;
+    qc->qn++;
+    pthread_cond_signal(&qc->qcv);
+    pthread_mutex_unlock(&g_quic_srv_mu);
+}
+
+// 返回 1 有包 / 0 超时 / -1 队列关闭
+static int quic_q_pop(quic_conn* qc, uint8_t** pkt, int* plen,
+                      struct sockaddr_storage* from, int timeout_ms) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec += timeout_ms / 1000;
+    ts.tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
+    if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
+    pthread_mutex_lock(&g_quic_srv_mu);
+    while (qc->qn == 0 && !qc->qclosed) {
+        if (pthread_cond_timedwait(&qc->qcv, &g_quic_srv_mu, &ts) != 0)
+            break;
+    }
+    if (qc->qn == 0) {
+        int r = qc->qclosed ? -1 : 0;
+        pthread_mutex_unlock(&g_quic_srv_mu);
+        return r;
+    }
+    *pkt = qc->qbufs[qc->qhead];
+    *plen = qc->qlens[qc->qhead];
+    if (from) *from = qc->qfroms[qc->qhead];
+    qc->qbufs[qc->qhead] = NULL;
+    qc->qhead = (qc->qhead + 1) % qc->qcap;
+    qc->qn--;
+    pthread_mutex_unlock(&g_quic_srv_mu);
+    return 1;
+}
+
+// 由收到的长头 Initial 包创建服务端连接（握手后续由处理线程队列泵完成）。
+// 复制自 bi_quic_accept 创建段，另登记初始 scid 到 listener cid 路由表。
+static int quic_srv_new_conn(quic_listener* ql, const uint8_t* pkt, size_t rl,
+                             const struct sockaddr_storage* from, socklen_t fromlen,
+                             int64_t* out_cid) {
+    ngtcp2_version_cid vc;
+    if (ngtcp2_pkt_decode_version_cid(&vc, pkt, rl, 0) != 0) return -1;
+    quic_conn qc0; memset(&qc0, 0, sizeof(qc0));
+    int64_t cid = quic_alloc_conn(&qc0);
+    if (cid < 0) return -1;
+    quic_conn* qc = &g_qconns[cid - 1];
+    qc->fd = ql->fd;
+    qc->ssl_ctx = NULL;
+    qc->owner_listener = (int)((ql - g_qlis) + 1);
+    if (quic_q_init(qc) != 0) { g_qconns[cid - 1].used = 0; return -1; }
+    memcpy(&qc->remote_sa, from, fromlen);
+    memcpy(&qc->local_sa, &ql->local, sizeof(ql->local));
+    qc->path.local.addr = (struct sockaddr*)&qc->local_sa;
+    qc->path.local.addrlen = sizeof(struct sockaddr_in);
+    qc->path.remote.addr = (struct sockaddr*)&qc->remote_sa;
+    qc->path.remote.addrlen = fromlen;
+
+    ngtcp2_cid cdcid;  // 对端连接 ID = 客户端 Initial 的 SCID
+    cdcid.datalen = vc.scidlen;
+    memcpy(cdcid.data, vc.scid, vc.scidlen);
+    ngtcp2_cid scid;
+    scid.datalen = QUIC_SCIDLEN;
+    if (RAND_bytes(scid.data, QUIC_SCIDLEN) != 1) {
+        if (qc->qbufs) { for (size_t qi = 0; qi < qc->qcap; qi++) if (qc->qbufs[qi]) free(qc->qbufs[qi]); free(qc->qbufs); }
+        if (qc->qlens) free(qc->qlens);
+        if (qc->qfroms) free(qc->qfroms);
+        pthread_cond_destroy(&qc->qcv);
+        g_qconns[cid - 1].used = 0;
+        return -1;
+    }
+    ngtcp2_settings settings;
+    ngtcp2_settings_default(&settings);
+    settings.initial_ts = quic_now();
+    settings.log_printf = quic_log_cb;
+    ngtcp2_transport_params params;
+    ngtcp2_transport_params_default(&params);
+    params.initial_max_streams_bidi = 16;
+    params.initial_max_streams_uni = 3;
+    params.initial_max_stream_data_bidi_local = 128 * 1024;
+    params.initial_max_stream_data_bidi_remote = 128 * 1024;
+    params.initial_max_stream_data_uni = 128 * 1024;
+    params.initial_max_data = 1024 * 1024;
+    params.original_dcid.datalen = vc.dcidlen;
+    memcpy(params.original_dcid.data, vc.dcid, vc.dcidlen);
+    params.original_dcid_present = 1;
+
+    ngtcp2_callbacks cb;
+    memset(&cb, 0, sizeof(cb));
+    cb.recv_client_initial = ngtcp2_crypto_recv_client_initial_cb;
+    cb.recv_crypto_data = ngtcp2_crypto_recv_crypto_data_cb;
+    cb.handshake_completed = quic_handshake_completed_cb;
+    cb.encrypt = ngtcp2_crypto_encrypt_cb;
+    cb.decrypt = ngtcp2_crypto_decrypt_cb;
+    cb.hp_mask = ngtcp2_crypto_hp_mask_cb;
+    cb.recv_stream_data = quic_recv_stream_data_cb;
+    cb.rand = quic_rand_cb;
+    cb.get_new_connection_id = quic_get_new_cid_cb;
+    cb.remove_connection_id = NULL;
+    cb.update_key = ngtcp2_crypto_update_key_cb;
+    cb.delete_crypto_aead_ctx = ngtcp2_crypto_delete_crypto_aead_ctx_cb;
+    cb.delete_crypto_cipher_ctx = ngtcp2_crypto_delete_crypto_cipher_ctx_cb;
+    cb.get_path_challenge_data = ngtcp2_crypto_get_path_challenge_data_cb;
+    cb.version_negotiation = ngtcp2_crypto_version_negotiation_cb;
+
+    int rv = ngtcp2_conn_server_new(&qc->conn, &cdcid, &scid, &qc->path,
+                                    vc.version, &cb, &settings, &params, NULL, qc);
+    if (rv != 0) {
+        fprintf(stderr, "[quic] srv_new server_new rv=%d (%s)\n", rv, ngtcp2_strerror(rv));
+        g_qconns[cid - 1].used = 0;
+        return -1;
+    }
+    SSL* ssl = SSL_new(ql->ssl_ctx);
+    if (!ssl) { ngtcp2_conn_del(qc->conn); qc->conn = NULL; g_qconns[cid - 1].used = 0; return -1; }
+    qc->ssl = ssl;
+    ngtcp2_conn_set_tls_native_handle(qc->conn, ssl);
+    qc->conn_ref.get_conn = quic_get_conn_from_ref;
+    qc->conn_ref.user_data = qc;
+    SSL_set_app_data(ssl, &qc->conn_ref);
+    SSL_set_accept_state(ssl);
+    // 登记初始 scid（客户端 1-RTT 短头包 DCID = 本端 scid）
+    quic_cid_add(ql, scid.data, scid.datalen, cid);
+    *out_cid = cid;
+    return 0;
+}
+
+// 默认连接回调：QUIC 流 echo（S1 多连接路由验证用）
+static void quic_srv_echo_cb(int64_t conn, void* ud);
+
+// 连接处理线程：泵握手 → 连接回调（HTTP/3 或 echo）→ 清理槽位
+static void* quic_srv_conn_thr(void* arg) {
+    int64_t cid = (int64_t)(intptr_t)arg;
+    quic_conn* qc = quic_get_conn(cid);
+    if (!qc) return NULL;
+    int lid = qc->owner_listener;
+    quic_listener* ql = (lid > 0 && lid <= QUIC_MAX) ? &g_qlis[lid - 1] : NULL;
+    int pr = quic_pump(qc, 10000, 0, -1);   // 泵到握手完成（最多 10s）
+    if (pr == 0 && qc->handshake_done && ql && ql->used) {
+        if (ql->conn_cb) ql->conn_cb(cid, ql->conn_ud);
+        else quic_srv_echo_cb(cid, NULL);
+    }
+    // 清理本连接（持 srv_mu 与 router/其他线程互斥）
+    pthread_mutex_lock(&g_quic_srv_mu);
+    if (qc->ssl) { SSL_free(qc->ssl); qc->ssl = NULL; }
+    if (qc->conn) { ngtcp2_conn_del(qc->conn); qc->conn = NULL; }
+    quic_stream_free_all(qc);
+    if (qc->qbufs) {
+        for (size_t i = 0; i < qc->qcap; i++) if (qc->qbufs[i]) free(qc->qbufs[i]);
+        free(qc->qbufs);
+    }
+    if (qc->qlens) free(qc->qlens);
+    if (qc->qfroms) free(qc->qfroms);
+    qc->qbufs = NULL; qc->qlens = NULL; qc->qfroms = NULL;
+    qc->qclosed = 1;
+    pthread_cond_destroy(&qc->qcv);
+    // 从 cid 路由表移除本连接所有项
+    if (ql) {
+        for (int i = 0; i < ql->cidtab_n; i++) {
+            if (ql->cidtab[i].conn == cid) {
+                memmove(&ql->cidtab[i], &ql->cidtab[i + 1],
+                        (size_t)(ql->cidtab_n - i - 1) * sizeof(quic_cid_entry));
+                ql->cidtab_n--;
+                i--;
+            }
+        }
+    }
+    memset(qc, 0, sizeof(*qc));   // used=0 → 槽位可复用
+    pthread_mutex_unlock(&g_quic_srv_mu);
+    return NULL;
+}
+
+static void quic_srv_start_conn_thr(int64_t cid) {
+    quic_conn* qc = quic_get_conn(cid);
+    if (!qc) return;
+    pthread_mutex_lock(&g_quic_srv_mu);
+    if (!qc->thr_started) {
+        qc->thr_started = 1;
+        pthread_t t;
+        if (pthread_create(&t, NULL, quic_srv_conn_thr, (void*)(intptr_t)cid) == 0)
+            qc->thr = t;
+        else
+            qc->thr_started = 0;
+    }
+    pthread_mutex_unlock(&g_quic_srv_mu);
+}
+
+// 收包路由线程：poll fd → recvfrom → 按 DCID 路由 / 新 Initial 自动建连接
+static void* quic_srv_router(void* arg) {
+    int64_t lid = (int64_t)(intptr_t)arg;
+    quic_listener* ql = quic_get_listener(lid);
+    if (!ql) return NULL;
+    struct pollfd pfd = { .fd = ql->fd, .events = POLLIN };
+    while (!ql->router_stop) {
+        int pr = poll(&pfd, 1, 200);
+        if (pr <= 0) continue;
+        uint8_t pkt[QUIC_PKT_BUF];
+        struct sockaddr_storage from;
+        socklen_t fromlen = sizeof(from);
+        ssize_t rl = recvfrom(ql->fd, pkt, sizeof(pkt), 0,
+                              (struct sockaddr*)&from, &fromlen);
+        if (rl <= 0) continue;
+        int is_long = (pkt[0] & 0x80) != 0;
+        if (is_long) {
+            ngtcp2_version_cid vc;
+            if (ngtcp2_pkt_decode_version_cid(&vc, pkt, (size_t)rl, 0) != 0) continue;
+            int64_t cid = quic_cid_find(ql, vc.dcid, vc.dcidlen);
+            if (cid < 0) {
+                int ptype = (pkt[0] >> 4) & 0x3;   // Initial=0 / 0-RTT=1 / Handshake=2 / Retry=3
+                if (ptype == 0 && vc.version != 0) {
+                    int64_t nc = -1;
+                    if (quic_srv_new_conn(ql, pkt, (size_t)rl, &from, fromlen, &nc) == 0) {
+                        quic_q_push(&g_qconns[nc - 1], pkt, (int)rl, &from);  // 首包入队
+                        quic_srv_start_conn_thr(nc);
+                    }
+                }
+                continue;
+            }
+            quic_conn* qc = quic_get_conn(cid);
+            if (qc) quic_q_push(qc, pkt, (int)rl, &from);
+        } else {
+            if ((size_t)rl < 1 + QUIC_SCIDLEN) continue;
+            int64_t cid = quic_cid_find(ql, pkt + 1, QUIC_SCIDLEN);  // 短头 DCID = 本端 scid
+            if (cid < 0) continue;
+            quic_conn* qc = quic_get_conn(cid);
+            if (qc) quic_q_push(qc, pkt, (int)rl, &from);
+        }
+    }
+    return NULL;
+}
+
+// M53：关闭托管 listener（停 router → 关托管 conn → 释放）
+static void quic_srv_close_listener(int64_t lid) {
+    quic_listener* ql = quic_get_listener(lid);
+    if (!ql) return;
+    ql->router_stop = 1;
+    if (ql->router_started) {
+        if (ql->fd >= 0) { shutdown(ql->fd, SHUT_RDWR); }
+        pthread_join(ql->router_thr, NULL);
+        ql->router_started = 0;
+    }
+    for (int i = 0; i < QUIC_MAX; i++) {
+        if (g_qconns[i].used && g_qconns[i].owner_listener == lid) {
+            quic_conn* qc = &g_qconns[i];
+            pthread_mutex_lock(&g_quic_srv_mu);
+            qc->qclosed = 1;
+            pthread_cond_signal(&qc->qcv);
+            pthread_mutex_unlock(&g_quic_srv_mu);
+            if (qc->thr_started) pthread_join(qc->thr, NULL);
+            // 连接线程退出时已清理槽位；若未启动线程则直接清
+            if (g_qconns[i].used) quic_srv_conn_thr((void*)(intptr_t)(i + 1));
+        }
+    }
+    if (ql->ssl_ctx) { SSL_CTX_free(ql->ssl_ctx); ql->ssl_ctx = NULL; }
+    if (ql->fd >= 0) { close(ql->fd); }
+    memset(ql, 0, sizeof(*ql));
+}
+
+// 语言 API：quic_h3_listen(port:int, cert:str, key:str) → listener id
+static LXValue bi_quic_h3_listen(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || args[0].type != PX_INT) px_error("quic_h3_listen 需要 (port: int[, cert: str, key: str])");
+    int port = (int)args[0].as.i;
+    const char* cert = "";
+    const char* key = "";
+    if (nargs >= 3 && args[1].type == PX_STR && args[2].type == PX_STR) {
+        cert = args[1].as.obj->as.str.data;
+        key = args[2].as.obj->as.str.data;
+    }
+    if (!g_quic_init) {
+        ngtcp2_crypto_quictls_init();
+        OPENSSL_init_ssl(0, NULL);
+        OSSL_PROVIDER_load(NULL, "default");
+        g_quic_init = 1;
+    }
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return px_int(-1);
+    int one = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port = htons((uint16_t)port);
+    if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+        close(fd);
+        return px_int(-1);
+    }
+    SSL_CTX* sctx = quic_make_server_ctx_cert(cert, key);
+    if (!sctx) { close(fd); return px_int(-1); }
+    quic_listener ql0; memset(&ql0, 0, sizeof(ql0));
+    int64_t id = quic_alloc_listener(&ql0);
+    if (id < 0) { SSL_CTX_free(sctx); close(fd); return px_int(-1); }
+    quic_listener* ql = &g_qlis[id - 1];
+    ql->fd = fd;
+    ql->local = addr;
+    ql->ssl_ctx = sctx;
+    ql->used = 1;
+    ql->conn_cb = g_quic_conn_cb;
+    ql->conn_ud = g_quic_conn_ud;
+    ql->router_stop = 0;
+    ql->router_started = 1;
+    if (pthread_create(&ql->router_thr, NULL, quic_srv_router, (void*)(intptr_t)id) != 0) {
+        ql->router_started = 0;
+        SSL_CTX_free(sctx);
+        close(fd);
+        memset(ql, 0, sizeof(*ql));
+        return px_int(-1);
+    }
+    return px_int(id);
+}
+
+// ============================================================
+// ============================================================
+// raw：启动 h3 server listener（语言 bi_quic_h3_listen 的 raw 封装）
+int64_t px_quic_raw_h3_listen(int port, const char* cert, const char* key) {
+    LXValue a[3];
+    a[0] = px_int(port);
+    a[1] = px_str(cert ? cert : "");
+    a[2] = px_str(key ? key : "");
+    LXValue r = bi_quic_h3_listen(a, 3, NULL);
+    return r.type == PX_INT ? r.as.i : -1;
+}
+
+// 默认连接回调：QUIC 流 echo（S1 多连接路由验证用）
+static void quic_srv_echo_cb(int64_t conn, void* ud) {
+    (void)ud;
+    int idle = 0;
+    while (idle < 3) {
+        quic_conn* qc = quic_get_conn(conn);
+        if (!qc || qc->peer_closed) break;
+        int64_t sid = px_quic_raw_poll(conn, 2000);
+        if (sid < 0) { idle++; continue; }
+        idle = 0;
+        uint8_t buf[65536];
+        for (;;) {
+            int64_t got = px_quic_raw_recv_on(conn, sid, buf, (int)sizeof(buf), 100);
+            if (got <= 0) break;
+            px_quic_raw_send_on(conn, sid, buf, (int)got, 0);
         }
     }
 }
@@ -865,8 +1395,13 @@ static LXValue bi_quic_close(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_quic_close_listener(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 1 || args[0].type != PX_INT) px_error("quic_close_listener 需要 (listener: int)");
-    quic_listener* ql = quic_get_listener(args[0].as.i);
+    int64_t lid = args[0].as.i;
+    quic_listener* ql = quic_get_listener(lid);
     if (!ql) return px_bool(false);
+    if (ql->router_started) {          // M53：托管 listener → 停路由 + 关 conn
+        quic_srv_close_listener(lid);
+        return px_bool(true);
+    }
     if (ql->ssl_ctx) { SSL_CTX_free(ql->ssl_ctx); ql->ssl_ctx = NULL; }
     close(ql->fd);
     memset(ql, 0, sizeof(*ql));
@@ -1004,6 +1539,7 @@ void px_register_quic(void) {
     px_set_global("quic_poll", px_native("quic_poll", bi_quic_poll));
     px_set_global("quic_close", px_native("quic_close", bi_quic_close));
     px_set_global("quic_close_listener", px_native("quic_close_listener", bi_quic_close_listener));
+    px_set_global("quic_h3_listen", px_native("quic_h3_listen", bi_quic_h3_listen));
     px_ffi_register("quic_listen", bi_quic_listen);
     px_ffi_register("quic_accept", bi_quic_accept);
     px_ffi_register("quic_connect", bi_quic_connect);
@@ -1016,4 +1552,5 @@ void px_register_quic(void) {
     px_ffi_register("quic_poll", bi_quic_poll);
     px_ffi_register("quic_close", bi_quic_close);
     px_ffi_register("quic_close_listener", bi_quic_close_listener);
+    px_ffi_register("quic_h3_listen", bi_quic_h3_listen);
 }
