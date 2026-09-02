@@ -12,6 +12,28 @@
 
 ---
 
+## ⚖️ License
+
+![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)
+
+PuXian 采用 **Apache License 2.0** 开源 —— 任何人可自由使用、修改、分发与商用（含闭源商用），无需授权费。完整条款见根目录 [`LICENSE`](LICENSE)。
+
+对本项目使用者最重要的几点：
+
+- **编译产物不受许可证约束**：你用 PuXian 写出的程序/服务（如 ws-web），可任意闭源商用，不构成衍生作品；
+- 修改并分发源码时，需保留版权声明与本 License 副本（Apache 宽松协议，不要求你的修改开源）；
+- **贡献方式**：项目初期以提 issue 为主（bug 报告 / 功能建议 / 使用反馈），暂不开放代码 PR，路线由核心团队掌控；
+- **Copyright © 2026 The PuXian Authors**
+
+---
+
+## ® Trademark
+
+**达者同游** 为南瞻集团注册商标；**PuXian** 为达者同游团队项目名称（非注册商标）。
+未经书面许可，不得将上述名称用于标识非达者同游团队官方发布的产品或服务。
+
+---
+
 ## 🎉 当前状态：编译器已自举
 
 | 状态 | 说明 |
@@ -234,3 +256,17 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 
 - **ws-web**（`ws-web/`）：第一个生产应用，HTTP + SQLite 服务，用于真实场景 dogfooding 验证 PuXian。
 - **问题反馈与贡献**：发现问题请附最小复现用例（单个 .px + 期望/实际输出）提交 issue（label：`ws-web-blocker` / `M-B9b`）；欢迎提交 PR 参与改进。
+
+---
+
+## 💡 Credits
+
+PuXian 由 **达者同游团队** 开发，并使用 **wsAgent（文殊智能体）** 辅助设计与实现：
+
+| 中文名 | 英文名 | 类型 | 角色 |
+|---|---|---|---|
+| 本源 | Benyuan | 人类 Human | 创始人 / 总架构师（方向与架构决策、最终验收） |
+| 东月 | Dongyue | 智能体 wsAgent | 开发工程师（编码实现） |
+| 清歌 | Qingge | 智能体 wsAgent | 设计师 / 质量发现（设计辅助与问题发现） |
+
+> 本语言由 wsAgent（文殊智能体）辅助开发 —— 面向 AI 高效编程的语言，由 AI 参与编写，dogfooding 自证。团队成员明细见 [`AUTHORS.md`](AUTHORS.md)。
