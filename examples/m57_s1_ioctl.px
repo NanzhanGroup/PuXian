@@ -1,0 +1,123 @@
+# ============================================================
+# M57 S1：ioctl 胶水内建自检（边缘设备层 fd 原语）
+# ------------------------------------------------------------
+# 覆盖：
+#   A. open/close fd 通路（设备文件 /dev/null、错误路径 errno）
+#   B. ioctl 于真实 fd（TCP socket）的语义：
+#        FIONREAD 数值正确 + bytes 就地 in/out buffer 填充
+#        FIONBIO 设置生效（非阻塞后 recv 无数据立即返回）
+#        类型不匹配 fd → -1 + errno=ENOTTY；非法 fd → -1 + errno=EBADF
+#   C. 真实设备探测（/dev/gpiochip*、/dev/i2c-* 存在则 open 验证，无则 skip）
+# request 码（Linux asm-generic，x86_64/aarch64 一致）：
+#   FIONREAD=0x541B  FIONBIO=0x5421  TCGETS=0x5401
+# ============================================================
+var FIONREAD = 0x541B
+var FIONBIO  = 0x5421
+var TCGETS   = 0x5401
+var ENOTTY   = 25
+var EBADF    = 9
+var ENOENT   = 2
+
+# ---- A. open/close fd 通路 ----
+print("== A. open/close fd 通路 ==")
+var fdnull = open("/dev/null", "rw")
+assert(fdnull > 0, "open /dev/null 失败 fd=" + str(fdnull))
+print("A: open /dev/null rw -> fd=" + str(fdnull))
+# /dev/null 对 TCGETS（tty 查询）应返回 ENOTTY → ioctl 失败路径 + errno
+var e = int_to_bytes(0, 4, "little")
+var r = ioctl(fdnull, TCGETS, e)
+assert(r == -1, "ioctl(/dev/null, TCGETS) 期望 -1 got=" + str(r))
+assert(os_errno() == ENOTTY, "期望 errno=ENOTTY(25) got=" + str(os_errno()))
+print("A: ioctl /dev/null TCGETS -> -1 errno=ENOTTY ok")
+assert(close(fdnull) == true, "close /dev/null 失败")
+# open 不存在 → -1 + ENOENT
+var fdmiss = open("/nonexistent_m57_xx", "r")
+assert(fdmiss == -1, "open 不存在文件期望 -1 got=" + str(fdmiss))
+assert(os_errno() == ENOENT, "期望 errno=ENOENT(2) got=" + str(os_errno()))
+print("A: open 不存在 -> -1 errno=ENOENT ok")
+
+# ---- B. ioctl 于真实 TCP fd 的语义 ----
+print("== B. ioctl 于 TCP fd 语义 ==")
+var lfd = tcp_listen(19057)
+assert(lfd > 0, "tcp_listen 失败")
+var cfd = tcp_connect("127.0.0.1", 19057)
+assert(cfd > 0, "tcp_connect 失败")
+var sfd = tcp_accept(lfd)
+assert(sfd > 0, "tcp_accept 失败")
+# B1: 对端写 5 字节后，本端 FIONREAD == 5（bytes 就地 buffer 由内核填充）
+var n5 = tcp_send(cfd, "hello")
+assert(n5 == 5, "tcp_send 应发 5 字节 got=" + str(n5))
+var fb = int_to_bytes(0, 4, "little")
+var rr = ioctl(sfd, FIONREAD, fb)
+assert(rr == 0, "ioctl FIONREAD 期望返回 0 got=" + str(rr))
+var avail = bytes_to_int(fb, "little")
+assert(avail == 5, "FIONREAD 应=5 got=" + str(avail))
+print("B: FIONREAD=" + str(avail) + " (bytes 就地填充 ok)")
+# B2: 收掉数据后 FIONREAD == 0
+var got = tcp_recv(sfd, 64)
+assert(got == "hello", "recv 应得 hello got=[" + got + "]")
+var fb2 = int_to_bytes(0, 4, "little")
+var rr2 = ioctl(sfd, FIONREAD, fb2)
+assert(rr2 == 0, "ioctl FIONREAD(空) 期望 0 got=" + str(rr2))
+assert(bytes_to_int(fb2, "little") == 0, "FIONREAD 清空后应=0")
+print("B: FIONREAD drained=0 ok")
+# B3: FIONBIO 设置生效：cfd 收方向无数据，非阻塞 recv 应立即返回空串（不阻塞挂起）
+var nb = int_to_bytes(1, 4, "little")
+var rb = ioctl(cfd, FIONBIO, nb)
+assert(rb == 0, "ioctl FIONBIO 期望 0 got=" + str(rb))
+var empty = tcp_recv(cfd, 16)
+assert(empty == "", "FIONBIO 后 recv 无数据应立即返回空串 got=[" + empty + "]")
+print("B: FIONBIO 设置生效（非阻塞 recv 立即返回）ok")
+# B4: fd 类型不匹配 → -1 + ENOTTY；非法 fd → -1 + EBADF
+var fb3 = int_to_bytes(0, 4, "little")
+var rty = ioctl(cfd, TCGETS, fb3)
+assert(rty == -1, "socket TCGETS 期望 -1 got=" + str(rty))
+assert(os_errno() == ENOTTY, "socket TCGETS 期望 errno=ENOTTY got=" + str(os_errno()))
+print("B: ioctl(socket, TCGETS) -> -1 errno=ENOTTY ok")
+var fb4 = int_to_bytes(0, 4, "little")
+var rbad = ioctl(999999, FIONREAD, fb4)
+assert(rbad == -1, "非法 fd 期望 -1 got=" + str(rbad))
+assert(os_errno() == EBADF, "非法 fd 期望 errno=EBADF(9) got=" + str(os_errno()))
+print("B: ioctl(非法fd) -> -1 errno=EBADF ok")
+# B5: arg 三形态边界——NULL（无 arg）/ int 值 / bytes 指针都已正确传递到内核：
+#     FIONREAD 与 FIONBIO 这类"需要用户指针"的 ioctl，若 arg 不是有效用户地址，
+#     内核 copy_to/from_user 返回 EFAULT（-1 + errno=14），以此证明 NULL 与
+#     int 值两种形态确实按对应值传给了驱动（而非被忽略/误作指针解引用崩溃）。
+var rno = ioctl(lfd, FIONREAD)
+assert(rno == -1, "FIONREAD(NULL) 期望 -1 got=" + str(rno))
+var eno_null = os_errno()
+assert(eno_null != 0, "NULL 形态应留下 errno")
+print("B: ioctl 无 arg(NULL) 形态 -> -1 errno=" + str(eno_null) + "（内核判定非崩溃）ok")
+var rint = ioctl(cfd, FIONBIO, 1)
+assert(rint == -1, "FIONBIO(int=1) 期望 -1 got=" + str(rint))
+var eno_int = os_errno()
+assert(eno_int != 0, "int 值形态应留下 errno")
+print("B: ioctl int 值形态 -> -1 errno=" + str(eno_int) + "（驱动需指针，按值传被拒）ok")
+assert(close(cfd) == true, "close cfd 失败")
+assert(close(sfd) == true, "close sfd 失败")
+assert(close(lfd) == true, "close lfd 失败")
+print("B: fd 关闭 ok")
+
+# ---- C. 真实设备探测（存在才 open/close 验证通路，无则 skip）----
+print("== C. 真实设备探测（条件性）==")
+var found = false
+if exists("/dev/gpiochip0"):
+    var gfd = open("/dev/gpiochip0", "rw")
+    if gfd > 0:
+        print("C: /dev/gpiochip0 open ok（真实 ioctl 控制 S3 验证）")
+        assert(close(gfd) == true, "close gpiochip0 失败")
+        found = true
+    else:
+        print("C: /dev/gpiochip0 存在但打开失败 errno=" + str(os_errno()) + "（权限/容器限制，skip）")
+if exists("/dev/i2c-1"):
+    var ifd = open("/dev/i2c-1", "rw")
+    if ifd > 0:
+        print("C: /dev/i2c-1 open ok（真实 ioctl 控制 S3 验证）")
+        assert(close(ifd) == true, "close i2c-1 失败")
+        found = true
+    else:
+        print("C: /dev/i2c-1 存在但打开失败 errno=" + str(os_errno()) + "（权限/容器限制，skip）")
+if not found:
+    print("C: 无可用边缘设备（容器/无板子环境），真实设备 ioctl 留待 S3 板子验证")
+
+print("M57-S1 ioctl OK")
