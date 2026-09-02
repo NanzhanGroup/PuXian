@@ -8,7 +8,7 @@
 - **语法 = Python 子集**：AI 在海量 Python 语料上训练，语法越像 Python，AI 生成的代码准确率越高；
 - **类型 = Rust 风格**：渐进类型（不写类型直接跑，写类型拿性能）、枚举、模式匹配、Option/Result；
 - **并发 = Go 风格**：`spawn` + `channel` + `select`，协程真并发；
-- **出身 = C 编译器**：编译后端生成 C 源码，经 gcc 静态编译为**零依赖单二进制**（无 Go/Google、无 Rust/Mozilla 色彩，信创/政府场景友好）。
+- **出身 = C 编译器**：编译后端生成 C 源码，经 gcc 静态编译为**零依赖单二进制**（无 Go/Google、无 Rust/Mozilla 色彩，供应链中立、部署极简）。
 
 ---
 
@@ -233,5 +233,4 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 ## 生态与合作
 
 - **ws-web**（`ws-web/`）：第一个生产应用，HTTP + SQLite 服务，用于真实场景 dogfooding 验证 PuXian。
-- **语言缺陷上报**：发现问题请写最小复现用例（单个 .px + 期望/实际输出），标注 `ws-web-blocker` 优先处理。
-- **协作分工**：清歌负责用 PuXian 写应用（M-B9b），东月负责编译器维护 + 响应 blocker issue。
+- **问题反馈与贡献**：发现问题请附最小复现用例（单个 .px + 期望/实际输出）提交 issue（label：`ws-web-blocker` / `M-B9b`）；欢迎提交 PR 参与改进。
