@@ -1,51 +1,307 @@
 # ============================================================
-# ws-web —— 用 PuXian 写的第一个生产应用（M-B9b 开工骨架）
+# ws-web —— 用 PuXian 写的第一个生产应用（M-B9b.1 纯静态服务器核心）
 # ------------------------------------------------------------
-# 语言面：Mini 子集（docs/MINI_SUBSET.md，自举编译器锁定）
-# 运行：
-#   ./run.sh                     # 解释执行（开发调试）
-#   ./build.sh && ./build/ws-web # 编译为静态二进制（生产）
+# 对齐 Go 版 v0.3.0：多站点 vhost / deny / SPA fallback / 反向代理 / 访问日志 / TLS-SNI / HTTP→HTTPS 301
+# 运行（生产，编译模式）：
+#   ./build.sh && ./build/ws-web --config /path/config.json
 # 端点：
-#   GET  /healthz     健康检查 → {"ok": true, "uptime": ms}
-#   GET  /api/time    服务器时间戳
-#   GET  /api/items   列出全部记录（SQLite 持久化）
-#   POST /api/items   新增记录（body: JSON {"name": "..."}）
-# 注意：Mini 子集禁止多行 list/dict 字面量 → 所有容器单行书写
+#   GET /healthz    健康检查 → {"ok": true, "uptime": ms}
+# 说明：
+#   - 所有站点注册 vhost(host, handler)，handler 内完成 deny/SPA/反代/静态文件全链路
+#   - 访问日志在 handler 内 append_file（px_serve 静态分支才自动记，vhost handler 分支需自记）
+#   - Mini 子集：多行 list/dict 字面量禁止、函数内不嵌套 def、fn 不捕获外部变量
 # ============================================================
 
-# ---- 全局状态（顶层 var 即全局变量，函数内可读写）----
-db = sqlite_open("ws-web.db")
+version = "0.4.0"
 started_at = now_ms()
-port = 8080
 
-def init_db():
-    sqlite_exec(db, "CREATE TABLE IF NOT EXISTS items(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, ts INTEGER)")
+# ---- 全局配置（load_config 填充） ----
+cfg_sites = {"_": 0}
+cfg_sites.remove("_")
+http_port = 80
+https_port = 443
+cert_dir = "/etc/nginx/ssl"
+default_root = "/data/www"
+access_log_path = ""
+spawn_http = 1
+log_ready = 0
 
-def json_resp(obj):
-    return {"status": 200, "body": json_stringify(obj), "headers": {"Content-Type": "application/json"}}
+# ==================== 配置加载 ====================
 
-def handle_request(req):
-    p = req.path
+def default_config():
+    c = {"sites": {"_": 0}}
+    c["sites"].remove("_")
+    wsai = {"root": "/data/www/wsai_chat", "spa_fallback": true, "proxy_routes": [{"prefix": "/wxcode/", "target": "http://127.0.0.1:8901"}]}
+    soft = {"root": "/data/www/soft_wsai_chat", "deny_dirs": ["package.bak_", ".bak", "backup", ".git", ".svn", "node_modules"], "deny_exts": [".db", ".sqlite", ".sqlite3", ".key", ".pem", ".p12", ".pfx", ".crt", ".csr", ".env", ".log", ".sh", ".md5", ".sha256", ".py"]}
+    mta = {"root": "/data/www/mta_sts_wsai_chat"}
+    c["sites"]["wsai.chat"] = wsai
+    c["sites"]["soft.wsai.chat"] = soft
+    c["sites"]["mta-sts.wsai.chat"] = mta
+    return c
+
+def load_config(path):
+    c = null
+    if path != "":
+        if exists(path):
+            c = json_parse(read_file(path))
+    elif exists("/etc/ws-web/config.json"):
+        c = json_parse(read_file("/etc/ws-web/config.json"))
+    elif exists("config.json"):
+        c = json_parse(read_file("config.json"))
+    if c == null:
+        return default_config()
+    return c
+
+def parse_port(addr, defv):
+    i = 0
+    while i < len(addr):
+        if addr[i] == ":":
+            s = addr[i + 1:]
+            if s != "":
+                return int(s)
+            return defv
+        i += 1
+    return defv
+
+def apply_config(c):
+    http_port = 80
+    https_port = 443
+    cert_dir = "/etc/nginx/ssl"
+    default_root = "/data/www"
+    access_log_path = ""
+    spawn_http = 1
+    if c.has("http_addr"):
+        http_port = parse_port(c["http_addr"], 80)
+    if c.has("https_addr"):
+        https_port = parse_port(c["https_addr"], 443)
+    if c.has("cert_dir"):
+        cert_dir = c["cert_dir"]
+    if c.has("default_root"):
+        default_root = c["default_root"]
+    if c.has("access_log"):
+        access_log_path = c["access_log"]
+    if c.has("spawn_http"):
+        spawn_http = c["spawn_http"]
+    if c.has("sites"):
+        cfg_sites = c["sites"]
+    # 补 www 别名
+    hosts = cfg_sites.keys()
+    for h in hosts:
+        if not starts_with(h, "www.") and not cfg_sites.has("www." + h):
+            cfg_sites["www." + h] = cfg_sites[h]
+
+# ==================== 工具 ====================
+
+def host_only(h):
+    i = 0
+    while i < len(h):
+        if h[i] == ":":
+            return h[0:i]
+        i += 1
+    return h
+
+def ext_of(path):
+    i = len(path) - 1
+    while i >= 0:
+        if path[i] == ".":
+            return path[i:]
+        i -= 1
+    return ""
+
+def content_type(path):
+    ext = ext_of(path)
+    if ext == ".html" or ext == ".htm":
+        return "text/html; charset=utf-8"
+    if ext == ".css":
+        return "text/css; charset=utf-8"
+    if ext == ".js":
+        return "application/javascript; charset=utf-8"
+    if ext == ".json":
+        return "application/json; charset=utf-8"
+    if ext == ".png":
+        return "image/png"
+    if ext == ".jpg" or ext == ".jpeg":
+        return "image/jpeg"
+    if ext == ".gif":
+        return "image/gif"
+    if ext == ".svg":
+        return "image/svg+xml"
+    if ext == ".ico":
+        return "image/x-icon"
+    if ext == ".webp":
+        return "image/webp"
+    if ext == ".txt":
+        return "text/plain; charset=utf-8"
+    if ext == ".xml":
+        return "application/xml; charset=utf-8"
+    if ext == ".pdf":
+        return "application/pdf"
+    if ext == ".zip":
+        return "application/zip"
+    if ext == ".gz" or ext == ".tgz":
+        return "application/gzip"
+    if ext == ".tar":
+        return "application/x-tar"
+    return "application/octet-stream"
+
+def write_access_log(host, method, path, status, ms):
+    if access_log_path == "":
+        return
+    line = str(now_ms() // 1000) + " " + host + " " + method + " " + path + " " + str(status) + " " + str(ms) + "ms\n"
+    append_file(access_log_path, line)
+
+# ==================== deny / SPA / 反代 ====================
+
+def deny_check(site, path):
+    segs = split(path, "/")
+    for seg in segs:
+        if seg == "" or seg == ".well-known":
+            continue
+        if starts_with(seg, "."):
+            return true
+        if site.has("deny_dirs"):
+            dd = site["deny_dirs"]
+            for d in dd:
+                if contains(seg, d):
+                    return true
+    ext = ext_of(path)
+    if ext != "" and site.has("deny_exts"):
+        de = site["deny_exts"]
+        for e in de:
+            if ext == e:
+                return true
+    return false
+
+def static_file(site, p):
+    root = site["root"]
+    if contains(p, ".."):
+        return null
+    full = root + p
+    idx = full + "/index.html"
+    if exists(idx):
+        return {"status": 200, "body": read_file(idx), "headers": {"Content-Type": "text/html; charset=utf-8"}}
+    if exists(full):
+        return {"status": 200, "body": read_file(full), "headers": {"Content-Type": content_type(full)}}
+    return null
+
+def spa_fallback(site):
+    idx = site["root"] + "/index.html"
+    if exists(idx):
+        return {"status": 200, "body": read_file(idx), "headers": {"Content-Type": "text/html; charset=utf-8"}}
+    return null
+
+def proxy_forward(target, prefix, req):
+    sub = req["path"][len(prefix):]
+    if sub == "" or not starts_with(sub, "/"):
+        sub = "/" + sub
+    url = target + sub
+    if req["query"] != "":
+        url = url + "?" + req["query"]
+    hdrs = {"_": 0}
+    hdrs.remove("_")
+    hs = req["headers"]
+    for k in hs.keys():
+        kl = to_lower(k)
+        if kl == "content-type" or kl == "authorization" or kl == "cookie" or kl == "x-requested-with":
+            hdrs[k] = hs[k]
+    resp = http_request(url, req["method"], req["body"], hdrs)
+    rh = {"_": 0}
+    rh.remove("_")
+    if resp["headers"].has("Content-Type"):
+        rh["Content-Type"] = resp["headers"]["Content-Type"]
+    return {"status": resp["status"], "body": resp["body"], "headers": rh}
+
+# ==================== vhost handler ====================
+
+def site_handler(req):
+    t0 = now_ms()
+    host = host_only(req["headers"]["Host"])
+    if host == "" or not cfg_sites.has(host):
+        return {"status": 404, "body": "not found", "headers": {"Content-Type": "text/plain; charset=utf-8"}}
+    site = cfg_sites[host]
+    p = req["path"]
     if p == "/healthz":
-        return json_resp({"ok": true, "uptime": now_ms() - started_at})
-    if p == "/api/time":
-        return json_resp({"ts": now_ms()})
-    if p == "/api/items":
-        rows = sqlite_query(db, "SELECT id, name, ts FROM items ORDER BY id")
-        items = []
-        for r in rows:
-            items.append({"id": r["id"], "name": r["name"], "ts": r["ts"]})
-        return json_resp({"items": items})
-    if p == "/api/items/add":
-        sqlite_exec(db, "INSERT INTO items(name, ts) VALUES (?, ?)", [req.body, now_ms()])
-        return json_resp({"ok": true, "id": sqlite_last_insert_rowid(db)})
-    return {"status": 404, "body": json_stringify({"error": "not found"}), "headers": {"Content-Type": "application/json"}}
+        r = {"status": 200, "body": json_stringify({"ok": true, "uptime": now_ms() - started_at}), "headers": {"Content-Type": "application/json"}}
+        write_access_log(host, req["method"], p, 200, now_ms() - t0)
+        return r
+    # 1. 反代路由
+    if site.has("proxy_routes"):
+        prs = site["proxy_routes"]
+        for pr in prs:
+            if starts_with(p, pr["prefix"]):
+                r = proxy_forward(pr["target"], pr["prefix"], req)
+                write_access_log(host, req["method"], p, r["status"], now_ms() - t0)
+                return r
+    # 2. deny
+    if deny_check(site, p):
+        write_access_log(host, req["method"], p, 403, now_ms() - t0)
+        return {"status": 403, "body": "forbidden", "headers": {"Content-Type": "text/plain; charset=utf-8"}}
+    # 3. 静态文件
+    r = static_file(site, p)
+    if r == null and site.has("spa_fallback") and site["spa_fallback"] == true:
+        r = spa_fallback(site)
+    if r == null:
+        write_access_log(host, req["method"], p, 404, now_ms() - t0)
+        return {"status": 404, "body": "not found", "headers": {"Content-Type": "text/plain; charset=utf-8"}}
+    write_access_log(host, req["method"], p, r["status"], now_ms() - t0)
+    return r
+
+# ==================== 80 → 301 ====================
+
+def redirect_http(req):
+    host = host_only(req["headers"]["Host"])
+    return {"status": 301, "headers": {"Location": "https://" + host + req["target"]}, "body": ""}
+
+# ==================== TLS / 启动 ====================
+
+def register_tls():
+    hosts = cfg_sites.keys()
+    any_cert = 0
+    for h in hosts:
+        crt = cert_dir + "/" + h + ".crt"
+        key = cert_dir + "/" + h + ".key"
+        if exists(crt) and exists(key):
+            tls_server(crt, key, h)
+            any_cert = 1
+    return any_cert
+
+def serve_https():
+    opts = {"_": 0}
+    opts.remove("_")
+    px_serve(https_port, default_root, 10000, opts)
 
 def main():
-    init_db()
-    print("ws-web listening on http://127.0.0.1:" + str(port))
-    spawn http_serve(port, handle_request)
-    while true:
-        sleep(1000)
+    av = args()
+    cfg_path = ""
+    i = 1
+    while i < len(av):
+        a = av[i]
+        if a == "--version":
+            print("ws-web " + version)
+            return
+        if a == "--config":
+            if i + 1 < len(av):
+                cfg_path = av[i + 1]
+                i = i + 1
+        elif starts_with(a, "--config="):
+            cfg_path = a[9:]
+        i = i + 1
+    c = load_config(cfg_path)
+    apply_config(c)
+    # 注册 vhost：全部走 handler（deny/SPA/反代/静态全链路在 handler 内）
+    hosts = cfg_sites.keys()
+    for h in hosts:
+        vhost(h, site_handler)
+    # 兜底：未注册 host 走 handler → 404
+    vhost("*", site_handler)
+    # TLS
+    has_tls = register_tls()
+    if has_tls == 0:
+        print("ws-web: no certs in " + cert_dir + ", plain HTTP mode")
+    # 80 → 301
+    if spawn_http == 1:
+        spawn http_serve(http_port, redirect_http)
+    # 443 主服务
+    serve_https()
 
 main()

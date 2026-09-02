@@ -1,0 +1,25 @@
+{
+  "http_addr": ":80",
+  "https_addr": ":443",
+  "cert_dir": "/etc/nginx/ssl",
+  "default_root": "/data/www",
+  "access_log": "/var/log/ws-web/access.log",
+  "spawn_http": 1,
+  "sites": {
+    "wsai.chat": {
+      "root": "/data/www/wsai_chat",
+      "spa_fallback": true,
+      "proxy_routes": [
+        { "prefix": "/wxcode/", "target": "http://127.0.0.1:8901" }
+      ]
+    },
+    "soft.wsai.chat": {
+      "root": "/data/www/soft_wsai_chat",
+      "deny_dirs": ["package.bak_", ".bak", "backup", ".git", ".svn", "node_modules"],
+      "deny_exts": [".db", ".sqlite", ".sqlite3", ".key", ".pem", ".p12", ".pfx", ".crt", ".csr", ".env", ".log", ".sh", ".md5", ".sha256", ".py"]
+    },
+    "mta-sts.wsai.chat": {
+      "root": "/data/www/mta_sts_wsai_chat"
+    }
+  }
+}
