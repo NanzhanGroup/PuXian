@@ -40,8 +40,21 @@
   NULL/int/bytes 三形态正确传递）；open/close 设备文件通路（/dev/null）+ 失败 errno；
   真实设备（/dev/gpiochip*、/dev/i2c-*）条件性探测。request 码为 32 位 _IOC 编码
   （语言用 0x 字面量，如 FIONREAD=0x541B）。
-- **D2 · mmap/munmap 语言内建（S2）**
-  映射 fd（帧缓冲 /dev/fb0、共享内存、DMA 缓冲）→ bytes 视图；配合 ioctl 完成设备读写。
+- **D2 · fd 数据通道 + mmap/munmap 语言内建（S2）**
+  延续 S1 注释承诺（read/write 在 fd 上的封装随 S2 一并设计）+ 设备映射：
+  - `read(fd, maxlen) → bytes`（实际读到的字节；0 长度 = EOF；失败 int -1 + os_errno()）
+  - `write(fd, data) → int`（实际写入字节数；失败 -1 + os_errno()；data 为 bytes/str）
+  - `mmap(fd, length[, offset]) → bytes`（PROT_READ|PROT_WRITE + MAP_SHARED 活映射视图；
+    data 直接指向 mmap 映射区，GC sweep 自动 munmap——LXObject 位域新增 is_mmap；
+    失败 int -1 + os_errno()；length 1..INT_MAX-1，offset 须页对齐）
+  - `munmap(bytes) → bool`（显式提前解除；解除后 data=NULL/len=0/is_mmap=0 防 double-unmap）
+  - `mem_write(mmap_bytes, offset, data) → int`（就地写映射区；bytes_set 是 COW 复制语义改不了
+    映射内存——帧缓冲写像素/共享内存写数据必须就地写底层区 → 专属内建；普通 bytes 保持
+    COW 不可就地，mem_write 仅接受 mmap 视图）
+  验证：文件 MAP_SHARED 活映射（mem_write→read_at 可见 / write_at→视图可见 / offset 页对齐
+  子视图 / 超长截断到视图尾）；mmap 视图作 ioctl 就地 buffer（FIONREAD 内核写映射区）；
+  munmap 解除语义（len=0 / 重复 false / 非映射 false）；GC sweep 自动 munmap 300 轮不崩；
+  失败 errno。read/write 以 TCP socket + 文件 fd 走真实内核路径（x86 mock 语义验证）。
 - **D3 · 设备示例 + mock（S3）**
   GPIO 老接口 / I2C dev 读写示例；无板子用 x86 ioctl mock（LD_PRELOAD 或 /dev 伪设备）
   验胶水语义。
@@ -57,8 +70,8 @@
 
 | 子步 | 内容 | 验证 |
 |---|---|---|
-| S1 ✅ | D1 fd 原语（open/close/ioctl/os_errno） | commit `88e824b`；examples/m57_s1_ioctl_verify.sh 全 PASS（A open/close+errno / B TCP fd FIONREAD=5/0+就地填充、FIONBIO 生效、ENOTTY/EBADF、NULL/int/bytes 三形态 / C 真实设备条件探测）；m53_s1_h3echo 8 并发回归 PASS；capability 全量因宿主负载 killed 留 S5 |
-| S2 | D2 mmap/munmap 语言内建（fd→bytes 视图） | 待定 |
+| S1 ✅ | D1 fd 原语（open/close/ioctl/os_errno） | commit `57bb9d7`；examples/m57_s1_ioctl_verify.sh 全 PASS（A open/close+errno / B TCP fd FIONREAD=5/0+就地填充、FIONBIO 生效、ENOTTY/EBADF、NULL/int/bytes 三形态 / C 真实设备条件探测）；m53_s1_h3echo 8 并发回归 PASS；capability 全量因宿主负载 killed 留 S5 |
+| S2 ✅ | D2 fd 数据通道 + mmap/munmap（read/write/mmap/munmap/mem_write） | commit `f71b28e`；examples/m57_s2_mmap_verify.sh 全 PASS（A TCP 环回 read/write + 文件顺序写 + 非法 fd errno / B MAP_SHARED 整视图·offset 子视图·双向可见·超长截断 / C mmap 视图作 ioctl buffer FIONREAD=3 / D munmap 解除语义 / E GC sweep munmap 300 轮 / F 失败 -1+EBADF）；m57_s1_ioctl 复验 PASS；capability/m53_s1 全量回归因宿主外部进程占核 killed 留 S5 |
 | S3 | D3 GPIO / I2C 示例 + x86 ioctl mock | 待定 |
 | S4 | D4 aarch64 交叉 + qemu + runtime 裁剪开关 | 待定 |
 | S5 | D5 pxi 重建 + capability/diffcheck/自举/全量回归 | 待定 |
