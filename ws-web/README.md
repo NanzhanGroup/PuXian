@@ -79,13 +79,13 @@ ws-web/
     └── smoke.px     # 冒烟测试（healthz / items / 404）
 ```
 
-## 协作协议（语言缺陷上报）
+## 反馈与贡献（语言缺陷上报）
 
 遇到语言 bug 或特性缺失：
 
 1. 写**最小复现用例**（单个 .px 文件 + 期望输出/实际输出）
-2. 提交 GitHub issue，label `ws-web-blocker`
-3. 东月（编译器维护）优先处理 blocker → 跑完整回归（--all + 自举证明）→ 出新编译器二进制 → 你 `git pull` 继续
+2. 提交 GitHub issue，label `ws-web`（ws-web 相关）或 `compiler`（语言/编译器缺陷）
+3. 维护者复现确认后修复 → 跑完整回归（--all + 自举证明）→ 随下个提交发布
 
 ## 版本
 

@@ -165,7 +165,7 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 ├── ws-web/                 # First production application (M-B9b, dogfooding): HTTP + SQLite service skeleton
 ├── examples/               # 80+ examples (hello / fib / match / concurrency / networking / TLS / SQLite / comprehensions ...)
 ├── archive/rust-compiler/  # Rust compiler source archive (read-only; the pre-bootstrap implementation; git history preserved)
-├── docs/                   # Documentation (spec / Mini subset / bootstrap plan / progress)
+├── docs/                   # Documentation (spec / Mini subset / ROADMAP)
 └── .github/workflows/ci.yml # CI: regression + bootstrap proof + example compilation + ws-web smoke
 ```
 
@@ -177,11 +177,11 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 |---|---|
 | [docs/spec.md](docs/spec.md) | Language specification (lexical / syntax / semantics / standard library) |
 | [docs/MINI_SUBSET.md](docs/MINI_SUBSET.md) | **Mini subset spec** (the locked language surface of the self-hosted compiler: supported features / explicitly excluded / known limitations) |
-| [docs/BOOTSTRAP_PLAN.md](docs/BOOTSTRAP_PLAN.md) | Bootstrap plan (M-B1 → M-B9 milestones + progress table) |
-| [docs/PROGRESS.md](docs/PROGRESS.md) | Feature development progress (M0–M40) |
-| [docs/DEV_HISTORY.md](docs/DEV_HISTORY.md) | Development history |
-| [docs/requirements.md](docs/requirements.md) | Requirements & design discussions (motivations, trade-offs, dual-mode architecture) |
-| [ws-web/README.md](ws-web/README.md) | First production application: quick start + 10 pitfall checks + collaboration protocol |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Roadmap (completed milestones + future directions) |
+| [CHANGELOG.md](CHANGELOG.md) | Changelog (notable changes per milestone) |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guide (build / test / PR guidelines) |
+| [SECURITY.md](SECURITY.md) | Security vulnerability reporting policy |
+| [ws-web/README.md](ws-web/README.md) | First production application: quick start + 10 pitfall checks |
 
 ---
 

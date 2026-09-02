@@ -3,7 +3,7 @@
 > 版本：v0.1.0-draft
 > 日期：2026-08-30
 > 状态：M0 里程碑交付物，供 M1（词法/语法）直接实现
-> 关联文档：requirements.md（需求）、plan.md（方案）
+> 关联文档：README.md（项目总览）、docs/ROADMAP.md（路线图）、docs/MINI_SUBSET.md（Mini 子集规范）
 
 ---
 
@@ -448,7 +448,7 @@ import "path/to/file.px"      # 相对路径导入（脚本模式）
 import "c/sqlite3"            # M42：显式 C 库 import（FFI）
 ```
 
-#### 8.2.1 显式 C 库 import（M42，对应"清歌的建议 P2-7"）
+#### 8.2.1 显式 C 库 import（M42）
 - `import "c/xxx"`：声明导入 C 库（路径以 `c/` 开头、不以 `.px` 结尾）→ 不加载 .px 文件，函数由 `extern def` 声明。
 - `extern def name(params) -> ret`：C 函数声明（无 body、单行、返回类型用 `->` 与普通 def 一致）。
 - 调用：extern 函数像普通函数一样调用，统一经 **FFI C 桥 `ffi_call(name, args_list)`**（runtime_ffi.c 注册表）——编译模式与解释模式行为一致。
@@ -468,7 +468,7 @@ import "c/sqlite3"            # M42：显式 C 库 import（FFI）
   ```
 - 新增 C 库 = runtime 绑定文件 + `px_ffi_register` + 语言层 extern 声明（三处）。
 
-#### 8.2.2 文件即路由（M43，对应"清歌的建议 P0-2"）
+#### 8.2.2 文件即路由（M43）
 - 应用目录约定：**文件名即路由、目录即应用**（PHP 式框架形态），构建期由 `tools/routegen.px` 扫描应用目录 → 生成 `generated_routes.px`（import + `route()` 注册，由入口显式调用 `register_routes()`）。
 - 文件名 → 路由规则（`std.webroute.wr_parse_file`，纯函数，相对应用根路径）：
   - `index.px` → `GET /`（默认首页）；`get.px` → `GET /`（方法前缀无 rest）
@@ -499,7 +499,7 @@ import "c/sqlite3"            # M42：显式 C 库 import（FFI）
 - v0.1 无第三方依赖，标准库单仓库 `std.*` 全内置
 - 编译产物零外部依赖（静态二进制）
 
-### 8.6 包管理器与版本化（M45，对应"清歌的建议 P1-5"）
+### 8.6 包管理器与版本化（M45）
 > 工具：`tools/pxpkg`（PuXian 版包管理器，Rust 版 px pkg 随 M-B9a 退役后重写）。
 > 定位：M26 远程 registry（URL + sha256）升级为**可复现构建**——semver 版本管理 + lockfile 锁定。
 
@@ -581,7 +581,7 @@ extern def quic_close_listener(listener: int) -> bool
 - 双模式一致：编译（pxc build）与解释（pxi run）均走 C 桥 `bi_ffi_call`（M42 机制）。
 - 验证：`examples/m46_quic_verify.sh` 回环 PASS（握手 + `hello-quic-42` → `echo:hello-quic-42`）。
 - 工程说明：QUIC 栈静态编译进 pxc/pxi 产物（零依赖分发）；选型 quictls + ngtcp2 quictls 后端
-  （OpenSSL 3.5 QUIC TLS 服务端存在集成问题，详见 docs/M46_PLAN.md 踩坑表）。
+  （OpenSSL 3.5 的 QUIC TLS 服务端存在集成问题，弃用并切换 quictls 3.0.9+quic）。
 
 ### 8.8 HTTP/3 语义层（M47，QPACK + HEADERS/DATA 帧 + 请求/响应对拍）
 

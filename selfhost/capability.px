@@ -1,6 +1,6 @@
 # ============================================================
 # M-B1 前置门禁：写编译器所需语言能力自检（PuXian 版）
-# 来源：BOOTSTRAP_PLAN §二.3 语言能力检查清单
+# 来源：自举工程语言能力检查清单（写编译器所需能力自检）
 #  字符串处理 / 正则 / JSON / 文件IO / 进程调用(gcc) / 错误处理(Result+?)
 # 运行：px run selfhost/capability.px
 #       编译模式：px build selfhost/capability.px && selfhost/build/capability
