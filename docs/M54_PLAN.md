@@ -88,7 +88,7 @@
 | S3 ✅ | D3 连接迁移（client 换源 + server path 跟随） | commit `4a463a1`；msg 跨迁移续传 PASS（同 conn 无重握手） |
 | S4 ✅ | D4 BLOCKED_STREAMS 流控协商 | commit `0bfd5a5`；上限 2 阻塞(-206)、extend +4 放行 PASS |
 | S5 ✅ | D5 pxi 重建 + capability/diffcheck/自举/全量回归 | 本 commit：**bootstrap/pxi 重建**（链接 M54 runtime，9.04MB；examples/m54_s5_pxi_quic_smoke.px 解释模式自检 PASS，证明 pxi 解释器同能力支持 M54 新内置）；**capability 双模式**（解释 253 PASS + 编译 253 PASS，输出逐字节一致）；**diffcheck --all rc=0 / --errors rc=0**；**自举证明 B.c==golden（6381 行 C 逐字节一致）**；**m4x + m53 + m54 全量回归全 PASS**（m46/m47/m48/m49/m50/m51/m52/m53_s1/m53_s3/m53_s4/m54_s1/m54_s2/m54_s3/m54_s4 共 14 项；其中 m51/m53_s4/m54_s4 初跑因验证脚本自身问题——verify.sh 无执行位 / 残留进程占端口 / 断言文本不匹配——修复后重跑 PASS） |
-| S6 | 文档收尾（spec §8.15、ROADMAP、CHANGELOG、README） | 里程碑闭合 |
+| S6 ✅ | 文档收尾（spec §8.15、ROADMAP、CHANGELOG、README/README.en） | 本 commit：spec §8.15（M54 四特性语言 API + 实现要点 + 验证 + 边界）+ §8.8 远期陈述更新（0-RTT/迁移/流控已落地）；ROADMAP M54 移入已完成主线（HTTP/3 能力行 + M55+ 远期重排）；CHANGELOG [Unreleased] 记 M54；README/README.en 原生开发表 M41–M54 + 示例清单补 m54_s1–s5 |
 
 ## 四、风险与边界
 

@@ -211,7 +211,7 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 | M-B9a | Retire the Rust version + wire up CI + bootstrap chain | `tools/pxc` fully usable end-to-end; CI four jobs |
 | M-B9b | ws-web (first production application) | 🔄 in progress (dogfooding validation) |
 
-### Native Development (M41–M53, post-bootstrap development in PuXian itself — all ✅)
+### Native Development (M41–M54, post-bootstrap development in PuXian itself — all ✅)
 
 | Milestone | Scope |
 |---|---|
@@ -222,6 +222,7 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 | M45 | Registry versioning: semver library + pxpkg + px.pkg.lock reproducible builds |
 | M46–M52 | HTTP/3/QUIC full chain: QUIC transport → H3 semantic layer → QPACK (Huffman/static table/dynamic table/SETTINGS/multiplexing/decoder-stream ack) |
 | M53 | **HTTP/3 three-stack WebServer**: px_serve http3 (HTTP/1.1+HTTP/2+HTTP/3 share the public pipeline) + Alt-Svc + **aioquic third-party interop** |
+| M54 | **HTTP/3 productionization**: TLS 1.3 session resumption (1-RTT) + **0-RTT early data** (send before handshake) + connection migration (source-change resume) + BLOCKED_STREAMS flow-control negotiation (-206 / MAX_STREAMS) |
 
 ---
 

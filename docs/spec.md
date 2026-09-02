@@ -590,7 +590,8 @@ QPACK 头压缩（RFC 9204 无动态表子集）+ HTTP/3 帧（HEADERS=0x01 / DA
 + 请求/响应对拍。完整 HTTP/3（QPACK 动态表/Huffman/静态表压缩、SETTINGS 控制流、
 多路复用、0-RTT/连接迁移、接入现有 HTTP 路由管道）原列为 M48+；其中 Huffman+静态表压缩
 已随 §8.9（M48）落地，动态表 + SETTINGS 帧已随 §8.10（M49）落地，多路复用已随 §8.11
-（M50）落地，接入现有 HTTP 路由管道已随 §8.14（M53）落地；0-RTT/连接迁移仍为远期。
+（M50）落地，接入现有 HTTP 路由管道已随 §8.14（M53）落地；0-RTT / 连接迁移 /
+流上限协商（BLOCKED_STREAMS）已随 §8.15（M54）落地。
 
 ```
 import "c/ngtcp2"
@@ -859,8 +860,77 @@ extern def h3_server_listen(port: int, cert: str, key: str) -> int  # M53-S3：H
   互操作** 200/静态/404 一致 + Alt-Svc + SIGTERM 优雅关闭 + ws-web config http3 端到端）；
   examples/m53_s5_pxi_h3_smoke.px（pxi 重建后解释器含 h3_server_listen，id>0 PASS）；
   M46–M52 回归 + capability 双模式 253 PASS + diffcheck + 自举证明全绿。
-- **边界（M54+ 方向）**：自研 MVP client 单响应帧缓冲（>700KB 多 DATA 需标准客户端全收验证）；
-  0-RTT / 连接迁移 / BLOCKED_STREAMS 互操作未做。
+- **边界（M54+ 方向）**：自研 MVP client 单响应帧缓冲（>700KB 多 DATA 需标准客户端全收验证）。
+
+---
+
+### 8.15 HTTP/3 生产化（M54，会话恢复 / 0-RTT / 连接迁移 / BLOCKED_STREAMS）
+
+```
+# M54 新增：HTTP/3 栈从"功能可用"推向"生产级传输语义"（RFC 9000/9114/9204）——
+# TLS 1.3 会话恢复（1-RTT resumption）+ 0-RTT early data + 连接迁移 + 流上限协商，
+# 全部以 PuXian 语言 API 落地 + 自研双端 + aioquic 互操作验证。
+
+# —— M54-S1 · TLS1.3 会话恢复（1-RTT resumption，RFC 8446/9001）——
+extern def quic_connect_resume(ip: str, port: int, alpn: str, session: str) -> int  # SSL_set_session → 1-RTT 握手
+extern def quic_session_save(conn: int) -> str   # i2d_SSL_SESSION 导出含 NewSessionTicket 的 DER→hex（内部泵至多 3s 等 ticket）
+extern def quic_conn_resumed(conn: int) -> bool  # SSL_session_reused（确为恢复而非全新握手）
+
+# —— M54-S2 · 0-RTT early data（RFC 9001 §8 / 9114 §3.5 幂等 GET / 9204 §3.3.3 静态表）——
+extern def quic_0rtt_save(conn: int) -> str      # TLS session DER hex + '|' + ngtcp2_conn_encode_0rtt_transport_params2
+extern def quic_connect_0rtt(ip: str, port: int, alpn: str, session0rtt: str) -> int  # 握手完成前即可 quic_send
+extern def quic_0rtt_rejected(conn: int) -> bool # ngtcp2_conn_tls_early_data_rejected → 0-RTT 数据按 1-RTT 重发
+extern def quic_conn_handshake_done(conn: int) -> bool
+extern def h3_server_listen_stateless(port: int, cert: str, key: str) -> int  # H3 无状态 0-RTT 子集（不 setup QPACK 动态表）
+
+# —— M54-S3 · 连接迁移（client 换源 / server path 跟随，RFC 9000 §9）——
+extern def quic_migrate(conn: int, local_ip: str, local_port: int) -> bool  # 新建 UDP fd 换源（被动迁移，NAT rebinding）
+extern def quic_conn_path(conn: int) -> str   # 当前对端 ip:port（验证迁移生效）
+extern def quic_conn_local(conn: int) -> str  # 本地源 ip:port（断言源端口变化）
+
+# —— M54-S4 · 流上限协商（BLOCKED_STREAMS / MAX_STREAMS，RFC 9000 §19.11）——
+extern def quic_set_max_client_streams(l: int, n: int) -> bool  # transport params.initial_max_streams_bidi 下发对端
+extern def quic_extend_max_streams(l: int, add: int) -> bool    # → ngtcp2_conn_extend_max_streams_bidi → 发 MAX_STREAMS
+extern def quic_streams_left(conn: int) -> int  # ngtcp2_conn_get_streams_bidi_left2
+# quic_open_stream 达对端配额返回 -206（NGTCP2_ERR_STREAM_ID_BLOCKED），上层等待放行后重试
+```
+
+- **TLS 1.3 会话恢复（M54-S1）**：server SSL_CTX（自签/PEM 两处）开启 stateless session
+  ticket（`SSL_SESS_CACHE_SERVER` + `session_id_context`，同 listener 内 ticket key 稳定）；
+  client `quic_connect_resume` 载入上次 `quic_session_save` 导出的 session → 1-RTT 握手；
+  `quic_conn_resumed==true` 断言确为恢复（m54_s1_resume_verify.sh）。
+- **0-RTT early data（M54-S2，本里程碑最复杂一层）**：server `SSL_CTX_set_max_early_data`
+  + `SSL_set_quic_early_data_enabled` 签发带 0-RTT 能力的 ticket；**收包路由修复**——托管
+  server 建连接时除本端 scid 外还登记客户端 Initial 包头 DCID（vc.dcid），否则 0-RTT 长头包
+  （与 Initial 同 DCID）被 router 丢弃 → early data 静默丢失；client `quic_connect_0rtt`
+  session|tp 拆分 → decode_and_set_0rtt_transport_params（须在首次 write_pkt 前）→ 首次
+  write_pkt 发 ClientHello（early_data 扩展 + 0-RTT key）→ 不等握手即返回，`quic_send`
+  即 0-RTT 提前发送；tp 缺失/解码失败自动降级 1-RTT resume；握手完成回调检测
+  `SSL_get_early_data_status==REJECTED` → `ngtcp2_conn_tls_early_data_rejected` 释放 0-RTT
+  状态、后续按 1-RTT 重发。H3 0-RTT 子集：`h3_server_listen_stateless` 不 setup QPACK
+  动态表（双端静态表/字面量 codec），0-RTT 请求限定幂等 GET（RFC 9114 §3.5）。
+- **连接迁移（M54-S3）**：`quic_migrate` 新建 UDP fd 绑新源端口 → 切换 qc fd/local_sa →
+  后续收发走新源（NAT rebinding 语义）；MVP 以被动换源完成（不调
+  initiate_immediate_migration——ngtcp2 1.25.90 该路径 cwnd=0 断言崩溃），客户端直接换
+  fd、ngtcp2 视角路径不变，服务器完成新路径验证并跟随（RFC 9000 §9 允许）；切换前
+  pump 300ms 冲刷旧路径在途包，防服务器 remote_sa 回切死地址。连接创建四处注册
+  handshake_confirmed 回调（迁移前提）；echo 服务端在 path validation 完成前 writev 失败
+  时 pump 推进 PATH_CHALLENGE/RESPONSE 后重试补发（10×400ms）。
+- **流上限协商（M54-S4）**：listener 级 `quic_set_max_client_streams(listener, n)` 经
+  transport params.initial_max_streams_bidi 下发给对端（托管 quic_srv_new_conn + demo
+  quic_accept 两路一致）；`quic_extend_max_streams(listener, add)` 遍历匹配连接调
+  ngtcp2 extend → pump write_pkt 带出 MAX_STREAMS；client 达配额 `quic_open_stream` 返回
+  ngtcp2 原始 -206（此前吞为 -1）；`quic_streams_left` 暴露剩余配额供断言。
+- **验证**：examples/m54_s1_resume_verify.sh（二次连接 resumed=true + echo）、
+  m54_s2_0rtt_verify.sh（transport 0-RTT：connect_0rtt 返回 handshake_done=false + 立即
+  send 成功 + echo 正确；H3 0-RTT 静态表 GET → 200）、m54_s3_migrate_verify.sh（M1 echo
+  基准 → migrate 换源（源端口变化断言）→ M2 echo 从新源收到，同 conn 无重握手）、
+  m54_s4_streams_verify.sh（上限 2 → 开流 4 成功、开流 8 -206 → extend +4 → 重试成功）；
+  S5 全量回归：pxi 重建 + capability 双模式 253 PASS + diffcheck --all/--errors rc=0 +
+  自举证明 B.c==golden + m46–m54 端到端 14 项全 PASS。
+- **边界（M55+ 方向）**：0-RTT + QPACK 动态表前缀（RFC 9204 深度语义）、服务端主动
+  迁移、immediate migration（ngtcp2 断言待上游修复）、0-RTT 第三方互操作（aioquic 控制
+  面弱）留待后续。
 
 ---
 

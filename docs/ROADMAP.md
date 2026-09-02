@@ -13,7 +13,7 @@
 | 类型系统 | ✅ Result/Option（`?`/`!`）、不可变（E3002）、空安全（E3003）、定义级泛型 |
 | 回归体系 | ✅ diffcheck（lexer/parser/errors/codegen/value/interp）+ capability + 自举证明 |
 | WebServer | ✅ HTTP/1.1/2/3、HTTPS、WebSocket、SSE、路由/中间件/限流/日志/vhost/SNI/S3 |
-| HTTP/3 | ✅ QUIC 传输 → HTTP/3 语义 → QPACK（Huffman/静态表/动态表/SETTINGS/多路复用/解码器流 ack）→ **px_serve 三栈合一（M53）+ aioquic 外部互操作** |
+| HTTP/3 | ✅ QUIC 传输 → HTTP/3 语义 → QPACK（Huffman/静态表/动态表/SETTINGS/多路复用/解码器流 ack）→ **px_serve 三栈合一（M53）+ aioquic 外部互操作** → **生产化（M54：1-RTT resumption / 0-RTT early data / 连接迁移 / BLOCKED_STREAMS）** |
 | 生态 | ws-web（dogfood 生产应用）、80+ examples、registry 版本化（semver + lockfile） |
 
 ## 二、已完成主线（里程碑记录，详见 CHANGELOG.md）
@@ -35,13 +35,15 @@
 | M51 | QPACK 会话接入线上：控制/编码器/解码器三单向流 + SETTINGS 协商 |
 | M52 | QPACK 解码器流 ack 线上化（RFC 9204 §4.4 闭环 + 编码表驱逐安全化） |
 | M53 | HTTP/3 三栈合一 WebServer：`px_serve` opts.http3（HTTP/1.1+HTTP/2+HTTP/3 共用公共 HTTP 管道）+ Alt-Svc 通告 + **aioquic 外部互操作打通** + pxi 重建解释同能力 |
+| M54 | **HTTP/3 生产化**：TLS 1.3 会话恢复（1-RTT resumption）+ **0-RTT early data**（含收包路由 DCID 修复、H3 静态表子集）+ 连接迁移（client 换源 + server path 跟随 + PATH_CHALLENGE）+ BLOCKED_STREAMS 流上限协商（-206 阻塞 / MAX_STREAMS 放行）；语言 API 12 项；S5 全量回归（pxi 重建 + capability 双模式 + diffcheck + 自举 + 14 项端到端） |
 
 ## 三、远期方向
 
-### M54+ · HTTP/3 生产化
+### M55+ · HTTP/3 深度生产化
 
-- 0-RTT / 连接迁移（QUIC 生产化）
-- BLOCKED_STREAMS 互操作
+- 0-RTT + QPACK 动态表前缀（RFC 9204 深度语义）
+- 服务端主动迁移 / immediate migration（ngtcp2 1.25.90 cwnd 断言待上游修复）
+- 0-RTT / 迁移 / 流控的第三方（aioquic 等）互操作扩展
 
 ### 平台 / 生态（按需排期）
 

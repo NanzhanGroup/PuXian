@@ -96,7 +96,7 @@ def main():
 | ⏱ 定时器 | `set_timeout` / `set_interval` / `clear_timer`（一次性/周期回调，可变参数透传，回调内并发原语安全） |
 | 🧹 内存 | 编译模式 C 运行时内置保守标记-清除 GC（循环引用可回收，自动触发）+ **slab 分配器**（21 档 size-class 槽位复用）；解释器侧**追踪式 GC** 回收循环引用（list/dict/chan/**闭包 Func↔Env 循环**）+ `gc()` 强制回收 |
 | 🧩 模块化 | `import std.*` / `import foo.bar` / `from foo import x` / 相对路径导入 |
-| 🌐 网络 | HTTP 客户端（**HTTPS TLS 1.2/1.3** + gzip/chunked 自动解码 + **http/https 连接池复用** + **TLS 会话票据恢复** + **流式 gzip 边下边解**）+ **HTTP 服务端**（`http_serve` gzip/chunked/keep-alive/流式 + **`px_serve` 服务端 TLS**：`tls_server(cert,key[,hostname])` 注册后 HTTPS/WSS/SSE-over-TLS + **TLS SNI 多证书按域名选择** + 请求体大小可配 + 413 + 大 body 落盘 + **优雅关闭** + **per-route 限流**（路由粒度 429）+ **访问日志落盘轮转** + **Alt-Svc 通告** + **HTTP/3 三栈合一**（`px_serve(...,{http3:true|{port?,cert?,key?}})` 同端口托管 H3/QUIC，HTTP/1.1+HTTP/2+HTTP/3 共用同一 vhost/路由/限流/访问日志/静态/.px 管道；`h3_server_listen` 独立 H3 listener；**aioquic 第三方互操作**））+ **WebSocket**（RFC 6455，心跳/超时，**`ws://`/`wss://` 一行连接**）+ **SSE** 服务端/客户端（**断线自动重连**，带 Last-Event-ID）+ **UDP**（udp_open/send/recv/close）+ TCP 全功能 |
+| 🌐 网络 | HTTP 客户端（**HTTPS TLS 1.2/1.3** + gzip/chunked 自动解码 + **http/https 连接池复用** + **TLS 会话票据恢复** + **流式 gzip 边下边解**）+ **HTTP 服务端**（`http_serve` gzip/chunked/keep-alive/流式 + **`px_serve` 服务端 TLS**：`tls_server(cert,key[,hostname])` 注册后 HTTPS/WSS/SSE-over-TLS + **TLS SNI 多证书按域名选择** + 请求体大小可配 + 413 + 大 body 落盘 + **优雅关闭** + **per-route 限流**（路由粒度 429）+ **访问日志落盘轮转** + **Alt-Svc 通告** + **HTTP/3 三栈合一**（`px_serve(...,{http3:true|{port?,cert?,key?}})` 同端口托管 H3/QUIC，HTTP/1.1+HTTP/2+HTTP/3 共用同一 vhost/路由/限流/访问日志/静态/.px 管道；`h3_server_listen` 独立 H3 listener；**aioquic 第三方互操作**；**HTTP/3 生产化**（TLS 1.3 会话恢复 1-RTT resumption、0-RTT early data 握手前可发、连接迁移换源续传、BLOCKED_STREAMS 流控协商 -206/MAX_STREAMS）））+ **WebSocket**（RFC 6455，心跳/超时，**`ws://`/`wss://` 一行连接**）+ **SSE** 服务端/客户端（**断线自动重连**，带 Last-Event-ID）+ **UDP**（udp_open/send/recv/close）+ TCP 全功能 |
 | 🛡 加密/文档 | **AES-CBC-PKCS7 / AES-GCM**、**RSA**（PKCS#1 v1.5）、**XML** 解析/转义/**生成**（xml_build）、**zip** 打包/解压、**base64**、sha256 / xxhash、**SQLite**（open/exec/query/close，参数绑定+结果集） |
 | 🔢 语言能力 | 切片语法 `a[i:j]` / `a[i:j:k]`（步长/反转，str 按 UTF-8 字符）、**生成器表达式** `(x for x in xs)`（**惰性**：单层 for 延迟求值 / `gen_next` 逐项 / for-in / `list()` 转换）、位运算 + 二进制数据视图（int_to_hex / bytes_to_hex / bit_count / bit_length）、正则表达式、锁原语（mutex / rwlock）、文件随机读写 + fsync、进程/信号（os_spawn / os_wait / signal）、**Result/Option 错误处理**（`Ok(x)`/`Err(e)`/`Some(x)` 构造，`?` 错误传播——Err/None 立即返回、`!` 强制解包、is_ok/is_err/unwrap 方法，spec 唯一错误通道）、字符串插值 `${expr}`、推导式、可选链 `?.`、空合并 `??`、管道 `\|>` |
 | 🚀 应用平台 | **.px 脚本执行机制**（`px_serve` PHP/OpenResty 式应用服务器：Cookie/Session/基础认证 + 服务端 TLS + 优雅关闭、`px_exec` 语言层嵌入 API）+ **.px 进程池**（编译模式预派生 worker 解释器常驻复用，PHP-FPM 风格，**脚本/二进制变更自动滚动重启热更新**）+ 路由表+中间件（method+path 模式 / `:id` 参数 / `*` 通配 / 中间件链）+ cron 调度（6 字段）+ JSON 路径（json_path/json_path_set） |
@@ -209,7 +209,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 | M-B9a | 退役 Rust 版 + 接入 CI + 引导链 | `tools/pxc` 全链路可用，CI 四 job |
 | M-B9b | ws-web（第一个生产应用） | 🔄 进行中（dogfooding 验证） |
 
-### 原生开发（M41–M53，自举后 PuXian 自身开发，全部 ✅）
+### 原生开发（M41–M54，自举后 PuXian 自身开发，全部 ✅）
 
 | 里程碑 | 内容 |
 |---|---|
@@ -220,6 +220,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 | M45 | registry 版本化：semver 库 + pxpkg + px.pkg.lock 可复现构建 |
 | M46–M52 | HTTP/3 / QUIC 全链路：QUIC 传输 → H3 语义层 → QPACK（Huffman/静态表/动态表/SETTINGS/多路复用/解码器流 ack） |
 | M53 | **HTTP/3 三栈合一 WebServer**：px_serve http3（HTTP/1.1+HTTP/2+HTTP/3 共用公共管道）+ Alt-Svc + **aioquic 外部互操作** |
+| M54 | **HTTP/3 生产化**：TLS 1.3 会话恢复（1-RTT resumption）+ **0-RTT early data**（握手前可发）+ 连接迁移（换源续传）+ BLOCKED_STREAMS 流控协商（-206/MAX_STREAMS） |
 
 ---
 
@@ -263,6 +264,11 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 - `m53_s3_pipe_verify.sh` —— HTTP/3 接入公共 HTTP 管道（同进程 px_serve + h3_server_listen 双栈，4 QUIC 连接 × 5 请求与 HTTP/1.1 同管道输出一致）
 - `m53_s4_pxserve_h3_verify.sh` —— **HTTP/3 三栈合一端到端**（px_serve http3：HTTP/1.1 TCP + HTTP/3 UDP 同服务；自研 client + **aioquic 第三方互操作** 200；Alt-Svc 自动通告；SIGTERM 优雅关闭）
 - `m53_s5_pxi_h3_smoke.px` —— pxi 重建后解释器 h3_server_listen 自检（id>0 PASS）
+- `m54_s1_resume_verify.sh` —— TLS 1.3 会话恢复端到端（二次连接 resumed=true，确为 1-RTT）
+- `m54_s2_0rtt_verify.sh` —— **0-RTT early data**（connect_0rtt 握手未完成即 send 成功 + H3 静态表 0-RTT GET → 200）
+- `m54_s3_migrate_verify.sh` —— **连接迁移**（client 换源端口 → server path 跟随、同 conn 无重握手、echo 跨迁移续传）
+- `m54_s4_streams_verify.sh` —— BLOCKED_STREAMS 流控协商（上限 2 → 开流 8 阻塞 -206 → extend +4 放行）
+- `m54_s5_pxi_quic_smoke.px` —— pxi 重建后 M54 新内置 12 项自检（解释/编译双模式一致）
 - ... 完整列表见 `examples/`
 
 ---
