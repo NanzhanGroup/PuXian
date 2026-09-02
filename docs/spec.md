@@ -695,6 +695,46 @@ extern def h3_settings_dec(frame: bytes) -> list   # SETTINGS 帧 → [[k,v]...]
   逐字节一致；`examples/m48_qpack_verify.sh` + `examples/m47_h3_verify.sh` 回归
   PASS（不回归）。
 
+### 8.11 HTTP/3 多路复用（M50，QUIC 多双向流并发请求/响应）
+
+M46–M49 是**单条双向流 + conn 级混流缓冲**（所有流数据混入一个 rbuf）。M50 升级为
+**QUIC 多流并发**（RFC 9000 §2.1 bidi 流 id：client 0,4,8… / server 1,5,9…）——一条
+连接上客户端逐请求开新流（每条流独立承载一个 HTTP/3 请求/响应对拍：HEADERS+DATA
+帧序列），服务端按 sid 分拣处理、交错响应。旧单流 API（quic_* 与 h3_serve_read_request
+等）保留"默认流"兼容语义（M46/M47 回归不破坏）。
+
+```
+import "c/ngtcp2"
+
+# M50 新增：QUIC 多流传输 API（runtime_quic.c per-stream 缓冲）
+extern def quic_open_stream(conn: int) -> int              # 本地 open 新 bidi 流 → sid | -1
+extern def quic_send_stream(conn: int, sid: int, data: str) -> int   # 写指定流 → 字节数 | -1
+extern def quic_recv_stream(conn: int, sid: int, maxlen: int, timeout_ms: int) -> str  # 读指定流
+extern def quic_poll(conn: int, timeout_ms: int) -> int    # 等任一活跃流有数据/FIN → sid | -1
+
+# M50 新增：HTTP/3 多路复用语义 API（runtime_h3.c per-sid 帧缓冲）
+extern def h3_client_open_stream(conn: int) -> int         # 客户端 open 一条请求流
+extern def h3_client_send_request_stream(conn: int, sid: int, method: str, scheme: str, authority: str, path: str, headers: list, body: str) -> bool
+extern def h3_client_read_response_stream(conn: int, sid: int, timeout_ms: int) -> dict  # 按流收响应
+extern def h3_serve_poll_stream(conn: int, timeout_ms: int) -> int    # 服务端等新请求流 → sid
+extern def h3_serve_read_request_stream(conn: int, sid: int, timeout_ms: int) -> dict    # 按流收请求
+extern def h3_serve_send_response_stream(conn: int, sid: int, status: int, headers: list, body: str) -> bool
+```
+
+- **per-stream 缓冲**：`quic_conn.streams[]`（QUIC_STREAM_MAX=16 线性槽按 sid 精确匹配），
+  `quic_recv_stream_data_cb` 按 sid 入队（对端首见建槽 peer=1，FIN flag 记录）；
+  `quic_any_data()` 取"有数据/FIN 的最小 sid"保证确定性；旧 quic_send/quic_recv 与
+  h3_serve_read_request 等映射"默认流 = 最小活跃 sid"（M47 单流场景逐字节兼容）。
+- **H3 层 per-sid 帧缓冲**：`g_h3buf[conn][slot]`（H3_STREAM_SLOTS=16，used 标志，
+  修复 static 数组 sid 零值不可作空槽的坑），`h3_take_frame(conn, sid, ...)` 按流消费帧。
+- **服务端模型**：accept 后循环 `serve_poll_stream → read_request_stream(sid) →
+  send_response_stream(sid)`——poll 返回的每条流只被该轮处理消费，流间互不干扰。
+- **客户端模型**：connect（自带 sid 0）后 `h3_client_open_stream` 逐请求开新流（4/8/12…），
+  全部发出（在途并发）再按 sid 逐流收响应 → 3 流 3 响应一一对应（无串扰）。
+- **验证**：`examples/m50_h3_mux_verify.sh` 双模式 PASS（3 并发请求 /alpha /beta /gamma
+  各得独立响应，body=`echo-mux:<path>:stream-<sid>` 一一对应，client 输出逐字节一致）+
+  capability section 25 + `examples/m47_h3_verify.sh`（旧 API 单流回归 PASS）。
+
 ---
 
 ## 9. 双模式执行

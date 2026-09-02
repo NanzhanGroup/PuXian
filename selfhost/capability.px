@@ -757,6 +757,31 @@ check("M49 SETTINGS MAX_TABLE_CAPACITY", m49sd[0][0] == 1 and m49sd[0][1] == 409
 check("M49 SETTINGS BLOCKED_STREAMS", m49sd[1][0] == 7 and m49sd[1][1] == 100)
 
 # ============================================================
+# 25. HTTP/3 多路复用（M50：QUIC 多双向流 + H3 per-stream 语义层）
+# ------------------------------------------------------------
+# runtime_quic.c：per-stream 接收缓冲 + quic_open_stream / quic_send_stream /
+#   quic_recv_stream / quic_poll（旧 quic_send/quic_recv 保留默认流兼容）；
+# runtime_h3.c：per-sid 帧缓冲 + h3_serve_poll_stream / h3_serve_read_request_stream /
+#   h3_serve_send_response_stream / h3_client_open_stream / h3_client_send_request_stream /
+#   h3_client_read_response_stream。
+# 完整端到端多流对拍见 examples/m50_h3_mux_verify.sh（编译+解释双模式）。
+# 本 section 覆盖无效句柄/未开流容错的纯函数断言。
+# ============================================================
+import "c/ngtcp2"
+
+extern def quic_open_stream(conn: int) -> int
+extern def quic_send_stream(conn: int, sid: int, data: str) -> int
+extern def quic_recv_stream(conn: int, sid: int, maxlen: int, timeout_ms: int) -> str
+extern def quic_poll(conn: int, timeout_ms: int) -> int
+
+check("M50 quic_open_stream 无效 conn → -1", quic_open_stream(0) == -1)
+check("M50 quic_send_stream 无效 conn → -1", quic_send_stream(0, 0, "x") == -1)
+check("M50 quic_recv_stream 无效 conn → 空串", quic_recv_stream(0, 0, 16, 5) == "")
+check("M50 quic_poll 无效 conn → -1", quic_poll(0, 5) == -1)
+check("M50 quic_open_stream 无效 conn(未监听) → -1", quic_open_stream(3) == -1)
+check("M50 quic_recv_stream 指定流无数据(超时短) → 空串", quic_recv_stream(3, 0, 16, 5) == "")
+
+# ============================================================
 # 汇总
 # ============================================================
 print("")

@@ -223,6 +223,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 - `m47_h3_verify.sh` —— HTTP/3 语义层回环（QPACK 编解码 + HEADERS/DATA 帧 + 请求/响应，GET /hello → 200）
 - `m48_qpack_verify.sh` —— QPACK 完整 codec 字节精确自检（RFC Huffman 官方向量 + 静态表索引 + 容错，编译/解释双模式）
 - `m49_qpack_dyn_verify.sh` —— QPACK 动态表 + SETTINGS 会话字节精确自检（动态表复用/压缩收益/SETTINGS roundtrip，编译/解释双模式）
+- `m50_h3_mux_verify.sh` —— HTTP/3 多路复用回环（同一连接 3 双向流并发请求/响应一一对应无串扰，编译/解释双模式）
 - ... 完整列表见 `examples/`
 
 ---

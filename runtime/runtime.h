@@ -134,6 +134,12 @@ int64_t px_quic_raw_accept(int64_t listener, int timeout_ms);
 int64_t px_quic_raw_connect(const char* ip, int port, const char* alpn);
 int64_t px_quic_raw_send(int64_t conn, const uint8_t* data, int len);
 int64_t px_quic_raw_recv(int64_t conn, uint8_t* out, int maxlen, int timeout_ms);
+// M50：QUIC 多流 raw 接口（runtime_quic.c 导出，供 runtime_h3.c 多路复用）
+int64_t px_quic_raw_open_stream(int64_t conn);   // 本地 open 新 bidi 流 → sid | -1
+int64_t px_quic_raw_send_on(int64_t conn, int64_t sid, const uint8_t* data, int len, int fin);
+int64_t px_quic_raw_recv_on(int64_t conn, int64_t sid, uint8_t* out, int maxlen, int timeout_ms);
+int64_t px_quic_raw_poll(int64_t conn, int timeout_ms);      // 任一活跃流有数据 → sid | -1/-2
+int64_t px_quic_raw_first_stream(int64_t conn);              // 最小活跃 sid（默认流）|-1
 bool    px_quic_raw_close(int64_t conn);
 bool    px_quic_raw_close_listener(int64_t listener);
 LXValue px_struct(const char* type_name, char** fnames, LXValue* fvals, int nfields);

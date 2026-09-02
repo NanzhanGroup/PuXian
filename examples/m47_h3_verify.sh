@@ -14,7 +14,13 @@ run_server_client() {
     echo "--- [$mode] server+client ---"
     bash -c "$srv_bin" >/tmp/m47_h3_srv_$mode.out 2>&1 &
     SRV_PID=$!
-    sleep 1
+    # 等服务端完成 listen（轮询输出标志，最多 ~10s）——抗解释器启动时序
+    local w=0
+    while [ $w -lt 100 ]; do
+        grep -q "listening 17997" /tmp/m47_h3_srv_$mode.out 2>/dev/null && break
+        sleep 0.1; w=$((w+1))
+    done
+    sleep 0.5
     bash -c "$cli_bin" >/tmp/m47_h3_cli_$mode.out 2>&1
     CLI_EXIT=$?
     wait $SRV_PID
@@ -36,9 +42,11 @@ run_server_client() {
 
 echo "=== M47 HTTP/3 语义层回环验证 ==="
 ok=1
-# 编译模式：先构建
-./tools/pxc build examples/m47_h3_server.px >/dev/null 2>&1 || { echo "FAIL: server 编译失败"; ok=0; }
-./tools/pxc build examples/m47_h3_client.px >/dev/null 2>&1 || { echo "FAIL: client 编译失败"; ok=0; }
+# 编译模式：先构建（PXC_SKIP_BUILD=1 跳过，产物已存在时快速复跑）
+if [ "${PXC_SKIP_BUILD:-0}" != "1" ]; then
+    ./tools/pxc build examples/m47_h3_server.px >/dev/null 2>&1 || { echo "FAIL: server 编译失败"; ok=0; }
+    ./tools/pxc build examples/m47_h3_client.px >/dev/null 2>&1 || { echo "FAIL: client 编译失败"; ok=0; }
+fi
 if [ "$ok" = "1" ]; then
     run_server_client comp "$B/m47_h3_server" "$B/m47_h3_client" || ok=0
 fi
