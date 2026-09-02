@@ -1,0 +1,51 @@
+# ============================================================
+# M54 S4：BLOCKED_STREAMS 流控协商 —— 服务端（demo accept 语言层）
+# ------------------------------------------------------------
+# quic_listen(:18001) → quic_set_max_client_streams(listener, 2)
+#   （transport params 下发：允许该连接 client 开 2 条 bidi 流：0、4）
+# accept 单连接 → echo 循环：收到 "EXTEND-PLS" → quic_extend_max_streams(listener, 4)
+#   → MAX_STREAMS 帧 → client 阻塞的第三条流(8)解禁。其余消息原样 echo。
+# ============================================================
+import "c/ngtcp2"
+
+extern def quic_listen(port: int) -> int
+extern def quic_set_max_client_streams(listener: int, n_bidi: int) -> bool
+extern def quic_accept(listener: int, timeout_ms: int) -> int
+extern def quic_extend_max_streams(listener: int, add_bidi: int) -> bool
+extern def quic_poll(conn: int, timeout_ms: int) -> int
+extern def quic_recv_stream(conn: int, sid: int, maxlen: int, timeout_ms: int) -> str
+extern def quic_send_stream(conn: int, sid: int, data: str) -> int
+extern def quic_close(conn: int) -> bool
+extern def quic_close_listener(listener: int) -> bool
+
+var l = quic_listen(18001)
+assert(l > 0, "server: quic_listen 失败")
+assert(quic_set_max_client_streams(l, 2) == true, "server: 设置 bidi 上限 2 失败")
+write_file("/tmp/m54s4.ready", "ready")
+
+var c = quic_accept(l, 15000)
+assert(c > 0, "server: quic_accept 失败")
+print("server: accepted conn=" + str(c))
+
+var idle = 0
+var done = false
+while not done and idle < 3:
+    var sid = quic_poll(c, 3000)
+    if sid < 0:
+        idle = idle + 1
+        continue
+    idle = 0
+    var msg = quic_recv_stream(c, sid, 2048, 2000)
+    if msg == "EXTEND-PLS":
+        assert(quic_extend_max_streams(l, 4) == true, "server: extend 失败")
+        quic_send_stream(c, sid, "OK")
+        print("server: extended max_streams +4")
+    else:
+        quic_send_stream(c, sid, msg)
+    if msg == "BYE":
+        done = true
+
+quic_close(c)
+# 注：demo accept conn 与 listener 共享 fd（M53 已注释的遗留缺陷）——close conn 即关
+# listener fd，故不再 close_listener（避免 double close）；进程退出自然回收。
+print("server: ok")

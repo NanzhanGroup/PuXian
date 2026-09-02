@@ -66,6 +66,8 @@ typedef struct {
     int            router_stop;
     quic_conn_cb   conn_cb;       // 每连接处理回调（NULL → 默认 echo）
     void*          conn_ud;
+    // M54-S4：流上限协商 —— 本 listener 每连接允许 client 开的 bidi 流数（0=默认 16）
+    int            max_client_bidi;
     int            used;
 } quic_listener;
 
@@ -659,7 +661,9 @@ static int quic_srv_new_conn(quic_listener* ql, const uint8_t* pkt, size_t rl,
     settings.log_printf = quic_log_cb;
     ngtcp2_transport_params params;
     ngtcp2_transport_params_default(&params);
-    params.initial_max_streams_bidi = 16;
+    // M54-S4：listener 可配 client bidi 流上限（quic_set_max_client_streams）——经 transport
+    // params 下发给对端（0=默认 16）
+    params.initial_max_streams_bidi = (ql->max_client_bidi > 0) ? ql->max_client_bidi : 16;
     params.initial_max_streams_uni = 3;
     params.initial_max_stream_data_bidi_local = 128 * 1024;
     params.initial_max_stream_data_bidi_remote = 128 * 1024;
@@ -1156,7 +1160,8 @@ static LXValue bi_quic_accept(LXValue* args, int nargs, void* ctx) {
         settings.log_printf = quic_log_cb;
         ngtcp2_transport_params params;
         ngtcp2_transport_params_default(&params);
-        params.initial_max_streams_bidi = 16;
+        // M54-S4：listener 可配 client bidi 流上限（quic_set_max_client_streams）
+        params.initial_max_streams_bidi = (ql->max_client_bidi > 0) ? ql->max_client_bidi : 16;
         params.initial_max_streams_uni = 3;
         params.initial_max_stream_data_bidi_local = 128 * 1024;
         params.initial_max_stream_data_bidi_remote = 128 * 1024;
@@ -1810,6 +1815,56 @@ static LXValue bi_quic_conn_local(LXValue* args, int nargs, void* ctx) {
     return px_str(buf);
 }
 
+// ==================== M54-S4：BLOCKED_STREAMS 流控协商 ====================
+// 语言 API：
+//   quic_set_max_client_streams(listener, n_bidi) -> bool
+//       设置 listener 每个新连接「允许对端(client)开的 bidi 流数」（0 = 默认 16）。
+//       经 transport params 下发（ngtcp2 server_new 时应用）。
+//   quic_extend_max_streams(listener, add_bidi) -> bool
+//       放行：对 listener 当前所有活跃连接调 ngtcp2_conn_extend_max_streams_bidi
+//       → pump write_pkt 带出 MAX_STREAMS 帧 → 对端阻塞的 quic_open_stream 解禁。
+//   quic_streams_left(conn) -> int   本端还可开的 bidi 流数（对端当前允许配额剩余）
+//   quic_open_stream 达对端上限返回 -206（NGTCP2_ERR_STREAM_ID_BLOCKED，RFC 9000 §19.11
+//   语义：客户端发 STREAMS_BLOCKED 告知对端被阻塞，对端可 MAX_STREAMS 放行）。
+static LXValue bi_quic_set_max_client_streams(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 2 || args[0].type != PX_INT || args[1].type != PX_INT)
+        px_error("quic_set_max_client_streams 需要 (listener: int, n_bidi: int)");
+    quic_listener* ql = quic_get_listener(args[0].as.i);
+    if (!ql) return px_bool(false);
+    ql->max_client_bidi = (int)args[1].as.i;
+    return px_bool(true);
+}
+
+static LXValue bi_quic_extend_max_streams(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 2 || args[0].type != PX_INT || args[1].type != PX_INT)
+        px_error("quic_extend_max_streams 需要 (listener: int, add_bidi: int)");
+    int64_t lid = args[0].as.i;
+    int add = (int)args[1].as.i;
+    quic_listener* ql = quic_get_listener(lid);
+    if (!ql || add <= 0) return px_bool(false);
+    int done = 0;
+    for (int i = 0; i < QUIC_MAX; i++) {
+        quic_conn* qc = &g_qconns[i];
+        // 匹配本 listener 的连接：托管 conn（owner_listener）或 demo accept conn
+        // （与 listener 共享 fd —— qc->fd == ql->fd）
+        if (qc->used && qc->conn && (qc->owner_listener == lid || qc->fd == ql->fd)) {
+            ngtcp2_conn_extend_max_streams_bidi(qc->conn, (uint64_t)add);
+            done++;
+        }
+    }
+    return px_bool(done > 0);
+}
+
+static LXValue bi_quic_streams_left(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || args[0].type != PX_INT) px_error("quic_streams_left 需要 (conn: int)");
+    quic_conn* qc = quic_get_conn(args[0].as.i);
+    if (!qc || !qc->conn) return px_int(-1);
+    return px_int((int)ngtcp2_conn_get_streams_bidi_left2(qc->conn));
+}
+
 // ============================================================
 // 发送/接收（M50：per-stream；旧 quic_send/quic_recv = 默认流兼容）
 // ============================================================
@@ -1886,7 +1941,7 @@ static LXValue bi_quic_open_stream(LXValue* args, int nargs, void* ctx) {
     if (!qc || !qc->conn) return px_int(-1);
     int64_t sid = -1;
     int rv = ngtcp2_conn_open_bidi_stream(qc->conn, &sid, NULL);
-    if (rv != 0 || sid < 0) return px_int(-1);
+    if (rv != 0 || sid < 0) return px_int(rv != 0 ? rv : -1);   // M54-S4：透出 -206 STREAM_ID_BLOCKED
     if (!quic_stream_new(qc, sid, 0)) return px_int(-1);
     return px_int(sid);
 }
@@ -2191,6 +2246,9 @@ void px_register_quic(void) {
     px_set_global("quic_migrate", px_native("quic_migrate", bi_quic_migrate));
     px_set_global("quic_conn_path", px_native("quic_conn_path", bi_quic_conn_path));
     px_set_global("quic_conn_local", px_native("quic_conn_local", bi_quic_conn_local));
+    px_set_global("quic_set_max_client_streams", px_native("quic_set_max_client_streams", bi_quic_set_max_client_streams));
+    px_set_global("quic_extend_max_streams", px_native("quic_extend_max_streams", bi_quic_extend_max_streams));
+    px_set_global("quic_streams_left", px_native("quic_streams_left", bi_quic_streams_left));
     px_ffi_register("quic_listen", bi_quic_listen);
     px_ffi_register("quic_accept", bi_quic_accept);
     px_ffi_register("quic_connect", bi_quic_connect);
@@ -2214,4 +2272,7 @@ void px_register_quic(void) {
     px_ffi_register("quic_migrate", bi_quic_migrate);
     px_ffi_register("quic_conn_path", bi_quic_conn_path);
     px_ffi_register("quic_conn_local", bi_quic_conn_local);
+    px_ffi_register("quic_set_max_client_streams", bi_quic_set_max_client_streams);
+    px_ffi_register("quic_extend_max_streams", bi_quic_extend_max_streams);
+    px_ffi_register("quic_streams_left", bi_quic_streams_left);
 }
