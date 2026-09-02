@@ -16,6 +16,7 @@
 // 连接级接收缓冲按 conn id 维护（h3_take_frame 消费式读取，支持分片到达）。
 #define _GNU_SOURCE
 #include "runtime.h"
+#include "runtime_h3_qpack.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -75,122 +76,6 @@ static int h3_varint_dec(const uint8_t* p, int maxlen, uint64_t* out) {
            ((uint64_t)p[2] << 40) | ((uint64_t)p[3] << 32) | ((uint64_t)p[4] << 24) |
            ((uint64_t)p[5] << 16) | ((uint64_t)p[6] << 8) | p[7];
     return 8;
-}
-
-// ==================== QPACK prefix integer（RFC 7541 §5.1 / RFC 9204 §4.1.1）====================
-// 编码：把 value 写入首字节（高 8-prefix_bits 位为 first_hi）+ 续字节。
-// first_hi 是调用方已构造的高位（如 0x20 表示 001 模式 + N/H 位）。
-// 返回写入总字节数。
-static int qp_enc_prefint(uint8_t* out, int prefix_bits, uint64_t value) {
-    uint64_t maxv = (1ULL << prefix_bits) - 1;
-    if (value < maxv) { out[0] = (uint8_t)value; return 1; }
-    out[0] = (uint8_t)maxv;
-    uint64_t rest = value - maxv;
-    int n = 1;
-    while (rest >= 128) {
-        out[n++] = (uint8_t)((rest & 0x7f) | 0x80);
-        rest >>= 7;
-    }
-    out[n++] = (uint8_t)rest;
-    return n;
-}
-
-// 解码 prefix integer：p 指向首字节（其高 8-prefix_bits 位已在调用处校验/忽略）。
-// 返回 [值, 消耗字节数]；数据不足消耗=0。
-static uint64_t qp_dec_prefint(const uint8_t* p, int maxlen, int prefix_bits, int* used) {
-    if (maxlen < 1) { *used = 0; return 0; }
-    uint64_t maxv = (1ULL << prefix_bits) - 1;
-    uint64_t v = p[0] & maxv;
-    if (v < maxv) { *used = 1; return v; }
-    int i = 1;
-    int shift = 0;
-    while (i < maxlen) {
-        uint8_t b = p[i++];
-        v += (uint64_t)(b & 0x7f) << shift;
-        if ((b & 0x80) == 0) { *used = i; return v; }
-        shift += 7;
-    }
-    *used = 0;
-    return 0;
-}
-
-// ==================== QPACK 字段段（MVP：Literal Field Line with Literal Name，无 Huffman/动态表）====================
-// 字段行：001 N H | NameLen(3+)  name...  H | ValueLen(7+)  value...
-//   N=0（不敏感），H=0（不用 Huffman）。前缀：Required Insert Count=0 + Base=0 → 0x00 0x00。
-// 返回写入字节数。
-static int qp_enc_field(uint8_t* out, const char* name, int nlen, const char* val, int vlen) {
-    int off = 0;
-    uint8_t tmp[16];
-    int n = qp_enc_prefint(tmp, 3, (uint64_t)nlen);
-    out[off++] = (uint8_t)(0x20 | tmp[0]);   // 001 N=0 H=0 | len 低 3 位
-    for (int i = 1; i < n; i++) out[off++] = tmp[i];
-    memcpy(out + off, name, (size_t)nlen); off += nlen;
-    n = qp_enc_prefint(tmp, 7, (uint64_t)vlen);
-    out[off++] = tmp[0];                     // H=0 | len 低 7 位
-    for (int i = 1; i < n; i++) out[off++] = tmp[i];
-    memcpy(out + off, val, (size_t)vlen); off += vlen;
-    return off;
-}
-
-// 编码字段段（2 字节前缀 + 字段行）。fields: list of [name,value]（PX_LIST）
-static int qp_enc_section(uint8_t* out, LXValue* fields, int nf) {
-    int off = 0;
-    out[off++] = 0x00;  // Required Insert Count = 0
-    out[off++] = 0x00;  // Base = 0（S=0, Delta=0）
-    for (int i = 0; i < nf; i++) {
-        if (fields[i].type != PX_LIST && fields[i].type != PX_TUPLE) return -1;
-        LXObject* f = fields[i].as.obj;
-        if (f->as.list.len < 2) return -1;
-        LXValue* kv = f->as.list.items;
-        if (kv[0].type != PX_STR || kv[1].type != PX_STR) return -1;
-        const char* nm = kv[0].as.obj->as.str.data; int nml = kv[0].as.obj->as.str.len;
-        const char* vl = kv[1].as.obj->as.str.data; int vll = kv[1].as.obj->as.str.len;
-        if (off + nml + vll + 8 > H3_BUF_MAX) return -1;
-        off += qp_enc_field(out + off, nm, nml, vl, vll);
-    }
-    return off;
-}
-
-// 解码字段段 → list of [name,value]。失败返回 null。
-static LXValue qp_dec_section(const uint8_t* p, int len) {
-    int off = 0;
-    int used = 0;
-    if (len < 2) return px_null();
-    uint64_t ric = qp_dec_prefint(p, len, 8, &used);   // Required Insert Count（8-bit prefix）
-    if (used == 0) return px_null();
-    off += used;
-    if (off >= len) return px_null();
-    uint64_t base = qp_dec_prefint(p + off, len - off, 7, &used);  // Base（S+7）
-    if (used == 0) return px_null();
-    off += used;
-    if (ric != 0) return px_null();   // MVP：动态表未启用
-    LXValue fields = px_list(8);
-    while (off < len) {
-        uint8_t b0 = p[off];
-        if ((b0 & 0xe0) != 0x20) return px_null();   // 001 模式（MVP 仅 Literal Name）
-        // b0 bit4=N, bit3=H
-        int H = (b0 >> 3) & 1;
-        if (H != 0) return px_null();                // 不支持 Huffman
-        uint64_t nlen = qp_dec_prefint(p + off, len - off, 3, &used);
-        if (used == 0) return px_null();
-        off += used;
-        if (off + (int)nlen > len) return px_null();
-        const char* nm = (const char*)(p + off);
-        off += (int)nlen;
-        if (off >= len) return px_null();
-        uint8_t v0 = p[off];
-        if ((v0 & 0x80) != 0) return px_null();      // H=0
-        uint64_t vlen = qp_dec_prefint(p + off, len - off, 7, &used);
-        if (used == 0) return px_null();
-        off += used;
-        if (off + (int)vlen > len) return px_null();
-        LXValue pair = px_list(2);
-        px_list_push(pair, px_str_len(nm, (int)nlen));
-        px_list_push(pair, px_str_len((const char*)(p + off), (int)vlen));
-        px_list_push(fields, pair);
-        off += (int)vlen;
-    }
-    return fields;
 }
 
 // ==================== HTTP/3 帧 ====================
@@ -291,7 +176,7 @@ static LXValue bi_h3_qenc(LXValue* args, int nargs, void* ctx) {
     LXObject* lst = args[0].as.obj;
     uint8_t* out = (uint8_t*)malloc(H3_BUF_MAX);
     if (!out) return px_null();
-    int n = qp_enc_section(out, lst->as.list.items, lst->as.list.len);
+    int n = px_h3_qenc(out, lst->as.list.items, lst->as.list.len);
     if (n < 0) { free(out); return px_null(); }
     LXValue r = px_bytes_len(out, n);
     free(out);
@@ -304,7 +189,7 @@ static LXValue bi_h3_qdec(LXValue* args, int nargs, void* ctx) {
     if (nargs < 1 || (args[0].type != PX_STR && args[0].type != PX_BYTES))
         px_error("h3_qdec 需要 (data: bytes)");
     LXObject* o = args[0].as.obj;
-    return qp_dec_section((const uint8_t*)o->as.str.data, o->as.str.len);
+    return px_h3_qdec((const uint8_t*)o->as.str.data, o->as.str.len);
 }
 
 // h3_frame(type:int, payload:bytes) -> bytes
@@ -365,7 +250,7 @@ static LXValue bi_h3_serve_send_response(LXValue* args, int nargs, void* ctx) {
     uint8_t* f = (uint8_t*)malloc(H3_BUF_MAX + 16);
     if (!q || !f) { free(q); free(f); return px_bool(false); }
     LXObject* fo = fields.as.obj;
-    int qn = qp_enc_section(q, fo->as.list.items, fo->as.list.len);
+    int qn = px_h3_qenc(q, fo->as.list.items, fo->as.list.len);
     int fn1 = h3_build_frame(f, H3_FRAME_HEADERS, q, qn > 0 ? qn : 0);
     int fn2 = h3_build_frame(f + fn1, H3_FRAME_DATA, bd, blen);
     int64_t sent = px_quic_raw_send(conn, f, fn1 + fn2);
@@ -383,7 +268,7 @@ static LXValue bi_h3_serve_read_request(LXValue* args, int nargs, void* ctx) {
     uint8_t* hd = NULL; int hlen = 0;
     int t = h3_take_frame(conn, &hd, &hlen, timeout);
     if (t != H3_FRAME_HEADERS) { free(hd); return px_null(); }
-    LXValue fields = qp_dec_section(hd, hlen);
+    LXValue fields = px_h3_qdec(hd, hlen);
     free(hd);
     if (fields.type != PX_LIST) return px_null();
     // 收 DATA 帧（body）
@@ -475,7 +360,7 @@ static LXValue bi_h3_client_send_request(LXValue* args, int nargs, void* ctx) {
     uint8_t* f = (uint8_t*)malloc(H3_BUF_MAX + 16);
     if (!q || !f) { free(q); free(f); return px_bool(false); }
     LXObject* fo = fields.as.obj;
-    int qn = qp_enc_section(q, fo->as.list.items, fo->as.list.len);
+    int qn = px_h3_qenc(q, fo->as.list.items, fo->as.list.len);
     int fn1 = h3_build_frame(f, H3_FRAME_HEADERS, q, qn > 0 ? qn : 0);
     int fn2 = h3_build_frame(f + fn1, H3_FRAME_DATA, bd, blen);
     int64_t sent = px_quic_raw_send(conn, f, fn1 + fn2);
@@ -492,7 +377,7 @@ static LXValue bi_h3_client_read_response(LXValue* args, int nargs, void* ctx) {
     uint8_t* hd = NULL; int hlen = 0;
     int t = h3_take_frame(conn, &hd, &hlen, timeout);
     if (t != H3_FRAME_HEADERS) { free(hd); return px_null(); }
-    LXValue fields = qp_dec_section(hd, hlen);
+    LXValue fields = px_h3_qdec(hd, hlen);
     free(hd);
     if (fields.type != PX_LIST) return px_null();
     uint8_t* bd = NULL; int blen = 0;
@@ -528,6 +413,8 @@ static LXValue bi_h3_client_read_response(LXValue* args, int nargs, void* ctx) {
 void px_register_h3(void) {
     px_set_global("h3_qenc", px_native("h3_qenc", bi_h3_qenc));
     px_set_global("h3_qdec", px_native("h3_qdec", bi_h3_qdec));
+    px_set_global("h3_huff", px_native("h3_huff", bi_h3_huff));
+    px_set_global("h3_unhuff", px_native("h3_unhuff", bi_h3_unhuff));
     px_set_global("h3_frame", px_native("h3_frame", bi_h3_frame));
     px_set_global("h3_serve_send_response", px_native("h3_serve_send_response", bi_h3_serve_send_response));
     px_set_global("h3_serve_read_request", px_native("h3_serve_read_request", bi_h3_serve_read_request));
@@ -536,6 +423,8 @@ void px_register_h3(void) {
     px_set_global("h3_client_read_response", px_native("h3_client_read_response", bi_h3_client_read_response));
     px_ffi_register("h3_qenc", bi_h3_qenc);
     px_ffi_register("h3_qdec", bi_h3_qdec);
+    px_ffi_register("h3_huff", bi_h3_huff);
+    px_ffi_register("h3_unhuff", bi_h3_unhuff);
     px_ffi_register("h3_frame", bi_h3_frame);
     px_ffi_register("h3_serve_send_response", bi_h3_serve_send_response);
     px_ffi_register("h3_serve_read_request", bi_h3_serve_read_request);

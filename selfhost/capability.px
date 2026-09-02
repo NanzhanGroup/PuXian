@@ -651,6 +651,55 @@ check("M47 QPACK 伪头 roundtrip", dec2 != null and len(dec2) == 3 and dec2[0][
 check("M47 QPACK 非法输入返回 null", h3_qdec("") == null)
 
 # ============================================================
+# 23. QPACK 完整 codec（M48：Huffman + 静态表压缩）
+# ------------------------------------------------------------
+# M47 的 QPACK MVP（仅 Literal Name、无压缩）内联实现迁出为
+# runtime/runtime_h3_qpack.c 完整 codec，按 RFC 9204 升级：
+#   - Indexed Field Line（静态表索引，RFC 9204 Appendix A 99 项）
+#   - Literal Field Line with Name Reference（T=1 静态）
+#   - Literal Field Line with Literal Name（name/value 可 Huffman）
+#   - Huffman 编解码（RFC 7541 Appendix B，QPACK 复用同表）
+# 仍无动态表（MaxTableCapacity=0：RIC/Base 恒 0，动态引用→null）。
+# 纯 codec 语言接口不变（h3_qenc/h3_qdec），新增 h3_huff/h3_unhuff。
+# 字节精确断言经 FFI 表 bytes_to_hex/hex_to_bytes（M48 注册，双模式一致）。
+# ============================================================
+import "c/ngtcp2"
+
+extern def h3_huff(s: str) -> bytes
+extern def h3_unhuff(data: bytes) -> str
+extern def bytes_to_hex(data) -> str
+extern def hex_to_bytes(s: str) -> bytes
+
+# M48.1：Huffman 与 RFC 7541 Appendix C 官方向量逐字节一致（互操作基准）
+check("M48 Huffman 官方向量 www.example.com", bytes_to_hex(h3_huff("www.example.com")) == "f1e3c2e5f23a6ba0ab90f4ff")
+check("M48 Huffman 官方向量 no-cache", bytes_to_hex(h3_huff("no-cache")) == "a8eb10649cbf")
+check("M48 Huffman 官方向量 custom-key", bytes_to_hex(h3_huff("custom-key")) == "25a849e95ba97d7f")
+check("M48 Huffman 官方向量 custom-value", bytes_to_hex(h3_huff("custom-value")) == "25a849e95bb8e8b4bf")
+check("M48 Huffman 解码官方向量", h3_unhuff(hex_to_bytes("f1e3c2e5f23a6ba0ab90f4ff")) == "www.example.com")
+
+# M48.2：Huffman 编解码 roundtrip（URL/中文/大小写混合）
+var hrt = h3_unhuff(h3_huff("px-h3://user:pass@example.com:8443/路径?q=1&b=中文"))
+check("M48 Huffman roundtrip 复杂串", hrt == "px-h3://user:pass@example.com:8443/路径?q=1&b=中文")
+
+# M48.3：QPACK 静态表压缩——[:method, GET] 命中表项 17 → 00 00 D1（字节精确）
+check("M48 QPACK 静态表索引编码", bytes_to_hex(h3_qenc([[":method", "GET"]])) == "0000d1")
+var st = h3_qdec(hex_to_bytes("0000d1"))
+check("M48 QPACK 静态表索引解码", st != null and len(st) == 1 and st[0][0] == ":method" and st[0][1] == "GET")
+
+# M48.4：完整 codec roundtrip（静态全匹配/静态名引用/字面名 Huffman 混合）
+var full = [[":method", "GET"], [":scheme", "https"], [":path", "/index.html"], ["content-type", "text/html; charset=utf-8"], ["x-custom-48", "ab中文c"]]
+var fdec = h3_qdec(h3_qenc(full))
+check("M48 全 codec roundtrip 数量", fdec != null and len(fdec) == 5)
+check("M48 全 codec roundtrip 伪头", fdec[0][0] == ":method" and fdec[0][1] == "GET" and fdec[1][1] == "https")
+check("M48 全 codec roundtrip 静态/字面", fdec[2][1] == "/index.html" and fdec[3][1] == "text/html; charset=utf-8")
+check("M48 全 codec roundtrip 自定义 Huffman", fdec[4][0] == "x-custom-48" and fdec[4][1] == "ab中文c")
+
+# M48.5：容错——非法 Huffman / 动态表引用 / 动态 Indexed 拒绝（无动态表语义）
+check("M48 Huffman 非法 padding 返回 null", h3_unhuff(hex_to_bytes("ff")) == null)
+check("M48 QPACK 动态表引用拒绝", h3_qdec(hex_to_bytes("0100c1")) == null)
+check("M48 QPACK 动态 Indexed 拒绝", h3_qdec(hex_to_bytes("000080")) == null)
+
+# ============================================================
 # 汇总
 # ============================================================
 print("")
