@@ -8,8 +8,9 @@
 > 二进制免环境 + 生成 C→gcc 交叉编译是边缘差异化卖点。
 >
 > 范围：仅 PuXian 语言 / runtime / 工具链侧（ws-web 归清歌，不在本里程碑）。
-> 验证基调：无真板子环境 → ioctl/mmap 语义用 **TCP fd + x86 ioctl mock** 验证，
-> 真实设备（GPIO/I2C）条件性探测（存在则 open 验证），S4 用 qemu-aarch64 跑交叉产物。
+> 验证基调：无真板子环境 → ioctl/mmap 语义用 **TCP fd + 内核自带可访问设备替身**
+> （网卡 lo ifreq / PTY，S3）验证，真实设备（GPIO/I2C）条件性探测
+> （存在则 open 验证），S4 用 qemu-aarch64 跑交叉产物。
 
 ## 一、现状（调研结论）
 
@@ -55,9 +56,17 @@
   子视图 / 超长截断到视图尾）；mmap 视图作 ioctl 就地 buffer（FIONREAD 内核写映射区）；
   munmap 解除语义（len=0 / 重复 false / 非映射 false）；GC sweep 自动 munmap 300 轮不崩；
   失败 errno。read/write 以 TCP socket + 文件 fd 走真实内核路径（x86 mock 语义验证）。
-- **D3 · 设备示例 + mock（S3）**
-  GPIO 老接口 / I2C dev 读写示例；无板子用 x86 ioctl mock（LD_PRELOAD 或 /dev 伪设备）
-  验胶水语义。
+- **D3 · 设备示例 + 真内核替身验证（S3，mock 方案调整）**
+  GPIO（/dev/gpiochipN chipinfo ioctl）与 I2C（/dev/i2c-N 读写）示例；
+  无板子验证原计划 LD_PRELOAD mock——但 pxc build 产物为**静态链接**（file 确认
+  statically linked），LD_PRELOAD 注入不可行，/dev 伪设备需内核模块亦不可用 →
+  改用**内核自带的用户态可访问设备**作 GPIO/I2C 替身：loopback 网卡 ifreq ioctl
+  （SIOCGIFADDR/SIOCGIFFLAGS/SIOCGIFHWADDR，结构体 buffer 就地填充）+ PTY
+  （TIOCGPTN，int buffer 就地填充），走与 GPIO/I2C **完全相同的语言胶水路径**
+  （fd=open/socket → ABI buffer → ioctl bytes/int 就地填充 → 解析内核写回），
+  验证力度反而更强（真内核而非假驱动）。实测意外收获：本容器存在 /dev/i2c-0 →
+  I2C_SLAVE=0x0703 **int 形态**设从地址在真实内核 ioctl 路径验证通过（rc=0；
+  写失败 errno=95 仅因无器件）。
 - **D4 · 交叉编译工具链（S4）**
   本地 aarch64 交叉（gcc-aarch64 或 zig cc）→ qemu-aarch64 跑静态产物；
   runtime 裁剪开关（--no-ssl 等，解开 mbedtls/sqlite3/openssl 平台依赖）。
@@ -72,7 +81,7 @@
 |---|---|---|
 | S1 ✅ | D1 fd 原语（open/close/ioctl/os_errno） | commit `57bb9d7`；examples/m57_s1_ioctl_verify.sh 全 PASS（A open/close+errno / B TCP fd FIONREAD=5/0+就地填充、FIONBIO 生效、ENOTTY/EBADF、NULL/int/bytes 三形态 / C 真实设备条件探测）；m53_s1_h3echo 8 并发回归 PASS；capability 全量因宿主负载 killed 留 S5 |
 | S2 ✅ | D2 fd 数据通道 + mmap/munmap（read/write/mmap/munmap/mem_write） | commit `f71b28e`；examples/m57_s2_mmap_verify.sh 全 PASS（A TCP 环回 read/write + 文件顺序写 + 非法 fd errno / B MAP_SHARED 整视图·offset 子视图·双向可见·超长截断 / C mmap 视图作 ioctl buffer FIONREAD=3 / D munmap 解除语义 / E GC sweep munmap 300 轮 / F 失败 -1+EBADF）；m57_s1_ioctl 复验 PASS；capability/m53_s1 全量回归因宿主外部进程占核 killed 留 S5 |
-| S3 | D3 GPIO / I2C 示例 + x86 ioctl mock | 待定 |
+| S3 ✅ | D3 GPIO / I2C 示例 + 真内核替身验证（mock 调整：pxc 静态链接 → LD_PRELOAD 不可行，改内核自带可访问设备 lo ifreq + PTY 走同胶水路径） | commit `8f6e615`；examples/m57_s3_verify.sh 全 PASS：A devctl 硬断言（A1 SIOCGIFADDR lo→family=2+127.0.0.1 / A2 SIOCGIFFLAGS→LOOPBACK 置位 / A3 SIOCGIFHWADDR→family=772+mac0 / B TIOCGPTN→pts 号，全真实内核）；B/C gpio（无 gpiochip SKIP）·i2c（/dev/i2c-0 存在 → I2C_SLAVE int 形态真实内核设置成功，无器件 errno=95 SKIP）两态放行；D m57_s1/m57_s2 复验 PASS |
 | S4 | D4 aarch64 交叉 + qemu + runtime 裁剪开关 | 待定 |
 | S5 | D5 pxi 重建 + capability/diffcheck/自举/全量回归 | 待定 |
 | S6 | D6 文档收尾 | 待定 |
