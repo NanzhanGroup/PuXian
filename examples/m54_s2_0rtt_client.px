@@ -1,0 +1,79 @@
+# ============================================================
+# M54 S2：0-RTT early data —— 客户端
+# ------------------------------------------------------------
+# A) 传输层 0-RTT（echo，:17998）：
+#    ① 全新握手 → echo → quic_0rtt_save（TLS session + 0-RTT transport params）
+#    ② quic_connect_0rtt 恢复 → 断言「握手未完成即返回」（handshake_done=false）
+#    ③ 立即 quic_send（0-RTT 包，握手完成前已发出）→ echo 正确返回
+#    核心：connect_0rtt 返回时握手未完成却能 send 成功 —— early data 语义。
+# B) H3 0-RTT 子集（GET→200，:17999，RFC 9204 §3.3.3）：
+#    客户端 0-RTT 连接不 setup QPACK（静态表/字面量编码），server 无状态响应 →
+#    0-RTT GET /hi 提前到达，server 握手完成后处理 → 200 "0rtt-get:200"。
+# ============================================================
+import "c/ngtcp2"
+
+extern def quic_connect(ip: str, port: int, alpn: str) -> int
+extern def quic_connect_0rtt(ip: str, port: int, alpn: str, session0rtt: str) -> int
+extern def quic_0rtt_save(conn: int) -> str
+extern def quic_0rtt_rejected(conn: int) -> bool
+extern def quic_conn_handshake_done(conn: int) -> bool
+extern def quic_send(conn: int, data: str) -> int
+extern def quic_recv(conn: int, maxlen: int) -> str
+extern def quic_close(conn: int) -> bool
+extern def h3_client_connect(ip: str, port: int, alpn: str) -> int
+extern def h3_client_send_request(conn: int, method: str, scheme: str, authority: str, path: str, headers: list, body: str) -> bool
+extern def h3_client_read_response(conn: int, timeout_ms: int) -> dict
+
+# ---------- A) 传输层 0-RTT（echo）----------
+var c1 = quic_connect("127.0.0.1", 17998, "puxian")
+assert(c1 > 0, "A: 首次连接失败")
+assert(quic_send(c1, "PING#1") > 0, "A: send#1 失败")
+assert(quic_recv(c1, 64) == "PING#1", "A: echo#1 不匹配")
+var s0 = quic_0rtt_save(c1)
+assert(s0 != "", "A: quic_0rtt_save 返回空")
+assert(len(s0) > 1000, "A: 0-RTT 会话过短（应含 session+ticket+0rtt tp） len=" + str(len(s0)))
+quic_close(c1)
+print("A: first full handshake ok, 0rtt_blob_len=" + str(len(s0)))
+
+var c2 = quic_connect_0rtt("127.0.0.1", 17998, "puxian", s0)
+assert(c2 > 0, "A: quic_connect_0rtt 失败")
+var hd_before = quic_conn_handshake_done(c2)
+print("A: connect_0rtt returned, handshake_done=" + str(hd_before))
+assert(hd_before == false, "A: 期望 0-RTT（握手未完成即返回），实际等了完整握手（0-RTT 不可用/降级）")
+assert(quic_0rtt_rejected(c2) == false, "A: early data 被拒绝")
+
+var n = quic_send(c2, "0RTT-EARLY")
+assert(n > 0, "A: 0-RTT send（握手完成前）失败")
+print("A: early send ok (" + str(n) + " bytes) before handshake complete")
+var echo = quic_recv(c2, 64)
+assert(echo == "0RTT-EARLY", "A: 0-RTT echo 不匹配 got=[" + echo + "]")
+assert(quic_conn_handshake_done(c2) == true, "A: recv 后握手应已完成")
+print("A: early echo ok, rejected=" + str(quic_0rtt_rejected(c2)))
+quic_close(c2)
+print("A: transport 0-RTT PASS")
+
+# ---------- B) H3 0-RTT 子集（GET → 200）----------
+var d1 = h3_client_connect("127.0.0.1", 17999, "puxian")
+assert(d1 > 0, "B: h3 首次连接失败")
+assert(h3_client_send_request(d1, "GET", "https", "127.0.0.1:17999", "/warm", [], "") == true, "B: h3 warm send 失败")
+var w1 = h3_client_read_response(d1, 4000)
+assert(w1 != null and w1["status"] == "200", "B: h3 warm 非 200")
+var sh = quic_0rtt_save(d1)
+assert(sh != "" and len(sh) > 1000, "B: h3 0rtt save 失败")
+quic_close(d1)
+print("B: warm full connection ok")
+
+var d2 = quic_connect_0rtt("127.0.0.1", 17999, "puxian", sh)
+assert(d2 > 0, "B: h3 quic_connect_0rtt 失败")
+assert(quic_conn_handshake_done(d2) == false, "B: 期望 0-RTT 建连（握手未完成）")
+assert(h3_client_send_request(d2, "GET", "https", "127.0.0.1:17999", "/hi", [], "") == true, "B: h3 0-RTT send 失败")
+print("B: h3 0-RTT GET sent before handshake complete")
+var w2 = h3_client_read_response(d2, 5000)
+assert(w2 != null, "B: h3 0-RTT 响应缺失")
+assert(w2["status"] == "200", "B: h3 0-RTT 状态错误 got=" + str(w2["status"]))
+assert(w2["body"] == "0rtt-get:200", "B: h3 0-RTT body 错误 got=[" + str(w2["body"]) + "]")
+print("B: h3 0-RTT GET -> " + str(w2["status"]) + " body=[" + w2["body"] + "]")
+quic_close(d2)
+print("B: h3 0-RTT PASS")
+
+print("client: ok")
