@@ -1,0 +1,29 @@
+# ============================================================
+# M54 S2：0-RTT early data —— 服务端
+# ------------------------------------------------------------
+# 两个托管 listener（M53 单 fd 收包路由 + 每连接处理线程）：
+#   :17998  quic_h3_listen        → 默认 QUIC echo 回调（传输层 0-RTT 验证）
+#   :17999  h3_server_listen_stateless → 无状态 H3 200（H3 0-RTT 子集验证，
+#           QPACK 静态表/字面量，RFC 9204 §3.3.3；不 setup 动态表会话）
+# 两个 listener 的 SSL_CTX 均开启 TLS1.3 max_early_data + session ticket
+# （M54-S2 server 侧改动），同一进程内 ticket key 稳定 → 客户端二次连接可 0-RTT。
+# ============================================================
+import "c/ngtcp2"
+
+extern def quic_h3_listen(port: int, cert: str, key: str) -> int
+extern def h3_server_listen_stateless(port: int, cert: str, key: str) -> int
+extern def quic_close_listener(listener: int) -> bool
+
+var le = quic_h3_listen(17998, "", "")
+assert(le > 0, "server: quic_h3_listen(echo) 失败")
+var lh = h3_server_listen_stateless(17999, "", "")
+assert(lh > 0, "server: h3_server_listen_stateless 失败")
+write_file("/tmp/m54s2.ready", "ready")
+
+var end = now_ms() + 25000
+while now_ms() < end:
+    sleep(200)
+
+quic_close_listener(lh)
+quic_close_listener(le)
+print("server: ok")

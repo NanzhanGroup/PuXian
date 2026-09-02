@@ -1269,6 +1269,59 @@ static void h3_srv_pipe_cb(int64_t conn, void* ud) {
     }
 }
 
+// M54-S2：托管 H3 无状态 conn_cb（0-RTT 子集验证，RFC 9204 §3.3.3）
+// 与 h3_srv_pipe_cb 的差异：**不 setup QPACK 动态表会话**（两端走无状态 codec：
+// 字段段仅静态表 + 字面量，0-RTT 安全）。0-RTT 客户端（quic_connect_0rtt 建连、
+// 不建 uni 控制/编码器流、仅静态表编码）可直连本 listener：握手完成前发出的
+// HEADERS+DATA 请求在握手完成回调执行时已缓冲于流槽 → 无状态解码 → 200 响应
+// （同样静态表编码，0-RTT client 可解）。用于 M54-S2 "0-RTT GET → 200" 验证。
+static void h3_srv_stateless_cb(int64_t conn, void* ud) {
+    (void)ud;
+    char peer[96];
+    px_quic_raw_peer_addr(conn, peer, sizeof(peer));
+    int idle = 0;
+    for (;;) {
+        int64_t sid = h3_poll_requests(conn, 4000);   // 未 setup：bidi 直返，uni 防御丢弃
+        if (sid < 0) { if (++idle >= 2) break; continue; }   // 2×4s 空闲 → 关闭
+        idle = 0;
+        LXValue fields; uint8_t* bd = NULL; int blen = 0;
+        if (h3_read_section(conn, sid, 4000, &fields, &bd, &blen) != 0) {
+            if (bd) free(bd);
+            continue;
+        }
+        LXValue req = h3_fields_to_request(fields, sid, bd, blen);
+        free(bd);
+        if (req.type != PX_DICT) continue;
+        // 0-RTT 子集响应：固定 200 text/plain（验证重点是 0-RTT 提前到达 + 静态表
+        // 请求/响应编解码双端一致；不接公共管道，避免依赖路由表与动态表会话）
+        LXValue hdrs = px_list(2);
+        px_list_push(hdrs, px_str("content-type: text/plain"));
+        LXValue rf = h3_make_response_fields(200, hdrs);
+        h3_send_fields(conn, sid, rf, px_str("0rtt-get:200"), 1);
+    }
+}
+
+// 0-RTT 无状态 H3 listener 内部入口（raw：显式回调走托管 listener）
+int64_t px_h3_server_listen_stateless(int port, const char* cert, const char* key) {
+    return px_quic_raw_h3_listen_cb(port, cert ? cert : "", key ? key : "",
+                                    h3_srv_stateless_cb, NULL);
+}
+
+// h3_server_listen_stateless(port:int[, cert:str, key:str]) -> int
+static LXValue bi_h3_server_listen_stateless(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || args[0].type != PX_INT) px_error("h3_server_listen_stateless 需要 (port: int[, cert: str, key: str])");
+    int port = (int)args[0].as.i;
+    const char* cert = "";
+    const char* key = "";
+    if (nargs >= 3 && args[1].type == PX_STR && args[2].type == PX_STR) {
+        cert = args[1].as.obj->as.str.data;
+        key = args[2].as.obj->as.str.data;
+    }
+    int64_t id = px_h3_server_listen_stateless(port, cert, key);
+    return px_int(id);
+}
+
 // M53-S4：px_serve opts.http3 内部入口 —— 公共 HTTP 管道托管 H3 listener
 // （与 h3_server_listen 同语义；runtime.c px_serve 启动时调用，实现三栈合一 WebServer）。
 int64_t px_h3_server_listen_pipe(int port, const char* cert, const char* key) {
@@ -1336,4 +1389,6 @@ void px_register_h3(void) {
     px_ffi_register("h3_conn_stats", bi_h3_conn_stats);
     px_set_global("h3_server_listen", px_native("h3_server_listen", bi_h3_server_listen));
     px_ffi_register("h3_server_listen", bi_h3_server_listen);
+    px_set_global("h3_server_listen_stateless", px_native("h3_server_listen_stateless", bi_h3_server_listen_stateless));
+    px_ffi_register("h3_server_listen_stateless", bi_h3_server_listen_stateless);
 }

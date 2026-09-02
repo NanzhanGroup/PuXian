@@ -94,6 +94,9 @@ typedef struct {
     int            handshake_done;
     int            peer_closed;
     int            used;
+    // M54-S2：0-RTT early data
+    int            early_sent;      // quic_connect_0rtt 成功路径（握手未完成即返回）
+    int            early_rejected;  // 服务端拒绝 early data（握手完成回调检测）
     // M53：server 多连接托管（收包路由线程 → 本连接处理线程）
     // 并发：队列 push/pop/free 统一持全局 g_quic_srv_mu；qcv 每连接独立（避免惊群）
     int              owner_listener;         // >0 = 由该 listener 托管
@@ -188,6 +191,17 @@ static int quic_handshake_completed_cb(ngtcp2_conn* conn, void* user_data) {
     (void)conn;
     quic_conn* qc = (quic_conn*)user_data;
     qc->handshake_done = 1;
+    // M54-S2：0-RTT early data 状态（OpenSSL 在握手完成后才报告 accepted/rejected）。
+    // 若服务端拒绝了 early data：必须调 ngtcp2_conn_tls_early_data_rejected 通知 ngtcp2
+    // 释放 0-RTT 发送状态 → 后续 write 把 0-RTT 流数据按 1-RTT 重发 —— 否则客户端误以
+    // 为 early data 已送达（实际被服务端丢弃），服务端永远收不到请求且重传状态错乱。
+    if (qc->ssl) {
+        int st = SSL_get_early_data_status(qc->ssl);
+        if (st == SSL_EARLY_DATA_REJECTED) {
+            qc->early_rejected = 1;
+            if (qc->conn) ngtcp2_conn_tls_early_data_rejected(qc->conn);
+        }
+    }
     return 0;
 }
 
@@ -341,6 +355,8 @@ static SSL_CTX* quic_make_server_ctx(void) {
     // M54-S1: TLS1.3 stateless session ticket（会话恢复前提）
     SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_SERVER);
     SSL_CTX_set_session_id_context(ctx, (const unsigned char*)"puxian-quic", 11);
+    // M54-S2: 允许 0-RTT early data（签发带 max_early_data 的 ticket，1MB 上限）
+    SSL_CTX_set_max_early_data(ctx, 1u << 20);
     if (SSL_CTX_use_certificate(ctx, x509) != 1 ||
         SSL_CTX_use_PrivateKey(ctx, pkey) != 1) {
         fprintf(stderr, "[quic] server ctx use_cert/key FAIL\n");
@@ -507,6 +523,8 @@ static SSL_CTX* quic_make_server_ctx_cert(const char* certfile, const char* keyf
     // M54-S1: TLS1.3 stateless session ticket（会话恢复前提）
     SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_SERVER);
     SSL_CTX_set_session_id_context(ctx, (const unsigned char*)"puxian-quic", 11);
+    // M54-S2: 允许 0-RTT early data（签发带 max_early_data 的 ticket，1MB 上限）
+    SSL_CTX_set_max_early_data(ctx, 1u << 20);
     if (SSL_CTX_use_certificate_chain_file(ctx, certfile) != 1 ||
         SSL_CTX_use_PrivateKey_file(ctx, keyfile, SSL_FILETYPE_PEM) != 1) {
         fprintf(stderr, "[quic] h3 server ctx 加载证书失败 cert=%s key=%s\n", certfile, keyfile);
@@ -674,8 +692,20 @@ static int quic_srv_new_conn(quic_listener* ql, const uint8_t* pkt, size_t rl,
     qc->conn_ref.user_data = qc;
     SSL_set_app_data(ssl, &qc->conn_ref);
     SSL_set_accept_state(ssl);
+    SSL_set_quic_early_data_enabled(ssl, 1);   // M54-S2：接受 0-RTT early data（官方 quictls 顺序：accept_state 后启用）
     // 登记初始 scid（客户端 1-RTT 短头包 DCID = 本端 scid）
     quic_cid_add(ql, scid.data, scid.datalen, cid);
+    // M54-S2：登记客户端 Initial 的 DCID（包头 DCID = vc.dcid）→ 同连接。0-RTT early data
+    // 长头包与 Initial 使用同一 DCID（ngtcp2 client 在收到 ServerHello/本端 SCID 前，以
+    // Initial 的 DCID 充当服务端 CID），必须可路由到本 conn —— 若误登记 vc.scid（对端 SCID，
+    // 仅用于回包 DCID）则 0-RTT 包 cid_find 未命中、被 router 丢弃（early data 静默丢失、
+    // 客户端等响应超时/重传状态错乱）。
+    {
+        ngtcp2_cid init_dcid;
+        init_dcid.datalen = vc.dcidlen;
+        memcpy(init_dcid.data, vc.dcid, vc.dcidlen);
+        quic_cid_add(ql, init_dcid.data, init_dcid.datalen, cid);
+    }
     *out_cid = cid;
     return 0;
 }
@@ -1152,6 +1182,7 @@ static LXValue bi_quic_accept(LXValue* args, int nargs, void* ctx) {
         qc->conn_ref.user_data = qc;
         SSL_set_app_data(ssl, &qc->conn_ref);
         SSL_set_accept_state(ssl);
+        SSL_set_quic_early_data_enabled(ssl, 1);   // M54-S2：接受 0-RTT early data（官方 quictls 顺序：accept_state 后启用）
         // 喂第一个包
         ngtcp2_conn_handle_expiry(qc->conn, quic_now());
         rv = ngtcp2_conn_read_pkt(qc->conn, &qc->path, NULL, pkt, (size_t)rl, quic_now());
@@ -1388,6 +1419,273 @@ static LXValue bi_quic_conn_resumed(LXValue* args, int nargs, void* ctx) {
     quic_conn* qc = quic_get_conn(args[0].as.i);
     if (!qc || !qc->ssl) return px_bool(false);
     return px_bool(SSL_session_reused(qc->ssl) == 1);
+}
+
+// ==================== M54-S2：0-RTT early data ====================
+// 语言 API：
+//   quic_0rtt_save(conn) -> str          "TLS-session-hex|0rtt-tp-hex"（session 段 = M54-S1
+//                                        quic_session_save 的 DER hex；tp 段 = 0-RTT transport
+//                                        params 编码，RFC 9000 要求随 ticket 一并记忆）。0-RTT
+//                                        tp 不可编码时退化为纯 session（1-RTT 可用）。
+//   quic_connect_0rtt(ip,port,alpn,s) -> conn   会话恢复 + 0-RTT early data：握手完成前即可
+//                                        quic_send（数据随 0-RTT 包提前到达 server）。tp 缺失/
+//                                        解码失败 → 自动降级普通 resume（等握手完成）。
+//   quic_0rtt_rejected(conn) -> bool     early data 被服务端拒绝（需重发）。
+//   quic_conn_handshake_done(conn)->bool 握手是否已完成（断言 0-RTT：connect_0rtt 返回时未完成）。
+// 0-RTT 流程（对齐 ngtcp2 官方 client.cc / tls_client_session_quictls.cc）：
+//   1) session 段 d2i → SSL_set_session（恢复）；SSL_SESSION_get_max_early_data>0 才可 0-RTT
+//   2) SSL_set_quic_early_data_enabled(ssl,1) + tp 段 decode_and_set_0rtt_transport_params
+//   3) 首次 ngtcp2_conn_write_pkt 发出 Initial/ClientHello（含 early_data 扩展，装 0-RTT key）
+//   4) open_bidi_stream 后立即返回 —— 不等握手完成；应用随即 quic_send → 0-RTT 包提前发出
+// 服务端：SSL_CTX_set_max_early_data（ctx）+ SSL_set_quic_early_data_enabled（连接）→
+// ticket 带 max_early_data；0-RTT 包由 quictls 自动解密 → recv_stream_data_cb 提前缓冲。
+static LXValue quic_conn_connect_0rtt_impl(LXValue* args, int nargs) {
+    if (nargs < 4 || args[0].type != PX_STR || args[1].type != PX_INT ||
+        args[2].type != PX_STR || args[3].type != PX_STR)
+        px_error("quic_connect_0rtt 需要 (ip: str, port: int, alpn: str, session0rtt: str)");
+    const char* ip = args[0].as.obj->as.str.data;
+    int port = (int)args[1].as.i;
+    const char* alpn = args[2].as.obj->as.str.data;
+    const char* s0 = args[3].as.obj->as.str.data;
+    // 拆分 "session|tp"
+    const char* sep = strchr(s0, '|');
+    const char* sess_hex = s0;
+    const char* tp_hex = NULL;
+    size_t sess_len = strlen(s0);
+    if (sep) { sess_len = (size_t)(sep - s0); tp_hex = sep + 1; }
+    if (!g_quic_init) {
+        ngtcp2_crypto_quictls_init();
+        OPENSSL_init_ssl(0, NULL);
+        OSSL_PROVIDER_load(NULL, "default");
+        g_quic_init = 1;
+    }
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) { fprintf(stderr, "[quic] 0rtt: socket fail\n"); return px_int(-1); }
+    struct sockaddr_in raddr;
+    memset(&raddr, 0, sizeof(raddr));
+    raddr.sin_family = AF_INET;
+    raddr.sin_port = htons((uint16_t)port);
+    if (inet_pton(AF_INET, ip, &raddr.sin_addr) != 1) { close(fd); return px_int(-1); }
+    if (connect(fd, (struct sockaddr*)&raddr, sizeof(raddr)) != 0) { close(fd); return px_int(-1); }
+    quic_conn qc0; memset(&qc0, 0, sizeof(qc0));
+    int64_t cid = quic_alloc_conn(&qc0);
+    if (cid < 0) { close(fd); return px_int(-1); }
+    quic_conn* qc = &g_qconns[cid - 1];
+    qc->fd = fd;
+    memset(&qc->local_sa, 0, sizeof(qc->local_sa));
+    socklen_t ll = sizeof(qc->local_sa);
+    getsockname(fd, (struct sockaddr*)&qc->local_sa, &ll);
+    memcpy(&qc->remote_sa, &raddr, sizeof(raddr));
+    qc->path.local.addr = (struct sockaddr*)&qc->local_sa;
+    qc->path.local.addrlen = ll;
+    qc->path.remote.addr = (struct sockaddr*)&qc->remote_sa;
+    qc->path.remote.addrlen = sizeof(raddr);
+    ngtcp2_cid dcid, scid;
+    dcid.datalen = NGTCP2_MIN_INITIAL_DCIDLEN;
+    if (RAND_bytes(dcid.data, dcid.datalen) != 1) { close(fd); qc->used = 0; return px_int(-1); }
+    scid.datalen = QUIC_SCIDLEN;
+    if (RAND_bytes(scid.data, QUIC_SCIDLEN) != 1) { close(fd); qc->used = 0; return px_int(-1); }
+    ngtcp2_settings settings;
+    ngtcp2_settings_default(&settings);
+    settings.initial_ts = quic_now();
+    settings.log_printf = quic_log_cb;
+    ngtcp2_transport_params params;
+    ngtcp2_transport_params_default(&params);
+    params.initial_max_streams_bidi = 16;
+    params.initial_max_streams_uni = 3;
+    params.initial_max_stream_data_bidi_local = 128 * 1024;
+    params.initial_max_stream_data_bidi_remote = 128 * 1024;
+    params.initial_max_stream_data_uni = 128 * 1024;
+    params.initial_max_data = 1024 * 1024;
+    ngtcp2_callbacks cb;
+    memset(&cb, 0, sizeof(cb));
+    cb.client_initial = ngtcp2_crypto_client_initial_cb;
+    cb.recv_crypto_data = ngtcp2_crypto_recv_crypto_data_cb;
+    cb.handshake_completed = quic_handshake_completed_cb;
+    cb.encrypt = ngtcp2_crypto_encrypt_cb;
+    cb.decrypt = ngtcp2_crypto_decrypt_cb;
+    cb.hp_mask = ngtcp2_crypto_hp_mask_cb;
+    cb.recv_retry = ngtcp2_crypto_recv_retry_cb;
+    cb.recv_stream_data = quic_recv_stream_data_cb;
+    cb.rand = quic_rand_cb;
+    cb.get_new_connection_id = quic_get_new_cid_cb;
+    cb.remove_connection_id = NULL;
+    cb.update_key = ngtcp2_crypto_update_key_cb;
+    cb.delete_crypto_aead_ctx = ngtcp2_crypto_delete_crypto_aead_ctx_cb;
+    cb.delete_crypto_cipher_ctx = ngtcp2_crypto_delete_crypto_cipher_ctx_cb;
+    cb.get_path_challenge_data = ngtcp2_crypto_get_path_challenge_data_cb;
+    cb.version_negotiation = ngtcp2_crypto_version_negotiation_cb;
+    int rv = ngtcp2_conn_client_new(&qc->conn, &dcid, &scid, &qc->path,
+                                    NGTCP2_PROTO_VER_V1, &cb, &settings, &params,
+                                    NULL, qc);
+    if (rv != 0) { close(fd); qc->used = 0; return px_int(-1); }
+    SSL_CTX* cctx = quic_make_client_ctx();
+    if (!cctx) { close(fd); ngtcp2_conn_del(qc->conn); qc->used = 0; return px_int(-1); }
+    qc->ssl_ctx = cctx;
+    SSL* ssl = SSL_new(cctx);
+    if (!ssl) { SSL_CTX_free(cctx); close(fd); ngtcp2_conn_del(qc->conn); qc->used = 0; return px_int(-1); }
+    qc->ssl = ssl;
+    size_t alpnlen = strlen(alpn);
+    if (alpnlen > 0 && alpnlen <= 255) {
+        unsigned char proto[256];
+        proto[0] = (unsigned char)alpnlen;
+        memcpy(proto + 1, alpn, alpnlen);
+        SSL_set_alpn_protos(ssl, proto, (unsigned)alpnlen + 1);
+    }
+    // session 段恢复（同 quic_connect_resume）
+    int have_sess = 0;
+    if (sess_len > 0 && sess_len % 2 == 0 && sess_len <= 262144) {
+        unsigned char* der = (unsigned char*)malloc(sess_len / 2);
+        int dlen = der ? quic_unhex(s0, sess_len, der) : -1;
+        if (dlen > 0) {
+            const unsigned char* p = der;
+            SSL_SESSION* sess = d2i_SSL_SESSION(NULL, &p, (long)dlen);
+            if (sess) {
+                if (SSL_set_session(ssl, sess) == 1) have_sess = 1;
+                else fprintf(stderr, "[quic] 0rtt: SSL_set_session FAIL\n");
+                SSL_SESSION_free(sess);
+            }
+        }
+        if (der) free(der);
+    }
+    // tp 段 → 0-RTT transport params（decode 必须在首次 write_pkt 前，供 0-RTT 流控/开流）
+    int early_ok = 0;
+    if (have_sess && tp_hex && *tp_hex) {
+        size_t tl = strlen(tp_hex);
+        if (tl % 2 == 0 && tl > 0 && tl <= 4096) {
+            unsigned char* tpb = (unsigned char*)malloc(tl / 2);
+            int tlen = tpb ? quic_unhex(tp_hex, tl, tpb) : -1;
+            if (tlen > 0) {
+                int drv = ngtcp2_conn_decode_and_set_0rtt_transport_params(
+                              qc->conn, tpb, (size_t)tlen);
+                if (drv == 0) {
+                    SSL_set_quic_early_data_enabled(ssl, 1);   // 0-RTT 触发开关
+                    early_ok = 1;
+                } else {
+                    fprintf(stderr, "[quic] 0rtt: decode tp rv=%d (%s) → 降级 1-RTT\n",
+                            drv, ngtcp2_strerror(drv));
+                }
+            }
+            if (tpb) free(tpb);
+        }
+    }
+    ngtcp2_conn_set_tls_native_handle(qc->conn, ssl);
+    qc->conn_ref.get_conn = quic_get_conn_from_ref;
+    qc->conn_ref.user_data = qc;
+    SSL_set_app_data(ssl, &qc->conn_ref);
+    SSL_set_connect_state(ssl);
+    if (early_ok) {
+        // 首次 write_pkt：触发 client_initial_cb → ClientHello（early_data 扩展）+ 装 0-RTT key
+        uint8_t out[QUIC_PKT_BUF];
+        ngtcp2_ssize n = ngtcp2_conn_write_pkt(qc->conn, &qc->path, NULL,
+                                               out, sizeof(out), quic_now());
+        if (n > 0) {
+            sendto(qc->fd, out, (size_t)n, 0,
+                   (struct sockaddr*)&qc->remote_sa, sizeof(qc->remote_sa));
+        } else if (n < 0 && n != NGTCP2_ERR_WRITE_MORE) {
+            fprintf(stderr, "[quic] 0rtt: first write_pkt rv=%zd (%s)\n", n, ngtcp2_strerror((int)n));
+            SSL_free(ssl); SSL_CTX_free(cctx); close(fd);
+            ngtcp2_conn_del(qc->conn); qc->used = 0;
+            return px_int(-1);
+        }
+        // 0-RTT 打开首条双向流（decode tp 后即可，无需握手完成）
+        int64_t sid0 = -1;
+        rv = ngtcp2_conn_open_bidi_stream(qc->conn, &sid0, NULL);
+        if (rv != 0 || sid0 < 0) {
+            fprintf(stderr, "[quic] 0rtt: open_bidi_stream rv=%d (%s)\n", rv, ngtcp2_strerror(rv));
+            SSL_free(ssl); SSL_CTX_free(cctx); close(fd);
+            ngtcp2_conn_del(qc->conn); qc->used = 0;
+            return px_int(-1);
+        }
+        quic_stream_new(qc, sid0, 0);
+        qc->early_sent = 1;   // 语言层可断言 quic_conn_handshake_done==false 且能立即 quic_send
+        return px_int(cid);
+    }
+    // 降级：0-RTT 不可用 → 普通 resume（泵到握手完成再开流）
+    int pr = quic_pump(qc, 10000, 0, -1);
+    if (pr != 0) {
+        SSL_free(ssl); SSL_CTX_free(cctx); close(fd);
+        ngtcp2_conn_del(qc->conn); qc->used = 0;
+        return px_int(-1);
+    }
+    int64_t sid0 = -1;
+    rv = ngtcp2_conn_open_bidi_stream(qc->conn, &sid0, NULL);
+    if (rv != 0 || sid0 < 0) {
+        SSL_free(ssl); SSL_CTX_free(cctx); close(fd);
+        ngtcp2_conn_del(qc->conn); qc->used = 0;
+        return px_int(-1);
+    }
+    quic_stream_new(qc, sid0, 0);
+    return px_int(cid);
+}
+
+// quic_0rtt_save(conn) -> str：同 quic_session_save 等 NewSessionTicket，另拼 0-RTT
+// transport params（握手完成且 0-RTT 可用时 encode；失败仅输出 session 段）。
+static LXValue bi_quic_0rtt_save(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || args[0].type != PX_INT) px_error("quic_0rtt_save 需要 (conn: int)");
+    quic_conn* qc = quic_get_conn(args[0].as.i);
+    if (!qc || !qc->ssl) return px_str("");
+    int waited = 0;
+    for (;;) {
+        SSL_SESSION* s0 = SSL_get0_session(qc->ssl);
+        if (s0 && SSL_SESSION_has_ticket(s0)) break;
+        if (qc->peer_closed || waited >= 3000) break;
+        int pr = quic_pump(qc, 500, 1, -1);
+        waited += 500;
+        if (pr == -2) break;
+    }
+    SSL_SESSION* s = SSL_get1_session(qc->ssl);
+    if (!s) return px_str("");
+    unsigned char* der = NULL;
+    int dlen = i2d_SSL_SESSION(s, &der);
+    SSL_SESSION_free(s);
+    if (dlen <= 0 || !der) { if (der) OPENSSL_free(der); return px_str(""); }
+    char* hex = (char*)malloc((size_t)dlen * 2 + 1);
+    quic_hex(der, (size_t)dlen, hex);
+    OPENSSL_free(der);
+    // 0-RTT transport params（encode 本端上一连接协商结果；须在握手完成后）
+    uint8_t tpb[512];
+    ngtcp2_ssize tplen = ngtcp2_conn_encode_0rtt_transport_params2(qc->conn, tpb, sizeof(tpb));
+    char* joined = NULL;
+    if (tplen > 0) {
+        char* tphex = (char*)malloc((size_t)tplen * 2 + 1);
+        quic_hex(tpb, (size_t)tplen, tphex);
+        size_t hl = strlen(hex);
+        joined = (char*)malloc(hl + (size_t)tplen * 2 + 2);
+        memcpy(joined, hex, hl);
+        joined[hl] = '|';
+        memcpy(joined + hl + 1, tphex, (size_t)tplen * 2 + 1);
+        free(tphex);
+    }
+    LXValue r = px_str(joined ? joined : hex);
+    if (joined) free(joined);
+    free(hex);
+    return r;
+}
+
+// quic_connect_0rtt(ip, port, alpn, session0rtt) -> int
+static LXValue bi_quic_connect_0rtt(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    return quic_conn_connect_0rtt_impl(args, nargs);
+}
+
+// quic_0rtt_rejected(conn) -> bool：本连接 early data 被服务端拒绝
+static LXValue bi_quic_0rtt_rejected(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || args[0].type != PX_INT) px_error("quic_0rtt_rejected 需要 (conn: int)");
+    quic_conn* qc = quic_get_conn(args[0].as.i);
+    if (!qc || !qc->ssl) return px_bool(false);
+    return px_bool(qc->early_rejected ? true : false);
+}
+
+// quic_conn_handshake_done(conn) -> bool：握手是否已完成
+static LXValue bi_quic_conn_handshake_done(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || args[0].type != PX_INT) px_error("quic_conn_handshake_done 需要 (conn: int)");
+    quic_conn* qc = quic_get_conn(args[0].as.i);
+    if (!qc || !qc->conn) return px_bool(false);
+    return px_bool(qc->handshake_done ? true : false);
 }
 
 // ============================================================
@@ -1764,6 +2062,10 @@ void px_register_quic(void) {
     px_set_global("quic_connect_resume", px_native("quic_connect_resume", bi_quic_connect_resume));
     px_set_global("quic_session_save", px_native("quic_session_save", bi_quic_session_save));
     px_set_global("quic_conn_resumed", px_native("quic_conn_resumed", bi_quic_conn_resumed));
+    px_set_global("quic_0rtt_save", px_native("quic_0rtt_save", bi_quic_0rtt_save));
+    px_set_global("quic_connect_0rtt", px_native("quic_connect_0rtt", bi_quic_connect_0rtt));
+    px_set_global("quic_0rtt_rejected", px_native("quic_0rtt_rejected", bi_quic_0rtt_rejected));
+    px_set_global("quic_conn_handshake_done", px_native("quic_conn_handshake_done", bi_quic_conn_handshake_done));
     px_ffi_register("quic_listen", bi_quic_listen);
     px_ffi_register("quic_accept", bi_quic_accept);
     px_ffi_register("quic_connect", bi_quic_connect);
@@ -1780,4 +2082,8 @@ void px_register_quic(void) {
     px_ffi_register("quic_connect_resume", bi_quic_connect_resume);
     px_ffi_register("quic_session_save", bi_quic_session_save);
     px_ffi_register("quic_conn_resumed", bi_quic_conn_resumed);
+    px_ffi_register("quic_0rtt_save", bi_quic_0rtt_save);
+    px_ffi_register("quic_connect_0rtt", bi_quic_connect_0rtt);
+    px_ffi_register("quic_0rtt_rejected", bi_quic_0rtt_rejected);
+    px_ffi_register("quic_conn_handshake_done", bi_quic_conn_handshake_done);
 }
