@@ -1,0 +1,21 @@
+{
+  "http_addr": ":18080",
+  "https_addr": ":18082",
+  "default_root": "/data/code/PuXian/ws-web/test_site",
+  "access_log": "/data/code/PuXian/ws-web/test_site/access.log",
+  "spawn_http": 0,
+  "llm": { "provider": "mock" },
+  "sites": {
+    "md.local": {
+      "type": "md",
+      "root": "/data/code/PuXian/ws-web/test_site",
+      "default_lang": "zh",
+      "langs": ["zh", "en", "ja"],
+      "public_url": "https://md.local",
+      "nav": [
+        {"href": "/index.html", "i18n": "nav_home"},
+        {"href": "/learn/01.html", "i18n": "nav_learn"}
+      ]
+    }
+  }
+}

@@ -1,0 +1,114 @@
+# ============================================================
+# ws-web/llm.px —— LLM 通道（OpenAI 兼容，单模型）+ key 加密存取
+# ------------------------------------------------------------
+# key 不落 config.json（安全约定）：
+#   1) 环境变量：config.llm.api_key_env 指定，如 WS_WEB_LLM_KEY（推荐）
+#   2) 加密 key 文件：--llm-key <secret> 写入 llm_cfg.key_file（0600，
+#      AES-256-GCM 加密存储；主钥在程序内，防静态泄漏/日志误贴，
+#      高安全场景建议环境变量/system secret 注入）
+# provider = "mock"（缺省）：不调真实 LLM，翻译走本地模拟（离线联调）
+# 全局（main.px 声明）：llm_cfg / llm_key / llm_enabled
+# ============================================================
+
+def llm_provider():
+    if llm_cfg.has("provider"):
+        return llm_cfg["provider"]
+    return "mock"
+
+def llm_model():
+    if llm_cfg.has("model"):
+        return llm_cfg["model"]
+    return ""
+
+def llm_base_url():
+    if llm_cfg.has("base_url"):
+        return llm_cfg["base_url"]
+    return ""
+
+# ---- key 加密存取（AES-256-GCM；主钥=代码派生常量，用途：防静态明文/日志泄漏） ----
+
+def llm_enc_key():
+    return sha256("ws-web-llm-keyfile-v1")
+
+def llm_enc_iv():
+    return sha256("ws-web-llm-iv-v1")[0:32]
+
+def llm_enc(secret):
+    return aes_gcm_encrypt(secret, llm_enc_key(), llm_enc_iv())
+
+def llm_dec(enc):
+    return aes_gcm_decrypt(enc, llm_enc_key(), llm_enc_iv())
+
+def llm_apply():
+    llm_key = ""
+    llm_enabled = 0
+    prov = llm_provider()
+    if prov == "mock":
+        llm_enabled = 1
+        return
+    if llm_cfg.has("api_key_env"):
+        k = env(llm_cfg["api_key_env"])
+        if k != null:
+            llm_key = k
+    if llm_key == "" and llm_cfg.has("key_file"):
+        kf = llm_cfg["key_file"]
+        if exists(kf):
+            raw = trim(read_file(kf))
+            if starts_with(raw, "enc:"):
+                llm_key = llm_dec(raw[4:])
+            else:
+                llm_key = raw
+    if llm_key == "" or llm_base_url() == "":
+        print("ws-web: llm 未配置完整（缺 api_key_env/key_file 或 base_url），翻译降级源语言")
+        llm_enabled = 0
+        return
+    llm_enabled = 1
+
+def llm_ready():
+    return llm_enabled
+
+def llm_write_key_file(path, secret):
+    enc = "enc:" + llm_enc(secret)
+    write_file(path, enc)
+
+def llm_setup_key_cmd(secret):
+    kf = "/etc/ws-web/llm.key.enc"
+    if llm_cfg.has("key_file"):
+        kf = llm_cfg["key_file"]
+    llm_write_key_file(kf, secret)
+    print("ws-web: llm key 已写入 " + kf + " (加密存储)")
+
+def llm_trim_slash(s):
+    if s == "":
+        return s
+    if s[len(s) - 1] == "/":
+        return s[0:len(s) - 1]
+    return s
+
+# ---- chat（OpenAI 兼容 chat/completions）----
+
+def llm_chat(system_prompt, user_prompt):
+    prov = llm_provider()
+    if prov == "mock":
+        # mock：不调真实 LLM（离线联调标记）
+        return {"ok": 1, "text": user_prompt, "mock": 1}
+    if llm_enabled == 0 or llm_key == "":
+        return {"ok": 0, "err": "llm not ready"}
+    url = llm_trim_slash(llm_base_url()) + "/chat/completions"
+    model = llm_model()
+    if model == "":
+        return {"ok": 0, "err": "llm model missing"}
+    body = {"model": model, "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}], "temperature": 0.2}
+    hdrs = {"_": 0}
+    hdrs.remove("_")
+    hdrs["Content-Type"] = "application/json"
+    hdrs["Authorization"] = "Bearer " + llm_key
+    resp = http_request(url, "POST", json_stringify(body), hdrs)
+    if resp.has("status") and resp["status"] == 200:
+        j = json_parse(resp["body"])
+        text = j["choices"][0]["message"]["content"]
+        return {"ok": 1, "text": text}
+    err = resp["body"]
+    if len(err) > 300:
+        err = err[0:300]
+    return {"ok": 0, "err": "llm http " + str(resp["status"]) + ": " + err}

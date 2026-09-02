@@ -1,0 +1,115 @@
+# ============================================================
+# ws-web/cfg.px —— 配置加载与应用（v0.5.0 模块化重构）
+# ------------------------------------------------------------
+# 由 main.px import。全局状态全部在 main.px 声明（import 不注册
+# 模块顶层 let），本模块只提供 def。
+# 对齐 Go 版 v0.3.0 配置语义；v0.5.0 新增 llm 段透传（key 不入 config）
+# ============================================================
+
+def default_config():
+    c = {"sites": {"_": 0}}
+    c["sites"].remove("_")
+    wsai = {"root": "/data/www/wsai_chat", "spa_fallback": true, "proxy_routes": [{"prefix": "/wxcode/", "target": "http://127.0.0.1:8901"}]}
+    soft = {"root": "/data/www/soft_wsai_chat", "deny_dirs": ["package.bak_", ".bak", "backup", ".git", ".svn", "node_modules"], "deny_exts": [".db", ".sqlite", ".sqlite3", ".key", ".pem", ".p12", ".pfx", ".crt", ".csr", ".env", ".log", ".sh", ".md5", ".sha256", ".py"]}
+    mta = {"root": "/data/www/mta_sts_wsai_chat"}
+    c["sites"]["wsai.chat"] = wsai
+    c["sites"]["soft.wsai.chat"] = soft
+    c["sites"]["mta-sts.wsai.chat"] = mta
+    return c
+
+def load_config(path):
+    c = null
+    if path != "":
+        if exists(path):
+            c = json_parse(read_file(path))
+    elif exists("/etc/ws-web/config.json"):
+        c = json_parse(read_file("/etc/ws-web/config.json"))
+    elif exists("config.json"):
+        c = json_parse(read_file("config.json"))
+    if c == null:
+        return default_config()
+    return c
+
+def parse_port(addr, defv):
+    i = 0
+    while i < len(addr):
+        if addr[i] == ":":
+            s = addr[i + 1:]
+            if s != "":
+                return int(s)
+            return defv
+        i += 1
+    return defv
+
+def apply_config(c):
+    http_port = 80
+    https_port = 443
+    cert_dir = "/etc/nginx/ssl"
+    default_root = "/data/www"
+    access_log_path = ""
+    spawn_http = 1
+    if c.has("http_addr"):
+        http_port = parse_port(c["http_addr"], 80)
+    if c.has("https_addr"):
+        https_port = parse_port(c["https_addr"], 443)
+    if c.has("cert_dir"):
+        cert_dir = c["cert_dir"]
+    if c.has("default_root"):
+        default_root = c["default_root"]
+    if c.has("access_log"):
+        access_log_path = c["access_log"]
+    if c.has("spawn_http"):
+        spawn_http = c["spawn_http"]
+    if c.has("sites"):
+        cfg_sites = c["sites"]
+    # llm 段（key 不入 config：只放 provider/base_url/model/api_key_env/key_file）
+    if c.has("llm"):
+        llm_cfg = c["llm"]
+    # M53-S4：HTTP/3 —— http3=true（同 https_port，自签）或 {port?, cert?, key?}
+    h3_port = 0
+    h3_cert = ""
+    h3_key = ""
+    if c.has("http3"):
+        h3o = c["http3"]
+        if type(h3o) == "dict":
+            if h3o.has("port"):
+                h3_port = h3o["port"]
+            else:
+                h3_port = https_port
+            if h3o.has("cert"):
+                h3_cert = h3o["cert"]
+            if h3o.has("key"):
+                h3_key = h3o["key"]
+        else:
+            h3_port = https_port
+    # 补 www 别名
+    hosts = cfg_sites.keys()
+    for h in hosts:
+        if not starts_with(h, "www.") and not cfg_sites.has("www." + h):
+            cfg_sites["www." + h] = cfg_sites[h]
+
+# 站点是否为 md 多语言模式（type == "md"）
+def site_is_md(site):
+    return site.has("type") and site["type"] == "md"
+
+# md 站点根下各子目录
+def md_dir_of(site, name):
+    return site["root"] + "/" + name
+
+# md 站点默认语言（缺省 zh）；源语言 = default_lang
+def md_default_lang(site):
+    if site.has("default_lang"):
+        return site["default_lang"]
+    return "zh"
+
+# 启用语言列表（含默认语言；缺省仅默认语言）
+def md_langs(site):
+    if site.has("langs") and type(site["langs"]) == "list" and len(site["langs"]) > 0:
+        return site["langs"]
+    return [md_default_lang(site)]
+
+# 站点对外 base url（SEO canonical/sitemap；可缺省）
+def md_public_url(site):
+    if site.has("public_url"):
+        return site["public_url"]
+    return ""
