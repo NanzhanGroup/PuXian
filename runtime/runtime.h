@@ -147,6 +147,10 @@ bool    px_quic_raw_close_listener(int64_t listener);
 typedef void (*px_quic_conn_cb)(int64_t conn, void* ud);     // 每连接处理回调（握手后）
 void    px_quic_raw_h3_set_conn_cb(px_quic_conn_cb cb, void* ud);
 int64_t px_quic_raw_h3_listen(int port, const char* cert, const char* key); // → listener id | -1
+// M53-S3：以显式连接回调启动 H3 listener（runtime_h3.c 管道托管用）；对端地址查询
+int64_t px_quic_raw_h3_listen_cb(int port, const char* cert, const char* key,
+                                 px_quic_conn_cb cb, void* ud);
+void    px_quic_raw_peer_addr(int64_t conn, char* out, size_t n);   // 连接对端 "ip:port"
 LXValue px_struct(const char* type_name, char** fnames, LXValue* fvals, int nfields);
 LXValue px_enum(const char* type_name, const char* variant);
 LXValue px_tuple(LXValue* items, int len);
@@ -297,6 +301,9 @@ bool px_is_rwlock(LXValue v);
 
 // spawn：在线程中执行 px_func(fn, args, nargs)，args 由运行时拷贝（调用后可释放）
 void px_spawn(LXFuncPtr fn, LXValue* args, int nargs);
+// M53-S3：外部裸线程（QUIC/H3 托管连接线程）纳入并发 GC（enter 注册/leave 注销）
+void px_gc_thread_enter(void);
+void px_gc_thread_leave(void);
 // 通用入口：spawn 函数名（由 codegen 调用 px_spawn_name）
 void px_spawn_name(const char* fname, LXValue* args, int nargs);
 
@@ -402,6 +409,10 @@ struct PxHttpOut {
 };
 // HTTP/1.1 实现初始化（impl=PxConn*；明文/TLS 统一，行为与旧 px_px_send_ex 一致）
 void px_http_out_init_conn(PxHttpOut* o, PxConn* c);
+// M53-S3：HTTP/3 请求接入桥（runtime.c）——把 H3 req dict 补全为与 HTTP/1.1 等价
+// （query 拆分+解码 / version="HTTP/3" / request_id / cookie / form / body gzip 解压）
+// 后送入公共管道 px_http_dispatch。req 需含 method/path/headers/body/remote（sid 等可选）。
+void px_http_dispatch_h3(PxHttpOut* pout, LXValue req, int client_keep_alive);
 
 #ifdef __cplusplus
 }

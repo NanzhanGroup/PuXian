@@ -771,23 +771,19 @@ static LXValue h3_make_request_fields(const char* method, const char* scheme,
 // h3_conn_setup(conn, qpack_cap:int) -> bool
 // 为连接建立 HTTP/3 会话：开 3 条单向流（控制流=首条 uni + SETTINGS、QPACK 编码器流、
 // 解码器流），建 QPACK 动态表会话。幂等。之后该连接请求/响应自动走动态表编解码。
-static LXValue bi_h3_conn_setup(LXValue* args, int nargs, void* ctx) {
-    (void)ctx;
-    if (nargs < 2 || args[0].type != PX_INT || args[1].type != PX_INT)
-        px_error("h3_conn_setup 需要 (conn: int, qpack_cap: int)");
-    int64_t conn = args[0].as.i;
-    int64_t cap = args[1].as.i;
+// M53-S3：C 侧实现（托管 H3 server 连接回调复用，不经语言层）。
+static bool h3_conn_setup_c(int64_t conn, int64_t cap) {
     h3conn_state* st = h3_st(conn);
-    if (!st) return px_bool(false);
-    if (st->used) return px_bool(true);               // 幂等
+    if (!st) return false;
+    if (st->used) return true;               // 幂等
     int64_t ctrl = px_quic_raw_open_uni_stream(conn); // 首条 uni = 控制流（RFC 9114 §6.2.1）
-    if (ctrl < 0) return px_bool(false);
+    if (ctrl < 0) return false;
     int64_t enc = px_quic_raw_open_uni_stream(conn);
-    if (enc < 0) return px_bool(false);
+    if (enc < 0) return false;
     int64_t dec = px_quic_raw_open_uni_stream(conn);
-    if (dec < 0) return px_bool(false);
+    if (dec < 0) return false;
     int64_t qd = px_qd_open(cap < 0 ? 0 : cap);
-    if (qd <= 0) return px_bool(false);
+    if (qd <= 0) return false;
     uint8_t buf[512];
     buf[0] = H3_UT_CONTROL;
     int n = h3_build_settings_frame(buf + 1, (int)(cap < 0 ? 0 : cap), 100);
@@ -799,7 +795,16 @@ static LXValue bi_h3_conn_setup(LXValue* args, int nargs, void* ctx) {
     st->used = 1; st->qd = qd;
     st->ctrl_sid = ctrl; st->enc_sid = enc; st->dec_sid = dec;
     st->peer_qcap = -1; st->peer_blocked = -1;
-    return px_bool(true);
+    return true;
+}
+
+static LXValue bi_h3_conn_setup(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 2 || args[0].type != PX_INT || args[1].type != PX_INT)
+        px_error("h3_conn_setup 需要 (conn: int, qpack_cap: int)");
+    int64_t conn = args[0].as.i;
+    int64_t cap = args[1].as.i;
+    return px_bool(h3_conn_setup_c(conn, cap));
 }
 
 // h3_conn_close(conn) -> bool：关闭连接级会话（释放 QPACK 会话），连接本身不关
@@ -1025,6 +1030,236 @@ static LXValue bi_h3_client_read_response(LXValue* args, int nargs, void* ctx) {
     return d;
 }
 
+// ==================== M53-S3：HTTP/3 接入公共 HTTP 管道 ====================
+// 目标：把 M46–M52 的 H3 语义层接进 px_serve 的 vhost/路由/限流/日志/静态/.px 管道。
+//   每连接（托管 listener 自动 accept）一个处理线程跑本回调：
+//   握手完成 → h3_conn_setup（QPACK 动态表会话）→ 循环 h3_poll_requests（自动消费
+//   对端单向流：控制 SETTINGS / 编码器 ingest / 解码器 ack）→ h3_read_section 解码
+//   请求（QPACK 阻塞自动泵对端编码器流；RIC>0 自动 Section Ack）→ 组 req dict
+//   （method/path/headers/body/remote/version="HTTP/3"）→ px_http_dispatch_h3 补全
+//   query/cookie/form 后送入公共管道 → 响应经 PxHttpOut H3 实现编码为 HEADERS/DATA。
+// 输出约定（与 HTTP/1.1 对齐）：:status + content-type/content-length + 管道 extra 头
+// （X-Request-Id/ETag/Last-Modified/Content-Encoding/Content-Range…；跳过 Connection/
+// Alt-Svc/Transfer-Encoding 等 H3 无意义或由协商承担的传输头）。body ≤ 单消息上限走
+// HEADERS+DATA 一次组装（自研 MVP client 兼容）；大 body 走 HEADERS + 多 DATA 分帧
+// （RFC 9114 §6.2 标准，aioquic/S4 验证完整接收）。
+#define H3_SEND_SINGLE_MAX (700 * 1024)     // 单消息（HEADERS+DATA 一次组装）body 上限
+#define H3_DATA_CHUNK_MAX  (600 * 1024)     // 分帧模式每 DATA 帧体上限
+#define H3_OUT_BODY_MAX    (16 * 1024 * 1024) // H3 响应体缓冲 MVP 上限（超限截断）
+
+// extra_headers（"\r\n" 结尾 "K: V" 文本，同 HTTP/1.1 begin 入参）→ headers list
+static void h3_extra_to_headers(LXValue hdrlist, const char* extra) {
+    if (!extra || !*extra) return;
+    const char* p = extra;
+    while (*p) {
+        const char* eol = strstr(p, "\r\n");
+        int ln = eol ? (int)(eol - p) : (int)strlen(p);
+        char line[1024];
+        int cl = ln < (int)sizeof(line) - 1 ? ln : (int)sizeof(line) - 1;
+        memcpy(line, p, (size_t)cl); line[cl] = 0;
+        if (line[0] && line[0] != '\r') {
+            char* colon = strchr(line, ':');
+            if (colon) {
+                *colon = 0;
+                char* k = line;
+                char* v = colon + 1;
+                while (*v == ' ') v++;
+                char* ve = v + strlen(v);
+                while (ve > v && ve[-1] == ' ') ve--;
+                *ve = 0;
+                if (!(strcasecmp(k, "Connection") == 0 ||
+                      strcasecmp(k, "Alt-Svc") == 0 ||
+                      strcasecmp(k, "Transfer-Encoding") == 0)) {
+                    LXValue pair = px_list(2);
+                    px_list_push(pair, px_str(k));
+                    px_list_push(pair, px_str(v));
+                    px_list_push(hdrlist, pair);
+                }
+            }
+        }
+        if (!eol) break;
+        p = eol + 2;
+    }
+}
+
+// H3 输出上下文：缓冲整个响应，end() 时编码发送（单线程串行，无需跨响应并发）
+typedef struct {
+    int64_t conn, sid;
+    int status;
+    int head_only;
+    int done;             // 响应已发送（防重复）
+    LXValue fields;       // 响应字段（:status + headers list）
+    uint8_t* body;        // body 缓冲（begin/write 累积）
+    int blen, bcap;
+} h3_out_ctx;
+
+static LXValue h3_out_make_fields(int status, const char* ct, long long body_len,
+                                  int head_only, const char* extra) {
+    LXValue hdr = px_list(16);
+    if (ct && *ct) {
+        LXValue p = px_list(2); px_list_push(p, px_str("content-type")); px_list_push(p, px_str(ct)); px_list_push(hdr, p);
+    }
+    // HEAD 也带 Content-Length（同 HTTP/1.1 begin：头总是有 Content-Length）
+    {
+        char lb[32]; snprintf(lb, sizeof(lb), "%lld", body_len);
+        LXValue p = px_list(2); px_list_push(p, px_str("content-length")); px_list_push(p, px_str(lb)); px_list_push(hdr, p);
+    }
+    h3_extra_to_headers(hdr, extra);
+    (void)head_only;
+    return h3_make_response_fields(status, hdr);
+}
+
+static void h3_out_begin(PxHttpOut* o, int status, const char* ct, long long body_len,
+                         int head_only, int keep_alive, const char* extra_headers) {
+    (void)keep_alive;   // H3 无 Connection 语义：总是 keep-alive
+    h3_out_ctx* c = (h3_out_ctx*)o->impl;
+    c->status = status;
+    c->head_only = head_only;
+    c->done = 0;
+    c->fields = h3_out_make_fields(status, ct, body_len, head_only, extra_headers);
+    c->blen = 0;
+    if (body_len > 0 && body_len < H3_OUT_BODY_MAX && !c->body) {
+        c->body = (uint8_t*)malloc((size_t)body_len);
+        if (c->body) c->bcap = (int)body_len;
+    }
+}
+
+static int h3_out_write(PxHttpOut* o, const void* buf, size_t n) {
+    h3_out_ctx* c = (h3_out_ctx*)o->impl;
+    if (n == 0) return 0;
+    if (c->blen + (int)n > c->bcap) {
+        int nc = c->bcap > 0 ? c->bcap * 2 : 65536;
+        while (nc < c->blen + (int)n && nc < H3_OUT_BODY_MAX) nc *= 2;
+        if (nc >= H3_OUT_BODY_MAX) nc = H3_OUT_BODY_MAX;
+        if (nc < c->blen + (int)n) return -1;   // 超 MVP 上限
+        uint8_t* nd = (uint8_t*)realloc(c->body, (size_t)nc);
+        if (!nd) return -1;
+        c->body = nd;
+        c->bcap = nc;
+    }
+    memcpy(c->body + c->blen, buf, n);
+    c->blen += (int)n;
+    return (int)n;
+}
+
+// 大响应（body > 单消息上限）：HEADERS 帧（无状态 QPACK 编码）+ 分块 DATA。
+// 无状态字段段在已 setup 连接上同样合法（QPACK 允许无动态引用）；本路径不产生
+// 动态表统计（enc_sects 等）——只影响超大响应，API 层统计由 m52 小响应路径覆盖。
+static bool h3_send_response_big(int64_t conn, int64_t sid, LXValue fields,
+                                 const uint8_t* bd, int blen) {
+    LXObject* fo = fields.as.obj;
+    uint8_t* q = (uint8_t*)malloc(H3_BUF_MAX);
+    uint8_t* f = (uint8_t*)malloc(H3_BUF_MAX + 16);
+    if (!q || !f) { free(q); free(f); return false; }
+    int qn = px_h3_qenc(q, fo->as.list.items, fo->as.list.len);
+    if (qn < 0) qn = 0;
+    int fn = h3_build_frame(f, H3_FRAME_HEADERS, q, qn);
+    int64_t s1 = px_quic_raw_send_on(conn, sid, f, fn, 0);
+    bool ok = s1 >= 0;
+    int off = 0;
+    while (off < blen) {
+        int chunk = blen - off;
+        if (chunk > H3_DATA_CHUNK_MAX) chunk = H3_DATA_CHUNK_MAX;
+        fn = h3_build_frame(f, H3_FRAME_DATA, bd + off, chunk);
+        if (px_quic_raw_send_on(conn, sid, f, fn, 0) < 0) { ok = false; break; }
+        off += chunk;
+    }
+    if (blen == 0) {   // 空 body 也发一个空 DATA（对齐单消息 HEADERS+DATA 语义）
+        fn = h3_build_frame(f, H3_FRAME_DATA, NULL, 0);
+        if (px_quic_raw_send_on(conn, sid, f, fn, 0) < 0) ok = false;
+    }
+    free(q); free(f);
+    return ok;
+}
+
+static void h3_out_send(h3_out_ctx* c) {
+    const uint8_t* bd = c->body ? c->body : (const uint8_t*)"";
+    int blen = c->head_only ? 0 : c->blen;
+    if (blen <= H3_SEND_SINGLE_MAX) {
+        LXValue bv = px_bytes_len(bd, blen);
+        h3_send_fields(c->conn, c->sid, c->fields, bv);
+    } else {
+        h3_send_response_big(c->conn, c->sid, c->fields, bd, blen);
+    }
+}
+
+static void h3_out_end(PxHttpOut* o) {
+    h3_out_ctx* c = (h3_out_ctx*)o->impl;
+    if (!c->done) { c->done = 1; h3_out_send(c); }
+}
+
+static void h3_out_respond(PxHttpOut* o, int status, const char* ct, const char* body,
+                           int body_len, int head_only, int keep_alive,
+                           const char* extra_headers) {
+    h3_out_begin(o, status, ct, (long long)body_len, head_only, keep_alive, extra_headers);
+    if (!head_only && body_len > 0) h3_out_write(o, body, (size_t)body_len);
+    h3_out_end(o);
+}
+
+// H3 输出实现初始化（impl=h3_out_ctx*；请求回调每请求建 ctx，用后 free(ctx->body)）
+static void px_http_out_init_h3(PxHttpOut* o, h3_out_ctx* c, int64_t conn, int64_t sid) {
+    memset(o, 0, sizeof(*o));
+    memset(c, 0, sizeof(*c));
+    c->conn = conn;
+    c->sid = sid;
+    c->done = 1;      // 未 begin（无响应）时 end 不发送
+    o->impl = c;
+    o->respond = h3_out_respond;
+    o->begin = h3_out_begin;
+    o->write = h3_out_write;
+    o->end = h3_out_end;
+}
+
+// ==================== M53-S3：托管连接回调（请求 → 公共管道） ====================
+// 由托管 listener 的连接处理线程调用（握手完成后，见 quic_srv_conn_thr）；
+// 回调返回后连接槽位被清理，故本函数必须完整跑完该连接生命周期（空闲退出）。
+static void h3_srv_pipe_cb(int64_t conn, void* ud) {
+    (void)ud;
+    if (!h3_conn_setup_c(conn, 4096)) return;
+    char peer[96];
+    px_quic_raw_peer_addr(conn, peer, sizeof(peer));
+    int idle = 0;
+    for (;;) {
+        int64_t sid = h3_poll_requests(conn, 8000);   // 自动消费对端单向流（SETTINGS/QPACK）
+        if (sid < 0) { if (++idle >= 2) break; continue; }  // 2×8s 空闲 → 关闭（同 keep-alive 超时）
+        idle = 0;
+        LXValue fields;
+        uint8_t* bd = NULL;
+        int blen = 0;
+        if (h3_read_section(conn, sid, 8000, &fields, &bd, &blen) != 0) {
+            if (bd) free(bd);
+            continue;
+        }
+        LXValue req = h3_fields_to_request(fields, sid, bd, blen);
+        free(bd);
+        if (req.type != PX_DICT) continue;
+        px_dict_set(req, "remote", px_str(peer));
+        PxHttpOut out;
+        h3_out_ctx ctx;
+        px_http_out_init_h3(&out, &ctx, conn, sid);
+        // 补全 req dict（query/version/cookie/form/request_id…）并送公共管道；响应经 out
+        px_http_dispatch_h3(&out, req, 1);
+        if (ctx.body) free(ctx.body);
+    }
+}
+
+// h3_server_listen(port:int[, cert:str, key:str]) -> int —— M53-S3：
+// 以公共 HTTP 管道托管 H3 server：每连接自动 accept + QPACK 会话 + 请求走
+// vhost/路由/限流/静态/.px 管道（与 HTTP/1.1 px_serve 同一逻辑）。→ listener id | -1
+static LXValue bi_h3_server_listen(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || args[0].type != PX_INT) px_error("h3_server_listen 需要 (port: int[, cert: str, key: str])");
+    int port = (int)args[0].as.i;
+    const char* cert = "";
+    const char* key = "";
+    if (nargs >= 3 && args[1].type == PX_STR && args[2].type == PX_STR) {
+        cert = args[1].as.obj->as.str.data;
+        key = args[2].as.obj->as.str.data;
+    }
+    int64_t id = px_quic_raw_h3_listen_cb(port, cert, key, h3_srv_pipe_cb, NULL);
+    return px_int(id);
+}
+
 // ==================== 注册（runtime.c px_register_builtins 调用）====================
 void px_register_h3(void) {
     px_set_global("h3_qenc", px_native("h3_qenc", bi_h3_qenc));
@@ -1067,4 +1302,6 @@ void px_register_h3(void) {
     px_ffi_register("h3_conn_close", bi_h3_conn_close);
     px_ffi_register("h3_conn_peer", bi_h3_conn_peer);
     px_ffi_register("h3_conn_stats", bi_h3_conn_stats);
+    px_set_global("h3_server_listen", px_native("h3_server_listen", bi_h3_server_listen));
+    px_ffi_register("h3_server_listen", bi_h3_server_listen);
 }

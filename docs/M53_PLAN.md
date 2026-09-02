@@ -48,7 +48,7 @@
 |---|---|---|
 | S1 ✅ | runtime_quic.c：h3 listener（外部证书）+ 单 fd 收包路由队列 + raw API | commit `d328041`；8 进程并发 QUIC echo 全 PASS + close 优雅退出 + m46 回环回归 |
 | S2 ✅ | runtime.c 管道抽取 PxHttpOut（纯重构，行为零变化） | 本 commit：m43_webapp(10 PASS)/m33_sni/m33_route_rate_limit/m35_gzip_rl/capability(253 PASS) + 原始响应字节 old==new 逐字节一致（静态/gzip/304/Range/HEAD/.px/404/403/路由/429/CORS/keep-alive） |
-| S3 | runtime_h3.c：h3 server 连接托管线程（多连接），请求流 → req dict → 调 D3 管道 → H3 响应（复用 h3_send_fields） | 自 client 多连接并发 → 管道响应一致 |
+| S3 ✅ | runtime_h3.c：H3 PxHttpOut 输出抽象（复用 h3_send_fields）+ 托管连接回调（请求流 → req dict → runtime.c 接入桥 px_http_dispatch_h3 补全 query/cookie/form/version → 公共管道 → HEADERS/DATA 响应）；runtime_quic.c 显式回调 listener（px_quic_raw_h3_listen_cb）与对端地址（px_quic_raw_peer_addr）；H3 连接线程纳入并发 GC（px_gc_thread_enter/leave） | 本 commit：4 条 QUIC 连接并发 ×5 请求（路由 handler / :id+query / 静态 / 404 / 403）= 20 全 PASS 且与 HTTP/1.1 curl 同一管道输出一致（examples/m53_s3_pipe_verify.sh）；m52 QPACK ack 双端 PASS；m53_s1 echo 8 并发 PASS；m43_webapp 10 PASS == golden |
 | S4 | px_serve opts http3 + Alt-Svc 注入 + ws-web 支持 | ws-web 起 h3 → aioquic + 自 client 双端 200 |
 | S5 | 全量回归：pxi 重建、capability、diffcheck --all/--errors、自举证明 B.c==golden、m4x 回归 | 全绿 |
 | S6 | 文档：spec §8.14、ROADMAP、PROGRESS、README、CHANGELOG；一次 commit push | 里程碑闭合 |
@@ -59,5 +59,10 @@
   双模式锁定行为；抽取过程中不合并任何行为改动。
 - H3 多线程与 GC：px_call（语言 handler）在线程内执行；全局表/GC 锁已由 M55 保障；
   H3 conn 状态（QPACK 表）**每连接单线程串行**访问，不做跨连接共享。
+- H3 托管连接线程（裸 pthread，不经 px_spawn）构造普贤对象 → S3 已纳入并发 GC：
+  quic_srv_conn_thr 开头 px_gc_thread_enter / 清理后 px_gc_thread_leave（g_threads 槽位
+  上限 64 与 spawn/连接池共享；槽满不暂停的风险与连接池 worker 一致，S4 生产评估）。
+- 大响应（>700KB body）：H3 out 走 HEADERS + 多 DATA 分帧（无状态 QPACK 编码，
+  标准多帧）；自研 MVP client 只取首 DATA —— S4 aioquic 走标准路径验证完整接收。
 - curl 7.76 无真 HTTP/3（无 ngtcp2/quiche）→ 外部互操作用 aioquic（pip，已确认网络可用）。
 - 静态文件 H3 大文件：H3 响应体经 QUIC 流分帧发送，不整读 1MB 上限（S3 处理分帧）。

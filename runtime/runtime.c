@@ -5622,6 +5622,41 @@ static void* spawn_thread(void* p) {
     return NULL;
 }
 
+// ==================== M53-S3：外部裸线程纳入并发 GC ====================
+// QUIC/H3 托管连接线程由 runtime_quic.c 直接 pthread_create（不经 px_spawn），
+// 但 M53-S3 起连接回调会构造普贤对象（请求 dict/响应字段）并可能触发 GC ——
+// 线程必须注册进 g_threads（被 stop-the-world 暂停 + 保守扫描栈），否则其栈上
+// 对象会被 GC 误回收（use-after-free）。语义与 px_pool_worker 常驻注册一致：
+//   enter：g_active_threads++ + 分配 GC 槽位（并发 GC 路径随之启用）
+//   leave：g_active_threads-- + 注销槽位（须在不再触碰普贤对象后最后调用）
+// 注：g_threads 槽位上限 64（spawn/连接池/H3 共享）；槽满时本线程不被 GC 暂停
+//     （与连接池 worker 槽满行为一致），H3 生产并发上限评估留待 S4。
+void px_gc_thread_enter(void) {
+    pthread_mutex_lock(&g_gc_mu);
+    if (!g_gc_env_inited) gc_init_env();
+    g_active_threads++;
+    int slot = -1;
+    for (int i = 0; i < MAX_SPAWN_THREADS; i++) {
+        if (!g_threads[i].in_use) { slot = i; break; }
+    }
+    if (slot >= 0) {
+        g_threads[slot].tid = pthread_self();
+        g_threads[slot].in_use = 1;
+        g_threads[slot].paused = 0;
+        g_threads[slot].is_main = 0;
+        g_threads[slot].epoch = 0;
+        g_threads[slot].tmp_root = NULL;
+    }
+    pthread_mutex_unlock(&g_gc_mu);
+}
+
+void px_gc_thread_leave(void) {
+    pthread_mutex_lock(&g_gc_mu);
+    if (g_active_threads > 0) g_active_threads--;
+    gc_unregister_thread(pthread_self());
+    pthread_mutex_unlock(&g_gc_mu);
+}
+
 void px_spawn(LXFuncPtr fn, LXValue* args, int nargs) {
     pthread_mutex_lock(&g_gc_mu);   // M8：创建前先标记活跃（防止主线程 GC 误判）
     if (!g_gc_env_inited) gc_init_env();
@@ -10717,6 +10752,80 @@ static void px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
     }
 
 
+}
+
+// ==================== M53-S3：HTTP/3 请求接入桥 ====================
+// runtime_h3.c 托管连接回调把解码后的 H3 请求（method/path/headers/body/remote…）
+// 交给本函数：补齐与 HTTP/1.1 等价的 req dict 字段（query 拆分+URL 解码、
+// version="HTTP/3"、request_id、cookie、form/multipart 解析、请求体 gzip 解压），
+// 随后送入公共管道 px_http_dispatch —— 与 HTTP/1.1 共用 vhost/路由/限流/日志/静态/.px。
+// 响应由 pout（H3 PxHttpOut 实现）编码为 HEADERS/DATA 帧，管道不感知传输差异。
+void px_http_dispatch_h3(PxHttpOut* pout, LXValue req, int client_keep_alive) {
+    LXValue mv = px_dict_get(req, "method");
+    LXValue pv = px_dict_get(req, "path");
+    const char* method = (mv.type == PX_STR) ? mv.as.obj->as.str.data : "GET";
+    const char* target = (pv.type == PX_STR) ? pv.as.obj->as.str.data : "/";
+    char tbuf[4096];
+    snprintf(tbuf, sizeof(tbuf), "%s", target);
+    char path[2048] = {0}, query[2048] = {0};
+    char* q = strchr(tbuf, '?');
+    if (q) {
+        *q = 0;
+        char* dec = px_url_decode(tbuf);
+        snprintf(path, sizeof(path), "%s", dec ? dec : tbuf);
+        if (dec) xfree(dec);
+        dec = px_url_decode(q + 1);
+        snprintf(query, sizeof(query), "%s", dec ? dec : q + 1);
+        if (dec) xfree(dec);
+    } else {
+        char* dec = px_url_decode(tbuf);
+        snprintf(path, sizeof(path), "%s", dec ? dec : tbuf);
+        if (dec) xfree(dec);
+    }
+    char req_id[64];
+    px_new_req_id(req_id, sizeof(req_id));
+    g_px_ctx_n = 0;                  // M36：每请求清除线程局部上下文（同 HTTP/1.1 worker）
+    px_dict_set(req, "path", px_str(path));
+    px_dict_set(req, "query", px_str(query));
+    px_dict_set(req, "version", px_str("HTTP/3"));
+    px_dict_set(req, "request_id", px_str(req_id));
+    LXValue headers = px_dict_get(req, "headers");
+    if (headers.type != PX_DICT) { headers = px_dict(); px_dict_set(req, "headers", headers); }
+    LXValue body_v = px_dict_get(req, "body");
+    // cookie（HTTP/1.1 worker 同款解析）
+    if (px_dict_get(req, "cookie").type == PX_NULL) {
+        LXValue ckv = px_header_get(&headers, "Cookie");
+        if (ckv.type == PX_STR) px_dict_set(req, "cookie", px_parse_cookie(ckv.as.obj->as.str.data));
+        else px_dict_set(req, "cookie", px_dict());
+    }
+    // 请求体：gzip 解压 + form/multipart（Content-Type 驱动）
+    if (body_v.type == PX_STR) {
+        int body_len = body_v.as.obj->as.str.len;
+        char* body_buf = xmalloc((size_t)body_len + 1);
+        memcpy(body_buf, body_v.as.obj->as.str.data, (size_t)body_len);
+        body_buf[body_len] = 0;
+        LXValue ce = px_header_get(&headers, "Content-Encoding");
+        if (body_len > 0 && ce.type == PX_STR && strcasestr(ce.as.obj->as.str.data, "gzip")) {
+            int olen = 0;
+            char* dec = px_gzip_decompress(body_buf, body_len, &olen);
+            if (dec) { xfree(body_buf); body_buf = dec; body_len = olen; }
+        }
+        px_dict_set(req, "body", px_str_len(body_buf ? body_buf : "", body_len));
+        if (body_len > 0) {
+            LXValue ct_v = px_dict_get_ci(headers, "Content-Type");
+            const char* ct = (ct_v.type == PX_STR) ? ct_v.as.obj->as.str.data : "";
+            if (strstr(ct, "multipart/form-data")) {
+                char* boundary = px_mime_boundary(ct);
+                if (boundary) { px_parse_multipart(req, body_buf, body_len, boundary); xfree(boundary); }
+            } else if (strstr(ct, "application/x-www-form-urlencoded")) {
+                LXValue form = px_parse_urlenc(body_buf);
+                px_dict_set(req, "form", form);
+            }
+        }
+        xfree(body_buf);
+    }
+    px_http_dispatch(pout, req, method, path, query, client_keep_alive, req_id);
+    px_reset_request_state();
 }
 
 // 连接处理线程（px_spawn 注册）：args[0] = fd
