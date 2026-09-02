@@ -1,0 +1,63 @@
+# M53 · HTTP/3 接入 px_serve（三栈合一 WebServer）
+
+> 目标：把 M46–M52 的 QUIC/HTTP/3/QPACK 能力从"语言层 demo 驱动"升级为
+> **px_serve 内置服务管道的一员**——HTTP/1.1 + HTTP/2(prior knowledge/ALPN) + HTTP/3
+> 共用同一套 vhost / 路由 / 限流 / 访问日志 / 静态文件 / .px 脚本管道。
+> 验证：真实第三方 HTTP/3 客户端（aioquic 独立实现）与 PuXian 自研 h3 client 双端互操作。
+
+## 一、现状（调研结论）
+
+| 层 | 现状 | 缺口 |
+|---|---|---|
+| QUIC 传输（runtime_quic.c） | quic_listen/accept 阻塞单连接握手；**listener fd 被每连接共享、各自 poll+recvfrom**，多连接会互相抢包 | 服务端需要**单 fd 收包路由**（按 DCID 分发到对应 conn），多连接并发 |
+| QUIC TLS | quic_make_server_ctx() **运行时自签临时证书** | 需支持加载 PEM 证书/私钥（ws-web 生产证书）；SNI 多证书后续 |
+| HTTP/3 语义（runtime_h3.c） | h3_conn_setup/poll/read/send 语言 API 齐全（QPACK 动态表、SETTINGS、多流、ack 闭环） | 全部是**阻塞式、单连接循环驱动**；无多连接托管、无监听服务形态 |
+| HTTP 管道（runtime.c px_serve） | px_conn_worker：HTTP/1.1 请求 → req dict → CORS/限流/vhost/路由/静态/.px/日志，输出与 **fd/TLS 强耦合**（px_px_send_ex/send/流式文件） | "请求处理"逻辑未与传输层解耦，H3 无法复用 |
+| 互操作验证 | m46–m52 全部为 PuXian 自 client ↔ 自 server 回环 | 无第三方独立实现打通过（外部互操作空白） |
+
+## 二、架构决策
+
+- **D1 · 收包路由（runtime_quic.c 新增，不动 demo 路径）**
+  新增 h3 专用 listener + 每 listener 单收包线程：poll(fd) → recvfrom → 包头 DCID 路由
+  到对应 conn 的入包队列；每连接由其 H3 处理线程消费队列 → ngtcp2 read_pkt →
+  write_pkt 即时 sendto。demo 级 quic_accept/quic_pump 原样保留（m46–m52 不回归）。
+- **D2 · 证书加载**
+  quic_make_server_ctx 扩展：`quic_h3_listen(port, cert, key)`，cert/key 非空走 PEM 加载
+  （SSL_CTX_use_certificate_chain_file / use_PrivateKey_file）；为空退回自签（demo/测试）。
+- **D3 · 公共请求管道抽取（runtime.c）**
+  把 px_conn_worker 中"req dict 就绪 → 响应发出"的逻辑抽为
+  `static void px_http_dispatch(PxHttpOut* out, LXValue req, ...)`，其中
+  `PxHttpOut` 是输出抽象（send status/body、流式 sendfile、HEAD/keep-alive 语义）：
+  - HTTP/1.1 out：包 fd/TLS，行为与现状逐字节一致（gzip/ETag/Range/304/日志全保留）
+  - HTTP/3 out：包 conn+sid，HEADERS/DATA 走 QPACK（复用 h3_send_fields）
+- **D4 · px_serve opts 增 http3**
+  `px_serve(port, docroot, timeout, {http3: {cert,key[,port]}, alt_svc,...})`：
+  启动 TCP 服务的同时，若 http3 配置存在 → 同端口（或指定 UDP 端口）起 H3 listener；
+  连接握手完成后按连接托管，每连接一个处理线程跑 H3 循环；每条请求流解码为
+  与 HTTP/1.1 等价的 req dict（version="HTTP/3"）→ 走 D3 公共管道 → H3 响应。
+  同时注入 `Alt-Svc: h3=":port"`（M33.4 已有 alt_svc 通告钩子）。
+- **D5 · 互操作验证**
+  - 第三方：`pip install aioquic`（Python 独立 QUIC+H3 实现，仅依赖 pyopenssl/cryptography）
+    → aioquic 客户端请求 PuXian H3 服务，断言 200 + body 与 HTTPS 一致。
+  - 自研：m52 类 client.px 多连接并发连 H3 server（多连接路由验证）。
+  - 管道一致性：同 URL 分别走 HTTP/1.1 与 HTTP/3，响应头/体逐字节一致。
+
+## 三、子步划分（每步可独立回归）
+
+| 子步 | 内容 | 验证 |
+|---|---|---|
+| S1 | runtime_quic.c：h3 listener（外部证书）+ 单 fd 收包路由队列 + raw API | 编译 + m46/m47/m48/m49/m50/m51/m52 verify 回归（demo 路径不回归） |
+| S2 | runtime.c 管道抽取 PxHttpOut（纯重构，行为零变化） | HTTP/1.1 端到端：m27_webprod/m33_sni/p4_http_server/m43_webapp/p5_px_serve + capability |
+| S3 | runtime_h3.c：h3 server 连接托管线程（多连接），请求流 → req dict → 调 D3 管道 → H3 响应（复用 h3_send_fields） | 自 client 多连接并发 → 管道响应一致 |
+| S4 | px_serve opts http3 + Alt-Svc 注入 + ws-web 支持 | ws-web 起 h3 → aioquic + 自 client 双端 200 |
+| S5 | 全量回归：pxi 重建、capability、diffcheck --all/--errors、自举证明 B.c==golden、m4x 回归 | 全绿 |
+| S6 | 文档：spec §8.14、ROADMAP、PROGRESS、README、CHANGELOG；一次 commit push | 里程碑闭合 |
+
+## 四、风险与规避
+
+- 管道抽取动 HTTP/1.1 生产核心 → S2 纯重构先行，靠 m27/m33/m43/p5 等端到端 + capability
+  双模式锁定行为；抽取过程中不合并任何行为改动。
+- H3 多线程与 GC：px_call（语言 handler）在线程内执行；全局表/GC 锁已由 M55 保障；
+  H3 conn 状态（QPACK 表）**每连接单线程串行**访问，不做跨连接共享。
+- curl 7.76 无真 HTTP/3（无 ngtcp2/quiche）→ 外部互操作用 aioquic（pip，已确认网络可用）。
+- 静态文件 H3 大文件：H3 响应体经 QUIC 流分帧发送，不整读 1MB 上限（S3 处理分帧）。

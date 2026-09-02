@@ -143,6 +143,10 @@ int64_t px_quic_raw_poll(int64_t conn, int timeout_ms);      // 任一活跃流�
 int64_t px_quic_raw_first_stream(int64_t conn);              // 最小活跃 sid（默认流）|-1
 bool    px_quic_raw_close(int64_t conn);
 bool    px_quic_raw_close_listener(int64_t listener);
+// M53：HTTP/3 server 多连接托管（runtime_quic.c）——单 fd 收包路由 + 自动 accept
+typedef void (*px_quic_conn_cb)(int64_t conn, void* ud);     // 每连接处理回调（握手后）
+void    px_quic_raw_h3_set_conn_cb(px_quic_conn_cb cb, void* ud);
+int64_t px_quic_raw_h3_listen(int port, const char* cert, const char* key); // → listener id | -1
 LXValue px_struct(const char* type_name, char** fnames, LXValue* fvals, int nfields);
 LXValue px_enum(const char* type_name, const char* variant);
 LXValue px_tuple(LXValue* items, int len);

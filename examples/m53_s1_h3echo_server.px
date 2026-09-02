@@ -1,0 +1,18 @@
+# ============================================================
+# M53 S1：HTTP/3 server 多连接托管冒烟 —— 服务端
+# ------------------------------------------------------------
+# quic_h3_listen(port, cert, key)：新收包路由 listener（自动 accept +
+# 每连接处理线程 + 默认 QUIC echo 回调）。跑 15s 后自然退出
+# （close 路径另测；本验证聚焦多连接并发路由正确性）。
+# ============================================================
+import "c/ngtcp2"
+
+extern def quic_h3_listen(port: int, cert: str, key: str) -> int
+
+var l = quic_h3_listen(17998, "", "")
+assert(l > 0, "server: quic_h3_listen 失败")
+write_file("/tmp/m53s1.ready", "ready")
+
+var end = now_ms() + 15000
+while now_ms() < end:
+    sleep(200)
