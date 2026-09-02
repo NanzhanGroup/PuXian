@@ -589,8 +589,8 @@ extern def quic_close_listener(listener: int) -> bool
 QPACK 头压缩（RFC 9204 无动态表子集）+ HTTP/3 帧（HEADERS=0x01 / DATA=0x00）
 + 请求/响应对拍。完整 HTTP/3（QPACK 动态表/Huffman/静态表压缩、SETTINGS 控制流、
 多路复用、0-RTT/连接迁移、接入现有 HTTP 路由管道）原列为 M48+；其中 Huffman+静态表压缩
-已随 §8.9（M48）落地，动态表 + SETTINGS 帧已随 §8.10（M49）落地，多路复用/0-RTT/
-连接迁移/接入现有 HTTP 路由管道仍为远期。
+已随 §8.9（M48）落地，动态表 + SETTINGS 帧已随 §8.10（M49）落地，多路复用已随 §8.11
+（M50）落地，接入现有 HTTP 路由管道已随 §8.14（M53）落地；0-RTT/连接迁移仍为远期。
 
 ```
 import "c/ngtcp2"
@@ -781,6 +781,7 @@ extern def h3_conn_stats(conn: int) -> dict|null              # 本端统计（e
 
 ### 8.13 QPACK 解码器流 ack 线上化（M52，RFC 9204 §4.4 闭环 + 编码表驱逐安全化）
 
+```
 # M52 新增：解码器流承载 Section Ack 的完整闭环 + Known Received Count
 
 extern def h3_conn_stats(conn: int) -> dict|null  # 增 krc/dec_sent/dec_sects/enc_acks 字段
@@ -817,6 +818,49 @@ extern def h3_qs_ins(sess: int) -> int             # 已 ingest 插入计数
   krc=10）、请求/响应字段跨线逐字节还原、client 输出双模式一致；capability section 27（qcap=120
   驱逐受限：f1/f2 插 2 条、f3 表满无 ack 不插 en_len=2、ack_sec(2) 后 f4 驱逐 abs0 插 abs2、
   Insert Count Increment 累计）+ M46–M51 回归全 PASS。
+
+### 8.14 HTTP/3 服务端三栈合一（M53，px_serve opts.http3 + 公共 HTTP 管道 + 外部互操作）
+
+```
+# M53 新增：HTTP/3 从"语言层 API"升级为 px_serve 服务管道成员 ——
+# HTTP/1.1(TCP) + HTTP/2 + HTTP/3(QUIC/UDP) 共用同一 vhost/路由/限流/访问日志/静态/.px 管道。
+
+extern def quic_h3_listen(port: int, cert: str, key: str) -> int   # M53-S1：QUIC raw listener（多连接托管地基；cert/key 空→自签）
+extern def h3_server_listen(port: int, cert: str, key: str) -> int  # M53-S3：HTTP/3 管道托管 listener（每连接线程 → 公共请求管道）
+# M53-S4：px_serve(port, docroot, timeout, {http3: true | {port?, cert?, key?}})
+#   http3=true（自签）或 dict：缺省同端口（UDP/TCP 不冲突）或指定 UDP 端口起 H3 托管 —— 三栈合一
+```
+
+- **输出抽象 PxHttpOut（M53-S2，runtime.h）**：请求管道（`px_http_dispatch` /
+  `px_route_try_dispatch`）只面向 PxHttpOut 写响应（respond 一次性 / begin+write+end 流式），
+  不再直接 send(fd)；传输后端可插拔：HTTP/1.1 实现（包 PxConn，行为与旧路径逐字节一致）与
+  HTTP/3 实现（HEADERS/DATA 经 QPACK `h3_send_fields` 编码，>700KB 自动 HEADERS+多 DATA
+  分帧、流结束 `writev_stream + FIN` 显式结束）。
+- **接入桥 `px_http_dispatch_h3`（M53-S3）**：H3 请求流解码为 req dict（method/path/headers/
+  body/remote/version="HTTP/3"）→ 补全 query 拆分+URL 解码 / cookie / form / body gzip 解压 /
+  request_id / headers[Host]=:authority（vhost 与 handler 与 HTTP/1.1 一致）→ 送公共管道
+  （CORS/限流/vhost/路由/静态/.px/访问日志）。
+- **服务端多连接托管（M53-S1，runtime_quic.c）**：h3 listener 单 UDP fd，收包路由线程
+  poll→recvfrom→短头按 DCID 路由到对应连接入包队列（长头 Initial 自动建连接）；每连接独立
+  处理线程消费队列 pump ngtcp2。demo 级 quic_accept/quic_pump 路径（§8.7）原样保留。
+- **证书与通告（M53-S2/S4）**：cert/key 非空走 PEM 加载（SSL_CTX_use_certificate_chain_file /
+  use_PrivateKey_file），空→运行时自签兜底；http3 开启且未显式配置 alt_svc 时默认注入
+  `Alt-Svc: h3=":port"`（route/middleware/静态/错误响应统一注入，M53-S2 起 route 路径也带）。
+- **并发安全**：H3 连接线程（裸 pthread，不经 px_spawn）经 px_gc_thread_enter/leave 纳入
+  stop-the-world GC；全局符号表/GC root 扫描互斥由 M55 保障（§7 并发）。
+- **优雅关闭**：SIGTERM → 停收包路由线程 → 关托管连接 → 回收 listener，exit 0。
+- **互操作修复（对拍 aioquic 独立实现暴露，RFC 9114/9000/9204）**：① fin-only 流不算活跃
+  （防连接线程忙循环、优雅关闭挂死）② 无 DATA 请求（HEADERS+FIN）body 视为空（RFC 9114 §4.1）
+  ③ 响应头字段名统一小写（大写触发对端 H3_MESSAGE_ERROR）④ 响应流 FIN 显式结束
+  （标准客户端等待流结束，非 RST 语义）。
+- **验证**：examples/m53_s3_pipe_verify.sh（同进程 px_serve + h3_server_listen 双栈，
+  4 QUIC 连接并发 × 5 请求 = 20 全 PASS，H3 与 HTTP/1.1 curl 同管道输出一致）；
+  examples/m53_s4_pxserve_h3_verify.sh（px_serve 三栈合一：自研 client + **aioquic 第三方
+  互操作** 200/静态/404 一致 + Alt-Svc + SIGTERM 优雅关闭 + ws-web config http3 端到端）；
+  examples/m53_s5_pxi_h3_smoke.px（pxi 重建后解释器含 h3_server_listen，id>0 PASS）；
+  M46–M52 回归 + capability 双模式 253 PASS + diffcheck + 自举证明全绿。
+- **边界（M54+ 方向）**：自研 MVP client 单响应帧缓冲（>700KB 多 DATA 需标准客户端全收验证）；
+  0-RTT / 连接迁移 / BLOCKED_STREAMS 互操作未做。
 
 ---
 

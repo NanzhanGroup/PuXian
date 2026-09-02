@@ -96,7 +96,7 @@ def main():
 | ⏱ 定时器 | `set_timeout` / `set_interval` / `clear_timer`（一次性/周期回调，可变参数透传，回调内并发原语安全） |
 | 🧹 内存 | 编译模式 C 运行时内置保守标记-清除 GC（循环引用可回收，自动触发）+ **slab 分配器**（21 档 size-class 槽位复用）；解释器侧**追踪式 GC** 回收循环引用（list/dict/chan/**闭包 Func↔Env 循环**）+ `gc()` 强制回收 |
 | 🧩 模块化 | `import std.*` / `import foo.bar` / `from foo import x` / 相对路径导入 |
-| 🌐 网络 | HTTP 客户端（**HTTPS TLS 1.2/1.3** + gzip/chunked 自动解码 + **http/https 连接池复用** + **TLS 会话票据恢复** + **流式 gzip 边下边解**）+ **HTTP 服务端**（`http_serve` gzip/chunked/keep-alive/流式 + **`px_serve` 服务端 TLS**：`tls_server(cert,key[,hostname])` 注册后 HTTPS/WSS/SSE-over-TLS + **TLS SNI 多证书按域名选择** + 请求体大小可配 + 413 + 大 body 落盘 + **优雅关闭** + **per-route 限流**（路由粒度 429）+ **访问日志落盘轮转** + **Alt-Svc 通告**）+ **WebSocket**（RFC 6455，心跳/超时，**`ws://`/`wss://` 一行连接**）+ **SSE** 服务端/客户端（**断线自动重连**，带 Last-Event-ID）+ **UDP**（udp_open/send/recv/close，QUIC 预研地基）+ TCP 全功能 |
+| 🌐 网络 | HTTP 客户端（**HTTPS TLS 1.2/1.3** + gzip/chunked 自动解码 + **http/https 连接池复用** + **TLS 会话票据恢复** + **流式 gzip 边下边解**）+ **HTTP 服务端**（`http_serve` gzip/chunked/keep-alive/流式 + **`px_serve` 服务端 TLS**：`tls_server(cert,key[,hostname])` 注册后 HTTPS/WSS/SSE-over-TLS + **TLS SNI 多证书按域名选择** + 请求体大小可配 + 413 + 大 body 落盘 + **优雅关闭** + **per-route 限流**（路由粒度 429）+ **访问日志落盘轮转** + **Alt-Svc 通告** + **HTTP/3 三栈合一**（`px_serve(...,{http3:true|{port?,cert?,key?}})` 同端口托管 H3/QUIC，HTTP/1.1+HTTP/2+HTTP/3 共用同一 vhost/路由/限流/访问日志/静态/.px 管道；`h3_server_listen` 独立 H3 listener；**aioquic 第三方互操作**））+ **WebSocket**（RFC 6455，心跳/超时，**`ws://`/`wss://` 一行连接**）+ **SSE** 服务端/客户端（**断线自动重连**，带 Last-Event-ID）+ **UDP**（udp_open/send/recv/close）+ TCP 全功能 |
 | 🛡 加密/文档 | **AES-CBC-PKCS7 / AES-GCM**、**RSA**（PKCS#1 v1.5）、**XML** 解析/转义/**生成**（xml_build）、**zip** 打包/解压、**base64**、sha256 / xxhash、**SQLite**（open/exec/query/close，参数绑定+结果集） |
 | 🔢 语言能力 | 切片语法 `a[i:j]` / `a[i:j:k]`（步长/反转，str 按 UTF-8 字符）、**生成器表达式** `(x for x in xs)`（**惰性**：单层 for 延迟求值 / `gen_next` 逐项 / for-in / `list()` 转换）、位运算 + 二进制数据视图（int_to_hex / bytes_to_hex / bit_count / bit_length）、正则表达式、锁原语（mutex / rwlock）、文件随机读写 + fsync、进程/信号（os_spawn / os_wait / signal）、**Result/Option 错误处理**（`Ok(x)`/`Err(e)`/`Some(x)` 构造，`?` 错误传播——Err/None 立即返回、`!` 强制解包、is_ok/is_err/unwrap 方法，spec 唯一错误通道）、字符串插值 `${expr}`、推导式、可选链 `?.`、空合并 `??`、管道 `\|>` |
 | 🚀 应用平台 | **.px 脚本执行机制**（`px_serve` PHP/OpenResty 式应用服务器：Cookie/Session/基础认证 + 服务端 TLS + 优雅关闭、`px_exec` 语言层嵌入 API）+ **.px 进程池**（编译模式预派生 worker 解释器常驻复用，PHP-FPM 风格，**脚本/二进制变更自动滚动重启热更新**）+ 路由表+中间件（method+path 模式 / `:id` 参数 / `*` 通配 / 中间件链）+ cron 调度（6 字段）+ JSON 路径（json_path/json_path_set） |
@@ -158,7 +158,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 │   ├── cases/ + golden/    #   对拍用例（s01-s09 + v01-v03）与基准产物
 │   ├── cases_bad/          #   错误场景（lex 14 + parse 9）
 │   └── diffcheck.sh / bootstrap_prove.sh  # 对拍框架 / 自举证明
-├── runtime/                # C 运行时（runtime.c/h + aes/xml/zip/ws/rsa/sqlite/route/h2 + mbedtls + third_party）
+├── runtime/                # C 运行时（runtime.c/h + aes/xml/zip/ws/rsa/sqlite/route/h2/h3/quic + mbedtls + third_party）
 ├── stdlib/                 # 标准库（collections.px）
 ├── ws-web/                 # 第一个生产应用（M-B9b，dogfooding）：HTTP + SQLite 服务骨架
 ├── examples/               # 80+ 个示例（hello / fib / match / 并发 / 网络 / TLS / SQLite / 推导式 ...）
@@ -209,6 +209,18 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 | M-B9a | 退役 Rust 版 + 接入 CI + 引导链 | `tools/pxc` 全链路可用，CI 四 job |
 | M-B9b | ws-web（第一个生产应用） | 🔄 进行中（dogfooding 验证） |
 
+### 原生开发（M41–M53，自举后 PuXian 自身开发，全部 ✅）
+
+| 里程碑 | 内容 |
+|---|---|
+| M41 | 类型系统欠账清零：edition / 不可变 / 空安全 / 定义级泛型 |
+| M42 | 显式 C 库 import（FFI 平台杠杆）：`import "c/xxx"` + `extern def` |
+| M43 | 文件即路由（routegen 构建期生成路由注册，PHP 式框架形态） |
+| M44 | 语言糖：简化枚举（type X const）+ 列表追加简写 `<-` |
+| M45 | registry 版本化：semver 库 + pxpkg + px.pkg.lock 可复现构建 |
+| M46–M52 | HTTP/3 / QUIC 全链路：QUIC 传输 → H3 语义层 → QPACK（Huffman/静态表/动态表/SETTINGS/多路复用/解码器流 ack） |
+| M53 | **HTTP/3 三栈合一 WebServer**：px_serve http3（HTTP/1.1+HTTP/2+HTTP/3 共用公共管道）+ Alt-Svc + **aioquic 外部互操作** |
+
 ---
 
 ## 示例
@@ -248,6 +260,9 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 - `m50_h3_mux_verify.sh` —— HTTP/3 多路复用回环（同一连接 3 双向流并发请求/响应一一对应无串扰，编译/解释双模式）
 - `m51_h3_qpack_wire_verify.sh` —— QPACK 会话接入线上回环（双端开控制/编码器/解码器 3 条 QUIC 单向流 + SETTINGS 协商，动态表指令经真实单向流传输：请求 1 插入、请求 2 复用零新增，编译/解释双模式）
 - `m52_qpack_decack_verify.sh` —— QPACK 解码器流 ack 线上化回环（RFC 9204 §4.4：接收方解码动态字段段自动发 Section Ack、发送方消费对端解码器流推进 Known Received Count、编码表驱逐安全化，双向闭环编译/解释双模式）
+- `m53_s3_pipe_verify.sh` —— HTTP/3 接入公共 HTTP 管道（同进程 px_serve + h3_server_listen 双栈，4 QUIC 连接 × 5 请求与 HTTP/1.1 同管道输出一致）
+- `m53_s4_pxserve_h3_verify.sh` —— **HTTP/3 三栈合一端到端**（px_serve http3：HTTP/1.1 TCP + HTTP/3 UDP 同服务；自研 client + **aioquic 第三方互操作** 200；Alt-Svc 自动通告；SIGTERM 优雅关闭）
+- `m53_s5_pxi_h3_smoke.px` —— pxi 重建后解释器 h3_server_listen 自检（id>0 PASS）
 - ... 完整列表见 `examples/`
 
 ---

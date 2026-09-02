@@ -12,8 +12,8 @@
 | 双后端 | ✅ tree-walking 解释器 + C 转译编译，双模式行为一致（diffcheck 逐字节对拍） |
 | 类型系统 | ✅ Result/Option（`?`/`!`）、不可变（E3002）、空安全（E3003）、定义级泛型 |
 | 回归体系 | ✅ diffcheck（lexer/parser/errors/codegen/value/interp）+ capability + 自举证明 |
-| WebServer | ✅ HTTP/1.1/2、HTTPS、WebSocket、SSE、路由/中间件/限流/日志/vhost/SNI/S3 |
-| HTTP/3 | ✅ QUIC 传输 → HTTP/3 语义 → QPACK（Huffman/静态表/动态表/SETTINGS/多路复用/解码器流 ack） |
+| WebServer | ✅ HTTP/1.1/2/3、HTTPS、WebSocket、SSE、路由/中间件/限流/日志/vhost/SNI/S3 |
+| HTTP/3 | ✅ QUIC 传输 → HTTP/3 语义 → QPACK（Huffman/静态表/动态表/SETTINGS/多路复用/解码器流 ack）→ **px_serve 三栈合一（M53）+ aioquic 外部互操作** |
 | 生态 | ws-web（dogfood 生产应用）、80+ examples、registry 版本化（semver + lockfile） |
 
 ## 二、已完成主线（里程碑记录，详见 CHANGELOG.md）
@@ -34,14 +34,14 @@
 | M50 | HTTP/3 多路复用：QUIC 多双向流并发请求/响应（per-stream 缓冲） |
 | M51 | QPACK 会话接入线上：控制/编码器/解码器三单向流 + SETTINGS 协商 |
 | M52 | QPACK 解码器流 ack 线上化（RFC 9204 §4.4 闭环 + 编码表驱逐安全化） |
+| M53 | HTTP/3 三栈合一 WebServer：`px_serve` opts.http3（HTTP/1.1+HTTP/2+HTTP/3 共用公共 HTTP 管道）+ Alt-Svc 通告 + **aioquic 外部互操作打通** + pxi 重建解释同能力 |
 
 ## 三、远期方向
 
-### M53+ · HTTP/3 完整化
+### M54+ · HTTP/3 生产化
 
 - 0-RTT / 连接迁移（QUIC 生产化）
 - BLOCKED_STREAMS 互操作
-- 接入现有 HTTP 路由 / 中间件 / 日志管道
 
 ### 平台 / 生态（按需排期）
 
