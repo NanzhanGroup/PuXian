@@ -57,6 +57,7 @@ struct LXValue {
 struct LXObject {
     LXType type;
     unsigned gc_mark : 1;   // M8 GC：标记-清除标记位
+    unsigned is_mmap : 1;   // M57-S2：PX_BYTES 的 data 指向 mmap 映射区（GC 回收走 munmap 而非 xfree）
     union {
         struct { char* data; int len; } str;
         struct { LXValue* items; int len, cap; } list;
