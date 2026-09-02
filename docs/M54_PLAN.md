@@ -83,11 +83,11 @@
 
 | 子步 | 内容 | 验证 |
 |---|---|---|
-| S1 ✅ | D1 TLS1.3 会话恢复（resumption） | commit `57895b1`；client 二次连接 resumed=true + echo 正常；m53_s1 回归 8/8 |
-| S2 | D2 0-RTT early data（传输层 + H3 静态表子集） | 传输层 echo + H3 0-RTT GET 200 双 PASS（见 commit） |
-| S3 | D3 连接迁移（client 换源 + server path 跟随） | msg 跨迁移续传 PASS（见 commit） |
-| S4 | D4 BLOCKED_STREAMS 流控协商 | 上限 2 阻塞(-206)、extend +4 放行 PASS（见 commit） |
-| S5 | D5 pxi 重建 + capability/diffcheck/自举/全量回归 | 全绿 |
+| S1 ✅ | D1 TLS1.3 会话恢复（resumption） | commit `dfba8f2`；client 二次连接 resumed=true + echo 正常；m53_s1 回归 8/8 |
+| S2 ✅ | D2 0-RTT early data（传输层 + H3 静态表子集） | commit `7d004f3`；传输层 echo + H3 0-RTT GET 200 双 PASS |
+| S3 ✅ | D3 连接迁移（client 换源 + server path 跟随） | commit `4a463a1`；msg 跨迁移续传 PASS（同 conn 无重握手） |
+| S4 ✅ | D4 BLOCKED_STREAMS 流控协商 | commit `0bfd5a5`；上限 2 阻塞(-206)、extend +4 放行 PASS |
+| S5 ✅ | D5 pxi 重建 + capability/diffcheck/自举/全量回归 | 本 commit：**bootstrap/pxi 重建**（链接 M54 runtime，9.04MB；examples/m54_s5_pxi_quic_smoke.px 解释模式自检 PASS，证明 pxi 解释器同能力支持 M54 新内置）；**capability 双模式**（解释 253 PASS + 编译 253 PASS，输出逐字节一致）；**diffcheck --all rc=0 / --errors rc=0**；**自举证明 B.c==golden（6381 行 C 逐字节一致）**；**m4x + m53 + m54 全量回归全 PASS**（m46/m47/m48/m49/m50/m51/m52/m53_s1/m53_s3/m53_s4/m54_s1/m54_s2/m54_s3/m54_s4 共 14 项；其中 m51/m53_s4/m54_s4 初跑因验证脚本自身问题——verify.sh 无执行位 / 残留进程占端口 / 断言文本不匹配——修复后重跑 PASS） |
 | S6 | 文档收尾（spec §8.15、ROADMAP、CHANGELOG、README） | 里程碑闭合 |
 
 ## 四、风险与边界

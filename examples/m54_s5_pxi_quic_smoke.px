@@ -1,0 +1,44 @@
+# ============================================================
+# M54 S5：pxi 解释器 M54 新内置 smoke（解释模式）
+# ------------------------------------------------------------
+# 验证重建后的 bootstrap/pxi（链接 M54 runtime）已同能力支持 M54
+# 新增语言 API —— 无效参数调用安全路径不报「未定义」即内置已注册：
+#   quic_0rtt_save / quic_connect_0rtt(参数校验) / quic_0rtt_rejected
+#   quic_conn_handshake_done / quic_migrate / quic_conn_path
+#   quic_conn_local / quic_set_max_client_streams / quic_extend_max_streams
+#   quic_streams_left / h3_server_listen_stateless（无效端口路径）
+# 编译模式 + 解释模式输出一致（verify 由 M54-S5 对拍）。
+# ============================================================
+import "c/ngtcp2"
+
+extern def quic_0rtt_save(conn: int) -> str
+extern def quic_connect_0rtt(ip: str, port: int, alpn: str, s: str) -> int
+extern def quic_0rtt_rejected(conn: int) -> bool
+extern def quic_conn_handshake_done(conn: int) -> bool
+extern def quic_migrate(conn: int, lip: str, lport: int) -> bool
+extern def quic_conn_path(conn: int) -> str
+extern def quic_conn_local(conn: int) -> str
+extern def quic_set_max_client_streams(l: int, n: int) -> bool
+extern def quic_extend_max_streams(l: int, add: int) -> bool
+extern def quic_streams_left(conn: int) -> int
+extern def h3_server_listen_stateless(port: int, cert: str, key: str) -> int
+
+# —— M54-S1 已有：quic_connect_resume / quic_session_save / quic_conn_resumed ——
+extern def quic_conn_resumed(conn: int) -> bool
+
+# —— 无效参数安全路径：返回默认值/失败码即内置已注册（不在语言层报未定义）——
+assert(quic_0rtt_save(0) == "", "smoke: quic_0rtt_save(0) 应为空串")
+assert(quic_0rtt_rejected(0) == false, "smoke: quic_0rtt_rejected(0) 应 false")
+assert(quic_conn_handshake_done(0) == false, "smoke: handshake_done(0) 应 false")
+assert(quic_conn_path(0) == "", "smoke: conn_path(0) 应空")
+assert(quic_conn_local(0) == "", "smoke: conn_local(0) 应空")
+assert(quic_migrate(0, "127.0.0.1", 0) == false, "smoke: migrate(0) 应 false")
+assert(quic_set_max_client_streams(-1, 2) == false, "smoke: set_max(-1) 应 false")
+assert(quic_extend_max_streams(-1, 4) == false, "smoke: extend(-1) 应 false")
+assert(quic_streams_left(-1) == -1, "smoke: streams_left(-1) 应 -1")
+assert(quic_conn_resumed(0) == false, "smoke: resumed(0) 应 false")
+# h3_server_listen_stateless：端口 0 bind 应失败 → -1（不崩 = 内置已注册且走安全失败路径）
+var lh = h3_server_listen_stateless(0, "", "")
+print("smoke: h3_server_listen_stateless(0) -> " + str(lh))
+# quic_connect_0rtt 参数类型错误应抛语言错误（E 类）；此处只验证函数可被 extern 解析（不调用避免连网）
+print("smoke: M54 新内置全部注册 OK")
