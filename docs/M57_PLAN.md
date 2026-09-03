@@ -11,6 +11,8 @@
 > 验证基调：无真板子环境 → ioctl/mmap 语义用 **TCP fd + 内核自带可访问设备替身**
 > （网卡 lo ifreq / PTY，S3）验证，真实设备（GPIO/I2C）条件性探测
 > （存在则 open 验证），S4 用 qemu-aarch64 跑交叉产物。
+>
+> **状态：✅ 已完成**（S1–S6 全部落地并回归，M57 里程碑闭环；详见子步表 + CHANGELOG/ROADMAP/README/spec）。
 
 ## 一、现状（调研结论）
 
@@ -104,7 +106,7 @@
 | S3 ✅ | D3 GPIO / I2C 示例 + 真内核替身验证（mock 调整：pxc 静态链接 → LD_PRELOAD 不可行，改内核自带可访问设备 lo ifreq + PTY 走同胶水路径） | commit `8f6e615`；examples/m57_s3_verify.sh 全 PASS：A devctl 硬断言（A1 SIOCGIFADDR lo→family=2+127.0.0.1 / A2 SIOCGIFFLAGS→LOOPBACK 置位 / A3 SIOCGIFHWADDR→family=772+mac0 / B TIOCGPTN→pts 号，全真实内核）；B/C gpio（无 gpiochip SKIP）·i2c（/dev/i2c-0 存在 → I2C_SLAVE int 形态真实内核设置成功，无器件 errno=95 SKIP）两态放行；D m57_s1/m57_s2 复验 PASS |
 | S4 ✅ | D4 aarch64 交叉 + qemu + PX_NO_QUIC 裁剪（方案收敛：--no-ssl → --no-quic；musl 工具链 + musl 兼容 5 点） | commit 见 S4 提交；tools/cross_aarch64.sh（mbedtls 3.6.2 + sqlite3 交叉入库）+ tools/pxc --no-quic/--cc/--mbedtls-lib/--sqlite-obj + runtime PX_NO_QUIC 7 处 + musl 兼容（execinfo 条件 / GC aarch64 分支 / getcontext→asm+setjmp / close_range 循环）；examples/m57_s4_cross_verify.sh 全 PASS：A 前置齐备 / B 交叉编译 aarch64 静态 2.5MB / C file 确认 ARM aarch64 / D qemu 跑 devctl 网卡 ifreq+PTY ioctl 全过与 x86 一致；x86 回归 m57_s1/m57_s3 全量 PASS（getcontext→setjmp 无破坏） |
 | S5 ✅ | D5 pxi 重建（M57 新内置进解释器）+ capability/diffcheck/自举/全量回归 | commit `62d9275`（代码，main 实际 commit；曾写 d91b720 为 rebase 丢弃的孤立 hash，已修正）；docs `ac067bc`。**pxi 重建真实路径**：解释器自举源码 `selfhost/interp.px`（i_register_builtins 白名单 +10：open/close/ioctl/os_errno/read/write/mmap/munmap/mem_write/http_unix）+ `selfhost/ibuiltin.px`（i_call_builtin 补 10 个纯转发分支，直调同名 runtime C builtin，可选参数按实参个数透传）→ `pxc build selfhost/interp.px` + 当前 runtime 静态链接 → 覆盖 `bootstrap/pxi`（9,050,264 B）。**验证全真实执行**：examples/m57_s5_pxi_smoke.px 解释 PASS + 编译 PASS + 双模式输出逐字节一致（open/close/errno、read(/dev/zero)、ioctl TIOCGPTN bytes 就地填充、write 文件通道、mmap/mem_write/munmap 活映射，全真内核路径）；capability 双模式解释 253 PASS + 编译 253 PASS 输出逐字节一致；diffcheck --all 通过 + --errors rc=0；自举证明 B.c==golden（6381 行 C）；m57_s1/s2/s3 verify.sh 复验全 PASS。⚠️ 本步曾出现一轮**未经执行的虚假完成汇报**（声称 commit 4013f42/27b4e0c + pxi.c 架构均不存在），已以本 commit 全程实测为准，教训：汇报必须以真实命令输出为依据 |
-| S6 | D6 文档收尾 | 待定 |
+| S6 ✅ | D6 文档收尾 | commit `89e5123`：spec §8.17（边缘设备层 fd 原语/数据通道/mmap 活映射 API 文档）+ ROADMAP（主线表 M57 行、能力基线「边缘设备层」、远期 M57 段移入完成）+ CHANGELOG（仓库治理 · ws-web 迁出条目 + M57 里程碑闭环行，S1–S5 commit 引用 S5 修正为 main 实际 62d9275）+ README/README.en（特性表「🔌 边缘设备」、里程碑表 M57、示例列表 m57_s1–s5）同步定稿；M57 里程碑 **S1–S6 全部闭环 ✅** |
 
 ## 四、风险与边界
 
