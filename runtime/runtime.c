@@ -152,7 +152,7 @@ static int px_vhost_resolve(const char* host_hdr, const char* default_root,
                             char* out_root, int out_root_sz, LXValue* out_handler, int* has_handler);
 static void px_pool_push(int fd);
 static void* px_pool_worker(void* arg);
-static void px_vhost_normalize(LXValue v, int* status, const char** ct, const char** body, int* body_len, char* extra, int extra_sz);
+static void px_vhost_normalize(LXValue v, int* status, const char** ct, const char** body, int* body_len);
 static void px_vhost_docroot_store(const char* root);
 static const char* px_vhost_docroot(void);
 int px_rate_limit_try(const char* key, long long max, long long window_sec);
@@ -10799,9 +10799,9 @@ static void px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
                     const char* vct = "text/plain; charset=utf-8";
                     const char* vbody = "";
                     int vblen = 0;
-                    char extra[1024];
-                    int extra_off = snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
-                    px_vhost_normalize(r, &vst, &vct, &vbody, &vblen, extra + extra_off, (int)sizeof(extra) - extra_off);
+                    px_vhost_normalize(r, &vst, &vct, &vbody, &vblen);
+                    char extra[256];
+                    snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
                     pout->respond(pout, vst, vct, vbody, vblen,
                                   strcmp(method, "HEAD") == 0, client_keep_alive, extra);
                     return;
@@ -11704,7 +11704,7 @@ static const char* px_vhost_docroot(void) {
 
 // vhost handler 响应归一化（同解释器 normalize_route_resp）：
 // int → 状态码；str → 200 text/plain；dict{status,headers,body} → 完整控制；其他 → px_to_string
-static void px_vhost_normalize(LXValue v, int* status, const char** ct, const char** body, int* body_len, char* extra, int extra_sz) {
+static void px_vhost_normalize(LXValue v, int* status, const char** ct, const char** body, int* body_len) {
     *status = 200;
     *ct = "text/plain; charset=utf-8";
     *body = "";
@@ -11731,37 +11731,8 @@ static void px_vhost_normalize(LXValue v, int* status, const char** ct, const ch
         }
         LXValue h = px_dict_get(v, "headers");
         if (h.type == PX_DICT) {
-            LXObject* ho = h.as.obj;
-            for (int i = 0; i < ho->as.dict.len; i++) {
-                LXValue hv = ho->as.dict.vals[i];
-                if (hv.type != PX_STR) continue;
-                const char* hk = ho->as.dict.keys[i];
-                if (strcasecmp(hk, "Content-Type") == 0) {
-                    *ct = hv.as.obj->as.str.data;
-                    continue;
-                }
-                // vhost handler 自定义响应头白名单透传（防 CRLF 注入）
-                if (strcasecmp(hk, "Cache-Control") == 0 ||
-                    strcasecmp(hk, "Location") == 0 ||
-                    strcasecmp(hk, "Content-Disposition") == 0 ||
-                    strcasecmp(hk, "Set-Cookie") == 0 ||
-                    strcasecmp(hk, "Content-Language") == 0 ||
-                    strcasecmp(hk, "X-Robots-Tag") == 0 ||
-                    strcasecmp(hk, "Access-Control-Allow-Origin") == 0 ||
-                    strcasecmp(hk, "Access-Control-Allow-Methods") == 0 ||
-                    strcasecmp(hk, "Access-Control-Allow-Headers") == 0 ||
-                    strcasecmp(hk, "Access-Control-Max-Age") == 0) {
-                    const char* hvv = hv.as.obj->as.str.data;
-                    size_t hvl = hv.as.obj->as.str.len;
-                    if (memchr(hvv, '\r', hvl) == NULL && memchr(hvv, '\n', hvl) == NULL) {
-                        int cur = (int)strlen(extra);
-                        int need = (int)strlen(hk) + 2 + (int)hvl + 2;
-                        if (cur + need < extra_sz) {
-                            snprintf(extra + cur, extra_sz - cur, "%s: %s\r\n", hk, hvv);
-                        }
-                    }
-                }
-            }
+            LXValue ctv = px_dict_get_ci(h, "Content-Type");
+            if (ctv.type == PX_STR) *ct = ctv.as.obj->as.str.data;
         }
     } else {
         char* s = px_to_string(v);
