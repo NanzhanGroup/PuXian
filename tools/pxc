@@ -10,6 +10,8 @@
 #   pxc build --cc <cc> [--mbedtls-lib <dir>] [--sqlite-obj <file>] --no-quic <file.px>
 #                                           交叉编译（M57-S4）：cc 指定交叉编译器，
 #                                           mbedtls-lib/sqlite-obj 指定目标架构静态库
+#   pxc build [--zlib-lib <dir>] <file.px>    zlib 外部库目录（M61-S0：缺省按 cc 自动探测，
+#                                            gcc→third_party/zlib/lib，aarch64→lib-aarch64）
 #   pxc run <file.px> [args...]            解释执行
 #   pxc lex <file.px>                      打印 Token 流（调试，走 PuXian lexer）
 #   pxc parse <file.px>                    打印 AST（调试，走 PuXian parser）
@@ -51,6 +53,8 @@ pxc $(echo "$SELFHOST_VER") (普贤 PuXian · selfhosted $SELFHOST_MILESTONE)
                                                                   （缺省 runtime/mbedtls/lib）
                                                  --sqlite-obj    目标架构 sqlite3 .o 文件
                                                                   （缺省 third_party/sqlite3/sqlite3.o）
+                                                 --zlib-lib      目标架构 zlib 库目录
+                                                                  （缺省按 cc 自动探测：gcc→lib，aarch64→lib-aarch64）
   pxc run <file.px> [args...]                 解释执行
   pxc lex <file.px>                           词法分析并打印 Token 流（调试）
   pxc parse <file.px>                         语法分析并打印 AST（调试）
@@ -105,13 +109,14 @@ copy_runtime() {
 
 # build：AST → C → gcc 静态二进制（对齐 Rust run_build）
 cmd_build() {
-    local no_quic=0 cc="gcc" mbedtls_lib="" sqlite_obj=""
+    local no_quic=0 cc="gcc" mbedtls_lib="" sqlite_obj="" zlib_lib=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --no-quic) no_quic=1; shift ;;
             --cc) cc="$2"; shift 2 ;;
             --mbedtls-lib) mbedtls_lib="$2"; shift 2 ;;
             --sqlite-obj) sqlite_obj="$2"; shift 2 ;;
+            --zlib-lib) zlib_lib="$2"; shift 2 ;;
             -h|--help) usage; return 0 ;;
             --) shift; break ;;
             -*) echo "未知选项: $1" >&2; usage >&2; return 1 ;;
@@ -122,6 +127,15 @@ cmd_build() {
     [ -n "$file" ] || { echo "用法: pxc build [选项] <file.px>" >&2; exit 1; }
     [ -f "$file" ] || { echo "错误: 无法读取文件 $file" >&2; return 1; }
     [ "$mbedtls_lib" = "" ] && mbedtls_lib="$RT_DIR/mbedtls/lib"
+    # M61-S0：zlib 外部静态库 —— 显式 --zlib-lib 优先，否则按 cc 架构自动探测
+    # （交叉 --cc aarch64-* 自动切 lib-aarch64，旧交叉脚本无需改）
+    if [ "$zlib_lib" = "" ]; then
+        case "$cc" in
+            *aarch64*) zlib_lib="$RT_DIR/third_party/zlib/lib-aarch64" ;;
+            *)         zlib_lib="$RT_DIR/third_party/zlib/lib" ;;
+        esac
+    fi
+    [ -f "$zlib_lib/libz.a" ] || { echo "错误: 缺少 zlib 静态库 $zlib_lib/libz.a（先跑 tools/build_zlib.sh）" >&2; return 1; }
     local base parent build_dir
     base="$(basename "$file" .px)"
     parent="$(cd "$(dirname "$file")" && pwd)"
@@ -159,7 +173,8 @@ cmd_build() {
         \"$sqlite_src\" \
         \"$build_dir/miniz.c\" \"$build_dir/miniz_tinfl.c\" \"$build_dir/miniz_tdef.c\" \
         -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_FOREIGN_KEYS=1 \
-        -I\"$build_dir\" -I\"$RT_DIR/third_party/miniz\" -I\"$mbedtls_inc\""
+        -I\"$build_dir\" -I\"$RT_DIR/third_party/miniz\" -I\"$mbedtls_inc\" \
+        -I\"$RT_DIR/third_party/zlib/include\""
     if [ "$no_quic" = "1" ]; then
         cc_cmd="$cc_cmd -DPX_NO_QUIC"
     else
@@ -172,6 +187,8 @@ cmd_build() {
         \"$build_dir/ngtcp2/lib/libngtcp2.a\" \"$build_dir/ngtcp2/lib/libngtcp2_crypto_quictls.a\" \
         \"$build_dir/openssl/lib/libssl.a\" \"$build_dir/openssl/lib/libcrypto.a\""
     fi
+    # M61-S0：zlib 外部静态库（无条件链，.a ~150KB；--cc 交叉已自动切架构库）
+    cc_cmd="$cc_cmd \"$zlib_lib/libz.a\""
     cc_cmd="$cc_cmd -lm -ldl"
     if ! eval "$cc_cmd" 2> /tmp/pxc_gcc_err.log; then
         echo "编译失败: $out_path" >&2
