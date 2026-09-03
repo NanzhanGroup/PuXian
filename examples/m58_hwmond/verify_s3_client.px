@@ -1,0 +1,51 @@
+# ============================================================
+# verify_s3_client.px —— pxhwmond HTTP 状态页客户端断言
+# ------------------------------------------------------------
+# 由 verify_s3.sh 编译运行（daemon --port 运行时）；env PXHWMON_VERIFY_PORT
+# 指定端口。断言（M57-S7「响应头丢失」教训自验）：
+#   A. GET /healthz → 200 + Content-Type: application/json + Connection: close
+#      + Content-Length 与实际 body 字节数一致 + JSON 字段齐全（service/
+#      status/heartbeat_ms/mem_total 等快照字段）
+#   B. GET / → 200 + text/html + 页面含 <html> 与快照字段（降级标记 temp 时）
+#   C. GET /nope → 404（text/plain）
+# ============================================================
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+def main():
+    var port = int(env("PXHWMON_VERIFY_PORT"))
+    var base = "http://127.0.0.1:" + str(port)
+
+    # ---- A. /healthz ----
+    var r = http_request(base + "/healthz", "GET", "", {})
+    expect(r["status"] == 200, "/healthz 应 200 得 " + str(r["status"]))
+    var h = r["headers"]
+    expect(h["Content-Type"] == "application/json", "Content-Type 应 application/json 得 [" + str(h["Content-Type"]) + "]")
+    expect(h["Connection"] == "close", "Connection 应 close 得 [" + str(h["Connection"]) + "]")
+    var cl = str(h["Content-Length"])
+    expect(int(h["Content-Length"]) == len(r["body"]), "Content-Length 应 " + str(len(r["body"])) + " 得 [" + cl + "]")
+    var j = json_parse(r["body"])
+    expect(j["service"] == "pxhwmond", "service 应 pxhwmond")
+    expect(j["status"] == "ok", "status 应 ok 得 [" + str(j["status"]) + "]")
+    expect(j["mem_total"] > 0, "mem_total 应 >0")
+    expect(j["heartbeat_ms"] > 0, "heartbeat_ms 应 >0")
+    print("A. /healthz JSON 200 + Content-Type/Connection/Content-Length 显式头 + 字段齐全 ok")
+
+    # ---- B. / HTML ----
+    var r2 = http_request(base + "/", "GET", "", {})
+    expect(r2["status"] == 200, "/ 应 200 得 " + str(r2["status"]))
+    expect(contains(str(r2["headers"]["Content-Type"]), "text/html"), "Content-Type 应 text/html 得 [" + str(r2["headers"]["Content-Type"]) + "]")
+    expect(contains(r2["body"], "<html>"), "/ body 应含 <html>")
+    expect(contains(r2["body"], "mem_avail"), "/ body 应含快照字段 mem_avail")
+    expect(contains(r2["body"], "temp"), "/ body 应含快照字段 temp")
+    expect(int(r2["headers"]["Content-Length"]) == len(r2["body"]), "/ Content-Length 应与 body 一致")
+    print("B. / HTML 200 + text/html + 快照表格 ok")
+
+    # ---- C. 404 ----
+    var r3 = http_request(base + "/nope", "GET", "", {})
+    expect(r3["status"] == 404, "/nope 应 404 得 " + str(r3["status"]))
+    print("C. /nope 404 ok")
+    print("S3-CLIENT OK")

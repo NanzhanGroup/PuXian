@@ -1,0 +1,121 @@
+# ============================================================
+# pxhwmond（M58 S3）serve.px —— 手写最小 HTTP 状态页
+# ------------------------------------------------------------
+# 形态决策（M58_PLAN D4）：不引 px_serve（docroot 脚本服务器，不贴合
+# 嵌入式裸响应），用 tcp_listen/accept/read/write 手写 HTTP/1.1，仅覆盖
+#   GET /healthz → JSON（最新快照 + 心跳 + 状态）
+#   GET /        → HTML 状态页（表格 + 降级标记）
+#   其他         → 404（text/plain）
+# **显式响应头自验**（吸收 M57-S7「vhost handler 自定义响应头丢失」教训）：
+#   Content-Type / Content-Length / Connection / Server 全部显式写，客户端
+#   （verify_s3_client.px http_request）逐头断言。
+# 边界：非完整 Web 服务器（无 keep-alive、无 chunked、单连接顺序处理）；
+#   状态页数据源 = mmap 共享区最新快照（shm_dump 活读，IPC 真实用途）。
+# 注意：import 只合并函数定义 → 无模块级全局；正文全 ASCII（Content-Length
+#   与 len() 字节数一致）。
+# ============================================================
+import "shm.px"
+import "collect.px"
+
+# ---- SNAP 字段 → 数值/字符串混排 dict（数字字段 int；float/na 保持字符串）----
+def healthz_dict(line):
+    var d = json_parse("{}")
+    d["service"] = "pxhwmond"
+    d["heartbeat_ms"] = now_ms()
+    if line == "":
+        d["status"] = "warming"          # daemon 尚未写首轮快照
+        d["snapshot"] = "unavailable"
+        return d
+    d["status"] = "ok"
+    var snap = parse_snap(line)
+    # 纯整数串 → int；含小数点/na 保持字符串（int("0.45")=0 截断失真，不能裸转）
+    if snap["cpu"] == "na":
+        d["cpu"] = "na"
+    else:
+        d["cpu"] = int(snap["cpu"])
+    d["ts"] = int(snap["ts"])
+    d["mem_total"] = int(snap["mem_total"])
+    d["mem_avail"] = int(snap["mem_avail"])
+    d["net_rx"] = int(snap["net_rx"])
+    d["net_tx"] = int(snap["net_tx"])
+    d["load1"] = snap["load1"]
+    d["load5"] = snap["load5"]
+    d["load15"] = snap["load15"]
+    d["up"] = snap["up"]
+    d["temp"] = snap["temp"]
+    if d["temp"] == "na":
+        d["temp_note"] = "no-sensor (degraded)"
+    return d
+
+# ---- HTML 状态页（表格；temp=na 行标降级）----
+def html_body(line):
+    var h = "<html><head><title>pxhwmond</title></head><body>"
+    h = h + "<h1>pxhwmond - hardware health monitor</h1>"
+    h = h + "<p>built with PuXian (M58 dogfood) | heartbeat " + str(now_ms()) + "</p>"
+    h = h + "<table border=\"1\" cellpadding=\"4\">"
+    if line == "":
+        h = h + "<tr><td>snapshot</td><td>warming (daemon first round not yet written)</td></tr>"
+    else:
+        var snap = parse_snap(line)
+        var ks = snap.keys()
+        for k in ks:
+            var v = str(snap[k])
+            var tag = ""
+            if k == "temp" and v == "na":
+                tag = " <b>[degraded: no sensor]</b>"
+            h = h + "<tr><td>" + k + "</td><td>" + v + tag + "</td></tr>"
+    h = h + "</table></body></html>"
+    return h
+
+# ---- 显式响应头响应 ----
+def send_resp(cfd, code, ctype, body):
+    var status = "200 OK"
+    if code == 404:
+        status = "404 Not Found"
+    var head = "HTTP/1.1 " + status + "\r\n"
+    head = head + "Content-Type: " + ctype + "\r\n"
+    head = head + "Content-Length: " + str(len(body)) + "\r\n"
+    head = head + "Connection: close\r\n"
+    head = head + "Server: pxhwmond/0.1\r\n"
+    head = head + "\r\n"
+    write(cfd, head + body)
+
+# ---- 请求首行解析出 path（GET /healthz HTTP/1.1 → /healthz）----
+def req_path(req):
+    var lines = split(req, "\r\n")
+    if len(lines) == 0:
+        return ""
+    var toks = split(lines[0], " ")
+    if len(toks) >= 2:
+        return toks[1]
+    return ""
+
+# ---- 单连接处理 ----
+def handle_client(cfd, shm_path):
+    var reqb = read(cfd, 4096)
+    if type(reqb) != "bytes":
+        close(cfd)
+        return
+    var req = bytes_to_str(reqb)
+    var p = req_path(req)
+    if p == "/healthz":
+        send_resp(cfd, 200, "application/json", json_stringify(healthz_dict(shm_dump(shm_path))))
+    elif p == "/":
+        send_resp(cfd, 200, "text/html; charset=utf-8", html_body(shm_dump(shm_path)))
+    else:
+        send_resp(cfd, 404, "text/plain", "not found: " + p)
+    close(cfd)
+
+# ---- HTTP 服务协程入口（阻塞 accept 循环）----
+def serve_http(port, shm_path):
+    var lfd = tcp_listen(port)
+    if lfd == -1:
+        print("serve: tcp_listen(" + str(port) + ") 失败 errno=" + str(os_errno()))
+        return
+    print("serve: pxhwmond status http://127.0.0.1:" + str(port) + " (shm=" + shm_path + ")")
+    while true:
+        var cfd = tcp_accept(lfd)
+        if cfd == -1:
+            sleep(100)                  # accept 失败退避（边缘常态容错）
+            continue
+        handle_client(cfd, shm_path)
