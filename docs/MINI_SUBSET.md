@@ -293,3 +293,26 @@ m58 notify.px 的 webhook dry-run 解禁为真发成为下一步 dogfood 候选�
 - **测试 mock 经验**：mock 用 PuXian 自举（http_serve + handler 落盘）；bash 侧就绪判定
   不能等 mock 的 stdout（print 到文件全缓冲），改用 `/dev/tcp` 端口探测。
 
+### §十三.4 M59 双模式同步记录：数学/随机内置进 pxi 解释器
+
+> M59（docs/M59_PLAN.md）为编译模式新增 C libm 数学内置 14 函数 + pi/e 常量（S1–S3）。
+> §二 已记录一处先于 M59 存在的**双模式不对称**：`sqrt` 编译模式有、解释器无
+> （ibuiltin.px 无 sqrt 分支）。M59-S4 一并收口，并给全部 15 函数（含 sqrt）+ 2 常量做
+> 解释器同步。此处记录实现要点与过程中新发现的行为差异：
+
+- **白名单注册（interp.px）**：`i_register_builtins` 的 `names` 列表 +15（sqrt/sin/cos/
+  tan/atan2/floor/ceil/round/log/log10/exp/random/random_int/random_seed）。常量 pi/e 不能走
+  `it_builtin`（函数形态），单独 `env_define(g_globals, "pi", pi)` —— **直接读宿主全局**
+  （编译模式 runtime 已用本地宏 PX_PI/PX_E 注册全精度），规避「高精度浮点字面量被编译期
+  截断 ~6 位」的坑（math_s1 实测：字面量 3.14159265358979 编译后只剩 ~6 位有效数字，
+  断言必须用表达式互证/低精度字面量 + 容差）。
+- **分发（ibuiltin.px）**：数学 5 分支（一元 10 函数合一、atan2、random、random_int、
+  random_seed）+ 预检 helper——参数个数/类型错返回 `Err`（解释器不杀进程，区别于编译模式
+  px_error 终止）；参数合法后**直调同名 runtime C builtin**（pxi 宿主已注册全集）。域错误
+  （log(-1)→NaN 等）由 C libm 透传，与编译模式一致、不返回 Err。
+- **验证**：math_s4.px 编译/解释/qemu-aarch64 三态断言全过；双模式输出逐字节一致；
+  splitmix64 序列 x86==aarch64 逐位一致（纯整数 PRNG + 确定性种子，跨平台可复现）。
+- **新发现的既有差异（先于 M59，非本次引入）**：编译模式 `%g` 打印整值浮点为 `"3"`、
+  解释器 i_to_str 为 `"3.0"`（`float(3)`、`2.0*2.0` 均可复现）——通用浮点打印不对称
+  （与 §十三 #7 同源，%g 6 位问题）；M59 验证文件规避：整值浮点只断言不打印，双模式
+  对拍仅用 int/非整值浮点/字符串输出。留档按需修（涉及全量浮点打印回归面）。

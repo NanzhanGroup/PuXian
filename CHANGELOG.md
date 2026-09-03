@@ -6,6 +6,31 @@
 
 ## [Unreleased]
 
+### M59 · 数学与随机补齐（C libm 内置，14 函数 + 2 常量）✅
+
+- **规划**：`docs/M59_PLAN.md`（前置实测复核：现有数学内置仅 abs/min/max/sum/sqrt/pow 六枚；
+  sin/cos/tan/atan2、floor/ceil/round、log/log10/exp、random 全缺；libm 已 include + `-lm`
+  已链接 → 零新依赖）。
+- **S1 三角 + pi**：`sin`/`cos`/`tan`（弧度）/`atan2(y,x)`（先 y 后 x）+ `pi` 常量
+  （本地宏 `PX_PI` 全精度）—— commit `8a85834`。
+- **S2 取整/对数 + e**：`floor`/`ceil`/`round`（C99 round，.5 远离零；返回 float 与 sqrt
+  一致）+ `log`(自然对数 ln)/`log10`/`exp` + `e` 常量（`PX_E` 全精度）；域错误透传 C 语义
+  不终止（log(-1)→NaN、log(0)→-inf、exp(1000)→+inf）—— commit `93eb9a9`。
+- **S3 随机（splitmix64）**：`random()`→float∈[0,1)（53 位尾数均匀）、`random_int(n)`→
+  int∈[0,n)（n>0）、`random_seed(s)` 设种子后同 seed 同序列；确定性 64 位 PRNG 不依赖 C
+  rand 的 glibc/musl 平台差异（静态二进制 + aarch64 序列可复现）；默认种子首次调用惰性
+  初始化（realtime ns ^ pid）—— commit `bddd953`。
+- **S4 双模式同步**：pxi 解释器白名单 +15（含补平 sqrt 编译有解释无的不对称）+ `pi`/`e`
+  常量种子（读宿主全局，规避浮点字面量 6 位截断）+ `ibuiltin.px` 数学分发 5 分支与
+  helper（参数预检返回 Err、域错误 NaN/inf 透传）→ `bootstrap/pxi` 重建；编译/解释/
+  qemu-aarch64 三态断言全过、双模式输出逐字节一致、splitmix64 序列 x86==aarch64 逐位
+  一致；hello/fib 双模式 + m57_s1/m58_s1 回归 PASS —— commit `3f7e434`。
+- **S5 文档收口**：spec §10.2/§10.3、MINI_SUBSET §十三.4、ROADMAP M59 勾选、
+  GAP_ANALYSIS 数学缺口勾销（本 commit）。
+- 语义要点：参数个数/类型错误 → px_error 终止（编程契约，与 abs/sqrt 一致）；域错误 →
+  NaN/inf 透传不终止；atan2 先 y 后 x；floor/ceil/round 返回 float 需 int() 转整数；
+  pi/e 全精度常量。样例与验证：`examples/m59_math/`（math_s1~s4.px + verify_s1~s4.sh）。
+
 ### 文档 · 能力差距分析 + 候选主线排期（docs/GAP_ANALYSIS.md + ROADMAP 远期方向）
 
 - 新增 `docs/GAP_ANALYSIS.md`：树莓派/边缘设备 与 2D/3D 游戏两条用户线的能力差距清单

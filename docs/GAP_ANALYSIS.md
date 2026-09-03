@@ -63,16 +63,18 @@ float64（IEEE 754）、list/dict/闭包/struct、多文件 import、`spawn`/`ch
 | 帧缓冲软件 2D（/dev/fb0 像素） | 🟡 通道通、原语零 | 画点/线/圆/矩形/BMP 精灵/字体渲染全要纯语言手写（stdlib `gfx.px` 候选）；键盘事件封装（/dev/input/event* 可读但解析无示例）；无双缓冲/vsync 封装 |
 | SDL2 / raylib 窗口游戏 | 🔴 0→1 未做 | FFI（M42）至今只绑过**内部 C 库**（ngtcp2/mbedtls 等），无「外部系统库」绑定先例：.a/.so 链接流程、pkg-config、事件循环桥均未验证 |
 
-### 数学欠账（做旋转/随机游戏立刻撞）
+### 数学欠账（做旋转/随机游戏立刻撞）—— ✅ M59 已全部补齐（2026-09）
 
 | 类别 | 函数 |
 |---|---|
 | ✅ 已有 | `abs`/`min`/`max`/`sqrt`/`pow`/`sum`；float64 运算在位 |
-| ❌ 无（必撞） | `sin`/`cos`/`tan`/`atan2`（旋转/圆周运动/转向视角）；`random`（随机性，只能 time 播种自研 hash） |
-| ❌ 无（次要） | `floor`/`ceil`/`round`/`log`/`exp`（HUD/数值系统） |
+| ✅ M59 已补（原必撞） | `sin`/`cos`/`tan`/`atan2`（弧度）；`random`/`random_int`/`random_seed`（splitmix64，确定性可复现） |
+| ✅ M59 已补（原次要） | `floor`/`ceil`/`round`/`log`/`log10`/`exp` + `pi`/`e` 全精度常量 |
 
+> 落地：C libm 内置 + splitmix64（M59 S1–S3）；pxi 解释器双模式同步 + aarch64 交叉
+> qemu 验证（M59 S4）；examples/m59_math/ + ROADMAP/CHANGELOG/MINI_SUBSET §十三.4。
 > 注：`min`/`max` 为双参内置（非 std.math 包形态）。stdlib 目前仅 collections / semver /
-> webroute 三文件共 ~440 行——**生态库极薄**是两条线的共同底色。
+> webroute 三文件共 ~440 行——**生态库极薄**仍是两条线的共同底色。
 
 ## 五、3D 游戏：一句话
 
@@ -91,14 +93,13 @@ ROADMAP 明确不做 OpenGL/Vulkan 原生绑定（工程量与价值不成比例
 
 | 序 | 里程碑 | 内容 | 规模 / 前置 | 依据 |
 |---|---|---|---|---|
-| **M59** | 数学与随机补齐 | `sin`/`cos`/`tan`/`atan2`/`random` + `floor`/`ceil`/`round`/`log`/`exp`（内置或 stdlib `math.px`） | 小；语言面最小侵入、回归可控（diffcheck/双模式/capability） | 游戏+边缘两条线的公共地基，dogfood 必撞 |
+| **M59** ✅ | 数学与随机补齐 | **已完成（2026-09，M59）**：`sin`/`cos`/`tan`/`atan2` + `floor`/`ceil`/`round`/`log`/`log10`/`exp` + `random`/`random_int`/`random_seed` + `pi`/`e`（C libm 内置 + splitmix64；pxi 双模式同步 + aarch64 验证）—— 见 ROADMAP 上表 + CHANGELOG + examples/m59_math | 小；语言面最小侵入（已落地） | 游戏+边缘两条线的公共地基（本表「数学欠账」一项已勾销） |
 | **M60** | 边缘 stdlib + 设备小内置 | `edge.px`：GPIO line request 控制封装、串口 termios、PWM sysfs + `poll`/`epoll` 语言暴露 + us 级 sleep；示例真跑（有设备）或 SKIP | 中；树莓派线最大缺口（§三 #1–#5）；poll/termios/usleep 均为小 C 封装 | |
 | 候选 A | FFI 外部库绑定验证 | SDL2 最小窗口或 raylib hello：.a/.so 链接 + pkg-config + 事件循环桥 | 中–大；游戏窗口线 0→1 前提（现 FFI 仅绑内部 C 库、无外部先例） | |
 | 候选 B | 真板物理回归 | 树莓派 + LED/按键/温湿度：GPIO/I2C/串口/温度示例真跑 | 需硬件；一切边缘能力的最终裁决 | |
 
-> 备注：M59/M60 主线编号可用（主线外占用仅 M55/M56）；立项前先以 `pxc build` 实测复核
-> 一次数学函数清单（确保本表「无 sin/cos/random」在开工时仍准确）；里程碑开工按 M58
-> 模式：先出 `docs/M*_PLAN.md` 规划供审 → 审批后按子步落地 + verify 回归 + 文档收口。
+> 备注：M60 主线编号可用（主线外占用仅 M55/M56）；里程碑开工按 M58 模式：先出
+> `docs/M*_PLAN.md` 规划供审 → 审批后按子步落地 + verify 回归 + 文档收口。
 
 ## 八、与既有文档的关系
 
