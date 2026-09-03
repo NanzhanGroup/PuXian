@@ -14,7 +14,7 @@
 | 温度（条件降级） | hwmon `temp*_input` / thermal_zone `temp` 条件探测，存在才读；全缺 → `temp=na`（当前容器即此态，真板子 open 即真内核路径） |
 | mmap 活映射共享 | 每轮快照 `mem_write` 进 **MAP_SHARED** 文件（`/tmp/pxhwmond.shm`，env 可换）；外部进程 `--dump` mmap 活读；控制区命令通道验证**双向活映射**（外部写 → daemon 下轮快照回显 `ctl=`） |
 | HTTP 状态页 | 手写最小 HTTP/1.1（`tcp_listen/accept/read/write`）：`GET /healthz`（JSON）+ `GET /`（HTML 表格）+ 404；**显式响应头** Content-Type/Content-Length/Connection/Server（M57-S7 教训自验） |
-| 监控 + 自愈 + 通知 | `run.sh` wrapper 崩溃自动重启（kill -9 → attempt 递增）+ 阈值告警（内存/负载/温度 env 阈值）→ 告警日志 + webhook dry-run 报文落盘 |
+| 监控 + 自愈 + 通知 | `run.sh` wrapper 崩溃自动重启（kill -9 → attempt 递增）+ 阈值告警（内存/负载/温度 env 阈值）→ 告警日志 + webhook **真发**（Err 语义：网络失败可检查不 panic） |
 | 交叉产物 | `pxc build --no-quic` aarch64 静态二进制（daemon 无 H3 → 天然裁剪），qemu-aarch64 跑 `--once` 采集真实 /proc（跨架构同源实证） |
 
 ## 目录结构
@@ -25,7 +25,8 @@ examples/m58_hwmond/
   collect.px     /proc + /sys 采集（M57 fd 通道）+ SNAP 行解析 parse_snap
   shm.px         mmap MAP_SHARED 快照共享区（快照区 + 控制区，prepare/write/read/dump）
   serve.px       手写最小 HTTP 状态页（/healthz JSON + / HTML + 404，显式响应头）
-  notify.px      阈值判定 + 告警日志 + webhook dry-run
+  notify.px      阈值判定 + 告警日志 + webhook 真发（http_request + Err 语义）
+  webhook_mock.px  本地接收 mock（http_serve 自举，verify_s3.sh D1 真发验收用）
   run.sh         daemon 启动 wrapper（崩溃自动重启 + systemd 示例）
   verify_s1..s4.sh  各子步自检（每步独立回归）
   verify_s3_client.px  HTTP 断言客户端（verify_s3.sh 使用）
@@ -76,8 +77,8 @@ qemu-aarch64-static examples/m58_hwmond/build/main --once --no-shm
 | `PXHWMON_ALERT_LOAD1` | load1 > 阈值 → 负载告警（float） |
 | `PXHWMON_ALERT_TEMP_MC` | temp(毫°C) > 阈值 → 高温告警（temp=na 跳过） |
 | `PXHWMON_ALERT_LOG` | 告警日志路径（默认 `/tmp/pxhwmond_alerts.jsonl`） |
-| `PXHWMON_WEBHOOK` | webhook URL（dry-run 报文落盘，见边界） |
-| `PXHWMON_WEBHOOK_DRYRUN_LOG` | dry-run 报文路径（默认 `/tmp/pxhwmond_webhook_dryrun.jsonl`） |
+| `PXHWMON_WEBHOOK` | webhook URL（真发 POST application/json，见边界） |
+| `PXHWMON_WEBHOOK_LOG` | webhook 发送结果日志路径（默认 `/tmp/pxhwmond_webhook.jsonl`；每轮一行 `{ts,url,alert,sent,err/status}`） |
 
 每轮输出：`SNAP ts=… cpu=… mem_total=… mem_avail=… load1=… load5=… load15=… up=… temp=… net_rx=… net_tx=… [ctl=…]`
 
@@ -97,22 +98,26 @@ curl -s http://127.0.0.1:19858/                    # HTML 表格（temp=na 标�
 - **监控**：`/healthz`（心跳 + 快照）+ mmap 共享区实时快照 + 告警日志
 - **自愈**：`run.sh` wrapper（daemon 崩溃/kill -9 → 137 → 1s 自动拉起；0/130/143 优雅
   退出不重启；`PXHWMON_RESTART_MAX` 上限）——systemd 部署见 run.sh 头注释示例
-- **通知**：阈值告警 → 告警日志 append + webhook **dry-run** 报文落盘（url/alert/ts JSON）
+- **通知**：阈值告警 → 告警日志 append + webhook **真发**（`http_request` POST JSON
+  到 `PXHWMON_WEBHOOK`，超时 3s 不重试防拖采样；网络失败返回 `Err` → `sent:false` +
+  `err` 落发送日志，daemon 继续存活——HTTP 客户端 Err 语义（§十三 #1/#2 修复）dogfood 闭环）
 
 ## 验证（examples 惯例，全部真实执行）
 
 ```bash
 bash examples/m58_hwmond/verify_s1.sh   # 骨架 + /proc 采集（mem_total 与 MemTotal 精确对拍）
 bash examples/m58_hwmond/verify_s2.sh   # 温度降级 + mmap 双向活映射（dump 活读/ctl 回显）
-bash examples/m58_hwmond/verify_s3.sh   # HTTP 状态页（响应头断言）+ 阈值告警/webhook dryrun
+bash examples/m58_hwmond/verify_s3.sh   # HTTP 状态页（响应头断言）+ 告警/webhook 真发（mock 实收 + 失败路径）
 bash examples/m58_hwmond/verify_s4.sh   # run.sh 崩溃自愈 + aarch64 交叉 qemu（~90s，建议后台）
 ```
 
 ## 已知语言欠账 / 边界（dogfood 撞到，记录不阻塞）
 
-- **`http_post` 失败即 panic**（无错误返回），且 **spawn 协程不隔离 panic**（实测整个
-  进程被杀）→ 长期 daemon 内**不能安全发起网络通知请求**：webhook 以 dry-run 报文落盘
-  验证通知通道，真实网络发送待语言补 HTTP 客户端错误返回后启用。
+- ~~**`http_post` 失败即 panic**，且 **spawn 协程不隔离 panic**（M58 实测整个进程被杀）~~
+  ✅ **已修复并闭环**：HTTP 客户端网络失败统一返回 `Err(result)`（MINI_SUBSET §十三.1），
+  本应用 `notify.px` 的 webhook **dry-run 已解禁为真发**（§十三.3 dogfood 闭环）：网络失败
+  → `sent:false` + `err` 落发送日志、daemon 存活；verify_s3.sh D1/D2 实证（mock 实收 +
+  连接拒绝不 panic）。
 - **`int()` 前缀截断**：`int("0.45")=0`、`int("123abc")=123`、`int("na")=0` → 数值
   转换须先确认纯整数串（本应用以字段白名单 + 字符串保留策略规避）。
 - **`{}` 空 dict 字面量不可靠**（import 合并场景实测为 null）→ 动态 dict 用
