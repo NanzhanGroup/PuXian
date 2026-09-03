@@ -39,6 +39,8 @@
 | M54 | **HTTP/3 生产化**：TLS 1.3 会话恢复（1-RTT resumption）+ **0-RTT early data**（含收包路由 DCID 修复、H3 静态表子集）+ 连接迁移（client 换源 + server path 跟随 + PATH_CHALLENGE）+ BLOCKED_STREAMS 流上限协商（-206 阻塞 / MAX_STREAMS 放行）；语言 API 12 项；S5 全量回归（pxi 重建 + capability 双模式 + diffcheck + 自举 + 14 项端到端） |
 | M57 | **边缘设备层支持（Linux 用户态）**：fd 原语 `open`/`close`/`ioctl`/`os_errno`（ioctl arg 三形态：int 直传 / bytes·str 就地 in/out buffer，`_IOR` 内核直接填充）+ fd 数据通道 `read`/`write` + **mmap 活映射** `mmap`/`munmap`/`mem_write`（MAP_SHARED，GC 自动 munmap）+ GPIO/I2C 示例 + 真内核替身验证（lo ifreq/PTY）+ **aarch64 交叉编译 + qemu 验证 + `--no-quic` 裁剪** + pxi 重建解释同能力（capability 双模式 253 PASS + diffcheck + 自举证明）；裸机 MCU 明确不做，通用动态 FFI（dlsym）等真需求再上 |
 
+| M58 | **首个 dogfood 真实应用：pxhwmond 硬件健康守护 daemon**（examples/m58_hwmond）：多文件 import 工程（每文件 <500 行）+ M57 fd 通道采 /proc（CPU 差值/内存/负载/uptime/net + 温度条件降级）+ **mmap MAP_SHARED 活映射 IPC**（快照区 + 控制区，外部 dump 活读 / 命令通道双向可见）+ 手写最小 HTTP 状态页（/healthz JSON + / HTML + 404，显式响应头自验 M57-S7）+ run.sh 崩溃自愈 + 阈值告警/webhook dry-run + aarch64 交叉 qemu 验证；dogfood 暴露语言欠账 8 项（http_post 失败即 panic 最优先，MINI_SUBSET §十三） |
+
 > **主线外已占用编号**（非 ROADMAP 功能里程碑，已记录于 CHANGELOG，勿复用）：
 > **M55** = issue #2 并发安全 hotfix（修复 · M55）；**M56** = 外部生产应用配套 runtime
 > `http_unix` 内建（新增 · M56）。

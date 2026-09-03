@@ -6,6 +6,34 @@
 
 ## [Unreleased]
 
+### 新增 · M58 首个 dogfood 真实应用：pxhwmond 硬件健康守护 daemon（examples/m58_hwmond，见 docs/M58_PLAN.md）
+
+- **首个 dogfood 里程碑**：用 PuXian 写**真实边缘应用**——单静态二进制硬件健康守护 daemon，
+  把 M57 能力（fd 原语数据通道 / mmap 活映射 / aarch64 交叉编译）揉进完整真实程序，
+  x86 实测 + aarch64 交叉 qemu 验证（1→1.0n 验证闭环）
+- **多文件 import 工程**：main/collect/shm/serve/notify 4 模块拆分（每文件 <500 行），
+  `import "collect.px"` 相对路径源码模块编译模式实测可用
+- **采集（M57 fd 通道主路径）**：/proc/stat CPU 差值 / meminfo / loadavg / uptime /
+  net/dev（非 lo 汇总）+ 温度 hwmon/thermal 条件探测降级（缺 → `temp=na` 不崩）
+- **mmap MAP_SHARED 活映射 IPC**：快照区 + 控制区 4096B 共享文件；`--dump` 外部活读、
+  控制区命令通道**双向可见**（外部写 → daemon 下轮快照回显 `ctl=`，verify_s2 轮询实证）
+- **手写最小 HTTP 状态页**（D4 决策：不引 px_serve docroot）：`GET /healthz` JSON +
+  `GET /` HTML 表格 + 404；**显式响应头** Content-Type/Content-Length/Connection/Server
+  （M57-S7「vhost 响应头丢失」教训自验，verify_s3_client http_request 逐头断言）
+- **监控 + 自愈 + 通知（MONITORING/P0 落地载体）**：/healthz 心跳 + mmap 实时快照 +
+  run.sh 崩溃自动重启（kill -9→137→attempt 递增）+ 阈值告警（内存/负载/温度 env）→
+  告警日志 + webhook dry-run 报文落盘
+- **aarch64 交叉 + qemu**：多文件 import 工程 `pxc build --no-quic` 交叉 aarch64 静态
+  产物（2.5MB）→ qemu-aarch64 `--once` 采集真实 /proc（mem_total 与 MemTotal 一致，
+  跨架构同源实证）；`--no-shm`/`--once` 保证自检可退出不裸奔
+- **语言欠账记录（MINI_SUBSET §十三）**：http_post 失败即 panic + spawn 不隔离 panic
+  （→ webhook 只能 dry-run，真实网络发送待语言补错误返回，最优先）；int() 前缀截断；
+  `{}` 空 dict 不可靠（用 json_parse("{}")）；import 只合并 def 不执行模块顶层；mmap
+  固定 PROT_RW 须 O_RDWR fd
+- 验证：verify_s1–s4.sh 全 PASS（s1 mem 精确对拍 / s2 双向活映射 / s3 HTTP 响应头 +
+  告警 / s4 崩溃自愈 + 交叉 qemu）；M57 s1/s3 回归 PASS；M58 commits：S1 `1694720` /
+  S2 `c821005` / S3 `b92be61` / S4 `25aa4bb`（规划 `4000dc3`）
+
 ### 仓库治理 · ws-web 迁出至独立私有仓库（开源 / 私有物理隔离）
 
 - 仓库外私有生产应用 ws-web（私有 webserver 系统）已从本仓库 `git rm` 并迁至**独立私有仓库**维护；
