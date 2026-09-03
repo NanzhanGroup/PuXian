@@ -2817,6 +2817,44 @@ static LXValue bi_atan2(LXValue* args, int nargs, void* ctx) {
     return px_float(atan2(math_num(args[0], "atan2"), math_num(args[1], "atan2")));
 }
 
+// ---- M59-S2：floor/ceil/round（返回 float，与 sqrt 一致）+ log/log10/exp ----
+// round 用 C99 round：.5 远离零（round(2.5)=3, round(-2.5)=-3）
+static LXValue bi_floor(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("floor 需要 1 个参数");
+    return px_float(floor(math_num(args[0], "floor")));
+}
+
+static LXValue bi_ceil(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("ceil 需要 1 个参数");
+    return px_float(ceil(math_num(args[0], "ceil")));
+}
+
+static LXValue bi_round(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("round 需要 1 个参数");
+    return px_float(round(math_num(args[0], "round")));
+}
+
+static LXValue bi_log(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("log 需要 1 个参数（自然对数 ln）");
+    return px_float(log(math_num(args[0], "log")));
+}
+
+static LXValue bi_log10(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("log10 需要 1 个参数");
+    return px_float(log10(math_num(args[0], "log10")));
+}
+
+static LXValue bi_exp(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("exp 需要 1 个参数");
+    return px_float(exp(math_num(args[0], "exp")));
+}
+
 // ==================== M5 标准库内置函数 ====================
 
 static LXValue bi_input(LXValue* args, int nargs, void* ctx) {
@@ -4900,6 +4938,14 @@ void px_register_builtins(void) {
     px_set_global("tan", px_native("tan", bi_tan));
     px_set_global("atan2", px_native("atan2", bi_atan2));
     px_set_global("pi", px_float(PX_PI));
+    // M59-S2 取整/舍入 + 对数/指数 + e 常量
+    px_set_global("floor", px_native("floor", bi_floor));
+    px_set_global("ceil", px_native("ceil", bi_ceil));
+    px_set_global("round", px_native("round", bi_round));
+    px_set_global("log", px_native("log", bi_log));
+    px_set_global("log10", px_native("log10", bi_log10));
+    px_set_global("exp", px_native("exp", bi_exp));
+    px_set_global("e", px_float(PX_E));
     // M5 标准库
     px_set_global("input", px_native("input", bi_input));
     px_set_global("exit", px_native("exit", bi_exit));
