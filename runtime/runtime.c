@@ -21,6 +21,7 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <fcntl.h>
+#include <termios.h>    // M60-S2: tty_config（串口 termios 波特率/raw 模式）
 #include <errno.h>
 #include <strings.h>
 #include <signal.h>
@@ -252,6 +253,9 @@ static LXValue bi_mem_write(LXValue* args, int nargs, void* ctx);
 static LXValue bi_sleep_us(LXValue* args, int nargs, void* ctx);
 static LXValue bi_now_us(LXValue* args, int nargs, void* ctx);
 static LXValue bi_fcntl(LXValue* args, int nargs, void* ctx);
+// M60-S2：设备组（tty_config/fd_wait）
+static LXValue bi_tty_config(LXValue* args, int nargs, void* ctx);
+static LXValue bi_fd_wait(LXValue* args, int nargs, void* ctx);
 // M30 P1：字节序可控整数↔bytes（pxdb 存储基石）
 static LXValue bi_int_to_bytes(LXValue* args, int nargs, void* ctx);
 static LXValue bi_bytes_to_int(LXValue* args, int nargs, void* ctx);
@@ -3477,6 +3481,84 @@ static LXValue bi_fcntl(LXValue* args, int nargs, void* ctx) {
     return px_int((int64_t)rc);
 }
 
+// ==================== M60-S2：设备组 tty_config / fd_wait ====================
+// 设计（docs/M60_PLAN.md §三.2）：服务边缘设备 GAP #3（串口 UART 无 termios：设不了
+// 波特率/raw 模式）与 #2（GPIO 边沿中断/多 fd 等待无 fd 多路复用）。内部 poll 已有
+// （子进程池读帧用），本步将其暴露为语言函数 fd_wait。失败语义延续 M57：-1/false + os_errno()。
+//   tty_config(fd, baud, raw) → bool：tcgetattr →（raw=true 则 cfmakeraw：关 canonical/echo/
+//     信号转换，串口 raw 标准姿势）→ cfsetispeed+cfsetospeed → tcsetattr(TCSANOW)。
+//     raw=false 仅改波特率保留原模式。baud 支持常规档 9600/19200/38400/57600/115200/
+//     230400/460800/921600；不支持的档 px_error（编程契约参数错误）。
+//   fd_wait(fds, timeout_ms) → list<就绪 fd>（空=超时）| int -1（poll 系统错误 + os_errno）。
+//     fds 接受 int 单 fd 或 list<int>（上限 64）；timeout_ms>=0（0=立即查，负值 px_error）；
+//     events 只监听 POLLIN 可读；revents 非 0（POLLIN/POLLHUP/POLLERR/POLLNVAL）即视为
+//     事件返回该 fd——HUP/ERR 场景由上层随后 read 判 EOF(空 bytes)/-1+errno。EINTR 自动续等。
+static LXValue bi_tty_config(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 3) px_error("tty_config 需要 (fd, baud, raw) 参数");
+    if (args[0].type != PX_INT) px_error("tty_config 的 fd 需要 int");
+    int fd = (int)args[0].as.i;
+    int64_t baud = int_val(args[1]);
+    if (args[2].type != PX_BOOL) px_error("tty_config 的 raw 需要 bool");
+    int raw = args[2].as.b ? 1 : 0;
+    struct termios tio;
+    if (tcgetattr(fd, &tio) != 0) return px_bool(false);   // os_errno() 查具体原因
+    if (raw) cfmakeraw(&tio);
+    speed_t sp;
+    switch (baud) {
+        case 9600:   sp = B9600;   break;
+        case 19200:  sp = B19200;  break;
+        case 38400:  sp = B38400;  break;
+        case 57600:  sp = B57600;  break;
+        case 115200: sp = B115200; break;
+        case 230400: sp = B230400; break;
+        case 460800: sp = B460800; break;
+        case 921600: sp = B921600; break;
+        default:
+            px_error("tty_config 不支持的波特率 %lld（支持 9600/19200/38400/57600/115200/230400/460800/921600）", (long long)baud);
+            return px_bool(false);
+    }
+    if (cfsetispeed(&tio, sp) != 0) return px_bool(false);
+    if (cfsetospeed(&tio, sp) != 0) return px_bool(false);
+    if (tcsetattr(fd, TCSANOW, &tio) != 0) return px_bool(false);
+    return px_bool(true);
+}
+
+static LXValue bi_fd_wait(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) px_error("fd_wait 需要 (fds, timeout_ms) 参数");
+    if (args[1].type != PX_INT) px_error("fd_wait 的 timeout_ms 需要 int");
+    int64_t tmo = args[1].as.i;
+    if (tmo < 0) px_error("fd_wait 的 timeout_ms 需要 >= 0");
+    if (tmo > 2147483647L) tmo = 2147483647L;   // poll 超时 int 上限保护
+    int fds[64];
+    int n = 0;
+    if (args[0].type == PX_INT) {
+        fds[n++] = (int)args[0].as.i;
+    } else if (args[0].type == PX_LIST) {
+        LXObject* o = args[0].as.obj;
+        if (o->as.list.len > 64) px_error("fd_wait 一次最多监听 64 个 fd");
+        for (int i = 0; i < o->as.list.len; i++) {
+            if (o->as.list.items[i].type != PX_INT) px_error("fd_wait 的 fds 列表元素需要 int");
+            fds[n++] = (int)o->as.list.items[i].as.i;
+        }
+    } else {
+        px_error("fd_wait 的 fds 需要 int 或 list<int>，实际 %s", px_type_name(args[0]));
+    }
+    if (n == 0) return px_list(0);   // 空集合立即返回空
+    struct pollfd pfds[64];
+    for (int i = 0; i < n; i++) { pfds[i].fd = fds[i]; pfds[i].events = POLLIN; pfds[i].revents = 0; }
+    int rc;
+    do { rc = poll(pfds, (nfds_t)n, (int)tmo); } while (rc < 0 && errno == EINTR);
+    if (rc < 0) return px_int(-1);   // os_errno() 查（如 EINVAL）
+    LXValue r = px_list(0);
+    if (rc == 0) return r;           // 超时 → 空 list（与就绪返回类型统一，非错误）
+    for (int i = 0; i < n; i++) {
+        if (pfds[i].revents != 0) px_list_push(r, px_int(pfds[i].fd));
+    }
+    return r;
+}
+
 static void bytes_to_hex(const unsigned char* in, size_t len, char* out) {
     static const char HEX[] = "0123456789abcdef";
     for (size_t i = 0; i < len; i++) {
@@ -5082,6 +5164,9 @@ void px_register_builtins(void) {
     px_set_global("sleep_us", px_native("sleep_us", bi_sleep_us));
     px_set_global("now_us", px_native("now_us", bi_now_us));
     px_set_global("fcntl", px_native("fcntl", bi_fcntl));
+    // M60-S2：设备组（tty_config/fd_wait）
+    px_set_global("tty_config", px_native("tty_config", bi_tty_config));
+    px_set_global("fd_wait", px_native("fd_wait", bi_fd_wait));
     // M14 P1：crypto 哈希
     px_set_global("sha256", px_native("sha256", bi_sha256));
     px_set_global("xxhash", px_native("xxhash", bi_xxhash));
