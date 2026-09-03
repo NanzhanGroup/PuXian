@@ -6,6 +6,20 @@
 
 ## [Unreleased]
 
+### 发布自动化 · tag 驱动 GitHub Release（仓库治理）
+
+- **`.github/workflows/release.yml`（新）**：推送 tag `v*` 触发 → ubuntu-latest 上
+  `tools/make_release.sh` 构建发布包（内置冒烟自检）→ `gh` CLI 创建 GitHub Release
+  并上传 tarball（`GITHUB_TOKEN`，零第三方 action）；Release notes 自动含
+  SHA-256 与上一 tag 起的提交列表。发布 SOP：`git tag v0.1.0-m62 &&
+  git push origin v0.1.0-m62`。
+- **`tools/make_release.sh` 版本来源 tag 驱动**：VER 取最近 tag 的 `vX.Y.Z` 部分
+  （`v0.1.0-m62` → `0.1.0`），里程碑优先级改为 命令行参数 > tag 后缀 `m62` >
+  最近提交推断，避免发布包版本与 tag 不一致。
+- **`pxi --version` 补齐**：`selfhost/interp.px` 入口支持 `--version`/`-v`（无文件
+  参数时输出版本退出 0，输出与 `tools/pxc --version` 对齐）；`bootstrap/pxi` 重建
+  （对齐"所有程序支持 --version"规范）。
+
 ### M61 · 外部库 FFI proof（zlib）+ 纯语言 2D 游戏内圈（gfx/png/贪吃蛇）✅
 
 - **规划**：`docs/M61_PLAN.md`（A=外部系统库绑定全链路 proof + B=纯语言 2D 内圈；无真板
