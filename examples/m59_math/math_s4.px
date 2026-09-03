@@ -1,0 +1,82 @@
+# ============================================================
+# M59 S4 math_s4.px —— 双模式同步 + aarch64 交叉验证（14 函数 + sqrt + pi/e）
+# ------------------------------------------------------------
+# 说明：编译模式 %g 打印整值浮点为 "3"、解释器 i_to_str 为 "3.0"（先于 M59
+# 存在的通用浮点打印差异，MINI_SUBSET §十三 #7 同类）→ 本文件所有浮点结果
+# 一律断言（容差 1e-12，覆盖跨 libm 1 ulp 尾位差），只打印 int/非整值浮点/字符串，
+# 保证 编译模式 == pxi 解释 == qemu-aarch64 输出逐字节一致。
+# 退出：全过 → "M59-S4 OK" 退出码 0
+# ============================================================
+
+def approx(a, b, tol):
+    return abs(a - b) <= tol
+
+# ---- 三角（弧度）----
+assert(approx(sin(0), 0.0, 1e-12), "sin(0)≈0")
+assert(approx(sin(pi / 2), 1.0, 1e-12), "sin(pi/2)≈1")
+assert(approx(cos(0), 1.0, 1e-12), "cos(0)≈1")
+assert(approx(cos(pi), -1.0, 1e-12), "cos(pi)≈-1")
+assert(approx(tan(0), 0.0, 1e-12), "tan(0)≈0")
+assert(approx(atan2(1, 1), pi / 4, 1e-12), "atan2(1,1)≈pi/4")
+assert(approx(atan2(0, -1), pi, 1e-12), "atan2(0,-1)≈pi（第二象限）")
+assert(atan2(-1, -1) < -2.3, "atan2(-1,-1)<-2.3（第三象限负角）")
+
+# ---- 取整/舍入（返回 float，内部断言；不打印整值浮点）----
+assert(floor(2.7) == 2.0, "floor(2.7)==2")
+assert(floor(-2.1) == -3.0, "floor(-2.1)==-3")
+assert(ceil(2.1) == 3.0, "ceil(2.1)==3")
+assert(ceil(-2.7) == -2.0, "ceil(-2.7)==-2")
+assert(round(2.5) == 3.0, "round(2.5)==3（.5 远离零）")
+assert(round(-2.5) == -3.0, "round(-2.5)==-3")
+
+# ---- 对数/指数 + e ----
+assert(log(1) == 0.0, "log(1)==0")
+assert(approx(log(e), 1.0, 1e-12), "log(e)≈1")
+assert(approx(log10(1000), 3.0, 1e-12), "log10(1000)≈3")
+assert(exp(0) == 1.0, "exp(0)==1")
+assert(approx(exp(1), e, 1e-12), "exp(1)≈e")
+
+# ---- 域错误透传（不终止；log(-1)→NaN / exp(1000)→+inf）----
+var nanv = log(-1)
+var infv = exp(1000)
+var nanv2 = log(0)
+# NaN/inf 不打印具体值（双模式表示差异风险），仅保证走到这里未终止
+
+# ---- sqrt（补解释器缺口，消除 M59-PLAN §二 记录的双模式不对称）----
+assert(sqrt(9) == 3.0, "sqrt(9)==3")
+assert(sqrt(2) > 1.41 and sqrt(2) < 1.42, "sqrt(2)∈(1.41,1.42)")
+assert(approx(sqrt(2) * sqrt(2), 2.0, 1e-12), "sqrt(2)*sqrt(2)≈2（高精度字面量会被编译期截断，用表达式互证）")
+
+# ---- 随机（splitmix64：同 seed 序列逐位一致 / 区间 / 类型）----
+var bad = 0
+for i in range(200):
+    var r = random()
+    if r < 0.0 or r >= 1.0:
+        bad += 1
+assert(bad == 0, "random() 200 次 [0,1)")
+assert(type(random()) == "float", "random() 返回 float")
+
+var badi = 0
+for i in range(200):
+    var n = random_int(10)
+    if n < 0 or n >= 10:
+        badi += 1
+    assert(type(n) == "int", "random_int 返回 int")
+assert(badi == 0, "random_int(10) 200 次 [0,10)")
+
+random_seed(2024)
+var seq = []
+for i in range(6):
+    seq.append(random_int(100))
+random_seed(2024)
+for i in range(6):
+    assert(random_int(100) == seq[i], "同 seed=2024 random_int 序列第 " + str(i) + " 位一致")
+print("rand_seq=", seq[0], seq[1], seq[2], seq[3], seq[4], seq[5])
+
+# ---- 常量/函数打印（非整值浮点 + int，双模式逐字节安全）----
+print("pi6=", pi)
+print("e6=", e)
+print("atan2q=", atan2(1, 1))
+print("exp1=", exp(1))
+
+print("M59-S4 OK")

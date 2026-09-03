@@ -82,6 +82,19 @@ def i_call_builtin(name, args, pos):
             return Err(i_r1002("pow 需要两个参数", pos))
         let r = i_eval_binary("Pow", args[0], args[1], pos)
         return r
+    # ---- M59-S4 数学（双模式同步：编译模式 bi_* 已注册；解释器参数预检后直调 C libm） ----
+    # 语义对齐 M59-PLAN §3.3：参数个数/类型错 → Err（解释器不杀进程，区别于编译模式 px_error）；
+    # 域错误（log(-1)→NaN、exp(1000)→+inf）透传 C libm（与编译模式一致，不返回 Err）。
+    if name == "sqrt" or name == "sin" or name == "cos" or name == "tan" or name == "floor" or name == "ceil" or name == "round" or name == "log" or name == "log10" or name == "exp":
+        return i_math_unary(name, args, pos)
+    if name == "atan2":
+        return i_math_atan2(args, pos)
+    if name == "random":
+        return i_math_random(args, pos)
+    if name == "random_int":
+        return i_math_random_int(args, pos)
+    if name == "random_seed":
+        return i_math_random_seed(args, pos)
     if name == "assert":
         if len(args) < 1 or len(args) > 2:
             return Err(i_r1002("assert 需要 1-2 个参数", pos))
@@ -358,6 +371,68 @@ def i_call_builtin(name, args, pos):
             return Ok(http_unix(args[0], args[1], args[2], args[3]))
         return Ok(http_unix(args[0], args[1], args[2], args[3], args[4]))
     return Err(i_r1002("未知内置函数: " + name, pos))
+
+# ---- M59-S4 数学直调 helper（双模式对齐） ----
+# 解释器参数错误返回 Err（不终止进程，区别于编译模式 px_error 终止）；
+# 参数合法后直调同名 runtime C builtin（pxi 宿主已注册全部 M59 数学内置）。
+def i_math_unary(cname, args, pos):
+    if len(args) != 1:
+        return Err(i_r1002(cname + " 需要 1 个参数", pos))
+    let t = i_type_name(args[0])
+    if t != "int" and t != "float":
+        return Err(i_r1002(cname + " 参数必须是数字，实际是 " + t, pos))
+    if cname == "sqrt":
+        return Ok(sqrt(args[0]))
+    if cname == "sin":
+        return Ok(sin(args[0]))
+    if cname == "cos":
+        return Ok(cos(args[0]))
+    if cname == "tan":
+        return Ok(tan(args[0]))
+    if cname == "floor":
+        return Ok(floor(args[0]))
+    if cname == "ceil":
+        return Ok(ceil(args[0]))
+    if cname == "round":
+        return Ok(round(args[0]))
+    if cname == "log":
+        return Ok(log(args[0]))
+    if cname == "log10":
+        return Ok(log10(args[0]))
+    return Ok(exp(args[0]))
+
+def i_math_atan2(args, pos):
+    if len(args) != 2:
+        return Err(i_r1002("atan2 需要 2 个参数（先 y 后 x）", pos))
+    var i = 0
+    while i < 2:
+        let t = i_type_name(args[i])
+        if t != "int" and t != "float":
+            return Err(i_r1002("atan2 参数必须是数字，实际是 " + t, pos))
+        i += 1
+    return Ok(atan2(args[0], args[1]))
+
+def i_math_random(args, pos):
+    if len(args) != 0:
+        return Err(i_r1002("random 不需要参数", pos))
+    return Ok(random())
+
+def i_math_random_int(args, pos):
+    if len(args) != 1:
+        return Err(i_r1002("random_int 需要 1 个参数 n（正整数）", pos))
+    if i_type_name(args[0]) != "int":
+        return Err(i_r1002("random_int 的 n 需要 int", pos))
+    if args[0] <= 0:
+        return Err(i_r1002("random_int 的 n 必须 > 0，实际是 " + i_to_str(args[0]), pos))
+    return Ok(random_int(args[0]))
+
+def i_math_random_seed(args, pos):
+    if len(args) != 1:
+        return Err(i_r1002("random_seed 需要 1 个整数参数（种子）", pos))
+    if i_type_name(args[0]) != "int":
+        return Err(i_r1002("random_seed 的种子需要 int", pos))
+    random_seed(args[0])
+    return Ok(null)
 
 # M42：FFI 调用（extern def 走 C 桥）
 # args: [name(str), fn_args(list)] → ffi_call(name, args_list) → runtime 注册的 C 绑定
