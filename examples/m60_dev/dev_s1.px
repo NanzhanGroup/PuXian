@@ -1,0 +1,82 @@
+# ============================================================
+# M60 S1 dev_s1.px —— us 级时钟 + fd 控制（sleep_us/now_us/fcntl）
+# ------------------------------------------------------------
+# 测试点（对应 docs/M60_PLAN.md §三.2 三内置语义）：
+#   A. sleep_us 计时：now_us 前后采样，实际等待 >= 指定 us 且不超额太多
+#   B. now_us 单调递增 + 与 now_ms（REALTIME）同一毫秒时间轴
+#   C. fcntl F_GETFL(3) 正常态：返回非负 flags
+#   D. fcntl F_SETFL(4) 设 O_NONBLOCK(0x800=2048) → F_GETFL 复核含 2048
+#   E. 非阻塞读空 PTY 主端 → int -1 + os_errno()==11(EAGAIN)（fd_wait 就绪前不阻塞的语义基础）
+#   F. 错误态：无效 fd 上 F_GETFL → -1 + os_errno()!=0（不杀进程，可检查）
+# PTY 流程沿用 M57-S3 真内核样板：open /dev/ptmx → TIOCGPTN 拿 pts 号 →
+#   TIOCSPTLCK 解锁 → open /dev/pts/N（对端）→ 主端设非阻塞读空验证 EAGAIN。
+# 退出：全过 → 打印 "M60-S1 OK"；任一失败 → assert 终止（exit 1）
+# ============================================================
+
+var F_GETFL  = 3
+var F_SETFL  = 4
+var O_NONBLOCK = 2048     # 0x800，x86/aarch64 asm-generic 一致
+var EAGAIN   = 11
+var TIOCGPTN = 0x80045430
+var TIOCSPTLCK = 0x40045431
+
+# ---- A. sleep_us 计时（now_us 前后采样）----
+var t0 = now_us()
+sleep_us(50000)            # 50ms
+var t1 = now_us()
+var el = t1 - t0
+assert(el >= 50000, "sleep_us(50000) 实际等待应>=50000us, got " + str(el))
+assert(el < 500000, "sleep_us(50000) 实际等待不应远超 500000us（调度抖动容差）, got " + str(el))
+print("A: sleep_us(50000) 实测", el, "us")
+# 边界：sleep_us(0) / sleep_us(-1) 不睡直接返回（<=0 语义）
+var b0 = now_us()
+sleep_us(0)
+sleep_us(-5)
+var b1 = now_us()
+assert(b1 - b0 < 20000, "sleep_us(<=0) 不应实际睡眠")
+
+# ---- B. now_us 单调递增（CLOCK_MONOTONIC 测量语义；数值与 REALTIME 的 now_ms 不可比，只验单调）----
+var a = now_us()
+var c = now_us()
+assert(c > a, "now_us 应单调递增")
+var n = now_us()
+assert(n > 0, "now_us 应>0（系统已启动，单调钟必为正值）")
+print("B: now_us 单调递增 ok")
+
+# ---- C/D. fcntl 正常态 + 设非阻塞 ----
+var pfd = open("/dev/ptmx", "rw")
+assert(pfd >= 0, "open /dev/ptmx 失败 fd=" + str(pfd) + " errno=" + str(os_errno()))
+var flags = fcntl(pfd, F_GETFL)
+assert(flags >= 0, "fcntl F_GETFL 应返回非负 flags=" + str(flags) + " errno=" + str(os_errno()))
+var rc = fcntl(pfd, F_SETFL, flags | O_NONBLOCK)
+assert(rc >= 0, "fcntl F_SETFL 失败 rc=" + str(rc) + " errno=" + str(os_errno()))
+var flags2 = fcntl(pfd, F_GETFL)
+assert((flags2 & O_NONBLOCK) != 0, "F_SETFL 后 F_GETFL 应含 O_NONBLOCK, flags2=" + str(flags2))
+print("C/D: fcntl F_GETFL/F_SETFL 设 O_NONBLOCK 成功")
+
+# ---- E. 非阻塞读空 PTY 主端 → -1/EAGAIN（需 slave 对端已打开）----
+var ptnb = int_to_bytes(0, 4, "little")
+var rp = ioctl(pfd, TIOCGPTN, ptnb)
+assert(rp == 0, "TIOCGPTN 应 0 got=" + str(rp) + " errno=" + str(os_errno()))
+var ptn = bytes_to_int(ptnb, "little")
+var ul = int_to_bytes(0, 4, "little")
+var ru = ioctl(pfd, TIOCSPTLCK, ul)
+assert(ru == 0, "TIOCSPTLCK 解锁应 0 got=" + str(ru) + " errno=" + str(os_errno()))
+var sfd = open("/dev/pts/" + str(ptn), "rw")
+assert(sfd >= 0, "open pts/" + str(ptn) + " 失败 fd=" + str(sfd) + " errno=" + str(os_errno()))
+# 主端已非阻塞（D 步设置），slave 打开且无数据 → 主端读应立即 EAGAIN
+var r = read(pfd, 1)
+assert(r == -1, "非阻塞空读应返回 -1, got " + str(r))
+assert(os_errno() == EAGAIN, "非阻塞空读 errno 应 EAGAIN(11), got " + str(os_errno()))
+print("E: 非阻塞读空 PTY → -1/EAGAIN(" + str(os_errno()) + ") ok")
+
+# ---- F. 错误态：无效 fd → -1 + errno（不杀进程）----
+var bad = fcntl(999999, F_GETFL)
+assert(bad == -1, "无效 fd F_GETFL 应 -1, got " + str(bad))
+assert(os_errno() != 0, "无效 fd 应留下非 0 errno, got " + str(os_errno()))
+print("F: fcntl 无效 fd → -1 + errno=" + str(os_errno()) + " ok")
+
+close(sfd)
+close(pfd)
+
+print("M60-S1 OK")
