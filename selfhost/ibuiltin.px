@@ -370,6 +370,37 @@ def i_call_builtin(name, args, pos):
         if len(args) == 4:
             return Ok(http_unix(args[0], args[1], args[2], args[3]))
         return Ok(http_unix(args[0], args[1], args[2], args[3], args[4]))
+    # ---- M60-S1/S2 边缘设备（us 级时钟 + fd 控制 + 设备组；直接转发 runtime C builtin） ----
+    # 语义对齐 M60-PLAN §3.3：参数错误 → Err（解释器不杀进程，区别于编译模式 px_error）；
+    # 设备失败 -1/false + os_errno() 透传（与 M57 fd 原语一致，不包装）。
+    if name == "sleep_us":
+        # sleep_us(us) → null（us 级睡眠，<=0 不睡）
+        if len(args) != 1:
+            return Err(i_r1002("sleep_us 需要 1 个参数（微秒）", pos))
+        sleep_us(args[0])
+        return Ok(null)
+    if name == "now_us":
+        # now_us() → int（CLOCK_MONOTONIC 微秒，测量语义）
+        if len(args) != 0:
+            return Err(i_r1002("now_us 不需要参数", pos))
+        return Ok(now_us())
+    if name == "fcntl":
+        # fcntl(fd, cmd[, arg]) → int（标准 fcntl；失败 -1 + os_errno）
+        if len(args) < 2 or len(args) > 3:
+            return Err(i_r1002("fcntl 需要 (fd, cmd[, arg])", pos))
+        if len(args) == 3:
+            return Ok(fcntl(args[0], args[1], args[2]))
+        return Ok(fcntl(args[0], args[1]))
+    if name == "tty_config":
+        # tty_config(fd, baud, raw) → bool（串口 termios 波特率/raw）
+        if len(args) != 3:
+            return Err(i_r1002("tty_config 需要 (fd, baud, raw)", pos))
+        return Ok(tty_config(args[0], args[1], args[2]))
+    if name == "fd_wait":
+        # fd_wait(fds, timeout_ms) → list<就绪 fd>（空=超时）| int -1（poll 错误）
+        if len(args) != 2:
+            return Err(i_r1002("fd_wait 需要 (fds, timeout_ms)", pos))
+        return Ok(fd_wait(args[0], args[1]))
     return Err(i_r1002("未知内置函数: " + name, pos))
 
 # ---- M59-S4 数学直调 helper（双模式对齐） ----
