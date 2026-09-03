@@ -98,3 +98,65 @@ def collect_uptime():
         u["up"] = t[0]
         u["idle"] = t[1]
     return u
+
+# ============================================================
+# S2 追加：温度（条件探测 + 降级）与网络流量（非 lo 汇总）
+# ============================================================
+
+# ---- 读文件首 token（温度文件 "45000\n" 等单值小文件）----
+def read_first_token(path):
+    var fd = open(path, "r")
+    if fd == -1:
+        return ""
+    var b = read(fd, 128)
+    close(fd)
+    if type(b) != "bytes":
+        return ""
+    var t = tokens(bytes_to_str(b))
+    if len(t) == 0:
+        return ""
+    return t[0]
+
+# ---- 温度：hwmon temp*_input / thermal_zone temp（m°C 原样字符串）----
+# 条件探测：存在才 open 读；全缺 → {"temp":"","src":""} 降级（当前容器即此态，
+# 分支仍走真代码路径，真板子 open 即真内核路径）
+def temp_read():
+    var r = {"temp": "", "src": ""}
+    var hw = list_dir("/sys/class/hwmon")
+    if hw != null:
+        for d in hw:
+            if starts_with(d, "hwmon"):
+                var p = "/sys/class/hwmon/" + d + "/temp1_input"
+                var v = read_first_token(p)
+                if v != "":
+                    r["temp"] = v
+                    r["src"] = p
+                    return r
+    var th = list_dir("/sys/class/thermal")
+    if th != null:
+        for d in th:
+            if starts_with(d, "thermal_zone"):
+                var p = "/sys/class/thermal/" + d + "/temp"
+                var v = read_first_token(p)
+                if v != "":
+                    r["temp"] = v
+                    r["src"] = p
+                    return r
+    return r
+
+# ---- 网络流量：/proc/net/dev 非 lo 接口收/发字节汇总（真实内核计数）----
+# 行格式：face: rxB rxP rxE ... | txB txP ...（tokens: [0]=face [1]=rx_bytes
+# [9]=tx_bytes，头两行无冒号跳过）
+def net_dev():
+    var n = {"rx": 0, "tx": 0, "ifaces": 0}
+    var txt = proc_read("/proc/net/dev")
+    if txt == "":
+        return n
+    for ln in split(txt, "\n"):
+        if contains(ln, ":"):
+            var t = tokens(ln)
+            if len(t) >= 10 and t[0] != "lo:":
+                n["rx"] = n["rx"] + int(t[1])
+                n["tx"] = n["tx"] + int(t[9])
+                n["ifaces"] = n["ifaces"] + 1
+    return n
