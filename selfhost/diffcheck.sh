@@ -126,18 +126,8 @@ check_codegen_file() {
     norm_c < "$GOLDEN_DIR/$base.c" > "$WORK/$base.gold.c" 2>/dev/null || { echo "    ⚠️ 无 golden，先生成"; return; }
     if diff -q "$WORK/$base.px.c" "$WORK/$base.gold.c" >/dev/null 2>&1; then
         echo "    ✅ $base C 源码一致"
-    elif [ "$base" = "v01_value" ]; then
-        # 已知差异（MINI_SUBSET §十）：编译模式浮点字面量 %g 截断
-        # （仅 px_float(<高精度小数>) 常量差异，代码结构一致）
-        local ndiff; ndiff=$(diff "$WORK/$base.px.c" "$WORK/$base.gold.c" | grep -cE '^[<>].*px_float' || true)
-        local ntotal; ntotal=$(diff "$WORK/$base.px.c" "$WORK/$base.gold.c" | grep -cE '^[<>]' || true)
-        if [ "$ndiff" = "$ntotal" ] && [ "$ntotal" -le 4 ]; then
-            echo "    ⚠️ $base C 源码已知差异：浮点常量 %g 截断（MINI_SUBSET §十，$ntotal 行）"
-        else
-            echo "    ❌ $base C 源码有差异"
-            diff "$WORK/$base.px.c" "$WORK/$base.gold.c" | head -10
-        fi
     else
+        # M63-L10：浮点字面量已全精度（无 %g 截断豁免）；此处任何差异即失败
         echo "    ❌ $base C 源码有差异"
         diff "$WORK/$base.px.c" "$WORK/$base.gold.c" | head -10
     fi
@@ -174,12 +164,7 @@ check_value_case() {
     fails=$(echo "$out" | grep -cE '^\[FAIL\]' || true)
     errs=$(echo "$out" | grep -cE '运行时错误|错误 \[' || true)
     passes=$(echo "$out" | grep -cE '^\[PASS\]' || true)
-    # 已知差异（MINI_SUBSET §十）：编译模式浮点 %g 精度——v01 的 float** 幂运算
-    # 期望值 1.4142135623730951 在编译版字面量被截断为 1.41421，其余断言全过
-    if [ "$fails" = "1" ] && echo "$out" | grep -q '^\[FAIL\] float\*\* v_arith'; then
-        echo "    ⚠️ $base 已知差异：编译模式浮点 %g 精度（MINI_SUBSET §十），$passes PASS"
-        return 0
-    fi
+    # M63-L10：浮点全精度后 v01 float** 已全 PASS，原 %g 豁免移除（差异即失败）
     if [ "$fails" = "0" ] && [ "$errs" = "0" ]; then
         echo "    ✅ $base $passes PASS"
         return 0
@@ -218,11 +203,7 @@ check_interp_value() {
     fails=$(echo "$out" | grep -cE '^\[FAIL\]' || true)
     errs=$(echo "$out" | grep -cE '运行时错误|错误 \[' || true)
     passes=$(echo "$out" | grep -cE '^\[PASS\]' || true)
-    # 已知差异（MINI_SUBSET §十）：编译模式浮点 %g 精度（同 check_value_case）
-    if [ "$fails" = "1" ] && echo "$out" | grep -q '^\[FAIL\] float\*\* v_arith'; then
-        echo "    ⚠️ $base 已知差异：编译模式浮点 %g 精度（MINI_SUBSET §十），$passes PASS"
-        return 0
-    fi
+    # M63-L10：浮点全精度后 v01 float** 已全 PASS，原 %g 豁免移除（差异即失败）
     if [ "$fails" = "0" ] && [ "$errs" = "0" ]; then
         echo "    ✅ $base $passes PASS"
         return 0
