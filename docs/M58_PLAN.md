@@ -10,7 +10,7 @@
 > 载体）；代码每文件 <500 行（对大模型友好）→ 多文件拆分。
 >
 > 范围：PuXian 语言 / runtime / 工具链 + 本仓库 examples 内自研示例应用（不牵外部
-> 生产应用 ws-web）。验证基调：容器无真板子/无 hwmon temp → 采集真实 /proc +
+> 生产应用 Mahesvara）。验证基调：容器无真板子/无 hwmon temp → 采集真实 /proc +
 > /sys 条件探测降级；aarch64 产物 qemu-aarch64 跑自检模式验证。
 >
 > **状态：✅ 已完成（S1–S5 全部落地并回归，M58 里程碑闭环）**

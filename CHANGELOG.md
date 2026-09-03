@@ -73,7 +73,7 @@
   输入/数学基础——终端 ASCII 半通、帧缓冲原语零、SDL2/raylib 0→1 未做）；3D 明确不做
   原生绑定、唯一路径 = raylib C 绑定（前置 FFI 外部库绑定验证）。
 - 历史任务覆盖核对：#37 → M57 S1–S4 **100% 闭环**；#36 → 主体完成（pxc 交叉产出 aarch64
-  静态 ELF + qemu 验证），遗留 = 原生 aarch64 pxi 未做（如需「板子跑解释模式」）+ ws-web
+  静态 ELF + qemu 验证），遗留 = 原生 aarch64 pxi 未做（如需「板子跑解释模式」）+ Mahesvara
   加分项已随拆仓移出本仓。
 - ROADMAP 远期方向新增「候选主线排期」：M59 数学与随机补齐（小）→ M60 边缘 stdlib +
   设备小内置（中）→ 候选 FFI 外部库绑定验证 / 真板物理回归（需硬件）。
@@ -172,17 +172,17 @@
   告警 / s4 崩溃自愈 + 交叉 qemu）；M57 s1/s3 回归 PASS；M58 commits：S1 `1694720` /
   S2 `c821005` / S3 `b92be61` / S4 `25aa4bb`（规划 `4000dc3`）
 
-### 仓库治理 · ws-web 迁出至独立私有仓库（开源 / 私有物理隔离）
+### 仓库治理 · Mahesvara 迁出至独立私有仓库（开源 / 私有物理隔离）
 
-- 仓库外私有生产应用 ws-web（私有 webserver 系统）已从本仓库 `git rm` 并迁至**独立私有仓库**维护；
-  本仓库只保留开源内容，`git grep ws-web`（tracked）零残留
+- 仓库外私有生产应用 Mahesvara（私有 webserver 系统）已从本仓库 `git rm` 并迁至**独立私有仓库**维护；
+  本仓库只保留开源内容，`git grep Mahesvara`（tracked）零残留
 - `.github/workflows/ci.yml` 移除 `wsweb` job（生产应用回归）；README/README.en/ROADMAP/spec/CHANGELOG/
-  M53/M54/M57_PLAN/CONTRIBUTING/.gitignore/examples 中 14 文件 39 处 ws-web 引用一律中性化
-  （「外部生产应用」表述；repro_h2_vhost/repro_tls_no_sni 标题 `[ws-web-blocker]`→`[dogfood-blocker]`，
+  M53/M54/M57_PLAN/CONTRIBUTING/.gitignore/examples 中 14 文件 39 处 Mahesvara 引用一律中性化
+  （「外部生产应用」表述；repro_h2_vhost/repro_tls_no_sni 标题 `[Mahesvara-blocker]`→`[dogfood-blocker]`，
   脚本自包含语义不变）
-- 背景：ws-web 为私有系统，与开源 PuXian 同仓导致提交边界不清（曾多次直推并被 revert）；
-  物理拆仓后「改 PuXian」与「推 ws-web」权限隔离，PuXian 侧对 ws-web 的参与回归 PR 流程；
-  git 历史完整保留（未清史）；ws-web 曾以真实应用身份抓出的 H3/并发类 bug 已在 CHANGELOG M53–M56 留存
+- 背景：Mahesvara 为私有系统，与开源 PuXian 同仓导致提交边界不清（曾多次直推并被 revert）；
+  物理拆仓后「改 PuXian」与「推 Mahesvara」权限隔离，PuXian 侧对 Mahesvara 的参与回归 PR 流程；
+  git 历史完整保留（未清史）；Mahesvara 曾以真实应用身份抓出的 H3/并发类 bug 已在 CHANGELOG M53–M56 留存
 
 ### 新增 · M57 边缘设备层支持（Linux 用户态，见 docs/M57_PLAN.md）
 

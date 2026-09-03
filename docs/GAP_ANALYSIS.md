@@ -87,7 +87,7 @@ ROADMAP 明确不做 OpenGL/Vulkan 原生绑定（工程量与价值不成比例
 | 清单项 | 状态 | 覆盖证据 | 遗留 |
 |---|---|---|---|
 | #37 通用 Linux 设备绑定（ioctl/mmap extern） | ✅ **100% 闭环**（= M57 S1–S4） | 57bb9d7（open/close/ioctl/os_errno）、f71b28e（read/write/mmap/munmap/mem_write + GC 自动 munmap）、8f6e615（纯用户态先行——真内核替身 lo ifreq / PTY / i2c，比假驱动更强）、bbffcd5（qemu-aarch64 联动验证）；M58-S4 跨架构采真实 /proc 一致 | 无 |
-| #36 交叉编译验证（arm64/aarch64 静态二进制） | ⚠️ **主体完成，2 处偏差** | pxc 前端 `--cc aarch64-linux-musl-gcc` 交叉产出 **aarch64 静态 ELF**（M57-S4 devctl 2.5MB static-pie、M58-S4 pxhwmond 多文件工程）+ qemu-aarch64 验证编译运行；tools/cross_aarch64.sh + runtime/mbedtls/lib-aarch64/ 入库 | ① pxi/pxl/pxpar **自身从未交叉成 aarch64**（file 实测四者均 x86-64）——解释器/调试工具不产出目标代码，「交叉产出」语义不成立；若本意是「板子上跑解释模式」则未做（可补：`pxc build --no-quic --cc aarch64-linux-musl-gcc selfhost/interp.px` → qemu smoke）② 加分项「ws-web 交叉 arm64 冒烟 200」无执行记录，且 ws-web 已拆独立私有仓（44637c0），本仓无此代码可验，只能走 ws-web 侧 |
+| #36 交叉编译验证（arm64/aarch64 静态二进制） | ⚠️ **主体完成，2 处偏差** | pxc 前端 `--cc aarch64-linux-musl-gcc` 交叉产出 **aarch64 静态 ELF**（M57-S4 devctl 2.5MB static-pie、M58-S4 pxhwmond 多文件工程）+ qemu-aarch64 验证编译运行；tools/cross_aarch64.sh + runtime/mbedtls/lib-aarch64/ 入库 | ① pxi/pxl/pxpar **自身从未交叉成 aarch64**（file 实测四者均 x86-64）——解释器/调试工具不产出目标代码，「交叉产出」语义不成立；若本意是「板子上跑解释模式」则未做（可补：`pxc build --no-quic --cc aarch64-linux-musl-gcc selfhost/interp.px` → qemu smoke）② 加分项「Mahesvara 交叉 arm64 冒烟 200」无执行记录，且 Mahesvara 已拆独立私有仓（44637c0），本仓无此代码可验，只能走 Mahesvara 侧 |
 
 ## 七、建议里程碑排期（供主线立项）
 
