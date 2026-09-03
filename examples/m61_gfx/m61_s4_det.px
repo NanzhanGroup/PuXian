@@ -1,0 +1,43 @@
+# ============================================================
+# M61 S4 m61_s4_det.px —— 确定性整数绘制 PNG（跨架构逐字节一致）
+# ------------------------------------------------------------
+# 只用纯整数 gfx 原语（fill_rect/rect/line/Bresenham/blit/text）+ std.png
+# stored 编码（CRC/ADLER 纯整数）→ 输出与浮点无关 → x86 与 aarch64(qemu)
+# 产物 sha256 应逐字节一致（证明 gfx 整数路径 + PNG 编码器跨架构确定性）
+# 落盘名由 env DET_OUT 指定（默认 det_x86.png）
+# ============================================================
+import std.gfx
+import std.png
+
+var W = 160
+var H = 100
+var c = canvas_create(W, H)
+
+fill_rect(c, 0, 0, W, H, 0x0a0a1e)          # 底
+rect(c, 2, 2, W - 4, H - 4, 0x22cc44)        # 边框
+line(c, 0, 0, W - 1, H - 1, 0xff44ff)        # 对角
+line(c, W - 1, 0, 0, H - 1, 0x44ccff)
+fill_rect(c, 30, 30, 40, 20, 0xff8822)       # 块
+fill_rect(c, 90, 50, 50, 30, 0x2288ff)
+
+var sp = []
+var i = 0
+while i < 64:
+    if (i % 3) == 0:
+        sp.append(0xffff00)
+    elif (i % 3) == 1:
+        sp.append(0x00ffff)
+    else:
+        sp.append(0)
+    i = i + 1
+blit(c, 60, 20, [8, 8, sp])
+
+text(c, 8, 60, "DET 160X100", 0xffffff)
+text(c, 8, 76, "V0.1", 0x88ccff)
+
+var f = png_encode(W, H, canvas_pixels(c))
+var fname = env("DET_OUT")
+if fname == null or len(fname) == 0:
+    fname = "det_x86.png"
+write_bytes("examples/m61_gfx/" + fname, f)
+print("M61-S4 DET OK", fname, bytes_len(f))
