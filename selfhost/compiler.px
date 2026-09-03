@@ -44,9 +44,17 @@ var cg_uidc = 0
 var cg_closure_id = 0
 var loaded = {"_": 0}
 
+# ---------- 版本（M63-L11：bootstrap/pxc --version/-v；对齐 tools/pxc SELFHOST_VER/MS） ----------
+let PXC_VER = "0.1.0"
+let PXC_MS = "M-B9a"
+
 # ---------- 入口 ----------
 def main():
     let a = args()
+    # M63-L11：pxc --version / -v（照 interp.px pxi 版本分支；args() 含 argv[0]）
+    if len(a) == 2 and (a[1] == "--version" or a[1] == "-v"):
+        print("pxc " + PXC_VER + " (普贤 PuXian · selfhosted " + PXC_MS + ")")
+        return 0
     # 支持：compiler.px <file>  /  compiler.px build <file>  /  compiler.px --xxx <file>
     let f = a[len(a) - 1]
     let base_dir = cg_dirname(f)
