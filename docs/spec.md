@@ -960,6 +960,86 @@ http_unix("/tmp/llm.sock", "/v1/chat/completions", "POST",
 
 ---
 
+### 8.17 边缘设备层：fd 原语 + 数据通道 + mmap 活映射（M57，Linux 用户态设备接入）
+
+```python
+# M57-S1 新增：fd 原语（ioctl/read/write 不依赖 import，request 码为内核 ABI 常量，语言不内置常量表）
+#   open(path[, mode]) → int fd（mode r/w/a/rw/w+ → O_*；失败 int -1 + os_errno()）
+#   close(fd) → bool
+#   ioctl(fd, request[, arg]) → int（原始返回值；失败 -1 + os_errno()）
+#     arg 缺省/null → NULL（无数据 ioctl）
+#     arg int       → 整值按 unsigned long 直传（整数型 ioctl，如 I2C_SLAVE 传从地址）
+#     arg bytes/str → 就地 in/out 缓冲区（_IOR/_IOWR 类 ioctl 内核直接读写该内存，同一变量读回）
+#   os_errno() → int（最近一次系统调用失败 errno，线程局部）
+# M57-S2 新增：fd 数据通道 + mmap 设备映射
+#   read(fd, maxlen) → bytes（read(2) 直通，实际读到的字节；0 长度=EOF；失败 int -1 + os_errno()）
+#   write(fd, data)  → int（write(2) 直通，EINTR 重试；失败 -1 + os_errno()；data bytes/str）
+#   mmap(fd, length[, offset]) → bytes（PROT_READ|PROT_WRITE + MAP_SHARED 活映射视图，
+#     GC 自动回收时 munmap；失败 int -1 + os_errno()；length 1..INT_MAX-1，offset 须页对齐）
+#   munmap(bytes) → bool（显式提前解除；非映射/已解除返回 false）
+#   mem_write(mmap_bytes, offset, data) → int（就地写映射视图 [offset..]，超长截断到视图尾）
+
+fd = open("/dev/i2c-1", "rw")            # 打开设备
+ioctl(fd, 0x0703, 0x48)                  # I2C_SLAVE：int 形态直传从地址（0x0703 为 _IOC 32 位码）
+write(fd, b"\x00")                       # 写器件寄存器命令
+data = read(fd, 2)                       # 读器件数据
+close(fd)
+
+fb = open("/dev/fb0", "rw")
+info = int_to_bytes(0, 160)              # 160B 就地 buffer
+ioctl(fb, 0x4600, info)                  # FBIOGET_VSCREENINFO：内核填充结构（_IOR 就地写回）
+view = mmap(fb, 128 * 64 * 4, 0)         # MAP_SHARED 活映射（帧缓冲像素区）
+mem_write(view, 0, pixel_bytes)          # 就地写像素（bytes_set 是 COW 复制语义，改不了映射区）
+munmap(view)
+close(fb)
+```
+
+- **背景与定位（M57，Linux 用户态设备层）**：PuXian 在嵌入式方向只能到 **Linux 边缘设备层**
+  （树莓派 / 网关 / 盒子——runtime 含 GC/线程/动态值，裸机 MCU 无 OS + 架构不符，明确不做）。
+  此前文件 IO 为路径式（read_at/write_at 内部 open 用完即关），语言面无**持久 fd 句柄**；
+  设备接入需要「打开设备 → ioctl 配置 → read/write 数据 / mmap 大块直访 → 关闭」的 fd 闭环，
+  故 M57 一并补齐 fd 原语（open/close/ioctl/os_errno，清歌方案核查修正——原方案默认已有 fd 句柄）。
+- **open/close/ioctl/os_errno（S1）**：mode 语义 `r`=O_RDONLY（默认）/`w`=O_WRONLY|O_CREAT|O_TRUNC/
+  `a`=O_WRONLY|O_CREAT|O_APPEND/`rw`,`r+`=O_RDWR/`w+`=O_RDWR|O_CREAT|O_TRUNC；设备文件典型 `r`
+  （只读查询）/`rw`（读写控制）。ioctl arg 三形态见上（int 直传 / bytes·str 就地 buffer / null），
+  `_IOR` 类调用后同一对象内容被内核填充，用 `bytes_to_int`/`cstr_at`/`int_from_bytes` 解析。
+  request 为 32 位 `_IOC` 码（方向位在最高 2 位可 >2^31，语言用 0x 字面量/十进制均可）。
+- **read/write（S2）**：read(2)/write(2) 直通——设备文件顺序读写/收发的通用入口（与 socket 无关）；
+  read 返回实际读到的字节（0 长度=EOF 空 bytes，与失败 int -1 类型区分）；write EINTR 自动重试。
+- **mmap/munmap/mem_write（S2）**：`mmap(fd,len[,offset])` 建 **PROT_READ|PROT_WRITE + MAP_SHARED 活映射**
+  （帧缓冲 /dev/fb0、共享内存、DMA 缓冲 → bytes 视图，配合 ioctl 成「配置 + 大数据块直接内存访问」双通道；
+  ioctl 也可把 mmap 视图作就地 buffer——视图是活内存，内核写入立即可读）。
+  **生命周期关键**：mmap bytes 的 LXObject 位域 `is_mmap=1`、data 指向映射区而非 xmalloc 堆块 →
+  GC sweep 走 munmap 而非 xfree（构造先 gc_register 再置位，防 sweep 误回收）；`munmap` 显式提前解除后
+  置 data=NULL/len=0/is_mmap=0（防 double-unmap，重复/非映射返回 false）；
+  `mem_write(map, offset, data)` 就地写映射视图（普通 bytes 的 bytes_set 是 COW 复制语义，改不了映射内存；
+  帧缓冲写像素/共享内存写数据必须就地写底层映射区）。
+- **设备示例（S3）**：m57_s3_gpio.px（/dev/gpiochipN `GPIO_GET_CHIPINFO_IOCTL` 68B buffer 就地填充
+  name[32]/label[32]/lines 解析，只读查询）；m57_s3_i2c.px（/dev/i2c-N `I2C_SLAVE` int 形态直传从地址 +
+  write 寄存器命令/read 器件数据）；m57_s3_devctl.px **真内核替身硬断言**（loopback 网卡 ifreq：
+  SIOCGIFADDR→family=2+127.0.0.1、SIOCGIFFLAGS→LOOPBACK、SIOCGIFHWADDR→family=772 + PTY `TIOCGPTN`）
+  ——LD_PRELOAD mock 因 pxc 产物静态链接不可行，改内核自带用户态可访问设备走**同一胶水路径**，验证力度更强。
+- **交叉编译与裁剪（S4）**：`pxc build --no-quic [--cc <交叉CC>] [--mbedtls-lib <dir>] [--sqlite-obj <file>]`
+  —— ngtcp2/openssl-quictls 无 aarch64 预编译且交叉成本高 → 裁剪（PX_NO_QUIC 条件编译 7 处）；
+  mbedtls/sqlite 纯 C 交叉保留（tools/cross_aarch64.sh，mbedtls 3.6.2 + sqlite3 交叉入库）；
+  musl 兼容 5 点（execinfo 条件包含 / GC `__aarch64__` 寄存器扫描分支 / getcontext→内联汇编 SP+setjmp
+  spill / close_range→循环关闭）；qemu-aarch64 静态产物设备层 ioctl 与 x86 结果一致
+  （asm-generic ioctl 码 + ifreq 布局**跨架构实证一致**）。
+- **pxi 解释同能力（S5）**：解释器自举源码 `selfhost/interp.px` 内置白名单 +10（open/close/ioctl/os_errno/
+  read/write/mmap/munmap/mem_write/http_unix）+ `selfhost/ibuiltin.px` `i_call_builtin` 补 10 个纯转发分支
+  （直调同名 runtime C builtin，语义与编译模式天然一致；可选参数按实参个数透传对齐 C 签名）→
+  `pxc build selfhost/interp.px` 重建 bootstrap/pxi。
+- **验证**：examples/m57_s1_ioctl_verify.sh / m57_s2_mmap_verify.sh / m57_s3_verify.sh /
+  m57_s4_cross_verify.sh / m57_s5_pxi_smoke.px 双模式全 PASS（真内核路径：TCP fd/文件/lo ifreq/PTY/mmap
+  活映射双向可见/GC 自动 munmap 300 轮）；capability 双模式各 253 PASS 输出逐字节一致；
+  diffcheck --all/--errors 全绿；自举证明 B.c==golden 逐字节一致（6381 行 C）。
+- **边界**：ioctl request 码为内核 ABI 常量，x86_64 与 aarch64 的 asm-generic 大部分一致，特殊码按目标
+  内核头适配（语言不内置常量表）；真实设备（GPIO/I2C）在 CI/容器不可用 → 条件探测 + 真内核替身验证
+  （语义正确性以 TCP fd/lo ifreq/PTY 真实内核路径为准）；裸机 MCU（STM32/ESP32）明确不做；
+  通用动态 FFI（dlsym）等「任意 C 库即插即用」真需求再上。
+
+---
+
 ## 9. 双模式执行
 
 ### 9.1 脚本模式
