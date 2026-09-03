@@ -316,3 +316,24 @@ m58 notify.px 的 webhook dry-run 解禁为真发成为下一步 dogfood 候选�
   解释器 i_to_str 为 `"3.0"`（`float(3)`、`2.0*2.0` 均可复现）——通用浮点打印不对称
   （与 §十三 #7 同源，%g 6 位问题）；M59 验证文件规避：整值浮点只断言不打印，双模式
   对拍仅用 int/非整值浮点/字符串输出。留档按需修（涉及全量浮点打印回归面）。
+
+### §十三.5 M60 双模式同步记录：边缘设备 5 内置进 pxi 解释器
+
+> M60（docs/M60_PLAN.md）为编译模式新增 5 个 C 小内置（S1：sleep_us/now_us/fcntl；
+> S2：tty_config/fd_wait）+ stdlib/edge.px（S3，纯语言封装，import std.edge）。S4 做
+> 解释器同步（白名单 +5 + ibuiltin 纯转发 5 分支 → bootstrap/pxi 重建）。要点与新发现：
+
+- **白名单（interp.px）**：`names` 列表 +5（sleep_us/now_us/fcntl/tty_config/fd_wait），
+  与 M57 设备原语同区（open/close/ioctl/os_errno/read/write/mmap 已在 §十三 M57-S5 区）。
+- **分发（ibuiltin.px）**：5 分支全部「参数预检返回 Err（解释器不杀进程）+ 成功后直调
+  同名 runtime C builtin」；设备失败 -1/false + os_errno() 透传不包装（与 M57 fd 原语
+  语义一致，非 Err 化——与 HTTP/S3 网络失败 Err 化是两条并存通道）。
+- **开工实测修正（ioctl arg 语义边界）**：`TIOCSPTLCK`（_IOW 写 int）驱动要**有效写指针**，
+  ioctl arg 传 int 0（→NULL）得 EFAULT errno=14——须传 bytes/int_to_bytes buffer；
+  而 `I2C_SLAVE`（_IOW 但驱动读值可 NULL？不，同为 _IOW 实为读指针场景差异）——
+  教训：_IOWR/_IOW 类 ioctl 一律用 bytes buffer 形态最稳，int 直传仅用于「驱动把值当
+  地址/值」场景（如 I2C_SLAVE 从地址值）。M57 §8.17 已述三种形态，本记录补充边界。
+- **验证**：dev_s4.px 编译/pxi/qemu-aarch64 三态断言全过、双模式输出逐字节一致
+  （PTY/termios/poll/fcntl/us 时钟跨架构一致，qemu 用户态 syscall 透传真内核）；edge.px
+  GPIO V2 布局单测 dev_s3（592B 结构 C offsetof 对照）x86 可跑；stdlib import（std.edge）
+  主打编译模式（§十三 #8 pxi 相对 import 限制不变）。

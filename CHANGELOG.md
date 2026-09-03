@@ -6,6 +6,38 @@
 
 ## [Unreleased]
 
+### M60 · 边缘设备深化（树莓派线：5 小内置 + std.edge 第 4 个 stdlib）✅
+
+- **规划**：`docs/M60_PLAN.md`（前置实测复核：poll 仅 runtime 内部 3 处未暴露、termios
+  全库零命中、sleep 仅 ms 整数粒度、SPI_IOC_MESSAGE 因 transfer 数组含 u64 指针留档、
+  GPIO V2 单线请求 592B 结构体 C offsetof 实测核对）。
+- **S1 us 级时钟 + fd 控制**：`sleep_us(us)`（nanosleep，EINTR 续睡，<=0 不睡）/
+  `now_us()`（**CLOCK_MONOTONIC** 微秒，测量语义与 now_ms 的 REALTIME 墙钟区分）/
+  `fcntl(fd, cmd[, arg])`（标准 fcntl，O_NONBLOCK 等；失败 -1+os_errno）—— commit
+  `fa91805`。
+- **S2 设备组**：`tty_config(fd, baud, raw)`（tcgetattr → cfmakeraw(raw) → cfsetispeed/
+  cfsetospeed → tcsetattr(TCSANOW)；baud 9600…921600，无效档终止；失败 false+errno）/
+  `fd_wait(fds, timeout_ms)`（内部 poll 暴露：int/list<int> 上限 64、只监听 POLLIN、
+  revents 非 0 即事件返回（含 HUP）、**超时空 list 非错误**、poll 错误 -1+errno）——
+  commit `bc97b20`。
+- **S3 stdlib std.edge**（第 4 个 stdlib，纯语言零新 C）：GPIO V2 line（gpio_input/
+  gpio_output/gpio_input_edge/gpio_request + read/write/wait/event，592B 布局按
+  linux/gpio.h offsetof 实测；OUTPUT 初始电平经 attr OUTPUT_VALUES）+ I2C（i2c_open/
+  i2c_read_reg/i2c_write_reg，write-then-read 两笔事务）+ serial_open（open rw +
+  tty_config raw 一站式）+ PWM sysfs（pwm_setup/enable/set_duty，open 通道写失败不杀
+  进程）+ 示例（m60_serial_pty **x86 实跑 PTY 真内核串口双向 loopback**、m60_gpio/
+  m60_i2c/m60_pwm 真板段 SKIP）+ dev_s3 布局常量断言单测—— commit `f5b1b03`。
+- **S4 双模式同步**：pxi 白名单 +5 + ibuiltin 纯转发 5 分支（参数预检返回 Err、设备失败
+  -1/false+errno 透传不包装）→ `bootstrap/pxi` 重建；dev_s4 编译/pxi/qemu-aarch64 三态
+  断言全过、双模式输出逐字节一致（PTY/termios/poll/fcntl/us 时钟跨架构一致）；
+  hello/fib 双模式 + m59 math_s1 解释 + m57_s1 编译回归 PASS —— commit `f7e21b5`。
+- **S5 文档收口**：spec §8.18 + §10.3 std.edge 行、MINI_SUBSET §十三.5、ROADMAP M60
+  勾选（候选池移除 M60）、GAP_ANALYSIS §三 #1–#5 ✅ + §七 M60 ✅（本 commit）。
+- 语义要点：失败 -1/false + os_errno()（延续 M57 fd 原语，可检查不杀进程）；参数错误
+  px_error 终止；fd_wait 超时返回空 list 非错误；GPIO 布局按 2024+ 内核（offsets u32
+  版）书写，旧内核需按目标头调整；真板物理回归（#6）候选待硬件。
+  样例与验证：`examples/m60_dev/`（dev_s1~s4.px + verify_s1~s4.sh）+ `stdlib/edge.px`。
+
 ### M59 · 数学与随机补齐（C libm 内置，14 函数 + 2 常量）✅
 
 - **规划**：`docs/M59_PLAN.md`（前置实测复核：现有数学内置仅 abs/min/max/sum/sqrt/pow 六枚；

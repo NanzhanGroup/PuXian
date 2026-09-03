@@ -1038,6 +1038,33 @@ close(fb)
   （语义正确性以 TCP fd/lo ifreq/PTY 真实内核路径为准）；裸机 MCU（STM32/ESP32）明确不做；
   通用动态 FFI（dlsym）等「任意 C 库即插即用」真需求再上。
 
+### 8.18 边缘设备深化：us 级时钟 + fd 控制 + 设备组小内置 + std.edge（M60，树莓派线深化）
+
+> 在 §8.17 fd 原语之上收敛 GAP 树莓派线 #1–#5（GPIO 真控制/边沿中断/串口 termios/
+> us 级时钟），M60（docs/M60_PLAN.md）。新增 5 个 C 小内置（Linux 用户态边缘设备）：
+> `sleep_us(us)` → null（us 级 nanosleep，EINTR 续睡，`<=0` 不睡）；`now_us()` → int
+> （**CLOCK_MONOTONIC** 微秒，测量/计时语义，与 `now_ms` 的 REALTIME 墙钟用途区分，
+> 两者数值起点不同不可比）；`fcntl(fd, cmd[, arg])` → int（标准 fcntl，O_NONBLOCK 等）；
+> `tty_config(fd, baud, raw)` → bool（tcgetattr → raw=true 则 cfmakeraw 关 canonical/echo →
+> cfsetispeed+cfsetospeed → tcsetattr(TCSANOW)，baud 常规档 9600…921600）；`fd_wait(fds,
+> timeout_ms)` → list<就绪 fd>（内部 poll；fds 收 int/list<int> 上限 64，仅监听 POLLIN，
+> revents 非 0 即事件返回——POLLHUP/ERR 由随后 read 判 EOF/-1；**超时空 list 非错误**；
+> poll 系统错误 int -1 + os_errno；EINTR 自动续等）。失败语义延续 M57：-1/false +
+> os_errno()（不杀进程）；参数个数/类型错 → px_error 终止（编程契约）。
+>
+> **stdlib `std.edge`（第 4 个 stdlib，纯语言封装，零新 C）**：GPIO V2 line uAPI
+> （`gpio_input`/`gpio_output`/`gpio_input_edge`/`gpio_request` + `gpio_read`/`gpio_write`/
+> `gpio_wait`/`gpio_event`，单线请求 592B 结构体布局按 linux/gpio.h 实测；边沿事件 24B
+> 解析 timestamp/id/offset/seqno）、I2C（`i2c_open(bus,addr)` + `i2c_read_reg`/
+> `i2c_write_reg`，write-then-read 两笔事务、无重复起始位）、串口（`serial_open(path,
+> baud)` = open rw + tty_config raw 一站式）、PWM sysfs（`pwm_setup`/`pwm_enable`/
+> `pwm_set_duty`，open 通道写失败不杀进程）。示例：m60_serial_pty.px（**x86 实跑 PTY
+> 真内核串口 loopback**）、m60_gpio/i2c/pwm.px（真板段，x86 无设备 SKIP 通道）；
+> dev_s3.px 布局常量断言（C offsetof 对照）。pxi 解释器白名单 +5 双模式同步 +
+> aarch64 交叉 qemu 三态一致。边界：SPI_IOC_MESSAGE（transfer 数组含 u64 指针）现
+> ioctl 无法承载语言 bytes 地址 → spidev read/write 半通、全双工留档；GPIO V2 结构体
+> 布局按 2024+ 内核（offsets u32 版），旧内核需按目标头调整；真板物理回归单独立项。
+
 ---
 
 ## 9. 双模式执行
@@ -1110,6 +1137,7 @@ panic(msg)            # 致命错误，退出码 1
 | `std.string` | split、join、trim、upper、lower、contains、replace |
 | `std.math` | abs、sqrt、min、max、pow（M59 起另有全局数学内置：sin/cos/tan/atan2、floor/ceil/round、log/log10/exp、random 族、pi/e，见 §10.2 注） |
 | `std.collections` | list/map 扩展操作 |
+| `std.edge` | 边缘设备（M60）：GPIO V2 line 控制/边沿、I2C 寄存器读写、串口 raw（serial_open）、PWM sysfs —— 见 §8.18 |
 | `std.os` | env、args、exit |
 | `std.process` | run 子进程（捕获输出） |
 

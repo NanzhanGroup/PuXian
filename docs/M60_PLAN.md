@@ -4,6 +4,7 @@
 > 主线编号 M60（GAP/ROADMAP 候选主线排期第 2 项）
 > 依据：`docs/GAP_ANALYSIS.md` §七 候选 B + §一 树莓派线缺口 #1–#5
 > 流程：本规划入库 → 本源审阅（§三 待审决策 D1–D5）→ 批准 → 按子步 S1–S5 执行（每步 verify + commit）→ 里程碑闭环回填 §八
+> ✅ **已批准并完成（2026-09，S1–S5 全落地）**，详见 §八回填
 
 ---
 
@@ -149,4 +150,22 @@ pxi 白名单同步 + aarch64 交叉 + qemu 验证惯例——M60 是在这条�
 - **规模估计**：C 内置 5 个 ~120 行；edge.px ~350–450 行（GPIO V2 结构体为主体）；示例 + verify 4–6 个；
   M60 总量中等偏大，子步化后每步可控（延续 M57/M58 节奏）。
 
-## 八、执行回填（待 S1–S5 完成后填）
+## 八、执行回填（✅ S1–S5 全落地，2026-09）
+
+> 本源批准开工（D1–D5 按推荐默认：D1 单函数 fd_wait 收 int/list、D2 保留 fcntl=5 内置、
+> D3 edge.px 透传 -1+os_errno、D4 GPIO 只做 V2 uAPI、D5 示例集按默认范围），全流程
+> verify_s1–s4 全 PASS + git 干净。各子步 commit：
+> - **S1** `fa91805`：sleep_us/now_us/fcntl 三内置 + dev_s1（计时/单调/PTY 非阻塞三态/EAGAIN）
+> - **S2** `bc97b20`：tty_config/fd_wait + dev_s2（PTY termios raw 真生效/波特率/fd_wait
+>   就绪·超时·HUP·单int与list双形态/空集合）
+> - **S3** `f5b1b03`：stdlib/edge.px（246 行）+ m60_serial_pty（x86 实跑 PTY 串口双向
+>   loopback）/m60_gpio/i2c/pwm（真板 SKIP）+ dev_s3 布局单测（GPIO V2 592B 结构按 C
+>   offsetof 实测核对）
+> - **S4** `f7e21b5`：pxi 白名单 +5 + ibuiltin 转发 5 分支 + bootstrap/pxi 重建 + dev_s4
+>   编译/pxi/qemu-aarch64 三态一致 + hello/fib/m59/m57 回归
+> - **S5** 本文档回填 + spec §8.18/§10.3 + MINI_SUBSET §十三.5 + ROADMAP/GAP 勾选 + CHANGELOG
+>
+> **开工实测新发现（已记录 MINI_SUBSET §十三.5）**：TIOCSPTLCK（_IOW 写 int）ioctl arg
+> 须 bytes/int_to_bytes buffer（int 0/NULL → EFAULT errno=14）——_IOWR/_IOW 类一律
+> bytes buffer 最稳。**范围外留档**：SPI_IOC_MESSAGE 全双工（transfer 含 u64 指针）、
+> GPIO 旧内核 ABI（≤6.x offsets u64 版）、真板物理回归（#6，待硬件）。

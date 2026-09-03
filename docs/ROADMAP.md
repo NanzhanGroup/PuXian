@@ -42,6 +42,7 @@
 | M58 | **首个 dogfood 真实应用：pxhwmond 硬件健康守护 daemon**（examples/m58_hwmond）：多文件 import 工程（每文件 <500 行）+ M57 fd 通道采 /proc（CPU 差值/内存/负载/uptime/net + 温度条件降级）+ **mmap MAP_SHARED 活映射 IPC**（快照区 + 控制区，外部 dump 活读 / 命令通道双向可见）+ 手写最小 HTTP 状态页（/healthz JSON + / HTML + 404，显式响应头自验 M57-S7）+ run.sh 崩溃自愈 + 阈值告警/webhook dry-run + aarch64 交叉 qemu 验证；dogfood 暴露语言欠账 8 项（http_post 失败即 panic 最优先，MINI_SUBSET §十三） |
 
 | M59 | **数学与随机补齐（游戏/边缘两条线公共地基）**：C libm 内置 14 函数 + 2 常量——`sin`/`cos`/`tan`/`atan2(y,x)`（弧度）+ `floor`/`ceil`/`round`（返回 float，与 sqrt 一致）+ `log`/`log10`/`exp` + `random`/`random_int`/`random_seed`（splitmix64 确定性、跨平台可复现）+ `pi`/`e` 全精度常量；域错误 NaN/inf 透传不终止、参数错误终止（编程契约）；pxi 解释器白名单 +15 双模式同步（含补平 sqrt 不对称）+ `bootstrap/pxi` 重建；编译/解释/qemu-aarch64 三态断言 + splitmix 序列 x86==aarch64（examples/m59_math + verify_s1~s4） |
+| M60 | **边缘设备深化（树莓派线，收敛 GAP §三 #1–#5）**：5 个 C 小内置——`sleep_us`/`now_us`（CLOCK_MONOTONIC 微秒）/`fcntl`/`tty_config`（串口 termios raw+波特率）/`fd_wait`（内部 poll 暴露，GPIO 边沿/多 fd 等待）+ 第 4 个 stdlib **`std.edge`**（GPIO V2 line 请求/读写/边沿事件、I2C 寄存器、serial_open、PWM sysfs，纯语言零新 C）+ 示例（m60_serial_pty **x86 实跑 PTY 真内核串口 loopback** / m60_gpio·i2c·pwm 真板段 SKIP 通道）+ GPIO V2 592B 布局 C offsetof 单测；pxi 白名单 +5 双模式同步 + bootstrap/pxi 重建 + aarch64 交叉 qemu 三态一致（examples/m60_dev + examples/m60_*.px） |
 
 > **主线外已占用编号**（非 ROADMAP 功能里程碑，已记录于 CHANGELOG，勿复用）：
 > **M55** = issue #2 并发安全 hotfix（修复 · M55）；**M56** = 外部生产应用配套 runtime
@@ -52,12 +53,11 @@
 ### 候选主线排期（由 docs/GAP_ANALYSIS.md 驱动，按建议顺序）
 
 > 定位：未来主线的候选池。立项流程：出 `docs/M*_PLAN.md` 规划供审 → 审批后按子步落地
-> （verify 回归 + 文档收口，见「六、执行约定」）。当前（M59 已闭环，见上表 + CHANGELOG）
-> 建议 **M60** 先行：树莓派/边缘线最大缺口（GPIO 控制、边沿中断、UART）。
+> （verify 回归 + 文档收口，见「六、执行约定」）。当前（M60 已闭环，见上表 + CHANGELOG）
+> 候选池仅剩 FFI 外部库绑定验证（游戏窗口线 0→1 前提）与真板物理回归（需硬件）。
 
 | 里程碑 | 主题 | 规模 / 前置 |
 |---|---|---|
-| **M60** | 边缘 stdlib + 设备小内置：GPIO line request 控制 / 串口 termios / PWM（`edge.px` 封装）+ `poll`/`epoll` 语言暴露 + us 级 sleep | 中；树莓派线最大缺口（GPIO 控制、边沿中断、UART） |
 | 候选 | FFI 外部库绑定验证（SDL2 最小示例或 raylib hello：.a 链接 / pkg-config / 事件循环桥） | 中–大；游戏窗口线 0→1 前提（现 FFI 仅绑内部 C 库、无外部先例） |
 | 候选 | 真板物理回归（树莓派 + LED / 按键 / 温湿度） | 需硬件；一切边缘能力的最终裁决 |
 
