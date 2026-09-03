@@ -1,0 +1,47 @@
+# ============================================================
+# M61 S2 demo_mandelbrot.px —— Mandelbrot 静帧 PNG（B 线可见性核心）
+# ------------------------------------------------------------
+# dogfood：M59 float 全套（复数迭代纯浮点压力）+ std.gfx（画布/直写像素/文字）
+#          + std.png（纯语言 PNG stored 编码器，落盘 send_file 用户眼见）
+# 范围：x ∈ [-2.0, 1.0]，y ∈ [-1.2, 1.2]，max_iter=80，11 色调色板循环
+# 退出：写 examples/m61_gfx/mandelbrot.png → "M61-S2 mandelbrot OK"
+# ============================================================
+import std.gfx
+import std.png
+
+var W = 640
+var H = 480
+var c = canvas_create(W, H)
+var px = canvas_pixels(c)
+var palette = [0x000044, 0x000088, 0x0044cc, 0x0088ff, 0x00ddff, 0x44ffaa, 0xffff66, 0xffaa22, 0xff4444, 0xff66cc, 0xffffff]
+var MAX = 80
+var y = 0
+while y < H:
+    var x = 0
+    while x < W:
+        var re0 = -2.0 + (3.0 * x) / W
+        var im0 = -1.2 + (2.4 * y) / H
+        var re = 0.0
+        var im = 0.0
+        var n = 0
+        while n < MAX:
+            var re2 = re * re
+            var im2 = im * im
+            if re2 + im2 > 4.0:
+                break
+            var nre = re2 - im2 + re0
+            var nim = 2.0 * re * im + im0
+            re = nre
+            im = nim
+            n = n + 1
+        var col = 0
+        if n < MAX:
+            col = palette[n % 11]
+        px[y * W + x] = col
+        x = x + 1
+    y = y + 1
+# 标题（5x7 字形，左上角）
+text(c, 8, 8, "MANDELBROT SET", 0xffffff)
+var f = png_encode(W, H, px)
+write_bytes("examples/m61_gfx/mandelbrot.png", f)
+print("M61-S2 mandelbrot OK", W, "x", H, "png", bytes_len(f), "bytes")

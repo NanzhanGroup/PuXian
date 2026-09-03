@@ -1,0 +1,56 @@
+# ============================================================
+# M61 S2 demo_scene.px —— 合成场景静帧 PNG（gfx 全原语覆盖验证）
+# ------------------------------------------------------------
+# 覆盖：fill_rect 底/line 对角/rect 边框/rect/fill_rect/circle/fill_circle
+#       /blit（8x8 透明棋盘精灵）/text 三行（5x7 字形，小写转大写）
+# 退出：写 examples/m61_gfx/scene.png → "M61-S2 scene OK"
+# ============================================================
+import std.gfx
+import std.png
+
+var W = 640
+var H = 480
+var c = canvas_create(W, H)
+
+# 深色底 + 边框
+fill_rect(c, 0, 0, W, H, 0x101028)
+rect(c, 4, 4, W - 8, H - 8, 0x4466ff)
+
+# 对角参考线
+line(c, 0, 0, W - 1, H - 1, 0x224488)
+line(c, W - 1, 0, 0, H - 1, 0x224488)
+
+# 太阳：填充圆 + 外圈
+fill_circle(c, 320, 220, 78, 0xffcc22)
+circle(c, 320, 220, 100, 0xff8844)
+
+# 矩形对：描边 + 填充
+rect(c, 60, 330, 140, 70, 0x44ff88)
+fill_rect(c, 440, 330, 140, 70, 0x8844ff)
+
+# 顶部色块对
+fill_rect(c, 100, 40, 120, 34, 0x22aaff)
+fill_rect(c, 420, 40, 120, 34, 0x22aaff)
+
+# 精灵：8x8 棋盘（黄色与透明交替 → 验证 blit 透明跳过）
+var sp = []
+var i = 0
+while i < 64:
+    if (i % 2) == 0:
+        sp.append(0xffff00)
+    else:
+        sp.append(0)
+    i = i + 1
+var spr = [8, 8, sp]
+blit(c, 130, 260, spr)
+blit(c, 470, 260, spr)
+
+# 文字（5x7 字形；text_size 居中标题）
+var ts = text_size("PUXIAN 2D")
+text(c, (W - ts) / 2, 150, "PUXIAN 2D", 0xffffff)
+text(c, 12, H - 26, "PuXian gfx primitives v0.1", 0x88ccff)
+text(c, 12, H - 40, "line rect circle blit text", 0x88ccff)
+
+var f = png_encode(W, H, canvas_pixels(c))
+write_bytes("examples/m61_gfx/scene.png", f)
+print("M61-S2 scene OK", W, "x", H, "png", bytes_len(f), "bytes")
