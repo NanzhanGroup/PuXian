@@ -297,6 +297,64 @@ def i_call_builtin(name, args, pos):
         return Ok(int_to_bytes(args[0], args[1]))
     if name == "bytes_to_int":
         return Ok(bytes_to_int(args[0]))
+    # ---- M62-L7：bytes 族白名单补齐（pxi 双模式对齐编译模式；C runtime 已注册，pxi 直调） ----
+    # 语义：参数个数/类型错误由 C 层 px_error 终止（编程契约，与编译模式一致——与
+    # read_file 等 io 可恢复错误走 Err 不同，bytes 族参数错属编程契约）。
+    if name == "bytes":
+        # bytes(x) → bytes（str/bytes/数值按 UTF-8/十进制字节原样）
+        return Ok(bytes(args[0]))
+    if name == "bytes_len":
+        # bytes_len(b) → int
+        return Ok(bytes_len(args[0]))
+    if name == "bytes_get":
+        # bytes_get(b, i) → int|null（负索引支持）
+        return Ok(bytes_get(args[0], args[1]))
+    if name == "bytes_set":
+        # bytes_set(b, i, v) → bytes（函数式：返回新 bytes，v ∈ 0..255）
+        return Ok(bytes_set(args[0], args[1], args[2]))
+    if name == "bytes_slice":
+        # bytes_slice(b[, start[, end]]) → bytes（start/end 可 null/int，负索引/越界 clamp）
+        if len(args) == 1:
+            return Ok(bytes_slice(args[0]))
+        if len(args) == 2:
+            return Ok(bytes_slice(args[0], args[1]))
+        if len(args) == 3:
+            return Ok(bytes_slice(args[0], args[1], args[2]))
+        return Err(i_r1002("bytes_slice 需要 (bytes[, start[, end]]) 参数", pos))
+    if name == "bytes_concat":
+        # bytes_concat(a, b, ...) → bytes（≥1 参；解释器两两折叠，等价 C 变参）
+        if len(args) < 1:
+            return Err(i_r1002("bytes_concat 至少需要一个参数", pos))
+        var acc = args[0]
+        var bci = 1
+        while bci < len(args):
+            acc = bytes_concat(acc, args[bci])
+            bci += 1
+        return Ok(acc)
+    if name == "bytes_to_str":
+        # bytes_to_str(b) → str（UTF-8）
+        return Ok(bytes_to_str(args[0]))
+    if name == "bytes_to_hex":
+        # bytes_to_hex(b) → str（hex 小写）
+        return Ok(bytes_to_hex(args[0]))
+    if name == "hex_to_bytes":
+        # hex_to_bytes(s) → bytes|null
+        return Ok(hex_to_bytes(args[0]))
+    if name == "bytes_find":
+        # bytes_find(b, sub) → int|null（子串下标；sub 可 bytes/str）
+        return Ok(bytes_find(args[0], args[1]))
+    if name == "bytes_base64":
+        # bytes_base64(b) → str（base64）
+        return Ok(bytes_base64(args[0]))
+    if name == "base64_to_bytes":
+        # base64_to_bytes(s) → bytes|null（严格解码）
+        return Ok(base64_to_bytes(args[0]))
+    if name == "base64_encode":
+        # base64_encode(s) → str（字符串 base64）
+        return Ok(base64_encode(args[0]))
+    if name == "base64_decode":
+        # base64_decode(s) → str|null
+        return Ok(base64_decode(args[0]))
     if name == "Ok":
         if len(args) == 0:
             return Ok(Ok(null))
