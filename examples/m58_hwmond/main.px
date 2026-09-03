@@ -1,0 +1,104 @@
+# ============================================================
+# pxhwmond（M58）main.px —— 硬件健康守护 daemon 入口（S1 骨架）
+# ------------------------------------------------------------
+# 用法：
+#   main                    常驻 daemon（默认每 5s 采样一轮，env 可覆盖）
+#   main --once             采 1 轮即退出（CI / qemu / 回归自检用）
+#   main --n N              采 N 轮退出（有限时长冒烟）
+#   main --interval 2       采样间隔（秒，默认 5）
+# env 覆盖（SECURITY/P0：无配置文件、无密钥落盘）：
+#   PXHWMON_INTERVAL        间隔秒（CLI --interval 优先）
+# S1 输出：每轮一行
+#   SNAP ts=<ms> cpu=<pct|na> mem_total=<kB> mem_avail=<kB>
+#        load1=<x> load5=<x> load15=<x> up=<s>
+# CPU 使用率 = 两次 /proc/stat 采样差值的 (total-idle)/total（预热前值 +
+# 采样间隔窗口，真实差值而非瞬时快照）。S2 起快照写入 mmap 共享区、S3 起
+# 提供 /healthz 状态页，本骨架先立采集循环 + 自检退出模式（长期 daemon
+# 必须能自检退出，规避回归裸奔）。
+# ============================================================
+import "collect.px"
+
+# ---- 参数解析：--once / --n N / --interval N（秒）----
+def parse_mode():
+    var cfg = {"once": false, "n": 0, "interval_ms": 5000, "interval_cli": false}
+    var a = args()
+    var i = 1                 # a[0] = 程序路径，跳过
+    while i < len(a):
+        var arg = a[i]
+        if arg == "--once":
+            cfg["once"] = true
+        elif arg == "--n":
+            if i + 1 < len(a):
+                cfg["n"] = int(a[i + 1])
+                i = i + 1
+        elif arg == "--interval":
+            if i + 1 < len(a):
+                cfg["interval_ms"] = int(a[i + 1]) * 1000
+                cfg["interval_cli"] = true
+                i = i + 1
+        i = i + 1
+    return cfg
+
+# ---- 一轮采集 + 输出 SNAP 行；返回本轮 cpu stat（作下轮前值）----
+def do_round(prev):
+    var cur = read_stat_cpu()
+    var cpu_s = "na"
+    if prev != null and cur != null:
+        var dT = cur[0] - prev[0]
+        var dI = cur[1] - prev[1]
+        if dT > 0:
+            var p = ((dT - dI) * 100) // dT
+            if p < 0:
+                p = 0
+            if p > 100:
+                p = 100
+            cpu_s = str(p)
+    var mem = collect_mem()
+    var ld = collect_load()
+    var up = collect_uptime()
+    var l1 = ld["load1"]
+    if l1 == "":
+        l1 = "na"
+    var l5 = ld["load5"]
+    if l5 == "":
+        l5 = "na"
+    var l15 = ld["load15"]
+    if l15 == "":
+        l15 = "na"
+    var us = up["up"]
+    if us == "":
+        us = "na"
+    var line = "SNAP ts=" + str(now_ms())
+    line = line + " cpu=" + cpu_s
+    line = line + " mem_total=" + str(mem["total"])
+    line = line + " mem_avail=" + str(mem["avail"])
+    line = line + " load1=" + l1
+    line = line + " load5=" + l5
+    line = line + " load15=" + l15
+    line = line + " up=" + us
+    print(line)
+    return cur
+
+# ---- 预热读一次 cpu stat（作差值前值），随后按模式采样 ----
+def main():
+    var cfg = parse_mode()
+    # env 覆盖：PXHWMON_INTERVAL（秒）；CLI --interval 显式给出时优先
+    if not cfg["interval_cli"] and not cfg["once"]:
+        var ev = env("PXHWMON_INTERVAL")
+        if ev != null:
+            cfg["interval_ms"] = int(ev) * 1000
+    var prev = read_stat_cpu()
+    if cfg["once"]:
+        sleep(300)                    # 300ms 短窗口出真实 CPU 差值
+        do_round(prev)
+        return
+    if cfg["n"] > 0:
+        var k = 0
+        while k < cfg["n"]:
+            sleep(cfg["interval_ms"])
+            prev = do_round(prev)
+            k = k + 1
+        return
+    while true:                       # 常驻 daemon
+        sleep(cfg["interval_ms"])
+        prev = do_round(prev)
