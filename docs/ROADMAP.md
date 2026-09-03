@@ -47,6 +47,22 @@
 
 ## 三、远期方向
 
+### 候选主线排期（由 docs/GAP_ANALYSIS.md 驱动，按建议顺序）
+
+> 定位：未来主线的候选池。立项流程：出 `docs/M*_PLAN.md` 规划供审 → 审批后按子步落地
+> （verify 回归 + 文档收口，见「六、执行约定」）。当前（M58 闭环后）建议 **M59 → M60**
+> 先行：游戏 / 边缘两条线的公共地基与最大缺口。
+
+| 里程碑 | 主题 | 规模 / 前置 |
+|---|---|---|
+| **M59** | 数学与随机补齐：`sin`/`cos`/`tan`/`atan2`/`random` + `floor`/`ceil`/`round`/`log`/`exp`（内置或 stdlib `math.px`） | 小；两条线公共地基，语言面最小侵入 |
+| **M60** | 边缘 stdlib + 设备小内置：GPIO line request 控制 / 串口 termios / PWM（`edge.px` 封装）+ `poll`/`epoll` 语言暴露 + us 级 sleep | 中；树莓派线最大缺口（GPIO 控制、边沿中断、UART） |
+| 候选 | FFI 外部库绑定验证（SDL2 最小示例或 raylib hello：.a 链接 / pkg-config / 事件循环桥） | 中–大；游戏窗口线 0→1 前提（现 FFI 仅绑内部 C 库、无外部先例） |
+| 候选 | 真板物理回归（树莓派 + LED / 按键 / 温湿度） | 需硬件；一切边缘能力的最终裁决 |
+
+> 差距细节见 docs/GAP_ANALYSIS.md；语言面欠账另见 MINI_SUBSET §十三（M58 dogfood 暴露，
+> 其中 §十三.1/.2 HTTP/S3 网络失败→Err 已修复）。
+
 ### 搁置 · HTTP/3 / QUIC 健壮性加固（可靠性生产化）
 
 > 曾列为 M57 候选主线；评估后降级：H3 目前 **无真实用户**（自签证书下 Chrome/Firefox 直接

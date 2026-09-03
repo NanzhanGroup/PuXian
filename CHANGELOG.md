@@ -6,6 +6,21 @@
 
 ## [Unreleased]
 
+### 文档 · 能力差距分析 + 候选主线排期（docs/GAP_ANALYSIS.md + ROADMAP 远期方向）
+
+- 新增 `docs/GAP_ANALYSIS.md`：树莓派/边缘设备 与 2D/3D 游戏两条用户线的能力差距清单
+  （事实基准：~257 内置函数清单 / stdlib / spec / ROADMAP / MINI_SUBSET §十三 / M57/M58
+  实测产物）。
+- 核心结论：树莓派线「能力已开、缺厚度与真板验证」（GPIO 真正控制、边沿中断 poll/epoll、
+  串口 termios、SPI/PWM 封装、us 级时钟、真板物理回归）；2D 游戏「几乎未开」（缺图形/
+  输入/数学基础——终端 ASCII 半通、帧缓冲原语零、SDL2/raylib 0→1 未做）；3D 明确不做
+  原生绑定、唯一路径 = raylib C 绑定（前置 FFI 外部库绑定验证）。
+- 历史任务覆盖核对：#37 → M57 S1–S4 **100% 闭环**；#36 → 主体完成（pxc 交叉产出 aarch64
+  静态 ELF + qemu 验证），遗留 = 原生 aarch64 pxi 未做（如需「板子跑解释模式」）+ ws-web
+  加分项已随拆仓移出本仓。
+- ROADMAP 远期方向新增「候选主线排期」：M59 数学与随机补齐（小）→ M60 边缘 stdlib +
+  设备小内置（中）→ 候选 FFI 外部库绑定验证 / 真板物理回归（需硬件）。
+
 ### M58 dogfood 闭环 · pxhwmond webhook dry-run 解禁为真发（HTTP Err 语义落地）
 
 - **背景**：M58 pxhwmond 的 webhook 通知因 HTTP 客户端网络失败即 panic（§十三 #1/#2）
