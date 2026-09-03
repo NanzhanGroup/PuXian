@@ -1,0 +1,39 @@
+# ============================================================
+# M59 S1 math_s1.px —— 三角族 sin/cos/tan/atan2 + pi 常量 数值断言
+# ------------------------------------------------------------
+# 断言策略（开工实测修正，M59-PLAN §二 补充）：
+#   ① 高精度 float 字面量会被自举编译器 cg_fmt_float 经 str(v) 截断为
+#      ~6 位有效数字（例：3.14159265358979 → 3.14159，误差 ~2.65e-6），
+#      故期望值一律用表达式（pi/2、pi/4…）或低精度字面量（0/1/-1/3），
+#      不用 6 位以上有效数字的浮点字面量当基准；
+#   ② 断言统一容差 1e-12。
+# 退出：全过 → 打印 "M59-S1 OK" 退出码 0；任一失败 → assert 终止（exit 1）
+# ============================================================
+
+def approx(actual, expected, tol):
+    # |actual-expected| <= tol
+    return abs(actual - expected) <= tol
+
+# ---- sin / cos / tan（弧度）----
+assert(approx(sin(0), 0.0, 1e-12), "sin(0)==0")
+assert(approx(sin(pi / 2), 1.0, 1e-12), "sin(pi/2)≈1（全精度 pi 的隐式验证：若 pi 被截 6 位则差 2.6e-6 会失败）")
+assert(approx(cos(0), 1.0, 1e-12), "cos(0)==1")
+assert(approx(cos(pi), -1.0, 1e-12), "cos(pi)≈-1")
+assert(approx(tan(0), 0.0, 1e-12), "tan(0)==0")
+# 整数入参也应接受（math_num 统一 int/float）
+assert(approx(sin(0), 0, 1e-12), "sin(0) 整数入参 int 期望")
+
+# ---- atan2(y, x)：先 y 后 x，四象限 ----
+assert(approx(atan2(1, 1), pi / 4, 1e-12), "atan2(1,1)==pi/4")
+assert(approx(atan2(0, -1), pi, 1e-12), "atan2(0,-1)==pi（第二象限边界）")
+assert(approx(atan2(-1, -1), -3 * pi / 4, 1e-12), "atan2(-1,-1)==-3pi/4（第三象限）")
+assert(approx(atan2(-1, 0), -pi / 2, 1e-12), "atan2(-1,0)==-pi/2")
+# 象限不对称性（x 负时结果在 [pi/2, 3pi/2] 区间）
+assert(atan2(1, -1) > pi / 2 and atan2(1, -1) < pi, "atan2(1,-1) 第二象限")
+
+# ---- pi 常量：全精度证明（C 宏 PX_PI）+ 量级 ----
+assert(type(pi) == "float", "pi 是 float")
+assert(pi * 1000000 > 3141592 and pi * 1000000 < 3141593, "pi 前 7 位 ≈ 3.141592")
+print("pi =", pi)
+
+print("M59-S1 OK")
