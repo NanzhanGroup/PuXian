@@ -1,0 +1,42 @@
+# ============================================================
+# s3_neterr_fail.px —— S3 客户端网络失败 → Err(result)（无服务器版，双模式可跑）
+# ------------------------------------------------------------
+# 同 examples/s3_neterr_result.px 的 A 段：只验证网络/协议失败路径
+# （连接拒绝 / 协议不支持）→ Err(result)，进程存活、退出码 0。
+# 应用层边界（200/404/204 语义不变）见 s3_neterr_result.px。
+# 运行（仅编译模式）：
+#   ./tools/pxc build examples/s3_neterr_fail.px && ./examples/build/s3_neterr_fail
+# 说明：Mini 子集解释器（pxc run）builtin 白名单未注册 s3_*（§十三 #8 类
+#   边界：解释器对完整能力 API 未承诺，报「未定义变量: 's3_get'」），
+#   故本样例只支持编译模式（pxc build 产物链接完整 runtime/runtime.c）。
+# 零外部依赖：127.0.0.1:1 连接必然被拒；ftp:// 协议不支持。
+# ============================================================
+AK = "testkey"
+SK = "testsecret"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+var a1 = s3_get("http://127.0.0.1:1/b/k", "b", "k", AK, SK)
+expect(a1.is_err(), "s3_get 连接失败应 is_err")
+print("  s3_get    失败 → " + str(a1))
+
+var a2 = s3_put("http://127.0.0.1:1/b/k", "b", "k", "data", AK, SK)
+expect(a2.is_err(), "s3_put 连接失败应 is_err")
+print("  s3_put    失败 → " + str(a2))
+
+var a3 = s3_delete("http://127.0.0.1:1/b/k", "b", "k", AK, SK)
+expect(a3.is_err(), "s3_delete 连接失败应 is_err")
+print("  s3_delete 失败 → " + str(a3))
+
+var a4 = s3_list("http://127.0.0.1:1/b", "b", "", AK, SK)
+expect(a4.is_err(), "s3_list 连接失败应 is_err")
+print("  s3_list   失败 → " + str(a4))
+
+var a5 = s3_get("ftp://nope/b/k", "b", "k", AK, SK)
+expect(a5.is_err(), "s3_get 协议不支持应 is_err")
+print("  协议不支持 → " + str(a5))
+
+print("ALIVE：S3 网络失败已可检查（Err）、进程未被终止 ✅")

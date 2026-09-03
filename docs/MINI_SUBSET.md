@@ -247,3 +247,26 @@ NULL 信号）；`hparse_url` 改为返回错误码（不再终止）；各 buil
 **对语言面的启示（真实用户喂 bug 的 1→1.0n 反馈）**：网络 I/O 失败路径缺失错误返回
 （#1/#2）是真实应用（通知/上报类）最痛的缺口，优先于语法糖；`int()` 宽容解析 + 空
 dict 字面量是隐蔽坑（静默错值/难排查），值得后续收紧或文档明示。
+
+### §十三.2 修复记录：S3/MinIO 客户端网络失败 → Err(result)（同源收口）
+
+> M37 的 `s3_*` 四函数与 §十三.1 HTTP 客户端同源（共享建连/h_exchange/错误语义），
+> 但失败形态更隐蔽：**静默返回 false/null/空 list**（非 panic 非报错），调用方无法
+> 区分「网络挂了」与「服务端拒绝」。M58 dogfood 收口 §十三.1 时一并识别，同法修复
+> （runtime/runtime.c，见 CHANGELOG + examples/s3_neterr_result.px 自检）：
+
+| 项 | 修复后语义 |
+|---|---|
+| s3_put / s3_delete | 网络失败返回 `Err(result)`（`"net: 连接 ... 失败"` 等），不再静默 false；应用层 200/204/404 仍返回 bool（404=幂等删除成功，语义不变） |
+| s3_get | 网络失败返回 `Err(result)`；应用层 200 仍返回 body 字符串、404 等仍返回 null（非 Err） |
+| s3_list | 网络失败返回 `Err(result)`；应用层 200 仍返回 keys 列表 |
+| endpoint 协议 | 非 http/https → `Err("net: 不支持的协议: ...")`（原来静默当明文 HTTP 处理） |
+| 参数个数/类型错误 | 仍 px_error 终止（编程契约，与全部 builtin 一致） |
+
+实现要点：`px_s3_exec` 增加错误缓冲输出（`px_net_fail`，与 §十三.1 同一 helper）；
+建连失败（明文 hconnect / TLS https_connect）与 h_exchange 连接中断分别填 errbuf 并
+返回 0（失败信号）；builtin 用 `px_net_err` 就地构造 `Err`。零新增内置函数。
+
+**意义**：至此语言面网络客户端（HTTP 5 个 + S3 4 个）网络失败全部「可检查、可恢复、
+不杀进程」，真实应用可安全地在长期服务内做网络调用（webhook 通知/对象存储上报），
+m58 notify.px 的 webhook dry-run 解禁为真发成为下一步 dogfood 候选。
