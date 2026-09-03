@@ -1595,7 +1595,22 @@ static const char* fmt_num(LXValue v) {
     if (v.type == PX_INT) {
         snprintf(num_buf, sizeof(num_buf), "%lld", (long long)v.as.i);
     } else {
-        snprintf(num_buf, sizeof(num_buf), "%g", v.as.f);
+        double f = v.as.f;
+        snprintf(num_buf, sizeof(num_buf), "%g", f);
+        // M62-L1：对齐解释器 i_fmt_float（selfhost/ival.px）：整值且有限且 |f| < 1e15
+        // 且 %g 输出无 ./e/E/inf/nan → 补 ".0"（编译模式原 %g 打印 3.0 → "3"，解释器 "3.0"，
+        // 双模式不对称；补 .0 后与解释器/golden(Rust fmt_float) 一致）
+        double af = (f < 0.0) ? -f : f;
+        if (af < 1e15 && f == (double)(int64_t)f) {
+            if (!strpbrk(num_buf, ".eE") && !strchr(num_buf, 'i') && !strchr(num_buf, 'n')) {
+                size_t ln = strlen(num_buf);
+                if (ln + 2 < sizeof(num_buf)) {
+                    num_buf[ln] = '.';
+                    num_buf[ln + 1] = '0';
+                    num_buf[ln + 2] = '\0';
+                }
+            }
+        }
     }
     return num_buf;
 }

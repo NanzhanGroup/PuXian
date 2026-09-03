@@ -1,0 +1,27 @@
+# M62-L1 浮点打印双模式一致（对齐解释器 i_fmt_float / Rust fmt_float）
+# 验证点：整值浮点 print/str/插值补 ".0"；非整值/大数保持 %g 既有格式。
+var bad = 0
+def chk(name, cond):
+  if not cond:
+    print("FAIL: " + name)
+    bad += 1
+
+def main():
+  var out1 = str(3.0)
+  chk("str(3.0) has .0", out1 == "3.0")
+  var out2 = str(float(7))
+  chk("str(float(7)) has .0", out2 == "7.0")
+  var out3 = str(-3.0)
+  chk("str(-3.0) has .0", out3 == "-3.0")
+  var out4 = str(100000.0)
+  chk("str(100000.0) has .0", out4 == "100000.0")
+  var out5 = str(1e15)
+  chk("str(1e15) keeps e-form", contains(out5, "e"))
+  var out6 = str(0.5)
+  chk("str(0.5) has .5", out6 == "0.5")
+  var out7 = str(0.1 + 0.2)
+  chk("str(0.1+0.2) is 6-digit", out7 == "0.3")
+  var out8 = "v=" + str(3.0)
+  chk("interp value keeps .0", out8 == "v=3.0")
+  if bad == 0:
+    print("L1 FLOATFMT OK")
