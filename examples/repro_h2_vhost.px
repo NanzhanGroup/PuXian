@@ -1,8 +1,8 @@
 # ============================================================
-# [ws-web-blocker] TLS ALPN 协商 h2 时绕过 vhost handler —— 最小复现
+# [dogfood-blocker] TLS ALPN 协商 h2 时绕过 vhost handler —— 最小复现
 # ------------------------------------------------------------
 # 仓库：NanzhanGroup/PuXian   环境：runtime C 版（M37 引入 h2 帧循环）
-# 发现：ws-web（PuXian 写的生产 Web 服务器）灰度时，浏览器（偏好 HTTP/2）
+# 发现：生产 Web 应用（PuXian 写、仓库外私有）灰度时，浏览器（偏好 HTTP/2）
 #       请求 https://qg.wsai.chat 返回「调试页」而不是站点内容。
 # 根因：TLS 握手 ALPN 协商到 h2 后，runtime 走 px_h2_handle 帧循环
 #       （runtime.c:10253），该路径【不调用 vhost(host, handler) 注册的
@@ -36,7 +36,7 @@ DOCROOT = "/tmp/px_h2_docroot"
 mkdir(DOCROOT)
 write_file(DOCROOT + "/index.html", "<h1>DEFAULT DOCROOT</h1>")
 
-# vhost handler：与 ws-web 生产用法一致，返回完整响应 dict
+# vhost handler：与生产应用用法一致，返回完整响应 dict
 def hhandler(req):
     return {"status": 200, "body": "{\"vhost\":\"ok\"}", "headers": {"Content-Type": "application/json"}}
 

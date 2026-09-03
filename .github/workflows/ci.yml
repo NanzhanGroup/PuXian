@@ -67,17 +67,3 @@ jobs:
             ./tools/pxc build "$ex" 2>&1 | tail -1
           done
           ./examples/build/fib | head -3
-
-  wsweb:
-    name: ws-web 冒烟（生产应用回归）
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-      - name: 构建并冒烟 ws-web
-        run: |
-          chmod +x bootstrap/pxc bootstrap/pxi tools/pxc ws-web/build.sh
-          ./tools/pxc build ws-web/main.px 2>&1 | tail -1
-          ./tools/pxc build ws-web/tests/smoke.px 2>&1 | tail -1
-          ./ws-web/tests/build/smoke | tail -1

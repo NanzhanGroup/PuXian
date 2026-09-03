@@ -37,7 +37,7 @@ cd PuXian
 - **Bug**：请附**最小复现用例**（单个 `.px` 文件）+ 期望输出 / 实际输出 + 你用的命令（build 还是 run）。
   模板见 [.github/ISSUE_TEMPLATE/bug_report.md](.github/ISSUE_TEMPLATE/bug_report.md)。
 - **特性请求**：请说明使用场景与预期行为，模板见 [.github/ISSUE_TEMPLATE/feature_request.md](.github/ISSUE_TEMPLATE/feature_request.md)。
-- 语言/编译器类问题可用 label：`compiler` / `interp` / `runtime`；生产应用 ws-web 相关用 `ws-web`。
+- 语言/编译器类问题可用 label：`compiler` / `interp` / `runtime`。
 
 ## 本地验证（提交 PR 前必须全绿）
 

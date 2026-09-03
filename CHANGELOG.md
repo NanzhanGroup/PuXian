@@ -46,7 +46,7 @@
   `docs/ROADMAP.md` §三「搁置」评估注记）
 - **HTTP/3 / QUIC 健壮性加固**（曾于上版设为 M57 候选主线）**同步降级为搁置**：H3 目前
   无真实用户（自签证书下浏览器退回 HTTP/1.1，不走本栈），给无人使用的栈做 fuzz / 并发
-  审计价值前提不成立（1→1.01 而非 0→1）；待 H3 出现真实用户（如 ws-web 配真证书公网/
+  审计价值前提不成立（1→1.01 而非 0→1）；待 H3 出现真实用户（如生产应用配真证书公网/
   浏览器实测）再捞回
 - **M57 重定向为主线下一条里程碑「边缘设备层支持（Linux 用户态）」**：与清歌嵌入式讨论
   的落地结论（PuXian 只能到树莓派/网关/盒子等 Linux 边缘设备层；裸机 MCU 架构不符，
@@ -56,15 +56,15 @@
   开关 → S5 pxi 重建 + capability/diffcheck/自举全绿 → S6 文档；通用动态 FFI（dlsym）
   等「任意 C 库即插即用」真需求再上
 
-### 新增 · M56 runtime http_unix 内建（ws-web 配套，非主线 HTTP/3 里程碑）
+### 新增 · M56 runtime http_unix 内建（外部生产应用配套，非主线 HTTP/3 里程碑）
 
 - `http_unix(sock_path, url_path, method[, body[, headers]]) -> dict{status, headers, body}`
   —— Unix domain socket HTTP 客户端内建（本地服务 / LLM 网关 / 容器 daemon 调用）：
   每次新建 AF_UNIX 连接、`Connection: close` 用完即关；收发超时 180s（本地长响应）；
   带 body 且未显式带 Content-Length 时自动补（Content-Type 可被 headers 覆盖）；
   响应解析复用 h_exchange（与 http_get/http_post 同解析器）
-- 引入背景：ws-web LLM 接入 ws 词元缓存网关（unix socket 通道，key 零落盘）；
-  由清歌提交（runtime/runtime.c +73；ws-web 侧 llm.px / translate.px / main.px），
+- 引入背景：外部生产应用 LLM 接入词元缓存网关（unix socket 通道，key 零落盘）；
+  由清歌提交（runtime/runtime.c +73；仓库外应用侧 llm.px / translate.px / main.px），
   编号与主线 HTTP/3 里程碑并行插队 —— 本条目为 PuXian runtime 侧文档补齐
 
 ### 新增 · M54 HTTP/3 生产化（见 docs/M54_PLAN.md）
@@ -137,7 +137,7 @@
 
 ### 生态
 
-- ws-web：用 PuXian 写的第一个生产应用（HTTP + SQLite），dogfooding 验证
+- 仓库外生产应用：用 PuXian 写的第一个生产应用（HTTP + SQLite），dogfooding 验证（代码维护于独立私库）
 - 80+ 示例程序 + 里程碑验证脚本（`examples/`）
 
 [Unreleased]: https://github.com/NanzhanGroup/PuXian
