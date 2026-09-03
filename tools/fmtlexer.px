@@ -1,0 +1,788 @@
+# ============================================================
+# M64a: fmtlexer.px —— 保留模式词法器（keep-lexer，工具链共享底座）
+# ------------------------------------------------------------
+# 由 selfhost/pxlexer.px 复制派生（M64-S1，词法规则同源：pxlexer 改动
+# 需同步手改本文件；编译链由 bootstrap_prove.sh 守护，工具链由自测守护）。
+# 与 pxlexer.px 的唯一行为差异 = 保留注释：
+#   - g_keep=false（默认）：行为与 pxlexer.lex_tokens 完全一致（注释跳过）
+#   - g_keep=true（lex_tokens_keep 入口）：注释以 kind="注释" token 输出，
+#     纯注释行产 [注释, 换行]（对齐 Rust Lexer::new_with_comments：
+#     注释行后补 Newline；行内注释后由主循环自然产换行）。
+# 供 fmt/doc/lint 共用（Rust 版 new_with_comments 等价物）。
+# token 结构：[kind, val, line, col]；kind 含 换行/缩进/去缩进/注释/EOF。
+# ============================================================
+
+# ---------- 全局状态（顶层 let = 全局变量） ----------
+var g_src = ""
+var g_len = 0
+var g_pos = 0
+var g_line = 1
+var g_col = 1
+var g_indent_stack = [0]
+var g_at_line_start = true
+var g_toks = []   # 结构化 token 列表 [kind, val, line, col]
+var g_count = 0
+var g_pending = []   # 插值产生的中间 token：[kind, val, line, col]
+var g_keep = false   # M64a：true=保留注释模式（lex_tokens_keep）
+
+# ---------- 关键字表（spec §2.4，None 别名 null，type 是普通标识符） ----------
+let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn": "fn", "struct": "struct", "enum": "enum", "trait": "trait", "impl": "impl", "match": "match", "case": "case", "if": "if", "elif": "elif", "else": "else", "for": "for", "while": "while", "in": "in", "and": "and", "or": "or", "not": "not", "return": "return", "break": "break", "continue": "continue", "import": "import", "from": "from", "pub": "pub", "as": "as", "spawn": "spawn", "chan": "chan", "send": "send", "recv": "recv", "select": "select", "true": "true", "false": "false", "null": "null", "None": "null", "self": "self", "capture": "capture", "extern": "extern"}
+
+# ---------- 控制字符表（0x01-0x1f 除 \n\t\r\0，0x7f-0x9f） ----------
+# 单行字符串拼接 61 个控制字符（顺序即码点映射基准，见 ctrl_codepoint）
+let CTRL_ALL = "\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}\u{8}\u{b}\u{c}\u{e}\u{f}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1a}\u{1b}\u{1c}\u{1d}\u{1e}\u{1f}\u{7f}\u{80}\u{81}\u{82}\u{83}\u{84}\u{85}\u{86}\u{87}\u{88}\u{89}\u{8a}\u{8b}\u{8c}\u{8d}\u{8e}\u{8f}\u{90}\u{91}\u{92}\u{93}\u{94}\u{95}\u{96}\u{97}\u{98}\u{99}\u{9a}\u{9b}\u{9c}\u{9d}\u{9e}\u{9f}"
+
+# ---------- 基础字符操作 ----------
+def peek():
+    if g_pos < g_len:
+        return g_src[g_pos]
+    return ""
+
+def peek2():
+    if g_pos + 1 < g_len:
+        return g_src[g_pos + 1]
+    return ""
+
+def peek3():
+    if g_pos + 2 < g_len:
+        return g_src[g_pos + 2]
+    return ""
+
+def advance():
+    if g_pos >= g_len:
+        return ""
+    let c = g_src[g_pos]
+    g_pos += 1
+    if c == "\n":
+        g_line += 1
+        g_col = 1
+    else:
+        g_col += 1
+    return c
+
+# ---------- 输出 / 错误 ----------
+def emit_at(kind, val, line, col):
+    g_toks.append([kind, val, line, col])
+    g_count += 1
+
+def emit(kind, val):
+    emit_at(kind, val, g_line, g_col)
+
+def emit_token(t):
+    emit_at(t[0], t[1], t[2], t[3])
+
+def err(code, msg):
+    print("错误: " + str(g_line) + ":" + str(g_col) + ": 词法错误 " + code + ": " + msg)
+    panic("lex " + code)
+
+def err_at(code, msg, line, col):
+    print("错误: " + str(line) + ":" + str(col) + ": 词法错误 " + code + ": " + msg)
+    panic("lex " + code)
+
+# ---------- 字符分类 ----------
+def is_digit(c):
+    return c != "" and c >= "0" and c <= "9"
+
+def is_hex_digit(c):
+    return is_digit(c) or (c >= "a" and c <= "f") or (c >= "A" and c <= "F")
+
+def is_alnum(c):
+    return is_digit(c) or (c >= "a" and c <= "z") or (c >= "A" and c <= "Z")
+
+def is_ident_start(c):
+    if c == "":
+        return false
+    return (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or c == "_" or c >= "\u{80}"
+
+def is_ident_continue(c):
+    if c == "":
+        return false
+    return is_ident_start(c) or is_digit(c)
+
+def digit_val(c):
+    let table = "0123456789abcdefABCDEF"
+    var i = 0
+    while i < len(table):
+        if table[i] == c:
+            if i >= 16:
+                return i - 6
+            return i
+        i += 1
+    return -1
+
+# ---------- 行首缩进处理 ----------
+def handle_line_start():
+    var indent = 0
+    while true:
+        indent = 0
+        while peek() == " ":
+            advance()
+            indent += 1
+        if peek() == "\t":
+            err("E1003", "缩进禁止使用 tab，请使用空格")
+        let c = peek()
+        if c == "":
+            return
+        if c == "\n":
+            advance()
+            continue
+        if c == "#":
+            # M64a keep 模式：注释行产 [注释, 换行]（对齐 Rust handle_line_start）
+            if g_keep:
+                let cmt_line = g_line
+                let cmt_col = g_col
+                let ctext = skip_comment()
+                emit_at("注释", ctext, cmt_line, cmt_col)
+                if peek() == "\n":
+                    let p_line = g_line
+                    let p_col = g_col
+                    advance()
+                    emit_at("换行", "", p_line, p_col)
+            else:
+                skip_comment()
+            continue
+        break
+    let cur = g_indent_stack[len(g_indent_stack) - 1]
+    if indent > cur:
+        g_indent_stack.append(indent)
+        emit("缩进", "")
+    elif indent < cur:
+        while g_indent_stack[len(g_indent_stack) - 1] > indent:
+            g_indent_stack.pop()
+            emit("去缩进", "")
+        if g_indent_stack[len(g_indent_stack) - 1] != indent:
+            err("E2002", "缩进不一致：当前缩进 " + str(indent) + " 与上层缩进不匹配")
+    g_at_line_start = false
+
+# ---------- 注释 ----------
+def skip_comment():
+    var text = ""
+    if peek2() == "|":
+        text += advance()
+        text += advance()
+        var depth = 1
+        while depth > 0:
+            let c = peek()
+            if c == "":
+                err("E1002", "块注释未闭合（缺少 |#）")
+            elif c == "#" and peek2() == "|":
+                text += advance()
+                text += advance()
+                depth += 1
+            elif c == "|" and peek2() == "#":
+                text += advance()
+                text += advance()
+                depth -= 1
+            else:
+                text += advance()
+    else:
+        while peek() != "" and peek() != "\n":
+            text += advance()
+    return text
+
+# ---------- 标识符 / 关键字 ----------
+def scan_ident_token():
+    let pos_line = g_line
+    let pos_col = g_col
+    var s = ""
+    while is_ident_continue(peek()):
+        s += advance()
+    if KEYWORDS.has(s):
+        return [KEYWORDS[s], "", pos_line, pos_col]
+    return ["标识符", s, pos_line, pos_col]
+
+# ---------- 数字 ----------
+def scan_radix_token(radix, pos_line, pos_col):
+    advance()  # 0
+    advance()  # x/b/o
+    var digits = ""
+    while is_alnum(peek()) or peek() == "_":
+        digits += advance()
+    if len(digits) == 0:
+        err("E1004", "进制字面量缺少数字（基数 " + str(radix) + "）")
+    var clean = ""
+    var i = 0
+    while i < len(digits):
+        if digits[i] != "_":
+            clean += digits[i]
+        i += 1
+    var v = 0
+    var j = 0
+    while j < len(clean):
+        let d = digit_val(clean[j])
+        if d < 0 or d >= radix:
+            err("E1004", "无效 " + str(radix) + "-进制字面量: " + clean)
+        v = v * radix + d
+        j += 1
+    return ["整数", str(v), pos_line, pos_col]
+
+def strip_leading_zeros(s):
+    var i = 0
+    while i < len(s) - 1 and s[i] == "0":
+        i += 1
+    return s[i:]
+
+def scan_number_token():
+    let pos_line = g_line
+    let pos_col = g_col
+    if peek() == "0":
+        let p2 = peek2()
+        if p2 == "x" or p2 == "X":
+            return scan_radix_token(16, pos_line, pos_col)
+        if p2 == "b" or p2 == "B":
+            return scan_radix_token(2, pos_line, pos_col)
+        if p2 == "o" or p2 == "O":
+            return scan_radix_token(8, pos_line, pos_col)
+    var digits = ""
+    while is_digit(peek()) or peek() == "_":
+        digits += advance()
+    var is_float = false
+    if peek() == "." and is_digit(peek2()):
+        is_float = true
+        digits += "."
+        advance()
+        while is_digit(peek()) or peek() == "_":
+            digits += advance()
+    if peek() == "e" or peek() == "E":
+        let save_pos = g_pos
+        let save_line = g_line
+        let save_col = g_col
+        var exp = ""
+        exp += advance()
+        if peek() == "+" or peek() == "-":
+            exp += advance()
+        if is_digit(peek()):
+            while is_digit(peek()) or peek() == "_":
+                exp += advance()
+            digits += exp
+            is_float = true
+        else:
+            g_pos = save_pos
+            g_line = save_line
+            g_col = save_col
+    var clean = ""
+    var i = 0
+    while i < len(digits):
+        if digits[i] != "_":
+            clean += digits[i]
+        i += 1
+    if is_float:
+        var v = float(clean)
+        var fs = str(v)
+        if ends_with(fs, ".0"):
+            fs = fs[0:len(fs) - 2]
+        return ["浮点", fs, pos_line, pos_col]
+    let norm = strip_leading_zeros(clean)
+    if len(norm) > 19 or (len(norm) == 19 and norm > "9223372036854775807"):
+        err("E1004", "无效整数: " + digits)
+    return ["整数", str(int(clean)), pos_line, pos_col]
+
+# ---------- 字符串 ----------
+def scan_string(interp):
+    let toks = scan_string_tokens(interp)
+    emit_token(toks[0])
+    var i = 1
+    while i < len(toks):
+        g_pending.append(toks[i])
+        i += 1
+
+def scan_string_tokens(interp):
+    let pos_line = g_line
+    let pos_col = g_col
+    let quote = advance()
+    if quote == "\"" and peek() == "\"" and peek2() == "\"":
+        advance()
+        advance()
+        return scan_multiline_string_tokens("\"", pos_line, pos_col, interp)
+    if quote == "'" and peek() == "'" and peek2() == "'":
+        advance()
+        advance()
+        return scan_multiline_string_tokens("'", pos_line, pos_col, interp)
+    var out = []
+    var s = ""
+    while true:
+        let c = peek()
+        if c == "":
+            err_at("E1002", "字符串未闭合（缺少 " + quote + "）", pos_line, pos_col)
+        if c == quote:
+            advance()
+            break
+        if c == "\\":
+            s += scan_escape(pos_line, pos_col)
+        elif c == "\n":
+            err_at("E1002", "单行字符串不能跨行，请使用 \"\"\" 多行字符串", pos_line, pos_col)
+        elif c == "$" and interp and peek2() == "{":
+            advance()
+            advance()
+            out.append(["字符串", rust_str_debug(s), pos_line, pos_col])
+            out.append(["+", "", pos_line, pos_col])
+            out.append(["标识符", "str", pos_line, pos_col])
+            out.append(["(", "", pos_line, pos_col])
+            let expr = scan_interp_expr(pos_line, pos_col)
+            var k = 0
+            while k < len(expr):
+                out.append(expr[k])
+                k += 1
+            out.append([")", "", pos_line, pos_col])
+            out.append(["+", "", pos_line, pos_col])
+            s = ""
+        else:
+            s += c
+            advance()
+    out.append(["字符串", rust_str_debug(s), pos_line, pos_col])
+    return out
+
+def scan_multiline_string_tokens(quote, pos_line, pos_col, interp):
+    var out = []
+    var s = ""
+    while true:
+        let c = peek()
+        if c == "":
+            err_at("E1002", "多行字符串未闭合", pos_line, pos_col)
+        if c == quote and peek2() == quote and peek3() == quote:
+            advance()
+            advance()
+            advance()
+            break
+        if c == "\\":
+            s += scan_escape(pos_line, pos_col)
+        elif c == "$" and interp and peek2() == "{":
+            advance()
+            advance()
+            out.append(["字符串", rust_str_debug(s), pos_line, pos_col])
+            out.append(["+", "", pos_line, pos_col])
+            out.append(["标识符", "str", pos_line, pos_col])
+            out.append(["(", "", pos_line, pos_col])
+            let expr = scan_interp_expr(pos_line, pos_col)
+            var k = 0
+            while k < len(expr):
+                out.append(expr[k])
+                k += 1
+            out.append([")", "", pos_line, pos_col])
+            out.append(["+", "", pos_line, pos_col])
+            s = ""
+        else:
+            s += c
+            advance()
+    out.append(["字符串", rust_str_debug(s), pos_line, pos_col])
+    return out
+
+def scan_interp_expr(str_pos_line, str_pos_col):
+    let toks = []
+    while true:
+        let c = peek()
+        if c == "":
+            err_at("E1002", "字符串插值 \${ 未闭合（缺少 }）", str_pos_line, str_pos_col)
+        if c == "}":
+            advance()
+            break
+        if c == "{":
+            err("E1006", "插值表达式不支持 {} 字面量（dict/set），请先用变量保存")
+        if c == "\n":
+            err_at("E1002", "字符串插值表达式不能跨行", str_pos_line, str_pos_col)
+        if c == "#":
+            err("E1006", "插值表达式不支持注释")
+        if c == " " or c == "\t":
+            advance()
+        elif c == "\"" or c == "'":
+            let t = scan_string_tokens(true)
+            var k = 0
+            while k < len(t):
+                toks.append(t[k])
+                k += 1
+        elif is_digit(c):
+            toks.append(scan_number_token())
+        elif is_ident_start(c):
+            toks.append(scan_ident_token())
+        else:
+            toks.append(scan_operator_token())
+    return toks
+
+def hex_to_char(hex):
+    let cp = hex_to_int(hex)
+    if cp <= 127:
+        return bytes_to_str(int_to_bytes(cp, 1))
+    if cp <= 2047:
+        let b1 = int_to_bytes(0xC0 | (cp >> 6), 1)
+        let b2 = int_to_bytes(0x80 | (cp & 63), 1)
+        return bytes_to_str(bytes_concat(b1, b2))
+    if cp <= 65535:
+        let b1 = int_to_bytes(0xE0 | (cp >> 12), 1)
+        let b2 = int_to_bytes(0x80 | ((cp >> 6) & 63), 1)
+        let b3 = int_to_bytes(0x80 | (cp & 63), 1)
+        return bytes_to_str(bytes_concat(b1, b2, b3))
+    let b1 = int_to_bytes(0xF0 | (cp >> 18), 1)
+    let b2 = int_to_bytes(0x80 | ((cp >> 12) & 63), 1)
+    let b3 = int_to_bytes(0x80 | ((cp >> 6) & 63), 1)
+    let b4 = int_to_bytes(0x80 | (cp & 63), 1)
+    return bytes_to_str(bytes_concat(b1, b2, b3, b4))
+
+def scan_escape(str_pos_line, str_pos_col):
+    advance()  # 反斜杠
+    let c = peek()
+    if c == "":
+        err_at("E1002", "字符串在转义序列处意外结束", str_pos_line, str_pos_col)
+    if c == "n":
+        advance()
+        return "\n"
+    if c == "t":
+        advance()
+        return "\t"
+    if c == "r":
+        advance()
+        return "\r"
+    if c == "\\":
+        advance()
+        return "\\"
+    if c == "\"":
+        advance()
+        return "\""
+    if c == "'":
+        advance()
+        return "'"
+    if c == "0":
+        advance()
+        return "\u{0}"
+    if c == "$":
+        advance()
+        return "$"
+    if c == "u":
+        advance()
+        if peek() != "{":
+            err("E1005", "Unicode 转义须为 \\u{XXXX} 形式")
+        advance()
+        var hex = ""
+        while peek() != "" and peek() != "}":
+            let h = peek()
+            if is_hex_digit(h):
+                hex += h
+                advance()
+            else:
+                err("E1005", "Unicode 转义含非法字符")
+        if peek() != "}":
+            err("E1005", "Unicode 转义缺少 }")
+        advance()
+        if hex == "":
+            err("E1005", "Unicode 转义无效")
+        let cp = hex_to_int(hex)
+        if cp == null or cp > 0xFFFFFFFF:
+            err("E1005", "Unicode 转义无效")
+        if cp > 0x10FFFF or (cp >= 0xD800 and cp <= 0xDFFF):
+            return hex_to_char("FFFD")
+        return hex_to_char(hex)
+    err("E1005", "非法转义序列 \\" + c)
+    return ""
+
+# ---------- char debug 表示（对齐 Rust char {:?}） ----------
+def int_to_hex_nopad(n):
+    let hex_chars = "0123456789abcdef"
+    var s = ""
+    while n > 0:
+        s = hex_chars[n % 16] + s
+        n = n // 16
+    if s == "":
+        return "0"
+    return s
+
+def char_debug(c):
+    if c == "'":
+        return "'\\''"
+    if c == "\\":
+        return "'\\\\'"
+    if c == "\n":
+        return "'\\n'"
+    if c == "\r":
+        return "'\\r'"
+    if c == "\t":
+        return "'\\t'"
+    if c == "\u{0}":
+        return "'\\0'"
+    let code = ctrl_codepoint(c)
+    if code >= 0:
+        return "'\\u{" + int_to_hex_nopad(code) + "}'"
+    return "'" + c + "'"
+
+# ---------- 字符串 debug 表示（对齐 Rust {:?}） ----------
+def rust_str_debug(s):
+    var out = "\""
+    var i = 0
+    while i < len(s):
+        let c = s[i]
+        if c == "\n":
+            out += "\\n"
+        elif c == "\t":
+            out += "\\t"
+        elif c == "\r":
+            out += "\\r"
+        elif c < "\u{1}":
+            out += "\\0"
+        elif c == "\"":
+            out += "\\\""
+        elif c == "\\":
+            out += "\\\\"
+        elif c >= " " and c <= "~":
+            out += c
+        elif c == "\u{a0}":
+            out += "\\u{a0}"
+        elif c > "\u{a0}":
+            out += c
+        else:
+            out += "\\u{" + ctrl_hex(c) + "}"
+        i += 1
+    out += "\""
+    return out
+
+def ctrl_codepoint(c):
+    var idx = 0
+    while idx < len(CTRL_ALL):
+        if CTRL_ALL[idx] == c:
+            if idx < 28:
+                if idx < 8:
+                    return idx + 1
+                if idx < 10:
+                    return idx + 3
+                return idx + 4
+            return idx + 99
+        idx += 1
+    return -1
+
+def ctrl_hex(c):
+    let h = int_to_hex(ctrl_codepoint(c), 16)
+    var i = 0
+    while i < len(h) and h[i] == "0":
+        i += 1
+    if i == len(h):
+        return "0"
+    return h[i:len(h)]
+
+# ---------- 运算符 ----------
+def scan_operator_token():
+    let pos_line = g_line
+    let pos_col = g_col
+    let c = advance()
+    if c == "(":
+        return ["(", "", pos_line, pos_col]
+    if c == ")":
+        return [")", "", pos_line, pos_col]
+    if c == "[":
+        return ["[", "", pos_line, pos_col]
+    if c == "]":
+        return ["]", "", pos_line, pos_col]
+    if c == "{":
+        return ["{", "", pos_line, pos_col]
+    if c == "}":
+        return ["}", "", pos_line, pos_col]
+    if c == ",":
+        return [",", "", pos_line, pos_col]
+    if c == ":":
+        return [":", "", pos_line, pos_col]
+    if c == ".":
+        if peek() == ".":
+            err("E1001", "运算符 '..' 未定义（range 语法尚未支持）")
+        return [".", "", pos_line, pos_col]
+    if c == "+":
+        if peek() == "=":
+            advance()
+            return ["+=", "", pos_line, pos_col]
+        return ["+", "", pos_line, pos_col]
+    if c == "-":
+        if peek() == ">":
+            advance()
+            return ["->", "", pos_line, pos_col]
+        if peek() == "=":
+            advance()
+            return ["-=", "", pos_line, pos_col]
+        return ["-", "", pos_line, pos_col]
+    if c == "*":
+        if peek() == "*":
+            advance()
+            if peek() == "=":
+                advance()
+                return ["**=", "", pos_line, pos_col]
+            return ["**", "", pos_line, pos_col]
+        if peek() == "=":
+            advance()
+            return ["*=", "", pos_line, pos_col]
+        return ["*", "", pos_line, pos_col]
+    if c == "/":
+        if peek() == "/":
+            advance()
+            if peek() == "=":
+                advance()
+                return ["//=", "", pos_line, pos_col]
+            return ["//", "", pos_line, pos_col]
+        if peek() == "=":
+            advance()
+            return ["/=", "", pos_line, pos_col]
+        return ["/", "", pos_line, pos_col]
+    if c == "%":
+        if peek() == "=":
+            advance()
+            return ["%=", "", pos_line, pos_col]
+        return ["%", "", pos_line, pos_col]
+    if c == "^":
+        if peek() == "=":
+            advance()
+            return ["^=", "", pos_line, pos_col]
+        return ["^", "", pos_line, pos_col]
+    if c == "~":
+        return ["~", "", pos_line, pos_col]
+    if c == "&":
+        if peek() == "=":
+            advance()
+            return ["&=", "", pos_line, pos_col]
+        return ["&", "", pos_line, pos_col]
+    if c == "|":
+        if peek() == ">":
+            advance()
+            return ["|>", "", pos_line, pos_col]
+        if peek() == "=":
+            advance()
+            return ["|=", "", pos_line, pos_col]
+        return ["|", "", pos_line, pos_col]
+    if c == "=":
+        if peek() == "=":
+            advance()
+            return ["==", "", pos_line, pos_col]
+        return ["=", "", pos_line, pos_col]
+    if c == "!":
+        if peek() == "=":
+            advance()
+            return ["!=", "", pos_line, pos_col]
+        return ["!", "", pos_line, pos_col]
+    if c == "<":
+        if peek() == "-":
+            # M44：列表追加简写 `a <- 4`（等价 a.append(4)）
+            # ⚠️ 与 `a < -b` 冲突：`<` 紧邻 `-` 无空格才构成 <-（现有代码 s < -1 有空格，安全）
+            advance()
+            return ["<-", "", pos_line, pos_col]
+        if peek() == "<":
+            advance()
+            if peek() == "=":
+                advance()
+                return ["<<=", "", pos_line, pos_col]
+            return ["<<", "", pos_line, pos_col]
+        if peek() == "=":
+            advance()
+            return ["<=", "", pos_line, pos_col]
+        return ["<", "", pos_line, pos_col]
+    if c == ">":
+        if peek() == ">":
+            advance()
+            if peek() == ">":
+                advance()
+                if peek() == "=":
+                    advance()
+                    return [">>>=", "", pos_line, pos_col]
+                return [">>>", "", pos_line, pos_col]
+            if peek() == "=":
+                advance()
+                return [">>=", "", pos_line, pos_col]
+            return [">>", "", pos_line, pos_col]
+        if peek() == "=":
+            advance()
+            return [">=", "", pos_line, pos_col]
+        return [">", "", pos_line, pos_col]
+    if c == "?":
+        if peek() == ".":
+            advance()
+            return ["?.", "", pos_line, pos_col]
+        if peek() == "?":
+            advance()
+            return ["??", "", pos_line, pos_col]
+        return ["?", "", pos_line, pos_col]
+    err("E1001", "非法字符: " + char_debug(c))
+    return ["", "", pos_line, pos_col]
+
+# ---------- 主循环 ----------
+def next_token():
+    if len(g_pending) > 0:
+        let t = g_pending[0]
+        g_pending = g_pending[1:len(g_pending)]
+        emit_token(t)
+        return true
+    if g_at_line_start:
+        handle_line_start()
+    let c = peek()
+    if c == "":
+        while len(g_indent_stack) > 1:
+            g_indent_stack.pop()
+            emit("去缩进", "")
+        emit("EOF", "")
+        return false
+    if c == "\n":
+        let nl_line = g_line
+        let nl_col = g_col
+        advance()
+        g_at_line_start = true
+        emit_at("换行", "", nl_line, nl_col)
+        return true
+    if c == " " or c == "\t":
+        advance()
+        return true
+    if c == "#":
+        # M64a keep 模式：行内注释产 "注释" token（行尾换行由主循环产）
+        if g_keep:
+            let cmt_line = g_line
+            let cmt_col = g_col
+            let ctext = skip_comment()
+            emit_at("注释", ctext, cmt_line, cmt_col)
+        else:
+            skip_comment()
+        return true
+    if c == "\"" or c == "'":
+        scan_string(true)
+        return true
+    if is_digit(c):
+        emit_token(scan_number_token())
+        return true
+    if is_ident_start(c):
+        emit_token(scan_ident_token())
+        return true
+    emit_token(scan_operator_token())
+    return true
+
+
+# ---------- M41.1：edition 版本化（spec §14） ----------
+# 源码首行可声明：# px 2026
+# 当前工具链最新稳定版：px 2026；声明 edition 高于 2026 → 报错 E-EDITION
+def check_edition(src):
+    var i = 0
+    var n = len(src)
+    var line = ""
+    while i < n and src[i] != "\n":
+        line += src[i]
+        i += 1
+    let t = trim(line)
+    let parts = t.split(" ")
+    if len(parts) >= 3 and parts[0] == "#" and parts[1] == "px":
+        let year_s = parts[2]
+        if len(year_s) == 4 and is_digit(year_s[0]) and is_digit(year_s[1]) and is_digit(year_s[2]) and is_digit(year_s[3]):
+            let year = int(year_s)
+            if year > 2026:
+                err("E-EDITION", "源码声明 edition px " + year_s + " 高于当前工具链支持（px 2026），请升级编译器")
+
+# ---------- 入口（供 parser 等复用） ----------
+def lex_tokens(src):
+    check_edition(src)
+    g_src = src
+    g_len = len(src)
+    g_pos = 0
+    g_line = 1
+    g_col = 1
+    g_indent_stack = [0]
+    g_at_line_start = true
+    g_toks = []
+    g_count = 0
+    g_pending = []
+    var running = true
+    while running:
+        running = next_token()
+    return g_toks
+
+# ---------- M64a：保留注释入口（fmt/doc/lint 用；对齐 Rust new_with_comments） ----------
+def lex_tokens_keep(src):
+    g_keep = true
+    let toks = lex_tokens(src)
+    g_keep = false
+    return toks

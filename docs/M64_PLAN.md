@@ -1,6 +1,6 @@
 # M64_PLAN —— 工具链自举恢复（fmt/lint/test/bench/doc/lsp/mcp）
 
-> 状态：已立项 · 待 S1 开工
+> 状态：M64-S1 已完成（keep-lexer 底座入库）· S2 待开工（pxfmt 主逻辑）
 > 关联：docs/spec.md §12（AI 工具链接口规格）、docs/GAP_ANALYSIS.md、docs/MINI_SUBSET.md
 
 ## 1. 背景与现状（全部实测 2025-09-04）
@@ -110,3 +110,35 @@ Rust 版全套归档于 `archive/rust-compiler/src/`（只读参考），已于 
 - 全仓 fmt --check / lint 收敛改动（selfhost/stdlib/tools/examples）
 - ci.yml + make_release.sh 更新、CHANGELOG、README、spec §12 勾选
 - 每里程碑 verify 脚本（examples/m64*_verify.sh）与 docs/M64*_PLAN.md 进展记录
+
+## 9. M64-S1 侦查记录与决策（已执行，commit 待入库）
+
+### 9.1 行结构 token 现状（实测）
+- `selfhost/pxlexer.px`（760 行，编译/解析用）：token = `[kind串, val, line, col]`；kind 含中文字符串 `换行/缩进/去缩进/EOF` 结构 token，标识符=`标识符`、关键字/运算符=`原文`、字符串=`字符串`。
+- 注释完全丢弃：`next_token` 遇 `#` → `skip_comment()` 吞掉不产 token；`handle_line_start` 中注释行/空行 continue 吞掉（不产 Newline/Indent）。
+- `pxlexer.px` 被 parser/codegen/compiler/interp import（bootstrap_prove.sh 守护链）→ **改它需自举重建 pxc/pxi + golden 全量对拍**。
+
+### 9.2 Rust 版 fmt 依赖（fmt.rs / lexer.rs 实证）
+- `Lexer::new_with_comments` = 同一 Lexer + `preserve_comments=true`（开关式）。
+- preserve 语义：① 行首注释 → `Comment(text)` + 若后随 `\n` 补 `Newline`，**注释行不产 Indent/Dedent**（continue 直到真代码行）；② 行中注释 → `Comment(text)`（行尾换行由主循环产）；③ 空行仍吞掉。
+- fmt 主循环用 `Newline/Indent/Dedent/Comment` 重建源码：level 由 Indent/Dedent 驱动；行首注释按原列 `col-1` 空格对齐；行内注释前补 2 空格；连续空行压到 1；末尾单换行。
+
+### 9.3 import 语义实验（PuXian 实证，决定底座文件组织）
+- import 只注册被导入文件的 **def 函数**；**顶层 var/let 均不注册**（d.px 主文件不声明全局 → 被导入函数引用全局报 `R1001 未定义变量`）。
+- 被导入函数引用顶层全局时在**主文件作用域**解析：主文件声明同名全局则函数绑定主文件全局（b.px：get_gx() 返回主文件 gx=99）。
+- 推论：跨文件共享词法全局 = 主文件重复声明全套全局（lexer.px/parser.px/compiler.px 先例即此）。
+
+### 9.4 keep-lexer 底座决策（定案）
+- **不修改 pxlexer.px**（避免动自举链）；新建独立保留模式词法器 **`tools/fmtlexer.px`**（788 行，由 pxlexer.px 复制派生，头注释声明同步维护约定）。
+- 与 pxlexer 唯一行为差异 = 新增 `g_keep` 开关 + 入口 `lex_tokens_keep(src)`：`g_keep=false`（默认）行为与 pxlexer.lex_tokens 完全一致；`true` 时注释以 `kind="注释"` token 输出，纯注释行产 `[注释, 换行]`（对齐 Rust new_with_comments ①②③）。
+- 后续 doc/lint 共用同一 `lex_tokens_keep`；调用方（pxfmt.px 等）须按 §9.3 惯例重复声明全局。
+
+### 9.5 S1 验证结果（实测）
+- `tools/t_fmtlex_sample.px`（行首/行内/块注释跨行/空行/缩进样本）：keep 模式 43 token，注释+行结构序列符合 §9.2 语义（行首注释后补换行、注释行不产缩进 token、代码行才产缩进/去缩进）。
+- 默认模式对拍：`fmtlexer.lex_tokens` 输出 vs `pxc lex`（pxl）**逐字节一致**（复制保真）。
+- 性能：pxi 解释器跑含 `CTRL_ALL`（61 个 `\u{..}` 转义）长串 >20s（解释器 FFI 开销假象）；**编译版 0.048s**（`tools/pxc build` 后）→ fmt 工具以编译版二进制交付（同 pxl/pxpar 模式），性能无虞；`selfhost/lexer.px` 全量 keep 词法化编译版 0.177s / 387 token / 9 注释。
+- 边界记录：跨行块注释若 `|#` 后同行残留代码属非法源码（编译链同样处理），keep 模式报缩进错一致。
+
+### 9.6 S2 开工点（fmt 主逻辑 tools/pxfmt.px）
+- 结构：import "fmtlexer.px" + 重复声明全局（§9.3）；主循环对齐 fmt.rs（level/at_line_start/prev/prev2 + needs_space/is_unary_context/render/escape_str）；`--check/--diff/写回` + 空行压缩 + 行首注释按原列对齐 + 行内注释补 2 空格；编译 `tools/pxc build` → `bootstrap/pxfmt` → `pxc fmt` 子命令。
+
