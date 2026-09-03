@@ -13,7 +13,7 @@
 > 生产应用 ws-web）。验证基调：容器无真板子/无 hwmon temp → 采集真实 /proc +
 > /sys 条件探测降级；aarch64 产物 qemu-aarch64 跑自检模式验证。
 >
-> **状态：🔄 进行中**（S1 起逐步更新；规划基于 2026-09-03 实测）
+> **状态：✅ 已完成（S1–S5 全部落地并回归，M58 里程碑闭环）**
 
 ## 一、现状（调研结论，均已实测）
 
@@ -155,4 +155,4 @@ examples/m58_hwmond/
 | S2 | ✅ | commit c821005：collect.px 追加 temp_read（hwmon/thermal 条件探测，缺 → na 降级）+ net_dev（非 lo rx/tx 汇总）；shm.px（4096B MAP_SHARED 共享区：快照区+控制区，prepare/write_snap/read_ctl/write_ctl/dump）；main.px --dump/--ctl/--shm/--no-shm + SNAP 行含 temp/net/ctl；verify_s2.sh 全 PASS（temp 降级、net 非负、daemon→dump 活读、ts 递增、外部写 ctl → 下轮快照回显双向闭环、daemon 有限轮次退出 0）；verify_s1 回归 PASS |
 | S3 | ✅ | commit b92be61：serve.px 手写最小 HTTP（tcp_listen/accept + 显式响应头 Content-Type/Content-Length/Connection/Server，/healthz JSON + / HTML 表格降级标记 + 404，数据源=mmap 快照活读）；notify.px 阈值 env（MEM_AVAIL_KB/LOAD1/TEMP_MC）→ 告警日志 + webhook dry-run（http_post 失败 panic 欠账记录）；main --port/--no-http + spawn serve + check_alerts；verify_s3 全 PASS（响应头断言 + 告警/webhook dryrun 各 3 行）；verify_s1/s2 回归 PASS（s1 修复 --no-http+SNAP 过滤） |
 | S4 | ✅ | commit 25aa4bb：run.sh 崩溃自愈 wrapper（kill -9→137→attempt 2 自动拉起；0/130/143 不重启；systemd 示例）；verify_s4.sh aarch64 交叉多文件 import 工程（--no-quic + aarch64 mbedtls/sqlite）→ file ARM aarch64 static-pie + qemu-aarch64 --once 采集真实 /proc（mem_total 与 MemTotal 一致）+ m57_s1/s3 回归 PASS 全绿（交叉 ~45s 后台跑） |
-| S5 | ⏳ | — |
+| S5 | ✅ | commit 04eccf0：examples/m58_hwmond/README.md（定位/特性/构建运行/env/HTTP/监控自愈通知/欠账边界）；CHANGELOG M58 条目（顶部）；ROADMAP 主线表 M58 行；README/README.en M58 行 + m58_hwmond 示例行 + 原生开发段 M41–M58；MINI_SUBSET §十三（dogfood 语言欠账 8 项：http_post 失败 panic + spawn 不隔离最优先）；M58_PLAN S4 行回填；里程碑闭环（状态✅，全仓回归绿） |
