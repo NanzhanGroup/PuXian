@@ -1,6 +1,7 @@
 # M59 规划：数学与随机补齐（游戏/边缘两条线的公共地基）
 
-> 状态：待批准 · 主线编号 M59（M55/M56 为主线外占用编号，已核对可用）
+> 状态：**✅ S1–S5 已全部落地并回归（2026-09）**，里程碑闭环见本文件 §八 回填。
+> 主线编号 M59（M55/M56 为主线外占用编号，已核对可用）
 > 依据：`docs/GAP_ANALYSIS.md` §七 候选 A（数学与随机补齐 → M59）
 > 流程：本规划入库 → 本源审阅批准 → 按子步 S1–S5 执行（每步 verify + commit）→ 里程碑闭环
 
@@ -114,3 +115,18 @@ splitmix64 为确定性 64 位 PRNG，实现约 5 行，质量良好（无短周
 - **风险极低**：纯增量内置，不动语法/GC/类型；libm 已在链路上；最大回归面是"新全局名与用户代码冲突"（pi/e 为新增名，存量代码无占用，grep 确认）。
 - **遗留（有意）**：%g 6 位打印精度（§十三 #7）；解释器对设备类 builtin（s3_* 等）白名单缺失（§十三 #8）；均非本里程碑范围，已在 GAP/欠账清单留档。
 - 规划时点复核已做；**S1 开工前不再重复扫描**（本规划 §二 即为最新事实，正文已含行号证据）。
+
+---
+
+## 八、执行回填（S1–S5 ✅）
+
+| 子步 | commit | 结果 |
+|---|---|---|
+| S1 三角+pi | `8a85834` | 编译模式 sin/cos/tan/atan2 数值断言（1e-12 容差）+ pi；verify_s1 PASS |
+| S2 取整/对数+e | `93eb9a9` | floor/ceil/round/log/log10/exp + e；域错误 NaN/inf 透传实证；verify_s2 PASS |
+| S3 随机 | `bddd953` | splitmix64：random/random_int/random_seed；同 seed 序列逐位复现；verify_s3 PASS |
+| S4 双模式同步+aarch64 | `3f7e434` | pxi 白名单 +15 + pi/e 常量种子 + sqrt 缺口补平 + bootstrap/pxi 重建；编译/解释/qemu-aarch64 三态 PASS、双模式逐字节一致、splitmix x86==aarch64；hello/fib + m57_s1/m58_s1 回归 PASS |
+| S5 文档收口 | `cc2dd3f`（+本回填） | spec §10.2/§10.3、MINI_SUBSET §十三.4、ROADMAP M59 勾选、GAP_ANALYSIS 数学缺口勾销、CHANGELOG [Unreleased] |
+
+全量 verify_s1–s4 复跑 PASS；git 干净。新发现留档：编译 `%g` 整值浮点打印 "3" vs 解释器
+"3.0"（先于 M59 存在，MINI_SUBSET §十三.4）。
