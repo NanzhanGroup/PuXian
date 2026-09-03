@@ -6659,6 +6659,10 @@ static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     LXValue px_err_1144_val = px_null();
     int px_err_1144_proped = 0;
     _v1137 = px_call(px_get_global("args"), (LXValue[]){}, 0);
+    if (px_is_truthy(({ LXValue _t1146 = px_eq(px_call(px_get_global("len"), (LXValue[]){_v1137}, 1), px_int(2LL)); px_is_truthy(_t1146) ? ({ LXValue _t1145 = px_eq(px_index(_v1137, px_int(1LL)), px_str("--version")); px_is_truthy(_t1145) ? _t1145 : px_eq(px_index(_v1137, px_int(1LL)), px_str("-v")); }) : _t1146; }))) {
+        (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_add(px_add(px_add(px_str("pxc "), px_get_global("PXC_VER")), px_str(" (普贤 PuXian · selfhosted ")), px_get_global("PXC_MS")), px_str(")"))}, 1));
+        return px_int(0LL);
+    }
     _v1138 = px_index(_v1137, px_sub(px_call(px_get_global("len"), (LXValue[]){_v1137}, 1), px_int(1LL)));
     _v1139 = px_call(px_get_global("cg_dirname"), (LXValue[]){_v1138}, 1);
     px_set_global("p_toks", px_call(px_get_global("lex_tokens"), (LXValue[]){px_call(px_get_global("read_file"), (LXValue[]){_v1138}, 1)}, 1));
@@ -6667,7 +6671,7 @@ static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     _v1141 = px_call(px_get_global("cg_resolve_modules"), (LXValue[]){_v1140, _v1139}, 2);
     _v1142 = px_call(px_get_global("cg_generate"), (LXValue[]){_v1141}, 1);
     _v1143 = px_call(px_get_global("len"), (LXValue[]){_v1142}, 1);
-    if (px_is_truthy(({ LXValue _t1145 = px_gt(_v1143, px_int(0LL)); px_is_truthy(_t1145) ? px_eq(px_index(_v1142, px_sub(_v1143, px_int(1LL))), px_str("\n")) : _t1145; }))) {
+    if (px_is_truthy(({ LXValue _t1147 = px_gt(_v1143, px_int(0LL)); px_is_truthy(_t1147) ? px_eq(px_index(_v1142, px_sub(_v1143, px_int(1LL))), px_str("\n")) : _t1147; }))) {
          _v1142 = px_slice(_v1142, px_int(0LL), px_sub(_v1143, px_int(1LL)), px_null());
     }
     (void)(px_call(px_get_global("print"), (LXValue[]){_v1142}, 1));
@@ -6878,6 +6882,8 @@ int main(int argc, char** argv) {
     px_set_global("cg_uidc", px_int(0LL));
     px_set_global("cg_closure_id", px_int(0LL));
     px_set_global("loaded", ({ LXValue _d = px_dict(); { LXValue _k = px_str("_"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_int(0LL)); } _d; }));
+    px_set_global("PXC_VER", px_str("0.1.0"));
+    px_set_global("PXC_MS", px_str("M-B9a"));
     { LXValue _r = fn_main(NULL, 0, NULL); int _code = 0;
       if (px_is_result(_r)) {
         if (!px_result_ok(_r)) {
