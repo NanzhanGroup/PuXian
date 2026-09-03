@@ -5316,6 +5316,8 @@ void px_register_builtins(void) {
     // M48：hex 纯函数进 FFI 表（capability 字节精确断言/双模式一致用）
     px_ffi_register("bytes_to_hex", bi_bytes_to_hex);
     px_ffi_register("hex_to_bytes", bi_hex_to_bytes);
+    // M61-S1：zlib 外部系统库绑定（runtime_zlib.c；libz.a 恒链，无条件注册）
+    px_register_zlib();
 #ifndef PX_NO_QUIC
     // M46：QUIC 传输级绑定（runtime_quic.c）—— 语言层 extern def quic_* 按名字查找
     px_register_quic();
