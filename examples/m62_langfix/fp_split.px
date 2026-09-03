@@ -1,0 +1,20 @@
+# M62-L6 split 空段回归（防 M-B2 旧 Rust 解释器「丢弃空段」问题回退）
+# 期望：split 保留空段（"a,,b" → ["a", "", "b"]，len=3），编译/解释一致。
+var bad = 0
+def chk(name, cond):
+  if not cond:
+    print("FAIL: " + name)
+    bad += 1
+
+def main():
+  let parts = split("a,,b", ",")
+  chk("split len 3", len(parts) == 3)
+  chk("part0 a", parts[0] == "a")
+  chk("part1 empty", parts[1] == "")
+  chk("part2 b", parts[2] == "b")
+  let head = split(",a", ",")
+  chk("leading empty kept", len(head) == 2 and head[0] == "")
+  let tail = split("a,", ",")
+  chk("trailing empty kept", len(tail) == 2 and tail[1] == "")
+  if bad == 0:
+    print("L6 SPLIT OK")
