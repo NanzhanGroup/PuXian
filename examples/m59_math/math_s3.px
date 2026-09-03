@@ -1,0 +1,82 @@
+# ============================================================
+# M59 S3 math_s3.px —— splitmix64 PRNG：random/random_int/random_seed
+# ------------------------------------------------------------
+# 断言策略：同 seed → 序列逐位一致（确定性 PRNG，浮点逐位 ==）；
+# 区间断言 [0,1) / [0,n)；random_int 返回 int；边界 n=1 → 恒 0。
+# 打印 pi/e 供 verify 校验 %g 可读性（6 位有效数字）。
+# 退出：全过 → "M59-S3 OK" 退出码 0；失败 → assert 终止 exit 1
+# ============================================================
+
+# ---- 基础区间与类型 ----
+var bad = 0
+for i in range(300):
+    var r = random()
+    if r < 0.0 or r >= 1.0:
+        bad += 1
+assert(bad == 0, "random() 300 次全部落在 [0,1)")
+assert(type(random()) == "float", "random() 返回 float")
+
+var badi = 0
+for i in range(300):
+    var n = random_int(10)
+    if n < 0 or n >= 10:
+        badi += 1
+    assert(type(n) == "int", "random_int 返回 int")
+assert(badi == 0, "random_int(10) 300 次全部落在 [0,10)")
+
+# ---- 两种取值都出现（n=2，300 次全同概率 ≈2^-299 可忽略）----
+var c0 = 0
+var c1 = 0
+for i in range(300):
+    var v = random_int(2)
+    if v == 0:
+        c0 += 1
+    else:
+        c1 += 1
+assert(c0 > 0 and c1 > 0, "random_int(2) 0/1 都应出现（c0=" + str(c0) + " c1=" + str(c1) + "）")
+
+# ---- 边界 n=1 → 恒 0 ----
+assert(random_int(1) == 0, "random_int(1) 恒 0")
+assert(random_int(1) == 0, "random_int(1) 恒 0（再次）")
+
+# ---- 同 seed 序列可复现（逐位一致）----
+random_seed(42)
+var s1 = []
+for i in range(5):
+    s1.append(random())
+random_seed(42)
+var s2 = []
+for i in range(5):
+    s2.append(random())
+for i in range(5):
+    assert(s1[i] == s2[i], "同 seed=42 第 " + str(i) + " 个 random() 应一致")
+
+# random_seed 重置后 3 连发序列一致（跨调用序列级复现）
+random_seed(7)
+var a0 = random()
+var a1 = random()
+var a2 = random()
+random_seed(7)
+assert(random() == a0 and random() == a1 and random() == a2, "random_seed(7) 重置后 3 连发序列逐位一致")
+
+# ---- random_int 同 seed 可复现（整数精确比较）----
+random_seed(2024)
+var r1 = []
+for i in range(6):
+    r1.append(random_int(100))
+random_seed(2024)
+var r2 = []
+for i in range(6):
+    r2.append(random_int(100))
+for i in range(6):
+    assert(r1[i] == r2[i], "同 seed=2024 第 " + str(i) + " 个 random_int(100) 应一致")
+
+# ---- 默认种子（未调 random_seed）只做区间检查，不比对具体值 ----
+# （进程内首次调用 random 已惰性播种；此处确保无 seed 也可用）
+assert(random() >= 0.0 and random() < 1.0, "默认种子 random() 在 [0,1)")
+
+# ---- pi/e 可读性（%g 6 位有效数字：3.14159 / 2.71828）----
+print("pi =", pi)
+print("e =", e)
+
+print("M59-S3 OK")
