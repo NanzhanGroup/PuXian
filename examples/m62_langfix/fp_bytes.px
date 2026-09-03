@@ -1,0 +1,34 @@
+# M62-L7 pxi bytes 族白名单补齐验证（编译/解释双模式一致）
+# 覆盖 14 个补白名单的 bytes 内置：bytes/bytes_len/bytes_get/bytes_set/bytes_slice/
+# bytes_concat/bytes_to_str/bytes_to_hex/hex_to_bytes/bytes_find/bytes_base64/
+# base64_to_bytes/base64_encode/base64_decode
+var bad = 0
+def chk(name, cond):
+  if not cond:
+    print("FAIL: " + name)
+    bad += 1
+
+def main():
+  var b = bytes("hi")
+  chk("bytes str->bytes", type(b) == "bytes")
+  chk("bytes_len", bytes_len(b) == 2)
+  chk("bytes_get", bytes_get(b, 0) == 104)
+  chk("bytes_get neg", bytes_get(b, -1) == 105)
+  var b2 = bytes_set(b, 1, 65)
+  chk("bytes_set func", bytes_to_str(b2) == "hA")
+  chk("bytes_set orig immutable", bytes_to_str(b) == "hi")
+  chk("bytes_slice", bytes_to_str(bytes_slice(b2, 0, 1)) == "h")
+  chk("bytes_slice omit end", bytes_to_str(bytes_slice(b2, 1)) == "A")
+  chk("bytes_concat", bytes_to_str(bytes_concat(b, b2, bytes("!"))) == "hihA!")
+  chk("bytes_to_str", bytes_to_str(b) == "hi")
+  chk("bytes_to_hex", bytes_to_hex(b) == "6869")
+  chk("hex_to_bytes", bytes_to_str(hex_to_bytes("6869")) == "hi")
+  chk("bytes_find", bytes_find(b, "i") == 1)
+  chk("bytes_find miss", bytes_find(b, "z") == null)
+  chk("bytes_base64", bytes_base64(b) == "aGk=")
+  chk("base64_to_bytes", bytes_to_str(base64_to_bytes("aGk=")) == "hi")
+  chk("base64_encode", base64_encode("hi") == "aGk=")
+  chk("base64_decode", base64_decode("aGk=") == "hi")
+  chk("int_to_bytes roundtrip", bytes_to_int(int_to_bytes(258, 2)) == 258)
+  if bad == 0:
+    print("L7 BYTES OK")
