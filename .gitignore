@@ -11,7 +11,6 @@ examples/*/build/
 selfhost/build/
 selfhost/cases/build/
 selfhost/cases_bad/build/
-ws-web/build/
 
 # M45 演示应用动态生成物（verify.sh 每次重建）
 examples/m45_pkgdemo/app/
@@ -31,12 +30,3 @@ examples/m45_pkgdemo/registry_empty/
 
 # 自举临时产物
 /tmp/
-
-# ws-web 构建产物与运行时数据库
-ws-web/tests/build/
-*.db
-
-# ws-web md 站点运行时产物
-ws-web/test_site/out/
-ws-web/test_site/cache/
-ws-web/test_site/access.log

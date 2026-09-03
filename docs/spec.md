@@ -857,7 +857,7 @@ extern def h3_server_listen(port: int, cert: str, key: str) -> int  # M53-S3：H
 - **验证**：examples/m53_s3_pipe_verify.sh（同进程 px_serve + h3_server_listen 双栈，
   4 QUIC 连接并发 × 5 请求 = 20 全 PASS，H3 与 HTTP/1.1 curl 同管道输出一致）；
   examples/m53_s4_pxserve_h3_verify.sh（px_serve 三栈合一：自研 client + **aioquic 第三方
-  互操作** 200/静态/404 一致 + Alt-Svc + SIGTERM 优雅关闭 + ws-web config http3 端到端）；
+  互操作** 200/静态/404 一致 + Alt-Svc + SIGTERM 优雅关闭 + 生产应用 config http3 端到端）；
   examples/m53_s5_pxi_h3_smoke.px（pxi 重建后解释器含 h3_server_listen，id>0 PASS）；
   M46–M52 回归 + capability 双模式 253 PASS + diffcheck + 自举证明全绿。
 - **边界（M54+ 方向）**：自研 MVP client 单响应帧缓冲（>700KB 多 DATA 需标准客户端全收验证）。
@@ -954,8 +954,8 @@ http_unix("/tmp/llm.sock", "/v1/chat/completions", "POST",
   （显式传 headers 可覆盖，JSON 等场景自设 Content-Type）。
 - **返回 / 错误**：`{status: int, headers: dict, body: str}`；连接失败 panic（带 errno），
   对端关闭等请求失败 panic `net: http_unix 请求失败`。
-- **背景与验证**：M56 由 ws-web LLM 接入词元缓存网关（unix socket 通道、key 零落盘）配套引入
-  （runtime.c 内建，ws-web/llm.px dogfood 调用）；pxi 重建后解释器同能力支持；无独立示例，
+- **背景与验证**：M56 由外部生产应用 LLM 接入词元缓存网关（unix socket 通道、key 零落盘）配套引入
+  （runtime.c 内建，仓库外应用 .px dogfood 调用）；pxi 重建后解释器同能力支持；无独立示例，
   随 capability/diffcheck 双模式回归保障。
 
 ---

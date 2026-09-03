@@ -22,7 +22,7 @@ PuXian is open-sourced under the **Apache License 2.0** — anyone is free to us
 
 Key points for users of this project:
 
-- **Compiled output is not bound by the license**: programs and services you write with PuXian (e.g. ws-web) may be closed-source and commercialized freely; they do not constitute derivative works.
+- **Compiled output is not bound by the license**: programs and services you write with PuXian may be closed-source and commercialized freely; they do not constitute derivative works.
 - When you modify and redistribute the source code, you must retain the copyright notice and a copy of this License (Apache is permissive — **your modifications are not required to be open-sourced**).
 - **How to contribute**: in the early stage the project primarily accepts issues (bug reports / feature suggestions / usage feedback); code PRs are not open yet, and the roadmap is controlled by the core team.
 - **Copyright © 2026 The PuXian Authors**
@@ -42,8 +42,8 @@ Without prior written permission, these names may not be used to identify produc
 |---|---|
 | ✅ **Self-hosting complete (M-B8)** | **The PuXian compiler is written in PuXian itself**: the five core components — `lexer / parser / codegen / interp / value system` — have all been rewritten in `.px`. The bootstrap proof shows A.c == B.c == B2.c, byte-for-byte identical. |
 | ✅ **Rust version retired (M-B9a)** | Rust sources archived under `archive/rust-compiler/` (read-only). The new toolchain **`tools/pxc` requires no Rust at all**, running on top of the bootstrap binary. |
-| ✅ **CI integrated** | GitHub Actions: every commit automatically runs regression + bootstrap proof + example compilation + ws-web smoke tests. |
-| 🔄 **ws-web in development (M-B9b)** | Writing the first production application in PuXian (HTTP + SQLite service), see `ws-web/`. |
+| ✅ **CI integrated** | GitHub Actions: every commit automatically runs regression + bootstrap proof + example compilation |
+| ✅ **Dogfooding done (M-B9b)** | Wrote the first production application in PuXian (HTTP + SQLite service); now maintained in a separate private repository. |
 
 > Clone the repo and you can compile/run PuXian programs with `tools/pxc` right away — **no Rust installation required**.
 
@@ -162,11 +162,10 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 │   └── diffcheck.sh / bootstrap_prove.sh  # differential harness / bootstrap proof
 ├── runtime/                # C runtime (runtime.c/h + aes/xml/zip/ws/rsa/sqlite/route/h2/h3/quic + mbedtls + third_party)
 ├── stdlib/                 # Standard library (collections.px)
-├── ws-web/                 # First production application (M-B9b, dogfooding): HTTP + SQLite service skeleton
 ├── examples/               # 80+ examples (hello / fib / match / concurrency / networking / TLS / SQLite / comprehensions ...)
 ├── archive/rust-compiler/  # Rust compiler source archive (read-only; the pre-bootstrap implementation; git history preserved)
 ├── docs/                   # Documentation (spec / Mini subset / ROADMAP)
-└── .github/workflows/ci.yml # CI: regression + bootstrap proof + example compilation + ws-web smoke
+└── .github/workflows/ci.yml # CI: regression + bootstrap proof + example compilation
 ```
 
 ---
@@ -181,7 +180,6 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 | [CHANGELOG.md](CHANGELOG.md) | Changelog (notable changes per milestone) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guide (build / test / PR guidelines) |
 | [SECURITY.md](SECURITY.md) | Security vulnerability reporting policy |
-| [ws-web/README.md](ws-web/README.md) | First production application: quick start + 10 pitfall checks |
 
 ---
 
@@ -209,7 +207,7 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 | M-B7 | interp rewritten in PuXian | stdout 8/8 + v01–v03 all PASS |
 | M-B8 | **Bootstrap proof** | **A.c == B.c == B2.c byte-for-byte identical** 🎉 |
 | M-B9a | Retire the Rust version + wire up CI + bootstrap chain | `tools/pxc` fully usable end-to-end; CI four jobs |
-| M-B9b | ws-web (first production application) | 🔄 in progress (dogfooding validation) |
+| M-B9b | First production application (dogfooding validation) | ✅ moved to a separate private repo |
 
 ### Native Development (M41–M54, post-bootstrap development in PuXian itself — all ✅)
 
@@ -272,8 +270,8 @@ The `examples/` directory (80+ examples) for quick hands-on:
 
 ## Ecosystem & Collaboration
 
-- **ws-web** (`ws-web/`): the first production application — an HTTP + SQLite service used to dogfood-validate PuXian in real scenarios.
-- **Feedback & contribution**: when you find a problem, please attach a minimal reproduction case (a single `.px` + expected/actual output) and file an issue (labels: `ws-web-blocker` / `M-B9b`); PRs to improve the project are welcome.
+- **Out-of-repo private app**: PuXian's first real production user (HTTP + SQLite service, dogfooding validation); code maintained in a separate private repository.
+- **Feedback & contribution**: when you find a problem, please attach a minimal reproduction case (a single `.px` + expected/actual output) and file an issue (labels: `M-B9b`); PRs to improve the project are welcome.
 
 ---
 

@@ -10027,7 +10027,7 @@ static int px_conn_tls_handshake(PxConn* c) {
     // M31.4a：HTTP/2 预检——ALPN 固定 http/1.1（客户端探测 h2 时明确协商 http/1.1）
     // M31.4a/M37：ALPN 声明 h2 + http/1.1（客户端可选 HTTP/2；握手后按协商协议分发）
     // M-B9b：固定 http/1.1 —— vhost handler 仅在 http/1.1 路径生效；h2 帧循环（M37）绕过 vhost，
-    //         生产 Web 服务（ws-web 多站点/deny/SPA/反代）必须走 handler，故 ALPN 只声明 http/1.1。
+    //         生产 Web 服务（多站点/deny/SPA/反代）必须走 handler，故 ALPN 只声明 http/1.1。
     static const char* alpn_list[] = { "http/1.1", NULL };
     mbedtls_ssl_conf_alpn_protocols(conf, alpn_list);
     if (mbedtls_ssl_setup(ssl, conf) != 0) return -1;
@@ -11122,7 +11122,7 @@ void px_http_dispatch_h3(PxHttpOut* pout, LXValue req, int client_keep_alive) {
     LXValue headers = px_dict_get(req, "headers");
     if (headers.type != PX_DICT) { headers = px_dict(); px_dict_set(req, "headers", headers); }
     // M53-S4：HTTP/3 请求无 Host 头（RFC 9114 用 :authority）。补齐 headers["Host"] 使
-    // vhost/handler（ws-web site_handler 读 req.headers.Host）与 HTTP/1.1 行为一致。
+    // vhost/handler（生产应用 site_handler 读 req.headers.Host）与 HTTP/1.1 行为一致。
     {
         LXValue av = px_dict_get(req, "authority");
         if (av.type == PX_STR && px_header_get(&headers, "host").type == PX_NULL) {

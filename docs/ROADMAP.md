@@ -14,7 +14,7 @@
 | 回归体系 | ✅ diffcheck（lexer/parser/errors/codegen/value/interp）+ capability + 自举证明 |
 | WebServer | ✅ HTTP/1.1/2/3、HTTPS、WebSocket、SSE、路由/中间件/限流/日志/vhost/SNI/S3 |
 | HTTP/3 | ✅ QUIC 传输 → HTTP/3 语义 → QPACK（Huffman/静态表/动态表/SETTINGS/多路复用/解码器流 ack）→ **px_serve 三栈合一（M53）+ aioquic 外部互操作** → **生产化（M54：1-RTT resumption / 0-RTT early data / 连接迁移 / BLOCKED_STREAMS）** |
-| 生态 | ws-web（dogfood 生产应用）、80+ examples、registry 版本化（semver + lockfile） |
+| 生态 | 仓库外私有生产应用（dogfood）、80+ examples、registry 版本化（semver + lockfile） |
 
 ## 二、已完成主线（里程碑记录，详见 CHANGELOG.md）
 
@@ -38,7 +38,7 @@
 | M54 | **HTTP/3 生产化**：TLS 1.3 会话恢复（1-RTT resumption）+ **0-RTT early data**（含收包路由 DCID 修复、H3 静态表子集）+ 连接迁移（client 换源 + server path 跟随 + PATH_CHALLENGE）+ BLOCKED_STREAMS 流上限协商（-206 阻塞 / MAX_STREAMS 放行）；语言 API 12 项；S5 全量回归（pxi 重建 + capability 双模式 + diffcheck + 自举 + 14 项端到端） |
 
 > **主线外已占用编号**（非 ROADMAP 功能里程碑，已记录于 CHANGELOG，勿复用）：
-> **M55** = issue #2 并发安全 hotfix（修复 · M55）；**M56** = ws-web 配套 runtime
+> **M55** = issue #2 并发安全 hotfix（修复 · M55）；**M56** = 外部生产应用配套 runtime
 > `http_unix` 内建（新增 · M56）。主线后续功能里程碑从 **M57** 起排。
 
 ## 三、远期方向
@@ -69,7 +69,7 @@
 
 > 曾列为 M57 候选主线；评估后降级：H3 目前 **无真实用户**（自签证书下 Chrome/Firefox 直接
 > 退回 HTTP/1.1，不走本栈），给无人使用的栈做 fuzz / 并发审计价值前提不成立（1→1.01 而非
-> 0→1）。待 H3 出现真实用户（如 ws-web 配真证书公网/局域网浏览器实测）再捞回。
+> 0→1）。待 H3 出现真实用户（如生产应用配真证书公网/局域网浏览器实测）再捞回。
 
 - 协议 fuzz：QUIC / H3 / QPACK 解析器模糊测试（畸形包 / 超大帧 / 恶意 SETTINGS），零崩溃
 - 并发 / 内存安全审计：race + ASAN 全量回归；fd / 缓冲 / 会话生命周期核查

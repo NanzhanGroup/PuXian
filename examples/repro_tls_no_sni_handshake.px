@@ -1,14 +1,14 @@
 # ============================================================
-# [ws-web-blocker 复现] TLS 服务器对「无 SNI 的 ClientHello」直接握手失败
+# [dogfood-blocker 复现] TLS 服务器对「无 SNI 的 ClientHello」直接握手失败
 # ------------------------------------------------------------
-# 现象：ws-web（PuXian 生产 Web 服务器）灰度时，curl 访问 https://127.0.0.1/
+# 现象：生产 Web 应用（PuXian 写、仓库外私有）灰度时，curl 访问 https://127.0.0.1/
 #       （IP 地址不发 SNI）报 ssl/tls alert handshake failure(40)；
 #       访问域名（带 SNI）正常。openssl s_client 同样：无 SNI 失败、带 SNI 成功。
 # 根因：runtime tls_server(cert,key,host) 仅按 SNI 匹配证书，ClientHello 无 SNI
 #       时无默认证书回退 → 直接 alert 40。
 # 期望：无 SNI 应使用默认证书（首个注册证书）继续握手，返回 HTTP 200。
 # 实际：无 SNI → handshake failure；带 SNI → 200。
-# 复现（编译模式，与 ws-web 生产一致）：
+# 复现（编译模式，与生产应用一致）：
 #   ./tools/pxc build examples/repro_tls_no_sni_handshake.px
 #   examples/build/repro_tls_no_sni_handshake
 # ============================================================
@@ -24,7 +24,7 @@ write_file("/tmp/px_tls_sni_server.px", "tls_server(\"/tmp/px_tls_sni_cert.pem\"
 os_spawn("/bin/sh", ["-c", "cd /data/code/PuXian && ./tools/pxc build /tmp/px_tls_sni_server.px"])
 sleep(3000)
 
-# ---- 3. 后台启动 TLS 服务器（编译产物，与 ws-web 同 runtime；pxc build 输出到 /tmp/build/）----
+# ---- 3. 后台启动 TLS 服务器（编译产物，与生产应用同 runtime；pxc build 输出到 /tmp/build/）----
 p = os_spawn("/tmp/build/px_tls_sni_server", [])
 sleep(1200)
 

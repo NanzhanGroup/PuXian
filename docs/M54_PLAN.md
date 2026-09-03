@@ -5,7 +5,7 @@
 > validation）、流上限协商（STREAMS_BLOCKED / MAX_STREAMS）** 三项 RFC 9000/9114
 > 生产化特性，全部以 PuXian 语言 API 落地 + 自研双端/第三方互操作验证。
 >
-> 范围：仅 PuXian 语言/runtime 迭代（ws-web 归清歌，不在本里程碑）。
+> 范围：仅 PuXian 语言/runtime 迭代（外部生产应用归其维护方，不在本里程碑）。
 > 验证基调：与 M46–M53 一致——PuXian 自研 client ↔ 自研 server 回环 + 可外部
 > 互操作项用 aioquic（第三方独立实现）对拍。
 

@@ -20,7 +20,7 @@ PuXian 采用 **Apache License 2.0** 开源 —— 任何人可自由使用、�
 
 对本项目使用者最重要的几点：
 
-- **编译产物不受许可证约束**：你用 PuXian 写出的程序/服务（如 ws-web），可任意闭源商用，不构成衍生作品；
+- **编译产物不受许可证约束**：你用 PuXian 写出的程序/服务，可任意闭源商用，不构成衍生作品；
 - 修改并分发源码时，需保留版权声明与本 License 副本（Apache 宽松协议，不要求你的修改开源）；
 - **贡献方式**：项目初期以提 issue 为主（bug 报告 / 功能建议 / 使用反馈），暂不开放代码 PR，路线由核心团队掌控；
 - **Copyright © 2026 The PuXian Authors**
@@ -40,8 +40,8 @@ PuXian 采用 **Apache License 2.0** 开源 —— 任何人可自由使用、�
 |---|---|
 | ✅ **自举完成（M-B8）** | **PuXian 编译器由 PuXian 自己写成**：`lexer / parser / codegen / interp / 值系统` 五大核心全部用 `.px` 重写，自举证明 A.c == B.c == B2.c 逐字节一致 |
 | ✅ **Rust 版已退役（M-B9a）** | Rust 源码归档至 `archive/rust-compiler/`（只读），**新工具链 `tools/pxc` 完全无需 Rust**，基于自举二进制运行 |
-| ✅ **CI 已接入** | GitHub Actions：每次提交自动跑回归 + 自举证明 + 示例编译 + ws-web 冒烟 |
-| 🔄 **ws-web 开发中（M-B9b）** | 用 PuXian 写第一个生产应用（HTTP + SQLite 服务），见 `ws-web/` |
+| ✅ **CI 已接入** | GitHub Actions：每次提交自动跑回归 + 自举证明 + 示例编译 |
+| ✅ **dogfood 完成（M-B9b）** | 用 PuXian 写出第一个生产应用（HTTP + SQLite 服务），代码已迁至独立私有仓库维护 |
 
 > 现在克隆仓库即可用 `tools/pxc` 编译/运行 PuXian 程序，**不需要安装 Rust**。
 
@@ -160,11 +160,10 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 │   └── diffcheck.sh / bootstrap_prove.sh  # 对拍框架 / 自举证明
 ├── runtime/                # C 运行时（runtime.c/h + aes/xml/zip/ws/rsa/sqlite/route/h2/h3/quic + mbedtls + third_party）
 ├── stdlib/                 # 标准库（collections.px）
-├── ws-web/                 # 第一个生产应用（M-B9b，dogfooding）：HTTP + SQLite 服务骨架
 ├── examples/               # 80+ 个示例（hello / fib / match / 并发 / 网络 / TLS / SQLite / 推导式 ...）
 ├── archive/rust-compiler/  # Rust 版编译器源码归档（只读，自举前的实现，git 历史保留）
 ├── docs/                   # 文档（语言规格 spec / Mini 子集 / 路线图 ROADMAP）
-└── .github/workflows/ci.yml # CI：回归 + 自举证明 + 示例编译 + ws-web 冒烟
+└── .github/workflows/ci.yml # CI：回归 + 自举证明 + 示例编译
 ```
 
 ---
@@ -179,7 +178,6 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 | [CHANGELOG.md](CHANGELOG.md) | 变更日志（按里程碑记录重要变更） |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献指南（构建 / 测试 / 提 PR 规范） |
 | [SECURITY.md](SECURITY.md) | 安全漏洞报告策略 |
-| [ws-web/README.md](ws-web/README.md) | 第一个生产应用：快速开始 + 10 条避坑清单 |
 
 ---
 
@@ -207,7 +205,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 | M-B7 | interp 用 PuXian 重写 | stdout 8/8 + v01-v03 全 PASS |
 | M-B8 | **自举证明** | **A.c == B.c == B2.c 逐字节一致** 🎉 |
 | M-B9a | 退役 Rust 版 + 接入 CI + 引导链 | `tools/pxc` 全链路可用，CI 四 job |
-| M-B9b | ws-web（第一个生产应用） | 🔄 进行中（dogfooding 验证） |
+| M-B9b | 第一个生产应用（dogfooding 验证） | ✅ 已迁独立私有仓库维护 |
 
 ### 原生开发（M41–M54，自举后 PuXian 自身开发，全部 ✅）
 
@@ -275,8 +273,8 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 
 ## 生态与合作
 
-- **ws-web**（`ws-web/`）：第一个生产应用，HTTP + SQLite 服务，用于真实场景 dogfooding 验证 PuXian。
-- **问题反馈与贡献**：发现问题请附最小复现用例（单个 .px + 期望/实际输出）提交 issue（label：`ws-web-blocker` / `M-B9b`）；欢迎提交 PR 参与改进。
+- **仓库外私有生产应用**：PuXian 的第一个真实生产用户（HTTP + SQLite 服务，dogfooding 验证），代码维护于独立私有仓库。
+- **问题反馈与贡献**：发现问题请附最小复现用例（单个 .px + 期望/实际输出）提交 issue（label：`M-B9b`）；欢迎提交 PR 参与改进。
 
 ---
 
