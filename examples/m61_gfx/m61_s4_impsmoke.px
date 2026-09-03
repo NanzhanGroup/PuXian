@@ -1,0 +1,16 @@
+# ============================================================
+# M61 S4 m61_s4_impsmoke.px —— pxi stdlib import 能力探针（记录用）
+# ------------------------------------------------------------
+# 目的：如实记录 pxi（解释器）对 stdlib 点分 import 的限制。
+# 已知背景：MINI_SUBSET §十三 #8 —— 解释模式对相对路径 import + open/read 链
+# 失败（pxc run 报 io 读取失败）→ stdlib（std.gfx/std.png 等）主打编译模式；
+# pxi 仅同步 C 内置注册面（extern zlib_* 已同步，见 m61_s4_zpxi.px）。
+# 本文件若被 pxc run 解释：预期失败（import std.gfx 无法在解释器加载库文件）；
+# 若未来 pxi 支持点分 stdlib import，则输出 "IMPSMOKE OK"。
+# ============================================================
+import std.gfx
+
+var c = canvas_create(8, 8)
+set_px(c, 0, 0, 0xffffff)
+assert(get_px(c, 0, 0) == 0xffffff, "set_px/get_px 往返")
+print("IMPSMOKE OK")

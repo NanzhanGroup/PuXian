@@ -1,0 +1,31 @@
+# ============================================================
+# M61 S4 m61_s4_zpxi.px —— pxi 解释模式 zlib extern smoke（精简）
+# ------------------------------------------------------------
+# pxi（bootstrap/pxi）重建后含 runtime_zlib.c + libz.a → extern def zlib_*
+# 经 ffi_call C 桥（i_builtin_ffi_call）可用 —— 双模式（编译==解释）同能力
+# 刻意只用 pxi Mini 子集白名单 builtin（interp.px names 含 int_to_bytes/
+# read_bytes/type/assert，不含 bytes()/bytes_len/bytes_get/bytes_concat）
+#   → 文本 bytes 用 int_to_bytes 构造（"hello" = 0x68656c6c6f 大端 5B）
+#   → roundtrip 保真用「crc32 守恒」断言（crc(roundtrip)==crc(原)），
+#     替代 Mini 子集不可用的逐字节比较（编译模式已做字节级验证）
+# 退出：全过 → "M61-S4 PXI OK"
+# ============================================================
+import "c/zlib"
+
+extern def zlib_crc32(data: bytes) -> int
+extern def zlib_compress(data: bytes, level: int) -> bytes
+extern def zlib_uncompress(data: bytes) -> bytes
+
+var hello = int_to_bytes(0x68656c6c6f, 5)   # "hello"
+var h = zlib_crc32(hello)
+assert(h == 0x3610a686, "pxi zlib_crc32(hello) 应 0x3610a686, got " + str(h))
+
+var comp = zlib_compress(hello, 9)
+assert(comp != null, "pxi compress 不应 null")
+var un = zlib_uncompress(comp)
+assert(un != null, "pxi uncompress 不应 null")
+assert(zlib_crc32(un) == 0x3610a686, "pxi roundtrip crc32 守恒失败")
+
+var bad = zlib_uncompress(int_to_bytes(0xdeadbeef, 4))
+assert(bad == null, "pxi 非法流应 null")
+print("M61-S4 PXI OK")

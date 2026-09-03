@@ -1,0 +1,89 @@
+# ============================================================
+# M61 S4 m61_s4_zpng.px —— A+B 联动：FFI compress2 生成压缩 PNG
+# ------------------------------------------------------------
+# std.png 是 stored（no compression）零依赖编码器；本 demo 演示 A 线 zlib FFI
+# 收口：同一图像数据用 extern zlib_compress（libz.a deflate，真压缩）直接产出
+# 压缩 IDAT → PNG 文件显著小于 stored 版 → FFI 在真实 PNG 上的 dogfood。
+# 结构：签名 + IHDR（8bit RGB）+ IDAT = zlib_compress(rows,6) + IEND
+#       chunk CRC = 纯语言 CRC-32（与 std.png/__crc32 同源实现）
+# 退出：写 examples/m61_gfx/zpng.png → "M61-S4 ZPNG OK <bytes>"
+# ============================================================
+import "c/zlib"
+import std.gfx
+
+extern def zlib_compress(data: bytes, level: int) -> bytes
+
+# 纯语言 CRC-32（IEEE）
+def _crc32_table():
+    var t = []
+    var i = 0
+    while i < 256:
+        var cc = i
+        var j = 0
+        while j < 8:
+            if (cc & 1) == 1:
+                cc = (cc >>> 1) ^ 0xEDB88320
+            else:
+                cc = cc >>> 1
+            j = j + 1
+        t.append(cc)
+        i = i + 1
+    return t
+
+def _crc32(t, d):
+    var cc = 0xFFFFFFFF
+    var n = bytes_len(d)
+    var i = 0
+    while i < n:
+        cc = (cc >>> 8) ^ t[(cc ^ bytes_get(d, i)) & 0xff]
+        i = i + 1
+    return cc ^ 0xFFFFFFFF
+
+def _chunk(tbl, type_s, data):
+    var td = bytes_concat(bytes(type_s), data)
+    var crc = _crc32(tbl, td)
+    var c = bytes_concat(int_to_bytes(bytes_len(data), 4), td)
+    return bytes_concat(c, int_to_bytes(crc, 4))
+
+# ---- 图像：160x100 水平渐变 + 色块 + 文字 ----
+var W = 160
+var H = 100
+var c = canvas_create(W, H)
+var px = canvas_pixels(c)
+var y = 0
+while y < H:
+    var x = 0
+    while x < W:
+        px[y * W + x] = ((x * 5) & 0xff) << 16 | ((y * 5) & 0xff) << 8 | (((x + y) * 2) & 0xff)
+        x = x + 1
+    y = y + 1
+text(c, 10, 40, "ZPNG FFI", 0xffffff)
+
+# ---- 行数据（filter 0 + RGB）----
+var rows = bytes("")
+var yy = 0
+while yy < H:
+    var row = int_to_bytes(0, 1)
+    var xx = 0
+    while xx < W:
+        row = bytes_concat(row, int_to_bytes(px[yy * W + xx], 3))
+        xx = xx + 1
+    rows = bytes_concat(rows, row)
+    yy = yy + 1
+
+# ---- FFI 压缩 IDAT + 组装 ----
+var ihdr = bytes_concat(int_to_bytes(W, 4), int_to_bytes(H, 4))
+ihdr = bytes_concat(ihdr, int_to_bytes(8, 1))
+ihdr = bytes_concat(ihdr, int_to_bytes(2, 1))
+ihdr = bytes_concat(ihdr, int_to_bytes(0, 1))
+ihdr = bytes_concat(ihdr, int_to_bytes(0, 1))
+ihdr = bytes_concat(ihdr, int_to_bytes(0, 1))
+var idat = zlib_compress(rows, 6)
+assert(idat != null, "zlib_compress 失败")
+var tbl = _crc32_table()
+var out = hex_to_bytes("89504e470d0a1a0a")
+out = bytes_concat(out, _chunk(tbl, "IHDR", ihdr))
+out = bytes_concat(out, _chunk(tbl, "IDAT", idat))
+out = bytes_concat(out, _chunk(tbl, "IEND", bytes("")))
+write_bytes("examples/m61_gfx/zpng.png", out)
+print("M61-S4 ZPNG OK", bytes_len(out), "idat", bytes_len(idat))
