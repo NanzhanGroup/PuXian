@@ -1,0 +1,115 @@
+# ============================================================
+# M61 S1 m61_zlib.px —— A 线 FFI proof：外部系统库 zlib 绑定
+# ------------------------------------------------------------
+# 验证点：
+#   A. zlib_crc32("hello") == 0x3610a686（已知值）+ 空串 == 0
+#   B. 纯语言 CRC-32 查表实现（IEEE poly 0xEDB88320）与 zlib libz.a 逐组互证
+#      （含标准 check 串 "123456789" == 0xCBF43926）
+#   C. compress2 → uncompress roundtrip：可压缩长文本还原逐字节一致 + 压缩率 < 1
+#      （uncompress 走 z_stream inflate 渐进扩容，覆盖 realloc 路径）
+#   D. 二进制 NUL 安全（base64 构造含 0x00 字节串 roundtrip）
+#   E. 空串 roundtrip
+#   F. 失败语义：非法 deflate 流 → zlib_uncompress == null（不杀进程，可检查）
+#   G. 压缩级别 level 0/6/9 roundtrip 一致
+# 说明：zlib_* 是 extern def → 查 C 侧 FFI 注册表（px_register_zlib，runtime_zlib.c）
+#   → 真正调用 libz.a（x86_64/aarch64 两版入库，pxc 无条件链）。
+#   纯语言 CRC32 与 zlib crc32() 双实现互证 → 证明外部库调用真实发生且正确。
+# 退出：全过 → "M61-S1 OK" 退出码 0
+# ============================================================
+import "c/zlib"
+
+extern def zlib_crc32(data: bytes) -> int
+extern def zlib_compress(data: bytes, level: int) -> bytes
+extern def zlib_uncompress(data: bytes) -> bytes
+
+# ---- 纯语言 CRC-32 查表（IEEE poly 0xEDB88320）----
+def crc32_table():
+    t = []
+    i = 0
+    while i < 256:
+        c = i
+        j = 0
+        while j < 8:
+            if (c & 1) == 1:
+                c = (c >>> 1) ^ 0xEDB88320
+            else:
+                c = c >>> 1
+            j += 1
+        t.append(c)
+        i += 1
+    return t
+
+def crc32_pure(t, b):
+    c = 0xFFFFFFFF
+    n = bytes_len(b)
+    i = 0
+    while i < n:
+        c = (c >>> 8) ^ t[(c ^ bytes_get(b, i)) & 0xff]
+        i += 1
+    return c ^ 0xFFFFFFFF
+
+# ---- A. 已知值 ----
+assert(zlib_crc32(bytes("hello")) == 0x3610a686, "zlib_crc32(hello) 应为 0x3610a686")
+assert(zlib_crc32(bytes("")) == 0, "zlib_crc32(空串) 应为 0")
+assert(zlib_crc32(bytes("123456789")) == 0xCBF43926, "标准 check 串 123456789 应为 0xCBF43926")
+print("A: zlib_crc32 已知值 PASS")
+
+# ---- B. 纯语言 CRC32 互证 ----
+var tbl = crc32_table()
+var cases = ["hello", "PuXian", "123456789", "The quick brown fox jumps over the lazy dog", ""]
+var i = 0
+while i < len(cases):
+    var s = cases[i]
+    var b = bytes(s)
+    var pure = crc32_pure(tbl, b)
+    var lib = zlib_crc32(b)
+    assert(pure == lib, "CRC 互证失败: " + s + " pure=" + str(pure) + " zlib=" + str(lib))
+    i += 1
+print("B: 纯语言 CRC32 与 libz.a 互证 PASS (" + str(len(cases)) + " 组)")
+
+# ---- C. roundtrip：可压缩长文本（uncompress 渐进扩容路径）----
+var long = ""
+var k = 0
+while k < 200:
+    long += "PuXian 2D game loop ticks; zlib external FFI proof; "
+    k += 1
+var src = bytes(long)
+var comp = zlib_compress(src, 6)
+assert(comp != null, "zlib_compress 不应返回 null")
+assert(bytes_len(comp) < bytes_len(src), "压缩率应 < 1: " + str(bytes_len(comp)) + " vs " + str(bytes_len(src)))
+var un = zlib_uncompress(comp)
+assert(un != null, "zlib_uncompress 不应返回 null")
+assert(bytes_len(un) == bytes_len(src), "roundtrip 长度应一致")
+assert(bytes_to_str(un) == long, "roundtrip 内容应逐字节还原")
+print("C: compress→uncompress roundtrip PASS (src=" + str(bytes_len(src)) + "B → comp=" + str(bytes_len(comp)) + "B)")
+
+# ---- D. 二进制 NUL 安全 ----
+var raw = base64_to_bytes("YQABAWI=")          # "a\x00\x01\x01b"（含 NUL；实测 hex 6100010162）
+assert(raw != null, "base64 解码失败")
+var comp2 = zlib_compress(raw, 6)
+var un2 = zlib_uncompress(comp2)
+assert(un2 != null, "二进制 roundtrip uncompress 失败")
+assert(bytes_to_hex(un2) == "6100010162", "NUL 字节 roundtrip 应逐字节一致")
+assert(bytes_len(un2) == bytes_len(raw), "NUL roundtrip 长度一致")
+print("D: 二进制 NUL 安全 roundtrip PASS")
+
+# ---- E. 空串 roundtrip ----
+var comp3 = zlib_compress(bytes(""), 6)
+var un3 = zlib_uncompress(comp3)
+assert(un3 != null, "空串 uncompress 失败")
+assert(bytes_len(un3) == 0, "空串 roundtrip 长度应 0")
+print("E: 空串 roundtrip PASS")
+
+# ---- F. 非法流失败语义（不杀进程 → null 可检查）----
+var bad = zlib_uncompress(bytes("garbage-not-a-deflate-stream-0123456789"))
+assert(bad == null, "非法 deflate 流应返回 null")
+print("F: 非法流 → null PASS")
+
+# ---- G. 压缩级别 level 0/9 roundtrip ----
+var g0 = zlib_uncompress(zlib_compress(src, 0))
+var g9 = zlib_uncompress(zlib_compress(src, 9))
+assert(g0 != null and g9 != null, "level 0/9 roundtrip 失败")
+assert(bytes_to_str(g0) == long and bytes_to_str(g9) == long, "level 0/9 roundtrip 内容一致")
+print("G: level 0/9 roundtrip PASS")
+
+print("M61-S1 OK")

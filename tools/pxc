@@ -71,7 +71,7 @@ copy_runtime() {
     # M57-S4：--no-quic 时不复制 QUIC/H3/QPACK 源（runtime.c 已用 PX_NO_QUIC 条件编译屏蔽引用）
     local rt_files="runtime.h runtime.c runtime_aes.c runtime_xml.c runtime_zip.c \
              runtime_ws.c runtime_rsa.c runtime_sqlite.c runtime_route.c runtime_h2.c \
-             runtime_ffi.c"
+             runtime_ffi.c runtime_zlib.c"
     if [ "$no_quic" != "1" ]; then
         rt_files="$rt_files runtime_quic.c runtime_h3.c runtime_h3_qpack.c \
              runtime_h3_qpack_dyn.c runtime_h3_qpack.h runtime_h3_qpack_tbl.h \
@@ -162,7 +162,8 @@ cmd_build() {
         \"$build_dir/runtime_xml.c\" \"$build_dir/runtime_zip.c\" \
         \"$build_dir/runtime_ws.c\" \"$build_dir/runtime_rsa.c\" \
         \"$build_dir/runtime_sqlite.c\" \"$build_dir/runtime_route.c\" \
-        \"$build_dir/runtime_h2.c\" \"$build_dir/runtime_ffi.c\""
+        \"$build_dir/runtime_h2.c\" \"$build_dir/runtime_ffi.c\" \
+        \"$build_dir/runtime_zlib.c\""
     if [ "$no_quic" != "1" ]; then
         rt_srcs="$rt_srcs \"$build_dir/runtime_quic.c\" \"$build_dir/runtime_h3.c\" \
         \"$build_dir/runtime_h3_qpack.c\" \"$build_dir/runtime_h3_qpack_dyn.c\""
