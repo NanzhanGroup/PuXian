@@ -16,12 +16,14 @@
 #   PXHWMON_SHM             共享文件路径（CLI --shm 优先）
 #   PXHWMON_PORT            HTTP 端口（CLI --port 优先）
 #   PXHWMON_ALERT_*         告警阈值（见 notify.px）
-#   PXHWMON_WEBHOOK         webhook URL（dry-run 落盘，见 notify.px）
+#   PXHWMON_WEBHOOK         webhook URL（真发，见 notify.px）
+#   PXHWMON_WEBHOOK_LOG     webhook 发送结果日志路径（默认 /tmp/pxhwmond_webhook.jsonl）
 # 每轮输出（S3 起）：
 #   SNAP ts= cpu= mem_total= mem_avail= load1= load5= load15= up=
 #        temp= net_rx= net_tx= [ctl=<外部命令回显>]
 # S3 增量：--port 起 serve_http（手写 HTTP /healthz JSON + / HTML + 404，
-#   显式响应头）；每轮 check_alerts 阈值告警 → 告警日志 + webhook dry-run。
+#   显式响应头）；每轮 check_alerts 阈值告警 → 告警日志 + webhook 真发
+#   （Err 语义升级：HTTP 客户端网络失败可检查，daemon 内安全发送）。
 # ============================================================
 import "collect.px"
 import "shm.px"
@@ -122,7 +124,7 @@ def do_round(prev, shm_path):
     var al = check_alerts(line)
     for a in al:
         write_alert_log(a)
-        webhook_dryrun(a)
+        webhook_send(a)
     if shm_path != "":
         shm_write_snap(shm_path, line + "\n")
     print(line)

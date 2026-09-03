@@ -1,5 +1,5 @@
 # ============================================================
-# pxhwmond（M58 S3）notify.px —— 阈值告警 + 通知（MONITORING/P0）
+# pxhwmond（M58 S3，Err 语义升级）notify.px —— 阈值告警 + 通知
 # ------------------------------------------------------------
 # 阈值 env（SECURITY/P0：无配置文件、无密钥落盘；未设 → 该类告警不启用）：
 #   PXHWMON_ALERT_MEM_AVAIL_KB   mem_avail < 阈值 → 内存不足告警（单位 kB）
@@ -7,12 +7,11 @@
 #   PXHWMON_ALERT_TEMP_MC        temp(毫°C) > 阈值 → 高温告警（temp=na 跳过）
 # 通知通道：
 #   1) 告警日志 append（PXHWMON_ALERT_LOG 覆盖，默认 /tmp/pxhwmond_alerts.jsonl）
-#   2) webhook dry-run：PXHWMON_WEBHOOK 设置 → 报文 JSON 落盘
-#      /tmp/pxhwmond_webhook_dryrun.jsonl（url + alert + ts）
-#   —— 语言 http_post 对不可达目标直接 panic（无错误返回）、spawn 协程不隔离
-#   panic（实测整个进程被杀）→ 长期 daemon 内不能安全发起网络通知请求；
-#   dry-run 验证"通知报文生成正确"，真实网络发送待语言 HTTP 客户端补错误
-#   返回后启用（MINI_SUBSET 欠账，M58 README 边界说明）。
+#   2) webhook 真发（原 dry-run 已解禁）：PXHWMON_WEBHOOK 设置 → http_request
+#      POST application/json 到目标；网络失败不再 panic（HTTP 客户端 Err 语义，
+#      M58 dogfood 欠账 MINI_SUBSET §十三 #1/#2 修复后闭环），结果（sent 布尔 +
+#      err/status）append 到发送日志（PXHWMON_WEBHOOK_LOG 覆盖，默认
+#      /tmp/pxhwmond_webhook.jsonl）。超时 3s 不重试，daemon 采样不被拖死。
 # ============================================================
 import "collect.px"
 
@@ -49,17 +48,42 @@ def write_alert_log(alert):
         path = p
     append_file(path, alert + "\n")
 
-# ---- webhook dry-run：报文落盘（真实网络发送受语言欠账限制，见文件头）----
-def webhook_dryrun(alert):
+# ---- webhook 真发（Err 语义 dogfood 闭环）：失败可检查、进程不死 ----
+# 发送载荷 {ts, source, alert}；结果日志 {ts, url, alert, sent, [err|status]}。
+def webhook_send(alert):
     var url = env("PXHWMON_WEBHOOK")
     if url == null:
         return
-    var path = "/tmp/pxhwmond_webhook_dryrun.jsonl"
-    var p = env("PXHWMON_WEBHOOK_DRYRUN_LOG")
-    if p != null:
-        path = p
-    var d = json_parse("{}")
-    d["ts"] = now_ms()
-    d["url"] = url
-    d["alert"] = alert
-    append_file(path, json_stringify(d) + "\n")
+    var log = "/tmp/pxhwmond_webhook.jsonl"
+    var lp = env("PXHWMON_WEBHOOK_LOG")
+    if lp != null:
+        log = lp
+    # 发送载荷（目标收到的 JSON）
+    var payload = json_parse("{}")
+    payload["ts"] = now_ms()
+    payload["source"] = "pxhwmond"
+    payload["alert"] = alert
+    var hd = json_parse("{}")
+    hd["Content-Type"] = "application/json"
+    var opt = json_parse("{}")
+    opt["timeout_ms"] = 3000
+    opt["retries"] = 0
+    # http_request 成功 → dict{status,headers,body}；网络失败 → Err(result)
+    var resp = http_request(url, "POST", json_stringify(payload), hd, opt)
+    # 结果记录（可追溯：url + 成功/失败 + 原因）
+    var rec = json_parse("{}")
+    rec["ts"] = now_ms()
+    rec["url"] = url
+    rec["alert"] = alert
+    rec["sent"] = false
+    if type(resp) == "result" and resp.is_err():
+        # 网络失败（连接拒绝/超时/协议等）→ 记 err，进程继续存活
+        rec["err"] = resp.err()
+    else:
+        var st = resp["status"]
+        rec["status"] = st
+        if st >= 200 and st < 300:
+            rec["sent"] = true
+        else:
+            rec["err"] = "http_status=" + str(st)
+    append_file(log, json_stringify(rec) + "\n")
