@@ -11,6 +11,7 @@ examples/*/build/
 selfhost/build/
 selfhost/cases/build/
 selfhost/cases_bad/build/
+tools/build/
 
 # M45 演示应用动态生成物（verify.sh 每次重建）
 examples/m45_pkgdemo/app/

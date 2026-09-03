@@ -1,0 +1,354 @@
+# ============================================================
+# M64-S2: fmt_core.px —— 格式化核心（自包含，无顶层全局依赖）
+# ------------------------------------------------------------
+# 对齐 Rust archive/rust-compiler/src/fmt.rs（620 行）：
+#   - 统一缩进 4 空格（S2 固定；--indent/--quote/--config 留档后续）
+#   - 运算符两侧空格（一元紧贴）、逗号/冒号后空格、括号内无空格
+#   - 函数调用 f( 无空格、关键字 if ( 有空格、fn( 无空格、not 前空格
+#   - 注释保留（行首按原列对齐、行内前补 2 空格；块注释原文保留）
+#   - 字符串/数字用 fmtlexer 规范化 val 渲染（浮点补 .0 保语义）
+#   - 连续空行压缩为 1；末尾无空行、文件末尾单换行
+# 保证：格式化后重新词法分析，语义 token 序列等价。
+# 本文件只含 def（无顶层 var/let），import 时零全局声明负担。
+# 入口：fmt_format(toks)（toks = fmtlexer.lex_tokens_keep 输出）。
+# ============================================================
+# ---------- 渲染 token 文本 ----------
+def tok_text(t):
+    let k = t[0]
+    if k == "整数":
+        return t[1]
+    if k == "浮点":
+        let fs = t[1]
+        # 整数值浮点（val 被 fmtlexer 去掉 .0）必须补回小数点，
+        # 否则重 lex 变整数语义改变（对齐 Rust render Float 分支）
+        if not has_dot_e(fs):
+            return fs + ".0"
+        return fs
+    if k == "字符串":
+        return t[1]
+    if k == "标识符":
+        return t[1]
+    return k
+def has_dot_e(s):
+    var i = 0
+    while i < len(s):
+        let c = s[i]
+        if c == "." or c == "e" or c == "E":
+            return true
+        i += 1
+    return false
+# ---------- 空格判定（对齐 Rust needs_space / is_unary_context） ----------
+def needs_space(p2, p, c):
+    # 当前 token 前不加空格（左紧贴）：) ] } . ?. , : !
+    if c == ")" or c == "]" or c == "}" or c == "." or c == "?." or c == "," or c == ":" or c == "!":
+        return false
+    # 前一个 token 后不加空格（右紧贴）：( [ { . ?. ~
+    if p == "(" or p == "[" or p == "{" or p == "." or p == "?." or p == "~":
+        return false
+    # 一元 +/- 后紧贴操作数：prev 是 +/- 且 p2 是一元上下文（如 add(-1, 1) 的 -1、
+    # 1 + -2 的 -2、x = -1 的 -1）。- 号与其操作数之间不空格。
+    # 注：Rust fmt.rs 另有"cur 是 +/- 且 prev 一元上下文 → 前不空格"一条，会把
+    #   `x = -1`/`1 + -2` 压成 `x =-1`/`1 +-2`；此处去掉该条（运算符后保留空格，
+    #   与全仓惯例及 <- 列表追加歧义规避一致），仅保留本条保证 -1 内部紧贴。
+    if (p == "-" or p == "+") and is_unary_ctx(p2):
+        return false
+    # 函数调用 f( / 下标 a[
+    if p == "标识符" and (c == "(" or c == "["):
+        return false
+    # 值后紧跟左括号（链式调用）如 )( a( 1( 无空格
+    if is_value_kind(p) and (c == "(" or c == "["):
+        return false
+    # fn(x) 无空格；其他关键字 + ( 有空格（if ( 等）
+    if p == "fn" and c == "(":
+        return false
+    # not 与操作数之间要空格
+    if c == "not":
+        return true
+    return true
+def is_value_kind(k):
+    if k == "整数" or k == "浮点" or k == "字符串":
+        return true
+    if k == ")" or k == "]" or k == "}":
+        return true
+    if k == "true" or k == "false" or k == "null":
+        return true
+    return false
+def is_unary_ctx(p):
+    # 运算符：cur 跟在以下符号后时构成一元 +/- 上下文
+    if p == "+" or p == "-" or p == "*" or p == "/" or p == "//" or p == "%" or p == "**":
+        return true
+    if p == "==" or p == "!=" or p == "<" or p == "<=" or p == ">" or p == ">=":
+        return true
+    if p == "and" or p == "or" or p == "not":
+        return true
+    if p == "&" or p == "|" or p == "^" or p == "<<" or p == ">>" or p == ">>>":
+        return true
+    if p == "=" or p == "+=" or p == "-=" or p == "*=" or p == "/=" or p == "//=" or p == "%=" or p == "**=":
+        return true
+    if p == "&=" or p == "|=" or p == "^=" or p == "<<=" or p == ">>=" or p == ">>>=":
+        return true
+    if p == "|>" or p == "??" or p == "->":
+        return true
+    if p == "(" or p == "[" or p == "{" or p == "," or p == ":":
+        return true
+    # 行结构 token：换行后的一元（行首）
+    if p == "换行" or p == "缩进" or p == "去缩进":
+        return true
+    # 关键字（对齐 Rust：let/var/const/return/if/elif/else/for/while/in/
+    #   def/fn/match/case/spawn/chan/select/send/recv/import/from/as/pub/capture）
+    if p == "let" or p == "var" or p == "const" or p == "return":
+        return true
+    if p == "if" or p == "elif" or p == "else" or p == "for" or p == "while" or p == "in":
+        return true
+    if p == "def" or p == "fn" or p == "match" or p == "case":
+        return true
+    if p == "spawn" or p == "chan" or p == "select" or p == "send" or p == "recv":
+        return true
+    if p == "import" or p == "from" or p == "as" or p == "pub" or p == "capture":
+        return true
+    return false
+# ---------- 行尾去尾随空格 ----------
+def trim_trail(s):
+    var out = s
+    while ends_with(out, " "):
+        out = out[0: len(out) - 1]
+    return out
+# ---------- 空行压缩 + 末尾单换行（对齐 Rust 尾部处理） ----------
+def compress_blank(s):
+    let lines = s.split("\n")
+    var kept = []
+    var blank_run = 0
+    var i = 0
+    while i < len(lines):
+        let line = lines[i]
+        if trim(line) == "":
+            blank_run += 1
+            if blank_run > 1:
+                i += 1
+                continue
+            kept.append("")
+        else:
+            blank_run = 0
+            kept.append(line)
+        i += 1
+    while len(kept) > 0 and trim(kept[len(kept) - 1]) == "":
+        kept.pop()
+    var out = ""
+    var j = 0
+    while j < len(kept):
+        if j > 0:
+            out += "\n"
+        out += kept[j]
+        j += 1
+    out += "\n"
+    return out
+# ---------- 主格式化入口（toks = lex_tokens_keep 输出） ----------
+def fmt_format(toks):
+    var out = ""
+    var level = 0
+    var at_line_start = true
+    var prev = ""
+    var prev2 = "换行"
+    var i = 0
+    while i < len(toks):
+        let t = toks[i]
+        let k = t[0]
+        if k == "EOF":
+            break
+        if k == "换行":
+            out = trim_trail(out)
+            out += "\n"
+            at_line_start = true
+            prev2 = prev
+            prev = k
+            i += 1
+            continue
+        if k == "缩进":
+            level += 1
+            if not at_line_start:
+                out += "\n"
+            at_line_start = true
+            prev2 = prev
+            prev = k
+            i += 1
+            continue
+        if k == "去缩进":
+            if level > 0:
+                level -= 1
+            if not at_line_start:
+                out += "\n"
+            at_line_start = true
+            prev2 = prev
+            prev = k
+            i += 1
+            continue
+        if k == "注释":
+            if at_line_start:
+                # 行首注释：按原列缩进对齐（块注释可跨行，原文保留）
+                let col = t[3]
+                if col > 1:
+                    var sp = 0
+                    while sp < col - 1:
+                        out += " "
+                        sp += 1
+                out += t[1]
+                at_line_start = false
+            else:
+                # 行内注释：前补两个空格
+                out = trim_trail(out)
+                out += "  " + t[1]
+                at_line_start = false
+            prev2 = prev
+            prev = k
+            i += 1
+            continue
+        # 普通 token
+        if at_line_start:
+            var li = 0
+            while li < level:
+                out += "    "
+                li += 1
+            at_line_start = false
+        elif prev != "" and prev2 != "":
+            if needs_space(prev2, prev, k):
+                out += " "
+        out += tok_text(t)
+        prev2 = prev
+        prev = k
+        i += 1
+    return compress_blank(out)
+# ============================================================
+# unified diff（对齐 fmt.rs M25：行级 LCS，@@ hunk + 上下文 3 行）
+# 无差异返回空串。
+# ============================================================
+def lcs_dp(a, b):
+    let n = len(a)
+    let m = len(b)
+    var dp = []
+    var r = 0
+    while r <= n:
+        var row = []
+        var c2 = 0
+        while c2 <= m:
+            row.append(0)
+            c2 += 1
+        dp.append(row)
+        r += 1
+    var i = n - 1
+    while i >= 0:
+        var j = m - 1
+        while j >= 0:
+            if a[i] == b[j]:
+                dp[i][j] = dp[i + 1][j + 1] + 1
+            elif dp[i + 1][j] >= dp[i][j + 1]:
+                dp[i][j] = dp[i + 1][j]
+            else:
+                dp[i][j] = dp[i][j + 1]
+            j -= 1
+        i -= 1
+    return dp
+def unified_diff(orig, new):
+    let a = orig.split("\n")
+    let b = new.split("\n")
+    if len(a) == len(b):
+        var same = true
+        var i = 0
+        while i < len(a):
+            if a[i] != b[i]:
+                same = false
+                break
+            i += 1
+        if same:
+            return ""
+    let dp = lcs_dp(a, b)
+    # 回溯 op 序列：0=同 1=删 2=增
+    var ops = []
+    var i = 0
+    var j = 0
+    while i < len(a) and j < len(b):
+        if a[i] == b[j]:
+            ops.append([0, a[i]])
+            i += 1
+            j += 1
+        elif dp[i + 1][j] >= dp[i][j + 1]:
+            ops.append([1, a[i]])
+            i += 1
+        else:
+            ops.append([2, b[j]])
+            j += 1
+    while i < len(a):
+        ops.append([1, a[i]])
+        i += 1
+    while j < len(b):
+        ops.append([2, b[j]])
+        j += 1
+    # 变化点分组
+    let ctx = 3
+    var changes = []
+    var oi = 0
+    while oi < len(ops):
+        if ops[oi][0] != 0:
+            changes.append(oi)
+        oi += 1
+    if len(changes) == 0:
+        return ""
+    var out = "--- original\n+++ formatted\n"
+    var gi = 0
+    while gi < len(changes):
+        var gj = gi + 1
+        while gj < len(changes) and changes[gj] - changes[gj - 1] < 2 * ctx + 1:
+            gj += 1
+        let first = changes[gi]
+        let last = changes[gj - 1]
+        var start = first - ctx
+        if start < 0:
+            start = 0
+        var end = last + ctx + 1
+        if end > len(ops):
+            end = len(ops)
+        out += emit_hunk(ops, start, end)
+        gi = gj
+    return out
+def emit_hunk(ops, start, end):
+    # 计算 hunk 起始行号（1-based）
+    var o_line = 1
+    var n_line = 1
+    var i = 0
+    while i < start:
+        if ops[i][0] == 0:
+            o_line += 1
+            n_line += 1
+        elif ops[i][0] == 1:
+            o_line += 1
+        else:
+            n_line += 1
+        i += 1
+    var o_count = 0
+    var n_count = 0
+    i = start
+    while i < end:
+        if ops[i][0] == 0:
+            o_count += 1
+            n_count += 1
+        elif ops[i][0] == 1:
+            o_count += 1
+        else:
+            n_count += 1
+        i += 1
+    if o_count < 1:
+        o_count = 1
+    if n_count < 1:
+        n_count = 1
+    var hdr = "@@ -" + str(o_line) + "," + str(o_count) + " +" + str(n_line) + "," + str(n_count) + " @@\n"
+    var txt = ""
+    txt += hdr
+    i = start
+    while i < end:
+        if ops[i][0] == 0:
+            txt += " " + ops[i][1] + "\n"
+        elif ops[i][0] == 1:
+            txt += "-" + ops[i][1] + "\n"
+        else:
+            txt += "+" + ops[i][1] + "\n"
+        i += 1
+    return txt

@@ -32,6 +32,7 @@ PXC_BIN="$PXC_HOME/bootstrap/pxc"
 PXI_BIN="$PXC_HOME/bootstrap/pxi"
 PXL_BIN="$PXC_HOME/bootstrap/pxl"     # lexer.px 编译版（pxc lex 用）
 PXPAR_BIN="$PXC_HOME/bootstrap/pxpar" # parser.px 编译版（pxc parse 用）
+PXFMT_BIN="$PXC_HOME/bootstrap/pxfmt" # fmt_core+pxfmt 编译版（pxc fmt 用，M64a）
 RT_DIR="$PXC_HOME/runtime"
 SELFHOST_VER="0.1.0"
 SELFHOST_MILESTONE="M-B9a"
@@ -58,6 +59,8 @@ pxc $(echo "$SELFHOST_VER") (普贤 PuXian · selfhosted $SELFHOST_MILESTONE)
   pxc run <file.px> [args...]                 解释执行
   pxc lex <file.px>                           词法分析并打印 Token 流（调试）
   pxc parse <file.px>                         语法分析并打印 AST（调试）
+  pxc fmt <file.px> [-w] [--check] [--diff]   代码格式化（M64a 自举；默认 stdout，
+                                              -w 写回 / --check 仅检查 / --diff 打印差异）
   pxc --version                               输出版本号
   pxc help                                    显示本帮助
 EOF
@@ -218,6 +221,11 @@ cmd_parse() {
     "$PXPAR_BIN" "$file" 2>&1
 }
 
+# M64a：px fmt（PuXian 自举格式化器，bootstrap/pxfmt）
+cmd_fmt() {
+    "$PXFMT_BIN" "$@"
+}
+
 # ---- 入口 ----
 cmd="${1:-help}"
 case "$cmd" in
@@ -225,6 +233,7 @@ case "$cmd" in
     run)   shift; [ $# -ge 1 ] || { echo "用法: pxc run <file.px>" >&2; exit 1; }; cmd_run "$@" ;;
     lex)   shift; [ $# -ge 1 ] || { echo "用法: pxc lex <file.px>" >&2; exit 1; }; cmd_lex "$1" ;;
     parse) shift; [ $# -ge 1 ] || { echo "用法: pxc parse <file.px>" >&2; exit 1; }; cmd_parse "$1" ;;
+    fmt)   shift; [ $# -ge 1 ] || { echo "用法: pxc fmt <file.px> [-w] [--check] [--diff]" >&2; exit 1; }; cmd_fmt "$@" ;;
     --version|-v) echo "pxc $SELFHOST_VER (普贤 PuXian · selfhosted $SELFHOST_MILESTONE)";;
     help|--help|-h) usage ;;
     *) echo "未知子命令: $cmd" >&2; usage >&2; exit 1 ;;

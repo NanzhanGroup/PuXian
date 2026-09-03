@@ -1,0 +1,90 @@
+# ============================================================
+# M64-S2: pxfmt.px —— 普贤代码格式化器 CLI（自举版，px fmt 等价物）
+# ------------------------------------------------------------
+# 对齐 Rust archive/rust-compiler/src/main.rs run_fmt：
+#   默认输出格式化结果到 stdout；-w 写回；--check 仅检查（不一致退出 1）；
+#   --diff 打印 unified diff（无差异退出 0）。
+# S2 范围：默认 4 空格缩进 + 双引号（--indent/--quote/--config 留档 M64 后续）。
+# 依赖：import fmtlexer.px（keep-lexer 底座）+ fmt_core.px（格式化核心）。
+# 入口惯例：import 只注册 def，顶层 var/let 不注册 → 在此重复声明
+#   fmtlexer 引用的全部顶层全局（§9.3，lexer.px 同构惯例）。
+# 构建：tools/pxc build tools/pxfmt.px → cp tools/build/pxfmt bootstrap/pxfmt
+# ============================================================
+import "fmtlexer.px"
+import "fmt_core.px"
+# ---------- 全局声明（供 fmtlexer 的 def 引用；必须与 fmtlexer.px 顶部一致） ----------
+var g_src = ""
+var g_len = 0
+var g_pos = 0
+var g_line = 1
+var g_col = 1
+var g_indent_stack = [0]
+var g_at_line_start = true
+var g_toks = []
+var g_count = 0
+var g_pending = []
+var g_keep = false
+let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn": "fn", "struct": "struct", "enum": "enum", "trait": "trait", "impl": "impl", "match": "match", "case": "case", "if": "if", "elif": "elif", "else": "else", "for": "for", "while": "while", "in": "in", "and": "and", "or": "or", "not": "not", "return": "return", "break": "break", "continue": "continue", "import": "import", "from": "from", "pub": "pub", "as": "as", "spawn": "spawn", "chan": "chan", "send": "send", "recv": "recv", "select": "select", "true": "true", "false": "false", "null": "null", "None": "null", "self": "self", "capture": "capture", "extern": "extern"}
+let CTRL_ALL = "\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}\u{8}\u{b}\u{c}\u{e}\u{f}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1a}\u{1b}\u{1c}\u{1d}\u{1e}\u{1f}\u{7f}\u{80}\u{81}\u{82}\u{83}\u{84}\u{85}\u{86}\u{87}\u{88}\u{89}\u{8a}\u{8b}\u{8c}\u{8d}\u{8e}\u{8f}\u{90}\u{91}\u{92}\u{93}\u{94}\u{95}\u{96}\u{97}\u{98}\u{99}\u{9a}\u{9b}\u{9c}\u{9d}\u{9e}\u{9f}"
+def usage():
+    print("pxfmt —— PuXian 代码格式化器（自举，M64a）")
+    print("用法: pxfmt <file.px> [-w|--write] [--check] [--diff] [--version]")
+def main():
+    let as_ = args()
+    var file = ""
+    var write_back = false
+    var check_only = false
+    var diff_only = false
+    var i = 0
+    while i < len(as_):
+        let a = as_[i]
+        if a == "-w" or a == "--write":
+            write_back = true
+        elif a == "--check":
+            check_only = true
+        elif a == "--diff":
+            diff_only = true
+        elif a == "--version" or a == "-v":
+            print("pxfmt 0.1.0 (普贤 PuXian fmt · M64a 自举)")
+            exit(0)
+        elif a == "--help" or a == "-h":
+            usage()
+            exit(0)
+        elif not starts_with(a, "-"):
+            file = a
+        i += 1
+    if file == "":
+        usage()
+        exit(2)
+    if not exists(file):
+        print("错误: 无法读取文件 " + file)
+        exit(1)
+    let src = read_file(file)
+    let toks = lex_tokens_keep(src)
+    let formatted = fmt_format(toks)
+    if diff_only:
+        if formatted != src:
+            let d = unified_diff(src, formatted)
+            # print 自动补尾换行：去掉 diff 自带尾 \n 避免多空行
+            if ends_with(d, "\n"):
+                print(d[0: len(d) - 1])
+            else:
+                print(d)
+        exit(0)
+    elif check_only:
+        if formatted == src:
+            print(file + ": 格式正确")
+            exit(0)
+        print(file + ": 格式需要调整（运行 `pxc fmt -w " + file + "` 修复）")
+        exit(1)
+    elif write_back:
+        write_file(file, formatted)
+        print("已格式化: " + file)
+        exit(0)
+    else:
+        # 默认 stdout：formatted 以 \n 结尾，print 自动补一个 → 去掉尾 \n 保证单换行
+        if ends_with(formatted, "\n"):
+            print(formatted[0: len(formatted) - 1])
+        else:
+            print(formatted)
+        exit(0)
