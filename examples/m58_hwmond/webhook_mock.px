@@ -1,0 +1,36 @@
+# ============================================================
+# webhook_mock.px —— pxhwmond 通知真发的本地接收 mock（PuXian 自举）
+# ------------------------------------------------------------
+# 用途：M58 dogfood 闭环验证 —— notify.px webhook_send 真发 POST 时，
+#   本 mock 用 http_serve（M16 编译模式）接收并把 method/path/body
+#   落盘（JSONL），供 verify_s3.sh 断言"daemon 真发出去了、报文正确"。
+# 运行（env，SECURITY/P0：无配置落盘）：
+#   PXHWMON_MOCK_PORT=19999 PXHWMON_MOCK_LOG=/tmp/pxhwmond_mock.jsonl
+#   ./examples/m58_hwmond/build/webhook_mock
+# 就绪：stdout 打印 "MOCK-READY port=..." 后进入接收循环（sleep 保活，
+#   由调用方 kill 结束）；每收一 POST 追加一行
+#   {"method":"POST","path":"/alert","body":"{...}"}
+# ============================================================
+
+# ---- 每收一请求：落盘 method/path/body ----
+def handler(req):
+    var path = "/tmp/pxhwmond_mock.jsonl"
+    var p = env("PXHWMON_MOCK_LOG")
+    if p != null:
+        path = p
+    var rec = json_parse("{}")
+    rec["method"] = req["method"]
+    rec["path"] = req["path"]
+    rec["body"] = req["body"]
+    append_file(path, json_stringify(rec) + "\n")
+    return {"status": 200, "body": "ok"}
+
+# ---- 入口：env 读端口 → 起 http_serve → 保活 ----
+def main():
+    var port = 19999
+    var pe = env("PXHWMON_MOCK_PORT")
+    if pe != null:
+        port = int(pe)
+    print("MOCK-READY port=" + str(port))
+    spawn http_serve(port, handler)
+    sleep(300000)                  # 长保活，调用方 kill 结束
