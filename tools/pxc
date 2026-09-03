@@ -4,17 +4,25 @@
 # ------------------------------------------------------------
 # 基于自举产物（bootstrap/pxc 编译器 + bootstrap/pxi 解释器），
 # 完全无需 Rust 工具链。行为对齐 Rust 版 px：
-#   pxc build <file.px>            编译为静态二进制（<dir>/build/<name>）
-#   pxc run <file.px> [args...]    解释执行
-#   pxc lex <file.px>              打印 Token 流（调试，走 PuXian lexer）
-#   pxc parse <file.px>            打印 AST（调试，走 PuXian parser）
-#   pxc --version / -v             输出版本号
-#   pxc help                       帮助
+#   pxc build <file.px>                    编译为静态二进制（<dir>/build/<name>）
+#   pxc build --no-quic <file.px>          裁剪 QUIC/H3（去掉 ngtcp2/openssl 依赖，
+#                                           runtime 侧 -DPX_NO_QUIC，M57-S4 边缘设备用）
+#   pxc build --cc <cc> [--mbedtls-lib <dir>] [--sqlite-obj <file>] --no-quic <file.px>
+#                                           交叉编译（M57-S4）：cc 指定交叉编译器，
+#                                           mbedtls-lib/sqlite-obj 指定目标架构静态库
+#   pxc run <file.px> [args...]            解释执行
+#   pxc lex <file.px>                      打印 Token 流（调试，走 PuXian lexer）
+#   pxc parse <file.px>                    打印 AST（调试，走 PuXian parser）
+#   pxc --version / -v                     输出版本号
+#   pxc help                               帮助
 # 说明：
 #   - build 模式：bootstrap/pxc 生成 C 源码 → 复制 runtime → gcc 静态编译，
 #     命令参数与 Rust 版 run_build 完全一致（-static -O2 -pthread + sqlite/miniz/mbedtls）
 #   - 对拍契约（MINI_SUBSET §五）：build 产物与 Rust 版 px build 逐字节一致
 #   - 版本：随 PuXian 编译器演进，用 SELFHOST_VER 标记自举里程碑
+#   - M57-S4：交叉编译默认配 --no-quic —— 第三方预编译库（ngtcp2/openssl-quictls）
+#     只有 x86_64 版，aarch64 目标需裁剪 QUIC/H3（runtime 加 -DPX_NO_QUIC 条件编译）；
+#     mbedtls/sqlite 均纯 C，可用目标架构交叉编译（tools/cross_aarch64.sh）。
 # ============================================================
 set -u
 PXC_HOME="$(cd "$(dirname "$0")/.." && pwd)"
@@ -31,24 +39,41 @@ usage() {
 pxc $(echo "$SELFHOST_VER") (普贤 PuXian · selfhosted $SELFHOST_MILESTONE)
 
 用法:
-  pxc build <file.px>             编译为静态二进制（输出 <目录>/build/<name>）
-  pxc run <file.px> [args...]     解释执行
-  pxc lex <file.px>               词法分析并打印 Token 流（调试）
-  pxc parse <file.px>             语法分析并打印 AST（调试）
-  pxc --version                   输出版本号
-  pxc help                        显示本帮助
+  pxc build <file.px>                         编译为静态二进制（输出 <目录>/build/<name>）
+  pxc build [--no-quic] [--cc <cc>]
+            [--mbedtls-lib <dir>] [--sqlite-obj <file>] <file.px>
+                                               裁剪/交叉编译选项（M57-S4）：
+                                                 --no-quic       去掉 QUIC/H3（-DPX_NO_QUIC，
+                                                                  不链 ngtcp2/openssl）
+                                                 --cc <cc>       指定 C 编译器（交叉用，
+                                                                  如 aarch64-linux-musl-gcc）
+                                                 --mbedtls-lib   目标架构 mbedtls 库目录
+                                                                  （缺省 runtime/mbedtls/lib）
+                                                 --sqlite-obj    目标架构 sqlite3 .o 文件
+                                                                  （缺省 third_party/sqlite3/sqlite3.o）
+  pxc run <file.px> [args...]                 解释执行
+  pxc lex <file.px>                           词法分析并打印 Token 流（调试）
+  pxc parse <file.px>                         语法分析并打印 AST（调试）
+  pxc --version                               输出版本号
+  pxc help                                    显示本帮助
 EOF
 }
 
 # 复制 runtime 依赖到构建目录（对齐 Rust run_build 的 10 个 rt 文件 + miniz + sqlite + mbedtls）
+# 参数：build_dir no_quic(0/1) sqlite_obj(可选，目标架构 sqlite3 .o)
 copy_runtime() {
-    local build_dir="$1"
+    local build_dir="$1" no_quic="$2" sqlite_obj="$3"
     local f
-    for f in runtime.h runtime.c runtime_aes.c runtime_xml.c runtime_zip.c \
+    # M57-S4：--no-quic 时不复制 QUIC/H3/QPACK 源（runtime.c 已用 PX_NO_QUIC 条件编译屏蔽引用）
+    local rt_files="runtime.h runtime.c runtime_aes.c runtime_xml.c runtime_zip.c \
              runtime_ws.c runtime_rsa.c runtime_sqlite.c runtime_route.c runtime_h2.c \
-             runtime_ffi.c runtime_quic.c runtime_h3.c runtime_h3_qpack.c \
+             runtime_ffi.c"
+    if [ "$no_quic" != "1" ]; then
+        rt_files="$rt_files runtime_quic.c runtime_h3.c runtime_h3_qpack.c \
              runtime_h3_qpack_dyn.c runtime_h3_qpack.h runtime_h3_qpack_tbl.h \
-             runtime_h3_qpack_dyn.h; do
+             runtime_h3_qpack_dyn.h"
+    fi
+    for f in $rt_files; do
         [ -f "$RT_DIR/$f" ] || { echo "错误: 缺少 runtime 文件 $RT_DIR/$f" >&2; return 1; }
         cp "$RT_DIR/$f" "$build_dir/"
     done
@@ -57,26 +82,46 @@ copy_runtime() {
         cp "$RT_DIR/third_party/miniz/$f" "$build_dir/" 2>/dev/null
     done
     # sqlite3：优先预编译 .o，否则退回全量 .c（CI 首跑会编译）
-    if [ -f "$RT_DIR/third_party/sqlite3/sqlite3.o" ]; then
+    # M57-S4：--sqlite-obj 指定目标架构 .o（交叉编译），否则用 x86_64 预编译 .o
+    if [ -n "$sqlite_obj" ] && [ -f "$sqlite_obj" ]; then
+        cp "$sqlite_obj" "$build_dir/sqlite3.o"
+    elif [ -f "$RT_DIR/third_party/sqlite3/sqlite3.o" ]; then
         cp "$RT_DIR/third_party/sqlite3/sqlite3.o" "$build_dir/"
     else
         cp "$RT_DIR/third_party/sqlite3/sqlite3.c" "$build_dir/"
     fi
     cp "$RT_DIR/third_party/sqlite3/sqlite3.h" "$build_dir/"
-    # M46：QUIC 栈（ngtcp2 + OpenSSL 静态库与头文件）
-    mkdir -p "$build_dir/ngtcp2/include" "$build_dir/ngtcp2/lib" \
-             "$build_dir/openssl/include" "$build_dir/openssl/lib"
-    cp -r "$RT_DIR/third_party/ngtcp2/include/ngtcp2" "$build_dir/ngtcp2/include/"
-    cp "$RT_DIR/third_party/ngtcp2/lib/"*.a "$build_dir/ngtcp2/lib/"
-    cp -r "$RT_DIR/third_party/openssl/include/openssl" "$build_dir/openssl/include/"
-    cp "$RT_DIR/third_party/openssl/lib/"*.a "$build_dir/openssl/lib/"
+    # M46：QUIC 栈（ngtcp2 + OpenSSL 静态库与头文件）—— 仅全量模式复制
+    if [ "$no_quic" != "1" ]; then
+        mkdir -p "$build_dir/ngtcp2/include" "$build_dir/ngtcp2/lib" \
+                 "$build_dir/openssl/include" "$build_dir/openssl/lib"
+        cp -r "$RT_DIR/third_party/ngtcp2/include/ngtcp2" "$build_dir/ngtcp2/include/"
+        cp "$RT_DIR/third_party/ngtcp2/lib/"*.a "$build_dir/ngtcp2/lib/"
+        cp -r "$RT_DIR/third_party/openssl/include/openssl" "$build_dir/openssl/include/"
+        cp "$RT_DIR/third_party/openssl/lib/"*.a "$build_dir/openssl/lib/"
+    fi
     return 0
 }
 
 # build：AST → C → gcc 静态二进制（对齐 Rust run_build）
 cmd_build() {
-    local file="$1"
+    local no_quic=0 cc="gcc" mbedtls_lib="" sqlite_obj=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --no-quic) no_quic=1; shift ;;
+            --cc) cc="$2"; shift 2 ;;
+            --mbedtls-lib) mbedtls_lib="$2"; shift 2 ;;
+            --sqlite-obj) sqlite_obj="$2"; shift 2 ;;
+            -h|--help) usage; return 0 ;;
+            --) shift; break ;;
+            -*) echo "未知选项: $1" >&2; usage >&2; return 1 ;;
+            *) break ;;
+        esac
+    done
+    local file="${1:-}"
+    [ -n "$file" ] || { echo "用法: pxc build [选项] <file.px>" >&2; exit 1; }
     [ -f "$file" ] || { echo "错误: 无法读取文件 $file" >&2; return 1; }
+    [ "$mbedtls_lib" = "" ] && mbedtls_lib="$RT_DIR/mbedtls/lib"
     local base parent build_dir
     base="$(basename "$file" .px)"
     parent="$(cd "$(dirname "$file")" && pwd)"
@@ -94,40 +139,45 @@ cmd_build() {
         return 1
     }
     # 2) 复制 runtime 依赖
-    copy_runtime "$build_dir" || return 1
-    # 3) gcc 静态编译（参数对齐 Rust run_build）
+    copy_runtime "$build_dir" "$no_quic" "$sqlite_obj" || return 1
+    # 3) C 编译器静态编译（参数对齐 Rust run_build；--no-quic 去掉 QUIC/H3 源与库）
     local mbedtls_inc="$RT_DIR/mbedtls/include"
-    local mbedtls_lib="$RT_DIR/mbedtls/lib"
     local sqlite_src="$build_dir/sqlite3.o"
     [ -f "$sqlite_src" ] || sqlite_src="$build_dir/sqlite3.c"
-    gcc -static -O2 -pthread -o "$out_path" \
-        "$c_path" \
-        "$build_dir/runtime.c" \
-        "$build_dir/runtime_aes.c" \
-        "$build_dir/runtime_xml.c" \
-        "$build_dir/runtime_zip.c" \
-        "$build_dir/runtime_ws.c" \
-        "$build_dir/runtime_rsa.c" \
-        "$build_dir/runtime_sqlite.c" \
-        "$build_dir/runtime_route.c" \
-        "$build_dir/runtime_h2.c" \
-        "$build_dir/runtime_ffi.c" \
-        "$build_dir/runtime_quic.c" \
-        "$build_dir/runtime_h3.c" \
-        "$build_dir/runtime_h3_qpack.c" \
-        "$build_dir/runtime_h3_qpack_dyn.c" \
-        "$sqlite_src" \
-        "$build_dir/miniz.c" "$build_dir/miniz_tinfl.c" "$build_dir/miniz_tdef.c" \
+    local rt_srcs="\"$build_dir/runtime.c\" \"$build_dir/runtime_aes.c\" \
+        \"$build_dir/runtime_xml.c\" \"$build_dir/runtime_zip.c\" \
+        \"$build_dir/runtime_ws.c\" \"$build_dir/runtime_rsa.c\" \
+        \"$build_dir/runtime_sqlite.c\" \"$build_dir/runtime_route.c\" \
+        \"$build_dir/runtime_h2.c\" \"$build_dir/runtime_ffi.c\""
+    if [ "$no_quic" != "1" ]; then
+        rt_srcs="$rt_srcs \"$build_dir/runtime_quic.c\" \"$build_dir/runtime_h3.c\" \
+        \"$build_dir/runtime_h3_qpack.c\" \"$build_dir/runtime_h3_qpack_dyn.c\""
+    fi
+    local cc_cmd
+    cc_cmd="$cc -static -O2 -pthread -o \"$out_path\" \
+        \"$c_path\" $rt_srcs \
+        \"$sqlite_src\" \
+        \"$build_dir/miniz.c\" \"$build_dir/miniz_tinfl.c\" \"$build_dir/miniz_tdef.c\" \
         -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_FOREIGN_KEYS=1 \
-        -I"$build_dir" -I"$RT_DIR/third_party/miniz" -I"$mbedtls_inc" \
-        -I"$build_dir/ngtcp2/include" -I"$build_dir/openssl/include" \
-        "$mbedtls_lib/libmbedtls.a" "$mbedtls_lib/libmbedx509.a" "$mbedtls_lib/libmbedcrypto.a" \
-        "$build_dir/ngtcp2/lib/libngtcp2.a" "$build_dir/ngtcp2/lib/libngtcp2_crypto_quictls.a" \
-        "$build_dir/openssl/lib/libssl.a" "$build_dir/openssl/lib/libcrypto.a" \
-        -lm -ldl || {
-        echo "gcc 编译失败: $out_path" >&2
+        -I\"$build_dir\" -I\"$RT_DIR/third_party/miniz\" -I\"$mbedtls_inc\""
+    if [ "$no_quic" = "1" ]; then
+        cc_cmd="$cc_cmd -DPX_NO_QUIC"
+    else
+        cc_cmd="$cc_cmd -I\"$build_dir/ngtcp2/include\" -I\"$build_dir/openssl/include\""
+    fi
+    cc_cmd="$cc_cmd \
+        \"$mbedtls_lib/libmbedtls.a\" \"$mbedtls_lib/libmbedx509.a\" \"$mbedtls_lib/libmbedcrypto.a\""
+    if [ "$no_quic" != "1" ]; then
+        cc_cmd="$cc_cmd \
+        \"$build_dir/ngtcp2/lib/libngtcp2.a\" \"$build_dir/ngtcp2/lib/libngtcp2_crypto_quictls.a\" \
+        \"$build_dir/openssl/lib/libssl.a\" \"$build_dir/openssl/lib/libcrypto.a\""
+    fi
+    cc_cmd="$cc_cmd -lm -ldl"
+    if ! eval "$cc_cmd" 2> /tmp/pxc_gcc_err.log; then
+        echo "编译失败: $out_path" >&2
+        tail -20 /tmp/pxc_gcc_err.log >&2
         return 1
-    }
+    fi
     local size
     size=$(stat -c %s "$out_path" 2>/dev/null || echo 0)
     echo "编译成功: $out_path （$size 字节）"
@@ -153,7 +203,7 @@ cmd_parse() {
 # ---- 入口 ----
 cmd="${1:-help}"
 case "$cmd" in
-    build) shift; [ $# -ge 1 ] || { echo "用法: pxc build <file.px>" >&2; exit 1; }; cmd_build "$1" ;;
+    build) shift; cmd_build "$@" ;;
     run)   shift; [ $# -ge 1 ] || { echo "用法: pxc run <file.px>" >&2; exit 1; }; cmd_run "$@" ;;
     lex)   shift; [ $# -ge 1 ] || { echo "用法: pxc lex <file.px>" >&2; exit 1; }; cmd_lex "$1" ;;
     parse) shift; [ $# -ge 1 ] || { echo "用法: pxc parse <file.px>" >&2; exit 1; }; cmd_parse "$1" ;;
