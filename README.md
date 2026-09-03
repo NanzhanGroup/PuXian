@@ -208,7 +208,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 | M-B9a | 退役 Rust 版 + 接入 CI + 引导链 | `tools/pxc` 全链路可用，CI 四 job |
 | M-B9b | 第一个生产应用（dogfooding 验证） | ✅ 已迁独立私有仓库维护 |
 
-### 原生开发（M41–M57，自举后 PuXian 自身开发，全部 ✅）
+### 原生开发（M41–M58，自举后 PuXian 自身开发，全部 ✅）
 
 | 里程碑 | 内容 |
 |---|---|
@@ -221,6 +221,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 | M53 | **HTTP/3 三栈合一 WebServer**：px_serve http3（HTTP/1.1+HTTP/2+HTTP/3 共用公共管道）+ Alt-Svc + **aioquic 外部互操作** |
 | M54 | **HTTP/3 生产化**：TLS 1.3 会话恢复（1-RTT resumption）+ **0-RTT early data**（握手前可发）+ 连接迁移（换源续传）+ BLOCKED_STREAMS 流控协商（-206/MAX_STREAMS） |
 | M57 | **边缘设备层支持（Linux 用户态）**：fd 原语 `open`/`close`/`ioctl`/`os_errno`（ioctl arg 三形态：int 直传 / bytes·str 就地 buffer）+ `read`/`write` 数据通道 + **mmap/munmap 活映射**（MAP_SHARED，GC 自动 munmap）+ GPIO/I2C 示例 + **aarch64 交叉编译 + qemu 验证 + `--no-quic` 裁剪** |
+| M58 | **首个 dogfood 真实应用「pxhwmond」**（硬件健康守护 daemon，examples/m58_hwmond）：多文件 import 工程 + M57 fd 通道 /proc 采集（温度条件降级）+ **mmap MAP_SHARED 快照 IPC**（外部 dump 活读 / 命令通道双向）+ 手写 HTTP 状态页（显式响应头）+ run.sh 崩溃自愈 + 阈值告警通知 + aarch64 交叉 qemu 验证 |
 
 ---
 
@@ -274,6 +275,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 - `m57_s3_verify.sh` —— 设备示例 + 真内核替身（GPIO_GET_CHIPINFO / I2C_SLAVE 示例；loopback ifreq SIOCGIFADDR/FLAGS/HWADDR + PTY TIOCGPTN 真内核 ioctl 硬断言，编译/解释双模式）
 - `m57_s4_cross_verify.sh` —— **aarch64 交叉编译 + qemu 验证**（arm64 静态产物 2.5MB 设备层 ioctl 与 x86 结果一致）
 - `m57_s5_pxi_smoke.px` —— pxi 重建后 M57 新内置 10 项自检（open/read/ioctl 就地填充/write/mmap 活映射，解释/编译双模式输出一致）
+- `m58_hwmond/` —— **M58 dogfood 真实应用：pxhwmond 硬件健康守护 daemon**（多文件 import 工程：main/collect/shm/serve/notify；verify_s1–s4.sh 各子步自检 + 使用/部署见 `m58_hwmond/README.md`）
 - ... 完整列表见 `examples/`
 
 ---

@@ -210,7 +210,7 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 | M-B9a | Retire the Rust version + wire up CI + bootstrap chain | `tools/pxc` fully usable end-to-end; CI four jobs |
 | M-B9b | First production application (dogfooding validation) | ✅ moved to a separate private repo |
 
-### Native Development (M41–M57, post-bootstrap development in PuXian itself — all ✅)
+### Native Development (M41–M58, post-bootstrap development in PuXian itself — all ✅)
 
 | Milestone | Scope |
 |---|---|
@@ -223,6 +223,7 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 | M53 | **HTTP/3 three-stack WebServer**: px_serve http3 (HTTP/1.1+HTTP/2+HTTP/3 share the public pipeline) + Alt-Svc + **aioquic third-party interop** |
 | M54 | **HTTP/3 productionization**: TLS 1.3 session resumption (1-RTT) + **0-RTT early data** (send before handshake) + connection migration (source-change resume) + BLOCKED_STREAMS flow-control negotiation (-206 / MAX_STREAMS) |
 | M57 | **Edge-device-layer support (Linux userspace)**: fd primitives `open`/`close`/`ioctl`/`os_errno` (ioctl arg three forms: int direct / bytes·str in-place buffer) + `read`/`write` data path + **mmap/munmap live mapping** (MAP_SHARED, GC auto-munmap) + GPIO/I2C examples + **aarch64 cross-compile + qemu verify + `--no-quic` trimming** |
+| M58 | **First dogfood real app "pxhwmond"** (hardware health monitor daemon, examples/m58_hwmond): multi-file import project + M57 fd-path /proc collection (CPU/mem/load/uptime/net + temp conditional degrade) + **mmap MAP_SHARED snapshot IPC** (external `--dump` live-read / ctl-channel bidirectional) + hand-written minimal HTTP status page (/healthz JSON + / HTML + 404, explicit headers) + run.sh crash self-heal wrapper + threshold alerts (log + webhook dry-run) + aarch64 cross-compile & qemu `--once` verify |
 
 ---
 
@@ -271,6 +272,7 @@ The `examples/` directory (80+ examples) for quick hands-on:
 - `m57_s3_verify.sh` — device examples + real-kernel stand-in (GPIO_GET_CHIPINFO / I2C_SLAVE examples; loopback ifreq SIOCGIFADDR/FLAGS/HWADDR + PTY TIOCGPTN real-kernel ioctl hard assertions, dual mode)
 - `m57_s4_cross_verify.sh` — **aarch64 cross-compile + qemu verify** (arm64 static binary 2.5MB edge-device ioctl identical to x86)
 - `m57_s5_pxi_smoke.px` — rebuilt pxi exposes the 10 M57 builtins (open/read/ioctl in-place fill/write/mmap live mapping; interpret/compile outputs identical)
+- `m58_hwmond/` — **M58 dogfood real app: pxhwmond hardware health monitor daemon** (multi-file import project: main/collect/shm/serve/notify; verify_s1–s4.sh per-substep self-checks; usage/deploy see `m58_hwmond/README.md`)
 - ... full list in `examples/`
 
 ---
