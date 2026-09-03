@@ -1,0 +1,42 @@
+# ============================================================
+# M60 S3：树莓派 PWM（sysfs）LED 呼吸示例（真板运行；x86 无 pwmchip SKIP）
+# ------------------------------------------------------------
+# 演示 std.edge PWM sysfs API（纯文件通道，零新 C）：
+#   pwm_setup(chip, ch, period_ns, duty_ns)：export + period + duty_cycle
+#   pwm_enable(chip, ch, on)：enable 1/0
+# 树莓派需先启用 PWM（/boot/config.txt: dtoverlay=pwm-2chan 或 pwm）才有
+#   /sys/class/pwm/pwmchip0（pwm0=BCM18 / pwm1=BCM19 等，视 overlay）。
+# x86/容器无 pwmchip → SKIP 放行（exit 0）。
+# ============================================================
+import std.edge
+
+# 找可用 pwmchip
+var chip = -1
+for c in [0, 1, 2]:
+    if exists("/sys/class/pwm/pwmchip" + str(c)):
+        chip = c
+        break
+if chip < 0:
+    print("PWM: SKIP（无 /sys/class/pwm/pwmchip*，真 PWM 留树莓派验证）")
+    exit(0)
+
+var ch = 0
+var period_ns = 20000000      # 20ms（50Hz，舵机/呼吸灯常用）
+var duty_ns = 1000000         # 初始 5% 占空
+
+# 1. 配置（export + period + duty_cycle）
+var ok1 = pwm_setup(chip, ch, period_ns, duty_ns)
+if not ok1:
+    print("PWM: pwmchip" + str(chip) + " pwm" + str(ch) + " 配置失败 errno=" + str(os_errno()) + "（权限/已占用 → SKIP）")
+    exit(0)
+print("PWM: pwmchip" + str(chip) + "/pwm" + str(ch) + " period=" + str(period_ns) + "ns duty=" + str(duty_ns) + "ns")
+
+# 2. 呼吸：0%→100%→0% 三档演示（us 级 sleep 细腻渐变）
+assert(pwm_enable(chip, ch, true) == true, "pwm enable 失败")
+var steps = [1000000, 5000000, 10000000, 15000000, 19000000, 19000000, 15000000, 10000000, 5000000, 1000000]
+for d in steps:
+    assert(pwm_set_duty(chip, ch, d) == true, "pwm_set_duty 失败")
+    sleep_us(50000)
+print("PWM: 呼吸渐变 10 档完成")
+assert(pwm_enable(chip, ch, false) == true, "pwm disable 失败")
+print("PWM OK")

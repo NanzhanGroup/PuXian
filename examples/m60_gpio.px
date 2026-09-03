@@ -1,0 +1,67 @@
+# ============================================================
+# M60 S3：树莓派 GPIO V2 控制示例（真板运行；x86 无 gpiochip SKIP）
+# ------------------------------------------------------------
+# 演示 std.edge GPIO V2 line API（linux gpio v2 uAPI）：
+#   gpio_input  读按键/传感器电平
+#   gpio_input_edge + gpio_event  边沿事件（按键中断/脉冲计数）
+#   gpio_output 驱动 LED/继电器（初始电平经 attr OUTPUT_VALUES 指定）
+# 树莓派：/dev/gpiochip0（BCM2835 系），线号即 BCM GPIO 编号。
+# 换线号：把下方 offset 改成你实际接的 BCM 引脚。
+# x86/容器无 /dev/gpiochip* → SKIP 放行（exit 0）。
+# ============================================================
+import std.edge
+
+# 探测可用的 gpiochip
+var fd = -1
+var chip = ""
+for p in ["/dev/gpiochip0", "/dev/gpiochip1", "/dev/gpiochip2"]:
+    var t = open(p, "rw")
+    if t > 0:
+        fd = t
+        chip = p
+        break
+if fd >= 0:
+    close(fd)
+else:
+    print("GPIO: SKIP（无 /dev/gpiochip*，真实 GPIO ioctl 留树莓派验证）")
+    exit(0)
+
+var btn_offset = 17    # BCM17 接按键（对地）
+var led_offset = 26    # BCM26 接 LED（串电阻）
+
+# 1. 输入读电平（按键按下=0 / 松开=1，取决于接法）
+var in_fd = gpio_input(chip, btn_offset, "px-btn")
+if in_fd >= 0:
+    var v = gpio_read(in_fd)
+    print("GPIO: 输入 line" + str(btn_offset) + " 电平=" + str(v))
+    close(in_fd)
+else:
+    print("GPIO: 输入线申请失败 errno=" + str(os_errno()) + "（线占用/权限 → SKIP）")
+    exit(0)
+
+# 2. 边沿事件（按下沿触发，等 2s 收集）
+var ef = gpio_input_edge(chip, btn_offset, "falling", "px-edge")
+if ef >= 0:
+    var ev = gpio_event(ef, 2000)
+    print("GPIO: 边沿事件(2s)=" + str(ev))
+    if len(ev) >= 4:
+        var eid = "rising"
+        if ev[1] == 2:
+            eid = "falling"
+        print("GPIO: 事件 id=" + eid + " offset=" + str(ev[2]) + " seqno=" + str(ev[3]))
+    close(ef)
+else:
+    print("GPIO: 边沿申请失败 errno=" + str(os_errno()) + "（线占用 → 跳过边沿）")
+
+# 3. 输出驱动（初始 1 高电平，翻转一次）
+var out_fd = gpio_output(chip, led_offset, 1, "px-led")
+if out_fd >= 0:
+    gpio_write(out_fd, 0)
+    sleep_us(200000)
+    gpio_write(out_fd, 1)
+    print("GPIO: 输出 line" + str(led_offset) + " 翻转 0→1 ok")
+    close(out_fd)
+    print("GPIO OK")
+else:
+    print("GPIO: 输出线申请失败 errno=" + str(os_errno()) + "（线占用/权限 → SKIP）")
+    exit(0)

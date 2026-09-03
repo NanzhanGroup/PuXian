@@ -1,0 +1,67 @@
+# ============================================================
+# M60 S3 dev_s3.px —— std.edge 库单测（x86 可跑，无设备依赖）
+# ------------------------------------------------------------
+# 验证点（docs/M60_PLAN.md §三.2 + §四 S3 verify）：
+#   A. 内部工具：_zeros / _put_u32 / _put_u64 / _put_ascii 字节级写入正确（小端）
+#   B. GPIO V2 request 布局常量断言（C offsetof 实测对照）：
+#      gpio_v2_line_request = 592B；offsets@0 / consumer@256 / config.flags@288 /
+#      num_attrs@296 / attrs@320 / num_lines@560 / event_buffer_size@564 / fd@588
+#   C. 输入请求（flags=4）：num_attrs=0、event=0、num_lines=1
+#   D. 输出请求（flags=8, out_val=1）：attr id=OUTPUT_VALUES(2)、values@328=1、mask@336=1
+#   E. 边沿请求（flags=4|16）：event_buffer_size=16
+#   F. gpio_event_parse：24B 事件解析 [ts, id, offset, seqno]
+# 依赖：stdlib/edge.px（import std.edge）——edge.px 顶层 def 直接可见
+# 退出：全过 → "M60-S3 DEV OK"
+# ============================================================
+import std.edge
+
+# ---- A. 内部工具字节写入 ----
+var b0 = _zeros(4)
+assert(bytes_len(b0) == 4, "_zeros(4) 长度应 4")
+assert(bytes_get(b0, 0) == 0 and bytes_get(b0, 3) == 0, "_zeros 应全 0")
+var b1 = _put_u32(b0, 0, 0x89ABCDEF)
+var u32ok = bytes_get(b1, 0) == 0xEF and bytes_get(b1, 1) == 0xCD and bytes_get(b1, 2) == 0xAB and bytes_get(b1, 3) == 0x89
+assert(u32ok, "_put_u32 小端写入错误")
+var b2 = _put_u64(_zeros(8), 0, 0x1122334455667788)
+assert(bytes_get(b2, 0) == 0x88 and bytes_get(b2, 7) == 0x11, "_put_u64 小端写入错误")
+var b3 = _put_ascii(_zeros(8), 0, "px", 8)
+assert(bytes_get(b3, 0) == 112 and bytes_get(b3, 1) == 120 and bytes_get(b3, 2) == 0, "_put_ascii 写入错误")
+print("A: 内部工具 _zeros/_put_u32/_put_u64/_put_ascii ok")
+
+# ---- B. GPIO V2 request 总体布局 ----
+var ri = _gpio_req_buf(17, 4, "px-in", 0)          # INPUT，offset 17
+assert(bytes_len(ri) == 592, "_gpio_req_buf 应 592B, got " + str(bytes_len(ri)))
+assert(bytes_to_int(bytes_slice(ri, 0, 4), "little") == 17, "offsets[0] 应 17")
+assert(bytes_to_int(bytes_slice(ri, 256, 258), "little") == 112 + (120 << 8), "consumer 应 'px' @256")
+assert(bytes_to_int(bytes_slice(ri, 288, 296), "little") == 4, "config.flags 应 INPUT(4)")
+assert(bytes_get(ri, 296) == 0, "输入请求 num_attrs 应 0")
+assert(bytes_to_int(bytes_slice(ri, 560, 564), "little") == 1, "num_lines 应 1")
+assert(bytes_to_int(bytes_slice(ri, 564, 568), "little") == 0, "输入无边沿 event_buffer 应 0")
+print("B: GPIO 输入请求布局（592B/flags/num_lines）ok")
+
+# ---- C/D. 输出请求（OUTPUT=8, out_val=1 → attr OUTPUT_VALUES）----
+var ro = _gpio_req_buf(5, 8, "led", 1)
+assert(bytes_to_int(bytes_slice(ro, 288, 296), "little") == 8, "输出 flags 应 OUTPUT(8)")
+assert(bytes_to_int(bytes_slice(ro, 296, 300), "little") == 1, "输出 num_attrs 应 1")
+assert(bytes_to_int(bytes_slice(ro, 320, 324), "little") == 2, "attr id 应 OUTPUT_VALUES(2)")
+assert(bytes_to_int(bytes_slice(ro, 328, 336), "little") == 1, "attr values 应 1")
+assert(bytes_to_int(bytes_slice(ro, 336, 344), "little") == 1, "attr mask 应 bit0")
+print("C/D: GPIO 输出请求（attr OUTPUT_VALUES 初始电平）ok")
+
+# ---- E. 边沿请求（INPUT|EDGE_RISING = 4|16 = 20）----
+var re = _gpio_req_buf(9, 20, "btn-edge", 0)
+assert(bytes_to_int(bytes_slice(re, 288, 296), "little") == 20, "边沿 flags 应 20")
+assert(bytes_to_int(bytes_slice(re, 564, 568), "little") == 16, "边沿 event_buffer_size 应 16")
+print("E: GPIO 边沿请求（event_buffer_size=16）ok")
+
+# ---- F. gpio_event_parse 24B 解析 ----
+var ev = bytes_concat(int_to_bytes(0x1122334455667788, 8, "little"), int_to_bytes(1, 4, "little"))
+ev = bytes_concat(ev, int_to_bytes(5, 4, "little"))
+ev = bytes_concat(ev, int_to_bytes(7, 4, "little"))
+ev = bytes_concat(ev, int_to_bytes(0, 4, "little"))
+var p = gpio_event_parse(ev)
+var evok = len(p) == 4 and p[0] == 0x1122334455667788 and p[1] == 1 and p[2] == 5 and p[3] == 7
+assert(evok, "gpio_event_parse 解析错误: " + str(p))
+print("F: gpio_event_parse [ts,id,offset,seqno] ok")
+
+print("M60-S3 DEV OK")

@@ -1,0 +1,51 @@
+# ============================================================
+# M60 S3：树莓派 I2C 传感器示例（真板运行；x86 无总线 SKIP）
+# ------------------------------------------------------------
+# 演示 std.edge I2C API：
+#   i2c_open(bus, addr) → fd（open /dev/i2c-N + I2C_SLAVE 设地址）
+#   i2c_read_reg / i2c_write_reg（寄存器寻址传感器标准，SMBus 风格）
+# 目标器件（二选一，按你接的改 addr/寄存器）：
+#   BMP280 气压温湿度：addr 0x76（或 0x77），chip_id 寄存器 0xD0 = 0x58
+#   SHT30  温湿度：     addr 0x44（或 0x45），需 i2c_write_reg 发测量命令
+# 树莓派默认 I2C 总线 1（/dev/i2c-1），需 raspi-config 开启 I2C。
+# x86/容器无 /dev/i2c-N → SKIP 放行（exit 0）。
+# ============================================================
+import std.edge
+
+# 1. 找可用 I2C 总线
+var bus = -1
+var bfd = -1
+for b in [1, 0, 2]:
+    var t = open("/dev/i2c-" + str(b), "rw")
+    if t > 0:
+        bfd = t
+        bus = b
+        break
+if bfd >= 0:
+    close(bfd)
+else:
+    print("I2C: SKIP（无 /dev/i2c-N，真实 I2C 留树莓派验证）")
+    exit(0)
+
+# 2. BMP280 @ 0x76：读 chip_id 寄存器 0xD0（应 0x58）
+var addr = 0x76
+var fd = i2c_open(bus, addr)
+if fd < 0:
+    print("I2C: 总线 " + str(bus) + " 无 0x" + str(addr) + " 器件（errno=" + str(os_errno()) + " → SKIP）")
+    exit(0)
+var cid = i2c_read_reg(fd, 0xD0, 1)
+if type(cid) == "int":
+    print("I2C: 读寄存器失败 errno=" + str(os_errno()) + "（器件不支持 → SKIP）")
+    close(fd)
+    exit(0)
+print("I2C: bus" + str(bus) + " addr 0x76 chip_id(0xD0) = " + str(bytes_get(cid, 0)))
+if bytes_get(cid, 0) == 0x58:
+    print("BMP280 探测成功")
+else:
+    print("（非 BMP280，跳过压力寄存器读）")
+
+# 3. 读校准无关的简单状态寄存器演示写后读（若支持）
+var wr = i2c_write_reg(fd, 0xF4, bytes("0"))   # BMP280 control 写 0x00（sleep）
+print("I2C: 写 control 寄存器返回 " + str(wr) + " 字节")
+close(fd)
+print("I2C OK")
