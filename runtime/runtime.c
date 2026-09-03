@@ -24,13 +24,16 @@
 #include <errno.h>
 #include <strings.h>
 #include <signal.h>
+#include <setjmp.h>       // M57-S4：musl 无 getcontext → GC 寄存器 spill 用 setjmp 替代
 #include <ucontext.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <sys/resource.h>  // M31 沙箱：setrlimit RLIMIT_AS
 #include <poll.h>
 #include <stdatomic.h>
-#include <execinfo.h>
+#if defined(__GLIBC__)
+#include <execinfo.h>   // M57-S4：glibc 特有头，musl 交叉（边缘设备）无此头 → 条件包含
+#endif
 #include "miniz.h"   // M21 gzip 压缩/解压（raw deflate + gzip 容器，M19 zip 同源）
 
 // M10 HTTPS：mbedtls 静态库（compiler/runtime/mbedtls/）
@@ -97,7 +100,10 @@ static int g_px_rate_whitelist_n = 0;
 char g_px_access_log[1024] = {0};
 char g_px_alt_svc[256] = {0};
 // M53-S4：px_serve opts.http3 的 H3（QUIC/UDP）listener id（0 = 未启用；优雅关闭时回收）
+// M57-S4：PX_NO_QUIC 裁剪（边缘设备交叉编译时去掉 QUIC/H3/ngtcp2/openssl 依赖）
+#ifndef PX_NO_QUIC
 static long long g_px_h3_listener = 0;
+#endif
 // M36：access log JSON 行格式 + 按天轮转（日期后缀）
 int g_px_log_json = 0;
 int g_px_log_daily = 0;
@@ -811,9 +817,18 @@ static void gc_scan_stack(GCHash* set) {
         pthread_attr_destroy(&attr);
     }
     if (!stackaddr || stacksize == 0) return;
+    // M57-S4：musl（边缘设备交叉）无 getcontext → 内联汇编直接读 SP（跨 glibc/musl/arch）
+#if defined(__aarch64__)
+    uintptr_t rsp;
+    __asm__ __volatile__("mov %0, sp" : "=r"(rsp));
+#elif defined(__x86_64__)
+    uintptr_t rsp;
+    __asm__ __volatile__("movq %%rsp, %0" : "=r"(rsp));
+#else
     ucontext_t uc;
     getcontext(&uc);
     uintptr_t rsp = (uintptr_t)uc.uc_mcontext.gregs[REG_RSP];
+#endif
     uintptr_t start = rsp & ~(uintptr_t)7;
     uintptr_t end = (uintptr_t)stackaddr + stacksize;
     if (g_gc_debug) { char dbg[160]; int dn = snprintf(dbg, sizeof(dbg), "[scan-self] rsp=%lx start=%lx end=%lx range=%lu\n", rsp, start, end, (unsigned long)(end - start)); (void)write(2, dbg, (size_t)dn); }
@@ -958,8 +973,18 @@ static void gc_ensure_main_registered(void) {
     gc_register_thread(pthread_self(), 1);
 }
 
-// 扫描单个暂停线程的通用寄存器（x86_64）
+// 扫描单个暂停线程的通用寄存器（x86_64 / aarch64；M57-S4 交叉编译兼容）
 static void gc_scan_registers(GCHash* set, ucontext_t* uc) {
+#if defined(__aarch64__)
+    // aarch64：mcontext.regs[0..30]（x0-x30）+ 独立 sp 字段（glibc/musl 同布局）
+    const uintptr_t* regs = (const uintptr_t*)uc->uc_mcontext.regs;
+    for (int i = 0; i <= 30; i++) {
+        uintptr_t w = regs[i];
+        if ((w & 7) == 0 && gc_hash_has(set, w)) gc_mark_obj(set, (LXObject*)w);
+    }
+    uintptr_t sp = (uintptr_t)uc->uc_mcontext.sp;
+    if ((sp & 7) == 0 && gc_hash_has(set, sp)) gc_mark_obj(set, (LXObject*)sp);
+#else
     greg_t* regs = uc->uc_mcontext.gregs;
     static const int reg_ids[] = {
         REG_RAX, REG_RBX, REG_RCX, REG_RDX, REG_RSI, REG_RDI,
@@ -970,6 +995,7 @@ static void gc_scan_registers(GCHash* set, ucontext_t* uc) {
         uintptr_t w = (uintptr_t)regs[reg_ids[i]];
         if ((w & 7) == 0 && gc_hash_has(set, w)) gc_mark_obj(set, (LXObject*)w);
     }
+#endif
 }
 
 // 扫描单个暂停线程的栈（pthread_getattr_np 获取边界；只扫活跃帧 [RSP, 栈底)）
@@ -982,7 +1008,11 @@ static void gc_scan_thread_stack(GCHash* set, pthread_t tid, ucontext_t* uc) {
         pthread_attr_destroy(&attr);
     }
     if (!stackaddr || stacksize == 0) return;
+#if defined(__aarch64__)
+    uintptr_t rsp = (uintptr_t)uc->uc_mcontext.sp;
+#else
     uintptr_t rsp = (uintptr_t)uc->uc_mcontext.gregs[REG_RSP];
+#endif
     uintptr_t start = rsp & ~(uintptr_t)7;
     uintptr_t end = (uintptr_t)stackaddr + stacksize;
     for (uintptr_t p = start; p + sizeof(uintptr_t) <= end; p += sizeof(uintptr_t)) {
@@ -1087,9 +1117,10 @@ void px_gc_collect(void) {
         if (g_gc_debug) (void)write(2, "[mk] globals\n", 13);
         // 根2：本线程（GC 执行者）暂存根
         if (g_tmp_root) gc_mark_obj(&set, g_tmp_root);
-        // 根3：本线程栈 + 寄存器（getcontext 写入栈上 ucontext，一并扫描）
-        ucontext_t uc;
-        getcontext(&uc);
+        // 根3：本线程栈 + 寄存器（setjmp 把寄存器写入栈上 jmp_buf，一并扫描；
+        //      musl 无 getcontext，M57-S4 改 setjmp——同为外部调用强制 spill + 落栈）
+        jmp_buf jb;
+        (void)setjmp(jb);
         gc_scan_stack(&set);
         if (g_gc_debug) (void)write(2, "[mk] self-stack\n", 15);
         // 根4：所有本轮暂停线程：寄存器 + 栈 + 暂存根
@@ -1158,8 +1189,8 @@ void px_gc_collect(void) {
     }
     pthread_mutex_unlock(&g_globals_mu);
     if (g_tmp_root) gc_mark_obj(&set, g_tmp_root);
-    ucontext_t uc;
-    getcontext(&uc);
+    jmp_buf jb;
+    (void)setjmp(jb);
     gc_scan_stack(&set);
     int freed = 0, w = 0;
     for (int i = 0; i < g_obj_count; i++) {
@@ -4999,12 +5030,14 @@ void px_register_builtins(void) {
     // M48：hex 纯函数进 FFI 表（capability 字节精确断言/双模式一致用）
     px_ffi_register("bytes_to_hex", bi_bytes_to_hex);
     px_ffi_register("hex_to_bytes", bi_hex_to_bytes);
+#ifndef PX_NO_QUIC
     // M46：QUIC 传输级绑定（runtime_quic.c）—— 语言层 extern def quic_* 按名字查找
     px_register_quic();
     // M47：HTTP/3 语义层（runtime_h3.c）—— QPACK 编解码 + H3 帧 + 请求/响应对拍
     px_register_h3();
     // M49：QPACK 动态表 + SETTINGS 帧（runtime_h3_qpack_dyn.c）—— 连接级 QPACK 会话
     px_register_h3_qpack_dyn();
+#endif
     // M28 P1：时间 / 时区
     px_set_global("time_format", px_native("time_format", bi_time_format));
     px_set_global("time_parse", px_native("time_parse", bi_time_parse));
@@ -9573,7 +9606,12 @@ static int px_pool_spawn(PXWorker* w) {
         close(out_pipe[0]); close(out_pipe[1]);
         // 关闭继承的其他 fd（监听 socket、连接 fd、其他 worker 管道）：
         // 防止 worker 持有监听端口 / 管道写端导致 EOF 误判（M25 进程池）
+#if defined(__GLIBC__)
         close_range(3, ~0U, 0);
+#else
+        // musl（M57-S4 交叉编译）无 close_range：循环关闭继承 fd（4096 覆盖常规上限）
+        for (int fd = 3; fd < 4096; fd++) close(fd);
+#endif
         execlp(px_px_bin(), "px", "--worker", (char*)NULL);
         dprintf(STDERR_FILENO, "px: 找不到 px 解释器（设置 PX_BIN 或加入 PATH）\n");
         _exit(127);
@@ -11847,11 +11885,13 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     if (nargs >= 3 && args[2].type == PX_INT) timeout_ms = (int)args[2].as.i;
     if (timeout_ms < 1) timeout_ms = 1;
     int port = (int)args[0].as.i;
+#ifndef PX_NO_QUIC
     // M53-S4：HTTP/3（QUIC/UDP）—— opts.http3 = true（自签）| {port?, cert?, key?}；port 默认=TCP port
     int h3_enable = 0;
     int h3_port = port;
     char h3_cert[1024] = {0};
     char h3_key[1024] = {0};
+#endif
     // M27/M31/M33：opts = {max_body_size, body_tmp_dir, max_conn, rate_limit:{max,window_sec}, access_log, alt_svc}
     g_px_max_body = 10 * 1024 * 1024;
     int max_conn = 32;
@@ -11865,7 +11905,9 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     g_px_log_daily = 0;
     g_px_gzip_level = 6;
     g_px_gzip_min = 1024;
+#ifndef PX_NO_QUIC
     g_px_h3_listener = 0;
+#endif
     if (nargs >= 4 && args[3].type == PX_DICT) {
         LXValue mb = px_dict_get(args[3], "max_body_size");
         if (mb.type == PX_INT) g_px_max_body = (int)(mb.as.i >= 1024 ? mb.as.i : 1024);
@@ -11910,6 +11952,7 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
         if (gl.type == PX_INT && gl.as.i >= 1 && gl.as.i <= 9) g_px_gzip_level = (int)gl.as.i;
         LXValue gm = px_dict_get(args[3], "gzip_min_bytes");
         if (gm.type == PX_INT && gm.as.i >= 1) g_px_gzip_min = (int)gm.as.i;
+#ifndef PX_NO_QUIC
         // M53-S4：opts.http3 —— bool true（自签证书）或 {port?, cert?, key?}
         LXValue h3o = px_dict_get(args[3], "http3");
         if (h3o.type == PX_BOOL && h3o.as.b) {
@@ -11923,6 +11966,7 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
             LXValue hk = px_dict_get(h3o, "key");
             if (hk.type == PX_STR) snprintf(h3_key, sizeof(h3_key), "%s", hk.as.obj->as.str.data);
         }
+#endif
     }
     // docroot / timeout / port 存全局表（GC 扫描根）
     px_set_global("__px_docroot", px_str(docroot));
@@ -11954,6 +11998,7 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     px_session_sweep();
     fprintf(stderr, "[px-serve] 普贤应用服务器 docroot=%s 端口=%d 超时=%dms tls=%d max_body=%d max_conn=%d\n",
             docroot, port, timeout_ms, g_srv_tls_ready, g_px_max_body, max_conn);
+#ifndef PX_NO_QUIC
     // M53-S4：HTTP/3（QUIC/UDP）—— 与 HTTP/1.1 同端口（UDP/TCP 不冲突，标准 443+443）或 http3.port；
     // 请求经 runtime_h3.c 管道托管（h3_srv_pipe_cb）走与 HTTP/1.1 同一 vhost/路由/限流/静态/.px 管道。
     if (h3_enable) {
@@ -11970,6 +12015,7 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
                     h3_port);
         }
     }
+#endif
     // M31.4b：并发模型升级——连接线程池（不占 spawn 槽位，突破 64 上限）
     // 预派生 max_conn 个常驻 worker：accept 只把 cfd 放队列，worker 取队列处理。
     g_pool_size = max_conn;
@@ -11990,12 +12036,14 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     }
     g_px_listen_fd = -1;
     close(sfd);
+#ifndef PX_NO_QUIC
     // M53-S4：优雅关闭 H3 listener（停收包路由线程 → 关托管连接 → 释放 UDP fd）
     if (g_px_h3_listener > 0) {
         px_quic_raw_close_listener(g_px_h3_listener);
         fprintf(stderr, "[px-serve] HTTP/3 listener 已关闭\n");
         g_px_h3_listener = 0;
     }
+#endif
     // 停止 worker：广播唤醒 → worker 处理完当前连接/清空队列后退出 → join
     pthread_mutex_lock(&g_pool_mu);
     pthread_cond_broadcast(&g_pool_cond);
