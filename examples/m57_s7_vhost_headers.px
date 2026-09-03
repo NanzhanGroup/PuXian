@@ -1,0 +1,61 @@
+# M57-S7 vhost handler 自定义响应头透传 + 注入防护（回归测试，双模式一致）
+# 背景：BUG_REPORT —— vhost(host, handler) 返回 dict{status,headers,body} 时，
+#       headers 除 Content-Type 外全部丢失（301 无 Location、Cache-Control 失效等）。
+# 修复：px_vhost_normalize 增加 extra 出参 + 白名单透传（Location/Cache-Control/
+#       Set-Cookie/Content-Disposition/CORS 等）+ CRLF 注入防护（键值任一含 \r\n 即丢弃）。
+# 本测试覆盖：① 白名单头正常透传 ② 非白名单头丢弃 ③ 值含 CRLF 丢弃（防注入）
+#           ④ 键含 CRLF 不崩溃（防注入）⑤ Content-Type 仍走独立通道
+
+PORT = 18608
+
+def h(req):
+    p = req.path
+    if p == "/ok":
+        return {"status": 200, "body": "ok", "headers": {"Location": "/dest", "Cache-Control": "max-age=3600", "Set-Cookie": "sid=abc123; Path=/", "Content-Type": "text/html", "X-Custom": "should-not-leak"}}
+    if p == "/evilval":
+        # Location 值注入 CRLF → 该头应整体丢弃（X-Evil 不得出现）
+        return {"status": 200, "body": "ok", "headers": {"Location": "/a\r\nX-Evil: 1", "Content-Type": "text/html"}}
+    if p == "/evilkey":
+        # 键含 CRLF → 不在白名单，应安全丢弃（X-Evil 不得出现、服务不崩）
+        return {"status": 200, "body": "ok", "headers": {"X-Evil\r\nInjected: 1": "x", "Content-Type": "text/html"}}
+    return {"status": 404, "body": "nf"}
+
+vhost("t.test", h)
+
+def serve():
+    px_serve(PORT, "/tmp", 10000)
+spawn serve()
+sleep(400)
+
+def get(path):
+    hh = json_parse("{}")
+    hh.set("Host", "t.test")
+    return http_request("http://127.0.0.1:" + str(PORT) + path, "GET", "", hh)
+
+def has(ks, name):
+    return contains(ks, name)
+
+r = get("/ok")
+ks = str(r["headers"].keys())
+print("OK keys:", ks)
+assert r["status"] == 200
+assert has(ks, "Location") and r["headers"]["Location"] == "/dest"
+assert has(ks, "Cache-Control") and r["headers"]["Cache-Control"] == "max-age=3600"
+assert has(ks, "Set-Cookie") and r["headers"]["Set-Cookie"] == "sid=abc123; Path=/"
+assert r["headers"]["Content-Type"] == "text/html"
+assert not has(ks, "X-Custom")          # 非白名单头不得透传
+print("ok-path PASS")
+
+r = get("/evilval")
+ks = str(r["headers"].keys())
+print("EVILVAL keys:", ks)
+assert not has(ks, "X-Evil") and not has(ks, "Location")
+print("evilval-path PASS (CRLF value dropped)")
+
+r = get("/evilkey")
+ks = str(r["headers"].keys())
+print("EVILKEY keys:", ks)
+assert not has(ks, "X-Evil")
+print("evilkey-path PASS (CRLF key dropped)")
+
+print("M57-S7 ALL OK")

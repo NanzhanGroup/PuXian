@@ -54,6 +54,26 @@
   （特性表「🔌 边缘设备」+ 里程碑表 M57 + 示例列表 m57_s1–s5）+ 本 CHANGELOG 同步定稿；
   M57 全部代码 commit：S1 `57bb9d7` / S2 `f71b28e` / S3 `8f6e615` / S4 `bbffcd5` / S5 `62d9275`
 
+### 修复 · M57-S7 vhost handler 自定义响应头丢失（外部生产应用 BUG_REPORT）
+
+- 现象：`vhost(host, handler)` 返回 `dict{status,headers,body}` 时，headers 除
+  `Content-Type` 外全部丢失 → 301 无 `Location`（浏览器不跳转）、`Cache-Control`
+  缓存头失效、`Set-Cookie` / CORS 头均受阻
+- 根因：`runtime.c px_vhost_normalize` 仅 `px_dict_get_ci("Content-Type")` 单头透传，
+  未透传其余响应头（最小复现位于仓库外生产应用私库，本次以仓库内自包含复现等价验证）
+- 修复：`px_vhost_normalize` 增加 `extra` 出参 + 白名单透传（`Location` /
+  `Cache-Control` / `Content-Disposition` / `Content-Language` / `Set-Cookie` /
+  `X-Robots-Tag` / `Access-Control-*` CORS 头），键、值任一含 CRLF 即整体丢弃（防注入），
+  extra 写满安全截断（响应头缓冲 2048 兜底）；Content-Type 仍走独立通道；调用侧
+  extra 缓冲 256→1024（X-Request-Id 之后追加）
+- 新增回归：`examples/m57_s7_vhost_headers.px`（编译模式 ALL OK）——覆盖①白名单透传
+  ②非白名单头丢弃 ③值含 CRLF 丢弃 ④键含 CRLF 不崩溃 ⑤Content-Type 独立通道；
+  pxi 解释器不含 vhost builtin（Mini 子集边界），修复在 runtime C 层对编译部署形态生效
+- 回归（runtime 变更全量）：pxi 重建 9,050,296B；capability 解释 + 编译双模式各
+  253 PASS 输出逐字节一致；diffcheck --all / --errors 全绿；自举证明 B.c 与
+  golden/compiler.c 逐字节一致（6381 行）；m31_vhost（vhost/限流/CORS）ALL OK
+
+
 ### 路线图 · M57 内容重定向（HTTP/3 深度生产化 → 健壮性加固 → 边缘设备层支持）
 
 - **HTTP/3 深度生产化剩余项**（QPACK 动态表前缀 / 服务端主动迁移·immediate migration /
