@@ -1,8 +1,10 @@
 # M61 规划：外部库 FFI proof（zlib）+ 纯语言 2D 游戏内圈（gfx）
 
-> 状态：待审（D1–D5 拍板后开工）
+> 状态：✅ 已闭环（2026-09，M61；S0–S5 全部落地，commit 见文末回填）
 > 背景：无树莓派真板 → GAP/ROADMAP 候选池排除「真板物理回归」，剩余两项均为游戏线铺路。用户选定 **A+B 并行一期**：
 > A = FFI 外部系统库绑定验证（游戏窗口线 0→1 的机制地基）；B = 纯语言 2D 游戏内圈（零 FFI/零硬件，产出可见图片与可玩 demo，最大程度 dogfood M59+M60）。
+> D1–D5 拍板：全部按推荐采纳（D1 SDL2/raylib 留档不实装；D2 zlib 自编两版 .a 入库；
+> D3 PNG 独立 stdlib png.px；D4 raw 终端必达 + uinput stretch 留档；D5 list[int] 画布）。
 
 ---
 
@@ -87,3 +89,26 @@
 - **D5**：画布用 list[int]（正确优先，性能 dogfood 后再定 bytes）→ 认可？
 
 > 回复「批准开工」或逐条给 D1–D5 意见即开动 S0。
+
+---
+
+## §6 执行回填（2026-09，全部真实执行）
+
+| 子步 | Commit | 要点 |
+|---|---|---|
+| S0 | `84fe8c8` | zlib 1.3.1 两版静态 .a 入库 runtime/third_party/zlib/{include,lib,lib-aarch64} + tools/build_zlib.sh + pxc `--zlib-lib`（缺省按 cc 自动架构探测）+ 无条件链 libz.a；回归 3 例编译 PASS |
+| S1 | `1639c5f` | runtime_zlib.c（crc32/compress[uLongf* 长度指针]/uncompress[inflate 渐进扩容]）+ px_register_zlib + pxc rt 列表；m61_zlib.px 7 组断言 + nm 实证 + 纯语言 CRC32 互证；verify_s1 PASS |
+| S2 | `171e59b` | stdlib/gfx.px（175 行，Bresenham/中点圆/blit/5x7 text）+ stdlib/png.px（105 行，PNG stored 编码器）+ demo Mandelbrot/scene + verify_s2 PASS（python3 zlib 独立解码全验）|
+| S3 | `2eb3060` | m61_snake.px raw 终端可玩（EAT/SELF/WALL 无头剧本 + PTY 喂 q QUIT）；tty_config baud 0 修正为 9600 |
+| S4 | `ab29185` | pxi 重建 9,293,144 B（zlib extern 双模式一致，extern 无需白名单）；aarch64 交叉 m61_zlib qemu diff 一致 + det PNG sha256 一致（605c5b07…）；FFI zpng 压缩 PNG python 校验合法；impsmoke 探针 pxi std.gfx 纯 list 路径 |
+| S5 | 本文档 + spec §8.19 + §10.3 表 + MINI_SUBSET §十三.6 + ROADMAP/GAP 勾选 + CHANGELOG | |
+
+**落地后新增事实**（供后续参考）：
+- extern def 双模式同步成本为零（走 M42 ffi_call C 桥，无需 interp.px 白名单/ibuiltin 分支，
+  只要 pxi 重建含注册 .c）。
+- pxi Mini 子集 bytes 族缺口：bytes/bytes_len/bytes_get/bytes_concat/bytes_to_hex/
+  hex_to_bytes/base64_to_bytes 不在 interp.px names → pxi 构造文本 bytes 只能
+  int_to_bytes/read_bytes；stdlib 完整能力主打编译模式。
+- 性能：640x480 PNG 单帧 mandelbrot ~34s / scene ~14.5s（逐像素 list + bytes concat），
+  画布优化方向 = bytes 三字节/像素（M61-PLAN §2 D5 预案）。
+- QQ 富媒体发送被平台拒（err 40093007），图片落盘 examples/m61_gfx/*.png。

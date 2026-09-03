@@ -95,8 +95,17 @@ ROADMAP 明确不做 OpenGL/Vulkan 原生绑定（工程量与价值不成比例
 |---|---|---|---|---|
 | **M59** ✅ | 数学与随机补齐 | **已完成（2026-09，M59）**：`sin`/`cos`/`tan`/`atan2` + `floor`/`ceil`/`round`/`log`/`log10`/`exp` + `random`/`random_int`/`random_seed` + `pi`/`e`（C libm 内置 + splitmix64；pxi 双模式同步 + aarch64 验证）—— 见 ROADMAP 上表 + CHANGELOG + examples/m59_math | 小；语言面最小侵入（已落地） | 游戏+边缘两条线的公共地基（本表「数学欠账」一项已勾销） |
 | **M60** ✅ | 边缘 stdlib + 设备小内置 | **已完成（2026-09，M60）**：5 个 C 小内置（`sleep_us`/`now_us`/`fcntl`/`tty_config`/`fd_wait`）+ 第 4 个 stdlib `std.edge`（GPIO V2 line / I2C / serial_open / PWM sysfs）+ 示例（PTY 串口 x86 实跑 / 真板 SKIP 通道）+ pxi 白名单 +5 双模式同步 + aarch64 交叉 qemu 三态一致 —— 见 ROADMAP 上表 + CHANGELOG + examples/m60_dev + stdlib/edge.px | 中；树莓派线 §三 #1–#5 已收敛（#6 真板回归仍候选，需硬件） | GPIO 控制、边沿中断、UART、us 级时钟（§三 #1–#5） |
-| 候选 A | FFI 外部库绑定验证 | SDL2 最小窗口或 raylib hello：.a/.so 链接 + pkg-config + 事件循环桥 | 中–大；游戏窗口线 0→1 前提（现 FFI 仅绑内部 C 库、无外部先例） | |
+| **M61** ✅ | 外部库 FFI proof（zlib）+ 2D 游戏内圈 | **已完成（2026-09，M61）**：zlib 1.3.1 两版静态 .a 入库 + pxc `--zlib-lib` 自动架构探测 + runtime_zlib.c（crc32/compress[uLongf* 长度指针]/uncompress[inflate 渐进扩容]，纯语言 CRC32 互证 + nm 实证 + aarch64 qemu diff 一致）+ 第 5/6 个 stdlib `std.gfx`（Bresenham/中点圆/blit/5x7 text）`std.png`（纯语言 PNG stored 编码器）+ demo（Mandelbrot/合成场景/raw 终端贪吃蛇 dogfood M60）+ FFI 压缩 PNG 联动 + pxi 重建（zlib extern 双模式一致）+ gfx 整数路径 PNG 跨架构 sha256 一致 —— 见 ROADMAP 上表 + CHANGELOG + examples/m61_zlib·m61_gfx + stdlib/gfx.px·png.px | 中；游戏窗口线机制地基（§四）已立 | 候选 A「FFI 外部库绑定」闭环；SDL2/raylib 真窗口留档需有屏 |
 | 候选 B | 真板物理回归 | 树莓派 + LED/按键/温湿度：GPIO/I2C/串口/温度示例真跑 | 需硬件；一切边缘能力的最终裁决 | |
+
+> 备注：里程碑开工按 M58 模式：先出 `docs/M*_PLAN.md` 规划供审 → 审批后按子步落地 +
+> verify 回归 + 文档收口。**候选 A「FFI 外部库绑定验证」已由 M61 闭环**（zlib proof 打通
+> 「外部 .a 入库 → C 胶水注册 → pxc 链接（--zlib-lib 自动架构探测）→ 语言调用 →
+> aarch64 跨架构」全链路，立任意外部库模板；见 ROADMAP 上表 + spec §8.19 + examples/
+> m61_zlib + runtime/third_party/zlib + tools/build_zlib.sh）；游戏窗口线的 0→1 尚未打
+> （SDL2/raylib 真窗口需有屏环境，M61-PLAN §4 结论留档）。当前（M61 已闭环）无真板下
+> 候选池为空 → 后续主线候选：Mahesvara 侧（独立私有仓）或语言面欠账（MINI_SUBSET §十三）
+> 按需立项。
 
 > 备注：里程碑开工按 M58 模式：先出 `docs/M*_PLAN.md` 规划供审 → 审批后按子步落地 +
 > verify 回归 + 文档收口。当前（M60 已闭环）候选池：FFI 外部库绑定验证（游戏窗口线

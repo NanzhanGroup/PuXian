@@ -43,6 +43,7 @@
 
 | M59 | **数学与随机补齐（游戏/边缘两条线公共地基）**：C libm 内置 14 函数 + 2 常量——`sin`/`cos`/`tan`/`atan2(y,x)`（弧度）+ `floor`/`ceil`/`round`（返回 float，与 sqrt 一致）+ `log`/`log10`/`exp` + `random`/`random_int`/`random_seed`（splitmix64 确定性、跨平台可复现）+ `pi`/`e` 全精度常量；域错误 NaN/inf 透传不终止、参数错误终止（编程契约）；pxi 解释器白名单 +15 双模式同步（含补平 sqrt 不对称）+ `bootstrap/pxi` 重建；编译/解释/qemu-aarch64 三态断言 + splitmix 序列 x86==aarch64（examples/m59_math + verify_s1~s4） |
 | M60 | **边缘设备深化（树莓派线，收敛 GAP §三 #1–#5）**：5 个 C 小内置——`sleep_us`/`now_us`（CLOCK_MONOTONIC 微秒）/`fcntl`/`tty_config`（串口 termios raw+波特率）/`fd_wait`（内部 poll 暴露，GPIO 边沿/多 fd 等待）+ 第 4 个 stdlib **`std.edge`**（GPIO V2 line 请求/读写/边沿事件、I2C 寄存器、serial_open、PWM sysfs，纯语言零新 C）+ 示例（m60_serial_pty **x86 实跑 PTY 真内核串口 loopback** / m60_gpio·i2c·pwm 真板段 SKIP 通道）+ GPIO V2 592B 布局 C offsetof 单测；pxi 白名单 +5 双模式同步 + bootstrap/pxi 重建 + aarch64 交叉 qemu 三态一致（examples/m60_dev + examples/m60_*.px） |
+| M61 | **外部库 FFI proof（zlib）+ 纯语言 2D 游戏内圈（无真板期，游戏线 0→1 地基）**：A = 外部系统库绑定全链路——zlib 1.3.1 源码自编两版静态 .a 入库（runtime/third_party/zlib/{lib,lib-aarch64}，tools/build_zlib.sh）+ pxc `--zlib-lib` 自动架构探测 + 薄胶水 runtime_zlib.c（`zlib_crc32`/`zlib_compress`[uLongf* 长度指针]/`zlib_uncompress`[inflate 渐进扩容]，纯语言 CRC32 查表互证 + nm 实证符号 + aarch64 qemu 输出 diff 一致）；B = 第 5/6 个 stdlib **`std.gfx`**（Bresenham/中点圆/blit/5x7 字形 text，画布 list[int] 0xRRGGBB）**`std.png`**（纯语言 PNG stored 编码器：CRC32+ADLER+zlib stored block，零 FFI）+ demo（**Mandelbrot 640x480** / 合成场景 / **raw 终端可玩贪吃蛇** dogfood M60 设备组）+ **FFI 压缩 PNG 联动**（zlib_compress 出 IDAT，python 独立解码全验）+ pxi 重建（zlib extern 双模式一致）+ gfx 整数路径 PNG 跨架构 sha256 一致；图片落盘（QQ 富媒体通道暂拒）；SDL2/raylib 真窗口结论留档（无屏不实装） |
 
 > **主线外已占用编号**（非 ROADMAP 功能里程碑，已记录于 CHANGELOG，勿复用）：
 > **M55** = issue #2 并发安全 hotfix（修复 · M55）；**M56** = 外部生产应用配套 runtime
@@ -58,8 +59,12 @@
 
 | 里程碑 | 主题 | 规模 / 前置 |
 |---|---|---|
-| 候选 | FFI 外部库绑定验证（SDL2 最小示例或 raylib hello：.a 链接 / pkg-config / 事件循环桥） | 中–大；游戏窗口线 0→1 前提（现 FFI 仅绑内部 C 库、无外部先例） |
 | 候选 | 真板物理回归（树莓派 + LED / 按键 / 温湿度） | 需硬件；一切边缘能力的最终裁决 |
+
+> FFI 外部库绑定验证候选已由 **M61 闭环**（zlib proof 打通「外部 .a 入库 → C 胶水注册 →
+> pxc 链接 → 语言调用 → 跨架构」全链路，立任意外部库模板；见上表 M61 + spec §8.19）。
+> 无真板前提下候选池即空 → 下一主线候选：Mahesvara 侧（独立仓）或语言面欠账（MINI_SUBSET
+> §十三）按需立项。
 
 > 差距细节见 docs/GAP_ANALYSIS.md；语言面欠账另见 MINI_SUBSET §十三（M58 dogfood 暴露，
 > 其中 §十三.1/.2 HTTP/S3 网络失败→Err 已修复）。

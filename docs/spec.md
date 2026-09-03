@@ -1067,6 +1067,68 @@ close(fb)
 
 ---
 
+### 8.19 外部系统库 FFI（zlib proof）+ 纯语言 2D 游戏内圈（M61，游戏线 0→1 地基）
+
+> M61（docs/M61_PLAN.md）双线收口 GAP 候选池（无真板）：A = **FFI 外部系统库绑定**
+> proof（游戏窗口线 0→1 机制地基），B = **纯语言 2D 内圈**（零 FFI/零硬件、产出可见
+> 图片与可玩 demo，最大程度 dogfood M59+M60）。
+
+**A 线 · FFI 外部库机制（真缺口 = 只绑过内部库）**
+
+> 机制认知（M42/M46 先例）：`extern def` 并非自动 dlsym 任意 C 符号，而是查 **C 侧手写
+> 注册表**（px_ffi_register）。故「绑定外部库」= ① 写薄 C 胶水注册 → ② 外部静态 .a 进
+> pxc 链接行 → ③ 入库约定。M61 以 zlib（最普适 C 库）打通全链路并立模板：
+
+- **外部 .a 两版入库**：`runtime/third_party/zlib/{include, lib, lib-aarch64}`，zlib 1.3.1
+  源码自编（x86_64 gcc / aarch64-linux-musl 交叉，`tools/build_zlib.sh` 一键重建 + ar 抽
+  crc32.o 架构校验）；保持纯静态哲学，零动态依赖。
+- **pxc 链接分支**：`--zlib-lib <dir>` 显式指定，缺省按 `--cc` **自动架构探测**（gcc →
+  `lib/`，aarch64-* → `lib-aarch64/`，旧交叉脚本免改）；libz.a 无条件链（~150KB，无 zlib
+  引用时不抽成员，向后兼容）。
+- **薄胶水 runtime_zlib.c**（注册 3 函数，进 FFI 表，双模式统一 bi_ffi_call C 桥）：
+  - `zlib_crc32(data)` → int：crc32(0,data,len)，已知值可校验；
+  - `zlib_compress(data, level)` → bytes：compress2 + **uLongf\* 长度指针**（cap→实际），
+    语言侧免预分配；
+  - `zlib_uncompress(data)` → bytes：z_stream inflate **渐进扩容**（免预知解压大小）。
+  - str/bytes 均走 union data/len（二进制安全含 NUL）；数据非法 → 返回 null 不杀进程
+    （与 M57 设备层哲学一致），参数/类型错误 → px_error 终止。
+- **语言面**：`import "c/zlib"` + `extern def zlib_*(...)`，双模式一致。
+- **验证**：m61_zlib.px —— crc32("hello")=0x3610a686 / 标准 check 0xCBF43926 / **纯语言
+  CRC32 查表 5 组互证**（真实调用 libz.a 的旁证）/ 长文本 roundtrip 10400→110B /
+  NUL 安全 / 空串 / 非法流 null / level 0·6·9；`nm` 实证产物含 crc32/compress2/inflate
+  符号；**aarch64 交叉 + qemu 输出与 x86 diff 逐字节一致**（aarch64 libz.a 生效）。
+
+**B 线 · 纯语言 2D 内圈（第 5/6 个 stdlib）**
+
+- **std.gfx**（stdlib/gfx.px，画布 = `[w,h,pixels]`，pixels 每像素 0xRRGGBB）：
+  `canvas_create/w/h/pixels`、`set_px`/`get_px`（边界裁剪）、`line`（Bresenham 整数）、
+  `rect`/`fill_rect`、`circle`（中点 8 对称）/`fill_circle`（sqrt 弦扫描）、
+  `blit`（spr=[sw,sh,colors]，0=透明跳过）、`text`/`text_size`（内置 5x7 位图，
+  0-9 A-Z . - 空格，小写自动转大写、未知→?，compact 编码 bit(x+5y)）。零新 C 零 FFI。
+- **std.png**（stdlib/png.px，纯语言 PNG 编码器 8bit RGB stored 无压缩）：
+  签名 + IHDR/IDAT/IEND chunk + 纯语言 CRC-32 查表 + ADLER-32 + zlib stored block
+  （CMF 0x78 01，≤65535/块，BFINAL 正确）。零 FFI、可移植（A 线联动压缩见下）。
+- **示例**：demo_mandelbrot.px（640x480 复数迭代 + 11 色调色板）、demo_scene.px
+  （全原语合成 + 8x8 透明棋盘 blit + 3 行 5x7 文字）；**m61_snake.px raw 终端可玩贪吃蛇**
+  （w/a/s/d 控向 q 退出，O/#/@；交互走 tty_config raw + fd_wait + read 单键 = M60 设备组
+  dogfood；SNAKE_AUTO=1 无头确定性剧本 EAT/SELF/WALL 三断言）。
+- **跨架构确定性**：m61_s4_det.px 纯整数绘制（无浮点）PNG，x86 == qemu-aarch64
+  **sha256 逐字节一致**（gfx 整数原语 + PNG stored 编码器跨架构确定）。
+- **FFI 压缩联动（A+B 交汇）**：m61_s4_zpng.px 用 extern zlib_compress(level6) 直接产出
+  压缩 IDAT → 标准压缩 PNG（python zlib 独立解码 chunk CRC 全过 + 像素抽查）。
+
+**验证**：python3 stdlib zlib 独立解码所有产出 PNG —— chunk 遍历 + 每 chunk CRC32 全校验
++ IDAT 解压 + filter=0 行结构 + 像素颜色抽查（scene 太阳黄/底/边框蓝；mandelbrot M 集内部
+黑/外部有色/标题白字）；pxi（重建后）可解释 zlib extern（双模式一致）；pxi 可 import
+std.gfx 走纯 list 路径（text/blit 依赖 pxi 未同步 builtin 仍受限，stdlib 完整能力主打编译
+模式，MINI_SUBSET §十三.6）。QQ 富媒体发送通道被平台拒（40093007）→ 图片落盘供自取。
+
+**性能 dogfood 教训（留档）**：640x480 单帧 PNG —— mandelbrot ~34s / scene ~14.5s
+（编译模式逐像素 list 存储 + bytes concat 拷贝为主）→ B 线后续画布优化方向 = bytes
+三字节/像素 + 批量 blit（M61-PLAN D5 预案，正确优先已验证、性能按需再评估）。
+
+---
+
 ## 9. 双模式执行
 
 ### 9.1 脚本模式
@@ -1138,6 +1200,8 @@ panic(msg)            # 致命错误，退出码 1
 | `std.math` | abs、sqrt、min、max、pow（M59 起另有全局数学内置：sin/cos/tan/atan2、floor/ceil/round、log/log10/exp、random 族、pi/e，见 §10.2 注） |
 | `std.collections` | list/map 扩展操作 |
 | `std.edge` | 边缘设备（M60）：GPIO V2 line 控制/边沿、I2C 寄存器读写、串口 raw（serial_open）、PWM sysfs —— 见 §8.18 |
+| `std.gfx` | 纯语言 2D 画布（M61）：line/rect/circle/fill_*/blit/text（5x7 字形）+ 精灵 —— 见 §8.19 |
+| `std.png` | 纯语言 PNG 编码器（M61）：8bit RGB stored 无压缩，落盘可见图 —— 见 §8.19 |
 | `std.os` | env、args、exit |
 | `std.process` | run 子进程（捕获输出） |
 
