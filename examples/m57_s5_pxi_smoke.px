@@ -1,0 +1,65 @@
+# ============================================================
+# M57 S5：pxi 解释器 M57 边缘设备层新内置 smoke（解释模式）
+# ------------------------------------------------------------
+# 验证重建后的 bootstrap/pxi（selfhost/interp.px 重新编译 + 当前 runtime
+# 静态链接）已同能力支持 M57 新增语言 API（S1 fd 原语 + S2 mmap 数据通道）：
+#   open / close / os_errno / ioctl / read / write
+#   mmap / munmap / mem_write
+# 走真实内核路径（/dev/zero、/dev/ptmx + TIOCGPTN），全部在 pxi
+# 解释模式下直接可用且语义与编译模式一致（同一份 runtime C builtin，
+# ibuiltin.px 纯转发）。
+# 说明：
+#   - 编译模式 + 解释模式输出一致（由本 S5 对拍）。
+#   - 刻意只用解释器内置子集内的辅助 builtin（int_to_bytes/bytes_to_int/
+#     read_bytes/type/str），避免依赖 bytes()/len(bytes) 等解释器未覆盖项。
+#   - http_unix（M56）与 tcp_* 系列不在本 smoke 范围（http_unix 已由
+#     M56 验证；tcp_* 编译模式验证见 m57_s1/s2 主脚本）。
+# ============================================================
+print("== M57-S5 pxi smoke: 边缘设备层 builtin（解释模式）==")
+
+# ---- 1. open/close/os_errno ----
+var fd = open("/dev/null", "rw")
+assert(fd > 0, "open /dev/null 应 >0 got=" + str(fd))
+assert(close(fd) == true, "close /dev/null 应 true")
+var fdmiss = open("/nonexistent_m57s5_xx", "r")
+assert(fdmiss == -1, "open 不存在应 -1 got=" + str(fdmiss))
+assert(os_errno() > 0, "open 失败后 errno 应 >0 got=" + str(os_errno()))
+
+# ---- 2. read 数据通道（/dev/zero → 全 0 bytes）----
+var zf = open("/dev/zero", "r")
+assert(zf > 0, "open /dev/zero 应 >0")
+var zb = read(zf, 8)
+assert(type(zb) == "bytes", "read 应返回 bytes got=" + type(zb))
+assert(bytes_to_int(zb) == 0, "/dev/zero 读 8 字节应全 0")
+
+# ---- 3. ioctl bytes 就地填充（/dev/ptmx + TIOCGPTN=0x80045430 真内核）----
+var pf = open("/dev/ptmx", "rw")
+assert(pf > 0, "open /dev/ptmx 应 >0")
+var ib = int_to_bytes(0, 4)
+var rc = ioctl(pf, 0x80045430, ib)
+assert(rc == 0, "TIOCGPTN ioctl 应 0 got=" + str(rc) + " errno=" + str(os_errno()))
+var ptn = bytes_to_int(ib)
+assert(ptn >= 0, "pty 号应 >=0 got=" + str(ptn))
+print("ioctl TIOCGPTN -> pts/" + str(ptn) + "（buffer 就地填充 ok）")
+assert(close(pf) == true, "close ptmx 应 true")
+
+# ---- 4. write 数据通道（临时文件）----
+var wf = open("/tmp/m57s5_smoke.txt", "w+")
+assert(wf > 0, "open w+ 应 >0")
+var wn = write(wf, "m57-s5-smoke")
+assert(wn == 12, "write 应 12 got=" + str(wn))
+assert(close(wf) == true, "close wf 应 true")
+assert(read_bytes("/tmp/m57s5_smoke.txt") != "", "回读临时文件应非空")
+
+# ---- 5. mmap/munmap/mem_write（/dev/zero 活映射）----
+var mf = open("/dev/zero", "rw")
+assert(mf > 0, "open zero2 应 >0")
+var mp = mmap(mf, 4096)
+assert(type(mp) == "bytes", "mmap 应返回 bytes got=" + type(mp))
+var mw = mem_write(mp, 0, "AB")
+assert(mw == 2, "mem_write 应 2 got=" + str(mw))
+assert(munmap(mp) == true, "munmap 应 true")
+assert(close(mf) == true, "close zero2 应 true")
+assert(close(zf) == true, "close zero 应 true")
+
+print("== M57-S5 pxi smoke 全 PASS：边缘设备层 builtin 解释模式同能力 ==")

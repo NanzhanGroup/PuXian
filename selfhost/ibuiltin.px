@@ -296,6 +296,67 @@ def i_call_builtin(name, args, pos):
         if len(args) == 0:
             return Ok(null)
         return Ok(args[0])
+    # ---- M57 边缘设备层（直接转发 runtime C builtin；可选参数按实参个数透传） ----
+    if name == "open":
+        # open(path[, mode]) → fd
+        if len(args) < 1 or len(args) > 2:
+            return Err(i_r1002("open 需要 (path[, mode])", pos))
+        if len(args) == 2:
+            return Ok(open(args[0], args[1]))
+        return Ok(open(args[0]))
+    if name == "close":
+        # close(fd) → bool
+        if len(args) != 1:
+            return Err(i_r1002("close 需要一个 fd 参数", pos))
+        return Ok(close(args[0]))
+    if name == "ioctl":
+        # ioctl(fd, request[, arg]) → int（arg: 缺省→NULL / int 直传 / bytes 就地）
+        if len(args) < 2 or len(args) > 3:
+            return Err(i_r1002("ioctl 需要 (fd, request[, arg])", pos))
+        if len(args) == 3:
+            return Ok(ioctl(args[0], args[1], args[2]))
+        return Ok(ioctl(args[0], args[1]))
+    if name == "os_errno":
+        # os_errno() → int（线程局部 errno 查询）
+        if len(args) != 0:
+            return Err(i_r1002("os_errno 不需要参数", pos))
+        return Ok(os_errno())
+    if name == "read":
+        # read(fd, maxlen) → bytes
+        if len(args) != 2:
+            return Err(i_r1002("read 需要 (fd, maxlen)", pos))
+        return Ok(read(args[0], args[1]))
+    if name == "write":
+        # write(fd, data) → int
+        if len(args) != 2:
+            return Err(i_r1002("write 需要 (fd, data)", pos))
+        return Ok(write(args[0], args[1]))
+    if name == "mmap":
+        # mmap(fd, length[, offset]) → bytes
+        if len(args) < 2 or len(args) > 3:
+            return Err(i_r1002("mmap 需要 (fd, length[, offset])", pos))
+        if len(args) == 3:
+            return Ok(mmap(args[0], args[1], args[2]))
+        return Ok(mmap(args[0], args[1]))
+    if name == "munmap":
+        # munmap(bytes) → bool（显式解除映射）
+        if len(args) != 1:
+            return Err(i_r1002("munmap 需要一个 mmap bytes 参数", pos))
+        return Ok(munmap(args[0]))
+    if name == "mem_write":
+        # mem_write(mmap_bytes, offset, data) → int（就地写映射区）
+        if len(args) != 3:
+            return Err(i_r1002("mem_write 需要 (mmap_bytes, offset, data)", pos))
+        return Ok(mem_write(args[0], args[1], args[2]))
+    if name == "http_unix":
+        # M56：http_unix(sock_path, url_path, method[, body[, headers]]) → dict
+        if len(args) < 3 or len(args) > 5:
+            return Err(i_r1002("http_unix 需要 (sock_path, url_path, method[, body[, headers]])", pos))
+        if len(args) == 3:
+            return Ok(http_unix(args[0], args[1], args[2]))
+        if len(args) == 4:
+            return Ok(http_unix(args[0], args[1], args[2], args[3]))
+        return Ok(http_unix(args[0], args[1], args[2], args[3], args[4]))
     return Err(i_r1002("未知内置函数: " + name, pos))
 
 # M42：FFI 调用（extern def 走 C 桥）
