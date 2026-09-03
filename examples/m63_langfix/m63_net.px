@@ -1,0 +1,33 @@
+# ============================================================
+# M63-L8: pxi 网络白名单补齐（http_post / http_request）
+# 双模式对拍：成功路径 http_post/http_request 打本地 mock（:18080）
+# + 失败路径（连不上的端口 → Err result 透传，M57 语义不杀进程）
+# s3_* 参数错（编译模式 px_error 杀进程，解释器 Err 不杀——既有设计差异）
+# 放 m63_net_err.px 单测，不入本对拍用例。
+# ============================================================
+def chk(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+    print("PASS: " + msg)
+
+var ep = "http://127.0.0.1:18080/api"
+
+# --- http_post(url, body) → 响应体字符串（echo 含 body） ---
+var pb = http_post(ep, "hello-px")
+chk(pb == "mock-ok:hello-px", "http_post body")
+
+# --- http_request(url, method, body) → dict{status,headers,body} ---
+var rq = http_request(ep, "POST", "reqdata")
+chk(rq["status"] == 200, "http_request status 200")
+chk(rq["body"] == "mock-ok:reqdata", "http_request body")
+
+# --- http_get（既有白名单，回归确认仍通） ---
+var g = http_get(ep)
+chk(g == "mock-ok:", "http_get body")
+
+# --- 失败路径：Result Err 透传（M57 网络失败不杀进程，双模式一致） ---
+var bad = http_request("http://127.0.0.1:1/x", "GET")
+chk(bad.is_err(), "http_request 网络失败 → Err result 透传")
+
+print("net done")
