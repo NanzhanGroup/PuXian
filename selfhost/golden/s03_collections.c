@@ -5,24 +5,26 @@
 
 static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    LXValue px_err_1_val = px_null();
-    int px_err_1_proped = 0;
-    LXValue _v2 = px_list_n((LXValue[]){px_int(3LL), px_int(1LL), px_int(2LL)}, 3);
-    (void)(px_method(_v2, "append", (LXValue[]){px_int(4LL)}, 1));
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){_v2}, 1)}, 1));
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_index(_v2, px_int(0LL))}, 1));
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_index(_v2, px_neg(px_int(1LL)))}, 1));
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("sorted"), (LXValue[]){_v2}, 1)}, 1));
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("reversed"), (LXValue[]){_v2}, 1)}, 1));
-    LXValue _v3 = ({ LXValue _d = px_dict(); { LXValue _k = px_str("a"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_int(1LL)); } { LXValue _k = px_str("b"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_int(2LL)); } _d; });
-    px_index_set(_v3, px_str("c"), px_int(3LL));
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_index(_v3, px_str("c"))}, 1));
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_method(_v3, "has", (LXValue[]){px_str("a")}, 1)}, 1));
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("sorted"), (LXValue[]){px_method(_v3, "keys", (LXValue[]){}, 0)}, 1)}, 1));
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("sorted"), (LXValue[]){px_method(_v3, "values", (LXValue[]){}, 0)}, 1)}, 1));
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_method(_v3, "get", (LXValue[]){px_str("zz"), px_int(9LL)}, 2)}, 1));
-px_err_1:
-    if (px_err_1_proped) return px_err_1_val;
+    LXValue _v1 = px_null();
+    LXValue _v2 = px_null();
+    LXValue px_err_3_val = px_null();
+    int px_err_3_proped = 0;
+    _v1 = px_list_n((LXValue[]){px_int(3LL), px_int(1LL), px_int(2LL)}, 3);
+    (void)(px_method(_v1, "append", (LXValue[]){px_int(4LL)}, 1));
+    (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){_v1}, 1)}, 1));
+    (void)(px_call(px_get_global("print"), (LXValue[]){px_index(_v1, px_int(0LL))}, 1));
+    (void)(px_call(px_get_global("print"), (LXValue[]){px_index(_v1, px_neg(px_int(1LL)))}, 1));
+    (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("sorted"), (LXValue[]){_v1}, 1)}, 1));
+    (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("reversed"), (LXValue[]){_v1}, 1)}, 1));
+    _v2 = ({ LXValue _d = px_dict(); { LXValue _k = px_str("a"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_int(1LL)); } { LXValue _k = px_str("b"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_int(2LL)); } _d; });
+    px_index_set(_v2, px_str("c"), px_int(3LL));
+    (void)(px_call(px_get_global("print"), (LXValue[]){px_index(_v2, px_str("c"))}, 1));
+    (void)(px_call(px_get_global("print"), (LXValue[]){px_method(_v2, "has", (LXValue[]){px_str("a")}, 1)}, 1));
+    (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("sorted"), (LXValue[]){px_method(_v2, "keys", (LXValue[]){}, 0)}, 1)}, 1));
+    (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("sorted"), (LXValue[]){px_method(_v2, "values", (LXValue[]){}, 0)}, 1)}, 1));
+    (void)(px_call(px_get_global("print"), (LXValue[]){px_method(_v2, "get", (LXValue[]){px_str("zz"), px_int(9LL)}, 2)}, 1));
+px_err_3:
+    if (px_err_3_proped) return px_err_3_val;
     return px_null();
 }
 

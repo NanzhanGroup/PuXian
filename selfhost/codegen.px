@@ -369,8 +369,14 @@ def cg_collect_consts(stmts):
             cg_collect_consts(st[2])
         i += 1
 
-# ---------- 收集赋值目标变量（递归 if/for/while） ----------
-def cg_collect_assign_vars(stmts, out):
+# ---------- 收集需提升到函数顶的局部变量（递归 if/for/while） ----------
+# M62-L5：Python/解释器语义 = 函数级作用域（if/for/while 不新建作用域）。
+# 编译模式原只对「无声明赋值（Assign 目标）」做函数顶提升（px_null 声明 + 原位赋值）；
+# VarDecl（let/var/const）与 For 循环变量在嵌套块内就地声明 → 块外引用 C undeclared。
+# 现把 VarDecl 与 For 循环变量一并纳入提升集：函数顶统一声明，声明处仅赋值，
+# 对齐解释器（istmt.px「if/for/while 沿用 Python 语义」）。同名 VarDecl 只提升一次
+# （同函数同名 = 同一变量，Python 语义）。
+def cg_collect_hoist_vars(stmts, out):
     var i = 0
     while i < len(stmts):
         let st = stmts[i]
@@ -381,18 +387,25 @@ def cg_collect_assign_vars(stmts, out):
                 let name = rust_unescape(tgt[1])
                 if not contains(out, name):
                     out.append(name)
+        elif ty == "VarDecl":
+            let name = rust_unescape(st[2])
+            if not contains(out, name):
+                out.append(name)
         elif ty == "If":
             let brs = st[1]
             var bi = 0
             while bi < len(brs):
-                cg_collect_assign_vars(brs[bi][1], out)
+                cg_collect_hoist_vars(brs[bi][1], out)
                 bi += 1
             if st[2] != null:
-                cg_collect_assign_vars(st[2], out)
+                cg_collect_hoist_vars(st[2], out)
         elif ty == "For":
-            cg_collect_assign_vars(st[3], out)
+            let lv = rust_unescape(st[1])
+            if not contains(out, lv):
+                out.append(lv)
+            cg_collect_hoist_vars(st[3], out)
         elif ty == "While":
-            cg_collect_assign_vars(st[2], out)
+            cg_collect_hoist_vars(st[2], out)
         i += 1
 
 # ---------- 函数生成 ----------
@@ -420,12 +433,13 @@ def cg_gen_func_named(f, cname):
             default_c = cg_gen_expr(p[3])
         s += "    LXValue " + v + " = (nargs > " + str(i) + ") ? args[" + str(i) + "] : " + default_c + ";\n"
         i += 1
-    # 预扫描：函数体内赋值变量（Python 语义局部变量；顶层全局名除外）
-    let assign_names = []
-    cg_collect_assign_vars(f[4], assign_names)
+    # 预扫描：函数体内需提升到函数顶的局部变量（Assign 目标 + VarDecl + For 循环变量，
+    # Python 语义局部变量；顶层全局名除外）——M62-L5 块作用域对齐（解释器不新建块作用域）
+    let hoist_names = []
+    cg_collect_hoist_vars(f[4], hoist_names)
     var ai = 0
-    while ai < len(assign_names):
-        let name = assign_names[ai]
+    while ai < len(hoist_names):
+        let name = hoist_names[ai]
         if cg_var_of(name) != null:
             ai += 1
             continue

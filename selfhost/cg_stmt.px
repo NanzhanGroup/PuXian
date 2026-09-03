@@ -27,8 +27,26 @@ def cg_gen_stmt(stmt, indent):
         # 顶层 let 变量（globals 且不在函数内）→ 全局变量
         if contains(cg_globals, name) and len(cg_err_labels) == 0:
             return pad + "px_set_global(\"" + name + "\", " + rhs + ");\n"
-        let v = cg_new_var(name)
-        # 类型推断：struct 构造
+        var hv = cg_var_of(name)
+        if hv == null:
+            # 未被函数顶预提升（如函数内 var 与模块顶层全局同名被 hoist 跳过）→ 就地声明
+            hv = cg_new_var(name)
+            # 类型推断：struct 构造
+            if stmt[4] != null:
+                let e = stmt[4]
+                var cname = null
+                if e[0] == "Constructor":
+                    cname = rust_unescape(e[1])
+                elif e[0] == "Call":
+                    let callee = e[1]
+                    if callee[0] == "Var":
+                        cname = rust_unescape(callee[1])
+                if cname != null:
+                    if cg_structs.has(cname):
+                        cg_var_types[name] = cname
+            return pad + "LXValue " + hv + " = " + rhs + ";\n"
+        # M62-L5：变量已由函数顶预声明（px_null 初始，块作用域不新建），此处仅赋值
+        # 类型推断：struct 构造（与就地声明路径一致）
         if stmt[4] != null:
             let e = stmt[4]
             var cname = null
@@ -41,7 +59,7 @@ def cg_gen_stmt(stmt, indent):
             if cname != null:
                 if cg_structs.has(cname):
                     cg_var_types[name] = cname
-        return pad + "LXValue " + v + " = " + rhs + ";\n"
+        return pad + hv + " = " + rhs + ";\n"
     if ty == "Assign":
         var rhs = cg_gen_expr(stmt[3])
         let tgt = stmt[1]
@@ -120,10 +138,18 @@ def cg_gen_stmt(stmt, indent):
         let it = cg_gen_expr(stmt[2])
         let it_var = cg_tmp()
         let idx_var = cg_tmp()
-        let v = cg_new_var(rust_unescape(stmt[1]))
+        var vv = cg_var_of(rust_unescape(stmt[1]))
+        var vp = "LXValue "
+        if vv == null or len(cg_err_labels) == 0:
+            # 顶层代码（无函数顶 hoist，err_labels 空）→ 每次迭代变量独立就地声明；
+            # 或函数内未被预提升 → 就地声明
+            vv = cg_new_var(rust_unescape(stmt[1]))
+        else:
+            # M62-L5：函数内循环变量已由函数顶预声明（px_null 初始，Python 语义循环后保留最后值），循环内仅赋值
+            vp = ""
         var s = pad + "LXValue " + it_var + " = " + it + ";\n"
         s += pad + "for (int " + idx_var + " = 0; " + idx_var + " < px_len(" + it_var + "); " + idx_var + "++) {\n"
-        s += pad + "    LXValue " + v + " = px_index(" + it_var + ", px_int(" + idx_var + "));\n"
+        s += pad + "    " + vp + vv + " = px_index(" + it_var + ", px_int(" + idx_var + "));\n"
         let body = stmt[3]
         var bi = 0
         while bi < len(body):
