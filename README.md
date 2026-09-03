@@ -99,6 +99,7 @@ def main():
 | 🌐 网络 | HTTP 客户端（**HTTPS TLS 1.2/1.3** + gzip/chunked 自动解码 + **http/https 连接池复用** + **TLS 会话票据恢复** + **流式 gzip 边下边解** + **Unix socket HTTP 客户端**（`http_unix(sock,path,method,...)` 本地服务/LLM 网关调用，自动补 Content-Length））+ **HTTP 服务端**（`http_serve` gzip/chunked/keep-alive/流式 + **`px_serve` 服务端 TLS**：`tls_server(cert,key[,hostname])` 注册后 HTTPS/WSS/SSE-over-TLS + **TLS SNI 多证书按域名选择** + 请求体大小可配 + 413 + 大 body 落盘 + **优雅关闭** + **per-route 限流**（路由粒度 429）+ **访问日志落盘轮转** + **Alt-Svc 通告** + **HTTP/3 三栈合一**（`px_serve(...,{http3:true|{port?,cert?,key?}})` 同端口托管 H3/QUIC，HTTP/1.1+HTTP/2+HTTP/3 共用同一 vhost/路由/限流/访问日志/静态/.px 管道；`h3_server_listen` 独立 H3 listener；**aioquic 第三方互操作**；**HTTP/3 生产化**（TLS 1.3 会话恢复 1-RTT resumption、0-RTT early data 握手前可发、连接迁移换源续传、BLOCKED_STREAMS 流控协商 -206/MAX_STREAMS）））+ **WebSocket**（RFC 6455，心跳/超时，**`ws://`/`wss://` 一行连接**）+ **SSE** 服务端/客户端（**断线自动重连**，带 Last-Event-ID）+ **UDP**（udp_open/send/recv/close）+ TCP 全功能 |
 | 🛡 加密/文档 | **AES-CBC-PKCS7 / AES-GCM**、**RSA**（PKCS#1 v1.5）、**XML** 解析/转义/**生成**（xml_build）、**zip** 打包/解压、**base64**、sha256 / xxhash、**SQLite**（open/exec/query/close，参数绑定+结果集） |
 | 🔢 语言能力 | 切片语法 `a[i:j]` / `a[i:j:k]`（步长/反转，str 按 UTF-8 字符）、**生成器表达式** `(x for x in xs)`（**惰性**：单层 for 延迟求值 / `gen_next` 逐项 / for-in / `list()` 转换）、位运算 + 二进制数据视图（int_to_hex / bytes_to_hex / bit_count / bit_length）、正则表达式、锁原语（mutex / rwlock）、文件随机读写 + fsync、进程/信号（os_spawn / os_wait / signal）、**Result/Option 错误处理**（`Ok(x)`/`Err(e)`/`Some(x)` 构造，`?` 错误传播——Err/None 立即返回、`!` 强制解包、is_ok/is_err/unwrap 方法，spec 唯一错误通道）、字符串插值 `${expr}`、推导式、可选链 `?.`、空合并 `??`、管道 `\|>` |
+| 🔌 边缘设备 | fd 原语 `open`/`close`/`ioctl`/`os_errno`（ioctl arg 三形态：int 直传 / bytes·str 就地 in/out buffer，`_IOR` 类内核直接填充同对象）+ fd 数据通道 `read`/`write`（read(2)/write(2) 直通）+ **mmap 活映射** `mmap`/`munmap`/`mem_write`（MAP_SHARED 帧缓冲/共享内存/DMA 直访，GC 自动 munmap，`mem_write` 就地写映射区）+ GPIO/I2C 设备示例 + **aarch64 交叉编译**（`pxc build --no-quic` 裁剪 + qemu-aarch64 验证与 x86 一致）——Linux 边缘设备层（树莓派/网关/盒子）单静态二进制免环境 |
 | 🚀 应用平台 | **.px 脚本执行机制**（`px_serve` PHP/OpenResty 式应用服务器：Cookie/Session/基础认证 + 服务端 TLS + 优雅关闭、`px_exec` 语言层嵌入 API）+ **.px 进程池**（编译模式预派生 worker 解释器常驻复用，PHP-FPM 风格，**脚本/二进制变更自动滚动重启热更新**）+ 路由表+中间件（method+path 模式 / `:id` 参数 / `*` 通配 / 中间件链）+ cron 调度（6 字段）+ JSON 路径（json_path/json_path_set） |
 | 📚 标准库 | `stdlib/collections.px`（sorted/reversed/map/filter/reduce/unique/group_by）+ 内置注册表白名单（见 MINI_SUBSET §2.5） |
 
@@ -192,7 +193,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 | M20–M29 | C 运行时符号统一 → chunked/gzip/切片/base64/SSE → slab 分配器+追踪式 GC+WebSocket+位运算 → 网络/存储/安全收尾 → XML 生成+切片步长+连接池 → 闭包循环回收+进程池+TLS 票据恢复 → `>>>`+WS 心跳+远程 registry → 服务端 TLS+请求体限制+Session → 路由/时间时区/cron/SQLite → JSON 路径+静态缓存头+Range+访问日志+请求 ID |
 | M30–M40 | 服务端 https 连接池+字节序整数↔bytes+推导式补全+fmt 配置化 → 沙箱+虚拟主机+限流+HTTP/2 预检+连接线程池 → ws/wss 一行连接+SSE 重连+进程池热更新+生成器 → per-route 限流+TLS SNI+访问日志轮转+QUIC 预研 → 惰性生成器+进程池配置化+WS 广播+事件总线 → gzip 解压+推导式 range+HTTP/2 最小服务端+多维限流 → 日志增强+请求上下文+WS 心跳配置+优雅关闭 → HTTP/2 over TLS+响应压缩+S3 → WS 自动重连+HTTP/2 多流+UDP echo → **Result/Option 唯一错误通道** → **字符串插值 `${expr}`** |
 
-### 自举（M-B1 → M-B9，全部 ✅，M-B9b 进行中）
+### 自举（M-B1 → M-B9b，全部 ✅）
 
 | 里程碑 | 内容 | 结果 |
 |---|---|---|
@@ -207,7 +208,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 | M-B9a | 退役 Rust 版 + 接入 CI + 引导链 | `tools/pxc` 全链路可用，CI 四 job |
 | M-B9b | 第一个生产应用（dogfooding 验证） | ✅ 已迁独立私有仓库维护 |
 
-### 原生开发（M41–M54，自举后 PuXian 自身开发，全部 ✅）
+### 原生开发（M41–M57，自举后 PuXian 自身开发，全部 ✅）
 
 | 里程碑 | 内容 |
 |---|---|
@@ -219,6 +220,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 | M46–M52 | HTTP/3 / QUIC 全链路：QUIC 传输 → H3 语义层 → QPACK（Huffman/静态表/动态表/SETTINGS/多路复用/解码器流 ack） |
 | M53 | **HTTP/3 三栈合一 WebServer**：px_serve http3（HTTP/1.1+HTTP/2+HTTP/3 共用公共管道）+ Alt-Svc + **aioquic 外部互操作** |
 | M54 | **HTTP/3 生产化**：TLS 1.3 会话恢复（1-RTT resumption）+ **0-RTT early data**（握手前可发）+ 连接迁移（换源续传）+ BLOCKED_STREAMS 流控协商（-206/MAX_STREAMS） |
+| M57 | **边缘设备层支持（Linux 用户态）**：fd 原语 `open`/`close`/`ioctl`/`os_errno`（ioctl arg 三形态：int 直传 / bytes·str 就地 buffer）+ `read`/`write` 数据通道 + **mmap/munmap 活映射**（MAP_SHARED，GC 自动 munmap）+ GPIO/I2C 示例 + **aarch64 交叉编译 + qemu 验证 + `--no-quic` 裁剪** |
 
 ---
 
@@ -267,6 +269,11 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 - `m54_s3_migrate_verify.sh` —— **连接迁移**（client 换源端口 → server path 跟随、同 conn 无重握手、echo 跨迁移续传）
 - `m54_s4_streams_verify.sh` —— BLOCKED_STREAMS 流控协商（上限 2 → 开流 8 阻塞 -206 → extend +4 放行）
 - `m54_s5_pxi_quic_smoke.px` —— pxi 重建后 M54 新内置 12 项自检（解释/编译双模式一致）
+- `m57_s1_ioctl_verify.sh` —— 边缘设备层 fd 原语验证（open/close/ioctl/os_errno：TCP fd FIONREAD/FIONBIO + 真实设备条件探测，编译/解释双模式）
+- `m57_s2_mmap_verify.sh` —— mmap 活映射验证（MAP_SHARED 双向可见 / offset 子视图 / munmap 解除语义 / GC 自动 munmap 300 轮，编译/解释双模式）
+- `m57_s3_verify.sh` —— 设备示例 + 真内核替身（GPIO_GET_CHIPINFO / I2C_SLAVE 示例；loopback ifreq SIOCGIFADDR/FLAGS/HWADDR + PTY TIOCGPTN 真内核 ioctl 硬断言，编译/解释双模式）
+- `m57_s4_cross_verify.sh` —— **aarch64 交叉编译 + qemu 验证**（arm64 静态产物 2.5MB 设备层 ioctl 与 x86 结果一致）
+- `m57_s5_pxi_smoke.px` —— pxi 重建后 M57 新内置 10 项自检（open/read/ioctl 就地填充/write/mmap 活映射，解释/编译双模式输出一致）
 - ... 完整列表见 `examples/`
 
 ---

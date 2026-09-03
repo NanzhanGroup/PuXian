@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+### 仓库治理 · ws-web 迁出至独立私有仓库（开源 / 私有物理隔离）
+
+- 仓库外私有生产应用 ws-web（私有 webserver 系统）已从本仓库 `git rm` 并迁至**独立私有仓库**维护；
+  本仓库只保留开源内容，`git grep ws-web`（tracked）零残留
+- `.github/workflows/ci.yml` 移除 `wsweb` job（生产应用回归）；README/README.en/ROADMAP/spec/CHANGELOG/
+  M53/M54/M57_PLAN/CONTRIBUTING/.gitignore/examples 中 14 文件 39 处 ws-web 引用一律中性化
+  （「外部生产应用」表述；repro_h2_vhost/repro_tls_no_sni 标题 `[ws-web-blocker]`→`[dogfood-blocker]`，
+  脚本自包含语义不变）
+- 背景：ws-web 为私有系统，与开源 PuXian 同仓导致提交边界不清（曾多次直推并被 revert）；
+  物理拆仓后「改 PuXian」与「推 ws-web」权限隔离，PuXian 侧对 ws-web 的参与回归 PR 流程；
+  git 历史完整保留（未清史）；ws-web 曾以真实应用身份抓出的 H3/并发类 bug 已在 CHANGELOG M53–M56 留存
+
 ### 新增 · M57 边缘设备层支持（Linux 用户态，见 docs/M57_PLAN.md）
 
 - **fd 原语内建（S1）**：`open(path[, mode]) → fd`（mode `r/w/a/rw/w+` → O_*）、
@@ -37,6 +49,10 @@
 - 目标场景：树莓派/网关/盒子等 Linux 边缘设备层（单静态二进制免 Python 环境）；
   裸机 MCU（STM32/ESP32）因 runtime 含 GC/线程/动态值与无 OS 架构不符，明确不做；
   通用动态 FFI（dlsym）待「任意 C 库即插即用」真需求再上
+- **里程碑闭环（S6 文档收尾）**：spec §8.17（边缘设备层 fd 原语 / 数据通道 / mmap 活映射 API 文档）+
+  ROADMAP（主线表 M57 行 + 能力基线「边缘设备层」+ 远期 M57 段移入完成）+ README / README.en
+  （特性表「🔌 边缘设备」+ 里程碑表 M57 + 示例列表 m57_s1–s5）+ 本 CHANGELOG 同步定稿；
+  M57 全部代码 commit：S1 `57bb9d7` / S2 `f71b28e` / S3 `8f6e615` / S4 `bbffcd5` / S5 `62d9275`
 
 ### 路线图 · M57 内容重定向（HTTP/3 深度生产化 → 健壮性加固 → 边缘设备层支持）
 

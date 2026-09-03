@@ -101,6 +101,7 @@ def main():
 | 🌐 Networking | HTTP client (**HTTPS TLS 1.2/1.3** + gzip/chunked auto-decoding + **http/https connection-pool reuse** + **TLS session-ticket resumption** + **streaming gzip decode-as-you-download** + **Unix-socket HTTP client** (`http_unix(sock,path,method,...)` for local services / LLM gateways, auto Content-Length)) + **HTTP server** (`http_serve` with gzip/chunked/keep-alive/streaming + **`px_serve` server-side TLS**: `tls_server(cert,key[,hostname])` enables HTTPS/WSS/SSE-over-TLS + **TLS SNI multi-certificate selection by domain** + configurable request-body limits + 413 + large-body spooling to disk + **graceful shutdown** + **per-route rate limiting** (429 at route granularity) + **access-log file rotation** + **Alt-Svc advertisement** + **HTTP/3 three-stack unification** (`px_serve(...,{http3:true|{port?,cert?,key?}})` hosts H3/QUIC on the same port — HTTP/1.1+HTTP/2+HTTP/3 share the same vhost/route/rate-limit/access-log/static/.px pipeline; `h3_server_listen` standalone H3 listener; **aioquic third-party interop**)) + **WebSocket** (RFC 6455, heartbeat/timeouts, **one-line `ws://`/`wss://` connection**) + **SSE** server/client (**auto-reconnect on disconnect**, with Last-Event-ID) + **UDP** (udp_open/send/recv/close) + full-featured TCP. |
 | 🛡 Crypto/Docs | **AES-CBC-PKCS7 / AES-GCM**, **RSA** (PKCS#1 v1.5), **XML** parse/escape/**generate** (xml_build), **zip** pack/unpack, **base64**, sha256 / xxhash, **SQLite** (open/exec/query/close, parameter binding + result sets). |
 | 🔢 Language | Slice syntax `a[i:j]` / `a[i:j:k]` (stride/reverse, strings sliced by UTF-8 chars), **generator expressions** `(x for x in xs)` (**lazy**: single-level for delayed evaluation / `gen_next` item-by-item / for-in / `list()` conversion), bitwise ops + binary-data views (int_to_hex / bytes_to_hex / bit_count / bit_length), regex, lock primitives (mutex / rwlock), random file I/O + fsync, process/signal (os_spawn / os_wait / signal), **Result/Option error handling** (`Ok(x)`/`Err(e)`/`Some(x)` constructors, `?` error propagation — Err/None returns immediately, `!` forced unwrap, is_ok/is_err/unwrap methods; the single error channel in the spec), string interpolation `${expr}`, comprehensions, optional chaining `?.`, null coalescing `??`, pipeline `\|>`. |
+| 🔌 Edge device | fd primitives `open`/`close`/`ioctl`/`os_errno` (ioctl arg three forms: int direct / bytes·str in-place in/out buffer, `_IOR` filled in place) + fd data path `read`/`write` (raw read(2)/write(2)) + **mmap live mapping** `mmap`/`munmap`/`mem_write` (MAP_SHARED framebuffer/shmem/DMA direct access, GC auto-munmap, in-place write into the mapping) + GPIO/I2C device examples + **aarch64 cross-compile** (`pxc build --no-quic` trimming + qemu-aarch64 verification identical to x86) — Linux edge devices (Raspberry Pi/gateway/box) as a single static binary, no runtime env needed |
 | 🚀 Application platform | **`.px` script execution mechanism** (`px_serve`, a PHP/OpenResty-style application server: Cookie/Session/basic auth + server-side TLS + graceful shutdown; `px_exec`, a language-level embedding API) + **`.px` process pool** (build mode pre-forks worker interpreters that stay resident and are reused, PHP-FPM style; **hot-reload with automatic rolling restart on script/binary changes**) + route table & middleware (method+path patterns / `:id` params / `*` wildcards / middleware chains) + cron scheduling (6 fields) + JSON path (json_path / json_path_set). |
 | 📚 Standard library | `stdlib/collections.px` (sorted/reversed/map/filter/reduce/unique/group_by) + built-in registration whitelist (see MINI_SUBSET §2.5). |
 
@@ -194,7 +195,7 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 | M20–M29 | C runtime symbol unification → chunked/gzip/slicing/base64/SSE → slab allocator + tracing GC + WebSocket + bitwise ops → networking/storage/security wrap-up → XML generation + slice strides + connection pool → closure-cycle collection + process pool + TLS ticket resumption → `>>>` + WS heartbeat + remote registry → server-side TLS + request-body limits + Session → routing/timezone/cron/SQLite → JSON path + static cache headers + Range + access logs + request ID |
 | M30–M40 | Server-side HTTPS connection pool + byte-order int↔bytes + comprehension completion + configurable fmt → sandbox + virtual hosts + rate limiting + HTTP/2 preflight + connection thread pool → one-line ws/wss + SSE reconnect + process-pool hot reload + generators → per-route rate limiting + TLS SNI + access-log rotation + QUIC research → lazy generators + configurable process pool + WS broadcast + event bus → gzip decompression + range comprehensions + minimal HTTP/2 server + multi-dimensional rate limiting → log enhancements + request context + WS heartbeat config + graceful shutdown → HTTP/2 over TLS + response compression + S3 → WS auto-reconnect + HTTP/2 multi-stream + UDP echo → **Result/Option as the single error channel** → **string interpolation `${expr}`** |
 
-### Bootstrapping (M-B1 → M-B9 — all ✅, M-B9b in progress)
+### Bootstrapping (M-B1 → M-B9b — all ✅)
 
 | Milestone | Scope | Result |
 |---|---|---|
@@ -209,7 +210,7 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 | M-B9a | Retire the Rust version + wire up CI + bootstrap chain | `tools/pxc` fully usable end-to-end; CI four jobs |
 | M-B9b | First production application (dogfooding validation) | ✅ moved to a separate private repo |
 
-### Native Development (M41–M54, post-bootstrap development in PuXian itself — all ✅)
+### Native Development (M41–M57, post-bootstrap development in PuXian itself — all ✅)
 
 | Milestone | Scope |
 |---|---|
@@ -221,6 +222,7 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 | M46–M52 | HTTP/3/QUIC full chain: QUIC transport → H3 semantic layer → QPACK (Huffman/static table/dynamic table/SETTINGS/multiplexing/decoder-stream ack) |
 | M53 | **HTTP/3 three-stack WebServer**: px_serve http3 (HTTP/1.1+HTTP/2+HTTP/3 share the public pipeline) + Alt-Svc + **aioquic third-party interop** |
 | M54 | **HTTP/3 productionization**: TLS 1.3 session resumption (1-RTT) + **0-RTT early data** (send before handshake) + connection migration (source-change resume) + BLOCKED_STREAMS flow-control negotiation (-206 / MAX_STREAMS) |
+| M57 | **Edge-device-layer support (Linux userspace)**: fd primitives `open`/`close`/`ioctl`/`os_errno` (ioctl arg three forms: int direct / bytes·str in-place buffer) + `read`/`write` data path + **mmap/munmap live mapping** (MAP_SHARED, GC auto-munmap) + GPIO/I2C examples + **aarch64 cross-compile + qemu verify + `--no-quic` trimming** |
 
 ---
 
@@ -264,6 +266,11 @@ The `examples/` directory (80+ examples) for quick hands-on:
 - `m53_s3_pipe_verify.sh` — HTTP/3 wired into the public HTTP pipeline (same-process px_serve + h3_server_listen dual stack; 4 QUIC connections × 5 requests byte-consistent with the HTTP/1.1 pipeline output)
 - `m53_s4_pxserve_h3_verify.sh` — **HTTP/3 three-stack end-to-end** (px_serve http3: HTTP/1.1 TCP + HTTP/3 UDP in one service; self-built client + **aioquic third-party interop** 200; automatic Alt-Svc; graceful shutdown on SIGTERM)
 - `m53_s5_pxi_h3_smoke.px` — self-check that the rebuilt pxi interpreter exposes h3_server_listen (id>0 PASS)
+- `m57_s1_ioctl_verify.sh` — edge-device fd primitives (open/close/ioctl/os_errno: TCP-fd FIONREAD/FIONBIO + real-device conditional probing, dual mode)
+- `m57_s2_mmap_verify.sh` — mmap live mapping (MAP_SHARED bidirectional visibility / offset sub-view / munmap semantics / GC auto-munmap 300 rounds, dual mode)
+- `m57_s3_verify.sh` — device examples + real-kernel stand-in (GPIO_GET_CHIPINFO / I2C_SLAVE examples; loopback ifreq SIOCGIFADDR/FLAGS/HWADDR + PTY TIOCGPTN real-kernel ioctl hard assertions, dual mode)
+- `m57_s4_cross_verify.sh` — **aarch64 cross-compile + qemu verify** (arm64 static binary 2.5MB edge-device ioctl identical to x86)
+- `m57_s5_pxi_smoke.px` — rebuilt pxi exposes the 10 M57 builtins (open/read/ioctl in-place fill/write/mmap live mapping; interpret/compile outputs identical)
 - ... full list in `examples/`
 
 ---

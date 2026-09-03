@@ -14,6 +14,7 @@
 | 回归体系 | ✅ diffcheck（lexer/parser/errors/codegen/value/interp）+ capability + 自举证明 |
 | WebServer | ✅ HTTP/1.1/2/3、HTTPS、WebSocket、SSE、路由/中间件/限流/日志/vhost/SNI/S3 |
 | HTTP/3 | ✅ QUIC 传输 → HTTP/3 语义 → QPACK（Huffman/静态表/动态表/SETTINGS/多路复用/解码器流 ack）→ **px_serve 三栈合一（M53）+ aioquic 外部互操作** → **生产化（M54：1-RTT resumption / 0-RTT early data / 连接迁移 / BLOCKED_STREAMS）** |
+| 边缘设备层 | ✅ M57：fd 原语（`open`/`close`/`ioctl`/`os_errno`，ioctl arg 三形态 int/bytes 就地 buffer）+ `read`/`write` 数据通道 + **mmap/munmap 活映射**（MAP_SHARED 帧缓冲/共享内存直访，GC 自动 munmap）+ GPIO/I2C 示例 + **aarch64 交叉编译**（`--no-quic` 裁剪 + qemu 验证）——Linux 边缘设备层（树莓派/网关/盒子）单静态二进制 |
 | 生态 | 仓库外私有生产应用（dogfood）、80+ examples、registry 版本化（semver + lockfile） |
 
 ## 二、已完成主线（里程碑记录，详见 CHANGELOG.md）
@@ -36,34 +37,13 @@
 | M52 | QPACK 解码器流 ack 线上化（RFC 9204 §4.4 闭环 + 编码表驱逐安全化） |
 | M53 | HTTP/3 三栈合一 WebServer：`px_serve` opts.http3（HTTP/1.1+HTTP/2+HTTP/3 共用公共 HTTP 管道）+ Alt-Svc 通告 + **aioquic 外部互操作打通** + pxi 重建解释同能力 |
 | M54 | **HTTP/3 生产化**：TLS 1.3 会话恢复（1-RTT resumption）+ **0-RTT early data**（含收包路由 DCID 修复、H3 静态表子集）+ 连接迁移（client 换源 + server path 跟随 + PATH_CHALLENGE）+ BLOCKED_STREAMS 流上限协商（-206 阻塞 / MAX_STREAMS 放行）；语言 API 12 项；S5 全量回归（pxi 重建 + capability 双模式 + diffcheck + 自举 + 14 项端到端） |
+| M57 | **边缘设备层支持（Linux 用户态）**：fd 原语 `open`/`close`/`ioctl`/`os_errno`（ioctl arg 三形态：int 直传 / bytes·str 就地 in/out buffer，`_IOR` 内核直接填充）+ fd 数据通道 `read`/`write` + **mmap 活映射** `mmap`/`munmap`/`mem_write`（MAP_SHARED，GC 自动 munmap）+ GPIO/I2C 示例 + 真内核替身验证（lo ifreq/PTY）+ **aarch64 交叉编译 + qemu 验证 + `--no-quic` 裁剪** + pxi 重建解释同能力（capability 双模式 253 PASS + diffcheck + 自举证明）；裸机 MCU 明确不做，通用动态 FFI（dlsym）等真需求再上 |
 
 > **主线外已占用编号**（非 ROADMAP 功能里程碑，已记录于 CHANGELOG，勿复用）：
 > **M55** = issue #2 并发安全 hotfix（修复 · M55）；**M56** = 外部生产应用配套 runtime
-> `http_unix` 内建（新增 · M56）。主线后续功能里程碑从 **M57** 起排。
+> `http_unix` 内建（新增 · M56）。
 
 ## 三、远期方向
-
-### M57 · 边缘设备层支持（Linux 用户态）
-
-> 与清歌嵌入式讨论的落地结论：PuXian（runtime 含 GC/线程/动态值，编译模式=生成 C→gcc）
-> 在嵌入式方向只能到 **Linux 边缘设备层**（树莓派 / 网关 / 盒子）；裸机 MCU（STM32/ESP32）
-> 无 OS + 架构不符，明确不做。相比给暂无真实用户的 H3 栈做打磨（1→1.01），设备层是
-> **0→1 开新使用域**（物理世界接口：点灯 / 读传感器 / 控 I2C/SPI/GPIO/tty/网卡/帧缓冲），
-> 首刀成本低（ioctl 胶水约 100–200 行 C，走 M42 FFI 桥），复用 fd / bytes(ptr,len) /
-> 生成 C→gcc 交叉等既有资产；静态二进制免环境是边缘差异化卖点。
->
-> 落地顺序（对齐清歌建议：先通用设备绑定，通用动态 FFI 等真需求再上）：
-
-- S1 ioctl 胶水内建：`ioctl(fd, request, arg)`（arg 支持 int / bytes → 通吃
-  i2c-dev / spi-dev / gpio(老 ioctl) / tty / 网卡；open/read/write 已被文件 IO 覆盖）
-- S2 mmap/munmap 语言内建：映射 fd（帧缓冲 / 共享内存 / DMA）→ bytes 视图
-- S3 GPIO / I2C 设备示例 + x86 ioctl mock 验证（无真板子，先用 mock 验胶水语义）
-- S4 交叉编译工具链：本地 aarch64 交叉编译 → qemu-aarch64 跑静态产物验证
-  + runtime 裁剪开关（--no-ssl 等，解开 mbedtls/sqlite3/openssl 平台依赖）
-- S5 pxi 重建 + capability / diffcheck / 自举全绿
-- S6 文档（spec §8.x + ROADMAP + CHANGELOG）
-- 明确不做：裸机 MCU（架构不符）；通用动态 FFI / dlsym（费劲，等「任意 C 库即插即用」
-  需求再上）
 
 ### 搁置 · HTTP/3 / QUIC 健壮性加固（可靠性生产化）
 
