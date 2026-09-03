@@ -1596,7 +1596,38 @@ static const char* fmt_num(LXValue v) {
         snprintf(num_buf, sizeof(num_buf), "%lld", (long long)v.as.i);
     } else {
         double f = v.as.f;
-        snprintf(num_buf, sizeof(num_buf), "%g", f);
+        // M63-L9：float→str 最短 roundtrip 全精度（替代原 %g 6 位截断，MINI_SUBSET §十三.8）
+        // 格式规则 = 语言既有 %g 定点舒适区：定点 iff 十进制指数 x ∈ [-4,15)（即
+        // 1e-4 <= |f| < 1e15），否则科学计数——保持语言习惯：100000.0→"100000.0"、
+        // 250.0→"250.0"、1e15→"1e+15"（%g6 时代同界；M63 把精度提到 roundtrip 全精度：
+        // 0.1+0.2→"0.30000000000000004"（旧 "0.3"）、1/3→"0.3333333333333333"、
+        // 123456789.123→"123456789.123"（旧 "1.23457e+08"））。
+        // 精度：roundtrip 所需最小位数——%.*f（定点）/%.*e（科学）逐位递增 + strtod
+        // 回读校验，首个相等即最短（位数单调，IEEE754 17 位内必达）。区别于早期实现
+        // 全扫 %.g 取字符最短（会把 100000.0 显成科学 "1e+05"、250.0 显 "2.5e+02"）。
+        if (isnan(f) || isinf(f)) {
+            snprintf(num_buf, sizeof(num_buf), "%g", f);          /* nan / inf / -inf */
+        } else if (f == 0.0) {
+            strcpy(num_buf, signbit(f) ? "-0" : "0");             /* ±0，.0 补丁同下 */
+        } else {
+            double a2 = (f < 0.0) ? -f : f;
+            int x = (int)floor(log10(a2));
+            double p10 = pow(10.0, (double)x);
+            if (a2 < p10) { x--; p10 /= 10.0; }
+            else if (a2 >= p10 * 10.0) { x++; p10 *= 10.0; }
+            int dec;
+            if (x >= -4 && x < 15) {                              /* 定点舒适区 */
+                for (dec = 0; dec <= 17; dec++) {
+                    snprintf(num_buf, sizeof(num_buf), "%.*f", dec, f);
+                    if (strtod(num_buf, NULL) == f) break;
+                }
+            } else {                                              /* 科学计数 */
+                for (dec = 0; dec <= 16; dec++) {
+                    snprintf(num_buf, sizeof(num_buf), "%.*e", dec, f);
+                    if (strtod(num_buf, NULL) == f) break;
+                }
+            }
+        }
         // M62-L1：对齐解释器 i_fmt_float（selfhost/ival.px）：整值且有限且 |f| < 1e15
         // 且 %g 输出无 ./e/E/inf/nan → 补 ".0"（编译模式原 %g 打印 3.0 → "3"，解释器 "3.0"，
         // 双模式不对称；补 .0 后与解释器/golden(Rust fmt_float) 一致）
