@@ -1,0 +1,27 @@
+# ============================================================
+# M63-L8: pxi 网络补白名单 —— C 层网络失败 → Err 值单测（仅 pxi 语义）
+# 网络失败（连接拒绝/协议错误）→ Err("net: ...") result 值（px_net_err，
+# M57 语义不杀进程），可 .is_err()/`?` 处理——与编译模式行为一致。
+# （参数个数错误在解释器是传播错误 exit 1，同编译模式 px_error；见 verify.sh
+#  的 arerr 段用退出码断言，不入本文件——单文件首个传播即退出。）
+# ============================================================
+def chk(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+    print("PASS: " + msg)
+
+# s3_list 网络失败（连接拒绝）→ Err 值透传（i_call_c_net Ok 包裹，icall unwrap 后为 Err）
+var r1 = s3_list("http://127.0.0.1:1", "b", "", "ak", "sk")
+chk(r1.is_err(), "s3_list 网络失败 → Err 值")
+# s3_get 同路径
+var r2 = s3_get("http://127.0.0.1:1", "b", "k", "ak", "sk")
+chk(r2.is_err(), "s3_get 网络失败 → Err 值")
+# http_request 网络失败 → Err 值
+var r3 = http_request("http://127.0.0.1:1/x", "GET")
+chk(r3.is_err(), "http_request 网络失败 → Err 值")
+# http_post 网络失败 → Err 值
+var r4 = http_post("http://127.0.0.1:1/x", "body")
+chk(r4.is_err(), "http_post 网络失败 → Err 值")
+
+print("net_err done")

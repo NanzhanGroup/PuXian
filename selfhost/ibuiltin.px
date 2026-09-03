@@ -10,6 +10,14 @@
 # ============================================================
 
 # ---------- 主分发 ----------
+# ---- M63-L8: 网络类 C builtin 统一 Ok 包裹 helper ----
+# 解释器 builtin 返回约定：Ok(实际返回值) 给 icall 自动 unwrap；Err 用于传播。
+# C 网络函数成功返回普通值（str/dict/bool/...）、失败返回 Err("net: ...") result
+# （px_net_err，M57 语义不杀进程）。一律 Ok(v)：unwrap 后成功=普通值、失败=Err result
+# 交用户 .is_err()/`?` 处理（与 http_get 既有分支、编译模式行为一致）。
+def i_call_c_net(v):
+    return Ok(v)
+
 def i_call_builtin(name, args, pos):
     # ---- 值感知类 ----
     if name == "print":
@@ -428,6 +436,45 @@ def i_call_builtin(name, args, pos):
         if len(args) == 4:
             return Ok(http_unix(args[0], args[1], args[2], args[3]))
         return Ok(http_unix(args[0], args[1], args[2], args[3], args[4]))
+    # ---- M63-L8: 网络真实应用补白名单（http_request 连接池 / S3 客户端） ----
+    # Result 透传（i_call_c_net）：C 网络函数失败返回 Err("net: ...") result，不杀进程
+    # （M57 语义），直接透传保失败路径双模式一致；成功返回普通值 Ok 包裹。
+    if name == "http_post":
+        # http_post(url, body) → 响应体字符串（支持 http/https，自动跟随重定向）
+        if len(args) != 2:
+            return Err(i_r1002("http_post 需要 (url, body) 参数", pos))
+        return i_call_c_net(http_post(args[0], args[1]))
+    if name == "http_request":
+        # http_request(url, method[, body[, headers[, opts]]]) → dict{status,headers,body}
+        if len(args) < 2 or len(args) > 5:
+            return Err(i_r1002("http_request 需要 (url, method[, body[, headers[, opts]]]) 参数", pos))
+        if len(args) == 2:
+            return i_call_c_net(http_request(args[0], args[1]))
+        if len(args) == 3:
+            return i_call_c_net(http_request(args[0], args[1], args[2]))
+        if len(args) == 4:
+            return i_call_c_net(http_request(args[0], args[1], args[2], args[3]))
+        return i_call_c_net(http_request(args[0], args[1], args[2], args[3], args[4]))
+    if name == "s3_get":
+        # s3_get(endpoint, bucket, key, ak, sk) → body（200）| null（非200）
+        if len(args) != 5:
+            return Err(i_r1002("s3_get 需要 (endpoint, bucket, key, ak, sk) 参数", pos))
+        return i_call_c_net(s3_get(args[0], args[1], args[2], args[3], args[4]))
+    if name == "s3_put":
+        # s3_put(endpoint, bucket, key, data, ak, sk) → bool
+        if len(args) != 6:
+            return Err(i_r1002("s3_put 需要 (endpoint, bucket, key, data, ak, sk) 参数", pos))
+        return i_call_c_net(s3_put(args[0], args[1], args[2], args[3], args[4], args[5]))
+    if name == "s3_list":
+        # s3_list(endpoint, bucket, prefix, ak, sk) → list<key>
+        if len(args) != 5:
+            return Err(i_r1002("s3_list 需要 (endpoint, bucket, prefix, ak, sk) 参数", pos))
+        return i_call_c_net(s3_list(args[0], args[1], args[2], args[3], args[4]))
+    if name == "s3_delete":
+        # s3_delete(endpoint, bucket, key, ak, sk) → bool
+        if len(args) != 5:
+            return Err(i_r1002("s3_delete 需要 (endpoint, bucket, key, ak, sk) 参数", pos))
+        return i_call_c_net(s3_delete(args[0], args[1], args[2], args[3], args[4]))
     # ---- M60-S1/S2 边缘设备（us 级时钟 + fd 控制 + 设备组；直接转发 runtime C builtin） ----
     # 语义对齐 M60-PLAN §3.3：参数错误 → Err（解释器不杀进程，区别于编译模式 px_error）；
     # 设备失败 -1/false + os_errno() 透传（与 M57 fd 原语一致，不包装）。
