@@ -152,7 +152,8 @@ static int px_vhost_resolve(const char* host_hdr, const char* default_root,
                             char* out_root, int out_root_sz, LXValue* out_handler, int* has_handler);
 static void px_pool_push(int fd);
 static void* px_pool_worker(void* arg);
-static void px_vhost_normalize(LXValue v, int* status, const char** ct, const char** body, int* body_len);
+static void px_vhost_normalize(LXValue v, int* status, const char** ct, const char** body, int* body_len,
+                               char* extra, int extra_sz);
 static void px_vhost_docroot_store(const char* root);
 static const char* px_vhost_docroot(void);
 int px_rate_limit_try(const char* key, long long max, long long window_sec);
@@ -10799,9 +10800,13 @@ static void px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
                     const char* vct = "text/plain; charset=utf-8";
                     const char* vbody = "";
                     int vblen = 0;
-                    px_vhost_normalize(r, &vst, &vct, &vbody, &vblen);
-                    char extra[256];
-                    snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
+                    char extra[1024];
+                    int extra_off = snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
+                    if (extra_off < 0 || extra_off >= (int)sizeof(extra)) extra_off = (int)sizeof(extra) - 1;
+                    // M57-S7：vhost handler dict 自定义响应头（Location/Cache-Control/Set-Cookie/CORS 等）
+                    // 白名单透传——修复 BUG_REPORT：此前仅透传 Content-Type，其余响应头全丢
+                    px_vhost_normalize(r, &vst, &vct, &vbody, &vblen,
+                                       extra + extra_off, (int)sizeof(extra) - extra_off);
                     pout->respond(pout, vst, vct, vbody, vblen,
                                   strcmp(method, "HEAD") == 0, client_keep_alive, extra);
                     return;
@@ -11704,7 +11709,24 @@ static const char* px_vhost_docroot(void) {
 
 // vhost handler 响应归一化（同解释器 normalize_route_resp）：
 // int → 状态码；str → 200 text/plain；dict{status,headers,body} → 完整控制；其他 → px_to_string
-static void px_vhost_normalize(LXValue v, int* status, const char** ct, const char** body, int* body_len) {
+// vhost handler 自定义响应头白名单（M57-S7）：键/值均须无 CRLF（防注入），
+// 值含 \0 时按 str.len 检测仍拦 \r\n，写出经 %s 以 \0 截断（头值本应为文本）
+static int px_vhost_header_allowed(const char* k) {
+    static const char* allow[] = {
+        "Location", "Cache-Control", "Content-Disposition", "Content-Language",
+        "Set-Cookie", "X-Robots-Tag",
+        "Access-Control-Allow-Origin", "Access-Control-Allow-Methods",
+        "Access-Control-Allow-Headers", "Access-Control-Allow-Credentials",
+        "Access-Control-Expose-Headers", "Access-Control-Max-Age",
+        NULL
+    };
+    for (int i = 0; allow[i]; i++)
+        if (strcasecmp(k, allow[i]) == 0) return 1;
+    return 0;
+}
+
+static void px_vhost_normalize(LXValue v, int* status, const char** ct, const char** body, int* body_len,
+                               char* extra, int extra_sz) {
     *status = 200;
     *ct = "text/plain; charset=utf-8";
     *body = "";
@@ -11733,6 +11755,26 @@ static void px_vhost_normalize(LXValue v, int* status, const char** ct, const ch
         if (h.type == PX_DICT) {
             LXValue ctv = px_dict_get_ci(h, "Content-Type");
             if (ctv.type == PX_STR) *ct = ctv.as.obj->as.str.data;
+            // M57-S7：vhost handler 自定义响应头白名单透传（防 CRLF 注入）——
+            // 键/值任一含 \r\n 即丢弃；extra 写满安全截断（px_out11_begin 头缓冲 2048 兜底）
+            if (extra && extra_sz > 0) {
+                LXObject* ho = h.as.obj;
+                for (int i = 0; i < ho->as.dict.len; i++) {
+                    LXValue hv = ho->as.dict.vals[i];
+                    if (hv.type != PX_STR) continue;
+                    const char* hk = ho->as.dict.keys[i];
+                    if (!hk || strcasecmp(hk, "Content-Type") == 0) continue;
+                    if (!px_vhost_header_allowed(hk)) continue;
+                    const char* hvv = hv.as.obj->as.str.data;
+                    size_t klen = strlen(hk), vlen = hv.as.obj->as.str.len;
+                    if (memchr(hk, '\r', klen) || memchr(hk, '\n', klen)) continue;
+                    if (memchr(hvv, '\r', vlen) || memchr(hvv, '\n', vlen)) continue;
+                    int cur = (int)strlen(extra);
+                    long long need = (long long)klen + 2 + (long long)vlen + 2;
+                    if ((long long)cur + need < (long long)extra_sz)
+                        snprintf(extra + cur, (size_t)(extra_sz - cur), "%s: %s\r\n", hk, hvv);
+                }
+            }
         }
     } else {
         char* s = px_to_string(v);
