@@ -6,6 +6,38 @@
 
 ## [Unreleased]
 
+### 新增 · M57 边缘设备层支持（Linux 用户态，见 docs/M57_PLAN.md）
+
+- **fd 原语内建（S1）**：`open(path[, mode]) → fd`（mode `r/w/a/rw/w+` → O_*）、
+  `close(fd) → bool`、`ioctl(fd, request[, arg]) → int`（arg 三形态：缺省→NULL /
+  int 直传 / bytes·str 就地 in/out buffer，_IOR 类内核直接填充同对象）、
+  `os_errno() → int`（线程局部 errno）——清歌方案"只缺 ioctl"核查后修正：
+  runtime 文件 IO 原为路径式（read_at/write_at 内部 open 用完即关），语言面无持久
+  fd 句柄，故一并补 fd 原语打通「打开设备 → ioctl → 关闭」闭环
+- **fd 数据通道 + mmap 活映射（S2）**：`read(fd, n) → bytes` / `write(fd, data) → int`
+  （read/write(2) 直通，EINTR 重试）；`mmap(fd, len[, offset]) → bytes`（PROT_RW +
+  MAP_SHARED，GC 自动 munmap，失败 -1+errno）；`munmap(bytes) → bool` 显式解除；
+  `mem_write(map, offset, data) → int` 就地写映射区（bytes_set 是 COW 复制语义，
+  帧缓冲/共享内存写像素必备）；LXObject 位域新增 is_mmap（px_obj_free 对 mmap
+  bytes 走 munmap 而非 xfree）
+- **GPIO/I2C 示例 + 真内核替身验证（S3）**：m57_s3_gpio.px（GPIO_GET_CHIPINFO_IOCTL
+  buffer 解析）、m57_s3_i2c.px（I2C_SLAVE int 形态直传从地址）、m57_s3_devctl.px
+  （loopback 网卡 ifreq + PTY TIOCGPTN 全真实内核硬断言）——LD_PRELOAD mock 因
+  pxc 静态链接不可行，改内核自带用户态可访问设备走同胶水路径，验证力度更强
+- **aarch64 交叉编译 + runtime 裁剪（S4）**：`pxc build --no-quic [--cc] [--mbedtls-lib]
+  [--sqlite-obj]`；runtime PX_NO_QUIC 条件编译（7 处）+ musl 兼容 5 点（execinfo
+  条件 / GC aarch64 寄存器扫描分支 / getcontext→内联汇编 SP+setjmp spill /
+  close_range 循环）；tools/cross_aarch64.sh（mbedtls 3.6.2 + sqlite3 交叉入库）；
+  qemu-aarch64 跑静态产物设备层 ioctl 与 x86 结果一致（asm-generic ioctl 码跨架构
+  实证一致）
+- **pxi 重建解释同能力（S5）**：interp.px 白名单 +10 + ibuiltin.px 纯转发分支 →
+  `pxc build selfhost/interp.px` 重建 bootstrap/pxi；examples/m57_s5_pxi_smoke.px
+  双模式输出一致；capability 双模式各 253 PASS 输出逐字节一致；diffcheck --all /
+  --errors 全绿；自举证明 B.c==golden 逐字节一致
+- 目标场景：树莓派/网关/盒子等 Linux 边缘设备层（单静态二进制免 Python 环境）；
+  裸机 MCU（STM32/ESP32）因 runtime 含 GC/线程/动态值与无 OS 架构不符，明确不做；
+  通用动态 FFI（dlsym）待「任意 C 库即插即用」真需求再上
+
 ### 路线图 · M57 内容重定向（HTTP/3 深度生产化 → 健壮性加固 → 边缘设备层支持）
 
 - **HTTP/3 深度生产化剩余项**（QPACK 动态表前缀 / 服务端主动迁移·immediate migration /
