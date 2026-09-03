@@ -1,0 +1,36 @@
+# M62-L5 块作用域修复验证（Python/解释器语义：if/for/while 不新建作用域）
+# 修复前：块内 var/let 块外引用 → 编译模式 C undeclared（build 失败）；
+# 修复后：变量函数顶提升，块外可见，双模式一致。
+def main():
+  var i = 0
+  while i < 3:
+    var inner = i * 10
+    i = i + 1
+  if inner != 20:
+    print("FAIL while scope: " + str(inner))
+    return
+  var fv = -1
+  for k in range(3):
+    fv = k + 100
+  if k != 2 or fv != 102:
+    print("FAIL for var scope: k=" + str(k) + " fv=" + str(fv))
+    return
+  for m in range(3):
+    var mv = m * 5
+  if mv != 10:
+    print("FAIL for-body scope: " + str(mv))
+    return
+  if true:
+    var iv = 7
+  if iv != 7:
+    print("FAIL if scope: " + str(iv))
+    return
+  var acc = 0
+  var n = 0
+  while n < 5:
+    acc += n
+    n += 1
+  if acc != 10:
+    print("FAIL acc sum: " + str(acc))
+    return
+  print("L5 BLOCK OK")

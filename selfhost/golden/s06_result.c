@@ -21,29 +21,33 @@ px_err_3:
 static LXValue fn_calc(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     LXValue _v4 = (nargs > 0) ? args[0] : px_null();
-    LXValue px_err_5_val = px_null();
-    int px_err_5_proped = 0;
-    LXValue _v7 = ({ LXValue _t6 = px_call(px_get_global("try_div"), (LXValue[]){_v4, px_int(2LL)}, 2); if (px_is_result(_t6)) { if (!px_result_ok(_t6)) { px_err_5_val = _t6; px_err_5_proped = 1; goto px_err_5; } _t6 = px_result_unwrap(_t6); } else if (px_is_null(_t6)) { px_err_5_val = px_null(); px_err_5_proped = 1; goto px_err_5; } _t6; });
-    return px_call(px_get_global("Ok"), (LXValue[]){px_add(_v7, px_int(1LL))}, 1);
-px_err_5:
-    if (px_err_5_proped) return px_err_5_val;
+    LXValue _v5 = px_null();
+    LXValue px_err_6_val = px_null();
+    int px_err_6_proped = 0;
+    _v5 = ({ LXValue _t7 = px_call(px_get_global("try_div"), (LXValue[]){_v4, px_int(2LL)}, 2); if (px_is_result(_t7)) { if (!px_result_ok(_t7)) { px_err_6_val = _t7; px_err_6_proped = 1; goto px_err_6; } _t7 = px_result_unwrap(_t7); } else if (px_is_null(_t7)) { px_err_6_val = px_null(); px_err_6_proped = 1; goto px_err_6; } _t7; });
+    return px_call(px_get_global("Ok"), (LXValue[]){px_add(_v5, px_int(1LL))}, 1);
+px_err_6:
+    if (px_err_6_proped) return px_err_6_val;
     return px_null();
 }
 
 static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    LXValue px_err_8_val = px_null();
-    int px_err_8_proped = 0;
-    LXValue _v9 = px_call(px_get_global("calc"), (LXValue[]){px_int(10LL)}, 1);
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_method(_v9, "is_ok", (LXValue[]){}, 0)}, 1));
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_method(_v9, "unwrap", (LXValue[]){}, 0)}, 1));
-    LXValue _v10 = px_call(px_get_global("try_div"), (LXValue[]){px_int(1LL), px_int(0LL)}, 2);
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_method(_v10, "is_err", (LXValue[]){}, 0)}, 1));
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_method(_v10, "err", (LXValue[]){}, 0)}, 1));
-    LXValue _v11 = px_call(px_get_global("Ok"), (LXValue[]){px_int(7LL)}, 1);
-    (void)(px_call(px_get_global("print"), (LXValue[]){({ LXValue _t12 = _v11; if (px_is_result(_t12)) { if (!px_result_ok(_t12)) px_error("force unwrap Err"); _t12 = px_result_unwrap(_t12); } if (px_is_null(_t12)) px_error("force unwrap null"); _t12; })}, 1));
-px_err_8:
-    if (px_err_8_proped) return px_err_8_val;
+    LXValue _v8 = px_null();
+    LXValue _v9 = px_null();
+    LXValue _v10 = px_null();
+    LXValue px_err_11_val = px_null();
+    int px_err_11_proped = 0;
+    _v8 = px_call(px_get_global("calc"), (LXValue[]){px_int(10LL)}, 1);
+    (void)(px_call(px_get_global("print"), (LXValue[]){px_method(_v8, "is_ok", (LXValue[]){}, 0)}, 1));
+    (void)(px_call(px_get_global("print"), (LXValue[]){px_method(_v8, "unwrap", (LXValue[]){}, 0)}, 1));
+    _v9 = px_call(px_get_global("try_div"), (LXValue[]){px_int(1LL), px_int(0LL)}, 2);
+    (void)(px_call(px_get_global("print"), (LXValue[]){px_method(_v9, "is_err", (LXValue[]){}, 0)}, 1));
+    (void)(px_call(px_get_global("print"), (LXValue[]){px_method(_v9, "err", (LXValue[]){}, 0)}, 1));
+    _v10 = px_call(px_get_global("Ok"), (LXValue[]){px_int(7LL)}, 1);
+    (void)(px_call(px_get_global("print"), (LXValue[]){({ LXValue _t12 = _v10; if (px_is_result(_t12)) { if (!px_result_ok(_t12)) px_error("force unwrap Err"); _t12 = px_result_unwrap(_t12); } if (px_is_null(_t12)) px_error("force unwrap null"); _t12; })}, 1));
+px_err_11:
+    if (px_err_11_proped) return px_err_11_val;
     return px_null();
 }
 
