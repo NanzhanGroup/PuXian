@@ -1,0 +1,59 @@
+# ============================================================
+# M60 S3：串口全链路示例（x86 实跑 —— PTY 真内核串口替身）
+# ------------------------------------------------------------
+# 用 /dev/ptmx + pts 对模拟串口设备，演示 std.edge 串口路径：
+#   serial_open(path, baud)（open rw + tty_config raw）
+#   + fd_wait + read/write 双向 loopback
+# 真实串口（/dev/ttyS0、/dev/ttyAMA0、/dev/ttyUSB0）用法与 pts 完全相同，
+# 仅路径不同 —— 真板/USB 转串口即插即用。
+# 退出：全过 → "M60-SERIAL-PTY OK"
+# ============================================================
+import std.edge
+
+var TIOCGPTN   = 0x80045430
+var TIOCSPTLCK = 0x40045431
+
+# 1. 开 PTY 主端 + 拿 pts 号 + 解锁
+var mfd = open("/dev/ptmx", "rw")
+assert(mfd >= 0, "open /dev/ptmx 失败 errno=" + str(os_errno()))
+var ptnb = int_to_bytes(0, 4, "little")
+assert(ioctl(mfd, TIOCGPTN, ptnb) == 0, "TIOCGPTN 失败 errno=" + str(os_errno()))
+var ptn = bytes_to_int(ptnb, "little")
+assert(ioctl(mfd, TIOCSPTLCK, int_to_bytes(0, 4, "little")) == 0, "TIOCSPTLCK 失败 errno=" + str(os_errno()))
+
+# 2. std.edge 串口封装：open 从端 + 设 115200 raw（8N1 无流控）
+var sfd = serial_open("/dev/pts/" + str(ptn), 115200)
+assert(sfd >= 0, "serial_open pts 失败 errno=" + str(os_errno()))
+print("serial_open(/dev/pts/" + str(ptn) + ", 115200) -> fd=" + str(sfd))
+
+# 3. 主端 → 从端（host→device 方向）：raw 无行缓冲，全量原样到达
+var msg = "AT+STATUS\r\n"
+var w = write(mfd, msg)
+assert(w == bytes_len(bytes(msg)), "master 写失败 w=" + str(w))
+var r1 = fd_wait(sfd, 1000)
+assert(len(r1) == 1 and r1[0] == sfd, "fd_wait 应等来 sfd 可读")
+var got1 = read(sfd, 100)
+assert(bytes_to_str(got1) == msg, "host→device 数据不符: [" + bytes_to_str(got1) + "]")
+print("host→device:", bytes_to_str(got1))
+
+# 4. 从端 → 主端（device→host 方向）
+var reply = "OK 200\r\n"
+var w2 = write(sfd, reply)
+assert(w2 == bytes_len(bytes(reply)), "slave 写失败 w2=" + str(w2))
+var r2 = fd_wait(mfd, 1000)
+assert(len(r2) == 1 and r2[0] == mfd, "fd_wait 应等来 mfd 可读")
+var got2 = read(mfd, 100)
+assert(bytes_to_str(got2) == reply, "device→host 数据不符: [" + bytes_to_str(got2) + "]")
+print("device→host:", bytes_to_str(got2))
+
+# 5. 串口设回 9600 再 loopback 一次（serial 已 raw，改波特率档）
+assert(tty_config(sfd, 9600, false) == true, "改波特率 9600 失败")
+var w3 = write(mfd, "PING")
+assert(w3 == 4, "PING 写失败")
+assert(len(fd_wait(sfd, 1000)) == 1, "PING 应可读")
+assert(bytes_to_str(read(sfd, 10)) == "PING", "9600 档 loopback 失败")
+print("9600 档 loopback ok")
+
+close(sfd)
+close(mfd)
+print("M60-SERIAL-PTY OK")
