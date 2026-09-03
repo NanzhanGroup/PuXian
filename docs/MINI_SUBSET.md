@@ -125,8 +125,8 @@
 | **编译版 args() 返回空列表**（不保留命令行参数，自举 lexer 无法取输入文件） | runtime.c bi_args | `px_args_init(argc, argv)` 保存 + bi_args 返回 |
 | **编译版 list.pop 缺失**（缩进栈 pop 崩溃） | runtime.c px_method | PX_LIST 分支补 pop（与解释器一致） |
 | **编译版字符串索引按字节**（与解释器字符语义、px_len 不一致；中文索引错位、for-in 错乱） | runtime.c px_index PX_STR | 按 UTF-8 字符索引（px_unicode_len + 字节定位） |
-| **codegen 作用域：while 块内 `let` 变量块外不可见**（解释器提升、codegen 未提升 → `_v59 undeclared`） | codegen.rs | 未修（写代码时变量声明移到循环外规避；待 M 后补） |
-| **解释器 split 丢弃空段**（vs Rust split 保留空段：`split("a,,b",",")` 解释器 2 段、Rust 3 段） | interp.rs split | 未修（lexer 已绕开：ctrl 表用遍历不 split）；待修 |
+| **codegen 作用域：while 块内 `let` 变量块外不可见**（解释器提升、codegen 未提升 → `_v59 undeclared`） | codegen.rs | ✅ M62-L5 已修（2026-09，codegen hoist：函数内 VarDecl/For 循环变量函数顶提升 + 原位赋值，if/for/while 块外引用对齐解释器/Python 函数级语义；见 §十三.7） |
+| **解释器 split 丢弃空段**（vs Rust split 保留空段：`split("a,,b",",")` 解释器 2 段、Rust 3 段） | interp.rs split | ✅ M62-L6 已修（自举 interp 重写后 split 走字符串方法 split 保留空段，编译/解释双模式实测一致；M62 补回归用例防回退，见 §十三.7） |
 
 ## 八、M-B2 新增已知限制（自举写代码必须规避）
 
@@ -224,7 +224,7 @@
 | 4 | **`{}` 空 dict 字面量不可靠** | import 合并场景 `var d = {}` 后 `d["k"]=v` 报「无法索引赋值: null」（`{}` 求值为 null） | 动态 dict 用 `json_parse("{}")` 创建；静态 dict 用完整字面量 `{"k": v}` |
 | 5 | **import 只合并函数定义，不执行模块顶层** | 被 import 文件的模块级 `var` 常量不可见（跨文件调用函数内部引用模块级常量 → 「未定义变量」）；多行 dict/print 表达式无隐式续行（报「意外的 token: 换行」） | 模块无全局可变状态、常量函数内局部化；长表达式拆单行赋值 |
 | 6 | **`mmap` 固定 PROT_READ\|PROT_WRITE** | 只读打开的 fd 上 mmap 失败（返回 -1） | mmap 一律用 O_RDWR（mode "r+"）fd |
-| 7 | **`str(float)` 显示精度 `%g`** | 浮点转字符串 6 位有效数字（§十二.3 同源） | 监控展示浮点（load/up）保持源字符串，不经 float→str 往返 |
+| 7 | **`str(float)` 显示精度 `%g`** | 浮点转字符串 6 位有效数字（§十二.3 同源）。**M62-L1 已修一半**：整值浮点补 `.0` 后缀（编译/解释对齐），6 位有效数字截断仍为既定规避项（见 §十三.7） | 监控展示浮点（load/up）保持源字符串，不经 float→str 往返 |
 | 8 | **pxi 解释模式对真实应用 API 支持未承诺** | 解释器（Mini 子集）对相对路径 import + open/read 链实测失败（pxc run 报「io: 读取文件失败」） | M58 主打编译模式全能力（与 M57 同策略）；解释模式补验/补齐属非阻塞项 |
 
 ### §十三.1 修复记录：HTTP 客户端网络失败 → Err(result)（#1/#2 根因）
@@ -315,7 +315,9 @@ m58 notify.px 的 webhook dry-run 解禁为真发成为下一步 dogfood 候选�
 - **新发现的既有差异（先于 M59，非本次引入）**：编译模式 `%g` 打印整值浮点为 `"3"`、
   解释器 i_to_str 为 `"3.0"`（`float(3)`、`2.0*2.0` 均可复现）——通用浮点打印不对称
   （与 §十三 #7 同源，%g 6 位问题）；M59 验证文件规避：整值浮点只断言不打印，双模式
-  对拍仅用 int/非整值浮点/字符串输出。留档按需修（涉及全量浮点打印回归面）。
+  对拍仅用 int/非整值浮点/字符串输出。**M62-L1 已修（2026-09）**：runtime fmt_num
+  对齐 ival.px i_fmt_float——整值有限 |f|<1e15 且无 .eE → 补 `.0`，双模式逐字节一致
+  （fp_floatfmt 回归；6 位 %g 截断保留为既定规避项）。
 
 ### §十三.5 M60 双模式同步记录：边缘设备 5 内置进 pxi 解释器
 
@@ -360,9 +362,51 @@ m58 notify.px 的 webhook dry-run 解禁为真发成为下一步 dogfood 候选�
   —— 说明 §十三 #8 的「相对/点分 import 失败」不是全量封锁；**但** std.gfx 的
   text()/blit() 与 std.png 全部编码路径依赖上述 pxi 未同步的 bytes 族 builtin → 运行期报
   「未定义变量: bytes」→ **stdlib 完整能力仍主打编译模式**，pxi 覆盖 C 内置注册面 +
-  简单纯 list 库路径。若要 pxi 全跑 gfx/png 需给 interp.px 白名单补 bytes 族（后续按需）。
+  简单纯 list 库路径。**M62-L7 已补齐（2026-09）**：interp.px 白名单 +14 bytes 族
+  （bytes/bytes_len/bytes_get/bytes_set/bytes_slice/bytes_concat/bytes_to_str/bytes_to_hex/
+  hex_to_bytes/bytes_find/bytes_base64/base64_to_bytes/base64_encode/base64_decode）+
+  ibuiltin 直调转发 → pxi 与编译模式同能力（fp_bytes 17 断言双模式一致；见 §十三.7）。
 - **性能 dogfood（编译模式，非 pxi）**：640x480 单帧 PNG 生成 mandelbrot ~34s /
   scene ~14.5s —— 瓶颈为逐像素 list 存储 + bytes 逐字节 concat 拷贝（std.png 行内
   640 次 concat/行 × 480 行 + adler/crc 逐字节 3 遍）。正确性已 python zlib 独立解码
   全验；**画布/编码器优化方向 = bytes 三字节每像素 + 批量行缓冲**（M61-PLAN D5 预案，
   性能按需再评估，不阻塞游戏线正确性）。
+
+### §十三.7 M62 语言面欠账修复记录（L1/L5/L6/L7 落地 + L2/L3/L4 处置）
+
+> M62 把 §七 M-B2 遗留 + §十三 系列中标「待修/待 M 后补/留档按需」的语言面欠账清掉一批
+> （用户侧清单 L1–L7；L1=%g 浮点 .0、L5=块作用域、L6=split、L7=pxi bytes 族为锚点）。
+> 均双模式实测验证（examples/m62_langfix/verify.sh + verify_l5.sh）。L2/L3/L4 属语义设计，另行处置：
+
+- **L1 编译/解释浮点打印不对称（%g 整值 .0）— ✅ 已修**（commit 9acfb94）：
+  runtime.c `fmt_num` float 分支对齐 selfhost/ival.px `i_fmt_float`——整值且有限且
+  |f| < 1e15 且 %g 输出无 `.eE/inf/nan` → 补 `.0`。修复前 `print(3.0)` 编译 `3` /
+  解释 `3.0`；修复后双模式逐字节一致（含 str/插值/list/dict 内浮点）。**6 位 %g 截断
+  （0.1+0.2→0.3）是既定规避项，不在本次爆炸面**（全精度打印留档按需）。
+- **L2 `int(str)` 前缀截断（§十三 #3）— 判定为语义设计，不做破坏性收紧**：双模式
+  一致（都 atoll/宽容）；仓库代码有依赖（int("42 ")、int("0x") 场景）。处置：文档
+  保留警示；如需严格解析可后续加 `int_strict`/全串校验开关（待需求）。
+- **L3 `{}` 空 dict 字面量（§十三 #4）— 判定为语法语义（`{}` 历来是"空块"=null），
+  不改 parser**：全仓依赖 `{}`→null 的规避已文档化（§九.1）；改成空 dict 需动
+  parser/codegen 且破坏 selfhost 既有写法，风险大于收益。空 dict 用
+  `json_parse("{}")` 或 `{"_": 0}`+remove（既有规避）。
+- **L4 import 只合并函数不执行模块顶层（§十三 #5）— 处置为文档澄清，不改 module
+  语义**：模块顶层 `var` 不可见是刻意设计（避免 import 副作用/全局污染）；模块导出
+  常量请用 `const`（已导出）。若要"模块函数内引用模块级常量"请用 const 定义。改动
+  module 合并语义风险大、收益不明，待真实需求。
+- **L5 块作用域不对称（if/for/while 内声明块外引用编译失败）— ✅ 已修**（codegen
+  hoist）：selfhost/codegen.px `cg_collect_assign_vars` → `cg_collect_hoist_vars`
+  （Assign 目标 + VarDecl + For 循环变量统一收集），函数顶 `px_null()` 预声明 + 原位
+  赋值；cg_stmt.px VarDecl/For 分支改为复用已 hoist 变量（顶层代码无 hoist 保持就地
+  声明）。修复后 `while/if/for` 块内 `var/let` 块外引用编译通过，与解释器/Python
+  函数级语义一致（fp_block.px 验证）。**连带产物变化**：codegen 输出的 C 源码结构
+  变化（变量声明提前）→ cases/compiler 的 C golden 全量更新（hoist 结构，语义等价由
+  capability 253 PASS + 自举收敛 + 全量 diffcheck 证明）。bootstrap/pxc 自举重建。
+- **L6 split 保留空段 — ✅ 确认已修 + 回归防回退**（commit f41c529）：M-B2 记录的旧
+  Rust 解释器问题；自举 interp（interp.px/ibuiltin.px）重写后 split 走字符串方法
+  split 保留空段（编译/解释双模式实测 3 段一致）。fp_split.px 断言中/尾/前空段。
+- **L7 pxi bytes 族白名单 — ✅ 已补齐**（commit ab598e0）：interp.px names +14 +
+  ibuiltin.px 直调转发（pxi 宿主 C native 全集直调；bytes_slice 按 1-3 参透传、
+  bytes_concat 两两折叠等价 C 变参）。fp_bytes.px 17 断言双模式一致。
+  注：解释器参数/类型错由 C 层终止（编程契约，与编译模式一致；区别于 io 可恢复
+  错误走 Err）。

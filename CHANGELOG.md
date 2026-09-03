@@ -6,6 +6,31 @@
 
 ## [Unreleased]
 
+### M62 · 语言面欠账修复（L1/L5/L6/L7 + L2/L3/L4 处置）✅
+
+- **规划**：MINI_SUBSET §十三 欠账总结（L1–L11）中清 L1–L7 可修硬欠账；
+  回归 examples/m62_langfix/verify.sh（L1/L6/L7）+ verify_l5.sh（L5）双模式一致。
+- **L1 浮点打印 `.0` 对齐**（commit `9acfb94`）：runtime.c `fmt_num` float 分支补 `.0`
+  （整值有限 |f|<1e15 且 %g 无 `.eE`）→ `print(3.0)` 编译模式 `3`→`3.0`，与解释器 /
+  Rust fmt_float 语义逐字节一致（str/插值/list/dict 内浮点全对齐）；6 位 %g 截断
+  （0.1+0.2→0.3）保留为既定规避项。
+- **L5 codegen 块作用域（变量提升 hoist）**：if/for/while 内 `var/let` 块外引用原编译报
+  C undeclared（M-B2 留档"待 M 后补"）→ `cg_collect_hoist_vars` 统一收集 Assign 目标 +
+  VarDecl + For 循环变量，函数顶 `px_null()` 预声明 + 原位赋值，对齐解释器/Python 函数级
+  语义；**bootstrap/pxc 自举重建 + cases/compiler 的 C golden 全量更新**（hoist 结构变化，
+  语义等价由 capability 253 PASS + 自举 B.c==golden + diffcheck --all/--errors 全绿证明）。
+- **L6 split 保留空段回归**（commit `f41c529`）：自举 interp 重写后已保留空段（编译/解释
+  双模式一致），补 fp_split.px 断言防回退。
+- **L7 pxi bytes 族白名单补齐**（commit `ab598e0`）：interp.px names +14（bytes/bytes_len/
+  bytes_get/bytes_set/bytes_slice/bytes_concat/bytes_to_str/bytes_to_hex/hex_to_bytes/
+  bytes_find/bytes_base64/base64_to_bytes/base64_encode/base64_decode）+ ibuiltin 直调转发；
+  bootstrap/pxi 重建；fp_bytes.px 17 断言双模式一致。
+- **L2/L3/L4 处置（不改语义）**：`int(str)` 宽容前缀、`{}` 空 dict 字面量、import 模块顶层
+  不执行 —— 均双模式一致的语义设计，破坏性收紧风险大于收益；文档保留警示与既有规避
+  （MINI_SUBSET §十三.7），待真实需求再评估。
+- **文档**：MINI_SUBSET §七 M-B2 两行待修标记 ✅、§十三 #7/§十三.4/.6 注记、新增 §十三.7
+  修复记录；spec §10.2 浮点打印注记。
+
 ### 发布自动化 · tag 驱动 GitHub Release（仓库治理）
 
 - **`.github/workflows/release.yml`（新）**：推送 tag `v*` 触发 → ubuntu-latest 上
