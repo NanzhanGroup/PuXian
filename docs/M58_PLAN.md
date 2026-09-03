@@ -151,7 +151,7 @@ examples/m58_hwmond/
 
 | 子步 | 状态 | commit / 验证摘要 |
 |---|---|---|
-| S1 | ⏳ | — |
+| S1 | ✅ | commit 1694720：多文件 import 工程（collect.px + main.px，<500行/文件）；collect 采 /proc（CPU 两次采样差值/内存/负载/uptime，M57 fd 通道 open+read+close）；main --once/--n/--interval/常驻 + env PXHWMON_INTERVAL；verify_s1.sh 全 PASS（静态 ELF、mem_total 与 MemTotal 精确一致、load1/5/15 与 /proc/loadavg 对拍、cpu∈0..100、行数<500） |
 | S2 | ⏳ | — |
 | S3 | ⏳ | — |
 | S4 | ⏳ | — |
