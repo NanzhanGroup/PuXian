@@ -224,8 +224,8 @@
 | 4 | **`{}` 空 dict 字面量不可靠** | import 合并场景 `var d = {}` 后 `d["k"]=v` 报「无法索引赋值: null」（`{}` 求值为 null） | 动态 dict 用 `json_parse("{}")` 创建；静态 dict 用完整字面量 `{"k": v}` |
 | 5 | **import 只合并函数定义，不执行模块顶层** | 被 import 文件的模块级 `var` 常量不可见（跨文件调用函数内部引用模块级常量 → 「未定义变量」）；多行 dict/print 表达式无隐式续行（报「意外的 token: 换行」） | 模块无全局可变状态、常量函数内局部化；长表达式拆单行赋值 |
 | 6 | **`mmap` 固定 PROT_READ\|PROT_WRITE** | 只读打开的 fd 上 mmap 失败（返回 -1） | mmap 一律用 O_RDWR（mode "r+"）fd |
-| 7 | **`str(float)` 显示精度 `%g`** | 浮点转字符串 6 位有效数字（§十二.3 同源）。**M62-L1 已修一半**：整值浮点补 `.0` 后缀（编译/解释对齐），6 位有效数字截断仍为既定规避项（见 §十三.7） | 监控展示浮点（load/up）保持源字符串，不经 float→str 往返 |
-| 8 | **pxi 解释模式对真实应用 API 支持未承诺** | 解释器（Mini 子集）对相对路径 import + open/read 链实测失败（pxc run 报「io: 读取文件失败」） | M58 主打编译模式全能力（与 M57 同策略）；解释模式补验/补齐属非阻塞项 |
+| 7 | **`str(float)` 显示精度 `%g`** | 浮点转字符串 6 位有效数字（§十二.3 同源）。**M62-L1 已修一半**：整值浮点补 `.0` 后缀（编译/解释对齐）；**M63-L9 已全修**：float→str 最短 roundtrip 全精度（定点舒适区 1e-4≤|f|<1e15 内定点、区外科学，逐位 + strtod 回读取最短 roundtrip），见 §十三.8 | 已修复；无规避项 |
+| 8 | **pxi 解释模式对真实应用 API 支持未承诺** | 解释器（Mini 子集）白名单不覆盖网络/S3 真实应用 API（相对路径 import + open/read 链早期实测失败；open/read 等已随 M57/M60 补）。**M63-L8 已补 HTTP/S3 6 名**（http_post/http_request/s3_get/s3_put/s3_list/s3_delete），见 §十三.8 | http_get_stream（chunk_handler 回调跨解释器边界）与 quic/h3/udp/serve/session/bus/cron/sse 高层 API 仍非 pxi Mini 子集（编译模式全能力）；真实网络应用可走编译模式或已补 6 名 |
 
 ### §十三.1 修复记录：HTTP 客户端网络失败 → Err(result)（#1/#2 根因）
 
@@ -410,3 +410,48 @@ m58 notify.px 的 webhook dry-run 解禁为真发成为下一步 dogfood 候选�
   bytes_concat 两两折叠等价 C 变参）。fp_bytes.px 17 断言双模式一致。
   注：解释器参数/类型错由 C 层终止（编程契约，与编译模式一致；区别于 io 可恢复
   错误走 Err）。
+### §十三.8 M63 语言面欠账修复记录（L8–L11 全清：pxi 网络 API / float 全精度 / pxc --version）
+
+> M63 清掉欠账表 L8–L11 全部四项（用户侧清单；L8=pxi 真实 API 深化、L9=%g 全精度打印、
+> L10=编译期浮点字面量截断、L11=bootstrap/pxc --version）。均双模式实测验证
+> （examples/m63_langfix/verify.sh）。与 M62 同主线：以「编译/解释双模式一致」为验收标准。
+
+- **L8 pxi 网络真实应用 API 补白名单 — ✅ 已补齐 6 名**（interp.px + ibuiltin.px）：
+  `http_post(url,body)`、`http_request(url,method[,body[,headers[,opts]]])`、
+  `s3_get(endpoint,bucket,key,ak,sk)`、`s3_put(...)`、`s3_list(...)`、`s3_delete(...)`。
+  机制：interp.px `i_register_builtins` names 表 +6；ibuiltin.px 新增 `i_call_c_net(v)`
+  helper（Result 透传：C 网络失败返回 Err("net: ...") result 不杀进程，M57 语义）+
+  各分支参数个数校验（错 → Err(i_r1002(...))，解释器不杀进程，区别于编译模式 px_error）。
+  验证：本地 mock HTTP（:18080）真请求 http_post/http_request/http_get + 失败路径
+  Err 透传 —— m63_net.px 编译/解释双模式输出逐字节一致；m63_net_err.px 4 断言；
+  s3_put 参数错 → 报错退出 + 消息。bootstrap/pxi 重建。
+  **http_get_stream 留档不入白名单**：C 侧 `bi_http_get_stream` 要求 chunk_handler 为宿主
+  PX_FUNC/PX_NATIVE 并跨边界回调（M24 流式下载），解释器函数是解释器闭包值，跨 FFI
+  回调不成立 → Mini 子集排除（M63_PLAN 原列 7 名 → 实落 6 名的差异即此，文档记录）。
+  quic/h3/udp/serve/session/bus/cron/sse 等编译模式高层 API 维持非 Mini 排除（§十三 #8 边界）。
+- **L9 float→str 最短 roundtrip 全精度 — ✅ 已修**（runtime.c `fmt_num` float 分支）：
+  原 `%g` 6 位截断（0.1+0.2→"0.3"、1/3→"0.333333"、123456789.123→"1.23457e+08"）→
+  **定点/科学按语言 %g 舒适区自动选择**：十进制指数 x∈[-4,15)（1e-4≤|f|<1e15）内 `%.*f`
+  定点、区外 `%.*e` 科学，逐位递增 + strtod 回读取**首个 roundtrip 成功者**（最短；位数
+  单调，IEEE754 17 位内必达）。规则与既有习惯一致：100000.0→"100000.0"、250.0→"250.0"、
+  123456789.123→定点、1e15→"1e+15"、0.0001→定点、1e-5→科学（对齐 C++ to_chars 定点界；
+  实现 v2 曾全扫 %.g 取最短字符，会把 100000.0/250.0 误显科学，v3 修正为舒适区规则）。
+  M62-L1 `.0` 补丁保留。双模式同根（pxi 宿主 str() 同一 fmt_num）→ 单点修复。
+  m63_fp.px 16 断言（roundtrip + 精确文本 + .0/-0.0 + 风格边界值）双模式逐字节一致。
+- **L10 编译期浮点字面量截断 — ✅ 已修（零 codegen 源码改动）**：根因是 codegen
+  `cg_fmt_float` 用 `str(v)`（px 宿主 str = fmt_num %g 6 位）生成 C 常量 → 高精度字面量
+  3.14159265358979323846 编译后只剩 3.14159。pxc 自举重建（内嵌新 roundtrip fmt_num）后
+  `str(v)` 自动全精度 → C 产物 `px_float(3.141592653589793)`（m63_prec.px 6 断言 + build
+  中间 C grep 实证）。v01_value float**（期望 1.4142135623730951）编译/解释全 PASS →
+  **diffcheck.sh 三处 v01 %g 豁免移除**（s09 的 250.0 打印亦随 L9 恢复 golden 一致）。
+- **L11 bootstrap/pxc --version — ✅ 已修（自举重建）**：compiler.px main 入口参数前置分支
+  （len(args)==2 && args[1] in --version/-v → 输出版本退出 0）+ `PXC_VER="0.1.0"` /
+  `PXC_MS="M-B9a"` 常量（照 interp.px PXI_VER 模式，对齐 tools/pxc 头注释）→
+  **bootstrap/pxc 自举重建**（tools/pxc build --no-quic selfhost/compiler.px，4144832 B，
+  与历史构建一致）+ golden/compiler.c 同步更新（diff 仅 main --version 分支 +7/-1 +
+  UID 顺延，无浮点字面量变化——compiler.px 自身无高精度浮点字面量）。
+  修复前 `bootstrap/pxc --version` 把参数当文件读（报「io: 读取文件失败」，RELEASE_PROCESS
+  已知边界）；修复后 `pxc 0.1.0 (普贤 PuXian · selfhosted M-B9a)` 与 pxi/tools 对齐。
+- **验证**：examples/m63_langfix/verify.sh ALL OK（L8/L9/L10/L11 全绿）；diffcheck
+  --all/--errors 全绿；capability 双模式 253/253 PASS；自举证明 B.c==golden/compiler.c；
+  m59_math/m61_gfx/m62_langfix 历史回归复跑 PASS。

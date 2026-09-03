@@ -6,6 +6,32 @@
 
 ## [Unreleased]
 
+### M63 · 语言面欠账修复（L8–L11 全清：pxi 网络 API / float 全精度 / pxc --version）✅
+
+- **规划**：MINI_SUBSET §十三 欠账总结清 L8–L11；回归 examples/m63_langfix/verify.sh
+  四线全绿（L8/L9/L10/L11 双模式对拍）。
+- **L8 pxi 网络真实应用 API 补白名单**（interp.px + ibuiltin.px）：`http_post`/
+  `http_request`/`s3_get`/`s3_put`/`s3_list`/`s3_delete` 进解释器 names 白名单 +
+  `i_call_c_net` Result 透传 helper（C 网络失败 Err 不杀进程，M57 语义，双模式失败路径
+  一致）；本地 mock HTTP 真请求双模式逐字节一致 + 失败 Err 透传 + 参数错报错退出。
+  **http_get_stream 留档**（chunk_handler 宿主函数回调跨解释器边界，Mini 排除）。
+- **L9 float→str 最短 roundtrip 全精度**（runtime.c `fmt_num`）：`%g` 6 位截断 →
+  定点舒适区规则（十进制指数∈[-4,15) 内 `%.*f` 定点、区外 `%.*e` 科学，逐位 + strtod
+  回读取最短 roundtrip；保持语言习惯 100000.0→"100000.0"、250.0→"250.0"、1e15→"1e+15"）；
+  修复 0.1+0.2→"0.3"、1/3→"0.333333"、123456789.123→"1.23457e+08" 等精度丢失；`.0`
+  补丁保留；双模式同根单点修复（m63_fp 16 断言逐字节一致）。
+- **L10 编译期浮点字面量全精度**（codegen 零改动）：pxc 自举重建内嵌新 fmt_num →
+  `cg_fmt_float` 的 `str(v)` 自动全精度 → C 产物 `px_float(3.141592653589793)`；
+  v01_value float**（1.4142135623730951）编译/解释全 PASS → **diffcheck.sh 三处
+  v01 %g 豁免移除**（差异即失败）。
+- **L11 bootstrap/pxc --version**（compiler.px main 参数前置分支 + PXC_VER/PXC_MS）→
+  **pxc 自举重建**（--no-quic）+ golden/compiler.c 同步（diff 仅 main +7/-1）；
+  修复前 `--version` 被当文件读报错（RELEASE_PROCESS 已知边界勾除）。
+- **验证**：verify.sh ALL OK；diffcheck --all/--errors 全绿（rc=0）；capability 双模式
+  253/253 PASS；自举证明 B.c==golden/compiler.c；m59_math/m61_gfx/m62_langfix 回归 PASS。
+- **文档**：MINI_SUBSET §七 #7/#8 勾除 + 新增 §十三.8 修复记录；spec §10.2 浮点打印
+  全精度表述。
+
 ### M62 · 语言面欠账修复（L1/L5/L6/L7 + L2/L3/L4 处置）✅
 
 - **规划**：MINI_SUBSET §十三 欠账总结（L1–L11）中清 L1–L7 可修硬欠账；
