@@ -6,6 +6,28 @@
 
 ## [Unreleased]
 
+### 语言面修复 · S3/MinIO 客户端网络失败 → Err(result)（与 HTTP 客户端同源收口）
+
+- **问题**：`s3_put`/`s3_get`/`s3_delete`/`s3_list`（M37 引入）网络失败（协议不支持/
+  建连失败/TLS/IO/连接中断）**静默返回 false/null/空 list**——无错误可见性，调用方无法
+  区分「网络挂了」与「服务端拒绝」（与 HTTP 客户端 px_error 杀进程同源、但更隐蔽：
+  M37 的 px_s3_exec 建连失败 `return 0` 无声无息）
+- **修复（runtime/runtime.c，零新增内置函数）**：上述 4 个 S3 客户端函数**网络失败统一
+  返回 `Err(result)`**（消息 `"net: ..."`），进程不终止，调用方可 `is_err()`/`?`/unwrap
+  处理；**成功/应用层语义不变**：服务器正常响应时 put/delete → bool、get → string(200)
+  或 null(其他)、list → keys 列表（403/404/500 等应用层状态码非网络失败，走原语义）；
+  参数个数/类型错误（编程契约）仍终止。实现：`px_s3_exec` 增加错误缓冲输出
+  （`px_net_fail` 填 errbuf，沿用 §十三.1 HTTP 修复的 helper）；endpoint 增加协议校验
+  （非 http/https → Err，原来静默当明文 HTTP 处理）；建连失败/h_exchange 中断分别填
+  `net: 连接 ... 失败` / `net: S3 请求失败: 连接中断`
+- **验证**：新增 `examples/s3_neterr_result.px` 自检：连接拒绝/协议不支持 → 4 函数全
+  is_err=true + 进程存活 ALIVE + 退出码 0；本地最小 S3 mock（http_serve）应用层
+  200/404/204 → true/body/null/keys 语义不变（非 Err）；m37_s3.px 成功路径全链路回归
+  M37_S3_OK（含 SigV4 签名 mock）；http_neterr_result.px 回归 PASS（共享 h_exchange
+  helper 未破坏）；pxi 重建后解释模式同 PASS
+- 记录：MINI_SUBSET §十三.2（§十三 #1/#2 属 HTTP 已修；本条目把 S3 静默失败一并收口为
+  「网络错误可检查」，语言面网络 I/O 失败语义趋同）
+
 ### 语言面修复 · HTTP 客户端网络失败 → Err(result)（M58 dogfood 欠账 #1/#2 根因）
 
 - **问题**：`http_get`/`http_post`/`http_request`/`http_unix`/`http_get_stream` 网络失败

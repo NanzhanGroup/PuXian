@@ -7274,7 +7274,7 @@ static void px_sigv4(const char* method, const char* host, const char* path, con
 // 构造并发送 S3 请求 → 返回 (status, body)
 static int px_s3_exec(const char* endpoint, const char* method, const char* bucket, const char* key,
                       const char* query, const char* body, const char* ak, const char* sk,
-                      char* body_out, int body_out_sz) {
+                      char* body_out, int body_out_sz, char* errbuf, int errcap) {
     // URL 解析
     int is_https = 0;
     char host[256];
@@ -7282,6 +7282,7 @@ static int px_s3_exec(const char* endpoint, const char* method, const char* buck
     const char* ep = endpoint;
     if (strncmp(ep, "https://", 8) == 0) { is_https = 1; ep += 8; port = 443; }
     else if (strncmp(ep, "http://", 7) == 0) ep += 7;
+    else { px_net_fail(errbuf, errcap, "net: 不支持的协议: %s", endpoint); return 0; }
     const char* slash = strchr(ep, '/');
     int hl = slash ? (int)(slash - ep) : (int)strlen(ep);
     if (hl > 255) hl = 255;
@@ -7329,18 +7330,26 @@ static int px_s3_exec(const char* endpoint, const char* method, const char* buck
     } else {
         slot.fd = hconnect(host, port);
     }
-    if (slot.fd < 0) return 0;
+    if (slot.fd < 0) {
+        px_net_fail(errbuf, errcap, "net: 连接 %s:%d 失败", host, port);
+        if (slot.tls) https_close(slot.tls);
+        return 0;
+    }
     int status = 0, resp_len = 0, keep = 0;
     LXValue hdrs = px_null();
     char* resp = NULL;
-    if (h_exchange(&slot, req, rlen, &status, &hdrs, &resp, &resp_len, &keep) == 0) {
-        if (body_out && resp && body_out_sz > 0) {
-            int cp = resp_len < body_out_sz - 1 ? resp_len : body_out_sz - 1;
-            memcpy(body_out, resp, (size_t)cp);
-            body_out[cp] = 0;
-        }
-        if (resp) xfree(resp);
+    if (h_exchange(&slot, req, rlen, &status, &hdrs, &resp, &resp_len, &keep) != 0) {
+        if (slot.tls) https_close(slot.tls);
+        close(slot.fd);
+        px_net_fail(errbuf, errcap, "net: S3 请求失败: 连接中断");
+        return 0;
     }
+    if (body_out && resp && body_out_sz > 0) {
+        int cp = resp_len < body_out_sz - 1 ? resp_len : body_out_sz - 1;
+        memcpy(body_out, resp, (size_t)cp);
+        body_out[cp] = 0;
+    }
+    if (resp) xfree(resp);
     if (slot.tls) https_close(slot.tls);
     close(slot.fd);
     return status;
@@ -7350,8 +7359,11 @@ static LXValue bi_s3_put(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 6) px_error("s3_put 需要 (endpoint, bucket, key, data, ak, sk) 参数");
     char out[8] = {0};
+    char err[256] = {0};
     int st = px_s3_exec(val_cstr(args[0]), "PUT", val_cstr(args[1]), val_cstr(args[2]),
-                        "", val_cstr(args[3]), val_cstr(args[4]), val_cstr(args[5]), out, sizeof(out));
+                        "", val_cstr(args[3]), val_cstr(args[4]), val_cstr(args[5]),
+                        out, sizeof(out), err, (int)sizeof(err));
+    if (st == 0) return px_net_err("%s", err[0] ? err : "net: S3 请求失败");
     return px_bool(st == 200 || st == 204);
 }
 
@@ -7359,8 +7371,11 @@ static LXValue bi_s3_get(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 5) px_error("s3_get 需要 (endpoint, bucket, key, ak, sk) 参数");
     char* body = malloc(1048576);
+    char err[256] = {0};
     int st = px_s3_exec(val_cstr(args[0]), "GET", val_cstr(args[1]), val_cstr(args[2]),
-                        "", "", val_cstr(args[3]), val_cstr(args[4]), body, 1048576);
+                        "", "", val_cstr(args[3]), val_cstr(args[4]),
+                        body, 1048576, err, (int)sizeof(err));
+    if (st == 0) { free(body); return px_net_err("%s", err[0] ? err : "net: S3 请求失败"); }
     LXValue r = (st == 200) ? px_str(body) : px_null();
     free(body);
     return r;
@@ -7370,8 +7385,11 @@ static LXValue bi_s3_delete(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 5) px_error("s3_delete 需要 (endpoint, bucket, key, ak, sk) 参数");
     char out[8] = {0};
+    char err[256] = {0};
     int st = px_s3_exec(val_cstr(args[0]), "DELETE", val_cstr(args[1]), val_cstr(args[2]),
-                        "", "", val_cstr(args[3]), val_cstr(args[4]), out, sizeof(out));
+                        "", "", val_cstr(args[3]), val_cstr(args[4]),
+                        out, sizeof(out), err, (int)sizeof(err));
+    if (st == 0) return px_net_err("%s", err[0] ? err : "net: S3 请求失败");
     return px_bool(st == 204 || st == 200 || st == 404);
 }
 
@@ -7381,8 +7399,11 @@ static LXValue bi_s3_list(LXValue* args, int nargs, void* ctx) {
     char query[512];
     snprintf(query, sizeof(query), "list-type=2&prefix=%s", val_cstr(args[2]));
     char* body = malloc(1048576);
+    char err[256] = {0};
     int st = px_s3_exec(val_cstr(args[0]), "GET", val_cstr(args[1]), "",
-                        query, "", val_cstr(args[3]), val_cstr(args[4]), body, 1048576);
+                        query, "", val_cstr(args[3]), val_cstr(args[4]),
+                        body, 1048576, err, (int)sizeof(err));
+    if (st == 0) { free(body); return px_net_err("%s", err[0] ? err : "net: S3 请求失败"); }
     LXValue l = px_list(0);
     if (st == 200) {
         // 提取 <Key>...</Key>

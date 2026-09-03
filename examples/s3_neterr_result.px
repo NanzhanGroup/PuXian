@@ -1,0 +1,94 @@
+# ============================================================
+# s3_neterr_result.px —— S3/MinIO 客户端网络失败 → Err(result) 语义演示/自检
+# ------------------------------------------------------------
+# 语言面修复（与 http 客户端同源，M37 遗留 → M58 dogfood 后收口）：
+#   s3_put/s3_get/s3_delete/s3_list 网络失败（协议不支持/建连失败/TLS/
+#   IO/连接中断）原来静默返回 false/null/空 list（无错误可见性，调用方
+#   无法区分"网络挂了"与"服务端拒绝"）；现在统一返回 Err(result)
+#   （消息 "net: ..."），进程不终止，调用方可 is_err()/`?`/unwrap 处理。
+# 语义边界（与 http 修复一致）：
+#   - 网络/传输/协议失败 → Err(net: ...)
+#   - 应用层（服务器正常响应 200/403/404/500…）返回值不变：
+#     put/delete → bool；get → string(200) 或 null(其他)；list → keys 列表
+#   - 参数个数/类型错误（编程契约）仍终止
+# 构建/运行：
+#   ./tools/pxc build examples/s3_neterr_result.px && ./examples/build/s3_neterr_result
+# A 段零外部依赖：127.0.0.1:1 连接必然被拒；ftp:// 协议不支持。
+# B 段本地最小 S3 mock（http_serve 回调，端口 18172）验证应用层语义不变。
+# 注意：Mini 子集语句不可跨行（多行 dict 字面量会语法错误 E2001）。
+# ============================================================
+PORT = 18172
+EP = "http://127.0.0.1:" + str(PORT)
+AK = "testkey"
+SK = "testsecret"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+# ---- 本地最小 S3 mock（不校验签名，验证"应用层响应 ≠ 网络失败"边界）----
+def s3mock(req):
+    method = req["method"]
+    path = req["path"]
+    q = req["query"]
+    if method == "GET" and (contains(path, "list-type=2") or contains(q, "list-type=2")):
+        return {"status": 200, "body": "<ListBucketResult><Contents><Key>a.txt</Key></Contents></ListBucketResult>"}
+    if method == "GET" and contains(path, "exist.txt"):
+        return {"status": 200, "body": "hello-s3"}
+    if method == "PUT":
+        return {"status": 200, "body": "OK"}
+    if method == "DELETE":
+        return {"status": 204, "body": ""}
+    if method == "GET":
+        return {"status": 404, "body": "NotFound"}
+    return {"status": 405, "body": "Method"}
+
+def s3server():
+    http_serve(PORT, s3mock)
+spawn s3server()
+sleep(1000)
+
+# ============ A. 网络/协议失败 → Err（连接拒绝 / 协议不支持） ============
+var a1 = s3_get("http://127.0.0.1:1/b/k", "b", "k", AK, SK)
+expect(a1.is_err(), "s3_get 连接失败应 is_err")
+print("  s3_get    失败 → " + str(a1))
+
+var a2 = s3_put("http://127.0.0.1:1/b/k", "b", "k", "data", AK, SK)
+expect(a2.is_err(), "s3_put 连接失败应 is_err")
+print("  s3_put    失败 → " + str(a2))
+
+var a3 = s3_delete("http://127.0.0.1:1/b/k", "b", "k", AK, SK)
+expect(a3.is_err(), "s3_delete 连接失败应 is_err")
+print("  s3_delete 失败 → " + str(a3))
+
+var a4 = s3_list("http://127.0.0.1:1/b", "b", "", AK, SK)
+expect(a4.is_err(), "s3_list 连接失败应 is_err")
+print("  s3_list   失败 → " + str(a4))
+
+var a5 = s3_get("ftp://nope/b/k", "b", "k", AK, SK)
+expect(a5.is_err(), "s3_get 协议不支持应 is_err")
+print("  协议不支持 → " + str(a5))
+
+# ============ B. 应用层正常响应 → 语义不变（本地 mock，非 Err） ============
+var b1 = s3_put(EP, "b", "x.txt", "hi", AK, SK)
+expect(b1 == true, "s3_put 应用层 200 应返回 true（非 Err）")
+print("  s3_put    200 → true")
+
+var b2 = s3_get(EP, "b", "exist.txt", AK, SK)
+expect(b2 == "hello-s3", "s3_get 200 应返回 body 字符串（非 Err）")
+print("  s3_get    200 → " + str(b2))
+
+var b3 = s3_get(EP, "b", "no-such.txt", AK, SK)
+expect(b3 == null, "s3_get 404 应返回 null（应用层语义不变，非 Err）")
+print("  s3_get    404 → null")
+
+var b4 = s3_list(EP, "b", "", AK, SK)
+expect(len(b4) == 1 and contains(b4[0], "a.txt"), "s3_list 200 应返回 keys 列表（非 Err）")
+print("  s3_list   200 → " + str(b4[0]))
+
+var b5 = s3_delete(EP, "b", "x.txt", AK, SK)
+expect(b5 == true, "s3_delete 204 应返回 true")
+print("  s3_delete 204 → true")
+
+print("ALIVE：S3 网络失败已可检查（Err）、应用层语义不变 ✅")
