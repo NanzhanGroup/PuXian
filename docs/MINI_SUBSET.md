@@ -337,3 +337,32 @@ m58 notify.px 的 webhook dry-run 解禁为真发成为下一步 dogfood 候选�
   （PTY/termios/poll/fcntl/us 时钟跨架构一致，qemu 用户态 syscall 透传真内核）；edge.px
   GPIO V2 布局单测 dev_s3（592B 结构 C offsetof 对照）x86 可跑；stdlib import（std.edge）
   主打编译模式（§十三 #8 pxi 相对 import 限制不变）。
+
+### §十三.6 M61 双模式同步记录：外部库 extern（zlib）+ stdlib import 边界复核
+
+> M61（docs/M61_PLAN.md）A 线把外部系统库（zlib）以 extern def 接入 FFI（runtime_zlib.c，
+> 3 函数注册进 px_ffi_register 表，pxc 无条件链 libz.a）；B 线新增 stdlib/gfx.px 与
+> stdlib/png.px（第 5/6 个 stdlib）。S4 复核双模式边界，要点与新发现：
+
+- **extern def 双模式成本为零（与 builtin 不同）**：zlib_* 是 extern def → 编译模式走
+  codegen 的 ffi_call 桥、解释模式走 `i_builtin_ffi_call`（同一 C 桥 bi_ffi_call，查 C 侧
+  注册表）—— **无需改 interp.px 白名单、无需 ibuiltin.px 分支**；只要 `bootstrap/pxi`
+  重建时链入 runtime_zlib.c + libz.a（px_register_builtins 无条件注册）即双模式同能力。
+  验证：m61_s4_zpxi.px 编译 == pxi 解释输出逐字节一致。
+- **pxi Mini 子集 bytes 构造缺口（如实记录）**：interp.px `names` 白名单含
+  read_bytes/write_bytes/int_to_bytes/bytes_to_int，但**不含** `bytes`（str→bytes 构造）、
+  `bytes_len`/`bytes_get`/`bytes_concat`/`bytes_slice`/`bytes_to_hex`/`hex_to_bytes`/
+  `base64_to_bytes` 等 bytes 族 → pxi 侧文本 bytes 只能 int_to_bytes 大端构造；m61_s4_zpxi
+  用「roundtrip 后 crc32 守恒」断言替代逐字节比较（编译模式已做字节级验证，双模式行为
+  由同一 C 桥保证）。
+- **pxi 点分 stdlib import 边界复核（修正 §十三 #8 的绝对化表述）**：探针 impsmoke.px
+  `import std.gfx` + canvas_create/set_px/get_px（纯 list/整数路径）在 pxi **可解释通过**
+  —— 说明 §十三 #8 的「相对/点分 import 失败」不是全量封锁；**但** std.gfx 的
+  text()/blit() 与 std.png 全部编码路径依赖上述 pxi 未同步的 bytes 族 builtin → 运行期报
+  「未定义变量: bytes」→ **stdlib 完整能力仍主打编译模式**，pxi 覆盖 C 内置注册面 +
+  简单纯 list 库路径。若要 pxi 全跑 gfx/png 需给 interp.px 白名单补 bytes 族（后续按需）。
+- **性能 dogfood（编译模式，非 pxi）**：640x480 单帧 PNG 生成 mandelbrot ~34s /
+  scene ~14.5s —— 瓶颈为逐像素 list 存储 + bytes 逐字节 concat 拷贝（std.png 行内
+  640 次 concat/行 × 480 行 + adler/crc 逐字节 3 遍）。正确性已 python zlib 独立解码
+  全验；**画布/编码器优化方向 = bytes 三字节每像素 + 批量行缓冲**（M61-PLAN D5 预案，
+  性能按需再评估，不阻塞游戏线正确性）。

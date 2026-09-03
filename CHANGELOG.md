@@ -6,7 +6,49 @@
 
 ## [Unreleased]
 
-### M60 · 边缘设备深化（树莓派线：5 小内置 + std.edge 第 4 个 stdlib）✅
+### M61 · 外部库 FFI proof（zlib）+ 纯语言 2D 游戏内圈（gfx/png/贪吃蛇）✅
+
+- **规划**：`docs/M61_PLAN.md`（A=外部系统库绑定全链路 proof + B=纯语言 2D 内圈；无真板
+  期游戏线 0→1 地基；用户选 A+B 并行）。
+- **S0 zlib 两版静态 .a 入库**：`runtime/third_party/zlib/{include,lib,lib-aarch64}`，
+  zlib 1.3.1 源码自编（x86_64 gcc / aarch64-linux-musl 交叉，ar 抽 crc32.o 双架构校验）；
+  `tools/build_zlib.sh` 一键重建；`tools/pxc` 加 `--zlib-lib <dir>`（缺省按 `--cc` 自动
+  架构探测：gcc→lib/，aarch64→lib-aarch64/，旧交叉脚本免改）+ 无条件链 libz.a（无引用
+  不抽成员，向后兼容）—— commit `84fe8c8`。
+- **S1 薄胶水 runtime_zlib.c**：`zlib_crc32(data)`（crc32(0,data,len)，已知值可校验）/
+  `zlib_compress(data,level)`（compress2 + **uLongf\* 长度指针** cap→实际）/
+  `zlib_uncompress(data)`（z_stream inflate **渐进扩容**免预知大小）；str/bytes 二进制安全、
+  数据非法→null 不杀进程；注册进 FFI 表（px_register_zlib）双模式同构；pxc 链
+  runtime_zlib.c；m61_zlib.px 七组断言（已知值 0x3610a686/标准 check 0xCBF43926/纯语言
+  CRC32 查表 5 组互证/long roundtrip 10400→110B/NUL 安全/空串/非法流 null/level 0·6·9）
+  + `nm` 实证 crc32/compress2/inflate 符号 + 4 例回归 PASS —— commit `1639c5f`。
+- **S2 std.gfx + std.png（第 5/6 个 stdlib）**：gfx.px 画布 list[int] 0xRRGGBB +
+  line(Bresenham)/rect/fill_rect/circle(中点)/fill_circle(弦扫描)/blit(透明跳过)/
+  text(5x7 compact 字形，0-9 A-Z . - 空格，小写→大写)；png.px 纯语言 PNG 8bit RGB
+  stored 编码器（CRC-32 查表 + ADLER-32 + zlib stored block + chunk 组装，零 FFI）；
+  demo Mandelbrot 640x480（复数迭代 + 11 色调色板）+ 合成场景全原语；**python3 stdlib
+  zlib 独立解码全校验**（chunk CRC 全过 + 像素颜色抽查全对）—— commit `171e59b`。
+- **S3 raw 终端可玩贪吃蛇**（examples/m61_gfx/m61_snake.px）：w/a/s/d 控向 q 退出，
+  O/#/@；try_step 纯函数 + spawn_food；交互走 tty_config(0,9600,raw)+fd_wait+read 单键
+  （M60 设备组应用层 dogfood）；SNAKE_AUTO=1 无头剧本 EAT/SELF/WALL 三断言 +
+  python3 PTY 真内核喂 q → QUIT；修正 tty_config 波特率 0 不支持（须 9600+ 枚举）；
+  uinput/evdev stretch 留档 —— commit `2eb3060`。
+- **S4 收口**：bootstrap/pxi 重建（9,293,144 B，含 runtime_zlib.c + libz.a → extern
+  zlib_* 经 ffi_call C 桥双模式同能力，无需白名单/ibuiltin 分支）；m61_s4_zpxi.px pxi
+  smoke（Mini 子集 int_to_bytes 构造 + crc32 守恒断言）解释==编译逐字节一致；
+  m61_s4_det.px 纯整数绘制 PNG **x86 == qemu-aarch64 sha256 一致**（605c5b07…）；
+  m61_s4_zpng.px **FFI compress2 直接产出标准压缩 PNG**（python 独立解码合法 +
+  像素抽查）；m61_s4_impsmoke.px 探针：pxi 可解释 std.gfx 纯 list 路径、text/blit 等
+  bytes 依赖仍受限；回归 hello/fib pxi + math_s1 编译 + dev_s1 --no-quic 编译 ——
+  commit `ab29185`。
+- **S5 文档收口**：spec §8.19（FFI 外部库约定 + gfx/png 库）+ §10 表 + MINI_SUBSET
+  §十三.6（extern 双模式零成本 / pxi bytes 族缺口 / stdlib import 边界复核 / 性能
+  dogfood 14-34s 每帧 → bytes 画布方向）+ ROADMAP/GAP 勾选 + CHANGELOG。
+- **边界如实记录**：SDL2/raylib 真窗口结论留档（无屏，M61-PLAN §4）；QQ 富媒体发送被
+  平台拒（err 40093007 下载失败），图片落盘 examples/m61_gfx/*.png 供自取；
+  pxi stdlib 完整能力仍主打编译模式；性能（640x480 逐像素 list+concat 14-34s/帧）
+  优化方向留档 bytes 画布。
+
 
 - **规划**：`docs/M60_PLAN.md`（前置实测复核：poll 仅 runtime 内部 3 处未暴露、termios
   全库零命中、sleep 仅 ms 整数粒度、SPI_IOC_MESSAGE 因 transfer 数组含 u64 指针留档、
