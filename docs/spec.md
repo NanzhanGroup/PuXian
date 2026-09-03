@@ -1090,6 +1090,15 @@ assert(cond, msg)     # 断言，失败 panic
 panic(msg)            # 致命错误，退出码 1
 ```
 
+> **M59 数学/随机内置（2026-09，C libm，docs/M59_PLAN.md）**：`sin(x)`/`cos(x)`/`tan(x)`
+> （弧度）、`atan2(y,x)`（**先 y 后 x**）→ float；`floor(x)`/`ceil(x)`/`round(x)`
+> （C99 .5 远离零，**返回 float**，需整数用 `int()`）→ float；`log(x)`（自然对数 ln）/
+> `log10(x)`/`exp(x)`；`random()` → float∈[0,1)、`random_int(n)` → int∈[0,n)（n>0）、
+> `random_seed(s)`（splitmix64 确定性，同 seed 同序列）；常量 `pi`/`e`（全精度 float）。
+> 错误语义：参数个数/类型错误 → 终止（编程契约，同 abs/sqrt）；**域错误透传 C 不终止**
+> （log(-1)→NaN、log(0)→-inf、exp(1000)→+inf）。返回的 float 一律按 IEEE754 全精度参与
+> 运算；打印仍走 `%g` 6 位有效数字（§十三 #7）。
+
 ### 10.3 核心模块（v0.1 范围）
 | 模块 | 内容 |
 |------|------|
@@ -1099,7 +1108,7 @@ panic(msg)            # 致命错误，退出码 1
 | `std.json` | parse / stringify |
 | `std.time` | now、sleep、duration |
 | `std.string` | split、join、trim、upper、lower、contains、replace |
-| `std.math` | abs、sqrt、min、max、pow |
+| `std.math` | abs、sqrt、min、max、pow（M59 起另有全局数学内置：sin/cos/tan/atan2、floor/ceil/round、log/log10/exp、random 族、pi/e，见 §10.2 注） |
 | `std.collections` | list/map 扩展操作 |
 | `std.os` | env、args、exit |
 | `std.process` | run 子进程（捕获输出） |
