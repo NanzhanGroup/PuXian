@@ -2773,6 +2773,50 @@ static LXValue bi_sqrt(LXValue* args, int nargs, void* ctx) {
     return px_float(sqrt(num_val(args[0])));
 }
 
+// ==================== M59 数学与随机内置 ====================
+// 设计（docs/M59_PLAN.md §三）：延续 abs/sqrt/pow 先例（C libm 内置，零新依赖），
+// 域错误透传 C 语义 NaN/+inf（不终止），参数个数/类型错误 px_error 终止（编程契约）。
+// pi/e 常量不用 M_PI/M_E（防个别 libm 缺省宏），本地宏常量更稳。
+
+#ifndef PX_PI
+#define PX_PI 3.14159265358979323846
+#endif
+#ifndef PX_E
+#define PX_E 2.71828182845904523536
+#endif
+
+// 一元数学参数校验：仅接受 int/float（字符串/列表等 → 终止）
+static double math_num(LXValue v, const char* fn) {
+    if (v.type == PX_INT) return (double)v.as.i;
+    if (v.type == PX_FLOAT) return v.as.f;
+    px_error("%s 参数必须是数字，实际是 %s", fn, px_type_name(v));
+    return 0.0;
+}
+
+static LXValue bi_sin(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("sin 需要 1 个参数（弧度）");
+    return px_float(sin(math_num(args[0], "sin")));
+}
+
+static LXValue bi_cos(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("cos 需要 1 个参数（弧度）");
+    return px_float(cos(math_num(args[0], "cos")));
+}
+
+static LXValue bi_tan(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("tan 需要 1 个参数（弧度）");
+    return px_float(tan(math_num(args[0], "tan")));
+}
+
+static LXValue bi_atan2(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) px_error("atan2 需要 2 个参数（先 y 后 x）");
+    return px_float(atan2(math_num(args[0], "atan2"), math_num(args[1], "atan2")));
+}
+
 // ==================== M5 标准库内置函数 ====================
 
 static LXValue bi_input(LXValue* args, int nargs, void* ctx) {
@@ -4850,6 +4894,12 @@ void px_register_builtins(void) {
     px_set_global("max", px_native("max", bi_max));
     px_set_global("sum", px_native("sum", bi_sum));
     px_set_global("sqrt", px_native("sqrt", bi_sqrt));
+    // M59-S1 三角（弧度）+ pi 常量
+    px_set_global("sin", px_native("sin", bi_sin));
+    px_set_global("cos", px_native("cos", bi_cos));
+    px_set_global("tan", px_native("tan", bi_tan));
+    px_set_global("atan2", px_native("atan2", bi_atan2));
+    px_set_global("pi", px_float(PX_PI));
     // M5 标准库
     px_set_global("input", px_native("input", bi_input));
     px_set_global("exit", px_native("exit", bi_exit));
