@@ -248,6 +248,10 @@ static LXValue bi_write(LXValue* args, int nargs, void* ctx);
 static LXValue bi_mmap(LXValue* args, int nargs, void* ctx);
 static LXValue bi_munmap(LXValue* args, int nargs, void* ctx);
 static LXValue bi_mem_write(LXValue* args, int nargs, void* ctx);
+// M60-S1：us 级时钟 + fd 控制（sleep_us/now_us/fcntl）
+static LXValue bi_sleep_us(LXValue* args, int nargs, void* ctx);
+static LXValue bi_now_us(LXValue* args, int nargs, void* ctx);
+static LXValue bi_fcntl(LXValue* args, int nargs, void* ctx);
 // M30 P1：字节序可控整数↔bytes（pxdb 存储基石）
 static LXValue bi_int_to_bytes(LXValue* args, int nargs, void* ctx);
 static LXValue bi_bytes_to_int(LXValue* args, int nargs, void* ctx);
@@ -3426,6 +3430,53 @@ static LXValue bi_mem_write(LXValue* args, int nargs, void* ctx) {
     return px_int((int64_t)n);
 }
 
+// ==================== M60-S1：us 级时钟 + fd 控制（sleep_us/now_us/fcntl） ====================
+// 设计（docs/M60_PLAN.md §三.2）：服务边缘设备 GAP #5（1-Wire/DHT 时序需 us 级睡眠/测量）
+// 与 fd 标准非阻塞姿势（fcntl，open 无 O_NONBLOCK mode 的补足通道）。
+// 语义：
+//   sleep_us(us) → null：us 级睡眠（nanosleep，EINTR 自动续睡；<=0 直接返回不睡）
+//   now_us()     → int：CLOCK_MONOTONIC 微秒（测量/计时语义，单调不受墙钟调整影响；
+//                        与 now_ms 的 CLOCK_REALTIME 墙钟用途区分，文档写明）
+//   fcntl(fd, cmd[, arg]) → int：标准 fcntl（F_GETFL/F_SETFL/O_NONBLOCK 等）；
+//                        失败 int -1 + os_errno() 查询（不杀进程，延续 M57 设备失败语义）
+static LXValue bi_sleep_us(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("sleep_us 需要 1 个参数（微秒）");
+    int64_t us = int_val(args[0]);
+    if (us <= 0) return px_null();
+    struct timespec ts;
+    ts.tv_sec = us / 1000000L;
+    ts.tv_nsec = (us % 1000000L) * 1000L;
+    while (nanosleep(&ts, &ts) == -1 && errno == EINTR) {}
+    return px_null();
+}
+
+static LXValue bi_now_us(LXValue* args, int nargs, void* ctx) {
+    (void)args; (void)nargs; (void)ctx;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return px_int((int64_t)ts.tv_sec * 1000000L + ts.tv_nsec / 1000L);
+}
+
+static LXValue bi_fcntl(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 2 || nargs > 3) px_error("fcntl 需要 (fd, cmd[, arg]) 参数");
+    if (args[0].type != PX_INT) px_error("fcntl 的 fd 需要 int");
+    if (args[1].type != PX_INT) px_error("fcntl 的 cmd 需要 int");
+    int fd = (int)args[0].as.i;
+    int cmd = (int)args[1].as.i;
+    long arg = 0;
+    if (nargs >= 3) {
+        if (args[2].type == PX_INT) arg = (long)args[2].as.i;
+        else if (args[2].type == PX_BOOL) arg = args[2].as.b ? 1 : 0;
+        else px_error("fcntl 的 arg 需要 int/bool，实际 %s", px_type_name(args[2]));
+    }
+    int rc;
+    do { rc = fcntl(fd, cmd, arg); } while (rc < 0 && errno == EINTR);
+    if (rc < 0) return px_int(-1);   // os_errno() 查询具体原因
+    return px_int((int64_t)rc);
+}
+
 static void bytes_to_hex(const unsigned char* in, size_t len, char* out) {
     static const char HEX[] = "0123456789abcdef";
     for (size_t i = 0; i < len; i++) {
@@ -5027,6 +5078,10 @@ void px_register_builtins(void) {
     px_set_global("mmap", px_native("mmap", bi_mmap));
     px_set_global("munmap", px_native("munmap", bi_munmap));
     px_set_global("mem_write", px_native("mem_write", bi_mem_write));
+    // M60-S1：us 级时钟 + fd 控制（sleep_us/now_us/fcntl）
+    px_set_global("sleep_us", px_native("sleep_us", bi_sleep_us));
+    px_set_global("now_us", px_native("now_us", bi_now_us));
+    px_set_global("fcntl", px_native("fcntl", bi_fcntl));
     // M14 P1：crypto 哈希
     px_set_global("sha256", px_native("sha256", bi_sha256));
     px_set_global("xxhash", px_native("xxhash", bi_xxhash));
