@@ -1,0 +1,72 @@
+# ============================================================
+# M60 S4 dev_s4.px —— M60 5 内置双模式同步 + aarch64 交叉验证
+# ------------------------------------------------------------
+# 刻意只用 pxi Mini 子集可解释的语法与 builtin（无 stdlib import、无
+# bytes_to_str/bytes_slice 等解释器未覆盖项），保证三态可跑：
+#   编译模式 == pxi 解释 == qemu-aarch64
+# 且输出逐字节一致（只打印固定标记行，实测值仅进断言消息，断言过不打印）。
+# 测试点：
+#   A. sleep_us/now_us（计时下限 + 单调 + <=0 不睡）
+#   B. fcntl 设 O_NONBLOCK → 非阻塞空读 -1 + errno==EAGAIN(11)（PTY 真内核）
+#   C. tty_config raw + fd_wait 就绪（master 写 3B 无换行 → slave 立即可读 bytes）
+#   D. fd_wait 超时 → 空 list（非错误）
+#   E. fd_wait POLLHUP：master 关闭 → slave 事件 + read EOF 空 bytes
+# 退出：全过 → "M60-S4 OK"
+# ============================================================
+
+# ---- A. sleep_us / now_us ----
+var t0 = now_us()
+sleep_us(30000)
+var t1 = now_us()
+var el = t1 - t0
+assert(el >= 30000, "sleep_us(30000) 应 >=30000us got " + str(el))
+assert(el < 300000, "sleep_us 不应超 300ms got " + str(el))
+var na = now_us()
+var nb = now_us()
+assert(nb > na, "now_us 单调递增")
+sleep_us(0)          # <=0 直接返回不睡
+sleep_us(-1)
+print("S4-A ok")
+
+# ---- B. fcntl O_NONBLOCK + 非阻塞空读 -1/EAGAIN ----
+var mfd = open("/dev/ptmx", "rw")
+assert(mfd > 0, "open /dev/ptmx 失败 errno=" + str(os_errno()))
+var ib = int_to_bytes(0, 4)
+assert(ioctl(mfd, 0x80045430, ib) == 0, "TIOCGPTN 失败 errno=" + str(os_errno()))
+var ptn = bytes_to_int(ib)
+assert(ioctl(mfd, 0x40045431, int_to_bytes(0, 4)) == 0, "TIOCSPTLCK 失败 errno=" + str(os_errno()))
+var sfd = open("/dev/pts/" + str(ptn), "rw")
+assert(sfd > 0, "open pts 失败 errno=" + str(os_errno()))
+var fl = fcntl(mfd, 3)                 # F_GETFL=3
+assert(fl >= 0, "F_GETFL 失败 got " + str(fl))
+assert(fcntl(mfd, 4, fl | 2048) >= 0, "F_SETFL O_NONBLOCK 失败 errno=" + str(os_errno()))
+var rr = read(mfd, 1)
+assert(type(rr) == "int" and rr == -1, "非阻塞空读应 -1 got " + str(rr))
+assert(os_errno() == 11, "空读 errno 应 EAGAIN(11) got " + str(os_errno()))
+print("S4-B ok")
+
+# ---- C. tty_config raw + fd_wait 就绪读 ----
+assert(tty_config(sfd, 115200, true) == true, "tty_config(115200,raw) 失败 errno=" + str(os_errno()))
+assert(write(mfd, "M60") == 3, "master 写 M60 失败 errno=" + str(os_errno()))
+var rl = fd_wait(sfd, 1000)
+assert(type(rl) == "list" and len(rl) == 1 and rl[0] == sfd, "fd_wait 应返回 [sfd] got type=" + str(type(rl)) + " len=" + str(len(rl)))
+var dd = read(sfd, 10)
+assert(type(dd) == "bytes", "raw 读应返回 bytes got " + str(type(dd)))
+assert(tty_config(sfd, 9600, false) == true, "改波特率 9600(非 raw) 失败")
+print("S4-C ok")
+
+# ---- D. fd_wait 超时 → 空 list（非错误）----
+var r2 = fd_wait(sfd, 20)
+assert(type(r2) == "list" and len(r2) == 0, "超时应返回空 list")
+print("S4-D ok")
+
+# ---- E. fd_wait POLLHUP：master 关闭 → slave 事件 + EOF ----
+assert(close(mfd) == true, "close master 失败")
+var r3 = fd_wait(sfd, 1000)
+assert(len(r3) >= 1, "master 关闭后 slave 应有 HUP 事件")
+var eof = read(sfd, 5)
+assert(type(eof) == "bytes", "EOF 读应返回空 bytes")
+assert(close(sfd) == true, "close slave 失败")
+print("S4-E ok")
+
+print("M60-S4 OK")
