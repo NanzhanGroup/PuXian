@@ -6,6 +6,29 @@
 
 ## [Unreleased]
 
+### M58 dogfood 闭环 · pxhwmond webhook dry-run 解禁为真发（HTTP Err 语义落地）
+
+- **背景**：M58 pxhwmond 的 webhook 通知因 HTTP 客户端网络失败即 panic（§十三 #1/#2）
+  只能 dry-run 报文落盘；HTTP/S3 网络失败 → `Err(result)` 修复（§十三.1/.2）后语言面已
+  允许 daemon 内安全发起网络请求 → 本条目把 dry-run 正式解禁为真发，完成 dogfood 闭环。
+- **改动（examples/m58_hwmond/）**：
+  - `notify.px`：`webhook_dryrun` → `webhook_send`——`http_request(url,"POST",JSON,
+    {Content-Type:application/json},{timeout_ms:3000,retries:0})` 真发；网络失败（返回
+    `Err`，以 `type(resp)=="result" and resp.is_err()` 判别、`resp.err()` 取文本）→ 发送
+    日志 `sent:false`+`err` 落盘、进程不死；HTTP 2xx → `sent:true`+`status`、非 2xx →
+    `sent:false`+`http_status=…`。env `PXHWMON_WEBHOOK_DRYRUN_LOG` → `PXHWMON_WEBHOOK_LOG`
+    （发送结果日志）。
+  - `main.px`：调用点 `webhook_dryrun` → `webhook_send`；头注释同步。
+  - 新增 `webhook_mock.px`：PuXian 自举的本地 webhook 接收 mock（`http_serve` handler 把
+    method/path/body 落盘 JSONL），verify_s3.sh D1 真发验收用。
+  - `verify_s3.sh`：D1 成功路径——阈值触发 3 轮 → mock **实收 3 条 POST /alert**（body 含
+    alert）+ 发送日志 3 条 `sent:true`；D2 失败路径——webhook 指向 `127.0.0.1:1`（连接
+    拒绝）→ daemon 3 轮跑完退出码 0、3 条 `sent:false`+`err`（§十三 #1 修复实证，原先
+    会 panic 杀进程）；A-C 段改端口就绪探测 + client 重试（daemon 冷启动偶发 >2.5s）。
+- **验证**：verify_s3.sh PASS（A-C 状态页响应头 + D1 mock 实收真发 + D2 失败不 panic）；
+  verify_s1/s2/s4 回归 PASS（见提交记录）。
+- 记录：MINI_SUBSET §十三.3、m58 README 边界更新（dry-run 描述 → 真发 + Err 语义闭环）。
+
 ### 语言面修复 · S3/MinIO 客户端网络失败 → Err(result)（与 HTTP 客户端同源收口）
 
 - **问题**：`s3_put`/`s3_get`/`s3_delete`/`s3_list`（M37 引入）网络失败（协议不支持/

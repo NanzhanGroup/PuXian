@@ -270,3 +270,26 @@ dict 字面量是隐蔽坑（静默错值/难排查），值得后续收紧或�
 **意义**：至此语言面网络客户端（HTTP 5 个 + S3 4 个）网络失败全部「可检查、可恢复、
 不杀进程」，真实应用可安全地在长期服务内做网络调用（webhook 通知/对象存储上报），
 m58 notify.px 的 webhook dry-run 解禁为真发成为下一步 dogfood 候选。
+
+### §十三.3 dogfood 闭环记录：pxhwmond webhook dry-run → 真发
+
+> §十三.2 末尾留的候选已落地：m58 notify.px 用新 Err 语义把 webhook dry-run 解禁为
+> 真发（HTTP 客户端 Err 语义首次进入真实 daemon 的网络路径，1→1.0n 验证闭环）。
+> 改动见 CHANGELOG；此处记录语言面使用要点与验证：
+
+- **Err 判别写法**：`http_request` 成功返回 `dict`（无 `is_err` 方法）、网络失败返回
+  `result`（Err）→ 须先按类型分流：`if type(resp) == "result" and resp.is_err()` 再取
+  `resp.err()`（错误文本）或 `resp.unwrap()`；直接对返回值 `["status"]` 会在失败时抛
+  「无法索引: result」（M58 verify client 同型坑）。成功侧仍 `resp["status"]`。
+- **超时/重试防拖**：`http_request(url, method, body, headers, {timeout_ms:3000,
+  retries:0})` —— daemon 内同步网络调用给短超时 + 零重试，避免不可达目标拖住采样循环
+  （默认 30s/1 次重试）。
+- **发送结果落盘**：每轮发送记录 `{ts,url,alert,sent,err|status}` JSONL——成功
+  （2xx）`sent:true`+status、网络失败 `sent:false`+err（`net: ...`）、非 2xx
+  `sent:false`+`http_status=...`。发送日志与告警日志分离，便于追责通知链路。
+- **验证（verify_s3.sh D1/D2 实证）**：本地 `http_serve` mock **实收 3 条 POST /alert**
+  （body JSON 含 alert）→ 真发打通；webhook 指向连接拒绝端口 → daemon 3 轮跑完退出码
+  0、3 条 `sent:false`+err（修复前此场景 px_error 杀进程，M58-S3 dry-run 即因此不能真发）。
+- **测试 mock 经验**：mock 用 PuXian 自举（http_serve + handler 落盘）；bash 侧就绪判定
+  不能等 mock 的 stdout（print 到文件全缓冲），改用 `/dev/tcp` 端口探测。
+
