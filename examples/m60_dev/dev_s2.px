@@ -1,0 +1,78 @@
+# ============================================================
+# M60 S2 dev_s2.px —— 设备组 tty_config / fd_wait
+# ------------------------------------------------------------
+# 测试点（docs/M60_PLAN.md §三.2）：
+#   A. tty_config(sfd, 9600, true) raw 设置成功；再 tty_config(sfd, 115200, false)（仅波特率）成功
+#   B. raw 生效：master 写 "HELLO"（无 \n）→ slave read 一次全量返回 5B（raw 关 canonical 行缓冲）
+#   C. fd_wait 就绪：master 写数据 → fd_wait 返回就绪 fd（list 含 sfd）
+#   D. fd_wait 超时：无数据 → 空 list（非错误）；空集合 → 立即空
+#   E. fd_wait 单 int 与 list<int> 两种输入形态
+#   F. fd_wait POLLHUP 事件：master 关闭 → slave fd_wait 返回 sfd（事件），read → EOF 空 bytes
+# PTY 真内核流程沿用 M57-S3：open /dev/ptmx → TIOCGPTN → TIOCSPTLCK → open pts。
+# 退出：全过 → "M60-S2 OK"；失败 → assert 终止
+# ============================================================
+
+var TIOCGPTN   = 0x80045430
+var TIOCSPTLCK = 0x40045431
+
+var mfd = open("/dev/ptmx", "rw")
+assert(mfd >= 0, "open /dev/ptmx 失败 errno=" + str(os_errno()))
+var ptnb = int_to_bytes(0, 4, "little")
+assert(ioctl(mfd, TIOCGPTN, ptnb) == 0, "TIOCGPTN 失败 errno=" + str(os_errno()))
+var ptn = bytes_to_int(ptnb, "little")
+assert(ioctl(mfd, TIOCSPTLCK, int_to_bytes(0, 4, "little")) == 0, "TIOCSPTLCK 失败 errno=" + str(os_errno()))
+var sfd = open("/dev/pts/" + str(ptn), "rw")
+assert(sfd >= 0, "open pts/" + str(ptn) + " 失败 errno=" + str(os_errno()))
+
+# ---- A. tty_config raw + 波特率 ----
+assert(tty_config(sfd, 9600, true) == true, "tty_config(9600, raw) 应 true, errno=" + str(os_errno()))
+assert(tty_config(sfd, 115200, false) == true, "tty_config(115200, 非raw 仅波特率) 应 true, errno=" + str(os_errno()))
+# 参数类型错误终止在 verify C 段覆盖
+print("A: tty_config raw + 波特率设置 ok")
+
+# ---- B. raw 生效：无 \n 数据全量立即可读（canonical 会等行结束）----
+assert(write(mfd, "HELLO") == 5, "master 写 HELLO 失败")
+var ready = fd_wait(sfd, 1000)
+assert(len(ready) == 1 and ready[0] == sfd, "fd_wait 应返回 [sfd], got len=" + str(len(ready)))
+var d = read(sfd, 10)
+assert(bytes_to_str(d) == "HELLO", "raw 模式应一次读到 HELLO, got [" + bytes_to_str(d) + "] len=" + str(bytes_len(d)))
+print("B: raw 生效（无 \\n 数据立即可读全量 5B）ok")
+
+# ---- C. fd_wait 超时 → 空 list（非错误）----
+var t0 = now_us()
+var r1 = fd_wait(sfd, 50)
+var t1 = now_us()
+assert(type(r1) == "list" and len(r1) == 0, "超时应返回空 list, got type=" + str(type(r1)))
+assert(t1 - t0 >= 40000, "fd_wait 50ms 应至少等 ~50ms, got " + str(t1 - t0) + "us")
+print("C: fd_wait 超时返回空 list（等待 " + str(t1 - t0) + "us）ok")
+
+# ---- D. fd_wait 单 int 输入 + 数据到齐立即返回 ----
+assert(write(mfd, "X") == 1, "master 写 X 失败")
+var r2 = fd_wait(sfd, 1000)
+assert(len(r2) == 1 and r2[0] == sfd, "单 int 输入应返回 [sfd]")
+var c1 = read(sfd, 1)
+assert(bytes_to_str(c1) == "X", "应读到 X")
+print("D: fd_wait 单 int 输入形态 ok")
+
+# ---- E. fd_wait list<int> 多 fd 输入 ----
+assert(write(mfd, "AB") == 2, "master 写 AB 失败")
+var r3 = fd_wait([sfd, mfd], 1000)   # sfd 可读（AB），mfd 无可读
+assert(len(r3) == 1 and r3[0] == sfd, "多 fd list 输入应只返回可读的 sfd, got " + str(r3))
+assert(bytes_to_str(read(sfd, 2)) == "AB", "应读到 AB")
+print("E: fd_wait list<int> 多 fd 输入 ok")
+
+# ---- F. fd_wait POLLHUP 事件：master 关闭 → slave 事件 + read EOF ----
+assert(close(mfd) == true, "close master 失败")
+var r4 = fd_wait(sfd, 1000)
+assert(len(r4) >= 1 and r4[0] == sfd, "master 关闭后 slave 应产生事件(HUP), got len=" + str(len(r4)))
+var e = read(sfd, 5)
+assert(bytes_len(e) == 0, "master 关闭后 slave read 应 EOF 空 bytes, got len=" + str(bytes_len(e)))
+print("F: fd_wait POLLHUP 事件 + read EOF ok")
+
+# ---- G. fd_wait 空集合边界：立即返回空 ----
+var r5 = fd_wait([], 1000)
+assert(type(r5) == "list" and len(r5) == 0, "空集合应立即返回空 list")
+print("G: fd_wait 空集合立即空 ok")
+
+close(sfd)
+print("M60-S2 OK")
