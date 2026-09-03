@@ -6,6 +6,27 @@
 
 ## [Unreleased]
 
+### 语言面修复 · HTTP 客户端网络失败 → Err(result)（M58 dogfood 欠账 #1/#2 根因）
+
+- **问题**：`http_get`/`http_post`/`http_request`/`http_unix`/`http_get_stream` 网络失败
+  （解析/建连/TLS/IO/重定向/协议不支持）直接 `px_error` → 打印「运行时错误:」并 exit(1)，
+  无错误返回；spawn 协程内网络调用失败会杀整个进程（MINI_SUBSET §十三 #1/#2，M58
+  pxhwmond dogfood 暴露：webhook 通知只能 dry-run 落盘、不能真发网络）
+- **修复（runtime/runtime.c，零新增内置函数）**：上述 5 个 HTTP 客户端函数**网络失败统一
+  返回 `Err(result)`**（消息 `"net: ..."`，保留原 px_error 文案），进程不终止，调用方可
+  `is_err()`/`?`/unwrap 处理；**成功返回值不变**（http_get/post → body 字符串；
+  http_request/unix → dict{status,headers,body}；get_stream → bool）；参数个数/类型错误
+  （编程契约）仍 px_error 终止；HTTP 应用层状态码（404/500）仍由 dict.status 返回（不算
+  网络失败）。实现：底层 `px_http_once`/`px_http_request` 增加错误缓冲输出
+  （`px_net_fail` 返回 NULL 信号，修复一处 NULL 未检解引用隐患）；`hparse_url` 改返回
+  错误码不再终止；builtin 用 `px_net_err` 就地构造 Err
+- **验证**：新增 `examples/http_neterr_result.px` 自检（连接拒绝/协议不支持/unix socket
+  不存在 → is_err=true + 进程存活 ALIVE + 退出码 0）；成功路径不变（本地 HTTP 状态页
+  http_get/http_post 返回 string、http_request 返回 dict status=200）；M58 verify_s1/s2/s3
+  回归全 PASS；aarch64 交叉链路 verify_s4 复跑
+- 连带：#2（spawn 不隔离 panic）在该场景**根除**——网络失败已不 panic；协程内其他运行时
+  错误（除零等）仍不隔离（MINI_SUBSET §十三.1 部分缓解记录）
+
 ### 新增 · M58 首个 dogfood 真实应用：pxhwmond 硬件健康守护 daemon（examples/m58_hwmond，见 docs/M58_PLAN.md）
 
 - **首个 dogfood 里程碑**：用 PuXian 写**真实边缘应用**——单静态二进制硬件健康守护 daemon，

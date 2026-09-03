@@ -1,0 +1,45 @@
+# ============================================================
+# http_neterr_result.px —— HTTP 客户端网络失败 → Err(result) 语义演示/自检
+# ------------------------------------------------------------
+# 语言面修复（M58 dogfood 欠账 MINI_SUBSET §十三 #1/#2 根因）：
+#   http_get/http_post/http_request/http_unix/http_get_stream 网络失败
+#   （解析/建连/TLS/IO/重定向/协议不支持）不再 px_error 杀进程，
+#   而是返回 Err(result)（消息 "net: ..."），调用方可 is_err()/`?`/unwrap 处理；
+#   成功返回值不变（http_get/post → body 字符串；http_request/unix →
+#   dict{status,headers,body}）；参数个数/类型错误（编程契约）仍终止。
+# 自检断言：全部失败路径 is_err=true 且进程存活（打印 ALIVE、退出码 0）。
+# 构建/运行：
+#   ./tools/pxc build examples/http_neterr_result.px && ./examples/build/http_neterr_result
+# （零外部依赖：127.0.0.1:1 连接必然被拒；无 unix socket 必然失败；ftp:// 协议不支持）
+# ============================================================
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+def main():
+    # ---- 连接拒绝（127.0.0.1:1 无监听 → ECONNREFUSED）----
+    var f1 = http_get("http://127.0.0.1:1/x")
+    expect(f1.is_err(), "http_get 连接失败应 is_err")
+    print("  http_get  失败 → " + str(f1))
+
+    var f2 = http_post("http://127.0.0.1:1/x", "x=1")
+    expect(f2.is_err(), "http_post 连接失败应 is_err")
+    print("  http_post 失败 → " + str(f2))
+
+    var f3 = http_request("http://127.0.0.1:1/x", "GET")
+    expect(f3.is_err(), "http_request 连接失败应 is_err")
+    print("  http_request 失败 → " + str(f3))
+
+    # ---- 协议不支持（hparse_url 校验路径，返回 Err 不终止）----
+    var f4 = http_request("ftp://nope/x", "GET")
+    expect(f4.is_err(), "http_request 协议不支持应 is_err")
+    print("  协议不支持 → " + str(f4))
+
+    # ---- unix socket 不存在（http_unix 连接失败）----
+    var f5 = http_unix("/tmp/no-such-px-http.sock", "/x", "GET")
+    expect(f5.is_err(), "http_unix 连接失败应 is_err")
+    print("  http_unix 失败 → " + str(f5))
+
+    print("ALIVE：全部网络失败已可检查（Err），进程未被终止 ✅")
