@@ -1,0 +1,100 @@
+# ============================================================
+# pxhwmond（M58）collect.px —— /proc 采集模块
+# ------------------------------------------------------------
+# 采样通道 = M57 fd 数据通道主路径：open(path,"r") + read(fd,n) + close
+#   （read_file 路径式为对照备选；本模块 dogfood 让新数据通道跑真实 /proc）
+# 任一指标读取/解析失败 → 字段降级（"" / -1 / null），绝不抛错终止
+#   （真实边缘设备常态容错：设备/字段缺失时守护进程必须继续活着）
+# API（跨文件 import 后全局可见，见 main.px）：
+#   proc_read(path) -> str          fd 通道读文本；失败返回 ""
+#   tokens(line)    -> list         空白分词（滤掉连续空格空串）
+#   read_stat_cpu() -> list|null    /proc/stat cpu 行 → [total, idle]；失败 null
+#   collect_mem()   -> dict         内存 kB：total/free/avail/buffers/cached
+#   collect_load()  -> dict         负载 load1/5/15 + procs（原样字符串）
+#   collect_uptime()-> dict         运行时长 up + idle（原样字符串）
+# ============================================================
+
+# ---- fd 通道读文本文件：成功 → str；失败 → "" ----
+def proc_read(path):
+    var fd = open(path, "r")
+    if fd == -1:
+        return ""
+    var b = read(fd, 4096)
+    close(fd)
+    if type(b) != "bytes":
+        return ""
+    return bytes_to_str(b)
+
+# ---- 空白分词（/proc 行常多空格，split(" ") 会产生空串，过滤掉）----
+def tokens(line):
+    return filter(split(line, " "), fn(x) { x != "" })
+
+# ---- /proc/stat 第一行 cpu 累计 → [total, idle]（单位 jiffies）----
+# 字段：cpu user nice system idle iowait irq softirq steal [guest ...]
+# total = user..steal 之和；idle = 第 5 列（t[4]）
+def read_stat_cpu():
+    var txt = proc_read("/proc/stat")
+    if txt == "":
+        return null
+    var lines = split(txt, "\n")
+    for ln in lines:
+        if starts_with(ln, "cpu "):        # 带空格排除 cpu0/cpu1... 各核行
+            var t = tokens(ln)
+            if len(t) < 5:
+                return null
+            var total = 0
+            var idle = int(t[4])
+            var i = 1
+            while i < len(t) and i <= 8:   # user..steal（guest 已含 user，不重复计）
+                total = total + int(t[i])
+                i = i + 1
+            return [total, idle]
+    return null
+
+# ---- /proc/meminfo 关键字段（kB）----
+def collect_mem():
+    var m = {"total": -1, "free": -1, "avail": -1, "buffers": -1, "cached": -1}
+    var txt = proc_read("/proc/meminfo")
+    if txt == "":
+        return m
+    for ln in split(txt, "\n"):
+        var t = tokens(ln)
+        if len(t) >= 2:
+            var v = int(t[1])
+            if t[0] == "MemTotal:":
+                m["total"] = v
+            elif t[0] == "MemFree:":
+                m["free"] = v
+            elif t[0] == "MemAvailable:":
+                m["avail"] = v
+            elif t[0] == "Buffers:":
+                m["buffers"] = v
+            elif t[0] == "Cached:":
+                m["cached"] = v
+    return m
+
+# ---- /proc/loadavg（load 为浮点，原样字符串保留精度，告警阈值比对在 S3）----
+def collect_load():
+    var ld = {"load1": "", "load5": "", "load15": "", "procs": ""}
+    var txt = proc_read("/proc/loadavg")
+    if txt == "":
+        return ld
+    var t = tokens(txt)
+    if len(t) >= 4:
+        ld["load1"] = t[0]
+        ld["load5"] = t[1]
+        ld["load15"] = t[2]
+        ld["procs"] = t[3]
+    return ld
+
+# ---- /proc/uptime：up（秒，浮点原样）+ idle ----
+def collect_uptime():
+    var u = {"up": "", "idle": ""}
+    var txt = proc_read("/proc/uptime")
+    if txt == "":
+        return u
+    var t = tokens(txt)
+    if len(t) >= 2:
+        u["up"] = t[0]
+        u["idle"] = t[1]
+    return u
