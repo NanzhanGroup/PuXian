@@ -257,7 +257,7 @@ static const char* bdata(LXValue v);
 static int blen(LXValue v);
 
 // M10 HTTPS 内部辅助
-static char* px_http_request(const char* url, const char* method, const char* body, int* out_len);
+static char* px_http_request(const char* url, const char* method, const char* body, int* out_len, char* errbuf, int errcap);
 static int px_https_request(const char* host, int port, const char* req, char** out, int* out_len);
 // M24 https 连接池：TLS 会话复用。CA 证书缓存定义在此（M10 区 px_ensure_cacert 使用，前向声明）。
 static pthread_mutex_t g_cacert_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -6846,12 +6846,12 @@ static void hpool_put(const char* key, HPoolSlot s) {
 }
 
 // 解析 http(s) URL：is_https / host / port / path
-static void hparse_url(const char* url, int* is_https, char* host, int host_cap, int* port, const char** path) {
+static int hparse_url(const char* url, int* is_https, char* host, int host_cap, int* port, const char** path) {
     *is_https = 0;
     const char* rest = url;
     if (strncmp(url, "https://", 8) == 0) { *is_https = 1; rest = url + 8; }
     else if (strncmp(url, "http://", 7) == 0) { rest = url + 7; }
-    else px_error("net: 不支持的协议: %s", url);
+    else return -1;  // 不支持的协议（不再终止；调用方转 Err 返回）
     int hl = 0;
     while (rest[hl] && rest[hl] != '/' && rest[hl] != ':' && hl < host_cap - 1) { host[hl] = rest[hl]; hl++; }
     host[hl] = 0;
@@ -6864,6 +6864,30 @@ static void hparse_url(const char* url, int* is_https, char* host, int host_cap,
         p = q;
     }
     *path = (*p == '/') ? p : "/";
+    return 0;
+}
+
+// ==================== HTTP 客户端网络失败 → Err(result)（语言面修复） ====================
+// 历史行为：http_get/http_post/http_request/http_unix/http_get_stream 网络失败（解析/建连/
+// TLS/IO/重定向/协议不支持）直接 px_error → 打印"运行时错误:"并 exit(1)，无错误返回；长期
+// daemon 内不能安全发起网络调用（MINI_SUBSET §十三 #1/#2，M58 dogfood 暴露）。
+// 修复语义：网络失败 → 返回 Err(result)（消息 "net: ..."），调用方可 is_err()/`?`/unwrap 处理，
+// 进程不终止；成功返回值不变（http_get/post → body 字符串；http_request/unix →
+// dict{status,headers,body}）。参数个数/类型错误（编程契约）仍 px_error 终止。
+// px_net_fail：底层 helper 填错误缓冲后返回失败信号（NULL/-1），builtin 再包装 Err。
+// px_net_err：builtin 就地构造并返回 Err("net: ...") result。
+static void px_net_fail(char* errbuf, int errcap, const char* fmt, ...) {
+    if (!errbuf || errcap <= 0) return;
+    va_list ap; va_start(ap, fmt);
+    vsnprintf(errbuf, (size_t)errcap, fmt, ap);
+    va_end(ap);
+}
+static LXValue px_net_err(const char* fmt, ...) {
+    char buf[300];
+    va_list ap; va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    return px_err(px_str(buf));
 }
 
 // 建立 TCP 连接（域名解析），返回 fd；失败返回 -1
@@ -7027,7 +7051,8 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
     char host[256];
     int port = 80;
     const char* path = "/";
-    hparse_url(url, &is_https, host, sizeof(host), &port, &path);
+    if (hparse_url(url, &is_https, host, sizeof(host), &port, &path) != 0)
+        return px_net_err("net: 不支持的协议: %s", url);
     // M37：代理——连接代理地址，请求行用绝对 URL
     char conn_host[256];
     int conn_port = is_https ? 443 : 80;
@@ -7080,7 +7105,7 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
             }
             if (slot.fd < 0) {
                 if (attempt < max_attempts - 1) continue;
-                px_error("net: 连接 %s:%d 失败", conn_host, conn_port);
+                return px_net_err("net: 连接 %s:%d 失败", conn_host, conn_port);
             }
             // M37：超时配置（SO_RCVTIMEO）
             struct timeval tv = { timeout_ms / 1000, (timeout_ms % 1000) * 1000 };
@@ -7103,7 +7128,7 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
         if (slot.tls) https_close(slot.tls);
         close(slot.fd);
         if (attempt < max_attempts - 1) continue; // 池连接失效重试
-        px_error("net: http_request 失败: 连接关闭");
+        return px_net_err("net: http_request 失败: 连接关闭");
     }
     return px_null();
 }
@@ -7130,7 +7155,7 @@ static LXValue bi_http_unix(LXValue* args, int nargs, void* ctx) {
         }
     }
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0) px_error("net: 创建 unix socket 失败");
+    if (fd < 0) return px_net_err("net: 创建 unix socket 失败");
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
@@ -7138,7 +7163,7 @@ static LXValue bi_http_unix(LXValue* args, int nargs, void* ctx) {
     if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
         int e = errno;
         close(fd);
-        px_error("net: 连接 unix socket %s 失败 (%d)", sock_path, e);
+        return px_net_err("net: 连接 unix socket %s 失败 (%d)", sock_path, e);
     }
     // 本地网关可能响应慢（如 LLM 长文本），接收/发送超时放宽到 180s
     struct timeval tv = { 180, 0 };
@@ -7166,7 +7191,7 @@ static LXValue bi_http_unix(LXValue* args, int nargs, void* ctx) {
     char* resp_body = NULL;
     if (h_exchange(&slot, req, rlen, &status, &headers, &resp_body, &body_len, &keep_alive) != 0) {
         close(fd);
-        px_error("net: http_unix 请求失败: 连接关闭");
+        return px_net_err("net: http_unix 请求失败: 连接关闭");
     }
     close(fd);
     LXValue d = px_dict();
@@ -7547,7 +7572,8 @@ static LXValue bi_http_get_stream(LXValue* args, int nargs, void* ctx) {
     char host[256];
     int port = 80;
     const char* path = "/";
-    hparse_url(url, &is_https, host, sizeof(host), &port, &path);
+    if (hparse_url(url, &is_https, host, sizeof(host), &port, &path) != 0)
+        return px_net_err("net: 不支持的协议: %s", url);
     // M37：代理——连接代理地址，请求行用绝对 URL
     char conn_host[256];
     int conn_port = is_https ? 443 : 80;
@@ -7575,14 +7601,14 @@ static LXValue bi_http_get_stream(LXValue* args, int nargs, void* ctx) {
     slot.tls = NULL;
     if (is_https) { slot.tls = https_connect(host, port); slot.fd = slot.tls ? slot.tls->net.fd : -1; }
     else slot.fd = hconnect(host, port);
-    if (slot.fd < 0) px_error("net: 连接 %s:%d 失败", host, port);
+    if (slot.fd < 0) return px_net_err("net: 连接 %s:%d 失败", host, port);
     int fd = slot.fd;
     HttpsSession* tls = slot.is_tls ? slot.tls : NULL;
     char req[8192];
     int rlen = snprintf(req, sizeof(req),
         "GET %s HTTP/1.1\r\nHost: %s:%d\r\nUser-Agent: PuXian/0.1\r\nConnection: close\r\n\r\n",
         path, host, port);
-    if (conn_send(tls, fd, req, rlen) < 0) { if (tls) https_close(tls); else close(fd); px_error("net: 发送请求失败"); }
+    if (conn_send(tls, fd, req, rlen) < 0) { if (tls) https_close(tls); else close(fd); return px_net_err("net: 发送请求失败"); }
     // 读响应头
     int cap = 16384, len = 0;
     char* buf = xmalloc(cap);
@@ -7590,12 +7616,12 @@ static LXValue bi_http_get_stream(LXValue* args, int nargs, void* ctx) {
     for (;;) {
         if (len + 4096 > cap) { cap *= 2; buf = xrealloc(buf, cap); }
         int n = conn_recv(tls, fd, buf + len, 4096);
-        if (n <= 0) { xfree(buf); if (tls) https_close(tls); else close(fd); px_error("net: 读取响应失败"); }
+        if (n <= 0) { xfree(buf); if (tls) https_close(tls); else close(fd); return px_net_err("net: 读取响应失败"); }
         len += n;
         buf[len] = 0;
         char* sep = strstr(buf, "\r\n\r\n");
         if (sep) { header_end = (int)(sep - buf); break; }
-        if (len > 65536) { xfree(buf); if (tls) https_close(tls); else close(fd); px_error("net: 响应头超过 64KB"); }
+        if (len > 65536) { xfree(buf); if (tls) https_close(tls); else close(fd); return px_net_err("net: 响应头超过 64KB"); }
     }
     int chunked = 0, gzip = 0, content_length = -1;
     char* hline = buf;
@@ -7863,12 +7889,13 @@ cleanup:
 
 // 单次 HTTP 往返：返回 malloc 响应（响应头+体），解析状态码与 Location
 static char* px_http_once(const char* url, const char* method, const char* body,
-    int* out_len, int* out_status, char* loc, int loc_cap) {
+    int* out_len, int* out_status, char* loc, int loc_cap,
+    char* errbuf, int errcap) {
     int is_https = 0;
     const char* rest;
     if (strncmp(url, "https://", 8) == 0) { is_https = 1; rest = url + 8; }
     else if (strncmp(url, "http://", 7) == 0) { rest = url + 7; }
-    else { px_error("net: 不支持的协议: %s", url); return NULL; }
+    else { px_net_fail(errbuf, errcap, "net: 不支持的协议: %s", url); return NULL; }
 
     char host[256];
     int hostlen = 0;
@@ -7877,12 +7904,12 @@ static char* px_http_once(const char* url, const char* method, const char* body,
         hostlen++;
     }
     host[hostlen] = 0;
-    if (hostlen == 0) { px_error("net: 主机名为空"); return NULL; }
+    if (hostlen == 0) { px_net_fail(errbuf, errcap, "net: 主机名为空"); return NULL; }
     int port = is_https ? 443 : 80;
     const char* p = rest + hostlen;
     if (*p == ':') {
         port = atoi(p + 1);
-        if (port <= 0 || port > 65535) { px_error("net: 端口非法"); return NULL; }
+        if (port <= 0 || port > 65535) { px_net_fail(errbuf, errcap, "net: 端口非法"); return NULL; }
         const char* q = p + 1;
         while (*q && *q != '/') q++;
         p = q;
@@ -7909,7 +7936,7 @@ static char* px_http_once(const char* url, const char* method, const char* body,
     int resp_len = 0;
     if (is_https) {
         int r = px_https_request(host, port, req, &resp, &resp_len);
-        if (r != 0) { px_error("net: HTTPS 请求失败 (%d) %s", r, host); return NULL; }
+        if (r != 0) { px_net_fail(errbuf, errcap, "net: HTTPS 请求失败 (%d) %s", r, host); return NULL; }
     } else {
         // 明文 http
         struct addrinfo hints, *res = NULL;
@@ -7918,13 +7945,13 @@ static char* px_http_once(const char* url, const char* method, const char* body,
         hints.ai_socktype = SOCK_STREAM;
         char portstr[16];
         snprintf(portstr, sizeof(portstr), "%d", port);
-        if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) { px_error("net: 解析主机失败 %s", host); return NULL; }
+        if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) { px_net_fail(errbuf, errcap, "net: 解析主机失败 %s", host); return NULL; }
         int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-        if (fd < 0) { freeaddrinfo(res); px_error("net: 创建 socket 失败"); return NULL; }
+        if (fd < 0) { freeaddrinfo(res); px_net_fail(errbuf, errcap, "net: 创建 socket 失败"); return NULL; }
         if (connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
             freeaddrinfo(res);
             close(fd);
-            px_error("net: 连接 %s:%d 失败", host, port);
+            px_net_fail(errbuf, errcap, "net: 连接 %s:%d 失败", host, port);
             return NULL;
         }
         freeaddrinfo(res);
@@ -7974,21 +8001,22 @@ static char* px_http_once(const char* url, const char* method, const char* body,
 }
 
 // 统一 HTTP 请求：自动跟随重定向（最多 5 次），返回 malloc 响应体
-static char* px_http_request(const char* url, const char* method, const char* body, int* out_len) {
+static char* px_http_request(const char* url, const char* method, const char* body, int* out_len, char* errbuf, int errcap) {
     char cur[2048];
     snprintf(cur, sizeof(cur), "%s", url);
     for (int i = 0; i < 5; i++) {
         char loc[1024];
         int status = 0;
         int len = 0;
-        char* resp = px_http_once(cur, method, body, &len, &status, loc, sizeof(loc));
+        char* resp = px_http_once(cur, method, body, &len, &status, loc, sizeof(loc), errbuf, errcap);
+        if (!resp) return NULL;  // 网络失败：errbuf 已填，上层 bi_http_get/post 包装 Err
         if (status >= 300 && status < 400 && loc[0]) {
             char next[2048];
             if (strncmp(loc, "http://", 7) == 0 || strncmp(loc, "https://", 8) == 0) {
                 snprintf(next, sizeof(next), "%s", loc);
             } else if (loc[0] == '/') {
                 const char* s = strstr(cur, "://");
-                if (!s) { xfree(resp); px_error("net: 非法 URL"); return NULL; }
+                if (!s) { xfree(resp); px_net_fail(errbuf, errcap, "net: 非法 URL"); return NULL; }
                 const char* hp = s + 3;
                 const char* hp_end = strchr(hp, '/');
                 int hplen = hp_end ? (int)(hp_end - hp) : (int)strlen(hp);
@@ -8057,7 +8085,7 @@ static char* px_http_request(const char* url, const char* method, const char* bo
         *out_len = final_len;
         return r;
     }
-    px_error("net: 重定向次数过多（>5）");
+    px_net_fail(errbuf, errcap, "net: 重定向次数过多（>5）");
     return NULL;
 }
 
@@ -8067,7 +8095,9 @@ static LXValue bi_http_get(LXValue* args, int nargs, void* ctx) {
     if (nargs != 1 || args[0].type != PX_STR) px_error("http_get 需要 (url) 参数");
     const char* url = args[0].as.obj->as.str.data;
     int len = 0;
-    char* body = px_http_request(url, "GET", NULL, &len);
+    char err[256] = {0};
+    char* body = px_http_request(url, "GET", NULL, &len, err, (int)sizeof(err));
+    if (!body) return px_net_err("%s", err[0] ? err : "net: HTTP 请求失败");
     LXValue r = px_str_len(body, len);
     xfree(body);
     return r;
@@ -8080,7 +8110,9 @@ static LXValue bi_http_post(LXValue* args, int nargs, void* ctx) {
     const char* url = args[0].as.obj->as.str.data;
     const char* body = args[1].as.obj->as.str.data;
     int len = 0;
-    char* resp = px_http_request(url, "POST", body, &len);
+    char err[256] = {0};
+    char* resp = px_http_request(url, "POST", body, &len, err, (int)sizeof(err));
+    if (!resp) return px_net_err("%s", err[0] ? err : "net: HTTP 请求失败");
     LXValue r = px_str_len(resp, len);
     xfree(resp);
     return r;

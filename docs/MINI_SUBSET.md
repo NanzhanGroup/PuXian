@@ -227,6 +227,23 @@
 | 7 | **`str(float)` 显示精度 `%g`** | 浮点转字符串 6 位有效数字（§十二.3 同源） | 监控展示浮点（load/up）保持源字符串，不经 float→str 往返 |
 | 8 | **pxi 解释模式对真实应用 API 支持未承诺** | 解释器（Mini 子集）对相对路径 import + open/read 链实测失败（pxc run 报「io: 读取文件失败」） | M58 主打编译模式全能力（与 M57 同策略）；解释模式补验/补齐属非阻塞项 |
 
+### §十三.1 修复记录：HTTP 客户端网络失败 → Err(result)（#1/#2 根因）
+
+> 表中 #1/#2 为 M58 dogfood 当时实测暴露。随后已做**语言面修复**（runtime/runtime.c，
+> 见 CHANGELOG + examples/http_neterr_result.px 自检）：
+
+| 项 | 修复后语义 |
+|---|---|
+| http_get / http_post | 网络失败返回 `Err(result)`（消息 `"net: ..."`），**不再终止进程**；成功仍返回 body 字符串 |
+| http_request / http_unix | 网络失败返回 `Err(result)`；成功仍返回 dict{status,headers,body}；HTTP 应用层状态码（404 等）仍由 dict.status 返回（非网络失败） |
+| http_get_stream | 网络失败返回 `Err(result)`；成功仍返回 bool |
+| 参数个数/类型错误 | 仍 px_error 终止（编程契约，与全部 builtin 一致） |
+| spawn 协程内网络调用 | 失败返回 Err 不再 panic → **不再杀整个进程**（#2 在该场景根除）；协程内其他运行时错误（除零等）仍不隔离，写代码仍须规避 |
+
+实现要点：底层 `px_http_once`/`px_http_request` 增加错误缓冲输出（`px_net_fail`，返回
+NULL 信号）；`hparse_url` 改为返回错误码（不再终止）；各 builtin 用 `px_net_err` 就地
+构造 `Err("net: ...")`。零新增内置函数，纯运行时失败语义修正。
+
 **对语言面的启示（真实用户喂 bug 的 1→1.0n 反馈）**：网络 I/O 失败路径缺失错误返回
 （#1/#2）是真实应用（通知/上报类）最痛的缺口，优先于语法糖；`int()` 宽容解析 + 空
 dict 字面量是隐蔽坑（静默错值/难排查），值得后续收紧或文档明示。
