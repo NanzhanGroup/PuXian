@@ -34,14 +34,14 @@
 
 ## 三、树莓派/边缘设备：真缺口（按「上真板立刻会撞」排序）
 
-| # | 缺口 | 现状证据 | 影响 | 解决路径 |
-|---|---|---|---|---|
-| 1 | GPIO 真正输出/读入 | 示例仅只读 `GPIO_GET_CHIPINFO`；未做 line request / 读写 / 边沿事件 | LED/按键/继电器做不了 | ioctl 语法已够，缺封装与示例（M60 edge.px） |
-| 2 | GPIO 边沿中断（poll/epoll） | runtime 内部有 `poll()`（3 处）但**未暴露为语言函数**；语言层 `select` 只等 chan | 按键中断、脉冲计数、编码器全卡死 | 语言暴露 poll/epoll（M60，小 C 封装） |
-| 3 | 串口 UART：无 termios | 全库无 `termios`/`tcsetattr`/`B9600` 痕迹 | `/dev/ttyS0` 能 open 但设不了波特率/raw 模式；GPS/蓝牙/RS485 全废 | termios 封装（M60） |
-| 4 | SPI / PWM 便捷封装 | 无 spidev / pwmchip 示例；PWM 只能手写 sysfs | ioctl 结构体含指针、手写痛苦，无 stdlib | edge.px 封装（M60） |
-| 5 | 高精度时钟（us 级） | `sleep` 单位 ms（nanosleep）；无 us 级 | 1-Wire、DHT11/DS18B20 时序 bit-bang 做不了 | usleep 内置或 edge.px（M60） |
-| 6 | 真板物理验证缺位 | GPIO/I2C 示例全部「留板子环境验证」（x86 SKIP）；qemu 也验不了真实设备 | 所有边缘能力停在「理论上通」，无真实器件回归 | 真板物理回归（候选 B，需硬件） |
+| # | 缺口 | 现状证据 | 影响 | 解决路径 | 状态 |
+|---|---|---|---|---|---|
+| 1 | GPIO 真正输出/读入 | 原仅只读 `GPIO_GET_CHIPINFO`；未做 line request / 读写 / 边沿事件 | LED/按键/继电器做不了 | ioctl 语法已够，缺封装与示例 | ✅ **M60 已落地**：`std.edge` GPIO V2 line（gpio_input/output/input_edge + read/write），592B 结构体 C offsetof 单测；真板段示例 m60_gpio |
+| 2 | GPIO 边沿中断（poll/epoll） | 原 runtime 内部 poll 未暴露为语言函数 | 按键中断、脉冲计数、编码器全卡死 | 语言暴露 poll | ✅ **M60 已落地**：`fd_wait(fds, ms)`（POLLIN，revents 非 0 即事件含 HUP）；GPIO 边沿经 gpio_wait/gpio_event |
+| 3 | 串口 UART：无 termios | 原全库无 termios/tcsetattr/B9600 | `/dev/ttyS0` 设不了波特率/raw；GPS/蓝牙/RS485 全废 | termios 封装 | ✅ **M60 已落地**：`tty_config(fd, baud, raw)` + `serial_open`；m60_serial_pty **x86 实跑 PTY 真内核串口 loopback** |
+| 4 | SPI / PWM 便捷封装 | 原无 spidev/pwmchip 示例；PWM 只能手写 sysfs | ioctl 结构体含指针、手写痛苦，无 stdlib | edge.px 封装 | ✅ **M60 已落地（PWM 全）**：`pwm_setup/enable/set_duty` sysfs + m60_pwm 示例；⚠️ SPI_IOC_MESSAGE（transfer 数组含 u64 指针）仍留档（§3.4），spidev read/write 半通 |
+| 5 | 高精度时钟（us 级） | 原 `sleep` 仅 ms 整数粒度 | 1-Wire、DHT11/DS18B20 时序 bit-bang 做不了 | us 级内置 | ✅ **M60 已落地**：`sleep_us(us)` + `now_us()`（CLOCK_MONOTONIC 微秒） |
+| 6 | 真板物理验证缺位 | GPIO/I2C/PWM 示例「留板子环境验证」（x86 SKIP）；qemu 也验不了真实设备 | 所有边缘能力停在「理论上通」，无真实器件回归 | 真板物理回归 | ⏳ 候选（需树莓派硬件，m60_gpio/i2c/pwm 即插即用） |
 | 7 | pxi 解释器设备 API（§十三 #8） | `pxc run` 对相对 import + open 链失败 | 板子上只能跑**编译模式**静态二进制（可行，但解释器快排用不了） | 语言面小修/评估（同 http_get 类 Err 修复节奏） |
 
 **缺口共性**：缺的不是语法，而是 **3 个小内置（poll/epoll + termios）+ 1 个 edge stdlib
@@ -94,12 +94,13 @@ ROADMAP 明确不做 OpenGL/Vulkan 原生绑定（工程量与价值不成比例
 | 序 | 里程碑 | 内容 | 规模 / 前置 | 依据 |
 |---|---|---|---|---|
 | **M59** ✅ | 数学与随机补齐 | **已完成（2026-09，M59）**：`sin`/`cos`/`tan`/`atan2` + `floor`/`ceil`/`round`/`log`/`log10`/`exp` + `random`/`random_int`/`random_seed` + `pi`/`e`（C libm 内置 + splitmix64；pxi 双模式同步 + aarch64 验证）—— 见 ROADMAP 上表 + CHANGELOG + examples/m59_math | 小；语言面最小侵入（已落地） | 游戏+边缘两条线的公共地基（本表「数学欠账」一项已勾销） |
-| **M60** | 边缘 stdlib + 设备小内置 | `edge.px`：GPIO line request 控制封装、串口 termios、PWM sysfs + `poll`/`epoll` 语言暴露 + us 级 sleep；示例真跑（有设备）或 SKIP | 中；树莓派线最大缺口（§三 #1–#5）；poll/termios/usleep 均为小 C 封装 | |
+| **M60** ✅ | 边缘 stdlib + 设备小内置 | **已完成（2026-09，M60）**：5 个 C 小内置（`sleep_us`/`now_us`/`fcntl`/`tty_config`/`fd_wait`）+ 第 4 个 stdlib `std.edge`（GPIO V2 line / I2C / serial_open / PWM sysfs）+ 示例（PTY 串口 x86 实跑 / 真板 SKIP 通道）+ pxi 白名单 +5 双模式同步 + aarch64 交叉 qemu 三态一致 —— 见 ROADMAP 上表 + CHANGELOG + examples/m60_dev + stdlib/edge.px | 中；树莓派线 §三 #1–#5 已收敛（#6 真板回归仍候选，需硬件） | GPIO 控制、边沿中断、UART、us 级时钟（§三 #1–#5） |
 | 候选 A | FFI 外部库绑定验证 | SDL2 最小窗口或 raylib hello：.a/.so 链接 + pkg-config + 事件循环桥 | 中–大；游戏窗口线 0→1 前提（现 FFI 仅绑内部 C 库、无外部先例） | |
 | 候选 B | 真板物理回归 | 树莓派 + LED/按键/温湿度：GPIO/I2C/串口/温度示例真跑 | 需硬件；一切边缘能力的最终裁决 | |
 
-> 备注：M60 主线编号可用（主线外占用仅 M55/M56）；里程碑开工按 M58 模式：先出
-> `docs/M*_PLAN.md` 规划供审 → 审批后按子步落地 + verify 回归 + 文档收口。
+> 备注：里程碑开工按 M58 模式：先出 `docs/M*_PLAN.md` 规划供审 → 审批后按子步落地 +
+> verify 回归 + 文档收口。当前（M60 已闭环）候选池：FFI 外部库绑定验证（游戏窗口线
+> 0→1 前提，见 §四/§五）与真板物理回归（需硬件，见 §三 #6）。
 
 ## 八、与既有文档的关系
 
