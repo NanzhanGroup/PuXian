@@ -1,0 +1,96 @@
+# ============================================================
+# pxhwmond（M58 S2）shm.px —— mmap MAP_SHARED 快照共享区
+# ------------------------------------------------------------
+# 布局（固定 4096B 文件）：
+#   [0..2048)  daemon 快照区：每轮写最新 SNAP 文本（首行 = 最新快照）
+#   [2048..)   控制区（外部写者 → daemon 命令通道，32B）
+# 双向活映射（M58 dogfood D5）：
+#   daemon 单写者写快照区；外部进程 mmap 直读最新值（dump）/ 写控制区；
+#   daemon 每轮先读控制区并清零 → 内容回显到快照 ctl= 字段（证明外部写
+#   下一轮可见——双向）。mem_write 就地写映射区，MAP_SHARED 写回文件。
+# 边界：单写者无锁（daemon 唯一写快照区；控制区消费式读清）。文件长度
+#   固定 4096 → mmap 无需担心 SIGBUS；mem_write 超长自动截断。
+# 注意：import 只合并函数定义不执行模块顶层 → 常量须函数内局部化。
+# ============================================================
+
+# ---- 确保共享文件存在且 ≥4096B（open w+ 截断 + 占位写两段 2048）----
+def shm_prepare(path):
+    var mlen = 4096
+    var fd = open(path, "w+")
+    if fd == -1:
+        return false
+    var pad = ""
+    var i = 0
+    while i < 128:                   # 128 × 32 = 4096
+        pad = pad + "                                "
+        i = i + 1
+    write(fd, pad)
+    close(fd)
+    return true
+
+# ---- daemon 每轮：快照文本写入共享区 [0..]（首行 = 最新快照）----
+def shm_write_snap(path, text):
+    var mlen = 4096
+    var fd = open(path, "r+")
+    if fd == -1:
+        return false
+    var m = mmap(fd, mlen)
+    if type(m) != "bytes":
+        close(fd)
+        return false
+    mem_write(m, 0, text)
+    munmap(m)
+    close(fd)
+    return true
+
+# ---- daemon 每轮：读控制区并清零（消费式读命令）；返回内容或 "" ----
+def shm_read_ctl(path):
+    var mlen = 4096
+    var coff = 2048
+    var clen = 32
+    var fd = open(path, "r+")
+    if fd == -1:
+        return ""
+    var m = mmap(fd, mlen)
+    if type(m) != "bytes":
+        close(fd)
+        return ""
+    var c = bytes_to_str(bytes_slice(m, coff, coff + clen))
+    mem_write(m, coff, "                                ")
+    munmap(m)
+    close(fd)
+    return trim(c)
+
+# ---- 外部写者：写控制区（命令通道，msg 建议 ≤32B，超长按 mem_write 截断）----
+def shm_write_ctl(path, msg):
+    var mlen = 4096
+    var coff = 2048
+    var fd = open(path, "r+")
+    if fd == -1:
+        return false
+    var m = mmap(fd, mlen)
+    if type(m) != "bytes":
+        close(fd)
+        return false
+    mem_write(m, coff, msg)
+    munmap(m)
+    close(fd)
+    return true
+
+# ---- dump：读共享区首行（最新快照）；空/无文件 → "" ----
+# 注：语言 mmap 固定 PROT_READ|PROT_WRITE → fd 必须 O_RDWR 打开（只读 fd 映射失败）
+def shm_dump(path):
+    var mlen = 4096
+    var fd = open(path, "r+")
+    if fd == -1:
+        return ""
+    var m = mmap(fd, mlen)
+    if type(m) != "bytes":
+        close(fd)
+        return ""
+    var lines = split(bytes_to_str(m), "\n")
+    munmap(m)
+    close(fd)
+    if len(lines) >= 1:
+        return trim(lines[0])
+    return ""
