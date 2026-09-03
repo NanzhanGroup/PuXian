@@ -160,3 +160,20 @@ def net_dev():
                 n["tx"] = n["tx"] + int(t[9])
                 n["ifaces"] = n["ifaces"] + 1
     return n
+
+# ============================================================
+# S3 追加：SNAP 文本行 → 字段 dict（serve/notify 共用）
+# ============================================================
+
+# SNAP 行 "SNAP ts=.. cpu=.. mem_total=.. ..." → {"ts": "...", "cpu": "..", ...}
+# 值全为字符串（数字转数值由消费方按需做）；空 dict 用 json_parse("{}") 创建
+# （{} 字面量在 import 合并场景不可靠，实测 json_parse 可靠）
+def parse_snap(line):
+    var d = json_parse("{}")
+    var toks = split(line, " ")
+    for t in toks:
+        if contains(t, "="):
+            var kv = split(t, "=")
+            if len(kv) == 2:
+                d[kv[0]] = kv[1]
+    return d

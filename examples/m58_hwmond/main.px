@@ -6,27 +6,31 @@
 #   main --once             采 1 轮即退出（CI / qemu / 回归自检用）
 #   main --n N              采 N 轮退出（有限时长冒烟）
 #   main --interval 2       采样间隔（秒，默认 5）
+#   main --port N           HTTP 状态页端口（默认 19858；--no-http 关闭）
 #   main --dump             读 mmap 共享区首行快照后退出（外部活读）
 #   main --ctl MSG          写 mmap 共享区控制区（外部命令通道模拟）
 #   main --shm PATH         共享文件路径（默认 /tmp/pxhwmond.shm）
 #   main --no-shm           daemon 不写共享（纯输出模式）
 # env 覆盖（SECURITY/P0：无配置文件、无密钥落盘）：
 #   PXHWMON_INTERVAL        间隔秒（CLI --interval 优先）
-#   PXHWMON_SHM             共享文件路径（CLI --shm 优先于 env）
-# 每轮输出（S2 起）：
+#   PXHWMON_SHM             共享文件路径（CLI --shm 优先）
+#   PXHWMON_PORT            HTTP 端口（CLI --port 优先）
+#   PXHWMON_ALERT_*         告警阈值（见 notify.px）
+#   PXHWMON_WEBHOOK         webhook URL（dry-run 落盘，见 notify.px）
+# 每轮输出（S3 起）：
 #   SNAP ts= cpu= mem_total= mem_avail= load1= load5= load15= up=
 #        temp= net_rx= net_tx= [ctl=<外部命令回显>]
-# CPU = 两次 /proc/stat 采样差值的 (total-idle)/total（预热前值 + 间隔窗口）。
-# S2 增量：temp 条件探测（hwmon/thermal，缺 → na 降级）、net 非 lo 汇总、
-#   mmap 快照共享（每轮 mem_write 进 MAP_SHARED；--dump 活读；控制区消费式
-#   命令通道验证双向活映射）。S3 起提供 /healthz 状态页。
+# S3 增量：--port 起 serve_http（手写 HTTP /healthz JSON + / HTML + 404，
+#   显式响应头）；每轮 check_alerts 阈值告警 → 告警日志 + webhook dry-run。
 # ============================================================
 import "collect.px"
 import "shm.px"
+import "serve.px"
+import "notify.px"
 
 # ---- 参数解析 ----
 def parse_mode():
-    var cfg = {"once": false, "n": 0, "interval_ms": 5000, "interval_cli": false, "dump": false, "ctl": "", "shm": "/tmp/pxhwmond.shm", "no_shm": false}
+    var cfg = {"once": false, "n": 0, "interval_ms": 5000, "interval_cli": false, "dump": false, "ctl": "", "shm": "/tmp/pxhwmond.shm", "no_shm": false, "port": 19858, "port_cli": false, "no_http": false}
     var a = args()
     var i = 1                 # a[0] = 程序路径，跳过
     while i < len(a):
@@ -42,6 +46,13 @@ def parse_mode():
                 cfg["interval_ms"] = int(a[i + 1]) * 1000
                 cfg["interval_cli"] = true
                 i = i + 1
+        elif arg == "--port":
+            if i + 1 < len(a):
+                cfg["port"] = int(a[i + 1])
+                cfg["port_cli"] = true
+                i = i + 1
+        elif arg == "--no-http":
+            cfg["no_http"] = true
         elif arg == "--dump":
             cfg["dump"] = true
         elif arg == "--ctl":
@@ -57,7 +68,7 @@ def parse_mode():
         i = i + 1
     return cfg
 
-# ---- 一轮采集 + 输出 + 写共享；返回本轮 cpu stat（作下轮前值）----
+# ---- 一轮采集 + 告警 + 输出 + 写共享；返回本轮 cpu stat（作下轮前值）----
 def do_round(prev, shm_path):
     var ctl = ""
     if shm_path != "":
@@ -107,6 +118,11 @@ def do_round(prev, shm_path):
     line = line + " net_tx=" + str(nw["tx"])
     if ctl != "":
         line = line + " ctl=" + ctl
+    # 阈值告警（MONITORING/P0：发现 + 通知）
+    var al = check_alerts(line)
+    for a in al:
+        write_alert_log(a)
+        webhook_dryrun(a)
     if shm_path != "":
         shm_write_snap(shm_path, line + "\n")
     print(line)
@@ -137,13 +153,20 @@ def main():
         var ev = env("PXHWMON_INTERVAL")
         if ev != null:
             cfg["interval_ms"] = int(ev) * 1000
-    # env 覆盖：PXHWMON_SHM（CLI --shm 已设时 parse_mode 里已用默认；此处理 no_shm 情况）
+    # env 覆盖：PXHWMON_SHM
     if not cfg["no_shm"]:
         var se = env("PXHWMON_SHM")
         if se != null and cfg["shm"] == "/tmp/pxhwmond.shm":
             cfg["shm"] = se
+    # env 覆盖：PXHWMON_PORT
+    if not cfg["port_cli"] and not cfg["once"]:
+        var pe = env("PXHWMON_PORT")
+        if pe != null:
+            cfg["port"] = int(pe)
     if cfg["no_shm"]:
         cfg["shm"] = ""
+    if cfg["no_http"]:
+        cfg["port"] = 0
     # 子命令分发（不 prepare，依赖 daemon 已建共享文件）
     if cfg["dump"]:
         cmd_dump(cfg["shm"])
@@ -151,9 +174,11 @@ def main():
     if cfg["ctl"] != "":
         cmd_ctl(cfg["shm"], cfg["ctl"])
         return
-    # daemon 模式：prepare 共享文件
+    # daemon 模式：prepare 共享文件 + 起 HTTP 状态页（--once 单轮不起服务）
     if cfg["shm"] != "":
         shm_prepare(cfg["shm"])
+    if cfg["port"] > 0 and not cfg["once"]:
+        spawn serve_http(cfg["port"], cfg["shm"])
     var prev = read_stat_cpu()
     if cfg["once"]:
         sleep(300)                    # 300ms 短窗口出真实 CPU 差值

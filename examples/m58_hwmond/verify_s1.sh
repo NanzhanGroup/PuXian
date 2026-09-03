@@ -93,12 +93,12 @@ awk -v d="$DU" 'BEGIN{exit !(d<30.0)}' || fail "up 差 $DU ≥ 30s"
 ok "up=$UP 与 /proc/uptime（$RUP）一致（差 <30s）"
 
 echo "== G. --n 2 --interval 1 冒烟 =="
-OUT2=$("$B/main" --n 2 --interval 1 2>&1) || fail "--n 2 退出码非 0"
+OUT2=$("$B/main" --n 2 --interval 1 --no-http --no-shm 2>&1) || fail "--n 2 退出码非 0"
 N2=$(echo "$OUT2" | grep -c '^SNAP ')
 [ "$N2" -eq 2 ] || fail "应 2 行 SNAP，实际 $N2"
 echo "$OUT2"
-T1=$(echo "$OUT2" | sed -n '1s/.* mem_total=\([^ ]*\).*/\1/p')
-T2=$(echo "$OUT2" | sed -n '2s/.* mem_total=\([^ ]*\).*/\1/p')
+T1=$(echo "$OUT2" | grep '^SNAP ' | sed -n '1s/.* mem_total=\([^ ]*\).*/\1/p')
+T2=$(echo "$OUT2" | grep '^SNAP ' | sed -n '2s/.* mem_total=\([^ ]*\).*/\1/p')
 [ "$T1" = "$T2" ] && [ "$T1" = "$REF_MEM" ] || fail "两轮 mem_total 不一致或与 MemTotal 不符"
 ok "两轮 mem_total 一致且正确（多轮循环稳定）"
 
