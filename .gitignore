@@ -30,3 +30,6 @@ examples/m45_pkgdemo/registry_empty/
 
 # 自举临时产物
 /tmp/
+
+# M61 gfx demo 运行时生成物（每次 verify 重建）
+examples/m61_gfx/*.png

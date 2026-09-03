@@ -1,0 +1,175 @@
+# ============================================================
+# 普贤标准库：std.gfx —— 纯语言 2D 游戏内圈（M61-S2，第 5 个 stdlib）
+# 用法：import std.gfx
+# 画布 = [w, h, pixels]；pixels = list[int]，每像素 0xRRGGBB（0 = 黑）
+# 原语：canvas_create/canvas_w/canvas_h/canvas_pixels/set_px/get_px/
+#       line/rect/fill_rect/circle/fill_circle/blit/text/text_size
+# 字形：内置 5x7 位图（0-9 A-Z . - 空格 ?；compact 编码 bit(x+5y)，x=0 最左）
+#       小写字母自动转大写；未知字符 → '?'
+# 依赖 builtin：bytes/bytes_get/bytes_len/sqrt/int/len —— 零新 C、零 FFI
+# 精灵 = [sw, sh, colors]，colors 中 0 = 透明（blit 跳过）
+# 性能注记：set_px 逐点带边界裁剪（正确优先）；密集像素直写 canvas_pixels
+# ============================================================
+
+def canvas_create(w, h):
+    var px = []
+    var n = w * h
+    var i = 0
+    while i < n:
+        px.append(0)
+        i = i + 1
+    return [w, h, px]
+
+def canvas_w(c):
+    return c[0]
+
+def canvas_h(c):
+    return c[1]
+
+def canvas_pixels(c):
+    return c[2]
+
+def set_px(c, x, y, color):
+    var w = c[0]
+    var h = c[1]
+    if x < 0 or y < 0 or x >= w or y >= h:
+        return
+    c[2][y * w + x] = color
+
+def get_px(c, x, y):
+    var w = c[0]
+    var h = c[1]
+    if x < 0 or y < 0 or x >= w or y >= h:
+        return -1
+    return c[2][y * w + x]
+
+# Bresenham 直线（整数，无浮点）
+def line(c, x0, y0, x1, y1, color):
+    var dx = x1 - x0
+    if dx < 0:
+        dx = -dx
+    var dy = y1 - y0
+    if dy < 0:
+        dy = -dy
+    var sx = 1
+    if x0 > x1:
+        sx = -1
+    var sy = 1
+    if y0 > y1:
+        sy = -1
+    var err = dx - dy
+    while true:
+        set_px(c, x0, y0, color)
+        if x0 == x1 and y0 == y1:
+            break
+        var e2 = 2 * err
+        if e2 > -dy:
+            err = err - dy
+            x0 = x0 + sx
+        if e2 < dx:
+            err = err + dx
+            y0 = y0 + sy
+
+def rect(c, x, y, w, h, color):
+    line(c, x, y, x + w - 1, y, color)
+    line(c, x, y + h - 1, x + w - 1, y + h - 1, color)
+    line(c, x, y, x, y + h - 1, color)
+    line(c, x + w - 1, y, x + w - 1, y + h - 1, color)
+
+def fill_rect(c, x, y, w, h, color):
+    var yy = y
+    while yy < y + h:
+        var xx = x
+        while xx < x + w:
+            set_px(c, xx, yy, color)
+            xx = xx + 1
+        yy = yy + 1
+
+# 中点圆（8 对称）
+def circle(c, cx, cy, r, color):
+    var x = 0
+    var y = r
+    var d = 1 - r
+    while x <= y:
+        set_px(c, cx + x, cy + y, color)
+        set_px(c, cx - x, cy + y, color)
+        set_px(c, cx + x, cy - y, color)
+        set_px(c, cx - x, cy - y, color)
+        set_px(c, cx + y, cy + x, color)
+        set_px(c, cx - y, cy + x, color)
+        set_px(c, cx + y, cy - x, color)
+        set_px(c, cx - y, cy - x, color)
+        if d < 0:
+            d = d + 2 * x + 3
+        else:
+            d = d + 2 * (x - y) + 5
+            y = y - 1
+        x = x + 1
+
+# 填充圆：逐行弦扫描（sqrt 定弦半宽）
+def fill_circle(c, cx, cy, r, color):
+    var yy = -r
+    while yy <= r:
+        var dx = sqrt(r * r - yy * yy)
+        var x0 = cx - int(dx)
+        var x1 = cx + int(dx)
+        fill_rect(c, x0, cy + yy, x1 - x0 + 1, 1, color)
+        yy = yy + 1
+
+# 精灵 blit：spr = [sw, sh, colors]；colors 中 0 = 透明
+def blit(c, dx, dy, spr):
+    var sw = spr[0]
+    var sh = spr[1]
+    var sp = spr[2]
+    var yy = 0
+    while yy < sh:
+        var xx = 0
+        while xx < sw:
+            var col = sp[yy * sw + xx]
+            if col != 0:
+                set_px(c, dx + xx, dy + yy, col)
+            xx = xx + 1
+        yy = yy + 1
+
+def text_size(s):
+    return bytes_len(bytes(s)) * 6 - 1
+
+# 5x7 文本（0-9 A-Z . - 空格；小写→大写；未知→?）
+# 字形 compact：每字符 1 int，bit(x+5y)：x=0 最左列，y 0..6 自上而下
+def text(c, x, y, s, color):
+    var b = bytes(s)
+    var n = bytes_len(b)
+    var digits = [0x3a318c62e, 0x7c84210c4, 0x7c444422e, 0x3a306221f, 0x211f4a988, 0x3a3083c3f, 0x3a317844c, 0x8422221f, 0x3a317462e, 0x1910f462e]
+    var upper = [0x4631fc62e, 0x3e317c62f, 0x3a210862e, 0x3e318c62f, 0x7c217843f, 0x4217843f, 0x7a31e862e, 0x4631fc631, 0x7c842109f, 0x19284211c, 0x452519531, 0x7c2108421, 0x4631ad771, 0x4631cd671, 0x3a318c62e, 0x4217c62f, 0x59358c62e, 0x45257c62f, 0x3e107043e, 0x10842109f, 0x3a318c631, 0x11518c631, 0x4775ac631, 0x462a22a31, 0x108422a31, 0x7c222221f]
+    var dot = 0x18c000000
+    var minus = 0xf8000
+    var qmark = 0x10044422e
+    var i = 0
+    var cx = x
+    while i < n:
+        var code = bytes_get(b, i)
+        var glyph = qmark
+        if code == 32:
+            glyph = 0
+        elif code >= 48 and code <= 57:
+            glyph = digits[code - 48]
+        elif code >= 65 and code <= 90:
+            glyph = upper[code - 65]
+        elif code >= 97 and code <= 122:
+            glyph = upper[code - 97]
+        elif code == 46:
+            glyph = dot
+        elif code == 45:
+            glyph = minus
+        if glyph != 0:
+            var gy = 0
+            while gy < 7:
+                var rowv = (glyph >> (5 * gy)) & 0x1f
+                var gx = 0
+                while gx < 5:
+                    if ((rowv >> gx) & 1) == 1:
+                        set_px(c, cx + gx, y + gy, color)
+                    gx = gx + 1
+                gy = gy + 1
+        cx = cx + 6
+        i = i + 1
