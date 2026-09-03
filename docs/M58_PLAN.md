@@ -152,7 +152,7 @@ examples/m58_hwmond/
 | 子步 | 状态 | commit / 验证摘要 |
 |---|---|---|
 | S1 | ✅ | commit 1694720：多文件 import 工程（collect.px + main.px，<500行/文件）；collect 采 /proc（CPU 两次采样差值/内存/负载/uptime，M57 fd 通道 open+read+close）；main --once/--n/--interval/常驻 + env PXHWMON_INTERVAL；verify_s1.sh 全 PASS（静态 ELF、mem_total 与 MemTotal 精确一致、load1/5/15 与 /proc/loadavg 对拍、cpu∈0..100、行数<500） |
-| S2 | ⏳ | — |
+| S2 | ✅ | commit c821005：collect.px 追加 temp_read（hwmon/thermal 条件探测，缺 → na 降级）+ net_dev（非 lo rx/tx 汇总）；shm.px（4096B MAP_SHARED 共享区：快照区+控制区，prepare/write_snap/read_ctl/write_ctl/dump）；main.px --dump/--ctl/--shm/--no-shm + SNAP 行含 temp/net/ctl；verify_s2.sh 全 PASS（temp 降级、net 非负、daemon→dump 活读、ts 递增、外部写 ctl → 下轮快照回显双向闭环、daemon 有限轮次退出 0）；verify_s1 回归 PASS |
 | S3 | ⏳ | — |
 | S4 | ⏳ | — |
 | S5 | ⏳ | — |
