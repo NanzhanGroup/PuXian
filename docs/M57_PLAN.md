@@ -67,9 +67,29 @@
   验证力度反而更强（真内核而非假驱动）。实测意外收获：本容器存在 /dev/i2c-0 →
   I2C_SLAVE=0x0703 **int 形态**设从地址在真实内核 ioctl 路径验证通过（rc=0；
   写失败 errno=95 仅因无器件）。
-- **D4 · 交叉编译工具链（S4）**
-  本地 aarch64 交叉（gcc-aarch64 或 zig cc）→ qemu-aarch64 跑静态产物；
-  runtime 裁剪开关（--no-ssl 等，解开 mbedtls/sqlite3/openssl 平台依赖）。
+- **D4 · 交叉编译工具链（S4，方案实测修正）**
+  目标：aarch64 交叉 → qemu-aarch64 跑设备层产物。落地（原 --no-ssl 泛化
+  裁剪收敛为 **--no-quic**）：
+  - **裁剪对象收敛为 QUIC/H3**：预编译 .a 中仅 ngtcp2 + openssl-quictls 无
+    aarch64 版且交叉成本高 → runtime 加 **PX_NO_QUIC** 条件编译（7 处：
+    g_px_h3_listener 变量 / px_register_builtins 的 register_quic·h3·qpack_dyn /
+    bi_px_serve 的 http3 opts·启停块），pxc 排除 runtime_quic/h3/qpack 源 +
+    不链 ngtcp2/openssl；mbedtls（runtime.c 核心强依赖）与 sqlite 纯 C → 交叉保留。
+  - **pxc 增强**：`build --no-quic [--cc <cc>] [--mbedtls-lib <dir>]
+    [--sqlite-obj <file>]`（默认行为与旧版一致，x86 全量回归 PASS）。
+  - **工具链实测**：Rocky9 dnf 的 gcc-aarch64-linux-gnu 缺交叉 glibc（sys-root
+    空）不可用 → musl.cc **aarch64-linux-musl-cross**（GCC 11.2.1，/opt），
+    static-pie 静态产物；qemu 用 multiarch **qemu-aarch64-static v7.2.0**。
+  - **交叉库 tools/cross_aarch64.sh**：mbedtls 3.6.2 源码（与仓库预编译同版本）
+    make CC=交叉 lib → runtime/mbedtls/lib-aarch64/；sqlite3 amalgamation 直编 →
+    runtime/third_party/sqlite3/sqlite3-aarch64.o（git 入库）。
+  - **runtime musl 兼容 5 点**（x86 glibc 零影响）：execinfo.h 条件包含；GC
+    寄存器扫描 __aarch64__ 分支（mcontext.regs[0..30]+sp）；三处 getcontext →
+    内联汇编读 SP / setjmp spill（musl 无 getcontext）；close_range → 非 glibc
+    循环关闭。
+  - 验证：examples/m57_s4_cross_verify.sh 全 PASS（pxc 交叉编译 → file 确认
+    aarch64 → qemu 跑 devctl：网卡 ifreq + PTY ioctl 与 x86 一致 →
+    asm-generic ioctl 码 + ifreq 布局跨架构实证一致）。
 - **D5 · 收口（S5）**：pxi 重建（ioctl/open/close/os_errno + 既有 http_unix 一并进
   解释器）+ capability 双模式 + diffcheck + 自举证明 + 全量回归。
 - **D6 · 文档（S6）**：spec §8.17（M57 设备层 API 文档）+ ROADMAP + CHANGELOG +
@@ -82,7 +102,7 @@
 | S1 ✅ | D1 fd 原语（open/close/ioctl/os_errno） | commit `57bb9d7`；examples/m57_s1_ioctl_verify.sh 全 PASS（A open/close+errno / B TCP fd FIONREAD=5/0+就地填充、FIONBIO 生效、ENOTTY/EBADF、NULL/int/bytes 三形态 / C 真实设备条件探测）；m53_s1_h3echo 8 并发回归 PASS；capability 全量因宿主负载 killed 留 S5 |
 | S2 ✅ | D2 fd 数据通道 + mmap/munmap（read/write/mmap/munmap/mem_write） | commit `f71b28e`；examples/m57_s2_mmap_verify.sh 全 PASS（A TCP 环回 read/write + 文件顺序写 + 非法 fd errno / B MAP_SHARED 整视图·offset 子视图·双向可见·超长截断 / C mmap 视图作 ioctl buffer FIONREAD=3 / D munmap 解除语义 / E GC sweep munmap 300 轮 / F 失败 -1+EBADF）；m57_s1_ioctl 复验 PASS；capability/m53_s1 全量回归因宿主外部进程占核 killed 留 S5 |
 | S3 ✅ | D3 GPIO / I2C 示例 + 真内核替身验证（mock 调整：pxc 静态链接 → LD_PRELOAD 不可行，改内核自带可访问设备 lo ifreq + PTY 走同胶水路径） | commit `8f6e615`；examples/m57_s3_verify.sh 全 PASS：A devctl 硬断言（A1 SIOCGIFADDR lo→family=2+127.0.0.1 / A2 SIOCGIFFLAGS→LOOPBACK 置位 / A3 SIOCGIFHWADDR→family=772+mac0 / B TIOCGPTN→pts 号，全真实内核）；B/C gpio（无 gpiochip SKIP）·i2c（/dev/i2c-0 存在 → I2C_SLAVE int 形态真实内核设置成功，无器件 errno=95 SKIP）两态放行；D m57_s1/m57_s2 复验 PASS |
-| S4 | D4 aarch64 交叉 + qemu + runtime 裁剪开关 | 待定 |
+| S4 ✅ | D4 aarch64 交叉 + qemu + PX_NO_QUIC 裁剪（方案收敛：--no-ssl → --no-quic；musl 工具链 + musl 兼容 5 点） | commit 见 S4 提交；tools/cross_aarch64.sh（mbedtls 3.6.2 + sqlite3 交叉入库）+ tools/pxc --no-quic/--cc/--mbedtls-lib/--sqlite-obj + runtime PX_NO_QUIC 7 处 + musl 兼容（execinfo 条件 / GC aarch64 分支 / getcontext→asm+setjmp / close_range 循环）；examples/m57_s4_cross_verify.sh 全 PASS：A 前置齐备 / B 交叉编译 aarch64 静态 2.5MB / C file 确认 ARM aarch64 / D qemu 跑 devctl 网卡 ifreq+PTY ioctl 全过与 x86 一致；x86 回归 m57_s1/m57_s3 全量 PASS（getcontext→setjmp 无破坏） |
 | S5 | D5 pxi 重建 + capability/diffcheck/自举/全量回归 | 待定 |
 | S6 | D6 文档收尾 | 待定 |
 
@@ -96,6 +116,8 @@
   造 4B buffer 验 FIONREAD；大 buffer 场景随 S2 造 bytes 工具一并解决）。
 - 真实设备（GPIO/I2C）在 CI/容器不可用 → S1 条件探测（存在才 open），语义正确性
   以 TCP fd（内核真实 ioctl 路径）为准，真实设备 demo 留 S3 板子环境。
-- 交叉编译需先解开 runtime 平台绑定（S4），否则 mbedtls/sqlite3/openssl 在
-  aarch64 目标同样要交叉编译；S4 的 --no-ssl 裁剪开关是前提而非可选项。
+- 交叉编译裁剪收敛为 --no-quic（S4 实测）：ngtcp2/openssl-quictls 无 aarch64
+  预编译 → 裁剪；mbedtls/sqlite 纯 C 交叉（tools/cross_aarch64.sh）。musl 与
+  glibc 差异（execinfo/getcontext/close_range/GC 寄存器布局）已在 S4 用条件编译
+  收口，x86 glibc 零影响（回归 PASS）。
 - 全部新 API 保持「旧行为零变化」：未用新 builtin 的 m46–m56 脚本不受影响。
