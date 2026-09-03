@@ -115,8 +115,19 @@ def i_run_program(prog):
     return Ok(null)
 
 # ---------- 入口 ----------
+# 版本：与 tools/pxc（SELFHOST_VER/SELFHOST_MILESTONE）保持一致。
+# 发布包版本号由 tools/make_release.sh 按 tag 派生（见其"版本来源"段）。
+let PXI_VER = "0.1.0"
+let PXI_MS = "M-B9a"
+
 def main():
-    let f = args()[len(args()) - 1]
+    let a = args()
+    # args() 含 argv[0]（程序名，见 runtime.c bi_args），用户参数自 a[1] 起；
+    # 支持 pxi --version / pxi -v（唯一用户参数为版本 flag 时输出版本退出 0）
+    if len(a) == 2 and (a[1] == "--version" or a[1] == "-v"):
+        print("pxi " + PXI_VER + " (普贤 PuXian · selfhosted " + PXI_MS + ")")
+        return 0
+    let f = a[len(a) - 1]
     let base_dir = it_dirname(f)
     p_toks = lex_tokens(read_file(f))
     p_pos = 0

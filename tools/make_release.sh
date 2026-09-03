@@ -17,6 +17,10 @@
 #   tools/make_release.sh [里程碑]       里程碑缺省取最近提交里的 Mxx（如 m57）
 #   tools/make_release.sh --no-check     打包后跳过冒烟自检
 #   tools/make_release.sh -o <路径>      指定输出 tarball 路径
+# 版本来源（M62 起 tag 驱动）：
+#   VER  = 最近 tag 的 vX.Y.Z 部分（git describe --tags --abbrev=0），无 tag 默认 0.1.0
+#   里程碑 = 命令行参数 > tag 后缀（v0.1.0-m62 → m62）> 最近提交消息里的 Mxx
+# 典型发布流：git tag v0.1.0-m62 && tools/make_release.sh  →  puxian-0.1.0-m62-<sha>.tar.gz
 # 冒烟自检（默认开，--no-check 关）：解包到临时目录后验证
 #   ① pxc --version  ② hello.px 编译(静态ELF)并运行  ③ hello.px 解释运行
 #   ④ import std.semver 编译（验证 stdlib 定位 PX_STDLIB）
@@ -38,13 +42,25 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# ---- 版本来源 ----
+# ---- 版本来源（tag 驱动，M62）----
+# VER 优先级：最近 tag vX.Y.Z[-mxx] > 默认 0.1.0（避免包版本与 tag 不一致）
+VER="0.1.0"
+TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+if [ -n "$TAG" ]; then
+    TVER="${TAG#v}"                 # v0.1.0-m62 → 0.1.0-m62
+    TAG_VER="${TVER%%-*}"           # → 0.1.0
+    [ -n "$TAG_VER" ] && VER="$TAG_VER"
+    if [ -z "$MILESTONE" ] && [ "$TVER" != "${TVER%%-*}" ]; then
+        # 未显式指定里程碑且 tag 带 -mxx 后缀 → tag 是发布决策，优先于 commit 推断
+        MILESTONE="$(echo "${TVER#*-}" | tr 'A-Z' 'a-z')"
+    fi
+    echo "   版本源: tag $TAG"
+fi
 if [ -z "$MILESTONE" ]; then
     MILESTONE="$(git log -1 --pretty=%s | grep -o 'M[0-9][0-9]*' | head -1 || true)"
     [ -n "$MILESTONE" ] || MILESTONE="dev"
     MILESTONE="$(echo "$MILESTONE" | tr 'A-Z' 'a-z')"
 fi
-VER="0.1.0"
 SHA="$(git rev-parse --short HEAD)"
 NAME="puxian-${VER}-${MILESTONE}-${SHA}"
 STAGE="/tmp/${NAME}.stage"

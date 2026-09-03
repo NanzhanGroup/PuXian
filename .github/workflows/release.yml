@@ -1,0 +1,85 @@
+# ============================================================
+# Release —— PuXian GitHub Release 自动发布（tag 驱动，M62）
+# ------------------------------------------------------------
+# 触发：推送 tag v*（如 v0.1.0-m62）到 GitHub
+# 流程：ubuntu-latest 检出（含 tag 历史）→ tools/make_release.sh
+#       构建发布包（版本号自 tag 派生，见脚本"版本来源"段）
+#       → 收集 tarball / SHA-256 / 上一 tag 起的提交列表
+#       → gh CLI 创建 GitHub Release 并上传 tarball（GITHUB_TOKEN，零第三方 action）
+# 产物：GitHub Release 资产 puxian-<VER>-<m62>-<sha>.tar.gz
+# 发布 SOP：
+#   git tag v0.1.0-m62            # 版本决策：v<主版本>-m<里程碑>
+#   git push origin v0.1.0-m62    # 触发本 workflow（main 需已含对应代码）
+# 冒烟：make_release.sh 默认内置解包自检（pxc --version / hello 编译运行 /
+#       解释运行 / import std.* 定位 / 包外 PX_STDLIB），任一失败即 workflow 失败
+# ============================================================
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: 构建发布包 + 创建 GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 检出代码（含 tag 历史，供 git describe 与提交列表）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 构建发布包（版本自 tag 派生 + 内置冒烟自检）
+        run: |
+          chmod +x tools/pxc tools/make_release.sh bootstrap/pxc bootstrap/pxi bootstrap/pxl bootstrap/pxpar
+          tools/make_release.sh
+
+      - name: 收集产物与提交列表
+        id: meta
+        run: |
+          PKG="$(ls -t /tmp/puxian-*.tar.gz | head -1)"
+          [ -n "$PKG" ] || { echo "❌ 未找到发布包"; exit 1; }
+          echo "TAG=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          echo "PKG=${PKG}" >> "$GITHUB_OUTPUT"
+          echo "PKG_NAME=$(basename "$PKG")" >> "$GITHUB_OUTPUT"
+          echo "SHA256=$(sha256sum "$PKG" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          # 提交列表：上一 tag → 本 tag；首个 tag 用最近 40 条
+          PREV="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+          if [ -n "$PREV" ]; then
+            RANGE="$PREV..${GITHUB_REF_NAME}"
+          else
+            RANGE="HEAD~40..HEAD"
+          fi
+          git log --oneline --no-merges "$RANGE" > /tmp/commits.txt || true
+          echo "COMMITS_LINES=$(wc -l < /tmp/commits.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: 创建 GitHub Release 并上传资产
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.meta.outputs.TAG }}"
+          PKG="${{ steps.meta.outputs.PKG }}"
+          PKG_NAME="${{ steps.meta.outputs.PKG_NAME }}"
+          SHA256="${{ steps.meta.outputs.SHA256 }}"
+          LINES="${{ steps.meta.outputs.COMMITS_LINES }}"
+          {
+            echo "## PuXian ${TAG}"
+            echo ""
+            echo "发布包：\`${PKG_NAME}\`"
+            echo ""
+            echo "- SHA-256: \`${SHA256}\`"
+            echo "- 里程碑范围：上一 tag 至本 tag（首个 tag 为最近 40 条）"
+            echo ""
+            echo "### 本版提交（${LINES} 条）"
+            echo '```'
+            cat /tmp/commits.txt
+            echo '```'
+          } > /tmp/notes.md
+          gh release create "$TAG" "$PKG" \
+            --title "PuXian ${TAG}" \
+            --notes-file /tmp/notes.md
+          echo "✅ GitHub Release 已创建: ${TAG}"
