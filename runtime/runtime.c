@@ -2855,6 +2855,51 @@ static LXValue bi_exp(LXValue* args, int nargs, void* ctx) {
     return px_float(exp(math_num(args[0], "exp")));
 }
 
+// ---- M59-S3：splitmix64 PRNG + random/random_int/random_seed ----
+// splitmix64：确定性 64 位 PRNG（质量良好、glibc/musl 跨平台序列一致，不依赖 C rand 的平台差异，
+// 静态二进制 + aarch64 交叉下序列可复现）。默认种子取 CLOCK_REALTIME 纳秒 ^ PID 混合
+// （首次调用惰性初始化）；random_seed(s) 显式设种子后同 seed → 同序列（测试可复现）。
+// 线程注意：static 状态在多协程并发调用下序列不保证（游戏/边缘主循环单线程为主，文档注明）。
+static uint64_t px_rng_state = 0;
+static int px_rng_seeded = 0;
+
+static uint64_t splitmix64_next(void) {
+    if (!px_rng_seeded) {
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        px_rng_state = ((uint64_t)ts.tv_sec << 32) ^ (uint64_t)ts.tv_nsec ^ ((uint64_t)getpid() << 1);
+        if (!px_rng_state) px_rng_state = 0x9E3779B97F4A7C15ULL;
+        px_rng_seeded = 1;
+    }
+    uint64_t z = (px_rng_state += 0x9E3779B97F4A7C15ULL);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
+
+static LXValue bi_random(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 0) px_error("random 不需要参数");
+    // [0,1)：53 位尾数均匀（double 可精确表示 ≤2^53 的整数）
+    return px_float((double)(splitmix64_next() >> 11) * (1.0 / 9007199254740992.0));
+}
+
+static LXValue bi_random_int(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_INT) px_error("random_int 需要 1 个参数 n（正整数），返回 [0,n) 的整数");
+    int64_t n = args[0].as.i;
+    if (n <= 0) px_error("random_int 的 n 必须 > 0，实际是 %lld", (long long)n);
+    return px_int((int64_t)(splitmix64_next() % (uint64_t)n));
+}
+
+static LXValue bi_random_seed(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_INT) px_error("random_seed 需要 1 个整数参数（种子）");
+    px_rng_state = (uint64_t)args[0].as.i;
+    px_rng_seeded = 1;
+    return px_null();
+}
+
 // ==================== M5 标准库内置函数 ====================
 
 static LXValue bi_input(LXValue* args, int nargs, void* ctx) {
@@ -4946,6 +4991,10 @@ void px_register_builtins(void) {
     px_set_global("log10", px_native("log10", bi_log10));
     px_set_global("exp", px_native("exp", bi_exp));
     px_set_global("e", px_float(PX_E));
+    // M59-S3 随机（splitmix64：random()→[0,1) / random_int(n)→[0,n) / random_seed(s) 设种子可复现）
+    px_set_global("random", px_native("random", bi_random));
+    px_set_global("random_int", px_native("random_int", bi_random_int));
+    px_set_global("random_seed", px_native("random_seed", bi_random_seed));
     // M5 标准库
     px_set_global("input", px_native("input", bi_input));
     px_set_global("exit", px_native("exit", bi_exit));
