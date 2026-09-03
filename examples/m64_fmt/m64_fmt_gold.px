@@ -1,0 +1,26 @@
+# 头部注释：fmt 自举样本（M64-S2）
+def fib(n: int) -> int:
+    if n <= 1:
+        return n
+    else:
+        return fib(n - 1) + fib(n - 2)
+#| 块注释可跨行
+  保留内部缩进
+|#
+def main():
+    # 行首注释
+    let x = 1  # 行内注释
+    let d = {"name": "px", "v": 1}
+    let pipe = "hi" |> to_upper()
+    let f = 1.0
+    let g = 1.25
+    let neg = -3
+    let pos = 1 + -2
+    let esc = "a\tb\nc"
+    let uni = "你好"
+    let interp = "val=" + str(x) + "end"
+    let arr = [1, 2, 3]
+    let slice = arr[0: 2]
+    print(x, d["name"], pipe, f, g, neg, pos, esc, uni, interp, slice)
+    if (x > 0):
+        print(to_upper(str(1 + 2)))

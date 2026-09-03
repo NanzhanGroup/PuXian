@@ -1,6 +1,7 @@
 # M64_PLAN —— 工具链自举恢复（fmt/lint/test/bench/doc/lsp/mcp）
 
-> 状态：M64-S1 已完成（keep-lexer 底座入库）· S2 待开工（pxfmt 主逻辑）
+> 状态：M64-S1 已完成（keep-lexer 底座入库）· S2 已完成（pxfmt 格式化器自举）
+> 进度：M64a fmt 主逻辑完成（S2）· S3 待开工（lint）
 > 关联：docs/spec.md §12（AI 工具链接口规格）、docs/GAP_ANALYSIS.md、docs/MINI_SUBSET.md
 
 ## 1. 背景与现状（全部实测 2025-09-04）
@@ -142,3 +143,30 @@ Rust 版全套归档于 `archive/rust-compiler/src/`（只读参考），已于 
 ### 9.6 S2 开工点（fmt 主逻辑 tools/pxfmt.px）
 - 结构：import "fmtlexer.px" + 重复声明全局（§9.3）；主循环对齐 fmt.rs（level/at_line_start/prev/prev2 + needs_space/is_unary_context/render/escape_str）；`--check/--diff/写回` + 空行压缩 + 行首注释按原列对齐 + 行内注释补 2 空格；编译 `tools/pxc build` → `bootstrap/pxfmt` → `pxc fmt` 子命令。
 
+
+## 10. M64-S2 记录（pxfmt 格式化器自举，已完成）
+
+### 10.1 交付物
+- `tools/fmt_core.px`（格式化核心，自包含零全局）：tok_text/render（整数/浮点补 .0/字符串 rust_str_debug 值）、needs_space、is_unary_ctx、行结构重建（level/at_line_start/prev/prev2）、行首注释按原列对齐、行内注释补 2 空格、空行压缩、尾部单换行、unified_diff（行级 LCS + @@ hunk + 上下文 3 行）。
+- `tools/pxfmt.px`（CLI 薄壳）：import fmtlexer.px + fmt_core.px + §9.3 重复声明全局；`<file>` 默认 stdout、`-w` 写回、`--check` 仅检查（不一致 rc=1）、`--diff` 打印 unified diff；`--version`。
+- `bootstrap/pxfmt`（自举二进制，9.0MB 静态，入库同 pxl 模式）+ `tools/pxc fmt` 子命令。
+- `examples/m64_fmt/`：`m64_fmt_in.px`（乱格式样本）+ `m64_fmt_gold.px`（golden）+ `verify.sh`（26 项断言）。
+- `.gitignore` 增 `tools/build/`（pxc build 产物 26MB 不入库）。
+
+### 10.2 行为对齐与差异（实测）
+- 与 Rust fmt.rs 对齐：运算符/逗号/冒号空格、`f(` 无空格、关键字 `if (` 有空格、注释保留、空行压缩、尾单换行、浮点补 `.0`（fmtlexer 去 .0 → render 补回闭环）、`--check/--diff/-w` 语义、unified diff 格式。
+- **修正 Rust 一元负号缺陷**：Rust needs_space "cur 是 +/- 且 prev 一元上下文 → 前不空格" 会把 `x = -1` 压成 `x =-1`、`1 + -2` 压成 `1 +-2`；pxfmt 去掉该条、仅保留 "-1 内部紧贴" 条 → `let neg = -3`、`let pos = 1 + -2`（与全仓惯例及 `<-` 列表追加歧义规避一致）。已留注释于 fmt_core.px。
+- 插值 `${x}` 规范化为等价拼接 `"val=" + str(x) + "end"`（spec/MINI_SUBSET 明示该语义保持行为）。
+- 切片冒号后空格 `arr[0: 2]`（与 Rust Colon 规则一致）。
+- 空行被词法器吞（Rust lexer 同）→ def 间空行压缩为 0，属对拍一致行为；自举工具自身已按此收敛。
+- `fmtlexer.px` 豁免 fmt --check（由 pxlexer 派生的底座，保持与源文件逐行可 diff）。
+
+### 10.3 验证（真实执行）
+- examples/m64_fmt/verify.sh 26 项全 ✅：golden 逐字节、幂等、语义等价（重 lex token 序列）、--check/--diff/-w、自举 dogfood（fmt_core/pxfmt 自身格式正确）。
+- 大文件：tools/pxpkg.px（372 行）格式化 → 352 行（空行压缩），2332 语义 token 前后**完全一致**，幂等 OK，2s。
+- 自举闭环：fmt_core.px / pxfmt.px 已用 pxfmt -w 收敛（dogfood），重新编译后功能回归全过。
+- 编译：tools/pxc build tools/pxfmt.px ~2.5 分钟（runtime 全量静态）。
+
+### 10.4 遗留（S3+ / M64a 收尾）
+- `--indent N|tab / --quote single / --config .pxfmt.toml`（Rust M30 配置化）未做，S2 固定 4 空格 + 双引号（M64_PLAN §4 已列 M64d 按需）。
+- selfhost/stdlib 全仓 fmt 收敛：待 lint 落地后与 --check 一起统一收尾（先报 diff 人工审再一次性收敛，§6 风险缓解）。
