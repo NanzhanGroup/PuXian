@@ -1,0 +1,179 @@
+# ============================================================
+# M61 S3 m61_snake.px —— raw 终端可玩贪吃蛇（B 线输入 dogfood M60）
+# ------------------------------------------------------------
+# 玩法：'w/a/s/d' 或方向？—— 本 demo 用 w/a/s/d 控制方向，q 退出
+#       'O' 蛇头，'#' 蛇身，'@' 食物；吃到食物蛇 +1 长度 +1 分
+#       撞墙或撞自身 → GAME OVER
+# 无头自动剧本（verify 用）：export SNAKE_AUTO=1
+#       AUTO EAT OK（直线吃食增长）/ AUTO SELF OK（撞自身判定）/
+#       AUTO WALL OK（撞墙判定）
+# 真终端/PTY 交互：默认模式 —— tty_config(0,0,true) raw + fd_wait([0],50)
+#       单键读取（M60 设备组 dogfood）；非 tty 下 tty_config 失败打印提示退出
+# 依赖 builtin：tty_config/fd_wait/read/bytes_get/bytes_len/sleep/env/exit/
+#       random_int/assert（M59/M60 里程碑）
+# ============================================================
+
+# ---- 核心纯函数：走一步 ----
+# 入参：snake(list[list2]) 蛇头在 index0；dir=[dx,dy]；food=[x,y]
+# 返回：[ns, eaten, alive] —— ns 为新蛇（死时原样），eaten 0/1，alive true/false
+def try_step(snake, dir, food, W, H):
+    var head = snake[0]
+    var nx = head[0] + dir[0]
+    var ny = head[1] + dir[1]
+    if nx < 0 or ny < 0 or nx >= W or ny >= H:
+        return [snake, 0, false]
+    var eaten = 0
+    if nx == food[0] and ny == food[1]:
+        eaten = 1
+    var keep = len(snake)
+    if eaten == 0:
+        keep = keep - 1
+    var i = 0
+    while i < keep:
+        var seg = snake[i]
+        if seg[0] == nx and seg[1] == ny:
+            return [snake, 0, false]
+        i = i + 1
+    var ns = [[nx, ny]]
+    var j = 0
+    while j < keep:
+        ns.append(snake[j])
+        j = j + 1
+    return [ns, eaten, true]
+
+# ---- 食物刷新（随机不在蛇上）----
+def spawn_food(W, H, snake):
+    var guard = 500
+    while guard > 0:
+        var fx = random_int(W)
+        var fy = random_int(H)
+        var clash = false
+        var i = 0
+        while i < len(snake):
+            var s = snake[i]
+            if s[0] == fx and s[1] == fy:
+                clash = true
+                break
+            i = i + 1
+        if clash == false:
+            return [fx, fy]
+        guard = guard - 1
+    return [0, 0]
+
+# ---- 终端帧渲染 ----
+def render(W, H, snake, food, score):
+    print("+--------------------+")
+    var y = 0
+    while y < H:
+        var line = "|"
+        var x = 0
+        while x < W:
+            var ch = " "
+            if x == food[0] and y == food[1]:
+                ch = "@"
+            else:
+                var i = 0
+                while i < len(snake):
+                    var s = snake[i]
+                    if s[0] == x and s[1] == y:
+                        if i == 0:
+                            ch = "O"
+                        else:
+                            ch = "#"
+                        break
+                    i = i + 1
+            line = line + ch
+            x = x + 1
+        print(line + "|")
+        y = y + 1
+    print("+--------------------+ score", score)
+
+# ---- 交互主循环（真终端 / PTY）----
+def run_interactive():
+    var W = 20
+    var H = 10
+    var snake = [[5, 5], [4, 5], [3, 5]]
+    var dir = [1, 0]
+    var food = spawn_food(W, H, snake)
+    var score = 0
+    if tty_config(0, 9600, true) == false:
+        print("tty_config(0) raw 失败 errno=", os_errno(), "—— 请在真终端运行，或 export SNAKE_AUTO=1")
+        return
+    while true:
+        var rd = fd_wait([0], 50)
+        if len(rd) > 0:
+            var b = read(0, 1)
+            if bytes_len(b) == 0:
+                print("EOF 退出 score", score)
+                return
+            var c = bytes_get(b, 0)
+            if c == 119:
+                dir = [0, -1]
+            elif c == 115:
+                dir = [0, 1]
+            elif c == 97:
+                dir = [-1, 0]
+            elif c == 100:
+                dir = [1, 0]
+            elif c == 113:
+                print("QUIT score", score)
+                return
+        var r = try_step(snake, dir, food, W, H)
+        if r[2] == false:
+            print("GAME OVER score", score)
+            return
+        snake = r[0]
+        if r[1] == 1:
+            score = score + 1
+            food = spawn_food(W, H, snake)
+        render(W, H, snake, food, score)
+        sleep(150)
+
+# ---- 无头自动剧本（verify 确定性断言）----
+def run_auto():
+    var W = 20
+    var H = 10
+    # 初始帧渲染证明（含蛇 O# 与食物 @）
+    var snake = [[5, 5], [4, 5], [3, 5]]
+    var food = [8, 5]
+    render(W, H, snake, food, 0)
+    # Phase1 直线吃食：食物 (8,5) 在前进方向 3 步处
+    var dir = [1, 0]
+    var score = 0
+    var stepn = 0
+    while stepn < 3:
+        var r = try_step(snake, dir, food, W, H)
+        assert(r[2], "auto Phase1 不应死")
+        snake = r[0]
+        if r[1] == 1:
+            score = score + 1
+            food = spawn_food(W, H, snake)
+        stepn = stepn + 1
+    assert(score == 1, "应吃到 1 个食物")
+    assert(len(snake) == 4, "吃后蛇长应 4, got " + str(len(snake)))
+    print("AUTO EAT OK len", len(snake), "score", score)
+    # Phase2 撞自身：蛇身 U 形，head 向左撞 index1 段
+    var s2 = [[5, 5], [4, 5], [4, 4], [5, 4]]
+    var r2 = try_step(s2, [-1, 0], [0, 0], W, H)
+    assert(r2[2] == false, "U 形左撞自身应死")
+    print("AUTO SELF OK")
+    # Phase3 撞墙：head(8,5) 朝右，到 x=19 共 11 步后下一步 x=20 撞墙
+    var cnt = 0
+    var alive = true
+    while cnt < 12 and alive:
+        var r3 = try_step(snake, [1, 0], food, W, H)
+        if r3[2] == false:
+            alive = false
+        else:
+            snake = r3[0]
+            if r3[1] == 1:
+                food = spawn_food(W, H, snake)
+        cnt = cnt + 1
+    assert(alive == false, "朝右 12 步应撞右墙 x=20")
+    print("AUTO WALL OK died at x=20 after", cnt, "steps")
+
+var mode = env("SNAKE_AUTO")
+if mode == "1":
+    run_auto()
+else:
+    run_interactive()
