@@ -1,6 +1,6 @@
 # M65_PLAN —— LSP / MCP 自举（spec §12 工具链最后两项 + AI agent 协议）
 
-> 状态：执行中 —— M65-S1/S2/S3 完成（2026-09-04），S4 待开工
+> 状态：执行中 —— M65-S1/S2/S3/S4 完成（2026-09-04），S5 收口待开工
 > 关联：docs/spec.md §12/§12.1、docs/M64_PLAN.md（M64d 按需立项前置侦查）、
 > archive/rust-compiler/src/lsp.rs (36618B)、mcp.rs (13409B)（只读语义参考，已退役）
 > 立项依据：M64 收尾确认「runtime fd stdin/stdout 原语已具备 → lsp/mcp 按需立项新里程碑」
@@ -230,3 +230,45 @@ Rust 版语义参考（archive，只读）：
 - 符号表结构：[{name,kind,line0,char0,detail,doc}]（0-based）；kind: function/struct/enum/trait/impl/var（对齐 Rust Symbol）。
 - 能力位诚实协商：completion/definition/hover 均 Bool(true)（对齐 Rust 一次性声明风格，但随实现同步开启）。
 - lint/fmt：lsp_core.px / pxlsp.px 0 错 0 警 + --check 全绿；未动 runtime/selfhost/pxlint → 零回归面（无需 diffcheck/capability 重跑）。
+
+## 13. S4 执行记录（M65-S4 完成，2026-09-04）
+
+### 13.1 交付物
+- `tools/pxmcp.px` → **bootstrap/pxmcp**：MCP 服务器（协议 2024-11-05，stdio transport）。
+  - 帧读写/JSON-RPC 复用 jsonrpc_core.px（import 同构惯例，与 pxlsp 共用底座）。
+  - initialize（protocolVersion + capabilities.tools.listChanged=false + serverInfo px-mcp）
+    → tools/list（8 工具 + inputSchema：type=object/properties/required）→ tools/call 按工具分派
+    → notifications/initialized 忽略 → shutdown/exit → 未知方法 JSON-RPC -32601。
+  - tools/call 结果对齐 MCP：`{content:[{type:text,text}], isError}`；错误参数/未知工具 = isError=true
+    （文本消息，不污染 JSON-RPC 层）。
+- **工具执行策略（S4 关键决策，见 13.2）**：8 工具全部子进程 `os_spawn_capture(bootstrap/pxxx)`，
+  返回文本 = 子进程 stdout（pxfmt/pxlint/pxdoc/pxpar/pxtest/pxbench 各自输出），rc!=0 → isError。
+- `tools/pxc` 增 `mcp` 子命令（usage + cmd_mcp）：注入 `PX_BOOT`（bootstrap 绝对路径）+ `PX_PXI`，
+  exec 直通保留 fd 0/1（stdio 即 MCP transport，agent 以子进程拉起）。
+- `examples/m65_mcp/`：demo_mcp.px（## 注释 + def test_add/test_sub + 无参 work）+ mcp_client_s4.py
+  （python3 模拟标准 MCP client）+ verify.sh（S4 验收）。
+
+### 13.2 S4 实测关键决策与发现
+1. **所有工具子进程执行**（含 fmt/lint/doc/ast，非语言内直调）：M65-S2 实测 #1（parser/lexer
+   语法错误 print+panic 杀进程不可捕获）对 MCP 同样致命——tools/call 输入是 agent 给的任意代码，
+   语言内直调 parser/lint 核心遇坏代码会把 pxmcp 服务器一起杀死。子进程隔离 = 崩溃安全 + 输出可
+   捕获 + 不污染协议 stdout（对齐 Rust run_cli 语义 + pxlsp pxcheck 先例）。
+2. **pxbench 目标函数须无参**：pxbench 内部构造 `while __i<N: func()` 基准程序，有参函数
+   （demo 初版 add(a,b)）→ 子进程 R1005 缺参数 → bench 失败。demo 改无参 `work()` 后通过。
+3. env 取值语义复核：`env()` 未设返回 null（非 ""），mcp_boot/mcp_tempfile 均 `== null or == ""`
+   双判（对齐 pxlsp S2 教训）；json 键访问全部 `.has()` 守卫（防 R1008 杀进程）。
+4. mcp_resolve：file/code 二选一，code 写 TMPDIR/pxmcp_<pid>_<seq>.px 执行后 remove 清理
+   （对齐 Rust write_temp + pxlsp 临时文件惯例）；run 无 stdin 注入（边界：px 子进程 stdin 继承终端，
+   与 MCP code 输入不冲突——run(code) 走临时文件路径方案，见 §1 能力表 #9）。
+
+### 13.3 S4 验收结论
+- **MCP client 端到端 41 断言 ALL PASS**：initialize（protocolVersion 2024-11-05 / capabilities.tools
+  listChanged=false / serverInfo px-mcp）；tools/list 恰 8 项（run/fmt/lint/test/bench/doc/ast/version）
+  每项 inputSchema 结构正确 + test.required=[file] + version 无必填；tools/call 每工具成功回包：
+  version（文本含 pxc 0.1.0）/ run(code)（输出 hi-mcp-run）/ fmt(code)（已格式化）/ lint(file 干净
+  样本 isError=false + 0 错误）/ test(file, 2/2 通过)/ bench(file+func work, 含汇总)/
+  doc(file, 含 add 标题)/ ast(code, 含 Program)；错误输入：lint 缺参 isError=true、未知工具
+  isError=true、未知方法 JSON-RPC -32601；shutdown result={} → exit rc=0。
+- pxmcp.px / demo_mcp.px lint 0 错 0 警 + fmt --check 全绿；pxc mcp --version 冒烟通过。
+- 回归面：未动 runtime/selfhost/pxlint/pxlsp → 无需 diffcheck/capability/m65_lsp 重跑。
+
