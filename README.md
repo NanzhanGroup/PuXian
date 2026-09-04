@@ -113,7 +113,7 @@ def main():
 | 🔢 语言能力 | 切片语法 `a[i:j]` / `a[i:j:k]`（步长/反转，str 按 UTF-8 字符）、**生成器表达式** `(x for x in xs)`（**惰性**：单层 for 延迟求值 / `gen_next` 逐项 / for-in / `list()` 转换）、位运算 + 二进制数据视图（int_to_hex / bytes_to_hex / bit_count / bit_length）、正则表达式、锁原语（mutex / rwlock）、文件随机读写 + fsync、进程/信号（os_spawn / os_wait / signal）、**Result/Option 错误处理**（`Ok(x)`/`Err(e)`/`Some(x)` 构造，`?` 错误传播——Err/None 立即返回、`!` 强制解包、is_ok/is_err/unwrap 方法，spec 唯一错误通道）、字符串插值 `${expr}`、推导式、可选链 `?.`、空合并 `??`、管道 `\|>` |
 | 🔌 边缘设备 | fd 原语 `open`/`close`/`ioctl`/`os_errno`（ioctl arg 三形态：int 直传 / bytes·str 就地 in/out buffer，`_IOR` 类内核直接填充同对象）+ fd 数据通道 `read`/`write`（read(2)/write(2) 直通）+ **mmap 活映射** `mmap`/`munmap`/`mem_write`（MAP_SHARED 帧缓冲/共享内存/DMA 直访，GC 自动 munmap，`mem_write` 就地写映射区）+ GPIO/I2C 设备示例 + **aarch64 交叉编译**（`pxc build --no-quic` 裁剪 + qemu-aarch64 验证与 x86 一致）——Linux 边缘设备层（树莓派/网关/盒子）单静态二进制免环境 |
 | 🚀 应用平台 | **.px 脚本执行机制**（`px_serve` PHP/OpenResty 式应用服务器：Cookie/Session/基础认证 + 服务端 TLS + 优雅关闭、`px_exec` 语言层嵌入 API）+ **.px 进程池**（编译模式预派生 worker 解释器常驻复用，PHP-FPM 风格，**脚本/二进制变更自动滚动重启热更新**）+ 路由表+中间件（method+path 模式 / `:id` 参数 / `*` 通配 / 中间件链）+ cron 调度（6 字段）+ JSON 路径（json_path/json_path_set） |
-| 📚 标准库 | `stdlib/collections.px`（sorted/reversed/map/filter/reduce/unique/group_by）+ 内置注册表白名单（见 MINI_SUBSET §2.5） |
+| 📚 标准库 | `stdlib/collections.px`（sorted/reversed/map/filter/reduce/unique/group_by）+ **共 9 个标准库**：collections / edge（M60 边缘设备）/ gfx / png（M61 2D）/ semver / webroute / **yaml / pxml / lunar（M66 收编，见 spec §10.3）** + 内置注册表白名单（见 MINI_SUBSET §2.5） |
 
 ---
 
@@ -172,7 +172,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 │   ├── cases_bad/          #   错误场景（lex 14 + parse 9）
 │   └── diffcheck.sh / bootstrap_prove.sh  # 对拍框架 / 自举证明
 ├── runtime/                # C 运行时（runtime.c/h + aes/xml/zip/ws/rsa/sqlite/route/h2/h3/quic + mbedtls + third_party）
-├── stdlib/                 # 标准库（collections.px）
+├── stdlib/                 # 标准库（9 个：collections/edge/gfx/png/semver/webroute/yaml/pxml/lunar）
 ├── examples/               # 80+ 个示例（hello / fib / match / 并发 / 网络 / TLS / SQLite / 推导式 ...）
 ├── archive/rust-compiler/  # Rust 版编译器源码归档（只读，自举前的实现，git 历史保留）
 ├── docs/                   # 文档（语言规格 spec / Mini 子集 / 路线图 ROADMAP）
@@ -241,6 +241,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 | M63 | 语言面欠账修复 L8–L11：pxi 网络 API 白名单 + float 全精度 roundtrip + pxc --version |
 | M64 | **工具链自举恢复**：`pxc fmt / lint / doc / test / bench` 五项自举（keep-lexer 底座 + 全仓收敛 + 净 -318 行） |
 | M65 | **LSP / MCP 自举**：`pxc lsp`（诊断/补全/跳转/悬停）+ `pxc mcp`（8 工具供 AI agent 调用）—— **spec §12 工具链全自举收官** |
+| M66 | **自举 wsAgent runtime 原语补全 + stdlib 收编**（qg-issue 01–06）：unix_connect + os 五件套 + os_capture/os_popen/os_kill group + write_file mode + zip_unpack 密码（zipcrypto/AES-256）→ 收编 std.yaml / std.pxml / std.lunar（农历）三个标准库，spec §8.20 |
 
 ---
 

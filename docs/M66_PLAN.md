@@ -1,7 +1,7 @@
 # M66_PLAN —— 自举 wsAgent runtime 原语补全 + stdlib 收编（qg-issue 01–06 全量合入）
 
-> 状态：📌 立项定稿（2026-09-05，决策已拍板）→ S1 进行中
-> 官方基线：github.com/NanzhanGroup/PuXian 本地仓库 HEAD = `ae52674`（M65-S5，工作区干净）
+> 状态：✅ 立项定稿（2026-09-05，决策已拍板）→ **S1/S2/S3 已提交，S4/S5 收口进行中，S6 待办**
+> 官方基线：github.com/NanzhanGroup/PuXian 本地仓库 HEAD = `6df05ef`（M66-S3，工作树含 S4 lunar 未提交）
 > 来源：清歌（qingge）qg-issue 01–06 + 00-README 索引（2026-09-05 更新）
 > 关联：docs/M65_PLAN.md（上一里程碑，spec §12 工具链全自举收官）、docs/spec.md、docs/ROADMAP.md
 
@@ -160,4 +160,39 @@
 - **重建**：bootstrap/pxi 全量重建（quic 符号在，9.32MB，pxi --version 0.1.0）；bootstrap/pxlint 全量重建（9.17MB，含新 BUILTINS）。pxi 解释模式新 native 冒烟 PASS（os_capture/os_random_hex/os_file_sha256 解释可调）。
 - **专项验证（examples/m66_proc verify.sh）**：os_fs_test 16 PASS；exec_demo os_exec 进程替换透传；proc_test 14 PASS（write_file mode 0600/os_capture 分离 rc/os_popen 双向/os_kill group 组杀/os_kill 两参兼容/unix_connect 失败-1+errno）；unix_test 行协议（python unix sock daemon pong 回显）PASS；zipcrypto 密码 zip 解包 PASS；**WinZip AES-256 密码 zip（pyzipper 生成）解包 PASS**。
 - **回归**：capability 双模式各 253 PASS/0 FAIL；diffcheck --all 全量对拍全绿；m65_lsp/m65_mcp verify ALL PASS；新文件 fmt/lint 全绿（tools 全绿）。
-- **S1 待收尾**：git commit（runtime 六文件 + pxi/pxlint 重建 + m66_proc examples + PLAN）。
+- **S1 收尾**：已 git commit `b01d7ea`（runtime 六文件 + pxi/pxlint 重建 + m66_proc examples + PLAN）。
+
+## 8. S2 执行记录（commit `17f00d5`，m66_yaml verify ALL PASS）
+
+- `stdlib/yaml.px` 收编（403 行，纯函数零 import，内容来自 qg-issue 03 yaml.px + 文件头按 stdlib 风格改写：
+  用途/支持子集/不支持项/入口 yaml_parse 说明）；`examples/m66_yaml/yaml_test.px`（99 行 35 断言）+ verify.sh 双模式。
+- 验证：pxi run + pxc build --no-quic 双模式各 **35 PASS** 且输出一致；fmt --check + lint 0/0；
+  capability 253 无回归（stdlib 收编零 runtime 改动）。
+
+## 9. S3 执行记录（commit `6df05ef`，m66_pxml verify ALL PASS）
+
+- `stdlib/pxml.px` 收编（444 行，加密能力 aes_gcm/base64/hex 依赖编译模式 native → 文件头注明主打编译模式）；
+  规范主体 CONFIG-FORMAT.md → `docs/PXML.md`（v0.6：语法 EBNF/enc 策略/决策表/语言缺口笔记 §5.6/Dogfood §5.7）；
+  dogfood 迁 `examples/m66_pxml/`（app.pxml/upstream.pxml/config_loader.px/demo.px/demo_enc.px）+ verify.sh。
+- 验证：pxml_test 双模式各 **68 PASS**；demo 16 PASS + demo_enc 4 PASS（PXML_MASTER_KEY env 不落盘）；
+  fmt/lint 全绿。
+
+## 10. S4 执行记录（stdlib.lunar，待提交）
+
+- `stdlib/lunar.px` 新建（185 行，第 9 个标准库）：**内嵌 1900-2101 每年正月初一偏移表（202 项）+ 1900-2100
+  农历年表 5 位 hex（201 项，闰月+大小月）**，源自寿星天文历（sxtwl）同源数据逐年对拍 0 误差；
+  入口 `lr_solar_to_lunar(y,m,d)` / `lr_lunar_to_solar(y,m,d,leap)` / `lr_md_in_year(m,d,solar_year)`
+  （ws-todo lunar:8-8 场景）/ `lr_leap_month/lr_year_days/lr_month_days/lr_leap_days`；纯函数双模式一致。
+- `examples/m66_lunar/lunar_test.px`：**36 断言双模式全 PASS**（2024/2026/2023 春节、2023 闰二月锚点、
+  边界 1900-01-31 / 2100-12-31、1996 八月十五、2033 春节、5 组往返互转、闰月号/闰月天数/年天数、
+  lunar:M-D 落点 2026 八月初八=2026-09-18 等）+ verify.sh（双模式 + fmt/lint）。
+- 验证：解释模式 36 PASS/0 FAIL；编译模式 36 PASS/0 FAIL；stdlib/lunar.px + lunar_test.px lint 0/0、fmt 全绿。
+
+## 11. S5 执行记录（生态收口，待提交）
+
+- spec.md §8.20 原语补全段（unix_connect/os 五件套/os_capture/os_popen/os_kill group/write_file mode/
+  zip_unpack 密码双算法 + G6 which 用法示例）+ §10.3 标准库表补 std.yaml/std.pxml/std.lunar 三行；
+- CHANGELOG [Unreleased] M66 完整条目；ROADMAP 主线表补 M66 行 + 当前里程碑更新；
+- README/README.en：原生开发表 M41–M66 + 📚 标准库 9 个清单 + 目录树 stdlib 注释同步；
+- ci.yml toolchain job 工具自测并入 m66_yaml/m66_pxml/m66_lunar verify；make_release.sh 无新二进制免改；
+- 全仓 fmt --check + lint 全绿；ci.yml YAML 校验 + make_release bash -n。

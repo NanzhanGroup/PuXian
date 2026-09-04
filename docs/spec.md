@@ -1127,6 +1127,51 @@ std.gfx 走纯 list 路径（text/blit 依赖 pxi 未同步 builtin 仍受限，
 （编译模式逐像素 list 存储 + bytes concat 拷贝为主）→ B 线后续画布优化方向 = bytes
 三字节/像素 + 批量 blit（M61-PLAN D5 预案，正确优先已验证、性能按需再评估）。
 
+### 8.20 自举 wsAgent runtime 原语补全（M66，qg-issue 01/02/05 合入）
+
+> M66（docs/M66_PLAN.md）合入清歌（qingge）qg-issue 01/02/05 全部 L0 缺口——ws-core / ws-install /
+> ws-todo 这些 wsAgent 生态模块被卡的原语族（unix socket 裸连接、子进程输出捕获/双向管道/进程组杀、
+> 原子改名/递归删/安全随机/文件哈希、写文件权限位、密码 zip）。关键决策：D0 以官方仓库现状为准
+> （issue 内旧基线认知如"os_exec M23 已有"不成立——官方从未有该 native）；D1 `os_capture` 与既有
+> `os_spawn_capture`（M65，stdout+stderr 合并捕获）**并存**（os_spawn_capture 已是正式 API 零回归）；
+> D2 `zip_unpack` 密码 **zipcrypto 与 WinZip AES-256 全实现**（不自限经典）。同名 native 均随
+> `bootstrap/pxi`（解释）与编译模式同步可用（pxi 白名单 / ibuiltin dispatch / pxlint BUILTINS 三处同步）。
+
+**新增/扩展 L0 native（C 写进 runtime）**：
+
+- `unix_connect(path) → int fd`（Issue 1 / 06 T1）：socket(AF_UNIX, SOCK_STREAM) + connect(2) → fd，
+  复用 M57 `read`/`write` 收发任意字节行协议（`http_unix` 只讲 HTTP 的裸连接补全）；失败 int -1 + `os_errno()`。
+- `os_exec(cmd, args…)`（Issue 2）：execvp(2) **进程替换**，成功不返回（launcher 语义，PID 不变）；失败 px_error。
+- `os_rename(old, new) → bool`（Issue 2）：rename(2) 原子改名/覆盖（免"写新→删旧"两步窗口）；失败 false + os_errno。
+- `os_remove_all(path) → bool`（Issue 2）：递归删目录树/文件（符号链接 unlink）；**空串与 `/`、`//` 拒绝防删根**；
+  失败 false + os_errno。
+- `os_random_hex(n) → str`（Issue 2 / 05 G7）：/dev/urandom 读 n 字节 → 2n 小写 hex（n∈[1,1024]）；失败 null。
+- `os_file_sha256(path) → str`（Issue 2）：文件内容 SHA-256 → 64 小写 hex（mbedtls）；失败 null。
+- `os_capture(cmd, args…) → {rc:int, stdout:str, stderr:str}`（05 G1 / 06 T2）：子进程 **双管道**
+  分离捕获 stdout/stderr（pipe×2 + fork/execvp + poll 双读净免死锁）；exec 失败 rc=127。
+  **G6 which 用法示例**：`os_capture("command","-v","gcc")["rc"]==0` 即存在（不单独造 which 原语）。
+- `os_popen(cmd, args…) → {stdin_fd:int, stdout_fd:int}`（05 G4 / 06 T2）：双向管道（pipe×2 + fork/execvp +
+  setpgid 自成进程组 → 可由 os_kill group 组杀），对话式子进程 stdin 注入 + stdout 读回。
+- `os_kill(pid, sig, group:bool)`（05 G5 / 06 T2）：group=true → `kill(-pid, sig)` 清整个进程组
+  （卡死任务连 worker/sleep 子进程一起清）；两参旧调用 `os_kill(pid, sig)` 兼容。
+- `write_file(path, content[, mode])` / `append_file(path, content[, mode])`（05 G3）：fopen 改
+  `open(O_WRONLY|O_CREAT|O_TRUNC, mode)` + 显式 fchmod（防 umask 削 0600 类密钥权限）；
+  不传 mode 保持原 0666 & umask 行为。
+- `zip_unpack(path, out[, password])`（05 G2）：第三参可选密码；**zipcrypto 传统解密**（PKWARE CRC32 keys
+  流）+ **WinZip AES-128/192/256**（local header extra 0x9901 探测 → PBKDF2-HMAC-SHA1 派生 +
+  AES-CTR 解密 + HMAC-SHA1 auth code 校验，AE-1/AE-2）；非密码 zip 走原 miniz 路径零影响。
+
+**验证（真实执行，examples/m66_proc/verify.sh ALL PASS）**：os_fs_test 16 PASS（Issue 2 交付断言）；
+exec_demo os_exec 进程替换透传（PID 不变）；proc_test 14 PASS（write_file mode 0600 stat 验证 /
+os_capture stdout·stderr 分离 / os_popen 双向回显 / os_kill group 组杀 + 两参兼容 / unix_connect 失败
+-1+errno）；unix_test 本地 unix sock 行协议 daemon pong 回环；zipcrypto 密码 zip 解包 + **WinZip AES-256
+（pyzipper 生成）解包** PASS；capability 双模式 253 PASS + diffcheck 全量 + m65_lsp/m65_mcp verify 零回归。
+
+**stdlib 收编（qg-issue 03/04/06 T3，L1 纯 .px，随发布包分发，见 §10.3）**：`std.yaml`（YAML 子集解析）、
+`std.pxml`（PXML 原生配置格式，规范 docs/PXML.md；加密能力 aes_gcm/base64/hex 依赖编译模式 native →
+文件头注明主打编译模式，std.gfx 先例）、`std.lunar`（内嵌 1900-2100 农历数据表，公历/农历互转 +
+ws-todo `lunar:M-D` 重复规则落点）。
+
 ---
 
 ## 9. 双模式执行
@@ -1209,6 +1254,9 @@ panic(msg)            # 致命错误，退出码 1
 | `std.png` | 纯语言 PNG 编码器（M61）：8bit RGB stored 无压缩，落盘可见图 —— 见 §8.19 |
 | `std.os` | env、args、exit |
 | `std.process` | run 子进程（捕获输出） |
+| `std.yaml` | YAML 子集解析（M66 收编，qg-issue 03）：`yaml_parse` —— 见 §8.20 |
+| `std.pxml` | PXML 原生配置格式（M66 收编，qg-issue 04）：解析 + ENC 加密还原（主打编译模式），规范 docs/PXML.md —— 见 §8.20 |
+| `std.lunar` | 农历（M66 收编，qg-issue 06 T3）：1900-2100 公历/农历互转 + 闰月 + `lunar:M-D` 落点 —— 见 §8.20 |
 
 ### 10.4 错误分类
 - 可能失败的函数返回 `Result[T, E]`，E 为 `str` 或标准错误类型

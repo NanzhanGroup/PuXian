@@ -91,11 +91,12 @@ jobs:
             ./bootstrap/pxlint "$f" >/dev/null || { echo "❌ lint 失败: $f"; exit 1; }
           done
           echo "✅ lint 全绿（compiler 主入口 0 错 + tools 16 文件 0/0）"
-      - name: 工具自测（m64_fmt / m64_lint / m65_lsp / m65_mcp）
+      - name: 工具自测（m64_fmt / m64_lint / m65_lsp / m65_mcp + m66_yaml/pxml/lunar）
         run: |
           bash examples/m64_fmt/verify.sh >/dev/null && bash examples/m64_lint/verify.sh >/dev/null
           python3 -c "import sys; assert sys.version_info[0]==3" && bash examples/m65_lsp/verify.sh >/dev/null && bash examples/m65_mcp/verify.sh >/dev/null
-          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp verify 全 PASS"
+          bash examples/m66_yaml/verify.sh >/dev/null && bash examples/m66_pxml/verify.sh >/dev/null && bash examples/m66_lunar/verify.sh >/dev/null
+          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar verify 全 PASS"
       - name: LSP / MCP 服务器冒烟（--version + 协议入口存在性）
         run: |
           chmod +x bootstrap/pxlsp bootstrap/pxmcp bootstrap/pxcheck
