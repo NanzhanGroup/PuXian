@@ -6,6 +6,43 @@
 
 ## [Unreleased]
 
+### M66 · 自举 wsAgent runtime 原语补全 + stdlib 收编（qg-issue 01–06 全量合入，docs/M66_PLAN.md）✅
+
+> 来源：清歌（qingge）qg-issue 01–06 —— ws-core / ws-install / ws-todo 等 wsAgent 生态模块
+> 被卡的 runtime 原语缺口（P0 blocker）与 stdlib 生态缺失。决策：D0 以官方仓库现状为准；
+> D1 os_capture 与既有 os_spawn_capture 并存（零回归）；D2 zip 密码 zipcrypto + WinZip AES-256 全实现；
+> D3 农历纳入 M66（std.lunar）；D4 命名「自举 wsAgent」。
+
+- **M66-S1 L0 runtime 原语补全（qg-issue 01/02/05，runtime/runtime.c +386 / runtime_zip.c +255）**：
+  新增 **unix_connect**（AF_UNIX 裸连接 fd，行协议驱动，http_unix 补全）；**os 五件套** os_exec
+  （execvp 进程替换，launcher 语义）/ os_rename（rename(2) 原子覆盖）/ os_remove_all（递归删，空串
+  与 `/`、`//` 拒绝防删根）/ os_random_hex（urandom→hex）/ os_file_sha256（mbedtls 文件哈希）；
+  新增 **os_capture(cmd,args)→{rc,stdout,stderr}**（双管道分离捕获，D1 与 os_spawn_capture 并存；
+  G6 which 用法示例 `os_capture("command","-v",x)`）/ **os_popen(cmd,args)→{stdin_fd,stdout_fd}**
+  （双向管道 + setpgid 自成组）；**os_kill 第三参 group**（kill(-pid) 组杀，两参兼容）；
+  **write_file/append_file 第三参 mode**（open + fchmod 防 umask 削权，写 0600 密钥免 chmod）；
+  **zip_unpack 第三参 password**（**zipcrypto 传统 + WinZip AES-128/192/256**：extra 0x9901 探测 +
+  PBKDF2-HMAC-SHA1 + AES-CTR + HMAC-SHA1 auth code，AE-1/AE-2）。pxi 白名单 + ibuiltin + pxlint
+  BUILTINS 三处同步 → bootstrap/pxi、pxlint 重建（解释模式新 native 可调）；专项
+  examples/m66_proc verify ALL PASS（os_fs_test 16 + os_exec 透传 + proc_test 14 + unix 行协议 +
+  zipcrypto/AES-256 解包）；capability 双模式 253 PASS + diffcheck 全量 + m65 回归零影响。
+- **M66-S2 L1 stdlib 收编 std.yaml（qg-issue 03，第 7 个标准库）**：stdlib/yaml.px（YAML 配置子集
+  解析 yaml_parse，纯函数零 import）+ examples/m66_yaml 双模式 35 PASS 一致。
+- **M66-S3 L1 stdlib 收编 std.pxml + PXML 规范（qg-issue 04，第 8 个标准库）**：stdlib/pxml.px
+  （解析 + ENC 加密还原，主打编译模式）+ **docs/PXML.md 规范 v0.6**（语法/EBNF/enc 策略/决策表/
+  语言缺口笔记）+ examples/m66_pxml dogfood 闭环（pxml_test 双模式 68 + demo 16 + demo_enc 4 PASS）。
+- **M66-S4 L1 stdlib 收编 std.lunar（qg-issue 06 T3，第 9 个标准库，D3 拍板纳入）**：
+  stdlib/lunar.px 内嵌 1900-2100 农历数据表（寿星天文历同源，逐年对拍 0 误差）+ 公历/农历互转
+  （lr_solar_to_lunar / lr_lunar_to_solar / lr_md_in_year / lr_leap_month 等，纯函数双模式一致）+
+  examples/m66_lunar 双模式 **36 PASS**（春节/除夕/闰二月/边界 1900-2100/往返/ws-todo lunar:8-8 落点）。
+- **M66-S5 生态收口**：spec §8.20 原语补全段 + §10.3 std.yaml/pxml/lunar 行；ROADMAP 主线表补 M66 行；
+  CHANGELOG 本条目；README/README.en 原生开发表扩 M41–M66 + 标准库 9 个清单同步；CI toolchain job
+  工具自测并入 m66_yaml/m66_pxml/m66_lunar verify。
+- **M66-S6 qg-issue 回写**：/data/qg-issue 01–06 头部状态行标「已合入 M66」；05 §7 / 06 §7 重写时机
+  checklist 勾除（G1/G2/G3/Issue 2/农历全勾 → ws-install / ws-todo 主体 .px 可写，M67+ 业务里程碑另立项）。
+- **验证**：m66_proc/m66_yaml/m66_pxml/m66_lunar verify ALL PASS；capability 双模式 253 PASS / 0 FAIL；
+  diffcheck --all 零回归；fmt --check + lint 全仓全绿（stdlib 3 新库 lint 0/0）。
+
 ### M65 · LSP / MCP 自举（spec §12 工具链收官 + §12.1 AI agent 协议，docs/M65_PLAN.md）✅
 
 - **M65-S1 JSON-RPC 共享底座 + runtime 补丁**：`tools/jsonrpc_core.px`（纯 defs）——

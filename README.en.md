@@ -113,7 +113,7 @@ def main():
 | 🔢 Language | Slice syntax `a[i:j]` / `a[i:j:k]` (stride/reverse, strings sliced by UTF-8 chars), **generator expressions** `(x for x in xs)` (**lazy**: single-level for delayed evaluation / `gen_next` item-by-item / for-in / `list()` conversion), bitwise ops + binary-data views (int_to_hex / bytes_to_hex / bit_count / bit_length), regex, lock primitives (mutex / rwlock), random file I/O + fsync, process/signal (os_spawn / os_wait / signal), **Result/Option error handling** (`Ok(x)`/`Err(e)`/`Some(x)` constructors, `?` error propagation — Err/None returns immediately, `!` forced unwrap, is_ok/is_err/unwrap methods; the single error channel in the spec), string interpolation `${expr}`, comprehensions, optional chaining `?.`, null coalescing `??`, pipeline `\|>`. |
 | 🔌 Edge device | fd primitives `open`/`close`/`ioctl`/`os_errno` (ioctl arg three forms: int direct / bytes·str in-place in/out buffer, `_IOR` filled in place) + fd data path `read`/`write` (raw read(2)/write(2)) + **mmap live mapping** `mmap`/`munmap`/`mem_write` (MAP_SHARED framebuffer/shmem/DMA direct access, GC auto-munmap, in-place write into the mapping) + GPIO/I2C device examples + **aarch64 cross-compile** (`pxc build --no-quic` trimming + qemu-aarch64 verification identical to x86) — Linux edge devices (Raspberry Pi/gateway/box) as a single static binary, no runtime env needed |
 | 🚀 Application platform | **`.px` script execution mechanism** (`px_serve`, a PHP/OpenResty-style application server: Cookie/Session/basic auth + server-side TLS + graceful shutdown; `px_exec`, a language-level embedding API) + **`.px` process pool** (build mode pre-forks worker interpreters that stay resident and are reused, PHP-FPM style; **hot-reload with automatic rolling restart on script/binary changes**) + route table & middleware (method+path patterns / `:id` params / `*` wildcards / middleware chains) + cron scheduling (6 fields) + JSON path (json_path / json_path_set). |
-| 📚 Standard library | `stdlib/collections.px` (sorted/reversed/map/filter/reduce/unique/group_by) + built-in registration whitelist (see MINI_SUBSET §2.5). |
+| 📚 Standard library | `stdlib/collections.px` (sorted/reversed/map/filter/reduce/unique/group_by) + **9 stdlibs total**: collections / edge (M60 edge devices) / gfx / png (M61 2D) / semver / webroute / **yaml / pxml / lunar (M66, see spec §10.3)** + built-in registration whitelist (see MINI_SUBSET §2.5) |
 
 ---
 
@@ -172,7 +172,7 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 │   ├── cases_bad/          #   error cases (lex 14 + parse 9)
 │   └── diffcheck.sh / bootstrap_prove.sh  # differential harness / bootstrap proof
 ├── runtime/                # C runtime (runtime.c/h + aes/xml/zip/ws/rsa/sqlite/route/h2/h3/quic + mbedtls + third_party)
-├── stdlib/                 # Standard library (collections.px)
+├── stdlib/                 # Standard library (9: collections/edge/gfx/png/semver/webroute/yaml/pxml/lunar)
 ├── examples/               # 80+ examples (hello / fib / match / concurrency / networking / TLS / SQLite / comprehensions ...)
 ├── archive/rust-compiler/  # Rust compiler source archive (read-only; the pre-bootstrap implementation; git history preserved)
 ├── docs/                   # Documentation (spec / Mini subset / ROADMAP)
@@ -241,6 +241,7 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 | M63 | Language-debt fixes L8–L11: pxi network API whitelist + float full-precision roundtrip + pxc --version |
 | M64 | **Toolchain self-hosting restored**: `pxc fmt / lint / doc / test / bench` five tools self-hosted (keep-lexer base + whole-repo convergence, net -318 lines) |
 | M65 | **LSP / MCP self-hosted**: `pxc lsp` (diagnostics/completion/definition/hover) + `pxc mcp` (8 tools for AI agents) — **spec §12 toolchain fully self-hosted** |
+| M66 | **wsAgent runtime primitives + stdlib adoption** (qg-issue 01–06): unix_connect + os 5-tuple + os_capture/os_popen/os_kill group + write_file mode + zip_unpack password (zipcrypto/AES-256) → std.yaml / std.pxml / std.lunar (lunar calendar), spec §8.20 |
 
 ---
 
