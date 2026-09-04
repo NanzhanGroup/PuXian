@@ -1,0 +1,99 @@
+# yaml_test.px —— yaml.px 单元测试
+# 运行：examples/m66_yaml/verify.sh（双模式 35 PASS）
+import std.yaml
+var g_pass = 0
+var g_fail = 0
+def check(name, cond, extra):
+    if cond:
+        g_pass += 1
+        # print("PASS:", name)
+    else:
+        g_fail += 1
+        print("FAIL:", name, extra)
+# 简单 kv 与类型推断
+def t_simple():
+    let r = yaml_parse("a: 1\nb: hello\nc: true\nd: 3.14\ne: null\nf: 1s\ng: http://x.com\n")
+    check("ok", r["ok"], r)
+    if r["ok"]:
+        let v = r["value"]
+        check("int", v["a"] == 1, v["a"])
+        check("str", v["b"] == "hello", v["b"])
+        check("bool", v["c"] == true, v["c"])
+        check("float", v["d"] == 3.14, v["d"])
+        check("null", v["e"] == null, v["e"])
+        check("1s str", v["f"] == "1s", v["f"])
+        check("url str", v["g"] == "http://x.com", v["g"])
+# 空值 / 注释
+def t_empty_comment():
+    let r = yaml_parse("# 整行注释\n# 再来一行\na:   # 行尾注释\nb: 2 # 注释\n")
+    check("ok2", r["ok"], r)
+    if r["ok"]:
+        check("a null", r["value"]["a"] == null, r["value"]["a"])
+        check("b 2", r["value"]["b"] == 2, r["value"]["b"])
+# 嵌套 map（2/4 空格）
+def t_nested():
+    let r = yaml_parse("server:\n  port: 8080\n  host: 127.0.0.1\nstorage:\n    path: /tmp/x\n    ttl: 720h\n")  # noqa
+    check("ok3", r["ok"], r)
+    if r["ok"]:
+        let v = r["value"]
+        check("srv port", v["server"]["port"] == 8080, v)
+        check("srv host", v["server"]["host"] == "127.0.0.1", v)
+        check("sto path", v["storage"]["path"] == "/tmp/x", v)
+        check("sto ttl", v["storage"]["ttl"] == "720h", v)
+# 引号键/值 + 内部冒号与#不误判
+def t_quotes():
+    let r = yaml_parse("\"03:00\": \"a#b\"\n'x:y': 'it''s'\nplain: 'no  # 不是注释'\n")
+    check("ok4", r["ok"], r)
+    if r["ok"]:
+        let v = r["value"]
+        check("q key", v["03:00"] == "a#b", v)
+        check("sq key", v["x:y"] == "it's", v)
+        check("sq plain", v["plain"] == "no  # 不是注释", v)
+# 序列
+def t_seq():
+    let r = yaml_parse("items:\n  - a\n  - b\n  - 42\nnums:\n  - 1\n  - 2\n")
+    check("ok5", r["ok"], r)
+    if r["ok"]:
+        let v = r["value"]
+        check("items len", len(v["items"]) == 3, v)
+        check("item0", v["items"][0] == "a", v)
+        check("item2 int", v["items"][2] == 42, v)
+        check("nums len", len(v["nums"]) == 2, v)
+# 序列内 map
+def t_seq_map():
+    let r = yaml_parse("servers:\n  - name: s1\n    port: 1001\n  - name: s2\n    port: 1002\n")
+    check("ok6", r["ok"], r)
+    if r["ok"]:
+        let v = r["value"]["servers"]
+        check("sm len", len(v) == 2, v)
+        check("sm0 name", v[0]["name"] == "s1", v)
+        check("sm0 port", v[0]["port"] == 1001, v)
+        check("sm1 port", v[1]["port"] == 1002, v)
+# 错误用例：tab / 顶层缩进 / 非法键
+def t_err():
+    let r1 = yaml_parse("\ta: 1\n")
+    check("tab err", not r1["ok"] and r1["error"] == "line 1: 制表符缩进不支持", r1)
+    let r2 = yaml_parse("a:\n   b: 1\n  c: 2\n")
+    check("indent err", not r2["ok"], r2)
+    let r3 = yaml_parse("  a: 1\n")
+    check("top indent err", not r3["ok"], r3)
+    let r4 = yaml_parse("a\n")
+    check("no colon err", not r4["ok"], r4)
+# 引号未闭合
+def t_unclosed():
+    let r = yaml_parse("a: \"xx\n")
+    check("unclosed err", not r["ok"], r)
+def main():
+    t_simple()
+    t_empty_comment()
+    t_nested()
+    t_quotes()
+    t_seq()
+    t_seq_map()
+    t_err()
+    t_unclosed()
+    print("PASS:", g_pass, "FAIL:", g_fail)
+    if g_fail > 0:
+        print("TEST_RESULT: FAIL")
+    else:
+        print("TEST_RESULT: PASS")
