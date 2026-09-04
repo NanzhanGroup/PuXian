@@ -6,6 +6,28 @@
 
 ## [Unreleased]
 
+### M64 · 工具链自举恢复（fmt/lint/doc/test/bench 五项自举，docs/M64_PLAN.md）✅
+
+- **M64-S1 keep-lexer 底座**：不碰 pxlexer（自举链零风险），派生 `tools/fmtlexer.px`
+  （788 行，`g_keep` 开关 + `lex_tokens_keep` 保留注释/行结构，对齐 Rust
+  `new_with_comments`）；默认模式与 pxl 逐字节一致。
+- **M64-S2 `pxc fmt`**（fmt_core.px + pxfmt.px）：确定性格式化（空格规则/行结构重建/
+  注释对齐/空行压缩/unified diff/幂等）；修正 Rust 版一元负号缺陷
+  （`x = -1` 不再压成 `x =-1`）；格式化前后重 lex token 序列完全一致（语义等价）。
+- **M64-S3 `pxc lint`**（lint_core.px + pxlint.px）：L001-L008 全移植（AST 驱动，
+  复用自举 parser），`--json`/`--strict`/退出码语义；自举工具链 7 文件 dogfood 0/0。
+- **M64-S4 fmt 全仓收敛**：审阅驱动修 4 缺陷（插值/数字原文保真、切片/后缀 `?` 紧贴、
+  首行 def 压坏）；selfhost 21+tools 7 文件 --check 全绿；净 -318 行；
+  **自举证明 B.c==golden 逐字节 + capability 双模式 253 PASS**。
+- **M64-S5 `pxc doc / test / bench`**（pxdoc/pxtest/pxbench.px + pxslice.px 共享切片）：
+  doc 从 `##` 注释生成 Markdown（对齐 Rust doc.rs：文件头说明并入首个定义）；
+  test 运行顶层 `def test_xxx()` 无参函数，逐用例独立 pxi 子进程（语言内 os_spawn+
+  os_wait 编排，非 shell）；bench 无参目标 N 次循环 × R 轮计时（now_us）。
+  三工具 --version/--help + examples/m64_{doc,test,bench}/verify.sh 全绿
+  （doc 18/18、test 12/12、bench 8/8）；pxlint BUILTINS 补 now_us/sleep_us。
+- **README / spec §12 勾选同步**：pkg/ast/fmt/lint/test/doc/bench 七项自举已标注，
+  lsp/mcp 留 M64d（按需）。
+
 ### M63 · 语言面欠账修复（L8–L11 全清：pxi 网络 API / float 全精度 / pxc --version）✅
 
 - **规划**：MINI_SUBSET §十三 欠账总结清 L8–L11；回归 examples/m63_langfix/verify.sh

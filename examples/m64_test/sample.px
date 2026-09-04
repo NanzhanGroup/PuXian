@@ -1,0 +1,28 @@
+# ============================================================
+# M64-S5 test 自测语料：顶层 def test_xxx() 无参 = 测试用例
+# ------------------------------------------------------------
+# 语义验证点（pxslice 切片正确性）：
+#   1) 顶层可执行语句（print/var g）→ 剔除，不得运行
+#   2) 顶层 def main → 剔除（防 pxi 自动调用），不得运行
+#   3) def test_with_args 有参 → 不算测试用例
+# 期望测试集：test_add / test_helper / test_filter_me / test_fail
+#   （test_fail 故意失败：add(1,1)==3 不成立 → assert R1003）
+# ============================================================
+def add(a, b):
+    return a + b
+def helper_x():
+    return 42
+def test_add():
+    assert(add(1, 2) == 3, "add ok")
+def test_helper():
+    assert(helper_x() == 42, "helper")
+def test_filter_me():
+    assert(add(2, 2) == 4, "two plus two")
+def test_fail():
+    assert(add(1, 1) == 3, "boom fail")
+def test_with_args(x):
+    return x
+print("TOP_LEVEL_SHOULD_NOT_RUN")
+var g = 99
+def main():
+    print("MAIN_SHOULD_NOT_RUN")

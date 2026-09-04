@@ -80,10 +80,19 @@ def main():
 | `pxc run <file.px> [args...]` | 脚本模式执行 |
 | `pxc lex <file.px>` | 打印 Token 流（调试，走 PuXian lexer） |
 | `pxc parse <file.px>` | 打印 AST（调试，走 PuXian parser） |
+| `pxc fmt <file.px> [-w] [--check] [--diff]` | 代码格式化（M64a 自举） |
+| `pxc lint <file.px> [--json] [--strict]` | 静态检查 L001-L008（M64b 自举） |
+| `pxc doc <file.px> [--output out.md]` | 从 `##` 注释生成 Markdown 文档（M64c 自举） |
+| `pxc test <file.px> [filter] [--list]` | 运行顶层 `def test_xxx()` 测试（M64c 自举） |
+| `pxc bench <file.px> <func> [--count N] [--repeat R]` | 基准测试（M64c 自举） |
 | `pxc --version` / `-v` | 输出版本号 |
 | `pxc help` | 帮助 |
 
-> **工具链现状说明**：自举版 `pxc` 当前提供上表核心命令；Rust 版曾有的 `fmt / lint / test / bench / doc / lsp / mcp / pkg` 等完整工具链，其源码保留在 `archive/rust-compiler/`（只读归档，可作参考或按需用 PuXian 重写恢复）。
+> **工具链现状（M64 工具链自举恢复）**：`pkg / ast / fmt / lint / test / doc / bench` 七项
+> 均已由 PuXian 自举实现（`.px` 源码 → bootstrap 二进制 → `pxc` 子命令），源码见
+> `tools/pxpkg.px`、`tools/pxfmt.px`、`tools/pxlint.px`、`tools/pxdoc.px`、
+> `tools/pxtest.px`、`tools/pxbench.px`（Rust 版全套留档 `archive/rust-compiler/` 只读）。
+> `lsp / mcp` 两项为 M64d（按需，stdio/JSON-RPC 底座侦查后启动）。
 
 ---
 

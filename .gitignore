@@ -34,3 +34,7 @@ examples/m45_pkgdemo/registry_empty/
 
 # M61 gfx demo 运行时生成物（每次 verify 重建）
 examples/m61_gfx/*.png
+
+# pxtest/pxbench 运行临时程序（崩溃残留兜底，正常应自清理）
+*.px_test_tmp_*
+*.px_bench_tmp_*
