@@ -1,0 +1,27 @@
+# ============================================================
+# examples/m65_mcp/demo_mcp.px —— M65-S4 MCP 工具样本
+# ------------------------------------------------------------
+# 供 tools/call test/bench/doc 验证的真实文件：
+#   - ## 注释（doc 生成 API 文档）
+#   - def test_add / test_sub（test 运行用例，0=PASS）
+#   - def add（bench 目标函数）
+# 不含 def main（run 演示用 code 输入；本文件仅被 test/bench/doc 引用，
+# 避免 pxi 自动调 main 干扰）。
+# ============================================================
+## 加法：返回 a+b
+def add(a, b):
+    return a + b
+## 基准目标：无参计算（bench 约定被测函数无参）
+def work():
+    let x = 1 + 2
+    return x
+def test_add():
+    let r = add(1, 2)
+    if r != 3:
+        return 1
+    return 0
+def test_sub():
+    let r = add(5, 0)
+    if r != 5:
+        return 1
+    return 0
