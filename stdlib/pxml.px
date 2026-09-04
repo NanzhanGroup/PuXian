@@ -1,0 +1,444 @@
+# ============================================================
+# 普贤标准库：std.pxml —— PXML 配置语言解析器（qg-issue 04 收编）
+# ------------------------------------------------------------
+# 纯函数风格（无 IO/无状态），入口 pxml_parse(text) -> {ok,value}/{ok,error}。
+# 随发布包分发：import std.pxml。
+# 加密能力说明：ENC 字段级加密"识别不解密"（分层铁律，解析器永不碰密钥）；
+# 消费方运行时解密依赖 aes_gcm/base64 native —— 按 std.gfx 先例，
+# ENC 解密主打编译模式（pxc build）；纯解析（无加密函数）双模式一致。
+# 完整规范：docs/PXML.md（v0.6）
+#
+# 设计决策（实现约定，v0.3）：
+#   - duration 字面量（720h / 1.5s）换算为纳秒 int（1d = 86400e9 ns）
+#   - ENC[...] 整体识别为"带标记字符串"，原样保留含 ENC[ 前缀；
+#     解析器不解密、不校验内部——解密是消费方运行时职责（分层铁律）
+#   - env("X") / include("p") 解析为 call 节点
+#     {"__call":"env","args":["X"]}，消费方展开（parser 不做 IO）
+#   - 字符串必须引号（' " 或 """），无裸字符串、无隐式类型转换
+#   - 块 {} 与 dict {} 同形；键重复报错；# 注释（引号/ENC 内不剥离）
+#   - 不支持：缩进语义、YAML 裸值/冒号、\u 转义（直接写 UTF-8）、
+#     未知 duration 单位、裸标识符值、科学计数 duration
+# 语法 EBNF 见 docs/CONFIG-FORMAT.md §5.2
+# ============================================================
+# ---- 工具 ----
+def px_nd():  # 空 dict（{} 字面量是 null，须经 json_parse）
+    return json_parse("{}")
+def px_isdigit(c):
+    return c >= "0" and c <= "9"
+def px_isalpha(c):
+    return (c >= "a" and c <= "z") or (c >= "A" and c <= "Z")
+def px_isid0(c):
+    return px_isalpha(c) or c == "_"
+def px_isid(c):
+    return px_isalpha(c) or px_isdigit(c) or c == "_"
+def px_is_unit(u):
+    if u == "ms":
+        return true
+    if u == "s":
+        return true
+    if u == "m":
+        return true
+    if u == "h":
+        return true
+    if u == "d":
+        return true
+    return false
+def px_dur_ns(num, unit):
+    var f = 1
+    if unit == "ms":
+        f = 1000000
+    elif unit == "s":
+        f = 1000000000
+    elif unit == "m":
+        f = 60000000000
+    elif unit == "h":
+        f = 3600000000000
+    elif unit == "d":
+        f = 86400000000000
+    return int(float(num) * f)
+# ---- 字符串扫描（返回 {"ok","v","i","line","err"}）----
+# 支持：单引号 '...'（'' 转义）、双引号 "..."（\n \t \r \" \\ \/ 转义）、
+#       三引号 """..."""（可跨行、不转义、原样保留）
+def px_scan_string(text, i, line):
+    let q = text[i]
+    let n = len(text)
+    # 三引号多行字符串
+    if q == "\"" and i + 2 < n and text[i + 1] == "\"" and text[i + 2] == "\"":
+        var out = ""
+        var j = i + 3
+        while true:
+            if j >= n:
+                return {"ok": false, "v": "", "i": i, "line": line, "err": "line " + str(line) + ": 多行字符串未闭合（需要 \"\"\"）"}  # noqa
+            if j + 2 < n and text[j] == "\"" and text[j + 1] == "\"" and text[j + 2] == "\"":
+                return {"ok": true, "v": out, "i": j + 3, "line": line, "err": ""}
+            if text[j] == "\n":
+                line += 1
+            out += text[j]
+            j += 1
+    # 单/双引号（单行）
+    var out = ""
+    var j = i + 1
+    while true:
+        if j >= n:
+            return {"ok": false, "v": "", "i": i, "line": line, "err": "line " + str(line) + ": 字符串未闭合"}  # noqa
+        let c = text[j]
+        if c == "\n":
+            return {"ok": false, "v": "", "i": i, "line": line, "err": "line " + str(line) + ": 字符串未闭合（不能跨行；多行请用 \"\"\"）"}  # noqa
+        if q == "'" and c == "'":
+            if j + 1 < n and text[j + 1] == "'":
+                out += "'"
+                j += 2
+                continue
+            return {"ok": true, "v": out, "i": j + 1, "line": line, "err": ""}
+        if q == "\"" and c == "\\":
+            if j + 1 >= n:
+                return {"ok": false, "v": "", "i": i, "line": line, "err": "line " + str(line) + ": 字符串尾部反斜杠"}  # noqa
+            let e = text[j + 1]
+            if e == "n":
+                out += "\n"
+            elif e == "t":
+                out += "\t"
+            elif e == "r":
+                out += "\r"
+            elif e == "\"":
+                out += "\""
+            elif e == "\\":
+                out += "\\"
+            elif e == "/":
+                out += "/"
+            elif e == "u":
+                return {"ok": false, "v": "", "i": i, "line": line, "err": "line " + str(line) + ": 不支持 \\u 转义（请直接写 UTF-8 字符）"}  # noqa
+            else:
+                return {"ok": false, "v": "", "i": i, "line": line, "err": "line " + str(line) + ": 不支持的转义 \\" + e}  # noqa
+            j += 2
+            continue
+        if q == "\"" and c == "\"":
+            return {"ok": true, "v": out, "i": j + 1, "line": line, "err": ""}
+        out += c
+        j += 1
+# ---- 数字 / duration 扫描 ----
+# 返回 {"ok","tok","i","err"}；tok: int/float/dur
+def px_scan_number(text, i, line):
+    let l0 = line
+    let n = len(text)
+    var j = i
+    if j < n and (text[j] == "-" or text[j] == "+"):
+        j += 1
+    var saw = false
+    while j < n and px_isdigit(text[j]):
+        saw = true
+        j += 1
+    if not saw:
+        return {"ok": false, "tok": null, "i": i, "err": "line " + str(l0) + ": 期望数字"}
+    var isf = false
+    if j < n and text[j] == ".":
+        isf = true
+        j += 1
+        while j < n and px_isdigit(text[j]):
+            j += 1
+    var has_exp = false
+    if j < n and (text[j] == "e" or text[j] == "E"):
+        var k = j + 1
+        if k < n and (text[k] == "+" or text[k] == "-"):
+            k += 1
+        if k < n and px_isdigit(text[k]):
+            has_exp = true
+            isf = true
+            j = k
+            while j < n and px_isdigit(text[j]):
+                j += 1
+    let numstr = text[i:j]
+    # duration：数字后紧跟字母（单位）
+    if j < n and px_isalpha(text[j]):
+        let us = j
+        while j < n and px_isalpha(text[j]):
+            j += 1
+        let unit = text[us:j]
+        if not px_is_unit(unit):
+            return {"ok": false, "tok": null, "i": i, "err": "line " + str(l0) + ": 未知的 duration 单位 '" + unit + "'（支持 ms/s/m/h/d；文本请加引号）"}  # noqa
+        if has_exp:
+            return {"ok": false, "tok": null, "i": i, "err": "line " + str(l0) + ": duration 不支持科学计数"}  # noqa
+        return {"ok": true, "tok": {"t": "dur", "v": numstr, "u": unit, "line": l0}, "i": j, "err": ""}  # noqa
+    if isf:
+        return {"ok": true, "tok": {"t": "float", "v": float(numstr), "line": l0}, "i": j, "err": ""}  # noqa
+    return {"ok": true, "tok": {"t": "int", "v": int(numstr), "line": l0}, "i": j, "err": ""}
+# ---- 标识符 / ENC 扫描 ----
+# ENC[ 整体吞为 enc token（原样保留含前缀，内部 # 不剥离、不校验内容）
+def px_scan_ident(text, i, line):
+    let l0 = line
+    let start = i
+    let n = len(text)
+    while i < n and px_isid(text[i]):
+        i += 1
+    let name = text[start:i]
+    if name == "ENC" and i < n and text[i] == "[":
+        var j = i
+        while j < n and text[j] != "]":
+            if text[j] == "\n":
+                line += 1
+            j += 1
+        if j >= n:
+            return {"ok": false, "tok": null, "i": start, "err": "line " + str(l0) + ": ENC[...] 未闭合"}  # noqa
+        return {"ok": true, "tok": {"t": "enc", "v": text[start:j + 1], "line": l0}, "i": j + 1, "err": ""}  # noqa
+    return {"ok": true, "tok": {"t": "ident", "v": name, "line": l0}, "i": i, "err": ""}
+# ---- 词法分析 ----
+def px_tokenize(text):
+    var toks = []
+    var i = 0
+    var line = 1
+    let n = len(text)
+    while i < n:
+        let c = text[i]
+        if c == " " or c == "\t" or c == "\r" or c == "\n":
+            if c == "\n":
+                line += 1
+            i += 1
+            continue
+        # 注释到行尾（引号/ENC 内不会到达此处）
+        if c == "#":
+            while i < n and text[i] != "\n":
+                i += 1
+            continue
+        if c == "\"" or c == "'":
+            let l0 = line
+            let r = px_scan_string(text, i, line)
+            if not r["ok"]:
+                return {"ok": false, "tokens": [], "error": r["err"]}
+            toks.append({"t": "str", "v": r["v"], "line": l0})
+            i = r["i"]
+            line = r["line"]
+            continue
+        if px_isdigit(c) or ((c == "-" or c == "+") and i + 1 < n and px_isdigit(text[i + 1])):
+            let r = px_scan_number(text, i, line)
+            if not r["ok"]:
+                return {"ok": false, "tokens": [], "error": r["err"]}
+            toks.append(r["tok"])
+            i = r["i"]
+            continue
+        if px_isid0(c):
+            let r = px_scan_ident(text, i, line)
+            if not r["ok"]:
+                return {"ok": false, "tokens": [], "error": r["err"]}
+            toks.append(r["tok"])
+            i = r["i"]
+            continue
+        if c == "{":
+            toks.append({"t": "lbrace", "v": "", "line": line})
+            i += 1
+            continue
+        if c == "}":
+            toks.append({"t": "rbrace", "v": "", "line": line})
+            i += 1
+            continue
+        if c == "[":
+            toks.append({"t": "lbrack", "v": "", "line": line})
+            i += 1
+            continue
+        if c == "]":
+            toks.append({"t": "rbrack", "v": "", "line": line})
+            i += 1
+            continue
+        if c == ",":
+            toks.append({"t": "comma", "v": "", "line": line})
+            i += 1
+            continue
+        if c == "=":
+            toks.append({"t": "eq", "v": "", "line": line})
+            i += 1
+            continue
+        if c == "(":
+            toks.append({"t": "lparen", "v": "", "line": line})
+            i += 1
+            continue
+        if c == ")":
+            toks.append({"t": "rparen", "v": "", "line": line})
+            i += 1
+            continue
+        if c == ":":
+            return {"ok": false, "tokens": [], "error": "line " + str(line) + ": 意外的 ':' —— PXML 用 '=' 赋值，不用冒号（YAML 请走 yaml.px）"}  # noqa
+        if c == "-" or c == "+":
+            return {"ok": false, "tokens": [], "error": "line " + str(line) + ": 意外的 '" + c + "'（期望数字）"}  # noqa
+        return {"ok": false, "tokens": [], "error": "line " + str(line) + ": 无法识别的字符 '" + c + "'"}
+    toks.append({"t": "eof", "v": "", "line": line})
+    return {"ok": true, "tokens": toks, "error": ""}
+# ============================================================
+# ============================================================
+# 语法分析（递归下降，纯函数风格：状态显式传递，无全局变量）
+# token 流尾部恒有 eof token，peek 永不越界。
+# 每个解析函数返回 {"v": 节点, "pos": 新位置, "err": 错误消息}
+# ============================================================
+def px_seen(arr, key):
+    var i = 0
+    while i < len(arr):
+        if arr[i] == key:
+            return true
+        i += 1
+    return false
+def px_tname(tk):
+    let t = tk["t"]
+    if t == "eof":
+        return "文件结束"
+    if t == "ident":
+        return "标识符 '" + str(tk["v"]) + "'"
+    if t == "str":
+        return "字符串"
+    if t == "int" or t == "float" or t == "dur":
+        return "数值"
+    if t == "enc":
+        return "ENC 加密值"
+    if t == "lbrace":
+        return "'{'"
+    if t == "rbrace":
+        return "'}'"
+    if t == "lbrack":
+        return "'['"
+    if t == "rbrack":
+        return "']'"
+    if t == "comma":
+        return "','"
+    if t == "eq":
+        return "'='"
+    if t == "lparen":
+        return "'('"
+    if t == "rparen":
+        return "')'"
+    return "token"
+# ---- 键 ----
+def px_parse_key(toks, pos):
+    let tk = toks[pos]
+    if tk["t"] == "ident" or tk["t"] == "str":
+        return {"v": tk["v"], "pos": pos + 1, "err": ""}
+    return {"v": "", "pos": pos, "err": "line " + str(tk["line"]) + ": 期望键名（标识符或字符串），但遇到 " + px_tname(tk)}  # noqa
+# ---- 值 ----
+def px_parse_value(toks, pos):
+    let tk = toks[pos]
+    let t = tk["t"]
+    if t == "str":
+        return {"v": tk["v"], "pos": pos + 1, "err": ""}
+    if t == "int":
+        return {"v": tk["v"], "pos": pos + 1, "err": ""}
+    if t == "float":
+        return {"v": tk["v"], "pos": pos + 1, "err": ""}
+    if t == "dur":
+        return {"v": px_dur_ns(tk["v"], tk["u"]), "pos": pos + 1, "err": ""}
+    if t == "enc":
+        return {"v": tk["v"], "pos": pos + 1, "err": ""}
+    if t == "lbrace":
+        return px_parse_container(toks, pos)
+    if t == "lbrack":
+        return px_parse_array(toks, pos)
+    if t == "ident":
+        let name = tk["v"]
+        if name == "true":
+            return {"v": true, "pos": pos + 1, "err": ""}
+        if name == "false":
+            return {"v": false, "pos": pos + 1, "err": ""}
+        if name == "null":
+            return {"v": null, "pos": pos + 1, "err": ""}
+        let nx = toks[pos + 1]
+        if nx["t"] == "lparen":
+            return px_parse_call(toks, pos)
+        return {"v": null, "pos": pos, "err": "line " + str(tk["line"]) + ": 意外的标识符 '" + name + "'（裸值不允许，字符串请加引号）"}  # noqa
+    return {"v": null, "pos": pos, "err": "line " + str(tk["line"]) + ": 期望值，但遇到 " + px_tname(tk)}
+# ---- 调用 env() / include()（parser 不执行，保留 call 节点）----
+def px_parse_call(toks, pos):
+    let tk = toks[pos]
+    let name = tk["v"]
+    var p = pos + 2  # 跳过 ident 与 '('
+    var args = []
+    while true:
+        let at = toks[p]
+        if at["t"] == "rparen":
+            break
+        if at["t"] == "eof":
+            return {"v": null, "pos": pos, "err": "line " + str(at["line"]) + ": 调用 '(' 未闭合"}
+        if at["t"] == "comma":
+            p += 1
+            continue
+        if at["t"] == "str":
+            args.append(at["v"])
+            p += 1
+            continue
+        return {"v": null, "pos": pos, "err": "line " + str(at["line"]) + ": 调用参数只允许字符串字面量"}
+    if name != "include" and name != "env":
+        return {"v": null, "pos": pos, "err": "line " + str(tk["line"]) + ": 不支持的调用 '" + name + "'（仅 include/env）"}  # noqa
+    var d = px_nd()
+    d.set("__call", name)
+    d.set("args", args)
+    return {"v": d, "pos": p + 1, "err": ""}
+# ---- 数组 ----
+def px_parse_array(toks, pos):
+    var arr = []
+    var p = pos + 1
+    while true:
+        let tk = toks[p]
+        if tk["t"] == "rbrack":
+            return {"v": arr, "pos": p + 1, "err": ""}
+        if tk["t"] == "eof":
+            return {"v": null, "pos": pos, "err": "line " + str(tk["line"]) + ": '[' 未闭合"}
+        if tk["t"] == "comma":
+            p += 1
+            continue
+        let vr = px_parse_value(toks, p)
+        if len(vr["err"]) > 0:
+            return {"v": null, "pos": p, "err": vr["err"]}
+        arr.append(vr["v"])
+        p = vr["pos"]
+# ---- 语句体（顶层 / 容器 {} 共用；容器内允许逗号分隔，顶层禁止）----
+def px_parse_body(toks, pos, in_con):
+    var node = px_nd()
+    var seen = []
+    var p = pos
+    while true:
+        while in_con and toks[p]["t"] == "comma":
+            p += 1
+        let tk = toks[p]
+        let t = tk["t"]
+        if t == "eof":
+            if in_con:
+                return {"v": null, "pos": pos, "err": "line " + str(tk["line"]) + ": '{' 未闭合"}
+            return {"v": node, "pos": p, "err": ""}
+        if t == "rbrace":
+            if in_con:
+                return {"v": node, "pos": p + 1, "err": ""}
+            return {"v": null, "pos": p, "err": "line " + str(tk["line"]) + ": 多余的 '}'"}
+        if t == "comma":
+            return {"v": null, "pos": p, "err": "line " + str(tk["line"]) + ": 顶层不允许逗号"}
+        let kr = px_parse_key(toks, p)
+        if len(kr["err"]) > 0:
+            return {"v": null, "pos": p, "err": kr["err"]}
+        let k = kr["v"]
+        if px_seen(seen, k):
+            return {"v": null, "pos": p, "err": "line " + str(tk["line"]) + ": 重复键 '" + k + "'"}
+        seen.append(k)
+        let p1 = kr["pos"]
+        let nx = toks[p1]
+        if nx["t"] == "lbrace":
+            let cr = px_parse_container(toks, p1)
+            if len(cr["err"]) > 0:
+                return {"v": null, "pos": p1, "err": cr["err"]}
+            node.set(k, cr["v"])
+            p = cr["pos"]
+        elif nx["t"] == "eq":
+            let vr = px_parse_value(toks, p1 + 1)
+            if len(vr["err"]) > 0:
+                return {"v": null, "pos": p1, "err": vr["err"]}
+            node.set(k, vr["v"])
+            p = vr["pos"]
+        else:
+            return {"v": null, "pos": p1, "err": "line " + str(nx["line"]) + ": 期望 '=' 或 '{'，但遇到 " + px_tname(nx)}  # noqa
+# ---- 容器 {}（block 与 dict 同形）----
+def px_parse_container(toks, pos):
+    return px_parse_body(toks, pos + 1, true)
+# ---- 顶层文档 ----
+def px_parse_document(toks):
+    return px_parse_body(toks, 0, false)
+# ---- 入口 ----
+def pxml_parse(text):
+    let tk = px_tokenize(text)
+    if not tk["ok"]:
+        return {"ok": false, "error": tk["error"]}
+    let pr = px_parse_document(tk["tokens"])
+    if len(pr["err"]) > 0:
+        return {"ok": false, "error": pr["err"]}
+    return {"ok": true, "value": pr["v"]}

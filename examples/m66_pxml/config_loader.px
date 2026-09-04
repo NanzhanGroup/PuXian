@@ -1,0 +1,172 @@
+# ============================================================
+# config_loader.px —— PXML 消费方加载器（Dogfood 演示）
+# ------------------------------------------------------------
+# 作用：读取 .pxml 配置文件 → pxml_parse → 递归展开
+#       env("X") / env("X","默认") / include("相对路径") / ENC[...]
+#       返回可直接消费的配置 dict。
+#
+# 分层铁律（docs/CONFIG-FORMAT.md §5.3）：
+#   - 解析器（pxml.px）只识别 ENC[...] 为带标记字符串，不解密；
+#   - 本加载器（消费方）负责运行时展开与解密：
+#       * env → 环境变量（第一道防线，不落盘）
+#       * include → 递归读文件合并（循环检测）
+#       * ENC  → 当 decrypt=true 且 env("PXML_MASTER_KEY") 存在时解密；
+#                否则原样保留（懒解密，消费方想解时再解）
+#
+# 依赖：pxml.px（仓库根，../pxml.px）、read_file/env/aes_gcm/base64
+# 注意：ENC 解密用到 aes_gcm/base64/hex，pxc run（pxi 解释器）可能缺
+#       native，建议 pxc build 编译产物运行解密演示（见 README）。
+# ============================================================
+import std.pxml
+# ---- 空 dict / 基础工具（PuXian 中 {} 字面量是 null）----
+def lx_nd():
+    return json_parse("{}")
+def lx_is_call(node):
+    if type(node) != "dict":
+        return false
+    return node.has("__call")
+# 拆 ENC 字符串为 {alg,kid,data,iv,tag}；非 ENC 返回 null
+# 输入形如 ENC[aes256gcm, kid:demo, data:..., iv:..., tag:...]
+def lx_enc_parse(s):
+    if len(s) < 5 or s[0:4] != "ENC[":
+        return null
+    var inner = s[4:len(s) - 1]  # 去掉 "ENC[" 与尾部 "]"
+    var fields = lx_nd()
+    var segs = split(inner, ",")
+    var i = 0
+    while i < len(segs):
+        var seg = trim(segs[i])
+        var kv = split(seg, ":")
+        if len(kv) == 1:
+            fields.set("alg", trim(kv[0]))  # 首段裸算法名
+        else:
+            fields.set(trim(kv[0]), trim(kv[1]))
+        i += 1
+    return fields
+# ---- ENC 解密（v1：aes256gcm，主密钥 env("PXML_MASTER_KEY")）----
+# enc_str 原样保留的 ENC[...]；key 32 字节主密钥
+# 返回明文或 null（tag 校验失败 / 非 aes256gcm）
+def lx_enc_decrypt(enc_str, key):
+    var f = lx_enc_parse(enc_str)
+    if f == null:
+        return null
+    if f.has("alg") and f["alg"] != "aes256gcm":
+        return null
+    if not (f.has("data") and f.has("iv") and f.has("tag")):
+        return null
+    # data/tag/iv 均为 base64 → 解回字节 → 拼 hex → runtime aes_gcm_decrypt
+    var dbytes = base64_decode(f["data"])
+    var tbytes = base64_decode(f["tag"])
+    var ivraw = base64_decode(f["iv"])
+    var hexall = bytes_to_hex(dbytes) + bytes_to_hex(tbytes)
+    return aes_gcm_decrypt(hexall, key, ivraw)
+# ---- env 展开 ----
+# call 节点 {"__call":"env","args":["X"]} 或 ["X","默认"]
+def lx_resolve_env(node):
+    var args = node["args"]
+    var name = args[0]
+    var v = env(name)
+    if v == null and len(args) >= 2:
+        return args[1]
+    return v
+# ---- include 展开：读文件 → parse → 递归 resolve ----
+# base_dir：当前文件所在目录（include 相对当前文件）
+# seen：已加载文件路径 list（循环检测）
+def lx_resolve_include(node, base_dir, seen, decrypt):
+    var rel = node["args"][0]
+    var path = base_dir + "/" + rel
+    if seen.contains(path):
+        panic("include 循环检测: " + path)
+    seen.append(path)
+    var text = read_file(path)
+    var r = pxml_parse(text)
+    if not r["ok"]:
+        panic("include 解析失败 " + path + ": " + r["error"])
+    var v = lx_resolve(r["value"], base_dir, seen, decrypt)
+    seen.pop()
+    return v
+# ---- 递归展开配置树 ----
+# 返回：普通值原样；env/include call → 展开值；ENC 字符串 → 解密或保留；
+#       dict/list 递归。
+def lx_resolve(node, base_dir, seen, decrypt):
+    if lx_is_call(node):
+        var kind = node["__call"]
+        if kind == "env":
+            return lx_resolve_env(node)
+        if kind == "include":
+            return lx_resolve_include(node, base_dir, seen, decrypt)
+        panic("未知 call: " + kind)
+    var t = type(node)
+    if t == "dict":
+        var out = lx_nd()
+        var keys = node.keys()
+        var i = 0
+        while i < len(keys):
+            var k = keys[i]
+            out.set(k, lx_resolve(node[k], base_dir, seen, decrypt))
+            i += 1
+        return out
+    if t == "list":
+        var out = []
+        var j = 0
+        while j < len(node):
+            out.append(lx_resolve(node[j], base_dir, seen, decrypt))
+            j += 1
+        return out
+    if t == "string" and len(node) >= 4 and node[0:4] == "ENC[":
+        if not decrypt:
+            return node  # 懒解密：默认保留标记字符串
+        var key = env("PXML_MASTER_KEY")
+        if key == null:
+            return node  # 无主密钥 → 保留原样
+        var plain = lx_enc_decrypt(node, key)
+        if plain == null:
+            return node  # 解密失败 → 保留原样（防误伤）
+        return plain
+    return node
+# ---- 顶层入口 ----
+# load(path, {decrypt:bool}) → config dict；失败 panic
+# decrypt=false：ENC 保留标记；true：尝试用 PXML_MASTER_KEY 解密
+def pxml_load(path, opts):
+    var text = read_file(path)
+    var r = pxml_parse(text)
+    if not r["ok"]:
+        panic("pxml 解析失败 " + path + ": " + r["error"])
+    var base_dir = "."
+    var parts = split(path, "/")
+    if len(parts) > 1:
+        # 去掉最后一段文件名，其余拼目录
+        var dirs = []
+        var i = 0
+        while i < len(parts) - 1:
+            dirs.append(parts[i])
+            i += 1
+        base_dir = join("/", dirs)
+    var seen = []
+    var decrypt = false
+    if opts != null and opts.has("decrypt") and opts["decrypt"] == true:
+        decrypt = true
+    return lx_resolve(r["value"], base_dir, seen, decrypt)
+# ---- 简易 JSON 化（演示/调试用）----
+def lx_json(node):
+    var t = type(node)
+    if t == "dict":
+        var parts = []
+        var keys = node.keys()
+        var i = 0
+        while i < len(keys):
+            parts.append("\"" + keys[i] + "\":" + lx_json(node[keys[i]]))
+            i += 1
+        return "{" + join(",", parts) + "}"
+    if t == "list":
+        var parts2 = []
+        var j = 0
+        while j < len(node):
+            parts2.append(lx_json(node[j]))
+            j += 1
+        return "[" + join(",", parts2) + "]"
+    if t == "string":
+        return "\"" + node + "\""
+    if node == null:
+        return "null"
+    return str(node)

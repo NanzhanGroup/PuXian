@@ -1,0 +1,56 @@
+# ============================================================
+# demo_enc.px —— PXML ENC 加密/解密 Dogfood 演示
+# ------------------------------------------------------------
+# 运行（需 pxc build，因 ENC 解密依赖 aes_gcm/base64 native，
+#      pxc run 解释器缺这些 native，这是已知语言缺口）：
+#   cd /data/code/token-cache-px
+#   PXML_MASTER_KEY=0123456789abcdef0123456789abcdef pxc build dogfood/demo_enc.px
+#   PXML_MASTER_KEY=0123456789abcdef0123456789abcdef ./dogfood/build/demo_enc
+# 演示：
+#   1) 用主密钥+iv 加密明文，生成标准 ENC[aes256gcm,...] 密文字符串
+#   2) 将密文写入临时 .pxml 文本 → pxml_parse → config_loader 懒解密
+#   3) 校验解回明文一致（与 dogfood/app.pxml 中 database.password 同源）
+# ============================================================
+import "./config_loader.px"
+var g_pass = 0
+var g_fail = 0
+def check(name, cond, extra):
+    if cond:
+        g_pass += 1
+    else:
+        g_fail += 1
+        print("FAIL:", name, extra)
+def main():
+    var key = env("PXML_MASTER_KEY")
+    check("主密钥存在", key != null, "请先 export PXML_MASTER_KEY=0123456789abcdef0123456789abcdef")
+    if key == null:
+        exit(1)
+    # --- 1) 加密生成 ENC 字符串 ---
+    var iv = "1234567890ab"
+    var plain = "s3cr3t-db-pass-2024"
+    var hexall = aes_gcm_encrypt(plain, key, iv)
+    var n = len(hexall)
+    var ct_hex = hexall[0:n - 32]
+    var tag_hex = hexall[n - 32:n]
+    var data_b64 = base64_encode(hex_to_bytes(ct_hex))
+    var tag_b64 = base64_encode(hex_to_bytes(tag_hex))
+    var iv_b64 = base64_encode(iv)
+    var enc_str = "ENC[aes256gcm, kid:demo, data:" + data_b64 + ", iv:" + iv_b64 + ", tag:" + tag_b64 + "]"  # noqa
+    print("生成 ENC:", enc_str)
+    # --- 2) 写入临时 .pxml 并加载（decrypt=true）---
+    var pxml_text = "db { password = " + enc_str + "\n}\n"
+    var r = pxml_parse(pxml_text)
+    check("临时配置解析 ok", r["ok"], r)
+    if not r["ok"]:
+        exit(1)
+    var out = lx_resolve(r["value"], ".", [], true)
+    var got = out["db"]["password"]
+    check("ENC 解密还原", got == plain, "got=" + str(got) + " want=" + plain)
+    # --- 3) 与真实 app.pxml 的 database.password 同源校验 ---
+    var cfg = pxml_load("app.pxml", json_parse("{\"decrypt\":true}"))
+    check("app.pxml 库密码解密", cfg["database"]["password"] == plain, cfg["database"]["password"])
+    print("")
+    print("=== 结果: pass=" + str(g_pass) + " fail=" + str(g_fail) + " ===")
+    if g_fail > 0:
+        exit(1)
+    print("ENC 加解密 Dogfood 演示通过 ✓")

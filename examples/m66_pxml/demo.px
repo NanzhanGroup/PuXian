@@ -1,0 +1,53 @@
+# ============================================================
+# demo.px —— PXML Dogfood 加载演示（pxc run / pxc build 均可）
+# ------------------------------------------------------------
+# 运行：cd /data/code/token-cache-px
+#   pxc run dogfood/demo.px            # 解释模式
+#   pxc build dogfood/demo.px && ./dogfood/build/demo   # 编译模式
+# 说明：本演示只加载与展开（decrypt=false，ENC 原样保留），
+#       双模式一致；真实解密演示见 demo_enc.px（需 build）。
+# ============================================================
+import "./config_loader.px"
+var g_pass = 0
+var g_fail = 0
+def check(name, cond, extra):
+    if cond:
+        g_pass += 1
+    else:
+        g_fail += 1
+        print("FAIL:", name, extra)
+print("=== PXML Dogfood 加载 examples/m66_pxml/app.pxml ===")
+var cfg = pxml_load("app.pxml", json_parse("{\"decrypt\":false}"))
+# --- app 块 ---
+check("app.name", cfg["app"]["name"] == "token-cache-px", cfg["app"]["name"])
+check("app.version", cfg["app"]["version"] == "0.5.0", cfg["app"]["version"])
+# --- server 块：duration 720h → 纳秒 ---
+var srv = cfg["server"]
+check("server.port", srv["port"] == 8377, srv["port"])
+check("server.ttl", srv["ttl"] == 2592000000000000, srv["ttl"])
+check("server.tags", len(srv["tags"]) == 3 and srv["tags"][2] == "pxml", srv["tags"])
+# --- include 分片：upstream 是 upstream.pxml 解析后的 dict ---
+var up = cfg["upstream"]
+check("upstream.name", up["name"] == "primary-upstream", up)
+check("upstream.timeout", up["timeout"] == 3000000000, up["timeout"])
+check("upstream.nodes", len(up["nodes"]) == 3 and up["nodes"][0]["host"] == "10.0.0.1", up["nodes"])
+# --- env 展开：无 LLM_API_KEY → null；带默认值的 base_url → 默认 ---
+var llm = cfg["llm"]
+check("llm.model", llm["model"] == "deepseek-v4-flash", llm["model"])
+check("llm.base_url default", llm["base_url"] == "https://api.deepseek.com/v1", llm["base_url"])
+check("llm.api_key null", llm["api_key"] == null, llm["api_key"])
+# --- cache：duration 25ms + 引号键 ---
+var cc = cfg["cache"]
+check("cache.shards", cc["shards"] == 16, cc["shards"])
+check("cache.miss_penalty", cc["miss_penalty"] == 25000000, cc["miss_penalty"])
+check("cache.中文键", cc["引号键"] == "支持中文键", cc["引号键"])
+# --- ENC：decrypt=false → 原样保留（懒解密标记）---
+var db = cfg["database"]
+var enc = db["password"]
+check("enc.prefix", type(enc) == "string" and enc[0:4] == "ENC[", enc)
+check("enc.length", len(enc) > 20, enc)
+print("")
+print("=== 结果: pass=" + str(g_pass) + " fail=" + str(g_fail) + " ===")
+if g_fail > 0:
+    exit(1)
+print("Dogfood 加载演示通过 ✓")

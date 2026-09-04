@@ -1,0 +1,53 @@
+# ============================================================
+# app.pxml —— token-cache-px Dogfood 配置文件（真实加载验证）
+# ------------------------------------------------------------
+# 用法：见 dogfood/demo.px（pxc run / pxc build 均可）
+#      解密验证见 dogfood/demo_enc.px（需 pxc build，因 ENC 解密
+#      依赖 aes_gcm/base64 native，pxc run 解释器缺）
+# 覆盖：块/嵌套 dict/数组/duration/env/include/ENC/注释/引号键
+# ============================================================
+
+app {
+    name = "token-cache-px"
+    version = "0.5.0"
+    description = "PuXian 语言练手仓库（PXML 配置语言 dogfood 载体）"
+}
+
+server {
+    host = "0.0.0.0"
+    port = 8377            # 行尾注释
+    ttl = 720h             # duration 原生 → 纳秒
+    read_timeout = 5s
+    tags = ["llm", "cache", "pxml",]
+}
+
+# include 分片：真实上游配置（相对当前文件目录解析）
+upstream = include("upstream.pxml")
+
+llm {
+    # 第一道防线：敏感值不落盘，经环境变量注入（带默认值演示）
+    api_key = env("LLM_API_KEY")
+    base_url = env("LLM_BASE_URL", "https://api.deepseek.com/v1")
+    model = "deepseek-v4-flash"
+    temperature = 0.7
+    max_tokens = 2048
+}
+
+cache {
+    engine = "lru"
+    capacity = 100000
+    shards = 16
+    hit_ratio_warn = 0.85
+    miss_penalty = 25ms
+    "引号键" = "支持中文键"   # 引号键示例
+}
+
+database {
+    host = "127.0.0.1"
+    port = 3306
+    user = "pxml"
+    # 第二道防线：字段级加密（解析器只识别不解密；消费方懒解密）
+    # 密文由 demo_enc.px 用 key=0123456789abcdef0123456789abcdef
+    # iv=1234567890ab 对明文 "s3cr3t-db-pass-2024" 生成
+    password = ENC[aes256gcm, kid:demo, data:veUUjlm/A7qSQSUUWhf40Sywag==, iv:MTIzNDU2Nzg5MGFi, tag:bhpDGxR+n0FTZjslF3dISw==]
+}
