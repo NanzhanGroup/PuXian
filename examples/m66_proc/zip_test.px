@@ -1,0 +1,24 @@
+# M66-S1 zip 密码解包测试（编译模式）
+# 用法：zip_test <zip路径> <输出目录> <密码>（编译版 args() 首元素=程序自身，用户参数自 i=1）
+# 支持 zipcrypto 传统 + WinZip AES-256；返回文件数，内容由 verify.sh 用 grep 核对
+var pass = 0
+var fail = 0
+def check(name, cond):
+    if cond:
+        pass += 1
+        print("PASS " + name)
+    else:
+        fail += 1
+        print("FAIL " + name)
+let as_ = args()
+var zip_path = as_[1]
+var out_dir = as_[2]
+var pwd = as_[3]
+var n = zip_unpack(zip_path, out_dir, pwd)
+check("zip_unpack count>0", n > 0)
+# 至少解出一个文件
+check("输出目录存在文件", exists(out_dir + "/a.txt") or exists(out_dir + "/sub/c.txt"))
+print("pass=" + str(pass) + " fail=" + str(fail))
+if fail > 0:
+    exit(1)
+exit(0)

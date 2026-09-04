@@ -1,0 +1,52 @@
+# os_rename / os_remove_all / os_random_hex / os_file_sha256 native 验证（编译模式）
+# 注：os_remove_all 等 native 若 pxi 解释模式缺失，务必 pxc build 后跑产物
+var pass = 0
+var fail = 0
+def check(name, cond):
+    if cond:
+        pass += 1
+        print("PASS " + name)
+    else:
+        fail += 1
+        print("FAIL " + name)
+# ---------- 准备 ----------
+var base = "/tmp/osfs_t"
+var sha_dir = "/tmp/osfs_sha"
+os_remove_all(base)
+os_remove_all(sha_dir)
+mkdir(base + "/a/b")
+write_file(base + "/a/b/c.txt", "hello")
+write_file(base + "/x.txt", "x")
+mkdir(base + "/e")
+check("准备: 目录树已建", exists(base + "/a/b/c.txt") and exists(base + "/x.txt"))
+# ---------- os_rename ----------
+check("rename 文件", os_rename(base + "/a/b/c.txt", base + "/a/b/d.txt"))
+check("rename 后旧路径消失", not exists(base + "/a/b/c.txt"))
+check("rename 后新路径存在", exists(base + "/a/b/d.txt"))
+check("rename 跨目录", os_rename(base + "/a/b/d.txt", base + "/d.txt"))
+check("rename 移动后新路径存在", exists(base + "/d.txt"))
+check("rename 源不存在返回 false", os_rename(base + "/no_such", base + "/x2.txt") == false)
+# ---------- os_remove_all ----------
+check("remove_all 递归删除", os_remove_all(base))
+check("删除后整树消失", not exists(base))
+check("remove_all('') 拒绝", os_remove_all("") == false)
+check("remove_all('/') 拒绝", os_remove_all("/") == false)
+# ---------- os_random_hex ----------
+var r8 = os_random_hex(8)
+check("random_hex(8) 长度=16", len(r8) == 16)
+var ra = os_random_hex(16)
+var rb = os_random_hex(16)
+check("random_hex(16) 长度=32", len(ra) == 32)
+check("random_hex 两次不同", ra != rb)
+# ---------- os_file_sha256 ----------
+mkdir(sha_dir)
+write_file(sha_dir + "/hello.txt", "hello")
+var h = os_file_sha256(sha_dir + "/hello.txt")
+check("sha256('hello') == 已知值", h == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")  # noqa
+check("sha256(不存在文件) == null", os_file_sha256(sha_dir + "/no.txt") == null)
+os_remove_all(sha_dir)
+print("---")
+print("pass=" + str(pass) + " fail=" + str(fail))
+if fail > 0:
+    exit(1)
+exit(0)

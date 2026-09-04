@@ -221,10 +221,19 @@ static LXValue bi_sse_read(LXValue* args, int nargs, void* ctx);
 static LXValue bi_gc(LXValue* args, int nargs, void* ctx);
 // M23 P1：进程/信号（os_pid/os_spawn/os_wait/os_kill/signal）
 static LXValue bi_os_pid(LXValue* args, int nargs, void* ctx);
+static LXValue bi_os_exec(LXValue* args, int nargs, void* ctx);
+static LXValue bi_os_rename(LXValue* args, int nargs, void* ctx);
+static LXValue bi_os_remove_all(LXValue* args, int nargs, void* ctx);
+static LXValue bi_os_random_hex(LXValue* args, int nargs, void* ctx);
+static LXValue bi_os_file_sha256(LXValue* args, int nargs, void* ctx);
 static LXValue bi_os_spawn(LXValue* args, int nargs, void* ctx);
 static LXValue bi_os_spawn_capture(LXValue* args, int nargs, void* ctx);
 static LXValue bi_os_wait(LXValue* args, int nargs, void* ctx);
 static LXValue bi_os_kill(LXValue* args, int nargs, void* ctx);
+static LXValue bi_os_capture(LXValue* args, int nargs, void* ctx); // M66
+static LXValue bi_os_popen(LXValue* args, int nargs, void* ctx);   // M66
+static LXValue bi_unix_connect(LXValue* args, int nargs, void* ctx); // M66
+
 static LXValue bi_signal(LXValue* args, int nargs, void* ctx);
 // M23b P1：二进制安全字节串（bytes 类型）
 static LXValue bi_bytes(LXValue* args, int nargs, void* ctx);
@@ -3180,37 +3189,62 @@ static LXValue bi_read_file(LXValue* args, int nargs, void* ctx) {
 
 static LXValue bi_write_file(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2 || args[0].type != PX_STR) px_error("write_file 需要 (路径, 内容)");
+    if (nargs < 2 || nargs > 3 || args[0].type != PX_STR) px_error("write_file 需要 (路径, 内容[, mode])");
     const char* path = args[0].as.obj->as.str.data;
     const char* content;
     int clen;
     if (args[1].type == PX_STR) { content = args[1].as.obj->as.str.data; clen = args[1].as.obj->as.str.len; }
     else { content = px_to_string(args[1]); clen = (int)strlen(content); }
-    FILE* f = fopen(path, "wb");
-    if (!f) px_error("io: 写入文件失败 %s", path);
-    fwrite(content, 1, clen, f);
-    fclose(f);
+    mode_t mode = 0666;
+    int has_mode = 0;
+    if (nargs == 3) {
+        if (args[2].type != PX_INT) px_error("write_file 的 mode 需要 int（八进制权限，如 0o600）");
+        mode = (mode_t)args[2].as.i;
+        has_mode = 1;
+    }
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, mode);
+    if (fd < 0) px_error("io: 写入文件失败 %s", path);
+    if (has_mode) fchmod(fd, mode);  // 显式 mode 不受 umask 影响（写 0600 密钥）
+    const char* p = content;
+    int left = clen;
+    while (left > 0) {
+        ssize_t n = write(fd, p, (size_t)left);
+        if (n < 0) { if (errno == EINTR) continue; int e = errno; close(fd); errno = e; px_error("io: 写入文件失败 %s", path); }
+        p += n; left -= (int)n;
+    }
+    close(fd);
     return px_null();
 }
 
 static LXValue bi_append_file(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2 || args[0].type != PX_STR) px_error("append_file 需要 (路径, 内容)");
+    if (nargs < 2 || nargs > 3 || args[0].type != PX_STR) px_error("append_file 需要 (路径, 内容[, mode])");
     const char* path = args[0].as.obj->as.str.data;
     const char* content;
     int clen;
     if (args[1].type == PX_STR) { content = args[1].as.obj->as.str.data; clen = args[1].as.obj->as.str.len; }
     else { content = px_to_string(args[1]); clen = (int)strlen(content); }
-    FILE* f = fopen(path, "ab");
-    if (!f) px_error("io: 追加写入失败 %s", path);
-    fwrite(content, 1, clen, f);
-    fclose(f);
+    mode_t mode = 0666;
+    int has_mode = 0;
+    if (nargs == 3) {
+        if (args[2].type != PX_INT) px_error("append_file 的 mode 需要 int（八进制权限，如 0o600）");
+        mode = (mode_t)args[2].as.i;
+        has_mode = 1;
+    }
+    int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, mode);
+    if (fd < 0) px_error("io: 追加写入失败 %s", path);
+    if (has_mode) fchmod(fd, mode);
+    const char* p = content;
+    int left = clen;
+    while (left > 0) {
+        ssize_t n = write(fd, p, (size_t)left);
+        if (n < 0) { if (errno == EINTR) continue; int e = errno; close(fd); errno = e; px_error("io: 追加写入失败 %s", path); }
+        p += n; left -= (int)n;
+    }
+    close(fd);
     return px_null();
 }
 
-// ---- M12 P0：文件随机读写 + fsync（WAL / 增量日志基石）----
-// read_at(path, offset, length) → 字符串：从 offset 偏移读 length 字节
-// （offset 超出 EOF 返回空串；读不足 length 返回实际读到的字节）
 static LXValue bi_read_at(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 3 || args[0].type != PX_STR) px_error("read_at 需要 (路径, 偏移, 长度)");
@@ -5384,9 +5418,19 @@ void px_register_builtins(void) {
     // M23 P1：进程/信号（文殊场景收尾：外部工具编排、守护进程、优雅停机）
     px_set_global("os_pid", px_native("os_pid", bi_os_pid));
     px_set_global("os_spawn", px_native("os_spawn", bi_os_spawn));
+    px_set_global("os_exec", px_native("os_exec", bi_os_exec));
+    px_set_global("os_rename", px_native("os_rename", bi_os_rename));
+    px_set_global("os_remove_all", px_native("os_remove_all", bi_os_remove_all));
+    px_set_global("os_random_hex", px_native("os_random_hex", bi_os_random_hex));
+    px_set_global("os_file_sha256", px_native("os_file_sha256", bi_os_file_sha256));
     px_set_global("os_spawn_capture", px_native("os_spawn_capture", bi_os_spawn_capture));
     px_set_global("os_wait", px_native("os_wait", bi_os_wait));
     px_set_global("os_kill", px_native("os_kill", bi_os_kill));
+    // M66：qg-issue 合入（unix_connect/os_capture/os_popen）
+    px_set_global("unix_connect", px_native("unix_connect", bi_unix_connect));
+    px_set_global("os_capture", px_native("os_capture", bi_os_capture));
+    px_set_global("os_popen", px_native("os_popen", bi_os_popen));
+
     px_set_global("signal", px_native("signal", bi_signal));
     // M23d P1：RSA（PKCS#1 v1.5，密钥/密文/签名均 hex；实现 runtime_rsa.c）
     px_set_global("rsa_gen_key", px_native("rsa_gen_key", bi_rsa_gen_key));
@@ -5548,6 +5592,146 @@ static LXValue bi_os_spawn_capture(LXValue* args, int nargs, void* ctx) {
     return px_list_n(res, 2);
 }
 
+// os_exec(cmd, args?) → 进程替换（execvp）：成功不返回，当前进程被目标程序替换；
+//                        失败（命令不存在/无权限等）px_error 报错退出。
+// 与 os_spawn（fork+execvp 返回 pid）互补：用于 launcher/daemon 场景的语义级 exec。
+static LXValue bi_os_exec(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || nargs > 2 || args[0].type != PX_STR)
+        px_error("os_exec 需要 (cmd, args?) 参数，cmd 为字符串");
+    const char* cmd = args[0].as.obj->as.str.data;
+    int argc = 0;
+    char** argv;
+    if (nargs == 2) {
+        if (args[1].type != PX_LIST) px_error("os_exec 的 args 必须是字符串列表");
+        LXObject* list = args[1].as.obj;
+        argc = list->as.list.len;
+        argv = (char**)calloc((size_t)argc + 2, sizeof(char*));
+        argv[0] = strdup(cmd);
+        for (int i = 0; i < argc; i++) {
+            LXValue v = list->as.list.items[i];
+            if (v.type != PX_STR) {
+                for (int j = 0; j <= i; j++) free(argv[j]);
+                free(argv);
+                px_error("os_exec 的 args 必须是字符串列表");
+            }
+            argv[i + 1] = strdup(v.as.obj->as.str.data);
+        }
+        argv[argc + 1] = NULL;
+    } else {
+        argv = (char**)calloc(2, sizeof(char*));
+        argv[0] = strdup(cmd);
+        argv[1] = NULL;
+    }
+    // execvp 成功后当前进程被替换，不会返回
+    execvp(cmd, argv);
+    // 走到这里说明 exec 失败
+    int e = errno;
+    for (int j = 0; j <= argc; j++) free(argv[j]);
+    free(argv);
+    px_error("os_exec 执行 %s 失败: %s", cmd, strerror(e));
+    return px_null(); /* unreachable */
+}
+
+// os_random_hex(n) → 2n 字符小写 hex 字符串：从 /dev/urandom 读 n 字节随机数转 hex。
+// 失败返回 null。用途：生成 agent_id / token（对齐 Go crypto/rand）。
+static LXValue bi_os_random_hex(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_INT)
+        px_error("os_random_hex 需要 (nbytes) 参数");
+    int64_t n64 = args[0].as.i;
+    if (n64 <= 0 || n64 > 1024)
+        px_error("os_random_hex nbytes 需在 1..1024");
+    int n = (int)n64;
+    FILE* f = fopen("/dev/urandom", "rb");
+    if (!f) return px_null();
+    unsigned char* buf = (unsigned char*)malloc((size_t)n);
+    if (!buf) { fclose(f); return px_null(); }
+    size_t got = fread(buf, 1, (size_t)n, f);
+    fclose(f);
+    if (got != (size_t)n) { free(buf); return px_null(); }
+    char* out = (char*)malloc((size_t)n * 2 + 1);
+    if (!out) { free(buf); return px_null(); }
+    for (int i = 0; i < n; i++) {
+        out[i*2]   = "0123456789abcdef"[buf[i] >> 4];
+        out[i*2+1] = "0123456789abcdef"[buf[i] & 15];
+    }
+    out[n*2] = 0;
+    free(buf);
+    LXValue v = px_str(out);
+    free(out);
+    return v;
+}
+
+// os_file_sha256(path) → 64 字符小写 hex 字符串：对文件内容计算 sha256（mbedtls），
+// 失败（不存在/不可读/读不全）返回 null。用途：模块包内容级校验（对齐 Go fileSHA256）。
+static LXValue bi_os_file_sha256(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_STR)
+        px_error("os_file_sha256 需要 (path) 参数");
+    const char* path = args[0].as.obj->as.str.data;
+    FILE* f = fopen(path, "rb");
+    if (!f) return px_null();
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return px_null(); }
+    long sz = ftell(f);
+    if (sz < 0) { fclose(f); return px_null(); }
+    rewind(f);
+    unsigned char* buf = (unsigned char*)malloc((size_t)sz > 0 ? (size_t)sz : 1);
+    if (!buf) { fclose(f); return px_null(); }
+    size_t rd = fread(buf, 1, (size_t)sz, f);
+    fclose(f);
+    unsigned char digest[32];
+    if (rd != (size_t)sz || mbedtls_sha256(buf, rd, digest, 0) != 0) {
+        free(buf);
+        return px_null();
+    }
+    free(buf);
+    char hex[65];
+    bytes_to_hex(digest, 32, hex);
+    return px_str(hex);
+}
+
+// os_rename(old, new) → bool：原子改名/移动（rename(2)）；成功 true，失败 false（os_errno 可查）。
+// 用途：原子替换（update/coreup 下载新包后 rename 覆盖）、文件移动。
+static LXValue bi_os_rename(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2 || args[0].type != PX_STR || args[1].type != PX_STR)
+        px_error("os_rename 需要 (old_path, new_path) 参数");
+    return px_bool(rename(args[0].as.obj->as.str.data, args[1].as.obj->as.str.data) == 0);
+}
+
+// os_remove_all(path) → bool：递归删除文件/目录树（unlink 文件与符号链接；子目录递归后 rmdir）。
+// 成功 true，失败 false（os_errno 可查）。保护：空串与根目录（/、//）拒绝，防误删根。
+static int rm_tree(const char* path) {
+    struct stat st;
+    if (lstat(path, &st) != 0) return -1;
+    if (S_ISDIR(st.st_mode)) {
+        DIR* d = opendir(path);
+        if (!d) return -1;
+        struct dirent* e;
+        int rc = 0;
+        while ((e = readdir(d)) != NULL) {
+            if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+            char child[2048];
+            snprintf(child, sizeof(child), "%s/%s", path, e->d_name);
+            if (rm_tree(child) != 0) { rc = -1; break; }
+        }
+        closedir(d);
+        if (rc != 0) return -1;
+        return rmdir(path);
+    }
+    return unlink(path);
+}
+static LXValue bi_os_remove_all(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_STR)
+        px_error("os_remove_all 需要 (path) 参数");
+    const char* path = args[0].as.obj->as.str.data;
+    if (!path[0]) return px_bool(false);
+    if (strcmp(path, "/") == 0 || strcmp(path, "//") == 0) return px_bool(false); /* 防删根 */
+    return px_bool(rm_tree(path) == 0);
+}
+
 static LXValue bi_os_wait(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1 || args[0].type != PX_INT) px_error("os_wait 需要 (pid) 参数");
@@ -5561,11 +5745,183 @@ static LXValue bi_os_wait(LXValue* args, int nargs, void* ctx) {
 
 static LXValue bi_os_kill(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2 || args[0].type != PX_INT || args[1].type != PX_INT)
-        px_error("os_kill 需要 (pid, sig) 参数");
+    if (nargs < 2 || nargs > 3 || args[0].type != PX_INT || args[1].type != PX_INT)
+        px_error("os_kill 需要 (pid, sig[, group]) 参数");
     pid_t pid = (pid_t)args[0].as.i;
     int sig = (int)args[1].as.i;
+    int group = 0;
+    if (nargs == 3) {
+        if (args[2].type == PX_BOOL) group = args[2].as.b ? 1 : 0;
+        else if (args[2].type == PX_INT) group = args[2].as.i != 0;
+        else px_error("os_kill 的 group 需要 bool");
+    }
+    if (group) return px_bool(kill(-pid, sig) == 0);  // M66：杀进程组（清 worker/sleep 子进程）
     return px_bool(kill(pid, sig) == 0);
+}
+
+// ==================== M66：qg-issue 合入（unix_connect / os_capture / os_popen） ====================
+// unix_connect(socket_path) → fd（Issue 1 / 06 T1）：AF_UNIX SOCK_STREAM 裸连接，
+//   返回持久 fd；失败返回 -1（os_errno 可查，与 M57 fd 族一致）。
+//   收发复用 M57 read(fd)/write(fd,data)（已具备，无需 unix_send/unix_recv）。
+static LXValue bi_unix_connect(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_STR)
+        px_error("unix_connect 需要 (socket_path) 参数");
+    const char* path = args[0].as.obj->as.str.data;
+    if (strlen(path) >= sizeof(((struct sockaddr_un*)0)->sun_path))
+        px_error("unix_connect: socket 路径过长");
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return px_int(-1);
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", path);
+    if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+        int e = errno;
+        close(fd);
+        errno = e;
+        return px_int(-1);
+    }
+    return px_int((int64_t)fd);
+}
+
+// os_capture(cmd, args) → {rc:int, stdout:str, stderr:str} | null（05 G1 / 06 T2）
+// fork+execvp，子进程 stdout/stderr 各接一条管道（分离捕获），父进程 poll 双 fd
+// 读净后 waitpid。rc 约定同 os_spawn_capture：正常=exit code；信号=128+sig；
+// exec 失败=127；pipe/fork/wait 失败=null。用途：安装器/系统管理"跑命令判输出"。
+static LXValue bi_os_capture(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2 || args[0].type != PX_STR || args[1].type != PX_LIST)
+        px_error("os_capture 需要 (cmd, args) 参数");
+    const char* cmd = args[0].as.obj->as.str.data;
+    LXObject* list = args[1].as.obj;
+    int argc = list->as.list.len;
+    char** argv = (char**)calloc((size_t)argc + 2, sizeof(char*));
+    argv[0] = strdup(cmd);
+    for (int i = 0; i < argc; i++) {
+        LXValue v = list->as.list.items[i];
+        if (v.type != PX_STR) {
+            for (int j = 0; j <= i; j++) free(argv[j]);
+            free(argv);
+            px_error("os_capture 的 args 必须是字符串列表");
+        }
+        argv[i + 1] = strdup(v.as.obj->as.str.data);
+    }
+    argv[argc + 1] = NULL;
+    int pout[2], perr[2];
+    if (pipe(pout) != 0 || pipe(perr) != 0) {
+        for (int i = 0; i <= argc; i++) free(argv[i]);
+        free(argv);
+        return px_null();
+    }
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pout[0]); close(pout[1]); close(perr[0]); close(perr[1]);
+        for (int i = 0; i <= argc; i++) free(argv[i]);
+        free(argv);
+        return px_null();
+    }
+    if (pid == 0) {
+        setpgid(0, 0);  // M66：自成进程组 → 支持 os_kill(pid, sig, true) 组杀
+        close(pout[0]); close(perr[0]);
+        dup2(pout[1], 1); dup2(perr[1], 2);
+        close(pout[1]); close(perr[1]);
+        execvp(cmd, argv);
+        _exit(127);
+    }
+    close(pout[1]); close(perr[1]);
+    for (int i = 0; i <= argc; i++) free(argv[i]);
+    free(argv);
+    // poll 双管道读净（防单管道写满死锁）
+    size_t cap_o = 8192, n_o = 0, cap_e = 8192, n_e = 0;
+    char* bo = (char*)xmalloc(cap_o);
+    char* be = (char*)xmalloc(cap_e);
+    int eof_o = 0, eof_e = 0;
+    while (!eof_o || !eof_e) {
+        struct pollfd fds[2];
+        fds[0].fd = pout[0]; fds[0].events = POLLIN; fds[0].revents = 0;
+        fds[1].fd = perr[0]; fds[1].events = POLLIN; fds[1].revents = 0;
+        int pr = poll(fds, 2, -1);
+        if (pr < 0) { if (errno == EINTR) continue; break; }
+        for (int i = 0; i < 2; i++) {
+            if ((fds[i].revents & (POLLIN | POLLHUP)) == 0) continue;
+            int rfd = (i == 0) ? pout[0] : perr[0];
+            int* eof = (i == 0) ? &eof_o : &eof_e;
+            char** buf = (i == 0) ? &bo : &be;
+            size_t* cap = (i == 0) ? &cap_o : &cap_e;
+            size_t* n = (i == 0) ? &n_o : &n_e;
+            if (*n + 4096 > *cap) { *cap *= 2; *buf = (char*)xrealloc(*buf, *cap); }
+            ssize_t r = read(rfd, *buf + *n, *cap - *n);
+            if (r < 0) { if (errno == EINTR) continue; *eof = 1; }
+            else if (r == 0) *eof = 1;
+            else *n += (size_t)r;
+        }
+    }
+    close(pout[0]); close(perr[0]);
+    int status = 0;
+    if (waitpid(pid, &status, 0) < 0) { xfree(bo); xfree(be); return px_null(); }
+    int rc = -1;
+    if (WIFEXITED(status)) rc = WEXITSTATUS(status);
+    else if (WIFSIGNALED(status)) rc = 128 + (int)WTERMSIG(status);
+    LXValue d = px_dict();
+    px_dict_set(d, "rc", px_int((int64_t)rc));
+    px_dict_set(d, "stdout", px_str_len(bo, (int)n_o));
+    px_dict_set(d, "stderr", px_str_len(be, (int)n_e));
+    xfree(bo); xfree(be);
+    return d;
+}
+
+// os_popen(cmd, args) → {pid:int, stdin_fd:int, stdout_fd:int} | null（05 G4 / 06 T2）
+// 双向管道：向子进程 stdin 注入 + 读回 stdout（对话式进程：chat core / sudo 提权等）。
+// 返回 pid + stdin 写端 fd + stdout 读端 fd；用完 os_wait(pid)/os_kill(pid,...) 回收。
+static LXValue bi_os_popen(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2 || args[0].type != PX_STR || args[1].type != PX_LIST)
+        px_error("os_popen 需要 (cmd, args) 参数");
+    const char* cmd = args[0].as.obj->as.str.data;
+    LXObject* list = args[1].as.obj;
+    int argc = list->as.list.len;
+    char** argv = (char**)calloc((size_t)argc + 2, sizeof(char*));
+    argv[0] = strdup(cmd);
+    for (int i = 0; i < argc; i++) {
+        LXValue v = list->as.list.items[i];
+        if (v.type != PX_STR) {
+            for (int j = 0; j <= i; j++) free(argv[j]);
+            free(argv);
+            px_error("os_popen 的 args 必须是字符串列表");
+        }
+        argv[i + 1] = strdup(v.as.obj->as.str.data);
+    }
+    argv[argc + 1] = NULL;
+    int pin[2], pout[2];
+    if (pipe(pin) != 0 || pipe(pout) != 0) {
+        for (int i = 0; i <= argc; i++) free(argv[i]);
+        free(argv);
+        return px_null();
+    }
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pin[0]); close(pin[1]); close(pout[0]); close(pout[1]);
+        for (int i = 0; i <= argc; i++) free(argv[i]);
+        free(argv);
+        return px_null();
+    }
+    if (pid == 0) {
+        setpgid(0, 0);  // M66：自成进程组 → 支持 os_kill(pid, sig, true) 组杀
+        close(pin[1]); close(pout[0]);
+        dup2(pin[0], 0); dup2(pout[1], 1);
+        close(pin[0]); close(pout[1]);
+        execvp(cmd, argv);
+        _exit(127);
+    }
+    close(pin[0]); close(pout[1]);
+    for (int i = 0; i <= argc; i++) free(argv[i]);
+    free(argv);
+    LXValue d = px_dict();
+    px_dict_set(d, "pid", px_int((int64_t)pid));
+    px_dict_set(d, "stdin_fd", px_int((int64_t)pin[1]));
+    px_dict_set(d, "stdout_fd", px_int((int64_t)pout[0]));
+    return d;
 }
 
 // ---- signal：self-pipe + 专用分发线程 ----

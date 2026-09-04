@@ -1,0 +1,9 @@
+# os_exec 进程替换演示（编译模式）：
+#   用法：pxc build exec_demo.px && ./build/exec_demo
+#   期望输出：hello-from-exec（/bin/echo 输出，当前进程已被替换为 /bin/echo）
+#             AFTER 永不打印（exec 成功不返回）
+#   与 os_spawn 区别：PID 不变（同进程替换，非 fork 子进程），可用 ps 观察：
+#     运行前记下进程 PID，运行中 `ps -p <PID> -o comm=` 显示 echo 而非 exec_demo
+#   注意：exec 前若有 print 输出，因 stdout 缓冲未 flush 会被 exec 丢弃（本 demo 故不先 print）
+os_exec("/bin/echo", ["hello-from-exec"])
+print("AFTER (不会打印)")

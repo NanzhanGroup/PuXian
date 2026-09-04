@@ -1,0 +1,19 @@
+# M66-S1 unix_connect 行协议实测（编译模式）
+# 前置：verify.sh 会先用 python3 起一个 AF_UNIX 行协议 daemon（/tmp/m66_test.sock）
+# daemon 行为：收一行 → 回 "pong:<原文>"
+var fd = unix_connect("/tmp/m66_test.sock")
+if fd < 0:
+    print("FAIL unix_connect 连接失败 errno=" + str(os_errno()))
+    exit(1)
+print("PASS unix_connect 连接成功 fd=" + str(fd))
+write(fd, "list\n")
+var resp = bytes_to_str(read(fd, 4096))
+if resp == "pong:list\n":
+    print("PASS unix 行协议收发")
+else:
+    print("FAIL unix 响应不符 resp=[" + resp + "]")
+    exit(1)
+close(fd)
+print("---")
+print("unix_connect 行协议 OK")
+exit(0)

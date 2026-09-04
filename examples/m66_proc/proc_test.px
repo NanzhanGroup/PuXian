@@ -1,0 +1,53 @@
+# M66-S1 m66_proc 专项测试（编译模式）：os_capture/os_popen/os_kill group/write_file mode/unix_connect
+# 用法：pxc build --no-quic proc_test.px && ./build/proc_test
+var pass = 0
+var fail = 0
+def check(name, cond):
+    if cond:
+        pass += 1
+        print("PASS " + name)
+    else:
+        fail += 1
+        print("FAIL " + name)
+# ---------- write_file / append_file mode ----------
+write_file("/tmp/m66_mode.txt", "secret", 0o600)
+var st = os_capture("stat", ["-c", "%a", "/tmp/m66_mode.txt"])
+check("write_file mode 0600", st["stdout"].trim() == "600")
+write_file("/tmp/m66_default.txt", "x")  # 不传 mode 保持默认
+var st2 = os_capture("stat", ["-c", "%a", "/tmp/m66_default.txt"])
+check("write_file 无 mode 默认 644", st2["stdout"].trim() == "644")
+# ---------- os_capture：stdout/stderr 分离 + rc ----------
+var r = os_capture("sh", ["-c", "echo out1; echo err1 >&2; exit 3"])
+check("os_capture rc=3", r["rc"] == 3)
+check("os_capture stdout", r["stdout"] == "out1\n")
+check("os_capture stderr", r["stderr"] == "err1\n")
+var r2 = os_capture("no_such_cmd_xyz", [])
+check("os_capture exec 失败 rc=127", r2["rc"] == 127)
+# ---------- os_popen：双向管道 ----------
+var p = os_popen("cat", [])
+check("os_popen pid>0", p["pid"] > 0)
+write(p["stdin_fd"], "hello-pop\n")
+close(p["stdin_fd"])
+var resp = read(p["stdout_fd"], 64)
+check("os_popen 回显", bytes_to_str(resp) == "hello-pop\n")
+close(p["stdout_fd"])
+os_wait(p["pid"])
+# ---------- os_kill group：os_popen 子进程自成组，组杀后 wait 立即非0 ----------
+var p2 = os_popen("sh", ["-c", "sleep 30"])
+check("os_popen2 pid>0", p2["pid"] > 0)
+check("os_kill group=true 成功", os_kill(p2["pid"], 9, true))
+var wc = os_wait(p2["pid"])
+check("os_wait 组杀后立即返回", wc != 0)
+# 旧两参调用仍兼容
+var p3 = os_popen("sh", ["-c", "sleep 30"])
+check("os_kill 两参兼容", os_kill(p3["pid"], 9))
+os_wait(p3["pid"])
+# ---------- unix_connect 失败路径（连接不存在 socket → -1 + os_errno） ----------
+var uc = unix_connect("/tmp/no_such_m66.sock")
+check("unix_connect 失败 -1", uc == -1)
+check("os_errno 可查", os_errno() != 0)
+print("---")
+print("pass=" + str(pass) + " fail=" + str(fail))
+if fail > 0:
+    exit(1)
+exit(0)
