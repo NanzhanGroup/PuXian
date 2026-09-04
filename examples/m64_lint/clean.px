@@ -1,0 +1,25 @@
+# 干净样本：不应有任何告警
+def add(a, b):
+    let sum_v = a + b
+    return sum_v
+
+def process(items):
+    var total = 0
+    for it in items:
+        total += it
+    if total > 100:
+        print("large")
+    else:
+        print("small")
+    return total
+
+def classify(x):
+    if x > 0:
+        return "pos"
+    elif x < 0:
+        return "neg"
+    return "zero"
+
+let TOP_LEVEL = add(1, 2)
+print(process([1, 2, 3]))
+print(classify(TOP_LEVEL))

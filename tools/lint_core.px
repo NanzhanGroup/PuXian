@@ -1,0 +1,577 @@
+# ============================================================
+# tools/lint_core.px —— PuXian lint 核心（M64b，纯函数库）
+# ------------------------------------------------------------
+# 自包含零顶层数据：本文件不含顶层 var/let（避免 import 后主文件
+# 重复声明全局的惯例负担）；所有数据由调用方传入/函数局部构造。
+# 规则对齐 Rust lint.rs（archive/rust-compiler/src/lint.rs）：
+#   L001 未使用变量    L002 未定义变量引用    L003 不可达代码
+#   L004 空块          L005 重复顶层定义      L006 命名规范
+#   L007 长行(>100)    L008 行尾空白
+# AST 为 parser.px 产出的嵌套 list；字符串字段为 rust_str_debug
+# 格式（带引号），用 lc_unq 还原。
+# ============================================================
+# ---------- 字符串工具 ----------
+def lc_unq(s):
+    if s == null:
+        return ""
+    if len(s) < 2:
+        return s
+    if s[0] != "\"":
+        return s
+    let body = s[1: len(s) - 1]
+    var out = ""
+    var i = 0
+    while i < len(body):
+        let c = body[i]
+        if c == "\\":
+            let nxt = body[i + 1]
+            if nxt == "n":
+                out += "\n"
+                i += 2
+            elif nxt == "t":
+                out += "\t"
+                i += 2
+            elif nxt == "r":
+                out += "\r"
+                i += 2
+            elif nxt == "\"":
+                out += "\""
+                i += 2
+            elif nxt == "\\":
+                out += "\\"
+                i += 2
+            elif nxt == "u":
+                var j = i + 3
+                var hex = ""
+                while j < len(body) and body[j] != "}":
+                    hex += body[j]
+                    j += 1
+                out += lc_cp_to_char(hex_to_int(hex))
+                i = j + 1
+            else:
+                out += nxt
+                i += 2
+        else:
+            out += c
+            i += 1
+    return out
+def lc_cp_to_char(cp):
+    if cp <= 127:
+        return bytes_to_str(int_to_bytes(cp, 1))
+    if cp <= 2047:
+        let b1 = int_to_bytes(192 | (cp >> 6), 1)
+        let b2 = int_to_bytes(128 | (cp & 63), 1)
+        return bytes_to_str(bytes_concat(b1, b2))
+    if cp <= 65535:
+        let b1 = int_to_bytes(224 | (cp >> 12), 1)
+        let b2 = int_to_bytes(128 | ((cp >> 6) & 63), 1)
+        let b3 = int_to_bytes(128 | (cp & 63), 1)
+        return bytes_to_str(bytes_concat(b1, b2, b3))
+    let b1 = int_to_bytes(240 | (cp >> 18), 1)
+    let b2 = int_to_bytes(128 | ((cp >> 12) & 63), 1)
+    let b3 = int_to_bytes(128 | ((cp >> 6) & 63), 1)
+    let b4 = int_to_bytes(128 | (cp & 63), 1)
+    return bytes_to_str(bytes_concat(b1, b2, b3, b4))
+def lc_is_upper(c):
+    return c >= "A" and c <= "Z"
+def lc_is_lower(c):
+    return c >= "a" and c <= "z"
+def lc_is_digit(c):
+    return c >= "0" and c <= "9"
+def lc_is_snake(s):
+    if len(s) == 0 or s[0] == "_":
+        return false
+    var i = 0
+    while i < len(s):
+        let c = s[i]
+        if not (lc_is_lower(c) or lc_is_digit(c) or c == "_"):
+            return false
+        i += 1
+    return true
+def lc_is_pascal(s):
+    if len(s) == 0:
+        return false
+    return lc_is_upper(s[0])
+# ---------- dict-as-set ----------
+# 注意：PuXian 空 dict 字面量 {} 求值为 null（实测），空 dict 只能
+# 通过先建哨兵再 remove 得到（或 dnew helper）。
+def lc_dnew():
+    let d = {"_": 0}
+    d.remove("_")
+    return d
+def lc_dset(d, k):
+    d[k] = 1
+def lc_dhas(d, k):
+    return d.has(k)
+def lc_dcopy(d):
+    let nd = lc_dnew()
+    let ks = d.keys()
+    var i = 0
+    while i < len(ks):
+        nd[ks[i]] = d[ks[i]]
+        i += 1
+    return nd
+def lc_dmerge(dst, src):
+    let ks = src.keys()
+    var i = 0
+    while i < len(ks):
+        dst[ks[i]] = src[ks[i]]
+        i += 1
+# ---------- ctx（declared/used/known） ----------
+def lc_ctx_new(known):
+    return {"decl": lc_dnew(), "used": lc_dnew(), "known": known}
+def lc_ctx_sub(ctx):
+    return {"decl": lc_dcopy(ctx["decl"]), "used": lc_dcopy(ctx["used"]), "known": ctx["known"]}
+def lc_ctx_merge(par, sub):
+    lc_dmerge(par["decl"], sub["decl"])
+    lc_dmerge(par["used"], sub["used"])
+def lc_declare(ctx, name):
+    lc_dset(ctx["decl"], name)
+def lc_use_var(ctx, name):
+    if lc_dhas(ctx["decl"], name):
+        lc_dset(ctx["used"], name)
+# ---------- 语句位置（对齐 LAYOUT pos 字段） ----------
+def lc_stmt_pos(st):
+    let ty = st[0]
+    if ty == "VarDecl":
+        return st[5]
+    if ty == "Assign":
+        return st[4]
+    if ty == "ExprStmt":
+        return st[2]
+    if ty == "If":
+        return st[3]
+    if ty == "For":
+        return st[4]
+    if ty == "While":
+        return st[3]
+    if ty == "Return":
+        return st[2]
+    if ty == "Break" or ty == "Continue" or ty == "Empty":
+        return st[1]
+    if ty == "FuncDef":
+        return st[5]
+    if ty == "StructDef" or ty == "TraitDef":
+        return st[3]
+    if ty == "EnumDef":
+        return st[3]
+    if ty == "ImplDef":
+        return st[4]
+    if ty == "Import":
+        return st[3]
+    if ty == "ExternDef":
+        return st[4]
+    if ty == "Spawn":
+        return st[2]
+    if ty == "ChanDecl":
+        return st[3]
+    if ty == "Send":
+        return st[3]
+    if ty == "Recv":
+        return st[2]
+    if ty == "Select":
+        return st[3]
+    return [0, 0]
+# ---------- 诊断 ----------
+def lc_warn(diags, code, pos, msg):
+    diags.append([code, "W", pos[0], pos[1], msg])
+def lc_error(diags, code, pos, msg):
+    diags.append([code, "E", pos[0], pos[1], msg])
+# ---------- L007/L008 行级 ----------
+def lc_check_lines(src, diags):
+    let lines = split(src, "\n")
+    var ln = 0
+    while ln < len(lines):
+        let line = lines[ln]
+        let no = ln + 1
+        if len(line) > 100 and not contains(line, "# noqa"):
+            lc_warn(diags, "L007", [no, 101], "行过长（" + str(len(line)) + " 字符 > 100）")
+        if ends_with(line, " ") or ends_with(line, "\t"):
+            var col = len(line)
+            if col < 1:
+                col = 1
+            lc_warn(diags, "L008", [no, col], "行尾存在空白字符")
+        ln += 1
+# ---------- L005/L006 顶层定义 ----------
+# 返回顶层定义名集合（已还原）；收集 L005/L006 到 diags
+def lc_collect_top(items, diags):
+    let top = lc_dnew()
+    var i = 0
+    while i < len(items):
+        let st = items[i]
+        let ty = st[0]
+        if ty == "FuncDef" or ty == "StructDef" or ty == "EnumDef" or ty == "TraitDef":
+            let name = lc_unq(st[1])
+            let pos = lc_stmt_pos(st)
+            if lc_dhas(top, name):
+                lc_error(diags, "L005", pos, "重复顶层定义: '" + name + "'")
+            else:
+                lc_dset(top, name)
+            if ty == "FuncDef":
+                if not lc_is_snake(name):
+                    lc_warn(diags, "L006", pos, "函数名 '" + name + "' 应为 snake_case")
+            else:
+                if not lc_is_pascal(name):
+                    lc_warn(diags, "L006", pos, "类型名 '" + name + "' 应为 PascalCase")
+        i += 1
+    return top
+# ---------- 未使用 / 空体 ----------
+def lc_check_unused(ctx, fn_pos, fn_name, diags):
+    let unused = []
+    let ks = ctx["decl"].keys()
+    var i = 0
+    while i < len(ks):
+        let n = ks[i]
+        if not lc_dhas(ctx["used"], n):
+            unused.append(n)
+        i += 1
+    if len(unused) > 0:
+        let un = sorted(unused)
+        let joined = join(", ", un)
+        lc_warn(diags, "L001", fn_pos, "函数 '" + fn_name + "' 中未使用变量: " + joined)
+def lc_check_empty_body(body, pos, name, diags):
+    if len(body) == 0:
+        lc_warn(diags, "L004", pos, "函数 '" + name + "' 体为空")
+# ---------- 块遍历（L003 不可达 + L004 空分支） ----------
+def lc_check_block(ctx, stmts, diags):
+    var terminated = false
+    var i = 0
+    while i < len(stmts):
+        let st = stmts[i]
+        if terminated:
+            lc_warn(diags, "L003", lc_stmt_pos(st), "不可达代码：前面的 return/break/continue 已终止本块")
+        if st[0] == "Return" or st[0] == "Break" or st[0] == "Continue":
+            terminated = true
+        lc_check_stmt(ctx, st, diags)
+        i += 1
+# no-op 语句类型（不产生变量/表达式副作用）
+def lc_stmt_noop(ty):
+    if ty == "Break" or ty == "Continue" or ty == "Empty":
+        return true
+    if ty == "StructDef" or ty == "EnumDef" or ty == "TraitDef":
+        return true
+    if ty == "Import" or ty == "ExternDef":
+        return true
+    return false
+# 顶层定义类语句（函数体检查跳过）
+def lc_is_def_stmt(ty):
+    if ty == "StructDef" or ty == "EnumDef" or ty == "TraitDef":
+        return true
+    if ty == "ImplDef" or ty == "Import" or ty == "ExternDef":
+        return true
+    return false
+# ---------- 语句遍历 ----------
+def lc_check_stmt(ctx, st, diags):
+    let ty = st[0]
+    if lc_stmt_noop(ty):
+        return
+    if ty == "VarDecl":
+        lc_declare(ctx, lc_unq(st[2]))
+        let v = st[4]
+        if v != null:
+            lc_check_expr(ctx, v, diags)
+    elif ty == "Assign":
+        lc_check_expr(ctx, st[1], diags)
+        lc_check_expr(ctx, st[3], diags)
+    elif ty == "ExprStmt":
+        lc_check_expr(ctx, st[1], diags)
+    elif ty == "If":
+        let branches = st[1]
+        var bi = 0
+        while bi < len(branches):
+            let br = branches[bi]
+            lc_check_expr(ctx, br[0], diags)
+            let sub = lc_ctx_sub(ctx)
+            lc_check_block(sub, br[1], diags)
+            lc_ctx_merge(ctx, sub)
+            if len(br[1]) == 0:
+                lc_warn(diags, "L004", [0, 0], "if 分支体为空")
+            bi += 1
+        let eb = st[2]
+        if eb != null:
+            let sub = lc_ctx_sub(ctx)
+            lc_check_block(sub, eb, diags)
+            lc_ctx_merge(ctx, sub)
+            if len(eb) == 0:
+                lc_warn(diags, "L004", [0, 0], "else 分支体为空")
+    elif ty == "For":
+        lc_check_expr(ctx, st[2], diags)
+        let sub = lc_ctx_sub(ctx)
+        lc_declare(sub, lc_unq(st[1]))
+        lc_check_block(sub, st[3], diags)
+        lc_ctx_merge(ctx, sub)
+        if len(st[3]) == 0:
+            lc_warn(diags, "L004", st[4], "for 循环体为空")
+    elif ty == "While":
+        lc_check_expr(ctx, st[1], diags)
+        let sub = lc_ctx_sub(ctx)
+        lc_check_block(sub, st[2], diags)
+        lc_ctx_merge(ctx, sub)
+        if len(st[2]) == 0:
+            lc_warn(diags, "L004", st[3], "while 循环体为空")
+    elif ty == "Return":
+        let v = st[1]
+        if v != null:
+            lc_check_expr(ctx, v, diags)
+    elif ty == "FuncDef":
+        lc_check_nested_func(st, ctx["known"], diags)
+        lc_use_var(ctx, lc_unq(st[1]))
+    elif ty == "ImplDef":
+        let methods = st[3]
+        var mi = 0
+        while mi < len(methods):
+            let m = methods[mi]
+            let sub = lc_ctx_new(ctx["known"])
+            lc_declare(sub, "self")
+            let params = m[2]
+            var pi = 0
+            while pi < len(params):
+                lc_declare(sub, lc_unq(params[pi][1]))
+                pi += 1
+            lc_check_block(sub, m[4], diags)
+            let mpos = lc_stmt_pos(m)
+            lc_check_unused(sub, mpos, lc_unq(m[1]), diags)
+            lc_check_empty_body(m[4], mpos, lc_unq(m[1]), diags)
+            mi += 1
+    elif ty == "Spawn":
+        lc_check_expr(ctx, st[1], diags)
+    elif ty == "ChanDecl":
+        lc_declare(ctx, lc_unq(st[1]))
+    elif ty == "Send":
+        lc_check_expr(ctx, st[1], diags)
+        lc_check_expr(ctx, st[2], diags)
+    elif ty == "Recv":
+        lc_check_expr(ctx, st[1], diags)
+    elif ty == "Select":
+        let arms = st[1]
+        var ai = 0
+        while ai < len(arms):
+            let arm = arms[ai]
+            lc_check_expr(ctx, arm[1], diags)
+            let sub = lc_ctx_sub(ctx)
+            if arm[0] != null:
+                lc_declare(sub, lc_unq(arm[0]))
+            lc_check_block(sub, arm[2], diags)
+            lc_ctx_merge(ctx, sub)
+            if len(arm[2]) == 0:
+                lc_warn(diags, "L004", st[3], "select 分支体为空")
+            ai += 1
+        let eb2 = st[2]
+        if eb2 != null:
+            let sub = lc_ctx_sub(ctx)
+            lc_check_block(sub, eb2, diags)
+            lc_ctx_merge(ctx, sub)
+# 嵌套 def：独立上下文（参数 + body + unused + 空体）
+def lc_check_nested_func(st, known, diags):
+    let name = lc_unq(st[1])
+    let sub = lc_ctx_new(known)
+    let params = st[2]
+    var pi = 0
+    while pi < len(params):
+        lc_declare(sub, lc_unq(params[pi][1]))
+        pi += 1
+    lc_check_block(sub, st[4], diags)
+    let fpos = lc_stmt_pos(st)
+    lc_check_unused(sub, fpos, name, diags)
+    lc_check_empty_body(st[4], fpos, name, diags)
+# ---------- 模式绑定收集 ----------
+def lc_collect_pat(p, ctx):
+    let ty = p[0]
+    if ty == "PatBinding":
+        lc_declare(ctx, lc_unq(p[1]))
+    elif ty == "PatTuple":
+        let items = p[1]
+        var i = 0
+        while i < len(items):
+            lc_collect_pat(items[i], ctx)
+            i += 1
+    elif ty == "PatConstructor":
+        let fields = p[2]
+        var i2 = 0
+        while i2 < len(fields):
+            lc_collect_pat(fields[i2], ctx)
+            i2 += 1
+# ---------- 推导式子句（声明 vars 到 sub） ----------
+def lc_decl_comp_vars(sub, clauses):
+    var ci = 0
+    while ci < len(clauses):
+        let cl = clauses[ci]
+        let vars = cl[1]
+        var vi = 0
+        while vi < len(vars):
+            lc_declare(sub, lc_unq(vars[vi]))
+            vi += 1
+        ci += 1
+def lc_check_comp_iterables(ctx, clauses, diags):
+    var ci = 0
+    while ci < len(clauses):
+        lc_check_expr(ctx, clauses[ci][2], diags)
+        ci += 1
+# ---------- 表达式遍历 ----------
+def lc_check_expr(ctx, e, diags):
+    let ty = e[0]
+    if ty == "Int" or ty == "Float" or ty == "Str" or ty == "Bool" or ty == "Null":
+        return
+    if ty == "List":
+        let items = e[1]
+        var i = 0
+        while i < len(items):
+            lc_check_expr(ctx, items[i], diags)
+            i += 1
+    elif ty == "Tuple":
+        let items = e[1]
+        var i = 0
+        while i < len(items):
+            lc_check_expr(ctx, items[i], diags)
+            i += 1
+    elif ty == "Dict":
+        let entries = e[1]
+        var i = 0
+        while i < len(entries):
+            lc_check_expr(ctx, entries[i][0], diags)
+            lc_check_expr(ctx, entries[i][1], diags)
+            i += 1
+    elif ty == "Var":
+        let name = lc_unq(e[1])
+        lc_use_var(ctx, name)
+        if not (lc_dhas(ctx["decl"], name) or lc_dhas(ctx["known"], name) or name == "self"):
+            lc_error(diags, "L002", e[2], "未定义变量: '" + name + "'")
+    elif ty == "Field" or ty == "OptionalField":
+        lc_check_expr(ctx, e[1], diags)
+    elif ty == "Index":
+        lc_check_expr(ctx, e[1], diags)
+        lc_check_expr(ctx, e[2], diags)
+    elif ty == "Slice":
+        lc_check_expr(ctx, e[1], diags)
+        if e[2] != null:
+            lc_check_expr(ctx, e[2], diags)
+        if e[3] != null:
+            lc_check_expr(ctx, e[3], diags)
+        if e[4] != null:
+            lc_check_expr(ctx, e[4], diags)
+    elif ty == "Call":
+        lc_check_expr(ctx, e[1], diags)
+        let args = e[2]
+        var i = 0
+        while i < len(args):
+            lc_check_expr(ctx, args[i], diags)
+            i += 1
+    elif ty == "Unary":
+        lc_check_expr(ctx, e[2], diags)
+    elif ty == "Binary":
+        lc_check_expr(ctx, e[2], diags)
+        lc_check_expr(ctx, e[3], diags)
+    elif ty == "Pipe":
+        lc_check_expr(ctx, e[1], diags)
+        lc_check_expr(ctx, e[2], diags)
+    elif ty == "NullCoalesce":
+        lc_check_expr(ctx, e[1], diags)
+        lc_check_expr(ctx, e[2], diags)
+    elif ty == "Try" or ty == "ForceUnwrap":
+        lc_check_expr(ctx, e[1], diags)
+    elif ty == "IfExpr":
+        lc_check_expr(ctx, e[1], diags)
+        lc_check_expr(ctx, e[2], diags)
+        lc_check_expr(ctx, e[3], diags)
+    elif ty == "ListComp" or ty == "GenExp":
+        lc_check_expr(ctx, e[1], diags)
+        lc_check_comp_iterables(ctx, e[2], diags)
+        let sub = lc_ctx_sub(ctx)
+        lc_decl_comp_vars(sub, e[2])
+        if e[3] != null:
+            lc_check_expr(sub, e[3], diags)
+        lc_ctx_merge(ctx, sub)
+    elif ty == "DictComp":
+        lc_check_expr(ctx, e[1], diags)
+        lc_check_expr(ctx, e[2], diags)
+        lc_check_comp_iterables(ctx, e[3], diags)
+        let sub = lc_ctx_sub(ctx)
+        lc_decl_comp_vars(sub, e[3])
+        if e[4] != null:
+            lc_check_expr(sub, e[4], diags)
+        lc_ctx_merge(ctx, sub)
+    elif ty == "Closure":
+        let sub = lc_ctx_new(ctx["known"])
+        let params = e[1]
+        var i = 0
+        while i < len(params):
+            lc_declare(sub, lc_unq(params[i][1]))
+            i += 1
+        let caps = e[4]
+        var ci = 0
+        while ci < len(caps):
+            let cn = lc_unq(caps[ci])
+            lc_declare(sub, cn)
+            lc_use_var(sub, cn)
+            lc_use_var(ctx, cn)
+            ci += 1
+        lc_check_expr(sub, e[3], diags)
+        lc_ctx_merge(ctx, sub)
+    elif ty == "Block":
+        let sub = lc_ctx_sub(ctx)
+        lc_check_block(sub, e[1], diags)
+        lc_ctx_merge(ctx, sub)
+    elif ty == "Match":
+        lc_check_expr(ctx, e[1], diags)
+        let arms = e[2]
+        var ai = 0
+        while ai < len(arms):
+            let arm = arms[ai]
+            let sub = lc_ctx_sub(ctx)
+            lc_collect_pat(arm[1], sub)
+            if arm[2] != null:
+                lc_check_expr(sub, arm[2], diags)
+            lc_check_expr(sub, arm[3], diags)
+            lc_ctx_merge(ctx, sub)
+            ai += 1
+    elif ty == "Constructor":
+        let args = e[2]
+        var i = 0
+        while i < len(args):
+            lc_check_expr(ctx, args[i], diags)
+            i += 1
+# ---------- 顶层入口：L005/L006 + 函数体 + 顶层语句 ----------
+def lc_check_program(items, src, known, diags):
+    # 1) 行级
+    lc_check_lines(src, diags)
+    # 2) 顶层定义集合 + L005 + L006
+    let top = lc_collect_top(items, diags)
+    let ks = top.keys()
+    var ki = 0
+    while ki < len(ks):
+        lc_dset(known, ks[ki])
+        ki += 1
+    lc_dset(known, "self")
+    # 3) 顶层全局变量名（let/var/const/chan）进 known：函数体可引用全局，
+    #    顶层语句顺序执行互见（避免 L002 对全局引用误报）
+    var i = 0
+    while i < len(items):
+        let st = items[i]
+        let ty = st[0]
+        if ty == "VarDecl":
+            lc_dset(known, lc_unq(st[2]))
+        elif ty == "ChanDecl":
+            lc_dset(known, lc_unq(st[1]))
+        i += 1
+    # 4) 每个顶层函数体（独立 ctx）+ 顶层非定义语句（共享 topctx 顺序执行）
+    let topctx = lc_ctx_new(known)
+    var j = 0
+    while j < len(items):
+        let st = items[j]
+        let ty = st[0]
+        if ty == "FuncDef":
+            let name = lc_unq(st[1])
+            let ctx = lc_ctx_new(known)
+            let params = st[2]
+            var pi = 0
+            while pi < len(params):
+                lc_declare(ctx, lc_unq(params[pi][1]))
+                pi += 1
+            lc_check_block(ctx, st[4], diags)
+            let fpos = lc_stmt_pos(st)
+            lc_check_unused(ctx, fpos, name, diags)
+            lc_check_empty_body(st[4], fpos, name, diags)
+        elif not lc_is_def_stmt(ty):
+            lc_check_stmt(topctx, st, diags)
+        j += 1
+    return diags

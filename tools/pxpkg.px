@@ -211,7 +211,9 @@ def pxp_install(dir, locked):
                 exit(1)
             let actual = sha256(read_file(installed_file))
             if actual != lock_dep["sha256"]:
-                print("pxpkg 错误: " + name + " 内容被篡改（sha256 不符，lock=" + lock_dep["sha256"] + " 实际=" + actual + "）")
+                let em1 = "pxpkg 错误: " + name + " 内容被篡改（sha256 不符，lock=" + lock_dep["sha256"]
+                let em2 = " 实际=" + actual + "）"
+                print(em1 + em2)
                 exit(1)
             print("  [locked] " + name + " " + lock_dep["version"] + " 校验通过")
             i += 1

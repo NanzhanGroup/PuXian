@@ -1,0 +1,228 @@
+# ============================================================
+# tools/pxlint.px —— PuXian 静态检查器 CLI（自举版，px lint 等价物）
+# ------------------------------------------------------------
+# 对齐 Rust archive/rust-compiler/src/lint.rs 的 L001-L008：
+#   L001 未使用变量  L002 未定义变量引用  L003 不可达代码
+#   L004 空块        L005 重复顶层定义    L006 命名规范
+#   L007 长行(>100)  L008 行尾空白
+# 用法（编译版）：pxlint <file.px> [--json] [--strict] [--version]
+#   退出码：有 Error → 1；仅 Warning → 0；--strict 时 Warning 也 → 1
+# 架构：
+#   - import ../selfhost/parser.px（复用自举 lexer+parser 产 AST）
+#   - import lint_core.px（纯函数 lint 核心，零顶层数据）
+#   - 主文件重复声明 parser/pxlexer 引用全部顶层全局（interp.px 同构惯例）
+# 构建：tools/pxc build tools/pxlint.px → cp tools/build/pxlint bootstrap/pxlint
+# ============================================================
+import "../selfhost/parser.px"
+import "lint_core.px"
+# ---------- lex/parser 全局状态（主文件声明；import 不合并模块顶层 let） ----------
+var g_src = ""
+var g_len = 0
+var g_pos = 0
+var g_line = 1
+var g_col = 1
+var g_indent_stack = [0]
+var g_at_line_start = true
+var g_toks = []
+var g_count = 0
+var g_pending = []
+let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn": "fn", "struct": "struct", "enum": "enum", "trait": "trait", "impl": "impl", "match": "match", "case": "case", "if": "if", "elif": "elif", "else": "else", "for": "for", "while": "while", "in": "in", "and": "and", "or": "or", "not": "not", "return": "return", "break": "break", "continue": "continue", "import": "import", "from": "from", "pub": "pub", "as": "as", "spawn": "spawn", "chan": "chan", "send": "send", "recv": "recv", "select": "select", "true": "true", "false": "false", "null": "null", "None": "null", "self": "self", "capture": "capture", "extern": "extern"}  # noqa
+let CTRL_ALL = "\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}\u{8}\u{b}\u{c}\u{e}\u{f}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1a}\u{1b}\u{1c}\u{1d}\u{1e}\u{1f}\u{7f}\u{80}\u{81}\u{82}\u{83}\u{84}\u{85}\u{86}\u{87}\u{88}\u{89}\u{8a}\u{8b}\u{8c}\u{8d}\u{8e}\u{8f}\u{90}\u{91}\u{92}\u{93}\u{94}\u{95}\u{96}\u{97}\u{98}\u{99}\u{9a}\u{9b}\u{9c}\u{9d}\u{9e}\u{9f}"  # noqa
+var p_toks = []
+var p_pos = 0
+# ---------- 内置函数/构造器已知名（对齐 Rust lint.rs builtin_names） ----------
+# 注：PuXian list 字面量不能跨行 → 名字以空格分隔字符串 + split 构造
+let BUILTINS = split("print len range type str int float bool assert panic input exit sleep to_upper to_lower trim split join contains replace starts_with ends_with abs sqrt min max pow sorted reversed sum now_ms read_file write_file append_file read_at write_at file_size fsync_file truncate_file sha256 xxhash exists list_dir mkdir remove json_parse json_stringify now env args map filter reduce tcp_listen tcp_accept tcp_connect tcp_send tcp_recv tcp_close http_get http_post http_serve px_exec px_serve set_timeout set_interval clear_timer base64_encode base64_decode sse_serve sse_send sse_close regex_find regex_match regex_search regex_find_all regex_replace regex_split aes_encrypt aes_decrypt aes_gcm_encrypt aes_gcm_decrypt xml_parse xml_escape xml_unescape xml_build zip_pack zip_unpack sse_connect sse_read int_to_hex hex_to_int bytes_to_hex hex_to_bytes bit_count bit_length ws_serve ws_connect ws_send ws_recv ws_close ws_ping ws_heartbeat os_pid os_spawn os_wait os_kill signal rsa_gen_key rsa_encrypt rsa_decrypt rsa_sign rsa_verify bytes bytes_len bytes_get bytes_set bytes_slice bytes_concat bytes_to_str bytes_base64 base64_to_bytes bytes_find read_bytes write_bytes int_to_bytes bytes_to_int http_request http_get_stream gc tls_server session_open session_id session_get session_set session_del session_destroy basic_auth route middleware time_format time_parse tz_offset cron sqlite_open sqlite_exec sqlite_query sqlite_close sqlite_escape sqlite_last_insert_rowid json_path json_path_set sandbox_enter vhost rate_limit gen_next list udp_open udp_send udp_recv udp_close ws_broadcast bus_new bus_subscribe bus_publish bus_unsubscribe ctx_set ctx_get ctx_clear s3_put s3_get s3_delete s3_list udp_serve ws_connect_auto Ok Err Some", " ")  # noqa
+# ---------- 路径/import 名收集（L002 免误报） ----------
+# 目标文件的 import 会把被导入模块的顶层 def 并入（cg_resolve_modules 语义），
+# 因此把 import 的文件（std.* / 相对路径 / 用户点分）的顶层函数名加入 known。
+# 边界：被 import 方依赖宿主全局的函数（如 it_util 用 hex_to_char）单文件 lint
+# 仍会报 L002 —— 属模块惯例固有边界（Rust lint.rs 同），dogfood 白名单留档。
+def lx_dirname(path):
+    var i = len(path) - 1
+    while i >= 0:
+        if path[i] == "/":
+            if i == 0:
+                return "/"
+            return path[0: i]
+        i -= 1
+    return "."
+def lx_stdlib_dir():
+    let e = env("PX_STDLIB")
+    if e != null and exists(e):
+        return e
+    let cands = ["stdlib", "./stdlib", "../stdlib", "../../stdlib", "/data/code/puxian/stdlib"]
+    var i = 0
+    while i < len(cands):
+        let c = cands[i]
+        if exists(c):
+            return c
+        i += 1
+    return null
+def lx_mod_candidates(module, base):
+    # module: qstr list；返回候选源文件路径（按优先级，可能为空）
+    let first = lc_unq(module[0])
+    if first == "std" and len(module) >= 2:
+        let d2 = lx_stdlib_dir()
+        if d2 == null:
+            return []
+        var p = d2
+        var si = 1
+        while si < len(module):
+            p += "/" + lc_unq(module[si])
+            si += 1
+        return [p + ".px", p + "/mod.px"]
+    if len(module) == 1 and (contains(first, "/") or contains(first, ".px")):
+        var p2 = first
+        if not (len(first) > 0 and first[0] == "/"):
+            p2 = base + "/" + first
+        return [p2]
+    var p3 = base
+    var si2 = 0
+    while si2 < len(module):
+        p3 += "/" + lc_unq(module[si2])
+        si2 += 1
+    return [p3 + ".px", p3 + "/mod.px"]
+# 递归扫描模块文件：收集其顶层 FuncDef 名 + 其自身 import（对齐
+# cg_resolve_modules 递归合并语义 → 主程序可见全部级联函数）。
+# visited 防循环；基础路径 = 各文件自身目录。
+def lx_scan_imports(path, known, visited):
+    if visited.has(path):
+        return
+    visited[path] = 1
+    if not exists(path):
+        return
+    let src = read_file(path)
+    p_toks = lex_tokens(src)
+    p_pos = 0
+    let ast = parse_program()
+    let sts = ast[1]
+    var si = 0
+    while si < len(sts):
+        let st2 = sts[si]
+        if st2[0] == "FuncDef":
+            lc_dset(known, lc_unq(st2[1]))
+        si += 1
+    let base = lx_dirname(path)
+    var ii = 0
+    while ii < len(sts):
+        let st3 = sts[ii]
+        if st3[0] == "Import":
+            let cands = lx_mod_candidates(st3[1], base)
+            var ci = 0
+            while ci < len(cands):
+                if exists(cands[ci]):
+                    lx_scan_imports(cands[ci], known, visited)
+                    ci = len(cands)
+                ci += 1
+        ii += 1
+def lx_collect_import_names(items, known, file):
+    let dir = lx_dirname(file)
+    let visited = lc_dnew()
+    var i = 0
+    while i < len(items):
+        let st = items[i]
+        if st[0] == "Import":
+            let cands = lx_mod_candidates(st[1], dir)
+            var ci = 0
+            while ci < len(cands):
+                if exists(cands[ci]):
+                    lx_scan_imports(cands[ci], known, visited)
+                    ci = len(cands)
+                ci += 1
+        i += 1
+# ---------- 主流程 ----------
+def lx_run(file, jmode, strict):
+    if not exists(file):
+        let emsg = "pxlint: 无法读取文件 '" + file + "'"
+        print(emsg)
+        exit(1)
+    let src = read_file(file)
+    p_toks = lex_tokens(src)
+    p_pos = 0
+    let ast = parse_program()
+    let items = ast[1]
+    let known = lc_dnew()
+    var bi = 0
+    while bi < len(BUILTINS):
+        lc_dset(known, BUILTINS[bi])
+        bi += 1
+    lc_dset(known, "pi")
+    lc_dset(known, "e")
+    lx_collect_import_names(items, known, file)
+    let diags = []
+    lc_check_program(items, src, known, diags)
+    var errs = 0
+    var warns = 0
+    if jmode:
+        let out = []
+        var di = 0
+        while di < len(diags):
+            let d = diags[di]
+            var lv = "warning"
+            if d[1] == "E":
+                lv = "error"
+            let jo = {"file": file}
+            jo["line"] = d[2]
+            jo["col"] = d[3]
+            jo["level"] = lv
+            jo["code"] = d[0]
+            jo["message"] = d[4]
+            out.append(jo)
+            if d[1] == "E":
+                errs += 1
+            else:
+                warns += 1
+            di += 1
+        print(json_stringify(out))
+    else:
+        var di = 0
+        while di < len(diags):
+            let d = diags[di]
+            var lv = "W"
+            if d[1] == "E":
+                lv = "E"
+            print(file + ":" + str(d[2]) + ":" + str(d[3]) + ": " + lv + " " + d[0] + ": " + d[4])
+            if d[1] == "E":
+                errs += 1
+            else:
+                warns += 1
+            di += 1
+        print(file + ": " + str(errs) + " 错误, " + str(warns) + " 警告")
+    if errs > 0:
+        exit(1)
+    if strict and warns > 0:
+        exit(1)
+    exit(0)
+def usage():
+    print("pxlint —— PuXian 静态检查器（自举，M64b）")
+    print("用法: pxlint <file.px> [--json] [--strict] [--version|-v] [-h]")
+def main():
+    let as_ = args()
+    var file = ""
+    var jmode = false
+    var strict = false
+    var i = 0
+    while i < len(as_):
+        let a = as_[i]
+        if a == "--json":
+            jmode = true
+        elif a == "--strict":
+            strict = true
+        elif a == "--version" or a == "-v":
+            print("pxlint 0.1.0 (普贤 PuXian lint · M64b 自举)")
+            exit(0)
+        elif a == "--help" or a == "-h":
+            usage()
+            exit(0)
+        elif starts_with(a, "-"):
+            print("pxlint: 未知选项 '" + a + "'")
+            usage()
+            exit(1)
+        else:
+            file = a
+        i += 1
+    if file == "":
+        usage()
+        exit(1)
+    lx_run(file, jmode, strict)

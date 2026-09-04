@@ -70,7 +70,7 @@ def rg_generate(app_dir):
         let r = wr_parse_file(rel)
         if r != null:
             let opts = rg_rate_limit(app_dir, rel)
-            routes.append({"rel": rel, "method": r["method"], "pattern": r["pattern"], "fnname": r["fnname"], "opts": opts})
+            routes.append({"rel": rel, "method": r["method"], "pattern": r["pattern"], "fnname": r["fnname"], "opts": opts})  # noqa: 跨行 dict 非法，语言强制单行
         elif rel == "middleware.px":
             has_middleware = true
         i += 1
@@ -82,10 +82,14 @@ def rg_generate(app_dir):
             let a = routes[j]
             let b = routes[k]
             if a["fnname"] == b["fnname"]:
-                print("routegen 错误: fnname 重复 " + a["rel"] + " 与 " + b["rel"] + " -> " + a["fnname"])
+                var r1 = "routegen 错误: fnname 重复 " + a["rel"]
+                r1 += " 与 " + b["rel"] + " -> " + a["fnname"]
+                print(r1)
                 exit(1)
             if a["method"] == b["method"] and a["pattern"] == b["pattern"]:
-                print("routegen 错误: 路由重复 " + a["rel"] + " 与 " + b["rel"] + " -> " + a["method"] + " " + a["pattern"])
+                var r2m = "routegen 错误: 路由重复 " + a["rel"]
+                r2m += " 与 " + b["rel"] + " -> " + a["method"] + " " + a["pattern"]
+                print(r2m)
                 exit(1)
             k += 1
         j += 1
@@ -105,7 +109,8 @@ def rg_generate(app_dir):
         let r2 = routes[ri]
         var line = "    route(\"" + r2["method"] + "\", \"" + r2["pattern"] + "\", " + r2["fnname"]
         if r2["opts"] != null:
-            line += ", {\"rate_limit\": {\"max\": " + str(r2["opts"]["max"]) + ", \"window_sec\": " + str(r2["opts"]["window_sec"]) + "}}"
+            line += ", {\"rate_limit\": {\"max\": " + str(r2["opts"]["max"])
+            line += ", \"window_sec\": " + str(r2["opts"]["window_sec"]) + "}}"
         line += ")\n"
         out += line
         ri += 1
