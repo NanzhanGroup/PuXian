@@ -6,6 +6,34 @@
 
 ## [Unreleased]
 
+### M65 · LSP / MCP 自举（spec §12 工具链收官 + §12.1 AI agent 协议，docs/M65_PLAN.md）✅
+
+- **M65-S1 JSON-RPC 共享底座 + runtime 补丁**：`tools/jsonrpc_core.px`（纯 defs）——
+  Content-Length 帧读写（read(0) 累积缓冲，半包/粘包/坏头/坏 body 自测 33 断言双模式）+ JSON-RPC
+  2.0 骨架（request→result / notification→无回 / 标准错误码 -32700/-32601）；runtime 补唯一原语
+  **`os_spawn_capture(cmd,args)→[rc,output]`**（fork+execvp，stdout+stderr 合并单管道免死锁，
+  exec 失败 127，编译/解释双模式 5 断言）；pxi 白名单 + ibuiltin 同步重建；pxlint BUILTINS 补裸
+  read/write（M57 fd 原语漏补）；capability 双模式 253 PASS + diffcheck 全量无回归。
+- **M65-S2 LSP 核心**：`tools/pxcheck.px` 独立诊断器（import parser+lint_core，lex+parse+lint →
+  stdout 单行 JSON；parse/lex 错误= parser 打印后 panic 退出 1，pxlsp 按文本解析）+ `tools/pxlsp.px`
+  0.1.0 —— 生命周期 initialize/initialized/shutdown/exit + didOpen/didChange(Full)/didSave/didClose +
+  **publishDiagnostics**（**深度诊断子进程化**：parser 语法错误 print+panic 杀进程不可捕获 → pxcheck
+  子进程隔离）；python3 模拟标准 LSP client 17 断言端到端全绿。
+- **M65-S3 LSP 增强**：`tools/lsp_core.px` 符号/补全/跳转/悬停语义层（顶层 def/struct/enum/trait/
+  impl/var 文本级行扫 + ## 文档注释并入 + 局部名宽松收集）+ pxlsp 0.2.0 开 completion/definition/
+  hover 能力位（诚实协商）；S3 client 39 断言全绿（9 来源补全候选 + 前缀过滤 + definition 行精确 +
+  hover 签名/文档 + 真实文件 selfhost/astdump.px + 错误输入不崩）。
+- **M65-S4 MCP 服务器**：`tools/pxmcp.px` —— MCP 2024-11-05 stdio transport；tools/list 暴露 8 工具
+  （run/fmt/lint/test/bench/doc/ast/version 带 inputSchema）+ tools/call **全部子进程执行**
+  （os_spawn_capture 调 bootstrap 各二进制：崩溃隔离不污染协议 stdout + 输出可捕获）；S4 client
+  41 断言端到端全绿（每工具成功回包 + 错误参数/未知工具/未知方法 isError/-32601）。
+- **pxc 子命令**：`pxc lsp` / `pxc mcp`（bash exec 直通保留 fd 0/1，stdio 即协议通道）。
+- **文档 / 收口**：spec §12 实现状态表 8 工具全自举 + §12.1 MCP 勾选；ROADMAP 主线表补 M62–M65 行
+  （M62–64 此前仅 CHANGELOG 记录，缺行补全）+ 工具链行扩 11 子命令；README/README.en CLI 表补
+  lsp/mcp + 原生开发表扩至 M41–M65；M64_PLAN M64d 状态行更新（已由 M65 承接完成）。
+- **验证**：m65_lsp + m65_mcp verify ALL PASS；fmt --check + lint 全仓全绿；capability 双模式
+  253 PASS / 0 FAIL；新 5 文件（jsonrpc_core/pxcheck/lsp_core/pxlsp/pxmcp）lint 0 错 0 警。
+
 ### M64 · 工具链自举恢复（fmt/lint/doc/test/bench 五项自举，docs/M64_PLAN.md）✅
 
 - **M64-S1 keep-lexer 底座**：不碰 pxlexer（自举链零风险），派生 `tools/fmtlexer.px`

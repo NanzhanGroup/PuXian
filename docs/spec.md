@@ -1284,15 +1284,19 @@ error[E3001]: type mismatch: expected int, got str
 | LSP | `px lsp` | 诊断/补全/跳转/悬停，编辑器与 agent 集成 |
 | 可复现构建 | `px build --locked` | 锁定构建参数，产物带版本哈希 |
 
-**实现状态（M64 工具链自举恢复）**：上表 `fmt`（M64a）/`lint`（M64b）/`test`/`doc`/
-`bench`（M64c）均已由 PuXian 自举实现（`.px` 源码 → `bootstrap/px*` → `tools/pxc`
-子命令：`pxc fmt / lint / doc / test / bench`）；`ast` 已有 `astdump.px`（JSON/Debug
-AST），`pkg` 已有 `pxpkg`（M45）。`lsp / mcp` 留 M64d（按需启动，前置侦查 runtime
-stdio 原语）。Rust 版全套留档 `archive/rust-compiler/`（只读）。
+**实现状态（M64/M65 工具链全自举）**：上表 `fmt`（M64a）/`lint`（M64b）/`test`/`doc`/
+`bench`（M64c）/`lsp`（M65-S2/S3）/`mcp`（M65-S4）均已由 PuXian 自举实现
+（`.px` 源码 → `bootstrap/px*` → `tools/pxc` 子命令：`pxc fmt / lint / doc / test /
+bench / lsp / mcp`）；`ast` 已有 `astdump.px`（JSON/Debug AST），`pkg` 已有
+`pxpkg`（M45）。**spec §12 表内 8 工具全部自举完成**。Rust 版全套留档
+`archive/rust-compiler/`（只读）。
 
 ### 12.1 面向 AI agent 的协议
 - 优先支持 **MCP**（Model Context Protocol），AI agent 可直接调用 `px` 工具链
-- 错误信息机器可读（JSON 模式 `px build --json`），AI 可直接解析修复
+- **已实现（M65-S4）**：`pxc mcp` —— MCP 2024-11-05 stdio transport，tools/list
+  暴露 8 工具（run/fmt/lint/test/bench/doc/ast/version，带 inputSchema），
+  tools/call 子进程执行（崩溃隔离不污染协议通道）。
+- 错误信息机器可读（JSON 模式 `px build --json` / `pxc lint --json`），AI 可直接解析修复
 
 ---
 

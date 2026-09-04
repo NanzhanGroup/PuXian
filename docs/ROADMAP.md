@@ -8,7 +8,7 @@
 | 能力 | 状态 |
 |---|---|
 | 语言自举 | ✅ 编译器由 PuXian 自身编写（三步自举证明：A.c == B.c == B2.c 逐字节一致） |
-| 工具链 | ✅ `tools/pxc`（build/run/lex/parse）+ `bootstrap/` 自举二进制，零 Rust 依赖 |
+| 工具链 | ✅ `tools/pxc`（build/run/lex/parse/fmt/lint/doc/test/bench/lsp/mcp）+ `bootstrap/` 自举二进制，零 Rust 依赖 |
 | 双后端 | ✅ tree-walking 解释器 + C 转译编译，双模式行为一致（diffcheck 逐字节对拍） |
 | 类型系统 | ✅ Result/Option（`?`/`!`）、不可变（E3002）、空安全（E3003）、定义级泛型 |
 | 回归体系 | ✅ diffcheck（lexer/parser/errors/codegen/value/interp）+ capability + 自举证明 |
@@ -44,7 +44,10 @@
 | M59 | **数学与随机补齐（游戏/边缘两条线公共地基）**：C libm 内置 14 函数 + 2 常量——`sin`/`cos`/`tan`/`atan2(y,x)`（弧度）+ `floor`/`ceil`/`round`（返回 float，与 sqrt 一致）+ `log`/`log10`/`exp` + `random`/`random_int`/`random_seed`（splitmix64 确定性、跨平台可复现）+ `pi`/`e` 全精度常量；域错误 NaN/inf 透传不终止、参数错误终止（编程契约）；pxi 解释器白名单 +15 双模式同步（含补平 sqrt 不对称）+ `bootstrap/pxi` 重建；编译/解释/qemu-aarch64 三态断言 + splitmix 序列 x86==aarch64（examples/m59_math + verify_s1~s4） |
 | M60 | **边缘设备深化（树莓派线，收敛 GAP §三 #1–#5）**：5 个 C 小内置——`sleep_us`/`now_us`（CLOCK_MONOTONIC 微秒）/`fcntl`/`tty_config`（串口 termios raw+波特率）/`fd_wait`（内部 poll 暴露，GPIO 边沿/多 fd 等待）+ 第 4 个 stdlib **`std.edge`**（GPIO V2 line 请求/读写/边沿事件、I2C 寄存器、serial_open、PWM sysfs，纯语言零新 C）+ 示例（m60_serial_pty **x86 实跑 PTY 真内核串口 loopback** / m60_gpio·i2c·pwm 真板段 SKIP 通道）+ GPIO V2 592B 布局 C offsetof 单测；pxi 白名单 +5 双模式同步 + bootstrap/pxi 重建 + aarch64 交叉 qemu 三态一致（examples/m60_dev + examples/m60_*.px） |
 | M61 | **外部库 FFI proof（zlib）+ 纯语言 2D 游戏内圈（无真板期，游戏线 0→1 地基）**：A = 外部系统库绑定全链路——zlib 1.3.1 源码自编两版静态 .a 入库（runtime/third_party/zlib/{lib,lib-aarch64}，tools/build_zlib.sh）+ pxc `--zlib-lib` 自动架构探测 + 薄胶水 runtime_zlib.c（`zlib_crc32`/`zlib_compress`[uLongf* 长度指针]/`zlib_uncompress`[inflate 渐进扩容]，纯语言 CRC32 查表互证 + nm 实证符号 + aarch64 qemu 输出 diff 一致）；B = 第 5/6 个 stdlib **`std.gfx`**（Bresenham/中点圆/blit/5x7 字形 text，画布 list[int] 0xRRGGBB）**`std.png`**（纯语言 PNG stored 编码器：CRC32+ADLER+zlib stored block，零 FFI）+ demo（**Mandelbrot 640x480** / 合成场景 / **raw 终端可玩贪吃蛇** dogfood M60 设备组）+ **FFI 压缩 PNG 联动**（zlib_compress 出 IDAT，python 独立解码全验）+ pxi 重建（zlib extern 双模式一致）+ gfx 整数路径 PNG 跨架构 sha256 一致；图片落盘（QQ 富媒体通道暂拒）；SDL2/raylib 真窗口结论留档（无屏不实装） |
-
+| M62 | **语言面欠账修复 L1–L7**（MINI_SUBSET §十三，docs/M62_PLAN.md）：L1 浮点打印 `.0` 对齐 + L5 codegen 块作用域 hoist（if/for/while 内变量提升，B.c 全量同步）+ L6 split 保留空段回归 + L7 pxi bytes 族白名单补齐（+14 双模式同步）+ L2/L3/L4 不改语义留档 |
+| M63 | **语言面欠账修复 L8–L11**（docs/M63_PLAN.md）：L8 pxi 网络真实 API 白名单（http/s3 + Result 透传，双模式一致）+ L9 float→str 最短 roundtrip 全精度（fmt_num 定点/科学舒适区）+ L10 编译期浮点字面量全精度（自举重建内嵌）+ L11 bootstrap/pxc --version |
+| M64 | **工具链自举恢复**（fmt/lint/test/bench/doc，docs/M64_PLAN.md）：keep-lexer 底座（fmtlexer.px 保留行结构，不碰 pxlexer）→ `pxc fmt`（确定性格式化/幂等）→ `pxc lint`（L001–L008 AST 驱动）→ fmt 全仓收敛（selfhost+tools+stdlib 净 -318 行，B.c==golden 逐字节 + capability 253 PASS）→ `pxc doc/test/bench`（## 注释→Markdown / 顶层 test_xxx 子进程编排 / N×R 计时）+ 收尾欠债清理（CI 质量门、stdlib 收敛、QUIC/H3 内建白名单、TypeConst 收集、L007 noqa） |
+| M65 | **LSP / MCP 自举**（spec §12 收官 + §12.1 AI agent 协议，docs/M65_PLAN.md）：jsonrpc_core.px JSON-RPC/Content-Length 底座（粘包/半包自测）+ runtime `os_spawn_capture`（唯一补丁，LSP 诊断与 MCP 工具子进程化共用）→ `pxc lsp`（生命周期/文档同步/publishDiagnostics 子进程 pxcheck 深度诊断 + completion/definition/hover，lsp_core 符号层）→ `pxc mcp`（tools/list 8 工具 + tools/call 崩溃隔离）→ spec §12 8 工具全自举勾选全绿 |
 > **主线外已占用编号**（非 ROADMAP 功能里程碑，已记录于 CHANGELOG，勿复用）：
 > **M55** = issue #2 并发安全 hotfix（修复 · M55）；**M56** = 外部生产应用配套 runtime
 > `http_unix` 内建（新增 · M56）。
@@ -54,7 +57,7 @@
 ### 候选主线排期（由 docs/GAP_ANALYSIS.md 驱动，按建议顺序）
 
 > 定位：未来主线的候选池。立项流程：出 `docs/M*_PLAN.md` 规划供审 → 审批后按子步落地
-> （verify 回归 + 文档收口，见「六、执行约定」）。当前（M60 已闭环，见上表 + CHANGELOG）
+> （verify 回归 + 文档收口，见「六、执行约定」）。当前（M65 已闭环，见上表 + CHANGELOG）
 > 候选池仅剩 FFI 外部库绑定验证（游戏窗口线 0→1 前提）与真板物理回归（需硬件）。
 
 | 里程碑 | 主题 | 规模 / 前置 |

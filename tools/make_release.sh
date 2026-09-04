@@ -96,10 +96,11 @@ PuXian 开发应用"，不提供源码改动/推送通道。源码见开源仓�
 ## 内容
 | 路径 | 说明 |
 |---|---|
-| tools/pxc | 工具链入口（build/run/lex/parse/--version/help） |
+| tools/pxc | 工具链入口（build/run/lex/parse/fmt/lint/doc/test/bench/lsp/mcp/--version/help） |
 | tools/pxpkg | 包管理器（M45 registry） |
 | tools/routegen / cross_aarch64.sh | 路由生成 / aarch64 交叉库构建（可选） |
 | bootstrap/pxc pxi pxl pxpar | 自举编译器 / 解释器 / lexer / parser 二进制 |
+| bootstrap/pxfmt pxlint pxdoc pxtest pxbench pxlsp pxmcp pxcheck | 自举工具链（fmt/lint/doc/test/bench/lsp/mcp/diagnostics） |
 | runtime/ | 构建必需 C 依赖（runtime*.c/h + mbedtls + miniz + sqlite3 + ngtcp2 + openssl，x86_64 与 aarch64 库均在） |
 | stdlib/ | 标准库（import std.* 必需） |
 | RELEASE.md / LICENSE | 本说明 / Apache-2.0 |
@@ -218,9 +219,9 @@ else
     echo "  ❌ 包外 PX_STDLIB 编译失败"; fail=1
 fi
 
-# ⑥ M64 工具链自举版存在性（pxfmt/pxlint/pxdoc/pxtest/pxbench）
+# ⑥ M64/M65 工具链自举版存在性（pxfmt/pxlint/pxdoc/pxtest/pxbench + pxlsp/pxmcp/pxcheck）
 TLS=""
-for t in pxfmt pxlint pxdoc pxtest pxbench; do
+for t in pxfmt pxlint pxdoc pxtest pxbench pxlsp pxmcp pxcheck; do
     if [ -x "./bootstrap/$t" ] && "./bootstrap/$t" --version >/dev/null 2>&1; then
         TLS="$TLS $t"
     else

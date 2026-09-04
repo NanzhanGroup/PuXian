@@ -1,8 +1,9 @@
 # M64_PLAN —— 工具链自举恢复（fmt/lint/test/bench/doc/lsp/mcp）
 
 > 状态：M64-S1~S5 已完成（keep-lexer 底座 → pxfmt → pxlint → fmt 全仓收敛 →
-> doc/test/bench 三件套入库）
-> 进度：M64a（fmt）/M64b（lint）/M64c（doc+test+bench）全部完成；M64d（lsp/mcp）按需未启
+> doc/test/bench 三件套入库）+ M64 收尾欠债清理完成
+> 进度：M64a（fmt）/M64b（lint）/M64c（doc+test+bench）全部完成；
+> M64d（lsp/mcp）**已由 M65 承接完成**（docs/M65_PLAN.md，spec §12 全自举收官）
 > 关联：docs/spec.md §12（AI 工具链接口规格）、docs/GAP_ANALYSIS.md、docs/MINI_SUBSET.md
 
 ## 1. 背景与现状（全部实测 2025-09-04）

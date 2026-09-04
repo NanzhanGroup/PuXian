@@ -87,11 +87,17 @@ jobs:
         run: |
           chmod +x bootstrap/pxlint
           ./bootstrap/pxlint selfhost/compiler.px >/dev/null || { echo "❌ compiler.px 项目级 lint 失败"; exit 1; }
-          for f in tools/fmt_core.px tools/fmtlexer.px tools/lint_core.px tools/pxbench.px tools/pxdoc.px tools/pxfmt.px tools/pxlint.px tools/pxpkg.px tools/pxslice.px tools/pxtest.px tools/routegen.px; do
+          for f in tools/fmt_core.px tools/fmtlexer.px tools/jsonrpc_core.px tools/lint_core.px tools/lsp_core.px tools/pxbench.px tools/pxcheck.px tools/pxdoc.px tools/pxfmt.px tools/pxlint.px tools/pxlsp.px tools/pxmcp.px tools/pxpkg.px tools/pxslice.px tools/pxtest.px tools/routegen.px; do
             ./bootstrap/pxlint "$f" >/dev/null || { echo "❌ lint 失败: $f"; exit 1; }
           done
-          echo "✅ lint 全绿（compiler 主入口 0 错 + tools 11 文件 0/0）"
-      - name: 工具自测（m64_fmt / m64_lint）
+          echo "✅ lint 全绿（compiler 主入口 0 错 + tools 16 文件 0/0）"
+      - name: 工具自测（m64_fmt / m64_lint / m65_lsp / m65_mcp）
         run: |
           bash examples/m64_fmt/verify.sh >/dev/null && bash examples/m64_lint/verify.sh >/dev/null
-          echo "✅ m64_fmt / m64_lint verify 全 PASS"
+          python3 -c "import sys; assert sys.version_info[0]==3" && bash examples/m65_lsp/verify.sh >/dev/null && bash examples/m65_mcp/verify.sh >/dev/null
+          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp verify 全 PASS"
+      - name: LSP / MCP 服务器冒烟（--version + 协议入口存在性）
+        run: |
+          chmod +x bootstrap/pxlsp bootstrap/pxmcp bootstrap/pxcheck
+          ./tools/pxc lsp --version && ./tools/pxc mcp --version && ./bootstrap/pxcheck --version
+          echo "✅ pxlsp / pxmcp / pxcheck 就绪"

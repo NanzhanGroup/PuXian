@@ -85,14 +85,17 @@ def main():
 | `pxc doc <file.px> [--output out.md]` | 从 `##` 注释生成 Markdown 文档（M64c 自举） |
 | `pxc test <file.px> [filter] [--list]` | 运行顶层 `def test_xxx()` 测试（M64c 自举） |
 | `pxc bench <file.px> <func> [--count N] [--repeat R]` | 基准测试（M64c 自举） |
+| `pxc lsp` | **LSP 服务器**（M65 自举）：诊断/补全/跳转/悬停，stdio 即协议通道（编辑器以子进程拉起） |
+| `pxc mcp` | **MCP 服务器**（M65 自举）：AI agent 经 MCP 调用 8 工具（run/fmt/lint/test/bench/doc/ast/version） |
 | `pxc --version` / `-v` | 输出版本号 |
 | `pxc help` | 帮助 |
 
-> **工具链现状（M64 工具链自举恢复）**：`pkg / ast / fmt / lint / test / doc / bench` 七项
-> 均已由 PuXian 自举实现（`.px` 源码 → bootstrap 二进制 → `pxc` 子命令），源码见
-> `tools/pxpkg.px`、`tools/pxfmt.px`、`tools/pxlint.px`、`tools/pxdoc.px`、
-> `tools/pxtest.px`、`tools/pxbench.px`（Rust 版全套留档 `archive/rust-compiler/` 只读）。
-> `lsp / mcp` 两项为 M64d（按需，stdio/JSON-RPC 底座侦查后启动）。
+> **工具链现状（M64/M65 工具链全自举）**：`pkg / ast / fmt / lint / test / doc / bench /
+> lsp / mcp` **spec §12 全部 8 工具**均已由 PuXian 自举实现（`.px` 源码 → bootstrap 二进制 →
+> `pxc` 子命令），源码见 `tools/pxpkg.px`、`tools/pxfmt.px`、`tools/pxlint.px`、
+> `tools/pxdoc.px`、`tools/pxtest.px`、`tools/pxbench.px`、`tools/pxlsp.px` +
+> `tools/pxmcp.px`（共享底座 `tools/jsonrpc_core.px`，LSP 诊断子进程 `tools/pxcheck.px`，
+> 语义层 `tools/lsp_core.px`）。Rust 版全套留档 `archive/rust-compiler/` 只读。
 
 ---
 
@@ -217,7 +220,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 | M-B9a | 退役 Rust 版 + 接入 CI + 引导链 | `tools/pxc` 全链路可用，CI 四 job |
 | M-B9b | 第一个生产应用（dogfooding 验证） | ✅ 已迁独立私有仓库维护 |
 
-### 原生开发（M41–M58，自举后 PuXian 自身开发，全部 ✅）
+### 原生开发（M41–M65，自举后 PuXian 自身开发，全部 ✅）
 
 | 里程碑 | 内容 |
 |---|---|
@@ -231,6 +234,13 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 | M54 | **HTTP/3 生产化**：TLS 1.3 会话恢复（1-RTT resumption）+ **0-RTT early data**（握手前可发）+ 连接迁移（换源续传）+ BLOCKED_STREAMS 流控协商（-206/MAX_STREAMS） |
 | M57 | **边缘设备层支持（Linux 用户态）**：fd 原语 `open`/`close`/`ioctl`/`os_errno`（ioctl arg 三形态：int 直传 / bytes·str 就地 buffer）+ `read`/`write` 数据通道 + **mmap/munmap 活映射**（MAP_SHARED，GC 自动 munmap）+ GPIO/I2C 示例 + **aarch64 交叉编译 + qemu 验证 + `--no-quic` 裁剪** |
 | M58 | **首个 dogfood 真实应用「pxhwmond」**（硬件健康守护 daemon，examples/m58_hwmond）：多文件 import 工程 + M57 fd 通道 /proc 采集（温度条件降级）+ **mmap MAP_SHARED 快照 IPC**（外部 dump 活读 / 命令通道双向）+ 手写 HTTP 状态页（显式响应头）+ run.sh 崩溃自愈 + 阈值告警通知 + aarch64 交叉 qemu 验证 |
+| M59 | 数学与随机补齐：C libm 内置 14 函数 + 2 常量（sin/cos/tan/atan2/floor/ceil/round/log/log10/exp/random 族/pi/e，splitmix64 跨平台可复现） |
+| M60 | 边缘设备深化：`std.edge` stdlib（GPIO V2/I2C/serial/PWM，纯语言）+ sleep_us/now_us/fcntl/tty_config/fd_wait 小内置 + PTY 真内核回环 |
+| M61 | 外部库 FFI proof（zlib）+ 纯语言 2D 内圈：`std.gfx`/`std.png`（Mandelbrot/贪吃蛇 demo，FFI 压缩联动） |
+| M62 | 语言面欠账修复 L1–L7：浮点打印 .0 对齐 + codegen 块作用域 hoist + split 空段 + pxi bytes 白名单 |
+| M63 | 语言面欠账修复 L8–L11：pxi 网络 API 白名单 + float 全精度 roundtrip + pxc --version |
+| M64 | **工具链自举恢复**：`pxc fmt / lint / doc / test / bench` 五项自举（keep-lexer 底座 + 全仓收敛 + 净 -318 行） |
+| M65 | **LSP / MCP 自举**：`pxc lsp`（诊断/补全/跳转/悬停）+ `pxc mcp`（8 工具供 AI agent 调用）—— **spec §12 工具链全自举收官** |
 
 ---
 

@@ -82,10 +82,20 @@ def main():
 | `pxc run <file.px> [args...]` | Run in script mode |
 | `pxc lex <file.px>` | Print the token stream (debugging; runs the PuXian lexer) |
 | `pxc parse <file.px>` | Print the AST (debugging; runs the PuXian parser) |
+| `pxc fmt <file.px> [-w] [--check] [--diff]` | Deterministic code formatting (self-hosted, M64a) |
+| `pxc lint <file.px> [--json] [--strict]` | Static checks L001-L008 (self-hosted, M64b) |
+| `pxc doc <file.px> [--output out.md]` | Generate Markdown docs from `##` comments (self-hosted, M64c) |
+| `pxc test <file.px> [filter] [--list]` | Run top-level `def test_xxx()` tests (self-hosted, M64c) |
+| `pxc bench <file.px> <func> [--count N] [--repeat R]` | Benchmarks (self-hosted, M64c) |
+| `pxc lsp` | **LSP server** (self-hosted, M65): diagnostics / completion / definition / hover over stdio |
+| `pxc mcp` | **MCP server** (self-hosted, M65): AI agent calls 8 tools (run/fmt/lint/test/bench/doc/ast/version) |
 | `pxc --version` / `-v` | Print the version number |
 | `pxc help` | Show help |
 
-> **Current toolchain status**: the self-hosted `pxc` currently provides the core commands above. The full toolchain the Rust version once offered (`fmt / lint / test / bench / doc / lsp / mcp / pkg`) is preserved in `archive/rust-compiler/` (read-only archive — usable as reference or to be restored in PuXian as needed).
+> **Current toolchain status (M64/M65 fully self-hosted)**: all 8 spec §12 tools
+> `pkg / ast / fmt / lint / test / bench / doc / lsp / mcp` are implemented in PuXian
+> itself (`.px` source → bootstrap binary → `pxc` subcommand). The Rust version is
+> archived read-only in `archive/rust-compiler/`.
 
 ---
 
@@ -210,7 +220,7 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 | M-B9a | Retire the Rust version + wire up CI + bootstrap chain | `tools/pxc` fully usable end-to-end; CI four jobs |
 | M-B9b | First production application (dogfooding validation) | ✅ moved to a separate private repo |
 
-### Native Development (M41–M58, post-bootstrap development in PuXian itself — all ✅)
+### Native Development (M41–M65, post-bootstrap development in PuXian itself — all ✅)
 
 | Milestone | Scope |
 |---|---|
@@ -224,6 +234,13 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 | M54 | **HTTP/3 productionization**: TLS 1.3 session resumption (1-RTT) + **0-RTT early data** (send before handshake) + connection migration (source-change resume) + BLOCKED_STREAMS flow-control negotiation (-206 / MAX_STREAMS) |
 | M57 | **Edge-device-layer support (Linux userspace)**: fd primitives `open`/`close`/`ioctl`/`os_errno` (ioctl arg three forms: int direct / bytes·str in-place buffer) + `read`/`write` data path + **mmap/munmap live mapping** (MAP_SHARED, GC auto-munmap) + GPIO/I2C examples + **aarch64 cross-compile + qemu verify + `--no-quic` trimming** |
 | M58 | **First dogfood real app "pxhwmond"** (hardware health monitor daemon, examples/m58_hwmond): multi-file import project + M57 fd-path /proc collection (CPU/mem/load/uptime/net + temp conditional degrade) + **mmap MAP_SHARED snapshot IPC** (external `--dump` live-read / ctl-channel bidirectional) + hand-written minimal HTTP status page (/healthz JSON + / HTML + 404, explicit headers) + run.sh crash self-heal wrapper + threshold alerts (log + webhook dry-run) + aarch64 cross-compile & qemu `--once` verify |
+| M59 | Math & random filling: C libm 14 built-ins + 2 constants (sin/cos/tan/atan2/floor/ceil/round/log/log10/exp/random family/pi/e, splitmix64 cross-platform reproducible) |
+| M60 | Edge-device deepening: `std.edge` stdlib (GPIO V2/I2C/serial/PWM, pure language) + sleep_us/now_us/fcntl/tty_config/fd_wait built-ins + PTY real-kernel loopback |
+| M61 | External-library FFI proof (zlib) + pure-language 2D inner circle: `std.gfx`/`std.png` (Mandelbrot / snake demo, FFI compression pipeline) |
+| M62 | Language-debt fixes L1–L7: float print `.0` alignment + codegen block-scope hoist + split empty segments + pxi bytes-family whitelist |
+| M63 | Language-debt fixes L8–L11: pxi network API whitelist + float full-precision roundtrip + pxc --version |
+| M64 | **Toolchain self-hosting restored**: `pxc fmt / lint / doc / test / bench` five tools self-hosted (keep-lexer base + whole-repo convergence, net -318 lines) |
+| M65 | **LSP / MCP self-hosted**: `pxc lsp` (diagnostics/completion/definition/hover) + `pxc mcp` (8 tools for AI agents) — **spec §12 toolchain fully self-hosted** |
 
 ---
 
