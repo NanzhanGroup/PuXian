@@ -6,6 +6,46 @@
 
 ## [Unreleased]
 
+### M67 · 多架构一等支持：aarch64 交叉编译 + GC 架构抽象 + armv7/riscv64（qg-issue 07，docs/M67_PLAN.md）✅
+
+> 来源：清歌 qg-issue 07（任务清单·执行版）两阶段 —— 阶段一 aarch64 交叉编译提升为一等支持；
+> 阶段二 runtime GC 架构抽象层 + armv7（armhf）/riscv64 扩展。决策：D1 armv7/riscv64 交叉库
+> CI 现编 + actions/cache **不入库**（aarch64 维持仓库预置）；D2 armv7 = armhf（linux-musleabihf）；
+> D3 GC 改动**重构等价**（不做算法变更）；D4 两阶段一体入 M67。实测修正：apt glibc 交叉不可背书
+> （官方只支持 musl.cc / docker 两路）；riscv64 需 -no-pie；qemu-user 并发 GC 模拟限制留档。
+
+- **M67-S1~S3 阶段一 aarch64 一等支持（commit d361b29）**：README.md / README.en.md 单列
+  「ARM64 Linux 交叉编译」章节（musl.cc tarball + docker 两路获取 / 一条命令交叉 / file+qemu 校验 /
+  为何不用 apt glibc）；CI 新增 aarch64 job（actions/cache musl 工具链 + 三用例 qemu 验证）；
+  examples/m67_aarch64/{hello_a64,http_a64,sqlite_a64}.px + verify.sh（交叉编译 → file 断言 ELF ARM
+  aarch64 → qemu 运行：hello 直跑 / HTTP qemu 起服宿主 curl 200 / SQLite CRUD）本机实测全绿。
+- **M67-S4 runtime GC 架构抽象层（commit e97b377，阶段二心脏）**：runtime.c 3 处 GC 架构 #if
+  （gc_scan_stack / gc_scan_registers / gc_scan_thread_stack）迁出为统一接口 `runtime/arch.h`：
+  `arch_read_sp()`（当前线程 SP，内联汇编跨 glibc/musl）+ `arch_scan_registers(uc, mark_cb, ctx)`
+  （暂停线程 ucontext → 逐寄存器 word 回调标记）+ `arch_uc_sp(uc)`；分架构头 `arch_x86_64.h` /
+  `arch_aarch64.h`（原样迁出，行为零变化）+ 新增 **`arch_armv7.h`**（armhf：arm_r0..arm_r12 + arm_sp，
+  14 word 扫描）与 **`arch_riscv64.h`**（mcontext `__gregs[32]` RISC-V psABI 序，sp=`__gregs[2]`）——
+  GC 主逻辑不再见架构 #if，以后加架构只增头文件。等价性证明：x86_64 diffcheck --all + capability
+  双模式 253 PASS + examples/m67_multiarch/gc_stress（并发 4 worker 深链 + stop-the-world）+ m65/m66
+  verify 零回归；aarch64 交叉 verify 全绿；**armv7/riscv64 C 层探针**（SIGUSR1 ucontext → 扫 14/32
+  regs + SP）musl 交叉 + qemu 实测布局通过。
+- **M67-S5 工具链扩展（阶段二 #2 通道）**：tools/pxc zlib 自动探测扩三架构（aarch64/armv7/riscv64
+  → lib-<arch>）+ copy_runtime 拷 arch 头 + **riscv64 自动 `-no-pie`**（musl static-pie 报
+  "read-only segment has dynamic relocations" 实测修复）；`tools/cross_aarch64.sh` 泛化为
+  **`tools/cross_multiarch.sh --arch aarch64|armv7|riscv64 [--outdir dir]`**（sqlite3.o + mbedtls +
+  zlib 三件套独立副本交叉现编，架构校验 file 断言），cross_aarch64.sh 保留为 --arch aarch64 兼容薄包装。
+- **M67-S6/S7 交叉库 + 四档矩阵**：armv7/riscv64 交叉库本机现编至 /opt/px-multiarch（不入库）；
+  examples/m67_multiarch/{hello_multi,http_multi,sqlite_multi,gc_stress,gc_single}.px + verify.sh
+  四档矩阵 —— **x86_64 native 全量**（含 gc_stress 并发 GC 压力 2000 + gc_single 单线程 3 万迭代）
+  + **aarch64/armv7/riscv64 qemu-user** 各 hello/http/sqlite（qemu 起服宿主 curl 200，file 断言
+  ARM aarch64 / ARM EABI5 / RISC-V）本机全矩阵 exit=0；CI 升级 **multiarch-cross 矩阵 job**
+  （三架构并行：musl 工具链 + 现编库 actions/cache，aarch64 用仓库预置）。
+- **M67-S8 生态收口**：spec §8.21 多架构段（arch.h 接口 + 四架构 + qemu 限制记录）；ROADMAP 补 M67 行 +
+  当前里程碑 M67 已闭环；CHANGELOG 本条目；README/README.en 里程碑表扩 M41–M67；
+  tools/make_release.sh 发布包含 cross_multiarch.sh + RELEASE.md 内容表更新。
+- **验证**：四档矩阵 verify ALL PASS（x86_64 含 GC 压力）；spec/README/CHANGELOG 全绿；ci.yml
+  YAML OK；diffcheck/capability/m65/m66 零回归（S4 提交时全绿）；qg-issue 07 归档 done/。
+
 ### M66 · 自举 wsAgent runtime 原语补全 + stdlib 收编（qg-issue 01–06 全量合入，docs/M66_PLAN.md）✅
 
 > 来源：清歌（qingge）qg-issue 01–06 —— ws-core / ws-install / ws-todo 等 wsAgent 生态模块

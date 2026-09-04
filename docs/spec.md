@@ -1172,6 +1172,42 @@ os_capture stdout·stderr 分离 / os_popen 双向回显 / os_kill group 组杀 
 文件头注明主打编译模式，std.gfx 先例）、`std.lunar`（内嵌 1900-2100 农历数据表，公历/农历互转 +
 ws-todo `lunar:M-D` 重复规则落点）。
 
+### 8.21 多架构一等支持：GC 架构抽象 + 四档矩阵（M67，qg-issue 07）
+
+> M67（docs/M67_PLAN.md）落实 qg-issue 07 两阶段：阶段一 aarch64 交叉编译提升为一等支持
+> （文档/CI/三用例）；阶段二 runtime GC 架构抽象层 + armv7/riscv64 扩展（CI 四档矩阵）。
+> 关键决策：D1 armv7/riscv64 交叉库 **CI 现编 + actions/cache，不入库**控体积（aarch64 维持仓库预置）；
+> D2 armv7 = **armhf**（linux-musleabihf，树莓派 2/3）；D3 GC 改动为**重构等价**（不做算法变更，
+> x86_64 diffcheck/capability/gc_stress 全链回归 + 新架构 C 探针 + qemu 用例）；D4 两阶段一体入 M67。
+> 实测修正（vs 07 原文）：apt `gcc-aarch64-linux-gnu` 是 glibc 交叉（缺交叉头文件 + 与预置 musl 库
+> 混链 ABI 风险）→ 官方只背书 **musl.cc tarball / docker 两条路**；riscv64 musl 默认 static-pie 报
+> "read-only segment has dynamic relocations" → pxc 对 riscv64 自动加 `-no-pie`。
+
+**runtime/arch.h GC 架构抽象层（qg-issue 07 阶段二 #1）**：runtime.c 原 3 处 GC 架构 #if（gc_scan_stack /
+gc_scan_registers / gc_scan_thread_stack）迁出为统一接口 `arch_read_sp()`（当前线程 SP，内联汇编跨
+glibc/musl）+ `arch_scan_registers(uc, mark_cb, ctx)`（暂停线程 ucontext → 逐寄存器 word 回调）+ `arch_uc_sp(uc)`
+（暂停线程 SP）；按架构分文件 `arch_x86_64.h` / `arch_aarch64.h`（原样迁出，**行为零变化**）+
+新增 `arch_armv7.h`（armhf：arm_r0..arm_r12 + arm_sp，14 word 扫描）与 `arch_riscv64.h`
+（mcontext `__gregs[32]` psABI 序，sp = `__gregs[2]`）——**GC 主逻辑不再见架构 #if**，以后加架构只新增
+头文件 + arch.h 一行 include。
+
+**多架构交叉编译通道（阶段一 + 阶段二 #2/#3）**：`pxc build --no-quic --cc <arch>-linux-musl-gcc
+[--mbedtls-lib dir] [--sqlite-obj file] [--zlib-lib dir]` 支持 **x86_64 / aarch64 / armv7(armhf) /
+riscv64** 四架构；aarch64 交叉库仓库预置（M57/M61），armv7/riscv64 由 `tools/cross_multiarch.sh
+--arch <a> [--outdir dir]` 现编三件套（sqlite3.o + mbedtls + zlib，`cross_aarch64.sh` 保留为
+--arch aarch64 兼容薄包装）；pxc zlib 自动探测扩三架构（`*aarch64*→lib-aarch64` 等）。
+
+**验证（真实执行四档矩阵 examples/m67_multiarch/verify.sh ALL PASS）**：x86_64 native 全量
+（hello/http/sqlite + **gc_stress** 并发 4 worker 深链 + stop-the-world 寄存器/栈扫描 + **gc_single**
+3 万迭代单线程显式 gc）；aarch64/armv7/riscv64 qemu-user 各三用例（hello / HTTP qemu 起服宿主 curl
+200 / SQLite CRUD）产物 `file` 断言（ARM aarch64 / ARM EABI5 / RISC-V）+ qemu 运行；armv7（14 regs）/
+riscv64（32 regs）GC 架构头由 **C 层探针**（SIGUSR1 ucontext → arch_scan_registers/arch_uc_sp）qemu 实测
+布局正确；x86_64 diffcheck --all + capability 双模式 253 PASS + m65/m66 verify 零回归（重构等价证明）。
+
+**qemu-user 限制（实测记录，入文档）**：qemu-user 下并发 GC 的 stop-the-world 线程暂停信号协议 +
+逐 word 栈扫描模拟开销极大（armv7 qemu 单次 GC ~15-25s）→ 并发 GC 压力只 x86_64 native 满量验证 +
+新架构 arch 层 C 探针 + 真机（用户侧）；qemu 档跑三用例冒烟（架构可运行性）。
+
 ---
 
 ## 9. 双模式执行
