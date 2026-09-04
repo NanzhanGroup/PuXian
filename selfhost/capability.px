@@ -69,7 +69,7 @@ section("2. 正则表达式（自研引擎）")
 check("regex_match 匹配", regex_match("^[a-z]+$", "puxian"))
 check("regex_match 不匹配", not regex_match("^[0-9]+$", "puxian"))
 var m = regex_search("(\\w+)@(\\w+)", "contact a@b.com now")
-check("regex_search 分组", m != null and m["match"] == "a@b" and m["groups"][0] == "a" and m["groups"][1] == "b")
+check("regex_search 分组", m != null and m["match"] == "a@b" and m["groups"][0] == "a" and m["groups"][1] == "b")  # noqa
 check("regex_replace 替换", regex_replace("\\d+", "id-123", "#") == "id-#")
 var rs = regex_split("[,\\s]+", "a, b  c")
 check("regex_split 分割", len(rs) == 3 and rs[2] == "c")
@@ -456,21 +456,21 @@ section("18. 文件即路由（M43 std.webroute）")
 # wr_parse_file：文件名（相对应用根）→ {method, pattern, fnname} 或 null
 # 方法前缀 + _ 段拆分 + #name→:name + index 默认首页 + 特殊文件/私有/static 跳过
 var wr1 = wr_parse_file("index.px")
-check("wr index.px → GET /", wr1["method"] == "GET" and wr1["pattern"] == "/" and wr1["fnname"] == "index")
+check("wr index.px → GET /", wr1["method"] == "GET" and wr1["pattern"] == "/" and wr1["fnname"] == "index")  # noqa
 var wr2 = wr_parse_file("get_healthz.px")
-check("wr get_healthz.px → GET /healthz", wr2["method"] == "GET" and wr2["pattern"] == "/healthz" and wr2["fnname"] == "get_healthz")
+check("wr get_healthz.px → GET /healthz", wr2["method"] == "GET" and wr2["pattern"] == "/healthz" and wr2["fnname"] == "get_healthz")  # noqa
 var wr3 = wr_parse_file("get_p_#id.px")
-check("wr get_p_#id.px → GET /p/:id", wr3["method"] == "GET" and wr3["pattern"] == "/p/:id" and wr3["fnname"] == "get_p_id")
+check("wr get_p_#id.px → GET /p/:id", wr3["method"] == "GET" and wr3["pattern"] == "/p/:id" and wr3["fnname"] == "get_p_id")  # noqa
 var wr4 = wr_parse_file("post_login.px")
-check("wr post_login.px → POST /login", wr4["method"] == "POST" and wr4["pattern"] == "/login" and wr4["fnname"] == "post_login")
+check("wr post_login.px → POST /login", wr4["method"] == "POST" and wr4["pattern"] == "/login" and wr4["fnname"] == "post_login")  # noqa
 var wr5 = wr_parse_file("api/get_items.px")
-check("wr api/get_items.px → GET /api/items", wr5["method"] == "GET" and wr5["pattern"] == "/api/items" and wr5["fnname"] == "api_get_items")
+check("wr api/get_items.px → GET /api/items", wr5["method"] == "GET" and wr5["pattern"] == "/api/items" and wr5["fnname"] == "api_get_items")  # noqa
 var wr6 = wr_parse_file("about.px")
-check("wr about.px → GET /about（无方法前缀）", wr6["method"] == "GET" and wr6["pattern"] == "/about" and wr6["fnname"] == "about")
+check("wr about.px → GET /about（无方法前缀）", wr6["method"] == "GET" and wr6["pattern"] == "/about" and wr6["fnname"] == "about")  # noqa
 var wr7 = wr_parse_file("user_profile.px")
-check("wr user_profile.px → GET /user_profile（首段非方法保持字面）", wr7["method"] == "GET" and wr7["pattern"] == "/user_profile" and wr7["fnname"] == "user_profile")
+check("wr user_profile.px → GET /user_profile（首段非方法保持字面）", wr7["method"] == "GET" and wr7["pattern"] == "/user_profile" and wr7["fnname"] == "user_profile")  # noqa
 var wr8 = wr_parse_file("get.px")
-check("wr get.px → GET /（方法前缀无 rest）", wr8["method"] == "GET" and wr8["pattern"] == "/" and wr8["fnname"] == "get")
+check("wr get.px → GET /（方法前缀无 rest）", wr8["method"] == "GET" and wr8["pattern"] == "/" and wr8["fnname"] == "get")  # noqa
 check("wr main.px → null（特殊文件）", wr_parse_file("main.px") == null)
 check("wr middleware.px → null（特殊文件）", wr_parse_file("middleware.px") == null)
 check("wr generated_routes.px → null（特殊文件）", wr_parse_file("generated_routes.px") == null)
@@ -482,7 +482,7 @@ section("19. 语言糖打包（M44：简化枚举 + 列表追加简写）")
 # ============================================================
 # M44.1：type X const (A = v, B = v) 一行式带值枚举
 type LogLevel const (Info = "info", Warn = "warn", Err = "error")
-check("M44 常量访问字符串值", LogLevel.Info == "info" and LogLevel.Warn == "warn" and LogLevel.Err == "error")
+check("M44 常量访问字符串值", LogLevel.Info == "info" and LogLevel.Warn == "warn" and LogLevel.Err == "error")  # noqa
 type Code const (A = 1, B = 2, OK = true)
 check("M44 常量访问整数/布尔值", Code.A == 1 and Code.B == 2 and Code.OK == true)
 # match case 按绑定值匹配（PatLiteral → 值比较）
@@ -529,26 +529,26 @@ section("20. registry 版本化（M45：semver 解析/比较/范围匹配）")
 # ============================================================
 # M45.1：sv_parse
 let sp1 = sv_parse("1.2.3")
-check("sv_parse 基础字段", sp1["major"] == 1 and sp1["minor"] == 2 and sp1["patch"] == 3 and sp1["pre"] == "" and sp1["build"] == "")
+check("sv_parse 基础字段", sp1["major"] == 1 and sp1["minor"] == 2 and sp1["patch"] == 3 and sp1["pre"] == "" and sp1["build"] == "")  # noqa
 let sp2 = sv_parse("1.2.3-alpha.1+build5")
 check("sv_parse pre+build", sp2["pre"] == "alpha.1" and sp2["build"] == "build5")
-check("sv_parse 非法版本拒绝", sv_parse("1.2") == null and sv_parse("1.2.3.4") == null and sv_parse("1.2.x") == null)
+check("sv_parse 非法版本拒绝", sv_parse("1.2") == null and sv_parse("1.2.3.4") == null and sv_parse("1.2.x") == null)  # noqa
 check("sv_parse 前导零拒绝", sv_parse("01.2.3") == null and sv_parse("1.2.3-01") == null)
 check("sv_parse prerelease 合法", sv_parse("1.2.3-rc.1") != null and sv_parse("1.2.3-beta.2") != null)
 # M45.1：sv_cmp
 check("sv_cmp 相等", sv_cmp("1.2.3", "1.2.3") == 0)
 check("sv_cmp 数值比较（非字典序）", sv_cmp("1.2.3", "1.2.10") == -1 and sv_cmp("1.2.10", "1.2.3") == 1)
 check("sv_cmp major 主导", sv_cmp("1.10.0", "2.0.0") == -1)
-check("sv_cmp 预发布 < 正式版", sv_cmp("1.0.0-alpha", "1.0.0") == -1 and sv_cmp("1.0.0", "1.0.0-alpha") == 1)
+check("sv_cmp 预发布 < 正式版", sv_cmp("1.0.0-alpha", "1.0.0") == -1 and sv_cmp("1.0.0", "1.0.0-alpha") == 1)  # noqa
 check("sv_cmp 标识符数量多者大", sv_cmp("1.0.0-alpha", "1.0.0-alpha.1") == -1)
 check("sv_cmp 数字标识符数值比较", sv_cmp("1.0.0-alpha.2", "1.0.0-alpha.10") == -1)
 check("sv_cmp 数字 < 字母数字", sv_cmp("1.0.0-1", "1.0.0-alpha") == -1)
 check("sv_cmp 字母数字按 ASCII", sv_cmp("1.0.0-alpha", "1.0.0-beta") == -1)
 # M45.1：sv_satisfies（^ / ~ / 精确 / 通配）
-check("sv_satisfies ^ 同 major", sv_satisfies("1.2.5", "^1.2.0") and not sv_satisfies("2.0.0", "^1.2.0"))
+check("sv_satisfies ^ 同 major", sv_satisfies("1.2.5", "^1.2.0") and not sv_satisfies("2.0.0", "^1.2.0"))  # noqa
 check("sv_satisfies ^0 语义", sv_satisfies("0.2.9", "^0.2.3") and not sv_satisfies("0.3.0", "^0.2.3"))
-check("sv_satisfies ^0.0 语义", sv_satisfies("0.0.3", "^0.0.3") and not sv_satisfies("0.0.4", "^0.0.3"))
-check("sv_satisfies ~ minor 内", sv_satisfies("1.2.9", "~1.2.3") and not sv_satisfies("1.3.0", "~1.2.3"))
+check("sv_satisfies ^0.0 语义", sv_satisfies("0.0.3", "^0.0.3") and not sv_satisfies("0.0.4", "^0.0.3"))  # noqa
+check("sv_satisfies ~ minor 内", sv_satisfies("1.2.9", "~1.2.3") and not sv_satisfies("1.3.0", "~1.2.3"))  # noqa
 check("sv_satisfies ~1.2 通配", sv_satisfies("1.2.0", "~1.2") and not sv_satisfies("1.3.0", "~1.2"))
 check("sv_satisfies 精确版本", sv_satisfies("1.2.3", "1.2.3") and not sv_satisfies("1.2.4", "1.2.3"))
 check("sv_satisfies 通配 x", sv_satisfies("1.2.9", "1.2.x") and not sv_satisfies("1.3.0", "1.2.x"))
@@ -598,7 +598,7 @@ check("M47 QPACK roundtrip 字段2", dec[1][0] == "user-agent" and dec[1][1] == 
 # 伪头字段 roundtrip（:method/:scheme/:path）
 var pseudo = [["method", "GET"], ["scheme", "https"], ["path", "/hi"]]
 var dec2 = h3_qdec(h3_qenc(pseudo))
-check("M47 QPACK 伪头 roundtrip", dec2 != null and len(dec2) == 3 and dec2[0][1] == "GET" and dec2[2][1] == "/hi")
+check("M47 QPACK 伪头 roundtrip", dec2 != null and len(dec2) == 3 and dec2[0][1] == "GET" and dec2[2][1] == "/hi")  # noqa
 # 非法 QPACK（空/截断）返回 null（容错）
 check("M47 QPACK 非法输入返回 null", h3_qdec("") == null)
 # ============================================================
@@ -620,24 +620,24 @@ extern def h3_unhuff(data: bytes) -> str
 extern def bytes_to_hex(data) -> str
 extern def hex_to_bytes(s: str) -> bytes
 # M48.1：Huffman 与 RFC 7541 Appendix C 官方向量逐字节一致（互操作基准）
-check("M48 Huffman 官方向量 www.example.com", bytes_to_hex(h3_huff("www.example.com")) == "f1e3c2e5f23a6ba0ab90f4ff")
+check("M48 Huffman 官方向量 www.example.com", bytes_to_hex(h3_huff("www.example.com")) == "f1e3c2e5f23a6ba0ab90f4ff")  # noqa
 check("M48 Huffman 官方向量 no-cache", bytes_to_hex(h3_huff("no-cache")) == "a8eb10649cbf")
 check("M48 Huffman 官方向量 custom-key", bytes_to_hex(h3_huff("custom-key")) == "25a849e95ba97d7f")
-check("M48 Huffman 官方向量 custom-value", bytes_to_hex(h3_huff("custom-value")) == "25a849e95bb8e8b4bf")
-check("M48 Huffman 解码官方向量", h3_unhuff(hex_to_bytes("f1e3c2e5f23a6ba0ab90f4ff")) == "www.example.com")
+check("M48 Huffman 官方向量 custom-value", bytes_to_hex(h3_huff("custom-value")) == "25a849e95bb8e8b4bf")  # noqa
+check("M48 Huffman 解码官方向量", h3_unhuff(hex_to_bytes("f1e3c2e5f23a6ba0ab90f4ff")) == "www.example.com")  # noqa
 # M48.2：Huffman 编解码 roundtrip（URL/中文/大小写混合）
 var hrt = h3_unhuff(h3_huff("px-h3://user:pass@example.com:8443/路径?q=1&b=中文"))
 check("M48 Huffman roundtrip 复杂串", hrt == "px-h3://user:pass@example.com:8443/路径?q=1&b=中文")
 # M48.3：QPACK 静态表压缩——[:method, GET] 命中表项 17 → 00 00 D1（字节精确）
 check("M48 QPACK 静态表索引编码", bytes_to_hex(h3_qenc([[":method", "GET"]])) == "0000d1")
 var st = h3_qdec(hex_to_bytes("0000d1"))
-check("M48 QPACK 静态表索引解码", st != null and len(st) == 1 and st[0][0] == ":method" and st[0][1] == "GET")
+check("M48 QPACK 静态表索引解码", st != null and len(st) == 1 and st[0][0] == ":method" and st[0][1] == "GET")  # noqa
 # M48.4：完整 codec roundtrip（静态全匹配/静态名引用/字面名 Huffman 混合）
-var full = [[":method", "GET"], [":scheme", "https"], [":path", "/index.html"], ["content-type", "text/html; charset=utf-8"], ["x-custom-48", "ab中文c"]]
+var full = [[":method", "GET"], [":scheme", "https"], [":path", "/index.html"], ["content-type", "text/html; charset=utf-8"], ["x-custom-48", "ab中文c"]]  # noqa
 var fdec = h3_qdec(h3_qenc(full))
 check("M48 全 codec roundtrip 数量", fdec != null and len(fdec) == 5)
-check("M48 全 codec roundtrip 伪头", fdec[0][0] == ":method" and fdec[0][1] == "GET" and fdec[1][1] == "https")
-check("M48 全 codec roundtrip 静态/字面", fdec[2][1] == "/index.html" and fdec[3][1] == "text/html; charset=utf-8")
+check("M48 全 codec roundtrip 伪头", fdec[0][0] == ":method" and fdec[0][1] == "GET" and fdec[1][1] == "https")  # noqa
+check("M48 全 codec roundtrip 静态/字面", fdec[2][1] == "/index.html" and fdec[3][1] == "text/html; charset=utf-8")  # noqa
 check("M48 全 codec roundtrip 自定义 Huffman", fdec[4][0] == "x-custom-48" and fdec[4][1] == "ab中文c")
 # M48.5：容错——非法 Huffman / 动态表引用 / 动态 Indexed 拒绝（无动态表语义）
 check("M48 Huffman 非法 padding 返回 null", h3_unhuff(hex_to_bytes("ff")) == null)
@@ -668,7 +668,7 @@ var qa = h3_qs_open(4096)
 var qb = h3_qs_open(4096)
 check("M49 会话打开", qa > 0 and qb > 0)
 # M49.2：A 编码字段段（动态表插入指令入编码器流）+ 语义还原
-var m49h = [[":method", "GET"], [":path", "/idx.html"], ["user-agent", "px-h3/1.0"], ["x-m49", "dyn-ok"]]
+var m49h = [[":method", "GET"], [":path", "/idx.html"], ["user-agent", "px-h3/1.0"], ["x-m49", "dyn-ok"]]  # noqa
 var m49s1 = h3_qs_enc(qa, m49h)
 var m49e1 = h3_qs_take_enc(qa)
 check("M49 首段产生编码器流指令", qb_len(m49e1) > 0)
@@ -809,7 +809,7 @@ var m52ds2 = h3_qs_enc(q27d, [["x-tok", "tok-b"]])
 var m52do2 = h3_qs_take_enc(q27d)
 check("M52 decoder ingest abs1 指令", h3_qs_dec_ingest(q27d, m52do2))
 var m52d2 = h3_qs_dec(q27d, m52ds2)
-check("M52 decoder 还原 f2 RIC=2", m52d2 != null and len(m52d2) == 1 and m52d2[0][1] == "tok-b" and h3_qs_dec_ric(q27d) == 2)
+check("M52 decoder 还原 f2 RIC=2", m52d2 != null and len(m52d2) == 1 and m52d2[0][1] == "tok-b" and h3_qs_dec_ric(q27d) == 2)  # noqa
 check("M52 镜像表 de_len=2 / ins=2", h3_qs_de_len(q27d) == 2 and h3_qs_ins(q27d) == 2)
 h3_qs_close(q27d)
 # ============================================================
