@@ -162,7 +162,20 @@ jobs:
               ok=1
               break
             fi
-            echo "::error::下载失败 rc=$rc http=$(grep -o 'HTTP:[0-9]*' /tmp/cc.err | head -1) size=$(stat -c%s /tmp/cc.tgz 2>/dev/null || echo NA) err=$(head -c 300 /tmp/cc.err 2>/dev/null | tr '\n' ' ')"
+            {
+              echo "## musl 工具链下载诊断（第 $i 次）"
+              echo "- rc=$rc"
+              echo "- 目标: $URL"
+              echo "- 错误输出:"
+              echo '```'
+              head -c 800 /tmp/cc.err 2>/dev/null | tr '\n' ' '
+              echo ''
+              echo '```'
+              echo "- 本机网络自检:"
+              curl -sI --connect-timeout 10 -o /dev/null -w 'musl.cc HTTP:%{http_code} time:%{time_total}s ip:%{remote_ip}\n' "https://musl.cc/aarch64-linux-musl-cross.tgz" 2>&1 || echo "musl.cc 自检失败"
+              getent hosts musl.cc || echo "DNS 解析失败"
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::下载失败 rc=$rc"
             rm -f /tmp/cc.tgz
             sleep $((i * 10))
           done
