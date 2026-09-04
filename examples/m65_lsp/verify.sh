@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # ============================================================
-# examples/m65_lsp/verify.sh —— M65-S1 验收（jsonrpc 底座 + runtime 补丁）
+# examples/m65_lsp/verify.sh —— M65 LSP 里程碑验收
 # ------------------------------------------------------------
-# 断言：双模式 jsonrpc 回环 33 PASS + os_spawn_capture 冒烟 4 PASS
+# S1：双模式 jsonrpc 回环 33 PASS + os_spawn_capture 冒烟 5 PASS
+# S2：pxlsp 端到端（python3 模拟标准 LSP client 双向管道）：
+#     initialize → didOpen(didChange/didSave/didClose) → publishDiagnostics
+#     → shutdown → exit，17 断言全绿
+# 依赖：python3 + bootstrap/pxlsp + bootstrap/pxcheck（自举产物，随仓库提交）
 # ============================================================
 set -u
 cd "$(dirname "$0")/../.."
@@ -30,9 +34,26 @@ for MODE in pxi compiled; do
   echo "PASS[$MODE]: jsonrpc_selftest + spawncap_selftest"
 done
 
+echo ""
+echo "== M65-S2 verify =="
+
+# S2：pxlsp 端到端握手 + 诊断（需自举产物 pxlsp/pxcheck 与 python3）
+if [ ! -x "$BOOT/pxlsp" ] || [ ! -x "$BOOT/pxcheck" ]; then
+  echo "FAIL: 缺 bootstrap/pxlsp 或 bootstrap/pxcheck（先 tools/pxc build 后 cp）"
+  FAIL=1
+elif ! command -v python3 >/dev/null 2>&1; then
+  echo "SKIP: 无 python3（S2 client 握手验证跳过）"
+else
+  LSP_OUT=$(python3 "$HERE/lsp_client_s2.py" "$BOOT/pxlsp" "$BOOT/pxcheck" 2>&1)
+  echo "$LSP_OUT" | grep -q "ALL PASS" || { echo "FAIL: S2 client 未全绿"; echo "$LSP_OUT"; FAIL=1; }
+  echo "PASS: S2 client 端到端握手 + 诊断全绿"
+fi
+
 if [ $FAIL -eq 0 ]; then
-  echo "== M65-S1 verify: ALL PASS =="
+  echo ""
+  echo "== M65-S1/S2 verify: ALL PASS =="
   exit 0
 fi
-echo "== M65-S1 verify: FAILED =="
+echo ""
+echo "== M65-S1/S2 verify: FAILED =="
 exit 1

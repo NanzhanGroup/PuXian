@@ -1,6 +1,6 @@
 # M65_PLAN —— LSP / MCP 自举（spec §12 工具链最后两项 + AI agent 协议）
 
-> 状态：执行中 —— M65-S1 完成（2026-09-04），S2 待开工
+> 状态：执行中 —— M65-S1/S2 完成（2026-09-04），S3 待开工
 > 关联：docs/spec.md §12/§12.1、docs/M64_PLAN.md（M64d 按需立项前置侦查）、
 > archive/rust-compiler/src/lsp.rs (36618B)、mcp.rs (13409B)（只读语义参考，已退役）
 > 立项依据：M64 收尾确认「runtime fd stdin/stdout 原语已具备 → lsp/mcp 按需立项新里程碑」
@@ -178,3 +178,29 @@ Rust 版语义参考（archive，只读）：
   jr_content_length、JSON-RPC 构造/分类/标准错误码。**双模式 33 PASS / 0 FAIL**（pxi + pxc 编译版实测）。
 - `examples/m65_lsp/jsonrpc_selftest.px`、`spawncap_selftest.px`、`verify.sh`（双模式断言脚本）。
 - 待收尾：pxi 重建完成 → pxi 跑 spawncap 冒烟 → capability 双模式回归 + diffcheck --all → pxlint 重建（BUILTINS 补漏）后新文件 lint 全绿 → S1 commit。
+
+## 11. S2 执行记录（M65-S2 完成，2026-09-04）
+
+### 11.1 交付物
+| 文件 | 角色 | 验证 |
+|---|---|---|
+| `tools/pxcheck.px` → `bootstrap/pxcheck` | **独立诊断器**（LSP 子进程）：import parser+lint_core，lex+parse+lint → stdout 单行 JSON；parse/lex 错误 = parser 打印错误行后 panic（进程退出 1），pxlsp 按文本解析 | 干净 `[]`；L002 JSON（1-based 行/列）；语法/词法错误文本行 rc=1 |
+| `tools/pxlsp.px` → `bootstrap/pxlsp` | **LSP 服务器**：生命周期 initialize/initialized/shutdown/exit + 文档同步 didOpen/didChange(Full)/didSave/didClose + publishDiagnostics（子进程 pxcheck 深度诊断，服务器不 import parser/lint） | python3 模拟 client 17 断言全绿 + verify.sh S1/S2 ALL PASS |
+| `tools/pxc lsp` | pxc 薄壳直通（exec 保留 fd 0/1 + 注入 PX_PXCHECK） | `pxc lsp --version` + 文件喂帧端到端 rc=0 |
+| `examples/m65_lsp/lsp_client_s2.py` + `verify.sh` | 模拟标准 LSP client（Content-Length 帧双向管道） | initialize→didOpen(L002@0-based 行3)→didChange 干净→didChange 语法错误→didClose→shutdown→exit 全 PASS |
+
+### 11.2 S2 实测新增发现（影响 S3/S4 架构）
+| # | 发现（实测） | 处置 |
+|---|---|---|
+| J | **PuXian if/elif 不建块作用域（函数级作用域）**：同一函数内多个顺序 if 链复用变量名（p/td/uri/text/last…）+ 后链对同名变量赋值 → 命中前链 `let` 的不可变绑定 → 编译错 E3002「对不可变变量赋值」。repro 证实（两个顺序 if 各 `let txt` + 第二个 `txt=` 报 E3002） | 文档同步每个 handler 拆**独立函数**（lsp_on_open/change/save/close），同函数内不跨 if 链复用变量名 |
+| K | **`env()` 未设置时返回 null（非 ""）**：`if pxcheck == ""` 判不住 null → 后续 null+str 相加运行时错误「无法相加: null + string」杀服务器 | 默认值判断统一 `== null or == ""`；pxcheck PX_STDLIB 同修（原代码 `!= ""` 漏 null） |
+| L | json_parse 产 dict **缺键访问 = R1008 运行时错误杀进程**（同 M65-S1 B 的不可捕获属性） | pxlsp 全部嵌套 dict 访问 .has() 守卫后才取（lsp_on_* 已按此写） |
+| M | pxcheck 崩溃文本两种格式需分别解析：parser `L:C: 语法错误 CODE: msg` / lexer `错误: L:C: 词法错误 CODE: msg`（后者带「错误: 」前缀）；「运行时错误: …」行（px_error stderr）格式不同须跳过 | lsp_parse_err_line 双格式 + 首个匹配即返回（对齐 Rust 报首错即停） |
+| N | LSP Position 0-based 与 px 1-based 的换算 + severity：Error=1/Warning=2、source="px"、range=点（start=end，对齐 Rust range(pos,pos)） | lsp_json_diags 统一换算 |
+| O | pxcheck JSON 判定以 **stdout 是否以 `[` 开头**为准（pxcheck 有 lint Error 时 exit 1 但 JSON 仍输出）——不能以退出码判解析成败 | pxlsp 先 `starts_with(ot,"[")` → json_parse；否则走文本崩溃路径 |
+
+### 11.3 S2 验收结论
+- 能力位诚实协商：initialize 仅声明 `textDocumentSync {openClose, change:1(Full)}`；
+  completion/definition/hover 能力位随 **S3** 落地后再开（不提前声明未实现能力，区别于 Rust lsp.rs 一次性声明）。
+- lint/fmt：新文件 pxcheck.px / pxlsp.px pxlint 0 错 0 警 + pxfmt --check 全绿。
+- 全仓回归：verify.sh（S1+S2）ALL PASS；未动 runtime/selfhost/pxlint（零回归面）。

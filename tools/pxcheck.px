@@ -1,0 +1,208 @@
+# ============================================================
+# tools/pxcheck.px —— PuXian 独立诊断器（LSP 用子进程，M65-S2）
+# ------------------------------------------------------------
+# pxlsp 服务器不自持 parser/lint（parser/lexer 语法错误 = print+panic
+# 杀进程，M65-S1 侦查 A）→ 深度诊断必须在子进程做，pxcheck 即该子进程。
+# 输出契约（pxlsp 据此解析）：
+#   - parse 成功：stdout 输出单行 JSON 数组（lint 诊断），退出码
+#     0=无 Error / 1=含 Error（JSON 始终输出，pxlsp 以 stdout 判定）
+#   - parse/lex 失败：parser 先 print 错误行再 panic → 进程退出码 1，
+#     stdout+stderr 含错误行（"L:C: 语法错误 CODE: msg" / "错误: L:C:
+#     词法错误 CODE: msg"），pxlsp 按文本模式解析（无 JSON）
+#   - 文件不可读/参数错：stderr 提示，退出码 2
+# JSON 数组元素：{"code","level","line","col","message"}
+#   code = L001-L008 / 内置错误码；level = "E" | "W"；line/col = 1-based
+# 用法（编译版）：pxcheck <file.px> [--base <dir>] [--version]
+#   --base：import 名收集的解析根目录（LSP 文档在临时目录但 import 相对
+#   真实文件所在目录，M65-S2 决策）——缺省用文件自身目录（pxlint 语义）
+# 架构：同 pxlint（import parser + lint_core，主文件声明全局），仅输出
+#   契约不同（LSP 化 JSON）。lint 规则 L001-L008 复用 lint_core.px。
+# 构建：tools/pxc build tools/pxcheck.px → cp tools/build/pxcheck bootstrap/pxcheck
+# ============================================================
+import "../selfhost/parser.px"
+import "lint_core.px"
+# ---------- lex/parser 全局状态（import 不合并顶层 let，主文件声明） ----------
+var g_src = ""
+var g_len = 0
+var g_pos = 0
+var g_line = 1
+var g_col = 1
+var g_indent_stack = [0]
+var g_at_line_start = true
+var g_toks = []
+var g_count = 0
+var g_pending = []
+let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn": "fn", "struct": "struct", "enum": "enum", "trait": "trait", "impl": "impl", "match": "match", "case": "case", "if": "if", "elif": "elif", "else": "else", "for": "for", "while": "while", "in": "in", "and": "and", "or": "or", "not": "not", "return": "return", "break": "break", "continue": "continue", "import": "import", "from": "from", "pub": "pub", "as": "as", "spawn": "spawn", "chan": "chan", "send": "send", "recv": "recv", "select": "select", "true": "true", "false": "false", "null": "null", "None": "null", "self": "self", "capture": "capture", "extern": "extern"}  # noqa
+let CTRL_ALL = "\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}\u{8}\u{b}\u{c}\u{e}\u{f}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1a}\u{1b}\u{1c}\u{1d}\u{1e}\u{1f}\u{7f}\u{80}\u{81}\u{82}\u{83}\u{84}\u{85}\u{86}\u{87}\u{88}\u{89}\u{8a}\u{8b}\u{8c}\u{8d}\u{8e}\u{8f}\u{90}\u{91}\u{92}\u{93}\u{94}\u{95}\u{96}\u{97}\u{98}\u{99}\u{9a}\u{9b}\u{9c}\u{9d}\u{9e}\u{9f}"  # noqa
+var p_toks = []
+var p_pos = 0
+# ---------- 内置函数/构造器已知名（对齐 pxlint BUILTINS） ----------
+let BUILTINS = split("print len range type str int float bool assert panic input exit sleep to_upper to_lower trim split join contains replace starts_with ends_with abs sqrt min max pow sorted reversed sum now_ms now_us sleep_us read_file write_file append_file read_at write_at file_size fsync_file truncate_file sha256 xxhash exists list_dir mkdir remove json_parse json_stringify now env args map filter reduce read write tcp_listen tcp_accept tcp_connect tcp_send tcp_recv tcp_close http_get http_post http_serve px_exec px_serve set_timeout set_interval clear_timer base64_encode base64_decode sse_serve sse_send sse_close regex_find regex_match regex_search regex_find_all regex_replace regex_split aes_encrypt aes_decrypt aes_gcm_encrypt aes_gcm_decrypt xml_parse xml_escape xml_unescape xml_build zip_pack zip_unpack sse_connect sse_read int_to_hex hex_to_int bytes_to_hex hex_to_bytes bit_count bit_length ws_serve ws_connect ws_send ws_recv ws_close ws_ping ws_heartbeat os_pid os_spawn os_spawn_capture os_wait os_kill signal rsa_gen_key rsa_encrypt rsa_decrypt rsa_sign rsa_verify bytes bytes_len bytes_get bytes_set bytes_slice bytes_concat bytes_to_str bytes_base64 base64_to_bytes bytes_find read_bytes write_bytes int_to_bytes bytes_to_int http_request http_get_stream gc tls_server session_open session_id session_get session_set session_del session_destroy basic_auth route middleware time_format time_parse tz_offset cron sqlite_open sqlite_exec sqlite_query sqlite_close sqlite_escape sqlite_last_insert_rowid json_path json_path_set sandbox_enter vhost rate_limit gen_next list udp_open udp_send udp_recv udp_close ws_broadcast bus_new bus_subscribe bus_publish bus_unsubscribe ctx_set ctx_get ctx_clear s3_put s3_get s3_delete s3_list udp_serve ws_connect_auto h3_conn_close h3_conn_peer h3_conn_setup h3_conn_stats h3_huff h3_qdec h3_qenc h3_qs_ack_inc h3_qs_ack_sec h3_qs_close h3_qs_dec h3_qs_dec_ingest h3_qs_dec_ric h3_qs_de_len h3_qs_enc h3_qs_enc_ric h3_qs_en_len h3_qs_ins h3_qs_krc h3_qs_open h3_qs_take_enc h3_settings_dec h3_settings_enc h3_unhuff quic_close quic_close_listener quic_listen quic_open_stream quic_open_uni_stream quic_poll quic_recv_stream quic_send_stream Ok Err Some", " ")  # noqa
+# ---------- 目录/import 名收集（L002 免误报；同 pxlint） ----------
+def px_dirname(path):
+    var i = len(path) - 1
+    while i >= 0:
+        if path[i] == "/":
+            if i == 0:
+                return "/"
+            return path[0:i]
+        i -= 1
+    return "."
+def px_stdlib_dir():
+    let e = env("PX_STDLIB")
+    if e != null and e != "" and exists(e):
+        return e
+    let cands = ["stdlib", "./stdlib", "../stdlib", "../../stdlib", "/data/code/puxian/stdlib"]
+    var i = 0
+    while i < len(cands):
+        let c = cands[i]
+        if exists(c):
+            return c
+        i += 1
+    return null
+def px_mod_candidates(module, base):
+    let first = lc_unq(module[0])
+    if first == "std" and len(module) >= 2:
+        let d2 = px_stdlib_dir()
+        if d2 == null:
+            return []
+        var p = d2
+        var si = 1
+        while si < len(module):
+            p += "/" + lc_unq(module[si])
+            si += 1
+        return [p + ".px", p + "/mod.px"]
+    if len(module) == 1 and (contains(first, "/") or contains(first, ".px")):
+        var p2 = first
+        if not (len(first) > 0 and first[0] == "/"):
+            p2 = base + "/" + first
+        return [p2]
+    var p3 = base
+    var si2 = 0
+    while si2 < len(module):
+        p3 += "/" + lc_unq(module[si2])
+        si2 += 1
+    return [p3 + ".px", p3 + "/mod.px"]
+def px_scan_imports(path, known, visited):
+    if visited.has(path):
+        return
+    visited[path] = 1
+    if not exists(path):
+        return
+    let src = read_file(path)
+    p_toks = lex_tokens(src)
+    p_pos = 0
+    let ast = parse_program()
+    let sts = ast[1]
+    var si = 0
+    while si < len(sts):
+        let st2 = sts[si]
+        if st2[0] == "FuncDef":
+            lc_dset(known, lc_unq(st2[1]))
+        si += 1
+    let base = px_dirname(path)
+    var ii = 0
+    while ii < len(sts):
+        let st3 = sts[ii]
+        if st3[0] == "Import":
+            let cands = px_mod_candidates(st3[1], base)
+            var ci = 0
+            while ci < len(cands):
+                if exists(cands[ci]):
+                    px_scan_imports(cands[ci], known, visited)
+                    ci = len(cands)
+                ci += 1
+        ii += 1
+# base_root：import 名收集根目录（pxlsp 传 --base；缺省=文件自身目录）
+def px_collect_import_names(items, known, base_root):
+    let visited = lc_dnew()
+    var i = 0
+    while i < len(items):
+        let st = items[i]
+        if st[0] == "Import":
+            let cands = px_mod_candidates(st[1], base_root)
+            var ci = 0
+            while ci < len(cands):
+                if exists(cands[ci]):
+                    px_scan_imports(cands[ci], known, visited)
+                    ci = len(cands)
+                ci += 1
+        i += 1
+# ---------- 主流程：诊断 JSON（仅 stdout 单行） ----------
+def px_err(msg):
+    write(2, msg + "\n")
+def px_run(file, base_root):
+    if not exists(file):
+        px_err("pxcheck: 无法读取文件 '" + file + "'")
+        exit(2)
+    let src = read_file(file)
+    p_toks = lex_tokens(src)
+    p_pos = 0
+    let ast = parse_program()
+    let items = ast[1]
+    let known = lc_dnew()
+    var bi = 0
+    while bi < len(BUILTINS):
+        lc_dset(known, BUILTINS[bi])
+        bi += 1
+    lc_dset(known, "pi")
+    lc_dset(known, "e")
+    px_collect_import_names(items, known, base_root)
+    let diags = []
+    lc_check_program(items, src, known, diags)
+    let out = []
+    var errs = 0
+    var di = 0
+    while di < len(diags):
+        let d = diags[di]
+        let jo = {"code": d[0]}
+        jo["level"] = d[1]
+        jo["line"] = d[2]
+        jo["col"] = d[3]
+        jo["message"] = d[4]
+        out.append(jo)
+        if d[1] == "E":
+            errs += 1
+        di += 1
+    print(json_stringify(out))
+    if errs > 0:
+        exit(1)
+    exit(0)
+def usage():
+    print("pxcheck —— PuXian 独立诊断器（LSP 子进程，M65-S2）")
+    print("用法: pxcheck <file.px> [--base <dir>] [--version]")
+    print("输出: parse 成功 → stdout JSON 诊断数组；parse 失败 → 文本错误行")
+def main():
+    let as_ = args()
+    # 编译版 args() 首元素 = 程序自身路径，用户参数自 i=1 起
+    var file = ""
+    var base_root = ""
+    var i = 1
+    while i < len(as_):
+        let a = as_[i]
+        if a == "--version" or a == "-v":
+            print("pxcheck 0.1.0 (普贤 PuXian diagnostics · M65-S2)")
+            exit(0)
+        elif a == "--help" or a == "-h":
+            usage()
+            exit(0)
+        elif a == "--base":
+            if i + 1 < len(as_):
+                i += 1
+                base_root = as_[i]
+            else:
+                px_err("pxcheck: --base 缺目录")
+                exit(2)
+        elif starts_with(a, "-"):
+            px_err("pxcheck: 未知选项 '" + a + "'")
+            usage()
+            exit(2)
+        elif file == "":
+            file = a
+        i += 1
+    if file == "":
+        usage()
+        exit(2)
+    if base_root == "":
+        base_root = px_dirname(file)
+    px_run(file, base_root)
