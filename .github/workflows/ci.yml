@@ -102,11 +102,19 @@ jobs:
           chmod +x bootstrap/pxlsp bootstrap/pxmcp bootstrap/pxcheck
           ./tools/pxc lsp --version && ./tools/pxc mcp --version && ./bootstrap/pxcheck --version
           echo "✅ pxlsp / pxmcp / pxcheck 就绪"
+      - name: M67 x86_64 native 档（m67_multiarch：hello/http/sqlite + gc_stress/gc_single GC 压力）
+        run: |
+          bash examples/m67_multiarch/verify.sh --arch x86_64 >/dev/null
+          echo "✅ M67 x86_64 档（含 gc_stress 并发 4 worker + gc_single 3 万迭代 GC 压力）PASS"
 
-  aarch64-cross:
-    name: aarch64 交叉编译 + qemu 验证（M67 阶段一）
+  multiarch-cross:
+    name: 多架构交叉编译 + qemu 验证（${{ matrix.arch }}，M67）
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [aarch64, armv7, riscv64]
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -116,32 +124,60 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq qemu-user-static
           qemu-aarch64-static --version | head -1
 
-      - name: 缓存 musl aarch64 交叉工具链
-        id: cache-musl-aarch64
+      - name: 映射 musl 工具链（arch → tarball URL / 解压目录）
+        id: musl-map
+        run: |
+          case "${{ matrix.arch }}" in
+            aarch64) URL=https://musl.cc/aarch64-linux-musl-cross.tgz;       DIR=aarch64-linux-musl-cross ;;
+            armv7)   URL=https://musl.cc/armv7l-linux-musleabihf-cross.tgz;  DIR=armv7l-linux-musleabihf-cross ;;
+            riscv64) URL=https://musl.cc/riscv64-linux-musl-cross.tgz;       DIR=riscv64-linux-musl-cross ;;
+          esac
+          echo "URL=$URL" >> "$GITHUB_OUTPUT"
+          echo "DIR=$DIR" >> "$GITHUB_OUTPUT"
+
+      - name: 缓存 musl 交叉工具链
+        id: cache-musl
         uses: actions/cache@v4
         with:
-          path: /opt/muslcc/aarch64-linux-musl-cross
-          key: muslcc-aarch64-20211120
+          path: /opt/muslcc/${{ steps.musl-map.outputs.DIR }}
+          key: muslcc-${{ matrix.arch }}-20211120
 
-      - name: 下载 musl aarch64 工具链（缓存未命中）
-        if: steps.cache-musl-aarch64.outputs.cache-hit != 'true'
+      - name: 下载 musl 工具链（缓存未命中）
+        if: steps.cache-musl.outputs.cache-hit != 'true'
         run: |
           sudo mkdir -p /opt/muslcc && sudo chown "$USER" /opt/muslcc
-          curl -sL -o /tmp/aarch64.tgz https://musl.cc/aarch64-linux-musl-cross.tgz
-          tar xzf /tmp/aarch64.tgz -C /opt/muslcc
-          rm -f /tmp/aarch64.tgz
+          curl -sL -o /tmp/cc.tgz "${{ steps.musl-map.outputs.URL }}"
+          tar xzf /tmp/cc.tgz -C /opt/muslcc
+          rm -f /tmp/cc.tgz
 
       - name: 交叉工具链就绪
-        run: |
-          /opt/muslcc/aarch64-linux-musl-cross/bin/aarch64-linux-musl-gcc --version | head -1
+        run: /opt/muslcc/${{ steps.musl-map.outputs.DIR }}/bin/*-gcc --version | head -1
 
-      - name: aarch64 三用例交叉 + qemu 验证（hello / HTTP server / SQLite）
-        run: |
-          export PATH=/opt/muslcc/aarch64-linux-musl-cross/bin:$PATH
-          bash examples/m67_aarch64/verify.sh
+      - name: 缓存现编交叉静态库（armv7/riscv64；aarch64 仓库预置免编）
+        id: cache-libs
+        uses: actions/cache@v4
+        with:
+          path: /opt/px-multiarch
+          key: px-libs-${{ matrix.arch }}-v1
 
-      - name: cross_aarch64.sh 冒烟（存在性 + 语法 + aarch64 产物位）
+      - name: 现编 armv7/riscv64 交叉库（缓存未命中）
+        if: steps.cache-libs.outputs.cache-hit != 'true' && matrix.arch != 'aarch64'
         run: |
+          export PATH=/opt/muslcc/${{ steps.musl-map.outputs.DIR }}/bin:$PATH
+          mkdir -p /opt/px-multiarch
+          tools/cross_multiarch.sh --arch ${{ matrix.arch }} --outdir /opt/px-multiarch/${{ matrix.arch }}
+
+      - name: 交叉编译 + qemu 验证（${{ matrix.arch }}）
+        run: |
+          export PATH=/opt/muslcc/${{ steps.musl-map.outputs.DIR }}/bin:$PATH
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            bash examples/m67_aarch64/verify.sh          # 阶段一三用例（aarch64 一等支持）
+          fi
+          bash examples/m67_multiarch/verify.sh --arch ${{ matrix.arch }}
+
+      - name: cross_multiarch.sh / cross_aarch64.sh 冒烟（存在性 + 语法）
+        run: |
+          [ -f tools/cross_multiarch.sh ] || { echo "❌ 缺 tools/cross_multiarch.sh"; exit 1; }
           [ -f tools/cross_aarch64.sh ] || { echo "❌ 缺 tools/cross_aarch64.sh"; exit 1; }
-          bash -n tools/cross_aarch64.sh || { echo "❌ cross_aarch64.sh 语法错误"; exit 1; }
-          echo "✅ cross_aarch64.sh 存在且语法 OK（发布包已含）"
+          bash -n tools/cross_multiarch.sh && bash -n tools/cross_aarch64.sh
+          echo "✅ cross_multiarch.sh / cross_aarch64.sh 存在且语法 OK（发布包已含）"

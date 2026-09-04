@@ -1,0 +1,91 @@
+# ============================================================
+# gc_stress.px —— M67-S4/S7：并发 + 深链 GC 压力测试
+# ------------------------------------------------------------
+# 目的：专测 arch_*.h（arch_read_sp / arch_scan_registers / arch_uc_sp）
+#       在多架构下的保守扫描正确性 —— 新架构（armv7/riscv64）寄存器/栈
+#       扫描若漏标，深链对象会被误回收，随后的链访问即崩/断言失败 → rc!=0。
+# 场景设计：
+#   4 个 spawn worker 各自持有深链头部（{"id","n"} 单向链），紧凑循环内
+#   频繁重建/丢弃子链 —— -O2 下 head 引用可能只在寄存器中，只有寄存器
+#   扫描（arch_scan_registers）能保住它；
+#   主线程同步压力循环 + 显式 gc() 强制回收 —— worker 活跃时走
+#   stop-the-world：gc_scan_registers + gc_scan_thread_stack 全量扫描
+#   （arch_uc_sp 取暂停线程 SP 做栈扫描起点）。
+# 规模：默认 2000（x86_64 native 满量）；可用参数调小（qemu 下并发 GC 的
+#   线程暂停信号协议模拟开销大，CI/qemu 用小规模如 300 即可覆盖扫描路径）：
+#   ./gc_stress              # 2000（默认）
+#   qemu-... ./gc_stress 300 # 小规模（qemu-user 验证）
+# 通过标准：worker 链头全程可访问（值/结构不坏）+ 主链头可访问 + 4 worker
+#   全部完成 → 打印 "gc_stress OK"；任何漏标误回收 → 断言/访问失败退出非 0。
+# ============================================================
+def worker(id, done, scale):
+    var head = null
+    var i = 0
+    var check_every = scale / 10 + 1
+    while i < scale:
+        var node = {"id": id, "n": head}
+        if i % 30 == 0:
+            head = node  # 周期性更新头引用（旧链成为可回收垃圾）
+        if i % check_every == 0:
+            # 中途访问链头，验证未被误回收（值 + 结构完整）
+            var cur = head
+            var d = 0
+            while cur != null and d < 20:
+                if cur["id"] != id:
+                    print("FAIL worker " + str(id) + " 链值错乱（疑似误回收）")
+                    exit(1)
+                cur = cur["n"]
+                d = d + 1
+        i = i + 1
+    # 最终统计链长（头每 30 次更新 → 约 scale/30 层）
+    var c = head
+    var total = 0
+    while c != null:
+        if c["id"] != id:
+            print("FAIL worker " + str(id) + " 最终链值错乱")
+            exit(1)
+        c = c["n"]
+        total = total + 1
+        if total > 1000000:
+            break
+    done.send (id)
+    print("worker " + str(id) + " done depth=" + str(total))
+def main():
+    var scale = 2000
+    var a = args()
+    if len(a) > 1:
+        scale = int(a[1])
+    if scale < 50:
+        scale = 50
+    var done = chan [int](8)
+    spawn worker(1, done, scale)
+    spawn worker(2, done, scale)
+    spawn worker(3, done, scale)
+    spawn worker(4, done, scale)
+    # 主线程同步压力 + 显式 GC（worker 活跃 → stop-the-world 全量扫描）
+    var h = null
+    var j = 0
+    var gc_every = scale / 4 + 1
+    while j < scale:
+        var n = [j, h]
+        if j % 25 == 0:
+            h = n  # list 深链（[idx, prev]）
+        if j % gc_every == 0:
+            gc()  # 强制全量回收（并发时暂停所有 worker 扫寄存器+栈）
+        j = j + 1
+    # 主链头访问断言（结构完整 = 未被误回收）
+    var c3 = h
+    var t3 = 0
+    while c3 != null and t3 < 100:
+        assert type(c3) == "list"
+        c3 = c3[1]
+        t3 = t3 + 1
+    # 等 4 worker 全部完成
+    var got = 0
+    while got < 4:
+        var v = done.recv ()
+        if v < 1 or v > 4:
+            print("FAIL 未知 worker id " + str(v))
+            exit(1)
+        got = got + 1
+    print("gc_stress OK: 4 workers + main 深链全程存活，无漏标误回收")

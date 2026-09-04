@@ -1,0 +1,40 @@
+# ============================================================
+# gc_single.px —— M67-S7：单线程 GC 压力（qemu-user 验证用）
+# ------------------------------------------------------------
+# 背景：qemu-user 下并发 GC 的线程暂停信号协议（SIG_GC_STOP 到各 spawn 线程）
+#       模拟开销极大（实测 armv7 qemu 单次 stop-the-world 约 20s+），不适合
+#       qemu 跑并发 gc_stress（native x86 已满量验证并发路径，真机用户亦可跑）。
+#       本文件以单线程深链 + 显式 gc 覆盖新架构的单线程扫描路径：
+#         arch_read_sp()（gc_scan_stack 当前线程 SP）+ 主线程栈保守扫描，
+#       在 qemu-arm / qemu-riscv64 上快速完成（数秒级）。
+# 新架构并发路径（arch_scan_registers / arch_uc_sp）由 C 层探针
+#   （SIGUSR1 ucontext → 扫 14/32 寄存器 + SP）在 qemu 实测通过；
+#   并发整体正确性由 x86_64 native gc_stress（4 worker 深链满量）覆盖。
+# 通过标准：深链全程存活 + 显式 gc 后结构完整 → "gc_single OK"。
+# 用法：qemu-arm-static ./gc_single [scale]   （默认 30000，qemu 建议 3000）
+# ============================================================
+def main():
+    var scale = 30000
+    var a = args()
+    if len(a) > 1:
+        scale = int(a[1])
+    if scale < 200:
+        scale = 200
+    var h = null
+    var j = 0
+    var gc_every = scale / 4 + 1
+    while j < scale:
+        var n = [j, h]
+        if j % 20 == 0:
+            h = n  # 深链头（每 20 次更新 → 旧链可回收垃圾）
+        if j % gc_every == 0:
+            gc()  # 显式全量回收（单线程：gc_scan_stack arch_read_sp 路径）
+        j = j + 1
+    # 链头访问断言（结构完整 = 未误回收）
+    var c = h
+    var t = 0
+    while c != null and t < 60:
+        assert type(c) == "list"
+        c = c[1]
+        t = t + 1
+    print("gc_single OK depth=" + str(t))

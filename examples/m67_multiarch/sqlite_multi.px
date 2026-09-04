@@ -1,0 +1,20 @@
+# ============================================================
+# sqlite_a64.px —— M67 阶段一：多架构交叉 SQLite 验证（四档矩阵用例 3/4）
+# ------------------------------------------------------------
+# 内存库 CRUD + 查询断言（对齐 m28 SQLite 绑定语义；双模式逐字节一致）。
+# 交叉编译链到 runtime/third_party/sqlite3/sqlite3-003carch003e.o（预置 aarch64 静态对象）。
+# ============================================================
+def main():
+    var db = sqlite_open(":memory:")
+    assert type(db) == "int" and db > 0
+    sqlite_exec(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, score REAL)")
+    sqlite_exec(db, "INSERT INTO t(name, score) VALUES ('alice', 90.5), ('bob', 88.0)")
+    var rows = sqlite_query(db, "SELECT id, name, score FROM t ORDER BY id")
+    assert len(rows) == 2
+    assert rows[0]["name"] == "alice"
+    assert rows[0]["score"] == 90.5
+    assert rows[1]["name"] == "bob"
+    var r2 = sqlite_query(db, "SELECT name FROM t WHERE score >= ?", [89])
+    assert len(r2) == 1 and r2[0]["name"] == "alice"
+    sqlite_close(db)
+    print("sqlite multiarch OK (m67)")

@@ -63,11 +63,16 @@ echo "$OUT" | grep -q "PX_ARCH_CROSS_OK" || fail "hello qemu 运行未达预期"
 echo "== D2. http_a64（qemu 起服 + 宿主 curl 200）=="
 "$QEMU" "$TMPD/build/http_a64" > "$TMPD/http.log" 2>&1 &
 SRV=$!
-sleep 1
-grep -q "READY" "$TMPD/http.log" || { cat "$TMPD/http.log"; kill "$SRV" 2>/dev/null; fail "http 服务未就绪"; }
-RESP=$(curl -s -o "$TMPD/http.body" -w "%{http_code}" "http://127.0.0.1:$PORT/" 2>&1)
+RESP=""
+n=0
+# print 到重定向 stdout 为全缓冲，不能靠 READY 就绪标记 → 轮询 curl（qemu 启动慢给足 10s）
+while [ "$RESP" != "200" ] && [ "$n" -lt 40 ]; do
+    sleep 0.25
+    RESP=$(curl -s -m 2 -o "$TMPD/http.body" -w "%{http_code}" "http://127.0.0.1:$PORT/" 2>/dev/null)
+    n=$((n + 1))
+done
 kill "$SRV" 2>/dev/null
-[ "$RESP" = "200" ] || fail "curl 状态码 $RESP ≠ 200"
+[ "$RESP" = "200" ] || { cat "$TMPD/http.log"; fail "curl 状态码 $RESP ≠ 200（10s 内未就绪）"; }
 grep -q "m67-aarch64-http-ok" "$TMPD/http.body" || fail "响应 body 不符"
 echo "  HTTP 200 + body=m67-aarch64-http-ok"
 ok "http qemu 起服宿主请求通过"
