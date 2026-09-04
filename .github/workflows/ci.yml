@@ -146,7 +146,6 @@ jobs:
 
       - name: 缓存 zig cc（路 2 fallback，55MB 覆盖三架构 musl 交叉）
         id: cache-zig
-        if: steps.cache-musl.outputs.cache-hit != 'true'
         uses: actions/cache@v4
         with:
           path: /opt/zig
@@ -211,7 +210,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /opt/px-multiarch
-          key: px-libs-${{ matrix.arch }}-${{ steps.dl.outputs.TOOLCHAIN || 'cached' }}-v1
+          key: px-libs-${{ matrix.arch }}-v2
 
       - name: 现编 armv7/riscv64 交叉库（缓存未命中）
         if: steps.cache-libs.outputs.cache-hit != 'true' && matrix.arch != 'aarch64'
