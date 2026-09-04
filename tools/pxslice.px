@@ -1,0 +1,128 @@
+# ============================================================
+# M64-S5: pxslice.px —— 源码顶层块切片核心（纯 defs，零顶层全局）
+# ------------------------------------------------------------
+# pxtest / pxbench 共用：把被测 .px 源码切成"顶层定义块 + 顶层可执行语句"，
+# 剔除后者（对齐 Rust test.rs / bench.rs run_one_test：仅保留
+# FuncDef/StructDef/EnumDef/TraitDef/ImplDef/Import 等顶层定义）。
+# 实现为纯文本行级切片（PuXian 缩进敏感、无跨行字面量、fmt 已收敛全仓格式）：
+#   - 顶层块 = 缩进 0 起始行 + 其后连续缩进>0 行（含块内空行/注释）
+#   - 定义类起始行（def/struct/enum/trait/impl/import/from/extern/pub…）→ 保留整块
+#   - 其余顶层起始行（var/let/if/for/while/表达式）→ 整块丢弃
+#   - def 类行解析函数名 + 参数串（无参判定 test_xxx()）
+# 缺陷（对齐 Rust 语义，接受）：嵌套在顶层可执行语句内的 def/顶层 var 全局
+# 初始化不保留；被保留 def 引用被剔除全局时运行期报未定义（同 Rust 一致）。
+# 本文件只含 def，import 零全局声明负担（fmt_core.px 同构惯例）。
+# ============================================================
+# ---------- 字符工具 ----------
+def pp_find_char(s, c, start):
+    var i = start
+    while i < len(s):
+        if s[i] == c:
+            return i
+        i += 1
+    return -1
+def pp_is_ws_line(line):
+    var i = 0
+    while i < len(line):
+        if line[i] != " " and line[i] != "\t":
+            return false
+        i += 1
+    return true
+def pp_indent_of(line):
+    var n = 0
+    while n < len(line) and line[n] == " ":
+        n += 1
+    return n
+# ---------- 定义类判定 ----------
+# t 为已 trim 的行。定义类：def/struct/enum/trait/impl（带体）+
+# import/from/extern（单行声明）。pub 前缀递归剥除。
+def pp_is_def_line(t):
+    if starts_with(t, "def ") or t == "def":
+        return true
+    if starts_with(t, "struct ") or starts_with(t, "enum ") or starts_with(t, "trait ") or starts_with(t, "impl "):  # noqa
+        return true
+    if starts_with(t, "import") or starts_with(t, "from "):
+        return true
+    if starts_with(t, "extern def ") or starts_with(t, "extern "):
+        return true
+    if starts_with(t, "pub "):
+        let sub = trim(t[4:])
+        if pp_is_def_line(sub):
+            return true
+    return false
+# ---------- def 解析：返回 [name, 参数串] ----------
+# line 可能 "def f():"/"pub def f(a, b) -> int:"/"extern def f() -> int"
+def pp_def_name_params(line):
+    var t = trim(line)
+    if starts_with(t, "pub "):
+        t = trim(t[4:])
+    if starts_with(t, "extern "):
+        t = trim(t[7:])
+    # t 现在 "def ..."（extern def → "def ..."）
+    var rest = t
+    if starts_with(rest, "def "):
+        rest = trim(rest[4:])
+    elif rest == "def":
+        return ["", ""]
+    else:
+        return ["", ""]
+    var po = pp_find_char(rest, "(", 0)
+    if po < 0:
+        return [rest, ""]
+    var name = trim(rest[0:po])
+    var pc = pp_find_char(rest, ")", po)
+    if pc < 0:
+        return [name, ""]
+    return [name, trim(rest[po + 1:pc])]
+# ---------- 顶层块切片 ----------
+# 返回 [保留的定义块行(list[str]), defs(list[[name, param], ...])]
+def pp_collect(src):
+    let lines = split(src, "\n")
+    var blocks = []
+    var defs = []
+    let n = len(lines)
+    var i = 0
+    while i < n:
+        let line = lines[i]
+        if pp_is_ws_line(line):
+            i += 1
+            continue
+        # 防御：顶层出现缩进行（前面块未配对消费）→ 丢弃防死循环
+        if line[0] == " ":
+            i += 1
+            continue
+        # 缩进 0 起始行：收集块（含后续 >0 缩进行，直到下一缩进 0 行）
+        var blk = []
+        var j = i
+        while j < n:
+            if j > i:
+                let l2 = lines[j]
+                if not pp_is_ws_line(l2) and l2[0] != " ":
+                    break
+            blk.append(lines[j])
+            j += 1
+        let t = trim(line)
+        if pp_is_def_line(t):
+            var k = 0
+            while k < len(blk):
+                blocks.append(blk[k])
+                k += 1
+            # def 类（含 extern def/pub def）记录名字与参数；struct 等不记
+            var tt = t
+            if starts_with(tt, "pub ") and not (starts_with(tt, "pub def")):
+                tt = tt  # struct/enum/trait 带 pub 前缀不解析名字，跳过
+            var np = pp_def_name_params(line)
+            if np[0] != "":
+                defs.append(np)
+        # 顶层可执行块：整块丢弃
+        i = j
+    return [blocks, defs]
+# ---------- 拼接定义块为源码文本 ----------
+def pp_blocks_text(blocks):
+    var out = ""
+    var i = 0
+    while i < len(blocks):
+        out += blocks[i]
+        out += "\n"
+        i += 1
+    return out

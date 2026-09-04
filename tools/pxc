@@ -34,6 +34,9 @@ PXL_BIN="$PXC_HOME/bootstrap/pxl"     # lexer.px 编译版（pxc lex 用）
 PXPAR_BIN="$PXC_HOME/bootstrap/pxpar" # parser.px 编译版（pxc parse 用）
 PXFMT_BIN="$PXC_HOME/bootstrap/pxfmt" # fmt_core+pxfmt 编译版（pxc fmt 用，M64a）
 PXLINT_BIN="$PXC_HOME/bootstrap/pxlint" # lint_core+pxlint 编译版（pxc lint 用，M64b）
+PXDOC_BIN="$PXC_HOME/bootstrap/pxdoc"   # pxdoc 编译版（pxc doc 用，M64c）
+PXTEST_BIN="$PXC_HOME/bootstrap/pxtest" # pxtest 编译版（pxc test 用，M64c）
+PXBENCH_BIN="$PXC_HOME/bootstrap/pxbench" # pxbench 编译版（pxc bench 用，M64c）
 RT_DIR="$PXC_HOME/runtime"
 SELFHOST_VER="0.1.0"
 SELFHOST_MILESTONE="M-B9a"
@@ -64,6 +67,12 @@ pxc $(echo "$SELFHOST_VER") (普贤 PuXian · selfhosted $SELFHOST_MILESTONE)
                                               -w 写回 / --check 仅检查 / --diff 打印差异）
   pxc lint <file.px> [--json] [--strict]      静态检查 L001-L008（M64b 自举；有错退出 1，
                                               --strict 时警告也退出 1 / --json 机器可读）
+  pxc doc <file.px> [--output out.md]         从 ## 文档注释生成 Markdown（M64c 自举；
+                                              默认 stdout，--output 写文件）
+  pxc test <file.px> [filter] [--list]        运行顶层 def test_xxx() 测试（M64c 自举；
+                                              逐用例独立 pxi 子进程，有失败退出 1）
+  pxc bench <file.px> <func> [--count N] [--repeat R]
+                                              基准测试（M64c 自举；N 次循环调用 × R 轮）
   pxc --version                               输出版本号
   pxc help                                    显示本帮助
 EOF
@@ -234,6 +243,22 @@ cmd_lint() {
     "$PXLINT_BIN" "$@"
 }
 
+# M64c：px doc（PuXian 自举文档生成器，bootstrap/pxdoc）
+cmd_doc() {
+    "$PXDOC_BIN" "$@"
+}
+
+# M64c：px test（PuXian 自举测试运行器，bootstrap/pxtest）
+# 注入 PX_PXI：pxtest 内部 os_spawn(bootstrap/pxi) 逐用例执行（语言内编排）
+cmd_test() {
+    PX_PXI="$PXI_BIN" "$PXTEST_BIN" "$@"
+}
+
+# M64c：px bench（PuXian 自举基准工具，bootstrap/pxbench）
+cmd_bench() {
+    PX_PXI="$PXI_BIN" "$PXBENCH_BIN" "$@"
+}
+
 # ---- 入口 ----
 cmd="${1:-help}"
 case "$cmd" in
@@ -243,6 +268,9 @@ case "$cmd" in
     parse) shift; [ $# -ge 1 ] || { echo "用法: pxc parse <file.px>" >&2; exit 1; }; cmd_parse "$1" ;;
     fmt)   shift; [ $# -ge 1 ] || { echo "用法: pxc fmt <file.px> [-w] [--check] [--diff]" >&2; exit 1; }; cmd_fmt "$@" ;;
     lint)  shift; [ $# -ge 1 ] || { echo "用法: pxc lint <file.px> [--json] [--strict]" >&2; exit 1; }; cmd_lint "$@" ;;
+    doc)   shift; [ $# -ge 1 ] || { echo "用法: pxc doc <file.px> [--output out.md]" >&2; exit 1; }; cmd_doc "$@" ;;
+    test)  shift; [ $# -ge 1 ] || { echo "用法: pxc test <file.px> [filter] [--list]" >&2; exit 1; }; cmd_test "$@" ;;
+    bench) shift; [ $# -ge 2 ] || { echo "用法: pxc bench <file.px> <func> [--count N] [--repeat R]" >&2; exit 1; }; cmd_bench "$@" ;;
     --version|-v) echo "pxc $SELFHOST_VER (普贤 PuXian · selfhosted $SELFHOST_MILESTONE)";;
     help|--help|-h) usage ;;
     *) echo "未知子命令: $cmd" >&2; usage >&2; exit 1 ;;

@@ -218,6 +218,17 @@ else
     echo "  ❌ 包外 PX_STDLIB 编译失败"; fail=1
 fi
 
+# ⑥ M64 工具链自举版存在性（pxfmt/pxlint/pxdoc/pxtest/pxbench）
+TLS=""
+for t in pxfmt pxlint pxdoc pxtest pxbench; do
+    if [ -x "./bootstrap/$t" ] && "./bootstrap/$t" --version >/dev/null 2>&1; then
+        TLS="$TLS $t"
+    else
+        echo "  ❌ bootstrap/$t --version 失败"; fail=1
+    fi
+done
+echo "  ⑥ 工具链自举版 →$TLS"
+
 cd / && rm -rf /tmp/pxuser "$CHK"
 echo "== 自检结果: $([ "$fail" = 1 ] && echo '❌ FAIL' || echo '✅ ALL OK') =="
 echo "发布包就绪: $PKG"

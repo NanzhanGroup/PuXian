@@ -1,0 +1,213 @@
+# ============================================================
+# M64-S5: pxdoc.px —— 普贤文档生成器（自举版，px doc 等价物）
+# ------------------------------------------------------------
+# 对齐 Rust archive/rust-compiler/src/doc.rs：
+#   - 约定：`##` 开头的文档注释（非 ###）紧跟顶层 def/struct/enum/trait
+#   - 连续 ## 注释合并为该定义的文档；行结构 token（换行/缩进/去缩进/EOF）
+#     不打断待定注释，其他 token 打断（对齐 Rust 语义：文件头说明块会并入
+#     首个定义，与 Rust 版行为一致）
+#   - 签名提取：def 起至主体前（depth==0 遇换行）token 序列，按 join_sig
+#     空格规则渲染（`def f(a : int) -> int :` 对齐 Rust join_sig）
+#   - 输出：# {basename} API 文档 / ## 函数 / ### `sig` + doc /
+#     ## 类型；无文档注释 → _无文档注释。_；无定义 → 提示
+# 依赖：import fmtlexer.px（keep-lexer 底座，lex_tokens_keep 产注释 token）
+#   —— 按 §9.3 在此重复声明 fmtlexer 引用的全部顶层全局（pxfmt.px 同构）
+# 构建：tools/pxc build tools/pxdoc.px → cp tools/build/pxdoc bootstrap/pxdoc
+# ============================================================
+import "fmtlexer.px"
+# ---------- 全局声明（与 fmtlexer.px 顶部一致；import 不合并顶层 let） ----------
+var g_src = ""
+var g_len = 0
+var g_pos = 0
+var g_line = 1
+var g_col = 1
+var g_indent_stack = [0]
+var g_at_line_start = true
+var g_toks = []
+var g_count = 0
+var g_pending = []
+var g_keep = false
+let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn": "fn", "struct": "struct", "enum": "enum", "trait": "trait", "impl": "impl", "match": "match", "case": "case", "if": "if", "elif": "elif", "else": "else", "for": "for", "while": "while", "in": "in", "and": "and", "or": "or", "not": "not", "return": "return", "break": "break", "continue": "continue", "import": "import", "from": "from", "pub": "pub", "as": "as", "spawn": "spawn", "chan": "chan", "send": "send", "recv": "recv", "select": "select", "true": "true", "false": "false", "null": "null", "None": "null", "self": "self", "capture": "capture", "extern": "extern"}  # noqa
+let CTRL_ALL = "\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}\u{8}\u{b}\u{c}\u{e}\u{f}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1a}\u{1b}\u{1c}\u{1d}\u{1e}\u{1f}\u{7f}\u{80}\u{81}\u{82}\u{83}\u{84}\u{85}\u{86}\u{87}\u{88}\u{89}\u{8a}\u{8b}\u{8c}\u{8d}\u{8e}\u{8f}\u{90}\u{91}\u{92}\u{93}\u{94}\u{95}\u{96}\u{97}\u{98}\u{99}\u{9a}\u{9b}\u{9c}\u{9d}\u{9e}\u{9f}"  # noqa
+# ---------- 工具 ----------
+def pd_trim_hash(line):
+    # 去掉行首空白与全部 # 前缀后 trim（对齐 Rust clean_doc_line）
+    var t = trim(line)
+    var i = 0
+    while i < len(t) and t[i] == "#":
+        i += 1
+    return trim(t[i:])
+def pd_is_doc(val):
+    var t = trim(val)
+    if starts_with(t, "##") and not starts_with(t, "###"):
+        return true
+    return false
+# ---------- 签名 token 渲染（对齐 doc.rs render_sig_token） ----------
+def pd_tok_text(t):
+    let k = t[0]
+    if k == "标识符":
+        return t[1]
+    if k == "整数":
+        return t[1]
+    if k == "浮点":
+        return t[1]
+    if k == "字符串":
+        return t[1]
+    return k
+# ---------- 签名拼接（对齐 doc.rs join_sig） ----------
+# `(` 前无空格、`)`/`,`/`:` 前无空格、`,`/`:`/`->` 后加空格
+def pd_join_sig(ts):
+    var out = ""
+    var i = 0
+    while i < len(ts):
+        let cur = ts[i]
+        if i == 0:
+            out += cur
+            i += 1
+            continue
+        let prev = ts[i - 1]
+        var need = true
+        if cur == ")" or cur == "," or cur == ":" or cur == "(":
+            need = false
+        elif prev == "(":
+            need = false
+        elif prev == "," or prev == ":" or prev == "->":
+            need = true
+        if need:
+            out += " "
+        out += cur
+        i += 1
+    return out
+# ---------- 主生成 ----------
+def pd_gen(src, fname):
+    var toks = lex_tokens_keep(src)
+    let md = "# " + fname + " API 文档\n\n> 由 `px doc` 自动生成。\n\n"
+    var funcs = []
+    var types = []
+    var pending = []
+    var i = 0
+    let n = len(toks)
+    while i < n:
+        let t = toks[i]
+        let k = t[0]
+        if k == "注释":
+            if pd_is_doc(t[1]):
+                pending.append(pd_trim_hash(t[1]))
+            else:
+                pending = []
+            i += 1
+            continue
+        if k == "def" or k == "struct" or k == "enum" or k == "trait":
+            let doc = join("\n", pending)
+            pending = []
+            # 提取签名：至 depth==0 遇行结构 token
+            var j = i
+            var depth = 0
+            var sig = []
+            while j < n:
+                let tk = toks[j]
+                let kk = tk[0]
+                if kk == "换行" or kk == "缩进" or kk == "去缩进" or kk == "EOF":
+                    if depth == 0:
+                        break
+                if kk == "(" or kk == "[" or kk == "{":
+                    depth += 1
+                elif kk == ")" or kk == "]" or kk == "}":
+                    depth -= 1
+                sig.append(pd_tok_text(tk))
+                if depth < 0:
+                    break
+                if depth == 0 and kk == "换行":
+                    break
+                j += 1
+            let sigs = pd_join_sig(sig)
+            if k == "def":
+                funcs.append([sigs, doc])
+            else:
+                types.append([sigs, doc])
+            i = j
+            continue
+        if k != "换行" and k != "缩进" and k != "去缩进" and k != "EOF":
+            # 行结构 token 不打断待定文档注释；其他 token 打断（对齐 Rust doc.rs）
+            pending = []
+        i += 1
+    # 输出
+    var out = md
+    if len(funcs) > 0:
+        out += "## 函数\n\n"
+        var fi = 0
+        while fi < len(funcs):
+            let f = funcs[fi]
+            out += "### `" + f[0] + "`\n\n"
+            if f[1] == "":
+                out += "_无文档注释。_\n\n"
+            else:
+                out += f[1]
+                out += "\n\n"
+            fi += 1
+    if len(types) > 0:
+        out += "## 类型\n\n"
+        var ti = 0
+        while ti < len(types):
+            let ty = types[ti]
+            out += "### `" + ty[0] + "`\n\n"
+            if ty[1] == "":
+                out += "_无文档注释。_\n\n"
+            else:
+                out += ty[1]
+                out += "\n\n"
+            ti += 1
+    if len(funcs) == 0 and len(types) == 0:
+        out += "_未发现带 `##` 文档注释的顶层定义。_\n"
+    return out
+def pd_basename(path):
+    var i = len(path) - 1
+    while i >= 0:
+        if path[i] == "/":
+            return path[i + 1:]
+        i -= 1
+    return path
+def pd_usage():
+    print("pxdoc —— PuXian 文档生成器（自举，M64-S5）")
+    print("用法: pxdoc <file.px> [--output out.md] [--version]")
+    print("  从 `##` 文档注释（紧跟顶层定义）生成 Markdown；默认输出到 stdout")
+def main():
+    let as_ = args()
+    var file = ""
+    var out_path = ""
+    var i = 0
+    while i < len(as_):
+        let a = as_[i]
+        if a == "--version" or a == "-v":
+            print("pxdoc 0.1.0 (普贤 PuXian doc · M64-S5 自举)")
+            exit(0)
+        elif a == "--help" or a == "-h":
+            pd_usage()
+            exit(0)
+        elif a == "--output" or a == "-o":
+            if i + 1 < len(as_):
+                out_path = as_[i + 1]
+                i += 1
+            else:
+                print("pxdoc: --output 需要路径")
+                exit(2)
+        elif starts_with(a, "-"):
+            print("pxdoc: 未知选项 '" + a + "'")
+            pd_usage()
+            exit(2)
+        else:
+            file = a
+        i += 1
+    if file == "":
+        pd_usage()
+        exit(2)
+    if not exists(file):
+        print("错误: 无法读取文件 " + file)
+        exit(2)
+    var src = read_file(file)
+    var md = pd_gen(src, pd_basename(file))
+    if out_path == "":
+        print(md)
+    else:
+        write_file(out_path, md)
+        print("已生成 " + out_path)

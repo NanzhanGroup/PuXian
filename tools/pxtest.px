@@ -1,0 +1,175 @@
+# ============================================================
+# M64-S5: pxtest.px —— 普贤测试运行器（自举版，px test 等价物）
+# ------------------------------------------------------------
+# 对齐 Rust archive/rust-compiler/src/test.rs：
+#   - 约定：顶层 `def test_xxx()` 无参函数 = 测试用例
+#   - 对每个测试独立构造程序（全部顶层定义 + 该测试调用），子进程 pxi 运行，
+#     互不影响；失败不中断其余测试；退出码 0=PASS / 非 0=FAIL
+#   - 顶层可执行语句剔除（pxslice：对齐 Rust 仅保留定义类项）
+#   - def main 定义剔除（pxi 约定自动调用顶层 main；测试语义=纯定义+调用）
+# 执行后端：语言内编排 —— os_spawn(bootstrap/pxi, [tmp.px]) + os_wait(pid)，
+#   子进程 stdout/stderr 继承终端（错误详情透传可见），退出码判定 PASS/FAIL。
+#   解释器路径：env("PX_PXI")（tools/pxc test 薄壳注入绝对路径），缺省 "pxi"。
+# 用法（编译版）：pxtest <file.px> [filter] [--list] [--version]
+#   退出码：全部通过 0；有失败 1；文件不可读/解析错误 2
+# 依赖：import pxslice.px（顶层块切片 + def 收集，纯 defs）
+# 构建：tools/pxc build tools/pxtest.px → cp tools/build/pxtest bootstrap/pxtest
+# ============================================================
+import "pxslice.px"
+# ---------- 构造"全部定义 + 单测试调用"源码 ----------
+def pt_build_src(blocks, call_line):
+    var out = pp_blocks_text(blocks)
+    out += call_line
+    out += "\n"
+    return out
+# ---------- 逐测试运行（子进程 pxi） ----------
+# 返回 [rc, us]（rc: 0=PASS 非 0=FAIL/错误；us: 含 spawn+wait 墙钟微秒）
+def pt_run_one(pxi_path, blocks, name, base_dir, tmp_seq):
+    let tmp_path = base_dir + "/.px_test_tmp_" + str(os_pid()) + "_" + str(tmp_seq) + ".px"
+    var src = pt_build_src(blocks, name + "()")
+    var werr = write_file(tmp_path, src)
+    if werr != null:
+        print("      [错误] 写临时文件失败: " + str(werr))
+        return [-2, 0]
+    let t0 = now_us()
+    var pid = os_spawn(pxi_path, [tmp_path])
+    var rc = -1
+    if pid == null:
+        rc = -2
+        print("      [错误] 无法启动解释器 '" + pxi_path + "'（设 PX_PXI 指向 bootstrap/pxi）")
+    else:
+        rc = os_wait(pid)
+    let us = now_us() - t0
+    remove(tmp_path)
+    return [rc, us]
+# ---------- 主流程 ----------
+# usage 文本
+def pt_usage():
+    print("pxtest —— PuXian 测试运行器（自举，M64-S5）")
+    print("用法: pxtest <file.px> [filter] [--list] [--version]")
+    print("  约定：顶层 def test_xxx() 无参函数 = 测试用例；逐用例独立运行")
+    print("  filter：仅运行名字含该子串的测试；--list 只列出不运行")
+# 参数解析在 main
+def pt_run(file, filt, list_only):
+    if not exists(file):
+        print("错误: 无法读取文件 " + file)
+        return 2
+    var src = read_file(file)
+    var got = pp_collect(src)
+    var blocks = got[0]
+    var defs = got[1]
+    # 收集测试：顶层 def test_xxx 且无参
+    var tests = []
+    var i = 0
+    while i < len(defs):
+        let d = defs[i]
+        if starts_with(d[0], "test_") and d[1] == "":
+            tests.append(d[0])
+        i += 1
+    if len(tests) == 0:
+        print("未发现测试函数（约定：顶层 def test_xxx()）")
+        return 0
+    if list_only:
+        var li = 0
+        while li < len(tests):
+            print(tests[li])
+            li += 1
+        return 0
+    # filter
+    var run_list = []
+    if filt == "":
+        run_list = tests
+    else:
+        var fi = 0
+        while fi < len(tests):
+            if contains(tests[fi], filt):
+                run_list.append(tests[fi])
+            fi += 1
+    if len(run_list) == 0:
+        print("没有测试匹配过滤器 '" + filt + "'")
+        return 0
+    # def main 剔除：重建 blocks（跳过名为 main 的 def 块）
+    var kept = []
+    var bi = 0
+    while bi < len(blocks):
+        let bl = blocks[bi]
+        if starts_with(trim(bl), "def main") or starts_with(trim(bl), "pub def main") or starts_with(trim(bl), "extern def main"):  # noqa
+            # 跳过该定义块（整块已按行切分——此处按块内缩进归属整块在 blocks 中连续，
+            # 需跳过从该行到下一个缩进 0 行的整段）
+            bi += 1
+            while bi < len(blocks) and (pp_is_ws_line(blocks[bi]) or blocks[bi][0] == " "):
+                bi += 1
+            continue
+        kept.append(bl)
+        bi += 1
+    blocks = kept
+    var pxi_path = env("PX_PXI")
+    if pxi_path == "":
+        pxi_path = "pxi"
+    let base_dir = pt_dirname(file)
+    print("运行 " + str(len(run_list)) + " 个测试…")
+    print("")
+    var passed = 0
+    var seq = 0
+    var ri = 0
+    while ri < len(run_list):
+        let name = run_list[ri]
+        let res = pt_run_one(pxi_path, blocks, name, base_dir, seq)
+        seq += 1
+        let rc = res[0]
+        let us = res[1]
+        let ms = float(us) / 1000.0
+        if rc == 0:
+            print("[PASS] " + name + " (" + str(ms) + " ms)")
+            passed += 1
+        else:
+            print("[FAIL] " + name + " (" + str(ms) + " ms)")
+            if rc == -1:
+                print("      解释器异常退出")
+        ri += 1
+    print("")
+    print("结果: " + str(passed) + "/" + str(len(run_list)) + " 通过, " + str(len(run_list) - passed) + "/" + str(len(run_list)) + " 失败")  # noqa
+    if passed == len(run_list):
+        return 0
+    return 1
+# ---------- 目录名 ----------
+def pt_dirname(path):
+    var i = len(path) - 1
+    while i >= 0:
+        if path[i] == "/":
+            if i == 0:
+                return "/"
+            return path[0:i]
+        i -= 1
+    return "."
+# ---------- 入口 ----------
+def main():
+    let as_ = args()
+    # 注：编译版 args() 首元素 = 程序自身路径（argv[0]），从 i=1 起解析用户参数
+    var file = ""
+    var filt = ""
+    var list_only = false
+    var i = 1
+    while i < len(as_):
+        let a = as_[i]
+        if a == "--version" or a == "-v":
+            print("pxtest 0.1.0 (普贤 PuXian test · M64-S5 自举)")
+            exit(0)
+        elif a == "--help" or a == "-h":
+            pt_usage()
+            exit(0)
+        elif a == "--list":
+            list_only = true
+        elif starts_with(a, "-"):
+            print("pxtest: 未知选项 '" + a + "'")
+            pt_usage()
+            exit(2)
+        elif file == "":
+            file = a
+        elif filt == "":
+            filt = a
+        i += 1
+    if file == "":
+        pt_usage()
+        exit(2)
+    exit(pt_run(file, filt, list_only))

@@ -1,7 +1,8 @@
 # M64_PLAN —— 工具链自举恢复（fmt/lint/test/bench/doc/lsp/mcp）
 
-> 状态：M64-S1 已完成（keep-lexer 底座入库）· S2 已完成（pxfmt 格式化器自举）
-> 进度：M64a fmt 主逻辑完成（S2）· S3 待开工（lint）
+> 状态：M64-S1~S5 已完成（keep-lexer 底座 → pxfmt → pxlint → fmt 全仓收敛 →
+> doc/test/bench 三件套入库）
+> 进度：M64a（fmt）/M64b（lint）/M64c（doc+test+bench）全部完成；M64d（lsp/mcp）按需未启
 > 关联：docs/spec.md §12（AI 工具链接口规格）、docs/GAP_ANALYSIS.md、docs/MINI_SUBSET.md
 
 ## 1. 背景与现状（全部实测 2025-09-04）
@@ -222,3 +223,67 @@ Rust 版全套归档于 `archive/rust-compiler/src/`（只读参考），已于 
 #### 12.3 留档（非 S4 范围）
 - selfhost 子模块单文件 lint 报 L002（i_eval_expr/LAYOUT/QUIC 内建等）＝多文件项目单文件检查局限（compiler.px 主入口 import 链合并后 lint 0 错误；capability 调 QUIC/H3 运行时内建不在 BUILTINS 白名单）→ lint 项目级解析留档 M64-S5+。
 - 存量长行 W L007（653 字符 KEYWORDS/CTRL_ALL 数据行等）语言强制单行 → noqa/拆分留档。
+
+## 13. M64-S5 记录（doc + test + bench 自举，已完成，commit 待入库）
+
+### 13.1 交付物
+- `tools/pxslice.px`（纯 defs 共享核心）：**文本行级顶层块切片** —— 缩进 0 起始行 +
+  后续缩进行成块；定义类起始（def/struct/enum/trait/impl/import/from/extern/pub…）整块
+  保留，顶层可执行语句块（var/let/if/print…）整块丢弃；def 行解析 [name, 参数串]。
+  对齐 Rust test.rs/bench.rs run_one_test"仅保留定义类项"语义；无 parser 依赖。
+- `tools/pxdoc.px`：`##` 文档注释（紧跟 def/struct/enum/trait）→ Markdown。import
+  fmtlexer.px（keep-lexer）产注释 token + 重复声明全局（pxfmt.px 同构样板）；遍历对齐
+  Rust doc.rs：文件头说明并入首个定义（行结构不打断 pending，其他 token 打断）、
+  签名 depth==0 遇行结构断、join_sig 空格规则、`_无文档注释。_`、无定义提示。
+- `tools/pxtest.px`：顶层 `def test_xxx()` 无参 = 测试用例；逐用例独立构造
+  "全部顶层定义块 + test_x() 调用" 临时 .px → **os_spawn(bootstrap/pxi) + os_wait**
+  子进程判定退出码（0=PASS 非0=FAIL），now_us 计时；def main 定义剔除
+  （pxi 约定自动调用顶层 main）；filter 子串 / --list。
+- `tools/pxbench.px`：无参目标函数 N 次循环调用 × R 轮；预热一轮；报告每轮
+  总s/平均ms/次/次每秒 与汇总 min/avg/max。
+- `bootstrap/pxdoc` / `pxtest` / `pxbench`（编译版静态二进制）+ `tools/pxc`
+  子命令 doc/test/bench（cmd_test/bench 注入 `PX_PXI=$PXI_BIN` 环境变量，
+  语言内编排定位 pxi；doc 直调）。
+- `examples/m64_doc/`（sample.px 含 def/struct/enum + 文件头说明 + 普通注释打断 +
+  verify.sh 18 断言）、`examples/m64_test/`（sample.px 含 pass/fail/filter/有参/
+  顶层可执行/def main + verify.sh 12 断言）、`examples/m64_bench/`（bench.px +
+  verify.sh 8 断言）。verify 全绿。
+
+### 13.2 关键实现事实（全部实测）
+- **编译版 args() 首元素 = 程序自身路径（argv[0]）**：pxlint/pxfmt/pxdoc 靠
+  "else 非选项参数覆盖式赋值"（最后一个非-参数=file）规避；pxtest/pxbench 用
+  elif 取第 1/2 位置参数会把自身路径当 file（实测 file=./bootstrap/pxtest）→
+  修正为 `i=1` 跳过 argv[0]。留档：新 CLI 工具一律从 args()[1] 起解析。
+- **PuXian 无 pass**：pxdoc 首版 if 分支写 pass → 运行时"未定义变量: pass"；
+  改条件反转。留档：空分支用条件反转表达。
+- **执行后端决策（真自举）**：pxtest/pxbench 语言内 os_spawn/os_wait 编排子进程
+  pxi（非 shell 循环）→ 工具本体 .px 内完成全部编排；断言错误详情由 pxi
+  stderr 透传终端可见（R1003 boom）。pxi 错误 exit=1、正常 exit=0 实测成立。
+- **def main 剔除**：pxi 自动调用顶层 def main（pxlint 编译版同约定）→ 测试/基准
+  构造程序须剔除被测文件 def main 定义块，否则自动执行 main（Rust 语义排除顶层
+  可执行语句等价）。pxslice 顶层可执行语句剔除实测：TOP_LEVEL print 不再执行。
+- **解释器性能**：pxi 解释执行整数 while 循环 ~0.6ms/迭代级 → pxc bench 大 count
+  极慢（500 次×300ms/次）；verify 用 count 10~100；README/help 注明解释器基准
+  建议小 count（编译版基准可后续用子进程编译版支持，留档）。
+- **pxlint BUILTINS 补漏**：now_us/sleep_us 实为 runtime/ibuiltin 已注册 builtin
+  但 pxlint L002 白名单缺 → pxtest/pxbench lint 报 E L002；补 BUILTINS 重编译
+  pxlint，S3 verify 复跑 18/18 无回归。
+
+### 13.3 验证（真实执行）
+- examples/m64_doc/verify.sh 18/18：标题/函数节/类型节/签名反引号（verify.sh 用
+  BT 变量 + grep -F 规避 eval 反引号命令替换陷阱）/文件头并入/普通注释打断/
+  --output/stdlib collections.px 真实 dogfood。
+- examples/m64_test/verify.sh 12/12：3 PASS 1 FAIL rc=1、汇总、filter、--list、
+  顶层可执行/def main 剔除、断言错误透传。
+- examples/m64_bench/verify.sh 8/8：rc=0、轮次输出、汇总、顶层剔除、不存在函数
+  报错 rc=1。
+- lint：pxslice/pxdoc/pxtest/pxbench 0 错误 0 警告（now_us 修正后）；fmt --check
+  四文件全绿。
+- 自举链无改动（未触 selfhost/runtime/compiler）→ 无需 diffcheck/自举证明。
+
+### 13.4 遗留（后续）
+- doc 文件头说明并入首个定义（Rust 语义，已对齐）；若需"仅紧跟才归属"需 Rust 版
+  同步改（两版一致性优先，留档不单改）。
+- pxbench 解释器基准慢 → count 建议 100 内；编译版基准（os_spawn 编译产物）留档。
+- lsp/mcp（M64d 按需）：runtime fd stdin/stdout 原语侦查（M60 fd read/write 已具
+  px_fd 类），stdio JSON-RPC 底座可复用本 S5 的 os_spawn 编排经验。

@@ -1,0 +1,172 @@
+# ============================================================
+# M64-S5: pxbench.px —— 普贤基准测试工具（自举版，px bench 等价物）
+# ------------------------------------------------------------
+# 对齐 Rust archive/rust-compiler/src/bench.rs：
+#   - 用法：pxbench <file.px> <func> [--count N] [--repeat R]
+#     count：迭代次数（默认 1000）；repeat：重复轮数（默认 3）
+#   - 目标函数须为顶层 def；构造"全部顶层定义 + N 次循环调用"程序，
+#     子进程 pxi 整段运行，测墙钟总耗时 → 平均 ms/次
+#   - 预热一轮；报告每轮 总s/平均ms/次 与汇总 min/avg/max
+#   - 顶层可执行语句剔除、def main 剔除（同 pxtest，pxslice 语义）
+# 执行后端：语言内编排（os_spawn bootstrap/pxi + os_wait），同 pxtest。
+#   解释器路径 env("PX_PXI")（pxc bench 薄壳注入），缺省 "pxi"。
+# 依赖：import pxslice.px（纯 defs）
+# 构建：tools/pxc build tools/pxbench.px → cp tools/build/pxbench bootstrap/pxbench
+# ============================================================
+import "pxslice.px"
+def pb_dirname(path):
+    var i = len(path) - 1
+    while i >= 0:
+        if path[i] == "/":
+            if i == 0:
+                return "/"
+            return path[0:i]
+        i -= 1
+    return "."
+def pb_usage():
+    print("pxbench —— PuXian 基准测试工具（自举，M64-S5）")
+    print("用法: pxbench <file.px> <func> [--count N] [--repeat R] [--version]")
+    print("  对顶层 def func 构造 N 次循环调用（子进程 pxi），重复 R 轮报告耗时")
+# 构造基准程序文本（定义块 + count 次调用 func）
+def pb_build_src(blocks, func, count):
+    var out = pp_blocks_text(blocks)
+    out += "var __pxb_i = 0\n"
+    out += "while __pxb_i < " + str(count) + ":\n"
+    out += "    " + func + "()\n"
+    out += "    __pxb_i += 1\n"
+    return out
+# 跑一轮：返回墙钟微秒（含 spawn+wait+执行）；pid 启动失败返回 -1
+def pb_run_round(pxi_path, blocks, func, count, base_dir, seq):
+    let tmp_path = base_dir + "/.px_bench_tmp_" + str(os_pid()) + "_" + str(seq) + ".px"
+    var src = pb_build_src(blocks, func, count)
+    write_file(tmp_path, src)
+    let t0 = now_us()
+    var pid = os_spawn(pxi_path, [tmp_path])
+    if pid == null:
+        remove(tmp_path)
+        return -1
+    let rc = os_wait(pid)
+    let us = now_us() - t0
+    remove(tmp_path)
+    if rc != 0:
+        return -2
+    return us
+# 剔除 def main 定义块（防 pxi 自动调用入口）
+def pb_strip_main(blocks):
+    var kept = []
+    var bi = 0
+    while bi < len(blocks):
+        let bl = blocks[bi]
+        if starts_with(trim(bl), "def main") or starts_with(trim(bl), "pub def main") or starts_with(trim(bl), "extern def main"):  # noqa
+            bi += 1
+            while bi < len(blocks) and (pp_is_ws_line(blocks[bi]) or blocks[bi][0] == " "):
+                bi += 1
+            continue
+        kept.append(bl)
+        bi += 1
+    return kept
+def pb_run(file, func, count, repeat):
+    if not exists(file):
+        print("错误: 无法读取文件 " + file)
+        return 2
+    var src = read_file(file)
+    var got = pp_collect(src)
+    var blocks = got[0]
+    var defs = got[1]
+    # 校验目标函数存在
+    var found = false
+    var di = 0
+    while di < len(defs):
+        if defs[di][0] == func:
+            found = true
+        di += 1
+    if not found:
+        print("错误: 未找到函数 '" + func + "'")
+        return 1
+    blocks = pb_strip_main(blocks)
+    var pxi_path = env("PX_PXI")
+    if pxi_path == "":
+        pxi_path = "pxi"
+    let base_dir = pb_dirname(file)
+    print("基准: " + file + " (函数 " + func + ") — " + str(count) + " 次迭代 × " + str(repeat) + " 轮")  # noqa
+    print("")
+    # 预热一轮（忽略结果，可能在等 IO 或首次加载）
+    let warm = pb_run_round(pxi_path, blocks, func, count, base_dir, 0)
+    if warm < 0:
+        print("警告: 预热运行失败（rc=" + str(warm) + "），继续计时")
+    var rounds = []
+    var r = 1
+    while r <= repeat:
+        let us = pb_run_round(pxi_path, blocks, func, count, base_dir, r)
+        if us < 0:
+            print("第 " + str(r) + " 轮运行错误（rc=" + str(us) + "）")
+            return 1
+        let secs = float(us) / 1000000.0
+        let avg_ms = float(us) / 1000.0 / float(count)
+        let per_s = float(count) * 1000000.0 / float(us)
+        rounds.append(us)
+        print("第 " + str(r) + " 轮: 总 " + str(secs) + " s, 平均 " + str(avg_ms) + " ms/次 (" + str(per_s) + " 次/s)")  # noqa
+        r += 1
+    # 汇总 min/avg/max
+    var mn = rounds[0]
+    var mx = rounds[0]
+    var sumv = 0
+    var si = 0
+    while si < len(rounds):
+        if rounds[si] < mn:
+            mn = rounds[si]
+        if rounds[si] > mx:
+            mx = rounds[si]
+        sumv += rounds[si]
+        si += 1
+    let avg_us = float(sumv) / float(len(rounds))
+    let min_s = float(mn) / 1000000.0
+    let max_s = float(mx) / 1000000.0
+    let avg_s = avg_us / 1000000.0
+    let avg_ms_per = avg_us / 1000.0 / float(count)
+    print("")
+    print("汇总: min " + str(min_s) + " s | avg " + str(avg_s) + " s | max " + str(max_s) + " s | 平均 " + str(avg_ms_per) + " ms/次")  # noqa
+    return 0
+def main():
+    let as_ = args()
+    # 注：编译版 args() 首元素 = 程序自身路径（argv[0]），从 i=1 起解析用户参数
+    var file = ""
+    var func = ""
+    var count = 1000
+    var repeat = 3
+    var i = 1
+    while i < len(as_):
+        let a = as_[i]
+        if a == "--version" or a == "-v":
+            print("pxbench 0.1.0 (普贤 PuXian bench · M64-S5 自举)")
+            exit(0)
+        elif a == "--help" or a == "-h":
+            pb_usage()
+            exit(0)
+        elif a == "--count":
+            if i + 1 < len(as_):
+                count = int(as_[i + 1])
+                i += 1
+            else:
+                print("pxbench: --count 需要数值")
+                exit(2)
+        elif a == "--repeat":
+            if i + 1 < len(as_):
+                repeat = int(as_[i + 1])
+                i += 1
+            else:
+                print("pxbench: --repeat 需要数值")
+                exit(2)
+        elif starts_with(a, "-") and a != "-":
+            print("pxbench: 未知选项 '" + a + "'")
+            pb_usage()
+            exit(2)
+        elif file == "":
+            file = a
+        elif func == "":
+            func = a
+        i += 1
+    if file == "" or func == "":
+        pb_usage()
+        exit(2)
+    exit(pb_run(file, func, count, repeat))
