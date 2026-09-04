@@ -9,7 +9,6 @@
 # 依赖 builtin：bytes/bytes_len/bytes_get/bytes_concat/bytes_slice/int_to_bytes/hex_to_bytes
 # 说明：PNG chunk 内 CRC 覆盖 type+data；stored 流 0x78 0x01 是标准 no-compression zlib 头
 # ============================================================
-
 # ---- 内部：CRC-32 查表（IEEE poly 0xEDB88320）----
 def _crc32_table():
     var t = []
@@ -26,7 +25,6 @@ def _crc32_table():
         t.append(cc)
         i = i + 1
     return t
-
 def _crc32(t, d):
     var cc = 0xFFFFFFFF
     var n = bytes_len(d)
@@ -35,7 +33,6 @@ def _crc32(t, d):
         cc = (cc >>> 8) ^ t[(cc ^ bytes_get(d, i)) & 0xff]
         i = i + 1
     return cc ^ 0xFFFFFFFF
-
 # ---- 内部：ADLER-32（zlib 流校验）----
 def _adler32(d):
     var a = 1
@@ -47,11 +44,10 @@ def _adler32(d):
         b = (b + a) % 65521
         i = i + 1
     return (b << 16) | a
-
 # ---- 内部：zlib stored（no compression）流 ----
 def _zlib_stored(d):
     var n = bytes_len(d)
-    var out = hex_to_bytes("7801")   # CMF FLG（no compression）
+    var out = hex_to_bytes("7801")  # CMF FLG（no compression）
     var off = 0
     while off < n:
         var blen = n - off
@@ -67,14 +63,12 @@ def _zlib_stored(d):
         off = off + blen
     out = bytes_concat(out, int_to_bytes(_adler32(d), 4))
     return out
-
 # ---- 内部：一个 PNG chunk ----
 def _chunk(tbl, type_s, data):
     var td = bytes_concat(bytes(type_s), data)
     var crc = _crc32(tbl, td)
     var c = bytes_concat(int_to_bytes(bytes_len(data), 4), td)
     return bytes_concat(c, int_to_bytes(crc, 4))
-
 # ---- 主入口：PNG 编码 ----
 def png_encode(w, h, pixels):
     # 1) 图像数据：逐行 filter=0 + RGB

@@ -14,11 +14,9 @@
 #   - fnname = relpath 去 .px、/ → _、# 移除（全局唯一，重复由 routegen 报错）
 #   - 特殊文件（main/middleware/generated_routes）与 _ 开头（私有）、static/ 下 → null
 # ============================================================
-
 # ---- 方法表（首段 ∈ 此表 → 方法前缀）----
 def wr_methods():
     return ["get", "post", "put", "delete", "patch", "head", "options", "all"]
-
 # ---- 特殊文件名（不生成路由）----
 def wr_is_special(name):
     if name == "main":
@@ -28,7 +26,6 @@ def wr_is_special(name):
     if name == "generated_routes":
         return true
     return false
-
 # ---- 段转换：一个路径段 → 路由 pattern 段（#name → :name，* → *）----
 def wr_seg_to_pattern(seg):
     if len(seg) > 0 and seg[0] == "#":
@@ -36,7 +33,6 @@ def wr_seg_to_pattern(seg):
     if seg == "*":
         return "*"
     return seg
-
 # ---- 核心：文件名（相对应用根）→ 路由规则 ----
 # 输入 relpath：如 "api/get_items.px"、"get_p_#id.px"
 # 返回 {"method","pattern","fnname"} 或 null（非路由文件）
