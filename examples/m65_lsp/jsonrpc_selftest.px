@@ -1,0 +1,152 @@
+# ============================================================
+# examples/m65_lsp/jsonrpc_selftest.px —— jsonrpc_core 回环自测
+# ------------------------------------------------------------
+# M65-S1 验收：帧读写（半包/粘包/坏头/坏 body）+ JSON-RPC 骨架自测。
+# 运行（双模式）：
+#   bootstrap/pxi examples/m65_lsp/jsonrpc_selftest.px
+#   pxc build 后跑编译版
+# 全部 PASS exit 0；任一 FAIL exit 1 并打印明细。
+# ============================================================
+import "../../tools/jsonrpc_core.px"
+var g_pass = 0
+var g_fail = 0
+var g_fails = []
+def check(name, cond):
+    if cond:
+        g_pass += 1
+    else:
+        g_fail += 1
+        g_fails.append(name)
+        print("FAIL: " + name)
+# ---------- 1. 帧编码：Content-Length 字节数（含中文） ----------
+def test_encode():
+    let msg = jr_dnew()
+    msg["jsonrpc"] = "2.0"
+    msg["id"] = 1
+    msg["method"] = "initialize"
+    let p = jr_dnew()
+    p["rootUri"] = null
+    p["note"] = "你好普贤"
+    msg["params"] = p
+    let frame = jr_encode(msg)
+    check("encode 以 Content-Length: 开头", starts_with(frame, "Content-Length: "))
+    # body = header 后 \r\n\r\n 之后部分；其 UTF-8 字节数应与头声明一致
+    let hdr_end = bytes_find(bytes(frame), "\r\n\r\n")
+    check("encode 含帧分隔", hdr_end != null)
+    if hdr_end != null:
+        let body_b = bytes_slice(bytes(frame), hdr_end + 4)
+        let declared = jr_content_length(bytes_to_str(bytes_slice(bytes(frame), 0, hdr_end)))
+        check("encode Content-Length = 实际字节数", declared == bytes_len(body_b))
+        check("encode 中文 body 字节定界", declared != len("你好普贤"))
+# ---------- 2. jr_pull 单帧 ----------
+def test_pull_single():
+    let msg = jr_dnew()
+    msg["jsonrpc"] = "2.0"
+    msg["id"] = 7
+    msg["method"] = "ping"
+    let frame = jr_encode(msg)
+    let r = jr_pull(bytes(frame))
+    check("pull 单帧 rest 为空", bytes_len(r[0]) == 0)
+    check("pull 单帧取出 dict", type(r[1]) == "dict")
+    if type(r[1]) == "dict":
+        check("pull 消息 id 保留", r[1]["id"] == 7)
+        check("pull 消息 method 保留", r[1]["method"] == "ping")
+# ---------- 3. 粘包：两帧一次喂入 ----------
+def test_pull_coalesced():
+    let m1 = jr_dnew()
+    m1["jsonrpc"] = "2.0"
+    m1["id"] = 1
+    m1["method"] = "a"
+    let m2 = jr_dnew()
+    m2["jsonrpc"] = "2.0"
+    m2["id"] = 2
+    m2["method"] = "b"
+    let two = bytes(jr_encode(m1) + jr_encode(m2))
+    let r1 = jr_pull(two)
+    check("粘包 第一帧取出", type(r1[1]) == "dict")
+    var ok = false
+    if type(r1[1]) == "dict":
+        ok = r1[1]["method"] == "a"
+    check("粘包 第一帧 method=a", ok)
+    let r2 = jr_pull(r1[0])
+    check("粘包 第二帧取出", type(r2[1]) == "dict")
+    ok = false
+    if type(r2[1]) == "dict":
+        ok = r2[1]["method"] == "b"
+    check("粘包 第二帧 method=b rest 空", ok and bytes_len(r2[0]) == 0)
+# ---------- 4. 半包：分两次喂 ----------
+def test_pull_partial():
+    let msg = jr_dnew()
+    msg["jsonrpc"] = "2.0"
+    msg["id"] = 9
+    msg["method"] = "partial"
+    let frame = jr_encode(msg)
+    let b = bytes(frame)
+    # 第一次只喂一半（PuXian / 是浮点除 → int 截断）
+    let half = int(bytes_len(b) / 2)
+    let r1 = jr_pull(bytes_slice(b, 0, half))
+    check("半包 数据不足返回 null", r1[1] == null)
+    # 累积缓冲保留（r1[0] 应等于已喂入部分）
+    check("半包 rest 保留已喂数据", bytes_len(r1[0]) == half and bytes_len(r1[0]) > 0)
+    # 第二次补全
+    let r2 = jr_pull(bytes_concat(r1[0], bytes_slice(b, half)))
+    check("半包 补全后取出", type(r2[1]) == "dict")
+    var ok = false
+    if type(r2[1]) == "dict":
+        ok = r2[1]["method"] == "partial" and r2[1]["id"] == 9
+    check("半包 消息内容正确", ok)
+# ---------- 5. 坏头 / 坏 body ----------
+def test_bad():
+    # 无 Content-Length 头
+    let bad_frame = bytes("Hello: 1\r\n\r\n{\"a\":1}")
+    let r1 = jr_pull(bad_frame)
+    check("坏头 返回 __jr_bad__", r1[1] == "__jr_bad__")
+    # body 非 JSON 对象
+    let notjson = "Content-Length: 4\r\n\r\nxxxx"
+    let r2 = jr_pull(bytes(notjson))
+    check("坏 body 返回 __jr_parse__", r2[1] == "__jr_parse__")
+    # 缺整帧（只有头无 body）→ 半包 null
+    let half_hdr = "Content-Length: 100\r\n\r\n{\"a\":"
+    let r3 = jr_pull(bytes(half_hdr))
+    check("声长大 body 未到齐 null", r3[1] == null)
+# ---------- 6. JSON-RPC 骨架 ----------
+def test_skeleton():
+    let req = jr_request(42, "textDocument/hover", {"a": 1})
+    check("classify request", jr_classify(req) == "request")
+    check("request id", jr_id_of(req) == 42)
+    check("request method", jr_method_of(req) == "textDocument/hover")
+    let notif = jr_notify("initialized", null)
+    check("classify notification", jr_classify(notif) == "notification")
+    check("notify id 缺省", jr_id_of(notif) == null)
+    let resp = jr_response(3, "ok")
+    check("classify response", jr_classify(resp) == "response")
+    let err = jr_error(3, -32601, "Method not found: x")
+    check("error code", jr_error_code_of(err) == -32601)
+    check("error 有 id", jr_id_of(err) == 3)
+    let inv = jr_invalid_resp(0)
+    check("invalid resp code", jr_error_code_of(inv) == -32600)
+    let mnf = jr_method_not_found(5, "foo")
+    check("method-not-found code", jr_error_code_of(mnf) == -32601)
+    let pre = jr_parse_error_resp()
+    check("parse-error id null", jr_id_of(pre) == null)
+    check("parse-error code", jr_error_code_of(pre) == -32700)
+    # 回环：构造 → 编码 → pull 回来结构一致
+    let rt = jr_response(11, {"x": 1, "s": "你好"})
+    let pr = jr_pull(bytes(jr_encode(rt)))
+    check("回环 响应取出", type(pr[1]) == "dict")
+    var ok = false
+    if type(pr[1]) == "dict":
+        ok = pr[1]["id"] == 11 and pr[1]["result"]["s"] == "你好"
+    check("回环 响应内容一致（含中文）", ok)
+def main():
+    test_encode()
+    test_pull_single()
+    test_pull_coalesced()
+    test_pull_partial()
+    test_bad()
+    test_skeleton()
+    print("jsonrpc_selftest: " + str(g_pass) + " PASS, " + str(g_fail) + " FAIL")
+    if g_fail > 0:
+        print("失败项: " + join(", ", g_fails))
+        return 1
+    return 0
