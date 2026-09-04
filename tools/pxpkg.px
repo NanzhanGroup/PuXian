@@ -16,21 +16,17 @@
 # 双模式：pxi 解释直接跑；也可 pxc build 编译（依赖 std.semver + std.webroute 风格纯函数）。
 # ============================================================
 import std.semver
-
 let PKG_FILE = "px.toml"
 let LOCK_FILE = "px.pkg.lock"
 let MODULES_DIR = ".px_modules"
-
 # ---- 工具 ----
 def pxp_is_url(s):
     return starts_with(s, "http://") or starts_with(s, "https://")
-
 def pxp_rm_rf(path):
     # list_dir 对文件报错（PuXian 无法 try-catch）→ 用 os_spawn 调 rm -rf（包管理器场景可接受）
     if not exists(path):
         return
     os_spawn("rm", ["-rf", path])
-
 # ---- px.toml 解析/序列化（兼容 M9 手写 TOML 风格）----
 def pxp_parse_manifest(src):
     let lines = split(src, "\n")
@@ -66,7 +62,6 @@ def pxp_parse_manifest(src):
                 deps[k] = v
         i += 1
     return {"name": name, "version": version, "deps": deps, "names": names}
-
 def pxp_serialize_manifest(name, version, deps, names):
     var out = "[package]\n"
     out += "name = \"" + name + "\"\n"
@@ -78,27 +73,22 @@ def pxp_serialize_manifest(name, version, deps, names):
             out += names[i] + " = \"" + deps[names[i]] + "\"\n"
             i += 1
     return out
-
 def pxp_read_manifest(dir):
     let path = dir + "/" + PKG_FILE
     if not exists(path):
         return null
     return pxp_parse_manifest(read_file(path))
-
 def pxp_write_manifest(dir, name, version, deps, names):
     write_file(dir + "/" + PKG_FILE, pxp_serialize_manifest(name, version, deps, names))
-
 # ---- lockfile（JSON）----
 def pxp_read_lock(dir):
     let path = dir + "/" + LOCK_FILE
     if not exists(path):
         return null
     return json_parse(read_file(path))
-
 def pxp_write_lock(dir, pkg_name, pkg_version, entries):
     let obj = {"format": 1, "package": {"name": pkg_name, "version": pkg_version}, "deps": entries}
     write_file(dir + "/" + LOCK_FILE, json_stringify(obj))
-
 # ---- 安装单个 registry 依赖（semver 选版本 + 复制 + 哈希）----
 def pxp_install_registry(name, spec, registry, modules_dir):
     let ver_dir = registry + "/" + name
@@ -128,7 +118,6 @@ def pxp_install_registry(name, spec, registry, modules_dir):
     write_file(dst_dir + "/" + name + ".px", content)
     print("  安装 " + name + " " + best + " <- " + ver_dir)
     return {"version": best, "sha256": digest, "source": ver_dir}
-
 # ---- 安装单个本地路径依赖 ----
 def pxp_install_path(name, path, modules_dir):
     let src_file = path
@@ -140,7 +129,6 @@ def pxp_install_path(name, path, modules_dir):
     write_file(dst_dir + "/" + name + ".px", content)
     print("  安装 " + name + " <- " + path)
     return {"version": "0.0.0", "sha256": digest, "source": path}
-
 # ---- 安装单个 URL 依赖（http_get 下载 + #sha256 校验）----
 def pxp_install_url(name, url, modules_dir):
     var base = url
@@ -160,7 +148,6 @@ def pxp_install_url(name, url, modules_dir):
     write_file(dst_dir + "/" + name + ".px", content)
     print("  安装 " + name + " <- " + base)
     return {"version": "0.0.0", "sha256": digest, "source": base}
-
 # ---- 判定依赖类型 ----
 def pxp_dep_kind(spec):
     if pxp_is_url(spec):
@@ -168,7 +155,6 @@ def pxp_dep_kind(spec):
     if exists(spec):
         return "path"
     return "range"
-
 # ---- install ----
 def pxp_install(dir, locked):
     let m = pxp_read_manifest(dir)
@@ -238,7 +224,6 @@ def pxp_install(dir, locked):
         i += 1
     pxp_write_lock(dir, pkg_name, pkg_version, entries)
     print("pxpkg: 已写入 " + LOCK_FILE)
-
 # ---- add ----
 def pxp_add(dir, spec, alias):
     let m = pxp_read_manifest(dir)
@@ -270,7 +255,6 @@ def pxp_add(dir, spec, alias):
     deps[name] = value
     pxp_write_manifest(dir, m["name"], m["version"], deps, names)
     print("已添加依赖 " + name + " = " + value + "（" + PKG_FILE + "）")
-
 # ---- remove ----
 def pxp_remove(dir, name):
     let m = pxp_read_manifest(dir)
@@ -296,7 +280,6 @@ def pxp_remove(dir, name):
         lock["deps"].remove(name)
         pxp_write_lock(dir, m["name"], m["version"], lock["deps"])
     print("已移除依赖 " + name)
-
 # ---- list ----
 def pxp_list(dir):
     let m = pxp_read_manifest(dir)
@@ -323,7 +306,6 @@ def pxp_list(dir):
             st = "已安装"
         print("  " + name + " = " + spec + "  [lock: " + locked_v + "] [" + st + "]")
         i += 1
-
 # ---- init ----
 def pxp_init(dir, name):
     let path = dir + "/" + PKG_FILE
@@ -335,7 +317,6 @@ def pxp_init(dir, name):
         pkg_name = "px_app"
     pxp_write_manifest(dir, pkg_name, "0.1.0", json_parse("{}"), [])
     print("已初始化 " + PKG_FILE + "（包名: " + pkg_name + "）")
-
 # ---- 入口（环境变量传参）----
 def main():
     var dir = env("PXPKG_DIR")
@@ -370,5 +351,4 @@ def main():
     else:
         print("pxpkg: 未知命令 " + cmd)
         exit(1)
-
 # 入口：pxi 约定顶层 def main() 自动调用一次（勿再显式调用，否则执行两遍）

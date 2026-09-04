@@ -39,8 +39,8 @@ def has_dot_e(s):
     return false
 # ---------- 空格判定（对齐 Rust needs_space / is_unary_context） ----------
 def needs_space(p2, p, c):
-    # 当前 token 前不加空格（左紧贴）：) ] } . ?. , : !
-    if c == ")" or c == "]" or c == "}" or c == "." or c == "?." or c == "," or c == ":" or c == "!":  # noqa
+    # 当前 token 前不加空格（左紧贴）：) ] } . ?. , : ! ?（? 为后缀错误传播，紧贴）
+    if c == ")" or c == "]" or c == "}" or c == "." or c == "?." or c == "," or c == ":" or c == "!" or c == "?":  # noqa
         return false
     # 前一个 token 后不加空格（右紧贴）：( [ { . ?. ~
     if p == "(" or p == "[" or p == "{" or p == "." or p == "?." or p == "~":
@@ -111,7 +111,7 @@ def is_unary_ctx(p):
 def trim_trail(s):
     var out = s
     while ends_with(out, " "):
-        out = out[0: len(out) - 1]
+        out = out[0:len(out) - 1]
     return out
 # ---------- 空行压缩 + 末尾单换行（对齐 Rust 尾部处理） ----------
 def compress_blank(s):
@@ -149,6 +149,9 @@ def fmt_format(toks):
     var at_line_start = true
     var prev = ""
     var prev2 = "换行"
+    # M64-S4：括号栈 + 切片冒号标记 —— 下标切片 [a:b] 冒号后紧贴，dict {k: v} 冒号后空格
+    var bstack = []
+    var last_colon_slice = false
     var i = 0
     while i < len(toks):
         let t = toks[i]
@@ -202,7 +205,18 @@ def fmt_format(toks):
             prev = k
             i += 1
             continue
-        # 普通 token
+        # 普通 token：先更新括号栈（供切片冒号判定）
+        if k == "[" or k == "(" or k == "{":
+            bstack.append(k)
+        elif k == "]" or k == ")" or k == "}":
+            if len(bstack) > 0:
+                bstack.pop()
+        elif k == ":":
+            # 冒号是否处于下标上下文（最内括号为 [）：切片 a[1:2]
+            var in_slice = false
+            if len(bstack) > 0 and bstack[len(bstack) - 1] == "[":
+                in_slice = true
+            last_colon_slice = in_slice
         if at_line_start:
             var li = 0
             while li < level:
@@ -210,10 +224,18 @@ def fmt_format(toks):
                 li += 1
             at_line_start = false
         elif prev != "" and prev2 != "":
-            if needs_space(prev2, prev, k):
+            var need = true
+            if prev == ":" and last_colon_slice:
+                need = false
+            if need and needs_space(prev2, prev, k):
                 out += " "
         out += tok_text(t)
-        prev2 = prev
+        # 首个 token 前 prev 为空：prev2 记"换行"（行首上下文），否则 f( 前的 def 会因
+        # prev2=="" 跳过空格判定被压成 deff(（M64-S4 probe 首行 def f(): 暴露）
+        if prev == "":
+            prev2 = "换行"
+        else:
+            prev2 = prev
         prev = k
         i += 1
     return compress_blank(out)

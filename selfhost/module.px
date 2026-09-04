@@ -14,7 +14,6 @@
 # 注意：PuXian 的 from import 只支持点分模块名（不支持字符串路径）
 # 对拍：selfhost/cases/v03_module.px
 # ============================================================
-
 # ---- 构建搜索路径（对齐 ModuleResolver::new）----
 # base_dir → .px_modules → .px_modules 下每个子目录
 def module_search_paths(base_dir):
@@ -26,7 +25,6 @@ def module_search_paths(base_dir):
         for entry in entries:
             paths.append(entry)
     return paths
-
 # ---- 路径候选（对齐 find_module_path 的路径拼接规则）----
 # module: list of 段；base_dir: 主文件目录；stdlib: stdlib 目录
 # 返回候选路径 list（按优先级）
@@ -52,7 +50,6 @@ def module_candidates(module, base_dir, stdlib):
     out.append(p + ".px")
     out.append(p + "/mod.px")
     return out
-
 # ---- 找到第一个存在的候选；找不到返回 null ----
 def module_find(module, base_dir, stdlib):
     let cands = module_candidates(module, base_dir, stdlib)
@@ -60,7 +57,6 @@ def module_find(module, base_dir, stdlib):
         if exists(c):
             return c
     return null
-
 # ---- 加载器状态：缓存 + 循环检测 ----
 # loader: {"base_dir", "stdlib", "search_paths", "loaded": {key: path}, "stack": [key]}
 def loader_new(base_dir, stdlib):
@@ -71,21 +67,18 @@ def loader_new(base_dir, stdlib):
         "loaded": {"_": 0},
         "stack": []
     }
-
 # 注册已加载模块（清除占位键）
 def loader_mark_loaded(loader, key, path):
     let ld = loader["loaded"]
     if ld.has("_"):
         ld.remove("_")
     ld[key] = path
-
 # 是否已加载
 def loader_is_loaded(loader, key):
     let ld = loader["loaded"]
     if ld.has("_"):
         return false
     return ld.has(key)
-
 # ---- 加载单个模块（路径解析 + 缓存 + 循环检测）----
 # 返回 {"ok": true, "path": 路径, "cached": bool} 或 {"ok": false, "err": 消息}
 # 注意：递归子 import 的解析需要 lexer/parser（后续里程碑），

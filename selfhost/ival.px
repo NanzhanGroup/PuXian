@@ -19,7 +19,6 @@
 # + 容器递归（可能内嵌包装值）+ 错误消息对齐。
 # 返回 Result 的函数用 ? 传播子错误（仅 i_call_function 边界区分 __prop__）。
 # ============================================================
-
 # ---------- 类型名（对齐 interp.rs type_name） ----------
 def i_type_name(v):
     let t = type(v)
@@ -37,7 +36,6 @@ def i_type_name(v):
         if v.has("__gen__"):
             return "generator"
     return t
-
 # ---------- 字符串渲染（对齐 fmt_value） ----------
 def i_to_str(v):
     let t = i_type_name(v)
@@ -82,7 +80,6 @@ def i_to_str(v):
     if t == "float":
         return i_fmt_float(v)
     return str(v)
-
 # 浮点渲染（对齐 value.rs fmt_float）：
 #   整值且有限且 |f| < 1e15 → 确保 ".0" 后缀（编译模式 str(float) 用 %g 会丢 .0）
 def i_fmt_float(f):
@@ -96,7 +93,6 @@ def i_fmt_float(f):
             return s
         return s + ".0"
     return s
-
 # ---------- 真值（对齐 is_truthy） ----------
 def i_truthy(v):
     let t = i_type_name(v)
@@ -117,7 +113,6 @@ def i_truthy(v):
     if t == "tuple":
         return len(v) > 0
     return true
-
 # ---------- 相等（对齐 value.rs PartialEq） ----------
 def i_eq(a, b):
     let ta = i_type_name(a)
@@ -206,7 +201,6 @@ def i_eq(a, b):
             return false
         return i_eq(a.ok(), b.ok()) and i_eq(a.err(), b.err())
     return false
-
 # ---------- 迭代（对齐 iter_values） ----------
 def i_iter(v, pos):
     let t = i_type_name(v)
@@ -228,7 +222,6 @@ def i_iter(v, pos):
     if t == "generator":
         return Ok(v["__gen__"])
     return Err(i_r1002("此类型不可迭代", pos))
-
 # ---------- 索引 ----------
 def i_as_index(idx, n, pos):
     if type(idx) == "int":
@@ -241,7 +234,6 @@ def i_as_index(idx, n, pos):
             return Err(i_r1003("索引越界", pos))
         return Ok(i)
     return Err(i_r1002("索引必须是整数", pos))
-
 def i_index(v, idx, pos):
     let t = i_type_name(v)
     if t == "list" or t == "tuple":
@@ -274,7 +266,6 @@ def i_index(v, idx, pos):
             return Ok(v[idx])
         return Err(i_r1008("字典没有键 '" + idx + "'", pos))
     return Err(i_r1002("此类型不支持索引", pos))
-
 # ---------- 字段访问（对齐 eval_field） ----------
 def i_field(v, name, pos):
     let t = i_type_name(v)
@@ -297,7 +288,6 @@ def i_field(v, name, pos):
             return Ok(v[name])
         return Err(i_r1008("字典没有键 '" + name + "'", pos))
     return Err(i_r1007("类型 " + t + " 没有字段 '" + name + "'", pos))
-
 # ---------- 切片 ----------
 # 返回 {"ok": bool, "idxs": [...], "err": msg}
 def i_slice_indices(start, end, step, n):
@@ -358,7 +348,6 @@ def i_slice_indices(start, end, step, n):
             idxs.append(i)
             i += st
     return {"ok": true, "idxs": idxs, "err": ""}
-
 def i_slice(v, start, end, step, pos):
     let t = i_type_name(v)
     if t == "string":
@@ -397,7 +386,6 @@ def i_slice(v, start, end, step, pos):
             ii += 1
         return Ok(tuple(out))
     return Err(i_r1002("此类型不支持切片", pos))
-
 # ---------- 一元运算（对齐 eval_unary） ----------
 def i_eval_unary(op, v, pos):
     let t = i_type_name(v)
@@ -416,7 +404,6 @@ def i_eval_unary(op, v, pos):
             return Ok(-v - 1)
         return Err(i_r1002("按位取反需要整数", pos))
     return Err(i_r1002("未知一元运算符 " + op, pos))
-
 # ---------- 二元运算（对齐 eval_binary） ----------
 def i_as_f64(v, pos):
     let t = i_type_name(v)
@@ -425,7 +412,6 @@ def i_as_f64(v, pos):
     if t == "float":
         return Ok(v)
     return Err(i_r1002("需要数值", pos))
-
 def i_eval_binary(op, l, r, pos):
     if op == "Add":
         return i_bin_add(l, r, pos)
@@ -436,7 +422,6 @@ def i_eval_binary(op, l, r, pos):
     if op == "Lt" or op == "Le" or op == "Gt" or op == "Ge":
         return i_bin_compare(op, l, r, pos)
     return i_bin_numeric(op, l, r, pos)
-
 def i_bin_add(l, r, pos):
     let tl = i_type_name(l)
     let tr = i_type_name(r)
@@ -462,7 +447,6 @@ def i_bin_add(l, r, pos):
             j += 1
         return Ok(out)
     return Err(i_r1002("+ 不支持: " + tl + " + " + tr, pos))
-
 def i_bin_numeric(op, l, r, pos):
     let tl = i_type_name(l)
     let tr = i_type_name(r)
@@ -523,7 +507,6 @@ def i_bin_numeric(op, l, r, pos):
     if op == "Pow":
         return Ok(a ** b)
     return Err(i_r1002("此运算符要求整数操作数", pos))
-
 # 逻辑右移（对齐 Rust (a as u64).wrapping_shr(b) as i64）
 # 负数补码：算术右移后清除符号扩展的高位
 #   mask = 2^(64-b) - 1 = (2^63 - 1) >> (b-1)
@@ -537,7 +520,6 @@ def i_shr_u(a, b):
     let shifted = a >> b
     let mask = 9223372036854775807 >> (b - 1)
     return shifted & mask
-
 def i_bin_compare(op, l, r, pos):
     let tl = i_type_name(l)
     let tr = i_type_name(r)

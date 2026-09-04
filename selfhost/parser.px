@@ -7,7 +7,6 @@
 # ============================================================
 import "pxlexer.px"
 import "astdump.px"
-
 # ---------- lex 全局状态（供 pxlexer 函数引用；import 不注册顶层 let） ----------
 var g_src = ""
 var g_len = 0
@@ -21,7 +20,6 @@ var g_count = 0
 var g_pending = []
 let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn": "fn", "struct": "struct", "enum": "enum", "trait": "trait", "impl": "impl", "match": "match", "case": "case", "if": "if", "elif": "elif", "else": "else", "for": "for", "while": "while", "in": "in", "and": "and", "or": "or", "not": "not", "return": "return", "break": "break", "continue": "continue", "import": "import", "from": "from", "pub": "pub", "as": "as", "spawn": "spawn", "chan": "chan", "send": "send", "recv": "recv", "select": "select", "true": "true", "false": "false", "null": "null", "None": "null", "self": "self", "capture": "capture", "extern": "extern"}
 let CTRL_ALL = "\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}\u{8}\u{b}\u{c}\u{e}\u{f}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1a}\u{1b}\u{1c}\u{1d}\u{1e}\u{1f}\u{7f}\u{80}\u{81}\u{82}\u{83}\u{84}\u{85}\u{86}\u{87}\u{88}\u{89}\u{8a}\u{8b}\u{8c}\u{8d}\u{8e}\u{8f}\u{90}\u{91}\u{92}\u{93}\u{94}\u{95}\u{96}\u{97}\u{98}\u{99}\u{9a}\u{9b}\u{9c}\u{9d}\u{9e}\u{9f}"
-
 let LAYOUT = {
     "Program": ["Program", [["items", "l"]]],
     "VarDecl": ["VarDecl", [["kind", "r"], ["name", "s"], ["ty", "o"], ["value", "o"], ["pos", "p"]]],
@@ -94,15 +92,12 @@ let LAYOUT = {
     "TyFunc": ["Func", [[null, "tl"], [null, "n"], [null, "p"]]],
     "TyGeneric": ["Generic", [[null, "s"], [null, "tl"], [null, "p"]]],
 }
-
 # ---------- parser 状态 ----------
 var p_toks = []
 var p_pos = 0
-
 # ---------- 工具 ----------
 def pk():
     return p_toks[p_pos][0]
-
 def pk_display():
     # 对齐 Rust TokenKind Display（kind + 值），供错误消息使用
     let k = p_toks[p_pos][0]
@@ -118,51 +113,40 @@ def pk_display():
     if k == "注释":
         return "注释 " + v
     return k
-
 def pv():
     return p_toks[p_pos][1]
-
 def pline():
     return p_toks[p_pos][2]
-
 def pcol():
     return p_toks[p_pos][3]
-
 def ppos():
     return [p_toks[p_pos][2], p_toks[p_pos][3]]
-
 def adv():
     let t = p_toks[p_pos]
     if p_pos + 1 < len(p_toks):
         p_pos += 1
     return t
-
 def chk(k):
     return pk() == k
-
 def chk2(k):
     if p_pos + 1 < len(p_toks):
         return p_toks[p_pos + 1][0] == k
     return false
-
 def chk3(k):
     # M44：type X const 前瞻（type 是普通标识符，需看第 3 个 token 才能确认是枚举声明）
     if p_pos + 2 < len(p_toks):
         return p_toks[p_pos + 2][0] == k
     return false
-
 def expect(k, what):
     if chk(k):
         return adv()
     perr("E2001", "期望 " + what + "，实际得到 " + pk_display())
-
 def expect_ident(what):
     if pk() == "标识符":
         let v = pv()
         adv()
         return v
     perr("E2001", "期望" + what + "，实际得到 " + pk_display())
-
 def is_name_kind(k):
     let ns = ["let", "var", "const", "def", "fn", "struct", "enum", "trait", "impl", "match", "case", "if", "elif", "else", "for", "while", "in", "return", "break", "continue", "import", "from", "pub", "as", "spawn", "chan", "send", "recv", "select", "true", "false", "null", "self", "type", "capture", "extern"]
     var i = 0
@@ -171,7 +155,6 @@ def is_name_kind(k):
             return true
         i += 1
     return false
-
 def expect_name(what):
     if pk() == "标识符":
         let v = pv()
@@ -182,29 +165,22 @@ def expect_name(what):
         adv()
         return v
     perr("E2001", "期望" + what + "，实际得到 " + pk_display())
-
 def perr(code, msg):
     print(str(pline()) + ":" + str(pcol()) + ": 语法错误 " + code + ": " + msg)
     panic("parse " + code)
-
 def skip_newlines():
     while chk("换行"):
         adv()
-
 def skip_brace_indents():
     while chk("缩进") or chk("去缩进"):
         adv()
-
 def skip_newlines_in_block():
     while chk("换行"):
         adv()
-
 def node_pos(node):
     return node[len(node) - 1]
-
 def qstr(s):
     return rust_str_debug(s)
-
 # ---------- 程序 ----------
 def parse_program():
     let items = []
@@ -213,7 +189,6 @@ def parse_program():
         items.append(parse_stmt())
         skip_newlines()
     return ["Program", items]
-
 # ---------- 语句 ----------
 def parse_stmt():
     let k = pk()
@@ -278,7 +253,6 @@ def parse_stmt():
         let pos = node_pos(expr)
         return ["ExprStmt", expr, pos]
     return parse_assign_or_expr()
-
 def parse_var_decl(kind):
     let pos = ppos()
     adv()
@@ -298,7 +272,6 @@ def parse_var_decl(kind):
         adv()
         value = parse_expr()
     return ["VarDecl", kind, qstr(name), ty, value, pos]
-
 def parse_assign_or_expr():
     var expr = parse_expr()
     let pos = node_pos(expr)
@@ -340,7 +313,6 @@ def parse_assign_or_expr():
         var value = parse_expr()
         return ["Assign", expr, op, value, pos]
     return ["ExprStmt", expr, pos]
-
 def parse_if():
     let pos = ppos()
     adv()
@@ -367,7 +339,6 @@ def parse_if():
         else:
             break
     return ["If", branches, else_branch, pos]
-
 def parse_for():
     let pos = ppos()
     adv()
@@ -378,7 +349,6 @@ def parse_for():
     expect("换行", "换行")
     var body = parse_block()
     return ["For", qstr(lv), iterable, body, pos]
-
 def parse_while():
     let pos = ppos()
     adv()
@@ -387,7 +357,6 @@ def parse_while():
     expect("换行", "换行")
     var body = parse_block()
     return ["While", cond, body, pos]
-
 def parse_block():
     expect("缩进", "缩进块")
     let stmts = []
@@ -400,7 +369,6 @@ def parse_block():
         perr("E2001", "代码块未正确结束（缺少去缩进）")
     expect("去缩进", "去缩进")
     return stmts
-
 def parse_type_params():
     # 泛型参数列表（可选，M41.4）：def first[T](...) / struct Box[T]:
     # 元素存 rust 字符串：无约束 "T"，有约束 "T: Trait"（约束仅记录，类型擦除渐进不检查）
@@ -422,7 +390,6 @@ def parse_type_params():
         break
     expect("]", "']'")
     return tps
-
 def parse_func_def():
     let pos = ppos()
     adv()
@@ -437,7 +404,6 @@ def parse_func_def():
     expect("换行", "换行")
     var body = parse_block()
     return ["FuncDef", qstr(name), params, ret_ty, body, pos, tps]
-
 # M42：extern def —— C 函数声明（FFI，无 body，单行）
 #   extern def name(a: int, b: str) : int
 def parse_extern_def():
@@ -451,7 +417,6 @@ def parse_extern_def():
         adv()
         ret_ty = parse_type()
     return ["ExternDef", qstr(name), params, ret_ty, pos]
-
 def parse_struct_def():
     let pos = ppos()
     adv()
@@ -476,7 +441,6 @@ def parse_struct_def():
         perr("E2001", "结构体定义未正确结束")
     expect("去缩进", "去缩进")
     return ["StructDef", qstr(name), fields, pos, tps]
-
 def parse_enum_def():
     let pos = ppos()
     adv()
@@ -509,7 +473,6 @@ def parse_enum_def():
         perr("E2001", "枚举定义未正确结束")
     expect("去缩进", "去缩进")
     return ["EnumDef", qstr(name), variants, pos]
-
 # ---------- M44：简化枚举（带值一行式）type X const (A = v, B = v) ----------
 # 语义：Name.Variant → 绑定值（常量组）；支持 match case Name.Variant: 按值匹配
 # 与无值 enum Kind: 并存不冲突（Field 访问先查 const 表再回落 enum 表）
@@ -533,7 +496,6 @@ def parse_type_const():
             break
     expect(")", "')'")
     return ["TypeConst", qstr(name), items, pos]
-
 def parse_trait_def():
     let pos = ppos()
     adv()
@@ -569,7 +531,6 @@ def parse_trait_def():
         perr("E2001", "trait 定义未正确结束")
     expect("去缩进", "去缩进")
     return ["TraitDef", qstr(name), methods, pos]
-
 def parse_impl_def():
     let pos = ppos()
     adv()
@@ -606,7 +567,6 @@ def parse_impl_def():
         perr("E2001", "impl 定义未正确结束")
     expect("去缩进", "去缩进")
     return ["ImplDef", qstr(type_name), trait_name, methods, pos]
-
 def parse_import():
     let pos = ppos()
     adv()
@@ -622,7 +582,6 @@ def parse_import():
             continue
         break
     return ["Import", module, [], pos]
-
 def parse_import_from():
     let pos = ppos()
     adv()
@@ -642,7 +601,6 @@ def parse_import_from():
             continue
         break
     return ["Import", module, names, pos]
-
 def parse_select():
     let pos = ppos()
     adv()
@@ -679,14 +637,12 @@ def parse_select():
         perr("E2001", "select 定义未正确结束")
     expect("去缩进", "去缩进")
     return ["Select", arms, else_branch, pos]
-
 def parse_case_body():
     if chk("缩进"):
         return parse_block()
     var expr = parse_expr()
     let pos = node_pos(expr)
     return [["ExprStmt", expr, pos]]
-
 # ---------- 参数 ----------
 def parse_params():
     expect("(", "'('")
@@ -710,11 +666,9 @@ def parse_params():
             break
     expect(")", "')'")
     return params
-
 # ---------- 表达式（Pratt 解析） ----------
 def parse_expr():
     return parse_pipe()
-
 def parse_pipe():
     var left = parse_null_coalesce()
     while chk("|>"):
@@ -723,7 +677,6 @@ def parse_pipe():
         let right = parse_null_coalesce()
         left = ["Pipe", left, right, pos]
     return left
-
 def parse_null_coalesce():
     var left = parse_or()
     while chk("??"):
@@ -732,7 +685,6 @@ def parse_null_coalesce():
         let right = parse_or()
         left = ["NullCoalesce", left, right, pos]
     return left
-
 def parse_or():
     var left = parse_and()
     while chk("or"):
@@ -741,7 +693,6 @@ def parse_or():
         let right = parse_and()
         left = ["Binary", "Or", left, right, pos]
     return left
-
 def parse_and():
     var left = parse_comparison()
     while chk("and"):
@@ -750,7 +701,6 @@ def parse_and():
         let right = parse_comparison()
         left = ["Binary", "And", left, right, pos]
     return left
-
 def parse_comparison():
     var left = parse_bitor()
     while true:
@@ -774,7 +724,6 @@ def parse_comparison():
         let right = parse_bitor()
         left = ["Binary", op, left, right, pos]
     return left
-
 def parse_bitor():
     var left = parse_bitxor()
     while chk("|"):
@@ -783,7 +732,6 @@ def parse_bitor():
         let right = parse_bitxor()
         left = ["Binary", "BitOr", left, right, pos]
     return left
-
 def parse_bitxor():
     var left = parse_bitand()
     while chk("^"):
@@ -792,7 +740,6 @@ def parse_bitxor():
         let right = parse_bitand()
         left = ["Binary", "BitXor", left, right, pos]
     return left
-
 def parse_bitand():
     var left = parse_shift()
     while chk("&"):
@@ -801,7 +748,6 @@ def parse_bitand():
         let right = parse_shift()
         left = ["Binary", "BitAnd", left, right, pos]
     return left
-
 def parse_shift():
     var left = parse_add()
     while true:
@@ -819,7 +765,6 @@ def parse_shift():
         let right = parse_add()
         left = ["Binary", op, left, right, pos]
     return left
-
 def parse_add():
     var left = parse_mul()
     while true:
@@ -835,7 +780,6 @@ def parse_add():
         let right = parse_mul()
         left = ["Binary", op, left, right, pos]
     return left
-
 def parse_mul():
     var left = parse_pow()
     while true:
@@ -855,7 +799,6 @@ def parse_mul():
         let right = parse_pow()
         left = ["Binary", op, left, right, pos]
     return left
-
 def parse_pow():
     var left = parse_unary()
     if chk("**"):
@@ -864,7 +807,6 @@ def parse_pow():
         let right = parse_pow()
         return ["Binary", "Pow", left, right, pos]
     return left
-
 def parse_unary():
     let k = pk()
     if k == "-":
@@ -883,7 +825,6 @@ def parse_unary():
         let operand = parse_unary()
         return ["Unary", "BitNot", operand, pos]
     return parse_postfix()
-
 def parse_postfix():
     var expr = parse_primary()
     while true:
@@ -939,12 +880,10 @@ def parse_postfix():
         else:
             break
     return expr
-
 def parse_slice_bound():
     if chk("]") or chk(":"):
         return null
     return parse_expr()
-
 def parse_call_args():
     expect("(", "'('")
     let args = []
@@ -957,7 +896,6 @@ def parse_call_args():
             break
     expect(")", "')'")
     return args
-
 # ---------- 原子表达式 ----------
 def parse_primary():
     let k = pk()
@@ -1023,7 +961,6 @@ def parse_primary():
         return callee
     perr("E2001", "意外的 token: " + pk_display())
     return null
-
 def parse_list_or_comp():
     let pos = ppos()
     adv()
@@ -1043,14 +980,12 @@ def parse_list_or_comp():
         items.append(parse_expr())
     expect("]", "']'")
     return ["List", items, pos]
-
 def parse_comp_vars():
     let vars = [qstr(expect_ident("推导变量"))]
     while chk(","):
         adv()
         vars.append(qstr(expect_ident("推导变量")))
     return vars
-
 def parse_comp_clauses():
     let clauses = []
     let conds = []
@@ -1067,7 +1002,6 @@ def parse_comp_clauses():
         else:
             break
     return [clauses, fold_comp_conds(conds)]
-
 def fold_comp_conds(conds):
     if len(conds) == 0:
         return null
@@ -1078,7 +1012,6 @@ def fold_comp_conds(conds):
         acc = ["Binary", "And", acc, conds[i], p]
         i += 1
     return acc
-
 def parse_paren_or_tuple():
     let pos = ppos()
     adv()
@@ -1101,7 +1034,6 @@ def parse_paren_or_tuple():
         return ["Tuple", items, pos]
     expect(")", "')'")
     return first
-
 def brace_looks_like_dict():
     var depth = 0
     var i = p_pos
@@ -1120,7 +1052,6 @@ def brace_looks_like_dict():
             return false
         i += 1
     return false
-
 def parse_brace():
     let pos = ppos()
     adv()
@@ -1159,7 +1090,6 @@ def parse_brace():
         skip_brace_indents()
     expect("}", "'}'")
     return ["Block", stmts, pos]
-
 def parse_closure():
     let pos = ppos()
     adv()
@@ -1196,7 +1126,6 @@ def parse_closure():
     else:
         perr("E2001", "匿名函数体期望 '{' 或 ':'")
     return ["Closure", params, ret_ty, body, captures, pos]
-
 def parse_match_expr():
     let pos = ppos()
     adv()
@@ -1233,7 +1162,6 @@ def parse_match_expr():
         perr("E2001", "match 表达式未正确结束")
     expect("去缩进", "去缩进")
     return ["Match", subject, arms, pos]
-
 def parse_if_expr():
     let pos = ppos()
     adv()
@@ -1244,7 +1172,6 @@ def parse_if_expr():
     expect(":", "':'")
     let else_ = parse_expr()
     return ["IfExpr", cond, then, else_, pos]
-
 # ---------- 模式 ----------
 def parse_pattern():
     let k = pk()
@@ -1292,13 +1219,11 @@ def parse_pattern():
         return ["PatTuple", items]
     perr("E2001", "无效的模式: " + pk_display())
     return null
-
 def is_upper(s):
     if len(s) == 0:
         return false
     let c = s[0]
     return c >= "A" and c <= "Z"
-
 # ---------- 类型 ----------
 def parse_type():
     var ty = parse_type_base()
@@ -1307,7 +1232,6 @@ def parse_type():
         adv()
         return ["TyOptional", ty, pos]
     return ty
-
 def parse_type_base():
     let k = pk()
     if k == "标识符":
@@ -1355,7 +1279,6 @@ def parse_type_base():
         return ["TyTuple", items, pos]
     perr("E2001", "无效的类型: " + pk_display())
     return null
-
 # ---------- 入口 ----------
 def main():
     let f = args()[len(args()) - 1]

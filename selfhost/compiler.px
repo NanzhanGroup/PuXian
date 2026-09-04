@@ -12,7 +12,6 @@
 #       Rust 版 `px build <file.px>` 产物逐字节一致。
 # ============================================================
 import "codegen.px"
-
 # ---------- 全局状态（主文件声明；import 不注册模块顶层 let）----------
 var g_src = ""
 var g_len = 0
@@ -43,11 +42,9 @@ var cg_err_labels = []
 var cg_uidc = 0
 var cg_closure_id = 0
 var loaded = {"_": 0}
-
 # ---------- 版本（M63-L11：bootstrap/pxc --version/-v；对齐 tools/pxc SELFHOST_VER/MS） ----------
 let PXC_VER = "0.1.0"
 let PXC_MS = "M-B9a"
-
 # ---------- 入口 ----------
 def main():
     let a = args()

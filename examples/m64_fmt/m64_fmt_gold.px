@@ -17,10 +17,10 @@ def main():
     let neg = -3
     let pos = 1 + -2
     let esc = "a\tb\nc"
-    let uni = "你好"
-    let interp = "val=" + str(x) + "end"
+    let uni = "\u{4f60}\u{597d}"
+    let interp = "val=${x}end"
     let arr = [1, 2, 3]
-    let slice = arr[0: 2]
+    let slice = arr[0:2]
     print(x, d["name"], pipe, f, g, neg, pos, esc, uni, interp, slice)
     if (x > 0):
         print(to_upper(str(1 + 2)))

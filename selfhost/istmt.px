@@ -12,7 +12,6 @@
 # 与 Rust exec_block 一致。闭包/函数调用新建 env（env_new）。
 # 并发语句（spawn/send/recv/select/chan）Mini 子集排除 → 报错。
 # ============================================================
-
 # ---------- 语句分发 ----------
 def i_exec_stmt(stmt, env):
     let ty = stmt[0]
@@ -118,7 +117,6 @@ def i_exec_stmt(stmt, env):
     if ty == "Select":
         return Err(i_r1002("interp 不支持 select（Mini 子集排除）", stmt[3]))
     return Err(i_r1002("未知语句节点: " + ty, [0, 0]))
-
 # ---------- if（对齐 exec_stmt If） ----------
 def i_exec_if(stmt, env):
     # ["If", branches([[cond, body]...]), else_branch, pos]
@@ -134,7 +132,6 @@ def i_exec_if(stmt, env):
     if stmt[2] != null:
         return i_exec_block(stmt[2], env)
     return Ok(null)
-
 # ---------- for（对齐 exec_for） ----------
 def i_exec_for(varname, iterable, body, env, pos):
     let ivr = i_iter(iterable, pos)
@@ -158,7 +155,6 @@ def i_exec_for(varname, iterable, body, env, pos):
                 continue
         ii += 1
     return Ok(null)
-
 # ---------- while（对齐 exec_stmt While） ----------
 def i_exec_while(stmt, env):
     # ["While", cond, body, pos]
@@ -178,7 +174,6 @@ def i_exec_while(stmt, env):
             if fl["__flow__"] == "return":
                 return Ok(fl)
     return Ok(null)
-
 # ---------- 语句块（不新建作用域，Python 语义） ----------
 def i_exec_block(body, env):
     var i = 0
@@ -191,7 +186,6 @@ def i_exec_block(body, env):
             return Ok(fl)
         i += 1
     return Ok(null)
-
 # ---------- struct 定义 ----------
 def i_exec_struct(stmt, env):
     # ["StructDef", name, fields, pos]  fields: [["StructField", name, ty, pos]]
@@ -205,7 +199,6 @@ def i_exec_struct(stmt, env):
     g_structs[name] = {"fields": fields}
     env_define(env, name, it_typeref("struct", name))
     return Ok(null)
-
 # ---------- enum 定义 ----------
 def i_exec_enum(stmt, env):
     # ["EnumDef", name, variants, pos]  variants: [["EnumVariant", name, fields, pos]]
@@ -218,7 +211,6 @@ def i_exec_enum(stmt, env):
     g_enums[name] = vs
     env_define(env, name, it_typeref("enum", name))
     return Ok(null)
-
 # ---------- impl 定义（对齐 exec_stmt ImplDef：closure=globals） ----------
 def i_exec_impl(stmt, env):
     # ["ImplDef", type_name, trait_name, methods, pos]
@@ -234,7 +226,6 @@ def i_exec_impl(stmt, env):
         i += 1
     g_impls[tn] = m
     return Ok(null)
-
 # ---------- 赋值（对齐 assign） ----------
 def i_assign(target, op, v, env, pos):
     if op == "Append":
@@ -328,7 +319,6 @@ def i_assign(target, op, v, env, pos):
             return Ok(null)
         return Err(i_r1002("索引赋值目标不支持", pos))
     return Err(i_r1002("非法赋值目标", pos))
-
 # ---------- 复合赋值运算符 → 二元运算符（对齐 apply_assign_op） ----------
 def i_apply_assign_op(op, old, new, pos):
     if op == "Assign":

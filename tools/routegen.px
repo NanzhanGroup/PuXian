@@ -16,7 +16,6 @@
 #       数据文件放 static/ 或应用目录外。
 # ============================================================
 import std.webroute
-
 # ---- 递归收集 *.px 相对路径（排除 build/ static/ _开头 私有）----
 def rg_walk(dir_path, prefix, out):
     let entries = list_dir(dir_path)
@@ -39,7 +38,6 @@ def rg_walk(dir_path, prefix, out):
             # 子目录递归（约定：非 .px 项均为目录）
             rg_walk(dir_path + "/" + name, rel + "/", out)
         i += 1
-
 # ---- 解析 handler 顶部限流注释：`# rate_limit: max/window_sec` ----
 # 返回 {"max", "window_sec"} 或 null
 def rg_rate_limit(app_dir, rel):
@@ -56,7 +54,6 @@ def rg_rate_limit(app_dir, rel):
             return null
         i += 1
     return null
-
 # ---- 生成 generated_routes.px ----
 def rg_generate(app_dir):
     let files = []
@@ -120,7 +117,6 @@ def rg_generate(app_dir):
         summary += " + middleware"
     summary += "）"
     print(summary)
-
 # ---- 入口 ----
 def main():
     let app_dir = env("PX_APP_DIR")
@@ -128,4 +124,3 @@ def main():
         print("用法: PX_APP_DIR=<app_dir> pxi run tools/routegen.px（或 tools/routegen <app_dir>）")
         exit(1)
     rg_generate(app_dir)
-

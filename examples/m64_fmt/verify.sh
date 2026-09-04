@@ -41,7 +41,9 @@ grep -q "def fib(n: int) -> int:" /tmp/m64f_out.px && a=0 || a=1; chk $a "参数
 grep -q "let f = 1.0" /tmp/m64f_out.px && a=0 || a=1; chk $a "整值浮点保留小数点 (1.0)"
 grep -q 'let d = {"name": "px", "v": 1}' /tmp/m64f_out.px && a=0 || a=1; chk $a "dict 冒号后空格"
 grep -q "let neg = -3" /tmp/m64f_out.px && a=0 || a=1; chk $a "一元负号赋值空格 (neg = -3)"
-grep -q "let interp = \"val=\" + str(x) + \"end\"" /tmp/m64f_out.px && a=0 || a=1; chk $a "插值规范化为等价拼接 (spec)"
+grep -q 'let interp = "val=${x}end"' /tmp/m64f_out.px && a=0 || a=1; chk $a "插值字符串保留原文 (spec)"
+grep -q 'let uni = "\\u{4f60}\\u{597d}"' /tmp/m64f_out.px && a=0 || a=1; chk $a "Unicode 转义保留原文"
+grep -qF "let slice = arr[0:2]" /tmp/m64f_out.px && a=0 || a=1; chk $a "切片冒号紧贴 (arr[0:2])"
 grep -q "# 行首注释" /tmp/m64f_out.px && a=0 || a=1; chk $a "行首注释保留"
 grep -q "let x = 1  # 行内注释" /tmp/m64f_out.px && a=0 || a=1; chk $a "行内注释保留（前补 2 空格）"
 

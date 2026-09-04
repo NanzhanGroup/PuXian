@@ -67,7 +67,7 @@ def main():
             let d = unified_diff(src, formatted)
             # print 自动补尾换行：去掉 diff 自带尾 \n 避免多空行
             if ends_with(d, "\n"):
-                print(d[0: len(d) - 1])
+                print(d[0:len(d) - 1])
             else:
                 print(d)
         exit(0)
@@ -84,7 +84,7 @@ def main():
     else:
         # 默认 stdout：formatted 以 \n 结尾，print 自动补一个 → 去掉尾 \n 保证单换行
         if ends_with(formatted, "\n"):
-            print(formatted[0: len(formatted) - 1])
+            print(formatted[0:len(formatted) - 1])
         else:
             print(formatted)
         exit(0)

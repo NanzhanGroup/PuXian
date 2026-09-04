@@ -7,18 +7,15 @@
 #   - it_dirname / it_new_dict / it_dict_copy / it_find
 #   - it_pack_*（值包装构造）
 # ============================================================
-
 # 空 dict 构造（{} 是空块=null，必须用此方式）
 def cg_new_dict():
     let d = {"_": 0}
     d.remove("_")
     return d
-
 def it_new_dict():
     let d = {"_": 0}
     d.remove("_")
     return d
-
 def it_dict_copy(d):
     var out = it_new_dict()
     let ks = d.keys()
@@ -27,7 +24,6 @@ def it_dict_copy(d):
         out[ks[i]] = d[ks[i]]
         i += 1
     return out
-
 # 路径目录名（对齐 Rust Path::parent 常用场景）
 def it_dirname(path):
     var i = len(path) - 1
@@ -38,7 +34,6 @@ def it_dirname(path):
             return path[0:i]
         i -= 1
     return "."
-
 # 子串查找（返回首次出现下标，找不到 -1）
 def it_find(s, sub):
     let n = len(s)
@@ -56,7 +51,6 @@ def it_find(s, sub):
             return i
         i += 1
     return -1
-
 # 字符串 debug 格式（rust_str_debug，带引号）→ 原始字符串
 # 对齐 codegen.px rust_unescape（AST 字段为 debug 格式）
 def rust_unescape(s):
@@ -100,30 +94,23 @@ def rust_unescape(s):
             out += c
             i += 1
     return out
-
 # ---------- 值包装构造 ----------
-
 # 用户函数包装：{"__ufn__": {"name","params","ret","body","closure","implicit"}}
 #   body：list（stmts）或表达式节点；闭包 fn 表达式用 [ExprStmt]
 def it_ufn(name, params, ret, body, closure, implicit):
     return {"__ufn__": {"name": name, "params": params, "ret": ret, "body": body, "closure": closure, "implicit": implicit}}
-
 # 内置函数包装
 def it_builtin(name):
     return {"__builtin__": name}
-
 # struct 实例包装：{"__struct__": type_name, "__fields__": {f: v}}
 def it_struct(tname, fields):
     return {"__struct__": tname, "__fields__": fields}
-
 # enum 值包装：{"__enum__": type_name, "variant": name, "payload": v 或 null}
 def it_enum(tname, variant, payload):
     return {"__enum__": tname, "variant": variant, "payload": payload}
-
 # 类型对象包装：{"__typeref__": "struct"/"enum", "name": n}
 def it_typeref(kind, name):
     return {"__typeref__": kind, "name": name}
-
 # 生成器包装：{"__gen__": items(list), "cursor": n}
 def it_gen(items, cursor):
     return {"__gen__": items, "cursor": cursor}

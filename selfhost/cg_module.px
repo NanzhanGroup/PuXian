@@ -9,7 +9,6 @@
 #   - 递归加载子 import；loaded 缓存避免重复
 # 对拍：含 import 的用例（s08）C 源码与 Rust 版逐字节一致
 # ============================================================
-
 # ---------- 工具 ----------
 def cg_dirname(path):
     var i = len(path) - 1
@@ -20,7 +19,6 @@ def cg_dirname(path):
             return path[0:i]
         i -= 1
     return "."
-
 # stdlib 目录定位：PX_STDLIB env → 候选路径（开发/安装布局）
 def cg_stdlib_dir():
     let e = env("PX_STDLIB")
@@ -34,7 +32,6 @@ def cg_stdlib_dir():
             return c
         i += 1
     return null
-
 # 根据模块路径查找源文件（相对路径 / std.* / 用户点分包）
 def cg_find_module_path(module, base_dir):
     if len(module) == 0:
@@ -100,7 +97,6 @@ def cg_find_module_path(module, base_dir):
                 return single
         bi += 1
     return null
-
 # 顶层语句是否为定义类（可被模块导出）
 def cg_is_definition(st):
     let ty = st[0]
@@ -116,7 +112,6 @@ def cg_is_definition(st):
     if ty == "VarDecl" and st[1] == "Const":
         return true
     return false
-
 # 定义名（impl 用 "impl::类型::trait" 近似键）
 def cg_def_name(st):
     let ty = st[0]
@@ -132,7 +127,6 @@ def cg_def_name(st):
             ts = "Some(" + tr + ")"
         return "impl::" + tn + "::" + ts
     return null
-
 # 加载单个模块：解析 → 递归子 import → 提取定义
 def cg_load_module(module, names, base_dir, out, std_defined):
     # module/names 元素是 AST 字符串字段（debug 格式带引号），先还原
@@ -210,7 +204,6 @@ def cg_load_module(module, names, base_dir, out, std_defined):
                 std_defined[name] = true
             out.append(st)
         ki += 1
-
 # 解析并合并程序的所有 import（返回新 Program）
 def cg_resolve_modules(prog, base_dir):
     let items = prog[1]

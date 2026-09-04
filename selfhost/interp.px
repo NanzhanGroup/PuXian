@@ -31,7 +31,6 @@ import "icall.px"
 import "ibuiltin.px"
 import "iexpr.px"
 import "istmt.px"
-
 # ---------- lex/parser 全局状态（主文件声明；import 不合并模块顶层 let） ----------
 var g_src = ""
 var g_len = 0
@@ -48,7 +47,6 @@ let CTRL_ALL = "\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}\u{8}\u{b}\u{c}\u{e}\u{f}\u{1
 var p_toks = []
 var p_pos = 0
 var loaded = {"_": 0}
-
 # ---------- interp 全局状态 ----------
 var g_globals = null
 var g_structs = it_new_dict()
@@ -59,7 +57,6 @@ var g_loop_depth = 0
 var g_exit_code = 0
 var i_ffi = it_new_dict()
 var g_const_enums = it_new_dict()  # M44：type X const 简化枚举（name → {variant: 值}）
-
 # ---------- 内置函数注册（Mini 子集 §2.5 白名单） ----------
 def i_register_builtins():
     let names = ["print", "str", "type", "bool", "len", "int", "float", "range", "sorted", "reversed", "sum", "abs", "min", "max", "pow", "sqrt", "sin", "cos", "tan", "atan2", "floor", "ceil", "round", "log", "log10", "exp", "random", "random_int", "random_seed", "assert", "join", "contains", "split", "trim", "to_upper", "to_lower", "replace", "starts_with", "ends_with", "list", "tuple", "dict", "map", "filter", "reduce", "read_file", "write_file", "append_file", "exists", "remove", "mkdir", "list_dir", "file_size", "read_bytes", "write_bytes", "regex_match", "regex_find", "regex_search", "regex_find_all", "regex_replace", "regex_split", "json_parse", "json_stringify", "json_path", "json_path_set", "os_spawn", "os_wait", "os_kill", "env", "now", "sleep", "exit", "hex_to_int", "int_to_hex", "int_to_bytes", "bytes_to_int", "bytes", "bytes_len", "bytes_get", "bytes_set", "bytes_slice", "bytes_concat", "bytes_to_str", "bytes_to_hex", "hex_to_bytes", "bytes_find", "bytes_base64", "base64_to_bytes", "base64_encode", "base64_decode", "gen_next", "unique", "flatten", "Ok", "Err", "Some", "ffi_call", "sha256", "http_get", "open", "close", "ioctl", "os_errno", "read", "write", "mmap", "munmap", "mem_write", "http_unix", "sleep_us", "now_us", "fcntl", "tty_config", "fd_wait", "http_post", "http_request", "s3_get", "s3_put", "s3_list", "s3_delete"]
@@ -72,7 +69,6 @@ def i_register_builtins():
     # 避免高精度浮点字面量被编译期截断 ~6 位（M59-S1 实测）导致 e/pi 精度损失。
     env_define(g_globals, "pi", pi)
     env_define(g_globals, "e", e)
-
 # ---------- 程序入口（对齐 run_program） ----------
 def i_run_program(prog):
     let items = prog[1]
@@ -113,13 +109,11 @@ def i_run_program(prog):
                 print("错误: " + i_to_str(v.err()))
                 g_exit_code = 1
     return Ok(null)
-
 # ---------- 入口 ----------
 # 版本：与 tools/pxc（SELFHOST_VER/SELFHOST_MILESTONE）保持一致。
 # 发布包版本号由 tools/make_release.sh 按 tag 派生（见其"版本来源"段）。
 let PXI_VER = "0.1.0"
 let PXI_MS = "M-B9a"
-
 def main():
     let a = args()
     # args() 含 argv[0]（程序名，见 runtime.c bi_args），用户参数自 a[1] 起；

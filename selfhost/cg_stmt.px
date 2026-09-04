@@ -4,7 +4,6 @@
 # 被 codegen.px import；函数引用主文件全局状态（cg_vars 等）。
 # 全局变量/函数命名：cg_ 前缀避免与主文件/parser 冲突。
 # ============================================================
-
 # ---------- 语句生成 ----------
 def cg_gen_stmt(stmt, indent):
     let pad = cg_pad(indent)
@@ -199,7 +198,6 @@ def cg_gen_stmt(stmt, indent):
         return pad + "/* import 忽略（MVP） */\n"
     # StructDef/EnumDef/TraitDef/ImplDef/FuncDef → 空（顶层在 generate 处理）
     return ""
-
 # 复合赋值：全局变量（先读全局再运算再写回）
 def cg_assign_op_global(op, name, rhs):
     if op == "Assign":
@@ -231,7 +229,6 @@ def cg_assign_op_global(op, name, rhs):
     if op == "ShrU":
         return "px_ushr(px_get_global(\"" + name + "\"), " + rhs + ")"
     return rhs
-
 # 复合赋值：局部变量
 def cg_assign_op_local(op, v, rhs):
     if op == "Assign":
@@ -263,7 +260,6 @@ def cg_assign_op_local(op, v, rhs):
     if op == "ShrU":
         return "px_ushr(" + v + ", " + rhs + ")"
     return rhs
-
 # ---------- select 生成（M4.2） ----------
 def cg_gen_select(arms, else_branch, indent):
     let pad = cg_pad(indent)

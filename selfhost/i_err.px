@@ -6,41 +6,29 @@
 #   传播     {"__prop__": v}   （用户代码 ? 遇 Err/null 的传播值）
 # 渲染对齐 LxError Display：错误 [code] line:col: msg
 # ============================================================
-
 def i_err(code, msg, pos):
     return {"__err__": code, "msg": msg, "line": pos[0], "col": pos[1]}
-
 def i_prop(v):
     return {"__prop__": v}
-
 # ---- 常用错误构造（对齐 interp.rs LxError 辅助） ----
 def i_r1001(name, pos):
     return i_err("R1001", "未定义变量: '" + name + "'", pos)
-
 def i_r1002(msg, pos):
     return i_err("R1002", msg, pos)
-
 def i_r1003(msg, pos):
     return i_err("R1003", msg, pos)
-
 def i_r1004(msg, pos):
     return i_err("R1004", msg, pos)
-
 def i_r1005(msg, pos):
     return i_err("R1005", msg, pos)
-
 def i_r1006(msg, pos):
     return i_err("R1006", msg, pos)
-
 def i_r1007(msg, pos):
     return i_err("R1007", msg, pos)
-
 def i_r1008(msg, pos):
     return i_err("R1008", msg, pos)
-
 def i_r1011(msg, pos):
     return i_err("R1011", msg, pos)
-
 # 错误渲染（对齐 LxError Display）
 def i_err_display(e):
     return "错误 [" + e["__err__"] + "] " + str(e["line"]) + ":" + str(e["col"]) + ": " + e["msg"]

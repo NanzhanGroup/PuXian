@@ -18,7 +18,7 @@ def lc_unq(s):
         return s
     if s[0] != "\"":
         return s
-    let body = s[1: len(s) - 1]
+    let body = s[1:len(s) - 1]
     var out = ""
     var i = 0
     while i < len(body):
