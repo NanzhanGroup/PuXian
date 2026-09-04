@@ -67,3 +67,31 @@ jobs:
             ./tools/pxc build "$ex" 2>&1 | tail -1
           done
           ./examples/build/fib | head -3
+
+  toolchain:
+    name: 工具链自举质量门（fmt + lint）
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+      - name: fmt --check（selfhost + tools + stdlib 收敛域）
+        run: |
+          chmod +x bootstrap/pxfmt bootstrap/pxlint bootstrap/pxc
+          set -e
+          for f in selfhost/*.px tools/*.px stdlib/*.px; do
+            ./bootstrap/pxfmt --check "$f" >/dev/null || { echo "❌ 格式不符: $f"; exit 1; }
+          done
+          echo "✅ fmt --check 全绿（selfhost+tools+stdlib）"
+      - name: lint（compiler 主入口 + 独立工具文件）
+        run: |
+          chmod +x bootstrap/pxlint
+          ./bootstrap/pxlint selfhost/compiler.px >/dev/null || { echo "❌ compiler.px 项目级 lint 失败"; exit 1; }
+          for f in tools/fmt_core.px tools/fmtlexer.px tools/lint_core.px tools/pxbench.px tools/pxdoc.px tools/pxfmt.px tools/pxlint.px tools/pxpkg.px tools/pxslice.px tools/pxtest.px tools/routegen.px; do
+            ./bootstrap/pxlint "$f" >/dev/null || { echo "❌ lint 失败: $f"; exit 1; }
+          done
+          echo "✅ lint 全绿（compiler 主入口 0 错 + tools 11 文件 0/0）"
+      - name: 工具自测（m64_fmt / m64_lint）
+        run: |
+          bash examples/m64_fmt/verify.sh >/dev/null && bash examples/m64_lint/verify.sh >/dev/null
+          echo "✅ m64_fmt / m64_lint verify 全 PASS"
