@@ -6,6 +6,9 @@
 # S2：pxlsp 端到端（python3 模拟标准 LSP client 双向管道）：
 #     initialize → didOpen(didChange/didSave/didClose) → publishDiagnostics
 #     → shutdown → exit，17 断言全绿
+# S3：completion / definition / hover 增强 e2e：
+#     demo_s3.px（def/struct/enum/trait/impl/var/局部/文档注释）+ 真实文件
+#     selfhost/astdump.px + 错误输入不崩，39 断言全绿
 # 依赖：python3 + bootstrap/pxlsp + bootstrap/pxcheck（自举产物，随仓库提交）
 # ============================================================
 set -u
@@ -49,11 +52,26 @@ else
   echo "PASS: S2 client 端到端握手 + 诊断全绿"
 fi
 
+echo ""
+echo "== M65-S3 verify =="
+
+# S3：completion/definition/hover e2e（demo + 真实文件 + 错误输入不崩）
+if [ ! -x "$BOOT/pxlsp" ] || [ ! -x "$BOOT/pxcheck" ]; then
+  echo "FAIL: 缺 bootstrap/pxlsp 或 bootstrap/pxcheck（S3 无法运行）"
+  FAIL=1
+elif ! command -v python3 >/dev/null 2>&1; then
+  echo "SKIP: 无 python3（S3 client 验证跳过）"
+else
+  S3_OUT=$(python3 "$HERE/lsp_client_s3.py" "$BOOT/pxlsp" "$BOOT/pxcheck" "$PWD" 2>&1)
+  echo "$S3_OUT" | grep -q "ALL PASS" || { echo "FAIL: S3 client 未全绿"; echo "$S3_OUT"; FAIL=1; }
+  echo "PASS: S3 client completion/definition/hover 全绿"
+fi
+
 if [ $FAIL -eq 0 ]; then
   echo ""
-  echo "== M65-S1/S2 verify: ALL PASS =="
+  echo "== M65-S1/S2/S3 verify: ALL PASS =="
   exit 0
 fi
 echo ""
-echo "== M65-S1/S2 verify: FAILED =="
+echo "== M65-S1/S2/S3 verify: FAILED =="
 exit 1

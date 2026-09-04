@@ -75,8 +75,9 @@ pxc $(echo "$SELFHOST_VER") (普贤 PuXian · selfhosted $SELFHOST_MILESTONE)
                                               逐用例独立 pxi 子进程，有失败退出 1）
   pxc bench <file.px> <func> [--count N] [--repeat R]
                                               基准测试（M64c 自举；N 次循环调用 × R 轮）
-  pxc lsp                                    LSP 服务器（M65-S2 自举；stdio 即协议通道，
-                                             编辑器以子进程拉起；诊断走 pxcheck 子进程）
+  pxc lsp                                    LSP 服务器（M65-S3 自举；stdio 即协议通道，
+                                             编辑器以子进程拉起；诊断走 pxcheck 子进程，
+                                             补全/跳转/悬停走 lsp_core 文本级符号层）
   pxc --version                               输出版本号
   pxc help                                    显示本帮助
 EOF

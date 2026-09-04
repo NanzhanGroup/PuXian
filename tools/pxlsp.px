@@ -1,8 +1,8 @@
 # ============================================================
-# tools/pxlsp.px —— PuXian LSP 服务器（自举版，pxc lsp，M65-S2）
+# tools/pxlsp.px —— PuXian LSP 服务器（自举版，pxc lsp，M65-S3）
 # ------------------------------------------------------------
-# 对齐 Rust archive/rust-compiler/src/lsp.rs 能力（本 S2 步：生命周期 +
-# 文档同步 + 诊断推送；completion/definition/hover 属 M65-S3）。
+# 对齐 Rust archive/rust-compiler/src/lsp.rs 能力（S2：生命周期 + 文档同步 +
+# 诊断推送；S3：completion / definition / hover，语义层在 lsp_core.px）。
 # 架构（M65-S1 侦查 A 决策）：
 #   - 深度诊断（词法/语法/lint）子进程化：os_spawn_capture(bootstrap/pxcheck)
 #     捕获其输出 → 解析为 LSP 诊断。服务器自身不 import parser/lint
@@ -20,9 +20,10 @@
 # 构建：tools/pxc build tools/pxlsp.px → cp tools/build/pxlsp bootstrap/pxlsp
 # ============================================================
 import "jsonrpc_core.px"
+import "lsp_core.px"
 # ---------- 全局状态 ----------
-let PXLSP_VER = "0.1.0"
-let PXLSP_MS = "M65-S2"
+let PXLSP_VER = "0.2.0"
+let PXLSP_MS = "M65-S3"
 var g_docs = jr_dnew()  # uri → text 缓存
 var g_seq = 0  # 临时文件序号（防并发覆盖）
 var g_shutdown = false
@@ -251,6 +252,90 @@ def lsp_on_close(msg, outs):
     # 关闭后清空诊断
     let none = []
     outs.append(lsp_publish(u, none))
+# ---------- S3 增强：补全 / 跳转 / 悬停 ----------
+# 请求位置提取：[uri, line0(0-based), char0(0-based)] 或 null（缺字段）
+def lsp_req_pos(msg):
+    if not msg.has("params"):
+        return null
+    let pp = msg["params"]
+    if type(pp) != "dict":
+        return null
+    if not pp.has("textDocument") or not pp.has("position"):
+        return null
+    let td = pp["textDocument"]
+    let ps = pp["position"]
+    if type(td) != "dict" or type(ps) != "dict":
+        return null
+    if not td.has("uri") or not ps.has("line") or not ps.has("character"):
+        return null
+    return [td["uri"], int(ps["line"]), int(ps["character"])]
+# 缓存文档文本（未 didOpen → ""）
+def lsp_cached_text(uri):
+    if g_docs.has(uri):
+        return g_docs[uri]
+    return ""
+# textDocument/completion → CompletionList（对齐 Rust completion_items + prefix 过滤）
+def lsp_on_completion(msg):
+    let got = lsp_req_pos(msg)
+    if got == null:
+        return null
+    let uri = got[0]
+    let text = lsp_cached_text(uri)
+    let syms = lc_collect_symbols(text)
+    let locs = lc_collect_locals(text)
+    let all_items = lc_completion_items(syms, locs)
+    let prefix = lc_word_at(text, got[1], got[2])
+    let result = lsp_dnew()
+    result["isIncomplete"] = false
+    result["items"] = lc_filter_prefix(all_items, prefix)
+    return result
+# textDocument/definition → Location|null（顶层符号精确名匹配，range 为点）
+def lsp_on_definition(msg):
+    let got = lsp_req_pos(msg)
+    if got == null:
+        return null
+    let uri = got[0]
+    let text = lsp_cached_text(uri)
+    let word = lc_word_at(text, got[1], got[2])
+    if word == "":
+        return null
+    let syms = lc_collect_symbols(text)
+    let s = lc_find_symbol(syms, word)
+    if s == null:
+        return null
+    let loc = lsp_dnew()
+    loc["uri"] = uri
+    let p1 = lsp_dnew()
+    p1["line"] = s["line0"]
+    p1["character"] = s["char0"]
+    let p2 = lsp_dnew()
+    p2["line"] = s["line0"]
+    p2["character"] = s["char0"]
+    let rng = lsp_dnew()
+    rng["start"] = p1
+    rng["end"] = p2
+    loc["range"] = rng
+    return loc
+# textDocument/hover → Hover|null（markdown：签名 + ## 文档注释；内置/关键字兜底）
+def lsp_on_hover(msg):
+    let got = lsp_req_pos(msg)
+    if got == null:
+        return null
+    let uri = got[0]
+    let text = lsp_cached_text(uri)
+    let word = lc_word_at(text, got[1], got[2])
+    if word == "":
+        return null
+    let syms = lc_collect_symbols(text)
+    let htxt = lc_hover_text(syms, word)
+    if htxt == null:
+        return null
+    let h = lsp_dnew()
+    let cc = lsp_dnew()
+    cc["kind"] = "markdown"
+    cc["value"] = htxt
+    h["contents"] = cc
+    return h
 # ---------- 消息分发 ----------
 # 返回待发送消息列表（response + 主动通知）
 def lsp_handle(msg):
@@ -269,7 +354,10 @@ def lsp_handle(msg):
             tsync["change"] = 1
             let caps = lsp_dnew()
             caps["textDocumentSync"] = tsync
-            # completion/definition/hover 能力位随 M65-S3 开启（诚实协商）
+            # completion/definition/hover 能力位随 M65-S3 落地后开启（诚实协商）
+            caps["completionProvider"] = true
+            caps["definitionProvider"] = true
+            caps["hoverProvider"] = true
             let info = lsp_dnew()
             info["name"] = "pxlsp"
             info["version"] = PXLSP_VER + " (" + PXLSP_MS + ")"
@@ -280,6 +368,12 @@ def lsp_handle(msg):
         elif method == "shutdown":
             g_shutdown = true
             outs.append(jr_response(id, null))
+        elif method == "textDocument/completion":
+            outs.append(jr_response(id, lsp_on_completion(msg)))
+        elif method == "textDocument/definition":
+            outs.append(jr_response(id, lsp_on_definition(msg)))
+        elif method == "textDocument/hover":
+            outs.append(jr_response(id, lsp_on_hover(msg)))
         else:
             outs.append(jr_method_not_found(id, method))
         return outs
@@ -322,7 +416,7 @@ def lsp_serve():
             let m = r[1]
             if m == null:
                 pull = false
-            elif type(m) == "str":
+            elif type(m) == "string":
                 # __jr_bad__ / __jr_parse__：协议坏帧
                 if m == "__jr_bad__":
                     lsp_err("[pxlsp] 协议坏头（无 Content-Length），终止")
@@ -341,7 +435,7 @@ def lsp_serve():
                     done = true
     return 0
 def usage():
-    print("pxlsp —— PuXian LSP 服务器（自举，M65-S2）")
+    print("pxlsp —— PuXian LSP 服务器（自举，M65-S3）")
     print("用法: pxlsp [--version]")
     print("  服务器入口：stdio 即 LSP transport（pxc lsp 直通执行）")
 def main():
