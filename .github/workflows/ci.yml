@@ -124,81 +124,84 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq qemu-user-static
           qemu-aarch64-static --version | head -1
 
-      - name: 映射 musl 工具链（arch → tarball URL / 解压目录）
+      - name: 映射交叉工具链（arch → musl.cc tarball URL / 解压目录 / zig target）
         id: musl-map
         run: |
           case "${{ matrix.arch }}" in
-            aarch64) URL=https://musl.cc/aarch64-linux-musl-cross.tgz;       DIR=aarch64-linux-musl-cross ;;
-            armv7)   URL=https://musl.cc/armv7l-linux-musleabihf-cross.tgz;  DIR=armv7l-linux-musleabihf-cross ;;
-            riscv64) URL=https://musl.cc/riscv64-linux-musl-cross.tgz;       DIR=riscv64-linux-musl-cross ;;
+            aarch64) URL=https://musl.cc/aarch64-linux-musl-cross.tgz;       DIR=aarch64-linux-musl-cross;      ZT=aarch64-linux-musl;      PRE=aarch64-linux-musl ;;
+            armv7)   URL=https://musl.cc/armv7l-linux-musleabihf-cross.tgz;  DIR=armv7l-linux-musleabihf-cross; ZT=arm-linux-musleabihf;    PRE=armv7l-linux-musleabihf ;;
+            riscv64) URL=https://musl.cc/riscv64-linux-musl-cross.tgz;       DIR=riscv64-linux-musl-cross;      ZT=riscv64-linux-musl;      PRE=riscv64-linux-musl ;;
           esac
           echo "URL=$URL" >> "$GITHUB_OUTPUT"
           echo "DIR=$DIR" >> "$GITHUB_OUTPUT"
+          echo "ZT=$ZT" >> "$GITHUB_OUTPUT"
+          echo "PRE=$PRE" >> "$GITHUB_OUTPUT"
 
-      - name: 缓存 musl 交叉工具链
+      - name: 缓存交叉工具链目录（musl.cc 解压 / zig wrapper 同布局）
         id: cache-musl
         uses: actions/cache@v4
         with:
           path: /opt/muslcc/${{ steps.musl-map.outputs.DIR }}
-          key: muslcc-${{ matrix.arch }}-20211120
+          key: muslcc-${{ matrix.arch }}-v1
 
-      - name: 下载 musl 工具链（缓存未命中，curl --ipv4 + python 双路 + 重试校验）
+      - name: 缓存 zig cc（路 2 fallback，55MB 覆盖三架构 musl 交叉）
+        id: cache-zig
+        if: steps.cache-musl.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: /opt/zig
+          key: zig-x86_64-linux-0.16.0-v1
+
+      - name: 下载交叉工具链（路1 musl.cc 快速失败 → 路2 zig cc fallback）
+        id: dl
         if: steps.cache-musl.outputs.cache-hit != 'true'
         run: |
-          sudo mkdir -p /opt/muslcc && sudo chown "$USER" /opt/muslcc
+          set -euo pipefail
+          sudo mkdir -p /opt/muslcc /opt/zig && sudo chown "$USER" /opt/muslcc /opt/zig
           URL="${{ steps.musl-map.outputs.URL }}"
+          DIR="${{ steps.musl-map.outputs.DIR }}"
+          ZT="${{ steps.musl-map.outputs.ZT }}"
+          PRE="${{ steps.musl-map.outputs.PRE }}"
           ok=0
-          for i in 1 2 3 4 5; do
-            echo "── 下载尝试 $i/5: $URL"
-            # 路 1：curl 强制 IPv4
+          # ---- 路 1：musl.cc tarball（2 次快速尝试，不通即弃保 CI 时效）----
+          for i in 1 2; do
+            echo "── [路1 musl.cc] 尝试 $i/2: $URL"
             if curl -4 -fL -A "Mozilla/5.0 (X11; Linux x86_64) puxian-ci" \
-                --retry 2 --retry-all-errors --connect-timeout 20 --max-time 900 \
+                --retry 1 --connect-timeout 12 --max-time 240 \
                 -o /tmp/cc.tgz "$URL" 2>/tmp/cc.err \
-               && [ -s /tmp/cc.tgz ] \
-               && tar tzf /tmp/cc.tgz >/dev/null 2>&1; then
-              echo "✅ curl 路下载成功（$(du -h /tmp/cc.tgz | cut -f1)）"
+                && [ -s /tmp/cc.tgz ] \
+                && tar tzf /tmp/cc.tgz >/dev/null 2>&1; then
+              echo "✅ 路1 musl.cc 下载成功（$(du -h /tmp/cc.tgz | cut -f1)）"
+              tar xzf /tmp/cc.tgz -C /opt/muslcc
+              echo "TOOLCHAIN=muslcc" >> "$GITHUB_OUTPUT"
               ok=1
               break
             fi
-            rc1=$?
-            # 路 2：python urllib（绕 curl/TLS/网络栈差异）
-            if ! python3 - "$URL" <<'PYEOF' 2>/tmp/py.err
-import sys, urllib.request, os
-url = sys.argv[1]
-req = urllib.request.Request(url, headers={'User-Agent': 'puxian-ci'})
-data = urllib.request.urlopen(req, timeout=900).read()
-open('/tmp/cc.tgz', 'wb').write(data)
-PYEOF
-            then
-              echo "  ⚠️ python 路也失败"
-              {
-                echo "## musl 工具链下载诊断（第 $i 次）"
-                echo "- curl rc=$rc1"
-                echo "- curl 错误: $(head -c 400 /tmp/cc.err 2>/dev/null | tr '\n' ' ')"
-                echo "- python 错误: $(head -c 400 /tmp/py.err 2>/dev/null | tr '\n' ' ')"
-                curl -4 -sI --connect-timeout 10 -o /dev/null -w 'musl.cc HTTP:%{http_code} time:%{time_total}s ip:%{remote_ip}\n' "https://musl.cc/aarch64-linux-musl-cross.tgz" 2>&1 || echo "musl.cc 自检失败"
-                getent ahosts musl.cc | head -4 || echo "DNS 解析失败"
-              } >> "$GITHUB_STEP_SUMMARY"
-              rm -f /tmp/cc.tgz
-              sleep $((i * 8))
-              continue
-            fi
-            if [ -s /tmp/cc.tgz ] && tar tzf /tmp/cc.tgz >/dev/null 2>&1; then
-              echo "✅ python 路下载成功（$(du -h /tmp/cc.tgz | cut -f1)）"
-              ok=1
-              break
-            fi
-            {
-              echo "## musl 工具链下载诊断（第 $i 次）"
-              echo "- python 下载后校验失败"
-              echo "- 文件大小: $(stat -c%s /tmp/cc.tgz 2>/dev/null || echo NA)"
-            } >> "$GITHUB_STEP_SUMMARY"
+            echo "  ⚠️ 路1 失败：$(head -c 300 /tmp/cc.err 2>/dev/null | tr '\n' ' ')"
             rm -f /tmp/cc.tgz
-            sleep $((i * 8))
+            sleep 3
           done
-          [ "$ok" = 1 ] || { echo "❌ 多次尝试仍无法下载 musl 工具链: $URL"; exit 1; }
-          tar xzf /tmp/cc.tgz -C /opt/muslcc
-          rm -f /tmp/cc.tgz
+          [ "$ok" = 1 ] && exit 0
+          # ---- 路 2：zig cc fallback（ziglang.org；zig 单文件 = 三架构 musl 交叉 clang）----
+          echo "── [路2 zig] musl.cc runner 侧不可达，切换 zig cc"
+          if [ ! -x /opt/zig/zig ]; then
+            curl -4 -fL -A "Mozilla/5.0 puxian-ci" --retry 3 --retry-all-errors \
+                --connect-timeout 15 --max-time 600 \
+                -o /tmp/zig.tar.xz \
+                "https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz"
+            tar xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1
+            rm -f /tmp/zig.tar.xz
+          fi
+          /opt/zig/zig version
+          # 生成 <triple>-gcc/ar/ranlib wrapper 到 /opt/muslcc/$DIR/bin（对齐 musl.cc 布局，后续 PATH 复用零改动）
+          BIN="/opt/muslcc/$DIR/bin"
+          mkdir -p "$BIN"
+          printf '#!/bin/sh\nexec /opt/zig/zig cc -target %s "$@"\n' "$ZT" > "$BIN/$PRE-gcc"
+          printf '#!/bin/sh\nexec /opt/zig/zig ar "$@"\n'            > "$BIN/$PRE-ar"
+          printf '#!/bin/sh\nexec /opt/zig/zig ranlib "$@"\n'        > "$BIN/$PRE-ranlib"
+          chmod +x "$BIN/$PRE-gcc" "$BIN/$PRE-ar" "$BIN/$PRE-ranlib"
+          echo "✅ 路2 zig wrapper 就绪：$BIN（$PRE-gcc → zig cc -target $ZT）"
+          echo "TOOLCHAIN=zig" >> "$GITHUB_OUTPUT"
 
       - name: 交叉工具链就绪
         run: /opt/muslcc/${{ steps.musl-map.outputs.DIR }}/bin/*-gcc --version | head -1
@@ -208,7 +211,7 @@ PYEOF
         uses: actions/cache@v4
         with:
           path: /opt/px-multiarch
-          key: px-libs-${{ matrix.arch }}-v1
+          key: px-libs-${{ matrix.arch }}-${{ steps.dl.outputs.TOOLCHAIN || 'cached' }}-v1
 
       - name: 现编 armv7/riscv64 交叉库（缓存未命中）
         if: steps.cache-libs.outputs.cache-hit != 'true' && matrix.arch != 'aarch64'
