@@ -45,6 +45,14 @@
   tools/make_release.sh 发布包含 cross_multiarch.sh + RELEASE.md 内容表更新。
 - **验证**：四档矩阵 verify ALL PASS（x86_64 含 GC 压力）；spec/README/CHANGELOG 全绿；ci.yml
   YAML OK；diffcheck/capability/m65/m66 零回归（S4 提交时全绿）；qg-issue 07 归档 done/。
+- **M67-CIfix CI 修复（commit 24e1065，多架构矩阵收绿）**：multiarch-cross 三档工具链双源 ——
+  ①修复 CIfix4 ci.yml heredoc 缩进错误（顶格破坏 YAML 块标量 → workflow 未启动，run95 直接失败根因）；
+  ②musl.cc 路 1 改 2 次快速尝试（GitHub runner 侧到 musl.cc 持续不可达），失败自动切路 2
+  zig cc fallback（ziglang.org 0.16.0 x86_64 55MB 单文件 = 三架构 musl 交叉 clang，生成
+  `<triple>-gcc/ar/ranlib` wrapper 对齐 musl.cc 布局，后续 PATH/脚本零改动复用）；
+  ③zig 独立 actions/cache + 现编库 cache key 分工具链源。GitHub CI 六 job 全绿：aarch64（zig cc
+  混链仓库预置 gcc-musl 库 + qemu 三用例）、armv7/riscv64（zig 现编交叉库 + qemu 三用例）全 PASS；
+  本机同步实测 zig 路三架构 verify exit=0。
 
 ### M66 · 自举 wsAgent runtime 原语补全 + stdlib 收编（qg-issue 01–06 全量合入，docs/M66_PLAN.md）✅
 
