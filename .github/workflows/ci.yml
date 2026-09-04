@@ -150,15 +150,23 @@ jobs:
           ok=0
           for i in 1 2 3 4 5; do
             echo "── 下载尝试 $i/5: $URL"
-            curl -fL --retry 3 --retry-all-errors --connect-timeout 20 --max-time 900 -o /tmp/cc.tgz "$URL" \
-              && [ -s /tmp/cc.tgz ] \
-              && tar tzf /tmp/cc.tgz >/dev/null 2>&1 && { ok=1; break; }
-            echo "⚠️  第 $i 次下载/校验失败，5 秒后重试"
+            set +e
+            curl -fL -A "Mozilla/5.0 (X11; Linux x86_64) puxian-ci" \
+              --retry 2 --retry-all-errors --connect-timeout 20 --max-time 900 \
+              -w 'HTTP:%{http_code} SIZE:%{size_download} SPEED:%{speed_download}\n' \
+              -o /tmp/cc.tgz "$URL" 2>/tmp/cc.err
+            rc=$?
+            set -e
+            if [ $rc -eq 0 ] && [ -s /tmp/cc.tgz ] && tar tzf /tmp/cc.tgz >/dev/null 2>&1; then
+              echo "✅ 第 $i 次下载并校验通过（$(du -h /tmp/cc.tgz | cut -f1)）"
+              ok=1
+              break
+            fi
+            echo "::error::下载失败 rc=$rc http=$(grep -o 'HTTP:[0-9]*' /tmp/cc.err | head -1) size=$(stat -c%s /tmp/cc.tgz 2>/dev/null || echo NA) err=$(head -c 300 /tmp/cc.err 2>/dev/null | tr '\n' ' ')"
             rm -f /tmp/cc.tgz
-            sleep 5
+            sleep $((i * 10))
           done
           [ "$ok" = 1 ] || { echo "❌ 多次尝试仍无法下载 musl 工具链: $URL"; exit 1; }
-          echo "✅ 下载并校验通过（$(du -h /tmp/cc.tgz | cut -f1)）"
           tar xzf /tmp/cc.tgz -C /opt/muslcc
           rm -f /tmp/cc.tgz
 
