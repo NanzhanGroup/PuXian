@@ -1,0 +1,30 @@
+# M65-S3 LSP 演示样本（普通注释行，不并入文档注释）
+var g_ready = true
+
+## 计算两数和：返回两 int 之和（文档注释验证 hover）
+def calc_add(a: int, b: int) -> int:
+    let total = a + b
+    return total
+
+## 数据结构：平面点
+struct Point:
+    x: float
+    y: float
+
+## 颜色枚举
+enum Color:
+    Red
+    Green
+
+## 说话能力 trait
+trait Speaker:
+    def speak(self) -> str:
+impl Speaker for Point:
+    def speak(self) -> str:
+        return "点"
+
+def demo_local():
+    let local_var = 42
+    for item in range(3):
+        print(item)
+    return calc_add(local_var, item)

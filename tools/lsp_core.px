@@ -1,0 +1,366 @@
+# ============================================================
+# tools/lsp_core.px —— LSP 增强核心（纯 defs，M65-S3）
+# ------------------------------------------------------------
+# pxlsp 的补全/跳转/悬停语义层（对齐 Rust archive/.../lsp.rs）：
+#   - 符号表 collect_symbols：顶层 def/struct/enum/trait/impl/var（文本级
+#     行扫描：PuXian 缩进敏感，缩进 0 起始行才可能是顶层定义；import 不
+#     做（符号收集不需要 parser——parse 错误 panic 会杀进程，M65-S1 发现 A）
+#   - 定义上方连续 `##` 文档注释并入（对齐 pxdoc/pxdoc.px 约定）
+#   - 局部名 collect_locals：文档内出现的标识符（行级词法跳过字符串/注释，
+#     宽松收集对齐 Rust collect_local_names 的 AST 全收集语义）
+#   - word_at：光标词（0-based 行/列，对齐 Rust word_at）
+#   - completion：关键字 + 内置函数 + std.collections + 用户符号 + 局部名
+#   - find_symbol / hover_text：精确名匹配 → 定义位置 / 悬停文本
+# 本文件纯 defs、零顶层全局（M64 工具惯例：主文件声明全局，import 不合并
+# 顶层 let）；无 print（LSP 服务器 stdout 仅协议帧，调试走 stderr）。
+# 位置约定：line0/char0 = 0-based（LSP Position）；内部不碰 1-based。
+# ============================================================
+# ---------- 字符分类 ----------
+def lc_is_digit(c):
+    return c != "" and c >= "0" and c <= "9"
+def lc_is_ident_start(c):
+    if c == "":
+        return false
+    return (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or c == "_" or c >= "\u{80}"  # noqa
+def lc_is_ident_cont(c):
+    if c == "":
+        return false
+    return lc_is_ident_start(c) or lc_is_digit(c)
+# ---------- 字符串小工具 ----------
+def lc_find_char(s, ch, start):
+    var i = start
+    while i < len(s):
+        if s[i] == ch:
+            return i
+        i += 1
+    return -1
+def lc_find_str(s, sub, start):
+    let n = len(s)
+    let m = len(sub)
+    if m == 0 or m > n:
+        return -1
+    var i = start
+    while i <= n - m:
+        if s[i:i + m] == sub:
+            return i
+        i += 1
+    return -1
+def lc_first_word(s):
+    var out = ""
+    var i = 0
+    while i < len(s) and lc_is_ident_cont(s[i]):
+        out += s[i]
+        i += 1
+    return out
+def lc_indent(line):
+    var n = 0
+    while n < len(line) and line[n] == " ":
+        n += 1
+    return n
+# ---------- 注释 / 文档注释 ----------
+def lc_is_comment(t):
+    return starts_with(t, "#")
+def lc_is_doc_comment(t):
+    if starts_with(t, "##") and not starts_with(t, "###"):
+        return true
+    return false
+def lc_doc_body(t):
+    var i = 0
+    while i < len(t) and t[i] == "#":
+        i += 1
+    return trim(t[i:len(t)])
+# ---------- 顶层定义行解析 ----------
+# t0 = trim 后的缩进 0 代码行；返回 {name,kind,char0,detail} 或 null
+# 支持：pub/extern 前缀剥除；def / struct / enum / trait / impl / 顶层 let/var
+# char0 = 名字起始列（0-based，相对整行；缩进 0 定义行为行首开始）
+def lc_parse_def(t0):
+    var t = t0
+    var off = 0
+    while starts_with(t, "pub "):
+        off += 4
+        t = trim(t[4:len(t)])
+    if starts_with(t, "extern def "):
+        off += 11
+        t = trim(t[11:len(t)])
+        return lc_mk_function(t, t0, off)
+    if starts_with(t, "def "):
+        off += 4
+        t = trim(t[4:len(t)])
+        return lc_mk_function(t, t0, off)
+    if starts_with(t, "struct ") or starts_with(t, "enum ") or starts_with(t, "trait "):  # noqa
+        var kw = "struct"
+        if starts_with(t, "enum "):
+            kw = "enum"
+        if starts_with(t, "trait "):
+            kw = "trait"
+        off += len(kw) + 1
+        t = trim(t[len(kw) + 1:len(t)])
+        var nm = lc_first_word(t)
+        if nm == "":
+            return null
+        let sd = {"name": nm, "kind": kw, "char0": off, "detail": kw + " " + nm}
+        return sd
+    if starts_with(t, "impl "):
+        # impl [Trait] for Type: / impl Type:
+        var nm = ""
+        if contains(t, " for "):
+            let ix = lc_find_str(t, " for ", 0)
+            if ix >= 0:
+                nm = lc_first_word(t[ix + 5:len(t)])
+        if nm == "":
+            nm = lc_first_word(t[5:len(t)])
+        if nm == "":
+            return null
+        let sd = {"name": nm, "kind": "impl", "char0": 0, "detail": "impl " + nm}
+        return sd
+    if starts_with(t, "let ") or starts_with(t, "var "):
+        var kw = "let"
+        if starts_with(t, "var "):
+            kw = "var"
+        off += len(kw) + 1
+        t = trim(t[len(kw) + 1:len(t)])
+        var nm = lc_first_word(t)
+        if nm == "":
+            return null
+        let sd = {"name": nm, "kind": "var", "char0": off, "detail": kw + " " + nm}
+        return sd
+    return null
+# 构造函数符号：t 从名字起（"name(params) -> ret:"），off = 名字起始列
+def lc_mk_function(t, t0, off):
+    var nm = ""
+    var region = ""
+    let po = lc_find_char(t, "(", 0)
+    if po >= 0:
+        nm = trim(t[0:po])
+        let pc = lc_find_char(t, ")", po)
+        if pc > po:
+            region = t[po + 1:pc]
+    else:
+        nm = lc_first_word(t)
+    if nm == "":
+        return null
+    var det = "def " + nm + "(" + join(", ", lc_param_names(region)) + ")"
+    let ar = lc_find_str(t0, "->", 0)
+    if ar >= 0:
+        var rt = trim(t0[ar + 2:len(t0)])
+        if rt != "" and rt[len(rt) - 1] == ":":
+            rt = trim(rt[0:len(rt) - 1])
+        if rt != "":
+            det += " -> " + rt
+    let sd = {"name": nm, "kind": "function", "char0": off, "detail": det}
+    return sd
+# 参数段（"a: int, b: int"）→ 参数名列表
+def lc_param_names(region):
+    var out = []
+    if region == "":
+        return out
+    let segs = split(region, ",")
+    var i = 0
+    while i < len(segs):
+        let w = lc_first_word(trim(segs[i]))
+        if w != "":
+            out.append(w)
+        i += 1
+    return out
+# ---------- 符号表收集 ----------
+# 返回 symbol 列表：[{name,kind,line0,char0,detail,doc}]（line0/char0 0-based）
+def lc_collect_symbols(src):
+    let lines = split(src, "\n")
+    var syms = []
+    var doc = []
+    var i = 0
+    while i < len(lines):
+        let t = trim(lines[i])
+        if t == "":
+            i += 1
+            continue
+        if lc_is_doc_comment(t):
+            doc.append(lc_doc_body(t))
+            i += 1
+            continue
+        if lc_is_comment(t):
+            doc = []
+            i += 1
+            continue
+        var sd = null
+        if lc_indent(lines[i]) == 0:
+            sd = lc_parse_def(t)
+        if sd != null:
+            if len(doc) > 0:
+                sd["doc"] = join("\n", doc)
+            else:
+                sd["doc"] = ""
+            sd["line0"] = i
+            syms.append(sd)
+            doc = []
+        else:
+            doc = []
+        i += 1
+    return syms
+# ---------- 局部名（文档内标识符，宽松收集） ----------
+# 行级词法：跳过 "..." 字符串与 # 注释，收集标识符（对齐 Rust
+# collect_local_names 的 AST 全标识符收集——字符串/注释内不会出现）
+def lc_line_words(line):
+    var out = []
+    let n = len(line)
+    var i = 0
+    var instr = false
+    while i < n:
+        let c = line[i]
+        if instr:
+            if c == "\\":
+                i += 2
+                continue
+            if c == "\"":
+                instr = false
+            i += 1
+            continue
+        if c == "#":
+            break
+        if c == "\"":
+            instr = true
+            i += 1
+            continue
+        if lc_is_ident_start(c):
+            var j = i
+            while j < n and lc_is_ident_cont(line[j]):
+                j += 1
+            out.append(line[i:j])
+            i = j
+            continue
+        i += 1
+    return out
+# 基础类型标注名（局部收集时过滤，避免类型当"变量"候选）
+def lc_type_names():
+    return split("int str float bool list dict bytes T U K V", " ")
+def lc_collect_locals(src):
+    var names = []
+    let lines = split(src, "\n")
+    var i = 0
+    while i < len(lines):
+        let toks = lc_line_words(lines[i])
+        var j = 0
+        while j < len(toks):
+            let w = toks[j]
+            if not lc_is_keyword(w) and not contains(lc_type_names(), w):
+                if not contains(names, w):
+                    names.append(w)
+            j += 1
+        i += 1
+    return names
+# ---------- 静态候选名单 ----------
+def lc_keywords():
+    return split("let var const def fn struct enum trait impl match case if elif else for while in and or not return break continue import from pub as spawn chan send recv select true false null None self capture extern type", " ")  # noqa
+def lc_std_funcs():
+    return split("each unique flatten zip_lists chunk group_by sort_by", " ")
+def lc_builtin_names():
+    # 常用内置函数子集（对齐 pxlint BUILTINS 头部常用项；补全候选非正确性
+    # 相关，漂移可接受——hover 对内置仅显示"内置函数"文本）
+    return split("print len range type str int float bool assert panic input exit sleep to_upper to_lower trim split join contains replace starts_with ends_with abs sqrt min max pow sorted reversed sum now now_ms now_us sleep_us read_file write_file append_file read_at write_at exists list_dir mkdir remove json_parse json_stringify env args map filter reduce read write os_pid os_spawn os_spawn_capture os_wait os_kill bytes bytes_len bytes_get bytes_set bytes_slice bytes_concat bytes_to_str bytes_base64 base64_to_bytes read_bytes write_bytes int_to_bytes bytes_to_int sha256 xxhash regex_match regex_find regex_replace base64_encode base64_decode int_to_hex hex_to_int", " ")  # noqa
+# ---------- 光标词 / 补全 / 查找 / 悬停 ----------
+# 光标处单词（0-based line/char），对齐 Rust word_at：向左扫到词首再向右取整词
+def lc_word_at(src, line0, ch0):
+    let lines = split(src, "\n")
+    if line0 < 0 or line0 >= len(lines):
+        return ""
+    let ls = lines[line0]
+    if ch0 <= 0:
+        return ""
+    var col = ch0
+    let n = len(ls)
+    if col > n:
+        col = n
+    while col > 0 and lc_is_ident_cont(ls[col - 1]):
+        col -= 1
+    var word = ""
+    while col < n and lc_is_ident_cont(ls[col]):
+        word += ls[col]
+        col += 1
+    return word
+def lc_make_item(label, kind, detail):
+    let it = {"label": label, "kind": kind, "detail": detail}
+    it["insertText"] = label
+    return it
+# 全部补全候选（不去重，对齐 Rust completion_items 追加顺序与语义）
+def lc_completion_items(syms, locals_):
+    var items = []
+    var i = 0
+    let kws = lc_keywords()
+    while i < len(kws):
+        items.append(lc_make_item(kws[i], 14, "关键字"))
+        i += 1
+    i = 0
+    let bs = lc_builtin_names()
+    while i < len(bs):
+        items.append(lc_make_item(bs[i], 3, "内置函数"))
+        i += 1
+    i = 0
+    let ss = lc_std_funcs()
+    while i < len(ss):
+        items.append(lc_make_item(ss[i], 3, "std.collections 函数"))
+        i += 1
+    i = 0
+    while i < len(syms):
+        let s = syms[i]
+        var kd = 6
+        if s["kind"] == "function":
+            kd = 3
+        elif s["kind"] == "struct" or s["kind"] == "enum" or s["kind"] == "trait" or s["kind"] == "impl":  # noqa
+            kd = 7
+        items.append(lc_make_item(s["name"], kd, s["detail"]))
+        i += 1
+    i = 0
+    while i < len(locals_):
+        items.append(lc_make_item(locals_[i], 6, "变量"))
+        i += 1
+    return items
+def lc_starts_with_label(item, prefix):
+    return starts_with(item["label"], prefix)
+def lc_filter_prefix(items, prefix):
+    if prefix == "":
+        return items
+    var out = []
+    var i = 0
+    while i < len(items):
+        if lc_starts_with_label(items[i], prefix):
+            out.append(items[i])
+        i += 1
+    return out
+# 精确名匹配顶层符号（对齐 Rust find_symbol：collect_symbols 首个匹配）
+def lc_find_symbol(syms, name):
+    var i = 0
+    while i < len(syms):
+        if syms[i]["name"] == name:
+            return syms[i]
+        i += 1
+    return null
+def lc_is_keyword(w):
+    var i = 0
+    let kws = lc_keywords()
+    while i < len(kws):
+        if kws[i] == w:
+            return true
+        i += 1
+    return false
+def lc_is_builtin(w):
+    var i = 0
+    let bs = lc_builtin_names()
+    while i < len(bs):
+        if bs[i] == w:
+            return true
+        i += 1
+    return false
+# hover 内容：符号签名/类型 + 文档注释；内置/关键字兜底（对齐 Rust hover_text）
+def lc_hover_text(syms, name):
+    let s = lc_find_symbol(syms, name)
+    if s != null:
+        var h = "**" + s["name"] + "**\n\n" + s["detail"]
+        let d = s["doc"]
+        if d != "":
+            h += "\n\n" + d
+        return h
+    if lc_is_builtin(name):
+        return "**" + name + "**\n\n内置函数"
+    if lc_is_keyword(name):
+        return "**" + name + "**\n\n关键字"
+    return null

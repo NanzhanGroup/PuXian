@@ -1,6 +1,6 @@
 # M65_PLAN —— LSP / MCP 自举（spec §12 工具链最后两项 + AI agent 协议）
 
-> 状态：执行中 —— M65-S1/S2 完成（2026-09-04），S3 待开工
+> 状态：执行中 —— M65-S1/S2/S3 完成（2026-09-04），S4 待开工
 > 关联：docs/spec.md §12/§12.1、docs/M64_PLAN.md（M64d 按需立项前置侦查）、
 > archive/rust-compiler/src/lsp.rs (36618B)、mcp.rs (13409B)（只读语义参考，已退役）
 > 立项依据：M64 收尾确认「runtime fd stdin/stdout 原语已具备 → lsp/mcp 按需立项新里程碑」
@@ -204,3 +204,29 @@ Rust 版语义参考（archive，只读）：
   completion/definition/hover 能力位随 **S3** 落地后再开（不提前声明未实现能力，区别于 Rust lsp.rs 一次性声明）。
 - lint/fmt：新文件 pxcheck.px / pxlsp.px pxlint 0 错 0 警 + pxfmt --check 全绿。
 - 全仓回归：verify.sh（S1+S2）ALL PASS；未动 runtime/selfhost/pxlint（零回归面）。
+
+## 12. S3 执行记录（M65-S3 完成，2026-09-04）
+
+### 12.1 交付物
+| 文件 | 角色 | 验证 |
+|---|---|---|
+| `tools/lsp_core.px`（新，纯 defs） | 补全/跳转/悬停语义层：顶层符号表 collect_symbols（文本级行扫描，缩进 0 定义 + `##` 文档注释并入，对齐 pxdoc 语义）、局部名 collect_locals（行级词法跳过字符串/注释，宽松收集对齐 Rust collect_local_names）、word_at 光标词、completion（关键字+内置+std.collections+用户符号+局部）、find_symbol、hover_text（签名+doc/内置/关键字兜底） | pxfmt --check 绿 + pxlint 0 错 0 警；双模式（pxi/pxc）行为一致（临时探针实测） |
+| `tools/pxlsp.px`（S3 扩展 0.2.0/M65-S3） | initialize 开 completionProvider/definitionProvider/hoverProvider 能力位（诚实协商）；`textDocument/completion`→CompletionList（prefix=word_at 过滤）、`definition`→Location（点 range，0-based）、`hover`→markdown contents；复用 lsp_core（文本级，不 spawn 子进程） | 见 12.3 验收 |
+| `bootstrap/pxlsp`（重建） | tools/pxc build 编译产物 cp | `--version` = 0.2.0 M65-S3 |
+| `examples/m65_lsp/demo_s3.px` + `lsp_client_s3.py` + verify.sh S3 段 | 受控样本（def/struct/enum/trait/impl/var/局部/文档注释）+ 真实文件 selfhost/astdump.px + 错误输入 | **39 断言 ALL PASS**（verify.sh S1/S2/S3 全绿） |
+| `tools/pxc` lsp 帮助文本 | 提及 S3 能力 | -- |
+
+### 12.2 S3 实测新增发现（影响 S4/自举工具共性）
+| # | 发现（实测） | 处置 |
+|---|---|---|
+| P | **px `type()` 对字符串返回 `"string"`（非 `"str"`）**；bytes 返回 `"bytes"`、list/dict 正常 | S2 遗留：pxlsp 主循环 `elif type(m) == "str"`（坏帧 __jr_bad__/__jr_parse__ 判定）**恒 false**——坏帧被静默忽略而非按协议终止；S3 顺手修为 `"string"`。另 hover doc `type(d)=="str"` 同修（doc 从不并入的直接原因）。教训：px 类型名 str 仅用于类型标注，运行时 type() 判字符串须用 "string" |
+| Q | **`join` 参数顺序 = `join(分隔符, 列表)`**（非 list 在前） | S3 lsp_core 初版 join(list, sep) 写反 → 运行时错误「join 需要 2 个参数」杀服务器（stderr 定位修复）；全仓源码惯例 astdump/cg_expr 均 `join(sep, list)` |
+| R | **px trait 抽象方法语法 = `def m(self) -> T:`（带冒号、空体）**，且方法后必须紧跟缩进 0 的下一行（中间插空行 → E2001「期望 ':' 实际 换行」） | 样本/符号收集按此约定写；trait 内 def 缩进>0 不入顶层符号（对齐 Rust 只收顶层 items） |
+| S | **pxcheck 对含 import 链文件（compiler.px/capability.px）didOpen 分析慢**（import resolve 全链，30s 未回） | S3 真实验证样本选**无 import** 的 selfhost 文件（astdump.px 197 行 16 def）；compiler.px 类 import 文件由 CI 项目级守护，LSP 端留给后续（文档注明） |
+| T | 补全候选允许重复 label（顶层符号 + locals 宽松收集同名，如 calc_add 出现 Function 签名项与"变量"项各一） | 对齐 Rust completion_items 不去重（collect_symbols 与 collect_local_names 天然重叠）；client 断言按「存在某 detail 项」而非唯一 |
+
+### 12.3 S3 验收结论
+- **39 断言 ALL PASS**：completion（关键字/内置/std/顶层 def/struct/enum/trait/var/局部 9 来源命中 + kind 3/6/7 + detail 签名 + 前缀过滤 loc→仅 local_var）；definition（调用点→def 行 0-based 精确；impl 行 trait 引用→trait 行）；hover（签名+## 文档注释、类型、无 doc 不崩、内置 print、关键字 let）；真实文件 astdump.px（真实 def 候选 + hover pad 签名 + definition pad 跳转）；错误输入不崩（未 didOpen uri / 越界位置正常响应）；shutdown/exit rc=0；服务器 stderr 无运行时错误。
+- 符号表结构：[{name,kind,line0,char0,detail,doc}]（0-based）；kind: function/struct/enum/trait/impl/var（对齐 Rust Symbol）。
+- 能力位诚实协商：completion/definition/hover 均 Bool(true)（对齐 Rust 一次性声明风格，但随实现同步开启）。
+- lint/fmt：lsp_core.px / pxlsp.px 0 错 0 警 + --check 全绿；未动 runtime/selfhost/pxlint → 零回归面（无需 diffcheck/capability 重跑）。
