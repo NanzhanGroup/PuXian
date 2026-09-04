@@ -201,3 +201,24 @@ Rust 版全套归档于 `archive/rust-compiler/src/`（只读参考），已于 
 - examples/m64_lint/verify.sh 18/18 PASS（六规则命中 + L007/L008 + clean 零告警 + --json + --strict）
 - 自举工具链 7 文件 lint 0/0；pxc lint 子命令可用；--version 输出
 - pxpkg（改动后）init/list 实测通过；routegen（改动后）重编译 + 实际生成 6 路由成功
+
+### 12. M64-S4 收尾（fmt 全仓收敛，commit 7512cd6，2026-09-04）
+#### 12.1 审阅驱动修复（selfhost --check 全量 diff 暴露 pxfmt 缺陷）
+- ① keep 模式字符串原文保真：scan_string_keep/skip_interp_raw —— 插值 `${...}`、`\${` 转义、`\u{..}` 原样保留。原 pxfmt 把插值展开成 `"" + str(x) + ""`：会抹掉 capability 对插值特性的测试、`\${name}` 丢转义后重 lex 变插值（pxlexer 错误消息字符串会被破坏）、`\u{0}` 按语言 strlen 截断语义显示为空（与 codegen.rs NUL 丢弃一致，非 bug）。
+- ② 数字 keep 保原文：0xC0/1_000/007 不再规范化为 192/1000/7（pxlexer UTF-8 位掩码可读性）；默认模式仍规范化（与 pxl 对拍不变）。
+- ③ 括号栈判定切片冒号紧贴 `[a:b]`、dict `{k: v}` 冒号仍空格、数组内 dict `[{"a":1}]` 不误伤；后缀 `?` 紧贴 `f(x)?`。
+- ④ 首 token 后 prev2 置"换行"：修复文件首行 `def f():` 被压成 `deff()`（S2 examples 首行是注释未暴露）。
+- 行为对齐决策：fn 单行字面量 `{ x * 2 }`→`{x * 2}`、泛型 `[T: Comparable]`→`[T:Comparable]` 为 Rust fmt.rs 沿袭（与 dict `{` 后不空格统一，token 等价）；hex→十进制被保留原文替代。
+
+#### 12.2 收敛与验证（真实执行）
+- 写回：selfhost 21 文件 + tools 7 文件，净 -318 行（7 增 463 删，几乎全空行压缩）；21 文件 pxfmt --check 全绿。
+- 硬验证（证明格式改动语义无损）：
+  - bootstrap_prove.sh --fresh：编译器产物 B.c 与 golden/compiler.c 逐字节一致（6900 行 C，自举成立）
+  - diffcheck.sh --all：lex/parse/value/interp 全量对拍通过
+  - capability.px 双模式：解释器 + 编译各 253 PASS/0 FAIL，输出逐字节一致
+  - examples m64_fmt / m64_lint verify 全绿；pxpkg m45 13/13 PASS；routegen 6 路由生成无 diff
+- 同步：m64_fmt golden/verify.sh（插值保留原文、Unicode 转义保留、切片紧贴断言）；bootstrap/pxfmt、pxlint 二进制更新。
+
+#### 12.3 留档（非 S4 范围）
+- selfhost 子模块单文件 lint 报 L002（i_eval_expr/LAYOUT/QUIC 内建等）＝多文件项目单文件检查局限（compiler.px 主入口 import 链合并后 lint 0 错误；capability 调 QUIC/H3 运行时内建不在 BUILTINS 白名单）→ lint 项目级解析留档 M64-S5+。
+- 存量长行 W L007（653 字符 KEYWORDS/CTRL_ALL 数据行等）语言强制单行 → noqa/拆分留档。
