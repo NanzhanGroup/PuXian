@@ -99,6 +99,64 @@ def main():
 
 ---
 
+## ARM64 Linux Cross-Compilation (M67 · aarch64 first-class)
+
+PuXian builds are **zero-dependency static single binaries**, a natural fit for ARM64 Linux
+devices (Raspberry Pi / gateways / edge boxes): cross-compile on an x86 dev machine and copy
+the binary to the device — no runtime or dependencies to install.
+
+### 1. Get the musl cross toolchain (two ways)
+
+```bash
+# Option A (recommended): official musl.cc tarball (no root needed)
+curl -LO https://musl.cc/aarch64-linux-musl-cross.tgz
+tar xzf aarch64-linux-musl-cross.tgz
+export PATH=$PWD/aarch64-linux-musl-cross/bin:$PATH
+
+# Option B: docker (messense/musl-cross)
+docker run --rm -v $PWD:/src -w /src messense/musl-cross:aarch64 \
+  sh -c 'aarch64-linux-musl-gcc --version'
+```
+
+> **Why not apt's `gcc-aarch64-linux-gnu`?** It is a glibc cross compiler: aarch64 cross headers
+> are missing (you would need `libc6-dev-arm64-cross`) and mixing with the repo's prebuilt **musl**
+> static libs is an ABI risk. The official line only backs the musl path (musl.cc / docker).
+
+### 2. Cross-compile with one command
+
+```bash
+# aarch64 cross static libs ship with the repo (runtime/mbedtls/lib-aarch64 +
+# sqlite3-aarch64.o + zlib lib-aarch64) — grab a cross CC and build, no need to rebuild libs
+./tools/pxc build --no-quic --cc aarch64-linux-musl-gcc \
+  --mbedtls-lib runtime/mbedtls/lib-aarch64 \
+  --sqlite-obj runtime/third_party/sqlite3/sqlite3-aarch64.o \
+  your_app.px
+# Output: your_app/build/your_app — ELF ARM aarch64 static single binary
+```
+
+Use `tools/cross_aarch64.sh` only when you need to rebuild the cross libs yourself
+(the prebuilt aarch64 libs in the repo usually suffice).
+
+### 3. Verify & run (file + qemu)
+
+```bash
+file your_app/build/your_app                  # "ELF 64-bit ..., ARM aarch64, ..., statically linked"
+qemu-aarch64-static your_app/build/your_app   # no hardware? qemu-user runs it directly
+```
+
+### 4. One-shot verification (same as CI, 3 use cases)
+
+```bash
+bash examples/m67_aarch64/verify.sh   # needs aarch64-linux-musl-gcc + qemu-aarch64-static on PATH
+# hello / HTTP server / SQLite: cross-compile → file aarch64 assert → qemu run assert, all green
+```
+
+> **Notes**: cross builds default to `--no-quic` (ngtcp2/openssl-quictls have no aarch64 prebuilt
+> libs; edge scenarios don't need H3 and trimming is semantics-neutral, verified identical to the
+> x86 trimmed build). musl emits static-pie by default — that is normal and runs under qemu.
+
+---
+
 ## Features at a Glance
 
 | Dimension | Capabilities |

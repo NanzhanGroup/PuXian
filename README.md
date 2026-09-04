@@ -99,6 +99,57 @@ def main():
 
 ---
 
+## ARM64 Linux 交叉编译（M67 · aarch64 一等支持）
+
+PuXian 编译产物是**零依赖静态单二进制**，天然适合树莓派 / 网关 / 边缘盒子等 ARM64 Linux 设备——在 x86 开发机上交叉编译，产物拷到设备即可运行（免装运行时/依赖）。
+
+### 1. 获取 musl 交叉工具链（两条路）
+
+```bash
+# 路 A（推荐）：musl.cc 官方 tarball（免 root，解压即用）
+curl -LO https://musl.cc/aarch64-linux-musl-cross.tgz
+tar xzf aarch64-linux-musl-cross.tgz
+export PATH=$PWD/aarch64-linux-musl-cross/bin:$PATH
+
+# 路 B：docker（messense/musl-cross）
+docker run --rm -v $PWD:/src -w /src messense/musl-cross:aarch64 \
+  sh -c 'aarch64-linux-musl-gcc --version'
+```
+
+> **为什么不用 apt 的 `gcc-aarch64-linux-gnu`？** 它是 glibc 交叉编译器：缺 aarch64 交叉头文件（需另装 `libc6-dev-arm64-cross`），且与仓库预置的 **musl** 静态库混链有 ABI 风险。官方只背书 musl 链路（musl.cc / docker 两路）。
+
+### 2. 一条命令交叉编译
+
+```bash
+# aarch64 交叉静态库已随仓库预置（runtime/mbedtls/lib-aarch64 +
+# sqlite3-aarch64.o + zlib lib-aarch64），拿到交叉 CC 即可编，无需自编库
+./tools/pxc build --no-quic --cc aarch64-linux-musl-gcc \
+  --mbedtls-lib runtime/mbedtls/lib-aarch64 \
+  --sqlite-obj runtime/third_party/sqlite3/sqlite3-aarch64.o \
+  your_app.px
+# 产物：your_app/build/your_app —— ELF ARM aarch64 静态单二进制
+```
+
+需要自编交叉库时才用 `tools/cross_aarch64.sh`（仓库预置 aarch64 库通常已够）。
+
+### 3. 校验与运行（file + qemu）
+
+```bash
+file your_app/build/your_app          # "ELF 64-bit ..., ARM aarch64, ..., statically linked"
+qemu-aarch64-static your_app/build/your_app   # 无硬件时 qemu-user 直接跑
+```
+
+### 4. 一键验证（CI 同款，三用例）
+
+```bash
+bash examples/m67_aarch64/verify.sh   # 需 aarch64-linux-musl-gcc + qemu-aarch64-static 在 PATH
+# hello / HTTP server / SQLite 三用例：交叉编译 → file 断言 aarch64 → qemu 运行断言全绿
+```
+
+> **要点**：交叉编译默认配 `--no-quic`（H3/QUIC 的 ngtcp2/openssl-quictls 无 aarch64 预编译库，边缘场景不依赖 H3，语义不受裁剪影响，与 x86 裁剪版一致）；musl 默认产出 static-pie 属正常形态（qemu 可跑）。
+
+---
+
 ## 特性一览
 
 | 维度 | 能力 |
