@@ -1,6 +1,6 @@
 # M65_PLAN —— LSP / MCP 自举（spec §12 工具链最后两项 + AI agent 协议）
 
-> 状态：执行中 —— M65-S1/S2/S3/S4 完成（2026-09-04），S5 收口待开工
+> 状态：✅ 全部完成 —— M65-S1/S2/S3/S4/S5（2026-09-04），spec §12 工具链全自举收官
 > 关联：docs/spec.md §12/§12.1、docs/M64_PLAN.md（M64d 按需立项前置侦查）、
 > archive/rust-compiler/src/lsp.rs (36618B)、mcp.rs (13409B)（只读语义参考，已退役）
 > 立项依据：M64 收尾确认「runtime fd stdin/stdout 原语已具备 → lsp/mcp 按需立项新里程碑」
@@ -272,3 +272,33 @@ Rust 版语义参考（archive，只读）：
 - pxmcp.px / demo_mcp.px lint 0 错 0 警 + fmt --check 全绿；pxc mcp --version 冒烟通过。
 - 回归面：未动 runtime/selfhost/pxlint/pxlsp → 无需 diffcheck/capability/m65_lsp 重跑。
 
+
+## 14. S5 执行记录（M65-S5 完成，2026-09-04 · 收口）
+
+### 14.1 S5 交付物
+- **全仓 dogfood**：pxfmt --check（selfhost+tools+stdlib 39 文件）全绿；pxlint 全绿（compiler.px
+  项目级 + tools 全部 .px 独立文件，含 M65 新增 jsonrpc_core/pxcheck/pxlsp/pxmcp/lsp_core）。
+- **握手实跑**（模拟标准 client，python3 subprocess 双向管道）：examples/m65_lsp/verify.sh
+  （S1 jsonrpc+spawncap 双模式 + S2 生命周期/诊断 + S3 completion/definition/hover）与
+  examples/m65_mcp/verify.sh（S4 initialize→tools/list→tools/call）**ALL PASS**。
+- **文档收口**：
+  - spec.md §12 实现状态表更新：8 工具全部自举完成（fmt/lint/test/doc/bench = M64a–c、
+    lsp/mcp = M65-S2~S4）；§12.1 增 M65-S4 `pxc mcp` 实现说明。
+  - ROADMAP.md：能力基线「工具链」行扩为 `pxc build/run/lex/parse/fmt/lint/doc/test/bench/lsp/mcp`；
+    主线表补 M62/M63/M64/M65 行（此前 M62–64 仅 CHANGELOG 有记录，主线表缺行一并补全）；
+    远期方向「当前 M60 已闭环」→「当前 M65 已闭环」。
+  - README.md / README.en.md：CLI 表补 `pxc lsp`/`pxc mcp` 行；工具链现状 8 工具全自举表述；
+    原生开发表（M41–M58）扩至 M41–M65 并补 M59–M65 行（中英一致）。
+  - M64_PLAN.md 状态行更新：M64d（lsp/mcp）已由 M65 承接完成。
+  - CHANGELOG [Unreleased] 新增 M65 条目。
+- **CI / 发布同步**：ci.yml toolchain job lint 文件清单补 jsonrpc_core/pxcheck/pxlsp/pxmcp/lsp_core；
+  tools/make_release.sh ⑥ 工具存在性自检补 pxlsp/pxmcp/pxcheck。
+
+### 14.2 S5 验收结论
+- m65_lsp + m65_mcp verify ALL PASS；fmt --check / lint 全仓全绿；capability 双模式
+  253 PASS / 0 FAIL（runtime os_spawn_capture 后无回归）；pxc lsp/pxmcp --version 冒烟通过。
+- 仓库收敛：未动 selfhost 产物 / golden → 无需自举证明重跑；git 工作区干净（本次收口 commit）。
+
+### 14.3 里程碑闭环备注
+- spec §12 8 工具 + §12.1 MCP 全部由 PuXian 自举实现，Rust 版 lsp.rs/mcp.rs 仅作 archive 只读参考。
+- 真实编辑器（vscode/neovim）与真实 agent（claude code 等）集成留作 M65 外可选外测（PLAN §7 边界）。
