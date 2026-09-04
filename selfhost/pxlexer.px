@@ -9,7 +9,6 @@
 #   - 数字：十进制/0x/0b/0o/浮点/指数/_ 下划线
 #   - 运算符最长匹配（?. ?? |> //= **= <<= >>>= 等）
 # ============================================================
-
 # ---------- 全局状态（顶层 let = 全局变量） ----------
 var g_src = ""
 var g_len = 0
@@ -18,33 +17,27 @@ var g_line = 1
 var g_col = 1
 var g_indent_stack = [0]
 var g_at_line_start = true
-var g_toks = []   # 结构化 token 列表 [kind, val, line, col]
+var g_toks = []  # 结构化 token 列表 [kind, val, line, col]
 var g_count = 0
-var g_pending = []   # 插值产生的中间 token：[kind, val, line, col]
-
+var g_pending = []  # 插值产生的中间 token：[kind, val, line, col]
 # ---------- 关键字表（spec §2.4，None 别名 null，type 是普通标识符） ----------
 let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn": "fn", "struct": "struct", "enum": "enum", "trait": "trait", "impl": "impl", "match": "match", "case": "case", "if": "if", "elif": "elif", "else": "else", "for": "for", "while": "while", "in": "in", "and": "and", "or": "or", "not": "not", "return": "return", "break": "break", "continue": "continue", "import": "import", "from": "from", "pub": "pub", "as": "as", "spawn": "spawn", "chan": "chan", "send": "send", "recv": "recv", "select": "select", "true": "true", "false": "false", "null": "null", "None": "null", "self": "self", "capture": "capture", "extern": "extern"}
-
 # ---------- 控制字符表（0x01-0x1f 除 \n\t\r\0，0x7f-0x9f） ----------
 # 单行字符串拼接 61 个控制字符（顺序即码点映射基准，见 ctrl_codepoint）
 let CTRL_ALL = "\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}\u{8}\u{b}\u{c}\u{e}\u{f}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1a}\u{1b}\u{1c}\u{1d}\u{1e}\u{1f}\u{7f}\u{80}\u{81}\u{82}\u{83}\u{84}\u{85}\u{86}\u{87}\u{88}\u{89}\u{8a}\u{8b}\u{8c}\u{8d}\u{8e}\u{8f}\u{90}\u{91}\u{92}\u{93}\u{94}\u{95}\u{96}\u{97}\u{98}\u{99}\u{9a}\u{9b}\u{9c}\u{9d}\u{9e}\u{9f}"
-
 # ---------- 基础字符操作 ----------
 def peek():
     if g_pos < g_len:
         return g_src[g_pos]
     return ""
-
 def peek2():
     if g_pos + 1 < g_len:
         return g_src[g_pos + 1]
     return ""
-
 def peek3():
     if g_pos + 2 < g_len:
         return g_src[g_pos + 2]
     return ""
-
 def advance():
     if g_pos >= g_len:
         return ""
@@ -56,46 +49,35 @@ def advance():
     else:
         g_col += 1
     return c
-
 # ---------- 输出 / 错误 ----------
 def emit_at(kind, val, line, col):
     g_toks.append([kind, val, line, col])
     g_count += 1
-
 def emit(kind, val):
     emit_at(kind, val, g_line, g_col)
-
 def emit_token(t):
     emit_at(t[0], t[1], t[2], t[3])
-
 def err(code, msg):
     print("错误: " + str(g_line) + ":" + str(g_col) + ": 词法错误 " + code + ": " + msg)
     panic("lex " + code)
-
 def err_at(code, msg, line, col):
     print("错误: " + str(line) + ":" + str(col) + ": 词法错误 " + code + ": " + msg)
     panic("lex " + code)
-
 # ---------- 字符分类 ----------
 def is_digit(c):
     return c != "" and c >= "0" and c <= "9"
-
 def is_hex_digit(c):
     return is_digit(c) or (c >= "a" and c <= "f") or (c >= "A" and c <= "F")
-
 def is_alnum(c):
     return is_digit(c) or (c >= "a" and c <= "z") or (c >= "A" and c <= "Z")
-
 def is_ident_start(c):
     if c == "":
         return false
     return (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or c == "_" or c >= "\u{80}"
-
 def is_ident_continue(c):
     if c == "":
         return false
     return is_ident_start(c) or is_digit(c)
-
 def digit_val(c):
     let table = "0123456789abcdefABCDEF"
     var i = 0
@@ -106,7 +88,6 @@ def digit_val(c):
             return i
         i += 1
     return -1
-
 # ---------- 行首缩进处理 ----------
 def handle_line_start():
     var indent = 0
@@ -138,7 +119,6 @@ def handle_line_start():
         if g_indent_stack[len(g_indent_stack) - 1] != indent:
             err("E2002", "缩进不一致：当前缩进 " + str(indent) + " 与上层缩进不匹配")
     g_at_line_start = false
-
 # ---------- 注释 ----------
 def skip_comment():
     var text = ""
@@ -164,7 +144,6 @@ def skip_comment():
         while peek() != "" and peek() != "\n":
             text += advance()
     return text
-
 # ---------- 标识符 / 关键字 ----------
 def scan_ident_token():
     let pos_line = g_line
@@ -175,7 +154,6 @@ def scan_ident_token():
     if KEYWORDS.has(s):
         return [KEYWORDS[s], "", pos_line, pos_col]
     return ["标识符", s, pos_line, pos_col]
-
 # ---------- 数字 ----------
 def scan_radix_token(radix, pos_line, pos_col):
     advance()  # 0
@@ -200,13 +178,11 @@ def scan_radix_token(radix, pos_line, pos_col):
         v = v * radix + d
         j += 1
     return ["整数", str(v), pos_line, pos_col]
-
 def strip_leading_zeros(s):
     var i = 0
     while i < len(s) - 1 and s[i] == "0":
         i += 1
     return s[i:]
-
 def scan_number_token():
     let pos_line = g_line
     let pos_col = g_col
@@ -261,7 +237,6 @@ def scan_number_token():
     if len(norm) > 19 or (len(norm) == 19 and norm > "9223372036854775807"):
         err("E1004", "无效整数: " + digits)
     return ["整数", str(int(clean)), pos_line, pos_col]
-
 # ---------- 字符串 ----------
 def scan_string(interp):
     let toks = scan_string_tokens(interp)
@@ -270,7 +245,6 @@ def scan_string(interp):
     while i < len(toks):
         g_pending.append(toks[i])
         i += 1
-
 def scan_string_tokens(interp):
     let pos_line = g_line
     let pos_col = g_col
@@ -316,7 +290,6 @@ def scan_string_tokens(interp):
             advance()
     out.append(["字符串", rust_str_debug(s), pos_line, pos_col])
     return out
-
 def scan_multiline_string_tokens(quote, pos_line, pos_col, interp):
     var out = []
     var s = ""
@@ -351,7 +324,6 @@ def scan_multiline_string_tokens(quote, pos_line, pos_col, interp):
             advance()
     out.append(["字符串", rust_str_debug(s), pos_line, pos_col])
     return out
-
 def scan_interp_expr(str_pos_line, str_pos_col):
     let toks = []
     while true:
@@ -382,7 +354,6 @@ def scan_interp_expr(str_pos_line, str_pos_col):
         else:
             toks.append(scan_operator_token())
     return toks
-
 def hex_to_char(hex):
     let cp = hex_to_int(hex)
     if cp <= 127:
@@ -401,7 +372,6 @@ def hex_to_char(hex):
     let b3 = int_to_bytes(0x80 | ((cp >> 6) & 63), 1)
     let b4 = int_to_bytes(0x80 | (cp & 63), 1)
     return bytes_to_str(bytes_concat(b1, b2, b3, b4))
-
 def scan_escape(str_pos_line, str_pos_col):
     advance()  # 反斜杠
     let c = peek()
@@ -457,7 +427,6 @@ def scan_escape(str_pos_line, str_pos_col):
         return hex_to_char(hex)
     err("E1005", "非法转义序列 \\" + c)
     return ""
-
 # ---------- char debug 表示（对齐 Rust char {:?}） ----------
 def int_to_hex_nopad(n):
     let hex_chars = "0123456789abcdef"
@@ -468,7 +437,6 @@ def int_to_hex_nopad(n):
     if s == "":
         return "0"
     return s
-
 def char_debug(c):
     if c == "'":
         return "'\\''"
@@ -486,7 +454,6 @@ def char_debug(c):
     if code >= 0:
         return "'\\u{" + int_to_hex_nopad(code) + "}'"
     return "'" + c + "'"
-
 # ---------- 字符串 debug 表示（对齐 Rust {:?}） ----------
 def rust_str_debug(s):
     var out = "\""
@@ -516,7 +483,6 @@ def rust_str_debug(s):
         i += 1
     out += "\""
     return out
-
 def ctrl_codepoint(c):
     var idx = 0
     while idx < len(CTRL_ALL):
@@ -530,7 +496,6 @@ def ctrl_codepoint(c):
             return idx + 99
         idx += 1
     return -1
-
 def ctrl_hex(c):
     let h = int_to_hex(ctrl_codepoint(c), 16)
     var i = 0
@@ -539,7 +504,6 @@ def ctrl_hex(c):
     if i == len(h):
         return "0"
     return h[i:len(h)]
-
 # ---------- 运算符 ----------
 def scan_operator_token():
     let pos_line = g_line
@@ -678,7 +642,6 @@ def scan_operator_token():
         return ["?", "", pos_line, pos_col]
     err("E1001", "非法字符: " + char_debug(c))
     return ["", "", pos_line, pos_col]
-
 # ---------- 主循环 ----------
 def next_token():
     if len(g_pending) > 0:
@@ -719,8 +682,6 @@ def next_token():
         return true
     emit_token(scan_operator_token())
     return true
-
-
 # ---------- M41.1：edition 版本化（spec §14） ----------
 # 源码首行可声明：# px 2026
 # 当前工具链最新稳定版：px 2026；声明 edition 高于 2026 → 报错 E-EDITION
@@ -739,7 +700,6 @@ def check_edition(src):
             let year = int(year_s)
             if year > 2026:
                 err("E-EDITION", "源码声明 edition px " + year_s + " 高于当前工具链支持（px 2026），请升级编译器")
-
 # ---------- 入口（供 parser 等复用） ----------
 def lex_tokens(src):
     check_edition(src)

@@ -8,7 +8,6 @@
 # 枚举/数字/bool 存原始值（dump 时 str() 转换）
 # Pos 存 [line, col]
 # ============================================================
-
 # ---------- 节点布局表：[字段名或 null, 渲染类型] ----------
 # 渲染类型：s=字符串(已格式化) r=原样值 n=节点 o=Option<节点> os=Option<字符串>
 #          l=节点列表 ls=字符串列表 p=Pos
@@ -24,7 +23,6 @@ def pad(n):
         s += " "
         i += 1
     return s
-
 def dump_node(node, ind):
     let ty = node[0]
     let entry = LAYOUT[ty]
@@ -53,7 +51,6 @@ def dump_node(node, ind):
     else:
         lines.append(pad(ind) + "}")
     return join("\n", lines)
-
 def dump_list(v, ind):
     if len(v) == 0:
         return "[]"
@@ -63,7 +60,6 @@ def dump_list(v, ind):
         parts.append(pad(ind + 4) + dump_node(v[i], ind + 4) + ",")
         i += 1
     return "[\n" + join("\n", parts) + "\n" + pad(ind) + "]"
-
 def dump_str_list(v, ind):
     if len(v) == 0:
         return "[]"
@@ -73,7 +69,6 @@ def dump_str_list(v, ind):
         parts.append(pad(ind + 4) + v[i] + ",")
         i += 1
     return "[\n" + join("\n", parts) + "\n" + pad(ind) + "]"
-
 def dump_ty_list(v, ind):
     if len(v) == 0:
         return "[]"
@@ -83,7 +78,6 @@ def dump_ty_list(v, ind):
         parts.append(pad(ind + 4) + dump_node(v[i], ind + 4) + ",")
         i += 1
     return "[\n" + join("\n", parts) + "\n" + pad(ind) + "]"
-
 def dump_pat_list(v, ind):
     if len(v) == 0:
         return "[]"
@@ -93,25 +87,20 @@ def dump_pat_list(v, ind):
         parts.append(pad(ind + 4) + dump_node(v[i], ind + 4) + ",")
         i += 1
     return "[\n" + join("\n", parts) + "\n" + pad(ind) + "]"
-
 def dump_opt_node(v, ind):
     if v == null:
         return "None"
     return "Some(\n" + pad(ind + 4) + dump_node(v, ind + 4) + ",\n" + pad(ind) + ")"
-
 def dump_opt_str(v, ind):
     if v == null:
         return "None"
     return "Some(\n" + pad(ind + 4) + v + ",\n" + pad(ind) + ")"
-
 def dump_opt_list(v, ind):
     if v == null:
         return "None"
     return "Some(\n" + pad(ind + 4) + dump_list(v, ind + 4) + ",\n" + pad(ind) + ")"
-
 def dump_pos(v, ind):
     return "Pos {\n" + pad(ind + 4) + "line: " + str(v[0]) + ",\n" + pad(ind + 4) + "col: " + str(v[1]) + ",\n" + pad(ind) + "}"
-
 # (Expr, Expr) 元组列表：Dict.entries
 def dump_t2_list(v, ind):
     if len(v) == 0:
@@ -123,7 +112,6 @@ def dump_t2_list(v, ind):
         parts.append(pad(ind + 4) + "(\n" + pad(ind + 8) + dump_node(e[0], ind + 8) + ",\n" + pad(ind + 8) + dump_node(e[1], ind + 8) + ",\n" + pad(ind + 4) + "),")
         i += 1
     return "[\n" + join("\n", parts) + "\n" + pad(ind) + "]"
-
 # (Expr, Vec<Stmt>) 元组列表：If.branches
 def dump_t2b_list(v, ind):
     if len(v) == 0:
@@ -135,7 +123,6 @@ def dump_t2b_list(v, ind):
         parts.append(pad(ind + 4) + "(\n" + pad(ind + 8) + dump_node(e[0], ind + 8) + ",\n" + pad(ind + 8) + dump_list(e[1], ind + 8) + ",\n" + pad(ind + 4) + "),")
         i += 1
     return "[\n" + join("\n", parts) + "\n" + pad(ind) + "]"
-
 # (Option<String>, Expr, Vec<Stmt>) 元组列表：Select.arms
 def dump_t3_list(v, ind):
     if len(v) == 0:
@@ -151,7 +138,6 @@ def dump_t3_list(v, ind):
         parts.append(pad(ind + 4) + "(\n" + pad(ind + 8) + bs + ",\n" + pad(ind + 8) + dump_node(e[1], ind + 8) + ",\n" + pad(ind + 8) + dump_list(e[2], ind + 8) + ",\n" + pad(ind + 4) + "),")
         i += 1
     return "[\n" + join("\n", parts) + "\n" + pad(ind) + "]"
-
 def fmt_float(v):
     var s = str(v)
     if s == "inf" or s == "-inf":
@@ -159,7 +145,6 @@ def fmt_float(v):
     if not contains(s, ".") and not contains(s, "e") and not contains(s, "E"):
         return s + ".0"
     return s
-
 def dump_field(v, kind, ind):
     if kind == "s":
         return v
@@ -207,7 +192,6 @@ def dump_field(v, kind, ind):
     if kind == "p":
         return dump_pos(v, ind)
     return str(v)
-
 # ---------- 顶层入口 ----------
 def dump_program(ast):
     return dump_node(ast, 0)

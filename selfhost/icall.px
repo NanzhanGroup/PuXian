@@ -12,7 +12,6 @@
 # 内置函数失败（如 read_file 不存在）在 PuXian 里是运行时错误（不可捕获），
 # interp 对已知可失败的做预检查返回 Err；其余直接转发（记录已知限制）。
 # ============================================================
-
 # ---------- 调用任意可调用值（对齐 call_value） ----------
 def i_call_value(cv, args, pos):
     let t = i_type_name(cv)
@@ -40,7 +39,6 @@ def i_call_value(cv, args, pos):
             return Ok(it_struct(name, fields))
         return Err(i_r1004("枚举类型 " + cv["name"] + " 不能直接调用（用 " + cv["name"] + ".Variant）", pos))
     return Err(i_r1004("值不可调用: " + i_to_str(cv), pos))
-
 # ---------- 调用用户函数（对齐 call_function） ----------
 def i_call_function(fd, args, selfv, pos):
     let call_env = env_new(fd["closure"])
@@ -88,7 +86,6 @@ def i_call_function(fd, args, selfv, pos):
             return Ok(fl["value"])
         return Err(i_r1005("函数 " + fd["name"] + " 内出现非法控制流", pos))
     return Ok(null)
-
 # ---------- 方法分派（对齐 call_method） ----------
 def i_call_method(rcv, name, args, pos):
     let t = i_type_name(rcv)
@@ -111,13 +108,11 @@ def i_call_method(rcv, name, args, pos):
             return Ok(len(rcv))
         return Err(i_r1007("tuple 没有方法 '" + name + "'", pos))
     return Err(i_r1007("类型 " + t + " 没有方法 '" + name + "'", pos))
-
 # 期望字符串参数（对齐 expect_str_arg）
 def i_expect_str_arg(args, idx, mname, pos):
     if idx < len(args) and type(args[idx]) == "string":
         return Ok(args[idx])
     return Err(i_r1002("方法 " + mname + " 参数 " + str(idx + 1) + " 需要 string", pos))
-
 # ---- string 方法（对齐 call_str_method） ----
 def i_str_method(s, name, args, pos):
     if name == "upper":
@@ -157,7 +152,6 @@ def i_str_method(s, name, args, pos):
             return Err(r.err())
         return Ok(s.ends_with(r.unwrap()))
     return Err(i_r1007("string 没有方法 '" + name + "'", pos))
-
 # ---- list 方法（对齐 call_list_method） ----
 def i_list_method(l, name, args, pos):
     if name == "len":
@@ -223,7 +217,6 @@ def i_list_method(l, name, args, pos):
             i += 1
         return Err(i_r1003("list.index 未找到元素", pos))
     return Err(i_r1007("list 没有方法 '" + name + "'", pos))
-
 # ---- dict 方法（对齐 call_dict_method） ----
 def i_dict_method(d, name, args, pos):
     if name == "len":
@@ -273,7 +266,6 @@ def i_dict_method(d, name, args, pos):
             return Ok(v)
         return Err(i_r1008("字典没有键 '" + k + "'", pos))
     return Err(i_r1007("dict 没有方法 '" + name + "'", pos))
-
 # ---- result 方法（对齐 call_method 的 Result 分支） ----
 def i_result_method(r, name, args, pos):
     if name == "is_ok":

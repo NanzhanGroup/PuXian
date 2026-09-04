@@ -6,12 +6,10 @@
 #       编译模式：px build selfhost/capability.px && selfhost/build/capability
 # 验证：解释器 + 编译模式输出逐字节一致，且全 PASS
 # ============================================================
-
 # ---- 自检框架 ----
 var g_pass = 0
 var g_fail = 0
 var g_fails = []
-
 def check(name, cond):
     if cond:
         g_pass += 1
@@ -20,26 +18,20 @@ def check(name, cond):
         g_fail += 1
         g_fails.append(name)
         print("[FAIL] " + name)
-
 def section(title):
     print("")
     print("== " + title + " ==")
-
 # ---- M42：显式 C 库 import（FFI 平台杠杆）----
 import "c/sqlite3"
-
 # ---- M43：文件即路由（std.webroute，wr_parse_file 规则）----
 import std.webroute
-
 # ---- M45：registry 版本化（std.semver，semver 解析/比较/范围匹配）----
 import std.semver
-
 extern def sqlite_open(path: str) -> int
 extern def sqlite_exec(db: int, sql: str) -> int
 extern def sqlite_query(db: int, sql: str) -> list
 extern def sqlite_close(db: int) -> bool
 extern def sqlite_escape(s: str) -> str
-
 # ============================================================
 section("1. 字符串处理")
 # ============================================================
@@ -71,7 +63,6 @@ def repeat_str(s, n):
         r += s
     return r
 check("字符串重复(循环)", repeat_str("ab", 3) == "ababab")
-
 # ============================================================
 section("2. 正则表达式（自研引擎）")
 # ============================================================
@@ -84,7 +75,6 @@ var rs = regex_split("[,\\s]+", "a, b  c")
 check("regex_split 分割", len(rs) == 3 and rs[2] == "c")
 var all = regex_find_all("\\d+", "a1b22c333")
 check("regex_find_all 全部", len(all) == 3)
-
 # ============================================================
 section("3. JSON")
 # ============================================================
@@ -98,7 +88,6 @@ var jp = json_path("{\"user\": {\"name\": \"px\", \"tags\": [\"c\", \"go\"]}}", 
 check("json_path 路径查询", jp == "go")
 var jp2 = json_path(enc, "$.b[2]")
 check("json_path 字符串", jp2 == "x")
-
 # ============================================================
 section("4. 文件 IO")
 # ============================================================
@@ -124,7 +113,6 @@ check("list_dir 包含文件", contains(entries, "a.txt") and contains(entries, 
 remove(d + "/a.txt")
 remove(d + "/b.txt")
 remove(d)
-
 # ============================================================
 section("5. 进程调用（os_spawn → gcc 工具链）")
 # ============================================================
@@ -140,7 +128,6 @@ os_wait(gcc_pid)
 # 环境变量
 var home = env("HOME")
 check("env 环境变量", home != null and len(home) > 0)
-
 # ============================================================
 section("6. Result / Option 错误处理（M39）")
 # ============================================================
@@ -160,18 +147,15 @@ def try_div(x, y):
     if y == 0:
         return Err("div0")
     return Ok(x // y)
-
 def chain(x):
     let v = try_div(x, 2)?
     var w = try_div(v, 3)?
     return Ok(w + 1)
-
 var r1 = chain(12)
 check("? 传播成功链", r1.is_ok() and r1.unwrap() == 3)
 def chain_err():
     let v = try_div(10, 0)?
     return Ok(v)
-
 var r2 = chain_err()
 check("? 传播错误返回", r2.is_err() and r2.err() == "div0")
 # ! 强制解包
@@ -180,7 +164,6 @@ check("! 强制解包", d! == 99)
 # Result 的 JSON 序列化
 var ej = json_stringify(Ok(5))
 check("Result json", contains(ej, "\"ok\"") and contains(ej, "5"))
-
 # ============================================================
 section("7. 字符串插值（M40）")
 # ============================================================
@@ -195,7 +178,6 @@ check("插值-属性/索引", "${kv_v}" == "2")
 check("插值-转义", "\${name}" == "$" + "{name}")
 var kn = "k" + str(ver)
 check("插值-嵌套", "${kv[kn]}" == "3")
-
 # ============================================================
 section("8. enum + match（AST 表示）")
 # ============================================================
@@ -205,7 +187,6 @@ enum TokenKind:
     Str
     Kw
     Eof
-
 def kind_name(k):
     var r = match k:
         case Int:
@@ -219,7 +200,6 @@ def kind_name(k):
         case Eof:
             "eof"
     return r
-
 check("enum 构造+match 基础", kind_name(TokenKind.Ident) == "ident")
 check("enum 相等比较", TokenKind.Int == TokenKind.Int)
 check("enum 不相等", TokenKind.Int != TokenKind.Eof)
@@ -231,13 +211,11 @@ enum ExprKind:
     StrLit
     Call
     BinOp
-
 struct AstNode:
     kind: ExprKind
     value: int
     name: str
     args: list
-
 var n1 = AstNode(ExprKind.Number, 7, "", [])
 check("enum+struct 表示 AST 节点", n1.kind == ExprKind.Number and n1.value == 7)
 var call = AstNode(ExprKind.Call, 0, "fib", [1, 2])
@@ -256,7 +234,6 @@ def node_desc(node):
     return r
 check("match 分发 AST 节点", node_desc(n1) == "num:7")
 check("match 分发 call", node_desc(call) == "call:fib")
-
 # ============================================================
 section("9. list / dict 容器")
 # ============================================================
@@ -284,7 +261,6 @@ var matrix = [[1, 2], [3, 4]]
 check("二维列表", matrix[1][0] == 3)
 var deep = {"x": {"y": [{"z": 42}]}}
 check("深嵌套访问", deep["x"]["y"][0]["z"] == 42)
-
 # ============================================================
 section("10. 函数/闭包/高阶函数/递归")
 # ============================================================
@@ -295,12 +271,12 @@ def fact(n):
     return n * fact(n - 1)
 check("递归 fact", fact(5) == 120)
 # 高阶函数
-check("map", map([1, 2, 3], fn(x) { x * 2 }) == [2, 4, 6])
-check("filter", filter([1, 2, 3, 4], fn(x) { x > 2 }) == [3, 4])
-check("reduce", reduce([1, 2, 3, 4], fn(a, b) { a + b }, 0) == 10)
+check("map", map([1, 2, 3], fn(x) {x * 2}) == [2, 4, 6])
+check("filter", filter([1, 2, 3, 4], fn(x) {x > 2}) == [3, 4])
+check("reduce", reduce([1, 2, 3, 4], fn(a, b) {a + b}, 0) == 10)
 # 闭包：编译模式仅支持无捕获闭包（捕获外部变量在 C 后端不可用，Mini 子集排除）
 def make_outer():
-    let f = fn() { return 42 }
+    let f = fn() {return 42}
     return f
 var k = make_outer()
 check("闭包（无捕获）", k() == 42)
@@ -322,7 +298,6 @@ def cfg(host, port = 8080, tls = false):
     return host + ":" + str(port)
 check("关键字参数", cfg("localhost") == "localhost:8080")
 check("关键字参数-tls", cfg("localhost", 8080, true) == "localhost:8080s")
-
 # ============================================================
 section("11. 控制流")
 # ============================================================
@@ -373,7 +348,6 @@ var mv = match 3:
     case _:
         "other"
 check("match 表达式", mv == "three")
-
 # ============================================================
 section("12. 模块 / import")
 # ============================================================
@@ -382,24 +356,20 @@ var uq = unique([1, 2, 2, 3, 3, 3])
 check("import 模块函数", uq == [1, 2, 3])
 var fl = flatten([[1, 2], [3]])
 check("import flatten", fl == [1, 2, 3])
-
 # ============================================================
 section("13. 类型系统（Rust 风格）")
 # ============================================================
 struct Point:
     x: float
     y: float
-
 var p = Point(3.0, 4.0)
 check("struct 构造", p.x == 3.0 and p.y == 4.0)
 # trait + impl（扩展方法）
 trait Shape:
     def area(self) -> float:
-
 impl Shape for Point:
     def area(self) -> float:
         return self.x * self.y
-
 check("trait impl 扩展方法", p.area() == 12.0)
 # 类型标注
 def typed(x: int, s: str) -> str:
@@ -411,7 +381,6 @@ const cv = 2
 var vv = 3
 vv += 1
 check("let/const/var", lv == 1 and cv == 2 and vv == 4)
-
 # ============================================================
 section("14. 位运算 / 进制")
 # ============================================================
@@ -421,7 +390,6 @@ check("位移", (1 << 4) == 16 and (16 >> 2) == 4)
 check("hex 转换", hex_to_int("ff") == 255 and int_to_hex(255, 2) == "ff")
 var bb = int_to_bytes(258, 2)
 check("bytes 转换", bytes_to_int(bb) == 258 and type(bb) == "bytes")
-
 # ============================================================
 section("15. M41 类型系统还债（不可变 E3002 / 空安全 E3003）")
 # ============================================================
@@ -437,32 +405,26 @@ var n_c: int = 9
 check("可空类型赋 null", n_a == null)
 check("可空类型非 null + ?? 空合并", n_b ?? 0 == 5)
 check("非空类型正常", n_c == 9)
-
 # ============================================================
 section("16. M41.4 定义级泛型（类型擦除）")
 # ============================================================
 # 泛型函数 def first[T]：返回列表首元素
 def first[T](items: list[T]) -> T:
     return items[0]
-
 # 泛型函数多参数 + 约束 T: Comparable（约束仅记录，渐进不强制）
 def swap2[K, V](k: K, v: V) -> V:
     return v
-
-def max2[T: Comparable](a: T, b: T) -> T:
+def max2[T:Comparable](a: T, b: T) -> T:
     if a > b:
         return a
     return b
-
 # 泛型结构体 struct Box[T] / Pair[A, B]
 struct Box[T]:
     value: T
     tag: str
-
 struct Pair[A, B]:
     x: A
     y: B
-
 check("泛型函数 first[int]", first([10, 20, 30]) == 10)
 check("泛型函数 first[str]", first(["甲", "乙"]) == "甲")
 check("泛型函数 swap2 多参数", swap2(1, "one") == "one")
@@ -474,7 +436,6 @@ check("泛型结构体 Pair[A,B]", gp.x == 1 and gp.y == "一")
 # 泛型与类型标注混用（渐进：标注不参与运行时）
 var gnums: list[int] = [5, 6, 7]
 check("泛型+类型标注", first(gnums) == 5)
-
 # ============================================================
 section("17. C-FFI 显式 C 库 import（M42）")
 # ============================================================
@@ -489,7 +450,6 @@ check("C-FFI 查询第一行", frows[0]["id"] == 1 and frows[0]["name"] == "甲"
 check("C-FFI 查询第二行", frows[1]["id"] == 2 and frows[1]["name"] == "乙")
 check("C-FFI sqlite_escape", sqlite_escape("O'Reilly") == "O''Reilly")
 check("C-FFI sqlite_close", sqlite_close(fdb) == true)
-
 # ============================================================
 section("18. 文件即路由（M43 std.webroute）")
 # ============================================================
@@ -517,7 +477,6 @@ check("wr generated_routes.px → null（特殊文件）", wr_parse_file("genera
 check("wr static/x.px → null（静态目录）", wr_parse_file("static/x.px") == null)
 check("wr _private/helper.px → null（私有段）", wr_parse_file("_private/helper.px") == null)
 check("wr hello.txt → null（非 .px）", wr_parse_file("hello.txt") == null)
-
 # ============================================================
 section("19. 语言糖打包（M44：简化枚举 + 列表追加简写）")
 # ============================================================
@@ -565,7 +524,6 @@ let sbag = SugarBag([])
 sbag.items <- 5
 check("M44 <- Field 目标", sbag.items == [5])
 check("M44 比较运算不受影响", (5 < -1) == false and (5 < 1) == false and (-1 < 5) == true)
-
 # ============================================================
 section("20. registry 版本化（M45：semver 解析/比较/范围匹配）")
 # ============================================================
@@ -602,7 +560,6 @@ check("sv_best ^1.2.0 选最高", sv_best(["1.2.0", "1.2.5", "2.0.0"], "^1.2.0")
 check("sv_best ^2.0.0", sv_best(["1.2.0", "1.2.5", "2.0.0"], "^2.0.0") == "2.0.0")
 check("sv_best ^0.2.0", sv_best(["0.2.0", "0.2.5", "0.3.0"], "^0.2.0") == "0.2.5")
 check("sv_best 无匹配返回 null", sv_best(["1.0.0", "1.2.0"], "^3.0.0") == null)
-
 # ============================================================
 # 21. QUIC 传输级 API（M46，import "c/ngtcp2"）
 # ------------------------------------------------------------
@@ -612,16 +569,13 @@ check("sv_best 无匹配返回 null", sv_best(["1.0.0", "1.2.0"], "^3.0.0") == n
 # 此处验证 FFI 绑定可加载 + 基础生命周期（双模式一致）。
 # ============================================================
 import "c/ngtcp2"
-
 extern def quic_listen(port: int) -> int
 extern def quic_close_listener(listener: int) -> bool
 extern def quic_close(conn: int) -> bool
-
 var ql = quic_listen(17996)
 check("M46 quic_listen 返回有效 listener", ql > 0)
 check("M46 quic_close_listener 关闭", quic_close_listener(ql) == true)
 check("M46 quic_close 无效 conn 返回 false", quic_close(0) == false)
-
 # ============================================================
 # 22. HTTP/3 语义层（M47：QPACK 编解码 + HEADERS/DATA 帧）
 # ------------------------------------------------------------
@@ -630,11 +584,9 @@ check("M46 quic_close 无效 conn 返回 false", quic_close(0) == false)
 # 完整握手回环见 examples/m47_h3_verify.sh（端到端 PASS）。
 # ============================================================
 import "c/ngtcp2"
-
 extern def h3_qenc(headers: list) -> bytes
 extern def h3_qdec(data: bytes) -> list
 extern def h3_frame(type: int, payload) -> bytes
-
 # QPACK roundtrip：编码 → 解码还原
 var hdr = [["x-test", "1"], ["user-agent", "px-h3"]]
 var enc = h3_qenc(hdr)
@@ -649,7 +601,6 @@ var dec2 = h3_qdec(h3_qenc(pseudo))
 check("M47 QPACK 伪头 roundtrip", dec2 != null and len(dec2) == 3 and dec2[0][1] == "GET" and dec2[2][1] == "/hi")
 # 非法 QPACK（空/截断）返回 null（容错）
 check("M47 QPACK 非法输入返回 null", h3_qdec("") == null)
-
 # ============================================================
 # 23. QPACK 完整 codec（M48：Huffman + 静态表压缩）
 # ------------------------------------------------------------
@@ -664,28 +615,23 @@ check("M47 QPACK 非法输入返回 null", h3_qdec("") == null)
 # 字节精确断言经 FFI 表 bytes_to_hex/hex_to_bytes（M48 注册，双模式一致）。
 # ============================================================
 import "c/ngtcp2"
-
 extern def h3_huff(s: str) -> bytes
 extern def h3_unhuff(data: bytes) -> str
 extern def bytes_to_hex(data) -> str
 extern def hex_to_bytes(s: str) -> bytes
-
 # M48.1：Huffman 与 RFC 7541 Appendix C 官方向量逐字节一致（互操作基准）
 check("M48 Huffman 官方向量 www.example.com", bytes_to_hex(h3_huff("www.example.com")) == "f1e3c2e5f23a6ba0ab90f4ff")
 check("M48 Huffman 官方向量 no-cache", bytes_to_hex(h3_huff("no-cache")) == "a8eb10649cbf")
 check("M48 Huffman 官方向量 custom-key", bytes_to_hex(h3_huff("custom-key")) == "25a849e95ba97d7f")
 check("M48 Huffman 官方向量 custom-value", bytes_to_hex(h3_huff("custom-value")) == "25a849e95bb8e8b4bf")
 check("M48 Huffman 解码官方向量", h3_unhuff(hex_to_bytes("f1e3c2e5f23a6ba0ab90f4ff")) == "www.example.com")
-
 # M48.2：Huffman 编解码 roundtrip（URL/中文/大小写混合）
 var hrt = h3_unhuff(h3_huff("px-h3://user:pass@example.com:8443/路径?q=1&b=中文"))
 check("M48 Huffman roundtrip 复杂串", hrt == "px-h3://user:pass@example.com:8443/路径?q=1&b=中文")
-
 # M48.3：QPACK 静态表压缩——[:method, GET] 命中表项 17 → 00 00 D1（字节精确）
 check("M48 QPACK 静态表索引编码", bytes_to_hex(h3_qenc([[":method", "GET"]])) == "0000d1")
 var st = h3_qdec(hex_to_bytes("0000d1"))
 check("M48 QPACK 静态表索引解码", st != null and len(st) == 1 and st[0][0] == ":method" and st[0][1] == "GET")
-
 # M48.4：完整 codec roundtrip（静态全匹配/静态名引用/字面名 Huffman 混合）
 var full = [[":method", "GET"], [":scheme", "https"], [":path", "/index.html"], ["content-type", "text/html; charset=utf-8"], ["x-custom-48", "ab中文c"]]
 var fdec = h3_qdec(h3_qenc(full))
@@ -693,12 +639,10 @@ check("M48 全 codec roundtrip 数量", fdec != null and len(fdec) == 5)
 check("M48 全 codec roundtrip 伪头", fdec[0][0] == ":method" and fdec[0][1] == "GET" and fdec[1][1] == "https")
 check("M48 全 codec roundtrip 静态/字面", fdec[2][1] == "/index.html" and fdec[3][1] == "text/html; charset=utf-8")
 check("M48 全 codec roundtrip 自定义 Huffman", fdec[4][0] == "x-custom-48" and fdec[4][1] == "ab中文c")
-
 # M48.5：容错——非法 Huffman / 动态表引用 / 动态 Indexed 拒绝（无动态表语义）
 check("M48 Huffman 非法 padding 返回 null", h3_unhuff(hex_to_bytes("ff")) == null)
 check("M48 QPACK 动态表引用拒绝", h3_qdec(hex_to_bytes("0100c1")) == null)
 check("M48 QPACK 动态 Indexed 拒绝", h3_qdec(hex_to_bytes("000080")) == null)
-
 # ============================================================
 # 24. QPACK 动态表 + SETTINGS（M49：RFC 9204 连接级会话）
 # ------------------------------------------------------------
@@ -709,7 +653,6 @@ check("M48 QPACK 动态 Indexed 拒绝", h3_qdec(hex_to_bytes("000080")) == null
 # 双模式一致：语言层 extern def h3_qs_*/h3_settings_* 走 FFI 表（px_ffi_register）。
 # ============================================================
 import "c/ngtcp2"
-
 extern def h3_qs_open(max_capacity: int) -> int
 extern def h3_qs_close(sess: int) -> bool
 extern def h3_qs_enc(sess: int, headers: list) -> bytes
@@ -718,10 +661,8 @@ extern def h3_qs_dec_ingest(sess: int, enc_stream: bytes) -> bool
 extern def h3_qs_dec(sess: int, section: bytes) -> list
 extern def h3_settings_enc(pairs: list) -> bytes
 extern def h3_settings_dec(frame: bytes) -> list
-
 def qb_len(data):
     return len(bytes_to_hex(data)) // 2
-
 # M49.1：会话打开/关闭
 var qa = h3_qs_open(4096)
 var qb = h3_qs_open(4096)
@@ -755,7 +696,6 @@ var m49sd = h3_settings_dec(m49st)
 check("M49 SETTINGS roundtrip 数量", m49sd != null and len(m49sd) == 2)
 check("M49 SETTINGS MAX_TABLE_CAPACITY", m49sd[0][0] == 1 and m49sd[0][1] == 4096)
 check("M49 SETTINGS BLOCKED_STREAMS", m49sd[1][0] == 7 and m49sd[1][1] == 100)
-
 # ============================================================
 # 25. HTTP/3 多路复用（M50：QUIC 多双向流 + H3 per-stream 语义层）
 # ------------------------------------------------------------
@@ -768,19 +708,16 @@ check("M49 SETTINGS BLOCKED_STREAMS", m49sd[1][0] == 7 and m49sd[1][1] == 100)
 # 本 section 覆盖无效句柄/未开流容错的纯函数断言。
 # ============================================================
 import "c/ngtcp2"
-
 extern def quic_open_stream(conn: int) -> int
 extern def quic_send_stream(conn: int, sid: int, data: str) -> int
 extern def quic_recv_stream(conn: int, sid: int, maxlen: int, timeout_ms: int) -> str
 extern def quic_poll(conn: int, timeout_ms: int) -> int
-
 check("M50 quic_open_stream 无效 conn → -1", quic_open_stream(0) == -1)
 check("M50 quic_send_stream 无效 conn → -1", quic_send_stream(0, 0, "x") == -1)
 check("M50 quic_recv_stream 无效 conn → 空串", quic_recv_stream(0, 0, 16, 5) == "")
 check("M50 quic_poll 无效 conn → -1", quic_poll(0, 5) == -1)
 check("M50 quic_open_stream 无效 conn(未监听) → -1", quic_open_stream(3) == -1)
 check("M50 quic_recv_stream 指定流无数据(超时短) → 空串", quic_recv_stream(3, 0, 16, 5) == "")
-
 # ============================================================
 # 26. HTTP/3 QPACK 会话接入线上（M51：QUIC 单向流 + h3_conn_* 连接会话）
 # ------------------------------------------------------------
@@ -793,13 +730,11 @@ check("M50 quic_recv_stream 指定流无数据(超时短) → 空串", quic_recv
 # 完整端到端线上验证见 examples/m51_h3_qpack_wire_verify.sh（编译+解释双模式）。
 # 本 section 覆盖无效句柄/未 setup 容错的纯函数断言。
 # ============================================================
-
 extern def quic_open_uni_stream(conn: int) -> int
 extern def h3_conn_setup(conn: int, qpack_cap: int) -> bool
 extern def h3_conn_close(conn: int) -> bool
 extern def h3_conn_peer(conn: int) -> dict
 extern def h3_conn_stats(conn: int) -> dict
-
 check("M51 quic_open_uni_stream 无效 conn → -1", quic_open_uni_stream(0) == -1)
 check("M51 quic_open_uni_stream 未连接 conn → -1", quic_open_uni_stream(3) == -1)
 check("M51 h3_conn_setup 无效 conn → false", h3_conn_setup(0, 4096) == false)
@@ -808,7 +743,6 @@ check("M51 h3_conn_close 未 setup → false", h3_conn_close(0) == false)
 check("M51 h3_conn_peer 无效/未 setup → null", h3_conn_peer(0) == null)
 check("M51 h3_conn_peer 未 setup conn → null", h3_conn_peer(3) == null)
 check("M51 h3_conn_stats 未 setup → null", h3_conn_stats(3) == null)
-
 # ============================================================
 # 27. QPACK 解码器流 ack / 驱逐安全（M52：RFC 9204 §4.4 闭环语义）
 # ------------------------------------------------------------
@@ -824,7 +758,6 @@ check("M51 h3_conn_stats 未 setup → null", h3_conn_stats(3) == null)
 # examples/m52_qpack_decack_verify.sh（编译+解释双模式端到端）。
 # ============================================================
 import "c/ngtcp2"
-
 extern def h3_qs_krc(sess: int) -> int
 extern def h3_qs_enc_ric(sess: int) -> int
 extern def h3_qs_dec_ric(sess: int) -> int
@@ -833,7 +766,6 @@ extern def h3_qs_ack_inc(sess: int, inc: int) -> bool
 extern def h3_qs_en_len(sess: int) -> int
 extern def h3_qs_de_len(sess: int) -> int
 extern def h3_qs_ins(sess: int) -> int
-
 # M52.1：编码器驱逐安全（小容量 120：x-tok+值条目 ≈ 42B，可容 2 条）
 var q27e = h3_qs_open(120)
 check("M52 驱逐测试会话打开", q27e > 0)
@@ -863,7 +795,6 @@ check("M52 f4 插入新指令 + RIC=3", qb_len(m52o4) > 0 and h3_qs_enc_ric(q27e
 # Insert Count Increment（RFC 9204 §4.4.3：KRC += inc）
 check("M52 Insert Count Increment KRC=4", h3_qs_ack_inc(q27e, 2) == true and h3_qs_krc(q27e) == 4)
 h3_qs_close(q27e)
-
 # M52.2：解码 RIC 跟踪（decoder 镜像表 + 字段段解码 → dec_ric>0 须发 Section Ack）
 var q27d = h3_qs_open(4096)
 check("M52 解码测试会话打开", q27d > 0)
@@ -881,7 +812,6 @@ var m52d2 = h3_qs_dec(q27d, m52ds2)
 check("M52 decoder 还原 f2 RIC=2", m52d2 != null and len(m52d2) == 1 and m52d2[0][1] == "tok-b" and h3_qs_dec_ric(q27d) == 2)
 check("M52 镜像表 de_len=2 / ins=2", h3_qs_de_len(q27d) == 2 and h3_qs_ins(q27d) == 2)
 h3_qs_close(q27d)
-
 # ============================================================
 # 汇总
 # ============================================================

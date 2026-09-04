@@ -8,7 +8,6 @@
 #   2. 直接转发类（参数为原生值，行为已双模式对齐）→ Ok(同名内置调用)
 #   3. 可失败类（read_file/int 转换等）→ 预检查返回 Err（对齐 Rust 错误消息）
 # ============================================================
-
 # ---------- 主分发 ----------
 # ---- M63-L8: 网络类 C builtin 统一 Ok 包裹 helper ----
 # 解释器 builtin 返回约定：Ok(实际返回值) 给 icall 自动 unwrap；Err 用于传播。
@@ -17,7 +16,6 @@
 # 交用户 .is_err()/`?` 处理（与 http_get 既有分支、编译模式行为一致）。
 def i_call_c_net(v):
     return Ok(v)
-
 def i_call_builtin(name, args, pos):
     # ---- 值感知类 ----
     if name == "print":
@@ -507,7 +505,6 @@ def i_call_builtin(name, args, pos):
             return Err(i_r1002("fd_wait 需要 (fds, timeout_ms)", pos))
         return Ok(fd_wait(args[0], args[1]))
     return Err(i_r1002("未知内置函数: " + name, pos))
-
 # ---- M59-S4 数学直调 helper（双模式对齐） ----
 # 解释器参数错误返回 Err（不终止进程，区别于编译模式 px_error 终止）；
 # 参数合法后直调同名 runtime C builtin（pxi 宿主已注册全部 M59 数学内置）。
@@ -536,7 +533,6 @@ def i_math_unary(cname, args, pos):
     if cname == "log10":
         return Ok(log10(args[0]))
     return Ok(exp(args[0]))
-
 def i_math_atan2(args, pos):
     if len(args) != 2:
         return Err(i_r1002("atan2 需要 2 个参数（先 y 后 x）", pos))
@@ -547,12 +543,10 @@ def i_math_atan2(args, pos):
             return Err(i_r1002("atan2 参数必须是数字，实际是 " + t, pos))
         i += 1
     return Ok(atan2(args[0], args[1]))
-
 def i_math_random(args, pos):
     if len(args) != 0:
         return Err(i_r1002("random 不需要参数", pos))
     return Ok(random())
-
 def i_math_random_int(args, pos):
     if len(args) != 1:
         return Err(i_r1002("random_int 需要 1 个参数 n（正整数）", pos))
@@ -561,7 +555,6 @@ def i_math_random_int(args, pos):
     if args[0] <= 0:
         return Err(i_r1002("random_int 的 n 必须 > 0，实际是 " + i_to_str(args[0]), pos))
     return Ok(random_int(args[0]))
-
 def i_math_random_seed(args, pos):
     if len(args) != 1:
         return Err(i_r1002("random_seed 需要 1 个整数参数（种子）", pos))
@@ -569,7 +562,6 @@ def i_math_random_seed(args, pos):
         return Err(i_r1002("random_seed 的种子需要 int", pos))
     random_seed(args[0])
     return Ok(null)
-
 # M42：FFI 调用（extern def 走 C 桥）
 # args: [name(str), fn_args(list)] → ffi_call(name, args_list) → runtime 注册的 C 绑定
 # 双模式统一：编译模式 codegen 生成 px_call(px_get_global("ffi_call"), ...)，
@@ -582,7 +574,6 @@ def i_builtin_ffi_call(args, pos):
     if type(args[1]) != "list":
         return Err(i_r1002("ffi_call 的 args 需要列表", pos))
     return Ok(ffi_call(args[0], args[1]))
-
 # ---------- len（对齐 builtin.rs Len） ----------
 def i_builtin_len(args, pos):
     if len(args) != 1:
@@ -601,7 +592,6 @@ def i_builtin_len(args, pos):
     if t == "range":
         return Ok(len(list(args[0])))
     return Err(i_r1002("len 不支持类型 " + t, pos))
-
 # ---------- int（对齐 builtin.rs Int） ----------
 def i_builtin_int(args, pos):
     if len(args) != 1:
@@ -622,7 +612,6 @@ def i_builtin_int(args, pos):
         let n = int(s)
         return Ok(n)
     return Err(i_r1002("int 不支持此类型", pos))
-
 # ---------- float（对齐 builtin.rs Float） ----------
 def i_builtin_float(args, pos):
     if len(args) != 1:
@@ -637,7 +626,6 @@ def i_builtin_float(args, pos):
         let f = float(s)
         return Ok(f)
     return Err(i_r1002("float 不支持此类型", pos))
-
 # ---------- range（对齐 builtin.rs Range） ----------
 def i_builtin_range(args, pos):
     var start = 0
@@ -659,7 +647,6 @@ def i_builtin_range(args, pos):
     if step == 0:
         return Err(i_r1006("range step 不能为 0", pos))
     return Ok(range(start, end, step))
-
 # ---------- sorted（对齐 builtin.rs Sorted：按 to_string 排序） ----------
 def i_builtin_sorted(args, pos):
     if len(args) != 1:
@@ -684,7 +671,6 @@ def i_builtin_sorted(args, pos):
             j += 1
         ii += 1
     return Ok(items)
-
 # ---------- reversed（对齐 builtin.rs Reversed） ----------
 def i_builtin_reversed(args, pos):
     if len(args) != 1:
@@ -710,7 +696,6 @@ def i_builtin_reversed(args, pos):
         out.append(items[i])
         i -= 1
     return Ok(out)
-
 # ---------- sum（对齐 builtin.rs Sum：从 0 累加） ----------
 def i_builtin_sum(args, pos):
     if len(args) != 1:
@@ -727,7 +712,6 @@ def i_builtin_sum(args, pos):
         acc = r.unwrap()
         i += 1
     return Ok(acc)
-
 # ---------- map（对齐 builtin Map：f(x) 收集） ----------
 def i_builtin_map(args, pos):
     if len(args) != 2:
@@ -741,7 +725,6 @@ def i_builtin_map(args, pos):
         out.append(r.unwrap())
         i += 1
     return Ok(out)
-
 # ---------- filter（对齐 builtin Filter：f(x) 真值保留） ----------
 def i_builtin_filter(args, pos):
     if len(args) != 2:
@@ -756,7 +739,6 @@ def i_builtin_filter(args, pos):
             out.append(args[0][i])
         i += 1
     return Ok(out)
-
 # ---------- reduce（对齐 builtin Reduce：二元折叠） ----------
 def i_builtin_reduce(args, pos):
     if len(args) < 2 or len(args) > 3:

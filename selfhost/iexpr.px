@@ -6,7 +6,6 @@
 #   errval 为 {"__err__": ...}（真实错误）或 {"__prop__": v}（? 传播）
 # 子表达式错误用 ? 传播（仅 i_call_function 边界区分 __prop__）。
 # ============================================================
-
 def i_eval_expr(node, env):
     let ty = node[0]
     if ty == "Int":
@@ -251,7 +250,6 @@ def i_eval_expr(node, env):
             ai += 1
         return Err(i_r1003("match 未匹配任何分支（非穷尽）：" + i_to_str(sv), node[3]))
     return Err(i_r1002("未知表达式节点: " + ty, [0, 0]))
-
 # ---------- 调用表达式（对齐 eval_call） ----------
 def i_eval_call(node, env):
     # node: ["Call", callee, args, pos]
@@ -317,7 +315,6 @@ def i_eval_call(node, env):
         arg_vals.append(ar.unwrap())
         ai += 1
     return i_call_value(cr.unwrap(), arg_vals, pos)
-
 # ---------- 二元运算（短路处理，对齐 eval_expr Binary） ----------
 def i_eval_binary_node(node, env):
     let op = node[1]
@@ -350,7 +347,6 @@ def i_eval_binary_node(node, env):
     if rr.is_err():
         return Err(rr.err())
     return i_eval_binary(op, lr.unwrap(), rr.unwrap(), node[4])
-
 # ---------- 管道（对齐 eval_expr Pipe） ----------
 def i_eval_pipe(node, env):
     # node: ["Pipe", value, func, pos]
@@ -379,7 +375,6 @@ def i_eval_pipe(node, env):
     if fr.is_err():
         return Err(fr.err())
     return i_call_value(fr.unwrap(), [v], node[3])
-
 # ---------- 推导式（对齐 eval_comp，简化：一律物化收集） ----------
 # clauses: [["CompClause", vars, iterable], ...]
 # sink：list（收集元素）或 dict（收集键值，dict 模式下 list_expr=null）
@@ -429,7 +424,6 @@ def i_eval_comp(clauses, ci, sink, list_expr, dict_key, dict_val, cond, env, pos
             return Err(rr.err())
         ii += 1
     return Ok(null)
-
 # 绑定推导式变量（对齐 bind_comp_vars：单变量直接绑定，多变量解包）
 def i_bind_comp_vars(vars_, item, child, pos):
     if len(vars_) == 1:
@@ -446,7 +440,6 @@ def i_bind_comp_vars(vars_, item, child, pos):
         env_define(child, rust_unescape(vars_[i]), v)
         i += 1
     return Ok(null)
-
 # ---------- 模式匹配（对齐 match_pattern） ----------
 # 注意：parser.px 生成的模式节点类型带 Pat 前缀
 #   （PatLiteral/PatBinding/PatWildcard/PatTuple/PatConstructor，

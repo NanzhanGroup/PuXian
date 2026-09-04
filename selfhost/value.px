@@ -15,13 +15,11 @@
 #   - v_arith 返回 {"ok": bool, "v": 值, "err": 错误消息}（对齐 Rust 的 Result<Value, LxError>）
 # 对拍：selfhost/cases/v01_value.px 逐项断言 v_xxx 与内置行为一致
 # ============================================================
-
 # ---- 类型名（对齐 interp.rs type_name）----
 # PuXian 内置 type() 返回字符串与 Rust type_name 完全一致（int/float/string/bool/null/
 # list/dict/tuple/range/builtin/fn/enum/struct/result/type/generator）
 def v_type(v):
     return type(v)
-
 # ---- 字符串渲染（对齐 fmt_value + fmt_float）----
 # 原子类型透传内置 str()（浮点格式已对齐 fmt_float：整值且 |f|<1e15 补 .0）
 # 容器显式递归：
@@ -50,7 +48,6 @@ def v_str(v):
         return "{" + join(", ", sp) + "}"
     else:
         return str(v)
-
 # ---- 相等比较（对齐 value.rs PartialEq）----
 # int/float 跨类型数值比较；容器逐元素/逐键；其余类型语言级 == 兜底
 def v_eq(a, b):
@@ -96,7 +93,6 @@ def v_eq(a, b):
         return true
     # enum / result / range / gen / fn 等：语言级 ==（已对齐 PartialEq）
     return a == b
-
 # ---- 顺序比较（对齐 interp.rs bin_compare）----
 # 返回 -1 / 0 / 1；不支持的类型返回 null（调用方负责报"比较不支持"）
 def v_cmp(a, b):
@@ -128,7 +124,6 @@ def v_cmp(a, b):
             return 1
         return 0
     return null
-
 # ---- 算术（对齐 interp.rs bin_add + bin_numeric）----
 # 返回 {"ok": true, "v": 结果} 或 {"ok": false, "err": 消息}
 def v_arith(op, a, b):
@@ -158,7 +153,6 @@ def v_arith(op, a, b):
         return v_int_op(op, a, b)
     # 至少一个 float 或非数值：as_f64 转换后浮点运算
     return v_float_op(op, a, b)
-
 # int op int（对齐 bin_numeric Int 分支）
 def v_int_op(op, a, b):
     if op == "-":
@@ -193,7 +187,6 @@ def v_int_op(op, a, b):
     if op == "^":
         return {"ok": true, "v": a ^ b}
     return {"ok": false, "err": "未知运算符 " + op}
-
 # float 参与（对齐 bin_numeric 非 Int/Int 分支）
 def v_float_op(op, a, b):
     let ta = type(a)
@@ -226,7 +219,6 @@ def v_float_op(op, a, b):
         return {"ok": true, "v": af ** bf}
     # 位运算要求整数操作数
     return {"ok": false, "err": "此运算符要求整数操作数"}
-
 # ---- 真值（对齐 bool() 转换）----
 # null/false/0/0.0/""/[]/空dict → false；其余 true
 def v_truthy(v):
@@ -246,10 +238,8 @@ def v_truthy(v):
     if t == "dict":
         return len(v) > 0
     return true
-
 # ---- 类型转换（对齐 int()/float()）----
 def v_int(v):
     return int(v)
-
 def v_float(v):
     return float(v)

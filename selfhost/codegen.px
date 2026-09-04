@@ -17,7 +17,6 @@ import "parser.px"
 import "cg_stmt.px"
 import "cg_expr.px"
 import "cg_module.px"
-
 # ---------- lex/parser 全局状态（主文件声明；import 不注册模块顶层 let） ----------
 var g_src = ""
 var g_len = 0
@@ -33,7 +32,6 @@ let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn"
 let CTRL_ALL = "\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}\u{8}\u{b}\u{c}\u{e}\u{f}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1a}\u{1b}\u{1c}\u{1d}\u{1e}\u{1f}\u{7f}\u{80}\u{81}\u{82}\u{83}\u{84}\u{85}\u{86}\u{87}\u{88}\u{89}\u{8a}\u{8b}\u{8c}\u{8d}\u{8e}\u{8f}\u{90}\u{91}\u{92}\u{93}\u{94}\u{95}\u{96}\u{97}\u{98}\u{99}\u{9a}\u{9b}\u{9c}\u{9d}\u{9e}\u{9f}"
 var p_toks = []
 var p_pos = 0
-
 # ---------- codegen 全局状态 ----------
 var cg_closures = ""
 var cg_structs = {"_": 0}
@@ -50,14 +48,12 @@ var cg_err_labels = []
 var cg_uidc = 0
 var cg_closure_id = 0
 var loaded = {"_": 0}
-
 # ---------- 工具 ----------
 # 空 dict 创建（PuXian 限制：{} 是空块=null，非空 dict）
 def cg_new_dict():
     let d = {"_": 0}
     d.remove("_")
     return d
-
 def cg_dict_copy(d):
     var out = cg_new_dict()
     let ks = d.keys()
@@ -66,35 +62,27 @@ def cg_dict_copy(d):
         out[ks[i]] = d[ks[i]]
         i += 1
     return out
-
 def cg_uid():
     cg_uidc = cg_uidc + 1
     return cg_uidc
-
 def cg_tmp():
     return "_t" + str(cg_uid())
-
 def cg_new_var(name):
     let v = "_v" + str(cg_uid())
     cg_vars[name] = v
     return v
-
 def cg_var_of(name):
     if cg_vars.has(name):
         return cg_vars[name]
     return null
-
 # M41.2：不可变变量跟踪（E3002——对 let/const 变量赋值 = 编译错误）
 def cg_mark_immutable(name):
     cg_immutables[name] = 1
-
 def cg_is_immutable(name):
     return cg_immutables.has(name)
-
 def cg_perr(code, msg):
     print("编译错误 " + code + ": " + msg)
     exit(1)
-
 # M41.3：空安全 E3003——null 赋给非可空类型 = 编译错误
 # 渐进类型：仅显式标注非空类型时检查；省略标注（any）/TyOptional 不查
 def cg_is_nonnull_ty(ty):
@@ -103,7 +91,6 @@ def cg_is_nonnull_ty(ty):
     if ty[0] == "TyOptional":
         return false
     return true
-
 # 表达式是否为 null 字面量（字面量级检查，保守渐进）
 def cg_is_null_lit(e):
     if e == null:
@@ -111,7 +98,6 @@ def cg_is_null_lit(e):
     if e[0] == "Null":
         return true
     return false
-
 # 类型显示名（错误消息用）
 def cg_ty_name(ty):
     if ty == null:
@@ -125,7 +111,6 @@ def cg_ty_name(ty):
     if ty[0] == "TyDict":
         return "{" + cg_ty_name(ty[1]) + ": " + cg_ty_name(ty[2]) + "}"
     return "any"
-
 def cg_func_cname(name):
     var out = ""
     var i = 0
@@ -140,7 +125,6 @@ def cg_func_cname(name):
             out += "_"
         i += 1
     return out
-
 def cg_find(s, sub):
     let n = len(s)
     let m = len(sub)
@@ -157,7 +141,6 @@ def cg_find(s, sub):
             return i
         i += 1
     return -1
-
 def cg_pad(n):
     var s = ""
     var i = 0
@@ -165,7 +148,6 @@ def cg_pad(n):
         s += "    "
         i += 1
     return s
-
 # 字符串 debug 格式（rust_str_debug，带引号）→ 原始字符串
 def rust_unescape(s):
     let body = s[1:len(s) - 1]
@@ -208,7 +190,6 @@ def rust_unescape(s):
             out += c
             i += 1
     return out
-
 # 对齐 Rust codegen.escape_str（原始字符串 → C 字面量转义）
 def cg_escape_str(s):
     var out = ""
@@ -233,7 +214,6 @@ def cg_escape_str(s):
             out += c
         i += 1
     return out
-
 # 指数格式展开（编译版 C 运行时 %g 输出 "1.5e+10" → Rust f64 Display 定点 "15000000000"）
 def cg_pad_zeros(n):
     var s = ""
@@ -242,7 +222,6 @@ def cg_pad_zeros(n):
         s += "0"
         i += 1
     return s
-
 def cg_expand_sci(s):
     var ei = -1
     var i = 0
@@ -292,7 +271,6 @@ def cg_expand_sci(s):
     if neg:
         return "-" + out
     return out
-
 # 对齐 Rust f64 Display（codegen 里 px_float({}) 用 Display：2.0 → "2"；1e15 → "1000000000000000"）
 def cg_fmt_float(v):
     var s = str(v)
@@ -303,7 +281,6 @@ def cg_fmt_float(v):
     if n >= 2 and s[n - 2:n] == ".0":
         return s[0:n - 2]
     return s
-
 # ---------- 类型表收集 ----------
 def cg_collect_types(prog):
     let items = prog[1]
@@ -338,7 +315,6 @@ def cg_collect_types(prog):
     # M44：type X const 简化枚举（递归收集，含函数体内声明）
     # 值应为常量表达式（字面量为主）；cg_gen_expr 生成 C 表达式内联到使用处
     cg_collect_consts(items)
-
 # ---------- M44：递归收集 TypeConst（顶层 + 函数体 + 嵌套块） ----------
 def cg_collect_consts(stmts):
     var i = 0
@@ -368,7 +344,6 @@ def cg_collect_consts(stmts):
         elif ty == "While":
             cg_collect_consts(st[2])
         i += 1
-
 # ---------- 收集需提升到函数顶的局部变量（递归 if/for/while） ----------
 # M62-L5：Python/解释器语义 = 函数级作用域（if/for/while 不新建作用域）。
 # 编译模式原只对「无声明赋值（Assign 目标）」做函数顶提升（px_null 声明 + 原位赋值）；
@@ -407,12 +382,10 @@ def cg_collect_hoist_vars(stmts, out):
         elif ty == "While":
             cg_collect_hoist_vars(st[2], out)
         i += 1
-
 # ---------- 函数生成 ----------
 def cg_gen_func(f):
     let cname = "fn_" + cg_func_cname(rust_unescape(f[1]))
     return cg_gen_func_named(f, cname)
-
 def cg_gen_func_named(f, cname):
     var s = "static LXValue " + cname + "(LXValue* args, int nargs, void* ctx) {\n"
     s += "    (void)ctx;\n"
@@ -469,7 +442,6 @@ def cg_gen_func_named(f, cname):
     cg_var_types = saved_types
     cg_immutables = saved_imm
     return s
-
 # ---------- generate 主流程 ----------
 def cg_generate(prog):
     var out = "/* 由普贤 (PuXian) 编译器自动生成 — px build */\n#include \"runtime.h\"\n#include <string.h>\n#include <stdio.h>\n\n"
@@ -621,7 +593,6 @@ def cg_generate(prog):
             final_out = head + cg_closures + "\n" + tail
         return final_out
     return out
-
 # ---------- 入口 ----------
 def main():
     let f = args()[len(args()) - 1]
