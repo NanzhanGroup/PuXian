@@ -1,0 +1,185 @@
+# ============================================================
+# 普贤标准库：std.lunar —— 农历（1900-2100）公历互转（qg-issue 06 T3 收编）
+# ------------------------------------------------------------
+# 纯函数（无 IO/无状态），双模式一致。随发布包分发：import std.lunar。
+# 数据：1900-2101 每年正月初一相对 1900-01-31 的天数偏移表 + 1900-2100 农历年表
+#      （闰月 + 各月大小），源自寿星天文历天文推算（sxtwl 逐日扫描生成并逐年
+#       对拍校验，0 误差）。
+# 入口：
+#   lr_solar_to_lunar(y, m, d) -> {ok, year, month, day, leap}
+#     公历 y/m/d -> 农历（year 为农历年号；leap 是否闰月）
+#   lr_lunar_to_solar(y, m, d, leap) -> {ok, year, month, day}
+#     农历 y/m/d(+闰月) -> 公历
+#   lr_md_in_year(m, d, solar_year) -> {ok, year, month, day}
+#     某公历年内"农历 m 月 d 日"的落点（ws-todo lunar:8-8 重复规则场景）
+#   lr_leap_month(y) / lr_year_days(y) / lr_month_days(y, m, leap)
+# 边界：范围 1900-2100；超出返回 {ok:false, error}。
+# ============================================================
+# ---- 1900-2101 每年正月初一距 1900-01-31 的天数（202 项；末项供 2100 年天数）----
+const LN_SPRING_STR = "0,384,738,1093,1476,1830,2185,2569,2923,3278,3662,4016,4400,4754,5108,5492,5846,6201,6585,6940,7324,7678,8032,8416,8770,9124,9509,9863,10218,10602,10956,11339,11693,12048,12432,12787,13141,13525,13879,14263,14617,14971,15355,15710,16064,16449,16803,17157,17541,17895,18279,18633,18988,19372,19726,20081,20465,20819,21202,21557,21911,22295,22650,23004,23388,23743,24096,24480,24835,25219,25573,25928,26312,26666,27020,27404,27758,28142,28496,28851,29235,29590,29944,30328,30682,31066,31420,31774,32158,32513,32868,33252,33606,33960,34343,34698,35082,35436,35791,36175,36529,36883,37267,37621,37976,38360,38714,39099,39453,39807,40191,40545,40899,41283,41638,42022,42376,42731,43115,43469,43823,44207,44561,44916,45300,45654,46038,46392,46746,47130,47485,47839,48223,48578,48962,49316,49670,50054,50408,50762,51146,51501,51856,52240,52594,52978,53332,53686,54070,54424,54779,55163,55518,55902,56256,56610,56993,57348,57702,58086,58441,58795,59179,59533,59917,60271,60626,61010,61364,61719,62103,62457,62841,63195,63549,63933,64288,64642,65026,65381,65735,66119,66473,66857,67211,67566,67950,68304,68659,69042,69396,69780,70134,70489,70873,71228,71582,71966,72320,72674,73058,73412"  # noqa
+const LN_SPRING = map(split(LN_SPRING_STR, ","), int)
+# ---- 1900-2100 农历年表（5 位 hex，逗号分隔；split 转数组）----
+const LN_STR = "04bd8,04ae0,0a570,054d5,0d260,0d950,16554,056a0,09ad0,055d2,04ae0,0a5b6,0a4d0,0d250,1d255,0b540,0d6a0,0ada2,095b0,14977,04970,0a4b0,0b4b5,06a50,06d40,1ab54,02b60,09570,052f2,04970,06566,0d4a0,0ea50,16a95,05ad0,02b60,186e3,092e0,1c8d7,0c950,0d4a0,1d8a6,0b550,056a0,1a5b4,025d0,092d0,0d2b2,0a950,0b557,06ca0,0b550,15355,04da0,0a5b0,14573,052b0,0a9a8,0e950,06aa0,0aea6,0ab50,04b60,0aae4,0a570,05260,0f263,0d950,05b57,056a0,096d0,04dd5,04ad0,0a4d0,0d4d4,0d250,0d558,0b540,0b6a0,195a6,095b0,049b0,0a974,0a4b0,0b27a,06a50,06d40,0af46,0ab60,09570,04af5,04970,064b0,074a3,0ea50,06b58,05ac0,0ab60,096d5,092e0,0c960,0d954,0d4a0,0da50,07552,056a0,0abb7,025d0,092d0,0cab5,0a950,0b4a0,0baa4,0ad50,055d9,04ba0,0a5b0,15176,052b0,0a930,07954,06aa0,0ad50,05b52,04b60,0a6e6,0a4e0,0d260,0ea65,0d530,05aa0,076a3,096d0,04afb,04ad0,0a4d0,1d0b6,0d250,0d520,0dd45,0b5a0,056d0,055b2,049b0,0a577,0a4b0,0aa50,1b255,06d20,0ada0,14b63,09370,049f8,04970,064b0,168a6,0ea50,06aa0,1a6c4,0aae0,092e0,0d2e3,0c960,0d557,0d4a0,0da50,05d55,056a0,0a6d0,055d4,052d0,0a9b8,0a950,0b4a0,0b6a6,0ad50,055a0,0aba4,0a5b0,052b0,0b273,06930,07337,06aa0,0ad50,14b55,04b60,0a570,054e4,0d160,0e968,0d520,0daa0,16aa6,056d0,04ae0,0a9d4,0a2d0,0d150,0f252,0d520"  # noqa
+const LN_ARR = split(LN_STR, ",")
+const LN_NUM = map(LN_ARR, hex_to_int)  # 一次转整数数组（解释器逐 hex 慢 40x）
+# 取某农历年年表信息（0x…）；越界返回 0
+def lr_info(y):
+    if y < 1900 or y > 2100:
+        return 0
+    return LN_NUM[y - 1900]
+# 闰月号（0=无闰）
+def lr_leap_month(y):
+    return lr_info(y) & 15
+# 某年闰月天数（无闰=0）
+def lr_leap_days(y):
+    if lr_leap_month(y) == 0:
+        return 0
+    if lr_info(y) & 0x10000 != 0:
+        return 30
+    return 29
+# 某年某月天数（leap=true 指闰 m 月）
+def lr_month_days(y, m, leap):
+    if leap:
+        if m != lr_leap_month(y):
+            return 0
+        return lr_leap_days(y)
+    if m < 1 or m > 12:
+        return 0
+    if lr_info(y) & (0x10000 >> m) != 0:
+        return 30
+    return 29
+# 某农历年总天数（快速：相邻春节偏移差）
+def lr_year_days(y):
+    if y < 1900 or y > 2100:
+        return 0
+    return LN_SPRING[y - 1899] - LN_SPRING[y - 1900]
+# ---- 公历闰年 / 月天数 / civil 换算 ----
+def lr_isleap(y):
+    if y % 4 != 0:
+        return false
+    if y % 100 != 0:
+        return true
+    if y % 400 == 0:
+        return true
+    return false
+def lr_mdays(y, m):
+    if m == 2:
+        if lr_isleap(y):
+            return 29
+        return 28
+    if m == 4 or m == 6 or m == 9 or m == 11:
+        return 30
+    return 31
+# days since 1970-01-01（1970-01-01 = 0）
+def lr_civil(y, m, d):
+    var days = d - 1
+    if y >= 1970:
+        var cy = 1970
+        while cy < y:
+            days += 365
+            if lr_isleap(cy):
+                days += 1
+            cy += 1
+    else:
+        var cy2 = y
+        while cy2 < 1970:
+            days -= 365
+            if lr_isleap(cy2):
+                days -= 1
+            cy2 += 1
+    var mm = 1
+    while mm < m:
+        days += lr_mdays(y, mm)
+        mm += 1
+    return days
+# civil 反推：天数（自 1900-01-01=0，仅正数用）-> y/m/d
+def lr_un_civil(n, out):
+    var y = 1900
+    var left = n
+    while true:
+        var dy = 365
+        if lr_isleap(y):
+            dy = 366
+        if left < dy:
+            break
+        left -= dy
+        y += 1
+    var m = 1
+    while m <= 12:
+        var dm = lr_mdays(y, m)
+        if left < dm:
+            break
+        left -= dm
+        m += 1
+    out[0] = y
+    out[1] = m
+    out[2] = left + 1
+# ---- 公历 y/m/d -> 农历 ----
+def lr_solar_to_lunar(y, m, d):
+    if y < 1900 or y > 2100:
+        return {"ok": false, "error": "lr_solar_to_lunar 年份范围 1900-2100"}
+    var n = lr_civil(y, m, d) - lr_civil(1900, 1, 31)
+    if n < 0:
+        return {"ok": false, "error": "早于 1900-01-31"}
+    var yy = 1900
+    while yy < 2100 and n >= LN_SPRING[yy - 1899]:
+        yy += 1
+    if yy > 2100:
+        return {"ok": false, "error": "超出 2100"}
+    n -= LN_SPRING[yy - 1900]
+    # 在该农历年内定位月日（含闰月，闰插在同号普通月后）
+    var lm = lr_leap_month(yy)
+    var mm = 1
+    while mm <= 12:
+        # 普通月
+        var d1 = lr_month_days(yy, mm, false)
+        if n < d1:
+            return {"ok": true, "year": yy, "month": mm, "day": n + 1, "leap": false}
+        n -= d1
+        # 闰月
+        if lm != 0 and mm == lm:
+            var d2 = lr_leap_days(yy)
+            if n < d2:
+                return {"ok": true, "year": yy, "month": mm, "day": n + 1, "leap": true}
+            n -= d2
+        mm += 1
+    return {"ok": false, "error": "内部错误"}
+# ---- 农历 y/m/d(+leap) -> 公历 ----
+def lr_lunar_to_solar(y, m, d, leap):
+    if y < 1900 or y > 2100:
+        return {"ok": false, "error": "lr_lunar_to_solar 年份范围 1900-2100"}
+    var off = LN_SPRING[y - 1900]
+    var lm = lr_leap_month(y)
+    var mm = 1
+    var found = false
+    while mm <= 12 and not found:
+        # 普通月
+        if mm == m and not leap:
+            off += d - 1
+            found = true
+            break
+        off += lr_month_days(y, mm, false)
+        # 闰月
+        if lm != 0 and mm == lm:
+            if mm == m and leap:
+                off += d - 1
+                found = true
+                break
+            off += lr_leap_days(y)
+        mm += 1
+    if not found:
+        return {"ok": false, "error": "该农历月日不存在"}
+    var out = [0, 0, 0]
+    lr_un_civil(off + 30, out)  # LN_SPRING 自 1900-01-31 计数；+30 得自 1900-01-01
+    return {"ok": true, "year": out[0], "month": out[1], "day": out[2]}
+# ---- ws-todo lunar:M-D：某公历年内该农历月日（农历 8-8 等）----
+def lr_md_in_year(m, d, solar_year):
+    var cand = [solar_year - 1, solar_year]
+    var i = 0
+    while i < len(cand):
+        var ly = cand[i]
+        let r = lr_lunar_to_solar(ly, m, d, false)
+        if r["ok"] and r["year"] == solar_year:
+            return {"ok": true, "year": r["year"], "month": r["month"], "day": r["day"]}
+        i += 1
+    return {"ok": false, "error": "该公历年内无此农历月日"}
