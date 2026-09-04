@@ -197,8 +197,11 @@ cmd_build() {
         \"$build_dir/runtime_h3_qpack.c\" \"$build_dir/runtime_h3_qpack_dyn.c\""
     fi
     local cc_cmd
-    cc_cmd="$cc -static -O2 -pthread -o \"$out_path\" \
-        \"$c_path\" $rt_srcs \
+    # M67-S7：riscv64 musl 默认 static-pie 报 "read-only segment has dynamic
+    # relocations"（RISC-V 只读段含重定位限制）→ riscv64 交叉加 -no-pie 传统静态
+    local pie_flag=""
+    case "$cc" in *riscv64*) pie_flag=" -no-pie" ;; esac
+    cc_cmd="$cc -static -O2 -pthread$pie_flag -o \"$out_path\" \"$c_path\" $rt_srcs \
         \"$sqlite_src\" \
         \"$build_dir/miniz.c\" \"$build_dir/miniz_tinfl.c\" \"$build_dir/miniz_tdef.c\" \
         -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_FOREIGN_KEYS=1 \
