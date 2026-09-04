@@ -11,7 +11,7 @@
 #                                           交叉编译（M57-S4）：cc 指定交叉编译器，
 #                                           mbedtls-lib/sqlite-obj 指定目标架构静态库
 #   pxc build [--zlib-lib <dir>] <file.px>    zlib 外部库目录（M61-S0：缺省按 cc 自动探测，
-#                                            gcc→third_party/zlib/lib，aarch64→lib-aarch64）
+#                                            gcc→lib，aarch64→lib-aarch64，armv7→lib-armv7，riscv64→lib-riscv64）
 #   pxc run <file.px> [args...]            解释执行
 #   pxc lex <file.px>                      打印 Token 流（调试，走 PuXian lexer）
 #   pxc parse <file.px>                    打印 AST（调试，走 PuXian parser）
@@ -62,7 +62,7 @@ pxc $(echo "$SELFHOST_VER") (普贤 PuXian · selfhosted $SELFHOST_MILESTONE)
                                                  --sqlite-obj    目标架构 sqlite3 .o 文件
                                                                   （缺省 third_party/sqlite3/sqlite3.o）
                                                  --zlib-lib      目标架构 zlib 库目录
-                                                                  （缺省按 cc 自动探测：gcc→lib，aarch64→lib-aarch64）
+                                                                  （缺省按 cc 自动探测：gcc→lib，aarch64/armv7/riscv64→lib-<arch>）
   pxc run <file.px> [args...]                 解释执行
   pxc lex <file.px>                           词法分析并打印 Token 流（调试）
   pxc parse <file.px>                         语法分析并打印 AST（调试）
@@ -96,7 +96,8 @@ copy_runtime() {
     # M57-S4：--no-quic 时不复制 QUIC/H3/QPACK 源（runtime.c 已用 PX_NO_QUIC 条件编译屏蔽引用）
     local rt_files="runtime.h runtime.c runtime_aes.c runtime_xml.c runtime_zip.c \
              runtime_ws.c runtime_rsa.c runtime_sqlite.c runtime_route.c runtime_h2.c \
-             runtime_ffi.c runtime_zlib.c"
+             runtime_ffi.c runtime_zlib.c arch.h arch_x86_64.h arch_aarch64.h \
+             arch_armv7.h arch_riscv64.h"
     if [ "$no_quic" != "1" ]; then
         rt_files="$rt_files runtime_quic.c runtime_h3.c runtime_h3_qpack.c \
              runtime_h3_qpack_dyn.c runtime_h3_qpack.h runtime_h3_qpack_tbl.h \
@@ -153,10 +154,12 @@ cmd_build() {
     [ -f "$file" ] || { echo "错误: 无法读取文件 $file" >&2; return 1; }
     [ "$mbedtls_lib" = "" ] && mbedtls_lib="$RT_DIR/mbedtls/lib"
     # M61-S0：zlib 外部静态库 —— 显式 --zlib-lib 优先，否则按 cc 架构自动探测
-    # （交叉 --cc aarch64-* 自动切 lib-aarch64，旧交叉脚本无需改）
+    # M67-S5：多架构扩展（aarch64/armv7/riscv64 → lib-<arch>，缺省 lib 兼容）
     if [ "$zlib_lib" = "" ]; then
         case "$cc" in
             *aarch64*) zlib_lib="$RT_DIR/third_party/zlib/lib-aarch64" ;;
+            *armv7*)   zlib_lib="$RT_DIR/third_party/zlib/lib-armv7" ;;
+            *riscv64*) zlib_lib="$RT_DIR/third_party/zlib/lib-riscv64" ;;
             *)         zlib_lib="$RT_DIR/third_party/zlib/lib" ;;
         esac
     fi

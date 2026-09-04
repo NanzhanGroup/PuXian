@@ -36,6 +36,7 @@
 #include <execinfo.h>   // M57-S4：glibc 特有头，musl 交叉（边缘设备）无此头 → 条件包含
 #endif
 #include "miniz.h"   // M21 gzip 压缩/解压（raw deflate + gzip 容器，M19 zip 同源）
+#include "arch.h"    // M67-S4：GC 架构抽象层（arch_read_sp / arch_scan_registers / arch_uc_sp）
 
 // M10 HTTPS：mbedtls 静态库（compiler/runtime/mbedtls/）
 #include "mbedtls/net_sockets.h"
@@ -836,18 +837,8 @@ static void gc_scan_stack(GCHash* set) {
         pthread_attr_destroy(&attr);
     }
     if (!stackaddr || stacksize == 0) return;
-    // M57-S4：musl（边缘设备交叉）无 getcontext → 内联汇编直接读 SP（跨 glibc/musl/arch）
-#if defined(__aarch64__)
-    uintptr_t rsp;
-    __asm__ __volatile__("mov %0, sp" : "=r"(rsp));
-#elif defined(__x86_64__)
-    uintptr_t rsp;
-    __asm__ __volatile__("movq %%rsp, %0" : "=r"(rsp));
-#else
-    ucontext_t uc;
-    getcontext(&uc);
-    uintptr_t rsp = (uintptr_t)uc.uc_mcontext.gregs[REG_RSP];
-#endif
+    // M67-S4：架构抽象（arch.h）—— 内联汇编直接读 SP，跨 glibc/musl/arch
+    uintptr_t rsp = arch_read_sp();
     uintptr_t start = rsp & ~(uintptr_t)7;
     uintptr_t end = (uintptr_t)stackaddr + stacksize;
     if (g_gc_debug) { char dbg[160]; int dn = snprintf(dbg, sizeof(dbg), "[scan-self] rsp=%lx start=%lx end=%lx range=%lu\n", rsp, start, end, (unsigned long)(end - start)); (void)write(2, dbg, (size_t)dn); }
@@ -992,29 +983,15 @@ static void gc_ensure_main_registered(void) {
     gc_register_thread(pthread_self(), 1);
 }
 
-// 扫描单个暂停线程的通用寄存器（x86_64 / aarch64；M57-S4 交叉编译兼容）
+// M67-S4：架构无关寄存器 word 标记回调（对象地址识别 + GC 标记；mark_cb 接口）
+static void gc_mark_word_cb(void* ctx, uintptr_t w) {
+    GCHash* set = (GCHash*)ctx;
+    if ((w & 7) == 0 && gc_hash_has(set, w)) gc_mark_obj(set, (LXObject*)w);
+}
+
+// 扫描单个暂停线程的通用寄存器（M67-S4：arch.h 按架构实现，见 runtime/arch_*.h）
 static void gc_scan_registers(GCHash* set, ucontext_t* uc) {
-#if defined(__aarch64__)
-    // aarch64：mcontext.regs[0..30]（x0-x30）+ 独立 sp 字段（glibc/musl 同布局）
-    const uintptr_t* regs = (const uintptr_t*)uc->uc_mcontext.regs;
-    for (int i = 0; i <= 30; i++) {
-        uintptr_t w = regs[i];
-        if ((w & 7) == 0 && gc_hash_has(set, w)) gc_mark_obj(set, (LXObject*)w);
-    }
-    uintptr_t sp = (uintptr_t)uc->uc_mcontext.sp;
-    if ((sp & 7) == 0 && gc_hash_has(set, sp)) gc_mark_obj(set, (LXObject*)sp);
-#else
-    greg_t* regs = uc->uc_mcontext.gregs;
-    static const int reg_ids[] = {
-        REG_RAX, REG_RBX, REG_RCX, REG_RDX, REG_RSI, REG_RDI,
-        REG_RBP, REG_R8, REG_R9, REG_R10, REG_R11, REG_R12,
-        REG_R13, REG_R14, REG_R15
-    };
-    for (unsigned i = 0; i < sizeof(reg_ids)/sizeof(reg_ids[0]); i++) {
-        uintptr_t w = (uintptr_t)regs[reg_ids[i]];
-        if ((w & 7) == 0 && gc_hash_has(set, w)) gc_mark_obj(set, (LXObject*)w);
-    }
-#endif
+    arch_scan_registers(uc, gc_mark_word_cb, set);
 }
 
 // 扫描单个暂停线程的栈（pthread_getattr_np 获取边界；只扫活跃帧 [RSP, 栈底)）
@@ -1027,11 +1004,7 @@ static void gc_scan_thread_stack(GCHash* set, pthread_t tid, ucontext_t* uc) {
         pthread_attr_destroy(&attr);
     }
     if (!stackaddr || stacksize == 0) return;
-#if defined(__aarch64__)
-    uintptr_t rsp = (uintptr_t)uc->uc_mcontext.sp;
-#else
-    uintptr_t rsp = (uintptr_t)uc->uc_mcontext.gregs[REG_RSP];
-#endif
+    uintptr_t rsp = arch_uc_sp(uc);   // M67-S4：arch.h 按架构取暂停线程 SP
     uintptr_t start = rsp & ~(uintptr_t)7;
     uintptr_t end = (uintptr_t)stackaddr + stacksize;
     for (uintptr_t p = start; p + sizeof(uintptr_t) <= end; p += sizeof(uintptr_t)) {
