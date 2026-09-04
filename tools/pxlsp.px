@@ -1,0 +1,363 @@
+# ============================================================
+# tools/pxlsp.px —— PuXian LSP 服务器（自举版，pxc lsp，M65-S2）
+# ------------------------------------------------------------
+# 对齐 Rust archive/rust-compiler/src/lsp.rs 能力（本 S2 步：生命周期 +
+# 文档同步 + 诊断推送；completion/definition/hover 属 M65-S3）。
+# 架构（M65-S1 侦查 A 决策）：
+#   - 深度诊断（词法/语法/lint）子进程化：os_spawn_capture(bootstrap/pxcheck)
+#     捕获其输出 → 解析为 LSP 诊断。服务器自身不 import parser/lint
+#     （其语法错误 panic 会杀进程），也不 print（防污染协议 stdout）。
+#   - stdio 双工：Content-Length 帧读写复用 jsonrpc_core.px（read(2)/write(2)
+#     直通，字节级定界，半包/粘包累积缓冲）。
+# 诊断输出契约（pxcheck 文档）：
+#   - pxcheck 正常退出（parse 成功）→ stdout 单行 JSON 数组（1-based 行/列）
+#   - pxcheck 因 parse/lex 错误崩溃（退出 1）→ 文本含错误行：
+#       "L:C: 语法错误 CODE: msg" / "错误: L:C: 词法错误 CODE: msg"
+#   - LSP 位置 0-based（行/列各 -1）；severity Error=1 Warning=2
+# 用法（编译版）：pxlsp [--version]  （服务器入口：stdio 即 LSP transport）
+#   调试输出一律 write(2, ...)；stdout 仅协议帧。
+# 依赖：bootstrap/pxcheck（环境变量 PX_PXCHECK 指定绝对路径，pxc lsp 注入）
+# 构建：tools/pxc build tools/pxlsp.px → cp tools/build/pxlsp bootstrap/pxlsp
+# ============================================================
+import "jsonrpc_core.px"
+# ---------- 全局状态 ----------
+let PXLSP_VER = "0.1.0"
+let PXLSP_MS = "M65-S2"
+var g_docs = jr_dnew()  # uri → text 缓存
+var g_seq = 0  # 临时文件序号（防并发覆盖）
+var g_shutdown = false
+def lsp_err(msg):
+    write(2, msg + "\n")
+# ---------- 工具 ----------
+def lsp_dnew():
+    let d = {"_": 0}
+    d.remove("_")
+    return d
+def lsp_dirname(path):
+    var i = len(path) - 1
+    while i >= 0:
+        if path[i] == "/":
+            if i == 0:
+                return "/"
+            return path[0:i]
+        i -= 1
+    return "."
+# uri → 文件路径（仅支持 file:// 与裸路径；其余返回 "" 表示无真实路径）
+def lsp_uri_path(uri):
+    if starts_with(uri, "file://"):
+        let p = uri[len("file://"):len(uri)]
+        return p
+    if not contains(uri, ":") and len(uri) > 0 and uri[0] == "/":
+        return uri
+    return ""
+# ---------- 诊断：解析 pxcheck 文本错误行（parse/lex 崩溃输出） ----------
+# parser: "L:C: 语法错误 CODE: msg"；lexer: "错误: L:C: 词法错误 CODE: msg"
+# 返回 [line(1-based), col(1-based), code, msg] 或 null
+def lsp_parse_err_line(line):
+    let parts = split(line, ":")
+    if len(parts) < 4:
+        return null
+    var ln = ""
+    var cl = ""
+    var tag = ""
+    var mi = 0
+    if trim(parts[0]) == "错误":
+        # lexer 格式：错误: L:C: 词法错误 CODE: msg
+        ln = trim(parts[1])
+        cl = trim(parts[2])
+        tag = trim(parts[3])
+        mi = 4
+    else:
+        ln = trim(parts[0])
+        cl = trim(parts[1])
+        tag = trim(parts[2])
+        mi = 3
+    var code = ""
+    if starts_with(tag, "语法错误 "):
+        code = tag[len("语法错误 "):len(tag)]
+    elif starts_with(tag, "词法错误 "):
+        code = tag[len("词法错误 "):len(tag)]
+    if code == "":
+        return null
+    var m = ""
+    if mi < len(parts):
+        m = parts[mi]
+        var j = mi + 1
+        while j < len(parts):
+            m += ":" + parts[j]
+            j += 1
+    return [int(ln), int(cl), code, trim(m)]
+# ---------- 诊断：pxcheck JSON 数组 → LSP Diagnostics ----------
+# pxcheck 元素：{code,level,line,col,message}（1-based）→ LSP（0-based）
+def lsp_json_diags(arr):
+    let out = []
+    var i = 0
+    while i < len(arr):
+        let e = arr[i]
+        var line0 = int(e["line"]) - 1
+        var col0 = int(e["col"]) - 1
+        if line0 < 0:
+            line0 = 0
+        if col0 < 0:
+            col0 = 0
+        var sev = 2
+        if e["level"] == "E":
+            sev = 1
+        let pos = {"line": line0}
+        pos["character"] = col0
+        let rng = {"start": pos}
+        rng["end"] = pos
+        let d = lsp_dnew()
+        d["range"] = rng
+        d["severity"] = sev
+        d["code"] = e["code"]
+        d["source"] = "px"
+        d["message"] = e["message"]
+        out.append(d)
+        i += 1
+    return out
+# ---------- 分析：子进程 pxcheck ----------
+# 返回 LSP diagnostics（JSON 数组）
+def lsp_analyze(uri, text):
+    var pxcheck = env("PX_PXCHECK")
+    if pxcheck == null or pxcheck == "":
+        pxcheck = "pxcheck"
+    var td = env("TMPDIR")
+    if td == null or td == "":
+        td = "/tmp"
+    let tmp = td + "/pxlsp_" + str(os_pid()) + "_" + str(g_seq) + ".px"
+    g_seq += 1
+    let werr = write_file(tmp, text)
+    if werr != null:
+        lsp_err("[pxlsp] 写临时文件失败: " + str(werr))
+        return []
+    var args = [tmp]
+    let real = lsp_uri_path(uri)
+    if real != "":
+        args.append("--base")
+        args.append(lsp_dirname(real))
+    let res = os_spawn_capture(pxcheck, args)
+    remove(tmp)
+    if type(res) != "list":
+        lsp_err("[pxlsp] pxcheck 启动失败（设 PX_PXCHECK 指向 bootstrap/pxcheck）")
+        return []
+    let rc = res[0]
+    let out = res[1]
+    let ot = trim(out)
+    if starts_with(ot, "["):
+        # parse 成功：JSON 数组（lint 诊断，可能为空 []）
+        let parsed = json_parse(ot)
+        if type(parsed) == "list":
+            return lsp_json_diags(parsed)
+        lsp_err("[pxlsp] pxcheck JSON 解析异常 rc=" + str(rc))
+        return []
+    # parse/lex 崩溃：文本错误行 → 单条错误诊断（首个错误）
+    if rc == 0 and ot == "":
+        return []
+    let lines = split(out, "\n")
+    var li = 0
+    while li < len(lines):
+        let got = lsp_parse_err_line(lines[li])
+        if got != null:
+            var line0 = got[0] - 1
+            var col0 = got[1] - 1
+            if line0 < 0:
+                line0 = 0
+            if col0 < 0:
+                col0 = 0
+            let pos = {"line": line0}
+            pos["character"] = col0
+            let rng = {"start": pos}
+            rng["end"] = pos
+            let d = lsp_dnew()
+            d["range"] = rng
+            d["severity"] = 1
+            d["code"] = got[2]
+            d["source"] = "px"
+            d["message"] = got[2] + ": " + got[3]
+            return [d]
+        li += 1
+    return []
+# ---------- 通知构造 ----------
+def lsp_publish(uri, diags):
+    let params = lsp_dnew()
+    params["uri"] = uri
+    params["diagnostics"] = diags
+    return jr_notify("textDocument/publishDiagnostics", params)
+# ---------- 文档同步 handler（每个独立函数：PuXian if 不建块作用域，
+# 同函数内变量名不得跨 if 链复用——M65-S2 踩坑，见 §10.2） ----------
+def lsp_on_open(msg, outs):
+    if not msg.has("params"):
+        return
+    let pp = msg["params"]
+    if type(pp) != "dict" or not pp.has("textDocument"):
+        return
+    let td = pp["textDocument"]
+    if type(td) != "dict" or not td.has("uri") or not td.has("text"):
+        return
+    let u = td["uri"]
+    let body = td["text"]
+    g_docs[u] = body
+    outs.append(lsp_publish(u, lsp_analyze(u, body)))
+def lsp_on_change(msg, outs):
+    if not msg.has("params"):
+        return
+    let pp = msg["params"]
+    if type(pp) != "dict" or not pp.has("textDocument") or not pp.has("contentChanges"):
+        return
+    let td = pp["textDocument"]
+    let chg = pp["contentChanges"]
+    if type(td) != "dict" or not td.has("uri"):
+        return
+    if type(chg) != "list" or len(chg) == 0:
+        return
+    let u = td["uri"]
+    # Full 同步：contentChanges 末元素含全文 text
+    let last = chg[len(chg) - 1]
+    if type(last) != "dict" or not last.has("text"):
+        return
+    let body = last["text"]
+    g_docs[u] = body
+    outs.append(lsp_publish(u, lsp_analyze(u, body)))
+def lsp_on_save(msg, outs):
+    if not msg.has("params"):
+        return
+    let pp = msg["params"]
+    if type(pp) != "dict" or not pp.has("textDocument"):
+        return
+    let td = pp["textDocument"]
+    if type(td) != "dict" or not td.has("uri"):
+        return
+    let u = td["uri"]
+    # 未缓存则跳过（未 didOpen 的文件无诊断上下文）
+    if not g_docs.has(u):
+        return
+    var body = g_docs[u]
+    if pp.has("text"):
+        body = pp["text"]
+        g_docs[u] = body
+    outs.append(lsp_publish(u, lsp_analyze(u, body)))
+def lsp_on_close(msg, outs):
+    if not msg.has("params"):
+        return
+    let pp = msg["params"]
+    if type(pp) != "dict" or not pp.has("textDocument"):
+        return
+    let td = pp["textDocument"]
+    if type(td) != "dict" or not td.has("uri"):
+        return
+    let u = td["uri"]
+    g_docs.remove(u)
+    # 关闭后清空诊断
+    let none = []
+    outs.append(lsp_publish(u, none))
+# ---------- 消息分发 ----------
+# 返回待发送消息列表（response + 主动通知）
+def lsp_handle(msg):
+    let outs = []
+    let c = jr_classify(msg)
+    if c == "response" or c == "invalid":
+        return outs
+    let method = jr_method_of(msg)
+    let is_req = (c == "request")
+    let id = jr_id_of(msg)
+    # ---------- requests ----------
+    if is_req:
+        if method == "initialize":
+            let tsync = lsp_dnew()
+            tsync["openClose"] = true
+            tsync["change"] = 1
+            let caps = lsp_dnew()
+            caps["textDocumentSync"] = tsync
+            # completion/definition/hover 能力位随 M65-S3 开启（诚实协商）
+            let info = lsp_dnew()
+            info["name"] = "pxlsp"
+            info["version"] = PXLSP_VER + " (" + PXLSP_MS + ")"
+            let res = lsp_dnew()
+            res["capabilities"] = caps
+            res["serverInfo"] = info
+            outs.append(jr_response(id, res))
+        elif method == "shutdown":
+            g_shutdown = true
+            outs.append(jr_response(id, null))
+        else:
+            outs.append(jr_method_not_found(id, method))
+        return outs
+    # ---------- notifications ----------
+    if method == "initialized":
+        return outs
+    if method == "exit":
+        # 客户端通知退出：主循环读到即 break（无响应）
+        return outs
+    if method == "textDocument/didOpen":
+        lsp_on_open(msg, outs)
+        return outs
+    if method == "textDocument/didChange":
+        lsp_on_change(msg, outs)
+        return outs
+    if method == "textDocument/didSave":
+        lsp_on_save(msg, outs)
+        return outs
+    if method == "textDocument/didClose":
+        lsp_on_close(msg, outs)
+        return outs
+    # 未知 notification：按 JSON-RPC 忽略
+    return outs
+# ---------- 服务器主循环 ----------
+def lsp_serve():
+    var buf = bytes("")
+    var done = false
+    while not done:
+        let rd = read(0, 65536)
+        if type(rd) != "bytes" or bytes_len(rd) == 0:
+            # EOF（客户端关闭）或读失败 → 结束
+            done = true
+            break
+        buf = bytes_concat(buf, rd)
+        # 从缓冲逐帧取（半包/粘包由 jr_pull 处理）
+        var pull = true
+        while pull:
+            let r = jr_pull(buf)
+            buf = r[0]
+            let m = r[1]
+            if m == null:
+                pull = false
+            elif type(m) == "str":
+                # __jr_bad__ / __jr_parse__：协议坏帧
+                if m == "__jr_bad__":
+                    lsp_err("[pxlsp] 协议坏头（无 Content-Length），终止")
+                    jr_write(jr_parse_error_resp())
+                    done = true
+                else:
+                    jr_write(jr_parse_error_resp())
+            else:
+                let outs = lsp_handle(m)
+                var oi = 0
+                while oi < len(outs):
+                    jr_write(outs[oi])
+                    oi += 1
+                # exit notification 后退出（shutdown 已由客户端先行发出）
+                if jr_method_of(m) == "exit" and jr_classify(m) == "notification":
+                    done = true
+    return 0
+def usage():
+    print("pxlsp —— PuXian LSP 服务器（自举，M65-S2）")
+    print("用法: pxlsp [--version]")
+    print("  服务器入口：stdio 即 LSP transport（pxc lsp 直通执行）")
+def main():
+    let as_ = args()
+    var i = 1
+    while i < len(as_):
+        let a = as_[i]
+        if a == "--version" or a == "-v":
+            print("pxlsp " + PXLSP_VER + " (普贤 PuXian lsp · " + PXLSP_MS + ")")
+            exit(0)
+        elif a == "--help" or a == "-h":
+            usage()
+            exit(0)
+        elif starts_with(a, "-"):
+            lsp_err("pxlsp: 未知选项 '" + a + "'")
+            usage()
+            exit(1)
+        i += 1
+    exit(lsp_serve())
