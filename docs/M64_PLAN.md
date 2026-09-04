@@ -287,3 +287,29 @@ Rust 版全套归档于 `archive/rust-compiler/src/`（只读参考），已于 
 - pxbench 解释器基准慢 → count 建议 100 内；编译版基准（os_spawn 编译产物）留档。
 - lsp/mcp（M64d 按需）：runtime fd stdin/stdout 原语侦查（M60 fd read/write 已具
   px_fd 类），stdio JSON-RPC 底座可复用本 S5 的 os_spawn 编排经验。
+
+## 14. M64 欠债清理（收尾，commit 待入库）
+
+### 14.1 欠债清单与处置（全部真实执行）
+
+| # | 欠债（出处） | 处置 | 状态 |
+|---|---|---|---|
+| 1 | **CI 质量门**（§5：ci.yml 加 fmt --check + lint + 工具自测） | ci.yml 新增 `toolchain` job：fmt --check（selfhost+tools+stdlib 39 文件）+ compiler.px 项目级 lint + tools 11 独立文件 lint + m64_fmt/m64_lint verify；本地模拟全绿 | ✅ |
+| 2 | **fmtlexer.px:327 错误消息裸 `${` 触发插值**（M64-S4 引入；错误路径会把消息当插值表达式求值，pxlint L002 抓出） | 改 `\${` 转义（对齐 444 行写法）；重建 bootstrap/pxfmt、pxdoc；fmtlexer lint 0/0、fmt --check OK | ✅ |
+| 3 | **stdlib 6 文件未 fmt 收敛**（S4 只收敛 selfhost+tools，§4 M64a 验收"全仓"未达） | pxfmt -w 写回 6 文件（净 -66 行：空行压缩 + 行内注释对齐，与 selfhost/tools 同规则）；**capability 编译版 253 PASS/0 FAIL 佐证语义无损** | ✅ |
+| 4 | **capability L002 ×97**（§12.3a：QUIC/H3 运行时内建不在 pxlint BUILTINS 白名单） | pxlint.px BUILTINS 补 32 名（h3_\* 24 + quic_\* 8，源自 capability 实际引用）；重建 bootstrap/pxlint | ✅ |
+| 5 | **`type X const (...)` 顶层声明不被 lint 收集**（M44 常量枚举语法 → LogLevel/Code 误报 L002） | lint_core.px：TypeConst 名注册进 known + lc_is_def_stmt 归为声明类；重建 pxlint | ✅ |
+| 6 | **存量长行 L007**（§12.3b：compiler.px KEYWORDS 653 字符 / CTRL_ALL 371 字符数据行，语言强制单行） | compiler.px 26/27 行尾 `# noqa`（纯注释零语义）；compiler.px lint → **0 错误 0 警告** | ✅ |
+| 7 | **capability 26 处 L007**（长 check 断言 / extern def 签名，字符串字面量不可跨行） | 26 行行尾 `# noqa`；capability lint → **0 错误**（剩 2 L001 warning 留档） | ✅ |
+
+### 14.2 验证（真实执行）
+- ci.yml toolchain job 本地模拟：fmt 39 文件全绿 + compiler.px 0/0 + tools 11 文件全 0/0 + m64_fmt / m64_lint verify PASS
+- capability 编译版 253 PASS / 0 FAIL（stdlib 收敛后重跑）；m64_lint verify 18/18（pxlint 增强无回归）
+- capability lint：97 L002 + 26 L007 + 2 L001 → **0 错误**；compiler.px lint：**0 错误 0 警告**
+
+### 14.3 归档与边界（明确不入本批，防重复立项）
+- **L001 for-range 计数变量 / 泛型演示参数假阳性**（capability repeat_str 的 i、swap2 的 k）：warning 级，与 Rust lint.rs 对拍待核 → 留档不修
+- **selfhost 子模块单文件 L002**（cg_\*/codegen/astdump 等跨文件互引）= 多文件项目单文件检查局限 → 以 **compiler.px 主入口 lint（import 链合并）作项目级守护**，已入 CI
+- **fmt 配置化 --indent/--quote/--config**（§10.4，Rust M30 FormatOptions 对应物）：功能增强非 M64 承诺 → backlog
+- **pxbench 编译版基准**（§13.4）：解释器慢边界已 README/help 注明 count≤100 → 边界留档
+- **lsp/mcp**（M64d）：runtime fd stdin/stdout 原语已具备（M60 px_fd read/write）→ 按需立项新里程碑

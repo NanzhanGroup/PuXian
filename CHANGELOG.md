@@ -28,6 +28,22 @@
 - **README / spec §12 勾选同步**：pkg/ast/fmt/lint/test/doc/bench 七项自举已标注，
   lsp/mcp 留 M64d（按需）。
 
+### M64 收尾 · 欠债清理（docs/M64_PLAN.md §14）✅
+
+- **CI 质量门**：ci.yml 新增 `toolchain` job —— `pxc fmt --check`（selfhost+tools+stdlib
+  39 文件收敛域）+ `pxc lint`（compiler.px 项目级主入口 + tools 11 独立文件 0/0）+
+  m64_fmt/m64_lint verify；PLAN §5 承诺落地。
+- **fmtlexer `${` 转义修复**：错误消息 `"字符串插值 ${ 未闭合"` 裸 `${` 会触发插值
+  （错误路径求值未定义调用），改 `\${`；重建 bootstrap/pxfmt、pxdoc。
+- **stdlib 6 文件 fmt 收敛**：collections/edge/gfx/png/semver/webroute 写回（净 -66 行，
+  空行压缩+注释对齐，与 selfhost/tools 同规则）；capability 编译版 253 PASS 佐证无损。
+- **pxlint 增强**：BUILTINS 白名单补 QUIC/H3 内建 32 名（capability L002 ×97 → 0）；
+  支持 `type X const (...)`（M44 常量枚举）顶层名收集（LogLevel/Code 误报消除）；
+  重建 bootstrap/pxlint；m64_lint verify 18/18 无回归。
+- **L007 存量数据行 noqa**：compiler.px KEYWORDS/CTRL_ALL（653/371 字符语言强制单行）+
+  capability 26 处长断言/extern 签名行尾 `# noqa` → compiler.px lint **0 错误 0 警告**、
+  capability lint **0 错误**（剩 2 L001 演示形态 warning 留档 §14.3）。
+
 ### M63 · 语言面欠账修复（L8–L11 全清：pxi 网络 API / float 全精度 / pxc --version）✅
 
 - **规划**：MINI_SUBSET §十三 欠账总结清 L8–L11；回归 examples/m63_langfix/verify.sh
