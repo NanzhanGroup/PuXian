@@ -53,6 +53,13 @@
   ③zig 独立 actions/cache + 现编库 cache key 分工具链源。GitHub CI 六 job 全绿：aarch64（zig cc
   混链仓库预置 gcc-musl 库 + qemu 三用例）、armv7/riscv64（zig 现编交叉库 + qemu 三用例）全 PASS；
   本机同步实测 zig 路三架构 verify exit=0。
+- **M67-CIfix6 cache 联动修复（commit 69ee30e）**：修复 CIfix5 引入的二次回归（run97 三档红）——
+  根因一：cache-musl 命中时 cache-zig 被 if 跳过 → `/opt/zig` 未恢复 → wrapper `exec /opt/zig/zig`
+  找不到立即失败；根因二：cache-libs key 依赖被跳过的 dl 步骤输出 TOOLCHAIN（空→'cached'），
+  与首轮存的 '-zig' 不匹配致每轮重复现编。修复：cache-zig 去掉 if **始终 restore**（保证 wrapper
+  依赖的 zig 本体在场）；cache-libs key 固定 `px-libs-<arch>-v2`（与工具链来源解耦，musl ABI 稳定
+  可混链）。**CI run 98 六 job 全绿**（aarch64/armv7/riscv64 三档 qemu 验证 + 回归 + 质量门），
+  cache 全 warm 后 multiarch 三档仅需 qemu 安装 + verify 秒级完成。
 
 ### M66 · 自举 wsAgent runtime 原语补全 + stdlib 收编（qg-issue 01–06 全量合入，docs/M66_PLAN.md）✅
 
