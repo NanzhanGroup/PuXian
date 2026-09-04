@@ -324,7 +324,7 @@ def skip_interp_raw(pos_line, pos_col):
     while depth > 0:
         let c = peek()
         if c == "":
-            err_at("E1002", "字符串插值 ${ 未闭合（缺少 }）", pos_line, pos_col)
+            err_at("E1002", "字符串插值 \${ 未闭合（缺少 }）", pos_line, pos_col)
         if c == "\\":
             advance()
             if peek() == "":

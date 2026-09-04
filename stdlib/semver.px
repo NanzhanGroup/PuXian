@@ -10,13 +10,11 @@
 # 范围语法（cargo/npm 风格子集）：^ / ~ / 精确 / * / x 通配。
 # 供 tools/pxpkg.px（registry 版本解析 + lockfile 锁定）与 capability 复用。
 # ============================================================
-
 # ---- 字符/字符串工具 ----
 def sv_is_digit(c):
     if c >= "0" and c <= "9":
         return true
     return false
-
 def sv_is_alnum(c):
     if sv_is_digit(c):
         return true
@@ -25,7 +23,6 @@ def sv_is_alnum(c):
     if c >= "A" and c <= "Z":
         return true
     return false
-
 def sv_is_all_digits(s):
     if len(s) == 0:
         return false
@@ -35,7 +32,6 @@ def sv_is_all_digits(s):
             return false
         i += 1
     return true
-
 # 子串索引（runtime 无 find，自实现）：找不到返回 -1
 def sv_index_of(s, sub):
     if len(sub) == 0:
@@ -46,7 +42,6 @@ def sv_index_of(s, sub):
             return i
         i += 1
     return -1
-
 # ---- 解析：v → {"major","minor","patch","pre","build","raw"} 或 null ----
 def sv_parse(v):
     var s = v
@@ -93,7 +88,6 @@ def sv_parse(v):
                     k += 1
             j += 1
     return {"major": int(parts[0]), "minor": int(parts[1]), "patch": int(parts[2]), "pre": pre, "build": build, "raw": v}
-
 # ---- 比较：a<b → -1；a==b → 0；a>b → 1（SemVer 2.0.0 优先级规则）----
 def sv_cmp(a, b):
     let pa = sv_parse(a)
@@ -137,18 +131,17 @@ def sv_cmp(a, b):
                 return -1
             return 1
         if xd:
-            return -1    # 数字标识符 < 字母数字标识符
+            return -1  # 数字标识符 < 字母数字标识符
         if yd:
             return 1
         if x < y:
-            return -1    # 字母数字按 ASCII 字典序
+            return -1  # 字母数字按 ASCII 字典序
         return 1
     if len(as_list) < len(bs_list):
-        return -1        # 标识符数量多者大
+        return -1  # 标识符数量多者大
     if len(as_list) > len(bs_list):
         return 1
     return 0
-
 # ---- 范围解析：rng → {"lo","hi","pre"}（hi 开区间）或 null ----
 # 支持：^1.2.3 / ~1.2.3 / ~1.2 / ~1 / 1.2.3 / * / 1.2.x / 1.2.* / 1.x / 1 / 空
 def sv_range_parse(rng):
@@ -174,7 +167,7 @@ def sv_range_parse(rng):
             nums.append(-1)
         elif sv_is_all_digits(t):
             if len(t) > 1 and t[0] == "0":
-                return null    # 前导零非法
+                return null  # 前导零非法
             nums.append(int(t))
         else:
             return null
@@ -221,7 +214,6 @@ def sv_range_parse(rng):
         return {"lo": str(ma) + "." + str(mi) + ".0", "hi": str(ma) + "." + str(mi + 1) + ".0", "pre": ""}
     # ~1.2.3 → >=1.2.3 <1.3.0
     return {"lo": str(ma) + "." + str(mi) + "." + str(pa), "hi": str(ma) + "." + str(mi + 1) + ".0", "pre": ""}
-
 # ---- 版本是否满足范围 ----
 def sv_satisfies(ver, rng):
     let r = sv_range_parse(rng)
@@ -234,7 +226,6 @@ def sv_satisfies(ver, rng):
     if p["pre"] != "":
         return false
     return sv_cmp(ver, r["lo"]) >= 0 and sv_cmp(ver, r["hi"]) < 0
-
 # ---- 从版本列表中选满足范围且最高的版本（未满足返回 null）----
 def sv_best(versions, rng):
     var best = null

@@ -10,7 +10,6 @@
 # 精灵 = [sw, sh, colors]，colors 中 0 = 透明（blit 跳过）
 # 性能注记：set_px 逐点带边界裁剪（正确优先）；密集像素直写 canvas_pixels
 # ============================================================
-
 def canvas_create(w, h):
     var px = []
     var n = w * h
@@ -19,30 +18,24 @@ def canvas_create(w, h):
         px.append(0)
         i = i + 1
     return [w, h, px]
-
 def canvas_w(c):
     return c[0]
-
 def canvas_h(c):
     return c[1]
-
 def canvas_pixels(c):
     return c[2]
-
 def set_px(c, x, y, color):
     var w = c[0]
     var h = c[1]
     if x < 0 or y < 0 or x >= w or y >= h:
         return
     c[2][y * w + x] = color
-
 def get_px(c, x, y):
     var w = c[0]
     var h = c[1]
     if x < 0 or y < 0 or x >= w or y >= h:
         return -1
     return c[2][y * w + x]
-
 # Bresenham 直线（整数，无浮点）
 def line(c, x0, y0, x1, y1, color):
     var dx = x1 - x0
@@ -69,13 +62,11 @@ def line(c, x0, y0, x1, y1, color):
         if e2 < dx:
             err = err + dx
             y0 = y0 + sy
-
 def rect(c, x, y, w, h, color):
     line(c, x, y, x + w - 1, y, color)
     line(c, x, y + h - 1, x + w - 1, y + h - 1, color)
     line(c, x, y, x, y + h - 1, color)
     line(c, x + w - 1, y, x + w - 1, y + h - 1, color)
-
 def fill_rect(c, x, y, w, h, color):
     var yy = y
     while yy < y + h:
@@ -84,7 +75,6 @@ def fill_rect(c, x, y, w, h, color):
             set_px(c, xx, yy, color)
             xx = xx + 1
         yy = yy + 1
-
 # 中点圆（8 对称）
 def circle(c, cx, cy, r, color):
     var x = 0
@@ -105,7 +95,6 @@ def circle(c, cx, cy, r, color):
             d = d + 2 * (x - y) + 5
             y = y - 1
         x = x + 1
-
 # 填充圆：逐行弦扫描（sqrt 定弦半宽）
 def fill_circle(c, cx, cy, r, color):
     var yy = -r
@@ -115,7 +104,6 @@ def fill_circle(c, cx, cy, r, color):
         var x1 = cx + int(dx)
         fill_rect(c, x0, cy + yy, x1 - x0 + 1, 1, color)
         yy = yy + 1
-
 # 精灵 blit：spr = [sw, sh, colors]；colors 中 0 = 透明
 def blit(c, dx, dy, spr):
     var sw = spr[0]
@@ -130,10 +118,8 @@ def blit(c, dx, dy, spr):
                 set_px(c, dx + xx, dy + yy, col)
             xx = xx + 1
         yy = yy + 1
-
 def text_size(s):
     return bytes_len(bytes(s)) * 6 - 1
-
 # 5x7 文本（0-9 A-Z . - 空格；小写→大写；未知→?）
 # 字形 compact：每字符 1 int，bit(x+5y)：x=0 最左列，y 0..6 自上而下
 def text(c, x, y, s, color):
