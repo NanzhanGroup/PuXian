@@ -222,6 +222,7 @@ static LXValue bi_gc(LXValue* args, int nargs, void* ctx);
 // M23 P1：进程/信号（os_pid/os_spawn/os_wait/os_kill/signal）
 static LXValue bi_os_pid(LXValue* args, int nargs, void* ctx);
 static LXValue bi_os_spawn(LXValue* args, int nargs, void* ctx);
+static LXValue bi_os_spawn_capture(LXValue* args, int nargs, void* ctx);
 static LXValue bi_os_wait(LXValue* args, int nargs, void* ctx);
 static LXValue bi_os_kill(LXValue* args, int nargs, void* ctx);
 static LXValue bi_signal(LXValue* args, int nargs, void* ctx);
@@ -5383,6 +5384,7 @@ void px_register_builtins(void) {
     // M23 P1：进程/信号（文殊场景收尾：外部工具编排、守护进程、优雅停机）
     px_set_global("os_pid", px_native("os_pid", bi_os_pid));
     px_set_global("os_spawn", px_native("os_spawn", bi_os_spawn));
+    px_set_global("os_spawn_capture", px_native("os_spawn_capture", bi_os_spawn_capture));
     px_set_global("os_wait", px_native("os_wait", bi_os_wait));
     px_set_global("os_kill", px_native("os_kill", bi_os_kill));
     px_set_global("signal", px_native("signal", bi_signal));
@@ -5464,6 +5466,86 @@ static LXValue bi_os_spawn(LXValue* args, int nargs, void* ctx) {
     for (int i = 0; i <= argc; i++) free(argv[i]);
     free(argv);
     return px_int((int64_t)pid);
+}
+
+// os_spawn_capture(cmd, args) → [rc:int, output:str] | null（M65：LSP/MCP 子进程捕获）
+// fork+execvp，子进程 stdout+stderr 合并到同一管道（2>&1 语义），父进程读尽后
+// waitpid 回收。rc：正常=exit code；信号终止=128+sig；exec 失败=127；wait 失败=-1(null)。
+// 用途：MCP run/test/bench、LSP 诊断器（pxcheck）子进程输出捕获 —— 语言内编排真自举。
+// 注意：输出为整串 str（二进制安全按字节长度截断）；大输出全量驻留内存（演示级上限自持）。
+static LXValue bi_os_spawn_capture(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2 || args[0].type != PX_STR || args[1].type != PX_LIST)
+        px_error("os_spawn_capture 需要 (cmd, args) 参数");
+    const char* cmd = args[0].as.obj->as.str.data;
+    LXObject* list = args[1].as.obj;
+    int argc = list->as.list.len;
+    char** argv = (char**)calloc((size_t)argc + 2, sizeof(char*));
+    argv[0] = strdup(cmd);
+    for (int i = 0; i < argc; i++) {
+        LXValue v = list->as.list.items[i];
+        if (v.type != PX_STR) {
+            for (int j = 0; j <= i; j++) free(argv[j]);
+            free(argv);
+            px_error("os_spawn_capture 的 args 必须是字符串列表");
+        }
+        argv[i + 1] = strdup(v.as.obj->as.str.data);
+    }
+    argv[argc + 1] = NULL;
+    int fds[2];
+    if (pipe(fds) != 0) {
+        for (int i = 0; i <= argc; i++) free(argv[i]);
+        free(argv);
+        return px_null();
+    }
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(fds[0]);
+        close(fds[1]);
+        for (int i = 0; i <= argc; i++) free(argv[i]);
+        free(argv);
+        return px_null();
+    }
+    if (pid == 0) {
+        close(fds[0]);
+        dup2(fds[1], 1);
+        dup2(fds[1], 2);
+        close(fds[1]);
+        execvp(cmd, argv);
+        _exit(127);
+    }
+    close(fds[1]);
+    for (int i = 0; i <= argc; i++) free(argv[i]);
+    free(argv);
+    size_t cap = 8192, n = 0;
+    char* buf = (char*)xmalloc(cap);
+    for (;;) {
+        if (n + 4096 > cap) {
+            cap *= 2;
+            buf = (char*)xrealloc(buf, cap);
+        }
+        ssize_t r = read(fds[0], buf + n, cap - n);
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (r == 0) break;
+        n += (size_t)r;
+    }
+    close(fds[0]);
+    int status = 0;
+    if (waitpid(pid, &status, 0) < 0) {
+        xfree(buf);
+        return px_null();
+    }
+    int rc = -1;
+    if (WIFEXITED(status)) rc = WEXITSTATUS(status);
+    else if (WIFSIGNALED(status)) rc = 128 + (int)WTERMSIG(status);
+    LXValue res[2];
+    res[0] = px_int((int64_t)rc);
+    res[1] = px_str_len(buf, (int)n);
+    xfree(buf);
+    return px_list_n(res, 2);
 }
 
 static LXValue bi_os_wait(LXValue* args, int nargs, void* ctx) {

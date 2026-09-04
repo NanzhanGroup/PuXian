@@ -276,6 +276,9 @@ def i_call_builtin(name, args, pos):
         return Ok(http_get(args[0]))
     if name == "os_spawn":
         return Ok(os_spawn(args[0], args[1]))
+    if name == "os_spawn_capture":
+        # M65：子进程输出捕获（LSP 诊断器 / MCP run/test/bench 编排，双模式对齐）
+        return Ok(os_spawn_capture(args[0], args[1]))
     if name == "ffi_call":
         # M42：FFI C 桥 —— ffi_call(name, args_list) 调 runtime 注册的 C 绑定
         return i_builtin_ffi_call(args, pos)

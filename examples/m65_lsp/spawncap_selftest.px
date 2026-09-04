@@ -1,0 +1,34 @@
+# ============================================================
+# examples/m65_lsp/spawncap_selftest.px —— os_spawn_capture 冒烟（M65-S1 runtime 补丁）
+# ------------------------------------------------------------
+# 双模式：pxi 解释 + pxc 编译产物行为一致。全 PASS exit 0。
+# 期望输出（5 段断言）：
+#   spawncap: 5 PASS, 0 FAIL
+# ============================================================
+var g_pass = 0
+var g_fail = 0
+var g_fails = []
+def check(name, cond):
+    if cond:
+        g_pass += 1
+    else:
+        g_fail += 1
+        g_fails.append(name)
+        print("FAIL: " + name)
+def main():
+    # 1. 正常命令 + stdout 捕获
+    let r = os_spawn_capture("/bin/echo", ["hello", "world"])
+    check("echo rc=0", type(r) == "list" and r[0] == 0)
+    check("echo 输出含 hello world", type(r) == "list" and r[1] == "hello world\n")
+    # 2. stderr 合并（2>&1）+ 退出码透传
+    let r2 = os_spawn_capture("/bin/sh", ["-c", "echo out-line; echo err-line >&2; exit 3"])
+    check("sh rc=3 透传", type(r2) == "list" and r2[0] == 3)
+    check("sh stdout+stderr 合并", type(r2) == "list" and r2[1] == "out-line\nerr-line\n")
+    # 3. exec 失败 rc=127
+    let r3 = os_spawn_capture("/nonexistent_bin_xyz_12345", [])
+    check("exec 失败 rc=127", type(r3) == "list" and r3[0] == 127)
+    print("spawncap: " + str(g_pass) + " PASS, " + str(g_fail) + " FAIL")
+    if g_fail > 0:
+        print("失败项: " + join(", ", g_fails))
+        return 1
+    return 0

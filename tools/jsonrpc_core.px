@@ -1,0 +1,169 @@
+# ============================================================
+# tools/jsonrpc_core.px —— JSON-RPC 2.0 + Content-Length 帧共享底座（纯 defs）
+# ------------------------------------------------------------
+# M65-S1：LSP（pxlsp）与 MCP（pxmcp）共用的 stdio 协议核心：
+#   - Content-Length 帧编解码（read(2)/write(2) 直通；累积缓冲处理半包/粘包）
+#   - JSON-RPC 2.0 消息构造/分类（request / notification / response / error）
+# 架构（M64 工具惯例）：
+#   - 纯 defs 核心，零顶层数据 → 可被 pxlsp.px / pxmcp.px import 复用
+#   - 输入按 bytes 精确字节操作（Content-Length 是字节数，len(str) 是码点数
+#     —— 中文 body 必须 bytes_len(bytes(body)) 定界，实测 M65-S1）
+#   - 服务器主循环（阻塞 read + 分发）留在各主文件；本文件只提供无状态原语
+# 协议约定：
+#   - 一帧 = "Content-Length: N\r\n\r\n" + JSON body（N = body UTF-8 字节数）
+#   - jr_pull(buf) 从累积缓冲取一帧：返回 [剩余缓冲, 消息 dict|null]
+#     null = 数据不足（半包/无完整头），调用方继续 read 追加后再 pull
+#   无 Content-Length 的坏头 → 返回 [空, "__jr_bad__"]（调用方应终止连接）
+# 注意：服务器进程禁用 print（print 走 stdio 缓冲会污染协议 stdout），
+# 调试输出一律 write(2, ...)（本文件不 print）。
+# ============================================================
+# ---------- 帧定界（bytes 精确） ----------
+# jr_pull(buf) → [rest:bytes, msg:dict|null|"__jr_bad__"]
+#   buf: 累积输入缓冲（bytes，来自 read(0,..) 追加）
+#   rest: 取出一帧后的剩余字节（粘包后续帧保留）；半包时 rest = 原 buf
+def jr_pull(buf):
+    let hdr_end = bytes_find(buf, "\r\n\r\n")
+    if hdr_end == null:
+        return [buf, null]
+    let header = bytes_to_str(bytes_slice(buf, 0, hdr_end))
+    let cl = jr_content_length(header)
+    if cl == null:
+        # 协议坏头：无法定界，丢弃缓冲（不可恢复，调用方应终止）
+        return [bytes(""), "__jr_bad__"]
+    let body_start = hdr_end + 4
+    let total = body_start + cl
+    if bytes_len(buf) < total:
+        return [buf, null]
+    let body_b = bytes_slice(buf, body_start, total)
+    var rest = bytes("")
+    if total < bytes_len(buf):
+        rest = bytes_slice(buf, total)
+    # 预检：JSON-RPC 消息必为 JSON 对象（{ 开头）。先验首字符避免 json_parse
+    # 对非对象/畸形文本抛错杀进程（px_error 不可捕获）—— 协议违约留档，
+    # 真实 client 不发非 JSON body；{ 开头但畸形仍由 json_parse 兜底终止。
+    let body_t = trim(bytes_to_str(body_b))
+    if not starts_with(body_t, "{"):
+        return [rest, "__jr_parse__"]
+    let parsed = json_parse(bytes_to_str(body_b))
+    if parsed == null or type(parsed) != "dict":
+        # body 不是合法 JSON 对象（含解析错误）：JSON-RPC 解析错误 -32700
+        return [rest, "__jr_parse__"]
+    return [rest, parsed]
+# 从头部文本解析 Content-Length（ASCII 头，无则返回 null）
+def jr_content_length(header):
+    let lines = split(header, "\r\n")
+    var i = 0
+    while i < len(lines):
+        let ln = lines[i]
+        if starts_with(ln, "Content-Length:"):
+            var v = ln[len("Content-Length:"):len(ln)]
+            v = trim(v)
+            var d = 0
+            var j = 0
+            let digits = "0123456789"
+            while j < len(v):
+                if contains(digits, v[j]) == false:
+                    return null
+                d = d * 10 + int(v[j])
+                j += 1
+            return d
+        i += 1
+    return null
+# ---------- 帧编码 / 写出 ----------
+# jr_encode(msg) → str：完整帧文本（含 Content-Length 头；body = msg 的 JSON）
+def jr_encode(msg):
+    let body = json_stringify(msg)
+    return "Content-Length: " + str(bytes_len(bytes(body))) + "\r\n\r\n" + body
+# jr_write(msg)：帧写入 fd 1（write(2) 直写，不经 stdio，不污染缓冲）
+# 返回 int（write 实际字节数；失败 -1）
+def jr_write(msg):
+    return write(1, jr_encode(msg))
+# ---------- JSON-RPC 2.0 消息构造 ----------
+def jr_dnew():
+    let d = {"_": 0}
+    d.remove("_")
+    return d
+def jr_response(id, result):
+    let m = jr_dnew()
+    m["jsonrpc"] = "2.0"
+    m["id"] = id
+    m["result"] = result
+    return m
+def jr_error(id, code, message):
+    let m = jr_dnew()
+    m["jsonrpc"] = "2.0"
+    m["id"] = id
+    let e = jr_dnew()
+    e["code"] = code
+    e["message"] = message
+    m["error"] = e
+    return m
+def jr_request(id, method, params):
+    let m = jr_dnew()
+    m["jsonrpc"] = "2.0"
+    m["id"] = id
+    m["method"] = method
+    m["params"] = params
+    return m
+def jr_notify(method, params):
+    let m = jr_dnew()
+    m["jsonrpc"] = "2.0"
+    m["method"] = method
+    m["params"] = params
+    return m
+# ---------- 消息分类（对齐 JSON-RPC 2.0 规范） ----------
+def jr_has(m, k):
+    return m.has(k)
+# classify(msg) → "request" | "notification" | "response" | "invalid"
+#   request:      有 method + 有 id
+#   notification: 有 method + 无 id
+#   response:     有 id + (有 result 或 error)
+def jr_classify(msg):
+    if type(msg) != "dict":
+        return "invalid"
+    let has_method = msg.has("method")
+    let has_id = msg.has("id")
+    if has_method and has_id:
+        return "request"
+    if has_method:
+        return "notification"
+    if has_id:
+        return "response"
+    return "invalid"
+def jr_id_of(msg):
+    if msg.has("id"):
+        return msg["id"]
+    return null
+def jr_method_of(msg):
+    if msg.has("method"):
+        return msg["method"]
+    return ""
+def jr_error_code_of(msg):
+    if msg.has("error") and type(msg["error"]) == "dict":
+        let e = msg["error"]
+        if e.has("code"):
+            return e["code"]
+    return null
+# ---------- 标准错误码 ----------
+def jr_code_parse():
+    return -32700
+def jr_code_invalid():
+    return -32600
+def jr_code_method():
+    return -32601
+def jr_code_params():
+    return -32602
+def jr_code_internal():
+    return -32603
+# 构造解析错误响应（id 不可得时 JSON-RPC 规范要求 id=null）
+def jr_parse_error_resp():
+    return jr_error(null, jr_code_parse(), "Parse error")
+# 构造无效请求响应
+def jr_invalid_resp(id):
+    return jr_error(id, jr_code_invalid(), "Invalid Request")
+# 构造方法未找到响应
+def jr_method_not_found(id, method):
+    return jr_error(id, jr_code_method(), "Method not found: " + method)
+# 构造内部错误响应
+def jr_internal_resp(id, message):
+    return jr_error(id, jr_code_internal(), message)
