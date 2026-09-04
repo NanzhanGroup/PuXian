@@ -221,8 +221,10 @@ fi
 
 # ⑥ M64/M65 工具链自举版存在性（pxfmt/pxlint/pxdoc/pxtest/pxbench + pxlsp/pxmcp/pxcheck）
 TLS=""
+# 注意：⑤ 之后 cwd 已切到 /tmp/pxuser，此处必须用绝对路径（$CHK/$NAME）
+BCHK="$CHK/$NAME/bootstrap"
 for t in pxfmt pxlint pxdoc pxtest pxbench pxlsp pxmcp pxcheck; do
-    if [ -x "./bootstrap/$t" ] && "./bootstrap/$t" --version >/dev/null 2>&1; then
+    if [ -x "$BCHK/$t" ] && "$BCHK/$t" --version >/dev/null 2>&1; then
         TLS="$TLS $t"
     else
         echo "  ❌ bootstrap/$t --version 失败"; fail=1
