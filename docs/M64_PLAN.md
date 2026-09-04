@@ -170,3 +170,34 @@ Rust 版全套归档于 `archive/rust-compiler/src/`（只读参考），已于 
 ### 10.4 遗留（S3+ / M64a 收尾）
 - `--indent N|tab / --quote single / --config .pxfmt.toml`（Rust M30 配置化）未做，S2 固定 4 空格 + 双引号（M64_PLAN §4 已列 M64d 按需）。
 - selfhost/stdlib 全仓 fmt 收敛：待 lint 落地后与 --check 一起统一收尾（先报 diff 人工审再一次性收敛，§6 风险缓解）。
+
+## 11. M64-S3 记录（lint 静态检查器自举，已完成）
+
+### 11.1 交付物
+- `tools/lint_core.px`（纯 defs 零顶层数据；规则 L001-L008 对齐 Rust lint.rs）
+- `tools/pxlint.px`（CLI：`<file> [--json] [--strict] [--version]`；import ../selfhost/parser.px 复用自举 lexer+parser 产 AST）
+- `bootstrap/pxlint`（编译版 9.1MB）+ `pxc lint` 子命令
+- `examples/m64_lint/`（bad.px/longline.px/clean.px + verify.sh 18 断言）
+- 退出码：Error → 1；仅 Warning → 0；--strict 时 Warning 也 → 1；--json 输出诊断数组
+
+### 11.2 关键实现事实（全部实测）
+- **AST=list 嵌套**（parser.px 产出），字符串字段 rust_str_debug 带引号 → lc_unq 还原（参考 it_util.rust_unescape）；pos=[line,col]。
+- **空 dict 字面量 `{}` 求值为 null**（实测！）→ 空 dict 只能用「哨兵键 + remove」构造（lc_dnew）；早期 walker 因此 R1007 null.has 崩溃。
+- **PuXian list/dict 字面量不能跨行**（括号续行不存在）→ 大常量（BUILTINS 178 名）用 `split("...", " ")` 单行字符串构造；KEYWORDS/CTRL_ALL/BUILTINS 等数据行必然超 100 字符 → `# noqa` 尾注豁免（lc_check_lines 支持，Rust lint 后自举增强，已文档化）。
+- **`pass` 不存在**、list 无 `.sort()`（用内置 sorted）、let 不可变赋值编译期 E3002（dogfood 拆行时踩中 r1 += 需 var）。
+- **模块 main 不进 import 合并**（cg_is_definition 排除）→ pxlint import parser.px 无 fn_main 冲突；pxlint 顶层 def main 自动调用（pxi/编译约定）。
+- **L002 已知名集合** = builtins 全集（从 Rust lint.rs Builtin 枚举派生 snake 178 名）+ 顶层 def/全局 var + std.* 模块函数 + **递归 import 的文件顶层 FuncDef**（对齐 cg_resolve_modules 级联合并：pxlint 调 lex_tokens 因 parser→pxlexer 递归链，单层收集会误报）。宿主依赖模块（it_util 用 hex_to_char、astdump 用 LAYOUT——依赖被 import 方提供全局）单文件 lint 必报 L002 → 模块惯例固有边界，白名单留档（Rust lint.rs 同）。
+- L004 空块在 PuXian **语法上不可表达**（parser 强制块非空，空 def/if/for 均 parse 报错）→ 实现保留防御（对齐 Rust），自测不覆盖。
+- L007 行 >100 字符（unicode 码点，len 按码点实测）；`# noqa` 行豁免（KEYWORDS/CTRL_ALL/BUILTINS/LAYOUT 等语言强制单行数据）。
+- pxi 解释器无 args()（pxlint 以编译版交付）；解释器跑 walker >120s，编译版 0.5s/文件。
+
+### 11.3 dogfood 收敛（lint 自举工具链 7 文件 0 错误 0 警告）
+- lint_core.px / pxlint.px / fmt_core.px / pxfmt.px / fmtlexer.px / pxpkg.px / routegen.px 全绿。
+- 修的真实问题：lint_core 超长 elif 重构为 helper（lc_stmt_noop/lc_is_def_stmt）；pxlint json dict 字面量超长拆多语句；pxpkg/routegen print 长消息与长拼接拆多行（dogfood 期间 routegen 曾因 let r1 + r1+= 触发编译期 E3002 → 改 var，展示 E3002 属编译器检查非 lint 规则）。
+- pxfmt -w 收敛 lint_core/pxlint 自身格式（fmt 与 lint 双 dogfood 闭环）。
+- selfhost 源码（含编译器本体）未动：超长 KEYWORDS/CTRL_ALL 数据行与历史逻辑行 L007 属语言强制/历史留档；宿主依赖模块 L002 白名单留档；全仓 fmt 收敛归 M64a-S4 收尾（涉及自举对拍，须专项）。
+
+### 11.4 验证（真实执行）
+- examples/m64_lint/verify.sh 18/18 PASS（六规则命中 + L007/L008 + clean 零告警 + --json + --strict）
+- 自举工具链 7 文件 lint 0/0；pxc lint 子命令可用；--version 输出
+- pxpkg（改动后）init/list 实测通过；routegen（改动后）重编译 + 实际生成 6 路由成功

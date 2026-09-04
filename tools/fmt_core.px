@@ -40,7 +40,7 @@ def has_dot_e(s):
 # ---------- 空格判定（对齐 Rust needs_space / is_unary_context） ----------
 def needs_space(p2, p, c):
     # 当前 token 前不加空格（左紧贴）：) ] } . ?. , : !
-    if c == ")" or c == "]" or c == "}" or c == "." or c == "?." or c == "," or c == ":" or c == "!":
+    if c == ")" or c == "]" or c == "}" or c == "." or c == "?." or c == "," or c == ":" or c == "!":  # noqa
         return false
     # 前一个 token 后不加空格（右紧贴）：( [ { . ?. ~
     if p == "(" or p == "[" or p == "{" or p == "." or p == "?." or p == "~":
@@ -83,7 +83,7 @@ def is_unary_ctx(p):
         return true
     if p == "&" or p == "|" or p == "^" or p == "<<" or p == ">>" or p == ">>>":
         return true
-    if p == "=" or p == "+=" or p == "-=" or p == "*=" or p == "/=" or p == "//=" or p == "%=" or p == "**=":
+    if p == "=" or p == "+=" or p == "-=" or p == "*=" or p == "/=" or p == "//=" or p == "%=" or p == "**=":  # noqa
         return true
     if p == "&=" or p == "|=" or p == "^=" or p == "<<=" or p == ">>=" or p == ">>>=":
         return true
@@ -339,7 +339,8 @@ def emit_hunk(ops, start, end):
         o_count = 1
     if n_count < 1:
         n_count = 1
-    var hdr = "@@ -" + str(o_line) + "," + str(o_count) + " +" + str(n_line) + "," + str(n_count) + " @@\n"
+    var hdr = "@@ -" + str(o_line) + "," + str(o_count)
+    hdr += " +" + str(n_line) + "," + str(n_count) + " @@\n"
     var txt = ""
     txt += hdr
     i = start

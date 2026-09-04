@@ -26,11 +26,11 @@ var g_pending = []   # 插值产生的中间 token：[kind, val, line, col]
 var g_keep = false   # M64a：true=保留注释模式（lex_tokens_keep）
 
 # ---------- 关键字表（spec §2.4，None 别名 null，type 是普通标识符） ----------
-let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn": "fn", "struct": "struct", "enum": "enum", "trait": "trait", "impl": "impl", "match": "match", "case": "case", "if": "if", "elif": "elif", "else": "else", "for": "for", "while": "while", "in": "in", "and": "and", "or": "or", "not": "not", "return": "return", "break": "break", "continue": "continue", "import": "import", "from": "from", "pub": "pub", "as": "as", "spawn": "spawn", "chan": "chan", "send": "send", "recv": "recv", "select": "select", "true": "true", "false": "false", "null": "null", "None": "null", "self": "self", "capture": "capture", "extern": "extern"}
+let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn": "fn", "struct": "struct", "enum": "enum", "trait": "trait", "impl": "impl", "match": "match", "case": "case", "if": "if", "elif": "elif", "else": "else", "for": "for", "while": "while", "in": "in", "and": "and", "or": "or", "not": "not", "return": "return", "break": "break", "continue": "continue", "import": "import", "from": "from", "pub": "pub", "as": "as", "spawn": "spawn", "chan": "chan", "send": "send", "recv": "recv", "select": "select", "true": "true", "false": "false", "null": "null", "None": "null", "self": "self", "capture": "capture", "extern": "extern"}  # noqa
 
 # ---------- 控制字符表（0x01-0x1f 除 \n\t\r\0，0x7f-0x9f） ----------
 # 单行字符串拼接 61 个控制字符（顺序即码点映射基准，见 ctrl_codepoint）
-let CTRL_ALL = "\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}\u{8}\u{b}\u{c}\u{e}\u{f}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1a}\u{1b}\u{1c}\u{1d}\u{1e}\u{1f}\u{7f}\u{80}\u{81}\u{82}\u{83}\u{84}\u{85}\u{86}\u{87}\u{88}\u{89}\u{8a}\u{8b}\u{8c}\u{8d}\u{8e}\u{8f}\u{90}\u{91}\u{92}\u{93}\u{94}\u{95}\u{96}\u{97}\u{98}\u{99}\u{9a}\u{9b}\u{9c}\u{9d}\u{9e}\u{9f}"
+let CTRL_ALL = "\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}\u{8}\u{b}\u{c}\u{e}\u{f}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1a}\u{1b}\u{1c}\u{1d}\u{1e}\u{1f}\u{7f}\u{80}\u{81}\u{82}\u{83}\u{84}\u{85}\u{86}\u{87}\u{88}\u{89}\u{8a}\u{8b}\u{8c}\u{8d}\u{8e}\u{8f}\u{90}\u{91}\u{92}\u{93}\u{94}\u{95}\u{96}\u{97}\u{98}\u{99}\u{9a}\u{9b}\u{9c}\u{9d}\u{9e}\u{9f}"  # noqa
 
 # ---------- 基础字符操作 ----------
 def peek():
@@ -757,7 +757,7 @@ def check_edition(src):
     let parts = t.split(" ")
     if len(parts) >= 3 and parts[0] == "#" and parts[1] == "px":
         let year_s = parts[2]
-        if len(year_s) == 4 and is_digit(year_s[0]) and is_digit(year_s[1]) and is_digit(year_s[2]) and is_digit(year_s[3]):
+        if len(year_s) == 4 and is_digit(year_s[0]) and is_digit(year_s[1]) and is_digit(year_s[2]) and is_digit(year_s[3]):  # noqa
             let year = int(year_s)
             if year > 2026:
                 err("E-EDITION", "源码声明 edition px " + year_s + " 高于当前工具链支持（px 2026），请升级编译器")
