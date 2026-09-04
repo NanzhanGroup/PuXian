@@ -142,7 +142,7 @@ jobs:
           path: /opt/muslcc/${{ steps.musl-map.outputs.DIR }}
           key: muslcc-${{ matrix.arch }}-20211120
 
-      - name: 下载 musl 工具链（缓存未命中，带重试与完整性校验）
+      - name: 下载 musl 工具链（缓存未命中，curl --ipv4 + python 双路 + 重试校验）
         if: steps.cache-musl.outputs.cache-hit != 'true'
         run: |
           sudo mkdir -p /opt/muslcc && sudo chown "$USER" /opt/muslcc
@@ -150,34 +150,51 @@ jobs:
           ok=0
           for i in 1 2 3 4 5; do
             echo "── 下载尝试 $i/5: $URL"
-            set +e
-            curl -fL -A "Mozilla/5.0 (X11; Linux x86_64) puxian-ci" \
-              --retry 2 --retry-all-errors --connect-timeout 20 --max-time 900 \
-              -w 'HTTP:%{http_code} SIZE:%{size_download} SPEED:%{speed_download}\n' \
-              -o /tmp/cc.tgz "$URL" 2>/tmp/cc.err
-            rc=$?
-            set -e
-            if [ $rc -eq 0 ] && [ -s /tmp/cc.tgz ] && tar tzf /tmp/cc.tgz >/dev/null 2>&1; then
-              echo "✅ 第 $i 次下载并校验通过（$(du -h /tmp/cc.tgz | cut -f1)）"
+            # 路 1：curl 强制 IPv4
+            if curl -4 -fL -A "Mozilla/5.0 (X11; Linux x86_64) puxian-ci" \
+                --retry 2 --retry-all-errors --connect-timeout 20 --max-time 900 \
+                -o /tmp/cc.tgz "$URL" 2>/tmp/cc.err \
+               && [ -s /tmp/cc.tgz ] \
+               && tar tzf /tmp/cc.tgz >/dev/null 2>&1; then
+              echo "✅ curl 路下载成功（$(du -h /tmp/cc.tgz | cut -f1)）"
+              ok=1
+              break
+            fi
+            rc1=$?
+            # 路 2：python urllib（绕 curl/TLS/网络栈差异）
+            if ! python3 - "$URL" <<'PYEOF' 2>/tmp/py.err
+import sys, urllib.request, os
+url = sys.argv[1]
+req = urllib.request.Request(url, headers={'User-Agent': 'puxian-ci'})
+data = urllib.request.urlopen(req, timeout=900).read()
+open('/tmp/cc.tgz', 'wb').write(data)
+PYEOF
+            then
+              echo "  ⚠️ python 路也失败"
+              {
+                echo "## musl 工具链下载诊断（第 $i 次）"
+                echo "- curl rc=$rc1"
+                echo "- curl 错误: $(head -c 400 /tmp/cc.err 2>/dev/null | tr '\n' ' ')"
+                echo "- python 错误: $(head -c 400 /tmp/py.err 2>/dev/null | tr '\n' ' ')"
+                curl -4 -sI --connect-timeout 10 -o /dev/null -w 'musl.cc HTTP:%{http_code} time:%{time_total}s ip:%{remote_ip}\n' "https://musl.cc/aarch64-linux-musl-cross.tgz" 2>&1 || echo "musl.cc 自检失败"
+                getent ahosts musl.cc | head -4 || echo "DNS 解析失败"
+              } >> "$GITHUB_STEP_SUMMARY"
+              rm -f /tmp/cc.tgz
+              sleep $((i * 8))
+              continue
+            fi
+            if [ -s /tmp/cc.tgz ] && tar tzf /tmp/cc.tgz >/dev/null 2>&1; then
+              echo "✅ python 路下载成功（$(du -h /tmp/cc.tgz | cut -f1)）"
               ok=1
               break
             fi
             {
               echo "## musl 工具链下载诊断（第 $i 次）"
-              echo "- rc=$rc"
-              echo "- 目标: $URL"
-              echo "- 错误输出:"
-              echo '```'
-              head -c 800 /tmp/cc.err 2>/dev/null | tr '\n' ' '
-              echo ''
-              echo '```'
-              echo "- 本机网络自检:"
-              curl -sI --connect-timeout 10 -o /dev/null -w 'musl.cc HTTP:%{http_code} time:%{time_total}s ip:%{remote_ip}\n' "https://musl.cc/aarch64-linux-musl-cross.tgz" 2>&1 || echo "musl.cc 自检失败"
-              getent hosts musl.cc || echo "DNS 解析失败"
+              echo "- python 下载后校验失败"
+              echo "- 文件大小: $(stat -c%s /tmp/cc.tgz 2>/dev/null || echo NA)"
             } >> "$GITHUB_STEP_SUMMARY"
-            echo "::error::下载失败 rc=$rc"
             rm -f /tmp/cc.tgz
-            sleep $((i * 10))
+            sleep $((i * 8))
           done
           [ "$ok" = 1 ] || { echo "❌ 多次尝试仍无法下载 musl 工具链: $URL"; exit 1; }
           tar xzf /tmp/cc.tgz -C /opt/muslcc
