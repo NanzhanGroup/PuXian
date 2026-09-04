@@ -1,0 +1,15 @@
+# ============================================================
+# upstream.pxml —— app.pxml 的 include 分片
+# include 语义：整个文件解析为 dict，作为 upstream 键的值
+# ============================================================
+
+name = "primary-upstream"
+endpoint = "http://10.0.0.8:9000"
+timeout = 3s
+retries = 3
+weight = 10
+nodes = [
+    { host = "10.0.0.1", port = 9000, weight = 5 },
+    { host = "10.0.0.2", port = 9000, weight = 3 },
+    { host = "10.0.0.3", port = 9000, weight = 2 },
+]
