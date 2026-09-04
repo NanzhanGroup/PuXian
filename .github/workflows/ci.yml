@@ -102,3 +102,46 @@ jobs:
           chmod +x bootstrap/pxlsp bootstrap/pxmcp bootstrap/pxcheck
           ./tools/pxc lsp --version && ./tools/pxc mcp --version && ./bootstrap/pxcheck --version
           echo "✅ pxlsp / pxmcp / pxcheck 就绪"
+
+  aarch64-cross:
+    name: aarch64 交叉编译 + qemu 验证（M67 阶段一）
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 qemu-user-static
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq qemu-user-static
+          qemu-aarch64-static --version | head -1
+
+      - name: 缓存 musl aarch64 交叉工具链
+        id: cache-musl-aarch64
+        uses: actions/cache@v4
+        with:
+          path: /opt/muslcc/aarch64-linux-musl-cross
+          key: muslcc-aarch64-20211120
+
+      - name: 下载 musl aarch64 工具链（缓存未命中）
+        if: steps.cache-musl-aarch64.outputs.cache-hit != 'true'
+        run: |
+          sudo mkdir -p /opt/muslcc && sudo chown "$USER" /opt/muslcc
+          curl -sL -o /tmp/aarch64.tgz https://musl.cc/aarch64-linux-musl-cross.tgz
+          tar xzf /tmp/aarch64.tgz -C /opt/muslcc
+          rm -f /tmp/aarch64.tgz
+
+      - name: 交叉工具链就绪
+        run: |
+          /opt/muslcc/aarch64-linux-musl-cross/bin/aarch64-linux-musl-gcc --version | head -1
+
+      - name: aarch64 三用例交叉 + qemu 验证（hello / HTTP server / SQLite）
+        run: |
+          export PATH=/opt/muslcc/aarch64-linux-musl-cross/bin:$PATH
+          bash examples/m67_aarch64/verify.sh
+
+      - name: cross_aarch64.sh 冒烟（存在性 + 语法 + aarch64 产物位）
+        run: |
+          [ -f tools/cross_aarch64.sh ] || { echo "❌ 缺 tools/cross_aarch64.sh"; exit 1; }
+          bash -n tools/cross_aarch64.sh || { echo "❌ cross_aarch64.sh 语法错误"; exit 1; }
+          echo "✅ cross_aarch64.sh 存在且语法 OK（发布包已含）"

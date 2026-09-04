@@ -1,0 +1,32 @@
+# ============================================================
+# http_a64.px —— M67 阶段一：aarch64 交叉 HTTP server 验证（用例 2/3）
+# ------------------------------------------------------------
+# 服务端：手写极简 HTTP/1.1（tcp_listen/tcp_accept/read/write，
+#         对齐 m58 serve.px 嵌入式裸响应模式，零依赖、--no-quic 无影响）。
+# verify.sh 以 qemu-aarch64 后台运行本二进制，宿主 curl 断言 200 + body。
+# 构建同 hello_a64.px（--no-quic --cc aarch64-...）。
+# ============================================================
+def send_ok(cfd, body):
+    var head = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n"
+    head = head + "Content-Length: " + str(len(body)) + "\r\n"
+    head = head + "Connection: close\r\nServer: puxian-m67-aarch64\r\n\r\n"
+    write(cfd, head + body)
+    close(cfd)
+def main():
+    var port = 18991
+    var lfd = tcp_listen(port)
+    if lfd == -1:
+        print("FAIL: tcp_listen(" + str(port) + ") errno=" + str(os_errno()))
+        exit(1)
+    print("READY " + str(port))
+    while true:
+        var cfd = tcp_accept(lfd)
+        if cfd == -1:
+            sleep(100)
+            continue
+        var reqb = read(cfd, 4096)
+        var body = "m67-aarch64-http-ok\n"
+        if type(reqb) != "bytes":  # 读失败也照常回 200（自检只需连通性）
+            send_ok(cfd, body)
+            continue
+        send_ok(cfd, body)
