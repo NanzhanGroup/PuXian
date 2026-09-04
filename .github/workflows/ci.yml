@@ -142,11 +142,23 @@ jobs:
           path: /opt/muslcc/${{ steps.musl-map.outputs.DIR }}
           key: muslcc-${{ matrix.arch }}-20211120
 
-      - name: 下载 musl 工具链（缓存未命中）
+      - name: 下载 musl 工具链（缓存未命中，带重试与完整性校验）
         if: steps.cache-musl.outputs.cache-hit != 'true'
         run: |
           sudo mkdir -p /opt/muslcc && sudo chown "$USER" /opt/muslcc
-          curl -sL -o /tmp/cc.tgz "${{ steps.musl-map.outputs.URL }}"
+          URL="${{ steps.musl-map.outputs.URL }}"
+          ok=0
+          for i in 1 2 3 4 5; do
+            echo "── 下载尝试 $i/5: $URL"
+            curl -fL --retry 3 --retry-all-errors --connect-timeout 20 --max-time 900 -o /tmp/cc.tgz "$URL" \
+              && [ -s /tmp/cc.tgz ] \
+              && tar tzf /tmp/cc.tgz >/dev/null 2>&1 && { ok=1; break; }
+            echo "⚠️  第 $i 次下载/校验失败，5 秒后重试"
+            rm -f /tmp/cc.tgz
+            sleep 5
+          done
+          [ "$ok" = 1 ] || { echo "❌ 多次尝试仍无法下载 musl 工具链: $URL"; exit 1; }
+          echo "✅ 下载并校验通过（$(du -h /tmp/cc.tgz | cut -f1)）"
           tar xzf /tmp/cc.tgz -C /opt/muslcc
           rm -f /tmp/cc.tgz
 
