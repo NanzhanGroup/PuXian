@@ -99,27 +99,31 @@ def main():
 
 ---
 
-## ARM64 Linux Cross-Compilation (M67 · aarch64 first-class)
+## Multi-Arch Cross-Compilation (M67: ARM64 / ARMv7 / RISC-V)
 
-PuXian builds are **zero-dependency static single binaries**, a natural fit for ARM64 Linux
-devices (Raspberry Pi / gateways / edge boxes): cross-compile on an x86 dev machine and copy
-the binary to the device — no runtime or dependencies to install.
+PuXian builds are **zero-dependency static single binaries**, a natural fit for Raspberry Pi /
+gateways / edge boxes on Linux: cross-compile on an x86 dev machine and copy the binary to the
+device — no runtime or dependencies to install. Officially supported: **x86_64 (native) +
+aarch64 + armv7(armhf) + riscv64** (GC conservative scanning is arch-abstracted, see spec §8.21).
 
-### 1. Get the musl cross toolchain (two ways)
+### 1. Get the musl cross toolchain (two ways per arch)
 
 ```bash
 # Option A (recommended): official musl.cc tarball (no root needed)
+#   aarch64 → aarch64-linux-musl-cross.tgz       ARM64 devices (RPi 4/5, gateways)
+#   armv7   → armv7l-linux-musleabihf-cross.tgz  32-bit ARM (RPi 2/3, old industrial boxes)
+#   riscv64 → riscv64-linux-musl-cross.tgz       RISC-V (VisionFive2, xiangshan/xuantie)
 curl -LO https://musl.cc/aarch64-linux-musl-cross.tgz
 tar xzf aarch64-linux-musl-cross.tgz
 export PATH=$PWD/aarch64-linux-musl-cross/bin:$PATH
 
-# Option B: docker (messense/musl-cross)
+# Option B: docker (messense/musl-cross; images aarch64 / armv7l / riscv64)
 docker run --rm -v $PWD:/src -w /src messense/musl-cross:aarch64 \
   sh -c 'aarch64-linux-musl-gcc --version'
 ```
 
-> **Why not apt's `gcc-aarch64-linux-gnu`?** It is a glibc cross compiler: aarch64 cross headers
-> are missing (you would need `libc6-dev-arm64-cross`) and mixing with the repo's prebuilt **musl**
+> **Why not apt's `gcc-aarch64-linux-gnu`?** It is a glibc cross compiler: cross headers are
+> missing (you would need `libc6-dev-arm64-cross`) and mixing with the repo's prebuilt **musl**
 > static libs is an ABI risk. The official line only backs the musl path (musl.cc / docker).
 
 ### 2. Cross-compile with one command
@@ -132,28 +136,37 @@ docker run --rm -v $PWD:/src -w /src messense/musl-cross:aarch64 \
   --sqlite-obj runtime/third_party/sqlite3/sqlite3-aarch64.o \
   your_app.px
 # Output: your_app/build/your_app — ELF ARM aarch64 static single binary
+# armv7 / riscv64: build the target libs first with tools/cross_multiarch.sh (same as CI):
+#   tools/cross_multiarch.sh --arch armv7   --outdir /opt/px-multiarch/armv7
+#   tools/cross_multiarch.sh --arch riscv64 --outdir /opt/px-multiarch/riscv64
+# then pass --mbedtls-lib /opt/px-multiarch/<a>/mbedtls/lib-<a> --sqlite-obj .../sqlite3-<a>.o
+# Note: riscv64 gets -no-pie automatically (musl static-pie RISC-V read-only-segment limit)
 ```
-
-Use `tools/cross_aarch64.sh` only when you need to rebuild the cross libs yourself
-(the prebuilt aarch64 libs in the repo usually suffice).
 
 ### 3. Verify & run (file + qemu)
 
 ```bash
-file your_app/build/your_app                  # "ELF 64-bit ..., ARM aarch64, ..., statically linked"
-qemu-aarch64-static your_app/build/your_app   # no hardware? qemu-user runs it directly
+file your_app/build/your_app     # ARM aarch64 (aarch64) / ARM EABI5 32-bit (armv7) / RISC-V (riscv64)
+qemu-aarch64-static your_app/build/your_app    # no hardware? qemu-user runs it directly
+qemu-arm-static ... / qemu-riscv64-static ...  # same for armv7 / riscv64
 ```
 
-### 4. One-shot verification (same as CI, 3 use cases)
+### 4. One-shot verification (same as CI 4-arch matrix)
 
 ```bash
-bash examples/m67_aarch64/verify.sh   # needs aarch64-linux-musl-gcc + qemu-aarch64-static on PATH
-# hello / HTTP server / SQLite: cross-compile → file aarch64 assert → qemu run assert, all green
+# aarch64 first-class (3 use-cases; needs cross CC + qemu-aarch64-static)
+bash examples/m67_aarch64/verify.sh
+# 4-arch matrix: x86_64 native (incl. gc_stress concurrent GC stress) + aarch64/armv7/riscv64 qemu
+bash examples/m67_multiarch/verify.sh                # all four
+bash examples/m67_multiarch/verify.sh --arch aarch64 # single arch
 ```
 
-> **Notes**: cross builds default to `--no-quic` (ngtcp2/openssl-quictls have no aarch64 prebuilt
-> libs; edge scenarios don't need H3 and trimming is semantics-neutral, verified identical to the
-> x86 trimmed build). musl emits static-pie by default — that is normal and runs under qemu.
+> **Notes**: cross builds default to `--no-quic` (ngtcp2/openssl-quictls only have x86_64 prebuilt
+> libs; edge scenarios don't need H3 and trimming is semantics-neutral). aarch64 libs ship in the
+> repo; armv7/riscv64 libs are built by cross_multiarch.sh (script included in the release).
+> musl emits static-pie by default — that is normal and runs under qemu. qemu-user is too slow for
+> concurrent-GC stress → new-arch GC is verified by arch probe + native concurrency + real device
+> (spec §8.21).
 
 ---
 
@@ -278,7 +291,7 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 | M-B9a | Retire the Rust version + wire up CI + bootstrap chain | `tools/pxc` fully usable end-to-end; CI four jobs |
 | M-B9b | First production application (dogfooding validation) | ✅ moved to a separate private repo |
 
-### Native Development (M41–M65, post-bootstrap development in PuXian itself — all ✅)
+### Native Development (M41–M67, post-bootstrap development in PuXian itself — all ✅)
 
 | Milestone | Scope |
 |---|---|
@@ -300,6 +313,7 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 | M64 | **Toolchain self-hosting restored**: `pxc fmt / lint / doc / test / bench` five tools self-hosted (keep-lexer base + whole-repo convergence, net -318 lines) |
 | M65 | **LSP / MCP self-hosted**: `pxc lsp` (diagnostics/completion/definition/hover) + `pxc mcp` (8 tools for AI agents) — **spec §12 toolchain fully self-hosted** |
 | M66 | **wsAgent runtime primitives + stdlib adoption** (qg-issue 01–06): unix_connect + os 5-tuple + os_capture/os_popen/os_kill group + write_file mode + zip_unpack password (zipcrypto/AES-256) → std.yaml / std.pxml / std.lunar (lunar calendar), spec §8.20 |
+| M67 | **Multi-arch first-class support** (qg-issue 07): cross-compile docs section + `runtime/arch.h` GC arch abstraction (x86_64/aarch64 extracted + new **armv7/riscv64** mcontext) + `cross_multiarch.sh` + CI **4-arch matrix** (x86_64 native GC stress + aarch64/armv7/riscv64 qemu 3 use-cases), spec §8.21 |
 
 ---
 

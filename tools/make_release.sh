@@ -6,7 +6,7 @@
 #       （如外部私有应用 ws-web 的维护者）只需"用编译器开发"，无需持有源码树。
 #       本脚本打一个最小可独立开发发布包：
 #         编译器二进制（bootstrap/pxc pxi pxl pxpar）
-#       + 工具入口（tools/pxc pxpkg routegen cross_aarch64.sh）
+#       + 工具入口（tools/pxc pxpkg routegen cross_aarch64.sh cross_multiarch.sh）
 #       + 构建必需 C 依赖（runtime/ 全树，含 mbedtls / sqlite3 / miniz /
 #         ngtcp2 / openssl 静态库与头文件，x86_64 + aarch64 双架构）
 #       + 标准库（stdlib/，import std.* 必需）
@@ -98,7 +98,7 @@ PuXian 开发应用"，不提供源码改动/推送通道。源码见开源仓�
 |---|---|
 | tools/pxc | 工具链入口（build/run/lex/parse/fmt/lint/doc/test/bench/lsp/mcp/--version/help） |
 | tools/pxpkg | 包管理器（M45 registry） |
-| tools/routegen / cross_aarch64.sh | 路由生成 / aarch64 交叉库构建（可选） |
+| tools/routegen / cross_aarch64.sh / cross_multiarch.sh | 路由生成 / aarch64 交叉库构建 / 多架构（aarch64·armv7·riscv64）交叉库构建（可选，M67） |
 | bootstrap/pxc pxi pxl pxpar | 自举编译器 / 解释器 / lexer / parser 二进制 |
 | bootstrap/pxfmt pxlint pxdoc pxtest pxbench pxlsp pxmcp pxcheck | 自举工具链（fmt/lint/doc/test/bench/lsp/mcp/diagnostics） |
 | runtime/ | 构建必需 C 依赖（runtime*.c/h + mbedtls + miniz + sqlite3 + ngtcp2 + openssl，x86_64 与 aarch64 库均在） |
@@ -130,7 +130,11 @@ tar xzf ${NAME}.tar.gz && cd ${NAME}
   runtime 侧 -DPX_NO_QUIC），产物更小、无第三方 QUIC 依赖（嵌入式/边缘设备场景）。
 - \`pxc build --cc aarch64-linux-musl-gcc --mbedtls-lib runtime/mbedtls/lib-aarch64
   --sqlite-obj runtime/third_party/sqlite3/sqlite3-aarch64.o --no-quic <app.px>\`：
-  aarch64 交叉编译（本包已含目标架构 mbedtls/sqlite3 静态库）。
+  aarch64 交叉编译（本包已含目标架构 mbedtls/sqlite3/zlib 静态库，直接可编）。
+- armv7 / riscv64 交叉：先 \`tools/cross_multiarch.sh --arch armv7 --outdir <dir>\`（或
+  \`--arch riscv64\`）现编目标库（本包已含脚本），再 \`pxc build --cc <arch>-linux-musl-gcc
+  --mbedtls-lib <dir>/mbedtls/lib-<arch> --sqlite-obj <dir>/sqlite3/sqlite3-<arch>.o --no-quic <app.px>\`；
+  riscv64 自动加 -no-pie（M67）。
 - \`pxc help\`：完整用法。
 
 ## 能力面（本包随附）

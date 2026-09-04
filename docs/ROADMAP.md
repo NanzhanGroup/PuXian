@@ -49,6 +49,7 @@
 | M64 | **工具链自举恢复**（fmt/lint/test/bench/doc，docs/M64_PLAN.md）：keep-lexer 底座（fmtlexer.px 保留行结构，不碰 pxlexer）→ `pxc fmt`（确定性格式化/幂等）→ `pxc lint`（L001–L008 AST 驱动）→ fmt 全仓收敛（selfhost+tools+stdlib 净 -318 行，B.c==golden 逐字节 + capability 253 PASS）→ `pxc doc/test/bench`（## 注释→Markdown / 顶层 test_xxx 子进程编排 / N×R 计时）+ 收尾欠债清理（CI 质量门、stdlib 收敛、QUIC/H3 内建白名单、TypeConst 收集、L007 noqa） |
 | M65 | **LSP / MCP 自举**（spec §12 收官 + §12.1 AI agent 协议，docs/M65_PLAN.md）：jsonrpc_core.px JSON-RPC/Content-Length 底座（粘包/半包自测）+ runtime `os_spawn_capture`（唯一补丁，LSP 诊断与 MCP 工具子进程化共用）→ `pxc lsp`（生命周期/文档同步/publishDiagnostics 子进程 pxcheck 深度诊断 + completion/definition/hover，lsp_core 符号层）→ `pxc mcp`（tools/list 8 工具 + tools/call 崩溃隔离）→ spec §12 8 工具全自举勾选全绿 |
 | M66 | **自举 wsAgent runtime 原语补全 + stdlib 收编**（qg-issue 01–06 全量合入，docs/M66_PLAN.md）：L0 11 项 native —— unix_connect（AF_UNIX 裸连接）+ os 五件套（os_exec 进程替换 / os_rename 原子覆盖 / os_remove_all 递归删防删根 / os_random_hex / os_file_sha256）+ os_capture（双管道分离捕获，G6 which 用法覆盖）+ os_popen（双向管道）+ os_kill group 组杀 + write_file/append_file mode + zip_unpack 密码（zipcrypto + WinZip AES-256），pxi 白名单三处同步重建 → L1 收编第 7/8/9 个标准库：std.yaml（YAML 子集）/ std.pxml（PXML 规范进 docs/PXML.md，dogfood 闭环）/ std.lunar（1900-2100 公农历互转，农历生日卖点，ws-todo lunar:M-D 落点）→ spec §8.20 + ROADMAP/README/CI 生态收口 |
+| M67 | **多架构一等支持：aarch64 交叉 + GC 架构抽象 + armv7/riscv64**（qg-issue 07 两阶段，docs/M67_PLAN.md）：阶段一 aarch64 一等（README 中英「交叉编译」章节 + CI aarch64 job + examples/m67_aarch64 hello/http/sqlite 三用例 qemu 全绿）→ 阶段二 runtime GC 架构抽象（3 处架构 #if 迁出为 `runtime/arch.h` 统一接口 arch_read_sp/arch_scan_registers/arch_uc_sp + 分架构头 x86_64/aarch64 原样迁出 + 新增 **armv7(armhf)/riscv64** mcontext，GC 主逻辑不再见 #if）+ `pxc` riscv64 自动 -no-pie + zlib 探测三架构 + `cross_multiarch.sh`（--arch 三件套现编，cross_aarch64 薄包装）→ CI **四档矩阵**（x86_64 native 含 gc_stress 并发 GC 压力 + aarch64/armv7/riscv64 qemu 各 hello/http/sqlite）→ 真机侧 qemu-user 并发 GC 限制留档 |
 > **主线外已占用编号**（非 ROADMAP 功能里程碑，已记录于 CHANGELOG，勿复用）：
 > **M55** = issue #2 并发安全 hotfix（修复 · M55）；**M56** = 外部生产应用配套 runtime
 > `http_unix` 内建（新增 · M56）。
@@ -58,7 +59,7 @@
 ### 候选主线排期（由 docs/GAP_ANALYSIS.md 驱动，按建议顺序）
 
 > 定位：未来主线的候选池。立项流程：出 `docs/M*_PLAN.md` 规划供审 → 审批后按子步落地
-> （verify 回归 + 文档收口，见「六、执行约定」）。当前（M66 已闭环，见上表 + CHANGELOG）
+> （verify 回归 + 文档收口，见「六、执行约定」）。当前（M67 已闭环，见上表 + CHANGELOG）
 > 候选池仅剩 FFI 外部库绑定验证（游戏窗口线 0→1 前提）与真板物理回归（需硬件）。
 
 | 里程碑 | 主题 | 规模 / 前置 |

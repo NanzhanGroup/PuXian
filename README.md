@@ -99,54 +99,67 @@ def main():
 
 ---
 
-## ARM64 Linux 交叉编译（M67 · aarch64 一等支持）
+## 多架构交叉编译（M67：ARM64 / ARMv7 / RISC-V）
 
-PuXian 编译产物是**零依赖静态单二进制**，天然适合树莓派 / 网关 / 边缘盒子等 ARM64 Linux 设备——在 x86 开发机上交叉编译，产物拷到设备即可运行（免装运行时/依赖）。
+PuXian 编译产物是**零依赖静态单二进制**，天然适合树莓派 / 网关 / 边缘盒子等 Linux 设备——在 x86 开发机上交叉编译，产物拷到设备即可运行（免装运行时/依赖）。官方支持 **x86_64（native）+ aarch64 + armv7(armhf) + riscv64** 四架构（GC 保守扫描已架构抽象，见 spec §8.21）。
 
-### 1. 获取 musl 交叉工具链（两条路）
+### 1. 获取 musl 交叉工具链（每条路两选）
 
 ```bash
 # 路 A（推荐）：musl.cc 官方 tarball（免 root，解压即用）
+#   aarch64 → aarch64-linux-musl-cross.tgz       ARM64 设备（树莓派 4/5、网关、手机派）
+#   armv7   → armv7l-linux-musleabihf-cross.tgz  32 位 ARM（树莓派 2/3、老工业盒子）
+#   riscv64 → riscv64-linux-musl-cross.tgz       RISC-V（香山/玄铁、VisionFive2、信创）
 curl -LO https://musl.cc/aarch64-linux-musl-cross.tgz
 tar xzf aarch64-linux-musl-cross.tgz
 export PATH=$PWD/aarch64-linux-musl-cross/bin:$PATH
 
-# 路 B：docker（messense/musl-cross）
+# 路 B：docker（messense/musl-cross，镜像名 aarch64 / armv7l / riscv64）
 docker run --rm -v $PWD:/src -w /src messense/musl-cross:aarch64 \
   sh -c 'aarch64-linux-musl-gcc --version'
 ```
 
-> **为什么不用 apt 的 `gcc-aarch64-linux-gnu`？** 它是 glibc 交叉编译器：缺 aarch64 交叉头文件（需另装 `libc6-dev-arm64-cross`），且与仓库预置的 **musl** 静态库混链有 ABI 风险。官方只背书 musl 链路（musl.cc / docker 两路）。
+> **为什么不用 apt 的 `gcc-aarch64-linux-gnu`？** 它是 glibc 交叉编译器：缺交叉头文件（需另装
+> `libc6-dev-arm64-cross`），且与仓库预置的 **musl** 静态库混链有 ABI 风险。官方只背书 musl 链路。
 
 ### 2. 一条命令交叉编译
 
 ```bash
-# aarch64 交叉静态库已随仓库预置（runtime/mbedtls/lib-aarch64 +
-# sqlite3-aarch64.o + zlib lib-aarch64），拿到交叉 CC 即可编，无需自编库
+# aarch64 交叉静态库已随仓库预置（runtime/mbedtls/lib-aarch64 + sqlite3-aarch64.o + zlib lib-aarch64）
 ./tools/pxc build --no-quic --cc aarch64-linux-musl-gcc \
   --mbedtls-lib runtime/mbedtls/lib-aarch64 \
   --sqlite-obj runtime/third_party/sqlite3/sqlite3-aarch64.o \
   your_app.px
 # 产物：your_app/build/your_app —— ELF ARM aarch64 静态单二进制
+# armv7 / riscv64：先用 tools/cross_multiarch.sh --arch <a> 现编目标库（CI 同款）再同法编译：
+#   tools/cross_multiarch.sh --arch armv7   --outdir /opt/px-multiarch/armv7
+#   tools/cross_multiarch.sh --arch riscv64 --outdir /opt/px-multiarch/riscv64
+# 然后 --mbedtls-lib /opt/px-multiarch/<a>/mbedtls/lib-<a> --sqlite-obj .../sqlite3-<a>.o
+# 注：riscv64 由 pxc 自动加 -no-pie（musl static-pie 的 RISC-V 只读段重定位限制）
 ```
-
-需要自编交叉库时才用 `tools/cross_aarch64.sh`（仓库预置 aarch64 库通常已够）。
 
 ### 3. 校验与运行（file + qemu）
 
 ```bash
-file your_app/build/your_app          # "ELF 64-bit ..., ARM aarch64, ..., statically linked"
-qemu-aarch64-static your_app/build/your_app   # 无硬件时 qemu-user 直接跑
+file your_app/build/your_app     # ARM aarch64（aarch64）/ ARM EABI5 32 位（armv7）/ RISC-V（riscv64）
+qemu-aarch64-static your_app/build/your_app    # 无硬件时用 qemu-user 直跑
+qemu-arm-static ... / qemu-riscv64-static ...  # armv7 / riscv64 同理
 ```
 
-### 4. 一键验证（CI 同款，三用例）
+### 4. 一键验证（CI 四档矩阵同款）
 
 ```bash
-bash examples/m67_aarch64/verify.sh   # 需 aarch64-linux-musl-gcc + qemu-aarch64-static 在 PATH
-# hello / HTTP server / SQLite 三用例：交叉编译 → file 断言 aarch64 → qemu 运行断言全绿
+# aarch64 一等（三用例，需交叉 CC + qemu-aarch64-static）
+bash examples/m67_aarch64/verify.sh
+# 四档矩阵：x86_64 native（含 gc_stress 并发 GC 压力）+ aarch64/armv7/riscv64 qemu
+bash examples/m67_multiarch/verify.sh                # 全四档
+bash examples/m67_multiarch/verify.sh --arch aarch64 # 单档
 ```
 
-> **要点**：交叉编译默认配 `--no-quic`（H3/QUIC 的 ngtcp2/openssl-quictls 无 aarch64 预编译库，边缘场景不依赖 H3，语义不受裁剪影响，与 x86 裁剪版一致）；musl 默认产出 static-pie 属正常形态（qemu 可跑）。
+> **要点**：交叉编译默认配 `--no-quic`（H3/QUIC 的 ngtcp2/openssl-quictls 只有 x86_64 预编译库，
+> 边缘场景不依赖 H3，语义不受裁剪影响，与 x86 裁剪版一致）；aarch64 库仓库预置免自编，armv7/riscv64
+> 库用 cross_multiarch.sh 现编（发布包含该脚本）；musl 默认产出 static-pie 属正常形态（qemu 可跑）；
+> qemu-user 下并发 GC 模拟开销大 → 新架构 GC 由 arch 探针 + native 并发 + 真机验证（spec §8.21）。
 
 ---
 
@@ -271,7 +284,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 | M-B9a | 退役 Rust 版 + 接入 CI + 引导链 | `tools/pxc` 全链路可用，CI 四 job |
 | M-B9b | 第一个生产应用（dogfooding 验证） | ✅ 已迁独立私有仓库维护 |
 
-### 原生开发（M41–M65，自举后 PuXian 自身开发，全部 ✅）
+### 原生开发（M41–M67，自举后 PuXian 自身开发，全部 ✅）
 
 | 里程碑 | 内容 |
 |---|---|
@@ -293,6 +306,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 | M64 | **工具链自举恢复**：`pxc fmt / lint / doc / test / bench` 五项自举（keep-lexer 底座 + 全仓收敛 + 净 -318 行） |
 | M65 | **LSP / MCP 自举**：`pxc lsp`（诊断/补全/跳转/悬停）+ `pxc mcp`（8 工具供 AI agent 调用）—— **spec §12 工具链全自举收官** |
 | M66 | **自举 wsAgent runtime 原语补全 + stdlib 收编**（qg-issue 01–06）：unix_connect + os 五件套 + os_capture/os_popen/os_kill group + write_file mode + zip_unpack 密码（zipcrypto/AES-256）→ 收编 std.yaml / std.pxml / std.lunar（农历）三个标准库，spec §8.20 |
+| M67 | **多架构一等支持**（qg-issue 07）：README 交叉编译章节 + `runtime/arch.h` GC 架构抽象（x86_64/aarch64 迁出 + 新增 **armv7/riscv64** mcontext）+ `cross_multiarch.sh` + CI **四档矩阵**（x86_64 native GC 压力 + aarch64/armv7/riscv64 qemu 三用例），spec §8.21 |
 
 ---
 

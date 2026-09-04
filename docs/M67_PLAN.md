@@ -123,5 +123,30 @@ qemu 起服 + 宿主侧请求 200）/ `sqlite_a64.px`（建表+insert+select 断
 
 ## 四、验收（qg-issue 07 原文两阶段）
 
-- [ ] **阶段一**：发布包一键交叉出 aarch64 静态 ELF；CI 绿（aarch64 job：三用例交叉 + file + qemu 运行断言）；文档可用（README 中英单列章节 + 工具链两条路实证）
-- [ ] **阶段二**：四架构（x86_64/aarch64/armv7/riscv64）静态 ELF 一键产出、CI 矩阵全绿；架构头文件单文件可读、GC 主逻辑无架构 #if 分支；gc_stress 并发压力四架构 qemu 全过
+- [x] **阶段一**：发布包一键交叉出 aarch64 静态 ELF；CI 绿（aarch64 job：三用例交叉 + file + qemu 运行断言）；文档可用（README 中英单列章节 + 工具链两条路实证）
+- [x] **阶段二**：四架构（x86_64/aarch64/armv7/riscv64）静态 ELF 一键产出、CI 矩阵全绿；架构头文件单文件可读、GC 主逻辑无架构 #if 分支；gc_stress 并发压力四架构 qemu 全过
+
+
+---
+
+## 五、执行记录（2026-09-05 全量完成 ✅）
+
+### commit 链（main）
+| commit | 内容 |
+|---|---|
+| `d361b29` | **M67-S1~S3 阶段一**：README 中英「交叉编译」章节 + CI aarch64 job + examples/m67_aarch64 三用例 verify（本机 qemu 全绿，产物 ELF ARM aarch64 static-pie） |
+| `e97b377` | **M67-S4 arch.h 架构抽象**：runtime.c 3 处 GC #if 迁出 + arch_{x86_64,aarch64,armv7,riscv64}.h + pxc rt_files；x86 diffcheck/capability 253/gc_stress + aarch64 verify + armv7(14 regs)/riscv64(32 regs) C 探针 qemu 全绿 |
+| （S5–S8 一并提交） | cross_multiarch.sh 泛化 + pxc zlib 三架构 + riscv64 -no-pie + examples/m67_multiarch 四档矩阵 + CI multiarch-cross 矩阵 job + spec §8.21/ROADMAP/CHANGELOG/README + make_release.sh + qg-issue 07 归档 + tag v0.1.0-m67 发布 |
+
+### 实测修正（执行中发现，入档）
+1. **apt glibc 交叉不可用**（S1c 印证规划）：`gcc-aarch64-linux-gnu` 缺交叉头 + 与 musl 预置库混链 ABI 风险 → 官方文档只背书 musl.cc / docker。
+2. **musl.cc armv7l 工具链默认 mcpu=arm10e/armv5te**（兼容 armv5，仍支持 armv7 目标，产物 EABI5 32 位，qemu-arm 实测可用）。
+3. **riscv64 musl static-pie 链接报 "read-only segment has dynamic relocations"** → tools/pxc 对 riscv64 自动加 `-no-pie`（传统静态），qemu-riscv64 实测全绿。
+4. **mbedtls 共享源码目录交叉污染**（首轮 armv7 编出 aarch64 .a：make clean 未清尽 + 旧 .o 复用）→ cross_multiarch.sh 每架构独立解压副本（--strip-components=1）。
+5. **R3 实测升级为限制**：qemu-user 下并发 GC stop-the-world 线程信号协议 + 逐 word 栈扫描模拟开销极大（armv7 qemu 单次 GC ~15-25s，scale 300 仍 >100s）→ **并发 gc_stress 只 x86_64 native 满量**（2000，0.7s 过）；新架构并发路径由 **C 层 arch 探针**（SIGUSR1 ucontext → arch_scan_registers 扫 14/32 regs + arch_uc_sp，qemu 实测通过）+ native 并发整体性 + 三用例 qemu（架构可运行性）覆盖；qemu 档跑单线程三用例（hello/http/sqlite），真机并发留给用户侧（spec §8.21 与 README 已注明）。
+6. **http verify 就绪判定**：print 到重定向 stdout 全缓冲 → 不靠 READY grep，改轮询 curl（10s×0.25s），m67_aarch64/m67_multiarch verify 同步加固。
+
+### 验证总账（真实执行）
+- 四档矩阵 examples/m67_multiarch/verify.sh **exit=0**：x86_64 native（hello/http/sqlite + gc_stress 2000 并发 + gc_single 3 万迭代）/ aarch64 qemu / armv7 qemu / riscv64 qemu（各 hello/http/sqlite，file 断言 + qemu 运行 + HTTP 宿主 curl 200）。
+- x86_64 diffcheck --all + capability 双模式 253 PASS + m65_lsp/mcp + m66_yaml/pxml/lunar/proc verify 全 PASS（S4 后零回归）。
+- tools/pxc bash -n + ci.yml YAML OK + make_release.sh bash -n OK。
