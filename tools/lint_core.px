@@ -259,6 +259,8 @@ def lc_is_def_stmt(ty):
         return true
     if ty == "ImplDef" or ty == "Import" or ty == "ExternDef":
         return true
+    if ty == "TypeConst":
+        return true
     return false
 # ---------- 语句遍历 ----------
 def lc_check_stmt(ctx, st, diags):
@@ -551,6 +553,8 @@ def lc_check_program(items, src, known, diags):
         if ty == "VarDecl":
             lc_dset(known, lc_unq(st[2]))
         elif ty == "ChanDecl":
+            lc_dset(known, lc_unq(st[1]))
+        elif ty == "TypeConst":
             lc_dset(known, lc_unq(st[1]))
         i += 1
     # 4) 每个顶层函数体（独立 ctx）+ 顶层非定义语句（共享 topctx 顺序执行）
