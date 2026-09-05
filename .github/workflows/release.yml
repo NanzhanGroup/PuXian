@@ -138,6 +138,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: 信任工作区（容器内 git safe.directory，规避 dubious ownership）
+        if: steps.gpgkey.outputs.ok == 'true'
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory '*'
+          echo "✅ safe.directory: $GITHUB_WORKSPACE (+ *)"
+
       - name: 导入签名私钥（CI 子密钥，headless 签名）
         if: steps.gpgkey.outputs.ok == 'true'
         env:
