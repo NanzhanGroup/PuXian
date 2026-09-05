@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+### M72 · AI 调试回路 + runtime bytes 增强（docs/M72_PLAN.md）✅
+
+> 立项（2026-09-06 用户指令，方案 A）：qg-issue **9**（print stdout 全缓冲——服务日志运行中不可见/崩溃前丢失）+ **10**（AI 诊断 D1 编译产物错误无行号 / D2 spawn 协程错误不隔离）+ **13-R1**（ws-backup PuXian 化前置：AES/HTTP 二进制硬缺口 GAP-BIN-1/2）**一批 runtime 立项**，一次自举重建共享成本；13-R2（ws-backup-px 业务）拆 M73。L0 runtime + 编译器诊断层，**不改语言语义**。
+> 回归：runtime.c/h + runtime_aes.c + selfhost（cg_stmt/codegen/interp/ibuiltin）改动 → 重链 bootstrap pxc/pxi + golden/compiler.c 与 codegen golden 重生成 + 自举证明 + diffcheck + examples/toolchain verify + native_index 防漂移。
+
+- **M72-S1 print 即时可见（Issue 9，commit 759fc4c）**：`bi_print` 行尾 `fflush(stdout)` → print/println 管道/journald/文件下**逐行实时**（不再攒 8KB、崩溃前不丢行），现有 .px **零改码**；新原生 **`flush()`**（显式刷 stdout/stderr）+ **`print_err(...)`**（渲染同 print 输出 stderr）；pxi ibuiltin 名单+dispatch 同步；native 281→283；实测 200 行间隔输出管道下 2s 已见 110 行。
+- **M72-S2 编译产物运行时错误源行号（Issue 10 D1，commit f77732f）**：cg_stmt 语句入口 wrapper 每条可执行语句（含 if/while/for 嵌套块）前插 `px_srcline(<源行>)` + codegen 函数入口插 `px_srcfunc(<函数名>)`；runtime `px_error` 打印 **`运行时错误 [函数 行N]: msg`**（pxi 解释器路径本就带行号不变）→「AI 不需要断点」等价物①：报错即定位源行；重链 bootstrap/pxc；实测嵌套 while 内 `len(null)` → `[foo 行5]`。
+- **M72-S3 spawn 协程错误隔离 + 崩溃现场（Issue 10 D2，commit 24a6e95）**：px_error 打印现场后若在 spawn 协程（setjmp 捕获点）→ longjmp 隔离、走 GC 注销路径安全退线程，**宿主继续**；主线程/无捕获点保持 exit(1) 带现场；`PX_SPAWN_ISOLATE=0` 关 → 回退原 exit 语义向后兼容；实测 worker 内错误 → `[worker 行3]` 现场 + `[px-spawn] 已隔离`，宿主全跑 rc=0。
+- **M72-S4 runtime bytes native（Issue 13 R1，commit 39a4d6c）**：**GAP-BIN-1** `aes_gcm_encrypt_bytes/decrypt_bytes`（str|bytes 取参含 \0 不截断；去 aes_is_utf8 限制——二进制明文可解出；输出 密文||tag 原始 bytes 与 Go crypto/aes-gcm 字节兼容）+ CBC `aes_encrypt_bytes/decrypt_bytes` 顺带同坑修复；**GAP-BIN-2** `http_request` body 收 str|bytes **长度感知**（Content-Length=bytes.len；body 独立发送顺带修复 16KB req 缓冲大 payload 溢出；http_unix 保持原样）；native 283→287；实测 runtime.c 577953B 二进制 GCM/CBC roundtrip + HTTP POST bytes 上传 sha256 逐字节一致。
+- **M72-S5 重建链 + 回归 + 文档收口**：golden/compiler.c（自举基准）与 codegen golden（s 系列 .c，S2 插桩后 C 产物变化）重生成；pxi 重链；自举证明 + diffcheck --all + examples/toolchain verify 全绿；ECOSYSTEM_GAPS §6（M72 已落地能力 D1-D4/B1-B2）；CHEATSHEET native 计数 281→287 + M72 诊断/bytes 注记；ROADMAP/README(.en)/qg-issue 同步；Issue 9/10 归档 done；Issue 13 R1 ✅（R2 → M73）。
+
 ### M71 · build 管线现代化 + AI 交付一条龙（docs/M71_PLAN.md）✅
 
 - **M71 立项（commit ae81443）**：四条合一 —— qg-issue 12（B1 build 无缓存全量 gcc / B2 交叉 5 flag 人肉串 / B3 Release 仅 x86_64 / B4 安装靠 PX_STDLIB）+ qg-issue 11（F4 结论过时）+ 用户点名 MCP `build` 第 9 工具（补「写→验→交付」闭环）；Issue 9/10（runtime 诊断，需 selfhost 重建）拆 **M72 候选**。

@@ -1,3 +1,4 @@
+/* 由普贤 (PuXian) 编译器自动生成 — px build */
 #include "runtime.h"
 #include <string.h>
 #include <stdio.h>
@@ -5,10 +6,12 @@
 
 static LXValue fn_add(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
+    px_srcfunc("add");
     LXValue _v1 = (nargs > 0) ? args[0] : px_null();
     LXValue _v2 = (nargs > 1) ? args[1] : px_null();
     LXValue px_err_3_val = px_null();
     int px_err_3_proped = 0;
+    px_srcline(3);
     return px_add(_v1, _v2);
 px_err_3:
     if (px_err_3_proped) return px_err_3_val;
@@ -17,17 +20,26 @@ px_err_3:
 
 static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
+    px_srcfunc("main");
     LXValue _v4 = px_null();
     LXValue _v5 = px_null();
     LXValue px_err_6_val = px_null();
     int px_err_6_proped = 0;
+    px_srcline(6);
     _v4 = px_int(21LL);
+    px_srcline(7);
     _v5 = px_call(px_get_global("add"), (LXValue[]){_v4, px_int(21LL)}, 2);
+    px_srcline(8);
     (void)(px_call(px_get_global("print"), (LXValue[]){_v5}, 1));
+    px_srcline(9);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_mul(_v4, px_int(2LL)), px_int(1LL))}, 1));
+    px_srcline(10);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_sub(px_int(100LL), px_mul(px_int(3LL), px_int(30LL)))}, 1));
+    px_srcline(11);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_idiv(px_int(7LL), px_int(2LL))}, 1));
+    px_srcline(12);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_mod(px_int(7LL), px_int(3LL))}, 1));
+    px_srcline(13);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_pow(px_int(2LL), px_int(10LL))}, 1));
 px_err_6:
     if (px_err_6_proped) return px_err_6_val;

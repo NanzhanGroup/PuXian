@@ -78,3 +78,16 @@
 - `docs/PUXIAN_CHEATSHEET.md §1`：11 条易错事实（含 F1/F2/F3 速查）。
 - `docs/ECOSYSTEM.md §6`：生态健康速查（F1/F2 已在）。
 - qg-issue 00-README 已知缺口段：本文件可作为仓库内权威缺口评估副本；仓库外 qg-issue 侧引用本文档。
+
+## 6. M72 已落地能力（2026-09-06，docs/M72_PLAN.md）——诊断/可观测性 + bytes native
+
+> 非语言语义缺口修复（L0 runtime + 编译器诊断层 + bytes native），来源 qg-issue 9/10/13-R1。均已实测闭环，详见 M72_PLAN §四 验收。
+
+| # | 能力 | 落地 | 生态意义 |
+|---|---|---|---|
+| D1 | **print/println 逐行实时**（管道/journald/文件下不再全缓冲攒 8KB；崩溃前不丢行） | M72-S1（bi_print 行尾 fflush，现有 .px 零改码） | 服务/构建日志实时可见——被 supervisor 托管的 .px 服务可 `tail -f` 观测 |
+| D2 | **`flush()` / `print_err()`** 新原生（flush 显式刷；print_err 渲染同 print 但输出 stderr） | M72-S1（native 283） | 脚本自主控制刷新；错误/诊断出口统一 stderr |
+| D3 | **编译产物运行时错误带 .px 源位置**：`运行时错误 [函数 行N]: msg`（cg 每语句插 px_srcline + 函数入口 px_srcfunc；pxi 解释器本就带 `错误 [code] 行:列`） | M72-S2（Issue 10 D1） | 「AI 不需要断点」等价物①：报错即定位到源行，LLM 一次推理可修 |
+| D4 | **spawn 协程运行时错误默认隔离**：打印现场后协程安全退出，宿主继续；`PX_SPAWN_ISOLATE=0` 关（回退原 exit 语义向后兼容） | M72-S3（Issue 10 D2，px_error setjmp/longjmp + GC 注销路径） | 长跑服务不被单点协程运行时错误带走（崩溃现场不丢）；临界区崩溃锁遗留风险文档化（用 Result/? 收敛） |
+| B1 | **`aes_gcm_encrypt_bytes/decrypt_bytes` + `aes_encrypt_bytes/decrypt_bytes`**（CBC 顺带）：str|bytes 取参含 \0 不截断；去 aes_is_utf8 限制（二进制明文可解出）；GCM 输出 密文||tag 原始 bytes，与 Go crypto/aes-gcm 字节兼容 | M72-S4（Issue 13 GAP-BIN-1，native 283→287） | 任意二进制文件 AES 加解密（ws-backup Peer 密文链路前置） |
+| B2 | **`http_request` body 收 str|bytes 长度感知**（Content-Length=bytes.len，body 独立发送——顺带修复原 body 塞 16KB req 缓冲的大 payload 溢出） | M72-S4（Issue 13 GAP-BIN-2） | 二进制密文 HTTP 上传字节完整（实测 577KB runtime.c sha256 一致） |

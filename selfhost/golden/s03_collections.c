@@ -1,3 +1,4 @@
+/* 由普贤 (PuXian) 编译器自动生成 — px build */
 #include "runtime.h"
 #include <string.h>
 #include <stdio.h>
@@ -5,23 +6,38 @@
 
 static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
+    px_srcfunc("main");
     LXValue _v1 = px_null();
     LXValue _v2 = px_null();
     LXValue px_err_3_val = px_null();
     int px_err_3_proped = 0;
+    px_srcline(3);
     _v1 = px_list_n((LXValue[]){px_int(3LL), px_int(1LL), px_int(2LL)}, 3);
+    px_srcline(4);
     (void)(px_method(_v1, "append", (LXValue[]){px_int(4LL)}, 1));
+    px_srcline(5);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){_v1}, 1)}, 1));
+    px_srcline(6);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_index(_v1, px_int(0LL))}, 1));
+    px_srcline(7);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_index(_v1, px_neg(px_int(1LL)))}, 1));
+    px_srcline(8);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("sorted"), (LXValue[]){_v1}, 1)}, 1));
+    px_srcline(9);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("reversed"), (LXValue[]){_v1}, 1)}, 1));
+    px_srcline(10);
     _v2 = ({ LXValue _d = px_dict(); { LXValue _k = px_str("a"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_int(1LL)); } { LXValue _k = px_str("b"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_int(2LL)); } _d; });
+    px_srcline(11);
     px_index_set(_v2, px_str("c"), px_int(3LL));
+    px_srcline(12);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_index(_v2, px_str("c"))}, 1));
+    px_srcline(13);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_method(_v2, "has", (LXValue[]){px_str("a")}, 1)}, 1));
+    px_srcline(14);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("sorted"), (LXValue[]){px_method(_v2, "keys", (LXValue[]){}, 0)}, 1)}, 1));
+    px_srcline(15);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("sorted"), (LXValue[]){px_method(_v2, "values", (LXValue[]){}, 0)}, 1)}, 1));
+    px_srcline(16);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_method(_v2, "get", (LXValue[]){px_str("zz"), px_int(9LL)}, 2)}, 1));
 px_err_3:
     if (px_err_3_proped) return px_err_3_val;
