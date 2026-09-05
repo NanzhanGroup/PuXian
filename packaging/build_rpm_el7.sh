@@ -74,7 +74,8 @@ gpgcheck=0
 repo_gpgcheck=0
 EOF
 yum -y makecache 2>&1 | tail -3 || { echo "❌ el7 yum makecache 失败"; exit 1; }
-yum -y --repo=puxian-selfcheck list puxian >/dev/null || { echo "❌ yum list 找不到 puxian"; exit 1; }
+# yum 3.4（el7）无 dnf 风格 --repo 选项 → 用 --disablerepo/--enablerepo
+yum -y --disablerepo='*' --enablerepo=puxian-selfcheck list puxian >/dev/null || { echo "❌ yum list 找不到 puxian"; exit 1; }
 echo "== [el7] 真实安装 puxian + 运行验证 =="
 yum -y install puxian >/dev/null
 /usr/bin/pxc --version
