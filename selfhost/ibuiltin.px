@@ -26,6 +26,21 @@ def i_call_builtin(name, args, pos):
             i += 1
         print(join(" ", parts))
         return Ok(null)
+    if name == "flush":
+        # M72-S1（Issue 9）：flush() —— 显式刷 stdout/stderr（宿主 runtime native）
+        if len(args) != 0:
+            return Err(i_r1002("flush 不需要参数", pos))
+        flush()
+        return Ok(null)
+    if name == "print_err":
+        # M72-S1（Issue 9/10）：print_err(...) —— 渲染对齐 print，输出到 stderr
+        let parts = []
+        var i = 0
+        while i < len(args):
+            parts.append(i_to_str(args[i]))
+            i += 1
+        print_err(join(" ", parts))
+        return Ok(null)
     if name == "str":
         if len(args) != 1:
             return Err(i_r1002("str 需要一个参数", pos))

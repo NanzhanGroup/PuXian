@@ -2626,6 +2626,34 @@ static LXValue bi_print(LXValue* args, int nargs, void* ctx) {
         px_print_value(args[i], false);
     }
     printf("\n");
+    // M72-S1（Issue 9）：print 即人读日志——stdout 重定向到管道/journald/文件时
+    // C stdio 变全缓冲（8192B），不刷则服务日志运行中不可见、崩溃前缓冲丢失。
+    // 行尾 fflush → 每行实时（行级 syscall 对日志场景可接受）。
+    fflush(stdout);
+    return px_null();
+}
+
+// M72-S1（Issue 9 方案 C 最小版）：flush() —— .px 脚本自主刷 stdout/stderr
+static LXValue bi_flush(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 0) px_error("flush 不接受参数");
+    fflush(stdout);
+    fflush(stderr);
+    return px_null();
+}
+
+// M72-S1（Issue 9/10）：print_err(...) —— 渲染对齐 print（px_fmt_value）但输出到
+// stderr（默认无缓冲，天然实时）→ 服务错误/诊断出口统一 stderr 的基础。
+static LXValue bi_print_err(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    for (int i = 0; i < nargs; i++) {
+        if (i) fputs(" ", stderr);
+        char* s = px_fmt_value(args[i]);
+        fputs(s, stderr);
+        xfree(s);
+    }
+    fputc('\n', stderr);
+    fflush(stderr);
     return px_null();
 }
 
@@ -5167,6 +5195,8 @@ static LXValue bi_reduce(LXValue* args, int nargs, void* ctx) {
 
 void px_register_builtins(void) {
     px_set_global("print", px_native("print", bi_print));
+    px_set_global("flush", px_native("flush", bi_flush));
+    px_set_global("print_err", px_native("print_err", bi_print_err));
     // M39：Result/Option 构造函数
     px_set_global("Ok", px_native("Ok", bi_ok));
     px_set_global("Err", px_native("Err", bi_err));
