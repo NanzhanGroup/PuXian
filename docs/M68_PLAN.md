@@ -106,3 +106,24 @@
 > 核心诊断：生态不是少，是**供给侧强、需求侧空**——9 个官库 + dogfood 代码已在，缺的是可 `import` 的在线 registry + 让 AI「喂进上下文就能写对」的速查包。
 > 佐证：spec §8.2 import 已支持 `import std.xxx` / 相对路径 / `import "c/xxx"`，import 只注册不执行顶层；stdlib/ 9 库平铺 → 基座现成。
 - **候选 M69（生态启动）**：① registry 资产化（9 官库 + dogfood ≥20 项 → ECOSYSTEM.md + 机器索引）；② AI 速查包（native 表由脚本从 runtime dump 防漂移 → PUXIAN_CHEATSHEET.md）；③ pxreg fetch 拉取闭环（fetch → import 双模式可用）；④ 写库体验缺口评估（模块 var / 数组跨行 / let 不可变 → 语义修复再拆档）；⑤ 需求/贡献通道（qg-issue 继续；Discussions/PR 是否放开待用户定）。
+
+## 八、执行进度（M68 场次实时记录 · 东月）
+
+> 2026-09-05 12:00 上午场开始（ws-todo #10 唤醒）。基线：main @ 126f1f0 + M68_PLAN commit a466ede，工作树干净。
+
+### A1 · 能力精确盘点 — ✅ DONE
+- 实证口径（比立项侦查更精确）：编译产物默认可达 = runtime **px_set_global("name", px_native(...)) 启动注册全局 native 全集 281**（runtime.c px_register_builtins 217 + quic/h3/qpack/ws 注册 64；__px_* 动态伪全局与 pi/e 常量已剔除）；pxi 默认可达 = **interp.px i_register_builtins() names 数组 129 名**（env_define 注册进 g_globals）。
+- 差集 **155** = 编译可达、pxi R1001。分类：**A 类真 native 91**（sqlite6/aes4/rsa5/xml5/zip2/tcp6/udp5/ws9/sse4/session7/ctx3/bus4/cron·signal·time/http_serve·px_serve·route·vhost·middleware·rate_limit·basic_auth·sandbox/fsync·read_at·write_at·truncate_file/set_timeout·set_interval·clear_timer/xxhash/os_pid/now_ms/args/input/panic/gc 等）+ **B 类 quic/h3 64**（#ifndef PX_NO_QUIC 条件注册）。
+- 用户现象复现：pxi 裸跑 `sqlite_open(":memory:")` → R1001（rc=1）；`pxc build` 同切片产物运行正常（exec rc=0、rows=[{a:1},{a:2}]）→ 「pxi 缺 sqlite、编译器没事」准确。
+- 产出：**docs/pxi_native_diff.md**（逐名差异表 + 归因排除项）。
+
+### A2 · 机制侦查 + 方案定案 — ✅ DONE（落点比立项字面更优，忠实 D1 根治意图）
+- 侦查要点：`px_get_global` 未找到会 px_error（杀进程）→ 不能用于 ffi 兜底探测，需新非致命查询；`i_register_builtins` names 是 pxi 可达性真正单源（129 名 env_define 进 g_globals，用户裸名调用 → i_eval_call Var → env_get 未命中 → R1001）；宿主 C native 可经 `px_err(px_str(...))` 返回**非致命可辨错误**（PX_RESULT）。
+- 定案（忠实 D1「A 根治：224 全量可达 + 自动回退 + 查无此名可辨错误 + 零 extern def」，实现路径由「逐行复制 224 进 ffi 表」优化为「**ffi_call 双表兜底**」）：
+  1. **C 侧 runtime.c**：新增 `bool px_global_native(const char* name, LXValue* out)`（g_globals_mu + gc_block_stop 锁协议，名存在且 type==PX_NATIVE 才 true，未找到不杀进程）——全局表即单源，天然覆盖 runtime.c + quic/h3 全部 px_set_global native，**无需逐行注册宏、无 ffi 表扩容/双源漂移**。
+  2. **C 侧 runtime_ffi.c**：`bi_ffi_call` 双表：① ffi 注册表（extern def C 库原路径）→ ② px_global_native 全局 PX_NATIVE 兜底；两表未命中 → `px_err(px_str("ffi_call: 未注册函数: <name>"))`（可辨、不杀进程）。**已验证**（旧编译器 + 新 runtime build 冒烟）：ffi_call("os_pid",[])→pid、ffi_call("now_ms",[])→now_ms、未注册名→is_err=true 且载荷前缀可辨。
+  3. **selfhost iexpr.px `i_eval_call` Var 分支**：chan/mutex/rwlock 判断后新增宿主回退——`env_get` 未命中 → 评估实参 → `i_builtin_ffi_call([cname, arg_vals])`；宿主 Err 载荷为 "ffi_call: 未注册" 前缀（真 typo）→ 转 `i_r1001(cname)`；其余返回值（含业务 Err 值）原样返回。
+- 改动文件：runtime/runtime.h（+声明）、runtime/runtime.c（+px_global_native）、runtime/runtime_ffi.c（bi_ffi_call 双表）、selfhost/iexpr.px（i_eval_call 回退）。compiler/parser/语言语义零改动。
+
+### A3 · pxi 重建 — 🔄 RUNNING（后台 pid 237023，tools/pxc build selfhost/interp.px）
+- 重建完成后：cp selfhost/build/interp → bootstrap/pxi → 双模式回归（§四/§六验收）。
