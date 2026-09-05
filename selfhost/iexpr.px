@@ -288,6 +288,31 @@ def i_eval_call(node, env):
             return Err(i_r1002("interp 不支持 mutex（Mini 子集排除）", pos))
         if cname == "rwlock":
             return Err(i_r1002("interp 不支持 rwlock（Mini 子集排除）", pos))
+        # M68：宿主 native 自动回退 —— env 未命中（用户未定义、非注册 builtin）时
+        # 尝试宿主 ffi_call（C 侧双表：ffi 注册表 → 全局 PX_NATIVE 表）。
+        # 零 extern def 裸脚本即可调 sqlite_open/os_pid/now_ms/aes_gcm 等全部
+        # runtime 内置，与编译产物可达性一致；真拼错名（宿主也未注册）→ R1001。
+        let ger = env_get(env, cname)
+        if not ger["found"]:
+            let arg_vals = []
+            var ai = 0
+            while ai < len(args):
+                let ar = i_eval_expr(args[ai], env)
+                if ar.is_err():
+                    return Err(ar.err())
+                arg_vals.append(ar.unwrap())
+                ai += 1
+            let hfr = i_builtin_ffi_call([cname, arg_vals], pos)
+            if hfr.is_err():
+                return Err(hfr.err())
+            let hv = hfr.unwrap()
+            # 宿主未注册哨兵 Err（载荷为 "ffi_call: 未注册函数: " 前缀）→ 真 typo
+            # → R1001；其余宿主返回值（含业务 Err 值）原样返回，语义不漂移。
+            if i_type_name(hv) == "result" and hv.is_err():
+                let hev = hv.err()
+                if i_type_name(hev) == "string" and hev.starts_with("ffi_call: 未注册"):
+                    return Err(i_r1001(cname, pos))
+            return Ok(hv)
     # 方法调用 obj.method(args)
     if callee[0] == "Field":
         let or_ = i_eval_expr(callee[1], env)

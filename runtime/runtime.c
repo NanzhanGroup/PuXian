@@ -2563,6 +2563,32 @@ LXValue px_get_global(const char* name) {
     return px_null();
 }
 
+// M68：非致命全局 native 查询（bi_ffi_call 双表兜底用；未找到不 px_error）
+// 锁协议与 px_get_global 一致（g_globals_mu + gc_block_stop）；仅当全局值存在
+// 且为 PX_NATIVE（px_set_global 注册的内置函数）时返回 true 并拷贝出值。
+// 用途：ffi_call 查 ffi 注册表未命中 → 兜底查宿主全局 PX_NATIVE → pxi 解释器
+// 用户裸脚本（零 extern def）调用 runtime 全部内置函数，与编译产物可达性一致。
+bool px_global_native(const char* name, LXValue* out) {
+    sigset_t old;
+    pthread_mutex_lock(&g_globals_mu);
+    gc_block_stop(&old);
+    for (int i = 0; i < g_len; i++) {
+        if (strcmp(g_keys[i], name) == 0) {
+            LXValue v = g_vals[i];
+            gc_unblock_stop(&old);
+            pthread_mutex_unlock(&g_globals_mu);
+            if (v.type == PX_NATIVE) {
+                if (out) *out = v;
+                return true;
+            }
+            return false;   // 名存在但非内置函数（用户变量/常量/结构体等）
+        }
+    }
+    gc_unblock_stop(&old);
+    pthread_mutex_unlock(&g_globals_mu);
+    return false;
+}
+
 void px_set_global(const char* name, LXValue v) {
     // M55/P0（issue#2）：写全局表全程持 g_globals_mu（含 g_len++ 与 key/val 槽位
     // 写入），与 px_get_global 读、GC 根扫描互斥；g_len 在锁内更新保证原子可见。
