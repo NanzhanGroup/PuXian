@@ -1557,6 +1557,11 @@ __thread int g_px_src_line = 0;
 __thread const char* g_px_src_func = NULL;
 void px_srcline(int line) { g_px_src_line = line; }
 void px_srcfunc(const char* name) { g_px_src_func = name; }
+// M72-S3（Issue 10 D2）：spawn 协程错误捕获边界（TLS per-thread）——spawn_thread 在
+// 调 fn 前 setjmp；协程内 px_error 打印现场后 longjmp 回捕获点 → 该协程安全退出
+// （走 GC 注销路径），宿主进程继续。主线程不设捕获 → 顶层错误保持 exit(1)。
+static __thread jmp_buf g_err_jmp;
+static __thread int g_err_jmp_set = 0;
 
 void px_error(const char* fmt, ...) {
     // 先刷新 stdout 缓冲：print 输出在管道/重定向下是全缓冲，exit 前不刷会丢
@@ -1576,6 +1581,12 @@ void px_error(const char* fmt, ...) {
     vfprintf(stderr, fmt, ap);
     fprintf(stderr, "\n");
     va_end(ap);
+    fflush(stderr);
+    // M72-S3（Issue 10 D2）：spawn 协程内错误 → longjmp 隔离（宿主继续）；主线程
+    // /无捕获点 → exit(1)（带现场）。隔离由 spawn_thread setjmp 提供。
+    if (g_err_jmp_set) {
+        longjmp(g_err_jmp, 1);
+    }
     exit(1);
 }
 
@@ -6681,7 +6692,27 @@ static void* spawn_thread(void* p) {
         }
     }
     pthread_mutex_unlock(&g_gc_mu);
-    job->fn(job->args, job->nargs, NULL);
+    // M72-S3（Issue 10 D2）：spawn 协程错误隔离（默认开；PX_SPAWN_ISOLATE=0 关 →
+    // px_error 保持原 exit 语义向后兼容）。协程内运行时错误打印现场后 longjmp 回
+    // 此捕获点 → 走下方注销路径安全退出线程，宿主进程继续。注意：崩溃点若在
+    // mutex/rwlock 临界区内，longjmp 不展开 pthread 锁 → 锁遗留（宿主可能等锁）；
+    // 临界区内请用 Result/? 收敛可预期错误（运行时错误 = bug，隔离保进程不死）。
+    int isolate = 1;
+    const char* iso_env = getenv("PX_SPAWN_ISOLATE");
+    if (iso_env && iso_env[0] == '0') isolate = 0;
+    if (isolate) {
+        if (setjmp(g_err_jmp) == 0) {
+            g_err_jmp_set = 1;
+            job->fn(job->args, job->nargs, NULL);
+            g_err_jmp_set = 0;
+        } else {
+            g_err_jmp_set = 0;
+            fprintf(stderr, "[px-spawn] 协程运行时错误已隔离，宿主继续（错误现场见上）\n");
+            fflush(stderr);
+        }
+    } else {
+        job->fn(job->args, job->nargs, NULL);
+    }
     // M11 修复②（退出窗口）：先持锁注销（活跃计数减一 + 槽位清空），再释放 job 内存。
     // 保证"仍持有普贤对象"的阶段始终在注册表内被 GC 暂停/扫描；注销后本线程不再被
     // 扫描，但只做 xfree（不创建/使用普贤对象），安全。原实现先 xfree 再等锁注销，
