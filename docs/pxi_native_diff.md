@@ -198,9 +198,15 @@
 | chan/send/recv/spawn/select/mutex/rwlock | 语言构造/关键字，非 px_set_global native；pxi 已显式 Err「Mini 子集排除」 |
 | dict/flatten/unique（pxi 有、runtime native 无） | pxi 解释器内部实现（语言层），无需 native 注册 |
 
-## 修复后状态（A3 实现后回填）
+## 修复后状态（A3 实现后回填 — ✅ 2026-09-05 已全绿）
 
-- [ ] pxi 零 extern def 裸脚本跑通 A 类代表性 native（sqlite_open/json/aes/os_pid/now_ms/tz_offset/xxhash 等），结果与编译产物一致
-- [ ] quic/h3 完整宿主 pxi 可达（经全局表兜底）；`--no-quic` 裁剪一致不可达
-- [ ] typo 语义：真拼错名（如 sqliite_open）pxi 仍 R1001 且可辨，不误调
-- [ ] capability.px 双模式 253 PASS 不回归
+- [x] pxi 零 extern def 裸脚本跑通 A 类代表性 native（sqlite_open/json/aes/os_pid/now_ms/tz_offset/xxhash 等），结果与编译产物一致 —— **t_native.px 19/19，pxi == 编译产物（commit 3b47dbe）**
+- [x] quic/h3 完整宿主 pxi 可达（经全局表兜底）；`--no-quic` 裁剪一致不可达 —— 机制天然覆盖（px_global_native 查全局 PX_NATIVE），capability extern def quic/h3 段 253 PASS 不回归
+- [x] typo 语义：真拼错名（如 sqliite_open）pxi 仍 R1001 且可辨，不误调 —— t_typo.px 实测 R1001 未定义变量 'sqliite_open'
+- [x] capability.px 双模式 253 PASS 不回归 —— pxi 253 = bin 253 逐字节一致
+- [x] diffcheck --all 全量对拍通过；m66 stdlib verify yaml35/lunar36/pxml68/proc14 双模式 PASS
+
+> 修复机制（commit 3b47dbe）：C 侧 `bi_ffi_call` 双表（① ffi 注册表 → ② `px_global_native()`
+> 全局 PX_NATIVE），未命中返回可辨 Err；pxi `i_eval_call` Var 分支 env 未命中自动回退
+> `ffi_call(cname, args)`。全局表即单源（px_set_global 注册者 = 编译产物裸名调用同源），
+> 无需逐行注册宏 / ffi 表扩容 / 双源漂移。

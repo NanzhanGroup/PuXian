@@ -227,6 +227,24 @@
 | 7 | **`str(float)` 显示精度 `%g`** | 浮点转字符串 6 位有效数字（§十二.3 同源）。**M62-L1 已修一半**：整值浮点补 `.0` 后缀（编译/解释对齐）；**M63-L9 已全修**：float→str 最短 roundtrip 全精度（定点舒适区 1e-4≤|f|<1e15 内定点、区外科学，逐位 + strtod 回读取最短 roundtrip），见 §十三.8 | 已修复；无规避项 |
 | 8 | **pxi 解释模式对真实应用 API 支持未承诺** | 解释器（Mini 子集）白名单不覆盖网络/S3 真实应用 API（相对路径 import + open/read 链早期实测失败；open/read 等已随 M57/M60 补）。**M63-L8 已补 HTTP/S3 6 名**（http_post/http_request/s3_get/s3_put/s3_list/s3_delete），见 §十三.8 | http_get_stream（chunk_handler 回调跨解释器边界）与 quic/h3/udp/serve/session/bus/cron/sse 高层 API 仍非 pxi Mini 子集（编译模式全能力）；真实网络应用可走编译模式或已补 6 名 |
 
+### §十三.0 M68 根治：pxi native 可达性与编译模式一致（2026-09，docs/M68_PLAN.md）
+
+> 上表 #8「pxi 对真实应用 API 支持未承诺」在本里程碑**根治**：解释器（pxi）不再是
+> 手工白名单（interp.px `i_register_builtins` names 129 名），而是经 C 侧 `ffi_call`
+> **双表兜底**（① ffi 注册表 → ② 全局 PX_NATIVE = `px_set_global` 注册的全部 runtime
+> 内置 281 名）自动可达全部内置——**零 `extern def` 裸脚本**在 pxi 与编译产物行为一致。
+>
+> - **覆盖**：sqlite6/aes4/rsa5/xml5/zip2/tcp6/udp5/ws9/sse4/session7/ctx3/bus4/cron·
+>   signal·time/http_serve·px_serve·route·vhost·middleware·rate_limit·basic_auth·
+>   sandbox/fsync·read_at·write_at·truncate_file/set_timeout·set_interval·clear_timer/
+>   xxhash/os_pid/now_ms/args/input/panic/gc（91 真 native）+ quic/h3 族（64，完整宿主）。
+>   差异表逐名见 docs/pxi_native_diff.md。
+> - **typo 语义不漂移**：真拼错名（宿主两表均未命中）→ pxi 仍 R1001「未定义变量」，
+>   错误可辨、不误调（宿主哨兵 Err 载荷 `ffi_call: 未注册函数: <name>` 判定）。
+> - **quic/h3 条件编译**：`--no-quic` 裁剪宿主无此全局 → 与裁剪编译产物一致不可达。
+> - **capability.px 253 PASS 双模式逐字节一致、diffcheck --all 全绿、t_native 零
+>   extern def 裸脚本 19 项（pxi == 编译产物）** —— 无回归证据链见 M68_PLAN §四。
+
 ### §十三.1 修复记录：HTTP 客户端网络失败 → Err(result)（#1/#2 根因）
 
 > 表中 #1/#2 为 M58 dogfood 当时实测暴露。随后已做**语言面修复**（runtime/runtime.c，

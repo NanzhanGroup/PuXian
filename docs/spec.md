@@ -1231,6 +1231,16 @@ riscv64（32 regs）GC 架构头由 **C 层探针**（SIGUSR1 ucontext → arch_
   - 编译模式：编译期检查 + 推断（快，等价运行时检查前置）
 - 测试套件必须在双模式下跑同一用例
 
+> **M68 native 可达性根治（2026-09，docs/M68_PLAN.md）**：解释器（pxi）对 runtime 内嵌
+> native 的可达性与编译产物**完全一致，零 `extern def` 裸脚本即可调全部内置**。机制：
+> C 侧 `ffi_call` 双表查找（① ffi 注册表 = extern def C 库 → ② 全局 PX_NATIVE 表 =
+> `px_set_global` 注册的全部 runtime 内置，编译产物裸名调用同源），两表未命中返回可辨
+> Err（`ffi_call: 未注册函数: <name>`，不杀进程）；pxi `i_eval_call` 用户作用域/注册
+> builtin 均未命中时自动回退 `ffi_call(cname, args)`，宿主哨兵 Err（真拼错名）转
+> R1001，业务返回值/Err 原样透传。差异表见 docs/pxi_native_diff.md（281 runtime native
+> vs 原 pxi 129 名白名单 → 差集 155 全量对齐，含 sqlite/aes/rsa/xml/zip/tcp/udp/ws/sse/
+> cron/session/bus/http_serve/os_pid/now_ms 及 quic/h3 族）。
+
 ### 9.4 入口
 ```python
 def main(args: list[str]) -> int:

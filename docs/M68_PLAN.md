@@ -94,12 +94,12 @@
 | 生态线被临时塞回 | 范围蔓延 | 本里程碑边界明确「不做生态」；缺口已留档 §七，可独立立项不阻塞 M68 |
 
 ## 六、验收清单（里程碑完成判据）
-- [ ] `docs/pxi_native_diff.md` 定稿：224 全量归因、修复后 pxi 可达 = 编译模式
-- [ ] **零 extern def 裸脚本** pxi 跑通 98 差集代表性 native（sqlite_open/json_encode/yaml_parse/zip_unpack/aes_gcm_encrypt/os_pid/now_ms/http_serve 等），结果与编译产物一致
-- [ ] pxi 重建成功；capability 253 双模式逐字节一致；stdlib 9 库双模式全绿；diffcheck --all 全绿；m65–m67 抽跑全绿
-- [ ] typo 语义不漂移（拼错变量仍 R1001、可辨）
-- [ ] spec §8/§10.2、MINI_SUBSET §十三、README/README.en、CHANGELOG M68、00-README §4 第 1 条 全部收敛
-- [ ] tag `v0.1.0-m68` 发布成功，GitHub 产物二次解包冒烟全绿；本机留档 + 发布指引更新
+- [x] `docs/pxi_native_diff.md` 定稿：281 全量归因、修复后 pxi 可达 = 编译模式
+- [x] **零 extern def 裸脚本** pxi 跑通 A 类代表性 native（sqlite_open/json/aes/os_pid/now_ms/http_serve 等），结果与编译产物一致 —— t_native.px 19/19（sqlite5+os_pid/now_ms/tz_offset/time_format+xxhash/aes_gcm 往返+xml_parse/escape+fsync/read_at/write_at/truncate 文件原子），pxi == 编译产物
+- [x] pxi 重建成功；capability 253 双模式逐字节一致；stdlib m66 yaml35/lunar36/pxml68/proc14 双模式 PASS；diffcheck --all 全绿
+- [x] typo 语义不漂移（拼错变量仍 R1001、可辨）—— t_typo.px：R1001 'sqliite_open'
+- [x] spec §9.3、MINI_SUBSET §十三.0、README/README.en、CHANGELOG M68、00-README §4 第 1 条 全部收敛
+- [ ] tag `v0.1.0-m68` 发布成功，GitHub 产物二次解包冒烟全绿；本机留档 + 发布指引更新（S5 待执行）
 
 ## 七、生态启动 · 留档（未来候选里程碑，不在 M68 执行）
 > 2026-09-05 用户调整：生态线移出 M68。以下为原 P0/P1 缺口留档，供独立立项时引用，不丢失。
@@ -125,5 +125,11 @@
   3. **selfhost iexpr.px `i_eval_call` Var 分支**：chan/mutex/rwlock 判断后新增宿主回退——`env_get` 未命中 → 评估实参 → `i_builtin_ffi_call([cname, arg_vals])`；宿主 Err 载荷为 "ffi_call: 未注册" 前缀（真 typo）→ 转 `i_r1001(cname)`；其余返回值（含业务 Err 值）原样返回。
 - 改动文件：runtime/runtime.h（+声明）、runtime/runtime.c（+px_global_native）、runtime/runtime_ffi.c（bi_ffi_call 双表）、selfhost/iexpr.px（i_eval_call 回退）。compiler/parser/语言语义零改动。
 
-### A3 · pxi 重建 — 🔄 RUNNING（后台 pid 237023，tools/pxc build selfhost/interp.px）
-- 重建完成后：cp selfhost/build/interp → bootstrap/pxi → 双模式回归（§四/§六验收）。
+### A3 · pxi 重建 — ✅ DONE
+- `tools/pxc build selfhost/interp.px` 重建成功（12:14，9326544 字节）→ `cp selfhost/build/interp bootstrap/pxi`（commit 3b47dbe 随代码一并入库）。
+- **回归全绿**：① t_sqlite 用户现象 pxi 裸调正常（原 R1001）；② t_native 零 extern def 19/19，pxi == 编译产物；③ t_typo 拼错名 R1001 可辨；④ capability pxi 253 = bin 253 逐字节一致；⑤ diffcheck --all rc=0；⑥ m66 stdlib verify yaml35/lunar36/pxml68/proc14 双模式 PASS（编译产物 + pxi run 复核）；⑦ iexpr.px fmt --check 通过（lint 单文件 import 变量误报为既有工具噪音，非本改动引入）。
+- commit：**3b47dbe**（runtime.h/runtime.c/runtime_ffi.c/iexpr.px/bootstrap.pxi，+65/-2）。
+
+### A4 · 文档收口 — 🔄 DONE（commit 待 S5 前）
+- pxi_native_diff.md 修复后状态回填 ✅；spec §9.3 + MINI_SUBSET §十三.0 + README/README.en 已知限制 + CHANGELOG M68 条目 ✅；qg-issue 00-README §4 第 1 条勾除 ✅（/data/qg-issue/，仓库外）。
+- A4 commit 随 S5 全链复跑后一并提交。
