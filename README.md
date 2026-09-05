@@ -312,7 +312,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 
 ## 示例
 
-`examples/` 目录（80+ 个），快速上手：
+`examples/` 目录（119 个 `.px` + 子目录工程），快速上手：
 
 ```bash
 # 解释运行
@@ -362,6 +362,28 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 - `m57_s5_pxi_smoke.px` —— pxi 重建后 M57 新内置 10 项自检（open/read/ioctl 就地填充/write/mmap 活映射，解释/编译双模式输出一致）
 - `m58_hwmond/` —— **M58 dogfood 真实应用：pxhwmond 硬件健康守护 daemon**（多文件 import 工程：main/collect/shm/serve/notify；verify_s1–s4.sh 各子步自检 + 使用/部署见 `m58_hwmond/README.md`）
 - ... 完整列表见 `examples/`
+
+---
+
+## 生态（Ecosystem）
+
+- **标准库 9 个**（纯语言 `.px`，`import std.*` 即用，编译/解释双模式一致；API 摘要见下表与总览文档）：
+
+| 库 | 定位 | 入口 |
+|---|---|---|
+| `collections` | 集合高阶操作：unique / group_by / chunk / flatten / zip_lists / sort_by | `import std.collections` |
+| `semver` | 语义化版本 2.0.0：解析 / 比较 / 范围匹配（^ ~ * x） | `import std.semver` |
+| `webroute` | 文件即路由命名：get_healthz.px → GET /healthz | `import std.webroute` |
+| `yaml` | YAML 子集解析（配置文件） | `import std.yaml` |
+| `pxml` | PXML 配置语言解析（规范 docs/PXML.md） | `import std.pxml` |
+| `lunar` | 农历 1900-2100 公农历互转（闰月） | `import std.lunar` |
+| `gfx` | 纯语言 2D 画布/图形（Bresenham/字形/贴图） | `import std.gfx` |
+| `png` | 纯语言 PNG 编码器（stored） | `import std.png` |
+| `edge` | 边缘设备：GPIO V2 / I2C / 串口 / PWM（Linux） | `import std.edge` |
+
+- **生态总览**：[`docs/ECOSYSTEM.md`](docs/ECOSYSTEM.md) —— 库定位与导出 API / 119 个 dogfood 示例按能力导航 / 消费路径（import · pxpkg · 拷源码）/ 机器索引防漂移（`tools/gen_ecosystem.px`）。
+- **AI 速查包**：`docs/PUXIAN_CHEATSHEET.md`（M69-S2，整包喂 AI 即写对 .px）。
+- **包管理**：`tools/pxpkg`（M45：init/add/install + px.px.lock 可复现）；registry 资产随仓库分发（M69-S3 打通 fetch→import）。
 
 ---
 
