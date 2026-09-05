@@ -1,0 +1,108 @@
+# M68_PLAN · pxi 一致性收官（解释器 native 可达性根治）
+
+> 创建：2026-09-05 · 修订：2026-09-05（用户决定：生态线移出 M68，本里程碑只做 pxi 一致性）
+> 来源：qingge 反馈「pxi 内置不全、缺 sqlite，编译器没事」→ 源码级侦查确认根因
+> 处理人：东月 · 官方基准：github.com/NanzhanGroup/PuXian（HEAD main @ 126f1f0，M67 闭环 · v0.1.0-m67 已发布）
+> 目标：**pxi（解释器）对 runtime 内嵌 native 的可达性与 pxc 编译产物完全一致**（根治 A）——
+> 用户裸脚本（零 `extern def`）在 pxi 下可调 sqlite 等全部 native，不再 R1001「未定义变量」。
+> 关联：00-README 通用说明 §4 已知语言缺口第 1 条（pxi native，长期留档未决）。
+
+## 〇、立项决策记录（用户拍板，含调整）
+
+| # | 决策 | 结论 |
+|---|---|---|
+| D1 | pxi native 对齐机制 | **A 根治**：C 侧 224 native 全量进 FFI 表 + pxi 调用解析失败自动回退 ffi_call，零 extern def，双模式行为一致（否决 B 治标补白名单） |
+| D2 | 里程碑范围 | **M68 只做 pxi 一致性**（A 线）。原「生态启动」B 线（9 官库 + dogfood registry 化 / AI 速查包 / ECOSYSTEM 基线等 P0/P1 项）经用户调整**从 M68 移除**，生态缺口留档为未来候选里程碑（见 §七），信息不丢弃、不在本里程碑执行 |
+| D3 | S5 发布 | **打 tag `v0.1.0-m68`** 自动发布（沿用 tag 驱动 workflow） |
+| — | PR 策略 | 维持**不开 PR**（用户既定边界）→ 直接 commit + push origin main |
+
+## 一、pxi native 可达性根因（2026-09-05 侦查实录，源码级证据）
+
+### 现象
+- pxi 跑 `sqlite_open(":memory:")` → **R1001 未定义变量**；同切片 `pxc build` 产物运行正常（exec rc=0）。
+- capability.px 双模式 253 PASS 系因它对 sqlite/quic/h3 **全写了 extern def**，掩盖了不对称。
+
+### 根因链
+1. **编译模式**：`runtime/runtime.c` `px_register_builtins()`（5142 行起）将 **224 个** native 以 `px_set_global` 注册为全局 → 任何编译产物**无声明直接可调**。
+2. **pxi 解释模式**（selfhost/interp.px + ibuiltin.px）只认两条路：① `i_call_builtin` 手工白名单（**129 名**）直调宿主 C；② 用户代码显式 `extern def` → FFI 桥（runtime `px_ffi_register` 主函数内仅 8 名：sqlite 6 + bytes 转换 2）。
+3. → **差集 98 个 native 在 pxi 默认不可达**（sqlite_*/aes_*/rsa_*/xml_*/zip_*/tcp_*/udp_*/ws_*/sse_*/cron/signal/session_*/bus_*/http_serve/http_get_stream/tls_server/time_format/os_pid/fsync_file/truncate_file/read_at/write_at/xxhash/basic_auth/rate_limit/middleware/vhost/route/px_serve 等；`__px_*`/`__http_handler` 等伪全局与语言内置另通道需在 A1 甄别剔除）。
+
+### 影响面
+- 清歌等用户 pxi 直接跑裸脚本（未写 extern def）→ R1001 → 误判「解释器内置不全、编译器没事」。
+- 双模式一致性欠账最后一类：**语言内置已对齐，C native 可达性未对齐**。
+
+## 二、范围与边界
+
+**做**：
+- 精确盘点 224 native 差集 → `docs/pxi_native_diff.md` 差异表（含修复后状态）。
+- C 侧统一 FFI 注册（224 native 全量登记进 ffi 可达面）+ selfhost 解释层自动回退 ffi_call。
+- pxi 重建（selfhost 链，>10min / RSS 2.5GB 预留）+ 全量双模式回归。
+- 文档收口：spec §8/§10.2、MINI_SUBSET §十三、README/README.en、CHANGELOG [Unreleased] M68 条目、00-README §4 第 1 条勾除（qg-issue 侧）。
+- S5：全链复跑 + 打 tag `v0.1.0-m68` 发布 + 本机留档 + 发布指引更新。
+
+**不做**：
+- ❌ **生态启动全部项**（registry 资产化 / pxreg / AI 速查包 / ECOSYSTEM.md / P0.1–P0.3 + P1.1–P1.3）—— 已移出，留档 §七 未来候选，不在 M68 执行。
+- 不改语言语义 / parser / compiler / codegen / pxc build 行为（A 线为 runtime 注册层 + selfhost 解释层改动，compiler 不动 → 自举证明非必需，但 pxi 重建后须全量双模式回归）。
+- 不逐个手补白名单（治标，A 方案已否决）。
+- 不回归 FFI 外部库机制（zlib/sqlite3.o 等经 `extern def` 的 C 库路径双模式已一致）。
+- 不做 spawn/chan/mutex 等 Mini 子集有意排除项。
+- 不开 PR；不修语言语义缺陷（模块 var / 数组跨行 / let 不可变等，00-README §4 另 3 条，留档未来候选）。
+
+## 三、分步计划
+
+### A1 · 能力精确盘点（纯侦查，差异表 v1）
+- 脚本 diff：runtime `px_set_global` 全名表（224）vs pxi 白名单（129，ibuiltin.px 全部 `name == "..."` 分支）vs 语言内置另通道（interp/iexpr/it_util i_ 前缀、KEYWORDS、常量 pi/e、args/input/panic）。
+- 98 差集逐一归因：真 native（应可达）/ 语言内置另通道（剔除）/ 伪全局内部位（`__px_*`/`__http_handler`/`__sse_handler`/`__px_docroot/port/timeout` 剔除）/ 有意排除（记录依据）。
+- 产出 **`docs/pxi_native_diff.md`**：列 = native | runtime 注册 | 编译模式 | pxi 现状（白名单/FFI/不可达）| 归因 | 建议 | 修复后状态（A3 后回填）。
+
+### A2 · 机制侦查 + 方案定案
+- 读 `i_eval_call` Var 分支完整顺序（iexpr.px ~262 起）与 R1001 产生点；读 runtime `ffi_call`/`px_ffi` 实现（runtime_ffi.c）与 `px_register_builtins` 注册循环 → 定 A 落地细节。
+- C 侧统一注册宏设计：`px_register_builtins` 内每个 native 同时进 `px_ffi` 表（不重复注册、顺序稳定）；`ffi_call` 查无此名返回**可辨错误**（区分「未注册」与「调用失败」，不杀进程）。
+- selfhost 侧回退点：`i_eval_call` 用户函数/白名单/i_ffi 全未命中处 → 构造 `i_builtin_ffi_call([cname, arg_vals])` → ffi 命中即调、未命中才 R1001（与编译模式「全局名运行时查表」语义对齐）。
+
+### A3 · 实现 + pxi 重建 + 双模式回归
+- 按 A2 实现 C 侧 + selfhost 侧；`bootstrap_prove.sh` 等价链重建 pxi（**>10min / RSS 2.5GB，预留整块时间，后台执行 + 定期探活**）。
+- 回归总闸见 §五；补 typo 场景用例（真拼错变量不应被误当 C native、错误语义不漂移）。
+
+### A4 · 文档收口
+- `pxi_native_diff.md` 定稿（差异表 + A3 修复后状态回填）。
+- spec §8/§10.2「pxi native 可达性与编译模式一致（无需 extern def）」；MINI_SUBSET §十三 对应更新。
+- CHANGELOG [Unreleased] M68 条目草稿；qg-issue 00-README §4 第 1 条状态更新。
+
+### S5 · 总闸 + 发布（D3：打 tag）
+- 全链复跑（§五）+ 工作树收敛（全仓 fmt --check / lint 0/0）。
+- 文档定稿 + CHANGELOG [Unreleased] M68 完整条目。
+- **打 tag `v0.1.0-m68` → push → tag 驱动 workflow 自动发布**；对 GitHub 实际产物二次解包冒烟（沿 M66/M67 收尾先例）；本机留档 + 发布指引更新至 m68。
+
+## 四、回归总闸（A3 与 S5 两次跑）
+- capability.px 双模式 **253 PASS 且解释/编译逐字节一致**（主闸）。
+- diffcheck --all 全量 + stdlib 9 库双模式（collections/semver/edge/gfx/png/webroute/yaml/pxml/lunar）。
+- examples m65_lsp / m65_mcp / m66_* / m67_* verify 抽跑 + 新增 pxi native 抽测切片（98 差集中代表性 native：sqlite_open/json_encode/yaml_parse/zip_unpack/aes_gcm_encrypt/os_pid/now_ms/http_serve 等，pxi == 编译产物一致，**零 extern def 裸脚本**）。
+- typo 语义回归（拼错变量仍报 R1001、错误可辨、不误当 C native）。
+- 全仓 fmt --check + lint 0/0；ci.yml YAML 校验；make_release.sh bash -n。
+- push origin main 后 CI 六 job 全绿确认（自举回归/示例/工具链质量门/multiarch-cross 三档）。
+
+## 五、风险与预案
+
+| 风险 | 影响 | 预案 |
+|---|---|---|
+| pxi 重建超长（>10min / RSS 2.5GB） | 进度卡顿 | A3 集中一次重建；后台执行 + 定期探活；失败按 bootstrap 链重试 |
+| ffi 自动回退改变错误语义（真 typo 被误当 C native） | 行为漂移 | A2 先验证 ffi 查无此名可辨错误 → 回退仅在该错误转 R1001；typo 回归用例覆盖 |
+| 白名单 129 名与自动回退重复路径 | 双重调用 | 回退只放白名单/i_ffi/用户函数全未命中后（A2 确认顺序）；同名字不改白名单分支 |
+| 224 全量进 FFI 表致注册表膨胀/顺序不稳 | 启动/行为风险 | 统一注册宏复用既有表结构、仅增登记不改语义；差异表脚本化可重跑验证 |
+| 盘点归因误判（伪全局/另通道混入差集） | 实现范围偏差 | A1 严格三表 diff + 逐名人工复核；伪全局/有意排除单独列并记依据 |
+| 生态线被临时塞回 | 范围蔓延 | 本里程碑边界明确「不做生态」；缺口已留档 §七，可独立立项不阻塞 M68 |
+
+## 六、验收清单（里程碑完成判据）
+- [ ] `docs/pxi_native_diff.md` 定稿：224 全量归因、修复后 pxi 可达 = 编译模式
+- [ ] **零 extern def 裸脚本** pxi 跑通 98 差集代表性 native（sqlite_open/json_encode/yaml_parse/zip_unpack/aes_gcm_encrypt/os_pid/now_ms/http_serve 等），结果与编译产物一致
+- [ ] pxi 重建成功；capability 253 双模式逐字节一致；stdlib 9 库双模式全绿；diffcheck --all 全绿；m65–m67 抽跑全绿
+- [ ] typo 语义不漂移（拼错变量仍 R1001、可辨）
+- [ ] spec §8/§10.2、MINI_SUBSET §十三、README/README.en、CHANGELOG M68、00-README §4 第 1 条 全部收敛
+- [ ] tag `v0.1.0-m68` 发布成功，GitHub 产物二次解包冒烟全绿；本机留档 + 发布指引更新
+
+## 七、生态启动 · 留档（未来候选里程碑，不在 M68 执行）
+> 2026-09-05 用户调整：生态线移出 M68。以下为原 P0/P1 缺口留档，供独立立项时引用，不丢失。
+> 核心诊断：生态不是少，是**供给侧强、需求侧空**——9 个官库 + dogfood 代码已在，缺的是可 `import` 的在线 registry + 让 AI「喂进上下文就能写对」的速查包。
+> 佐证：spec §8.2 import 已支持 `import std.xxx` / 相对路径 / `import "c/xxx"`，import 只注册不执行顶层；stdlib/ 9 库平铺 → 基座现成。
+- **候选 M69（生态启动）**：① registry 资产化（9 官库 + dogfood ≥20 项 → ECOSYSTEM.md + 机器索引）；② AI 速查包（native 表由脚本从 runtime dump 防漂移 → PUXIAN_CHEATSHEET.md）；③ pxreg fetch 拉取闭环（fetch → import 双模式可用）；④ 写库体验缺口评估（模块 var / 数组跨行 / let 不可变 → 语义修复再拆档）；⑤ 需求/贡献通道（qg-issue 继续；Discussions/PR 是否放开待用户定）。
