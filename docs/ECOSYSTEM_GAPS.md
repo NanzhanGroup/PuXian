@@ -3,6 +3,7 @@
 > 用途：① 给**生态库/复用模块作者**一份可照做的写库 checklist；② 把写库时踩到的**语言缺口**逐一评估入档——每条给影响场景/绕行规范/修复成本收益/结论；**语义修复不在 M69 执行**（M69 铁律：不改 compiler/parser/语言语义），拆 **M70 候选**记录在案。
 > 建立：M69-S4（2026-09-05）· 依据：M69 全程实证 + `docs/MINI_SUBSET.md` §四/§八/§九/§十三 + 历史里程碑记录。
 > 更新：M70-S1/S3（2026-09-05）—— G1/G2 已由 M70 修复（见各节「M70 修复」标注）；本文档保留历史评估供追溯。
+> 更新：M71-S5（2026-09-06）—— F4 归因更正（Issue 11：慢的是 pxi 解释器，pxc build 编译版毫秒级 ≈ grep），见 §3 F4 行「M71 更正」。
 > 配套：写码速查见 `docs/PUXIAN_CHEATSHEET.md §1`（11 条易错事实）。
 
 ---
@@ -62,7 +63,7 @@
 | F1 | **`{}` 字面量 = `null`**（不是空 dict） | M69-S1：`stdlib/collections.px group_by` 用 `result = {}` 致返回 null / 双模式不可用（M5 历史 bug，从未被调用测试暴露） | 已修复（`json_parse("{}")`，M69-S1）；ECOSYSTEM §6 + CHEATSHEET §1 警示 |
 | F2 | **无 `d[k] = v` dict 赋值** | M69-S1 实证 R1002「索引赋值目标不支持」 | 写库规范用 `.set(k,v)`；与 F1 同源（`{}`=null 时对 null 赋值） |
 | F3 | **pxi Mini 子集无 `spawn`/`chan`** | M69-S2 AI 自测：http_serve 服务端 pxi 报「interp 不支持 spawn」 | 服务端/并发程序标注编译模式；CHEATSHEET §1.11 |
-| F4 | **纯普贤逐行扫大文件慢**（解释器字符串密集循环） | M69-S2：gen_native_table 普贤版扫 runtime.c 5000+ 行超时 → 改 bash+grep（281 项秒级） | 工具选型：重文本/大文件用 C 或 shell；普贤适合业务/IO 编排/小文件 |
+| F4 | **pxi 解释器逐行扫大文件慢**（tree-walking 字符串密集循环；**归因对象 M71 已更正**——非"纯普贤"之过） | M69-S2：gen_native_table 普贤版（pxi 解释）扫 runtime.c 5000+ 行超时 → 改 bash+grep（281 项秒级）；M71 复核：**pxc build 编译版扫 13578 行 runtime.c 仅 0.055s（≈ grep 14×，与 C/shell 同量级）** | **工具选型更正（M71，Issue 11）**：pxc build 编译版重文本/大文件**毫秒级可胜任**（≈ C/shell）；pxi 解释器适合业务/IO 编排/小文件（真重负载走 `pxc build` 产物或等字节码 VM） |
 | F5 | **import 双路径并存**：`import std.x`（stdlib 内置）与裸名 `import x`（`.px_modules` registry 包）同源不同路径 | M69-S3 verify | registry/README + spec §8.6.3 文档化 |
 
 ## 4. 拆 M70 候选（记录在案，M69 不执行）
