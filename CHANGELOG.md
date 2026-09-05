@@ -6,6 +6,39 @@
 
 ## [Unreleased]
 
+### M69 · 生态启动：资产化 + AI 速查 + registry 拉取闭环（docs/M69_PLAN.md）✅
+
+> 立项（2026-09-05 用户指令）：GitHub 见 M68 收尾 → 立项 M69 生态线。承接 M68_PLAN §七留档。
+> 决策：D1 精编件不进发布包（repo README 为入口 + Release 附链接）；D2 registry 最小闭环（随库入库 + 本地挂载，远程评估）；
+> D3 语言缺口只评估入档（修复拆 M70）；D4 tag v0.1.0-m69 自动发布；D5 不排 ws-todo 直接开工；D6 维持 issue 通道不开 PR。
+> 范围铁律：不改 compiler/parser/语言语义。
+
+- **M69-S1 生态资产化（commit 25d5add）**：`docs/ECOSYSTEM.md`（9 库一览：定位/导出 API/适用场景 +
+  快速用库实测示例 + 119 dogfood 能力导航 + 里程碑主线 + 消费路径 + 写库健康速查）；
+  `tools/gen_ecosystem.px` 机器索引（扫 stdlib 顶层 def/头部注释 → `docs/ecosystem_index.json`，幂等）；
+  ci.yml 生态索引防漂移步骤（重跑 + `git diff --exit-code`）；README 生态段升级（9 库表 + 入口文档）；
+  **修复 stdlib collections.group_by 历史 bug（M5 起：`result = {}` —— {} 字面量 = null + 无 `d[k]=v` 赋值）**
+  → `json_parse("{}")` + `.set` API，双模式实测 `{"1":[1,3,5],"0":[2,4,6]}`（8/9 库抽测双模式逐字节一致，edge 需真板）。
+- **M69-S2 AI 速查包（commit 56d4c4d）**：`docs/PUXIAN_CHEATSHEET.md`（语言速查 + 11 条易错事实 +
+  native 按域速查 + 9 库速查 + 9 个高频模式模板）；`tools/gen_native_table.sh`（runtime*.c `px_set_global`
+  注册表 → `docs/native_index.json` **281 全量**，单一事实源 = runtime）；ci.yml native 清单防漂移；
+  **AI 自测 3/3 一次写对**（http server 编译模式 / sqlite / yaml，模板实测输出入档）；双模式差异点入档
+  （pxi Mini 子集无 spawn/chan → 常驻服务端程序须 `pxc build`）。
+- **M69-S3 registry 拉取闭环（commit e1aed36）**：`registry/` 随库入库（9 官库镜像 `<name>/0.1.0/<name>.px` +
+  README：结构/用法/发布流程/远程评估/一致性防漂移）；`examples/m69_registry/verify.sh` **11 断言全过**
+  （init/add 3 库 → install → lockfile 锁定 0.1.0 → main.px `import semver/yaml/collections` 裸名命中
+  `.px_modules`，pxi run + pxc build 双模式一致 → `--locked` 可复现 + registry 不可用仍复现）；
+  spec §8.6.3 官方 registry + 远程评估结论（目录随 git clone 分发 / 单包 http URL#sha256；目录级 URL 枚举不做）。
+- **M69-S4 写库评估（commit b6079ed）**：`docs/ECOSYSTEM_GAPS.md`（写库规范 checklist 13 条 + 语言缺口
+  G1-G4 评估入档 + M69 实证 F1-F5 + M70 候选记录）；结论：G2 表达式跨行（修复候选，写库第一痛点）、
+  G1 模块顶层状态（修复候选）、G3 let 不可变（有意设计保持）、G4 分号（不做）；**M70 候选 A/B 记录在案，
+  M69 不碰 compiler/parser**。
+- **M69-S5 总闸 + 发布（本 commit）**：capability 双模式 **253 PASS 逐字节一致**；diffcheck --all 全绿；
+  stdlib 9 库双模式（S1 抽测 + m66 verify）；m45_pkgdemo + m69_registry verify 全过；fmt --check + lint 0/0
+  （gen_ecosystem.px 纳入 tools lint 域）；ci/release YAML + make_release.sh bash -n；生态/native 索引重跑
+  diff 空（幂等）；**tag `v0.1.0-m69` → push → tag 驱动 workflow 自动发布** + GitHub 产物二次解包冒烟 +
+  发布指引更新（RELEASE_PROCESS.md）。
+
 ### M68 · pxi 一致性收官：解释器 native 可达性根治（docs/M68_PLAN.md）✅
 
 > 来源：清歌反馈「pxi 内置不全、缺 sqlite，编译器没事」→ 源码级侦查确认根因：编译产物
