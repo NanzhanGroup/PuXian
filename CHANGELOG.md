@@ -6,6 +6,27 @@
 
 ## [Unreleased]
 
+### W1a · Windows 交叉编译链骨架（qg-issue 14，Issue 14 W1 第一阶段）✅
+
+> 立项（2026-09-06 用户拍板）：Issue 14 Windows 移植按里程碑推进，W1a = 编译链
+> 骨架先行（零风险、不碰 runtime.c），W1b 平台分流/hello.exe 等后续里程碑待令。
+> 范围：`pxc build --target x86_64-windows` 参数折叠 + 第三方静态库 windows 交叉
+> 入库 + 工具链接通验证；不改语言语义、不改 runtime 平台代码。
+
+- **W1a-S1 --target x86_64-windows OS 维度折叠（commit 待填）**：tools/pxc
+  target_defaults 新增 `x86_64-windows`（对齐 M71-S2 注释 GOOS/GOARCH 双维心智）——
+  cc=x86_64-w64-mingw32-gcc（PATH 探测：EPEL mingw64-gcc 或 zig wrapper 均可）+
+  库布局 lib-windows/（对齐 lib-&lt;arch&gt; 约定）+ **默认 --no-quic**（QUIC/ngtcp2+
+  openssl 交叉 Windows 裁剪，与边缘设备同线）；未知 target 提示同步补该值。
+- **W1a-S2 第三方静态库 windows 交叉入库（zig cc -target x86_64-windows-gnu）**：
+  sqlite3-windows.o（Intel amd64 COFF，1795 symbols，仓库预置）+
+  runtime/mbedtls/lib-windows/{libmbedtls,libmbedx509,libmbedcrypto}.a +
+  runtime/third_party/zlib/lib-windows/libz.a；file 断言 COFF amd64 通过。
+- **W1a-S3 工具链接通验证**：`pxc build --target x86_64-windows` 全链走通
+  （target 折叠 → cc 探测 → 静态库完整性 → PXC_BIN AST→C → runtime 预编译入口），
+  稳定停在 runtime.c POSIX 头编译错误（预期，W1b 平台分流消化）；Linux 主链
+  x86_64 构建不受影响（cache key 按 cc 隔离），CI 不回归。
+
 ### M82 · unix socket HTTP 服务端 native http_serve_unix（qg-issue 15，GAP-SRV-1）✅
 
 > 立项（2026-09-06 用户拍板 A1：新原生，不与 TCP http_serve 混淆）：ws-approve .px 化
