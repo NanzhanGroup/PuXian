@@ -60,14 +60,37 @@ repo_gpgcheck=1
 gpgkey=https://nanzhangroup.github.io/PuXian/rpm/PUXIAN-GPG-KEY.asc
 ```
 
+## 用户安装（发布后）
+
+```bash
+curl -fsSL -o install-rpm.sh https://nanzhangroup.github.io/PuXian/install-rpm.sh
+sudo bash install-rpm.sh          # 写入 repo + 导入公钥
+sudo dnf install puxian           # 一行安装
+sudo dnf upgrade puxian           # 里程碑升级自动拉新
+```
+
+（脚本也随仓库提供：`packaging/install-rpm.sh`；支持 `install`/`remove` 参数）
+
+## CI 发布（release.yml rpm job，M73 已入库）
+
+tag `v0.1.0-mXX` 推送即触发（与 GitHub Release 并行）：
+
+- 容器 `rockylinux:9` → `packaging/build_rpm.sh`（rpmbuild + 包签名 + createrepo
+  + repomd.xml 签名 + 公钥导出，`DIST=9` → 目录 = releasever）
+- dnf file:// 本地仓库自检（makecache 双验签）→ rsync 到 `gh-pages` 的 `rpm/`
+- 仓库只保留最新版；旧版 rpm 由 GitHub Release 资产留存
+- GPG secrets 未配置时 job 自动跳过（绿），配置后下一个 tag 即自动发布
+
 ## 验证链路
 
 dnf 安装校验链：公钥 → repomd.xml 签名（repo_gpgcheck）→ 按哈希取 rpm
 → 包签名（gpgcheck）→ 安装。两层都过才装。
 
-## 待办（CI 入库）
+## 待办（等正式密钥）
 
-- [ ] release.yml 增加 rpm job：tag 触发 → build_rpm.sh（GPG 三 secret）
-      → 推 `gh-pages`（rpm/<dist>/<arch>/ + PUXIAN-GPG-KEY.asc）
-- [ ] 用户安装脚本 `install-rpm.sh`（写入 repo 文件 + import 公钥）
+- [x] release.yml 增加 rpm job（tag 触发 → build_rpm.sh → 推 gh-pages）
+- [x] 用户安装脚本 `install-rpm.sh`（写入 repo 文件 + import 公钥）
+- [ ] 用户生成正式主/子密钥后，配置三个 secrets：`GPG_PRIVATE_KEY`
+      / `GPG_PASSPHRASE` / `GPG_KEY_ID`（见上"第二步"，密钥未配置时 job 自动跳过）
 - [ ] aarch64 仓库（交叉构建或原生 runner）
+- [ ] Fedora / openEuler 目录铺开（$releasever 语义不同，需独立 dist 目录 + 测试）
