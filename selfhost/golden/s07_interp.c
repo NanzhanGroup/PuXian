@@ -1,3 +1,4 @@
+/* 由普贤 (PuXian) 编译器自动生成 — px build */
 #include "runtime.h"
 #include <string.h>
 #include <stdio.h>
@@ -5,18 +6,27 @@
 
 static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
+    px_srcfunc("main");
     LXValue _v1 = px_null();
     LXValue _v2 = px_null();
     LXValue _v3 = px_null();
     LXValue px_err_4_val = px_null();
     int px_err_4_proped = 0;
+    px_srcline(3);
     _v1 = px_str("px");
+    px_srcline(4);
     _v2 = px_int(2LL);
+    px_srcline(5);
     _v3 = ({ LXValue _d = px_dict(); { LXValue _k = px_str("k"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_int(3LL)); } _d; });
+    px_srcline(6);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_add(px_str("hello "), px_call(px_get_global("str"), (LXValue[]){_v1}, 1)), px_str(""))}, 1));
+    px_srcline(7);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_add(px_str("v"), px_call(px_get_global("str"), (LXValue[]){_v2}, 1)), px_str(""))}, 1));
+    px_srcline(8);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_add(px_str(""), px_call(px_get_global("str"), (LXValue[]){px_add(px_int(1LL), px_mul(px_int(2LL), px_int(3LL)))}, 1)), px_str(""))}, 1));
+    px_srcline(9);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_add(px_str(""), px_call(px_get_global("str"), (LXValue[]){px_index(_v3, px_str("k"))}, 1)), px_str(""))}, 1));
+    px_srcline(10);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_add(px_str(""), px_call(px_get_global("str"), (LXValue[]){px_method(_v1, "upper", (LXValue[]){}, 0)}, 1)), px_str(""))}, 1));
 px_err_4:
     if (px_err_4_proped) return px_err_4_val;
