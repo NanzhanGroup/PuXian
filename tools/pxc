@@ -11,6 +11,10 @@
 #                                           arch ∈ x86_64|aarch64|armv7|riscv64，自动折叠
 #                                           cc/mbedtls-lib/sqlite-obj/zlib-lib/--no-quic
 #                                           （aarch64 库仓库预置；armv7/riscv64 先 cross_multiarch）
+#   pxc build --target x86_64-windows <file.px>  OS 维度交叉（Issue 14 W1，对齐 GOOS/GOARCH
+#                                           双维心智）：mingw/zig cc 出 PE .exe，折叠
+#                                           cc=x86_64-w64-mingw32-gcc + lib-windows 库布局，
+#                                           默认 --no-quic（QUIC 交叉 Windows 暂裁剪）
 #   pxc build --cc <cc> [--mbedtls-lib <dir>] [--sqlite-obj <file>] --no-quic <file.px>
 #                                           交叉编译（M57-S4）：cc 指定交叉编译器，
 #                                           mbedtls-lib/sqlite-obj 指定目标架构静态库
@@ -66,8 +70,8 @@ pxc $(echo "$SELFHOST_VER") (普贤 PuXian · selfhosted $SELFHOST_MILESTONE)
   pxc build [--no-quic] [--target <arch>] [--cc <cc>]
             [--mbedtls-lib <dir>] [--sqlite-obj <file>] <file.px>
                                                裁剪/交叉编译选项（M57-S4 / M71-S2）：
-                                                 --target <arch> 高层交叉开关：x86_64|aarch64|
-                                                                  armv7|riscv64，自动折叠 cc/
+                                                 --target <arch|os-arch> 高层交叉开关：x86_64|aarch64|
+                                                                  armv7|riscv64|x86_64-windows，自动折叠 cc/
                                                                   mbedtls-lib/sqlite-obj/zlib-lib/
                                                                   --no-quic（显式 flag 优先）
                                                  --no-quic       去掉 QUIC/H3（-DPX_NO_QUIC，
@@ -214,6 +218,16 @@ target_defaults() {
             echo "sqlite_obj=$RT_DIR/third_party/sqlite3/sqlite3.o"
             echo "zlib_lib=$RT_DIR/third_party/zlib/lib"
             return 0 ;;
+        x86_64-windows)
+            # Issue 14 W1：OS 维度交叉（GOOS=windows, GOARCH=x86_64）——mingw/zig cc 出 PE
+            # .exe。cc 探测：PATH 中 x86_64-w64-mingw32-gcc（EPEL mingw64-gcc 或 zig
+            # wrapper 均可）；库布局 lib-windows/ 对齐 lib-<arch> 约定；默认 --no-quic
+            # （QUIC/ngtcp2+openssl 交叉 Windows 暂裁剪，M57-S4 边缘线同款）。
+            echo "cc=x86_64-w64-mingw32-gcc"; echo "no_quic=1"
+            echo "mbedtls_lib=$RT_DIR/mbedtls/lib-windows"
+            echo "sqlite_obj=$RT_DIR/third_party/sqlite3/sqlite3-windows.o"
+            echo "zlib_lib=$RT_DIR/third_party/zlib/lib-windows"
+            return 0 ;;
         aarch64)
             echo "cc=aarch64-linux-musl-gcc"; echo "no_quic=1"
             echo "mbedtls_lib=$RT_DIR/mbedtls/lib-aarch64"
@@ -236,7 +250,7 @@ target_defaults() {
             echo "mbedtls_lib=$base"; echo "sqlite_obj=$so"; echo "zlib_lib=$zl"
             return 0 ;;
         *)
-            echo "错误: 未知 --target $arch（支持 x86_64|aarch64|armv7|riscv64）" >&2
+            echo "错误: 未知 --target $arch（支持 x86_64|x86_64-windows|aarch64|armv7|riscv64）" >&2
             return 1 ;;
     esac
 }
