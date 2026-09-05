@@ -88,48 +88,99 @@ pxc $(echo "$SELFHOST_VER") (普贤 PuXian · selfhosted $SELFHOST_MILESTONE)
 EOF
 }
 
-# 复制 runtime 依赖到构建目录（对齐 Rust run_build 的 10 个 rt 文件 + miniz + sqlite + mbedtls）
-# 参数：build_dir no_quic(0/1) sqlite_obj(可选，目标架构 sqlite3 .o)
-copy_runtime() {
-    local build_dir="$1" no_quic="$2" sqlite_obj="$3"
+# ---- M71-S1：runtime 预编译 .o 增量缓存（等价 Go build cache）----
+# build 不再每次全量现编 runtime*.c：预编译 .o 入 $PXC_HOME/.rtcache/<key>/，
+# 命中时只编 base.c + 链接（二次 build 亚秒）。key = runtime 源内容 × cc × no_quic
+# → 改 runtime 源码 / 换 cc / 切 quic 自动重建缓存。
+# 注意：mbedtls/ngtcp2/openssl 为第三方 git 预置（include 不随 key 变；升级三方库后
+#       若缓存行为异常 rm -rf .rtcache 重建即可）。
+rt_src_files() {
+    # 参数：no_quic(0/1) → 输出需进缓存的 runtime 源（相对 $RT_DIR）
+    local no_quic="$1"
+    local list="runtime.h runtime.c runtime_aes.c runtime_xml.c runtime_zip.c \
+        runtime_ws.c runtime_rsa.c runtime_sqlite.c runtime_route.c runtime_h2.c \
+        runtime_ffi.c runtime_zlib.c arch.h arch_x86_64.h arch_aarch64.h \
+        arch_armv7.h arch_riscv64.h"
+    if [ "$no_quic" != "1" ]; then
+        list="$list runtime_quic.c runtime_h3.c runtime_h3_qpack.c \
+            runtime_h3_qpack_dyn.c runtime_h3_qpack.h runtime_h3_qpack_tbl.h \
+            runtime_h3_qpack_dyn.h"
+    fi
+    echo "$list"
+}
+rt_key() {
+    # 参数：no_quic cc → 16 位缓存键（runtime 源 + miniz + sqlite 头内容哈希）
+    local no_quic="$1" cc="$2" f key_src=""
+    for f in $(rt_src_files "$no_quic") \
+             third_party/miniz/miniz.c third_party/miniz/miniz_tinfl.c \
+             third_party/miniz/miniz_tdef.c third_party/miniz/miniz.h \
+             third_party/miniz/miniz_common.h third_party/miniz/miniz_tinfl.h \
+             third_party/miniz/miniz_tdef.h third_party/miniz/miniz_export.h \
+             third_party/sqlite3/sqlite3.h; do
+        if [ -f "$RT_DIR/$f" ]; then
+            key_src="$key_src $(sha256sum "$RT_DIR/$f" | cut -c1-16)"
+        fi
+    done
+    echo "$key_src cc=$(basename "$cc") noquic=$no_quic" | sha256sum | cut -c1-16
+}
+rt_cache_compile() {
+    # 参数：dir（cache 目录）no_quic cc —— 复制源到 dir 并逐 .c 预编译 .o（一次性）
+    local dir="$1" no_quic="$2" cc="$3"
+    local mbedtls_inc="$RT_DIR/mbedtls/include"
+    local zlib_inc="$RT_DIR/third_party/zlib/include"
+    local sqlite_dir="$RT_DIR/third_party/sqlite3"
     local f
-    # M57-S4：--no-quic 时不复制 QUIC/H3/QPACK 源（runtime.c 已用 PX_NO_QUIC 条件编译屏蔽引用）
-    local rt_files="runtime.h runtime.c runtime_aes.c runtime_xml.c runtime_zip.c \
-             runtime_ws.c runtime_rsa.c runtime_sqlite.c runtime_route.c runtime_h2.c \
-             runtime_ffi.c runtime_zlib.c arch.h arch_x86_64.h arch_aarch64.h \
-             arch_armv7.h arch_riscv64.h"
-    if [ "$no_quic" != "1" ]; then
-        rt_files="$rt_files runtime_quic.c runtime_h3.c runtime_h3_qpack.c \
-             runtime_h3_qpack_dyn.c runtime_h3_qpack.h runtime_h3_qpack_tbl.h \
-             runtime_h3_qpack_dyn.h"
-    fi
-    for f in $rt_files; do
-        [ -f "$RT_DIR/$f" ] || { echo "错误: 缺少 runtime 文件 $RT_DIR/$f" >&2; return 1; }
-        cp "$RT_DIR/$f" "$build_dir/"
+    # 复制源（同目录相对 include 语义，对齐旧 copy_runtime 的 build_dir 布局）
+    for f in $(rt_src_files "$no_quic"); do
+        cp "$RT_DIR/$f" "$dir/" || return 1
     done
-    # miniz（zip raw deflate）
-    for f in miniz.c miniz_tinfl.c miniz_tdef.c; do
-        cp "$RT_DIR/third_party/miniz/$f" "$build_dir/" 2>/dev/null
+    for f in miniz.c miniz_tinfl.c miniz_tdef.c miniz.h miniz_common.h \
+             miniz_tinfl.h miniz_tdef.h miniz_export.h; do
+        cp "$RT_DIR/third_party/miniz/$f" "$dir/" 2>/dev/null
     done
-    # sqlite3：优先预编译 .o，否则退回全量 .c（CI 首跑会编译）
-    # M57-S4：--sqlite-obj 指定目标架构 .o（交叉编译），否则用 x86_64 预编译 .o
-    if [ -n "$sqlite_obj" ] && [ -f "$sqlite_obj" ]; then
-        cp "$sqlite_obj" "$build_dir/sqlite3.o"
-    elif [ -f "$RT_DIR/third_party/sqlite3/sqlite3.o" ]; then
-        cp "$RT_DIR/third_party/sqlite3/sqlite3.o" "$build_dir/"
+    cp "$sqlite_dir/sqlite3.h" "$dir/" 2>/dev/null
+    # 预编译 .c（runtime 源 + miniz；sqlite3 走既有预编译 .o/.c 通道不进缓存）
+    local common="-O2 -pthread -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_FOREIGN_KEYS=1 \
+        -I\"$dir\" -I\"$RT_DIR/third_party/miniz\" -I\"$mbedtls_inc\" \
+        -I\"$sqlite_dir\" -I\"$zlib_inc\""
+    if [ "$no_quic" = "1" ]; then
+        common="$common -DPX_NO_QUIC"
     else
-        cp "$RT_DIR/third_party/sqlite3/sqlite3.c" "$build_dir/"
+        common="$common -I\"$RT_DIR/third_party/ngtcp2/include\" -I\"$RT_DIR/third_party/openssl/include\""
     fi
-    cp "$RT_DIR/third_party/sqlite3/sqlite3.h" "$build_dir/"
-    # M46：QUIC 栈（ngtcp2 + OpenSSL 静态库与头文件）—— 仅全量模式复制
+    local srcs="runtime.c runtime_aes.c runtime_xml.c runtime_zip.c runtime_ws.c \
+        runtime_rsa.c runtime_sqlite.c runtime_route.c runtime_h2.c runtime_ffi.c \
+        runtime_zlib.c"
     if [ "$no_quic" != "1" ]; then
-        mkdir -p "$build_dir/ngtcp2/include" "$build_dir/ngtcp2/lib" \
-                 "$build_dir/openssl/include" "$build_dir/openssl/lib"
-        cp -r "$RT_DIR/third_party/ngtcp2/include/ngtcp2" "$build_dir/ngtcp2/include/"
-        cp "$RT_DIR/third_party/ngtcp2/lib/"*.a "$build_dir/ngtcp2/lib/"
-        cp -r "$RT_DIR/third_party/openssl/include/openssl" "$build_dir/openssl/include/"
-        cp "$RT_DIR/third_party/openssl/lib/"*.a "$build_dir/openssl/lib/"
+        srcs="$srcs runtime_quic.c runtime_h3.c runtime_h3_qpack.c runtime_h3_qpack_dyn.c"
     fi
+    srcs="$srcs miniz.c miniz_tinfl.c miniz_tdef.c"
+    local src base
+    for src in $srcs; do
+        base="$(basename "$src" .c)"
+        if ! eval "$cc -c $common -o \"$dir/$base.o\" \"$dir/$src\"" 2>>/tmp/pxc_rtcc.log; then
+            echo "错误: runtime 预编译失败 $src（$cc）—— 日志 /tmp/pxc_rtcc.log" >&2
+            return 1
+        fi
+    done
+    touch "$dir/.complete"
+    return 0
+}
+rt_ensure() {
+    # 参数：no_quic cc → stdout 输出 cache_dir；缺失则现编
+    local no_quic="$1" cc="$2" key dir
+    key="$(rt_key "$no_quic" "$cc")"
+    dir="$PXC_HOME/.rtcache/$key"
+    if [ -d "$dir" ] && [ -f "$dir/.complete" ]; then
+        echo "$dir"
+        return 0
+    fi
+    mkdir -p "$dir"
+    if ! rt_cache_compile "$dir" "$no_quic" "$cc"; then
+        rm -rf "$dir"
+        return 1
+    fi
+    echo "$dir"
     return 0
 }
 
@@ -180,44 +231,53 @@ cmd_build() {
         "$PXC_BIN" build "$file" 2>&1 | head -20 >&2
         return 1
     }
-    # 2) 复制 runtime 依赖
-    copy_runtime "$build_dir" "$no_quic" "$sqlite_obj" || return 1
-    # 3) C 编译器静态编译（参数对齐 Rust run_build；--no-quic 去掉 QUIC/H3 源与库）
+    # 2) M71-S1：runtime 预编译 .o 缓存（命中 → 只编 base.c + 链接；miss → 现编入缓存）
+    local cache_dir
+    cache_dir="$(rt_ensure "$no_quic" "$cc")" || { echo "错误: runtime 预编译缓存建立失败" >&2; return 1; }
+    # 3) 编译生成的 C 单文件 + 链接预编译 .o（不再每次全量现编 runtime）
     local mbedtls_inc="$RT_DIR/mbedtls/include"
-    local sqlite_src="$build_dir/sqlite3.o"
-    [ -f "$sqlite_src" ] || sqlite_src="$build_dir/sqlite3.c"
-    local rt_srcs="\"$build_dir/runtime.c\" \"$build_dir/runtime_aes.c\" \
-        \"$build_dir/runtime_xml.c\" \"$build_dir/runtime_zip.c\" \
-        \"$build_dir/runtime_ws.c\" \"$build_dir/runtime_rsa.c\" \
-        \"$build_dir/runtime_sqlite.c\" \"$build_dir/runtime_route.c\" \
-        \"$build_dir/runtime_h2.c\" \"$build_dir/runtime_ffi.c\" \
-        \"$build_dir/runtime_zlib.c\""
-    if [ "$no_quic" != "1" ]; then
-        rt_srcs="$rt_srcs \"$build_dir/runtime_quic.c\" \"$build_dir/runtime_h3.c\" \
-        \"$build_dir/runtime_h3_qpack.c\" \"$build_dir/runtime_h3_qpack_dyn.c\""
+    local sqlite_dir="$RT_DIR/third_party/sqlite3"
+    local sqlite_src=""
+    if [ -n "$sqlite_obj" ] && [ -f "$sqlite_obj" ]; then
+        sqlite_src="$sqlite_obj"
+    elif [ -f "$sqlite_dir/sqlite3.o" ]; then
+        sqlite_src="$sqlite_dir/sqlite3.o"
+    else
+        sqlite_src="$sqlite_dir/sqlite3.c"
     fi
     local cc_cmd
+    local common_def="-O2 -pthread -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_FOREIGN_KEYS=1 \
+        -I\"$cache_dir\" -I\"$RT_DIR/third_party/miniz\" -I\"$mbedtls_inc\" \
+        -I\"$sqlite_dir\" -I\"$RT_DIR/third_party/zlib/include\""
+    if [ "$no_quic" = "1" ]; then
+        common_def="$common_def -DPX_NO_QUIC"
+    else
+        common_def="$common_def -I\"$RT_DIR/third_party/ngtcp2/include\" -I\"$RT_DIR/third_party/openssl/include\""
+    fi
+    # 用户 C 单文件现编（与 runtime .o 同 defines/include → ABI 一致）
+    if ! eval "$cc -c $common_def -o \"$build_dir/$base.o\" \"$c_path\"" 2>/tmp/pxc_gcc_err.log; then
+        echo "编译失败: $base.c" >&2
+        tail -20 /tmp/pxc_gcc_err.log >&2
+        return 1
+    fi
+    # 链接：base.o + runtime/miniz 预编译 .o + sqlite3 + 三方静态库
+    local objs="" f
+    for f in "$cache_dir"/*.o; do
+        [ -f "$f" ] || { echo "错误: 缺少预编译对象 $f" >&2; return 1; }
+        objs="$objs \"$f\""
+    done
     # M67-S7：riscv64 musl 默认 static-pie 报 "read-only segment has dynamic
-    # relocations"（RISC-V 只读段含重定位限制）→ riscv64 交叉加 -no-pie 传统静态
+    # relocations" → riscv64 交叉加 -no-pie 传统静态
     local pie_flag=""
     case "$cc" in *riscv64*) pie_flag=" -no-pie" ;; esac
-    cc_cmd="$cc -static -O2 -pthread$pie_flag -o \"$out_path\" \"$c_path\" $rt_srcs \
-        \"$sqlite_src\" \
-        \"$build_dir/miniz.c\" \"$build_dir/miniz_tinfl.c\" \"$build_dir/miniz_tdef.c\" \
-        -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_FOREIGN_KEYS=1 \
-        -I\"$build_dir\" -I\"$RT_DIR/third_party/miniz\" -I\"$mbedtls_inc\" \
-        -I\"$RT_DIR/third_party/zlib/include\""
-    if [ "$no_quic" = "1" ]; then
-        cc_cmd="$cc_cmd -DPX_NO_QUIC"
-    else
-        cc_cmd="$cc_cmd -I\"$build_dir/ngtcp2/include\" -I\"$build_dir/openssl/include\""
-    fi
+    cc_cmd="$cc -static -O2 -pthread$pie_flag -o \"$out_path\" \"$build_dir/$base.o\" $objs \
+        \"$sqlite_src\""
     cc_cmd="$cc_cmd \
         \"$mbedtls_lib/libmbedtls.a\" \"$mbedtls_lib/libmbedx509.a\" \"$mbedtls_lib/libmbedcrypto.a\""
     if [ "$no_quic" != "1" ]; then
         cc_cmd="$cc_cmd \
-        \"$build_dir/ngtcp2/lib/libngtcp2.a\" \"$build_dir/ngtcp2/lib/libngtcp2_crypto_quictls.a\" \
-        \"$build_dir/openssl/lib/libssl.a\" \"$build_dir/openssl/lib/libcrypto.a\""
+        \"$RT_DIR/third_party/ngtcp2/lib/libngtcp2.a\" \"$RT_DIR/third_party/ngtcp2/lib/libngtcp2_crypto_quictls.a\" \
+        \"$RT_DIR/third_party/openssl/lib/libssl.a\" \"$RT_DIR/third_party/openssl/lib/libcrypto.a\""
     fi
     # M61-S0：zlib 外部静态库（无条件链，.a ~150KB；--cc 交叉已自动切架构库）
     cc_cmd="$cc_cmd \"$zlib_lib/libz.a\""
