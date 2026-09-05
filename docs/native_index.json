@@ -1,7 +1,7 @@
 {
  "generator": "tools/gen_native_table.sh",
  "source": "runtime/*.c px_set_global(px_native)",
- "count": 281,
+ "count": 283,
  "names": [
   "Err",
   "Ok",
@@ -58,6 +58,7 @@
   "filter",
   "float",
   "floor",
+  "flush",
   "fsync_file",
   "gc",
   "gen_next",
@@ -150,6 +151,7 @@
   "panic",
   "pow",
   "print",
+  "print_err",
   "px_exec",
   "px_serve",
   "quic_0rtt_rejected",
