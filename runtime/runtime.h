@@ -322,6 +322,12 @@ void px_select_signal(void);
 // ==================== 运行时错误 ====================
 
 void px_error(const char* fmt, ...) __attribute__((noreturn));
+// M72-S2（Issue 10 D1）：编译产物运行时 .px 源位置追踪——cg 在每条可执行语句前
+// 生成 px_srcline(<源行>) 调用、每个用户函数入口生成 px_srcfunc("<函数名>")；
+// px_error 打印最近位置 → 运行时错误带源行号（AI 一次定位）。线程局部（spawn
+// 各协程独立追踪当前位置，S3 隔离用）。
+void px_srcline(int line);
+void px_srcfunc(const char* name);
 
 // ==================== GC（M8：值对象自动释放） ====================
 // 保守标记-清除：所有 LXObject 注册到全局对象表，分配累计超阈值自动触发回收。

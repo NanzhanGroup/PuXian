@@ -5,7 +5,7 @@
 # 全局变量/函数命名：cg_ 前缀避免与主文件/parser 冲突。
 # ============================================================
 # ---------- 语句生成 ----------
-def cg_gen_stmt(stmt, indent):
+def cg_gen_stmt_inner(stmt, indent):
     let pad = cg_pad(indent)
     let ty = stmt[0]
     if ty == "VarDecl":
@@ -198,6 +198,20 @@ def cg_gen_stmt(stmt, indent):
         return pad + "/* import 忽略（MVP） */\n"
     # StructDef/EnumDef/TraitDef/ImplDef/FuncDef → 空（顶层在 generate 处理）
     return ""
+# M72-S2（Issue 10 D1）：cg_gen_stmt 入口 wrapper —— 编译产物运行时错误带 .px 源行号。
+# 每条可执行语句（含 if/while/for 嵌套子语句，递归均经本 wrapper）生成前插
+# px_srcline(<源行>) 追踪；stmt 末位恒为 pos [line, col]（parser 约定）。runtime 侧
+# px_error 打印最近位置 → LLM 拿到错误即定位到 .px 源行。产物 C 仅多一行赋值，开销极微。
+def cg_gen_stmt(stmt, indent):
+    var line = 0
+    if len(stmt) > 0:
+        let p = stmt[len(stmt) - 1]
+        if type(p) == "list" and len(p) >= 1 and type(p[0]) == "int":
+            line = p[0]
+    var pre = ""
+    if line > 0:
+        pre = cg_pad(indent) + "px_srcline(" + str(line) + ");\n"
+    return pre + cg_gen_stmt_inner(stmt, indent)
 # 复合赋值：全局变量（先读全局再运算再写回）
 def cg_assign_op_global(op, name, rhs):
     if op == "Assign":

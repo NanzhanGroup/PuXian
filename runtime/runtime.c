@@ -1550,12 +1550,29 @@ LXValue px_some(LXValue v) { return v; }
 
 // ==================== 错误 ====================
 
+// M72-S2（Issue 10 D1）：编译产物运行时 .px 源位置追踪（cg 每语句插 px_srcline、
+// 函数入口插 px_srcfunc；px_error 打印最近位置）。__thread → spawn 各协程独立
+// 追踪（S3 错误隔离按线程打印现场）。
+__thread int g_px_src_line = 0;
+__thread const char* g_px_src_func = NULL;
+void px_srcline(int line) { g_px_src_line = line; }
+void px_srcfunc(const char* name) { g_px_src_func = name; }
+
 void px_error(const char* fmt, ...) {
     // 先刷新 stdout 缓冲：print 输出在管道/重定向下是全缓冲，exit 前不刷会丢
     fflush(stdout);
     va_list ap;
     va_start(ap, fmt);
-    fprintf(stderr, "运行时错误: ");
+    // M72-S2（Issue 10 D1）：运行时错误带 .px 源位置（编译产物路径；pxi 解释器
+    // 走 i_err line:col 不受影响）。无追踪位置（native 初始化期）→ 原样前缀。
+    if (g_px_src_line > 0) {
+        if (g_px_src_func && g_px_src_func[0])
+            fprintf(stderr, "运行时错误 [%s 行%d]: ", g_px_src_func, g_px_src_line);
+        else
+            fprintf(stderr, "运行时错误 [行%d]: ", g_px_src_line);
+    } else {
+        fprintf(stderr, "运行时错误: ");
+    }
     vfprintf(stderr, fmt, ap);
     fprintf(stderr, "\n");
     va_end(ap);
