@@ -196,8 +196,9 @@ jobs:
           repo_gpgcheck=1
           gpgkey=file:///tmp/pxrepo/PUXIAN-GPG-KEY.asc
           EOF
-          dnf -q makecache 2>&1 | tail -5 || { echo "❌ 仓库验签失败"; exit 1; }
-          dnf -q --repo=puxian-selfcheck repoquery puxian || { echo "❌ repoquery 找不到 puxian"; exit 1; }
+          # -y：CI 无 tty，自动接受 gpgkey 导入（否则 dnf 交互询问 → 拒签 Bad GPG signature）
+          dnf -q -y makecache 2>&1 | tail -5 || { echo "❌ 仓库验签失败"; exit 1; }
+          dnf -q -y --repo=puxian-selfcheck repoquery puxian || { echo "❌ repoquery 找不到 puxian"; exit 1; }
           echo "✅ dnf makecache 双验签通过（repomd.xml.asc + 包签名）"
 
       - name: 发布到 gh-pages（rpm/ 树，只保留最新版）

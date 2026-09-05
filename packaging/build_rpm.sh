@@ -75,7 +75,20 @@ else
     fi
     echo "== 包签名 (demo key: $GPG_KEY) =="
 fi
-rpm --define "_gpg_name $GPG_KEY" --addsign "$RPK"
+# rpm --addsign 无 tty 时拿不到带口令密钥（"Could not set GPG_TTY ... ioctl"，
+# 且 gpg-agent 缓存未必命中 rpm 的 gpg 调用）→ 静默跳过签名但返回 0，
+# 后续 rpm -Kv 必然失败。release 模式带口令时覆写 __gpg_sign_cmd：
+#   headless 标准做法 —— --pinentry-mode loopback + --passphrase-file（CI 无需终端）
+SIGN_ARGS=(--define "_gpg_name $GPG_KEY")
+_PASSFILE=""
+if [ -n "${GPG_PASSPHRASE:-}" ]; then
+    _PASSFILE="$RPM_TOP/.gpg-passfile.$$"
+    printf '%s' "$GPG_PASSPHRASE" > "$_PASSFILE"
+    chmod 600 "$_PASSFILE"
+    SIGN_ARGS+=(--define "__gpg_sign_cmd %{__gpg} gpg --batch --yes --pinentry-mode loopback --passphrase-file $_PASSFILE --no-armor --no-secmem-warning -u %{_gpg_name} -sbo %{__signature_filename} %{__plaintext_filename}")
+fi
+rpm "${SIGN_ARGS[@]}" --addsign "$RPK"
+[ -n "$_PASSFILE" ] && rm -f "$_PASSFILE"
 
 # ---- 4) 仓库元数据 + repomd.xml 签名 + 公钥导出 ----
 echo "== createrepo_c =="
@@ -88,8 +101,10 @@ echo "== 公钥导出 =="
 gpg --batch --armor --export "$GPG_KEY" > "$REPO_OUT/PUXIAN-GPG-KEY.asc"
 
 # ---- 5) 自检 ----
+echo "== rpm 导入公钥（rpm -Kv 需 rpm 密钥库内有公钥，否则 NOKEY 误报失败）=="
+rpm --import "$REPO_OUT/PUXIAN-GPG-KEY.asc"
 echo "== rpm -Kv 自检 =="
-rpm -Kv "$RPK" | tail -3
+rpm -Kv "$RPK" | tail -6
 echo
 echo "✅ 仓库就绪: $REPO_OUT"
 echo "   包:       $RPK"
