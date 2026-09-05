@@ -1,0 +1,72 @@
+# ============================================================
+# M70-S1 用例 s15：表达式跨行（M70 候选 A / G2）
+# ------------------------------------------------------------
+# 多行 list/dict/调用参数/元组/索引切片/推导 —— 语义与单行等价
+# 对拍：diffcheck（lex+parse+codegen+run 四类 golden）
+# ============================================================
+def lookup(m):
+    return m["k"]
+
+def add3(a, b, c):
+    return a + b + c
+
+def main():
+    # 多行 list（含尾部逗号）
+    let a = [
+        1,
+        2,
+        3,
+    ]
+    print(len(a))
+    # 多行 dict（键值对分行 + 尾部逗号）
+    let d = {
+        "x": 10,
+        "y": 20,
+    }
+    print(d["x"] + d["y"])
+    # 多行调用参数：含尾部逗号 / 无尾部逗号
+    print(add3(
+        1,
+        2,
+        3,
+    ))
+    print(max(
+        8,
+        2
+    ))
+    # 多行元组
+    let t = (
+        1,
+        2,
+    )
+    print(t[0] + t[1])
+    # 多行索引 + 切片
+    let arr = [10, 20, 30, 40]
+    print(arr[
+        2
+    ])
+    print(len(arr[
+        1:3
+    ]))
+    # 多行 listcomp（for 与 if 分行）
+    let evens = [
+        x for x in [1, 2, 3, 4, 5, 6]
+        if x % 2 == 0
+    ]
+    print(evens)
+    # 嵌套：多行 dict 作实参、值含多行 list
+    let d2 = lookup({
+        "k": [
+            5,
+            6,
+        ],
+    })
+    print(d2)
+    # 跨行调用实参嵌套多行 dict + 多行 list
+    print(len(lookup({
+        "k": [
+            7,
+            8,
+            9,
+        ],
+    })))
