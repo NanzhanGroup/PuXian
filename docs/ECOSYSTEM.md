@@ -89,7 +89,7 @@ PuXian 每个里程碑都用普贤自己写示例/工具/应用（dogfooding 自
 ## 4. 消费路径（把库/示例用起来）
 
 1. **import std.***：`import std.collections` → 直接调函数（双模式皆可；M68 起 native 零 extern def）。
-2. **pxpkg 包管理**（M45，S3 深化）：`pxpkg init` + `pxpkg add <name>` + `pxpkg install` → px.px.lock 可复现；registry 资产 `registry/<name>/<version>/<name>.px` 随仓库分发（M69-S3 打通 fetch→import 闭环）。
+2. **pxpkg + 官方 registry**（M45 + M69-S3 打通 fetch→import 闭环）：`PX_REGISTRY=<仓库>/registry` → `pxpkg init` + `pxpkg add semver@^0.1.0` + `pxpkg install` → 安装到 `.px_modules/<name>/<name>.px`，**`import <name>`（裸名）编译/解释双模式可用** + `px.pkg.lock` 可复现（`--locked` 防篡改/registry 离线仍复现）。官方 9 库镜像随库入库（`registry/<name>/0.1.0/<name>.px`，见 `registry/README.md`）；端到端验证 `examples/m69_registry/verify.sh`（11 断言）。远程：registry 目录随 git clone 分发，或单包 `http(s) URL#sha256`。
 3. **拷源码改**：stdlib 全纯语言，直接读源码/拷进项目改（每文件 <500 行，符合大模型友好约束）。
 4. **文档链**：本文件（总览）→ `docs/PUXIAN_CHEATSHEET.md`（速查）→ `docs/spec.md`（规范）→ `docs/MINI_SUBSET.md`（子集边界）→ `docs/PXML.md`（PXML 规范）→ `docs/ROADMAP.md`（里程碑史）。
 5. **代码内文档**：`tools/pxc doc stdlib/<name>.px` 从 `##` 注释生成该库 Markdown API 文档。

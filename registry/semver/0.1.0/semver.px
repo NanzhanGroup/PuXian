@@ -1,0 +1,239 @@
+# ============================================================
+# 普贤标准库：std.semver —— 语义化版本 2.0.0（子集）（M45）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（pxc build）与解释（pxi run）双模式一致。
+#   sv_parse("1.2.3-alpha.1+build5") → {"major":1,"minor":2,"patch":3,
+#                                        "pre":"alpha.1","build":"build5","raw":"1.2.3-alpha.1+build5"}
+#   sv_cmp("1.2.3", "1.2.10")        → -1
+#   sv_satisfies("1.2.5", "^1.2.0")  → true
+#   sv_best(["1.2.0","1.2.5","2.0.0"], "^1.2.0") → "1.2.5"
+# 范围语法（cargo/npm 风格子集）：^ / ~ / 精确 / * / x 通配。
+# 供 tools/pxpkg.px（registry 版本解析 + lockfile 锁定）与 capability 复用。
+# ============================================================
+# ---- 字符/字符串工具 ----
+def sv_is_digit(c):
+    if c >= "0" and c <= "9":
+        return true
+    return false
+def sv_is_alnum(c):
+    if sv_is_digit(c):
+        return true
+    if c >= "a" and c <= "z":
+        return true
+    if c >= "A" and c <= "Z":
+        return true
+    return false
+def sv_is_all_digits(s):
+    if len(s) == 0:
+        return false
+    var i = 0
+    while i < len(s):
+        if not sv_is_digit(s[i]):
+            return false
+        i += 1
+    return true
+# 子串索引（runtime 无 find，自实现）：找不到返回 -1
+def sv_index_of(s, sub):
+    if len(sub) == 0:
+        return 0
+    var i = 0
+    while i <= len(s) - len(sub):
+        if s[i:i + len(sub)] == sub:
+            return i
+        i += 1
+    return -1
+# ---- 解析：v → {"major","minor","patch","pre","build","raw"} 或 null ----
+def sv_parse(v):
+    var s = v
+    var build = ""
+    let plus = sv_index_of(s, "+")
+    if plus >= 0:
+        build = s[plus + 1:len(s)]
+        s = s[0:plus]
+    var pre = ""
+    let dash = sv_index_of(s, "-")
+    if dash >= 0:
+        pre = s[dash + 1:len(s)]
+        s = s[0:dash]
+    let parts = split(s, ".")
+    if len(parts) != 3:
+        return null
+    if len(parts[0]) == 0 or len(parts[1]) == 0 or len(parts[2]) == 0:
+        return null
+    # 主版本号：全数字、无前导零
+    var i = 0
+    while i < 3:
+        if not sv_is_all_digits(parts[i]):
+            return null
+        if len(parts[i]) > 1 and parts[i][0] == "0":
+            return null
+        i += 1
+    # prerelease：点分标识符（数字无前导零；字母数字可含连字符）
+    if len(pre) > 0:
+        let pres = split(pre, ".")
+        var j = 0
+        while j < len(pres):
+            let tok = pres[j]
+            if len(tok) == 0:
+                return null
+            if sv_is_all_digits(tok):
+                if len(tok) > 1 and tok[0] == "0":
+                    return null
+            else:
+                var k = 0
+                while k < len(tok):
+                    let c = tok[k]
+                    if not (sv_is_alnum(c) or c == "-"):
+                        return null
+                    k += 1
+            j += 1
+    return {"major": int(parts[0]), "minor": int(parts[1]), "patch": int(parts[2]), "pre": pre, "build": build, "raw": v}
+# ---- 比较：a<b → -1；a==b → 0；a>b → 1（SemVer 2.0.0 优先级规则）----
+def sv_cmp(a, b):
+    let pa = sv_parse(a)
+    let pb = sv_parse(b)
+    if pa == null or pb == null:
+        return 0
+    if pa["major"] < pb["major"]:
+        return -1
+    if pa["major"] > pb["major"]:
+        return 1
+    if pa["minor"] < pb["minor"]:
+        return -1
+    if pa["minor"] > pb["minor"]:
+        return 1
+    if pa["patch"] < pb["patch"]:
+        return -1
+    if pa["patch"] > pb["patch"]:
+        return 1
+    # 同号段：有 prerelease 的版本 < 无 prerelease 的版本
+    let ap = pa["pre"]
+    let bp = pb["pre"]
+    if ap == "" and bp == "":
+        return 0
+    if ap == "":
+        return 1
+    if bp == "":
+        return -1
+    let as_list = split(ap, ".")
+    let bs_list = split(bp, ".")
+    var i = 0
+    while i < len(as_list) and i < len(bs_list):
+        let x = as_list[i]
+        let y = bs_list[i]
+        if x == y:
+            i += 1
+            continue
+        let xd = sv_is_all_digits(x)
+        let yd = sv_is_all_digits(y)
+        if xd and yd:
+            if int(x) < int(y):
+                return -1
+            return 1
+        if xd:
+            return -1  # 数字标识符 < 字母数字标识符
+        if yd:
+            return 1
+        if x < y:
+            return -1  # 字母数字按 ASCII 字典序
+        return 1
+    if len(as_list) < len(bs_list):
+        return -1  # 标识符数量多者大
+    if len(as_list) > len(bs_list):
+        return 1
+    return 0
+# ---- 范围解析：rng → {"lo","hi","pre"}（hi 开区间）或 null ----
+# 支持：^1.2.3 / ~1.2.3 / ~1.2 / ~1 / 1.2.3 / * / 1.2.x / 1.2.* / 1.x / 1 / 空
+def sv_range_parse(rng):
+    var r = trim(rng)
+    if r == "" or r == "*":
+        return {"lo": "0.0.0", "hi": "999999999.0.0", "pre": ""}
+    var op = ""
+    if r[0] == "^":
+        op = "^"
+        r = trim(r[1:len(r)])
+    elif r[0] == "~":
+        op = "~"
+        r = trim(r[1:len(r)])
+    if r == "" or r == "*":
+        return {"lo": "0.0.0", "hi": "999999999.0.0", "pre": ""}
+    # 拆分 x.y.z（x/y/z 可含通配 x/*）
+    let parts = split(r, ".")
+    var nums = []
+    var i = 0
+    while i < len(parts) and i < 3:
+        let t = parts[i]
+        if t == "x" or t == "X" or t == "*":
+            nums.append(-1)
+        elif sv_is_all_digits(t):
+            if len(t) > 1 and t[0] == "0":
+                return null  # 前导零非法
+            nums.append(int(t))
+        else:
+            return null
+        i += 1
+    # 补齐：1 → [1]；1.2 → [1,2]；缺失视为通配 -1
+    while len(nums) < 3:
+        nums.append(-1)
+    let ma = nums[0]
+    let mi = nums[1]
+    let pa = nums[2]
+    if ma < 0:
+        # 全通配（如 * / x）
+        return {"lo": "0.0.0", "hi": "999999999.0.0", "pre": ""}
+    # 精确版本号（op 空且三部分都确定）
+    if op == "" and mi >= 0 and pa >= 0:
+        return {"lo": r, "hi": str(ma) + "." + str(mi) + "." + str(pa + 1), "pre": ""}
+    if op == "" and mi < 0:
+        # 1 / 1.x：>=1.0.0 <2.0.0
+        return {"lo": str(ma) + ".0.0", "hi": str(ma + 1) + ".0.0", "pre": ""}
+    if op == "" and pa < 0:
+        # 1.2 / 1.2.x：>=1.2.0 <1.3.0
+        return {"lo": str(ma) + "." + str(mi) + ".0", "hi": str(ma) + "." + str(mi + 1) + ".0", "pre": ""}
+    # 显式 op
+    if op == "^":
+        # ^1.2.3 → >=1.2.3 <2.0.0；^0.2.3 → <0.3.0；^0.0.3 → <0.0.4
+        var lo = ""
+        var hi = ""
+        if ma > 0:
+            lo = str(ma) + "." + str(mi) + "." + str(pa)
+            hi = str(ma + 1) + ".0.0"
+        elif mi > 0:
+            lo = "0." + str(mi) + "." + str(pa)
+            hi = "0." + str(mi + 1) + ".0"
+        else:
+            lo = "0.0." + str(pa)
+            hi = "0.0." + str(pa + 1)
+        return {"lo": lo, "hi": hi, "pre": ""}
+    # op == "~"
+    if ma >= 0 and mi < 0:
+        # ~1 → >=1.0.0 <2.0.0
+        return {"lo": str(ma) + ".0.0", "hi": str(ma + 1) + ".0.0", "pre": ""}
+    if ma >= 0 and mi >= 0 and pa < 0:
+        # ~1.2 → >=1.2.0 <1.3.0
+        return {"lo": str(ma) + "." + str(mi) + ".0", "hi": str(ma) + "." + str(mi + 1) + ".0", "pre": ""}
+    # ~1.2.3 → >=1.2.3 <1.3.0
+    return {"lo": str(ma) + "." + str(mi) + "." + str(pa), "hi": str(ma) + "." + str(mi + 1) + ".0", "pre": ""}
+# ---- 版本是否满足范围 ----
+def sv_satisfies(ver, rng):
+    let r = sv_range_parse(rng)
+    if r == null:
+        return false
+    let p = sv_parse(ver)
+    if p == null:
+        return false
+    # 预发布版本只匹配显式含 pre 的范围（本实现范围不带 pre → 一律不匹配）
+    if p["pre"] != "":
+        return false
+    return sv_cmp(ver, r["lo"]) >= 0 and sv_cmp(ver, r["hi"]) < 0
+# ---- 从版本列表中选满足范围且最高的版本（未满足返回 null）----
+def sv_best(versions, rng):
+    var best = null
+    var i = 0
+    while i < len(versions):
+        let v = versions[i]
+        if sv_satisfies(v, rng):
+            if best == null or sv_cmp(v, best) > 0:
+                best = v
+        i += 1
+    return best

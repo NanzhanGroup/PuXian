@@ -1,0 +1,112 @@
+# ============================================================
+# 普贤标准库：std.webroute —— 文件即路由命名规则（M43）
+# ------------------------------------------------------------
+# 纯函数：文件名（相对应用根）→ 路由规则 dict。
+#   用法：wr_parse_file("get_healthz.px") → {"method":"GET","pattern":"/healthz","fnname":"get_healthz"}
+#         wr_parse_file("main.px")        → null（非路由文件）
+# 被 tools/routegen.px（路由生成器）与 capability.px（能力自检）复用。
+# 双模式共享：编译（pxc build）+ 解释（pxi run）输出一致。
+#
+# 规则摘要：
+#   - 方法前缀：文件名首段（第一个 _ 前）∈ 方法表 → 该值大写；否则 GET
+#   - 路径段：目录段与文件名段统一按 `_` 拆分（_ 即路径分隔）；#name → :name；* → *
+#   - index.px / get.px → GET /
+#   - fnname = relpath 去 .px、/ → _、# 移除（全局唯一，重复由 routegen 报错）
+#   - 特殊文件（main/middleware/generated_routes）与 _ 开头（私有）、static/ 下 → null
+# ============================================================
+# ---- 方法表（首段 ∈ 此表 → 方法前缀）----
+def wr_methods():
+    return ["get", "post", "put", "delete", "patch", "head", "options", "all"]
+# ---- 特殊文件名（不生成路由）----
+def wr_is_special(name):
+    if name == "main":
+        return true
+    if name == "middleware":
+        return true
+    if name == "generated_routes":
+        return true
+    return false
+# ---- 段转换：一个路径段 → 路由 pattern 段（#name → :name，* → *）----
+def wr_seg_to_pattern(seg):
+    if len(seg) > 0 and seg[0] == "#":
+        return ":" + seg[1:len(seg)]
+    if seg == "*":
+        return "*"
+    return seg
+# ---- 核心：文件名（相对应用根）→ 路由规则 ----
+# 输入 relpath：如 "api/get_items.px"、"get_p_#id.px"
+# 返回 {"method","pattern","fnname"} 或 null（非路由文件）
+def wr_parse_file(relpath):
+    # 1. 必须以 .px 结尾
+    if not ends_with(relpath, ".px"):
+        return null
+    # 2. 去 .px；按 / 拆分目录段
+    let base = relpath[0:len(relpath) - 3]
+    let dirs = split(base, "/")
+    # 3. 目录段任一段以 _ 开头 → 私有，跳过
+    var di = 0
+    while di < len(dirs) - 1:
+        if starts_with(dirs[di], "_"):
+            return null
+        di += 1
+    # 4. 第一段 static → 静态目录
+    if dirs[0] == "static":
+        return null
+    # 5. 末段（文件名）
+    let fname = dirs[len(dirs) - 1]
+    if starts_with(fname, "_"):
+        return null
+    if wr_is_special(fname):
+        return null
+    # 6. 方法前缀：fname 按 _ 拆，首段 ∈ 方法表
+    let fparts = split(fname, "_")
+    var method = "GET"
+    var rest_segs = []
+    var has_prefix = false
+    if contains(wr_methods(), fparts[0]):
+        has_prefix = true
+        method = to_upper(fparts[0])
+        # 剩余段 = 目录段（各按 _ 拆展平）+ fparts[1:]（方法后各段）
+        var ri = 0
+        while ri < len(dirs) - 1:
+            let dsegs = split(dirs[ri], "_")
+            var dj = 0
+            while dj < len(dsegs):
+                rest_segs.append(dsegs[dj])
+                dj += 1
+            ri += 1
+        var fi = 1
+        while fi < len(fparts):
+            rest_segs.append(fparts[fi])
+            fi += 1
+    else:
+        # 无方法前缀：method=GET，剩余段 = 目录段展平 + 整个 fname（不拆 _，保持字面）
+        var ri = 0
+        while ri < len(dirs) - 1:
+            let dsegs = split(dirs[ri], "_")
+            var dj = 0
+            while dj < len(dsegs):
+                rest_segs.append(dsegs[dj])
+                dj += 1
+            ri += 1
+        rest_segs.append(fname)
+    # 7. pattern：rest_segs 为空 → /；index 且无前缀 → /
+    var pattern = "/"
+    var no_prefix = not has_prefix
+    if len(rest_segs) == 0:
+        pattern = "/"
+    elif len(rest_segs) == 1 and rest_segs[0] == "index" and no_prefix:
+        pattern = "/"
+    else:
+        var out = "/"
+        var pi = 0
+        while pi < len(rest_segs):
+            out += wr_seg_to_pattern(rest_segs[pi])
+            if pi < len(rest_segs) - 1:
+                out += "/"
+            pi += 1
+        pattern = out
+    # 8. fnname：base 去 / → _，# 移除
+    var fnname = replace(base, "/", "_")
+    fnname = replace(fnname, "#", "")
+    return {"method": method, "pattern": pattern, "fnname": fnname}
