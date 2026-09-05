@@ -99,7 +99,7 @@
 - [x] pxi 重建成功；capability 253 双模式逐字节一致；stdlib m66 yaml35/lunar36/pxml68/proc14 双模式 PASS；diffcheck --all 全绿
 - [x] typo 语义不漂移（拼错变量仍 R1001、可辨）—— t_typo.px：R1001 'sqliite_open'
 - [x] spec §9.3、MINI_SUBSET §十三.0、README/README.en、CHANGELOG M68、00-README §4 第 1 条 全部收敛
-- [ ] tag `v0.1.0-m68` 发布成功，GitHub 产物二次解包冒烟全绿；本机留档 + 发布指引更新（S5 待执行）
+- [x] tag `v0.1.0-m68` 发布成功（Release 资产 `puxian-0.1.0-m68-41afc1d.tar.gz` 50,404,289B，sha256 e63ac492… 与 GitHub API 记录一致）；GitHub 产物二次解包冒烟全绿（pxc/pxi 静态 ELF + hello 编译/解释 + import std.semver + **零 extern def 裸脚本 sqlite_open/exec/query + os_pid + now_ms pxi == 编译产物逐字节一致**）；本机留档 + 发布指引更新至 m68
 
 ## 七、生态启动 · 留档（未来候选里程碑，不在 M68 执行）
 > 2026-09-05 用户调整：生态线移出 M68。以下为原 P0/P1 缺口留档，供独立立项时引用，不丢失。
@@ -144,3 +144,23 @@
   5. 本机留档 + 发布指引更新至 m68；
   6. 验收清单最后一项 [ ] → [x] 回填 + 向用户完整报告。
 - 14:00 现场快照：origin/main @ 41afc1d 已同步、工作树 clean、产物齐备（bootstrap/pxi 9326544B 12:14 重建、docs/pxi_native_diff.md 10025B）。
+
+### 18:00 · 晚间场 S5 收尾（ws-todo #12）— ✅ 里程碑闭环
+> 先读 §八 断点留档续做。侦查发现：tag v0.1.0-m68 于 12:26 已打已推（指向 41afc1d，A4 代码终态）、
+> Release workflow run 4 已成功、资产已发布（sha256 e63ac492…），CI run 101(41afc1d)/102(428fa12) 均六 job 全绿
+> → S5 剩余项 = 全链复跑 + 产物冒烟 + 留档 + 指引 + 验收回填。
+- **全链复跑（§四总闸，本机 18:03-18:25）**：
+  ① capability 双模式 **pxi 253 = bin 253 逐字节一致**（diff 空，CAPABILITY_DIFF_IDENTICAL）；
+  ② diffcheck --all **全量对拍全部通过**（rc=0，96 行日志）；
+  ③ 发布产物冒烟（/tmp/pxm68 解包 v0.1.0-m68-41afc1d）：pxc/pxi 均 statically linked ELF + --version 正常；
+     hello.px 编译静态 ELF 运行 + 解释运行均输出一致；`import std.semver` + sv_parse("1.2.3") 编译运行
+     (major=1 minor=2 patch=3) 验证 stdlib 定位；**M68 核心：零 extern def 裸脚本（sqlite_open/exec/query +
+     os_pid + now_ms）pxi rc=0 输出 `rows=[{a: 1}, {a: 2}] pid_gt0=true now_ms_gt0=true` 与编译产物
+     逐字节一致（SMOKE_DIFF_IDENTICAL）—— 用户「pxi 缺 sqlite」现象在发布版彻底消失**；
+  ④ typo 语义：`sqliite_open` → `错误 [R1001] 1:22: 未定义变量: 'sqliite_open'`（真 typo 不误当 native、可辨）；
+  ⑤ verify：m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m66_proc **8 项全 PASS**；
+  ⑥ fmt --check 全绿（selfhost+tools+stdlib 收敛域）；lint compiler.px 0 错 + tools 16 文件 0/0；
+  ⑦ ci.yml + release.yml YAML 合法；make_release.sh bash -n OK；⑧ CI run 102（HEAD 428fa12）六 job 全绿。
+- **本机留档**：`/data/release/puxian-0.1.0-m68-41afc1d.tar.gz`（sha256 e63ac492e74df… 与 GitHub API 一致）+
+  `PuXian发布包开发指引-v0.1.0-m68.md`（§5 删除过时「pxi 缺 native」缺口描述，更新为 M68 后双模式一致 + M68 能力速览）。
+- **验收清单全勾**（§六 8/8）→ M68 里程碑闭环。M68 收尾 commit 随本文档入库并推送 origin main。
