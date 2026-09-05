@@ -1,0 +1,55 @@
+# ============================================================
+# gen_ecosystem.px —— 生态机器索引生成器（M69-S1）
+# ------------------------------------------------------------
+# 从 stdlib/*.px 扫描：库名 / 顶层 def 签名 / 头部注释块，
+# 生成机器可读索引 JSON → docs/ecosystem_index.json。
+# 幂等：同一 stdlib 快照重跑输出字节一致。
+# CI 校验（防漂移）：重跑本工具写回 docs/ecosystem_index.json，
+#   再 `git diff --exit-code docs/ecosystem_index.json` —— stdlib 变更
+#   未同步索引即失败 → 提示人工同步索引与 ECOSYSTEM.md。
+# 运行：tools/pxc run tools/gen_ecosystem.px （仓库根目录）
+# 注：dict 用字面量构造（普贤无 d[k]=v 赋值，用 d.set(k,v) / 读 d[k]）。
+# ============================================================
+let LIBS = ["collections", "edge", "gfx", "lunar", "png", "pxml", "semver", "webroute", "yaml"]
+
+# 去行首空白与全部 # 前缀后 trim
+def strip_hash(line):
+    var t = trim(line)
+    var i = 0
+    while i < len(t) and t[i] == "#":
+        i += 1
+    return trim(t[i:])
+
+# 扫描单库：头部注释块（文件头连续 # 行）+ 顶层 def 清单
+def scan_lib(name):
+    var path = "stdlib/" + name + ".px"
+    var src = read_file(path)
+    var lines = split(src, "\n")
+    var header = []
+    var defs = []
+    var in_header = true
+    for line in lines:
+        var t = trim(line)
+        if in_header:
+            if starts_with(t, "#"):
+                var doc = strip_hash(line)
+                if len(doc) > 0:
+                    header.append(doc)
+            elif len(t) == 0:
+                pass
+            else:
+                in_header = false
+        if starts_with(t, "def "):
+            defs.append(t)
+    return {"name": name, "path": path, "lines": len(lines), "defs": defs, "header": header}
+
+def main():
+    var out = []
+    for name in LIBS:
+        out.append(scan_lib(name))
+    var payload = {"generator": "tools/gen_ecosystem.px", "count": len(LIBS), "libs": out}
+    var text = json_stringify(payload)
+    write_file("docs/ecosystem_index.json", text)
+    print("written docs/ecosystem_index.json (" + str(len(LIBS)) + " libs, " + str(len(text)) + " bytes)")
+
+main()
