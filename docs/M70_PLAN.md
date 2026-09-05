@@ -112,11 +112,11 @@
 | golden 重生成面大 | 每 S 步增量更新 + diff 人工核对 + diffcheck --all 兜底 |
 
 ## 五、验收清单（里程碑完成判据）
-- [ ] S1：跨行探针（多行 list/dict/call/tuple/索引）pxi/pxc 双模式跑通，语义与单行等价；单行行为零回归（golden 无意外漂移）
-- [ ] S2：fmt 多行样本规范化输出 + 幂等 + 往返成功；单行格式零回归
-- [ ] S3：顶层 var 跨函数读写双模式一致；import 模块状态槽可用且无副作用原则成立；自举证明通过
-- [ ] S4：回归总闸 1-6 全绿
-- [ ] S5：spec/MINI_SUBSET/CHEATSHEET/ECOSYSTEM_GAPS/ROADMAP/CHANGELOG/README 全部收口
+- [x] S1：跨行探针（多行 list/dict/call/tuple/索引）pxi/pxc 双模式跑通，语义与单行等价；单行行为零回归（golden 无意外漂移）
+- [x] S2：fmt 多行样本规范化输出 + 幂等 + 往返成功；单行格式零回归
+- [x] S3：顶层 var 跨函数读写双模式一致；import 模块状态槽可用且无副作用原则成立；自举证明通过
+- [x] S4：回归总闸 1-6 全绿
+- [x] S5：spec/MINI_SUBSET/CHEATSHEET/ECOSYSTEM_GAPS/ROADMAP/CHANGELOG/README 全部收口
 - [ ] S6：tag v0.1.0-m70 发布 + GitHub 产物二次冒烟通过 + 本机留档 + 发布指引更新
 
 ## 六、执行进度（实时记录 · 东月）
@@ -124,9 +124,11 @@
 
 ### 执行记录
 - **S0 立项侦查**（2026-09-05, commit b927602）：M70_PLAN 起草入库。源码实录确认：parse_brace 已支持跨行 dict/block；parse_call_args/parse_list_or_comp/parse_paren_or_tuple/索引切片不支持（实测 E2001）；顶层 VarDecl codegen 为 main 内局部变量；runtime 已有 px_set_global/get_global 可承载全局槽。
-- **S1 表达式跨行**（2026-09-05）：parser.px 新增 `skip_expr_ws()`（跳过 换行/缩进/去缩进），在 parse_call_args（含尾部逗号）、parse_list_or_comp（含 listcomp for/if 分行）、parse_paren_or_tuple、parse_postfix 索引/切片四处括号上下文加入跨行容忍（对齐 parse_brace 既有模式，不动 lexer → 现有 golden 零漂移）。重建 pxpar/pxi/pxc（--no-quic）→ 探针 C1-C9 全过、双模式输出逐字节一致；新增 s15_multiline.px 用例 + 四类 golden、cases_bad parse_b11/b12（未闭合仍报错）+ errors golden；diffcheck --all 与 --errors 全绿（现有 golden 零漂移）。待 commit。
-- **S3 模块顶层状态**（2026-09-05）：实证澄清——主程序同文件顶层 let/var 跨函数早已支持（codegen cg_globals → px_get/set_global，探针 g1a/g1b 双模式一致）；G1 真缺口 = **import 不导出非 Const 顶层 VarDecl**（实测 import mystate → 双模式「未定义变量 g_state」）。修复 cg_module.px：cg_is_definition/cg_def_name 的 VarDecl 分支由「仅 Const」放宽为全部 VarDecl（let/var/const）→ import 合并模块级状态槽，主程序顶层执行 VarDecl 初始化（px_set_global 注册）。双模式共用 cg_resolve_modules → 一处修复双模式生效。验证：mystate 探针 import set/get 双模式一致（42）；新增 v04_module_state.px（9 断言：模块函数读写/主程序直名读写/let 只读/无副作用）pxi+pxc 双模式 9 PASS；副本声明（compiler 链各文件同名声明显式）导出后同值覆盖无害——自举证明通过（新 golden/compiler.c 6992 行，B.c==A.c 逐字节）。diffcheck --all/--errors 全绿。注意：模块顶层 var 初始化表达式随合并于主程序启动执行一次（import 副作用边界文档化，S5 写库规范更新）。待 commit。
-- **S2 fmt 多行收口**（2026-09-05）：fmt_core 为 token 流重排架构 → **零代码改动**；新增 examples/m70_langfix/verify_fmt_multiline.sh（① 多行输入→golden 结构保留+规范化 ② 幂等 ③ 重 lex 语义等价 ④ fmt 输出 pxi 往返一致 ⑤ --check）全过。待 commit。
+- **S1 表达式跨行**（2026-09-05）：parser.px 新增 `skip_expr_ws()`（跳过 换行/缩进/去缩进），在 parse_call_args（含尾部逗号）、parse_list_or_comp（含 listcomp for/if 分行）、parse_paren_or_tuple、parse_postfix 索引/切片四处括号上下文加入跨行容忍（对齐 parse_brace 既有模式，不动 lexer → 现有 golden 零漂移）。重建 pxpar/pxi/pxc（--no-quic）→ 探针 C1-C9 全过、双模式输出逐字节一致；新增 s15_multiline.px 用例 + 四类 golden、cases_bad parse_b11/b12（未闭合仍报错）+ errors golden；diffcheck --all 与 --errors 全绿（现有 golden 零漂移）。**commit c4571b7（20:00）**。
+- **S3 模块顶层状态**（2026-09-05）：实证澄清——主程序同文件顶层 let/var 跨函数早已支持（codegen cg_globals → px_get/set_global，探针 g1a/g1b 双模式一致）；G1 真缺口 = **import 不导出非 Const 顶层 VarDecl**（实测 import mystate → 双模式「未定义变量 g_state」）。修复 cg_module.px：cg_is_definition/cg_def_name 的 VarDecl 分支由「仅 Const」放宽为全部 VarDecl（let/var/const）→ import 合并模块级状态槽，主程序顶层执行 VarDecl 初始化（px_set_global 注册）。双模式共用 cg_resolve_modules → 一处修复双模式生效。验证：mystate 探针 import set/get 双模式一致（42）；新增 v04_module_state.px（9 断言：模块函数读写/主程序直名读写/let 只读/无副作用）pxi+pxc 双模式 9 PASS；副本声明（compiler 链各文件同名声明显式）导出后同值覆盖无害——自举证明通过（新 golden/compiler.c 6992 行，B.c==A.c 逐字节）。diffcheck --all/--errors 全绿。注意：模块顶层 var 初始化表达式随合并于主程序启动执行一次（import 副作用边界文档化，S5 写库规范更新）。**commit 66af554（20:26）**。
+- **S2 fmt 多行收口**（2026-09-05）：fmt_core 为 token 流重排架构 → **零代码改动**；新增 examples/m70_langfix/verify_fmt_multiline.sh（① 多行输入→golden 结构保留+规范化 ② 幂等 ③ 重 lex 语义等价 ④ fmt 输出 pxi 往返一致 ⑤ --check）全过。**commit 3cf0b6d（20:01）**。
+- **S4 回归总闸（2026-09-05，20:40-20:59）**：侦查发现 S1/S3 期间重建的 bootstrap/pxi pxc pxpar 为 **--no-quic 裁剪态**（pxi 4245944B，vs M68/M69 发布物全能力 pxi 9326544B）→ capability.px quic 段（M46-M54）FAIL（pxi 178/180）、双模式不一致 → **判定：M70 发布物须全能力重建**（与 M68/M69 对齐，quic/h3 解释能力保持，M68「差集 155 含 quic/h3」成果不丢）。`tools/pxc build`（不带 --no-quic）三连：interp.px → pxi **9355256B**（real 9m10s）/ compiler.px → pxc **9275232B**（real 5m0s）/ parser.px → pxpar **9142352B**（real 1m49s）。最终回归（全能力产物下）**全绿**：① capability 双模式 **253 PASS 逐字节一致**（CAPABILITY_DIFF_IDENTICAL，capability.px 全能力重编 9098040B）；② diffcheck --all rc=0；③ diffcheck --errors rc=0；④ m62/m64_fmt/m64_lint/m66_yaml(35)/pxml/lunar/m69_registry(11 断言)/m70_fmt verify 全过 + m63_langfix（mock :18080 起后）ALL OK；⑤ fmt --check（selfhost+tools+stdlib）0 错、lint compiler.px + tools 0 错；⑥ ci.yml/release.yml YAML OK、make_release.sh bash -n OK。**噪音排除记录**：m63 verify 初跑 rc=1 = mock server 未起（环境依赖，起后 ALL OK）；regress 初跑 capability DIFFERS = --no-quic 裁剪态（全能力重建后 IDENTICAL）。**commit 见收口**。
+- **S5 文档收口（2026-09-05）**：spec §4.1（表达式跨行规则：括号内换行/语句边界/缩进栈约束/dict 判定）+ §5.1（顶层 let·var = 全局状态槽 px_set_global + import 导出模块顶层 let/var/const + 同名冲突用户优先 + let 仍 E3002）+ §8.4（import 无副作用边界：仅顶层 var/let/const 声明随合并导出并初始化一次）修订；MINI_SUBSET §四 #1/#5、§九 #7、§十三 #5、§十四 L4 更新（G1/G2 从「限制」改「已支持+规则」）；ECOSYSTEM_GAPS G1/G2 标记 M70 已修（保留历史评估供追溯）；CHEATSHEET §0.3（import 导出）、§1 类型表（list 可跨行）、§1 坑 3/6/7（表达式跨行/顶层全局状态槽/import 副作用边界）同步 M70 语义；ROADMAP M70 行；CHANGELOG M70 条目；README(.en) 原生开发表补 M68/M69/M70 三行。**commit 见收口**。
 
 
 （每完成一步在此追加：日期/commit/验证结果）

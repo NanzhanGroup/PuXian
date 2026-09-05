@@ -6,6 +6,45 @@
 
 ## [Unreleased]
 
+### M70 · 语言缺口修复：表达式跨行 + 模块顶层状态（docs/M70_PLAN.md）✅
+
+> 立项（2026-09-05 用户指令）：M69-S4 `docs/ECOSYSTEM_GAPS.md §4` 拆出的两条语言缺口——
+> **G2 表达式跨行**（写库第一痛点，AI 生成最常见语法错）+ **G1 模块顶层状态**（写有状态模块/配置中心受阻）。
+> 决策：A→B 顺序执行；G3 `let` 不可变（有意设计保持）、G4 分号（不做）；范围铁律 = 只动语言面
+> （parser/cg_module 语义），不开 PR；直接开工不排 ws-todo。
+> 回归：语言面修复全套（diffcheck --all/--errors + capability 双模式 253 逐字节 + 全能力重建
+> bootstrap 链 + 自举证明 B.c==A.c + stdlib/m62-m64/m69_registry/m70_langfix verify + fmt/lint + YAML/bash -n）。
+
+- **M70-S1 表达式跨行（commit c4571b7）**：parser 括号上下文换行容忍——新增 `skip_expr_ws()`，
+  在 `parse_call_args`（含尾部逗号）/ `parse_list_or_comp`（含 listcomp for/if 分行）/ `parse_paren_or_tuple`
+  / `parse_postfix` 索引切片四处括号上下文支持多行，`brace_looks_like_dict` 跨行 dict 判定修正；
+  **不动 lexer token 流 → 现有 golden 零漂移**；新增 `s15_multiline.px` + 四类 golden +
+  cases_bad `parse_b11/b12`（括号未闭合仍报错）。新规则：换行仅限括号（`[` `(` `{`）内、语句边界
+  仍以换行为准（`=` 后/二元运算符后不换行，续行用括号包裹）、续行缩进须与缩进栈相容（不规则仍 E2002）。
+- **M70-S2 fmt 多行收口（commit 3cf0b6d）**：fmt_core 为 token 流重排架构 → **多行天然支持，零代码改动**；
+  `examples/m70_langfix/verify_fmt_multiline.sh`（① 多行结构保留+规范化 ② 幂等 ③ 重 lex 语义等价
+  ④ fmt 输出 pxi 往返一致 ⑤ --check）全过；单行格式零回归。
+- **M70-S3 模块顶层状态（commit 66af554）**：实证——主程序同文件顶层 let/var 跨函数**早已支持**
+  （codegen `px_get/set_global`），G1 真缺口 = **import 不导出非 Const 顶层 VarDecl**（实测 R1001 未定义）。
+  修复 `cg_module.px`：`cg_is_definition`/`cg_def_name` 的 VarDecl 分支由「仅 Const」放宽为全部
+  （let/var/const）→ 模块级状态槽随 import 合并、主程序顶层 VarDecl 初始化注册全局（双模式共用
+  `cg_resolve_modules` 一处修复双模式生效）。**新语义/约束**：① 模块顶层 var/let 初始化表达式在
+  import 方程序启动时执行一次（import 有「合并初始化」副作用——库作者保持纯值/惰性 init）；② 主程序与
+  模块同名顶层声明 → 用户值覆盖模块默认；③ 模块 let 仍不可变（跨文件赋值编译期 E3002）。验证：
+  `v04_module_state.px` 9 断言（模块函数读写/主程序直名读写/let 只读/无副作用）pxi+pxc 双模式全过 +
+  自举证明通过（golden/compiler.c 重生成 6992 行 B.c==A.c）+ diffcheck --all/--errors 全绿。
+- **M70-S4 回归总闸（commit 见本里程碑收口）**：**全能力重建 bootstrap/pxi pxc pxpar**（不带 --no-quic，
+  与 M68/M69 发布物对齐——quic/h3 解释能力保持，capability quic 段不丢）；capability 双模式
+  **253 PASS 逐字节一致**；diffcheck --all + --errors 全绿；stdlib/m62_langfix/m63_langfix/m64_fmt/
+  m64_lint/m69_registry/m70_langfix verify 全过；fmt --check + lint 0 错；ci/release YAML +
+  make_release.sh bash -n。
+- **M70-S5 文档收口 + S6 发布（commit/tag v0.1.0-m70）**：spec §4.1（表达式跨行规则）/§5.1（顶层
+  let/var 全局状态槽语义）/§8.4（import 导出边界）新增修订 + MINI_SUBSET §四/§八/§九/§十三 限制更新
+  （G1/G2 从限制改「已支持+规则」）+ ECOSYSTEM_GAPS（G1/G2 标记 M70 已修、保留历史评估）+
+  CHEATSHEET §0/§1 同步 + ROADMAP M70 行 + README(.en) 里程碑行；tag `v0.1.0-m70` → push →
+  CI 自动发布 + GitHub 产物二次冒烟（sha256 三方一致 + 跨行/模块状态双模式冒烟）+ 本机留档 +
+  发布指引更新至 m70。
+
 ### M69 · 生态启动：资产化 + AI 速查 + registry 拉取闭环（docs/M69_PLAN.md）✅
 
 > 立项（2026-09-05 用户指令）：GitHub 见 M68 收尾 → 立项 M69 生态线。承接 M68_PLAN §七留档。

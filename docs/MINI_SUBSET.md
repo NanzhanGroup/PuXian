@@ -132,11 +132,11 @@
 
 | # | 限制 | 现象 | 规避 |
 |---|---|---|---|
-| 1 | **多行 list/dict 字面量不支持** | `let d = {\n...}` 报"意外的 token: 换行" | 集合字面量必须单行（长表用字符串/循环构造） |
+| 1 | **多行 list/dict 字面量** | ~~报"意外的 token: 换行"~~ **M70-S1 已修**：`[\n...]`/`{\n...}` 括号内换行容忍（parser skip_expr_ws），语义与单行等价 | 续行缩进须与缩进栈相容；`=` 后/二元运算符后不换行（需续行用括号包裹） |
 | 2 | **编译版浮点 str() 用 `%g`**（与解释器/Rust Display 不一致） | `str(1e-7)`="1e-07"、`str(123456789.123)`="1.23457e+08" 丢精度、`str(1e20)` 错误 | 源码避免极小/极大/高精度浮点字面量；对拍用例不含此类 |
 | 3 | **编译版 NUL 字符串截断**（C 字符串本质） | `"\u{0}"` 编译版变空串；对拍含 NUL 字面量的文件时输出 `""` vs `"\0"` | 源码避免 NUL 字面量（rust_str_debug 用 `c < "\u{1}"` 判断 NUL 绕开） |
 | 4 | **单行 if 语句不支持**（`if x: y`） | 报"期望 换行，实际得到 return" | 一律用 if 块 |
-| 5 | **函数调用参数不能跨行** | 多行调用参数报错 | 单行调用 |
+| 5 | **函数调用参数跨行** | ~~多行调用参数报错~~ **M70-S1 已修**：`f(\na,\nb,\n)` 含尾部逗号全支持 | 同上（缩进栈相容） |
 | 6 | **exit(n) 不终止执行**（仅设退出码） | `exit(1)` 后代码继续跑 | 报错用 `panic` 立即终止（err 函数先 print 再 panic） |
 | 7 | **编译版 AST dump 超大文件内存受限** | `build/parser 解析 >2 万行 AST 的源码` 被 kill（字符串拼接峰值内存）；解释器版可过 | 自举 codegen 消费 AST 树不 dump，不受影响；对拍用例规模内正常 |
 | 8 | **大指数浮点 str() 显示**（>=1e16） | PuXian str(1.5e308) 展开为 1500...000（无指数），Rust f64 Debug 显示 1.5e308 | 源码避免 >=1e16 浮点字面量；对拍用例（s09）已规避，M-B6 处理 codegen 浮点表示 |
@@ -153,7 +153,7 @@
 | 4 | **编译模式 range() 物化为 list** | `str(range(3))` 编译版 \"[0, 1, 2]\" vs 解释器 \"range(0, 3, 1)\" | range 只用于 `for` 迭代，不打印/转字符串；对拍用例不跨模式对比 range 的 str |
 | 5 | **编译模式闭包显示名带序号** | `str(fn(x){x})` 编译版 \"\<fn \<closure2\>\>\" vs 解释器 \"\<fn \<closure\>\>\" | 不依赖闭包显示名（语义不受影响） |
 | 6 | **dict 键必须字符串**（语言级） | 整数键 `d[1]` 编译/解释均按字符串键 \"1\" 处理（`keys()` 返回 [\"1\"]） | 显式 `str(k)` 作键 |
-| 7 | **模块顶层 `let` 不导出**（import 只导出 def/struct/enum/trait/impl/const） | `import` 后访问模块的顶层 `let` 变量 → 未定义 | 模块导出常量用 `const` 关键字；函数/类型定义自动导出 |
+| 7 | **模块顶层 `let` 导出** | ~~import 不导出非 Const VarDecl~~ **M70-S3 已修**：import 导出顶层 let/var/const（模块级状态槽），主程序可直名读写（let 只读） | 模块顶层 var 初始化表达式于 import 方启动执行一次（保持纯值初始；可变状态建议 init 函数惰性初始化） |
 
 ## 十、M-B6 新增：codegen 自举重写完成（AST → C 源码逐字节对拍）
 
@@ -222,7 +222,7 @@
 | 2 | **spawn 协程不隔离 panic** | 协程内 http_post 失败 → 整个进程被杀（主程序无存活机会） | 不可用 spawn 隔离风险调用；网络等可失败操作须在语言层给错误返回 |
 | 3 | **`int(str)` 前缀截断，非全串校验** | `int("0.45")=0`、`int("123abc")=123`、`int("na")=0` | 数值转换前用字段白名单确认纯整数串；浮点值保持字符串或走 `float()` |
 | 4 | **`{}` 空 dict 字面量不可靠** | import 合并场景 `var d = {}` 后 `d["k"]=v` 报「无法索引赋值: null」（`{}` 求值为 null） | 动态 dict 用 `json_parse("{}")` 创建；静态 dict 用完整字面量 `{"k": v}` |
-| 5 | **import 只合并函数定义，不执行模块顶层** | 被 import 文件的模块级 `var` 常量不可见（跨文件调用函数内部引用模块级常量 → 「未定义变量」）；多行 dict/print 表达式无隐式续行（报「意外的 token: 换行」） | 模块无全局可变状态、常量函数内局部化；长表达式拆单行赋值 |
+| 5 | **import 合并定义 + 初始化模块顶层 var** | ~~模块级 `var` 不可见~~ **M70-S3 已修**：import 导出模块顶层 VarDecl（状态槽，初始化随主程序启动执行）；仍不执行模块其它顶层语句（函数调用/赋值等） | 模块顶层除 var/let/const/def 外不写语句；状态初始化用纯值或显式 init 函数 |
 | 6 | **`mmap` 固定 PROT_READ\|PROT_WRITE** | 只读打开的 fd 上 mmap 失败（返回 -1） | mmap 一律用 O_RDWR（mode "r+"）fd |
 | 7 | **`str(float)` 显示精度 `%g`** | 浮点转字符串 6 位有效数字（§十二.3 同源）。**M62-L1 已修一半**：整值浮点补 `.0` 后缀（编译/解释对齐）；**M63-L9 已全修**：float→str 最短 roundtrip 全精度（定点舒适区 1e-4≤|f|<1e15 内定点、区外科学，逐位 + strtod 回读取最短 roundtrip），见 §十三.8 | 已修复；无规避项 |
 | 8 | **pxi 解释模式对真实应用 API 支持未承诺** | 解释器（Mini 子集）白名单不覆盖网络/S3 真实应用 API（相对路径 import + open/read 链早期实测失败；open/read 等已随 M57/M60 补）。**M63-L8 已补 HTTP/S3 6 名**（http_post/http_request/s3_get/s3_put/s3_list/s3_delete），见 §十三.8 | http_get_stream（chunk_handler 回调跨解释器边界）与 quic/h3/udp/serve/session/bus/cron/sse 高层 API 仍非 pxi Mini 子集（编译模式全能力）；真实网络应用可走编译模式或已补 6 名 |
@@ -408,10 +408,11 @@ m58 notify.px 的 webhook dry-run 解禁为真发成为下一步 dogfood 候选�
   不改 parser**：全仓依赖 `{}`→null 的规避已文档化（§九.1）；改成空 dict 需动
   parser/codegen 且破坏 selfhost 既有写法，风险大于收益。空 dict 用
   `json_parse("{}")` 或 `{"_": 0}`+remove（既有规避）。
-- **L4 import 只合并函数不执行模块顶层（§十三 #5）— 处置为文档澄清，不改 module
-  语义**：模块顶层 `var` 不可见是刻意设计（避免 import 副作用/全局污染）；模块导出
-  常量请用 `const`（已导出）。若要"模块函数内引用模块级常量"请用 const 定义。改动
-  module 合并语义风险大、收益不明，待真实需求。
+- **L4 import 只合并函数不执行模块顶层（§十三 #5）— ✅ M70-S3 已修**：import 导出
+  非 Const 顶层 VarDecl（cg_module cg_is_definition/cg_def_name 放宽），模块级状态槽
+  随合并由主程序启动初始化（px_set_global 注册）；import 仍不执行模块其它顶层语句
+  （保持无副作用原则）。语义定案：模块顶层 var 初始化执行一次、`const`/纯函数仍是库
+  推荐形态，可变状态走显式 init 函数模式。
 - **L5 块作用域不对称（if/for/while 内声明块外引用编译失败）— ✅ 已修**（codegen
   hoist）：selfhost/codegen.px `cg_collect_assign_vars` → `cg_collect_hoist_vars`
   （Assign 目标 + VarDecl + For 循环变量统一收集），函数顶 `px_null()` 预声明 + 原位
