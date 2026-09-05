@@ -51,7 +51,8 @@ EOF
 echo "== [verify-el7] yum makecache 双验签（-y 免 tty 自动导入公钥）=="
 yum -y makecache 2>&1 | tail -6 || { echo "❌ el7 yum makecache 双验签失败"; exit 1; }
 echo "== [verify-el7] 仓库可见性 =="
-yum -y --repo=puxian-verify list puxian || { echo "❌ yum list 找不到 puxian"; exit 1; }
+# yum 3.4（el7）无 dnf 风格 --repo 选项 → 用 --disablerepo/--enablerepo
+yum -y --disablerepo='*' --enablerepo=puxian-verify list puxian || { echo "❌ yum list 找不到 puxian"; exit 1; }
 
 echo "== [verify-el7] 真实安装 puxian + 运行验证 =="
 yum -y install puxian >/dev/null
