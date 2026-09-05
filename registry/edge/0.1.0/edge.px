@@ -1,0 +1,220 @@
+# ============================================================
+# 普贤标准库：std.edge（边缘设备：GPIO V2 line / I2C / 串口 / PWM sysfs）
+# M60-S3 交付（docs/M60_PLAN.md §三.2）——第 4 个 stdlib，与 collections/semver/webroute 并列
+# 依赖 builtin：open/close/read/write/ioctl/os_errno/tty_config/fd_wait/sleep_us/
+#   exists/type/len/str/int_to_bytes/bytes_to_int/bytes_slice/bytes_concat/bytes_set/bytes
+# 用法：import std.edge
+# 失败语义（与 M57 fd 原语一致）：设备失败返回 int -1 / false，os_errno() 查询，不杀进程；
+#   参数错误（编程契约）px_error 终止。errno 全局单线程语义：勿跨调用缓存，失败即查。
+# GPIO 用 V2 uAPI。本文件结构体布局按 2024+ 内核（linux/gpio.h，gpio_v2_line_request
+#   = 592B：offsets u32[64]@0 / consumer[32]@256 / config@288 / num_lines@560 /
+#   event_buffer_size@564 / fd@588），常量经 C offsetof 实测核对；旧内核(≤6.x 早期，
+#   offsets u64 布局)不兼容，需按目标内核头调整 —— 真板回归单独立项兜底。
+# I2C 寄存器读用「write reg → stop → read n」两笔事务（fd 通道极限；重复起始位
+#   需 I2C_RDWR/SMBUS ioctl 含指针结构体，语言 bytes 无法承载，见 M60-PLAN §3.4）。
+# ============================================================
+# ---- 内部工具：零 bytes / 小端写入 / ASCII 拷贝（bytes_set 是函数式 COW，逐次赋回）----
+def _zeros(n):
+    var z = open("/dev/zero", "r")
+    if z < 0:
+        return bytes("")
+    var b = read(z, n)
+    close(z)
+    return b
+def _put_u32(b, off, v):
+    b = bytes_set(b, off, v & 0xFF)
+    b = bytes_set(b, off + 1, (v >> 8) & 0xFF)
+    b = bytes_set(b, off + 2, (v >> 16) & 0xFF)
+    b = bytes_set(b, off + 3, (v >> 24) & 0xFF)
+    return b
+def _put_u64(b, off, v):
+    var i = 0
+    while i < 8:
+        b = bytes_set(b, off + i, (v >> (8 * i)) & 0xFF)
+        i = i + 1
+    return b
+def _put_ascii(b, off, s, cap):
+    var cb = bytes(s)
+    var n = len(s)
+    if n > cap:
+        n = cap
+    var i = 0
+    while i < n:
+        b = bytes_set(b, off + i, bytes_get(cb, i))
+        i = i + 1
+    return b
+# ---- GPIO V2 uAPI 常量（linux/gpio.h 实测位值）----
+# 方向/边沿/bias 均为 config.flags 的位（GPIO_V2_LINE_FLAG_*）：
+#   INPUT=4 OUTPUT=8 EDGE_RISING=16 EDGE_FALLING=32 BIAS_PULL_UP=256
+#   BIAS_PULL_DOWN=512 BIAS_DISABLED=1024 ACTIVE_LOW=2
+# GPIO_V2_LINE_REQUEST = _IOWR(0xB4, 0x03, 592) = 0xC250B403
+# 构造 gpio_v2_line_request（592B 零 buffer 逐字段填充）供 ioctl 就地提交。
+# offset：chip 内线号；flags：方向|边沿|bias 组合；consumer：消费方标签（<=31B）；
+# out_val：OUTPUT 时初始电平（0/1，经 attr GPIO_V2_LINE_ATTR_ID_OUTPUT_VALUES=2 指定）；
+# 返回 592B bytes（ioctl 成功后 fd 回填于 @588）。
+def _gpio_req_buf(offset, flags, consumer, out_val):
+    var b = _zeros(592)
+    b = _put_u32(b, 0, offset)  # offsets[0]
+    b = _put_ascii(b, 256, consumer, 31)  # consumer[32]，末字节留 0
+    b = _put_u64(b, 288, flags)  # config.flags
+    var num_attrs = 0
+    if (flags & 8) != 0:  # OUTPUT → 用 attr 指定初始值（确定电平）
+        num_attrs = 1
+        b = _put_u32(b, 320, 2)  # attrs[0].attr.id = OUTPUT_VALUES
+        b = _put_u64(b, 328, out_val)  # attrs[0].attr.values
+        b = _put_u64(b, 336, 1)  # attrs[0].mask = bit0（line 0）
+    b = _put_u32(b, 296, num_attrs)  # config.num_attrs
+    b = _put_u32(b, 560, 1)  # num_lines = 1
+    if (flags & 48) != 0:  # 边沿开启 → 建议事件缓冲 16
+        b = _put_u32(b, 564, 16)
+    return b
+# 通用 GPIO V2 单线请求：flags 直接给（可用注释常量组合），无输出值 attr。
+# chip：/dev/gpiochipN；成功返回 line fd（int），失败 -1 + os_errno()。
+def gpio_request(chip, offset, flags, consumer):
+    var chipfd = open(chip, "rw")
+    if chipfd < 0:
+        return -1
+    var req = _gpio_req_buf(offset, flags, consumer, 0)
+    var rc = ioctl(chipfd, 0xC250B403, req)
+    close(chipfd)
+    if rc < 0:
+        return -1
+    return bytes_to_int(bytes_slice(req, 588, 592), "little")
+# 输入（读按键/传感器电平）
+def gpio_input(chip, offset, consumer):
+    return gpio_request(chip, offset, 4, consumer)
+# 输出（LED/继电器等；val 为初始电平 0/1）
+def gpio_output(chip, offset, val, consumer):
+    var chipfd = open(chip, "rw")
+    if chipfd < 0:
+        return -1
+    var req = _gpio_req_buf(offset, 8, consumer, val)
+    var rc = ioctl(chipfd, 0xC250B403, req)
+    close(chipfd)
+    if rc < 0:
+        return -1
+    return bytes_to_int(bytes_slice(req, 588, 592), "little")
+# 输入 + 边沿事件（按键中断/脉冲计数）：edge = "rising"/"falling"/"both"
+def gpio_input_edge(chip, offset, edge, consumer):
+    var ef = 0
+    if edge == "rising":
+        ef = 16
+    elif edge == "falling":
+        ef = 32
+    elif edge == "both":
+        ef = 48
+    else:
+        panic("gpio_input_edge 的 edge 需要 rising/falling/both")
+    return gpio_request(chip, offset, 4 | ef, consumer)
+# 读电平：line fd read 1B 得 '0'/'1'（ASCII）→ int 0/1；失败 -1
+def gpio_read(fd):
+    var b = read(fd, 1)
+    if type(b) == "int":
+        return -1
+    if bytes_len(b) != 1:
+        return -1
+    var v = bytes_get(b, 0)
+    if v == 48:
+        return 0
+    if v == 49:
+        return 1
+    return -1
+# 写电平：v=0 写 '0'，否则 '1'；返回写入字节数 1 或 -1
+def gpio_write(fd, v):
+    if v == 0:
+        return write(fd, "0")
+    return write(fd, "1")
+# 等事件：fd_wait 包装（边沿已开时 line fd 可读即有事件）；返回就绪 list
+def gpio_wait(fd, ms):
+    return fd_wait(fd, ms)
+# 解析 gpio_v2_line_event（24B）：timestamp u64@0 / id u32@8 / offset u32@12 / seqno u32@16
+# 返回 list [timestamp, id, offset, seqno]；id: 1=rising 2=falling
+def gpio_event_parse(data):
+    if bytes_len(data) < 24:
+        return []
+    var ts = bytes_to_int(bytes_slice(data, 0, 8), "little")
+    var id = bytes_to_int(bytes_slice(data, 8, 12), "little")
+    var off = bytes_to_int(bytes_slice(data, 12, 16), "little")
+    var seq = bytes_to_int(bytes_slice(data, 16, 20), "little")
+    return [ts, id, off, seq]
+# 边沿事件读：先 fd_wait 等就绪，再 read 24B 解析；无事件返回空 list
+def gpio_event(fd, ms):
+    var r = fd_wait(fd, ms)
+    if len(r) == 0:
+        return []
+    var d = read(fd, 24)
+    if type(d) == "int":
+        return []
+    return gpio_event_parse(d)
+# ---- I2C（/dev/i2c-N 字符设备，SMBus 风格寄存器寻址）----
+# 打开总线并设从机地址：bus 如 1（树莓派默认）、addr 7 位地址
+def i2c_open(bus, addr):
+    var fd = open("/dev/i2c-" + str(bus), "rw")
+    if fd < 0:
+        return -1
+    if ioctl(fd, 0x0703, addr) < 0:  # I2C_SLAVE = 0x0703（int 直传）
+        close(fd)
+        return -1
+    return fd
+# 读寄存器：先写 1B 寄存器号，再读 n 字节；返回 bytes，失败 -1
+def i2c_read_reg(fd, reg, n):
+    var w = write(fd, int_to_bytes(reg, 1, "little"))
+    if w != 1:
+        return -1
+    return read(fd, n)
+# 写寄存器：写 reg 号 + data（str/bytes）；返回写入总字节数或 -1
+def i2c_write_reg(fd, reg, data):
+    return write(fd, bytes_concat(int_to_bytes(reg, 1, "little"), bytes(data)))
+# ---- 串口：open + tty_config raw（8N1，无流控）一站式 ----
+# 注：非交互脚本非会话 leader，open 无 O_NOCTTY 不影响；交互场景需另加 fcntl O_NOCTTY。
+def serial_open(path, baud):
+    var fd = open(path, "rw")
+    if fd < 0:
+        return -1
+    if tty_config(fd, baud, true) != true:
+        close(fd)
+        return -1
+    return fd
+# ---- PWM（sysfs 通道，纯文件写，零新 C）----
+# /sys/class/pwm/pwmchipN/{export, pwmCH/period, duty_cycle, enable}
+# 写 sysfs 属性（open+write 通道：失败返回 false 不杀进程，区别于 write_file 的 px_error）
+def _pwm_write(path, content):
+    var fd = open(path, "w")
+    if fd < 0:
+        return false
+    var n = write(fd, content)
+    close(fd)
+    return n >= 0
+# 配置 PWM：chip（pwmchip 号）、ch（通道）、period_ns/duty_ns；自动 export 并等目录就绪
+def pwm_setup(chip, ch, period_ns, duty_ns):
+    var base = "/sys/class/pwm/pwmchip" + str(chip)
+    var pdir = base + "/pwm" + str(ch)
+    if not exists(pdir):
+        if not _pwm_write(base + "/export", str(ch)):
+            return false
+        var tries = 0
+        while tries < 50 and not exists(pdir):
+            sleep_us(10000)
+            tries = tries + 1
+        if not exists(pdir):
+            return false
+    if not _pwm_write(pdir + "/period", str(period_ns)):
+        return false
+    if not _pwm_write(pdir + "/duty_cycle", str(duty_ns)):
+        return false
+    return true
+# 使能/关闭 PWM 输出
+def pwm_enable(chip, ch, on):
+    var pdir = "/sys/class/pwm/pwmchip" + str(chip) + "/pwm" + str(ch)
+    if not exists(pdir):
+        return false
+    var v = "0"
+    if on:
+        v = "1"
+    return _pwm_write(pdir + "/enable", v)
+# 动态改占空比（呼吸灯/舵机连续控制）
+def pwm_set_duty(chip, ch, duty_ns):
+    var pdir = "/sys/class/pwm/pwmchip" + str(chip) + "/pwm" + str(ch)
+    if not exists(pdir):
+        return false
+    return _pwm_write(pdir + "/duty_cycle", str(duty_ns))

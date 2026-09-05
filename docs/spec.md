@@ -526,6 +526,9 @@ remote = "https://.../lib.px#sha256=HEX" # http(s) 远程（M26，保留）
 #### 8.6.3 registry（版本源）
 - 环境变量 `PX_REGISTRY` 指向目录，结构：`<name>/<version>/<name>.px`（每版本目录一个文件）。
 - 版本枚举：目录名经 semver 解析过滤 → `sv_best` 选版本。
+- **官方 registry（M69-S3）**：本仓库 `registry/` 随库分发——9 个 stdlib 镜像（0.1.0）+ 第三方/自研包按同结构发布；`PX_REGISTRY=<仓库>/registry` 即用（README 见 `registry/README.md`）。安装到 `.px_modules/<name>/<name>.px` 后 **`import <name>`（裸名）双模式可用**（命中 `.px_modules`，见 §8.2 用户点分包）；官方 stdlib 内置路径用 `import std.*`——两条消费路径并存且同源。
+- **远程 registry（M69-S3 评估结论）**：registry 为本地目录形态；远程 = git clone / 下载目录后本地挂载，或单包 `http(s) URL#sha256`（8.6.2 第三形态，`pxpkg add https://.../lib.px#sha256=HEX`）。registry **目录级** URL 枚举/索引暂不支持（有真实需求另立里程碑，M69 不做）。
+- 端到端验证：`bash examples/m69_registry/verify.sh`（init/add/install → import 双模式 → `--locked` 可复现，11 断言）。
 
 #### 8.6.4 lockfile px.pkg.lock（可复现构建契约）
 ```json

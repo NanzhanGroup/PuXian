@@ -1,0 +1,99 @@
+# ============================================================
+# 普贤标准库：std.png —— 纯语言 PNG 编码器（stored 无压缩，M61-S2，第 6 个 stdlib）
+# 用法：import std.png
+#   png_encode(w, h, pixels) -> bytes  完整 PNG 文件（8bit RGB truecolor，逐行 filter=0）
+#   pixels = list[int]（w*h），每像素 0xRRGGBB —— 与 std.gfx 画布像素布局一致
+# 实现：签名 + IHDR/IDAT/IEND chunk + 纯语言 CRC-32（IEEE）+ zlib stored block
+#       （CMF=0x78 FLG=0x01 + BFINAL/BTYPE stored 块 ≤65535 + ADLER32）
+#       零新 C、零 FFI（A 线 zlib FFI 通后可选联动：IDAT 换 zlib_compress 真压缩，见 M61-PLAN §4）
+# 依赖 builtin：bytes/bytes_len/bytes_get/bytes_concat/bytes_slice/int_to_bytes/hex_to_bytes
+# 说明：PNG chunk 内 CRC 覆盖 type+data；stored 流 0x78 0x01 是标准 no-compression zlib 头
+# ============================================================
+# ---- 内部：CRC-32 查表（IEEE poly 0xEDB88320）----
+def _crc32_table():
+    var t = []
+    var i = 0
+    while i < 256:
+        var cc = i
+        var j = 0
+        while j < 8:
+            if (cc & 1) == 1:
+                cc = (cc >>> 1) ^ 0xEDB88320
+            else:
+                cc = cc >>> 1
+            j = j + 1
+        t.append(cc)
+        i = i + 1
+    return t
+def _crc32(t, d):
+    var cc = 0xFFFFFFFF
+    var n = bytes_len(d)
+    var i = 0
+    while i < n:
+        cc = (cc >>> 8) ^ t[(cc ^ bytes_get(d, i)) & 0xff]
+        i = i + 1
+    return cc ^ 0xFFFFFFFF
+# ---- 内部：ADLER-32（zlib 流校验）----
+def _adler32(d):
+    var a = 1
+    var b = 0
+    var n = bytes_len(d)
+    var i = 0
+    while i < n:
+        a = (a + bytes_get(d, i)) % 65521
+        b = (b + a) % 65521
+        i = i + 1
+    return (b << 16) | a
+# ---- 内部：zlib stored（no compression）流 ----
+def _zlib_stored(d):
+    var n = bytes_len(d)
+    var out = hex_to_bytes("7801")  # CMF FLG（no compression）
+    var off = 0
+    while off < n:
+        var blen = n - off
+        if blen > 65535:
+            blen = 65535
+        var final = 0
+        if off + blen >= n:
+            final = 1
+        out = bytes_concat(out, int_to_bytes(final, 1))
+        out = bytes_concat(out, int_to_bytes(blen, 2, "little"))
+        out = bytes_concat(out, int_to_bytes((65535 - blen) & 0xffff, 2, "little"))
+        out = bytes_concat(out, bytes_slice(d, off, off + blen))
+        off = off + blen
+    out = bytes_concat(out, int_to_bytes(_adler32(d), 4))
+    return out
+# ---- 内部：一个 PNG chunk ----
+def _chunk(tbl, type_s, data):
+    var td = bytes_concat(bytes(type_s), data)
+    var crc = _crc32(tbl, td)
+    var c = bytes_concat(int_to_bytes(bytes_len(data), 4), td)
+    return bytes_concat(c, int_to_bytes(crc, 4))
+# ---- 主入口：PNG 编码 ----
+def png_encode(w, h, pixels):
+    # 1) 图像数据：逐行 filter=0 + RGB
+    var rows = bytes("")
+    var y = 0
+    while y < h:
+        var row = int_to_bytes(0, 1)
+        var x = 0
+        while x < w:
+            var p = pixels[y * w + x]
+            row = bytes_concat(row, int_to_bytes(p, 3))
+            x = x + 1
+        rows = bytes_concat(rows, row)
+        y = y + 1
+    # 2) IHDR：width(4) height(4) bitdepth=8 colortype=2 compression=0 filter=0 interlace=0
+    var ihdr = bytes_concat(int_to_bytes(w, 4), int_to_bytes(h, 4))
+    ihdr = bytes_concat(ihdr, int_to_bytes(8, 1))
+    ihdr = bytes_concat(ihdr, int_to_bytes(2, 1))
+    ihdr = bytes_concat(ihdr, int_to_bytes(0, 1))
+    ihdr = bytes_concat(ihdr, int_to_bytes(0, 1))
+    ihdr = bytes_concat(ihdr, int_to_bytes(0, 1))
+    # 3) 组装
+    var tbl = _crc32_table()
+    var out = hex_to_bytes("89504e470d0a1a0a")
+    out = bytes_concat(out, _chunk(tbl, "IHDR", ihdr))
+    out = bytes_concat(out, _chunk(tbl, "IDAT", _zlib_stored(rows)))
+    out = bytes_concat(out, _chunk(tbl, "IEND", bytes("")))
+    return out
