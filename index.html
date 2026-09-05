@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PuXian RPM 仓库</title>
+<style>
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; max-width: 760px; margin: 48px auto; padding: 0 20px; color: #1f2937; line-height: 1.7; }
+  h1 { border-bottom: 2px solid #e5e7eb; padding-bottom: 12px; }
+  pre { background: #f3f4f6; padding: 14px 16px; border-radius: 8px; overflow-x: auto; }
+  code { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; }
+  a { color: #2563eb; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .ok { color: #059669; font-weight: 600; }
+  .muted { color: #6b7280; font-size: 0.9em; }
+</style>
+</head>
+<body>
+<h1>PuXian RPM / dnf·yum 仓库</h1>
+<p>PuXian —— 给 AI 使用的新时代编程语言（Python 语法 + Rust 类型 + Go 并发 + C 出身，编译为 C 静态零依赖单二进制）。</p>
+
+<p class="ok">✅ RHEL 9 系（Rocky / Alma / CentOS Stream 9 / Oracle 9）一行安装：</p>
+<pre><code>curl -fsSL -o install-rpm.sh https://nanzhangroup.github.io/PuXian/install-rpm.sh
+sudo bash install-rpm.sh          # 写入仓库 + 导入 GPG 公钥（双验签）
+sudo dnf install puxian           # 一行安装
+sudo dnf upgrade puxian           # 里程碑自动升级
+</code></pre>
+
+<h2>校验链（GPG 双层签名）</h2>
+<ul>
+  <li>公钥：<code>rpm/PUXIAN-GPG-KEY.asc</code>（<a href="rpm/PUXIAN-GPG-KEY.asc">下载</a>）</li>
+  <li>仓库元数据签名：<code>repomd.xml.asc</code>（<code>repo_gpgcheck=1</code>）</li>
+  <li>包签名：每个 <code>.rpm</code> 内嵌（<code>gpgcheck=1</code>）</li>
+</ul>
+
+<p class="muted">站点由 GitHub Actions 在 tag 发布时自动更新（rpm/ 树只保留最新版）。</p>
+</body>
+</html>
