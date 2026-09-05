@@ -57,7 +57,7 @@ PuXian 每个里程碑都用普贤自己写示例/工具/应用（dogfooding 自
 |---|---|---|
 | 语言内核 / GC / 并发 | `hello` `fib` `struct` `match` `concurrent` `gc_demo` `std_demo` `toolchain_demo` `m22_tracing_gc` `m25_closure_gc` `m30_comp` `m39_gc/result/err_main` `m40_str_interp` | 语法/闭包/GC/Result/插值入门 |
 | HTTP 客户端 | `https_demo` `http_neterr_result` `m23c_http_adv` `m24_http_adv` `m37_s3`(S3 对象存储) `m38_chunked`(流式) | 客户端全特性（TLS/gzip/chunked/池化/Unix socket） |
-| HTTP 服务端 / 应用平台 | `m27a_webprod` `m28_route` `m29_webprod` `m31_sandbox/vhost` `m32_hot_reload` `m33_access_log/route_rate_limit/sni` `m34_pool_cfg` `m35_gzip_rl` `m36_log_ctx/pool_grace` `p4_http_server` `p5_px_serve` | px_serve 生产形态：路由/中间件/限流/日志/优雅关闭/Session/基础认证 |
+| HTTP 服务端 / 应用平台 | `m27a_webprod` `m28_route` `m29_webprod` `m31_sandbox/vhost` `m32_hot_reload` `m33_access_log/route_rate_limit/sni` `m34_pool_cfg` `m35_gzip_rl` `m36_log_ctx/pool_grace` `p4_http_server` `p5_px_serve` `m82_http_serve_unix` | px_serve 生产形态：路由/中间件/限流/日志/优雅关闭/Session/基础认证；http_serve_unix（M82）= Unix socket HTTP 服务端（ws-approve serve 场景） |
 | WebSocket / SSE | `m22_websocket` `m23a_sse_ws` `m26_ws_heartbeat/sse_https` `m32_ws_url/sse_reconnect` `m34_bus_ws` `m36_ws_hb` `m38_ws_reconnect` | 双端 + 心跳/重连/广播 |
 | TLS / 加密 / 压缩 / 编码 | `m23d_rsa` `m25_tls_resume` `m27b_tls_serve` `m30_tls_pool` `m33_sni` `m35_gzip_rl` `m37_h2_tls` `p2_crypto_hash` `p7_aes_xml_zip` `p8_slice_base64` `m23b_bytes` `m26_ushr` `m30_int_bytes` | RSA/AES/证书/压缩/字节视图 |
 | SQLite / 时间 / cron / 会话 | `m28_time_sqlite` `m28_cron` `m36_log_ctx` | sqlite_exec/query、6 字段 cron、会话 |

@@ -98,13 +98,13 @@ jobs:
           bash tools/gen_native_table.sh
           git diff --exit-code -- docs/ecosystem_index.json docs/native_index.json || { echo "❌ stdlib/runtime 变更未同步生态/native 索引 → 重跑生成器并同步 docs/ECOSYSTEM.md 与 docs/PUXIAN_CHEATSHEET.md"; exit 1; }
           echo "✅ 生态索引与 stdlib 一致 + native 清单与 runtime 一致"
-      - name: 工具自测（m64_fmt / m64_lint / m65_lsp / m65_mcp + m66_yaml/pxml/lunar + m71_mcp_build）
+      - name: 工具自测（m64_fmt / m64_lint / m65_lsp / m65_mcp + m66_yaml/pxml/lunar + m71_mcp_build + m82_http_serve_unix）
         run: |
           bash examples/m64_fmt/verify.sh >/dev/null && bash examples/m64_lint/verify.sh >/dev/null
           python3 -c "import sys; assert sys.version_info[0]==3" && bash examples/m65_lsp/verify.sh >/dev/null && bash examples/m65_mcp/verify.sh >/dev/null
           bash examples/m66_yaml/verify.sh >/dev/null && bash examples/m66_pxml/verify.sh >/dev/null && bash examples/m66_lunar/verify.sh >/dev/null
-          bash examples/m71_mcp_build/verify.sh >/dev/null
-          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build verify 全 PASS"
+          bash examples/m71_mcp_build/verify.sh >/dev/null && bash examples/m82_http_serve_unix/verify.sh >/dev/null
+          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix verify 全 PASS"
       - name: LSP / MCP 服务器冒烟（--version + 协议入口存在性）
         run: |
           chmod +x bootstrap/pxlsp bootstrap/pxmcp bootstrap/pxcheck
