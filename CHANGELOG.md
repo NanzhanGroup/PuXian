@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+### M71 · build 管线现代化 + AI 交付一条龙（docs/M71_PLAN.md）✅
+
+- **M71 立项（commit ae81443）**：四条合一 —— qg-issue 12（B1 build 无缓存全量 gcc / B2 交叉 5 flag 人肉串 / B3 Release 仅 x86_64 / B4 安装靠 PX_STDLIB）+ qg-issue 11（F4 结论过时）+ 用户点名 MCP `build` 第 9 工具（补「写→验→交付」闭环）；Issue 9/10（runtime 诊断，需 selfhost 重建）拆 **M72 候选**。
+- **M71-S1 build 增量缓存（commit 528b072）**：`tools/pxc build` 对 runtime 源预编译 `.o` 缓存（等价 Go build cache）——key = runtime源×cc×no_quic；命中只编 base.c + 链接：**二次 build quic 14.7s→0.94s / no-quic 11.6s→0.41s**；改 runtime 源 / 换 cc / 切 quic 自动重建（key 失效），零语义风险（产物同前全量路径）。
+- **M71-S2 `--target` 交叉开关（commit bd23dba）**：`pxc build --target <arch>` 对齐 GOOS/GOARCH 心智 —— 自动折叠 cc/mbedtls-lib/sqlite-obj/zlib-lib/`--no-quic` + riscv64 `-no-pie`；显式 flag 优先；目标 cc 缺失给友好指引（含安装建议）；x86_64 缺省等价现状，不回归。
+- **M71-S3 MCP 第 9 工具 `build`（commit c7c045c）**：pxmcp `tools_meta`+`mcp_call_tool` 加 `build`（参数 file/code/target/no_quic → spawn `tools/pxc build`，返回产物路径 + 非零 rc 即 isError）→ **AI agent 一条 MCP 完成写→验→交付（编译产物）闭环**；examples/m71_mcp_build verify（list 9 工具 + build 产物静态可运行 + 坏代码 isError）+ m65 verify 8→9 全绿。
+- **M71-S4 分发安装（commit e0b19d5）**：Release 资产附 **`sha256sums.txt`**（make_release.sh 与 tarball 同目录生成 + release.yml 上传/Notes 提及）；**`tools/install.sh`** 一键安装（`--prefix`/PX_PREFIX/root→`/usr/local` 非 root→`~/.local`；sha256 强校验失败中止；aarch64 提示用 `--target` 交叉）；`tools/pxc` **argv0 自发现**（readlink 解析软链→真实包根）+ **PX_STDLIB 自动注入**（包根有 stdlib 且未显式设置时）→ **安装后任意目录免环境变量**；实测 `--prefix /tmp/pxinst` 安装 OK + 软链任意目录含 `import std.io` 程序运行 OK（B4 达成）。
+- **M71-S5 文档收口**：ECOSYSTEM_GAPS.md **F4 归因更正**（Issue 11：慢的是 pxi 解释器非「纯普贤」——实测 **pxc build 编译版扫 13578 行 runtime.c 仅 0.055s ≈ grep 14×**，工具选型更正为「重文本/大文件编译版毫秒级可胜任；真重负载走 pxc build 产物或等字节码 VM」）+ 顶部更新注记；ROADMAP/README(.en) M71 行 + CHEATSHEET 工具链注记。
 ### M70 · 语言缺口修复：表达式跨行 + 模块顶层状态（docs/M70_PLAN.md）✅
 
 > 立项（2026-09-05 用户指令）：M69-S4 `docs/ECOSYSTEM_GAPS.md §4` 拆出的两条语言缺口——
