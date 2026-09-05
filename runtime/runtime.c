@@ -5386,6 +5386,12 @@ void px_register_builtins(void) {
     px_set_global("aes_decrypt", px_native("aes_decrypt", bi_aes_decrypt));
     px_set_global("aes_gcm_encrypt", px_native("aes_gcm_encrypt", bi_aes_gcm_encrypt));
     px_set_global("aes_gcm_decrypt", px_native("aes_gcm_decrypt", bi_aes_gcm_decrypt));
+    // M72-S4（Issue 13 GAP-BIN-1）：AES bytes 版（任意二进制，含 \0/非 UTF-8；
+    // GCM 输出 密文||tag 原始 bytes，与 Go crypto/aes-gcm 字节兼容）
+    px_set_global("aes_encrypt_bytes", px_native("aes_encrypt_bytes", bi_aes_encrypt_bytes));
+    px_set_global("aes_decrypt_bytes", px_native("aes_decrypt_bytes", bi_aes_decrypt_bytes));
+    px_set_global("aes_gcm_encrypt_bytes", px_native("aes_gcm_encrypt_bytes", bi_aes_gcm_encrypt_bytes));
+    px_set_global("aes_gcm_decrypt_bytes", px_native("aes_gcm_decrypt_bytes", bi_aes_gcm_decrypt_bytes));
     // M19 P1：XML 解析（企微回调 Encrypt 报文 / 配置文件 / 文档）
     px_set_global("xml_parse", px_native("xml_parse", bi_xml_parse));
     px_set_global("xml_escape", px_native("xml_escape", bi_xml_escape));
@@ -7756,12 +7762,19 @@ static int hconnect(const char* host, int port) {
 
 // 在已建立连接上完成一次 HTTP 往返（keep-alive 安全：按 Content-Length/chunked 精确读）
 // 支持明文 fd 与 TLS 会话（M24 https 连接池）。成功返回 0，body malloc；失败返回 -1。
+// M72-S4（Issue 13 GAP-BIN-2）：h_exchange 增 body/body_n 参数——请求体独立发送
+// （与 header 分离），支持任意大小二进制 bytes body（\0 不截断、不塞 req 缓冲，
+// 顺带修复原 body 并入 16KB req 缓冲的大 payload 溢出）。body 为 NULL/len 0 → 不发。
 static int h_exchange(HPoolSlot* slot, const char* req, int rlen,
+                      const char* body, int body_n,
                       int* out_status, LXValue* out_headers,
                       char** out_body, int* out_body_len, int* out_keep_alive) {
     int fd = slot->fd;
     HttpsSession* tls = slot->is_tls ? slot->tls : NULL;
     if (conn_send(tls, fd, req, rlen) < 0) return -1;
+    if (body && body_n > 0) {
+        if (conn_send(tls, fd, body, body_n) < 0) return -1;
+    }
     // 读响应头
     int cap = 16384, len = 0;
     char* buf = xmalloc(cap);
@@ -7871,8 +7884,14 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
     if (nargs < 2 || nargs > 5) px_error("http_request 需要 (url, method[, body[, headers[, opts]]]) 参数");
     const char* url = val_cstr(args[0]);
     const char* method = val_cstr(args[1]);
+    // M72-S4（Issue 13 GAP-BIN-2）：body 收 str|bytes，长度感知（bytes 含 \0 不截断）
+    // body_n = 请求体字节长（区别于下方响应体长 body_len 变量）
     const char* body = NULL;
-    if (nargs >= 3 && args[2].type == PX_STR) body = args[2].as.obj->as.str.data;
+    int body_n = 0;
+    if (nargs >= 3 && (args[2].type == PX_STR || args[2].type == PX_BYTES)) {
+        body = args[2].as.obj->as.str.data;
+        body_n = args[2].as.obj->as.str.len;
+    }
     char extra_headers[4096] = {0};
     if (nargs >= 4 && args[3].type == PX_DICT) {
         LXObject* ho = args[3].as.obj;
@@ -7932,11 +7951,13 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
     if (body) {
         if (!strcasestr(extra_headers, "Content-Length")) {
             rlen += snprintf(req + rlen, sizeof(req) - rlen,
-                "Content-Type: application/x-www-form-urlencoded\r\nContent-Length: %d\r\n", (int)strlen(body));
+                "Content-Type: application/x-www-form-urlencoded\r\nContent-Length: %d\r\n", body_n);
         }
     }
     rlen += snprintf(req + rlen, sizeof(req) - rlen, "\r\n");
-    if (body) { memcpy(req + rlen, body, strlen(body)); rlen += (int)strlen(body); }
+    // M72-S4（Issue 13 GAP-BIN-2）：body 独立发送（h_exchange body/body_n 参数），
+    // 不并入 req 缓冲 → 二进制 bytes（含 \0）任意大小安全；顺带修复原 body 塞入
+    // 16KB req 缓冲的大 payload 溢出。Content-Length 已按 body_n 长度感知。
     int max_attempts = retries;
     for (int attempt = 0; attempt < max_attempts; attempt++) {
         HPoolSlot slot;
@@ -7963,7 +7984,7 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
         int status = 0, body_len = 0, keep_alive = 1;
         LXValue headers = px_null();
         char* resp_body = NULL;
-        if (h_exchange(&slot, req, rlen, &status, &headers, &resp_body, &body_len, &keep_alive) == 0) {
+        if (h_exchange(&slot, req, rlen, body, body_n, &status, &headers, &resp_body, &body_len, &keep_alive) == 0) {
             if (keep_alive) hpool_put(key, slot);
             else { if (slot.tls) https_close(slot.tls); close(slot.fd); }
             LXValue d = px_dict();
@@ -8037,7 +8058,7 @@ static LXValue bi_http_unix(LXValue* args, int nargs, void* ctx) {
     int status = 0, body_len = 0, keep_alive = 1;
     LXValue headers = px_null();
     char* resp_body = NULL;
-    if (h_exchange(&slot, req, rlen, &status, &headers, &resp_body, &body_len, &keep_alive) != 0) {
+    if (h_exchange(&slot, req, rlen, NULL, 0, &status, &headers, &resp_body, &body_len, &keep_alive) != 0) {
         close(fd);
         return px_net_err("net: http_unix 请求失败: 连接关闭");
     }
@@ -8186,7 +8207,7 @@ static int px_s3_exec(const char* endpoint, const char* method, const char* buck
     int status = 0, resp_len = 0, keep = 0;
     LXValue hdrs = px_null();
     char* resp = NULL;
-    if (h_exchange(&slot, req, rlen, &status, &hdrs, &resp, &resp_len, &keep) != 0) {
+    if (h_exchange(&slot, req, rlen, NULL, 0, &status, &hdrs, &resp, &resp_len, &keep) != 0) {
         if (slot.tls) https_close(slot.tls);
         close(slot.fd);
         px_net_fail(errbuf, errcap, "net: S3 请求失败: 连接中断");

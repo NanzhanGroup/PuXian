@@ -241,6 +241,11 @@ LXValue bi_aes_encrypt(LXValue* args, int nargs, void* ctx);
 LXValue bi_aes_decrypt(LXValue* args, int nargs, void* ctx);
 LXValue bi_aes_gcm_encrypt(LXValue* args, int nargs, void* ctx);
 LXValue bi_aes_gcm_decrypt(LXValue* args, int nargs, void* ctx);
+// M72-S4（Issue 13 GAP-BIN-1）：AES bytes 版（二进制安全，去 utf8/NUL 限制）
+LXValue bi_aes_encrypt_bytes(LXValue* args, int nargs, void* ctx);
+LXValue bi_aes_decrypt_bytes(LXValue* args, int nargs, void* ctx);
+LXValue bi_aes_gcm_encrypt_bytes(LXValue* args, int nargs, void* ctx);
+LXValue bi_aes_gcm_decrypt_bytes(LXValue* args, int nargs, void* ctx);
 LXValue bi_xml_parse(LXValue* args, int nargs, void* ctx);
 LXValue bi_xml_escape(LXValue* args, int nargs, void* ctx);
 LXValue bi_xml_unescape(LXValue* args, int nargs, void* ctx);
