@@ -125,6 +125,7 @@
 ### 执行记录
 - **S0 立项侦查**（2026-09-05, commit b927602）：M70_PLAN 起草入库。源码实录确认：parse_brace 已支持跨行 dict/block；parse_call_args/parse_list_or_comp/parse_paren_or_tuple/索引切片不支持（实测 E2001）；顶层 VarDecl codegen 为 main 内局部变量；runtime 已有 px_set_global/get_global 可承载全局槽。
 - **S1 表达式跨行**（2026-09-05）：parser.px 新增 `skip_expr_ws()`（跳过 换行/缩进/去缩进），在 parse_call_args（含尾部逗号）、parse_list_or_comp（含 listcomp for/if 分行）、parse_paren_or_tuple、parse_postfix 索引/切片四处括号上下文加入跨行容忍（对齐 parse_brace 既有模式，不动 lexer → 现有 golden 零漂移）。重建 pxpar/pxi/pxc（--no-quic）→ 探针 C1-C9 全过、双模式输出逐字节一致；新增 s15_multiline.px 用例 + 四类 golden、cases_bad parse_b11/b12（未闭合仍报错）+ errors golden；diffcheck --all 与 --errors 全绿（现有 golden 零漂移）。待 commit。
-- **S2 fmt 同步侦查**（2026-09-05）：fmt_core.px 为 token 流重排架构（fmt_format 逐 token，换行/缩进 token 忠实保留、缩进按级规范化），**不依赖 parser** → 现行 pxfmt 对多行 list/dict/call 输入直接正确格式化（实测 m70_probe2 fmt 输出保留全部跨行结构、幂等 ✅）→ **fmt 零代码改动**，S2 交付 = 验证 + 用例。待补正式 fmt 往返用例。
+- **S2 fmt 多行收口**（2026-09-05）：fmt_core 为 token 流重排架构 → **零代码改动**；新增 examples/m70_langfix/verify_fmt_multiline.sh（① 多行输入→golden 结构保留+规范化 ② 幂等 ③ 重 lex 语义等价 ④ fmt 输出 pxi 往返一致 ⑤ --check）全过。待 commit。
+
 
 （每完成一步在此追加：日期/commit/验证结果）
