@@ -125,6 +125,7 @@
 ### 执行记录
 - **S0 立项侦查**（2026-09-05, commit b927602）：M70_PLAN 起草入库。源码实录确认：parse_brace 已支持跨行 dict/block；parse_call_args/parse_list_or_comp/parse_paren_or_tuple/索引切片不支持（实测 E2001）；顶层 VarDecl codegen 为 main 内局部变量；runtime 已有 px_set_global/get_global 可承载全局槽。
 - **S1 表达式跨行**（2026-09-05）：parser.px 新增 `skip_expr_ws()`（跳过 换行/缩进/去缩进），在 parse_call_args（含尾部逗号）、parse_list_or_comp（含 listcomp for/if 分行）、parse_paren_or_tuple、parse_postfix 索引/切片四处括号上下文加入跨行容忍（对齐 parse_brace 既有模式，不动 lexer → 现有 golden 零漂移）。重建 pxpar/pxi/pxc（--no-quic）→ 探针 C1-C9 全过、双模式输出逐字节一致；新增 s15_multiline.px 用例 + 四类 golden、cases_bad parse_b11/b12（未闭合仍报错）+ errors golden；diffcheck --all 与 --errors 全绿（现有 golden 零漂移）。待 commit。
+- **S3 模块顶层状态**（2026-09-05）：实证澄清——主程序同文件顶层 let/var 跨函数早已支持（codegen cg_globals → px_get/set_global，探针 g1a/g1b 双模式一致）；G1 真缺口 = **import 不导出非 Const 顶层 VarDecl**（实测 import mystate → 双模式「未定义变量 g_state」）。修复 cg_module.px：cg_is_definition/cg_def_name 的 VarDecl 分支由「仅 Const」放宽为全部 VarDecl（let/var/const）→ import 合并模块级状态槽，主程序顶层执行 VarDecl 初始化（px_set_global 注册）。双模式共用 cg_resolve_modules → 一处修复双模式生效。验证：mystate 探针 import set/get 双模式一致（42）；新增 v04_module_state.px（9 断言：模块函数读写/主程序直名读写/let 只读/无副作用）pxi+pxc 双模式 9 PASS；副本声明（compiler 链各文件同名声明显式）导出后同值覆盖无害——自举证明通过（新 golden/compiler.c 6992 行，B.c==A.c 逐字节）。diffcheck --all/--errors 全绿。注意：模块顶层 var 初始化表达式随合并于主程序启动执行一次（import 副作用边界文档化，S5 写库规范更新）。待 commit。
 - **S2 fmt 多行收口**（2026-09-05）：fmt_core 为 token 流重排架构 → **零代码改动**；新增 examples/m70_langfix/verify_fmt_multiline.sh（① 多行输入→golden 结构保留+规范化 ② 幂等 ③ 重 lex 语义等价 ④ fmt 输出 pxi 往返一致 ⑤ --check）全过。待 commit。
 
 
