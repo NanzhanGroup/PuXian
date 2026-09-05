@@ -109,7 +109,10 @@ def cg_is_definition(st):
         return true
     if ty == "StructDef" or ty == "EnumDef" or ty == "TraitDef" or ty == "ImplDef":
         return true
-    if ty == "VarDecl" and st[1] == "Const":
+    if ty == "VarDecl":
+        # M70-S3：模块顶层 let/var（非 Const）也导出 —— 模块级状态槽。
+        # import 不执行模块顶层语句；VarDecl 合并后由主程序顶层执行初始化（px_set_global 注册全局）。
+        # 主文件若已有同名顶层声明，模块定义插前、主文件后执行 → 用户值覆盖模块默认（沿用"用户优先"）。
         return true
     return false
 # 定义名（impl 用 "impl::类型::trait" 近似键）
@@ -117,7 +120,7 @@ def cg_def_name(st):
     let ty = st[0]
     if ty == "FuncDef" or ty == "StructDef" or ty == "EnumDef" or ty == "TraitDef" or ty == "ExternDef":
         return rust_unescape(st[1])
-    if ty == "VarDecl" and st[1] == "Const":
+    if ty == "VarDecl":
         return rust_unescape(st[2])
     if ty == "ImplDef":
         let tn = rust_unescape(st[1])

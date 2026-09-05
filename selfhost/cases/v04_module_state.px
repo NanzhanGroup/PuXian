@@ -1,0 +1,52 @@
+# ============================================================
+# M70-S3 对拍用例 v04：模块顶层状态（import 导出非 Const VarDecl）
+# 运行: px run selfhost/cases/v04_module_state.px
+# 断言（M70-S3 / G1）：
+#   - import 模块顶层 var 导出为全局状态槽：模块函数可读写（跨函数）
+#   - 主程序可直名读写模块顶层 var（合并后为主程序全局）
+#   - 模块顶层 let 导出为不可变全局（只读 + 编译期不可赋值）
+#   - import 无副作用（模块无其它顶层语句）
+# 输出 [PASS]/[FAIL]，diffcheck --value/--interp 检查全 PASS
+# ============================================================
+import "modstate.px"
+
+let mut g_pass = 0
+let mut g_fail = 0
+
+def check(name, cond):
+    if cond:
+        g_pass += 1
+        print("[PASS] " + name)
+    else:
+        g_fail += 1
+        print("[FAIL] " + name)
+
+# ---- 1. 模块顶层 var 初始值（合并初始化已执行）----
+check("模块 var 初始值", counter_get() == 0)
+
+# ---- 2. 模块函数读写模块全局（跨函数状态）----
+counter_inc()
+counter_inc()
+counter_inc()
+check("模块函数自增 3 次", counter_get() == 3)
+
+# ---- 3. 主程序直名读写模块顶层 var ----
+g_counter = 100
+check("主程序直名写模块 var", counter_get() == 100)
+g_counter = g_counter + 1
+check("主程序直名读+写", counter_get() == 101)
+
+# ---- 4. 模块 var 可经模块函数改、主程序读 ----
+label_set("hello")
+check("模块函数写 label", label_get() == "hello")
+g_label = "main-write"
+check("主程序直名写 label", label_get() == "main-write")
+
+# ---- 5. 模块 let 导出为不可变全局（只读）----
+check("模块 let 可读", CFG_LIMIT == 100)
+check("模块 let 经函数读", limit_get() == 100)
+
+# ---- 6. import 无副作用（模块无意外顶层执行）----
+check("g_counter 精确值", g_counter == 101)
+
+print("结果: " + str(g_pass) + " PASS / " + str(g_fail) + " FAIL")

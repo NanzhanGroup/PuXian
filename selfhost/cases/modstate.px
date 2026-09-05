@@ -1,0 +1,25 @@
+# ============================================================
+# M70-S3 模块状态库 modstate（import 侧测试辅助）
+# 模块顶层 var/let 为非 Const 声明 —— M70 前 import 不导出（G1），
+# M70-S3 后导出为模块级状态槽，import 方经模块函数或直名访问。
+# import 无副作用：顶层不执行其它语句，仅 var/let 初始化随合并执行。
+# ============================================================
+var g_counter = 0
+var g_label = "init"
+
+let CFG_LIMIT = 100
+
+def counter_inc():
+    g_counter = g_counter + 1
+
+def counter_get():
+    return g_counter
+
+def label_set(v):
+    g_label = v
+
+def label_get():
+    return g_label
+
+def limit_get():
+    return CFG_LIMIT
