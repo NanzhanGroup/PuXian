@@ -91,12 +91,13 @@ jobs:
             ./bootstrap/pxlint "$f" >/dev/null || { echo "❌ lint 失败: $f"; exit 1; }
           done
           echo "✅ lint 全绿（compiler 主入口 0 错 + tools 16 文件 0/0）"
-      - name: 生态索引防漂移（stdlib 变更须同步 docs/ecosystem_index.json + ECOSYSTEM.md）
+      - name: 生态索引防漂移（stdlib → ecosystem_index.json + native_index.json + ECOSYSTEM/CHEATSHEET 同步）
         run: |
           chmod +x bootstrap/pxi
           ./bootstrap/pxi tools/gen_ecosystem.px
-          git diff --exit-code -- docs/ecosystem_index.json || { echo "❌ stdlib 变更未同步生态索引 → 重跑 tools/gen_ecosystem.px 并同步 docs/ECOSYSTEM.md"; exit 1; }
-          echo "✅ 生态索引与 stdlib 一致（tools/gen_ecosystem.px）"
+          bash tools/gen_native_table.sh
+          git diff --exit-code -- docs/ecosystem_index.json docs/native_index.json || { echo "❌ stdlib/runtime 变更未同步生态/native 索引 → 重跑生成器并同步 docs/ECOSYSTEM.md 与 docs/PUXIAN_CHEATSHEET.md"; exit 1; }
+          echo "✅ 生态索引与 stdlib 一致 + native 清单与 runtime 一致"
       - name: 工具自测（m64_fmt / m64_lint / m65_lsp / m65_mcp + m66_yaml/pxml/lunar）
         run: |
           bash examples/m64_fmt/verify.sh >/dev/null && bash examples/m64_lint/verify.sh >/dev/null
