@@ -89,25 +89,26 @@ jobs:
           echo "✅ GitHub Release 已创建: ${TAG}（tarball + sha256sums.txt）"
 
   # ============================================================
-  # rpm —— 构建签名 RPM 仓库并发布到 GitHub Pages（M73：dnf/yum 一行安装）
+  # rpm —— 构建签名 RPM 仓库并发布到 GitHub Pages（M73 dnf + M77 el7 yum）
   # ------------------------------------------------------------
   # 前置：GitHub Actions secrets 配置正式签名子密钥后自动启用：
   #   GPG_PRIVATE_KEY = gpg --export-secret-subkeys <子>! | gpg --armor --symmetric 的输出
   #   GPG_PASSPHRASE  = 该加密导出的 passphrase（若子密钥无 passphrase 可留空）
   #   GPG_KEY_ID      = 子密钥指纹（gpg --list-secret-keys --keyid-format LONG）
-  # 密钥未配置时本 job 各步自动跳过（绿色占位），不阻塞发布。
-  # 流程（rockylinux:9 容器 = 真实 el9 构建语义）：
-  #   检出(含tag) → 导入私钥 → packaging/build_rpm.sh（rpmbuild + rpm --addsign
-  #   + createrepo_c + repomd.xml 签名 + 公钥导出，REPO_OUT=/tmp/pxrepo）
-  #   → dnf 本地 file:// 仓库自检（makecache 双验签）→ rsync 到 gh-pages 的 rpm/
-  #   → commit + push（首次自动建 gh-pages 分支）
-  # 发布后用户（见 packaging/install-rpm.sh）：
-  #   sudo bash install-rpm.sh && dnf install puxian
+  # 密钥未配置时各 job 自动跳过（绿色占位），不阻塞发布。
+  # 结构（构建与发布分离，避免并发 push 冲突；矩阵加 dist 即扩版本）：
+  #   rpm-build-9  rockylinux:9 容器（真实 el9 语义）→ artifact pxrepo-9
+  #   rpm-build-7  ubuntu + docker run centos:7（EOL vault 源 + gpg1 兼容 + yum 3.4
+  #                自检真实安装）→ artifact pxrepo-7
+  #   rpm-publish  needs 两构建 → download 合并 rpm/{7,9} → rsync 推送 gh-pages
+  # 发布后用户（packaging/install-rpm.sh）：
+  #   EL9: sudo bash install-rpm.sh && dnf install puxian
+  #   EL7: sudo bash install-rpm.sh && yum install puxian
   # baseurl: https://nanzhangroup.github.io/PuXian/rpm/$releasever/$basearch/
-  # 目录语义：rpm/9/x86_64（$releasever 展开=9，RHEL9/Rocky9/Alma9/CentOSStream9 通用）
+  # 目录语义：rpm/7/x86_64 与 rpm/9/x86_64（$releasever 展开，EL 系通用）
   # ============================================================
-  rpm:
-    name: 构建签名 RPM 仓库并发布 GitHub Pages
+  rpm-build-9:
+    name: 构建 el9 签名 RPM 仓库（rockylinux:9）
     runs-on: ubuntu-latest
     container: rockylinux:9
     timeout-minutes: 30
@@ -175,7 +176,6 @@ jobs:
       - name: 构建 + 签名 RPM 仓库（build_rpm.sh 全链路）
         if: steps.gpgkey.outputs.ok == 'true'
         env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
           GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
           DIST: '9'          # 目录=releasever（dnf $releasever 展开 9 → rpm/9/x86_64）
@@ -200,6 +200,123 @@ jobs:
           dnf -q -y makecache 2>&1 | tail -5 || { echo "❌ 仓库验签失败"; exit 1; }
           dnf -q -y --repo=puxian-selfcheck repoquery puxian || { echo "❌ repoquery 找不到 puxian"; exit 1; }
           echo "✅ dnf makecache 双验签通过（repomd.xml.asc + 包签名）"
+
+      - name: 上传 el9 仓库产物（供 rpm-publish 合并）
+        if: steps.gpgkey.outputs.ok == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pxrepo-9
+          path: /tmp/pxrepo
+          if-no-files-found: error
+
+      - name: 密钥未配置提示（占位，保持 job 绿）
+        if: steps.gpgkey.outputs.ok != 'true'
+        run: |
+          echo "⏸ 本次跳过 rpm 发布。启用方法（正式密钥就绪后无需改代码）："
+          echo "   1. 在仓库 Settings → Secrets and variables → Actions 配置："
+          echo "      GPG_PRIVATE_KEY / GPG_PASSPHRASE / GPG_KEY_ID"
+          echo "   2. 下一个 tag（v0.1.0-mXX）自动构建签名 RPM 仓库并发布（el7 + el9）"
+          echo "   3. 用户侧: sudo bash packaging/install-rpm.sh && dnf install puxian"
+
+  rpm-build-7:
+    name: 构建 el7 签名 RPM 仓库（centos:7 容器 + yum 真实验证）
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: 检查 GPG 签名密钥是否就绪（未配置则跳过发布）
+        id: gpgkey
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          if [ -n "$GPG_PRIVATE_KEY" ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            echo "✅ GPG_PRIVATE_KEY 已配置，el7 rpm 发布启用"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "⏸ GPG_PRIVATE_KEY 未配置 —— el7 rpm 发布跳过"
+          fi
+
+      - name: 检出代码（含 tag 历史；centos:7 跑不了 node actions，故构建走 docker run）
+        if: steps.gpgkey.outputs.ok == 'true'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 准备 el7 仓库输出目录（挂载给 centos:7 容器）
+        if: steps.gpgkey.outputs.ok == 'true'
+        run: mkdir -p /tmp/pxrepo7 && echo "✅ /tmp/pxrepo7 就绪"
+
+      - name: centos:7 容器构建签名 + yum 双验签 + 真实安装（build_rpm_el7.sh）
+        if: steps.gpgkey.outputs.ok == 'true'
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/src" \
+            -v /tmp/pxrepo7:/out \
+            -e GPG_PRIVATE_KEY="$GPG_PRIVATE_KEY" \
+            -e GPG_PASSPHRASE="$GPG_PASSPHRASE" \
+            -e GPG_KEY_ID="$GPG_KEY_ID" \
+            centos:7 \
+            bash /src/packaging/build_rpm_el7.sh
+
+      - name: 上传 el7 仓库产物（供 rpm-publish 合并）
+        if: steps.gpgkey.outputs.ok == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pxrepo-7
+          path: /tmp/pxrepo7
+          if-no-files-found: error
+
+      - name: 密钥未配置提示（占位，保持 job 绿）
+        if: steps.gpgkey.outputs.ok != 'true'
+        run: echo "⏸ 本次跳过 el7 rpm 发布（GPG_PRIVATE_KEY 未配置）"
+
+  rpm-publish:
+    name: 合并发布 el7+el9 rpm 仓库到 GitHub Pages
+    needs: [rpm-build-9, rpm-build-7]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 检查 GPG 签名密钥是否就绪（未配置则跳过发布）
+        id: gpgkey
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          if [ -n "$GPG_PRIVATE_KEY" ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            echo "✅ GPG_PRIVATE_KEY 已配置，合并发布启用"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "⏸ GPG_PRIVATE_KEY 未配置 —— 发布跳过"
+          fi
+
+      - name: 下载 el9 仓库产物
+        if: steps.gpgkey.outputs.ok == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: pxrepo-9
+          path: /tmp/art/pxrepo-9
+
+      - name: 下载 el7 仓库产物
+        if: steps.gpgkey.outputs.ok == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: pxrepo-7
+          path: /tmp/art/pxrepo-7
+
+      - name: 合并 el7 + el9 仓库树（顶层 PUXIAN-GPG-KEY.asc 两份同内容）
+        if: steps.gpgkey.outputs.ok == 'true'
+        run: |
+          mkdir -p /tmp/pxrepo
+          rsync -a /tmp/art/pxrepo-9/ /tmp/pxrepo/
+          rsync -a /tmp/art/pxrepo-7/ /tmp/pxrepo/
+          echo "== 合并结果 =="
+          find /tmp/pxrepo -maxdepth 2 | sort | head -20
+          echo "✅ 已合并 rpm/{7,9} 两套签名仓库"
 
       - name: 发布到 gh-pages（rpm/ 树，只保留最新版）
         if: steps.gpgkey.outputs.ok == 'true'
@@ -226,7 +343,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "ℹ️ rpm 仓库无变更（同版本重复发布）"
           else
-            git commit -q -m "rpm: 发布 PuXian ${GITHUB_REF_NAME}（el9/x86_64 签名仓库）"
+            git commit -q -m "rpm: 发布 PuXian ${GITHUB_REF_NAME}（el7/el9 签名仓库）"
             if git rev-parse --verify -q origin/gh-pages >/dev/null; then
               git push -q origin gh-pages
             else
@@ -234,13 +351,8 @@ jobs:
             fi
             echo "✅ 已推送到 gh-pages/rpm/（${GITHUB_REF_NAME}）"
           fi
-          echo "🌐 仓库地址: https://nanzhangroup.github.io/${GITHUB_REPOSITORY#*/}/rpm/9/x86_64/"
+          echo "🌐 仓库地址: https://nanzhangroup.github.io/${GITHUB_REPOSITORY#*/}/rpm/{7,9}/x86_64/"
 
       - name: 密钥未配置提示（占位，保持 job 绿）
         if: steps.gpgkey.outputs.ok != 'true'
-        run: |
-          echo "⏸ 本次跳过 rpm 发布。启用方法（正式密钥就绪后无需改代码）："
-          echo "   1. 在仓库 Settings → Secrets and variables → Actions 配置："
-          echo "      GPG_PRIVATE_KEY / GPG_PASSPHRASE / GPG_KEY_ID"
-          echo "   2. 下一个 tag（v0.1.0-mXX）自动构建签名 RPM 仓库并发布"
-          echo "   3. 用户侧: sudo bash packaging/install-rpm.sh && dnf install puxian"
+        run: echo "⏸ 本次跳过 rpm 发布（GPG_PRIVATE_KEY 未配置）"
