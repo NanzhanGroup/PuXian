@@ -125,6 +125,7 @@ LXValue px_native(const char* name, LXFuncPtr fn);
 // M42：FFI 注册表（runtime_ffi.c）—— 显式 C 库 import 的 C 桥
 void    px_ffi_register(const char* name, LXFuncPtr fn);
 bool    px_ffi_has(const char* name);
+bool    px_global_native(const char* name, LXValue* out);   // M68：非致命全局 native 查询（ffi_call 双表兜底）
 LXValue bi_ffi_call(LXValue* args, int nargs, void* ctx);   // ffi_call(name, args_list)
 void    px_register_quic(void);                          // M46：QUIC 绑定（runtime_quic.c）
 void    px_register_h3(void);                            // M47：HTTP/3 语义层（runtime_h3.c）
