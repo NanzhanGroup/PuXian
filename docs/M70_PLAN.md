@@ -117,9 +117,11 @@
 - [x] S3：顶层 var 跨函数读写双模式一致；import 模块状态槽可用且无副作用原则成立；自举证明通过
 - [x] S4：回归总闸 1-6 全绿
 - [x] S5：spec/MINI_SUBSET/CHEATSHEET/ECOSYSTEM_GAPS/ROADMAP/CHANGELOG/README 全部收口
-- [ ] S6：tag v0.1.0-m70 发布 + GitHub 产物二次冒烟通过 + 本机留档 + 发布指引更新
+- [x] S6：tag v0.1.0-m70（6ccc057）发布 + GitHub 产物二次冒烟通过（sha256 三方一致 + 双模式 9 断言全过）+ 本机留档 + 发布指引更新至 m70
 
 ## 六、执行进度（实时记录 · 东月）
+- **S6 发布收尾（2026-09-05）**：tag v0.1.0-m70 已 push（6ccc057，5 commits）→ CI 自动发布 GitHub Release（id 383247949，asset `puxian-0.1.0-m70-6ccc057.tar.gz` 54862618B）。二次冒烟：本地下载 sha256sum=`f340e19b…7fd655` 与 GitHub digest 逐字节一致；解包后 `bootstrap/pxi` 跑 smoke_m70.px（顶层 var counter 跨函数累加=3 / let base 跨函数读 total=1008 / 多行 list nums[2]=3 / 多行索引 i1=2 / 多行 dict cfg["ver"]=70 / 多行调用 add=42 / 多行 tuple t0=1 t1=40）9 断言全过 M70_SMOKE_OK；`tools/pxc build` 编译静态 ELF 8977680B statically linked，运行输出与解释器逐字节一致。本机留档：`/data/release/puxian-0.1.0-m70-6ccc057.tar.gz` + `.sha256` + `PuXian发布包开发指引-v0.1.0-m70.md`（基于 m69 版更新 M70 能力速览/语言边界/版本历史）。**commit 6ccc057 之后收口 commit（本次）**。
+
 （每完成一步在此追加：日期/commit/验证结果）
 
 ### 执行记录
@@ -130,5 +132,7 @@
 - **S4 回归总闸（2026-09-05，20:40-20:59）**：侦查发现 S1/S3 期间重建的 bootstrap/pxi pxc pxpar 为 **--no-quic 裁剪态**（pxi 4245944B，vs M68/M69 发布物全能力 pxi 9326544B）→ capability.px quic 段（M46-M54）FAIL（pxi 178/180）、双模式不一致 → **判定：M70 发布物须全能力重建**（与 M68/M69 对齐，quic/h3 解释能力保持，M68「差集 155 含 quic/h3」成果不丢）。`tools/pxc build`（不带 --no-quic）三连：interp.px → pxi **9355256B**（real 9m10s）/ compiler.px → pxc **9275232B**（real 5m0s）/ parser.px → pxpar **9142352B**（real 1m49s）。最终回归（全能力产物下）**全绿**：① capability 双模式 **253 PASS 逐字节一致**（CAPABILITY_DIFF_IDENTICAL，capability.px 全能力重编 9098040B）；② diffcheck --all rc=0；③ diffcheck --errors rc=0；④ m62/m64_fmt/m64_lint/m66_yaml(35)/pxml/lunar/m69_registry(11 断言)/m70_fmt verify 全过 + m63_langfix（mock :18080 起后）ALL OK；⑤ fmt --check（selfhost+tools+stdlib）0 错、lint compiler.px + tools 0 错；⑥ ci.yml/release.yml YAML OK、make_release.sh bash -n OK。**噪音排除记录**：m63 verify 初跑 rc=1 = mock server 未起（环境依赖，起后 ALL OK）；regress 初跑 capability DIFFERS = --no-quic 裁剪态（全能力重建后 IDENTICAL）。**commit 见收口**。
 - **S5 文档收口（2026-09-05）**：spec §4.1（表达式跨行规则：括号内换行/语句边界/缩进栈约束/dict 判定）+ §5.1（顶层 let·var = 全局状态槽 px_set_global + import 导出模块顶层 let/var/const + 同名冲突用户优先 + let 仍 E3002）+ §8.4（import 无副作用边界：仅顶层 var/let/const 声明随合并导出并初始化一次）修订；MINI_SUBSET §四 #1/#5、§九 #7、§十三 #5、§十四 L4 更新（G1/G2 从「限制」改「已支持+规则」）；ECOSYSTEM_GAPS G1/G2 标记 M70 已修（保留历史评估供追溯）；CHEATSHEET §0.3（import 导出）、§1 类型表（list 可跨行）、§1 坑 3/6/7（表达式跨行/顶层全局状态槽/import 副作用边界）同步 M70 语义；ROADMAP M70 行；CHANGELOG M70 条目；README(.en) 原生开发表补 M68/M69/M70 三行。**commit 见收口**。
 
+
+- **S6 发布收尾（2026-09-05）**：tag v0.1.0-m70 已 push（6ccc057，5 commits）→ CI 自动发布 GitHub Release（id 383247949，asset `puxian-0.1.0-m70-6ccc057.tar.gz` 54862618B）。二次冒烟：本地下载 sha256sum=`f340e19b…7fd655` 与 GitHub digest 逐字节一致；解包后 `bootstrap/pxi` 跑 smoke_m70.px（顶层 var counter 跨函数累加=3 / let base 跨函数读 total=1008 / 多行 list nums[2]=3 / 多行索引 i1=2 / 多行 dict cfg["ver"]=70 / 多行调用 add=42 / 多行 tuple t0=1 t1=40）9 断言全过 M70_SMOKE_OK；`tools/pxc build` 编译静态 ELF 8977680B statically linked，运行输出与解释器逐字节一致。本机留档：`/data/release/puxian-0.1.0-m70-6ccc057.tar.gz` + `.sha256` + `PuXian发布包开发指引-v0.1.0-m70.md`（基于 m69 版更新 M70 能力速览/语言边界/版本历史）。**commit 6ccc057 之后收口 commit（本次）**。
 
 （每完成一步在此追加：日期/commit/验证结果）
