@@ -79,3 +79,19 @@ dnf/yum 安装校验链：公钥 → repomd.xml 签名（repo_gpgcheck）→ 按
 - [ ] el8 目录铺开（release.yml matrix 加 dist=8 即可，结构已支持）
 - [ ] aarch64 仓库（交叉构建或原生 runner）
 - [ ] Fedora / openEuler 目录铺开（$releasever 语义不同，需独立 dist 目录 + 测试）
+
+## M78/M80：el7 支持与 RPM 签名密钥轮换（重要）
+- **架构（M78）**：el7(rpm4.11/gpg2.0) 原生容器内 headless 签名不可靠（无 `--pinentry-mode
+  loopback`，`__gpg_sign_cmd` 注入在 rpm4.11 不生效 → Bad passphrase）。改为：
+  centos:7 容器**无签名构建**（`SKIP_SIGN=1`）→ el9(rockylinux:9, rpm4.16) **代签**
+  el7 rpm（createrepo_c gzip，兼容 yum3.4）→ 发布单 artifact `pxrepo-all` →
+  `rpm-verify-7` job 用 centos:7 + yum 3.4 对**正式签名仓库**双验签 + 安装终验。
+- **密钥轮换（M80）**：旧 CI 密钥是「主密钥占位 + 签名子密钥」形态；el7 rpm4.11 的
+  rpmdb 只导入主钥、不认子密钥签发的包（`NOKEY key ID 542a1694`）。已轮换为**专用主密钥**
+  （RSA4096、无子密钥），el7/el9 包均以主密钥签发，rpm4.11 yum3.4 / dnf 全兼容：
+  - 指纹：`334536AC7B3E161ABE1F53753851AD992A61D264`
+  - GitHub secrets：`GPG_PRIVATE_KEY`（明文 armor 主私钥）/ `GPG_PASSPHRASE` /
+    `GPG_KEY_ID`（上指纹）已同步更新
+  - 本机备份（root 600）：`/data/puxian-rpm-release-sec.asc`（私钥）、
+    `/data/.puxian-rpm-pass`（口令，勿外泄）
+- [x] el7 签名仓库 + yum 3.4 真实验签安装（rpm-verify-7 job 终验通过，M80）
