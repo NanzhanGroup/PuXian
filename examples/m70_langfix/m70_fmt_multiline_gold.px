@@ -1,0 +1,33 @@
+# M70-S2 输入样例：多行表达式（未规范化，含不规则空白）
+def main():
+    let a = [
+        1,
+        2,
+        3,
+    ]
+    let d = {
+        "x": 10,
+        "y": 20,
+    }
+    let s = max(
+        3,
+        7
+    )
+    let t = (
+        1,
+        2,
+    )
+    let arr = [10, 20, 30, 40]
+    let v = arr[
+        2
+    ]
+    let evens = [
+        x for x in [1, 2, 3, 4, 5, 6]
+        if x % 2 == 0
+    ]
+    print(len(a))
+    print(d["x"] + d["y"])
+    print(s)
+    print(t[0] + t[1])
+    print(v)
+    print(evens)
