@@ -7,6 +7,10 @@
 #   pxc build <file.px>                    编译为静态二进制（<dir>/build/<name>）
 #   pxc build --no-quic <file.px>          裁剪 QUIC/H3（去掉 ngtcp2/openssl 依赖，
 #                                           runtime 侧 -DPX_NO_QUIC，M57-S4 边缘设备用）
+#   pxc build --target <arch> <file.px>        高层交叉开关（M71-S2，对齐 GOOS/GOARCH）：
+#                                           arch ∈ x86_64|aarch64|armv7|riscv64，自动折叠
+#                                           cc/mbedtls-lib/sqlite-obj/zlib-lib/--no-quic
+#                                           （aarch64 库仓库预置；armv7/riscv64 先 cross_multiarch）
 #   pxc build --cc <cc> [--mbedtls-lib <dir>] [--sqlite-obj <file>] --no-quic <file.px>
 #                                           交叉编译（M57-S4）：cc 指定交叉编译器，
 #                                           mbedtls-lib/sqlite-obj 指定目标架构静态库
@@ -18,8 +22,10 @@
 #   pxc --version / -v                     输出版本号
 #   pxc help                               帮助
 # 说明：
-#   - build 模式：bootstrap/pxc 生成 C 源码 → 复制 runtime → gcc 静态编译，
-#     命令参数与 Rust 版 run_build 完全一致（-static -O2 -pthread + sqlite/miniz/mbedtls）
+#   - build 模式：bootstrap/pxc 生成 C 源码 → runtime 预编译 .o 缓存（M71-S1：
+#     $PXC_HOME/.rtcache/<key>，key=runtime源×cc×no_quic，命中只编 base.c+链接，
+#     二次 build 亚秒；改 runtime/换 cc/切 quic 自动重建）→ gcc 静态链接，
+#     参数对齐 Rust 版 run_build（-static -O2 -pthread + sqlite/miniz/mbedtls）
 #   - 对拍契约（MINI_SUBSET §五）：build 产物与 Rust 版 px build 逐字节一致
 #   - 版本：随 PuXian 编译器演进，用 SELFHOST_VER 标记自举里程碑
 #   - M57-S4：交叉编译默认配 --no-quic —— 第三方预编译库（ngtcp2/openssl-quictls）
@@ -50,9 +56,13 @@ pxc $(echo "$SELFHOST_VER") (普贤 PuXian · selfhosted $SELFHOST_MILESTONE)
 
 用法:
   pxc build <file.px>                         编译为静态二进制（输出 <目录>/build/<name>）
-  pxc build [--no-quic] [--cc <cc>]
+  pxc build [--no-quic] [--target <arch>] [--cc <cc>]
             [--mbedtls-lib <dir>] [--sqlite-obj <file>] <file.px>
-                                               裁剪/交叉编译选项（M57-S4）：
+                                               裁剪/交叉编译选项（M57-S4 / M71-S2）：
+                                                 --target <arch> 高层交叉开关：x86_64|aarch64|
+                                                                  armv7|riscv64，自动折叠 cc/
+                                                                  mbedtls-lib/sqlite-obj/zlib-lib/
+                                                                  --no-quic（显式 flag 优先）
                                                  --no-quic       去掉 QUIC/H3（-DPX_NO_QUIC，
                                                                   不链 ngtcp2/openssl）
                                                  --cc <cc>       指定 C 编译器（交叉用，
@@ -184,13 +194,55 @@ rt_ensure() {
     return 0
 }
 
+# ---- M71-S2：--target 高层折叠（对齐 GOOS/GOARCH，交叉 5 flag 折叠为一条命令）----
+# 输出键值行：cc / mbedtls_lib / sqlite_obj / zlib_lib / no_quic。
+# aarch64 仓库预置库；armv7/riscv64 无仓库预置 → 探测 CI/本机 cross_multiarch
+#   --outdir 布局 /opt/px-multiarch/<arch>/（M67 cross cache 约定）。
+target_defaults() {
+    local arch="$1"
+    case "$arch" in
+        x86_64)
+            echo "cc=gcc"; echo "no_quic=0"
+            echo "mbedtls_lib=$RT_DIR/mbedtls/lib"
+            echo "sqlite_obj=$RT_DIR/third_party/sqlite3/sqlite3.o"
+            echo "zlib_lib=$RT_DIR/third_party/zlib/lib"
+            return 0 ;;
+        aarch64)
+            echo "cc=aarch64-linux-musl-gcc"; echo "no_quic=1"
+            echo "mbedtls_lib=$RT_DIR/mbedtls/lib-aarch64"
+            echo "sqlite_obj=$RT_DIR/third_party/sqlite3/sqlite3-aarch64.o"
+            echo "zlib_lib=$RT_DIR/third_party/zlib/lib-aarch64"
+            return 0 ;;
+        armv7|riscv64)
+            local cc="$arch-linux-musl-gcc"
+            [ "$arch" = "armv7" ] && cc="armv7l-linux-musleabihf-gcc"
+            echo "cc=$cc"; echo "no_quic=1"
+            local base="$RT_DIR/mbedtls/lib-$arch"
+            local so="$RT_DIR/third_party/sqlite3/sqlite3-$arch.o"
+            local zl="$RT_DIR/third_party/zlib/lib-$arch"
+            # 仓库未预置 armv7/riscv64 库 → 探测 /opt/px-multiarch/<arch>/ 布局
+            if [ ! -d "$base" ] && [ -d "/opt/px-multiarch/$arch/mbedtls/lib-$arch" ]; then
+                base="/opt/px-multiarch/$arch/mbedtls/lib-$arch"
+                so="/opt/px-multiarch/$arch/sqlite3/sqlite3-$arch.o"
+                zl="/opt/px-multiarch/$arch/zlib/lib-$arch"
+            fi
+            echo "mbedtls_lib=$base"; echo "sqlite_obj=$so"; echo "zlib_lib=$zl"
+            return 0 ;;
+        *)
+            echo "错误: 未知 --target $arch（支持 x86_64|aarch64|armv7|riscv64）" >&2
+            return 1 ;;
+    esac
+}
+
 # build：AST → C → gcc 静态二进制（对齐 Rust run_build）
 cmd_build() {
-    local no_quic=0 cc="gcc" mbedtls_lib="" sqlite_obj="" zlib_lib=""
+    local no_quic=0 cc="gcc" mbedtls_lib="" sqlite_obj="" zlib_lib="" target=""
+    local cc_set=0 no_quic_set=0
     while [ $# -gt 0 ]; do
         case "$1" in
-            --no-quic) no_quic=1; shift ;;
-            --cc) cc="$2"; shift 2 ;;
+            --no-quic) no_quic=1; no_quic_set=1; shift ;;
+            --cc) cc="$2"; cc_set=1; shift 2 ;;
+            --target|-t) target="$2"; shift 2 ;;
             --mbedtls-lib) mbedtls_lib="$2"; shift 2 ;;
             --sqlite-obj) sqlite_obj="$2"; shift 2 ;;
             --zlib-lib) zlib_lib="$2"; shift 2 ;;
@@ -203,6 +255,42 @@ cmd_build() {
     local file="${1:-}"
     [ -n "$file" ] || { echo "用法: pxc build [选项] <file.px>" >&2; exit 1; }
     [ -f "$file" ] || { echo "错误: 无法读取文件 $file" >&2; return 1; }
+    # M71-S2：--target 高层折叠（显式 flag 优先于 target 默认；缺省 x86_64 语义 = 现状）
+    if [ -n "$target" ]; then
+        local t_out t_cc="" t_mb="" t_so="" t_zl="" t_nq=""
+        t_out="$(target_defaults "$target")" || return 1
+        local t_line
+        while IFS= read -r t_line; do
+            case "$t_line" in
+                cc=*) t_cc="${t_line#cc=}" ;;
+                mbedtls_lib=*) t_mb="${t_line#mbedtls_lib=}" ;;
+                sqlite_obj=*) t_so="${t_line#sqlite_obj=}" ;;
+                zlib_lib=*) t_zl="${t_line#zlib_lib=}" ;;
+                no_quic=*) t_nq="${t_line#no_quic=}" ;;
+            esac
+        done <<< "$t_out"
+        [ "$cc_set" = 1 ] || cc="$t_cc"
+        [ "$no_quic_set" = 1 ] || no_quic="${t_nq:-0}"
+        [ "$mbedtls_lib" = "" ] && mbedtls_lib="$t_mb"
+        [ "$sqlite_obj" = "" ] && sqlite_obj="$t_so"
+        [ "$zlib_lib" = "" ] && zlib_lib="$t_zl"
+        # 交叉 cc 不在 PATH → 友好指引（不联网下载；CI/用户自备工具链）
+        if ! command -v "$cc" >/dev/null 2>&1; then
+            echo "错误: --target $target 需要交叉编译器 $cc（不在 PATH）" >&2
+            echo "  获取方式（任一）：" >&2
+            echo "    1) musl.cc：https://musl.cc/ 下载 ${cc%-gcc}-cross.tgz，解压把 bin 加入 PATH" >&2
+            echo "    2) zig cc：装 zig 后建 wrapper（${cc%-gcc}-gcc → 'zig cc -target <triple>'）入 PATH（CI 已用此路）" >&2
+            echo "    3) 交叉静态库：armv7/riscv64 先 tools/cross_multiarch.sh --arch $target --outdir /opt/px-multiarch/$target（aarch64 库仓库已预置）" >&2
+            return 1
+        fi
+        # 目标架构静态库完整性检查
+        if [ ! -d "$mbedtls_lib" ] || [ ! -f "$mbedtls_lib/libmbedcrypto.a" ]            || [ ! -f "$sqlite_obj" ] || [ ! -f "$zlib_lib/libz.a" ]; then
+            echo "错误: --target $target 缺目标架构静态库（mbedtls/sqlite3/zlib）" >&2
+            echo "  仓库预置：aarch64 已含 runtime/mbedtls/lib-aarch64 + sqlite3-aarch64.o + zlib/lib-aarch64" >&2
+            echo "  armv7/riscv64：先 tools/cross_multiarch.sh --arch $target --outdir /opt/px-multiarch/$target 现编" >&2
+            return 1
+        fi
+    fi
     [ "$mbedtls_lib" = "" ] && mbedtls_lib="$RT_DIR/mbedtls/lib"
     # M61-S0：zlib 外部静态库 —— 显式 --zlib-lib 优先，否则按 cc 架构自动探测
     # M67-S5：多架构扩展（aarch64/armv7/riscv64 → lib-<arch>，缺省 lib 兼容）
