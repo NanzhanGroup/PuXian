@@ -79,7 +79,7 @@ cp -r stdlib       "$STAGE/$NAME/stdlib"
 cp -r runtime      "$STAGE/$NAME/runtime"
 cp    LICENSE      "$STAGE/$NAME/LICENSE"
 # 发布脚本自身不进发布包（依赖 git 仓库，且与"无源码树"目标冲突）
-rm -f "$STAGE/$NAME/tools/make_release.sh"
+rm -f "$STAGE/$NAME/tools/make_release.sh" "$STAGE/$NAME/tools/install.sh"
 # runtime 下的备份/杂物不进发布包
 find "$STAGE/$NAME" -name '*.bak*' -delete
 find "$STAGE/$NAME" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
@@ -148,6 +148,9 @@ EOF
 tar -C "$STAGE" -czf "$PKG" "$NAME"
 SZ="$(stat -c %s "$PKG")"
 echo "   ✅ tarball: $PKG （$SZ 字节）"
+# M71-S4：sha256sums.txt 与 tarball 同目录（tools/install.sh 一键安装校验用）
+( cd "$(dirname "$PKG")" && sha256sum "$(basename "$PKG")" > sha256sums.txt )
+echo "   ✅ sha256sums: $(dirname "$PKG")/sha256sums.txt"
 rm -rf "$STAGE"
 
 # ---- 4. 冒烟自检 ----
