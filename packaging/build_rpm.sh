@@ -21,7 +21,7 @@
 #   REPO_OUT   仓库输出目录（缺省 /tmp/pxrepo）
 #   RPM_TOP    rpmbuild 顶层（缺省 $HOME/rpmbuild）
 #   DIST       目录 = releasever 纯数字（缺省取 rpm -E %{?dist}，如 7/9）
-#   GPG_PASSPHRASE  签名私钥口令（有则用 --passphrase-file 无 tty 签名）
+#   GPG_PASSPHRASE  签名私钥口令（有则 --passphrase-file 无 tty 签名）
 # ============================================================
 set -euo pipefail
 
@@ -34,10 +34,10 @@ GPG_KEY_ID="${GPG_KEY_ID:-}"
 DIST="${DIST:-$(rpm -E %{?dist} 2>/dev/null | grep -o '[0-9]*' || echo 9)}"
 DL="${DIST//[^0-9]/}"          # 目录名里取纯数字（DIST=el9 → 9）
 
-# ---- gpg 二进制自适应（el7 默认无 /usr/bin/gpg，rpm 宏需指向 gpg2）----
+# ---- gpg 二进制自适应（el7 若只装 gnupg2 则无 /usr/bin/gpg → 用 gpg2）----
 GPG_BIN="$(command -v gpg || command -v gpg2 || true)"
 [ -n "$GPG_BIN" ] || { echo "❌ 未找到 gpg/gpg2"; exit 1; }
-# --pinentry-mode loopback 仅 gpg 2.1+；gpg1 / gpg2.0 用 --passphrase-file 即可
+# --pinentry-mode loopback 仅 gpg 2.1+；gpg1 / gpg2.0 无此选项 → 空，靠 --passphrase-file
 _LOOPBACK=""
 if "$GPG_BIN" --batch --pinentry-mode loopback --version >/dev/null 2>&1; then
     _LOOPBACK="--pinentry-mode loopback"
@@ -89,23 +89,35 @@ fi
 
 # 带口令私钥在无 tty 下 rpm --addsign 拿不到口令 → 覆写 __gpg_sign_cmd：
 #   headless 标准做法 —— gpg2.1+ 加 --pinentry-mode loopback；gpg1/gpg2.0 仅
-#   --passphrase-file（el7 默认 gpg1 无 loopback 选项，加了反而 unknown option）。
-#   若系统默认 __gpg(/usr/bin/gpg) 不存在（el7 只装 gnupg2）→ 覆写 __gpg 到 gpg2。
+#   --passphrase-file（el7 默认 gpg1 无 loopback，加了反而 unknown option）。
+#   传递双通道：① 命令行 --define（el9 rpm4.16 生效，已验证）；
+#   ② 写入 ~/.rpmmacros（el7 rpm4.11 rpmsign 对命令行 define 可能不生效，
+#      宏文件对 rpmsign/rpmbuild 一律生效），用完删除。
+MACROS_FILE="$HOME/.rpmmacros"
+_GPG_SIGN_CMD=""
 SIGN_ARGS=(--define "_gpg_name $GPG_KEY")
-[ -x /usr/bin/gpg ] || SIGN_ARGS+=(--define "__gpg $GPG_BIN")
 _PASSFILE=""
 if [ -n "${GPG_PASSPHRASE:-}" ]; then
     _PASSFILE="$RPM_TOP/.gpg-passfile.$$"
     printf '%s' "$GPG_PASSPHRASE" > "$_PASSFILE"
     chmod 600 "$_PASSFILE"
-    SIGN_ARGS+=(--define "__gpg_sign_cmd %{__gpg} gpg --batch --yes $_LOOPBACK --passphrase-file $_PASSFILE --no-armor --no-secmem-warning -u %{_gpg_name} -sbo %{__signature_filename} %{__plaintext_filename}")
+    _GPG_SIGN_CMD="%{__gpg} gpg --batch --yes $_LOOPBACK --passphrase-file $_PASSFILE --no-armor --no-secmem-warning -u %{_gpg_name} -sbo %{__signature_filename} %{__plaintext_filename}"
+    SIGN_ARGS+=(--define "__gpg_sign_cmd $_GPG_SIGN_CMD")
 fi
 command -v rpmsign >/dev/null 2>&1 || { echo "❌ 未找到 rpmsign：请先安装 rpm-sign（dnf/yum install -y rpm-sign）"; exit 1; }
+# ~/.rpmmacros 双保险（el7 rpm4.11 rpmsign 兼容通道）
+{
+    echo "%_gpg_name $GPG_KEY"
+    [ -x /usr/bin/gpg ] || echo "%__gpg $GPG_BIN"
+    [ -n "$_GPG_SIGN_CMD" ] && echo "%__gpg_sign_cmd $_GPG_SIGN_CMD"
+} > "$MACROS_FILE"
+chmod 600 "$MACROS_FILE"
 rpm "${SIGN_ARGS[@]}" --addsign "$RPK"
+rm -f "$MACROS_FILE"
 
 # ---- 4) 仓库元数据 + repomd.xml 签名 + 公钥导出 ----
 # createrepo_c（el8/9，zstd 元数据）与 createrepo（el7 python，gzip 元数据）自适应；
-# 各自的消费端 dnf / yum3.4 恰好匹配压缩格式，不做强制 --compress-type。
+# 各自消费端 dnf / yum3.4 恰好匹配压缩格式，不做强制 --compress-type。
 CREATEREPO_BIN="$(command -v createrepo_c || command -v createrepo || true)"
 [ -n "$CREATEREPO_BIN" ] || { echo "❌ 未找到 createrepo_c/createrepo"; exit 1; }
 echo "== $CREATEREPO_BIN =="
