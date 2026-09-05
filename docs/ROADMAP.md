@@ -15,7 +15,7 @@
 | WebServer | ✅ HTTP/1.1/2/3、HTTPS、WebSocket、SSE、路由/中间件/限流/日志/vhost/SNI/S3 |
 | HTTP/3 | ✅ QUIC 传输 → HTTP/3 语义 → QPACK（Huffman/静态表/动态表/SETTINGS/多路复用/解码器流 ack）→ **px_serve 三栈合一（M53）+ aioquic 外部互操作** → **生产化（M54：1-RTT resumption / 0-RTT early data / 连接迁移 / BLOCKED_STREAMS）** |
 | 边缘设备层 | ✅ M57：fd 原语（`open`/`close`/`ioctl`/`os_errno`，ioctl arg 三形态 int/bytes 就地 buffer）+ `read`/`write` 数据通道 + **mmap/munmap 活映射**（MAP_SHARED 帧缓冲/共享内存直访，GC 自动 munmap）+ GPIO/I2C 示例 + **aarch64 交叉编译**（`--no-quic` 裁剪 + qemu 验证）——Linux 边缘设备层（树莓派/网关/盒子）单静态二进制 |
-| 生态 | 仓库外私有生产应用（dogfood）、80+ examples、registry 版本化（semver + lockfile） |
+| 生态 | 仓库外私有生产应用（dogfood）+ **119 examples 能力导航**（docs/ECOSYSTEM.md）+ **AI 速查包**（PUXIAN_CHEATSHEET，native 281 单一事实源）+ **registry 拉取闭环**（9 官库随库入库，pxpkg fetch→import 双模式） |
 
 ## 二、已完成主线（里程碑记录，详见 CHANGELOG.md）
 
@@ -51,6 +51,7 @@
 | M66 | **自举 wsAgent runtime 原语补全 + stdlib 收编**（qg-issue 01–06 全量合入，docs/M66_PLAN.md）：L0 11 项 native —— unix_connect（AF_UNIX 裸连接）+ os 五件套（os_exec 进程替换 / os_rename 原子覆盖 / os_remove_all 递归删防删根 / os_random_hex / os_file_sha256）+ os_capture（双管道分离捕获，G6 which 用法覆盖）+ os_popen（双向管道）+ os_kill group 组杀 + write_file/append_file mode + zip_unpack 密码（zipcrypto + WinZip AES-256），pxi 白名单三处同步重建 → L1 收编第 7/8/9 个标准库：std.yaml（YAML 子集）/ std.pxml（PXML 规范进 docs/PXML.md，dogfood 闭环）/ std.lunar（1900-2100 公农历互转，农历生日卖点，ws-todo lunar:M-D 落点）→ spec §8.20 + ROADMAP/README/CI 生态收口 |
 | M67 | **多架构一等支持：aarch64 交叉 + GC 架构抽象 + armv7/riscv64**（qg-issue 07 两阶段，docs/M67_PLAN.md）：阶段一 aarch64 一等（README 中英「交叉编译」章节 + CI aarch64 job + examples/m67_aarch64 hello/http/sqlite 三用例 qemu 全绿）→ 阶段二 runtime GC 架构抽象（3 处架构 #if 迁出为 `runtime/arch.h` 统一接口 arch_read_sp/arch_scan_registers/arch_uc_sp + 分架构头 x86_64/aarch64 原样迁出 + 新增 **armv7(armhf)/riscv64** mcontext，GC 主逻辑不再见 #if）+ `pxc` riscv64 自动 -no-pie + zlib 探测三架构 + `cross_multiarch.sh`（--arch 三件套现编，cross_aarch64 薄包装）→ CI **四档矩阵**（x86_64 native 含 gc_stress 并发 GC 压力 + aarch64/armv7/riscv64 qemu 各 hello/http/sqlite）→ 真机侧 qemu-user 并发 GC 限制留档 |
 | M68 | **pxi 一致性收官：解释器 native 可达性根治**（docs/M68_PLAN.md）：根因 = 编译产物默认可达 runtime `px_set_global` 全局 native 281，pxi 只认 interp.px 白名单 129 → 差集 155（sqlite/aes/rsa/xml/zip/tcp/udp/ws/sse/cron/session/bus/http_serve/os_pid/now_ms…）pxi 裸脚本 R1001 → 根治 = C 侧 `ffi_call` **双表兜底**（ffi 注册表 → 新增 `px_global_native()` 全局 PX_NATIVE 单源）+ pxi `i_eval_call` env 未命中自动回退 + 未注册返回可辨 Err（typo 仍 R1001）→ **零 extern def 裸脚本 pxi 与编译产物一致**（t_native 19/19、capability 253 双模式逐字节一致、diffcheck --all 全绿、m66 stdlib verify 双模式 PASS）→ spec §9.3 / MINI_SUBSET §十三.0 / README 已知限制收敛 |
+| M69 | **生态启动：资产化 + AI 速查 + registry 拉取闭环**（docs/M69_PLAN.md）：S1 生态资产化 —— docs/ECOSYSTEM.md（9 库一览/119 dogfood 能力导航/消费路径）+ tools/gen_ecosystem.px 机器索引 + CI 防漂移；修复 stdlib collections.group_by 历史 bug（{} 字面量 = null + 无 d[k]=v）；S2 AI 速查包 docs/PUXIAN_CHEATSHEET.md + tools/gen_native_table.sh（runtime 注册表 281 全量单一事实源）+ AI 自测 3/3；S3 registry 拉取闭环 —— registry/ 9 官库 0.1.0 随库入库 + pxpkg fetch→import 双模式端到端（examples/m69_registry verify 11 断言）+ spec §8.6.3；S4 写库评估 docs/ECOSYSTEM_GAPS.md（缺口 G1-G4 入档，修复拆 M70 候选 A/B）；S5 全链回归（capability 253 双模式逐字节一致 + diffcheck --all 全绿）+ tag v0.1.0-m69 自动发布 |
 > **主线外已占用编号**（非 ROADMAP 功能里程碑，已记录于 CHANGELOG，勿复用）：
 > **M55** = issue #2 并发安全 hotfix（修复 · M55）；**M56** = 外部生产应用配套 runtime
 > `http_unix` 内建（新增 · M56）。
