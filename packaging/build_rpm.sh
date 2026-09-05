@@ -87,6 +87,7 @@ if [ -n "${GPG_PASSPHRASE:-}" ]; then
     chmod 600 "$_PASSFILE"
     SIGN_ARGS+=(--define "__gpg_sign_cmd %{__gpg} gpg --batch --yes --pinentry-mode loopback --passphrase-file $_PASSFILE --no-armor --no-secmem-warning -u %{_gpg_name} -sbo %{__signature_filename} %{__plaintext_filename}")
 fi
+command -v rpmsign >/dev/null 2>&1 || { echo "❌ 未找到 rpmsign：请先安装 rpm-sign（dnf install -y rpm-sign）"; exit 1; }
 rpm "${SIGN_ARGS[@]}" --addsign "$RPK"
 [ -n "$_PASSFILE" ] && rm -f "$_PASSFILE"
 

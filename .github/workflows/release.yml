@@ -129,8 +129,8 @@ jobs:
         if: steps.gpgkey.outputs.ok == 'true'
         run: |
           dnf -y install --setopt=install_weak_deps=False \
-            rpm-build createrepo_c gnupg2 git rsync gcc tar >/dev/null
-          echo "✅ 工具就绪: $(rpmbuild --version | head -1), $(createrepo_c --version | head -1)"
+            rpm-build rpm-sign createrepo_c gnupg2 git rsync gcc tar >/dev/null
+          echo "✅ 工具就绪: $(rpmbuild --version | head -1), $(rpmsign --version | head -1), $(createrepo_c --version | head -1)"
 
       - name: 检出代码（含 tag 历史，build_rpm.sh 依赖 git describe）
         if: steps.gpgkey.outputs.ok == 'true'
