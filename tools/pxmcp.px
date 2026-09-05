@@ -13,7 +13,8 @@
 #   - 统一入口：环境变量 PX_BOOT 指向 bootstrap/（pxc mcp 注入绝对路径），
 #     按工具 spawn 对应静态二进制：run→pxi、fmt→pxfmt、lint→pxlint、
 #     test→pxtest（需 PX_PXI，pxc mcp 一并注入）、bench→pxbench、
-#     doc→pxdoc、ast→pxpar；version 内联版本串。
+#     doc→pxdoc、ast→pxpar、build→tools/pxc（需 PX_PXC，缺省 PX_BOOT 上级推导）；
+#     version 内联版本串。
 #   - code 输入（run/fmt/lint/ast）写临时文件（TMPDIR/pxmcp_<pid>_<seq>.px）
 #     执行后删除（对齐 Rust write_temp + pxlsp 惯例）。
 # 协议约定：服务器禁用 print（污染协议 stdout）；调试输出 write(2)。
@@ -46,7 +47,7 @@ def tool(name, desc, params):
     d["description"] = desc
     d["params"] = params
     return d
-# 8 工具元数据（单条构造，PuXian 不支持跨行复合字面量）
+# 9 工具元数据（单条构造，PuXian 不支持跨行复合字面量）
 def tools_meta():
     let t = []
     let run_p = []
@@ -75,6 +76,12 @@ def tools_meta():
     ast_p.append(mp("file", "普贤源码文件路径", false))
     ast_p.append(mp("code", "普贤源码字符串", false))
     t.append(tool("ast", "查看普贤源码的 AST 树形结构", ast_p))
+    let build_p = []
+    build_p.append(mp("file", "普贤源码文件路径", false))
+    build_p.append(mp("code", "普贤源码字符串（写临时文件编译）", false))
+    build_p.append(mp("target", "目标架构 x86_64|aarch64|armv7|riscv64（可选）", false))
+    build_p.append(mp("no_quic", "1 或 true 裁剪 QUIC/H3（可选）", false))
+    t.append(tool("build", "编译普贤脚本为静态二进制（交付；写盘副作用：源同目录 build/<name>，返回产物路径）", build_p))
     t.append(tool("version", "获取普贤编译器版本信息", []))
     return t
 # ---------- 工具定位 ----------
@@ -90,6 +97,16 @@ def mcp_bin(name):
     if b == "":
         return name
     return b + "/" + name
+# tools/pxc 绝对路径（env PX_PXC 优先；缺省 PX_BOOT 上级 tools/pxc）—— M71-S3 build 用
+def mcp_pxc():
+    let p = env("PX_PXC")
+    if p != null:
+        if p != "":
+            return p
+    let b = mcp_boot()
+    if b == "":
+        return "pxc"
+    return b + "/../tools/pxc"
 # ---------- 临时文件（code 输入用）----------
 # 写 code 到 TMPDIR 下唯一 .px，返回路径；失败返回 ""
 def mcp_tempfile(code):
@@ -135,7 +152,32 @@ def mcp_call_tool(name, arg):
     var is_err = false
     var need_clean = false
     var path = ""
-    if name == "version":
+    if name == "build":
+        # M71-S3：编译交付（写盘副作用——产物在源同目录 build/<name>，不清理，供 agent 取路径）
+        let r = mcp_resolve(arg)
+        if not r[0]:
+            text = r[1]
+            is_err = true
+        else:
+            path = r[1]
+            need_clean = r[2]
+            var args = []
+            args.append("build")
+            if arg.has("no_quic"):
+                if type(arg["no_quic"]) == "string":
+                    if arg["no_quic"] == "1" or arg["no_quic"] == "true":
+                        args.append("--no-quic")
+            if arg.has("target"):
+                if type(arg["target"]) == "string":
+                    if arg["target"] != "":
+                        args.append("--target")
+                        args.append(arg["target"])
+            args.append(path)
+            let sp = mcp_spawn(mcp_pxc(), args)
+            text = sp[1]
+            if sp[0] != 0:
+                is_err = true
+    elif name == "version":
         text = PXC_VER_INFO
         text = text + "\npxmcp " + PXMC_VER + " (MCP " + MCP_PROTO + " · " + PXMC_MS + ")"
     elif name == "run" or name == "fmt" or name == "lint" or name == "ast":

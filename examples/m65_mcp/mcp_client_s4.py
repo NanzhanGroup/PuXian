@@ -124,9 +124,9 @@ def main():
     if "result" in r:
         tools = r["result"].get("tools", [])
         names = [t.get("name") for t in tools]
-        for expect in ["run", "fmt", "lint", "test", "bench", "doc", "ast", "version"]:
+        for expect in ["run", "fmt", "lint", "test", "bench", "doc", "ast", "version", "build"]:
             check("tools/list 含 " + expect, expect in names)
-        check("tools/list 恰 8 项", len(tools) == 8)
+        check("tools/list 恰 9 项（M71 扩展 build）", len(tools) == 9)
         # schema 结构抽查
         for t in tools:
             sch = t.get("inputSchema", {})

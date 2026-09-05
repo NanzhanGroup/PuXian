@@ -90,8 +90,8 @@ pxc $(echo "$SELFHOST_VER") (普贤 PuXian · selfhosted $SELFHOST_MILESTONE)
                                              编辑器以子进程拉起；诊断走 pxcheck 子进程，
                                              补全/跳转/悬停走 lsp_core 文本级符号层）
   pxc mcp                                    MCP 服务器（M65-S4 自举；stdio 即协议通道，
-                                             agent 以子进程拉起；8 工具 run/fmt/lint/test/
-                                             bench/doc/ast/version 经 os_spawn_capture
+                                             agent 以子进程拉起；9 工具 run/fmt/lint/test/
+                                             bench/doc/ast/build/version 经 os_spawn_capture
                                              调 bootstrap 各二进制，隔离崩溃不污染协议）
   pxc --version                               输出版本号
   pxc help                                    显示本帮助
@@ -433,9 +433,10 @@ cmd_lsp() {
 # M65-S4：px mcp（PuXian 自举 MCP 服务器，bootstrap/pxmcp）
 # stdio 即 MCP transport：exec 替换进程保留 fd 0/1（agent 以子进程拉起）。
 # 注入 PX_BOOT：pxmcp 内部 os_spawn_capture(bootstrap/<工具>) 执行各工具
-# （隔离崩溃 + 捕获输出不污染协议 stdout）；test/bench 子进程还需 PX_PXI
+# （隔离崩溃 + 捕获输出不污染协议 stdout）；test/bench 子进程还需 PX_PXI；
+# build 工具还需 PX_PXC（tools/pxc，M71-S3 交付腿）
 cmd_mcp() {
-    PX_BOOT="$PXC_HOME/bootstrap" PX_PXI="$PXI_BIN" exec "$PXMCP_BIN" "$@"
+    PX_BOOT="$PXC_HOME/bootstrap" PX_PXI="$PXI_BIN" PX_PXC="$PXC_HOME/tools/pxc" exec "$PXMCP_BIN" "$@"
 }
 
 # ---- 入口 ----
