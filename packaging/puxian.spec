@@ -1,7 +1,7 @@
 # ============================================================
 # packaging/puxian.spec —— PuXian RPM 打包定义（M73：dnf/yum 分发）
 # ------------------------------------------------------------
-# 用法（由 tools/build_rpm.sh 驱动，勿手动裸跑 rpmbuild）：
+# 用法（由 packaging/build_rpm.sh 驱动，勿手动裸跑 rpmbuild）：
 #   rpmbuild -bb \
 #     --define "_sourcedir <dir>" \
 #     --define "pxtag m72"          # 里程碑（Release 字段）
