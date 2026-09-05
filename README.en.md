@@ -222,7 +222,7 @@ CI runs this proof automatically on every commit (`.github/workflows/ci.yml`).
 
 During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_SUBSET.md`, syntax baseline M40, a minimal Turing-complete surface): only bug fixes allowed, no new features. The PuXian-written compiler only needs to correctly compile this subset (its own sources already live inside it).
 
-> **Known limitations**: in build mode `str(float)` truncates large-float %g precision (beyond 6 significant digits); the built version cannot parse source strings containing NUL; building the compiler itself takes ~3.5 min / 1.6 GB (the C runtime interprets the PuXian compiler logic); the built interpreter only exposes the Mini-subset built-in whitelist (`sqlite_*`/`http_*` and other production builtins are available in build mode only). See MINI_SUBSET §8–§12.
+> **Known limitations**: in build mode `str(float)` truncates large-float %g precision (beyond 6 significant digits); the built version cannot parse source strings containing NUL; building the compiler itself takes ~3.5 min / 1.6 GB (the C runtime interprets the PuXian compiler logic). **pxi interpreter native reachability is aligned with build mode (M68 root fix, 2026-09)**: `ffi_call` dual-table lookup (ffi registry + global PX_NATIVE) plus interpreter auto-fallback — bare scripts with zero `extern def` can call all runtime builtins (`sqlite_*`/`http_serve`/`aes_*`/`os_pid`/…). See MINI_SUBSET §8–§13.
 
 ---
 

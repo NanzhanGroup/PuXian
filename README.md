@@ -215,7 +215,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 
 自举期间语言被锁定为 **Mini 子集**（`docs/MINI_SUBSET.md`，语法基线 M40，图灵完备最小面）：只准修 bug 不准加特性。PuXian 版编译器只需正确编译该子集（自身源码即在子集内）。
 
-> **已知限制**：编译模式 `str(float)` 大浮点 %g 精度（>6 位有效数字截断）；编译版无法解析含 NUL 的源码字符串；编译自己需 ~3.5min/1.6GB（C 运行时解释执行 PuXian 编译器逻辑）；编译版解释器仅 Mini 子集内置白名单（`sqlite_*/http_*` 等生产内置只在编译模式可用）。详见 MINI_SUBSET §八~§十二。
+> **已知限制**：编译模式 `str(float)` 大浮点 %g 精度（>6 位有效数字截断）；编译版无法解析含 NUL 的源码字符串；编译自己需 ~3.5min/1.6GB（C 运行时解释执行 PuXian 编译器逻辑）。**pxi 解释器 native 可达性与编译模式一致（M68 根治，2026-09）**：`ffi_call` 双表（ffi 注册表 + 全局 PX_NATIVE）+ 解释器自动回退，零 `extern def` 裸脚本即可调 `sqlite_*`/`http_serve`/`aes_*`/`os_pid` 等全部 runtime 内置。详见 MINI_SUBSET §八~§十三。
 
 ---
 

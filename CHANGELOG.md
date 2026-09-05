@@ -6,6 +6,31 @@
 
 ## [Unreleased]
 
+### M68 · pxi 一致性收官：解释器 native 可达性根治（docs/M68_PLAN.md）✅
+
+> 来源：清歌反馈「pxi 内置不全、缺 sqlite，编译器没事」→ 源码级侦查确认根因：编译产物
+> 默认可达 = runtime `px_set_global` 全局 native **281 名**，pxi 只认 interp.px
+> `i_register_builtins` 白名单 **129 名** → 差集 155（sqlite/aes/rsa/xml/zip/tcp/udp/ws/
+> sse/cron/session/bus/http_serve/os_pid/now_ms…）在 pxi 裸脚本（零 extern def）R1001。
+> 决策：D1 A 根治（否决 B 补白名单）；D2 里程碑只做 pxi 一致性（生态线移出留档）；
+> D3 打 tag v0.1.0-m68 发布；不开 PR。
+
+- **M68-S1 差异表定稿（commit d71a82c）**：`docs/pxi_native_diff.md` 逐名归因（A 类真
+  native 91 + quic/h3 条件编译 64；`__px_*` 伪全局 / pi·e 常量 / chan·spawn 语言构造 /
+  dict·flatten·unique 解释器内部 均已剔除记依据）。
+- **M68-S2 根治实现（commit 3b47dbe，+65/-2 行）**：C 侧 `ffi_call` **双表兜底**——① ffi
+  注册表（extern def C 库原路径）→ ② 新增 `px_global_native()` 查全局 PX_NATIVE 表
+  （px_set_global 注册的全部内置，编译产物裸名调用同源单源，无逐行注册宏/无表扩容/无
+  双源漂移）；两表未命中返回**可辨 Err** `ffi_call: 未注册函数: <name>`（不杀进程，原
+  静默 null）。pxi `i_eval_call` Var 分支 env 未命中 → **自动回退** `ffi_call(cname, args)`，
+  宿主哨兵 Err（真拼错名）转 R1001，业务返回值/Err 原样透传。pxi 重建（bootstrap/pxi）。
+- **回归全绿**：capability 双模式 **253 PASS 逐字节一致**；t_native 零 extern def 裸脚本
+  **19/19（pxi == 编译产物）**；用户现象 t_sqlite pxi 裸调正常（原 R1001 修复）；t_typo
+  拼错名仍 R1001 可辨；diffcheck --all 全量通过；m66 stdlib verify yaml35/lunar36/
+  pxml68/proc14 双模式 PASS；fmt --check 通过；ci.yml YAML + make_release.sh bash -n 通过。
+- **文档收敛**：spec §9.3 + MINI_SUBSET §十三.0 + README/README.en 已知限制（pxi 白名单
+  条目更新为 M68 根治后一致）+ CHANGELOG 本条 + qg-issue 00-README §4 第 1 条勾除。
+
 ### M67 · 多架构一等支持：aarch64 交叉编译 + GC 架构抽象 + armv7/riscv64（qg-issue 07，docs/M67_PLAN.md）✅
 
 > 来源：清歌 qg-issue 07（任务清单·执行版）两阶段 —— 阶段一 aarch64 交叉编译提升为一等支持；
