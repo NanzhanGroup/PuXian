@@ -174,6 +174,9 @@ def skip_newlines():
 def skip_brace_indents():
     while chk("缩进") or chk("去缩进"):
         adv()
+def skip_expr_ws():
+    while chk("换行") or chk("缩进") or chk("去缩进"):
+        adv()
 def skip_newlines_in_block():
     while chk("换行"):
         adv()
@@ -836,24 +839,30 @@ def parse_postfix():
         elif k == "[":
             let pos = ppos()
             adv()
+            skip_expr_ws()
             if chk(":"):
                 adv()
                 let end = parse_slice_bound()
+                skip_expr_ws()
                 var step = null
                 if chk(":"):
                     adv()
                     step = parse_slice_bound()
+                    skip_expr_ws()
                 expect("]", "']'")
                 expr = ["Slice", expr, null, end, step, pos]
             else:
                 let first = parse_expr()
+                skip_expr_ws()
                 if chk(":"):
                     adv()
                     let end = parse_slice_bound()
+                    skip_expr_ws()
                     var step = null
                     if chk(":"):
                         adv()
                         step = parse_slice_bound()
+                        skip_expr_ws()
                     expect("]", "']'")
                     expr = ["Slice", expr, first, end, step, pos]
                 else:
@@ -886,12 +895,17 @@ def parse_slice_bound():
     return parse_expr()
 def parse_call_args():
     expect("(", "'('")
+    skip_expr_ws()
     let args = []
     if not chk(")"):
         while true:
             args.append(parse_expr())
+            skip_expr_ws()
             if chk(","):
                 adv()
+                skip_expr_ws()
+                if chk(")"):
+                    break
                 continue
             break
     expect(")", "')'")
@@ -964,20 +978,25 @@ def parse_primary():
 def parse_list_or_comp():
     let pos = ppos()
     adv()
+    skip_expr_ws()
     if chk("]"):
         adv()
         return ["List", [], pos]
     let first = parse_expr()
+    skip_expr_ws()
     if chk("for"):
         let clauses = parse_comp_clauses()
+        skip_expr_ws()
         expect("]", "']'")
         return ["ListComp", first, clauses[0], clauses[1], pos]
     let items = [first]
     while chk(","):
         adv()
+        skip_expr_ws()
         if chk("]"):
             break
         items.append(parse_expr())
+        skip_expr_ws()
     expect("]", "']'")
     return ["List", items, pos]
 def parse_comp_vars():
@@ -990,6 +1009,7 @@ def parse_comp_clauses():
     let clauses = []
     let conds = []
     while true:
+        skip_expr_ws()
         if chk("for"):
             adv()
             let vars = parse_comp_vars()
@@ -1015,21 +1035,26 @@ def fold_comp_conds(conds):
 def parse_paren_or_tuple():
     let pos = ppos()
     adv()
+    skip_expr_ws()
     if chk(")"):
         adv()
         return ["Tuple", [], pos]
     let first = parse_expr()
+    skip_expr_ws()
     if chk("for"):
         let clauses = parse_comp_clauses()
+        skip_expr_ws()
         expect(")", "')'")
         return ["GenExp", first, clauses[0], clauses[1], pos]
     if chk(","):
         let items = [first]
         while chk(","):
             adv()
+            skip_expr_ws()
             if chk(")"):
                 break
             items.append(parse_expr())
+            skip_expr_ws()
         expect(")", "')'")
         return ["Tuple", items, pos]
     expect(")", "')'")
