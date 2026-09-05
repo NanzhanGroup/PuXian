@@ -307,6 +307,9 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 | M65 | **LSP / MCP 自举**：`pxc lsp`（诊断/补全/跳转/悬停）+ `pxc mcp`（8 工具供 AI agent 调用）—— **spec §12 工具链全自举收官** |
 | M66 | **自举 wsAgent runtime 原语补全 + stdlib 收编**（qg-issue 01–06）：unix_connect + os 五件套 + os_capture/os_popen/os_kill group + write_file mode + zip_unpack 密码（zipcrypto/AES-256）→ 收编 std.yaml / std.pxml / std.lunar（农历）三个标准库，spec §8.20 |
 | M67 | **多架构一等支持**（qg-issue 07）：README 交叉编译章节 + `runtime/arch.h` GC 架构抽象（x86_64/aarch64 迁出 + 新增 **armv7/riscv64** mcontext）+ `cross_multiarch.sh` + CI **四档矩阵**（x86_64 native GC 压力 + aarch64/armv7/riscv64 qemu 三用例），spec §8.21 |
+| M68 | **pxi 一致性收官：解释器 native 可达性根治**（docs/M68_PLAN.md）：根因 = 编译产物默认可达 runtime `px_set_global` 全局 native **281 名**，pxi 只认 interp.px 白名单 **129 名** → 差集 155（sqlite/aes/rsa/xml/zip/tcp/udp/ws/sse/cron/session/bus/http_serve/os_pid/now_ms…）pxi 裸脚本 R1001 → 根治 = C 侧 `ffi_call` **双表兜底**（ffi 注册表 + 全局 PX_NATIVE 单源）+ pxi `i_eval_call` 自动回退 + 未注册返回可辨 Err（typo 仍 R1001）→ **零 extern def 裸脚本 pxi 与编译产物一致**（capability 253 双模式逐字节一致 + diffcheck --all 全绿），spec §9.3 |
+| M69 | **生态启动：资产化 + AI 速查 + registry 拉取闭环**（docs/M69_PLAN.md）：docs/ECOSYSTEM.md（9 库一览/119 dogfood 能力导航）+ gen_ecosystem.px 机器索引（CI 防漂移）+ 修复 stdlib collections.group_by 历史 bug（`{}` 字面量 = null）→ docs/PUXIAN_CHEATSHEET.md + gen_native_table.sh（281 native 单一事实源）AI 自测 3/3 → registry/ 9 官库随库入库 + pxpkg fetch→import 双模式端到端（11 断言）+ spec §8.6.3 → ECOSYSTEM_GAPS 写库评估（G1-G4 入档，修复拆 M70）|
+| M70 | **语言缺口修复：表达式跨行 + 模块顶层状态**（docs/M70_PLAN.md）：parser 括号内换行容忍（多行 list/dict/调用/元组/索引，语义与单行等价；**lexer 不动 → golden 零漂移**；续行缩进须与缩进栈相容）+ fmt 多行零改动验证 → cg_module **import 导出非 Const 顶层 VarDecl**（模块级状态槽，启动初始化一次；同名冲突用户优先；let 仍不可变 E3002）→ 全能力重建 bootstrap + capability 253 双模式逐字节 + diffcheck --all/--errors + 自举证明 → spec §4.1/§5.1/§8.4 + MINI_SUBSET/CHEATSHEET/ECOSYSTEM_GAPS 同步 → tag v0.1.0-m70 自动发布 |
 
 ---
 

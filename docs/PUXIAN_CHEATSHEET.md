@@ -9,7 +9,7 @@
 
 1. **`.px` 文件 = 程序/模块**；注释 `#`；`##` 开头为文档注释（pxc doc 生成 API 文档）。
 2. **运行**：`tools/pxc run hello.px`（解释，秒起）· `tools/pxc build hello.px`（生成 C→gcc 静态二进制，`<目录>/build/hello`）。
-3. **import**：`import std.collections` / `from std.collections import unique` / `import "rel/path.px"`；import 只注册定义**不执行**顶层语句。
+3. **import**：`import std.collections` / `from std.collections import unique` / `import "rel/path.px"`；import 只注册定义**不执行**模块其它顶层语句——但模块顶层 **let/var/const 声明随合并导出**（M70-S3：初始化表达式在 import 方程序启动时执行一次 = 模块级状态槽）。
 
 ## 1. 语言速查
 
@@ -19,7 +19,7 @@
 |---|---|
 | int / float / bool / null | `42` `3.14` `-5` `true` `false` `null` |
 | str | `"双引号"` 支持 `${expr}` 插值、转义 `\n \t \"`；多行 `"""..."""` |
-| list | `[1, 2, 3]`（**字面量须单行**；追加 `.append(x)`） |
+| list | `[1, 2, 3]`（**M70：括号内可换行** `[\n1, 2,\n3]`；追加 `.append(x)`） |
 | dict | `{"k": "v"}`（**键限 str**） |
 | bytes | `bytes("abc")` 二进制视图，配 `bytes_*` 族 |
 
@@ -74,11 +74,11 @@ print("upper=" + to_upper("px"))
 
 1. **`{}` 字面量 = `null`**，不是空 dict；空 dict 用 `json_parse("{}")`。
 2. **无 `d[k] = v` 赋值**；dict 写用 `.set(k, v)`、查 `.has(k)`、读 `d[k]`。
-3. **数组/字典字面量不能跨行**（单行写完；长数据用循环 `.append`/`.set` 构建）。
+3. **表达式可跨行（M70 起）**：list/dict/调用参数/元组/索引在括号（`[` `(` `{`）内可换行（含尾部逗号），语义与单行等价；但 `=` 后、二元/一元运算符后仍**不能**换行（语句边界以换行为准，需续行用括号包裹，如 `let x = (\n  a + b\n)`）；续行缩进须与缩进栈相容（不规则缩进仍 E2002）。
 4. **dict 键限定 str**；键非 str 先 `str(k)`。
 5. **`let` 不可变**（重新赋值报错），要改的用 `var`。
-6. **模块顶层 `var` 在函数内不可读**（写纯函数库请把状态显式传参）。
-7. **import 无副作用**（不执行顶层语句）。
+6. **顶层 `var`/`let` = 全局状态槽（M70-S3）**：主程序与 import 模块的顶层 var/let 声明均可跨函数访问/读写（var 可写、let 只读报 E3002；import 方启动时初始化一次，同名冲突用户值优先）；写**纯函数库**仍建议显式传参（确定性优先）。
+7. **import 无副作用**（不执行模块顶层函数调用/裸赋值等语句）；仅模块顶层 var/let/const **声明**随合并导出并初始化一次（M70-S3，模块级状态槽的必要初始化，非任意副作用）。
 8. **编译模式全功能**（native 281 全部可调）；**解释模式（pxi）M68 后同样零 extern def 可达全部 native**——但极端底层（ffi/指针）语义以编译产物为准。
 9. **stdlib 内参数名不用 `fn`**（`fn` 是匿名函数关键字），用 `f` 等。
 10. 注释/字符串里长行可加 `# noqa` 供 `pxc lint` 跳过。
