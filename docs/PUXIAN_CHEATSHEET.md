@@ -85,7 +85,7 @@ print("upper=" + to_upper("px"))
 10. 注释/字符串里长行可加 `# noqa` 供 `pxc lint` 跳过。
 11. **pxi（解释器）为 Mini 子集：不支持 `spawn`/`chan` 等并发关键字** → 并发/服务端（http_serve/ws_serve 等常驻回调）程序用 `pxc build`；纯计算与客户端脚本 pxi/编译双模式皆可。
 
-## 2. native 内置速查（287 全量见 `docs/native_index.json`，本表为常用）
+## 2. native 内置速查（288 全量见 `docs/native_index.json`，本表为常用）
 
 ### 核心 / 值
 `print` `len` `range` `type` `str` `int` `float` `bool` `assert` `input` `exit` `sleep` `abs` `sqrt` `min` `max` `pow` `sorted` `reversed` `sum` `map` `filter` `reduce` `contains` `env` `args` `gc` · 数学（M59）：`sin/cos/tan/atan2/floor/ceil/round/log/log10/exp/random/random_int/random_seed` + 常量 `pi/e`
@@ -104,7 +104,7 @@ print("upper=" + to_upper("px"))
 `now()` `now_ms()` `now_us()` `sleep(sec)` `sleep_us` `time_format(t, fmt)` `time_parse` `tz_offset` · `set_timeout(f, ms, ...)` `set_interval` `clear_timer` · `cron("分 时 日 月 周", f)`（6 字段）
 
 ### HTTP（客户端/服务端）
-客户端：`http_get(url)` `http_post(url, body[, headers])` `http_request(method, url[, body, headers])` `http_get_stream` · 服务端：`http_serve(port, handler)`（每请求回调）· `px_serve(port, docroot[, tls, opts])`（静态 + .px 应用服务器，opts 可 {http3:true, max_body_size, rate_limit...}）· `px_exec`（语言内嵌 .px）· `http_unix(sock, path, ...)`（Unix socket 客户端）
+客户端：`http_get(url)` `http_post(url, body[, headers])` `http_request(method, url[, body, headers])` `http_get_stream` · 服务端：`http_serve(port, handler)`（TCP 每请求回调）· `http_serve_unix(sock_path, handler)`（**Unix socket 服务端**，M82；自动清残留 + 0600）· `px_serve(port, docroot[, tls, opts])`（静态 + .px 应用服务器，opts 可 {http3:true, max_body_size, rate_limit...}）· `px_exec`（语言内嵌 .px）· `http_unix(sock, path, ...)`（Unix socket 客户端，M56）
 
 ### WebSocket / SSE
 `ws_serve(port, onmsg)` `ws_connect(url)` `ws_send` `ws_recv` `ws_close` `ws_ping` `ws_heartbeat(conn, ms, cb)` `ws_broadcast(server, msg)` `ws_connect_auto(url, ...)` · SSE：`sse_serve(port, cb)` `sse_send` `sse_close` `sse_connect(url)` `sse_read`
@@ -164,6 +164,15 @@ def handler(req):
     return {"status": 404, "body": "not found"}
 spawn http_serve(18080, handler)
 sleep(300)   # 等服务线程完成 bind
+```
+
+**Unix domain socket 服务端变体（M82 http_serve_unix）**：同 handler 契约、同解析管道，
+仅监听面换成本地 sock 文件（本地 HTTP-over-unix 服务端，如 ws-approve serve / token-cache 网关）：
+
+```px
+# ⚠️ 编译模式（pxi Mini 子集无 spawn）
+spawn http_serve_unix("/tmp/approve.sock", handler)   # 自动清理残留 sock + chmod 0600
+# 客户端即 http_unix(sock_path, path, method, ...)（M56）
 ```
 
 ### 4.2 HTTP 客户端 + JSON
@@ -240,6 +249,6 @@ set_timeout(fn (): print("once after 2s"), 2000)
 
 ## 5. 防漂移与源
 
-- **native 清单**（287，单一事实源 = runtime 注册表）：`bash tools/gen_native_table.sh` → `docs/native_index.json`；CI 重跑 diff 防漂移。**本表计数必须 == count**（现 287）。
+- **native 清单**（288，单一事实源 = runtime 注册表）：`bash tools/gen_native_table.sh` → `docs/native_index.json`；CI 重跑 diff 防漂移。**本表计数必须 == count**（现 288）。
 - **stdlib 索引**：`tools/pxc run tools/gen_ecosystem.px` → `docs/ecosystem_index.json`。
 - 规范：`docs/spec.md`（§8 模块/import、§9 双模式、§12 AI 协议）· `docs/MINI_SUBSET.md`（子集边界）· 缺口与写库规范：`docs/ECOSYSTEM_GAPS.md`。

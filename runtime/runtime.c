@@ -195,6 +195,7 @@ static LXValue bi_udp_serve(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_get(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_post(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_serve(LXValue* args, int nargs, void* ctx);
+static LXValue bi_http_serve_unix(LXValue* args, int nargs, void* ctx); // M8x（Issue 15 GAP-SRV-1）
 // M23c P1：HTTP 生产化（http_request 连接池 / http_get_stream 流式下载）
 static LXValue bi_http_request(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_get_stream(LXValue* args, int nargs, void* ctx);
@@ -5361,6 +5362,8 @@ void px_register_builtins(void) {
     px_set_global("http_get", px_native("http_get", bi_http_get));
     px_set_global("http_post", px_native("http_post", bi_http_post));
     px_set_global("http_serve", px_native("http_serve", bi_http_serve));
+    // M8x：Issue 15 GAP-SRV-1 —— unix socket HTTP 服务端（与 http_serve 同族，AF_UNIX 服务端维度）
+    px_set_global("http_serve_unix", px_native("http_serve_unix", bi_http_serve_unix));
     // M23c P1：HTTP 生产化（http_request 连接池 / http_get_stream 流式下载）
     px_set_global("http_request", px_native("http_request", bi_http_request));
     px_set_global("http_get_stream", px_native("http_get_stream", bi_http_get_stream));
@@ -9531,12 +9534,20 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
         px_dict_set(req, "body", px_str_len(body_buf, body_len));
         LXValue form = px_dict();
         {
-            struct sockaddr_in raddr;
+            // M8x：remote 兼容 AF_UNIX（http_serve_unix 连接无 IP）——sockaddr_storage 判族，
+            // AF_INET → ip:port（http_serve 原行为）；AF_UNIX → "unix"（客户端 peer 无 sun_path）
+            struct sockaddr_storage raddr;
+            memset(&raddr, 0, sizeof(raddr));
             socklen_t rl = sizeof(raddr);
-            if (getpeername(fd, (struct sockaddr*)&raddr, &rl) == 0) {
+            if (getpeername(fd, (struct sockaddr*)&raddr, &rl) != 0) {
+                px_dict_set(req, "remote", px_str(""));
+            } else if (raddr.ss_family == AF_INET) {
+                struct sockaddr_in* rin = (struct sockaddr_in*)&raddr;
                 char rbuf[64];
-                snprintf(rbuf, sizeof(rbuf), "%s:%d", inet_ntoa(raddr.sin_addr), ntohs(raddr.sin_port));
+                snprintf(rbuf, sizeof(rbuf), "%s:%d", inet_ntoa(rin->sin_addr), ntohs(rin->sin_port));
                 px_dict_set(req, "remote", px_str(rbuf));
+            } else if (raddr.ss_family == AF_UNIX) {
+                px_dict_set(req, "remote", px_str("unix"));
             } else {
                 px_dict_set(req, "remote", px_str(""));
             }
@@ -9693,6 +9704,56 @@ static LXValue bi_http_serve(LXValue* args, int nargs, void* ctx) {
     for (;;) {
         int cfd = accept(sfd, NULL, NULL);
         if (cfd < 0) continue;
+        LXValue arg = px_int(cfd);
+        px_spawn(http_conn_worker, &arg, 1);
+    }
+    return px_null(); // 不可达
+}
+
+// http_serve_unix(sock_path, handler)：AF_UNIX HTTP 服务端（M82 / Issue 15 GAP-SRV-1）
+// 与 http_serve 同族：HTTP 解析/路由/keep-alive 完全复用 http_conn_worker，
+// 仅监听面从 TCP 换成 Unix domain socket（ws-approve serve 等本地 HTTP over unix socket 场景）。
+// 差异点：① bind 前 unlink 清理残留 sock 文件（上次异常退出遗留 → EADDRINUSE）；
+//        ② bind 后 chmod 0600（审批/令牌数据敏感，仅 owner 可读写）；
+//        ③ accept 循环错误容忍（EINTR 直接重试，EMFILE 等短暂让出避免忙循环）。
+static LXValue bi_http_serve_unix(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2 || args[0].type != PX_STR) px_error("http_serve_unix 需要 (sock_path, handler) 参数");
+    const char* sock_path = args[0].as.obj->as.str.data;
+    if (sock_path[0] == '\0') px_error("http_serve_unix: sock_path 不能为空");
+    if (strlen(sock_path) >= sizeof(((struct sockaddr_un*)0)->sun_path))
+        px_error("http_serve_unix: socket 路径过长（> %d）", (int)sizeof(((struct sockaddr_un*)0)->sun_path) - 1);
+    LXValue handler = args[1];
+    if (handler.type != PX_FUNC && handler.type != PX_NATIVE) px_error("http_serve_unix 的 handler 必须是函数");
+    // handler 存入全局表（GC 扫描根），连接线程经全局表取回（与 http_serve 同槽 __http_handler）
+    px_set_global("__http_handler", handler);
+    // 清理残留 sock 文件（上次异常退出遗留；忽略 ENOENT）
+    unlink(sock_path);
+    int sfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (sfd < 0) px_error("http_serve_unix: socket 创建失败");
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", sock_path);
+    if (bind(sfd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        close(sfd);
+        px_error("http_serve_unix: 绑定 %s 失败", sock_path);
+    }
+    // 审批/令牌数据敏感：sock 文件收紧为 0600（bind 创建时受 umask 影响，显式收紧）
+    chmod(sock_path, 0600);
+    if (listen(sfd, 128) < 0) {
+        close(sfd);
+        px_error("http_serve_unix: listen 失败");
+    }
+    for (;;) {
+        int cfd = accept(sfd, NULL, NULL);
+        if (cfd < 0) {
+            // accept 循环错误容忍：EINTR 重试；EMFILE/ENFILE 等短暂让出避免忙循环
+            if (errno == EINTR) continue;
+            struct timespec ts = {0, 50 * 1000 * 1000}; // 50ms
+            nanosleep(&ts, NULL);
+            continue;
+        }
         LXValue arg = px_int(cfd);
         px_spawn(http_conn_worker, &arg, 1);
     }
@@ -12365,12 +12426,20 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         }
         LXValue form = px_dict();
         {
-            struct sockaddr_in raddr;
+            // M8x：remote 兼容 AF_UNIX（http_serve_unix 连接无 IP）——sockaddr_storage 判族，
+            // AF_INET → ip:port（http_serve 原行为）；AF_UNIX → "unix"（客户端 peer 无 sun_path）
+            struct sockaddr_storage raddr;
+            memset(&raddr, 0, sizeof(raddr));
             socklen_t rl = sizeof(raddr);
-            if (getpeername(fd, (struct sockaddr*)&raddr, &rl) == 0) {
+            if (getpeername(fd, (struct sockaddr*)&raddr, &rl) != 0) {
+                px_dict_set(req, "remote", px_str(""));
+            } else if (raddr.ss_family == AF_INET) {
+                struct sockaddr_in* rin = (struct sockaddr_in*)&raddr;
                 char rbuf[64];
-                snprintf(rbuf, sizeof(rbuf), "%s:%d", inet_ntoa(raddr.sin_addr), ntohs(raddr.sin_port));
+                snprintf(rbuf, sizeof(rbuf), "%s:%d", inet_ntoa(rin->sin_addr), ntohs(rin->sin_port));
                 px_dict_set(req, "remote", px_str(rbuf));
+            } else if (raddr.ss_family == AF_UNIX) {
+                px_dict_set(req, "remote", px_str("unix"));
             } else {
                 px_dict_set(req, "remote", px_str(""));
             }

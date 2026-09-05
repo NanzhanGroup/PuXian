@@ -6,6 +6,28 @@
 
 ## [Unreleased]
 
+### M82 · unix socket HTTP 服务端 native http_serve_unix（qg-issue 15，GAP-SRV-1）✅
+
+> 立项（2026-09-06 用户拍板 A1：新原生，不与 TCP http_serve 混淆）：ws-approve .px 化
+> serve 前置缺口——PuXian 只有 unix socket HTTP **客户端**（http_unix/unix_connect，
+> M56/M66）无**服务端**，而 token-cache 等主客户端是 fail-closed 直连 unix socket HTTP。
+> 方案 A1：L0 runtime 新原生 `http_serve_unix(sock_path, handler)`，复用 http_conn_worker
+> 同一 HTTP 解析/路由/keep-alive 管道，仅监听面 TCP → AF_UNIX。不改语言语义。
+> 回归：runtime.c（新增 native + worker remote 判族兼容）→ pxc build 编译验证 +
+> examples/m82_http_serve_unix verify 8 项全绿 + native_index 防漂移（287→288）。
+
+- **M82-S1 http_serve_unix（qg-issue 15 / GAP-SRV-1，commit 待填）**：新原生
+  `http_serve_unix(sock_path, handler)`——AF_UNIX 服务端三差异点：启动自动 **unlink 残留
+  sock 文件**（异常退出遗留 → bind EADDRINUSE）；bind 后 sock **chmod 0600**（审批/令牌
+  本地敏感数据）；accept 循环**错误容忍**（EINTR 重试 + EMFILE 短暂让出）。worker remote
+  段 getpeername 改 sockaddr_storage **判族兼容**：AF_UNIX → `"unix"`（原 sockaddr_in 对
+  AF_UNIX 会读错字节），TCP http_serve 行为不变。native 287→288。
+- **M82-S2 示例 + 回归收口**：examples/m82_http_serve_unix/（serve_daemon.px + verify.sh）
+  8 项全绿——进程内自检（http_unix → http_serve_unix /health·POST echo·remote=unix）+
+  curl --unix-socket 冒烟 + 残留 sock 清理 + 权限 0600 + 客户端断连容忍 + **TCP http_serve
+  同 handler 双跑对拍**；spec §8.22 + CHEATSHEET（native 287→288 + §4.1 unix 变体）+
+  ECOSYSTEM + native_index.json（tools/gen_native_table.sh 重生成）同步。
+
 ### M72 · AI 调试回路 + runtime bytes 增强（docs/M72_PLAN.md）✅
 
 > 立项（2026-09-06 用户指令，方案 A）：qg-issue **9**（print stdout 全缓冲——服务日志运行中不可见/崩溃前丢失）+ **10**（AI 诊断 D1 编译产物错误无行号 / D2 spawn 协程错误不隔离）+ **13-R1**（ws-backup PuXian 化前置：AES/HTTP 二进制硬缺口 GAP-BIN-1/2）**一批 runtime 立项**，一次自举重建共享成本；13-R2（ws-backup-px 业务）拆 M73。L0 runtime + 编译器诊断层，**不改语言语义**。

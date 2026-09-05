@@ -1222,6 +1222,43 @@ riscv64（32 regs）GC 架构头由 **C 层探针**（SIGUSR1 ucontext → arch_
 
 ---
 
+### 8.22 本地 HTTP 服务端内建 http_serve_unix（M82，Unix domain socket 服务端）
+
+```
+# M82 新增（qg-issue 15 GAP-SRV-1）：http_serve_unix(sock_path, handler)
+# AF_UNIX socket 上的 HTTP 服务端——与 http_serve（TCP）同族、完全复用同一 HTTP
+# 解析/路由/keep-alive 管道（http_conn_worker），仅监听面从 TCP 换成 Unix domain
+# socket。服务于 ws-approve serve 等"本地 HTTP over unix socket"服务端场景
+# （token-cache 等客户端 http_unix/unix_connect 已 M56/M66 落地，本内置补齐服务端半侧）。
+def handler(req):
+    return {"status": 200, "body": "{\"ok\":true}", "headers": {"Content-Type": "application/json"}}
+
+spawn http_serve_unix("/tmp/approve.sock", handler)   # 编译模式运行（同 http_serve）
+```
+
+- **签名**：`http_serve_unix(sock_path: str, handler: func) -> 阻塞常驻（不可达返回）`。
+  `sock_path` 为文件系统路径（长度 < sun_path 上限 107）；`handler` 同 http_serve 契约：
+  入参 `req` dict（method/path/query/headers/body/form/files/remote…），返回
+  str（200 text/plain）/ dict{status,body,headers} / int（状态码）/ file 流式响应。
+- **与 http_serve 差异点**（服务端专用语义）：
+  - 启动**自动清理残留 sock 文件**（上次异常退出遗留 → unlink 后 bind，避免 EADDRINUSE）；
+  - bind 后 sock 文件 **chmod 0600**（审批/令牌等本地敏感数据，仅 owner 可读写）；
+  - accept 循环**错误容忍**（EINTR 重试；EMFILE/ENFILE 等短暂让出避免忙循环）。
+- **连接语义**：每连接 `px_spawn(http_conn_worker)` 独立线程处理（与 http_serve 完全一致），
+  支持 keep-alive、HTTP/1.1 解析、multipart/urlencoded form、静态文件流式响应。
+- **remote 字段**：AF_UNIX 连接无 IP → `req["remote"]` = `"unix"`（TCP http_serve 保持 `ip:port`；
+  worker 的 getpeername 已按 sockaddr_storage 判族兼容，M82 顺带加固）。
+- **约束**：http_serve_unix 与 http_serve 同为**编译模式 native**（内部 px_spawn 并发；
+  pxi Mini 子集无 spawn → 用 `pxc build`）。进程内 handler 槽位与 http_serve 共用
+  `__http_handler`（同一进程一般只跑一个 serve 回调，勿与 http_serve 同进程异 handler 并用）。
+- **背景与验证**：M82 由 qg-issue 15（ws-approve .px 化 GAP-SRV-1）立项——ws-approve 主客户端
+  token-cache 是 fail-closed 直连 unix socket HTTP（1s 超时×3 重试），此前 PuXian 只有
+  unix socket HTTP **客户端**（http_unix/unix_connect，M56/M66）无**服务端**，serve 接口无法
+  .px 原样替代。示例 `examples/m82_http_serve_unix/`（curl --unix-socket 冒烟 + 进程内
+  http_unix 自检 + sock 0600/残留清理/断连容忍 + TCP 同 handler 双跑）verify 全绿。
+
+---
+
 ## 9. 双模式执行
 
 ### 9.1 脚本模式

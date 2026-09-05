@@ -1,0 +1,52 @@
+# m82_http_serve_unix / serve_daemon.px —— Issue 15 (GAP-SRV-1) http_serve_unix 常驻冒烟
+# 编译模式运行（pxi Mini 子集无 spawn；http_serve_unix 与 http_serve 同族为编译模式 native）
+# verify.sh 流程：后台起本 daemon → curl --unix-socket 冒烟 /health、POST /echo →
+#                stat 验证 sock 0600 → 同 handler TCP http_serve 双跑对拍 → kill
+# 自检（进程内）：spawn http_serve_unix 后经 http_unix 客户端自调用断言，失败即 exit(1)
+
+def handler(req):
+    let method = req["method"]
+    let path = req["path"]
+    if path == "/health":
+        return "{\"ok\":true,\"srv\":\"http_serve_unix\"}"
+    if path == "/echo" and method == "POST":
+        return "echo:" + req["body"]
+    if path == "/remote":
+        return "remote=" + req["remote"]
+    if path == "/tcp":
+        return "tcp-ok"
+    return "not-found"
+
+spawn http_serve_unix("/tmp/m82_puxian.sock", handler)
+sleep(600)
+
+let h = http_unix("/tmp/m82_puxian.sock", "/health", "GET")
+if h["status"] != 200:
+    print("SELFCHECK-FAIL unix /health status=" + str(h["status"]))
+    exit(1)
+if contains(h["body"], "http_serve_unix"):
+    print("SELFCHECK-OK unix /health body=[" + h["body"] + "]")
+else:
+    print("SELFCHECK-FAIL unix /health body=[" + h["body"] + "]")
+    exit(1)
+
+let hp = http_unix("/tmp/m82_puxian.sock", "/echo", "POST", "hello-unix", {"Content-Type": "text/plain"})
+if hp["body"] == "echo:hello-unix":
+    print("SELFCHECK-OK unix POST /echo body=[" + hp["body"] + "]")
+else:
+    print("SELFCHECK-FAIL unix POST /echo body=[" + hp["body"] + "]")
+    exit(1)
+
+let hr = http_unix("/tmp/m82_puxian.sock", "/remote", "GET")
+if hr["body"] == "remote=unix":
+    print("SELFCHECK-OK unix /remote body=[" + hr["body"] + "]")
+else:
+    print("SELFCHECK-FAIL unix /remote body=[" + hr["body"] + "] (期望 remote=unix)")
+    exit(1)
+
+print("SELFCHECK-PASS http_serve_unix 冒烟通过")
+
+spawn http_serve(18083, handler)
+
+sleep(60000)
+exit(0)

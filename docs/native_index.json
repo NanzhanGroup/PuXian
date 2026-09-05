@@ -1,7 +1,7 @@
 {
  "generator": "tools/gen_native_table.sh",
  "source": "runtime/*.c px_set_global(px_native)",
- "count": 287,
+ "count": 288,
  "names": [
   "Err",
   "Ok",
@@ -111,6 +111,7 @@
   "http_post",
   "http_request",
   "http_serve",
+  "http_serve_unix",
   "http_unix",
   "input",
   "int",
