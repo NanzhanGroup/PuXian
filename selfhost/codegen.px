@@ -389,6 +389,9 @@ def cg_gen_func(f):
 def cg_gen_func_named(f, cname):
     var s = "static LXValue " + cname + "(LXValue* args, int nargs, void* ctx) {\n"
     s += "    (void)ctx;\n"
+    # M72-S2（Issue 10 D1）：函数入口标记 .px 函数名（px_error 现场带函数上下文；
+    # 与 cg_gen_stmt 每语句 px_srcline 配套 → "错误 [函数 行N]"）
+    s += "    px_srcfunc(\"" + rust_unescape(f[1]) + "\");\n"
     let saved_vars = cg_dict_copy(cg_vars)
     let saved_types = cg_dict_copy(cg_var_types)
     let saved_imm = cg_dict_copy(cg_immutables)
