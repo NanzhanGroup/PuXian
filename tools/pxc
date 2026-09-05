@@ -33,7 +33,14 @@
 #     mbedtls/sqlite 均纯 C，可用目标架构交叉编译（tools/cross_aarch64.sh）。
 # ============================================================
 set -u
-PXC_HOME="$(cd "$(dirname "$0")/.." && pwd)"
+# M71-S4：argv0 自发现 —— readlink 解析符号链接到真实位置（软链安装
+# /usr/local/bin/pxc → 包/tools/pxc 时 PXC_HOME 仍定位到包根，免 PX_STDLIB）
+PXC_SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+PXC_HOME="$(cd "$(dirname "$PXC_SELF")/.." && pwd)"
+# stdlib 自动定位：包根存在 stdlib 且用户未显式设 PX_STDLIB → 注入（包外任意 cwd 可用）
+if [ -z "${PX_STDLIB:-}" ] && [ -d "$PXC_HOME/stdlib" ]; then
+    export PX_STDLIB="$PXC_HOME/stdlib"
+fi
 PXC_BIN="$PXC_HOME/bootstrap/pxc"
 PXI_BIN="$PXC_HOME/bootstrap/pxi"
 PXL_BIN="$PXC_HOME/bootstrap/pxl"     # lexer.px 编译版（pxc lex 用）

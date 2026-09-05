@@ -43,9 +43,12 @@ jobs:
         run: |
           PKG="$(ls -t /tmp/puxian-*.tar.gz | head -1)"
           [ -n "$PKG" ] || { echo "❌ 未找到发布包"; exit 1; }
+          SHA256SUMS="$(dirname "$PKG")/sha256sums.txt"
+          [ -f "$SHA256SUMS" ] || { echo "❌ 未找到 sha256sums.txt（M71-S4 make_release 应生成）"; exit 1; }
           echo "TAG=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           echo "PKG=${PKG}" >> "$GITHUB_OUTPUT"
           echo "PKG_NAME=$(basename "$PKG")" >> "$GITHUB_OUTPUT"
+          echo "SHA256SUMS=${SHA256SUMS}" >> "$GITHUB_OUTPUT"
           echo "SHA256=$(sha256sum "$PKG" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
           # 提交列表：上一 tag → 本 tag；首个 tag 用最近 40 条
           PREV="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
@@ -64,12 +67,13 @@ jobs:
           TAG="${{ steps.meta.outputs.TAG }}"
           PKG="${{ steps.meta.outputs.PKG }}"
           PKG_NAME="${{ steps.meta.outputs.PKG_NAME }}"
+          SHA256SUMS="${{ steps.meta.outputs.SHA256SUMS }}"
           SHA256="${{ steps.meta.outputs.SHA256 }}"
           LINES="${{ steps.meta.outputs.COMMITS_LINES }}"
           {
             echo "## PuXian ${TAG}"
             echo ""
-            echo "发布包：\`${PKG_NAME}\`"
+            echo "发布包：\`${PKG_NAME}\`（M71-S4 起附 \`sha256sums.txt\`，\`tools/install.sh\` 一键安装自动校验）"
             echo ""
             echo "- SHA-256: \`${SHA256}\`"
             echo "- 里程碑范围：上一 tag 至本 tag（首个 tag 为最近 40 条）"
@@ -79,7 +83,7 @@ jobs:
             cat /tmp/commits.txt
             echo '```'
           } > /tmp/notes.md
-          gh release create "$TAG" "$PKG" \
+          gh release create "$TAG" "$PKG" "$SHA256SUMS" \
             --title "PuXian ${TAG}" \
             --notes-file /tmp/notes.md
-          echo "✅ GitHub Release 已创建: ${TAG}"
+          echo "✅ GitHub Release 已创建: ${TAG}（tarball + sha256sums.txt）"
