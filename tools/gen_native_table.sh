@@ -19,11 +19,11 @@ grep -h 'px_set_global("' \
   runtime/runtime.c runtime/runtime_quic.c runtime/runtime_h3.c \
   runtime/runtime_h3_qpack_dyn.c runtime/runtime_ws.c \
   | sed -n 's/.*px_set_global("\([A-Za-z_][A-Za-z0-9_]*\)", px_native.*/\1/p' \
-  | sort -u > "$names_file"
+  | LC_ALL=C sort -u > "$names_file"   # LC_ALL=C 固定字节序排序：sort 输出不受 runner locale 影响（否则 en_US.UTF-8 与 C locale 排序不同 → CI 防漂移假红）
 
 python3 - "$names_file" <<'PY'
 import json, sys
-names = [l.strip() for l in open(sys.argv[1]) if l.strip()]
+names = sorted(l.strip() for l in open(sys.argv[1]) if l.strip())  # sorted 按码点 = 与 LC_ALL=C sort 一致，双保险防 locale 漂移
 out = {"generator": "tools/gen_native_table.sh",
        "source": "runtime/*.c px_set_global(px_native)",
        "count": len(names), "names": names}
