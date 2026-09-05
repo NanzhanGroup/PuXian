@@ -130,6 +130,17 @@
 - **回归全绿**：① t_sqlite 用户现象 pxi 裸调正常（原 R1001）；② t_native 零 extern def 19/19，pxi == 编译产物；③ t_typo 拼错名 R1001 可辨；④ capability pxi 253 = bin 253 逐字节一致；⑤ diffcheck --all rc=0；⑥ m66 stdlib verify yaml35/lunar36/pxml68/proc14 双模式 PASS（编译产物 + pxi run 复核）；⑦ iexpr.px fmt --check 通过（lint 单文件 import 变量误报为既有工具噪音，非本改动引入）。
 - commit：**3b47dbe**（runtime.h/runtime.c/runtime_ffi.c/iexpr.px/bootstrap.pxi，+65/-2）。
 
-### A4 · 文档收口 — 🔄 DONE（commit 待 S5 前）
+### A4 · 文档收口 — ✅ DONE（commit 41afc1d）
 - pxi_native_diff.md 修复后状态回填 ✅；spec §9.3 + MINI_SUBSET §十三.0 + README/README.en 已知限制 + CHANGELOG M68 条目 ✅；qg-issue 00-README §4 第 1 条勾除 ✅（/data/qg-issue/，仓库外）。
-- A4 commit 随 S5 全链复跑后一并提交。
+- commit **41afc1d**（docs 收口全链记录）已推送 origin main。
+
+### 14:00 · 中断收尾（ws-todo #11）— M68 未全部完成，按计划停止
+- **断点**：A1–A4 全部完成并推送 origin main（main @ 41afc1d，工作树干净）；**S5 未执行** → 18:00 晚间场从 S5 续做。
+- **18:00 晚间场待做（S5 总闸 + 发布）**：
+  1. 全链复跑（§四回归总闸：capability 双模式 253 一致 / diffcheck --all / stdlib 9 库双模式 / m65–m67 抽跑 / typo 用例 / 全仓 fmt --check / lint / ci.yml YAML / make_release.sh bash -n）；
+  2. 工作树收敛 + CHANGELOG [Unreleased] M68 完整条目核验；
+  3. **打 tag `v0.1.0-m68` → push → tag 驱动 workflow 自动发布**；
+  4. GitHub 实际产物二次解包冒烟（沿 M66/M67 先例）；
+  5. 本机留档 + 发布指引更新至 m68；
+  6. 验收清单最后一项 [ ] → [x] 回填 + 向用户完整报告。
+- 14:00 现场快照：origin/main @ 41afc1d 已同步、工作树 clean、产物齐备（bootstrap/pxi 9326544B 12:14 重建、docs/pxi_native_diff.md 10025B）。
