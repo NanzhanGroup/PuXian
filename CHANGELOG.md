@@ -6,6 +6,33 @@
 
 ## [Unreleased]
 
+### M83-S1 · 服务端 body 动态化（64KB→可配+413）+ len()/contains() NUL 一致化（qg-issue 16，GAP-SRV-2 / GAP-STR-1-B1）✅
+
+> 立项（2026-09-06）：M83 分六批实现 qg-issue 除挂起 W1b 外全量，S1 = Issue 16（http_serve 服务端
+> 64KB 固定 body 缓冲 + 语言层 str 对 NUL 截断）。ws-backup receiver 实测缺口：64KB 超限**静默截断
+> 不报错**（handler 拿残缺 body = 静默数据损坏）；str 内部带 len 但 len()/contains() 按 C strlen 语义
+> 对含 NUL 二进制提前截断。本批只动 L0 runtime，不改语言语法；Linux 基线 m82 全绿保持。
+
+- **S1-1 服务端 body 动态缓冲 + 413（GAP-SRV-2）**：http_conn_worker 第 4 段固定 `char body_buf[65536]`
+  栈缓冲 → `xmalloc` 动态跟随 content_length（上限默认 256MB、`PX_HTTP_BODY_MAX` 环境变量可配，
+  超限返回 `413 Payload Too Large` 并关连接，不再静默截断）；与客户端 http_request 动态读（M72-S4）
+  对称。http_serve 与 http_serve_unix（M82）**共享同一 worker → 一处改两入口通**。
+- **S1-2 body 缓冲生命周期**：req.body 经 px_str_len 深拷贝、multipart/form 解析同步完成 → handler
+  同步返回后 `xfree(body_buf)`（防 keep-alive 长连接累积）；无 body 时 body_buf=NULL → req.body 给空串
+  （避免 px_str_len(NULL,0) 的 memcpy UB）。
+- **S1-3 len() 尊重 str.len（GAP-STR-1-B1）**：新增 `px_unicode_len_n(s, n)`（字节边界 UTF-8 字符计数，
+  px_unicode_len 改由其包装、strlen 边界——旧调用零回归）；px_len 的 PX_STR 分支改按 `as.str.len` 计数，
+  内嵌 NUL 不再截断（文本 str.len==strlen → 字符数语义不变）。
+- **S1-4 contains() 字节 memmem（GAP-STR-1-B1）**：新增 `px_memmem(hay,hl,ned,nl)` 字节级子串查找
+  （可含 NUL，纯文本与 strstr 等价），bi_contains 字符串分支改 memmem 按 str.len 边界。
+- **S1-5 验证 examples/m83_s1_http_body_nul/**：serve_daemon.px（TCP + unix 双 serve）+ verify_cli.py
+  （urllib/AF_UNIX 裸 socket POST 二进制 body）+ verify.sh 6 组全绿——① 1MB 全 ASCII POST /len →
+  len=1048576（旧 64KB 截 65535）② 含 NUL body `A\0BC` /probe → `len=4,after_nul=true`（旧 len=1、
+  contains 跨 NUL 命中 false）③ NUL body /echo 原样回显逐字节一致（响应 str.len 保真）④ unix 入口
+  同测（1MB+NUL 全过）⑤ 小 body 无回归 ⑥ PX_HTTP_BODY_MAX=102400 + 200KB POST → 413。
+- **S1-6 回归**：examples/m82_http_serve_unix verify 8 项全绿（unix serve 原行为不破坏）。native 288
+  （本批无新增函数）。runtime.c 六处补丁 diff 66 行，Linux POSIX 路径零删除、仅动态化/加边界。
+
 ### W1a · Windows 交叉编译链骨架（qg-issue 14，Issue 14 W1 第一阶段）✅
 
 > 立项（2026-09-06 用户拍板）：Issue 14 Windows 移植按里程碑推进，W1a = 编译链

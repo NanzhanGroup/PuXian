@@ -1,0 +1,42 @@
+# m83_s1_http_body_nul / serve_daemon.px —— Issue 16（GAP-SRV-2 + GAP-STR-1-B1）
+#   服务端请求体 64KB 硬上限 → 动态缓冲（+413）；len()/contains() 对含 NUL str 一致化（尊重 str.len）
+# 编译模式运行（http_serve/http_serve_unix/spawn 为编译模式 native；pxi Mini 子集无 spawn）
+# verify.sh 流程：后台起本 daemon → ①1MB 大 body 动态接收 ②含 NUL body 的 len()/contains()
+#                 语言层语义 ③NUL body 原样回显（响应 dict body 按 str.len 保真）
+#                 ④unix 入口同测（共享 http_conn_worker 一处改两入口通）⑤小 body 无回归；
+#                 再以 PX_HTTP_BODY_MAX=102400 起第二实例验证超限 → 413
+# 用法：serve_daemon [tcp_port] [sock_path]（默认 18085 /tmp/m83_s1.sock）
+var port = 18085
+var sock = "/tmp/m83_s1.sock"
+let av = args()
+if len(av) > 1:
+    port = int(av[1])
+if len(av) > 2:
+    sock = av[2]
+
+def handler(req):
+    let method = req["method"]
+    let path = req["path"]
+    if path == "/health":
+        return "ok"
+    if path == "/len" and method == "POST":
+        # 大 body 动态接收：len(body) 应 == Content-Length（旧 64KB 固定缓冲 → 截到 65535）
+        return "len=" + str(len(req["body"]))
+    if path == "/probe" and method == "POST":
+        # 含 NUL body 语言层语义（本测试 body = "A\0BC" 4 字节）：
+        #   len(body) 尊重 str.len → 4（旧 px_unicode_len(strlen) 在 NUL 截断 → 1）
+        #   contains(body, "BC") 字节 memmem → true（旧 strstr 在首个 NUL 截断 → false）
+        let b = req["body"]
+        var c = "false"
+        if contains(b, "BC"):
+            c = "true"
+        return "len=" + str(len(b)) + ",after_nul=" + c
+    if path == "/echo" and method == "POST":
+        # 原样回显（响应 dict body 按 str.len 保真，含 NUL 不回截断 → 逐字节一致）
+        return {"status": 200, "body": req["body"]}
+    return {"status": 404, "body": "not-found"}
+
+spawn http_serve(port, handler)
+spawn http_serve_unix(sock, handler)
+sleep(60000)
+exit(0)
