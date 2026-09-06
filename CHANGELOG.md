@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### M84-S4 · 收口：重链 bootstrap/pxi + 全量回归 + qg-issue 21/22/23 归档（tag v0.1.0-m84）
+
+> 收口（2026-09-06）：M83-S2…M84-S3 的 runtime 变更（AES-ECB/gzip 暴露/ed25519/RSA-PKCS1v15/http_stream/CT 修复/hmac_sha256/dns_lookup）此前均未重链解释器 → 本批重链 **bootstrap/pxi**（9,425,360 → 9,457,456 字节，git 提交新 ELF）——pxi 解释模式现可调 M83/M84 全部新 native。
+> - **重链 + 自举证明**：tools/pxc build selfhost/interp.px → 覆盖 bootstrap/pxi；bootstrap_prove.sh rc=0（compiler.px 未动，B.c == golden 10595 行逐字节）。pxc 等编译器类 ELF 源码未动无需重链（产物每次编译现链最新 runtime）。
+> - **双模式抽查**：pxi run == pxc build —— hmac_sha256 RFC4231 TC2（5bdcc146…）与 dns_lookup localhost（[::1, 127.0.0.1]）解释/编译逐字节一致。
+> - **全量回归总闸全绿**：m82（http_serve_unix）+ m83_s1–s6 + m84_s1–s3 每批独立 verify PASS —— m83_s5 multipart 上传卸 Content-Length hack 仍过（CT 修复后 runtime 自动补 CL）、m83_s6 SSE 同端口零回归、m84_s1 单 CT 6 场景断言、m84_s2 RFC4231/Go/TC3 对拍、m84_s3 公网 www.qq.com 与 Go net.LookupIP 交集≥1。
+> - **native 301**（gen_native_table.sh 幂等，native_index/CHEATSHEET 已同步）；qg-issue **21/22/23 归档 `done/`**（00-README 更新：Issue 1–23 全部合入/归档，仅 14-W1b ⏸️ 挂起 + 13-R2 业务自持）；docs/M84_PLAN.md 全程记录。
+> - 附带记录：m83_s5/s6 verify.sh 收尾 trap 在工具进程管理下 signal terminated（内容断言全 PASS，CI 环境正常），属既有脚本边界，不修。
+
 ### M84-S2 · hmac_sha256 native + sha256 bytes/含 NUL 增强（qg-issue 21，GAP-HMAC-1）
 
 > 立项（2026-09-06）：qg-issue 21 —— bs-safeip 腾讯云 API 3.0 需 4 级 HMAC-SHA256 链（TC3），全仓无
