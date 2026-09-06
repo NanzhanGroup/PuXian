@@ -76,5 +76,6 @@ echo "$MAIL1" | grep -q '^\.\.keep this line' || { echo "FAIL 行首点应转义
 echo "$MAIL2" | grep -q 'AUTHUSER=' || { echo "FAIL AUTH LOGIN 未走"; exit 1; }
 echo "$MAIL2" | grep -q 'Subject: M83-S5 AUTH test' || { echo "FAIL AUTH 邮件 Subject"; exit 1; }
 rm -rf out
+rm -f x.png
 echo "m83_s5 verify done"
 exit 0

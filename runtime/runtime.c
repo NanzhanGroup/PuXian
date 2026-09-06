@@ -7937,6 +7937,20 @@ static int h_exchange(HPoolSlot* slot, const char* req, int rlen,
     return 0;
 }
 
+// M84-S1（Issue 23）：extra_headers（"K: V\r\n" 逐行拼接）中是否已含指定头名——行首匹配、
+// 大小写不敏感（避免 strcasestr 子串误伤 "X-Content-Type" 之类）；用于 CT/CL 判定解耦。
+static int px_extra_hdr_has(const char* extra_headers, const char* name) {
+    size_t nl = strlen(name);
+    const char* p = extra_headers;
+    while (*p) {
+        if (strncasecmp(p, name, nl) == 0 && p[nl] == ':') return 1;
+        const char* eol = strstr(p, "\r\n");
+        if (!eol) break;
+        p = eol + 2;
+    }
+    return 0;
+}
+
 // http_request(url, method, body?, headers?) → dict{status, headers, body}
 static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
@@ -8009,10 +8023,14 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
         method, req_target, host, port);
     if (extra_headers[0]) { memcpy(req + rlen, extra_headers, strlen(extra_headers)); rlen += (int)strlen(extra_headers); }
     if (body) {
-        if (!strcasestr(extra_headers, "Content-Length")) {
+        // M84-S1（Issue 23）：CT 与 CL 判定解耦——调用方已带 Content-Type 则不再补默认表单头
+        // （修复带 CT 无 CL → 双 Content-Type，腾讯云等严服务端拒收）；默认 urlencoded 仅
+        // 完全未指定 CT 时补；Content-Length 仅在缺失时补（body_n 长度感知，bytes 含 \0 安全）。
+        if (!px_extra_hdr_has(extra_headers, "Content-Type"))
             rlen += snprintf(req + rlen, sizeof(req) - rlen,
-                "Content-Type: application/x-www-form-urlencoded\r\nContent-Length: %d\r\n", body_n);
-        }
+                "Content-Type: application/x-www-form-urlencoded\r\n");
+        if (!px_extra_hdr_has(extra_headers, "Content-Length"))
+            rlen += snprintf(req + rlen, sizeof(req) - rlen, "Content-Length: %d\r\n", body_n);
     }
     rlen += snprintf(req + rlen, sizeof(req) - rlen, "\r\n");
     // M72-S4（Issue 13 GAP-BIN-2）：body 独立发送（h_exchange body/body_n 参数），
@@ -8104,10 +8122,12 @@ static LXValue bi_http_unix(LXValue* args, int nargs, void* ctx) {
         method, url_path);
     if (extra_headers[0]) { memcpy(req + rlen, extra_headers, strlen(extra_headers)); rlen += (int)strlen(extra_headers); }
     if (body) {
-        if (!strcasestr(extra_headers, "Content-Length")) {
+        // M84-S1（Issue 23）：同 bi_http_request——CT 与 CL 解耦，单头语义（http_unix 客户端）
+        if (!px_extra_hdr_has(extra_headers, "Content-Type"))
             rlen += snprintf(req + rlen, sizeof(req) - rlen,
-                "Content-Type: application/x-www-form-urlencoded\r\nContent-Length: %d\r\n", (int)strlen(body));
-        }
+                "Content-Type: application/x-www-form-urlencoded\r\n");
+        if (!px_extra_hdr_has(extra_headers, "Content-Length"))
+            rlen += snprintf(req + rlen, sizeof(req) - rlen, "Content-Length: %d\r\n", (int)strlen(body));
     }
     rlen += snprintf(req + rlen, sizeof(req) - rlen, "\r\n");
     if (body) { memcpy(req + rlen, body, strlen(body)); rlen += (int)strlen(body); }
