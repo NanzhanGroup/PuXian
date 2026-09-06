@@ -77,7 +77,7 @@
 |---|---|---|
 | S1 | ✅ done（M85-S1 commit） | runtime.c 14 处宏包裹（sqlite/ws/zip/xml/aes/rsa/ed25519/route/zlib/h2，10 模块）+ tools/pxc 10 个 --no-* flag + cuts 缓存隔离 + 链接裁剪；verify PASS=9 FAIL=0：默认 9010184 零漂移 / --no-quic 3929808 / --no-quic --no-sqlite 2884072 / 全裁 2713472（9.0M→2.7M −70%）；缺 native → 未定义变量（R1001 叙事）+ 核心 http native 保留 |
 | S2 | ✅ done（M85-S2 commit） | --min profile 预设（聚合全裁 2713472）+ --min==全裁等价 + --target x86_64 折叠+裁剪叠加（7968768<9.0M）+ 文档同步（README/CHEATSHEET/pxi_native_diff/spec）；verify PASS=8 FAIL=0；aarch64 真机交叉组合由 CI 覆盖（本机无 musl 交叉链，预案 4） |
-| S3 | ⏳ 待执行 | 收口：重链 bootstrap/pxi + 自举证明 + 回归总闸 + 归档 + tag |
+| S3 | ✅ done（M85-S3 收口 commit，tag 待用户令） | 全能力重链 bootstrap/pxi（产物 9457456 与 m84 ELF 同字节仅 build-id 异 → 宏包裹零语义影响实证）+ 自举证明 rc=0 + 回归总闸 12 批内容全 PASS（m82/m83_s1-6/m84_s1-3/m85_s1-2；m83_s5/s6 收尾 trap 边界同 M84-S4 记录不修）+ 文档同步 + qg-issue 24 归档 done/ + CHANGELOG；tag v0.1.0-m85 待用户令 |
 
 ### S1 侦查修正（2026-09-06 源码级实录，覆盖规划假设）
 

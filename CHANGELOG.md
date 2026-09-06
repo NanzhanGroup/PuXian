@@ -39,6 +39,15 @@
 >   spec.md（M57-S4 裁剪叙事处补 M85 模块开关泛化注记）。
 > - verify（examples/m85_s2，PASS=8 FAIL=0）：--min 体积/运行、--min==全裁、target+裁剪、缺 native R1001、核心 http 保留。
 
+### M85-S3 · 收口：全能力重链 pxi + 自举证明 + 回归总闸 + qg-issue 24 归档（qg-issue 24）
+
+> 收口（2026-09-06）：runtime.c 宏包裹文本变更 → 按 M84-S4 惯例全能力重链 **bootstrap/pxi**。
+> - **重链 + 零漂移实证**：tools/pxc build selfhost/interp.px → 产物 **9,457,456 B 与 m84 入库 bootstrap/pxi 同字节**（仅 .note.gnu.build-id 20B 差异，gcc 链接非确定性）——宏包裹在无 -D 全能力路径对 pxi **零语义影响**的最强证明；功能冒烟（hello/sha256/sqlite/dns_lookup 解释模式）全过；已 cp 覆盖 bootstrap/pxi 提交（build-id 更新记录）。
+> - **自举证明**：selfhost/bootstrap_prove.sh rc=0（B.c == golden/compiler.c 10595 行逐字节；compiler.px 未动）。
+> - **回归总闸 12 批内容全 PASS**：m82_http_serve_unix + m83_s1–s6 + m84_s1–s3 + m85_s1–s2 —— m83_s5/s6 内容断言全 PASS，仅 verify.sh 收尾 trap 在工具进程管理下 signal 边界（同 M84-S4 记录，CI 环境正常，不修）。
+> - **qg-issue 24 归档 `done/`**（00-README 更新：Issue 1–24 全部合入/归档，仅 14-W1b ⏸️ + 13-R2 自持）；docs/M85_PLAN.md 全程记录。
+> - tag v0.1.0-m85 **待用户令**（规划默认推）。
+
 ### M84-S4 · 收口：重链 bootstrap/pxi + 全量回归 + qg-issue 21/22/23 归档（tag v0.1.0-m84）
 
 > 收口（2026-09-06）：M83-S2…M84-S3 的 runtime 变更（AES-ECB/gzip 暴露/ed25519/RSA-PKCS1v15/http_stream/CT 修复/hmac_sha256/dns_lookup）此前均未重链解释器 → 本批重链 **bootstrap/pxi**（9,425,360 → 9,457,456 字节，git 提交新 ELF）——pxi 解释模式现可调 M83/M84 全部新 native。
