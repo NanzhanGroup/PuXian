@@ -84,6 +84,9 @@ rm -f "$STAGE/$NAME/tools/make_release.sh" "$STAGE/$NAME/tools/install.sh"
 find "$STAGE/$NAME" -name '*.bak*' -delete
 find "$STAGE/$NAME" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 
+# ---- 2a. 机器可读版本号（M87：px --version 读取；源码仓无此文件 → px 显示语义版 0.1.0）----
+echo "${TVER:-${VER}-${MILESTONE}}" > "$STAGE/$NAME/VERSION"
+
 # ---- 2. 生成 RELEASE.md ----
 cat > "$STAGE/$NAME/RELEASE.md" <<EOF
 # PuXian ${VER}（${MILESTONE} · ${SHA}）

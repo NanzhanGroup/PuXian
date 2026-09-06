@@ -12,7 +12,7 @@ git clone git@github.com:NanzhanGroup/PuXian.git
 cd PuXian
 
 # 2. 唯一外部依赖：gcc（仓库自带自举工具链 bootstrap/pxc，克隆即用，零 Rust 依赖）
-./tools/pxc --version        # 应输出 pxc 0.1.0 (普贤 PuXian · selfhosted M-B9a)
+./tools/px --version         # 应输出 px 0.1.0（源码仓为语义版；发布包内为 px 0.1.0-mXX）
 
 # 3. 试跑
 ./tools/pxc run examples/hello.px
@@ -24,7 +24,7 @@ cd PuXian
 | 路径 | 内容 |
 |---|---|
 | `bootstrap/pxc` `bootstrap/pxi` | 自举引导二进制（编译器/解释器，静态 ELF，仓库自带） |
-| `tools/pxc` | 用户入口：build / run / lex / parse / --version |
+| `tools/px` | 用户入口（官方命令名，M86 起）：build / run / lex / parse / --version；`tools/pxc` = symlink → px 兼容别名 |
 | `selfhost/` | **核心**：PuXian 写的编译器（compiler.px + codegen/interp/lexer/parser 模块） |
 | `selfhost/cases*` `golden/` | 对拍用例与基准产物 |
 | `runtime/` | C 运行时（runtime.c + 网络/加密/数据库等扩展 + third_party） |
