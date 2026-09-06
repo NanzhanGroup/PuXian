@@ -1,0 +1,13 @@
+def main():
+    let db = sqlite_open(":memory:")
+    let c = zip_pack([1, 2])
+    let x = xml_parse("<a/>")
+    let r = rsa_gen_key(1024)
+    let e = ed25519_sign("m")
+    let z = zlib_compress("d")
+    let q = quic_listen(443)
+    let w = ws_connect("ws://x")
+    let a = aes_encrypt_ecb("data", "key")
+    print(c)
+    print(db)
+    print(a)

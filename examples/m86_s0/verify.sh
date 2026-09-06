@@ -41,18 +41,18 @@ echo "== [4/9] px run 解释执行 =="
 O=$($PX run hello.px 2>&1)
 [ "$O" = "m86s0 hello" ] && ok "px run → $O" || bad "px run → $O"
 
-echo "== [5/9] px build 默认全能力零漂移（9.0M 基线）=="
-$PX build hello.px >/tmp/m86s0.log 2>&1 || { bad "默认 build"; tail -3 /tmp/m86s0.log; }
+echo "== [5/9] px build --full 全能力零漂移（9.0M 基线；M86-S2 起裸 build=自动最小，全能力用 --full）=="
+$PX build --full hello.px >/tmp/m86s0.log 2>&1 || { bad "--full build"; tail -3 /tmp/m86s0.log; }
 SZ=$(stat -c %s build/hello 2>/dev/null || echo 0)
-if [ "$SZ" -ge 8900000 ] && [ "$SZ" -le 9150000 ]; then ok "默认体积 $SZ（9.0M 基线内）"; else bad "默认体积 $SZ 偏离基线"; fi
+if [ "$SZ" -ge 8900000 ] && [ "$SZ" -le 9150000 ]; then ok "--full 体积 $SZ（9.0M 基线内）"; else bad "默认体积 $SZ 偏离基线"; fi
 ./build/hello >/dev/null 2>&1 && ok "默认产物运行" || bad "默认产物运行"
 
-echo "== [6/9] px build --no-quic（基线 3929808）=="
-$PX build --no-quic hello.px >/dev/null 2>&1 && SZ=$(stat -c %s build/hello) || SZ=0
-if [ "$SZ" -ge 3800000 ] && [ "$SZ" -le 4050000 ]; then ok "--no-quic $SZ"; else bad "--no-quic $SZ 期望 ~3929808"; fi
+echo "== [6/9] px build --full --no-quic（显式 quic 裁剪 + 全能力其余，基线 3929808）=="
+$PX build --full --no-quic hello.px >/dev/null 2>&1 && SZ=$(stat -c %s build/hello) || SZ=0
+if [ "$SZ" -ge 3800000 ] && [ "$SZ" -le 4050000 ]; then ok "--full --no-quic $SZ"; else bad "--full --no-quic $SZ 期望 ~3929808"; fi
 
 echo "== [7/9] 历史脚本兼容：tools/pxc（别名路径）build 可用 =="
-$PXC build --no-quic hello.px >/dev/null 2>&1 && ok "pxc 别名 build 成功" || bad "pxc 别名 build 失败"
+$PXC build --full hello.px >/dev/null 2>&1 && ok "pxc 别名 build 成功" || bad "pxc 别名 build 失败"
 
 echo "== [8/9] rpm spec 双装（/usr/bin/px + /usr/bin/pxc → px）=="
 S=../../packaging/puxian.spec
