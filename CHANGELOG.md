@@ -6,6 +6,34 @@
 
 ## [Unreleased]
 
+### M83-S3 · ed25519 签名/验签 native（qg-issue 17，GAP-ED25519-1）✅
+
+> 立项（2026-09-06）：M83 分六批实现 qg-issue 除挂起 W1b 外全量，S3 = Issue 17 —— 签名族第一个
+> 硬缺口（api-server /v1/family 节点互信 PEM 验签 + ws-ddns 更新双向签名均需要 ed25519，无优雅绕过：
+> openssl 子进程丑且不自洽）。**issue 描述「mbedtls ed25519 已就绪只差暴露」不成立**（源码级核实：
+> 预编译 mbedtls 库不含 ed25519 符号/头，仓库无 mbedtls 源码可重编）→ 用户授权东月定实现：
+> **DJB tweetnacl-20140427（public domain 参考实现）**。native 294→**296**（+2）。纯新增，
+> 零删除；Linux 基线 m82 全绿保持。
+
+- **S3-1 引入 tweetnacl（GAP-ED25519-1）**：`runtime/tweetnacl.c` + `runtime/tweetnacl.h` 逐字节取自
+  https://tweetnacl.cr.yp.to/20140427/（public domain；sha256 归档于 runtime_ed25519.c 文件头）。
+  仅 tweetnacl.c 内 crypto_sign_keypair 后新增 **1 处** `crypto_sign_seed_keypair`（RFC8032
+  seed→sk64=seed||pub，对齐官方 NaCl 同名 API；Go x509 PKCS8 导出即 32B seed，无此扩展无法用 Go
+  的 PEM 私钥直签）。wrapper 独立 `runtime/runtime_ed25519.c`（本地 helper + DER 小解析）。
+- **S3-2 语言层 native**：`ed25519_sign(priv, msg)→sig_hex|null`（priv 收 hex seed32 / hex sk64 /
+  PKCS8 PEM，seed 自动展开；msg 收 str|bytes 二进制安全；RFC8032 **确定性签名**；内容非法 null）+
+  `ed25519_verify(pub, msg, sig)→bool`（pub 收 hex / SPKI PEM；坏入参 false）。PEM/DER：base64 解码
+  + 通用 TLV 走查（短/长格式长度均支持），PKCS8（OID 1.3.101.112）嵌套/直存/完整 sk 三种 OCTET
+  STRING 形态兼容，SPKI BIT STRING 校验 unused-bits=0。
+- **S3-3 验证 examples/m83_s3_ed25519/**（**与 Go crypto/ed25519 双向互通对拍全绿**）：Go 生成
+  keypair → 导出 PKCS8 PEM / SPKI PEM / seed / sk64 / msg（文本 + 二进制含 NUL）→ ① px 用 PEM 与
+  hex 公钥验 Go 签（文本+二进制）全 true ② px 用 PKCS8 PEM / seed / sk64 **三路签出的签名与 Go 签
+  逐字节一致**（确定性 + 格式等价双证明）③ Go 反向验 px 签（文本+二进制）均 true ④ 反例矩阵：
+  篡改 msg / 错公钥 / 坏 sig / 长度错 / 公钥当私钥签 null / 私钥当公钥验 false。回归：m83_s2 全绿
+  + m82 unix serve 8 项 + m83_s1 6 组 + rsa（m23d）/p7 aes-xml-zip 双模式全绿。
+- **S3-4 工具链/文档**：tools/pxc rt_src_files + rt_cache_compile 增 tweetnacl.c/.h +
+  runtime_ed25519.c（进缓存 key，改源码自动重建）；native_index 294→296；CHEATSHEET / M83_PLAN 同步。
+
 ### M83-S2 · AES-ECB + gzip 语言层通用暴露 + os_spawn setpgid（qg-issue 20-L0，GAP-AES-1 / GAP-ARC-1 / GAP-PGID-1）✅
 
 > 立项（2026-09-06）：M83 分六批实现 qg-issue 除挂起 W1b 外全量，S2 = Issue 20 **L0 三件**——

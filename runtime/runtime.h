@@ -281,6 +281,9 @@ LXValue bi_rsa_encrypt(LXValue* args, int nargs, void* ctx);
 LXValue bi_rsa_decrypt(LXValue* args, int nargs, void* ctx);
 LXValue bi_rsa_sign(LXValue* args, int nargs, void* ctx);
 LXValue bi_rsa_verify(LXValue* args, int nargs, void* ctx);
+// M83-S3（Issue 17 GAP-ED25519-1）：ed25519 签名/验签（RFC8032，tweetnacl；实现 runtime_ed25519.c）
+LXValue bi_ed25519_sign(LXValue* args, int nargs, void* ctx);
+LXValue bi_ed25519_verify(LXValue* args, int nargs, void* ctx);
 LXValue ws_conn_worker(LXValue* args, int nargs, void* ctx);
 const char* px_val_cstr(LXValue v);
 

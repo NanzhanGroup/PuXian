@@ -19,6 +19,9 @@ examples/m45_pkgdemo/registry_empty/
 examples/m69_registry/app/
 examples/m69_registry/registry_empty/
 
+# M83-S3 互通对拍 Go 生成物（verify.sh 每次重建）
+examples/m83_s3_ed25519/artifacts/
+
 # 备份文件
 *.bak
 *.bak.*
