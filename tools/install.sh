@@ -3,7 +3,7 @@
 # tools/install.sh —— PuXian 一键安装（M71-S4，B4）
 # ------------------------------------------------------------
 # 从 GitHub Release 下载官方 tarball → 验 sha256（sha256sums.txt）
-# → 解压安装 → PATH 软链。pxc argv0 自发现（tools/pxc readlink 真实根）
+# → 解压安装 → PATH 软链。px argv0 自发现（tools/px readlink 真实根）
 # + stdlib 自动注入 → 软链后任意目录可用，免 PX_STDLIB/相对路径。
 # 用法：
 #   curl -fsSL https://raw.githubusercontent.com/NanzhanGroup/PuXian/main/tools/install.sh | sh
@@ -13,7 +13,8 @@
 # 环境：PX_PREFIX（安装前缀；缺省 ~/.local，root 无参时 /usr/local）
 # 产物：
 #   <prefix>/share/puxian/<tag>/   包根（tarball 解压，strip 顶层目录）
-#   <prefix>/bin/pxc → 软链 包根/tools/pxc
+#   <prefix>/bin/px  -> 软链 包根/tools/px（官方名，M86-S0）
+#   <prefix>/bin/pxc -> 软链 包根/tools/pxc（兼容别名，历史脚本照跑）
 # 架构：当前官方资产 x86_64；aarch64 用户提示用 --target 交叉（见 ROADMAP M71）
 # 依赖：curl + tar + sha256sum；GitHub 可达
 # ============================================================
@@ -43,7 +44,7 @@ case "$MACH" in
     x86_64|amd64) ARCH="x86_64" ;;
     aarch64|arm64)
         echo "提示：当前官方 Release 资产为 x86_64（aarch64 原生包按需，见 ROADMAP M71）。"
-        echo "  aarch64 部署：在 x86_64 开发机用官方包交叉 —— pxc build --target aarch64 <app.px>（产物直接跑 aarch64）。"
+        echo "  aarch64 部署：在 x86_64 开发机用官方包交叉 —— px build --target aarch64 <app.px>（产物直接跑 aarch64）。"
         exit 1 ;;
     *) echo "错误: 不支持架构 $MACH（当前仅 x86_64 资产）"; exit 1 ;;
 esac
@@ -92,12 +93,13 @@ DEST="$PKG_DIR/$VERSION"
 rm -rf "$DEST"
 mkdir -p "$DEST" "$BIN_DIR"
 tar -C "$DEST" -xzf "$TMP/pkg.tar.gz" --strip-components=1
-chmod +x "$DEST/tools/pxc" "$DEST/bootstrap/pxc" "$DEST/bootstrap/pxi" 2>/dev/null || true
+chmod +x "$DEST/tools/px" "$DEST/tools/pxc" "$DEST/bootstrap/pxc" "$DEST/bootstrap/pxi" 2>/dev/null || true
+ln -sf "$DEST/tools/px" "$BIN_DIR/px"
 ln -sf "$DEST/tools/pxc" "$BIN_DIR/pxc"
 echo "== 安装完成 =="
 echo "  包根: $DEST"
-echo "  入口: $BIN_DIR/pxc"
-"$BIN_DIR/pxc" --version
+echo "  入口: $BIN_DIR/px（pxc 为兼容别名）"
+"$BIN_DIR/px" --version
 echo ""
 echo "  用法: export PATH=\"$BIN_DIR:\$PATH\""
-echo "  然后: pxc run app.px / pxc build --target aarch64 app.px / pxc mcp"
+echo "  然后: px run app.px / px build --target aarch64 app.px / px mcp"

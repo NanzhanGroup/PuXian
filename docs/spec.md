@@ -281,7 +281,7 @@ type UserList = list[User]
 ### 4.1 表达式跨行（M70-S1）
 - **括号内可换行**：list `[\n1,\n2,\n]`、dict `{\n"k": v,\n}`、调用 `f(\na,\nb,\n)`（含尾部逗号）、元组 `(\na,\nb,\n)`、下标/切片 `a[\n1:3\n]`、推导 `[x for x in ys\nif cond]` —— 括号（`[` `(` `{`）内换行/缩进 token 被 parser 忽略，语义与单行等价。
 - **语句边界仍以换行为准**：`=` 后不换行、二元/一元运算符后不换行、`return` 后直接换行仍表示语句结束；需续行请用括号包裹（`let x = (\n  a + b\n)`）。
-- **续行缩进须与缩进栈相容**（缩进一致或严格递增回退，不规则缩进仍报 E2002，见 §2.8）；`pxc fmt` 输出的多行结构恒满足此约束。
+- **续行缩进须与缩进栈相容**（缩进一致或严格递增回退，不规则缩进仍报 E2002，见 §2.8）；`px fmt` 输出的多行结构恒满足此约束。
 - dict 字面量与块共用 `{ }`：由首 token 判定（含键值冒号即 dict）；跨行 dict 判定已支持（M70-S1 修正 brace_looks_like_dict 前序跳过）。
 
 ---
@@ -590,7 +590,7 @@ extern def quic_close_listener(listener: int) -> bool
 ```
 
 - 语义：TLS 1.3（QUIC 内）自签证书（内存生成，MVP 不校验）、单条双向流（stream 0）、阻塞事件循环。
-- 双模式一致：编译（pxc build）与解释（pxi run）均走 C 桥 `bi_ffi_call`（M42 机制）。
+- 双模式一致：编译（px build）与解释（pxi run）均走 C 桥 `bi_ffi_call`（M42 机制）。
 - 验证：`examples/m46_quic_verify.sh` 回环 PASS（握手 + `hello-quic-42` → `echo:hello-quic-42`）。
 - 工程说明：QUIC 栈静态编译进 pxc/pxi 产物（零依赖分发）；选型 quictls + ngtcp2 quictls 后端
   （OpenSSL 3.5 的 QUIC TLS 服务端存在集成问题，弃用并切换 quictls 3.0.9+quic）。
@@ -625,7 +625,7 @@ extern def h3_client_read_response(conn: int, timeout_ms: int) -> dict|null # {s
   字段行仅 Literal Field Line with Literal Name（`001 0 0 | NameLen(3+)`），无 Huffman/静态/动态表。
 - **H3 帧**：type + length 用 QUIC varint（RFC 9000 §16）；请求 = HEADERS+DATA，响应 = HEADERS(:status)+DATA。
 - **边界**：MVP 约定单 DATA 帧界定消息（不依赖 FIN）；单条双向流（复用 M46 连接模型）。
-- 双模式一致：编译（pxc build）与解释（pxi run）走同一 C 桥（runtime_h3.c 注册进 FFI 表）。
+- 双模式一致：编译（px build）与解释（pxi run）走同一 C 桥（runtime_h3.c 注册进 FFI 表）。
 - 验证：`examples/m47_h3_verify.sh` 回环 PASS（QPACK 编解码 method/path/x-test 头 → 200 + echo-h3 体）；
   capability section 22（6 项：roundtrip / 伪头 / 非法输入容错），187 PASS/0 FAIL 双模式逐字节一致。
 
@@ -659,7 +659,7 @@ extern def hex_to_bytes(s: str) -> bytes    # hex → bytes | null（非法返�
   `a8eb10649cbf`、custom-key/custom-value 全命中）。
 - **静态表**：QPACK 99 项（RFC 9204 Appendix A，0-based；与 HPACK 表顺序不同）。
 - **工程**：QPACK 逻辑自 runtime_h3.c 迁出（净删 123 行），H3 高层请求/响应自动走新 codec；
-  tools/pxc 链 runtime_h3_qpack.c；bootstrap/pxi 重建（解释模式同能力）。
+  tools/px 链 runtime_h3_qpack.c；bootstrap/pxi 重建（解释模式同能力）。
 - 验证：`examples/m48_qpack_verify.sh` 双模式字节精确 PASS（RFC 向量/静态索引/roundtrip/容错，
   输出逐字节一致）+ capability section 23（15 项）202 PASS/0 FAIL 双模式逐字节一致；
   `examples/m47_h3_verify.sh` 回归 PASS（QPACK 重构不回归，编译+解释）。
@@ -699,7 +699,7 @@ extern def h3_settings_dec(frame: bytes) -> list   # SETTINGS 帧 → [[k,v]...]
   （字段段显著短于 M48 静态-only codec）。
 - **SETTINGS 帧**：完整帧 type=0x04 + QUIC varint 长度 + 键值对；能力断言
   `h3_settings_enc([[1,4096],[7,100]]) == 0406015000074064`。
-- **工程**：runtime.c 注册 px_register_h3_qpack_dyn、runtime.h 声明、tools/pxc
+- **工程**：runtime.c 注册 px_register_h3_qpack_dyn、runtime.h 声明、tools/px
   copy_runtime + gcc 链接列表加 runtime_h3_qpack_dyn.c/.h、bootstrap/pxi 重建
   （解释模式同能力，interp codegen 内存峰值约 2.2GB）。
 - 验证：`examples/m49_qpack_dyn_verify.sh` 双模式字节精确 PASS（A/B 双会话：首轮插入
@@ -1031,9 +1031,9 @@ close(fb)
   write 寄存器命令/read 器件数据）；m57_s3_devctl.px **真内核替身硬断言**（loopback 网卡 ifreq：
   SIOCGIFADDR→family=2+127.0.0.1、SIOCGIFFLAGS→LOOPBACK、SIOCGIFHWADDR→family=772 + PTY `TIOCGPTN`）
   ——LD_PRELOAD mock 因 pxc 产物静态链接不可行，改内核自带用户态可访问设备走**同一胶水路径**，验证力度更强。
-- **交叉编译与裁剪（S4）**：`pxc build --no-quic [--cc <交叉CC>] [--mbedtls-lib <dir>] [--sqlite-obj <file>]`
+- **交叉编译与裁剪（S4）**：`px build --no-quic [--cc <交叉CC>] [--mbedtls-lib <dir>] [--sqlite-obj <file>]`
   —— ngtcp2/openssl-quictls 无 aarch64 预编译且交叉成本高 → 裁剪（PX_NO_QUIC 条件编译 7 处）；
-  > M85-S1（2026-09-06）泛化：`pxc build` 模块开关集 `--no-sqlite/--no-ws/--no-zip/--no-xml/--no-aes/--no-rsa/--no-ed25519/--no-route/--no-zlib/--no-h2`（与 `--no-quic` 正交可组合，`--min` 聚合）—— runtime.c 注册/调用段 14 处 `#ifndef PX_NO_<MOD>` 包裹 + 链接去 sqlite3.o/libz.a + 缓存 key 纳开关集；产物 9.0M→2.7M；裁剪态缺 native → 运行时未定义（R1001 口径）。详见 tools/pxc usage 与 docs/M85_PLAN.md。
+  > M85-S1（2026-09-06）泛化：`px build` 模块开关集 `--no-sqlite/--no-ws/--no-zip/--no-xml/--no-aes/--no-rsa/--no-ed25519/--no-route/--no-zlib/--no-h2`（与 `--no-quic` 正交可组合，`--min` 聚合）—— runtime.c 注册/调用段 14 处 `#ifndef PX_NO_<MOD>` 包裹 + 链接去 sqlite3.o/libz.a + 缓存 key 纳开关集；产物 9.0M→2.7M；裁剪态缺 native → 运行时未定义（R1001 口径）。详见 tools/px usage 与 docs/M85_PLAN.md。
   mbedtls/sqlite 纯 C 交叉保留（tools/cross_aarch64.sh，mbedtls 3.6.2 + sqlite3 交叉入库）；
   musl 兼容 5 点（execinfo 条件包含 / GC `__aarch64__` 寄存器扫描分支 / getcontext→内联汇编 SP+setjmp
   spill / close_range→循环关闭）；qemu-aarch64 静态产物设备层 ioctl 与 x86 结果一致
@@ -1041,7 +1041,7 @@ close(fb)
 - **pxi 解释同能力（S5）**：解释器自举源码 `selfhost/interp.px` 内置白名单 +10（open/close/ioctl/os_errno/
   read/write/mmap/munmap/mem_write/http_unix）+ `selfhost/ibuiltin.px` `i_call_builtin` 补 10 个纯转发分支
   （直调同名 runtime C builtin，语义与编译模式天然一致；可选参数按实参个数透传对齐 C 签名）→
-  `pxc build selfhost/interp.px` 重建 bootstrap/pxi。
+  `px build selfhost/interp.px` 重建 bootstrap/pxi。
 - **验证**：examples/m57_s1_ioctl_verify.sh / m57_s2_mmap_verify.sh / m57_s3_verify.sh /
   m57_s4_cross_verify.sh / m57_s5_pxi_smoke.px 双模式全 PASS（真内核路径：TCP fd/文件/lo ifreq/PTY/mmap
   活映射双向可见/GC 自动 munmap 300 轮）；capability 双模式各 253 PASS 输出逐字节一致；
@@ -1204,7 +1204,7 @@ glibc/musl）+ `arch_scan_registers(uc, mark_cb, ctx)`（暂停线程 ucontext �
 （mcontext `__gregs[32]` psABI 序，sp = `__gregs[2]`）——**GC 主逻辑不再见架构 #if**，以后加架构只新增
 头文件 + arch.h 一行 include。
 
-**多架构交叉编译通道（阶段一 + 阶段二 #2/#3）**：`pxc build --no-quic --cc <arch>-linux-musl-gcc
+**多架构交叉编译通道（阶段一 + 阶段二 #2/#3）**：`px build --no-quic --cc <arch>-linux-musl-gcc
 [--mbedtls-lib dir] [--sqlite-obj file] [--zlib-lib dir]` 支持 **x86_64 / aarch64 / armv7(armhf) /
 riscv64** 四架构；aarch64 交叉库仓库预置（M57/M61），armv7/riscv64 由 `tools/cross_multiarch.sh
 --arch <a> [--outdir dir]` 现编三件套（sqlite3.o + mbedtls + zlib，`cross_aarch64.sh` 保留为
@@ -1250,7 +1250,7 @@ spawn http_serve_unix("/tmp/approve.sock", handler)   # 编译模式运行（同
 - **remote 字段**：AF_UNIX 连接无 IP → `req["remote"]` = `"unix"`（TCP http_serve 保持 `ip:port`；
   worker 的 getpeername 已按 sockaddr_storage 判族兼容，M82 顺带加固）。
 - **约束**：http_serve_unix 与 http_serve 同为**编译模式 native**（内部 px_spawn 并发；
-  pxi Mini 子集无 spawn → 用 `pxc build`）。进程内 handler 槽位与 http_serve 共用
+  pxi Mini 子集无 spawn → 用 `px build`）。进程内 handler 槽位与 http_serve 共用
   `__http_handler`（同一进程一般只跑一个 serve 回调，勿与 http_serve 同进程异 handler 并用）。
 - **背景与验证**：M82 由 qg-issue 15（ws-approve .px 化 GAP-SRV-1）立项——ws-approve 主客户端
   token-cache 是 fail-closed 直连 unix socket HTTP（1s 超时×3 重试），此前 PuXian 只有
@@ -1430,17 +1430,17 @@ error[E3001]: type mismatch: expected int, got str
 
 **实现状态（M64/M65 工具链全自举）**：上表 `fmt`（M64a）/`lint`（M64b）/`test`/`doc`/
 `bench`（M64c）/`lsp`（M65-S2/S3）/`mcp`（M65-S4）均已由 PuXian 自举实现
-（`.px` 源码 → `bootstrap/px*` → `tools/pxc` 子命令：`pxc fmt / lint / doc / test /
+（`.px` 源码 → `bootstrap/px*` → `tools/px` 子命令：`px fmt / lint / doc / test /
 bench / lsp / mcp`）；`ast` 已有 `astdump.px`（JSON/Debug AST），`pkg` 已有
 `pxpkg`（M45）。**spec §12 表内 8 工具全部自举完成**。Rust 版全套留档
 `archive/rust-compiler/`（只读）。
 
 ### 12.1 面向 AI agent 的协议
 - 优先支持 **MCP**（Model Context Protocol），AI agent 可直接调用 `px` 工具链
-- **已实现（M65-S4）**：`pxc mcp` —— MCP 2024-11-05 stdio transport，tools/list
+- **已实现（M65-S4）**：`px mcp` —— MCP 2024-11-05 stdio transport，tools/list
   暴露 8 工具（run/fmt/lint/test/bench/doc/ast/version，带 inputSchema），
   tools/call 子进程执行（崩溃隔离不污染协议通道）。
-- 错误信息机器可读（JSON 模式 `px build --json` / `pxc lint --json`），AI 可直接解析修复
+- 错误信息机器可读（JSON 模式 `px build --json` / `px lint --json`），AI 可直接解析修复
 
 ---
 

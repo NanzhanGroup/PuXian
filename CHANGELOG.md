@@ -15,6 +15,16 @@
 > M86 = **S0**（命令正名 px + help 补齐 M85 开关 + pxc 兼容别名 + spec 双装 + 文档入口更新）→ **S1**（selfhost 语义打点收集「被引用 native 集」，旁路导出不扰 codegen；import 递归；解析异常退全量）→ **S2**（裸 `px build` 自动折 `--no-xxx` 裁剪集复用 M85 链路 + `--full/--max` 逃生舱 + 显式 flag 优先级 > 自动）→ **S3**（收口：重链 + 自举证明 + 回归总闸 + qg-issue 25 归档 + tag v0.1.0-m86 待令）。
 > 不改语言语法/现有 native 语义；native 总数 **301** 不变；bootstrap 发布物全能力。执行规划 `docs/M86_PLAN.md`（S0→S3）。
 
+### M86-S0 · 命令正名 px + help 补齐 + 安装链路双装（qg-issue 25）
+
+> 完成（2026-09-06，commit M86-S0）：**官方命令名 `pxc` → `px`**（pxc 保留兼容别名）。
+> - **改名落盘**：`tools/pxc` → `tools/px`（bash 前端 git mv），`tools/pxc` = symlink → `px`（软链入库，历史脚本/文档路径照跑）；脚本内 usage/version/错误提示/注释 px 化（`bootstrap/pxc` 编译器真名保留不误伤）；`cmd_mcp` 注入 `PX_PXC=$PXC_HOME/tools/px`。
+> - **安装链路双装**：`packaging/puxian.spec` 装 `/usr/bin/px` + `/usr/bin/pxc → px`；`tools/install.sh` 双软链 `bin/px` + `bin/pxc`；`tools/make_release.sh` RELEASE 模板与冒烟自检 px 化。
+> - **help 补齐**：`px --help/-h/无参` usage 含 px 全 13 子命令 + M85 裁剪开关（--min + 10× --no-*）+ M86-S0 pxc 别名说明；`px --version` → `px 0.1.0 (普贤 PuXian · selfhosted M-B9a)`，pxc 别名输出等价。
+> - **文档入口同步**：README.md / README.en.md / docs/PUXIAN_CHEATSHEET.md / docs/spec.md / docs/MINI_SUBSET.md 用户命令与 tools/px 路径 px 化（pxc 别名说明保留；历史 M*_PLAN/ROADMAP 原样）。
+> - **零漂移实证**：examples/m86_s0 verify **14/14 PASS** —— 默认 build **9,010,184 B**（9.0M 基线不变）/ `--no-quic` 3,929,808 B（M85 基线不变）/ pxc 别名 build 等价 / spec+install.sh+make_release 双装断言全过。
+> - `.px` 工具（pxfmt/pxlint/pxdoc/pxtest/pxbench/pxlsp/pxmcp）usage 显示名保留各自自举二进制真名（px 子命令错误提示已在 tools/px 层 px 化，直接调用场景名实相符，侦查后不改为宜）。
+
 ### M85 立项 · pxc build 编译产物按需裁剪（qg-issue 24 · 方案 B 细粒度模块开关）
 
 > 立项（2026-09-06）：用户提问「编译产物都在 9M 以上，能去掉未使用模块吗」→ 真机实测 hello.px

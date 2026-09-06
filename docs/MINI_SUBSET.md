@@ -429,10 +429,10 @@ m58 notify.px 的 webhook dry-run 解禁为真发成为下一步 dogfood 候选�
   bytes_concat 两两折叠等价 C 变参）。fp_bytes.px 17 断言双模式一致。
   注：解释器参数/类型错由 C 层终止（编程契约，与编译模式一致；区别于 io 可恢复
   错误走 Err）。
-### §十三.8 M63 语言面欠账修复记录（L8–L11 全清：pxi 网络 API / float 全精度 / pxc --version）
+### §十三.8 M63 语言面欠账修复记录（L8–L11 全清：pxi 网络 API / float 全精度 / px --version）
 
 > M63 清掉欠账表 L8–L11 全部四项（用户侧清单；L8=pxi 真实 API 深化、L9=%g 全精度打印、
-> L10=编译期浮点字面量截断、L11=bootstrap/pxc --version）。均双模式实测验证
+> L10=编译期浮点字面量截断、L11=bootstrap/px --version）。均双模式实测验证
 > （examples/m63_langfix/verify.sh）。与 M62 同主线：以「编译/解释双模式一致」为验收标准。
 
 - **L8 pxi 网络真实应用 API 补白名单 — ✅ 已补齐 6 名**（interp.px + ibuiltin.px）：
@@ -463,14 +463,14 @@ m58 notify.px 的 webhook dry-run 解禁为真发成为下一步 dogfood 候选�
   `str(v)` 自动全精度 → C 产物 `px_float(3.141592653589793)`（m63_prec.px 6 断言 + build
   中间 C grep 实证）。v01_value float**（期望 1.4142135623730951）编译/解释全 PASS →
   **diffcheck.sh 三处 v01 %g 豁免移除**（s09 的 250.0 打印亦随 L9 恢复 golden 一致）。
-- **L11 bootstrap/pxc --version — ✅ 已修（自举重建）**：compiler.px main 入口参数前置分支
+- **L11 bootstrap/px --version — ✅ 已修（自举重建）**：compiler.px main 入口参数前置分支
   （len(args)==2 && args[1] in --version/-v → 输出版本退出 0）+ `PXC_VER="0.1.0"` /
-  `PXC_MS="M-B9a"` 常量（照 interp.px PXI_VER 模式，对齐 tools/pxc 头注释）→
-  **bootstrap/pxc 自举重建**（tools/pxc build --no-quic selfhost/compiler.px，4144832 B，
+  `PXC_MS="M-B9a"` 常量（照 interp.px PXI_VER 模式，对齐 tools/px 头注释）→
+  **bootstrap/pxc 自举重建**（tools/px build --no-quic selfhost/compiler.px，4144832 B，
   与历史构建一致）+ golden/compiler.c 同步更新（diff 仅 main --version 分支 +7/-1 +
   UID 顺延，无浮点字面量变化——compiler.px 自身无高精度浮点字面量）。
-  修复前 `bootstrap/pxc --version` 把参数当文件读（报「io: 读取文件失败」，RELEASE_PROCESS
-  已知边界）；修复后 `pxc 0.1.0 (普贤 PuXian · selfhosted M-B9a)` 与 pxi/tools 对齐。
+  修复前 `bootstrap/px --version` 把参数当文件读（报「io: 读取文件失败」，RELEASE_PROCESS
+  已知边界）；修复后 `px 0.1.0 (普贤 PuXian · selfhosted M-B9a)` 与 pxi/tools 对齐。
 - **验证**：examples/m63_langfix/verify.sh ALL OK（L8/L9/L10/L11 全绿）；diffcheck
   --all/--errors 全绿；capability 双模式 253/253 PASS；自举证明 B.c==golden/compiler.c；
   m59_math/m61_gfx/m62_langfix 历史回归复跑 PASS。

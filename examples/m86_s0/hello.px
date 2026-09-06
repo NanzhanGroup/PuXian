@@ -1,0 +1,2 @@
+def main():
+    print("m86s0 hello")

@@ -7,10 +7,11 @@
 #     --define "pxtag m72"          # 里程碑（Release 字段）
 #     --define "pxsha 2e6ac8d"      # commit short sha（Source 名拼接）
 #     packaging/puxian.spec
-# 布局（对齐 tools/pxc argv0 自发现：软链 /usr/bin/pxc → 包根/tools/pxc，
-#   任意 cwd 可用，免 PX_STDLIB）：
+# 布局（对齐 tools/px argv0 自发现：软链 /usr/bin/px → 包根/tools/px，
+#   /usr/bin/pxc → px（兼容别名，M86-S0），任意 cwd 可用，免 PX_STDLIB）：
 #   /usr/share/puxian/     包树（tools bootstrap stdlib runtime LICENSE RELEASE.md ...）
-#   /usr/bin/pxc -> /usr/share/puxian/tools/pxc
+#   /usr/bin/px  -> /usr/share/puxian/tools/px
+#   /usr/bin/pxc -> px（同目录相对软链，等价别名）
 # 依赖：仅 gcc（pxc build 需要 cc）。bootstrap/* 均 statically linked，
 #   零动态库依赖，跨发行版通用（RHEL/Fedora/Rocky/Alma/openEuler/CentOS...）。
 # 版本：主版本固定 0.1.0（与 tag v0.1.0-mXX 对齐）；Release=1.m<里程碑>
@@ -44,9 +45,10 @@ AutoReqProv:    no
 %description
 PuXian (普贤) is a self-hosted, AI-first programming language whose compiler
 is written in itself. This package installs the complete toolchain:
-  pxc build / run / fmt / lint / test / bench / doc / lsp / mcp / version
+  px build / run / fmt / lint / test / bench / doc / lsp / mcp / version
+  （pxc 为兼容别名，等价可用）
 
-All bootstrap binaries are statically linked (zero dynamic deps), and pxc
+All bootstrap binaries are statically linked (zero dynamic deps), and px
 locates its package root via argv[0] resolution, so it works from any
 directory without PX_STDLIB.
 
@@ -62,16 +64,19 @@ cp -a tools bootstrap stdlib runtime \
       %{buildroot}%{_datadir}/puxian/
 # 可执行位兜底（cp -a 已保留，防个别环境 umask）
 find %{buildroot}%{_datadir}/puxian/bootstrap -type f -exec chmod +x {} \;
-chmod +x %{buildroot}%{_datadir}/puxian/tools/pxc \
+chmod +x %{buildroot}%{_datadir}/puxian/tools/px \
+        %{buildroot}%{_datadir}/puxian/tools/pxc \
         %{buildroot}%{_datadir}/puxian/tools/*.sh \
         %{buildroot}%{_datadir}/puxian/tools/pxpkg \
         %{buildroot}%{_datadir}/puxian/tools/routegen 2>/dev/null || true
-# PATH 软链（argv0 自发现解析真实位置 → 包根）
+# PATH 软链（argv0 自发现解析真实位置 → 包根；px 官方名 + pxc 兼容别名 M86-S0）
 install -d %{buildroot}%{_bindir}
-ln -s %{_datadir}/puxian/tools/pxc %{buildroot}%{_bindir}/pxc
+ln -s %{_datadir}/puxian/tools/px %{buildroot}%{_bindir}/px
+ln -s px %{buildroot}%{_bindir}/pxc
 
 %files
 %{_datadir}/puxian/
+%{_bindir}/px
 %{_bindir}/pxc
 
 %changelog

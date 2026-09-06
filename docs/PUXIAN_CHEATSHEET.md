@@ -1,16 +1,16 @@
 # PuXian 速查包（PUXIAN_CHEATSHEET）
 
-> **给 AI 的一句话**：把本文件 + [`docs/ECOSYSTEM.md`](ECOSYSTEM.md) 整包喂进上下文，即可写出**语法正确、native/库调用正确**的 PuXian（普贤）`.px` 程序。生成后务必用 `tools/pxc run <f>.px` 验证；编译模式 `tools/pxc build <f>.px`。
-> 版本基线：M69（2026-09-05）· 双模式（编译 pxc build / 解释 pxi run）行为一致（M68 起 native 零 extern def 可达）。
-> 工具链（M71，2026-09-06）：`pxc build` 已增量缓存（**二次 build ≈0.4–0.9s**）+ `--target <arch>` 交叉；`pxc mcp` 含 **build** 工具（AI 一条 MCP 写→验→交付）；安装 `tools/install.sh`（sha256 自动校验 + argv0 自发现，装完任意目录免 PX_STDLIB）。重文本/大文件处理：pxc build 编译版毫秒级 ≈ grep（ECOSYSTEM_GAPS F4 M71 更正）。
-> M85（2026-09-06）：`pxc build` 模块裁剪开关集 —— `--no-sqlite`/`--no-ws`/`--no-zip`/`--no-xml`/`--no-aes`/`--no-rsa`/`--no-ed25519`/`--no-route`/`--no-zlib`/`--no-h2` 与 `--no-quic` 正交可任意组合，`--min` 聚合为最小化 profile；产物 9.0M → 2.7M（−70%，默认不传 flag 全能力零漂移）；裁剪态调用缺的 native → 运行时明确报错（R1001，与裁剪编译产物一致）。
+> **给 AI 的一句话**：把本文件 + [`docs/ECOSYSTEM.md`](ECOSYSTEM.md) 整包喂进上下文，即可写出**语法正确、native/库调用正确**的 PuXian（普贤）`.px` 程序。生成后务必用 `tools/px run <f>.px` 验证；编译模式 `tools/px build <f>.px`。
+> 版本基线：M69（2026-09-05）· 双模式（编译 px build / 解释 pxi run）行为一致（M68 起 native 零 extern def 可达）。
+> 工具链（M71，2026-09-06）：`px build` 已增量缓存（**二次 build ≈0.4–0.9s**）+ `--target <arch>` 交叉；`px mcp` 含 **build** 工具（AI 一条 MCP 写→验→交付）；安装 `tools/install.sh`（sha256 自动校验 + argv0 自发现，装完任意目录免 PX_STDLIB）。重文本/大文件处理：px build 编译版毫秒级 ≈ grep（ECOSYSTEM_GAPS F4 M71 更正）。
+> M85（2026-09-06）：`px build` 模块裁剪开关集 —— `--no-sqlite`/`--no-ws`/`--no-zip`/`--no-xml`/`--no-aes`/`--no-rsa`/`--no-ed25519`/`--no-route`/`--no-zlib`/`--no-h2` 与 `--no-quic` 正交可任意组合，`--min` 聚合为最小化 profile；产物 9.0M → 2.7M（−70%，默认不传 flag 全能力零漂移）；裁剪态调用缺的 native → 运行时明确报错（R1001，与裁剪编译产物一致）。
 
 ---
 
 ## 0. 三件套先记住
 
-1. **`.px` 文件 = 程序/模块**；注释 `#`；`##` 开头为文档注释（pxc doc 生成 API 文档）。
-2. **运行**：`tools/pxc run hello.px`（解释，秒起）· `tools/pxc build hello.px`（生成 C→gcc 静态二进制，`<目录>/build/hello`）。
+1. **`.px` 文件 = 程序/模块**；注释 `#`；`##` 开头为文档注释（px doc 生成 API 文档）。
+2. **运行**：`tools/px run hello.px`（解释，秒起）· `tools/px build hello.px`（生成 C→gcc 静态二进制，`<目录>/build/hello`）。
 3. **import**：`import std.collections` / `from std.collections import unique` / `import "rel/path.px"`；import 只注册定义**不执行**模块其它顶层语句——但模块顶层 **let/var/const 声明随合并导出**（M70-S3：初始化表达式在 import 方程序启动时执行一次 = 模块级状态槽）。
 
 ## 1. 语言速查
@@ -83,8 +83,8 @@ print("upper=" + to_upper("px"))
 7. **import 无副作用**（不执行模块顶层函数调用/裸赋值等语句）；仅模块顶层 var/let/const **声明**随合并导出并初始化一次（M70-S3，模块级状态槽的必要初始化，非任意副作用）。
 8. **编译模式全功能**（native 287 全部可调）；**解释模式（pxi）M68 后同样零 extern def 可达全部 native**——但极端底层（ffi/指针）语义以编译产物为准。
 9. **stdlib 内参数名不用 `fn`**（`fn` 是匿名函数关键字），用 `f` 等。
-10. 注释/字符串里长行可加 `# noqa` 供 `pxc lint` 跳过。
-11. **pxi（解释器）为 Mini 子集：不支持 `spawn`/`chan` 等并发关键字** → 并发/服务端（http_serve/ws_serve 等常驻回调）程序用 `pxc build`；纯计算与客户端脚本 pxi/编译双模式皆可。
+10. 注释/字符串里长行可加 `# noqa` 供 `px lint` 跳过。
+11. **pxi（解释器）为 Mini 子集：不支持 `spawn`/`chan` 等并发关键字** → 并发/服务端（http_serve/ws_serve 等常驻回调）程序用 `px build`；纯计算与客户端脚本 pxi/编译双模式皆可。
 
 ## 2. native 内置速查（301 全量见 `docs/native_index.json`，本表为常用）
 
@@ -152,14 +152,14 @@ Session：`session_open()/session_id/get/set/del/destroy` · `basic_auth(user, p
 | multipart | `import std.multipart` | `mp_encode(fields, files)` → {body: bytes, content_type: "multipart/form-data; boundary=…", len}（files 值 {filename, data: str\|bytes, type}）· `mp_boundary` |
 | smtp | `import std.smtp` | `smtp_send(host, port, from, to, msg, opts?)` → bool（msg {subject, text\|html}；opts {user, password, helo} AUTH LOGIN）· `smtp_try` → {ok, err} 诊断 |
 
-> 完整 API 文档：`tools/pxc doc stdlib/<name>.px`；用法示例见 `docs/ECOSYSTEM.md §2`。
+> 完整 API 文档：`tools/px doc stdlib/<name>.px`；用法示例见 `docs/ECOSYSTEM.md §2`。
 
 ## 4. 高频模式（可直接抄）
 
 ### 4.1 HTTP 服务端（http_serve 回调式 · 编译模式运行）
 
 ```px
-# ⚠️ http_serve 常驻服务 + spawn → 用 `pxc build`（pxi Mini 子集无 spawn）
+# ⚠️ http_serve 常驻服务 + spawn → 用 `px build`（pxi Mini 子集无 spawn）
 def handler(req):
     # req: {method, path, query, headers, body, form, files, ...}（dict）
     if req["path"] == "/" and req["method"] == "GET":
@@ -258,5 +258,5 @@ set_timeout(fn (): print("once after 2s"), 2000)
 ## 5. 防漂移与源
 
 - **native 清单**（301，单一事实源 = runtime 注册表）：`bash tools/gen_native_table.sh` → `docs/native_index.json`；CI 重跑 diff 防漂移。**本表计数必须 == count**（现 301）。
-- **stdlib 索引**：`tools/pxc run tools/gen_ecosystem.px` → `docs/ecosystem_index.json`。
+- **stdlib 索引**：`tools/px run tools/gen_ecosystem.px` → `docs/ecosystem_index.json`。
 - 规范：`docs/spec.md`（§8 模块/import、§9 双模式、§12 AI 协议）· `docs/MINI_SUBSET.md`（子集边界）· 缺口与写库规范：`docs/ECOSYSTEM_GAPS.md`。
