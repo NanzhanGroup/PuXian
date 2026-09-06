@@ -1,8 +1,0 @@
-GET
-/
-Action=DescribeInstances&Limit=1&Nonce=11886&Offset=0&Region=ap-guangzhou&Timestamp=1551117345&Version=2017-03-12
-content-type:application/json; charset=utf-8
-host:cvm.tencentcloudapi.com
-
-content-type;host
-35e9c5e0e79ae38f8df6a5b003f9b3c0c5b1f9e8a7d6c5b4a3928170d6c5b4a3
