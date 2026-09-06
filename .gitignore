@@ -46,3 +46,4 @@ examples/m61_gfx/*.png
 *.px_test_tmp_*
 *.px_bench_tmp_*
 .rtcache/
+examples/m84_s2_hmac/artifacts/
