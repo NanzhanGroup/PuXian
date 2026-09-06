@@ -6,9 +6,9 @@
 
 ## [Unreleased]
 
-### M87 · px --version 对齐 go/python 单版本号 + 发布号 VERSION（qg-issue 26）
+### px --version 对齐 go/python 单版本号 + 发布号 VERSION（补丁 · 不占里程碑号 · 随下次发版携带）
 
-> 完成（2026-09-06，commit M87）：`px --version` 从 `px 0.1.0 (普贤 PuXian · selfhosted M-B9a)` 简化为**单版本号一行**（对齐 go `go1.26.6 linux/amd64` / python `3.9.25` 心智，应 m86 发版后用户追问简化）。
+> 完成（2026-09-06，commit 39e01bb，小改动不立项不单独发版）：`px --version` 从 `px 0.1.0 (普贤 PuXian · selfhosted M-B9a)` 简化为**单版本号一行**（对齐 go `go1.26.6 linux/amd64` / python `3.9.25` 心智，应 m86 发版后用户追问简化）。
 > - **用户可见版本 = 发布号**：发布包由 make_release.sh 从 git tag 生成 `VERSION`（如 `0.1.0-m86`）→ `px --version` 输出 `px 0.1.0-m86`（一眼可判新旧、与 dnf 包名 `0.1.0-1.m86` 对应）；源码仓直跑无 VERSION → 输出语义版 `px 0.1.0`。
 > - **M-B9a 归位内部**：自举内核血统标识不再出现在用户可见输出（保留 tools/px 注释 + compiler.px/interp.px 常量，供内部诊断；bootstrap 二进制版本串不动 → 自举/对拍零影响，无需重跑自举证明）。
 > - **机制（最小改动）**：tools/px 新增 RELEASE_VER（读 `$PXC_HOME/VERSION`，缺失退 SELFHOST_VER，--version 与 usage 头部统一）；make_release.sh 打包生成 `VERSION`（`${TVER:-${VER}-${MILESTONE}}`）；packaging/puxian.spec %install 收录 VERSION。
