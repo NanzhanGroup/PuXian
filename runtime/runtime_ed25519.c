@@ -24,6 +24,12 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+// M83-S3 扩展 crypto_sign_seed_keypair 的显式声明（tweetnacl.h 保持上游逐字节不变，不注入；
+// C99+ 禁止隐式函数声明 —— gcc 仅警告故 x86_64 主链通过，clang/交叉（zig cc -target *-musl）按
+// 错误处理导致 CI 多架构预编译失败；定义见 tweetnacl.c 内「M83-S3 扩展」注释，签名与官方
+// crypto_sign_keypair 一致：pk[32] + sk[64]=seed(32)||pub(32)）
+extern int crypto_sign_seed_keypair(unsigned char *pk, unsigned char *sk);
+
 // ---- randombytes：tweetnacl 引用（crypto_sign_keypair/crypto_box_keypair 需要，
 //      M83-S3 只暴露显式 seed 入口不调用，但整 .o 链接必须有定义）----
 void randombytes(unsigned char* x, unsigned long long xlen) {
