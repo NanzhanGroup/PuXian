@@ -74,6 +74,9 @@ pxc $(echo "$SELFHOST_VER") (普贤 PuXian · selfhosted $SELFHOST_MILESTONE)
                                                                   armv7|riscv64|x86_64-windows，自动折叠 cc/
                                                                   mbedtls-lib/sqlite-obj/zlib-lib/
                                                                   --no-quic（显式 flag 优先）
+                                                 --min           最小化 profile（M85-S2）：聚合 --no-quic +
+                                                                  sqlite/ws/zip/xml/aes/rsa/ed25519/route/zlib/h2
+                                                                  全裁，服务端/CLI 纯核心态 ~2.7M（9.0M 基线）
                                                  --no-quic       去掉 QUIC/H3（-DPX_NO_QUIC，
                                                                   不链 ngtcp2/openssl）
                                                  --no-sqlite     模块裁剪（M85-S1，各开关正交可组合）：去掉
@@ -307,6 +310,7 @@ cmd_build() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --no-quic) no_quic=1; no_quic_set=1; shift ;;
+            --min) no_quic=1; no_quic_set=1; mods="$mods sqlite ws zip xml aes rsa ed25519 route zlib h2"; shift ;;
             --no-sqlite) mods="$mods sqlite"; shift ;;
             --no-ws) mods="$mods ws"; shift ;;
             --no-zip) mods="$mods zip"; shift ;;

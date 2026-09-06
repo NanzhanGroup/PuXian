@@ -1033,6 +1033,7 @@ close(fb)
   ——LD_PRELOAD mock 因 pxc 产物静态链接不可行，改内核自带用户态可访问设备走**同一胶水路径**，验证力度更强。
 - **交叉编译与裁剪（S4）**：`pxc build --no-quic [--cc <交叉CC>] [--mbedtls-lib <dir>] [--sqlite-obj <file>]`
   —— ngtcp2/openssl-quictls 无 aarch64 预编译且交叉成本高 → 裁剪（PX_NO_QUIC 条件编译 7 处）；
+  > M85-S1（2026-09-06）泛化：`pxc build` 模块开关集 `--no-sqlite/--no-ws/--no-zip/--no-xml/--no-aes/--no-rsa/--no-ed25519/--no-route/--no-zlib/--no-h2`（与 `--no-quic` 正交可组合，`--min` 聚合）—— runtime.c 注册/调用段 14 处 `#ifndef PX_NO_<MOD>` 包裹 + 链接去 sqlite3.o/libz.a + 缓存 key 纳开关集；产物 9.0M→2.7M；裁剪态缺 native → 运行时未定义（R1001 口径）。详见 tools/pxc usage 与 docs/M85_PLAN.md。
   mbedtls/sqlite 纯 C 交叉保留（tools/cross_aarch64.sh，mbedtls 3.6.2 + sqlite3 交叉入库）；
   musl 兼容 5 点（execinfo 条件包含 / GC `__aarch64__` 寄存器扫描分支 / getcontext→内联汇编 SP+setjmp
   spill / close_range→循环关闭）；qemu-aarch64 静态产物设备层 ioctl 与 x86 结果一致

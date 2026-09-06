@@ -3,6 +3,7 @@
 > **给 AI 的一句话**：把本文件 + [`docs/ECOSYSTEM.md`](ECOSYSTEM.md) 整包喂进上下文，即可写出**语法正确、native/库调用正确**的 PuXian（普贤）`.px` 程序。生成后务必用 `tools/pxc run <f>.px` 验证；编译模式 `tools/pxc build <f>.px`。
 > 版本基线：M69（2026-09-05）· 双模式（编译 pxc build / 解释 pxi run）行为一致（M68 起 native 零 extern def 可达）。
 > 工具链（M71，2026-09-06）：`pxc build` 已增量缓存（**二次 build ≈0.4–0.9s**）+ `--target <arch>` 交叉；`pxc mcp` 含 **build** 工具（AI 一条 MCP 写→验→交付）；安装 `tools/install.sh`（sha256 自动校验 + argv0 自发现，装完任意目录免 PX_STDLIB）。重文本/大文件处理：pxc build 编译版毫秒级 ≈ grep（ECOSYSTEM_GAPS F4 M71 更正）。
+> M85（2026-09-06）：`pxc build` 模块裁剪开关集 —— `--no-sqlite`/`--no-ws`/`--no-zip`/`--no-xml`/`--no-aes`/`--no-rsa`/`--no-ed25519`/`--no-route`/`--no-zlib`/`--no-h2` 与 `--no-quic` 正交可任意组合，`--min` 聚合为最小化 profile；产物 9.0M → 2.7M（−70%，默认不传 flag 全能力零漂移）；裁剪态调用缺的 native → 运行时明确报错（R1001，与裁剪编译产物一致）。
 
 ---
 

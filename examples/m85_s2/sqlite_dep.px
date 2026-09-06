@@ -1,0 +1,3 @@
+def main():
+    r = sqlite_open(":memory:")
+    print("sqlite r=", r)
