@@ -6,6 +6,19 @@
 
 ## [Unreleased]
 
+### M85 立项 · pxc build 编译产物按需裁剪（qg-issue 24 · 方案 B 细粒度模块开关）
+
+> 立项（2026-09-06）：用户提问「编译产物都在 9M 以上，能去掉未使用模块吗」→ 真机实测 hello.px
+> 默认 build **9,010,184 B** / `--no-quic` **3,929,808 B**（−56%）→ 源码级解剖定位根因：tools/pxc
+> （bash 装配器）无条件全链 runtime 全部 .o + sqlite3.o + mbedtls 三 .a + libz.a，且 runtime.c
+> `px_register_builtins()`（L5313）集中注册使 ld 无法丢弃未用 .o → 新建 qg-issue **24** 并立项
+> **M85 = 方案 B 细粒度模块开关**：把 PX_NO_QUIC（M57-S4）单开关模式泛化为模块开关集
+> （--no-sqlite/--no-ws/--no-tls/--no-zip/--no-xml/--no-aes/--no-rsa/--no-ed25519/--no-route 等，
+> 与 --no-quic 正交可组合）+ runtime.c 各模块注册段 #ifndef PX_NO_\<MOD\> 包裹 + tools/pxc
+> 链接/缓存 key 按开关集裁剪；目标产物 9.0M→**2~4M**，默认全能力 build 行为零漂移；
+> 方案 C（--gc-sections 自动死代码裁剪）二期评估不承诺。执行规划 `docs/M85_PLAN.md`（S1→S3）。
+> 不改语言语法/现有 native 语义；native 总数 **301** 不变。
+
 ### M84-S4 · 收口：重链 bootstrap/pxi + 全量回归 + qg-issue 21/22/23 归档（tag v0.1.0-m84）
 
 > 收口（2026-09-06）：M83-S2…M84-S3 的 runtime 变更（AES-ECB/gzip 暴露/ed25519/RSA-PKCS1v15/http_stream/CT 修复/hmac_sha256/dns_lookup）此前均未重链解释器 → 本批重链 **bootstrap/pxi**（9,425,360 → 9,457,456 字节，git 提交新 ELF）——pxi 解释模式现可调 M83/M84 全部新 native。
