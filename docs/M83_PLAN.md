@@ -63,7 +63,7 @@
 - **S1 · Issue 16**（runtime.c http_conn_worker + px_unicode_len/bi_contains）：服务端 body 动态缓冲（xmalloc 跟 content_length，上限默认 256MB、PX_HTTP_BODY_MAX 可配、超限 413）+ len() 尊重 str.len（px_unicode_len_n 字节边界）+ contains memmem 语义（NUL 保真）。native 288（不改数）。**✅ 已交付**（examples/m83_s1 verify 6/6 + m82 回归 8/8）。
 - **S2 · Issue 20-L0 三件（✅ 已交付 2026-09-06）**：`aes_encrypt_ecb/aes_decrypt_ecb` + `aes_encrypt_ecb_bytes/aes_decrypt_ecb_bytes`（runtime_aes.c，PKCS7；hex 版供文本互通对拍、bytes 版供微信媒体二进制——微信网关 AES-128-ECB 加解密媒体文件为二进制，hex 版 aes_decrypt_ecb 的 utf8 校验会拒非 UTF-8，故按 aes_gcm/aes_cbc 家族惯例同时提供 bytes 版）；`gzip_compress/gzip_uncompress`（runtime.c 包 px_gzip_*）；`os_spawn` 可选 group 参数（setpgid）。native +6 → 294。
 - **S3 · Issue 17 ed25519（✅ 已交付 2026-09-06）**：引入 tweetnacl-20140427（public domain，runtime/tweetnacl.c 逐字节上游 + 唯一扩展 crypto_sign_seed_keypair）→ `ed25519_sign(priv, msg)` / `ed25519_verify(pub, msg, sig)`（runtime_ed25519.c wrapper；hex 或 PEM 入参，PEM 走内部 PKCS8/PKIX 小 DER 解析）。与 Go crypto/ed25519 双向互通全绿（同 seed 同 msg 签名逐字节一致）。native +2 → 296。
-- **S4 · Issue 18 RSA 标准签名**（runtime_rsa.c）：`rsa_sign_pkcs1v15_sha256(pem_priv, msg)` / `rsa_verify_pkcs1v15_sha256(pem_pub, msg, sig_hex)`（mbedtls pk_parse_key/pk_sign 带 MD_SHA256 自动 DigestInfo；支持 PKCS8/PKCS1/RSA PUBLIC KEY/PUBLIC KEY）；旧 rsa_sign/rsa_verify 裸 type1 **原样保留**。native +2 → 298。
+- **S4 · Issue 18 RSA 标准签名（✅ 已交付 2026-09-06）**（runtime_rsa.c）：`rsa_sign_pkcs1v15_sha256(pem_priv, msg)` / `rsa_verify_pkcs1v15_sha256(pem_pub, msg, sig_hex)`（mbedtls pk_parse_key/pk_sign 带 MD_SHA256 自动 DigestInfo；支持 PKCS8/PKCS1/RSA PUBLIC KEY/PUBLIC KEY）；旧 rsa_sign/rsa_verify 裸 type1 **原样保留**。native +2 → 298。与 Go/openssl 双向互通全绿（px 用 Go PKCS8/PKCS1 私钥 PEM 签 → Go VerifyPKCS1v15 true + openssl dgst -sha256 -verify Verified OK；px 验 Go 签 true；PKCS8==PKCS1 签一致；2000B 超长 msg 过）。
 - **S5 · Issue 20-L1 stdlib 四库**：std.html / std.cookiejar / std.multipart / std.smtp（纯 .px 入库 stdlib/ 随发布包分发）。
 - **S6 · Issue 19 SSE 同端口 + 收口**：`http_stream(path, on_connect)` native（runtime.c，+1 → **299**）+ http_conn_worker 流式分支（复用 g_sse_clients/sse_send/sse_close）；随后全量重建链 + 回归总闸 + 文档 + qg-issue 16/17/18/19/20 归档 + tag v0.1.0-m83。
   - （SSE 放 S6 因其是 http 面最大改动，与前 5 批各自独立提交后再上，风险隔离；S6 = SSE + 收口，若 SSE 超预期可先发 m83a 再 m83b，执行期临机。）
@@ -110,7 +110,10 @@
 - **PEM 解析**：ed25519 的 PKCS8（OID 1.3.101.112）与 SPKI 结构固定 → 内部小解析（base64 解码 + 通用 DER TLV 走查，der_tlv/der_skip 短/长格式均支持）；RSA PEM 走 mbedtls pk_parse（S4），两族不共享复杂 DER 层（各自最简）。
 - 验证（examples/m83_s3_ed25519，**与 Go 互通对拍全绿**）：Go 生成 keypair → export PKCS8 PEM + SPKI PEM + seed/sk64 hex + msg（文本+二进制含 NUL）→ px `ed25519_verify(pem_pub/hex_pub, msg, go_sig)` true（错 pub/篡改 msg/坏 sig false）；px 用 **PKCS8 PEM / seed / sk64 三路签 == Go 签逐字节一致**（RFC8032 确定性 + 格式等价双重证明）；px 签文本+二进制 → Go `ed25519.Verify` 均 true；公钥当私钥签 null / 私钥当公钥验 false 边界。
 
-### S4 · Issue 18：RSA PKCS1v15-SHA256 + PEM（runtime_rsa.c 扩展，native +2 → 298）
+### S4 · Issue 18：RSA PKCS1v15-SHA256 + PEM（runtime_rsa.c 扩展，native +2 → 298）✅ 已交付
+> 2026-09-06 完成：examples/m83_s4 verify 全绿（Go 互通 + openssl 第三方交叉验 Verified OK）。
+> mbedtls pk_parse 走现成 API；PKCS8/PKCS1 私钥签出同一签名（确定性）；2000B 超长 msg 无长度限制；
+> 回归 m83_s1/s2/s3 + m82 全绿。native 296→298。
 - 新增：
   - `rsa_sign_pkcs1v15_sha256(pem_priv, msg) → sig_hex | null`：pem_priv 收 PEM 文本（`-----BEGIN (RSA )?PRIVATE KEY-----`，mbedtls `pk_parse_key` 自动 PKCS8/PKCS1）→ `pk_sign(MBEDTLS_MD_SHA256, ...)`（自动 sha256 + DigestInfo + PKCS1v15）→ hex。
   - `rsa_verify_pkcs1v15_sha256(pem_pub, msg, sig_hex) → bool`：pem_pub 收 PEM 公钥（`RSA PUBLIC KEY`/`PUBLIC KEY`，pk_parse_public_key）→ pk_verify MD_SHA256。

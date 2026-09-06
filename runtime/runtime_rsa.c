@@ -4,9 +4,17 @@
 // - rsa_decrypt(ct_hex, n, d) → 明文 str | null（type 2 解码，含 padding 校验）
 // - rsa_sign(data, n, d) → hex 签名 | null（type 1，直接签数据不包 DigestInfo）
 // - rsa_verify(data, sig_hex, n, e) → bool
+// M83-S4（Issue 18 GAP-RSA-1，2026-09-06）：
+// - rsa_sign_pkcs1v15_sha256(pem_priv, msg) → sig_hex | null（PEM 私钥 PKCS8/PKCS1，mbedtls pk_parse_key 自动识别；
+//   SHA256+DigestInfo 自动封装 = 标准 PKCS#1 v1.5 签名，与 Go rsa.SignPKCS1v15(crypto.SHA256) 互通；msg str|bytes 二进制安全）
+// - rsa_verify_pkcs1v15_sha256(pem_pub, msg, sig_hex) → bool（PEM 公钥 RSA PUBLIC KEY/PUBLIC KEY，pk_parse_public_key）
+//   旧 rsa_sign/rsa_verify（裸 type1 + n/e hex）原样保留，零回归
 #include "runtime.h"
 #include "mbedtls/rsa.h"
 #include "mbedtls/bignum.h"
+#include "mbedtls/pk.h"
+#include "mbedtls/md.h"
+#include "mbedtls/sha256.h"
 #include <string.h>
 #include <stdlib.h>
 #include <fcntl.h>
@@ -272,6 +280,104 @@ LXValue bi_rsa_verify(LXValue* args, int nargs, void* ctx) {
                                       (unsigned int)dlen, (const unsigned char*)data, sb) == 0;
     }
     mbedtls_rsa_free(&rsa);
+    free(sb);
+    return px_bool(ok);
+}
+
+// ---- M83-S4（Issue 18 GAP-RSA-1）：PKCS1v15-SHA256 标准签名 + PEM 入参 ----
+// 取消息字节（str|bytes 二进制安全，对齐 ed25519 的 e_bytes 模式）
+static const char* rsa_msg(LXValue v, int* len) {
+    if (v.type == PX_STR || v.type == PX_BYTES) {
+        *len = v.as.obj->as.str.len;
+        return v.as.obj->as.str.data;
+    }
+    px_error("期望字符串或 bytes，实际是 %s", px_type_name(v));
+    return NULL;
+}
+
+// PEM 文本 → NUL 结尾缓冲（mbedtls pk_parse 要求 null-terminated + keylen=strlen+1；malloc 调用方 free）
+static char* rsa_pem_copy(const char* pem, int len) {
+    char* p = (char*)malloc((size_t)len + 1);
+    if (!p) return NULL;
+    memcpy(p, pem, (size_t)len);
+    p[len] = '\0';
+    return p;
+}
+
+// rsa_sign_pkcs1v15_sha256(pem_priv, msg) → sig_hex | null
+//   pem_priv: PEM 私钥文本（BEGIN PRIVATE KEY=PKCS8 / BEGIN RSA PRIVATE KEY=PKCS1，pk_parse_key 自动识别；
+//             不支持加密 PEM，私钥应走环境变量明文 PEM 传递 [SECURITY]）
+//   msg: str|bytes（二进制安全，全量 sha256，无长度限制）
+//   输出: 标准 PKCS#1 v1.5-SHA256（DigestInfo 由 mbedtls 自动封装，与 Go rsa.SignPKCS1v15(crypto.SHA256) 互通）
+LXValue bi_rsa_sign_pkcs1v15_sha256(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) px_error("rsa_sign_pkcs1v15_sha256 需要 2 个参数: (pem_priv, msg)");
+    const char* pem = rsa_str(args[0]);
+    int pemlen = rsa_strlen(args[0]);
+    int mlen = 0;
+    const char* msg = rsa_msg(args[1], &mlen);
+    char* pemz = rsa_pem_copy(pem, pemlen);
+    if (!pemz) return px_null();
+    mbedtls_pk_context pk;
+    mbedtls_pk_init(&pk);
+    int rc = mbedtls_pk_parse_key(&pk, (const unsigned char*)pemz, (size_t)pemlen + 1,
+                                  NULL, 0, px_rng, NULL);
+    free(pemz);
+    if (rc != 0 || !mbedtls_pk_can_do(&pk, MBEDTLS_PK_RSA)) {
+        mbedtls_pk_free(&pk);
+        return px_null();
+    }
+    unsigned char digest[32];
+    mbedtls_sha256((const unsigned char*)msg, (size_t)mlen, digest, 0);
+    size_t k = ((size_t)mbedtls_pk_get_bitlen(&pk) + 7) / 8;
+    unsigned char* sig = (unsigned char*)malloc(k ? k : 1);
+    if (!sig) { mbedtls_pk_free(&pk); return px_null(); }
+    size_t siglen = 0;
+    rc = mbedtls_pk_sign(&pk, MBEDTLS_MD_SHA256, digest, sizeof(digest),
+                         sig, k, &siglen, px_rng, NULL);
+    mbedtls_pk_free(&pk);
+    if (rc != 0 || siglen == 0) { free(sig); return px_null(); }
+    char* hex = rsa_hex(sig, (int)siglen);
+    free(sig);
+    LXValue v = hex ? px_str(hex) : px_null();
+    free(hex);
+    return v;
+}
+
+// rsa_verify_pkcs1v15_sha256(pem_pub, msg, sig_hex) → bool
+//   pem_pub: PEM 公钥文本（BEGIN RSA PUBLIC KEY=PKCS1 / BEGIN PUBLIC KEY=SPKI，pk_parse_public_key 自动识别）
+LXValue bi_rsa_verify_pkcs1v15_sha256(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 3) px_error("rsa_verify_pkcs1v15_sha256 需要 3 个参数: (pem_pub, msg, sig_hex)");
+    const char* pem = rsa_str(args[0]);
+    int pemlen = rsa_strlen(args[0]);
+    int mlen = 0;
+    const char* msg = rsa_msg(args[1], &mlen);
+    const char* sig_hex = rsa_str(args[2]);
+    int siglen = rsa_strlen(args[2]);
+    int sblen = 0;
+    unsigned char* sb = rsa_unhex(sig_hex, siglen, &sblen);
+    if (!sb) return px_bool(false);
+    char* pemz = rsa_pem_copy(pem, pemlen);
+    if (!pemz) { free(sb); return px_bool(false); }
+    mbedtls_pk_context pk;
+    mbedtls_pk_init(&pk);
+    int rc = mbedtls_pk_parse_public_key(&pk, (const unsigned char*)pemz, (size_t)pemlen + 1);
+    free(pemz);
+    if (rc != 0 || !mbedtls_pk_can_do(&pk, MBEDTLS_PK_RSA)) {
+        mbedtls_pk_free(&pk);
+        free(sb);
+        return px_bool(false);
+    }
+    unsigned char digest[32];
+    mbedtls_sha256((const unsigned char*)msg, (size_t)mlen, digest, 0);
+    size_t k = ((size_t)mbedtls_pk_get_bitlen(&pk) + 7) / 8;
+    bool ok = false;
+    if ((size_t)sblen == k) {
+        ok = mbedtls_pk_verify(&pk, MBEDTLS_MD_SHA256, digest, sizeof(digest),
+                               sb, (size_t)sblen) == 0;
+    }
+    mbedtls_pk_free(&pk);
     free(sb);
     return px_bool(ok);
 }

@@ -21,6 +21,8 @@ examples/m69_registry/registry_empty/
 
 # M83-S3 互通对拍 Go 生成物（verify.sh 每次重建）
 examples/m83_s3_ed25519/artifacts/
+# M83-S4 互通对拍 Go/openssl 生成物（verify.sh 每次重建；含私钥 PEM 不可入库）
+examples/m83_s4/artifacts/
 
 # 备份文件
 *.bak

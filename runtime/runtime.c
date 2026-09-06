@@ -5539,6 +5539,10 @@ void px_register_builtins(void) {
     //   —— api-server /v1/family 节点互信 + ws-ddns 双向签名（与 Go crypto/ed25519 互通）
     px_set_global("ed25519_sign", px_native("ed25519_sign", bi_ed25519_sign));
     px_set_global("ed25519_verify", px_native("ed25519_verify", bi_ed25519_verify));
+    // M83-S4（Issue 18 GAP-RSA-1）：RSA PKCS1v15-SHA256 标准签名（PEM 入参，DigestInfo 自动封装）
+    //   —— ws-pay 商户签名 + agentmail DKIM rsa-sha256（与 Go rsa.SignPKCS1v15/VerifyPKCS1v15 互通）
+    px_set_global("rsa_sign_pkcs1v15_sha256", px_native("rsa_sign_pkcs1v15_sha256", bi_rsa_sign_pkcs1v15_sha256));
+    px_set_global("rsa_verify_pkcs1v15_sha256", px_native("rsa_verify_pkcs1v15_sha256", bi_rsa_verify_pkcs1v15_sha256));
     // M23b P1：二进制安全字节串（bytes 类型；带长度，可含 NUL）
     px_set_global("bytes", px_native("bytes", bi_bytes));
     px_set_global("bytes_len", px_native("bytes_len", bi_bytes_len));

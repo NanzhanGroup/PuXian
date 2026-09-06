@@ -1,0 +1,59 @@
+# M83-S4 (Issue 18 GAP-RSA-1) RSA 标准签名专项验证：PKCS1v15-SHA256 + PEM ↔ Go rsa.SignPKCS1v15 双向互通
+# 依赖 artifacts/（verify.sh 用 Go 生成）+ bootstrap 编译的 s4_verify
+# 全部断言通过打印 M83-S4-VERIFY-OK 并 exit 0；任一失败 assert 中止
+def main():
+    # ---- 读 Go 生成的 artifacts ----
+    priv8    = bytes_to_str(read_bytes("artifacts/pkcs8.pem"))       # BEGIN PRIVATE KEY
+    priv1    = bytes_to_str(read_bytes("artifacts/pk1.pem"))         # BEGIN RSA PRIVATE KEY
+    pub_spki = bytes_to_str(read_bytes("artifacts/pub_spki.pem"))    # BEGIN PUBLIC KEY
+    pub_pk1  = bytes_to_str(read_bytes("artifacts/pub_pkcs1.pem"))   # BEGIN RSA PUBLIC KEY
+    msg      = bytes_to_str(read_bytes("artifacts/msg.txt"))
+    go_sig   = bytes_to_str(read_bytes("artifacts/go.sig.hex"))
+    bmsg     = read_bytes("artifacts/binmsg.bin")
+    go_bin_sig = bytes_to_str(read_bytes("artifacts/go_bin.sig.hex"))
+    assert(priv8 != null and priv1 != null and pub_spki != null and pub_pk1 != null)
+    assert(msg != null and go_sig != null and bmsg != null and go_bin_sig != null)
+    assert(len(go_sig) == 512 and len(go_bin_sig) == 512, "2048bit sig = 512 hex")
+    print("S0-artifacts OK")
+
+    # ---- 1) PKCS8 与 PKCS1 私钥签出同一签名（同钥同 msg，PKCS1v15 确定性）----
+    s8 = rsa_sign_pkcs1v15_sha256(priv8, msg)
+    s1 = rsa_sign_pkcs1v15_sha256(priv1, msg)
+    assert(s8 != null and s1 != null, "sign PKCS8/PKCS1 非 null")
+    assert(s8 == s1, "PKCS8 与 PKCS1 签一致")
+    assert(len(s8) == 512, "2048bit sig = 512 hex")
+    print("S1-pkcs8-eq-pkcs1 OK")
+
+    # ---- 2) px 验 Go 签名（SPKI / PKCS1 公钥 × 文本 / 二进制 msg）----
+    assert(rsa_verify_pkcs1v15_sha256(pub_spki, msg, go_sig) == true, "SPKI 验 Go 文本签")
+    assert(rsa_verify_pkcs1v15_sha256(pub_pk1,  msg, go_sig) == true, "PKCS1 公钥验 Go 文本签")
+    assert(rsa_verify_pkcs1v15_sha256(pub_spki, bmsg, go_bin_sig) == true, "SPKI 验 Go 二进制签")
+    assert(rsa_verify_pkcs1v15_sha256(pub_pk1,  bmsg, go_bin_sig) == true, "PKCS1 公钥验 Go 二进制签")
+    print("S2-px-verify-go-sig OK")
+
+    # ---- 3) px 签（PKCS8 路径）落盘 → verify.sh 让 Go/openssl 反向验 ----
+    sb_bin = rsa_sign_pkcs1v15_sha256(priv8, bmsg)
+    assert(sb_bin != null and len(sb_bin) == 512)
+    okw = write_bytes("artifacts/px.sig.hex", bytes(s8))
+    okw2 = write_bytes("artifacts/px_bin.sig.hex", bytes(sb_bin))
+    assert(okw != null and okw2 != null)
+    print("S3-px-sig-written OK")
+
+    # ---- 4) 超长 msg（远大于 k-11，自动 sha256 无长度限制）----
+    long_msg = "A" * 2000
+    sl = rsa_sign_pkcs1v15_sha256(priv8, long_msg)
+    assert(sl != null and len(sl) == 512, "2000B msg 可签")
+    assert(rsa_verify_pkcs1v15_sha256(pub_spki, long_msg, sl) == true, "2000B msg 验签")
+    print("S4-long-msg OK")
+
+    # ---- 5) 反例矩阵：篡改 / 错钥 / 坏 sig / 格式边界 ----
+    assert(rsa_verify_pkcs1v15_sha256(pub_spki, msg + "x", go_sig) == false, "篡改 msg false")
+    assert(rsa_verify_pkcs1v15_sha256(pub_spki, msg, "00" * 512) == false, "坏 sig false")
+    assert(rsa_verify_pkcs1v15_sha256(pub_pk1, msg, "ff" * 512) == false, "坏 sig2 false")
+    assert(rsa_sign_pkcs1v15_sha256(pub_spki, msg) == null, "公钥当私钥签 null")
+    assert(rsa_verify_pkcs1v15_sha256(priv8, msg, go_sig) == false, "私钥当公钥验 false")
+    assert(rsa_verify_pkcs1v15_sha256(pub_spki, msg, "abcd") == false, "sig 非 hex false")
+    assert(rsa_sign_pkcs1v15_sha256("-----BEGIN EC PRIVATE KEY-----\nabc\n-----END EC PRIVATE KEY-----", msg) == null, "非 RSA key null")
+    print("S5-negative OK")
+
+    print("M83-S4-VERIFY-OK")
