@@ -6,6 +6,34 @@
 
 ## [Unreleased]
 
+### M83-S2 · AES-ECB + gzip 语言层通用暴露 + os_spawn setpgid（qg-issue 20-L0，GAP-AES-1 / GAP-ARC-1 / GAP-PGID-1）✅
+
+> 立项（2026-09-06）：M83 分六批实现 qg-issue 除挂起 W1b 外全量，S2 = Issue 20 **L0 三件**——
+> AES-ECB（微信网关媒体全链路 AES-128-ECB，iLink 协议硬规定、无优雅绕过）、gzip 语言层通用
+> 压缩/解压（runtime 内部 px_gzip_* 早已实现只差暴露，zlib 已链）、os_spawn 独立进程组
+> （supervisor 停服需 kill(-pgid) 连孙进程一起清）。native 288→**294**（+6）。纯新增/参数增强，
+> 零删除；Linux 基线 m82 全绿保持。
+
+- **S2-1 AES-ECB 四形态（GAP-AES-1）**：runtime_aes.c 新增 `aes_encrypt_ecb(data,key)→hex` /
+  `aes_decrypt_ecb(hex,key)→str|null`（PKCS7、key 16/24/32→128/192/256、无 IV）+ bytes 版
+  `aes_encrypt_ecb_bytes` / `aes_decrypt_ecb_bytes`（微信媒体为**任意二进制**，hex 版 utf8 校验
+  会拒非 UTF-8 → bytes 版无 utf8 校验，对齐 aes_gcm_*_bytes 家族）；mbedtls_aes_crypt_ecb
+  逐 16B 块实现（aes_ecb_crypt 内部循环），与 Go crypto/aes NewCipher / openssl enc -aes-128-ecb
+  PKCS7 逐字节互通。
+- **S2-2 gzip 语言层暴露（GAP-ARC-1）**：注册 `gzip_compress(data)→bytes` /
+  `gzip_uncompress(gz)→bytes|null`（包 runtime.c 既存 px_gzip_compress/decompress，标准 gzip 容器
+  1F 8B 头 + raw deflate + CRC32 + ISIZE，与系统 gzip / Go compress/gzip 互通）；输入兼容
+  str|bytes（bdata/blen 含 NUL 不截断），解压失败（非 gzip/截断/损坏）返回 null。
+- **S2-3 os_spawn 独立进程组（GAP-PGID-1）**：os_spawn 增可选第 3 参 `group:bool`（默认 false
+  保持现状）→ fork 后子进程 `setpgid(0,0)` 自成组；配合既有 `os_kill(pid, sig, true)` 组杀
+  （kill(-pid)），supervisor 停服可连孙进程/daemonize 残留一起清。
+- **S2-4 验证 examples/m83_s2_archive_gaps/**：s2_verify.px + verify.sh 全绿——① AES-128-ECB hex
+  与 openssl enc -aes-128-ecb -K 逐字节一致（同 PKCS7）② AES-ECB-256 bytes round-trip（任意
+  二进制含 NUL）③ 空串→PKCS7 整块 16B 边界 ④ px gzip → 系统 gzip -dc 解回原文 ⑤ 系统 gzip -9
+  → px gzip_uncompress 解回 ⑥ gzip 二进制（含 NUL）双向互通 ⑦ os_spawn group=true →
+  os_kill(pid,9,true) 组杀成功（rc=137=128+9）⑧ smoke：hex/bytes round-trip + gzip round-trip
+  全断言。回归：m82_http_serve_unix 8 项 + m83_s1 6 组 + rsa/bytes/p7 双模式全绿。
+
 ### M83-S1 · 服务端 body 动态化（64KB→可配+413）+ len()/contains() NUL 一致化（qg-issue 16，GAP-SRV-2 / GAP-STR-1-B1）✅
 
 > 立项（2026-09-06）：M83 分六批实现 qg-issue 除挂起 W1b 外全量，S1 = Issue 16（http_serve 服务端

@@ -246,6 +246,13 @@ LXValue bi_aes_encrypt_bytes(LXValue* args, int nargs, void* ctx);
 LXValue bi_aes_decrypt_bytes(LXValue* args, int nargs, void* ctx);
 LXValue bi_aes_gcm_encrypt_bytes(LXValue* args, int nargs, void* ctx);
 LXValue bi_aes_gcm_decrypt_bytes(LXValue* args, int nargs, void* ctx);
+// M83-S2（Issue 20 GAP-AES-1）：AES-ECB（PKCS7，无 IV）——hex 版（aes_encrypt_ecb/aes_decrypt_ecb）
+//   供文本互通场景（与 Go crypto/aes NewCipher 块加密逐字节一致，openssl enc -aes-128-ecb 可对拍）；
+//   微信网关媒体全链路 AES-128-ECB 二进制（CDN 下载→ECB 解密→上传）走 _bytes 版。
+LXValue bi_aes_encrypt_ecb(LXValue* args, int nargs, void* ctx);
+LXValue bi_aes_decrypt_ecb(LXValue* args, int nargs, void* ctx);
+LXValue bi_aes_encrypt_ecb_bytes(LXValue* args, int nargs, void* ctx);
+LXValue bi_aes_decrypt_ecb_bytes(LXValue* args, int nargs, void* ctx);
 LXValue bi_xml_parse(LXValue* args, int nargs, void* ctx);
 LXValue bi_xml_escape(LXValue* args, int nargs, void* ctx);
 LXValue bi_xml_unescape(LXValue* args, int nargs, void* ctx);

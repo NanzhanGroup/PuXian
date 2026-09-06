@@ -1,0 +1,59 @@
+# M83-S2 verify：AES-ECB / gzip 与 openssl+系统 gzip 互通对拍、os_spawn group 组杀
+# 由 verify.sh 调用；本程序输出互通判定所需值 + 落盘文件供 shell 交叉验证
+
+def main():
+    # ---- 1. AES-128-ECB hex 互通向量（与 openssl enc -aes-128-ecb 对拍）----
+    key = "0123456789abcdef"            # 16B ASCII → hex 30313233343536373839616263646566
+    msg = "hello-ecb-puxian"
+    ct = aes_encrypt_ecb(msg, key)
+    assert(ct != null)
+    print("CT=" + ct)                   # shell 与 openssl 输出比对
+
+    # ---- 2. AES-ECB bytes（AES-256）round-trip（smoke 已测 128；这里 256 + 空串边界）----
+    key256 = "0123456789abcdef0123456789abcdef"
+    raw = base64_to_bytes("AP//w5r7sAABAQ==")   # 任意二进制
+    ctb = aes_encrypt_ecb_bytes(raw, key256)
+    ptb = aes_decrypt_ecb_bytes(ctb, key256)
+    assert(ptb != null and bytes_to_hex(ptb) == bytes_to_hex(raw))
+    # 空串加密 → 仍应有 PKCS7 整块（16B），解密回空
+    ct0 = aes_encrypt_ecb_bytes(bytes(""), key256)
+    assert(ct0 != null and bytes_len(ct0) == 16)
+    assert(bytes_len(aes_decrypt_ecb_bytes(ct0, key256)) == 0)
+    print("AES-ECB-256-bytes-OK")
+
+    # ---- 3. gzip：px 压缩 → 落盘（shell 用系统 gzip -dc 交叉解）----
+    plain = "gzip 互通验证 payload 中文 123\n第二行数据 line2\n"
+    gz = gzip_compress(plain)
+    assert(gz != null)
+    write_bytes("/tmp/m83s2_px.gz", gz)
+    # px 解自身压缩 → 原文
+    assert(bytes_to_str(gzip_uncompress(gz)) == plain)
+    print("GZIP-PX-OK")
+
+    # ---- 4. gzip：读系统 gzip -9 压缩文件（shell 预生成 /tmp/m83s2_sys.gz）→ px 解压 ---- 
+    sys_gz = read_bytes("/tmp/m83s2_sys.gz")
+    assert(sys_gz != null)
+    out = gzip_uncompress(sys_gz)
+    assert(out != null and bytes_to_str(out) == plain, "系统 gzip → px 解压互通")
+    print("GZIP-SYS-OK")
+
+    # ---- 5. gzip 二进制（含 NUL）与系统 gzip 互通 ----
+    bindata = read_bytes("/tmp/m83s2_bin.bin")   # shell 预生成二进制（与 gzip 交叉一致）
+    assert(bindata != null)
+    gzb = gzip_compress(bindata)
+    write_bytes("/tmp/m83s2_pxbin.gz", gzb)
+    assert(bytes_to_hex(gzip_uncompress(gzb)) == bytes_to_hex(bindata))
+    sysbin = read_bytes("/tmp/m83s2_sysbin.gz")
+    assert(sysbin != null and bytes_to_hex(gzip_uncompress(sysbin)) == bytes_to_hex(bindata))
+    print("GZIP-BIN-OK")
+
+    # ---- 6. os_spawn group=true：子进程自成组 → os_kill(pid, 9, true) 组杀 ----
+    pid = os_spawn("/bin/sh", ["-c", "sleep 30"], true)
+    assert(pid > 0)
+    sleep_us(300000)
+    # 组杀 SIGKILL → 应成功（sleep 被终止）
+    okk = os_kill(pid, 9, true)
+    assert(okk == true)
+    rc = os_wait(pid)          # 应回收（128+9=137 或正常退出码）
+    print("SPAWN-GROUP-OK rc=" + str(rc))
+    exit(0)
