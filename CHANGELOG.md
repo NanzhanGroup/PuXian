@@ -6,6 +6,27 @@
 
 ## [Unreleased]
 
+### M83-S4 · RSA PKCS1v15-SHA256 标准签名 + PEM 入参 native（qg-issue 18，GAP-RSA-1）✅
+
+> 立项（2026-09-06）：M83-S4 = Issue 18 —— `rsa_sign/rsa_verify` 裸 type1（MBEDTLS_MD_NONE 无 DigestInfo）
+> + 只收 hex 模数/指数，不满足 ws-pay 商户签名 / agentmail DKIM rsa-sha256 硬契约（微信/支付宝服务端验签
+> 要求标准 PKCS#1 v1.5-SHA256 + PEM）。mbedtls `pk_parse_key`/`pk_parse_public_key`/`pk_sign`/`pk_verify`
+> 现成 API 齐备（源码级核实）→ 走现成 API，零自研 DER。native 296→**298**（+2）。纯新增，零删除；
+> 旧 `rsa_sign/rsa_verify` 裸模式原样保留，Linux 基线 m82 全绿保持。
+
+- **S4-1 新增 native**：`rsa_sign_pkcs1v15_sha256(pem_priv, msg)→sig_hex|null`（pem_priv 收 PEM 文本，
+  `pk_parse_key` 自动识别 PKCS8 `BEGIN PRIVATE KEY` / PKCS1 `BEGIN RSA PRIVATE KEY`；内部 sha256 + DigestInfo
+  + PKCS1v15 = 标准 PKCS#1 v1.5-SHA256；msg 收 str|bytes 二进制安全、超长 msg 自动 sha256 无长度限制；
+  **不支持加密 PEM**，私钥按 [SECURITY] 走环境变量明文 PEM 传递）+ `rsa_verify_pkcs1v15_sha256(pem_pub, msg,
+  sig_hex)→bool`（pem_pub 收 SPKI `PUBLIC KEY` / PKCS1 `RSA PUBLIC KEY`，`pk_parse_public_key` 自动识别）。
+- **S4-2 验证（examples/m83_s4，与 Go + openssl 双向互通全绿）**：Go `rsa.GenerateKey(2048)` → 导出
+  PKCS8/PKCS1 私钥 PEM + SPKI/PKCS1 公钥 PEM → px 用私钥 PEM（**PKCS8 与 PKCS1 签出同一签名**，确定性）
+  签文本+二进制 msg → Go `rsa.VerifyPKCS1v15(sha256)` true、**openssl dgst -sha256 -verify Verified OK**
+  （第三方独立证明输出为标准 PKCS1v15-SHA256）；px 验 Go 签（SPKI/PKCS1 公钥 × 文本/二进制）true；
+  2000B 超长 msg 签+验过；反例矩阵（篡改 msg / 坏 sig / 公钥当私钥签 null / 私钥当公钥验 false /
+  非 RSA key null / sig 非 hex false）全过。
+- 回归：m83_s1/s2/s3 + m82 全绿；native_index/CHEATSHEET/M83_PLAN/CHANGELOG 同步。
+
 ### M83-S3 · ed25519 签名/验签 native（qg-issue 17，GAP-ED25519-1）✅
 
 > 立项（2026-09-06）：M83 分六批实现 qg-issue 除挂起 W1b 外全量，S3 = Issue 17 —— 签名族第一个

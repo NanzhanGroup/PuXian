@@ -1,7 +1,7 @@
 {
  "generator": "tools/gen_native_table.sh",
  "source": "runtime/*.c px_set_global(px_native)",
- "count": 296,
+ "count": 298,
  "names": [
   "Err",
   "Ok",
@@ -218,7 +218,9 @@
   "rsa_encrypt",
   "rsa_gen_key",
   "rsa_sign",
+  "rsa_sign_pkcs1v15_sha256",
   "rsa_verify",
+  "rsa_verify_pkcs1v15_sha256",
   "s3_delete",
   "s3_get",
   "s3_list",
