@@ -33,6 +33,15 @@
 > - **失败退全量**：解析/编译失败 → px refs 非 0 + 提示"自动裁剪退全量"（保编译成功不背锅）。
 > - **verify examples/m86_s1 19/19 PASS**：hello 核心集 / 条件分支静态收集（if 内 ws_connect）/ import 递归（多文件 aes + stdlib 库内部 len/zip_lists）/ 解析异常退全量 / 9 模块代表 native 全命中。
 
+### M86-S2 · 自动按需裁剪：裸 `px build` = 引用集最小 + `--full/--max` 逃生舱（qg-issue 25）
+
+> 完成（2026-09-06，commit M86-S2）：**用户目标「必须 --min？不如默认自动 / 想全面用 --full」落地**。
+> - **cmd_build 自动判定**：无 `--full/--max` 时，从**已生成的 C 产物**（主编译一次性 codegen）提取 px_get_global 引用集 → native_mod_map 反推被引用模块 → 未引用模块自动补裁（`--no-xxx` 复用 M85 cuts/宏/缓存 key 隔离链路，零额外 codegen）。
+> - **优先级**：显式 flag（--no-xxx / --min / --no-quic / --target 物理约束）> 自动；自动只补"未显式声明 + 引用集未命中"模块。`--full/--max` = 全能力逃生舱（可组合显式 --no-xxx = 显式裁剪其余全能力）。
+> - **实测**：裸 `px build hello` **2,713,472 B**（自动最小 = M85 --min 档；hello 只引 core → 11 模块全裁）/ `--full` **9,010,184 B**（精确全能力基线）/ `--max` 同 / sqlite_dep 裸 **3,759,248 B**（引用 sqlite → 保留，运行 `sqlite_open(":memory:")=1` 无 R1001）/ `--no-sqlite` 显式覆盖自动保留 → R1001 未定义 sqlite_open / allmod（引 9 模块）裸 9,001,304 B（保留被引用模块，route/h2 未引用裁掉）。
+> - **语义变更**：M85"默认不传 flag = 全能力零漂移" → M86-S2 起**默认裸 build = 自动最小**（M86 立项目标）；全能力需 `--full/--max`。受影响回归适配：m86_s0 verify 默认断言改 `--full`（改名零漂移验证意图不变）。
+> - **verify examples/m86_s2 11/11 PASS**（裸最小/--full/--max/sqlite 保留/显式优先/allmod 保留/map 与生成器 diff 一致）。
+
 ### M85 立项 · pxc build 编译产物按需裁剪（qg-issue 24 · 方案 B 细粒度模块开关）
 
 > 立项（2026-09-06）：用户提问「编译产物都在 9M 以上，能去掉未使用模块吗」→ 真机实测 hello.px

@@ -78,8 +78,8 @@
 | 批 | 状态 | 说明 |
 |---|---|---|
 | S0 | ✅ done | **命令正名 px**：tools/pxc → tools/px（git mv）+ tools/pxc = symlink px 入库；usage/version/错误提示/注释 px 化（bootstrap/pxc 真名保留）；cmd_mcp PX_PXC→tools/px；spec/install.sh 双软链 /usr/bin/px + pxc→px；make_release RELEASE 模板 px 化；README/en/CHEATSHEET/spec/MINI_SUBSET 入口 px 化；help 补齐 M85 全开关 + M86 pxc 别名说明。verify examples/m86_s0 **14/14 PASS**（默认 9010184 / --no-quic 3929808 零漂移；pxc 别名 build 等价）。commit M86-S0 |
-| S1 | ✅ done | **引用采集层（实现修正）**：runtime/native_mod_map.txt（112 native 名=模块，生成器 tools/gen_native_map.sh 零依赖可重生成）；`px refs <file>` 子命令（pxc build C 产物提取 px_get_global 名，import 递归全量；失败非0退全量）。**实践否决原"编译器打点"方案**：打点版 pxc 编 compiler.px 自举触发 runtime 字符串越界（自举不收敛）→ 回滚，改 C 产物静态提取（零编译器/golden 改动、零自举风险、零漏报）。verify examples/m86_s1 **19/19 PASS**（hello 核心/条件分支静态/import 多文件+stdlib/异常退全量/9 模块代表）。commit M86-S1 |
-| S2 | ⏳ pending | 待开工 |
+| S1 | ✅ done | **引用采集层（实现修正）**：runtime/native_mod_map.txt（112 native 名=模块，生成器 tools/gen_native_map.sh 零依赖可重生成）；`px refs <file>` 子命令（pxc build C 产物提取 px_get_global 名，import 递归全量；失败非0退全量）。**实践否决原"编译器打点"方案**：打点版 pxc 编 compiler.px 自举触发 runtime 字符串越界（自举不收敛）→ 回滚，改 C 产物静态提取（零编译器/golden 改动、零自举风险、零漏报）。verify examples/m86_s1 **19/19 PASS**。commit M86-S1 |
+| S2 | ✅ done | **自动按需裁剪**：cmd_build 加 auto 判定——无 --full/--max 时从已生成 C 产物提取引用集 → native_mod_map 反推被引用模块 → 未引用模块自动补裁（零额外 codegen，复用 M85 cuts/宏/cache-key 隔离链路）；`--full/--max` 逃生舱全能力；显式 flag（--no-xxx/--min/--no-quic/target 物理约束）> 自动，自动只补未声明模块。实测：裸 hello **2,713,472**（自动最小=M85 --min 档）/ `--full` **9,010,184**（精确基线）/ sqlite_dep 裸 3,759,248 保留可运行 / --no-sqlite 显式覆盖 → R1001 / allmod（引 9 模块）裸 9,001,304 保留。m86_s0 verify 适配新默认语义（--full 断言，14/14）。verify examples/m86_s2 **11/11 PASS**。commit M86-S2 |
 | S3 | ⏳ pending | 待开工 |
 
 > 立项 commit：M86 立项落盘（qg-issue 25 ISSUE.md + docs/M86_PLAN.md + 00-README + CHANGELOG）
