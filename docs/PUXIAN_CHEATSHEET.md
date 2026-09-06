@@ -130,7 +130,7 @@ Session：`session_open()/session_id/get/set/del/destroy` · `basic_auth(user, p
 ### QUIC / HTTP/3（完整编译含 64 项；`--no-quic` 裁剪不含）
 `quic_listen/accept/connect/close/close_listener` · `quic_open_stream/open_uni_stream/send_stream/recv_stream/poll` · `h3_server_listen` `h3_serve_read_request(_stream)` `h3_client_*` · QPACK：`h3_huff/unhuff` `h3_qenc/qdec/qs_*` `h3_settings_enc/dec` `h3_conn_*` —— 生产路径推荐直接 `px_serve(..., {http3: true})`（HTTP/1.1+2+3 三栈合一）。
 
-## 3. 标准库速查（9 库，纯语言 .px，双模式一致）
+## 3. 标准库速查（13 库，纯语言 .px，双模式一致）
 
 | 库 | import | 核心函数（一行式） |
 |---|---|---|
@@ -143,6 +143,10 @@ Session：`session_open()/session_id/get/set/del/destroy` · `basic_auth(user, p
 | gfx | `import std.gfx` | `canvas_create(w,h)` → [w,h,pixels] · `set_px/get_px/line/rect/fill_rect/circle/fill_circle/blit/text/text_size`（像素 0xRRGGBB） |
 | png | `import std.png` | `png_encode(w, h, pixels)` → bytes（PNG stored，配 gfx 画布） |
 | edge | `import std.edge` | `gpio_request/input/output/read/write/wait/event` · `i2c_open/read_reg/write_reg` · `serial_open` · `pwm_setup/enable/set_duty`（失败返回 -1/false + os_errno） |
+| html | `import std.html` | `html_parse(text)` → DOM（容错，坏标签自动纠正）· `html_text(dom)` 剥标签正文（script/style 跳过）· `html_query(dom, "p.a#id")` 简单选择 → [node] · `html_children/attr/tag` · `html_escape` |
+| cookiejar | `import std.cookiejar` | `cj_new()` → jar · `cj_update(jar, resp_headers)` 解析 Set-Cookie · `cj_header(jar, url)` → "n=v; n2=v2"（domain/path/secure 匹配，会话保持）· `cj_clean` / `cj_len` |
+| multipart | `import std.multipart` | `mp_encode(fields, files)` → {body: bytes, content_type: "multipart/form-data; boundary=…", len}（files 值 {filename, data: str\|bytes, type}）· `mp_boundary` |
+| smtp | `import std.smtp` | `smtp_send(host, port, from, to, msg, opts?)` → bool（msg {subject, text\|html}；opts {user, password, helo} AUTH LOGIN）· `smtp_try` → {ok, err} 诊断 |
 
 > 完整 API 文档：`tools/pxc doc stdlib/<name>.px`；用法示例见 `docs/ECOSYSTEM.md §2`。
 

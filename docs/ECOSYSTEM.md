@@ -6,7 +6,7 @@
 
 ---
 
-## 1. 标准库一览（stdlib/ · 9 库）
+## 1. 标准库一览（stdlib/ · 13 库）
 
 全部为纯语言 `.px`（零 C），随发布包分发；`import std.<name>` 或 `from std.<name> import <fn>`。
 除注明外均为纯函数库（无 IO、无状态），**编译（pxc build）与解释（pxi run）双模式一致**（M68 起 native 可达性根治，本表示例均双模式实测）。
@@ -22,6 +22,10 @@
 | **gfx** | `std.gfx` | 纯语言 2D 画布与图形（M61） | `canvas_create` / `canvas_w` / `canvas_h` / `canvas_pixels` / `set_px` / `get_px` / `line` / `rect` / `fill_rect` / `circle` / `fill_circle` / `blit` / `text` / `text_size` | 无屏 2D 合成（Mandelbrot/贪吃蛇），画布 `list[int]` 0xRRGGBB |
 | **png** | `std.png` | 纯语言 PNG 编码器（stored，M61） | `png_encode(w, h, pixels) -> bytes` | 把 gfx 画布编码为 PNG 文件字节（CRC32+ADLER+zlib stored 自实现） |
 | **edge** | `std.edge` | 边缘设备：GPIO V2 / I2C / 串口 / PWM（M60） | `gpio_request/input/output/read/write/wait/event` · `i2c_open/read_reg/write_reg` · `serial_open` · `pwm_setup/enable/set_duty` | Linux 边缘设备（树莓派/网关/盒子）直控；依赖 fd 原语，需真设备或 PTY 验证 |
+| **html** | `std.html` | 简化 HTML5 容错解析（M83-S5） | `html_parse(text)` → DOM · `html_text(node)` 剥标签正文 · `html_query(root, sel)` tag[.class][#id] 简单选择 · `html_children` / `html_attr` / `html_tag` / `html_escape` | 网页正文抽取 / 富文本清洗 / 片段选择（坏标签自动纠正，script/style 不进正文） |
+| **cookiejar** | `std.cookiejar` | 会话 Cookie 管理（M83-S5） | `cj_new` / `cj_update(jar, headers)` 解析 Set-Cookie · `cj_header(jar, url)` → Cookie 头 · `cj_clean` / `cj_len` | http_request 会话保持（domain/path/secure 匹配，Max-Age 过期清除） |
+| **multipart** | `std.multipart` | multipart/form-data 编码（M83-S5） | `mp_encode(fields, files)` → {body: bytes, content_type, len} · `mp_boundary` | HTTP 文件上传 / 飞书 uploadImage（字段+文件，str\|bytes 内容，自动 boundary） |
+| **smtp** | `std.smtp` | 轻量 SMTP 客户端（M83-S5） | `smtp_send(host, port, from, to, msg, opts?)` → bool · `smtp_try` → {ok, err} | 告警通知 / 事务邮件（EHLO/AUTH LOGIN/DATA 全流程，行首点自动转义；明文 25/内网 587，STARTTLS 暂不支持） |
 
 > **edge 说明**：失败语义与 M57 fd 原语一致——设备失败返回 int `-1`/`false`，`os_errno()` 查询，不杀进程；x86 无真板时示例走 SKIP 通道，真板段用 `examples/m60_*.px` 与 PTY 内核回环验证。
 
@@ -45,7 +49,7 @@ var ya = yaml_parse("name: PuXian\nver: 1\nlist:\n  - a\n  - b\n")
 print(ya["ok"])                                         # true（ya["value"] 为解析节点）
 ```
 
-其余库一行式：`wr_parse_file("get_healthz.px")` → 路由规则 dict；`lr_solar_to_lunar(2026, 9, 5)` → 农历（实测 `{"ok":true,"year":2026,"month":7,"day":24,"leap":false}`）；`pxml_parse("a = 1\nb = \"hi\"\n")["ok"]` → true；`set_px(canvas_create(4,4), 1, 1, 0xFF0000)` 后 `get_px` → 16711680；`png_encode(2, 2, [...])` → 82 字节 PNG。完整 API 文档：`tools/pxc doc stdlib/<name>.px`。
+其余库一行式：`wr_parse_file("get_healthz.px")` → 路由规则 dict；`lr_solar_to_lunar(2026, 9, 5)` → 农历（实测 `{"ok":true,"year":2026,"month":7,"day":24,"leap":false}`）；`pxml_parse("a = 1\nb = \"hi\"\n")["ok"]` → true；`set_px(canvas_create(4,4), 1, 1, 0xFF0000)` 后 `get_px` → 16711680；`png_encode(2, 2, [...])` → 82 字节 PNG；`html_text(html_parse("<p>hi<b>x</b></p>"))` → "hix"；`mp_encode({...}, {...})` → 带随机 boundary 的 bytes body；`smtp_send(...)` 连本地/内网 SMTP 发信。完整 API 文档：`tools/pxc doc stdlib/<name>.px`。
 
 ## 3. Dogfood 资产图（examples/ · 119 个 .px）
 
@@ -89,7 +93,7 @@ PuXian 每个里程碑都用普贤自己写示例/工具/应用（dogfooding 自
 ## 4. 消费路径（把库/示例用起来）
 
 1. **import std.***：`import std.collections` → 直接调函数（双模式皆可；M68 起 native 零 extern def）。
-2. **pxpkg + 官方 registry**（M45 + M69-S3 打通 fetch→import 闭环）：`PX_REGISTRY=<仓库>/registry` → `pxpkg init` + `pxpkg add semver@^0.1.0` + `pxpkg install` → 安装到 `.px_modules/<name>/<name>.px`，**`import <name>`（裸名）编译/解释双模式可用** + `px.pkg.lock` 可复现（`--locked` 防篡改/registry 离线仍复现）。官方 9 库镜像随库入库（`registry/<name>/0.1.0/<name>.px`，见 `registry/README.md`）；端到端验证 `examples/m69_registry/verify.sh`（11 断言）。远程：registry 目录随 git clone 分发，或单包 `http(s) URL#sha256`。
+2. **pxpkg + 官方 registry**（M45 + M69-S3 打通 fetch→import 闭环）：`PX_REGISTRY=<仓库>/registry` → `pxpkg init` + `pxpkg add semver@^0.1.0` + `pxpkg install` → 安装到 `.px_modules/<name>/<name>.px`，**`import <name>`（裸名）编译/解释双模式可用** + `px.pkg.lock` 可复现（`--locked` 防篡改/registry 离线仍复现）。官方 13 库镜像随库入库（`registry/<name>/0.1.0/<name>.px`，见 `registry/README.md`）；端到端验证 `examples/m69_registry/verify.sh`（11 断言）。远程：registry 目录随 git clone 分发，或单包 `http(s) URL#sha256`。
 3. **拷源码改**：stdlib 全纯语言，直接读源码/拷进项目改（每文件 <500 行，符合大模型友好约束）。
 4. **文档链**：本文件（总览）→ `docs/PUXIAN_CHEATSHEET.md`（速查）→ `docs/spec.md`（规范）→ `docs/MINI_SUBSET.md`（子集边界）→ `docs/PXML.md`（PXML 规范）→ `docs/ROADMAP.md`（里程碑史）。
 5. **代码内文档**：`tools/pxc doc stdlib/<name>.px` 从 `##` 注释生成该库 Markdown API 文档。

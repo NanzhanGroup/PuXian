@@ -1,0 +1,80 @@
+# M83-S5 (Issue 20-L1) stdlib 四库纯逻辑验证：html / cookiejar / multipart（无网络段）
+# 双模式一致：pxi run 与 pxc build 输出相同。网络段（smtp/multipart 上传回环）见 verify.sh。
+# 全部断言通过打印 M83-S5-LIBS-OK 并 exit 0。
+import std.html
+import std.cookiejar
+import std.multipart
+
+def main():
+    # ============ std.html：真实坏网页（缺闭合/错嵌套/实体/raw text）============
+    # 缺闭合 li + 错嵌套（</div> 无对应开标签）+ 属性引号内 > 
+    var messy = "<html><body><div class='card' id='c1'><ul><li>one<li>two</ul>"
+    messy += "<p>a < b &amp; c &gt; d</p><script>if (1 < 2) { x = '</div>'; }</script>"
+    messy += "<img src='/x.png'><p class='tail'>end</p></div></body></html>"
+    var dom = html_parse(messy)
+    var txt = html_text(dom)
+    assert(not contains(txt, "<p") and not contains(txt, "<div") and not contains(txt, "<ul"), "正文不应残留标签标记: " + txt)
+    assert(not contains(txt, "if ("), "script 内容不应进正文: " + txt)
+    assert(contains(txt, "one"), "li 文本 one")
+    assert(contains(txt, "a < b & c > d"), "实体应解码")
+    assert(contains(txt, "end"), "尾部 p 文本")
+    # html_query：tag / .class / #id / tag.class#id
+    assert(len(html_query(dom, "li")) == 2, "li 数量")
+    assert(len(html_query(dom, "p")) == 2, "p 数量")
+    assert(len(html_query(dom, "p.tail")) == 1, "p.tail")
+    assert(len(html_query(dom, "div.card#c1")) == 1, "div.card#c1")
+    var imgs = html_query(dom, "img")
+    assert(len(imgs) == 1 and html_attr(imgs[0], "src") == "/x.png", "img src 属性")
+    assert(len(html_query(dom, "div#nope")) == 0, "不存在的 id")
+    # html_escape
+    assert(html_escape("<a>&\"") == "&lt;a&gt;&amp;&quot;", "html_escape")
+    print("PASS std.html")
+
+    # ============ std.cookiejar：会话保持（两次请求带 session）============
+    var jar = cj_new()
+    # 模拟登录响应 Set-Cookie（domain 后缀匹配 / path 前缀匹配 / secure 限制）
+    cj_update(jar, {"Set-Cookie": "session=abc123; Path=/; HttpOnly; SameSite=Lax"})
+    cj_update(jar, {"Set-Cookie": "theme=dark; Path=/; Domain=.example.com; Max-Age=3600"})
+    cj_update(jar, {"Set-Cookie": "secure_token=s1; Path=/secure; Secure"})
+    # 同一站点后续请求应带 session + theme（无 secure）
+    var h1 = cj_header(jar, "https://www.example.com/app")
+    assert(contains(h1, "session=abc123"), "会话 cookie 应携带: " + h1)
+    assert(contains(h1, "theme=dark"), "域 cookie 应携带: " + h1)
+    assert(not contains(h1, "secure_token"), "http 不应带 secure cookie: " + h1)
+    # https + /secure 路径 → secure cookie 带上
+    var h2 = cj_header(jar, "https://www.example.com/secure/x")
+    assert(contains(h2, "secure_token=s1"), "https+path 应带 secure cookie: " + h2)
+    # path 不匹配 → 不带
+    var h3 = cj_header(jar, "https://www.example.com/other")
+    assert(not contains(h3, "secure_token"), "path 不匹配不应带: " + h3)
+    # 非 example.com 域 → 不带 domain cookie（但 "*" 会话 cookie 仍带）
+    var h4 = cj_header(jar, "https://evil.com/")
+    assert(not contains(h4, "theme=dark"), "跨域不应带 domain cookie: " + h4)
+    # 会话更新（覆盖）
+    cj_update(jar, {"Set-Cookie": "session=newval; Path=/"})
+    var h5 = cj_header(jar, "http://example.com/")
+    assert(contains(h5, "session=newval") and not contains(h5, "session=abc123"), "cookie 覆盖更新: " + h5)
+    # Max-Age=0 删除
+    cj_update(jar, {"Set-Cookie": "theme=gone; Path=/; Domain=.example.com; Max-Age=0"})
+    var h6 = cj_header(jar, "https://example.com/")
+    assert(not contains(h6, "theme"), "Max-Age=0 应删除: " + h6)
+    assert(cj_len(jar) == 3, "jar 数量应 3")
+    print("PASS std.cookiejar")
+
+    # ============ std.multipart：结构自检（与 px http_serve 互通见 m83_s5_client）============
+    var m = mp_encode({"token": "t1", "count": "5"}, {"avatar": {"filename": "me.png", "data": bytes("PNGDATA"), "type": "image/png"}})
+    assert(m.has("body") and m.has("content_type") and m.has("boundary"), "multipart 结果字段")
+    assert(m["len"] == bytes_len(m["body"]), "multipart len 一致")
+    assert(contains(m["content_type"], "boundary=" + m["boundary"]), "content_type 带 boundary")
+    var raw = bytes_to_str(m["body"])
+    var b = m["boundary"]
+    assert(contains(raw, "--" + b + "\r\n"), "段前 boundary")
+    assert(contains(raw, "name=\"token\""), "字段 name")
+    assert(contains(raw, "name=\"avatar\"; filename=\"me.png\""), "文件 filename")
+    assert(contains(raw, "Content-Type: image/png"), "文件 Content-Type")
+    assert(contains(raw, "PNGDATA"), "二进制内容保真")
+    assert(ends_with(raw, "--" + b + "--\r\n"), "结束 boundary")
+    # 纯文本字段也可用（http_request str body 场景由上层决定，库返回 bytes 统一）
+    print("PASS std.multipart")
+
+    print("M83-S5-LIBS-OK")

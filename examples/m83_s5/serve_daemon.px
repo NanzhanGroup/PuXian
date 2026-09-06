@@ -1,0 +1,36 @@
+# M83-S5 multipart 回环服务端（编译模式 http_serve）—— 接收 multipart/form-data 上传并回显解析结果
+# verify.sh 流程：后台起本服务 → m83_s5_client（px mp_encode 上传）断言 →
+#                 curl -F 对照上传断言（证明与标准 multipart 互通）→ 停服务
+# 用法：serve_daemon [port]（默认 18092）
+var srv_port = 18092
+let srv_av = args()
+if len(srv_av) > 1:
+    srv_port = int(srv_av[1])
+
+def upload_handler(req):
+    if req["path"] != "/upload" or req["method"] != "POST":
+        return {"status": 404, "body": "not-found"}
+    # req["form"] 普通字段 dict；req["files"] filename → 内容（px_parse_multipart）
+    var form = req["form"]
+    var files = req["files"]
+    var fkeys = []
+    if type(files) == "dict":
+        fkeys = files.keys()
+    var out = json_parse("{}")
+    out.set("form", form)
+    out.set("files_keys", fkeys)
+    if len(fkeys) > 0:
+        out.set("file0", files[fkeys[0]])
+    return {"status": 200, "body": json_stringify(out), "headers": {"Content-Type": "application/json"}}
+
+def health_handler(req):
+    return "ok"
+
+def handler(req):
+    if req["path"] == "/health":
+        return health_handler(req)
+    return upload_handler(req)
+
+spawn http_serve(srv_port, handler)
+sleep(300000)
+exit(0)

@@ -1,0 +1,36 @@
+# M83-S5 multipart 上传客户端（编译模式 http_request）—— 用 std.multipart 编码后上传，
+# 服务端 px_parse_multipart 解析回显 → 断言字段/文件/二进制保真 → 证明与 px 服务端互通。
+# 另由 verify.sh 用 curl -F 对照上传同样字段（服务端解析一致 → 与标准 multipart 互通）。
+# 用法：m83_s5_client <url>（默认 http://127.0.0.1:18092/upload）
+import std.multipart
+
+def main():
+    var url = "http://127.0.0.1:18092/upload"
+    var av = args()
+    if len(av) > 1:
+        url = av[1]
+    var fields = json_parse("{}")
+    fields.set("token", "t1")
+    fields.set("count", "5")
+    var files = json_parse("{}")
+    var finfo = json_parse("{}")
+    finfo.set("filename", "me.png")
+    # 类 PNG 头 8 字节（含非 ASCII 二进制；语言无 \x 转义 → hex_to_bytes 构造）
+    # ⚠️ 末尾避免 \r\n：服务端 multipart 解析会把内容尾部 CRLF 当段分隔符剥掉
+    finfo.set("data", hex_to_bytes("89504e470d0a1a01"))
+    finfo.set("type", "image/png")
+    files.set("avatar", finfo)
+    var m = mp_encode(fields, files)
+    # ⚠️ Issue 23（runtime 缺陷，qg-issue 另案）：http_request 显式 Content-Type 仍会追加
+    # 默认 urlencoded —— 须同时显式 Content-Length 才跳过该分支（M83 边界不动 runtime）
+    var headers = json_parse("{}")
+    headers.set("Content-Type", m["content_type"])
+    headers.set("Content-Length", str(m["len"]))
+    var resp = http_request(url, "POST", m["body"], headers)
+    assert(type(resp) == "dict" and resp["status"] == 200, "上传失败 status=" + str(resp["status"]))
+    var d = json_parse(resp["body"])
+    assert(d["form"]["token"] == "t1", "字段 token")
+    assert(d["form"]["count"] == "5", "字段 count")
+    assert(contains(json_stringify(d["files_keys"]), "me.png"), "文件 filename 键: " + json_stringify(d["files_keys"]))
+    assert(d["file0"] == bytes_to_str(hex_to_bytes("89504e470d0a1a01")), "二进制内容逐字节保真")
+    print("M83-S5-MULTIPART-CLIENT-OK")

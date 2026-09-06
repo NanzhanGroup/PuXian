@@ -1,0 +1,441 @@
+# ============================================================
+# 普贤标准库：std.html —— 简化 HTML5 容错解析器（提取正文/简单选择器）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译/解释双模式一致。
+# 面向「爬取正文 / 页面片段提取」场景的容错 HTML 子集解析器：
+#   不校验标签闭合合法性——坏标签自动纠正（自动闭合/隐式闭合/忽略孤立结束标签）。
+#   注释/doctype/script/style 内容按 HTML5 规则处理（raw text 不进正文）。
+#   命名实体最小解码集：&amp; &lt; &gt; &quot; &#39; &nbsp;（数字实体保留原样）。
+#   DOM 节点统一 dict：{tag, attrs, text, children}
+#     tag  = 元素名（小写）| "#root" | "#text" | "#comment"（注释/doctype 丢弃不建节点）
+#     attrs = 属性 dict（名小写，无值属性记 ""）
+#     text  = 仅 #text 节点持有；children = 子节点 list
+#   html_parse(text) → #root 节点（永不失败：无法解析的片段按文本保留）
+#   html_text(node)  → 剥标签取可见正文（跳过 script/style 内容，注释节点跳过）
+#   html_query(root, selector) → [node]（tag[.class][#id] 简单选择，无空格后代组合）
+# 用法：
+#   import std.html
+#   var dom = html_parse("<div class='a'><p>hi</p></div>")
+#   print(html_text(dom))                    # hi
+#   var ns = html_query(dom, "p.a")          # [<p 节点>]
+# ============================================================
+# ---- void 元素（HTML5：不自闭合也不需闭合标签）----
+def hx_void_tags():
+    return ["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]  # noqa
+# ---- raw text 元素（内容整体为文本直到闭合标签）----
+def hx_raw_tags():
+    return ["script", "style", "textarea", "title"]
+# ---- 可隐式闭合的元素（新开同名前先闭合栈中未闭合者，容错常用列表）----
+def hx_implicit_close():
+    return ["li", "p", "td", "tr", "th", "option", "dt", "dd", "optgroup"]
+# ---- 空节点 ----
+def hx_new_node(tag):
+    var nd = json_parse("{}")
+    nd.set("tag", tag)
+    nd.set("attrs", json_parse("{}"))
+    nd.set("text", "")
+    nd.set("children", [])
+    return nd
+# ---- 追加文本到当前栈顶 children（相邻 #text 合并）----
+def hx_add_text(stack, s):
+    if len(s) == 0:
+        return
+    var d = hx_decode(s)
+    var top = stack[len(stack) - 1]
+    var cs = top["children"]
+    if len(cs) > 0:
+        var last = cs[len(cs) - 1]
+        if last["tag"] == "#text":
+            last.set("text", last["text"] + d)
+            return
+    var tn = hx_new_node("#text")
+    tn.set("text", d)
+    cs.append(tn)
+# ---- 追加元素节点到栈顶 children，并压栈（若未闭合）----
+def hx_open(stack, node):
+    var top = stack[len(stack) - 1]
+    var cs = top["children"]
+    cs.append(node)
+    stack.append(node)
+# ---- 栈内查找同名元素并弹出（含该元素）；找不到忽略 ----
+def hx_close_upto(stack, tag):
+    var k = len(stack) - 1
+    while k >= 0:
+        if stack[k]["tag"] == tag:
+            break
+        k -= 1
+    if k < 0:
+        return
+    # 弹出 k..末尾，使栈回到 k-1（即闭掉该元素）
+    var popn = len(stack) - k
+    var m = 0
+    while m < popn:
+        stack.pop()
+        m += 1
+# ---- 查找：text 中从 start 起下一个字符 ch（返回下标，找不到 -1）----
+def hx_find(text, start, ch):
+    var i = start
+    var n = len(text)
+    while i < n:
+        if text[i] == ch:
+            return i
+        i += 1
+    return -1
+# ---- 大小写不敏感查找子串（朴素的逐位置比较，返回下标或 -1）----
+def hx_find_ci(text, start, needle):
+    var nl = len(needle)
+    var n = len(text)
+    if nl == 0 or start + nl > n:
+        return -1
+    var low = to_lower(needle)
+    var i = start
+    while i + nl <= n:
+        var seg = text[i:i + nl]
+        if to_lower(seg) == low:
+            return i
+        i += 1
+    return -1
+# ---- 实体表 ----
+def hx_entities():
+    var e = json_parse("{}")
+    e.set("amp", "&")
+    e.set("lt", "<")
+    e.set("gt", ">")
+    e.set("quot", "\"")
+    e.set("apos", "'")
+    e.set("nbsp", " ")
+    return e
+# ---- 解码最小命名实体（&name;）----
+def hx_decode(s):
+    if not contains(s, "&"):
+        return s
+    var ent = hx_entities()
+    var out = ""
+    var i = 0
+    var n = len(s)
+    while i < n:
+        var c = s[i]
+        if c == "&":
+            var semi = hx_find(s, i + 1, ";")
+            if semi > i + 1 and semi - i <= 12:
+                var name = s[i + 1:semi]
+                if ent.has(name):
+                    out += ent[name]
+                    i = semi + 1
+                    continue
+                if name[0] == "#":
+                    # 数字实体保留原样（语言无 chr，不强行解码）
+                    out += s[i:semi + 1]
+                    i = semi + 1
+                    continue
+            out += c
+            i += 1
+            continue
+        out += c
+        i += 1
+    return out
+# ---- 属性名合法起始字符 ----
+def hx_is_name_start(c):
+    if c >= "a" and c <= "z":
+        return true
+    if c >= "A" and c <= "Z":
+        return true
+    return false
+# ---- 属性名内字符（含数字/中划线/冒号/下划线）----
+def hx_is_name_char(c):
+    if c >= "a" and c <= "z":
+        return true
+    if c >= "A" and c <= "Z":
+        return true
+    if c >= "0" and c <= "9":
+        return true
+    if c == "-" or c == "_" or c == ":" or c == ".":
+        return true
+    return false
+# ---- 属性值中引号外的空白 ----
+def hx_is_space(c):
+    return c == " " or c == "\t" or c == "\n" or c == "\r"
+# ---- 解析开标签体（不含 < >）：返回 {tag, attrs, selfclose} 或 null（非标签）----
+def hx_parse_open(body):
+    var s = trim(body)
+    var selfclose = false
+    if len(s) > 0 and s[len(s) - 1] == "/":
+        selfclose = true
+        s = trim(s[0:len(s) - 1])
+    if len(s) == 0 or not hx_is_name_start(s[0]):
+        return null
+    var i = 0
+    var n = len(s)
+    var tagname = ""
+    while i < n and hx_is_name_char(s[i]):
+        tagname += s[i]
+        i += 1
+    tagname = to_lower(tagname)
+    var attrs = json_parse("{}")
+    while i < n:
+        while i < n and hx_is_space(s[i]):
+            i += 1
+        if i >= n:
+            break
+        if s[i] == "/":
+            selfclose = true
+            break
+        # 读属性名
+        var an = ""
+        while i < n and hx_is_name_char(s[i]):
+            an += s[i]
+            i += 1
+        if len(an) == 0:
+            i += 1
+            continue
+        an = to_lower(an)
+        # 跳空白
+        while i < n and hx_is_space(s[i]):
+            i += 1
+        var val = ""
+        if i < n and s[i] == "=":
+            i += 1
+            while i < n and hx_is_space(s[i]):
+                i += 1
+            if i < n and (s[i] == "\"" or s[i] == "'"):
+                var q = s[i]
+                i += 1
+                while i < n and s[i] != q:
+                    val += s[i]
+                    i += 1
+                if i < n:
+                    i += 1
+            else:
+                while i < n and not hx_is_space(s[i]) and s[i] != "/":
+                    val += s[i]
+                    i += 1
+            attrs.set(an, hx_decode(val))
+        else:
+            attrs.set(an, "")
+    var r = json_parse("{}")
+    r.set("tag", tagname)
+    r.set("attrs", attrs)
+    r.set("selfclose", selfclose)
+    return r
+# ---- 解析结束标签体 "</tag ...>"：返回 tag 名（小写）或 "" ----
+def hx_parse_end(body):
+    var s = trim(body)
+    var i = 0
+    var n = len(s)
+    var tagname = ""
+    while i < n and hx_is_name_char(s[i]):
+        tagname += s[i]
+        i += 1
+    return to_lower(tagname)
+# ============================================================
+# 公开 API
+# ============================================================
+# ---- html_parse(text) → #root 节点（容错永不失败）----
+def html_parse(text):
+    var root = hx_new_node("#root")
+    var stack = [root]
+    var i = 0
+    var n = len(text)
+    var voids = hx_void_tags()
+    var raws = hx_raw_tags()
+    var implicit = hx_implicit_close()
+    while i < n:
+        # raw 元素模式：栈顶是 script/style/textarea/title → 找对应闭合标签
+        var top_tag = stack[len(stack) - 1]["tag"]
+        if contains(raws, top_tag):
+            var close_pat = "</" + top_tag
+            var ci = hx_find_ci(text, i, close_pat)
+            if ci < 0:
+                hx_add_text(stack, text[i:n])
+                break
+            if ci > i:
+                hx_add_text(stack, text[i:ci])
+            i = ci
+            # 落入通用结束标签处理（ci 指向 '</'）
+        var lt = hx_find(text, i, "<")
+        if lt < 0:
+            hx_add_text(stack, text[i:n])
+            break
+        if lt > i:
+            hx_add_text(stack, text[i:lt])
+        # ---- 处理标签（i = lt）----
+        if lt + 4 <= n and text[lt:lt + 4] == "<!--":
+            # HTML 注释：找 -->
+            var endc = hx_find_ci(text, lt + 4, "-->")
+            if endc < 0:
+                break
+            var cm = hx_new_node("#comment")
+            cm.set("text", text[lt + 4:endc])
+            var top2 = stack[len(stack) - 1]
+            top2["children"].append(cm)
+            i = endc + 3
+            continue
+        if lt + 2 <= n and text[lt:lt + 2] == "</":
+            # 结束标签：读 tag 名直到 > 或空白
+            var p2 = lt + 2
+            var e2 = p2
+            while e2 < n and text[e2] != ">" and not hx_is_space(text[e2]):
+                e2 += 1
+            var etag = hx_parse_end(text[p2:e2])
+            if len(etag) > 0:
+                hx_close_upto(stack, etag)
+            # 跳到 > 后（若存在）
+            var gt2 = hx_find(text, e2, ">")
+            if gt2 < 0:
+                break
+            i = gt2 + 1
+            continue
+        # 找 '>'（属性值内含 > 会误切；容错解析接受此限制）
+        # 裸 '<'（后非标签起始字符，如 "a < b" 的空格）→ 按文本字符保留
+        if lt + 1 >= n or not hx_is_name_start(text[lt + 1]):
+            hx_add_text(stack, "<")
+            i = lt + 1
+            continue
+        var gt = hx_find(text, lt + 1, ">")
+        if gt < 0:
+            # 无闭合 >：当作普通文本保留（容错）
+            hx_add_text(stack, text[lt:n])
+            break
+        var inner = text[lt + 1:gt]
+        var info = hx_parse_open(inner)
+        if info == null:
+            # 不是合法标签（如裸 '<' 后无标签名）：按文本处理这个字符
+            hx_add_text(stack, "<")
+            i = lt + 1
+            continue
+        var tag = info["tag"]
+        # 隐式闭合：新开 li/p/td 等前，先闭栈内未闭合同名
+        if contains(implicit, tag):
+            hx_close_upto(stack, tag)
+        var nd = hx_new_node(tag)
+        nd.set("attrs", info["attrs"])
+        var is_void = contains(voids, tag)
+        var selfc = info["selfclose"] or is_void
+        hx_open(stack, nd)
+        if selfc:
+            stack.pop()
+        i = gt + 1
+    return root
+# ---- 子树可见文本（跳过 script/style/#comment）----
+def html_text(node):
+    var tag = node["tag"]
+    if tag == "#text":
+        return node["text"]
+    if tag == "#comment":
+        return ""
+    if tag == "script" or tag == "style" or tag == "noscript":
+        return ""
+    var out = ""
+    var cs = node["children"]
+    var k = 0
+    while k < len(cs):
+        out += html_text(cs[k])
+        k += 1
+    return out
+# ---- 子节点 ----
+def html_children(node):
+    return node["children"]
+# ---- 属性取值（无返回 ""）----
+def html_attr(node, name):
+    var a = node["attrs"]
+    if a.has(name):
+        return a[name]
+    return ""
+# ---- 元素名 ----
+def html_tag(node):
+    return node["tag"]
+# ---- 简单选择器解析：tag[.class][#id]（顺序任意，无空格后代）----
+# 返回 {tag, class, id}（缺省空串匹配任意）
+def hx_parse_selector(sel):
+    var s = trim(sel)
+    var tag = ""
+    var cls = ""
+    var id = ""
+    var i = 0
+    var n = len(s)
+    var cur = ""
+    var mode = "tag"
+    while i < n:
+        var c = s[i]
+        if c == "." or c == "#":
+            if mode == "tag":
+                tag = cur
+            elif mode == "class":
+                cls = cur
+            elif mode == "id":
+                id = cur
+            if c == ".":
+                mode = "class"
+            else:
+                mode = "id"
+            cur = ""
+            i += 1
+            continue
+        cur += c
+        i += 1
+    if mode == "tag":
+        tag = cur
+    elif mode == "class":
+        cls = cur
+    elif mode == "id":
+        id = cur
+    var r = json_parse("{}")
+    r.set("tag", to_lower(tag))
+    r.set("class", cls)
+    r.set("id", id)
+    return r
+# ---- 节点是否匹配选择器 ----
+def hx_match(node, tag, cls, id):
+    if node["tag"] == "#text" or node["tag"] == "#comment":
+        return false
+    if len(tag) > 0 and node["tag"] != tag:
+        return false
+    var a = node["attrs"]
+    if len(id) > 0:
+        if not a.has("id") or a["id"] != id:
+            return false
+    if len(cls) > 0:
+        if not a.has("class"):
+            return false
+        var cl = a["class"]
+        var found = false
+        for part in split(cl, " "):
+            if part == cls:
+                found = true
+        if not found:
+            return false
+    return true
+# ---- DFS 收集匹配节点（模块级递归：编译模式不支持下推嵌套递归 def）----
+def hx_collect(node, tag, cls, id, out):
+    if hx_match(node, tag, cls, id):
+        out.append(node)
+    var cs = node["children"]
+    var k = 0
+    while k < len(cs):
+        hx_collect(cs[k], tag, cls, id, out)
+        k += 1
+# ---- html_query(root, selector) → [匹配节点]（DFS 含 root 自身若匹配）----
+def html_query(root, selector):
+    var sel = hx_parse_selector(selector)
+    var out = []
+    hx_collect(root, sel["tag"], sel["class"], sel["id"], out)
+    return out
+# ---- 文本转义（构建 HTML 片段时用）----
+def html_escape(s):
+    var out = ""
+    var i = 0
+    var n = len(s)
+    while i < n:
+        var c = s[i]
+        if c == "&":
+            out += "&amp;"
+        elif c == "<":
+            out += "&lt;"
+        elif c == ">":
+            out += "&gt;"
+        elif c == "\"":
+            out += "&quot;"
+        else:
+            out += c
+        i += 1
+    return out

@@ -1,0 +1,32 @@
+# M83-S5 smtp 客户端回环测试 —— 连 verify.sh 起的本地假 SMTP（fake_smtp.py）真实发信
+# 断言：smtp_try ok=true；收到回执消息（verify.sh 在 Python 侧核对 Subject/From/To/正文/点转义）
+# 用法：smtp_test <host> <port>（默认 127.0.0.1 2525）
+import std.smtp
+
+def main():
+    var host = "127.0.0.1"
+    var port = 2525
+    var av = args()
+    if len(av) > 1:
+        host = av[1]
+    if len(av) > 2:
+        port = int(av[2])
+    var msg = json_parse("{}")
+    msg.set("subject", "M83-S5 SMTP test")
+    msg.set("text", "hello from std.smtp\nline2 with leading dot test:\n.keep this line")
+    var r = smtp_try(host, port, "sender@px.test", ["rcpt1@px.test", "rcpt2@px.test"], msg, null)
+    if not r["ok"]:
+        print("SMTP-FAIL: " + r["err"])
+        exit(1)
+    # 带 AUTH 的路径也测一遍（fake server 支持 AUTH LOGIN 任意凭据）
+    var msg2 = json_parse("{}")
+    msg2.set("subject", "M83-S5 AUTH test")
+    msg2.set("text", "auth body")
+    var opts = json_parse("{}")
+    opts.set("user", "pxuser")
+    opts.set("password", "pxpass")
+    var r2 = smtp_try(host, port, "auth@px.test", "rcpt3@px.test", msg2, opts)
+    if not r2["ok"]:
+        print("SMTP-AUTH-FAIL: " + r2["err"])
+        exit(1)
+    print("M83-S5-SMTP-OK")

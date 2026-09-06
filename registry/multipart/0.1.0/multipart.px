@@ -1,0 +1,84 @@
+# ============================================================
+# 普贤标准库：std.multipart —— multipart/form-data 编码（HTTP 上传）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译/解释双模式一致。
+#   面向「http_request 上传 multipart 表单 / 飞书 uploadImage」场景：
+#   mp_encode(fields, files) → {"body": bytes, "content_type": str, "len": int}
+#     fields: dict 字段名→值（int/float/bool 自动转 str，bytes 内容按字段原样）
+#     files:  dict 字段名→ {filename: 文件名, data: str|bytes 内容, type: MIME(可选)}
+#     body 为完整 multipart 字节（自动 boundary）
+#   用法：
+#     import std.multipart
+#     var m = mp_encode({"token": "abc"},
+#                       {"image": {"filename": "a.png", "data": img_bytes,
+#                                  "type": "image/png"}})
+#     var r = http_request(url, "POST", m["body"],
+#                          {"Content-Type": m["content_type"]})
+# ============================================================
+# ---- CRLF 常量（顶层 let：import 时初始化一次，只读）----
+let mp_crlf = "\r\n"
+# ---- 生成 boundary（固定前缀 + 随机 hex）----
+def mp_boundary():
+    return "----PuXianFormBoundary" + os_random_hex(12)
+# ---- 构造一个 field 段字节 ----
+def mp_field_bytes(boundary, name, value):
+    var head = "--" + boundary + mp_crlf
+    head += "Content-Disposition: form-data; name=\"" + name + "\"" + mp_crlf
+    head += mp_crlf + value + mp_crlf
+    return bytes(head)
+# ---- 构造一个 file 段字节（data 收 str|bytes）----
+def mp_file_bytes(boundary, fname, finfo):
+    var filename = finfo["filename"]
+    var ftype = "application/octet-stream"
+    if finfo.has("type"):
+        var ft = finfo["type"]
+        if type(ft) == "string" and len(ft) > 0:
+            ftype = ft
+    var head = "--" + boundary + mp_crlf
+    head += "Content-Disposition: form-data; name=\"" + fname + "\"; filename=\""
+    head += filename + "\"" + mp_crlf
+    head += "Content-Type: " + ftype + mp_crlf + mp_crlf
+    var seg = bytes(head)
+    var data = finfo["data"]
+    if type(data) == "bytes":
+        seg = bytes_concat(seg, data)
+    else:
+        seg = bytes_concat(seg, bytes(str(data)))
+    seg = bytes_concat(seg, bytes(mp_crlf))
+    return seg
+# ---- 字段值转字符串 ----
+def mp_val_str(fv):
+    if type(fv) == "string":
+        return fv
+    return str(fv)
+# ---- 核心：编码 multipart body ----
+def mp_encode(fields, files):
+    var boundary = mp_boundary()
+    var body = bytes("")
+    # 文本字段
+    if type(fields) == "dict":
+        var fks = fields.keys()
+        var fi = 0
+        while fi < len(fks):
+            var fk = fks[fi]
+            body = bytes_concat(body, mp_field_bytes(boundary, fk, mp_val_str(fields[fk])))
+            fi += 1
+    # 文件段
+    if type(files) == "dict":
+        var gks = files.keys()
+        var gi = 0
+        while gi < len(gks):
+            var gk = gks[gi]
+            var finfo = files[gk]
+            if type(finfo) == "dict":
+                body = bytes_concat(body, mp_file_bytes(boundary, gk, finfo))
+            gi += 1
+    # 结尾
+    var tail = "--" + boundary + "--" + mp_crlf
+    body = bytes_concat(body, bytes(tail))
+    var r = json_parse("{}")
+    r.set("body", body)
+    r.set("content_type", "multipart/form-data; boundary=" + boundary)
+    r.set("boundary", boundary)
+    r.set("len", bytes_len(body))
+    return r

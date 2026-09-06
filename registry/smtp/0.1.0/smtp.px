@@ -1,0 +1,213 @@
+# ============================================================
+# 普贤标准库：std.smtp —— 轻量 SMTP 客户端（邮件发送原语）
+# ------------------------------------------------------------
+# 纯语言实现（tcp_connect 手写 SMTP 会话），编译/解释双模式一致（同步 TCP）。
+#   面向「告警通知 / 事务邮件」的轻量发信：
+#   smtp_send(host, port, from, to, msg, opts?) → bool      # 成功 true
+#   smtp_try (host, port, from, to, msg, opts?) → {ok, err} # 带诊断
+#     from / to：邮箱地址（to 可 str 或 list[str]）
+#     msg：{"subject":..., "text":...} 或 {"subject":..., "html":...}
+#     opts（可选 dict）：{"user","password","helo"} —— 有 user 则 AUTH LOGIN；
+#                        默认明文（25/内网 587）；STARTTLS 暂不支持（语言无
+#                        客户端 TLS 包装 native，见 M83_PLAN §S5 边界）
+#   DATA 消息行首 "." 自动转义；长消息 tcp_send 循环发满。
+#   ⚠️ 不处理 RFC 2047 标题编码（非 ASCII Subject 请自行 base64 编码头）；
+#      Date 头由本库按服务器本地时间生成（多数 server 接受缺省/宽松格式）。
+# 用法：
+#   import std.smtp
+#   if smtp_send("smtp.example.com", 25, "a@x.com", "b@y.com",
+#                {"subject": "告警", "text": "disk 满"}, {"user": "u", "password": "p"}):
+#       print("sent")
+# ============================================================
+# ---- 判断字符是否数字 ----
+def sm_isdigit(c):
+    return c >= "0" and c <= "9"
+# ---- 从右找子串（朴素），找不到 -1 ----
+def sm_rfind(s, needle):
+    var nl = len(needle)
+    var i = len(s) - nl
+    while i >= 0:
+        if s[i:i + nl] == needle:
+            return i
+        i -= 1
+    return -1
+# ---- 去尾部空白 ----
+def sm_rtrim(s):
+    var i = len(s)
+    while i > 0:
+        var c = s[i - 1]
+        if c == " " or c == "\t" or c == "\r" or c == "\n":
+            i -= 1
+        else:
+            break
+    return s[0:i]
+# ---- 取回复最后一行（去掉空行）----
+def sm_last_line(buf):
+    var s = sm_rtrim(buf)
+    var nl = sm_rfind(s, "\n")
+    if nl < 0:
+        return s
+    return s[nl + 1:len(s)]
+# ---- 回复是否已完成：最后一行以 "NNN " 结尾（终行）----
+def sm_reply_done(buf):
+    var line = sm_last_line(buf)
+    if len(line) < 4:
+        return false
+    if not (sm_isdigit(line[0]) and sm_isdigit(line[1]) and sm_isdigit(line[2])):
+        return false
+    return line[3] == " " or line[3] == "\t"
+# ---- 读完整回复（阻塞直到终行；最多约 20s 防挂死）----
+def sm_read_reply(fd):
+    var buf = ""
+    var tries = 0
+    while tries < 1000:
+        var chunk = tcp_recv(fd, 1024)
+        if len(chunk) == 0:
+            break
+        buf += chunk
+        if sm_reply_done(buf):
+            break
+        tries += 1
+    return buf
+# ---- 回复状态码（前 3 位数字）----
+def sm_code(buf):
+    var line = sm_last_line(buf)
+    if len(line) < 3:
+        return -1
+    return int(line[0:3])
+# ---- 发整行命令（追加 CRLF，循环发满）----
+def sm_send_line(fd, line):
+    var payload = line + "\r\n"
+    var sent = 0
+    var total = len(payload)
+    while sent < total:
+        var n = tcp_send(fd, payload[sent:total])
+        if n <= 0:
+            return false
+        sent += n
+    return true
+# ---- DATA 体：行首 "." 转义 ".."（先按 \n 归一行为 \r\n，裸 \n/\r\n 混合均正确处理）----
+def sm_dot_escape(body):
+    var lines = split(body, "\n")
+    var out = []
+    var i = 0
+    while i < len(lines):
+        var ln = lines[i]
+        if len(ln) > 0 and ln[len(ln) - 1] == "\r":
+            ln = ln[0:len(ln) - 1]
+        if len(ln) > 0 and ln[0] == ".":
+            out.append("." + ln)
+        else:
+            out.append(ln)
+        i += 1
+    return join("\r\n", out)
+# ---- 构造 RFC5322 消息文本 ----
+def sm_build_msg(from_addr, to_list, msg):
+    var head = "From: " + from_addr + "\r\n"
+    head += "To: " + join(", ", to_list) + "\r\n"
+    if msg.has("subject"):
+        head += "Subject: " + msg["subject"] + "\r\n"
+    var ts = int(now_ms() / 1000)
+    head += "Date: " + time_format(ts, "%a, %d %b %Y %H:%M:%S") + "\r\n"
+    head += "MIME-Version: 1.0\r\n"
+    if msg.has("html"):
+        head += "Content-Type: text/html; charset=utf-8\r\n"
+    else:
+        head += "Content-Type: text/plain; charset=utf-8\r\n"
+    var content = ""
+    if msg.has("html"):
+        content = msg["html"]
+    elif msg.has("text"):
+        content = msg["text"]
+    elif msg.has("body"):
+        content = msg["body"]
+    var body = head + "\r\n" + content
+    return body
+# ---- 邮箱列表归一化为 list[str] ----
+def sm_to_list(to):
+    var r = []
+    if type(to) == "list":
+        var i = 0
+        while i < len(to):
+            r.append(to[i])
+            i += 1
+    else:
+        r.append(to)
+    return r
+# ---- 会话失败：关连接并返回诊断 ----
+def sm_done(fd, ok, err):
+    if fd >= 0:
+        tcp_close(fd)
+    if ok:
+        return {"ok": true, "err": ""}
+    return {"ok": false, "err": err}
+# ---- 带诊断的发送（主实现）----
+def smtp_try(host, port, from_addr, to_addrs, msg, opts):
+    var tos = sm_to_list(to_addrs)
+    var fd = tcp_connect(host, port)
+    if fd < 0:
+        return sm_done(fd, false, "TCP 连接 " + host + ":" + str(port) + " 失败")
+    var rbuf = sm_read_reply(fd)
+    if sm_code(rbuf) != 220:
+        return sm_done(fd, false, "未收到 220 欢迎: " + sm_last_line(rbuf))
+    var helo = "localhost"
+    if opts != null and opts.has("helo"):
+        helo = opts["helo"]
+    if not sm_send_line(fd, "EHLO " + helo):
+        return sm_done(fd, false, "发送 EHLO 失败")
+    rbuf = sm_read_reply(fd)
+    if sm_code(rbuf) != 250:
+        return sm_done(fd, false, "EHLO 被拒: " + sm_last_line(rbuf))
+    # AUTH LOGIN（可选）
+    if opts != null and opts.has("user"):
+        if not sm_send_line(fd, "AUTH LOGIN"):
+            return sm_done(fd, false, "发送 AUTH LOGIN 失败")
+        rbuf = sm_read_reply(fd)
+        if sm_code(rbuf) != 334:
+            return sm_done(fd, false, "AUTH 不支持: " + sm_last_line(rbuf))
+        if not sm_send_line(fd, base64_encode(opts["user"])):
+            return sm_done(fd, false, "发送用户名失败")
+        rbuf = sm_read_reply(fd)
+        if sm_code(rbuf) != 334:
+            return sm_done(fd, false, "用户名被拒: " + sm_last_line(rbuf))
+        if not sm_send_line(fd, base64_encode(opts["password"])):
+            return sm_done(fd, false, "发送密码失败")
+        rbuf = sm_read_reply(fd)
+        if sm_code(rbuf) != 235:
+            return sm_done(fd, false, "认证失败: " + sm_last_line(rbuf))
+    # MAIL FROM / RCPT TO
+    if not sm_send_line(fd, "MAIL FROM:<" + from_addr + ">"):
+        return sm_done(fd, false, "发送 MAIL FROM 失败")
+    rbuf = sm_read_reply(fd)
+    if sm_code(rbuf) != 250:
+        return sm_done(fd, false, "MAIL FROM 被拒: " + sm_last_line(rbuf))
+    var i = 0
+    while i < len(tos):
+        if not sm_send_line(fd, "RCPT TO:<" + tos[i] + ">"):
+            return sm_done(fd, false, "发送 RCPT TO 失败")
+        rbuf = sm_read_reply(fd)
+        var rc = sm_code(rbuf)
+        if rc != 250 and rc != 251:
+            return sm_done(fd, false, "收件人 " + tos[i] + " 被拒: " + sm_last_line(rbuf))
+        i += 1
+    # DATA
+    if not sm_send_line(fd, "DATA"):
+        return sm_done(fd, false, "发送 DATA 失败")
+    rbuf = sm_read_reply(fd)
+    if sm_code(rbuf) != 354:
+        return sm_done(fd, false, "DATA 被拒: " + sm_last_line(rbuf))
+    var raw = sm_dot_escape(sm_build_msg(from_addr, tos, msg))
+    if not sm_send_line(fd, raw + "\r\n."):
+        return sm_done(fd, false, "发送消息体失败")
+    rbuf = sm_read_reply(fd)
+    if sm_code(rbuf) != 250:
+        return sm_done(fd, false, "消息被拒: " + sm_last_line(rbuf))
+    var q_ok = sm_send_line(fd, "QUIT")
+    if q_ok:
+        sm_read_reply(fd)
+    var e = sm_done(fd, true, "")
+    return e
+# ---- 布尔便捷版（对齐 M83_PLAN API：send(...) → bool）----
+def smtp_send(host, port, from_addr, to_addrs, msg, opts):
+    var r = smtp_try(host, port, from_addr, to_addrs, msg, opts)
+    return r["ok"]
