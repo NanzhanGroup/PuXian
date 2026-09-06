@@ -5535,6 +5535,10 @@ void px_register_builtins(void) {
     px_set_global("rsa_decrypt", px_native("rsa_decrypt", bi_rsa_decrypt));
     px_set_global("rsa_sign", px_native("rsa_sign", bi_rsa_sign));
     px_set_global("rsa_verify", px_native("rsa_verify", bi_rsa_verify));
+    // M83-S3（Issue 17 GAP-ED25519-1）：ed25519（RFC8032，tweetnacl；实现 runtime_ed25519.c）
+    //   —— api-server /v1/family 节点互信 + ws-ddns 双向签名（与 Go crypto/ed25519 互通）
+    px_set_global("ed25519_sign", px_native("ed25519_sign", bi_ed25519_sign));
+    px_set_global("ed25519_verify", px_native("ed25519_verify", bi_ed25519_verify));
     // M23b P1：二进制安全字节串（bytes 类型；带长度，可含 NUL）
     px_set_global("bytes", px_native("bytes", bi_bytes));
     px_set_global("bytes_len", px_native("bytes_len", bi_bytes_len));

@@ -62,7 +62,7 @@
 **做（S1–S6，全部 qg-issue 待办除 W1b）**：
 - **S1 · Issue 16**（runtime.c http_conn_worker + px_unicode_len/bi_contains）：服务端 body 动态缓冲（xmalloc 跟 content_length，上限默认 256MB、PX_HTTP_BODY_MAX 可配、超限 413）+ len() 尊重 str.len（px_unicode_len_n 字节边界）+ contains memmem 语义（NUL 保真）。native 288（不改数）。**✅ 已交付**（examples/m83_s1 verify 6/6 + m82 回归 8/8）。
 - **S2 · Issue 20-L0 三件（✅ 已交付 2026-09-06）**：`aes_encrypt_ecb/aes_decrypt_ecb` + `aes_encrypt_ecb_bytes/aes_decrypt_ecb_bytes`（runtime_aes.c，PKCS7；hex 版供文本互通对拍、bytes 版供微信媒体二进制——微信网关 AES-128-ECB 加解密媒体文件为二进制，hex 版 aes_decrypt_ecb 的 utf8 校验会拒非 UTF-8，故按 aes_gcm/aes_cbc 家族惯例同时提供 bytes 版）；`gzip_compress/gzip_uncompress`（runtime.c 包 px_gzip_*）；`os_spawn` 可选 group 参数（setpgid）。native +6 → 294。
-- **S3 · Issue 17 ed25519**（引入 tweetnacl 入 runtime_ed25519.c）：`ed25519_sign(priv, msg)` / `ed25519_verify(pub, msg, sig)`（hex 或 PEM 入参，PEM 走内部 PKCS8/PKIX 小解析）。native +2 → 296。
+- **S3 · Issue 17 ed25519（✅ 已交付 2026-09-06）**：引入 tweetnacl-20140427（public domain，runtime/tweetnacl.c 逐字节上游 + 唯一扩展 crypto_sign_seed_keypair）→ `ed25519_sign(priv, msg)` / `ed25519_verify(pub, msg, sig)`（runtime_ed25519.c wrapper；hex 或 PEM 入参，PEM 走内部 PKCS8/PKIX 小 DER 解析）。与 Go crypto/ed25519 双向互通全绿（同 seed 同 msg 签名逐字节一致）。native +2 → 296。
 - **S4 · Issue 18 RSA 标准签名**（runtime_rsa.c）：`rsa_sign_pkcs1v15_sha256(pem_priv, msg)` / `rsa_verify_pkcs1v15_sha256(pem_pub, msg, sig_hex)`（mbedtls pk_parse_key/pk_sign 带 MD_SHA256 自动 DigestInfo；支持 PKCS8/PKCS1/RSA PUBLIC KEY/PUBLIC KEY）；旧 rsa_sign/rsa_verify 裸 type1 **原样保留**。native +2 → 298。
 - **S5 · Issue 20-L1 stdlib 四库**：std.html / std.cookiejar / std.multipart / std.smtp（纯 .px 入库 stdlib/ 随发布包分发）。
 - **S6 · Issue 19 SSE 同端口 + 收口**：`http_stream(path, on_connect)` native（runtime.c，+1 → **299**）+ http_conn_worker 流式分支（复用 g_sse_clients/sse_send/sse_close）；随后全量重建链 + 回归总闸 + 文档 + qg-issue 16/17/18/19/20 归档 + tag v0.1.0-m83。
@@ -102,13 +102,13 @@
 - `os_spawn(cmd, args, group?)`：第 3 参可选 bool 默认 false；true 时 fork 后子进程 `setpgid(0,0)`（对齐 os_capture L5891 先例）→ 语言层 `os_kill(pid, sig, true)` 可组杀孙进程。os_spawn_capture/os_capture 已有 setpgid 不动。
 - 验证（examples/m83_s2）：ECB 与 Go `aes.NewCipher` + PKCS7 ref 双向互通（固定 key/任意二进制含 NUL）；gzip_compress→uncompress roundtrip 逐字节一致 + 与系统 gzip -d 互通（file magic 1f 8b）；os_spawn(group=true) 子进程再 spawn 孙 → os_kill(pid, SIGTERM, true) 后孙进程消失（ps 断言）、group 缺省行为不变（回归）。
 
-### S3 · Issue 17：ed25519 签名/验签（新增 runtime/runtime_ed25519.c，引入 tweetnacl，native +2 → 296）
-- **引入 tweetnacl（public domain）**：仓库无 mbedtls 源码不可重编 ed25519 → 将 tweetnacl 的 ed25519 部分（crypto_sign/crypto_sign_open + 内嵌 sha512 + crypto_sign_seed_keypair）并入 `runtime/runtime_ed25519.c`（单文件 self-contained，头部注明来源与 public domain 许可）。需要确认 tweetnacl.c 可从何处取得——标准源即 tweetnacl.org / DJB 官方发布的 tweetnacl-20140427 版（常见镜像）。**执行期取源 + 校验 sha256 + 归档来源到文件头**（第三方引入规范：记来源/版本/许可）。
+### S3 · Issue 17：ed25519 签名/验签（新增 runtime/tweetnacl.c + runtime_ed25519.c，引入 tweetnacl，native +2 → 296）✅ 已交付
+- **引入 tweetnacl（public domain）**：仓库无 mbedtls 源码不可重编 ed25519 → 取 **DJB tweetnacl-20140427**（https://tweetnacl.cr.yp.to/20140427/，ed25519 标准参考实现）。**落地形态（比计划初稿更稳）**：`runtime/tweetnacl.c` + `runtime/tweetnacl.h` 保持上游**逐字节不变**（可随时 sha256 对账），wrapper 独立为 `runtime_ed25519.c`；仅 tweetnacl.c 内 crypto_sign_keypair 后新增 1 处 `crypto_sign_seed_keypair`（RFC8032 seed→sk64，Go PKCS8 导出即 32B seed，文件内注释标明）。sha256 归档见 runtime_ed25519.c 文件头（c 02e65bc…/h 43f29ad…，均为 20140427 官方值）。
 - native：
-  - `ed25519_sign(priv, msg) → sig_hex | null`：priv 收 **hex（32B seed=64 hex 或 64B sk=128 hex，seed 自动 crypto_sign_seed_keypair 展开）或 PEM（PKCS8 PRIVATE KEY，内部小 DER 解析取 seed 32B）**；msg str|bytes；输出 64B sig → 128 hex。失败 null。
-  - `ed25519_verify(pub, msg, sig) → bool`：pub 收 hex（32B=64 hex）或 PEM（PUBLIC KEY / PKIX，解析取 32B）；sig hex 128；验签通过 true。
-- **PEM 解析**：ed25519 的 PKCS8（OID 1.3.101.112）与 PKIX 结构固定，写内部小解析（base64 + 定长 DER 走查，<100 行）；RSA PEM 走 mbedtls pk_parse（S4），两族不共享复杂 DER 层（各自最简）。
-- 验证（examples/m83_s3，**与 Go 互通对拍**）：Go 生成 ed25519 keypair → export PKCS8 PEM + 公钥 PEM + msg → px `ed25519_verify(pem_pub,...)` true（错 key false）；px 用 Go 的 PEM 私钥签 → Go `ed25519.Verify` true；px os_random_hex(32) 生成 seed 自签自验 + 错 sig/坏 key 断言 false；与 Go 用同 seed 派生公钥比对（seed 互通）。
+  - `ed25519_sign(priv, msg) → sig_hex | null`：priv 收 **hex（32B seed=64 hex 或 64B sk=128 hex，seed 自动 crypto_sign_seed_keypair 展开）或 PEM（PKCS8 PRIVATE KEY，内部小 DER 解析取 seed 32B）**；msg str|bytes（二进制安全）；输出 64B sig → 128 hex。RFC8032 确定性签名。失败 null。
+  - `ed25519_verify(pub, msg, sig) → bool`：pub 收 hex（32B=64 hex）或 PEM（PUBLIC KEY / SPKI，解析取 32B）；sig hex 128；验签通过 true。
+- **PEM 解析**：ed25519 的 PKCS8（OID 1.3.101.112）与 SPKI 结构固定 → 内部小解析（base64 解码 + 通用 DER TLV 走查，der_tlv/der_skip 短/长格式均支持）；RSA PEM 走 mbedtls pk_parse（S4），两族不共享复杂 DER 层（各自最简）。
+- 验证（examples/m83_s3_ed25519，**与 Go 互通对拍全绿**）：Go 生成 keypair → export PKCS8 PEM + SPKI PEM + seed/sk64 hex + msg（文本+二进制含 NUL）→ px `ed25519_verify(pem_pub/hex_pub, msg, go_sig)` true（错 pub/篡改 msg/坏 sig false）；px 用 **PKCS8 PEM / seed / sk64 三路签 == Go 签逐字节一致**（RFC8032 确定性 + 格式等价双重证明）；px 签文本+二进制 → Go `ed25519.Verify` 均 true；公钥当私钥签 null / 私钥当公钥验 false 边界。
 
 ### S4 · Issue 18：RSA PKCS1v15-SHA256 + PEM（runtime_rsa.c 扩展，native +2 → 298）
 - 新增：

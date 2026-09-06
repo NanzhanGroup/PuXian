@@ -120,7 +120,8 @@ rt_src_files() {
     local no_quic="$1"
     local list="runtime.h runtime.c runtime_aes.c runtime_xml.c runtime_zip.c \
         runtime_ws.c runtime_rsa.c runtime_sqlite.c runtime_route.c runtime_h2.c \
-        runtime_ffi.c runtime_zlib.c arch.h arch_x86_64.h arch_aarch64.h \
+        runtime_ffi.c runtime_zlib.c runtime_ed25519.c tweetnacl.c tweetnacl.h \
+        arch.h arch_x86_64.h arch_aarch64.h \
         arch_armv7.h arch_riscv64.h"
     if [ "$no_quic" != "1" ]; then
         list="$list runtime_quic.c runtime_h3.c runtime_h3_qpack.c \
@@ -171,7 +172,7 @@ rt_cache_compile() {
     fi
     local srcs="runtime.c runtime_aes.c runtime_xml.c runtime_zip.c runtime_ws.c \
         runtime_rsa.c runtime_sqlite.c runtime_route.c runtime_h2.c runtime_ffi.c \
-        runtime_zlib.c"
+        runtime_zlib.c runtime_ed25519.c tweetnacl.c"
     if [ "$no_quic" != "1" ]; then
         srcs="$srcs runtime_quic.c runtime_h3.c runtime_h3_qpack.c runtime_h3_qpack_dyn.c"
     fi

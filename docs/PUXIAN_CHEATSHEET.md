@@ -85,7 +85,7 @@ print("upper=" + to_upper("px"))
 10. 注释/字符串里长行可加 `# noqa` 供 `pxc lint` 跳过。
 11. **pxi（解释器）为 Mini 子集：不支持 `spawn`/`chan` 等并发关键字** → 并发/服务端（http_serve/ws_serve 等常驻回调）程序用 `pxc build`；纯计算与客户端脚本 pxi/编译双模式皆可。
 
-## 2. native 内置速查（294 全量见 `docs/native_index.json`，本表为常用）
+## 2. native 内置速查（296 全量见 `docs/native_index.json`，本表为常用）
 
 ### 核心 / 值
 `print` `len` `range` `type` `str` `int` `float` `bool` `assert` `input` `exit` `sleep` `abs` `sqrt` `min` `max` `pow` `sorted` `reversed` `sum` `map` `filter` `reduce` `contains` `env` `args` `gc` · 数学（M59）：`sin/cos/tan/atan2/floor/ceil/round/log/log10/exp/random/random_int/random_seed` + 常量 `pi/e`
@@ -116,7 +116,7 @@ print("upper=" + to_upper("px"))
 `sqlite_open(path)` → conn · `sqlite_exec(conn, sql[, params])` · `sqlite_query(conn, sql[, params])` → list[dict] · `sqlite_close` · `sqlite_escape` · `sqlite_last_insert_rowid`
 
 ### 加密 / 哈希 / 压缩 / XML / ZIP
-AES：`aes_encrypt(key, iv, data)` / `aes_decrypt`（CBC-PKCS7）· `aes_gcm_encrypt/decrypt`（hex 文本版）· **M72 bytes 版（二进制安全，含 \0/非 UTF-8，GCM 输出 密文||tag 原始 bytes 与 Go crypto/aes-gcm 互通）**：`aes_gcm_encrypt_bytes/decrypt_bytes` `aes_encrypt_bytes/decrypt_bytes` · **M83-S2 ECB（PKCS7 无 IV，微信网关媒体 AES-128-ECB）：hex 版与 openssl enc -aes-128-ecb 逐字节一致，bytes 版供二进制媒体** `aes_encrypt_ecb/decrypt_ecb` `aes_encrypt_ecb_bytes/decrypt_ecb_bytes` · **M83-S2 gzip 通用**：`gzip_compress(bytes)`→bytes（标准 gzip 容器，与系统 gzip/Go compress/gzip 互通）`gzip_uncompress(gz)`→bytes|null · RSA：`rsa_gen_key(bits)` `rsa_encrypt/decrypt/sign/verify` · `sha256(s)` `xxhash(s)` · 压缩/解压（zlib，M61 FFI）：`zlib_compress` `zlib_uncompress` `zlib_crc32` · XML：`xml_parse(s)` `xml_escape` `xml_unescape` `xml_build` · ZIP：`zip_pack(files_dict, out)` `zip_unpack(bytes[, password])`（M66 支持 zipcrypto/AES-256 密码）
+AES：`aes_encrypt(key, iv, data)` / `aes_decrypt`（CBC-PKCS7）· `aes_gcm_encrypt/decrypt`（hex 文本版）· **M72 bytes 版（二进制安全，含 \0/非 UTF-8，GCM 输出 密文||tag 原始 bytes 与 Go crypto/aes-gcm 互通）**：`aes_gcm_encrypt_bytes/decrypt_bytes` `aes_encrypt_bytes/decrypt_bytes` · **M83-S2 ECB（PKCS7 无 IV，微信网关媒体 AES-128-ECB）：hex 版与 openssl enc -aes-128-ecb 逐字节一致，bytes 版供二进制媒体** `aes_encrypt_ecb/decrypt_ecb` `aes_encrypt_ecb_bytes/decrypt_ecb_bytes` · **M83-S2 gzip 通用**：`gzip_compress(bytes)`→bytes（标准 gzip 容器，与系统 gzip/Go compress/gzip 互通）`gzip_uncompress(gz)`→bytes|null · RSA：`rsa_gen_key(bits)` `rsa_encrypt/decrypt/sign/verify` · **M83-S3 ed25519（RFC8032，与 Go crypto/ed25519 互通，确定性签名同 seed 同 msg 逐字节一致；PEM 收 Go x509 PKCS8/SPKI）**：`ed25519_sign(priv, msg)`→sig_hex（priv 收 hex seed32/sk64 或 PKCS8 PEM；msg 收 str|bytes）`ed25519_verify(pub, msg, sig)`→bool（pub 收 hex 或 SPKI PEM）· `sha256(s)` `xxhash(s)` · 压缩/解压（zlib，M61 FFI）：`zlib_compress` `zlib_uncompress` `zlib_crc32` · XML：`xml_parse(s)` `xml_escape` `xml_unescape` `xml_build` · ZIP：`zip_pack(files_dict, out)` `zip_unpack(bytes[, password])`（M66 支持 zipcrypto/AES-256 密码）
 
 ### Web 应用平台
 Session：`session_open()/session_id/get/set/del/destroy` · `basic_auth(user, pass)` · `route(method, pattern, fn)`（:id 参数 / * 通配）· `middleware(fn)` `rate_limit` `vhost` `sandbox_enter` · 上下文 `ctx_set/get/clear` · 消息总线 `bus_new/subscribe/publish/unsubscribe` · `event_bus` · `gen_next`（生成器取下一项）· `list(xs)`（生成器→list）
@@ -249,6 +249,6 @@ set_timeout(fn (): print("once after 2s"), 2000)
 
 ## 5. 防漂移与源
 
-- **native 清单**（294，单一事实源 = runtime 注册表）：`bash tools/gen_native_table.sh` → `docs/native_index.json`；CI 重跑 diff 防漂移。**本表计数必须 == count**（现 294）。
+- **native 清单**（296，单一事实源 = runtime 注册表）：`bash tools/gen_native_table.sh` → `docs/native_index.json`；CI 重跑 diff 防漂移。**本表计数必须 == count**（现 296）。
 - **stdlib 索引**：`tools/pxc run tools/gen_ecosystem.px` → `docs/ecosystem_index.json`。
 - 规范：`docs/spec.md`（§8 模块/import、§9 双模式、§12 AI 协议）· `docs/MINI_SUBSET.md`（子集边界）· 缺口与写库规范：`docs/ECOSYSTEM_GAPS.md`。

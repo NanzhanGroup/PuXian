@@ -1,0 +1,64 @@
+# M83-S3 (Issue 17) ed25519 专项验证：RFC8032 确定性 + Go 互通（PEM PKCS8/SPKI + seed + 二进制）
+# 依赖 artifacts/（verify.sh 用 Go 生成）+ bootstrap 编译的 s3_verify
+# 本程序全部断言通过打印 MARK-OK 并 exit 0；任一失败 assert 中止
+def main():
+    # ---- 读 Go 生成的 artifacts ----
+    priv_pem = bytes_to_str(read_bytes("artifacts/pkcs8.pem"))
+    pub_pem  = bytes_to_str(read_bytes("artifacts/pub.pem"))
+    pub_hex  = bytes_to_str(read_bytes("artifacts/pub.hex"))
+    seed     = bytes_to_str(read_bytes("artifacts/seed.hex"))
+    sk64     = bytes_to_str(read_bytes("artifacts/sk64.hex"))
+    msg      = bytes_to_str(read_bytes("artifacts/msg.txt"))
+    go_sig   = bytes_to_str(read_bytes("artifacts/go.sig.hex"))
+    bmsg     = read_bytes("artifacts/binmsg.bin")
+    go_bin_sig = bytes_to_str(read_bytes("artifacts/go_bin.sig.hex"))
+    assert(priv_pem != null and pub_pem != null and pub_hex != null and seed != null)
+    assert(sk64 != null and msg != null and go_sig != null and bmsg != null and go_bin_sig != null)
+    # 长度自检：seed=64hex, sk64=128hex, sig=128hex, pub=64hex
+    assert(len(seed) == 64 and len(sk64) == 128 and len(go_sig) == 128 and len(pub_hex) == 64)
+    print("S0-artifacts OK")
+
+    # ---- 1) px 验 Go 签名：PEM 公钥 + 文本 msg + 二进制 msg ----
+    assert(ed25519_verify(pub_pem, msg, go_sig) == true, "px 验 Go sig (PEM pub)")
+    assert(ed25519_verify(pub_hex, msg, go_sig) == true, "px 验 Go sig (hex pub)")
+    assert(ed25519_verify(pub_pem, bmsg, go_bin_sig) == true, "px 验 Go 二进制 sig")
+    print("S1-verify-go-sig OK")
+
+    # ---- 2) px 签 == Go 签（RFC8032 确定性，同 seed → 逐字节相同）----
+    s_pem  = ed25519_sign(priv_pem, msg)      # PKCS8 PEM
+    s_seed = ed25519_sign(seed, msg)          # 32B seed hex
+    s_sk   = ed25519_sign(sk64, msg)          # 64B sk hex
+    assert(s_pem != null and s_seed != null and s_sk != null)
+    assert(s_pem == go_sig, "PEM 签 == Go 签")
+    assert(s_seed == go_sig, "seed 签 == Go 签")
+    assert(s_sk == go_sig, "sk64 签 == Go 签")
+    assert(s_pem == s_seed and s_pem == s_sk)
+    print("S2-px-sign-eq-go OK")
+
+    # ---- 3) px 签二进制 msg == Go 二进制签 ----
+    sb_bin = ed25519_sign(seed, bmsg)
+    assert(sb_bin != null and sb_bin == go_bin_sig, "二进制 msg 签 == Go")
+    print("S3-px-bin-sign-eq-go OK")
+
+    # ---- 4) 落盘 px 签名（verify.sh 让 Go 反向验）----
+    okw = write_bytes("artifacts/px.sig.hex", bytes(s_pem))
+    assert(okw != null)
+    okw2 = write_bytes("artifacts/px_bin.sig.hex", bytes(sb_bin))
+    assert(okw2 != null)
+    print("S4-px-sig-written OK")
+
+    # ---- 5) 反例：篡改 msg / 错公钥 / 坏 sig → false ----
+    assert(ed25519_verify(pub_pem, msg + "x", go_sig) == false, "篡改 msg false")
+    bad = "00" + pub_hex[2:]
+    assert(ed25519_verify(bad, msg, go_sig) == false, "错公钥 false")
+    assert(ed25519_verify(pub_hex, msg, "00" * 64) == false, "坏 sig false")
+    print("S5-negative OK")
+
+    # ---- 6) 格式边界：公钥当私钥签 / 私钥当公钥验 → sign null / verify false ----
+    assert(ed25519_sign(pub_pem, msg) == null, "公钥不能签")
+    assert(ed25519_verify(priv_pem, msg, go_sig) == false, "私钥不能验")
+    assert(ed25519_verify(pub_hex + "00", msg, go_sig) == false, "hex 长度错 false")
+    print("S6-format-boundary OK")
+
+    print("M83-S3-VERIFY-OK")
+    exit(0)
