@@ -1,0 +1,56 @@
+# M83-S6（Issue 19 GAP-SRV-SSE）http_stream 同端口流式验证服务端（编译模式）
+#   同端口 /json（普通 handler）与 /stream（http_stream 流式）共存；http_serve(TCP) 与
+#   http_serve_unix 同享流式路由；另起 sse_serve 独立端口（旧行为回归参考）。
+# verify.sh 流程：后台起本 daemon → curl 打 /json（普通）→ curl -N 打 /stream（TCP+unix）
+#   断言 text/event-stream + 逐块 chunk + [DONE] → 中途断连不崩 → sse_serve 独立端口回归。
+# 用法：serve_sse_daemon [tcp_port] [sock_path] [sse_port]（默认 18097 /tmp/m83_s6.sock 18098）
+var sse_tcp_port = 18097
+var sse_sock = "/tmp/m83_s6.sock"
+var legacy_sse_port = 18098
+let sse_av = args()
+if len(sse_av) > 1:
+    sse_tcp_port = int(sse_av[1])
+if len(sse_av) > 2:
+    sse_sock = sse_av[2]
+if len(sse_av) > 3:
+    legacy_sse_port = int(sse_av[3])
+
+# ---- http_stream 流式路由 on_connect：req["conn"] 即 SSE 连接 id，逐块推送 ----
+def stream_handler(req):
+    let cid = req["conn"]
+    var i = 1
+    while i <= 3:
+        let ok = sse_send(cid, "chunk" + str(i))
+        if not ok:
+            return
+        sleep(0.1)
+        i += 1
+    sse_send(cid, {"event": "done", "data": "[DONE]"})
+    # on_connect 返回后 runtime 自动注销 + 关闭连接（也可主动 sse_close(cid)）
+
+# ---- 普通 JSON handler（与 /stream 同端口共存）----
+def http_handler(req):
+    if req["path"] == "/json":
+        var hj = json_parse("{}")
+        hj.set("status", 200)
+        hj.set("body", "json-ok")
+        hj.set("headers", json_parse("{\"Content-Type\":\"application/json\"}"))
+        return hj
+    if req["path"] == "/health":
+        return "ok"
+    return {"status": 404, "body": "not-found"}
+
+# ---- sse_serve 独立端口旧行为回归（handler 返回后连接保持）----
+def legacy_sse_handler(req):
+    sse_send(req["conn"], "legacy-1")
+    sleep(0.1)
+    sse_send(req["conn"], "legacy-2")
+
+# 注册流式路由（http_serve 与 http_serve_unix 同享）——连接建立前完成
+http_stream("/stream", stream_handler)
+# 启动服务：TCP http_serve + unix http_serve_unix（同 handler 同 worker）+ sse_serve 独立端口
+spawn http_serve(sse_tcp_port, http_handler)
+spawn http_serve_unix(sse_sock, http_handler)
+spawn sse_serve(legacy_sse_port, legacy_sse_handler)
+sleep(300000)
+exit(0)

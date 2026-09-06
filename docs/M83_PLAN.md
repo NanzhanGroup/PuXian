@@ -121,14 +121,21 @@
 - 旧 `rsa_sign/rsa_verify`（裸 type1、hex 模数/指数）**零改动保留**。
 - 验证（examples/m83_s4，Go 互通）：Go `rsa.GenerateKey` → 导出 PKCS8 私钥 PEM + PKIX 公钥 PEM → px 用私钥 PEM 签（任意 msg 含中文/二进制）→ Go `rsa.VerifyPKCS1v15(sha256)` true；反向 px 签 → Go 验 true；PKCS1 私钥 PEM 同样过；裸 rsa_sign 旧行为 verify 回归；错 key/错 sig false；超长 msg 自动 sha256 无长度限制。
 
-### S5 · Issue 20-L1：stdlib 四库（stdlib/*.px 纯 .px，随发布包分发）
+### S5 · Issue 20-L1：stdlib 四库（stdlib/*.px 纯 .px，随发布包分发）✅ 已交付（2026-09-06，commit 28a2f9f）
+> examples/m83_s5 verify 6 步全绿（双模式 libs_test 一致 + multipart 回环与 curl -F 对照互通 + SMTP 真发信回环）；
+> stdlib 9→13 库、registry 官方包 9→13、gen_ecosystem LIBS 9→13 重跑索引、ECOSYSTEM/CHEATSHEET 同步；fmt/lint 0。
+> ⚠️ 实测记录 Issue 23（http_request 显式 Content-Type 仍追加默认 urlencoded → multipart 上传须带 Content-Length
+> 绕过，见 m83_s5_client 注释），真 bug 留 qg-issue 23 单独修 runtime。
 - **std.html**（简化 HTML5 容错解析，chat tool_browse/search_parse 场景够用）：`html_parse(text) → dom`（坏标签/自动闭合/实体最小容错）、`html_text(node)`（剥标签取正文）、`html_query(dom, selector)`（tag[.class][#id] 简单选择，够 888 行工具面）；命名与接口风格对齐 std.yaml/std.pxml 先例（先看 stdlib 现有命名再定模块名，如 html.px）。
 - **std.cookiejar**：`new() → jar` / `update(jar, resp_headers_dict)`（解析 Set-Cookie 存 domain/path/expires 简化）/ `header(jar, url) → cookie_str`（自动带 Cookie header）。
 - **std.multipart**：`encode(fields: dict, files: dict) → body`（自动 boundary + Content-Type，供 http_request 上传）；飞书 uploadImage/uploadFile。
 - **std.smtp**：`send(host, port, from, to, msg, opts?) → bool`：tcp 手写 SMTP 客户端（EHLO/MAIL FROM/RCPT TO/DATA/QUIT + 可选 AUTH LOGIN base64）；TLS：先查 runtime 是否有裸 TLS 连接包装可用（px_conn/tls 面，执行期评估）——首版支持明文内网/587 与（若可得）STARTTLS；agentmail 全移植不做。wgfixer 告警场景 sendmail 子进程可先行绕过。
 - 验证（examples/m83_s5）：html 真实坏网页（缺闭合/错嵌套）text 提取不含标签；cookie 两次请求带 session 断言；multipart body 与 curl -F 互通（本地 http_serve 接收断言字段+文件）；smtp 发到本地 127.0.0.1:25 收件箱（或 dev 中继）断言到达。stdlib 双模式 run+build 验证（M69 惯例）。
 
-### S6 · Issue 19 SSE 同端口 + 全量收口（runtime.c，native +1 → 299）
+### S6 · Issue 19 SSE 同端口 + 全量收口（runtime.c，native +1 → 299）✅ 已交付（2026-09-06）
+> http_stream(path, on_connect) 落地（流式路由表前置 + SSE 区实现；http_conn_worker GET 命中转接管）；
+> examples/m83_s6 verify 5 步全绿（/json+/stream 同端口共存、TCP+unix 双入口 SSE 帧、sse_serve 旧回归、断连不崩）；
+> 收口完成：native_index 299 + 自举证明 + m82/m83_s1-s5 回归 + qg-issue 16-20 归档 + tag v0.1.0-m83。
 - **Issue 19（B 形态）**：新增 native `http_stream(path, on_connect)`（注册流式路由表 path→fn，可多次注册）；http_conn_worker（L9413）解析 path 后**先查流式路由表**：命中 → 该连接进 sse 注册表（分配 conn id，复用 g_sse_clients/sse_find，L9810）→ 写 SSE 响应头（Content-Type: text/event-stream，对齐 sse_serve 现状）→ `px_spawn(on_connect, {conn_id, req})` → on_connect 内语言层 `sse_send(conn_id, data)` 逐块推（自动 data: 帧 + 每块写即 flush）→ on_connect 返回 → `sse_close(conn_id)` 注销 + 关闭连接。普通路由照旧（流式路由优先，.px 普通 handler 兜底 404）。**http_serve + http_serve_unix 同享**。
   - sse_send/sse_close 现成（L10082/L10117），只缺注册入口 → 改动面 = 流式路由表 + worker 分支 + 1 个注册 native。
 - 验证（examples/m83_s6）：同一 http_serve 注册 `/json`（普通）与 `/stream`（SSE 3 chunk + data: [DONE]）；curl 同端口分别打两路由；断言 stream 头 `text/event-stream`、chunk 逐条实时（时间戳差）、客户端中途断开服务端不崩；http_serve_unix 同端口流式同样过；sse_serve 独立端口旧行为回归。

@@ -6,6 +6,59 @@
 
 ## [Unreleased]
 
+### M83-S6 · http_stream 同端口流式 SSE + M83 全量收口（qg-issue 19，GAP-SRV-SSE；tag v0.1.0-m83）✅
+
+> 立项（2026-09-06）：M83-S6 = Issue 19 —— http_serve/sse_serve 两路径不相通：http_serve handler 一次性应答、
+> sse_serve 独立端口专用不接受 http 路由。api-server OpenAI 兼容 /stream（同一端口 JSON+SSE 共存）无优雅绕过。
+> 形态决策 B：**http_stream(path, on_connect) 流式路由注册**——http 服务面与 sse_send/sse_close 通道复用，
+> 改动面最小（http_serve 与 http_serve_unix 共享 http_conn_worker → 一处改两入口通）。native 298→**299**（+1）。
+> 收口：qg-issue 16/17/18/19/20 全部合入（W1b Windows 平台分流保持挂起），tag v0.1.0-m83。
+
+- **S6-1 新增 native `http_stream(path, on_connect)`**（runtime.c）：http_serve/http_serve_unix 同端口流式路由表
+  （GET + path 精确匹配，流式路由优先于普通 handler）。命中 → 连接包装 PxConn 注册进 g_sse_conns（与 sse_serve
+  同注册表/锁）→ req 注入 conn id → 写 SSE 响应头（text/event-stream + Connection: close）→ 调 on_connect(req)；
+  on_connect 内 `sse_send(req["conn"], chunk)` 逐块推送（每块即写即刷），可 `sse_send` dict {event,data,id,retry}；
+  可提前 `sse_close(conn)`；on_connect 返回后 runtime 自动注销 + 关闭连接（curl 自然 EOF）。
+  handler fn 存全局表（GC 根）经 `__stream_fn_<i>` 取回；全局表 g_stream_mu/g_stream_routes 前置定义于
+  http_conn_worker（避免 static 使用前未定义）。限制：明文 HTTP / HTTP-over-unix（http_conn_worker 面）；
+  px_serve（应用平台独立 worker）暂不接入（文档注明，后续扩展）。
+- **S6-2 验证（examples/m83_s6 verify 5 步全绿）**：同端口 /json（普通 JSON handler 返回 json-ok）与 /stream
+  （3 chunk 间隔 100ms + event done + data: [DONE]）共存；TCP 与 Unix socket 双入口 curl -N 均收到完整 SSE 帧
+  序列 + Content-Type: text/event-stream + 自然 EOF（on_connect 返回即关闭）；sse_serve 独立端口旧行为回归
+  （legacy-1/2 帧）；客户端中途断开（--max-time 0.3）后服务端 health 仍 ok（不崩）。
+- **S6b 收口**：native_index 298→299（gen_native_table.sh 重跑）+ CHEATSHEET（SSE native 面 + 计数）+ CHANGELOG +
+  M83_PLAN 标记 + qg-issue 16-20 归档 done/ + 自举证明（bootstrap_prove.sh rc=0，产物与基准逐字节一致）+
+  回归总闸 m82 + m83_s1-s5 全绿。
+
+### M83-S5 · stdlib 四库 std.html / cookiejar / multipart / smtp（qg-issue 20-L1）✅
+
+> 立项（2026-09-06）：M83-S5 = Issue 20-L1 —— HTML5 / cookie jar / multipart 生成 / SMTP 四个纯 .px 标准库
+> （L1 随发布包分发；零 native 改动）。stdlib 9 → **13 库**，registry 官方包同步 13 个。
+> ⚠️ 验证中实测并记录 **Issue 23**（http_request 显式 Content-Type 仍追加默认 urlencoded → multipart 上传须
+> 带 Content-Length 绕过，见 m83_s5_client 注释）——真 bug 修复留 qg-issue 23 单独处理（M83 边界不动 runtime 语义）。
+
+- **S5-1 `std.html`**（stdlib/html.px + registry/html/0.1.0）：简化 HTML5 容错解析——`html_parse(text)→DOM`
+  （坏标签自动纠正/隐式闭合/孤立结束标签忽略/script·style raw text 不进正文/实体最小解码 &amp;&lt;&gt;&quot;&#39;&nbsp;/
+  裸 `<` 容错）、`html_text(node)` 剥标签取可见正文、`html_query(root, sel)` tag[.class][#id] 简单选择、
+  `html_children/html_attr/html_tag/html_escape`。DOM 节点统一 {tag, attrs, text, children}（#root/#text/#comment）。
+- **S5-2 `std.cookiejar`**（stdlib/cookiejar.px）：会话 Cookie——`cj_new()→jar`、`cj_update(jar, resp_headers)`
+  解析 Set-Cookie（domain/path/max-age/secure/httponly/samesite，Max-Age=0 立删、Max-Age 换算绝对到期秒）、
+  `cj_header(jar, url)` 按 domain（含 ".example.com" 后缀）·path 前缀·secure(https) 匹配生成 "n=v; n2=v2"、
+  `cj_len/cj_clean`。language 限制（http_request 同名响应头覆盖 → 多 Set-Cookie 仅最后一个）文档化。
+- **S5-3 `std.multipart`**（stdlib/multipart.px）：`mp_encode(fields, files)→{body: bytes, content_type, len}`
+  （自动 boundary=`os_random_hex`，files 值 {filename, data: str|bytes, type}，字段 int/float/bool 自动转 str）。
+- **S5-4 `std.smtp`**（stdlib/smtp.px）：轻量 SMTP 客户端——`smtp_send(host, port, from, to, msg, opts?)→bool`
+  + `smtp_try→{ok, err}` 诊断（EHLO/MAIL FROM/RCPT TO/DATA/QUIT 全流程 + 可选 AUTH LOGIN base64；DATA 行首点
+  转义按 \n 归一行再转；tcp_send 循环发满；消息构造 From/To/Subject/Date/MIME-Version/Content-Type）。
+  STARTTLS 暂不支持（语言无客户端 TLS 包装 native，文档注明）。
+- **S5-5 验证（examples/m83_s5 verify 6 步全绿）**：libs_test 双模式（pxi run + pxc build 输出逐字节一致）；
+  multipart 上传回环——px mp_encode body ↔ px http_serve（px_parse_multipart）解析字段/文件/二进制逐字节保真
+  （Content-Length 显式带以绕过 Issue 23）+ **curl -F 对照**（同一服务端解析出同 token/me.png/内容 → 证明
+  与标准 multipart 互通）；SMTP 真发信回环——本地 fake_smtp.py（python）收信断言 Subject/From/To/正文/行首点
+  转义 "..keep this line"/AUTH LOGIN 凭据 base64。
+- stdlib 全库 fmt/lint 0 错 0 警告；registry 4 库镜像 + registry/README（9→13 官方包）；gen_ecosystem.px LIBS
+  白名单 9→13 重跑 ecosystem_index.json（13 libs）；ECOSYSTEM/CHEATSHEET 标准库表 9→13。
+
 ### M83-S4 · RSA PKCS1v15-SHA256 标准签名 + PEM 入参 native（qg-issue 18，GAP-RSA-1）✅
 
 > 立项（2026-09-06）：M83-S4 = Issue 18 —— `rsa_sign/rsa_verify` 裸 type1（MBEDTLS_MD_NONE 无 DigestInfo）

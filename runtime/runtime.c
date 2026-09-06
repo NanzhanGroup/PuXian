@@ -216,6 +216,11 @@ LXValue bi_cron(LXValue* args, int nargs, void* ctx);
 static LXValue bi_sse_serve(LXValue* args, int nargs, void* ctx);
 static LXValue bi_sse_send(LXValue* args, int nargs, void* ctx);
 static LXValue bi_sse_close(LXValue* args, int nargs, void* ctx);
+// M83-S6（Issue 19 GAP-SRV-SSE）：http_stream 同端口流式路由（http_serve/http_serve_unix）
+static LXValue bi_http_stream(LXValue* args, int nargs, void* ctx);
+static int stream_match(const char* path);   // 流式路由表匹配（http_conn_worker 用）
+// 流式接管连接（定义在 SSE 注册表区之后）；http_conn_worker 前向引用
+static LXValue stream_takeover_conn(int fd, LXValue req, int route_idx);
 // M23 P1：SSE 客户端（流式消费 / 事件订阅）
 static LXValue bi_sse_connect(LXValue* args, int nargs, void* ctx);
 static LXValue bi_sse_read(LXValue* args, int nargs, void* ctx);
@@ -5441,6 +5446,8 @@ void px_register_builtins(void) {
     px_set_global("sse_serve", px_native("sse_serve", bi_sse_serve));
     px_set_global("sse_send", px_native("sse_send", bi_sse_send));
     px_set_global("sse_close", px_native("sse_close", bi_sse_close));
+    // M83-S6（Issue 19）：http_serve/http_serve_unix 同端口流式路由注册
+    px_set_global("http_stream", px_native("http_stream", bi_http_stream));
     // M23 P1：SSE 客户端（流式消费 / 事件订阅）
     px_set_global("sse_connect", px_native("sse_connect", bi_sse_connect));
     px_set_global("sse_read", px_native("sse_read", bi_sse_read));
@@ -9486,6 +9493,17 @@ static char* px_http_build_response(LXValue v, int* out_len, int* keep_alive_out
     return out;
 }
 
+// ==================== M83-S6（Issue 19）http_stream 流式路由全局表 ====================
+// http_stream(path, on_connect) 注册 http_serve/http_serve_unix 同端口流式路由。
+// 全局表须在 http_conn_worker（下方）使用前定义；函数实现见 SSE 区（bi_http_stream/
+// stream_takeover_conn，定义在 g_sse_conns 注册表可用处之后）。
+#define MAX_STREAM_ROUTES 64
+static pthread_mutex_t g_stream_mu = PTHREAD_MUTEX_INITIALIZER;
+static struct {
+    char path[256];
+    int active;
+} g_stream_routes[MAX_STREAM_ROUTES];
+
 // 连接处理线程（px_spawn 注册）：args[0] = fd
 // ==================== M23c HTTP 服务端 keep-alive（双模式：与解释器 builtin.rs 一致） ====================
 static const char* px_file_content_type(const char* path);
@@ -9689,6 +9707,19 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
                 }
                 xfree(fcopy);
                 px_dict_set(req, "form", form);
+            }
+        }
+
+        // 5.5（M83-S6 / Issue 19 GAP-SRV-SSE）：http_stream 流式路由优先——
+        //    命中（GET）→ 连接转 SSE 通道（复用 sse_send/sse_close），不再走普通 handler/keep-alive。
+        //    http_serve 与 http_serve_unix 共享本 worker → 两入口同享。
+        if (strcmp(method, "GET") == 0) {
+            pthread_mutex_lock(&g_stream_mu);
+            int s_idx = stream_match(path);
+            pthread_mutex_unlock(&g_stream_mu);
+            if (s_idx >= 0) {
+                if (body_buf) { xfree(body_buf); body_buf = NULL; }
+                return stream_takeover_conn(fd, req, s_idx);
             }
         }
 
@@ -10251,6 +10282,113 @@ static LXValue bi_sse_close(LXValue* args, int nargs, void* ctx) {
     close(fd);
     pthread_mutex_unlock(&g_sse_mu);
     return px_bool(true);
+}
+
+// ==================== M83-S6（Issue 19 GAP-SRV-SSE）http_stream 同端口流式路由 ====================
+// http_stream(path, on_connect)：把 http_serve / http_serve_unix 的同端口路由注册为流式 SSE
+//   （B 形态——http 服务面与 sse_send/sse_close 通道复用）：
+//     · http_conn_worker 解析请求后先查本路由表（GET + path 精确匹配）
+//     · 命中 → 连接包装为 PxConn 并注册进 g_sse_conns（与 sse_serve 同一注册表/锁），
+//       req 注入 conn id → 写 SSE 响应头 → 调 on_connect(req)
+//     · on_connect 内语言层 sse_send(conn, chunk) 逐块推送（每块即写即刷，线程安全）；
+//       可提前 sse_close(conn) 结束；on_connect 返回后本函数自动注销 + 关闭连接
+//     · 普通 JSON handler 同端口共存（流式路由优先匹配）；http_serve 与 http_serve_unix 同享
+//     · 限制：明文 HTTP / HTTP-over-unix（http_conn_worker 面）；px_serve（应用平台独立
+//       worker）暂不接入（文档注明，后续扩展）
+// （全局表 g_stream_mu/g_stream_routes 定义于 http_conn_worker 之前，见上）
+// 流式路由精确匹配（调用方需持 g_stream_mu）；命中返回路由下标，否则 -1
+static int stream_match(const char* path) {
+    for (int i = 0; i < MAX_STREAM_ROUTES; i++) {
+        if (g_stream_routes[i].active && strcmp(g_stream_routes[i].path, path) == 0) return i;
+    }
+    return -1;
+}
+
+// http_stream(path, on_connect) → bool
+static LXValue bi_http_stream(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2 || args[0].type != PX_STR) px_error("http_stream 需要 (path, on_connect) 参数");
+    const char* p = args[0].as.obj->as.str.data;
+    if (p[0] != '/') px_error("http_stream 的 path 必须以 / 开头");
+    LXValue fn = args[1];
+    if (fn.type != PX_FUNC && fn.type != PX_NATIVE) px_error("http_stream 的 on_connect 必须是函数");
+    pthread_mutex_lock(&g_stream_mu);
+    int idx = -1;
+    for (int i = 0; i < MAX_STREAM_ROUTES; i++) {
+        if (g_stream_routes[i].active && strcmp(g_stream_routes[i].path, p) == 0) { idx = i; break; }
+    }
+    if (idx < 0) {
+        for (int i = 0; i < MAX_STREAM_ROUTES; i++) {
+            if (!g_stream_routes[i].active) { idx = i; break; }
+        }
+        if (idx < 0) { pthread_mutex_unlock(&g_stream_mu); return px_bool(false); }
+        snprintf(g_stream_routes[idx].path, sizeof(g_stream_routes[idx].path), "%s", p);
+        g_stream_routes[idx].active = 1;
+    }
+    pthread_mutex_unlock(&g_stream_mu);
+    // handler 存全局表（GC 扫描根），连接线程经全局表取回
+    char key[300];
+    snprintf(key, sizeof(key), "__stream_fn_%d", idx);
+    px_set_global(key, fn);
+    return px_bool(true);
+}
+
+// http_stream 连接接管（http_conn_worker 线程内）：已解析的 HTTP 请求连接 → SSE 流式连接。
+static LXValue stream_takeover_conn(int fd, LXValue req, int route_idx) {
+    // 明文 fd → PxConn 包装（与 sse_serve 同机制：sse_send 经 px_conn_write 写出）
+    PxConn* c = xmalloc(sizeof(PxConn));
+    if (px_conn_init(c, fd) != 0) { xfree(c); close(fd); return px_null(); }
+    g_cur_conn = c;
+    __sync_fetch_and_add(&g_px_inflight, 1);
+
+    // 分配 conn id + 注册（防 fd 复用：注册后才接受 sse_send）
+    pthread_mutex_lock(&g_sse_mu);
+    int64_t conn = g_sse_next_id++;
+    int slot = sse_alloc_slot();
+    if (slot < 0) {
+        pthread_mutex_unlock(&g_sse_mu);
+        px_conn_close(c);
+        __sync_fetch_and_sub(&g_px_inflight, 1);
+        g_cur_conn = NULL;
+        return px_null();
+    }
+    g_sse_conns[slot].fd = fd;
+    g_sse_conns[slot].id = conn;
+    g_sse_conns[slot].active = 1;
+    g_sse_conns[slot].conn = c;
+    pthread_mutex_unlock(&g_sse_mu);
+    px_dict_set(req, "conn", px_int(conn));
+
+    // SSE 响应头（Connection: close——本连接不 keep-alive 复用）
+    const char* hdr = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\n"
+                      "Cache-Control: no-cache\r\nConnection: close\r\n\r\n";
+    px_conn_write(c, hdr, strlen(hdr));
+
+    // 调 on_connect(req)（路由 fn 经全局表取回，防 GC）
+    char key[300];
+    snprintf(key, sizeof(key), "__stream_fn_%d", route_idx);
+    LXValue fn = px_get_global(key);
+    if (fn.type == PX_FUNC || fn.type == PX_NATIVE) {
+        px_call(fn, &req, 1);
+    }
+
+    // on_connect 返回 → 注销 + 关闭（语言层若已 sse_close，注册项已清 → 不再二次关闭）
+    int still = 0;
+    pthread_mutex_lock(&g_sse_mu);
+    int idx = sse_find(conn);
+    if (idx >= 0) {
+        g_sse_conns[idx].active = 0;
+        g_sse_conns[idx].fd = -1;
+        g_sse_conns[idx].conn = NULL;
+        still = 1;
+    }
+    pthread_mutex_unlock(&g_sse_mu);
+    if (still) {
+        px_conn_close(c);
+        __sync_fetch_and_sub(&g_px_inflight, 1);
+    }
+    g_cur_conn = NULL;
+    return px_null();
 }
 
 // 解析 SSE 事件文本（field: value 行）为 dict

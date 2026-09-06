@@ -85,7 +85,7 @@ print("upper=" + to_upper("px"))
 10. 注释/字符串里长行可加 `# noqa` 供 `pxc lint` 跳过。
 11. **pxi（解释器）为 Mini 子集：不支持 `spawn`/`chan` 等并发关键字** → 并发/服务端（http_serve/ws_serve 等常驻回调）程序用 `pxc build`；纯计算与客户端脚本 pxi/编译双模式皆可。
 
-## 2. native 内置速查（298 全量见 `docs/native_index.json`，本表为常用）
+## 2. native 内置速查（299 全量见 `docs/native_index.json`，本表为常用）
 
 ### 核心 / 值
 `print` `len` `range` `type` `str` `int` `float` `bool` `assert` `input` `exit` `sleep` `abs` `sqrt` `min` `max` `pow` `sorted` `reversed` `sum` `map` `filter` `reduce` `contains` `env` `args` `gc` · 数学（M59）：`sin/cos/tan/atan2/floor/ceil/round/log/log10/exp/random/random_int/random_seed` + 常量 `pi/e`
@@ -107,7 +107,7 @@ print("upper=" + to_upper("px"))
 客户端：`http_get(url)` `http_post(url, body[, headers])` `http_request(method, url[, body, headers])` `http_get_stream` · 服务端：`http_serve(port, handler)`（TCP 每请求回调）· `http_serve_unix(sock_path, handler)`（**Unix socket 服务端**，M82；自动清残留 + 0600）· `px_serve(port, docroot[, tls, opts])`（静态 + .px 应用服务器，opts 可 {http3:true, max_body_size, rate_limit...}）· `px_exec`（语言内嵌 .px）· `http_unix(sock, path, ...)`（Unix socket 客户端，M56）
 
 ### WebSocket / SSE
-`ws_serve(port, onmsg)` `ws_connect(url)` `ws_send` `ws_recv` `ws_close` `ws_ping` `ws_heartbeat(conn, ms, cb)` `ws_broadcast(server, msg)` `ws_connect_auto(url, ...)` · SSE：`sse_serve(port, cb)` `sse_send` `sse_close` `sse_connect(url)` `sse_read`
+`ws_serve(port, onmsg)` `ws_connect(url)` `ws_send` `ws_recv` `ws_close` `ws_ping` `ws_heartbeat(conn, ms, cb)` `ws_broadcast(server, msg)` `ws_connect_auto(url, ...)` · SSE：`sse_serve(port, cb)` `sse_send` `sse_close` `sse_connect(url)` `sse_read` · **M83-S6 同端口流式（http_serve/http_serve_unix）**：`http_stream(path, on_connect)` 把同端口某 path 注册为流式 SSE（on_connect(req) 内 `sse_send(req["conn"], chunk)` 逐块推、可 `sse_send` dict {event,data,id,retry}，on_connect 返回自动关闭；普通 JSON handler 同端口共存，流式路由优先；明文 HTTP/HTTP-over-unix，px_serve 面暂不接入）
 
 ### TCP / UDP / TLS
 `tcp_listen/accept/connect/send/recv/close` · `udp_open/send/recv/close` `udp_serve(port, cb)` · TLS：`tls_server(cert, key[, hostname])`（注册后 px_serve/WS/SSE 支持 HTTPS/WSS/TLS）
@@ -253,6 +253,6 @@ set_timeout(fn (): print("once after 2s"), 2000)
 
 ## 5. 防漂移与源
 
-- **native 清单**（298，单一事实源 = runtime 注册表）：`bash tools/gen_native_table.sh` → `docs/native_index.json`；CI 重跑 diff 防漂移。**本表计数必须 == count**（现 298）。
+- **native 清单**（299，单一事实源 = runtime 注册表）：`bash tools/gen_native_table.sh` → `docs/native_index.json`；CI 重跑 diff 防漂移。**本表计数必须 == count**（现 299）。
 - **stdlib 索引**：`tools/pxc run tools/gen_ecosystem.px` → `docs/ecosystem_index.json`。
 - 规范：`docs/spec.md`（§8 模块/import、§9 双模式、§12 AI 协议）· `docs/MINI_SUBSET.md`（子集边界）· 缺口与写库规范：`docs/ECOSYSTEM_GAPS.md`。
