@@ -85,7 +85,7 @@ print("upper=" + to_upper("px"))
 10. 注释/字符串里长行可加 `# noqa` 供 `pxc lint` 跳过。
 11. **pxi（解释器）为 Mini 子集：不支持 `spawn`/`chan` 等并发关键字** → 并发/服务端（http_serve/ws_serve 等常驻回调）程序用 `pxc build`；纯计算与客户端脚本 pxi/编译双模式皆可。
 
-## 2. native 内置速查（300 全量见 `docs/native_index.json`，本表为常用）
+## 2. native 内置速查（301 全量见 `docs/native_index.json`，本表为常用）
 
 ### 核心 / 值
 `print` `len` `range` `type` `str` `int` `float` `bool` `assert` `input` `exit` `sleep` `abs` `sqrt` `min` `max` `pow` `sorted` `reversed` `sum` `map` `filter` `reduce` `contains` `env` `args` `gc` · 数学（M59）：`sin/cos/tan/atan2/floor/ceil/round/log/log10/exp/random/random_int/random_seed` + 常量 `pi/e`
@@ -111,6 +111,9 @@ print("upper=" + to_upper("px"))
 
 ### TCP / UDP / TLS
 `tcp_listen/accept/connect/send/recv/close` · `udp_open/send/recv/close` `udp_serve(port, cb)` · TLS：`tls_server(cert, key[, hostname])`（注册后 px_serve/WS/SSE 支持 HTTPS/WSS/TLS）
+
+### DNS（域名解析）
+`dns_lookup(domain)` → list[str]（**M84-S3**，A+AAAA 全量返回，getaddrinfo；顺序即解析器返回序）——失败（NXDOMAIN/超时/无地址记录）返回 **Err("dns: ...")**，调用方可 `is_err()`/`?` 判定（区别于空 list）。守护域名解析（bs-safeip resolve_ips 类）不再依赖 getent 外部命令代偿。
 
 ### SQLite
 `sqlite_open(path)` → conn · `sqlite_exec(conn, sql[, params])` · `sqlite_query(conn, sql[, params])` → list[dict] · `sqlite_close` · `sqlite_escape` · `sqlite_last_insert_rowid`
@@ -253,6 +256,6 @@ set_timeout(fn (): print("once after 2s"), 2000)
 
 ## 5. 防漂移与源
 
-- **native 清单**（300，单一事实源 = runtime 注册表）：`bash tools/gen_native_table.sh` → `docs/native_index.json`；CI 重跑 diff 防漂移。**本表计数必须 == count**（现 300）。
+- **native 清单**（301，单一事实源 = runtime 注册表）：`bash tools/gen_native_table.sh` → `docs/native_index.json`；CI 重跑 diff 防漂移。**本表计数必须 == count**（现 301）。
 - **stdlib 索引**：`tools/pxc run tools/gen_ecosystem.px` → `docs/ecosystem_index.json`。
 - 规范：`docs/spec.md`（§8 模块/import、§9 双模式、§12 AI 协议）· `docs/MINI_SUBSET.md`（子集边界）· 缺口与写库规范：`docs/ECOSYSTEM_GAPS.md`。

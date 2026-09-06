@@ -20,6 +20,19 @@
 >   Go sha256.Sum256、腾讯云 TC3 4 级链（kDate→kService→kSigning→signature）端到端对拍 Go、篡改敏感性。
 > - 回归：m83_s3（ed25519）/ m83_s4（RSA）/ m84_s1（http CT）全绿。
 
+### M84-S3 · dns_lookup 原生域名解析（qg-issue 22，GAP-DNS-1）
+
+> 立项（2026-09-06）：全仓无 getaddrinfo/A 记录查询 native —— 守护类模块（bs-safeip util.px
+> resolve_ips 每轮解析守护域名）只能 `getent ahostsv4` 外部命令文本切分（脆弱、依赖 glibc 命令）。
+> 底层 glibc getaddrinfo 现成 → 纯暴露成本。native 300→**301**（+1 dns_lookup）。
+> - **`dns_lookup(domain)`→list[str]**：getaddrinfo（AF_UNSPEC+SOCK_STREAM，与 hconnect 同口径）返回
+>   A+AAAA **全量地址**（顺序即解析器返回序）；解析失败（NXDOMAIN/超时/空域名/无地址记录）返回
+>   **Err("dns: <host>: <原因>")**——调用方可 `is_err()`/`?` 判定，与「解析成功但空」天然区分。
+> - verify（examples/m84_s3_dns，全绿）：localhost 确定性断言（含 127.0.0.1，/etc/hosts 语义）、
+>   .invalid NXDOMAIN/空域名 → Err 可判定、公网域 www.qq.com（A+AAAA）与 Go net.LookupIP 期望交集
+>   ≥1（DNS 轮询容忍，非精确相等）且返回 IPv6、重复调用集合稳定；断网自动跳过公网项仅本地断言。
+> - 回归：m82 / m83_s3 / m83_s4 / m84_s1 / m84_s2 全绿。
+
 ### M84-S1 · http_request/http_unix 双 Content-Type bug 修复（qg-issue 23）
 
 > 立项（2026-09-06）：http_request 显式带 Content-Type 且无 Content-Length 时，默认 urlencoded CT 照加
