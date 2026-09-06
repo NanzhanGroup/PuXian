@@ -121,6 +121,9 @@ px $(echo "$SELFHOST_VER") (普贤 PuXian · selfhosted $SELFHOST_MILESTONE)
                                              agent 以子进程拉起；9 工具 run/fmt/lint/test/
                                              bench/doc/ast/build/version 经 os_spawn_capture
                                              调 bootstrap 各二进制，隔离崩溃不污染协议）
+  px refs <file.px>                         输出被引用全局/native 名集合（M86-S1：
+                                             编译 C 产物提取 px_get_global，import 递归
+                                             覆盖；供 px build 自动裁剪，失败退全量）
   px --version                               输出版本号
   px help                                    显示本帮助
 EOF
@@ -532,6 +535,29 @@ cmd_mcp() {
     PX_BOOT="$PXC_HOME/bootstrap" PX_PXI="$PXI_BIN" PX_PXC="$PXC_HOME/tools/px" exec "$PXMCP_BIN" "$@"
 }
 
+# ---- M86-S1：px refs（编译器 C 产物引用集提取 —— 自动裁剪的"引用采集"）----
+# 原理：pxc build <file> 把 .px 编译为 C（stdout）；所有全局名引用都落成
+#   px_get_global("name") 调用串 → 提取即得"被引用全局/native 名集合"。
+#   import 递归天然覆盖（resolve 展开后一并生成）；比编译器内打点更可靠
+#   （提取的是最终代码生成结果，零漏报），且零编译器改动（不破坏自举）。
+# 输出：每行一个名（LC_ALL=C 排序去重）；编译失败 → 空 + 退出 1（装配器退全量）。
+cmd_refs() {
+    local file="${1:-}"
+    [ -n "$file" ] || { echo "用法: px refs <file.px>" >&2; exit 1; }
+    [ -f "$file" ] || { echo "错误: 无法读取文件 $file" >&2; exit 1; }
+    local c
+    c="$(mktemp /tmp/px_refs_XXXXXX.c)" || return 1
+    if ! "$PXC_BIN" build "$file" > "$c" 2>/dev/null; then
+        rm -f "$c"
+        echo "错误: 编译失败（$file）—— 自动裁剪退全量" >&2
+        return 1
+    fi
+    grep -oE 'px_get_global\("([^"]+)"' "$c" \
+        | sed 's/px_get_global("//; s/"$//' \
+        | LC_ALL=C sort -u
+    rm -f "$c"
+}
+
 # ---- 入口 ----
 cmd="${1:-help}"
 case "$cmd" in
@@ -546,6 +572,7 @@ case "$cmd" in
     bench) shift; [ $# -ge 2 ] || { echo "用法: px bench <file.px> <func> [--count N] [--repeat R]" >&2; exit 1; }; cmd_bench "$@" ;;
     lsp)   shift; cmd_lsp "$@" ;;
     mcp)   shift; cmd_mcp "$@" ;;
+    refs)  shift; cmd_refs "$@" ;;
     --version|-v) echo "px $SELFHOST_VER (普贤 PuXian · selfhosted $SELFHOST_MILESTONE)";;
     help|--help|-h) usage ;;
     *) echo "未知子命令: $cmd" >&2; usage >&2; exit 1 ;;

@@ -25,6 +25,14 @@
 > - **零漂移实证**：examples/m86_s0 verify **14/14 PASS** —— 默认 build **9,010,184 B**（9.0M 基线不变）/ `--no-quic` 3,929,808 B（M85 基线不变）/ pxc 别名 build 等价 / spec+install.sh+make_release 双装断言全过。
 > - `.px` 工具（pxfmt/pxlint/pxdoc/pxtest/pxbench/pxlsp/pxmcp）usage 显示名保留各自自举二进制真名（px 子命令错误提示已在 tools/px 层 px 化，直接调用场景名实相符，侦查后不改为宜）。
 
+### M86-S1 · 引用集收集 `px refs` + native_mod_map（qg-issue 25）
+
+> 完成（2026-09-06，commit M86-S1）：**自动裁剪的"引用采集"层落地**。
+> - **runtime/native_mod_map.txt**（112 个可裁 native 名=模块）：从 runtime.c px_register_builtins 各 `#ifndef PX_NO_<MOD>` 宏块 + 模块文件注册点提取（sqlite/ws/zip/xml/aes/rsa/ed25519/route/zlib/h2/quic）；生成器 `tools/gen_native_map.sh`（awk+grep 零依赖，`LC_ALL=C sort` 与入库 diff 一致可重生成校验）。
+> - **`px refs <file.px>`**（tools/px 新子命令，usage 同步）：pxc build 编译 C 产物 → 提取 `px_get_global("name")` 引用名集合（每行一名，排序去重）。**实现选择（实践修正）**：M86_PLAN 原方案"编译器内打点收集"经实测否决——打点版自举 pxc 编 compiler.px 自身触发 runtime 字符串越界（自举不收敛风险），回滚零改动方案；C 产物静态提取更优：提取的是**最终代码生成结果**（import 递归展开后全量、零漏报零误报、条件分支静态覆盖），且**零编译器/零 golden 改动、零自举风险**（bootstrap/pxc 与 golden 均未动）。
+> - **失败退全量**：解析/编译失败 → px refs 非 0 + 提示"自动裁剪退全量"（保编译成功不背锅）。
+> - **verify examples/m86_s1 19/19 PASS**：hello 核心集 / 条件分支静态收集（if 内 ws_connect）/ import 递归（多文件 aes + stdlib 库内部 len/zip_lists）/ 解析异常退全量 / 9 模块代表 native 全命中。
+
 ### M85 立项 · pxc build 编译产物按需裁剪（qg-issue 24 · 方案 B 细粒度模块开关）
 
 > 立项（2026-09-06）：用户提问「编译产物都在 9M 以上，能去掉未使用模块吗」→ 真机实测 hello.px

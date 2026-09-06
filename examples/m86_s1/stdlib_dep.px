@@ -1,0 +1,4 @@
+import std.collections
+def main():
+    let p = zip_lists([1], [2])
+    print(len(p))
