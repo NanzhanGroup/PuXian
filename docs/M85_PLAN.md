@@ -75,6 +75,14 @@
 
 | 批 | 状态 | 说明 |
 |---|---|---|
-| S1 | ⏳ 待执行 | |
-| S2 | ⏳ 待执行 | |
-| S3 | ⏳ 待执行 | |
+| S1 | ✅ done（M85-S1 commit） | runtime.c 14 处宏包裹（sqlite/ws/zip/xml/aes/rsa/ed25519/route/zlib/h2，10 模块）+ tools/pxc 10 个 --no-* flag + cuts 缓存隔离 + 链接裁剪；verify PASS=9 FAIL=0：默认 9010184 零漂移 / --no-quic 3929808 / --no-quic --no-sqlite 2884072 / 全裁 2713472（9.0M→2.7M −70%）；缺 native → 未定义变量（R1001 叙事）+ 核心 http native 保留 |
+| S2 | ⏳ 待执行 | profile 预设（--min）+ 交叉 target 组合 + 文档同步 |
+| S3 | ⏳ 待执行 | 收口：重链 bootstrap/pxi + 自举证明 + 回归总闸 + 归档 + tag |
+
+### S1 侦查修正（2026-09-06 源码级实录，覆盖规划假设）
+
+- **`--no-tls` 从开关集剔除**：mbedtls 非仅 TLS 面——runtime.c 主文件 **104 处直接调用**（http/https/wss/tls_server 核心 native，不设开关）+ aes/rsa/zip/ws(sha1) 亦以 mbedtls 为实现底座 → mbedtls **恒链**；真正的"去 mbedtls"需先把 HTTPS/TLS 逻辑从 runtime.c 拆独立模块（超 M85 边界，候选 M85b/M86）。
+- miniz 被 runtime.c（gzip 内联核心 bi_gzip_* L9401）与 runtime_zip.c 共用 → **恒链**，不随 --no-zip 裁。
+- tls_server/session/basic_auth（M27 webserver 生产化）定义在 **runtime.c 内联**（非 ws 模块）→ 不随 --no-ws 裁。
+- sqlite 裁剪最净：runtime.c 对 sqlite3 API **零直接调用**，注册两段（px_set_global L5547-5553 + ffi_register L5556-5562）宏包 + 去 sqlite3.o 直链 1.3M。
+- runtime_h2.c 无 native 注册（http_serve 内部 px_h2_handle 两调用段宏包）→ h2 裁剪语义 = http_serve 退化为 HTTP/1.1（非 native 缺失叙事）。

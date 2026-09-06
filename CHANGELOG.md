@@ -19,6 +19,14 @@
 > 方案 C（--gc-sections 自动死代码裁剪）二期评估不承诺。执行规划 `docs/M85_PLAN.md`（S1→S3）。
 > 不改语言语法/现有 native 语义；native 总数 **301** 不变。
 
+### M85-S1 · 模块裁剪开关集落地：runtime.c 宏包裹 + tools/pxc 细粒度裁剪（qg-issue 24）
+
+> 实施（2026-09-06）：S1 首步依赖矩阵侦查定稿（修正规划假设）→ runtime.c 14 处宏包裹 + tools/pxc 重构。
+> - **侦查修正**：`--no-tls` 从开关集**剔除**——mbedtls 非仅 TLS 面，runtime.c 主文件 104 处直接调用（http/https/wss/tls_server 核心）+ aes/rsa/zip/ws(sha1) 均以 mbedtls 为底座，恒链不可独立裁；miniz 被 runtime.c(gzip 内联核心)+zip 共用恒链；tls_server/session/basic_auth 属 runtime.c 内联（M27）不随 --no-ws 裁。sqlite 最净（runtime.c 对 sqlite3 API 零直接调用）。
+> - **runtime.c 宏包裹**（零漂移，默认无 -D 全能力路径编译通过）：sqlite（注册 px_set_global+ffi_register 两段）/ ws / zip / xml / aes / rsa（两段）/ ed25519 / route（注册段 + http dispatch 调用段）/ zlib / h2（TLS ALPN + h2c 两调用段）共 **10 模块 14 处** `#ifndef PX_NO_<MOD>`。
+> - **tools/pxc 重构**：新增 `--no-sqlite/--no-ws/--no-zip/--no-xml/--no-aes/--no-rsa/--no-ed25519/--no-route/--no-zlib/--no-h2`（与 --no-quic 正交可组合）；rt_src_files/rt_key/rt_cache_compile/rt_ensure 改以 **cuts 集合**驱动——被裁模块源不复制不编译、`-DPX_NO_<MOD>` 宏自动注入、**缓存 key 纳入 cuts**（不同裁剪组合缓存隔离，实测 4 组合各独立 .rtcache 无串用）、链接去 sqlite3.o / libz.a（按开关）。
+> - **verify（examples/m85_s1，PASS=9 FAIL=0）**：默认 build **9,010,184 B**（M84 基线逐字节零漂移）/ `--no-quic` **3,929,808 B** / `--no-quic --no-sqlite` **2,884,072 B** / 全裁（--no-quic+10 模块）**2,713,472 B**（9.0M→2.7M，**−70%**）；裁剪态缺 native 调用 → 运行时明确报错（未定义变量，非崩溃，R1001 叙事）；全裁态 http_get 等核心 HTTP native 保留可用。
+
 ### M84-S4 · 收口：重链 bootstrap/pxi + 全量回归 + qg-issue 21/22/23 归档（tag v0.1.0-m84）
 
 > 收口（2026-09-06）：M83-S2…M84-S3 的 runtime 变更（AES-ECB/gzip 暴露/ed25519/RSA-PKCS1v15/http_stream/CT 修复/hmac_sha256/dns_lookup）此前均未重链解释器 → 本批重链 **bootstrap/pxi**（9,425,360 → 9,457,456 字节，git 提交新 ELF）——pxi 解释模式现可调 M83/M84 全部新 native。

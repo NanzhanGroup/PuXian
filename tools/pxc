@@ -76,6 +76,16 @@ pxc $(echo "$SELFHOST_VER") (普贤 PuXian · selfhosted $SELFHOST_MILESTONE)
                                                                   --no-quic（显式 flag 优先）
                                                  --no-quic       去掉 QUIC/H3（-DPX_NO_QUIC，
                                                                   不链 ngtcp2/openssl）
+                                                 --no-sqlite     模块裁剪（M85-S1，各开关正交可组合）：去掉
+                                                 --no-ws         sqlite3 / ws / zip / xml / aes / rsa / ed25519 /
+                                                 --no-zip        route / zlib / h2 未用模块，产物显著减小
+                                                 --no-xml        （runtime 侧 -DPX_NO_<MOD>；缺 native 调用 → R1001）
+                                                 --no-aes        例：--no-quic --no-sqlite hello.px → ~2.6M
+                                                 --no-rsa        （默认全能力基线 9.0M，不传 flag 零漂移）
+                                                 --no-ed25519
+                                                 --no-route
+                                                 --no-zlib
+                                                 --no-h2
                                                  --cc <cc>       指定 C 编译器（交叉用，
                                                                   如 aarch64-linux-musl-gcc）
                                                  --mbedtls-lib   目标架构 mbedtls 库目录
@@ -115,15 +125,46 @@ EOF
 # → 改 runtime 源码 / 换 cc / 切 quic 自动重建缓存。
 # 注意：mbedtls/ngtcp2/openssl 为第三方 git 预置（include 不随 key 变；升级三方库后
 #       若缓存行为异常 rm -rf .rtcache 重建即可）。
+# ---- M85-S1：模块裁剪开关集（--no-<mod>，与 --no-quic 正交可组合）----
+# cuts = 空格分隔的已裁项集合（quic + sqlite ws zip xml aes rsa ed25519 route zlib h2）
+# 每模块对应 runtime 源文件与 -DPX_NO_<MOD> 宏；缓存 key 纳入 cuts（不同裁剪组合缓存隔离）
+cut_has() { # $1=cuts串 $2=name → 0 含 / 1 不含
+    case " $1 " in *" $2 "*) return 0 ;; *) return 1 ;; esac
+}
+mod_srcs() { # $1=mod → 该模块 runtime 源文件（空格分隔，从 rt_src_files/cache 剔除）
+    case "$1" in
+        sqlite)   echo "runtime_sqlite.c" ;;
+        ws)       echo "runtime_ws.c" ;;
+        zip)      echo "runtime_zip.c" ;;
+        xml)      echo "runtime_xml.c" ;;
+        aes)      echo "runtime_aes.c" ;;
+        rsa)      echo "runtime_rsa.c" ;;
+        ed25519)  echo "runtime_ed25519.c tweetnacl.c tweetnacl.h" ;;
+        route)    echo "runtime_route.c" ;;
+        zlib)     echo "runtime_zlib.c" ;;
+        h2)       echo "runtime_h2.c" ;;
+    esac
+}
+mod_macro() { # $1=mod → -DPX_NO_<MOD>
+    echo "-DPX_NO_$(echo "$1" | tr '[:lower:]' '[:upper:]')"
+}
 rt_src_files() {
-    # 参数：no_quic(0/1) → 输出需进缓存的 runtime 源（相对 $RT_DIR）
-    local no_quic="$1"
+    # 参数：cuts（空格分隔已裁项）→ 输出需进缓存的 runtime 源（相对 $RT_DIR）
+    local cuts="$1"
     local list="runtime.h runtime.c runtime_aes.c runtime_xml.c runtime_zip.c \
         runtime_ws.c runtime_rsa.c runtime_sqlite.c runtime_route.c runtime_h2.c \
         runtime_ffi.c runtime_zlib.c runtime_ed25519.c tweetnacl.c tweetnacl.h \
         arch.h arch_x86_64.h arch_aarch64.h \
         arch_armv7.h arch_riscv64.h"
-    if [ "$no_quic" != "1" ]; then
+    local m f
+    for m in sqlite ws zip xml aes rsa ed25519 route zlib h2; do
+        if cut_has "$cuts" "$m"; then
+            for f in $(mod_srcs "$m"); do
+                list="${list/ $f/ }"
+            done
+        fi
+    done
+    if ! cut_has "$cuts" "quic"; then
         list="$list runtime_quic.c runtime_h3.c runtime_h3_qpack.c \
             runtime_h3_qpack_dyn.c runtime_h3_qpack.h runtime_h3_qpack_tbl.h \
             runtime_h3_qpack_dyn.h"
@@ -131,9 +172,9 @@ rt_src_files() {
     echo "$list"
 }
 rt_key() {
-    # 参数：no_quic cc → 16 位缓存键（runtime 源 + miniz + sqlite 头内容哈希）
-    local no_quic="$1" cc="$2" f key_src=""
-    for f in $(rt_src_files "$no_quic") \
+    # 参数：cuts cc → 16 位缓存键（runtime 源 + miniz + sqlite 头内容哈希 + cuts）
+    local cuts="$1" cc="$2" f key_src=""
+    for f in $(rt_src_files "$cuts") \
              third_party/miniz/miniz.c third_party/miniz/miniz_tinfl.c \
              third_party/miniz/miniz_tdef.c third_party/miniz/miniz.h \
              third_party/miniz/miniz_common.h third_party/miniz/miniz_tinfl.h \
@@ -143,17 +184,17 @@ rt_key() {
             key_src="$key_src $(sha256sum "$RT_DIR/$f" | cut -c1-16)"
         fi
     done
-    echo "$key_src cc=$(basename "$cc") noquic=$no_quic" | sha256sum | cut -c1-16
+    echo "$key_src cc=$(basename "$cc") cuts=$cuts" | sha256sum | cut -c1-16
 }
 rt_cache_compile() {
-    # 参数：dir（cache 目录）no_quic cc —— 复制源到 dir 并逐 .c 预编译 .o（一次性）
-    local dir="$1" no_quic="$2" cc="$3"
+    # 参数：dir（cache 目录）cuts cc —— 复制源到 dir 并逐 .c 预编译 .o（一次性）
+    local dir="$1" cuts="$2" cc="$3"
     local mbedtls_inc="$RT_DIR/mbedtls/include"
     local zlib_inc="$RT_DIR/third_party/zlib/include"
     local sqlite_dir="$RT_DIR/third_party/sqlite3"
     local f
     # 复制源（同目录相对 include 语义，对齐旧 copy_runtime 的 build_dir 布局）
-    for f in $(rt_src_files "$no_quic"); do
+    for f in $(rt_src_files "$cuts"); do
         cp "$RT_DIR/$f" "$dir/" || return 1
     done
     for f in miniz.c miniz_tinfl.c miniz_tdef.c miniz.h miniz_common.h \
@@ -165,17 +206,20 @@ rt_cache_compile() {
     local common="-O2 -pthread -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_FOREIGN_KEYS=1 \
         -I\"$dir\" -I\"$RT_DIR/third_party/miniz\" -I\"$mbedtls_inc\" \
         -I\"$sqlite_dir\" -I\"$zlib_inc\""
-    if [ "$no_quic" = "1" ]; then
-        common="$common -DPX_NO_QUIC"
-    else
+    local m
+    for m in quic sqlite ws zip xml aes rsa ed25519 route zlib h2; do
+        if cut_has "$cuts" "$m"; then
+            common="$common $(mod_macro "$m")"
+        fi
+    done
+    if ! cut_has "$cuts" "quic"; then
         common="$common -I\"$RT_DIR/third_party/ngtcp2/include\" -I\"$RT_DIR/third_party/openssl/include\""
     fi
-    local srcs="runtime.c runtime_aes.c runtime_xml.c runtime_zip.c runtime_ws.c \
-        runtime_rsa.c runtime_sqlite.c runtime_route.c runtime_h2.c runtime_ffi.c \
-        runtime_zlib.c runtime_ed25519.c tweetnacl.c"
-    if [ "$no_quic" != "1" ]; then
-        srcs="$srcs runtime_quic.c runtime_h3.c runtime_h3_qpack.c runtime_h3_qpack_dyn.c"
-    fi
+    # 需编译的 .c = rt_src_files 输出中所有 .c（被裁模块已剔除，顺序一致）+ miniz
+    local srcs=""
+    for f in $(rt_src_files "$cuts"); do
+        case "$f" in *.c) srcs="$srcs $f" ;; esac
+    done
     srcs="$srcs miniz.c miniz_tinfl.c miniz_tdef.c"
     local src base
     for src in $srcs; do
@@ -189,23 +233,22 @@ rt_cache_compile() {
     return 0
 }
 rt_ensure() {
-    # 参数：no_quic cc → stdout 输出 cache_dir；缺失则现编
-    local no_quic="$1" cc="$2" key dir
-    key="$(rt_key "$no_quic" "$cc")"
+    # 参数：cuts cc → stdout 输出 cache_dir；缺失则现编
+    local cuts="$1" cc="$2" key dir
+    key="$(rt_key "$cuts" "$cc")"
     dir="$PXC_HOME/.rtcache/$key"
     if [ -d "$dir" ] && [ -f "$dir/.complete" ]; then
         echo "$dir"
         return 0
     fi
     mkdir -p "$dir"
-    if ! rt_cache_compile "$dir" "$no_quic" "$cc"; then
+    if ! rt_cache_compile "$dir" "$cuts" "$cc"; then
         rm -rf "$dir"
         return 1
     fi
     echo "$dir"
     return 0
 }
-
 # ---- M71-S2：--target 高层折叠（对齐 GOOS/GOARCH，交叉 5 flag 折叠为一条命令）----
 # 输出键值行：cc / mbedtls_lib / sqlite_obj / zlib_lib / no_quic。
 # aarch64 仓库预置库；armv7/riscv64 无仓库预置 → 探测 CI/本机 cross_multiarch
@@ -259,10 +302,21 @@ target_defaults() {
 # build：AST → C → gcc 静态二进制（对齐 Rust run_build）
 cmd_build() {
     local no_quic=0 cc="gcc" mbedtls_lib="" sqlite_obj="" zlib_lib="" target=""
+    local mods="" cuts=""
     local cc_set=0 no_quic_set=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --no-quic) no_quic=1; no_quic_set=1; shift ;;
+            --no-sqlite) mods="$mods sqlite"; shift ;;
+            --no-ws) mods="$mods ws"; shift ;;
+            --no-zip) mods="$mods zip"; shift ;;
+            --no-xml) mods="$mods xml"; shift ;;
+            --no-aes) mods="$mods aes"; shift ;;
+            --no-rsa) mods="$mods rsa"; shift ;;
+            --no-ed25519) mods="$mods ed25519"; shift ;;
+            --no-route) mods="$mods route"; shift ;;
+            --no-zlib) mods="$mods zlib"; shift ;;
+            --no-h2) mods="$mods h2"; shift ;;
             --cc) cc="$2"; cc_set=1; shift 2 ;;
             --target|-t) target="$2"; shift 2 ;;
             --mbedtls-lib) mbedtls_lib="$2"; shift 2 ;;
@@ -343,7 +397,8 @@ cmd_build() {
     }
     # 2) M71-S1：runtime 预编译 .o 缓存（命中 → 只编 base.c + 链接；miss → 现编入缓存）
     local cache_dir
-    cache_dir="$(rt_ensure "$no_quic" "$cc")" || { echo "错误: runtime 预编译缓存建立失败" >&2; return 1; }
+    cuts="$mods"; [ "$no_quic" = "1" ] && cuts="$cuts quic"
+    cache_dir="$(rt_ensure "$cuts" "$cc")" || { echo "错误: runtime 预编译缓存建立失败" >&2; return 1; }
     # 3) 编译生成的 C 单文件 + 链接预编译 .o（不再每次全量现编 runtime）
     local mbedtls_inc="$RT_DIR/mbedtls/include"
     local sqlite_dir="$RT_DIR/third_party/sqlite3"
@@ -359,9 +414,13 @@ cmd_build() {
     local common_def="-O2 -pthread -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_FOREIGN_KEYS=1 \
         -I\"$cache_dir\" -I\"$RT_DIR/third_party/miniz\" -I\"$mbedtls_inc\" \
         -I\"$sqlite_dir\" -I\"$RT_DIR/third_party/zlib/include\""
-    if [ "$no_quic" = "1" ]; then
-        common_def="$common_def -DPX_NO_QUIC"
-    else
+    local m2
+    for m2 in quic sqlite ws zip xml aes rsa ed25519 route zlib h2; do
+        if cut_has "$cuts" "$m2"; then
+            common_def="$common_def $(mod_macro "$m2")"
+        fi
+    done
+    if ! cut_has "$cuts" "quic"; then
         common_def="$common_def -I\"$RT_DIR/third_party/ngtcp2/include\" -I\"$RT_DIR/third_party/openssl/include\""
     fi
     # 用户 C 单文件现编（与 runtime .o 同 defines/include → ABI 一致）
@@ -380,17 +439,21 @@ cmd_build() {
     # relocations" → riscv64 交叉加 -no-pie 传统静态
     local pie_flag=""
     case "$cc" in *riscv64*) pie_flag=" -no-pie" ;; esac
-    cc_cmd="$cc -static -O2 -pthread$pie_flag -o \"$out_path\" \"$build_dir/$base.o\" $objs \
-        \"$sqlite_src\""
+    cc_cmd="$cc -static -O2 -pthread$pie_flag -o \"$out_path\" \"$build_dir/$base.o\" $objs"
+    if ! cut_has "$cuts" sqlite; then
+        cc_cmd="$cc_cmd \"$sqlite_src\""
+    fi
     cc_cmd="$cc_cmd \
         \"$mbedtls_lib/libmbedtls.a\" \"$mbedtls_lib/libmbedx509.a\" \"$mbedtls_lib/libmbedcrypto.a\""
-    if [ "$no_quic" != "1" ]; then
+    if ! cut_has "$cuts" "quic"; then
         cc_cmd="$cc_cmd \
         \"$RT_DIR/third_party/ngtcp2/lib/libngtcp2.a\" \"$RT_DIR/third_party/ngtcp2/lib/libngtcp2_crypto_quictls.a\" \
         \"$RT_DIR/third_party/openssl/lib/libssl.a\" \"$RT_DIR/third_party/openssl/lib/libcrypto.a\""
     fi
     # M61-S0：zlib 外部静态库（无条件链，.a ~150KB；--cc 交叉已自动切架构库）
-    cc_cmd="$cc_cmd \"$zlib_lib/libz.a\""
+    if ! cut_has "$cuts" zlib; then
+        cc_cmd="$cc_cmd \"$zlib_lib/libz.a\""
+    fi
     cc_cmd="$cc_cmd -lm -ldl"
     if ! eval "$cc_cmd" 2> /tmp/pxc_gcc_err.log; then
         echo "编译失败: $out_path" >&2
