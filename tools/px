@@ -61,11 +61,21 @@ PXCHECK_BIN="$PXC_HOME/bootstrap/pxcheck" # pxcheck 诊断器（pxlsp 子进程�
 PXMCP_BIN="$PXC_HOME/bootstrap/pxmcp"   # pxmcp 编译版（px mcp 用，M65-S4）
 RT_DIR="$PXC_HOME/runtime"
 SELFHOST_VER="0.1.0"
-SELFHOST_MILESTONE="M-B9a"
+SELFHOST_MILESTONE="M-B9a"   # 自举内核血统标识（M87 起用户可见版本=RELEASE_VER，此标识留内部诊断用）
+
+# 用户可见版本号（M87：对齐 go/python 单版本号心智，一行、无括号长文案）。
+# 发布包由 make_release.sh 从 git tag 生成 VERSION（如 0.1.0-m86）；源码直跑
+# 无此文件 → 退回语义版 SELFHOST_VER。--version 与 usage 头部均用 RELEASE_VER。
+RELEASE_VER="$SELFHOST_VER"
+if [ -f "$PXC_HOME/VERSION" ]; then
+    _RV="$(cat "$PXC_HOME/VERSION" 2>/dev/null || true)"
+    [ -n "$_RV" ] && RELEASE_VER="$_RV"
+    unset _RV
+fi
 
 usage() {
     cat <<EOF
-px $(echo "$SELFHOST_VER") (普贤 PuXian · selfhosted $SELFHOST_MILESTONE)
+px $RELEASE_VER
 
 （M86-S0 起官方命令名为 px；pxc 为兼容别名，等价可用）
 
@@ -602,7 +612,7 @@ case "$cmd" in
     lsp)   shift; cmd_lsp "$@" ;;
     mcp)   shift; cmd_mcp "$@" ;;
     refs)  shift; cmd_refs "$@" ;;
-    --version|-v) echo "px $SELFHOST_VER (普贤 PuXian · selfhosted $SELFHOST_MILESTONE)";;
+    --version|-v) echo "px $RELEASE_VER";;
     help|--help|-h) usage ;;
     *) echo "未知子命令: $cmd" >&2; usage >&2; exit 1 ;;
 esac

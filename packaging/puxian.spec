@@ -60,7 +60,7 @@ rm -rf %{buildroot}
 # 包树平铺到 /usr/share/puxian（= 发布 tarball 内容，strip 顶层目录）
 install -d %{buildroot}%{_datadir}/puxian
 cp -a tools bootstrap stdlib runtime \
-      LICENSE RELEASE.md \
+      LICENSE RELEASE.md VERSION \
       %{buildroot}%{_datadir}/puxian/
 # 可执行位兜底（cp -a 已保留，防个别环境 umask）
 find %{buildroot}%{_datadir}/puxian/bootstrap -type f -exec chmod +x {} \;
