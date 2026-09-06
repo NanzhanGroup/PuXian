@@ -41,11 +41,11 @@ Without prior written permission, these names may not be used to identify produc
 | Status | Description |
 |---|---|
 | ✅ **Self-hosting complete (M-B8)** | **The PuXian compiler is written in PuXian itself**: the five core components — `lexer / parser / codegen / interp / value system` — have all been rewritten in `.px`. The bootstrap proof shows A.c == B.c == B2.c, byte-for-byte identical. |
-| ✅ **Rust version retired (M-B9a)** | Rust sources archived under `archive/rust-compiler/` (read-only). The new toolchain **`tools/pxc` requires no Rust at all**, running on top of the bootstrap binary. |
+| ✅ **Rust version retired (M-B9a)** | Rust sources archived under `archive/rust-compiler/` (read-only). The new toolchain **`tools/px` requires no Rust at all**, running on top of the bootstrap binary. |
 | ✅ **CI integrated** | GitHub Actions: every commit automatically runs regression + bootstrap proof + example compilation |
 | ✅ **Dogfooding done (M-B9b)** | Wrote the first production application in PuXian (HTTP + SQLite service); now maintained in a separate private repository. |
 
-> Clone the repo and you can compile/run PuXian programs with `tools/pxc` right away — **no Rust installation required**.
+> Clone the repo and you can compile/run PuXian programs with `tools/px` right away — **no Rust installation required**.
 
 ---
 
@@ -69,32 +69,33 @@ def main():
 ```
 
 ```bash
-./tools/pxc run hello.px              # script mode: interpreted, starts instantly
-./tools/pxc build hello.px            # build mode: emits C → gcc static binary
+./tools/px run hello.px              # script mode: interpreted, starts instantly
+./tools/px build hello.px            # build mode: emits C → gcc static binary
 ./hello/build/hello                   # run directly, zero dependencies (output in <dir>/build/)
 ```
 
-### CLI Overview (`tools/pxc`)
+### CLI Overview (`tools/px`)
 
 | Command | Description |
 |---|---|
-| `pxc build <file.px>` | Compile to a static binary (outputs `<dir>/build/<name>`) |
-| `pxc run <file.px> [args...]` | Run in script mode |
-| `pxc lex <file.px>` | Print the token stream (debugging; runs the PuXian lexer) |
-| `pxc parse <file.px>` | Print the AST (debugging; runs the PuXian parser) |
-| `pxc fmt <file.px> [-w] [--check] [--diff]` | Deterministic code formatting (self-hosted, M64a) |
-| `pxc lint <file.px> [--json] [--strict]` | Static checks L001-L008 (self-hosted, M64b) |
-| `pxc doc <file.px> [--output out.md]` | Generate Markdown docs from `##` comments (self-hosted, M64c) |
-| `pxc test <file.px> [filter] [--list]` | Run top-level `def test_xxx()` tests (self-hosted, M64c) |
-| `pxc bench <file.px> <func> [--count N] [--repeat R]` | Benchmarks (self-hosted, M64c) |
-| `pxc lsp` | **LSP server** (self-hosted, M65): diagnostics / completion / definition / hover over stdio |
-| `pxc mcp` | **MCP server** (self-hosted, M65): AI agent calls 8 tools (run/fmt/lint/test/bench/doc/ast/version) |
-| `pxc --version` / `-v` | Print the version number |
-| `pxc help` | Show help |
+| `px build <file.px>` | Compile to a static binary (outputs `<dir>/build/<name>`) |
+| `px run <file.px> [args...]` | Run in script mode |
+| `px lex <file.px>` | Print the token stream (debugging; runs the PuXian lexer) |
+| `px parse <file.px>` | Print the AST (debugging; runs the PuXian parser) |
+| `px fmt <file.px> [-w] [--check] [--diff]` | Deterministic code formatting (self-hosted, M64a) |
+| `px lint <file.px> [--json] [--strict]` | Static checks L001-L008 (self-hosted, M64b) |
+| `px doc <file.px> [--output out.md]` | Generate Markdown docs from `##` comments (self-hosted, M64c) |
+| `px test <file.px> [filter] [--list]` | Run top-level `def test_xxx()` tests (self-hosted, M64c) |
+| `px bench <file.px> <func> [--count N] [--repeat R]` | Benchmarks (self-hosted, M64c) |
+| `px lsp` | **LSP server** (self-hosted, M65): diagnostics / completion / definition / hover over stdio |
+| `px mcp` | **MCP server** (self-hosted, M65): AI agent calls 8 tools (run/fmt/lint/test/bench/doc/ast/version) |
+| `px --version` / `-v` | Print the version number |
+| `px help` | Show help |
 
 > **Current toolchain status (M64/M65 fully self-hosted)**: all 8 spec §12 tools
 > `pkg / ast / fmt / lint / test / bench / doc / lsp / mcp` are implemented in PuXian
-> itself (`.px` source → bootstrap binary → `pxc` subcommand). The Rust version is
+> itself (`.px` source → bootstrap binary → `px` subcommand). `pxc` remains as a
+> compatibility alias (M86-S0). The Rust version is
 > archived read-only in `archive/rust-compiler/`.
 
 ---
@@ -131,7 +132,7 @@ docker run --rm -v $PWD:/src -w /src messense/musl-cross:aarch64 \
 ```bash
 # aarch64 cross static libs ship with the repo (runtime/mbedtls/lib-aarch64 +
 # sqlite3-aarch64.o + zlib lib-aarch64) — grab a cross CC and build, no need to rebuild libs
-./tools/pxc build --no-quic --cc aarch64-linux-musl-gcc \
+./tools/px build --no-quic --cc aarch64-linux-musl-gcc \
   --mbedtls-lib runtime/mbedtls/lib-aarch64 \
   --sqlite-obj runtime/third_party/sqlite3/sqlite3-aarch64.o \
   your_app.px
@@ -182,7 +183,7 @@ bash examples/m67_multiarch/verify.sh --arch aarch64 # single arch
 | 🌐 Networking | HTTP client (**HTTPS TLS 1.2/1.3** + gzip/chunked auto-decoding + **http/https connection-pool reuse** + **TLS session-ticket resumption** + **streaming gzip decode-as-you-download** + **Unix-socket HTTP client** (`http_unix(sock,path,method,...)` for local services / LLM gateways, auto Content-Length)) + **HTTP server** (`http_serve` with gzip/chunked/keep-alive/streaming + **`px_serve` server-side TLS**: `tls_server(cert,key[,hostname])` enables HTTPS/WSS/SSE-over-TLS + **TLS SNI multi-certificate selection by domain** + configurable request-body limits + 413 + large-body spooling to disk + **graceful shutdown** + **per-route rate limiting** (429 at route granularity) + **access-log file rotation** + **Alt-Svc advertisement** + **HTTP/3 three-stack unification** (`px_serve(...,{http3:true|{port?,cert?,key?}})` hosts H3/QUIC on the same port — HTTP/1.1+HTTP/2+HTTP/3 share the same vhost/route/rate-limit/access-log/static/.px pipeline; `h3_server_listen` standalone H3 listener; **aioquic third-party interop**)) + **WebSocket** (RFC 6455, heartbeat/timeouts, **one-line `ws://`/`wss://` connection**) + **SSE** server/client (**auto-reconnect on disconnect**, with Last-Event-ID) + **UDP** (udp_open/send/recv/close) + full-featured TCP. |
 | 🛡 Crypto/Docs | **AES-CBC-PKCS7 / AES-GCM**, **RSA** (PKCS#1 v1.5), **XML** parse/escape/**generate** (xml_build), **zip** pack/unpack, **base64**, sha256 / xxhash, **SQLite** (open/exec/query/close, parameter binding + result sets). |
 | 🔢 Language | Slice syntax `a[i:j]` / `a[i:j:k]` (stride/reverse, strings sliced by UTF-8 chars), **generator expressions** `(x for x in xs)` (**lazy**: single-level for delayed evaluation / `gen_next` item-by-item / for-in / `list()` conversion), bitwise ops + binary-data views (int_to_hex / bytes_to_hex / bit_count / bit_length), regex, lock primitives (mutex / rwlock), random file I/O + fsync, process/signal (os_spawn / os_wait / signal), **Result/Option error handling** (`Ok(x)`/`Err(e)`/`Some(x)` constructors, `?` error propagation — Err/None returns immediately, `!` forced unwrap, is_ok/is_err/unwrap methods; the single error channel in the spec), string interpolation `${expr}`, comprehensions, optional chaining `?.`, null coalescing `??`, pipeline `\|>`. |
-| 🔌 Edge device | fd primitives `open`/`close`/`ioctl`/`os_errno` (ioctl arg three forms: int direct / bytes·str in-place in/out buffer, `_IOR` filled in place) + fd data path `read`/`write` (raw read(2)/write(2)) + **mmap live mapping** `mmap`/`munmap`/`mem_write` (MAP_SHARED framebuffer/shmem/DMA direct access, GC auto-munmap, in-place write into the mapping) + GPIO/I2C device examples + **aarch64 cross-compile** (`pxc build --no-quic` trimming + qemu-aarch64 verification identical to x86) — Linux edge devices (Raspberry Pi/gateway/box) as a single static binary, no runtime env needed |
+| 🔌 Edge device | fd primitives `open`/`close`/`ioctl`/`os_errno` (ioctl arg three forms: int direct / bytes·str in-place in/out buffer, `_IOR` filled in place) + fd data path `read`/`write` (raw read(2)/write(2)) + **mmap live mapping** `mmap`/`munmap`/`mem_write` (MAP_SHARED framebuffer/shmem/DMA direct access, GC auto-munmap, in-place write into the mapping) + GPIO/I2C device examples + **aarch64 cross-compile** (`px build --no-quic` trimming + qemu-aarch64 verification identical to x86) — Linux edge devices (Raspberry Pi/gateway/box) as a single static binary, no runtime env needed |
 | 🚀 Application platform | **`.px` script execution mechanism** (`px_serve`, a PHP/OpenResty-style application server: Cookie/Session/basic auth + server-side TLS + graceful shutdown; `px_exec`, a language-level embedding API) + **`.px` process pool** (build mode pre-forks worker interpreters that stay resident and are reused, PHP-FPM style; **hot-reload with automatic rolling restart on script/binary changes**) + route table & middleware (method+path patterns / `:id` params / `*` wildcards / middleware chains) + cron scheduling (6 fields) + JSON path (json_path / json_path_set). |
 | 📚 Standard library | `stdlib/collections.px` (sorted/reversed/map/filter/reduce/unique/group_by) + **9 stdlibs total**: collections / edge (M60 edge devices) / gfx / png (M61 2D) / semver / webroute / **yaml / pxml / lunar (M66, see spec §10.3)** + built-in registration whitelist (see MINI_SUBSET §2.5) |
 
@@ -230,7 +231,7 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 
 ```
 ├── bootstrap/              # Bootstrap binaries (pxc compiler / pxi interpreter / pxl lexer / pxpar parser, static ELF)
-├── tools/pxc               # User entry point: build / run / lex / parse / --version (bash wrapper, zero Rust dependency)
+├── tools/px               # User entry point: build / run / lex / parse / --version (bash wrapper, zero Rust dependency)
 ├── selfhost/               # The bootstrapping project (the core!)
 │   ├── compiler.px         #   Full PuXian-written compiler CLI (imports the full codegen.px chain)
 │   ├── codegen.px + cg_*.px #   codegen modules (AST → C)
@@ -288,7 +289,7 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 | M-B6 | codegen rewritten in PuXian | C-source differential 12/12 (dual mode) |
 | M-B7 | interp rewritten in PuXian | stdout 8/8 + v01–v03 all PASS |
 | M-B8 | **Bootstrap proof** | **A.c == B.c == B2.c byte-for-byte identical** 🎉 |
-| M-B9a | Retire the Rust version + wire up CI + bootstrap chain | `tools/pxc` fully usable end-to-end; CI four jobs |
+| M-B9a | Retire the Rust version + wire up CI + bootstrap chain | `tools/px` fully usable end-to-end; CI four jobs |
 | M-B9b | First production application (dogfooding validation) | ✅ moved to a separate private repo |
 
 ### Native Development (M41–M67, post-bootstrap development in PuXian itself — all ✅)
@@ -309,15 +310,15 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 | M60 | Edge-device deepening: `std.edge` stdlib (GPIO V2/I2C/serial/PWM, pure language) + sleep_us/now_us/fcntl/tty_config/fd_wait built-ins + PTY real-kernel loopback |
 | M61 | External-library FFI proof (zlib) + pure-language 2D inner circle: `std.gfx`/`std.png` (Mandelbrot / snake demo, FFI compression pipeline) |
 | M62 | Language-debt fixes L1–L7: float print `.0` alignment + codegen block-scope hoist + split empty segments + pxi bytes-family whitelist |
-| M63 | Language-debt fixes L8–L11: pxi network API whitelist + float full-precision roundtrip + pxc --version |
-| M64 | **Toolchain self-hosting restored**: `pxc fmt / lint / doc / test / bench` five tools self-hosted (keep-lexer base + whole-repo convergence, net -318 lines) |
-| M65 | **LSP / MCP self-hosted**: `pxc lsp` (diagnostics/completion/definition/hover) + `pxc mcp` (8 tools for AI agents) — **spec §12 toolchain fully self-hosted** |
+| M63 | Language-debt fixes L8–L11: pxi network API whitelist + float full-precision roundtrip + px --version |
+| M64 | **Toolchain self-hosting restored**: `px fmt / lint / doc / test / bench` five tools self-hosted (keep-lexer base + whole-repo convergence, net -318 lines) |
+| M65 | **LSP / MCP self-hosted**: `px lsp` (diagnostics/completion/definition/hover) + `px mcp` (8 tools for AI agents) — **spec §12 toolchain fully self-hosted** |
 | M66 | **wsAgent runtime primitives + stdlib adoption** (qg-issue 01–06): unix_connect + os 5-tuple + os_capture/os_popen/os_kill group + write_file mode + zip_unpack password (zipcrypto/AES-256) → std.yaml / std.pxml / std.lunar (lunar calendar), spec §8.20 |
 | M67 | **Multi-arch first-class support** (qg-issue 07): cross-compile docs section + `runtime/arch.h` GC arch abstraction (x86_64/aarch64 extracted + new **armv7/riscv64** mcontext) + `cross_multiarch.sh` + CI **4-arch matrix** (x86_64 native GC stress + aarch64/armv7/riscv64 qemu 3 use-cases), spec §8.21 |
 | M68 | **pxi consistency completion — interpreter native reachability root fix** (docs/M68_PLAN.md): build mode reaches all 281 `px_set_global` runtime natives; pxi only knew a 129-name whitelist (155-gap → R1001 on bare scripts) → root fix = C-side `ffi_call` dual-table fallback (`px_global_native()` global PX_NATIVE single source) + pxi `i_eval_call` auto-fallback + distinguishable Err on unknown name (typo still R1001) → **zero-`extern def` bare scripts: pxi ≡ build artifacts** (capability 253 byte-identical dual-mode, diffcheck --all green), spec §9.3 |
 | M69 | **Ecosystem launch: assetization + AI cheat-sheet + registry fetch loop** (docs/M69_PLAN.md): `docs/ECOSYSTEM.md` (9-lib overview / 119-example capability map / consumption paths) + `tools/gen_ecosystem.px` machine index (CI drift guard); fixed stdlib collections.group_by historical bug (`{}` literal = null, no `d[k]=v`); `docs/PUXIAN_CHEATSHEET.md` + `tools/gen_native_table.sh` (281 natives, single source = runtime) — AI self-test 3/3; `registry/` 9 official libs shipped in-repo + pxpkg fetch→import dual-mode e2e (`examples/m69_registry/verify.sh`, 11 asserts) + spec §8.6.3; `docs/ECOSYSTEM_GAPS.md` (G1-G4 assessed, M70 candidates logged) |
 | M70 | **Language-gap fixes: multiline expressions + module top-level state** (docs/M70_PLAN.md): parser bracket-context newline tolerance (`skip_expr_ws` — multiline list/dict/call args incl. trailing comma/tuple/index slices/comprehensions; `brace_looks_like_dict` multiline-dict detection fix; **lexer untouched → zero golden drift**; line breaks allowed only inside `[` `(` `{`, statement boundary still = newline, continuation indent must fit the indent stack) + fmt multiline zero-change verification (`verify_fmt_multiline.sh`) → cg_module **exports non-Const top-level VarDecls on import** (module-level state slots, initialized once at importer startup; same-name conflict → user value wins; module `let` still immutable E3002) → full-capability bootstrap rebuild + capability 253 byte-identical dual-mode + diffcheck --all/--errors + bootstrap proof → spec §4.1/§5.1/§8.4 + MINI_SUBSET/CHEATSHEET/ECOSYSTEM_GAPS updated → tag v0.1.0-m70 auto-release |
-| M71 | **Build-pipeline modernization + AI delivery one-stop** (docs/M71_PLAN.md): `pxc build` precompiled-runtime `.o` incremental cache (rebuild quic 14.7s→**0.94s** / no-quic 11.6s→**0.41s**) → `pxc build --target <arch>` high-level cross switch (one command folds 5 flags) → **MCP 9th tool `build`** (write→verify→deliver closed loop) → Release ships `sha256sums.txt` + `tools/install.sh` one-shot install (argv0 self-discovery + PX_STDLIB auto-inject, usable from any cwd) → ECOSYSTEM_GAPS F4 correction (compiled pxc build is ms-fast on large files ≈ grep) |
+| M71 | **Build-pipeline modernization + AI delivery one-stop** (docs/M71_PLAN.md): `px build` precompiled-runtime `.o` incremental cache (rebuild quic 14.7s→**0.94s** / no-quic 11.6s→**0.41s**) → `px build --target <arch>` high-level cross switch (one command folds 5 flags) → **MCP 9th tool `build`** (write→verify→deliver closed loop) → Release ships `sha256sums.txt` + `tools/install.sh` one-shot install (argv0 self-discovery + PX_STDLIB auto-inject, usable from any cwd) → ECOSYSTEM_GAPS F4 correction (compiled px build is ms-fast on large files ≈ grep) |
 | M72 | **AI debug loop + runtime bytes support** (docs/M72_PLAN.md, qg-issue 9/10/13-R1): `print`/`println` **flush per line** (no more 8KB buffering under pipes/journald; existing .px needs zero changes) + new natives `flush()`/`print_err()` → **compiled-binary runtime errors carry the .px source line** (`运行时错误 [函数 行N]: msg` — one-shot AI locating) → **spawn-coroutine runtime errors are isolated by default** (scene printed + host keeps running; `PX_SPAWN_ISOLATE=0` reverts to exit) → **bytes natives**: `aes_gcm_encrypt_bytes/decrypt_bytes` (no utf8/NUL truncation; byte-compatible with Go crypto/aes-gcm) + `http_request` length-aware body (binary ciphertext uploads byte-exact) → Issue 9/10 archived done, 13-R1 ✅ (R2 ws-backup-px → M73) |
 
 ---
@@ -328,14 +329,14 @@ The `examples/` directory (80+ examples) for quick hands-on:
 
 ```bash
 # Interpreted run
-./tools/pxc run examples/fib.px
-./tools/pxc run examples/match.px
-./tools/pxc run examples/m39_result.px
-./tools/pxc run examples/m40_str_interp.px
+./tools/px run examples/fib.px
+./tools/px run examples/match.px
+./tools/px run examples/m39_result.px
+./tools/px run examples/m40_str_interp.px
 
 # Build to a static binary
-./tools/pxc build examples/fib.px && ./examples/build/fib
-./tools/pxc build examples/m28_time_sqlite.px && ./examples/build/m28_time_sqlite
+./tools/px build examples/fib.px && ./examples/build/fib
+./tools/px build examples/m28_time_sqlite.px && ./examples/build/m28_time_sqlite
 ```
 
 - `hello.px` — Hello World (pipeline operator)

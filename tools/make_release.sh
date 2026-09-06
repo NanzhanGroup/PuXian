@@ -6,7 +6,7 @@
 #       （如外部私有应用 ws-web 的维护者）只需"用编译器开发"，无需持有源码树。
 #       本脚本打一个最小可独立开发发布包：
 #         编译器二进制（bootstrap/pxc pxi pxl pxpar）
-#       + 工具入口（tools/pxc pxpkg routegen cross_aarch64.sh cross_multiarch.sh）
+#       + 工具入口（tools/px（pxc 兼容别名）+ pxpkg routegen cross_aarch64.sh cross_multiarch.sh）
 #       + 构建必需 C 依赖（runtime/ 全树，含 mbedtls / sqlite3 / miniz /
 #         ngtcp2 / openssl 静态库与头文件，x86_64 + aarch64 双架构）
 #       + 标准库（stdlib/，import std.* 必需）
@@ -22,7 +22,7 @@
 #   里程碑 = 命令行参数 > tag 后缀（v0.1.0-m62 → m62）> 最近提交消息里的 Mxx
 # 典型发布流：git tag v0.1.0-m62 && tools/make_release.sh  →  puxian-0.1.0-m62-<sha>.tar.gz
 # 冒烟自检（默认开，--no-check 关）：解包到临时目录后验证
-#   ① pxc --version  ② hello.px 编译(静态ELF)并运行  ③ hello.px 解释运行
+#   ① px --version  ② hello.px 编译(静态ELF)并运行  ③ hello.px 解释运行
 #   ④ import std.semver 编译（验证 stdlib 定位 PX_STDLIB）
 # ============================================================
 set -euo pipefail
@@ -96,7 +96,7 @@ PuXian 开发应用"，不提供源码改动/推送通道。源码见开源仓�
 ## 内容
 | 路径 | 说明 |
 |---|---|
-| tools/pxc | 工具链入口（build/run/lex/parse/fmt/lint/doc/test/bench/lsp/mcp/--version/help） |
+| tools/px（pxc 兼容别名） | 工具链入口（build/run/lex/parse/fmt/lint/doc/test/bench/lsp/mcp/--version/help） |
 | tools/pxpkg | 包管理器（M45 registry） |
 | tools/routegen / cross_aarch64.sh / cross_multiarch.sh | 路由生成 / aarch64 交叉库构建 / 多架构（aarch64·armv7·riscv64）交叉库构建（可选，M67） |
 | bootstrap/pxc pxi pxl pxpar | 自举编译器 / 解释器 / lexer / parser 二进制 |
@@ -115,27 +115,27 @@ PuXian 开发应用"，不提供源码改动/推送通道。源码见开源仓�
 ## 快速开始
 \`\`\`bash
 tar xzf ${NAME}.tar.gz && cd ${NAME}
-./tools/pxc --version                      # 版本确认
-./tools/pxc run hello.px                   # 解释运行
-./tools/pxc build hello.px                 # 编译静态 ELF → hello/build/hello
+./tools/px --version                      # 版本确认
+./tools/px run hello.px                   # 解释运行
+./tools/px build hello.px                 # 编译静态 ELF → hello/build/hello
 ./hello/build/hello                        # 直接运行
 \`\`\`
 
 > **stdlib 定位**：在解压目录（或子目录）内开发，\`import std.*\` 自动命中
-> （候选路径含 \`./stdlib\`、\`../stdlib\`）。若在包外任意目录调用 pxc，请先
+> （候选路径含 `./stdlib`、`../stdlib`）。若在包外任意目录调用 px（pxc 别名等价），请先
 > \`export PX_STDLIB=<解压目录>/stdlib\`。
 
 ## 常用选项
-- \`pxc build --no-quic <app.px>\`：裁剪 QUIC/H3（去掉 ngtcp2/openssl 链接，
+- \`px build --no-quic <app.px>\`：裁剪 QUIC/H3（去掉 ngtcp2/openssl 链接，
   runtime 侧 -DPX_NO_QUIC），产物更小、无第三方 QUIC 依赖（嵌入式/边缘设备场景）。
-- \`pxc build --cc aarch64-linux-musl-gcc --mbedtls-lib runtime/mbedtls/lib-aarch64
+- \`px build --cc aarch64-linux-musl-gcc --mbedtls-lib runtime/mbedtls/lib-aarch64
   --sqlite-obj runtime/third_party/sqlite3/sqlite3-aarch64.o --no-quic <app.px>\`：
   aarch64 交叉编译（本包已含目标架构 mbedtls/sqlite3/zlib 静态库，直接可编）。
 - armv7 / riscv64 交叉：先 \`tools/cross_multiarch.sh --arch armv7 --outdir <dir>\`（或
-  \`--arch riscv64\`）现编目标库（本包已含脚本），再 \`pxc build --cc <arch>-linux-musl-gcc
+  \`--arch riscv64\`）现编目标库（本包已含脚本），再 \`px build --cc <arch>-linux-musl-gcc
   --mbedtls-lib <dir>/mbedtls/lib-<arch> --sqlite-obj <dir>/sqlite3/sqlite3-<arch>.o --no-quic <app.px>\`；
   riscv64 自动加 -no-pie（M67）。
-- \`pxc help\`：完整用法。
+- \`px help\`：完整用法。
 
 ## 能力面（本包随附）
 fd 原语与 mmap 活映射（M57 边缘设备层）、HTTP/1.1·2·3 + QUIC、WebSocket、
@@ -169,8 +169,8 @@ echo "== 冒烟自检 =="
 fail=0
 
 # ① 版本
-V="$(./tools/pxc --version 2>&1)" || { echo "  ❌ pxc --version 失败"; fail=1; }
-echo "  ① pxc --version → $V"
+V="$(./tools/px --version 2>&1)" || { echo "  ❌ px --version 失败"; fail=1; }
+echo "  ① px --version → $V"
 
 # ② hello 编译 + 运行
 # 注意：编译/解释两模式的输出全局函数均为 print（println 非 builtin）
@@ -179,7 +179,7 @@ cat > hello.px <<'PX'
 def main():
     print("hello from release pkg\n")
 PX
-./tools/pxc build --no-quic hello.px >/dev/null 2>&1 || { echo "  ❌ build hello 失败"; fail=1; }
+./tools/px build --no-quic hello.px >/dev/null 2>&1 || { echo "  ❌ build hello 失败"; fail=1; }
 if [ -x build/hello ]; then
     SZ2="$(stat -c %s build/hello)"
     O="$(./build/hello 2>&1)"
@@ -190,8 +190,8 @@ else
 fi
 
 # ③ 解释运行
-O2="$(./tools/pxc run hello.px 2>&1)"
-echo "  ③ pxc run hello → $O2"
+O2="$(./tools/px run hello.px 2>&1)"
+echo "  ③ px run hello → $O2"
 [ "$O2" = "hello from release pkg" ] || { echo "  ❌ 解释运行输出不符"; fail=1; }
 
 # ④ import std.collections 编译（stdlib 定位：包根 ./stdlib 相对命中）
@@ -202,7 +202,7 @@ import std.collections
 def main():
     print("stdlib import ok\n")
 PX
-if ./tools/pxc build --no-quic usesem.px >/dev/null 2>&1 && [ -x build/usesem ]; then
+if ./tools/px build --no-quic usesem.px >/dev/null 2>&1 && [ -x build/usesem ]; then
     O3="$(./build/usesem 2>&1)"
     echo "  ④ import std.collections → $O3"
     [ "$O3" = "stdlib import ok" ] || { echo "  ❌ 输出不符"; fail=1; }
@@ -218,7 +218,7 @@ def main():
     print("webroute import ok\n")
 PX
 export PX_STDLIB="$CHK/$NAME/stdlib"
-if "$CHK/$NAME/tools/pxc" build --no-quic proj.px >/dev/null 2>&1 && [ -x build/proj ]; then
+if "$CHK/$NAME/tools/px" build --no-quic proj.px >/dev/null 2>&1 && [ -x build/proj ]; then
     O4="$(./build/proj 2>&1)"
     echo "  ⑤ 包外+PX_STDLIB(webroute) → $O4"
     [ "$O4" = "webroute import ok" ] || { echo "  ❌ 输出不符"; fail=1; }

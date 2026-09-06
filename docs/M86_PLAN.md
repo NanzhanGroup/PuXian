@@ -77,7 +77,7 @@
 
 | 批 | 状态 | 说明 |
 |---|---|---|
-| S0 | ⏳ pending | 待开工（用户令） |
+| S0 | ✅ done | **命令正名 px**：tools/pxc → tools/px（git mv）+ tools/pxc = symlink px 入库；usage/version/错误提示/注释 px 化（bootstrap/pxc 真名保留）；cmd_mcp PX_PXC→tools/px；spec/install.sh 双软链 /usr/bin/px + pxc→px；make_release RELEASE 模板 px 化；README/en/CHEATSHEET/spec/MINI_SUBSET 入口 px 化；help 补齐 M85 全开关 + M86 pxc 别名说明。verify examples/m86_s0 **14/14 PASS**（默认 9010184 / --no-quic 3929808 零漂移；pxc 别名 build 等价）。commit M86-S0 |
 | S1 | ⏳ pending | 待开工 |
 | S2 | ⏳ pending | 待开工 |
 | S3 | ⏳ pending | 待开工 |

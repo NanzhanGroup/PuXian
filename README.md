@@ -39,11 +39,11 @@ PuXian 采用 **Apache License 2.0** 开源 —— 任何人可自由使用、�
 | 状态 | 说明 |
 |---|---|
 | ✅ **自举完成（M-B8）** | **PuXian 编译器由 PuXian 自己写成**：`lexer / parser / codegen / interp / 值系统` 五大核心全部用 `.px` 重写，自举证明 A.c == B.c == B2.c 逐字节一致 |
-| ✅ **Rust 版已退役（M-B9a）** | Rust 源码归档至 `archive/rust-compiler/`（只读），**新工具链 `tools/pxc` 完全无需 Rust**，基于自举二进制运行 |
+| ✅ **Rust 版已退役（M-B9a）** | Rust 源码归档至 `archive/rust-compiler/`（只读），**新工具链 `tools/px` 完全无需 Rust**，基于自举二进制运行 |
 | ✅ **CI 已接入** | GitHub Actions：每次提交自动跑回归 + 自举证明 + 示例编译 |
 | ✅ **dogfood 完成（M-B9b）** | 用 PuXian 写出第一个生产应用（HTTP + SQLite 服务），代码已迁至独立私有仓库维护 |
 
-> 现在克隆仓库即可用 `tools/pxc` 编译/运行 PuXian 程序，**不需要安装 Rust**。
+> 现在克隆仓库即可用 `tools/px` 编译/运行 PuXian 程序，**不需要安装 Rust**。
 
 ---
 
@@ -67,36 +67,37 @@ def main():
 ```
 
 ```bash
-./tools/pxc run hello.px              # 脚本模式：解释执行，秒起
-./tools/pxc build hello.px            # 编译模式：生成 C → gcc 静态二进制
+./tools/px run hello.px              # 脚本模式：解释执行，秒起
+./tools/px build hello.px            # 编译模式：生成 C → gcc 静态二进制
 ./hello/build/hello                   # 直接运行，零依赖（产物在 <目录>/build/）
 ```
 
-### CLI 一览（`tools/pxc`）
+### CLI 一览（`tools/px`）
 
 | 命令 | 说明 |
 |---|---|
-| `pxc build <file.px>` | 编译为静态二进制（输出 `<目录>/build/<name>`） |
-| `pxc build --min <file.px>` | **最小化编译**（M85）：聚合 `--no-quic` + sqlite/ws/zip/xml/aes/rsa/ed25519/route/zlib/h2 全裁，产物 ~2.7M（9.0M 基线 −70%）；`--no-sqlite`/`--no-ws`/`--no-zip`/`--no-xml`/`--no-aes`/`--no-rsa`/`--no-ed25519`/`--no-route`/`--no-zlib`/`--no-h2` 可单独/任意组合裁剪（缺 native 调用 → R1001） |
-| `pxc run <file.px> [args...]` | 脚本模式执行 |
-| `pxc lex <file.px>` | 打印 Token 流（调试，走 PuXian lexer） |
-| `pxc parse <file.px>` | 打印 AST（调试，走 PuXian parser） |
-| `pxc fmt <file.px> [-w] [--check] [--diff]` | 代码格式化（M64a 自举） |
-| `pxc lint <file.px> [--json] [--strict]` | 静态检查 L001-L008（M64b 自举） |
-| `pxc doc <file.px> [--output out.md]` | 从 `##` 注释生成 Markdown 文档（M64c 自举） |
-| `pxc test <file.px> [filter] [--list]` | 运行顶层 `def test_xxx()` 测试（M64c 自举） |
-| `pxc bench <file.px> <func> [--count N] [--repeat R]` | 基准测试（M64c 自举） |
-| `pxc lsp` | **LSP 服务器**（M65 自举）：诊断/补全/跳转/悬停，stdio 即协议通道（编辑器以子进程拉起） |
-| `pxc mcp` | **MCP 服务器**（M65 自举）：AI agent 经 MCP 调用 8 工具（run/fmt/lint/test/bench/doc/ast/version） |
-| `pxc --version` / `-v` | 输出版本号 |
-| `pxc help` | 帮助 |
+| `px build <file.px>` | 编译为静态二进制（输出 `<目录>/build/<name>`） |
+| `px build --min <file.px>` | **最小化编译**（M85）：聚合 `--no-quic` + sqlite/ws/zip/xml/aes/rsa/ed25519/route/zlib/h2 全裁，产物 ~2.7M（9.0M 基线 −70%）；`--no-sqlite`/`--no-ws`/`--no-zip`/`--no-xml`/`--no-aes`/`--no-rsa`/`--no-ed25519`/`--no-route`/`--no-zlib`/`--no-h2` 可单独/任意组合裁剪（缺 native 调用 → R1001） |
+| `px run <file.px> [args...]` | 脚本模式执行 |
+| `px lex <file.px>` | 打印 Token 流（调试，走 PuXian lexer） |
+| `px parse <file.px>` | 打印 AST（调试，走 PuXian parser） |
+| `px fmt <file.px> [-w] [--check] [--diff]` | 代码格式化（M64a 自举） |
+| `px lint <file.px> [--json] [--strict]` | 静态检查 L001-L008（M64b 自举） |
+| `px doc <file.px> [--output out.md]` | 从 `##` 注释生成 Markdown 文档（M64c 自举） |
+| `px test <file.px> [filter] [--list]` | 运行顶层 `def test_xxx()` 测试（M64c 自举） |
+| `px bench <file.px> <func> [--count N] [--repeat R]` | 基准测试（M64c 自举） |
+| `px lsp` | **LSP 服务器**（M65 自举）：诊断/补全/跳转/悬停，stdio 即协议通道（编辑器以子进程拉起） |
+| `px mcp` | **MCP 服务器**（M65 自举）：AI agent 经 MCP 调用 8 工具（run/fmt/lint/test/bench/doc/ast/version） |
+| `px --version` / `-v` | 输出版本号 |
+| `px help` | 帮助 |
 
 > **工具链现状（M64/M65 工具链全自举）**：`pkg / ast / fmt / lint / test / doc / bench /
 > lsp / mcp` **spec §12 全部 8 工具**均已由 PuXian 自举实现（`.px` 源码 → bootstrap 二进制 →
-> `pxc` 子命令），源码见 `tools/pxpkg.px`、`tools/pxfmt.px`、`tools/pxlint.px`、
+> `px` 子命令），源码见 `tools/pxpkg.px`、`tools/pxfmt.px`、`tools/pxlint.px`、
 > `tools/pxdoc.px`、`tools/pxtest.px`、`tools/pxbench.px`、`tools/pxlsp.px` +
 > `tools/pxmcp.px`（共享底座 `tools/jsonrpc_core.px`，LSP 诊断子进程 `tools/pxcheck.px`，
 > 语义层 `tools/lsp_core.px`）。Rust 版全套留档 `archive/rust-compiler/` 只读。
+> （M86-S0：官方命令名为 `px`，`pxc` 为兼容别名，历史脚本照跑。）
 
 ---
 
@@ -127,7 +128,7 @@ docker run --rm -v $PWD:/src -w /src messense/musl-cross:aarch64 \
 
 ```bash
 # aarch64 交叉静态库已随仓库预置（runtime/mbedtls/lib-aarch64 + sqlite3-aarch64.o + zlib lib-aarch64）
-./tools/pxc build --no-quic --cc aarch64-linux-musl-gcc \
+./tools/px build --no-quic --cc aarch64-linux-musl-gcc \
   --mbedtls-lib runtime/mbedtls/lib-aarch64 \
   --sqlite-obj runtime/third_party/sqlite3/sqlite3-aarch64.o \
   your_app.px
@@ -136,7 +137,7 @@ docker run --rm -v $PWD:/src -w /src messense/musl-cross:aarch64 \
 #   tools/cross_multiarch.sh --arch armv7   --outdir /opt/px-multiarch/armv7
 #   tools/cross_multiarch.sh --arch riscv64 --outdir /opt/px-multiarch/riscv64
 # 然后 --mbedtls-lib /opt/px-multiarch/<a>/mbedtls/lib-<a> --sqlite-obj .../sqlite3-<a>.o
-# 注：riscv64 由 pxc 自动加 -no-pie（musl static-pie 的 RISC-V 只读段重定位限制）
+# 注：riscv64 由 px 自动加 -no-pie（musl static-pie 的 RISC-V 只读段重定位限制）
 ```
 
 ### 3. 校验与运行（file + qemu）
@@ -176,7 +177,7 @@ bash examples/m67_multiarch/verify.sh --arch aarch64 # 单档
 | 🌐 网络 | HTTP 客户端（**HTTPS TLS 1.2/1.3** + gzip/chunked 自动解码 + **http/https 连接池复用** + **TLS 会话票据恢复** + **流式 gzip 边下边解** + **Unix socket HTTP 客户端**（`http_unix(sock,path,method,...)` 本地服务/LLM 网关调用，自动补 Content-Length））+ **HTTP 服务端**（`http_serve` gzip/chunked/keep-alive/流式 + **`px_serve` 服务端 TLS**：`tls_server(cert,key[,hostname])` 注册后 HTTPS/WSS/SSE-over-TLS + **TLS SNI 多证书按域名选择** + 请求体大小可配 + 413 + 大 body 落盘 + **优雅关闭** + **per-route 限流**（路由粒度 429）+ **访问日志落盘轮转** + **Alt-Svc 通告** + **HTTP/3 三栈合一**（`px_serve(...,{http3:true|{port?,cert?,key?}})` 同端口托管 H3/QUIC，HTTP/1.1+HTTP/2+HTTP/3 共用同一 vhost/路由/限流/访问日志/静态/.px 管道；`h3_server_listen` 独立 H3 listener；**aioquic 第三方互操作**；**HTTP/3 生产化**（TLS 1.3 会话恢复 1-RTT resumption、0-RTT early data 握手前可发、连接迁移换源续传、BLOCKED_STREAMS 流控协商 -206/MAX_STREAMS）））+ **WebSocket**（RFC 6455，心跳/超时，**`ws://`/`wss://` 一行连接**）+ **SSE** 服务端/客户端（**断线自动重连**，带 Last-Event-ID）+ **UDP**（udp_open/send/recv/close）+ TCP 全功能 |
 | 🛡 加密/文档 | **AES-CBC-PKCS7 / AES-GCM**、**RSA**（PKCS#1 v1.5）、**XML** 解析/转义/**生成**（xml_build）、**zip** 打包/解压、**base64**、sha256 / xxhash、**SQLite**（open/exec/query/close，参数绑定+结果集） |
 | 🔢 语言能力 | 切片语法 `a[i:j]` / `a[i:j:k]`（步长/反转，str 按 UTF-8 字符）、**生成器表达式** `(x for x in xs)`（**惰性**：单层 for 延迟求值 / `gen_next` 逐项 / for-in / `list()` 转换）、位运算 + 二进制数据视图（int_to_hex / bytes_to_hex / bit_count / bit_length）、正则表达式、锁原语（mutex / rwlock）、文件随机读写 + fsync、进程/信号（os_spawn / os_wait / signal）、**Result/Option 错误处理**（`Ok(x)`/`Err(e)`/`Some(x)` 构造，`?` 错误传播——Err/None 立即返回、`!` 强制解包、is_ok/is_err/unwrap 方法，spec 唯一错误通道）、字符串插值 `${expr}`、推导式、可选链 `?.`、空合并 `??`、管道 `\|>` |
-| 🔌 边缘设备 | fd 原语 `open`/`close`/`ioctl`/`os_errno`（ioctl arg 三形态：int 直传 / bytes·str 就地 in/out buffer，`_IOR` 类内核直接填充同对象）+ fd 数据通道 `read`/`write`（read(2)/write(2) 直通）+ **mmap 活映射** `mmap`/`munmap`/`mem_write`（MAP_SHARED 帧缓冲/共享内存/DMA 直访，GC 自动 munmap，`mem_write` 就地写映射区）+ GPIO/I2C 设备示例 + **aarch64 交叉编译**（`pxc build --no-quic` 裁剪 + qemu-aarch64 验证与 x86 一致）——Linux 边缘设备层（树莓派/网关/盒子）单静态二进制免环境 |
+| 🔌 边缘设备 | fd 原语 `open`/`close`/`ioctl`/`os_errno`（ioctl arg 三形态：int 直传 / bytes·str 就地 in/out buffer，`_IOR` 类内核直接填充同对象）+ fd 数据通道 `read`/`write`（read(2)/write(2) 直通）+ **mmap 活映射** `mmap`/`munmap`/`mem_write`（MAP_SHARED 帧缓冲/共享内存/DMA 直访，GC 自动 munmap，`mem_write` 就地写映射区）+ GPIO/I2C 设备示例 + **aarch64 交叉编译**（`px build --no-quic` 裁剪 + qemu-aarch64 验证与 x86 一致）——Linux 边缘设备层（树莓派/网关/盒子）单静态二进制免环境 |
 | 🚀 应用平台 | **.px 脚本执行机制**（`px_serve` PHP/OpenResty 式应用服务器：Cookie/Session/基础认证 + 服务端 TLS + 优雅关闭、`px_exec` 语言层嵌入 API）+ **.px 进程池**（编译模式预派生 worker 解释器常驻复用，PHP-FPM 风格，**脚本/二进制变更自动滚动重启热更新**）+ 路由表+中间件（method+path 模式 / `:id` 参数 / `*` 通配 / 中间件链）+ cron 调度（6 字段）+ JSON 路径（json_path/json_path_set） |
 | 📚 标准库 | `stdlib/collections.px`（sorted/reversed/map/filter/reduce/unique/group_by）+ **共 9 个标准库**：collections / edge（M60 边缘设备）/ gfx / png（M61 2D）/ semver / webroute / **yaml / pxml / lunar（M66 收编，见 spec §10.3）** + 内置注册表白名单（见 MINI_SUBSET §2.5） |
 
@@ -224,7 +225,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 
 ```
 ├── bootstrap/              # 自举引导二进制（pxc 编译器 / pxi 解释器 / pxl lexer / pxpar parser，静态 ELF）
-├── tools/pxc               # 用户入口：build / run / lex / parse / --version（bash 包装，零 Rust 依赖）
+├── tools/px               # 用户入口：build / run / lex / parse / --version（bash 包装，零 Rust 依赖）
 ├── selfhost/               # 自举工程（核心！）
 │   ├── compiler.px         #   PuXian 版完整编译器 CLI（import codegen.px 全链）
 │   ├── codegen.px + cg_*.px #   codegen 模块（AST → C）
@@ -282,7 +283,7 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 | M-B6 | codegen 用 PuXian 重写 | C 源码对拍 12/12（双模式） |
 | M-B7 | interp 用 PuXian 重写 | stdout 8/8 + v01-v03 全 PASS |
 | M-B8 | **自举证明** | **A.c == B.c == B2.c 逐字节一致** 🎉 |
-| M-B9a | 退役 Rust 版 + 接入 CI + 引导链 | `tools/pxc` 全链路可用，CI 四 job |
+| M-B9a | 退役 Rust 版 + 接入 CI + 引导链 | `tools/px` 全链路可用，CI 四 job |
 | M-B9b | 第一个生产应用（dogfooding 验证） | ✅ 已迁独立私有仓库维护 |
 
 ### 原生开发（M41–M67，自举后 PuXian 自身开发，全部 ✅）
@@ -303,15 +304,15 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 | M60 | 边缘设备深化：`std.edge` stdlib（GPIO V2/I2C/serial/PWM，纯语言）+ sleep_us/now_us/fcntl/tty_config/fd_wait 小内置 + PTY 真内核回环 |
 | M61 | 外部库 FFI proof（zlib）+ 纯语言 2D 内圈：`std.gfx`/`std.png`（Mandelbrot/贪吃蛇 demo，FFI 压缩联动） |
 | M62 | 语言面欠账修复 L1–L7：浮点打印 .0 对齐 + codegen 块作用域 hoist + split 空段 + pxi bytes 白名单 |
-| M63 | 语言面欠账修复 L8–L11：pxi 网络 API 白名单 + float 全精度 roundtrip + pxc --version |
-| M64 | **工具链自举恢复**：`pxc fmt / lint / doc / test / bench` 五项自举（keep-lexer 底座 + 全仓收敛 + 净 -318 行） |
-| M65 | **LSP / MCP 自举**：`pxc lsp`（诊断/补全/跳转/悬停）+ `pxc mcp`（8 工具供 AI agent 调用）—— **spec §12 工具链全自举收官** |
+| M63 | 语言面欠账修复 L8–L11：pxi 网络 API 白名单 + float 全精度 roundtrip + px --version |
+| M64 | **工具链自举恢复**：`px fmt / lint / doc / test / bench` 五项自举（keep-lexer 底座 + 全仓收敛 + 净 -318 行） |
+| M65 | **LSP / MCP 自举**：`px lsp`（诊断/补全/跳转/悬停）+ `px mcp`（8 工具供 AI agent 调用）—— **spec §12 工具链全自举收官** |
 | M66 | **自举 wsAgent runtime 原语补全 + stdlib 收编**（qg-issue 01–06）：unix_connect + os 五件套 + os_capture/os_popen/os_kill group + write_file mode + zip_unpack 密码（zipcrypto/AES-256）→ 收编 std.yaml / std.pxml / std.lunar（农历）三个标准库，spec §8.20 |
 | M67 | **多架构一等支持**（qg-issue 07）：README 交叉编译章节 + `runtime/arch.h` GC 架构抽象（x86_64/aarch64 迁出 + 新增 **armv7/riscv64** mcontext）+ `cross_multiarch.sh` + CI **四档矩阵**（x86_64 native GC 压力 + aarch64/armv7/riscv64 qemu 三用例），spec §8.21 |
 | M68 | **pxi 一致性收官：解释器 native 可达性根治**（docs/M68_PLAN.md）：根因 = 编译产物默认可达 runtime `px_set_global` 全局 native **281 名**，pxi 只认 interp.px 白名单 **129 名** → 差集 155（sqlite/aes/rsa/xml/zip/tcp/udp/ws/sse/cron/session/bus/http_serve/os_pid/now_ms…）pxi 裸脚本 R1001 → 根治 = C 侧 `ffi_call` **双表兜底**（ffi 注册表 + 全局 PX_NATIVE 单源）+ pxi `i_eval_call` 自动回退 + 未注册返回可辨 Err（typo 仍 R1001）→ **零 extern def 裸脚本 pxi 与编译产物一致**（capability 253 双模式逐字节一致 + diffcheck --all 全绿），spec §9.3 |
 | M69 | **生态启动：资产化 + AI 速查 + registry 拉取闭环**（docs/M69_PLAN.md）：docs/ECOSYSTEM.md（9 库一览/119 dogfood 能力导航）+ gen_ecosystem.px 机器索引（CI 防漂移）+ 修复 stdlib collections.group_by 历史 bug（`{}` 字面量 = null）→ docs/PUXIAN_CHEATSHEET.md + gen_native_table.sh（281 native 单一事实源）AI 自测 3/3 → registry/ 9 官库随库入库 + pxpkg fetch→import 双模式端到端（11 断言）+ spec §8.6.3 → ECOSYSTEM_GAPS 写库评估（G1-G4 入档，修复拆 M70）|
 | M70 | **语言缺口修复：表达式跨行 + 模块顶层状态**（docs/M70_PLAN.md）：parser 括号内换行容忍（多行 list/dict/调用/元组/索引，语义与单行等价；**lexer 不动 → golden 零漂移**；续行缩进须与缩进栈相容）+ fmt 多行零改动验证 → cg_module **import 导出非 Const 顶层 VarDecl**（模块级状态槽，启动初始化一次；同名冲突用户优先；let 仍不可变 E3002）→ 全能力重建 bootstrap + capability 253 双模式逐字节 + diffcheck --all/--errors + 自举证明 → spec §4.1/§5.1/§8.4 + MINI_SUBSET/CHEATSHEET/ECOSYSTEM_GAPS 同步 → tag v0.1.0-m70 自动发布 |
-| M71 | **build 管线现代化 + AI 交付一条龙**（docs/M71_PLAN.md）：`pxc build` runtime 预编译 `.o` 增量缓存（二次 build quic 14.7s→**0.94s** / no-quic 11.6s→**0.41s**）→ `pxc build --target <arch>` 高层交叉开关（一条命令折叠 5 flag）→ **MCP 第 9 工具 `build`**（写→验→交付一条龙闭环）→ Release 附 `sha256sums.txt` + `tools/install.sh` 一键安装（argv0 自发现 + PX_STDLIB 自动注入，任意目录免环境变量）→ ECOSYSTEM_GAPS F4 更正（pxc build 编译版大文件毫秒级 ≈ grep） |
+| M71 | **build 管线现代化 + AI 交付一条龙**（docs/M71_PLAN.md）：`px build` runtime 预编译 `.o` 增量缓存（二次 build quic 14.7s→**0.94s** / no-quic 11.6s→**0.41s**）→ `px build --target <arch>` 高层交叉开关（一条命令折叠 5 flag）→ **MCP 第 9 工具 `build`**（写→验→交付一条龙闭环）→ Release 附 `sha256sums.txt` + `tools/install.sh` 一键安装（argv0 自发现 + PX_STDLIB 自动注入，任意目录免环境变量）→ ECOSYSTEM_GAPS F4 更正（px build 编译版大文件毫秒级 ≈ grep） |
 | M72 | **AI 调试回路 + runtime bytes 增强**（docs/M72_PLAN.md，qg-issue 9/10/13-R1）：print/println **逐行实时**（管道/journald 不再攒 8KB，现有 .px 零改码）+ 新原生 `flush()`/`print_err()` → 编译产物运行时错误带 **`.px` 源行号**（`运行时错误 [函数 行N]: msg`，AI 一次定位）→ spawn 协程运行时错误**默认隔离**（现场打印 + 宿主继续；`PX_SPAWN_ISOLATE=0` 回退）→ **bytes native**：`aes_gcm_encrypt_bytes/decrypt_bytes`（去 utf8/NUL 限制，与 Go crypto/aes-gcm 字节互通）+ `http_request` body 长度感知（二进制密文上传字节完整）→ Issue 9/10 归档 done、13-R1 ✅（R2 ws-backup-px → M73） |
 | M73–M81 | **RPM/dnf·yum 分发闭环**（v0.1.0-m73→m81，见 `packaging/README.md`）：el9 → **el7 全兼容**（centos:7 构建 + el9 代签 + 专用主密钥轮换 334536AC…2A61D264）→ dnf/yum 双验签安装 + gh-pages 在线仓库（/rpm/7、/rpm/9）全链路绿灯 |
 | M82 | **unix socket HTTP 服务端 native `http_serve_unix`**（qg-issue 15，GAP-SRV-1）：ws-approve .px 化 serve 前置缺口——补全 AF_UNIX **服务端**半侧（http_unix/unix_connect M56/M66 是客户端）；L0 runtime 新原生，复用 http_conn_worker 同管道，自动清理残留 sock + chmod 0600 + accept 错误容忍；worker remote 判族兼容（AF_UNIX → `"unix"`）；native 287→288；examples/m82_http_serve_unix verify 8 项全绿（curl --unix-socket 冒烟 + TCP 同 handler 双跑），spec §8.22 |
@@ -324,14 +325,14 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 
 ```bash
 # 解释运行
-./tools/pxc run examples/fib.px
-./tools/pxc run examples/match.px
-./tools/pxc run examples/m39_result.px
-./tools/pxc run examples/m40_str_interp.px
+./tools/px run examples/fib.px
+./tools/px run examples/match.px
+./tools/px run examples/m39_result.px
+./tools/px run examples/m40_str_interp.px
 
 # 编译为静态二进制
-./tools/pxc build examples/fib.px && ./examples/build/fib
-./tools/pxc build examples/m28_time_sqlite.px && ./examples/build/m28_time_sqlite
+./tools/px build examples/fib.px && ./examples/build/fib
+./tools/px build examples/m28_time_sqlite.px && ./examples/build/m28_time_sqlite
 ```
 
 - `hello.px` —— Hello World（管道操作符）
