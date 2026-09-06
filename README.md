@@ -76,8 +76,10 @@ def main():
 
 | 命令 | 说明 |
 |---|---|
-| `px build <file.px>` | 编译为静态二进制（输出 `<目录>/build/<name>`） |
-| `px build --min <file.px>` | **最小化编译**（M85）：聚合 `--no-quic` + sqlite/ws/zip/xml/aes/rsa/ed25519/route/zlib/h2 全裁，产物 ~2.7M（9.0M 基线 −70%）；`--no-sqlite`/`--no-ws`/`--no-zip`/`--no-xml`/`--no-aes`/`--no-rsa`/`--no-ed25519`/`--no-route`/`--no-zlib`/`--no-h2` 可单独/任意组合裁剪（缺 native 调用 → R1001） |
+| `px build <file.px>` | 编译为静态二进制（输出 `<目录>/build/<name>`）。**M86-S2 起默认按引用集自动最小**：编译期自动收集被引用 native（import 递归），未引用模块自动去除（hello/纯 CLI → ~2.7M，用 sqlite → 自动保留 ~3.8M）；引用即保留，解析失败自动退全量保编译成功 |
+| `px build --full <file.px>` / `--max` | **全能力编译**（M86-S2 逃生舱）：跳过自动裁剪、runtime 全模块链接 ≈ 9.0M 基线；可与显式 `--no-xxx` 组合（= 显式裁剪其余全能力） |
+| `px build --min <file.px>` | **显式最小化**（M85，优先级同显式 flag）：聚合 `--no-quic` + sqlite/ws/zip/xml/aes/rsa/ed25519/route/zlib/h2 全裁 ≈ 2.7M；`--no-sqlite`/`--no-ws`/`--no-zip`/`--no-xml`/`--no-aes`/`--no-rsa`/`--no-ed25519`/`--no-route`/`--no-zlib`/`--no-h2` 可单独/任意组合（显式 flag > 自动；缺 native 调用 → R1001） |
+| `px refs <file.px>` | 输出被引用全局/native 名集合（M86-S1：编译 C 产物提取，import 递归覆盖；`px build` 自动裁剪的引用采集层） |
 | `px run <file.px> [args...]` | 脚本模式执行 |
 | `px lex <file.px>` | 打印 Token 流（调试，走 PuXian lexer） |
 | `px parse <file.px>` | 打印 AST（调试，走 PuXian parser） |

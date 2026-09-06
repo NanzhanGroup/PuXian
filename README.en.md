@@ -78,7 +78,10 @@ def main():
 
 | Command | Description |
 |---|---|
-| `px build <file.px>` | Compile to a static binary (outputs `<dir>/build/<name>`) |
+| `px build <file.px>` | Compile to a static binary (outputs `<dir>/build/<name>`). **Auto-pruned by referenced natives by default (M86-S2)**: unreferenced runtime modules are dropped at compile time (import-recursive; hello/pure CLI → ~2.7M, sqlite users keep it → ~3.8M; on parse failure falls back to full build) |
+| `px build --full <file.px>` / `--max` | Full-capability build (M86-S2 escape hatch): skips auto-pruning, ≈9.0M baseline; combinable with explicit `--no-xxx` |
+| `px build --min <file.px>` | Explicit minimal profile (M85): aggregates `--no-quic` + sqlite/ws/zip/xml/aes/rsa/ed25519/route/zlib/h2 → ≈2.7M; `--no-xxx` flags combine freely (explicit flag > auto; missing native → R1001) |
+| `px refs <file.px>` | Print referenced global/native names (M86-S1: extracted from the compiled C output, import-recursive; the reference collector behind `px build` auto-pruning) |
 | `px run <file.px> [args...]` | Run in script mode |
 | `px lex <file.px>` | Print the token stream (debugging; runs the PuXian lexer) |
 | `px parse <file.px>` | Print the AST (debugging; runs the PuXian parser) |

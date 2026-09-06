@@ -1034,6 +1034,7 @@ close(fb)
 - **交叉编译与裁剪（S4）**：`px build --no-quic [--cc <交叉CC>] [--mbedtls-lib <dir>] [--sqlite-obj <file>]`
   —— ngtcp2/openssl-quictls 无 aarch64 预编译且交叉成本高 → 裁剪（PX_NO_QUIC 条件编译 7 处）；
   > M85-S1（2026-09-06）泛化：`px build` 模块开关集 `--no-sqlite/--no-ws/--no-zip/--no-xml/--no-aes/--no-rsa/--no-ed25519/--no-route/--no-zlib/--no-h2`（与 `--no-quic` 正交可组合，`--min` 聚合）—— runtime.c 注册/调用段 14 处 `#ifndef PX_NO_<MOD>` 包裹 + 链接去 sqlite3.o/libz.a + 缓存 key 纳开关集；产物 9.0M→2.7M；裁剪态缺 native → 运行时未定义（R1001 口径）。详见 tools/px usage 与 docs/M85_PLAN.md。
+  > M86-S0/S1/S2（2026-09-06）：① **命令正名 `px`**（pxc 兼容别名 symlink，spec/install.sh 双装 `/usr/bin/px` + `/usr/bin/pxc → px`）；② **`px refs <file>`** 引用集子命令 + `runtime/native_mod_map.txt`（112 个可裁 native 名=模块，生成器 `tools/gen_native_map.sh`）；③ **裸 `px build` = 按引用集自动最小**（编译 C 产物提取 `px_get_global` 引用名 → map 反推被引用模块，未引用模块自动补裁——复用 M85 cuts/宏/缓存 key 链路；`--full/--max` 全能力逃生舱；显式 flag 优先级 > 自动，自动只补未声明模块；解析失败自动退全量保编译成功）。实测：裸 hello 2,713,472 B / `--full` 9,010,184 B / sqlite 程序自动保留 3,759,248 B。详见 docs/M86_PLAN.md。
   mbedtls/sqlite 纯 C 交叉保留（tools/cross_aarch64.sh，mbedtls 3.6.2 + sqlite3 交叉入库）；
   musl 兼容 5 点（execinfo 条件包含 / GC `__aarch64__` 寄存器扫描分支 / getcontext→内联汇编 SP+setjmp
   spill / close_range→循环关闭）；qemu-aarch64 静态产物设备层 ioctl 与 x86 结果一致

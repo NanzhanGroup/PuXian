@@ -23,8 +23,8 @@ echo "== [2/5] --min == 手写全裁组合（同体积）=="
 $PX build $ALL hello.px >/dev/null 2>&1 && SZ2=$(stat -c %s build/hello) || SZ2=0
 [ "$SZ" = "$SZ2" ] && ok "--min($SZ) == 全裁($SZ2)" || bad "--min($SZ) != 全裁($SZ2)"
 
-echo "== [3/5] --target x86_64 折叠 + 裁剪叠加（quic 开 + 去 sqlite，实测 7968768 < 全能力 9010184）=="
-$PX build --target x86_64 --no-sqlite hello.px >/dev/null 2>&1 && SZ3=$(stat -c %s build/hello) || SZ3=0
+echo "== [3/5] --full --target x86_64 折叠 + 裁剪叠加（quic 开 + 去 sqlite，实测 7968768 < 全能力 9010184；M86-S2 适配 --full 前缀）=="
+$PX build --full --target x86_64 --no-sqlite hello.px >/dev/null 2>&1 && SZ3=$(stat -c %s build/hello) || SZ3=0
 if [ "$SZ3" -ge 7400000 ] && [ "$SZ3" -lt 8300000 ]; then ok "--target x86_64 --no-sqlite $SZ3（<9.0M 全能力基线，裁剪生效）"; else bad "--target x86_64 --no-sqlite $SZ3 期望 ~7.97M"; fi
 ./build/hello >/dev/null 2>&1 && ok "target+裁剪产物运行" || bad "target+裁剪产物运行"
 
