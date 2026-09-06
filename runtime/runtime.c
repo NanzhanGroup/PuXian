@@ -275,6 +275,9 @@ static LXValue bi_bytes_to_int(LXValue* args, int nargs, void* ctx);
 // M23b 字节辅助（字符串/字节串统一 data+len；供 base64/hex 等前置函数使用）
 static const char* bdata(LXValue v);
 static int blen(LXValue v);
+// M83-S2（Issue 20 GAP-ARC-1）：gzip 语言层通用压缩/解压（px_gzip_* 定义在后方 M21 区）
+static LXValue bi_gzip_compress(LXValue* args, int nargs, void* ctx);
+static LXValue bi_gzip_uncompress(LXValue* args, int nargs, void* ctx);
 
 // M10 HTTPS 内部辅助
 static char* px_http_request(const char* url, const char* method, const char* body, int* out_len, char* errbuf, int errcap);
@@ -5415,6 +5418,11 @@ void px_register_builtins(void) {
     px_set_global("aes_decrypt_bytes", px_native("aes_decrypt_bytes", bi_aes_decrypt_bytes));
     px_set_global("aes_gcm_encrypt_bytes", px_native("aes_gcm_encrypt_bytes", bi_aes_gcm_encrypt_bytes));
     px_set_global("aes_gcm_decrypt_bytes", px_native("aes_gcm_decrypt_bytes", bi_aes_gcm_decrypt_bytes));
+    // M83-S2（Issue 20 GAP-AES-1）：AES-ECB（PKCS7，无 IV）——微信网关媒体 AES-128-ECB 全链路
+    px_set_global("aes_encrypt_ecb", px_native("aes_encrypt_ecb", bi_aes_encrypt_ecb));
+    px_set_global("aes_decrypt_ecb", px_native("aes_decrypt_ecb", bi_aes_decrypt_ecb));
+    px_set_global("aes_encrypt_ecb_bytes", px_native("aes_encrypt_ecb_bytes", bi_aes_encrypt_ecb_bytes));
+    px_set_global("aes_decrypt_ecb_bytes", px_native("aes_decrypt_ecb_bytes", bi_aes_decrypt_ecb_bytes));
     // M19 P1：XML 解析（企微回调 Encrypt 报文 / 配置文件 / 文档）
     px_set_global("xml_parse", px_native("xml_parse", bi_xml_parse));
     px_set_global("xml_escape", px_native("xml_escape", bi_xml_escape));
@@ -5423,6 +5431,9 @@ void px_register_builtins(void) {
     // M19 P1：zip 打包/解压（docx/xlsx/pptx 是 zip+xml，文档工具基石）
     px_set_global("zip_pack", px_native("zip_pack", bi_zip_pack));
     px_set_global("zip_unpack", px_native("zip_unpack", bi_zip_unpack));
+    // M83-S2（Issue 20 GAP-ARC-1）：gzip 语言层通用压缩/解压（wsa-heal tar.gz / gen-update 差分包）
+    px_set_global("gzip_compress", px_native("gzip_compress", bi_gzip_compress));
+    px_set_global("gzip_uncompress", px_native("gzip_uncompress", bi_gzip_uncompress));
     // M21 P1：base64 编解码
     px_set_global("base64_encode", px_native("base64_encode", bi_base64_encode));
     px_set_global("base64_decode", px_native("base64_decode", bi_base64_decode));
@@ -5565,7 +5576,17 @@ static LXValue bi_os_pid(LXValue* args, int nargs, void* ctx) {
 
 static LXValue bi_os_spawn(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2 || args[0].type != PX_STR || args[1].type != PX_LIST)
+    // M83-S2（Issue 20 GAP-PGID-1）：第 3 参可选 group:bool（默认 false 保持现状）→
+    //   fork 后子进程 setpgid(0,0) 自成进程组（supervisor 停服需 kill(-pgid) 连孙进程一起清）
+    int group = 0;
+    if (nargs == 3) {
+        if (args[2].type == PX_BOOL) group = args[2].as.b ? 1 : 0;
+        else if (args[2].type == PX_INT) group = args[2].as.i != 0;
+        else px_error("os_spawn 的 group 需要 bool");
+    } else if (nargs != 2) {
+        px_error("os_spawn 需要 (cmd, args[, group]) 参数");
+    }
+    if (args[0].type != PX_STR || args[1].type != PX_LIST)
         px_error("os_spawn 需要 (cmd, args) 参数");
     const char* cmd = args[0].as.obj->as.str.data;
     LXObject* list = args[1].as.obj;
@@ -5589,7 +5610,8 @@ static LXValue bi_os_spawn(LXValue* args, int nargs, void* ctx) {
         return px_null();
     }
     if (pid == 0) {
-        // 子进程：execvp（argv[0]=cmd）
+        // 子进程：setpgid（可选）后 execvp（argv[0]=cmd）
+        if (group) setpgid(0, 0);
         execvp(cmd, argv);
         _exit(127);
     }
@@ -9271,6 +9293,38 @@ static char* px_gzip_decompress(const char* in, int inlen, int* outlen) {
     mz_inflateEnd(&s);
     *outlen = (int)s.total_out;
     return out;
+}
+
+// ==================== M83-S2（Issue 20 GAP-ARC-1）：gzip 语言层通用压缩/解压 ====================
+// gzip_compress(data) → bytes：标准 gzip 容器（1F 8B 头 + raw deflate + CRC32 + ISIZE），
+//   与系统 gzip -9 / Go compress/gzip 互通（wsa-heal 健康快照 tar.gz、gen-update 差分包外层）。
+// gzip_uncompress(gz) → bytes|null：解压失败（非 gzip / 截断 / 损坏）返回 null。
+//   输入均兼容 str|bytes（bdata/blen 语义，含 NUL 不截断）；输出 bytes（任意二进制）。
+
+static LXValue bi_gzip_compress(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("gzip_compress 需要 1 个参数: (data)");
+    const char* in = bdata(args[0]);
+    int inlen = blen(args[0]);
+    int outlen = 0;
+    char* out = px_gzip_compress(in, inlen, &outlen);
+    if (!out) return px_null();
+    LXValue r = px_bytes_len(out, outlen);
+    xfree(out);
+    return r;
+}
+
+static LXValue bi_gzip_uncompress(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("gzip_uncompress 需要 1 个参数: (gz)");
+    const char* in = bdata(args[0]);
+    int inlen = blen(args[0]);
+    int outlen = 0;
+    char* out = px_gzip_decompress(in, inlen, &outlen);
+    if (!out) return px_null();
+    LXValue r = px_bytes_len(out, outlen);
+    xfree(out);
+    return r;
 }
 
 // chunked 传输编码。返回 xmalloc，调用者 xfree。

@@ -358,3 +358,154 @@ LXValue bi_aes_decrypt_bytes(LXValue* args, int nargs, void* ctx) {
     free(out);
     return r;
 }
+
+// ==================== M83-S2（Issue 20 GAP-AES-1）：AES-ECB（PKCS7，无 IV） ====================
+// 微信网关 media.go 媒体收发全链路 AES-128-ECB（CDN 下载→ECB 解密→上传）——iLink 媒体协议硬规定。
+// mbedtls_aes_crypt_ecb 逐 16 字节块加解密（无链接模式）；PKCS7 padding 与 CBC 同。
+// - aes_encrypt_ecb(data, key) → hex（AES-ECB-PKCS7；key 16/24/32 字节 → 128/192/256 位）
+// - aes_decrypt_ecb(hex, key) → str 或 null（padding 非法 / 非 UTF-8 → null）
+// - aes_encrypt_ecb_bytes(data, key) → bytes（密文原始字节，任意二进制明文）
+// - aes_decrypt_ecb_bytes(ct, key) → bytes | null（无 utf8 校验，微信媒体二进制解密用）
+// 注：ECB 无 IV；相同明文块产生相同密文块（非随机化），仅用于协议规定场景，勿作通用加密。
+
+// ECB 逐块处理（input/output 同长，len 为 16 倍数）
+static int aes_ecb_crypt(mbedtls_aes_context* aes, int mode,
+                         const unsigned char* in, unsigned char* out, int len) {
+    for (int off = 0; off < len; off += 16) {
+        int rc = mbedtls_aes_crypt_ecb(aes, mode, in + off, out + off);
+        if (rc != 0) return rc;
+    }
+    return 0;
+}
+
+// aes_encrypt_ecb(data, key) → hex（AES-ECB-PKCS7）
+LXValue bi_aes_encrypt_ecb(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) px_error("aes_encrypt_ecb 需要 2 个参数: (data, key)");
+    int dlen = 0, klen = 0;
+    const char* data = vbytes(args[0], &dlen);
+    const char* key = vbytes(args[1], &klen);
+    if (klen != 16 && klen != 24 && klen != 32) px_error("AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
+    int pad = 16 - (dlen % 16);
+    int buflen = dlen + pad;
+    unsigned char* buf = (unsigned char*)malloc((size_t)buflen);
+    unsigned char* out = (unsigned char*)malloc((size_t)buflen);
+    if (!buf || !out) { free(buf); free(out); px_error("内存不足"); }
+    memcpy(buf, data, (size_t)dlen);
+    memset(buf + dlen, pad, (size_t)pad);
+    mbedtls_aes_context aes;
+    mbedtls_aes_init(&aes);
+    if (mbedtls_aes_setkey_enc(&aes, (const unsigned char*)key, klen * 8) != 0) {
+        mbedtls_aes_free(&aes); free(buf); free(out);
+        px_error("AES 密钥设置失败");
+    }
+    int rc = aes_ecb_crypt(&aes, MBEDTLS_AES_ENCRYPT, buf, out, buflen);
+    mbedtls_aes_free(&aes);
+    free(buf);
+    if (rc != 0) { free(out); px_error("AES 加密失败"); }
+    char* hex = (char*)malloc((size_t)buflen * 2 + 1);
+    if (!hex) { free(out); px_error("内存不足"); }
+    aes_hex(out, buflen, hex);
+    LXValue r = px_str(hex);
+    free(out); free(hex);
+    return r;
+}
+
+// aes_decrypt_ecb(hex, key) → str 或 null
+LXValue bi_aes_decrypt_ecb(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) px_error("aes_decrypt_ecb 需要 2 个参数: (hex, key)");
+    const char* hs = vstr(args[0]); int hlen = vstrlen(args[0]);
+    int klen = 0;
+    const char* key = vbytes(args[1], &klen);
+    if (klen != 16 && klen != 24 && klen != 32) px_error("AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
+    unsigned char* ct = (unsigned char*)malloc((size_t)hlen / 2 + 1);
+    if (!ct) px_error("内存不足");
+    int ctlen = aes_unhex(hs, hlen, ct);
+    if (ctlen < 0 || ctlen == 0 || ctlen % 16 != 0) { free(ct); return px_null(); }
+    unsigned char* out = (unsigned char*)malloc((size_t)ctlen);
+    if (!out) { free(ct); px_error("内存不足"); }
+    mbedtls_aes_context aes;
+    mbedtls_aes_init(&aes);
+    if (mbedtls_aes_setkey_dec(&aes, (const unsigned char*)key, klen * 8) != 0) {
+        mbedtls_aes_free(&aes); free(ct); free(out);
+        px_error("AES 密钥设置失败");
+    }
+    int rc = aes_ecb_crypt(&aes, MBEDTLS_AES_DECRYPT, ct, out, ctlen);
+    mbedtls_aes_free(&aes);
+    free(ct);
+    if (rc != 0) { free(out); px_error("AES 解密失败"); }
+    // PKCS7 校验
+    int pad = out[ctlen - 1];
+    if (pad == 0 || pad > 16) { free(out); return px_null(); }
+    for (int i = 0; i < pad; i++) {
+        if (out[ctlen - 1 - i] != pad) { free(out); return px_null(); }
+    }
+    int plen = ctlen - pad;
+    if (!aes_is_utf8(out, plen)) { free(out); return px_null(); }
+    LXValue r = px_str_len((const char*)out, plen);
+    free(out);
+    return r;
+}
+
+// aes_encrypt_ecb_bytes(data, key) → bytes（密文原始字节）
+LXValue bi_aes_encrypt_ecb_bytes(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) px_error("aes_encrypt_ecb_bytes 需要 2 个参数: (data, key)");
+    int dlen = 0, klen = 0;
+    const char* data = vbytes(args[0], &dlen);
+    const char* key = vbytes(args[1], &klen);
+    if (klen != 16 && klen != 24 && klen != 32) px_error("AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
+    int pad = 16 - (dlen % 16);
+    int buflen = dlen + pad;
+    unsigned char* buf = (unsigned char*)malloc((size_t)buflen);
+    unsigned char* out = (unsigned char*)malloc((size_t)buflen);
+    if (!buf || !out) { free(buf); free(out); px_error("内存不足"); }
+    memcpy(buf, data, (size_t)dlen);
+    memset(buf + dlen, pad, (size_t)pad);
+    mbedtls_aes_context aes;
+    mbedtls_aes_init(&aes);
+    if (mbedtls_aes_setkey_enc(&aes, (const unsigned char*)key, klen * 8) != 0) {
+        mbedtls_aes_free(&aes); free(buf); free(out);
+        px_error("AES 密钥设置失败");
+    }
+    int rc = aes_ecb_crypt(&aes, MBEDTLS_AES_ENCRYPT, buf, out, buflen);
+    mbedtls_aes_free(&aes);
+    free(buf);
+    if (rc != 0) { free(out); px_error("AES 加密失败"); }
+    LXValue r = px_bytes_len(out, buflen);
+    free(out);
+    return r;
+}
+
+// aes_decrypt_ecb_bytes(ct_bytes, key) → bytes | null（PKCS7 非法 → null；无 utf8 校验）
+LXValue bi_aes_decrypt_ecb_bytes(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) px_error("aes_decrypt_ecb_bytes 需要 2 个参数: (ct, key)");
+    int ctlen = 0, klen = 0;
+    const char* ct = vbytes(args[0], &ctlen);
+    const char* key = vbytes(args[1], &klen);
+    if (klen != 16 && klen != 24 && klen != 32) px_error("AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
+    if (ctlen == 0 || ctlen % 16 != 0) return px_null();
+    unsigned char* out = (unsigned char*)malloc((size_t)ctlen);
+    if (!out) px_error("内存不足");
+    mbedtls_aes_context aes;
+    mbedtls_aes_init(&aes);
+    if (mbedtls_aes_setkey_dec(&aes, (const unsigned char*)key, klen * 8) != 0) {
+        mbedtls_aes_free(&aes); free(out);
+        px_error("AES 密钥设置失败");
+    }
+    int rc = aes_ecb_crypt(&aes, MBEDTLS_AES_DECRYPT, (const unsigned char*)ct, out, ctlen);
+    mbedtls_aes_free(&aes);
+    if (rc != 0) { free(out); px_error("AES 解密失败"); }
+    // PKCS7 校验
+    int pad = out[ctlen - 1];
+    if (pad == 0 || pad > 16) { free(out); return px_null(); }
+    for (int i = 0; i < pad; i++) {
+        if (out[ctlen - 1 - i] != pad) { free(out); return px_null(); }
+    }
+    int plen = ctlen - pad;
+    LXValue r = px_bytes_len(out, plen);  // 无 utf8 校验（微信媒体二进制）
+    free(out);
+    return r;
+}

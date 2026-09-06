@@ -9,7 +9,7 @@
 >       ③ **RSA PKCS1v15-SHA256 DigestInfo 封装 + PEM 私钥解析**（ws-pay + agentmail DKIM 硬契约，Issue 18）
 >       ④ **http_serve 同端口流式 SSE**（api-server OpenAI 兼容 /stream 无绕过硬缺口，Issue 19）
 >       ⑤ **归档批 7 项**（Issue 20）：L0 AES-ECB / gzip_compress/uncompress / os_spawn setpgid + L1 stdlib HTML5 / cookie jar / multipart / smtp_send
-> 性质：**L0 runtime（native 288→297）+ L1 stdlib（4 个 .px 库）+ 引入 tweetnacl（public domain）**，不改语言语法 → 需重链全部 bootstrap ELF + 自举证明 + 全量回归（M72 同款大回归链）
+> 性质：**L0 runtime（native 288→299，S2 实际 +6：AES-ECB hex+bytes 双形态）+ L1 stdlib（4 个 .px 库）+ 引入 tweetnacl（public domain）**，不改语言语法 → 需重链全部 bootstrap ELF + 自举证明 + 全量回归（M72 同款大回归链）
 > 分批次：**S1→S6 六批**，每批独立开发 + examples verify + commit；S6 统一一次自举重建收口 + tag v0.1.0-m83
 
 ## 〇、现状侦查（2026-09-06 源码级实录，非记忆推断）
@@ -61,11 +61,11 @@
 
 **做（S1–S6，全部 qg-issue 待办除 W1b）**：
 - **S1 · Issue 16**（runtime.c http_conn_worker + px_unicode_len/bi_contains）：服务端 body 动态缓冲（xmalloc 跟 content_length，上限默认 256MB、PX_HTTP_BODY_MAX 可配、超限 413）+ len() 尊重 str.len（px_unicode_len_n 字节边界）+ contains memmem 语义（NUL 保真）。native 288（不改数）。**✅ 已交付**（examples/m83_s1 verify 6/6 + m82 回归 8/8）。
-- **S2 · Issue 20-L0 三件**：`aes_encrypt_ecb/aes_decrypt_ecb`（runtime_aes.c，PKCS7）；`gzip_compress/gzip_uncompress`（runtime.c 包 px_gzip_*）；`os_spawn` 可选 group 参数（setpgid）。native +4 → 292。
-- **S3 · Issue 17 ed25519**（引入 tweetnacl 入 runtime_ed25519.c）：`ed25519_sign(priv, msg)` / `ed25519_verify(pub, msg, sig)`（hex 或 PEM 入参，PEM 走内部 PKCS8/PKIX 小解析）。native +2 → 294。
-- **S4 · Issue 18 RSA 标准签名**（runtime_rsa.c）：`rsa_sign_pkcs1v15_sha256(pem_priv, msg)` / `rsa_verify_pkcs1v15_sha256(pem_pub, msg, sig_hex)`（mbedtls pk_parse_key/pk_sign 带 MD_SHA256 自动 DigestInfo；支持 PKCS8/PKCS1/RSA PUBLIC KEY/PUBLIC KEY）；旧 rsa_sign/rsa_verify 裸 type1 **原样保留**。native +2 → 296。
+- **S2 · Issue 20-L0 三件（✅ 已交付 2026-09-06）**：`aes_encrypt_ecb/aes_decrypt_ecb` + `aes_encrypt_ecb_bytes/aes_decrypt_ecb_bytes`（runtime_aes.c，PKCS7；hex 版供文本互通对拍、bytes 版供微信媒体二进制——微信网关 AES-128-ECB 加解密媒体文件为二进制，hex 版 aes_decrypt_ecb 的 utf8 校验会拒非 UTF-8，故按 aes_gcm/aes_cbc 家族惯例同时提供 bytes 版）；`gzip_compress/gzip_uncompress`（runtime.c 包 px_gzip_*）；`os_spawn` 可选 group 参数（setpgid）。native +6 → 294。
+- **S3 · Issue 17 ed25519**（引入 tweetnacl 入 runtime_ed25519.c）：`ed25519_sign(priv, msg)` / `ed25519_verify(pub, msg, sig)`（hex 或 PEM 入参，PEM 走内部 PKCS8/PKIX 小解析）。native +2 → 296。
+- **S4 · Issue 18 RSA 标准签名**（runtime_rsa.c）：`rsa_sign_pkcs1v15_sha256(pem_priv, msg)` / `rsa_verify_pkcs1v15_sha256(pem_pub, msg, sig_hex)`（mbedtls pk_parse_key/pk_sign 带 MD_SHA256 自动 DigestInfo；支持 PKCS8/PKCS1/RSA PUBLIC KEY/PUBLIC KEY）；旧 rsa_sign/rsa_verify 裸 type1 **原样保留**。native +2 → 298。
 - **S5 · Issue 20-L1 stdlib 四库**：std.html / std.cookiejar / std.multipart / std.smtp（纯 .px 入库 stdlib/ 随发布包分发）。
-- **S6 · Issue 19 SSE 同端口 + 收口**：`http_stream(path, on_connect)` native（runtime.c，+1 → **297**）+ http_conn_worker 流式分支（复用 g_sse_clients/sse_send/sse_close）；随后全量重建链 + 回归总闸 + 文档 + qg-issue 16/17/18/19/20 归档 + tag v0.1.0-m83。
+- **S6 · Issue 19 SSE 同端口 + 收口**：`http_stream(path, on_connect)` native（runtime.c，+1 → **299**）+ http_conn_worker 流式分支（复用 g_sse_clients/sse_send/sse_close）；随后全量重建链 + 回归总闸 + 文档 + qg-issue 16/17/18/19/20 归档 + tag v0.1.0-m83。
   - （SSE 放 S6 因其是 http 面最大改动，与前 5 批各自独立提交后再上，风险隔离；S6 = SSE + 收口，若 SSE 超预期可先发 m83a 再 m83b，执行期临机。）
 
 **不做**：
@@ -96,13 +96,13 @@
 - **16b**：`px_unicode_len` 增加带长度边界版本 `px_unicode_len_n(s, n)`（遍历 n 字节，UTF-8 连续字节跳过）；`px_len` 对 PX_STR 改走 `px_unicode_len_n(v.data, v.len)`（纯文本零变化——len 语义不变、仅不再被 NUL 提前截断）；`bi_contains` 改 memmem(data, len, needle, nlen) 长度感知（两参均按 str.len）。其余 C 字符串族（B2 全量）**不在本里程碑**（Issue 16 已拆 B1/B2，B2 留档）。
 - 验证（examples/m83_s1）：1MB 随机二进制 POST → handler 回显 body 长度 + sha256 断言与源一致（http_serve 与 http_serve_unix 双入口）；>256MB 上限回 413（用小上限 env/参数测）；含 NUL body 的 `len(body)` 与 `contains(body, bin_needle)` 断言；现有小 body 用例（ws-approve/m82 自检形态）零回归；纯文本 len() golden 零漂移。
 
-### S2 · Issue 20-L0：AES-ECB + gzip 暴露 + os_spawn setpgid（runtime_aes.c / runtime.c，native +4 → 292）
+### S2 · Issue 20-L0：AES-ECB + gzip 暴露 + os_spawn setpgid（runtime_aes.c / runtime.c，native +6 → 294）✅ 已交付
 - `aes_encrypt_ecb(data, key) → bytes|null` / `aes_decrypt_ecb(data, key) → bytes|null`：mbedtls aes setkey + crypt（16B 块），**PKCS7 自动填充/去填充**（对齐 Go 侧微信网关 ref），key 长决定 AES-128/192/256；data/key 收 str|bytes（vbytes 助手，M72-S4 模式）；失败 null。
 - `gzip_compress(data) → bytes` / `gzip_uncompress(data) → bytes|null`：包 px_gzip_compress/decompress（已 L9182/L9219 就绪），str|bytes 入、bytes 出，失败（数据非法）null。
 - `os_spawn(cmd, args, group?)`：第 3 参可选 bool 默认 false；true 时 fork 后子进程 `setpgid(0,0)`（对齐 os_capture L5891 先例）→ 语言层 `os_kill(pid, sig, true)` 可组杀孙进程。os_spawn_capture/os_capture 已有 setpgid 不动。
 - 验证（examples/m83_s2）：ECB 与 Go `aes.NewCipher` + PKCS7 ref 双向互通（固定 key/任意二进制含 NUL）；gzip_compress→uncompress roundtrip 逐字节一致 + 与系统 gzip -d 互通（file magic 1f 8b）；os_spawn(group=true) 子进程再 spawn 孙 → os_kill(pid, SIGTERM, true) 后孙进程消失（ps 断言）、group 缺省行为不变（回归）。
 
-### S3 · Issue 17：ed25519 签名/验签（新增 runtime/runtime_ed25519.c，引入 tweetnacl，native +2 → 294）
+### S3 · Issue 17：ed25519 签名/验签（新增 runtime/runtime_ed25519.c，引入 tweetnacl，native +2 → 296）
 - **引入 tweetnacl（public domain）**：仓库无 mbedtls 源码不可重编 ed25519 → 将 tweetnacl 的 ed25519 部分（crypto_sign/crypto_sign_open + 内嵌 sha512 + crypto_sign_seed_keypair）并入 `runtime/runtime_ed25519.c`（单文件 self-contained，头部注明来源与 public domain 许可）。需要确认 tweetnacl.c 可从何处取得——标准源即 tweetnacl.org / DJB 官方发布的 tweetnacl-20140427 版（常见镜像）。**执行期取源 + 校验 sha256 + 归档来源到文件头**（第三方引入规范：记来源/版本/许可）。
 - native：
   - `ed25519_sign(priv, msg) → sig_hex | null`：priv 收 **hex（32B seed=64 hex 或 64B sk=128 hex，seed 自动 crypto_sign_seed_keypair 展开）或 PEM（PKCS8 PRIVATE KEY，内部小 DER 解析取 seed 32B）**；msg str|bytes；输出 64B sig → 128 hex。失败 null。
@@ -110,7 +110,7 @@
 - **PEM 解析**：ed25519 的 PKCS8（OID 1.3.101.112）与 PKIX 结构固定，写内部小解析（base64 + 定长 DER 走查，<100 行）；RSA PEM 走 mbedtls pk_parse（S4），两族不共享复杂 DER 层（各自最简）。
 - 验证（examples/m83_s3，**与 Go 互通对拍**）：Go 生成 ed25519 keypair → export PKCS8 PEM + 公钥 PEM + msg → px `ed25519_verify(pem_pub,...)` true（错 key false）；px 用 Go 的 PEM 私钥签 → Go `ed25519.Verify` true；px os_random_hex(32) 生成 seed 自签自验 + 错 sig/坏 key 断言 false；与 Go 用同 seed 派生公钥比对（seed 互通）。
 
-### S4 · Issue 18：RSA PKCS1v15-SHA256 + PEM（runtime_rsa.c 扩展，native +2 → 296）
+### S4 · Issue 18：RSA PKCS1v15-SHA256 + PEM（runtime_rsa.c 扩展，native +2 → 298）
 - 新增：
   - `rsa_sign_pkcs1v15_sha256(pem_priv, msg) → sig_hex | null`：pem_priv 收 PEM 文本（`-----BEGIN (RSA )?PRIVATE KEY-----`，mbedtls `pk_parse_key` 自动 PKCS8/PKCS1）→ `pk_sign(MBEDTLS_MD_SHA256, ...)`（自动 sha256 + DigestInfo + PKCS1v15）→ hex。
   - `rsa_verify_pkcs1v15_sha256(pem_pub, msg, sig_hex) → bool`：pem_pub 收 PEM 公钥（`RSA PUBLIC KEY`/`PUBLIC KEY`，pk_parse_public_key）→ pk_verify MD_SHA256。
@@ -125,13 +125,13 @@
 - **std.smtp**：`send(host, port, from, to, msg, opts?) → bool`：tcp 手写 SMTP 客户端（EHLO/MAIL FROM/RCPT TO/DATA/QUIT + 可选 AUTH LOGIN base64）；TLS：先查 runtime 是否有裸 TLS 连接包装可用（px_conn/tls 面，执行期评估）——首版支持明文内网/587 与（若可得）STARTTLS；agentmail 全移植不做。wgfixer 告警场景 sendmail 子进程可先行绕过。
 - 验证（examples/m83_s5）：html 真实坏网页（缺闭合/错嵌套）text 提取不含标签；cookie 两次请求带 session 断言；multipart body 与 curl -F 互通（本地 http_serve 接收断言字段+文件）；smtp 发到本地 127.0.0.1:25 收件箱（或 dev 中继）断言到达。stdlib 双模式 run+build 验证（M69 惯例）。
 
-### S6 · Issue 19 SSE 同端口 + 全量收口（runtime.c，native +1 → 297）
+### S6 · Issue 19 SSE 同端口 + 全量收口（runtime.c，native +1 → 299）
 - **Issue 19（B 形态）**：新增 native `http_stream(path, on_connect)`（注册流式路由表 path→fn，可多次注册）；http_conn_worker（L9413）解析 path 后**先查流式路由表**：命中 → 该连接进 sse 注册表（分配 conn id，复用 g_sse_clients/sse_find，L9810）→ 写 SSE 响应头（Content-Type: text/event-stream，对齐 sse_serve 现状）→ `px_spawn(on_connect, {conn_id, req})` → on_connect 内语言层 `sse_send(conn_id, data)` 逐块推（自动 data: 帧 + 每块写即 flush）→ on_connect 返回 → `sse_close(conn_id)` 注销 + 关闭连接。普通路由照旧（流式路由优先，.px 普通 handler 兜底 404）。**http_serve + http_serve_unix 同享**。
   - sse_send/sse_close 现成（L10082/L10117），只缺注册入口 → 改动面 = 流式路由表 + worker 分支 + 1 个注册 native。
 - 验证（examples/m83_s6）：同一 http_serve 注册 `/json`（普通）与 `/stream`（SSE 3 chunk + data: [DONE]）；curl 同端口分别打两路由；断言 stream 头 `text/event-stream`、chunk 逐条实时（时间戳差）、客户端中途断开服务端不崩；http_serve_unix 同端口流式同样过；sse_serve 独立端口旧行为回归。
 - **收口（S6b）**：全量重建链 + 回归总闸（见三）+ 文档同步 + qg-issue 归档 + tag。
 
-## 三、新增 native 清单（288 → 297，+9）
+## 三、新增 native 清单（288 → 299，+11）
 
 | # | native | 文件 | 签名 | 里程碑 |
 |---|---|---|---|---|
@@ -146,7 +146,7 @@
 | 9 | `http_stream` | runtime.c | (path, on_connect) → bool | S6 |
 
 参数增强（不计 native）：os_spawn 第 3 参 group（S2）；len()/contains() NUL 语义修正（S1）。
-同步义务：CHEATSHEET native 清单 288→297 + tools/gen_native_table.sh 重跑 → docs/native_index.json + ECOSYSTEM/CHEATSHEET §crypto/http 条目；CI 防漂移。
+同步义务：CHEATSHEET native 清单 288→299 + tools/gen_native_table.sh 重跑 → docs/native_index.json + ECOSYSTEM/CHEATSHEET §crypto/http 条目；CI 防漂移。
 
 ## 四、回归总闸（判据）
 1. CI 六 job 全绿：regression（自举证明 + diffcheck 全量）+ examples + toolchain（fmt/lint/生态+原生索引防漂移/M65-M82 verify）+ multiarch 三架构交叉。
@@ -155,7 +155,7 @@
 4. S3：ed25519 ↔ Go 双向互通（PEM + seed）；错 key/坏 sig false。
 5. S4：RSA PKCS1v15-SHA256 ↔ Go SignPKCS1v15/VerifyPKCS1v15 双向互通（PKCS8/PKCS1 两格式）；裸 rsa_sign 不回归。
 6. S5：stdlib 四库双模式 run+build verify（M69 惯例）。
-7. S6：同端口 /json + /stream 共存、SSE 逐块实时、断连不崩；sse_serve 旧行为回归；native_index/CHEATSHEET 297 防漂移 diff 通过。
+7. S6：同端口 /json + /stream 共存、SSE 逐块实时、断连不崩；sse_serve 旧行为回归；native_index/CHEATSHEET 299 防漂移 diff 通过。
 8. fmt/lint 0 错；bash -n 通过；CHANGELOG/ROADMAP/README/ECOSYSTEM/CHEATSHEET/native_index/qg-issue 收口 commit。
 
 ## 五、验收方法（对齐各 ISSUE 五节 + 用户指令）
@@ -164,7 +164,7 @@
 3. **Issue 18**：ws-pay 商户签名——Go 生成的商户 PKCS8 私钥 PEM 直接喂 px 签出标准 PKCS1v15-SHA256，微信/支付宝服务端验签通过（Go ref 对拍验证等价）；DKIM rsa-sha256 原语可用。
 4. **Issue 19**：api-server OpenAI 兼容——同一 443/端口 `/v1/chat/completions`（stream=true）返回 `text/event-stream` 逐块 + [DONE]，普通 JSON 路由同端口共存；OpenAI SDK 直连不破坏。
 5. **Issue 20**：AES-ECB 微信媒体链路 ↔ Go；gzip ↔ 系统 tar；supervisor stop 组杀；html/cookie/multipart/smtp 各自最小断言（§S5）。
-6. **全量**：native 297、CHEATSHEET 同步、自举证明、diffcheck、CI 全绿、qg-issue 16-20 归档 done/。
+6. **全量**：native 299、CHEATSHEET 同步、自举证明、diffcheck、CI 全绿、qg-issue 16-20 归档 done/。
 
 ## 六、风险与取舍
 - **tweetnacl 引入**（S3）：第三方 public domain 源码进 runtime——需固定来源版本 + 文件头注明 + sha256 校验记录；仅取 ed25519/sha512 必要函数，避免整包。替代方案（重编 mbedtls 开 ed25519）仓库无源码，弃。
