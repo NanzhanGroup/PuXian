@@ -122,7 +122,7 @@ tar xzf ${NAME}.tar.gz && cd ${NAME}
 \`\`\`
 
 > **stdlib 定位**：在解压目录（或子目录）内开发，\`import std.*\` 自动命中
-> （候选路径含 `./stdlib`、`../stdlib`）。若在包外任意目录调用 px（pxc 别名等价），请先
+> （候选路径含 \`./stdlib\`、\`../stdlib\`）。若在包外任意目录调用 px（pxc 别名等价），请先
 > \`export PX_STDLIB=<解压目录>/stdlib\`。
 
 ## 常用选项
