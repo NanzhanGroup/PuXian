@@ -5474,6 +5474,8 @@ void px_register_builtins(void) {
     px_set_global("set_timeout", px_native("set_timeout", bi_set_timeout));
     px_set_global("set_interval", px_native("set_interval", bi_set_interval));
     px_set_global("clear_timer", px_native("clear_timer", bi_clear_timer));
+// M85-S1：--no-aes 裁剪（去 runtime_aes.o + mbedtls aes/gcm 引用面）
+#ifndef PX_NO_AES
     // M19 P1：AES 加密（企微回调加解密 / 数据落盘加密 / Cookie 签名）
     px_set_global("aes_encrypt", px_native("aes_encrypt", bi_aes_encrypt));
     px_set_global("aes_decrypt", px_native("aes_decrypt", bi_aes_decrypt));
@@ -5490,14 +5492,21 @@ void px_register_builtins(void) {
     px_set_global("aes_decrypt_ecb", px_native("aes_decrypt_ecb", bi_aes_decrypt_ecb));
     px_set_global("aes_encrypt_ecb_bytes", px_native("aes_encrypt_ecb_bytes", bi_aes_encrypt_ecb_bytes));
     px_set_global("aes_decrypt_ecb_bytes", px_native("aes_decrypt_ecb_bytes", bi_aes_decrypt_ecb_bytes));
+#endif // PX_NO_AES
+// M85-S1：--no-xml 裁剪（去 runtime_xml.o）
+#ifndef PX_NO_XML
     // M19 P1：XML 解析（企微回调 Encrypt 报文 / 配置文件 / 文档）
     px_set_global("xml_parse", px_native("xml_parse", bi_xml_parse));
     px_set_global("xml_escape", px_native("xml_escape", bi_xml_escape));
     px_set_global("xml_unescape", px_native("xml_unescape", bi_xml_unescape));
     px_set_global("xml_build", px_native("xml_build", bi_xml_build));
+#endif // PX_NO_XML
+// M85-S1：--no-zip 裁剪（去 runtime_zip.o + 其 mbedtls md/pkcs5/aes 引用面）
+#ifndef PX_NO_ZIP
     // M19 P1：zip 打包/解压（docx/xlsx/pptx 是 zip+xml，文档工具基石）
     px_set_global("zip_pack", px_native("zip_pack", bi_zip_pack));
     px_set_global("zip_unpack", px_native("zip_unpack", bi_zip_unpack));
+#endif // PX_NO_ZIP
     // M83-S2（Issue 20 GAP-ARC-1）：gzip 语言层通用压缩/解压（wsa-heal tar.gz / gen-update 差分包）
     px_set_global("gzip_compress", px_native("gzip_compress", bi_gzip_compress));
     px_set_global("gzip_uncompress", px_native("gzip_uncompress", bi_gzip_uncompress));
@@ -5520,6 +5529,8 @@ void px_register_builtins(void) {
     px_set_global("hex_to_bytes", px_native("hex_to_bytes", bi_hex_to_bytes));
     px_set_global("bit_count", px_native("bit_count", bi_bit_count));
     px_set_global("bit_length", px_native("bit_length", bi_bit_length));
+// M85-S1：--no-ws 裁剪（去 runtime_ws.o；ws_serve/ws_connect 等 WS native 缺 → R1001）
+#ifndef PX_NO_WS
     // M22 P1：WebSocket（RFC 6455，微信/QQ/飞书长连接 / LLM 流式 / 实时推送）
     px_set_global("ws_serve", px_native("ws_serve", bi_ws_serve));
     px_set_global("ws_connect", px_native("ws_connect", bi_ws_connect));
@@ -5532,6 +5543,7 @@ void px_register_builtins(void) {
     px_set_global("ws_close", px_native("ws_close", bi_ws_close));
     px_set_global("ws_ping", px_native("ws_ping", bi_ws_ping));
     px_set_global("ws_heartbeat", px_native("ws_heartbeat", bi_ws_heartbeat));
+#endif // PX_NO_WS
     // M27 P0：WebServer 生产化四件套（服务端 TLS / Session / 基础认证）
     px_set_global("tls_server", px_native("tls_server", bi_tls_server));
     px_set_global("session_open", px_native("session_open", bi_session_open));
@@ -5541,9 +5553,14 @@ void px_register_builtins(void) {
     px_set_global("session_del", px_native("session_del", bi_session_del));
     px_set_global("session_destroy", px_native("session_destroy", bi_session_destroy));
     px_set_global("basic_auth", px_native("basic_auth", bi_basic_auth));
+// M85-S1：--no-route 裁剪（去 runtime_route.o；route/middleware native 缺 → R1001）
+#ifndef PX_NO_ROUTE
     // M28 P1：路由表 + 中间件（runtime_route.c）
     px_set_global("route", px_native("route", bi_route));
     px_set_global("middleware", px_native("middleware", bi_middleware));
+#endif // PX_NO_ROUTE
+// M85-S1：--no-sqlite 裁剪（去 runtime_sqlite.o + sqlite3.o；sqlite_* native 缺 → R1001）
+#ifndef PX_NO_SQLITE
     // M28 P1：SQLite 绑定（runtime_sqlite.c）
     px_set_global("sqlite_open", px_native("sqlite_open", bi_sqlite_open));
     px_set_global("sqlite_exec", px_native("sqlite_exec", bi_sqlite_exec));
@@ -5551,8 +5568,11 @@ void px_register_builtins(void) {
     px_set_global("sqlite_close", px_native("sqlite_close", bi_sqlite_close));
     px_set_global("sqlite_escape", px_native("sqlite_escape", bi_sqlite_escape));
     px_set_global("sqlite_last_insert_rowid", px_native("sqlite_last_insert_rowid", bi_sqlite_last_insert_rowid));
+#endif // PX_NO_SQLITE
     // M42：FFI C 桥（runtime_ffi.c）—— ffi_call(name, args_list)
     px_set_global("ffi_call", px_native("ffi_call", bi_ffi_call));
+// M85-S1：--no-sqlite 裁剪（去 runtime_sqlite.o + sqlite3.o；sqlite_* native 缺 → R1001）
+#ifndef PX_NO_SQLITE
     // M42：已链 C 库绑定进 FFI 注册表（语言层 extern def 按名字查找）
     px_ffi_register("sqlite_open", bi_sqlite_open);
     px_ffi_register("sqlite_exec", bi_sqlite_exec);
@@ -5560,11 +5580,15 @@ void px_register_builtins(void) {
     px_ffi_register("sqlite_close", bi_sqlite_close);
     px_ffi_register("sqlite_escape", bi_sqlite_escape);
     px_ffi_register("sqlite_last_insert_rowid", bi_sqlite_last_insert_rowid);
+#endif // PX_NO_SQLITE
     // M48：hex 纯函数进 FFI 表（capability 字节精确断言/双模式一致用）
     px_ffi_register("bytes_to_hex", bi_bytes_to_hex);
     px_ffi_register("hex_to_bytes", bi_hex_to_bytes);
+// M85-S1：--no-zlib 裁剪（去 runtime_zlib.o + libz.a 链；extern zlib_* 缺 → R1001）
+#ifndef PX_NO_ZLIB
     // M61-S1：zlib 外部系统库绑定（runtime_zlib.c；libz.a 恒链，无条件注册）
     px_register_zlib();
+#endif // PX_NO_ZLIB
 #ifndef PX_NO_QUIC
     // M46：QUIC 传输级绑定（runtime_quic.c）—— 语言层 extern def quic_* 按名字查找
     px_register_quic();
@@ -5598,20 +5622,29 @@ void px_register_builtins(void) {
     px_set_global("os_popen", px_native("os_popen", bi_os_popen));
 
     px_set_global("signal", px_native("signal", bi_signal));
+// M85-S1：--no-rsa 裁剪（去 runtime_rsa.o + mbedtls rsa/pk 引用面；rsa_* native 缺 → R1001）
+#ifndef PX_NO_RSA
     // M23d P1：RSA（PKCS#1 v1.5，密钥/密文/签名均 hex；实现 runtime_rsa.c）
     px_set_global("rsa_gen_key", px_native("rsa_gen_key", bi_rsa_gen_key));
     px_set_global("rsa_encrypt", px_native("rsa_encrypt", bi_rsa_encrypt));
     px_set_global("rsa_decrypt", px_native("rsa_decrypt", bi_rsa_decrypt));
     px_set_global("rsa_sign", px_native("rsa_sign", bi_rsa_sign));
     px_set_global("rsa_verify", px_native("rsa_verify", bi_rsa_verify));
+#endif // PX_NO_RSA
+// M85-S1：--no-ed25519 裁剪（去 runtime_ed25519.o + tweetnacl.o；ed25519_* native 缺 → R1001）
+#ifndef PX_NO_ED25519
     // M83-S3（Issue 17 GAP-ED25519-1）：ed25519（RFC8032，tweetnacl；实现 runtime_ed25519.c）
     //   —— api-server /v1/family 节点互信 + ws-ddns 双向签名（与 Go crypto/ed25519 互通）
     px_set_global("ed25519_sign", px_native("ed25519_sign", bi_ed25519_sign));
     px_set_global("ed25519_verify", px_native("ed25519_verify", bi_ed25519_verify));
+#endif // PX_NO_ED25519
+// M85-S1：--no-rsa 裁剪（去 runtime_rsa.o + mbedtls rsa/pk 引用面；rsa_* native 缺 → R1001）
+#ifndef PX_NO_RSA
     // M83-S4（Issue 18 GAP-RSA-1）：RSA PKCS1v15-SHA256 标准签名（PEM 入参，DigestInfo 自动封装）
     //   —— ws-pay 商户签名 + agentmail DKIM rsa-sha256（与 Go rsa.SignPKCS1v15/VerifyPKCS1v15 互通）
     px_set_global("rsa_sign_pkcs1v15_sha256", px_native("rsa_sign_pkcs1v15_sha256", bi_rsa_sign_pkcs1v15_sha256));
     px_set_global("rsa_verify_pkcs1v15_sha256", px_native("rsa_verify_pkcs1v15_sha256", bi_rsa_verify_pkcs1v15_sha256));
+#endif // PX_NO_RSA
     // M23b P1：二进制安全字节串（bytes 类型；带长度，可含 NUL）
     px_set_global("bytes", px_native("bytes", bi_bytes));
     px_set_global("bytes_len", px_native("bytes_len", bi_bytes_len));
@@ -12122,6 +12155,8 @@ static void px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
         px_vhost_docroot_store(vroot);
     }
 
+// M85-S1：--no-route 裁剪（去 runtime_route.o；route/middleware native 缺 → R1001）
+#ifndef PX_NO_ROUTE
     // M28：路由表非空 → 优先匹配路由（method+path 模式 + :id 参数 + 中间件链）
     if (px_route_has()) {
         char extra[256];
@@ -12131,6 +12166,7 @@ static void px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
             return;
         }
     }
+#endif // PX_NO_ROUTE
 
     // 6. 路径映射 + 目录隔离（穿越防护：拒绝 ".." 路径段）
     // M31.2：docroot 已由 vhost 解析覆盖（__thread 存储，见 px_vhost_docroot_store）
@@ -12489,6 +12525,8 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
     PxHttpOut out;
     px_http_out_init_conn(&out, &conn);
 
+// M85-S1：--no-h2 裁剪（去 runtime_h2.o；http_serve 不再协商 h2c/ALPN-h2，退化为 HTTP/1.1）
+#ifndef PX_NO_H2
     // M37：TLS ALPN 协商 h2 → 直接 HTTP/2（prior knowledge 帧循环，整连接为 h2）
     if (conn.is_tls) {
         const char* alpn = mbedtls_ssl_get_alpn_protocol((mbedtls_ssl_context*)conn.ssl);
@@ -12500,6 +12538,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
             return px_null();
         }
     }
+#endif // PX_NO_H2
 
     // M29d：keep-alive 循环——同一连接连续处理多个请求，直到客户端
     // Connection: close / 空闲超时（15s）/ 出错。
@@ -12781,6 +12820,8 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
             }
         }
 
+// M85-S1：--no-h2 裁剪（去 runtime_h2.o；http_serve 不再协商 h2c/ALPN-h2，退化为 HTTP/1.1）
+#ifndef PX_NO_H2
         // M35：HTTP/2——h2c Upgrade（Upgrade: h2c + HTTP2-Settings）→ 升级为 h2 帧连接；
         // prior knowledge（请求行 "PRI * HTTP/2.0"）→ 直接 h2。进入帧循环后整连接为 h2。
         {
@@ -12796,6 +12837,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
                 goto req_done;
             }
         }
+#endif // PX_NO_H2
         // M53-S2：req 就绪 → 公共请求管道（CORS/限流/vhost/路由/静态/.px；输出经 PxHttpOut）
         px_http_dispatch(&out, req, method, path, query, client_keep_alive, req_id);
     req_done:
