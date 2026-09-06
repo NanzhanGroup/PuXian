@@ -1,0 +1,83 @@
+# M84-S2 (Issue 21) hmac_sha256 / sha256 bytes 增强专项验证
+#   S1 RFC4231 固定向量（TC1/TC2 官方期望值硬编码 + Go 全量对拍）
+#   S2 hmac 文本/二进制 key × 文本/二进制 msg（含 NUL）与 Go crypto/hmac 逐字节互通
+#   S3 sha256 bytes 含 NUL == Go sha256.Sum256（旧 strlen 截断 bug 修复证明）+ ASCII/空串回归
+#   S4 腾讯云 TC3-HMAC-SHA256 4 级链端到端（kDate→kService→kSigning→signature）对拍 Go
+#   S5 篡改敏感性
+# 依赖 artifacts/（verify.sh 用 Go 生成）+ bootstrap 编译的 s2_verify
+def rdhex(name):
+    return bytes_to_str(read_bytes("artifacts/" + name))
+
+def main():
+    # ---- 读 artifacts ----
+    go_tc1 = rdhex("go_tc1.hex")
+    go_tc2 = rdhex("go_tc2.hex")
+    go_tc3 = rdhex("go_tc3.hex")
+    go_tc4 = rdhex("go_tc4.hex")
+    go_tc6 = rdhex("go_tc6.hex")
+    msg = read_bytes("artifacts/msg.txt")
+    bmsg = read_bytes("artifacts/binmsg.bin")
+    msg_str = bytes_to_str(msg)
+    assert(go_tc1 != null and go_tc2 != null and go_tc3 != null and go_tc4 != null and go_tc6 != null)
+    assert(msg != null and bmsg != null and msg_str != null)
+    print("S0-artifacts OK")
+
+    # ---- S1 RFC4231 固定向量（px 用 hex_to_bytes 还原二进制 key/data 复算）----
+    k1 = hex_to_bytes(rdhex("tc1_key.hex"))
+    d1 = hex_to_bytes(rdhex("tc1_data.hex"))
+    assert(hmac_sha256(k1, d1) == go_tc1, "TC1")
+    # 官方向量双印证（Go 期望值 == 公开官方值 → px==官方）
+    assert(go_tc1 == "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7", "TC1 官方向量")
+    assert(hmac_sha256("Jefe", "what do ya want for nothing?") == go_tc2, "TC2")
+    assert(go_tc2 == "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843", "TC2 官方向量")
+    k3 = hex_to_bytes(rdhex("tc3_key.hex"))
+    d3 = hex_to_bytes(rdhex("tc3_data.hex"))
+    assert(hmac_sha256(k3, d3) == go_tc3, "TC3")
+    k4 = hex_to_bytes(rdhex("tc4_key.hex"))
+    d4 = hex_to_bytes(rdhex("tc4_data.hex"))
+    assert(hmac_sha256(k4, d4) == go_tc4, "TC4")
+    # TC6：key 0xaa*131 > 64B（触发 key 先 sha256 路径）
+    k6 = hex_to_bytes(rdhex("tc6_key.hex"))
+    assert(hmac_sha256(k6, "Test Using Larger Than Block-Size Key - Hash Key First") == go_tc6, "TC6 key>64B")
+    print("S1-RFC4231 OK")
+
+    # ---- S2 文本/二进制 key × 文本/二进制 msg（含 NUL）与 Go 互通 ----
+    strkey = "puxian-secret-2026"
+    assert(hmac_sha256(strkey, msg_str) == rdhex("go_hmac_strkey_strmsg.hex"), "strkey×strmsg")
+    assert(hmac_sha256(strkey, msg) == rdhex("go_hmac_strkey_strmsg.hex"), "strkey×msg-bytes")
+    assert(hmac_sha256(strkey, bmsg) == rdhex("go_hmac_strkey_binmsg.hex"), "strkey×binmsg(含NUL)")
+    binkey = hex_to_bytes("5a001b4b657900ff")   # {0x5a,0x00,0x1b,'K','e','y',0x00,0xff}
+    assert(binkey != null)
+    assert(hmac_sha256(binkey, bmsg) == rdhex("go_hmac_binkey_binmsg.hex"), "binkey(含NUL)×binmsg")
+    assert(hmac_sha256(binkey, msg_str) == rdhex("go_hmac_binkey_strmsg.hex"), "binkey×strmsg")
+    print("S2-hmac-go-interop OK")
+
+    # ---- S3 sha256 增强：bytes 含 NUL 全哈希（旧 strlen 截断 → 修复证明）+ ASCII/空串回归 ----
+    assert(sha256(bmsg) == rdhex("go_sha_bin.hex"), "sha256(binmsg 含NUL) 全哈希")
+    assert(sha256(msg) == rdhex("go_sha_msg.hex"), "sha256(文本 bytes)")
+    assert(sha256("abc") == rdhex("go_sha_abc.hex"), "sha256(abc) ASCII 回归")
+    assert(sha256("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "sha256(abc) 官方")
+    assert(sha256("") == rdhex("go_sha_empty.hex"), "sha256(空串)")
+    assert(sha256("") == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "sha256(空) 官方")
+    print("S3-sha256-bytes OK")
+
+    # ---- S4 腾讯云 TC3-HMAC-SHA256 4 级链端到端（vs Go 独立实现）----
+    kdate = hmac_sha256("TC3Gu5t9xGARNpq86cd98joQYCN3Cozk1qA", "2019-02-25")
+    assert(kdate == rdhex("tc3_kdate.hex"), "TC3 kDate")
+    kservice = hmac_sha256(hex_to_bytes(kdate), "cvm")
+    assert(kservice == rdhex("tc3_kservice.hex"), "TC3 kService")
+    ksigning = hmac_sha256(hex_to_bytes(kservice), "tc3_request")
+    assert(ksigning == rdhex("tc3_ksigning.hex"), "TC3 kSigning")
+    canonical = "GET\n/\nAction=DescribeInstances&Limit=1&Nonce=11886&Offset=0&Region=ap-guangzhou&Timestamp=1551117345&Version=2017-03-12\ncontent-type:application/json; charset=utf-8\nhost:cvm.tencentcloudapi.com\n\ncontent-type;host\n35e9c5e0e79ae38f8df6a5b003f9b3c0c5b1f9e8a7d6c5b4a3928170d6c5b4a3"
+    signature = hmac_sha256(hex_to_bytes(ksigning), canonical)
+    assert(signature == rdhex("tc3_signature.hex"), "TC3 signature")
+    print("S4-TC3-4level-chain OK")
+
+    # ---- S5 篡改敏感性 ----
+    assert(hmac_sha256(strkey, msg) != hmac_sha256(strkey, bmsg), "不同 msg 不同 hmac")
+    assert(hmac_sha256("keyA", "data") != hmac_sha256("keyB", "data"), "不同 key 不同 hmac")
+    assert(sha256(bmsg) != sha256("abc"), "sha256 输入敏感")
+    print("S5-negative OK")
+
+    print("M84-S2-VERIFY-OK")
+    exit(0)

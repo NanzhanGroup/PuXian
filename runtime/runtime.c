@@ -3924,13 +3924,35 @@ static LXValue bi_bit_length(LXValue* args, int nargs, void* ctx) {
 }
 
 // sha256(data) → 64 字符小写 hex 字符串（mbedtls 实现，与解释器一致）
+// M84-S2（Issue 21）：bdata/blen 二进制安全——接受 str|bytes|数值，bytes 与含 NUL 载荷
+// 完整哈希（不再被 strlen 截断）；纯 ASCII str 输出与旧版逐字节一致（零回归）。
 static LXValue bi_sha256(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) px_error("sha256 需要一个参数");
-    const char* data = val_cstr(args[0]);
+    const char* data = bdata(args[0]);
+    int len = blen(args[0]);
     unsigned char digest[32];
-    if (mbedtls_sha256((const unsigned char*)data, strlen(data), digest, 0) != 0)
+    if (mbedtls_sha256((const unsigned char*)data, (size_t)len, digest, 0) != 0)
         px_error("sha256 计算失败");
+    char hex[65];
+    bytes_to_hex(digest, 32, hex);
+    return px_str(hex);
+}
+
+// hmac_sha256(key, msg) → 64 字符小写 hex（HMAC-SHA256）
+// M84-S2（Issue 21 GAP-HMAC-1）：key/msg 均收 str|bytes，二进制安全可含 NUL（数值自动
+// 字符串化，与 bytes() 语义一致）。腾讯云 TC3 4 级 HMAC 链 / SigV4 / webhook / JWT HS256 解锁。
+static void px_hmac_sha256(const unsigned char* key, int klen,
+                           const unsigned char* data, int dlen, unsigned char out[32]);
+static LXValue bi_hmac_sha256(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) px_error("hmac_sha256 需要 (key, msg) 参数");
+    const unsigned char* kd = (const unsigned char*)bdata(args[0]);
+    int kl = blen(args[0]);
+    const unsigned char* md = (const unsigned char*)bdata(args[1]);
+    int ml = blen(args[1]);
+    unsigned char digest[32];
+    px_hmac_sha256(kd, kl, md, ml, digest);
     char hex[65];
     bytes_to_hex(digest, 32, hex);
     return px_str(hex);
@@ -5336,6 +5358,7 @@ void px_register_builtins(void) {
     px_set_global("fd_wait", px_native("fd_wait", bi_fd_wait));
     // M14 P1：crypto 哈希
     px_set_global("sha256", px_native("sha256", bi_sha256));
+    px_set_global("hmac_sha256", px_native("hmac_sha256", bi_hmac_sha256));  // M84-S2 (Issue 21 GAP-HMAC-1)
     px_set_global("xxhash", px_native("xxhash", bi_xxhash));
     // M15 P1：正则表达式（文本解析 / 日志分析 / 参数抽取）
     px_set_global("regex_find", px_native("regex_find", bi_regex_find));

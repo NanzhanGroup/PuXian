@@ -6,6 +6,31 @@
 
 ## [Unreleased]
 
+### M84-S2 · hmac_sha256 native + sha256 bytes/含 NUL 增强（qg-issue 21，GAP-HMAC-1）
+
+> 立项（2026-09-06）：qg-issue 21 —— bs-safeip 腾讯云 API 3.0 需 4 级 HMAC-SHA256 链（TC3），全仓无
+> hmac native；sha256 仅 ASCII（bi_sha256 用 strlen → 含 NUL/bytes 载荷截断）。mbedtls 层已有内部
+> HMAC 实现（M37 S3/SigV4 同源 px_hmac_sha256）→ 纯暴露成本。native 299→**300**（+1 hmac_sha256）。
+> - **`hmac_sha256(key, msg)`→hex**：key/msg 均收 str|bytes 二进制安全可含 NUL（数值自动字符串化）；
+>   key>64B 自动先 sha256（标准 HMAC 块处理）。腾讯云 TC3 / AWS SigV4 / webhook 验签 / JWT HS256 解锁。
+> - **`sha256` 原地增强**（+0 native，输出语义不变）：bdata/blen 替代 val_cstr+strlen——bytes 与含 NUL
+>   载荷全哈希（旧截断 bug 修复）；纯 ASCII str 输出与旧版逐字节一致零回归。
+> - verify（examples/m84_s2_hmac，全绿）：RFC4231 TC1-4/6 固定向量（TC1/TC2 官方期望硬编码 + Go
+>   crypto/hmac 全量对拍）、文本/二进制 key×文本/二进制 msg（含 NUL）Go 互通、sha256(binmsg 含 NUL)==
+>   Go sha256.Sum256、腾讯云 TC3 4 级链（kDate→kService→kSigning→signature）端到端对拍 Go、篡改敏感性。
+> - 回归：m83_s3（ed25519）/ m83_s4（RSA）/ m84_s1（http CT）全绿。
+
+### M84-S1 · http_request/http_unix 双 Content-Type bug 修复（qg-issue 23）
+
+> 立项（2026-09-06）：http_request 显式带 Content-Type 且无 Content-Length 时，默认 urlencoded CT 照加
+> → 双 Content-Type，腾讯云等严服务端拒收。根因：默认头补充判定挂在 Content-Length 上而非 Content-Type。
+> - **CT/CL 判定解耦**（runtime.c bi_http_request + bi_http_unix）：已带 Content-Type 不再追加默认 CT；
+>   默认表单头仅完全未指定 CT 时补；CL 仅缺失时补。新增 px_extra_hdr_has 行首匹配（避免 strcasestr 误伤
+>   X-Content-Type 等含子串头）。GET 无 body 无 CT/CL 不变。
+> - verify（examples/m84_s1_http_ct，全绿）：6 场景单头断言（无头默认表单回归 / json 显式 CT 单头+自动
+>   CL / multipart 显式 CL 保留 / GET / X-Custom 相邻不干扰 / http_unix 同步）。
+> - M83-S5 multipart 上传的 Content-Length 显式 hack 卸除（修复后 runtime 自动补齐）。native 保持 299。
+
 ### M83-S6 · http_stream 同端口流式 SSE + M83 全量收口（qg-issue 19，GAP-SRV-SSE；tag v0.1.0-m83）✅
 
 > 立项（2026-09-06）：M83-S6 = Issue 19 —— http_serve/sse_serve 两路径不相通：http_serve handler 一次性应答、
