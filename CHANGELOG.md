@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### M86 立项 · px build 按需自动裁剪（路线甲）+ 命令正名 px（qg-issue 25）
+
+> 立项（2026-09-06）：M85 交付后用户连续追问「能否按需自动裁剪（不必手动 --min）？或反转默认 min + --full？」「pxc 能否改为 px？有没有 --help？」→
+> 三问实测：① `--help` 已有（--help/-h/无参均完整 usage、exit 0），但 M85 新 flag（--min + 10× --no-*）未同步进 usage 文本（grep 命中 0，文档缺口）；
+> ② pxc→px 可行（/usr/bin/pxc = symlink → tools/pxc bash 前端；M71-S4 readlink 自发现、逻辑不依赖 argv[0]；改名面=脚本名 + usage/version 文本 + spec + 文档，pxc 留兼容别名）；
+> ③ 用户拍板**路线甲（自动裁剪）**，乙案（默认 min）剔除（自举/工具链需全量、破坏向后兼容、与编译型惯例倒置）。
+> M86 = **S0**（命令正名 px + help 补齐 M85 开关 + pxc 兼容别名 + spec 双装 + 文档入口更新）→ **S1**（selfhost 语义打点收集「被引用 native 集」，旁路导出不扰 codegen；import 递归；解析异常退全量）→ **S2**（裸 `px build` 自动折 `--no-xxx` 裁剪集复用 M85 链路 + `--full/--max` 逃生舱 + 显式 flag 优先级 > 自动）→ **S3**（收口：重链 + 自举证明 + 回归总闸 + qg-issue 25 归档 + tag v0.1.0-m86 待令）。
+> 不改语言语法/现有 native 语义；native 总数 **301** 不变；bootstrap 发布物全能力。执行规划 `docs/M86_PLAN.md`（S0→S3）。
+
 ### M85 立项 · pxc build 编译产物按需裁剪（qg-issue 24 · 方案 B 细粒度模块开关）
 
 > 立项（2026-09-06）：用户提问「编译产物都在 9M 以上，能去掉未使用模块吗」→ 真机实测 hello.px
