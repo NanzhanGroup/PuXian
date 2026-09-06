@@ -1593,12 +1593,18 @@ void px_error(const char* fmt, ...) {
 
 // ==================== 字符串工具 ====================
 
-int px_unicode_len(const char* s) {
-    int n = 0;
-    for (const unsigned char* p = (const unsigned char*)s; *p; p++) {
-        if ((*p & 0xC0) != 0x80) n++;  // 非连续字节 = 新字符
+// M83-S1（Issue 16 GAP-STR-1-B1）：带字节长度边界的 UTF-8 字符计数——str 内嵌 NUL 时
+// len() 尊重 str.len（完整字节边界）而非 C strlen（在首个 NUL 截断）。边界 n 为字节数。
+int px_unicode_len_n(const char* s, int n) {
+    int c = 0;
+    for (int i = 0; i < n; i++) {
+        if (((unsigned char)s[i] & 0xC0) != 0x80) c++;  // 非连续字节 = 新字符
     }
-    return n;
+    return c;
+}
+
+int px_unicode_len(const char* s) {
+    return px_unicode_len_n(s, (int)strlen(s));
 }
 
 // 简单数字转字符串（int/float）
@@ -2330,7 +2336,7 @@ bool px_dict_has(LXValue dict, const char* key) {
 
 int px_len(LXValue v) {
     switch (v.type) {
-        case PX_STR: return px_unicode_len(v.as.obj->as.str.data);
+        case PX_STR: return px_unicode_len_n(v.as.obj->as.str.data, v.as.obj->as.str.len); // M83-S1：尊重 str.len（内嵌 NUL 不再截断）
         case PX_LIST: return v.as.obj->as.list.len;
         case PX_DICT: return v.as.obj->as.dict.len;
         case PX_TUPLE: return v.as.obj->as.tuple.len;
@@ -3102,13 +3108,27 @@ static LXValue bi_join(LXValue* args, int nargs, void* ctx) {
     return px_str(out);
 }
 
+// M83-S1（Issue 16 GAP-STR-1-B1）：字节级子串查找（hay[0..hl)/ned[0..nl)，可含 NUL），
+// 替代 strstr 的 C 字符串语义（遇 NUL 截断）。对无内嵌 NUL 的文本与 strstr 结果一致。
+static const char* px_memmem(const char* hay, int hl, const char* ned, int nl) {
+    if (nl == 0) return hay;
+    if (hl < nl) return NULL;
+    for (int i = 0; i <= hl - nl; i++) {
+        if (hay[i] == ned[0] && memcmp(hay + i, ned, (size_t)nl) == 0) return hay + i;
+    }
+    return NULL;
+}
+
 // contains(容器, 元素) -> bool（字符串/列表）
 static LXValue bi_contains(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 2) px_error("contains 需要 2 个参数");
     if (args[0].type == PX_STR) {
         if (args[1].type != PX_STR) return px_bool(false);
-        return px_bool(strstr(args[0].as.obj->as.str.data, args[1].as.obj->as.str.data) != NULL);
+        LXObject* h = args[0].as.obj;
+        LXObject* n = args[1].as.obj;
+        // M83-S1：字节 memmem 语义（str.len 边界，内嵌 NUL 的二进制 str 不再截断）
+        return px_bool(px_memmem(h->as.str.data, h->as.str.len, n->as.str.data, n->as.str.len) != NULL);
     }
     if (args[0].type == PX_LIST) {
         LXObject* o = args[0].as.obj;
@@ -9502,20 +9522,37 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
             hline = eol ? eol + 2 : hline + strlen(hline);
         }
 
-        // 4. 读 body（Content-Length）
-        char body_buf[65536] = {0};
+        // 4. 读 body（Content-Length）——M83-S1（Issue 16 GAP-SRV-2）：
+        //    固定 64KB 栈缓冲（content_length>65535 静默截断且不报错 → handler 拿残缺 body
+        //    = 静默数据损坏）→ 动态缓冲（xmalloc 跟随 content_length）；上限默认 256MB、
+        //    PX_HTTP_BODY_MAX 环境变量可配；超限返回 413（不再静默截断）。
+        //    与客户端 http_request 动态读（M72-S4）对称；http_serve 与 http_serve_unix
+        //    共享本 worker，一处改两入口通。
+        char* body_buf = NULL;
         int body_len = 0;
         if (content_length > 0) {
+            int body_max = 256 * 1024 * 1024;
+            const char* bm_env = getenv("PX_HTTP_BODY_MAX");
+            if (bm_env && atol(bm_env) > 0) {
+                long bmv = atol(bm_env);
+                body_max = bmv > 0x7fffffffL ? 0x7fffffff : (int)bmv;
+            }
+            if (content_length > body_max) {
+                const char* r413 = "HTTP/1.1 413 Payload Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                send(fd, r413, (int)strlen(r413), 0);
+                close(fd);
+                return px_null();
+            }
+            body_buf = xmalloc((size_t)content_length + 1);
             int body_off = header_end + 4;
             int have = len - body_off;
             if (have > 0) {
                 int take = have < content_length ? have : content_length;
-                if (take > (int)sizeof(body_buf) - 1) take = (int)sizeof(body_buf) - 1;
                 memcpy(body_buf, buf + body_off, (size_t)take);
                 body_len = take;
             }
-            while (body_len < content_length && body_len < (int)sizeof(body_buf) - 1) {
-                ssize_t n = recv(fd, body_buf + body_len, (size_t)((int)sizeof(body_buf) - 1 - body_len), 0);
+            while (body_len < content_length) {
+                ssize_t n = recv(fd, body_buf + body_len, (size_t)(content_length - body_len), 0);
                 if (n <= 0) break;
                 body_len += (int)n;
             }
@@ -9531,7 +9568,7 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
         px_dict_set(req, "query", px_str(query));
         px_dict_set(req, "version", px_str(version));
         px_dict_set(req, "headers", headers);
-        px_dict_set(req, "body", px_str_len(body_buf, body_len));
+        px_dict_set(req, "body", body_buf ? px_str_len(body_buf, body_len) : px_str("")); // M83-S1：body_buf NULL(无 body) → 空串（避免 px_str_len(NULL,0) UB）
         LXValue form = px_dict();
         {
             // M8x：remote 兼容 AF_UNIX（http_serve_unix 连接无 IP）——sockaddr_storage 判族，
@@ -9599,6 +9636,9 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
         if (handler.type == PX_FUNC || handler.type == PX_NATIVE) {
             resp = px_call(handler, &req, 1);
         }
+        // M83-S1：动态 body 缓冲用毕即释放（req.body 经 px_str_len 已深拷贝、multipart/form
+        // 解析已入 req；handler 同步返回后 body_buf 无引用）——防 keep-alive 长连接累积
+        if (body_buf) { xfree(body_buf); body_buf = NULL; }
 
         // 7. 响应：file 流式（Connection: close，发送后关闭）或普通（keep-alive 判定）
         LXValue file_v = (resp.type == PX_DICT) ? px_dict_get(resp, "file") : px_null();
