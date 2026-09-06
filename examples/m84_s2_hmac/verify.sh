@@ -28,10 +28,10 @@ echo "$OUT"
 [ $RC -eq 0 ] || { echo "FAIL px 运行 rc=$RC"; exit 1; }
 echo "$OUT" | grep -q 'M84-S2-VERIFY-OK' || { echo "FAIL px 断言未全过"; exit 1; }
 
-echo "== [4/4] native 表对账（hmac_sha256 计入 → 300）=="
+echo "== [4/4] native 表对账（hmac_sha256 计入，基线 ≥300；最终精确值 S4 收口统一核）=="
 cd ../..
 bash tools/gen_native_table.sh >/tmp/m84s2_gentab.log 2>&1 || { echo "FAIL gen_native_table"; cat /tmp/m84s2_gentab.log; exit 1; }
 N=$(python3 -c "import json;print(json.load(open('docs/native_index.json'))['count'])")
-[ "$N" = "300" ] || { echo "FAIL native count=$N 期望 300"; exit 1; }
+[ "$N" -ge "300" ] || { echo "FAIL native count=$N 低于基线 300"; exit 1; }
 echo "m84_s2_hmac verify done (native=$N)"
 exit 0

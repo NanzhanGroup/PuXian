@@ -89,5 +89,5 @@
 |---|---|---|
 | S1 (Issue 23) | ✅ done | commit 86dd355（M84-S1，已 push，CI success）；m84_s1_http_ct 全绿；m83_s5 Content-Length hack 卸除仍绿 |
 | S2 (Issue 21) | ✅ done | m84_s2_hmac 全绿：RFC4231 TC1-4/6 + Go crypto/hmac 互通 + TC3 4 级链对拍 + sha256(含 NUL bytes)==Go；native 300；回归 m83_s3/m83_s4/m84_s1 全绿 |
-| S3 (Issue 22) | ⏳ 待开工 | dns_lookup（getaddrinfo，native +1 → 301） |
+| S3 (Issue 22) | ✅ done | dns_lookup native（getaddrinfo AF_UNSPEC+SOCK_STREAM，A+AAAA 全量；失败 NXDOMAIN/超时/无记录 → Err("dns: ...") 可 is_err 判定）；examples/m84_s3_dns verify 全绿（localhost 确定性 + .invalid Err + www.qq.com 与 Go net.LookupIP 交集≥1 含 AAAA + 重复调用稳定）；native 300→**301**；回归 m82/m83_s3/m83_s4/m84_s1/m84_s2 全绿 |
 | S4 (收口) | ⏳ 待做 | 重建链 + 自举证明 + 全量回归 + 归档 + tag v0.1.0-m84 |

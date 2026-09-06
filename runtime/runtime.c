@@ -3958,6 +3958,44 @@ static LXValue bi_hmac_sha256(LXValue* args, int nargs, void* ctx) {
     return px_str(hex);
 }
 
+// dns_lookup(domain) → list[str]（IPv4+IPv6 全部地址，A/AAAA）
+// M84-S3（Issue 22 GAP-DNS-1）：getaddrinfo(AF_UNSPEC+SOCK_STREAM) 域名解析原生实现——
+// 守护类模块（bs-safeip util.px resolve_ips 每轮解析）不再依赖 getent 外部命令代偿。
+// 返回全部 A+AAAA 地址（顺序即 getaddrinfo 返回序）；解析失败
+// （NXDOMAIN/超时/无地址记录）返回 Err("dns: <host>: <原因>")，调用方可 is_err()/`?` 判定。
+static LXValue bi_dns_lookup(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("dns_lookup 需要一个参数 (domain)");
+    const char* host = val_cstr(args[0]);
+    char msg[320];
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;      // A + AAAA
+    hints.ai_socktype = SOCK_STREAM;  // 与 hconnect 同口径，避免重复返回
+    int rc = getaddrinfo(host, NULL, &hints, &res);
+    if (rc != 0) {
+        snprintf(msg, sizeof(msg), "dns: %s: %s", host, gai_strerror(rc));
+        return px_err(px_str(msg));
+    }
+    LXValue list = px_list(0);
+    char ip[INET6_ADDRSTRLEN];
+    for (struct addrinfo* p = res; p; p = p->ai_next) {
+        const void* src = NULL;
+        if (p->ai_family == AF_INET)
+            src = &((struct sockaddr_in*)p->ai_addr)->sin_addr;
+        else if (p->ai_family == AF_INET6)
+            src = &((struct sockaddr_in6*)p->ai_addr)->sin6_addr;
+        if (src && inet_ntop(p->ai_family, src, ip, sizeof(ip)))
+            px_list_push(list, px_str(ip));
+    }
+    freeaddrinfo(res);
+    if (list.as.obj->as.list.len == 0) {
+        snprintf(msg, sizeof(msg), "dns: %s: no address records", host);
+        return px_err(px_str(msg));
+    }
+    return list;
+}
+
 // ---- XXH64（xxHash, seed=0）----
 #define XXH_P1 0x9E3779B185EBCA87ULL
 #define XXH_P2 0xC2B2AE3D27D4EB4FULL
@@ -5359,6 +5397,7 @@ void px_register_builtins(void) {
     // M14 P1：crypto 哈希
     px_set_global("sha256", px_native("sha256", bi_sha256));
     px_set_global("hmac_sha256", px_native("hmac_sha256", bi_hmac_sha256));  // M84-S2 (Issue 21 GAP-HMAC-1)
+    px_set_global("dns_lookup", px_native("dns_lookup", bi_dns_lookup));     // M84-S3 (Issue 22 GAP-DNS-1)
     px_set_global("xxhash", px_native("xxhash", bi_xxhash));
     // M15 P1：正则表达式（文本解析 / 日志分析 / 参数抽取）
     px_set_global("regex_find", px_native("regex_find", bi_regex_find));

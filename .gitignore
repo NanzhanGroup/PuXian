@@ -47,3 +47,6 @@ examples/m61_gfx/*.png
 *.px_bench_tmp_*
 .rtcache/
 examples/m84_s2_hmac/artifacts/
+
+# M84-S3 互通对拍生成物（verify.sh 每次重建）
+examples/m84_s3_dns/artifacts/

@@ -1,0 +1,71 @@
+# M84-S3 (Issue 22 GAP-DNS-1) dns_lookup 原生域名解析专项验证
+#   S1 localhost 确定性断言（/etc/hosts 语义，offline 安全）
+#   S2 失败可判定：NXDOMAIN(.invalid) / 空名 → Err（is_err 可判定，区别于空 list）
+#   S3 公网域对拍（artifacts/net_on 门控，verify.sh 检测网络）：www.qq.com（A+AAAA）
+#      A/AAAA 双族返回 + 与 Go net.LookupIP 期望交集 ≥1（DNS 轮询容忍，非精确相等）
+#   S4 健壮性：重复调用集合稳定
+# 依赖 artifacts/（verify.sh 用 Go net.LookupIP 现算；断网时仅 S1/S2/S4 本地断言）
+# 编译运行：verify.sh（tools/pxc build --no-quic）
+
+def has_v6(lst):
+    for i in range(len(lst)):
+        if contains(lst[i], ":"):
+            return true
+    return false
+
+def has_v4(lst):
+    for i in range(len(lst)):
+        if not contains(lst[i], ":"):
+            return true
+    return false
+
+def share_any(px_list, exp_list):
+    # px 结果与期望文件行交集 ≥1（跳过空行）
+    for i in range(len(px_list)):
+        for j in range(len(exp_list)):
+            if px_list[i] != null and exp_list[j] != null and px_list[i] == exp_list[j] and len(exp_list[j]) > 0:
+                return true
+    return false
+
+def main():
+    # ---- S1 localhost（确定性，/etc/hosts）----
+    r = dns_lookup("localhost")
+    assert(r != null, "localhost 解析非 Err")
+    assert(type(r) == "list", "dns_lookup 返回 list")
+    assert(len(r) >= 1, "localhost ≥1 地址")
+    assert(contains(r, "127.0.0.1"), "localhost 含 127.0.0.1（/etc/hosts 语义）")
+    print("S1-localhost OK " + str(r))
+
+    # ---- S2 失败可判定 Err（NXDOMAIN / 空名）----
+    e1 = dns_lookup("no-such-host.invalid")
+    assert(e1.is_err(), "NXDOMAIN(.invalid) → Err（可判定，区别于空 list）")
+    em1 = str(e1.err())
+    assert(contains(em1, "dns:"), "Err 文本含 dns: 前缀: " + em1)
+    e2 = dns_lookup("")
+    assert(e2.is_err(), "空域名 → Err")
+    print("S2-err-detectable OK " + em1)
+
+    # ---- S3 公网域对拍（仅网络可用时）----
+    if exists("artifacts/net_on"):
+        res_pub = dns_lookup("www.qq.com")
+        assert(res_pub != null, "www.qq.com 解析非 Err")
+        assert(len(res_pub) >= 1, "www.qq.com ≥1 地址")
+        assert(has_v4(res_pub), "www.qq.com 含 IPv4")
+        assert(has_v6(res_pub), "www.qq.com（AAAA 域）应返回 IPv6")
+        gv4 = split(read_file("artifacts/go_v4_qq.txt"), "\n")
+        gv6 = split(read_file("artifacts/go_v6_qq.txt"), "\n")
+        assert(len(gv4) >= 1, "Go oracle 有 IPv4 期望")
+        assert(len(gv6) >= 1, "Go oracle 有 IPv6 期望")
+        assert(share_any(res_pub, gv4), "px 与 Go net.LookupIP 共享 ≥1 IPv4（DNS 轮询容忍）")
+        assert(share_any(res_pub, gv6), "px 与 Go net.LookupIP 共享 ≥1 IPv6（AAAA 域）")
+        print("S3-public-go-interop OK " + str(res_pub))
+    else:
+        print("S3-public SKIP（无网络：仅本地确定性断言）")
+
+    # ---- S4 健壮性：重复调用稳定 ----
+    r2 = dns_lookup("localhost")
+    assert(contains(r2, "127.0.0.1"), "重复调用集合稳定")
+    print("S4-robust OK")
+
+    print("M84-S3-VERIFY-OK")
+    exit(0)
