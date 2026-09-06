@@ -77,6 +77,7 @@ def main():
 | 命令 | 说明 |
 |---|---|
 | `pxc build <file.px>` | 编译为静态二进制（输出 `<目录>/build/<name>`） |
+| `pxc build --min <file.px>` | **最小化编译**（M85）：聚合 `--no-quic` + sqlite/ws/zip/xml/aes/rsa/ed25519/route/zlib/h2 全裁，产物 ~2.7M（9.0M 基线 −70%）；`--no-sqlite`/`--no-ws`/`--no-zip`/`--no-xml`/`--no-aes`/`--no-rsa`/`--no-ed25519`/`--no-route`/`--no-zlib`/`--no-h2` 可单独/任意组合裁剪（缺 native 调用 → R1001） |
 | `pxc run <file.px> [args...]` | 脚本模式执行 |
 | `pxc lex <file.px>` | 打印 Token 流（调试，走 PuXian lexer） |
 | `pxc parse <file.px>` | 打印 AST（调试，走 PuXian parser） |

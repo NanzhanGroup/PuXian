@@ -27,6 +27,18 @@
 > - **tools/pxc 重构**：新增 `--no-sqlite/--no-ws/--no-zip/--no-xml/--no-aes/--no-rsa/--no-ed25519/--no-route/--no-zlib/--no-h2`（与 --no-quic 正交可组合）；rt_src_files/rt_key/rt_cache_compile/rt_ensure 改以 **cuts 集合**驱动——被裁模块源不复制不编译、`-DPX_NO_<MOD>` 宏自动注入、**缓存 key 纳入 cuts**（不同裁剪组合缓存隔离，实测 4 组合各独立 .rtcache 无串用）、链接去 sqlite3.o / libz.a（按开关）。
 > - **verify（examples/m85_s1，PASS=9 FAIL=0）**：默认 build **9,010,184 B**（M84 基线逐字节零漂移）/ `--no-quic` **3,929,808 B** / `--no-quic --no-sqlite` **2,884,072 B** / 全裁（--no-quic+10 模块）**2,713,472 B**（9.0M→2.7M，**−70%**）；裁剪态缺 native 调用 → 运行时明确报错（未定义变量，非崩溃，R1001 叙事）；全裁态 http_get 等核心 HTTP native 保留可用。
 
+### M85-S2 · --min profile + target 折叠叠加 + 文档同步（qg-issue 24）
+
+> 实施（2026-09-06）：S1 基础上补 profile 与组合验证。
+> - **`--min` profile 预设**：聚合 `--no-quic` + sqlite/ws/zip/xml/aes/rsa/ed25519/route/zlib/h2 全裁，
+>   一条命令出最小化产物 **2,713,472 B**（9.0M → 2.7M，−70%）；与手写全裁组合逐字节同体积（等价性断言）。
+> - **target 折叠 + 裁剪叠加**：`--target x86_64 --no-sqlite` 路径验证（quic 全能力 + 去 sqlite，7,968,768 < 9.0M 基线）；
+>   aarch64/armv7/riscv64 真机交叉组合由 CI 覆盖（本机无 musl 交叉工具链）。
+> - **文档同步**：README（CLI 表 `pxc build --min` 行）、PUXIAN_CHEATSHEET（工具链行 M85 裁剪说明）、
+>   pxi_native_diff（M85-S1 更新段：模块裁剪宿主缺 native → R1001 口径，native 计数以全能力 301 为准）、
+>   spec.md（M57-S4 裁剪叙事处补 M85 模块开关泛化注记）。
+> - verify（examples/m85_s2，PASS=8 FAIL=0）：--min 体积/运行、--min==全裁、target+裁剪、缺 native R1001、核心 http 保留。
+
 ### M84-S4 · 收口：重链 bootstrap/pxi + 全量回归 + qg-issue 21/22/23 归档（tag v0.1.0-m84）
 
 > 收口（2026-09-06）：M83-S2…M84-S3 的 runtime 变更（AES-ECB/gzip 暴露/ed25519/RSA-PKCS1v15/http_stream/CT 修复/hmac_sha256/dns_lookup）此前均未重链解释器 → 本批重链 **bootstrap/pxi**（9,425,360 → 9,457,456 字节，git 提交新 ELF）——pxi 解释模式现可调 M83/M84 全部新 native。
