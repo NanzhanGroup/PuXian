@@ -1,0 +1,3 @@
+def main():
+    let db = sqlite_open(":memory:")
+    print(db)

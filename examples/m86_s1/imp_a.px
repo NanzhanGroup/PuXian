@@ -1,0 +1,3 @@
+import "imp_b.px"
+def main():
+    imp_b_go()

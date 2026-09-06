@@ -1,0 +1,7 @@
+def main():
+    let flag = true
+    if flag:
+        let w = ws_connect("ws://x")
+        print(w)
+    else:
+        print("no")

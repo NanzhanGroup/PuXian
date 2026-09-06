@@ -1,0 +1,3 @@
+def imp_b_go():
+    let v = aes_encrypt_ecb("data", "key")
+    print(v)
