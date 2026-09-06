@@ -21,11 +21,10 @@ def main():
     finfo.set("type", "image/png")
     files.set("avatar", finfo)
     var m = mp_encode(fields, files)
-    # ⚠️ Issue 23（runtime 缺陷，qg-issue 另案）：http_request 显式 Content-Type 仍会追加
-    # 默认 urlencoded —— 须同时显式 Content-Length 才跳过该分支（M83 边界不动 runtime）
+    # M84-S1（Issue 23 修复）：显式 Content-Type 不再追加默认 urlencoded、Content-Length 由
+    # runtime 自动补齐 → 此处只带 CT 即可（原 M83-S5 的显式 CL hack 已卸除）
     var headers = json_parse("{}")
     headers.set("Content-Type", m["content_type"])
-    headers.set("Content-Length", str(m["len"]))
     var resp = http_request(url, "POST", m["body"], headers)
     assert(type(resp) == "dict" and resp["status"] == 200, "上传失败 status=" + str(resp["status"]))
     var d = json_parse(resp["body"])

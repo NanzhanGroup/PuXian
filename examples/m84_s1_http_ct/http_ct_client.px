@@ -1,0 +1,47 @@
+# M84-S1 (Issue 23) http_request/http_unix CT/CL 解耦回环客户端
+#   顺序固定 6 场景，echo_server.py 按连接完成顺序落盘 req_<n>.txt：
+#     T1 无头 POST（默认表单头回归：urlencoded CT + CL 均补）
+#     T2 显式 CT 无 CL（Issue 23 核心：修复前双 Content-Type；修复后单 CT + 自动补 CL）
+#     T3 显式 CT + 显式 CL（显式 CL 保留，仍单 CT 单 CL）
+#     T4 GET 无 body（不应出现 CT/CL）
+#     T5 X-Custom + CT（自定义头相邻不干扰行首匹配，dict 无序下仍单 CT）
+#     U1 unix socket 客户端同场景（http_unix 同步修复）
+# 依赖：编译模式 http_request/http_unix（非 pxi Mini 子集）
+var tcp = "http://127.0.0.1:" + args()[1]
+var sock = args()[2]
+
+# T1：无头 POST → 默认 application/x-www-form-urlencoded + CL（现状行为回归）
+var r1 = http_request(tcp + "/t1", "POST", "k=v")
+assert(r1["status"] == 200, "T1 status=" + str(r1["status"]))
+
+# T2：显式 Content-Type 无 Content-Length → 单 CT(json) + CL 自动补齐（Issue 23 修复核心）
+var h2 = json_parse("{}")
+h2.set("Content-Type", "application/json")
+var r2 = http_request(tcp + "/t2", "POST", "{\"a\":1}", h2)
+assert(r2["status"] == 200, "T2 status=" + str(r2["status"]))
+
+# T3：显式 CT(multipart) + 显式 CL → 单 CT 单 CL，CL 值保留调用方
+var h3 = json_parse("{}")
+h3.set("Content-Type", "multipart/form-data; boundary=x42")
+h3.set("Content-Length", "5")
+var r3 = http_request(tcp + "/t3", "POST", "hello", h3)
+assert(r3["status"] == 200, "T3 status=" + str(r3["status"]))
+
+# T4：GET 无 body → 不出现 CT/CL
+var r4 = http_request(tcp + "/t4", "GET")
+assert(r4["status"] == 200, "T4 status=" + str(r4["status"]))
+
+# T5：自定义头 + CT（dict 无序 → 行首匹配在任意相邻头序下仍准确）
+var h5 = json_parse("{}")
+h5.set("X-Custom", "1")
+h5.set("Content-Type", "text/plain; charset=utf-8")
+var r5 = http_request(tcp + "/t5", "POST", "xyz", h5)
+assert(r5["status"] == 200, "T5 status=" + str(r5["status"]))
+
+# U1：http_unix 客户端同步修复验证
+var h6 = json_parse("{}")
+h6.set("Content-Type", "application/json")
+var r6 = http_unix(sock, "/u1", "POST", "{\"u\":1}", h6)
+assert(r6["status"] == 200, "U1 status=" + str(r6["status"]))
+
+print("M84-S1-HTTP-CT-CLIENT-OK")
