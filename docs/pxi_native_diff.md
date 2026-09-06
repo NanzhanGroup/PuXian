@@ -5,7 +5,7 @@
 
 ## M85-S1 更新 · 模块裁剪宿主（2026-09-06）
 
-> `pxc build --no-sqlite/--no-ws/--no-zip/--no-xml/--no-aes/--no-rsa/--no-ed25519/--no-route/--no-zlib/--no-h2`
+> `px build --no-sqlite/--no-ws/--no-zip/--no-xml/--no-aes/--no-rsa/--no-ed25519/--no-route/--no-zlib/--no-h2`
 > （及聚合 `--min`）裁剪编译宿主：被裁模块的 native 不注册 → 调用报**运行时未定义（R1001 语义）**，
 > 与 PX_NO_QUIC 裁剪叙事一致（裁剪宿主与裁剪编译产物一致不可达，而非 pxi 差集）。native 计数口径不变：
 > 全能力 host = 301；裁剪态动态计数（如 `--min` 宿主仅核心 HTTP 面）。本表差集以全能力 host 为准。

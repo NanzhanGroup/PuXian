@@ -42,6 +42,14 @@
 > - **语义变更**：M85"默认不传 flag = 全能力零漂移" → M86-S2 起**默认裸 build = 自动最小**（M86 立项目标）；全能力需 `--full/--max`。受影响回归适配：m86_s0 verify 默认断言改 `--full`（改名零漂移验证意图不变）。
 > - **verify examples/m86_s2 11/11 PASS**（裸最小/--full/--max/sqlite 保留/显式优先/allmod 保留/map 与生成器 diff 一致）。
 
+### M86-S3 · 收口：回归总闸 + 文档同步 + qg-issue 25 归档（qg-issue 25）
+
+> 完成（2026-09-06，commit M86-S3）：**回归总闸 15 批全绿**（m82_http_serve_unix + m83_s1–s6 + m84_s1–s3 + m85_s1–s2 + m86_s0–s2）——m85_s1/s2、m86_s0 适配 M86-S2 新默认语义（M85 显式裁剪档统一 `--full` 前缀保原意；m85_s1 9/9、m85_s2 8/8、m86_s0 14/14、m86_s1 19/19、m86_s2 11/11）。
+> - **自举证明 rc=0**（bootstrap_prove：B.c == golden/compiler.c 10595 行逐字节一致）——S1 选型「C 产物静态提取（零编译器/golden 改动）」的零自举影响实证；native **301** 不变。
+> - **文档同步**：README.md / README.en.md CLI 表（裸 build 自动最小 + --full/--max + px refs）、CHEATSHEET M86 摘要、spec.md M86 规格段、pxi_native_diff px 化；px fmt 新增样例全过、bash -n 语法过。
+> - **qg-issue 25 归档 `done/25-px-auto-prune/`**；00-README 更新（Issue 1–25 全部合入/归档，仅 14-W1b ⏸️ + 13-R2 自持）。
+> - tag v0.1.0-m86 **待用户令**（规划默认推 GitHub release + dnf 仓库 m86）。
+
 ### M85 立项 · pxc build 编译产物按需裁剪（qg-issue 24 · 方案 B 细粒度模块开关）
 
 > 立项（2026-09-06）：用户提问「编译产物都在 9M 以上，能去掉未使用模块吗」→ 真机实测 hello.px
