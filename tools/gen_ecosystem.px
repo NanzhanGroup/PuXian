@@ -10,7 +10,7 @@
 # 运行：tools/pxc run tools/gen_ecosystem.px （仓库根目录）
 # 注：dict 用字面量构造（普贤无 d[k]=v 赋值，用 d.set(k,v) / 读 d[k]）。
 # ============================================================
-let LIBS = ["collections", "edge", "gfx", "lunar", "png", "pxml", "semver", "webroute", "yaml"]
+let LIBS = ["collections", "cookiejar", "edge", "gfx", "html", "lunar", "multipart", "png", "pxml", "semver", "smtp", "webroute", "yaml"]
 # 去行首空白与全部 # 前缀后 trim
 def strip_hash(line):
     var t = trim(line)

@@ -12,11 +12,12 @@ registry/<name>/<version>/<name>.px
 - 内容 = 单文件纯语言库（`.px`）；安装到项目 `.px_modules/<name>/<name>.px`，`import <name>` 即用（裸名 → `.px_modules` 命中；不带 `std.` 前缀）。
 - lockfile `px.pkg.lock` 锁定精确版本 + sha256，`install --locked` 可复现/防篡改。
 
-## 官方包（9 · 与 stdlib/ 同源镜像，版本 0.1.0）
+## 官方包（13 · 与 stdlib/ 同源镜像，版本 0.1.0）
 
 | 包 | 来源 | 说明 |
 |---|---|---|
-| collections / semver / webroute / yaml / pxml / lunar / gfx / png / edge | `stdlib/<name>.px` | 9 个标准库的 registry 分发形态（官方包 = stdlib 镜像，同一事实源） |
+| collections / semver / webroute / yaml / pxml / lunar / gfx / png / edge | `stdlib/<name>.px` | 9 个早期标准库的 registry 分发形态 |
+| html / cookiejar / multipart / smtp | `stdlib/<name>.px` | M83-S5 新增 4 库（HTML 容错解析 / 会话 Cookie / multipart 上传 / SMTP 客户端），官方包 = stdlib 镜像 |
 
 > **为什么 stdlib 还要 registry 化**：stdlib 随编译器/发布包内置（`import std.*`）；registry 形态供「按需拉取 + 版本锁定 + 可复现构建」场景（第三方项目/离线分发/自定义 registry），两者内容同源、import 名不同（`std.*` vs 裸名）。
 
@@ -51,7 +52,7 @@ pxpkg install                  # → .px_modules/ + px.pkg.lock
 
 `registry/<name>/0.1.0/` 与 `stdlib/` 应保持同源（改 stdlib 须同步 registry 或加版本）。CI 步骤：
 ```bash
-for lib in collections edge gfx lunar png pxml semver webroute yaml; do
+for lib in collections cookiejar edge gfx html lunar multipart png pxml semver smtp webroute yaml; do
   diff -q stdlib/$lib.px registry/$lib/0.1.0/$lib.px
 done
 ```

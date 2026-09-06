@@ -1,0 +1,272 @@
+# ============================================================
+# 普贤标准库：std.cookiejar —— 会话 Cookie 管理（HTTP 客户端复用）
+# ------------------------------------------------------------
+# 纯语言实现（dict/list 引用语义，jar 原地更新），编译/解释双模式一致。
+#   面向「多次 http_request 保持会话」场景：把响应 Set-Cookie 收进 jar，
+#   请求前按 URL 生成 Cookie 请求头。
+#   jar = {"cookies": [cookie, ...]}（list；每条 cookie 为 dict）
+#   cookie = {name, value, domain, path, secure, httponly, samesite, expires, max_age}
+#   规则（RFC 6265 简化子集）：
+#     - 无 Domain 属性的会话 cookie：domain 记为 "*"，匹配任意 host（仅限 path）
+#     - 有 Domain 属性：host 精确等于或以其 "." + domain 结尾才匹配
+#     - path 匹配：请求 path 以 cookie path 为前缀（path 缺省 "/"）
+#     - Max-Age=0 立删；expires 仅存原始串不判过期（最小实现，见文件尾注）
+#     - secure cookie 仅 https 请求携带（url scheme 判断）
+#   ⚠️ 语言层限制：http_request 返回的 headers dict 同名头会覆盖（C 层实现），
+#      多 Set-Cookie 时仅最后一个可见；本库接受 Set-Cookie 值为 str 或
+#      list[str]（调用方自行聚合多个 Set-Cookie 为 list 可完整更新）。
+# 用法：
+#   import std.cookiejar
+#   var jar = cj_new()
+#   var r1 = http_request(url_login, "POST", body)
+#   cj_update(jar, r1["headers"])
+#   var r2 = http_request(url_api, "GET", null,
+#       {"Cookie": cj_header(jar, url_api)})
+# ============================================================
+# ---- 新 jar ----
+def cj_new():
+    var jar = json_parse("{}")
+    jar.set("cookies", [])
+    return jar
+# ---- 内部：空 cookie dict ----
+def cj_blank():
+    var c = json_parse("{}")
+    c.set("name", "")
+    c.set("value", "")
+    c.set("domain", "")
+    c.set("path", "/")
+    c.set("secure", false)
+    c.set("httponly", false)
+    c.set("samesite", "")
+    c.set("expires", "")
+    c.set("max_age", -1)
+    return c
+# ---- 解析单个 Set-Cookie 串 → cookie dict（语法错返回 null）----
+def cj_parse_setcookie(line):
+    var s = trim(line)
+    if len(s) == 0 or not contains(s, "="):
+        return null
+    var c = cj_blank()
+    var parts = split(s, ";")
+    # 首段 name=value
+    var first = trim(parts[0])
+    var eq = 0
+    while eq < len(first) and first[eq] != "=":
+        eq += 1
+    if eq <= 0 or eq >= len(first) - 1:
+        return null
+    c.set("name", trim(first[0:eq]))
+    c.set("value", trim(first[eq + 1:len(first)]))
+    # 后续属性
+    var i = 1
+    while i < len(parts):
+        var seg = trim(parts[i])
+        if len(seg) == 0:
+            i += 1
+            continue
+        var aeq = 0
+        while aeq < len(seg) and seg[aeq] != "=":
+            aeq += 1
+        var an = ""
+        var av = ""
+        if aeq < len(seg):
+            an = trim(seg[0:aeq])
+            av = trim(seg[aeq + 1:len(seg)])
+        else:
+            an = seg
+        an = to_lower(an)
+        if an == "domain":
+            c.set("domain", to_lower(av))
+        elif an == "path":
+            if len(av) > 0:
+                c.set("path", av)
+            else:
+                c.set("path", "/")
+        elif an == "secure":
+            c.set("secure", true)
+        elif an == "httponly":
+            c.set("httponly", true)
+        elif an == "samesite":
+            c.set("samesite", to_lower(av))
+        elif an == "expires":
+            c.set("expires", av)
+        elif an == "max-age":
+            var mv = int(av)
+            # 换算为到期绝对秒（Max-Age 为相对秒数；到期判断见 cj_clean）
+            c.set("max_age", int(now_ms() / 1000) + mv)
+        i += 1
+    # 无 Domain → "*"（任意 host，仅 path 限制）
+    if len(c["domain"]) == 0:
+        c.set("domain", "*")
+    return c
+# ---- 从响应头 dict 提取所有 Set-Cookie（值可能 str 或 list）----
+def cj_extract(headers):
+    var out = []
+    if type(headers) != "dict":
+        return out
+    var keys = headers.keys()
+    var k = 0
+    while k < len(keys):
+        if to_lower(keys[k]) == "set-cookie":
+            var v = headers[keys[k]]
+            if type(v) == "list":
+                var m = 0
+                while m < len(v):
+                    out.append(v[m])
+                    m += 1
+            elif type(v) == "string":
+                out.append(v)
+        k += 1
+    return out
+# ---- 更新 jar（原地）：解析 Set-Cookie 覆盖同 (domain,name,path) ----
+def cj_update(jar, headers):
+    var lines = cj_extract(headers)
+    var i = 0
+    while i < len(lines):
+        var c = cj_parse_setcookie(lines[i])
+        if c != null:
+            # Max-Age=0 → 删除既有
+            if c["max_age"] == 0:
+                cj_remove(jar, c["domain"], c["name"], c["path"])
+            else:
+                cj_put(jar, c)
+        i += 1
+    return jar
+# ---- 覆盖写入（同 domain/name/path 替换，否则追加）----
+def cj_put(jar, c):
+    var cs = jar["cookies"]
+    var i = 0
+    while i < len(cs):
+        var o = cs[i]
+        if o["domain"] == c["domain"] and o["name"] == c["name"] and o["path"] == c["path"]:
+            cs[i] = c
+            return
+        i += 1
+    cs.append(c)
+# ---- 删除（domain/name/path 精确匹配）----
+def cj_remove(jar, domain, name, path):
+    var cs = jar["cookies"]
+    var kept = []
+    var i = 0
+    while i < len(cs):
+        var o = cs[i]
+        if not (o["domain"] == domain and o["name"] == name and o["path"] == path):
+            kept.append(o)
+        i += 1
+    jar.set("cookies", kept)
+# ---- URL → host（小写，去端口/路径/query）----
+def cj_url_host(url):
+    var s = url
+    if contains(s, "://"):
+        var scheme_end = hx_url_find(s, "://")
+        s = s[scheme_end + 3:len(s)]
+    # 去 path / query / fragment
+    var cut = len(s)
+    var p = hx_url_find(s, "/")
+    if p >= 0 and p < cut:
+        cut = p
+    var q = hx_url_find(s, "?")
+    if q >= 0 and q < cut:
+        cut = q
+    var host = s[0:cut]
+    host = to_lower(host)
+    # 去 :port
+    var colon = hx_url_find(host, ":")
+    if colon >= 0:
+        host = host[0:colon]
+    return host
+# ---- URL → path（含 /，无则 /）----
+def cj_url_path(url):
+    var s = url
+    if contains(s, "://"):
+        var scheme_end = hx_url_find(s, "://")
+        s = s[scheme_end + 3:len(s)]
+    var p = hx_url_find(s, "/")
+    if p < 0:
+        return "/"
+    # path 到 ? 或 #
+    var path = s[p:len(s)]
+    var q = hx_url_find(path, "?")
+    if q >= 0:
+        path = path[0:q]
+    if len(path) == 0:
+        return "/"
+    return path
+# ---- URL 是否 https ----
+def cj_url_secure(url):
+    var s = to_lower(url)
+    return starts_with(s, "https://")
+# ---- 内部通用 find 子串（避免依赖未知 native）----
+def hx_url_find(s, needle):
+    var nl = len(needle)
+    var i = 0
+    while i + nl <= len(s):
+        if s[i:i + nl] == needle:
+            return i
+        i += 1
+    return -1
+# ---- 域名匹配：host == domain 或 host 以 "."+domain 结尾 ----
+def cj_domain_match(host, domain):
+    if domain == "*":
+        return true
+    if host == domain:
+        return true
+    if len(domain) > 0 and domain[0] == ".":
+        # Domain=.example.com（RFC 6265 形式：host 以 .example.com 结尾）
+        return ends_with(host, domain)
+    return ends_with(host, "." + domain)
+# ---- path 前缀匹配 ----
+def cj_path_match(reqpath, cpath):
+    if reqpath == cpath:
+        return true
+    if starts_with(reqpath, cpath):
+        if cpath == "/":
+            return true
+        if len(cpath) > 0 and cpath[len(cpath) - 1] == "/":
+            return true
+        # /foo 匹配 /foobar? 不应匹配：要求 cpath 以 / 结尾或 reqpath 下一字符 /
+        if len(reqpath) > len(cpath) and reqpath[len(cpath)] == "/":
+            return true
+        return false
+    return false
+# ---- 生成 Cookie 请求头（不匹配返回 ""）----
+def cj_header(jar, url):
+    var host = cj_url_host(url)
+    var path = cj_url_path(url)
+    var secure = cj_url_secure(url)
+    var cs = jar["cookies"]
+    var parts = []
+    var i = 0
+    while i < len(cs):
+        var c = cs[i]
+        if c["secure"] and not secure:
+            i += 1
+            continue
+        if not cj_domain_match(host, c["domain"]):
+            i += 1
+            continue
+        if not cj_path_match(path, c["path"]):
+            i += 1
+            continue
+        parts.append(c["name"] + "=" + c["value"])
+        i += 1
+    if len(parts) == 0:
+        return ""
+    return join("; ", parts)
+# ---- jar 内 cookie 数量 ----
+def cj_len(jar):
+    return len(jar["cookies"])
+# ---- 清理过期的 Max-Age cookie（now_sec 为 Unix 秒；expires 串暂不判）----
+def cj_clean(jar, now_sec):
+    var cs = jar["cookies"]
+    var kept = []
+    var i = 0
+    while i < len(cs):
+        var c = cs[i]
+        if c["max_age"] >= 0 and now_sec > c["max_age"]:
+            i += 1
+            continue
+        kept.append(c)
+        i += 1
+    jar.set("cookies", kept)
+    return jar
