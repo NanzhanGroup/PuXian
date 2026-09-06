@@ -1,7 +1,7 @@
 {
  "generator": "tools/gen_native_table.sh",
  "source": "runtime/*.c px_set_global(px_native)",
- "count": 299,
+ "count": 300,
  "names": [
   "Err",
   "Ok",
@@ -114,6 +114,7 @@
   "h3_unhuff",
   "hex_to_bytes",
   "hex_to_int",
+  "hmac_sha256",
   "http_get",
   "http_get_stream",
   "http_post",

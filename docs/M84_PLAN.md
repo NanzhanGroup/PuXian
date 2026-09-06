@@ -80,3 +80,14 @@
 | TC3 固定向量与腾讯文档版本漂移 | 以 RFC 4231 + Go 自算为主对拍（权威），TC3 向量仅作端到端叙事 |
 | 多架构交叉 CI（aarch64/armv7/riscv64）新 native 隐式声明 | 遵循 M83-S4 教训：新增 native 全部显式声明（extern/static 前置），本地 zig cc 三架构预演后再 push |
 | W1b 若被解冻插入 | 不在本计划默认范围；用户下令则拆为独立 M84b 单独批次，不混入 S1–S4 |
+
+---
+
+## 附：执行状态记录（2026-09-06）
+
+| 批 | 状态 | 说明 |
+|---|---|---|
+| S1 (Issue 23) | ✅ done | commit 86dd355（M84-S1，已 push，CI success）；m84_s1_http_ct 全绿；m83_s5 Content-Length hack 卸除仍绿 |
+| S2 (Issue 21) | ✅ done | m84_s2_hmac 全绿：RFC4231 TC1-4/6 + Go crypto/hmac 互通 + TC3 4 级链对拍 + sha256(含 NUL bytes)==Go；native 300；回归 m83_s3/m83_s4/m84_s1 全绿 |
+| S3 (Issue 22) | ⏳ 待开工 | dns_lookup（getaddrinfo，native +1 → 301） |
+| S4 (收口) | ⏳ 待做 | 重建链 + 自举证明 + 全量回归 + 归档 + tag v0.1.0-m84 |
