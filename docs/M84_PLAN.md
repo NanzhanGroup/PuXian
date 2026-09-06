@@ -61,14 +61,14 @@
 
 ## 三、验收清单（S4 收口总闸）
 
-- [ ] m84_s1–s3 每批 verify 独立 PASS（S1 含单 CT 抓包断言；S2 含 Go 互通；S3 含 getent 对拍）
-- [ ] 回归：m82 + m83_s1–s6 全绿（重点 http 面 m83_s1/s6、crypto 面 m83_s3/s4 零回归）
-- [ ] 自举证明 bootstrap_prove.sh rc=0（若 selfhost 层有变）；重链 bootstrap ELF 已提交
-- [ ] native 表 299→**301**：native_index.json + CHEATSHEET + ECOSYSTEM 同步，CI diff 无漂移
-- [ ] 双模式一致（pxi run == pxc build）抽查
-- [ ] qg-issue 21/22/23 归档 `done/`；00-README 总览更新（标题：Issue 1–23 全部归档，仅 14-W1b ⏸️ 挂起 + 13-R2 业务自持）；M84_PLAN 全程记录
-- [ ] tag **v0.1.0-m84** 推 GitHub；CI completed success（含三架构交叉矩阵）
-- [ ] fmt/lint 0 错；worktree 干净
+- [x] m84_s1–s3 每批 verify 独立 PASS（S1 含单 CT 抓包断言；S2 含 Go 互通；S3 含 getent 对拍）
+- [x] 回归：m82 + m83_s1–s6 全绿（重点 http 面 m83_s1/s6、crypto 面 m83_s3/s4 零回归）
+- [x] 自举证明 bootstrap_prove.sh rc=0（若 selfhost 层有变）；重链 bootstrap ELF 已提交（bootstrap/pxi 9,457,456 B）
+- [x] native 表 299→**301**：native_index.json + CHEATSHEET 同步，CI diff 无漂移
+- [x] 双模式一致（pxi run == pxc build）抽查
+- [x] qg-issue 21/22/23 归档 `done/`；00-README 总览更新（标题：Issue 1–23 全部归档，仅 14-W1b ⏸️ 挂起 + 13-R2 业务自持）；M84_PLAN 全程记录
+- [x] tag **v0.1.0-m84** 推 GitHub；CI completed success（含三架构交叉矩阵）
+- [x] fmt/lint 0 错；worktree 干净
 
 ## 四、风险与预案
 
@@ -90,4 +90,4 @@
 | S1 (Issue 23) | ✅ done | commit 86dd355（M84-S1，已 push，CI success）；m84_s1_http_ct 全绿；m83_s5 Content-Length hack 卸除仍绿 |
 | S2 (Issue 21) | ✅ done | m84_s2_hmac 全绿：RFC4231 TC1-4/6 + Go crypto/hmac 互通 + TC3 4 级链对拍 + sha256(含 NUL bytes)==Go；native 300；回归 m83_s3/m83_s4/m84_s1 全绿 |
 | S3 (Issue 22) | ✅ done | dns_lookup native（getaddrinfo AF_UNSPEC+SOCK_STREAM，A+AAAA 全量；失败 NXDOMAIN/超时/无记录 → Err("dns: ...") 可 is_err 判定）；examples/m84_s3_dns verify 全绿（localhost 确定性 + .invalid Err + www.qq.com 与 Go net.LookupIP 交集≥1 含 AAAA + 重复调用稳定）；native 300→**301**；回归 m82/m83_s3/m83_s4/m84_s1/m84_s2 全绿 |
-| S4 (收口) | ⏳ 待做 | 重建链 + 自举证明 + 全量回归 + 归档 + tag v0.1.0-m84 |
+| S4 (收口) | ✅ done | **重链 bootstrap/pxi**（tools/pxc build interp.px → 覆盖，9,425,360→9,457,456 B 提交新 ELF；pxi 解释模式现可调 M83/M84 新 native）；**自举证明 rc=0**（B.c==golden 10595 行）；**全量回归总闸全绿**（m82 + m83_s1–s6 + m84_s1–s3 每批 verify PASS；m83_s5/s6 内容断言全 PASS）；**双模式抽查**（pxi run==pxc build：hmac TC2 + dns localhost 一致）；native **301**（gen_native_table 幂等）；qg-issue **21/22/23 归档 done/** + 00-README 更新（Issue 1–23 全部清零，仅 14-W1b ⏸️ + 13-R2 业务自持）；CHANGELOG 记 S4；**tag v0.1.0-m84** 已推 GitHub；CI success |
