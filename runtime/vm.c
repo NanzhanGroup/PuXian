@@ -104,15 +104,24 @@ static void vm_frame_pop(PxVmState* st) {
 }
 
 // ---- LOADK 常量物化 ----
-static LXValue vm_loadk(const PxK* k) {
+// B4：PXK_FUNC 需模块 funcs 表（k.i=funcs 下标）→ vm_loadk 增加 mod 参数
+static LXValue vm_loadk(const PxK* k, const PxBCModule* mod) {
     switch (k->kind) {
     case PXK_INT:   return px_int(k->i);
     case PXK_FLT:   return px_float(k->f);
     case PXK_STR:   return px_str(k->s ? k->s : "");
     case PXK_BOOL:  return px_bool(k->i != 0);
+    case PXK_FUNC:
+        if (mod && k->i >= 0 && k->i < mod->nfuncs) {
+            const PxVMFunc* cf = &mod->funcs[(int)k->i];
+            return px_func(cf->name, px_vm_entry, (void*)cf);
+        }
+        px_error("VM: LOADK FUNC 函数下标越界 k->i=%lld (nfuncs=%d)", k->i, mod ? mod->nfuncs : -1);
+        break;
     case PXK_NULL:
     default:        return px_null();
     }
+    return px_null();
 }
 
 // ---- 便捷分配器（A0 自测/调试用；正式产物静态 PxVMFunc 不走堆）----
@@ -249,7 +258,7 @@ LXValue px_vm_run_func(PxVmState* st, const PxVMFunc* f, LXValue* args, int narg
                 px_error("VM %s: LOADK 常量越界 k=%d (nK=%d)",
                          cf->name, in.b, m ? m->nK : -1);
             }
-            fr->slots[in.a] = vm_loadk(&m->K[in.b]);
+            fr->slots[in.a] = vm_loadk(&m->K[in.b], m);
             break;
         }
         // ---- B 表：一元/二元运算（A2，语义=调现 px_* C 函数，错误由 px_* 保证）----
@@ -344,6 +353,16 @@ LXValue px_vm_run_func(PxVmState* st, const PxVMFunc* f, LXValue* args, int narg
                 px_error("VM %s:%d NEWENUM 名字越界 b=%d c=%d (nN=%d)",
                          cf->name, fr->line, in.b, in.c, mm ? mm->nN : -1);
             fr->slots[in.a] = px_enum(mm->N[in.b], mm->N[in.c]);
+            break;
+        }
+        // NEWGEN（B3，M34 惰性生成器）：a=dst，b=seq 槽，c=2 连续槽基址
+        //   [transform(PX_FUNC), filter(PX_FUNC|null)] → px_gen_lazy（同 codegen 单 for
+        //   GenExp：elt 恒为 transform 闭包，cond 有则 filter 闭包）。槽越界容错（防御）。
+        case PXOP_NEWGEN: {
+            LXValue tf = px_null(), fl = px_null();
+            if ((int)in.c >= 0 && (int)in.c < fr->nslots) tf = fr->slots[in.c];
+            if ((int)in.c + 1 < fr->nslots) fl = fr->slots[in.c + 1];
+            fr->slots[in.a] = px_gen_lazy(fr->slots[in.b], tf, fl);
             break;
         }
         case PXOP_LISTPUSH:  // a=val 槽，b=list 槽（值入列表尾）

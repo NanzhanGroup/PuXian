@@ -289,3 +289,29 @@
 >   TypeConst 语法为括号形式 `type X const (A = 1, ...)`（非缩进块，parser M44 语法）。
 > - 下一步：B3 推导式/match/生成器（ListComp/GenExp/DictComp → 循环展开或 NEWGEN；
 >   match/select 模式匹配展开；cases s04/s13 + m34_gen_lazy/m25 系列）。
+
+### S3-B · B3a 推导式/生成器/闭包基建（ListComp/DictComp/GenExp/Closure/Block）
+> 完成（2026-09-08）：**闭包/块表达式基建 + 三类推导式在 VM 跑通（bc9 ALL PASS）**。
+> - **runtime/vm.h/vm.c**：PxK 增 PXK_FUNC（i=funcs 下标，LOADK 物化为 PX_FUNC(px_vm_entry,
+>   &funcs[i])——非全局注册函数的引用）；vm_loadk 增 mod 参数；实现 **NEWGEN**（a=dst,b=seq
+>   槽,c=2 连续槽基址[transform(PX_FUNC),filter(PX_FUNC|null)] → px_gen_lazy，对齐 codegen
+>   单 for GenExp：elt 恒为 transform 闭包）。px_vm_run_module 跳过 '<' 名全局注册（B2 已加）。
+> - **selfhost/bc_emit.px**：① lambda 基建 bc_emit_push_lambda（无捕获单参/多参闭包
+>   "<closureN>" 入 funcs 返回下标）+ K 池 func 登记（dump/emit-c 输出 func 常量）；② Closure
+>   表达式 fn(params) body → LOADK PXK_FUNC；③ **Block 块表达式**（{ stmts }：顺序执行，
+>   值=最后 ExprStmt，块内 VarDecl/Assign 就地分配槽——无块级作用域对齐 codegen/M62-L5）；
+>   ④ 推导式嵌套循环展开 bc_emit_comp（ListComp push / DictComp rv.set(k,v)，多子句递归，
+>   迭代变量重绑定 smap 保存/恢复——comp 变量不泄漏，对齐 cg_comp_collect/restore；cond
+>   JMPF 过滤）；⑤ GenExp 单 for 单变量 → NEWGEN（seq + transform 闭包 fn(x){elt} + filter
+>   闭包 fn(x){cond} 或 null；多 for/多变量 panic 未实现）；⑥ bc_emit_methodcall_slot 修正
+>   （obj 引用先 MOV 到新 cslot，实参区全新预留——dictcomp set 暴露原实现 obj 槽后排布与
+>   既有活跃槽重叠覆写）。
+> - **验证**：cases_bc/bc9.px+dump golden —— **bc9_verify.sh 12 断言全 PASS**（ListComp 平方
+>   列表 len/元素、ListComp+cond 偶数过滤、DictComp {k: k+"!"} str 键、GenExp (x*10 for..) 惰性
+>   NEWGEN + for-in 迭代物化 transform 闭包、Closure fn(a){a+5}(Block) LOADK PXK_FUNC 调用）；
+>   bc9 旧轨 pxi 同跑 rc=0 语义一致；bc1-8 dump golden 全不变（无闭包/推导式 case 零影响）。
+> - 记录：comp 迭代变量多变量子句（解构 for）未实现（panic）；GenExp 仅单 for 单变量
+>   （多 for 物化路径未接）；dictcomp/comp dict.set 键假定 str（对齐 NEWDICT 仅 str 键入池）；
+>   Closure 为无捕获 P1（body 引用宿主局部 → 按全局处理报未定义，与 codegen fn_closureN 同构；
+>   真捕获 upvalue cell = P2 留 S3-C）。修复过程中发现并解决 bc_emit_expr 内 let si(Index 分支)
+>   与 var si(Block 分支) 同名触发 M41.2 E3002（循环变量改名 bi2）。
