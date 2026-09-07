@@ -1267,3 +1267,18 @@
 > - 验证：bc1/bc2 dump golden 回归不变；bc3.px dump golden + emit-c 端到端 11 断言 ALL PASS
 >   （and/or 返回左/右操作数、?? 仅 null 替换、IfExpr 双支、while continue 跳 3 + break 停 8 →
 >   sum=25 / flags=5）。
+
+### M89-S3-A4 · 调用闭环：CALL/嵌套帧/递归深链/main 调用约定（hello.px 三轨对拍）
+
+> 完成（2026-09-08）：**函数调用闭环打通** —— px→px 调用压显式帧不回 C 递归（D3 深链
+> 安全），native/旧 C 产物经 px_call（C 递归一层）；PX_FUNC.fn==px_vm_entry 判断天然兼容
+> 混合调用。
+> - runtime/vm.c+vm.h：PxFrame 增 ret_dst（CALL 返回写 caller 槽）；RET/RET0 弹帧回传；
+>   CALL 分派（VM 函数手动压帧 / native·旧 C px_call），参数连续区槽排布。
+> - bc_emit.px：bc_emit_call 抽取 + Call/Pipe 表达式接线 + main 调用约定（Top 末尾 GETG
+>   main→CALL→RET，run_module 返回 main 结果）+ emit-c driver 退出码转换（对齐 codegen）。
+> - 验证：bc4.px（add 多参/fib(10)=55 递归/deep 2 万层深链/main 返回）main 退出码=63
+>   ALL PASS；嵌套帧 CALL 手测 PASS；**examples/hello.px 三轨 stdout 逐字节一致
+>   （VM=旧 C=pxi）**——真实程序（main/局部/and 短路/if-else/print native/Pipe to_upper）
+>   在 VM 上跑通；bc1-4 dump golden 回归不变。
+> - 默认参数/CALLM 方法调用/for-in 依赖容器 → S3-B（记录在案）。

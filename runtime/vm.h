@@ -6,10 +6,10 @@
 // 在 S3-A 起与 codegen 平行开发；本文件 = C 侧数据结构 + 指令集编号
 // （编号一经 S3 定稿即冻结，发射器按名字引用）。
 //
-// 状态（A0→A1，2026-09-08）：解释循环已实现
-//   LOADK/IMM/MOV/GETG/SETG/SRCLINE/JMP/JMPT/JMPF/RET/RET0/HALT（A1 补
-//   GETG/SETG 经 px_get_global/px_set_global v1 语义 + run_module 注册函数）；
-//   未实现（分发默认 px_error "指令未实现"）：其余 op —— A2 起逐批实现
+// 状态（A0→A4，2026-09-08）：解释循环已实现
+//   LOADK/IMM/MOV/GETG/SETG/SRCLINE/JMP/JMPT/JMPF/RET/RET0/HALT + B 表运算
+//   （NEG..SHRU，A2）+ CALL（A4：VM 函数手动压帧 D3、native/旧 C 产物 px_call）；
+//   CALLM/TRY/FORCE/容器等 S3-B/A5 起逐批（默认分发 px_error "指令未实现"）。
 // 线程模型：px_vm_entry 在调用线程取/建 __thread PxVmState 执行（与
 //   px_pool_worker/px_spawn 线程模型同构）；spawn/连接线程各自独立 VM 状态。
 // 语义约定：以现双轨（px build fn_* C 产物 / pxi 树遍历）用例集为对拍基准。
@@ -148,6 +148,8 @@ typedef struct {
     int             nslots;
     int             pc;        // 返回时恢复
     int             line;      // SRCLINE 最近行号（px_srcline 语义）
+    int             ret_dst;   // A4：CALL 压帧 → 返回写 caller 帧槽号；-1=顶层
+                               //   （返回给 px_vm_run_func 调用者 / px_vm_entry）
 } PxFrame;
 
 typedef struct {

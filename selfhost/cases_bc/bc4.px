@@ -1,0 +1,21 @@
+# M89-S3-A4 bc4.px —— 调用闭环冒烟（纯函数，无容器）
+# 覆盖：函数定义→CALL、多参数 add、递归 fib、2 万层深递归（帧栈安全，
+#       px→px 不回 C 递归 D3）、main 调用约定（Top 末尾 call main + RET）。
+def fib(n):
+    if n <= 1:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+def add(a, b):
+    return a + b
+
+def deep(n):
+    if n == 0:
+        return 7
+    return deep(n - 1)
+
+def main():
+    let x = add(3, 4)       # 7
+    let y = fib(10)         # 55
+    let z = deep(20000)     # 7（2 万深链）
+    return x + y + z - 6    # 7+55+7-6 = 63（退出码 63）
