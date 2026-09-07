@@ -1,0 +1,10 @@
+# B-S2 核心验证 daemon：http_serve TCP，空闲 keep-alive 连接事件驱动
+# 编译：px build --no-quic bs2_daemon.px
+# 运行：PX_SERVE_WORKERS=8 ./build/bs2_daemon   （8 worker 却能挂 200+ 空闲连接 = 事件驱动生效）
+def handler(req):
+    let p = req["path"]
+    if p == "/health":
+        return "ok-bs2"
+    return "not-found"
+
+http_serve(18099, handler)

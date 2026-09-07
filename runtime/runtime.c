@@ -9652,6 +9652,50 @@ static struct {
     int active;
 } g_stream_routes[MAX_STREAM_ROUTES];
 
+// ==================== M88-B-S2（qg-issue 27 B 类）：http_conn_worker 请求级重构（空闲连接事件驱动） ====================
+// 目标：keep-alive 空闲连接不占 worker——响应写完且无下一请求数据在途 → 连接交还 IDLE
+// （事件循环 epoll 照看，可读再派发回 fserve 池；15s 空闲超时由事件循环 tick close）。
+// 手段（侵入最小）：serve 连接 fd 一律非阻塞；请求读改用 px_recv_wait（poll+recv，语义 =
+// 阻塞 recv + SO_RCVTIMEO 15s，非 Linux 同效）；连接收尾统一 px_evc_close（防 fd 复用串扰）。
+// 事件驱动内核（px_evc_acquire/close/idle_put、px_ev_ensure、px_fd_nonblock、PxConnCtx）
+// 定义在下方 M88-B-S1 区（本 worker 位于其前 → 前向声明；typedef 加标签同型）。
+#ifndef FSERVE_KIND_HTTP
+#define FSERVE_KIND_HTTP 0
+#define FSERVE_KIND_SSE  1
+#endif
+typedef struct PxConnCtx PxConnCtx;
+static PxConnCtx* px_evc_acquire(int fd, int kind);
+static void px_evc_close(int fd);
+static int px_evc_idle_put(int fd, int kind);
+static void px_ev_ensure(void);
+static void px_fd_nonblock(int fd);
+
+// 非阻塞 fd 安全读：recv 遇 EAGAIN → poll 等待 tmo_ms → 再 recv（可读/断开/错误均再 recv 一次）。
+// 语义 = 阻塞 recv + SO_RCVTIMEO（服务端空闲超时 15s 对齐原 http_conn_worker）。返回 recv 结果：
+//   >0 读得字节 / 0 对端关闭 / -1 错误或超时（超时 errno=EAGAIN，与 SO_RCVTIMEO 行为一致）
+static ssize_t px_recv_wait(int fd, char* buf, size_t len, int tmo_ms) {
+    for (;;) {
+        ssize_t n = recv(fd, buf, len, 0);
+        if (n >= 0) return n;
+        if (errno == EINTR) continue;
+        if (errno != EAGAIN && errno != EWOULDBLOCK) return -1;
+        struct pollfd pfd;
+        pfd.fd = fd; pfd.events = POLLIN; pfd.revents = 0;
+        int r = poll(&pfd, 1, tmo_ms);
+        if (r == 0) { errno = EAGAIN; return -1; }   // 超时（空闲）
+        if (r < 0) { if (errno == EINTR) continue; return -1; }
+        // 可读/挂起/对端关闭 → 再 recv（返回 0 = EOF）
+    }
+}
+
+// 当前是否有请求数据在途（0 超时探测；keep-alive 交还 IDLE 决策用）
+static int px_fd_readable_now(int fd) {
+    struct pollfd pfd;
+    pfd.fd = fd; pfd.events = POLLIN; pfd.revents = 0;
+    int r = poll(&pfd, 1, 0);
+    return r > 0 && (pfd.revents & (POLLIN | POLLHUP | POLLERR));
+}
+
 // 连接处理线程（px_spawn 注册）：args[0] = fd
 // ==================== M23c HTTP 服务端 keep-alive（双模式：与解释器 builtin.rs 一致） ====================
 static const char* px_file_content_type(const char* path);
@@ -9662,9 +9706,12 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) return px_null();
     int fd = (int)args[0].as.i;
-    // keep-alive 空闲读超时 15s
-    struct timeval tv; tv.tv_sec = 15; tv.tv_usec = 0;
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    // M88-B-S2：serve 连接一律非阻塞 + 登记连接上下文（FREE→ACTIVE）。fd 超 PX_MAX_CONNS
+    // 或非 Linux 时 acquire 返回 NULL（不登记）→ 后续 px_evc_idle_put 失败走阻塞续读路径，功能不降。
+    px_fd_nonblock(fd);
+    px_evc_acquire(fd, FSERVE_KIND_HTTP);
+    // keep-alive 空闲超时语义：非阻塞 fd 上 SO_RCVTIMEO 不生效，由 px_recv_wait 的 15s poll 等待取代
+    // （IDLE 连接空闲超时由 B-S1 事件循环 tick 同样 15s 对齐）。
 
     for (;;) {
         // 1. 读请求头（直到 \r\n\r\n，上限 64KB；EOF/超时 → 关闭）
@@ -9672,23 +9719,20 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
         int len = 0;
         int header_end = -1;
         while (len < (int)sizeof(buf) - 1) {
-            ssize_t n = recv(fd, buf + len, (size_t)((int)sizeof(buf) - 1 - len), 0);
-            if (n == 0) { close(fd); return px_null(); }          // 对端关闭
-            if (n < 0) {                                           // 超时/错误
-                if (errno == EAGAIN || errno == EWOULDBLOCK) { close(fd); return px_null(); }
-                close(fd); return px_null();
-            }
+            ssize_t n = px_recv_wait(fd, buf + len, (size_t)((int)sizeof(buf) - 1 - len), 15000);
+            if (n == 0) { px_evc_close(fd); return px_null(); }    // 对端关闭
+            if (n < 0) { px_evc_close(fd); return px_null(); }     // 空闲超时(15s)/错误
             len += (int)n;
             buf[len] = 0;
             char* sep = strstr(buf, "\r\n\r\n");
             if (sep) { header_end = (int)(sep - buf); break; }
         }
-        if (header_end < 0 || len == 0) { close(fd); return px_null(); }
+        if (header_end < 0 || len == 0) { px_evc_close(fd); return px_null(); }
 
         // 2. 解析请求行：METHOD SP target SP version
         char* head = buf;
         char* sp1 = strchr(head, ' ');
-        if (!sp1) { close(fd); return px_null(); }
+        if (!sp1) { px_evc_close(fd); return px_null(); }
         *sp1 = 0;
         char* method = head;
         char* target = sp1 + 1;
@@ -9768,7 +9812,7 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
             if (content_length > body_max) {
                 const char* r413 = "HTTP/1.1 413 Payload Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
                 send(fd, r413, (int)strlen(r413), 0);
-                close(fd);
+                px_evc_close(fd);
                 return px_null();
             }
             body_buf = xmalloc((size_t)content_length + 1);
@@ -9780,8 +9824,8 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
                 body_len = take;
             }
             while (body_len < content_length) {
-                ssize_t n = recv(fd, body_buf + body_len, (size_t)(content_length - body_len), 0);
-                if (n <= 0) break;
+                ssize_t n = px_recv_wait(fd, body_buf + body_len, (size_t)(content_length - body_len), 15000);
+                if (n <= 0) break;   // 超时/对端关闭 → 按已收 body 处理（原 SO_RCVTIMEO 语义一致）
                 body_len += (int)n;
             }
             if (body_len > content_length) body_len = content_length;
@@ -9912,7 +9956,7 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
                 const char* notfound = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
                 send(fd, notfound, (int)strlen(notfound), 0);
             }
-            close(fd);
+            px_evc_close(fd);
             return px_null();
         }
         int out_len = 0;
@@ -9926,13 +9970,22 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
             if (out_len > 0) send(fd, out, out_len, 0);
             xfree(out);
         }
-        // 8. keep-alive 判定
+        // 8. keep-alive 判定：需关闭 → 统一 px_evc_close（清理连接上下文，防 fd 复用串扰）
         if (client_close || !resp_keep_alive) {
-            close(fd);
+            px_evc_close(fd);
             return px_null();
         }
+        // M88-B-S2：空闲连接不占 worker——无下一请求数据在途 → 连接交还 IDLE。
+        // 事件循环（epoll）照看空闲连接：可读再派发回 fserve 池（worker 接管下一请求突发）；
+        // 15s 空闲超时 / 对端断开由事件循环 tick close（语义与原 SO_RCVTIMEO 对齐）。
+        // 交还成功即返回释放本 worker 去取新 job；失败（非 Linux / fd 未登记）→ 继续读下一请求
+        // （px_recv_wait 15s 超时 = 原空闲语义，功能不降仅无事件驱动优化）。
+        if (!px_fd_readable_now(fd)) {
+            px_ev_ensure();
+            if (px_evc_idle_put(fd, FSERVE_KIND_HTTP) == 0) return px_null();
+        }
     }
-    close(fd);
+    px_evc_close(fd);
     return px_null();
 }
 
@@ -9964,10 +10017,13 @@ static const char* px_file_content_type(const char* path) {
 //   worker 取 job 按 kind 调 http_conn_worker / sse_conn_worker（处理语义与既有逐字节一致）。
 // 池容量 env PX_SERVE_WORKERS（默认 256，夹取 [8,4095]）。池 worker 均注册 GC 槽（同
 // px_pool_worker 常驻模式），注意 PX_MAX_THREADS 需 ≥ PX_SERVE_WORKERS + 主线程 + 业务 spawn。
-// keep-alive 空闲连接占 worker 至 15s 超时（http_conn_worker 既有语义）；SSE 长连接占 worker
-// 至 sse_close/对端断开。真正"空闲连接不占线程"属 B 类 poll 事件驱动范畴（见 M88_PLAN §三）。
+// M88-B-S2：http 连接已事件驱动——keep-alive 空闲连接响应写完即交还 IDLE（事件循环照看），
+// 不再占 worker 至 15s 超时（见 http_conn_worker 改造）；SSE 长连接仍占 worker 至 sse_close/
+// 对端断开（B-S3 事件循环化）。真正"空闲连接不占线程"现役于 http（见 M88_PLAN §三 B 类）。
+#ifndef FSERVE_KIND_HTTP
 #define FSERVE_KIND_HTTP 0
 #define FSERVE_KIND_SSE  1
+#endif
 #define FSERVE_DEFAULT_WORKERS 256
 #define FSERVE_QUEUE_CAP 16384        // 环形队列容量（job 8B → 128KB 背压缓冲）
 typedef struct { int fd; int kind; } FServeJob;
@@ -10082,7 +10138,7 @@ static void fserve_ensure(void) {
 // 默认最大并发连接登记（fd 索引表容量上限，env PX_MAX_CONNS 可配 [1024, 131072]）
 #define PX_CONN_DEFAULT_MAX  16384
 
-typedef struct {
+typedef struct PxConnCtx {
     int fd;                 // 连接 fd；FREE 时为 -1
     int kind;               // FSERVE_KIND_HTTP / FSERVE_KIND_SSE（派发回 fserve 用）
     int state;              // FREE / ACTIVE / IDLE
