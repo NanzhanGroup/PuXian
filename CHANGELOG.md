@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+### 回归脚本卫生修复 · m83_s5/s6 verify.sh 收尾 trap `kill 0`（M84-S4 起记录不修，今根治 · 不占里程碑号）
+
+> 完成（2026-09-07）：`examples/m83_s5/verify.sh`、`examples/m83_s6/verify.sh` 收尾 `trap ... EXIT`
+> 内为裸 `kill $SRV_PID [$SMTP_PID]`。当服务段正常结束、PID 变量已置 0 后脚本 exit，trap 触发 →
+> `kill 0`（bash/POSIX：**pid=0 的语义是向当前进程组广播 SIGTERM**，不是"杀 PID 0"）→ 脚本连同自身
+> 进程组被信号终止 → 内容断言全 PASS 但退出码非 0。此现象自 **M84-S4** 起每轮收口都在 CHANGELOG
+> 记录为"不修"（内容全过、仅退出码失真，总闸靠人工豁免）。本次给 trap 内 kill 加 `[ "$PID" -gt 0 ]`
+> 守卫根治：M84/M85/M86/M88 四个里程碑累积的"退出码需人工豁免"噪音消除，回归总闸退出码恢复可信。
+> 验证：m83_s5、m83_s6 重跑，内容断言全 PASS 且 **EXIT=0**。纯测试脚本卫生修复，不碰产品代码、
+> 不动断言语义、不改被测行为，不占里程碑号、不打 tag。
+
 ### M88-A 立项 · runtime 并发模型演进 A/B/C（qg-issue 27）
 
 > 立项（2026-09-07）：qg-issue 27（清歌 ws-approve .px 化 #47 压测/线上事故：http_serve_unix 高并发崩溃）

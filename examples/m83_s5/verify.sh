@@ -12,7 +12,7 @@ SMTP_PORT=2525
 mkdir -p build out
 SRV_PID=0
 SMTP_PID=0
-trap 'kill $SRV_PID $SMTP_PID 2>/dev/null; wait $SRV_PID $SMTP_PID 2>/dev/null; rm -f /tmp/m83s5_*.log x.png' EXIT
+trap 'for p in $SRV_PID $SMTP_PID; do if [ "$p" -gt 0 ] 2>/dev/null; then kill "$p" 2>/dev/null; wait "$p" 2>/dev/null; fi; done; rm -f /tmp/m83s5_*.log x.png' EXIT
 
 echo "== [1/6] 解释模式 libs_test（html/cookiejar/multipart 纯逻辑断言）=="
 $PX run libs_test.px > /tmp/m83s5_libs_run.log 2>&1 || { echo "FAIL pxi run libs_test"; tail -20 /tmp/m83s5_libs_run.log; exit 1; }

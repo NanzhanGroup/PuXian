@@ -13,7 +13,7 @@ SOCK=/tmp/m83_s6.sock
 LEGACY=18098
 mkdir -p build
 SRV_PID=0
-trap 'kill $SRV_PID 2>/dev/null; wait $SRV_PID 2>/dev/null; rm -f $SOCK /tmp/m83s6_*.log' EXIT
+trap 'if [ "$SRV_PID" -gt 0 ] 2>/dev/null; then kill $SRV_PID 2>/dev/null; wait $SRV_PID 2>/dev/null; fi; rm -f $SOCK /tmp/m83s6_*.log' EXIT
 
 echo "== [1/5] 编译并启动 daemon（http_serve + http_serve_unix + sse_serve）=="
 $PX build --no-quic serve_sse_daemon.px > /tmp/m83s6_build.log 2>&1 || { echo "FAIL build"; tail -15 /tmp/m83s6_build.log; exit 1; }
