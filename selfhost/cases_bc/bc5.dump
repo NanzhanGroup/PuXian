@@ -1,0 +1,61 @@
+# BCModule bc5
+# K 1
+K 0 str "除零"
+# G 5
+G 0 div_checked
+G 1 use_div
+G 2 main
+G 3 Err
+G 4 Ok
+# funcs 4 top=3
+== func div_checked arity=2 ndefault=0 nslots=11
+0:SRCLINE 0 6 0
+1:MOV 2 1 0
+2:IMM 3 0 0
+3:EQ 2 2 3
+4:JMPF 2 5 0
+5:SRCLINE 0 7 0
+6:GETG 5 3 0
+7:LOADK 6 0 0
+8:CALL 4 5 1
+9:RET 4 0 0
+10:SRCLINE 0 8 0
+11:GETG 8 4 0
+12:MOV 9 0 0
+13:MOV 10 1 0
+14:IDIV 9 9 10
+15:CALL 7 8 1
+16:RET 7 0 0
+17:RET0 0 0 0
+== func use_div arity=2 ndefault=0 nslots=7
+0:SRCLINE 0 11 0
+1:GETG 3 0 0
+2:MOV 4 0 0
+3:MOV 5 1 0
+4:CALL 2 3 2
+5:TRY 2 0 0
+6:IMM 6 100 0
+7:ADD 2 2 6
+8:RET 2 0 0
+9:RET0 0 0 0
+== func main arity=0 ndefault=0 nslots=9
+0:SRCLINE 0 14 0
+1:GETG 2 1 0
+2:IMM 3 10 0
+3:IMM 4 2 0
+4:CALL 0 2 2
+5:TRY 0 0 0
+6:SRCLINE 0 15 0
+7:GETG 5 1 0
+8:IMM 6 1 0
+9:IMM 7 0 0
+10:CALL 1 5 2
+11:TRY 1 0 0
+12:SRCLINE 0 16 0
+13:IMM 8 0 0
+14:RET 8 0 0
+15:RET0 0 0 0
+== func <top> arity=0 ndefault=0 nslots=2
+0:GETG 0 2 0
+1:CALL 1 0 0
+2:RET 1 0 0

@@ -140,6 +140,7 @@ LXValue px_vm_run_func(PxVmState* st, const PxVMFunc* f, LXValue* args, int narg
         // 帧可能因 CALL（A4 起）被推入/弹出，每次循环取当前帧
         fr = &st->frames[st->nframes - 1];
         const PxVMFunc* cf = fr->f;          // 当前帧所属函数
+        px_srcfunc(cf->name);                // A5：同步 runtime 错误追踪（px_error 文案带函数名）
         int pc = fr->pc;
         if (pc < 0 || pc >= cf->nbc) {       // 越界 → 视作自然落尾
             vm_frame_pop(st);
@@ -214,6 +215,7 @@ LXValue px_vm_run_func(PxVmState* st, const PxVMFunc* f, LXValue* args, int narg
         }
         case PXOP_SRCLINE:
             fr->line = (int)(int16_t)in.b;
+            px_srcline(fr->line);            // A5：同步 runtime 错误追踪（行号）
             break;
         case PXOP_IMM:
             fr->slots[in.a] = px_int((int64_t)(int16_t)in.b);
@@ -274,6 +276,40 @@ LXValue px_vm_run_func(PxVmState* st, const PxVMFunc* f, LXValue* args, int narg
         case PXOP_SHR:    fr->slots[in.a] = px_shr(fr->slots[in.b], fr->slots[in.c]); break;
         case PXOP_SHRU:   fr->slots[in.a] = px_ushr(fr->slots[in.b], fr->slots[in.c]); break;
 
+        // ---- E 表：错误传播（A5，D7）----
+        // TRY（?）：Result-Err → 就地返回 Err（RET 语义回传）；null → 返回 null；
+        // Ok → 就地解包覆写槽。对齐 codegen err_tag 模型（函数尾仅转发，语义等价）。
+        case PXOP_TRY: {
+            LXValue v = fr->slots[in.a];
+            int is_err = px_is_result(v) && !px_result_ok(v);
+            int is_nul = !is_err && px_is_null(v);
+            if (is_err || is_nul) {
+                LXValue ev = is_err ? v : px_null();
+                int rd = fr->ret_dst;
+                vm_frame_pop(st);
+                if (st->nframes == base) { ret = ev; done = 1; }
+                else if (rd >= 0) {
+                    PxFrame* pf = &st->frames[st->nframes - 1];
+                    if (rd < pf->nslots) pf->slots[rd] = ev;
+                }
+                break;
+            }
+            if (px_is_result(v)) v = px_result_unwrap(v);   // Ok 就地解包
+            fr->slots[in.a] = v;
+            break;
+        }
+        // FORCE（!）：Result-Err → px_error；null → px_error；否则就地解包
+        case PXOP_FORCE: {
+            LXValue v = fr->slots[in.a];
+            if (px_is_result(v)) {
+                if (!px_result_ok(v))
+                    px_error("force unwrap Err: %s", px_to_string(px_result_unwrap(v)));
+                v = px_result_unwrap(v);
+            }
+            if (px_is_null(v)) px_error("force unwrap null");
+            fr->slots[in.a] = v;
+            break;
+        }
         case PXOP_JMP:
             fr->pc += (int)(int16_t)in.b;   // off 相对下一条：目标=(pc+1)+off
             break;

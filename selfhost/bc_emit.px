@@ -367,6 +367,24 @@ def bc_emit_expr(expr, dst, func):
         bc_emit_expr(expr[3], d, func)          # else
         bc_patch_off(func, jj, len(func["bc"]))
         return d
+    if ty == "Try":
+        # A5：?expr → 求值入 d；TRY d（Err/null 就地返回传播；Ok 解包覆写）。
+        # 顶层 ?（is_top 帧）语义：Err/null 经 RET 到 run_module → driver 报错退出
+        # （对齐 codegen "顶层不能传播" 报错意图；文案差异记录）。
+        var d = dst
+        if d < 0:
+            d = bc_tmp(func)
+        bc_emit_expr(expr[1], d, func)
+        bc_emit_inst(func, "TRY", d, 0, 0)
+        return d
+    if ty == "ForceUnwrap":
+        # A5：!expr → 求值入 d；FORCE d（Err/null px_error；Ok 解包覆写）
+        var d = dst
+        if d < 0:
+            d = bc_tmp(func)
+        bc_emit_expr(expr[1], d, func)
+        bc_emit_inst(func, "FORCE", d, 0, 0)
+        return d
     if ty == "Call":
         # A4：普通调用 → bc_emit_call（callee=expr[1]，args=expr[2]）
         return bc_emit_call(expr[1], expr[2], dst, func)

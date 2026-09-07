@@ -1282,3 +1282,15 @@
 >   （VM=旧 C=pxi）**——真实程序（main/局部/and 短路/if-else/print native/Pipe to_upper）
 >   在 VM 上跑通；bc1-4 dump golden 回归不变。
 > - 默认参数/CALLM 方法调用/for-in 依赖容器 → S3-B（记录在案）。
+
+### M89-S3-A5 · 错误传播：TRY/FORCE + 错误现场追踪（S3-A 骨架段收口）
+
+> 完成（2026-09-08）：VM 化 S3-A 全段（A0 骨架→A5 错误）收口。
+> - runtime/vm.c：TRY（?）——Err/null 就地返回传播（RET 语义回传，顶层帧→run_module→
+>   driver 报错退出）/Ok 解包覆写；FORCE（!）——Err/null px_error / Ok 解包；解释循环
+>   逐帧 px_srcfunc + SRCLINE 逐条 px_srcline → runtime px_error 文案格式对齐 M72-S2
+>   （实测 "运行时错误 [main 行3]: force unwrap Err: boom"）。
+> - bc_emit.px：表达式 Try→TRY、ForceUnwrap→FORCE。
+> - 验证：bc5（Err 两跳 ? 传播 → exit 1 + stderr 除零）、bc6（FORCE Ok + null ? 传播 →
+>   exit 0）ALL PASS；bc1-4 dump golden 回归；bc2/3/4 verify + hello 三轨复跑全绿。
+> - S3-A 收口：A0-A5 完成，hello.px VM=旧C=pxi 三轨逐字节一致；fib.px 依赖容器 → S3-B。
