@@ -552,6 +552,38 @@ static char* xstrdup(const char* s) {
     return p;
 }
 
+// ==================== ISSUE28-B2（qg-issue 28）：slab 空页归还 OS ====================
+// 现象：高频短请求场景堆"只涨不落"（40MB→380MB→1.1GB 不回吐）——对象 sweep 释放后
+// 槽位回空闲链表复用，但整块 slab 的 mmap 映射从不归还 OS（无 munmap/madvise 路径）。
+// 本函数在 GC sweep 结束后调用：摘除并 munmap **完全空闲**（free_count==slot_count）
+// 的非头 slab（每 class 保留当前头 slab 作分配缓冲，防"刚释放又立即重新 mmap"抖动），
+// 反查数组 g_slab_ranges 同步移除。调用前提：stop-the-world / 单线程（调用方持
+// g_gc_mu 且其他线程已暂停/无并发分配）；本函数内部取 g_slab_mu 防残余并发。
+static void slab_reclaim_empty(void) {
+    pthread_mutex_lock(&g_slab_mu);
+    // 以 g_slab_ranges（全量登记）为准遍历：任何完全空闲 slab（含游离/链上遗漏）
+    // 一律摘链 + 移除登记 + munmap；每 class 保留当前头 slab 作分配缓冲防抖动。
+    size_t w = 0;
+    for (size_t i = 0; i < g_slab_range_count; i++) {
+        Slab* s = g_slab_ranges[i];
+        if (s->free_count != s->slot_count) { g_slab_ranges[w++] = s; continue; }  // 非空保留
+        int ci = -1;
+        for (int k = 0; k < SLAB_CLASS_COUNT; k++) if (slab_classes[k] == s->class_size) { ci = k; break; }
+        if (ci < 0) { g_slab_ranges[w++] = s; continue; }   // 防御：无法归类则不回收
+        if (s == g_slab_heads[ci]) { g_slab_ranges[w++] = s; continue; }  // 头 slab 缓冲保留
+        // 从 class 链摘除
+        Slab** pp = &g_slab_heads[ci];
+        while (*pp) { if (*pp == s) { *pp = s->next; break; } pp = &(*pp)->next; }
+        // 先释放 in_use 位图（独立 mmap），再 munmap slab 本体
+        slab_raw_free(s->in_use);
+        size_t hdr = (sizeof(Slab) + 7) & ~(size_t)7;
+        size_t bytes = (hdr + s->slot_count * s->class_size + PX_PAGE - 1) & ~(size_t)(PX_PAGE - 1);
+        munmap(s, bytes);
+    }
+    g_slab_range_count = w;
+    pthread_mutex_unlock(&g_slab_mu);
+}
+
 // ==================== 全局表（定义前移：GC 标记根集合使用） ====================
 
 #define GLOBAL_CAP 4096
@@ -1187,6 +1219,8 @@ void px_gc_collect(void) {
         gc_debug("collect #%d(并发): 标记 %lld/%d 回收 %d 存活 %d 线程 %d", g_gc_runs, g_gc_marked, g_obj_count + freed, freed, g_obj_count, g_paused_count);
         if (g_gc_debug) (void)write(2, "[mk] after-collect\n", 19);
         gc_hash_free(&set);
+        // ISSUE28-B2：sweep 后归还完全空闲 slab 页给 OS（仍 STW，无并发分配，安全）
+        slab_reclaim_empty();
         // 5) 本轮结束：epoch++ 唤醒所有暂停线程；清除进行中标志；等待其全部恢复
         g_gc_epoch++;
         g_gc_stop_in_progress = 0;
@@ -1244,6 +1278,8 @@ void px_gc_collect(void) {
     if (g_obj_count >= g_gc_threshold) g_gc_threshold = g_obj_count * 2;
     gc_debug("collect #%d: 标记 %lld/%d 回收 %d 存活 %d 跳过 %d", g_gc_runs, g_gc_marked, g_obj_count + freed, freed, g_obj_count, g_gc_skips);
     gc_hash_free(&set);
+    // ISSUE28-B2：sweep 后归还完全空闲 slab 页给 OS（单线程路径，无并发分配）
+    slab_reclaim_empty();
     pthread_mutex_unlock(&g_gc_mu);
     g_gc_executor = 0;
     gc_unblock_stop(&gc_old);
@@ -1885,7 +1921,9 @@ LXValue px_add(LXValue a, LXValue b) {
         memcpy(d, a.as.obj->as.str.data, la);
         memcpy(d + la, b.as.obj->as.str.data, lb);
         d[la + lb] = 0;
-        return px_str_len(d, la + lb);
+        LXValue r = px_str_len(d, la + lb);
+        xfree(d);   // ISSUE28-B2 修复：中间缓冲 px_str_len 已深拷贝，用毕即还 slab（原泄漏每拼接 1 缓冲）
+        return r;
     }
     if (a.type == PX_INT && b.type == PX_INT) return px_int(a.as.i + b.as.i);
     if (a.type == PX_FLOAT || b.type == PX_FLOAT) return px_float(num_val(a) + num_val(b));
@@ -1917,7 +1955,9 @@ LXValue px_mul(LXValue a, LXValue b) {
         char* d = xmalloc(len * n + 1);
         for (int i = 0; i < n; i++) memcpy(d + i * len, a.as.obj->as.str.data, len);
         d[len * n] = 0;
-        return px_str_len(d, len * n);
+        LXValue r = px_str_len(d, len * n);
+        xfree(d);   // ISSUE28-B2 修复：同上，重复串中间缓冲用毕即还
+        return r;
     }
     px_error("无法相乘: %s * %s", px_type_name(a), px_type_name(b));
     return px_null();

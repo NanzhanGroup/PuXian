@@ -1,0 +1,28 @@
+# ISSUE28-B2 验证 daemon：slab 空页归还 OS（qg-issue 28 止血批次 B2）
+# 编译：pxc build --no-quic wave.px
+# 运行：./build/wave（外部 verify.sh 采样 /proc/<pid>/status VmRSS）
+# 语义：多轮大瞬时垃圾波 → 每轮结束显式 gc() 全量回收 → RSS 应回落近基线
+#   （B2 使 sweep 后完全空闲的 slab 页 munmap 归还 OS；修复前整块 slab 只回
+#     空闲链表不归还 → 堆只涨不落。实测修复前 40MB→380MB→1.1GB 不回吐）
+def garbage_wave(n):
+    for i in range(n):
+        let s = "wave-garbage-item-" + str(i) + "-payload-string"
+        if len(s) == 0:
+            print("unreachable")
+
+def main():
+    print("W-BASELINE")
+    sleep(1500)
+    garbage_wave(400000)
+    gc()
+    print("W1-DONE")
+    sleep(500)
+    garbage_wave(400000)
+    gc()
+    print("W2-DONE")
+    sleep(500)
+    garbage_wave(400000)
+    gc()
+    print("W3-DONE")
+    sleep(2500)
+    print("W-END")
