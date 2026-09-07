@@ -6,6 +6,23 @@
 
 ## [Unreleased]
 
+### M89-S1/S2 · VM 化详勘预研 + 设计定稿（docs/M89_vm_prestudy.md · M89_vm_design.md）
+
+> 完成（2026-09-07~08）：VM 化旗舰（M89）**详勘（S1，只侦察未写码）** 与 **设计定稿（S2）**。
+> - S1 结论：双执行轨坐实（编译轨 px 函数=C 函数+C 递归、无显式帧；pxi=AST 树遍历），共享
+>   parser/AST=VM 化最有利资产；实测编译轨**无真词法闭包**（捕获外层局部退化 px_get_global 取 null、
+>   selfhost 编译器 0 个 fn_closure）；字节码选型=寄存器式 3-地址（帧槽=现 _v 编号，AST→BC 只换目标）；
+>   精确 GC 改造面量化（根：帧槽+全局槽+原生桥 ≤60 处，退役整栈保守扫描）；issue28 三根因代码级坐实；
+>   工期钉 **P50≈10–11 周 / P90 16 周**（S3-A 骨架/B 全构造/C 自举收敛/D 精确 GC 可横向分包）。
+> - S2 设计定稿（D1–D8）：发射器=PuXian 自举（bc_emit.px）、执行器=C（runtime/vm.c）；统一函数对象
+>   （PX_FUNC.fn=px_vm_entry trampoline、ctx=PxVMFunc*，px_call/px_method/px_spawn 零改动兼容旧 C 产物）；
+>   显式帧栈（px→px 不回 C 递归，深递归安全）；8B 定长寄存器式 3-地址指令集（~45 op spec）；
+>   全局=固定槽数组无锁读（issue28 GIL 根治）；错误 TRY 就地解包/Err 即 RET；短路 and/or/?? = JMPT/JMPF；
+>   闭包=真词法捕获 upvalue cell（补编译轨缺口，分 P1/P2）；方法调用 v1 桥接 px_method、S3-C 静态化；
+>   精确 GC 根=帧槽+全局槽+原生桥。S3 拆四级微步清单 + A/B 对拍 harness（vm_ab.sh 三实现两两对拍）+ BC 镜像自举证明。
+> - ⚠️ 记录：M89 主体（VM 实现 S3-A..D）为季度级大工程，issue28 止血（B1/B2/B3）已先行落地（见下条），
+>   根治（分代/精确 GC + 全局槽）随 M89-S3-D 吸收。
+
 ### Issue28 止血批次 B1-B3（qg-issue 28 · docs/ISSUE28_PLAN.md）
 
 > 完成（2026-09-07）：对 M88-B 后仍阻塞 ws-approve .px 化（#47）的 **GC STW 周期尖刺 +
