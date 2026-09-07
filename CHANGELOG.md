@@ -1241,3 +1241,19 @@
 >   （bc_k_add/bc_n_add/bc_g_add/bc_new_module）+ emit 入口占位（stmt/expr 逐 tag A1 起）；`px parse` 通过。
 > - 集成：vm.c 暂未入 rt_src_files / compiler.px `bc` 子命令随 A1 首个发射切片接入（golden 再生成同批，
 >   避免重复 3.5 分钟全量重链）；回归 hello（while 求和）px build + px run 双轨一致 rc=0。
+
+### M89-S3-A2 · 运算批 + 顶层顺序执行：发射器→可链接 C→VM 端到端闭环打通
+
+> 完成（2026-09-08）：VM 化 S3-A 进入**首个可运行字节码闭环**（A1 只是 dump 验证；本步起
+> BCModule 可静态输出为 C、gcc 链接 runtime（含 vm.o）真正跑 Top，顶层值可对拍断言）。
+> - **runtime/vm.c**：B 表一元/二元运算全量执行（NEG/NOT/BITNOT、ADD..GE、BITAND..SHRU，调现
+>   px_* C 函数，语义=旧轨）；**vm.c/vm.h 入 tools/px rt_src_files**（rtcache 重建含 vm.o）。
+> - **selfhost/bc_emit.px**：Binary 算术/比较/位运算批（两地址）+ Unary 一般化接线；新增
+>   bc_binop_op/bc_unop_op；**emit-c（bc_emit_c_program）**= BCModule→可链接 C 静态初值
+>   （PxK/N/G/bc/funcs/mod 前向引用）+ main 跑 px_vm_run_module（PX_BC_DUMP 环境变量打印非函数
+>   全局，A 阶段对拍）；bc_cli.px 增 `--emit-c`。
+> - **修复 A1 遗留 bug**：bc_emit_if 有 else/elif 时 JMPF 假跳落点错（落 then 尾 JMP → else 永不
+>   执行）；修正为假值落 JMP 之后（else 起点）。bc1.dump golden 回归不变。
+> - **验证**：cases_bc/bc2.px+dump golden（Add/Sub/Mul/IntDiv/Mod/Pow/比较/位/一元/if-else/while）；
+>   examples/m89_a2/bc_run.sh + bc2_verify.sh 端到端 **16 断言 ALL PASS**；bc1.px emit-c 跑通；
+>   vm_selftest(A1) 复跑 ALL PASS；px build hello C 产物与 pxi 输出一致（rtcache 重建无回归）。
