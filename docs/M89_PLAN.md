@@ -333,3 +333,16 @@
 >   guard 支持已加（codegen 侧忽略 guard 是缺口，VM 侧先行正确实现，记录差异待收敛）。
 > - 下一步：B4 闭包 P1 收口（m25_closure_gc 对拍 + 捕获面扫描）→ B5 并发/IO 桥
 >   （spawn/chan/send/recv/select/ffi 构造）。
+
+### S3-B · B4 闭包 P1 收口（无捕获闭包 + m25_closure_gc 对拍）
+> 完成（2026-09-08）：**闭包基建（B3a 落地）经真实用例对拍收口 P1**。
+> - Closure 表达式 → LOADK PXK_FUNC 引用 funcs 内 "<closureN>"（px_vm_entry trampoline，
+>   px_call 零改动）；Block body 支持 return 语句（RET 提前返回，尾 RET0 死代码无害）。
+> - **验证**：**examples/m25_closure_gc.px 在 VM 跑通** —— bc_run.sh emit-c → gcc → 运行：
+>   "M25 CLOSURE GC TESTS PASSED"（rc=0）—— 覆盖闭包自引用循环（let g=null; g=fn()..）、
+>   for i in range(300) 大批闭包垃圾 + gc() 强回收、活跃闭包 k()==42 未被误回收、assert 断言。
+> - 捕获面扫描结论（P2 时机）：m25/自举编译器路径 0 捕获；examples 闭包用例（match.px 的
+>   fn(x){x*2}、m25、m34 gen_lazy transform/filter）均为无捕获或单参 lambda —— **P1 覆盖现
+>   存量用例，真捕获（upvalue cell）P2 按计划留 S3-C**（spec §6.2 语义为终目标）。
+> - 下一步：B5 并发/IO 桥（spawn/chan/send/recv/select/mutex/rwlock/ffi_call 构造
+>   → VM native 注册 + bc_emit 语句 tag 支持）。
