@@ -55,6 +55,7 @@ const char* px_op_name(int op) {
         [PXOP_TRY] = "TRY", [PXOP_FORCE] = "FORCE", [PXOP_SRCLINE] = "SRCLINE",
         [PXOP_HALT] = "HALT",
         [PXOP_NEWGEN] = "NEWGEN", [PXOP_SPAWN] = "SPAWN",
+        [PXOP_ENUMVAR] = "ENUMVAR",
     };
     if (op < 0 || op >= PXM_MAX || !names[op]) return "?";
     return names[op];
@@ -365,6 +366,11 @@ LXValue px_vm_run_func(PxVmState* st, const PxVMFunc* f, LXValue* args, int narg
             fr->slots[in.a] = px_gen_lazy(fr->slots[in.b], tf, fl);
             break;
         }
+        // ENUMVAR（B3b）：a=dst，b=obj 槽 —— enum→px_str(variant)、非 enum→null
+        //   （match 模式匹配 variant 判断；对齐 cg subject.type==PX_ENUM && strcmp）
+        case PXOP_ENUMVAR:
+            fr->slots[in.a] = px_enum_variant(fr->slots[in.b]);
+            break;
         case PXOP_LISTPUSH:  // a=val 槽，b=list 槽（值入列表尾）
             px_list_push(fr->slots[in.b], fr->slots[in.a]);
             break;

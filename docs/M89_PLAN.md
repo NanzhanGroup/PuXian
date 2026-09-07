@@ -315,3 +315,21 @@
 >   Closure 为无捕获 P1（body 引用宿主局部 → 按全局处理报未定义，与 codegen fn_closureN 同构；
 >   真捕获 upvalue cell = P2 留 S3-C）。修复过程中发现并解决 bc_emit_expr 内 let si(Index 分支)
 >   与 var si(Block 分支) 同名触发 M41.2 E3002（循环变量改名 bi2）。
+
+### S3-B · B3b match 模式匹配（enum 变体/literal/wildcard/guard）
+> 完成（2026-09-08）：**match 表达式在 VM 跑通（bc10 ALL PASS）**。
+> - **runtime**：新增 px_enum_variant（enum→px_str(variant)、非 enum→null——对齐 cg
+>   subject.type==PX_ENUM && strcmp 短路，非 enum 不报错）；vm.h 增 PXOP_ENUMVAR（55，
+>   PXM_MAX→56：a=dst,b=obj 槽）+ vm.c 实现。
+> - **selfhost/bc_emit.px**：Match 表达式 → if-elif 链（d 初=subject，命中 arm body 覆写 d
+>   并跳 end，全不命中返回 subject——对齐 cg Match）；模式条件 bc_match_cond：PatConstructor/
+>   大写 PatBinding → ENUMVAR(subject) == "变体名"（str EQ）；PatLiteral → EQ(subject, 字面量
+>   表达式，含 Field enum 折叠）；PatWildcard/小写 PatBinding/空 PatTuple → 恒真（null 无跳转）；
+>   guard（arm[2]）与 pattern cond 组合（均命中才进 body）。
+> - **验证**：cases_bc/bc10.px+dump golden —— **bc10_verify.sh 6 断言全 PASS**（def 内 match
+>   enum 变体 Red/Green + wildcard 兜底、顶层 match literal 3/1 + wildcard）；bc10 pxi 同跑
+>   rc=0 语义一致；bc1-9 dump golden 全不变零回归。
+> - 记录：PatBinding 小写（绑定语义）恒真不绑定变量（对齐 codegen 现状，P2/后续可补）；
+>   guard 支持已加（codegen 侧忽略 guard 是缺口，VM 侧先行正确实现，记录差异待收敛）。
+> - 下一步：B4 闭包 P1 收口（m25_closure_gc 对拍 + 捕获面扫描）→ B5 并发/IO 桥
+>   （spawn/chan/send/recv/select/ffi 构造）。

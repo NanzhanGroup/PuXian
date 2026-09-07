@@ -1,0 +1,40 @@
+# M89-S3-B3b bc10.px —— match 模式匹配冒烟（enum 变体 + 字面量 + wildcard）
+# 覆盖（B3b）：
+#   match 表达式（enum 变体：case Red/Green/_）
+#   PatConstructor → ENUMVAR subject variant == 变体名（px_enum_variant + str EQ）
+#   PatWildcard _ → 恒真兜底
+#   PatLiteral 字面量比较（case 1 / 2 / _）
+#   match 作为表达式（let r = match ...）与顶层 var 初始值两处
+#   def 返回值 = match 结果
+# 验证：emit-c 跑 Top 后 PX_BC_DUMP 全局断言（bc10_verify.sh）。
+enum Color:
+    Red
+    Green
+    Blue
+
+def color_name(c):
+    let r = match c:
+        case Red:
+            "red"
+        case Green:
+            "green"
+        case _:
+            "other"
+    return r
+
+var n1 = color_name(Color.Red)       # "red"（constructor 变体命中）
+var n2 = color_name(Color.Blue)      # "other"（wildcard 兜底）
+var n3 = color_name(Color.Green)     # "green"
+var x1 = match 3:
+    case 1:
+        "one"
+    case 2:
+        "two"
+    case _:
+        "many"                       # literal 不命中 → wildcard → "many"
+var x2 = match 1:
+    case 1:
+        "one"
+    case _:
+        "other"                      # literal 命中 → "one"
+var ok = n1 == "red" and n2 == "other" and n3 == "green" and x1 == "many" and x2 == "one"

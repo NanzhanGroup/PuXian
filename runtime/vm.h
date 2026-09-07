@@ -97,7 +97,8 @@ typedef struct {
 // F 生成器/并发/桥（S3-B 起细化；多数映射既有 px_* C 桥，不重造）
 #define PXOP_NEWGEN  53  // a=dst, b=seq 槽, c=transform/filter 连续 2 槽基址（S3-B）
 #define PXOP_SPAWN   54  // a=dst, b=callee 槽, c=argc（S3-B：新线程跑 槽s2 函数）
-#define PXM_MAX      55
+#define PXOP_ENUMVAR 55  // a=dst, b=obj 槽（enum→px_str(variant)；非 enum→null；B3b match 用）
+#define PXM_MAX      56
 
 // ==================== 常量子（K 池） ====================
 // 发射器按 kind 生成静态项；LOADK 时物化为 LXValue（str 需 strdup/常驻，
