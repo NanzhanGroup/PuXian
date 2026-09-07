@@ -1257,3 +1257,13 @@
 > - **验证**：cases_bc/bc2.px+dump golden（Add/Sub/Mul/IntDiv/Mod/Pow/比较/位/一元/if-else/while）；
 >   examples/m89_a2/bc_run.sh + bc2_verify.sh 端到端 **16 断言 ALL PASS**；bc1.px emit-c 跑通；
 >   vm_selftest(A1) 复跑 ALL PASS；px build hello C 产物与 pxi 输出一致（rtcache 重建无回归）。
+
+### M89-S3-A3 · 控制流批：短路 and/or/??、IfExpr、while+break/continue（纯发射器）
+
+> 完成（2026-09-08）：短路与分支全部映射到既有 JMPT/JMPF/EQ/LOADK —— VM 无新增 op。
+> - bc_emit.px：Binary And/Or 短路（D5 返回操作数）；NullCoalesce（EQ d,null→JMPF 仅 null 替换）；
+>   IfExpr（JMPF→else / JMP→end）；Break/Continue（func.loops 循环上下文栈，break→end、
+>   continue→cond 起点，body 发完统一回填）；bc_emit_while 重构支持 break/continue。
+> - 验证：bc1/bc2 dump golden 回归不变；bc3.px dump golden + emit-c 端到端 11 断言 ALL PASS
+>   （and/or 返回左/右操作数、?? 仅 null 替换、IfExpr 双支、while continue 跳 3 + break 停 8 →
+>   sum=25 / flags=5）。
