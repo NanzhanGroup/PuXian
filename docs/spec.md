@@ -1222,6 +1222,14 @@ riscv64（32 regs）GC 架构头由 **C 层探针**（SIGUSR1 ucontext → arch_
 逐 word 栈扫描模拟开销极大（armv7 qemu 单次 GC ~15-25s）→ 并发 GC 压力只 x86_64 native 满量验证 +
 新架构 arch 层 C 探针 + 真机（用户侧）；qemu 档跑三用例冒烟（架构可运行性）。
 
+**GC 止血（issue28 批次，2026-09-07）**：① 服务模式 GC 延迟到**请求间安全点**（多线程越阈值置
+`g_gc_pending`，fserve/px_pool worker 空闲经 `px_gc_poll` 回收；硬上限 阈值×4 强制内联兜底；
+单线程 CLI/解释模式保持原内联零回归）；② sweep 免逐趟 sigprocmask + xfree 局部性 hint（单次 STW
+~2-4× 缩短）；③ slab 空页归还 OS（sweep 后 munmap 完全空闲非头 slab）；④ 字符串拼接中间缓冲泄漏
+修复（px_add/px_mul）；⑤ 全局符号表互斥锁 → 读写锁（读并发破 GIL）。环境变量：`PX_GC_INLINE=1`
+强制还原 B1 前内联行为（对拍）；`PX_GC_DEBUG=1` 打印每轮 GC 摘要（含耗时）；GC 延迟只影响多线程
+服务模式，语义/正确性不变（回收点后移，内存由硬上限保界）。
+
 ---
 
 ### 8.22 本地 HTTP 服务端内建 http_serve_unix（M82，Unix domain socket 服务端）

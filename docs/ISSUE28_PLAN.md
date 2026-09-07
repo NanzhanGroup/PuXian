@@ -1,6 +1,6 @@
 # ISSUE28_PLAN · GC STW 尖刺 + 堆不回收 + 并发吞吐止血批次（qg-issue 28）
 
-> 状态：🆕 **2026-09-07 立项开工**（M89-S1 VM 详勘预研后，按预研结论"先止血、M89 内根治"的接力路径）。
+> 状态：✅ **2026-09-07 B1/B2/B3 完成**（commits 868ed78/c67f5c0/e568e92，均 push main）——S4 收口文档同步（CHANGELOG/spec/m86_s0 verify 0.2.0 断言适配）本 commit 一并落地；issue28 全量验收（单发 p95≤50ms/max≤100ms、500 并发 p50≤200ms）待观音/清歌 ws-approve 隔离环境实测复核（产物=仓库 HEAD）。
 > 关联：qg-issue 28（GC stop-the-world 周期尖刺 + 堆内存不回收 + 吞吐 GIL 效应，仍阻塞 ws-approve .px 化 #47）。
 > 处理人：东月（dy.wsai.chat）。官方基准：github.com/NanzhanGroup/PuXian（HEAD 0.2.0 / M89-S1-12020c9）。
 
