@@ -5,6 +5,10 @@
 > 工具链（M71，2026-09-06）：`px build` 已增量缓存（**二次 build ≈0.4–0.9s**）+ `--target <arch>` 交叉；`px mcp` 含 **build** 工具（AI 一条 MCP 写→验→交付）；安装 `tools/install.sh`（sha256 自动校验 + argv0 自发现，装完任意目录免 PX_STDLIB）。重文本/大文件处理：px build 编译版毫秒级 ≈ grep（ECOSYSTEM_GAPS F4 M71 更正）。
 > M85（2026-09-06）：`px build` 模块裁剪开关集 —— `--no-sqlite`/`--no-ws`/`--no-zip`/`--no-xml`/`--no-aes`/`--no-rsa`/`--no-ed25519`/`--no-route`/`--no-zlib`/`--no-h2` 与 `--no-quic` 正交可任意组合，`--min` 聚合为最小化 profile；产物 9.0M → 2.7M；裁剪态调用缺的 native → 运行时明确报错（R1001，与裁剪编译产物一致）。
 > M86（2026-09-06）：**官方命令名 `px`**（pxc 兼容别名，等价可用）；`px build` **默认按引用集自动最小**（编译期自动收集被引用 native，未引用模块自动去除；hello → ~2.7M / sqlite 用户自动保留 ~3.8M；`--full`/`--max` = 全能力逃生舱 ≈9.0M；显式 `--no-xxx`/`--min` 优先级 > 自动；解析失败自动退全量保编译成功）；`px refs <file>` 输出被引用全局/native 名集合。
+> M88（2026-09-07，qg-issue 27）：**服务端并发止血** —— http_serve/http_serve_unix/sse_serve accept
+> 不再每连接 spawn，接入**常驻连接池**（队满阻塞背压，服务进程不因连接数/spawn 槽满退出）；GC 线程槽
+> 固定 64 → 动态上限。env `PX_SERVE_WORKERS`（池容量，默认 256，夹取 [8,4095]）/ `PX_MAX_THREADS`
+> （spawn 线程上限，默认 1024，夹取 [64,4096]）。并发 100×500 压测全 200、0 失败、进程不崩。
 
 ---
 

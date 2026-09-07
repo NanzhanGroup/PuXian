@@ -1246,11 +1246,14 @@ spawn http_serve_unix("/tmp/approve.sock", handler)   # 编译模式运行（同
   - 启动**自动清理残留 sock 文件**（上次异常退出遗留 → unlink 后 bind，避免 EADDRINUSE）；
   - bind 后 sock 文件 **chmod 0600**（审批/令牌等本地敏感数据，仅 owner 可读写）；
   - accept 循环**错误容忍**（EINTR 重试；EMFILE/ENFILE 等短暂让出避免忙循环）。
-- **连接语义**：每连接 `px_spawn(http_conn_worker)` 独立线程处理（与 http_serve 完全一致），
-  支持 keep-alive、HTTP/1.1 解析、multipart/urlencoded form、静态文件流式响应。
+- **连接语义**（M88 起池化）：http_serve/http_serve_unix/sse_serve accept 不再**每连接 `px_spawn`**，
+  统一投递**函数式 serve 常驻连接池**（accept → (fd,kind) 环形队列，常驻 worker 调 http_conn_worker/
+  sse_conn_worker，连接处理语义不变；队满阻塞背压 → 服务进程永不因连接数/spawn 槽满 exit）。
+  池容量 env `PX_SERVE_WORKERS`（默认 256，夹取 [8,4095]）。支持 keep-alive、HTTP/1.1 解析、
+  multipart/urlencoded form、静态文件流式响应。
 - **remote 字段**：AF_UNIX 连接无 IP → `req["remote"]` = `"unix"`（TCP http_serve 保持 `ip:port`；
   worker 的 getpeername 已按 sockaddr_storage 判族兼容，M82 顺带加固）。
-- **约束**：http_serve_unix 与 http_serve 同为**编译模式 native**（内部 px_spawn 并发；
+- **约束**：http_serve_unix 与 http_serve 同为**编译模式 native**（内部常驻连接线程池；
   pxi Mini 子集无 spawn → 用 `px build`）。进程内 handler 槽位与 http_serve 共用
   `__http_handler`（同一进程一般只跑一个 serve 回调，勿与 http_serve 同进程异 handler 并用）。
 - **背景与验证**：M82 由 qg-issue 15（ws-approve .px 化 GAP-SRV-1）立项——ws-approve 主客户端
