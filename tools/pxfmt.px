@@ -45,7 +45,7 @@ def main():
         elif a == "--diff":
             diff_only = true
         elif a == "--version" or a == "-v":
-            print("pxfmt 0.1.0 (普贤 PuXian fmt · M64a 自举)")
+            print("pxfmt 0.2.0 (普贤 PuXian fmt · M64a 自举)")
             exit(0)
         elif a == "--help" or a == "-h":
             usage()

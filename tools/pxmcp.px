@@ -24,11 +24,11 @@
 # ============================================================
 import "jsonrpc_core.px"
 # ---------- 常量 ----------
-let PXMC_VER = "0.1.0"
+let PXMC_VER = "0.2.0"
 let PXMC_MS = "M65-S4"
 let MCP_PROTO = "2024-11-05"
 # 与 tools/pxc SELFHOST_VER/SELFHOST_MILESTONE 对齐的版本串（version 工具内联）
-let PXC_VER_INFO = "pxc 0.1.0 (普贤 PuXian · selfhosted M-B9a)"
+let PXC_VER_INFO = "pxc 0.2.0 (普贤 PuXian · selfhosted M-B9a)"
 var g_seq = 0  # 临时文件序号（防并发覆盖）
 var g_shutdown = false
 def mcp_err(msg):

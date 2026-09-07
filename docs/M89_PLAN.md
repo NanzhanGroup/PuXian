@@ -1,0 +1,89 @@
+# M89_PLAN · VM 化旗舰里程碑（AST/C 递归 → 显式帧 + 平坦字节码 VM）
+
+> 状态：🆕 **2026-09-07 立项**（M88 A/B 收口后，按 M88_PLAN §四·A 远景裁定启动）。S0 版本升格与本文档同批执行；S1 VM 化详勘预研紧随其后。
+> 关联：M88_PLAN §四·A（VM 化 = 总钥匙，native 后端排最后）、§四·A·落地建议第 2 条（VM 化 + C 类合并为独立旗舰里程碑，先详勘钉工期再拍板）。
+
+## 〇、一句话
+
+把 PuXian 的执行模型从「编译器把每个 px 函数生成 C 函数 fn_xxx + 运行走 px_call 直接 C 递归（interp.px 为 AST tree-walking）」升级为「编译到显式字节码 + 显式 VM 帧栈解释执行」——这是语义冻结、精确 GC、用户态协程（C 类）、native 后端的共同前提，是全项目远期路线上的**总钥匙**。
+
+## 一、背景与裁定依据（摘自 M88_PLAN §四·A，2026-09-07 定稿）
+
+1. 并发容量/平台不能靠 native 后端解决，靠执行模型可挂起（协程）与 OS API 层；
+2. **VM 化是三合一总钥匙**，必须在 native 之前：① GC map/精确 GC 需帧显式；② 语义基准：先有 VM 作"对的实现"，native 后端对拍归因；③ 教科书全走此路（JVM / CPython 3.11 / LuaJIT = 先稳定 VM 再谈 JIT）；
+3. **PuXian 现状坐实无捷径**（M88 立项期代码侦察）：interp.px 是 AST 树遍历递归（i_exec_stmt/i_eval_expr/i_eval_call 递归下降）；px 函数编译成 C 函数 fn_xxx、调用走 px_call 直接 C 递归；**无堆上显式 VM 帧栈，局部变量即 C 局部量** → VM 层协程（Lua 式帧快照挂起）目前不可行；
+4. C 类协程（M:N 用户态协程）只有两条路：**甲 = VM 化后做帧协程（正路，与 VM 化合并）**；乙 = C 栈协程（= 造 Go 早期 runtime + GC 扫 N 条栈 + Windows 换 Fiber，重路）。取甲。
+
+→ 因此 **VM 化独立立项为 M89 旗舰里程碑**；C 类协程不在 M89 主线内混做，视 S1 详勘结论（帧协程是否随 VM 设计自然可得）决定收尾批次并入或另立 M90。
+
+## 二、范围
+
+### 在本里程碑内（M89）
+- **S0** 版本升格 0.1.0 → 0.2.0（随本立项执行：源码层 + golden 同步 + 重链 pxc/pxi + 自举证明 + 回归，见 §五 版本策略）
+- **S1** VM 化可行性详勘预研（**只侦察写报告，不写码**，约半天级）——产出 `docs/M89_vm_prestudy.md`：
+  - 帧栈：现有 codegen（cg_stmt/cg_expr/cg_module）如何搬 → 显式帧；函数调用链/尾调用/闭包捕获的帧表达；
+  - 闭包/生成器/异常（Result Err + __prop__ ? 传播）/错误栈如何搬进 VM；
+  - 字节码格式选型：栈式 vs 寄存器式；常量池/名字表；与现 C 递归语义的对拍契约怎么定；
+  - 精确 GC 改造面：值表示（现原生值透传 + dict 包装 __ufn__/__struct__ 等）→ GC root/帧槽标记的量化；
+  - interp.px（pxi 解释路径）与 compiler.px（pxc 编译路径）双轨如何收敛/各自改造量；
+  - **工期钉到周级精度**（按 §四·A：先详勘把工期钉到周级再拍板实现批次）。
+- **S2** 按 S1 详勘定稿设计 + 实现批次拆分（S 级微步，每步编译 + 相关 verify 通过，不混 commit）
+- **S3** 实现
+- **S4** 收口（自举证明 + 全量回归 + 重链 bootstrap + 文档同步 + tag）
+
+### 不在本里程碑内（顺延，按 §四·A 顺序）
+- C 类用户态协程 M:N（帧协程，VM 稳定后水到渠成）
+- native 机器码后端（旗舰 2，VM/IR/GC map 之后）
+- Windows 平台（VM + 精确 GC 后变易）
+
+## 三、目标（里程碑级）
+
+1. PuXian 程序执行从「px 函数 = C 函数、C 递归调用」切到「px 函数 = 字节码、显式帧栈 VM 解释」，语义逐字节可对拍（对拍基准 = 现 C 递归路径，先锁语义再动引擎）；
+2. 显式帧栈为精确 GC / 帧协程铺路（S1 详勘给出精确改造面量化）；
+3. VM 化全程保持自举：compiler.px/interp.px 自身仍用 PuXian 写、仍能自举证明（golden 同步）。
+
+## 四、S 级拆分（预排，S1 详勘后修正）
+
+| S | 内容 | 验收 |
+|---|---|---|
+| S0 | 版本升格 0.1.0→0.2.0（本批） | pxc/pxi/px --version = 0.2.0；自举证明 rc=0；回归全绿 |
+| S1 | VM 化详勘预研（只侦察） | docs/M89_vm_prestudy.md（改造面量化 + 字节码选型 + 工期周级） |
+| S2 | VM 设计定稿 + 实现拆分 | 设计文档 + S 清单 |
+| S3 | VM 实现（S 微步） | 每 S 编译 + verify；语义对拍 |
+| S4 | 收口 | 自举 + 全量回归 + 重链 + 文档 + tag v0.2.0-m89 |
+
+## 五、版本策略：0.1.0 → 0.2.0（S0，2026-09-07 决策）
+
+- **现状**：0.1.0 自 M62 起沿用至 M88b，已覆盖「Rust 退役 + 全自举工具链 + 标准库 + 并发 64 → 1 万+ 连接事件驱动」的巨变，0.1.0 严重低配；
+- **升到 0.2.0 而非 1.0.0**：pre-1.0 语义化版本惯例，0.x minor 递增 = 重大架构演进（可含不兼容）；1.0.0 的语义 = 语义冻结 + 向后兼容承诺，须等 VM 化落地、语义稳定后再定（VM 化正是"语义冻结 → IR 诞生"的关口，1.0 留给它之后）；
+- **落地范围（S0）**：tools/px SELFHOST_VER、compiler.px PXC_VER、interp.px PXI_VER、pxmcp.px PXMC_VER/PXC_VER_INFO、pxfmt.px banner、runtime/runtime.c server dict 版本串 → 0.2.0；golden/compiler.c 重链同步；bootstrap/pxc + pxi 重链；自举证明 + 回归；tag 从 v0.1.0-mXX → **v0.2.0-mXX**（M89 收口打 v0.2.0-m89）；
+- 文档中的历史里程碑表格（README 等 v0.1.0-m70 字样）为历史记录，不动。
+
+## 六、风险与预案
+
+| 风险 | 预案 |
+|---|---|
+| VM 化体量大（数月级，§四·A 估） | S1 详勘先把工期钉到周级，按 S 微步推进，不混 commit；每步语义对拍 |
+| 双轨（pxi 解释 / pxc 编译 C）改造面不一 | S1 量化两条路径，决定收敛策略（可能以 VM 为唯一执行层，pxi/pxc 共享字节码） |
+| 自举证明在过渡期易碎 | 任何动 codegen 的 commit 必须同步 golden + 自举证明 rc=0（沿用 M88 收口纪律） |
+| 语义漂移 | 以现 C 递归路径为对拍基准，先锁语义（golden cases）再动引擎 |
+| 精确 GC 改造面过大 | S1 详勘给量化 + 分阶段（先保守扫显式帧，再精确化） |
+
+## 附：执行状态记录（2026-09-07）
+
+### S0 · 版本升格 0.1.0 → 0.2.0（随立项执行）
+> 完成（2026-09-07）：改源码版本串（tools/px SELFHOST_VER / compiler.px PXC_VER /
+> interp.px PXI_VER / pxmcp.px PXMC_VER+PXC_VER_INFO / pxfmt.px banner / runtime/runtime.c server dict）
+> → golden/compiler.c 重链同步（10596 行）→ bootstrap/pxi 重链 0.2.0（pxi --version = 0.2.0，hello 冒烟 rc=0）
+> → 自举证明 rc=0（B.c==golden 10595 行 norm 逐字节）→ 回归 m82 http_serve_unix 8 项全 PASS。命令入口
+> px/pxc/pxi --version 均 0.2.0；tag 基线进入 v0.2.0 时代（M89 收口打 v0.2.0-m89）。
+>
+> ⚠️ 发现并记录：**bootstrap/pxc 二进制内部保持 f77732f(M72) runtime 未重链**。用当前(M88) runtime 重链
+> pxc 后，pxc 编 interp.px 确定性崩（"运行时错误 [rust_str_debug 行462]: 字符串索引越界: 0"；--full 全模块
+> 与自动裁剪版均复现，pxc 编 compiler.px 正常、pxi(M88 runtime) 正常）→ 疑 M88 runtime 某改动与 compiler
+> codegen 组合存在潜在 bug。不阻塞（用户编译路径 tools/px → bootstrap/pxc 为 f77732f-runtime 稳定版，px build
+> 全链路冒烟正常），单独立项排查。故 pxc 二进制 --version 内部显示 0.1.0（自举编译器滞后一代），命令入口
+> px/pxc/tools 均 0.2.0。
+
+### S1 · VM 化详勘预研
+> （待启动：M89 立项后即开始，产出 docs/M89_vm_prestudy.md）
