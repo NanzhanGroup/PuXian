@@ -125,6 +125,7 @@ def bc_new_func(name, arity):
     func["smap"] = bc_new_dict()
     func["next_slot"] = arity
     func["is_top"] = false
+    func["loops"] = []          # A3：循环上下文栈 [{breaks:[idx],conts:[idx]}]
     return func
 
 # 变量名 → 槽号（无则分配）
@@ -309,17 +310,62 @@ def bc_emit_expr(expr, dst, func):
             bc_emit_inst(func, "GETG", dst, g, 0)
         return dst
     if ty == "Binary":
-        # A2：算术/比较/位运算批（两地址：ADD dst,dst,s2）；And/Or 短路 → A3
+        # A2：算术/比较/位运算批（两地址：ADD dst,dst,s2）；A3：and/or 短路（D5）
         let op = expr[1]
-        if op == "And" or op == "Or":
-            panic("bc_emit_expr Binary And/Or 短路未实现（A3 控制流批）: " + str(expr))
         var d = dst
         if d < 0:
             d = bc_tmp(func)
+        if op == "And":
+            # and：左假 → 结果=左；左真 → 求右覆写
+            bc_emit_expr(expr[2], d, func)
+            let je = len(func["bc"])
+            bc_emit_inst(func, "JMPF", d, 0, 0)
+            bc_emit_expr(expr[3], d, func)
+            bc_patch_off(func, je, len(func["bc"]))
+            return d
+        if op == "Or":
+            # or：左真 → 结果=左；左假 → 求右覆写
+            bc_emit_expr(expr[2], d, func)
+            let je = len(func["bc"])
+            bc_emit_inst(func, "JMPT", d, 0, 0)
+            bc_emit_expr(expr[3], d, func)
+            bc_patch_off(func, je, len(func["bc"]))
+            return d
         bc_emit_expr(expr[2], d, func)      # 左值直接入 dst（两地址）
         let s2 = bc_tmp(func)
         bc_emit_expr(expr[3], s2, func)
         bc_emit_inst(func, bc_binop_op(op), d, d, s2)
+        return d
+    if ty == "NullCoalesce":
+        # ??：左为 null → 取右；否则保留左（对齐 codegen px_is_null ? r : l）
+        var d = dst
+        if d < 0:
+            d = bc_tmp(func)
+        bc_emit_expr(expr[1], d, func)
+        let tn = bc_tmp(func)
+        bc_emit_null(func, tn)
+        let te = bc_tmp(func)
+        bc_emit_inst(func, "EQ", te, d, tn)     # te = (d == null)
+        let je = len(func["bc"])
+        bc_emit_inst(func, "JMPF", te, 0, 0)    # 非 null → 保留 d
+        bc_emit_expr(expr[2], d, func)
+        bc_patch_off(func, je, len(func["bc"]))
+        return d
+    if ty == "IfExpr":
+        # if c: a else: b 表达式 → JMPF/JMP 分支（结果槽 d）
+        var d = dst
+        if d < 0:
+            d = bc_tmp(func)
+        let tc = bc_tmp(func)
+        bc_emit_expr(expr[1], tc, func)
+        let jf = len(func["bc"])
+        bc_emit_inst(func, "JMPF", tc, 0, 0)
+        bc_emit_expr(expr[2], d, func)          # then
+        let jj = len(func["bc"])
+        bc_emit_inst(func, "JMP", 0, 0, 0)
+        bc_patch_off(func, jf, len(func["bc"])) # 假 → else 起点（JMP 之后）
+        bc_emit_expr(expr[3], d, func)          # else
+        bc_patch_off(func, jj, len(func["bc"]))
         return d
     panic("bc_emit_expr 未实现: " + str(expr))
 
@@ -393,6 +439,26 @@ def bc_emit_stmt_inner(stmt, func):
     if ty == "While":
         bc_emit_while(stmt, func)
         return
+    if ty == "Break":
+        # A3：跳当前最内层循环 end（占位待 patch）
+        let loops = func["loops"]
+        if len(loops) == 0:
+            panic("bc_emit Break 不在循环内")
+        let ctx = loops[len(loops) - 1]
+        let j = len(func["bc"])
+        bc_emit_inst(func, "JMP", 0, 0, 0)
+        ctx["breaks"].append(j)
+        return
+    if ty == "Continue":
+        # A3：跳当前最内层循环 cont_target（while=cond 起点）
+        let loops = func["loops"]
+        if len(loops) == 0:
+            panic("bc_emit Continue 不在循环内")
+        let ctx = loops[len(loops) - 1]
+        let j = len(func["bc"])
+        bc_emit_inst(func, "JMP", 0, 0, 0)
+        ctx["conts"].append(j)
+        return
     if ty == "Empty":
         return
     panic("bc_emit_stmt 未实现: " + str(stmt))
@@ -452,6 +518,8 @@ def bc_emit_if(stmt, func):
         ji += 1
 
 # While: loop_start → cond → JMPF(假→end) → body → JMP(回 loop_start)
+# A3：break/continue —— 循环上下文入 func.loops 栈；break=JMP end、
+# continue=JMP loop_start（重新求 cond）；body 发完/end 确定后统一回填。
 def bc_emit_while(stmt, func):
     let cond = stmt[1]
     let body = stmt[2]
@@ -460,12 +528,25 @@ def bc_emit_while(stmt, func):
     bc_emit_expr(cond, t, func)
     let jf = len(func["bc"])
     bc_emit_inst(func, "JMPF", t, 0, 0)
+    let ctx = bc_new_dict()
+    ctx["breaks"] = []
+    ctx["conts"] = []
+    func["loops"].push(ctx)
     bc_emit_stmts(body, func)
+    func["loops"].pop()
     let jb = len(func["bc"])
     bc_emit_inst(func, "JMP", 0, 0, 0)
     let end = len(func["bc"])
     bc_patch_off(func, jb, loop_start)
     bc_patch_off(func, jf, end)
+    var bi = 0
+    while bi < len(ctx["breaks"]):
+        bc_patch_off(func, ctx["breaks"][bi], end)
+        bi += 1
+    bi = 0
+    while bi < len(ctx["conts"]):
+        bc_patch_off(func, ctx["conts"][bi], loop_start)
+        bi += 1
 
 # ---------- 函数发射 ----------
 # 顶层 FuncDef → PxVMFunc（body 语句发射 + 尾 RET0 对齐 codegen return px_null()）

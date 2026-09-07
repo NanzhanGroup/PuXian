@@ -1,0 +1,30 @@
+# M89-S3-A3 bc3.px —— 控制流批冒烟（无函数调用；无 for —— S3-B）
+# 覆盖：短路 and/or（返回操作数，Python 语义）、NullCoalesce ??（仅 null 替换）、
+#       IfExpr（if c: a else: b）、while + break/continue（回填 loop end/cond）。
+var a1 = 0 and 5          # 0（左假 → 左）
+var a2 = 3 and 7          # 7（左真 → 右）
+var o1 = 0 or 9           # 9
+var o2 = 3 or 9           # 3
+var n1 = null ?? 42       # 42
+var n2 = 0 ?? 42          # 0（0 非 null 保留）
+var n3 = "x" ?? "y"       # x
+var ie1 = if 2 > 1: "yes" else: "no"    # yes
+var ie2 = if 2 < 1: "yes" else: "no"    # no
+var sum = 0
+var i = 0
+while i < 10:
+    i = i + 1
+    if i == 3:
+        continue
+    if i == 8:
+        break
+    sum = sum + i
+# i=1..7 且跳过 3：sum = 1+2+4+5+6+7 = 25（i=8 break）
+var flags = 0
+var j = 0
+while j < 100:
+    j = j + 1
+    if j > 5:
+        break
+    flags = flags + 1
+# flags = 5

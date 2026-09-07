@@ -176,3 +176,17 @@
 >   PX_BC_DUMP 顶层值断言验证（无 CALL/print，stdout 对拍留 A4 print 可用后）。A2 端到端闭环已立，
 >   A3-A5 不再重编 compiler/rt 即可逐批接入。
 > - 下一步：A3 控制流（短路 and/or/?? + IfExpr + break/continue；for-in 依赖迭代器/容器见 S3-B）。
+
+### S3-A · A3 控制流批：短路 and/or/??、IfExpr、while+break/continue
+> 完成（2026-09-08）：**纯发射器扩展**（VM 无需新 op —— 短路/分支全部映射到既有
+> JMPT/JMPF/EQ/LOADK）。验证仍走 bc_cli emit-c 端到端（无 CALL，A4 接入 print/函数调用）。
+> - **selfhost/bc_emit.px**：Binary And/Or 短路（D5：左值入 d → JMPF(and)/JMPT(or) 跳过右式，
+>   d 保留左值或右值覆写——返回操作数 Python 语义）；NullCoalesce ??（EQ d,null → JMPF 非 null
+>   保留，仅 null 替换）；IfExpr（JMPF→else/JMP→end 分支）；stmt Break/Continue（func.loops 循环
+>   上下文栈；break=JMP end、continue=JMP cond 起点，body 发完回填）；bc_emit_while 重构支持
+>   break/continue（loop ctx push/pop，breaks→end、conts→loop_start）。
+> - 验证：bc1/bc2.dump golden 回归不变；cases_bc/bc3.px+dump golden 覆盖 and/or/??/IfExpr/
+>   while+break+continue；emit-c 端到端 **11 断言 ALL PASS**（a1=0 a2=7 o1=9 o2=3 n1=42 n2=0
+>   n3=x ie1=yes ie2=no sum=25（continue 跳 3）+flags=5（break 停））。
+> - 下一步：A4 调用闭环（CALL/参数区/默认参数/RET 嵌套帧 + 发射器 Call/main 调用约定 + vm.c
+>   解释循环嵌套帧改造：VM 内 px→px 压帧不回 C 递归（D3），native/旧 C 经 px_call）。
