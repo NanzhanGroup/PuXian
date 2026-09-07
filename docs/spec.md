@@ -1246,11 +1246,20 @@ spawn http_serve_unix("/tmp/approve.sock", handler)   # 编译模式运行（同
   - 启动**自动清理残留 sock 文件**（上次异常退出遗留 → unlink 后 bind，避免 EADDRINUSE）；
   - bind 后 sock 文件 **chmod 0600**（审批/令牌等本地敏感数据，仅 owner 可读写）；
   - accept 循环**错误容忍**（EINTR 重试；EMFILE/ENFILE 等短暂让出避免忙循环）。
-- **连接语义**（M88 起池化）：http_serve/http_serve_unix/sse_serve accept 不再**每连接 `px_spawn`**，
+- **连接语义**（M88 起池化 + 事件驱动）：http_serve/http_serve_unix/sse_serve accept 不再**每连接 `px_spawn`**，
   统一投递**函数式 serve 常驻连接池**（accept → (fd,kind) 环形队列，常驻 worker 调 http_conn_worker/
   sse_conn_worker，连接处理语义不变；队满阻塞背压 → 服务进程永不因连接数/spawn 槽满 exit）。
   池容量 env `PX_SERVE_WORKERS`（默认 256，夹取 [8,4095]）。支持 keep-alive、HTTP/1.1 解析、
   multipart/urlencoded form、静态文件流式响应。
+- **空闲连接事件驱动**（M88-B，Linux epoll 一等）：连接上下文表 `ConnCtx`（fd 索引，容量 env
+  `PX_MAX_CONNS` 默认 16384 夹取 [1024,131072]）+ FREE/ACTIVE/IDLE 状态机（单持有者原则）。
+  - http keep-alive：worker 处理完一个**请求突发**即把连接交还 IDLE（事件循环 epoll 照看可读/
+    断开/超时），不再阻塞占 worker 至 15s 空闲超时 → **空闲连接不占线程**，进程 OS 线程数 ≈
+    池容量 + 常数，与连接数解耦（压测：池 8 挂 1 万 idle keep-alive 线程恒 10）；
+  - SSE 长连接：handler 返回后明文连接同样交还 IDLE（事件循环 detect 断开/`sse_close`/写失败统一
+    清理；**SSE 空闲不超时**）；服务端 SSE 注册表容量 env `PX_MAX_SSE_CONNS`（默认 4096 夹取
+    [64,65536]）。仅 TLS SSE 长连接仍走原阻塞保持路径（文档注明）；
+  - 15s keep-alive 空闲超时语义保留（由事件循环 tick 对齐原 SO_RCVTIMEO）。
 - **remote 字段**：AF_UNIX 连接无 IP → `req["remote"]` = `"unix"`（TCP http_serve 保持 `ip:port`；
   worker 的 getpeername 已按 sockaddr_storage 判族兼容，M82 顺带加固）。
 - **约束**：http_serve_unix 与 http_serve 同为**编译模式 native**（内部常驻连接线程池；

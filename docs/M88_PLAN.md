@@ -6,7 +6,7 @@
 > 用户指令（2026-09-07）：**「把 A、B、C 全部立项 M88 里面。今天中午（12:00）开工，只需要实现 A 类」**
 > 性质：**L0 runtime（C，GC 线程表 + 服务端并发模型层）**；业务 .px 零改动；native 总数不变
 > 风险等级：**L0**（动 GC/线程模型）→ 必须：自举证明 + 回归总闸 + 并发压测 + 文档同步
-> 状态：🆕 A 类已于 2026-09-07 收口（tag v0.1.0-m88）；**B 类已立项开工：S1+S2 完成（事件驱动内核 + http 接入，见 §七）**；C 类排后
+> 状态：🆕 A 类已于 2026-09-07 收口（tag v0.1.0-m88）；**B 类已收口（tag v0.1.0-m88b）**：S1-S4 完成（事件驱动内核 → http 接入 → SSE 事件化 → 量级压测回归收口，见 §七）；C 类排后
 
 ---
 
@@ -202,7 +202,8 @@
 | B 类立项 | ✅ done | §三 细化 B 方案 + S1-S4 拆分落盘（本文件，2026-09-07）；**不挂 ws-todo**（用户指令"现在立项开工 B 类，不用挂 ws-todo"） |
 | B 类 S1 | ✅ done | 连接上下文表 ConnCtx（fd 索引动态扩容，PX_MAX_CONNS 可配默认 16384）+ FREE/ACTIVE/IDLE 状态机（单持有者）+ 事件循环线程（Linux epoll EPOLLET + 唤醒管道 + 1s tick 扫 15s 空闲超时；非 Linux 降级 stub 零行为变化）+ px_evc_acquire/close/idle_put/idle_pop/px_ev_ensure 接口；commit 3babe04 |
 | B 类 S2 | ✅ done | **http_conn_worker 请求级重构**——空闲 keep-alive 连接交还 IDLE 事件驱动（见下 B 类执行摘要）；commit 3c08bb9 |
-| B 类 S3/S4 | ⏳ pending | SSE 长连接事件循环化 + g_sse_conns 动态化（S3）；压测 + 回归总闸 + 收口 + tag（S4，见 §三） |
+| B 类 S3 | ✅ done | **SSE 长连接事件循环化 + g_sse_conns 动态化**——handler 返回后明文连接交还 IDLE（事件循环照看断开/超时；SSE 空闲不超时）+ 注册表 256→PX_MAX_SSE_CONNS 动态化（默认 4096）+ sse_close/send 统一关闭路径；commit 30cfbfa；验证 bs3 1000 长连接线程恒 10 + m23a/m82/m83_s6 全绿（见下 B 类执行摘要） |
+| B 类 S4 | ✅ done | **收口完成（tag v0.1.0-m88b）**：万级空闲 keep-alive（10000 挂载线程恒 10）+ SSE 1000 长连接 + 短连接吞吐 50000/50000 ≥ A 基线 + 回归总闸全绿 rc=0 + 自举证明 rc=0 + native 301 不变 + 重链 pxi + 文档同步 + CHANGELOG（见下 B 类执行摘要） |
 
 ### A 类执行摘要（2026-09-07 12:00 开工，S1/S2 完成）
 
@@ -214,8 +215,10 @@
 > 立项 commit：M88-PLAN 落盘（qg-issue 27 ISSUE.md 状态 + docs/M88_PLAN.md）
 > S1 commit：c530612；S2 commit 见执行时记录
 
-### B 类执行摘要（2026-09-07 立项开工，S1/S2 完成）
+### B 类执行摘要（2026-09-07 立项开工，S1-S3 完成）
 
 - **S1（commit 3babe04）**：**事件驱动内核**——ConnCtx 连接上下文表（fd 索引 + 动态扩容，容量 `PX_MAX_CONNS` env 可配默认 16384）+ FREE/ACTIVE/IDLE 状态机（单持有者原则：同一 fd 任一时刻只一个持有者，杜绝 worker 与事件循环双读/fd 复用串扰）+ 事件循环线程（Linux **epoll** `EPOLLIN|EPOLLRDHUP|EPOLLET` + 唤醒管道 + 1s tick 扫 15s 空闲超时；非 Linux 自动降级 stub 走原阻塞路径，不破坏 Windows 交叉编译）+ 接口 `px_evc_acquire/px_evc_idle_put/px_evc_idle_pop/px_evc_close/px_ev_ensure`。⚠️ 过程中发现 runtime 已存在 `PxConn` 连接对象体系（`px_conn_close(PxConn*)` 全局函数），新内核统一 `px_evc_` 前缀避开，未动既有 PxConn 体系。S1 未接入 conn_worker → 事件循环不启动、行为零变化（按 PLAN 约定）。验证：px build + hello/fib + m82 http_serve_unix 专项 8 项全 PASS。
 - **S2（commit 3c08bb9）**：**http_conn_worker 请求级重构**（http_serve/http_serve_unix 同 worker 一处改两入口通）——serve 连接 fd 一律非阻塞 + 登记 ConnCtx（FREE→ACTIVE）；请求读改用新增 `px_recv_wait`（poll+recv，语义 = 阻塞 recv + SO_RCVTIMEO 15s，非阻塞下半包/大 body 续读自然达成，无需跨派发存半包）；**响应写完且无下一请求数据在途 → `px_evc_idle_put` 交还 IDLE**（epoll 照看：可读摘除 + 派发回 fserve 池、15s 空闲超时/对端断开由事件循环 tick close），worker 返回释放去取新 job = **空闲 keep-alive 连接不再占线程**；收尾统一 `px_evc_close`（清理 ctx 防 fd 复用串扰）；acquire/idle_put 失败（非 Linux / fd 超 PX_MAX_CONNS）自动降级原阻塞续读路径，功能不降。前置：B-S1 PxConnCtx typedef 加标签（worker 位于内核前需前向声明）、FSERVE_KIND_* 宏 #ifndef 保护。
 - **B-S2 验证实录**（examples/m88b_bs2/ 归档）：`PX_SERVE_WORKERS=8` 下——① 200 空闲 keep-alive 连接首请求 **200/200**（A 类 8 worker 只能同时喂 8 连接，空闲即释放实证）；② 500 空闲连接挂载后服务线程数**恒定 10**（8 fserve + 1 事件循环 + 1 主，不随连接数涨 = 空闲不占 worker 核心指标）；③ 突发（空闲连接复用）**50/50 全 200**（事件循环派发回池正确）；④ 16s 后服务端关闭空闲连接 = **15s 空闲超时语义保留**。回归：m82 http_serve_unix 8 项 PASS、m83_s6 同端口流式 SSE 5 项 PASS（含断连不崩）、A 类短连接压测场景 100×300=30000 全 200 0 err（45.5s）。SSE 长连接（sse_conn_worker）仍在阻塞路径 → B-S3。
+- **S3（commit 30cfbfa）**：**SSE 长连接事件循环化 + 注册表动态化**——① sse_conn_worker handler 返回后，明文连接 `px_evc_acquire`+`px_evc_idle_put` 交还 IDLE（epoll 照看断开/异常 → `sse_server_close_fd` 统一清理），worker 返回释放去取新 job = **SSE 长连接不再占 worker**；TLS / 非 Linux / fd 超限自动降级原阻塞保持路径（功能不降，仅 TLS SSE 仍占 worker，文档注明）。② 服务端 SSE 注册表 g_sse_conns 256 定长 → 动态容量表（env `PX_MAX_SSE_CONNS` 默认 4096 夹取 [64,65536]，首次用惰性一次性分配，无 realloc 竞态）。③ 事件循环按 kind 分流：SSE IDLE 只断开检测（drain 读 + FIN/错误关闭），**SSE 空闲不超时**（tick 空闲超时仅对 http IDLE 生效，keep-alive 15s 语义不受扰）；sse_close IDLE→统一清理、ACTIVE→原 shutdown 唤醒兜底；sse_send 写失败锁外统一清理；新增 `px_evc_detach`（摘除事件循环不 close fd）与 `px_evc_is_idle`。stream_takeover_conn/http_stream 共享动态注册表。**B-S3 验证实录**（examples/m88b_bs3/ 归档）：`PX_SERVE_WORKERS=8` 下 **1000 SSE 长连接全建立+收 3 事件、3s 后 1000/1000 存活（不被 15s tick 误关）、服务线程恒 10、断开 500 重开 500 全成功**；回归 m23a SSE+WS PASS、m82 8 项 PASS、m83_s6 同端口流式 SSE 5 项 PASS。
+- **S4（收口，commit M88-B-S4，tag v0.1.0-m88b）**：**B 类收口验证**——① 万级量级压测（examples/m88b_s4/，PX_SERVE_WORKERS=8）：10000 空闲 keep-alive 同时挂载（首请求+窗口内突发复用均 200，9720/10000，其余为 keep-alive 15s 设计语义超窗关闭）**服务线程恒 10**；② SSE 1000 长连接（m88b_bs3）线程恒 10；③ 短连接吞吐回归 ≥ A 基线：http_serve_unix 100×500=50000/50000 全 200 0 失败0 err 不崩（69.6s）；④ 回归总闸 m82+m83_s1-s6+m84_s1-s3+m85_s1-s2+m86_s0-s2 全部 rc=0（m83_s5/s6 退出码随 af75807 归 0）+ m23a PASS；⑤ 自举证明 rc=0（B.c==golden 10595 行）+ native 301 不变（B 类五提交零触碰 px_native 注册面）+ fmt/lint 0 + worktree 干净；⑥ 全能力重链 bootstrap/pxi（9462024→9467264B，strings 含 PX_MAX_CONNS/PX_MAX_SSE_CONNS/PX_SERVE_WORKERS 实证 + pxi 冒烟 rc=0）；⑦ 文档同步（spec §8.22 连接语义→池化+事件驱动、CHEATSHEET、M88_PLAN）。tag v0.1.0-m88b。

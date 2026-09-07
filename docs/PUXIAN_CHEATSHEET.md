@@ -8,7 +8,7 @@
 > M88（2026-09-07，qg-issue 27）：**服务端并发止血** —— http_serve/http_serve_unix/sse_serve accept
 > 不再每连接 spawn，接入**常驻连接池**（队满阻塞背压，服务进程不因连接数/spawn 槽满退出）；GC 线程槽
 > 固定 64 → 动态上限。env `PX_SERVE_WORKERS`（池容量，默认 256，夹取 [8,4095]）/ `PX_MAX_THREADS`
-> （spawn 线程上限，默认 1024，夹取 [64,4096]）。并发 100×500 压测全 200、0 失败、进程不崩。
+> （spawn 线程上限，默认 1024，夹取 [64,4096]）。并发 100×500 压测全 200、0 失败、进程不崩。B 档（M88-B）起**空闲连接事件驱动**（Linux epoll）：http keep-alive / SSE 长连接 handler 返回后交还 IDLE 由事件循环照看，**空闲连接不占 worker**（池 8 挂 1 万 idle keep-alive / 1000 SSE 线程恒 10；SSE 空闲不超时，keep-alive 15s 超时语义保留）。env 追加 `PX_MAX_CONNS`（ConnCtx 连接登记上限，默认 16384，夹取 [1024,131072]）/ `PX_MAX_SSE_CONNS`（服务端 SSE 注册表容量，默认 4096，夹取 [64,65536]）。
 
 ---
 
