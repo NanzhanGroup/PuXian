@@ -1,0 +1,32 @@
+# M89-S3-A1 bc1.px —— 发射器 A1 子集冒烟
+# 覆盖：K 池（IMM 小整 / LOADK 大整·float·str·bool·null·str 去重）、
+#       G 池（顶层 const/var + 顶层赋值）、参数/局部槽、RET/RET0、
+#       if 分支（JMPF 回填）、while 循环（JMPF/JMP 回填）。
+const GREETING = "hi"
+var counter = 0
+var big = 100000
+var pi = 3.5
+var enabled = true
+var missing = null
+var again = "hi"
+
+def greet():
+    return GREETING
+
+def double(x):
+    var y = x
+    return y
+
+def classify(n):
+    if n:
+        return 100
+    return -1
+
+def countdown(start):
+    var acc = 0
+    while start:
+        acc = acc
+        start = 0
+    return acc
+
+counter = 42

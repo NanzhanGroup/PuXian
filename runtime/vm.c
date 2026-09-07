@@ -1,10 +1,13 @@
 // 普贤 (PuXian) C 运行时库 — vm.c
-// M89-S3-A0: 显式帧 + 平坦字节码 VM 骨架
+// M89-S3-A0/A1: 显式帧 + 平坦字节码 VM
 // ------------------------------------------------------------
-// 本文件 = S3-A A0 交付：PxVmState/PxFrame/PxVMFunc 生命周期 + px_vm_entry
-// trampoline（D2，px_call 零改动兼容）+ 指令分发循环骨架。
-// 已实现最小指令子集（自证解释循环可跑）：LOADK IMM MOV SRCLINE JMP JMPT
-// JMPF RET RET0 HALT；其余 op 分发默认 px_error "指令未实现"（A1 起逐批）。
+// 本文件 = S3-A A0 交付（PxVmState/PxFrame/PxVMFunc 生命周期 + px_vm_entry
+// trampoline（D2，px_call 零改动兼容）+ 指令分发循环骨架）后，A1 扩展：
+//   - GETG/SETG 执行（v1 经 px_get_global/px_set_global，D8 无锁化后置）
+//   - px_vm_run_module 完整 Top 运行（注册全局函数 D2 trampoline + 跑 Top bc；
+//     main() 调用约定随 S3-B CALL 接入）
+// 已实现指令子集：LOADK IMM MOV GETG SETG SRCLINE JMP JMPT JMPF RET RET0 HALT；
+// 其余 op 分发默认 px_error "指令未实现"（A2 起逐批）。
 //
 // 执行模型：
 //   px_vm_run_func 在 st 上 push 帧（slots 数组）→ 循环取指分发 →
@@ -162,6 +165,26 @@ LXValue px_vm_run_func(PxVmState* st, const PxVMFunc* f, LXValue* args, int narg
         case PXOP_MOV:
             fr->slots[in.a] = fr->slots[in.b];
             break;
+        case PXOP_GETG: {
+            // A1：v1 经 px_get_global（D8 无锁化后置）；b=G idx
+            const PxBCModule* m = cf->mod;
+            if (!m || in.b >= (uint16_t)m->nG) {
+                px_error("VM %s:%d GETG 全局越界 g=%d (nG=%d)",
+                         cf->name, fr->line, in.b, m ? m->nG : -1);
+            }
+            fr->slots[in.a] = px_get_global(m->G[in.b]);
+            break;
+        }
+        case PXOP_SETG: {
+            // A1：v1 经 px_set_global；a=G idx，b=src 槽
+            const PxBCModule* m = cf->mod;
+            if (!m || in.a >= (uint16_t)m->nG) {
+                px_error("VM %s:%d SETG 全局越界 g=%d (nG=%d)",
+                         cf->name, fr->line, in.a, m ? m->nG : -1);
+            }
+            px_set_global(m->G[in.a], fr->slots[in.b]);
+            break;
+        }
         case PXOP_LOADK: {
             const PxBCModule* m = cf->mod;
             if (!m || in.b >= (uint16_t)m->nK) {
@@ -197,15 +220,21 @@ LXValue px_vm_entry(LXValue* args, int nargs, void* ctx) {
     return px_vm_run_func(px_vm_state(), f, args, nargs);
 }
 
-// ---- 运行模块顶层（A1+：注册全局 + Top bc + main 调用）----
+// ---- 运行模块顶层（A1：注册全局函数 + Top bc；main() 调用约定随 S3-B CALL 接入）----
 LXValue px_vm_run_module(PxVmState* st, const PxBCModule* m) {
     if (!m) return px_null();
     if (m->top_idx < 0 || m->top_idx >= m->nfuncs) {
         px_error("VM 模块 %s 无 Top 函数", m->name ? m->name : "?");
         return px_null();
     }
-    // A0：仅骨架占位 —— Top bc 的运行（全局注册/args/main 调用约定）随
-    // A1 发射器首个 BCModule 落地。此处直接跑 Top 函数（参数 0）。
-    const PxVMFunc* top = &m->funcs[m->top_idx];
-    return px_vm_run_func(st, top, NULL, 0);
+    // 注册全局函数（除 Top）：统一 px_func(name, px_vm_entry, &funcs[i])（D2 trampoline）
+    // —— 与 codegen main() 里 px_set_global 注册等价；此后 px_get_global("fname") 可调用
+    int i = 0;
+    for (i = 0; i < m->nfuncs; i++) {
+        if (i == m->top_idx) continue;
+        const PxVMFunc* f = &m->funcs[i];
+        px_set_global(f->name, px_func(f->name, px_vm_entry, (void*)f));
+    }
+    // 跑顶层 bc（Top：声明/赋值 + S3-B 起 main() 调用约定）
+    return px_vm_run_func(st, &m->funcs[m->top_idx], NULL, 0);
 }

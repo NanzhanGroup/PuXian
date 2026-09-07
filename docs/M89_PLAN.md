@@ -126,3 +126,31 @@
 > - 回归：hello_a0（while 求和）px build + px run 双轨一致（sum=10，rc=0），仓库可编译、工作区干净。
 > - 下一步：A1 常量/名字/槽编号 —— 发射器 K/N/G/Func 收集 + LOADK/IMM/MOV/GETG/SETG/SRCLINE/RET/RET0/HALT
 >   全指令接线（compiler.px `bc` 子命令 + golden 再生成）。
+
+### S3-A · A1 常量/名字/槽编号（发射器首个真实切片）
+> 完成（2026-09-08）：**发射器 K/N/G/Func 收集 + A1 指令集全接线 + vm GETG/SETG/Top 运行**。
+> - **selfhost/bc_emit.px**（A0 骨架 → 首个真实发射切片）：K 池按值去重（int/float/str/bool/null）、
+>   G 池全局名（源码序对齐 cg_generate）、N 池预留；**函数级槽分配对齐 _v 体系**（参数 0..arity-1 +
+>   hoist 局部预占 —— 帧槽 calloc 零=PX_NULL 免初始化指令（M62-L5 对齐）—— + 临时单调分配，A1 不回收）；
+>   语句/表达式 A1 子集接线：VarDecl/Assign(Var)/Return/ExprStmt/If/While/Empty + Int/Float/Str/Bool/
+>   Null/Var + Unary 负字面量折叠 → LOADK/IMM/MOV/GETG/SETG/SRCLINE/RET/RET0/HALT，if/while 用
+>   JMPF/JMP 相对跳转回填（off 相对下一条）；顶层=合成 top 函数（HALT）、顶层 VarDecl/Assign=SETG、
+>   函数内 VarDecl=局部槽遮蔽同名全局、Assign 未声明名=hoist/全局（逐条对齐 codegen 语义）；
+>   不支持 tag panic「未实现」（A2+ 逐批）；bc_dump_module 文本 dump。
+> - **验证**：cases_bc/bc1.px → bc1.dump（golden，83 行）核对全对 —— K 去重（"hi" 双引用仅 1 条、
+>   int16 内走 IMM 不进 K）、G 源码序 11 项、greet/double/classify/countdown 槽号/跳转 off/IMM -1
+>   负常量折叠、top 全 SETG 链路 + HALT 逐条与手推一致。
+> - **runtime/vm.c + vm.h**（A1 扩展）：GETG/SETG 执行（v1 经 px_get_global/px_set_global，D8
+>   无锁化后置）；px_vm_run_module 完整 Top 运行（注册非 top 函数 px_func(name,px_vm_entry,
+>   &funcs[i]) D2 trampoline + 跑 Top bc）。自测 examples/m89_a1/vm_selftest.c + vm_selftest_run.sh：
+>   手写 PxBCModule 冒烟 **ALL PASS** —— Top SETG answer=42 后 px_get_global 可取 42；
+>   px_call(read) 经 GETG 返回 42（函数注册+trampoline 通）；外部 px_set_global(7) 后 GETG v1 读到 7。
+> - **工程决策（偏离 A0 预排，记录）**：新增 **bc_cli.px 独立验证壳**（import codegen.px+bc_emit.px、
+>   主文件声明全套全局，main=lex/parse/resolve→emit→dump）。`compiler.px bc` 子命令 + golden 再生成
+>   **推迟**到首个可运行字节码闭环（A2/A3 算术/CALL 接入时）——避免 codegen 全链重编（~6 min/次，
+>   pxc M72 解释 codegen 生态）烧 2 次；届时 bc_emit 并入 compiler.px 随自举 golden 同批。vm.c 仍
+>   未入 rt_src_files（同上时机，一次重建 rt 缓存）。bc_cli 编译：bootstrap/pxc build → C 存
+>   selfhost/build/bc_cli.c → gcc 链接 rtcache 全 .o（build/ gitignore 不入库）。
+> - 回归：compiler.px/import 链零触碰（自举证明不受影响）；vm.c 独立编译零告警；仓库可编译。
+> - 下一步：A2 算术/比较（PXOP_NEG..PXOP_GE 批 + 发射器 Binary/Unary 映射 cg_binop_cname +
+>   首个可计算程序端到端跑通 → compiler.px bc 接入/rt 缓存重建同批）。
