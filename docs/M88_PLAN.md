@@ -153,9 +153,17 @@
 | 项 | 状态 | 说明 |
 |---|---|---|
 | 立项 | ✅ done | docs/M88_PLAN.md 落盘（本文件）；qg-issue 27 状态更新；ws-todo **#14**（2026-09-07 12:00）已入，中午触发开工 |
-| A 类 S1 | ⏳ 今日 12:00 开工 | GC 线程槽动态化 + PX_MAX_THREADS 可配（18 处遍历 + 扩容 + env） |
-| A 类 S2 | ⏳ | http_serve/http_serve_unix/sse_serve 接入连接线程池（案甲/案乙定稿后实施） |
-| A 类 S3 | ⏳ | 压测（examples/m88_s3）+ 回归总闸 + 文档 + 收口 |
+| A 类 S1 | ✅ done | GC 线程槽动态化 + PX_MAX_THREADS 可配（固定 64 槽 → 按上限一次分配稳定表，无 realloc）；commit c530612；验证 s1_spawn_200（200 并发 spawn 全过）+ s1b_gc_stress（200 线程并发 GC 稳定） |
+| A 类 S2 | ✅ done | 函数式 serve 连接池（http_serve/unix/sse_serve accept → fserve 池，队列背压绝不 exit）+ SIGPIPE 忽略 + bi_sleep EINTR 续睡（三处根因修复，见下执行摘要）；回归 m82 verify + m23a SSE+WS + s1 全绿 |
+| A 类 S3 | ⏳ 部分 | 压测脚本已归档 examples/m88_s3/；实测基线见下；全量回归总闸（重链+自举证明）留收口批次 |
 | 远景路线裁定 | ✅ done | §四·A 落盘（VM 化=总钥匙；native 后端排最后；Windows 排 native 后；单线程子集可应急） |
 
+### A 类执行摘要（2026-09-07 12:00 开工，S1/S2 完成）
+
+- **S1（commit c530612）**：`g_threads` 固定 64 槽 → `g_thread_cap/g_thread_max` 动态表（gc_init_env 按 PX_MAX_THREADS 上限一次分配，指针恒定无 realloc 竞态）；17 处遍历 + 3 处报错改动态；env `PX_MAX_THREADS`（默认 1024，夹取 [64,4096]）。**验证**：200 并发 spawn 全过（旧 64 崩）；`PX_MAX_THREADS=64` 时 200 spawn 正确报"超出上限 64"；200 线程×300 对象+强制 GC 冒烟稳定。
+- **S2（待 commit）**：① **函数式 serve 连接池**——http_serve/http_serve_unix/sse_serve 的 accept 循环从"每连接 px_spawn"改为投递 `fserve` 常驻池（accept 只 push (fd,kind)，worker 按 kind 调 http_conn_worker/sse_conn_worker，处理语义逐字节不变；队满阻塞背压，**服务进程永不因 spawn/槽满 exit**）；env `PX_SERVE_WORKERS`（默认 256，夹取 [8,4095]）。② **SIGPIPE 忽略**（gc_install_handler）——http_conn_worker 裸 send 到已断开连接触发 SIGPIPE 默认杀进程（无 core 无日志的"悄然消失"）。③ **bi_sleep EINTR 续睡**——nanosleep 不在 SA_RESTART 自动重启清单，主线程 sleep(长) 被 GC 信号打断提前返回 → main 结束进程静默退出；对齐 timer_sleep_ms/sleep_us 续睡模式。
+- **压测实测基线**（examples/m88_s3/s2_serve_unix.px + press_unix.go，本机）：并发 100×500（5 万请求）**全 200、0 失败、进程不崩**（~63s）；30/60×500 全 200。m82 http_serve_unix 专项 verify 全 PASS（残留 sock 清理/0600/断连容忍/TCP 双跑）；m23a SSE+WS 全 PASS（sse_serve 池化后 SSE 功能零回归）。
+- **已知架构边界（A 类不重构，B 类及后续根治）**：M11 容器修改（px_dict_set/px_list_push 等）与 GC 经全局 `g_gc_mu` 互斥 → 高并发（≥256 keep-alive 活跃连接）下锁竞争使总吞吐饱和 ~1k req/s，表现为请求超时而非崩溃；且池 worker 常驻注册使 GC stop-the-world 暂停线程数 = 池容量。**A 类已根除 issue 27 的"并发即崩溃/exit"**；海量 keep-alive 空闲连接吞吐需 B 类 poll 事件驱动 + 容器锁细化（可并入后续里程碑，不与 A 混 commit）。
+
 > 立项 commit：M88-PLAN 落盘（qg-issue 27 ISSUE.md 状态 + docs/M88_PLAN.md）
+> S1 commit：c530612；S2 commit 见执行时记录

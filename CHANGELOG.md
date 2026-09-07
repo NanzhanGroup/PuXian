@@ -6,6 +6,28 @@
 
 ## [Unreleased]
 
+### M88-A 立项 · runtime 并发模型演进 A/B/C（qg-issue 27）
+
+> 立项（2026-09-07）：qg-issue 27（清歌 ws-approve .px 化 #47 压测/线上事故：http_serve_unix 高并发崩溃）
+> → runtime `px_spawn` 受 GC 线程表固定 64 槽限制，槽满 `px_error`→`exit(1)`；http_serve/sse_serve
+> accept 每连接 spawn → 64 并发即崩。M88 = A（线程池止血，已开工）→ B（事件驱动）→ C（用户态协程 M:N）
+> 三档完整演进。规划见 docs/M88_PLAN.md。
+
+### M88-S1 · GC 线程槽动态化（qg-issue 27）
+
+> 完成（2026-09-07，commit c530612）：GC 线程表固定 64 槽 → 动态容量（env `PX_MAX_THREADS`，默认 1024，
+> 夹取 [64,4096]），gc_init_env 一次性按上限分配稳定表（无 realloc 指针移动，规避信号处理器/GC 遍历竞态）。
+> 17 处遍历/3 处报错文案改动态。验证：200 并发 spawn 全过（旧 64 崩）、200 线程并发 GC 冒烟稳定。
+
+### M88-S2 · 函数式 serve 连接线程池 + 服务端健壮性三修复（qg-issue 27）
+
+> 完成（2026-09-07）：http_serve/http_serve_unix/sse_serve accept 从"每连接 px_spawn"改为投递
+> **函数式 serve 常驻连接池**（fserve：accept → (fd,kind) 环形队列，worker 调 http_conn_worker/sse_conn_worker；
+> 队满阻塞背压，**服务进程永不因 spawn/槽满 exit**）。env `PX_SERVE_WORKERS`（默认 256）。
+> 附带修复两个"进程悄然消失"根因：① 忽略 SIGPIPE（http_conn_worker 裸 send 到已断开连接默认杀进程）；
+> ② bi_sleep EINTR 续睡（nanosleep 不在 SA_RESTART 清单，主线程 sleep 被 GC 信号打断提前返回 → main 结束）。
+> 回归：m82 http_serve_unix 专项 + m23a SSE+WS + 并发压测（100×500 全 200 0 失败，进程不崩）。
+
 ### px --version 对齐 go/python 单版本号 + 发布号 VERSION（补丁 · 不占里程碑号 · 随下次发版携带）
 
 > 完成（2026-09-06，commit 39e01bb，小改动不立项不单独发版）：`px --version` 从 `px 0.1.0 (普贤 PuXian · selfhosted M-B9a)` 简化为**单版本号一行**（对齐 go `go1.26.6 linux/amd64` / python `3.9.25` 心智，应 m86 发版后用户追问简化）。
