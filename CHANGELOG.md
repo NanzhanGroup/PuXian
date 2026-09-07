@@ -6,6 +6,26 @@
 
 ## [Unreleased]
 
+### M89 立项 + S0 · 版本升格 0.1.0 → 0.2.0（docs/M89_PLAN.md · VM 化旗舰里程碑启动）
+
+> 完成（2026-09-07）：**M89 立项**（VM 化 = AST/C 递归 → 显式帧 + 平坦字节码 VM，
+> 总钥匙；S0 版本升格 → S1 VM 详勘预研 → S2 设计 → S3 实现 → S4 收口）。**版本号 0.1.0 → 0.2.0**：
+> 0.1.0 自 M62 沿用至 M88b，已覆盖「Rust 退役 + 全自举工具链 + 并发 64 → 1 万+ 连接事件驱动」巨变，
+> 严重低配；升 0.2.0 而非 1.0.0（pre-1.0 语义化版本演进，1.0.0 留给 VM 化落地、语义冻结之后）。
+> - 落地：tools/px SELFHOST_VER / compiler.px PXC_VER / interp.px PXI_VER / pxmcp.px / pxfmt.px /
+>   runtime/runtime.c server dict → 0.2.0；golden/compiler.c 重链同步（10596 行）；**bootstrap/pxi 重链
+>   0.2.0**（HEAD pxc 编 interp.px + 全 runtime；pxi --version = 0.2.0，hello 冒烟 rc=0）；
+>   命令入口 px/pxc/pxi --version 均 0.2.0；px build 全链路冒烟 rc=0。
+> - 验证：**自举证明 rc=0**（B.c==golden/compiler.c 10595 行 norm 逐字节）；回归 m82 http_serve_unix
+>   8 项全 PASS；fmt/lint 干净。
+> - ⚠️ 发现并记录：**bootstrap/pxc 二进制内部保持 f77732f(M72) runtime 未重链**——用当前(M88) runtime
+>   重链 pxc 后，pxc 编 interp.px 确定性崩（"字符串索引越界: 0"，--full 全模块与自动裁剪版均复现；
+>   pxc 编 compiler.px 正常、pxi(M88 runtime) 正常）→ 疑 M88 runtime 某改动与 compiler codegen 组合存在
+>   潜在 bug，**单独立项排查**（不阻塞：用户编译路径 tools/px → bootstrap/pxc 为 f77732f-runtime 稳定版）。
+>   故 pxc 二进制 --version 内部显示 0.1.0（自举编译器滞后一代）。
+> - tag 基线进入 v0.2.0 时代（M89 收口打 v0.2.0-m89）。qg-issue 27 的 B 档已闭环；C 类协程按 §四·A
+>   顺序（VM 化 → 协程）随 M89 详勘推进。
+
 ### M88-B-S4 · 收口：事件驱动量级压测 + 回归总闸 + tag v0.1.0-m88b（qg-issue 27 B 类）
 
 > 完成（2026-09-07，commit M88-B-S4）：**B 类（事件驱动半同步/半异步）收口**。

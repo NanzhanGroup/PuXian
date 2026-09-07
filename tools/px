@@ -60,7 +60,7 @@ PXLSP_BIN="$PXC_HOME/bootstrap/pxlsp"   # pxlsp 编译版（px lsp 用，M65-S2�
 PXCHECK_BIN="$PXC_HOME/bootstrap/pxcheck" # pxcheck 诊断器（pxlsp 子进程，M65-S2）
 PXMCP_BIN="$PXC_HOME/bootstrap/pxmcp"   # pxmcp 编译版（px mcp 用，M65-S4）
 RT_DIR="$PXC_HOME/runtime"
-SELFHOST_VER="0.1.0"
+SELFHOST_VER="0.2.0"
 SELFHOST_MILESTONE="M-B9a"   # 自举内核血统标识（M87 起用户可见版本=RELEASE_VER，此标识留内部诊断用）
 
 # 用户可见版本号（M87：对齐 go/python 单版本号心智，一行、无括号长文案）。

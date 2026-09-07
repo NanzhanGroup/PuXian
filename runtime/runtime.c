@@ -12842,7 +12842,7 @@ static void px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
         px_dict_set(server, "port", px_int(port));
         px_dict_set(server, "docroot", px_str(docroot));
         px_dict_set(server, "script", px_str(fpath));
-        px_dict_set(server, "px", px_str("0.1.0"));
+        px_dict_set(server, "px", px_str("0.2.0"));
         LXValue env = px_dict();
         px_dict_set(env, "REQUEST", req);
         px_dict_set(env, "GET", get);
@@ -14177,7 +14177,7 @@ static LXValue bi_px_exec(LXValue* args, int nargs, void* ctx) {
         px_dict_set(env, "GET", px_dict());
         px_dict_set(env, "POST", px_dict());
         LXValue srv = px_dict();
-        px_dict_set(srv, "px", px_str("0.1.0"));
+        px_dict_set(srv, "px", px_str("0.2.0"));
         px_dict_set(env, "SERVER", srv);
         if (params.type == PX_DICT) {
             LXObject* o = params.as.obj;

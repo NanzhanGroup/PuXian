@@ -10576,7 +10576,7 @@ int main(int argc, char** argv) {
     px_srcline(44);
     px_set_global("loaded", ({ LXValue _d = px_dict(); { LXValue _k = px_str("_"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_int(0LL)); } _d; }));
     px_srcline(46);
-    px_set_global("PXC_VER", px_str("0.1.0"));
+    px_set_global("PXC_VER", px_str("0.2.0"));
     px_srcline(47);
     px_set_global("PXC_MS", px_str("M-B9a"));
     { LXValue _r = fn_main(NULL, 0, NULL); int _code = 0;
