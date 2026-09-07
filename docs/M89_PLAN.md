@@ -96,3 +96,18 @@
 > 约 20+ 处，估 ≤60 处改造）；保守扫描假存活 + slab 页不还 OS = issue28 堆只涨不落代码级证据。
 > ⑤ 工期钉周级：P50 ≈ 10–11 周、P90 16 周封顶（S3 分 A 骨架/B 全构造/C 自举收敛/D 精确 GC 四段可横向分包）。
 > ⑥ issue28 分界：先立 issue28 B1/B2 止血批次（3–5 天，保守 GC 内触发策略+slab 归还，不依赖 VM），再进 S2 设计。
+
+### S2 · VM 设计定稿 + 实现拆分
+> 完成（2026-09-08）：产出 **docs/M89_vm_design.md**。核心定稿：
+> ① 架构：发射器=PuXian 自举（selfhost/bc_emit.px，AST→BCModule），执行器=C（runtime/vm.c），
+>   与现 codegen/pxi 共享同一 parser/AST；双轨收敛到「同一 AST→同一 BC→同一 VM」。
+> ② 关键决策 D1–D8：统一函数对象（PX_FUNC.fn=px_vm_entry trampoline，ctx=PxVMFunc*，px_call/px_method/
+>   px_spawn 零改动兼容旧 C 产物）；显式帧栈（px→px 不回 C 递归，帧=槽数组，深递归安全）；
+>   8B 定长寄存器式 3-地址指令集（~45 op spec 定稿）；全局访问=固定槽数组无锁读（issue28 GIL 根治）；
+>   错误传播 = TRY 就地解包/Err 即 RET（映射现 err_tag，帧无需 err 字段）；
+>   短路 and/or/?? = JMPT/JMPF 分支（返回操作数值，Python 语义）；
+>   闭包=真词法捕获 upvalue cell（补编译轨缺口、对齐 spec §6.2，分 P1 无捕获/P2 cell 两期）；
+>   方法调用 v1 保 px_method 桥语义、S3-C 静态化优化；精确 GC 根=帧槽+全局槽+原生桥暂存根（≤60 处）。
+> ③ S3 拆 A 骨架（2 周）/B 全构造（2 周）/C 自举收敛（2 周）/D 精确 GC（2 周）四级微步清单，
+>   含 A/B 对拍 harness（vm_ab.sh：三实现两两对拍）、自举证明切 BC 镜像、issue28 验收门。
+> ④ 下一步：S3-A 开工（A0 vm.c/bc_emit.px 骨架 → A1 常量/名字/槽 → ... 逐微步，每步编译+verify）。
