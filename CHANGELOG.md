@@ -6,6 +6,25 @@
 
 ## [Unreleased]
 
+### M89-S3-B1 · VM 化：容器/字段/方法桥/For 迭代（S3-B 首切）
+
+> 完成（2026-09-08）：VM 化旗舰（M89）进入 **S3-B 全构造段**，B1 落地。
+> - **runtime/vm.c**：C 表容器/字段 op 全接线 —— NEWLIST/NEWTUPLE/NEWDICT（自连续槽拷贝建容器，
+>   dict 仅字符串键入池对齐 codegen）、INDEX/SETIDX/SLICE、GETF/SETF/GETF_OPT（px_field/
+>   px_field_set；dict 字段 = px_field→dict_get）、CALLM 方法桥（px_method：a=dst,b=obj,c=N 名,
+>   fl=argc，实参=槽 b+1..）。NEWSTRUCT/NEWENUM 待 B2 类型元数据表。
+> - **selfhost/bc_emit.px**：① 指令升 5 元组 [op,fl,a,b,c]（fl 预留，CALLM 存 argc；dump/C 输出
+>   跳过 fl → bc1-6 golden 文本不变实测回归一致）；② 表达式 List/Tuple/Dict 字面量 → NEWLIST/
+>   NEWTUPLE/NEWDICT、Index→INDEX、Slice→SLICE、Field→GETF、OptionalField→GETF_OPT、方法调用
+>   obj.m(args)（callee Field）→ CALLM；③ Assign 目标扩 Var/Index/Field + 复合赋值 + `a <- rhs`
+>   Append；④ For 迭代展开（对齐 cg：CALL len → 计数器 → INDEX 取元素 → body → 计数+1；
+>   break/continue ctx 回填）；⑤ hoist 补 For 循环变量。enum/const enum 折叠、struct 构造 → B2。
+> - **验证**：bc7.px+dump golden（容器字面量/索引读写/切片/dict 字段/CALLM 方法/For 迭代/复合赋值）
+>   13 断言全 PASS；**m89_b1_parity.px 容器双轨对拍（VM=旧 C codegen）stdout 逐字节一致**；
+>   bc1-6 dump golden 不变 + bc2-6 verify + hello 三轨复跑全绿。
+> - 记录：bc_run.sh 自动探测 rtcache 改按 mtime 最新（避免命中 vm.c 改动前旧 vm.o）；VM 帧槽尚未入
+>   GC 根面（A/B 测试规模安全，S3-D 段切精确根）；bc_emit 暂不做 M41.2 等静态语义校验（compiler 侧负责）。
+
 ### M89-S3-A1 · VM 化实现启动：发射器首个真实切片 + VM GETG/SETG/Top 运行
 
 > 完成（2026-09-08）：VM 化旗舰（M89）进入 **S3-A 实码阶段**，A1 落地

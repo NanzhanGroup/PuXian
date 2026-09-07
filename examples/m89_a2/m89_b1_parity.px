@@ -1,0 +1,23 @@
+# M89-S3-B1 parity —— 容器/方法/For 双轨 stdout 对拍（VM vs 旧 C codegen）
+def total(xs):
+    var t = 0
+    for v in xs:
+        t += v
+    return t
+
+def main():
+    let xs = [1, 2, 3, 4]
+    xs[1] = 99
+    xs.push(5)
+    let d = {"a": 1}
+    d["b"] = 2
+    let s = "hi".to_upper()
+    print("total=" + str(total(xs)))
+    print("x1=" + str(xs[1]))
+    print("sl=" + str(xs[1:3]))
+    print("sl0=" + str(xs[1:3][0]))
+    print("da=" + str(d.a))
+    print("db=" + str(d["b"]))
+    print("s=" + s)
+    print("len=" + str(len(xs)))
+    return 0

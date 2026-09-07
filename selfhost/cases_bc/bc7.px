@@ -1,0 +1,40 @@
+# M89-S3-B1 bc7.px —— 容器/字段/方法桥/For 迭代冒烟
+# 覆盖（B1 首切）：
+#   List/Tuple/Dict 字面量 → NEWLIST/NEWTUPLE/NEWDICT
+#   Index 读 obj[i] / 写 obj[i]=v（SETIDX）、Slice obj[a:b]、str 索引
+#   Field 读 obj.name（GETF，dict 字段 = px_field→dict_get）、dict 复合索引赋值
+#   方法调用桥 obj.method(args) → CALLM（list.push、str.to_upper）
+#   For 迭代 for v in xs（INDEX + len/比较 + break/continue ctx）
+#   def 内局部复合赋值 t = t + v
+# 验证：emit-c 跑 Top 后 PX_BC_DUMP 全局断言（shell bc7_verify.sh）。
+def sum_list(xs):
+    var t = 0
+    for v in xs:
+        t += v
+    return t
+
+var xs = [1, 2, 3, 4]
+var tup = (7, "a", 2.5)
+var d = {"k": 1, "j": 2}
+var x0 = xs[0]          # 1
+xs[1] = 99
+var x1 = xs[1]          # 99
+var sl = xs[1:3]        # [99, 3]
+var sl0 = sl[0]         # 99
+var sln = len(sl)       # 2
+xs.push(5)              # 方法桥 CALLM（list.push）
+var total = sum_list(xs)    # 1+99+3+4+5 = 112
+var up = "hi".to_upper()    # 方法桥 CALLM（str.to_upper）→ "HI"
+var c1 = "abc"[1]           # str 索引 → "b"
+d["k"] = 42                 # SETIDX dict
+var dk = d.k                # GETF dict 字段 → 42
+d["j"] = d["j"] + 1         # dict 复合索引赋值 → 3
+var dj = d.j                # → 3
+var keys_n = 0
+for k in d:
+    keys_n += 1     # For 迭代 dict（len=2）+ 局部复合 +=
+var gacc = 10
+gacc += 5           # 全局复合赋值（GETG→ADD→SETG）
+var out_total = total
+var out_ok = x0 == 1 and x1 == 99 and sl0 == 99 and sln == 2 and total == 112
+var out_ok2 = up == "HI" and c1 == "b" and dk == 42 and dj == 3 and keys_n == 2 and gacc == 15

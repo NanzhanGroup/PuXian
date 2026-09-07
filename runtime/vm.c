@@ -276,6 +276,106 @@ LXValue px_vm_run_func(PxVmState* st, const PxVMFunc* f, LXValue* args, int narg
         case PXOP_SHR:    fr->slots[in.a] = px_shr(fr->slots[in.b], fr->slots[in.c]); break;
         case PXOP_SHRU:   fr->slots[in.a] = px_ushr(fr->slots[in.b], fr->slots[in.c]); break;
 
+        // ---- C 表：容器 / 字段（S3-B B1；语义=调现 px_* C 函数，错误由 px_* 保证）----
+        // NEWLIST/NEWTUPLE：a=dst，b=连续槽基址，c=n；自 槽 b..b+n-1 拷贝建容器
+        case PXOP_NEWLIST: {
+            int n = (int)in.c;
+            int cap = 0;
+            LXValue* tmp2 = NULL;
+            if (n > 0 && (int)in.b + n <= fr->nslots) cap = n;
+            else if (n > 0) cap = fr->nslots - (int)in.b;
+            if (cap > 0) {
+                tmp2 = (LXValue*)malloc((size_t)cap * sizeof(LXValue));
+                for (int i = 0; i < cap; i++) tmp2[i] = fr->slots[in.b + i];
+                fr->slots[in.a] = px_list_n(tmp2, cap);
+                free(tmp2);
+            } else fr->slots[in.a] = px_list_n(NULL, 0);
+            break;
+        }
+        case PXOP_NEWTUPLE: {
+            int n = (int)in.c;
+            int cap = 0;
+            LXValue* tmp2 = NULL;
+            if (n > 0 && (int)in.b + n <= fr->nslots) cap = n;
+            else if (n > 0) cap = fr->nslots - (int)in.b;
+            if (cap > 0) {
+                tmp2 = (LXValue*)malloc((size_t)cap * sizeof(LXValue));
+                for (int i = 0; i < cap; i++) tmp2[i] = fr->slots[in.b + i];
+                fr->slots[in.a] = px_tuple(tmp2, cap);
+                free(tmp2);
+            } else fr->slots[in.a] = px_tuple(NULL, 0);
+            break;
+        }
+        // NEWDICT：a=dst，b=连续槽基址，c=项数 n（槽 b..b+2n-1 为 k0,v0,k1,v1..）；
+        //   仅字符串键入 dict（对齐 codegen：if (_k.type == PX_STR) px_dict_set）
+        case PXOP_NEWDICT: {
+            LXValue d = px_dict();
+            int n = (int)in.c;
+            for (int i = 0; i < n; i++) {
+                int k0 = (int)in.b + 2 * i;
+                if (k0 + 1 < fr->nslots && fr->slots[k0].type == PX_STR)
+                    px_dict_set(d, fr->slots[k0].as.obj->as.str.data, fr->slots[k0 + 1]);
+            }
+            fr->slots[in.a] = d;
+            break;
+        }
+        case PXOP_LISTPUSH:  // a=val 槽，b=list 槽（值入列表尾）
+            px_list_push(fr->slots[in.b], fr->slots[in.a]);
+            break;
+        case PXOP_INDEX:     // a=dst，b=obj，c=idx
+            fr->slots[in.a] = px_index(fr->slots[in.b], fr->slots[in.c]);
+            break;
+        case PXOP_SETIDX:    // a=val 槽，b=obj，c=idx（赋值表达式结果=val）
+            px_index_set(fr->slots[in.b], fr->slots[in.c], fr->slots[in.a]);
+            break;
+        case PXOP_SLICE:     // a=dst，b=obj，c=3 连续槽基址[start,end,step]
+            if ((int)in.c + 2 < fr->nslots)
+                fr->slots[in.a] = px_slice(fr->slots[in.b], fr->slots[in.c],
+                                           fr->slots[in.c + 1], fr->slots[in.c + 2]);
+            else px_error("VM %s:%d SLICE 槽越界 base=%d", cf->name, fr->line, in.c);
+            break;
+        case PXOP_GETF:      // a=dst，b=obj，c=N 名字 idx（px_field）
+            if (cf->mod && in.c < cf->mod->nN)
+                fr->slots[in.a] = px_field(fr->slots[in.b], cf->mod->N[in.c]);
+            else px_error("VM %s:%d GETF 名字越界 n=%d", cf->name, fr->line, in.c);
+            break;
+        case PXOP_GETF_OPT: { // OptionalField：obj null→null，否则 px_field
+            LXValue o = fr->slots[in.b];
+            if (cf->mod && in.c < cf->mod->nN)
+                fr->slots[in.a] = px_is_null(o) ? px_null()
+                                                : px_field(o, cf->mod->N[in.c]);
+            else px_error("VM %s:%d GETF_OPT 名字越界 n=%d", cf->name, fr->line, in.c);
+            break;
+        }
+        case PXOP_SETF:      // a=val 槽，b=obj，c=N 名字 idx（px_field_set）
+            if (cf->mod && in.c < cf->mod->nN)
+                px_field_set(fr->slots[in.b], cf->mod->N[in.c], fr->slots[in.a]);
+            else px_error("VM %s:%d SETF 名字越界 n=%d", cf->name, fr->line, in.c);
+            break;
+        // CALLM：方法调用桥（px_method obj.name(args..)，obj=槽 b，方法名=N[c]，
+        //   fl=argc，实参=槽 b+1..b+argc；返回写槽 a）——px_method 语义=现 C 桥
+        case PXOP_CALLM: {
+            LXValue ov = fr->slots[in.b];
+            int argc = (int)in.fl;
+            LXValue* abuf = NULL;
+            if (argc > 0) {
+                int n = argc;
+                if (in.b + 1 + n > fr->nslots) n = fr->nslots - (int)in.b - 1;
+                if (n > 0) {
+                    abuf = (LXValue*)malloc((size_t)n * sizeof(LXValue));
+                    for (int i = 0; i < n; i++) abuf[i] = fr->slots[in.b + 1 + i];
+                    argc = n;
+                } else argc = 0;
+            }
+            LXValue r = px_null();
+            if (cf->mod && in.c < cf->mod->nN)
+                r = px_method(ov, cf->mod->N[in.c], abuf, argc);
+            else px_error("VM %s:%d CALLM 名字越界 n=%d", cf->name, fr->line, in.c);
+            free(abuf);
+            if (in.a < fr->nslots) fr->slots[in.a] = r;
+            break;
+        }
+
         // ---- E 表：错误传播（A5，D7）----
         // TRY（?）：Result-Err → 就地返回 Err（RET 语义回传）；null → 返回 null；
         // Ok → 就地解包覆写槽。对齐 codegen err_tag 模型（函数尾仅转发，语义等价）。

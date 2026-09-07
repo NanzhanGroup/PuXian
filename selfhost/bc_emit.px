@@ -146,12 +146,14 @@ def bc_tmp(func):
 # ---------- 指令发射 ----------
 # 发射一条指令到 func bc 列表：inst = [op, a, b, c]（op 用名字）
 def bc_emit_inst(func, op, a, b, c):
-    func["bc"].push([op, a, b, c])
+    # M89-S3-B B1：指令升 5 元组 [op, fl, a, b, c]（fl 预留；CALLM 用 fl 存
+    # argc）。dump / C 输出跳过 fl → golden 文本不变。
+    func["bc"].push([op, 0, a, b, c])
 
 # 回填跳转 off（JMP/JMPT/JMPF 的 b 字段=off，相对「下一条」）：
 #   bc[idx] 从 idx 跳到 target → off = target - (idx+1)
 def bc_patch_off(func, idx, target):
-    func["bc"][idx][2] = target - (idx + 1)
+    func["bc"][idx][3] = target - (idx + 1)
 
 # ---------- hoist 局部收集（对齐 cg_collect_hoist_vars：函数级作用域） ----------
 def bc_collect_hoist(stmts, out):
@@ -179,6 +181,12 @@ def bc_collect_hoist(stmts, out):
                 bc_collect_hoist(st[2], out)
         elif ty == "While":
             bc_collect_hoist(st[2], out)
+        elif ty == "For":
+            # B1：for 循环变量（Python 语义：循环后保留最后值）+ 遍历 body
+            let fv = rust_unescape(st[1])
+            if not contains(out, fv):
+                out.append(fv)
+            bc_collect_hoist(st[3], out)
         i += 1
 
 # 发 null 常量到 dst 槽（LOADK nullK；K 去重）
@@ -385,9 +393,103 @@ def bc_emit_expr(expr, dst, func):
         bc_emit_expr(expr[1], d, func)
         bc_emit_inst(func, "FORCE", d, 0, 0)
         return d
+    if ty == "List" or ty == "Tuple":
+        # B1：容器字面量 —— 项连续槽 base..base+n-1 → NEWLIST/NEWTUPLE dst, base, n
+        let items = expr[1]
+        let n = len(items)
+        var d = dst
+        if d < 0:
+            d = bc_tmp(func)
+        let base = bc_tmp(func)
+        while func["next_slot"] < base + n:
+            bc_tmp(func)
+        var li = 0
+        while li < n:
+            bc_emit_expr(items[li], base + li, func)
+            li += 1
+        if ty == "List":
+            bc_emit_inst(func, "NEWLIST", d, base, n)
+        else:
+            bc_emit_inst(func, "NEWTUPLE", d, base, n)
+        return d
+    if ty == "Dict":
+        # B1：dict 字面量 —— entries [[k,v]..]；NEWDICT dst, base, 项数（str 键入池）
+        let entries = expr[1]
+        let n = len(entries)
+        var d = dst
+        if d < 0:
+            d = bc_tmp(func)
+        let base = bc_tmp(func)
+        while func["next_slot"] < base + 2 * n:
+            bc_tmp(func)
+        var di = 0
+        while di < n:
+            bc_emit_expr(entries[di][0], base + 2 * di, func)
+            bc_emit_expr(entries[di][1], base + 2 * di + 1, func)
+            di += 1
+        bc_emit_inst(func, "NEWDICT", d, base, n)
+        return d
+    if ty == "Index":
+        # B1：obj[idx] 读取 → INDEX dst, obj, idx
+        var d = dst
+        if d < 0:
+            d = bc_tmp(func)
+        let so = bc_tmp(func)
+        bc_emit_expr(expr[1], so, func)
+        let si = bc_tmp(func)
+        bc_emit_expr(expr[2], si, func)
+        bc_emit_inst(func, "INDEX", d, so, si)
+        return d
+    if ty == "Slice":
+        # B1：obj[start:end:step] → SLICE dst, obj, base（base 起 3 连续槽，缺省 null）
+        var d = dst
+        if d < 0:
+            d = bc_tmp(func)
+        let so = bc_tmp(func)
+        bc_emit_expr(expr[1], so, func)
+        let base = bc_tmp(func)
+        while func["next_slot"] < base + 3:
+            bc_tmp(func)
+        if expr[2] == null:
+            bc_emit_null(func, base)
+        else:
+            bc_emit_expr(expr[2], base, func)
+        if expr[3] == null:
+            bc_emit_null(func, base + 1)
+        else:
+            bc_emit_expr(expr[3], base + 1, func)
+        if expr[4] == null:
+            bc_emit_null(func, base + 2)
+        else:
+            bc_emit_expr(expr[4], base + 2, func)
+        bc_emit_inst(func, "SLICE", d, so, base)
+        return d
+    if ty == "Field":
+        # B1：obj.name → GETF dst, obj, N（px_field；enum/const enum 折叠 B2 类型表接入）
+        var d = dst
+        if d < 0:
+            d = bc_tmp(func)
+        let so = bc_tmp(func)
+        bc_emit_expr(expr[1], so, func)
+        let nn = bc_n_add(g_bcm["n_pool"], rust_unescape(expr[2]))
+        bc_emit_inst(func, "GETF", d, so, nn)
+        return d
+    if ty == "OptionalField":
+        # B1：obj?.name → GETF_OPT dst, obj, N（obj null→null）
+        var d = dst
+        if d < 0:
+            d = bc_tmp(func)
+        let so = bc_tmp(func)
+        bc_emit_expr(expr[1], so, func)
+        let nn = bc_n_add(g_bcm["n_pool"], rust_unescape(expr[2]))
+        bc_emit_inst(func, "GETF_OPT", d, so, nn)
+        return d
     if ty == "Call":
-        # A4：普通调用 → bc_emit_call（callee=expr[1]，args=expr[2]）
-        return bc_emit_call(expr[1], expr[2], dst, func)
+        # A4 普通调用 / B1 方法调用（callee Field → CALLM px_method 桥）
+        let callee = expr[1]
+        if callee[0] == "Field":
+            return bc_emit_methodcall(callee[1], rust_unescape(callee[2]), expr[2], dst, func)
+        return bc_emit_call(callee, expr[2], dst, func)
     if ty == "Pipe":
         # |>: 左值作为实参首参调用右函数；右为 Call → f(v, ...)（cg 同语义）
         let v = expr[1]
@@ -422,7 +524,114 @@ def bc_emit_call(callee, arg_list, dst, func):
     bc_emit_inst(func, "CALL", d, cslot, argc)
     return d
 
-# ---------- 语句发射（A1 子集） ----------
+# 方法调用发射（B1）：obj.name(args) → CALLM
+#   inst = ["CALLM", argc(fl), dst, obj槽, N(方法名)]
+#   实参连续区 obj+1..obj+argc（对齐 CALL args 排布：obj 占 callee 位）；
+#   先预留容量防内部临时碰撞（同 bc_emit_call）。
+def bc_emit_methodcall(obj, mname, arg_list, dst, func):
+    var d = dst
+    if d < 0:
+        d = bc_tmp(func)
+    let cslot = bc_tmp(func)
+    let argc = len(arg_list)
+    let need = cslot + 1 + argc
+    while func["next_slot"] < need:
+        bc_tmp(func)
+    bc_emit_expr(obj, cslot, func)
+    var ai = 0
+    while ai < argc:
+        bc_emit_expr(arg_list[ai], cslot + 1 + ai, func)
+        ai += 1
+    let nn = bc_n_add(g_bcm["n_pool"], mname)
+    func["bc"].push(["CALLM", argc, d, cslot, nn])
+    return d
+
+# ---------- B1：赋值目标发射（Assign/复合赋值 目标 ∈ Var/Index/Field） ----------
+# 复合赋值语义：先读目标旧值 → 求值 rhs → 二元运算 → 写回（对齐 cg_assign_op_*）
+def bc_assign_local_slot(s, op, rhs, func):
+    if op == "Assign":
+        bc_emit_expr(rhs, s, func)
+        return
+    let tr = bc_tmp(func)
+    bc_emit_expr(rhs, tr, func)
+    bc_emit_inst(func, bc_binop_op(bc_assign_op_name(op)), s, s, tr)
+
+def bc_assign_global(name, op, rhs, func):
+    let g = bc_g_add(g_bcm["globals"], name)
+    if op == "Assign":
+        let t = bc_tmp(func)
+        bc_emit_expr(rhs, t, func)
+        bc_emit_inst(func, "SETG", g, t, 0)
+        return
+    let t = bc_tmp(func)
+    bc_emit_inst(func, "GETG", t, g, 0)
+    let tr = bc_tmp(func)
+    bc_emit_expr(rhs, tr, func)
+    bc_emit_inst(func, bc_binop_op(bc_assign_op_name(op)), t, t, tr)
+    bc_emit_inst(func, "SETG", g, t, 0)
+
+def bc_assign_index(tgt, op, rhs, func):
+    # tgt = [Index, obj, idx, pos]：obj[idx] op= rhs
+    let so = bc_tmp(func)
+    bc_emit_expr(tgt[1], so, func)
+    let si = bc_tmp(func)
+    bc_emit_expr(tgt[2], si, func)
+    let sv = bc_tmp(func)
+    if op == "Assign":
+        bc_emit_expr(rhs, sv, func)
+    else:
+        bc_emit_inst(func, "INDEX", sv, so, si)
+        let tr = bc_tmp(func)
+        bc_emit_expr(rhs, tr, func)
+        bc_emit_inst(func, bc_binop_op(bc_assign_op_name(op)), sv, sv, tr)
+    bc_emit_inst(func, "SETIDX", sv, so, si)
+
+def bc_assign_field(tgt, op, rhs, func):
+    # tgt = [Field, obj, name, pos]：obj.name op= rhs
+    let so = bc_tmp(func)
+    bc_emit_expr(tgt[1], so, func)
+    let nn = bc_n_add(g_bcm["n_pool"], rust_unescape(tgt[2]))
+    let sv = bc_tmp(func)
+    if op == "Assign":
+        bc_emit_expr(rhs, sv, func)
+    else:
+        bc_emit_inst(func, "GETF", sv, so, nn)
+        let tr = bc_tmp(func)
+        bc_emit_expr(rhs, tr, func)
+        bc_emit_inst(func, bc_binop_op(bc_assign_op_name(op)), sv, sv, tr)
+    bc_emit_inst(func, "SETF", sv, so, nn)
+
+# 赋值 op 名 → 二元表达式 op 名（bc_binop_op 消费；映射对齐 cg_assign_op_*）
+def bc_assign_op_name(op):
+    if op == "Plus":
+        return "Add"
+    if op == "Minus":
+        return "Sub"
+    if op == "Star":
+        return "Mul"
+    if op == "Slash":
+        return "Div"
+    if op == "IntDiv":
+        return "IntDiv"
+    if op == "Mod":
+        return "Mod"
+    if op == "Pow":
+        return "Pow"
+    if op == "BitAnd":
+        return "BitAnd"
+    if op == "BitOr":
+        return "BitOr"
+    if op == "BitXor":
+        return "BitXor"
+    if op == "Shl":
+        return "Shl"
+    if op == "Shr":
+        return "Shr"
+    if op == "ShrU":
+        return "ShrU"
+    panic("bc_assign_op_name 未知赋值 op: " + str(op))
+
+# ---------- 语句发射（A1 子集；B1 扩 容器/字段/方法/For） ----------
 def bc_emit_stmt_inner(stmt, func):
     let ty = stmt[0]
     if ty == "VarDecl":
@@ -449,30 +658,37 @@ def bc_emit_stmt_inner(stmt, func):
         bc_emit_expr(stmt[4], s, func)
         return
     if ty == "Assign":
+        # B1：Assign 目标 ∈ Var/Index/Field；op ∈ Assign/复合/Append
+        #   （Append `a <- rhs` ≡ a.append(rhs)，cg px_method 桥语义）
         let tgt = stmt[1]
         let op = stmt[2]
         let rhs = stmt[3]
-        if tgt[0] != "Var":
-            panic("bc_emit_stmt Assign 目标未实现（A2+）: " + str(tgt))
-        if op != "Assign":
-            panic("bc_emit_stmt 复合赋值未实现（A2+）: " + str(stmt))
-        let name = rust_unescape(tgt[1])
-        if func["smap"].has(name):
-            # 已声明局部 → 槽赋值
-            let s = func["smap"][name]
-            bc_emit_expr(rhs, s, func)
+        if op == "Append":
+            let ar = [rhs]
+            bc_emit_methodcall(tgt, "append", ar, -1, func)
             return
-        if not func["is_top"] and not bc_is_global(name):
-            # 函数内对未声明名的赋值：hoist 预提升为局部（Python 语义，对齐 codegen）
-            let s = bc_slot(func, name)
-            bc_emit_expr(rhs, s, func)
+        let tty = tgt[0]
+        if tty == "Var":
+            let name = rust_unescape(tgt[1])
+            if func["smap"].has(name):
+                # 已声明局部（含 hoist）→ 局部槽赋值/复合
+                bc_assign_local_slot(func["smap"][name], op, rhs, func)
+                return
+            if not func["is_top"] and not bc_is_global(name):
+                # 函数内未声明名 → hoist 预提升为局部（Python 语义，对齐 codegen）
+                let s = bc_slot(func, name)
+                bc_assign_local_slot(s, op, rhs, func)
+                return
+            # 全局赋值（顶层 Assign / 函数内写全局名）
+            bc_assign_global(name, op, rhs, func)
             return
-        # 全局赋值 → SETG（顶层 Assign 或函数内写全局名）
-        let t = bc_tmp(func)
-        bc_emit_expr(rhs, t, func)
-        let g = bc_g_add(g_bcm["globals"], name)
-        bc_emit_inst(func, "SETG", g, t, 0)
-        return
+        if tty == "Index":
+            bc_assign_index(tgt, op, rhs, func)
+            return
+        if tty == "Field":
+            bc_assign_field(tgt, op, rhs, func)
+            return
+        panic("bc_emit_stmt Assign 目标未实现: " + str(tgt))
     if ty == "Return":
         if stmt[1] != null:
             let t = bc_tmp(func)
@@ -491,6 +707,9 @@ def bc_emit_stmt_inner(stmt, func):
         return
     if ty == "While":
         bc_emit_while(stmt, func)
+        return
+    if ty == "For":
+        bc_emit_for(stmt, func)
         return
     if ty == "Break":
         # A3：跳当前最内层循环 end（占位待 patch）
@@ -599,6 +818,67 @@ def bc_emit_while(stmt, func):
     bi = 0
     while bi < len(ctx["conts"]):
         bc_patch_off(func, ctx["conts"][bi], loop_start)
+        bi += 1
+
+# B1: For —— 索引迭代（对齐 codegen cg For：i in 0..len(iter)，v=iter[i]）
+# 展开：iter→槽 its → n = CALL len(its) → ctr=0 →
+#       loop: cond(ctr<n) JMPF end → v=INDEX(its,ctr) → body →
+#       ctr+=1 → JMP loop；break/continue 经 func.loops ctx 回填
+#       （continue 跳 loop-back 处，即增量后重判 cond —— Python for 语义）。
+def bc_emit_for(stmt, func):
+    let vname = rust_unescape(stmt[1])
+    let iter = stmt[2]
+    let body = stmt[3]
+    var vs = -1
+    if func["smap"].has(vname):
+        vs = func["smap"][vname]
+    else:
+        vs = bc_slot(func, vname)
+    # iterable 求值一次入 its（先求值，len 用其结果）
+    let its = bc_tmp(func)
+    bc_emit_expr(iter, its, func)
+    # n = len(its)：CALL native len（其真实参数区 fnl+1）
+    let fnl = bc_tmp(func)
+    let nslot = bc_tmp(func)
+    while func["next_slot"] < fnl + 2:
+        bc_tmp(func)
+    let gl = bc_g_add(g_bcm["globals"], "len")
+    bc_emit_inst(func, "GETG", fnl, gl, 0)
+    bc_emit_inst(func, "MOV", fnl + 1, its, 0)
+    bc_emit_inst(func, "CALL", nslot, fnl, 1)
+    # ctr = 0
+    let ctr = bc_tmp(func)
+    bc_emit_int(func, ctr, 0)
+    let loop_start = len(func["bc"])
+    # cond: ctr < n
+    let lt = bc_tmp(func)
+    bc_emit_inst(func, "LT", lt, ctr, nslot)
+    let jf = len(func["bc"])
+    bc_emit_inst(func, "JMPF", lt, 0, 0)
+    # 循环变量 = its[ctr]
+    bc_emit_inst(func, "INDEX", vs, its, ctr)
+    let ctx = bc_new_dict()
+    ctx["breaks"] = []
+    ctx["conts"] = []
+    func["loops"].push(ctx)
+    bc_emit_stmts(body, func)
+    func["loops"].pop()
+    # ctr += 1
+    let one = bc_tmp(func)
+    bc_emit_int(func, one, 1)
+    bc_emit_inst(func, "ADD", ctr, ctr, one)
+    let jb = len(func["bc"])
+    bc_emit_inst(func, "JMP", 0, 0, 0)
+    let end = len(func["bc"])
+    bc_patch_off(func, jb, loop_start)
+    bc_patch_off(func, jf, end)
+    var bi = 0
+    while bi < len(ctx["breaks"]):
+        bc_patch_off(func, ctx["breaks"][bi], end)
+        bi += 1
+    bi = 0
+    while bi < len(ctx["conts"]):
+        bc_patch_off(func, ctx["conts"][bi], jb)
         bi += 1
 
 # ---------- 函数发射 ----------
@@ -740,7 +1020,7 @@ def bc_dump_module(m):
         var pc = 0
         while pc < len(f["bc"]):
             let ins = f["bc"][pc]
-            print(str(pc) + ":" + ins[0] + " " + str(ins[1]) + " " + str(ins[2]) + " " + str(ins[3]))
+            print(str(pc) + ":" + ins[0] + " " + str(ins[2]) + " " + str(ins[3]) + " " + str(ins[4]))
             pc += 1
         fi += 1
 
@@ -796,7 +1076,7 @@ def bc_emit_c_program(prog):
         var pc = 0
         while pc < len(f["bc"]):
             let ins = f["bc"][pc]
-            out += "    {PXOP_" + ins[0] + ", 0, " + str(ins[1]) + ", " + str(ins[2]) + ", " + str(ins[3]) + "},\n"
+            out += "    {PXOP_" + ins[0] + ", " + str(ins[1]) + ", " + str(ins[2]) + ", " + str(ins[3]) + ", " + str(ins[4]) + "},\n"
             pc += 1
         out += "};\n"
         fi += 1
