@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### M89-S3-B4 · VM 化：闭包 P1 收口（m25_closure_gc 真实用例对拍 PASS）
+
+> 完成（2026-09-08）：闭包基建（B3a 落地：Closure→LOADK PXK_FUNC、Block、lambda 入 funcs）
+> 经真实用例收口 **P1（无捕获闭包）**。
+> - **验证**：examples/m25_closure_gc.px 在 VM（bc_run.sh emit-c→gcc→运行）输出
+>   "M25 CLOSURE GC TESTS PASSED"（rc=0）—— 覆盖闭包自引用循环垃圾 + gc() 强回收、
+>   for range(300) 批量、活跃闭包不被误回收（k()==42）、assert。
+> - 捕获面扫描：存量闭包用例（m25/match.px 的 fn(x){x*2}/m34 gen_lazy transform/filter）
+>   均无捕获或单参 lambda → P1 覆盖现存量；真捕获 upvalue cell = P2 按计划留 S3-C。
+
 ### M89-S3-B3b · VM 化：match 模式匹配（enum 变体/literal/wildcard/guard）
 
 > 完成（2026-09-08）：VM 化（M89）S3-B 推进，**match 表达式在 VM 跑通**。
