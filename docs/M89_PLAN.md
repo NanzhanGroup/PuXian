@@ -86,4 +86,13 @@
 > px/pxc/tools 均 0.2.0。
 
 ### S1 · VM 化详勘预研
-> （待启动：M89 立项后即开始，产出 docs/M89_vm_prestudy.md）
+> 完成（2026-09-07）：产出 **docs/M89_vm_prestudy.md**（只侦察未写码）。核心结论：
+> ① 现状两执行轨已坐实——编译轨 px 函数=C 函数、C 递归、模块全局每次 px_get_global(锁+哈希)、
+> 无堆上显式帧；解释轨 pxi=AST 树遍历、dict 包装值。共享 parser/AST = VM 化最有利资产。
+> ② 关键实测：编译轨**无真词法闭包**（fn_closure ctx=NULL、捕获外层局部退化为 px_get_global 取 null、
+> 函数内嵌套 def 被整体丢弃；selfhost 编译器 0 个 fn_closure）→ 精确 GC 无 upvalue 需搬，VM 闭包策略 S2 定。
+> ③ 字节码选型：寄存器式 3-地址（帧槽=现 _v 编号体系，AST→BC 发射器只换目标不换 parser/AST）。
+> ④ 精确 GC 面：17 类型中含引用 7 类；根从整 C 栈保守扫描换帧槽+全局槽+原生桥暂存根（runtime px_call
+> 约 20+ 处，估 ≤60 处改造）；保守扫描假存活 + slab 页不还 OS = issue28 堆只涨不落代码级证据。
+> ⑤ 工期钉周级：P50 ≈ 10–11 周、P90 16 周封顶（S3 分 A 骨架/B 全构造/C 自举收敛/D 精确 GC 四段可横向分包）。
+> ⑥ issue28 分界：先立 issue28 B1/B2 止血批次（3–5 天，保守 GC 内触发策略+slab 归还，不依赖 VM），再进 S2 设计。
