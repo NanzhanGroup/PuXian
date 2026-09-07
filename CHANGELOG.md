@@ -28,6 +28,21 @@
 > ② bi_sleep EINTR 续睡（nanosleep 不在 SA_RESTART 清单，主线程 sleep 被 GC 信号打断提前返回 → main 结束）。
 > 回归：m82 http_serve_unix 专项 + m23a SSE+WS + 并发压测（100×500 全 200 0 失败，进程不崩）。
 
+### M88-S3 · 收口：重链 pxi + 自举证明 + 回归总闸 + 文档/issue 归档（qg-issue 27）
+
+> 完成（2026-09-07，commit M88-S3）：**全能力重链 bootstrap/pxi**（`tools/pxc build --full
+> selfhost/interp.px`，9,457,456→9,462,024 B；解释器宿主内嵌 M88 runtime → `pxi` 解释路径同样
+> 获得线程槽动态化/连接池/SIGPIPE·sleep 健壮性修复；strings 含 PX_SERVE_WORKERS/PX_MAX_THREADS 实证）。
+> 自举证明 **rc=0**（bootstrap/pxc 编 compiler.px == golden/compiler.c 10595 行逐字节 —— M88 未动
+> compiler.px/golden/pxc，runtime 改动对编译器零影响实证）；native **301 不变**（未动 px_native 注册面）。
+> 回归总闸：m82 + m83_s1-s4 + m84_s1-s3 + m85_s1-s2 + m86_s0-s2 **干净全绿**；m83_s5/s6 内容断言
+> 全 PASS（multipart/SMTP 回环、同端口流式 SSE/断连不崩）—— 二者 verify.sh 收尾 `trap ... EXIT` 内
+> `kill $SRV_PID` 在 PID 已置 0 时退化为 `kill 0`（进程组自杀）致退出码非 0，系 **M84-S4 起记录不修**的
+> 历史边界（非 M88 回归）。M88 专项抽验：s1_spawn_200（200 并发 spawn 全 done）+ http_serve_unix
+> 并发 100×500 = **50000/50000 全 200、0 失败、0 err、进程不崩**（53s）。px fmt/lint 质量门 0 错。
+> 文档同步（spec §8.22 连接语义改池化 + env PX_SERVE_WORKERS/PX_MAX_THREADS、CHEATSHEET M88 行、
+> M88_PLAN 状态、examples/m88_s3/press_unix.go 注释 # → // 修正）。qg-issue 27 归档 done/。tag v0.1.0-m88。
+
 ### px --version 对齐 go/python 单版本号 + 发布号 VERSION（补丁 · 不占里程碑号 · 随下次发版携带）
 
 > 完成（2026-09-06，commit 39e01bb，小改动不立项不单独发版）：`px --version` 从 `px 0.1.0 (普贤 PuXian · selfhosted M-B9a)` 简化为**单版本号一行**（对齐 go `go1.26.6 linux/amd64` / python `3.9.25` 心智，应 m86 发版后用户追问简化）。

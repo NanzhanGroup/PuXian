@@ -155,7 +155,7 @@
 | 立项 | ✅ done | docs/M88_PLAN.md 落盘（本文件）；qg-issue 27 状态更新；ws-todo **#14**（2026-09-07 12:00）已入，中午触发开工 |
 | A 类 S1 | ✅ done | GC 线程槽动态化 + PX_MAX_THREADS 可配（固定 64 槽 → 按上限一次分配稳定表，无 realloc）；commit c530612；验证 s1_spawn_200（200 并发 spawn 全过）+ s1b_gc_stress（200 线程并发 GC 稳定） |
 | A 类 S2 | ✅ done | 函数式 serve 连接池（http_serve/unix/sse_serve accept → fserve 池，队列背压绝不 exit）+ SIGPIPE 忽略 + bi_sleep EINTR 续睡（三处根因修复，见下执行摘要）；回归 m82 verify + m23a SSE+WS + s1 全绿 |
-| A 类 S3 | ⏳ 部分 | 压测脚本已归档 examples/m88_s3/；实测基线见下；全量回归总闸（重链+自举证明）留收口批次 |
+| A 类 S3 | ✅ done | **收口完成**：全能力重链 bootstrap/pxi（--full，9457456→9462024B，strings 含 PX_SERVE_WORKERS/PX_MAX_THREADS 实证 M88 runtime 入解释器宿主）；自举证明 rc=0（B.c==golden 10595 行）；native 301 不变；回归总闸 m82+m83_s1-s4+m84_s1-s3+m85_s1-s2+m86_s0-s2 干净全绿（m83_s5/s6 内容全 PASS，收尾 EXIT-trap `kill 0` 进程组自杀 = M84-S4 起记录不修的历史边界，非本 M 回归）；M88 专项 s1_spawn_200 200 并发 PASS + http_serve_unix 100×500 **全 200 0 失败 0 err 进程不崩**（53s）；fmt/lint 0；文档同步（spec §8.22/CHEATSHEET/M88_PLAN）+ examples/m88_s3/press_unix.go #→// 修正；qg-issue 27 归档 done/；tag v0.1.0-m88 |
 | 远景路线裁定 | ✅ done | §四·A 落盘（VM 化=总钥匙；native 后端排最后；Windows 排 native 后；单线程子集可应急） |
 
 ### A 类执行摘要（2026-09-07 12:00 开工，S1/S2 完成）
