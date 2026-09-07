@@ -1,0 +1,16 @@
+# M88-S1 验证：GC 线程槽动态化（原固定 64 槽 → PX_MAX_THREADS 可配，默认 1024）
+# 旧代码 64 并发 spawn → px_error("spawn: 并发线程数超出上限 64") → 进程 exit(1)
+# 本测试 spawn 200 个并发存活线程，全部完成即证明槽动态化生效。
+def worker(ch, id):
+    sleep(300)      # 保持存活，使 200 个线程同时占用 GC 槽位
+    ch.send(id)
+
+let N = 200
+let ch = chan[int](N)
+for i in range(N):
+    spawn worker(ch, i)
+var got = []
+for i in range(N):
+    got.append(ch.recv())
+assert(len(got) == N, "all workers done")
+print("S1-OK: " + str(N) + " concurrent spawn all done (beyond old 64 cap)")

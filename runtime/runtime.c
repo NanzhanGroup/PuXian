@@ -136,7 +136,7 @@ typedef struct RateBucket {
 static RateBucket* g_rate_head = NULL;
 static int g_rate_buckets = 0;
 static pthread_mutex_t g_rate_mu = PTHREAD_MUTEX_INITIALIZER;
-// M31.4b：连接线程池（突破 spawn 64 槽位：连接处理线程不占 spawn 槽位）
+// M31.4b：连接线程池（常驻 worker 直接注册 GC 槽，不走 spawn 槽位）
 #define PX_POOL_MAX 256
 static pthread_t g_pool_threads[PX_POOL_MAX];
 static int g_pool_fds[PX_POOL_MAX];       // 环形队列（cfd）
@@ -591,7 +591,13 @@ static int g_gc_debug = 0;
 static int g_active_threads = 0;   // spawn 活跃线程数（>0 时进入并发 GC 路径）
 
 // M11 并发 GC：线程注册表 + 暂停协议
-#define MAX_SPAWN_THREADS 64
+// M88-S1（qg-issue 27）：GC 线程槽动态化。原固定 64 槽（MAX_SPAWN_THREADS）是服务端
+// 高并发崩溃根因之一（http_serve/sse_serve 每连接 spawn → 64 并发槽满 → px_error → exit）。
+// 现改为按槽上限（PX_MAX_THREADS，默认 1024，可配 [64,4096]）在 gc_init_env 一次性分配动态表：
+//   g_threads 指针 + g_thread_cap 容量（= 配置上限，一次到位，无 realloc 指针移动）。
+// 并发安全：首次分配在 gc_init_env（各并发入口均先调用，持 g_gc_mu 或单线程阶段）；
+//   此后 g_threads/g_thread_cap 只读恒定 → 信号处理器 / GC 遍历读到的始终是同一稳定表，
+//   无 realloc/use-after-free 竞态面（比按需 ×2 扩容更稳，代价是默认 1024 槽 ≈1MB 常驻）。
 #define SIG_GC_STOP (SIGRTMIN + 2)   // 实时信号：暂停线程（可排队，不与用户信号冲突）
 typedef struct {
     pthread_t tid;
@@ -602,7 +608,13 @@ typedef struct {
     ucontext_t uc;       // 暂停时保存的上下文（寄存器）
     LXObject* tmp_root;  // 暂停时该线程的暂存根（__thread 跨线程不可读，由处理器保存）
 } GCThreadInfo;
-static GCThreadInfo g_threads[MAX_SPAWN_THREADS];
+#define MAX_SPAWN_THREADS 64   // 历史宏：默认初始容量（保留供旧引用/文档对照；实际容量读 g_thread_cap）
+#define PX_DEFAULT_THREAD_CAP 64     // 默认初始容量（= 历史 MAX_SPAWN_THREADS 语义）
+#define PX_DEFAULT_THREAD_MAX 1024   // 默认槽上限（env PX_MAX_THREADS 未设时）
+#define PX_HARD_THREAD_LIMIT 4096    // 槽硬上限（内存 / GC stop-the-world 停顿权衡；spec 环境变量表明示）
+static GCThreadInfo* g_threads = NULL;              // 动态线程表（gc_init_env 分配，此后指针恒定）
+static int g_thread_cap = 0;                        // 表容量（= 配置上限，gc_init_env 置位后不变）
+static int g_thread_max = PX_DEFAULT_THREAD_MAX;    // 槽上限（env PX_MAX_THREADS 夹取 [64,4096]）
 static int g_paused_count = 0;      // 已暂停线程数（调试用；控制流以 paused 标志 + epoch 为准）
 static volatile int g_gc_resume = 0;// （保留字段，控制流以 epoch 为准）
 static volatile int g_gc_epoch = 0; // GC 轮次号：每轮开始/结束各 ++，handler 等待其变化
@@ -673,6 +685,15 @@ static void gc_init_env(void) {
     if (d && d[0] == '1') g_gc_debug = 1;
     const char* t = getenv("PX_GC_THRESHOLD");
     if (t && atoi(t) > 0) g_gc_threshold = atoi(t);
+    // M88-S1：PX_MAX_THREADS 可配槽上限（夹取 [64, 4096]）；线程表一次性按上限分配。
+    // 此后 g_threads/g_thread_cap 恒定，无扩容/指针移动（并发安全见 §594 注释）。
+    const char* mt = getenv("PX_MAX_THREADS");
+    if (mt && atoi(mt) >= PX_DEFAULT_THREAD_CAP && atoi(mt) <= PX_HARD_THREAD_LIMIT)
+        g_thread_max = atoi(mt);
+    if (!g_threads) {
+        g_threads = (GCThreadInfo*)xcalloc((size_t)g_thread_max, sizeof(GCThreadInfo));
+        g_thread_cap = g_thread_max;
+    }
     gc_install_handler();
     gc_ensure_main_registered();
     g_gc_env_inited = 1;
@@ -881,8 +902,9 @@ static void gc_stop_handler(int sig, siginfo_t* si, void* ctx) {
     // 否则延迟信号在本轮 GC 执行中投递，handler 自旋等 epoch，而 epoch 只有
     // 本线程自己能推进 → 死锁（依赖 5 秒兜底才恢复，每轮 GC 卡 5 秒）。
     if (g_gc_executor && pthread_equal(g_gc_executor, me)) return;
+    if (!g_threads) return;  // 表尚未分配（理论不会：信号仅 GC 进行中发出，GC 前必已 init）
     GCThreadInfo* ti = NULL;
-    for (int i = 0; i < MAX_SPAWN_THREADS; i++) {
+    for (int i = 0; i < g_thread_cap; i++) {
         if (g_threads[i].in_use && pthread_equal(g_threads[i].tid, me)) { ti = &g_threads[i]; break; }
     }
     if (!ti) return;  // 理论不会：未注册线程收到暂停信号
@@ -952,7 +974,7 @@ static void gc_unblock_stop(const sigset_t* old) {
 
 // 线程槽位注册/注销（调用方须持 g_gc_mu；信号处理器只读不写注册表）
 static GCThreadInfo* gc_find_thread(pthread_t tid) {
-    for (int i = 0; i < MAX_SPAWN_THREADS; i++) {
+    for (int i = 0; i < g_thread_cap; i++) {
         if (g_threads[i].in_use && pthread_equal(g_threads[i].tid, tid)) return &g_threads[i];
     }
     return NULL;
@@ -960,7 +982,7 @@ static GCThreadInfo* gc_find_thread(pthread_t tid) {
 
 static int gc_register_thread(pthread_t tid, int is_main) {
     if (gc_find_thread(tid)) return 0;  // 已注册
-    for (int i = 0; i < MAX_SPAWN_THREADS; i++) {
+    for (int i = 0; i < g_thread_cap; i++) {
         if (!g_threads[i].in_use) {
             g_threads[i].tid = tid;
             g_threads[i].in_use = 1;
@@ -976,7 +998,7 @@ static int gc_register_thread(pthread_t tid, int is_main) {
 }
 
 static void gc_unregister_thread(pthread_t tid) {
-    for (int i = 0; i < MAX_SPAWN_THREADS; i++) {
+    for (int i = 0; i < g_thread_cap; i++) {
         if (g_threads[i].in_use && !g_threads[i].is_main && pthread_equal(g_threads[i].tid, tid)) {
             g_threads[i].in_use = 0;
             g_threads[i].paused = 0;
@@ -1051,7 +1073,7 @@ void px_gc_collect(void) {
         if (g_gc_debug) {
             char dbg[512]; int dn = 0;
             dn += snprintf(dbg+dn, sizeof(dbg)-dn, "[gc] me=%lx active=%d\n", (unsigned long)me, g_active_threads);
-            for (int i = 0; i < MAX_SPAWN_THREADS; i++)
+            for (int i = 0; i < g_thread_cap; i++)
                 if (g_threads[i].in_use)
                     dn += snprintf(dbg+dn, sizeof(dbg)-dn, "  [%d] tid=%lx main=%d paused=%d\n", i, (unsigned long)g_threads[i].tid, g_threads[i].is_main, g_threads[i].paused);
             (void)write(2, dbg, (size_t)dn);
@@ -1061,7 +1083,7 @@ void px_gc_collect(void) {
         g_gc_stop_in_progress = 1;   // 标记进行中（handler 据此区分过期堆积信号）
         __sync_synchronize();
         // 1) 向所有已注册、非自身、已创建完成的线程发送暂停信号（只发一次）
-        for (int i = 0; i < MAX_SPAWN_THREADS; i++) {
+        for (int i = 0; i < g_thread_cap; i++) {
             GCThreadInfo* ti = &g_threads[i];
             if (!ti->in_use || pthread_equal(ti->tid, me)) continue;
             if ((uintptr_t)ti->tid == 0) continue;  // 创建中：还没运行普贤代码，无需暂停
@@ -1075,7 +1097,7 @@ void px_gc_collect(void) {
         for (;;) {
             int remain = 0;
             __sync_synchronize();
-            for (int i = 0; i < MAX_SPAWN_THREADS; i++) {
+            for (int i = 0; i < g_thread_cap; i++) {
                 GCThreadInfo* ti = &g_threads[i];
                 if (!ti->in_use || pthread_equal(ti->tid, me) || (uintptr_t)ti->tid == 0) continue;
                 if (ti->paused && ti->epoch == g_gc_epoch) continue;   // 本轮已真暂停
@@ -1125,7 +1147,7 @@ void px_gc_collect(void) {
         gc_scan_stack(&set);
         if (g_gc_debug) (void)write(2, "[mk] self-stack\n", 15);
         // 根4：所有本轮暂停线程：寄存器 + 栈 + 暂存根
-        for (int i = 0; i < MAX_SPAWN_THREADS; i++) {
+        for (int i = 0; i < g_thread_cap; i++) {
             GCThreadInfo* ti = &g_threads[i];
             if (!ti->in_use || !ti->paused || ti->epoch != g_gc_epoch || pthread_equal(ti->tid, me)) continue;
             gc_scan_registers(&set, &ti->uc);
@@ -1165,7 +1187,7 @@ void px_gc_collect(void) {
         for (;;) {
             int any_paused = 0;
             __sync_synchronize();
-            for (int i = 0; i < MAX_SPAWN_THREADS; i++)
+            for (int i = 0; i < g_thread_cap; i++)
                 if (g_threads[i].in_use && g_threads[i].paused) { any_paused = 1; break; }
             if (!any_paused) { if (++wstable >= 2) break; }
             else wstable = 0;
@@ -6846,7 +6868,7 @@ static void* spawn_thread(void* p) {
     // "tid==0 创建中"跳过本线程，而它已在运行普贤代码 → 其栈上对象被 sweep 误回收
     // （use-after-free，即此前偶发 SIGSEGV 的根因）。
     pthread_mutex_lock(&g_gc_mu);
-    for (int i = 0; i < MAX_SPAWN_THREADS; i++) {
+    for (int i = 0; i < g_thread_cap; i++) {
         if (g_threads[i].in_use && (uintptr_t)g_threads[i].tid == 0) {
             g_threads[i].tid = pthread_self();
             break;
@@ -6895,14 +6917,15 @@ static void* spawn_thread(void* p) {
 // 对象会被 GC 误回收（use-after-free）。语义与 px_pool_worker 常驻注册一致：
 //   enter：g_active_threads++ + 分配 GC 槽位（并发 GC 路径随之启用）
 //   leave：g_active_threads-- + 注销槽位（须在不再触碰普贤对象后最后调用）
-// 注：g_threads 槽位上限 64（spawn/连接池/H3 共享）；槽满时本线程不被 GC 暂停
+// M88-S1（qg-issue 27）：g_threads 槽上限现为 g_thread_max（PX_MAX_THREADS 可配，默认 1024）；
+// spawn/连接池/H3 共享同一表；槽满时本线程不被 GC 暂停
 //     （与连接池 worker 槽满行为一致），H3 生产并发上限评估留待 S4。
 void px_gc_thread_enter(void) {
     pthread_mutex_lock(&g_gc_mu);
     if (!g_gc_env_inited) gc_init_env();
     g_active_threads++;
     int slot = -1;
-    for (int i = 0; i < MAX_SPAWN_THREADS; i++) {
+    for (int i = 0; i < g_thread_cap; i++) {
         if (!g_threads[i].in_use) { slot = i; break; }
     }
     if (slot >= 0) {
@@ -6929,7 +6952,7 @@ void px_spawn(LXFuncPtr fn, LXValue* args, int nargs) {
     g_active_threads++;
     // M11：同一临界区预留线程槽位（tid=0 表示创建中，GC 视为无需暂停）
     int slot = -1;
-    for (int i = 0; i < MAX_SPAWN_THREADS; i++) {
+    for (int i = 0; i < g_thread_cap; i++) {
         if (!g_threads[i].in_use) { slot = i; break; }
     }
     if (slot >= 0) {
@@ -6945,7 +6968,7 @@ void px_spawn(LXFuncPtr fn, LXValue* args, int nargs) {
         g_active_threads--;
     }
     pthread_mutex_unlock(&g_gc_mu);
-    if (slot < 0) px_error("spawn: 并发线程数超出上限 %d", MAX_SPAWN_THREADS);
+    if (slot < 0) px_error("spawn: 并发线程数超出上限 %d", g_thread_max);
     SpawnJob* job = xmalloc(sizeof(SpawnJob));
     job->fn = fn;
     job->nargs = nargs;
@@ -7044,7 +7067,7 @@ static void* timer_thread(void* p) {
     TimerJob* job = (TimerJob*)p;
     // M11：自注册真实 tid 到 GC 槽位（槽位已由 timer_create 预留 in_use=1, tid=0）
     pthread_mutex_lock(&g_gc_mu);
-    for (int i = 0; i < MAX_SPAWN_THREADS; i++) {
+    for (int i = 0; i < g_thread_cap; i++) {
         if (g_threads[i].in_use && (uintptr_t)g_threads[i].tid == 0) {
             g_threads[i].tid = pthread_self();
             break;
@@ -7098,7 +7121,7 @@ static int64_t px_timer_create(int periodic, LXValue fn, LXValue* args, int narg
     if (!g_gc_env_inited) gc_init_env();
     g_active_threads++;
     int gslot = -1;
-    for (int i = 0; i < MAX_SPAWN_THREADS; i++) if (!g_threads[i].in_use) { gslot = i; break; }
+    for (int i = 0; i < g_thread_cap; i++) if (!g_threads[i].in_use) { gslot = i; break; }
     if (gslot >= 0) {
         g_threads[gslot].tid = (pthread_t)0;
         g_threads[gslot].in_use = 1;
@@ -7110,7 +7133,7 @@ static int64_t px_timer_create(int periodic, LXValue fn, LXValue* args, int narg
         g_active_threads--;   // 槽位满回滚
     }
     pthread_mutex_unlock(&g_gc_mu);
-    if (gslot < 0) px_error("定时器: 并发线程数超出上限 %d", MAX_SPAWN_THREADS);
+    if (gslot < 0) px_error("定时器: 并发线程数超出上限 %d", g_thread_max);
 
     TimerJob* job = xmalloc(sizeof(TimerJob));
     job->id = id;
@@ -13511,7 +13534,7 @@ static void* px_pool_worker(void* arg) {
     if (!g_gc_env_inited) gc_init_env();
     g_active_threads++;
     int slot = -1;
-    for (int i = 0; i < MAX_SPAWN_THREADS; i++) {
+    for (int i = 0; i < g_thread_cap; i++) {
         if (!g_threads[i].in_use) { slot = i; break; }
     }
     if (slot >= 0) {
@@ -13985,7 +14008,7 @@ static void* cron_thread(void* p) {
     CronJob* job = (CronJob*)p;
     // 注册 GC 槽位（同 timer_thread）
     pthread_mutex_lock(&g_gc_mu);
-    for (int i = 0; i < MAX_SPAWN_THREADS; i++) {
+    for (int i = 0; i < g_thread_cap; i++) {
         if (g_threads[i].in_use && (uintptr_t)g_threads[i].tid == 0) {
             g_threads[i].tid = pthread_self();
             break;
@@ -14069,7 +14092,7 @@ LXValue bi_cron(LXValue* args, int nargs, void* ctx) {
     if (!g_gc_env_inited) gc_init_env();
     g_active_threads++;
     int gslot = -1;
-    for (int i = 0; i < MAX_SPAWN_THREADS; i++) if (!g_threads[i].in_use) { gslot = i; break; }
+    for (int i = 0; i < g_thread_cap; i++) if (!g_threads[i].in_use) { gslot = i; break; }
     if (gslot >= 0) {
         memset(&g_threads[gslot], 0, sizeof(g_threads[gslot]));
         g_threads[gslot].in_use = 1;
@@ -14080,7 +14103,7 @@ LXValue bi_cron(LXValue* args, int nargs, void* ctx) {
     pthread_mutex_unlock(&g_gc_mu);
     if (gslot < 0) {
         cron_release(id);
-        px_error("cron: 并发线程数超出上限 %d", MAX_SPAWN_THREADS);
+        px_error("cron: 并发线程数超出上限 %d", g_thread_max);
     }
 
     CronJob* job = (CronJob*)malloc(sizeof(CronJob));

@@ -1,0 +1,26 @@
+# M88-S1 附带验证：并发 GC stop-the-world 在 >64 线程（200）下正常（不崩、不卡死、不误回收）
+# 200 个线程各自分配普贤对象（list/dict）并保持存活 → 触发并发 GC（stop-the-world
+# 暂停全部 200 个已注册线程并扫描）→ 全部完成且结果正确 = 动态槽表 + GC 协议健全。
+def allocer(ch, id, n):
+    var acc = 0
+    for i in range(n):
+        let l = [i, id, "x" + str(i)]   # list + str 对象
+        let d = {"id": id, "i": i}       # dict 对象
+        acc = acc + l[0] + d["id"]
+    sleep(200)                           # 保持存活，制造并发 GC 扫描窗口
+    ch.send(acc)
+
+let N = 200
+let n = 300
+let ch = chan[int](N)
+for i in range(N):
+    spawn allocer(ch, i, n)
+var total = 0
+for i in range(N):
+    total = total + ch.recv()
+var expect = 0
+for i in range(N):
+    for j in range(n):
+        expect = expect + j + i
+assert(total == expect, "GC stress result intact")
+print("S1-GC-OK: 200 threads x " + str(n) + " allocs concurrent GC stable, total=" + str(total))
