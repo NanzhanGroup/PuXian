@@ -6,7 +6,7 @@
 > 用户指令（2026-09-07）：**「把 A、B、C 全部立项 M88 里面。今天中午（12:00）开工，只需要实现 A 类」**
 > 性质：**L0 runtime（C，GC 线程表 + 服务端并发模型层）**；业务 .px 零改动；native 总数不变
 > 风险等级：**L0**（动 GC/线程模型）→ 必须：自举证明 + 回归总闸 + 并发压测 + 文档同步
-> 状态：🆕 A 类已于 2026-09-07 收口（tag v0.1.0-m88）；**B 类已立项开工（S1 进行中，见 §七）**；C 类排后
+> 状态：🆕 A 类已于 2026-09-07 收口（tag v0.1.0-m88）；**B 类已立项开工：S1+S2 完成（事件驱动内核 + http 接入，见 §七）**；C 类排后
 
 ---
 
@@ -200,8 +200,9 @@
 | A 类 S3 | ✅ done | **收口完成**：全能力重链 bootstrap/pxi（--full，9457456→9462024B，strings 含 PX_SERVE_WORKERS/PX_MAX_THREADS 实证 M88 runtime 入解释器宿主）；自举证明 rc=0（B.c==golden 10595 行）；native 301 不变；回归总闸 m82+m83_s1-s4+m84_s1-s3+m85_s1-s2+m86_s0-s2 干净全绿（m83_s5/s6 内容全 PASS，收尾 EXIT-trap `kill 0` 进程组自杀 = M84-S4 起记录不修的历史边界，非本 M 回归）；M88 专项 s1_spawn_200 200 并发 PASS + http_serve_unix 100×500 **全 200 0 失败 0 err 进程不崩**（53s）；fmt/lint 0；文档同步（spec §8.22/CHEATSHEET/M88_PLAN）+ examples/m88_s3/press_unix.go #→// 修正；qg-issue 27 归档 done/；tag v0.1.0-m88 |
 | 远景路线裁定 | ✅ done | §四·A 落盘（VM 化=总钥匙；native 后端排最后；Windows 排 native 后；单线程子集可应急） |
 | B 类立项 | ✅ done | §三 细化 B 方案 + S1-S4 拆分落盘（本文件，2026-09-07）；**不挂 ws-todo**（用户指令"现在立项开工 B 类，不用挂 ws-todo"） |
-| B 类 S1 | 🔄 running | 事件循环内核 + 连接上下文表（进行中） |
-| B 类 S2/S3/S4 | ⏳ pending | 见 §三 S 级拆分 |
+| B 类 S1 | ✅ done | 连接上下文表 ConnCtx（fd 索引动态扩容，PX_MAX_CONNS 可配默认 16384）+ FREE/ACTIVE/IDLE 状态机（单持有者）+ 事件循环线程（Linux epoll EPOLLET + 唤醒管道 + 1s tick 扫 15s 空闲超时；非 Linux 降级 stub 零行为变化）+ px_evc_acquire/close/idle_put/idle_pop/px_ev_ensure 接口；commit 3babe04 |
+| B 类 S2 | ✅ done | **http_conn_worker 请求级重构**——空闲 keep-alive 连接交还 IDLE 事件驱动（见下 B 类执行摘要）；commit 3c08bb9 |
+| B 类 S3/S4 | ⏳ pending | SSE 长连接事件循环化 + g_sse_conns 动态化（S3）；压测 + 回归总闸 + 收口 + tag（S4，见 §三） |
 
 ### A 类执行摘要（2026-09-07 12:00 开工，S1/S2 完成）
 
@@ -212,3 +213,9 @@
 
 > 立项 commit：M88-PLAN 落盘（qg-issue 27 ISSUE.md 状态 + docs/M88_PLAN.md）
 > S1 commit：c530612；S2 commit 见执行时记录
+
+### B 类执行摘要（2026-09-07 立项开工，S1/S2 完成）
+
+- **S1（commit 3babe04）**：**事件驱动内核**——ConnCtx 连接上下文表（fd 索引 + 动态扩容，容量 `PX_MAX_CONNS` env 可配默认 16384）+ FREE/ACTIVE/IDLE 状态机（单持有者原则：同一 fd 任一时刻只一个持有者，杜绝 worker 与事件循环双读/fd 复用串扰）+ 事件循环线程（Linux **epoll** `EPOLLIN|EPOLLRDHUP|EPOLLET` + 唤醒管道 + 1s tick 扫 15s 空闲超时；非 Linux 自动降级 stub 走原阻塞路径，不破坏 Windows 交叉编译）+ 接口 `px_evc_acquire/px_evc_idle_put/px_evc_idle_pop/px_evc_close/px_ev_ensure`。⚠️ 过程中发现 runtime 已存在 `PxConn` 连接对象体系（`px_conn_close(PxConn*)` 全局函数），新内核统一 `px_evc_` 前缀避开，未动既有 PxConn 体系。S1 未接入 conn_worker → 事件循环不启动、行为零变化（按 PLAN 约定）。验证：px build + hello/fib + m82 http_serve_unix 专项 8 项全 PASS。
+- **S2（commit 3c08bb9）**：**http_conn_worker 请求级重构**（http_serve/http_serve_unix 同 worker 一处改两入口通）——serve 连接 fd 一律非阻塞 + 登记 ConnCtx（FREE→ACTIVE）；请求读改用新增 `px_recv_wait`（poll+recv，语义 = 阻塞 recv + SO_RCVTIMEO 15s，非阻塞下半包/大 body 续读自然达成，无需跨派发存半包）；**响应写完且无下一请求数据在途 → `px_evc_idle_put` 交还 IDLE**（epoll 照看：可读摘除 + 派发回 fserve 池、15s 空闲超时/对端断开由事件循环 tick close），worker 返回释放去取新 job = **空闲 keep-alive 连接不再占线程**；收尾统一 `px_evc_close`（清理 ctx 防 fd 复用串扰）；acquire/idle_put 失败（非 Linux / fd 超 PX_MAX_CONNS）自动降级原阻塞续读路径，功能不降。前置：B-S1 PxConnCtx typedef 加标签（worker 位于内核前需前向声明）、FSERVE_KIND_* 宏 #ifndef 保护。
+- **B-S2 验证实录**（examples/m88b_bs2/ 归档）：`PX_SERVE_WORKERS=8` 下——① 200 空闲 keep-alive 连接首请求 **200/200**（A 类 8 worker 只能同时喂 8 连接，空闲即释放实证）；② 500 空闲连接挂载后服务线程数**恒定 10**（8 fserve + 1 事件循环 + 1 主，不随连接数涨 = 空闲不占 worker 核心指标）；③ 突发（空闲连接复用）**50/50 全 200**（事件循环派发回池正确）；④ 16s 后服务端关闭空闲连接 = **15s 空闲超时语义保留**。回归：m82 http_serve_unix 8 项 PASS、m83_s6 同端口流式 SSE 5 项 PASS（含断连不崩）、A 类短连接压测场景 100×300=30000 全 200 0 err（45.5s）。SSE 长连接（sse_conn_worker）仍在阻塞路径 → B-S3。
