@@ -260,3 +260,32 @@
 >   bc_emit 不做 M41.2 不可变检查等静态语义校验（语义校验走 compiler/codegen，VM 侧收口时对齐）。
 > - 下一步：B2 构造/类型（NEWSTRUCT/NEWENUM + struct/enum/const enum 类型元数据表 +
 >   impl 方法注册 "Type.method" → G 槽）。
+
+### S3-B · B2 构造/类型：NEWSTRUCT/NEWENUM + struct/enum/const enum/impl 方法注册
+> 完成（2026-09-08）：**类型系统三件套（struct/enum/const enum）在 VM 上跑通 + impl 方法
+> 注册为全局 "Type.method"（px_method struct 桥按名转发）**。
+> - **runtime/vm.h**：PxBCModule 增 struct 类型元数据表（PxStructDef {name, fnames, nfields}，
+>   NEWSTRUCT 运行时字段名来源）；vm.c 实现 **NEWSTRUCT**（a=dst, b=structs 元数据 idx,
+>   c=字段值连续槽基址 → px_struct，同 codegen 构造语义）与 **NEWENUM**（a=dst, b=N 类型名,
+>   c=N 变体名 → px_enum）；px_vm_run_module 注册全局函数跳过 name 以 '<' 开头的闭包
+>   （B4 起 closure 不注册全局，LOADK PXK_FUNC 直接引用）。
+> - **selfhost/bc_emit.px**：① 类型元数据收集 —— StructDef → structs（字段声明序）、
+>   EnumDef → enums（变体表）、TypeConst 递归收集（顶层+函数体+嵌套块，对齐 cg_collect_consts，
+>   值=表达式，访问处内联发射而非编译期常量）、impl 方法列表按 "Type.method" 字典序
+>   （对齐 codegen M-B6 确定性排序）；② Field 编译期折叠 —— const enum（LogLevel.Info →
+>   值表达式内联）与 enum 变体（Color.Red → NEWENUM，obj 不求值）优先于 GETF；③ 构造
+>   Call/Constructor（callee Var 为类型名）→ struct/enum 构造；④ impl 方法以注册名
+>   "Type.method" 作为普通函数（self=首参）发射并入 funcs（px_vm_run_module 统一注册）；
+>   ⑤ emit-c 输出 s_structs 元数据表 + s_mod .structs/.nstructs；⑥ top_stmts 过滤补
+>   TypeConst、bc_emit_stmt 补 TypeConst 跳过。
+> - **验证**：cases_bc/bc8.px+dump golden —— **bc8_verify.sh 11 断言全 PASS**（struct 构造
+>   NEWSTRUCT/字段读 GETF/字段写 SETF/impl 方法 Point.sum CALLM→px_method struct 桥（self
+>   绑定）/enum 变体 NEWENUM + px_eq enum 相等比较/TypeConst 折叠 LogLevel.Error=3）；
+>   **bc8.px 旧轨 pxi 同跑 rc=0 语义一致**；bc1-7 dump golden 全不变 + bc7_verify 复跑全绿
+>   （B1 无回归）。
+> - 记录/决策：NEWSTRUCT 用 structs 元数据下标（非 N 名）作 b 操作数——字段名表须随模块
+>   静态生成；enum 构造仅支持 Color(Variant)/Color("Variant")（payload enum 未覆盖，遇之
+>   panic 未实现，不静默错）；const enum 值=表达式内联（对齐 codegen，非编译期常量折叠）；
+>   TypeConst 语法为括号形式 `type X const (A = 1, ...)`（非缩进块，parser M44 语法）。
+> - 下一步：B3 推导式/match/生成器（ListComp/GenExp/DictComp → 循环展开或 NEWGEN；
+>   match/select 模式匹配展开；cases s04/s13 + m34_gen_lazy/m25 系列）。

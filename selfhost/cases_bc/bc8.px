@@ -1,0 +1,40 @@
+# M89-S3-B2 bc8.px —— 构造/类型批冒烟（struct/enum/impl/const enum）
+# 覆盖（B2 首切）：
+#   struct 构造 Point(1,2) → NEWSTRUCT（模块 structs 元数据 + 字段值连续槽）
+#   struct 字段读 obj.name（GETF）/ 写 obj.name=v（SETF）
+#   enum 变体 Color.Red → NEWENUM（Field 折叠，obj 不求值）
+#   impl 方法 def sum(self) → 注册 "Point.sum"，obj.sum() CALLM→px_method struct 桥
+#   type X const（TypeConst）LogLevel.Error → 值表达式内联折叠（对齐 codegen）
+#   enum 相等比较 c1 == Color.Red（px_eq PX_ENUM 分支）
+# 验证：emit-c 跑 Top 后 PX_BC_DUMP 全局断言（bc8_verify.sh）。
+struct Point:
+    x: int
+    y: int
+
+enum Color:
+    Red
+    Green
+    Blue
+
+impl Point:
+    def sum(self):
+        return self.x + self.y
+
+type LogLevel const (Info = 1, Warn = 2, Error = 3)
+
+var p = Point(10, 5)        # NEWSTRUCT 顶层
+var p2 = Point(3, 4)        # NEWSTRUCT 顶层
+p2.x = 7                    # SETF struct 字段写
+var psum = p.sum()          # CALLM struct 方法桥 → 10+5 = 15
+var p2sum = p2.sum()        # → 7+4 = 11
+var c1 = Color.Red          # NEWENUM 顶层
+var c2 = Color.Green        # NEWENUM 顶层
+var is_red = c1 == Color.Red    # px_eq PX_ENUM → true
+var not_red = c1 == c2          # false
+var lv = LogLevel.Error     # TypeConst 折叠 → 3
+var lw = LogLevel.Warn      # → 2
+var out_x = p.x             # GETF → 10
+var out_y = p2.y            # GETF → 4
+var out_xy = p.x + p.y      # 15
+var out_lv = lv
+var out_ok = psum == 15 and p2sum == 11 and out_xy == 15 and is_red and not not_red and lv == 3 and lw == 2

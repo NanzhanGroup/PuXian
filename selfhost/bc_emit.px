@@ -110,7 +110,107 @@ def bc_new_module(name):
     m["globals"] = []
     m["funcs"] = []
     m["top"] = -1
+    # B2：类型元数据 —— structs=[{name,fnames}...]（声明序）；enums={name:[变体..]}；
+    #   consts={name:[{n,e}]}（TypeConst 值表达式，Field 访问处展开对齐 codegen 内联）
+    m["structs"] = []
+    m["enums"] = bc_new_dict()
+    m["consts"] = bc_new_dict()
     return m
+
+# B2：struct 类型名 → structs 元数据下标（无则 -1）
+def bc_struct_index(name):
+    var i = 0
+    while i < len(g_bcm["structs"]):
+        if g_bcm["structs"][i]["name"] == name:
+            return i
+        i += 1
+    return -1
+
+# B2：enum 类型名是否登记且含变体名
+def bc_enum_has(tname, vname):
+    if not g_bcm["enums"].has(tname):
+        return false
+    return contains(g_bcm["enums"][tname], vname)
+
+# B2：TypeConst 查找 —— consts[tname] 里找 iname，命中返回值表达式（null=无）
+def bc_const_find(tname, iname):
+    if not g_bcm["consts"].has(tname):
+        return null
+    let items = g_bcm["consts"][tname]
+    var i = 0
+    while i < len(items):
+        if items[i]["n"] == iname:
+            return items[i]["e"]
+        i += 1
+    return null
+
+# B2：递归收集 TypeConst（顶层 + 函数体 + 嵌套块，对齐 cg_collect_consts）
+def bc_collect_consts(stmts):
+    var i = 0
+    while i < len(stmts):
+        let st = stmts[i]
+        let ty = st[0]
+        if ty == "TypeConst":
+            let tname = rust_unescape(st[1])
+            if not g_bcm["consts"].has(tname):
+                g_bcm["consts"][tname] = []
+            var ti = 0
+            while ti < len(st[2]):
+                let it = st[2][ti]
+                let d2 = bc_new_dict()
+                d2["n"] = rust_unescape(it[1])
+                d2["e"] = it[2]
+                g_bcm["consts"][tname].push(d2)
+                ti += 1
+        elif ty == "FuncDef":
+            bc_collect_consts(st[4])
+        elif ty == "ImplDef":
+            var mi = 0
+            while mi < len(st[3]):
+                bc_collect_consts(st[3][mi][4])
+                mi += 1
+        elif ty == "If":
+            let brs = st[1]
+            var bi = 0
+            while bi < len(brs):
+                bc_collect_consts(brs[bi][1])
+                bi += 1
+            if st[2] != null:
+                bc_collect_consts(st[2])
+        elif ty == "While":
+            bc_collect_consts(st[2])
+        elif ty == "For":
+            bc_collect_consts(st[3])
+        i += 1
+
+# B2：收集 impl 方法列表 [[type_name, method_func]..]，按 "Type.method" 字典序
+#   （对齐 codegen M-B6 确定性排序）
+def bc_collect_impl_list(items):
+    let out = []
+    var i = 0
+    while i < len(items):
+        let st = items[i]
+        if st[0] == "ImplDef":
+            let tn = rust_unescape(st[1])
+            var mi = 0
+            while mi < len(st[3]):
+                out.append([tn, st[3][mi]])
+                mi += 1
+        i += 1
+    # 插入排序（按 "Type.method" 字典序）
+    var si = 1
+    while si < len(out):
+        var j = si
+        while j > 0:
+            let ka = out[j - 1][0] + "." + rust_unescape(out[j - 1][1][1])
+            let kb = out[j][0] + "." + rust_unescape(out[j][1][1])
+            if kb < ka:
+                let tmp2 = out[j]
+                out[j] = out[j - 1]
+                out[j - 1] = tmp2
+            j -= 1
+        si += 1
+    return out
 
 # ---------- 函数级槽分配（对齐 codegen _v 编号体系） ----------
 # 参数先占 0..nparams-1（A1 无默认参数，arity=nparams）；hoist 局部随声明序；
@@ -465,13 +565,34 @@ def bc_emit_expr(expr, dst, func):
         bc_emit_inst(func, "SLICE", d, so, base)
         return d
     if ty == "Field":
-        # B1：obj.name → GETF dst, obj, N（px_field；enum/const enum 折叠 B2 类型表接入）
+        # B1：obj.name → GETF dst, obj, N（px_field）。
+        # B2：enum 变体（Color.Red → NEWENUM）与 const enum（LogLevel.Info → 值表达式
+        #   内联，对齐 codegen cg_collect_consts 语义）编译期折叠，obj 不求值。
+        let fname = rust_unescape(expr[2])
+        let obj0 = expr[1]
+        if obj0[0] == "Var":
+            let oname = rust_unescape(obj0[1])
+            let ce = bc_const_find(oname, fname)
+            if ce != null:
+                var d = dst
+                if d < 0:
+                    d = bc_tmp(func)
+                bc_emit_expr(ce, d, func)
+                return d
+            if bc_enum_has(oname, fname):
+                var d = dst
+                if d < 0:
+                    d = bc_tmp(func)
+                let tn = bc_n_add(g_bcm["n_pool"], oname)
+                let vn = bc_n_add(g_bcm["n_pool"], fname)
+                bc_emit_inst(func, "NEWENUM", d, tn, vn)
+                return d
         var d = dst
         if d < 0:
             d = bc_tmp(func)
         let so = bc_tmp(func)
         bc_emit_expr(expr[1], so, func)
-        let nn = bc_n_add(g_bcm["n_pool"], rust_unescape(expr[2]))
+        let nn = bc_n_add(g_bcm["n_pool"], fname)
         bc_emit_inst(func, "GETF", d, so, nn)
         return d
     if ty == "OptionalField":
@@ -485,11 +606,29 @@ def bc_emit_expr(expr, dst, func):
         bc_emit_inst(func, "GETF_OPT", d, so, nn)
         return d
     if ty == "Call":
-        # A4 普通调用 / B1 方法调用（callee Field → CALLM px_method 桥）
+        # A4 普通调用 / B1 方法调用（callee Field → CALLM px_method 桥）/
+        # B2 struct/enum 构造（callee Var 为类型名 → NEWSTRUCT/NEWENUM）
         let callee = expr[1]
+        if callee[0] == "Var":
+            let cname = rust_unescape(callee[1])
+            let sti = bc_struct_index(cname)
+            if sti >= 0:
+                return bc_emit_struct_new(cname, sti, expr[2], dst, func)
+            if g_bcm["enums"].has(cname):
+                return bc_emit_enum_new(cname, expr[2], dst, func)
         if callee[0] == "Field":
             return bc_emit_methodcall(callee[1], rust_unescape(callee[2]), expr[2], dst, func)
         return bc_emit_call(callee, expr[2], dst, func)
+    if ty == "Constructor":
+        # B2：类型构造器名(args)（parser 命名的构造表达式）→ struct/enum 构造
+        let cname = rust_unescape(expr[1])
+        let sti = bc_struct_index(cname)
+        if sti >= 0:
+            return bc_emit_struct_new(cname, sti, expr[2], dst, func)
+        if g_bcm["enums"].has(cname):
+            return bc_emit_enum_new(cname, expr[2], dst, func)
+        # 其他构造名 → 普通函数调用（对齐 codegen Constructor 兜底 px_call 全局）
+        return bc_emit_call(expr[1], expr[2], dst, func)
     if ty == "Pipe":
         # |>: 左值作为实参首参调用右函数；右为 Call → f(v, ...)（cg 同语义）
         let v = expr[1]
@@ -544,6 +683,47 @@ def bc_emit_methodcall(obj, mname, arg_list, dst, func):
         ai += 1
     let nn = bc_n_add(g_bcm["n_pool"], mname)
     func["bc"].push(["CALLM", argc, d, cslot, nn])
+    return d
+
+# ---------- B2：struct/enum 构造发射 ----------
+# Point(1,2)：字段值连续槽 base..base+n-1（声明序）→ NEWSTRUCT dst, 元数据idx, base
+def bc_emit_struct_new(cname, sti, args, dst, func):
+    let sd = g_bcm["structs"][sti]
+    let n = len(sd["fnames"])
+    if len(args) != n:
+        panic("结构体 " + cname + " 需要 " + str(n) + " 个字段，给出 " + str(len(args)))
+    var d = dst
+    if d < 0:
+        d = bc_tmp(func)
+    let base = bc_tmp(func)
+    while func["next_slot"] < base + n:
+        bc_tmp(func)
+    var ai = 0
+    while ai < n:
+        bc_emit_expr(args[ai], base + ai, func)
+        ai += 1
+    bc_emit_inst(func, "NEWSTRUCT", d, sti, base)
+    return d
+
+# Color(Red) / Color("Red")：实参=变体名 → NEWENUM dst, N(类型), N(变体)
+def bc_emit_enum_new(cname, args, dst, func):
+    var vname = null
+    if len(args) == 1:
+        let a0 = args[0]
+        if a0[0] == "Var":
+            let vn = rust_unescape(a0[1])
+            if bc_enum_has(cname, vn):
+                vname = vn
+        elif a0[0] == "Str":
+            vname = rust_unescape(a0[1])
+    if vname == null:
+        panic("bc_emit enum 构造未实现（仅支持 Color(Variant)/Color(\"Variant\"): " + str(cname))
+    var d = dst
+    if d < 0:
+        d = bc_tmp(func)
+    let tn = bc_n_add(g_bcm["n_pool"], cname)
+    let vn2 = bc_n_add(g_bcm["n_pool"], vname)
+    bc_emit_inst(func, "NEWENUM", d, tn, vn2)
     return d
 
 # ---------- B1：赋值目标发射（Assign/复合赋值 目标 ∈ Var/Index/Field） ----------
@@ -733,6 +913,9 @@ def bc_emit_stmt_inner(stmt, func):
         return
     if ty == "Empty":
         return
+    if ty == "TypeConst":
+        # B2：函数体内 const enum 定义无运行时语句（值在访问处内联折叠）
+        return
     panic("bc_emit_stmt 未实现: " + str(stmt))
 
 # SRCLINE 追踪（对齐 cg_gen_stmt wrapper；stmt 末位 = pos [line,col]）
@@ -885,6 +1068,15 @@ def bc_emit_for(stmt, func):
 # 顶层 FuncDef → PxVMFunc（body 语句发射 + 尾 RET0 对齐 codegen return px_null()）
 def bc_emit_func_def(f):
     let name = rust_unescape(f[1])
+    return bc_emit_func_body(f, name)
+
+# B2：impl 方法 → 注册名 "Type.method"（self=首参，与普通函数同构发射）
+def bc_emit_impl_def(m, tname):
+    let mname = rust_unescape(m[1])
+    return bc_emit_func_body(m, tname + "." + mname)
+
+# 统一函数体发射（顶层 FuncDef / impl 方法同构；name=注册名）
+def bc_emit_func_body(f, name):
     let params = f[2]
     var arity = len(params)
     var pi = 0
@@ -942,8 +1134,34 @@ def bc_emit_program(prog):
     let items = prog[1]
     let m = bc_new_module("<module>")
     g_bcm = m
-    # 第一遍：收集全局名（对齐 cg_generate 顺序：FuncDef/ExternDef/VarDecl/Assign）
+    # B2：收集类型元数据 —— structs/enums（顶层 StructDef/EnumDef）+ consts（递归
+    #   含函数体内 TypeConst）+ impl 方法列表（对齐 cg_collect_types/cg_collect_consts）
     var i = 0
+    while i < len(items):
+        let st = items[i]
+        let ty = st[0]
+        if ty == "StructDef":
+            let sd = bc_new_dict()
+            sd["name"] = rust_unescape(st[1])
+            let fnames = []
+            var fi = 0
+            while fi < len(st[2]):
+                fnames.append(rust_unescape(st[2][fi][1]))
+                fi += 1
+            sd["fnames"] = fnames
+            m["structs"].push(sd)
+        elif ty == "EnumDef":
+            let vnames = []
+            var vi = 0
+            while vi < len(st[2]):
+                vnames.append(rust_unescape(st[2][vi][1]))
+                vi += 1
+            m["enums"][rust_unescape(st[1])] = vnames
+        i += 1
+    bc_collect_consts(items)
+    let impl_list = bc_collect_impl_list(items)
+    # 第一遍：收集全局名（对齐 cg_generate 顺序：FuncDef/ExternDef/VarDecl/Assign）
+    i = 0
     while i < len(items):
         let st = items[i]
         let ty = st[0]
@@ -956,7 +1174,14 @@ def bc_emit_program(prog):
             if tgt[0] == "Var":
                 bc_g_add(m["globals"], rust_unescape(tgt[1]))
         i += 1
-    # 第二遍：顶层 FuncDef → funcs（按 items 顺序，对齐 cg_generate 顶层 def）
+    # 第二遍：funcs —— impl 方法（"Type.method" 字典序，对齐 cg_generate 先于
+    #   顶层 def）+ 顶层 FuncDef（items 序）
+    i = 0
+    while i < len(impl_list):
+        let im = impl_list[i]
+        let f = bc_emit_impl_def(im[1], im[0])
+        m["funcs"].push(f)
+        i += 1
     i = 0
     while i < len(items):
         let st = items[i]
@@ -970,7 +1195,7 @@ def bc_emit_program(prog):
     while i < len(items):
         let st = items[i]
         let ty = st[0]
-        if ty != "FuncDef" and ty != "StructDef" and ty != "EnumDef" and ty != "TraitDef" and ty != "ImplDef" and ty != "Import" and ty != "ExternDef":
+        if ty != "FuncDef" and ty != "StructDef" and ty != "EnumDef" and ty != "TraitDef" and ty != "ImplDef" and ty != "Import" and ty != "ExternDef" and ty != "TypeConst":
             top_stmts.append(st)
         i += 1
     # 顶层是否有 main 定义（A4：有 → Top 末尾 call main + RET，退出码由 driver 转换）
@@ -1068,6 +1293,24 @@ def bc_emit_c_program(prog):
         out += "    \"" + cg_escape_str(m["globals"][gi]) + "\",\n"
         gi += 1
     out += "};\n\n"
+    # B2：struct 类型元数据表（NEWSTRUCT 运行时字段名来源）
+    var sti = 0
+    while sti < len(m["structs"]):
+        let sd = m["structs"][sti]
+        out += "static const char* s_st_" + str(sti) + "[] = {\n"
+        var sfi = 0
+        while sfi < len(sd["fnames"]):
+            out += "    \"" + cg_escape_str(sd["fnames"][sfi]) + "\",\n"
+            sfi += 1
+        out += "};\n"
+        sti += 1
+    out += "static const PxStructDef s_structs[] = {\n"
+    sti = 0
+    while sti < len(m["structs"]):
+        let sd = m["structs"][sti]
+        out += "    {\"" + cg_escape_str(sd["name"]) + "\", s_st_" + str(sti) + ", " + str(len(sd["fnames"])) + "},\n"
+        sti += 1
+    out += "};\n\n"
     # funcs：每个函数一个 bc 数组（s_bc_<fi>）
     var fi = 0
     while fi < len(m["funcs"]):
@@ -1093,6 +1336,7 @@ def bc_emit_c_program(prog):
     out += "static const PxBCModule s_mod = {\n"
     out += "    .name=\"<module>\", .K=s_K, .nK=" + str(len(m["k_pool"])) + ", .N=s_N, .nN=" + str(len(m["n_pool"])) + ",\n"
     out += "    .G=s_G, .nG=" + str(len(m["globals"])) + ", .funcs=s_funcs, .nfuncs=" + str(len(m["funcs"])) + ", .top_idx=" + str(m["top"]) + ",\n"
+    out += "    .structs=s_structs, .nstructs=" + str(len(m["structs"])) + ",\n"
     out += "};\n\n"
     # main（A2：跑 Top；main() 用户函数调用约定随 S3-B/CALL 接入）
     out += "int main(int argc, char** argv) {\n"
