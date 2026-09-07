@@ -6,7 +6,7 @@
 > 用户指令（2026-09-07）：**「把 A、B、C 全部立项 M88 里面。今天中午（12:00）开工，只需要实现 A 类」**
 > 性质：**L0 runtime（C，GC 线程表 + 服务端并发模型层）**；业务 .px 零改动；native 总数不变
 > 风险等级：**L0**（动 GC/线程模型）→ 必须：自举证明 + 回归总闸 + 并发压测 + 文档同步
-> 状态：🆕 立项（A/B/C 全部归属 M88；A 类今日 12:00 开工，见 §七 执行状态）
+> 状态：🆕 A 类已于 2026-09-07 收口（tag v0.1.0-m88）；**B 类已立项开工（S1 进行中，见 §七）**；C 类排后
 
 ---
 
@@ -75,11 +75,35 @@
 
 ---
 
-## 三、B 类（M88 后续批次，事件驱动半同步/半异步）
+## 三、B 类（M88 本批次：事件驱动半同步/半异步，连接上万，2026-09-07 立项）
 
-- 目标：连接数上万~10 万，keep-alive **空闲连接不占 OS 线程**。
-- 方案：连接处理统一收敛到线程池；空闲连接由 poll/epoll 事件循环照看，**有完整请求才派给池 worker**（半同步/半异步，即 issue 建议 B + 那篇 C 语言 epoll 文章的架构内核）；`SO_RCVTIMEO` 轮询式空闲判定改为事件驱动。
-- 依赖：A 类 S1（槽动态化）已完成，本档收益最大化。参考：cnblogs.com/zhengpan0526/p/18860258（epoll 演进 + Linux 内核参数调优表：fs.file-max/nofile/nf_conntrack/tcp_mem…对 Go/PuXian 通用）。
+### 目标
+- **空闲 keep-alive / SSE 连接不占 worker 线程**：由事件循环（epoll/poll）照看，有数据才派发 → 进程 OS 线程数 ≈ 池容量 + 常数，与连接数解耦；
+- 连接数 **1 万+**（http keep-alive 与 SSE 长连接均可），活跃突发请求全 200、不崩；
+- 吞吐不降：活跃 worker 从 256 收敛到几十（= 同时处理请求的连接数）→ 顺带缓解 M11 g_gc_mu 容器锁竞争（少线程抢锁）；**不在本批重构 g_gc_mu**（风险表已注明归属）；
+- 语义零漂移：keep-alive 15s 空闲超时、client_close / resp keep_alive:false、file 流式、chunked/gzip、M83-S6 同端口 stream 路由、SSE 注册表 + sse_send/sse_close、http_serve_unix 0600/错误容忍 全部保持。
+
+### 现状（A 类 S2 收口后实测定位，2026-09-07）
+- fserve 池 worker 取 (fd,kind) 后**阻塞跑完连接整个生命周期**：http_conn_worker keep-alive 循环阻塞 recv（SO_RCVTIMEO 15s 判空闲超时）；sse_conn_worker handler 返回后阻塞 recv 至断开/sse_close（shutdown 唤醒）。→ keep-alive 空闲连接与 SSE 长连接**全程占 1 个 worker** 直到 15s 超时/断开；空闲连接越多线程/槽被吃越狠（A 类压测：256 活跃 keep-alive 即吃满默认池）。
+- runtime 现无 epoll/统一事件循环（poll 仅零星用于等子进程/管道等）；连接 fd 全阻塞式处理。
+
+### 方案：连接对象化 + 全局事件循环（mini reactor）
+- **ConnCtx 连接上下文表**（动态/容量可配，PX_MAX_CONNS 默认 16384）：{fd, kind(HTTP/SSE), state(FREE/ACTIVE/IDLE), 半请求动态缓冲(非阻塞下读一半的续接), 空闲计时起点}；
+- **连接状态机**：worker 持有 = ACTIVE（独占处理）；响应写完且无下一请求数据 = 交还 IDLE；事件循环 detect 可读 = 摘除 + 派发回 fserve 队列；空闲超时（15s，沿用既有语义）由事件循环计时 close；对端断开/HUP 由事件循环 detect → close + 清理（SSE 同步清注册表）；
+- **单持有者原则**：fd 在 ACTIVE/IDLE 间严格互斥转移（idle 注册/摘除 + fserve 派发同锁/原子），杜绝 worker 与事件循环同时 recv 同一 fd（也防 fd 复用串扰）；
+- **worker 处理单元从"连接"细化为"请求突发"**：接管后循环读完整请求（头+body，用 ConnCtx 缓冲续接半包/半 body）→ handler → 响应 → 已有下一请求数据则续、否则交还 IDLE 回池；
+- **事件循环**：Linux epoll（O(1)），非 Linux poll 兜底（文档明示 Linux 一等）；懒启动全局单例线程；连接 fd 一律 O_NONBLOCK；
+- **SSE**：handler 返回后连接交还 IDLE（事件循环等 POLLIN|POLLHUP|POLLERR detect 断开）；sse_send 仍任意线程可写（写失败才清注册表，语义保持）；sse_close 改为 IDLE 摘除 + close + 清理（ACTIVE 场景走 shutdown 唤醒原逻辑兜底）；g_sse_conns 256 定长 → 动态表容量可配（PX_MAX_SSE_CONNS，支撑上千~上万 SSE）。
+
+### B 类 S 级拆分（每 S 编译 + 相关 verify 通过，不混 commit）
+- **B-S1 连接上下文表 + 事件循环内核**：ConnCtx 表 + 状态机 + 事件循环线程（epoll/poll，懒启动单例）+ 连接 fd 非阻塞化 + 注册/摘除/超时/派发接口；冒烟：哑连接挂 IDLE → 外部写触发派发 → 读 0/HUP 触发清理。
+- **B-S2 http_conn_worker 请求级重构**：keep-alive 空闲交还 IDLE + ConnCtx 缓冲续接（半包/大 body 非阻塞续读）+ 事件循环派发回池；语义保持（见目标）；验证：m82/m83_s6 HTTP 专项 + A 类短连接压测场景回归 + 新增「N 空闲长连接 + 突发全 200」。
+- **B-S3 SSE 长连接事件循环化 + 注册表容量可配**：handler 返回后交还 IDLE；sse_close/sse_send 适配；g_sse_conns 动态化（PX_MAX_SSE_CONNS）；验证：m23a SSE+WS 回归 + 500~1000 长连接挂载 + 广播。
+- **B-S4 压测 + 回归 + 收口**：压测脚本归档 examples/m88b_s4/：① 1 万 idle keep-alive 连接：进程 OS 线程数 ≈ 池容量 + 常数（不随连接数涨）② idle 后突发全 200 ③ SSE 500+ 挂载广播 ④ 短连接并发吞吐不低于 A 类基线；回归总闸 + 自举证明 rc=0 + native 数不变 + fmt/lint 0 + 文档同步 + CHANGELOG + tag（版本号收口时定）。
+
+### 依赖
+- A 类 S1（槽动态化）+ S2（fserve 池）已完成 ✅；本档在 fserve 池与 conn_worker 间插入事件循环层，池容量默认收敛（PX_SERVE_WORKERS 默认 256 → 64 级，空闲不占线程后无需大池）。
+- 参考：cnblogs.com/zhengpan0526/p/18860258（epoll 演进 + Linux 内核参数调优表：fs.file-max/nofile/nf_conntrack/tcp_mem…）。
 
 ## 四、C 类（M88 远期旗舰：用户态协程 M:N，向 Go 百万看齐）
 
@@ -137,6 +161,14 @@
 - [ ] 回归总闸全绿 + 自举证明 rc=0 + native 数不变；fmt/lint 0；worktree 干净
 - [ ] 文档同步 + CHANGELOG + qg-issue 27 状态更新；ws-approve #47 对拍重跑 + 灰度观察（交清歌）
 
+### B 类验收清单（B-S4 总闸，2026-09-07 立项）
+- [ ] 1 万 idle keep-alive 连接建立：进程 OS 线程数 ≈ 池容量 + 常数（不随连接数线性涨）
+- [ ] idle 连接突发请求全 200、0 失败、进程不崩（http_serve / http_serve_unix / sse_serve 抽查）
+- [ ] SSE 长连接 500+ 挂载 + sse_send 广播 + sse_close/sse_send 断线语义回归
+- [ ] 短连接并发 100×500 吞吐/成功率不低于 A 类基线；服务路径无任何 spawn/槽满 exit
+- [ ] 回归总闸全绿 + 自举证明 rc=0 + native 数不变；fmt/lint 0；worktree 干净
+- [ ] 文档同步 + CHANGELOG + tag
+
 ## 六、风险与预案
 | 风险 | 预案 |
 |---|---|
@@ -145,6 +177,16 @@
 | 高线程数下 GC stop-the-world 停顿变长 | 默认槽上限 1024（甜点区）；文档明示；B 类事件驱动从根上降线程数 |
 | px_serve 既有池被复用后容量/行为回归 | 案甲若复用需跑 px_serve 既有 verify（p5_px_serve/m34_pool_cfg/m36_pool_grace 等） |
 | spawn/池 worker 同时抢槽扩容 | 槽分配本就全在 g_gc_mu，扩容并入同临界区；verify 并发 spawn + serve 混跑 |
+
+**B 类新增风险：**
+| 风险 | 预案 |
+|---|---|
+| 非阻塞重构引入半包/半 body 续接错误（丢字节/错位） | ConnCtx 动态缓冲续接 + 既有 HTTP 专项逐字节对拍（m82/m83_s6/A 类压测）+ 新增分片写（TCP_NODELAY 慢发）用例 |
+| 状态机竞态（worker 与事件循环同抢 fd / fd 复用串扰） | 单持有者原则：FREE/ACTIVE/IDLE 原子转移，close 前强制置 FREE 并从事件循环摘除；并发压测长跑验证 |
+| keep-alive 空闲超时语义漂移（SO_RCVTIMEO → 事件循环计时） | 默认 15s 语义保持；补空闲超时关闭用例 |
+| M83-S6 stream 路由 / SSE 交接破坏（连接转通道后脱离普通 keep-alive） | stream_takeover 走专用状态转移路径 + m83_s6 专项回归 |
+| g_gc_mu 容器锁竞争仍限吞吐 | 本批不重构（归 C 类前置预研/单独立项）；以「活跃 worker 收敛 → 抢锁线程减少」验证吞吐不降；若不足单独立项锁细化 |
+| 非 Linux 平台 poll 兜底性能 | 文档明示 Linux epoll 一等；生产部署 Linux |
 
 ---
 
@@ -157,6 +199,9 @@
 | A 类 S2 | ✅ done | 函数式 serve 连接池（http_serve/unix/sse_serve accept → fserve 池，队列背压绝不 exit）+ SIGPIPE 忽略 + bi_sleep EINTR 续睡（三处根因修复，见下执行摘要）；回归 m82 verify + m23a SSE+WS + s1 全绿 |
 | A 类 S3 | ✅ done | **收口完成**：全能力重链 bootstrap/pxi（--full，9457456→9462024B，strings 含 PX_SERVE_WORKERS/PX_MAX_THREADS 实证 M88 runtime 入解释器宿主）；自举证明 rc=0（B.c==golden 10595 行）；native 301 不变；回归总闸 m82+m83_s1-s4+m84_s1-s3+m85_s1-s2+m86_s0-s2 干净全绿（m83_s5/s6 内容全 PASS，收尾 EXIT-trap `kill 0` 进程组自杀 = M84-S4 起记录不修的历史边界，非本 M 回归）；M88 专项 s1_spawn_200 200 并发 PASS + http_serve_unix 100×500 **全 200 0 失败 0 err 进程不崩**（53s）；fmt/lint 0；文档同步（spec §8.22/CHEATSHEET/M88_PLAN）+ examples/m88_s3/press_unix.go #→// 修正；qg-issue 27 归档 done/；tag v0.1.0-m88 |
 | 远景路线裁定 | ✅ done | §四·A 落盘（VM 化=总钥匙；native 后端排最后；Windows 排 native 后；单线程子集可应急） |
+| B 类立项 | ✅ done | §三 细化 B 方案 + S1-S4 拆分落盘（本文件，2026-09-07）；**不挂 ws-todo**（用户指令"现在立项开工 B 类，不用挂 ws-todo"） |
+| B 类 S1 | 🔄 running | 事件循环内核 + 连接上下文表（进行中） |
+| B 类 S2/S3/S4 | ⏳ pending | 见 §三 S 级拆分 |
 
 ### A 类执行摘要（2026-09-07 12:00 开工，S1/S2 完成）
 
