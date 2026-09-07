@@ -6,6 +6,25 @@
 
 ## [Unreleased]
 
+### Issue28 止血批次 B1-B3（qg-issue 28 · docs/ISSUE28_PLAN.md）
+
+> 完成（2026-09-07）：对 M88-B 后仍阻塞 ws-approve .px 化（#47）的 **GC STW 周期尖刺 +
+> 堆只涨不落 + 并发吞吐 GIL** 三瓶颈做保守 GC 框架内止血（最终根治随 M89 VM 化精确 GC）。
+> - **B3**：全局符号表 M55 互斥锁 → **读写锁**——px_get_global / px_global_native / struct 方法查找
+>   读锁并发（破 GIL 串行化），px_set_global / GC 根扫描写锁独占；锁序 g_gc_mu → g_globals_mu 不变。
+> - **B2**：**slab 空页归还 OS**（GC sweep 后摘除并 munmap 完全空闲非头 slab，每 class 保留头防抖动）+
+>   **字符串拼接中间缓冲泄漏修复**（px_add "+" / px_mul "×n" 中间缓冲 xmalloc 未 xfree —— 堆 40MB→1.1GB
+>   不回吐的直接根因之一：每拼接泄漏 1 缓冲；修复前 3 轮 40 万垃圾波 RSS 逐轮 +130MB，修复后回落基线 +15MB）。
+> - **B1**：**GC 延迟到请求间安全点**（服务模式越阈值置 g_gc_pending，fserve/px_pool worker 空闲
+>   px_gc_poll 回收，硬上限 阈值×4 内联兜底；单线程 CLI/解释保持原内联零回归）+ **sweep 削峰**
+>   （sweep 免逐趟 sigprocmask + xfree 局部性 hint：单次 STW 250-500ms → ~100-150ms）+
+>   GC 摘要打印耗时；`PX_GC_INLINE=1` 可对拍还原 B1 前行为。
+> - 验证：examples/issue28_b1 A/B（200 请求：B1 前每 ~4 请求 1 刺 p95 数百 ms → B1 后 200 请求仅
+>   2 次 GC、p95≈10ms、无灾难卡死）；examples/issue28_b2 RSS 回落专项 PASS；回归 m82（8 项）/m83_s6/
+>   m83_s1-s5/m84_s1/m85_s1-s2/m86_s0-s2 PASS。
+> - ⚠️ 残余（M89 吸收）：单次 STW 仍 ~100-300ms（sweep 线性于对象数）；issue28 §7 全量验收
+>   （单发 p95≤50ms / max≤100ms / 500 并发 p50≤200ms）需观音/清歌 ws-approve 隔离实测。
+
 ### M89 立项 + S0 · 版本升格 0.1.0 → 0.2.0（docs/M89_PLAN.md · VM 化旗舰里程碑启动）
 
 > 完成（2026-09-07）：**M89 立项**（VM 化 = AST/C 递归 → 显式帧 + 平坦字节码 VM，

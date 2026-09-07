@@ -16,7 +16,7 @@ bad() { echo "  FAIL $1"; FAIL=$((FAIL+1)); }
 
 echo "== [1/9] px --version（官方名）=="
 V=$($PX --version 2>&1)
-if echo "$V" | grep -qE "^px 0.1.0(-|$)"; then ok "--version → $V"; else bad "--version → $V"; fi
+if echo "$V" | grep -qE "^px [0-9]+\.[0-9]+\.[0-9]+"; then ok "--version → $V"; else bad "--version → $V"; fi
 
 echo "== [2/9] px --help 含 M85 全开关 + px 全子命令 + M86 别名说明 =="
 H=$($PX --help 2>&1)
