@@ -1,0 +1,27 @@
+# M89-S3-A2 bc2.px —— 运算批冒烟（无函数调用）
+# 覆盖：算术 Add/Sub/Mul/Div/IntDiv/Mod/Pow、比较 Eq/Gt/Ge/Lt、位 BitAnd/
+#       BitOr/BitXor/Shl、一元 Neg（折叠）与 Not；if/while 控制流与运算组合。
+# 验证：dump golden 锁指令序列 + emit-c 跑顶层后全局值断言（shell）。
+var arith = 2 + 3 * 4 - 1       # 13
+var idiv = 7 // 2               # 3
+var modv = 7 % 3                # 1
+var powv = 2 ** 8               # 256
+var bita = 6 & 3                # 2
+var bito = 4 | 1                # 5
+var bitx = 7 ^ 3                # 4
+var shlv = 1 << 4               # 16
+var negv = -7                   # -7
+var notv = not false            # true
+var cmp1 = 10 > 5               # true
+var cmp2 = 3 >= 4               # false
+var cmps = "ab" == "ab"         # true
+var scon = "ab" + "cd"          # "abcd"
+var acc = 0
+var n = 0
+while n < 5:
+    acc = acc + n
+    n = n + 1
+if 2 < 3:
+    var res = "big"
+else:
+    var res = "small"

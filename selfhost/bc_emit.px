@@ -198,6 +198,57 @@ def bc_emit_float(func, dst, f):
     let k = bc_k_add(g_bcm["k_pool"], "float", 0, f, "")
     bc_emit_inst(func, "LOADK", dst, k, 0)
 
+# ---------- op 名 → 指令名（对齐 vm.h B 表；A2） ----------
+def bc_unop_op(op):
+    if op == "Neg":
+        return "NEG"
+    if op == "Not":
+        return "NOT"
+    if op == "BitNot":
+        return "BITNOT"
+    panic("bc_unop_op 未知一元 op: " + str(op))
+
+def bc_binop_op(op):
+    if op == "Add":
+        return "ADD"
+    if op == "Sub":
+        return "SUB"
+    if op == "Mul":
+        return "MUL"
+    if op == "Div":
+        return "DIV"
+    if op == "IntDiv":
+        return "IDIV"
+    if op == "Mod":
+        return "MOD"
+    if op == "Pow":
+        return "POW"
+    if op == "Eq":
+        return "EQ"
+    if op == "Ne":
+        return "NE"
+    if op == "Lt":
+        return "LT"
+    if op == "Le":
+        return "LE"
+    if op == "Gt":
+        return "GT"
+    if op == "Ge":
+        return "GE"
+    if op == "BitAnd":
+        return "BITAND"
+    if op == "BitOr":
+        return "BITOR"
+    if op == "BitXor":
+        return "BITXOR"
+    if op == "Shl":
+        return "SHL"
+    if op == "Shr":
+        return "SHR"
+    if op == "ShrU":
+        return "SHRU"
+    panic("bc_binop_op 未知二元 op: " + str(op))
+
 # ---------- 表达式发射（A1 子集） ----------
 # 把 expr 值发射到 dst 槽。返回「值所在槽」（A1 恒 dst；优化留 A2）。
 # 支持的 tag：Int/Float/Str/Bool/Null → 加载；Var → 局部 MOV / 全局 GETG。
@@ -210,8 +261,8 @@ def bc_emit_expr(expr, dst, func):
         bc_emit_float(func, dst, expr[1])
         return dst
     if ty == "Unary":
-        # A1：仅负字面量常量折叠（-Int/-Float，parser 把 -1 解析为 Unary Neg Int）；
-        # 一般 Neg/Not/Bitnot 走 PXOP_NEG/NOT/BITNOT，A2 随算术批接入
+        # 负字面量常量折叠优先（-Int/-Float，parser 把 -1 解析为 Unary Neg Int）；
+        # 一般 Neg/Not/BitNot → NEG/NOT/BITNOT（A2 算术批）
         let inner = expr[2]
         let op = expr[1]
         if inner[0] == "Int" and op == "Neg":
@@ -220,7 +271,13 @@ def bc_emit_expr(expr, dst, func):
         if inner[0] == "Float" and op == "Neg":
             bc_emit_float(func, dst, 0 - inner[1])
             return dst
-        panic("bc_emit_expr Unary 未实现（A2 算术批）: " + str(expr))
+        var d = dst
+        if d < 0:
+            d = bc_tmp(func)
+        let s = bc_tmp(func)
+        bc_emit_expr(inner, s, func)
+        bc_emit_inst(func, bc_unop_op(op), d, s, 0)
+        return d
     if ty == "Str":
         let k = bc_k_add(g_bcm["k_pool"], "str", 0, 0.0, rust_unescape(expr[1]))
         if dst >= 0:
@@ -251,6 +308,19 @@ def bc_emit_expr(expr, dst, func):
         if dst >= 0:
             bc_emit_inst(func, "GETG", dst, g, 0)
         return dst
+    if ty == "Binary":
+        # A2：算术/比较/位运算批（两地址：ADD dst,dst,s2）；And/Or 短路 → A3
+        let op = expr[1]
+        if op == "And" or op == "Or":
+            panic("bc_emit_expr Binary And/Or 短路未实现（A3 控制流批）: " + str(expr))
+        var d = dst
+        if d < 0:
+            d = bc_tmp(func)
+        bc_emit_expr(expr[2], d, func)      # 左值直接入 dst（两地址）
+        let s2 = bc_tmp(func)
+        bc_emit_expr(expr[3], s2, func)
+        bc_emit_inst(func, bc_binop_op(op), d, d, s2)
+        return d
     panic("bc_emit_expr 未实现: " + str(expr))
 
 # ---------- 语句发射（A1 子集） ----------
@@ -362,13 +432,16 @@ def bc_emit_if(stmt, func):
         let jf = len(func["bc"])
         bc_emit_inst(func, "JMPF", t, 0, 0)
         bc_emit_stmts(body, func)
-        # body 完 → 回填 JMPF：假值落 body 后（下一分支 / else / end）
-        bc_patch_off(func, jf, len(func["bc"]))
-        # 还有后续分支或 else → body 尾须 JMP 越过（到 end）
         if bi < n - 1 or else_b != null:
+            # 还有后续（elif 分支 / else）→ then 尾 JMP（pend 待 patch 到 end）；
+            # JMPF 假值落点 = JMP 之后（下一分支 cond / else 起点）
             let j = len(func["bc"])
             bc_emit_inst(func, "JMP", 0, 0, 0)
+            bc_patch_off(func, jf, len(func["bc"]))
             pend_jmp.append(j)
+        else:
+            # 无后续：假值直接落 body 完 = end
+            bc_patch_off(func, jf, len(func["bc"]))
         bi += 1
     if else_b != null:
         bc_emit_stmts(else_b, func)
@@ -518,3 +591,91 @@ def bc_dump_module(m):
             print(str(pc) + ":" + ins[0] + " " + str(ins[1]) + " " + str(ins[2]) + " " + str(ins[3]))
             pc += 1
         fi += 1
+
+# ---------- emit-c（A2：把 BCModule 序列化为可链接 C 静态初值） ----------
+# 产出：含 main() 的完整 C 文件 —— 静态 PxK/N/G/funcs(bc)/PxBCModule 初值 +
+#   main 调 px_vm_run_module（注册全局函数 + 跑 Top）。与 codegen 生成的 C
+#   同入口（px_args_init/px_register_builtins）；顶层无 main 函数时 return 0
+#   （对齐 codegen 行为）；PX_BC_DUMP 环境变量 → 打印非函数全局值（A 阶段对拍）。
+def bc_emit_c_program(prog):
+    let m = bc_emit_program(prog)
+    var out = "/* 由 bc_emit.px (M89-S3) 自动生成 — 字节码模块（VM 执行） */\n"
+    out += "#include \"runtime.h\"\n#include \"vm.h\"\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\n"
+    out += "static const PxBCModule s_mod;\n\n"
+    # K 常量池
+    out += "static const PxK s_K[] = {\n"
+    var ki = 0
+    while ki < len(m["k_pool"]):
+        let k = m["k_pool"][ki]
+        if k["kind"] == "int":
+            out += "    {PXK_INT, " + str(k["i"]) + ", 0, NULL},\n"
+        elif k["kind"] == "float":
+            out += "    {PXK_FLT, 0, " + cg_fmt_float(k["f"]) + ", NULL},\n"
+        elif k["kind"] == "str":
+            out += "    {PXK_STR, 0, 0, \"" + cg_escape_str(k["s"]) + "\"},\n"
+        elif k["kind"] == "bool":
+            var bv = "0"
+            if k["i"] != 0:
+                bv = "1"
+            out += "    {PXK_BOOL, " + bv + ", 0, NULL},\n"
+        else:
+            out += "    {PXK_NULL, 0, 0, NULL},\n"
+        ki += 1
+    out += "};\n\n"
+    # N 名字池（A1 预留，空表也输出保持结构完整）
+    out += "static const char* s_N[] = {\n"
+    var ni = 0
+    while ni < len(m["n_pool"]):
+        out += "    \"" + cg_escape_str(m["n_pool"][ni]) + "\",\n"
+        ni += 1
+    out += "};\n\n"
+    # G 全局槽名表
+    out += "static const char* s_G[] = {\n"
+    var gi = 0
+    while gi < len(m["globals"]):
+        out += "    \"" + cg_escape_str(m["globals"][gi]) + "\",\n"
+        gi += 1
+    out += "};\n\n"
+    # funcs：每个函数一个 bc 数组（s_bc_<fi>）
+    var fi = 0
+    while fi < len(m["funcs"]):
+        let f = m["funcs"][fi]
+        out += "static const PxInst s_bc_" + str(fi) + "[] = {\n"
+        var pc = 0
+        while pc < len(f["bc"]):
+            let ins = f["bc"][pc]
+            out += "    {PXOP_" + ins[0] + ", 0, " + str(ins[1]) + ", " + str(ins[2]) + ", " + str(ins[3]) + "},\n"
+            pc += 1
+        out += "};\n"
+        fi += 1
+    out += "\n"
+    # 函数表（mod 前向引用 s_mod）
+    out += "static const PxVMFunc s_funcs[] = {\n"
+    fi = 0
+    while fi < len(m["funcs"]):
+        let f = m["funcs"][fi]
+        out += "    {.name=\"" + cg_escape_str(f["name"]) + "\", .arity=" + str(f["arity"]) + ", .ndefault=" + str(f["ndefault"]) + ", .nslots=" + str(f["nslots"]) + ", .bc=s_bc_" + str(fi) + ", .nbc=" + str(len(f["bc"])) + ", .mod=&s_mod, .upvals=NULL},\n"
+        fi += 1
+    out += "};\n\n"
+    # 模块
+    out += "static const PxBCModule s_mod = {\n"
+    out += "    .name=\"<module>\", .K=s_K, .nK=" + str(len(m["k_pool"])) + ", .N=s_N, .nN=" + str(len(m["n_pool"])) + ",\n"
+    out += "    .G=s_G, .nG=" + str(len(m["globals"])) + ", .funcs=s_funcs, .nfuncs=" + str(len(m["funcs"])) + ", .top_idx=" + str(m["top"]) + ",\n"
+    out += "};\n\n"
+    # main（A2：跑 Top；main() 用户函数调用约定随 S3-B/CALL 接入）
+    out += "int main(int argc, char** argv) {\n"
+    out += "    px_args_init(argc, argv);\n"
+    out += "    px_register_builtins();\n"
+    out += "    LXValue _r = px_vm_run_module(px_vm_state(), &s_mod);\n"
+    out += "    (void)_r;\n"
+    out += "    if (getenv(\"PX_BC_DUMP\")) {\n"
+    out += "        int _i;\n"
+    out += "        for (_i = 0; _i < (int)s_mod.nG; _i++) {\n"
+    out += "            LXValue _v = px_get_global(s_mod.G[_i]);\n"
+    out += "            if (_v.type != PX_FUNC && _v.type != PX_NATIVE)\n"
+    out += "                printf(\"%s=%s\\n\", s_mod.G[_i], px_to_string(_v));\n"
+    out += "        }\n"
+    out += "    }\n"
+    out += "    return 0;\n"
+    out += "}\n"
+    return out

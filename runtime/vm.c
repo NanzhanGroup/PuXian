@@ -2,12 +2,12 @@
 // M89-S3-A0/A1: 显式帧 + 平坦字节码 VM
 // ------------------------------------------------------------
 // 本文件 = S3-A A0 交付（PxVmState/PxFrame/PxVMFunc 生命周期 + px_vm_entry
-// trampoline（D2，px_call 零改动兼容）+ 指令分发循环骨架）后，A1 扩展：
-//   - GETG/SETG 执行（v1 经 px_get_global/px_set_global，D8 无锁化后置）
-//   - px_vm_run_module 完整 Top 运行（注册全局函数 D2 trampoline + 跑 Top bc；
-//     main() 调用约定随 S3-B CALL 接入）
-// 已实现指令子集：LOADK IMM MOV GETG SETG SRCLINE JMP JMPT JMPF RET RET0 HALT；
-// 其余 op 分发默认 px_error "指令未实现"（A2 起逐批）。
+// trampoline（D2，px_call 零改动兼容）+ 指令分发循环骨架）后，逐 A 扩展：
+//   - A1: GETG/SETG 执行（v1 经 px_get_global/px_set_global，D8 无锁化后置）、
+//     px_vm_run_module 完整 Top 运行（注册全局函数 D2 trampoline + 跑 Top bc）
+//   - A2: B 表一元/二元运算全量（NEG..SHRU，语义=调现 px_* C 函数）
+// 已实现指令子集：LOADK IMM MOV GETG SETG SRCLINE JMP JMPT JMPF RET RET0 HALT
+//   + B 表运算（A2）；其余 op 分发默认 px_error "指令未实现"（A3 起逐批）。
 //
 // 执行模型：
 //   px_vm_run_func 在 st 上 push 帧（slots 数组）→ 循环取指分发 →
@@ -194,6 +194,30 @@ LXValue px_vm_run_func(PxVmState* st, const PxVMFunc* f, LXValue* args, int narg
             fr->slots[in.a] = vm_loadk(&m->K[in.b]);
             break;
         }
+        // ---- B 表：一元/二元运算（A2，语义=调现 px_* C 函数，错误由 px_* 保证）----
+        case PXOP_NEG:    fr->slots[in.a] = px_neg(fr->slots[in.b]); break;
+        case PXOP_NOT:    fr->slots[in.a] = px_not(fr->slots[in.b]); break;
+        case PXOP_BITNOT: fr->slots[in.a] = px_bitnot(fr->slots[in.b]); break;
+        case PXOP_ADD:    fr->slots[in.a] = px_add(fr->slots[in.b], fr->slots[in.c]); break;
+        case PXOP_SUB:    fr->slots[in.a] = px_sub(fr->slots[in.b], fr->slots[in.c]); break;
+        case PXOP_MUL:    fr->slots[in.a] = px_mul(fr->slots[in.b], fr->slots[in.c]); break;
+        case PXOP_DIV:    fr->slots[in.a] = px_div(fr->slots[in.b], fr->slots[in.c]); break;
+        case PXOP_IDIV:   fr->slots[in.a] = px_idiv(fr->slots[in.b], fr->slots[in.c]); break;
+        case PXOP_MOD:    fr->slots[in.a] = px_mod(fr->slots[in.b], fr->slots[in.c]); break;
+        case PXOP_POW:    fr->slots[in.a] = px_pow(fr->slots[in.b], fr->slots[in.c]); break;
+        case PXOP_EQ:     fr->slots[in.a] = px_eq(fr->slots[in.b], fr->slots[in.c]); break;
+        case PXOP_NE:     fr->slots[in.a] = px_ne(fr->slots[in.b], fr->slots[in.c]); break;
+        case PXOP_LT:     fr->slots[in.a] = px_lt(fr->slots[in.b], fr->slots[in.c]); break;
+        case PXOP_LE:     fr->slots[in.a] = px_le(fr->slots[in.b], fr->slots[in.c]); break;
+        case PXOP_GT:     fr->slots[in.a] = px_gt(fr->slots[in.b], fr->slots[in.c]); break;
+        case PXOP_GE:     fr->slots[in.a] = px_ge(fr->slots[in.b], fr->slots[in.c]); break;
+        case PXOP_BITAND: fr->slots[in.a] = px_bitand(fr->slots[in.b], fr->slots[in.c]); break;
+        case PXOP_BITOR:  fr->slots[in.a] = px_bitor(fr->slots[in.b], fr->slots[in.c]); break;
+        case PXOP_BITXOR: fr->slots[in.a] = px_bitxor(fr->slots[in.b], fr->slots[in.c]); break;
+        case PXOP_SHL:    fr->slots[in.a] = px_shl(fr->slots[in.b], fr->slots[in.c]); break;
+        case PXOP_SHR:    fr->slots[in.a] = px_shr(fr->slots[in.b], fr->slots[in.c]); break;
+        case PXOP_SHRU:   fr->slots[in.a] = px_ushr(fr->slots[in.b], fr->slots[in.c]); break;
+
         case PXOP_JMP:
             fr->pc += (int)(int16_t)in.b;   // off 相对下一条：目标=(pc+1)+off
             break;

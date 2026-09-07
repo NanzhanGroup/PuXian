@@ -63,12 +63,22 @@ def bc_basename(path):
 def main():
     let a = args()
     # 编译版：args 含 argv[0]（程序路径）；file = 最后参数（对齐 compiler.px）
+    var emit_c = false
+    var ai = 1
+    while ai < len(a) - 1:
+        if a[ai] == "--emit-c":
+            emit_c = true
+        ai += 1
     let f = a[len(a) - 1]
     let base_dir = cg_dirname(f)
     p_toks = lex_tokens(read_file(f))
     p_pos = 0
     let ast = parse_program()
     let prog = cg_resolve_modules(ast, base_dir)
+    if emit_c:
+        # A2：输出可链接 C（静态 BCModule + main 跑 VM）→ 与旧轨 stdout 对拍
+        print(bc_emit_c_program(prog))
+        return
     let m = bc_emit_program(prog)
     m["name"] = bc_basename(f)
     bc_dump_module(m)

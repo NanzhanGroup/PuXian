@@ -154,3 +154,25 @@
 > - 回归：compiler.px/import 链零触碰（自举证明不受影响）；vm.c 独立编译零告警；仓库可编译。
 > - 下一步：A2 算术/比较（PXOP_NEG..PXOP_GE 批 + 发射器 Binary/Unary 映射 cg_binop_cname +
 >   首个可计算程序端到端跑通 → compiler.px bc 接入/rt 缓存重建同批）。
+
+### S3-A · A2 运算批 + 顶层顺序执行（发射器→可链接 C→VM 端到端闭环打通）
+> 完成（2026-09-08）：**首个可运行字节码闭环** —— BCModule 静态 C 输出 + gcc 链接 rtcache 跑 Top。
+> - **runtime/vm.c**：B 表一元/二元运算全量执行（NEG/NOT/BITNOT + ADD..GE + BITAND..SHRU，
+>   语义=调现 px_* C 函数，错误由 px_* 保证）；**tools/px rt_src_files 加入 vm.c/vm.h**
+>   （A1 预留接入时机；rtcache 重建含 vm.o，px build 正常、hello C 产物与 pxi 输出一致回归 PASS）。
+> - **selfhost/bc_emit.px**：表达式 Binary（算术/比较/位运算，两地址 ADD dst,dst,s2）与 Unary 一般化
+>   （Neg/Not/BitNot → NEG/NOT/BITNOT；负字面量折叠保留）接线；新增 bc_binop_op/bc_unop_op 映射；
+>   **emit-c**（bc_emit_c_program）：BCModule → 可链接 C 静态初值（PxK/N/G/bc/funcs/mod，mod 前向
+>   引用）+ main 跑 px_vm_run_module（PX_BC_DUMP=1 打印非函数全局，A 阶段对拍用）。
+>   **bc_cli.px 增 --emit-c**。examples/m89_a2/bc_run.sh（emit-c→gcc 链 rtcache→跑）。
+> - **修复 A1 遗留 bug**：bc_emit_if 有 else/elif 时 JMPF 假值落点错（落在 then 尾 JMP 上 → else 永不
+>   执行）——调整为假值落 JMP 之后（else 起点）；bc1.dump golden 回归不变。
+> - **验证**：cases_bc/bc2.px（+bc2.dump golden）覆盖 Add/Sub/Mul/Div/IntDiv/Mod/Pow/比较/位/一元/
+>   if-else/while；emit-c 端到端跑 bc2 顶层全局值 **16 项断言 ALL PASS**（arith=13、idiv=3、modv=1、
+>   powv=256、bita=2、bito=5、bitx=4、shlv=16、negv=-7、notv=true、cmp1/cmp2/cmps、scon=abcd、
+>   acc=10、res=big=if-else 真分支正确）；bc1 emit-c 跑通（GREETING/counter=42/big/pi/enabled/
+>   missing/again 全对）。examples/m89_a1/vm_selftest 复跑 ALL PASS。
+> - 工程决策（记录）：compiler.px bc 子命令并入仍推迟（S3-C 自举收敛统一做）；A2 以 bc_cli 独立壳 +
+>   PX_BC_DUMP 顶层值断言验证（无 CALL/print，stdout 对拍留 A4 print 可用后）。A2 端到端闭环已立，
+>   A3-A5 不再重编 compiler/rt 即可逐批接入。
+> - 下一步：A3 控制流（短路 and/or/?? + IfExpr + break/continue；for-in 依赖迭代器/容器见 S3-B）。
