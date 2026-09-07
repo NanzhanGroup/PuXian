@@ -213,3 +213,25 @@
 >   一起；A4 无容器无方法调用消费方）；for-in 依赖 len/index 见 S3-B。
 > - 下一步：A5 错误（TRY/FORCE + 顶层 ? 语义 + SRCLINE 现场比对 px_error 文案）——需
 >   Ok()/Err() native 构造 Result（GETG→CALL native 已可用），A4 CALL 已就绪。
+
+### S3-A · A5 错误传播：TRY/FORCE + 现场追踪（S3-A 骨架段收口）
+> 完成（2026-09-08）：**错误传播接线 + VM 错误现场对齐 px_error 文案**（D7）。
+> - **runtime/vm.c**：PXOP_TRY（?）——Result-Err/null → 就地返回（RET 语义回传 caller
+>   槽；顶层帧 → 返回 run_module → driver 报错退出）；Ok → 就地解包覆写槽。PXOP_FORCE
+>   （!）——Err/null → px_error（"force unwrap Err: <载荷>" / "force unwrap null"）；Ok 解包。
+>   **现场同步**：解释循环每帧迭代 px_srcfunc(函数名)、SRCLINE 指令 px_srcline(行) →
+>   runtime px_error 文案格式 "[函数 行N]: ..."（M72-S2 对齐，实测
+>   "运行时错误 [main 行3]: force unwrap Err: boom"）。
+> - **selfhost/bc_emit.px**：表达式 Try（?）→ TRY、ForceUnwrap（!）→ FORCE（求值入 d →
+>   TRY/FORCE d）。顶层 ? 语义 = Err/null 经 RET 到 run_module → driver 报错退出（对齐
+>   codegen "顶层不能传播" 报错意图；文案差异记录）。
+> - **验证**：cases_bc/bc5.px+dump（Err("除零") 经 use_div? → main? 两跳就地传播）→ emit-c
+>   退出码 1 + stderr "错误: 除零" PASS；bc6.px+dump（get_val()! = 7 FORCE Ok 解包 +
+>   ret_null()? null 就地传播 → main RET null → exit 0；若 null 未传播则 exit 8 区分）PASS；
+>   FORCE Err 现场 "运行时错误 [main 行3]: force unwrap Err: boom" PASS；bc1-4 dump golden
+>   回归不变；bc2/3/4 verify + hello 三轨复跑全绿。
+> - **S3-A 段收口**：A0 骨架 → A1 常量/槽 → A2 运算+顶层闭环 → A3 控制流 → A4 调用闭环 →
+>   A5 错误传播 全部完成；hello.px 三轨（VM=旧 C=pxi）stdout 逐字节一致；fib.px 需容器
+>   （list/dict/range/推导式）→ S3-B。A 段门（cases s01-s07+hello/fib）中 fib 随 S3-B 补齐。
+> - 下一步：S3-B 全构造（容器 NEWLIST/NEWTUPLE/NEWDICT/INDEX/SETF/字段 GETF/SETF、方法
+>   CALLM、for-in、推导式、闭包 P1、生成器/并发桥）。

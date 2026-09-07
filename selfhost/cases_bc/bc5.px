@@ -1,0 +1,16 @@
+# M89-S3-A5 bc5.px —— 错误传播冒烟：Err 经 ? 链式就地传播（D7）
+# div_checked(10,2)=Ok(5) → use_div 解包 +100 = 105（x 正常赋值）；
+# div_checked(1,0)=Err("除零") → use_div ? 就地 RET Err → main ? 就地 RET Err
+# → run_module 返回 Err → emit-c driver 打印 "错误: 除零" + 退出码 1。
+def div_checked(a, b):
+    if b == 0:
+        return Err("除零")
+    return Ok(a // b)
+
+def use_div(a, b):
+    return (div_checked(a, b)?) + 100
+
+def main():
+    let x = use_div(10, 2)?
+    let y = use_div(1, 0)?
+    return 0

@@ -1,0 +1,38 @@
+# BCModule bc6
+# K 1
+K 0 null
+# G 4
+G 0 get_val
+G 1 ret_null
+G 2 main
+G 3 Ok
+# funcs 4 top=3
+== func get_val arity=0 ndefault=0 nslots=3
+0:SRCLINE 0 6 0
+1:GETG 1 3 0
+2:IMM 2 7 0
+3:CALL 0 1 1
+4:RET 0 0 0
+5:RET0 0 0 0
+== func ret_null arity=0 ndefault=0 nslots=1
+0:SRCLINE 0 9 0
+1:LOADK 0 0 0
+2:RET 0 0 0
+3:RET0 0 0 0
+== func main arity=0 ndefault=0 nslots=5
+0:SRCLINE 0 12 0
+1:GETG 2 0 0
+2:CALL 0 2 0
+3:FORCE 0 0 0
+4:SRCLINE 0 13 0
+5:GETG 3 1 0
+6:CALL 1 3 0
+7:TRY 1 0 0
+8:SRCLINE 0 14 0
+9:IMM 4 8 0
+10:RET 4 0 0
+11:RET0 0 0 0
+== func <top> arity=0 ndefault=0 nslots=2
+0:GETG 0 2 0
+1:CALL 1 0 0
+2:RET 1 0 0
