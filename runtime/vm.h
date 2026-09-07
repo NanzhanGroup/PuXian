@@ -102,11 +102,14 @@ typedef struct {
 // ==================== 常量子（K 池） ====================
 // 发射器按 kind 生成静态项；LOADK 时物化为 LXValue（str 需 strdup/常驻，
 // BCModule 进程级常驻 → 直接引用发射器字符串字面量，不回收）。
+// B3/B4：PXK_FUNC —— K 项 i=funcs 下标，LOADK 物化为 PX_FUNC(px_vm_entry, &funcs[i])
+//   （闭包/生成器 lambda 等非全局注册函数的引用；run_module 注册全局时跳过 '<' 名）。
 #define PXK_INT  0
 #define PXK_FLT  1
 #define PXK_STR  2
 #define PXK_BOOL 3
 #define PXK_NULL 4
+#define PXK_FUNC 5
 typedef struct {
     uint8_t kind;      // PXK_*
     int64_t i;         // PXK_INT

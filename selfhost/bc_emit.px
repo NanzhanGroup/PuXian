@@ -115,6 +115,7 @@ def bc_new_module(name):
     m["structs"] = []
     m["enums"] = bc_new_dict()
     m["consts"] = bc_new_dict()
+    m["nclosure"] = 0          # B4: 闭包/lambda 命名计数 "<closureN>"
     return m
 
 # B2：struct 类型名 → structs 元数据下标（无则 -1）
@@ -643,6 +644,56 @@ def bc_emit_expr(expr, dst, func):
             return bc_emit_call(fn2[1], al, dst, func)
         let al = [v]
         return bc_emit_call(fn2, al, dst, func)
+
+    if ty == "ListComp":
+        # [elt for ...] → 空列表槽 + 嵌套循环展开 + cond 过滤 + push(elt)
+        let clauses = expr[2]
+        var d = dst
+        if d < 0:
+            d = bc_tmp(func)
+        bc_emit_inst(func, "NEWLIST", d, 0, 0)
+        bc_emit_comp(func, "push", [expr[1]], expr[3], d, clauses, 0)
+        return d
+    if ty == "DictComp":
+        # {k: v for ...} → 空 dict 槽 + 循环展开 + rv.set(k,v)（键 str，对齐 NEWDICT）
+        let clauses = expr[3]
+        var d = dst
+        if d < 0:
+            d = bc_tmp(func)
+        bc_emit_inst(func, "NEWDICT", d, 0, 0)
+        bc_emit_comp(func, "dict", [expr[1], expr[2]], expr[4], d, clauses, 0)
+        return d
+    if ty == "GenExp":
+        return bc_emit_genexp(expr, dst, func)
+    if ty == "Block":
+        # { stmts } 块表达式：顺序执行，块值 = 最后 ExprStmt 值（cg：_blk 初 null，
+        #   每 ExprStmt 覆写；无 ExprStmt → null）。块内 VarDecl/Assign 就地分配槽
+        #   （函数级 smap，帧槽零=PX_NULL；无块级作用域，对齐 codegen/M62-L5）。
+        var d = dst
+        if d < 0:
+            d = bc_tmp(func)
+        bc_emit_null(func, d)
+        let stmts = expr[1]
+        var bi2 = 0
+        while bi2 < len(stmts):
+            let st = stmts[bi2]
+            if st[0] == "ExprStmt":
+                bc_emit_expr(st[1], d, func)
+            else:
+                bc_emit_stmt(st, func)
+            bi2 += 1
+        return d
+    if ty == "Closure":
+        # fn(params) body → 无捕获闭包 PxVMFunc（LOADK PXK_FUNC 引用 funcs 下标）
+        let pnames = []
+        var pi = 0
+        while pi < len(expr[1]):
+            pnames.append(rust_unescape(expr[1][pi][1]))
+            pi += 1
+        let fidx = bc_emit_push_lambda(pnames, expr[3])
+        let k = bc_k_add(g_bcm["k_pool"], "func", fidx, 0.0, "")
+        bc_emit_inst(func, "LOADK", dst, k, 0)
+        return dst
     panic("bc_emit_expr 未实现: " + str(expr))
 # 通用调用发射（A4）：callee 求值到槽；实参连续区 callee+1..+argc（先预留防
 # 内部临时碰撞）；CALL dst, callee_slot, argc。arg_list = 实参表达式列表。
@@ -724,6 +775,147 @@ def bc_emit_enum_new(cname, args, dst, func):
     let tn = bc_n_add(g_bcm["n_pool"], cname)
     let vn2 = bc_n_add(g_bcm["n_pool"], vname)
     bc_emit_inst(func, "NEWENUM", d, tn, vn2)
+    return d
+
+# ---------- B3/B4：推导式展开 + lambda/闭包基建 ----------
+# 以槽号 obj 调方法（obj 已是槽号；args 元素=槽号(int)→MOV 或 表达式）
+# 安全布局：obj 引用先 MOV 到新 cslot，实参区 cslot+1..cslot+argc 全新预留
+#   （CALLM args=槽 b+1..；若直接在原 obj 槽后排布会与既有活跃槽（迭代变量/its 等）
+#   重叠覆写 —— dictcomp set 暴露：obj 是收集容器槽，其后即循环临时槽）。
+def bc_emit_methodcall_slot(func, obj_slot, mname, args, dst):
+    let cslot = bc_tmp(func)
+    bc_emit_inst(func, "MOV", cslot, obj_slot, 0)
+    let argc = len(args)
+    let need = cslot + 1 + argc
+    while func["next_slot"] < need:
+        bc_tmp(func)
+    var ai = 0
+    while ai < argc:
+        let a = args[ai]
+        if type(a) == "int":
+            bc_emit_inst(func, "MOV", cslot + 1 + ai, a, 0)
+        else:
+            bc_emit_expr(a, cslot + 1 + ai, func)
+        ai += 1
+    let nn = bc_n_add(g_bcm["n_pool"], mname)
+    func["bc"].push(["CALLM", argc, dst, cslot, nn])
+    return dst
+
+# 无捕获 lambda（对齐 cg_gen_lambda）：param_names + body 表达式 → PxVMFunc 入
+#   funcs 返回下标（LOADK PXK_FUNC 引用；'<' 名不注册全局）
+def bc_emit_push_lambda(param_names, body_expr):
+    let name = "<closure" + str(g_bcm["nclosure"]) + ">"
+    g_bcm["nclosure"] = g_bcm["nclosure"] + 1
+    let func = bc_new_func(name, len(param_names))
+    var pi = 0
+    while pi < len(param_names):
+        func["smap"][param_names[pi]] = pi
+        pi += 1
+    g_bcm["funcs"].push(func)
+    let t = bc_tmp(func)
+    bc_emit_expr(body_expr, t, func)
+    bc_emit_inst(func, "RET", t, 0, 0)
+    func["nslots"] = func["next_slot"]
+    return len(g_bcm["funcs"]) - 1
+
+# 推导式嵌套循环展开（ListComp/DictComp）。kind="push"（put=push(elems[0])）/
+#   "dict"（put=rv.set(elems[0], elems[1])）。cond=过滤表达式或 null；rv=收集容器槽；
+#   clauses=[[CompClause, vars, iterable]..]；ci=当前子句层（0 起，递归）。
+# 迭代变量重绑定：进入子句时把用户变量 vn 绑到新临时槽（保存旧绑定/无），
+#   循环完恢复 —— 对齐 cg_comp_collect/restore（comp 变量不泄漏外层）。
+def bc_emit_comp(func, kind, elems, cond, rv, clauses, ci):
+    let ncl = len(clauses)
+    if ci >= ncl:
+        var skip = -1
+        if cond != null:
+            let tc = bc_tmp(func)
+            bc_emit_expr(cond, tc, func)
+            skip = len(func["bc"])
+            bc_emit_inst(func, "JMPF", tc, 0, 0)
+        if kind == "dict":
+            let kv = bc_tmp(func)
+            let vv = bc_tmp(func)
+            bc_emit_expr(elems[0], kv, func)
+            bc_emit_expr(elems[1], vv, func)
+            bc_emit_methodcall_slot(func, rv, "set", [kv, vv], bc_tmp(func))
+        else:
+            let ev = bc_tmp(func)
+            bc_emit_expr(elems[0], ev, func)
+            bc_emit_inst(func, "LISTPUSH", ev, rv, 0)
+        if skip >= 0:
+            bc_patch_off(func, skip, len(func["bc"]))
+        return
+    let cl = clauses[ci]
+    let vars = cl[1]
+    if len(vars) != 1:
+        panic("bc_emit 推导式多变量子句未实现: " + str(cl))
+    let vn = rust_unescape(vars[0])
+    var had = false
+    var sv = 0
+    if func["smap"].has(vn):
+        sv = func["smap"][vn]
+        had = true
+    let vs = bc_tmp(func)
+    func["smap"][vn] = vs
+    let its = bc_tmp(func)
+    bc_emit_expr(cl[2], its, func)
+    let fnl = bc_tmp(func)
+    let nslot = bc_tmp(func)
+    while func["next_slot"] < fnl + 2:
+        bc_tmp(func)
+    let gl = bc_g_add(g_bcm["globals"], "len")
+    bc_emit_inst(func, "GETG", fnl, gl, 0)
+    bc_emit_inst(func, "MOV", fnl + 1, its, 0)
+    bc_emit_inst(func, "CALL", nslot, fnl, 1)
+    let ctr = bc_tmp(func)
+    bc_emit_int(func, ctr, 0)
+    let loop_start = len(func["bc"])
+    let lt = bc_tmp(func)
+    bc_emit_inst(func, "LT", lt, ctr, nslot)
+    let jf = len(func["bc"])
+    bc_emit_inst(func, "JMPF", lt, 0, 0)
+    bc_emit_inst(func, "INDEX", vs, its, ctr)
+    bc_emit_comp(func, kind, elems, cond, rv, clauses, ci + 1)
+    let one = bc_tmp(func)
+    bc_emit_int(func, one, 1)
+    bc_emit_inst(func, "ADD", ctr, ctr, one)
+    let jb = len(func["bc"])
+    bc_emit_inst(func, "JMP", 0, 0, 0)
+    let end = len(func["bc"])
+    bc_patch_off(func, jb, loop_start)
+    bc_patch_off(func, jf, end)
+    if had:
+        func["smap"][vn] = sv
+    else:
+        func["smap"].remove(vn)
+
+# GenExp 单 for 单变量 → NEWGEN 惰性（px_gen_lazy：seq + transform=fn(x){elt}
+#   + filter=fn(x){cond}，对齐 codegen cg GenExp 单 for 惰性路径）
+def bc_emit_genexp(expr, dst, func):
+    let clauses = expr[2]
+    if len(clauses) != 1 or len(clauses[0][1]) != 1:
+        panic("bc_emit GenExp 仅支持单 for 单变量（多 for 物化路径待接入）: " + str(expr))
+    let vn = rust_unescape(clauses[0][1][0])
+    var d = dst
+    if d < 0:
+        d = bc_tmp(func)
+    let seq = bc_tmp(func)
+    bc_emit_expr(clauses[0][2], seq, func)
+    let tidx = bc_emit_push_lambda([vn], expr[1])
+    var fidx = -1
+    if expr[3] != null:
+        fidx = bc_emit_push_lambda([vn], expr[3])
+    let base = bc_tmp(func)
+    while func["next_slot"] < base + 2:
+        bc_tmp(func)
+    let tk = bc_k_add(g_bcm["k_pool"], "func", tidx, 0.0, "")
+    bc_emit_inst(func, "LOADK", base, tk, 0)
+    if fidx >= 0:
+        let fk = bc_k_add(g_bcm["k_pool"], "func", fidx, 0.0, "")
+        bc_emit_inst(func, "LOADK", base + 1, fk, 0)
+    else:
+        bc_emit_null(func, base + 1)
+    bc_emit_inst(func, "NEWGEN", d, seq, base)
     return d
 
 # ---------- B1：赋值目标发射（Assign/复合赋值 目标 ∈ Var/Index/Field） ----------
@@ -1229,6 +1421,8 @@ def bc_dump_module(m):
             if k["i"] != 0:
                 bv = "true"
             print("K " + str(ki) + " bool " + bv)
+        elif k["kind"] == "func":
+            print("K " + str(ki) + " func " + str(k["i"]))
         else:
             print("K " + str(ki) + " null")
         ki += 1
@@ -1275,6 +1469,8 @@ def bc_emit_c_program(prog):
             if k["i"] != 0:
                 bv = "1"
             out += "    {PXK_BOOL, " + bv + ", 0, NULL},\n"
+        elif k["kind"] == "func":
+            out += "    {PXK_FUNC, " + str(k["i"]) + ", 0, NULL},\n"
         else:
             out += "    {PXK_NULL, 0, 0, NULL},\n"
         ki += 1

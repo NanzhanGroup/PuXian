@@ -1,0 +1,31 @@
+# M89-S3-B3 bc9.px —— 推导式/match/闭包 冒烟（ListComp/DictComp/GenExp/Closure）
+# 覆盖（B3 首切）：
+#   ListComp [x*x for x in xs] → 嵌套循环展开 + push（收集列表）
+#   ListComp + cond [x for x in xs if x%2==0]（JMPF 过滤）
+#   DictComp {k: k*2 for k in [...]]} → rv.set(k,v)（str 键）
+#   GenExp (x*10 for x in [1,2,3]) → NEWGEN 惰性（transform=fn(x){x*10} 闭包）
+#   for v in g1 迭代生成器（px_len → 物化逐项调 transform）
+#   Closure fn(a) -> int { a + 5 } → LOADK PXK_FUNC（无捕获 P1）
+#   Block 块表达式（闭包 body { a + 5 }）
+# 验证：emit-c 跑 Top 后 PX_BC_DUMP 全局断言（bc9_verify.sh）。
+var xs = [1, 2, 3, 4]
+var sq = [x * x for x in xs]
+var sqn = len(sq)          # 4
+var sq0 = sq[0]            # 1
+var sq3 = sq[3]            # 16
+var ev = [x for x in [1, 2, 3, 4, 5, 6] if x % 2 == 0]
+var evn = len(ev)          # 3
+var ev0 = ev[0]            # 2
+var d1 = {k: k + "!" for k in ["a", "b", "c"]}
+var d1n = len(d1)          # 3
+var d1a = d1["a"]          # "a!"（str 键；value 表达式 k+"!"）
+var g1 = (x * 10 for x in [1, 2, 3])
+var gg = []
+for v in g1:
+    gg.push(v)
+var ggn = len(gg)          # 3
+var gg0 = gg[0]            # 10
+var gg2 = gg[2]            # 30
+var clo = fn(a) -> int { a + 5 }
+var cr = clo(7)            # 12
+var ok = sqn == 4 and sq0 == 1 and sq3 == 16 and evn == 3 and ev0 == 2 and d1n == 3 and d1a == "a!" and ggn == 3 and gg0 == 10 and gg2 == 30 and cr == 12

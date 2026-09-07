@@ -6,6 +6,23 @@
 
 ## [Unreleased]
 
+### M89-S3-B3a · VM 化：推导式/生成器/闭包基建（ListComp/DictComp/GenExp/Closure/Block）
+
+> 完成（2026-09-08）：VM 化（M89）S3-B 推进，**三类推导式 + 闭包/块表达式在 VM 跑通**。
+> - **runtime/vm.h/vm.c**：PxK 增 PXK_FUNC（i=funcs 下标，LOADK 物化为 PX_FUNC(px_vm_entry,
+>   &funcs[i])，闭包/lambda 引用）；vm_loadk 增 mod 参数；实现 NEWGEN（seq + transform/filter
+>   闭包 → px_gen_lazy）。
+> - **selfhost/bc_emit.px**：lambda 基建（无捕获闭包 "<closureN>" 入 funcs）；Closure 表达式 →
+>   LOADK PXK_FUNC；Block 块表达式（值=最后 ExprStmt）；推导式嵌套循环展开（ListComp push /
+>   DictComp rv.set，迭代变量重绑定保存/恢复，cond JMPF 过滤）；GenExp 单 for → NEWGEN 惰性
+>   （transform/filter 闭包）；methodcall_slot 修正（obj 先 MOV 到新 cslot，实参区全新预留，
+>   修复 dictcomp set 参数区与活跃槽重叠覆写）。
+> - **验证**：bc9.px+dump golden，bc9_verify.sh 12 断言全 PASS（ListComp/cond 过滤/DictComp/
+>   GenExp 惰性 + for-in 迭代/Closure(Block) 调用）；bc9 pxi 同跑 rc=0 语义一致；bc1-8 dump
+>   golden 全不变零回归。
+> - 记录：comp 多变量子句、GenExp 多 for 未实现（panic 不静默错）；Closure 为无捕获 P1（真
+>   捕获 upvalue cell = P2 留 S3-C）；bc_emit_expr let si 与 var si 同名 E3002 已解决。
+
 ### M89-S3-B2 · VM 化：构造/类型 —— NEWSTRUCT/NEWENUM + struct/enum/const enum/impl 方法
 
 > 完成（2026-09-08）：VM 化（M89）S3-B 全构造段推进，**类型系统三件套在 VM 上跑通 + impl
