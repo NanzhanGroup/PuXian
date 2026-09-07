@@ -950,6 +950,11 @@ static void gc_stop_handler(int sig, siginfo_t* si, void* ctx) {
 static void gc_install_handler(void) {
     static int installed = 0;
     if (installed) return;
+    // M88-S2（qg-issue 27）：忽略 SIGPIPE——http_serve/unix/sse_serve 等服务端对已断开
+    // 连接 send()（http_conn_worker 内 5 处裸 send）会触发 SIGPIPE，默认终止整个进程
+    // （无 core、无日志，表现即"高并发压测中服务进程悄然消失"）。忽略后 send 返回 EPIPE，
+    // 由调用方按"连接已断"清理返回，服务进程永不因客户端断开而亡。
+    signal(SIGPIPE, SIG_IGN);
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_sigaction = gc_stop_handler;
@@ -2826,10 +2831,15 @@ static LXValue bi_sleep(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 1) px_error("sleep 需要 1 个参数");
     int64_t ms = int_val(args[0]);
+    // M88-S2（qg-issue 27）：EINTR 自动续睡——并发 GC（M11 stop-the-world）向所有已注册
+    // 线程发 SIG_GC_STOP 实时信号，nanosleep 被信号打断返回 EINTR（nanosleep 不在
+    // SA_RESTART 自动重启清单）。若不续睡，主线程 sleep(长) 会在首轮 GC 后提前返回 →
+    // main 结束 → 进程静默退出（高并发压测"服务进程悄然消失"根因）。timer_sleep_ms/
+    // sleep_us 均已按此模式续睡，此处对齐。
     struct timespec ts;
     ts.tv_sec = ms / 1000;
     ts.tv_nsec = (ms % 1000) * 1000000L;
-    nanosleep(&ts, NULL);
+    while (nanosleep(&ts, &ts) == -1 && errno == EINTR) {}
     return px_null();
 }
 
@@ -9946,7 +9956,106 @@ static const char* px_file_content_type(const char* path) {
 }
 
 
-// http_serve(port, handler)：阻塞 accept 循环（Go 风格），每连接 px_spawn 处理
+// ==================== M88-S2（qg-issue 27）：函数式 serve 连接线程池 ====================
+// http_serve / http_serve_unix / sse_serve 原 accept 循环每连接 px_spawn（一请求一线程），
+// 并发连接数逼近 spawn 槽上限即 px_error → 服务进程 exit(1)（qg-issue 27 线上事故根因）。
+// 现改为预派生常驻 worker 池（与 px_serve 的 M31.4b 池同构，独立于其 g_pool_*，不互相干扰）：
+//   accept 只把 (cfd, kind) 投递环形队列（队满阻塞 → 背压到 TCP backlog，绝不 exit）；
+//   worker 取 job 按 kind 调 http_conn_worker / sse_conn_worker（处理语义与既有逐字节一致）。
+// 池容量 env PX_SERVE_WORKERS（默认 256，夹取 [8,4095]）。池 worker 均注册 GC 槽（同
+// px_pool_worker 常驻模式），注意 PX_MAX_THREADS 需 ≥ PX_SERVE_WORKERS + 主线程 + 业务 spawn。
+// keep-alive 空闲连接占 worker 至 15s 超时（http_conn_worker 既有语义）；SSE 长连接占 worker
+// 至 sse_close/对端断开。真正"空闲连接不占线程"属 B 类 poll 事件驱动范畴（见 M88_PLAN §三）。
+#define FSERVE_KIND_HTTP 0
+#define FSERVE_KIND_SSE  1
+#define FSERVE_DEFAULT_WORKERS 256
+#define FSERVE_QUEUE_CAP 16384        // 环形队列容量（job 8B → 128KB 背压缓冲）
+typedef struct { int fd; int kind; } FServeJob;
+static pthread_t* g_fserve_threads = NULL;
+static FServeJob* g_fserve_queue = NULL;
+static int g_fserve_qcap = 0;
+static int g_fserve_head = 0, g_fserve_tail = 0, g_fserve_count = 0;
+static int g_fserve_workers = 0;
+static int g_fserve_inited = 0;
+static pthread_mutex_t g_fserve_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_fserve_cond = PTHREAD_COND_INITIALIZER;
+
+static LXValue sse_conn_worker(LXValue* args, int nargs, void* ctx);  // M88-S2：池 dispatch 前向
+
+static void* fserve_worker(void* arg) {
+    (void)arg;
+    // 常驻线程：注册到 GC 槽位（同 px_pool_worker：GC 可暂停/扫描本线程栈上对象）
+    pthread_mutex_lock(&g_gc_mu);
+    if (!g_gc_env_inited) gc_init_env();
+    g_active_threads++;
+    int slot = -1;
+    for (int i = 0; i < g_thread_cap; i++) if (!g_threads[i].in_use) { slot = i; break; }
+    if (slot >= 0) {
+        g_threads[slot].tid = pthread_self();
+        g_threads[slot].in_use = 1;
+        g_threads[slot].paused = 0;
+        g_threads[slot].is_main = 0;
+        g_threads[slot].epoch = 0;
+        g_threads[slot].tmp_root = NULL;
+    }
+    pthread_mutex_unlock(&g_gc_mu);
+    for (;;) {
+        pthread_mutex_lock(&g_fserve_mu);
+        while (g_fserve_count == 0) pthread_cond_wait(&g_fserve_cond, &g_fserve_mu);
+        FServeJob job = g_fserve_queue[g_fserve_head];
+        g_fserve_head = (g_fserve_head + 1) % g_fserve_qcap;
+        g_fserve_count--;
+        pthread_cond_broadcast(&g_fserve_cond);   // 唤醒阻塞在 push 的 accept 线程
+        pthread_mutex_unlock(&g_fserve_mu);
+        LXValue arg = px_int(job.fd);
+        if (job.kind == FSERVE_KIND_SSE) sse_conn_worker(&arg, 1, NULL);
+        else http_conn_worker(&arg, 1, NULL);
+    }
+    return NULL;  // 不可达（进程退出由 OS 回收）
+}
+
+// 队列满时阻塞等待空位（背压）：调用方为 accept 线程；绝不 exit
+static void fserve_push(int fd, int kind) {
+    pthread_mutex_lock(&g_fserve_mu);
+    while (g_fserve_count >= g_fserve_qcap) pthread_cond_wait(&g_fserve_cond, &g_fserve_mu);
+    g_fserve_queue[g_fserve_tail].fd = fd;
+    g_fserve_queue[g_fserve_tail].kind = kind;
+    g_fserve_tail = (g_fserve_tail + 1) % g_fserve_qcap;
+    g_fserve_count++;
+    pthread_cond_signal(&g_fserve_cond);
+    pthread_mutex_unlock(&g_fserve_mu);
+}
+
+// 懒初始化：首个 serve 入口调用时建池（幂等；持 g_fserve_mu 下创建，worker 启动后
+// 阻塞在 cond_wait 内部释放本锁 → 无死锁）
+static void fserve_ensure(void) {
+    if (g_fserve_inited) return;
+    pthread_mutex_lock(&g_fserve_mu);
+    if (!g_fserve_inited) {
+        int workers = FSERVE_DEFAULT_WORKERS;
+        const char* we = getenv("PX_SERVE_WORKERS");
+        if (we) {
+            int w = atoi(we);
+            if (w >= 8 && w <= 4095) workers = w;
+        }
+        g_fserve_workers = workers;
+        g_fserve_qcap = FSERVE_QUEUE_CAP;
+        g_fserve_threads = (pthread_t*)xcalloc((size_t)workers, sizeof(pthread_t));
+        g_fserve_queue = (FServeJob*)xcalloc((size_t)FSERVE_QUEUE_CAP, sizeof(FServeJob));
+        for (int i = 0; i < workers; i++) {
+            if (pthread_create(&g_fserve_threads[i], NULL, fserve_worker, NULL) != 0) {
+                // 创建失败不致命：保留已建 worker；容量不足时 accept 背压，绝不 exit
+                fprintf(stderr, "[px-serve] 函数式连接池建 worker 失败（已建 %d/%d），连接将排队背压\n", i, workers);
+                break;
+            }
+            pthread_detach(g_fserve_threads[i]);
+        }
+        g_fserve_inited = 1;
+    }
+    pthread_mutex_unlock(&g_fserve_mu);
+}
+
+// http_serve(port, handler)：阻塞 accept 循环（Go 风格），连接交池 worker 处理
 static LXValue bi_http_serve(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 2 || args[0].type != PX_INT) px_error("http_serve 需要 (port, handler) 参数");
@@ -9972,11 +10081,12 @@ static LXValue bi_http_serve(LXValue* args, int nargs, void* ctx) {
         close(sfd);
         px_error("http_serve: listen 失败");
     }
+    // M88-S2：接入连接线程池（取代每连接 px_spawn——高并发不再因 spawn 槽满而 exit）
+    fserve_ensure();
     for (;;) {
         int cfd = accept(sfd, NULL, NULL);
         if (cfd < 0) continue;
-        LXValue arg = px_int(cfd);
-        px_spawn(http_conn_worker, &arg, 1);
+        fserve_push(cfd, FSERVE_KIND_HTTP);
     }
     return px_null(); // 不可达
 }
@@ -10016,6 +10126,8 @@ static LXValue bi_http_serve_unix(LXValue* args, int nargs, void* ctx) {
         close(sfd);
         px_error("http_serve_unix: listen 失败");
     }
+    // M88-S2：接入连接线程池（保留 unix 版 accept 错误容忍语义）
+    fserve_ensure();
     for (;;) {
         int cfd = accept(sfd, NULL, NULL);
         if (cfd < 0) {
@@ -10025,8 +10137,7 @@ static LXValue bi_http_serve_unix(LXValue* args, int nargs, void* ctx) {
             nanosleep(&ts, NULL);
             continue;
         }
-        LXValue arg = px_int(cfd);
-        px_spawn(http_conn_worker, &arg, 1);
+        fserve_push(cfd, FSERVE_KIND_HTTP);
     }
     return px_null(); // 不可达
 }
@@ -10340,11 +10451,12 @@ static LXValue bi_sse_serve(LXValue* args, int nargs, void* ctx) {
         close(sfd);
         px_error("sse_serve: listen 失败");
     }
+    // M88-S2：接入连接线程池（SSE 长连接占 worker 至 sse_close/断开，见池注释）
+    fserve_ensure();
     for (;;) {
         int cfd = accept(sfd, NULL, NULL);
         if (cfd < 0) continue;
-        LXValue arg = px_int(cfd);
-        px_spawn(sse_conn_worker, &arg, 1);
+        fserve_push(cfd, FSERVE_KIND_SSE);
     }
     return px_null(); // 不可达
 }

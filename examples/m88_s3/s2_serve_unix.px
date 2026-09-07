@@ -1,0 +1,10 @@
+# M88-S2/S3 压测服务端：http_serve_unix（issue 27 线上事故同款入口）
+# 用法：px build 后后台运行，另用并发客户端打 /tmp/m88_s3_press.sock
+def handler(req):
+    let p = req["path"]
+    if p == "/ok":
+        return {"status": 200, "body": "ok"}
+    return {"status": 404, "body": "nf"}
+
+spawn http_serve_unix("/tmp/m88_s3_press.sock", handler)
+sleep(3600000)
