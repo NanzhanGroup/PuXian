@@ -6,8 +6,12 @@
 //   - A1: GETG/SETG 执行（v1 经 px_get_global/px_set_global，D8 无锁化后置）、
 //     px_vm_run_module 完整 Top 运行（注册全局函数 D2 trampoline + 跑 Top bc）
 //   - A2: B 表一元/二元运算全量（NEG..SHRU，语义=调现 px_* C 函数）
+//   - A4: CALL 统一调用（PX_FUNC+px_vm_entry → 手动压帧 D3 不回 C 递归；
+//     PX_NATIVE/旧 C 产物 → px_call C 递归一层）——PxFrame 增 ret_dst
+//     （CALL 压帧返回写 caller 槽）；RET/RET0 弹帧回传（nframes==base 才返回）
 // 已实现指令子集：LOADK IMM MOV GETG SETG SRCLINE JMP JMPT JMPF RET RET0 HALT
-//   + B 表运算（A2）；其余 op 分发默认 px_error "指令未实现"（A3 起逐批）。
+//   + B 表运算（A2）+ CALL（A4）；其余 op 分发默认 px_error "指令未实现"
+//   （CALLM/TRY/FORCE 等 S3-B/A5 起逐批）。
 //
 // 执行模型：
 //   px_vm_run_func 在 st 上 push 帧（slots 数组）→ 循环取指分发 →
@@ -69,8 +73,10 @@ PxVmState* px_vm_state(void) {
 }
 
 // ---- 帧栈 ----
+// ret_dst：-1 = 顶层（RET 时返回 run_func 调用者）；≥0 = CALL 压帧，RET 时把
+// 返回值写入 caller 帧的该槽（D3：px→px 调用 push 帧，返回值经槽回传）。
 static PxFrame* vm_frame_push(PxVmState* st, const PxVMFunc* f,
-                              LXValue* args, int nargs) {
+                              LXValue* args, int nargs, int ret_dst) {
     if (st->nframes >= st->cap) {
         st->cap *= 2;
         st->frames = (PxFrame*)realloc(st->frames, (size_t)st->cap * sizeof(PxFrame));
@@ -80,6 +86,7 @@ static PxFrame* vm_frame_push(PxVmState* st, const PxVMFunc* f,
     fr->f = f;
     fr->nslots = f ? f->nslots : 0;
     fr->slots = (LXValue*)calloc((size_t)(fr->nslots ? fr->nslots : 1), sizeof(LXValue));
+    fr->ret_dst = ret_dst;
     // 参数拷入 slots[0..nargs)：calloc 零值 = PX_NULL（type 0），缺省参数由
     // 发射器在帧内预填默认值，实参不足时覆盖（对齐现 (nargs>i)?args[i]:default）。
     if (args && nargs > 0) {
@@ -124,7 +131,7 @@ PxVMFunc* px_vm_new_func(const char* name, int arity, int ndefault, int nslots,
 // ---- 解释循环（最小子集；其余 op → px_error "指令未实现"）----
 LXValue px_vm_run_func(PxVmState* st, const PxVMFunc* f, LXValue* args, int nargs) {
     int base = st->nframes;                 // 入口帧前栈深
-    vm_frame_push(st, f, args, nargs);
+    vm_frame_push(st, f, args, nargs, -1);  // ret_dst=-1：返回给本函数调用者
     LXValue ret = px_null();
     int done = 0;
     PxFrame* fr = &st->frames[st->nframes - 1];
@@ -146,16 +153,65 @@ LXValue px_vm_run_func(PxVmState* st, const PxVMFunc* f, LXValue* args, int narg
             vm_frame_pop(st);
             if (st->nframes == base) done = 1;
             break;
-        case PXOP_RET:
-            ret = fr->slots[in.a];
+        case PXOP_RET: {
+            LXValue v = fr->slots[in.a];
+            int rd = fr->ret_dst;
             vm_frame_pop(st);
-            if (st->nframes == base) done = 1;
+            if (st->nframes == base) { ret = v; done = 1; }
+            else if (rd >= 0) {          // A4：写回 caller 帧 dst 槽（D3 帧回传）
+                PxFrame* pf = &st->frames[st->nframes - 1];
+                if (rd < pf->nslots) pf->slots[rd] = v;
+            }
             break;
-        case PXOP_RET0:
-            ret = px_null();
+        }
+        case PXOP_RET0: {
+            LXValue v = px_null();
+            int rd = fr->ret_dst;
             vm_frame_pop(st);
-            if (st->nframes == base) done = 1;
+            if (st->nframes == base) { ret = v; done = 1; }
+            else if (rd >= 0) {
+                PxFrame* pf = &st->frames[st->nframes - 1];
+                if (rd < pf->nslots) pf->slots[rd] = v;
+            }
             break;
+        }
+        case PXOP_CALL: {
+            // A4：统一调用。callee 槽 = in.b，参数 = 槽 in.b+1..in.b+argc 连续区，
+            // 返回写槽 in.a。分派：VM 函数（PX_FUNC 且 fn==px_vm_entry）→ 手动压帧
+            // （D3：px→px 不回 C 递归，帧栈承接递归深度）；PX_NATIVE / 旧 C 编译产物
+            // （fn != px_vm_entry）→ px_call 直调（C 递归一层，与 CPython 同构）。
+            LXValue fnv = fr->slots[in.b];
+            int argc = in.c;
+            int dst = in.a;
+            LXValue* abuf = NULL;
+            if (argc > 0) {
+                int n = argc;
+                if (in.b + 1 + n > fr->nslots) n = fr->nslots - (int)in.b - 1;
+                if (n > 0) {
+                    abuf = (LXValue*)malloc((size_t)n * sizeof(LXValue));
+                    for (int i = 0; i < n; i++) abuf[i] = fr->slots[in.b + 1 + i];
+                    argc = n;
+                } else argc = 0;
+            }
+            if (fnv.type == PX_FUNC &&
+                fnv.as.obj->as.func.fn == px_vm_entry) {
+                PxVMFunc* cf = (PxVMFunc*)fnv.as.obj->as.func.ctx;
+                if (argc < cf->arity) {      // 参数不足（默认参数 S3-B 补）
+                    free(abuf);
+                    px_error("VM %s:%d CALL %s 参数不足: 需 %d 给 %d",
+                             fr->f->name, fr->line, cf->name, cf->arity, argc);
+                    break;
+                }
+                vm_frame_push(st, cf, abuf, argc, dst);  // 压子帧，循环继续
+                free(abuf);
+            } else {
+                LXValue r = px_call(fnv, abuf, argc);     // native/旧C/非函数
+                free(abuf);
+                fr = &st->frames[st->nframes - 1];        // 刷新（未 push，帧不变）
+                if (dst < fr->nslots) fr->slots[dst] = r;
+            }
+            break;
+        }
         case PXOP_SRCLINE:
             fr->line = (int)(int16_t)in.b;
             break;

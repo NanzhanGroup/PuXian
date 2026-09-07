@@ -190,3 +190,26 @@
 >   n3=x ie1=yes ie2=no sum=25（continue 跳 3）+flags=5（break 停））。
 > - 下一步：A4 调用闭环（CALL/参数区/默认参数/RET 嵌套帧 + 发射器 Call/main 调用约定 + vm.c
 >   解释循环嵌套帧改造：VM 内 px→px 压帧不回 C 递归（D3），native/旧 C 经 px_call）。
+
+### S3-A · A4 调用闭环：CALL/嵌套帧/递归深链/main 调用约定（hello.px 三轨对拍通过）
+> 完成（2026-09-08）：**函数调用闭环打通** —— px→px 调用压显式帧不回 C 递归（D3），
+> native/旧 C 产物经 px_call（C 递归一层，与 CPython 同构）；混合（旧 C fn 调 VM 函数/
+> VM 调旧 C fn）由 PX_FUNC.fn 指针相等判断天然兼容。
+> - **runtime/vm.c + vm.h**：PxFrame 增 ret_dst（CALL 压帧 → 返回写 caller 槽；-1=顶层）；
+>   vm_frame_push 带 ret_dst；RET/RET0 弹帧回传（nframes 回 base 才返回调用者）；
+>   **CALL** 分派——callee 是 PX_FUNC 且 fn==px_vm_entry → 手动压帧（递归深度走 VM 帧栈，
+>   深递归安全）；PX_NATIVE / 旧 C 编译产物（fn!=px_vm_entry）→ px_call 直调。参数连续区
+>   槽 b+1..b+argc（发射器预留防临时碰撞）；argc<arity px_error（默认参数 S3-B）。
+> - **selfhost/bc_emit.px**：抽 **bc_emit_call**（callee 槽 + 实参连续区预留 + CALL）；表达式
+>   Call/Pipe（|>：左值作首参调右函数，含 f(v,...) 形态）接线；**main 调用约定**——Top 末尾
+>   检测 has_main → GETG main→CALL(argc=0)→RET（Top 返回 main 结果给 run_module）；
+>   emit-c driver main 按 codegen 语义转退出码（Result Err→stderr+1；Ok/Int→code）。
+> - **验证**：cases_bc/bc4.px+dump golden（add 多参/fib 递归/deep 2 万层深链/main 调用），
+>   emit-c 端到端 **main 退出码=63**（add(3,4)=7+fib(10)=55+deep(20000)=7-6）ALL PASS；
+>   嵌套帧 CALL 手测（top→outer→inner 返回 42）PASS；bc1-4 dump golden 回归不变；
+>   **examples/hello.px 三轨 stdout 逐字节一致（VM=旧 C codegen=pxi）**——main 调用 + 局部 +
+>   and 短路 + if/else + print(native) + Pipe(msg |> to_upper()) 全链路真实程序跑通。
+> - 决策记录：默认参数/CALLM 方法调用推迟 S3-B（容器/方法到来时随 NEWSTRUCT/px_method 桥
+>   一起；A4 无容器无方法调用消费方）；for-in 依赖 len/index 见 S3-B。
+> - 下一步：A5 错误（TRY/FORCE + 顶层 ? 语义 + SRCLINE 现场比对 px_error 文案）——需
+>   Ok()/Err() native 构造 Result（GETG→CALL native 已可用），A4 CALL 已就绪。

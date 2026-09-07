@@ -27,8 +27,8 @@ if [ -z "$CACHE" ] || [ ! -d "$CACHE" ]; then
 fi
 [ -n "$CACHE" ] && [ -f "$CACHE/runtime.o" ] || { echo "❌ 未找到含 vm.o 的 rtcache（先 px build 任一程序重建缓存）" >&2; exit 1; }
 [ -f "$CACHE/vm.o" ] || { echo "❌ rtcache 无 vm.o（tools/px 已加 vm.c，需重建缓存）" >&2; exit 1; }
-echo "── emit-c: $SRC"
-echo "── rtcache: $CACHE"
+echo "── emit-c: $SRC" >&2
+echo "── rtcache: $CACHE" >&2
 NAME="$(basename "$SRC" .px)"
 "$BC_CLI" --emit-c "$SRC" > "/tmp/bc_run_${NAME}.c" || { echo "❌ emit-c 失败" >&2; exit 1; }
 gcc -c -O2 -I"$CACHE" -I"$RT" "/tmp/bc_run_${NAME}.c" -o "/tmp/bc_run_${NAME}.o" 2>/tmp/bc_run_cc.log || {
@@ -42,5 +42,5 @@ gcc -static -O2 -pthread -o "/tmp/bc_run_${NAME}" "/tmp/bc_run_${NAME}.o" $objs 
     "$RT/third_party/openssl/lib/libssl.a" "$RT/third_party/openssl/lib/libcrypto.a" \
     "$RT/third_party/zlib/lib/libz.a" -lm -ldl 2>/tmp/bc_run_link.log || {
         echo "❌ 链接失败 —— 日志 /tmp/bc_run_link.log" >&2; tail -15 /tmp/bc_run_link.log >&2; exit 1; }
-echo "── 运行（PX_BC_DUMP=1 打印非函数全局）"
+echo "── 运行（PX_BC_DUMP=1 打印非函数全局）" >&2
 PX_BC_DUMP=1 "/tmp/bc_run_${NAME}"

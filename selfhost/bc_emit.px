@@ -367,7 +367,42 @@ def bc_emit_expr(expr, dst, func):
         bc_emit_expr(expr[3], d, func)          # else
         bc_patch_off(func, jj, len(func["bc"]))
         return d
+    if ty == "Call":
+        # A4：普通调用 → bc_emit_call（callee=expr[1]，args=expr[2]）
+        return bc_emit_call(expr[1], expr[2], dst, func)
+    if ty == "Pipe":
+        # |>: 左值作为实参首参调用右函数；右为 Call → f(v, ...)（cg 同语义）
+        let v = expr[1]
+        let fn2 = expr[2]
+        if fn2[0] == "Call":
+            let al = []
+            al.append(v)
+            var a2i = 0
+            while a2i < len(fn2[2]):
+                al.append(fn2[2][a2i])
+                a2i += 1
+            return bc_emit_call(fn2[1], al, dst, func)
+        let al = [v]
+        return bc_emit_call(fn2, al, dst, func)
     panic("bc_emit_expr 未实现: " + str(expr))
+# 通用调用发射（A4）：callee 求值到槽；实参连续区 callee+1..+argc（先预留防
+# 内部临时碰撞）；CALL dst, callee_slot, argc。arg_list = 实参表达式列表。
+def bc_emit_call(callee, arg_list, dst, func):
+    var d = dst
+    if d < 0:
+        d = bc_tmp(func)
+    let cslot = bc_tmp(func)
+    let argc = len(arg_list)
+    let need = cslot + 1 + argc
+    while func["next_slot"] < need:
+        bc_tmp(func)
+    bc_emit_expr(callee, cslot, func)
+    var ai = 0
+    while ai < argc:
+        bc_emit_expr(arg_list[ai], cslot + 1 + ai, func)
+        ai += 1
+    bc_emit_inst(func, "CALL", d, cslot, argc)
+    return d
 
 # ---------- 语句发射（A1 子集） ----------
 def bc_emit_stmt_inner(stmt, func):
@@ -584,12 +619,22 @@ def bc_emit_func_def(f):
     func["nslots"] = func["next_slot"]
     return func
 
-# 合成 top 函数（顶层可执行语句；末尾 HALT）
-def bc_emit_func_top(stmts, topname):
+# 合成 top 函数（顶层可执行语句；末尾 HALT 或 main 调用约定 RET）
+# A4：has_main=1 → 末尾 GETG main→CALL(argc=0)→RET（返回 main 结果给 run_module，
+# driver 按 codegen 语义转退出码）；has_main=0 → HALT（顶层跑完 return 0）。
+def bc_emit_func_top(stmts, topname, has_main):
     let func = bc_new_func(topname, 0)
     func["is_top"] = true
     bc_emit_stmts(stmts, func)
-    bc_emit_inst(func, "HALT", 0, 0, 0)
+    if has_main:
+        let cs = bc_tmp(func)
+        let gmain = bc_g_add(g_bcm["globals"], "main")
+        bc_emit_inst(func, "GETG", cs, gmain, 0)
+        let rs = bc_tmp(func)
+        bc_emit_inst(func, "CALL", rs, cs, 0)
+        bc_emit_inst(func, "RET", rs, 0, 0)
+    else:
+        bc_emit_inst(func, "HALT", 0, 0, 0)
     func["nslots"] = func["next_slot"]
     return func
 
@@ -630,7 +675,15 @@ def bc_emit_program(prog):
         if ty != "FuncDef" and ty != "StructDef" and ty != "EnumDef" and ty != "TraitDef" and ty != "ImplDef" and ty != "Import" and ty != "ExternDef":
             top_stmts.append(st)
         i += 1
-    let top = bc_emit_func_top(top_stmts, "<top>")
+    # 顶层是否有 main 定义（A4：有 → Top 末尾 call main + RET，退出码由 driver 转换）
+    var has_main = false
+    i = 0
+    while i < len(items):
+        let st = items[i]
+        if st[0] == "FuncDef" and rust_unescape(st[1]) == "main":
+            has_main = true
+        i += 1
+    let top = bc_emit_func_top(top_stmts, "<top>", has_main)
     m["funcs"].push(top)
     m["top"] = len(m["funcs"]) - 1
     return m
@@ -748,7 +801,18 @@ def bc_emit_c_program(prog):
     out += "    px_args_init(argc, argv);\n"
     out += "    px_register_builtins();\n"
     out += "    LXValue _r = px_vm_run_module(px_vm_state(), &s_mod);\n"
-    out += "    (void)_r;\n"
+    out += "    int _code = 0;\n"
+    out += "    if (px_is_result(_r)) {\n"
+    out += "        if (!px_result_ok(_r)) {\n"
+    out += "            fprintf(stderr, \"错误: %s\\n\", px_to_string(px_result_unwrap(_r)));\n"
+    out += "            _code = 1;\n"
+    out += "        } else {\n"
+    out += "            LXValue _uv = px_result_unwrap(_r);\n"
+    out += "            if (_uv.type == PX_INT) _code = (int)_uv.as.i;\n"
+    out += "        }\n"
+    out += "    } else if (_r.type == PX_INT) {\n"
+    out += "        _code = (int)_r.as.i;\n"
+    out += "    }\n"
     out += "    if (getenv(\"PX_BC_DUMP\")) {\n"
     out += "        int _i;\n"
     out += "        for (_i = 0; _i < (int)s_mod.nG; _i++) {\n"
@@ -757,6 +821,6 @@ def bc_emit_c_program(prog):
     out += "                printf(\"%s=%s\\n\", s_mod.G[_i], px_to_string(_v));\n"
     out += "        }\n"
     out += "    }\n"
-    out += "    return 0;\n"
+    out += "    return _code;\n"
     out += "}\n"
     return out
