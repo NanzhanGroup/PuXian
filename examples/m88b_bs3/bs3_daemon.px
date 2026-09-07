@@ -1,0 +1,13 @@
+# B-S3 核心验证 daemon：SSE 长连接事件化（qg-issue 27 B 类）
+# 编译：pxc build --no-quic bs3_daemon.px
+# 运行：PX_SERVE_WORKERS=8 ./build/bs3_daemon
+#   （8 个 fserve worker 却可挂 400+ 空闲 SSE 长连接 = handler 返回后连接交还 IDLE
+#     事件循环照看、worker 释放——旧 256 定长注册表会在第 257 个连接拒绝/关闭）
+def sse_handler(req):
+    conn = req["conn"]
+    sse_send(conn, {"event": "hello", "data": "world"})
+    sse_send(conn, {"data": "line1\nline2"})
+    sse_send(conn, "plain")
+    # handler 返回 → B-S3：明文连接交还 IDLE 事件循环（epoll 照看断开/超时），本 worker 释放取新 job
+
+sse_serve(18100, sse_handler)

@@ -10018,8 +10018,9 @@ static const char* px_file_content_type(const char* path) {
 // 池容量 env PX_SERVE_WORKERS（默认 256，夹取 [8,4095]）。池 worker 均注册 GC 槽（同
 // px_pool_worker 常驻模式），注意 PX_MAX_THREADS 需 ≥ PX_SERVE_WORKERS + 主线程 + 业务 spawn。
 // M88-B-S2：http 连接已事件驱动——keep-alive 空闲连接响应写完即交还 IDLE（事件循环照看），
-// 不再占 worker 至 15s 超时（见 http_conn_worker 改造）；SSE 长连接仍占 worker 至 sse_close/
-// 对端断开（B-S3 事件循环化）。真正"空闲连接不占线程"现役于 http（见 M88_PLAN §三 B 类）。
+// 不再占 worker 至 15s 超时（见 http_conn_worker 改造）。
+// M88-B-S3：SSE 长连接已事件化——handler 返回后明文连接同样交还 IDLE（事件循环照看断开，
+// SSE 空闲不超时），worker 释放；仅 TLS SSE 长连接仍占 worker（走原阻塞保持路径，文档注明）。
 #ifndef FSERVE_KIND_HTTP
 #define FSERVE_KIND_HTTP 0
 #define FSERVE_KIND_SSE  1
@@ -10125,6 +10126,9 @@ static void fserve_ensure(void) {
 // B-S2、SSE 在 B-S3（见 docs/M88_PLAN.md §三）。未接入前事件循环不启动、行为零变化。
 #if defined(__linux__)
 #include <sys/epoll.h>
+// M88-B-S3：SSE 长连接事件化辅助（实现在 SSE 服务端区）——事件循环断开检测 + 统一关闭清理
+static int sse_idle_should_close(int fd);
+static void sse_server_close_fd(int fd);
 #endif
 
 #define PX_CONN_STATE_FREE   0
@@ -10242,6 +10246,31 @@ static void px_evc_close(int fd) {
     close(fd);
 }
 
+// M88-B-S3：摘除事件循环登记并把连接上下文置 FREE，但**不 close fd**——供 SSE 统一关闭路径用
+// （SSE 连接 fd 由 PxConn 拥有，px_conn_close 负责 close；本函数只防事件循环继续照看已关 fd）。
+static void px_evc_detach(int fd) {
+    if (fd < 0) return;
+    pthread_mutex_lock(&g_conn_mu);
+    PxConnCtx* c = px_evc_ctx(fd);
+    if (c && c->state != PX_CONN_STATE_FREE) {
+        if (c->ev_reg && g_ev_epfd >= 0) { epoll_ctl(g_ev_epfd, EPOLL_CTL_DEL, fd, NULL); c->ev_reg = 0; }
+        if (c->pbuf) { xfree(c->pbuf); c->pbuf = NULL; c->pbuf_len = c->pbuf_cap = 0; }
+        c->fd = -1; c->state = PX_CONN_STATE_FREE; c->kind = 0; c->idle_since = 0;
+    }
+    pthread_mutex_unlock(&g_conn_mu);
+}
+
+// M88-B-S3：查询 fd 当前是否在 IDLE（事件循环照看）。SSE 的 sse_close 用它区分关闭路径：
+//   IDLE（事件化，worker 已释放）→ detach + px_conn_close 统一清理；非 IDLE → 原 shutdown 唤醒语义。
+static int px_evc_is_idle(int fd) {
+    int r = 0;
+    pthread_mutex_lock(&g_conn_mu);
+    PxConnCtx* c = px_evc_ctx(fd);
+    if (c && c->state == PX_CONN_STATE_IDLE) r = 1;
+    pthread_mutex_unlock(&g_conn_mu);
+    return r;
+}
+
 // worker 响应写完且无下一请求数据 → 连接交还 IDLE（注册事件循环等可读；fd 先置非阻塞）
 // 返回 0 成功；连接未登记/事件循环不可用（非 Linux）返回 -1（调用方走原阻塞路径）
 static int px_evc_idle_put(int fd, int kind) {
@@ -10278,7 +10307,10 @@ static int px_evc_idle_pop(int fd) {
     return 1;
 }
 
-// 事件循环线程：等可读/断开/超时 → 可读派发回 fserve，断开/超时 close 清理
+// 事件循环线程：等可读/断开/超时 → 可读派发回 fserve，断开/超时 close 清理。
+// M88-B-S3：按连接类型分流——http IDLE 可读 → 派发回池（worker 处理下一请求突发）；
+//   SSE IDLE 长连接 → 只做断开检测（读掉/丢弃客户端数据；对端 FIN/错误 → sse_server_close_fd 统一清理）。
+//   SSE 空闲不超时（区别于 http keep-alive 15s）：tick 超时扫描仅对 http IDLE 生效。
 static void* px_ev_loop(void* arg) {
     (void)arg;
     struct epoll_event evs[256];
@@ -10295,19 +10327,32 @@ static void* px_ev_loop(void* arg) {
                 while (read(g_ev_wakefd, tmp, sizeof(tmp)) > 0) {}
                 continue;
             }
+            // 先取该 fd 当前 IDLE 连接的类型（锁内快照；FREE/异常跳过）
+            int kind = -1;
+            pthread_mutex_lock(&g_conn_mu);
+            PxConnCtx* c0 = px_evc_ctx(fd);
+            if (c0 && c0->state == PX_CONN_STATE_IDLE) kind = c0->kind;
+            pthread_mutex_unlock(&g_conn_mu);
+            if (kind == FSERVE_KIND_SSE) {
+                // SSE 长连接 IDLE：客户端不应发数据——有事件多半是对端断开/异常。
+                // 读掉并丢弃客户端数据（原阻塞保持语义）；对端 FIN/读错误 → 统一关闭清理。
+                if (sse_idle_should_close(fd)) sse_server_close_fd(fd);
+                continue;
+            }
+            if (kind != FSERVE_KIND_HTTP) continue;   // 非 IDLE/状态异常/已关闭：跳过
             if (evs[i].events & (EPOLLIN)) {    // 可读 → 派发回 fserve（worker 再接管）
-                int kind = FSERVE_KIND_HTTP;
+                int k2 = FSERVE_KIND_HTTP;
                 pthread_mutex_lock(&g_conn_mu);
                 PxConnCtx* c = px_evc_ctx(fd);
                 if (c && c->state == PX_CONN_STATE_IDLE) {
-                    kind = c->kind;
+                    k2 = c->kind;
                     if (c->ev_reg) { epoll_ctl(g_ev_epfd, EPOLL_CTL_DEL, fd, NULL); c->ev_reg = 0; }
                     c->state = PX_CONN_STATE_ACTIVE; c->idle_since = 0;
                 } else {
                     c = NULL;  // 状态异常/已关闭：跳过派发
                 }
                 pthread_mutex_unlock(&g_conn_mu);
-                if (c) fserve_push(fd, kind);   // 队满阻塞背压（事件循环线程暂停派发，不丢 fd）
+                if (c) fserve_push(fd, k2);   // 队满阻塞背压（事件循环线程暂停派发，不丢 fd）
                 continue;
             }
             if (evs[i].events & (EPOLLHUP | EPOLLERR | EPOLLRDHUP)) {  // 对端断开/异常
@@ -10316,11 +10361,13 @@ static void* px_ev_loop(void* arg) {
             }
         }
         // 周期性扫空闲超时（统一 tick；与 SO_RCVTIMEO 15s 语义对齐）
+        // M88-B-S3：仅 http IDLE 连接受 15s 空闲超时约束；SSE IDLE 长连接不超时（等 sse_close/对端断开）。
         long long now = px_ev_now_ms();
         pthread_mutex_lock(&g_conn_mu);
         for (int i = 0; i < g_conn_cap; i++) {
             PxConnCtx* c = &g_conns[i];
-            if (c->state == PX_CONN_STATE_IDLE && now - c->idle_since >= PX_CONN_IDLE_TMO_MS) {
+            if (c->state == PX_CONN_STATE_IDLE && c->kind == FSERVE_KIND_HTTP &&
+                now - c->idle_since >= PX_CONN_IDLE_TMO_MS) {
                 int fd = c->fd;
                 if (c->ev_reg && g_ev_epfd >= 0) { epoll_ctl(g_ev_epfd, EPOLL_CTL_DEL, fd, NULL); c->ev_reg = 0; }
                 if (c->pbuf) { xfree(c->pbuf); c->pbuf = NULL; c->pbuf_len = c->pbuf_cap = 0; }
@@ -10374,6 +10421,8 @@ static void px_ev_ensure(void) {
 static void px_ev_wake(void) { (void)0; }
 static PxConnCtx* px_evc_acquire(int fd, int kind) { (void)fd; (void)kind; return NULL; }
 static void px_evc_close(int fd) { close(fd); }
+static void px_evc_detach(int fd) { (void)fd; }
+static int px_evc_is_idle(int fd) { (void)fd; return 0; }
 static int px_evc_idle_put(int fd, int kind) { (void)fd; (void)kind; return -1; }
 static int px_evc_idle_pop(int fd) { (void)fd; return 0; }
 static void* px_ev_loop(void* arg) { (void)arg; return NULL; }
@@ -10468,30 +10517,98 @@ static LXValue bi_http_serve_unix(LXValue* args, int nargs, void* ctx) {
 }
 
 // ==================== M21 SSE 服务端（编译模式，与并发 GC 兼容） ====================
-// sse_serve(port, handler)：accept 循环，每连接 px_spawn 处理线程。
-// 连接线程：解析请求 → 发 SSE 响应头 → 注册连接(conn id) → 调 handler（req 注入 conn）
-//           → handler 返回后保持连接（recv 阻塞），直到 sse_close(conn)（shutdown 唤醒）
-//           或对端断开（recv 返回 0/错误）。
+// sse_serve(port, handler)：accept 循环，连接交 fserve 池 worker 处理（M88-S2）。
+// 连接 worker：解析请求 → 发 SSE 响应头 → 注册连接(conn id) → 调 handler（req 注入 conn）
+//           → handler 返回后保持连接，直到 sse_close(conn) 或对端断开。
 // sse_send(conn, data)：注册表 + 锁，任意线程可推送；写失败自动清理。
-// sse_close(conn)：shutdown 唤醒连接线程，清理注册。
+// sse_close(conn)：shutdown 唤醒（阻塞保持路径）或摘除事件循环清理（B-S3 事件化路径），并清注册。
 
-#define MAX_SSE_CONNS 256
+// M88-B-S3（qg-issue 27 B 类）：服务端 SSE 注册表 256 定长 → 动态容量表
+// （env PX_MAX_SSE_CONNS，默认 4096，夹取 [64,65536]），支撑上千~上万 SSE 长连接挂载；
+// 容量首次使用时一次性分配（无 realloc 竞态，指针恒定）。
+#define MAX_SSE_CONNS_DEFAULT 4096
+typedef struct SseServerConn { int fd; int64_t id; int active; PxConn* conn; } SseServerConn;
 static pthread_mutex_t g_sse_mu = PTHREAD_MUTEX_INITIALIZER;
-static struct { int fd; int64_t id; int active; PxConn* conn; } g_sse_conns[MAX_SSE_CONNS];
+static SseServerConn* g_sse_conns = NULL;
+static int g_sse_cap = 0;            // 当前容量（首次使用时按 env 上限一次性分配）
+static int g_sse_tab_inited = 0;
 static int64_t g_sse_next_id = 1;
 
+// 惰性分配服务端 SSE 注册表（调用方须持 g_sse_mu；sse_find/sse_alloc_slot 首行自动调用）
+static void sse_tab_ensure(void) {
+    if (g_sse_tab_inited) return;
+    g_sse_tab_inited = 1;
+    int cap = MAX_SSE_CONNS_DEFAULT;
+    const char* e = getenv("PX_MAX_SSE_CONNS");
+    if (e) {
+        int v = atoi(e);
+        if (v >= 64 && v <= 65536) cap = v;
+    }
+    g_sse_conns = (SseServerConn*)xcalloc((size_t)cap, sizeof(SseServerConn));
+    for (int i = 0; i < cap; i++) g_sse_conns[i].fd = -1;
+    g_sse_cap = cap;
+}
+
 static int sse_find(int64_t id) {
-    for (int i = 0; i < MAX_SSE_CONNS; i++) {
+    sse_tab_ensure();
+    for (int i = 0; i < g_sse_cap; i++) {
         if (g_sse_conns[i].active && g_sse_conns[i].id == id) return i;
     }
     return -1;
 }
 
 static int sse_alloc_slot(void) {
-    for (int i = 0; i < MAX_SSE_CONNS; i++) {
+    sse_tab_ensure();
+    for (int i = 0; i < g_sse_cap; i++) {
         if (!g_sse_conns[i].active) return i;
     }
     return -1;
+}
+
+// ==================== M88-B-S3：SSE 长连接事件化辅助 ====================
+// 事件循环对 SSE IDLE 连接只做断开检测：SSE 客户端在长连接期间不应发数据，但原保持语义是
+// 「阻塞读并丢弃客户端数据直到断开」。事件化后由事件循环读掉并丢弃（drain），并对对端
+// FIN/读错误返回"应关闭"。返回 1 = 对端断开/错误（调用方走 sse_server_close_fd）；0 = 保持 IDLE。
+static int sse_idle_should_close(int fd) {
+    char tmp[4096];
+    int rounds = 0;
+    for (;;) {
+        ssize_t n = recv(fd, tmp, sizeof(tmp), MSG_DONTWAIT);
+        if (n > 0) {                 // 读掉并丢弃（客户端违规数据；原阻塞保持语义）
+            if (++rounds > 1024) return 0;   // 恶意灌流上限（防占死事件循环；残留等下次事件）
+            continue;
+        }
+        if (n == 0) return 1;        // 对端 FIN → 关闭
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;  // 读尽 → 保持 IDLE
+        return 1;                    // 读错误 → 关闭
+    }
+}
+
+// SSE 服务端连接统一关闭路径（事件循环断开检测 / sse_send 写失败 / sse_close(IDLE 场景) 共用）：
+//   ① px_evc_detach：摘除事件循环登记 + 连接上下文置 FREE（不 close fd）；
+//   ② g_sse_mu 内清服务端注册表匹配项并取 PxConn*；
+//   ③ px_conn_close（幂等，内部 close fd 一次）——无注册项时直接 close(fd) 兜底。
+// 锁序：g_conn_mu 与 g_sse_mu 从不嵌套持用（本函数先 g_conn_mu 后 g_sse_mu，各自释放后取下一把）。
+static void sse_server_close_fd(int fd) {
+    if (fd < 0) return;
+    px_evc_detach(fd);
+    int found = 0;
+    PxConn* pc = NULL;
+    pthread_mutex_lock(&g_sse_mu);
+    sse_tab_ensure();
+    for (int i = 0; i < g_sse_cap; i++) {
+        if (g_sse_conns[i].active && g_sse_conns[i].fd == fd) {
+            pc = g_sse_conns[i].conn;
+            g_sse_conns[i].active = 0;
+            g_sse_conns[i].fd = -1;
+            g_sse_conns[i].conn = NULL;
+            found = 1;
+            break;
+        }
+    }
+    if (pc) px_conn_close(pc);   // 幂等（closed 标记）；内部 close(fd) 一次
+    pthread_mutex_unlock(&g_sse_mu);
+    if (!found) close(fd);       // 未注册（调用方兜底）：直接关 fd（无 PxConn 持有）
 }
 
 // ==================== M23 SSE 客户端（编译模式，与解释器 builtin.rs 双模式一致） ====================
@@ -10721,14 +10838,36 @@ static LXValue sse_conn_worker(LXValue* args, int nargs, void* ctx) {
         px_call(handler, &req, 1);
     }
 
-    // 8. 保持连接：read 阻塞直到 sse_close（shutdown 唤醒）或对端断开
+    // 8. M88-B-S3：SSE 长连接不占 worker——handler 返回后，明文连接交还 IDLE 事件循环照看
+    //    （事件循环 detect 对端断开 / sse_close / sse_send 写失败 → sse_server_close_fd 统一清理；
+    //    SSE 空闲不超时，区别于 http keep-alive 15s）；worker 立即返回释放去取新 job。
+    //    TLS 连接 / 事件化不可用（非 Linux、fd 超 PX_MAX_CONNS）→ 走原阻塞保持路径（功能不降，
+    //    仅 TLS SSE 长连接仍占 worker，文档注明）。
+    if (!c->is_tls) {
+        PxConnCtx* ac = px_evc_acquire(fd, FSERVE_KIND_SSE);
+        if (ac) {
+            px_ev_ensure();
+            if (px_evc_idle_put(fd, FSERVE_KIND_SSE) == 0) {
+                // 交还成功：注册表项保留（conn 供 sse_send 写）；本 worker 收尾（GC 计数）释放
+                __sync_fetch_and_sub(&g_px_inflight, 1);
+                g_cur_conn = NULL;
+                return px_null();
+            }
+            // idle_put 失败（罕见：epoll ADD 失败）→ 摘除登记并恢复阻塞，走原保持路径
+            px_evc_detach(fd);
+            int fl = fcntl(fd, F_GETFL, 0);
+            if (fl >= 0) fcntl(fd, F_SETFL, fl & ~O_NONBLOCK);
+        }
+    }
+    // 原保持路径（TLS 或事件化不可用）：read 阻塞直到 sse_close（shutdown 唤醒）或对端断开
     char rb[64];
     while (px_conn_read(c, rb, sizeof(rb)) > 0) {}
 
     // 9. 清理注册 + 关闭（只在仍注册时 close，避免与 sse_close 重复关闭）
     int closed = 0;
     pthread_mutex_lock(&g_sse_mu);
-    for (int i = 0; i < MAX_SSE_CONNS; i++) {
+    sse_tab_ensure();
+    for (int i = 0; i < g_sse_cap; i++) {
         if (g_sse_conns[i].active && g_sse_conns[i].fd == fd) {
             g_sse_conns[i].active = 0;
             g_sse_conns[i].fd = -1;
@@ -10739,7 +10878,7 @@ static LXValue sse_conn_worker(LXValue* args, int nargs, void* ctx) {
     if (closed) {
         // 置空共享 conn 指针（sse_send 已不可再写该连接）
         pthread_mutex_lock(&g_sse_mu);
-        for (int j = 0; j < MAX_SSE_CONNS; j++) {
+        for (int j = 0; j < g_sse_cap; j++) {
             if (g_sse_conns[j].conn == c) g_sse_conns[j].conn = NULL;
         }
         pthread_mutex_unlock(&g_sse_mu);
@@ -10776,7 +10915,8 @@ static LXValue bi_sse_serve(LXValue* args, int nargs, void* ctx) {
         close(sfd);
         px_error("sse_serve: listen 失败");
     }
-    // M88-S2：接入连接线程池（SSE 长连接占 worker 至 sse_close/断开，见池注释）
+    // M88-S2：接入连接线程池；M88-B-S3：SSE 长连接 handler 返回后事件化（空闲不占 worker，
+    // 见 sse_conn_worker 第 8 步与池注释）
     fserve_ensure();
     for (;;) {
         int cfd = accept(sfd, NULL, NULL);
@@ -10807,31 +10947,30 @@ static LXValue bi_sse_send(LXValue* args, int nargs, void* ctx) {
     }
     int fd = g_sse_conns[idx].fd;
     ssize_t w = px_conn_write(pc, frame, strlen(frame));
-    if (w < 0) {
-        g_sse_conns[idx].active = 0;
-        g_sse_conns[idx].fd = -1;
-        g_sse_conns[idx].conn = NULL;
-        px_conn_close(pc);  // 对象保留
-        pthread_mutex_unlock(&g_sse_mu);
-        xfree(frame);
-        return px_bool(false);
-    }
     pthread_mutex_unlock(&g_sse_mu);
     xfree(frame);
+    if (w < 0) {
+        // M88-B-S3：写失败 = 对端已断/连接异常 → 统一关闭路径（摘除事件循环登记 + 清注册 + 关连接）。
+        // 锁外执行：px_conn_close 幂等，与其它 sse_send/事件循环清理并发安全。
+        sse_server_close_fd(fd);
+        return px_bool(false);
+    }
     return px_bool(true);
 }
 
-// sse_close(conn) → bool（服务端连接 shutdown 唤醒；客户端连接直接关闭）
+// sse_close(conn) → bool（服务端连接 shutdown 唤醒 / 事件化摘除；客户端连接直接关闭）
 static LXValue bi_sse_close(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1 || args[0].type != PX_INT) px_error("sse_close 需要 (conn) 参数");
     int64_t conn = args[0].as.i;
-    // 服务端连接
+    // 服务端连接：先取 fd（存在性判断）
+    int fd = -1;
     pthread_mutex_lock(&g_sse_mu);
     int idx = sse_find(conn);
-    if (idx < 0) {
-        pthread_mutex_unlock(&g_sse_mu);
-        // 客户端连接
+    if (idx >= 0) fd = g_sse_conns[idx].fd;
+    pthread_mutex_unlock(&g_sse_mu);
+    if (fd < 0) {
+        // 客户端连接（原逻辑不变）
         pthread_mutex_lock(&g_sse_cli_mu);
         int cidx = sse_cli_find(conn);
         if (cidx < 0) {
@@ -10850,11 +10989,22 @@ static LXValue bi_sse_close(LXValue* args, int nargs, void* ctx) {
         if (ctl) https_close(ctl); else close(cfd);
         return px_bool(true);
     }
-    int fd = g_sse_conns[idx].fd;
-    g_sse_conns[idx].active = 0;
-    g_sse_conns[idx].fd = -1;
-    shutdown(fd, SHUT_RDWR);
-    close(fd);
+    // M88-B-S3：区分关闭路径——IDLE（已事件化，worker 已释放）→ sse_server_close_fd 统一清理
+    // （摘除事件循环 + 清注册表 + px_conn_close 关 fd）；ACTIVE/未事件化（worker 仍在 handler 或
+    // 阻塞保持）→ 原语义：清注册 + shutdown 唤醒阻塞读兜底（worker 醒后见注册已清不二次 close）。
+    if (px_evc_is_idle(fd)) {
+        sse_server_close_fd(fd);
+        return px_bool(true);
+    }
+    pthread_mutex_lock(&g_sse_mu);
+    idx = sse_find(conn);
+    if (idx >= 0) {
+        g_sse_conns[idx].active = 0;
+        g_sse_conns[idx].fd = -1;
+        g_sse_conns[idx].conn = NULL;
+        shutdown(fd, SHUT_RDWR);
+        close(fd);
+    }
     pthread_mutex_unlock(&g_sse_mu);
     return px_bool(true);
 }
