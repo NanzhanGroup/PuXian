@@ -158,6 +158,9 @@ void    px_quic_raw_peer_addr(int64_t conn, char* out, size_t n);   // 连接对
 int     px_quic_raw_stream_fin(int64_t conn, int64_t sid);
 LXValue px_struct(const char* type_name, char** fnames, LXValue* fvals, int nfields);
 LXValue px_enum(const char* type_name, const char* variant);
+// M89-S3-B3b：enum 值变体名（match 模式匹配 subject.type==PX_ENUM && variant==name 用；
+//   非 enum → px_null，不报错——对齐 cg 的 type 短路判断）
+LXValue px_enum_variant(LXValue v);
 LXValue px_tuple(LXValue* items, int len);
 // M32：生成器对象（创建时物化，gen_next 逐项消费）
 LXValue px_gen_from_list(LXValue list);

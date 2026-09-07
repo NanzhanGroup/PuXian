@@ -1507,6 +1507,11 @@ LXValue px_enum(const char* type_name, const char* variant) {
     return v;
 }
 
+LXValue px_enum_variant(LXValue v) {
+    if (v.type == PX_ENUM) return px_str(v.as.obj->as.enum_inst.variant);
+    return px_null();
+}
+
 LXValue px_tuple(LXValue* items, int len) {
     LXValue v; v.type = PX_TUPLE;
     LXObject* o = xmalloc(sizeof(LXObject));

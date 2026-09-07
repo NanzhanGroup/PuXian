@@ -665,6 +665,57 @@ def bc_emit_expr(expr, dst, func):
         return d
     if ty == "GenExp":
         return bc_emit_genexp(expr, dst, func)
+    if ty == "Match":
+        # match subject { case pat: body ... } 表达式 → if-elif 链（对齐 cg Match：
+        #   d 初=subject，命中 arm body 覆写 d 并跳 end；全不命中 → 返回 subject）
+        var d = dst
+        if d < 0:
+            d = bc_tmp(func)
+        let t = bc_tmp(func)
+        bc_emit_expr(expr[1], t, func)
+        bc_emit_inst(func, "MOV", d, t, 0)
+        let arms = expr[2]
+        var pend = []
+        var ai = 0
+        while ai < len(arms):
+            let arm = arms[ai]
+            let pcond = bc_match_cond(arm[1], t, func)
+            var skip = -1
+            var gskip = -1
+            if pcond == null:
+                # 恒真模式：无 pattern 跳转；guard（arm[2]）有则查 guard
+                if arm[2] != null:
+                    let gb = bc_tmp(func)
+                    bc_emit_expr(arm[2], gb, func)
+                    let gf = len(func["bc"])
+                    bc_emit_inst(func, "JMPF", gb, 0, 0)
+                    gskip = gf
+            else:
+                let jf = len(func["bc"])
+                bc_emit_inst(func, "JMPF", pcond, 0, 0)
+                skip = jf
+                if arm[2] != null:
+                    let gb = bc_tmp(func)
+                    bc_emit_expr(arm[2], gb, func)
+                    let gf = len(func["bc"])
+                    bc_emit_inst(func, "JMPF", gb, 0, 0)
+                    gskip = gf
+            bc_emit_expr(arm[3], d, func)
+            let jj = len(func["bc"])
+            bc_emit_inst(func, "JMP", 0, 0, 0)
+            let land = len(func["bc"])
+            if skip >= 0:
+                bc_patch_off(func, skip, land)
+            if gskip >= 0:
+                bc_patch_off(func, gskip, land)
+            pend.append(jj)
+            ai += 1
+        let end = len(func["bc"])
+        var pi = 0
+        while pi < len(pend):
+            bc_patch_off(func, pend[pi], end)
+            pi += 1
+        return d
     if ty == "Block":
         # { stmts } 块表达式：顺序执行，块值 = 最后 ExprStmt 值（cg：_blk 初 null，
         #   每 ExprStmt 覆写；无 ExprStmt → null）。块内 VarDecl/Assign 就地分配槽
@@ -917,6 +968,45 @@ def bc_emit_genexp(expr, dst, func):
         bc_emit_null(func, base + 1)
     bc_emit_inst(func, "NEWGEN", d, seq, base)
     return d
+
+# ---------- B3b：match 模式条件 ----------
+# 模式条件 → 布尔槽；恒真模式（Wildcard/小写 Binding/空 Tuple）返回 null（无跳转）
+def bc_match_enumvar(vname, t, func):
+    # subject 是 enum 且 variant==vname（对齐 cg subject.type==PX_ENUM && strcmp；
+    #   px_enum_variant 对非 enum → null → EQ false，无需类型预判）
+    let ev = bc_tmp(func)
+    bc_emit_inst(func, "ENUMVAR", ev, t, 0)
+    let k = bc_k_add(g_bcm["k_pool"], "str", 0, 0.0, vname)
+    let ks = bc_tmp(func)
+    bc_emit_inst(func, "LOADK", ks, k, 0)
+    let eb = bc_tmp(func)
+    bc_emit_inst(func, "EQ", eb, ev, ks)
+    return eb
+
+def bc_match_cond(pattern, t, func):
+    let pty = pattern[0]
+    if pty == "PatWildcard":
+        return null
+    if pty == "PatBinding":
+        let name = rust_unescape(pattern[1])
+        if len(name) > 0 and name[0] >= "A" and name[0] <= "Z":
+            # 大写 → enum 变体名匹配（对齐 cg：变体名常量全大写惯例）
+            return bc_match_enumvar(name, t, func)
+        return null
+    if pty == "PatTuple":
+        let items = pattern[1]
+        if len(items) > 0:
+            return bc_match_cond(items[0], t, func)
+        return null
+    if pty == "PatConstructor":
+        return bc_match_enumvar(rust_unescape(pattern[1]), t, func)
+    if pty == "PatLiteral":
+        let ev = bc_tmp(func)
+        bc_emit_expr(pattern[1], ev, func)
+        let eb = bc_tmp(func)
+        bc_emit_inst(func, "EQ", eb, t, ev)
+        return eb
+    panic("bc_match_cond 未知 pattern: " + str(pattern))
 
 # ---------- B1：赋值目标发射（Assign/复合赋值 目标 ∈ Var/Index/Field） ----------
 # 复合赋值语义：先读目标旧值 → 求值 rhs → 二元运算 → 写回（对齐 cg_assign_op_*）

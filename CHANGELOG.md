@@ -6,6 +6,19 @@
 
 ## [Unreleased]
 
+### M89-S3-B3b · VM 化：match 模式匹配（enum 变体/literal/wildcard/guard）
+
+> 完成（2026-09-08）：VM 化（M89）S3-B 推进，**match 表达式在 VM 跑通**。
+> - **runtime**：新增 px_enum_variant（enum→px_str(variant)，非 enum→null，对齐 cg
+>   type 短路）；vm.h 增 PXOP_ENUMVAR（55）+ vm.c 实现。
+> - **selfhost/bc_emit.px**：Match 表达式 → if-elif 链（d 初=subject，命中 arm 覆写并跳 end，
+>   全不命中返回 subject）；模式条件 PatConstructor/大写 PatBinding → ENUMVAR(subject)==变体名、
+>   PatLiteral → EQ(subject, 字面量)、PatWildcard/小写 Binding → 恒真；guard 与 pattern cond
+>   组合（VM 先行正确实现 guard，codegen 侧忽略 guard 记录差异待收敛）。
+> - **验证**：bc10.px+dump golden，bc10_verify.sh 6 断言全 PASS（def 内 match enum 变体 +
+>   wildcard、顶层 match literal）；bc10 pxi 同跑 rc=0 语义一致；bc1-9 dump golden 全不变。
+> - 记录：小写 PatBinding 绑定语义未实现（对齐 codegen 现状，P2 补）。
+
 ### M89-S3-B3a · VM 化：推导式/生成器/闭包基建（ListComp/DictComp/GenExp/Closure/Block）
 
 > 完成（2026-09-08）：VM 化（M89）S3-B 推进，**三类推导式 + 闭包/块表达式在 VM 跑通**。
