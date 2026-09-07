@@ -256,7 +256,7 @@ jobs:
           echo "⏸ 本次跳过 rpm 发布。启用方法（正式密钥就绪后无需改代码）："
           echo "   1. 在仓库 Settings → Secrets and variables → Actions 配置："
           echo "      GPG_PRIVATE_KEY / GPG_PASSPHRASE / GPG_KEY_ID"
-          echo "   2. 下一个 tag（v0.1.0-mXX）自动构建签名 RPM 仓库并发布（el7 + el9）"
+          echo "   2. 下一个 tag（v0.2.0 / v0.1.0-mXX）自动构建签名 RPM 仓库并发布（el7 + el9）"
           echo "   3. 用户侧: sudo bash packaging/install-rpm.sh && dnf install puxian"
 
   rpm-build-7:
