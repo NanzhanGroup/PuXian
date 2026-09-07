@@ -6,6 +6,38 @@
 
 ## [Unreleased]
 
+### M88-B-S4 · 收口：事件驱动量级压测 + 回归总闸 + tag v0.1.0-m88b（qg-issue 27 B 类）
+
+> 完成（2026-09-07，commit M88-B-S4）：**B 类（事件驱动半同步/半异步）收口**。
+> - **万级空闲连接量级实证**（examples/m88b_s4/，PX_SERVE_WORKERS=8）：**10000 空闲 keep-alive
+>   同时挂载（首请求+窗口内突发复用均 200，9720/10000——其余为 http keep-alive 空闲 15s 设计语义下
+>   超窗连接被服务端正常关闭），进程 OS 线程数恒 10**（≈ 池容量 + 事件循环 + 主，不随连接数涨）。
+> - **SSE 长连接量级**（examples/m88b_bs3/）：1000 SSE 长连接全建立收事件、3s 后 1000/1000 存活
+>   （SSE 空闲不超时）、线程恒 10、断开 500 重开 500 全成功。
+> - **短连接吞吐 ≥ A 类基线**：http_serve_unix 并发 100×500 = 50000/50000 全 200、0 失败、0 err、
+>   进程不崩（69.6s，与 A 类基线 63s 同量级）。
+> - **回归总闸全绿**：m82 + m83_s1-s6 + m84_s1-s3 + m85_s1-s2 + m86_s0-s2 全部 rc=0（m83_s5/s6
+>   收尾 `kill 0` 退出码已随 af75807 修复归 0，不再人工豁免）；m23a SSE+WS PASS；**自举证明 rc=0**
+>   （B.c==golden/compiler.c 10595 行，M88 未动 compiler.px/golden）；native **301 不变**（B 类五提交
+>   零触碰 px_native 注册面）。fmt/lint 0 错；worktree 干净。
+> - **重链 bootstrap/pxi**（--full，9,462,024→9,467,264 B；B 类 runtime——事件驱动内核/http 交还/SSE
+>   事件化/注册表动态化——全能力入解释器宿主；strings 含 PX_MAX_CONNS/PX_MAX_SSE_CONNS/PX_SERVE_WORKERS
+>   实证；pxi 冒烟 rc=0）。
+> - 文档同步（spec §8.22 连接语义 → 池化+事件驱动、CHEATSHEET M88 行、M88_PLAN §七）。**tag v0.1.0-m88b**
+>   已 push。qg-issue 27 的 B 档（连接 1 万+、空闲不占线程）落地；C 类（用户态协程 M:N）按
+>   M88_PLAN §四·A 顺序（VM 化 → 协程）另行立项。
+
+### M88-B-S3 · SSE 长连接事件循环化 + 服务端注册表动态化（qg-issue 27 B 类）
+
+> 完成（2026-09-07，commit 30cfbfa）：`sse_conn_worker` handler 返回后，**明文 SSE 长连接交还 IDLE
+> 事件循环**（Linux epoll 照看：对端断开/异常 → 统一关闭清理；**SSE 空闲不超时**，区别于 http keep-alive
+> 15s tick），worker 返回释放取新 job = **SSE 长连接不再占线程**；TLS / 非 Linux / fd 超限自动降级原
+> 阻塞保持路径（功能不降）。服务端 SSE 注册表 `g_sse_conns` 256 定长 → **动态容量表**（env `PX_MAX_SSE_CONNS`
+> 默认 4096 夹取 [64,65536]）。事件循环按连接类型分流；`sse_close` 按 IDLE/ACTIVE 分流关闭、`sse_send`
+> 写失败统一清理（新增 `px_evc_detach`/`px_evc_is_idle`）；http_stream/stream_takeover 共享动态注册表。
+> 验证：bs3 专项 **1000 SSE 长连接全建立收事件、3s 后 1000/1000 存活（不被 15s tick 误关）、服务线程恒
+> 10、断开 500 重开 500 全成功**；回归 m23a SSE+WS、m82 http_serve_unix、m83_s6 同端口流式 SSE 全绿。
+
 ### 回归脚本卫生修复 · m83_s5/s6 verify.sh 收尾 trap `kill 0`（M84-S4 起记录不修，今根治 · 不占里程碑号）
 
 > 完成（2026-09-07）：`examples/m83_s5/verify.sh`、`examples/m83_s6/verify.sh` 收尾 `trap ... EXIT`

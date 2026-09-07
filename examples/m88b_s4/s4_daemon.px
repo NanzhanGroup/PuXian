@@ -1,0 +1,12 @@
+# B-S4 量级验证 daemon：http keep-alive 空闲连接事件驱动（qg-issue 27 B 类）
+# 编译：pxc build --no-quic s4_daemon.px
+# 运行：PX_SERVE_WORKERS=8 ./build/s4_daemon
+#   （8 个 fserve worker 却可同时挂 1 万+ 空闲 keep-alive 连接 = 空闲连接交还 IDLE 事件循环，
+#     worker 只处理"请求突发"；A 类 8 worker 只能同时喂 8 连接）
+def handler(req):
+    let p = req["path"]
+    if p == "/health":
+        return "ok-s4"
+    return "not-found"
+
+http_serve(18099, handler)
