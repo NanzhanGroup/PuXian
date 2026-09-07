@@ -352,6 +352,8 @@ void px_srcfunc(const char* name);
 // 根集合 = 全局表 + 当前线程栈（保守扫描）+ 暂存根（刚创建对象）。
 // 并发（spawn 线程活跃）时自动跳过回收（保持正确性），线程全部退出后自动恢复。
 void px_gc_collect(void);
+// ISSUE28-B1：请求间/空闲安全点回收（多线程服务模式延迟 GC 的触发点；单线程零开销）
+void px_gc_poll(void);
 // 返回 GC 次数；live 输出当前存活对象数，total 输出累计回收对象数
 int px_gc_stats(int* live, int* total);
 

@@ -1,0 +1,25 @@
+# ISSUE28-B1 验证 daemon：GC 延迟到请求间安全点（qg-issue 28 止血批次 B1）
+# 编译：pxc build --no-quic b1_daemon.px
+# 运行：PX_SERVE_WORKERS=8 ./build/b1_daemon /tmp/issue28_b1.sock
+# 语义：handler 每次请求制造 ~1200 个瞬时字符串对象（≈4.8k 对象/请求，接近 ws-approve
+#   /check 数量级 ×几）→ 累计越过 GC 阈值（10 万对象）时：
+#   B1 前：在请求处理热路径内联全量 STW（周期尖刺打中在途请求，单发 p95 数百 ms）；
+#   B1 后：置 pending，在 fserve worker 处理完请求、空闲时（px_gc_poll 安全点）才回收，
+#          且 sweep 免逐趟 sigprocmask + xfree 局部性 hint（单次 STW ~2-4× 缩短）。
+# 观测：PX_GC_DEBUG=1 时 stderr 可见 collect 行（含耗时）；verify.sh 客户端量测延迟分布。
+def churn():
+    for i in range(200):
+        let s = "churn-item-" + str(i) + "-payload"
+        if len(s) == 0:
+            print("unreachable")
+
+def handler(req):
+    churn()
+    return "ok-b1"
+
+def main(sock):
+    spawn http_serve_unix(sock, handler)
+    print("B1-READY")
+    sleep(60000)
+
+main("/tmp/issue28_b1.sock")

@@ -22,7 +22,7 @@ M88-B 修好「万级空闲连接线程恒定」，但 m88b 实测 **单发 p95=
 |---|---|---|
 | B3 | 全局符号表锁 M55 互斥锁→**读写锁**（px_get_global/px_global_native/struct 方法查找=读锁并发；px_set_global/GC 根扫描=写锁独占；锁序 g_gc_mu→g_globals_mu 不变） | 编译过；m82 8 项 PASS；并发 spawn get/set 压测无损坏/不崩；GC 根扫描语义不变 |
 | B2 | **slab 空页归还 OS + 字符串拼接中间缓冲泄漏修复**：GC sweep 后以 g_slab_ranges 全量遍历，摘除并 munmap 完全空闲的非头 slab（每 class 保留头 slab 防抖动）；**验证中发现并修复 px_add(字符串+) / px_mul(字符串×n) 中间缓冲 xmalloc 后未 xfree 的泄漏（堆只涨不落的直接根因之一：每拼接泄漏 1 缓冲）** | 编译过；examples/issue28_b2 3 轮 40 万垃圾波后 RSS 回落基线 +15MB 内（修复前逐轮 +130MB 不回吐）；m82/m83_s6 PASS |
-| B1 | **GC 延迟到安全点**：多线程服务模式对象越阈值不再内联 STW（置 pending），改在请求间安全点回收（fserve/px_pool worker 循环顶）+ 硬上限兜底内联；单线程 CLI/解释模式保持原内联零回归；GC 摘要打印耗时便于观测 | 编译过；服务模式在途请求不吃 GC 停顿（可测）；单线程/pxi 行为不变；m82/m83_s6 PASS |
+| B1 | **GC 延迟到请求间安全点 + sweep 削峰**：多线程服务模式越阈值不再内联 STW（置 g_gc_pending，fserve/px_pool worker 空闲安全点 px_gc_poll 回收；硬上限 阈值×4 强制内联兜底；单线程 CLI/解释模式保持原内联零回归）；**sweep 免逐趟 sigprocmask + xfree 局部性 hint（单次 STW ~2-4× 缩短：实测 250-500ms → ~100-150ms）**；GC 摘要打印耗时；PX_GC_INLINE=1 可对拍还原 B1 前行为 | 编译过；A/B 200 请求对拍：GC 从"每 ~4 请求 1 刺 p95 数百 ms"→ 200 请求仅 2 次 GC、p95≈10ms、无灾难卡死；单线程/pxi 零回归；m82/m83_s6 PASS。残余：单次 STW ~100-300ms（sweep 线性于对象数），max≤100ms 全量标准需观音 ws-approve 实测 + M89 精确/分代 GC |
 | S4 | 收口：全量回归 + 自举证明 + 重链 bootstrap + 文档同步（CHANGELOG/spec/qg-issue 28 状态）+ 记录 M89 吸收项 | 回归全绿 |
 
 ## 三、验证标准（issue 28 §7 目标 + 本环境可达子集）
