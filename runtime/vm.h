@@ -130,6 +130,13 @@ typedef struct {
     const void*     upvals;
 } PxVMFunc;
 
+// B2：struct 类型元数据（NEWSTRUCT 运行时字段名来源；发射器按声明序收集）
+typedef struct {
+    const char*     name;      // 类型名
+    const char**    fnames;    // 字段名表（声明序，nfields 项）
+    int             nfields;
+} PxStructDef;
+
 struct PxBCModule {
     const char*     name;      // 模块名（主文件名去扩展）
     const PxK*      K;  int nK;   // 常量池（int/float/str/bool/null 统一）
@@ -137,6 +144,7 @@ struct PxBCModule {
     const char**    G;  int nG;   // 声明全局槽名（函数名/顶层 var）
     const PxVMFunc* funcs; int nfuncs;  // 函数表（含 Top 与全部用户函数）
     int             top_idx;          // Top（顶层代码）在 funcs 下标；-1=无
+    const PxStructDef* structs; int nstructs;  // B2：struct 类型元数据表
 };
 
 // ==================== 显式帧栈 ====================

@@ -319,6 +319,33 @@ LXValue px_vm_run_func(PxVmState* st, const PxVMFunc* f, LXValue* args, int narg
             fr->slots[in.a] = d;
             break;
         }
+        // NEWSTRUCT（B2）：a=dst，b=struct 元数据 idx（mod->structs），
+        //   c=字段值连续槽基址（槽 c..c+nfields-1）→ px_struct（同 codegen 构造）
+        case PXOP_NEWSTRUCT: {
+            const PxBCModule* mm = cf->mod;
+            if (!mm || in.b >= (uint16_t)mm->nstructs)
+                px_error("VM %s:%d NEWSTRUCT 元数据越界 st=%d (n=%d)",
+                         cf->name, fr->line, in.b, mm ? mm->nstructs : -1);
+            const PxStructDef* sd = &mm->structs[in.b];
+            if (sd->nfields < 0 || (int)in.c + sd->nfields > fr->nslots)
+                px_error("VM %s:%d NEWSTRUCT 槽越界 base=%d nf=%d", cf->name, fr->line, in.c, sd->nfields);
+            int nf = sd->nfields;
+            LXValue* vals = nf > 0 ? (LXValue*)malloc((size_t)nf * sizeof(LXValue)) : NULL;
+            char** fns = nf > 0 ? (char**)malloc((size_t)nf * sizeof(char*)) : NULL;
+            for (int i = 0; i < nf; i++) { vals[i] = fr->slots[in.c + i]; fns[i] = (char*)sd->fnames[i]; }
+            fr->slots[in.a] = px_struct(sd->name, fns, vals, nf);
+            free(vals); free(fns);
+            break;
+        }
+        // NEWENUM（B2）：a=dst，b=N 类型名 idx，c=N 变体名 idx → px_enum
+        case PXOP_NEWENUM: {
+            const PxBCModule* mm = cf->mod;
+            if (!mm || in.b >= (uint16_t)mm->nN || in.c >= (uint16_t)mm->nN)
+                px_error("VM %s:%d NEWENUM 名字越界 b=%d c=%d (nN=%d)",
+                         cf->name, fr->line, in.b, in.c, mm ? mm->nN : -1);
+            fr->slots[in.a] = px_enum(mm->N[in.b], mm->N[in.c]);
+            break;
+        }
         case PXOP_LISTPUSH:  // a=val 槽，b=list 槽（值入列表尾）
             px_list_push(fr->slots[in.b], fr->slots[in.a]);
             break;
@@ -443,12 +470,15 @@ LXValue px_vm_run_module(PxVmState* st, const PxBCModule* m) {
         px_error("VM 模块 %s 无 Top 函数", m->name ? m->name : "?");
         return px_null();
     }
-    // 注册全局函数（除 Top）：统一 px_func(name, px_vm_entry, &funcs[i])（D2 trampoline）
+    // 注册全局函数（除 Top / 闭包）：统一 px_func(name, px_vm_entry, &funcs[i])（D2 trampoline）
     // —— 与 codegen main() 里 px_set_global 注册等价；此后 px_get_global("fname") 可调用
+    // B2：impl 方法名 "Type.method" 亦在 funcs → 一并注册（px_method struct 分支按名转发）。
+    // B4 起：闭包（name 以 '<' 开头）不注册全局（LOADK PXK_FUNC 直接引用，B4）。
     int i = 0;
     for (i = 0; i < m->nfuncs; i++) {
         if (i == m->top_idx) continue;
         const PxVMFunc* f = &m->funcs[i];
+        if (f->name[0] == '<') continue;
         px_set_global(f->name, px_func(f->name, px_vm_entry, (void*)f));
     }
     // 跑顶层 bc（Top：声明/赋值 + S3-B 起 main() 调用约定）

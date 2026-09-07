@@ -6,6 +6,21 @@
 
 ## [Unreleased]
 
+### M89-S3-B2 · VM 化：构造/类型 —— NEWSTRUCT/NEWENUM + struct/enum/const enum/impl 方法
+
+> 完成（2026-09-08）：VM 化（M89）S3-B 全构造段推进，**类型系统三件套在 VM 上跑通 + impl
+> 方法注册全局 "Type.method"**。
+> - **runtime/vm.h/vm.c**：PxBCModule 增 struct 元数据表（PxStructDef）；实现 NEWSTRUCT
+>   （structs 元数据 idx + 字段值连续槽 → px_struct）与 NEWENUM（N 池类型名/变体名 → px_enum）；
+>   px_vm_run_module 注册全局函数跳过 '<' 开头闭包名（B4 closure 走 LOADK PXK_FUNC）。
+> - **selfhost/bc_emit.px**：类型元数据收集（StructDef structs / EnumDef enums / TypeConst 递归
+>   consts / impl 方法按 "Type.method" 字典序）；Field 折叠 const enum（值表达式内联）与 enum
+>   变体（NEWENUM）；Call/Constructor 类型名 → struct/enum 构造；impl 方法以 "Type.method"
+>   普通函数发射入 funcs；emit-c 输出 s_structs 元数据表。
+> - **验证**：bc8.px+dump golden，bc8_verify.sh 11 断言全 PASS（struct 构造/字段读写/impl 方法
+>   Point.sum CALLM→px_method 桥（self 绑定）/enum 变体 NEWENUM + px_eq enum 比较/TypeConst
+>   折叠）；bc8 旧轨 pxi 同跑 rc=0 语义一致；bc1-7 dump golden 全不变 + bc7_verify 复跑全绿。
+
 ### M89-S3-B1 · VM 化：容器/字段/方法桥/For 迭代（S3-B 首切）
 
 > 完成（2026-09-08）：VM 化旗舰（M89）进入 **S3-B 全构造段**，B1 落地。
