@@ -330,6 +330,12 @@ typedef struct Slab {
 
 static pthread_mutex_t g_slab_mu = PTHREAD_MUTEX_INITIALIZER;
 static Slab* g_slab_heads[SLAB_CLASS_COUNT] = {0};
+// ISSUE28-B1：xfree 局部性 hint——sweep 成批释放同一批 slab 的对象/数据时，跳过 O(log R)
+// 反查二分（实测全量 STW 主要耗时在 sweep 的 xfree：120k 对象 ~250ms，单发 p95 尖刺根因）。
+#define XFREE_HINT_N 16
+static Slab* g_xfree_hint[XFREE_HINT_N];
+static int g_xfree_hint_head = 0;
+static __thread int g_in_gc_sweep = 0;  // ISSUE28-B1：GC sweep 中（executor 已屏蔽 SIG_GC_STOP、单线程），xfree 跳过每趟 sigprocmask 屏蔽/恢复（实测全量 STW 耗时大头）
 // 地址 → slab 反查（xfree/xrealloc 定位）：按 base 升序，二分查找
 static Slab** g_slab_ranges = NULL;
 static size_t g_slab_range_count = 0;
@@ -488,10 +494,23 @@ static void* xmalloc(size_t n) {
 static void xfree(void* p) {
     if (!p) return;
     sigset_t old;
-    gc_block_stop(&old);
+    int blk = !g_in_gc_sweep;   // ISSUE28-B1：sweep 内 executor 已屏蔽信号且单线程 → 免逐趟 sigprocmask
+    if (blk) gc_block_stop(&old);
     pthread_mutex_lock(&g_slab_mu);
-    Slab* s = slab_find_locked(p);
+    // ISSUE28-B1 快路径：先查最近释放过的 slab hint（成批释放同 slab 命中即免二分反查）。
+    // 仅在本锁内读写 hint；slab_reclaim_empty 归还空 slab 时同锁清零 → 无悬垂 hint。
+    Slab* s = NULL;
+    for (int hi = 0; hi < XFREE_HINT_N; hi++) {
+        Slab* h = g_xfree_hint[hi];
+        if (!h) continue;
+        size_t hh = (sizeof(Slab) + 7) & ~(size_t)7;
+        uintptr_t hend = ((uintptr_t)h + hh + h->slot_count * h->class_size + PX_PAGE - 1) & ~(uintptr_t)(PX_PAGE - 1);
+        if ((uintptr_t)p >= (uintptr_t)h && (uintptr_t)p < hend) { s = h; break; }
+    }
+    if (!s) s = slab_find_locked(p);
     if (s) {
+        g_xfree_hint[g_xfree_hint_head] = s;
+        g_xfree_hint_head = (g_xfree_hint_head + 1) % XFREE_HINT_N;
         size_t header = (sizeof(Slab) + 7) & ~(size_t)7;
         size_t off = (const char*)p - ((const char*)s->base + header);
         size_t idx = off / s->class_size;
@@ -504,7 +523,7 @@ static void xfree(void* p) {
         if (!s->in_use[idx]) {
             // 槽已空闲（double-free）：幂等忽略，不重复入链（防空闲链表环 → 双重分配）
             pthread_mutex_unlock(&g_slab_mu);
-            gc_unblock_stop(&old);
+            if (blk) gc_unblock_stop(&old);
             return;
         }
         s->in_use[idx] = 0;
@@ -512,11 +531,11 @@ static void xfree(void* p) {
         s->free_head = p;
         s->free_count++;
         pthread_mutex_unlock(&g_slab_mu);
-        gc_unblock_stop(&old);
+        if (blk) gc_unblock_stop(&old);
         return;
     }
     pthread_mutex_unlock(&g_slab_mu);
-    gc_unblock_stop(&old);
+    if (blk) gc_unblock_stop(&old);
     size_t total = *(size_t*)((char*)p - sizeof(size_t));
     munmap((char*)p - sizeof(size_t), total);
 }
@@ -581,6 +600,8 @@ static void slab_reclaim_empty(void) {
         munmap(s, bytes);
     }
     g_slab_range_count = w;
+    memset(g_xfree_hint, 0, sizeof(g_xfree_hint));   // 归还 slab 后清 hint（同锁，防悬垂）
+    g_xfree_hint_head = 0;
     pthread_mutex_unlock(&g_slab_mu);
 }
 
@@ -622,6 +643,13 @@ static int g_obj_cap = 0;
 static long long g_alloc_bytes = 0;
 static long long g_gc_trigger_bytes = 0;  // 0 = 未启用字节阈值
 static int g_gc_threshold = GC_THRESHOLD_DEFAULT;
+// ISSUE28-B1（qg-issue 28）：GC 延迟到安全点（服务模式）。多线程服务场景把"对象越阈值
+// 立即内联全量 STW"从请求热路径挪到**请求间安全点**（worker 空闲/池循环顶）执行，避免
+// 300-500ms 周期尖刺打中在途请求（m88b 实测单发 p95=331ms/max=520ms）。g_gc_pending
+// 置位后在安全点 px_gc_poll() 回收；单线程 CLI/解释模式无安全点，保持原内联（零回归）。
+#define GC_HARD_CAP_FACTOR 4        // 延迟硬上限：对象数 ≥ 阈值×4 仍强制内联（防失控，保内存有界）
+static volatile int g_gc_pending = 0;
+static int g_gc_force_inline = 0;   // 调试/对拍：PX_GC_INLINE=1 强制请求热路径内联（还原 B1 前行为，验证 A/B）
 static int g_gc_env_inited = 0;
 static int g_gc_debug = 0;
 static int g_active_threads = 0;   // spawn 活跃线程数（>0 时进入并发 GC 路径）
@@ -721,6 +749,8 @@ static void gc_init_env(void) {
     if (d && d[0] == '1') g_gc_debug = 1;
     const char* t = getenv("PX_GC_THRESHOLD");
     if (t && atoi(t) > 0) g_gc_threshold = atoi(t);
+    const char* inl = getenv("PX_GC_INLINE");
+    if (inl && inl[0] == '1') g_gc_force_inline = 1;
     // M88-S1：PX_MAX_THREADS 可配槽上限（夹取 [64, 4096]）；线程表一次性按上限分配。
     // 此后 g_threads/g_thread_cap 恒定，无扩容/指针移动（并发安全见 §594 注释）。
     const char* mt = getenv("PX_MAX_THREADS");
@@ -733,6 +763,25 @@ static void gc_init_env(void) {
     gc_install_handler();
     gc_ensure_main_registered();
     g_gc_env_inited = 1;
+}
+
+// ==================== ISSUE28-B1：安全点回收 + GC 耗时观测 ====================
+static long long gc_mono_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+// 请求间/空闲安全点回收：服务模式把 GC 延迟到此处执行（worker 处理完一请求空闲时、
+// 连接池循环顶），使全量 STW 不落在在途请求处理中。持 g_gc_mu 判定+清 pending，
+// 防多 worker 同时进入（thundering herd）→ 同刻仅一个触发 px_gc_collect。
+void px_gc_poll(void) {
+    if (!g_gc_pending) return;
+    pthread_mutex_lock(&g_gc_mu);
+    int run = g_gc_pending;
+    g_gc_pending = 0;
+    pthread_mutex_unlock(&g_gc_mu);
+    if (run) px_gc_collect();
 }
 
 static void gc_debug(const char* fmt, ...) {
@@ -1091,10 +1140,12 @@ void px_gc_collect(void) {
     // 在本轮 GC 执行中投递（handler 会自旋等 epoch，而 epoch 只有本线程能推进
     // → 卡死/5 秒空转）。先拿锁再屏蔽：等锁期间不屏蔽（可被其他 GC 正常暂停），
     // 持锁后屏蔽（防自打断）。出口统一 gc_unblock_stop。
+    long long t0 = gc_mono_ms();   // ISSUE28-B1：GC 耗时观测
     sigset_t gc_old;
     pthread_mutex_lock(&g_gc_mu);
     gc_block_stop(&gc_old);
     g_gc_executor = pthread_self();   // 标记我是 GC 执行者（handler 自检防自打断）
+    g_gc_pending = 0;                 // ISSUE28-B1：任一回收路径（内联/gc()/安全点）清除延迟标记
     if (!g_gc_env_inited) gc_init_env();
     if (g_obj_count == 0) {
         pthread_mutex_unlock(&g_gc_mu);
@@ -1197,7 +1248,9 @@ void px_gc_collect(void) {
             if (g_gc_debug) { char dbg[64]; int dn = snprintf(dbg, sizeof(dbg), "[mk] scanned tid=%lx\n", (unsigned long)ti->tid); (void)write(2, dbg, (size_t)dn); }
         }
         // 4) sweep
+        if (g_gc_debug) { char dbg[128]; int dn = snprintf(dbg, sizeof(dbg), "[mk] 暂停+标记+扫栈耗时%lldms\n", gc_mono_ms() - t0); (void)write(2, dbg, (size_t)dn); }
         if (g_gc_debug) { char dbg[96]; int dn = snprintf(dbg, sizeof(dbg), "[mk] sweep count=%d\n", g_obj_count); (void)write(2, dbg, (size_t)dn); }
+        g_in_gc_sweep = 1;   // ISSUE28-B1：sweep 单线程（executor 已屏蔽信号）→ xfree 免逐趟 sigprocmask
         int freed = 0, w = 0;
         for (int i = 0; i < g_obj_count; i++) {
             LXObject* o = g_objs[i];
@@ -1210,13 +1263,14 @@ void px_gc_collect(void) {
                 freed++;
             }
         }
+        g_in_gc_sweep = 0;
         g_obj_count = w;
         g_alloc_bytes = 0;
         g_gc_freed += freed;
         g_gc_runs++;
         g_tmp_root = NULL;
         if (g_obj_count >= g_gc_threshold) g_gc_threshold = g_obj_count * 2;
-        gc_debug("collect #%d(并发): 标记 %lld/%d 回收 %d 存活 %d 线程 %d", g_gc_runs, g_gc_marked, g_obj_count + freed, freed, g_obj_count, g_paused_count);
+        gc_debug("collect #%d(并发): 标记 %lld/%d 回收 %d 存活 %d 线程 %d 耗时%lldms", g_gc_runs, g_gc_marked, g_obj_count + freed, freed, g_obj_count, g_paused_count, gc_mono_ms() - t0);
         if (g_gc_debug) (void)write(2, "[mk] after-collect\n", 19);
         gc_hash_free(&set);
         // ISSUE28-B2：sweep 后归还完全空闲 slab 页给 OS（仍 STW，无并发分配，安全）
@@ -1258,6 +1312,7 @@ void px_gc_collect(void) {
     jmp_buf jb;
     (void)setjmp(jb);
     gc_scan_stack(&set);
+    g_in_gc_sweep = 1;   // ISSUE28-B1：单线程 sweep 同上免逐趟 sigprocmask
     int freed = 0, w = 0;
     for (int i = 0; i < g_obj_count; i++) {
         LXObject* o = g_objs[i];
@@ -1270,13 +1325,14 @@ void px_gc_collect(void) {
             freed++;
         }
     }
+    g_in_gc_sweep = 0;
     g_obj_count = w;
     g_alloc_bytes = 0;
     g_gc_freed += freed;
     g_gc_runs++;
     g_tmp_root = NULL;
     if (g_obj_count >= g_gc_threshold) g_gc_threshold = g_obj_count * 2;
-    gc_debug("collect #%d: 标记 %lld/%d 回收 %d 存活 %d 跳过 %d", g_gc_runs, g_gc_marked, g_obj_count + freed, freed, g_obj_count, g_gc_skips);
+    gc_debug("collect #%d: 标记 %lld/%d 回收 %d 存活 %d 跳过 %d 耗时%lldms", g_gc_runs, g_gc_marked, g_obj_count + freed, freed, g_obj_count, g_gc_skips, gc_mono_ms() - t0);
     gc_hash_free(&set);
     // ISSUE28-B2：sweep 后归还完全空闲 slab 页给 OS（单线程路径，无并发分配）
     slab_reclaim_empty();
@@ -1301,8 +1357,20 @@ static void gc_register(LXObject* o, long long est) {
     g_tmp_root = o;  // 保护刚创建对象
     int need = (g_obj_count >= g_gc_threshold) ||
                (g_gc_trigger_bytes && g_alloc_bytes >= g_gc_trigger_bytes);
+    int snap_count = g_obj_count;
+    int snap_thr = g_gc_threshold;
+    int deferrable = (g_active_threads > 0) && !g_gc_force_inline;   // 服务/并发模式：存在请求间安全点（PX_GC_INLINE=1 对拍强制内联）
     pthread_mutex_unlock(&g_gc_mu);
-    if (need) px_gc_collect();
+    if (need) {
+        // ISSUE28-B1：多线程服务模式（spawn/连接池活跃）把 GC 延迟到安全点（worker 空闲/
+        // 池循环顶），避免全量 STW 落在请求热路径；对象数超过 阈值×4 硬上限仍强制内联
+        // （内存有界兜底）；单线程 CLI/解释模式无安全点，保持原内联（零行为回归）。
+        if (deferrable && (long long)snap_count < (long long)snap_thr * GC_HARD_CAP_FACTOR) {
+            g_gc_pending = 1;
+        } else {
+            px_gc_collect();
+        }
+    }
 }
 
 int px_gc_stats(int* live, int* total) {
@@ -10111,6 +10179,7 @@ static void* fserve_worker(void* arg) {
         LXValue arg = px_int(job.fd);
         if (job.kind == FSERVE_KIND_SSE) sse_conn_worker(&arg, 1, NULL);
         else http_conn_worker(&arg, 1, NULL);
+        px_gc_poll();   // ISSUE28-B1：请求间安全点回收（worker 空闲时跑 GC，不落请求热路径）
     }
     return NULL;  // 不可达（进程退出由 OS 回收）
 }
@@ -14193,6 +14262,7 @@ static void* px_pool_worker(void* arg) {
         pthread_mutex_unlock(&g_pool_mu);
         LXValue arg = px_int(fd);
         px_conn_worker(&arg, 1, NULL);
+        px_gc_poll();   // ISSUE28-B1：请求间安全点回收（px_serve 池 worker 同 fserve 语义）
     }
     pthread_mutex_lock(&g_gc_mu);
     g_active_threads--;
