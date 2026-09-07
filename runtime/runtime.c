@@ -10056,6 +10056,275 @@ static void fserve_ensure(void) {
 }
 
 // http_serve(port, handler)：阻塞 accept 循环（Go 风格），连接交池 worker 处理
+
+// ==================== M88-B-S1（qg-issue 27 B 类）：连接上下文表 + 事件循环内核 ====================
+// 目标（M88_PLAN §三）：keep-alive / SSE 空闲连接不占 worker 线程，由事件循环照看——
+//   worker 处理完一个请求突发 → px_evc_idle_put(fd) 把连接交还 IDLE（事件循环等 可读/断开/超时）；
+//   事件循环 detect 可读 → 摘除（IDLE → 派发）并投回 fserve 队列（worker 再接管处理下一请求突发）；
+//   对端断开 / HUP / 空闲超时（15s，沿用 http_conn_worker SO_RCVTIMEO 的 keep-alive 空闲语义）→ close 清理。
+// 连接状态机（单持有者原则：同一 fd 任一时刻只一个持有者，杜绝双读 / fd 复用串扰）：
+//   FREE（无主）→ ACTIVE（worker 独占处理）→ IDLE（事件循环照看）→（可读）派发 → ACTIVE → …
+//   任意态收尾（close/超时/HUP）必经 FREE，防 fd 复用后串扰旧上下文。
+// S1 落地本内核（ConnCtx 表 + 状态机 + 事件循环线程 + 接口）；http_conn_worker 请求级接入在
+// B-S2、SSE 在 B-S3（见 docs/M88_PLAN.md §三）。未接入前事件循环不启动、行为零变化。
+#if defined(__linux__)
+#include <sys/epoll.h>
+#endif
+
+#define PX_CONN_STATE_FREE   0
+#define PX_CONN_STATE_ACTIVE 1
+#define PX_CONN_STATE_IDLE   2
+
+// 连接空闲超时（ms）：沿用 http_conn_worker 的 SO_RCVTIMEO 15s keep-alive 空闲语义
+#define PX_CONN_IDLE_TMO_MS  15000
+// 事件循环 tick（ms）：周期性醒来统一扫空闲超时（epoll 无每 fd 定时器，不做复杂最小堆）
+#define PX_EV_TICK_MS        1000
+// 默认最大并发连接登记（fd 索引表容量上限，env PX_MAX_CONNS 可配 [1024, 131072]）
+#define PX_CONN_DEFAULT_MAX  16384
+
+typedef struct {
+    int fd;                 // 连接 fd；FREE 时为 -1
+    int kind;               // FSERVE_KIND_HTTP / FSERVE_KIND_SSE（派发回 fserve 用）
+    int state;              // FREE / ACTIVE / IDLE
+    int ev_reg;             // 是否已注册进事件循环（IDLE 必真；防重复 epoll_ctl ADD/DEL）
+    long long idle_since;   // 进入 IDLE 的单调毫秒（空闲超时检查用）
+    char* pbuf;             // 半请求续接缓冲（B-S2 非阻塞续接启用；S1 预留）
+    int pbuf_len, pbuf_cap;
+} PxConnCtx;
+
+static pthread_mutex_t g_conn_mu = PTHREAD_MUTEX_INITIALIZER;   // 保护 g_conns 表 + 状态转移
+static PxConnCtx* g_conns = NULL;       // fd 索引表（g_conn_cap 个；fd 超上限不登记走原路径）
+static int g_conn_cap = 0;
+static int g_conn_max = PX_CONN_DEFAULT_MAX;
+static int g_conn_max_init = 0;         // 已从 env 读 PX_MAX_CONNS
+static int g_ev_epfd = -1;              // Linux: epoll fd（ensure 时建，g_conn_mu 保护 epoll_ctl）
+static pthread_t g_ev_thread;
+static volatile int g_ev_run = 0;       // 事件循环运行标志
+static int g_ev_wakefd = -1;            // 唤醒管道读端（写端 g_ev_wakew；注册/摘除后唤醒重算）
+static int g_ev_wakew = -1;
+
+// 单调毫秒（空闲超时计时；不进 px_now_ms 以免依赖其后定义）
+static long long px_ev_now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+// fd 置非阻塞（连接交还事件循环前调用；B-S2 起 serve 连接一律非阻塞读）
+static void px_fd_nonblock(int fd) {
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl >= 0 && !(fl & O_NONBLOCK)) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+}
+
+// fd 索引表扩容到至少容纳 idx=fd（上限 g_conn_max；超限返回 -1）。调用方持 g_conn_mu。
+static int px_evc_ensure(int fd) {
+    if (!g_conn_max_init) {
+        g_conn_max_init = 1;
+        const char* e = getenv("PX_MAX_CONNS");
+        if (e) {
+            int v = atoi(e);
+            if (v >= 1024 && v <= 131072) g_conn_max = v;
+        }
+    }
+    if (fd < 0 || fd >= g_conn_max) return -1;
+    if (fd < g_conn_cap) return 0;
+    int ncap = g_conn_cap ? g_conn_cap : 256;
+    while (ncap <= fd && ncap < g_conn_max) ncap *= 2;
+    if (ncap > g_conn_max) ncap = g_conn_max;
+    if (ncap <= fd) return -1;
+    PxConnCtx* nc = (PxConnCtx*)xrealloc(g_conns, (size_t)ncap * sizeof(PxConnCtx));
+    if (!nc) return -1;
+    for (int i = g_conn_cap; i < ncap; i++) {
+        nc[i].fd = -1; nc[i].kind = 0; nc[i].state = PX_CONN_STATE_FREE;
+        nc[i].ev_reg = 0; nc[i].idle_since = 0;
+        nc[i].pbuf = NULL; nc[i].pbuf_len = 0; nc[i].pbuf_cap = 0;
+    }
+    g_conns = nc; g_conn_cap = ncap;
+    return 0;
+}
+
+static PxConnCtx* px_evc_ctx(int fd) {
+    if (fd < 0 || fd >= g_conn_cap) return NULL;
+    return &g_conns[fd];
+}
+
+#if defined(__linux__)
+// 事件循环唤醒（注册/摘除/关闭后写一字节，epoll_wait 立即醒来重算）
+static void px_ev_wake(void) {
+    if (g_ev_wakew >= 0) {
+        ssize_t w = write(g_ev_wakew, "", 1);
+        (void)w;  // EAGAIN 忽略（管道已满说明事件循环已被唤醒在途）
+    }
+}
+
+// 登记连接为 ACTIVE（worker 开始处理前调用；重复登记同 fd 则复位旧上下文防串扰）
+static PxConnCtx* px_evc_acquire(int fd, int kind) {
+    pthread_mutex_lock(&g_conn_mu);
+    if (px_evc_ensure(fd) != 0) { pthread_mutex_unlock(&g_conn_mu); return NULL; }
+    PxConnCtx* c = px_evc_ctx(fd);
+    if (c->state != PX_CONN_STATE_FREE) {
+        // 旧上下文未收尾（异常路径）：强制清理（调用方须保证该 fd 已 close 或即将接管）
+        if (c->ev_reg && g_ev_epfd >= 0) { epoll_ctl(g_ev_epfd, EPOLL_CTL_DEL, fd, NULL); c->ev_reg = 0; }
+        if (c->pbuf) { xfree(c->pbuf); c->pbuf = NULL; c->pbuf_len = c->pbuf_cap = 0; }
+    }
+    c->fd = fd; c->kind = kind; c->state = PX_CONN_STATE_ACTIVE; c->idle_since = 0;
+    pthread_mutex_unlock(&g_conn_mu);
+    return c;
+}
+
+// 关闭连接 + 收尾上下文（统一 close 路径，防 fd 复用串扰；供事件循环与 worker 收尾调用）
+static void px_evc_close(int fd) {
+    if (fd < 0) return;
+    pthread_mutex_lock(&g_conn_mu);
+    PxConnCtx* c = px_evc_ctx(fd);
+    if (c && c->state != PX_CONN_STATE_FREE) {
+        if (c->ev_reg && g_ev_epfd >= 0) { epoll_ctl(g_ev_epfd, EPOLL_CTL_DEL, fd, NULL); c->ev_reg = 0; }
+        if (c->pbuf) { xfree(c->pbuf); c->pbuf = NULL; c->pbuf_len = c->pbuf_cap = 0; }
+        c->fd = -1; c->state = PX_CONN_STATE_FREE; c->kind = 0; c->idle_since = 0;
+    }
+    pthread_mutex_unlock(&g_conn_mu);
+    close(fd);
+}
+
+// worker 响应写完且无下一请求数据 → 连接交还 IDLE（注册事件循环等可读；fd 先置非阻塞）
+// 返回 0 成功；连接未登记/事件循环不可用（非 Linux）返回 -1（调用方走原阻塞路径）
+static int px_evc_idle_put(int fd, int kind) {
+    if (g_ev_epfd < 0) return -1;
+    px_fd_nonblock(fd);
+    pthread_mutex_lock(&g_conn_mu);
+    PxConnCtx* c = px_evc_ctx(fd);
+    if (!c || c->state != PX_CONN_STATE_ACTIVE) { pthread_mutex_unlock(&g_conn_mu); return -1; }
+    c->kind = kind;
+    struct epoll_event ev;
+    memset(&ev, 0, sizeof(ev));
+    ev.events = EPOLLIN | EPOLLRDHUP | EPOLLET;  // 边缘触发：可读事件只报一次，读完由 worker 再交还
+    ev.data.fd = fd;
+    if (epoll_ctl(g_ev_epfd, EPOLL_CTL_ADD, fd, &ev) != 0) {
+        // 注册失败（fd 非法/已达上限等）→ 保持 ACTIVE，调用方按失败处理（原路径关闭）
+        pthread_mutex_unlock(&g_conn_mu);
+        return -1;
+    }
+    c->state = PX_CONN_STATE_IDLE; c->ev_reg = 1; c->idle_since = px_ev_now_ms();
+    pthread_mutex_unlock(&g_conn_mu);
+    px_ev_wake();
+    return 0;
+}
+
+// 事件循环/接管方摘除：IDLE →（摘除事件循环）→ ACTIVE 返回 1；非 IDLE 返回 0
+// （事件循环 detect 可读后调用，随后把 fd 投回 fserve 队列）
+static int px_evc_idle_pop(int fd) {
+    pthread_mutex_lock(&g_conn_mu);
+    PxConnCtx* c = px_evc_ctx(fd);
+    if (!c || c->state != PX_CONN_STATE_IDLE) { pthread_mutex_unlock(&g_conn_mu); return 0; }
+    if (c->ev_reg && g_ev_epfd >= 0) { epoll_ctl(g_ev_epfd, EPOLL_CTL_DEL, fd, NULL); c->ev_reg = 0; }
+    c->state = PX_CONN_STATE_ACTIVE; c->idle_since = 0;
+    pthread_mutex_unlock(&g_conn_mu);
+    return 1;
+}
+
+// 事件循环线程：等可读/断开/超时 → 可读派发回 fserve，断开/超时 close 清理
+static void* px_ev_loop(void* arg) {
+    (void)arg;
+    struct epoll_event evs[256];
+    for (;;) {
+        int n = epoll_wait(g_ev_epfd, evs, 256, PX_EV_TICK_MS);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        for (int i = 0; i < n; i++) {
+            int fd = evs[i].data.fd;
+            if (fd == g_ev_wakefd) {           // 唤醒管道：排空
+                char tmp[64];
+                while (read(g_ev_wakefd, tmp, sizeof(tmp)) > 0) {}
+                continue;
+            }
+            if (evs[i].events & (EPOLLIN)) {    // 可读 → 派发回 fserve（worker 再接管）
+                int kind = FSERVE_KIND_HTTP;
+                pthread_mutex_lock(&g_conn_mu);
+                PxConnCtx* c = px_evc_ctx(fd);
+                if (c && c->state == PX_CONN_STATE_IDLE) {
+                    kind = c->kind;
+                    if (c->ev_reg) { epoll_ctl(g_ev_epfd, EPOLL_CTL_DEL, fd, NULL); c->ev_reg = 0; }
+                    c->state = PX_CONN_STATE_ACTIVE; c->idle_since = 0;
+                } else {
+                    c = NULL;  // 状态异常/已关闭：跳过派发
+                }
+                pthread_mutex_unlock(&g_conn_mu);
+                if (c) fserve_push(fd, kind);   // 队满阻塞背压（事件循环线程暂停派发，不丢 fd）
+                continue;
+            }
+            if (evs[i].events & (EPOLLHUP | EPOLLERR | EPOLLRDHUP)) {  // 对端断开/异常
+                px_evc_close(fd);
+                continue;
+            }
+        }
+        // 周期性扫空闲超时（统一 tick；与 SO_RCVTIMEO 15s 语义对齐）
+        long long now = px_ev_now_ms();
+        pthread_mutex_lock(&g_conn_mu);
+        for (int i = 0; i < g_conn_cap; i++) {
+            PxConnCtx* c = &g_conns[i];
+            if (c->state == PX_CONN_STATE_IDLE && now - c->idle_since >= PX_CONN_IDLE_TMO_MS) {
+                int fd = c->fd;
+                if (c->ev_reg && g_ev_epfd >= 0) { epoll_ctl(g_ev_epfd, EPOLL_CTL_DEL, fd, NULL); c->ev_reg = 0; }
+                if (c->pbuf) { xfree(c->pbuf); c->pbuf = NULL; c->pbuf_len = c->pbuf_cap = 0; }
+                c->fd = -1; c->state = PX_CONN_STATE_FREE; c->kind = 0; c->idle_since = 0;
+                pthread_mutex_unlock(&g_conn_mu);
+                close(fd);                       // 空闲超时关闭（keep-alive 15s 语义）
+                pthread_mutex_lock(&g_conn_mu);
+            }
+        }
+        pthread_mutex_unlock(&g_conn_mu);
+    }
+    return NULL;
+}
+
+// 懒启动事件循环（首个 px_evc_idle_put 前置调用；幂等）
+static void px_ev_ensure(void) {
+    if (g_ev_epfd >= 0) return;
+    pthread_mutex_lock(&g_conn_mu);
+    if (g_ev_epfd < 0) {
+        int epfd = epoll_create1(0);
+        if (epfd >= 0) {
+            int p[2];
+            if (pipe(p) == 0) {
+                px_fd_nonblock(p[0]); px_fd_nonblock(p[1]);
+                struct epoll_event ev;
+                memset(&ev, 0, sizeof(ev));
+                ev.events = EPOLLIN; ev.data.fd = p[0];
+                if (epoll_ctl(epfd, EPOLL_CTL_ADD, p[0], &ev) == 0) {
+                    g_ev_epfd = epfd; g_ev_wakefd = p[0]; g_ev_wakew = p[1];
+                    g_ev_run = 1;
+                    if (pthread_create(&g_ev_thread, NULL, px_ev_loop, NULL) != 0) {
+                        g_ev_run = 0; g_ev_epfd = -1;
+                        close(p[0]); close(p[1]); close(epfd);
+                        g_ev_wakefd = g_ev_wakew = -1;
+                    } else {
+                        pthread_detach(g_ev_thread);
+                    }
+                } else {
+                    close(p[0]); close(p[1]); close(epfd);
+                }
+            } else {
+                close(epfd);
+            }
+        }
+    }
+    pthread_mutex_unlock(&g_conn_mu);
+}
+#else
+// 非 Linux（Windows 交叉等）：事件驱动内核降级为空操作——连接走既有阻塞处理路径，
+// 功能不降仅无空闲不占线程优化（文档明示 Linux epoll 一等）。
+static void px_ev_wake(void) { (void)0; }
+static PxConnCtx* px_evc_acquire(int fd, int kind) { (void)fd; (void)kind; return NULL; }
+static void px_evc_close(int fd) { close(fd); }
+static int px_evc_idle_put(int fd, int kind) { (void)fd; (void)kind; return -1; }
+static int px_evc_idle_pop(int fd) { (void)fd; return 0; }
+static void* px_ev_loop(void* arg) { (void)arg; return NULL; }
+static void px_ev_ensure(void) { (void)0; }
+#endif
+
+
 static LXValue bi_http_serve(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 2 || args[0].type != PX_INT) px_error("http_serve 需要 (port, handler) 参数");
