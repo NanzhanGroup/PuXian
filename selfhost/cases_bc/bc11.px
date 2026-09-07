@@ -1,0 +1,18 @@
+# M89-S3-B5 bc11.px —— 并发原语冒烟（spawn / chan 构造 / send / recv）
+# 覆盖（B5 首切）：
+#   chan(cap) 构造（Call Var chan → VM 注册 native px_chan_create）
+#   spawn f(args) 语句（spawn("f", args) native → px_spawn_name 按名全局查函数 →
+#     新线程 px_vm_entry 跑 worker 帧；子线程各自 thread-local VM 状态共享全局槽）
+#   ch.send(v) / ch.recv()（CALLM chan 方法桥 → px_chan_send/px_chan_recv）
+#   main 阻塞收两值求和 print
+# 验证：bc_run.sh 跑 Top 后 stdout 断言 "sum: 6"（bc11_verify.sh）。
+def worker(id, ch):
+    ch.send(id * 2)
+
+def main():
+    let ch = chan(4)
+    spawn worker(1, ch)
+    spawn worker(2, ch)
+    let a = ch.recv()
+    let b = ch.recv()
+    print("sum:", a + b)

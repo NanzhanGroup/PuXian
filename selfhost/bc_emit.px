@@ -288,6 +288,11 @@ def bc_collect_hoist(stmts, out):
             if not contains(out, fv):
                 out.append(fv)
             bc_collect_hoist(st[3], out)
+        elif ty == "ChanDecl":
+            # B5：通道声明变量（函数级 hoist，body 引用前预占槽）
+            let cn = rust_unescape(st[1])
+            if not contains(out, cn):
+                out.append(cn)
         i += 1
 
 # 发 null 常量到 dst 槽（LOADK nullK；K 去重）
@@ -1198,7 +1203,134 @@ def bc_emit_stmt_inner(stmt, func):
     if ty == "TypeConst":
         # B2：函数体内 const enum 定义无运行时语句（值在访问处内联折叠）
         return
+    if ty == "ChanDecl":
+        # B5：ch = chan()（GETG chan native → CALL 0 参）；顶层 SETG / 函数内局部槽
+        let name = rust_unescape(stmt[1])
+        let t = bc_tmp(func)
+        let cs = bc_tmp(func)
+        let gs = bc_g_add(g_bcm["globals"], "chan")
+        bc_emit_inst(func, "GETG", cs, gs, 0)
+        bc_emit_inst(func, "CALL", t, cs, 0)
+        if func["is_top"]:
+            let g = bc_g_add(g_bcm["globals"], name)
+            bc_emit_inst(func, "SETG", g, t, 0)
+        else:
+            let s = bc_slot(func, name)
+            bc_emit_inst(func, "MOV", s, t, 0)
+        return
+    if ty == "Send":
+        # B5：send ch, v ≡ ch.send(v)（chan.send 方法桥 → px_chan_send）
+        let vl = [stmt[2]]
+        bc_emit_methodcall(stmt[1], "send", vl, -1, func)
+        return
+    if ty == "Recv":
+        # B5：recv ch ≡ ch.recv()（值丢弃）
+        bc_emit_methodcall(stmt[1], "recv", [], -1, func)
+        return
+    if ty == "Spawn":
+        # B5：spawn f(args) ≡ spawn("f", args...) —— spawn native 按名在全局表找函数
+        #   （px_spawn_name 语义；VM 启动期注册 bi_vm_spawn）
+        let ex = stmt[1]
+        if ex[0] == "Call" and ex[1][0] == "Var":
+            let fname = rust_unescape(ex[1][1])
+            let args = ex[2]
+            let t = bc_tmp(func)
+            let cs = bc_tmp(func)
+            let argc = 1 + len(args)
+            let need = cs + 1 + argc
+            while func["next_slot"] < need:
+                bc_tmp(func)
+            let gs = bc_g_add(g_bcm["globals"], "spawn")
+            bc_emit_inst(func, "GETG", cs, gs, 0)
+            let k = bc_k_add(g_bcm["k_pool"], "str", 0, 0.0, fname)
+            bc_emit_inst(func, "LOADK", cs + 1, k, 0)
+            var ai = 0
+            while ai < len(args):
+                bc_emit_expr(args[ai], cs + 2 + ai, func)
+                ai += 1
+            bc_emit_inst(func, "CALL", t, cs, argc)
+            return
+        panic("bc_emit Spawn 仅支持直接函数调用: " + str(ex))
+    if ty == "Select":
+        bc_emit_select(stmt, func)
+        return
     panic("bc_emit_stmt 未实现: " + str(stmt))
+
+# ---------- B5：select 语句（顺序 try_recv + else / 无 else 无限重试） ----------
+# Select: arms=[[bind?, caseExpr(ch.recv()), body(stmts)..]..], else_b=stmt[2]。
+# 语义对齐 cg_gen_select：每个 arm 的 chan 非阻塞 try（命中消费+执行 body+退出 select；
+# 未命中试下一 arm；全未命中 → else（若有）否则重试循环）。命中值 t 绑到 bind 变量
+# （若有）。chan_try_recv native 命中返回收到的值、未命中返回 null（EQ null 判未命中；
+# 真 null 消息边缘误判，记录）。
+def bc_emit_select(stmt, func):
+    let arms = stmt[1]
+    let else_b = stmt[2]
+    let n = len(arms)
+    # 求值各 arm chan 表达式（arm[1] = ch.recv() → obj = arm[1][1][1]）到 chs[i]
+    let chs = []
+    var ai = 0
+    while ai < n:
+        let case_e = arms[ai][1]
+        # case 表达式形如 Call(Field(ch, recv))；取 chan 对象
+        if case_e[0] != "Call" or case_e[1][0] != "Field":
+            panic("bc_emit select case 仅支持 ch.recv(): " + str(case_e))
+        let cslot = bc_tmp(func)
+        bc_emit_expr(case_e[1][1], cslot, func)
+        chs.append(cslot)
+        ai += 1
+    var loop_label = -1
+    if else_b == null:
+        loop_label = len(func["bc"])
+    var last_miss = -1
+    var pend = []
+    var gtry = bc_g_add(g_bcm["globals"], "chan_try_recv")
+    let nullk = bc_k_add(g_bcm["k_pool"], "null", 0, 0.0, "")
+    ai = 0
+    while ai < n:
+        if last_miss >= 0:
+            bc_patch_off(func, last_miss, len(func["bc"]))
+        # t = chan_try_recv(ch_i)：GETG cs；args cs+1=ch
+        let cs = bc_tmp(func)
+        let t = bc_tmp(func)
+        let need2 = cs + 2
+        while func["next_slot"] < need2:
+            bc_tmp(func)
+        bc_emit_inst(func, "GETG", cs, gtry, 0)
+        bc_emit_inst(func, "MOV", cs + 1, chs[ai], 0)
+        bc_emit_inst(func, "CALL", t, cs, 1)
+        # 未命中（t == null）→ last_miss
+        let te = bc_tmp(func)
+        let tn = bc_tmp(func)
+        bc_emit_inst(func, "LOADK", tn, nullk, 0)
+        bc_emit_inst(func, "EQ", te, t, tn)
+        let mj = len(func["bc"])
+        bc_emit_inst(func, "JMPT", te, 0, 0)
+        last_miss = mj
+        # 命中：bind 绑定 + body
+        let bind = arms[ai][0]
+        if bind != null:
+            let bname = rust_unescape(bind)
+            let bs = bc_slot(func, bname)
+            bc_emit_inst(func, "MOV", bs, t, 0)
+        bc_emit_stmts(arms[ai][2], func)
+        let jj = len(func["bc"])
+        bc_emit_inst(func, "JMP", 0, 0, 0)
+        pend.append(jj)
+        ai += 1
+    # 全部未命中：else 起点（若有）；否则 JMP 回 retry
+    if last_miss >= 0:
+        bc_patch_off(func, last_miss, len(func["bc"]))
+    if else_b != null:
+        bc_emit_stmts(else_b, func)
+    else:
+        let jb = len(func["bc"])
+        bc_emit_inst(func, "JMP", 0, 0, 0)
+        bc_patch_off(func, jb, loop_label)
+    let end = len(func["bc"])
+    var pi = 0
+    while pi < len(pend):
+        bc_patch_off(func, pend[pi], end)
+        pi += 1
 
 # SRCLINE 追踪（对齐 cg_gen_stmt wrapper；stmt 末位 = pos [line,col]）
 def bc_emit_stmt(stmt, func):
