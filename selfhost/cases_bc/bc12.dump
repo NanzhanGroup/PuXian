@@ -1,0 +1,58 @@
+# BCModule bc12
+# K 4
+K 0 str "worker"
+K 1 null
+K 2 str "sel:"
+K 3 str "done"
+# G 6
+G 0 worker
+G 1 main
+G 2 chan
+G 3 spawn
+G 4 chan_try_recv
+G 5 print
+# funcs 3 top=2
+== func worker arity=2 ndefault=0 nslots=6
+0:SRCLINE 0 8 0
+1:MOV 3 1 0
+2:MOV 4 0 0
+3:IMM 5 2 0
+4:MUL 4 4 5
+5:CALLM 2 3 0
+6:RET0 0 0 0
+== func main arity=0 ndefault=0 nslots=21
+0:SRCLINE 0 11 0
+1:GETG 1 2 0
+2:IMM 2 4 0
+3:CALL 0 1 1
+4:SRCLINE 0 12 0
+5:GETG 4 3 0
+6:LOADK 5 0 0
+7:IMM 6 3 0
+8:MOV 7 0 0
+9:CALL 3 4 3
+10:SRCLINE 0 13 0
+11:MOV 8 0 0
+12:GETG 9 4 0
+13:MOV 10 8 0
+14:CALL 10 9 1
+15:LOADK 12 1 0
+16:EQ 11 10 12
+17:JMPT 11 7 0
+18:MOV 13 10 0
+19:SRCLINE 0 15 0
+20:GETG 15 5 0
+21:LOADK 16 2 0
+22:MOV 17 13 0
+23:CALL 14 15 2
+24:JMP 0 1 0
+25:JMP 0 -14 0
+26:SRCLINE 0 16 0
+27:GETG 19 5 0
+28:LOADK 20 3 0
+29:CALL 18 19 1
+30:RET0 0 0 0
+== func <top> arity=0 ndefault=0 nslots=2
+0:GETG 0 1 0
+1:CALL 1 0 0
+2:RET 1 0 0

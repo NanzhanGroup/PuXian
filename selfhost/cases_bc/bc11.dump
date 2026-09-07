@@ -1,0 +1,54 @@
+# BCModule bc11
+# K 2
+K 0 str "worker"
+K 1 str "sum:"
+# G 5
+G 0 worker
+G 1 main
+G 2 chan
+G 3 spawn
+G 4 print
+# funcs 3 top=2
+== func worker arity=2 ndefault=0 nslots=6
+0:SRCLINE 0 10 0
+1:MOV 3 1 0
+2:MOV 4 0 0
+3:IMM 5 2 0
+4:MUL 4 4 5
+5:CALLM 2 3 0
+6:RET0 0 0 0
+== func main arity=0 ndefault=0 nslots=22
+0:SRCLINE 0 13 0
+1:GETG 3 2 0
+2:IMM 4 4 0
+3:CALL 0 3 1
+4:SRCLINE 0 14 0
+5:GETG 6 3 0
+6:LOADK 7 0 0
+7:IMM 8 1 0
+8:MOV 9 0 0
+9:CALL 5 6 3
+10:SRCLINE 0 15 0
+11:GETG 11 3 0
+12:LOADK 12 0 0
+13:IMM 13 2 0
+14:MOV 14 0 0
+15:CALL 10 11 3
+16:SRCLINE 0 16 0
+17:MOV 15 0 0
+18:CALLM 1 15 1
+19:SRCLINE 0 17 0
+20:MOV 16 0 0
+21:CALLM 2 16 1
+22:SRCLINE 0 18 0
+23:GETG 18 4 0
+24:LOADK 19 1 0
+25:MOV 20 1 0
+26:MOV 21 2 0
+27:ADD 20 20 21
+28:CALL 17 18 2
+29:RET0 0 0 0
+== func <top> arity=0 ndefault=0 nslots=2
+0:GETG 0 1 0
+1:CALL 1 0 0
+2:RET 1 0 0

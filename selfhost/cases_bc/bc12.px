@@ -1,0 +1,16 @@
+# M89-S3-B5 bc12.px —— select 语句冒烟（spawn + select ch.recv 绑定）
+# 覆盖（B5）：select 无 else（忙等重试）直到某 chan 就绪：
+#   case x = ch.recv(): 绑定命中值到 x → body
+#   worker spawn 发值 → select 命中 → print("sel:", x)
+# 单 arm（确定性：worker 发 6 → 必命中绑定 x=6 → sel: 6）
+# 验证：bc_run.sh stdout 断言 "sel: 6" 与 "done"（bc12_verify.sh）。
+def worker(id, ch):
+    ch.send(id * 2)
+
+def main():
+    let ch = chan(4)
+    spawn worker(3, ch)
+    select:
+        case x = ch.recv():
+            print("sel:", x)
+    print("done")

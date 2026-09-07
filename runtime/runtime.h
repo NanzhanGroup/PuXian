@@ -327,6 +327,9 @@ bool px_is_rwlock(LXValue v);
 
 // spawn：在线程中执行 px_func(fn, args, nargs)，args 由运行时拷贝（调用后可释放）
 void px_spawn(LXFuncPtr fn, LXValue* args, int nargs);
+// M89-S3-B5：带上下文 spawn（VM PX_FUNC=px_vm_entry 需 ctx=PxVMFunc* 定位字节码函数；
+//   旧 C 编译产物 ctx=NULL —— px_spawn_name 透传 func.ctx）
+void px_spawn_ctx(LXFuncPtr fn, void* ctx, LXValue* args, int nargs);
 // M53-S3：外部裸线程（QUIC/H3 托管连接线程）纳入并发 GC（enter 注册/leave 注销）
 void px_gc_thread_enter(void);
 void px_gc_thread_leave(void);

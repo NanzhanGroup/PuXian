@@ -6984,6 +6984,8 @@ void px_chan_close(LXValue ch) {
 
 typedef struct {
     LXFuncPtr fn;
+    void* ctx;          // M89-S3-B5：spawn 目标上下文（VM PX_FUNC 需 ctx=PxVMFunc*；
+                        //   旧 C 编译产物 ctx=NULL —— spawn_thread 透传）
     LXValue* args;
     int nargs;
 } SpawnJob;
@@ -7013,7 +7015,7 @@ static void* spawn_thread(void* p) {
     if (isolate) {
         if (setjmp(g_err_jmp) == 0) {
             g_err_jmp_set = 1;
-            job->fn(job->args, job->nargs, NULL);
+            job->fn(job->args, job->nargs, job->ctx);
             g_err_jmp_set = 0;
         } else {
             g_err_jmp_set = 0;
@@ -7021,7 +7023,7 @@ static void* spawn_thread(void* p) {
             fflush(stderr);
         }
     } else {
-        job->fn(job->args, job->nargs, NULL);
+        job->fn(job->args, job->nargs, job->ctx);
     }
     // M11 修复②（退出窗口）：先持锁注销（活跃计数减一 + 槽位清空），再释放 job 内存。
     // 保证"仍持有普贤对象"的阶段始终在注册表内被 GC 暂停/扫描；注销后本线程不再被
@@ -7073,7 +7075,7 @@ void px_gc_thread_leave(void) {
     pthread_mutex_unlock(&g_gc_mu);
 }
 
-void px_spawn(LXFuncPtr fn, LXValue* args, int nargs) {
+void px_spawn_ctx(LXFuncPtr fn, void* ctx, LXValue* args, int nargs) {
     pthread_mutex_lock(&g_gc_mu);   // M8：创建前先标记活跃（防止主线程 GC 误判）
     if (!g_gc_env_inited) gc_init_env();
     g_active_threads++;
@@ -7098,6 +7100,7 @@ void px_spawn(LXFuncPtr fn, LXValue* args, int nargs) {
     if (slot < 0) px_error("spawn: 并发线程数超出上限 %d", g_thread_max);
     SpawnJob* job = xmalloc(sizeof(SpawnJob));
     job->fn = fn;
+    job->ctx = ctx;
     job->nargs = nargs;
     job->args = xmalloc(sizeof(LXValue) * (nargs > 0 ? nargs : 1));
     if (nargs > 0) memcpy(job->args, args, sizeof(LXValue) * nargs);
@@ -7117,12 +7120,19 @@ void px_spawn(LXFuncPtr fn, LXValue* args, int nargs) {
     pthread_detach(t);
 }
 
+void px_spawn(LXFuncPtr fn, LXValue* args, int nargs) {
+    px_spawn_ctx(fn, NULL, args, nargs);
+}
+
 void px_spawn_name(const char* fname, LXValue* args, int nargs) {
     LXValue fn = px_get_global(fname);
     if (fn.type == PX_FUNC) {
-        px_spawn(fn.as.obj->as.func.fn, args, nargs);
+        // M89-S3-B5：透传函数 ctx —— VM PX_FUNC(px_vm_entry, ctx=PxVMFunc*) 需 ctx
+        //   定位字节码函数；旧 C 编译产物 ctx=NULL 不变（此前只传 fn 丢 ctx → VM spawn
+        //   worker 线程 px_vm_entry ctx=NULL 直接返回，静默不执行 → 主线程 chan.recv 死等）
+        px_spawn_ctx(fn.as.obj->as.func.fn, fn.as.obj->as.func.ctx, args, nargs);
     } else if (fn.type == PX_NATIVE) {
-        px_spawn(fn.as.obj->as.native.fn, args, nargs);
+        px_spawn_ctx(fn.as.obj->as.native.fn, NULL, args, nargs);
     } else {
         px_error("spawn: 未找到函数 %s", fname);
     }

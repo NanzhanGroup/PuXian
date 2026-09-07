@@ -6,6 +6,21 @@
 
 ## [Unreleased]
 
+### M89-S3-B5 · VM 化：并发/原语桥（spawn/chan/send/recv/select + px_spawn_ctx 修复）
+
+> 完成（2026-09-08）：VM 并发桥打通（bc11/bc12 ALL PASS），修复一个跨轨 runtime bug。
+> - **runtime**：新增 px_spawn_ctx(fn, ctx, args, nargs)（spawn_thread 透传 ctx；px_spawn 为
+>   ctx=NULL 包装）；px_spawn_name 透传 PX_FUNC.ctx —— 修复致命缺陷：原只传 fn 丢 ctx，VM
+>   PX_FUNC(px_vm_entry, ctx=PxVMFunc*) 起线程后 px_vm_entry ctx=NULL 直接返回 → spawn worker
+>   静默不执行 → 主线程 chan.recv 死等（旧 C 产物 ctx 无关不暴露；VM 首暴露，runtime 层修复）。
+> - **selfhost/bc_emit.px**：语句 ChanDecl/Send/Recv/Spawn/Select；VM 启动注册原语 native
+>   chan(cap)/mutex()/rwlock()/spawn(fname,..)/chan_try_recv(ch)。
+> - **验证**：bc11.px（spawn 2 worker + chan + send/recv 求和）bc11_verify PASS（"sum: 6"）；
+>   bc12.px（spawn + select 绑定 recv）bc12_verify PASS（"sel: 6"+"done"）；bc1-10 dump 全不变。
+> - 记录：pxi Mini 子集不支持通道（R1002）→ 对拍走旧 C codegen 轨；select 无 else 忙等对齐
+>   cg retry、null 消息判未命中边缘局限、随机化公平未做；mutex/rwlock/ffi/http 构造已由
+>   Call 桥覆盖，专项用例验证随 S3-B 门（vm_ab v2 + examples 并发对拍）推进。
+
 ### M89-S3-B4 · VM 化：闭包 P1 收口（m25_closure_gc 真实用例对拍 PASS）
 
 > 完成（2026-09-08）：闭包基建（B3a 落地：Closure→LOADK PXK_FUNC、Block、lambda 入 funcs）

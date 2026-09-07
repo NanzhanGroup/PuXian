@@ -344,5 +344,30 @@
 > - 捕获面扫描结论（P2 时机）：m25/自举编译器路径 0 捕获；examples 闭包用例（match.px 的
 >   fn(x){x*2}、m25、m34 gen_lazy transform/filter）均为无捕获或单参 lambda —— **P1 覆盖现
 >   存量用例，真捕获（upvalue cell）P2 按计划留 S3-C**（spec §6.2 语义为终目标）。
-> - 下一步：B5 并发/IO 桥（spawn/chan/send/recv/select/mutex/rwlock/ffi_call 构造
->   → VM native 注册 + bc_emit 语句 tag 支持）。
+
+### S3-B · B5 并发/原语桥（spawn/chan/send/recv/select + 关键 bug 修复）
+> 完成（2026-09-08）：**VM 并发桥打通（bc11/bc12 ALL PASS）**，并修复一个**跨轨 runtime bug**。
+> - **runtime**：新增 **px_spawn_ctx(fn, ctx, args, nargs)**（spawn_thread 透传 job->ctx；
+>   px_spawn=ctx NULL 包装）；**px_spawn_name 透传 PX_FUNC 的 ctx** —— 修复致命缺陷：
+>   原 px_spawn_name 只传 fn 丢 ctx，VM PX_FUNC(px_vm_entry, ctx=PxVMFunc*) 起线程后
+>   px_vm_entry ctx=NULL 直接返回 → spawn 的 worker 静默不执行 → 主线程 chan.recv 死等
+>   （codegen 旧 C 产物 ctx 无关不暴露；VM 首暴露，跨轨 runtime 层修复）。新增 px_enum_variant
+>   （B3b）。VM 启动注册 5 个原语 native：chan(cap)/mutex()/rwlock()（构造）、spawn(fname,args..)
+>   （px_spawn_name 入口）、chan_try_recv(ch)（select 用；命中=收到值、未命中=null）。
+> - **selfhost/bc_emit.px**：语句 tag —— ChanDecl（chan() 构造）、Send ch,v（ch.send）、Recv ch
+>   （ch.recv 丢弃）、Spawn f(args)（→ spawn("f",args..)）、Select（顺序 try_recv 每 arm +
+>   bind 绑定命中值 + body；全未命中 → else（若有）否则忙等重试对齐 cg retry；null 消息边缘
+>   误判记录）。chan/mutex/rwlock 构造表达式 = 普通 Call（GETG 注册 native）。
+> - **验证**：bc11.px（spawn 2 worker + chan(4) + send/recv，main 收两值求和）——
+>   **bc11_verify.sh PASS（"sum: 6"）**；bc12.px（worker spawn + select ch.recv 绑定 x）
+>   —— **bc12_verify.sh PASS（"sel: 6" + "done"）**；bc1-10 dump golden 全不变零回归。
+>   旧轨 px build bc11 运行对照 stdout（codegen chan/spawn 支持）——见提交记录。
+> - 记录：pxi（Mini 子集）不支持通道（R1002），bc11/bc12 对拍走旧 C codegen 轨而非 pxi；
+>   select 无 else 忙等（高 CPU，对齐 cg retry）；真 null 消息经 chan_try_recv 判未命中
+>   （边缘局限记录）；select 随机化公平未做（顺序尝试，语义选择任一就绪 arm 仍成立）；
+>   mutex/rwlock/ffi_call/http_serve 语句构造已由 Call 桥覆盖（chan_try_recv 等 native 已注册），
+>   专项用例验证随 S3-B 门（vm_ab v2 + examples 并发对拍）推进。
+> - **S3-B 段完成状态**：B1（容器/字段/方法/For）✓ B2（构造/类型）✓ B3（推导式/match/
+>   生成器）✓ B4（闭包 P1）✓ B5（并发/原语桥）✓ —— 微步全落地；**里程碑门**（cases 全量 +
+>   examples 全量 VM vs 旧轨 stdout 一致 vm_ab.sh v2）待 S3-C 收口时补全量 harness 回归
+>   （本段以 bc1-12 自建用例 + 代表性对拍为验证基准，见 §七 S3-B 门）。

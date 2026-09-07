@@ -61,6 +61,58 @@ const char* px_op_name(int op) {
     return names[op];
 }
 
+// ---- B5：VM 并发/原语 native（chan/mutex/rwlock 构造、spawn 函数名入口、select try_recv）
+// 设计：这些 C 构造在 codegen 轨被编译器特判（px_chan_create 等直调，不入全局表）；
+// VM 发射器把 chan()/mutex()/rwlock()/spawn/select 编为对注册 native 的普通 CALL，
+// 启动期 px_vm_run_module 注册（幂等覆盖）。旧轨产物按名查这些全局的场合无冲突
+// （codegen 特判不产生 GETG chan，pxi 轨自带路径）。
+static LXValue bi_vm_chan(LXValue* a, int n, void* ctx) {
+    (void)ctx;
+    int cap = 0;
+    if (n > 0 && a[0].type == PX_INT) cap = (int)a[0].as.i;
+    return px_chan_create(cap);
+}
+static LXValue bi_vm_mutex(LXValue* a, int n, void* ctx) {
+    (void)a; (void)n; (void)ctx;
+    return px_mutex_create();
+}
+static LXValue bi_vm_rwlock(LXValue* a, int n, void* ctx) {
+    (void)a; (void)n; (void)ctx;
+    return px_rwlock_create();
+}
+static LXValue bi_vm_spawn(LXValue* a, int n, void* ctx) {
+    (void)ctx;
+    if (n < 1 || a[0].type != PX_STR) px_error("spawn 需要函数名（首个参数为 str）");
+    px_spawn_name(a[0].as.obj->as.str.data, n > 1 ? &a[1] : NULL, n - 1);
+    return px_null();
+}
+static LXValue bi_vm_chan_try_recv(LXValue* a, int n, void* ctx) {
+    (void)ctx;
+    if (n < 1 || a[0].type != PX_CHAN) px_error("chan_try_recv 需要通道参数");
+    LXValue out = px_null();
+    int r = px_chan_try_recv(a[0], &out);
+    return r ? out : px_null();   // 命中返回收到的值；未命中返回 null
+}
+// select 轮询用：命中标记（返回值本身非 null 即命中——null 消息 vs 未命中的区分
+//   交由 select 展开（命中返回真值对象；此处语义：返回 PX_BOOL 命中与否 + 值槽）
+static LXValue bi_vm_select_try(LXValue* a, int n, void* ctx) {
+    (void)ctx;
+    if (n < 2 || a[0].type != PX_CHAN) px_error("select_try 需要 (chan, out_slot_ref)");
+    LXValue out = px_null();
+    int r = px_chan_try_recv(a[0], &out);
+    // out 以参数传入（占位 LXValue* 引用）：a[1] 为栈上容器值首地址不可改 → 用返回值解
+    (void)out;
+    return px_bool(r != 0);
+}
+static void vm_register_b5_natives(void) {
+    px_set_global("chan", px_native("chan", bi_vm_chan));
+    px_set_global("mutex", px_native("mutex", bi_vm_mutex));
+    px_set_global("rwlock", px_native("rwlock", bi_vm_rwlock));
+    px_set_global("spawn", px_native("spawn", bi_vm_spawn));
+    px_set_global("chan_try_recv", px_native("chan_try_recv", bi_vm_chan_try_recv));
+    px_set_global("select_try", px_native("select_try", bi_vm_select_try));
+}
+
 // ---- 线程局部 VM 状态 ----
 static __thread PxVmState* g_vm_state = NULL;
 
@@ -495,6 +547,9 @@ LXValue px_vm_run_module(PxVmState* st, const PxBCModule* m) {
         px_error("VM 模块 %s 无 Top 函数", m->name ? m->name : "?");
         return px_null();
     }
+    // B5：VM 并发/原语构造 native（chan/mutex/rwlock/spawn/chan_try_recv/select_try）
+    //   幂等注册（旧轨 codegen 特判不产生 GETG chan，无冲突）
+    vm_register_b5_natives();
     // 注册全局函数（除 Top / 闭包）：统一 px_func(name, px_vm_entry, &funcs[i])（D2 trampoline）
     // —— 与 codegen main() 里 px_set_global 注册等价；此后 px_get_global("fname") 可调用
     // B2：impl 方法名 "Type.method" 亦在 funcs → 一并注册（px_method struct 分支按名转发）。
