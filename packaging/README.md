@@ -11,7 +11,7 @@ yum install puxian      # EL7
 
 | 文件 | 作用 |
 |---|---|
-| `puxian.spec` | RPM 打包定义（Version 0.1.0，Release 1.m<里程碑>.el<dist>） |
+| `puxian.spec` | RPM 打包定义（Version 取 %{pxver}，由 build_rpm.sh 按 git tag 派生注入；Release 1.<里程碑>.el<dist>） |
 | `build_rpm.sh` | 全链路（el7/el8/el9 通用）：tarball → rpmbuild → 包签名 → createrepo(_c) → repomd 签名 → 公钥导出；`DIST=7/9` 决定目录与 `.el` 后缀 |
 | `build_rpm_el7.sh` | centos:7 容器内执行：EOL vault 源修正 + gpg2.0(headless) + createrepo(gzip) + yum 3.4 双验签 + 真实安装验证 |
 | `install-rpm.sh` | 用户侧仓库安装脚本（自动探测 dnf/yum 与 el7/el9） |
@@ -48,7 +48,7 @@ sudo dnf upgrade puxian           # 里程碑升级自动拉新（el7 yum update
 仓库 URL：`https://nanzhangroup.github.io/PuXian/rpm/$releasever/$basearch/`
 （el7 → `rpm/7/x86_64/`，el9 → `rpm/9/x86_64/`；gpgkey 在 `rpm/PUXIAN-GPG-KEY.asc`）。
 
-## CI 发布（release.yml，tag `v0.1.0-mXX` 推送触发）
+## CI 发布（release.yml，tag `v*` 推送触发，如 v0.2.0 / v0.1.0-mXX）
 
 构建与发布分离（避免并发 push gh-pages 冲突）：
 

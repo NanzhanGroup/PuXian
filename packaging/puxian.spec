@@ -14,12 +14,15 @@
 #   /usr/bin/pxc -> px（同目录相对软链，等价别名）
 # 依赖：仅 gcc（pxc build 需要 cc）。bootstrap/* 均 statically linked，
 #   零动态库依赖，跨发行版通用（RHEL/Fedora/Rocky/Alma/openEuler/CentOS...）。
-# 版本：主版本固定 0.1.0（与 tag v0.1.0-mXX 对齐）；Release=1.m<里程碑>
-#   → RPM 版本序 1.m72 < 1.m73，dnf upgrade 自动升级路径正确。
+# 版本：主版本 %{pxver} 由 build_rpm.sh 自 git tag 派生并 --define 注入
+#   （tag v<ver>[-m<里程碑>]，如 v0.2.0 / v0.1.0-m72 → pxver=0.2.0 / 0.1.0），
+#   禁止写死 —— 版本升格只需打新 tag，spec 自动跟随。
+#   Release=1.<里程碑>.el<dist>（无 -m 段时 build_rpm.sh 兜底 dev 或 m<最近里程碑>）
+#   → RPM 版本序递增正确（1.m72 < 1.m73；0.2.0 < 0.2.1），dnf upgrade 自动升级。
 # ============================================================
 
 Name:           puxian
-Version:        0.1.0
+Version:        %{pxver}
 Release:        1.%{pxtag}%{?dist}
 Summary:        PuXian programming language compiler and toolchain
 
@@ -80,5 +83,8 @@ ln -s px %{buildroot}%{_bindir}/pxc
 %{_bindir}/pxc
 
 %changelog
+* Mon Sep 07 2026 The PuXian Authors - 0.2.0
+- 打包链版本宏化：spec Version 由 build_rpm.sh 按 git tag 注入 %{pxver}，适配语义版本 tag v0.2.0（修复 el7 RPM job 因 spec 固定 0.1.0 与 tag 不一致而失败）
+
 * Sun Sep 06 2026 The PuXian Authors - 0.1.0-m72
 - 首个 RPM 打包（M73：dnf/yum 分发），内容对齐发布 tarball v0.1.0-m72

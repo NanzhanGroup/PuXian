@@ -51,13 +51,22 @@ if [ "${SKIP_SIGN:-0}" != "1" ] && [ -z "$GPG_BIN" ]; then
     echo "❌ 未找到 gpg/gpg2"; exit 1
 fi
 
-# ---- 版本自 tag 派生（与 make_release.sh 同构）----
-TAG="$(git describe --tags --abbrev=0 2>/dev/null || echo v0.1.0-m72)"
-TVER="${TAG#v}"                        # 0.1.0-m72
-VER="${TVER%%-*}"                      # 0.1.0
-MILESTONE="${TVER#*-}"                 # m72
+# ---- 版本自 tag 派生（与 make_release.sh 同构，tag v<ver>[-m<里程碑>]）----
+#   VER=主版本段（0.2.0 / 0.1.0）；MILESTONE=-m 段（m72）或兜底（commit 里程碑 / dev）
+TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+[ -n "$TAG" ] || { echo "❌ 未找到 git tag（发布必须先打 v<版本> tag）"; exit 1; }
+TVER="${TAG#v}"                        # v0.2.0 → 0.2.0；v0.1.0-m72 → 0.1.0-m72
+VER="${TVER%%-*}"                      # 0.2.0 / 0.1.0
+MILESTONE=""
+if [ "$TVER" != "${TVER%%-*}" ]; then  # 含 -m<里程碑> 段
+    MILESTONE="$(echo "${TVER#*-}" | tr 'A-Z' 'a-z')"
+else                                   # 语义版本 tag 无 - 段 → 同 make_release 兜底
+    MILESTONE="$(git log -1 --pretty=%s | grep -o 'M[0-9][0-9]*' | head -1 || true)"
+    [ -n "$MILESTONE" ] || MILESTONE="dev"
+    MILESTONE="$(echo "$MILESTONE" | tr 'A-Z' 'a-z')"
+fi
 SHA="$(git rev-parse --short HEAD)"    # 2e6ac8d
-[ "$VER" = "0.1.0" ] || { echo "❌ spec 固定 Version 0.1.0，tag=$TAG 不一致"; exit 1; }
+[ -n "$VER" ] || { echo "❌ tag 主版本段为空（tag=$TAG）"; exit 1; }
 echo "== RPM 构建: puxian-$VER-$MILESTONE-$SHA (dist=$DL, repo_dir=$DIST) =="
 
 # ---- 1) 发布 tarball（make_release.sh --no-check，打包不冒烟）----
@@ -70,10 +79,10 @@ echo "   tarball: $TARBALL ($(du -h "$TARBALL" | cut -f1))"
 # ---- 2) rpmbuild -bb（Release 后缀带 .el<dist>，与仓库目录 dist 对齐）----
 mkdir -p "$RPM_TOP"/{SPECS,SOURCES,RPMS,SRPMS,BUILD,BUILDROOT}
 cp "$TARBALL" "$RPM_TOP/SOURCES/$(basename "$TARBALL")"
-RPM_ARGS=(--define "_topdir $RPM_TOP" --define "pxtag $MILESTONE" --define "pxsha $SHA")
+RPM_ARGS=(--define "_topdir $RPM_TOP" --define "pxver $VER" --define "pxtag $MILESTONE" --define "pxsha $SHA")
 [ -n "$DL" ] && RPM_ARGS+=(--define "dist .el$DL")
 rpmbuild -bb "${RPM_ARGS[@]}" packaging/puxian.spec
-RPM="$(ls -t "$RPM_TOP"/RPMS/*/puxian-$VER-1.$MILESTONE*.rpm | head -1)"
+RPM="$(ls -t "$RPM_TOP"/RPMS/*/puxian-$VER-1*.rpm | head -1)"
 [ -f "$RPM" ] || { echo "❌ rpm 构建失败"; exit 1; }
 echo "   rpm: $RPM ($(du -h "$RPM" | cut -f1))"
 
