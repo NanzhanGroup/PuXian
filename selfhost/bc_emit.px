@@ -1,30 +1,38 @@
 # ============================================================
-# M89-S3-A0: bc_emit.px —— AST → 字节码 发射器骨架（PuXian 自举）
+# M89-S3-A1: bc_emit.px —— AST → 字节码 发射器（PuXian 自举）
 # ------------------------------------------------------------
-# 定位（docs/M89_vm_design.md D1/D4/D8）：新增单一执行引擎 —— 现 codegen
+# 定位（docs/M89_vm_design.md D1/D4/D8）：单一执行引擎 —— 现 codegen
 # （AST→C 文本 fn_*）平行开发的目标=「把 C 文本换成字节码指令 + 登记
-# 常量/名字/槽」。本文件 = 发射器（PuXian），随 compiler.px 生态自举；
-# 执行器在 runtime/vm.c（C，S3-A A0 已立骨架）。
+# 常量/名字/槽」。本文件 = 发射器（PuXian，纯 importable，无 main/全局
+# 声明/import —— 由主文件 bc_cli.px 或将来 compiler.px import，运行时
+# 引用主文件全局与 parser/cg_* 函数），执行器在 runtime/vm.c（C）。
 #
-# A0 状态（2026-09-08）：
-#   - 仅骨架：BCModule 目标形态（§D8）+ 表构建工具函数 + emit 入口占位。
-#   - 尚未被 compiler.px import（`bc` 子命令随 A1 首个发射切片接入，
-#     与 golden/自举再生成同批，避免重复 3.5 分钟全量重链）。
-#   - 依赖约定：本文件由 compiler.px（主文件）import，词法/解析/解析后
-#     全局状态（g_src/p_toks/cg_*）由主文件声明（import 不注册模块顶层
-#     let/var —— 见 compiler.px 头注）；本文件只新增 bc_* 名字。
+# A1 状态（2026-09-08）：
+#   - 首个真实发射切片：BCModule K/N/G/Func 收集（K 去重/N/G 去重）、
+#     函数级槽分配（参数 0..arity-1 + hoist 局部 + 临时）、语句/表达式
+#     A1 子集接线：
+#       语句 VarDecl/Assign(Var)/Return/ExprStmt/If/While/Empty
+#       表达式 Int/Float/Str/Bool/Null/Var
+#     指令：LOADK/IMM/MOV/GETG/SETG/SRCLINE/RET/RET0/HALT + JMP/JMPT/JMPF
+#     （if/while 控制流用 JMPF/JMP 回填；JMPT 留 and/or 短路 A2）
+#   - 不支持（panic 未实现，A2+ 逐批）：算术/比较、容器、调用/方法、
+#     字段/索引、推导式/match、闭包、默认参数、for/break/continue 等。
+#   - 顶层处理对齐 codegen：顶层可执行语句 → 合成 top 函数（末尾 HALT）；
+#     顶层 VarDecl/Assign = 全局 SETG；函数内 VarDecl = 局部槽（遮蔽全局，
+#     同 codegen cg_gen_func_named 语义）；函数内 Assign 到未声明名 = SETG。
+#   - 槽分配对齐 codegen _v 编号体系（D4）：函数内 hoist 变量（VarDecl +
+#     Assign 目标 + for 变量）预占槽；帧槽 calloc 零 = PX_NULL → 声明无需
+#     初始化指令，声明处仅赋值（对齐 M62-L5 函数级作用域）。
 #
-# BCModule 目标形态（A1 起发射器逐项填充，与 runtime/vm.h struct 对应）：
-#   {
-#     "name":    "主文件名去扩展",          # → PxBCModule.name
-#     "k_pool":  [ {kind,i,f,s}... ],       # 常量池 → PxK[]（PXK_INT/FLT/STR/BOOL/NULL）
-#     "n_pool":  [ "全局名/字段/方法/类型名"... ], # 名字池 → N[]
-#     "globals": [ "name"... ],             # 声明全局槽 → G[]（函数名/顶层 var）
-#     "funcs":   [ {name,arity,ndefault,nslots,bc:[inst...]}... ],  # → PxVMFunc[]
-#     "top":      funcs 下标 或 null         # 顶层代码函数
-#   }
-#   bc 指令 inst = [op, a, b, c]（op 用常量名，发射器输出 C 时映射 PXOP_*）。
+# BCModule 目标形态（与 runtime/vm.h struct 对应）：
+#   { name, k_pool:[{kind,i,f,s}], n_pool:[...], globals:[...],
+#     funcs:[{name,arity,ndefault,nslots,bc:[inst...],is_top}], top }
+#   bc 指令 inst = [op, a, b, c]（op 用名，dump 直读；C 输出时映射 PXOP_*）。
+#   N 池（n_pool）为字段/方法/类型名预留，A1 尚无消费方（空表）。
 # ============================================================
+
+# ---------- 模块级当前状态（bc_emit_program 设置；helper 引用） ----------
+var g_bcm = null          # 当前 BCModule dict
 
 # ---------- 空 dict/列表工具（PuXian：{} 是空块=null） ----------
 def bc_new_dict():
@@ -33,18 +41,41 @@ def bc_new_dict():
     return d
 
 # ---------- 表构建 ----------
-# 常量池登记：kind ∈ "int"/"float"/"str"/"bool"/"null"；返回池下标（去重 A1 起）
+# 常量池登记（去重：同 kind 同值只入一次）；返回池下标
+def bc_k_find(pool, kind, i, f, s):
+    var idx = 0
+    while idx < len(pool):
+        let e = pool[idx]
+        if e["kind"] == kind:
+            if kind == "int":
+                if e["i"] == i:
+                    return idx
+            elif kind == "float":
+                if e["f"] == f:
+                    return idx
+            elif kind == "str":
+                if e["s"] == s:
+                    return idx
+            else:
+                # bool/null 仅按 kind（i 承载 true/false 或恒 0）
+                if e["i"] == i:
+                    return idx
+        idx += 1
+    return -1
+
 def bc_k_add(pool, kind, i, f, s):
+    let ex = bc_k_find(pool, kind, i, f, s)
+    if ex >= 0:
+        return ex
     let e = bc_new_dict()
     e["kind"] = kind
     e["i"] = i
     e["f"] = f
     e["s"] = s
-    let idx = len(pool)
     pool.push(e)
-    return idx
+    return len(pool) - 1
 
-# 名字池登记（A1 起按值去重）；返回 N 下标
+# 名字池登记（A1 预留：字段/方法/类型名；按值去重）；返回 N 下标
 def bc_n_add(pool, name):
     var i = 0
     while i < len(pool):
@@ -54,7 +85,7 @@ def bc_n_add(pool, name):
     pool.push(name)
     return len(pool) - 1
 
-# 全局槽登记（声明全局：函数名/顶层 var）；返回 G 下标
+# 全局槽登记（顶层声明/读到的全局名：函数名/顶层 var）；返回 G 下标
 def bc_g_add(globals_list, name):
     var i = 0
     while i < len(globals_list):
@@ -64,6 +95,12 @@ def bc_g_add(globals_list, name):
     globals_list.push(name)
     return len(globals_list) - 1
 
+# 名字是否为已登记全局
+def bc_is_global(name):
+    if g_bcm == null:
+        return false
+    return contains(g_bcm["globals"], name)
+
 # 新建空 BCModule
 def bc_new_module(name):
     let m = bc_new_dict()
@@ -72,33 +109,412 @@ def bc_new_module(name):
     m["n_pool"] = []
     m["globals"] = []
     m["funcs"] = []
-    m["top"] = null
+    m["top"] = -1
     return m
 
-# ---------- 指令发射（A1 起核心；A0 仅骨架） ----------
-# 发射一条指令到 func bc 列表：inst = [op, a, b, c]
-# op 用 PuXian 字符串/常量名（如 "LOADK"/"IMM"），输出 C 时映射 PXOP_*；
-# 也可直接登记 opcode 整数（对齐 runtime/vm.h #define 冻结编号，由
-# 发射器维护 op→编号 映射表，避免两处手抄漂移 —— A1 实现）。
+# ---------- 函数级槽分配（对齐 codegen _v 编号体系） ----------
+# 参数先占 0..nparams-1（A1 无默认参数，arity=nparams）；hoist 局部随声明序；
+# 临时槽 next_slot 单调递增（A1 不回收，nslots=峰值；A2 起可栈式复用）。
+def bc_new_func(name, arity):
+    let func = bc_new_dict()
+    func["name"] = name
+    func["arity"] = arity
+    func["ndefault"] = 0
+    func["nslots"] = arity
+    func["bc"] = []
+    func["smap"] = bc_new_dict()
+    func["next_slot"] = arity
+    func["is_top"] = false
+    return func
+
+# 变量名 → 槽号（无则分配）
+def bc_slot(func, name):
+    if func["smap"].has(name):
+        return func["smap"][name]
+    let s = func["next_slot"]
+    func["next_slot"] = s + 1
+    func["smap"][name] = s
+    return s
+
+# 临时槽（表达式目标/暂存）：单调递增
+def bc_tmp(func):
+    let s = func["next_slot"]
+    func["next_slot"] = s + 1
+    return s
+
+# ---------- 指令发射 ----------
+# 发射一条指令到 func bc 列表：inst = [op, a, b, c]（op 用名字）
 def bc_emit_inst(func, op, a, b, c):
     func["bc"].push([op, a, b, c])
 
-# ---------- 各 AST 类别发射入口（A1 起逐 tag 填充；A0 全部占位报未实现） ----------
-# 发射单条语句到当前函数（stmt tag → 指令序列）；现 codegen cg_stmt.px 对拍基准
-def bc_emit_stmt(stmt, func):
-    # A1: 按 stmt tag 分发（let/var/const/赋值/expr/if/while/for/return/...）
-    panic("bc_emit_stmt 未实现: " + str(stmt))
+# 回填跳转 off（JMP/JMPT/JMPF 的 b 字段=off，相对「下一条」）：
+#   bc[idx] 从 idx 跳到 target → off = target - (idx+1)
+def bc_patch_off(func, idx, target):
+    func["bc"][idx][2] = target - (idx + 1)
 
-# 发射单个表达式到目标槽（expr tag → 指令序列）
-def bc_emit_expr(expr, dst_slot, func):
-    # A1: 按 expr tag 分发（~60 tag，映射到 runtime/vm.h 指令集 spec §二）
+# ---------- hoist 局部收集（对齐 cg_collect_hoist_vars：函数级作用域） ----------
+def bc_collect_hoist(stmts, out):
+    var i = 0
+    while i < len(stmts):
+        let st = stmts[i]
+        let ty = st[0]
+        if ty == "Assign":
+            let tgt = st[1]
+            if tgt[0] == "Var":
+                let name = rust_unescape(tgt[1])
+                if not contains(out, name):
+                    out.append(name)
+        elif ty == "VarDecl":
+            let name = rust_unescape(st[2])
+            if not contains(out, name):
+                out.append(name)
+        elif ty == "If":
+            let brs = st[1]
+            var bi = 0
+            while bi < len(brs):
+                bc_collect_hoist(brs[bi][1], out)
+                bi += 1
+            if st[2] != null:
+                bc_collect_hoist(st[2], out)
+        elif ty == "While":
+            bc_collect_hoist(st[2], out)
+        i += 1
+
+# 发 null 常量到 dst 槽（LOADK nullK；K 去重）
+def bc_emit_null(func, dst):
+    let k = bc_k_add(g_bcm["k_pool"], "null", 0, 0.0, "")
+    bc_emit_inst(func, "LOADK", dst, k, 0)
+
+# 发 int 常量到 dst 槽：int16 内 → IMM；否则 K 池 LOADK
+def bc_emit_int(func, dst, i):
+    if i >= -32768 and i <= 32767:
+        bc_emit_inst(func, "IMM", dst, i, 0)
+    else:
+        let k = bc_k_add(g_bcm["k_pool"], "int", i, 0.0, "")
+        bc_emit_inst(func, "LOADK", dst, k, 0)
+
+# 发 float 常量到 dst 槽（K 池 LOADK）
+def bc_emit_float(func, dst, f):
+    let k = bc_k_add(g_bcm["k_pool"], "float", 0, f, "")
+    bc_emit_inst(func, "LOADK", dst, k, 0)
+
+# ---------- 表达式发射（A1 子集） ----------
+# 把 expr 值发射到 dst 槽。返回「值所在槽」（A1 恒 dst；优化留 A2）。
+# 支持的 tag：Int/Float/Str/Bool/Null → 加载；Var → 局部 MOV / 全局 GETG。
+def bc_emit_expr(expr, dst, func):
+    let ty = expr[0]
+    if ty == "Int":
+        bc_emit_int(func, dst, expr[1])
+        return dst
+    if ty == "Float":
+        bc_emit_float(func, dst, expr[1])
+        return dst
+    if ty == "Unary":
+        # A1：仅负字面量常量折叠（-Int/-Float，parser 把 -1 解析为 Unary Neg Int）；
+        # 一般 Neg/Not/Bitnot 走 PXOP_NEG/NOT/BITNOT，A2 随算术批接入
+        let inner = expr[2]
+        let op = expr[1]
+        if inner[0] == "Int" and op == "Neg":
+            bc_emit_int(func, dst, 0 - inner[1])
+            return dst
+        if inner[0] == "Float" and op == "Neg":
+            bc_emit_float(func, dst, 0 - inner[1])
+            return dst
+        panic("bc_emit_expr Unary 未实现（A2 算术批）: " + str(expr))
+    if ty == "Str":
+        let k = bc_k_add(g_bcm["k_pool"], "str", 0, 0.0, rust_unescape(expr[1]))
+        if dst >= 0:
+            bc_emit_inst(func, "LOADK", dst, k, 0)
+        return dst
+    if ty == "Bool":
+        var bi = 0
+        if expr[1]:
+            bi = 1
+        let k = bc_k_add(g_bcm["k_pool"], "bool", bi, 0.0, "")
+        if dst >= 0:
+            bc_emit_inst(func, "LOADK", dst, k, 0)
+        return dst
+    if ty == "Null":
+        if dst >= 0:
+            bc_emit_null(func, dst)
+        return dst
+    if ty == "Var":
+        let name = rust_unescape(expr[1])
+        if func["smap"].has(name):
+            # 局部变量：MOV dst←槽（dst==槽时省）
+            let s = func["smap"][name]
+            if dst >= 0 and dst != s:
+                bc_emit_inst(func, "MOV", dst, s, 0)
+            return dst
+        # 全局：GETG dst, g
+        let g = bc_g_add(g_bcm["globals"], name)
+        if dst >= 0:
+            bc_emit_inst(func, "GETG", dst, g, 0)
+        return dst
     panic("bc_emit_expr 未实现: " + str(expr))
 
-# ---------- 模块级入口（A1 起：cg_resolve_modules 合并后单一 Program） ----------
+# ---------- 语句发射（A1 子集） ----------
+def bc_emit_stmt_inner(stmt, func):
+    let ty = stmt[0]
+    if ty == "VarDecl":
+        # kind=stmt[1](Let/Var/Const) name=stmt[2] ty=stmt[3] init=stmt[4]
+        let name = rust_unescape(stmt[2])
+        if stmt[4] == null:
+            # 无初值声明：函数内帧槽零=PX_NULL 无需指令；顶层 SETG null
+            # （对齐 codegen rhs=px_null() → px_set_global）
+            if func["is_top"]:
+                let t = bc_tmp(func)
+                bc_emit_null(func, t)
+                let g = bc_g_add(g_bcm["globals"], name)
+                bc_emit_inst(func, "SETG", g, t, 0)
+            return
+        if func["is_top"]:
+            # 顶层（含顶层块内）VarDecl = 全局 SETG（codegen：err_labels 空）
+            let t = bc_tmp(func)
+            bc_emit_expr(stmt[4], t, func)
+            let g = bc_g_add(g_bcm["globals"], name)
+            bc_emit_inst(func, "SETG", g, t, 0)
+            return
+        # 函数内 VarDecl = 局部槽（hoist 已预占或就地分配；遮蔽同名全局）
+        let s = bc_slot(func, name)
+        bc_emit_expr(stmt[4], s, func)
+        return
+    if ty == "Assign":
+        let tgt = stmt[1]
+        let op = stmt[2]
+        let rhs = stmt[3]
+        if tgt[0] != "Var":
+            panic("bc_emit_stmt Assign 目标未实现（A2+）: " + str(tgt))
+        if op != "Assign":
+            panic("bc_emit_stmt 复合赋值未实现（A2+）: " + str(stmt))
+        let name = rust_unescape(tgt[1])
+        if func["smap"].has(name):
+            # 已声明局部 → 槽赋值
+            let s = func["smap"][name]
+            bc_emit_expr(rhs, s, func)
+            return
+        if not func["is_top"] and not bc_is_global(name):
+            # 函数内对未声明名的赋值：hoist 预提升为局部（Python 语义，对齐 codegen）
+            let s = bc_slot(func, name)
+            bc_emit_expr(rhs, s, func)
+            return
+        # 全局赋值 → SETG（顶层 Assign 或函数内写全局名）
+        let t = bc_tmp(func)
+        bc_emit_expr(rhs, t, func)
+        let g = bc_g_add(g_bcm["globals"], name)
+        bc_emit_inst(func, "SETG", g, t, 0)
+        return
+    if ty == "Return":
+        if stmt[1] != null:
+            let t = bc_tmp(func)
+            bc_emit_expr(stmt[1], t, func)
+            bc_emit_inst(func, "RET", t, 0, 0)
+            return
+        bc_emit_inst(func, "RET0", 0, 0, 0)
+        return
+    if ty == "ExprStmt":
+        # A1 表达式无副作用调用；发到临时槽丢弃（含未支持 tag 会 panic 暴露）
+        let t = bc_tmp(func)
+        bc_emit_expr(stmt[1], t, func)
+        return
+    if ty == "If":
+        bc_emit_if(stmt, func)
+        return
+    if ty == "While":
+        bc_emit_while(stmt, func)
+        return
+    if ty == "Empty":
+        return
+    panic("bc_emit_stmt 未实现: " + str(stmt))
+
+# SRCLINE 追踪（对齐 cg_gen_stmt wrapper；stmt 末位 = pos [line,col]）
+def bc_emit_stmt(stmt, func):
+    var line = 0
+    if len(stmt) > 0:
+        let p = stmt[len(stmt) - 1]
+        if type(p) == "list" and len(p) >= 1 and type(p[0]) == "int":
+            line = p[0]
+    if line > 0:
+        bc_emit_inst(func, "SRCLINE", 0, line, 0)
+    bc_emit_stmt_inner(stmt, func)
+
+def bc_emit_stmts(stmts, func):
+    var i = 0
+    while i < len(stmts):
+        bc_emit_stmt(stmts[i], func)
+        i += 1
+
+# ---------- if / while（JMPF/JMP 回填） ----------
+# If: branches=[[cond,body]...]（elif 折叠），else_b=stmt[2] 或 null。
+# 布局：cond→JMPF(假跳下一分支起点/else起点/end) → body → (JMP end)...
+# JMPF_i 目标 = body_i 完的位置（下一分支 cond / else / end）。
+def bc_emit_if(stmt, func):
+    let brs = stmt[1]          # [[cond, body], ...]
+    let else_b = stmt[2]
+    let n = len(brs)
+    var pend_jmp = []          # branch body 尾 JMP end 的占位 idx
+    var bi = 0
+    while bi < n:
+        let cond = brs[bi][0]
+        let body = brs[bi][1]
+        let t = bc_tmp(func)
+        bc_emit_expr(cond, t, func)
+        let jf = len(func["bc"])
+        bc_emit_inst(func, "JMPF", t, 0, 0)
+        bc_emit_stmts(body, func)
+        # body 完 → 回填 JMPF：假值落 body 后（下一分支 / else / end）
+        bc_patch_off(func, jf, len(func["bc"]))
+        # 还有后续分支或 else → body 尾须 JMP 越过（到 end）
+        if bi < n - 1 or else_b != null:
+            let j = len(func["bc"])
+            bc_emit_inst(func, "JMP", 0, 0, 0)
+            pend_jmp.append(j)
+        bi += 1
+    if else_b != null:
+        bc_emit_stmts(else_b, func)
+    let end = len(func["bc"])
+    var ji = 0
+    while ji < len(pend_jmp):
+        bc_patch_off(func, pend_jmp[ji], end)
+        ji += 1
+
+# While: loop_start → cond → JMPF(假→end) → body → JMP(回 loop_start)
+def bc_emit_while(stmt, func):
+    let cond = stmt[1]
+    let body = stmt[2]
+    let loop_start = len(func["bc"])
+    let t = bc_tmp(func)
+    bc_emit_expr(cond, t, func)
+    let jf = len(func["bc"])
+    bc_emit_inst(func, "JMPF", t, 0, 0)
+    bc_emit_stmts(body, func)
+    let jb = len(func["bc"])
+    bc_emit_inst(func, "JMP", 0, 0, 0)
+    let end = len(func["bc"])
+    bc_patch_off(func, jb, loop_start)
+    bc_patch_off(func, jf, end)
+
+# ---------- 函数发射 ----------
+# 顶层 FuncDef → PxVMFunc（body 语句发射 + 尾 RET0 对齐 codegen return px_null()）
+def bc_emit_func_def(f):
+    let name = rust_unescape(f[1])
+    let params = f[2]
+    var arity = len(params)
+    var pi = 0
+    while pi < len(params):
+        if params[pi][3] != null:
+            panic("bc_emit 默认参数未实现（A2+）: " + name + " 参数 #" + str(pi))
+        pi += 1
+    let func = bc_new_func(name, arity)
+    # 参数槽 0..arity-1（smap 登记）
+    pi = 0
+    while pi < arity:
+        func["smap"][rust_unescape(params[pi][1])] = pi
+        pi += 1
+    # hoist 局部预占（跳过已登记名；A1 不处理嵌套 def/For）
+    let hoist = []
+    bc_collect_hoist(f[4], hoist)
+    var hi = 0
+    while hi < len(hoist):
+        let nm = hoist[hi]
+        if func["smap"].has(nm):
+            hi += 1
+            continue
+        if bc_is_global(nm):
+            hi += 1
+            continue
+        bc_slot(func, nm)
+        hi += 1
+    bc_emit_stmts(f[4], func)
+    bc_emit_inst(func, "RET0", 0, 0, 0)
+    func["nslots"] = func["next_slot"]
+    return func
+
+# 合成 top 函数（顶层可执行语句；末尾 HALT）
+def bc_emit_func_top(stmts, topname):
+    let func = bc_new_func(topname, 0)
+    func["is_top"] = true
+    bc_emit_stmts(stmts, func)
+    bc_emit_inst(func, "HALT", 0, 0, 0)
+    func["nslots"] = func["next_slot"]
+    return func
+
+# ---------- 模块级入口（对齐 cg_generate 顶层流程） ----------
 # prog = 解析+import 合并后的 Program（与现 codegen 同输入同粒度）
-# 返回 BCModule dict（A0 仅建壳并统计待办面；A1 起逐类填充）
 def bc_emit_program(prog):
-    let m = bc_new_module("")
-    # A0 占位：登记空表返回，等待 A1 首个发射切片（词法/解析全局由主文件置位）
-    m["name"] = "<bc-emit-skeleton>"
+    let items = prog[1]
+    let m = bc_new_module("<module>")
+    g_bcm = m
+    # 第一遍：收集全局名（对齐 cg_generate 顺序：FuncDef/ExternDef/VarDecl/Assign）
+    var i = 0
+    while i < len(items):
+        let st = items[i]
+        let ty = st[0]
+        if ty == "FuncDef":
+            bc_g_add(m["globals"], rust_unescape(st[1]))
+        elif ty == "VarDecl":
+            bc_g_add(m["globals"], rust_unescape(st[2]))
+        elif ty == "Assign":
+            let tgt = st[1]
+            if tgt[0] == "Var":
+                bc_g_add(m["globals"], rust_unescape(tgt[1]))
+        i += 1
+    # 第二遍：顶层 FuncDef → funcs（按 items 顺序，对齐 cg_generate 顶层 def）
+    i = 0
+    while i < len(items):
+        let st = items[i]
+        if st[0] == "FuncDef":
+            let f = bc_emit_func_def(st)
+            m["funcs"].push(f)
+        i += 1
+    # 第三遍：顶层可执行语句 → top 函数（非定义类，含 main 的调用由 S3-B CALL 接入）
+    let top_stmts = []
+    i = 0
+    while i < len(items):
+        let st = items[i]
+        let ty = st[0]
+        if ty != "FuncDef" and ty != "StructDef" and ty != "EnumDef" and ty != "TraitDef" and ty != "ImplDef" and ty != "Import" and ty != "ExternDef":
+            top_stmts.append(st)
+        i += 1
+    let top = bc_emit_func_top(top_stmts, "<top>")
+    m["funcs"].push(top)
+    m["top"] = len(m["funcs"]) - 1
     return m
+
+# ---------- dump（A1 验证：BCModule 可读文本，直读断言） ----------
+def bc_dump_module(m):
+    print("# BCModule " + m["name"])
+    print("# K " + str(len(m["k_pool"])))
+    var ki = 0
+    while ki < len(m["k_pool"]):
+        let k = m["k_pool"][ki]
+        if k["kind"] == "int":
+            print("K " + str(ki) + " int " + str(k["i"]))
+        elif k["kind"] == "float":
+            print("K " + str(ki) + " float " + str(k["f"]))
+        elif k["kind"] == "str":
+            print("K " + str(ki) + " str \"" + cg_escape_str(k["s"]) + "\"")
+        elif k["kind"] == "bool":
+            var bv = "false"
+            if k["i"] != 0:
+                bv = "true"
+            print("K " + str(ki) + " bool " + bv)
+        else:
+            print("K " + str(ki) + " null")
+        ki += 1
+    print("# G " + str(len(m["globals"])))
+    var gi = 0
+    while gi < len(m["globals"]):
+        print("G " + str(gi) + " " + m["globals"][gi])
+        gi += 1
+    print("# funcs " + str(len(m["funcs"])) + " top=" + str(m["top"]))
+    var fi = 0
+    while fi < len(m["funcs"]):
+        let f = m["funcs"][fi]
+        print("== func " + f["name"] + " arity=" + str(f["arity"]) + " ndefault=" + str(f["ndefault"]) + " nslots=" + str(f["nslots"]))
+        var pc = 0
+        while pc < len(f["bc"]):
+            let ins = f["bc"][pc]
+            print(str(pc) + ":" + ins[0] + " " + str(ins[1]) + " " + str(ins[2]) + " " + str(ins[3]))
+            pc += 1
+        fi += 1

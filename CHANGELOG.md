@@ -6,6 +6,26 @@
 
 ## [Unreleased]
 
+### M89-S3-A1 · VM 化实现启动：发射器首个真实切片 + VM GETG/SETG/Top 运行
+
+> 完成（2026-09-08）：VM 化旗舰（M89）进入 **S3-A 实码阶段**，A1 落地
+> （A0 骨架见 docs/M89_vm_design.md）。
+> - **selfhost/bc_emit.px**（AST→BCModule 发射器首个真实切片）：K 池按值去重、G 池全局名源码序收集、
+>   N 池预留；函数级槽分配对齐现 codegen `_v` 编号体系（参数 0..arity-1 + hoist 局部预占（帧槽零值
+>   即 PX_NULL 免初始化）+ 临时槽）；A1 子集接线 VarDecl/Assign(Var)/Return/If/While/Empty +
+>   字面量（含 Unary 负字面量折叠）→ LOADK/IMM/MOV/GETG/SETG/SRCLINE/RET/RET0/HALT；if/while 用
+>   JMPF/JMP 相对跳转回填；顶层合成 top 函数；逐条对齐 codegen 语义（顶层=SETG、函数内 VarDecl 局部
+>   遮蔽、Assign 未声明名=hoist/全局）。**cases_bc/bc1.px → bc1.dump golden 核对全对**（K 去重/G 源码
+>   序/槽号/跳转/负常量）。
+> - **runtime/vm.c + vm.h**：GETG/SETG 执行（v1 经 px_get_global/px_set_global，D8 无锁化后置）；
+>   px_vm_run_module 完整 Top 运行（注册非 top 函数 D2 trampoline + 跑 Top bc）。
+>   examples/m89_a1/vm_selftest **ALL PASS**（Top SETG=42 可读、px_call(read) GETG=42、
+>   GETG v1 读外部写回 7）。
+> - 新增 bc_cli.px 验证壳（A 阶段独立 dump 入口）；compiler.px `bc` 子命令 + golden 再生成 + vm.c 入
+>   rt_src_files 推迟到首个可运行字节码闭环（A2/A3）一次做（避免 codegen 全链 ~6min 重编烧多次）。
+> - ⚠️ 记录：pxi 解释器不支持 import codegen 生态（i_run_program 解释合并 prog 触发 rust_str_debug
+>   越界）——compiler 生态工具一律编译版运行（bc_cli 亦如此），解释验证仅限单文件。
+
 ### M89-S1/S2 · VM 化详勘预研 + 设计定稿（docs/M89_vm_prestudy.md · M89_vm_design.md）
 
 > 完成（2026-09-07~08）：VM 化旗舰（M89）**详勘（S1，只侦察未写码）** 与 **设计定稿（S2）**。

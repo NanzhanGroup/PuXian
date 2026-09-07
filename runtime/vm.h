@@ -1,14 +1,15 @@
 // 普贤 (PuXian) C 运行时库 — vm.h
-// M89-S3-A0: 显式帧 + 平坦字节码 VM 骨架（设计定稿 docs/M89_vm_design.md）
+// M89-S3-A0/A1: 显式帧 + 平坦字节码 VM 骨架（设计定稿 docs/M89_vm_design.md）
 // ------------------------------------------------------------
 // 定位：单一执行引擎（第三种实现）。PuXian 程序统一编译为平坦字节码，
 // 由本 VM（runtime 层 C）执行。发射器（AST→BC，PuXian 自举 bc_emit.px）
 // 在 S3-A 起与 codegen 平行开发；本文件 = C 侧数据结构 + 指令集编号
 // （编号一经 S3 定稿即冻结，发射器按名字引用）。
 //
-// A0 状态（2026-09-08）：骨架 + 可运行最小指令子集（自证解释循环）。
-//   - 已实现：LOADK/IMM/MOV/SRCLINE/JMP/JMPT/JMPF/RET/RET0/HALT
-//   - 未实现（分发默认 px_error "指令未实现"）：其余 op —— A1 起逐批实现
+// 状态（A0→A1，2026-09-08）：解释循环已实现
+//   LOADK/IMM/MOV/GETG/SETG/SRCLINE/JMP/JMPT/JMPF/RET/RET0/HALT（A1 补
+//   GETG/SETG 经 px_get_global/px_set_global v1 语义 + run_module 注册函数）；
+//   未实现（分发默认 px_error "指令未实现"）：其余 op —— A2 起逐批实现
 // 线程模型：px_vm_entry 在调用线程取/建 __thread PxVmState 执行（与
 //   px_pool_worker/px_spawn 线程模型同构）；spawn/连接线程各自独立 VM 状态。
 // 语义约定：以现双轨（px build fn_* C 产物 / pxi 树遍历）用例集为对拍基准。
