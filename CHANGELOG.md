@@ -1203,3 +1203,21 @@
 
 [Unreleased]: https://github.com/NanzhanGroup/PuXian
 [0.1.0]: https://github.com/NanzhanGroup/PuXian
+
+### M89-S3A-A0 · VM 骨架（runtime/vm.h+vm.c + selfhost/bc_emit.px）
+
+> 完成（2026-09-08）：S3-A 骨架第一步 —— 单一执行引擎（显式帧 + 平坦字节码 VM）C 侧骨架 + 发射器骨架。
+> - **runtime/vm.h**：指令集编号冻结（54 op：A 加载/槽 5 · B 一元/二元 22 · C 容器/字段 11 · D 调用/返回 6 ·
+>   E 控制流/错误 7 · F 生成器/并发 2；PXM_MAX=55）；8B 定长指令 PxInst{op,fl,a,b,c}；常量池 PxK；
+>   PxVMFunc（name/arity/ndefault/nslots/bc/mod，upvals 预留 P2）与 PxBCModule（K/N/G/funcs/top）；
+>   显式帧 PxFrame/PxVmState；API（px_op_name/px_vm_state/px_vm_entry/px_vm_run_func/px_vm_run_module/
+>   px_vm_new_func）。跳转 off 语义=相对「下一条」，发射器按 (目标-(pc+1)) 计算。
+> - **runtime/vm.c**：__thread PxVmState；帧栈 push/pop（槽数组 calloc，RET 弹帧释放）；D2 trampoline
+>   px_vm_entry（ctx=PxVMFunc*，px_call/px_method/px_spawn 零改动兼容）；解释循环最小子集已跑通
+>   （LOADK/IMM/MOV/SRCLINE/JMP/JMPT/JMPF/RET/RET0/HALT），其余 op 分发 px_error「指令未实现」；
+>   `gcc -O2 -pthread -Wall -Wextra -c` 零告警；临时冒烟 7 例 ALL PASS（IMM→RET 常量、RET0→null、
+>   JMPF 分支真假两路、JMPT 跳过、LOADK 走模块 K 池）。
+> - **selfhost/bc_emit.px**：发射器骨架（PuXian，D1 自举）—— BCModule 目标形态 + 表构建工具
+>   （bc_k_add/bc_n_add/bc_g_add/bc_new_module）+ emit 入口占位（stmt/expr 逐 tag A1 起）；`px parse` 通过。
+> - 集成：vm.c 暂未入 rt_src_files / compiler.px `bc` 子命令随 A1 首个发射切片接入（golden 再生成同批，
+>   避免重复 3.5 分钟全量重链）；回归 hello（while 求和）px build + px run 双轨一致 rc=0。

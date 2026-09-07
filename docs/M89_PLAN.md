@@ -111,3 +111,18 @@
 > ③ S3 拆 A 骨架（2 周）/B 全构造（2 周）/C 自举收敛（2 周）/D 精确 GC（2 周）四级微步清单，
 >   含 A/B 对拍 harness（vm_ab.sh：三实现两两对拍）、自举证明切 BC 镜像、issue28 验收门。
 > ④ 下一步：S3-A 开工（A0 vm.c/bc_emit.px 骨架 → A1 常量/名字/槽 → ... 逐微步，每步编译+verify）。
+
+### S3 · VM 实现（S3-A 骨架启动）
+> A0（2026-09-08）完成：**runtime/vm.h + vm.c 骨架 + bc_emit.px 骨架**。
+> - C 侧（runtime/vm.c，A0 引擎骨架）：指令集编号冻结（54 op，PXM_MAX=55，编号一经 S3 定稿即锁）；
+>   显式帧栈 PxVmState/PxFrame/PxVMFunc + 帧槽数组生命周期；D2 trampoline px_vm_entry（LXFuncPtr 兼容，
+>   ctx=PxVMFunc*，px_call 零改动）；解释循环最小子集已跑通（LOADK/IMM/MOV/SRCLINE/JMP/JMPT/JMPF/RET/RET0/
+>   HALT），其余 op 分发默认 px_error「指令未实现」（A1 起逐批）；临时冒烟 7 例 ALL PASS（含 JMPT/JMPF 分支、
+>   LOADK 走模块 K 池）；`gcc -O2 -pthread -Wall -Wextra -c` 零告警。
+> - 发射器（selfhost/bc_emit.px，A0 骨架）：BCModule 目标形态（k_pool/n_pool/globals/funcs/top）+ 表构建
+>   工具（bc_k_add/bc_n_add/bc_g_add/bc_new_module）+ emit 入口占位；`px parse` 通过。
+> - 集成说明：vm.c 暂未入 rt_src_files（A1 首个发射切片/px run --vm 接入时连同 rt 缓存一次重建）；
+>   compiler.px 的 `bc` 子命令随 A1 首个发射切片接入（golden/自举再生成同批，避免重复 3.5 分钟全量重链）。
+> - 回归：hello_a0（while 求和）px build + px run 双轨一致（sum=10，rc=0），仓库可编译、工作区干净。
+> - 下一步：A1 常量/名字/槽编号 —— 发射器 K/N/G/Func 收集 + LOADK/IMM/MOV/GETG/SETG/SRCLINE/RET/RET0/HALT
+>   全指令接线（compiler.px `bc` 子命令 + golden 再生成）。

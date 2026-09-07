@@ -1,0 +1,104 @@
+# ============================================================
+# M89-S3-A0: bc_emit.px —— AST → 字节码 发射器骨架（PuXian 自举）
+# ------------------------------------------------------------
+# 定位（docs/M89_vm_design.md D1/D4/D8）：新增单一执行引擎 —— 现 codegen
+# （AST→C 文本 fn_*）平行开发的目标=「把 C 文本换成字节码指令 + 登记
+# 常量/名字/槽」。本文件 = 发射器（PuXian），随 compiler.px 生态自举；
+# 执行器在 runtime/vm.c（C，S3-A A0 已立骨架）。
+#
+# A0 状态（2026-09-08）：
+#   - 仅骨架：BCModule 目标形态（§D8）+ 表构建工具函数 + emit 入口占位。
+#   - 尚未被 compiler.px import（`bc` 子命令随 A1 首个发射切片接入，
+#     与 golden/自举再生成同批，避免重复 3.5 分钟全量重链）。
+#   - 依赖约定：本文件由 compiler.px（主文件）import，词法/解析/解析后
+#     全局状态（g_src/p_toks/cg_*）由主文件声明（import 不注册模块顶层
+#     let/var —— 见 compiler.px 头注）；本文件只新增 bc_* 名字。
+#
+# BCModule 目标形态（A1 起发射器逐项填充，与 runtime/vm.h struct 对应）：
+#   {
+#     "name":    "主文件名去扩展",          # → PxBCModule.name
+#     "k_pool":  [ {kind,i,f,s}... ],       # 常量池 → PxK[]（PXK_INT/FLT/STR/BOOL/NULL）
+#     "n_pool":  [ "全局名/字段/方法/类型名"... ], # 名字池 → N[]
+#     "globals": [ "name"... ],             # 声明全局槽 → G[]（函数名/顶层 var）
+#     "funcs":   [ {name,arity,ndefault,nslots,bc:[inst...]}... ],  # → PxVMFunc[]
+#     "top":      funcs 下标 或 null         # 顶层代码函数
+#   }
+#   bc 指令 inst = [op, a, b, c]（op 用常量名，发射器输出 C 时映射 PXOP_*）。
+# ============================================================
+
+# ---------- 空 dict/列表工具（PuXian：{} 是空块=null） ----------
+def bc_new_dict():
+    let d = {"_": 0}
+    d.remove("_")
+    return d
+
+# ---------- 表构建 ----------
+# 常量池登记：kind ∈ "int"/"float"/"str"/"bool"/"null"；返回池下标（去重 A1 起）
+def bc_k_add(pool, kind, i, f, s):
+    let e = bc_new_dict()
+    e["kind"] = kind
+    e["i"] = i
+    e["f"] = f
+    e["s"] = s
+    let idx = len(pool)
+    pool.push(e)
+    return idx
+
+# 名字池登记（A1 起按值去重）；返回 N 下标
+def bc_n_add(pool, name):
+    var i = 0
+    while i < len(pool):
+        if pool[i] == name:
+            return i
+        i += 1
+    pool.push(name)
+    return len(pool) - 1
+
+# 全局槽登记（声明全局：函数名/顶层 var）；返回 G 下标
+def bc_g_add(globals_list, name):
+    var i = 0
+    while i < len(globals_list):
+        if globals_list[i] == name:
+            return i
+        i += 1
+    globals_list.push(name)
+    return len(globals_list) - 1
+
+# 新建空 BCModule
+def bc_new_module(name):
+    let m = bc_new_dict()
+    m["name"] = name
+    m["k_pool"] = []
+    m["n_pool"] = []
+    m["globals"] = []
+    m["funcs"] = []
+    m["top"] = null
+    return m
+
+# ---------- 指令发射（A1 起核心；A0 仅骨架） ----------
+# 发射一条指令到 func bc 列表：inst = [op, a, b, c]
+# op 用 PuXian 字符串/常量名（如 "LOADK"/"IMM"），输出 C 时映射 PXOP_*；
+# 也可直接登记 opcode 整数（对齐 runtime/vm.h #define 冻结编号，由
+# 发射器维护 op→编号 映射表，避免两处手抄漂移 —— A1 实现）。
+def bc_emit_inst(func, op, a, b, c):
+    func["bc"].push([op, a, b, c])
+
+# ---------- 各 AST 类别发射入口（A1 起逐 tag 填充；A0 全部占位报未实现） ----------
+# 发射单条语句到当前函数（stmt tag → 指令序列）；现 codegen cg_stmt.px 对拍基准
+def bc_emit_stmt(stmt, func):
+    # A1: 按 stmt tag 分发（let/var/const/赋值/expr/if/while/for/return/...）
+    panic("bc_emit_stmt 未实现: " + str(stmt))
+
+# 发射单个表达式到目标槽（expr tag → 指令序列）
+def bc_emit_expr(expr, dst_slot, func):
+    # A1: 按 expr tag 分发（~60 tag，映射到 runtime/vm.h 指令集 spec §二）
+    panic("bc_emit_expr 未实现: " + str(expr))
+
+# ---------- 模块级入口（A1 起：cg_resolve_modules 合并后单一 Program） ----------
+# prog = 解析+import 合并后的 Program（与现 codegen 同输入同粒度）
+# 返回 BCModule dict（A0 仅建壳并统计待办面；A1 起逐类填充）
+def bc_emit_program(prog):
+    let m = bc_new_module("")
+    # A0 占位：登记空表返回，等待 A1 首个发射切片（词法/解析全局由主文件置位）
+    m["name"] = "<bc-emit-skeleton>"
+    return m
