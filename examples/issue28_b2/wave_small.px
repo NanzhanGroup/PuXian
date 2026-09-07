@@ -1,0 +1,23 @@
+# 3 轮瞬时垃圾波（B2 诊断用，较快）
+def garbage_wave(n):
+    for i in range(n):
+        let s = "wave-garbage-item-" + str(i) + "-payload-string"
+        if len(s) == 0:
+            print("unreachable")
+
+def main():
+    print("W-BASELINE")
+    sleep(1000)
+    garbage_wave(120000)
+    gc()
+    print("W1-DONE")
+    sleep(400)
+    garbage_wave(120000)
+    gc()
+    print("W2-DONE")
+    sleep(400)
+    garbage_wave(120000)
+    gc()
+    print("W3-DONE")
+    sleep(2000)
+    print("W-END")

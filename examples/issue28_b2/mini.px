@@ -1,0 +1,17 @@
+# mini repro: RSS 轨迹（issue28_b2 诊断）
+def garbage(n):
+    for i in range(n):
+        let s = "mini-garbage-" + str(i) + "-payload"
+        if len(s) == 0:
+            print("unreachable")
+
+def main():
+    print("S0")
+    sleep(1200)
+    garbage(100000)
+    print("S1")
+    sleep(600)
+    gc()
+    print("S2")
+    sleep(3000)
+    print("S-END")
