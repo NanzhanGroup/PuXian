@@ -2213,8 +2213,10 @@ LXValue px_index(LXValue obj, LXValue idx) {
     }
     if (obj.type == PX_STR) {
         // M-B2 修复：字符串索引按 UTF-8 字符（与解释器字符语义、px_len 一致；原按字节导致中文错位）
+        // M89-S3-C1 补漏（M83-S1 GAP-STR-1-B1）：索引越界须用 str.len 字节边界（strlen 在
+        //   内嵌 NUL 处截断 → 含 \u{0} 的串 len()=N 但 s[0] 判越界，自举编译 pxlexer.px 崩）
         int i = (int)int_val(idx);
-        int ulen = px_unicode_len(obj.as.obj->as.str.data);
+        int ulen = px_unicode_len_n(obj.as.obj->as.str.data, obj.as.obj->as.str.len);
         if (i < 0) i += ulen;
         if (i < 0 || i >= ulen) px_error("字符串索引越界: %d", i);
         const unsigned char* p = (const unsigned char*)obj.as.obj->as.str.data;
@@ -2239,7 +2241,9 @@ LXValue px_index(LXValue obj, LXValue idx) {
         else clen = 1;
         char buf[8] = {0};
         memcpy(buf, p, clen);
-        return px_str(buf);
+        // M89-S3-C1 补漏：单字符结果须按 clen 带长构造（px_str 用 strlen → 取到 NUL 字符时
+        //   截断成空串，与 compare_values 的 memcmp+len 字节安全语义不一致）
+        return px_str_len(buf, clen);
     }
     if (obj.type == PX_DICT) {
         if (idx.type == PX_STR) {
@@ -2293,7 +2297,7 @@ LXValue px_slice(LXValue obj, LXValue start, LXValue end, LXValue step) {
     int len, kind = 0; // 0=list 1=tuple 2=str 3=bytes
     if (obj.type == PX_LIST) { kind = 0; len = obj.as.obj->as.list.len; }
     else if (obj.type == PX_TUPLE) { kind = 1; len = obj.as.obj->as.tuple.len; }
-    else if (obj.type == PX_STR) { kind = 2; len = px_unicode_len(obj.as.obj->as.str.data); }
+    else if (obj.type == PX_STR) { kind = 2; len = px_unicode_len_n(obj.as.obj->as.str.data, obj.as.obj->as.str.len); }
     else if (obj.type == PX_BYTES) { kind = 3; len = obj.as.obj->as.str.len; }
     else { px_error("无法切片: %s", px_type_name(obj)); return px_null(); }
 

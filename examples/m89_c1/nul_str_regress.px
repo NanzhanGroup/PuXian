@@ -1,0 +1,56 @@
+# M89-S3-C1 回归：内嵌 NUL 字符串索引/切片/len/拼接（runtime.c px_index/px_slice 修复验证）
+# 背景：M83-S1 修了 len() 尊重 str.len 字节边界（内嵌 NUL 不截断），但 px_index/px_slice
+#   仍用 strlen 版 px_unicode_len → 含 NUL 串 len()=N 却 s[0] 判越界 → 自举编译器 lex
+#   pxlexer.px（含 "\u{0}" 字面量 → hex_to_char 解码为内存 NUL 串 → rust_str_debug 遍历）
+#   确定性崩 "字符串索引越界: 0"。本用例用运行时 native 构造 NUL 串（绕过 codegen 对
+#   字面量 NUL 的 C 串截断局限），直接验证修复。
+def nul():          # 单个 NUL 字符（运行时构造：bytes [0x00] → str）
+    return bytes_to_str(int_to_bytes(0, 1))
+def check(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        return 1
+    return 0
+
+def main():
+    var fails = 0
+    let z = nul()
+    # 1) 纯 NUL 串
+    fails += check(len(z) == 1, "len(z)==1 got " + str(len(z)))
+    fails += check(z[0] == z, "z[0]==NUL")
+    # 2) NUL + x / x + NUL + y
+    let b = z + "x"
+    fails += check(len(b) == 2, "len(b)==2 got " + str(len(b)))
+    fails += check(b[0] == z, "b[0]==NUL")
+    fails += check(b[1] == "x", "b[1]==x")
+    let c = "x" + z + "y"
+    fails += check(len(c) == 3, "len(c)==3 got " + str(len(c)))
+    fails += check(c[0] == "x", "c[0]==x")
+    fails += check(c[1] == z, "c[1]==NUL")
+    fails += check(c[2] == "y", "c[2]==y")
+    # 3) 切片（含跨 NUL）
+    fails += check(c[0:2] == "x" + z, "c[0:2] == x<NUL>")
+    fails += check(c[1:3] == z + "y", "c[1:3] == <NUL>y")
+    fails += check(c[0:3] == c, "c[0:3] == c")
+    # 4) 反向步长切片跨 NUL
+    fails += check(c[2:0:-1] == "y" + z, "c[2:0:-1] == y<NUL>")
+    # 5) 遍历求和（迭代字符计数）
+    var n = 0
+    for ch in c:
+        n += 1
+    fails += check(n == 3, "iter c count 3 got " + str(n))
+    # 6) 普通 unicode 不受影响
+    let zh = "中文ab"
+    fails += check(len(zh) == 4, "len(zh)==4 got " + str(len(zh)))
+    fails += check(zh[0] == "中", "zh[0]==中")
+    fails += check(zh[3] == "b", "zh[3]==b")
+    fails += check(zh[1:3] == "文a", "zh[1:3]==文a")
+    # 7) 负索引
+    fails += check(c[-1] == "y", "c[-1]==y")
+    fails += check(b[-2] == z, "b[-2]==NUL")
+    if fails == 0:
+        print("NUL-STR REGRESSION PASSED")
+    else:
+        print("NUL-STR REGRESSION FAILED: " + str(fails))
+        return 1
+    return 0

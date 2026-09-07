@@ -371,3 +371,22 @@
 >   生成器）✓ B4（闭包 P1）✓ B5（并发/原语桥）✓ —— 微步全落地；**里程碑门**（cases 全量 +
 >   examples 全量 VM vs 旧轨 stdout 一致 vm_ab.sh v2）待 S3-C 收口时补全量 harness 回归
 >   （本段以 bc1-12 自建用例 + 代表性对拍为验证基准，见 §七 S3-B 门）。
+
+### S3-C · C1 自举：runtime 内嵌 NUL 修复 + 编译器全量 BCModule 发射打通（2026-09-08 启动）
+> C1 目标（docs/M89_vm_design.md §七 S3-C）：compiler.px（+bc_emit 自身）在 VM 上编译自身
+> → 字节码镜像；与现 C 递归产物编译结果对拍一致。
+> - **第一步（本批）—— 前置阻塞清除 + 发射完备性证明**：
+>   - runtime 内嵌 NUL 字符串 bug 修复（见 CHANGELOG M89-S3-C1）：px_index/px_slice 越界
+>     检查与单字符结果构造的 strlen 截断 = S0 记录 "pxc 重链后编 interp.px 崩 rust_str_debug
+>     行462" 的真凶；修复后 bc_cli 处理 pxlexer.px/compiler.px exit 0。
+>   - **bc_emit 对编译器全量发射成功**：compiler.px 全 import 链（codegen/parser/pxlexer/
+>     cg_stmt/cg_expr/cg_module/bc_emit，~4700 行合并源码）→ BCModule dump 21456 行 exit 0，
+>     173 funcs / 226 globals / 809 K —— 语言覆盖达自举完备，零未实现 panic。
+>   - 基线入库：selfhost/golden/compiler.bc.dump（382KB，重复运行逐字节一致）。
+>   - 回归：examples/m89_c1/nul_str_verify.sh PASS + bc4/8/11 + hello 三轨 + B1 parity 全绿。
+> - 记录：bc_emit 对 compiler.px 发射耗时 ~6 min（C 递归引擎解释 4700 行编译器源码的固有
+>   成本；后续 VM 镜像重放会更慢，性能优化点：全局/K 池线性扫描可 hash 化——留待 C1 对拍
+>   通过后按需做）；codegen 对字面量 NUL 的 C 串截断是编译轨固有局限（运行期串字节安全，
+>   不受影响）。
+> - 下一步（C1 对拍）：bc_cli --emit-c bc_cli.px → gcc → VM 驱动；跑 compiler.px 重放
+>   BCModule dump，与 golden/compiler.bc.dump 逐字节对拍（VM 编译器编译自身的第一证明）。

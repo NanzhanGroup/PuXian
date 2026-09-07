@@ -1383,3 +1383,29 @@
 > - 验证：bc5（Err 两跳 ? 传播 → exit 1 + stderr 除零）、bc6（FORCE Ok + null ? 传播 →
 >   exit 0）ALL PASS；bc1-4 dump golden 回归；bc2/3/4 verify + hello 三轨复跑全绿。
 > - S3-A 收口：A0-A5 完成，hello.px VM=旧C=pxi 三轨逐字节一致；fib.px 依赖容器 → S3-B。
+
+### M89-S3-C1 · VM 化自举收敛起步：runtime 内嵌 NUL 字符串修复 + 编译器全量 BCModule 发射打通
+
+> 完成（2026-09-08）：C1 自举第一道阻塞清除 + 编译器字节码镜像基线建立。
+> - **根因**：M83-S1（GAP-STR-1-B1）修 len() 尊重 str.len 字节边界，但 px_index/px_slice
+>   仍用 strlen 版 px_unicode_len（内嵌 NUL 截断）→ 含 \u{0} 的串 len()=N 却 s[0] 判越界；
+>   且字符串索引单字符结果用 px_str（strlen）构造，取到 NUL 时截断成空串。该 bug = S0 记录的
+>   "pxc 重链后编 interp.px 确定性崩 rust_str_debug 行462" 真凶 —— 自举编译器 lex 含 "\u{0}"
+>   字面量的源码（pxlexer.px 等）时 rust_str_debug 遍历 NUL 串崩 "字符串索引越界: 0"。
+> - **修复**（runtime/runtime.c 3 处）：px_index 越界检查改 px_unicode_len_n(data, str.len)；
+>   单字符结果改 px_str_len(buf, clen)；px_slice str len 改 px_unicode_len_n(data, str.len)。
+>   修复后 bc_cli 处理 pxlexer.px/compiler.px（原确定性崩）exit 0。
+> - **编译器全量 BCModule 发射打通（C1 核心前置）**：bc_emit 对 compiler.px（+codegen/
+>   parser/pxlexer/cg_*/bc_emit 全 import 链 ~4700 行合并源码）完整发射成功 —— 173 funcs /
+>   226 globals / 809 K 常量，dump 21456 行 exit 0 零未实现 panic → bc_emit 语言覆盖已达
+>   编译器自举完备（修复前连 resolve 阶段都到不了）。
+> - **基线**：golden/compiler.bc.dump（382KB，编译器 BCModule dump 权威基线，重复运行
+>   diff 逐字节一致——发射确定性实证）。
+> - **回归**：新增 examples/m89_c1/nul_str_regress.px（运行时构造 NUL 串：len/索引/切片/
+>   反步长切片/遍历/拼接/负索引/中文不受影响）nul_str_verify.sh PASS；bc4/bc8/bc11 verify +
+>   hello 三轨 + B1 parity 复跑全绿（runtime 改动零回归）。
+> - 记录：编译轨 codegen 对字面量 NUL（\u{0}）在 C 源码层截断（C 串 "\0" 终止）——运行期
+>   内存串字节安全不受影响（lexer 解码路径已由本修复覆盖）；to_upper/to_lower/trim 等原生
+>   仍 strlen 截断 NUL（不在自举路径，留待后续 GAP-STR 收口）。
+> - 下一步：C1 镜像对拍 —— bc_cli 自身 emit-c 成 VM 驱动，跑 compiler.px 重放 dump 与
+>   golden/compiler.bc.dump 逐字节对拍（VM 上编译器编译自身）。
