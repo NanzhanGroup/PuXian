@@ -235,3 +235,28 @@
 >   （list/dict/range/推导式）→ S3-B。A 段门（cases s01-s07+hello/fib）中 fib 随 S3-B 补齐。
 > - 下一步：S3-B 全构造（容器 NEWLIST/NEWTUPLE/NEWDICT/INDEX/SETF/字段 GETF/SETF、方法
 >   CALLM、for-in、推导式、闭包 P1、生成器/并发桥）。
+
+### S3-B · B1 容器/字段/方法桥/For 迭代（S3-B 首切）
+> 完成（2026-09-08）：**C 表容器/字段 op 全接线 + 发射器字面量/索引/切片/字段/方法/For**。
+> - **runtime/vm.c**：NEWLIST/NEWTUPLE/NEWDICT（自连续槽拷贝建容器；dict 仅 str 键入池对齐
+>   codegen）、INDEX/SETIDX/SLICE、GETF/SETF/GETF_OPT（px_field/px_field_set，dict 字段=
+>   px_field→dict_get）、CALLM（方法桥 px_method：a=dst,b=obj,c=N 名,fl=argc，args=槽 b+1..
+>   b+argc）。NEWSTRUCT/NEWENUM 待 B2 类型元数据表。
+> - **selfhost/bc_emit.px**：① 指令升 5 元组 [op,fl,a,b,c]（fl 预留，CALLM 用 argc；dump/C
+>   输出跳过 fl → bc1-6 golden 文本不变，实测回归一致）；② 表达式 List/Tuple/Dict 字面量 →
+>   NEWLIST/NEWTUPLE/NEWDICT、Index→INDEX、Slice→SLICE（缺省界置 null）、Field→GETF、
+>   OptionalField→GETF_OPT、方法调用 obj.m(args)（callee Field）→ CALLM；③ Assign 目标
+>   扩 Var/Index/Field + 复合赋值（读旧值→运算→写回）+ `a <- rhs` Append（→ append 方法桥）；
+>   ④ For 迭代展开（对齐 cg：CALL len → 计数器 → INDEX 取元素 → body → 计数+1；break/
+>   continue ctx 回填，continue=跳回增量后重判 cond）；⑤ hoist 收集补 For 循环变量 + For
+>   body 递归。Field 的 enum/const enum 折叠、struct 构造调用 → B2 类型元数据表接入。
+> - **验证**：cases_bc/bc7.px+dump golden（list/tuple/dict 字面量、索引读写、切片、str 索引、
+>   dict 字段 GETF、CALLM list.push/str.to_upper、For 迭代 dict、局部/全局复合赋值）——
+>   **bc7_verify.sh 13 断言全 PASS**；**m89_b1_parity.px 容器双轨对拍（VM=旧 C codegen）
+>   stdout 逐字节一致 PASS**（total=112/sl=[99,3]/d.a/d.b/s=HI/len=5）；bc1-6 dump golden
+>   不变 + bc2-6 verify + hello 三轨复跑全绿。
+> - 决策/记录：bc_run.sh 自动探测 rtcache 改「按 mtime 最新含 vm.o」（避免命中 vm.c 改动前
+>   旧 vm.o）；VM 帧槽尚未入 GC 根面（保守扫描面外，A/B 测试规模安全；S3-D 段切精确根）；
+>   bc_emit 不做 M41.2 不可变检查等静态语义校验（语义校验走 compiler/codegen，VM 侧收口时对齐）。
+> - 下一步：B2 构造/类型（NEWSTRUCT/NEWENUM + struct/enum/const enum 类型元数据表 +
+>   impl 方法注册 "Type.method" → G 槽）。

@@ -68,10 +68,10 @@ typedef struct {
 #define PXOP_SHRU   27
 // C 容器/字段
 #define PXOP_INDEX   28  // a=dst, b=obj s2, c=idx s3
-#define PXOP_SETIDX  29  // a=dst(值/结果), b=obj s2, c=idx s3
+#define PXOP_SETIDX  29  // a=val 槽, b=obj s2, c=idx s3（px_index_set；结果=val）
 #define PXOP_SLICE   30  // a=dst, b=obj, c=3 连续槽基址[start,end,step]
 #define PXOP_GETF    31  // a=dst, b=obj s2, c=N[n]
-#define PXOP_SETF    32  // a=val(结果), b=obj s2, c=N[n]
+#define PXOP_SETF    32  // a=val 槽, b=obj s2, c=N[n]（px_field_set；结果=val）
 #define PXOP_GETF_OPT 33 // a=dst, b=obj s2, c=N[n]（OptionalField：null→null）
 #define PXOP_NEWLIST 34  // a=dst, b=连续槽基址, c=n
 #define PXOP_NEWTUPLE 35 // a=dst, b=连续槽基址, c=n
@@ -81,7 +81,7 @@ typedef struct {
 #define PXOP_LISTPUSH 39 // a=val, b=list 槽
 // D 调用/返回
 #define PXOP_CALL    40  // a=dst, b=callee 槽 s2, c=argc；参数=槽 s2+1..s2+argc 连续区
-#define PXOP_CALLM   41  // a=dst, b=obj 槽 s2, c=N[n]；方法调用（px_method 桥）
+#define PXOP_CALLM   41  // a=dst, b=obj 槽 s2, c=N[n], fl=argc；方法调用（px_method 桥，args=槽 b+1..b+argc）
 #define PXOP_CALLSELF 42 // a=dst, b=callee 槽 s2, c=argc（self=首参，现 call_with_self）
 #define PXOP_TAILCALL 43 // b=callee 槽 s2, c=argc（复用当前帧，S3-C）
 #define PXOP_RET     44  // a=src s（返回槽 s 值）
