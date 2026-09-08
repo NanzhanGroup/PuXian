@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### M89-S3-C2-5c · bootstrap/pxi_vm —— pxi VM 化原型（切片 3，分支试做）
+
+> 完成（2026-09-09，dongyue）：compiler_vm --emit-c interp.px（装配壳 + 全
+> 解释链 parser/env/cg_module/it_util/i_err/ival/icall/ibuiltin/iexpr/istmt）
+> → BCModule 静态 C → gcc -static 链 → bootstrap/pxi_vm（9.3M 静态 ELF，
+> **解释器自身跑在显式帧 VM 上**）。发射层面证明 bc_emit 已覆盖解释器全链
+> 语法构造。--version = pxi 0.2.0；hello / m22_bitwise_data / p8_slice_base64
+> / struct 与 bootstrap/pxi 逐字节一致。默认轨未切（pxi_vm 供 PXI_BIN/PX_PXI
+> 覆盖式实验）。
+
 ### M89-S3-C2-5b · bootstrap/pxc_vm —— pxc VM 化静态重链（切片 2，分支试做）
 
 > 完成（2026-09-09，dongyue）：compiler_vm 静态重链落位 bootstrap/pxc_vm
