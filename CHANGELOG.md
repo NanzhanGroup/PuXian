@@ -1409,3 +1409,20 @@
 >   仍 strlen 截断 NUL（不在自举路径，留待后续 GAP-STR 收口）。
 > - 下一步：C1 镜像对拍 —— bc_cli 自身 emit-c 成 VM 驱动，跑 compiler.px 重放 dump 与
 >   golden/compiler.bc.dump 逐字节对拍（VM 上编译器编译自身）。
+
+### M89-S3-C1 · 自举证明 PASS：VM 编译器编译自身，BCModule dump 与 golden 逐字节一致
+
+> 完成（2026-09-08，dongyue 重放）：S3-D（96a8e4b 帧槽 GC 根止血）落地后，C1 自举对拍通过。
+> - **证明链**：① 旧轨 bc_cli dump compiler.px == golden/compiler.bc.dump（本机基线复核一致）；
+>   ② bc_cli --emit-c bc_cli.px → bc_cli_vm.c（990,651 B）→ gcc 链 rtcache（含 vm.o，S3-D）
+>   → bc_cli_vm（VM 驱动版编译器）；③ bc_cli_vm compiler.px 重放 → dump 21,456 行 / 382,650 B
+>   **与 golden/compiler.bc.dump 逐字节一致（diff 空，rc=0）** —— 编译器字节码镜像在 VM 上
+>   编译自身，与旧 C 递归引擎产物完全一致，VM 语义等价第一证明。
+> - **S3-D 止血实证**：VM 重放 compiler.px 全链 rss ≤ ~0.5 GB（对比 OOM 记录 7.1GB 泄漏态），
+>   10GB ulimit 内完成无泄漏 —— VM 帧槽入 GC 根面修复有效。
+> - **内存记录**：emit-c bc_cli.px 走旧 C 引擎（非 VM），虚拟内存高水位 >6GB（slab 不还 OS +
+>   全链大对象，issue28 技术债）→ 本地验证需 ulimit ≥9.5GB；VM 路径不受影响。
+> - **回归**：旧轨 bc1-12 dump golden 全绿；VM 冒烟 bc1/bc2 dump 一致；hello/旧轨一致。
+> - 环境注：dongyue 缺 glibc static → 本地链接去 -static（仅开发验证，发布仍静态）。
+> - 下一步：C2 golden 切换（compiler.c → BCModule 镜像 + 自举证明规则更新）+ S3-C 收口门
+>   （vm_ab.sh v2 examples 全量 VM vs 旧轨 stdout 对拍）。
