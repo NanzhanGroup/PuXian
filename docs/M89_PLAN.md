@@ -544,3 +544,42 @@
 >   自身 VM 化静态重链）+ pxi_vm（解释器自身 VM 化）—— C2 主体的技术可行性
 >   全部实证；剩余 = 默认轨切换的 golden 大迁移（diffcheck s01-s15 .c / capa-
 >   bility / 全量回归），需在主干整体规划后执行。
+
+### S3-C · C2 收口：三大切片合入 main + 主干全量回归绿（2026-09-09，dongyue）
+
+> 完成：分支 feat/m89-c2-vmtoolchain（C2-5/5b/5c 三大切片）**ff 合入 main**
+> （8ebaacd）并 push GitHub main —— px build --vm + bootstrap/pxc_vm +
+> bootstrap/pxi_vm 全部落主干，工作区干净。合入后主干全量回归复跑全绿：
+> - **bootstrap_prove.sh**（C 轨自举）✅ 14986 行 == golden/compiler.c
+> - **bootstrap_prove_bc.sh**（BC 轨自举）✅ compiler_vm 重放 dump 30445 行
+>   == golden/compiler.bc.dump 逐字节一致
+> - **vm_ab.sh v2**（S3-C 收口门）✅ 19 PASS + 0 GAP + 0 FAIL
+> - **diffcheck.sh --all**（lex/parse/codegen/run vs golden）✅ 全量对拍通过
+> - 本地分支已删，远程 feat/m89-c2-vmtoolchain 保留可追溯
+> - **S3-C 段（C1 自举 + C2 golden 双轨同步/BC 轨自举证明/推导式 GAP 补齐/
+>   收口门 GAP→0/三大 VM 化切片）技术目标全部达成**。
+
+### S3-C · 决策记录：默认轨切换不在 S3-C 段做（2026-09-09，dongyue）
+
+> 剩余最大项「px build 默认产物切 BC + diffcheck/capability/全量回归 golden
+> 从 fn_* C 文本形态迁 BCModule 形态」**不在 S3-C 段执行**，理由（工程判断）：
+> 1. **收益未到兑现点**：VM 轨当前是解释执行（无 JIT/native），把 px 默认
+>    产物切到 BCModule 会让所有用户程序从「C 文本编译产物直接机器码执行」
+>    退为「VM 解释执行」——性能倒退；VM 化的价值（显式帧 → 精确 GC/帧协程/
+>    native 后端）尚未在本里程碑兑现，默认切换只增成本不增收益。
+> 2. **成本高风险大**：diffcheck s01-s15 的 .c golden、capability、全量回归
+>    全部依赖 fn_* C 文本形态；golden 大迁移 = 重生成全部基准 + 改造断言 +
+>    主干验证体系整体动手术，不可逆、易碎，需独立规划与稳定期。
+> 3. **技术可行性已实证**：C2 三切片证明 VM 化全链路（产物/编译器/解释器）
+>    与旧轨逐字节一致；工程化铺开（默认切换 + golden 迁移）应作为 M89 后段
+>    （GC/协程/native 前置需求明确时）或独立里程碑的专项，而非 S3-C 收口
+>    的必要条件。
+> → **S3-C 段正式收口**；默认轨切换挂起为后置决策项（触发条件：native 后端
+>   立项 / 精确 GC 需要 VM 为唯一执行轨 / 用户拍板性能换架构统一）。
+
+### S3-C · vm_ab 收口门扩展：19 例 → 确定性 examples 全量（2026-09-09，dongyue）
+
+> S3-C 收口门定义本义 = examples 全量 VM vs 旧轨 stdout 对拍（M89_PLAN
+> C2 记录原文）。当前 vm_ab.sh v2 清单 19 例为精选确定性子集；收口后
+> 下一步将清单扩展到 examples 中全部「确定性本地输出」（无网络/无外部
+> 服务/无不可控时间输出）用例，逐批补 bc_emit 缺口 → 收口门覆盖最大化。
