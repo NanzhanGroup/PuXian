@@ -468,3 +468,20 @@
 > - 下一步（C2 主体剩余）：bootstrap/pxc/pxi 重链 VM 版（pxc 产物 = BCModule 内嵌 C +
 >   VM 启动 main，px build 默认切 BC）；S3-C 收口门 vm_ab.sh v2（examples 全量 VM vs
 >   旧轨 stdout 对拍）。
+
+### S3-C · C2-4 推导式 3 GAP 补齐 + VM op GENFROMLIST —— 收口门 GAP→0（2026-09-08，dongyue）
+> 完成（C2-4）：补齐 vm_ab.sh v2 首跑记录的 3 GAP（m30_comp 推导式多变量/
+> m32_gen 多 for GenExp/m34_gen_lazy 物化）→ S3-C 收口门全绿 **19 PASS + 0 GAP
+> + 0 FAIL**（VM 与旧轨 pxi stdout 逐字节一致）。
+> - runtime 新增 op **PXOP_GENFROMLIST 56**（a=dst, b=list 槽 → px_gen_from_list
+>   物化包 gen；对齐 codegen px_gen_from_list/pxi it_gen）。指令集纯追加（55 op
+>   编号语义零改动），PXM_MAX 57。
+> - bc_emit.px：bc_emit_comp 多变量子句支持（逐字段 INDEX 解包，越界 null 对齐
+>   pxi i_bind_comp_vars；单变量分配序保持既有 → bc1-12 dump golden 全回归不变）；
+>   bc_emit_genexp 物化路径（非单 for 单变量 → NEWLIST + 嵌套循环 + GENFROMLIST）。
+> - golden 双轨同步：compiler.c（14987 行）→ C 轨自举 rc=0；compiler.bc.dump
+>   （30446 行，diff 仅 bc_emit_comp 自身字节区）→ VM compiler_vm 重放 == golden
+>   （BC 轨自举 rc=0）。
+> - 下一步（C2 主体剩余）：bootstrap/pxc/pxi VM 化重链（pxc 产物 = BCModule
+>   内嵌 C + VM main，px build 默认切 BC）—— 建议分支试做 + 重生成 BC golden
+>   对比，避免动主干 diffcheck（s01-s15 .c 形态）。

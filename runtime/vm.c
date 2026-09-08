@@ -56,6 +56,7 @@ const char* px_op_name(int op) {
         [PXOP_HALT] = "HALT",
         [PXOP_NEWGEN] = "NEWGEN", [PXOP_SPAWN] = "SPAWN",
         [PXOP_ENUMVAR] = "ENUMVAR",
+        [PXOP_GENFROMLIST] = "GENFROMLIST",
     };
     if (op < 0 || op >= PXM_MAX || !names[op]) return "?";
     return names[op];
@@ -422,6 +423,12 @@ LXValue px_vm_run_func(PxVmState* st, const PxVMFunc* f, LXValue* args, int narg
         //   （match 模式匹配 variant 判断；对齐 cg subject.type==PX_ENUM && strcmp）
         case PXOP_ENUMVAR:
             fr->slots[in.a] = px_enum_variant(fr->slots[in.b]);
+            break;
+        // GENFROMLIST（S3-C C2）：a=dst，b=list 槽 → px_gen_from_list —— 物化
+        //   GenExp（多 for/多变量子句）先收集 list 再包成 generator（对齐 codegen
+        //   cg GenExp 物化路径 px_gen_from_list；pxi 轨 i_eval GenExp it_gen 同语义）
+        case PXOP_GENFROMLIST:
+            fr->slots[in.a] = px_gen_from_list(fr->slots[in.b]);
             break;
         case PXOP_LISTPUSH:  // a=val 槽，b=list 槽（值入列表尾）
             px_list_push(fr->slots[in.b], fr->slots[in.a]);

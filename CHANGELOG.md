@@ -6,6 +6,32 @@
 
 ## [Unreleased]
 
+### M89-S3-C2-4 · 3 GAP 补齐（推导式多变量子句 + GenExp 物化路径）+ VM op GENFROMLIST —— S3-C 收口门 GAP→0
+
+> 完成（2026-09-08，dongyue）：补齐 bc_emit 推导式已知缺口（vm_ab.sh v2 首跑
+> 记录的 3 GAP：m30_comp/m32_gen/m34_gen_lazy）→ 收口门全绿 **19 PASS + 0 GAP
+> + 0 FAIL**（VM 与旧轨 pxi stdout 逐字节一致）。
+> - **runtime/vm.h + vm.c**：新 op **PXOP_GENFROMLIST 56**（a=dst, b=list 槽 →
+>   px_gen_from_list：物化 GenExp 收集完 list 后包成 generator，对齐 codegen
+>   px_gen_from_list / pxi it_gen 语义）；PXM_MAX 56→57；op 名表 + 分发 case。
+>   指令集按名字扩展（既有 55 op 编号/语义零改动，纯追加）。
+> - **selfhost/bc_emit.px**：① bc_emit_comp 支持**多变量子句**（for k, v in ...：
+>   进入子句前每变量分配槽 + 保存旧绑定，循环体内迭代元素 INDEX 到 item 槽后
+>   逐字段 px_index(item,i) 解包，越界 null —— 对齐 pxi i_bind_comp_vars /
+>   cg bind；单变量路径分配序与既有实现一致，**bc1-12 dump golden 全回归不变**）
+>   ② bc_emit_genexp 增**物化路径**：非「单 for 单变量」GenExp（多 for 笛卡尔积 /
+>   多变量解包）→ NEWLIST 收集 + bc_emit_comp 嵌套循环展开 + GENFROMLIST 包 gen
+>   （对齐 codegen cg GenExp 物化分支）；单 for 单变量仍走 NEWGEN 惰性不回归。
+> - **golden 双轨同步**（bc_emit.px 被 compiler.px import → 编译器生态变化）：
+>   golden/compiler.c = pxc 编 compiler.px 新产物（14987 行）→ bootstrap_prove
+>   rc=0（C 轨自举成立）；golden/compiler.bc.dump = compiler_new bc compiler.px
+>   新镜像（30446 行，diff 仅 bc_emit_comp 函数自身字节区）→ compiler_vm 重放
+>   == golden 逐字节一致（BC 轨自举成立）。
+> - 回归：bc1-12 dump golden 全绿；m30_comp（ALL PASSED）/m32_gen（m32_gen_ok）
+>   /m34_gen_lazy（M34_GEN_LAZY_OK）VM 轨通过；vm_ab.sh v2 全量 19 PASS。
+> - 下一步：C2 主体剩余 —— bootstrap/pxc/pxi VM 化重链 + px build 默认切 BC
+>   产物（pxc 产物 = BCModule 内嵌 C + VM main）；建议分支试做 + 重生成 BC golden。
+
 ### M89-S3-C2-3b · vm_ab.sh v2 —— S3-C 收口门骨架（examples 确定性用例 VM vs 旧轨 stdout 对拍）
 
 > 完成（2026-09-08，dongyue，commit b5bddb4）：S3-C 收口门落地首版 —— 对拍
