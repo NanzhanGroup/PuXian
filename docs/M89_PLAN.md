@@ -636,8 +636,22 @@
 >   gc() + 垃圾波后 gen_next 消费校验 2340）PASS。
 >
 > **测试资产**：examples/m89_s3d/（vm_spawn_smoke.px / vm_conc_gc_stress.px /
-> gen_gc_stress.px / verify.sh）——verify.sh = 冒烟 + 并发 GC 压测 ×3 + gen 护栏，
-> PX_GC_THRESHOLD=20000 低阈值放大窗口。
-> - 下一步：D3 issue28 验收压测（本机可达子集：spawn/回调/生成器专项 + g_gc_debug
->   标记数核对 + 堆回落；单发 p95/500 并发 p50 全量标准需 ws-approve 隔离环境）；
->   后置（默认轨切 VM 后）：退役整栈保守扫描、原生桥 ≤60 处逐一登记、cell 标记。
+> gen_gc_stress.px / verify.sh）——verify.sh = 冒烟 + 并发 GC 压测 ×3 + gen 护栏 +
+> VM 轨堆回落 3 波采样，PX_GC_THRESHOLD=20000 低阈值放大窗口；6 PASS 全绿。
+>
+> ### S3-D-3 · issue28 验收（本机可达子集 + 部署路径，2026-09-09，dongyue）
+> - **正确性/根面压测子集全过**：verify.sh 6 PASS（含并发 GC 压测 ×3、gen 护栏、
+>   VM 轨 3 波垃圾堆回落 RSS 距基线 <40MB）；并发压测 PX_GC_DEBUG=1 轨迹核对
+>   12 轮 GC（8 轮并发 8 线程）标记/回收计数正常、无异常（大波 118k 对象正确
+>   回收、存活对象无一误回收）→ 跨线程帧根在真实 STW 并发 GC 下稳定。
+> - **收口门回归**：vm_ab v2（full 模块 rtcache）**38 PASS + 0 GAP + 0 FAIL**。
+> - **全量验收（单发 p95≤50ms/max≤100ms、500 并发 p50≤200ms、无周期尖刺）**：
+>   属 ws-approve 隔离环境标准（ISSUE28_PLAN §三），本机不达标的子集留**部署
+>   复核**——且语义上该延迟验收应在「默认轨切 VM + 纯精确（退役整栈保守扫描）」
+>   之后才具最终意义（当前双根过渡期 STW 仍含保守栈扫描，延迟未到设计目标）。
+> - **S3-D 本批收口**：D1（并发 VM 帧根）+ D2a（PX_GEN 标记）+ D3 本机子集完成，
+>   commit 4343891（push GitHub main）。**后置决策项（触发 = 默认轨切 VM）**：
+>   ① 退役整栈保守扫描（旧 C 轨 fn_* 局部即 C 栈变量，须 VM 独占后才安全）；
+>   ② 原生桥 ≤60 处逐一根登记（双根期保守栈扫已兜底）；③ cell（闭包 upvalue）
+>   标记（P2 未实现，现无 cell 对象）。三者与「px build 默认切 BC + golden 大
+>   迁移」同属默认轨切换批次，是 M89-S4 收口前的最大待决项。
