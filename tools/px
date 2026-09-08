@@ -427,9 +427,17 @@ cmd_build() {
     #    VM 轨（--vm）= VM 版编译器 --emit-c（BCModule 字节码镜像 C，M89-S3-C2）
     local cmp_bin="$PXC_BIN" cmp_sub="build"
     if [ "$vm" = 1 ]; then
-        cmp_bin="${PXC_VM_BIN:-$PXC_HOME/selfhost/build/compiler_vm}"
+        # VM 版编译器优先级：PXC_VM_BIN 环境变量 > bootstrap/pxc_vm（静态，入库）
+        #   > selfhost/build/compiler_vm（dev 自举缓存，需先跑 bootstrap_prove_bc.sh）
+        if [ -n "${PXC_VM_BIN:-}" ]; then
+            cmp_bin="$PXC_VM_BIN"
+        elif [ -x "$PXC_HOME/bootstrap/pxc_vm" ]; then
+            cmp_bin="$PXC_HOME/bootstrap/pxc_vm"
+        else
+            cmp_bin="$PXC_HOME/selfhost/build/compiler_vm"
+        fi
         cmp_sub="--emit-c"
-        [ -x "$cmp_bin" ] || { echo "错误: --vm 需要 VM 版编译器 $cmp_bin（先跑 selfhost/bootstrap_prove_bc.sh 生成）" >&2; return 1; }
+        [ -x "$cmp_bin" ] || { echo "错误: --vm 需要 VM 版编译器 $cmp_bin（bootstrap/pxc_vm 或先跑 selfhost/bootstrap_prove_bc.sh 生成）" >&2; return 1; }
     fi
     "$cmp_bin" $cmp_sub "$file" > "$c_path" 2>/dev/null || {
         echo "错误: 编译失败（$file）" >&2

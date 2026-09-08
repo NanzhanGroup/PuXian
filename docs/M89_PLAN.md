@@ -509,3 +509,21 @@
 >   现可链）→ px build --vm 默认指 pxc_vm；pxi VM 化（interp.px 增 bc 发射 +
 >   golden 同步）评估；分支验证通过后再谈默认轨切换（需整体规划 diffcheck/
 >   capability 的 fn_* .c 形态 golden 迁移）。
+
+### S3-C · C2-5b bootstrap/pxc_vm —— pxc VM 化静态重链（切片 2，分支试做）
+> 完成（分支 feat/m89-c2-vmtoolchain 切片 2）：pxc 的 VM 化重链原型落地 ——
+> **compiler_vm 静态重链落位 bootstrap/pxc_vm**（9.3M 静态 ELF，与 pxc/pxi 同为
+> 引导二进制入库）。px build --vm 编译器默认路径升级：PXC_VM_BIN 环境变量 >
+> bootstrap/pxc_vm（静态，clone 即用）> selfhost/build/compiler_vm（dev 自举
+> 缓存）。gcc -static 本机可用（C2-5 已装 glibc-static）是重链前置。
+> - 链法：selfhost/build/compiler_vm.c（compiler.px 字节码镜像静态 C）→ gcc
+>   -static 链 rtcache（含 vm.o）→ bootstrap/pxc_vm。--version = pxc 0.2.0。
+> - **自举一致实证**：pxc_vm bc compiler.px 重放（约 6 分钟，RSS ~0.76GB 内存
+>   可控）→ dump 30446 行 == golden/compiler.bc.dump **逐字节一致** —— 静态
+>   VM 版编译器具备权威编译能力，与动态 compiler_vm 完全等价。
+> - 验证：px build --vm（PXC_VM_BIN=./bootstrap/pxc_vm）fib 静态产物 == pxi
+>   逐字节一致；pxc_vm bc hello == compiler_vm bc hello 一致。
+> - 下一步（切片 3 评估）：pxi VM 化（interp.px import bc_emit + emit-c →
+>   pxi_vm 静态 ELF，解释器自身跑 VM）—— compiler_vm --emit-c interp.px 可行
+>   性实验先行；分支验证通过后再谈默认轨切换（diffcheck/capability fn_* .c
+>   golden 迁移需整体规划）。
