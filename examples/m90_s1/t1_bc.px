@@ -1,0 +1,9 @@
+var bc = 0
+for i in range(10):
+    if i == 2:
+        continue
+    if i == 5:
+        break
+    bc += 1
+print("bc=" + str(bc))
+print("T1-DONE")

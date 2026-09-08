@@ -1,0 +1,53 @@
+# ============================================================
+# M90-S1/F1: 默认参数功能专项（bc_emit 默认参数支持验收）
+# ------------------------------------------------------------
+# 覆盖：
+#   1) 常量默认值 · 直接调用 全/半/满实参
+#   2) 多默认参数部分提供（cfg 2 默认：给 0/1/2 个）
+#   3) 默认表达式引用全局（gx：c 默认 = g_base 全局；注意：旧轨 pxi
+#      在 def 定义时求值固化默认，C/VM 轨在调用时入口求值 —— 本文件
+#      g_base 定义后不改，两轨输出一致。引用前参的入口求值语义见
+#      cmpsem 专项（C 轨产物 vs VM 轨产物，不走 pxi））
+#   4) 别名间接调用缺默认（g=greet; g(...) → callee 入口兜底，
+#      与 codegen (nargs>i)?args[i]:default 语义一致）
+# 验证：旧轨 pxi 解释 vs VM 轨 emit-c 产物 stdout 逐字节一致
+#      （verify.sh 双轨 diff）。
+# 注意：只用两轨均已支持的语言特性，避免无关缺口混淆 F1 验收。
+# ============================================================
+def greet(who, punct = "!"):
+    return "hi " + who + punct
+
+def cfg(host, port = 8080, tls = false):
+    var s = host + ":" + str(port)
+    if tls:
+        s += " (tls)"
+    return s
+
+def scale(x, k = 2, off = 1):
+    return x * k + off
+
+var g_base = 100
+
+def gx(a, c = g_base):
+    return a + c
+
+print(greet("px"))
+print(greet("px", "?"))
+print(cfg("h"))
+print(cfg("h", 9000))
+print(cfg("h", 9000, true))
+print(scale(5))
+print(scale(5, 3))
+print(scale(5, 3, 10))
+print(gx(1))
+print(gx(1, 7))
+# 别名间接调用（callee 侧兜底路径）
+let g = greet
+print(g("ali"))
+print(g("ali", "~"))
+let c = cfg
+print(c("a"))
+print(c("a", 7000, true))
+# 返回值再参与表达式（默认参数函数非语句调用）
+print("sum=" + str(scale(4) + scale(4, 5)))
+print("DONE")

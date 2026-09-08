@@ -1,0 +1,24 @@
+# M90-S1 附带排查：capability 11 段控制流片段最小复现（VM 卡点定位）
+var bc = 0
+for i in range(10):
+    if i == 2:
+        continue
+    if i == 5:
+        break
+    bc += 1
+check = bc == 4
+print("break/continue bc=" + str(bc) + " expect4=" + str(check))
+# 列表推导
+var lc = [x * x for x in range(5)]
+print("listcomp=" + str(lc))
+var lc2 = [x for x in range(6) if x % 2 == 0]
+print("listcomp2=" + str(lc2))
+# dict 推导
+var dc = {str(x): x for x in range(3)}
+print("dictcomp=" + str(dc["1"]) + "," + str(dc["2"]))
+# 生成器
+var g = (x * 2 for x in range(4))
+print("gen1=" + str(gen_next(g)) + " gen2=" + str(gen_next(g)))
+var g2 = (x for x in range(3))
+print("genlist=" + str(list(g2)))
+print("SEG11-DONE")

@@ -100,7 +100,9 @@ typedef struct {
 #define PXOP_ENUMVAR 55  // a=dst, b=obj 槽（enum→px_str(variant)；非 enum→null；B3b match 用）
 #define PXOP_GENFROMLIST 56 // a=dst, b=list 槽（S3-C C2：GenExp 物化路径 list→generator，
                             //   对齐 codegen px_gen_from_list —— 多 for/多变量推导先收集再包 gen）
-#define PXM_MAX      57
+#define PXOP_NARGS   57      // a=dst s（M90-S1/F1：槽s = 本帧实际实参数 nargs（int）——
+                            //   默认参数入口填充序列读取「实参是否提供槽 i」用 nargs ≤ i 判定）
+#define PXM_MAX      58
 
 // ==================== 常量子（K 池） ====================
 // 发射器按 kind 生成静态项；LOADK 时物化为 LXValue（str 需 strdup/常驻，
@@ -158,12 +160,16 @@ struct PxBCModule {
 // 递归一层。D7：TRY 遇 Err 即 RET 传播 → 帧无需 err 字段（RET 即返回 err 值）。
 typedef struct {
     const PxVMFunc* f;
-    LXValue*        slots;     // 槽数组：slots[0..arity-1] 参数；其后局部+临时
+    LXValue*        slots;     // 槽数组：slots[0..tot-1] 参数（tot=arity+ndefault）；
+                               //   其后局部+临时。缺的默认参数槽由函数入口 NARGS+填充
+                               //   分支补（M90-S1/F1 对齐 codegen callee 侧入口语义）
     int             nslots;
     int             pc;        // 返回时恢复
     int             line;      // SRCLINE 最近行号（px_srcline 语义）
     int             ret_dst;   // A4：CALL 压帧 → 返回写 caller 帧槽号；-1=顶层
                                //   （返回给 px_vm_run_func 调用者 / px_vm_entry）
+    int             nargs;     // M90-S1/F1：本帧实际实参数（CALL/顶层入口实参个数；
+                               //   NARGS 指令读取 → 默认参数缺失填充判断 nargs ≤ i）
 } PxFrame;
 
 typedef struct {

@@ -57,6 +57,7 @@ const char* px_op_name(int op) {
         [PXOP_NEWGEN] = "NEWGEN", [PXOP_SPAWN] = "SPAWN",
         [PXOP_ENUMVAR] = "ENUMVAR",
         [PXOP_GENFROMLIST] = "GENFROMLIST",
+        [PXOP_NARGS] = "NARGS",
     };
     if (op < 0 || op >= PXM_MAX || !names[op]) return "?";
     return names[op];
@@ -161,6 +162,7 @@ static PxFrame* vm_frame_push(PxVmState* st, const PxVMFunc* f,
     fr->pc = 0;
     fr->line = 0;
     fr->ret_dst = ret_dst;
+    fr->nargs = nargs;          // M90-S1/F1：默认参数入口填充依 NARGS 读此
     __sync_synchronize();     // 帧字段写完成后再发布 nframes（弱序架构显式屏障）
     st->nframes = idx + 1;
     return fr;
@@ -298,6 +300,9 @@ LXValue px_vm_run_func(PxVmState* st, const PxVMFunc* f, LXValue* args, int narg
             break;
         case PXOP_IMM:
             fr->slots[in.a] = px_int((int64_t)(int16_t)in.b);
+            break;
+        case PXOP_NARGS:   // M90-S1/F1：槽a = 本帧实际实参数（默认参数入口填充依据）
+            fr->slots[in.a] = px_int((int64_t)fr->nargs);
             break;
         case PXOP_MOV:
             fr->slots[in.a] = fr->slots[in.b];
