@@ -6,6 +6,30 @@
 
 ## [Unreleased]
 
+### M89-S3-C2-3b · vm_ab.sh v2 —— S3-C 收口门骨架（examples 确定性用例 VM vs 旧轨 stdout 对拍）
+
+> 完成（2026-09-08，dongyue，commit b5bddb4）：S3-C 收口门落地首版 —— 对拍
+> examples 本地确定性用例（旧轨 pxi vs VM 轨 vm_run.sh emit-c→gcc→run）
+> stdout 逐字节一致 = PASS。
+> - 首跑：19 用例 → **16 PASS + 3 GAP + 0 FAIL**。PASS 覆盖算术/字符串/字节/
+>   闭包/GC/Result/单 for 推导式/regex/base64/struct/工具链 —— VM 与旧轨语义零
+>   漂移实证。3 GAP = m30_comp/m32_gen/m34_gen_lazy（bc_emit 已知缺口：推导式
+>   多变量子句/GenExp 多 for 物化路径，B3a 记录'多 for 物化路径待接入'），分类
+>   记录不阻塞（FAIL>0 才退出码非零）。
+> - 清单可传参过滤（vm_ab.sh <substr>）+ --list 列清单。
+> - 下一步：补齐 bc_emit 推导式缺口 → 重跑收敛（GAP→0）→ pxc/pxi VM 化。
+
+### M89-S3-C2-3 · vm_run.sh —— VM 轨运行器（compiler.px 正主 emit-c → gcc → 运行）
+
+> 完成（2026-09-08，dongyue，commit a908d69）：bc_cli 姊妹壳退役第一步 —— VM
+> 发射切 compiler.px 正主（selfhost/build/compiler_new = pxc 编 compiler.px 的
+> C 引擎产物，含 bc/--emit-c 子命令）。
+> - 流程：compiler_new --emit-c <file> → 静态 BCModule C → gcc 链 rtcache
+>   （含 vm.o）→ 运行；退出码透传。
+> - 验证：hello/fib/m22/m25/m26/m39/m40/match/p2/p8/struct/toolchain_demo 均
+>   VM==pxi 逐字节一致；m34_gen_lazy 暴露 bc_emit 多 for GenExp 缺口（记录待补）；
+>   std_demo 差异为时间相关输出（非语义差异）。
+
 ### M89-S3-C2-2 · golden 同步修复 + BC 轨自举证明脚本（自举证明规则更新落地）
 
 > 完成（2026-09-08，dongyue）：C2 主体第 1 项（自举证明规则更新）落地，修复 C2-1
