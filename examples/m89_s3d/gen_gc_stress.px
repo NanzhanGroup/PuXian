@@ -1,0 +1,58 @@
+# M89-S3-D2: 生成器（PX_GEN）子对象 GC 标记压测
+# ------------------------------------------------------------------
+# 目的：验证 gc_mark_obj 对 PX_GEN 的 list/seq/transform/filter 子对象递归
+#   标记。修复前 default 分支不标 → gen 为唯一活引用时子对象（惰性 seq
+#   list / transform 闭包 PX_FUNC）被 sweep 误回收 → gen_next 时 use-after-free。
+# 场景：每轮 ① 制造 src 列表（仅局部引用）→ ② 建惰性 gen（子对象唯一
+#   活引用 = gen）→ ③ src=null 丢最后外部引用 → ④ 垃圾波强制 GC →
+#   ⑤ gen_next 消费校验（若子对象被误回收 → 崩溃/值错 → FAIL）。
+# 用法：PX_GC_THRESHOLD=20000 运行本文件编译产物（旧 C 轨或 VM 轨均可）。
+# 注意：genexp transform 闭包对外层变量的捕获按全局解析（编译轨无真词法
+#   闭包，spec §6.2 对齐）→ mult 声明为模块级全局，勿放 main 局部。
+mult = 3
+
+def garbage(n: int):
+    w = 0
+    while w < n:
+        j = 0
+        gb = []
+        while j < 120:
+            gb.push("gg" + str(j) + "-" + str(w))
+            j += 1
+        w += 1
+    return n
+
+def main():
+    bad = 0
+    r = 0
+    while r < 6:
+        # ① src：仅局部引用的列表
+        src = []
+        i = 0
+        while i < 40:
+            src.push(i)
+            i += 1
+        # ② 惰性 gen：seq=src / transform=闭包 的唯一活引用即 gen 自身
+        g = (x * mult for x in src)
+        # ③ 丢掉外部引用：src 置 null → 列表/闭包唯一活引用 = gen（PX_GEN 子对象）
+        src = null
+        # ③b 显式强制 GC：修复前 gc_mark_obj 不递归 PX_GEN 子对象 → 此处 list/
+        #     transform 闭包被 sweep 误回收 → 下方 gen_next use-after-free
+        gc()
+        # ④ 垃圾波（多一轮压力，同阈值下再触发若干次自动 GC）
+        garbage(60)
+        # ⑤ 消费校验：期望 sum(i*3, i=0..39) = 3*780 = 2340
+        s = 0
+        v = gen_next(g)
+        while v != null:
+            s += v
+            v = gen_next(g)
+        if s != 2340:
+            bad += 1
+            print("round", r, "SUM-CORRUPT:", s)
+        r += 1
+    print("gen-gc-stress bad:", bad)
+    if bad == 0:
+        print("GEN-GC-STRESS PASSED")
+    else:
+        print("GEN-GC-STRESS FAILED")

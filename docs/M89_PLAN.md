@@ -596,3 +596,48 @@
 >   shift 忽略，兼容 `vm_ab.sh [v2] [<substr>]`。
 > - **收口门覆盖面最大化达成**：确定性 examples 全量对拍全绿 = S3-C 段
 >   收官（后续仅剩后置决策项：默认轨切换，见上条决策记录）。
+
+### S3-D · 精确 GC（D0 侦察 + D1 并发 VM 帧根 + D2 PX_GEN 标记，2026-09-09，dongyue）
+> S3-D 目标（M89_vm_design §六/§七）：精确根（帧槽+全局槽+原生桥）替代整栈保守
+> 扫描 → issue28 验收（单发 p95≤50ms / 500 并发 p50≤200ms / 堆回落）。本批次落地时
+> **默认轨仍未切 VM**（S3-C 决策记录：后置）→ 旧 C 轨（fn_* C 局部= C 栈变量）仍须
+> 保守栈扫描作根 → **D1「退役整栈保守扫描」/ D2「原生桥 ≤60 处逐一登记」明确后置**
+> （触发 = 默认轨切 VM，届时旧 C 轨退场纯精确才安全）。本批按 R4 双根过渡（保守
+> 扫栈 + VM 帧槽精确根并存）推进 GC **正确性/根面完备性**，D0 侦察坐实三缺口：
+>   ① **并发 GC 路径不标跨线程 VM 帧槽**（96a8e4b 止血只覆盖单线程路径；vm.c 注释
+>     「并发 GC 跨线程帧根留 S3-D」）——多 spawn 线程跑 VM 时其余线程帧槽漏标 →
+>     活跃对象被误回收 use-after-free（真实崩溃，A/B 实证 3/3 segfault）；
+>   ② **PX_GEN 生成器子对象漏标**（gc_mark_obj default 不递归 gen.list/seq/
+>     transform/filter）——保守扫栈掩盖下罕见触发，纯精确后必现（本批先补正）；
+>   ③ 旧 C 轨依赖保守扫栈 = 双根并存期约束（见上，退役后置）。
+>
+> **D1 并发 VM 帧根（runtime.c + vm.c/vm.h）**：
+> - 机制：GCThreadInfo 增 vm_state 槽；SIG_GC_STOP 暂停处理器（运行在目标线程）读
+>   自身 TLS VM 状态存入 ti->vm_state（新弱符号 px_vm_cur_state，不懒建；弱符号与
+>   既有 px_vm_gc_mark 同款，无 VM 链接空转）；executor 并发路径 g_gc_cur_set 环绕 +
+>   对每个本轮暂停线程调 px_vm_gc_mark_state(ti->vm_state) 跨线程精确标帧槽 +
+>   根3b 补标 executor 自身 VM 帧（单线程路径 96a8e4b 同款补到并发路径）。
+> - 暂停安全不变量：vm_frame_push 改「先完整初始化帧条目、最后发布 st->nframes」
+>   （旧实现先 nframes++ 再 memset/calloc，暂停落缝 executor 会读垃圾 slots 指针）；
+>   帧数组扩容改 malloc+拷贝+发布 st->frames+释放旧（非 realloc——任何暂停点
+>   st->frames 都指向完整有效缓冲），无需每调用信号屏蔽。
+> - ⚠️ 过程中修自身 bug：runtime.c 弱声明误写 px_vm_gc_cur_state 而 vm.c 定义为
+>   px_vm_cur_state → 弱符号恒 NULL → 跨线程标记被静默禁用（B 版仍 3/3 崩溃），
+>   统一命名后 3/3 PASS。
+> - **A/B 实证**（examples/m89_s3d/vm_conc_gc_stress.px，8 spawn worker 跑 VM × 高
+>   垃圾率 × PX_GC_THRESHOLD=20000）：旧 runtime（5af0472，修复前）**3/3 segfault**
+>   （并发 GC 误回收跨线程 VM 帧槽活跃对象）；新 runtime **3/3 PASS**（token-sum
+>   320002800 全对、bad=0）。同程序旧 C 轨（fn_* 并发）对照组 3/3 PASS → 崩溃确系
+>   VM 帧根缺口而非通用 GC 问题。VM spawn 冒烟（vm_spawn_smoke）先行门 PASS。
+>
+> **D2a PX_GEN 子对象递归标记（gc_mark_obj 增 PX_GEN 分支）**：四值（物化 list /
+>   惰性 seq / transform / filter）逐一标记。两轨通用防御（保守扫栈掩盖下 A/B 不
+>   区分，作防回归护栏 + 纯精确前置正确性）；gen_gc_stress.px（src=null + 显式
+>   gc() + 垃圾波后 gen_next 消费校验 2340）PASS。
+>
+> **测试资产**：examples/m89_s3d/（vm_spawn_smoke.px / vm_conc_gc_stress.px /
+> gen_gc_stress.px / verify.sh）——verify.sh = 冒烟 + 并发 GC 压测 ×3 + gen 护栏，
+> PX_GC_THRESHOLD=20000 低阈值放大窗口。
+> - 下一步：D3 issue28 验收压测（本机可达子集：spawn/回调/生成器专项 + g_gc_debug
+>   标记数核对 + 堆回落；单发 p95/500 并发 p50 全量标准需 ws-approve 隔离环境）；
+>   后置（默认轨切 VM 后）：退役整栈保守扫描、原生桥 ≤60 处逐一登记、cell 标记。
