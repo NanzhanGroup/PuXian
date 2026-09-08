@@ -527,3 +527,20 @@
 >   pxi_vm 静态 ELF，解释器自身跑 VM）—— compiler_vm --emit-c interp.px 可行
 >   性实验先行；分支验证通过后再谈默认轨切换（diffcheck/capability fn_* .c
 >   golden 迁移需整体规划）。
+
+### S3-C · C2-5c bootstrap/pxi_vm —— pxi VM 化原型（切片 3，分支试做）
+> 完成（分支 feat/m89-c2-vmtoolchain 切片 3）：pxi 的 VM 化原型成立 ——
+> compiler_vm --emit-c interp.px（143 行装配壳 + parser/env/cg_module/it_util/
+> i_err/ival/icall/ibuiltin/iexpr/istmt 全解释链）→ 930KB BCModule 静态 C →
+> gcc -static 链 → **bootstrap/pxi_vm**（9.3M 静态 ELF，解释器自身跑在显式帧
+> VM 上）。发射层面证明 bc_emit 已覆盖解释器全链语法构造（无缺口）。
+> - --version = pxi 0.2.0；hello/m22_bitwise_data/p8_slice_base64/struct 与
+>   bootstrap/pxi 逐字节一致（VM 化解释器语义不变，行为对齐）。
+> - 入库（引导二进制，与 pxi 同待遇）。默认轨未切：pxi_vm 供 PXI_BIN/PX_PXI
+>   环境变量覆盖式实验（diffcheck/pxtest 等整体切 VM 版属默认轨切换，待分支
+>   验证通过后整体规划）。tools/px 未加 px run --vm（pxi_vm 与 pxi 同语义，
+>   解释执行无独立价值；pxc_vm 的 --vm 才是产物形态切换）。
+> - 至此分支试做三大切片齐：px build --vm（产物 VM 化产品化）+ pxc_vm（编译器
+>   自身 VM 化静态重链）+ pxi_vm（解释器自身 VM 化）—— C2 主体的技术可行性
+>   全部实证；剩余 = 默认轨切换的 golden 大迁移（diffcheck s01-s15 .c / capa-
+>   bility / 全量回归），需在主干整体规划后执行。
