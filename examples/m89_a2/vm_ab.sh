@@ -24,31 +24,57 @@ VM_RUN="$ROOT/examples/m89_a2/vm_run.sh"
 OUT=/tmp/vm_ab2
 mkdir -p "$OUT"
 
-# 对拍清单：确定性本地输出 examples（pxi rc=0 且输出稳定）
+# 对拍清单：确定性本地输出 examples 全量（M89-S3-C2 收口门扩展）
+#   判别法（自动化探测，probe_det.sh）：pxi 解释双跑 rc=0 且 stdout 逐字节
+#   一致 = 确定性用例（排除 server 监听型/网络依赖/不可控时间/随机输出）。
+#   119 顶层 examples 中 38 例入选（2026-09-09 探测固化）。带 *_verify.sh 的
+#   专项用例（bc2-12/m89_b1_parity）走各自 verify，不在此重复。
 CASES="
-hello
 fib
+hello
+http_neterr_result
+https_demo
 m22_bitwise_data
 m23b_bytes
+m23d_rsa
 m25_closure_gc
 m26_ushr
+m29_jsonpath_web
 m30_comp
+m31_sandbox
 m32_gen
 m34_gen_lazy
 m39_gc
 m39_result
 m40_str_interp
+m46_quic_smoke
+m48_qpack_verify
+m49_qpack_dyn_verify
+m53_s5_pxi_h3_smoke
+m54_s5_pxi_quic_smoke
+m57_s3_gpio
+m57_s3_i2c
+m57_s5_pxi_smoke
+m60_gpio
+m60_i2c
+m60_pwm
+m60_serial_pty
 match
 p0_random_io
 p2_crypto_hash
 p3_regex
+p7_aes_xml_zip
 p8_slice_base64
+s3_neterr_fail
 struct
 toolchain_demo
 "
 
 [ "${1:-}" = "--list" ] && { echo "$CASES"; exit 0; }
 
+# 兼容两种调用：vm_ab.sh（全量）/ vm_ab.sh v2（全量，v2 为版本子命令，
+# 忽略后接过滤词）；过滤：vm_ab.sh <substr> 或 vm_ab.sh v2 <substr>。
+if [ "${1:-}" = "v2" ]; then shift || true; fi
 FILTER="${1:-}"
 PASS=0; GAP=0; FAIL=0
 for n in $CASES; do
