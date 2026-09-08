@@ -6,6 +6,19 @@
 
 ## [Unreleased]
 
+### M89-S3-C2-5 · px build --vm —— VM 轨产物产品化（分支 feat/m89-c2-vmtoolchain 切片 1）
+
+\u003e 完成（2026-09-09，dongyue）：C2 主体最大项第 1 切片 —— tools/px 增 `--vm/--bc`
+\u003e 开关，VM 轨产物正式纳入用户工具链入口，与旧 fn_* C 文本轨**并存过渡**。
+\u003e - `px build --vm \u003cfile\u003e`：编译器切 compiler_vm（compiler.px 字节码镜像 + VM），
+\u003e   --emit-c → BCModule 字节码镜像 C → gcc -static 链 runtime（含 vm.o）→ 静态
+\u003e   ELF 跑显式帧 VM。PXC_VM_BIN 环境变量可覆盖 VM 编译器路径（切片 2 留口）。
+\u003e - VM 产物无 px_get_global 引用 → 跳过 M86-S2 自动裁剪，默认全能力链接。
+\u003e - 环境债：Rocky 9 缺 glibc-static（px build 本机不可用）→ 启 CRB + dnf install
+\u003e   glibc-static → gcc -static 复活，px build 旧轨本机回归可用。
+\u003e - 验证：hello / m34_gen_lazy（GENFROMLIST 物化）/ m30_comp（推导式多变量）/
+\u003e   fib（递归）/ m39_gc（GC）五用例 px build --vm 静态产物 stdout == pxi 逐字节一致。
+
 ### M89-S3-C2-4 · 3 GAP 补齐（推导式多变量子句 + GenExp 物化路径）+ VM op GENFROMLIST —— S3-C 收口门 GAP→0
 
 > 完成（2026-09-08，dongyue）：补齐 bc_emit 推导式已知缺口（vm_ab.sh v2 首跑
