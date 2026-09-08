@@ -6,6 +6,23 @@
 
 ## [Unreleased]
 
+### M89-后置决策 · VM vs C 轨性能基线（默认轨切换数据底座）
+
+> 完成（2026-09-09，dongyue）：M89-S4 收口后置决策项「默认轨切 VM」的量化数据
+> 基础（docs/M89_PERF_BASELINE.md + examples/m89_perf/ 一键复现资产）。
+> - **三类负载实测（同源双轨产物对拍，3-5 轮取中位）**：fib 纯计算热点 VM/C =
+>   **1.52x**；compiler 形态综合真实负载（compiler.px 双轨产物跑同一 bc dump）=
+>   **1.04x**；HTTP JSON 服务 8 并发 RPS = **1.00x（持平）**。
+> - **结论：此前"VM 解释 = 机器码 5~20x 慢"假设被实测推翻**（根因：px C 轨产物
+>   每步值操作仍走 runtime 动态值层，函数级机器码占比小，VM dispatch 只是叠加小层）。
+>   服务/IO 与综合负载切换代价 ≈ 0~10%，纯计算热点 ~50%（可 C 轨逃生舱 / native 兜底）。
+>   默认轨切换从"高成本后置大决策"重估为**可行低风险项**（仍须独立里程碑：
+>   bc_emit 默认参数缺口 F1 + golden/capability 大迁移 + 稳定期/AB 回退）。
+> - 附带发现归档：F1 bc_emit 默认参数未实现（capability.px bc rc=1）；F2 bc dump
+>   大文件慢（compiler.px 全链 >10min；emit-c 4-5min vs pxc 3.5min）；F3 HTTP 20
+>   并发双轨 RPS 均骤降且 max ~9s 尖刺（runtime 服务层/GC 退化，与轨无关）；
+>   F4 server 空转 spin。均记入 M90 候选。
+
 ### M89-S4 · VM 化旗舰里程碑收口（tag v0.2.0-m89）
 
 > 完成（2026-09-09，dongyue）：M89（AST/C 递归 → 显式帧 + 平坦字节码 VM）S0→S4
