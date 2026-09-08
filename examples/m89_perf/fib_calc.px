@@ -1,0 +1,22 @@
+# m89_perf/fib_calc.px —— VM vs C 轨性能基线 · 基准 1：纯计算热点（fib 递归）
+# 用法：编译双轨后直接运行（无参数）；固定负载便于外层 time 对比。
+#   C 轨：px build fib_calc.px → build/fib_calc
+#   VM 轨：px build --vm fib_calc.px → build/fib_calc（覆盖，跑前先保留 C 轨产物）
+# 负载：fib(28) × reps 次递归求和（reps 由环境变量 BENCH_REPS 覆盖，默认 100）。
+# 输出固定 sum 值（双轨必须一致，作正确性锚点）。
+
+def fib(n: int) -> int:
+    if n <= 1:
+        return n
+    else:
+        return fib(n - 1) + fib(n - 2)
+
+def main():
+    var reps = 100
+    let er = env("BENCH_REPS")
+    if er != null:
+        reps = int(er)
+    var s = 0
+    for i in range(reps):
+        s = s + fib(28)
+    print("sum=" + str(s))

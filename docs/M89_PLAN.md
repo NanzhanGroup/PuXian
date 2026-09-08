@@ -697,3 +697,18 @@
 >   （与旧缓存共存）→ 重链后跑 vm_ab 前须确认 vm_run.sh 选中的是含 quic/h3/rsa
 >   全模块 rtcache（否则 quic/rsa/h3 用例误报 GAP —— 本次实证：误选裁剪缓存
 >   31 PASS+7 GAP → 删除新裁剪缓存或 px build --full 重建全模块缓存后 38 全绿）。
+
+### 后置决策 · 默认轨切换数据底座（2026-09-09，M89-S4 收口后）
+> 对「px build 默认产物切 VM + golden 大迁移」后置决策项的量化重估
+> （详见 docs/M89_PERF_BASELINE.md + examples/m89_perf/，一键复现 bench_vm_vs_c.sh）。
+> - **实测三类负载（同源双轨产物，3-5 轮中位）**：fib 纯计算热点 VM/C = **1.52x**；
+>   compiler 形态综合负载（compiler.px 双轨产物同一 bc dump）= **1.04x**；
+>   HTTP JSON 服务 8 并发 RPS = **1.00x（持平）**。此前"纯解释 = 机器码 5~20x 慢"
+>   的假设被推翻（px C 轨每步值操作仍走 runtime 动态值层，VM dispatch 叠加小层）。
+> - **决策重估**：项目主流负载（服务/综合）切换代价 ≈ 0~10% → 默认轨切换从"高成本
+>   后置大决策"上调为**可行低风险独立立项**（纯计算热点 ~50% 由 C 轨逃生舱/native 兜底）；
+>   触发条件修订 = 服务型为主用户负载直接可切 / native·精确 GC·帧协程立项顺带切换 /
+>   用户拍板立项切换里程碑。切换前置缺口（本基线发现）：① bc_emit 默认参数未实现
+>   （capability.px 41KB 系统文件无法 VM 编译）② golden/capability 大迁移 ③ 稳定期/AB 回退。
+> - 附带发现（M90 候选）：bc dump 大文件慢（compiler.px 全链 >10min）；HTTP 20 并发
+>   双轨 RPS 骤降 + ~9s 尖刺（runtime 服务层/GC，与轨无关）。

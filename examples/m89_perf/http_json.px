@@ -1,0 +1,22 @@
+# m89_perf/http_json.px —— VM vs C 轨性能基线 · 基准 3：HTTP JSON 服务（IO/服务型）
+# 长跑 server（http_serve 阻塞主线程，m88b daemon 模式）。
+# 用法：C 轨与 VM 轨产物各起一个实例（端口不同）由 press_http.py 并发压测。
+#   默认端口 18091；环境变量 PERF_PORT 覆盖。
+# 负载：/health 文本 + /api/check JSON 响应（dict→json_stringify，模拟
+#   ws-approve /check 类 JSON 服务的工作负载：请求分发 + query 解析 + JSON 序列化）。
+
+def handler(req):
+    let p = req["path"]
+    if p == "/health":
+        return "ok-perf"
+    if p == "/api/check":
+        let body = json_stringify({"code": 0, "name": "px", "v": 1})
+        return {"status": 200, "body": body, "headers": {"Content-Type": "application/json"}}
+    return {"status": 404, "body": "nf"}
+
+def main():
+    var port = 18091
+    let ep = env("PERF_PORT")
+    if ep != null:
+        port = int(ep)
+    http_serve(port, handler)
