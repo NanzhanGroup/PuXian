@@ -485,3 +485,27 @@
 > - 下一步（C2 主体剩余）：bootstrap/pxc/pxi VM 化重链（pxc 产物 = BCModule
 >   内嵌 C + VM main，px build 默认切 BC）—— 建议分支试做 + 重生成 BC golden
 >   对比，避免动主干 diffcheck（s01-s15 .c 形态）。
+
+### S3-C · C2-5 px build --vm —— VM 轨产物产品化（分支试做，2026-09-09，dongyue）
+> 完成（分支 feat/m89-c2-vmtoolchain 切片 1）：C2 主体最大项（pxc/pxi VM 化 +
+> px build 切 BC）的第 1 切片 —— 把 VM 轨产物正式纳入用户工具链入口，与旧轨
+> **并存过渡**（默认不变，显式 --vm/--bc 走 VM 轨）。
+> - **tools/px 增 `px build --vm/--bc <file>`**：编译器从 bootstrap/pxc（fn_* C
+>   文本轨）切到 compiler_vm（compiler.px 的字节码镜像 + VM 驱动，M89-S3-C2
+>   正主），子命令 --emit-c → 产物 = bc_emit.px emit-c **BCModule 字节码镜像 C**
+>   → gcc -static 链 runtime（rt_src_files 已含 vm.h/vm.c，cache 自动含 vm.o）
+>   → **静态 ELF，程序跑显式帧 VM**。PXC_VM_BIN 环境变量可覆盖 VM 编译器路径
+>   （为切片 2 pxc_vm 静态重链留口，CI/部署可指向 bootstrap/pxc_vm）。
+> - VM 产物无 px_get_global 引用可提取 → 自动裁剪（M86-S2）对 VM 轨跳过，默认
+>   全能力链接（≈9.0M 基线，旧轨 --full 语义）；显式 --no-xxx 裁剪仍可组合。
+> - **环境债修复**：本机 Rocky Linux 9.8 缺 glibc-static（gcc -static 全链路
+>   不可用，px build 本机跑不通 —— 旧 .rtcache 均为晨曦环境产物）→ 启用 CRB
+>   仓库 + dnf install glibc-static → gcc -static 复活，**px build 旧轨本机回归
+>   可用**（hello 2.7M 静态产物编译成功）。
+> - 验证（px build --vm 静态产物 stdout == pxi 逐字节一致）：hello（基础）、
+>   m34_gen_lazy（GenExp 物化 GENFROMLIST）、m30_comp（推导式多变量）、fib
+>   （递归）、m39_gc（GC）五用例全 PASS；产物 file 确认 statically linked。
+> - 下一步（切片 2）：compiler_vm 静态重链落位 bootstrap/pxc_vm（gcc -static
+>   现可链）→ px build --vm 默认指 pxc_vm；pxi VM 化（interp.px 增 bc 发射 +
+>   golden 同步）评估；分支验证通过后再谈默认轨切换（需整体规划 diffcheck/
+>   capability 的 fn_* .c 形态 golden 迁移）。
