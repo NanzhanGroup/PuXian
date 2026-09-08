@@ -655,3 +655,23 @@
 >   ② 原生桥 ≤60 处逐一根登记（双根期保守栈扫已兜底）；③ cell（闭包 upvalue）
 >   标记（P2 未实现，现无 cell 对象）。三者与「px build 默认切 BC + golden 大
 >   迁移」同属默认轨切换批次，是 M89-S4 收口前的最大待决项。
+
+> **S3-D-4 · issue28 验收复核结论修正 + VM 并发 GC×生成器混合收口（2026-09-09，dongyue）**：
+> - **issue28 定位修正**：`/data/qg-issue/28-puxian-gc-stw-heap/VERIFY-20260908-0.2.0-qingge.md`
+>   确认 issue28 全量延迟验收已由**清歌 0.2.0 隔离实测复核通过**（单发 p50=1ms/p95≤6ms
+>   >100ms=0；500 并发 p50=42~55ms 0 失败；1500 并发 0 失败；空载 RSS 17~30MB）→
+>   ws-approve .px 版**无需重编码可替换 Go 版上线**。即 issue28 由 B1/B2/B3 在**无 VM
+>   化时已解决**（2026-09-08），上一批 S3-D-3 把 issue28 验收列为部署复核后置的表述收回；
+>   S3-D 对 issue28 不再承担验收门，D1/D2 定位 = 「VM 为唯一执行轨」精确 GC 正确性前置；
+>   VM 化只吸收 §9.3 残余偶发停顿（~0.4~0.6% >100ms，sweep 线性于对象数），锦上添花。
+> - **D4 组合最坏窗口**（examples/m89_s3d/vm_conc_gen_stress.px 新增）：6 spawn worker
+>   并发跑 VM × 惰性生成器（部分消费 10/15 项跨 ~10 轮并发 GC → 全量消费剩余 5 项，校验
+>   游标/seq/transform/filter 子对象跨 GC 完好；期望单 worker = 420+15×GKC=435，K=6 总
+>   2610）—— D1（跨线程帧根）+ D2a（PX_GEN 标记）叠加的最坏组合。verify.sh 增第 5 项 ×3。
+> - **verify.sh = 9 PASS + 0 FAIL**：1-4 项回归不变（冒烟 / 并发 GC ×3 / gen 护栏 / VM 堆
+>   回落 RSS 6084→7156KB <40MB）+ 混合 ×3 PASS。commit（push GitHub main）。
+> - **S3-D 段收口声明**：段内可推进工作（D0 侦察 + D1 并发帧根 + D2a PX_GEN 标记 + D3/D4
+>   验证补强）全部完成。剩余（① 退役整栈保守扫描 ② 原生桥 ≤60 处逐一登记 ③ cell 标记 +
+>   issue28 残余停顿吸收）与「px build 默认切 BC + golden 大迁移」同属**默认轨切 VM 后置
+>   批次** —— M89-S4 收口前最大待决项（触发 = native 后端立项 / 精确 GC 需 VM 唯一执行轨
+>   / 用户拍板性能换架构统一）。
