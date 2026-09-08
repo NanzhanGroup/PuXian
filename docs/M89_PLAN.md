@@ -577,9 +577,22 @@
 > → **S3-C 段正式收口**；默认轨切换挂起为后置决策项（触发条件：native 后端
 >   立项 / 精确 GC 需要 VM 为唯一执行轨 / 用户拍板性能换架构统一）。
 
-### S3-C · vm_ab 收口门扩展：19 例 → 确定性 examples 全量（2026-09-09，dongyue）
+### S3-C · vm_ab 收口门扩展完成：确定性 examples 19→38 全量对拍全绿（2026-09-09，dongyue）
 
 > S3-C 收口门定义本义 = examples 全量 VM vs 旧轨 stdout 对拍（M89_PLAN
-> C2 记录原文）。当前 vm_ab.sh v2 清单 19 例为精选确定性子集；收口后
-> 下一步将清单扩展到 examples 中全部「确定性本地输出」（无网络/无外部
-> 服务/无不可控时间输出）用例，逐批补 bc_emit 缺口 → 收口门覆盖最大化。
+> C2 记录原文）。收口后把清单从 19 例精选扩到 examples 中全部「确定性
+> 本地输出」（无网络/无外部服务/无不可控时间/无随机输出）用例 —— **完成，
+> 38 PASS + 0 GAP + 0 FAIL**（VM 轨 stdout 与旧轨 pxi 逐字节一致，无已知
+> bc_emit 缺口，无需逐批补）。
+> - 确定性判别自动化：119 顶层 examples 逐个 pxi 双跑，rc=0 且 stdout
+>   逐字节一致 = 确定性（38 例）；排除 server 监听型/网络依赖型/时间型/
+>   随机型（探测方法固化进 vm_ab.sh 注释）。
+> - 新增 19 例覆盖类型显著扩展：QUIC/H3 smoke + qpack verify（m46_s/m48/
+>   m49/m53_s5/m54_s5）、设备 API（m57_s3 gpio/i2c + m60 gpio/i2c/pwm/
+>   serial_pty）、AES+XML+ZIP（p7）、RSA（m23d）、JSONPath（m29）、
+>   sandbox（m31）、确定性网络错误（s3_neterr_fail/http_neterr_result/
+>   https_demo）—— VM 发射器对这些语法与库调用面全部与旧轨一致。
+> - vm_ab.sh 顺带修参：`v2` 子命令被当过滤词 → 全量误跑 0 用例；改 v2
+>   shift 忽略，兼容 `vm_ab.sh [v2] [<substr>]`。
+> - **收口门覆盖面最大化达成**：确定性 examples 全量对拍全绿 = S3-C 段
+>   收官（后续仅剩后置决策项：默认轨切换，见上条决策记录）。

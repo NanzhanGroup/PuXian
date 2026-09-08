@@ -6,6 +6,26 @@
 
 ## [Unreleased]
 
+### M89-S3-C2-6 · vm_ab 收口门扩展：确定性 examples 19→38 全量对拍全绿
+
+> 完成（2026-09-09，dongyue）：S3-C 收口门覆盖从 19 例精选扩到**确定性
+> examples 全量 38 例**，对拍 **38 PASS + 0 GAP + 0 FAIL**（VM 轨 stdout 与
+> 旧轨 pxi 逐字节一致）——bc_emit/VM 覆盖面无已知缺口。
+> - **确定性判别自动化**（/tmp/probe_det.sh 方法固化进脚本注释）：119 顶层
+>   examples 逐个 pxi 解释双跑，rc=0 且 stdout 逐字节一致 = 确定性用例；
+>   排除 server 监听型/网络依赖/不可控时间/随机输出。38 例入选（2026-09-09
+>   探测固化）。
+> - **新增 19 例**：http_neterr_result / https_demo / m23d_rsa /
+>   m29_jsonpath_web / m31_sandbox / m46_quic_smoke / m48_qpack_verify /
+>   m49_qpack_dyn_verify / m53_s5_pxi_h3_smoke / m54_s5_pxi_quic_smoke /
+>   m57_s3_gpio / m57_s3_i2c / m57_s5_pxi_smoke / m60_gpio / m60_i2c /
+>   m60_pwm / m60_serial_pty / p7_aes_xml_zip / s3_neterr_fail。原 19 例全保留。
+> - 覆盖类型显著扩展：QUIC/H3 smoke 与 qpack verify、GPIO/I2C/PWM/串口
+>   设备 API、AES+XML+ZIP、JSONPath、RSA、sandbox、确定性网络错误路径 ——
+>   VM 发射器对上述语法/库调用面全部与旧轨一致。
+> - vm_ab.sh 顺带修参数解析：`v2` 子命令被误当过滤词导致全量跑空（0 用例），
+>   改为 v2 作版本子命令 shift 忽略，兼容 `vm_ab.sh [v2] [<substr>]`。
+
 ### M89-S3-C2-5c · bootstrap/pxi_vm —— pxi VM 化原型（切片 3，分支试做）
 
 > 完成（2026-09-09，dongyue）：compiler_vm --emit-c interp.px（装配壳 + 全
