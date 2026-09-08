@@ -1,0 +1,21 @@
+# M89-S3-D1: VM 并发最小冒烟 —— spawn 2 worker 跑 VM + chan 同步
+# 目的：验证 VM 轨 spawn 线程（各自 TLS PxVmState + 堆上帧槽）基础可用，
+#       作为并发 GC 压测的前置门。输出确定性。
+def worker(id: int, ch):
+    acc = 0
+    n = 0
+    while n < 1000:
+        acc += n
+        n += 1
+    ch.send(acc + id)
+
+def main():
+    ch = chan[int](8)
+    spawn worker(1, ch)
+    spawn worker(2, ch)
+    let a = ch.recv()
+    let b = ch.recv()
+    print("sum1:", a)
+    print("sum2:", b)
+    print("total:", a + b)
+    print("VM-SPAWN-SMOKE PASSED")

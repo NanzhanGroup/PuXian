@@ -191,6 +191,13 @@ LXValue px_vm_run_module(PxVmState* st, const PxBCModule* m);
 PxVMFunc* px_vm_new_func(const char* name, int arity, int ndefault, int nslots,
                          const PxInst* bc, int nbc);
 
+// ==================== S3-D 精确 GC：VM 根面 API ====================
+// 当前线程 VM 状态（无则 NULL；不懒建——供 GC 暂停处理器读取 TLS 用）。
+void*   px_vm_cur_state(void);
+// 标记指定 VM 状态的全部活跃帧槽为 GC 根（跨线程：executor 遍历已暂停
+// 线程的 st 调此函数；帧槽值经 px_gc_mark_slots 精确标记，无保守栈扫描）。
+void    px_vm_gc_mark_state(void* vst);
+
 #ifdef __cplusplus
 }
 #endif

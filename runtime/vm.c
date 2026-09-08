@@ -129,24 +129,40 @@ PxVmState* px_vm_state(void) {
 // ---- 帧栈 ----
 // ret_dst：-1 = 顶层（RET 时返回 run_func 调用者）；≥0 = CALL 压帧，RET 时把
 // 返回值写入 caller 帧的该槽（D3：px→px 调用 push 帧，返回值经槽回传）。
+// S3-D-1 暂停安全不变量：**先完整初始化帧条目，最后发布 st->nframes** ——
+// 并发 GC 暂停线程后按 frames[0..nframes) 遍历标记，绝不读到半初始化帧
+// （旧实现先 nframes++ 再 memset/calloc，暂停落缝会读到垃圾 slots 指针）。
+// 帧数组扩容用 malloc+拷贝+发布+释放旧（非 realloc）：任何暂停点 st->frames
+// 都指向完整有效缓冲（发布前旧缓冲完整、发布后新缓冲完整），无需屏蔽信号。
 static PxFrame* vm_frame_push(PxVmState* st, const PxVMFunc* f,
                               LXValue* args, int nargs, int ret_dst) {
-    if (st->nframes >= st->cap) {
-        st->cap *= 2;
-        st->frames = (PxFrame*)realloc(st->frames, (size_t)st->cap * sizeof(PxFrame));
+    int idx = st->nframes;
+    if (idx >= st->cap) {
+        int ncap = st->cap * 2;
+        PxFrame* nf = (PxFrame*)malloc((size_t)ncap * sizeof(PxFrame));
+        if (nf) {
+            memcpy(nf, st->frames, (size_t)st->nframes * sizeof(PxFrame));
+            PxFrame* old = st->frames;
+            st->frames = nf;      // 发布新缓冲（此刻起遍历安全）
+            st->cap = ncap;
+            free(old);
+        }
+        idx = st->nframes;
     }
-    PxFrame* fr = &st->frames[st->nframes++];
-    memset(fr, 0, sizeof(*fr));
-    fr->f = f;
-    fr->nslots = f ? f->nslots : 0;
-    fr->slots = (LXValue*)calloc((size_t)(fr->nslots ? fr->nslots : 1), sizeof(LXValue));
-    fr->ret_dst = ret_dst;
-    // 参数拷入 slots[0..nargs)：calloc 零值 = PX_NULL（type 0），缺省参数由
-    // 发射器在帧内预填默认值，实参不足时覆盖（对齐现 (nargs>i)?args[i]:default）。
-    if (args && nargs > 0) {
-        int n = nargs < fr->nslots ? nargs : fr->nslots;
+    PxFrame* fr = &st->frames[idx];
+    int nslot = f ? f->nslots : 0;
+    fr->slots = (LXValue*)calloc((size_t)(nslot > 0 ? nslot : 1), sizeof(LXValue));
+    fr->nslots = nslot;
+    if (args && nargs > 0 && nslot > 0) {
+        int n = nargs < nslot ? nargs : nslot;
         memcpy(fr->slots, args, (size_t)n * sizeof(LXValue));
     }
+    fr->f = f;
+    fr->pc = 0;
+    fr->line = 0;
+    fr->ret_dst = ret_dst;
+    __sync_synchronize();     // 帧字段写完成后再发布 nframes（弱序架构显式屏障）
+    st->nframes = idx + 1;
     return fr;
 }
 
@@ -577,13 +593,25 @@ LXValue px_vm_run_module(PxVmState* st, const PxBCModule* m) {
 // 不可见会被误回收（use-after-free）或漏回收（堆只增）。按帧逐槽标记：
 // 未用槽 = calloc 零值（PX_NULL），px_value_is_obj 为假无副作用；帧存活期
 // 槽值保守全标（宁漏回收不误回收），弹帧后 slots 已 free 且不在 frames[0..nframes)
-// 范围内不再标记。并发 GC（多 spawn 线程）的跨线程帧根 = S3-D 完整目标，留后续。
-void px_vm_gc_mark(void) {
-    PxVmState* st = g_vm_state;
+// 范围内不再标记。
+// S3-D-1 扩展：px_vm_gc_mark_state(void*) 供并发 GC executor 遍历「已暂停线程」
+// 的 VM 状态做跨线程帧根标记（旧实现只标本线程 → 多 spawn 线程跑 VM 时其余
+// 线程帧槽漏标 → 活跃对象被误回收 use-after-free）；px_vm_cur_state 供
+// GC 暂停信号处理器（运行在目标线程上）读取其 TLS VM 状态指针（不懒建）。
+void px_vm_gc_mark_state(void* vst) {
+    PxVmState* st = (PxVmState*)vst;
     if (!st || st->nframes <= 0) return;
     for (int i = 0; i < st->nframes; i++) {
         PxFrame* fr = &st->frames[i];
         if (fr->slots && fr->nslots > 0)
             px_gc_mark_slots(fr->slots, fr->nslots);
     }
+}
+
+void px_vm_gc_mark(void) {
+    px_vm_gc_mark_state(g_vm_state);
+}
+
+void* px_vm_cur_state(void) {
+    return g_vm_state;
 }

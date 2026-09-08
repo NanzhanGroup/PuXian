@@ -6,6 +6,28 @@
 
 ## [Unreleased]
 
+### M89-S3-D1/2 · VM 并发帧根 + PX_GEN 标记（精确 GC 根面完备性第 1 批）
+
+> 完成（2026-09-09，dongyue）：S3-D（精确 GC）本批按 R4 双根过渡（保守扫栈 +
+> VM 帧槽精确根并存；退役整栈保守扫描/原生桥 ≤60 处登记随默认轨切 VM 后置）推进
+> GC **正确性/根面完备性**，坐实并修复三缺口中的两个：
+> - **D1 并发 GC 跨线程 VM 帧根**：旧实现只标本线程 VM 帧（96a8e4b 单线程止血），
+>   并发 GC 停其它线程后其堆上帧槽不可见 → 活跃对象被误回收 use-after-free。
+>   机制：GCThreadInfo.vm_state + 暂停处理器（目标线程）读自身 TLS VM 状态 +
+>   executor 对每暂停线程 px_vm_gc_mark_state 跨线程精确标帧槽 + 补标 executor
+>   自身 VM 帧；vm_frame_push 改「先初始化后发布 nframes」暂停安全不变量 + 帧
+>   数组扩容 malloc+拷贝+发布（免 realloc 悬垂窗口）。
+> - **D2 PX_GEN 子对象漏标**：gc_mark_obj 增 PX_GEN 分支（list/seq/transform/
+>   filter 四值递归）——两轨通用防御（保守扫栈掩盖下作防回归护栏 + 纯精确前置）。
+> - **A/B 实证**（examples/m89_s3d/vm_conc_gc_stress.px，8 spawn worker VM ×
+>   PX_GC_THRESHOLD=20000）：修复前 runtime **3/3 segfault**、修复后 **3/3 PASS**
+>   （旧 C 轨并发对照组 3/3 PASS → 崩溃确系 VM 帧根缺口）。修复中自查并修正弱
+>   符号命名不一致（px_vm_gc_cur_state/px_vm_cur_state）导致跨线程标记被静默禁用。
+> - 测试资产 examples/m89_s3d/：vm_spawn_smoke / vm_conc_gc_stress / gen_gc_stress
+>   / verify.sh（冒烟 + 并发 GC ×3 + gen 护栏 + VM 轨堆回落 3 波采样）= 6 PASS。
+> - 回归：vm_ab v2 收口门（full 模块 rtcache）**38 PASS + 0 GAP + 0 FAIL**；
+>   px build / pxi 旧轨对照绿。M89_PLAN S3-D 段记录 + 后置项（退役保守扫描等）。
+
 ### M89-S3-C2-6 · vm_ab 收口门扩展：确定性 examples 19→38 全量对拍全绿
 
 > 完成（2026-09-09，dongyue）：S3-C 收口门覆盖从 19 例精选扩到**确定性

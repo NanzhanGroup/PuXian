@@ -1,0 +1,57 @@
+# M89-S3-D1: VM 并发 GC 压测 —— spawn N worker 跑 VM + 高垃圾率 + 帧槽活引用完整性
+# ------------------------------------------------------------------
+# 目的：验证并发 GC（stop-the-world 跨线程）对「VM 堆上帧槽」根标记正确性。
+#   修复前（runtime/vm.c S3-D-1 前）：并发 GC 只扫各线程 C 栈/寄存器/全局，
+#   不标其余线程 VM 帧槽（帧槽数组在堆上）→ 活跃对象被误回收 → use-after-free
+#   （worker 恢复后读已 free 的 sentinel/anchor → 内容损坏或崩溃）。
+#   修复后：暂停处理器保存各线程 VM 状态指针，executor 跨线程精确标记帧槽。
+# 探测手段：每 worker 持有「仅其帧槽引用」的 sentinel 串 + anchor 列表，
+#   每波垃圾制造后校验 sentinel == 期望值（损坏即 FAIL 并送出负标记）。
+# 输出确定性：K worker 各送 token，主线程聚合打印（bad>0 → FAIL）。
+# 用法：PX_GC_THRESHOLD=<阈值> vm_run.sh/本文件编译产物
+def worker(id: int, waves: int, ch):
+    sentinel = "W" + str(id) + "-s3d1-sentinel"
+    anchor = []
+    bad = 0
+    w = 0
+    while w < waves:
+        # 垃圾波：局部大 list + 字符串拼接（分配压力 → 触发其他线程 GC）
+        g = []
+        m = 0
+        while m < 120:
+            g.push("g" + str(m) + "#" + sentinel + ":" + str(w))
+            m += 1
+        anchor.push(len(g))
+        # 活引用校验：sentinel/anchor 仅存于本 worker 帧槽 —— 若被并发 GC
+        # 误回收（修复前跨线程帧槽漏标）→ 内存复用 → 内容损坏/崩溃
+        if sentinel != "W" + str(id) + "-s3d1-sentinel":
+            bad = 1
+        if len(anchor) > 300:
+            anchor = []
+        w += 1
+    ch.send((len(anchor) * 1000000) + (id * 100) + bad)
+
+def main():
+    k = 8
+    waves = 40
+    ch = chan[int](32)
+    i = 0
+    while i < k:
+        spawn worker(i, waves, ch)
+        i += 1
+    got = 0
+    badsum = 0
+    j = 0
+    while j < k:
+        let tok = ch.recv()
+        if tok % 100 != 0:
+            badsum += 1
+        got += tok
+        j += 1
+    print("workers:", k, "waves:", waves)
+    print("token-sum:", got)
+    print("bad:", badsum)
+    if badsum == 0:
+        print("VM-CONCURRENT-GC-STRESS PASSED")
+    else:
+        print("VM-CONCURRENT-GC-STRESS FAILED")

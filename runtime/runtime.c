@@ -671,6 +671,9 @@ typedef struct {
     int epoch;           // 暂停所属 GC 轮次（用于区分"本轮真暂停"与"堆积信号短暂暂停"）
     ucontext_t uc;       // 暂停时保存的上下文（寄存器）
     LXObject* tmp_root;  // 暂停时该线程的暂存根（__thread 跨线程不可读，由处理器保存）
+    void* vm_state;      // S3-D-1：暂停时该线程的 VM 状态指针（PxVmState*，TLS 跨线程
+                         //   不可读，由运行在目标线程上的暂停处理器保存；executor 依此
+                         //   遍历其堆上帧槽做精确根标记）
 } GCThreadInfo;
 #define MAX_SPAWN_THREADS 64   // 历史宏：默认初始容量（保留供旧引用/文档对照；实际容量读 g_thread_cap）
 #define PX_DEFAULT_THREAD_CAP 64     // 默认初始容量（= 历史 MAX_SPAWN_THREADS 语义）
@@ -689,6 +692,13 @@ static int g_gc_freed = 0;
 static int g_gc_skips = 0;
 static long long g_gc_marked = 0;   // 调试：最近一轮 GC 标记数
 static __thread LXObject* g_tmp_root = NULL;  // 暂存根：保护刚创建对象（构造函数内触发 GC）
+
+// ---- S3-D-1：VM 跨线程帧根弱符号接口（vm.c 提供强定义；无 VM 链接时空转零影响）----
+// 暂停处理器（运行在目标线程上）经 px_vm_cur_state 读该线程 TLS VM 状态；
+// GC executor（另一线程）经 px_vm_gc_mark_state 遍历已暂停线程的堆上帧槽做
+// 精确根标记。帧槽数组在堆上，保守 C 栈扫描不可见 → 不标记则活跃对象被误回收。
+extern void* px_vm_cur_state(void) __attribute__((weak));
+extern void  px_vm_gc_mark_state(void* vst) __attribute__((weak));
 
 // 开放寻址哈希集合（对象地址快速查询，供保守栈扫描）
 typedef struct {
@@ -933,7 +943,23 @@ static void gc_mark_obj(GCHash* set, LXObject* o) {
                 }
                 break;
             }
-            default: break;  // STR / FUNC / NATIVE / ENUM 无子对象
+            case PX_GEN: {
+                // M89-S3-D2：生成器子对象递归标记 —— gen 可持有 物化 list /
+                // 惰性 seq（list/range 等迭代源）/ transform / filter 闭包。
+                // 旧实现 default 分支不标 → gen 为唯一活引用时子对象被误回收
+                // （惰性 gen 的 transform/filter 闭包在 gen_next 时才调用，
+                //  若已被 sweep 则 use-after-free）。四值逐一检查引用类。
+                LXValue* gv[4]; int gn = 0;
+                gv[gn++] = &cur->as.gen.list;
+                gv[gn++] = &cur->as.gen.seq;
+                gv[gn++] = &cur->as.gen.transform;
+                gv[gn++] = &cur->as.gen.filter;
+                for (int i = 0; i < gn; i++) {
+                    if (px_value_is_obj(*gv[i]) && gv[i]->as.obj) PUSH_OBJ(gv[i]->as.obj);
+                }
+                break;
+            }
+            default: break;  // STR / FUNC / NATIVE / ENUM / MUTEX / RWLOCK 无子对象
         }
     }
     xfree(stack);
@@ -1013,6 +1039,9 @@ static void gc_stop_handler(int sig, siginfo_t* si, void* ctx) {
     }
     ti->uc = *(const ucontext_t*)ctx;
     ti->tmp_root = g_tmp_root;
+    // S3-D-1：保存本线程 VM 状态（若有）——线程自己的 TLS，此处读取安全。
+    // executor 暂停全部线程后据此跨线程遍历帧槽（见 px_gc_collect 并发路径）。
+    ti->vm_state = px_vm_cur_state ? px_vm_cur_state() : NULL;
     ti->epoch = g_gc_epoch;   // 记录暂停所属轮次
     ti->paused = 1;
     __sync_fetch_and_add(&g_paused_count, 1);
@@ -1081,6 +1110,7 @@ static int gc_register_thread(pthread_t tid, int is_main) {
             g_threads[i].epoch = 0;
             memset(&g_threads[i].uc, 0, sizeof(g_threads[i].uc));
             g_threads[i].tmp_root = NULL;
+            g_threads[i].vm_state = NULL;
             return 0;
         }
     }
@@ -1093,6 +1123,7 @@ static void gc_unregister_thread(pthread_t tid) {
             g_threads[i].in_use = 0;
             g_threads[i].paused = 0;
             g_threads[i].epoch = 0;
+            g_threads[i].vm_state = NULL;
             return;
         }
     }
@@ -1250,21 +1281,28 @@ void px_gc_collect(void) {
         if (g_gc_debug) (void)write(2, "[mk] globals\n", 13);
         // 根2：本线程（GC 执行者）暂存根
         if (g_tmp_root) gc_mark_obj(&set, g_tmp_root);
+        // S3-D-1：VM 帧槽精确根 —— executor 自身 VM 状态 + 各暂停线程 VM 状态。
+        // 帧槽数组在堆上，保守栈扫描不可见；g_gc_cur_set 供 px_gc_mark_slots 使用。
+        g_gc_cur_set = &set;
         // 根3：本线程栈 + 寄存器（setjmp 把寄存器写入栈上 jmp_buf，一并扫描；
         //      musl 无 getcontext，M57-S4 改 setjmp——同为外部调用强制 spill + 落栈）
         jmp_buf jb;
         (void)setjmp(jb);
         gc_scan_stack(&set);
         if (g_gc_debug) (void)write(2, "[mk] self-stack\n", 15);
-        // 根4：所有本轮暂停线程：寄存器 + 栈 + 暂存根
+        // 根3b：executor 自身 VM 活跃帧槽（单线程路径同款补标，此处并发路径）
+        if (px_vm_gc_mark) px_vm_gc_mark();
+        // 根4：所有本轮暂停线程：寄存器 + 栈 + 暂存根 + VM 帧槽（跨线程）
         for (int i = 0; i < g_thread_cap; i++) {
             GCThreadInfo* ti = &g_threads[i];
             if (!ti->in_use || !ti->paused || ti->epoch != g_gc_epoch || pthread_equal(ti->tid, me)) continue;
             gc_scan_registers(&set, &ti->uc);
             gc_scan_thread_stack(&set, ti->tid, &ti->uc);
             if (ti->tmp_root) gc_mark_obj(&set, ti->tmp_root);
+            if (ti->vm_state && px_vm_gc_mark_state) px_vm_gc_mark_state(ti->vm_state);
             if (g_gc_debug) { char dbg[64]; int dn = snprintf(dbg, sizeof(dbg), "[mk] scanned tid=%lx\n", (unsigned long)ti->tid); (void)write(2, dbg, (size_t)dn); }
         }
+        g_gc_cur_set = NULL;
         // 4) sweep
         if (g_gc_debug) { char dbg[128]; int dn = snprintf(dbg, sizeof(dbg), "[mk] 暂停+标记+扫栈耗时%lldms\n", gc_mono_ms() - t0); (void)write(2, dbg, (size_t)dn); }
         if (g_gc_debug) { char dbg[96]; int dn = snprintf(dbg, sizeof(dbg), "[mk] sweep count=%d\n", g_obj_count); (void)write(2, dbg, (size_t)dn); }
