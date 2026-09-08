@@ -390,3 +390,17 @@
 >   不受影响）。
 > - 下一步（C1 对拍）：bc_cli --emit-c bc_cli.px → gcc → VM 驱动；跑 compiler.px 重放
 >   BCModule dump，与 golden/compiler.bc.dump 逐字节对拍（VM 编译器编译自身的第一证明）。
+
+### S3-C · C1 自举 — OOM 阻塞记录（2026-09-08 08:0x，网关连带重启）
+> 事件：C1 自举验证中 bc_cli（VM）全量执行 compiler.bc 两次 OOM（dmesg 07:55 rss 6.7GB、
+> 08:04 rss 7.1GB，机器 7.8GB）→ 内核杀 bc_cli → 该进程在 ws-supervisor.service cgroup 内
+> → systemd 判 unit oom-kill → 整个 ws-supervisor 重启（QQ 网关/memory-service 连带，08:06 恢复）。
+> 技术归因：runtime 为保守标记-清除 GC（M8/M11，根=线程栈/寄存器+全局表+g_tmp_root）；
+> **VM 帧槽（PxFrame.slots）在堆上，不在 GC 根集**（vm.c 头注自认"S3-D 前不纳入 GC 根面"）
+> → VM 大规模执行 compiler.px 全链（对象百万级）时活跃对象对 GC 不可见/栈残留保守误标，
+> 内存只增不减 → OOM。= 设计预告的 S3-D「帧槽根切换」技术债被 C1 提前引爆。
+> 决策（记录）：C1 剩余"VM 跑 compiler.bc 自举证明"前置 = **VM 帧槽 GC 根止血（S3-D 切片）**：
+>   runtime.c 增外部根注册（px_gc_add_roots，单线程/并发根扫描统一纳入）+ vm.c 把 PxVmState
+>   活跃帧槽区间注册为根 → 全量重链 + bc1-12/hello/compiler dump 回归 → 再跑 C1 自举证明。
+> 防护（立即生效）：此后一切 VM/编译任务命令行前缀 `ulimit -v 2500000`（2.5GB 快速失败，
+>   不再全局 OOM 连带网关）；根治后才放开。
