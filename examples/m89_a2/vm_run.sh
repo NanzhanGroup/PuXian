@@ -19,11 +19,28 @@ SRC="${1:?用法: vm_run.sh <file.px> [args...]}"
 shift || true
 [ -x "$CN" ] || { echo "❌ 缺 selfhost/build/compiler_new（先跑 bootstrap_prove_bc.sh）" >&2; exit 1; }
 
-# 选含 vm.o 的最新 rtcache
+# 选 rtcache：优先"全能力含 vm.o"（含全部模块 .o —— VM 语义对拍不受裁剪
+#   影响，aes/xml/zip 等 native 全可用）；无全能力才回退"最新含 vm.o"
+#   （警告：裁剪 cache 会让引用被裁模块 native 的程序报"未定义变量"伪缺口）。
+#   M91 默认 build 自动裁剪后最新 cache 常为裁剪态，必须显式找全能力 cache。
 CACHE=""
+FULL_MARK="runtime_aes.o runtime_xml.o runtime_zip.o runtime_ws.o runtime_rsa.o \
+    runtime_ed25519.o runtime_h2.o runtime_route.o runtime_zlib.o runtime_quic.o \
+    runtime_sqlite.o"
 for d in $(ls -dt "$PXC_HOME"/.rtcache/*/ 2>/dev/null); do
-    [ -f "$d/.complete" ] && [ -f "$d/vm.o" ] && CACHE="$d" && break
+    [ -f "$d/.complete" ] && [ -f "$d/vm.o" ] || continue
+    missing=""
+    for m in $FULL_MARK; do
+        [ -f "$d/$m" ] || { missing="$missing $m"; break; }
+    done
+    if [ -z "$missing" ]; then CACHE="$d"; break; fi
 done
+if [ -z "$CACHE" ]; then
+    for d in $(ls -dt "$PXC_HOME"/.rtcache/*/ 2>/dev/null); do
+        [ -f "$d/.complete" ] && [ -f "$d/vm.o" ] && CACHE="$d" && break
+    done
+    [ -n "$CACHE" ] && echo "⚠️ 无全能力 rtcache，回退 $CACHE（裁剪态可能致 native 伪缺口）" >&2
+fi
 [ -n "$CACHE" ] && [ -f "$CACHE/vm.o" ] || { echo "❌ 未找到含 vm.o 的 rtcache" >&2; exit 1; }
 
 NAME="$(basename "$SRC" .px)"

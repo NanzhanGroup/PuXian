@@ -31,7 +31,7 @@
 | 模式 | 命令 | 说明 |
 |------|------|------|
 | 脚本模式 | `px run file.px` | 解释执行，秒起，类型宽松 |
-| 编译模式 | `px build file.px -o out` | 生成 C → gcc 静态二进制 |
+| 编译模式 | `px build file.px -o out` | 生成静态二进制（M91 起默认 = VM 字节码轨：compiler_vm --emit-c → BCModule 镜像 C → gcc 链 vm.o；`--c`/`PX_BUILD_ENGINE=c` = C 文本轨 fn_* 逃生舱） |
 | REPL | `px repl` | 交互式 |
 | 工具链 | `px fmt / lint / test / doc / bench / ast / lsp` | 全内置 |
 
