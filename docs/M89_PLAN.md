@@ -675,3 +675,25 @@
 >   issue28 残余停顿吸收）与「px build 默认切 BC + golden 大迁移」同属**默认轨切 VM 后置
 >   批次** —— M89-S4 收口前最大待决项（触发 = native 后端立项 / 精确 GC 需 VM 唯一执行轨
 >   / 用户拍板性能换架构统一）。
+
+### S4 · 收口（2026-09-09，dongyue）✅ 完成
+> M89 里程碑正式收口：自举证明 + 全量回归 + 重链 bootstrap + 文档同步 + tag。
+> 本机（dongyue）验证门全绿后 push GitHub main + tag v0.2.0-m89。
+> - **自举证明**：C 轨（bootstrap_prove.sh）14986 行 == golden/compiler.c；BC 轨
+>   （bootstrap_prove_bc.sh）compiler_vm 重放 30445 行 == golden/compiler.bc.dump
+>   逐字节一致 —— 双轨自举均成立。
+> - **全量回归**：diffcheck --all rc=0（lex/parse/codegen/run 全量 golden 对拍）；
+>   vm_ab.sh v2 收口门 **38 PASS + 0 GAP + 0 FAIL**（examples 确定性全集 VM vs
+>   旧轨逐字节一致）；examples/m89_s3d verify.sh **9 PASS**（VM 并发 GC 根面 +
+>   生成器标记 + 堆回落）；hello 三轨（VM=旧 C=pxi）stdout 逐字节一致。
+> - **重链 bootstrap（吸收 M89 runtime 改动）**：bootstrap/pxi（9,467,264→9,480,688
+>   B，interp.px --full 重链，解释器含 S3-D GC 修复）；bootstrap/pxc_vm
+>   （9,334,008→9,334,096 B，compiler_vm 静态重链）；bootstrap/pxi_vm
+>   （9,314,424→9,314,512 B，interp VM 镜像静态重链）。重链后 diffcheck --all 复跑
+>   rc=0 + vm_ab 复跑 38 PASS（pxi_vm/pxc_vm 与旧 pxi/pxc_vm stdout 逐字节一致）。
+> - **文档同步**：M89_PLAN（本段）+ CHANGELOG 记录 S4 收口。
+> - **tag v0.2.0-m89**：M89 收口 tag（S0 版本策略：tag 从 v0.1.0-mXX → v0.2.0-mXX）。
+> - ⚠️ 重链过程注意：`px build --full selfhost/interp.px` 会生成新的 rtcache key
+>   （与旧缓存共存）→ 重链后跑 vm_ab 前须确认 vm_run.sh 选中的是含 quic/h3/rsa
+>   全模块 rtcache（否则 quic/rsa/h3 用例误报 GAP —— 本次实证：误选裁剪缓存
+>   31 PASS+7 GAP → 删除新裁剪缓存或 px build --full 重建全模块缓存后 38 全绿）。

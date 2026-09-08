@@ -6,6 +6,24 @@
 
 ## [Unreleased]
 
+### M89-S4 · VM 化旗舰里程碑收口（tag v0.2.0-m89）
+
+> 完成（2026-09-09，dongyue）：M89（AST/C 递归 → 显式帧 + 平坦字节码 VM）S0→S4
+> 全段收官。S4 收口门 = 自举证明 + 全量回归 + 重链 bootstrap + 文档同步 + tag。
+> - **自举证明双轨成立**：C 轨 14986 行 == golden/compiler.c；BC 轨 compiler_vm
+>   重放 30445 行 == golden/compiler.bc.dump（逐字节）—— 编译器源码↔二进制↔字节码
+>   镜像三方一致。
+> - **全量回归全绿**：diffcheck --all rc=0 + vm_ab v2 收口门 **38 PASS 0 GAP 0 FAIL**
+>   （examples 确定性全集 VM vs 旧轨逐字节一致）+ m89_s3d verify 9 PASS + hello
+>   三轨一致。
+> - **重链 bootstrap（吸收 M89 runtime 改动）**：pxi / pxc_vm / pxi_vm 三引导二进制
+>   全模块重链（含 S3-D 精确 GC 根面修复），重链后 diffcheck + vm_ab 复跑全绿。
+> - 文档同步：M89_PLAN + CHANGELOG；决策记录（默认轨切 VM 后置批次）已归档。
+> - **M89 里程碑成果一览**：55→57 op 显式帧 VM + 自举 BCModule 发射器 + 双轨对拍
+>   收口门 38 例 + 三大 VM 化切片（px build --vm / pxc_vm / pxi_vm）+ 精确 GC 根面
+>   完备性（跨线程帧根 + PX_GEN 标记）。**VM 化为 native 后端 / 帧协程 / 语义冻结
+>   铺平道路（总钥匙）**。
+
 ### M89-S3-D3/4 · issue28 验收复核结论 + VM 并发 GC×生成器混合收口（精确 GC 根面完备性第 2 批）
 
 > 完成（2026-09-09，dongyue）：S3-D 段收口补强 + issue28 定位修正。
