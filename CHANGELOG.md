@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+### M89-S3-C2-5b · bootstrap/pxc_vm —— pxc VM 化静态重链（切片 2，分支试做）
+
+> 完成（2026-09-09，dongyue）：compiler_vm 静态重链落位 bootstrap/pxc_vm
+> （9.3M 静态 ELF，引导二进制入库）→ px build --vm 编译器默认路径升级为
+> PXC_VM_BIN > bootstrap/pxc_vm > selfhost/build/compiler_vm。
+> - 自举一致实证：pxc_vm bc compiler.px 重放（~6 分钟，RSS ~0.76GB）dump
+>   30446 行 == golden/compiler.bc.dump 逐字节一致 —— 静态 VM 版编译器具备
+>   权威编译能力（= pxc 的 VM 化重链技术成立）。
+> - 验证：px build --vm（PXC_VM_BIN=pxc_vm）fib == pxi；pxc_vm bc hello ==
+>   compiler_vm bc hello。
+
 ### M89-S3-C2-5 · px build --vm —— VM 轨产物产品化（分支 feat/m89-c2-vmtoolchain 切片 1）
 
 \u003e 完成（2026-09-09，dongyue）：C2 主体最大项第 1 切片 —— tools/px 增 `--vm/--bc`
