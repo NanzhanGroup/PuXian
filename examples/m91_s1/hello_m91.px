@@ -1,0 +1,11 @@
+# M91 默认轨切 VM · 验收样本 —— 冒烟程序（hello + 简单计算）
+def fib(n):
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+def main():
+    print("hello m91 vm default")
+    print("fib(15) =", fib(15))
+
+main()

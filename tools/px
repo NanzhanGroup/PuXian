@@ -6,6 +6,9 @@
 # 基于自举产物（bootstrap/pxc 编译器 + bootstrap/pxi 解释器），
 # 完全无需 Rust 工具链。行为对齐 Rust 版 px：
 #   px build <file.px>                    编译为静态二进制（<dir>/build/<name>）
+#                                          M91 起默认 = VM 字节码轨（compiler_vm
+#                                          --emit-c → BCModule 镜像 → 链 vm.o）；
+#                                          --c / PX_BUILD_ENGINE=c = C 轨逃生舱
 #   px build --no-quic <file.px>          裁剪 QUIC/H3（去掉 ngtcp2/openssl 依赖，
 #                                           runtime 侧 -DPX_NO_QUIC，M57-S4 边缘设备用）
 #   px build --target <arch> <file.px>        高层交叉开关（M71-S2，对齐 GOOS/GOARCH）：
@@ -27,7 +30,9 @@
 #   px --version / -v                     输出版本号
 #   px help                               帮助
 # 说明：
-#   - build 模式：bootstrap/pxc 生成 C 源码 → runtime 预编译 .o 缓存（M71-S1：
+#   - build 模式（M91 默认 VM 轨）：compiler_vm --emit-c 生成 BCModule 字节码镜像
+#     C（bootstrap/pxc_vm 或 PXC_VM_BIN 覆盖；--c/PX_BUILD_ENGINE=c 逃生舱走
+#     bootstrap/pxc fn_* C 文本）→ runtime 预编译 .o 缓存（M71-S1：
 #     $PXC_HOME/.rtcache/<key>，key=runtime源×cc×no_quic，命中只编 base.c+链接，
 #     二次 build 亚秒；改 runtime/换 cc/切 quic 自动重建）→ gcc 静态链接，
 #     参数对齐 Rust 版 run_build（-static -O2 -pthread + sqlite/miniz/mbedtls）
@@ -81,6 +86,7 @@ px $RELEASE_VER
 
 用法:
   px build <file.px>                         编译为静态二进制（输出 <目录>/build/<name>）
+                                              （M91：默认 = VM 字节码轨；--c = C 轨逃生舱）
   px build [--no-quic] [--target <arch>] [--cc <cc>]
             [--mbedtls-lib <dir>] [--sqlite-obj <file>] <file.px>
                                                裁剪/交叉编译选项（M57-S4 / M71-S2）：
@@ -91,13 +97,18 @@ px $RELEASE_VER
                                                  --full/--max   全能力编译（M86-S2 逃生舱：跳过自动裁剪，
                                                                   runtime 全模块链接 ≈ 9.0M 基线；可与显式
                                                                   --no-xxx 组合 = 显式裁剪其余全能力）
-                                                 --vm/--bc       VM 轨产物（M89-S3-C2 试做：编译器换
-                                                                  VM 版 compiler_vm，产物 = BCModule 字节码
-                                                                  镜像 C → 链接 runtime 含 vm.o → 程序跑在
-                                                                  显式帧 VM 上，与旧 fn_* C 文本轨并存过渡；
-                                                                  默认全能力链接，跳过自动裁剪（VM 产物无
-                                                                  px_get_global 引用可提取）。PXC_VM_BIN 环
-                                                                  境变量可覆盖 VM 编译器路径）
+                                                 --vm/--bc       VM 轨（M91 起 = 默认，flag 保留兼容）：
+                                                                  编译器 = VM 版 compiler_vm --emit-c，
+                                                                  产物 = BCModule 字节码镜像 C → 链 runtime
+                                                                  含 vm.o → 程序跑在显式帧 VM 上；默认自动
+                                                                  裁剪按 s_G 引用集（同 C 轨口径）
+                                                 --c             C 轨逃生舱（M91：显式走旧 fn_* C 文本轨，
+                                                                  纯计算热点程序用 ≈ 1.5x 性能；产物运行语义
+                                                                  与 VM 轨一致）。PXC_VM_BIN 环境变量可覆盖
+                                                                  VM 编译器路径
+                                                 PX_BUILD_ENGINE=c|vm   环境变量逃生舱（脚本/CI 一次性
+                                                                  回退到 C 轨；显式 flag 优先于 env；M91 起
+                                                                  默认 vm）
                                                  --min           显式最小化 profile（M85-S2，优先级同显式 flag）：
                                                                   聚合 --no-quic + sqlite/ws/zip/xml/aes/rsa/
                                                                   ed25519/route/zlib/h2 全裁 ≈ 2.7M
@@ -332,7 +343,14 @@ target_defaults() {
 
 # build：AST → C → gcc 静态二进制（对齐 Rust run_build）
 cmd_build() {
-    local no_quic=0 cc="gcc" mbedtls_lib="" sqlite_obj="" zlib_lib="" target="" full=0 vm=0
+    # M91：默认引擎 = vm（VM 字节码轨）。优先级：显式 flag(--c/--vm/--bc，后写胜)
+    #   > PX_BUILD_ENGINE env(c|vm) > 默认 vm。--c = C 轨逃生舱（fn_* 文本轨）。
+    local no_quic=0 cc="gcc" mbedtls_lib="" sqlite_obj="" zlib_lib="" target="" full=0
+    local engine="${PX_BUILD_ENGINE:-vm}"
+    case "$engine" in
+        c|vm) ;;
+        *) echo "警告: 未知 PX_BUILD_ENGINE=$engine（取 c|vm，退默认 vm）" >&2; engine=vm ;;
+    esac
     local mods="" cuts=""
     local cc_set=0 no_quic_set=0
     while [ $# -gt 0 ]; do
@@ -340,7 +358,8 @@ cmd_build() {
             --no-quic) no_quic=1; no_quic_set=1; shift ;;
             --min) no_quic=1; no_quic_set=1; mods="$mods sqlite ws zip xml aes rsa ed25519 route zlib h2"; shift ;;
             --full|--max) full=1; shift ;;
-            --vm|--bc) vm=1; shift ;;
+            --c) engine=c; shift ;;              # M91：C 轨逃生舱（显式）
+            --vm|--bc) engine=vm; shift ;;       # M91：VM 轨（显式 = 新默认；保留旧 flag 兼容）
             --no-sqlite) mods="$mods sqlite"; shift ;;
             --no-ws) mods="$mods ws"; shift ;;
             --no-zip) mods="$mods zip"; shift ;;
@@ -423,10 +442,11 @@ cmd_build() {
     local out_path="$build_dir/$base"
 
     # 1) PuXian 版编译器生成产物 C 源码（stdout）：
-    #    旧轨（默认）= bootstrap/pxc build（fn_* C 文本）
-    #    VM 轨（--vm）= VM 版编译器 --emit-c（BCModule 字节码镜像 C，M89-S3-C2）
+    #    VM 轨（默认 engine=vm）= VM 版编译器 --emit-c：BCModule 字节码镜像 C
+    #      （M89-S3-C2 试做 / M91 默认化）→ 链 runtime 含 vm.o → 显式帧 VM 执行
+    #    C 轨（--c / PX_BUILD_ENGINE=c 逃生舱）= bootstrap/pxc build（fn_* C 文本）
     local cmp_bin="$PXC_BIN" cmp_sub="build"
-    if [ "$vm" = 1 ]; then
+    if [ "$engine" = "vm" ]; then
         # VM 版编译器优先级：PXC_VM_BIN 环境变量 > bootstrap/pxc_vm（静态，入库）
         #   > selfhost/build/compiler_vm（dev 自举缓存，需先跑 bootstrap_prove_bc.sh）
         if [ -n "${PXC_VM_BIN:-}" ]; then
@@ -437,7 +457,7 @@ cmd_build() {
             cmp_bin="$PXC_HOME/selfhost/build/compiler_vm"
         fi
         cmp_sub="--emit-c"
-        [ -x "$cmp_bin" ] || { echo "错误: --vm 需要 VM 版编译器 $cmp_bin（bootstrap/pxc_vm 或先跑 selfhost/bootstrap_prove_bc.sh 生成）" >&2; return 1; }
+        [ -x "$cmp_bin" ] || { echo "错误: VM 引擎需要 VM 版编译器 $cmp_bin（bootstrap/pxc_vm 或先跑 selfhost/bootstrap_prove_bc.sh 生成；逃生舱 PX_BUILD_ENGINE=c）" >&2; return 1; }
     fi
     "$cmp_bin" $cmp_sub "$file" > "$c_path" 2>/dev/null || {
         echo "错误: 编译失败（$file）" >&2
@@ -447,16 +467,25 @@ cmd_build() {
     }
     # 2) M71-S1：runtime 预编译 .o 缓存（命中 → 只编 base.c + 链接；miss → 现编入缓存）
     local cache_dir
-    # M86-S2：自动按需裁剪 —— 裸 `px build <file>` = 按引用集自动最小；
+    # M86-S2 / M91：自动按需裁剪 —— 裸 `px build <file>` = 按引用集自动最小；
     #   --full / --max 逃生舱 = 全能力（跳过自动）。优先级：
     #   显式 flag（--no-xxx / --min / --no-quic / --target 物理约束）> 自动；
-    #   自动只补"未显式声明"且"引用集未命中"的模块（C 产物提取 px_get_global，零额外 codegen）。
-    if [ "$full" = 0 ] && [ "$vm" = 0 ]; then
+    #   自动只补"未显式声明"且"引用集未命中"的模块。引用集提取分轨：
+    #   C 轨 = C 产物 px_get_global；VM 轨产物无 px_get_global → 提取 BCModule
+    #   镜像 s_G 字符串表（全部全局/native 引用名，等价信息，实测含 http_serve
+    #   等 native）。后续 map 反推/补裁逻辑两轨共用。
+    if [ "$full" = 0 ]; then
         local refs_tmp used am
         refs_tmp="$(mktemp /tmp/px_auto_refs_XXXXXX)" || return 1
-        grep -oE 'px_get_global\("([^"]+)"' "$c_path" \
-            | sed 's/px_get_global("//; s/"$//' \
-            | LC_ALL=C sort -u > "$refs_tmp"
+        if [ "$engine" = "vm" ]; then
+            # 提取 `static const char* s_G[] = { "a", "b", ... };` 块内字符串
+            sed -n '/s_G\[\] = {/,/};/p' "$c_path" \
+                | grep -oE '"([^"]+)"' | tr -d '"' | LC_ALL=C sort -u > "$refs_tmp"
+        else
+            grep -oE 'px_get_global\("([^"]+)"' "$c_path" \
+                | sed 's/px_get_global("//; s/"$//' \
+                | LC_ALL=C sort -u > "$refs_tmp"
+        fi
         local MAP="$PXC_HOME/runtime/native_mod_map.txt"
         if [ -f "$MAP" ]; then
             # 被引用模块 = 引用集 ∩ map 的 mod 集合
