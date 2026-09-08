@@ -10230,23 +10230,43 @@ static pthread_cond_t g_fserve_cond = PTHREAD_COND_INITIALIZER;
 
 static LXValue sse_conn_worker(LXValue* args, int nargs, void* ctx);  // M88-S2：池 dispatch 前向
 
-static void* fserve_worker(void* arg) {
-    (void)arg;
-    // 常驻线程：注册到 GC 槽位（同 px_pool_worker：GC 可暂停/扫描本线程栈上对象）
+// F3-fix（M90-F3 根因修复）：fserve_worker 空闲（cond_wait 等 job）时注销 GC 槽位。
+// 背景：事件化 keep-alive（M88-B-S1）后 256 个 worker 绝大多数时间空闲 cond_wait；
+//   M11 并发 GC（stop-the-world）每次回收需暂停全部已注册线程——254 个空闲 worker
+//   在 cond_wait 中被 SIG_GC_STOP 暂停/自旋/恢复的协商开销巨大，且被暂停 worker 若
+//   卡在 cond_wait 锁窗口会让事件循环 fserve_push 长时间拿不到 g_fserve_mu → 连接
+//   请求 15s 无人处理（F3 实测根因：RPS 218 vs 禁 GC 后 1400）。空闲 worker 栈上无
+//   px 对象（job 仅 fd+kind int）→ 不参与 GC 暂停安全；取到 job 处理前注册（处理中
+//   创建 px 对象需 GC 根面）。注册/注销持 g_gc_mu（GC executor 亦持 → 天然互斥）。
+static void fserve_gc_reg(int on) {
     pthread_mutex_lock(&g_gc_mu);
     if (!g_gc_env_inited) gc_init_env();
-    g_active_threads++;
-    int slot = -1;
-    for (int i = 0; i < g_thread_cap; i++) if (!g_threads[i].in_use) { slot = i; break; }
-    if (slot >= 0) {
-        g_threads[slot].tid = pthread_self();
-        g_threads[slot].in_use = 1;
-        g_threads[slot].paused = 0;
-        g_threads[slot].is_main = 0;
-        g_threads[slot].epoch = 0;
-        g_threads[slot].tmp_root = NULL;
+    pthread_t me = pthread_self();
+    if (on) {
+        g_active_threads++;
+        for (int i = 0; i < g_thread_cap; i++) if (!g_threads[i].in_use) {
+            g_threads[i].tid = me;
+            g_threads[i].in_use = 1;
+            g_threads[i].paused = 0;
+            g_threads[i].is_main = 0;
+            g_threads[i].epoch = 0;
+            g_threads[i].tmp_root = NULL;
+            break;
+        }
+    } else {
+        for (int i = 0; i < g_thread_cap; i++)
+            if (g_threads[i].in_use && pthread_equal(g_threads[i].tid, me)) {
+                g_threads[i].in_use = 0;
+                if (g_active_threads > 0) g_active_threads--;
+                break;
+            }
     }
     pthread_mutex_unlock(&g_gc_mu);
+}
+
+static void* fserve_worker(void* arg) {
+    (void)arg;
+    // F3-fix：初始不注册 GC 槽（空闲）；取到 job 处理前 fserve_gc_reg(1) 注册。
     for (;;) {
         pthread_mutex_lock(&g_fserve_mu);
         while (g_fserve_count == 0) pthread_cond_wait(&g_fserve_cond, &g_fserve_mu);
@@ -10255,10 +10275,12 @@ static void* fserve_worker(void* arg) {
         g_fserve_count--;
         pthread_cond_broadcast(&g_fserve_cond);   // 唤醒阻塞在 push 的 accept 线程
         pthread_mutex_unlock(&g_fserve_mu);
+        fserve_gc_reg(1);   // F3-fix：取到 job → 注册 GC 槽（处理中持 px 对象，需 GC 根）
         LXValue arg = px_int(job.fd);
         if (job.kind == FSERVE_KIND_SSE) sse_conn_worker(&arg, 1, NULL);
         else http_conn_worker(&arg, 1, NULL);
-        px_gc_poll();   // ISSUE28-B1：请求间安全点回收（worker 空闲时跑 GC，不落请求热路径）
+        px_gc_poll();       // ISSUE28-B1：请求间安全点回收（本 worker 仍注册，空闲前跑 GC）
+        fserve_gc_reg(0);   // F3-fix：处理完 → 注销（回 cond_wait 空闲，不参与 GC 暂停）
     }
     return NULL;  // 不可达（进程退出由 OS 回收）
 }
@@ -10340,6 +10362,9 @@ typedef struct PxConnCtx {
     int state;              // FREE / ACTIVE / IDLE
     int ev_reg;             // 是否已注册进事件循环（IDLE 必真；防重复 epoll_ctl ADD/DEL）
     long long idle_since;   // 进入 IDLE 的单调毫秒（空闲超时检查用）
+    // F3-fix 根因深查插桩：本 IDLE 周期内事件循环 epoll_wait 返回该 fd 的次数
+    // （观测「漏报活跃连接」到底 epoll 报没报；仅诊断打印用，正常路径零读取）
+    int idle_ev_cnt;
     char* pbuf;             // 半请求续接缓冲（B-S2 非阻塞续接启用；S1 预留）
     int pbuf_len, pbuf_cap;
 } PxConnCtx;
@@ -10354,6 +10379,15 @@ static pthread_t g_ev_thread;
 static volatile int g_ev_run = 0;       // 事件循环运行标志
 static int g_ev_wakefd = -1;            // 唤醒管道读端（写端 g_ev_wakew；注册/摘除后唤醒重算）
 static int g_ev_wakew = -1;
+// F3-fix（M90-F3 / qg-issue）：事件驱动 keep-alive 诊断计数器——观测事件循环
+// 「交 IDLE → detect → 派发」链路的漏报规模（PX_EV_DIAG=1 时事件循环每 ~5s 打一行 stderr）。
+// 计数用 __atomic 宽松自增（仅诊断，不要求精确）；生产（未开 PX_EV_DIAG）零输出、近零开销。
+static volatile long long g_diag_idle_put = 0;    // worker 交 IDLE 成功次数（px_evc_idle_put）
+static volatile long long g_diag_detect_http = 0; // 事件循环 detect HTTP IDLE 可读并投回 fserve 次数
+static volatile long long g_diag_tmo_close = 0;   // 空闲超时关闭次数（poll 确认真空闲）
+static volatile long long g_diag_tmo_save = 0;    // 空闲超时救回次数（poll 见在途数据 = 漏报活跃连接）
+static int g_ev_diag = 0;                          // PX_EV_DIAG=1 开诊断（px_ev_ensure 启动时读一次）
+static long long g_diag_last_log = 0;              // 上次诊断打印时刻（单调 ms）
 
 // 单调毫秒（空闲超时计时；不进 px_now_ms 以免依赖其后定义）
 static long long px_ev_now_ms(void) {
@@ -10389,6 +10423,7 @@ static int px_evc_ensure(int fd) {
     for (int i = g_conn_cap; i < ncap; i++) {
         nc[i].fd = -1; nc[i].kind = 0; nc[i].state = PX_CONN_STATE_FREE;
         nc[i].ev_reg = 0; nc[i].idle_since = 0;
+        nc[i].idle_ev_cnt = 0;
         nc[i].pbuf = NULL; nc[i].pbuf_len = 0; nc[i].pbuf_cap = 0;
     }
     g_conns = nc; g_conn_cap = ncap;
@@ -10420,6 +10455,7 @@ static PxConnCtx* px_evc_acquire(int fd, int kind) {
         if (c->pbuf) { xfree(c->pbuf); c->pbuf = NULL; c->pbuf_len = c->pbuf_cap = 0; }
     }
     c->fd = fd; c->kind = kind; c->state = PX_CONN_STATE_ACTIVE; c->idle_since = 0;
+    c->idle_ev_cnt = 0;
     pthread_mutex_unlock(&g_conn_mu);
     return c;
 }
@@ -10474,7 +10510,9 @@ static int px_evc_idle_put(int fd, int kind) {
     c->kind = kind;
     struct epoll_event ev;
     memset(&ev, 0, sizeof(ev));
-    ev.events = EPOLLIN | EPOLLRDHUP | EPOLLET;  // 边缘触发：可读事件只报一次，读完由 worker 再交还
+    // 边缘触发：可读事件只报一次，读完由 worker 再交还（F3 根因实验确认与 ET/LT 无关，
+    //   漏报实为 GC STW 暂停事件循环所致；恢复 ET 减少无谓唤醒）
+    ev.events = EPOLLIN | EPOLLRDHUP | EPOLLET;
     ev.data.fd = fd;
     if (epoll_ctl(g_ev_epfd, EPOLL_CTL_ADD, fd, &ev) != 0) {
         // 注册失败（fd 非法/已达上限等）→ 保持 ACTIVE，调用方按失败处理（原路径关闭）
@@ -10482,7 +10520,9 @@ static int px_evc_idle_put(int fd, int kind) {
         return -1;
     }
     c->state = PX_CONN_STATE_IDLE; c->ev_reg = 1; c->idle_since = px_ev_now_ms();
+    c->idle_ev_cnt = 0;
     pthread_mutex_unlock(&g_conn_mu);
+    __atomic_fetch_add(&g_diag_idle_put, 1, __ATOMIC_RELAXED);
     px_ev_wake();
     return 0;
 }
@@ -10520,10 +10560,17 @@ static void* px_ev_loop(void* arg) {
                 continue;
             }
             // 先取该 fd 当前 IDLE 连接的类型（锁内快照；FREE/异常跳过）
+            // F3-fix 插桩：IDLE 周期内每被 epoll_wait 返回一次 idle_ev_cnt++（观测漏报：
+            //   超时救回/关闭时若 cnt==0 → 本 IDLE 周期 epoll 从未报过该 fd）
             int kind = -1;
             pthread_mutex_lock(&g_conn_mu);
             PxConnCtx* c0 = px_evc_ctx(fd);
-            if (c0 && c0->state == PX_CONN_STATE_IDLE) kind = c0->kind;
+            if (c0 && c0->state == PX_CONN_STATE_IDLE) { kind = c0->kind; c0->idle_ev_cnt++; }
+            // F3-fix 现场抓拍：epoll 报事件但连接 state 非 IDLE（ev_reg=1 = 仍在 epoll）
+            //   → 状态与登记不一致（漏报根因候选：某路径改 state 未 DEL，事件循环每次跳过）
+            if (g_ev_diag && c0 && c0->ev_reg && c0->state != PX_CONN_STATE_IDLE)
+                fprintf(stderr, "[px-ev:INCONSIST] fd=%d state=%d ev_reg=1 events=0x%x\n",
+                        fd, c0->state, evs[i].events);
             pthread_mutex_unlock(&g_conn_mu);
             if (kind == FSERVE_KIND_SSE) {
                 // SSE 长连接 IDLE：客户端不应发数据——有事件多半是对端断开/异常。
@@ -10544,7 +10591,10 @@ static void* px_ev_loop(void* arg) {
                     c = NULL;  // 状态异常/已关闭：跳过派发
                 }
                 pthread_mutex_unlock(&g_conn_mu);
-                if (c) fserve_push(fd, k2);   // 队满阻塞背压（事件循环线程暂停派发，不丢 fd）
+                if (c) {
+                    __atomic_fetch_add(&g_diag_detect_http, 1, __ATOMIC_RELAXED);
+                    fserve_push(fd, k2);   // 队满阻塞背压（事件循环线程暂停派发，不丢 fd）
+                }
                 continue;
             }
             if (evs[i].events & (EPOLLHUP | EPOLLERR | EPOLLRDHUP)) {  // 对端断开/异常
@@ -10554,22 +10604,78 @@ static void* px_ev_loop(void* arg) {
         }
         // 周期性扫空闲超时（统一 tick；与 SO_RCVTIMEO 15s 语义对齐）
         // M88-B-S3：仅 http IDLE 连接受 15s 空闲超时约束；SSE IDLE 长连接不超时（等 sse_close/对端断开）。
+        // F3-fix（M90-F3）：空闲超时 close 前 poll(0) 二次确认——杜绝「事件循环漏报 →
+        //   活跃连接被 15s tick 误杀」（Connection reset / 长压 RPS 骤降根因）。确认逻辑：
+        //   有在途数据（POLLIN）→ 连接实际活跃（漏报），摘除上下文后重新登记 ACTIVE 并投回
+        //   fserve 池继续服务；POLLHUP/POLLERR → 对端已断开 → 照常关闭；无事件 → 真空闲 → close。
         long long now = px_ev_now_ms();
         pthread_mutex_lock(&g_conn_mu);
         for (int i = 0; i < g_conn_cap; i++) {
             PxConnCtx* c = &g_conns[i];
-            if (c->state == PX_CONN_STATE_IDLE && c->kind == FSERVE_KIND_HTTP &&
-                now - c->idle_since >= PX_CONN_IDLE_TMO_MS) {
-                int fd = c->fd;
-                if (c->ev_reg && g_ev_epfd >= 0) { epoll_ctl(g_ev_epfd, EPOLL_CTL_DEL, fd, NULL); c->ev_reg = 0; }
-                if (c->pbuf) { xfree(c->pbuf); c->pbuf = NULL; c->pbuf_len = c->pbuf_cap = 0; }
-                c->fd = -1; c->state = PX_CONN_STATE_FREE; c->kind = 0; c->idle_since = 0;
-                pthread_mutex_unlock(&g_conn_mu);
-                close(fd);                       // 空闲超时关闭（keep-alive 15s 语义）
-                pthread_mutex_lock(&g_conn_mu);
+            if (c->state != PX_CONN_STATE_IDLE || c->kind != FSERVE_KIND_HTTP ||
+                now - c->idle_since < PX_CONN_IDLE_TMO_MS) continue;
+            int fd = c->fd;
+            int idle_ev_cnt = c->idle_ev_cnt;   // 本 IDLE 周期 epoll 上报次数（诊断用）
+            int ev_reg_before = c->ev_reg;      // 超时收尾前是否仍登记在 epoll（诊断用）
+            // F3-fix 根因验证：EPOLL_CTL_MOD 试探内核 epoll 是否真有该 fd（ev_reg 可能陈旧——
+            //   fd 曾被 close(内核自动 DEL) 但上下文未清 → 新连接复用 fd → 数据到达 epoll 永不报）
+            if (g_ev_diag && c->ev_reg && g_ev_epfd >= 0) {
+                struct epoll_event mev; memset(&mev, 0, sizeof(mev));
+                mev.events = EPOLLIN | EPOLLRDHUP; mev.data.fd = fd;
+                int mr = epoll_ctl(g_ev_epfd, EPOLL_CTL_MOD, fd, &mev);
+                if (mr != 0 && errno == ENOENT)
+                    fprintf(stderr, "[px-ev:tmo] CHECK fd=%d ev_reg=%d → 内核epoll【不在】(ENOENT, ev_reg陈旧!)\n",
+                            fd, ev_reg_before);
             }
+            // 摘除事件循环登记并释放上下文（统一收尾路径；fd 暂不 close，供下方 poll(0) 二次确认）
+            if (c->ev_reg && g_ev_epfd >= 0) { epoll_ctl(g_ev_epfd, EPOLL_CTL_DEL, fd, NULL); c->ev_reg = 0; }
+            if (c->pbuf) { xfree(c->pbuf); c->pbuf = NULL; c->pbuf_len = c->pbuf_cap = 0; }
+            c->fd = -1; c->state = PX_CONN_STATE_FREE; c->kind = 0; c->idle_since = 0;
+            c->idle_ev_cnt = 0;
+            pthread_mutex_unlock(&g_conn_mu);
+            // —— 二次确认（fd 已从上下文摘除且未 close：数字仍占用，poll 安全）——
+            int keep = 0;
+            struct pollfd pfd;
+            pfd.fd = fd; pfd.events = POLLIN; pfd.revents = 0;
+            int pr = poll(&pfd, 1, 0);
+            if (pr > 0 && (pfd.revents & POLLIN) &&
+                !(pfd.revents & (POLLHUP | POLLERR | POLLNVAL))) {
+                keep = 1;                  // 在途数据：活跃连接被漏报 → 救回
+            }
+            if (keep) {
+                __atomic_fetch_add(&g_diag_tmo_save, 1, __ATOMIC_RELAXED);
+                if (g_ev_diag) {
+                    // 区分「活跃连接漏报」vs「对端 FIN(EOF) 未上报」：MSG_PEEK 看缓冲内容
+                    char pkb[80]; int pkn = -1, avail = -1;
+                    pkn = (int)recv(fd, pkb, sizeof(pkb) - 1, MSG_PEEK | MSG_DONTWAIT);
+                    if (pkn >= 0) pkb[pkn] = 0; else pkb[0] = 0;
+                    ioctl(fd, FIONREAD, &avail);
+                    fprintf(stderr, "[px-ev:tmo] SAVE fd=%d ev_reg=%d idle_ev_cnt=%d peek=%d avail=%d head='%.*s'\n",
+                            fd, ev_reg_before, idle_ev_cnt, pkn, avail,
+                            (pkn > 0 && pkn < 80) ? pkn : 0, pkb);
+                }
+                PxConnCtx* ac = px_evc_acquire(fd, FSERVE_KIND_HTTP);  // FREE→ACTIVE 重新登记
+                if (ac) fserve_push(fd, FSERVE_KIND_HTTP);             // 投回池，worker 接管读在途请求
+                else close(fd);                                        // 登记失败兜底（理论不可达）
+            } else {
+                __atomic_fetch_add(&g_diag_tmo_close, 1, __ATOMIC_RELAXED);
+                if (g_ev_diag)
+                    fprintf(stderr, "[px-ev:tmo] CLOSE fd=%d ev_reg=%d idle_ev_cnt=%d (真空闲/断开)\n",
+                            fd, ev_reg_before, idle_ev_cnt);
+                close(fd);                   // 真空闲/对端断开：空闲超时关闭（keep-alive 15s 语义）
+            }
+            pthread_mutex_lock(&g_conn_mu);
         }
         pthread_mutex_unlock(&g_conn_mu);
+        // 诊断输出（PX_EV_DIAG=1；每 ~5s 一行；生产默认关）
+        if (g_ev_diag && now - g_diag_last_log >= 5000) {
+            g_diag_last_log = now;
+            fprintf(stderr, "[px-ev:diag] idle_put=%lld detect_http=%lld tmo_close=%lld tmo_save=%lld (tmo_save=漏报救回的活跃连接)\n",
+                    __atomic_load_n(&g_diag_idle_put, __ATOMIC_RELAXED),
+                    __atomic_load_n(&g_diag_detect_http, __ATOMIC_RELAXED),
+                    __atomic_load_n(&g_diag_tmo_close, __ATOMIC_RELAXED),
+                    __atomic_load_n(&g_diag_tmo_save, __ATOMIC_RELAXED));
+        }
     }
     return NULL;
 }
@@ -10579,6 +10685,7 @@ static void px_ev_ensure(void) {
     if (g_ev_epfd >= 0) return;
     pthread_mutex_lock(&g_conn_mu);
     if (g_ev_epfd < 0) {
+        if (getenv("PX_EV_DIAG") && atoi(getenv("PX_EV_DIAG")) > 0) g_ev_diag = 1;
         int epfd = epoll_create1(0);
         if (epfd >= 0) {
             int p[2];

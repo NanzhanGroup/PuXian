@@ -6,6 +6,25 @@
 
 ## [Unreleased]
 
+### F3-fix · http_serve keep-alive 长压卡顿修复（GC×fserve 池交互根因 + 超时 tick 兜底）
+
+> 完成（2026-09-09，dongyue）：M90-S2 F3 的修复落地。**根因实证修正**：误杀活跃连接的
+> 真根因不是 epoll 漏报，而是 **M11 并发 GC（STW）与事件化 fserve 池交互**——事件化后
+> 256 fserve_worker 绝大多数空闲 cond_wait，GC 每次 STW 暂停全部注册线程的协商开销 +
+> 被暂停 worker 卡 cond_wait 锁窗口 → 事件循环 fserve_push 长时间阻塞 → 连接请求 15s
+> 无人处理。实证链：ET/LT 均漏报排除 epoll 语义 → SAVE 插桩 idle_ev_cnt=0 但高频 wait
+> 日志每批含该 fd → gdb 抓拍事件循环卡 fserve_push 锁 + 254 worker 被 GC 暂停自旋 →
+> **禁 GC 后 RPS 218→1400、卡顿归零（实锤）**。
+> - **治本**：`fserve_gc_reg()` —— fserve_worker 空闲（cond_wait）注销 GC 槽，取 job
+>   处理前注册（空闲 worker 无 px 对象 → 不参与 GC 暂停安全）；GC 只暂停在岗 worker。
+> - **兜底**：事件循环空闲超时 tick close 前 `poll(0)` 二次确认，活跃连接（有在途数据）
+>   救回投回 fserve 池，杜绝任何路径下被 15s tick 误杀。
+> - **验证**（GC 默认开启 8×3000 长压）：RPS 216→**1288**、ok 24000/24000、max 18s→262ms、
+>   tmo_save 9~20→0。回归：m89_s3d 9 PASS、m90_s1 5 PASS、m82 unix 全 PASS（issue28 场景）、
+>   m83_s6 SSE/http_stream 全 PASS、vm_ab 38 例 FAIL 0、短压 RPS 1473。
+> - 诊断：PX_EV_DIAG=1 门控计数器（idle_put/detect/tmo_close/tmo_save + SAVE 明细），
+>   生产默认关零开销。详见 docs/M90_S2_F3.md §6。
+
 ### M90-S2/S3/S4 · F3 快查 + stdlib 全 VM 冒烟 + 默认轨切换立项评估（M90 收官）
 
 > 完成（2026-09-09，dongyue）：M90（默认轨切换前奏）S2-S4 收官（S1 见下一条目）。
