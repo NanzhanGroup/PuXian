@@ -6,6 +6,32 @@
 
 ## [Unreleased]
 
+### M89-S3-C2 · golden 切换前奏：compiler.px 主链路并入 bc_emit（编译器正主 BC 发射能力）
+
+> 完成（2026-09-08）：VM 化自举收敛进入 C2 第一步 —— 把 bc 发射能力从姊妹壳
+> bc_cli.px 并入 compiler.px 主链路（M89_PLAN A1 决策"届时 bc_emit 并入 compiler.px
+> 随自举 golden 同批"落地）。compiler.px 现支持 `bc`/`--emit-c` 子命令（默认仍 C
+> 文本旧轨，px build 零回归）。
+> - **selfhost/compiler.px**：import bc_emit.px + 声明 g_bcm + bc_basename + main
+>   分支（参数含 `bc` → BCModule dump；含 `--emit-c` → emit-c 静态 C）。默认 C 文本
+>   （cg_generate）路径不动。
+> - **golden 双轨同步**（compiler.px 源码变化 → 权威产物再生成）：golden/compiler.c
+>   = pxc 编 compiler.px 新产物（14935 行，原 10596 → 因并入 bc_emit 生态）；自举
+>   证明 B.c==golden/compiler.c 逐字节 PASS（bootstrap_prove.sh rc=0）。
+> - **VM 自举重放证明（C2 核心前置）**：compiler_new（= 新 compiler.px 的 C 引擎
+>   产物）emit-c compiler.px → gcc 链 rtcache（含 vm.o）→ compiler_vm（VM 驱动版
+>   编译器）；compiler_vm bc compiler.px → dump 30315 行 / 541,219 B 与
+>   golden/compiler.bc.dump 逐字节一致（编译器字节码镜像在 VM 上编译自身，C 引擎
+>   产物与 VM 产物双轨一致）。
+> - **回归**：bc1-12 dump golden 全绿（bc_emit 逻辑未动）；hello C 轨产物与旧 pxc
+>   逐字节零回归；hello VM（emit-c→gcc→run）输出 "HELLO, 普贤" 与 pxi/C 轨一致；
+>   compiler.px parse/lint 零告警。
+> - 记录：bc_cli.px 姊妹壳暂留（后续 C2 收口退役）；compiler.bc.dump 权威基线随
+>   compiler.px 含 bc_emit 增大为含发射器自身的镜像（30315 行，重复运行逐字节一致）。
+> - 下一步：C2 golden 切换 —— 自举证明规则更新（compiler.bc.dump 为字节码权威对拍
+>   基准）；bootstrap/pxc/pxi 重链 VM 版（px build 产物 = BCModule 内嵌 C + VM 启动）；
+>   vm_ab.sh v2 examples 全量 VM vs 旧轨 stdout 对拍。
+
 ### M89-S3-B5 · VM 化：并发/原语桥（spawn/chan/send/recv/select + px_spawn_ctx 修复）
 
 > 完成（2026-09-08）：VM 并发桥打通（bc11/bc12 ALL PASS），修复一个跨轨 runtime bug。

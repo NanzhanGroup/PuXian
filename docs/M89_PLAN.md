@@ -422,3 +422,27 @@
 > - 本机环境注：缺 glibc static（-static 链接报 cannot find -lm/-lc）→ 本地验证链接去 -static。
 > - 下一步：C2 golden 切换（golden/compiler.c → BCModule 镜像；自举证明规则更新）+ S3-C 收口
 >   门（vm_ab.sh v2 examples 全量 VM vs 旧轨 stdout 对拍）。
+
+### S3-C · C2 golden 切换前奏：compiler.px 主链路并入 bc_emit（2026-09-08）
+> 完成（C2-1，dongyue）：VM 化自举收敛 A1 决策"bc_emit 并入 compiler.px 随自举 golden
+> 同批"落地 —— 编译器正主（compiler.px/pxc 源码）获得 BC 发射能力，不再依赖姊妹壳 bc_cli。
+> - **selfhost/compiler.px**：import bc_emit.px + 声明 g_bcm + bc_basename + main 支持
+>   `bc`（BCModule dump）/`--emit-c`（emit-c 静态 C）子命令；默认 C 文本（cg_generate）
+>   路径零改动 → px build / pxc 旧用法完全兼容。
+> - **golden 双轨同步**：compiler.px 源码有意变更 → ① golden/compiler.c = pxc 编
+>   compiler.px 新产物（14935 行，并入 bc_emit 生态后增大）② golden/compiler.bc.dump =
+>   compiler.px 含 bc_emit 的新字节码镜像（30315 行，原 21456 → 含发射器自身）。
+> - **证明链**：bootstrap_prove rc=0（B.c==golden/compiler.c 逐字节）；compiler_new
+>   （= 新 compiler.px 的 C 引擎编译产物）bc bc1-12 dump == golden 全绿；VM 编译器
+>   （compiler_vm = 新 compiler.px emit-c → gcc 链 vm.o）重放 compiler.px → dump 30315
+>   行与 golden/compiler.bc.dump 逐字节一致 —— C 引擎轨与 VM 轨双轨一致。
+> - **回归**：hello 三轨（pxi / C 轨 / VM 轨 emit-c→gcc→run）stdout 逐字节一致；
+>   compiler.px parse/lint 零告警；bc_emit 逻辑未动 → cases_bc dump 全不变。
+> - 记录：bc_cli.px 姊妹壳暂留（C2 收口退役，届时 bc_run.sh 切 compiler.px bc）；
+>   bootstrap/pxc 二进制滞后一代未重链（沿用 M89_PLAN S0 决策，C2 后段 pxc VM 化统一
+>   重链）；compiler.bc.dump 权威基线随 compiler.px 含 bc_emit 变为"含发射器自身的
+>   编译器镜像"（VM 自举重放 == golden 实证）。
+> - 下一步（C2 主体）：自举证明规则更新（compiler.bc.dump 为字节码权威对拍基准，
+>   bootstrap_prove.sh 支持 BC 轨）；bootstrap/pxc/pxi 重链 VM 版（pxc 产物 = BCModule
+>   内嵌 C + VM 启动 main，px build 默认切 BC）；S3-C 收口门 vm_ab.sh v2（examples
+>   全量 VM vs 旧轨 stdout 对拍）。

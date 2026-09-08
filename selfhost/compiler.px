@@ -6,12 +6,21 @@
 # 用法：
 #   px run compiler.px build <file.px>   # 解释模式
 #   build/compiler build <file.px>       # 编译模式（自举）
+#   build/compiler <file.px>             # 同上（file 为最后参数）
 # 说明：主文件声明全部全局状态（import 不注册模块顶层 let），
 #       import codegen.px 提供函数（parser/pxlexer/cg_* 全链）。
 # 对拍契约（MINI_SUBSET §五 build 层）：输出 C 源码 norm_c 后与
 #       Rust 版 `px build <file.px>` 产物逐字节一致。
+#
+# M89-S3-C2（2026-09-08）：并入 bc_emit.px —— 编译器正主自举收敛第一子步：
+#       bc 发射能力从姊妹壳 bc_cli.px 并入 compiler.px 主链路，支持：
+#         compiler.px <file>              # 默认 C 文本（旧轨 codegen，不变）
+#         compiler.px bc <file>           # BCModule dump（字节码镜像，VM 轨）
+#         compiler.px bc --emit-c <file>  # BCModule 静态 C 产物（emit-c）
+#       自举证明规则随 C2 从 C 文本对拍切到 BC 镜像对拍（见 bootstrap_prove.sh）。
 # ============================================================
 import "codegen.px"
+import "bc_emit.px"
 # ---------- 全局状态（主文件声明；import 不注册模块顶层 let）----------
 var g_src = ""
 var g_len = 0
@@ -42,9 +51,24 @@ var cg_err_labels = []
 var cg_uidc = 0
 var cg_closure_id = 0
 var loaded = {"_": 0}
+# bc_emit.px 模块级状态（import 不注册模块顶层 var → 主文件声明）
+var g_bcm = null
 # ---------- 版本（M63-L11：bootstrap/pxc --version/-v；对齐 tools/pxc SELFHOST_VER/MS） ----------
 let PXC_VER = "0.2.0"
 let PXC_MS = "M-B9a"
+# ---------- 工具（bc dump 用；与 bc_cli.px 同构） ----------
+def bc_basename(path):
+    var i = len(path) - 1
+    while i >= 0:
+        if path[i] == "/":
+            var b = path[i + 1:len(path)]
+            if len(b) > 3 and b[len(b) - 3:len(b)] == ".px":
+                return b[0:len(b) - 3]
+            return b
+        i -= 1
+    if len(path) > 3 and path[len(path) - 3:len(path)] == ".px":
+        return path[0:len(path) - 3]
+    return path
 # ---------- 入口 ----------
 def main():
     let a = args()
@@ -52,13 +76,32 @@ def main():
     if len(a) == 2 and (a[1] == "--version" or a[1] == "-v"):
         print("pxc " + PXC_VER + " (普贤 PuXian · selfhosted " + PXC_MS + ")")
         return 0
-    # 支持：compiler.px <file>  /  compiler.px build <file>  /  compiler.px --xxx <file>
+    # M89-S3-C2：bc 子命令识别 —— 参数（非末位文件）含 "bc"/"--emit-c" → BCModule 轨
+    #   （--emit-c 单独出现也进 BC 轨 emit-c，对齐 bc_cli 用法）。默认 = C 文本（旧轨）。
+    var bc_mode = false
+    var emit_c = false
+    var ai = 1
+    while ai < len(a) - 1:
+        if a[ai] == "bc" or a[ai] == "--emit-c":
+            bc_mode = true
+        if a[ai] == "--emit-c":
+            emit_c = true
+        ai += 1
+    # 支持：compiler.px <file>  /  compiler.px build <file>  /  compiler.px bc <file>
     let f = a[len(a) - 1]
     let base_dir = cg_dirname(f)
     p_toks = lex_tokens(read_file(f))
     p_pos = 0
     let ast = parse_program()
     let prog = cg_resolve_modules(ast, base_dir)
+    if bc_mode:
+        if emit_c:
+            print(bc_emit_c_program(prog))
+            return 0
+        let m = bc_emit_program(prog)
+        m["name"] = bc_basename(f)
+        bc_dump_module(m)
+        return 0
     var out = cg_generate(prog)
     # print 会追加一个换行：去掉末尾 \n 避免多一个空行（对齐 Rust 版写文件）
     let n = len(out)
