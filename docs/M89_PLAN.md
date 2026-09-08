@@ -404,3 +404,21 @@
 >   活跃帧槽区间注册为根 → 全量重链 + bc1-12/hello/compiler dump 回归 → 再跑 C1 自举证明。
 > 防护（立即生效）：此后一切 VM/编译任务命令行前缀 `ulimit -v 2500000`（2.5GB 快速失败，
 >   不再全局 OOM 连带网关）；根治后才放开。
+
+### S3-C · C1 自举 — OOM 解除 + 自举证明 PASS（2026-09-08 本机 dongyue 重放）
+> S3-D 止血（96a8e4b，帧槽 GC 根）落地后于本机复跑 C1 自举对拍 → **PASS**。
+> - **流程（对齐 3dfbb04 记录下一步）**：
+>   ① 旧轨复核：bc_cli dump compiler.px（~6 min）== golden/compiler.bc.dump 逐字节一致
+>     （本机工具链与权威基线一致确认）；旧轨 bc1-12 dump golden 全量回归全绿。
+>   ② bc_cli --emit-c bc_cli.px → bc_cli_vm.c（990,651 B，VM 字节码镜像静态 C）→ gcc 链
+>     rtcache（含 vm.o，S3-D）→ /tmp/bc_cli_vm（VM 驱动版编译器；冒烟 bc1 dump==golden）。
+>   ③ VM 驱动版跑 compiler.px 重放 → dump **21,456 行 / 382,650 B，与 golden/compiler.bc.dump
+>     逐字节一致（diff 空）** —— VM 编译器编译自身第一证明 PASS（rc=0）。
+> - **S3-D 止血实证**：VM 重放 compiler.px 全链全程 rss ≤ ~0.5 GB（帧槽入 GC 根后内存受控，
+>   对比 OOM 记录 7.1GB 泄漏态），ulimit -v 10GB 内完成、无泄漏。
+> - **内存记录（新发现）**：emit-c bc_cli.px 走**旧 C 引擎**（非 VM），虚拟内存高水位 >6GB
+>   （slab 页不还 OS + emit-c 全链大对象/大 out 字符串，issue28 技术债）→ ulimit 2.5GB/6GB
+>   均被 malloc 拒杀，**≥9.5GB 才完成**（本机 16G，非物理 OOM）。VM 路径则受控。
+> - 本机环境注：缺 glibc static（-static 链接报 cannot find -lm/-lc）→ 本地验证链接去 -static。
+> - 下一步：C2 golden 切换（golden/compiler.c → BCModule 镜像；自举证明规则更新）+ S3-C 收口
+>   门（vm_ab.sh v2 examples 全量 VM vs 旧轨 stdout 对拍）。
