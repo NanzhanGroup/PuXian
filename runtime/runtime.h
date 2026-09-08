@@ -167,6 +167,10 @@ LXValue px_gen_from_list(LXValue list);
 // M34：惰性生成器（单层 for 延迟求值：seq 不展开，transform/filter 闭包 gen_next 时调用）
 LXValue px_gen_lazy(LXValue seq, LXValue transform, LXValue filter);
 LXValue px_gen_next(LXValue g);
+// S3-D 止血：外部 GC 根标记（vm.c 帧槽等堆上根区间 → 补进当前 GC 标记集）
+void px_gc_mark_slots(LXValue* base, int n);
+// VM 活跃帧槽根标记实现（vm.c；runtime 单线程 GC 弱引用调用）
+void px_vm_gc_mark(void);
 // M39：Result 构造 / 判断 / 解包（spec §3.5）
 LXValue px_ok(LXValue v);
 LXValue px_err(LXValue v);

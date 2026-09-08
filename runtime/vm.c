@@ -564,3 +564,19 @@ LXValue px_vm_run_module(PxVmState* st, const PxBCModule* m) {
     // 跑顶层 bc（Top：声明/赋值 + S3-B 起 main() 调用约定）
     return px_vm_run_func(st, &m->funcs[m->top_idx], NULL, 0);
 }
+
+// S3-D 止血切片：runtime 单线程 GC 弱引用调用 —— 把当前线程 VM 活跃帧槽
+// 补标为根。帧槽数组在堆上，保守 GC 只扫 C 栈/全局/暂存根 → 槽内活跃对象
+// 不可见会被误回收（use-after-free）或漏回收（堆只增）。按帧逐槽标记：
+// 未用槽 = calloc 零值（PX_NULL），px_value_is_obj 为假无副作用；帧存活期
+// 槽值保守全标（宁漏回收不误回收），弹帧后 slots 已 free 且不在 frames[0..nframes)
+// 范围内不再标记。并发 GC（多 spawn 线程）的跨线程帧根 = S3-D 完整目标，留后续。
+void px_vm_gc_mark(void) {
+    PxVmState* st = g_vm_state;
+    if (!st || st->nframes <= 0) return;
+    for (int i = 0; i < st->nframes; i++) {
+        PxFrame* fr = &st->frames[i];
+        if (fr->slots && fr->nslots > 0)
+            px_gc_mark_slots(fr->slots, fr->nslots);
+    }
+}
