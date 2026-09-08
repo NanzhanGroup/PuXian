@@ -6,6 +6,38 @@
 
 ## [Unreleased]
 
+### M91 · 默认轨切 VM（px build 默认产物 = 字节码 VM 轨 + C 轨逃生舱）
+
+> 完成（2026-09-09，dongyue）：M91（立项依据 docs/M90_S4_switch_eval.md + perf 基线）
+> 按 S0-S4 收口，详见 docs/M91_PLAN.md。commit fca0cee（S3）+ 收口提交。
+> - **tools/px 引擎反转**：`px build` 默认 = VM 轨（compiler_vm --emit-c → BCModule
+>   字节码镜像 C → 链 runtime 含 vm.o → 显式帧 VM 执行）；新增 `--c`（C 轨逃生舱
+>   fn_* 文本轨，纯计算热点 ≈1.5x 用）；`PX_BUILD_ENGINE=c|vm` env 逃生舱（脚本/CI
+>   一次性回退；显式 flag > env > 默认 vm；非法 env 警告退默认）；`--vm/--bc` 保留
+>   兼容（= 新默认）。VM 编译器优先 PXC_VM_BIN > bootstrap/pxc_vm > dev compiler_vm。
+> - **VM 轨自动裁剪补齐**（M89-S3-C2 试做缺口）：VM 产物无 px_get_global → 提取
+>   BCModule 镜像 s_G 字符串表（全部全局/native 引用名，等价信息）→ 与 C 轨共用
+>   native_mod_map 反推。实测裸 hello：VM 全能力 9,033,936B → 裁剪 2,737,200B
+>   （≈ C 轨 2,736,992B，无体积回归）；capability 8,953,320B 自动保留 sqlite，
+>   运行 253 PASS/0 FAIL。
+> - **bootstrap/pxc_vm 静态重链**（M91 硬前置）：旧入库版（M89-S4 9,334,096B）无 F1
+>   默认参数 → capability emit-c 报 "bc_emit 默认参数未实现"；基于含 PXOP_NARGS 的
+>   compiler_vm.c（M90-S1 重链产物）gcc -static 链全能力 rtcache 重链 9,338,504B →
+>   emit-c capability rc=0、--version = pxc 0.2.0。
+> - **vm_ab cache 选择修复**（M91 暴露的测试基建 bug）：vm_run.sh 原选"最新含 vm.o
+>   rtcache"，M91 默认自动裁剪后最新 cache 常为裁剪态 → 引用 aes/xml/zip native 的
+>   用例（p7 等 2 例）报"未定义变量"伪缺口；改为优先全能力 cache（含全部模块 .o），
+>   无则回退最新并警告 → vm_ab v2 恢复 38 PASS 0 GAP 0 FAIL。
+> - **回归全绿**：m91_s1 verify 7 PASS（默认=VM 轨 / --c=C 轨 / env=C 轨 / VM 自动
+>   裁剪 <4MB / flag 优先 env / 双轨 stdout 逐字节一致 / --vm 兼容）+ m90_s1 5 PASS
+>   + m89_s3d 9 PASS + vm_ab v2 38 PASS 0 GAP 0 FAIL + diffcheck --all + m82 unix
+>   全 PASS（issue28 场景默认 VM --no-quic）+ m83_s6 SSE 全 PASS + 双自举证明
+>   （C 轨 B.c==golden 15058 行 + BC 轨 VM 重放 == golden/compiler.bc.dump）。
+> - 说明：diffcheck/prove* 直调 bootstrap/pxc 不经 tools/px → 自举守护基线不受默认
+>   切换影响；px refs 仍提取 C 轨引用集（C 轨保留为逃生舱，命令继续有效）。
+> - 后续批次（收口标注，未并入 M91）：bootstrap/pxi/pxi_vm 重链吸收 F3-fix runtime
+>   （解释器非 http_serve 长压主用例，基座大二进制变更收益低风险高，留独立批次）。
+
 ### F3-fix · http_serve keep-alive 长压卡顿修复（GC×fserve 池交互根因 + 超时 tick 兜底）
 
 > 完成（2026-09-09，dongyue）：M90-S2 F3 的修复落地。**根因实证修正**：误杀活跃连接的

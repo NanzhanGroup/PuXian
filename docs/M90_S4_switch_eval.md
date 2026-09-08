@@ -1,5 +1,12 @@
 # M90-S4 · 默认轨切 VM 立项评估（收口）
 
+> **状态（2026-09-09，dongyue）**：本评估建议的默认轨切换已按 M91 立项执行并收口
+> （docs/M91_PLAN.md + CHANGELOG）：`px build` 默认 = VM 字节码轨（compiler_vm
+> --emit-c → BCModule 镜像），`--c`/`PX_BUILD_ENGINE=c` = C 轨逃生舱；VM 轨自动
+> 裁剪补齐（s_G 引用集提取，hello 9.03MB→2.74MB 无体积回归）；pxc_vm 静态重链
+> 入库（含 F1 默认参数）；m91_s1/m90_s1/m89_s3d/vm_ab 38/diffcheck/双自举/m82/
+> m83_s6 回归全绿。
+
 > 完成（2026-09-09，dongyue）：M90 清障与验证段收口。本文 = 默认轨切换
 > （px build 默认产物 C 文本 → BCModule 字节码镜像，运行于显式帧 VM）的
 > **立项评估报告**：前置就绪度、风险、迁移范围、AB 回退、排期建议。

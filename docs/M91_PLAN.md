@@ -89,7 +89,21 @@
 |---|---|---|
 | S0/S1 | 立项 + 详勘（本篇） | ✅ |
 | S2 | 设计定稿（本篇 §三） | ✅ |
-| S3a | tools/px 引擎反转 + --c/env + usage | ⏳ |
-| S3b | VM 轨自动裁剪（s_G 提取） | ⏳ |
-| S3c | examples/m91_s1/verify.sh + 冒烟 | ⏳ |
-| S4 | 收口：全回归 + 重链批次 + 文档 + tag v0.2.0-m91 | ⏳ |
+| S3a | tools/px 引擎反转 + --c/env + usage | ✅（fca0cee） |
+| S3b | VM 轨自动裁剪（s_G 提取） | ✅（fca0cee） |
+| S3c | examples/m91_s1/verify.sh + 冒烟 | ✅（7 PASS） |
+| S4 | 收口：全回归 + 文档 + tag v0.2.0-m91 | ⏳ 回归全绿，待 push/tag |
+
+## S4 收口记录（2026-09-09）
+
+- 回归全绿：m91_s1 7 / m90_s1 5 / m89_s3d 9 / vm_ab v2 **38 PASS 0 GAP 0 FAIL**
+  / diffcheck --all / m82 unix（issue28 场景默认 VM --no-quic）全 PASS / m83_s6
+  SSE 全 PASS / 双自举证明（C 轨 B.c==golden 15058 行 + BC 轨 VM 重放==bc.dump）。
+- **附带修复**：examples/m89_a2/vm_run.sh cache 选择——"最新含 vm.o rtcache"在 M91
+  默认自动裁剪后会捡到裁剪态 cache（缺 aes/xml/zip .o）→ p7 等 2 例报"未定义变量"
+  伪 GAP；改为优先全能力 cache（含全部模块 .o），无则回退最新并警告。修复后
+  vm_ab 38 PASS 0 GAP（与 M90-S1 基线一致，证实原 2 GAP 为伪缺口非 VM 轨缺陷）。
+- 文档：CHANGELOG M91 条目 + README/spec.md build 描述 + M90_S4_switch_eval 状态。
+- 后续批次（标注未并入）：bootstrap/pxi/pxi_vm 重链吸收 F3-fix runtime（M91_PLAN
+  S1 事实 7，收口评估为独立批次更稳——基座大二进制变更 + 需全量重验，收益集中于
+  解释器跑 http_serve 长压的非主用例）。
