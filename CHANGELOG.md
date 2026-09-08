@@ -6,6 +6,33 @@
 
 ## [Unreleased]
 
+### M90-S1 · bc_emit 默认参数支持（F1）+ for/continue 死循环修复 + capability VM 化跑通
+
+> 完成（2026-09-09，dongyue）：M90（默认轨切换前奏：bc_emit 缺口清障）S1 收官，
+> 详见 docs/M90_PLAN.md。默认轨切换前置硬缺口 F1 落地，并连带暴露/修复 M89 遗留
+> continue-for 死循环、实现 capability.px（41KB 系统文件）全量 VM 化运行。
+> - **F1 bc_emit 默认参数**：新指令 PXOP_NARGS 57（槽=本帧实际实参数，PxFrame
+>   增 nargs）+ bc_emit_func_body arity=必需数/ndefault 计数 + 函数入口
+>   bc_emit_default_fill 填充序列（NARGS→LT(pi<nargs)→JMPT 跳过/求默认表达式入
+>   槽，对齐 codegen callee 侧入口 `(nargs>i)?args[i]:default` 语义，经别名/闭包
+>   间接调用缺参同样兜底；默认值可引用前参/全局）。此前 `compiler bc
+>   capability.px` rc=1（panic "bc_emit 默认参数未实现"）→ 现 rc=0。
+> - **附带修复 bc_emit_for continue 死循环（M89 遗留，vm_ab 38 例盲区）**：continue
+>   原回填到增量后 JMP → body 内 continue 跳过 ctr+=1 → 死循环（capability VM 化
+>   卡死暴露，t1_bc.px 最小复现）；改回填到增量段起点（Python for：先 +1 再重判）。
+> - **capability.px 全量 VM 化**：41KB 系统能力自检（253 PASS，含 FFI sqlite/
+>   h3-qpack/默认参数/推导式/生成器/break-continue）emit-c → VM 运行 == pxi
+>   **303 行 stdout 逐字节一致**。
+> - **双自举 golden 更新**：compiler.c 15058 行 / compiler.bc.dump 30577 行（随
+>   compiler.px 生态源码改动；双引擎 C/VM 编 compiler.px 镜像逐字节一致）。
+> - **回归全绿**：m90_s1 verify 5 PASS（default_args 双轨一致/capability BC 编译/
+>   NARGS 落地/cmpsem C轨==VM轨入口求值语义/continue 回归）+ vm_ab 38 PASS +
+>   m89_s3d 9 PASS + diffcheck --all + prove.sh/prove_bc.sh 双自举证明。
+> - **关键操作**：runtime vm.h/vm.c 变更 → 旧 rtcache 无 PXOP_NARGS → `px build
+>   --full` 建新全量 rtcache + compiler_new/compiler_vm 重链新 vm.o。
+> - 备注：默认参数「pxi def 时固化 vs codegen 入口求值」为既有两轨分歧（非 VM
+>   引入，VM 对齐 codegen 替代目标）；pxi 不支持默认引用前参。
+
 ### M89-后置决策 · VM vs C 轨性能基线（默认轨切换数据底座）
 
 > 完成（2026-09-09，dongyue）：M89-S4 收口后置决策项「默认轨切 VM」的量化数据

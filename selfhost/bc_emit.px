@@ -1493,7 +1493,11 @@ def bc_emit_for(stmt, func):
     func["loops"].push(ctx)
     bc_emit_stmts(body, func)
     func["loops"].pop()
-    # ctr += 1
+    # ctr += 1 —— continue 目标 = 增量段起点（先执行 ctr+=1 再经 JMP 回 loop
+    # 重判，Python for 语义）。修复（M90-S1 附带：原回填到 jb=增量后 JMP 指令
+    # 处，body 内 continue 跳过 ADD → ctr 不前进 → 死循环；capability 11 段
+    # break/continue 用例暴露，vm_ab 38 例无 continue-for 未覆盖）。
+    let inc_start = len(func["bc"])
     let one = bc_tmp(func)
     bc_emit_int(func, one, 1)
     bc_emit_inst(func, "ADD", ctr, ctr, one)
@@ -1508,7 +1512,7 @@ def bc_emit_for(stmt, func):
         bi += 1
     bi = 0
     while bi < len(ctx["conts"]):
-        bc_patch_off(func, ctx["conts"][bi], jb)
+        bc_patch_off(func, ctx["conts"][bi], inc_start)
         bi += 1
 
 # ---------- 函数发射 ----------
@@ -1525,18 +1529,28 @@ def bc_emit_impl_def(m, tname):
 # 统一函数体发射（顶层 FuncDef / impl 方法同构；name=注册名）
 def bc_emit_func_body(f, name):
     let params = f[2]
+    # M90-S1/F1：默认参数 —— arity=必需参数数（首个带默认参数下标之前；无默认=全参），
+    #   ndefault=带默认参数的参数个数。对齐 codegen 宽松尾部语义：CALL 对 argc<arity
+    #   报错（必需缺失），argc≥arity 进函数后由入口填充序列补齐缺失默认槽（含经别名/
+    #   闭包/px_call 间接调用路径 —— callee 侧兜底，语义与 C 轨逐参三元一致）。
     var arity = len(params)
+    var ndefault = 0
     var pi = 0
     while pi < len(params):
         if params[pi][3] != null:
-            panic("bc_emit 默认参数未实现（A2+）: " + name + " 参数 #" + str(pi))
+            if ndefault == 0:
+                arity = pi
+            ndefault += 1
         pi += 1
     let func = bc_new_func(name, arity)
-    # 参数槽 0..arity-1（smap 登记）
+    func["ndefault"] = ndefault
+    # 参数槽 0..len(params)-1（smap 登记全部形参名；默认参数槽同样占槽）
     pi = 0
-    while pi < arity:
+    while pi < len(params):
         func["smap"][rust_unescape(params[pi][1])] = pi
         pi += 1
+    if func["next_slot"] < len(params):
+        func["next_slot"] = len(params)
     # hoist 局部预占（跳过已登记名；A1 不处理嵌套 def/For）
     let hoist = []
     bc_collect_hoist(f[4], hoist)
@@ -1551,10 +1565,33 @@ def bc_emit_func_body(f, name):
             continue
         bc_slot(func, nm)
         hi += 1
+    # 默认参数缺失补填序列（body 前；对齐 codegen 入口逐参 (nargs>i)?args[i]:default）
+    if ndefault > 0:
+        bc_emit_default_fill(func, params, arity)
     bc_emit_stmts(f[4], func)
     bc_emit_inst(func, "RET0", 0, 0, 0)
     func["nslots"] = func["next_slot"]
     return func
+
+# M90-S1/F1：函数入口默认参数缺失补填。
+# 每默认参数槽 i：本帧实参缺失（NARGS 读 nargs ≤ i）→ 求默认表达式入槽 i；
+# 已提供（nargs > i）→ JMPT 跳过（显式传值优先）。默认表达式在函数入口求值，
+# 可引用前面形参/全局 —— 对齐 codegen 生成的 (nargs > i) ? args[i] : default_c。
+def bc_emit_default_fill(func, params, arity):
+    let nt = bc_tmp(func)
+    bc_emit_inst(func, "NARGS", nt, 0, 0)
+    var pi = arity
+    while pi < len(params):
+        if params[pi][3] != null:
+            let ci = bc_tmp(func)
+            bc_emit_int(func, ci, pi)
+            let cond = bc_tmp(func)
+            bc_emit_inst(func, "LT", cond, ci, nt)   # cond = (pi < nargs)
+            let jt = len(func["bc"])
+            bc_emit_inst(func, "JMPT", cond, 0, 0)   # 已提供 → 跳过填充
+            bc_emit_expr(params[pi][3], pi, func)    # 默认表达式 → 槽 pi
+            bc_patch_off(func, jt, len(func["bc"]))
+        pi += 1
 
 # 合成 top 函数（顶层可执行语句；末尾 HALT 或 main 调用约定 RET）
 # A4：has_main=1 → 末尾 GETG main→CALL(argc=0)→RET（返回 main 结果给 run_module，
