@@ -446,3 +446,25 @@
 >   bootstrap_prove.sh 支持 BC 轨）；bootstrap/pxc/pxi 重链 VM 版（pxc 产物 = BCModule
 >   内嵌 C + VM 启动 main，px build 默认切 BC）；S3-C 收口门 vm_ab.sh v2（examples
 >   全量 VM vs 旧轨 stdout 对拍）。
+
+### S3-C · C2-2 golden 同步修复 + BC 轨自举证明脚本（2026-09-08，dongyue）
+> 完成（C2-2a + C2-2b）：C2 主体第 1 项（自举证明规则更新）落地，并修复 C2-1 提交的
+> golden 与源码不同步问题。
+> - **C2-2a golden 双轨同步修复**：发现 C2-1 提交(90f2a29) 的 compiler.px（21:44 最后
+>   微调 bc flag → --emit-c，对齐 bc_cli）晚于 golden 生成（21:36），HEAD 中 compiler.px
+>   (--emit-c) 与 golden(--bc) 不同步 → 自举证明实际失败（B.c vs golden 差 1 处 flag
+>   判定行）。修复 = 用当前 compiler.px 重生成双轨权威基线：golden/compiler.c = pxc 编
+>   compiler.px（14935 行，--emit-c 版）→ bootstrap_prove rc=0；golden/compiler.bc.dump =
+>   compiler_new bc compiler.px（30315→30314 行，K 池含 --emit-c）→ VM 编译器
+>   （compiler_vm = 新 compiler.px emit-c → gcc 链 vm.o）重放 == golden 逐字节一致；
+>   bc1-12 dump golden 回归全绿。commit d01e2a7。
+> - **C2-2b bootstrap_prove_bc.sh（BC 轨自举证明规则落地）**：自举证明基准从 C 文本单轨
+>   升级为双轨（C 轨 compiler.c 由 bootstrap_prove.sh 守护；BC 轨 compiler.bc.dump 由
+>   bootstrap_prove_bc.sh 守护）。BC 轨全链：pxc build compiler.px → compiler_new.c →
+>   gcc 链 rtcache → compiler_new（C 引擎版）→ --emit-c compiler.px → compiler_vm.c →
+>   gcc 链 → compiler_vm（VM 驱动版）→ bc compiler.px 重放 → 对拍
+>   golden/compiler.bc.dump（带缓存失效判断 + --fresh 强制全链）。缓存态全链 rc=0，
+>   VM 重放 dump 30314 行 == golden 逐字节一致。commit e1bf26d。
+> - 下一步（C2 主体剩余）：bootstrap/pxc/pxi 重链 VM 版（pxc 产物 = BCModule 内嵌 C +
+>   VM 启动 main，px build 默认切 BC）；S3-C 收口门 vm_ab.sh v2（examples 全量 VM vs
+>   旧轨 stdout 对拍）。

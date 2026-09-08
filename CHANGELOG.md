@@ -6,6 +6,25 @@
 
 ## [Unreleased]
 
+### M89-S3-C2-2 · golden 同步修复 + BC 轨自举证明脚本（自举证明规则更新落地）
+
+> 完成（2026-09-08，dongyue）：C2 主体第 1 项（自举证明规则更新）落地，修复 C2-1
+> 提交的 golden 与源码不同步问题。
+> - **C2-2a golden 双轨同步修复**（commit d01e2a7）：C2-1 提交(90f2a29) 中 compiler.px
+>   （21:44 最后微调 bc flag → --emit-c，对齐 bc_cli）晚于 golden 生成（21:36），HEAD 的
+>   compiler.px(--emit-c) 与 golden(--bc) 不同步 → 自举证明实际失败。修复 = 重生成双轨
+>   权威基线：golden/compiler.c = pxc 编 compiler.px（14935 行）→ bootstrap_prove rc=0；
+>   golden/compiler.bc.dump = compiler_new bc compiler.px（30315→30314 行，含 --emit-c）
+>   → VM 编译器重放 == golden 逐字节一致；bc1-12 dump golden 回归全绿。
+> - **C2-2b bootstrap_prove_bc.sh**（commit e1bf26d）：自举证明升级为双轨（C 轨 compiler.c
+>   由 bootstrap_prove.sh 守护；BC 轨 compiler.bc.dump 由 bootstrap_prove_bc.sh 守护）。
+>   脚本全链：pxc build compiler.px → compiler_new.c → gcc 链 → compiler_new → --emit-c
+>   compiler.px → compiler_vm.c → gcc 链 → compiler_vm → bc compiler.px 重放 → 对拍
+>   golden/compiler.bc.dump（缓存失效判断 + --fresh）。缓存态全链 rc=0，VM 重放
+>   30314 行 == golden 逐字节一致。
+> - 下一步（C2 主体剩余）：bootstrap/pxc/pxi 重链 VM 版（px build 默认切 BC 产物）；
+>   S3-C 收口门 vm_ab.sh v2（examples 全量 VM vs 旧轨 stdout 对拍）。
+
 ### M89-S3-C2 · golden 切换前奏：compiler.px 主链路并入 bc_emit（编译器正主 BC 发射能力）
 
 > 完成（2026-09-08）：VM 化自举收敛进入 C2 第一步 —— 把 bc 发射能力从姊妹壳
