@@ -1555,3 +1555,17 @@
 > - 环境注：dongyue 缺 glibc static → 本地链接去 -static（仅开发验证，发布仍静态）。
 > - 下一步：C2 golden 切换（compiler.c → BCModule 镜像 + 自举证明规则更新）+ S3-C 收口门
 >   （vm_ab.sh v2 examples 全量 VM vs 旧轨 stdout 对拍）。
+
+### M89-S3-C2 收口 · 三大切片合入 main + 主干全量回归绿（2026-09-09，dongyue）
+
+> 分支 feat/m89-c2-vmtoolchain（C2-5 px build --vm / C2-5b pxc_vm / C2-5c
+> pxi_vm）ff 合入 main（8ebaacd）并 push GitHub main。合入后主干全量回归
+> 复跑全绿：C 轨自举（14986 行 == golden/compiler.c）+ BC 轨自举（compiler_vm
+> 重放 dump 30445 行 == golden/compiler.bc.dump）+ vm_ab.sh v2 收口门
+> （19 PASS + 0 GAP + 0 FAIL）+ diffcheck.sh --all 全量对拍 —— **S3-C 段
+> 技术目标全部达成并收口**。
+>
+> 决策记录：默认轨切换（px build 默认产物切 BC + diffcheck/capability golden
+> 大迁移）不在 S3-C 段做——VM 轨当前解释执行无 JIT/native，默认切换性能倒退
+> 且动主干验证体系（fn_* .c golden 全量重生成），收益未到兑现点；技术可行性
+> 已由三切片实证，工程化铺开挂起为后置决策项（详见 docs/M89_PLAN.md）。
