@@ -1134,6 +1134,24 @@ static void gc_scan_thread_stack(GCHash* set, pthread_t tid, ucontext_t* uc) {
     }
 }
 
+// ============ S3-D 止血切片：外部 GC 根（VM 帧槽） ============
+// VM 帧槽数组在堆上（PxFrame.slots），保守 GC 只扫 C 栈/全局/暂存根，
+// 帧槽引用的活跃对象不可见 → use-after-free（GC 误回收）或堆只增（漏回收）。
+// 单线程 GC 标记期 g_gc_cur_set 指向当前集合；vm.c 的 px_vm_gc_mark 遍历
+// 当前线程 VM 活跃帧槽调 px_gc_mark_slots 补标。无 VM 链接时弱符号空转零影响。
+static GCHash* g_gc_cur_set = NULL;
+
+void px_gc_mark_slots(LXValue* base, int n) {
+    if (!base || n <= 0 || !g_gc_cur_set) return;
+    for (int i = 0; i < n; i++) {
+        if (px_value_is_obj(base[i]) && base[i].as.obj)
+            gc_mark_obj(g_gc_cur_set, base[i].as.obj);
+    }
+}
+
+// VM 活跃帧槽根标记（vm.c 实现；无 VM 链接时弱符号为空，零影响）
+extern void px_vm_gc_mark(void) __attribute__((weak));
+
 // 主回收入口：mark + sweep（M11：spawn 活跃时 stop-the-world）
 void px_gc_collect(void) {
     // M11 修复④：GC 执行期间屏蔽自己的 SIG_GC_STOP——防止上一轮"延迟信号"
@@ -1312,6 +1330,10 @@ void px_gc_collect(void) {
     jmp_buf jb;
     (void)setjmp(jb);
     gc_scan_stack(&set);
+    // S3-D 止血：补标当前线程 VM 活跃帧槽（堆上根，保守 C 栈扫不到）
+    g_gc_cur_set = &set;
+    if (px_vm_gc_mark) px_vm_gc_mark();
+    g_gc_cur_set = NULL;
     g_in_gc_sweep = 1;   // ISSUE28-B1：单线程 sweep 同上免逐趟 sigprocmask
     int freed = 0, w = 0;
     for (int i = 0; i < g_obj_count; i++) {
