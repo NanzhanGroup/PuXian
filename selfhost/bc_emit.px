@@ -903,16 +903,22 @@ def bc_emit_comp(func, kind, elems, cond, rv, clauses, ci):
         return
     let cl = clauses[ci]
     let vars = cl[1]
-    if len(vars) != 1:
-        panic("bc_emit 推导式多变量子句未实现: " + str(cl))
-    let vn = rust_unescape(vars[0])
-    var had = false
-    var sv = 0
-    if func["smap"].has(vn):
-        sv = func["smap"][vn]
-        had = true
-    let vs = bc_tmp(func)
-    func["smap"][vn] = vs
+    # 迭代变量槽：单/多变量统一 —— 进入子句前每变量分配槽 + 保存旧绑定
+    #   （对齐 cg_comp_collect/restore：comp 变量不泄漏外层；单变量分配序与
+    #   既有实现一致，保持 bc1-12 dump golden 槽序不变）；循环体内逐项覆写
+    #   （单变量 = 整个元素；多变量 = px_index(item,i) 逐字段解包，越界 null
+    #   —— 对齐 pxi i_bind_comp_vars / cg bind px_index）
+    let saved = []
+    var bi = 0
+    while bi < len(vars):
+        let vn = rust_unescape(vars[bi])
+        var sv = -1
+        if func["smap"].has(vn):
+            sv = func["smap"][vn]
+        let vs = bc_tmp(func)
+        func["smap"][vn] = vs
+        saved.append([vn, sv])
+        bi += 1
     let its = bc_tmp(func)
     bc_emit_expr(cl[2], its, func)
     let fnl = bc_tmp(func)
@@ -930,7 +936,18 @@ def bc_emit_comp(func, kind, elems, cond, rv, clauses, ci):
     bc_emit_inst(func, "LT", lt, ctr, nslot)
     let jf = len(func["bc"])
     bc_emit_inst(func, "JMPF", lt, 0, 0)
-    bc_emit_inst(func, "INDEX", vs, its, ctr)
+    if len(vars) == 1:
+        bc_emit_inst(func, "INDEX", func["smap"][rust_unescape(vars[0])], its, ctr)
+    else:
+        # 多变量解包：迭代元素入 item 槽，再逐字段 INDEX 到各变量槽
+        let item = bc_tmp(func)
+        bc_emit_inst(func, "INDEX", item, its, ctr)
+        var fi = 0
+        while fi < len(vars):
+            let iv = bc_tmp(func)
+            bc_emit_int(func, iv, fi)
+            bc_emit_inst(func, "INDEX", func["smap"][rust_unescape(vars[fi])], item, iv)
+            fi += 1
     bc_emit_comp(func, kind, elems, cond, rv, clauses, ci + 1)
     let one = bc_tmp(func)
     bc_emit_int(func, one, 1)
@@ -940,38 +957,54 @@ def bc_emit_comp(func, kind, elems, cond, rv, clauses, ci):
     let end = len(func["bc"])
     bc_patch_off(func, jb, loop_start)
     bc_patch_off(func, jf, end)
-    if had:
-        func["smap"][vn] = sv
-    else:
-        func["smap"].remove(vn)
+    # 恢复外层绑定
+    var ri = 0
+    while ri < len(saved):
+        let s = saved[ri]
+        if s[1] < 0:
+            func["smap"].remove(s[0])
+        else:
+            func["smap"][s[0]] = s[1]
+        ri += 1
 
 # GenExp 单 for 单变量 → NEWGEN 惰性（px_gen_lazy：seq + transform=fn(x){elt}
 #   + filter=fn(x){cond}，对齐 codegen cg GenExp 单 for 惰性路径）
 def bc_emit_genexp(expr, dst, func):
     let clauses = expr[2]
-    if len(clauses) != 1 or len(clauses[0][1]) != 1:
-        panic("bc_emit GenExp 仅支持单 for 单变量（多 for 物化路径待接入）: " + str(expr))
-    let vn = rust_unescape(clauses[0][1][0])
+    if len(clauses) == 1 and len(clauses[0][1]) == 1:
+        # 单 for 单变量 → NEWGEN 惰性（px_gen_lazy：seq + transform=fn(x){elt}
+        #   + filter=fn(x){cond}，对齐 codegen cg GenExp 单 for 惰性路径）
+        let vn = rust_unescape(clauses[0][1][0])
+        var d = dst
+        if d < 0:
+            d = bc_tmp(func)
+        let seq = bc_tmp(func)
+        bc_emit_expr(clauses[0][2], seq, func)
+        let tidx = bc_emit_push_lambda([vn], expr[1])
+        var fidx = -1
+        if expr[3] != null:
+            fidx = bc_emit_push_lambda([vn], expr[3])
+        let base = bc_tmp(func)
+        while func["next_slot"] < base + 2:
+            bc_tmp(func)
+        let tk = bc_k_add(g_bcm["k_pool"], "func", tidx, 0.0, "")
+        bc_emit_inst(func, "LOADK", base, tk, 0)
+        if fidx >= 0:
+            let fk = bc_k_add(g_bcm["k_pool"], "func", fidx, 0.0, "")
+            bc_emit_inst(func, "LOADK", base + 1, fk, 0)
+        else:
+            bc_emit_null(func, base + 1)
+        bc_emit_inst(func, "NEWGEN", d, seq, base)
+        return d
+    # 物化路径（M32/M34 多 for 嵌套 / 多变量解包 GenExp）：对齐 codegen cg
+    #   （收集 list → px_gen_from_list）与 pxi（i_eval GenExp 一律物化 it_gen）：
+    #   嵌套循环展开收集元素到 list（bc_emit_comp）→ GENFROMLIST 包成 generator
     var d = dst
     if d < 0:
         d = bc_tmp(func)
-    let seq = bc_tmp(func)
-    bc_emit_expr(clauses[0][2], seq, func)
-    let tidx = bc_emit_push_lambda([vn], expr[1])
-    var fidx = -1
-    if expr[3] != null:
-        fidx = bc_emit_push_lambda([vn], expr[3])
-    let base = bc_tmp(func)
-    while func["next_slot"] < base + 2:
-        bc_tmp(func)
-    let tk = bc_k_add(g_bcm["k_pool"], "func", tidx, 0.0, "")
-    bc_emit_inst(func, "LOADK", base, tk, 0)
-    if fidx >= 0:
-        let fk = bc_k_add(g_bcm["k_pool"], "func", fidx, 0.0, "")
-        bc_emit_inst(func, "LOADK", base + 1, fk, 0)
-    else:
-        bc_emit_null(func, base + 1)
-    bc_emit_inst(func, "NEWGEN", d, seq, base)
+    bc_emit_inst(func, "NEWLIST", d, 0, 0)
+    bc_emit_comp(func, "push", [expr[1]], expr[3], d, clauses, 0)
+    bc_emit_inst(func, "GENFROMLIST", d, d, 0)
     return d
 
 # ---------- B3b：match 模式条件 ----------

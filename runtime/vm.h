@@ -98,7 +98,9 @@ typedef struct {
 #define PXOP_NEWGEN  53  // a=dst, b=seq 槽, c=transform/filter 连续 2 槽基址（S3-B）
 #define PXOP_SPAWN   54  // a=dst, b=callee 槽, c=argc（S3-B：新线程跑 槽s2 函数）
 #define PXOP_ENUMVAR 55  // a=dst, b=obj 槽（enum→px_str(variant)；非 enum→null；B3b match 用）
-#define PXM_MAX      56
+#define PXOP_GENFROMLIST 56 // a=dst, b=list 槽（S3-C C2：GenExp 物化路径 list→generator，
+                            //   对齐 codegen px_gen_from_list —— 多 for/多变量推导先收集再包 gen）
+#define PXM_MAX      57
 
 // ==================== 常量子（K 池） ====================
 // 发射器按 kind 生成静态项；LOADK 时物化为 LXValue（str 需 strdup/常驻，
