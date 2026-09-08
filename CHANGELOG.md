@@ -6,6 +6,25 @@
 
 ## [Unreleased]
 
+### M90-S2/S3/S4 · F3 快查 + stdlib 全 VM 冒烟 + 默认轨切换立项评估（M90 收官）
+
+> 完成（2026-09-09，dongyue）：M90（默认轨切换前奏）S2-S4 收官（S1 见下一条目）。
+> - **S2 F3 快查（docs/M90_S2_F3.md）**：HTTP keep-alive 高并发崩溃判定真 bug ——
+>   **15s keep-alive 空闲超时误杀活跃连接**（M88-B-S2 事件化遗留，与 VM/C 轨无关）。
+>   关键证据：崩溃阈值 = 压测时长跨 ~15s（M89 短测 8 并发 12.3s <15s 未触发被掩盖；
+>   长压 8/20 并发均复现：RPS 249-301、ok 率 26-65%、max 16.6-17.7s 尖刺、Connection
+>   reset；原版产物干净环境复现排除改动/噪声）。已试修复回退（扫描限频无效；worker
+>   3ms 乒乓短窗 20 并发 RPS 631/尖刺消但 8 并发退化）。**修复列独立批次 F3-fix**
+>   （超时 close 前 poll 二次确认兜底 + 事件循环漏报深查）。
+> - **S3 stdlib 全 VM 编译冒烟**：stdlib 13/13 `compiler_new bc` 通过（F1 后无缺口；
+>   capability 41KB 全量 VM 运行 == pxi 已在 S1 兑现）。
+> - **S4 默认轨切换立项评估（docs/M90_S4_switch_eval.md）**：技术前置全齐（F1/
+>   stdlib/语义对拍 38 例/perf 代价量化 0-10%）；golden 大迁移范围 + AB 回退开关
+>   （`px build` 默认 VM + `--c` 逃生舱 + PX_BUILD_ENGINE env）设计完成；建议
+>   F3-fix 先行后按 S0-S4 独立立项（如 M91）推进切换，无技术 blocker。
+> - M90 收官状态：S1 代码 + S2 报告 + S3 冒烟 + S4 评估全绿；F3-fix 与默认轨切换
+>   立项为下一批次。
+
 ### M90-S1 · bc_emit 默认参数支持（F1）+ for/continue 死循环修复 + capability VM 化跑通
 
 > 完成（2026-09-09，dongyue）：M90（默认轨切换前奏：bc_emit 缺口清障）S1 收官，
