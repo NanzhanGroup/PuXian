@@ -112,5 +112,18 @@ else
     echo "  FAIL VM 堆回落（base=$BASE idle=$IDLE）"; FAIL=$((FAIL+1));
 fi
 
+echo "── 5) VM 并发 GC × 生成器/容器 混合压测（D1+D2a 组合 ×3，须全 PASS）"
+emit_and_link "$DIR/vm_conc_gen_stress.px" cgengc || { FAIL=$((FAIL+1)); }
+for i in 1 2 3; do
+    timeout 90 env PX_GC_THRESHOLD=20000 "$OUT/cgengc" >"$OUT/cgengc.$i.out" 2>&1
+    rc=$?
+    if [ $rc -eq 0 ] && grep -q "VM-CONC-GEN-STRESS PASSED" "$OUT/cgengc.$i.out" \
+       && ! grep -q " FAILED bad=" "$OUT/cgengc.$i.out"; then
+        echo "  PASS 并发GC×生成器混合 第${i}轮"; PASS=$((PASS+1));
+    else
+        echo "  FAIL 并发GC×生成器混合 第${i}轮（rc=$rc）"; tail -3 "$OUT/cgengc.$i.out"; FAIL=$((FAIL+1));
+    fi
+done
+
 echo "════════ M89-S3-D verify：PASS=$PASS FAIL=$FAIL ════════"
 [ $FAIL -eq 0 ]

@@ -1,0 +1,78 @@
+# M89-S3-D4: VM 并发 GC × 生成器/容器 混合压测（D1+D2a 组合最坏窗口）
+# ------------------------------------------------------------------
+# 目的：把 S3-D-1（并发 GC 跨线程 VM 帧根）与 S3-D-2（PX_GEN 生成器
+#   子对象递归标记：seq/transform/filter/游标）叠加到同一最坏组合验证：
+#   K 个 spawn 线程同时跑 VM + 惰性生成器（部分消费后跨多轮 GC 保留
+#   内部游标与 transform/filter 闭包）+ 容器/字符串垃圾波。
+#   缺口任一处（跨线程帧槽漏标 → gen/列表对象被误回收；PX_GEN 漏标 →
+#   子对象被误回收）→ 生成器状态损坏 → 最终累计值错 / use-after-free 崩溃。
+# 语义设计：每 worker 惰性 gen = (x*2+GKC for x in base if x%2==0)，
+#   base = 0..29（15 个偶数项）。wave1 部分消费 10 项（跨 ~10 轮 GC），
+#   再全量消费剩余 5 项 —— 校验总累计 = 15 项完整和（游标跨 GC 保持）。
+#   期望单 worker = sum(even x*2) + 15*GKC = 420 + 15*1 = 435；K=6 → 2610。
+# 用法：PX_GC_THRESHOLD=<阈值> 产物（低阈值高频并发 GC 放大窗口）。
+GKC = 1
+
+def worker(id: int, waves: int, ch):
+    sentinel = "GW" + str(id) + "-s3d4-sentinel"
+    base = []
+    i = 0
+    while i < 30:
+        base.push(i)
+        i += 1
+    # 惰性生成器：seq(局部 list) + filter(偶) + transform(*2+GKC) 均仅存本 worker 帧槽
+    glazy = (x * 2 + GKC for x in base if x % 2 == 0)
+    p1 = 0
+    bad = 0
+    w = 0
+    while w < waves:
+        # 垃圾波：大 list + 拼接串（分配压力 → 其它线程 GC 频繁触发）
+        g = []
+        m = 0
+        while m < 100:
+            g.push("g" + str(m) + "#" + sentinel + ":" + str(w))
+            m += 1
+        # 部分消费 1 项（前 waves 波 = 10 项），gen 内部游标/闭包跨 GC 存活
+        if w < 10:
+            let v = gen_next(glazy)
+            if v != null:
+                p1 += v
+        # 活引用校验：sentinel 仅存于本 worker 帧槽
+        if sentinel != "GW" + str(id) + "-s3d4-sentinel":
+            bad = 1
+        w += 1
+    # 全量消费剩余（5 项），验证游标跨 ~10 轮 GC 后仍指向正确位置
+    p2 = 0
+    v = gen_next(glazy)
+    while v != null:
+        p2 += v
+        v = gen_next(glazy)
+    total = p1 + p2
+    # 期望 = 420 + 15*GKC（GKC=1 → 435）。不符 = 生成器/帧槽对象被误回收
+    if total != 435:
+        bad = 2
+    if bad != 0:
+        print("WORKER-" + str(id) + " FAILED bad=" + str(bad) + " total=" + str(total))
+    ch.send(total)
+
+def main():
+    k = 6
+    waves = 12
+    ch = chan[int](32)
+    i = 0
+    while i < k:
+        spawn worker(i, waves, ch)
+        i += 1
+    totalsum = 0
+    j = 0
+    while j < k:
+        let tok = ch.recv()
+        totalsum += tok
+        j += 1
+    print("workers:", k, "waves:", waves)
+    print("total-sum:", totalsum)
+    # 期望 6 × 435 = 2610
+    if totalsum == 2610:
+        print("VM-CONC-GEN-STRESS PASSED")
+    else:
+        print("VM-CONC-GEN-STRESS FAILED")

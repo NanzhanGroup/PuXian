@@ -6,6 +6,31 @@
 
 ## [Unreleased]
 
+### M89-S3-D3/4 · issue28 验收复核结论 + VM 并发 GC×生成器混合收口（精确 GC 根面完备性第 2 批）
+
+> 完成（2026-09-09，dongyue）：S3-D 段收口补强 + issue28 定位修正。
+> - **issue28 验收结论修正**：全量延迟验收（单发 p95≤50ms / 500 并发 p50≤200ms /
+>   堆回落）已由**清歌 0.2.0 隔离实测复核通过**（`/data/qg-issue/28-…/VERIFY-20260908-
+>   0.2.0-qingge.md`：单发 p50=1ms/p95≤6ms、>100ms=0；500 并发 p50=42~55ms 0 失败；
+>   1500 并发 0 失败；空载 RSS 17~30MB）→ **ws-approve .px 版无需重编码可替换 Go 版
+>   上线**（core/ws-approve + tools/wst-approve 已替换）。即 issue28 由 B1/B2/B3
+>   **在无 VM 化时已解决**，S3-D 不再承担 issue28 验收门；D1（并发 VM 帧根）/D2
+>   （PX_GEN 标记）定位明确为「VM 为唯一执行轨」的精确 GC 正确性前置，VM 化对
+>   issue28 只吸收 §9.3 记录的残余低频偶发停顿（~0.4~0.6% >100ms，sweep 线性），
+>   属锦上添花非解决路径。
+> - **D4 组合最坏窗口压测**（examples/m89_s3d/vm_conc_gen_stress.px）：6 spawn
+>   worker 并发跑 VM × 惰性生成器（部分消费 10/15 项跨 ~10 轮并发 GC 后全量消费
+>   剩余，校验游标/transform/filter 子对象跨 GC 完好）+ 容器/字符串垃圾波 ——
+>   D1（跨线程帧根）+ D2a（PX_GEN 递归标记）叠加验证；期望单 worker 435（420+
+>   15×GKC=1）、K=6 总 2610。verify.sh 增第 5 项 ×3。
+> - **verify.sh 9 PASS + 0 FAIL**：原 1-4 项（冒烟/并发 GC ×3/gen 护栏/VM 堆回落
+>   RSS 6084→7156KB <40MB）回归不变 + 混合压测 ×3 PASS。
+> - **S3-D 段收口**：段内可推进工作全部完成；剩余（退役整栈保守扫描、原生桥 ≤60
+>   处逐一登记、cell 标记、issue28 残余停顿吸收）与「px build 默认切 BC + golden
+>   大迁移」同锁 **默认轨切 VM 后置批次**，是 M89-S4 收口前最大待决项。
+> - 文档：`/data/qg-issue/00-README.md` Issue 28 状态同步为「✅ 已复核通过（2026-
+>   09-08 清歌 0.2.0）」。
+
 ### M89-S3-D1/2 · VM 并发帧根 + PX_GEN 标记（精确 GC 根面完备性第 1 批）
 
 > 完成（2026-09-09，dongyue）：S3-D（精确 GC）本批按 R4 双根过渡（保守扫栈 +
