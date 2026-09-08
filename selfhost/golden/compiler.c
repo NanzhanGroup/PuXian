@@ -14453,7 +14453,7 @@ static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     px_srcline(84);
     while (px_is_truthy(px_lt(_v1692, px_sub(px_call(px_get_global("len"), (LXValue[]){_v1689}, 1), px_int(1LL))))) {
         px_srcline(85);
-        if (px_is_truthy(({ LXValue _t1703 = px_eq(px_index(_v1689, _v1692), px_str("bc")); px_is_truthy(_t1703) ? _t1703 : px_eq(px_index(_v1689, _v1692), px_str("--bc")); }))) {
+        if (px_is_truthy(({ LXValue _t1703 = px_eq(px_index(_v1689, _v1692), px_str("bc")); px_is_truthy(_t1703) ? _t1703 : px_eq(px_index(_v1689, _v1692), px_str("--emit-c")); }))) {
             px_srcline(86);
              _v1690 = px_bool(true);
         }
