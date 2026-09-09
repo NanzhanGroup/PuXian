@@ -6,6 +6,49 @@
 
 ## [Unreleased]
 
+### M100 · middleware 链协程化（px_serve route 管道内链状态机 defer）
+
+> M100 = 二期候选第 2 项（middleware 链协程化）正式立项（M98_PLAN §二 ⚠️ 遗留清单第 4 项；
+> M99 收口后二期排序第 2 项）。commit 链：2c202ec（S1 立项 + D0 侦察 + 设计定稿）+
+> 6d65d23（S2 实现 + examples/m100 验证套件 11P/0F）+ 本 commit（S3 收口 + tag v0.2.0-m100）。
+> 规划 docs/M100_PLAN.md。上游：M98（px_serve route/vhost handler 拆段协程化，
+> PxPend 注册表 + px_pxserve_defer + 段2 续处理骨架直接复用）；M99（连接级事件化 IDLE）。
+> 性质：**L0 runtime**（px_serve route 管道 middleware 链并发模型层）。
+> - **背景**：M98 只拆了「middleware 链之后的 route handler」——链本身仍在 g_pool worker
+>   内同步逐个 px_call（runtime_route.c px_route_try_dispatch for 循环）。链上任一 VM
+>   middleware 内 chan/sleep 长业务（与 handler 同构）→ 阻塞 worker；多慢 middleware
+>   请求把 max_conn 池占满 → 快路径饿死。middleware 链与 handler 不同：多段串联 + 每段
+>   返回值决定链去向（null 继续 / 非 null 短路 / 全 null 进 handler）→ 不能平移单点 defer。
+> - **S2（链状态机 defer 实现）**：
+>   · **PxPend kind 扩 2/3** + mw 字段：2 = middleware 链 defer 运行中（链状态机）、
+>     3 = middleware 短路完成（段2）；mw_i/mw_n/mw_chain[32]（链快照）/mw_handler/
+>     mw_params 入 GC 根（px_pxserve_pend_gc_mark 补标，逐段 spawn 函数值跨协程保活）。
+>   · **px_pxserve_mw_defer**（runtime.c）：登记 kind=2 + 链快照（持调用方 mws 快照拷入，
+>     不依赖 g_middlewares 运行期一致性）+ handler/params 入根 → spawn 首段（middleware[0]）。
+>   · **px_serve_mw_done**（链推进回调，coro worker）：段为 middleware（mw_i<mw_n）→
+>     ret==null 推进下一段（mw_i++，仍 <mw_n → spawn mw_chain[mw_i] 继续链；==mw_n →
+>     链全 null 通过 → spawn handler 段 [req, params]）；ret!=null → 短路（resp + kind=3 +
+>     stage=2 → 投回 g_pool 段2）；段为 handler（mw_i==mw_n）→ resp + kind=0（= route
+>     handler 完成语义 px_route_respond）。spawn 出锁后做（锁序 g_pxpend_mu 不嵌套）。
+>   · **px_route_try_dispatch 分流**（runtime_route.c）：链非空且每段 middleware + handler
+>     全 VM（PX_FUNC 且 fn==px_vm_entry）且 async_ok → 链 defer（return 2，worker 释放）；
+>     含 C 闭包 middleware 段 / 非 VM handler / async_ok=0 / 无协程内核 → **原同步链零变化**
+>     （M98 行为逐字节一致）。
+>   · **短路 respond 公共化**：px_route_mw_short_respond（normalize + respond +
+>     (middleware) 访问日志）——同步短路与协程段2（kind=3）共用，文案逐字一致。
+>   · **px_conn_worker 段2** 加 skind==3 分支（middleware 短路续处理）。
+> - **验证（examples/m100 11P/0F + 回归 26 套）**：并发 20×/slow-mw（middleware sleep 600ms
+>   让出）wall=0.60s（同步占 2 worker 串行需 ~6s+——核心铁证）+ 慢 middleware 在途
+>   30×/fast 不饿死（0.01s）+ 短路 401/403 + 多段链 null 推进 + keep-alive 5 请求 +
+>   线程峰值 12≤20 + (middleware) 日志 + 优雅关闭干净退出；px_serve 管道回归
+>   （m28_route/m29_webprod/m31_vhost/m33_route_rate_limit/m57_s7_vhost_headers/
+>   m43_webapp（10P/0F STDOUT==GOLDEN，含 middleware.px 短路）/m98_s2/m99_s2）+ 协程内核
+>   suites（m82/m83_s6/m89_s3d/m93_s2/s3/m94_s2/s3/m95_s2/s4/m96_s2/s3/m97_s2/s3）
+>   全绿；vm_ab + diffcheck --all + 双自举证明 + pxi/pxi_vm 重链，tag v0.2.0-m100。
+> - **D0 记录**：库内 middleware 全为 def VM 函数（纯计算记录/校验/短路），无长业务真实
+>   用例 → 本里程碑 = 能力补齐（与 handler 同级让出），消除「middleware 写长业务占死
+>   worker」架构缺口；含 C 闭包链保持同步（边界，语义与 M98 一致）。
+
 ### M99 · px_serve 连接级事件化 IDLE（keep-alive 空闲不占 g_pool worker）
 
 > M99 = 原 M95 二期候选第 1 项（px_serve 连接级事件化 IDLE）正式立项（M98 收口后，
