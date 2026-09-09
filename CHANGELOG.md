@@ -6,6 +6,41 @@
 
 ## [Unreleased]
 
+### M102 · .px 子进程池协程化（语言层 px_exec offload）+ h2/URL 侦察收口
+
+> M102 = 二期候选 B（.px 子进程池协程化）+ C（h2 handler 协程化）侦察驱动里程碑
+> （候选排序第 4/5 项）：**先 D0 侦察、成立则实施、不成立就地关闭记录**。commit 链：
+> 7edb71f（S1 立项 + D0 侦察定稿）+ 3b02cf9（S2a D1 实施）+ a6e7993（S2b 收口决策）。
+> 规划 docs/M102_PLAN.md。性质：**L0 runtime**（语言层 .px 执行并发模型）。
+> - **D0 侦察结论**：
+>   - **候选 C（h2 handler 协程化）→ ❌ 关闭记录**：runtime_h2.c 为最小 h2c 帧循环
+>     （M35：h2c Upgrade + prior knowledge + HPACK + 固定 echo 响应），**不调用 VM
+>     handler、不经 px_http_dispatch 公共管道** → 无"handler"可协程化；且 M-B9b 已
+>     ALPN 固定 http/1.1（vhost handler 仅 http/1.1 生效，h2 帧循环绕过 vhost 生产
+>     不可用）→ h2 生产化（含 handler 管道接入）需完整 h2 服务端另立大里程碑。
+>   - **候选 B（.px 子进程池协程化）→ ✅ 成立**：.px 执行 = M25 常驻 `px --worker`
+>     子进程池（PHP-FPM 风格）；父进程 px_pool_recv_result 用 poll+read 同步阻塞等
+%   - 实现范围收敛：D1（语言层 px_exec offload）实施；D2（URL 直达 .px 请求管道
+%     defer）评估为需「offload executor C 闭包任务 + PxPend kind 扩展 + 管道拆段」
+%     ≈独立里程碑 → 关闭记录二期；h2 关闭记录。
+> - **D1（语言层 px_exec offload）✅**：`px_exec`（bi_px_exec → px_pool_run 阻塞等
+>   px --worker 结果帧）纳入 `px_native_offload_kind` 名单 —— 协程 ctx（route/vhost/
+>   middleware VM handler、spawn 帧协程）内调 px_exec 自动外包执行线程池（M96 β
+>   路线），阻塞等子进程在外包线程，worker 释放取下一协程。px_exec 内仅 native 直调
+>   （json_stringify 等）不回调用户 VM → 满足 D5 名单约束；px_pool 全局池 g_px_pool_mu
+>   保护，外包线程并发安全（与多连接线程直调并发语义一致）。逃生舱（主线程/非协程
+>   ctx）→ 直调零变化。
+> - **验证（examples/m102_s2 verify 5P/0F）**：PX_CORO_WORKERS=1 极限 —— 单次
+>   px_exec（sleep400）once≈500ms；3 协程并发 px_exec conc≈505ms（≈单次，外包并行
+>   铁证；若同步阻塞卡 1 coro worker 需 ~3×≈1.5s）+ 结果 3/3 对拍 slow-ok。回归：
+>   m96_s2 8P/0F（offload 名单扩展不破坏）+ m32_hot_reload（px_exec 语义）+ m96_s3
+>   9P + m93_s2/s3 + m94_s2/s3 + m95_s2/s4 + m97_s2/s3 + m98_s2 + m99_s2 + m100 +
+>   m101_s2 + m89_s3d 全绿；vm_ab 38P/0GAP/0F + diffcheck --all rc=0 + 双自举证明
+>   （C 轨 + BC 轨）+ pxi/pxi_vm 重链（吸收 M102 runtime，双轨 hello 一致）
+>   + tag v0.2.0-m102。
+> - 二期候选续：URL 直达 .px 管道 defer（offload C 闭包执行器 + PxPend kind 扩展）；
+%   h2 生产化接入公共管道；清歌 Issue 29/30（dns_txt/ed25519_keygen/图片/yaml 写）。
+
 ### M101 · px_serve 并发 TLS 握手缺陷修复（qg 二期候选 A）
 
 > M101 = 二期候选排序第 A 项（已复现真实缺陷：M99-S3 记档「px_serve 并发 TLS 握手
