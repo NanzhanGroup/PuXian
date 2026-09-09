@@ -1,0 +1,44 @@
+# ============================================================
+# M103-S2a (Issue 29 GAP-DNS-TXT-1) dns_txt 专项验证
+# ------------------------------------------------------------
+# dns_txt(domain) → list[str]：手写 DNS UDP TXT(TYPE=16) 查询（ws-ddns server 端
+#   授权 TXT 校验 native）。与 Go net.LookupTXT 语义对齐（多段合并）；无 TXT/
+#   NXDOMAIN → 空 list（非报错）；查询失败 → Err 可 is_err 判定。
+# 运行：examples/m103_s2a/verify.sh（px build + Go net.LookupTXT 对拍集合相等）
+# ============================================================
+var g_pass = 0
+var g_fail = 0
+def check(name, cond):
+    if cond:
+        g_pass += 1
+    else:
+        g_fail += 1
+        print("FAIL:", name)
+# 1) 公开域 TXT（qq.com SPF 记录）
+let r = dns_txt("qq.com")
+check("qq.com is list", type(r) == "list")
+check("qq.com has txt", len(r) >= 1)
+if len(r) >= 1:
+    check("qq.com spf", contains(r[0], "v=spf1"))
+# 2) 无 TXT / NXDOMAIN → 空 list（非报错：授权 TXT 可能未配置）
+let e = dns_txt("_nonexist_txt_probe.invalid")
+check("invalid empty list", type(e) == "list" and len(e) == 0)
+let lo = dns_txt("localhost")
+check("localhost empty list", type(lo) == "list" and len(lo) == 0)
+# 3) 非法入参 → Err 可判定（Result .is_err()）
+let b = dns_txt("")
+check("empty domain err", b.is_err())
+let b2 = dns_txt("a..b")
+check("bad label err", b2.is_err())
+# 4) dns_lookup A/AAAA 零回归（getaddrinfo 路径不受 dns_txt 影响）
+let a = dns_lookup("qq.com")
+check("dns_lookup qq.com ok", type(a) == "list" and len(a) >= 1)
+let nx = dns_lookup("_nonexist_txt_probe.invalid")
+check("dns_lookup invalid err", nx.is_err())
+# ---- dump 供 Go net.LookupTXT 对拍（verify.sh 截取）----
+print("----TXT-DUMP----")
+for t in r:
+    print(t)
+print("DNS_TXT_TEST:", str(g_pass) + "P/" + str(g_fail) + "F")
+if g_fail > 0:
+    exit(1)

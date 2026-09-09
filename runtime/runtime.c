@@ -4448,6 +4448,176 @@ static LXValue bi_dns_lookup(LXValue* args, int nargs, void* ctx) {
     return list;
 }
 
+// ---- M103-S2a（Issue 29 GAP-DNS-TXT-1）：DNS TXT 查询（TYPE=16，手写 UDP wire）----
+// ws-ddns server 端授权 TXT 校验 native：getaddrinfo 只 A/AAAA（结构上不可能返回 TXT），
+// libc res_query 在 musl（交叉 aarch64/armv7/riscv64）仅 A/AAAA 桩、mingw 无 → 手写
+// DNS 报文经系统 resolv.conf nameserver UDP 查询，跨 glibc/musl/mingw 零依赖。
+// 返回全部 TXT 记录字符串 list（多段 character-string 合并，对齐 Go net.LookupTXT）；
+// 无 TXT 记录/NXDOMAIN → 空 list（非报错：授权 TXT 可能未配置，调用方按无记录处理）；
+// 查询失败（无 nameserver/超时/TC 截断/格式错）→ Err("dns: <host>: <原因>") 可 is_err 判定。
+static uint16_t dns_txt_next_id(void) {
+    static unsigned int c = 0x51f15e;
+    c = c * 1103515245u + 12345u;
+    return (uint16_t)((c >> 8) ^ (unsigned int)getpid() ^ (unsigned int)time(NULL));
+}
+// 跳过 DNS name（label 序列或压缩指针），返回新 offset；非法返回 -1
+static int dns_skip_name(const unsigned char* b, int blen, int off) {
+    while (off < blen) {
+        int l = b[off];
+        if ((l & 0xC0) == 0xC0) return off + 2;   // 压缩指针：2 字节结束
+        if (l == 0) return off + 1;               // root 结束
+        if (l > 63) return -1;
+        off += 1 + l;
+    }
+    return -1;
+}
+static LXValue bi_dns_txt(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("dns_txt 需要一个参数 (domain)");
+    const char* host = val_cstr(args[0]);
+    char msg[320];
+    if (host[0] == '\0') return px_err(px_str("dns: empty domain"));
+    // 1) resolv.conf 首个 nameserver
+    char ns[64] = "";
+    FILE* rf = fopen("/etc/resolv.conf", "r");
+    if (rf) {
+        char line[256];
+        while (fgets(line, (int)sizeof(line), rf)) {
+            char kw[16] = "", ip[64] = "";
+            if (sscanf(line, " %15s %63s", kw, ip) == 2 && strcmp(kw, "nameserver") == 0) {
+                snprintf(ns, sizeof(ns), "%s", ip);
+                break;
+            }
+        }
+        fclose(rf);
+    }
+    if (ns[0] == '\0') {
+        snprintf(msg, sizeof(msg), "dns: %s: no nameserver in /etc/resolv.conf", host);
+        return px_err(px_str(msg));
+    }
+    // 2) 编码 query（header + question QTYPE=TXT(16) QCLASS=IN(1)）
+    unsigned char q[512];
+    uint16_t id = dns_txt_next_id();
+    q[0] = (unsigned char)(id >> 8); q[1] = (unsigned char)(id & 0xFF);
+    q[2] = 0x01; q[3] = 0x00;                    // RD
+    q[4] = 0; q[5] = 1;                          // QDCOUNT=1
+    memset(q + 6, 0, 6);                         // AN/NS/AR=0
+    int ql = 12;
+    const char* p = host;
+    while (*p) {
+        const char* dot = strchr(p, '.');
+        int l = dot ? (int)(dot - p) : (int)strlen(p);
+        if (l <= 0 || l > 63) {
+            snprintf(msg, sizeof(msg), "dns: %s: invalid domain label", host);
+            return px_err(px_str(msg));
+        }
+        if (ql + 1 + l + 5 > (int)sizeof(q)) {
+            snprintf(msg, sizeof(msg), "dns: %s: domain too long", host);
+            return px_err(px_str(msg));
+        }
+        q[ql++] = (unsigned char)l;
+        memcpy(q + ql, p, (size_t)l); ql += l;
+        p = dot ? dot + 1 : p + l;
+        if (dot && *(dot + 1) == '\0') break;    // 尾点：root 段由下面统一补
+    }
+    q[ql++] = 0;                                 // root
+    q[ql++] = 0; q[ql++] = 16;                   // QTYPE TXT
+    q[ql++] = 0; q[ql++] = 1;                    // QCLASS IN
+    // 3) UDP 发送（nameserver:53，SO_RCVTIMEO 3s）
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return px_err(px_str("dns: socket() failed"));
+    struct sockaddr_in sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(53);
+    if (inet_pton(AF_INET, ns, &sa.sin_addr) != 1) {
+        close(fd);
+        snprintf(msg, sizeof(msg), "dns: %s: bad nameserver %s", host, ns);
+        return px_err(px_str(msg));
+    }
+    if (connect(fd, (struct sockaddr*)&sa, sizeof(sa)) != 0) {
+        close(fd);
+        return px_err(px_str("dns: connect() failed"));
+    }
+    struct timeval tv;
+    tv.tv_sec = 3; tv.tv_usec = 0;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    if (send(fd, q, ql, 0) != ql) { close(fd); return px_err(px_str("dns: send() failed")); }
+    unsigned char rb[4096];
+    int rl = (int)recv(fd, rb, sizeof(rb), 0);
+    close(fd);
+    if (rl < 0) {
+        snprintf(msg, sizeof(msg), "dns: %s: query timeout", host);
+        return px_err(px_str(msg));
+    }
+    // 4) 解析响应
+    if (rl < 12) return px_err(px_str("dns: short response"));
+    uint16_t rid = (uint16_t)((rb[0] << 8) | rb[1]);
+    if (rid != id) return px_err(px_str("dns: response id mismatch"));
+    uint16_t flags = (uint16_t)((rb[2] << 8) | rb[3]);
+    if ((flags & 0x8000) == 0) return px_err(px_str("dns: not a response"));
+    int rcode = flags & 0x000F;
+    if (rcode == 3) return px_list(0);           // NXDOMAIN → 无记录 → 空 list（非报错）
+    if (rcode != 0) {
+        snprintf(msg, sizeof(msg), "dns: %s: rcode=%d", host, rcode);
+        return px_err(px_str(msg));
+    }
+    if (flags & 0x0200) {
+        snprintf(msg, sizeof(msg), "dns: %s: response truncated (TCP 回退二期)", host);
+        return px_err(px_str(msg));
+    }
+    int qd = (rb[4] << 8) | rb[5];
+    int an = (rb[6] << 8) | rb[7];
+    if (qd < 1) return px_err(px_str("dns: no question in response"));
+    int off = 12;
+    for (int i = 0; i < qd; i++) {
+        off = dns_skip_name(rb, rl, off);
+        if (off < 0 || off + 4 > rl) return px_err(px_str("dns: bad question"));
+        off += 4;
+    }
+    char* txts[128];
+    int nt = 0;
+    int bad = 0;
+    while (an-- > 0) {
+        off = dns_skip_name(rb, rl, off);
+        if (off < 0 || off + 10 > rl) { bad = 1; break; }
+        int rtype = (rb[off] << 8) | rb[off + 1];
+        int rclass = (rb[off + 2] << 8) | rb[off + 3];
+        int rdlen = (rb[off + 8] << 8) | rb[off + 9];   // TYPE2+CLASS2+TTL4 后 RDLENGTH2
+        off += 10;
+        if (off + rdlen > rl) { bad = 1; break; }
+        if (rtype == 16 && rclass == 1) {
+            char tmp[2048];
+            int tl = 0;
+            int pos = off;
+            int end = off + rdlen;
+            while (pos < end && tl < (int)sizeof(tmp) - 1) {
+                int sl = rb[pos++];
+                if (pos + sl > end) break;
+                if (tl + sl > (int)sizeof(tmp) - 1) { tl = (int)sizeof(tmp) - 1; break; }
+                memcpy(tmp + tl, rb + pos, (size_t)sl); tl += sl; pos += sl;
+            }
+            tmp[tl] = '\0';
+            if (tl > 0 && nt < 128) {
+                txts[nt] = (char*)malloc((size_t)tl + 1);
+                memcpy(txts[nt], tmp, (size_t)tl + 1);
+                nt++;
+            }
+        }
+        off += rdlen;
+    }
+    LXValue list = px_list(0);
+    px_root_push();
+    PX_KEEP(list);
+    if (!bad) {
+        for (int i = 0; i < nt; i++) px_list_push(list, px_str(txts[i]));
+    }
+    px_root_pop();
+    for (int i = 0; i < nt; i++) free(txts[i]);
+    if (bad) return px_err(px_str("dns: malformed response"));
+    return list;
+}
+
 // ---- XXH64（xxHash, seed=0）----
 #define XXH_P1 0x9E3779B185EBCA87ULL
 #define XXH_P2 0xC2B2AE3D27D4EB4FULL
@@ -5914,6 +6084,7 @@ void px_register_builtins(void) {
     px_set_global("sha256", px_native("sha256", bi_sha256));
     px_set_global("hmac_sha256", px_native("hmac_sha256", bi_hmac_sha256));  // M84-S2 (Issue 21 GAP-HMAC-1)
     px_set_global("dns_lookup", px_native("dns_lookup", bi_dns_lookup));     // M84-S3 (Issue 22 GAP-DNS-1)
+    px_set_global("dns_txt", px_native("dns_txt", bi_dns_txt));              // M103-S2a (Issue 29 GAP-DNS-TXT-1)
     px_set_global("xxhash", px_native("xxhash", bi_xxhash));
     // M15 P1：正则表达式（文本解析 / 日志分析 / 参数抽取）
     px_set_global("regex_find", px_native("regex_find", bi_regex_find));
