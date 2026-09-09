@@ -4056,6 +4056,12 @@ int px_native_offload_kind(LXValue fn) {
     if (strcmp(nm, "ws_connect_auto") == 0) return 1;
     if (strcmp(nm, "ws_send") == 0) return 1;
     if (strcmp(nm, "ws_recv") == 0) return 1;
+    // M102-S2a：.px 子进程池执行（px_exec → px_pool_run C 阻塞等 px --worker 结果帧；
+    //   popen/子进程等待类 —— M96 D2 二期候选兑现）。协程 ctx 命中 → 外包执行线程池跑
+    //   px_pool_run（阻塞等子进程在 offload 线程），worker 释放 —— 语言层 .px 调用与
+    //   handler 内 px_exec 不卡 worker。px_exec 内 px_call(json_stringify) 为 native
+    //   直调（不回调用户 VM）→ 满足 D5 名单约束。
+    if (strcmp(nm, "px_exec") == 0) return 1;
     return 0;
 }
 

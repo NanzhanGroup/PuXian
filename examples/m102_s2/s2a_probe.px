@@ -1,0 +1,38 @@
+# M102-S2a 探针：px_exec 语言层协程 ctx 外包（不卡 coro worker）
+# 判据：单次 px_exec 基准 t1（sleep400 + pxi 启动 ~450ms）；3 并发协程 wall
+#       ≈ t1（外包并行）而非 3×t1（同步串行卡 1 coro worker）。
+write_file("/tmp/m102_slow.px", "sleep(400)\nprint('slow-ok')\n")
+# 单次基准（主线程直调）
+var t0 = now_us()
+var r1 = px_exec("/tmp/m102_slow.px")
+var t1 = (now_us() - t0) // 1000
+print("S2A once_ms=" + str(t1) + " ok=" + str(r1.ends_with("slow-ok\n")))
+# 并发：3 协程各调 px_exec（PX_CORO_WORKERS=1 由 shell 注入 → 外包则并行）
+var ch = chan[string](16)
+def runpx(i, ch):
+    var r = px_exec("/tmp/m102_slow.px")
+    ch.send("px" + str(i) + ":" + r)
+var t2 = now_us()
+for i in range(3):
+    spawn runpx(i, ch)
+var msgs = []
+for k in range(3):
+    msgs.append(ch.recv())
+var wall = (now_us() - t2) // 1000
+var sall = ""
+for m in msgs:
+    sall += m
+print("S2A conc_ms=" + str(wall))
+print("S2A msgs=" + sall)
+var ok = 0
+for m in msgs:
+    if m.ends_with("slow-ok\n"):
+        ok = ok + 1
+print("S2A ok=" + str(ok))
+# 断言：3 并发 wall < 单次×2（并行近似单次；同步串行需 ~3×单次）且 3 结果全对
+if ok == 3 and wall < t1 * 2:
+    print("S2A-PXEXEC-OFFLOAD-OK")
+else:
+    print("S2A-PXEXEC-OFFLOAD-FAIL once=" + str(t1) + " conc=" + str(wall) + " ok=" + str(ok))
+assert(ok == 3, "px_exec 协程结果全对")
+assert(wall < t1 * 2, "px_exec 协程外包并行 conc_wall < 2×once_wall")
