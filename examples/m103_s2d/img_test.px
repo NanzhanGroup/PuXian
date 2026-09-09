@@ -1,0 +1,78 @@
+# ============================================================
+# M103-S2d (Issue 30 GAP-IMG) 图片 decode→scale→JPEG 编码专项验证
+# ------------------------------------------------------------
+# img_decode(data) / img_scale(pixels,w,h,nw,nh) / img_encode_jpeg(w,h,pixels,q)
+#   —— api-server avatar.go「解码→>512 等比缩放→JPEG q70」头像接口 native（stb_image
+#   v2.30 + stb_image_write v1.16，public domain）。
+# 断言：PNG 大图 decode 尺寸/像素 + 等比缩放 ≤512 + JPEG q70 魔数 + decode back +
+#   JPEG 输入（Go 生成）decode + 小图不缩放路径 + 畸形输入 Err + 落盘 px_out.jpg
+#   供 Go image.Decode 反向校验（px 产出 JPEG 格式合法强证明）。
+# 运行：examples/m103_s2d/verify.sh（Go 参照：avatar 语义对拍）
+# ============================================================
+var g_pass = 0
+var g_fail = 0
+def check(name, cond, extra=""):
+    if cond:
+        g_pass += 1
+    else:
+        g_fail += 1
+        print("FAIL:", name, extra)
+
+# ---- 1. PNG 大图 decode（scene.png 640×480，m61_gfx 现成）----
+let png = read_bytes("../m61_gfx/scene.png")
+check("png bytes", type(png) == "bytes" and bytes_len(png) > 0)
+let r = img_decode(png)
+check("decode scene png dict", type(r) == "dict")
+if type(r) == "dict":
+    check("scene w 640", r["w"] == 640, r["w"])
+    check("scene h 480", r["h"] == 480, r["h"])
+    check("scene rgba len", bytes_len(r["pixels"]) == 640 * 480 * 4)
+    # 首像素通道范围（RGBA 每通道 0-255）
+    check("rgba byte range", bytes_get(r["pixels"], 0) >= 0 and bytes_get(r["pixels"], 0) <= 255)
+    # ---- 2. 等比缩放 >512 → ≤512（scene 640×480 → 512×384）----
+    var nw = 512
+    var nh = 512
+    if r["w"] >= r["h"]:
+        nh = int(r["h"] * 512 / r["w"])
+    else:
+        nw = int(r["w"] * 512 / r["h"])
+    let s = img_scale(r["pixels"], r["w"], r["h"], nw, nh)
+    check("scale ok", type(s) == "bytes")
+    if type(s) == "bytes":
+        check("scale 512x384 len", bytes_len(s) == 512 * 384 * 4)
+        # ---- 3. JPEG q70 编码 + 魔数 + decode back ----
+        let j = img_encode_jpeg(nw, nh, s, 70)
+        check("jpeg ok", type(j) == "bytes")
+        if type(j) == "bytes":
+            check("jpeg nonempty", bytes_len(j) > 100)
+            check("jpeg magic ffd8", bytes_get(j, 0) == 255 and bytes_get(j, 1) == 216)
+            check("jpeg eoi ffd9", bytes_get(j, bytes_len(j) - 2) == 255 and bytes_get(j, bytes_len(j) - 1) == 217)
+            let d2 = img_decode(j)
+            check("jpeg decode back", type(d2) == "dict")
+            if type(d2) == "dict":
+                check("jpeg back 512x384", d2["w"] == 512 and d2["h"] == 384)
+            write_bytes("artifacts/px_out.jpg", j)
+    # ---- 4. JPEG 输入 decode（go_input.jpg 由 Go gen 生成 200×150）----
+    if exists("artifacts/go_input.jpg"):
+        let jp = read_bytes("artifacts/go_input.jpg")
+        let dj = img_decode(jp)
+        check("jpeg input decode", type(dj) == "dict")
+        if type(dj) == "dict":
+            check("jpeg input 200x150", dj["w"] == 200 and dj["h"] == 150, str(dj["w"]) + "x" + str(dj["h"]))
+# ---- 5. 小图不缩放路径（det_x86.png，若 <512 则保持原尺寸）----
+if exists("../m61_gfx/det_x86.png"):
+    let small = read_bytes("../m61_gfx/det_x86.png")
+    let rs = img_decode(small)
+    if type(rs) == "dict" and rs["w"] <= 512 and rs["h"] <= 512:
+        let ss = img_scale(rs["pixels"], rs["w"], rs["h"], rs["w"], rs["h"])
+        check("small no-up scale ok", type(ss) == "bytes" and bytes_len(ss) == rs["w"] * rs["h"] * 4)
+# ---- 6. 畸形输入 → Err 可判定 ----
+check("bad input err", type(img_decode("not an image")) == "result")
+check("empty input err", type(img_decode("")) == "result")
+let z = json_parse("{}")
+let zr = img_scale("short", 100, 100, 50, 50)
+check("short pixels err", type(zr) == "result")
+check("bad dims err", type(img_encode_jpeg(0, 100, "x", 70)) == "result")
+print("IMG_TEST:", str(g_pass) + "P/" + str(g_fail) + "F")
+if g_fail > 0:
+    exit(1)

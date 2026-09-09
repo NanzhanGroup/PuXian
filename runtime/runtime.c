@@ -6326,6 +6326,15 @@ void px_register_builtins(void) {
     px_set_global("ed25519_verify", px_native("ed25519_verify", bi_ed25519_verify));
     px_set_global("ed25519_keygen", px_native("ed25519_keygen", bi_ed25519_keygen));  // M103-S2b (Issue 29 GAP-ED25519-2)
 #endif // PX_NO_ED25519
+// M103-S2d：--no-img 裁剪（去 runtime_image.o + third_party/stb；img_* native 缺 → R1001）
+#ifndef PX_NO_IMG
+    // M103-S2d（Issue 30 GAP-IMG）：图片解码/等比缩放/JPEG 编码（stb_image v2.30 +
+    //   stb_image_write v1.16，public domain；实现 runtime_image.c）
+    //   —— api-server avatar.go「解码→>512 等比缩放→JPEG q70」头像接口 native 解锁
+    px_set_global("img_decode", px_native("img_decode", bi_img_decode));
+    px_set_global("img_scale", px_native("img_scale", bi_img_scale));
+    px_set_global("img_encode_jpeg", px_native("img_encode_jpeg", bi_img_encode_jpeg));
+#endif // PX_NO_IMG
 // M85-S1：--no-rsa 裁剪（去 runtime_rsa.o + mbedtls rsa/pk 引用面；rsa_* native 缺 → R1001）
 #ifndef PX_NO_RSA
     // M83-S4（Issue 18 GAP-RSA-1）：RSA PKCS1v15-SHA256 标准签名（PEM 入参，DigestInfo 自动封装）

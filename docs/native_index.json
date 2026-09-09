@@ -1,7 +1,7 @@
 {
  "generator": "tools/gen_native_table.sh",
  "source": "runtime/*.c px_set_global(px_native)",
- "count": 303,
+ "count": 306,
  "names": [
   "Err",
   "Ok",
@@ -126,6 +126,9 @@
   "http_serve_unix",
   "http_stream",
   "http_unix",
+  "img_decode",
+  "img_encode_jpeg",
+  "img_scale",
   "input",
   "int",
   "int_to_bytes",
