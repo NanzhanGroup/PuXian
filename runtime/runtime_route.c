@@ -18,6 +18,9 @@
 #include <string.h>
 #include <pthread.h>
 
+// M100：VM 函数判定（px_vm_entry 为 runtime.c weak extern —— C 轨逃生舱无 vm.o → NULL）
+extern LXValue px_vm_entry(LXValue* args, int nargs, void* ctx) __attribute__((weak));
+
 #define MAX_ROUTES 128
 #define MAX_MIDDLEWARES 32
 
@@ -320,6 +323,28 @@ void px_route_respond(PxHttpOut* out, LXValue req, const char* method, int head_
     }
 }
 
+// M100：middleware 短路响应（归一化 + respond + (middleware) 访问日志）。同步短路
+//   （px_route_try_dispatch 内 px_call 后）与协程续处理段2（px_serve kind=3，续 worker
+//   从挂起表取回）共用 —— 保证 async/sync 短路语义逐字节一致（文案含 "(middleware)"）。
+void px_route_mw_short_respond(PxHttpOut* out, LXValue req, const char* method, int head_only,
+                               int keep_alive, const char* req_id, LXValue r) {
+    LXValue path_v = px_dict_get(req, "path");
+    const char* pstr = (path_v.type == PX_STR) ? path_v.as.obj->as.str.data : "?";
+    RouteResp rr;
+    route_normalize(r, &rr);
+    fprintf(stderr, "[px-serve] [route] %s %s -> %d (middleware)\n", method, pstr, rr.status);
+    char rsp_extra[512];
+    snprintf(rsp_extra, sizeof(rsp_extra), "X-Request-Id: %s\r\n", req_id);
+    route_send(out, rr.status, rr.ct, rr.body, rr.body_len, head_only, keep_alive, rsp_extra);
+    // M36：middleware 短路响应统一访问日志（与解释器 log_access 一致）
+    {
+        LXValue rmt = px_dict_get(req, "remote");
+        const char* lr = (rmt.type == PX_STR) ? rmt.as.obj->as.str.data : "-";
+        px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
+                (long long)time(NULL), lr, method, pstr, rr.status, rr.body_len, req_id);
+    }
+}
+
 // 执行中间件链 + handler 并发送响应。返回 0 = 未匹配；1 = 已处理（同步完成响应）；
 // 2 = 已拆段（route VM handler 帧协程运行中，调用方须释放 worker，done 回调投回续处理）。
 int px_route_try_dispatch(PxHttpOut* out, LXValue req, const char* method, int head_only,
@@ -366,25 +391,32 @@ int px_route_try_dispatch(PxHttpOut* out, LXValue req, const char* method, int h
     pthread_mutex_unlock(&g_route_mu);
     px_root_push();   // M92-S2c precise：px_route_try_dispatch 登记作用域
     PX_KEEP(params);   // M92-S2c precise：route_match 传出 params（跨中间件/handler px_call）
+    // M100：middleware 链协程化 —— 链非空且每段 middleware 与 handler 均为 VM 函数
+    //   （fn==px_vm_entry，可帧协程让出）且 async_ok → 链状态机 defer
+    //   （px_pxserve_mw_defer：登记 kind=2 + 链快照入 GC 根 + spawn 首段；done 回调逐段
+    //   推进：null → 下一 middleware / 全 null → handler 段 / 非 null → 短路 kind=3 段2）
+    //   → 返回 2（调用方释放 worker，占协程不占线程）。含 C 闭包 middleware 段 / 非 VM
+    //   handler / async_ok=0 / 无协程内核 / 登记失败 → 回落下方原同步链（M98 行为零变化）。
+    if (async_ok && mw_count > 0) {
+        int all_vm = (handler.type == PX_FUNC && handler.as.obj &&
+                      px_vm_entry && handler.as.obj->as.func.fn == px_vm_entry);
+        for (int i = 0; i < mw_count && all_vm; i++) {
+            if (mws[i].type != PX_FUNC || !mws[i].as.obj ||
+                !px_vm_entry || mws[i].as.obj->as.func.fn != px_vm_entry) all_vm = 0;
+        }
+        if (all_vm &&
+            px_pxserve_mw_defer(out, req, handler, params, mws, mw_count,
+                                head_only, keep_alive, req_id)) {
+            px_root_pop();   // M92-S2c precise（req/params 已入挂起表 GC 根）
+            return 2;        // 已拆段（middleware 链状态机运行中）：调用方释放 worker
+        }
+    }
     for (int i = 0; i < mw_count; i++) {
         LXValue r = px_call(mws[i], &req, 1);
         PX_KEEP(r);   // M92-S2c precise：middleware px_call 返回值（route_normalize/route_send 期间使用）
         if (r.type != PX_NULL) {
-            RouteResp rr;
-            route_normalize(r, &rr);
-            fprintf(stderr, "[px-serve] [route] %s %s -> %d (middleware)\n", method,
-                    path_v.as.obj->as.str.data, rr.status);
-            char rsp_extra[512];
-            snprintf(rsp_extra, sizeof(rsp_extra), "X-Request-Id: %s\r\n", req_id);
-            route_send(out, rr.status, rr.ct, rr.body, rr.body_len, head_only, keep_alive, rsp_extra);
-            // M36：route 响应统一访问日志（与解释器 log_access 一致）
-            {
-                LXValue rmt = px_dict_get(req, "remote");
-                const char* lr = (rmt.type == PX_STR) ? rmt.as.obj->as.str.data : "-";
-                px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
-                        (long long)time(NULL), lr, method,
-                        path_v.as.obj->as.str.data, rr.status, rr.body_len, req_id);
-            }
+            // M100：短路响应抽公共函数（同步短路与协程段2 kind=3 共用，文案逐字一致）
+            px_route_mw_short_respond(out, req, method, head_only, keep_alive, req_id, r);
             px_root_pop();   // M92-S2c precise
             return 1;
         }

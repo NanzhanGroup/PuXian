@@ -1,0 +1,75 @@
+# M100 daemon —— middleware 链协程化验证（docs/M100_PLAN.md S2）
+# 并发模型升级：px_serve route 命中后 middleware 链（runtime_route.c px_route_try_dispatch）
+# 全 VM 且 async_ok → 不再 g_pool worker 内同步逐个 px_call，改链状态机 defer
+# （PxPend kind=2：登记链快照入 GC 根 + spawn 首段；done 回调逐段推进：
+#   null → 下一 middleware / 全 null → handler 段 / 非 null → 短路 kind=3 段2）
+# → middleware 内 sleep/chan 长业务占协程不占 g_pool worker。
+# 验证面：
+#   middleware 链（3 段，注册序）：
+#     mw_slow：/slow-mw → sleep(600)（慢让出实证）；其余立即 null
+#     mw_auth ：/admin* → 401 短路；/chain2* → 403 短路；其余 null
+#     mw_log  ：恒 null（纯通过）
+#   /slow-mw -> 3 段 null 通过 + handler（middleware 慢让出 → 并发不占 worker）
+#   /fast    -> 全链快 null → handler（慢 middleware 在途时快速请求不被饿死）
+#   /chain   -> 3 段 null 通过 + handler（多段链推进正确）
+#   /admin/* -> mw_auth 401 短路（段2 px_route_mw_short_respond，(middleware) 文案）
+#   /chain2/*-> mw_auth 403 短路
+#   /index.txt 静态文件（route 不匹配 → 不过 middleware，原同步路径零变化）
+# 用法：m100_daemon [port]（默认 18100）；日志 stderr。
+var m100_port = 18100
+let m100_av = args()
+if len(m100_av) > 1:
+    m100_port = int(m100_av[1])
+
+# ---- middleware 链（注册序 = 执行序；每段 fn(req) → null 继续 / 非 null 短路）----
+def mw_slow(req):
+    if starts_with(req["path"], "/slow-mw"):
+        sleep(600)                  # 慢 middleware：600ms 让出窗口（并发 20 也 ~1.5s 全完成）
+    return null
+middleware(mw_slow)
+
+def mw_auth(req):
+    if starts_with(req["path"], "/admin"):
+        return {"status": 401, "body": "unauthorized"}
+    if starts_with(req["path"], "/chain2"):
+        return {"status": 403, "body": "chain2-blocked"}
+    return null
+middleware(mw_auth)
+
+def mw_log(req):
+    return null
+middleware(mw_log)
+
+# ---- route handlers（均 (req, params) 2 参；M98 语义）----
+def slow_handler(req, params):
+    return "SLOW-MW-OK"
+
+def fast_handler(req, params):
+    return "FAST"
+
+def chain_handler(req, params):
+    return "CHAIN-OK"
+
+def short_handler(req, params):
+    return "SHOULD-NOT-REACH"
+
+def setup():
+    route("GET", "/slow-mw", slow_handler)
+    route("GET", "/fast", fast_handler)
+    route("HEAD", "/fast", fast_handler)
+    route("GET", "/chain", chain_handler)
+    route("GET", "/admin/*", short_handler)     # 实际被 mw_auth 短路（401）
+    route("GET", "/chain2/*", short_handler)    # 实际被 mw_auth 短路（403）
+    let D = "/tmp/px_m100_docroot"
+    mkdir(D)
+    write_file(D + "/index.txt", "M100-OK")
+    # max_conn=2：刻意压到 2 个 g_pool worker —— 若 middleware 同步占线程，20 并发
+    # /slow-mw（每段 sleep 600ms）需 ~6s 且 /fast 被饿死；链 defer 后 worker 释放 →
+    # 全部 ~1.5s 完成。M99 已事件化 IDLE（keep-alive 空闲交事件循环照看）。
+    px_serve(m100_port, D, 30000, {"max_conn": 2})
+    # px_serve 返回 = 优雅关闭完成（SIGTERM → accept 退出 → join → 清 IDLE → 在途 0）
+    exit(0)
+
+spawn setup()
+sleep(300000)   # 兜底保活（正常路径 setup 内 px_serve 返回后 exit(0) 提前终止）
+exit(0)
