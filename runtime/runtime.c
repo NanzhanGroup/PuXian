@@ -719,7 +719,13 @@ extern void  px_vm_gc_mark_state(void* vst) __attribute__((weak));
 //   px_coro_spawn：spawn 分派（VM 函数 → 协程入就绪队列）；px_coro_gc_mark_roots：
 //   GC 标记期补标全部存活协程（就绪参数副本 + 已运行帧槽，precise/conservative 皆用）。
 extern void px_coro_spawn(void* ctx, LXValue* args, int nargs) __attribute__((weak));
+extern void px_coro_spawn_ex(void* ctx, LXValue* args, int nargs,
+                             void (*done_cb)(void* ud, LXValue ret),
+                             void* done_ud) __attribute__((weak));
 extern void px_coro_gc_mark_roots(void) __attribute__((weak));
+// M95-S2：http handler 协程化 pending 表 gc 标记（实现在 ConnCtx 区后；前向声明供
+//   gc 标记期调用 —— 挂起连接的 req/resp 须入精确根面，漏标 = GC 误回收 UAF）
+static void http_pend_gc_mark(void);
 // M93-S2：VM 函数指针判定（px_spawn_name 分派用；C 轨逃生舱无 vm.o → weak 空转）
 extern LXValue px_vm_entry(LXValue* args, int nargs, void* ctx) __attribute__((weak));
 // M93-S2：协程 worker 复用 spawn 错误隔离 / GC 暂停信号屏蔽原语（本文件强定义导出）
@@ -1351,6 +1357,7 @@ void px_gc_collect(void) {
         //   运行中协程 vm 已由所属 worker 的 ti->vm_state 覆盖（重复标无害）；
         //   就绪队列协程的 args 副本仅本表可达 → 必须补标（漏标 = worker 取到 UAF）。
         if (px_coro_gc_mark_roots) px_coro_gc_mark_roots();
+        http_pend_gc_mark();   // M95-S2：http 挂起连接 req/resp 补标
         g_gc_cur_set = NULL;
         // 4) sweep
         if (g_gc_debug) { char dbg[128]; int dn = snprintf(dbg, sizeof(dbg), "[mk] 暂停+标记+扫栈耗时%lldms\n", gc_mono_ms() - t0); (void)write(2, dbg, (size_t)dn); }
@@ -1428,6 +1435,7 @@ void px_gc_collect(void) {
     // M93-S2：帧协程根面补标（单线程 GC 路径同款；协程存在即有 worker 活跃走并发路径，
     //   此处兜底纯就绪/创建窗口）
     if (px_coro_gc_mark_roots) px_coro_gc_mark_roots();
+    http_pend_gc_mark();   // M95-S2：同上（单线程 GC 路径兜底）
     g_gc_cur_set = NULL;
     g_in_gc_sweep = 1;   // ISSUE28-B1：单线程 sweep 同上免逐趟 sigprocmask
     int freed = 0, w = 0;
@@ -10203,6 +10211,18 @@ static int px_evc_idle_put(int fd, int kind);
 static void px_ev_ensure(void);
 static void px_fd_nonblock(int fd);
 
+// ---- M95-S2：http handler 协程化 —— pending 表前向声明（实现在 ConnCtx 区后）----
+// 读+解析完成（段1）→ put(stage=1) + spawn handler 帧协程 → 完成回调写 resp
+//   （stage=2）→ fserve_push 续处理；fserve worker 重入循环顶 take → 响应写（段2）。
+// 锁 = g_hpend_mu（独立于 g_conn_mu，见定义处 fix 注释）。fd 超容量/不可用 → put 返回
+//   0（调用方退回同步路径）。
+static int  http_pend_put(int fd, LXValue req, int method_head, int client_close);
+static int  http_pend_take(int fd, LXValue* req, LXValue* resp, int* method_head, int* client_close);
+static void http_pend_clear(int fd);   // px_evc_close 收尾调用（防 fd 复用串扰）
+static void http_pend_gc_mark(void);   // gc 标记期补标 req/resp
+// handler 完成回调（coro worker 线程执行；ret 已 PX_KEEP 约定由本函数内处理）
+static void http_handler_done(void* ud, LXValue ret);
+
 // 非阻塞 fd 安全读：recv 遇 EAGAIN → poll 等待 tmo_ms → 再 recv（可读/断开/错误均再 recv 一次）。
 // 语义 = 阻塞 recv + SO_RCVTIMEO（服务端空闲超时 15s 对齐原 http_conn_worker）。返回 recv 结果：
 //   >0 读得字节 / 0 对端关闭 / -1 错误或超时（超时 errno=EAGAIN，与 SO_RCVTIMEO 行为一致）
@@ -10235,6 +10255,80 @@ static const char* px_file_content_type(const char* path);
 // 同一连接循环处理多个请求：HTTP/1.1 默认 keep-alive；客户端 Connection: close、
 // handler 返回 keep_alive:false、或空闲超时(15s) → 关闭。handler 返回 dict 支持
 // "file": path（流式文件响应，大文件不占内存）。
+// ==================== M95-S2（D8-②）：http_serve 系 handler 协程化 ====================
+// http_conn_worker 拆段：读+解析（段1）→ VM handler 以帧协程执行（chan/sleep 让出
+//   占协程不占 fserve worker）→ 完成回调（http_handler_done，coro worker 线程）写
+//   pending 表 + fserve_push 投回 → 本函数重入循环顶 take → http_send_resp（段2
+//   响应写 + keep-alive 决策）。PX_NATIVE / 非 VM handler（逃生舱）→ 原同步直调。
+// 语义：handler 挂起期连接挂起（同原线程模型 handler 占用期）；空闲交还 IDLE 事件
+//   循环照看（M88-B）；请求读仍事件化兜底（job 派发时数据在途，快速）。
+
+// 响应写 + keep-alive 决策（原 http_conn_worker step7-8 抽出；同步/协程续处理共用）。
+// 返回：0 = 连接已收尾（px_evc_close 已调，调用方 return）；1 = 已交还 IDLE 事件
+//       循环（调用方 return）；2 = 连接可继续读下一请求（调用方 continue）。
+static int http_send_resp(int fd, LXValue req, LXValue resp, int method_head, int client_close) {
+    // 7. 响应：file 流式（Connection: close，发送后关闭）或普通（keep-alive 判定）
+    LXValue file_v = (resp.type == PX_DICT) ? px_dict_get(resp, "file") : px_null();
+    if (file_v.type == PX_STR) {
+        // 流式文件响应
+        const char* fpath = file_v.as.obj->as.str.data;
+        FILE* f = fopen(fpath, "rb");
+        if (f) {
+            fseek(f, 0, SEEK_END);
+            long fsz = ftell(f);
+            fseek(f, 0, SEEK_SET);
+            const char* ct2 = px_file_content_type(fpath);
+            char hdr[1024];
+            int hl = snprintf(hdr, sizeof(hdr),
+                              "HTTP/1.1 200 OK\r\nContent-Length: %ld\r\nContent-Type: %s\r\nConnection: close\r\n\r\n",
+                              fsz, ct2);
+            if (hl > 0) send(fd, hdr, (size_t)hl, 0);
+            char fbuf[65536];
+            size_t rd;
+            while ((rd = fread(fbuf, 1, sizeof(fbuf), f)) > 0) {
+                size_t off = 0;
+                while (off < rd) {
+                    ssize_t w = send(fd, fbuf + off, rd - off, 0);
+                    if (w <= 0) { off = rd; break; }
+                    off += (size_t)w;
+                }
+            }
+            fclose(f);
+        } else {
+            const char* notfound = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            send(fd, notfound, (int)strlen(notfound), 0);
+        }
+        px_evc_close(fd);
+        return 0;
+    }
+    int out_len = 0;
+    int resp_keep_alive = 1;
+    char* out = px_http_build_response(resp, &out_len, &resp_keep_alive);
+    if (out) {
+        if (method_head) {
+            char* sep = strstr(out, "\r\n\r\n");
+            if (sep) out_len = (int)(sep - out) + 4;
+        }
+        if (out_len > 0) send(fd, out, out_len, 0);
+        xfree(out);
+    }
+    // 8. keep-alive 判定：需关闭 → 统一 px_evc_close（清理连接上下文，防 fd 复用串扰）
+    if (client_close || !resp_keep_alive) {
+        px_evc_close(fd);
+        return 0;
+    }
+    // M88-B-S2：空闲连接不占 worker——无下一请求数据在途 → 连接交还 IDLE。
+    // 事件循环（epoll）照看空闲连接：可读再派发回 fserve 池（worker 接管下一请求突发）；
+    // 15s 空闲超时 / 对端断开由事件循环 tick close（语义与原 SO_RCVTIMEO 对齐）。
+    // 交还成功即返回释放本 worker 去取新 job；失败（非 Linux / fd 未登记）→ 继续读下一请求
+    // （px_recv_wait 15s 超时 = 原空闲语义，功能不降仅无事件驱动优化）。
+    if (!px_fd_readable_now(fd)) {
+        px_ev_ensure();
+        if (px_evc_idle_put(fd, FSERVE_KIND_HTTP) == 0) return 1;
+    }
+    return 2;
+}
+
 static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) return px_null();
@@ -10247,6 +10341,20 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
     // （IDLE 连接空闲超时由 B-S1 事件循环 tick 同样 15s 对齐）。
 
     for (;;) {
+        // M95-S2：handler 协程完成待响应（finish 续处理）→ 先于读下一请求执行。
+        //   take 后项已出表（GC 根失效）→ 临时 push 保活 req/resp 至 http_send_resp 完。
+        {
+            LXValue fr = px_null(), fs = px_null();
+            int fh = 0, fc = 0;
+            if (http_pend_take(fd, &fr, &fs, &fh, &fc)) {
+                px_root_push();
+                PX_KEEP(fr); PX_KEEP(fs);
+                int act = http_send_resp(fd, fr, fs, fh, fc);
+                px_root_pop();
+                if (act == 0 || act == 1) return px_null();   // close / 已交还 IDLE
+                continue;                  // act==2：下一请求在途 → 继续读
+            }
+        }
         // 1. 读请求头（直到 \r\n\r\n，上限 64KB；EOF/超时 → 关闭）
         char buf[65536];
         int len = 0;
@@ -10455,79 +10563,47 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
             }
         }
 
-        // 6. 调 handler
+        // 6. 调 handler（M95-S2：VM handler → 帧协程异步执行占协程，fserve worker 释放）
         LXValue handler = px_get_global("__http_handler");
+        int hvm = (handler.type == PX_FUNC && px_vm_entry &&
+                   handler.as.obj->as.func.fn == px_vm_entry);
+        int head_flag = (strcmp(method, "HEAD") == 0) ? 1 : 0;
+        if (hvm) {
+            // M83-S1：body 缓冲用毕即释放（req.body 经 px_str_len 已深拷贝、multipart/form
+            // 解析已入 req；handler 异步执行期 body_buf 无引用）——防 keep-alive 长连接累积
+            if (body_buf) { xfree(body_buf); body_buf = NULL; }
+            // 登记挂起项（stage=1，req 入 GC 根表）→ 成功则 spawn handler 帧协程并释放
+            //   本 worker（handler 内 chan/sleep/spawn 让出占协程；完成回调投回续处理）。
+            if (!http_pend_put(fd, req, head_flag, client_close)) {
+                // 登记失败（fd 超容量等）→ 退回原同步路径（行为零变化）
+                LXValue resp = px_null();
+                if (handler.type == PX_FUNC || handler.type == PX_NATIVE)
+                    resp = px_call(handler, &req, 1);
+                PX_KEEP(resp);
+                int act = http_send_resp(fd, req, resp, head_flag, client_close);
+                px_root_pop();
+                if (act == 2) continue;          // 下一请求在途 → 继续迭代
+                return px_null();                // close(0) / 已交还 IDLE(1)
+            }
+            if (px_coro_spawn_ex)
+                px_coro_spawn_ex(handler.as.obj->as.func.ctx, &req, 1,
+                                 http_handler_done, (void*)(intptr_t)fd);
+            else
+                http_pend_clear(fd);             // 无协程内核（理论不达）→ 清项兜底
+            px_root_pop();
+            return px_null();                    // worker 释放；完成回调投回续处理
+        }
+        // —— 逃生舱（PX_NATIVE / 非 VM handler）：原同步直调路径（行为零变化）——
         LXValue resp = px_null();
         if (handler.type == PX_FUNC || handler.type == PX_NATIVE) {
             resp = px_call(handler, &req, 1);
         }
-        PX_KEEP(resp);   // M92-S2c precise：px_call 返回值裸局部（后续 px_http_build_response 等可能 GC）
-        // M83-S1：动态 body 缓冲用毕即释放（req.body 经 px_str_len 已深拷贝、multipart/form
-        // 解析已入 req；handler 同步返回后 body_buf 无引用）——防 keep-alive 长连接累积
+        PX_KEEP(resp);   // M92-S2c precise：px_call 返回值裸局部（后续构建响应可能 GC）
         if (body_buf) { xfree(body_buf); body_buf = NULL; }
-
-        // 7. 响应：file 流式（Connection: close，发送后关闭）或普通（keep-alive 判定）
-        LXValue file_v = (resp.type == PX_DICT) ? px_dict_get(resp, "file") : px_null();
-        if (file_v.type == PX_STR) {
-            // 流式文件响应
-            const char* fpath = file_v.as.obj->as.str.data;
-            FILE* f = fopen(fpath, "rb");
-            if (f) {
-                fseek(f, 0, SEEK_END);
-                long fsz = ftell(f);
-                fseek(f, 0, SEEK_SET);
-                const char* ct2 = px_file_content_type(fpath);
-                char hdr[1024];
-                int hl = snprintf(hdr, sizeof(hdr),
-                                  "HTTP/1.1 200 OK\r\nContent-Length: %ld\r\nContent-Type: %s\r\nConnection: close\r\n\r\n",
-                                  fsz, ct2);
-                if (hl > 0) send(fd, hdr, (size_t)hl, 0);
-                char fbuf[65536];
-                size_t rd;
-                while ((rd = fread(fbuf, 1, sizeof(fbuf), f)) > 0) {
-                    size_t off = 0;
-                    while (off < rd) {
-                        ssize_t w = send(fd, fbuf + off, rd - off, 0);
-                        if (w <= 0) { off = rd; break; }
-                        off += (size_t)w;
-                    }
-                }
-                fclose(f);
-            } else {
-                const char* notfound = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-                send(fd, notfound, (int)strlen(notfound), 0);
-            }
-            px_evc_close(fd);
-            px_root_pop();   // M92-S2c precise
-            return px_null();
-        }
-        int out_len = 0;
-        int resp_keep_alive = 1;
-        char* out = px_http_build_response(resp, &out_len, &resp_keep_alive);
-        if (out) {
-            if (strcmp(method, "HEAD") == 0) {
-                char* sep = strstr(out, "\r\n\r\n");
-                if (sep) out_len = (int)(sep - out) + 4;
-            }
-            if (out_len > 0) send(fd, out, out_len, 0);
-            xfree(out);
-        }
-        // 8. keep-alive 判定：需关闭 → 统一 px_evc_close（清理连接上下文，防 fd 复用串扰）
-        if (client_close || !resp_keep_alive) {
-            px_evc_close(fd);
-            px_root_pop();   // M92-S2c precise
-            return px_null();
-        }
-        // M88-B-S2：空闲连接不占 worker——无下一请求数据在途 → 连接交还 IDLE。
-        // 事件循环（epoll）照看空闲连接：可读再派发回 fserve 池（worker 接管下一请求突发）；
-        // 15s 空闲超时 / 对端断开由事件循环 tick close（语义与原 SO_RCVTIMEO 对齐）。
-        // 交还成功即返回释放本 worker 去取新 job；失败（非 Linux / fd 未登记）→ 继续读下一请求
-        // （px_recv_wait 15s 超时 = 原空闲语义，功能不降仅无事件驱动优化）。
-        if (!px_fd_readable_now(fd)) {
-            px_ev_ensure();
-            if (px_evc_idle_put(fd, FSERVE_KIND_HTTP) == 0) { px_root_pop(); return px_null(); }
-        }
-        px_root_pop();   // M92-S2c precise：迭代作用域结束
+        int act2 = http_send_resp(fd, req, resp, head_flag, client_close);
+        px_root_pop();
+        if (act2 == 2) continue;                 // 下一请求在途 → 继续迭代
+        return px_null();                        // close(0) / 已交还 IDLE(1) 均已收尾
     }
     px_evc_close(fd);
     return px_null();
@@ -10559,7 +10635,8 @@ static const char* px_file_content_type(const char* path) {
 // 现改为预派生常驻 worker 池（与 px_serve 的 M31.4b 池同构，独立于其 g_pool_*，不互相干扰）：
 //   accept 只把 (cfd, kind) 投递环形队列（队满阻塞 → 背压到 TCP backlog，绝不 exit）；
 //   worker 取 job 按 kind 调 http_conn_worker / sse_conn_worker（处理语义与既有逐字节一致）。
-// 池容量 env PX_SERVE_WORKERS（默认 256，夹取 [8,4095]）。池 worker 均注册 GC 槽（同
+// 池容量 env PX_SERVE_WORKERS（默认 256，夹取 [2,4095]；M95-S2 下限 8→2 见 fserve_ensure）。
+// 池 worker 均注册 GC 槽（同
 // px_pool_worker 常驻模式），注意 PX_MAX_THREADS 需 ≥ PX_SERVE_WORKERS + 主线程 + 业务 spawn。
 // M88-B-S2：http 连接已事件驱动——keep-alive 空闲连接响应写完即交还 IDLE（事件循环照看），
 // 不再占 worker 至 15s 超时（见 http_conn_worker 改造）。
@@ -10660,7 +10737,11 @@ static void fserve_ensure(void) {
         const char* we = getenv("PX_SERVE_WORKERS");
         if (we) {
             int w = atoi(we);
-            if (w >= 8 && w <= 4095) workers = w;
+            // M95-S2：下限 8→2 —— http_serve handler 协程化后（D8-②）长业务请求占
+            //   协程不占 fserve worker，显式小池（2 worker 起）即可承载并发长业务；
+            //   默认仍 FSERVE_DEFAULT_WORKERS。逃险舱（PX_NATIVE handler 同步直调）
+            //   占 worker 语义不变，显式小池由用户在知晓 handler 形态下配置。
+            if (w >= 2 && w <= 4095) workers = w;
         }
         g_fserve_workers = workers;
         g_fserve_qcap = FSERVE_QUEUE_CAP;
@@ -10783,6 +10864,155 @@ static int px_evc_ensure(int fd) {
     return 0;
 }
 
+// ==================== M95-S2：http handler 协程化 —— 挂起连接表 ====================
+// 每活跃连接（fd）至多一个 handler 挂起项：段1（读+解析+req 构造）完成 →
+//   http_pend_put(stage=1) + spawn handler 帧协程；协程完成回调 http_handler_done
+//   （coro worker 线程）→ resp 写回（stage=2）+ fserve_push 投回续处理；fserve
+//   worker 重入 http_conn_worker 循环顶 http_pend_take（stage=2）→ http_send_resp。
+// req/resp 为该表 GC 根（http_pend_gc_mark 在 gc 标记期补标 —— precise 必须，
+//   漏标 = GC 误回收挂起连接的请求/响应 → UAF）。锁 = g_hpend_mu（独立锁，见定义处 fix 注释）。
+typedef struct HttpPend {
+    int fd;
+    int active;      // 1 = 有挂起项
+    int stage;       // 1 = handler 协程运行中；2 = 已完成待响应
+    int method_head;
+    int client_close;
+    LXValue req;     // GC 根（挂起期保活请求 dict）
+    LXValue resp;    // GC 根（handler 完成结果）
+} HttpPend;
+static HttpPend* g_hpend = NULL;
+static int g_hpend_cap = 0;
+// M95-S2 fix：pending 表独立锁（不复用 g_conn_mu）。原因：GC 标记期 http_pend_gc_mark
+//   需遍历本表，而 g_conn_mu 既有临界区（M88-B，px_evc_*）不屏蔽 SIG_GC_STOP —— 若
+//   GC mark 拿 g_conn_mu，STW 恰暂停一个持 g_conn_mu 的线程（信号打断临界区）→ executor
+//   等锁死锁（daemon 卡死：health 不分配仍响应、分配型请求全挂）。独立锁 + 本表临界区
+//   屏蔽 SIG_GC_STOP → GC 信号 pending 到临界区外才递达，mark 无竞争。
+//   锁序：g_hpend_mu 与 g_conn_mu / g_fserve_mu 均不嵌套持用（clear 在 g_conn_mu 外调；
+//   handler_done 出锁后才 fserve_push）。
+static pthread_mutex_t g_hpend_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static HttpPend* http_pend_ctx(int fd) {
+    if (fd < 0 || fd >= g_hpend_cap) return NULL;
+    return &g_hpend[fd];
+}
+
+// 扩容（持 g_hpend_mu；上限 g_conn_max = PX_MAX_CONNS env）。返回 0 可登记。
+static int http_pend_ensure(int fd) {
+    if (fd < 0 || fd >= g_conn_max) return -1;
+    if (fd < g_hpend_cap) return 0;
+    int ncap = g_hpend_cap ? g_hpend_cap : 256;
+    while (ncap <= fd && ncap < g_conn_max) ncap *= 2;
+    if (ncap > g_conn_max) ncap = g_conn_max;
+    if (ncap <= fd) return -1;
+    HttpPend* np = (HttpPend*)xrealloc(g_hpend, (size_t)ncap * sizeof(HttpPend));
+    if (!np) return -1;
+    for (int i = g_hpend_cap; i < ncap; i++) {
+        np[i].fd = -1; np[i].active = 0; np[i].stage = 0;
+        np[i].method_head = 0; np[i].client_close = 0;
+        np[i].req.type = PX_NULL; np[i].resp.type = PX_NULL;
+    }
+    g_hpend = np; g_hpend_cap = ncap;
+    return 0;
+}
+
+// 登记 handler 挂起（返回 1 成功 → 调用方 spawn 协程；0 → 退回同步路径）
+// 持 g_hpend_mu 屏蔽 SIG_GC_STOP：GC mark 同锁遍历，临界区不被 GC 暂停（协议同
+//   g_globals_mu/g_gc_mu）——防「GC 等锁 vs 持锁线程被暂停」死锁。
+static int http_pend_put(int fd, LXValue req, int method_head, int client_close) {
+    int ok = 0;
+    sigset_t old;
+    pthread_mutex_lock(&g_hpend_mu);
+    gc_block_stop(&old);
+    if (http_pend_ensure(fd) == 0) {
+        HttpPend* p = http_pend_ctx(fd);
+        if (p && !p->active) {
+            p->fd = fd; p->active = 1; p->stage = 1;
+            p->method_head = method_head; p->client_close = client_close;
+            p->req = req;                    // GC 根接管（调用方根随后失效无碍）
+            p->resp.type = PX_NULL;
+            ok = 1;
+        }
+    }
+    gc_unblock_stop(&old);
+    pthread_mutex_unlock(&g_hpend_mu);
+    return ok;
+}
+
+// 取完成项（stage==2 → 置 inactive 返回 1，req/resp 移交调用方；否则 0）
+static int http_pend_take(int fd, LXValue* req, LXValue* resp, int* method_head, int* client_close) {
+    int got = 0;
+    sigset_t old;
+    pthread_mutex_lock(&g_hpend_mu);
+    gc_block_stop(&old);
+    HttpPend* p = http_pend_ctx(fd);
+    if (p && p->active && p->stage == 2) {
+        *req = p->req; *resp = p->resp;
+        *method_head = p->method_head; *client_close = p->client_close;
+        p->active = 0; p->stage = 0; p->fd = -1;
+        p->req.type = PX_NULL; p->resp.type = PX_NULL;
+        got = 1;
+    }
+    gc_unblock_stop(&old);
+    pthread_mutex_unlock(&g_hpend_mu);
+    return got;
+}
+
+// 清挂起项（px_evc_close 收尾调用：连接关闭 → 丢弃未决结果，防 fd 复用串扰）
+static void http_pend_clear(int fd) {
+    sigset_t old;
+    pthread_mutex_lock(&g_hpend_mu);
+    gc_block_stop(&old);
+    HttpPend* p = http_pend_ctx(fd);
+    if (p && p->active) {
+        p->active = 0; p->stage = 0; p->fd = -1;
+        p->req.type = PX_NULL; p->resp.type = PX_NULL;
+    }
+    gc_unblock_stop(&old);
+    pthread_mutex_unlock(&g_hpend_mu);
+}
+
+// GC 标记期补标挂起项 req/resp（gc executor 单线程标记期调用；持 g_hpend_mu）
+static void http_pend_gc_mark(void) {
+    sigset_t old;
+    pthread_mutex_lock(&g_hpend_mu);
+    gc_block_stop(&old);   // executor 本已自屏蔽（幂等）；写者临界区同屏蔽 → 无持锁被暂停
+    if (g_hpend) {
+        for (int i = 0; i < g_hpend_cap; i++) {
+            HttpPend* p = &g_hpend[i];
+            if (p->active) {
+                if (p->req.type != PX_NULL) px_gc_mark_slots(&p->req, 1);
+                if (p->resp.type != PX_NULL) px_gc_mark_slots(&p->resp, 1);
+            }
+        }
+    }
+    gc_unblock_stop(&old);
+    pthread_mutex_unlock(&g_hpend_mu);
+}
+
+// handler 帧协程完成回调（coro worker 线程执行；ret = handler 顶层返回值）。
+// 顺序：PX_KEEP 保护 ret（precise 窗口）→ g_hpend_mu 内 stage 1→2 写 resp →
+//   出锁后 fserve_push 投回续处理 job。连接已关 / 表项已清（fd 复用）→ 丢弃 ret。
+static void http_handler_done(void* ud, LXValue ret) {
+    int fd = (int)(intptr_t)ud;
+    if (fd < 0) return;
+    px_root_push();
+    PX_KEEP(ret);
+    int push = 0;
+    sigset_t old;
+    pthread_mutex_lock(&g_hpend_mu);
+    gc_block_stop(&old);
+    HttpPend* p = http_pend_ctx(fd);
+    if (p && p->active && p->stage == 1) {
+        p->resp = ret;    // GC 根接管（表项 active 期间 mark 补标）
+        p->stage = 2;
+        push = 1;
+    }
+    gc_unblock_stop(&old);
+    pthread_mutex_unlock(&g_hpend_mu);
+    if (push) fserve_push(fd, FSERVE_KIND_HTTP);   // 续处理：响应写 + keep-alive
+    px_root_pop();
+}
+
 static PxConnCtx* px_evc_ctx(int fd) {
     if (fd < 0 || fd >= g_conn_cap) return NULL;
     return &g_conns[fd];
@@ -10824,6 +11054,7 @@ static void px_evc_close(int fd) {
         c->fd = -1; c->state = PX_CONN_STATE_FREE; c->kind = 0; c->idle_since = 0;
     }
     pthread_mutex_unlock(&g_conn_mu);
+    http_pend_clear(fd);   // M95-S2：清挂起 handler 项（fd 复用防串扰 + done 丢弃）
     close(fd);
 }
 
@@ -11072,7 +11303,7 @@ static void px_ev_ensure(void) {
 // 功能不降仅无空闲不占线程优化（文档明示 Linux epoll 一等）。
 static void px_ev_wake(void) { (void)0; }
 static PxConnCtx* px_evc_acquire(int fd, int kind) { (void)fd; (void)kind; return NULL; }
-static void px_evc_close(int fd) { close(fd); }
+static void px_evc_close(int fd) { http_pend_clear(fd); close(fd); }
 static void px_evc_detach(int fd) { (void)fd; }
 static int px_evc_is_idle(int fd) { (void)fd; return 0; }
 static int px_evc_idle_put(int fd, int kind) { (void)fd; (void)kind; return -1; }

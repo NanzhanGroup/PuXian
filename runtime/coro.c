@@ -69,6 +69,11 @@ typedef struct PxCoro {
                                //   入队 —— 见 worker 让出协议 / px_coro_wake）
     long long      due_us;    // M93-S3：sleep 到期（CLOCK_REALTIME us）
     long long      run_begin_us; // M94-S2：本次运行时间片起点（worker resume 前记）
+    // M95-S2：完成回调（协程跑完 return 0 → worker 回收前调；服务端 handler
+    //   协程化用它把结果投回续处理。回调在 worker 线程、仍注册 GC 时执行，
+    //   回调内须 PX_KEEP 保护 ret 再转移给全局 GC 根。）
+    void (*done_cb)(void* ud, LXValue ret);
+    void*          done_ud;
 } PxCoro;
 
 static pthread_mutex_t g_coro_mu   = PTHREAD_MUTEX_INITIALIZER;
@@ -274,6 +279,12 @@ static void* coro_worker(void* arg) {
         if (g_coro_diag == 1)
             fprintf(stderr, "[px-coro] #%d done (f=%s)\n", cid,
                     c->f && c->f->name ? c->f->name : "?");
+        // M95-S2：完成回调（摘除 g_all 后、free 前；worker 仍注册 GC。ret 已存
+        //   vm.ret_val；回调内须 PX_KEEP 保护后再转移给全局 GC 根 —— 见调用方约定）
+        if (c->done_cb) {
+            LXValue rv = c->vm.ret_val;
+            c->done_cb(c->done_ud, rv);
+        }
         free(c->args);
         coro_vm_free(&c->vm);
         free(c);
@@ -320,7 +331,9 @@ static void coro_ensure_workers(void) {
 }
 
 // ---- spawn 分派入口（runtime.c px_spawn_name weak 调用；ctx=PxVMFunc*）----
-void px_coro_spawn(void* ctx, LXValue* args, int nargs) {
+// px_coro_spawn_ex：带完成回调版（M95-S2）。px_coro_spawn = ex 的 NULL 回调壳。
+void px_coro_spawn_ex(void* ctx, LXValue* args, int nargs,
+                      void (*done_cb)(void* ud, LXValue ret), void* done_ud) {
     PxCoro* c = (PxCoro*)calloc(1, sizeof(PxCoro));
     if (!c) return;
     c->f = (const PxVMFunc*)ctx;
@@ -331,6 +344,8 @@ void px_coro_spawn(void* ctx, LXValue* args, int nargs) {
         memcpy(c->args, args, sizeof(LXValue) * nargs);
     c->state = CORO_READY;
     c->first = 1;                 // M93-S3：首次需压顶层帧
+    c->done_cb = done_cb;         // M95-S2
+    c->done_ud = done_ud;         // M95-S2
     if (g_coro_diag < 0) {   // 首个 spawn 前初始化诊断开关（worker 池惰性启动同读）
         const char* diag = getenv("PX_CORO_DIAG");
         g_coro_diag = (diag && diag[0] == '1') ? 1 : 0;
@@ -352,6 +367,11 @@ void px_coro_spawn(void* ctx, LXValue* args, int nargs) {
                 cid, c->f && c->f->name ? c->f->name : "?", nargs);
     coro_ensure_workers();
     pthread_cond_signal(&g_coro_cond);
+}
+
+// px_coro_spawn：无完成回调（M93 原语义壳）
+void px_coro_spawn(void* ctx, LXValue* args, int nargs) {
+    px_coro_spawn_ex(ctx, args, nargs, NULL, NULL);
 }
 
 // ==================== M93-S3：阻塞登记 API ====================

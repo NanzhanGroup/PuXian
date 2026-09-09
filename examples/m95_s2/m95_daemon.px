@@ -1,0 +1,58 @@
+# M95-S2 daemon —— http_serve handler 协程化验证（D8-②，docs/M95_PLAN.md）
+# 服务端 VM handler（def 函数）执行 = 帧协程：handler 内 sleep/chan/spawn 阻塞
+# 让出占协程不占 fserve worker（PX_SERVE_WORKERS 可设很小）；读+解析（段1）→
+# spawn handler 协程 → 完成回调投回续处理（段2 响应写）→ keep-alive/交还事件循环。
+# 路由：
+#   /health -> ok（就绪探测）
+#   /json   -> dict JSON 响应
+#   /sleep  -> handler sleep(0.1)（M93 让出）→ 并发长业务占协程的实证路由
+#   /chan   -> handler spawn 子协程经 chan 送结果 + handler chan.recv 让出等待
+#   /gc     -> handler 大量 dict/list 分配（precise 低阈值 GC：pending 表 req/resp 根）
+#   /slow   -> handler 内 sleep(0.02)×N（制造持续占用窗口供线程采样）
+# 用法：m95_daemon [port]（默认 18195）
+var m95_port = 18195
+let m95_av = args()
+if len(m95_av) > 1:
+    m95_port = int(m95_av[1])
+
+def m95_handler(req):
+    let p = req["path"]
+    if p == "/health":
+        return "ok"
+    if p == "/json":
+        return {"status": 200, "body": "json-ok", "headers": {"Content-Type": "application/json"}}
+    if p == "/sleep":
+        sleep(200)                      # M93-S3 协程让出（占协程不占 worker；sleep 单位 = ms）
+        return "slept"
+    if p == "/slow":
+        var i = 0
+        while i < 5:
+            sleep(40)                   # 200ms 占用窗（供并发/线程采样）
+            i += 1
+        return "slow-done"
+    if p == "/chan":
+        let c0 = chan[string](1)
+        spawn m95_worker(c0)
+        let got = c0.recv()             # handler 内 chan 让出等待子协程
+        return "chan-" + got
+    if p == "/gc":
+        var i = 0
+        while i < 300:
+            let d = {"seed": i}         # px 语义：{} = 空块(null)，空 dict 起步须带首键
+            d.set("k" + str(i), {"v": i, "s": "abcdefghijklmnopqrstuvwxyz012345"})
+            let l = []
+            l.append(d)
+            l.append([1, 2, 3, 4, 5])
+            i += 1
+        return "gc-ok"
+    if p == "/echo":
+        return "echo:" + req["query"]
+    return {"status": 404, "body": "not-found"}
+
+def m95_worker(c0):
+    sleep(50)
+    c0.send("from-worker")
+
+spawn http_serve(m95_port, m95_handler)
+sleep(300000)
+exit(0)
