@@ -10305,13 +10305,17 @@ static struct {
 #ifndef FSERVE_KIND_HTTP
 #define FSERVE_KIND_HTTP 0
 #define FSERVE_KIND_SSE  1
+#define FSERVE_KIND_PXSERVE 2   // M99：px_serve 连接（keep-alive 空闲交 IDLE，事件循环照看）
 #endif
 typedef struct PxConnCtx PxConnCtx;
 static PxConnCtx* px_evc_acquire(int fd, int kind);
 static void px_evc_close(int fd);
 static int px_evc_idle_put(int fd, int kind);
+// M99：px_serve 版交 IDLE（fd 保持阻塞；px_evc_idle_put 对 http_serve 强制 px_fd_nonblock）
+static int px_evc_idle_put_fd(int fd, int kind, int nonblock);
 static void px_ev_ensure(void);
 static void px_fd_nonblock(int fd);
+static void px_pxpend_close(int fd);   // M99：px_serve 连接统一 close（px_ev_loop tick/断开分支用；定义见 px_conn_worker 区）
 
 // ---- M95-S2：http handler 协程化 —— pending 表前向声明（实现在 ConnCtx 区后）----
 // 读+解析完成（段1）→ put(stage=1) + spawn handler 帧协程 → 完成回调写 resp
@@ -10349,6 +10353,26 @@ static int px_fd_readable_now(int fd) {
     pfd.fd = fd; pfd.events = POLLIN; pfd.revents = 0;
     int r = poll(&pfd, 1, 0);
     return r > 0 && (pfd.revents & (POLLIN | POLLHUP | POLLERR));
+}
+
+// M99：px_serve 连接「下一请求数据在途」判定（keep-alive 交 IDLE 决策用）。
+//   TLS：PxConn 内部缓冲（mbedtls_ssl_read 一次读整 TLS record 未消费完，roff<rlen）有数据
+//   → 在途（epoll 只照看内核 fd，缓冲残留对 epoll 不可见——漏判则交 IDLE 后缓冲中的下一
+//   请求永不处理，悬挂至 15s 空闲超时）；明文：poll fd 探测（同 http_serve）。
+static int px_pxserve_inflight_data(PxConn* conn, int fd) {
+    if (conn && conn->is_tls && conn->roff < conn->rlen) return 1;
+    return px_fd_readable_now(fd);
+}
+
+// M99：px_serve 响应写完后的 keep-alive 空闲交 IDLE 决策。返回 1 = 已交 IDLE（调用方 return
+//   释放 worker，连接由事件循环照看）；0 = 下一请求在途 或 事件循环不可用（非 Linux/未登记）
+//   → 调用方走 for(;;) 顶部原阻塞续读（功能不降）。
+static int px_pxserve_idle_after_resp(PxConn* conn, int fd) {
+    if (!px_pxserve_inflight_data(conn, fd)) {
+        px_ev_ensure();
+        if (px_evc_idle_put_fd(fd, FSERVE_KIND_PXSERVE, 0) == 0) return 1;
+    }
+    return 0;
 }
 
 // M97-S3（qg-issue 32）：非阻塞 fd 全量写——循环 send，EAGAIN/EWOULDBLOCK →
@@ -10777,6 +10801,7 @@ static const char* px_file_content_type(const char* path) {
 #ifndef FSERVE_KIND_HTTP
 #define FSERVE_KIND_HTTP 0
 #define FSERVE_KIND_SSE  1
+#define FSERVE_KIND_PXSERVE 2   // M99：px_serve 连接（keep-alive 空闲交 IDLE，事件循环照看）
 #endif
 #define FSERVE_DEFAULT_WORKERS 256
 #define FSERVE_QUEUE_CAP 16384        // 环形队列容量（job 8B → 128KB 背压缓冲）
@@ -11215,11 +11240,14 @@ static int px_evc_is_idle(int fd) {
     return r;
 }
 
-// worker 响应写完且无下一请求数据 → 连接交还 IDLE（注册事件循环等可读；fd 先置非阻塞）
+// worker 响应写完且无下一请求数据 → 连接交还 IDLE（注册事件循环等可读）。
+// M99：nonblock 标志——http_serve 用 1（fd 置非阻塞，读走 px_recv_wait poll 语义，原行为）；
+//   px_serve 用 0（fd 保持阻塞 + SO_RCVTIMEO recv 读语义，切非阻塞会致 recv EAGAIN 误判断开；
+//   epoll 对阻塞 fd 照常报可读，投回时数据在途 → 阻塞 recv 立即返回，零 EAGAIN/零 TLS WANT）。
 // 返回 0 成功；连接未登记/事件循环不可用（非 Linux）返回 -1（调用方走原阻塞路径）
-static int px_evc_idle_put(int fd, int kind) {
+static int px_evc_idle_put_fd(int fd, int kind, int nonblock) {
     if (g_ev_epfd < 0) return -1;
-    px_fd_nonblock(fd);
+    if (nonblock) px_fd_nonblock(fd);
     pthread_mutex_lock(&g_conn_mu);
     PxConnCtx* c = px_evc_ctx(fd);
     if (!c || c->state != PX_CONN_STATE_ACTIVE) { pthread_mutex_unlock(&g_conn_mu); return -1; }
@@ -11241,6 +11269,11 @@ static int px_evc_idle_put(int fd, int kind) {
     __atomic_fetch_add(&g_diag_idle_put, 1, __ATOMIC_RELAXED);
     px_ev_wake();
     return 0;
+}
+
+// http_serve 用（fd 置非阻塞；原语义）：M99 重构保留 wrapper
+static int px_evc_idle_put(int fd, int kind) {
+    return px_evc_idle_put_fd(fd, kind, 1);
 }
 
 // 事件循环/接管方摘除：IDLE →（摘除事件循环）→ ACTIVE 返回 1；非 IDLE 返回 0
@@ -11294,8 +11327,9 @@ static void* px_ev_loop(void* arg) {
                 if (sse_idle_should_close(fd)) sse_server_close_fd(fd);
                 continue;
             }
-            if (kind != FSERVE_KIND_HTTP) continue;   // 非 IDLE/状态异常/已关闭：跳过
-            if (evs[i].events & (EPOLLIN)) {    // 可读 → 派发回 fserve（worker 再接管）
+            // M99：HTTP 与 px_serve（PXSERVE）IDLE 均按可读/断开/超时派发；SSE 已在上方 continue
+            if (kind != FSERVE_KIND_HTTP && kind != FSERVE_KIND_PXSERVE) continue;   // 非 IDLE/状态异常/已关闭：跳过
+            if (evs[i].events & (EPOLLIN)) {    // 可读 → 派发回服务池（worker 再接管）
                 int k2 = FSERVE_KIND_HTTP;
                 pthread_mutex_lock(&g_conn_mu);
                 PxConnCtx* c = px_evc_ctx(fd);
@@ -11309,12 +11343,16 @@ static void* px_ev_loop(void* arg) {
                 pthread_mutex_unlock(&g_conn_mu);
                 if (c) {
                     __atomic_fetch_add(&g_diag_detect_http, 1, __ATOMIC_RELAXED);
-                    fserve_push(fd, k2);   // 队满阻塞背压（事件循环线程暂停派发，不丢 fd）
+                    // M99：PXSERVE → 投回 px_serve 的 g_pool（px_pool_push）；HTTP/SSE → fserve
+                    if (k2 == FSERVE_KIND_PXSERVE) px_pool_push(fd);
+                    else fserve_push(fd, k2);   // 队满阻塞背压（事件循环线程暂停派发，不丢 fd）
                 }
                 continue;
             }
             if (evs[i].events & (EPOLLHUP | EPOLLERR | EPOLLRDHUP)) {  // 对端断开/异常
-                px_evc_close(fd);
+                // M99：PXSERVE 连接含 PxConn/TLS/inflight → 走 px_pxpend_close（不可裸 close）
+                if (kind == FSERVE_KIND_PXSERVE) px_pxpend_close(fd);
+                else px_evc_close(fd);
                 continue;
             }
         }
@@ -11328,9 +11366,13 @@ static void* px_ev_loop(void* arg) {
         pthread_mutex_lock(&g_conn_mu);
         for (int i = 0; i < g_conn_cap; i++) {
             PxConnCtx* c = &g_conns[i];
-            if (c->state != PX_CONN_STATE_IDLE || c->kind != FSERVE_KIND_HTTP ||
+            // M99：px_serve（PXSERVE）IDLE 同受 15s 空闲超时约束（与 HTTP keep-alive 语义一致；
+            //   SSE 长连接仍不超时，保持历史）。kind 快照供出锁后按类型收尾。
+            if (c->state != PX_CONN_STATE_IDLE ||
+                (c->kind != FSERVE_KIND_HTTP && c->kind != FSERVE_KIND_PXSERVE) ||
                 now - c->idle_since < PX_CONN_IDLE_TMO_MS) continue;
             int fd = c->fd;
+            int kind_tmo = c->kind;   // M99：HTTP / PXSERVE（close 收尾分派用）
             int idle_ev_cnt = c->idle_ev_cnt;   // 本 IDLE 周期 epoll 上报次数（诊断用）
             int ev_reg_before = c->ev_reg;      // 超时收尾前是否仍登记在 epoll（诊断用）
             // F3-fix 根因验证：EPOLL_CTL_MOD 试探内核 epoll 是否真有该 fd（ev_reg 可能陈旧——
@@ -11370,15 +11412,26 @@ static void* px_ev_loop(void* arg) {
                             fd, ev_reg_before, idle_ev_cnt, pkn, avail,
                             (pkn > 0 && pkn < 80) ? pkn : 0, pkb);
                 }
-                PxConnCtx* ac = px_evc_acquire(fd, FSERVE_KIND_HTTP);  // FREE→ACTIVE 重新登记
-                if (ac) fserve_push(fd, FSERVE_KIND_HTTP);             // 投回池，worker 接管读在途请求
-                else close(fd);                                        // 登记失败兜底（理论不可达）
+                // M99：按类型投回服务池——PXSERVE → px_serve 的 g_pool；HTTP → fserve
+                PxConnCtx* ac = px_evc_acquire(fd, kind_tmo);  // FREE→ACTIVE 重新登记
+                if (ac) {
+                    if (kind_tmo == FSERVE_KIND_PXSERVE) px_pool_push(fd);
+                    else fserve_push(fd, FSERVE_KIND_HTTP);    // 投回池，worker 接管读在途请求
+                } else {
+                    // 登记失败兜底（理论不可达）：PXSERVE 走 px_pxpend_close（清 PxConn/TLS/inflight）
+                    if (kind_tmo == FSERVE_KIND_PXSERVE) px_pxpend_close(fd);
+                    else close(fd);
+                }
             } else {
                 __atomic_fetch_add(&g_diag_tmo_close, 1, __ATOMIC_RELAXED);
                 if (g_ev_diag)
                     fprintf(stderr, "[px-ev:tmo] CLOSE fd=%d ev_reg=%d idle_ev_cnt=%d (真空闲/断开)\n",
                             fd, ev_reg_before, idle_ev_cnt);
-                close(fd);                   // 真空闲/对端断开：空闲超时关闭（keep-alive 15s 语义）
+                // 真空闲/对端断开：空闲超时关闭（keep-alive 15s 语义）
+                // M99：PXSERVE 连接含 PxConn/TLS/inflight → 必须走 px_pxpend_close（不可裸 close，
+                //   否则泄漏 PxConn 堆对象 + TLS 会话 + inflight 计数错乱）
+                if (kind_tmo == FSERVE_KIND_PXSERVE) px_pxpend_close(fd);
+                else close(fd);
             }
             pthread_mutex_lock(&g_conn_mu);
         }
@@ -11439,6 +11492,7 @@ static void px_evc_close(int fd) { http_pend_clear(fd); close(fd); }
 static void px_evc_detach(int fd) { (void)fd; }
 static int px_evc_is_idle(int fd) { (void)fd; return 0; }
 static int px_evc_idle_put(int fd, int kind) { (void)fd; (void)kind; return -1; }
+static int px_evc_idle_put_fd(int fd, int kind, int nonblock) { (void)fd; (void)kind; (void)nonblock; return -1; }
 static int px_evc_idle_pop(int fd) { (void)fd; return 0; }
 static void* px_ev_loop(void* arg) { (void)arg; return NULL; }
 static void px_ev_ensure(void) { (void)0; }
@@ -14398,8 +14452,31 @@ static void px_pxpend_close(int fd) {
     }
     gc_unblock_stop(&old);
     pthread_mutex_unlock(&g_pxpend_mu);
+    // M99：前置摘除事件循环上下文（防事件循环继续照看将关 fd / fd 复用串扰；detach 不 close，
+    //   由 px_conn_close 负责 close。worker 处理中 ACTIVE 关闭 / 事件循环 tick/断开分支均走本函数
+    //   ——detach 幂等：FREE 时无操作）
+    px_evc_detach(fd);
     if (c) { px_conn_close(c); xfree(c); }
     if (tmp[0]) unlink(tmp);
+}
+
+// M99：优雅关闭 —— px_serve accept 循环退出 + g_pool worker join 后调用：关闭事件循环照看
+// 的全部 px_serve 连接（IDLE 空闲 + 理论残留 ACTIVE；join 后无 worker 使用），逐条
+// px_pxpend_close（其内部先 px_evc_detach 摘上下文再 px_conn_close + inflight--），使
+// g_px_inflight 归零、优雅关闭干净退出（否则 IDLE 连接等 tick 15s 或卡 5s 等待循环）。
+// 锁序：先 g_conn_mu 快照收集 fd（出锁），再逐个 px_pxpend_close（g_pxpend_mu）——两锁不嵌套。
+static void px_pxserve_ev_close_all(void) {
+    if (g_conn_cap <= 0) return;
+    int* fds = (int*)xmalloc((size_t)g_conn_cap * sizeof(int));
+    int n = 0;
+    pthread_mutex_lock(&g_conn_mu);
+    for (int i = 0; i < g_conn_cap; i++) {
+        PxConnCtx* c = &g_conns[i];
+        if (c->state != PX_CONN_STATE_FREE && c->kind == FSERVE_KIND_PXSERVE) fds[n++] = c->fd;
+    }
+    pthread_mutex_unlock(&g_conn_mu);
+    for (int i = 0; i < n; i++) px_pxpend_close(fds[i]);
+    xfree(fds);
 }
 
 // 登记挂起请求 body 临时文件（DEFER 返回前调用；done 回调清理）。锁内写，幂等。
@@ -14542,6 +14619,9 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
     if (!pend) return px_null();
     PxConn* conn = pend->conn;
     g_cur_conn = conn;
+    // M99：每 job 登记连接上下文为 ACTIVE（FREE→ACTIVE 或幂等复位；事件循环照看/超时收尾用）。
+    //   非 Linux（acquire stub 返回 NULL）→ 不登记，交 IDLE 时 idle_put_fd 返回 -1 → 原阻塞续读。
+    px_evc_acquire(fd, FSERVE_KIND_PXSERVE);
     PxHttpOut out;
     px_http_out_init_conn(&out, conn);
 
@@ -14616,6 +14696,13 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         px_root_pop();
         if (sc) {   // 本请求 Connection: close → 响应后关闭连接
             px_pxpend_close(fd);
+            g_cur_conn = NULL;
+            return px_null();
+        }
+        // M99：段2（route/vhost handler 协程完成）响应已写完 + keep-alive → 空闲交 IDLE。
+        //   与 req_done 后同决策——否则段2 完成直接落 for(;;) 顶部阻塞读下一请求占 worker，
+        //   handler defer 后连接的空闲仍不释放（M99 目标：所有请求间空闲都不占 worker）。
+        if (px_pxserve_idle_after_resp(conn, fd)) {
             g_cur_conn = NULL;
             return px_null();
         }
@@ -14946,6 +15033,15 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         px_reset_request_state();
         px_root_pop();   // M92-S2c precise：px_serve 请求迭代登记作用域结束
         if (!client_keep_alive) break;
+        // M99：keep-alive 空闲事件化——响应已写完（px_http_dispatch 同步完成 或 段2 续处理完成
+        // 均落此）且无下一请求在途 → 连接交 IDLE（事件循环照看），释放本 worker 取下一 job；
+        // 事件循环 detect 可读 → px_pool_push 投回续读。有在途（pipelining/TLS 缓冲残留/竞态）
+        // 或交 IDLE 失败 → 落 for(;;) 顶部原阻塞续读（功能不降）。fd 保持阻塞（nonblock=0）：
+        // 投回时数据在途 → SO_RCVTIMEO recv 立即返回，无 EAGAIN。
+        if (px_pxserve_idle_after_resp(conn, fd)) {
+            g_cur_conn = NULL;
+            return px_null();   // 已交 IDLE：worker 释放（空闲连接 0 占用 g_pool 线程）
+        }
     }
     // 连接结束（客户端关闭 / 空闲超时 / 出错）：释放连接槽（px_conn_close + free + inflight--）
     px_pxpend_close(fd);
@@ -15553,7 +15649,10 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     pthread_mutex_unlock(&g_pool_mu);
     for (int i = 0; i < g_pool_size; i++) pthread_join(g_pool_threads[i], NULL);
     g_pool_size = 0;
-    // 等待在途请求（最多 5s；连接线程池已 join，正常已归零）
+    // M99：关闭事件循环照看的 px_serve 连接（keep-alive IDLE 空闲不占 worker → join 已快；
+    //   此处清 IDLE 连接使 inflight 归零，优雅关闭干净退出，不再等 15s tick / 5s 等待兜底）
+    px_pxserve_ev_close_all();
+    // 等待在途请求（最多 5s；连接线程池已 join + IDLE 已清，正常已归零）
     for (int i = 0; i < 100 && g_px_inflight > 0; i++) {
         struct timespec ts = {0, 50 * 1000 * 1000};
         nanosleep(&ts, NULL);

@@ -1,0 +1,48 @@
+# M99-S2 daemon —— px_serve 连接级事件化 IDLE 验证（docs/M99_PLAN.md）
+# 并发模型升级：keep-alive 空闲连接（响应写完 + 无下一请求在途）交 IDLE 事件循环照看，
+# g_pool worker 释放取下一 job —— 空闲连接 0 占用 worker（事件化前：每空闲连接占死一个
+# g_pool 线程阻塞 recv 到关闭 / max_conn 预派生池被 keep-alive 空闲占满 → 后续连接悬挂）。
+# 验证面（examples/m99_s2/go_ka.go + verify.sh）：
+#   max_conn=4 刻意压小：40 并发 keep-alive 请求须全成功（事件化前仅 4 个 worker 被空闲
+#   占死 → 36 悬挂超时）→ 铁证「空闲不占 worker」。
+#   40 conns 空闲保持 2s：线程数 ≈ 池 4 + coro 空闲 + 事件循环 1 + 主（不随连接数增长）。
+#   40 conns 再并发 /slow（sleep 300ms 让出）：M98 defer + M99 IDLE 组合，全完成 wall<3s。
+#   pipelining 单连接连续 2 请求同缓冲：在途判定（缓冲残留 → 不交 IDLE 直接续读）不丢请求。
+#   40 conns 空闲 16.5s：事件循环 15s tick 超时关闭（fd 回收），探测写/读失败 = 服务端已关。
+#   优雅关闭：SIGTERM → join + px_pxserve_ev_close_all 清 IDLE → 「在途 0」干净退出。
+# 用法：m99_s2_daemon [port]（默认 18199）；日志 stderr。
+var m99_port = 18199
+let m99_av = args()
+if len(m99_av) > 1:
+    m99_port = int(m99_av[1])
+
+def fast_handler(req, params):
+    return {"status": 200, "body": "FAST"}
+
+def slow_handler(req, params):
+    sleep(300)                  # 300ms 让出窗口（M93 协程；40 并发 ~0.4s 全完成）
+    return {"status": 200, "body": "SLOW-DONE"}
+
+def echo_handler(req, params):
+    let b = req["body"]
+    var s = ""
+    if b != null:
+        s = b
+    return {"status": 200, "headers": {"Content-Type": "text/plain"}, "body": s}
+
+def setup():
+    route("GET", "/fast", fast_handler)
+    route("GET", "/slow", slow_handler)
+    route("POST", "/echo", echo_handler)
+    let D = "/tmp/px_m99_s2_docroot"
+    mkdir(D)
+    write_file(D + "/index.txt", "M99-OK")
+    # max_conn=4：刻意压到 4 个 g_pool worker —— 事件化前 40 并发 keep-alive 连接
+    # 会占死 4 worker（每空闲连接阻塞 recv 到关闭）→ 其余 36 悬挂；M99 后全部即时完成。
+    px_serve(m99_port, D, 30000, {"max_conn": 4})
+    # px_serve 返回 = 优雅关闭完成（SIGTERM → accept 退出 → join → 清 IDLE → 在途 0）
+    exit(0)
+
+spawn setup()
+sleep(300000)   # 兜底保活（正常路径 setup 内 px_serve 返回后 exit(0) 提前终止）
+exit(0)
