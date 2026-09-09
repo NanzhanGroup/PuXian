@@ -3989,19 +3989,42 @@ int px_native_blocking_kind(LXValue fn) {
     return PX_BLK_NONE;
 }
 
-// M96-S2：阻塞网络 native offload 识别（vm.c CALL 预检）。名单 = C 层全协议阻塞桥
-//   （http 解析 recv 循环/mbedtls TLS 阻塞/s3 连接池/ws/tcp/udp/dns —— 阻塞点在 C
-//   native 内部，M93-S3 让出（VM 层可控等待）与 M94 抢占（VM 指令边界）都救不了）。
+// M96-S2/S3：阻塞网络 native offload 识别（vm.c CALL 预检）。名单 = C 层全协议阻塞桥
+//   （http 解析 recv 循环/mbedtls TLS 阻塞/s3 连接池/ws 客户端/tcp/udp/dns —— 阻塞点
+//   在 C native 内部，M93-S3 让出（VM 层可控等待）与 M94 抢占（VM 指令边界）都救不了）。
 //   协程 ctx 命中 → 外包执行线程池（D1/D2，β 路线）；否则 px_call 直调（pthread 阻塞）。
 //   按 native 名匹配（as.native.name）：跨文件安全（ws 在 runtime_ws.c 注册同名 native）
-//   且不依赖 static 函数指针跨编译单元可见性。S2 试点 http_get + tcp_recv；S3 扩全集。
+//   且不依赖 static 函数指针跨编译单元可见性。S2 试点 http_get/tcp_recv；S3 扩全集。
+//   排除：服务端/控制类（tcp_listen/accept、udp_open/udp_serve、tcp_close/udp_close、
+//   ws_serve/ws_close/ws_ping/ws_broadcast/ws_heartbeat —— 非 VM 协程 ctx 或非阻塞）；
+//   fd_wait（用户显式短等自控超时）；sleep/chan/mutex（已让出，非网络）。
 int px_native_offload_kind(LXValue fn) {
     if (fn.type != PX_NATIVE) return 0;
     const char* nm = fn.as.obj->as.native.name;
     if (!nm || !nm[0]) return 0;
-    // S2 试点（C 层全协议阻塞客户端；resp = 整包 str/bytes）
+    // HTTP 客户端全协议（get/post/unix socket；get_stream 排除 —— chunk 回调用户 VM
+    //   函数，违反 D5「名单 = 纯网络 native 不回调 VM」约束，二期候选）
     if (strcmp(nm, "http_get") == 0) return 1;
+    if (strcmp(nm, "http_post") == 0) return 1;
+    if (strcmp(nm, "http_unix") == 0) return 1;
+    // TCP/UDP 客户端阻塞 syscall
+    if (strcmp(nm, "tcp_connect") == 0) return 1;
+    if (strcmp(nm, "tcp_send") == 0) return 1;
     if (strcmp(nm, "tcp_recv") == 0) return 1;
+    if (strcmp(nm, "udp_send") == 0) return 1;
+    if (strcmp(nm, "udp_recv") == 0) return 1;
+    // DNS（getaddrinfo 可秒级）
+    if (strcmp(nm, "dns_lookup") == 0) return 1;
+    // S3 客户端（SigV4 + 连接池 h_exchange）
+    if (strcmp(nm, "s3_put") == 0) return 1;
+    if (strcmp(nm, "s3_get") == 0) return 1;
+    if (strcmp(nm, "s3_delete") == 0) return 1;
+    if (strcmp(nm, "s3_list") == 0) return 1;
+    // WS 客户端（runtime_ws.c：ws_connect/ws_send/ws_recv/ws_connect_auto）
+    if (strcmp(nm, "ws_connect") == 0) return 1;
+    if (strcmp(nm, "ws_connect_auto") == 0) return 1;
+    if (strcmp(nm, "ws_send") == 0) return 1;
+    if (strcmp(nm, "ws_recv") == 0) return 1;
     return 0;
 }
 
@@ -7447,23 +7470,26 @@ int px_spawn_isolate_begin(void) {
 void px_spawn_isolate_end(void) {
     g_err_jmp_set = 0;
 }
-// M96-S2：通用错误捕获点（offload 外包线程用，见 runtime.h）。纯 setjmp 安装：
-//   px_error → longjmp 回返回 0（错误文本已打印 + g_err_last_msg 可经 px_err_last 取）；
-//   与 px_spawn_isolate_begin 不同：不打印「已隔离」消息（外包线程错误由协程恢复
-//   后重抛，语义与直调一致 —— 隔离消息留待协程侧 px_error 一并体现）。
-int px_err_capture_begin(void) {
+// M96-S2：受保护 native 调用（offload 外包线程用；见 runtime.h）。setjmp 在本函数内
+//   消化 longjmp —— px_call → px_error → longjmp 回本函数 setjmp → return 1（错误已
+//   打印；errbuf 带回 g_err_last_msg 文本，由协程恢复后重抛带源位置）。调用者只见
+//   普通一次返回（0/1），不依赖「setjmp 包装 helper 返回两次」的跨函数语义（gcc
+//   -O1/-O2 下此类 helper 返回分支可能被优化错判 —— 最小复现证实 → 必须同函数消化）。
+int px_native_call_capture(LXValue fn, LXValue* args, int nargs,
+                           LXValue* out, char* errbuf, int errbuf_sz) {
     if (setjmp(g_err_jmp) == 0) {
         g_err_jmp_set = 1;
-        return 1;
+        LXValue r = px_call(fn, args, nargs);
+        PX_KEEP(r);                  // 返回前保护（*out 拷出前可被并发 GC STW 暂停）
+        g_err_jmp_set = 0;
+        if (out) *out = r;
+        return 0;
     }
     g_err_jmp_set = 0;
-    return 0;
-}
-void px_err_capture_end(void) {
-    g_err_jmp_set = 0;
-}
-const char* px_err_last(void) {
-    return g_err_last_msg;
+    if (errbuf && errbuf_sz > 0)
+        snprintf(errbuf, (size_t)errbuf_sz, "%s",
+                 g_err_last_msg[0] ? g_err_last_msg : "外包执行失败");
+    return 1;
 }
 void px_gc_block_stop_sig(sigset_t* old) {
     gc_block_stop(old);
