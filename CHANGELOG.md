@@ -6,6 +6,23 @@
 
 ## [Unreleased]
 
+### 重链批次 · bootstrap/pxi + pxi_vm 吸收 F3-fix runtime（2026-09-09，dongyue）
+
+> M91_PLAN S1 事实 7 标注的后续批次（基座大二进制变更留独立批次）。F3-fix
+> （de5ceef，http_serve keep-alive 长压卡顿根治：fserve_gc_reg 空闲注销 GC 槽 +
+> 超时 tick poll(0) 二次确认兜底）改 runtime/runtime.c 后，解释器引导二进制
+> 未重链 → 本次全能力重链让解释器也带 F3-fix runtime。
+> - **bootstrap/pxi**（C 轨解释器，9,480,688→9,480,960 B）：`px build --c --full
+>   selfhost/interp.px`（C 轨逃生舱全能力）→ cp。pxi 0.2.0、hello stdout 与旧
+>   逐字节一致、strings 确认 fserve_gc_reg/tmo_save/tmo_close 链入。
+> - **bootstrap/pxi_vm**（VM 轨解释器，9,314,512→9,314,792 B）：`px build --full
+>   selfhost/interp.px`（M91 默认 VM 引擎 = pxc_vm --emit-c BCModule 镜像）→ cp。
+>   pxi 0.2.0、hello stdout 与旧一致、pxi == pxi_vm stdout 逐字节一致。
+> - **回归抽查**（对齐 M89-S4 重链惯例）：diffcheck --all rc=0（新 pxi 全量对拍
+>   golden）+ vm_ab.sh v2 **38 PASS 0 GAP 0 FAIL**。
+> - 备注：pxc_vm 已在 M91-S3 重链（9,338,504B 含 F1+PXOP_NARGS）不需重复；pxc
+>   （C 轨编译器）按 M89 决策保持不重链（编译只产文本不依赖 runtime 版本）。
+
 ### M91 · 默认轨切 VM（px build 默认产物 = 字节码 VM 轨 + C 轨逃生舱）
 
 > 完成（2026-09-09，dongyue）：M91（立项依据 docs/M90_S4_switch_eval.md + perf 基线）
