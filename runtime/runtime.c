@@ -726,6 +726,7 @@ extern void px_coro_gc_mark_roots(void) __attribute__((weak));
 // M95-S2：http handler 协程化 pending 表 gc 标记（实现在 ConnCtx 区后；前向声明供
 //   gc 标记期调用 —— 挂起连接的 req/resp 须入精确根面，漏标 = GC 误回收 UAF）
 static void http_pend_gc_mark(void);
+void px_pxserve_pend_gc_mark(void);   // M98-S2a（定义见 px_conn_worker 区）
 // M93-S2：VM 函数指针判定（px_spawn_name 分派用；C 轨逃生舱无 vm.o → weak 空转）
 extern LXValue px_vm_entry(LXValue* args, int nargs, void* ctx) __attribute__((weak));
 // M93-S2：协程 worker 复用 spawn 错误隔离 / GC 暂停信号屏蔽原语（本文件强定义导出）
@@ -1358,6 +1359,7 @@ void px_gc_collect(void) {
         //   就绪队列协程的 args 副本仅本表可达 → 必须补标（漏标 = worker 取到 UAF）。
         if (px_coro_gc_mark_roots) px_coro_gc_mark_roots();
         http_pend_gc_mark();   // M95-S2：http 挂起连接 req/resp 补标
+        px_pxserve_pend_gc_mark();   // M98-S2a：px_serve 挂起连接 req/resp 补标
         g_gc_cur_set = NULL;
         // 4) sweep
         if (g_gc_debug) { char dbg[128]; int dn = snprintf(dbg, sizeof(dbg), "[mk] 暂停+标记+扫栈耗时%lldms\n", gc_mono_ms() - t0); (void)write(2, dbg, (size_t)dn); }
@@ -1436,6 +1438,7 @@ void px_gc_collect(void) {
     //   此处兜底纯就绪/创建窗口）
     if (px_coro_gc_mark_roots) px_coro_gc_mark_roots();
     http_pend_gc_mark();   // M95-S2：同上（单线程 GC 路径兜底）
+    px_pxserve_pend_gc_mark();   // M98-S2a：同上（单线程 GC 路径兜底）
     g_gc_cur_set = NULL;
     g_in_gc_sweep = 1;   // ISSUE28-B1：单线程 sweep 同上免逐趟 sigprocmask
     int freed = 0, w = 0;
@@ -13780,9 +13783,13 @@ static int px_resp_gzipable(LXValue* headers, const char* ct, int body_len) {
 // 纯重构自 px_conn_worker（HTTP/1.1 请求处理）：所有响应经 PxHttpOut 抽象写出，
 // 不再触碰 fd/g_cur_conn —— HTTP/1.1（TCP/TLS）与 HTTP/3（H3 帧）共用本管道。
 // 行为与重构前逐字节一致：CORS/限流/vhost/路由/静态(gzip/ETag/Range/304)/.px/访问日志全保留。
-static void px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
+// M98-S2a：公共管道返回码 —— 0 = 已同步处理完成（响应已发送/短路）；1 = 已拆段
+//   （route VM handler 帧协程运行中，调用方须释放 worker，done 回调投回续处理）。
+//   async_ok=1：仅 px_serve HTTP/1.1 池 worker 传（route VM handler 可拆段异步执行）；
+//   H3（px_http_dispatch_h3）与其余调用传 0 → 原同步路径逐字节零变化。
+static int px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
                              const char* path, const char* query,
-                             int client_keep_alive, const char* req_id) {
+                             int client_keep_alive, const char* req_id, int async_ok) {
     LXValue headers = px_dict_get(req, "headers");
     const char* log_remote = "unknown";
     {
@@ -13801,7 +13808,7 @@ static void px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
                  "Access-Control-Max-Age: 86400\r\n", req_id);
         pout->respond(pout, 204, "text/plain; charset=utf-8", "", 0,
                       strcmp(method, "HEAD") == 0, client_keep_alive, extra);
-        return;
+        return 0;
     }
     // M31.3：服务端内置限流（按 IP；px_serve opts{rate_limit:{max,window_sec}} → 429）
     if (g_px_rate_max > 0 && g_px_rate_window > 0) {
@@ -13842,7 +13849,7 @@ static void px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
                               21, strcmp(method, "HEAD") == 0, client_keep_alive, extra);
                 px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
                         (long long)time(NULL), ipbuf, method, path, 429, 21, req_id);
-                return;
+                return 0;
             }
         }
     }
@@ -13876,7 +13883,7 @@ static void px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
                     pout->respond(pout, vst, vct, vbody, vblen,
                                   strcmp(method, "HEAD") == 0, client_keep_alive, extra);
                     px_root_pop();   // M92-S2c precise
-                    return;
+                    return 0;
                 }
                 px_root_pop();   // M92-S2c precise：r==NULL 分支（作用域结束）
             }
@@ -13891,10 +13898,10 @@ static void px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
     if (px_route_has()) {
         char extra[256];
         snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
-        if (px_route_try_dispatch(pout, req, method, strcmp(method, "HEAD") == 0,
-                                  client_keep_alive, req_id)) {
-            return;
-        }
+        int rret = px_route_try_dispatch(pout, req, method, strcmp(method, "HEAD") == 0,
+                                          client_keep_alive, req_id, async_ok);
+        if (rret == 1) return 0;   // 已处理（响应已同步发送）
+        if (rret == 2) return 1;   // M98-S2a：已拆段（route VM handler 协程运行中，调用方释放 worker）
     }
 #endif // PX_NO_ROUTE
 
@@ -13919,7 +13926,7 @@ static void px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
         pout->respond(pout, 403, "text/plain; charset=utf-8", "403 Forbidden: 路径穿越被拒绝", 30, head_only, client_keep_alive, extra);
         px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
                 (long long)time(NULL), log_remote, method, path, 403, 30, req_id);
-        return;
+        return 0;
     }
     char full[4096];
     snprintf(full, sizeof(full), "%s%s", docroot, path);
@@ -13931,7 +13938,7 @@ static void px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
         pout->respond(pout, 404, "text/plain; charset=utf-8", "404 Not Found", 13, head_only, client_keep_alive, extra);
         px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
                 (long long)time(NULL), log_remote, method, path, 404, 13, req_id);
-        return;
+        return 0;
     }
     char fpath[4096];
     if (S_ISDIR(st.st_mode)) {
@@ -13944,7 +13951,7 @@ static void px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
                 pout->respond(pout, 404, "text/plain; charset=utf-8", "404 Not Found", 13, head_only, client_keep_alive, extra);
                 px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
                         (long long)time(NULL), log_remote, method, path, 404, 13, req_id);
-                return;
+                return 0;
             }
         }
     } else {
@@ -14049,7 +14056,7 @@ static void px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
             pout->respond(pout, 404, "text/plain; charset=utf-8", "404 Not Found", 13, head_only, client_keep_alive, extra);
             px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
                     (long long)time(NULL), log_remote, method, path, 404, 13, req_id);
-            return;
+            return 0;
         }
         long long fsz = (long long)fst.st_size;
         time_t mt = fst.st_mtime;
@@ -14064,7 +14071,7 @@ static void px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
             snprintf(extra, sizeof(extra), "ETag: %s\r\nLast-Modified: %s\r\nX-Request-Id: %s\r\n",
                      etag, last_mod, req_id);
             pout->respond(pout, 304, NULL, "", 0, head_only, client_keep_alive, extra);
-            return;
+            return 0;
         }
         LXValue ims = px_header_get(&headers, "If-Modified-Since");
         if (ims.type == PX_STR) {
@@ -14078,7 +14085,7 @@ static void px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
                     snprintf(extra, sizeof(extra), "ETag: %s\r\nLast-Modified: %s\r\nX-Request-Id: %s\r\n",
                              etag, last_mod, req_id);
                     pout->respond(pout, 304, NULL, "", 0, head_only, client_keep_alive, extra);
-                    return;
+                    return 0;
                 }
             }
         }
@@ -14125,7 +14132,7 @@ static void px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
                         pout->end(pout);
                         xfree(gz);
                         xfree(data);
-                        return;
+                        return 0;
                     }
                 }
                 xfree(data);
@@ -14156,8 +14163,7 @@ static void px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
         px_access_log("[px-access] %lld %s %s %s %d %lld 0ms req=%s\n",
                 (long long)time(NULL), log_remote, method, path, status, seg_len, req_id);
     }
-
-
+    return 0;   // M98-S2a：同步完成（函数末尾兜底）
 }
 
 // ==================== M53-S3：HTTP/3 请求接入桥 ====================
@@ -14238,8 +14244,252 @@ void px_http_dispatch_h3(PxHttpOut* pout, LXValue req, int client_keep_alive) {
         }
         xfree(body_buf);
     }
-    px_http_dispatch(pout, req, method, path, query, client_keep_alive, req_id);
+    px_http_dispatch(pout, req, method, path, query, client_keep_alive, req_id, 0); // H3: async_ok=0 同步零变化
     px_reset_request_state();
+}
+
+
+
+// ==================== M98-S2a：px_serve route handler 协程化 —— 连接挂起注册表 ====================
+// px_serve（M31.4b g_pool）原模型：每连接一个常驻 g_pool 线程跑 px_conn_worker 阻塞
+// keep-alive 到连接关闭（PxConn 为栈对象，线程结束即丢）。M98-S2a 升级：连接对象堆化并
+// 登记本表（fd→PxPend*，TLS 会话/读缓冲跨 worker 存活）；route VM handler 命中 → stage=1
+//   + req 入 GC 根 + spawn 帧协程（chan/sleep/spawn 让出占协程不占 worker）→ px_conn_worker
+//   返回（g_pool 线程释放取下一 job）；协程完成回调 px_serve_route_done（coro worker 线程）
+//   → stage=2 + resp 入根 + px_pool_push(fd) 投回；续处理 worker 重入 px_conn_worker →
+//   段2（px_route_respond normalize+respond+访问日志）→ keep-alive 下一请求。
+// req/resp 为本表 GC 根（px_pxserve_pend_gc_mark 在 gc 标记期补标 —— precise 必须，
+//   漏标 = GC 误回收挂起连接请求/响应 → UAF）。
+// 锁 = g_pxpend_mu（独立锁，不复用 g_conn_mu —— 同 http_pend fix：GC 标记期遍历本表，
+//   而既有 g_conn_mu 临界区（M88-B px_evc_*）不屏蔽 SIG_GC_STOP → 复用会死锁）。临界区
+//   统一屏蔽 SIG_GC_STOP（gc_block_stop/gc_unblock_stop）→ 与 GC executor 无持锁竞争。
+// 锁序：g_pxpend_mu 不与其他锁嵌套（done 出锁后才 px_pool_push；close 出锁后才
+//   px_conn_close + xfree）。fd 复用防串扰：close 置 active=0 → 旧 done/take 不再命中。
+typedef struct PxPend {
+    int fd;
+    int active;        // 连接槽位在用（conn 存活）
+    PxConn* conn;      // 堆连接（跨 worker 存活；含 TLS 会话/读缓冲）
+    int stage;         // 0 = 无挂起（处理中/空闲循环）；1 = route handler 协程运行中；
+                       // 2 = 已完成待续处理（段2 respond）
+    int method_head;   // 挂起请求 HEAD
+    int client_close;  // 挂起请求 Connection: close（1 = 响应后关连接）
+    char req_id[64];   // 挂起请求 X-Request-Id
+    char tmp_path[1024]; // 挂起期 body 临时文件（done 回调清理；handler 期需可读）
+    LXValue req;       // GC 根（stage>=1）
+    LXValue resp;      // GC 根（stage==2）
+} PxPend;
+static PxPend* g_pxpend = NULL;
+static int g_pxpend_cap = 0;
+static pthread_mutex_t g_pxpend_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static PxPend* px_pxpend_ctx(int fd) {
+    if (fd < 0 || fd >= g_pxpend_cap) return NULL;
+    return &g_pxpend[fd];
+}
+
+// 扩容（持 g_pxpend_mu；上限 g_conn_max = PX_MAX_CONNS env，同 http_pend）。返回 0 可用。
+static int px_pxpend_ensure(int fd) {
+    if (fd < 0 || fd >= g_conn_max) return -1;
+    if (fd < g_pxpend_cap) return 0;
+    int ncap = g_pxpend_cap ? g_pxpend_cap : 256;
+    while (ncap <= fd && ncap < g_conn_max) ncap *= 2;
+    if (ncap > g_conn_max) ncap = g_conn_max;
+    if (ncap <= fd) return -1;
+    PxPend* np = (PxPend*)xrealloc(g_pxpend, (size_t)ncap * sizeof(PxPend));
+    if (!np) return -1;
+    for (int i = g_pxpend_cap; i < ncap; i++) {
+        np[i].fd = -1; np[i].active = 0; np[i].stage = 0;
+        np[i].conn = NULL; np[i].method_head = 0; np[i].client_close = 0;
+        np[i].req_id[0] = 0; np[i].tmp_path[0] = 0;
+        np[i].req.type = PX_NULL; np[i].resp.type = PX_NULL;
+    }
+    g_pxpend = np; g_pxpend_cap = ncap;
+    return 0;
+}
+
+// px_conn_worker 每 fd job 入口：取/建连接槽。新连接（!active）→ 堆 PxConn + px_conn_init
+// （TLS 握手在锁外做，防长握手阻塞全表/GC）+ inflight++。返回槽指针；失败 NULL。
+static PxPend* px_pxpend_enter(int fd) {
+    PxPend* e = NULL;
+    int create = 0;
+    sigset_t old;
+    pthread_mutex_lock(&g_pxpend_mu);
+    gc_block_stop(&old);
+    if (px_pxpend_ensure(fd) == 0) {
+        e = px_pxpend_ctx(fd);
+        if (e && !e->active) create = 1;
+        else if (e && e->conn) { /* 续处理：连接/会话复用 */ }
+        else e = NULL;
+    }
+    gc_unblock_stop(&old);
+    pthread_mutex_unlock(&g_pxpend_mu);
+    if (!e) return NULL;
+    if (!create) return e;
+    // 新建：堆化连接 + TLS 握手（锁外）
+    PxConn* c = (PxConn*)xmalloc(sizeof(PxConn));
+    if (!c) return NULL;
+    if (px_conn_init(c, fd) != 0) { xfree(c); return NULL; }
+    pthread_mutex_lock(&g_pxpend_mu);
+    gc_block_stop(&old);
+    if (e->active) {   // 防御：槽被占（理论不达，fd 唯一在途）→ 弃新建
+        gc_unblock_stop(&old);
+        pthread_mutex_unlock(&g_pxpend_mu);
+        px_conn_close(c); xfree(c);
+        return NULL;
+    }
+    e->fd = fd; e->active = 1; e->stage = 0; e->conn = c;
+    e->method_head = 0; e->client_close = 0;
+    e->req_id[0] = 0; e->tmp_path[0] = 0;
+    e->req.type = PX_NULL; e->resp.type = PX_NULL;
+    __sync_fetch_and_add(&g_px_inflight, 1);
+    gc_unblock_stop(&old);
+    pthread_mutex_unlock(&g_pxpend_mu);
+    return e;
+}
+
+// 关闭连接并释放槽（统一 close 路径；幂等）。close(fd)+TLS 释放+free(conn) 在锁外做；
+// tmp 兜底清理。fd 复用防串扰：active=0 → 旧 done 回调/take 不再命中。
+static void px_pxpend_close(int fd) {
+    if (fd < 0) return;
+    PxConn* c = NULL;
+    char tmp[1024]; tmp[0] = 0;
+    sigset_t old;
+    pthread_mutex_lock(&g_pxpend_mu);
+    gc_block_stop(&old);
+    PxPend* e = px_pxpend_ctx(fd);
+    if (e && e->active) {
+        c = e->conn;
+        if (e->tmp_path[0]) { snprintf(tmp, sizeof(tmp), "%s", e->tmp_path); e->tmp_path[0] = 0; }
+        e->active = 0; e->stage = 0; e->fd = -1; e->conn = NULL;
+        e->req.type = PX_NULL; e->resp.type = PX_NULL;
+        __sync_fetch_and_sub(&g_px_inflight, 1);
+    }
+    gc_unblock_stop(&old);
+    pthread_mutex_unlock(&g_pxpend_mu);
+    if (c) { px_conn_close(c); xfree(c); }
+    if (tmp[0]) unlink(tmp);
+}
+
+// 登记挂起请求 body 临时文件（DEFER 返回前调用；done 回调清理）。锁内写，幂等。
+static void px_pxpend_set_tmp(int fd, const char* path) {
+    if (!path || !path[0]) return;
+    sigset_t old;
+    pthread_mutex_lock(&g_pxpend_mu);
+    gc_block_stop(&old);
+    PxPend* e = px_pxpend_ctx(fd);
+    if (e && e->active && e->stage == 1) {
+        snprintf(e->tmp_path, sizeof(e->tmp_path), "%s", path);
+    }
+    gc_unblock_stop(&old);
+    pthread_mutex_unlock(&g_pxpend_mu);
+}
+
+// 取完成项（stage==2 → 置 stage=0 返回 1，req/resp/标志移交调用方；否则 0）
+static int px_pxpend_take(int fd, LXValue* req, LXValue* resp, int* method_head,
+                          int* client_close, char* req_id, size_t req_id_sz) {
+    int got = 0;
+    sigset_t old;
+    pthread_mutex_lock(&g_pxpend_mu);
+    gc_block_stop(&old);
+    PxPend* e = px_pxpend_ctx(fd);
+    if (e && e->active && e->stage == 2) {
+        *req = e->req; *resp = e->resp;
+        *method_head = e->method_head; *client_close = e->client_close;
+        if (req_id && req_id_sz > 0) snprintf(req_id, req_id_sz, "%s", e->req_id);
+        e->stage = 0;
+        e->req.type = PX_NULL; e->resp.type = PX_NULL;
+        got = 1;
+    }
+    gc_unblock_stop(&old);
+    pthread_mutex_unlock(&g_pxpend_mu);
+    return got;
+}
+
+// GC 标记期补标挂起项 req/resp（gc executor 单线程标记期调用；持 g_pxpend_mu）
+void px_pxserve_pend_gc_mark(void) {
+    sigset_t old;
+    pthread_mutex_lock(&g_pxpend_mu);
+    gc_block_stop(&old);   // executor 本已自屏蔽（幂等）；写者临界区同屏蔽 → 无持锁被暂停
+    if (g_pxpend) {
+        for (int i = 0; i < g_pxpend_cap; i++) {
+            PxPend* e = &g_pxpend[i];
+            if (e->active && (e->stage == 1 || e->stage == 2)) {
+                if (e->req.type != PX_NULL) px_gc_mark_slots(&e->req, 1);
+                if (e->resp.type != PX_NULL) px_gc_mark_slots(&e->resp, 1);
+            }
+        }
+    }
+    gc_unblock_stop(&old);
+    pthread_mutex_unlock(&g_pxpend_mu);
+}
+
+// route handler 帧协程完成回调（coro worker 线程执行；ret = handler 顶层返回值）。
+// 顺序：PX_KEEP 保护 ret（precise 窗口）→ g_pxpend_mu 内 stage 1→2 写 resp + tmp 移交
+//   → 出锁后清理 tmp + px_pool_push(fd) 投回续处理。连接已关/表项已清（fd 复用）→
+//   丢弃 ret。g_px_stop（优雅关闭，池 worker 已退出）→ 直接关连接防 push 无消费者挂死。
+static void px_serve_route_done(void* ud, LXValue ret) {
+    int fd = (int)(intptr_t)ud;
+    if (fd < 0) return;
+    px_root_push();
+    PX_KEEP(ret);
+    int push = 0;
+    char tmp[1024]; tmp[0] = 0;
+    sigset_t old;
+    pthread_mutex_lock(&g_pxpend_mu);
+    gc_block_stop(&old);
+    PxPend* e = px_pxpend_ctx(fd);
+    if (e && e->active && e->stage == 1) {
+        e->resp = ret;    // GC 根接管（表项 stage2 期间 mark 补标）
+        e->stage = 2;
+        push = 1;
+        if (e->tmp_path[0]) { snprintf(tmp, sizeof(tmp), "%s", e->tmp_path); e->tmp_path[0] = 0; }
+    }
+    gc_unblock_stop(&old);
+    pthread_mutex_unlock(&g_pxpend_mu);
+    if (tmp[0]) unlink(tmp);
+    if (push) {
+        if (g_px_stop) px_pxpend_close(fd);   // 关闭期：池 worker 已退出 → 直接收尾
+        else px_pool_push(fd);                // 续处理：段2 respond + keep-alive
+    }
+    px_root_pop();
+}
+
+// 登记 route handler 挂起并 spawn（调用点 = px_route_try_dispatch 命中 handler 且
+// async_ok；runtime_route.c 经 runtime.h 调用）。返回 1 = 已登记+已 spawn（调用方返回
+// DEFER）；0 = 退回原同步直调路径（非 px_serve 连接 / 非 VM handler / 槽忙 / 无协程内核）。
+int px_pxserve_defer_route(PxHttpOut* out, LXValue req, LXValue handler, LXValue params,
+                           int head_only, int keep_alive, const char* req_id) {
+    PxConn* c = (out && out->impl) ? (PxConn*)out->impl : NULL;
+    if (!c) return 0;
+    int fd = c->fd;
+    if (fd < 0) return 0;
+    if (!px_coro_spawn_ex || !px_vm_entry) return 0;          // 无协程内核 → 同步
+    if (handler.type != PX_FUNC || !handler.as.obj ||
+        handler.as.obj->as.func.fn != px_vm_entry) return 0;  // 仅 VM handler 拆段
+    int ok = 0;
+    sigset_t old;
+    pthread_mutex_lock(&g_pxpend_mu);
+    gc_block_stop(&old);
+    PxPend* e = px_pxpend_ctx(fd);
+    if (e && e->active && e->conn == c && e->stage == 0) {
+        e->stage = 1;
+        e->method_head = head_only ? 1 : 0;
+        e->client_close = keep_alive ? 0 : 1;
+        e->req_id[0] = 0;
+        if (req_id) snprintf(e->req_id, sizeof(e->req_id), "%s", req_id);
+        e->req = req;                 // GC 根接管（调用方根随后失效无碍）
+        e->resp.type = PX_NULL;
+        ok = 1;
+    }
+    gc_unblock_stop(&old);
+    pthread_mutex_unlock(&g_pxpend_mu);
+    if (!ok) return 0;
+    LXValue hargs[2];
+    hargs[0] = req;
+    hargs[1] = params;
+    px_coro_spawn_ex(handler.as.obj->as.func.ctx, hargs, 2,
+                     px_serve_route_done, (void*)(intptr_t)fd);
+    return 1;
 }
 
 // 连接处理线程（px_spawn 注册）：args[0] = fd
@@ -14247,28 +14497,58 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) return px_null();
     int fd = (int)args[0].as.i;
-    // M27：TLS 握手（若 tls_server 注册）→ PxConn 统一读写
-    PxConn conn;
-    if (px_conn_init(&conn, fd) != 0) { return px_null(); }
-    g_cur_conn = &conn;
-    __sync_fetch_and_add(&g_px_inflight, 1);
+    // M98-S2a：连接槽取/建（fd→PxPend*）—— PxConn 堆化登记（跨 g_pool worker 存活，
+    // TLS 会话/读缓冲不随 worker 释放而丢）；新建连接在槽内做握手 + inflight++。
+    PxPend* pend = px_pxpend_enter(fd);
+    if (!pend) return px_null();
+    PxConn* conn = pend->conn;
+    g_cur_conn = conn;
     PxHttpOut out;
-    px_http_out_init_conn(&out, &conn);
+    px_http_out_init_conn(&out, conn);
 
 // M85-S1：--no-h2 裁剪（去 runtime_h2.o；http_serve 不再协商 h2c/ALPN-h2，退化为 HTTP/1.1）
 #ifndef PX_NO_H2
-    // M37：TLS ALPN 协商 h2 → 直接 HTTP/2（prior knowledge 帧循环，整连接为 h2）
-    if (conn.is_tls) {
-        const char* alpn = mbedtls_ssl_get_alpn_protocol((mbedtls_ssl_context*)conn.ssl);
+    // M37：TLS ALPN 协商 h2 → 直接 HTTP/2（prior knowledge 帧循环，整连接为 h2）。
+    //   h2 连接请求循环在 px_h2_handle 内（h2 handler 协程化另立里程碑，保持同步）。
+    if (conn->is_tls) {
+        const char* alpn = mbedtls_ssl_get_alpn_protocol((mbedtls_ssl_context*)conn->ssl);
         if (alpn && strcmp(alpn, "h2") == 0) {
-            px_h2_handle(&conn, 0, NULL, 0);
-            px_conn_close(&conn);
-            __sync_fetch_and_sub(&g_px_inflight, 1);
+            px_h2_handle(conn, 0, NULL, 0);
+            px_pxpend_close(fd);   // 释放连接槽（px_conn_close 幂等 + free + inflight--）
             g_cur_conn = NULL;
             return px_null();
         }
     }
 #endif // PX_NO_H2
+
+    // M98-S2a：续处理 —— route handler 帧协程完成投回（stage==2）：段2 归一化 + 响应
+    // 发送 + 访问日志（px_route_respond），随后落入下方 keep-alive 循环读下一请求。
+// M85-S1：--no-route 裁剪 —— route 模块裁剪时 defer/续处理均不达（无路由表），
+//   px_route_respond 无定义 → 整块裁剪防链接失败。
+#ifndef PX_NO_ROUTE
+    if (pend->stage == 2) {
+        LXValue sreq, sresp;
+        int sh = 0, sc = 1;
+        char srid[64];
+        srid[0] = 0;
+        px_pxpend_take(fd, &sreq, &sresp, &sh, &sc, srid, sizeof(srid));
+        const char* sm = "GET";
+        {
+            LXValue smv = px_dict_get(sreq, "method");
+            if (smv.type == PX_STR) sm = smv.as.obj->as.str.data;
+        }
+        px_root_push();   // M92-S2c precise：续处理段2 登记作用域（sreq/sresp 取自挂起表）
+        PX_KEEP(sreq);
+        PX_KEEP(sresp);
+        px_route_respond(&out, sreq, sm, sh, sc ? 0 : 1, srid, sresp);
+        px_root_pop();
+        if (sc) {   // 本请求 Connection: close → 响应后关闭连接
+            px_pxpend_close(fd);
+            g_cur_conn = NULL;
+            return px_null();
+        }
+    }
+#endif // PX_NO_ROUTE
 
     // M29d：keep-alive 循环——同一连接连续处理多个请求，直到客户端
     // Connection: close / 空闲超时（15s）/ 出错。
@@ -14284,7 +14564,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         int len = 0;
         int header_end = -1;
         while (len < (int)sizeof(buf) - 1) {
-            ssize_t n = px_conn_read(&conn, buf + len, (size_t)((int)sizeof(buf) - 1 - len));
+            ssize_t n = px_conn_read(conn, buf + len, (size_t)((int)sizeof(buf) - 1 - len));
             if (n <= 0) break;
             len += (int)n;
             buf[len] = 0;
@@ -14393,7 +14673,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
                     // pend 无换行 → 读 conn 补
                     if (pend_pos < pend_len) { pend_len -= pend_pos; memmove(pend, pend + pend_pos, (size_t)pend_len); pend_pos = 0; }
                     char tmpb[512];
-                    ssize_t n = px_conn_read(&conn, tmpb, sizeof(tmpb));
+                    ssize_t n = px_conn_read(conn, tmpb, sizeof(tmpb));
                     if (n <= 0) break;
                     // 追加到 pend（扩大？用静态缓冲；简化：直接处理）
                     // 简化：把读到的数据追加到 pend 缓冲（buf 后空间足够 64KB）
@@ -14415,7 +14695,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
                 // 读 csize 字节 + CRLF
                 while (pend_len - pend_pos < csize + 2) {
                     char tmpb[8192];
-                    ssize_t n = px_conn_read(&conn, tmpb, sizeof(tmpb));
+                    ssize_t n = px_conn_read(conn, tmpb, sizeof(tmpb));
                     if (n <= 0) break;
                     if (pend_len + (int)n < 65536) {
                         memcpy(pend + pend_len, tmpb, (size_t)n);
@@ -14460,7 +14740,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
                 int remaining = content_length - have;
                 char tmpb[16384];
                 while (remaining > 0) {
-                    ssize_t n = px_conn_read(&conn, tmpb, sizeof(tmpb));
+                    ssize_t n = px_conn_read(conn, tmpb, sizeof(tmpb));
                     if (n <= 0) break;
                     (void)write(body_tmp_file, tmpb, (size_t)n);
                     remaining -= (int)n;
@@ -14472,7 +14752,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
                 int got = have;
                 if (have > 0) memcpy(body_buf, buf + body_off, (size_t)have);
                 while (got < content_length) {
-                    ssize_t n = px_conn_read(&conn, body_buf + got, (size_t)(content_length - got));
+                    ssize_t n = px_conn_read(conn, body_buf + got, (size_t)(content_length - got));
                     if (n <= 0) break;
                     got += (int)n;
                 }
@@ -14567,13 +14847,27 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
                 const unsigned char* residual = (const unsigned char*)buf + (header_end + 4) + content_length;
                 int rlen = 0;
                 if (len > (header_end + 4) + content_length) rlen = len - ((header_end + 4) + content_length);
-                px_h2_handle(&conn, is_h2c ? 1 : 0, residual, rlen);
+                px_h2_handle(conn, is_h2c ? 1 : 0, residual, rlen);
                 goto req_done;
             }
         }
 #endif // PX_NO_H2
-        // M53-S2：req 就绪 → 公共请求管道（CORS/限流/vhost/路由/静态/.px；输出经 PxHttpOut）
-        px_http_dispatch(&out, req, method, path, query, client_keep_alive, req_id);
+        // M53-S2：req 就绪 → 公共请求管道（CORS/限流/vhost/路由/静态/.px；输出经
+        // PxHttpOut）。async_ok=1：route VM handler 命中可拆段帧协程执行（M98-S2a）。
+        int dret = px_http_dispatch(&out, req, method, path, query,
+                                    client_keep_alive, req_id, 1);
+        if (dret == 1) {
+            // 已拆段（route VM handler 协程运行中，挂起表 stage=1）：body 临时文件移交
+            // done 回调清理（handler 期需可读）；req 已入挂起表 GC 根。释放本 worker
+            // （g_pool 线程立即取下一 job）；完成回调 px_pool_push(fd) 投回续处理。
+            if (body_tmp_path[0]) px_pxpend_set_tmp(fd, body_tmp_path);
+            if (body_tmp_file >= 0) close(body_tmp_file);
+            if (body_buf) xfree(body_buf);
+            px_reset_request_state();
+            px_root_pop();   // M92-S2c precise：px_serve 请求迭代登记作用域结束
+            g_cur_conn = NULL;
+            return px_null();
+        }
     req_done:
         if (body_tmp_path[0]) unlink(body_tmp_path);
         if (body_tmp_file >= 0) close(body_tmp_file);
@@ -14582,8 +14876,8 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         px_root_pop();   // M92-S2c precise：px_serve 请求迭代登记作用域结束
         if (!client_keep_alive) break;
     }
-    px_conn_close(&conn);
-    __sync_fetch_and_sub(&g_px_inflight, 1);
+    // 连接结束（客户端关闭 / 空闲超时 / 出错）：释放连接槽（px_conn_close + free + inflight--）
+    px_pxpend_close(fd);
     g_cur_conn = NULL;
     return px_null();
 }

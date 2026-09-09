@@ -456,10 +456,25 @@ void px_h2_handle(void* c, int upgrade, const unsigned char* residual, int rlen)
 void px_access_log(const char* fmt, ...);
 // 路由表非空？（决定 px_serve 是否走路由优先）
 int px_route_has(void);
-// 匹配路由并执行中间件链 + handler，发送响应。返回 1=已处理 / 0=未匹配。
-// out 为 PxHttpOut*（M53-S2：HTTP/1.1 与 HTTP/3 共用输出抽象）
+// 匹配路由并执行中间件链 + handler，发送响应。返回 0=未匹配 / 1=已处理 / 2=已拆段
+// （route VM handler 已协程化，调用方须释放 worker，完成回调投回续处理）。
+// out 为 PxHttpOut*（M53-S2：HTTP/1.1 与 HTTP/3 共用输出抽象）；async_ok=1 允许
+// route VM handler 拆段异步执行（仅 px_serve HTTP/1.1 池 worker 传 1；H3/非 VM 零变化）。
 int px_route_try_dispatch(PxHttpOut* out, LXValue req, const char* method, int head_only,
-                          int keep_alive, const char* req_id);
+                          int keep_alive, const char* req_id, int async_ok);
+// M98-S2a：route handler 返回值 → 归一化 + 响应发送 + 访问日志（段2）。
+//   同步路径（px_route_try_dispatch 内 px_call 后）与协程续处理（px_serve 续 worker
+//   从挂起表取回 stage2 后）共用 —— 保证 async/sync 响应语义逐字节一致。
+void px_route_respond(PxHttpOut* out, LXValue req, const char* method, int head_only,
+                      int keep_alive, const char* req_id, LXValue resp);
+// M98-S2a（runtime.c 实现）：px_serve route handler 挂起登记 + 帧协程 spawn。
+//   命中 VM route handler（handler.type==PX_FUNC && fn==px_vm_entry）且连接在 px 挂起
+//   注册表（stage 0）→ stage=1 + req 入 GC 根 + px_coro_spawn_ex(handler,[req,params],
+//   done) → 返回 1（调用方返回 DEFER）；否则返回 0（调用方走原同步直调路径）。
+int px_pxserve_defer_route(PxHttpOut* out, LXValue req, LXValue handler, LXValue params,
+                           int head_only, int keep_alive, const char* req_id);
+// M98-S2a：px 连接挂起表 GC 补标（gc 标记期调用；同 http_pend_gc_mark）
+void px_pxserve_pend_gc_mark(void);
 // M28 P1：SQLite 绑定（runtime_sqlite.c）
 LXValue bi_sqlite_open(LXValue* args, int nargs, void* ctx);
 LXValue bi_sqlite_exec(LXValue* args, int nargs, void* ctx);

@@ -1,0 +1,64 @@
+# M98-S2a daemon —— px_serve route VM handler 协程化验证（docs/M98_PLAN.md S2a）
+# 并发模型升级：route VM handler 命中 → 挂起表 stage1 + 帧协程 spawn（sleep/chan 让出
+# 占协程不占 g_pool worker）→ worker 释放取下一 job → 完成回调投回 → 续 worker 段2
+# （px_route_respond 归一化+响应+访问日志）→ keep-alive 下一请求。
+# 验证面：
+#   /slow  -> handler sleep(1200ms)（M93 协程让出）——并发长业务占协程不占 worker 实证
+#   /fast  -> 即时响应（慢 handler 在途时快速响应不被饿死）
+#   /ka    -> 同连接连续 2 次 /slow 语义（keep-alive 续处理：响应后读下一请求）
+#   /p/:id -> 路径参数跨 defer 传递（handler(req, params) params 随 spawn 拷贝）
+#   /big   -> POST 大 body（>1MB 落盘 tmp）defer 期 tmp 文件存活可读（done 回调清理）
+#   /alloc -> 大量 dict 分配（precise 低阈值 GC：挂起表 req/resp GC 根）
+#   /index.txt 静态文件不受 route handler defer 影响（原同步路径零变化）
+# 用法：m98_s2_daemon [port]（默认 18198）；日志 stderr。
+var m98_port = 18198
+let m98_av = args()
+if len(m98_av) > 1:
+    m98_port = int(m98_av[1])
+
+def slow_handler(req, params):
+    sleep(1200)                     # 1200ms 让出窗口（并发 20 也仅 ~1.3s 全完成）
+    return {"status": 200, "body": "SLOW-DONE"}
+
+def fast_handler(req, params):
+    return "FAST"
+
+def p_handler(req, params):
+    return "P:" + params["id"]
+
+def big_handler(req, params):
+    let bt = req["body_tmp"]        # >1MB body 落盘：req.body 为空串，实际数据在 tmp 文件
+    if bt != null:
+        let data = read_file(bt)    # defer 期 handler 读 tmp（须存活；done 回调才清理）
+        return "BT:" + str(len(data))
+    return "B:" + str(len(req["body"]))
+
+def alloc_handler(req, params):
+    var i = 0
+    while i < 200:                  # 大量分配 → 触发 precise GC（挂起表 req/resp 根）
+        let d = {"seed": i}
+        d.set("k" + str(i), {"v": i, "s": "abcdefghijklmnopqrstuvwxyz0123456789"})
+        let l = []
+        l.append(d)
+        l.append([1, 2, 3, 4, 5, 6])
+        i += 1
+    sleep(60)
+    return "A-OK"
+
+def setup():
+    route("GET", "/slow", slow_handler)
+    route("GET", "/fast", fast_handler)
+    route("HEAD", "/fast", fast_handler)
+    route("GET", "/p/:id", p_handler)
+    route("POST", "/big", big_handler)
+    route("GET", "/alloc", alloc_handler)
+    let D = "/tmp/px_m98_s2_docroot"
+    mkdir(D)
+    write_file(D + "/index.txt", "OK")
+    # max_conn=2：刻意压到 2 个 g_pool worker —— 若 handler 同步占线程，20 并发
+    # /slow 需 ~12s 且 /fast 被饿死；协程化后 worker 释放 → 全部 ~1.3s 完成。
+    px_serve(m98_port, D, 30000, {"max_conn": 2})
+
+spawn setup()
+sleep(300000)
+exit(0)

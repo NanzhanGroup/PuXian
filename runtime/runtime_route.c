@@ -298,9 +298,32 @@ static void route_normalize(LXValue v, RouteResp* r) {
 
 // ==================== 请求分派（runtime.c px_conn_worker 调用） ====================
 
-// 执行中间件链 + handler 并发送响应。返回 1 = 已处理（匹配到路由）；0 = 未匹配。
+// M98-S2a：route handler 返回值 → 归一化 + 发送 + 访问日志（段2）。
+//   同步路径（px_route_try_dispatch 内 px_call 后）与协程续处理（px_serve 续 worker
+//   从挂起表取回 stage2 后）共用 —— async/sync 响应语义逐字节一致。
+void px_route_respond(PxHttpOut* out, LXValue req, const char* method, int head_only,
+                      int keep_alive, const char* req_id, LXValue resp) {
+    LXValue path_v = px_dict_get(req, "path");
+    const char* pstr = (path_v.type == PX_STR) ? path_v.as.obj->as.str.data : "?";
+    RouteResp rr;
+    route_normalize(resp, &rr);
+    fprintf(stderr, "[px-serve] [route] %s %s -> %d\n", method, pstr, rr.status);
+    char rsp_extra[512];
+    snprintf(rsp_extra, sizeof(rsp_extra), "X-Request-Id: %s\r\n", req_id);
+    route_send(out, rr.status, rr.ct, rr.body, rr.body_len, head_only, keep_alive, rsp_extra);
+    // M36：route 响应统一访问日志（与解释器 log_access 一致）
+    {
+        LXValue rmt = px_dict_get(req, "remote");
+        const char* lr = (rmt.type == PX_STR) ? rmt.as.obj->as.str.data : "-";
+        px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
+                (long long)time(NULL), lr, method, pstr, rr.status, rr.body_len, req_id);
+    }
+}
+
+// 执行中间件链 + handler 并发送响应。返回 0 = 未匹配；1 = 已处理（同步完成响应）；
+// 2 = 已拆段（route VM handler 帧协程运行中，调用方须释放 worker，done 回调投回续处理）。
 int px_route_try_dispatch(PxHttpOut* out, LXValue req, const char* method, int head_only,
-                          int keep_alive, const char* req_id) {
+                          int keep_alive, const char* req_id, int async_ok) {
     LXValue path_v = px_dict_get(req, "path");
     if (path_v.type != PX_STR) return 0;
     LXValue handler, params;
@@ -370,23 +393,16 @@ int px_route_try_dispatch(PxHttpOut* out, LXValue req, const char* method, int h
     LXValue hargs[2];
     hargs[0] = req;
     hargs[1] = params;
+    // M98-S2a：async_ok + VM route handler → 挂起登记 + 帧协程 spawn（占协程不占 worker）；
+    //   完成回调 px_serve_done 写 resp + px_pool_push 投回 → 续 worker px_route_respond 段2。
+    if (async_ok && px_pxserve_defer_route(out, req, handler, params,
+                                           head_only, keep_alive, req_id)) {
+        px_root_pop();   // M92-S2c precise（req 已入挂起表 GC 根；params 已随 spawn 拷贝）
+        return 2;        // 已拆段：调用方释放 worker，不发送响应
+    }
     LXValue r = px_call(handler, hargs, 2);
     PX_KEEP(r);   // M92-S2c precise：handler px_call 返回值（route_normalize/route_send 期间使用）
-    RouteResp rr;
-    route_normalize(r, &rr);
-    fprintf(stderr, "[px-serve] [route] %s %s -> %d\n", method,
-            path_v.as.obj->as.str.data, rr.status);
-    char rsp_extra[512];
-    snprintf(rsp_extra, sizeof(rsp_extra), "X-Request-Id: %s\r\n", req_id);
-    route_send(out, rr.status, rr.ct, rr.body, rr.body_len, head_only, keep_alive, rsp_extra);
-    // M36：route 响应统一访问日志（与解释器 log_access 一致）
-    {
-        LXValue rmt = px_dict_get(req, "remote");
-        const char* lr = (rmt.type == PX_STR) ? rmt.as.obj->as.str.data : "-";
-        px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
-                (long long)time(NULL), lr, method,
-                path_v.as.obj->as.str.data, rr.status, rr.body_len, req_id);
-    }
+    px_route_respond(out, req, method, head_only, keep_alive, req_id, r);
     px_root_pop();   // M92-S2c precise
     return 1;
 }
