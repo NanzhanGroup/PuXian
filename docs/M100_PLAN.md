@@ -1,6 +1,15 @@
 # M100_PLAN · middleware 链协程化 —— 二期候选第 2 项（D8-② 补缺）
 
-> 状态：🟢 **S1 立项 + D0 侦察 + 设计定稿（本 commit）**。基线 v0.2.0-m99（d0d1f60）。
+> 状态：✅ **M100 完成（S2 链状态机 defer 实现 + S3 收口，tag v0.2.0-m100）**。
+> 基线 v0.2.0-m99（d0d1f60）。S2 验证：examples/m100 verify.sh 11P/0F（并发 20×/slow-mw
+> middleware sleep600 wall=0.60s（同步占 2 worker 需 ~6s+，核心铁证）/ fast 30 不饿死
+> 0.01s / 短路 401/403 / 多段链 null 推进 / keep-alive 5 请求 / 线程峰值 12≤20 /
+> (middleware) 短路日志 / 优雅关闭干净退出）。S3 收口：px_serve 管道直接面回归
+> （m28_route/m29_webprod/m31_vhost/m33_route_rate_limit/m57_s7_vhost_headers 5P +
+> m43_webapp 10P/0F STDOUT==GOLDEN + m98_s2 7P + m99_s2 8P）+ 协程内核 suites
+> 13 套件（m82/m83_s6/m89_s3d/m93_s2/s3/m94_s2/s3/m95_s2/s4/m96_s2/s3/m97_s2/s3）
+> 全绿 + diffcheck --all rc=0 + vm_ab 38P/0GAP/0F + 双自举证明（C 轨 rc=0 + BC 轨
+> 30582 行 dump 逐字节一致）+ pxi/pxi_vm 重链吸收 M100 runtime + 文档。
 > 上游：M98（px_serve route/vhost handler 拆段协程化 —— px_pxserve_defer + PxPend
 > 注册表 + 段2 续处理，本里程碑直接复用其骨架）；M99（px_serve 连接级事件化 IDLE）；
 > M93/M94（帧协程内核 + 抢占）；M96（offload 让出）。M98_PLAN §二 ⚠️ 二期清单第 4 项
