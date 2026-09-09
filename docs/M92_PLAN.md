@@ -1,7 +1,12 @@
 # M92_PLAN · 精确 GC 终极项（退役整栈保守扫描 + 原生桥根登记）
 
-> 状态：🆕 **2026-09-10 立项**（M91 默认轨切 VM + 引导二进制重链吸收 F3-fix 后启动；
-> M89_S3-D 后置决策三件套触发条件「默认轨切 VM」已满足）。
+> 状态：🚧 **进行中（S2b 完成）**。S1 设计定稿 + S2a precise 框架（双模式 + TLS
+> 登记根栈）已合入（2017101）；S2b 语言核心层批量登记已合入（a55a13c）：19 个累积构造桥
+> （bi_range/args/sorted/reversed/split/fd_wait/dns_lookup/list_dir/regex_*/px_add-list/
+> px_slice-list/px_method-dict.keys,values/bi_list-str,dict）+ json 递归 helper
+> （json_parse_value dict/list、json_value_copy list/tuple收集数组逐项/dict、
+> json_path_set_at 整函数多出口）——stress2 SEG3 暴露 json_path_set_at 顶层 base 临时
+> 漏登记后修复。剩余 S2c（vm.c bi_vm_* + ws/route/ffi + 服务池/IO 桥）→ S2d 插桩 → S3 收口。
 > 上游：M89_PLAN §S3-D 后置决策、docs/M89_vm_design.md §六（精确 GC 设计）。
 > 基线：v0.2.0（M91 收口 3bbbee4）。
 
@@ -94,7 +99,7 @@ void px_root_keep(const LXValue* v);      // 登记局部引用（跨可能触�
 |---|---|---|
 | S1 | 设计定稿（本文档）+ D0 量化 | 本文档 + 侦察数据 |
 | S2a | precise 框架：runtime 双模式 + TLS 登记根栈 API + GC 根面接线（并发/单线程）+ 冒烟 | 默认模式全回归不变（diffcheck/vm_ab 抽查）；PX_GC_PRECISE=1 最小用例通过 |
-| S2b | 登记批次 1：runtime.c 核心桥（px_call/px_method 系列 + 容器/字典/字符串/chan/mutex 桥） | precise + 低阈值 PX_GC_THRESHOLD 跑 examples 确定性子集 + m89_s3d stress 无 UAF |
+| S2b | 登记批次 1：runtime.c 语言核心桥（累积构造/递归构造/json helper，19 函数 + 3 helper） | ✅ 完成（a55a13c）：precise 低阈值（thr=400/800）stress1+stress2 与 conservative 逐字节一致；conservative 零回归 m89_s3d 9PASS + vm_ab 38PASS/0GAP/0FAIL。压力集 examples/m92_precise/precise_stress2.px（dict keys/values、json roundtrip、json_path_set 深拷贝链、list 拼接/切片、sorted/reversed、split/join、list(str)、regex find_all/search/split、list_dir）；SEG3 json_path_set 暴露漏登记 → 补 json_path_set_at 整函数 |
 | S2c | 登记批次 2：vm.c bi_vm_* + runtime_ws/route/ffi + runtime.c 服务池/IO 桥 | precise 跑 m82/m83 服务用例 + 并发压测 |
 | S2d | VM 轨产物插桩：bc_emit.px 产物 main 加 px_gc_set_precise(1)（C 轨 codegen 不加） | 默认 px build 产物 precise 运行全量回归绿 |
 | S3 | 收口：precise 全量回归（vm_ab/diffcheck/m89_s3d/m82/m83 + 低阈值压力）+ 重链 bootstrap + 文档 + tag | 全绿 + tag v0.2.0-m92 |
