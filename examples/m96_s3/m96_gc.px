@@ -1,0 +1,38 @@
+# M96-S3 offload GC 根面压力：150 协程 offload http_get（挂起期 off_task args/result
+# 须入精确根面——漏标 = GC 误回收 UAF）+ 1850 纯分配协程；PX_GC_THRESHOLD 低阈值 →
+# 挂起协程 offload 任务被高频 GC 并发标记/存活校验。断言：零崩 + 全部完成。
+def hw(id, done):
+    var r = http_get("http://127.0.0.1:18889/data")   # offload（外包线程）
+    done.send("h" + str(id))
+
+def al(id, done):
+    var d = {"seed": id}
+    var i = 0
+    while i < 60:
+        d.set("k" + str(i), {"v": i, "s": "abcdefghijklmnopqrstuvwxyz0123456789"})
+        i += 1
+    done.send("a" + str(id))
+
+var N_H = 150
+var N_A = 1850
+var done = chan[string](N_H + N_A)
+for i in range(N_H):
+    spawn hw(i, done)
+for i in range(N_A):
+    spawn al(i, done)
+
+var hok = 0
+var aok = 0
+for k in range(N_H + N_A):
+    var m = done.recv()
+    if m.starts_with("h"):
+        hok += 1
+    if m.starts_with("a"):
+        aok += 1
+print("GC hok=" + str(hok) + "/" + str(N_H) + " aok=" + str(aok) + "/" + str(N_A))
+if hok == N_H and aok == N_A:
+    print("GC-OFFLOAD-ROOT-OK")
+    exit(0)
+else:
+    print("GC-OFFLOAD-BAD")
+    exit(1)

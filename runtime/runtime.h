@@ -405,13 +405,14 @@ void px_select_signal(void);
 // ==================== 运行时错误 ====================
 
 void px_error(const char* fmt, ...) __attribute__((noreturn));
-// M96-S2：通用错误捕获点（offload 外包线程用）——setjmp 安装捕获点；px_error →
-//   longjmp 回返回 0（px_error 已打印现场，本线程 TLS 最后错误文本经 px_err_last 取）。
-//   与 px_spawn_isolate_begin 区别：不打印「已隔离」消息（外包线程错误由协程恢复后
-//   重抛，语义与直调一致）。begin 正常返回 1；longjmp 回返回 0。
-int  px_err_capture_begin(void);
-void px_err_capture_end(void);
-const char* px_err_last(void);   // 本线程最后一次 px_error 的格式化文本（捕获方回传用）
+// M96-S2：受保护 native 调用（offload 外包线程用）。setjmp 在本函数内消化 longjmp：
+//   px_call → px_error → longjmp 回本函数 setjmp → return 1（错误已打印现场，errbuf
+//   带回本线程最后一次 px_error 文本）。调用者只见普通一次返回（0=成功 *out 有效；
+//   1=px_error 被捕获）—— 无跨函数 returns_twice 语义泄漏（gcc 对「包装 setjmp 的
+//   helper 返回后分支」优化不可靠：最小复现 -O1/-O2 下调用者把 helper 返回 0 误判为
+//   真 → 死循环/段错误 → 必须同函数消化，不把 setjmp 分支暴露给跨编译单元调用者）。
+int px_native_call_capture(LXValue fn, LXValue* args, int nargs,
+                           LXValue* out, char* errbuf, int errbuf_sz);
 // M72-S2（Issue 10 D1）：编译产物运行时 .px 源位置追踪——cg 在每条可执行语句前
 // 生成 px_srcline(<源行>) 调用、每个用户函数入口生成 px_srcfunc("<函数名>")；
 // px_error 打印最近位置 → 运行时错误带源行号（AI 一次定位）。线程局部（spawn

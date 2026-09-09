@@ -1,0 +1,27 @@
+# M96-S3 offload 错误路径验证（D5 错误回传）：
+# 1) 网络失败 Result 回传：协程 http_get 连接拒绝（18999 无监听）→ Err(result) 作为
+#    普通结果由外包线程传回（网络失败走 Result 非 px_error，M39 语义）→ 协程 is_err()
+#    处理 —— offload 语义与直调一致。
+# 2) px_error 通道：协程 http_get 参数错误（非 str）→ 外包线程 px_error → 捕获回传 →
+#    协程恢复重抛 → worker 隔离（协程异常终止）→ 宿主与其它协程继续（语义 = 直调）。
+def bad_net():
+    var r = http_get("http://127.0.0.1:18999/nope")
+    if r.is_err():
+        print("NET-ERR-OK")
+    else:
+        print("NET-ERR-BAD")
+
+def bad_arg():
+    var r = http_get(123, "x")      # px_error：http_get 需要 str url
+    print("ARG-UNREACHABLE")        # 不应到达（协程已被隔离）
+
+def ok():
+    sleep(300)
+    print("OK-CORO-ALIVE")
+
+spawn bad_net()
+spawn bad_arg()
+spawn ok()
+sleep(1500)
+print("ERR-DONE")
+exit(0)

@@ -640,25 +640,24 @@ static void offload_run_task(PxOffTask* t) {
     if (!t) return;
     // 执行期注册 GC（px_call 内构造普贤对象；precise 模式根 = TLS 登记栈）。
     px_gc_thread_enter();
-    px_root_push();                      // 作用域根标记（错误 longjmp 也统一走 pop）
-    if (px_err_capture_begin()) {
-        LXValue r = px_call(t->fn, t->args, t->nargs);
-        PX_KEEP(r);                      // px_call 返回后保护（写 t->result 前可被 STW）
-        px_err_capture_end();
-        pthread_mutex_lock(&g_coro_mu);  // 发布 result+done（与 GC 标记/消费互斥）
-        t->result = r;
-        t->done = 1;
-        pthread_mutex_unlock(&g_coro_mu);
+    px_root_push();                      // 作用域根标记（结果写 t->result 前被保护）
+    // 受保护 native 调用（runtime.c px_native_call_capture）：px_error → longjmp 在
+    //   函数内消化 → return 1（errbuf 带回错误文本，px_error 已打印外包线程无位置版）。
+    //   本函数只见普通一次返回 —— 无跨函数 setjmp 返回分支优化坑（最小复现证实）。
+    LXValue r = px_null();
+    char errbuf[512];
+    errbuf[0] = 0;
+    int ec = px_native_call_capture(t->fn, t->args, t->nargs, &r, errbuf, (int)sizeof(errbuf));
+    pthread_mutex_lock(&g_coro_mu);      // 发布 result+done（与 GC 标记/消费互斥）
+    if (ec == 0) {
+        t->result = r;                   // PX_KEEP(r) 由 capture 内 keep + 本作用域 push 保护
     } else {
-        // px_error 已打印（外包线程 TLS 无 VM 源位置 → 无位置前缀）；文本经 px_err_last
-        //   回传，由协程恢复后 px_error 重抛（带让出点源位置，语义 = 直调）。
-        const char* lm = px_err_last();
-        snprintf(t->errmsg, sizeof(t->errmsg), "%s", lm && lm[0] ? lm : "外包执行失败");
-        pthread_mutex_lock(&g_coro_mu);
+        snprintf(t->errmsg, sizeof(t->errmsg), "%s",
+                 errbuf[0] ? errbuf : "外包执行失败");
         t->result = px_null();
-        t->done = 1;
-        pthread_mutex_unlock(&g_coro_mu);
     }
+    t->done = 1;
+    pthread_mutex_unlock(&g_coro_mu);
     px_root_pop();                       // 结果已转移 t->result（done=1 后由协程根保护）
     px_gc_thread_leave();
     px_coro_wake(t->coro);               // 入就绪队列唤醒协程（wake 内部 g_coro_mu）

@@ -1,0 +1,125 @@
+# M96-S3 对拍：主线程直调基准 vs 协程 offload（同函数同参数）逐项一致
+# 覆盖名单本地可测全集：http_get / http_post / http_unix / tcp(send+recv) /
+#   udp(send+recv) / dns_lookup / ws(send+recv)。s3_* 需外部 S3 端点（verify.sh 记录跳过）。
+# 每项：直调基准 R0 → spawn 协程 offload 同调 → 逐项比较 == R0 → chan 回传 0/1。
+def rep(ch, tag, ok, extra):
+    if ok:
+        ch.send(tag + ":1")
+    else:
+        ch.send(tag + ":0:" + extra)
+
+def d_http_get():
+    return http_get("http://127.0.0.1:18889/data")
+
+def d_http_post():
+    return http_post("http://127.0.0.1:18889/post", "hello-post")
+
+def d_http_unix():
+    var r = http_unix("/tmp/m96s3.sock", "/hi", "GET")
+    return r["body"]
+
+def d_tcp():
+    var c = tcp_connect("127.0.0.1", 18901)
+    tcp_send(c, "TCP-ECHO-1")
+    var r = tcp_recv(c, 64)
+    tcp_close(c)
+    return r
+
+def d_udp():
+    var u = udp_open(0)
+    udp_send(u, "127.0.0.1", 18902, "UDP-ECHO-1")
+    var r = udp_recv(u, 64)
+    udp_close(u)
+    return r["data"]
+
+def d_dns():
+    var l = dns_lookup("localhost")
+    var s = ""
+    for x in l:
+        s += x + ","
+    return s
+
+def d_ws():
+    var w = ws_connect("127.0.0.1", 18903, "/ws")
+    if w == null:
+        return "connect-fail"
+    ws_send(w, "WS-ECHO-1")
+    var r = ws_recv(w)
+    ws_close(w)
+    return r
+
+# 直调基准（主线程，yield_ok=0 → px_call 直调 pthread 阻塞）
+var b_get = d_http_get()
+var b_post = d_http_post()
+var b_unix = d_http_unix()
+var b_tcp = d_tcp()
+var b_udp = d_udp()
+var b_dns = d_dns()
+var b_ws = d_ws()
+
+var ch = chan[string](7)
+
+def o_http_get():
+    var r = http_get("http://127.0.0.1:18889/data")
+    rep(ch, "get", r == b_get, r)
+
+def o_http_post():
+    var r = http_post("http://127.0.0.1:18889/post", "hello-post")
+    rep(ch, "post", r == b_post, r)
+
+def o_http_unix():
+    var r = http_unix("/tmp/m96s3.sock", "/hi", "GET")
+    rep(ch, "unix", r["body"] == b_unix, "mismatch")
+
+def o_tcp():
+    var c = tcp_connect("127.0.0.1", 18901)
+    tcp_send(c, "TCP-ECHO-1")
+    var r = tcp_recv(c, 64)
+    tcp_close(c)
+    rep(ch, "tcp", r == b_tcp, r)
+
+def o_udp():
+    var u = udp_open(0)
+    udp_send(u, "127.0.0.1", 18902, "UDP-ECHO-1")
+    var r = udp_recv(u, 64)
+    udp_close(u)
+    rep(ch, "udp", r["data"] == b_udp, "mismatch")
+
+def o_dns():
+    var l = dns_lookup("localhost")
+    var s = ""
+    for x in l:
+        s += x + ","
+    rep(ch, "dns", s == b_dns, s)
+
+def o_ws():
+    var w = ws_connect("127.0.0.1", 18903, "/ws")
+    if w == null:
+        ch.send("ws:0:connect-fail")
+        return
+    ws_send(w, "WS-ECHO-1")
+    var r = ws_recv(w)
+    ws_close(w)
+    rep(ch, "ws", r == b_ws, r)
+
+spawn o_http_get()
+spawn o_http_post()
+spawn o_http_unix()
+spawn o_tcp()
+spawn o_udp()
+spawn o_dns()
+spawn o_ws()
+
+var bad = 0
+var bads = ""
+for k in range(7):
+    var m = ch.recv()
+    if m.ends_with(":1") == false:
+        bad += 1
+        bads += m + " "
+if bad == 0:
+    print("NET-ALL-OK")
+    exit(0)
+else:
+    print("NET-BAD:", bads)
+    exit(1)
