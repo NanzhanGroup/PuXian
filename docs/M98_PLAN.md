@@ -1,9 +1,12 @@
 # M98_PLAN · px_serve（route/vhost handler）协程化 —— D8-② 二期收官
 
-> 状态：🟡 **S2a 完成（route handler 协程化：连接注册表+拆段内核）**。基线 v0.2.0-m97
-> （f4b805f，M97 收口后）。S2a 验证：examples/m98_s2 verify.sh 全 PASS（20×/slow
-> max_conn=2 wall≈1.2s / fast 30 不饿死 / keep-alive 续处理 dials=1 / big tmp defer 期
-> 可读 / alloc GC 根 / 线程峰值 11≤18 / 访问日志 67 条对拍）。
+> 状态：✅ **M98 完成（S2a route 拆段 + S2b vhost 拆段 + S3 收口，tag v0.2.0-m98）**。
+> 基线 v0.2.0-m97（f4b805f，M97 收口后）。S2a 验证：examples/m98_s2 verify.sh
+> 全 PASS（20×/slow max_conn=2 wall≈1.2s / fast 30 不饿死 / keep-alive 续处理
+> dials=1 / big tmp defer 期可读 / alloc GC 根 / 线程峰值 11≤18 / 访问日志 70 条对拍）；
+> S2b 增 vhost 并发 10×/vh-slow（wall=807ms）+ vhost null 回退 3×/index.txt keep-alive
+> （dials=1）+ Content-Type 透传。S3 收口：px_serve 核心套件全绿 + 里程碑 suites
+> 13 套件 + vm_ab 38P/0GAP/0F + diffcheck --all + 双自举证明 + pxi/pxi_vm 重链。
 > 承接：**M95_S5_PLAN.md**（2026-09-09 5e171ac 立项，原 M95-S5）—— M97 期间
 > qg-issue 31/32 插入使编号顺延，本文件为 M98 正式计划（M95_S5_PLAN.md 保持有效
 > 作历史快照，本文档以其为基础更新基线/行号/实现决策）。

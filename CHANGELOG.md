@@ -6,6 +6,56 @@
 
 ## [Unreleased]
 
+### M98 · px_serve route/vhost handler 协程化（D8-② 收官）
+
+> M98 = 原 M95-S5（px_serve route/vhost handler 协程化）正式立项（M97 期间 qg-issue
+> 31/32 插入顺延编号）。commit 链：1d3168b（S1 立项 + D0 复核 + 范围决策）+ fdc2160
+> （S2a route 拆段）+ 448c0d3（S2b vhost 拆段 + null 回退）+ 本 commit（S3 收口 +
+> tag v0.2.0-m98）。规划 docs/M98_PLAN.md；早期侦察快照 docs/M95_S5_PLAN.md。
+> - **背景**：px_serve（M31.4b g_pool）每连接一个常驻线程跑 px_conn_worker 阻塞
+>   keep-alive 到连接关闭（PxConn 为栈对象）→ route/vhost VM handler 长业务
+>   （sleep/chan/spawn）占死 worker → 慢请求数 ≥ worker 数即饿死全系统。D0 复核
+>   确认不可直接平移 http/sse 的 http_pend（px_serve handler 调用点深埋
+>   px_http_dispatch + PxConn 栈对象跨 worker 释放即丢）→ 需连接堆化注册表 +
+>   管道拆段内核，独立里程碑量级。
+> - **S2a（连接堆化注册表 + route handler 拆段内核）**：PxPend 连接注册表
+>   （fd→堆 PxConn*，TLS 会话/读缓冲跨 g_pool worker 存活；独立锁 g_pxpend_mu +
+>   SIG_GC_STOP 屏蔽 + fd 复用 active=0 防串扰）；px_conn_worker 连接槽取/建
+>   （新建锁外握手）+ 续处理入口 + DEFER 释放 worker；px_http_dispatch 返回码化
+>   （0=同步完成/1=已拆段）+ async_ok 开关（H3/其余传 0 → 原同步路径逐字节零变化）；
+>   route 命中 VM handler → px_pxserve_defer（stage1 + req 入 GC 根 +
+>   px_coro_spawn_ex(handler,[req,params],done,fd)）→ worker 释放；done（coro
+>   worker）stage2 + px_pool_push 投回；段2 px_route_respond（async/sync 响应语义
+>   逐字节一致）+ 访问日志；GC 标记期 px_pxserve_pend_gc_mark 补标挂起 req/resp
+>   （precise 必须，漏标=UAF）。
+> - **S2b（vhost VM handler 拆段 + null 回退续管道）**：px_pxserve_defer 泛化
+>   （hargs/nargs + kind=0 route/1 vhost + vroot）；px_http_dispatch 增 skip_pre：
+>   CORS/限流/vhost 段1 包 `if(!skip_pre)`（vhost null 回退续管道重入不双计）；
+>   vhost handler 命中 VM → defer(kind=1) 拆段；段2 kind 分派 —— route →
+>   px_route_respond；vhost resp 非 null → px_vhost_respond（公共函数，M57-S7 白名单
+>   响应头透传，无访问日志=vhost 历史语义）；resp null → store vroot + 重入
+>   px_http_dispatch(skip_pre=1) 续 route+静态/.px（续管道内 route 再拆段 → 再释放
+>   等二次投回）。未命中 VM / H3 / 原生 handler → 同步路径零变化。
+> - **验证（全绿）**：examples/m98_s2 verify.sh —— 并发 20×/slow（max_conn=2）
+>   wall≈1.2s（同步占线程≈12s）+ fast 30 不饿死（wall≈40ms）+ keep-alive 顺序
+>   2×/slow（dials=1 续处理）+ /p/:id 路径参数跨 defer + /big 1.5MB body tmp defer
+>   期可读 + /alloc ×10 precise GC 挂起表根 + **vhost 并发 10×/vh-slow
+>   （wall=807ms，同步≈4s）+ vhost null 回退 3×/index.txt（dials=1）+ Content-Type
+>   透传（段2 normalize）** + 访问日志对拍 + 线程峰值 11≤18。
+> - **收口回归**：px_serve 核心套件 m28_route / m29_webprod / m31_vhost /
+>   m33_route_rate_limit / m57_s7_vhost_headers + m53_s4 HTTP/1.1 共享管道全绿
+>   （H3/QUIC 部分依赖 ngtcp2+aioquic 外部库，本环境缺 → HTTP/1.1 管道回归覆盖）；
+>   里程碑 suites m82/m83_s6/m89_s3d/m93_s2/s3/m94_s2/s3/m95_s2/s4/m96_s2/s3/
+>   m97_s2（重跑 3/0）/m97_s3 全绿 + vm_ab 38P/0GAP/0F + diffcheck --all rc=0 +
+>   双自举证明（BCModule dump 30582 行 + B.c 15060 行均与 golden 逐字节一致）。
+> - **重链**：bootstrap/pxi（C 轨解释器，9,504,592 → 9,513,200B）与 bootstrap/pxi_vm
+>   （VM 轨，9,334,360 → 9,342,968B）吸收 M98 runtime（px_pxserve_defer/px_vhost_respond/
+>   px_pxserve_pend_gc_mark 链入）；双轨 hello stdout 逐字节一致。compiler_new/vm 未
+>   重链（M98 runtime 改动在 px_serve 网络层，compiler 执行路径不触网络；--fresh 可重建）。
+> - **二期候选（另立里程碑）**：px_serve 连接级事件化 IDLE（keep-alive 空闲不占
+>   g_pool 线程）、h2 连接 handler 协程化、.px 子进程池协程化、middleware 链协程化、
+>   px_serve CORS/限流 middleware 链拆段。
+
 ### M97 · 连接复用生命周期缺陷修复（qg-issue 31 客户端 + 32 服务端）
 
 > M97 = 清歌（qingge）新 issue 31/32 立项；原 M97（px_serve route/vhost handler
