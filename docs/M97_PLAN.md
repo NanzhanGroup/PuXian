@@ -1,6 +1,13 @@
 # M97_PLAN · 连接复用生命周期缺陷修复（qg-issue 31 客户端 + 32 服务端）
 
-> 状态：🆕 **M97 立项（2026-09-10）**：D0 侦察两 issue 代码级证据落定 + 设计定稿 + S 拆分。
+> 状态：✅ **M97 完成（2026-09-10）**：S2（F31 客户端：h_exchange 协议感知 keep_alive
+>   + 池死连接自动新建重发）与 S3（F32 服务端：px_send_all 全量写 + 响应入内核才交还
+>   IDLE + 裸 send 全替换）一次落地；examples/m97_s2（4 PASS，旧 runtime pxi 对拍
+>   ok=15/30 奇偶失败精确复现）+ m97_s3（6 PASS，Go keep-alive 单连接复用 100 请求
+>   含 2MB 大响应 100/100 零悬挂零丢 + audit==100 对拍）新增套件全绿；全量回归
+>   （m89_s3d 9 + m93_s2/s3 12 + m94_s2/s3 8 + m95_s2 14 + m95_s4 10 + m96_s2/s3 17 +
+>   m82/m83_s6 + vm_ab 38P/0GAP/0F + diffcheck --all）+ 双自举证明 + pxi/pxi_vm 重链
+>   吸收 M97 runtime + tag v0.2.0-m97。
 > 来源：qingge（清歌）——Issue 31（Mahesvara proxy_forward 反代实测：http_request 客户端
 >   keep-alive 误判 HTTP/1.0 死连接回池 → 复用失败奇偶失败）+ Issue 32（晨曦 token-cache
 >   网关实测：http_serve_unix 服务端 keep-alive 长连响应悬挂/偶发丢失 → 1s fail-closed

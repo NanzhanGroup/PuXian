@@ -1,0 +1,35 @@
+# M97-S2（qg-issue 31）验证客户端：连续 N 次 http_request 打 HTTP/1.0 上游
+# ------------------------------------------------------------
+# 修复前：第 1 次新建连接成功（keep_alive 误判 → 死连接回池）→ 第 2 次取死连接
+#   失败（默认 retries=1 无自动重连）→ 第 3 次新建成功 → 奇偶失败（1/3/5 成、2/4/6 败）。
+# 修复后：① h_exchange 判 HTTP/1.0 → keep_alive=0 → 死连接不回池；
+#   ② 即便池中残有死连接（对端抢先关等），复用失败自动丢弃新建重发一次 → 零失败。
+# 网络失败返回 Err result（type(r)=="result"）；成功返回 dict{status,headers,body}。
+# 断言：N 次全部 status==200（bad==0）→ 打印 M97S2_CLIENT_ALL_OK_<N> 退出 0。
+def main():
+    n = 30
+    ok = 0
+    bad = 0
+    i = 0
+    while i < n:
+        var r = http_request("http://127.0.0.1:18890/x", "GET")
+        if type(r) == "result":
+            bad = bad + 1
+            if bad <= 3:
+                print("req#" + str(i) + " ERR: " + str(r))
+        else:
+            if r["status"] == 200:
+                ok = ok + 1
+            else:
+                bad = bad + 1
+                if bad <= 3:
+                    print("req#" + str(i) + " status=" + str(r["status"]))
+        i = i + 1
+    print("ok=" + str(ok) + " bad=" + str(bad))
+    if bad == 0:
+        print("M97S2_CLIENT_ALL_OK_" + str(ok))
+        exit(0)
+    print("M97S2_CLIENT_FAILS_" + str(bad))
+    exit(1)
+
+main()

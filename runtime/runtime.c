@@ -8584,10 +8584,17 @@ static int h_exchange(HPoolSlot* slot, const char* req, int rlen,
         if (len > 65536) { xfree(buf); return -1; }
     }
     // 解析状态码 + 头部
+    // M97-S2（qg-issue 31）：解析响应协议版本——keep_alive 判定须按 HTTP 版本语义
+    //   （RFC 7230 §6.3：HTTP/1.1 默认复用、显式 close 才关；HTTP/1.0 默认短连接、
+    //   须显式 Connection: keep-alive 才可复用）。修复前版本被 %*s 直接跳过 →
+    //   HTTP/1.0 上游（无 Connection 头 + Content-Length、发完即关）的死连接被
+    //   误判可复用回池 → 二次请求取死连接失败（清歌 Mahesvara 反代奇偶失败实测）。
     int status = 0;
+    int resp10 = 0;
+    if (strncmp(buf, "HTTP/1.0", 8) == 0 && (buf[8] == ' ' || buf[8] == '\r')) resp10 = 1;
     sscanf(buf, "HTTP/%*s %d", &status);
     *out_headers = px_dict();
-    int chunked = 0, gzip = 0, keep_alive = 1;
+    int chunked = 0, gzip = 0, keep_alive = resp10 ? 0 : 1;
     int content_length = -1;
     char* hline = buf;
     char* hend = buf + header_end;
@@ -8611,7 +8618,12 @@ static int h_exchange(HPoolSlot* slot, const char* req, int rlen,
             if (strcasecmp(k, "Content-Length") == 0) content_length = atoi(v);
             if (strcasecmp(k, "Transfer-Encoding") == 0 && strstr(v, "chunked")) chunked = 1;
             if (strcasecmp(k, "Content-Encoding") == 0 && strstr(v, "gzip")) gzip = 1;
-            if (strcasecmp(k, "Connection") == 0 && strcasecmp(v, "close") == 0) keep_alive = 0;
+            // M97-S2：协议感知 keep_alive——Connection: close 一律关；
+            //   HTTP/1.0 显式 Connection: keep-alive 才置可复用（覆盖初值 0）。
+            if (strcasecmp(k, "Connection") == 0) {
+                if (strcasecmp(v, "close") == 0) keep_alive = 0;
+                else if (resp10 && strcasecmp(v, "keep-alive") == 0) keep_alive = 1;
+            }
             px_dict_set(*out_headers, k, px_str(v));
         }
         hline = eol + 2;
@@ -8771,9 +8783,16 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
     // 不并入 req 缓冲 → 二进制 bytes（含 \0）任意大小安全；顺带修复原 body 塞入
     // 16KB req 缓冲的大 payload 溢出。Content-Length 已按 body_n 长度感知。
     int max_attempts = retries;
+    // M97-S2（qg-issue 31）：池中死连接（HTTP/1.0 误判回池 / 对端已关）复用失败时
+    //   自动丢弃并新建连接重发一次（不消耗 attempt 预算）——修复前默认 retries=1
+    //   时池连接失败路径直接返回 Err（奇偶失败：1/3/5 新建成功、2/4/6 取死连接失败）。
+    //   安全性：池连接复用首次 IO 失败 = 连接已死（请求未发出或未收到任何业务响应
+    //   字节），重发无半响应污染；仅「新建连接」失败才按原 attempt 预算返回 Err。
+    int dead_rebuilt = 0;
     for (int attempt = 0; attempt < max_attempts; attempt++) {
         HPoolSlot slot;
-        if (hpool_take(key, &slot) != 0) {
+        int from_pool = (hpool_take(key, &slot) == 0);
+        if (!from_pool) {
             // 池中无空闲连接：新建（http 明文 TCP；https TLS 握手）
             slot.is_tls = is_https;
             slot.fd = -1;
@@ -8812,7 +8831,14 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
         }
         if (slot.tls) https_close(slot.tls);
         close(slot.fd);
-        if (attempt < max_attempts - 1) continue; // 池连接失效重试
+        if (from_pool && !dead_rebuilt) {
+            // 池连接复用失败（死连接）→ 丢弃重建：不消耗 attempt（for 的 attempt++
+            //   抵消本处 attempt--），下一轮池已空 → 新建连接重发一次。
+            dead_rebuilt = 1;
+            attempt--;
+            continue;
+        }
+        if (attempt < max_attempts - 1) continue; // 新建连接失败重试（原 retries 语义）
         return px_net_err("net: http_request 失败: 连接关闭");
     }
     return px_null();
@@ -10322,6 +10348,33 @@ static int px_fd_readable_now(int fd) {
     return r > 0 && (pfd.revents & (POLLIN | POLLHUP | POLLERR));
 }
 
+// M97-S3（qg-issue 32）：非阻塞 fd 全量写——循环 send，EAGAIN/EWOULDBLOCK →
+//   poll(POLLOUT, 15s 写超时) 等可写续写；EINTR 重试；EPIPE/ERR/超时 → -1。
+//   修复前 http_send_resp 等用单次裸 send 不检查返回值：非阻塞 fd 高水位时 send
+//   返回 EAGAIN 或部分字节 → 响应截断且不重试 → 交还 IDLE 后事件循环只等可读，
+//   剩余响应永不写出 → 悬挂至 15s 空闲超时 close（清歌 token-cache 1s fail-closed
+//   误报根因）。全量入内核后才交还 IDLE，事件循环无需关心写侧。
+//   调用方（worker 线程）：写失败返回 -1 → 连接已不可续（对端关/半关/持续不读），
+//   应收尾 px_evc_close，不得进 keep-alive 判定。
+static int px_send_all(int fd, const char* data, size_t len) {
+    size_t off = 0;
+    while (off < len) {
+        ssize_t w = send(fd, data + off, len - off, 0);
+        if (w > 0) { off += (size_t)w; continue; }
+        if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) return -1;
+        if (w < 0 && errno == EINTR) continue;
+        // EAGAIN / 部分写 0：等可写（15s 写超时——对端持续不读 → 放弃，防 worker 无限挂）
+        struct pollfd pfd;
+        pfd.fd = fd; pfd.events = POLLOUT; pfd.revents = 0;
+        int r = poll(&pfd, 1, 15000);
+        if (r <= 0) return -1;   // 超时 / poll 错误
+        if (pfd.revents & (POLLERR | POLLNVAL)) return -1;
+        if (pfd.revents & POLLOUT) continue;   // 可写 → 再 send
+        return -1;
+    }
+    return 0;
+}
+
 // 连接处理线程（px_spawn 注册）：args[0] = fd
 // ==================== M23c HTTP 服务端 keep-alive（双模式：与解释器 builtin.rs 一致） ====================
 static const char* px_file_content_type(const char* path);
@@ -10346,6 +10399,7 @@ static int http_send_resp(int fd, LXValue req, LXValue resp, int method_head, in
         // 流式文件响应
         const char* fpath = file_v.as.obj->as.str.data;
         FILE* f = fopen(fpath, "rb");
+        int werr = 0;
         if (f) {
             fseek(f, 0, SEEK_END);
             long fsz = ftell(f);
@@ -10355,21 +10409,17 @@ static int http_send_resp(int fd, LXValue req, LXValue resp, int method_head, in
             int hl = snprintf(hdr, sizeof(hdr),
                               "HTTP/1.1 200 OK\r\nContent-Length: %ld\r\nContent-Type: %s\r\nConnection: close\r\n\r\n",
                               fsz, ct2);
-            if (hl > 0) send(fd, hdr, (size_t)hl, 0);
+            // M97-S3：全量写（非阻塞 fd 高水位 EAGAIN/部分写 → poll POLLOUT 续写）
+            if (hl > 0 && px_send_all(fd, hdr, (size_t)hl) != 0) werr = 1;
             char fbuf[65536];
             size_t rd;
-            while ((rd = fread(fbuf, 1, sizeof(fbuf), f)) > 0) {
-                size_t off = 0;
-                while (off < rd) {
-                    ssize_t w = send(fd, fbuf + off, rd - off, 0);
-                    if (w <= 0) { off = rd; break; }
-                    off += (size_t)w;
-                }
+            while (!werr && (rd = fread(fbuf, 1, sizeof(fbuf), f)) > 0) {
+                if (px_send_all(fd, fbuf, rd) != 0) { werr = 1; break; }
             }
             fclose(f);
         } else {
             const char* notfound = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-            send(fd, notfound, (int)strlen(notfound), 0);
+            if (px_send_all(fd, notfound, strlen(notfound)) != 0) werr = 1;
         }
         px_evc_close(fd);
         return 0;
@@ -10382,7 +10432,13 @@ static int http_send_resp(int fd, LXValue req, LXValue resp, int method_head, in
             char* sep = strstr(out, "\r\n\r\n");
             if (sep) out_len = (int)(sep - out) + 4;
         }
-        if (out_len > 0) send(fd, out, out_len, 0);
+        // M97-S3：响应字节全量入内核后才交还 IDLE（单次裸 send → px_send_all 循环写；
+        //   修复前非阻塞 fd 高水位 EAGAIN/部分写 → 响应截断，交 IDLE 后剩余永不写出）
+        if (out_len > 0 && px_send_all(fd, out, (size_t)out_len) != 0) {
+            xfree(out);
+            px_evc_close(fd);   // 写失败：对端关/半关/持续不读 → 收尾，不留半写连接进 keep-alive
+            return 0;
+        }
         xfree(out);
     }
     // 8. keep-alive 判定：需关闭 → 统一 px_evc_close（清理连接上下文，防 fd 复用串扰）
@@ -10527,7 +10583,7 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
             }
             if (content_length > body_max) {
                 const char* r413 = "HTTP/1.1 413 Payload Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-                send(fd, r413, (int)strlen(r413), 0);
+                px_send_all(fd, r413, strlen(r413));   // M97-S3：全量写（尽力；随即 close）
                 px_evc_close(fd);
                 px_root_pop();   // M92-S2c precise
                 return px_null();
