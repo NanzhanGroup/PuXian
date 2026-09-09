@@ -1,0 +1,17 @@
+# M94-S3 验证：sleep 定时并入调度循环（退役独立 timer 线程）
+# ------------------------------------------------------------
+# 背景：M93 sleep 让出由独立 timer 线程到点唤醒（g_timer_mu/cond + coro_timer_thread）。
+# M94-S3：g_sleepers 移入 g_coro_mu 单锁保护，worker 取协程前置摘到期者入就绪、
+#   就绪空时 cond_timedwait 到最近到期 → 无专职 timer 线程。
+# 本用例：20 协程各 sleep(2000ms) → shell 在 0.8s 窗口抓 /proc/PID/status 线程数：
+#   WORKERS=4 时预期 5 线程（4 worker + 1 main）—— 旧版含 timer 线程会是 6。
+def slp(i):
+    sleep(2000)
+
+let N = 20
+for i in range(N):
+    spawn slp(i)
+sleep(1200)
+print("TIMER-THR SLEEPERS=" + str(N))
+sleep(2000)
+print("TIMER-THR DONE")

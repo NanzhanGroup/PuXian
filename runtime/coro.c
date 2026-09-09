@@ -31,6 +31,13 @@
 //     F3-fix 同模式：GC STW 只暂停在岗 worker，不因空闲 worker 空转放大开销。
 //   - sleep timer 线程不注册 GC（不持 px 对象，只操作就绪队列/定时链表）→ 不
 //     被 STW 暂停，持 g_timer_mu 总会放锁，与 GC 拿 g_coro_mu 无死锁。
+//   - M94-S3：定时器并入调度循环（单锁 g_coro_mu 保护 g_sleepers + g_rq）——退役
+//     独立 timer 线程与 g_timer_mu/g_timer_cond；worker 取协程前置摘到期 sleeper
+//     入就绪、就绪空时 cond_timedwait 到最近到期。锁序问题随单锁收敛消除。
+//   - M94-S2：抢占式时间片 —— vm_run_loop 每 4096 条指令查 px_coro_preempt_check
+//     （本次运行 ≥ quantum → return 2）；worker 把协程直接放回就绪队尾轮转
+//     （协程未登记等待 → 无唤醒源 → 无 lost-wakeup/双执行竞态）。PX_CORO_QUANTUM_US
+//     默认 5000us，0=关闭（回归 M93 无抢占语义逃生阀）。
 // ============================================================
 #include "vm.h"
 #include <stdio.h>
@@ -75,11 +82,11 @@ static int     g_coro_seq = 0;
 static volatile int g_coro_diag = -1;   // PX_CORO_DIAG=1 诊断输出
 static __thread PxCoro* g_cur_coro = NULL;  // M93-S3：当前 worker 正在执行的协程
 
-// ---- M93-S3：sleep 定时器（timer 线程到点唤醒）----
-static pthread_mutex_t g_timer_mu   = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t  g_timer_cond = PTHREAD_COND_INITIALIZER;
-static PxCoro* g_sleepers = NULL;        // 按 due_us 升序
-static int     g_timer_started = 0;
+// ---- M94-S3：sleep 定时表（并入调度循环，g_coro_mu 保护 —— 无独立 timer 线程）----
+// g_sleepers 按 due_us 升序。登记 = 持 g_coro_mu 升序插入；摘取 = worker 取就绪
+//   协程前在 g_coro_mu 内把到期者摘入就绪队列（见 coro_worker）。单锁收敛消除了
+//   旧双锁（g_timer_mu→g_coro_mu）的锁序问题；无专职 timer 线程 → 线程数再 -1。
+static PxCoro* g_sleepers = NULL;        // 按 due_us 升序（M94-S3：g_coro_mu 保护）
 static long long g_quantum_us = -1;  // M94-S2：抢占时间片 us；PX_CORO_QUANTUM_US
                                      //   （0=关、<200 夹 200、>1e6 夹 1e6；-1=未初始化）
 
@@ -135,55 +142,12 @@ void px_coro_wake(struct PxCoro* c) {
     pthread_cond_signal(&g_coro_cond);
 }
 
-// ---- M93-S3：timer 线程（sleep 让出协程到点唤醒）----
-// 循环不变量：持 g_timer_mu 摘到期者入 batch；仅当 batch 空时才 wait
-//   （有未来到期 → timedwait 最近点；无 sleeper → cond_wait 等登记 signal）；
-//   摘到到期者（batch 非空）→ 立即 unlock + wake（若摘完仍 wait 会漏 wake 且
-//   持锁死等 —— 已修复：batch 非空时不进入任何 wait）。
-static void* coro_timer_thread(void* arg) {
-    (void)arg;
-    for (;;) {
-        PxCoro* batch = NULL;
-        pthread_mutex_lock(&g_timer_mu);
-        long long now = coro_now_us();
-        while (g_sleepers && g_sleepers->due_us <= now) {   // 摘链到期协程
-            PxCoro* c = g_sleepers;
-            g_sleepers = c->s_next;
-            c->s_next = batch; batch = c;
-        }
-        if (!batch) {
-            if (g_sleepers) {
-                struct timespec ts;
-                clock_gettime(CLOCK_REALTIME, &ts);
-                long long rel = g_sleepers->due_us - now;
-                if (rel < 1) rel = 1;
-                ts.tv_sec += rel / 1000000;
-                ts.tv_nsec += (rel % 1000000) * 1000;
-                if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
-                pthread_cond_timedwait(&g_timer_cond, &g_timer_mu, &ts);  // 绝对时间
-            } else {
-                pthread_cond_wait(&g_timer_cond, &g_timer_mu);
-            }
-        }
-        // batch 非空或 wait 被唤醒 → unlock 后 wake（循环顶重新摘/计算）
-        pthread_mutex_unlock(&g_timer_mu);
-        for (PxCoro* c = batch; c; ) { PxCoro* nx = c->s_next; c->s_next = NULL; px_coro_wake(c); c = nx; }
-    }
-    return NULL;
-}
-
-static void coro_ensure_timer(void) {
-    if (g_timer_started) return;
-    pthread_mutex_lock(&g_timer_mu);
-    if (!g_timer_started) {
-        pthread_t t;
-        if (pthread_create(&t, NULL, coro_timer_thread, NULL) == 0) pthread_detach(t);
-        g_timer_started = 1;
-    }
-    pthread_mutex_unlock(&g_timer_mu);
-}
-
-// ---- worker 线程：循环取就绪协程执行（跑到让出或完成）----
+// ---- worker 线程：循环取就绪协程执行（跑到让出/抢占/完成）----
+// M94-S3：定时摘取并入本循环 —— 取就绪前先摘到期 sleeper 入就绪队列（等效原
+//   timer 线程 px_coro_wake，内联避免二次入队）；就绪空且有未来 sleeper →
+//   cond_timedwait 到最近到期（绝对时间，到期自醒重摘）；就绪空且无 sleeper →
+//   cond_wait 等唤醒（新协程入队 / 新 sleeper 头登记 signal）。任一空闲 worker
+//   承担到点摘取职责，无专职 timer 线程。
 static void* coro_worker(void* arg) {
     (void)arg;
     for (;;) {
@@ -192,8 +156,38 @@ static void* coro_worker(void* arg) {
         px_gc_block_stop_sig(&old);
         pthread_mutex_lock(&g_coro_mu);
         PxCoro* c = NULL;
-        while (!g_rq) {
-            pthread_cond_wait(&g_coro_cond, &g_coro_mu);
+        for (;;) {
+            // 1) 摘到期 sleeper 入就绪队列（唤醒规则同 px_coro_wake：RUNNING →
+            //    wake_pending 由让出 worker 自入队；BLOCKED → 直接入队 READY）
+            long long now = coro_now_us();
+            while (g_sleepers && g_sleepers->due_us <= now) {
+                PxCoro* s = g_sleepers;
+                g_sleepers = s->s_next;
+                s->s_next = NULL;
+                if (s->state == CORO_RUNNING) {     // 还在让出返回路径（登记未完成）
+                    s->wake_pending = 1;            //   让出 worker 置 BLOCKED 后自入队
+                } else if (s->state == CORO_BLOCKED) {
+                    s->state = CORO_READY;
+                    if (g_rq_tail) g_rq_tail->next = s; else g_rq = s;
+                    g_rq_tail = s;
+                }
+                // 其它态（READY/DONE/异常）理论不达：sleeper 只被定时摘取，忽略
+            }
+            if (g_rq) break;                        // 就绪非空（含刚摘的 sleeper）→ 取队首
+            if (g_sleepers) {                       // 无就绪、有未来 sleeper → 等到最近到期
+                struct timespec ts;
+                clock_gettime(CLOCK_REALTIME, &ts);
+                long long rel = g_sleepers->due_us - now;
+                if (rel < 1) rel = 1;
+                ts.tv_sec += rel / 1000000;
+                ts.tv_nsec += (rel % 1000000) * 1000;
+                if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
+                pthread_cond_timedwait(&g_coro_cond, &g_coro_mu, &ts);
+            } else {
+                pthread_cond_wait(&g_coro_cond, &g_coro_mu);
+            }
+            // 醒来：cond_signal（新就绪 / 新 sleeper 头登记）或 timedwait 到期 →
+            //   循环顶重摘（多个 worker 同刻醒来也只会有一个摘到，其余回 wait）
         }
         c = g_rq;
         g_rq = c->next;
@@ -473,19 +467,22 @@ int px_coro_rwlock_wait_w(LXValue m) {
 int px_coro_sleep_us(long long us) {
     if (!g_cur_coro) return 0;
     if (us <= 0) return PX_CORO_WAIT_RETRY;
-    coro_ensure_timer();
     PxCoro* c = g_cur_coro;
     c->due_us = coro_now_us() + us;
     sigset_t old;
     px_gc_block_stop_sig(&old);
-    pthread_mutex_lock(&g_timer_mu);
-    PxCoro** pp = &g_sleepers;                       // 按到期升序插入
+    pthread_mutex_lock(&g_coro_mu);            // M94-S3：单锁（与就绪队列同锁）
+    PxCoro** pp = &g_sleepers;                 // 按到期升序插入
     while (*pp && (*pp)->due_us <= c->due_us) pp = &(*pp)->s_next;
     c->s_next = *pp;
     *pp = c;
-    pthread_mutex_unlock(&g_timer_mu);
+    int is_head = (g_sleepers == c);           // 成为新的最近到期？
+    pthread_mutex_unlock(&g_coro_mu);
     px_gc_unblock_stop_sig(&old);
-    pthread_cond_signal(&g_timer_cond);              // 新最近到期 → timer 重算
+    if (is_head) pthread_cond_signal(&g_coro_cond);  // 早于 worker 当前 timedwait 目标
+                                                      //   → 唤醒一个 worker 重算 deadline；
+                                                      //   非头则已有更早 sleeper，worker 必
+                                                      //   已 timedwait 到 ≤ 本 due，无需打扰
     return PX_CORO_WAIT_BLOCKED;
 }
 
