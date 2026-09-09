@@ -31,7 +31,15 @@ file /tmp/m98s2_go | grep -q "statically linked"
 chk "Go 客户端静态链接" $?
 
 SRV_PID=0
-cleanup() { if [ -n "$SRV_PID" ] && [ "$SRV_PID" -gt 0 ] 2>/dev/null; then kill $SRV_PID 2>/dev/null; wait $SRV_PID 2>/dev/null; fi; SRV_PID=0; }
+cleanup() {
+    if [ -n "$SRV_PID" ] && [ "$SRV_PID" -gt 0 ] 2>/dev/null; then
+        kill $SRV_PID 2>/dev/null
+        for i in $(seq 1 30); do kill -0 $SRV_PID 2>/dev/null || break; sleep 0.1; done
+        kill -9 $SRV_PID 2>/dev/null   # daemon 优雅关闭等待 keep-alive 空闲连接超时 → 兜底强杀
+        wait $SRV_PID 2>/dev/null
+    fi
+    SRV_PID=0
+}
 trap cleanup EXIT
 
 echo "── 启动 px_serve daemon（max_conn=2；PX_GC_THRESHOLD=1000 precise 低阈值）"

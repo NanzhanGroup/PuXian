@@ -395,7 +395,7 @@ int px_route_try_dispatch(PxHttpOut* out, LXValue req, const char* method, int h
     hargs[1] = params;
     // M98-S2a：async_ok + VM route handler → 挂起登记 + 帧协程 spawn（占协程不占 worker）；
     //   完成回调 px_serve_done 写 resp + px_pool_push 投回 → 续 worker px_route_respond 段2。
-    if (async_ok && px_pxserve_defer_route(out, req, handler, params,
+    if (async_ok && px_pxserve_defer(out, req, handler, hargs, 2, 0, NULL,
                                            head_only, keep_alive, req_id)) {
         px_root_pop();   // M92-S2c precise（req 已入挂起表 GC 根；params 已随 spawn 拷贝）
         return 2;        // 已拆段：调用方释放 worker，不发送响应

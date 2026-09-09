@@ -467,12 +467,15 @@ int px_route_try_dispatch(PxHttpOut* out, LXValue req, const char* method, int h
 //   从挂起表取回 stage2 后）共用 —— 保证 async/sync 响应语义逐字节一致。
 void px_route_respond(PxHttpOut* out, LXValue req, const char* method, int head_only,
                       int keep_alive, const char* req_id, LXValue resp);
-// M98-S2a（runtime.c 实现）：px_serve route handler 挂起登记 + 帧协程 spawn。
-//   命中 VM route handler（handler.type==PX_FUNC && fn==px_vm_entry）且连接在 px 挂起
-//   注册表（stage 0）→ stage=1 + req 入 GC 根 + px_coro_spawn_ex(handler,[req,params],
-//   done) → 返回 1（调用方返回 DEFER）；否则返回 0（调用方走原同步直调路径）。
-int px_pxserve_defer_route(PxHttpOut* out, LXValue req, LXValue handler, LXValue params,
-                           int head_only, int keep_alive, const char* req_id);
+// M98-S2a/S2b（runtime.c 实现）：px_serve route/vhost handler 挂起登记 + 帧协程 spawn。
+//   命中 VM handler（handler.type==PX_FUNC && fn==px_vm_entry）且连接在 px 挂起
+//   注册表（stage 0）→ stage=1 + kind/vroot 记录 + req 入 GC 根 + px_coro_spawn_ex
+//   (handler, hargs, nargs, done) → 返回 1（调用方返回 DEFER）；否则返回 0（调用方走
+//   原同步直调路径）。kind=0 route（段2 px_route_respond）/ 1 vhost（段2 respond 或
+//   null 回退续管道）。
+int px_pxserve_defer(PxHttpOut* out, LXValue req, LXValue handler, LXValue* hargs, int nargs,
+                     int kind, const char* vroot, int head_only, int keep_alive,
+                     const char* req_id);
 // M98-S2a：px 连接挂起表 GC 补标（gc 标记期调用；同 http_pend_gc_mark）
 void px_pxserve_pend_gc_mark(void);
 // M28 P1：SQLite 绑定（runtime_sqlite.c）

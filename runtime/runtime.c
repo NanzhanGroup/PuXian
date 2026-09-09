@@ -13778,6 +13778,26 @@ static int px_resp_gzipable(LXValue* headers, const char* ct, int body_len) {
 }
 
 
+// ==================== M98-S2b：vhost handler 响应（同步/异步段2 共用） ====================
+// vhost handler 返回非 null → vhost_normalize（M57-S7 白名单响应头）+ respond；返回
+// null → 空操作（调用方续 docroot 管道）。vhost 历史语义：无访问日志。
+static void px_vhost_respond(PxHttpOut* pout, const char* method, int head_only,
+                             int keep_alive, const char* req_id, LXValue r) {
+    if (r.type == PX_NULL) return;
+    int vst = 200;
+    const char* vct = "text/plain; charset=utf-8";
+    const char* vbody = "";
+    int vblen = 0;
+    char extra[1024];
+    int extra_off = snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
+    if (extra_off < 0 || extra_off >= (int)sizeof(extra)) extra_off = (int)sizeof(extra) - 1;
+    // M57-S7：vhost handler dict 自定义响应头（Location/Cache-Control/Set-Cookie/CORS 等）
+    // 白名单透传——修复 BUG_REPORT：此前仅透传 Content-Type，其余响应头全丢
+    px_vhost_normalize(r, &vst, &vct, &vbody, &vblen,
+                       extra + extra_off, (int)sizeof(extra) - extra_off);
+    pout->respond(pout, vst, vct, vbody, vblen, head_only, keep_alive, extra);
+    (void)method;
+}
 // ==================== M53-S2：公共请求管道（px_http_dispatch） ====================
 // req dict 就绪（method/path/query/headers/body/cookie/form/remote）→ 输出响应。
 // 纯重构自 px_conn_worker（HTTP/1.1 请求处理）：所有响应经 PxHttpOut 抽象写出，
@@ -13789,13 +13809,17 @@ static int px_resp_gzipable(LXValue* headers, const char* ct, int body_len) {
 //   H3（px_http_dispatch_h3）与其余调用传 0 → 原同步路径逐字节零变化。
 static int px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
                              const char* path, const char* query,
-                             int client_keep_alive, const char* req_id, int async_ok) {
+                             int client_keep_alive, const char* req_id, int async_ok,
+                             int skip_pre) {
     LXValue headers = px_dict_get(req, "headers");
     const char* log_remote = "unknown";
     {
         LXValue lr = px_dict_get(req, "remote");
         if (lr.type == PX_STR) log_remote = lr.as.obj->as.str.data;
     }
+    // M98-S2b：skip_pre=1 → 跳过 CORS/限流/vhost 段1（vhost handler null 回退续管道重入；
+    //   段1 已在首次 dispatch 执行 —— 重复执行会 CORS 预检双计 / 限流双计 / vhost 重解析）
+    if (!skip_pre) {
     // M31.4a：CORS 预检——OPTIONS + Access-Control-Request-Method/Origin → 204 + CORS 头
     if (strcmp(method, "OPTIONS") == 0 &&
         (px_header_get(&headers, "Access-Control-Request-Method").type == PX_STR ||
@@ -13865,23 +13889,24 @@ static int px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
         const char* host_hdrs = (host_hdr.type == PX_STR) ? host_hdr.as.obj->as.str.data : NULL;
         if (px_vhost_resolve(host_hdrs, def_root, vroot, sizeof(vroot), &vhandler, &has_vhandler)) {
             if (has_vhandler) {
+                // M98-S2b：async_ok + VM vhost handler → 挂起登记 + 帧协程 spawn（占协程
+                //   不占 worker）；done 回调投回续处理（段2 kind=1：respond / null 回退）。
+                //   同步路径（非 px_serve 连接 / 非 VM handler / 无协程内核 / 槽忙）零变化。
+                if (async_ok && vhandler.type == PX_FUNC && vhandler.as.obj &&
+                    vhandler.as.obj->as.func.fn == px_vm_entry) {
+                    LXValue hargs[1];
+                    hargs[0] = req;
+                    if (px_pxserve_defer(pout, req, vhandler, hargs, 1, 1, vroot,
+                                         strcmp(method, "HEAD") == 0,
+                                         client_keep_alive, req_id))
+                        return 1;   // 已拆段：调用方（px_conn_worker）释放 worker，不发送响应
+                }
                 LXValue r = px_call(vhandler, &req, 1);
                 px_root_push();   // M92-S2c precise：vhost handler 登记作用域
                 PX_KEEP(r);   // M92-S2c precise：vhost handler 返回值（normalize/respond 期间使用）
                 if (r.type != PX_NULL) {
-                    int vst = 200;
-                    const char* vct = "text/plain; charset=utf-8";
-                    const char* vbody = "";
-                    int vblen = 0;
-                    char extra[1024];
-                    int extra_off = snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
-                    if (extra_off < 0 || extra_off >= (int)sizeof(extra)) extra_off = (int)sizeof(extra) - 1;
-                    // M57-S7：vhost handler dict 自定义响应头（Location/Cache-Control/Set-Cookie/CORS 等）
-                    // 白名单透传——修复 BUG_REPORT：此前仅透传 Content-Type，其余响应头全丢
-                    px_vhost_normalize(r, &vst, &vct, &vbody, &vblen,
-                                       extra + extra_off, (int)sizeof(extra) - extra_off);
-                    pout->respond(pout, vst, vct, vbody, vblen,
-                                  strcmp(method, "HEAD") == 0, client_keep_alive, extra);
+                    px_vhost_respond(pout, method, strcmp(method, "HEAD") == 0,
+                                     client_keep_alive, req_id, r);
                     px_root_pop();   // M92-S2c precise
                     return 0;
                 }
@@ -13891,6 +13916,8 @@ static int px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
         // 每请求重置 docroot（命中 vhost → vhost root；未命中 → 默认）
         px_vhost_docroot_store(vroot);
     }
+    }  // M98-S2b：end if(!skip_pre) —— CORS/限流/vhost 段1（vhost null 回退续管道
+       //   skip_pre=1 整段跳过，由段2 先 docroot store 再续 route+静态）
 
 // M85-S1：--no-route 裁剪（去 runtime_route.o；route/middleware native 缺 → R1001）
 #ifndef PX_NO_ROUTE
@@ -14244,7 +14271,7 @@ void px_http_dispatch_h3(PxHttpOut* pout, LXValue req, int client_keep_alive) {
         }
         xfree(body_buf);
     }
-    px_http_dispatch(pout, req, method, path, query, client_keep_alive, req_id, 0); // H3: async_ok=0 同步零变化
+    px_http_dispatch(pout, req, method, path, query, client_keep_alive, req_id, 0, 0); // H3: async_ok=0 skip_pre=0 同步零变化
     px_reset_request_state();
 }
 
@@ -14269,12 +14296,15 @@ typedef struct PxPend {
     int fd;
     int active;        // 连接槽位在用（conn 存活）
     PxConn* conn;      // 堆连接（跨 worker 存活；含 TLS 会话/读缓冲）
-    int stage;         // 0 = 无挂起（处理中/空闲循环）；1 = route handler 协程运行中；
+    int stage;         // 0 = 无挂起（处理中/空闲循环）；1 = route/vhost handler 协程运行中；
                        // 2 = 已完成待续处理（段2 respond）
     int method_head;   // 挂起请求 HEAD
     int client_close;  // 挂起请求 Connection: close（1 = 响应后关连接）
     char req_id[64];   // 挂起请求 X-Request-Id
     char tmp_path[1024]; // 挂起期 body 临时文件（done 回调清理；handler 期需可读）
+    int kind;          // M98-S2b：0 = route 拆段（段2 px_route_respond）；1 = vhost 拆段
+                       //   （段2：resp 非 null → px_vhost_respond；null → docroot 回退续管道）
+    char vroot[1024];  // M98-S2b：vhost 拆段登记时的解析 docroot（null 回退段2 store 用）
     LXValue req;       // GC 根（stage>=1）
     LXValue resp;      // GC 根（stage==2）
 } PxPend;
@@ -14301,6 +14331,7 @@ static int px_pxpend_ensure(int fd) {
         np[i].fd = -1; np[i].active = 0; np[i].stage = 0;
         np[i].conn = NULL; np[i].method_head = 0; np[i].client_close = 0;
         np[i].req_id[0] = 0; np[i].tmp_path[0] = 0;
+        np[i].kind = 0; np[i].vroot[0] = 0;
         np[i].req.type = PX_NULL; np[i].resp.type = PX_NULL;
     }
     g_pxpend = np; g_pxpend_cap = ncap;
@@ -14340,6 +14371,7 @@ static PxPend* px_pxpend_enter(int fd) {
     e->fd = fd; e->active = 1; e->stage = 0; e->conn = c;
     e->method_head = 0; e->client_close = 0;
     e->req_id[0] = 0; e->tmp_path[0] = 0;
+    e->kind = 0; e->vroot[0] = 0;
     e->req.type = PX_NULL; e->resp.type = PX_NULL;
     __sync_fetch_and_add(&g_px_inflight, 1);
     gc_unblock_stop(&old);
@@ -14384,9 +14416,10 @@ static void px_pxpend_set_tmp(int fd, const char* path) {
     pthread_mutex_unlock(&g_pxpend_mu);
 }
 
-// 取完成项（stage==2 → 置 stage=0 返回 1，req/resp/标志移交调用方；否则 0）
+// 取完成项（stage==2 → 置 stage=0 返回 1，req/resp/kind/vroot/标志移交调用方；否则 0）
 static int px_pxpend_take(int fd, LXValue* req, LXValue* resp, int* method_head,
-                          int* client_close, char* req_id, size_t req_id_sz) {
+                          int* client_close, char* req_id, size_t req_id_sz,
+                          int* kind, char* vroot, size_t vroot_sz) {
     int got = 0;
     sigset_t old;
     pthread_mutex_lock(&g_pxpend_mu);
@@ -14396,7 +14429,10 @@ static int px_pxpend_take(int fd, LXValue* req, LXValue* resp, int* method_head,
         *req = e->req; *resp = e->resp;
         *method_head = e->method_head; *client_close = e->client_close;
         if (req_id && req_id_sz > 0) snprintf(req_id, req_id_sz, "%s", e->req_id);
+        if (kind) *kind = e->kind;
+        if (vroot && vroot_sz > 0) snprintf(vroot, vroot_sz, "%s", e->vroot);
         e->stage = 0;
+        e->kind = 0; e->vroot[0] = 0;
         e->req.type = PX_NULL; e->resp.type = PX_NULL;
         got = 1;
     }
@@ -14454,11 +14490,14 @@ static void px_serve_route_done(void* ud, LXValue ret) {
     px_root_pop();
 }
 
-// 登记 route handler 挂起并 spawn（调用点 = px_route_try_dispatch 命中 handler 且
-// async_ok；runtime_route.c 经 runtime.h 调用）。返回 1 = 已登记+已 spawn（调用方返回
-// DEFER）；0 = 退回原同步直调路径（非 px_serve 连接 / 非 VM handler / 槽忙 / 无协程内核）。
-int px_pxserve_defer_route(PxHttpOut* out, LXValue req, LXValue handler, LXValue params,
-                           int head_only, int keep_alive, const char* req_id) {
+// 登记 route/vhost VM handler 挂起并 spawn（M98-S2b 泛化：kind=0 route / 1 vhost；
+// hargs[0..nargs) 为 handler 参数；vroot 供 vhost null 回退段2 docroot store）。
+// 调用点：runtime_route.c（px_route_try_dispatch）与 runtime.c（px_http_dispatch vhost 块）。
+// 返回 1 = 已登记+已 spawn（调用方返回 DEFER/1）；0 = 退回原同步直调路径（非 px_serve
+// 连接 / 非 VM handler / 槽忙 / 无协程内核）。
+int px_pxserve_defer(PxHttpOut* out, LXValue req, LXValue handler, LXValue* hargs, int nargs,
+                     int kind, const char* vroot, int head_only, int keep_alive,
+                     const char* req_id) {
     PxConn* c = (out && out->impl) ? (PxConn*)out->impl : NULL;
     if (!c) return 0;
     int fd = c->fd;
@@ -14473,6 +14512,9 @@ int px_pxserve_defer_route(PxHttpOut* out, LXValue req, LXValue handler, LXValue
     PxPend* e = px_pxpend_ctx(fd);
     if (e && e->active && e->conn == c && e->stage == 0) {
         e->stage = 1;
+        e->kind = (kind == 1) ? 1 : 0;
+        e->vroot[0] = 0;
+        if (e->kind == 1 && vroot) snprintf(e->vroot, sizeof(e->vroot), "%s", vroot);
         e->method_head = head_only ? 1 : 0;
         e->client_close = keep_alive ? 0 : 1;
         e->req_id[0] = 0;
@@ -14484,10 +14526,7 @@ int px_pxserve_defer_route(PxHttpOut* out, LXValue req, LXValue handler, LXValue
     gc_unblock_stop(&old);
     pthread_mutex_unlock(&g_pxpend_mu);
     if (!ok) return 0;
-    LXValue hargs[2];
-    hargs[0] = req;
-    hargs[1] = params;
-    px_coro_spawn_ex(handler.as.obj->as.func.ctx, hargs, 2,
+    px_coro_spawn_ex(handler.as.obj->as.func.ctx, hargs, nargs,
                      px_serve_route_done, (void*)(intptr_t)fd);
     return 1;
 }
@@ -14521,26 +14560,59 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
     }
 #endif // PX_NO_H2
 
-    // M98-S2a：续处理 —— route handler 帧协程完成投回（stage==2）：段2 归一化 + 响应
-    // 发送 + 访问日志（px_route_respond），随后落入下方 keep-alive 循环读下一请求。
-// M85-S1：--no-route 裁剪 —— route 模块裁剪时 defer/续处理均不达（无路由表），
-//   px_route_respond 无定义 → 整块裁剪防链接失败。
-#ifndef PX_NO_ROUTE
+    // M98-S2a/S2b：续处理 —— route/vhost handler 帧协程完成投回（stage==2）：
+    //   kind=0（route）段2 px_route_respond（归一化 + 响应 + 访问日志）；kind=1（vhost）：
+    //   返回非 null → px_vhost_respond（无访问日志 = vhost 历史语义）；返回 null →
+    //   docroot 回退续管道（store vroot + 重入 px_http_dispatch skip_pre=1：不重复
+    //   CORS/限流/vhost，直接 route+静态/.px 完成）——vhost 回退与同步路径语义一致。
     if (pend->stage == 2) {
         LXValue sreq, sresp;
         int sh = 0, sc = 1;
         char srid[64];
-        srid[0] = 0;
-        px_pxpend_take(fd, &sreq, &sresp, &sh, &sc, srid, sizeof(srid));
+        int skind = 0;
+        char svroot[1024];
+        srid[0] = 0; svroot[0] = 0;
+        px_pxpend_take(fd, &sreq, &sresp, &sh, &sc, srid, sizeof(srid),
+                       &skind, svroot, sizeof(svroot));
         const char* sm = "GET";
+        const char* spath = "/";
+        const char* squery = "";
         {
             LXValue smv = px_dict_get(sreq, "method");
             if (smv.type == PX_STR) sm = smv.as.obj->as.str.data;
+            LXValue pv = px_dict_get(sreq, "path");
+            if (pv.type == PX_STR) spath = pv.as.obj->as.str.data;
+            LXValue qv = px_dict_get(sreq, "query");
+            if (qv.type == PX_STR) squery = qv.as.obj->as.str.data;
         }
         px_root_push();   // M92-S2c precise：续处理段2 登记作用域（sreq/sresp 取自挂起表）
         PX_KEEP(sreq);
         PX_KEEP(sresp);
-        px_route_respond(&out, sreq, sm, sh, sc ? 0 : 1, srid, sresp);
+        if (skind == 1) {
+            // vhost 段2
+            if (sresp.type != PX_NULL) {
+                px_vhost_respond(&out, sm, sh, sc ? 0 : 1, srid, sresp);
+            } else {
+                // null 回退 docroot：续管道（route + 静态/.px）完成本请求
+                px_vhost_docroot_store(svroot);
+                int trc = px_http_dispatch(&out, sreq, sm, spath, squery,
+                                           sc ? 0 : 1, srid, 1, 1);
+                if (trc == 1) {   // 续管道内 route 命中 → 再次拆段（stage 已在 dispatch 内重新登记）
+                    px_root_pop();
+                    g_cur_conn = NULL;
+                    return px_null();
+                }
+            }
+        } else {
+#ifdef PX_NO_ROUTE
+            // 理论不达（route 表空 → 无 route 拆段登记）；防御：释放连接收尾
+            px_pxpend_close(fd);
+            g_cur_conn = NULL;
+            return px_null();
+#else
+            px_route_respond(&out, sreq, sm, sh, sc ? 0 : 1, srid, sresp);
+#endif
+        }
         px_root_pop();
         if (sc) {   // 本请求 Connection: close → 响应后关闭连接
             px_pxpend_close(fd);
@@ -14548,7 +14620,6 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
             return px_null();
         }
     }
-#endif // PX_NO_ROUTE
 
     // M29d：keep-alive 循环——同一连接连续处理多个请求，直到客户端
     // Connection: close / 空闲超时（15s）/ 出错。
@@ -14855,7 +14926,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         // M53-S2：req 就绪 → 公共请求管道（CORS/限流/vhost/路由/静态/.px；输出经
         // PxHttpOut）。async_ok=1：route VM handler 命中可拆段帧协程执行（M98-S2a）。
         int dret = px_http_dispatch(&out, req, method, path, query,
-                                    client_keep_alive, req_id, 1);
+                                    client_keep_alive, req_id, 1, 0);
         if (dret == 1) {
             // 已拆段（route VM handler 协程运行中，挂起表 stage=1）：body 临时文件移交
             // done 回调清理（handler 期需可读）；req 已入挂起表 GC 根。释放本 worker

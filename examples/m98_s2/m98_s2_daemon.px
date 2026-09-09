@@ -45,6 +45,16 @@ def alloc_handler(req, params):
     sleep(60)
     return "A-OK"
 
+# M98-S2b：vhost VM handler 拆段（async_ok=1 命中 → 挂起 + spawn，占协程不占 worker）。
+def vh_slow(req):
+    sleep(800)                      # 800ms 让出窗口（并发 10 也 ~0.8s 全完成）
+    return {"status": 200, "headers": {"Content-Type": "text/x-vh"}, "body": "VH-SLOW"}
+
+# M98-S2b：vhost handler 返回 null → docroot 回退续管道（route+静态/.px 完成本请求）。
+def vh_null(req):
+    sleep(200)
+    return null
+
 def setup():
     route("GET", "/slow", slow_handler)
     route("GET", "/fast", fast_handler)
@@ -55,6 +65,9 @@ def setup():
     let D = "/tmp/px_m98_s2_docroot"
     mkdir(D)
     write_file(D + "/index.txt", "OK")
+    # vhost：vh1.test → sleep handler（拆段）；vh2.test → null 回退（docroot 静态 = D）
+    vhost("vh1.test", vh_slow)
+    vhost("vh2.test", vh_null)
     # max_conn=2：刻意压到 2 个 g_pool worker —— 若 handler 同步占线程，20 并发
     # /slow 需 ~12s 且 /fast 被饿死；协程化后 worker 释放 → 全部 ~1.3s 完成。
     px_serve(m98_port, D, 30000, {"max_conn": 2})
