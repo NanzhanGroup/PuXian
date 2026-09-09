@@ -190,6 +190,8 @@ static int route_match(const char* method, const char* path, LXValue* handler_ou
         if (!g_routes[i].active) continue;
         if (strcmp(g_routes[i].method, "*") != 0 && strcmp(g_routes[i].method, mup) != 0) continue;
         LXValue params = px_dict();
+        px_root_push();   // M92-S2c precise：route_match 单次匹配登记作用域
+        PX_KEEP(params);   // M92-S2c precise：route 匹配 params 裸局部跨 px_dict_set/px_str
         int ok = 1;
         int pi = 0;
         for (int s = 0; s < g_routes[i].nsegs; s++) {
@@ -219,6 +221,7 @@ static int route_match(const char* method, const char* path, LXValue* handler_ou
             if (pattern_out) *pattern_out = g_routes[i].pattern;
             found = 1;
         }
+        px_root_pop();   // M92-S2c precise
     }
     pthread_mutex_unlock(&g_route_mu);
     return found;
@@ -338,8 +341,11 @@ int px_route_try_dispatch(PxHttpOut* out, LXValue req, const char* method, int h
     LXValue mws[MAX_MIDDLEWARES];
     if (mw_count > 0) memcpy(mws, g_middlewares, sizeof(LXValue) * (size_t)mw_count);
     pthread_mutex_unlock(&g_route_mu);
+    px_root_push();   // M92-S2c precise：px_route_try_dispatch 登记作用域
+    PX_KEEP(params);   // M92-S2c precise：route_match 传出 params（跨中间件/handler px_call）
     for (int i = 0; i < mw_count; i++) {
         LXValue r = px_call(mws[i], &req, 1);
+        PX_KEEP(r);   // M92-S2c precise：middleware px_call 返回值（route_normalize/route_send 期间使用）
         if (r.type != PX_NULL) {
             RouteResp rr;
             route_normalize(r, &rr);
@@ -356,6 +362,7 @@ int px_route_try_dispatch(PxHttpOut* out, LXValue req, const char* method, int h
                         (long long)time(NULL), lr, method,
                         path_v.as.obj->as.str.data, rr.status, rr.body_len, req_id);
             }
+            px_root_pop();   // M92-S2c precise
             return 1;
         }
     }
@@ -364,6 +371,7 @@ int px_route_try_dispatch(PxHttpOut* out, LXValue req, const char* method, int h
     hargs[0] = req;
     hargs[1] = params;
     LXValue r = px_call(handler, hargs, 2);
+    PX_KEEP(r);   // M92-S2c precise：handler px_call 返回值（route_normalize/route_send 期间使用）
     RouteResp rr;
     route_normalize(r, &rr);
     fprintf(stderr, "[px-serve] [route] %s %s -> %d\n", method,
@@ -379,5 +387,6 @@ int px_route_try_dispatch(PxHttpOut* out, LXValue req, const char* method, int h
                 (long long)time(NULL), lr, method,
                 path_v.as.obj->as.str.data, rr.status, rr.body_len, req_id);
     }
+    px_root_pop();   // M92-S2c precise
     return 1;
 }

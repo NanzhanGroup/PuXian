@@ -1446,20 +1446,29 @@ void px_gc_set_precise(int precise) {
 
 // 作用域开始：保存当前登记栈深度（native 桥入口调用，与 px_root_pop 配对）。
 // 登记栈为 TLS，native 桥在同一线程执行，作用域天然线程隔离。
+// M92-S2c：屏蔽 SIG_GC_STOP —— 根栈 push/pop/keep 非原子，若信号落在
+// push/keep 的 n++ 中途，GC handler 快照 ti->root_n 读到半态 → 刚登记的
+// 局部漏根被误回收（并发 GC 偶发 UAF 根因）。与 list/dict 结构修改同模式。
 void px_root_push(void) {
+    sigset_t old;
+    gc_block_stop(&old);
     if (g_px_root_marks_n >= g_px_root_marks_cap) {
         int nc = g_px_root_marks_cap ? g_px_root_marks_cap * 2 : 16;
         g_px_root_marks = (int*)xrealloc(g_px_root_marks, sizeof(int) * (size_t)nc);
         g_px_root_marks_cap = nc;
     }
     g_px_root_marks[g_px_root_marks_n++] = g_px_roots_n;
+    gc_unblock_stop(&old);
 }
 
 // 作用域结束：弹回 px_root_push 时的深度（与 push 严格配对）。
 void px_root_pop(void) {
-    if (g_px_root_marks_n <= 0) return;
+    sigset_t old;
+    gc_block_stop(&old);
+    if (g_px_root_marks_n <= 0) { gc_unblock_stop(&old); return; }
     int mark = g_px_root_marks[--g_px_root_marks_n];
     g_px_roots_n = mark;
+    gc_unblock_stop(&old);
 }
 
 // 登记一个局部 LXValue 引用（跨可能触发 GC 的调用前调用）。只压引用类值
@@ -1467,12 +1476,15 @@ void px_root_pop(void) {
 // 不影响已登记条目（登记 = 快照该时刻的引用，语义正确：局部变量持有期即该值）。
 void px_root_keep(const LXValue* v) {
     if (!v || !px_value_is_obj(*v)) return;
+    sigset_t old;
+    gc_block_stop(&old);
     if (g_px_roots_n >= g_px_roots_cap) {
         int nc = g_px_roots_cap ? g_px_roots_cap * 2 : 64;
         g_px_roots = (LXValue*)xrealloc(g_px_roots, sizeof(LXValue) * (size_t)nc);
         g_px_roots_cap = nc;
     }
     g_px_roots[g_px_roots_n++] = *v;
+    gc_unblock_stop(&old);
 }
 
 // 注册对象（构造时调用）。est = 估算占用字节（触发字节阈值用，当前主用对象数阈值）。
@@ -8558,10 +8570,14 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
             if (keep_alive) hpool_put(key, slot);
             else { if (slot.tls) https_close(slot.tls); close(slot.fd); }
             LXValue d = px_dict();
+            px_root_push();   // M92-S2c precise：http_request 响应 dict 构造登记
+            PX_KEEP(headers);   // M92-S2c precise：headers（h_exchange 填充 dict）入 d 前跨分配
+            PX_KEEP(d);   // M92-S2c precise：d 裸局部跨 px_dict_set/px_str_len 分配
             px_dict_set(d, "status", px_int(status));
             px_dict_set(d, "headers", headers);
             px_dict_set(d, "body", resp_body ? px_str_len(resp_body, body_len) : px_str(""));
             if (resp_body) xfree(resp_body);
+            px_root_pop();   // M92-S2c precise
             return d;
         }
         if (slot.tls) https_close(slot.tls);
@@ -8636,10 +8652,14 @@ static LXValue bi_http_unix(LXValue* args, int nargs, void* ctx) {
     }
     close(fd);
     LXValue d = px_dict();
+    px_root_push();   // M92-S2c precise：http_unix 响应 dict 构造登记
+    PX_KEEP(headers);   // M92-S2c precise：headers（h_exchange 填充 dict）入 d 前跨分配
+    PX_KEEP(d);   // M92-S2c precise：d 裸局部跨 px_dict_set/px_str_len 分配
     px_dict_set(d, "status", px_int(status));
     px_dict_set(d, "headers", headers);
     px_dict_set(d, "body", resp_body ? px_str_len(resp_body, body_len) : px_str(""));
     if (resp_body) xfree(resp_body);
+    px_root_pop();   // M92-S2c precise
     return d;
 }
 
@@ -10128,7 +10148,9 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
         }
 
         // 3. 头部 + Content-Length + Connection
+        px_root_push();   // M92-S2c precise：http_conn_worker 请求迭代登记作用域开始
         LXValue headers = px_dict();
+        PX_KEEP(headers);   // M92-S2c precise：headers 裸局部跨 px_dict_set/px_str 分配
         int content_length = 0;
         int client_close = 0; // Connection: close
         char* hline = sp2 ? sp2 + 1 : target + strlen(target);
@@ -10177,6 +10199,7 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
                 const char* r413 = "HTTP/1.1 413 Payload Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
                 send(fd, r413, (int)strlen(r413), 0);
                 px_evc_close(fd);
+                px_root_pop();   // M92-S2c precise
                 return px_null();
             }
             body_buf = xmalloc((size_t)content_length + 1);
@@ -10198,6 +10221,7 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
 
         // 5. 构造请求 dict
         LXValue req = px_dict();
+        PX_KEEP(req);   // M92-S2c precise：req 裸局部跨 px_dict_set/px_str/px_call（崩点修复）
         px_dict_set(req, "method", px_str(method));
         px_dict_set(req, "target", px_str(target));
         px_dict_set(req, "path", px_str(path));
@@ -10206,6 +10230,7 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
         px_dict_set(req, "headers", headers);
         px_dict_set(req, "body", body_buf ? px_str_len(body_buf, body_len) : px_str("")); // M83-S1：body_buf NULL(无 body) → 空串（避免 px_str_len(NULL,0) UB）
         LXValue form = px_dict();
+        PX_KEEP(form);   // M92-S2c precise：form 裸局部跨 px_dict_set/px_str 分配
         {
             // M8x：remote 兼容 AF_UNIX（http_serve_unix 连接无 IP）——sockaddr_storage 判族，
             // AF_INET → ip:port（http_serve 原行为）；AF_UNIX → "unix"（客户端 peer 无 sun_path）
@@ -10275,7 +10300,9 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
             pthread_mutex_unlock(&g_stream_mu);
             if (s_idx >= 0) {
                 if (body_buf) { xfree(body_buf); body_buf = NULL; }
-                return stream_takeover_conn(fd, req, s_idx);
+                LXValue _s2c_sr = stream_takeover_conn(fd, req, s_idx);
+                px_root_pop();   // M92-S2c precise
+                return _s2c_sr;
             }
         }
 
@@ -10285,6 +10312,7 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
         if (handler.type == PX_FUNC || handler.type == PX_NATIVE) {
             resp = px_call(handler, &req, 1);
         }
+        PX_KEEP(resp);   // M92-S2c precise：px_call 返回值裸局部（后续 px_http_build_response 等可能 GC）
         // M83-S1：动态 body 缓冲用毕即释放（req.body 经 px_str_len 已深拷贝、multipart/form
         // 解析已入 req；handler 同步返回后 body_buf 无引用）——防 keep-alive 长连接累积
         if (body_buf) { xfree(body_buf); body_buf = NULL; }
@@ -10321,6 +10349,7 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
                 send(fd, notfound, (int)strlen(notfound), 0);
             }
             px_evc_close(fd);
+            px_root_pop();   // M92-S2c precise
             return px_null();
         }
         int out_len = 0;
@@ -10337,6 +10366,7 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
         // 8. keep-alive 判定：需关闭 → 统一 px_evc_close（清理连接上下文，防 fd 复用串扰）
         if (client_close || !resp_keep_alive) {
             px_evc_close(fd);
+            px_root_pop();   // M92-S2c precise
             return px_null();
         }
         // M88-B-S2：空闲连接不占 worker——无下一请求数据在途 → 连接交还 IDLE。
@@ -10346,8 +10376,9 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
         // （px_recv_wait 15s 超时 = 原空闲语义，功能不降仅无事件驱动优化）。
         if (!px_fd_readable_now(fd)) {
             px_ev_ensure();
-            if (px_evc_idle_put(fd, FSERVE_KIND_HTTP) == 0) return px_null();
+            if (px_evc_idle_put(fd, FSERVE_KIND_HTTP) == 0) { px_root_pop(); return px_null(); }
         }
+        px_root_pop();   // M92-S2c precise：迭代作用域结束
     }
     px_evc_close(fd);
     return px_null();
@@ -11236,7 +11267,9 @@ static LXValue sse_conn_worker(LXValue* args, int nargs, void* ctx) {
     }
 
     // 3. 头部
+    px_root_push();   // M92-S2c precise：sse_conn_worker 登记作用域开始
     LXValue headers = px_dict();
+    PX_KEEP(headers);   // M92-S2c precise：headers 裸局部跨 px_dict_set/px_str 分配
     char* hline = sp2 ? sp2 + 1 : target + strlen(target);
     char* nl0 = strchr(hline, '\n');
     hline = nl0 ? nl0 + 1 : head + len;
@@ -11264,6 +11297,7 @@ static LXValue sse_conn_worker(LXValue* args, int nargs, void* ctx) {
 
     // 4. 构造请求 dict（SSE 无 body，简化）
     LXValue req = px_dict();
+    PX_KEEP(req);   // M92-S2c precise：req 裸局部跨 px_dict_set/px_str/px_call
     px_dict_set(req, "method", px_str(method));
     px_dict_set(req, "target", px_str(target));
     px_dict_set(req, "path", px_str(path));
@@ -11291,6 +11325,7 @@ static LXValue sse_conn_worker(LXValue* args, int nargs, void* ctx) {
     if (slot < 0) {
         pthread_mutex_unlock(&g_sse_mu);
         close(fd);
+        px_root_pop();   // M92-S2c precise
         return px_null();
     }
     g_sse_conns[slot].fd = fd;
@@ -11309,6 +11344,7 @@ static LXValue sse_conn_worker(LXValue* args, int nargs, void* ctx) {
     if (handler.type == PX_FUNC || handler.type == PX_NATIVE) {
         px_call(handler, &req, 1);
     }
+    px_root_pop();   // M92-S2c precise：req 作用域结束（px_call 返回后不再用 req/headers）
 
     // 8. M88-B-S3：SSE 长连接不占 worker——handler 返回后，明文连接交还 IDLE 事件循环照看
     //    （事件循环 detect 对端断开 / sse_close / sse_send 写失败 → sse_server_close_fd 统一清理；
@@ -11591,6 +11627,8 @@ static LXValue stream_takeover_conn(int fd, LXValue req, int route_idx) {
 // 解析 SSE 事件文本（field: value 行）为 dict
 static LXValue sse_parse_event_c(const char* text, int len) {
     LXValue d = px_dict();
+    px_root_push();   // M92-S2c precise：sse_parse_event_c 累积 dict 登记
+    PX_KEEP(d);   // M92-S2c precise：d 裸局部跨 px_dict_set/px_str 分配
     px_dict_set(d, "event", px_str("message"));
     char* data_buf = xmalloc(len + 1);
     int data_len = 0;
@@ -11645,6 +11683,7 @@ static LXValue sse_parse_event_c(const char* text, int len) {
     else px_dict_set(d, "data", px_str(""));
     xfree(data_buf);
     xfree(id_buf);
+    px_root_pop();   // M92-S2c precise
     xfree(event_buf);
     return d;
 }
@@ -13215,6 +13254,8 @@ static void px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
         if (px_vhost_resolve(host_hdrs, def_root, vroot, sizeof(vroot), &vhandler, &has_vhandler)) {
             if (has_vhandler) {
                 LXValue r = px_call(vhandler, &req, 1);
+                px_root_push();   // M92-S2c precise：vhost handler 登记作用域
+                PX_KEEP(r);   // M92-S2c precise：vhost handler 返回值（normalize/respond 期间使用）
                 if (r.type != PX_NULL) {
                     int vst = 200;
                     const char* vct = "text/plain; charset=utf-8";
@@ -13229,8 +13270,10 @@ static void px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
                                        extra + extra_off, (int)sizeof(extra) - extra_off);
                     pout->respond(pout, vst, vct, vbody, vblen,
                                   strcmp(method, "HEAD") == 0, client_keep_alive, extra);
+                    px_root_pop();   // M92-S2c precise
                     return;
                 }
+                px_root_pop();   // M92-S2c precise：r==NULL 分支（作用域结束）
             }
         }
         // 每请求重置 docroot（命中 vhost → vhost root；未命中 → 默认）
@@ -13666,7 +13709,9 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         }
 
         // 3. 头部 + Content-Length + keep-alive 判定
+        px_root_push();   // M92-S2c precise：px_conn_worker 请求迭代登记作用域开始
         LXValue headers = px_dict();
+        PX_KEEP(headers);   // M92-S2c precise：headers 裸局部跨 px_dict_set/px_str 分配
         int content_length = 0;
         char* hline = sp2 ? sp2 + 1 : target + strlen(target);
         char* nl0 = strchr(hline, '\n');
@@ -13846,6 +13891,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
             }
         }
         LXValue req = px_dict();
+        PX_KEEP(req);   // M92-S2c precise：req 裸局部跨 px_dict_set/px_str/px_http_dispatch
         px_dict_set(req, "method", px_str(method));
         px_dict_set(req, "target", px_str(target));
         px_dict_set(req, "path", px_str(path));
@@ -13868,6 +13914,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
             }
         }
         LXValue form = px_dict();
+        PX_KEEP(form);   // M92-S2c precise：form 裸局部跨 px_dict_set/px_parse_urlenc 分配
         {
             // M8x：remote 兼容 AF_UNIX（http_serve_unix 连接无 IP）——sockaddr_storage 判族，
             // AF_INET → ip:port（http_serve 原行为）；AF_UNIX → "unix"（客户端 peer 无 sun_path）
@@ -13927,6 +13974,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         if (body_tmp_file >= 0) close(body_tmp_file);
         if (body_buf) xfree(body_buf);
         px_reset_request_state();
+        px_root_pop();   // M92-S2c precise：px_serve 请求迭代登记作用域结束
         if (!client_keep_alive) break;
     }
     px_conn_close(&conn);

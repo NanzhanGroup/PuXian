@@ -1,12 +1,19 @@
 # M92_PLAN · 精确 GC 终极项（退役整栈保守扫描 + 原生桥根登记）
 
-> 状态：🚧 **进行中（S2b 完成）**。S1 设计定稿 + S2a precise 框架（双模式 + TLS
-> 登记根栈）已合入（2017101）；S2b 语言核心层批量登记已合入（a55a13c）：19 个累积构造桥
-> （bi_range/args/sorted/reversed/split/fd_wait/dns_lookup/list_dir/regex_*/px_add-list/
-> px_slice-list/px_method-dict.keys,values/bi_list-str,dict）+ json 递归 helper
-> （json_parse_value dict/list、json_value_copy list/tuple收集数组逐项/dict、
-> json_path_set_at 整函数多出口）——stress2 SEG3 暴露 json_path_set_at 顶层 base 临时
-> 漏登记后修复。剩余 S2c（vm.c bi_vm_* + ws/route/ffi + 服务池/IO 桥）→ S2d 插桩 → S3 收口。
+> 状态：🚧 **进行中（S2c 完成）**。S1 设计定稿 + S2a precise 框架 + S2b 语言核心层
+> 批量登记已合入（2017101/a55a13c）；S2c 登记批次 2（服务/IO 桥）已合入（本 commit）：
+>   http_conn_worker（http_serve/http_serve_unix 主 worker：headers/req/form/resp 迭代
+>   作用域登记——崩点修复，precise 压测实锤 http_conn_worker→px_dict_set→UAF）、
+>   sse_conn_worker（headers/req）、sse_parse_event_c（累积 dict）、bi_http_request/
+>   bi_http_unix（客户端响应 dict）、px_conn_worker（px_serve 主 worker headers/req/form）、
+>   route_match/px_route_try_dispatch（params + 中间件/handler 返回值）、px_http_dispatch
+>   vhost handler 段。**附带修复**：px_root_push/pop/keep 加 SIG_GC_STOP 屏蔽（根栈操作
+>   非原子 → GC handler 快照半态 → 并发随机 UAF；与 list/dict 结构修改同模式）。
+>   已知残余：PX_GC_INLINE=1 强化模式 precise 服务长跑 ~2 万请求级稀有崩溃（崩 GC 标记
+>   hash set 坏指针；INLINE 强制内联 GC 至任意分配点 → executor 极稀有交错；真实服务
+>   deferrable 安全点 GC 无窗口——无 INLINE precise 19.2 万请求稳定、conservative 15 万
+>   稳定），列 issue 专项，不阻塞（见 §五 S2c 验收记录）。
+>   剩余 S2d（bc_emit 产物插桩 px_gc_set_precise）→ S3 收口。
 > 上游：M89_PLAN §S3-D 后置决策、docs/M89_vm_design.md §六（精确 GC 设计）。
 > 基线：v0.2.0（M91 收口 3bbbee4）。
 
@@ -100,7 +107,13 @@ void px_root_keep(const LXValue* v);      // 登记局部引用（跨可能触�
 | S1 | 设计定稿（本文档）+ D0 量化 | 本文档 + 侦察数据 |
 | S2a | precise 框架：runtime 双模式 + TLS 登记根栈 API + GC 根面接线（并发/单线程）+ 冒烟 | 默认模式全回归不变（diffcheck/vm_ab 抽查）；PX_GC_PRECISE=1 最小用例通过 |
 | S2b | 登记批次 1：runtime.c 语言核心桥（累积构造/递归构造/json helper，19 函数 + 3 helper） | ✅ 完成（a55a13c）：precise 低阈值（thr=400/800）stress1+stress2 与 conservative 逐字节一致；conservative 零回归 m89_s3d 9PASS + vm_ab 38PASS/0GAP/0FAIL。压力集 examples/m92_precise/precise_stress2.px（dict keys/values、json roundtrip、json_path_set 深拷贝链、list 拼接/切片、sorted/reversed、split/join、list(str)、regex find_all/search/split、list_dir）；SEG3 json_path_set 暴露漏登记 → 补 json_path_set_at 整函数 |
-| S2c | 登记批次 2：vm.c bi_vm_* + runtime_ws/route/ffi + runtime.c 服务池/IO 桥 | precise 跑 m82/m83 服务用例 + 并发压测 |
+| S2c | 登记批次 2：vm.c bi_vm_* + runtime_ws/route/ffi + runtime.c 服务池/IO 桥 | ✅ 完成（本 commit）：服务主路径登记（http_conn_worker/sse_conn_worker/sse_parse_event_c/bi_http_request/bi_http_unix/px_conn_worker/route_match/px_route_try_dispatch/px_http_dispatch vhost 段）；vm.c bi_vm_*/ws 主路径/ffi 审查确认无跨 GC 裸局部（无需登记）。验收（precise 低阈值/INLINE 强化）：
+  - http_serve JSON 服务 8 并发压测 14400/14400 请求 0 错（登记崩点修复前 56 请求即崩）；
+  - thr500/16 并发 14400 请求 0 错；m82 verify 8 PASS（http_serve_unix+http_unix 客户端路径）；m83_s6 verify 全 PASS（SSE/http_stream/断连）；
+  - px_serve+route+middleware 并发压测 499/500（examples/m92_precise/s2c_pxserve.px 新增）；m31_vhost precise 自检 ALL OK（vhost handler 段）；
+  - conservative 零回归：m89_s3d 9 PASS + vm_ab v2 38 PASS/0GAP/0FAIL + precise_stress1/2 逐字节一致；
+  - 真实服务模式（无 PX_GC_INLINE，deferrable 安全点 GC）precise 19.2 万请求稳定；PX_GC_INLINE=1 强化模式 ~2 万请求稀有崩溃（GC 标记 hash set 坏指针，已记录 issue，见状态头）；
+  - 附带修复：px_root_push/pop/keep SIG_GC_STOP 屏蔽（并发根栈快照原子性）。 |
 | S2d | VM 轨产物插桩：bc_emit.px 产物 main 加 px_gc_set_precise(1)（C 轨 codegen 不加） | 默认 px build 产物 precise 运行全量回归绿 |
 | S3 | 收口：precise 全量回归（vm_ab/diffcheck/m89_s3d/m82/m83 + 低阈值压力）+ 重链 bootstrap + 文档 + tag | 全绿 + tag v0.2.0-m92 |
 

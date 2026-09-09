@@ -6,6 +6,42 @@
 
 ## [Unreleased]
 
+### M92-S2c · precise GC native 桥登记批次 2（服务/IO 层）+ 根栈并发原子性修复（2026-09-09，dongyue）
+
+> M92（精确 GC 终极项，docs/M92_PLAN.md）S2c 完成。S2a 框架 + S2b 语言核心层
+> 登记（2017101/a55a13c）后，本批把服务/IO 主路径 native 桥的跨 GC 点裸局部全部
+> 登记进 precise 根面，并用 precise 低阈值 + 服务压测验证。
+> - **服务端主 worker 登记**（runtime/runtime.c）：
+>   - `http_conn_worker`（http_serve/http_serve_unix 共享）：headers/req/form/resp
+>     请求迭代作用域登记（px_root_push/keep/pop 严格配对，覆盖全部出口含 413/
+>     stream 接管/file 流/keep-alive 关闭/idle 交还）——precise 压测实锤崩点
+>     （http_conn_worker→px_dict_set→UAF，56 请求即崩 → 登记后 14400 请求 0 错）；
+>   - `sse_conn_worker`（SSE 服务）+ `sse_parse_event_c`（SSE 事件文本累积 dict）；
+>   - `px_conn_worker`（px_serve 主 worker：headers/req/form 迭代登记）；
+>   - `px_http_dispatch` vhost handler 返回值段（normalize/respond 期间保护）；
+> - **客户端桥登记**：`bi_http_request`/`bi_http_unix` 响应 dict 构造（h_exchange
+>   填充的 headers + d 跨 px_dict_set/px_str_len 分配）；
+> - **route 层登记**（runtime/runtime_route.c）：`route_match` 匹配 params 构造 +
+>   `px_route_try_dispatch` params/中间件/route handler 返回值（跨 normalize/send）；
+> - **附带修复 · 根栈并发原子性**：`px_root_push/pop/keep` 加 SIG_GC_STOP 屏蔽
+>   （gc_block_stop/gc_unblock_stop）——根栈 n++ 非原子，若 GC 暂停信号落在中途，
+>   handler 快照 ti->root_n 读到半态 → 刚登记局部漏根被误回收（并发随机 UAF 根因），
+>   与既有 list/dict 结构修改关键区同模式；
+> - **审查确认无需登记**：vm.c bi_vm_*（chan/mutex/spawn/try_recv 无跨 GC 裸局部）、
+>   runtime_ws.c ws_conn_worker（handler 全局表保护 + arg 为 int）、bi_ffi_call（查表直调）；
+> - **验证**：precise 低阈值（thr500-1500 + PX_GC_INLINE=1 强化）http_serve 8 并发
+>   压测 6×2400 + 16 并发 3×4800 全 0 错；m82 verify 8 PASS；m83_s6 verify 全 PASS；
+>   px_serve+route+middleware 并发 499/500（新增 examples/m92_precise/s2c_pxserve.px）；
+>   m31_vhost precise 自检 ALL OK；conservative 零回归 m89_s3d 9 PASS + vm_ab v2
+>   38 PASS/0GAP/0FAIL + precise_stress1/2 逐字节一致；真实服务模式（deferrable
+>   安全点 GC）precise 19.2 万请求稳定。
+> - **已知残余（列 issue）**：PX_GC_INLINE=1 强化模式 precise 长跑 ~2 万请求稀有
+>   崩溃（GC 标记 hash set 坏指针；INLINE 强制内联 GC 至任意分配点的极稀有交错，
+>   诊断版 xrealloc 加检查即可改变时序规避）。真实服务 deferrable 模式无窗口（GC
+>   只在请求间安全点执行）。INLINE 为压测强化手段，非生产路径；记录待专项深查。
+> - 新增：examples/m92_precise/s2c_pxserve.px（px_serve+route precise 冒烟压测）；
+>   M92_PLAN 状态/验收/残余更新。
+
 ### 重链批次 · bootstrap/pxi + pxi_vm 吸收 F3-fix runtime（2026-09-09，dongyue）
 
 > M91_PLAN S1 事实 7 标注的后续批次（基座大二进制变更留独立批次）。F3-fix
