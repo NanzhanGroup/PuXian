@@ -384,6 +384,16 @@ void           px_coro_wake(struct PxCoro* c);             // 入就绪队列（
 #define PX_BLK_SLEEP_MS 1
 #define PX_BLK_SLEEP_US 2
 int px_native_blocking_kind(LXValue fn);
+// M96-S2：阻塞网络 native offload 识别（vm.c CALL 预检用）。命中名单（C 层全协议
+//   阻塞桥：http_get/tcp_recv 等客户端网络，M94 抢占救不了）返回 1，否则 0。
+//   按 native 名字匹配（as.native.name，跨文件安全 —— ws 在 runtime_ws.c）。名单在
+//   runtime.c 维护（S2 试点 http_get/tcp_recv；S3 扩全集）。
+int px_native_offload_kind(LXValue fn);
+// M96-S2：offload 提交（coro.c 定义；vm.c CALL 预检调）。协程 ctx：打包任务入外包
+//   执行线程池 + 协程登记 offload 等待（c->off_task/off_dst）→ 返回 PX_CORO_WAIT_BLOCKED
+//   （调用方让出，pc 不回退）。失败（非协程 ctx / 内存）→ 0（调用方落 px_call 直调）。
+//   args 数组所有权转移给任务（外包线程执行完释放）；调用方不得再 free。
+int px_coro_offload_submit(LXValue fn, LXValue* args, int nargs, int dst);
 
 // select：阻塞等待任一通道可接收（返回索引），chan 活动后由运行时自动唤醒
 int px_select_wait_any(LXValue* chans, int n);
@@ -395,6 +405,13 @@ void px_select_signal(void);
 // ==================== 运行时错误 ====================
 
 void px_error(const char* fmt, ...) __attribute__((noreturn));
+// M96-S2：通用错误捕获点（offload 外包线程用）——setjmp 安装捕获点；px_error →
+//   longjmp 回返回 0（px_error 已打印现场，本线程 TLS 最后错误文本经 px_err_last 取）。
+//   与 px_spawn_isolate_begin 区别：不打印「已隔离」消息（外包线程错误由协程恢复后
+//   重抛，语义与直调一致）。begin 正常返回 1；longjmp 回返回 0。
+int  px_err_capture_begin(void);
+void px_err_capture_end(void);
+const char* px_err_last(void);   // 本线程最后一次 px_error 的格式化文本（捕获方回传用）
 // M72-S2（Issue 10 D1）：编译产物运行时 .px 源位置追踪——cg 在每条可执行语句前
 // 生成 px_srcline(<源行>) 调用、每个用户函数入口生成 px_srcfunc("<函数名>")；
 // px_error 打印最近位置 → 运行时错误带源行号（AI 一次定位）。线程局部（spawn

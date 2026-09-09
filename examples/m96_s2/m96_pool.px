@@ -1,0 +1,28 @@
+# M96-S2 线程池验证：并发 12 × 慢 http_get(/slow 200ms) + PX_OFFLOAD_MAX=4
+# 外包线程池上限收敛：阻塞 native 并发不随 spawn 数无限涨线程（对比 pthread 时代
+#   12 spawn = 12+ 线程）；offload 完成后空闲回收（PX_OFFLOAD_IDLE_MS）。
+# verify.sh 采样：http 批处理活跃期 Threads 峰值 T1（≤ 上限+worker+主+余量）、
+#   POOL-OK 后空闲期 T2（外包线程已回收，回落 < T1）。
+def hg(id, ch):
+    var r = http_get("http://127.0.0.1:18889/slow")
+    ch.send("h" + str(id) + ":" + r)
+
+var ch = chan[string](12)
+var t0 = now_us()
+for i in range(12):
+    spawn hg(i, ch)
+var bad = 0
+for k in range(12):
+    var m = ch.recv()
+    if not m.ends_with(":ok"):
+        bad += 1
+var wall = (now_us() - t0) // 1000
+print("POOL wall_ms=" + str(wall) + " bad=" + str(bad))
+if bad == 0:
+    print("POOL-OK")
+else:
+    print("POOL-BAD")
+    exit(1)
+# 空闲保活窗（verify.sh 在此采样外包线程回收后线程数；> PX_OFFLOAD_IDLE_MS）
+sleep(2500)
+print("POOL-IDLE-DONE")

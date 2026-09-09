@@ -1,0 +1,23 @@
+# M96-S2 验证用慢 HTTP 服务（http_get 目标 daemon）
+# 路由：
+#   /hi     立即 "hi"（就绪探测）
+#   /slow   sleep 200ms → "ok"
+#   /slow2  sleep 500ms → "ok2"
+#   /data   固定长 body（offload vs 直调对拍基准）
+def m96_handler(req):
+    let p = req["path"]
+    if p == "/slow":
+        sleep(200)
+        return "ok"
+    if p == "/slow2":
+        sleep(500)
+        return "ok2"
+    if p == "/data":
+        return "M96DATA-0123456789-ABCDEFGHIJKLMNOPQRSTUVWXYZ-abcdefghijklmnopqrstuvwxyz-0123456789-DATA-END"
+    if p == "/hi":
+        return "hi"
+    return {"status": 404, "body": "nf"}
+
+spawn http_serve(18889, m96_handler)
+sleep(300000)
+exit(0)
