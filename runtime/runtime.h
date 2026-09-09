@@ -516,6 +516,11 @@ typedef struct PxConn {
     void* conf;        // mbedtls_ssl_config*
     void* ctr_drbg;    // mbedtls_ctr_drbg_context*
     void* entropy;     // mbedtls_entropy_context*
+    void* own_pk;      // M101: per-连接服务端私钥副本（mbedtls_pk_context*，RSA clone；
+                       //      多 worker 并发握手消除共享 g_srv_key 签名 data race；
+                       //      owned=1 时 px_conn_close 释放）
+    void* own_pk_sni;  // M101: SNI 命中的 per-连接私钥副本（mbedtls_pk_context*，若有；
+                       //      px_sni_cb 内 clone；owned=1 时 px_conn_close 释放）
     unsigned char rbuf[16384]; // TLS 读缓冲（SSL_read 一次可多读）
     int rlen, roff;
     int closed;        // 连接已关闭（px_conn_close 置 1；对象保留避免并发 use-after-free）
