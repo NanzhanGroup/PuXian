@@ -11,6 +11,21 @@
 M102 = 二期候选 **B（.px 子进程池协程化）+ C（h2 handler 协程化）**：先各做 D0
 侦察，**成立则实施，不成立就地关闭并记录**（侦察驱动，不为不存在的东西写代码）。
 
+## 〇-1、实施收口决策（2026-09-10，S3 前更新）
+
+- **D1（语言层 px_exec offload）✅ 已实施**：px_exec 纳入 offload 名单（协程 ctx 内
+  .px 子进程池执行外包执行线程池，worker 不卡）。examples/m102_s2 verify 5P/0F：
+  PX_CORO_WORKERS=1 单次基准 ~500ms vs 3 并发 ~505ms（≈单次 → 外包并行铁证，同步
+  串行需 ~3×）。语义对拍 3/3 slow-ok。回归 m96_s2 8P/0F + m32_hot_reload 绿。
+- **D2（URL 直达 .px defer）🔸 关闭记录（二期）**：URL .px 请求（px_http_dispatch
+  静态 docroot .px 分支同步 px_pool_run）阻塞 g_pool worker 属实，但 defer 需要：
+  ① offload executor 扩展"C 闭包任务"（现仅 LXValue native）或新增 .px 专用后台
+  执行器；② PxPend kind 扩展 + 段2 组装；③ .px docroot CGI 在协程化时代已非主流
+  （route/vhost handler 优先）。工程 ≈ 独立里程碑 → 记入二期清单，不在 M102。
+- **候选 C（h2 handler 协程化）❌ 关闭记录**：h2 无 VM handler 管道（固定 echo 帧
+  循环、不经公共管道）+ M-B9b ALPN 已固定 http/1.1 → 无对象可协程化。
+- **M102 = D1 一个实施闭环**（侦察驱动：h2 关闭、URL defer 记录、px_exec 成立实施）。
+
 ## 一、D0 侦察结论（2026-09-10，dongyue，基线 31ff74a）
 
 ### 候选 C · h2 handler 协程化 → ❌ 关闭（记录，不实施）
@@ -54,8 +69,9 @@ M102 = 二期候选 **B（.px 子进程池协程化）+ C（h2 handler 协程化
 
 | S | 内容 | 交付 |
 |---|---|---|
-| **S1**（本 commit） | 立项 + D0 侦察定稿（h2 关闭记录 / .px 成立）+ 本文档 | docs/M102_PLAN.md |
-| **S2** | .px 协程化实现 + examples/m102 验证套件 | 见下 D1-D4 |
+| **S1**（✅ 7edb71f） | 立项 + D0 侦察定稿（h2 关闭记录 / .px 成立）+ 本文档 | docs/M102_PLAN.md |
+| **S2a**（✅ 3b02cf9） | D1 语言层 px_exec offload 实现 + examples/m102_s2 verify 5P/0F（铁证：PX_CORO_WORKERS=1 3 并发 px_exec ≈ 单次基准 → 外包并行） | runtime.c 名单 + examples/m102_s2 |
+| **S2b**（🔸 本 commit） | 收口决策记录：D2（URL .px defer）关闭记二期 + D1 验证面扩（m96_s2 8P/0F + m32 语义） | 本文档更新 |
 | **S3** | 收口：全量回归 + 双自举 + pxi/pxi_vm 重链 + 文档 + tag v0.2.0-m102 | CHANGELOG/ROADMAP |
 
 ## 三、设计定稿（S2，D1-D4）
