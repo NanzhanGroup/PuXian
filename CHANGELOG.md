@@ -40,6 +40,32 @@
 >   g_cur_conn）、px_serve（route/vhost 管道 handler 调用点深埋 runtime_route）；完成后
 >   评估 fserve/pool 默认 worker 数下调（256 → CPU 级）。
 
+### M95-S4 · sse_serve handler 协程化（D8-② 二期：SSE 活跃 handler 占协程不占 fserve worker）
+
+> M95-S4 = M95_PLAN §五 二期编排第 S4 条（sse_serve handler 协程化）。commit：本 commit。
+> - **sse_conn_worker 拆段**：TLS 握手+读请求+解析+注册 conn id+发 SSE 响应头（段1）
+>   → handler.fn==px_vm_entry（VM）→ 注册表项 stage=1 + `px_coro_spawn_ex` 帧协程 →
+>   **worker 释放**去取下一 job（handler 内 chan/sleep/spawn 让出占协程不占 fserve
+>   worker）；协程完成回调 sse_handler_done（coro worker 线程）置 stage=2 +
+>   fserve_push(fd, SSE) 投回续处理 → fserve worker 重入 sse_conn_worker 入口
+>   （注册表项 stage==2 take）→ **sse_conn_hold**（段2 收尾 = 原 step8/9：明文连接交还
+>   IDLE 事件循环照看 / TLS 阻塞保持读 + 注册清理，同步路径与续处理共用，逐字节语义
+>   一致）。逃生舱（PX_NATIVE handler）→ 原同步直调 + sse_conn_hold 零变化。
+> - **D0 关键结论**：g_cur_conn 全库**无读取消费者**（仅赋值 + extern + 注释，历史
+>   遗留；sse_send/sse_close 按 conn id 查 g_sse_conns 注册表，不依赖 TLS 线程局部）
+>   → 无需「协程局部连接上下文」迁移机制；SSE 一连接一 handler（无 keep-alive 循环）
+>   → pending 仅需注册表项 stage 标志（无独立 req/resp GC 根面需求 —— req 由协程
+>   args 保活，SSE handler 返回后不写 HTTP 响应）。
+> - **验证门全绿**：examples/m95_s4/verify.sh **10 PASS**（功能路由 /health /sleep
+>   /chan + **fserve=2 × 20 并发 /sleep(0.6s) wall 0.65s**（占协程实证，线程模型 2
+>   worker 需 ≥6s）+ 20 并发期间线程收敛 8 + /chan spawn+chan.recv 让出 + precise
+>   低阈值 GC 压力 12/12 + 客户端断连不崩服务健康）+ TLS SSE 冒烟（tls_server +
+>   sse_serve handler 内 sleep 两段推送 + sse_close，curl -k 收流正确；handler 返回
+>   连接保持路径断连后服务健康重连正常）。回归全绿：m83_s6 9（SSE legacy + http_stream
+>   takeover）+ m95_s2 12 + m89_s3d 9 + **vm_ab 38 PASS 0 GAP 0 FAIL** + m93_s2/s3 12
+>   + m94_s2/s3 8 + diffcheck interp ✅。详见 docs/M95_PLAN.md §五。
+> - ⚠️ 继续边界：M95-S5（px_serve route/vhost handler 协程化，g_pool 收敛到 coro）。
+
 ### M94 · 协程调度完备性（D8 二期-A：抢占 + 定时器并入调度循环 + 逃生舱边界决策）
 
 > M94 = M93_PLAN §D8 二期第 ③④ 条落地（①② 网络 IO / handler 协程化编排 M95/M96）。

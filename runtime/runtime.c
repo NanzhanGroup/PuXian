@@ -11410,7 +11410,12 @@ static LXValue bi_http_serve_unix(LXValue* args, int nargs, void* ctx) {
 // （env PX_MAX_SSE_CONNS，默认 4096，夹取 [64,65536]），支撑上千~上万 SSE 长连接挂载；
 // 容量首次使用时一次性分配（无 realloc 竞态，指针恒定）。
 #define MAX_SSE_CONNS_DEFAULT 4096
-typedef struct SseServerConn { int fd; int64_t id; int active; PxConn* conn; } SseServerConn;
+// M95-S4：SSE handler 协程化 —— stage 字段：
+//   0 = 常规/无 handler 协程；1 = handler 帧协程运行中（fserve worker 已释放，
+//      连接注册表项保留供 sse_send/sse_close）；2 = handler 协程完成待续处理
+//      （done 回调置位 + fserve_push(fd, SSE) 投回 → sse_conn_worker 入口检测
+//      stage==2 → 执行原 step8 hold 收尾：明文交 IDLE / TLS 阻塞保持读）。
+typedef struct SseServerConn { int fd; int64_t id; int active; PxConn* conn; int stage; } SseServerConn;
 static pthread_mutex_t g_sse_mu = PTHREAD_MUTEX_INITIALIZER;
 static SseServerConn* g_sse_conns = NULL;
 static int g_sse_cap = 0;            // 当前容量（首次使用时按 env 上限一次性分配）
@@ -11485,6 +11490,7 @@ static void sse_server_close_fd(int fd) {
             g_sse_conns[i].active = 0;
             g_sse_conns[i].fd = -1;
             g_sse_conns[i].conn = NULL;
+            g_sse_conns[i].stage = 0;   // M95-S4：清 handler 协程 stage（防 slot 复用残留）
             found = 1;
             break;
         }
@@ -11582,11 +11588,117 @@ static char* sse_frame_c(LXValue data) {
     return out;
 }
 
+// ==================== M95-S4：sse_serve handler 协程化辅助 ====================
+// 目标：SSE handler（VM px 函数）执行从「fserve worker 线程内同步 px_call（handler
+//   内 chan/sleep/spawn 阻塞占线程）」→「handler 帧协程（M93 协程，让出占协程不占
+//   fserve worker）」。sse_conn_worker 拆段：
+//     · 段1（fserve worker）：TLS 握手 → 读请求 → 解析 → 注册 conn id → 发 SSE 响应头
+//       → handler 若 VM → 注册表项 stage=1 + px_coro_spawn_ex(handler, [req],
+//       sse_handler_done, fd) → return（worker 释放，连接注册表项保留供 sse_send）；
+//     · handler 协程完成回调（coro worker 线程）sse_handler_done → g_sse_mu 内
+//       stage 1→2 + fserve_push(fd, SSE) 投回续处理；
+//     · fserve worker 重入 sse_conn_worker 入口 → 见注册表项 active && stage==2
+//       → take（stage 归 0，active 保留）→ sse_conn_hold 收尾（明文 → 交还 IDLE
+//       事件循环；TLS/事件化不可用 → 原阻塞保持读 + 清理注册）→ return。
+//   handler 非 VM（PX_NATIVE，逃生舱）→ 原同步 px_call + sse_conn_hold（零变化）。
+// GC：handler 协程运行期 req 由协程 args 副本保活（px_coro_gc_mark_roots 标 g_all
+//   协程 args）→ 无独立 pending 根面需求；收尾不需 req。连接对象 c = 注册表项
+//   conn（C 堆对象非 GC），跨线程经注册表访问。g_cur_conn 全库无读取消费者（仅
+//   赋值，历史遗留）→ handler 协程化无需 TLS 连接上下文迁移（D0 确认）。
+// ============================================================
+
+// handler 协程完成回调：把注册表项 stage 1→2（连接仍 active）并投回 fserve 续处理。
+// 若连接已关闭/注册项已清（sse_close/断开）→ 丢弃（防 fd 复用误投）。
+static void sse_handler_done(void* ud, LXValue ret) {
+    int fd = (int)(intptr_t)ud;
+    if (fd < 0) return;
+    px_root_push();
+    PX_KEEP(ret);   // precise 窗口保护（SSE handler 返回值语义无接收方 → 随即丢弃）
+    int push = 0;
+    pthread_mutex_lock(&g_sse_mu);
+    sse_tab_ensure();
+    for (int i = 0; i < g_sse_cap; i++) {
+        if (g_sse_conns[i].active && g_sse_conns[i].fd == fd) {
+            if (g_sse_conns[i].stage == 1) { g_sse_conns[i].stage = 2; push = 1; }
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_sse_mu);
+    if (push) fserve_push(fd, FSERVE_KIND_SSE);   // 投回续处理（worker 重入入口收尾）
+    px_root_pop();
+}
+
+// 段2 收尾（原 sse_conn_worker step8/9 抽出；同步路径与 handler 协程续处理共用）。
+// 连接注册表项在收尾前仍 active（明文交 IDLE 后保留供 sse_send；TLS/断开清理）。
+static void sse_conn_hold(int fd, PxConn* c) {
+    if (!c) return;
+    // step8：明文 → 交还 IDLE 事件循环照看（事件循环 detect 断开/sse_close/sse_send
+    //   写失败 → sse_server_close_fd 统一清理；SSE 空闲不超时）。TLS/事件化不可用
+    //   → 原阻塞保持路径（功能不降，仅 TLS SSE 长连接仍占 worker，文档注明）。
+    if (!c->is_tls) {
+        PxConnCtx* ac = px_evc_acquire(fd, FSERVE_KIND_SSE);
+        if (ac) {
+            px_ev_ensure();
+            if (px_evc_idle_put(fd, FSERVE_KIND_SSE) == 0) {
+                // 交还成功：注册表项保留（conn 供 sse_send 写）；本 worker 收尾释放
+                __sync_fetch_and_sub(&g_px_inflight, 1);
+                g_cur_conn = NULL;
+                return;
+            }
+            px_evc_detach(fd);
+            int fl = fcntl(fd, F_GETFL, 0);
+            if (fl >= 0) fcntl(fd, F_SETFL, fl & ~O_NONBLOCK);
+        }
+    }
+    // 原保持路径（TLS 或事件化不可用）：read 阻塞直到 sse_close（shutdown 唤醒）或对端断开
+    char rb[64];
+    while (px_conn_read(c, rb, sizeof(rb)) > 0) {}
+    // step9：清理注册 + 关闭（只在仍注册时 close，避免与 sse_close 重复关闭）
+    int closed = 0;
+    pthread_mutex_lock(&g_sse_mu);
+    sse_tab_ensure();
+    for (int i = 0; i < g_sse_cap; i++) {
+        if (g_sse_conns[i].active && g_sse_conns[i].fd == fd) {
+            g_sse_conns[i].active = 0;
+            g_sse_conns[i].fd = -1;
+            g_sse_conns[i].stage = 0;
+            closed = 1;
+        }
+    }
+    pthread_mutex_unlock(&g_sse_mu);
+    if (closed) {
+        pthread_mutex_lock(&g_sse_mu);
+        for (int j = 0; j < g_sse_cap; j++) {
+            if (g_sse_conns[j].conn == c) g_sse_conns[j].conn = NULL;
+        }
+        pthread_mutex_unlock(&g_sse_mu);
+        px_conn_close(c);  // 对象保留（closed 标记），避免并发 ws/sse 使用悬垂指针
+        __sync_fetch_and_sub(&g_px_inflight, 1);
+        g_cur_conn = NULL;
+    }
+}
+
 // SSE 连接线程（px_spawn 注册进 GC 槽位）：args[0] = fd
 static LXValue sse_conn_worker(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) return px_null();
     int fd = (int)args[0].as.i;
+    // M95-S4：handler 协程完成续处理（重入入口）——注册表项 active && stage==2
+    //   → take（stage 归 0，active 保留至收尾决定）→ 段2 收尾后返回。
+    {
+        PxConn* c2 = NULL;
+        pthread_mutex_lock(&g_sse_mu);
+        sse_tab_ensure();
+        for (int i = 0; i < g_sse_cap; i++) {
+            if (g_sse_conns[i].active && g_sse_conns[i].fd == fd && g_sse_conns[i].stage == 2) {
+                c2 = g_sse_conns[i].conn;
+                g_sse_conns[i].stage = 0;
+                break;
+            }
+        }
+        pthread_mutex_unlock(&g_sse_mu);
+        if (c2) { sse_conn_hold(fd, c2); return px_null(); }
+    }
     // M27：TLS 握手（若 tls_server 注册）→ PxConn 统一读写（堆分配共享给 sse_send）
     PxConn* c = xmalloc(sizeof(PxConn));
     if (px_conn_init(c, fd) != 0) { xfree(c); return px_null(); }
@@ -11719,61 +11831,45 @@ static LXValue sse_conn_worker(LXValue* args, int nargs, void* ctx) {
     const char* hdr = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n";
     px_conn_write(c, hdr, strlen(hdr));
 
-    // 7. 调 handler（req 注入 conn；handler 内/后台线程可 sse_send）
+    // 7. 调 handler（M95-S4：VM handler → 帧协程异步执行占协程，fserve worker 释放；
+    //    handler 完成回调 sse_handler_done 投回续处理 → 入口 stage==2 走 sse_conn_hold）
     LXValue handler = px_get_global("__sse_handler");
+    int hvm = (handler.type == PX_FUNC && px_vm_entry &&
+               handler.as.obj->as.func.fn == px_vm_entry);
+    if (hvm) {
+        // 登记 stage=1（连接注册表项保留供 sse_send/sse_close）→ spawn handler 帧协程并
+        //   释放本 worker（handler 内 chan/sleep/spawn 让出占协程不占 fserve worker）。
+        pthread_mutex_lock(&g_sse_mu);
+        sse_tab_ensure();
+        for (int i = 0; i < g_sse_cap; i++) {
+            if (g_sse_conns[i].active && g_sse_conns[i].fd == fd) {
+                g_sse_conns[i].stage = 1;
+                break;
+            }
+        }
+        pthread_mutex_unlock(&g_sse_mu);
+        if (px_coro_spawn_ex)
+            px_coro_spawn_ex(handler.as.obj->as.func.ctx, &req, 1,
+                             sse_handler_done, (void*)(intptr_t)fd);
+        else {
+            // 无协程内核（理论不达）→ 退回原同步直调（行为零变化）
+            pthread_mutex_lock(&g_sse_mu);
+            for (int i = 0; i < g_sse_cap; i++) {
+                if (g_sse_conns[i].active && g_sse_conns[i].fd == fd) g_sse_conns[i].stage = 0;
+            }
+            pthread_mutex_unlock(&g_sse_mu);
+            if (handler.type == PX_FUNC || handler.type == PX_NATIVE)
+                px_call(handler, &req, 1);
+        }
+        px_root_pop();   // M92-S2c precise：req 作用域结束（req 已由协程 args 保活）
+        return px_null();   // worker 释放；handler 完成回调投回续处理收尾
+    }
+    // —— 逃生舱（PX_NATIVE / 非 VM handler）：原同步直调路径（行为零变化）——
     if (handler.type == PX_FUNC || handler.type == PX_NATIVE) {
         px_call(handler, &req, 1);
     }
     px_root_pop();   // M92-S2c precise：req 作用域结束（px_call 返回后不再用 req/headers）
-
-    // 8. M88-B-S3：SSE 长连接不占 worker——handler 返回后，明文连接交还 IDLE 事件循环照看
-    //    （事件循环 detect 对端断开 / sse_close / sse_send 写失败 → sse_server_close_fd 统一清理；
-    //    SSE 空闲不超时，区别于 http keep-alive 15s）；worker 立即返回释放去取新 job。
-    //    TLS 连接 / 事件化不可用（非 Linux、fd 超 PX_MAX_CONNS）→ 走原阻塞保持路径（功能不降，
-    //    仅 TLS SSE 长连接仍占 worker，文档注明）。
-    if (!c->is_tls) {
-        PxConnCtx* ac = px_evc_acquire(fd, FSERVE_KIND_SSE);
-        if (ac) {
-            px_ev_ensure();
-            if (px_evc_idle_put(fd, FSERVE_KIND_SSE) == 0) {
-                // 交还成功：注册表项保留（conn 供 sse_send 写）；本 worker 收尾（GC 计数）释放
-                __sync_fetch_and_sub(&g_px_inflight, 1);
-                g_cur_conn = NULL;
-                return px_null();
-            }
-            // idle_put 失败（罕见：epoll ADD 失败）→ 摘除登记并恢复阻塞，走原保持路径
-            px_evc_detach(fd);
-            int fl = fcntl(fd, F_GETFL, 0);
-            if (fl >= 0) fcntl(fd, F_SETFL, fl & ~O_NONBLOCK);
-        }
-    }
-    // 原保持路径（TLS 或事件化不可用）：read 阻塞直到 sse_close（shutdown 唤醒）或对端断开
-    char rb[64];
-    while (px_conn_read(c, rb, sizeof(rb)) > 0) {}
-
-    // 9. 清理注册 + 关闭（只在仍注册时 close，避免与 sse_close 重复关闭）
-    int closed = 0;
-    pthread_mutex_lock(&g_sse_mu);
-    sse_tab_ensure();
-    for (int i = 0; i < g_sse_cap; i++) {
-        if (g_sse_conns[i].active && g_sse_conns[i].fd == fd) {
-            g_sse_conns[i].active = 0;
-            g_sse_conns[i].fd = -1;
-            closed = 1;
-        }
-    }
-    pthread_mutex_unlock(&g_sse_mu);
-    if (closed) {
-        // 置空共享 conn 指针（sse_send 已不可再写该连接）
-        pthread_mutex_lock(&g_sse_mu);
-        for (int j = 0; j < g_sse_cap; j++) {
-            if (g_sse_conns[j].conn == c) g_sse_conns[j].conn = NULL;
-        }
-        pthread_mutex_unlock(&g_sse_mu);
-        px_conn_close(c);  // 对象保留（closed 标记），避免并发 ws/sse 使用悬垂指针
-        __sync_fetch_and_sub(&g_px_inflight, 1);
-        g_cur_conn = NULL;
-    }
+    sse_conn_hold(fd, c);   // 段2 收尾（明文交 IDLE / TLS 阻塞保持读 + 清理）
     return px_null();
 }
 

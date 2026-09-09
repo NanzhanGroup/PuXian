@@ -132,10 +132,20 @@ static HP* g_hpend;  // fd 索引表（懒分配 cap=PX_MAX_CONNS，同 ConnCtx 
 - 逃生舱（--c 产物、PX_NATIVE handler）行为零变化。
 
 ## 五、后续编排（sse/px handler 协程化）
-- **M95-S4（sse_serve）**：前置 = 「协程局部连接上下文」（PxCoro 关联 PxConn*
-  g_cur_conn 替代 __thread；sse handler 内 sse_send/sse_close 按 conn id 查表本不
-  依赖 TLS，需核查 ws 升级等 g_cur_conn 消费点）→ sse_conn_worker step7 handler
-  协程化 + 完成回调做 step8 收尾（交 IDLE / TLS 保持读）。
+- ✅ **M95-S4（sse_serve，本 commit）**：sse_conn_worker handler 协程化 ——
+  sse_serve 的活跃 handler 从「fserve worker 同步 px_call（handler 长业务占线程）」
+  →「handler 帧协程」。sse_conn_worker 拆段：TLS 握手+读+解析+注册 conn id+发 SSE
+  响应头（段1）→ handler.fn==px_vm_entry（VM）→ 注册表项 stage=1 + `px_coro_spawn_ex`
+  帧协程 → **worker 释放**；协程完成回调 sse_handler_done（coro worker 线程）置
+  stage=2 + fserve_push(fd, SSE) 投回 → fserve worker 重入 sse_conn_worker 入口
+  （stage==2 take）→ sse_conn_hold（段2 收尾 = 原 step8/9：明文交还 IDLE 事件循环
+  / TLS 阻塞保持读 + 清理，同步/续处理共用）。逃生舱（PX_NATIVE handler）→ 原同步
+  直调 + sse_conn_hold 零变化。D0 关键结论：g_cur_conn 全库无读取消费者（仅赋值，
+  历史遗留）→ handler 协程化无需 TLS 连接上下文迁移；SSE 一连接一 handler 无
+  keep-alive → pending 仅需注册表项 stage 标志（无 req/resp GC 根面需求，req 由协程
+  args 保活）。m95_s4 套件 10 PASS（并发 20×/sleep 0.6s fserve=2 wall 0.65s 占协程
+  实证 + 线程收敛 8 + /chan 让出 + precise GC 12/12 + 断连健康）+ TLS SSE 冒烟 +
+  回归 m83_s6 9/m95_s2 12/m89_s3d 9/vm_ab 38P/m93_s2/s3 12/m94_s2/s3 8/diffcheck。
 - **M95-S5（px_serve）**：M31.4b g_pool 连接处理 = px_conn_worker（route/vhost/
   静态/.px 管道）handler 调用点定位（runtime_route action）→ 同构协程化；g_pool
   线程收敛到 coro worker。

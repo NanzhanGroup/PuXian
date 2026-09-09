@@ -1,0 +1,60 @@
+# M95-S4 daemon —— sse_serve handler 协程化验证（D8-② 二期，docs/M95_PLAN.md §五 S4）
+# 服务端 sse_serve handler（VM def）执行 = 帧协程：handler 内 sleep/chan/spawn 让出
+# 占协程不占 fserve worker。路由（handler req["path"]）：
+#   /health -> sse_send ok + close（就绪探测）
+#   /sleep  -> handler 内 2×sleep(300ms)（让出实证）：sse_send hello-sse + [DONE] + close
+#   /chan   -> handler 内 spawn 子协程 + chan.recv 让出 → via-chan:from-sub
+#   /gc     -> handler 内大量 dict 分配（precise 低阈值 GC：协程 args/注册表根）
+# 用法：m95_s4_daemon [port]（默认 18196）
+var m95s4_port = 18196
+let m95s4_av = args()
+if len(m95s4_av) > 1:
+    m95s4_port = int(m95s4_av[1])
+
+def sleep_body(req):
+    let conn = req["conn"]
+    sleep(300)                      # 让出（不占 fserve worker 的关键路径）
+    sse_send(conn, "hello-sse")
+    sleep(300)
+    sse_send(conn, {"event": "done", "data": "[DONE]"})
+    sse_close(conn)
+
+def chan_body(req):
+    let conn = req["conn"]
+    let c0 = chan[string](1)
+    spawn sse_sub_worker(c0)
+    let got = c0.recv()             # handler 内 chan 让出等待子协程
+    sse_send(conn, "via-chan:" + got)
+    sse_close(conn)
+
+def sse_sub_worker(c0):
+    sleep(200)
+    c0.send("from-sub")
+
+def gc_body(req):
+    let conn = req["conn"]
+    var i = 0
+    while i < 200:
+        let d = {"seed": i}
+        d.set("k" + str(i), {"v": i, "s": "abcdefghijklmnopqrstuvwxyz0123456789"})
+        i += 1
+    sse_send(conn, "gc-ok")
+    sse_close(conn)
+
+def sse_handler(req):
+    let p = req["path"]
+    if p == "/health":
+        sse_send(req["conn"], "ok")
+        sse_close(req["conn"])
+        return
+    if p == "/chan":
+        chan_body(req)
+        return
+    if p == "/gc":
+        gc_body(req)
+        return
+    sleep_body(req)                 # 默认 /sleep（并发占协程实证路径）
+
+spawn sse_serve(m95s4_port, sse_handler)
+sleep(300000)
+exit(0)
