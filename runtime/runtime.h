@@ -366,6 +366,17 @@ void px_gc_collect(void);
 void px_gc_poll(void);
 // 返回 GC 次数；live 输出当前存活对象数，total 输出累计回收对象数
 int px_gc_stats(int* live, int* total);
+// M92 精确 GC（退役整栈保守扫描）：precise/conservative 双模式 + native 桥根登记。
+//   px_gc_set_precise(1) = precise（VM 轨产物 main 调用；根=全局槽+VM 帧槽+TLS 登记根栈，
+//     跳过整 C 栈保守扫描）；0 = conservative（默认；C 轨逃生舱产物，保持旧行为）。
+//   px_root_push/pop 界定登记作用域（native 桥入口/出口配对）；px_root_keep/PX_KEEP 登记
+//     跨「可能触发 GC 的调用」的局部 LXValue 引用（args 指向对象无需登记——调用者帧槽/
+//     上层根已保护；冗余登记无害，漏登记 = GC 误回收 use-after-free）。
+void px_gc_set_precise(int precise);
+void px_root_push(void);
+void px_root_pop(void);
+void px_root_keep(const LXValue* v);
+#define PX_KEEP(v) px_root_keep(&(v))
 
 // ==================== M28 P1：路由表 + 中间件（runtime_route.c） ====================
 typedef struct PxHttpOut PxHttpOut;   // M53-S2：HTTP 输出抽象（结构体定义见下方 M27 段）

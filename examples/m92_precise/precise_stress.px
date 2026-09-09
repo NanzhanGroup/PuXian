@@ -1,0 +1,19 @@
+# M92 precise GC 压力：map/filter/reduce + lambda 回调内大量字符串构造（触发高频 GC）
+# 目标：验证 native 桥登记（bi_map/bi_filter/bi_reduce 内部局部跨 px_call 保护）
+def mk(x):
+    var s = ""
+    for i in range(25):
+        s = s + str(x) + "_" + str(i)
+    return s
+
+def main():
+    var nums = []
+    for i in range(1500):
+        nums.append(i % 97)
+    var r = 0
+    for round in range(40):
+        var m = map(nums, fn(x) { len(mk(x)) })
+        var f = filter(m, fn(x) { x > 90 })
+        var s = reduce(f, fn(a, b) { a + b }, 0)
+        r = r + len(f) * 1000000 + s
+    print("STRESS_RESULT", r)
