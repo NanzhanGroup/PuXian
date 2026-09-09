@@ -1,7 +1,8 @@
 # M99_PLAN · px_serve 连接级事件化 IDLE —— keep-alive 空闲连接不占 g_pool worker
 
-> 状态：🔄 **M99 进行中（S1 立项 → S2 实现 → S3 验证 → S4 收口）**。
-> 基线 v0.2.0-m98（e76df86，M98 收口后，runtime.c 16217 行）。S2 验证：examples/m99_s2 verify.sh。
+> 状态：🔄 **M99 进行中（S1 立项 → S2 实现+核心验证 → S3 回归面全绿 → S4 收口）**。
+> 基线 v0.2.0-m98（e76df86，M98 收口后，runtime.c 16217 行）。S2 验证：examples/m99_s2 verify.sh
+> 8P/0F + verify_tls.sh 8P/0F。S3 回归：m95_s2/s4、m97_s2/s3、m82、m83_s6 全 RC=0 + M98_s2 回归 7P/0F。
 > 上游：M95（http_serve handler 协程化 + px_evc 事件循环内核）、M95-S4（sse_serve 事件化、
 > PxConn 堆化注册蓝本）、M88-B（fserve 事件化：FREE→ACTIVE→IDLE→派发）、M97（px_send_all
 > 全量写）、M98（px_serve route/vhost handler 协程化：PxPend 连接堆化注册表）。
@@ -91,3 +92,26 @@ M99 = **px_serve 连接「请求间空闲」事件化**（明文 + TLS 全支持
 - S2 runtime.c 事件化实现
 - S3 examples/m99_s2 verify.sh 验证门
 - S4 收口（回归/自举/重链/文档/tag）
+
+## 四、S2/S3 验证结果（2026-09-10）
+
+- **examples/m99_s2 verify.sh（明文）8P/0F**：P1 并发 40×/fast max_conn=4 全成功 wall=0.01s
+  （事件化前 4 worker 被 keep-alive 空闲占死 → 36 悬挂——核心铁证）；线程峰值 14≤20（40 空闲
+  连接 0 占 worker）；P3 并发 40×/slow（sleep300 让出+IDLE）wall=0.30s；P6 空闲 16.5s 后 8/8
+  连接被事件循环 15s tick 超时回收；优雅关闭 0.1s + 日志在途 0（px_pxserve_ev_close_all 生效）。
+- **examples/m99_s2 verify_tls.sh（TLS）8P/0F**：顺序建 20 TLS keep-alive 全成功（0.97s，
+  max_conn=2）；线程峰值 12≤18（20 TLS 空闲连接 0 占 worker）；P3 TLS 空闲后 20 conns 并发
+  续请求 20/20 wall=0.00s（IDLE 唤醒 + mbedtls rbuf 缓冲探测续服务，不悬挂不丢）；优雅关闭干净。
+- **回归面（M99 改动触及 px_evc 事件循环 + px_serve + 关闭路径）全绿**：m95_s2（http handler
+  协程化）RC=0、m95_s4（sse handler 协程化 + px_evc SSE）RC=0、m97_s2/m97_s3（Issue31/32 连接
+  复用）RC=0、m82_http_serve_unix RC=0、m83_s6 RC=0、M98_s2（route/vhost 协程化）7P/0F。
+- **⚠️ 发现既有缺陷（先于 M99，非本里程碑引入，qg 二期候选）**：px_serve **并发 TLS 握手**
+  缺陷——TLS1.3 下 CertificateVerify「crypto/rsa: verification error」（Go 客户端，InsecureSkipVerify
+  不豁免 CertificateVerify 验签）+ TLS1.2 下大并发部分 EOF。用 M98 runtime（git show e76df86:
+  runtime/runtime.c）复现同样失败（TLS1.3 20/20、TLS1.2 20/20 更严重）→ 确证与 M99 无关（M99
+  不触握手路径：px_conn_init/px_conn_tls_handshake 未改）。M99 TLS 验证据此改为顺序建连（单连
+  握手稳定）聚焦「已建 TLS 连接空闲事件化」；并发握手健壮性另立里程碑（疑似 mbedtls 全局
+  session cache 并发竞态 / RSA-PSS CertificateVerify 边界，需 mbedtls debug 定位）。
+- **注（px_serve 既有限制，非 M99 引入）**：HTTP/1.1 pipelining 同缓冲多请求——px_conn_worker
+  读缓冲残余未 pbuf 续接（http_serve 有 PxConnCtx.pbuf 续接，px_serve 未实现）→ 流水线客户端
+  残余请求丢失；keep-alive 顺序请求（标准用法）无此问题。二期候选（px_conn_worker pbuf 续接）。
