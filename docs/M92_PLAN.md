@@ -1,19 +1,14 @@
 # M92_PLAN · 精确 GC 终极项（退役整栈保守扫描 + 原生桥根登记）
 
-> 状态：🚧 **进行中（S2c 完成）**。S1 设计定稿 + S2a precise 框架 + S2b 语言核心层
-> 批量登记已合入（2017101/a55a13c）；S2c 登记批次 2（服务/IO 桥）已合入（本 commit）：
->   http_conn_worker（http_serve/http_serve_unix 主 worker：headers/req/form/resp 迭代
->   作用域登记——崩点修复，precise 压测实锤 http_conn_worker→px_dict_set→UAF）、
->   sse_conn_worker（headers/req）、sse_parse_event_c（累积 dict）、bi_http_request/
->   bi_http_unix（客户端响应 dict）、px_conn_worker（px_serve 主 worker headers/req/form）、
->   route_match/px_route_try_dispatch（params + 中间件/handler 返回值）、px_http_dispatch
->   vhost handler 段。**附带修复**：px_root_push/pop/keep 加 SIG_GC_STOP 屏蔽（根栈操作
->   非原子 → GC handler 快照半态 → 并发随机 UAF；与 list/dict 结构修改同模式）。
->   已知残余：PX_GC_INLINE=1 强化模式 precise 服务长跑 ~2 万请求级稀有崩溃（崩 GC 标记
->   hash set 坏指针；INLINE 强制内联 GC 至任意分配点 → executor 极稀有交错；真实服务
->   deferrable 安全点 GC 无窗口——无 INLINE precise 19.2 万请求稳定、conservative 15 万
->   稳定），列 issue 专项，不阻塞（见 §五 S2c 验收记录）。
->   剩余 S2d（bc_emit 产物插桩 px_gc_set_precise）→ S3 收口。
+> 状态：🚧 **进行中（S2d 完成）**。S1 设计定稿 + S2a precise 框架 + S2b 语言核心层
+> 批量登记（2017101/a55a13c）+ S2c 服务/IO 层登记与根栈并发原子性修复（a323505）
+> + S2d 插桩完成（本 commit）：bc_emit.px 产物 main 加 `px_gc_set_precise(1)` →
+> **默认 px build VM 产物自动 precise**（C 轨逃生舱产物不插 → conservative）。
+> 自举全链重建（compiler_new + compiler_vm 含新 bc_emit）+ bootstrap/pxc_vm 部署
+> + 双 golden 更新（compiler.c 15061 行 / compiler.bc.dump 30582 行）。
+> 剩余 S3 收口（precise 默认轨全量回归已绿：vm_ab 38PASS/m89_s3d 9PASS/m82 8PASS/
+> m83_s6 全PASS/diffcheck 24✅/双自举 prove rc=0 + http_json 默认 precise 5×6000
+> 0 错 RPS 1270-1535 → 文档 + tag v0.2.0-m92）。
 > 上游：M89_PLAN §S3-D 后置决策、docs/M89_vm_design.md §六（精确 GC 设计）。
 > 基线：v0.2.0（M91 收口 3bbbee4）。
 
@@ -114,7 +109,7 @@ void px_root_keep(const LXValue* v);      // 登记局部引用（跨可能触�
   - conservative 零回归：m89_s3d 9 PASS + vm_ab v2 38 PASS/0GAP/0FAIL + precise_stress1/2 逐字节一致；
   - 真实服务模式（无 PX_GC_INLINE，deferrable 安全点 GC）precise 19.2 万请求稳定；PX_GC_INLINE=1 强化模式 ~2 万请求稀有崩溃（GC 标记 hash set 坏指针，已记录 issue，见状态头）；
   - 附带修复：px_root_push/pop/keep SIG_GC_STOP 屏蔽（并发根栈快照原子性）。 |
-| S2d | VM 轨产物插桩：bc_emit.px 产物 main 加 px_gc_set_precise(1)（C 轨 codegen 不加） | 默认 px build 产物 precise 运行全量回归绿 |
+| S2d | VM 轨产物插桩：bc_emit.px 产物 main 加 px_gc_set_precise(1)（C 轨 codegen 不加） | ✅ 完成（本 commit）：bc_emit.px main 生成处插桩 → 默认 px build VM 产物自动 precise；自举全链重建（compiler_new/compiler_vm 含新 bc_emit）+ bootstrap/pxc_vm 部署 + 双 golden 更新（compiler.c 15061 / compiler.bc.dump 30582）；验证：vm_ab v2 默认 precise 38 PASS/0GAP/0FAIL、m89_s3d 默认 precise 9 PASS、m82 8 PASS、m83_s6 全 PASS、diffcheck --all 24✅、双自举证明 rc=0、http_json 默认 precise（thr2000 deferrable）5×6000 请求 0 错 RPS 1270-1535、px_serve+route 默认 precise 200 并发全 200 |
 | S3 | 收口：precise 全量回归（vm_ab/diffcheck/m89_s3d/m82/m83 + 低阈值压力）+ 重链 bootstrap + 文档 + tag | 全绿 + tag v0.2.0-m92 |
 
 ## 六、风险与预案

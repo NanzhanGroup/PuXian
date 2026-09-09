@@ -1830,6 +1830,7 @@ def bc_emit_c_program(prog):
     out += "int main(int argc, char** argv) {\n"
     out += "    px_args_init(argc, argv);\n"
     out += "    px_register_builtins();\n"
+    out += "    px_gc_set_precise(1);   // M92-S2d：VM 轨产物默认 precise 精确根面（退役保守栈扫描；C 轨逃生舱产物不插此调用 → conservative）\n"
     out += "    LXValue _r = px_vm_run_module(px_vm_state(), &s_mod);\n"
     out += "    int _code = 0;\n"
     out += "    if (px_is_result(_r)) {\n"
