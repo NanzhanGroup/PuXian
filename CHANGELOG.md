@@ -6,6 +6,31 @@
 
 ## [Unreleased]
 
+### M92-S2d · VM 轨产物默认 precise 插桩（bc_emit）+ 自举重建 + 双 golden 更新（2026-09-09，dongyue）
+
+> M92 S2d 完成：bc_emit.px 产物 main 插 `px_gc_set_precise(1)` → **默认 `px build`
+> VM 产物自动进入 precise 精确根面**（退役保守栈扫描；C 轨逃生舱产物不插 →
+> conservative，逃生舱语义零变化）。这是 M89_S3-D 后置决策三件套的最终落地——
+> 默认轨（VM）成为精确 GC 主执行轨。
+> - **插桩**（selfhost/bc_emit.px）：`main()` 里 `px_register_builtins()` 后加
+>   `px_gc_set_precise(1);`（含注释）。产物 C 实测含该调用（precise_stress.c
+>   grep 命中）。
+> - **自举全链重建**：compiler.px（import bc_emit）→ compiler_new（C 引擎编译器）→
+>   compiler_vm（VM 驱动编译器，含新 bc_emit）→ 部署 bootstrap/pxc_vm（9,334,096 →
+>   2,566,248B 基线变化见二进制）。此后 `px build` 产物默认 precise。
+> - **双 golden 更新**：golden/compiler.c 15058 → **15061 行**、golden/compiler.bc.dump
+>   30578 → **30582 行**（双引擎 C/VM 编 compiler.px 镜像逐字节一致）。
+> - **验证（默认 precise 下全量回归绿）**：vm_ab v2 **38 PASS 0 GAP 0 FAIL**（38 例
+>   逐字节对拍，precise 根面无漏登记 UAF）；m89_s3d **9 PASS**（VM 并发 GC ×3 +
+>   堆回落 ×3 波）；m82 verify 8 PASS（http_serve_unix）；m83_s6 verify 全 PASS
+>   （SSE/http_stream/断连）；diffcheck --all 24 用例全 ✅；双自举证明
+>   bootstrap_prove.sh rc=0 + bootstrap_prove_bc.sh rc=0（新 golden 逐字节）；http_json
+>   默认 precise（thr2000 deferrable 真实服务模式）8-12 并发 5×6000=30000 请求 0 错
+>   RPS 1270-1535（与 conservative 持平，无性能回归）；px_serve+route 默认 precise
+>   200 并发全 200。
+> - 备注：M92_PLAN 状态/验收同步；残余 issue（PX_GC_INLINE=1 强化模式稀有 GC 标记
+>   崩溃）记录于 S2c 段，真实服务 deferrable 模式无窗口。
+
 ### M92-S2c · precise GC native 桥登记批次 2（服务/IO 层）+ 根栈并发原子性修复（2026-09-09，dongyue）
 
 > M92（精确 GC 终极项，docs/M92_PLAN.md）S2c 完成。S2a 框架 + S2b 语言核心层
