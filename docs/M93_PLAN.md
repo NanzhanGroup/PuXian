@@ -245,4 +245,15 @@
 - **工具链**：调试用 `-g`/`-fsanitize=address` 为临时改动 tools/px（已还原 + 清
   rtcache 重编 release）；libasan 通过 yum 安装（RHEL9 gcc11 runtime 缺失）。
 
-### S4 GC 集成 + 万级压力 —— 待办
+### S4 GC 集成 + 万级压力 —— 完成（与 S3 同 commit 验证）
+> g_coros 精确根（S2）+ BLOCKED 让出协程帧槽标记（S3 px_coro_gc_mark_roots 遍历
+> g_all 全部存活协程）在并发 GC（STW 暂停 worker）下实测：
+> - coro_gc_block.px：60 协程 chan 乒乓 × list/str 高频分配 × PX_GC_THRESHOLD=4000
+>   （多轮并发 GC STW × BLOCKED 帧精确根）→ 零崩/UAF，值正确。
+> - coro_5k_gc.px（临时）：5000 协程 × 40 轮分配 + 每 11 轮 sleep_us(150) 让出 ×
+>   PX_GC_THRESHOLD=8000 → 37.3s 全完成，total=2,400,000 精确（无丢失/重复）。
+> - 万级纯算 spawn（10000 协程）3.26s 全完成。
+> 验证了让出协程（无 C 栈）帧槽根面在并发 GC 下稳定（漏标 = UAF 会被低阈值压力
+> 暴露；未发生）。
+
+### S5 收口（全量回归 + 重链 + 文档 + tag）—— 进行中
