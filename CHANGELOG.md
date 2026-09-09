@@ -6,6 +6,40 @@
 
 ## [Unreleased]
 
+### M95 · 服务端 handler 协程化（D8-② http_serve 系：活跃请求占协程不占 fserve worker）
+
+> M95 = M94_PLAN §五 编排 D8 二期第 ② 条（http_serve/http_serve_unix handler 协程化）。
+> commit 链：a6d6056（S1 立项定稿 + S2 实现闭环）+ 本 commit（S3 收口 + tag v0.2.0-m95）。
+> - **S2 handler 协程化**：http_serve/http_serve_unix 的活跃请求 handler 从「fserve
+>   pthread worker 内同步 px_call（handler 长业务占线程）」→「handler 帧协程」。
+>   http_conn_worker 拆段：读+解析（段1）→ handler.fn==px_vm_entry（VM）→
+>   http_pend_put(stage=1) + `px_coro_spawn_ex` 帧协程 → **worker 释放**去取下一 job；
+>   协程完成回调 http_handler_done（coro worker 线程）写 resp（stage=2）+ fserve_push
+>   投回续处理 → fserve worker 重入循环顶 take → http_send_resp（段2 响应写 +
+>   keep-alive，与同步路径共用，逐字节语义一致）。逃生舱（PX_NATIVE / C 轨 handler）
+>   → 原同步直调零变化。
+> - **机制扩展**：coro.c 完成回调（PxCoro.done_cb/done_ud + px_coro_spawn_ex，px_coro_
+>   spawn = NULL 壳）；vm.c/h PxVmState.ret_val（跑完存顶层返回值供回调取 + GC 补标）；
+>   http pending 表（fd 索引，req/resp 为 GC 根，gc 标记期补标 —— precise 漏标=UAF）；
+>   px_evc_close 清 pending 项（fd 复用防串扰）；PX_SERVE_WORKERS 下限 8→2（协程承载
+>   长业务后显式小池可用，默认仍 256）。
+> - **S2 排障两案**：① verify 门5 假 FAIL = verify.sh 统计 bug（`echo` 未重定向致
+>   daemon 无尾换行响应体粘连、grep 行锚定失效）→ 修 printf '\n' >>out + 逐文件
+>   grep -l；② **真实死锁** = http_pend_gc_mark 在 GC 标记期持 g_conn_mu，与不屏蔽
+>   SIG_GC_STOP 的既有 g_conn_mu 临界区（M88-B px_evc_*）形成 STW 死锁面（GC 等锁
+>   vs 持锁线程被信号暂停）→ precise 低阈值 GC 压力下 daemon 卡死（health 不分配仍
+>   响应、分配型请求全挂）→ pending 表改**独立锁 g_hpend_mu** + 全部临界区屏蔽
+>   SIG_GC_STOP（对齐 M92 根栈原子性模式）。
+> - **验证门全绿**：m95_s2 套件 **12 PASS**（功能路由 + fserve=2 × 30 并发 sleep
+>   handler wall 0.25s（占协程实证，线程模型需 ≥3s）+ 20 并发期间线程收敛 9 + /chan
+>   让出 + precise 低阈值 GC 压力 16/16 + close/HEAD 逐字节）+ 协程内核回归 m93_s2/s3
+>   12 + m94_s2/s3 8 + **vm_ab 38 PASS 0 GAP 0 FAIL** + m89_s3d 9 + m82/m83_s6 ✅ +
+>   diffcheck --all ✅；bootstrap/pxi_vm 重链吸收 M95 runtime（9,329,128 → 9,329,448B，
+>   hello 与 pxi stdout 一致）。详见 docs/M95_PLAN.md。
+> - ⚠️ 二期边界（M95_PLAN §五）：sse_serve（需先做「协程局部连接上下文」替代 __thread
+>   g_cur_conn）、px_serve（route/vhost 管道 handler 调用点深埋 runtime_route）；完成后
+>   评估 fserve/pool 默认 worker 数下调（256 → CPU 级）。
+
 ### M94 · 协程调度完备性（D8 二期-A：抢占 + 定时器并入调度循环 + 逃生舱边界决策）
 
 > M94 = M93_PLAN §D8 二期第 ③④ 条落地（①② 网络 IO / handler 协程化编排 M95/M96）。
