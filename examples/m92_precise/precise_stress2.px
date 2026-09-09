@@ -1,0 +1,76 @@
+# M92-S2b precise GC 压力2：覆盖 S2b 登记的 native 桥
+#   dict keys/values · json_parse/stringify 递归 · json_path_set 深拷贝链 ·
+#   list 拼接/切片 · sorted/reversed · split/join · list(str) 字符化 ·
+#   regex find_all/search/split · map/filter/reduce（S2a 既有）
+# 运行：PX_GC_PRECISE=1 PX_GC_THRESHOLD=<低> 与 conservative 输出须逐字节一致
+def chk(name, a, b, c):
+    print("CHK", name, a, b, c)
+
+def main():
+    # ---- dict keys/values（px_method dict.keys/values 登记）----
+    var d = {"seed": 0}
+    for i in range(400):
+        d.set("k" + str(i), [i, i + 1, {"n": str(i)}])
+    print("SEG1")
+    chk("keys_len", len(d.keys()), 0, 0)
+    var vs = d.values()
+    var s0 = 0
+    for i in range(1, len(vs)):
+        var v = vs[i]
+        s0 = s0 + v[0]
+    chk("vals_sum", s0, 0, 0)
+    # ---- json roundtrip（json_parse_value dict/list 递归登记）----
+    print("SEG2")
+    for t in range(10):
+        var s = json_stringify(d)
+        var b = json_parse(s)
+        chk("roundtrip", t, len(b.keys()), len(b))
+    # ---- json_path_set → json_value_copy + json_path_set_at（深拷贝递归登记）----
+    print("SEG3")
+    for t in range(15):
+        var dd = json_path_set(d, "$.k7[1]", t)
+        chk("jps", t, json_path(dd, "$.k7[1]"), json_path(dd, "$.k7[2].n"))
+    # ---- list 拼接 + 切片（px_add/px_slice list 分支登记）----
+    print("SEG4")
+    var la = range(150)
+    var lc = la + la
+    var sl = lc[10:290:2]
+    chk("add_slice", len(lc), len(sl), sl[0])
+    # ---- sorted / reversed（累积拷贝登记）----
+    print("SEG5")
+    var nums = [9, 1, 7, 3, 5, 0, 8, 2, 6, 4]
+    var so = sorted(nums)
+    var rv = reversed(nums)
+    chk("sorted", join(",", so), rv[0], rv[9])
+    for t in range(10):
+        var so2 = sorted(nums)
+        chk("sorted2", t, so2[0], so2[9])
+    # ---- split/join（bi_split 累积登记）----
+    print("SEG6")
+    for t in range(30):
+        var parts = "a,b,c,d,e,f,g,h,i,j".split(",")
+        chk("sj", t, len(parts), len(join("-", parts)), parts[0])
+    # ---- list(str) 字符化 含多字节（bi_list str 分支登记）----
+    print("SEG7")
+    for t in range(15):
+        var cl = list("普贤hello世界")
+        chk("cl", t, len(cl), cl[0], cl[7])
+    # ---- regex（find_all/search/split 累积登记）----
+    print("SEG8")
+    var txt = "ab12cd34ef56gh78"
+    for t in range(20):
+        var fa = regex_find_all("[0-9]+", txt)
+        var m = regex_search("([a-z]+)([0-9]+)", txt)
+        var sp = regex_split("[0-9]+", txt)
+        chk("re", t, len(fa), m["start"], len(sp))
+    # ---- map/filter/reduce（S2a）+ range 大累积（bi_range 登记）----
+    print("SEG9")
+    var r2 = reduce(map(range(1000), fn(x) { x * 2 }), fn(a, b) { a + b }, 0)
+    var big = range(3000)
+    var r3 = reduce(filter(big, fn(x) { x % 7 == 0 }), fn(a, b) { a + b }, 0)
+    chk("mapreduce", r2, r3, len(big))
+    # ---- list_dir（IO 累积登记；用仓库目录，条目固定）----
+    print("SEG10")
+    var ent = list_dir("/usr/bin")
+    chk("listdir", len(ent) > 100, len(ent), 0)
+    print("STRESS2_DONE")
