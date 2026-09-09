@@ -2136,10 +2136,13 @@ LXValue px_add(LXValue a, LXValue b) {
     if (a.type == PX_FLOAT || b.type == PX_FLOAT) return px_float(num_val(a) + num_val(b));
     if (a.type == PX_LIST && b.type == PX_LIST) {
         LXValue r = px_list(a.as.obj->as.list.len + b.as.obj->as.list.len);
+        px_root_push();
+        PX_KEEP(r);   // M92 precise：拼接 list 跨 px_list_push 扩容分配
         LXObject* ro = r.as.obj; LXObject* ao = a.as.obj; LXObject* bo = b.as.obj;
         for (int i = 0; i < ao->as.list.len; i++) px_list_push(r, ao->as.list.items[i]);
         for (int i = 0; i < bo->as.list.len; i++) px_list_push(r, bo->as.list.items[i]);
         (void)ro;
+        px_root_pop();
         return r;
     }
     px_error("无法相加: %s + %s", px_type_name(a), px_type_name(b));
@@ -2445,8 +2448,11 @@ LXValue px_slice(LXValue obj, LXValue start, LXValue end, LXValue step) {
 
     if (kind == 0) { // list
         LXValue r = px_list(n);
+        px_root_push();
+        PX_KEEP(r);   // M92 precise：切片 list 跨 px_list_push 扩容分配
         if (k_in > 0) { for (int64_t i = s; i < e; i += k_in) px_list_push(r, obj.as.obj->as.list.items[(int)i]); }
         else { for (int64_t i = s; i > e; i += k_in) px_list_push(r, obj.as.obj->as.list.items[(int)i]); }
+        px_root_pop();
         return r;
     }
     if (kind == 1) { // tuple
@@ -2777,13 +2783,19 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
         if (strcmp(name, "keys") == 0) {
             LXObject* o = obj.as.obj;
             LXValue r = px_list(0);
+            px_root_push();
+            PX_KEEP(r);   // M92 precise：keys list 跨 px_list_push/px_str 分配
             for (int i = 0; i < o->as.dict.len; i++) px_list_push(r, px_str(o->as.dict.keys[i]));
+            px_root_pop();
             return r;
         }
         if (strcmp(name, "values") == 0) {
             LXObject* o = obj.as.obj;
             LXValue r = px_list(0);
+            px_root_push();
+            PX_KEEP(r);   // M92 precise：values list 跨 px_list_push 扩容分配
             for (int i = 0; i < o->as.dict.len; i++) px_list_push(r, o->as.dict.vals[i]);
+            px_root_pop();
             return r;
         }
         if (strcmp(name, "remove") == 0) {
@@ -3014,8 +3026,11 @@ static LXValue bi_range(LXValue* args, int nargs, void* ctx) {
     else px_error("range 需要 1-3 个参数");
     if (step == 0) px_error("range step 不能为 0");
     LXValue r = px_list(0);
+    px_root_push();
+    PX_KEEP(r);   // M92 precise：累积 list 跨 px_list_push 扩容分配
     if (step > 0) for (int64_t i = start; i < end; i += step) px_list_push(r, px_int(i));
     else for (int64_t i = start; i > end; i += step) px_list_push(r, px_int(i));
+    px_root_pop();
     return r;
 }
 
@@ -3351,6 +3366,8 @@ static LXValue bi_split(LXValue* args, int nargs, void* ctx) {
     const char* sep = (nargs >= 2 && args[1].type == PX_STR) ? args[1].as.obj->as.str.data : " ";
     int sep_len = (int)strlen(sep);
     LXValue r = px_list(0);
+    px_root_push();
+    PX_KEEP(r);   // M92 precise：累积 list 跨 px_list_push/px_str_len 分配
     if (sep_len == 0) {
         // 按空白切分
         const char* p = s;
@@ -3361,6 +3378,7 @@ static LXValue bi_split(LXValue* args, int nargs, void* ctx) {
             while (*p && !(*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
             px_list_push(r, px_str_len(start, (int)(p - start)));
         }
+        px_root_pop();
         return r;
     }
     const char* p = s;
@@ -3373,6 +3391,7 @@ static LXValue bi_split(LXValue* args, int nargs, void* ctx) {
         px_list_push(r, px_str_len(p, (int)(hit - p)));
         p = hit + sep_len;
     }
+    px_root_pop();
     return r;
 }
 
@@ -3499,6 +3518,8 @@ static LXValue bi_sorted(LXValue* args, int nargs, void* ctx) {
     if (nargs != 1 || args[0].type != PX_LIST) px_error("sorted 需要一个列表");
     LXObject* o = args[0].as.obj;
     LXValue r = px_list(o->as.list.len);
+    px_root_push();
+    PX_KEEP(r);   // M92 precise：拷贝 list 跨 px_list_push 扩容分配
     for (int i = 0; i < o->as.list.len; i++) px_list_push(r, o->as.list.items[i]);
     LXObject* ro = r.as.obj;
     for (int i = 0; i < ro->as.list.len; i++) {
@@ -3510,6 +3531,7 @@ static LXValue bi_sorted(LXValue* args, int nargs, void* ctx) {
             }
         }
     }
+    px_root_pop();
     return r;
 }
 
@@ -3519,13 +3541,19 @@ static LXValue bi_reversed(LXValue* args, int nargs, void* ctx) {
     if (args[0].type == PX_LIST) {
         LXObject* o = args[0].as.obj;
         LXValue r = px_list(o->as.list.len);
+        px_root_push();
+        PX_KEEP(r);   // M92 precise：累积 list 跨 px_list_push 扩容分配
         for (int i = o->as.list.len - 1; i >= 0; i--) px_list_push(r, o->as.list.items[i]);
+        px_root_pop();
         return r;
     }
     if (args[0].type == PX_TUPLE) {
         LXObject* o = args[0].as.obj;
         LXValue r = px_list(o->as.tuple.len);
+        px_root_push();
+        PX_KEEP(r);   // M92 precise：累积 list 跨 px_list_push 扩容分配
         for (int i = o->as.tuple.len - 1; i >= 0; i--) px_list_push(r, o->as.tuple.items[i]);
+        px_root_pop();
         return r;
     }
     if (args[0].type == PX_STR) {
@@ -4005,9 +4033,12 @@ static LXValue bi_fd_wait(LXValue* args, int nargs, void* ctx) {
     if (rc < 0) return px_int(-1);   // os_errno() 查（如 EINVAL）
     LXValue r = px_list(0);
     if (rc == 0) return r;           // 超时 → 空 list（与就绪返回类型统一，非错误）
+    px_root_push();
+    PX_KEEP(r);   // M92 precise：就绪 list 跨 px_list_push 扩容分配
     for (int i = 0; i < n; i++) {
         if (pfds[i].revents != 0) px_list_push(r, px_int(pfds[i].fd));
     }
+    px_root_pop();
     return r;
 }
 
@@ -4265,6 +4296,8 @@ static LXValue bi_dns_lookup(LXValue* args, int nargs, void* ctx) {
         return px_err(px_str(msg));
     }
     LXValue list = px_list(0);
+    px_root_push();
+    PX_KEEP(list);   // M92 precise：累积 list 跨 px_list_push/px_str 分配
     char ip[INET6_ADDRSTRLEN];
     for (struct addrinfo* p = res; p; p = p->ai_next) {
         const void* src = NULL;
@@ -4278,8 +4311,10 @@ static LXValue bi_dns_lookup(LXValue* args, int nargs, void* ctx) {
     freeaddrinfo(res);
     if (list.as.obj->as.list.len == 0) {
         snprintf(msg, sizeof(msg), "dns: %s: no address records", host);
+        px_root_pop();
         return px_err(px_str(msg));
     }
+    px_root_pop();
     return list;
 }
 
@@ -4909,10 +4944,13 @@ static LXValue bi_regex_search(LXValue* args, int nargs, void* ctx) {
     rp_free(root);
     if (!found) return px_null();
     LXValue d = px_dict();
+    px_root_push();
+    PX_KEEP(d);    // M92 precise：结果 dict 跨 px_dict_set/px_list_push/px_str_len 分配
     px_dict_set(d, "match", px_str_len(text + s, e - s));
     px_dict_set(d, "start", px_int(s));
     px_dict_set(d, "end", px_int(e));
     LXValue gl = px_list(0);
+    PX_KEEP(gl);   // M92 precise：groups list 跨 px_list_push/px_str_len 分配（入 d 前仅局部）
     for (int i = 1; i < RG_N; i++) {
         if (g[i] != -1) {
             int gs = (int)(g[i] >> 32), ge = (int)(g[i] & 0xffffffff);
@@ -4922,6 +4960,7 @@ static LXValue bi_regex_search(LXValue* args, int nargs, void* ctx) {
         }
     }
     px_dict_set(d, "groups", gl);
+    px_root_pop();
     return d;
 }
 
@@ -4936,6 +4975,8 @@ static LXValue bi_regex_find_all(LXValue* args, int nargs, void* ctx) {
     RNode* root = rcompile(pat, err, sizeof(err));
     if (!root) px_error("regex: %s", err);
     LXValue r = px_list(0);
+    px_root_push();
+    PX_KEEP(r);   // M92 precise：累积 list 跨 px_list_push/px_str_len 分配
     int pos = 0;
     while (pos <= tlen) {
         int s, e;
@@ -4945,6 +4986,7 @@ static LXValue bi_regex_find_all(LXValue* args, int nargs, void* ctx) {
         pos = (e == s) ? s + 1 : e;
     }
     rp_free(root);
+    px_root_pop();
     return r;
 }
 
@@ -4978,8 +5020,11 @@ static LXValue bi_regex_split(LXValue* args, int nargs, void* ctx) {
     RNode* root = rcompile(pat, err, sizeof(err));
     if (!root) px_error("regex: %s", err);
     LXValue r = px_list(0);
+    px_root_push();
+    PX_KEEP(r);   // M92 precise：r_split 内部 px_list_push 分配
     r_split(root, (const unsigned char*)text, tlen, r);
     rp_free(root);
+    px_root_pop();
     return r;
 }
 
@@ -4997,6 +5042,8 @@ static LXValue bi_list_dir(LXValue* args, int nargs, void* ctx) {
     DIR* d = opendir(path);
     if (!d) px_error("fs: 读取目录失败 %s", path);
     LXValue r = px_list(0);
+    px_root_push();
+    PX_KEEP(r);   // M92 precise：累积 list 跨 px_list_push/px_str 分配
     struct dirent* e;
     while ((e = readdir(d)) != NULL) {
         if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
@@ -5014,6 +5061,7 @@ static LXValue bi_list_dir(LXValue* args, int nargs, void* ctx) {
             }
         }
     }
+    px_root_pop();
     return r;
 }
 
@@ -5104,8 +5152,10 @@ static LXValue json_parse_value(JsonCtx* j) {
     if (*j->p == '{') {
         j->p++;
         LXValue d = px_dict();
+        px_root_push();
+        PX_KEEP(d);   // M92 precise：递归解析结果 dict 跨 px_dict_set/json_parse_value 分配
         json_ws(j);
-        if (*j->p == '}') { j->p++; return d; }
+        if (*j->p == '}') { j->p++; px_root_pop(); return d; }
         while (1) {
             json_ws(j);
             if (*j->p != '"') px_error("json: 期望对象键");
@@ -5122,13 +5172,16 @@ static LXValue json_parse_value(JsonCtx* j) {
             if (*j->p == '}') { j->p++; break; }
             px_error("json: 对象解析失败");
         }
+        px_root_pop();
         return d;
     }
     if (*j->p == '[') {
         j->p++;
         LXValue a = px_list(0);
+        px_root_push();
+        PX_KEEP(a);   // M92 precise：递归解析结果 list 跨 px_list_push/json_parse_value 分配
         json_ws(j);
-        if (*j->p == ']') { j->p++; return a; }
+        if (*j->p == ']') { j->p++; px_root_pop(); return a; }
         while (1) {
             LXValue v = json_parse_value(j);
             px_list_push(a, v);
@@ -5137,6 +5190,7 @@ static LXValue json_parse_value(JsonCtx* j) {
             if (*j->p == ']') { j->p++; break; }
             px_error("json: 数组解析失败");
         }
+        px_root_pop();
         return a;
     }
     if (*j->p == '"') {
@@ -5386,24 +5440,35 @@ static LXValue json_value_copy(LXValue v) {
             return v;
         case PX_LIST: {
             LXValue r = px_list(0);
+            px_root_push();
+            PX_KEEP(r);   // M92 precise：深拷贝 list 跨递归 json_value_copy/px_list_push 分配
             LXObject* o = v.as.obj;
             for (int i = 0; i < o->as.list.len; i++) px_list_push(r, json_value_copy(o->as.list.items[i]));
+            px_root_pop();
             return r;
         }
         case PX_TUPLE: {
             LXObject* o = v.as.obj;
             LXValue* items = xmalloc(sizeof(LXValue) * (size_t)(o->as.tuple.len > 0 ? o->as.tuple.len : 1));
-            for (int i = 0; i < o->as.tuple.len; i++) items[i] = json_value_copy(o->as.tuple.items[i]);
+            px_root_push();
+            for (int i = 0; i < o->as.tuple.len; i++) {
+                items[i] = json_value_copy(o->as.tuple.items[i]);
+                PX_KEEP(items[i]);   // M92 precise：收集数组仅 C 持有，跨后续递归分配
+            }
             LXValue r = px_tuple(items, o->as.tuple.len);
+            px_root_pop();
             xfree(items);
             return r;
         }
         case PX_DICT: {
             LXValue r = px_dict();
+            px_root_push();
+            PX_KEEP(r);   // M92 precise：深拷贝 dict 跨递归 json_value_copy/px_dict_set 分配
             LXObject* o = v.as.obj;
             for (int i = 0; i < o->as.dict.len; i++) {
                 px_dict_set(r, o->as.dict.keys[i], json_value_copy(o->as.dict.vals[i]));
             }
+            px_root_pop();
             return r;
         }
         case PX_RESULT: {
@@ -5425,10 +5490,17 @@ static LXValue json_path_set_at(LXValue base, JPathSeg* segs, int n, LXValue new
         LXObject* o = lst.as.obj;
         int len = o->as.list.len;
         long long real = (idx < 0) ? len + idx : idx;
-        // 深拷贝现有元素
+        // 深拷贝现有元素（M92 precise：items 收集数组 + 结果 list 仅 C 局部持有，
+        // 跨 json_value_copy/px_list_push 分配须登记）
         LXValue* items = xmalloc(sizeof(LXValue) * (size_t)(len > 0 ? len : 1));
-        for (int i = 0; i < len; i++) items[i] = json_value_copy(o->as.list.items[i]);
+        px_root_push();
+        PX_KEEP(lst);   // base（bi_json_path_set 深拷贝临时，仅 C 持有）跨拷贝分配存活
+        for (int i = 0; i < len; i++) {
+            items[i] = json_value_copy(o->as.list.items[i]);
+            PX_KEEP(items[i]);   // 收集数组仅 C 持有，跨后续递归/分配
+        }
         LXValue r = px_list(len);
+        PX_KEEP(r);   // 结果 list 跨 px_list_push/递归分配
         for (int i = 0; i < len; i++) px_list_push(r, items[i]);
         xfree(items);
         LXObject* ro = r.as.obj;
@@ -5438,21 +5510,27 @@ static LXValue json_path_set_at(LXValue base, JPathSeg* segs, int n, LXValue new
             // 在 0 处插入：新 list 重建
             LXValue* ni = xmalloc(sizeof(LXValue) * (size_t)(ro->as.list.len + 1));
             ni[0] = child;
+            PX_KEEP(child);   // 入 rr 前 child 仅 ni[0] 持有
             for (int i = 0; i < ro->as.list.len; i++) ni[i + 1] = ro->as.list.items[i];
             LXValue rr = px_list(ro->as.list.len + 1);
+            PX_KEEP(rr);   // 结果 list 跨 px_list_push 分配
             for (int i = 0; i < ro->as.list.len + 1; i++) px_list_push(rr, ni[i]);
             xfree(ni);
+            px_root_pop();
             return rr;
         } else if (real < ro->as.list.len) {
-            // 原位设值
+            // 原位设值（child 赋入 r 前无分配，r 已登记）
             LXValue child = json_path_set_at(ro->as.list.items[(int)real], segs + 1, n - 1, new_val);
             ro->as.list.items[(int)real] = child;
+            px_root_pop();
             return r;
         } else {
             // 越界扩展：null 填充 + 追加
             while (ro->as.list.len < real) px_list_push(r, px_null());
             LXValue child = json_path_set_at(px_null(), segs + 1, n - 1, new_val);
+            PX_KEEP(child);   // 入 r 前仅 C 局部
             px_list_push(r, child);
+            px_root_pop();
             return r;
         }
     } else {
@@ -5460,6 +5538,9 @@ static LXValue json_path_set_at(LXValue base, JPathSeg* segs, int n, LXValue new
         LXValue d = (base.type == PX_DICT) ? base : px_dict();
         LXObject* o = d.as.obj;
         LXValue r = px_dict();
+        px_root_push();
+        PX_KEEP(d);   // base（bi_json_path_set 深拷贝临时，仅 C 持有）跨拷贝分配存活
+        PX_KEEP(r);   // 结果 dict 跨 px_dict_set/json_value_copy 分配
         for (int i = 0; i < o->as.dict.len; i++) {
             px_dict_set(r, o->as.dict.keys[i], json_value_copy(o->as.dict.vals[i]));
         }
@@ -5467,7 +5548,9 @@ static LXValue json_path_set_at(LXValue base, JPathSeg* segs, int n, LXValue new
         LXValue nv = (child.type == PX_NULL)
             ? json_path_set_at(px_null(), segs + 1, n - 1, new_val)
             : json_path_set_at(child, segs + 1, n - 1, new_val);
+        PX_KEEP(nv);   // 入 r 前仅 C 局部（递归返回值）
         px_dict_set(r, segs[0].key, nv);
+        px_root_pop();
         return r;
     }
 }
@@ -5547,9 +5630,12 @@ void px_args_init(int argc, char** argv) {
 static LXValue bi_args(LXValue* args, int nargs, void* ctx) {
     (void)args; (void)nargs; (void)ctx;
     LXValue l = px_list(0);
+    px_root_push();
+    PX_KEEP(l);   // M92 precise：累积 list 跨 px_list_push/px_str 分配
     for (int i = 0; i < g_px_argc; i++) {
         px_list_push(l, px_str(g_px_argv[i]));
     }
+    px_root_pop();
     return l;
 }
 
@@ -14228,6 +14314,8 @@ static LXValue bi_list(LXValue* args, int nargs, void* ctx) {
         const char* s = v.as.obj->as.str.data;
         int n = v.as.obj->as.str.len;
         LXValue l = px_list(0);
+        px_root_push();
+        PX_KEEP(l);   // M92 precise：字符 list 跨 px_list_push/px_str_len 分配
         int i = 0;
         while (i < n) {
             int cl = 1;
@@ -14240,12 +14328,16 @@ static LXValue bi_list(LXValue* args, int nargs, void* ctx) {
             px_list_push(l, px_str_len(buf, cl));
             i += cl;
         }
+        px_root_pop();
         return l;
     }
     if (v.type == PX_DICT) {
         LXValue l = px_list(0);
+        px_root_push();
+        PX_KEEP(l);   // M92 precise：keys list 跨 px_list_push/px_str 分配
         LXObject* o = v.as.obj;
         for (int i = 0; i < o->as.dict.len; i++) px_list_push(l, px_str(o->as.dict.keys[i]));
+        px_root_pop();
         return l;
     }
     // range：C 端 range() 已物化为 list（bi_range 直接返回 list）
