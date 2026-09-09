@@ -1,0 +1,15 @@
+# M93-S2 验证：线程数收敛 —— spawn N 个纯计算协程（各算 ~0.3s），保持存活窗口
+# 供 shell 查 /proc/<pid>/status Threads。期望：进程线程数 ≈ worker 数 + 1（主），
+# 远小于 spawn 数（pthread 时代 = spawn 数 + 1）。N 固定（VM 轨无 sys.argv）。
+def heavy(i):
+    var s = 0
+    for j in range(500000):
+        s = s + j * 31 + i
+    return s
+
+let N = 128
+for i in range(N):
+    spawn heavy(i)
+
+sleep(2500)   # 保持进程 2.5s（shell 查线程数窗口；heavy 协程 <0.3s 全部跑完）
+print("S2-THR-DONE spawn=" + str(N))

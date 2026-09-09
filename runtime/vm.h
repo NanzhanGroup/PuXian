@@ -182,6 +182,9 @@ typedef struct {
 
 const char* px_op_name(int op);                 // 调试/未实现文案（越界返回 "?"）
 PxVmState*  px_vm_state(void);                  // 线程局部 VM 状态（懒建，不销毁）
+void        px_vm_state_init(PxVmState* st);    // M93-S2：显式初始化 PxVmState（协程持有）
+void        px_vm_bind(PxVmState* st);          // M93-S2：绑当前线程到指定 VM 状态（协程 worker）
+PxVmState*  px_vm_unbind(void);                 // M93-S2：解绑（返回当前状态并置 NULL）
 
 // D2 trampoline：与 LXFuncPtr 兼容 —— 统一函数对象 func.fn = px_vm_entry。
 // ctx 必须是 PxVMFunc*（px_func 构造 PX_FUNC 时传入）。

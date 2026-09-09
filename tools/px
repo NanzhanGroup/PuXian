@@ -195,7 +195,7 @@ rt_src_files() {
     local list="runtime.h runtime.c runtime_aes.c runtime_xml.c runtime_zip.c \
         runtime_ws.c runtime_rsa.c runtime_sqlite.c runtime_route.c runtime_h2.c \
         runtime_ffi.c runtime_zlib.c runtime_ed25519.c tweetnacl.c tweetnacl.h \
-        vm.h vm.c \
+        vm.h vm.c coro.c \
         arch.h arch_x86_64.h arch_aarch64.h \
         arch_armv7.h arch_riscv64.h"
     local m f

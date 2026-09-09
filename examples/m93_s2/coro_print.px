@@ -1,0 +1,16 @@
+# M93-S2 验证：spawn 协程被真正执行（帧协程内核）—— N 个纯计算协程各 print
+# 一行结果；主线程 sleep 保持存活后退出；shell 侧 grep 验证 R0..R(N-1) 全在
+# （全部完成断言）。避免顶层集合字面量（VM 轨已知缺口，另行修复）。
+def heavy(i):
+    var s = 0
+    for j in range(30000):
+        s = s + (j & 7) + i
+    print("R" + str(i) + "=" + str(s))
+    return s
+
+let N = 64
+for i in range(N):
+    spawn heavy(i)
+
+sleep(2500)
+print("S2-CORO-PRINT-DONE spawn=" + str(N))

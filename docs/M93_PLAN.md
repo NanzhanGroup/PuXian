@@ -1,6 +1,6 @@
 # M93_PLAN · 帧协程 M:N（M88 C 类旗舰落地：px_spawn 用户态协程化）
 
-> 状态：🚧 **S1 立项 + 设计定稿（本 commit）**。S2 起按 §五 逐批落地。
+> 状态：🚧 **S2 协程内核完成（本 commit）**。S3 阻塞让出进行中。
 > 上游：M88_PLAN §一 C 档（用户态协程 M:N，Go runtime 简化版）+ M89_vm_design D3
 > （显式帧 = 槽数组，挂起 = 帧拷贝存档，"本设计为其铺路"）+ M89_vm_prestudy §2.4
 > （C 类协程在 VM 上自然可得；C 递归模型完全不可行）+ M91 默认轨切 VM + M92 精确 GC
@@ -166,3 +166,32 @@
 - GC：precise + 低阈值 + 万协程压力零 UAF/零崩溃、堆回落。
 - 回归：vm_ab 38 PASS 0 GAP 0 FAIL · diffcheck --all ✅ · m89_s3d 9 PASS ·
   m82 8 PASS · m83_s6 全 PASS · 双自举证明 rc=0 · tag v0.2.0-m93。
+
+## 八、落地记录
+
+### S2 协程内核（本 commit）—— 完成
+- **代码**：runtime/coro.c（新，协程内核）+ vm.c/vm.h（px_vm_state_init/px_vm_bind/
+  px_vm_unbind）+ runtime.c（spawn 分派判 fn==px_vm_entry → px_coro_spawn weak；
+  GC 标记期 px_coro_gc_mark_roots weak 补标协程表根面；导出 px_spawn_isolate_begin/
+  end + px_gc_block_stop_sig/unblock_stop_sig 供 worker）+ tools/px（rt_src_files 增
+  coro.c）+ runtime.h（signal.h include + 导出声明）。
+- **机制**：worker 池 = PX_CORO_WORKERS（默认 min(在线CPU,8)，范围 [1,64]）常驻；
+  就绪队列 FIFO（mutex+cond）；协程 = 独立 PxVmState（全堆帧栈）。worker 空闲
+  cond_wait 不注册 GC（STW 无空闲放大，对齐 M90 F3-fix 模式）；取到协程才
+  px_gc_thread_enter → px_vm_bind(&coro.vm) → px_spawn_isolate_begin 隔离执行
+  px_vm_entry → 解绑/注销 → 摘表回收。协程表 g_all 为 GC 根（args 副本 + 帧槽）。
+- **并发安全**：g_coro_mu 临界区全部屏蔽 SIG_GC_STOP（持锁不被 STW 打断 → GC
+  executor 标记拿锁不与其死锁）；precise/conservative 标记路径均补标协程表。
+- **验证**（examples/m93_s2/verify.sh PASS=6 FAIL=0）：
+  1) coro_print 64 纯算协程全部执行+回收（PX_CORO_DIAG done=64，结果行 R0..63）
+  2) coro_many 1000 全部完成（done=1000）
+  3) thr_count spawn 128 → 线程 9（8 worker+1 主；pthread 时代 = 129）线程数收敛
+  4) coro_gc 500 × list 高频分配 + PX_GC_THRESHOLD=4000 多轮并发 GC STW → 500/500
+     零崩溃零 UAF（协程表 GC 根面实证）
+  5) C 轨逃生舱 --c（fn_*）spawn 128 → 线程 129（pthread 语义零变化）
+- **回归门**：m89_s3d verify 9 PASS（含 vm_spawn_smoke 前置门——spawn 冒烟走新
+  协程路径）+ vm_ab v2 PASS 31 / GAP 7（=已知 bc_emit native 缺口）/ FAIL 0。
+- **工具链备注**：仓库 tools/px 与安装版 /usr/bin/px 并存——本里程碑起验证一律用
+  仓库 `./tools/px`（安装版为旧打包，pxc_vm 行为/默认轨不一致，勿混用）。
+
+### S3 阻塞原语让出（chan/mutex/rwlock/sleep 协程化）—— 待办

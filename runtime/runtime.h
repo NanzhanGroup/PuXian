@@ -9,6 +9,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <pthread.h>
+#include <signal.h>      // M93-S2: sigset_t（协程 worker GC 信号屏蔽导出 API 参数）
 #include <sys/types.h>   // ssize_t（PxConn 读写返回）
 
 #ifdef __cplusplus
@@ -339,6 +340,14 @@ void px_gc_thread_enter(void);
 void px_gc_thread_leave(void);
 // 通用入口：spawn 函数名（由 codegen 调用 px_spawn_name）
 void px_spawn_name(const char* fname, LXValue* args, int nargs);
+// M93-S2：spawn 错误隔离点（coro worker 复用 spawn_thread 的 setjmp 隔离语义）。
+//   begin 正常返回 1（捕获点已装）；错误 longjmp 回 → 返回 0（协程异常终止）。
+int  px_spawn_isolate_begin(void);
+void px_spawn_isolate_end(void);
+// M93-S2：GC 暂停信号屏蔽原语（coro.c 临界区用；屏蔽 SIG_GC_STOP → 持锁临界区
+//   不被 STW 打断 → GC executor 标记协程表拿锁不与其死锁）。
+void px_gc_block_stop_sig(sigset_t* old);
+void px_gc_unblock_stop_sig(const sigset_t* old);
 
 // select：阻塞等待任一通道可接收（返回索引），chan 活动后由运行时自动唤醒
 int px_select_wait_any(LXValue* chans, int n);

@@ -1,0 +1,19 @@
+# M93-S2 验证：帧协程 × 并发 GC 稳定性 —— 协程内高频对象分配（list 构造）
+# 触发多轮并发 GC（STW 暂停 worker + 主线程）；精确 GC 根面 = 协程表 args 副本
+# + worker 运行帧槽。预期：零崩溃/UAF、全部完成（PX_CORO_DIAG done 计数 = N）。
+# 配 PX_GC_THRESHOLD=4000 强制高频 GC 放大压力。
+def churn(i):
+    var acc = 0
+    for k in range(100):
+        var xs = []
+        for j in range(20):
+            xs.append(j + i)
+        acc += len(xs) * k
+    return acc
+
+let N = 500
+for i in range(N):
+    spawn churn(i)
+
+sleep(8000)
+print("S2-GC-STRESS-DONE spawn=" + str(N))

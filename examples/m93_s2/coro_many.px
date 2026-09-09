@@ -1,0 +1,15 @@
+# M93-S2 验证：大规模纯计算 spawn（1000 协程）—— 帧协程内核吞吐 + 线程数收敛
+# 完成度由 PX_CORO_DIAG=1 的 stderr "[px-coro] #N done" 行数断言（=N）；
+# 线程数 ≈ worker+1（shell 查）。协程内纯 int 计算（无阻塞原语）。
+def heavy(i):
+    var s = 0
+    for j in range(2000):
+        s = s + (j & 15) + i
+    return s
+
+let N = 1000
+for i in range(N):
+    spawn heavy(i)
+
+sleep(3000)
+print("S2-MANY-DONE spawn=" + str(N))
