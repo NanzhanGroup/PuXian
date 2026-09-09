@@ -6,6 +6,33 @@
 
 ## [Unreleased]
 
+### M93-S2/S3 · 帧协程 M:N 内核 + 阻塞原语让出（chan/mutex/rwlock/sleep 协程化）
+
+> M93（候选③，M88 C 类旗舰）落地：`px_spawn` VM 函数从每 spawn 一个 pthread →
+> **用户态帧协程 M:N**（worker 池 = min(CPU,8)，协程 = 独立 PxVmState，切换只换
+> 指针，零 ucontext/零汇编）。commit 链：64034a5（S1 立项+设计 D1-D8）+ 695651a
+> （S2 协程内核）+ 本 commit 04a11a7（S3 阻塞让出，路线 B）。
+> - **S2 内核**：协程 = 独立 PxVmState（帧栈全堆）→ spawn 目标判 fn==px_vm_entry
+>   即协程化；8 worker 常驻 + FIFO 就绪队列；线程数从 spawn 数收敛到 worker 数
+>   （spawn 128 → 9 线程）；GC 根面 = 协程表（args + 帧槽精确标记，BLOCKED 无 C
+>   栈 = 纯帧槽根，M92 直接受益）；逃生舱 fn_* 仍 pthread（语义零变化）。
+> - **S3 阻塞让出（路线 B：解释循环 C 层自动包装，不动编译器/bc_emit）**：
+>   chan send/recv、mutex lock、rwlock r/wlock 在协程 ctx 走 try 变体 → 失败登记
+>   对象等待链表（cw_*）让出（worker 不阻塞）；sleep/sleep_us 登记单后台 timer
+>   线程让出（并发 40 睡 wall≈max 121ms 非累加 3.2s）；with/with_read/with_write
+>   展开 = 压 fn 帧 + 帧弹自动解锁（fn 中途让出锁随帧保留 + GC 保活锁对象）。
+>   非协程 ctx（主线程/嵌套 native 回调/逃生舱）→ 原 pthread 语义零变化。
+> - **修复两并发 bug**：① 让出窗口双执行/UAF（登记到 worker 让出间唤醒并行
+>   resume + 让出 worker 读协程 UAF）→ 让出标志改运行函数返回码 + wake_pending
+>   延迟调度状态机（state 收敛 g_coro_mu，ASAN 12 轮零报）；② timer 线程摘到期
+>   后仍 cond_wait 漏唤醒 → batch 非空不 wait。
+> - **验证门全绿**：examples/m93_s3/verify.sh **6 PASS**（mutex 4000/chan 乒乓
+>   8×300/并发 sleep/with 展开/让出×GC 低阈值/逃生舱对拍）；m93_s2 6 + m89_s3d 9
+>   + vm_ab 31P/7GAP(已知)/0F + diffcheck --all ✅ + m82 + m83_s6 ✅；万级 spawn
+>   10000 协程 3.26s；5000 协程×分配×GC 37s 零崩。详见 docs/M93_PLAN.md。
+> - ⚠️ 已知边界（D8 二期）：网络 IO（http/tcp/ws）epoll 协程化、服务端 handler
+>   协程化、抢占/work-stealing、逃生舱内 spawn 协程化 —— 后置。
+
 ### M92 · 精确 GC 终极项收口（tag v0.2.0-m92）
 
 > M92 完整交付：VM 主执行轨退役整栈保守扫描 → 精确根面（全局槽 + VM 帧槽 +
