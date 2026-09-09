@@ -75,6 +75,25 @@ static PxSniCert g_sni_certs[PX_MAX_SNI_CERTS];
 // M30：服务端 https 连接池——TLS 会话缓存（Session ID + 票据），新连接快速恢复握手
 static mbedtls_ssl_cache_context g_srv_tls_cache;
 static int g_srv_tls_cache_init = 0;
+// M101：并发 TLS 握手修复——mbedtls 3.6.2 预编译库未编线程支持（MBEDTLS_THREADING_C 关，
+// config 2100/2111/3630 全注释）→ 库内无互斥；px_serve g_pool 多 worker 并发 mbedtls
+// 握手共享全局可变对象 = data race（examples/m101_s2 复现：RSA-TLS1.3 48×3 并发新建
+// 连接 ok=2 fail=142 'invalid signature by the server certificate: crypto/rsa:
+// verification error' + RSA-TLS1.2 144 全 EOF + EC-TLS1.3 ok=140 fail=4 EOF/reset）。
+// 修复（S2，三层）：
+//   ① per-连接 RSA 私钥 clone（px_pk_clone_rsa → c->own_pk/own_pk_sni）：签名写共享
+//      g_srv_key 消除（RSA CRT 推导/窗口缓存写 ctx → 并发签名错——主因，142/144）；
+//   ② session cache 加锁包装（px_srv_cache_get/set 包 g_srv_cache_mu）：无锁链表
+//      get/set 竞争（EC 证书残余 4 失败 + TLS1.2 叠加）——次因；
+//   ③ **全局握手串行锁** g_srv_hs_mu 包整个 px_conn_tls_handshake（px_conn_tls_handshake
+//      包装 / _locked 实现）：clone+cache 锁后 RSA-TLS1.3 仍残余 ~1% 并发特有
+//      MBEDTLS_ERR_ERROR_CORRUPTION_DETECTED(-110) + 偶发堆损坏（串行 300 次零失败；
+//      TLS1.3 服务端深层共享无法枚举）→ 串行锁根治。clone（EC 共享只读实测安全）+
+//      cache 锁保留作双保险（未来换开 threading 的 mbedtls 可去串行锁仍正确）。
+// 每连接 ssl/conf/drbg/entropy 独立（px_conn_init），cert 只读共享 —— 均非竞态源。
+// 锁序：hs_mu → tls_mu（sni_cb 同序）→ 无死锁；tls_server 注册仅持 tls_mu。
+static pthread_mutex_t g_srv_cache_mu = PTHREAD_MUTEX_INITIALIZER;  // session cache 锁
+static pthread_mutex_t g_srv_hs_mu = PTHREAD_MUTEX_INITIALIZER;     // 全局握手串行锁
 static LXValue bi_tls_server(LXValue* args, int nargs, void* ctx);
 static LXValue bi_session_open(LXValue* args, int nargs, void* ctx);
 static LXValue bi_session_id(LXValue* args, int nargs, void* ctx);
@@ -13098,9 +13117,54 @@ static LXValue px_parse_urlenc(const char* body) {
 
 // 发送 HTTP 响应（HEAD 只发响应头）
 // ==================== M27 P0：PxConn 连接抽象（明文/TLS 统一） ====================
+// M101：session cache 线程安全包装（mbedtls 3.6.2 库内无锁——MBEDTLS_THREADING_C 关；
+// 多 worker 并发握手 get/set 同一 g_srv_tls_cache 链表会损坏/错会话数据。自定义
+// get/set 包 g_srv_cache_mu，经 mbedtls_ssl_conf_session_cache 注册替换库函数直传。
+// 3.6.2 回调签名：get_t/set_t = (void*, const unsigned char*, size_t, session)）。
+static int px_srv_cache_get(void* p, const unsigned char* session_id, size_t len,
+                            mbedtls_ssl_session* session) {
+    pthread_mutex_lock(&g_srv_cache_mu);
+    int r = mbedtls_ssl_cache_get((mbedtls_ssl_cache_context*)p, session_id, len, session);
+    pthread_mutex_unlock(&g_srv_cache_mu);
+    return r;
+}
+static int px_srv_cache_set(void* p, const unsigned char* session_id, size_t len,
+                            const mbedtls_ssl_session* session) {
+    pthread_mutex_lock(&g_srv_cache_mu);
+    int r = mbedtls_ssl_cache_set((mbedtls_ssl_cache_context*)p, session_id, len, session);
+    pthread_mutex_unlock(&g_srv_cache_mu);
+    return r;
+}
+// M101：RSA 私钥 per-连接 clone。mbedtls 3.6.2 无 mbedtls_pk_copy（PSA 化移除）；
+// legacy PK 后端启用（USE_PSA_CRYPTO 关）→ pk_setup(PK_RSA) + mbedtls_rsa_copy 深拷贝
+// 出独立 mbedtls_rsa_context（签名时 CRT 推导/窗口缓存写各自 ctx → 并发握手无共享写）。
+// 返回 malloc 的 mbedtls_pk_context*（调用方 px_conn_close 释放）；非 RSA → NULL（EC
+// 私钥签名并发安全实测 → 共享只读）；RSA clone 失败（OOM）→ NULL（调用方退化全局
+// 握手锁 g_srv_hs_mu 保底）。调用方应持 g_srv_tls_mu（防源 key 并发重注册覆盖）。
+static mbedtls_pk_context* px_pk_clone_rsa(const mbedtls_pk_context* src) {
+    if (mbedtls_pk_get_type(src) != MBEDTLS_PK_RSA) return NULL;
+    mbedtls_pk_context* dst = (mbedtls_pk_context*)malloc(sizeof(mbedtls_pk_context));
+    if (!dst) return NULL;
+    mbedtls_pk_init(dst);
+    // 3.6.2 pk_setup 第二参是 const mbedtls_pk_info_t*（描述符）而非枚举 → 用
+    // mbedtls_pk_info_from_type 取 RSA info（直接传枚举值会当指针解引用段错误）
+    const mbedtls_pk_info_t* info = mbedtls_pk_info_from_type(MBEDTLS_PK_RSA);
+    if (!info || mbedtls_pk_setup(dst, info) != 0 ||
+        mbedtls_rsa_copy(mbedtls_pk_rsa(*dst), mbedtls_pk_rsa(*src)) != 0) {
+        mbedtls_pk_free(dst);
+        free(dst);
+        return NULL;
+    }
+    return dst;
+}
+
 // M33：TLS SNI 回调——按 ClientHello 域名从 g_sni_certs 选证书（无匹配 → 默认证书，返回 0）
+// M101：p_ctx = PxConn*（conf_sni 传入 c）；命中 slot 且其 key 为 RSA → 锁内 clone 到
+//   c->own_pk_sni（per-连接独立私钥，消除与其它 worker 并发签名共享 g_sni_certs[i].key
+//   的 data race）；EC key → 共享只读（签名并发安全实测）；RSA clone 失败 → 返回错误
+//   （握手失败保守，宁失败不竞态——已在握手中途无法退 g_srv_hs_mu）。
 static int px_sni_cb(void* p_ctx, mbedtls_ssl_context* ssl, const unsigned char* name, size_t len) {
-    (void)p_ctx;
+    PxConn* c = (PxConn*)p_ctx;
     char host[256];
     size_t cl = len < 255 ? len : 255;
     memcpy(host, name, cl);
@@ -13115,14 +13179,33 @@ static int px_sni_cb(void* p_ctx, mbedtls_ssl_context* ssl, const unsigned char*
     }
     int rc = 0;
     if (slot >= 0) {
-        rc = mbedtls_ssl_set_hs_own_cert(ssl, &g_sni_certs[slot].cert, &g_sni_certs[slot].key);
+        mbedtls_pk_context* use = &g_sni_certs[slot].key;
+        if (mbedtls_pk_get_type(use) == MBEDTLS_PK_RSA) {
+            mbedtls_pk_context* own = px_pk_clone_rsa(use);
+            if (own) {
+                c->own_pk_sni = own;
+                use = own;
+            } else {
+                rc = MBEDTLS_ERR_SSL_ALLOC_FAILED;  // RSA clone 失败 → 握手失败保守
+            }
+        }
+        if (rc == 0) rc = mbedtls_ssl_set_hs_own_cert(ssl, &g_sni_certs[slot].cert, use);
     }
     pthread_mutex_unlock(&g_srv_tls_mu);
     return rc;
 }
 
 // 服务端 TLS：accept 后 px_conn_init 做 mbedtls 服务端握手（若 tls_server 已注册）。
-static int px_conn_tls_handshake(PxConn* c) {
+// M101-final：**全局握手串行锁** g_srv_hs_mu —— mbedtls 3.6.2 预编译库无线程支持
+// （MBEDTLS_THREADING_C 关），除私钥签名（per-conn RSA clone 已消除）与 session cache
+// （加锁包装已消除）外，TLS1.3 服务端仍存在无法枚举的深层共享（并发实测 RSA-TLS1.3
+// 48×3 残余 ~1% MBEDTLS_ERR_ERROR_CORRUPTION_DETECTED(-110) + 偶发堆损坏；串行 300
+// 次零失败 → 并发特有）。整个握手持 g_srv_hs_mu → 握手期对 mbedtls 无任何跨线程共享
+// 访问。clone + cache 锁保留作双保险（未来若换开 threading 的 mbedtls 可去掉串行锁仍
+// 正确）。keep-alive 连接握手仅一次，不受串行影响；握手本地毫秒级，新连接突发排队
+// 可接受（边缘/内部 px_serve 以 keep-alive 为主）。锁序：hs_mu → tls_mu（sni_cb 同
+// 序）→ 无死锁；tls_server 注册仅持 tls_mu 不碰 hs_mu。
+static int px_conn_tls_handshake_locked(PxConn* c) {
     mbedtls_ssl_context* ssl = (mbedtls_ssl_context*)c->ssl;
     mbedtls_ssl_config* conf = (mbedtls_ssl_config*)c->conf;
     mbedtls_ctr_drbg_context* drbg = (mbedtls_ctr_drbg_context*)c->ctr_drbg;
@@ -13133,16 +13216,25 @@ static int px_conn_tls_handshake(PxConn* c) {
     if (mbedtls_ssl_config_defaults(conf, MBEDTLS_SSL_IS_SERVER,
                                     MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT) != 0) return -1;
     mbedtls_ssl_conf_rng(conf, mbedtls_ctr_drbg_random, drbg);
+    // M101：私钥 clone / 共享决策（已持 g_srv_hs_mu → 无并发；clone 仍作双保险：
+    //   RSA → per-连接独立 ctx（未来去串行锁仍正确）；EC → 共享只读实测安全）
     pthread_mutex_lock(&g_srv_tls_mu);
-    int oc = mbedtls_ssl_conf_own_cert(conf, &g_srv_cert, &g_srv_key);
+    mbedtls_pk_context* own = px_pk_clone_rsa(&g_srv_key);
+    int oc;
+    if (own) {
+        c->own_pk = own;
+        oc = mbedtls_ssl_conf_own_cert(conf, &g_srv_cert, own);
+    } else {
+        oc = mbedtls_ssl_conf_own_cert(conf, &g_srv_cert, &g_srv_key);
+    }
     pthread_mutex_unlock(&g_srv_tls_mu);
     if (oc != 0) return -1;
-    // M33：TLS SNI——按 ClientHello 域名选择证书（多证书共服）
-    mbedtls_ssl_conf_sni(conf, px_sni_cb, NULL);
-    // M30：服务端 https 连接池——全局 TLS 会话缓存共享给所有连接（Session ID 恢复）
+    // M33：TLS SNI——按 ClientHello 域名选择证书（多证书共服；p_ctx=PxConn* 供 SNI clone）
+    mbedtls_ssl_conf_sni(conf, px_sni_cb, c);
+    // M30/M101：服务端 https 连接池——全局 TLS 会话缓存（加锁包装 get/set，并发安全）
     if (g_srv_tls_cache_init) {
         mbedtls_ssl_conf_session_cache(conf, &g_srv_tls_cache,
-                                       mbedtls_ssl_cache_get, mbedtls_ssl_cache_set);
+                                       px_srv_cache_get, px_srv_cache_set);
     }
     // TLS 1.2 会话票据（与客户端 M25 票据恢复对偶）
     mbedtls_ssl_conf_session_tickets(conf, MBEDTLS_SSL_SESSION_TICKETS_ENABLED);
@@ -13159,6 +13251,13 @@ static int px_conn_tls_handshake(PxConn* c) {
         if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) return -1;
     }
     return 0;
+}
+
+static int px_conn_tls_handshake(PxConn* c) {
+    pthread_mutex_lock(&g_srv_hs_mu);
+    int rc = px_conn_tls_handshake_locked(c);
+    pthread_mutex_unlock(&g_srv_hs_mu);
+    return rc;
 }
 
 // 初始化连接（fd 上 TLS 握手若已注册服务端证书；失败返回 -1，连接应关闭）
@@ -13239,16 +13338,32 @@ void px_conn_close(PxConn* c) {
     if (!c) return;
     if (c->closed) return;  // 幂等：已关闭
     c->closed = 1;
-    if (c->is_tls) {
-        mbedtls_ssl_close_notify((mbedtls_ssl_context*)c->ssl);
-        if (c->owned) {
-            mbedtls_ssl_free((mbedtls_ssl_context*)c->ssl);
-            mbedtls_ssl_config_free((mbedtls_ssl_config*)c->conf);
-            mbedtls_ctr_drbg_free((mbedtls_ctr_drbg_context*)c->ctr_drbg);
-            mbedtls_entropy_free((mbedtls_entropy_context*)c->entropy);
-            free(c->ssl); free(c->conf); free(c->ctr_drbg); free(c->entropy);
-            c->ssl = c->conf = c->ctr_drbg = c->entropy = NULL;
+    // M101：释放条件由「is_tls」放宽为「owned && ssl」——握手失败路径（px_conn_init 中
+    //   px_conn_tls_handshake 返回 -1 时 is_tls 尚未置 1）原实现直接跳过释放 ssl/conf/
+    //   drbg/entropy（每失败连接泄漏 ~20KB+），并发握手失败高频时泄漏严重；owned=1 时
+    //   ssl 非空即本连接 malloc 的 TLS 状态。close_notify 仅在握手完成后发（未完成握手
+    //   直接 free，避免对已关对端写 alert）。own_pk/own_pk_sni（M101 per-连接 RSA 私钥
+    //   clone）随连接释放：先 ssl_free/config_free（内部引用 conf/key 结束）再 pk_free。
+    if (c->owned && c->ssl) {
+        if (c->is_tls) {
+            mbedtls_ssl_close_notify((mbedtls_ssl_context*)c->ssl);
         }
+        mbedtls_ssl_free((mbedtls_ssl_context*)c->ssl);
+        mbedtls_ssl_config_free((mbedtls_ssl_config*)c->conf);
+        mbedtls_ctr_drbg_free((mbedtls_ctr_drbg_context*)c->ctr_drbg);
+        mbedtls_entropy_free((mbedtls_entropy_context*)c->entropy);
+        if (c->own_pk) {
+            mbedtls_pk_free((mbedtls_pk_context*)c->own_pk);
+            free(c->own_pk);
+            c->own_pk = NULL;
+        }
+        if (c->own_pk_sni) {
+            mbedtls_pk_free((mbedtls_pk_context*)c->own_pk_sni);
+            free(c->own_pk_sni);
+            c->own_pk_sni = NULL;
+        }
+        free(c->ssl); free(c->conf); free(c->ctr_drbg); free(c->entropy);
+        c->ssl = c->conf = c->ctr_drbg = c->entropy = NULL;
         // owned=0：TLS 状态由外部（HttpsSession）管理，px_https_close_ex 统一释放
     }
     if (c->fd >= 0) { close(c->fd); c->fd = -1; }
