@@ -167,7 +167,7 @@ EOF
 # 注意：mbedtls/ngtcp2/openssl 为第三方 git 预置（include 不随 key 变；升级三方库后
 #       若缓存行为异常 rm -rf .rtcache 重建即可）。
 # ---- M85-S1：模块裁剪开关集（--no-<mod>，与 --no-quic 正交可组合）----
-# cuts = 空格分隔的已裁项集合（quic + sqlite ws zip xml aes rsa ed25519 route zlib h2）
+# cuts = 空格分隔的已裁项集合（quic + sqlite ws zip xml aes rsa ed25519 img route zlib h2）
 # 每模块对应 runtime 源文件与 -DPX_NO_<MOD> 宏；缓存 key 纳入 cuts（不同裁剪组合缓存隔离）
 cut_has() { # $1=cuts串 $2=name → 0 含 / 1 不含
     case " $1 " in *" $2 "*) return 0 ;; *) return 1 ;; esac
@@ -181,6 +181,7 @@ mod_srcs() { # $1=mod → 该模块 runtime 源文件（空格分隔，从 rt_sr
         aes)      echo "runtime_aes.c" ;;
         rsa)      echo "runtime_rsa.c" ;;
         ed25519)  echo "runtime_ed25519.c tweetnacl.c tweetnacl.h" ;;
+        img)      echo "runtime_image.c third_party/stb/stb_image.h third_party/stb/stb_image_write.h" ;;
         route)    echo "runtime_route.c" ;;
         zlib)     echo "runtime_zlib.c" ;;
         h2)       echo "runtime_h2.c" ;;
@@ -195,11 +196,12 @@ rt_src_files() {
     local list="runtime.h runtime.c runtime_aes.c runtime_xml.c runtime_zip.c \
         runtime_ws.c runtime_rsa.c runtime_sqlite.c runtime_route.c runtime_h2.c \
         runtime_ffi.c runtime_zlib.c runtime_ed25519.c tweetnacl.c tweetnacl.h \
+        runtime_image.c third_party/stb/stb_image.h third_party/stb/stb_image_write.h \
         vm.h vm.c coro.c \
         arch.h arch_x86_64.h arch_aarch64.h \
         arch_armv7.h arch_riscv64.h"
     local m f
-    for m in sqlite ws zip xml aes rsa ed25519 route zlib h2; do
+    for m in sqlite ws zip xml aes rsa ed25519 img route zlib h2; do
         if cut_has "$cuts" "$m"; then
             for f in $(mod_srcs "$m"); do
                 list="${list/ $f/ }"
@@ -249,7 +251,7 @@ rt_cache_compile() {
         -I\"$dir\" -I\"$RT_DIR/third_party/miniz\" -I\"$mbedtls_inc\" \
         -I\"$sqlite_dir\" -I\"$zlib_inc\""
     local m
-    for m in quic sqlite ws zip xml aes rsa ed25519 route zlib h2; do
+    for m in quic sqlite ws zip xml aes rsa ed25519 img route zlib h2; do
         if cut_has "$cuts" "$m"; then
             common="$common $(mod_macro "$m")"
         fi
@@ -356,7 +358,7 @@ cmd_build() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --no-quic) no_quic=1; no_quic_set=1; shift ;;
-            --min) no_quic=1; no_quic_set=1; mods="$mods sqlite ws zip xml aes rsa ed25519 route zlib h2"; shift ;;
+            --min) no_quic=1; no_quic_set=1; mods="$mods sqlite ws zip xml aes rsa ed25519 img route zlib h2"; shift ;;
             --full|--max) full=1; shift ;;
             --c) engine=c; shift ;;              # M91：C 轨逃生舱（显式）
             --vm|--bc) engine=vm; shift ;;       # M91：VM 轨（显式 = 新默认；保留旧 flag 兼容）
@@ -367,6 +369,7 @@ cmd_build() {
             --no-aes) mods="$mods aes"; shift ;;
             --no-rsa) mods="$mods rsa"; shift ;;
             --no-ed25519) mods="$mods ed25519"; shift ;;
+            --no-img) mods="$mods img"; shift ;;
             --no-route) mods="$mods route"; shift ;;
             --no-zlib) mods="$mods zlib"; shift ;;
             --no-h2) mods="$mods h2"; shift ;;
@@ -490,7 +493,7 @@ cmd_build() {
         if [ -f "$MAP" ]; then
             # 被引用模块 = 引用集 ∩ map 的 mod 集合
             used="$(awk -F= 'NR==FNR{ref[$1]=1; next} ref[$1]{print $2}' "$refs_tmp" "$MAP" | LC_ALL=C sort -u | tr '\n' ' ')"
-            for am in sqlite ws zip xml aes rsa ed25519 route zlib h2 quic; do
+            for am in sqlite ws zip xml aes rsa ed25519 img route zlib h2 quic; do
                 case " $mods " in *" $am "*) continue ;; esac   # 显式已裁
                 [ "$am" = quic ] && [ "$no_quic_set" = 1 ] && continue
                 case " $used " in
@@ -519,7 +522,7 @@ cmd_build() {
         -I\"$cache_dir\" -I\"$RT_DIR/third_party/miniz\" -I\"$mbedtls_inc\" \
         -I\"$sqlite_dir\" -I\"$RT_DIR/third_party/zlib/include\""
     local m2
-    for m2 in quic sqlite ws zip xml aes rsa ed25519 route zlib h2; do
+    for m2 in quic sqlite ws zip xml aes rsa ed25519 img route zlib h2; do
         if cut_has "$cuts" "$m2"; then
             common_def="$common_def $(mod_macro "$m2")"
         fi
