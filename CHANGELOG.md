@@ -6,6 +6,55 @@
 
 ## [Unreleased]
 
+### M96 · 客户端网络 IO 协程化（D8-①：阻塞 native offload 执行器，慢上游不卡 worker）
+
+> M96 = M93_PLAN §D8 ①（http_request/tcp/udp/ws/s3/dns 同步阻塞桥 → 协程上下文感知）
+> + M94_PLAN §五 编排（M96 = D8-① 客户端网络 IO 协程化）。
+> commit 链：84bff6d（S1 立项定稿 + 路线拍板）+ 8a8add4（S2 执行器核心）+ d3802de
+> （S3 名单全集 + 错误回传重构）+ 本 commit（S4 收口 + tag v0.2.0-m96）。
+> - **D0 侦察**：客户端网络 native 全为 C 层阻塞全协议（http_get 阻塞 recv 循环 /
+>   https mbedtls 阻塞 IO / s3 连接池 h_exchange / ws runtime_ws / tcp-udp 阻塞
+>   syscall / dns getaddrinfo）；M93-M95 让出覆盖的真实死角 —— M94 抢占只在 VM
+>   指令边界、绝不在 native C 内部，M95 handler 协程化后 handler 内调慢上游
+>   http_get 即冻结整 worker（慢上游并发 ≥ worker 数饿死全系统）。
+> - **路线决策（β）**：α（epoll 状态机化重写全协议 + TLS 非阻塞）= 数里程碑不可达；
+>   β（阻塞 native 外包执行线程池，Go cgo/LockOSThread 范式）—— C 代码零改、语义
+>   零变、一刀切覆盖全部阻塞 native。px 网络栈在 C 层 = Go 的 cgo 边界等价物 → β
+>   是正确工程选择；α 记二期候选（协议整体 VM 化后自然可得纯正 epoll 形态）。
+> - **S2 offload 执行器核心**：PxOffTask + 外包线程池（按需创建 / 空闲回收 /
+>   PX_OFFLOAD_MAX 上限默认 max(8, CPU×2)）；vm.c CALL native 预检扩展
+>   `px_native_offload_kind` 命中名单 → 打包 args 投递 → 协程登记 offload 等待让出
+>   → 外包线程执行完写任务槽唤醒 → px_vm_resume 恢复写 dst + pc 前进（**不回退
+>   重试**，语义 = M93 sleep 预写 dst 让出模式推广）；主线程/逃生舱/嵌套回调
+>   （yield_ok=0）直调零变化。实证：PX_CORO_WORKERS=1 + 慢 http(500ms) + 快
+>   sleep(60ms) 协程 → sleep 66/71ms 完成（worker 未卡）；offload 与直调逐字节一致；
+>   线程池收敛 + 空闲回收（7→3）。
+> - **S3 名单全集 + 错误回传**：名单扩至 17 项（http_get/post/unix + tcp/udp/dns +
+>   s3_* 4 项 + ws_* 4 项；排除 http_get_stream —— chunk 回调用户 VM，违反纯网络
+>   约束）；**实锤修复编译器级坑** = setjmp 包装 helper 的"longjmp 回返回 0 → 调用者
+>   分支"在 gcc -O1/-O2 不可靠（最小复现：返回 0 被误判真 → 死循环）→ 重构为
+>   runtime.c `px_native_call_capture`（setjmp 函数内消化，调用者只见普通一次返回）；
+>   错误回传实证：外包线程 px_error → 协程恢复重抛带源位置 → worker 隔离 → 宿主
+>   继续（语义与直调一致）。
+> - **S4 收口（本 commit）**：回归中发现并修复 M93 协程化潜伏真实缺陷 —— 帧协程
+>   多 worker 并发 println 到同一 stdout 行内多次 printf 非原子 → 行交错合并
+>   （m93_s2 门1 偶发 R=63，10 次复跑 2 次触发）→ runtime 加 g_print_mu 整行原子锁
+>   （bi_print/print_err；GC 标记不涉此锁简单互斥即可，print 低频 I/O 开销可忽略）
+>   → 修复后 coro_print 10/10 全 64 稳定。
+> - **验证门全绿**：m96_s2 套件 **8 PASS**（不卡 worker 实证 + 4 offload/直调逐字节
+>   一致 + 线程池上限收敛 7 空闲回收 3 + 逃生舱 --c 直调不变）+ m96_s3 套件 **9 PASS**
+>   （名单 7 项本地可测全集对拍 + Err Result 回传 + px_error 隔离带源位置 + 150
+>   offload × 1850 分配低阈值 precise GC 零崩）+ 回归（vm_ab 38 PASS 0 GAP 0 FAIL +
+>   m89_s3d 9 + m93_s2 6 + m93_s3 6 + m94_s2/s3 8 + m95_s2 12 + m95_s4 10 + m82 +
+>   m83_s6 全绿 + diffcheck --all ✅）+ 双自举证明（compiler_vm 重放 compiler.px 与
+>   golden/compiler.bc.dump 逐字节一致）+ bootstrap/pxi_vm 重链吸收 M96 runtime
+>   （9,329,448 → 9,334,320B，hello 与 pxi stdout 一致）+ bootstrap/pxi 重链吸收
+>   M96 runtime（9,495,360 → 9,504,560B，--c 轨解释器，M91 重链批次惯例）。详见
+>   docs/M96_PLAN.md。
+> - ⚠️ 二期边界（M96_PLAN §五/D8 二期候选）：α 纯正 epoll 网络栈（协议整体 VM 化后）；
+>   文件 IO / popen 子进程等待等其余阻塞 native offload 候选；M97 = px_serve
+>   route/vhost handler 协程化（M95_S5_PLAN.md，暂缓）。
+
 ### M95 · 服务端 handler 协程化（D8-② http_serve 系：活跃请求占协程不占 fserve worker）
 
 > M95 = M94_PLAN §五 编排 D8 二期第 ② 条（http_serve/http_serve_unix handler 协程化）。

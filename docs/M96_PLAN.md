@@ -1,6 +1,10 @@
 # M96_PLAN · 客户端网络 IO 协程化（D8-① 阻塞桥不卡 worker）
 
-> 状态：🆕 **M96-S1 立项定稿（2026-09-10）**。
+> 状态：✅ **M96 全段完成（2026-09-10）**：S1 立项定稿 → S2 offload 执行器核心
+> （84bff6d+8a8add4）→ S3 名单全集 + 错误回传重构（d3802de）→ S4 收口（本 commit，
+> tag v0.2.0-m96）。S4 全量回归绿 + 双自举证明 + bootstrap/pxi_vm 重链吸收 M96
+> runtime；顺带修复 M93 协程化潜伏缺陷（并发 println 行交错 → g_print_mu 整行
+> 原子锁）。验证矩阵 §六逐项实跑全绿（见 CHANGELOG M96 段）。
 > 上游：M93_PLAN §D8 ①（http_request/tcp/udp/ws/s3/dns/fd_wait 同步阻塞桥 → 协程
 >   上下文感知 → 不阻塞 worker）+ M94_PLAN §五 编排（M96 = D8-① 客户端网络 IO
 >   协程化；前置 M94 抢占 + M95 服务端 handler 协程化已齐）+ M95-S2/S4（handler
