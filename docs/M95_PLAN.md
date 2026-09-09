@@ -8,8 +8,11 @@
 > 修正 printf '\n' >>out + 逐文件 grep -l；② 真实死锁修复 = http_pend_gc_mark
 > 在 GC 标记期持 g_conn_mu，与不屏蔽 SIG_GC_STOP 的既有 g_conn_mu 临界区形成
 > STW 死锁面（GC 等锁 vs 持锁线程被暂停）→ pending 表改独立锁 g_hpend_mu +
-> 全部临界区屏蔽 SIG_GC_STOP（对齐 M92 根栈原子性模式）。S3（sse_serve）/
-> S4（px_serve）二期编排见 §五。
+> 全部临界区屏蔽 SIG_GC_STOP（对齐 M92 根栈原子性模式）。✅ **M95-S3 收口（2026-09-10）**：
+> 全量回归绿（vm_ab 38P/0GAP/0F + m89_s3d 9 + m93_s2/s3 12 + m94_s2/s3 8 + m82/
+> m83_s6 + diffcheck --all）+ pxi_vm 重链吸收 M95 runtime（9,329,128 → 9,329,448B，
+> hello 与 pxi stdout 一致）+ CHANGELOG/ROADMAP 文档 + tag v0.2.0-m95。S4（sse_serve）/
+> S5（px_serve）二期编排见 §五。
 > 上游：M93_PLAN §D8 ②（http_serve/sse handler 协程化）+ M94_PLAN §五 编排
 >   （M95 = 服务端活跃请求处理从 fserve pthread 池 → 协程）+ M94 抢占（防单
 >   handler 饿死池）+ M93 阻塞原语让出（chan/sleep 占协程不占线程）+ M88-B 事件化
