@@ -6,6 +6,44 @@
 
 ## [Unreleased]
 
+### M101 · px_serve 并发 TLS 握手缺陷修复（qg 二期候选 A）
+
+> M101 = 二期候选排序第 A 项（已复现真实缺陷：M99-S3 记档「px_serve 并发 TLS 握手
+> TLS1.3 CertificateVerify 签名错 + TLS1.2 大并发 EOF，M98 runtime 复现，先于 M99」）。
+> 规划 docs/M101_PLAN.md。性质：**L0 runtime bugfix**（服务端 TLS 多 worker 并发握手
+> 正确性——mbedtls 3.6.2 预编译库未编线程支持下的共享竞态根治）。
+> - **根因（D0 侦察 + 复现二分）**：px_serve g_pool 多 worker 并发在各自连接上执行
+>   mbedtls 服务端握手，而 runtime/mbedtls 3.6.2 库 **MBEDTLS_THREADING_C 关（config
+>   2100/2111/3630 全注释）→ 库内无任何互斥**；握手中跨线程**共享可变对象**：全局
+>   私钥 g_srv_key（RSA CRT 签名写 ctx）/ SNI key / 全局 session cache g_srv_tls_cache
+>   （无锁链表）。examples/m101_s2 复现（v0.2.0-m100 runtime，barrier 48 并发新建 TLS
+>   连接全握手）：**RSA-TLS1.3 ok=2 fail=142**（'invalid signature by the server
+>   certificate: crypto/rsa: verification error' = RSA 私钥并发签名竞争实锤）、
+>   **RSA-TLS1.2 144 全 EOF**、EC(P-256)-TLS1.3 ok=140 fail=4（EOF/reset = session
+>   cache 无锁竞争）。修复前**每次请求都新建连接全握手**（Connection: close）。
+> - **修复（S2，消除握手中跨线程共享可变写，不做全局性能新瓶颈）**：
+>   · **per-连接 RSA 私钥 clone**（px_pk_clone_rsa：mbedtls 3.6.2 无 mbedtls_pk_copy，
+>     legacy PK 启用（USE_PSA_CRYPTO 关）→ pk_info_from_type(PK_RSA)+pk_setup+
+>     mbedtls_rsa_copy 深拷贝出独立 rsa ctx）→ c->own_pk（默认）/ c->own_pk_sni（SNI
+>     命中，px_sni_cb p_ctx=NULL→PxConn* 后锁内 clone）→ 签名写各自 ctx（主因根治）。
+>   · **session cache 加锁包装**（px_srv_cache_get/set 自定义 get/set 包 g_srv_cache_mu，
+>     3.6.2 cache 回调 4 参签名 (void*,id,len,session)）——次因根治（EC 残余 4 失败归因）。
+>   · **全局握手串行锁** g_srv_hs_mu 包整个 px_conn_tls_handshake：clone+cache 锁后
+>     RSA-TLS1.3 仍残余 ~1% MBEDTLS_ERR_ERROR_CORRUPTION_DETECTED(-110) + 偶发堆损坏
+>     （串行 300 次零失败 = 并发特有；TLS1.3 服务端存在无法枚举的深层共享）→ 串行锁
+>     根治（锁序 hs_mu→tls_mu 无死锁；keep-alive 连接握手仅一次不受影响；clone+cache
+>     锁保留双保险——未来换开 threading 的 mbedtls 可去掉串行锁仍正确）。
+>   · **px_conn_close 泄漏修复**：释放条件 is_tls → owned && ssl（握手失败路径 is_tls
+>     未置 1 原实现跳过释放 ssl/conf/drbg/entropy/own_pk → 每失败连接泄漏，并发失败
+>     高频时严重）；close_notify 仅握手完成后发。
+> - **验证（S2 全绿 + 收口全绿）**：examples/m101_s2 verify.sh 三轮并发全 0 失败
+>   （RSA-TLS1.3 / RSA-TLS1.2 / EC-TLS1.3 各 144/144；修复前 RSA-TLS1.3 142 失败、
+>   TLS1.2 144 EOF）+ 独立 6 轮×144=864 连发 0 失败 0 崩溃 + SNI 单连（CN=localhost /
+>   CN=sni.local 证书正确切换）+ SNI 并发 30/30 + m99_s2 verify_tls 8P/0F（M99 TLS
+>   场景不受损）+ 回归 suites（m82/m83_s6/m89_s3d/m93_s2/s3/m94_s2/s3/m95_s2/s4/
+>   m96_s2/s3/m97_s2/s3/m98_s2/m99_s2/m100）全绿 + vm_ab 38P/0GAP/0F + diffcheck
+>   --all rc=0 + 双自举证明 + pxi/pxi_vm 重链 + tag v0.2.0-m101。
+
 ### M100 · middleware 链协程化（px_serve route 管道内链状态机 defer）
 
 > M100 = 二期候选第 2 项（middleware 链协程化）正式立项（M98_PLAN §二 ⚠️ 遗留清单第 4 项；
