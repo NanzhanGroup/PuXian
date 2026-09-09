@@ -1,0 +1,30 @@
+# M97-S3（qg-issue 32）验证用 http_serve_unix daemon（keep-alive 长连服务端）
+# ------------------------------------------------------------
+# 场景：复现清歌 token-cache 网关（Go http.Transport keep-alive 复用同一 unix
+#   连接高频调用）。修复前服务端响应写为单次裸 send（非阻塞 fd EAGAIN/部分写
+#   不处理）→ 大响应截断；交还 IDLE 后事件循环只等可读 → 剩余响应永不写出 →
+#   悬挂至 15s 超时 close（客户端 1s fail-closed 误报）。
+# 路由：
+#   /ok   短响应 "ok-m97s3"
+#   /big  大响应（2MB body，> unix socket 发送缓冲 → 触发 EAGAIN/部分写路径）
+# 每请求打印 "AUDIT <path>"（verify 与 Go 客户端成功数对拍：无丢无悬挂）。
+# big body 模块顶层构造一次（指数翻倍），handler 只做引用拼接（不写模块全局，
+# PuXian 无 global 关键字；AUDIT 不带计数，verify 按行数统计）。
+big = "B"
+while len(big) < 1500000:
+    big = big + big
+
+def m97s3_handler(req):
+    p = req["path"]
+    print("AUDIT " + p)
+    if p == "/ok":
+        return "ok-m97s3"
+    if p == "/big":
+        return "M97S3BIG:" + big + ":TAIL"
+    if p == "/audit":
+        return "AUDITED"
+    return {"status": 404, "body": "nf"}
+
+spawn http_serve_unix("/tmp/m97s3.sock", m97s3_handler)
+sleep(300000)
+exit(0)

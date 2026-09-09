@@ -6,6 +6,38 @@
 
 ## [Unreleased]
 
+### M97 · 连接复用生命周期缺陷修复（qg-issue 31 客户端 + 32 服务端）
+
+> M97 = 清歌（qingge）新 issue 31/32 立项；原 M97（px_serve route/vhost handler
+> 协程化，M95_S5_PLAN.md）**顺延为 M98**。commit 链：b6587a3（S1 立项 + D0 侦察 +
+> 设计定稿）+ 本 commit（S2 F31 + S3 F32 + S4 收口 + tag v0.2.0-m97）。
+> - **Issue 31（客户端 http_request 连接池）实锤三处**：h_exchange 响应行版本被
+>   `sscanf(buf,"HTTP/%*s %d")` 直接跳过 → keep_alive 判定只看 `Connection: close`
+>   不判协议版本 → HTTP/1.0 上游（无 Connection 头 + Content-Length、发完即关）的
+>   死连接被误判可复用回池；默认 retries=1 → 池连接复用失败路径无自动新建重连 →
+>   **奇偶失败**（Mahesvara 反代 1/3/5 成、2/4/6 败实测吻合）。
+> - **F31 修复**：h_exchange 解析响应协议版本 → keep_alive **协议感知**（RFC 7230
+>   §6.3：HTTP/1.1 默认复用 / HTTP/1.0 默认关、仅显式 `Connection: keep-alive`
+>   复用）；bi_http_request 池死连接复用失败 → 丢弃并**自动新建重发一次**（不消耗
+>   attempt，首次 IO 失败 = 连接已死无半响应污染，重发安全）。验证：HTTP/1.0 模拟
+>   上游连续 30 次请求零失败且 accept==30（不回池）；旧 runtime（pxi 对拍）精确
+>   复现 ok=15/30 奇偶失败 → bug 实锤 + 修复双闭合。
+> - **Issue 32（服务端 http_serve_unix keep-alive 长连）实锤三处**：响应写为单次裸
+>   send 不检查返回值（非阻塞 fd EAGAIN/部分写 → 响应截断）；事件循环 IDLE 只注册
+>   EPOLLIN|EPOLLRDHUP|EPOLLET 不等 POLLOUT → 部分写交还 IDLE 后剩余响应**永不写出**
+>   → 悬挂至 15s 空闲超时 close（token-cache 网关 1s fail-closed 误报根因）；
+>   M95-S2 handler 挂起期连接 ACTIVE 不照看不交还（记录项）。
+> - **F32 修复**：新增 `px_send_all` 非阻塞全量写（循环 send，EAGAIN/EWOULDBLOCK →
+>   poll(POLLOUT, 15s) 续写，EINTR 重试，EPIPE/ERR/超时 → -1）；http_send_resp
+>   普通响应 + file 流式 + 404 与 http_conn_worker 413 全部替换；响应字节**全量入
+>   内核后才交还 IDLE**；写失败 → px_evc_close 收尾不留半写连接。验证：Go
+>   http.Transport keep-alive 单连接复用（conns==1）100 请求（/big 2MB 大响应与
+>   /ok 交替）100/100 零悬挂零丢零截断（wall 0.72s）+ 服务端 audit==100 无丢对拍闭合。
+> - **回归**：新增 examples/m97_s2（4 PASS）+ m97_s3（6 PASS）+ m89_s3d 9 + m93_s2/s3
+>   12 + m94_s2/s3 8 + m95_s2 14 + m95_s4 10 + m96_s2 8 + m96_s3 9 + m82/m83_s6 +
+>   vm_ab 38P/0GAP/0F + diffcheck --all ✅ + 双自举证明 + pxi/pxi_vm 重链吸收 M97
+>   runtime + tag v0.2.0-m97。
+
 ### M96 · 客户端网络 IO 协程化（D8-①：阻塞 native offload 执行器，慢上游不卡 worker）
 
 > M96 = M93_PLAN §D8 ①（http_request/tcp/udp/ws/s3/dns 同步阻塞桥 → 协程上下文感知）

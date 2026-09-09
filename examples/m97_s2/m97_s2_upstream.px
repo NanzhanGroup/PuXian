@@ -1,0 +1,33 @@
+# M97-S2（qg-issue 31）验证用 HTTP/1.0 模拟上游服务端
+# ------------------------------------------------------------
+# 语义精确模拟「清歌 Mahesvara 反代 / HTTP/1.0 上游」：
+#   响应行 HTTP/1.0 + Content-Length、**无 Connection 头**、发完即关。
+#   （RFC 7230 §6.3：HTTP/1.0 默认短连接——服务端不会保持，发完即 close。）
+# 修复前 h_exchange 不判协议版本 → keep_alive 误判 1 → 死连接被客户端回池 →
+#   二次请求取死连接失败（奇偶失败）。修复后 keep_alive=0 → 客户端每请求新建。
+# 每处理一连接打印一行 "UP:<n>"（verify 统计：= 客户端新建连接次数）。
+# 用 std.net 裸 TCP：tcp_listen/tcp_accept（阻塞）/tcp_recv/tcp_send/tcp_close。
+def main():
+    l = tcp_listen(18890)
+    total = 0
+    while total < 80:
+        c = tcp_accept(l)
+        # 读请求头直到 \r\n\r\n（上限 16KB；EOF 则跳过）
+        buf = ""
+        while not contains(buf, "\r\n\r\n"):
+            if len(buf) > 16384:
+                break
+            s = tcp_recv(c, 4096)
+            if s == "":
+                break
+            buf = buf + s
+        body = "UPSTREAM10-" + str(total)
+        resp = "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\nContent-Length: " + str(len(body)) + "\r\n\r\n" + body
+        tcp_send(c, resp)
+        tcp_close(c)
+        total = total + 1
+        print("UP:" + str(total))
+    print("UPSTREAM_EXIT_" + str(total))
+    exit(0)
+
+main()
