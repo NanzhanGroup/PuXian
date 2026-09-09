@@ -1,0 +1,33 @@
+# M93-S3/S4 验证：帧协程让出（chan 乒乓 + sleep）× 并发 GC（precise 低阈值）
+# 30 对 churn/mate 协程通过 cap=1 通道乒乓（send 满/recv 空大量让出）+ 高频对象
+# 分配（list/str）触发多轮并发 GC STW。BLOCKED 协程帧槽为精确 GC 根面 ——
+# 低阈值下零崩溃/UAF 即通过（让出协程无 C 栈 = 纯帧槽根，M92 根面直接受益）。
+def churn(i, a, b, done):
+    for k in range(120):
+        var v = k + i
+        a.send(v * 3 + 1)
+        var r = b.recv()
+        var xs = []
+        for j in range(25):
+            xs.append(r + j)
+        var s = "i" + str(i) + "k" + str(k) + "n" + str(len(xs))
+        if k % 5 == 0:
+            sleep_us(300)
+    done.send(1)
+
+def mate(i, a, b):
+    for k in range(120):
+        var v = a.recv()
+        b.send(v + 1)
+
+let N = 30
+let done = chan[int](N)
+for i in range(N):
+    let ca = chan[int](1)
+    let cb = chan[int](1)
+    spawn churn(i, ca, cb, done)
+    spawn mate(i, ca, cb)
+
+for i in range(N):
+    done.recv()
+print("CORO-GC-BLOCK OK")

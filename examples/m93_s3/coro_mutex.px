@@ -1,0 +1,24 @@
+# M93-S3 验证：帧协程 mutex 互斥计数（4 协程 × 1000 临界区竞争，让出/唤醒密集）
+# mutex 被占时 lock 让出（登记 cw 链表）；unlock 唤醒首等待者。锁保护下计数无丢失。
+def inc_worker(m, counter, ch, n):
+    for i in range(n):
+        m.lock()
+        let cur = counter[0]
+        counter[0] = cur + 1
+        m.unlock()
+    ch.send(1)
+
+let m = mutex()
+let counter = [0]
+let ch = chan[int](8)
+let N = 1000
+spawn inc_worker(m, counter, ch, N)
+spawn inc_worker(m, counter, ch, N)
+spawn inc_worker(m, counter, ch, N)
+spawn inc_worker(m, counter, ch, N)
+ch.recv()
+ch.recv()
+ch.recv()
+ch.recv()
+assert(counter[0] == 4 * N, "mutex 保护下计数无丢失更新")
+print("CORO-MUTEX OK counter=" + str(counter[0]))

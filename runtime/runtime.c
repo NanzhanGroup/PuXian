@@ -3967,6 +3967,16 @@ static LXValue bi_sleep_us(LXValue* args, int nargs, void* ctx) {
     return px_null();
 }
 
+// M93-S3：阻塞 native 识别（vm.c CALL 预检）——协程上下文里 sleep/sleep_us 改由
+//   定时器登记让出（不阻塞 worker）。函数指针比较（static 同编译单元内可达）。
+int px_native_blocking_kind(LXValue fn) {
+    if (fn.type != PX_NATIVE) return PX_BLK_NONE;
+    LXFuncPtr fp = fn.as.obj->as.native.fn;
+    if (fp == bi_sleep)    return PX_BLK_SLEEP_MS;
+    if (fp == bi_sleep_us) return PX_BLK_SLEEP_US;
+    return PX_BLK_NONE;
+}
+
 static LXValue bi_now_us(LXValue* args, int nargs, void* ctx) {
     (void)args; (void)nargs; (void)ctx;
     struct timespec ts;
@@ -7032,10 +7042,13 @@ LXValue px_mutex_try_lock(LXValue m) {
 
 LXValue px_mutex_unlock(LXValue m) {
     LXObject* o = px_mutex_obj(m, "unlock");
+    struct PxCoro* w = NULL;
     pthread_mutex_lock(&o->as.mutex.mu);
     o->as.mutex.locked = 0;
     pthread_cond_signal(&o->as.mutex.cv);
+    w = px_coro_take_waiter(&o->as.mutex.cw);   // M93-S3：唤醒首协程 lock 等待者
     pthread_mutex_unlock(&o->as.mutex.mu);
+    px_coro_wake(w);
     return px_null();
 }
 
@@ -7081,10 +7094,17 @@ LXValue px_rwlock_try_rlock(LXValue m) {
 
 LXValue px_rwlock_runlock(LXValue m) {
     LXObject* o = px_rwlock_obj(m, "runlock");
+    struct PxCoro* w = NULL;
     pthread_mutex_lock(&o->as.rwlock.mu);
     if (o->as.rwlock.readers > 0) o->as.rwlock.readers--;
-    if (o->as.rwlock.readers == 0) pthread_cond_broadcast(&o->as.rwlock.cv);
+    if (o->as.rwlock.readers == 0) {
+        pthread_cond_broadcast(&o->as.rwlock.cv);
+        // M93-S3：写者优先唤醒（有协程写者等 → 先给它；无则协程读者）
+        w = px_coro_take_waiter(&o->as.rwlock.cw_w);
+        if (!w) w = px_coro_take_waiter(&o->as.rwlock.cw_r);
+    }
     pthread_mutex_unlock(&o->as.rwlock.mu);
+    px_coro_wake(w);
     return px_null();
 }
 
@@ -7114,10 +7134,15 @@ LXValue px_rwlock_try_wlock(LXValue m) {
 
 LXValue px_rwlock_wunlock(LXValue m) {
     LXObject* o = px_rwlock_obj(m, "wunlock");
+    struct PxCoro* w = NULL;
     pthread_mutex_lock(&o->as.rwlock.mu);
     o->as.rwlock.writer = 0;
     pthread_cond_broadcast(&o->as.rwlock.cv);
+    // M93-S3：写者优先唤醒协程等待者（无协程写者则协程读者）
+    w = px_coro_take_waiter(&o->as.rwlock.cw_w);
+    if (!w) w = px_coro_take_waiter(&o->as.rwlock.cw_r);
     pthread_mutex_unlock(&o->as.rwlock.mu);
+    px_coro_wake(w);
     return px_null();
 }
 
@@ -7139,9 +7164,26 @@ LXValue px_chan_create(int cap) {
     return v;
 }
 
+// M93-S3：通道双轨唤醒辅助（调用方已持 chan.mu）——signal pthread 等待者 +
+//   摘链首协程等待者（解锁后由调用方 px_coro_wake）。无协程等待者时头为 NULL，
+//   摘链空操作（协程系统未启用/无等待，零开销）。
+static struct PxCoro* chan_sig_recv(LXObject* o) {
+    pthread_cond_signal(&o->as.chan.cv_recv);
+    return px_coro_take_waiter(&o->as.chan.cw_recv);
+}
+static struct PxCoro* chan_sig_send(LXObject* o) {
+    pthread_cond_signal(&o->as.chan.cv_send);
+    return px_coro_take_waiter(&o->as.chan.cw_send);
+}
+// 有「接收者就绪」（pthread recv_waiting 或协程 cw_recv）——无缓冲 send 交付判据
+static int chan_has_recver(const LXObject* o) {
+    return o->as.chan.recv_waiting > 0 || o->as.chan.cw_recv != NULL;
+}
+
 LXValue px_chan_send(LXValue ch, LXValue val) {
     if (ch.type != PX_CHAN) px_error("send: 目标不是通道（%s）", px_type_name(ch));
     LXObject* o = ch.as.obj;
+    struct PxCoro* w = NULL;
     pthread_mutex_lock(&o->as.chan.mu);
     while (1) {
         if (o->as.chan.closed) {
@@ -7149,8 +7191,8 @@ LXValue px_chan_send(LXValue ch, LXValue val) {
             px_error("R1011: 向已关闭的通道发送");
         }
         if (o->as.chan.cap == 0) {
-            // 无缓冲：等待接收者就绪
-            if (o->as.chan.recv_waiting > 0) {
+            // 无缓冲：等待接收者就绪（pthread recv_waiting 或协程 cw_recv）
+            if (chan_has_recver(o)) {
                 // M22 修复：写 buf 元素（LXValue 多字节非原子）期间屏蔽 GC 暂停信号，
                 // 防 GC 扫描 chan 读到半写入值 → 活跃对象漏标被误回收
                 sigset_t old;
@@ -7158,8 +7200,9 @@ LXValue px_chan_send(LXValue ch, LXValue val) {
                 o->as.chan.buf[0] = val;
                 o->as.chan.len = 1;
                 gc_unblock_stop(&old);
-                pthread_cond_signal(&o->as.chan.cv_recv);
+                w = chan_sig_recv(o);
                 pthread_mutex_unlock(&o->as.chan.mu);
+                px_coro_wake(w);
                 px_select_signal();
                 return val;
             }
@@ -7173,8 +7216,9 @@ LXValue px_chan_send(LXValue ch, LXValue val) {
                 o->as.chan.buf[tail] = val;
                 o->as.chan.len++;
                 gc_unblock_stop(&old);
-                pthread_cond_signal(&o->as.chan.cv_recv);
+                w = chan_sig_recv(o);
                 pthread_mutex_unlock(&o->as.chan.mu);
+                px_coro_wake(w);
                 px_select_signal();
                 return val;
             }
@@ -7186,6 +7230,7 @@ LXValue px_chan_send(LXValue ch, LXValue val) {
 LXValue px_chan_recv(LXValue ch) {
     if (ch.type != PX_CHAN) px_error("recv: 目标不是通道（%s）", px_type_name(ch));
     LXObject* o = ch.as.obj;
+    struct PxCoro* w = NULL;
     pthread_mutex_lock(&o->as.chan.mu);
     while (1) {
         if (o->as.chan.len > 0) {
@@ -7194,13 +7239,13 @@ LXValue px_chan_recv(LXValue ch) {
                 // 无缓冲：清空交付槽，通知等待的发送者
                 o->as.chan.len = 0;
                 if (o->as.chan.recv_waiting > 0) o->as.chan.recv_waiting--;
-                pthread_cond_signal(&o->as.chan.cv_send);
             } else {
                 o->as.chan.head = (o->as.chan.head + 1) % o->as.chan.cap;
                 o->as.chan.len--;
-                pthread_cond_signal(&o->as.chan.cv_send);
             }
+            w = chan_sig_send(o);
             pthread_mutex_unlock(&o->as.chan.mu);
+            px_coro_wake(w);
             px_select_signal();
             return v;
         }
@@ -7220,6 +7265,7 @@ bool px_chan_try_recv(LXValue ch, LXValue* out) {
     if (ch.type != PX_CHAN) px_error("recv: 目标不是通道（%s）", px_type_name(ch));
     LXObject* o = ch.as.obj;
     bool ok = false;
+    struct PxCoro* w = NULL;
     pthread_mutex_lock(&o->as.chan.mu);
     if (o->as.chan.len > 0) {
         *out = o->as.chan.buf[o->as.chan.head];
@@ -7230,10 +7276,49 @@ bool px_chan_try_recv(LXValue ch, LXValue* out) {
             o->as.chan.head = (o->as.chan.head + 1) % o->as.chan.cap;
             o->as.chan.len--;
         }
-        pthread_cond_signal(&o->as.chan.cv_send);
+        w = chan_sig_send(o);
         ok = true;
     }
     pthread_mutex_unlock(&o->as.chan.mu);
+    px_coro_wake(w);
+    if (ok) px_select_signal();
+    return ok;
+}
+
+// M93-S3：非阻塞发送（select/协程 try 用）。成功 = 值已入缓冲/直接交付接收者。
+//   closed → false（调用方须走阻塞版 px_chan_send 报 R1011，不得登记等待）。
+bool px_chan_try_send(LXValue ch, LXValue val) {
+    if (ch.type != PX_CHAN) px_error("send: 目标不是通道（%s）", px_type_name(ch));
+    LXObject* o = ch.as.obj;
+    bool ok = false;
+    struct PxCoro* w = NULL;
+    pthread_mutex_lock(&o->as.chan.mu);
+    if (o->as.chan.closed) {
+        pthread_mutex_unlock(&o->as.chan.mu);
+        return false;
+    }
+    if (o->as.chan.cap == 0) {
+        if (chan_has_recver(o)) {          // 无缓冲：有接收者就绪（pthread/协程）
+            sigset_t old;
+            gc_block_stop(&old);
+            o->as.chan.buf[0] = val;
+            o->as.chan.len = 1;
+            gc_unblock_stop(&old);
+            w = chan_sig_recv(o);
+            ok = true;
+        }
+    } else if (o->as.chan.len < o->as.chan.cap) {
+        int tail = (o->as.chan.head + o->as.chan.len) % o->as.chan.cap;
+        sigset_t old;
+        gc_block_stop(&old);
+        o->as.chan.buf[tail] = val;
+        o->as.chan.len++;
+        gc_unblock_stop(&old);
+        w = chan_sig_recv(o);
+        ok = true;
+    }
+    pthread_mutex_unlock(&o->as.chan.mu);
+    px_coro_wake(w);
     if (ok) px_select_signal();
     return ok;
 }
@@ -7241,10 +7326,18 @@ bool px_chan_try_recv(LXValue ch, LXValue* out) {
 void px_chan_close(LXValue ch) {
     if (ch.type != PX_CHAN) px_error("close: 目标不是通道（%s）", px_type_name(ch));
     LXObject* o = ch.as.obj;
+    struct PxCoro* w1 = NULL;
+    struct PxCoro* w2 = NULL;
     pthread_mutex_lock(&o->as.chan.mu);
     o->as.chan.closed = 1;
     pthread_cond_broadcast(&o->as.chan.cv_send);
     pthread_cond_broadcast(&o->as.chan.cv_recv);
+    // 协程等待者全部唤醒（醒来重试 try：send 见 closed → 阻塞版报 R1011；
+    //   recv len==0 且 closed → 阻塞版报 R1011；期间新到的数据先被取走则继续）
+    while ((w1 = px_coro_take_waiter(&o->as.chan.cw_send)) != NULL)
+        px_coro_wake(w1);
+    while ((w2 = px_coro_take_waiter(&o->as.chan.cw_recv)) != NULL)
+        px_coro_wake(w2);
     pthread_mutex_unlock(&o->as.chan.mu);
     px_select_signal();
 }

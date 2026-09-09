@@ -1,0 +1,19 @@
+# M93-S3 验证：帧协程并发 sleep（N=40 协程各睡 40..120ms）
+# 协程化：sleep 登记定时器让出（worker 不阻塞）→ 总墙钟 ≈ max(sleep)+调度 ≈ 120ms；
+# 若 worker 被 pthread 阻塞串行累加 ≈ N×80ms=3.2s → 上限 800ms 断言暴露。
+def slp(i, done):
+    sleep(40 + (i % 5) * 20)
+    done.send(1)
+
+let N = 40
+let done = chan[int](N)
+var t0 = now_us()
+for i in range(N):
+    spawn slp(i, done)
+for i in range(N):
+    done.recv()
+var wall = now_us() - t0
+print("SLEEP-PAR wall_us=" + str(wall) + " (expect ~120ms, serial would be ~3.2s)")
+assert(wall < 800000, "并发 sleep 总时延应 ≈ max(120ms) 而非累加")
+assert(wall > 90000, "总时延应覆盖 max sleep(120ms) 下限")
+print("CORO-SLEEP-PAR OK")

@@ -182,14 +182,29 @@ static PxFrame* vm_frame_push(PxVmState* st, const PxVMFunc* f,
     fr->line = 0;
     fr->ret_dst = ret_dst;
     fr->nargs = nargs;          // M90-S1/F1：默认参数入口填充依 NARGS 读此
+    fr->unlock_kind = 0;        // M93-S3：with 展开后置解锁（帧复用清零）
+    fr->unlock_obj = px_null();
     __sync_synchronize();     // 帧字段写完成后再发布 nframes（弱序架构显式屏障）
     st->nframes = idx + 1;
     return fr;
 }
 
+// M93-S3：帧弹公共路径 —— 先执行 with 系列登记的后置解锁（unlock_kind），再释放槽。
+//   解锁在 slots free 前做（unlock 只拿锁对象锁，不触 slots；顺序无关紧要但保持清晰）。
 static void vm_frame_pop(PxVmState* st) {
     if (st->nframes <= 0) return;
     PxFrame* fr = &st->frames[--st->nframes];
+    if (fr->unlock_kind && fr->unlock_obj.type != PX_NULL) {
+        if (fr->unlock_kind == 1) {
+            if (fr->unlock_obj.type == PX_MUTEX) px_mutex_unlock(fr->unlock_obj);
+        } else if (fr->unlock_kind == 2) {
+            if (fr->unlock_obj.type == PX_RWLOCK) px_rwlock_runlock(fr->unlock_obj);
+        } else if (fr->unlock_kind == 3) {
+            if (fr->unlock_obj.type == PX_RWLOCK) px_rwlock_wunlock(fr->unlock_obj);
+        }
+        fr->unlock_kind = 0;
+        fr->unlock_obj = px_null();
+    }
     free(fr->slots);
     fr->slots = NULL;
 }
@@ -229,9 +244,155 @@ PxVMFunc* px_vm_new_func(const char* name, int arity, int ndefault, int nslots,
 }
 
 // ---- 解释循环（最小子集；其余 op → px_error "指令未实现"）----
-LXValue px_vm_run_func(PxVmState* st, const PxVMFunc* f, LXValue* args, int nargs) {
-    int base = st->nframes;                 // 入口帧前栈深
-    vm_frame_push(st, f, args, nargs, -1);  // ret_dst=-1：返回给本函数调用者
+// ---- M93-S3：阻塞方法协程让出拦截辅助（CALLM 预检；仅协程上下文 + 可让出循环）----
+// 返回值：0 = 未拦截（调用方落原 px_method / px_call，走 pthread 阻塞语义）；
+//   1 = 已处理 —— dst 已写 / fn 帧已压（with 系列，fn 返回由帧弹自动解锁）/
+//   已让出（st->suspended=1，fr->pc 已回退到重试指令）。
+// 语义对齐：chan.send/recv、mutex.lock、rwlock.rlock/wlock 阻塞版结果（send 返回发送值、
+//   recv 返回收到的值、lock 返回 null）；with = try_lock + 回调 + 返回后解锁。回调内
+//   px_error（longjmp 跳帧）→ 锁泄漏 —— 与现 px_method with 的 px_call 内错误同语义。
+static int vm_coro_method(PxVmState* st, PxFrame* fr, LXValue ov, const char* mname,
+                          LXValue* abuf, int argc, int pc, int dst) {
+    if (ov.type == PX_CHAN) {
+        if (strcmp(mname, "send") == 0) {
+            if (argc != 1) return 0;               // 参数错 → 落 px_method 报错
+            for (;;) {
+                if (px_chan_try_send(ov, abuf[0])) {   // 成功：返回值 = 发送值（同阻塞版）
+                    if (dst < fr->nslots) fr->slots[dst] = abuf[0];
+                    return 1;
+                }
+                int r = px_coro_chan_send_wait(ov);    // closed→0(落阻塞版报 R1011)/
+                if (r == PX_CORO_WAIT_BLOCKED) { fr->pc = pc; st->suspended = 1; return 1; }
+                if (r == PX_CORO_WAIT_RETRY) continue; // 登记期间条件满足 → 重试
+                return 0;
+            }
+        }
+        if (strcmp(mname, "recv") == 0) {
+            LXValue out = px_null();
+            for (;;) {
+                if (px_chan_try_recv(ov, &out)) {
+                    if (dst < fr->nslots) fr->slots[dst] = out;
+                    return 1;
+                }
+                int r = px_coro_chan_recv_wait(ov);    // closed 且空 → 0(阻塞版报 R1011)
+                if (r == PX_CORO_WAIT_BLOCKED) { fr->pc = pc; st->suspended = 1; return 1; }
+                if (r == PX_CORO_WAIT_RETRY) continue;
+                return 0;
+            }
+        }
+        return 0;                                    // close/unlock 等非阻塞 → px_method
+    }
+    if (ov.type == PX_MUTEX) {
+        if (strcmp(mname, "lock") == 0) {
+            for (;;) {
+                LXValue tl = px_mutex_try_lock(ov);
+                if (tl.type == PX_BOOL && tl.as.b) {
+                    if (dst < fr->nslots) fr->slots[dst] = px_null();   // lock 返回 null
+                    return 1;
+                }
+                int r = px_coro_mutex_wait(ov);
+                if (r == PX_CORO_WAIT_BLOCKED) { fr->pc = pc; st->suspended = 1; return 1; }
+                if (r == PX_CORO_WAIT_RETRY) continue;
+                return 0;
+            }
+        }
+        if (strcmp(mname, "with") == 0) {
+            if (argc != 1) return 0;
+            for (;;) {
+                LXValue tl = px_mutex_try_lock(ov);
+                if (tl.type == PX_BOOL && tl.as.b) break;    // 已拿锁 → 执行回调
+                int r = px_coro_mutex_wait(ov);
+                if (r == PX_CORO_WAIT_BLOCKED) { fr->pc = pc; st->suspended = 1; return 1; }
+                if (r == PX_CORO_WAIT_RETRY) continue;
+                return 0;
+            }
+            LXValue fn = abuf[0];
+            if (fn.type == PX_FUNC && fn.as.obj->as.func.fn == px_vm_entry) {
+                // VM 函数回调：压帧（ret_dst=dst）+ 帧标 unlock 后置 —— fn 中途让出
+                //   锁随帧保留（GC 标 unlock_obj 防回收），恢复后 fn RET 弹帧自动解锁。
+                PxVMFunc* cf2 = (PxVMFunc*)fn.as.obj->as.func.ctx;
+                if (cf2->arity > 0) { px_mutex_unlock(ov); return 0; }  // 带参回调落原语义报错
+                vm_frame_push(st, cf2, NULL, 0, dst);
+                PxFrame* nf = &st->frames[st->nframes - 1];
+                nf->unlock_kind = 1;
+                nf->unlock_obj = ov;
+                return 1;
+            }
+            LXValue r = px_call(fn, NULL, 0);              // native 回调：直调后解锁
+            px_mutex_unlock(ov);
+            if (dst < fr->nslots) fr->slots[dst] = r;
+            return 1;
+        }
+        return 0;
+    }
+    if (ov.type == PX_RWLOCK) {
+        if (strcmp(mname, "rlock") == 0) {
+            for (;;) {
+                LXValue tl = px_rwlock_try_rlock(ov);
+                if (tl.type == PX_BOOL && tl.as.b) {
+                    if (dst < fr->nslots) fr->slots[dst] = px_null();
+                    return 1;
+                }
+                int r = px_coro_rwlock_wait_r(ov);
+                if (r == PX_CORO_WAIT_BLOCKED) { fr->pc = pc; st->suspended = 1; return 1; }
+                if (r == PX_CORO_WAIT_RETRY) continue;
+                return 0;
+            }
+        }
+        if (strcmp(mname, "wlock") == 0) {
+            for (;;) {
+                LXValue tl = px_rwlock_try_wlock(ov);
+                if (tl.type == PX_BOOL && tl.as.b) {
+                    if (dst < fr->nslots) fr->slots[dst] = px_null();
+                    return 1;
+                }
+                int r = px_coro_rwlock_wait_w(ov);
+                if (r == PX_CORO_WAIT_BLOCKED) { fr->pc = pc; st->suspended = 1; return 1; }
+                if (r == PX_CORO_WAIT_RETRY) continue;
+                return 0;
+            }
+        }
+        if (strcmp(mname, "with_read") == 0 || strcmp(mname, "with_write") == 0) {
+            if (argc != 1) return 0;
+            int is_w = mname[5] == 'w';                  // "with_write"[5]='w'，read 为 'r'
+            for (;;) {
+                LXValue tl = is_w ? px_rwlock_try_wlock(ov) : px_rwlock_try_rlock(ov);
+                if (tl.type == PX_BOOL && tl.as.b) break;
+                int r = is_w ? px_coro_rwlock_wait_w(ov) : px_coro_rwlock_wait_r(ov);
+                if (r == PX_CORO_WAIT_BLOCKED) { fr->pc = pc; st->suspended = 1; return 1; }
+                if (r == PX_CORO_WAIT_RETRY) continue;
+                return 0;
+            }
+            LXValue fn = abuf[0];
+            if (fn.type == PX_FUNC && fn.as.obj->as.func.fn == px_vm_entry) {
+                PxVMFunc* cf2 = (PxVMFunc*)fn.as.obj->as.func.ctx;
+                if (cf2->arity > 0) {
+                    if (is_w) px_rwlock_wunlock(ov); else px_rwlock_runlock(ov);
+                    return 0;
+                }
+                vm_frame_push(st, cf2, NULL, 0, dst);
+                PxFrame* nf = &st->frames[st->nframes - 1];
+                nf->unlock_kind = is_w ? 3 : 2;
+                nf->unlock_obj = ov;
+                return 1;
+            }
+            LXValue r = px_call(fn, NULL, 0);
+            if (is_w) px_rwlock_wunlock(ov); else px_rwlock_runlock(ov);
+            if (dst < fr->nslots) fr->slots[dst] = r;
+            return 1;
+        }
+        return 0;
+    }
+    return 0;
+}
+
+// ---- 解释循环核心（M93-S3 重构：可让出）----
+// 参数：base = 本入口应跑到的帧深（px_vm_run_func：push 前深度；协程恢复：0）。
+//   yield_ok = 1 表示协程顶层解释循环（阻塞点可让出）；0 = 嵌套/主线程（遇阻塞
+//   走原 pthread 路径 —— 语义与现一致）。
+// 返回：0 = 完成（*out_ret 有效）；1 = 让出（st->suspended=1，协程已登记等待队列，
+//   帧栈保留在 st，唤醒后由 px_vm_resume 从让出点恢复）。
+static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) {
     LXValue ret = px_null();
     int done = 0;
     PxFrame* fr = &st->frames[st->nframes - 1];
@@ -294,16 +455,44 @@ LXValue px_vm_run_func(PxVmState* st, const PxVMFunc* f, LXValue* args, int narg
                     argc = n;
                 } else argc = 0;
             }
+            // —— M93-S3：协程上下文 + 可让出循环：sleep/sleep_us 定时器让出预检 ——
+            //   （登记全局 sleep 等待表 + 让出，worker 不阻塞；到期由 timer 线程唤醒
+            //   恢复后直接跑下一条 —— sleep 结果恒 null，让出前预写 dst）
+            if (yield_ok && px_coro_active() && argc >= 1) {
+                int bk = px_native_blocking_kind(fnv);
+                if (bk != PX_BLK_NONE) {
+                    long long us = 0;
+                    int have = 0;
+                    if (abuf[0].type == PX_INT) { us = abuf[0].as.i; have = 1; }
+                    else if (abuf[0].type == PX_FLOAT) { us = (long long)abuf[0].as.f; have = 1; }
+                    if (bk == PX_BLK_SLEEP_MS) us *= 1000;   // sleep(ms) → us
+                    if (have) {
+                        int r = px_coro_sleep_us(us);
+                        if (r == PX_CORO_WAIT_RETRY) {       // us<=0：立即完成
+                            free(abuf);
+                            if (dst < fr->nslots) fr->slots[dst] = px_null();
+                            break;
+                        }
+                        if (r == PX_CORO_WAIT_BLOCKED) {     // 已登记定时器 → 让出（不回退 pc）
+                            free(abuf);
+                            if (dst < fr->nslots) fr->slots[dst] = px_null();
+                            st->suspended = 1;
+                            return 1;
+                        }
+                        // r==0：非协程 ctx（理论不达，yield_ok=1 恒协程）→ 落 px_call 兜底
+                    }
+                }
+            }
             if (fnv.type == PX_FUNC &&
                 fnv.as.obj->as.func.fn == px_vm_entry) {
-                PxVMFunc* cf = (PxVMFunc*)fnv.as.obj->as.func.ctx;
-                if (argc < cf->arity) {      // 参数不足（默认参数 S3-B 补）
+                PxVMFunc* cf2 = (PxVMFunc*)fnv.as.obj->as.func.ctx;
+                if (argc < cf2->arity) {      // 参数不足（默认参数 S3-B 补）
                     free(abuf);
                     px_error("VM %s:%d CALL %s 参数不足: 需 %d 给 %d",
-                             fr->f->name, fr->line, cf->name, cf->arity, argc);
+                             fr->f->name, fr->line, cf2->name, cf2->arity, argc);
                     break;
                 }
-                vm_frame_push(st, cf, abuf, argc, dst);  // 压子帧，循环继续
+                vm_frame_push(st, cf2, abuf, argc, dst);  // 压子帧，循环继续
                 free(abuf);
             } else {
                 LXValue r = px_call(fnv, abuf, argc);     // native/旧C/非函数
@@ -508,6 +697,7 @@ LXValue px_vm_run_func(PxVmState* st, const PxVMFunc* f, LXValue* args, int narg
         case PXOP_CALLM: {
             LXValue ov = fr->slots[in.b];
             int argc = (int)in.fl;
+            int dst = in.a;
             LXValue* abuf = NULL;
             if (argc > 0) {
                 int n = argc;
@@ -517,6 +707,16 @@ LXValue px_vm_run_func(PxVmState* st, const PxVMFunc* f, LXValue* args, int narg
                     for (int i = 0; i < n; i++) abuf[i] = fr->slots[in.b + 1 + i];
                     argc = n;
                 } else argc = 0;
+            }
+            // —— M93-S3：协程阻塞方法让出预检（chan send/recv、mutex lock/with、
+            //    rwlock rlock/wlock/with_read/with_write）——
+            if (yield_ok && px_coro_active() && cf->mod && in.c < cf->mod->nN) {
+                int h = vm_coro_method(st, fr, ov, cf->mod->N[in.c], abuf, argc, pc, dst);
+                if (h) {
+                    free(abuf);
+                    if (st->suspended) return 1;   // 已让出（登记等待队列，恢复重试）
+                    break;                          // 已处理（dst 已写 / fn 帧已压）
+                }
             }
             LXValue r = px_null();
             if (cf->mod && in.c < cf->mod->nN)
@@ -577,7 +777,36 @@ LXValue px_vm_run_func(PxVmState* st, const PxVMFunc* f, LXValue* args, int narg
             break;
         }
     }
+    *out_ret = ret;
+    return 0;
+}
+
+// ---- 入口三函数 ----
+// px_vm_run_func：不可让出（yield_ok=0）——主线程/嵌套 native 回调（px_call →
+//   px_vm_entry）遇阻塞 native 走原 pthread 路径，语义与现完全一致。
+LXValue px_vm_run_func(PxVmState* st, const PxVMFunc* f, LXValue* args, int nargs) {
+    int base = st->nframes;                 // 入口帧前栈深
+    vm_frame_push(st, f, args, nargs, -1);  // ret_dst=-1：返回给本函数调用者
+    LXValue ret = px_null();
+    vm_run_loop(st, base, 0, &ret);
     return ret;
+}
+
+// px_vm_run_coro / px_vm_resume（M93-S3，coro.c worker 用）：可让出（yield_ok=1）。
+//   返回码（vm_run_loop 透传）：1 = 让出（协程已登记等待队列，worker 不再触碰）；
+//   0 = 跑完（worker 回收）。st->suspended 仍由让出点置 1（诊断用，worker 不读）。
+int px_vm_run_coro(PxVmState* st, const PxVMFunc* f, LXValue* args, int nargs) {
+    int base = st->nframes;                 // 协程全新：0
+    st->suspended = 0;
+    vm_frame_push(st, f, args, nargs, -1);
+    LXValue ret = px_null();
+    return vm_run_loop(st, base, 1, &ret);
+}
+
+int px_vm_resume(PxVmState* st) {
+    st->suspended = 0;
+    LXValue ret = px_null();
+    return vm_run_loop(st, 0, 1, &ret);
 }
 
 // ---- D2 trampoline：统一函数对象 func.fn = px_vm_entry（ctx=PxVMFunc*）----
@@ -629,6 +858,8 @@ void px_vm_gc_mark_state(void* vst) {
         PxFrame* fr = &st->frames[i];
         if (fr->slots && fr->nslots > 0)
             px_gc_mark_slots(fr->slots, fr->nslots);
+        if (fr->unlock_kind && fr->unlock_obj.type != PX_NULL)   // M93-S3：with 展开
+            px_gc_mark_slots(&fr->unlock_obj, 1);                // 持锁对象保活（帧弹前）
     }
 }
 

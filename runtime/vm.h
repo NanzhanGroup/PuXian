@@ -170,12 +170,19 @@ typedef struct {
                                //   （返回给 px_vm_run_func 调用者 / px_vm_entry）
     int             nargs;     // M90-S1/F1：本帧实际实参数（CALL/顶层入口实参个数；
                                //   NARGS 指令读取 → 默认参数缺失填充判断 nargs ≤ i）
+    // M93-S3：with 系列展开（mutex.with/rwlock.with_read/with_write）——压 fn 帧时
+    //   登记返回后自动解锁动作（帧弹公共路径执行，含正常 RET/RET0/TRY 传播）。
+    //   unlock_kind：0=无 / 1=px_mutex_unlock / 2=px_rwlock_runlock / 3=px_rwlock_wunlock
+    int             unlock_kind;
+    LXValue         unlock_obj;  // 锁对象（GC 标记根：帧弹前保活锁对象，防 fn 内 GC 误回收）
 } PxFrame;
 
 typedef struct {
     PxFrame* frames;           // 帧栈（动态增长）
     int      nframes;
     int      cap;
+    int      suspended;        // M93-S3：协程让出标志（解释循环遇阻塞让出置 1，
+                               //   worker 观察后复位；恢复运行前须为 0）
 } PxVmState;
 
 // ==================== API ====================
@@ -191,7 +198,16 @@ PxVmState*  px_vm_unbind(void);                 // M93-S2：解绑（返回当�
 LXValue px_vm_entry(LXValue* args, int nargs, void* ctx);
 
 // 在 st 上运行函数 f（压帧→解释→弹帧→返回值）。递归入口（顶层/px_call 回调用）。
+// 不可让出（嵌套/主线程场景：遇阻塞 native 走原 pthread 路径）。
 LXValue px_vm_run_func(PxVmState* st, const PxVMFunc* f, LXValue* args, int nargs);
+
+// M93-S3：协程运行入口（coro.c worker 用）。px_vm_run_coro = 首次：压顶层帧后跑
+//   解释循环（可让出）；px_vm_resume = 恢复：从当前帧栈让出点继续（不压帧）。
+//   返回码：1 = 协程已让出（登记在等待队列，worker 不得再触碰协程对象 —— 它可能
+//   已被唤醒并回收）；0 = 协程已跑完（worker 回收）。让出标志经返回值传递而非读
+//   协程对象字段（避免"登记可被唤醒后 worker 仍读协程"的 use-after-free 竞态）。
+int px_vm_run_coro(PxVmState* st, const PxVMFunc* f, LXValue* args, int nargs);
+int px_vm_resume(PxVmState* st);
 
 // 运行模块顶层（Top bc：注册全局 + 顶层语句 + main 调用；A1+）。
 LXValue px_vm_run_module(PxVmState* st, const PxBCModule* m);
