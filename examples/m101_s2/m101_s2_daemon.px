@@ -1,0 +1,41 @@
+# M101-S1 daemon —— px_serve 并发 TLS 握手缺陷复现/验证（docs/M101_PLAN.md §二）
+# tls_server(cert,key) 进程级服务端 TLS → px_serve accept 后 px_conn_init 走 mbedtls
+# 握手（g_pool 多 worker 并发）。本 daemon 用 max_conn=16（默认）刻意放大并发握手面：
+# M99 顺序建连规避了「并发 TLS 握手」缺陷（TLS1.3 CertificateVerify 签名错 /
+# TLS1.2 大并发 EOF；M98 runtime 复现 = 先于 M99，qg 二期候选 A = 本 M101）——
+# verify.sh 用 barrier 同步的 Go 客户端高并发新建 TLS 连接（每连接全新握手）暴露它。
+# 用法：m101_s2_daemon [port] [cert] [key] [max_conn]（默认 18201 / /tmp/px_m101_cert.pem
+#   / /tmp/px_m101_key.pem / 16）；日志 stderr。
+var m101_port = 18201
+var m101_cert = "/tmp/px_m101_cert.pem"
+var m101_key = "/tmp/px_m101_key.pem"
+var m101_maxconn = 16
+let m101_av = args()
+if len(m101_av) > 1:
+    m101_port = int(m101_av[1])
+if len(m101_av) > 2:
+    m101_cert = m101_av[2]
+if len(m101_av) > 3:
+    m101_key = m101_av[3]
+if len(m101_av) > 4:
+    m101_maxconn = int(m101_av[4])
+
+def fast_handler(req, params):
+    return {"status": 200, "body": "TLS-FAST"}
+
+def setup():
+    let r = tls_server(m101_cert, m101_key)   # 进程级服务端 TLS（g_srv_tls_ready）
+    if r != true:
+        print("tls_server failed: " + str(r))
+        exit(1)
+    route("GET", "/fast", fast_handler)
+    let D = "/tmp/px_m101_s2_docroot"
+    mkdir(D)
+    write_file(D + "/index.txt", "M101-OK")
+    # max_conn 参数化（默认 16）：并发新连接握手面 = min(max_conn, 并发连接数)
+    px_serve(m101_port, D, 30000, {"max_conn": m101_maxconn})
+    exit(0)
+
+spawn setup()
+sleep(300000)   # 兜底保活（正常路径 setup 内 px_serve 返回后 exit(0) 提前终止）
+exit(0)
