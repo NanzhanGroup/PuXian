@@ -674,6 +674,8 @@ typedef struct {
     void* vm_state;      // S3-D-1：暂停时该线程的 VM 状态指针（PxVmState*，TLS 跨线程
                          //   不可读，由运行在目标线程上的暂停处理器保存；executor 依此
                          //   遍历其堆上帧槽做精确根标记）
+    LXValue* roots;      // M92：暂停时该线程的 TLS 登记根栈指针/长度（precise 模式根面；
+    int      root_n;     //   __thread 跨线程不可读，由处理器保存；executor 依此精确标记）
 } GCThreadInfo;
 #define MAX_SPAWN_THREADS 64   // 历史宏：默认初始容量（保留供旧引用/文档对照；实际容量读 g_thread_cap）
 #define PX_DEFAULT_THREAD_CAP 64     // 默认初始容量（= 历史 MAX_SPAWN_THREADS 语义）
@@ -692,6 +694,19 @@ static int g_gc_freed = 0;
 static int g_gc_skips = 0;
 static long long g_gc_marked = 0;   // 调试：最近一轮 GC 标记数
 static __thread LXObject* g_tmp_root = NULL;  // 暂存根：保护刚创建对象（构造函数内触发 GC）
+
+// ---- M92 精确 GC：precise/conservative 双模式 + native 桥 TLS 登记根栈 ----
+// precise（VM 轨产物）：退役整栈保守扫描（gc_scan_stack/registers/thread_stack 跳过），
+//   根 = 全局槽 + VM 帧槽（S3-D-1 跨线程已有）+ TLS 登记根栈 + 暂存根。C 栈上（native
+//   桥 bi_*/px_* helper）跨 GC 点的局部 LXValue 引用须经 PX_KEEP 登记，否则误回收。
+// conservative（默认）：保持旧行为（逃生舱 fn_* C 局部 + 所有桥局部靠保守扫栈兜底）。
+static int g_gc_precise = 0;   // M92：1=precise；0=conservative（默认，零行为变化）
+static __thread LXValue* g_px_roots = NULL;       // 登记根栈（本线程）
+static __thread int g_px_roots_n = 0;
+static __thread int g_px_roots_cap = 0;
+static __thread int* g_px_root_marks = NULL;      // 作用域帧标记栈（px_root_push/pop）
+static __thread int g_px_root_marks_n = 0;
+static __thread int g_px_root_marks_cap = 0;
 
 // ---- S3-D-1：VM 跨线程帧根弱符号接口（vm.c 提供强定义；无 VM 链接时空转零影响）----
 // 暂停处理器（运行在目标线程上）经 px_vm_cur_state 读该线程 TLS VM 状态；
@@ -761,6 +776,10 @@ static void gc_init_env(void) {
     if (t && atoi(t) > 0) g_gc_threshold = atoi(t);
     const char* inl = getenv("PX_GC_INLINE");
     if (inl && inl[0] == '1') g_gc_force_inline = 1;
+    // M92：PX_GC_PRECISE=1 强制 precise 模式（debug/回归驱动；产物插桩正式生效前用）。
+    // ⚠️ 仅限 VM 轨产物——C 轨逃生舱产物 + precise = fn_* C 局部失去保守扫栈根 → 误回收。
+    const char* pr = getenv("PX_GC_PRECISE");
+    if (pr && pr[0] == '1') g_gc_precise = 1;
     // M88-S1：PX_MAX_THREADS 可配槽上限（夹取 [64, 4096]）；线程表一次性按上限分配。
     // 此后 g_threads/g_thread_cap 恒定，无扩容/指针移动（并发安全见 §594 注释）。
     const char* mt = getenv("PX_MAX_THREADS");
@@ -1042,6 +1061,9 @@ static void gc_stop_handler(int sig, siginfo_t* si, void* ctx) {
     // S3-D-1：保存本线程 VM 状态（若有）——线程自己的 TLS，此处读取安全。
     // executor 暂停全部线程后据此跨线程遍历帧槽（见 px_gc_collect 并发路径）。
     ti->vm_state = px_vm_cur_state ? px_vm_cur_state() : NULL;
+    // M92：precise 模式登记根栈快照（线程自旋期无代码执行 → TLS 根栈不变；同 tmp_root 模式）
+    ti->roots = g_px_roots;
+    ti->root_n = g_px_roots_n;
     ti->epoch = g_gc_epoch;   // 记录暂停所属轮次
     ti->paused = 1;
     __sync_fetch_and_add(&g_paused_count, 1);
@@ -1284,20 +1306,30 @@ void px_gc_collect(void) {
         // S3-D-1：VM 帧槽精确根 —— executor 自身 VM 状态 + 各暂停线程 VM 状态。
         // 帧槽数组在堆上，保守栈扫描不可见；g_gc_cur_set 供 px_gc_mark_slots 使用。
         g_gc_cur_set = &set;
-        // 根3：本线程栈 + 寄存器（setjmp 把寄存器写入栈上 jmp_buf，一并扫描；
-        //      musl 无 getcontext，M57-S4 改 setjmp——同为外部调用强制 spill + 落栈）
-        jmp_buf jb;
-        (void)setjmp(jb);
-        gc_scan_stack(&set);
-        if (g_gc_debug) (void)write(2, "[mk] self-stack\n", 15);
+        // 根3：本线程栈 + 寄存器（conservative：setjmp 把寄存器写入栈上 jmp_buf，
+        //      一并扫描——musl 无 getcontext，M57-S4 改 setjmp，同为外部调用强制 spill）。
+        //      M92 precise：退役整栈保守扫描 → 跳过；补标本线程 TLS 登记根栈。
+        if (!g_gc_precise) {
+            jmp_buf jb;
+            (void)setjmp(jb);
+            gc_scan_stack(&set);
+        }
+        if (g_gc_debug) (void)write(2, g_gc_precise ? "[mk] self-precise-roots\n" : "[mk] self-stack\n", g_gc_precise ? 20 : 15);
         // 根3b：executor 自身 VM 活跃帧槽（单线程路径同款补标，此处并发路径）
         if (px_vm_gc_mark) px_vm_gc_mark();
+        // 根3c：M92 precise —— executor 自身 TLS 登记根栈
+        if (g_gc_precise && g_px_roots_n > 0) px_gc_mark_slots(g_px_roots, g_px_roots_n);
         // 根4：所有本轮暂停线程：寄存器 + 栈 + 暂存根 + VM 帧槽（跨线程）
+        //      M92 precise：暂停线程跳过保守栈/寄存器扫描，改标其 TLS 登记根栈快照。
         for (int i = 0; i < g_thread_cap; i++) {
             GCThreadInfo* ti = &g_threads[i];
             if (!ti->in_use || !ti->paused || ti->epoch != g_gc_epoch || pthread_equal(ti->tid, me)) continue;
-            gc_scan_registers(&set, &ti->uc);
-            gc_scan_thread_stack(&set, ti->tid, &ti->uc);
+            if (g_gc_precise) {
+                if (ti->roots && ti->root_n > 0) px_gc_mark_slots(ti->roots, ti->root_n);
+            } else {
+                gc_scan_registers(&set, &ti->uc);
+                gc_scan_thread_stack(&set, ti->tid, &ti->uc);
+            }
             if (ti->tmp_root) gc_mark_obj(&set, ti->tmp_root);
             if (ti->vm_state && px_vm_gc_mark_state) px_vm_gc_mark_state(ti->vm_state);
             if (g_gc_debug) { char dbg[64]; int dn = snprintf(dbg, sizeof(dbg), "[mk] scanned tid=%lx\n", (unsigned long)ti->tid); (void)write(2, dbg, (size_t)dn); }
@@ -1365,12 +1397,17 @@ void px_gc_collect(void) {
     }
     pthread_rwlock_unlock(&g_globals_mu);
     if (g_tmp_root) gc_mark_obj(&set, g_tmp_root);
-    jmp_buf jb;
-    (void)setjmp(jb);
-    gc_scan_stack(&set);
+    // M92 precise：退役整栈保守扫描 → 跳过本线程栈/寄存器扫描（conservative 保持旧行为）
+    if (!g_gc_precise) {
+        jmp_buf jb;
+        (void)setjmp(jb);
+        gc_scan_stack(&set);
+    }
     // S3-D 止血：补标当前线程 VM 活跃帧槽（堆上根，保守 C 栈扫不到）
     g_gc_cur_set = &set;
     if (px_vm_gc_mark) px_vm_gc_mark();
+    // M92 precise：补标当前线程 TLS 登记根栈（native 桥局部显式根）
+    if (g_gc_precise && g_px_roots_n > 0) px_gc_mark_slots(g_px_roots, g_px_roots_n);
     g_gc_cur_set = NULL;
     g_in_gc_sweep = 1;   // ISSUE28-B1：单线程 sweep 同上免逐趟 sigprocmask
     int freed = 0, w = 0;
@@ -1399,6 +1436,43 @@ void px_gc_collect(void) {
     pthread_mutex_unlock(&g_gc_mu);
     g_gc_executor = 0;
     gc_unblock_stop(&gc_old);
+}
+
+// ---- M92 精确 GC：precise/conservative 模式 + native 桥根登记 API ----
+// 模式切换只在程序启动早期（产物 main）调用一次，不做并发安全（GC 开始后不可切）。
+void px_gc_set_precise(int precise) {
+    g_gc_precise = precise ? 1 : 0;
+}
+
+// 作用域开始：保存当前登记栈深度（native 桥入口调用，与 px_root_pop 配对）。
+// 登记栈为 TLS，native 桥在同一线程执行，作用域天然线程隔离。
+void px_root_push(void) {
+    if (g_px_root_marks_n >= g_px_root_marks_cap) {
+        int nc = g_px_root_marks_cap ? g_px_root_marks_cap * 2 : 16;
+        g_px_root_marks = (int*)xrealloc(g_px_root_marks, sizeof(int) * (size_t)nc);
+        g_px_root_marks_cap = nc;
+    }
+    g_px_root_marks[g_px_root_marks_n++] = g_px_roots_n;
+}
+
+// 作用域结束：弹回 px_root_push 时的深度（与 push 严格配对）。
+void px_root_pop(void) {
+    if (g_px_root_marks_n <= 0) return;
+    int mark = g_px_root_marks[--g_px_root_marks_n];
+    g_px_roots_n = mark;
+}
+
+// 登记一个局部 LXValue 引用（跨可能触发 GC 的调用前调用）。只压引用类值
+// （int/bool/null 无对象无需保护）；压入的是值拷贝，后续对局部变量的赋值
+// 不影响已登记条目（登记 = 快照该时刻的引用，语义正确：局部变量持有期即该值）。
+void px_root_keep(const LXValue* v) {
+    if (!v || !px_value_is_obj(*v)) return;
+    if (g_px_roots_n >= g_px_roots_cap) {
+        int nc = g_px_roots_cap ? g_px_roots_cap * 2 : 64;
+        g_px_roots = (LXValue*)xrealloc(g_px_roots, sizeof(LXValue) * (size_t)nc);
+        g_px_roots_cap = nc;
+    }
+    g_px_roots[g_px_roots_n++] = *v;
 }
 
 // 注册对象（构造时调用）。est = 估算占用字节（触发字节阈值用，当前主用对象数阈值）。
@@ -5480,6 +5554,9 @@ static LXValue bi_args(LXValue* args, int nargs, void* ctx) {
 }
 
 // ---- std.collections（高阶函数） ----
+// M92：map/filter/reduce 循环内 px_call 回调用户代码（可大量分配触发 GC）+ px_list_push
+// （扩容分配）。precise 模式下 C 栈不扫 → 桥内新建、跨回调/跨分配的局部（结果 list r /
+// 累积 acc）须 PX_KEEP 登记（fn/item 为参数/参数子对象，上层根已保护）。
 
 static LXValue bi_map(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
@@ -5487,11 +5564,14 @@ static LXValue bi_map(LXValue* args, int nargs, void* ctx) {
     LXObject* o = args[0].as.obj;
     LXValue fn = args[1];
     LXValue r = px_list(0);
+    px_root_push();
+    PX_KEEP(r);          // 累积结果 list：px_list_push 扩容分配/回调期间需存活
     for (int i = 0; i < o->as.list.len; i++) {
         LXValue item = o->as.list.items[i];
         LXValue res = px_call(fn, &item, 1);
         px_list_push(r, res);
     }
+    px_root_pop();
     return r;
 }
 
@@ -5501,11 +5581,14 @@ static LXValue bi_filter(LXValue* args, int nargs, void* ctx) {
     LXObject* o = args[0].as.obj;
     LXValue fn = args[1];
     LXValue r = px_list(0);
+    px_root_push();
+    PX_KEEP(r);
     for (int i = 0; i < o->as.list.len; i++) {
         LXValue item = o->as.list.items[i];
         LXValue res = px_call(fn, &item, 1);
         if (px_is_truthy(res)) px_list_push(r, item);
     }
+    px_root_pop();
     return r;
 }
 
@@ -5518,7 +5601,11 @@ static LXValue bi_reduce(LXValue* args, int nargs, void* ctx) {
     for (int i = 0; i < o->as.list.len; i++) {
         LXValue item = o->as.list.items[i];
         LXValue pair[2] = { acc, item };
-        acc = px_call(fn, pair, 2);
+        px_root_push();
+        PX_KEEP(acc);    // 累积值跨 px_call 回调存活（回调内 GC 会回收仅栈持有的对象）
+        LXValue nacc = px_call(fn, pair, 2);
+        px_root_pop();
+        acc = nacc;
     }
     return acc;
 }
