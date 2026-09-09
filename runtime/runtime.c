@@ -3000,8 +3000,14 @@ void px_set_global(const char* name, LXValue v) {
 
 // ==================== 内置函数 ====================
 
+// M96-S4：并发 print 整行原子锁 —— 帧协程多 worker 共写同一 stdout，行内多次
+//   printf 非原子（stdio 锁仅单次调用）→ 行交错合并（R37 行写一半 R39 插入）。
+//   GC 标记不涉此锁，简单互斥即可；print 为低频 I/O，串行化开销可忽略。
+static pthread_mutex_t g_print_mu = PTHREAD_MUTEX_INITIALIZER;
+
 static LXValue bi_print(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
+    pthread_mutex_lock(&g_print_mu);
     for (int i = 0; i < nargs; i++) {
         if (i) printf(" ");
         px_print_value(args[i], false);
@@ -3011,6 +3017,7 @@ static LXValue bi_print(LXValue* args, int nargs, void* ctx) {
     // C stdio 变全缓冲（8192B），不刷则服务日志运行中不可见、崩溃前缓冲丢失。
     // 行尾 fflush → 每行实时（行级 syscall 对日志场景可接受）。
     fflush(stdout);
+    pthread_mutex_unlock(&g_print_mu);
     return px_null();
 }
 
@@ -3027,6 +3034,7 @@ static LXValue bi_flush(LXValue* args, int nargs, void* ctx) {
 // stderr（默认无缓冲，天然实时）→ 服务错误/诊断出口统一 stderr 的基础。
 static LXValue bi_print_err(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
+    pthread_mutex_lock(&g_print_mu);
     for (int i = 0; i < nargs; i++) {
         if (i) fputs(" ", stderr);
         char* s = px_fmt_value(args[i]);
@@ -3035,6 +3043,7 @@ static LXValue bi_print_err(LXValue* args, int nargs, void* ctx) {
     }
     fputc('\n', stderr);
     fflush(stderr);
+    pthread_mutex_unlock(&g_print_mu);
     return px_null();
 }
 
