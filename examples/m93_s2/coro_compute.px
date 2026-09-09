@@ -1,0 +1,38 @@
+# M93-S2 验证：帧协程内核 —— 纯计算 spawn 协程化（全部完成 + 结果正确）
+# 32 个纯计算协程各自累加（int 值计算，无阻塞原语），结果写入全局 dict 不同
+# key（无写竞争）；主线程轮询直到全部完成。验证：协程化后 spawn 语义等价
+# （全部完成、结果正确），且不因 spawn 数建线程（线程数断言见 thr_count.sh）。
+var done = {}
+
+def compute(i):
+    var s = 0
+    for j in range(20000):
+        s = s + (j & 7) + i
+    done[str(i)] = s
+    return s
+
+let N = 32
+for i in range(N):
+    spawn compute(i)
+
+# 主线程轮询等待全部完成（防死循环上限）
+var spin = 0
+while len(done) < N and spin < 2000:
+    sleep(5)
+    spin += 1
+
+if len(done) != N:
+    print("S2-FAIL: got " + str(len(done)) + "/" + str(N) + " done")
+    exit(1)
+
+# 结果对拍：期望值 = sum_{j=0..19999}((j&7)+i) = 20000*i + sum_{j}(j&7)
+# sum_{j=0..19999}(j&7)：每 8 个周期和 = 0+1+..+7=28；20000/8=2500 周期 → 28*2500=70000
+var ok = true
+for i in range(N):
+    if done[str(i)] != 20000 * i + 70000:
+        ok = false
+        print("S2-MISMATCH i=" + str(i) + " got " + str(done[str(i)]))
+if not ok:
+    print("S2-FAIL: result mismatch")
+    exit(1)
+print("S2-OK: " + str(N) + " compute coros all done, results verified")

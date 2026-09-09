@@ -1,0 +1,2 @@
+# M93-S2 冒烟：VM 轨 hello（验证 runtime 重编 + coro.o 链接 + 默认 VM 轨跑通）
+print("M93S2-HELLO-OK")

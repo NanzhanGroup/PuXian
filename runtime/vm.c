@@ -118,13 +118,32 @@ static void vm_register_b5_natives(void) {
 // ---- 线程局部 VM 状态 ----
 static __thread PxVmState* g_vm_state = NULL;
 
+// M93-S2：显式初始化一个 PxVmState（帧栈就绪）。协程内核（coro.c）建协程时
+//   用它初始化协程持有的独立 VM 状态（零初始化结构不可直接 push 帧——cap=0
+//   触发扩容 ncap=0 → malloc(0) 路径缺陷）。帧栈 calloc 分配、空闲协程 free。
+void px_vm_state_init(PxVmState* st) {
+    if (!st) return;
+    if (st->cap < 16) st->cap = 16;
+    if (!st->frames) st->frames = (PxFrame*)calloc((size_t)st->cap, sizeof(PxFrame));
+}
+
 PxVmState* px_vm_state(void) {
     if (!g_vm_state) {
         g_vm_state = (PxVmState*)calloc(1, sizeof(PxVmState));
-        g_vm_state->cap = 16;
-        g_vm_state->frames = (PxFrame*)calloc(g_vm_state->cap, sizeof(PxFrame));
+        px_vm_state_init(g_vm_state);
     }
     return g_vm_state;
+}
+
+// ---- M93-S2：协程 worker 状态绑定 ----
+// 协程 = 独立 PxVmState（全堆上帧栈）。worker 取到协程后把该协程 vm 绑为
+//   线程当前状态（px_vm_entry → px_vm_state() 命中协程 vm → 帧栈连续推进），
+//   跑完/让出后解绑。空闲 worker 不持有 px 对象（绑 NULL）。
+void px_vm_bind(PxVmState* st) { g_vm_state = st; }
+PxVmState* px_vm_unbind(void) {
+    PxVmState* s = g_vm_state;
+    g_vm_state = NULL;
+    return s;
 }
 
 // ---- 帧栈 ----

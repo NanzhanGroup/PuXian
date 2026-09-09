@@ -715,6 +715,19 @@ static __thread int g_px_root_marks_cap = 0;
 extern void* px_vm_cur_state(void) __attribute__((weak));
 extern void  px_vm_gc_mark_state(void* vst) __attribute__((weak));
 
+// M93-S2：帧协程内核（coro.c 提供强定义；无协程链接时空转零影响）——
+//   px_coro_spawn：spawn 分派（VM 函数 → 协程入就绪队列）；px_coro_gc_mark_roots：
+//   GC 标记期补标全部存活协程（就绪参数副本 + 已运行帧槽，precise/conservative 皆用）。
+extern void px_coro_spawn(void* ctx, LXValue* args, int nargs) __attribute__((weak));
+extern void px_coro_gc_mark_roots(void) __attribute__((weak));
+// M93-S2：VM 函数指针判定（px_spawn_name 分派用；C 轨逃生舱无 vm.o → weak 空转）
+extern LXValue px_vm_entry(LXValue* args, int nargs, void* ctx) __attribute__((weak));
+// M93-S2：协程 worker 复用 spawn 错误隔离 / GC 暂停信号屏蔽原语（本文件强定义导出）
+int  px_spawn_isolate_begin(void);
+void px_spawn_isolate_end(void);
+void px_gc_block_stop_sig(sigset_t* old);
+void px_gc_unblock_stop_sig(const sigset_t* old);
+
 // 开放寻址哈希集合（对象地址快速查询，供保守栈扫描）
 typedef struct {
     uintptr_t* slots;
@@ -1334,6 +1347,10 @@ void px_gc_collect(void) {
             if (ti->vm_state && px_vm_gc_mark_state) px_vm_gc_mark_state(ti->vm_state);
             if (g_gc_debug) { char dbg[64]; int dn = snprintf(dbg, sizeof(dbg), "[mk] scanned tid=%lx\n", (unsigned long)ti->tid); (void)write(2, dbg, (size_t)dn); }
         }
+        // 根4b：M93-S2 帧协程根面 —— 全部存活协程（就绪参数副本 + 运行/阻塞中帧槽）。
+        //   运行中协程 vm 已由所属 worker 的 ti->vm_state 覆盖（重复标无害）；
+        //   就绪队列协程的 args 副本仅本表可达 → 必须补标（漏标 = worker 取到 UAF）。
+        if (px_coro_gc_mark_roots) px_coro_gc_mark_roots();
         g_gc_cur_set = NULL;
         // 4) sweep
         if (g_gc_debug) { char dbg[128]; int dn = snprintf(dbg, sizeof(dbg), "[mk] 暂停+标记+扫栈耗时%lldms\n", gc_mono_ms() - t0); (void)write(2, dbg, (size_t)dn); }
@@ -1408,6 +1425,9 @@ void px_gc_collect(void) {
     if (px_vm_gc_mark) px_vm_gc_mark();
     // M92 precise：补标当前线程 TLS 登记根栈（native 桥局部显式根）
     if (g_gc_precise && g_px_roots_n > 0) px_gc_mark_slots(g_px_roots, g_px_roots_n);
+    // M93-S2：帧协程根面补标（单线程 GC 路径同款；协程存在即有 worker 活跃走并发路径，
+    //   此处兜底纯就绪/创建窗口）
+    if (px_coro_gc_mark_roots) px_coro_gc_mark_roots();
     g_gc_cur_set = NULL;
     g_in_gc_sweep = 1;   // ISSUE28-B1：单线程 sweep 同上免逐趟 sigprocmask
     int freed = 0, w = 0;
@@ -7288,6 +7308,31 @@ static void* spawn_thread(void* p) {
     return NULL;
 }
 
+// ==================== M93-S2：错误隔离 / GC 信号屏蔽原语导出（coro worker 复用） ====================
+// px_spawn_isolate_begin/end：spawn 语义错误隔离点（px_error → longjmp 回 begin 返回 0）。
+//   coro.c worker 每个协程执行前调 begin（setjmp 环境在 worker 栈帧，longjmp 回卷安全）；
+//   g_err_jmp/g_err_jmp_set 为 TLS static，跨文件不可直接访问 → 经本导出函数使用。
+//   语义对齐 spawn_thread：错误打印现场后隔离，宿主/worker 继续（协程异常终止回收）。
+int px_spawn_isolate_begin(void) {
+    if (setjmp(g_err_jmp) == 0) {
+        g_err_jmp_set = 1;
+        return 1;   // 正常路径：错误捕获点已安装，继续执行协程体
+    }
+    g_err_jmp_set = 0;
+    fprintf(stderr, "[px-coro] 协程运行时错误已隔离，宿主继续（错误现场见上）\n");
+    fflush(stderr);
+    return 0;       // 错误路径：longjmp 回此，协程异常终止
+}
+void px_spawn_isolate_end(void) {
+    g_err_jmp_set = 0;
+}
+void px_gc_block_stop_sig(sigset_t* old) {
+    gc_block_stop(old);
+}
+void px_gc_unblock_stop_sig(const sigset_t* old) {
+    gc_unblock_stop(old);
+}
+
 // ==================== M53-S3：外部裸线程纳入并发 GC ====================
 // QUIC/H3 托管连接线程由 runtime_quic.c 直接 pthread_create（不经 px_spawn），
 // 但 M53-S3 起连接回调会构造普贤对象（请求 dict/响应字段）并可能触发 GC ——
@@ -7376,6 +7421,17 @@ void px_spawn(LXFuncPtr fn, LXValue* args, int nargs) {
 void px_spawn_name(const char* fname, LXValue* args, int nargs) {
     LXValue fn = px_get_global(fname);
     if (fn.type == PX_FUNC) {
+        // M93-S2：帧协程分派 —— 目标为 VM 函数（PX_FUNC.fn==px_vm_entry，ctx=PxVMFunc*）
+        //   → 协程化（入就绪队列，worker 池执行，线程数 = worker 数）；否则 = 旧 C 轨
+        //   逃生舱 fn_*（ctx=NULL）→ 原 pthread 路径（帧协程在其上不可行，语义零变化）。
+        //   px_vm_entry 为 weak（C 轨逃生舱无 vm.o → NULL → 全走 pthread）。
+        if (px_vm_entry && fn.as.obj->as.func.fn == px_vm_entry) {
+            if (px_coro_spawn) {       // coro.c 已链（VM 轨 rt 缓存含 coro.o）
+                px_coro_spawn(fn.as.obj->as.func.ctx, args, nargs);
+                return;
+            }
+            // 无协程内核（理论不达：rt_src_files 恒含 coro.c）→ 退回 pthread 保语义
+        }
         // M89-S3-B5：透传函数 ctx —— VM PX_FUNC(px_vm_entry, ctx=PxVMFunc*) 需 ctx
         //   定位字节码函数；旧 C 编译产物 ctx=NULL 不变（此前只传 fn 丢 ctx → VM spawn
         //   worker 线程 px_vm_entry ctx=NULL 直接返回，静默不执行 → 主线程 chan.recv 死等）
