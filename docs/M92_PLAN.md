@@ -1,14 +1,10 @@
 # M92_PLAN · 精确 GC 终极项（退役整栈保守扫描 + 原生桥根登记）
 
-> 状态：🚧 **进行中（S2d 完成）**。S1 设计定稿 + S2a precise 框架 + S2b 语言核心层
+> 状态：✅ **已完成（S3 收口）**。S1 设计定稿 + S2a precise 框架 + S2b 语言核心层
 > 批量登记（2017101/a55a13c）+ S2c 服务/IO 层登记与根栈并发原子性修复（a323505）
-> + S2d 插桩完成（本 commit）：bc_emit.px 产物 main 加 `px_gc_set_precise(1)` →
-> **默认 px build VM 产物自动 precise**（C 轨逃生舱产物不插 → conservative）。
-> 自举全链重建（compiler_new + compiler_vm 含新 bc_emit）+ bootstrap/pxc_vm 部署
-> + 双 golden 更新（compiler.c 15061 行 / compiler.bc.dump 30582 行）。
-> 剩余 S3 收口（precise 默认轨全量回归已绿：vm_ab 38PASS/m89_s3d 9PASS/m82 8PASS/
-> m83_s6 全PASS/diffcheck 24✅/双自举 prove rc=0 + http_json 默认 precise 5×6000
-> 0 错 RPS 1270-1535 → 文档 + tag v0.2.0-m92）。
+> + S2d 插桩（9d91f24：默认 px build VM 产物自动 precise，C 轨逃生舱 conservative）
+> + S3 收口（本 commit：tag **v0.2.0-m92**）。精确 GC 终极项兑现：VM 主执行轨退役
+> 整栈保守扫描，native 桥显式登记根面，precise/conservative 双模式由产物轨自动判定。
 > 上游：M89_PLAN §S3-D 后置决策、docs/M89_vm_design.md §六（精确 GC 设计）。
 > 基线：v0.2.0（M91 收口 3bbbee4）。
 
