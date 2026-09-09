@@ -1,0 +1,27 @@
+# M92-S2c precise 验证：px_serve + route + middleware 服务端（长驻，外部 curl 打）
+# 运行：PX_GC_PRECISE=1 PX_GC_THRESHOLD=<低> PX_GC_INLINE=1 ./s2c_pxserve &
+#   外部验证：curl http://127.0.0.1:18231/api/abc?q=hi 等
+
+PORT = 18231
+ROOT = "/tmp/s2c_pxserve_root"
+mkdir(ROOT)
+write_file(ROOT + "/hello.txt", "static-ok")
+
+def mw(req):
+    return null
+middleware(mw)
+
+def api_handler(req, params):
+    let body = json_stringify({"id": params["id"], "q": params["q"]})
+    return {"status": 200, "body": body, "headers": {"Content-Type": "application/json"}}
+route("GET", "/api/:id", api_handler)
+
+def plain_handler(req, params):
+    return "plain:" + params["id"]
+route("GET", "/plain/:id", plain_handler)
+
+def serve():
+    px_serve(PORT, ROOT, 10000)
+spawn serve()
+sleep(300000)
+exit(0)
