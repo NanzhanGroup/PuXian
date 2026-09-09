@@ -301,6 +301,8 @@ LXValue bi_rsa_verify(LXValue* args, int nargs, void* ctx);
 // M83-S3（Issue 17 GAP-ED25519-1）：ed25519 签名/验签（RFC8032，tweetnacl；实现 runtime_ed25519.c）
 LXValue bi_ed25519_sign(LXValue* args, int nargs, void* ctx);
 LXValue bi_ed25519_verify(LXValue* args, int nargs, void* ctx);
+// M103-S2b（Issue 29 GAP-ED25519-2）：ed25519_keygen 密钥对生成
+LXValue bi_ed25519_keygen(LXValue* args, int nargs, void* ctx);
 // M83-S4（Issue 18 GAP-RSA-1）：RSA PKCS1v15-SHA256 标准签名（PEM 入参，DigestInfo 自动封装；实现 runtime_rsa.c）
 LXValue bi_rsa_sign_pkcs1v15_sha256(LXValue* args, int nargs, void* ctx);
 LXValue bi_rsa_verify_pkcs1v15_sha256(LXValue* args, int nargs, void* ctx);

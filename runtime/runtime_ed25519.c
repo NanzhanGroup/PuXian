@@ -17,6 +17,9 @@
 // - ed25519_verify(pub, msg, sig) → bool
 //     pub ：hex 32B（64 hex）| PEM PUBLIC KEY（SPKI）
 //     sig ：hex 64B（128 hex）
+// - ed25519_keygen() → dict {pk_hex, sk_hex, pk_pem, sk_pem}（M103-S2b，Issue 29
+//   GAP-ED25519-2）：tweetnacl randombytes seed32 → crypto_sign_seed_keypair 展开
+//   sk64=seed||pub；PEM = PKCS8/SPKI（RFC 8410，与 Go x509 逐字节互通）
 #include "runtime.h"
 #include "tweetnacl.h"
 #include <string.h>
@@ -287,4 +290,99 @@ LXValue bi_ed25519_verify(LXValue* args, int nargs, void* ctx) {
     free(sm);
     free(m);
     return px_bool(ok);
+}
+
+// ---- M103-S2b（Issue 29 GAP-ED25519-2）：ed25519_keygen 密钥对生成 ----
+// ws-ddns local 端 -genkey 无 native（Issue 17 仅 sign/verify 的延伸）。tweetnacl
+// randombytes + crypto_sign_seed_keypair 现成：seed32 随机 → pk32 + sk64=seed||pk。
+// 输出与 Go crypto/ed25519 + x509（RFC 8410）逐字节互通：
+//   PKCS8 DER = 30 2E 02 01 00 30 05 06 03 2B 65 70 04 22 04 20 <seed32>（嵌套 OCTET，
+//   Go x509.MarshalPKCS8PrivateKey 同构；现有 e_der_key 剥 kl==34 嵌套路径可回读）
+//   SPKI  DER = 30 2A 30 05 06 03 2B 65 70 03 21 00 <pk32>（RFC 8410 / Go PKIX 同构，
+//   总长 44B = 2B 头(30 2A) + 内容 42B）
+// ed25519_keygen() → dict {pk_hex(64), sk_hex(128=seed||pub), pk_pem(SPKI), sk_pem(PKCS8)}
+
+// ---- base64 编码（标准表；malloc，调用方 free）----
+static char* e_b64enc(const unsigned char* in, int len) {
+    static const char B64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    int cap = ((len + 2) / 3) * 4 + 1;
+    char* out = (char*)malloc((size_t)cap);
+    if (!out) return NULL;
+    int o = 0;
+    for (int i = 0; i < len; i += 3) {
+        int n = len - i;
+        int b0 = in[i], b1 = n > 1 ? in[i + 1] : 0, b2 = n > 2 ? in[i + 2] : 0;
+        unsigned v = ((unsigned)b0 << 16) | ((unsigned)b1 << 8) | (unsigned)b2;
+        out[o++] = B64[(v >> 18) & 63];
+        out[o++] = B64[(v >> 12) & 63];
+        out[o++] = n > 1 ? B64[(v >> 6) & 63] : '=';
+        out[o++] = n > 2 ? B64[v & 63] : '=';
+    }
+    out[o] = '\0';
+    return out;
+}
+
+// ---- DER → PEM（体每 64 字符换行；malloc，调用方 free）----
+static char* e_pem(const char* label, const unsigned char* der, int len) {
+    char head[96], tail[64];
+    snprintf(head, sizeof(head), "-----BEGIN %s-----\n", label);
+    snprintf(tail, sizeof(tail), "-----END %s-----\n", label);
+    char* b64 = e_b64enc(der, len);
+    if (!b64) return NULL;
+    int blen = (int)strlen(b64);
+    int nlines = (blen + 63) / 64;
+    char* out = (char*)malloc(strlen(head) + (size_t)blen + (size_t)nlines + strlen(tail) + 1);
+    if (!out) { free(b64); return NULL; }
+    char* p = out;
+    strcpy(p, head);
+    p += strlen(head);
+    for (int i = 0; i < blen; i += 64) {
+        int c = blen - i;
+        if (c > 64) c = 64;
+        memcpy(p, b64 + i, (size_t)c);
+        p += c;
+        *p++ = '\n';
+    }
+    strcpy(p, tail);
+    free(b64);
+    return out;
+}
+
+// ed25519_keygen() → dict {pk_hex, sk_hex, pk_pem, sk_pem} | null（熵源失败）
+LXValue bi_ed25519_keygen(LXValue* args, int nargs, void* ctx) {
+    (void)args; (void)ctx;
+    if (nargs != 0) px_error("ed25519_keygen 不需要参数");
+    unsigned char pk[32], sk[64];
+    randombytes(sk, 32);                              // 32B seed
+    if (crypto_sign_seed_keypair(pk, sk) != 0) return px_null();
+    // sk[0..31]=seed, sk[32..63]=pk
+    unsigned char p8[48];                             // PKCS8（RFC8410 嵌套，对齐 Go x509）
+    p8[0] = 0x30; p8[1] = 0x2E;
+    p8[2] = 0x02; p8[3] = 0x01; p8[4] = 0x00;
+    p8[5] = 0x30; p8[6] = 0x05; p8[7] = 0x06; p8[8] = 0x03; p8[9] = 0x2B; p8[10] = 0x65; p8[11] = 0x70;
+    p8[12] = 0x04; p8[13] = 0x22; p8[14] = 0x04; p8[15] = 0x20;
+    memcpy(p8 + 16, sk, 32);
+    unsigned char spki[44];                           // SPKI（RFC 8410，对齐 Go PKIX；总 44B）
+    spki[0] = 0x30; spki[1] = 0x2A;
+    spki[2] = 0x30; spki[3] = 0x05; spki[4] = 0x06; spki[5] = 0x03; spki[6] = 0x2B; spki[7] = 0x65; spki[8] = 0x70;
+    spki[9] = 0x03; spki[10] = 0x21; spki[11] = 0x00;
+    memcpy(spki + 12, pk, 32);
+    char* pk_hex = e_hex(pk, 32);
+    char* sk_hex = e_hex(sk, 64);
+    char* p8_pem = e_pem("PRIVATE KEY", p8, 48);
+    char* spki_pem = e_pem("PUBLIC KEY", spki, 44);
+    if (!pk_hex || !sk_hex || !p8_pem || !spki_pem) {
+        free(pk_hex); free(sk_hex); free(p8_pem); free(spki_pem);
+        return px_null();
+    }
+    LXValue d = px_dict();
+    px_root_push();
+    PX_KEEP(d);                                      // M92 precise：dict 跨 px_str 分配
+    px_dict_set(d, "pk_hex", px_str(pk_hex));
+    px_dict_set(d, "sk_hex", px_str(sk_hex));
+    px_dict_set(d, "pk_pem", px_str(spki_pem));
+    px_dict_set(d, "sk_pem", px_str(p8_pem));
+    px_root_pop();
+    free(pk_hex); free(sk_hex); free(p8_pem); free(spki_pem);
+    return d;
 }

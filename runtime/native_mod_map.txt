@@ -13,6 +13,7 @@ aes_gcm_encrypt=aes
 aes_gcm_encrypt_bytes=aes
 ed25519_sign=ed25519
 ed25519_verify=ed25519
+ed25519_keygen=ed25519
 h3_client_connect=quic
 h3_client_open_stream=quic
 h3_client_read_response=quic

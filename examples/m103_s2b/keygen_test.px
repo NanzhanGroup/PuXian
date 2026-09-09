@@ -1,0 +1,54 @@
+# ============================================================
+# M103-S2b (Issue 29 GAP-ED25519-2) ed25519_keygen 专项验证
+# ------------------------------------------------------------
+# ed25519_keygen() → dict {pk_hex, sk_hex, pk_pem, sk_pem}：tweetnacl seed32 随机 →
+#   pk32 + sk64=seed||pub；PKCS8/SPKI PEM（RFC 8410）与 Go crypto/ed25519 + x509
+#   逐字节互通（ws-ddns local -genkey / api-server 节点密钥初始化 native 解锁）。
+# 运行：examples/m103_s2b/verify.sh（px 断言 + Go x509 双向对拍）
+# ============================================================
+var g_pass = 0
+var g_fail = 0
+def check(name, cond):
+    if cond:
+        g_pass += 1
+    else:
+        g_fail += 1
+        print("FAIL:", name)
+
+let msg = "m103-s2b keygen interop message"
+let k = ed25519_keygen()
+check("keygen dict", type(k) == "dict")
+check("pk_hex 64", len(k["pk_hex"]) == 64)
+check("sk_hex 128", len(k["sk_hex"]) == 128)
+check("sk_pem PKCS8", starts_with(k["sk_pem"], "-----BEGIN PRIVATE KEY-----"))
+check("pk_pem SPKI", starts_with(k["pk_pem"], "-----BEGIN PUBLIC KEY-----"))
+check("sk_pem ends", ends_with(k["sk_pem"], "-----END PRIVATE KEY-----\n"))
+# px 自 roundtrip：hex 与 PKCS8/SPKI PEM 两路入参签名验签
+let sig1 = ed25519_sign(k["sk_hex"], msg)
+check("sign sk_hex ok", type(sig1) == "string" and len(sig1) == 128)
+check("verify pk_hex ok", ed25519_verify(k["pk_hex"], msg, sig1))
+let sig2 = ed25519_sign(k["sk_pem"], msg)
+check("sign sk_pem ok", type(sig2) == "string" and len(sig2) == 128)
+check("verify pk_pem ok", ed25519_verify(k["pk_pem"], msg, sig2))
+check("deterministic same seed", sig1 == sig2)
+check("verify tamper false", not ed25519_verify(k["pk_hex"], msg + "x", sig1))
+check("verify wrong sig false", not ed25519_verify(k["pk_hex"], msg, sig1 + "00"))
+# 反方向：Go 生成密钥的 SPKI PEM + 签名 → px 验（go artifacts 由 verify.sh Go gen 先行）
+if exists("artifacts/go_pub.pem"):
+    let gpub = read_file("artifacts/go_pub.pem")
+    let gmsg = read_file("artifacts/go_msg.txt")
+    let gsig = read_file("artifacts/go_sig.hex")
+    check("px verify go sig (SPKI PEM)", ed25519_verify(gpub, gmsg, gsig))
+    # px 用 Go 公钥验 Go 签 + 用 Go 公钥签?（px 无私钥不需）→ 够
+else:
+    print("skip go-artifacts 反向段（Go 先行缺失）")
+# dump px 产物供 Go x509 反向校验（PKCS8/SPKI 字节级互通）
+write_file("artifacts/px_pk_hex.txt", k["pk_hex"])
+write_file("artifacts/px_sk_hex.txt", k["sk_hex"])
+write_file("artifacts/px_pk.pem", k["pk_pem"])
+write_file("artifacts/px_sk.pem", k["sk_pem"])
+write_file("artifacts/px_msg.txt", msg)
+write_file("artifacts/px_sig.hex", sig1)
+print("ED25519_KEYGEN_TEST:", str(g_pass) + "P/" + str(g_fail) + "F")
+if g_fail > 0:
+    exit(1)
