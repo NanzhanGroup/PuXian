@@ -6,6 +6,58 @@
 
 ## [Unreleased]
 
+### M99 · px_serve 连接级事件化 IDLE（keep-alive 空闲不占 g_pool worker）
+
+> M99 = 原 M95 二期候选第 1 项（px_serve 连接级事件化 IDLE）正式立项（M98 收口后，
+> qg-issue 29/30/31/32 等已闭环或排期）。commit 链：68a589b（S1 立项 + D0 侦察 +
+> 方案）+ 09caa6a（S2 实现 + examples/m99_s2 验证门）+ 965bbd0（S3 回归面）+ 本
+> commit（S4 收口 + tag v0.2.0-m99）。规划 docs/M99_PLAN.md。
+> - **背景**：M98 已把 px_serve 的 route/vhost VM handler 拆段协程化（长业务占协程不占
+>   线程），但 **keep-alive 空闲连接仍每连接一个 g_pool 线程阻塞在下一请求 recv 直到
+>   连接关闭**（SO_RCVTIMEO 15s）→ max_conn 预派生池被空闲连接占死，超出 worker 数的
+>   并发连接悬挂排队。M95 已给 http_serve 系做连接级事件化（IDLE 交事件循环照看），
+>   px_serve 缺同款 → 并发模型未到终点。
+> - **S2（连接级事件化 IDLE 实现）**：px_serve 连接接入既有全局事件循环内核
+>   （px_evc/px_ev_loop，http/sse 同源）：
+>   · FSERVE_KIND_PXSERVE=2 新连接类型（事件循环 detect 可读 → 投回 px_serve 的 g_pool
+>     （px_pool_push）；tick 15s 空闲超时/对端断开 close 均走 px_pxpend_close —— 清
+>     PxConn/TLS 会话/inflight 计数，不可裸 close）。
+>   · 交 IDLE 变体 px_evc_idle_put_fd(nonblock=0)：**fd 保持阻塞**（px_serve 读侧走
+>     SO_RCVTIMEO recv + TLS mbedtls，切非阻塞会 recv EAGAIN 误判断开/引入 TLS WANT；
+>     epoll 对阻塞 fd 照常报可读，投回时数据在途 → recv 立即返回零 EAGAIN）；
+>     http_serve 用 wrapper(nonblock=1) 行为零变化。
+>   · 在途判定 px_pxserve_inflight_data：TLS 连接含 **PxConn rbuf 缓冲残留探测**
+>     （mbedtls_ssl_read 一次读整 record 未消费完 roff<rlen → 算在途；否则交 IDLE 后
+>     缓冲中下一请求对 epoll 不可见 → 永不处理悬挂至 15s 超时）；明文 poll fd。
+>   · px_conn_worker 每 job px_evc_acquire 登记 ACTIVE + req_done/段2 响应尾
+>     px_pxserve_idle_after_resp 交 IDLE 释放 worker；px_pxpend_close 前置 px_evc_detach
+>     （防事件循环照看已关 fd / fd 复用串扰）。
+>   · 优雅关闭补 px_pxserve_ev_close_all（accept 退出 + 池 join 后清全部 PXSERVE 登记
+>     连接 → g_px_inflight 归零，干净退出，不再等 15s tick/5s 兜底）。
+> - **验证（全绿）**：examples/m99_s2 verify.sh（明文）8P/0F —— **max_conn=4 并发 40
+>   keep-alive ×/fast 全成功 wall=0.01s**（事件化前 4 worker 被空闲占死 → 36 悬挂，核心
+>   铁证）+ 线程峰值 14≤20（40 空闲连接 0 占 worker）+ 并发 40×/slow（sleep300 让出 +
+>   IDLE）0.30s + 空闲 16.5s 后 8/8 连接被 15s tick 回收 + 优雅关闭 0.1s 在途 0；
+>   verify_tls.sh（TLS）8P/0F —— 顺序建 20 TLS keep-alive 全成功（0.97s，max_conn=2）
+>   + 线程峰值 12≤18 + TLS 空闲后 20 conns 并发续请求 20/20 wall=0.00s（IDLE 唤醒 +
+   mbedtls rbuf 探测续服务不悬挂）+ 优雅关闭干净。
+> - **收口回归**：diffcheck --all rc=0 + vm_ab 37P/1GAP(环境)/0F + 双自举证明（C 轨
+>   bootstrap_prove rc=0 + BC 轨 compiler_vm 重放 dump 与 golden 逐字节一致）+ 里程碑
+>   suites m95_s2/s4、m97_s2/s3、m82、m83_s6、M98_s2 全绿（px_evc 事件循环改动面：
+>   http/sse 交 IDLE/派发路径零回归）。
+> - **重链**：bootstrap/pxi_vm（VM 轨，9,342,968 → 9,343,016B）与 bootstrap/pxi
+>   （C 轨，9,513,200 → 9,513,256B）--full 吸收 M99 runtime（FSERVE_KIND_PXSERVE /
+>   px_pxserve_idle_after_resp / px_pxserve_ev_close_all / px_evc_idle_put_fd 链入）；
+>   双轨 hello stdout 逐字节一致。compiler_new/vm 未重链（M99 runtime 改动在 px_serve
+>   连接网络层，compiler 执行路径不触；--fresh 可重建）。
+> - **⚠️ 发现既有缺陷（先于 M99，M98 runtime 复现，qg 二期候选）**：px_serve **并发 TLS
+>   握手**缺陷 —— TLS1.3 下 CertificateVerify「crypto/rsa: verification error」（Go
+>   客户端 InsecureSkipVerify 不豁免 CertificateVerify 验签）+ TLS1.2 下大并发部分 EOF。
+>   用 M98 runtime 复现同失败（更严重）→ 确证非 M99 引入（M99 不触握手路径）。M99 TLS
+>   验证据此顺序建连聚焦「已建 TLS 连接空闲事件化」；并发握手健壮性另立里程碑（疑似
+>   mbedtls 全局 session cache 并发竞态 / RSA-PSS CertificateVerify 边界）。另记既有
+>   限制：px_serve HTTP/1.1 pipelining 同缓冲残余无 pbuf 续接（http_serve 有）→ 二期。
+
 ### M98 · px_serve route/vhost handler 协程化（D8-② 收官）
 
 > M98 = 原 M95-S5（px_serve route/vhost handler 协程化）正式立项（M97 期间 qg-issue

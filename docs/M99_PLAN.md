@@ -1,8 +1,11 @@
 # M99_PLAN · px_serve 连接级事件化 IDLE —— keep-alive 空闲连接不占 g_pool worker
 
-> 状态：🔄 **M99 进行中（S1 立项 → S2 实现+核心验证 → S3 回归面全绿 → S4 收口）**。
+> 状态：✅ **M99 完成（S2 实现 + S3 验证 + S4 收口，tag v0.2.0-m99）**。
 > 基线 v0.2.0-m98（e76df86，M98 收口后，runtime.c 16217 行）。S2 验证：examples/m99_s2 verify.sh
 > 8P/0F + verify_tls.sh 8P/0F。S3 回归：m95_s2/s4、m97_s2/s3、m82、m83_s6 全 RC=0 + M98_s2 回归 7P/0F。
+> S4 收口：diffcheck --all rc=0（重链前后两轮）+ vm_ab 37P/1GAP(环境)/0F + 双自举证明
+> （C 轨 rc=0 + BC 轨 dump 与 golden 逐字节一致）+ pxi/pxi_vm 重链（pxi 9,513,256B / pxi_vm
+> 9,343,016B，双轨 hello stdout 一致）+ CHANGELOG/ROADMAP 更新。
 > 上游：M95（http_serve handler 协程化 + px_evc 事件循环内核）、M95-S4（sse_serve 事件化、
 > PxConn 堆化注册蓝本）、M88-B（fserve 事件化：FREE→ACTIVE→IDLE→派发）、M97（px_send_all
 > 全量写）、M98（px_serve route/vhost handler 协程化：PxPend 连接堆化注册表）。
