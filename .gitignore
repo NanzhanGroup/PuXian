@@ -51,3 +51,4 @@ examples/m84_s2_hmac/artifacts/
 # M84-S3 互通对拍生成物（verify.sh 每次重建）
 examples/m84_s3_dns/artifacts/
 selfhost/cases_bc/build/
+examples/m103_s2a/artifacts/
