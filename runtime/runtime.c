@@ -6324,6 +6324,7 @@ void px_register_builtins(void) {
     //   —— api-server /v1/family 节点互信 + ws-ddns 双向签名（与 Go crypto/ed25519 互通）
     px_set_global("ed25519_sign", px_native("ed25519_sign", bi_ed25519_sign));
     px_set_global("ed25519_verify", px_native("ed25519_verify", bi_ed25519_verify));
+    px_set_global("ed25519_keygen", px_native("ed25519_keygen", bi_ed25519_keygen));  // M103-S2b (Issue 29 GAP-ED25519-2)
 #endif // PX_NO_ED25519
 // M85-S1：--no-rsa 裁剪（去 runtime_rsa.o + mbedtls rsa/pk 引用面；rsa_* native 缺 → R1001）
 #ifndef PX_NO_RSA
