@@ -401,3 +401,202 @@ def yaml_parse(text):
     if r["idx"] < len(ls):
         return {"ok": false, "error": "line " + str(ls[r["idx"]]["line"]) + ": 解析未消费完整输入"}
     return {"ok": true, "value": r["node"]}
+
+# ============================================================
+# YAML 序列化（M103-S2c，Issue 30 GAP-YAML-SER）：yaml_stringify(value)
+# ------------------------------------------------------------
+# 与 yaml_parse 对称的写回能力——api-server models.go/config.go 写回
+# token-cache-llm.yaml / references_*.yaml 需「反序列化→改字段→序列化→落盘」闭环
+# （对标 Go yaml.Marshal）。纯 .px，无 IO 无状态。
+#   yaml_stringify(value) → string（尾随 \n，对齐 Go yaml.Marshal 产出）
+# 输出子集：dict（键序=插入序）/ list / string / int / float / bool / null；
+#   裸标量除非有歧义/结构破坏风险（空、数字、null/bool 字面量、含 : # " ' 引号 换行
+#   制表 反斜杠、首字符为 YAML 特殊符）→ 双引号转义；嵌套缩进 2；空容器 {} / []。
+# 可读回性：本 parse 读回 roundtrip 语义等价（顶层空容器 {} / [] 除外——流式集合
+#   parse 不支持，Go/标准 YAML 可读）；Go yaml.Unmarshal 读回互认。
+# 边界（不做）：键序/注释保留（Issue 30 明确不要求）；bytes 值按 bytes_to_str 转义。
+# ============================================================
+def yl_sp(n):
+    var s = ""
+    var i = 0
+    while i < n:
+        s += " "
+        i += 1
+    return s
+
+# 字符串裸输出是否会与 parse 子集歧义/破坏结构 → 需双引号
+def yl_needs_quote(s):
+    if len(s) == 0:
+        return true
+    let t = trim(s)
+    if t != s:
+        return true
+    if s == "~" or s == "null" or s == "Null" or s == "NULL":
+        return true
+    if s == "true" or s == "True" or s == "TRUE":
+        return true
+    if s == "false" or s == "False" or s == "FALSE":
+        return true
+    if regex_match("^[+-]?[0-9]+$", s):
+        return true
+    if regex_match("^[+-]?([0-9]+\\.[0-9]*|\\.[0-9]+)([eE][+-]?[0-9]+)?$", s):
+        return true
+    if regex_match("^[+-]?[0-9]+[eE][+-]?[0-9]+$", s):
+        return true
+    var i = 0
+    while i < len(s):
+        let c = s[i]
+        if c == "\n" or c == "\t" or c == "\r" or c == ":" or c == "#" or c == "\"" or c == "'" or c == "\\":
+            return true
+        if i == 0:
+            if c == "-" or c == "{" or c == "}" or c == "[" or c == "]" or c == "," or c == "&" or c == "*" or c == "!" or c == "|" or c == ">" or c == "%" or c == "@" or c == "`" or c == "?":
+                return true
+        i += 1
+    return false
+
+# 双引号转义（与 parse yl_unescape_dq 支持集对齐：\" \\ \n \t \r）
+def yl_esc_dq(s):
+    var out = "\""
+    var i = 0
+    while i < len(s):
+        let c = s[i]
+        if c == "\"":
+            out += "\\\""
+        elif c == "\\":
+            out += "\\\\"
+        elif c == "\n":
+            out += "\\n"
+        elif c == "\t":
+            out += "\\t"
+        elif c == "\r":
+            out += "\\r"
+        else:
+            out += c
+        i += 1
+    return out + "\""
+
+def yl_key_str(k):
+    if type(k) == "string":
+        return k
+    return str(k)
+
+# 标量 → 单行文本（引号/转义在此决策）
+def yl_scalar_str(v):
+    let t = type(v)
+    if t == "null":
+        return "null"
+    if t == "bool":
+        if v:
+            return "true"
+        return "false"
+    if t == "int":
+        return str(v)
+    if t == "float":
+        return str(v)
+    if t == "string":
+        if yl_needs_quote(v):
+            return yl_esc_dq(v)
+        return v
+    if t == "bytes":
+        return yl_esc_dq(bytes_to_str(v))
+    return yl_esc_dq(str(v))
+
+# 键渲染：引号判定同值（含 ':'+空白的键裸写会被 kv 切分提前切断）
+def yl_render_key(k):
+    let ks = yl_key_str(k)
+    if yl_needs_quote(ks):
+        return yl_esc_dq(ks)
+    return ks
+
+# dict 键值行（容器值 → 键行 + 换行缩进块；空容器 → 行内 {} / []）
+def yl_kv_line(k, v, ind):
+    let p = yl_sp(ind) + yl_render_key(k) + ":"
+    let t = type(v)
+    if t == "dict":
+        if len(v) == 0:
+            return p + " {}"
+        return p + "\n" + yl_render(v, ind + 2)
+    if t == "list":
+        if len(v) == 0:
+            return p + " []"
+        return p + "\n" + yl_render(v, ind + 2)
+    return p + " " + yl_scalar_str(v)
+
+# list 中的 dict 项（- key: val 首键行内，后续键缩进 ind+2 对齐 child_col；
+#   容器值块缩进 ind+4 与 parse yl_parse_seq 吸收规则对齐）
+def yl_seq_map(m, ind):
+    var out = ""
+    var first = true
+    for k in m:
+        let key = yl_render_key(k)
+        let v = m[k]
+        let t = type(v)
+        var p = ""
+        if first:
+            p = yl_sp(ind) + "- " + key + ":"
+        else:
+            p = yl_sp(ind + 2) + key + ":"
+        if not first:
+            out += "\n"
+        first = false
+        if t == "dict":
+            if len(v) == 0:
+                out += p + " {}"
+            else:
+                out += p + "\n" + yl_render(v, ind + 4)
+        elif t == "list":
+            if len(v) == 0:
+                out += p + " []"
+            else:
+                out += p + "\n" + yl_render(v, ind + 4)
+        else:
+            out += p + " " + yl_scalar_str(v)
+    return out
+
+# list 项（标量 - v；dict → seq map；list → 空行缩进块；空容器行内）
+def yl_item_line(v, ind):
+    let p = yl_sp(ind) + "-"
+    let t = type(v)
+    if t == "dict":
+        if len(v) == 0:
+            return p + " {}"
+        return yl_seq_map(v, ind)
+    if t == "list":
+        if len(v) == 0:
+            return p + " []"
+        return p + "\n" + yl_render(v, ind + 2)
+    return p + " " + yl_scalar_str(v)
+
+# 块渲染（node 为 dict/list/标量；标量仅顶层调用可达）
+def yl_render(node, ind):
+    let t = type(node)
+    if t == "dict":
+        if len(node) == 0:
+            return yl_sp(ind) + "{}"
+        var out = ""
+        var first = true
+        for k in node:
+            if not first:
+                out += "\n"
+            first = false
+            out += yl_kv_line(k, node[k], ind)
+        return out
+    if t == "list":
+        if len(node) == 0:
+            return yl_sp(ind) + "[]"
+        var out = ""
+        var first = true
+        for item in node:
+            if not first:
+                out += "\n"
+            first = false
+            out += yl_item_line(item, ind)
+        return out
+    return yl_sp(ind) + yl_scalar_str(node)
+
+# 公共入口：value → YAML 文本（尾随 \n 对齐 Go yaml.Marshal）
+def yaml_stringify(value):
+    let s = yl_render(value, 0)
+    if s == "":
+        return ""
+    return s + "\n"

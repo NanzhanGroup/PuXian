@@ -1,0 +1,154 @@
+# ============================================================
+# M103-S2c (Issue 30 GAP-YAML-SER) yaml_stringify 专项验证
+# ------------------------------------------------------------
+# std.yaml 补写回能力（M66-S2 只有 parse）：yaml_stringify(value) 与 parse 对称，
+#   api-server models/config 写回 token-cache-llm.yaml / references_*.yaml 解锁。
+# 断言：roundtrip 语义等价（deep-equal）+ 特殊字符矩阵 + Go yaml 双向互认
+#   （Go 写→px 读在 artifacts/go_out.yaml 存在时执行；px 写→Go 读由 verify [3/4] 做）。
+# 运行：examples/m103_s2c/verify.sh
+# ============================================================
+import std.yaml
+var g_pass = 0
+var g_fail = 0
+def check(name, cond):
+    if cond:
+        g_pass += 1
+    else:
+        g_fail += 1
+        print("FAIL:", name)
+
+# 递归深度相等（dict/list/scalar）
+def yl_eq(a, b):
+    let ta = type(a)
+    if ta != type(b):
+        return false
+    if ta == "dict":
+        if len(a) != len(b):
+            return false
+        for k in a:
+            if not yl_eq(a[k], b[k]):
+                return false
+        return true
+    if ta == "list":
+        if len(a) != len(b):
+            return false
+        var i = 0
+        while i < len(a):
+            if not yl_eq(a[i], b[i]):
+                return false
+            i += 1
+        return true
+    return a == b
+
+# roundtrip 助手：value → stringify → parse → deep-equal
+def rt(v):
+    let y = yaml_stringify(v)
+    let r = yaml_parse(y)
+    if not r["ok"]:
+        return {"ok": false, "err": r["error"]}
+    if yl_eq(r["value"], v):
+        return {"ok": true, "err": ""}
+    return {"ok": false, "err": "roundtrip 不等"}
+
+# ---- A. api-server 形状（llm_providers / purpose_map / 嵌套 map/list）----
+var exp = json_parse("{\"llm_providers\":[{\"name\":\"qwen\",\"base_url\":\"https://dashscope.aliyuncs.com/compatible-mode/v1\",\"model\":\"qwen-max\",\"enabled\":true,\"priority\":1},{\"name\":\"openai\",\"base_url\":\"https://api.openai.com/v1\",\"model\":\"gpt-4o\",\"enabled\":false}],\"purpose_map\":{\"chat\":{\"provider\":\"qwen\",\"model\":\"qwen-max\"},\"embedding\":{\"provider\":\"bge\",\"model\":\"bge-large-zh\"}},\"upstream\":\"https://up.example.com\",\"cache_ttl_seconds\":7200,\"debug\":false,\"ratio\":0.85,\"tags\":[\"llm\",\"gateway\"],\"note\":null}")
+let ra = rt(exp)
+check("A roundtrip", ra["ok"], ra["err"])
+let out_a = yaml_stringify(exp)
+check("A 含 llm_providers", contains(out_a, "llm_providers:"))
+check("A 含 seq map", contains(out_a, "- name: qwen"))
+check("A 含嵌套缩进", contains(out_a, "    model: qwen-max") or contains(out_a, "  - name: qwen"))
+check("A 含 purpose_map", contains(out_a, "purpose_map:"))
+
+# ---- B. 特殊字符串矩阵（roundtrip 类型保持）----
+var special = []
+special.append("")
+special.append("123")
+special.append("-5")
+special.append("+7")
+special.append("3.14")
+special.append(".5")
+special.append("1e3")
+special.append("true")
+special.append("false")
+special.append("True")
+special.append("null")
+special.append("NULL")
+special.append("~")
+special.append("hello world")
+special.append("a#b")
+special.append("a: b")
+special.append("with \"quote\"")
+special.append("line1\nline2")
+special.append("tab\there")
+special.append("back\\slash")
+special.append("- leading dash")
+special.append("? question")
+special.append("  lead spaces")
+special.append("trail spaces  ")
+special.append("中文值混合 abc")
+special.append("url://x.com/y")
+special.append("'single quoted'")
+special.append("mix 'single' and \"double\" and #hash")
+var b_fail = 0
+for s in special:
+    let d1 = json_parse("{}")
+    d1.set("k", s)
+    let rr = rt(d1)
+    if not rr["ok"]:
+        b_fail += 1
+        print("FAIL special:", s, rr["err"])
+    else:
+        g_pass += 1
+if b_fail == 0:
+    g_pass += 1   # 整个矩阵成功计数（冗余累加，仅语义）
+check("B 特殊矩阵全过", b_fail == 0)
+
+# ---- C. 空容器序列化为 {} / []（Go/标准 YAML 语义；px parse 流式集合不支持记录）----
+var d2 = json_parse("{}")
+d2.set("e", json_parse("{}"))
+var l0 = []
+d2.set("f", l0)
+let out_c = yaml_stringify(d2)
+check("C 空 dict {} ", contains(out_c, "e: {}"))
+check("C 空 list []", contains(out_c, "f: []"))
+
+# ---- D. 标量保型（int 大数 / 负 / float 边界）----
+var d3 = json_parse("{}")
+d3.set("big", 9223372036854775807)
+d3.set("neg", -42)
+d3.set("f1", 3.0)
+d3.set("f2", 0.5)
+d3.set("f3", -2.75)
+d3.set("f4", 100.0)
+d3.set("t", true)
+d3.set("n", null)
+let rd = rt(d3)
+check("D 标量保型 roundtrip", rd["ok"], rd["err"])
+
+# ---- E. Go 写 → px 读（go_out.yaml 由 verify.sh [1/4] Go gen 先行落盘）----
+if exists("artifacts/go_out.yaml"):
+    let gy = read_file("artifacts/go_out.yaml")
+    let gr = yaml_parse(gy)
+    var gerr = ""
+    if not gr["ok"]:
+        gerr = gr["error"]
+    check("E go yaml parse ok", gr["ok"], gerr)
+    if gr["ok"]:
+        let gv = gr["value"]
+        check("E name", gv["name"] == "qg-api")
+        check("E port int", gv["port"] == 9520 and type(gv["port"]) == "int")
+        check("E debug bool", gv["debug"] == false and type(gv["debug"]) == "bool")
+        check("E ratio float", gv["ratio"] == 0.85 and type(gv["ratio"]) == "float")
+        check("E servers", len(gv["servers"]) == 2)
+        if len(gv["servers"]) == 2:
+            check("E server0 name", gv["servers"][0]["name"] == "s1")
+        check("E note 特殊字符还原", gv["note"] == "Go wrote #hash and \"quotes\" and 中文")
+else:
+    print("skip E（go_out.yaml 缺失，Go gen 先行未跑）")
+
+# ---- dump px 写出的 YAML 供 Go yaml.Unmarshal 反向读（verify [3/4]）----
+write_file("artifacts/px_out.yaml", out_a)
+print("YAML_STRINGIFY_TEST:", str(g_pass) + "P/" + str(g_fail) + "F")
+if g_fail > 0:
+    exit(1)

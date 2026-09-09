@@ -52,3 +52,5 @@ examples/m84_s2_hmac/artifacts/
 examples/m84_s3_dns/artifacts/
 selfhost/cases_bc/build/
 examples/m103_s2a/artifacts/
+examples/m103_s2b/artifacts/
+examples/m103_s2c/artifacts/
