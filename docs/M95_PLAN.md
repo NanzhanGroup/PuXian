@@ -11,8 +11,13 @@
 > 全部临界区屏蔽 SIG_GC_STOP（对齐 M92 根栈原子性模式）。✅ **M95-S3 收口（2026-09-10）**：
 > 全量回归绿（vm_ab 38P/0GAP/0F + m89_s3d 9 + m93_s2/s3 12 + m94_s2/s3 8 + m82/
 > m83_s6 + diffcheck --all）+ pxi_vm 重链吸收 M95 runtime（9,329,128 → 9,329,448B，
-> hello 与 pxi stdout 一致）+ CHANGELOG/ROADMAP 文档 + tag v0.2.0-m95。S4（sse_serve）/
-> S5（px_serve）二期编排见 §五。
+> hello 与 pxi stdout 一致）+ CHANGELOG/ROADMAP 文档 + tag v0.2.0-m95。✅ **M95-S4 完成
+> （2026-09-10，872041f）**：sse_serve handler 协程化（sse_conn_worker 拆段 + 完成回调
+> 投回 + m95_s4 套件 10 PASS + TLS 冒烟 + 回归绿）。**M95 收官于 S4**；S5（px_serve
+> route/vhost handler 协程化）D0 侦察后发现其非 http_serve 同构平移（M31.4b 每连接
+> 常驻线程 + PxConn 栈对象 + handler 调用点深埋 + H3 共用管道 → 需连接级事件化 +
+> 连接上下文跨线程，≈ 独立里程碑量级）→ **从 M95 剥离升格 M97**（见 M95_S5_PLAN.md，
+> 暂缓）。M96（D8-① 客户端网络 IO 协程化）先行，见 docs/M96_PLAN.md。
 > 上游：M93_PLAN §D8 ②（http_serve/sse handler 协程化）+ M94_PLAN §五 编排
 >   （M95 = 服务端活跃请求处理从 fserve pthread 池 → 协程）+ M94 抢占（防单
 >   handler 饿死池）+ M93 阻塞原语让出（chan/sleep 占协程不占线程）+ M88-B 事件化
