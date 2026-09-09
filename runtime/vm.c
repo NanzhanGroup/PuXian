@@ -31,6 +31,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+// M94-S2：抢占预算检查（coro.c 提供）。非 VM 轨产物（无 coro.o/vm.o 链的逃生舱）
+//   → weak 空转不抢占；VM 轨 vm.o 与 coro.o 同链 → 生效。
+extern int px_coro_preempt_check(void) __attribute__((weak));
+
 // ---- 指令名表（指定初始化，避免顺序漂移）----
 const char* px_op_name(int op) {
     static const char* names[PXM_MAX] = {
@@ -396,8 +400,19 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
     LXValue ret = px_null();
     int done = 0;
     PxFrame* fr = &st->frames[st->nframes - 1];
+    static __thread unsigned long vm_tick = 0;   // M94-S2：抢占节流计数（每 4096 条查一次）
 
     while (!done) {
+        // M94-S2：抢占 tick —— 仅协程顶层循环（yield_ok=1，主线程/嵌套不抢占）。
+        //   每 4096 条指令查一次时间片预算；超时 → return 2（抢占让出）。抢占点 =
+        //   解释循环指令边界（绝不在 native C 内部 / 让出登记临界区内）→ 帧栈完整
+        //   保留、pc 已指向下一条 → resume 直接续跑；协程未登记等待 → worker 直接
+        //   放回就绪队尾（无 lost-wakeup / 双执行竞态，见 coro.c worker yield_rc==2）。
+        if (yield_ok && ((++vm_tick & 4095UL) == 0) &&
+            px_coro_preempt_check && px_coro_preempt_check()) {
+            st->suspended = 1;
+            return 2;
+        }
         // 帧可能因 CALL（A4 起）被推入/弹出，每次循环取当前帧
         fr = &st->frames[st->nframes - 1];
         const PxVMFunc* cf = fr->f;          // 当前帧所属函数
@@ -793,8 +808,9 @@ LXValue px_vm_run_func(PxVmState* st, const PxVMFunc* f, LXValue* args, int narg
 }
 
 // px_vm_run_coro / px_vm_resume（M93-S3，coro.c worker 用）：可让出（yield_ok=1）。
-//   返回码（vm_run_loop 透传）：1 = 让出（协程已登记等待队列，worker 不再触碰）；
-//   0 = 跑完（worker 回收）。st->suspended 仍由让出点置 1（诊断用，worker 不读）。
+//   返回码（vm_run_loop 透传）：0 = 跑完（worker 回收）；1 = 阻塞让出（协程已登记
+//   等待队列，worker 不再触碰）；2 = 抢占让出（M94-S2：时间片耗尽，协程未登记任何
+//   等待，worker 直接放回就绪队尾）。st->suspended 由让出点置 1（诊断用，worker 不读）。
 int px_vm_run_coro(PxVmState* st, const PxVMFunc* f, LXValue* args, int nargs) {
     int base = st->nframes;                 // 协程全新：0
     st->suspended = 0;

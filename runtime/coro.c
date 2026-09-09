@@ -61,6 +61,7 @@ typedef struct PxCoro {
     int            wake_pending; // M93-S3：让出窗口被唤醒但协程仍在跑（延迟到让出完成
                                //   入队 —— 见 worker 让出协议 / px_coro_wake）
     long long      due_us;    // M93-S3：sleep 到期（CLOCK_REALTIME us）
+    long long      run_begin_us; // M94-S2：本次运行时间片起点（worker resume 前记）
 } PxCoro;
 
 static pthread_mutex_t g_coro_mu   = PTHREAD_MUTEX_INITIALIZER;
@@ -79,6 +80,8 @@ static pthread_mutex_t g_timer_mu   = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t  g_timer_cond = PTHREAD_COND_INITIALIZER;
 static PxCoro* g_sleepers = NULL;        // 按 due_us 升序
 static int     g_timer_started = 0;
+static long long g_quantum_us = -1;  // M94-S2：抢占时间片 us；PX_CORO_QUANTUM_US
+                                     //   （0=关、<200 夹 200、>1e6 夹 1e6；-1=未初始化）
 
 static long long coro_now_us(void) {
     struct timespec ts;
@@ -207,6 +210,7 @@ static void* coro_worker(void* arg) {
         px_vm_bind(&c->vm);
         g_cur_coro = c;
         int yield_rc = 0;
+        c->run_begin_us = coro_now_us();   // M94-S2：本次时间片起点（抢占预算基准）
         if (px_spawn_isolate_begin()) {
             if (c->first) {                    // 首次：压顶层帧跑（可让出）
                 c->first = 0;
@@ -220,6 +224,25 @@ static void* coro_worker(void* arg) {
         px_vm_unbind();
         px_gc_thread_leave();
 
+        if (yield_rc == 2) {
+            // M94-S2：抢占让出（vm_run_loop 时间片耗尽 return 2）。协程**未登记任何
+            //   等待**（抢占点仅解释循环指令边界，不在 native 内/登记窗口内）→ 无
+            //   唤醒源、无 wake_pending 竞态 → worker 直接放回就绪队尾（FIFO 轮转）。
+            //   与阻塞让出（yield_rc==1，已挂等待链表，worker 不得再触碰）本质不同。
+            sigset_t old2;
+            px_gc_block_stop_sig(&old2);
+            pthread_mutex_lock(&g_coro_mu);
+            c->state = CORO_READY;
+            c->next = NULL;
+            if (g_rq_tail) g_rq_tail->next = c; else g_rq = c;
+            g_rq_tail = c;
+            pthread_mutex_unlock(&g_coro_mu);
+            px_gc_unblock_stop_sig(&old2);
+            pthread_cond_signal(&g_coro_cond);
+            if (g_coro_diag == 1)
+                fprintf(stderr, "[px-coro] #%d preempt\n", cid);
+            continue;
+        }
         if (yield_rc) {
             // M93-S3：协程让出（运行函数返回码 1 —— 已登记到等待队列 cw 链表/sleep
             //   定时表）。状态机收敛在 g_coro_mu 内：置 BLOCKED（此刻起可被唤醒方
@@ -264,7 +287,9 @@ static void* coro_worker(void* arg) {
     return NULL;
 }
 
-// ---- worker 池惰性启动（首个协程 spawn 时）----
+// ---- 并发 worker 池惰性启动（首个协程 spawn 时）----
+// 注意：g_quantum_us 在创建 worker 线程**之前**初始化（写）→ worker 跑协程时
+//   preempt_check 只读已定值，无数据竞争。
 static void coro_ensure_workers(void) {
     if (g_workers_started) return;
     if (g_worker_target <= 0) {
@@ -277,6 +302,15 @@ static void coro_ensure_workers(void) {
         if (n > 64) n = 64;
         if (n < 1) n = 1;
         g_worker_target = n;
+    }
+    if (g_quantum_us < 0) {          // M94-S2：抢占时间片（-1=未初始化 → 读 env 一次）
+        const char* q = getenv("PX_CORO_QUANTUM_US");
+        long long v = q ? atoll(q) : 5000;   // 默认 5ms
+        if (v != 0) {
+            if (v < 200) v = 200;
+            if (v > 1000000) v = 1000000;
+        }
+        g_quantum_us = v;            // 0 = 显式关闭抢占（回归 M93 语义逃生阀）
     }
     const char* diag = getenv("PX_CORO_DIAG");
     if (diag && diag[0] == '1') g_coro_diag = 1;
@@ -453,6 +487,17 @@ int px_coro_sleep_us(long long us) {
     px_gc_unblock_stop_sig(&old);
     pthread_cond_signal(&g_timer_cond);              // 新最近到期 → timer 重算
     return PX_CORO_WAIT_BLOCKED;
+}
+
+// M94-S2：抢占预算检查（vm_run_loop 每 4096 条指令 weak 调一次）。仅协程上下文
+//   （g_cur_coro 非空）；本次运行时长 ≥ quantum → 返回 1（解释循环抢占让出 return 2，
+//   worker 直接放回就绪队尾）。g_quantum_us<=0（env=0 关闭 / -1 未初始化）→ 不抢占。
+int px_coro_preempt_check(void) {
+    if (g_quantum_us <= 0) return 0;
+    PxCoro* c = g_cur_coro;
+    if (!c) return 0;
+    long long now = coro_now_us();
+    return (now - c->run_begin_us) >= g_quantum_us ? 1 : 0;
 }
 
 // ---- GC 根面：全部存活协程（runtime.c 标记期 weak 调用）----
