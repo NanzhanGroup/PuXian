@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+### M92 · 精确 GC 终极项收口（tag v0.2.0-m92）
+
+> M92 完整交付：VM 主执行轨退役整栈保守扫描 → 精确根面（全局槽 + VM 帧槽 +
+> native 桥登记根栈），双模式由产物轨自动判定（VM 轨默认 precise；C 轨逃生舱
+> conservative）。commit 链：2017101（S1/S2a 框架）+ a55a13c（S2b 语言核心层）
+> + a323505（S2c 服务/IO 层 + 根栈原子性）+ 9d91f24（S2d 插桩）+ 本收口。
+> 详见 docs/M92_PLAN.md。tag **v0.2.0-m92**。
+
 ### M92-S2d · VM 轨产物默认 precise 插桩（bc_emit）+ 自举重建 + 双 golden 更新（2026-09-09，dongyue）
 
 > M92 S2d 完成：bc_emit.px 产物 main 插 `px_gc_set_precise(1)` → **默认 `px build`
