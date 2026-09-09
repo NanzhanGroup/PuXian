@@ -816,13 +816,17 @@ int px_vm_run_coro(PxVmState* st, const PxVMFunc* f, LXValue* args, int nargs) {
     st->suspended = 0;
     vm_frame_push(st, f, args, nargs, -1);
     LXValue ret = px_null();
-    return vm_run_loop(st, base, 1, &ret);
+    int rc = vm_run_loop(st, base, 1, &ret);
+    if (rc == 0) st->ret_val = ret;         // M95-S2：跑完保存顶层返回值（完成回调取）
+    return rc;
 }
 
 int px_vm_resume(PxVmState* st) {
     st->suspended = 0;
     LXValue ret = px_null();
-    return vm_run_loop(st, 0, 1, &ret);
+    int rc = vm_run_loop(st, 0, 1, &ret);
+    if (rc == 0) st->ret_val = ret;         // M95-S2：同上
+    return rc;
 }
 
 // ---- D2 trampoline：统一函数对象 func.fn = px_vm_entry（ctx=PxVMFunc*）----
@@ -869,7 +873,10 @@ LXValue px_vm_run_module(PxVmState* st, const PxBCModule* m) {
 // GC 暂停信号处理器（运行在目标线程上）读取其 TLS VM 状态指针（不懒建）。
 void px_vm_gc_mark_state(void* vst) {
     PxVmState* st = (PxVmState*)vst;
-    if (!st || st->nframes <= 0) return;
+    if (!st) return;
+    // M95-S2：协程完成返回值（完成-回调窗口 GC 兜底；线程 vm ret_val 恒 null 无碍）
+    if (st->ret_val.type != PX_NULL) px_gc_mark_slots(&st->ret_val, 1);
+    if (st->nframes <= 0) return;
     for (int i = 0; i < st->nframes; i++) {
         PxFrame* fr = &st->frames[i];
         if (fr->slots && fr->nslots > 0)

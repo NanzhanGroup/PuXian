@@ -183,6 +183,8 @@ typedef struct {
     int      cap;
     int      suspended;        // M93-S3：协程让出标志（解释循环遇阻塞让出置 1，
                                //   worker 观察后复位；恢复运行前须为 0）
+    LXValue  ret_val;          // M95-S2：协程顶层返回值（px_vm_run_coro/px_vm_resume
+                               //   跑完 return 0 时存，供 coro 完成回调取；GC 标记补标）
 } PxVmState;
 
 // ==================== API ====================
