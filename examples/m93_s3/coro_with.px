@@ -1,0 +1,43 @@
+# M93-S3 验证：帧协程 with 系列展开（mutex.with / rwlock.with_write / with_read）
+# vm 层预检把 with 展开为 try_lock + 压 fn 帧（帧弹自动解锁）—— 协程内回调中让出
+# 时锁随帧保留，恢复后 fn RET 弹帧解锁（GC 标 unlock_obj 保活锁对象）。
+var g_cnt = 0
+var g_wcnt = 0
+var g_rcnt = 0
+
+let m = mutex()
+let rw = rwlock()
+
+def wmutex(done):
+    for k in range(200):
+        m.with(fn() { g_cnt = g_cnt + 1 })
+    done.send(1)
+
+def wwrite(done):
+    for k in range(200):
+        rw.with_write(fn() { g_wcnt = g_wcnt + 1 })
+    done.send(1)
+
+def wread(done):
+    for k in range(200):
+        rw.with_read(fn() { let v = g_wcnt + g_cnt })
+    done.send(1)
+
+let done = chan[int](8)
+spawn wmutex(done)
+spawn wmutex(done)
+spawn wmutex(done)
+spawn wmutex(done)
+spawn wwrite(done)
+spawn wwrite(done)
+spawn wread(done)
+done.recv()
+done.recv()
+done.recv()
+done.recv()
+done.recv()
+done.recv()
+done.recv()
+assert(g_cnt == 800, "mutex.with 临界区计数 = 4×200")
+assert(g_wcnt == 400, "rwlock.with_write 临界区计数 = 2×200")
+print("CORO-WITH OK g_cnt=" + str(g_cnt) + " g_wcnt=" + str(g_wcnt))

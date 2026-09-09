@@ -1,5 +1,5 @@
 // 普贤 (PuXian) C 运行时库 — coro.c
-// M93-S2: 帧协程 M:N（px_spawn 用户态协程化 —— 协程内核）
+// M93: 帧协程 M:N（px_spawn 用户态协程化）
 // ------------------------------------------------------------
 // 设计（docs/M93_PLAN.md D1-D4）：px_spawn 目标为 VM 函数（PX_FUNC.fn==px_vm_entry，
 // ctx=PxVMFunc*）→ 不再每 spawn 建一个 pthread，而是建「帧协程」入就绪队列；
@@ -7,41 +7,60 @@
 // 协程 = 独立 PxVmState（帧栈全堆上，px→px 调用不回 C 递归）→ 执行状态全部在
 // 堆上，切换只换指针（px_vm_bind/unbind），零 ucontext/零汇编。
 //
-// S2 范围：纯计算协程（跑到结束）。worker 取协程 → bind 其 vm → px_vm_entry
-// 推进 → 完成回收。阻塞原语让出（chan/mutex/sleep）在 S3 引入（本文件状态机
-// 预留 CORO_BLOCKED；S2 worker 每次取协程跑到 DONE）。
+// S2 范围：纯计算协程（跑到结束）。S3（本版）范围：阻塞原语让出 —— chan
+// send/recv、mutex lock、rwlock r/wlock 的 try 失败后把当前协程登记到对象等待
+// 链表（runtime.h 各对象 cw_* 字段）并让出（state=BLOCKED，worker 解绑继续取
+// 下一协程，不占线程）；sleep/sleep_us 登记全局定时表让出（timer 线程到点唤醒）。
+// 唤醒方（chan send/recv/close、unlock 等，runtime.c 在各对象 mu 内）take 摘链 →
+// px_coro_wake 入就绪队列 → worker 重跑该协程（px_vm_resume 从让出点重试 try，
+// 成功即继续）。pthread 阻塞路径（cond_wait）与协程等待链表双轨共存（D4），
+// 逃生舱/主线程/嵌套 native 回调场景保持 pthread 语义零变化。
 //
 // 并发安全设计（关键）：
-//   - g_coro_mu 临界区（入队/出队/回收/GC 标记遍历）均屏蔽 SIG_GC_STOP
+//   - g_coro_mu 临界区（入队/出队/回收/GC 标记遍历/wake）均屏蔽 SIG_GC_STOP
 //     （px_gc_block_stop_sig）→ 持锁临界区不被 STW 信号打断 → GC executor
 //     标记协程表拿 g_coro_mu 时，持锁线程必在推进（非被暂停自旋）→ 无死锁。
+//   - 登记 API（px_coro_*_wait）在对象 mu 内「条件复查 + 挂链 + state=BLOCKED」
+//     原子完成 → 与唤醒方（同锁 take）无 lost wakeup；take 摘链后协程即归就绪
+//     队列管理（state=READY 由 wake 置），原 worker 让出返回后不再触碰它。
 //   - GC 根面（runtime.c 标记期 weak 调 px_coro_gc_mark_roots）：全部存活协程
-//     的 args 副本 + 已运行帧槽精确标记。worker 跑协程期间经 px_gc_thread_enter
-//     注册 GC 槽（暂停时 ti->vm_state=协程 vm，运行中帧槽亦被覆盖标记）。
+//     （READY/RUNNING/BLOCKED）的 args 副本 + 帧槽精确标记；with 展开持锁对象
+//     由 px_vm_gc_mark_state 补标（PxFrame.unlock_obj）。worker 跑协程期间经
+//     px_gc_thread_enter 注册 GC 槽。
 //   - worker 空闲（cond_wait 等就绪队列）不注册 GC（无 px 对象）→ 与 M90
 //     F3-fix 同模式：GC STW 只暂停在岗 worker，不因空闲 worker 空转放大开销。
+//   - sleep timer 线程不注册 GC（不持 px 对象，只操作就绪队列/定时链表）→ 不
+//     被 STW 暂停，持 g_timer_mu 总会放锁，与 GC 拿 g_coro_mu 无死锁。
 // ============================================================
 #include "vm.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
 
-// ---- 协程状态机（S3 阻塞让出预留 BLOCKED）----
+// ---- 协程状态机 ----
 #define CORO_READY   0
 #define CORO_RUNNING 1
-#define CORO_BLOCKED 2   // S3：阻塞原语让出（chan/mutex/sleep 等待登记）
+#define CORO_BLOCKED 2   // 已登记等待（chan/mutex/rwlock/sleep），唤醒后重入就绪
 #define CORO_DONE    3
 
 typedef struct PxCoro {
     struct PxCoro* next;      // 就绪队列链（FIFO）
     struct PxCoro* all_next;  // 全局存活表链（GC 根面 + 完成回收）
-    PxVmState      vm;        // 协程独立 VM 状态（帧栈全堆上）
-    const PxVMFunc* f;        // 目标 VM 函数（ctx 直传 px_vm_entry）
-    LXValue*       args;      // 实参副本（spawn 时复制，协程生命周期内保活）
+    struct PxCoro* w_next;    // M93-S3：对象等待链表（chan cw_send/cw_recv、
+                              //   mutex cw、rwlock cw_w/cw_r —— take/wake 用）
+    struct PxCoro* s_next;    // M93-S3：sleep 定时表链（按 due_us 升序）
+    PxVmState      vm;        // 协程独立 VM 状态（帧栈全堆上；让出保留、恢复续跑）
+    const PxVMFunc* f;        // 目标 VM 函数（ctx 直传 px_vm_run_coro）
+    LXValue*       args;      // 实参副本（spawn 时复制，首次运行拷贝入帧后仍保活）
     int            nargs;
     int            state;
     int            id;
+    int            first;     // M93-S3：1 = 尚未首次运行（worker 用 px_vm_run_coro）
+    int            wake_pending; // M93-S3：让出窗口被唤醒但协程仍在跑（延迟到让出完成
+                               //   入队 —— 见 worker 让出协议 / px_coro_wake）
+    long long      due_us;    // M93-S3：sleep 到期（CLOCK_REALTIME us）
 } PxCoro;
 
 static pthread_mutex_t g_coro_mu   = PTHREAD_MUTEX_INITIALIZER;
@@ -53,6 +72,19 @@ static int     g_workers_started = 0;
 static int     g_worker_target = 0;
 static int     g_coro_seq = 0;
 static volatile int g_coro_diag = -1;   // PX_CORO_DIAG=1 诊断输出
+static __thread PxCoro* g_cur_coro = NULL;  // M93-S3：当前 worker 正在执行的协程
+
+// ---- M93-S3：sleep 定时器（timer 线程到点唤醒）----
+static pthread_mutex_t g_timer_mu   = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  g_timer_cond = PTHREAD_COND_INITIALIZER;
+static PxCoro* g_sleepers = NULL;        // 按 due_us 升序
+static int     g_timer_started = 0;
+
+static long long coro_now_us(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (long long)ts.tv_sec * 1000000LL + ts.tv_nsec / 1000;
+}
 
 // ---- 清理协程 vm 残留帧（异常 longjmp 跳过多帧时 slots 需逐个释放）----
 static void coro_vm_free(PxVmState* st) {
@@ -68,7 +100,87 @@ static void coro_vm_free(PxVmState* st) {
     st->cap = 0;
 }
 
-// ---- worker 线程：循环取就绪协程执行 ----
+// ---- M93-S3：取协程摘链 / 入就绪队列唤醒 ----
+// take：调用方必须已持对象锁（与登记 API 同锁互斥 → 无 lost wakeup）。
+// wake：入就绪队列 + signal worker；可在对象锁内或锁外调用（只碰 g_coro_mu）。
+struct PxCoro* px_coro_take_waiter(struct PxCoro** head) {
+    struct PxCoro* c = *head;
+    if (c) { *head = c->w_next; c->w_next = NULL; }
+    return c;
+}
+
+void px_coro_wake(struct PxCoro* c) {
+    if (!c) return;
+    sigset_t old;
+    px_gc_block_stop_sig(&old);
+    pthread_mutex_lock(&g_coro_mu);
+    if (c->state == CORO_RUNNING) {
+        // 协程还在让出返回路径上（登记完成可被摘链、但 worker 尚未置 BLOCKED）：
+        //   直接入队会让协程被第二个 worker 并行 resume（双执行撕裂）。置 pending，
+        //   由让出 worker 在置 BLOCKED 后查 pending 自行入队 —— 调度权转移原子化。
+        c->wake_pending = 1;
+    } else if (c->state == CORO_BLOCKED) {
+        // 正常：协程已让出完成（worker 置 BLOCKED）→ 入就绪队列
+        c->state = CORO_READY;
+        c->next = NULL;
+        if (g_rq_tail) g_rq_tail->next = c; else g_rq = c;
+        g_rq_tail = c;
+    }
+    // state==READY（已在队列，理论不达——take 只摘一次等待链）/ DONE/异常 → 忽略
+    pthread_mutex_unlock(&g_coro_mu);
+    px_gc_unblock_stop_sig(&old);
+    pthread_cond_signal(&g_coro_cond);
+}
+
+// ---- M93-S3：timer 线程（sleep 让出协程到点唤醒）----
+// 循环不变量：持 g_timer_mu 摘到期者入 batch；仅当 batch 空时才 wait
+//   （有未来到期 → timedwait 最近点；无 sleeper → cond_wait 等登记 signal）；
+//   摘到到期者（batch 非空）→ 立即 unlock + wake（若摘完仍 wait 会漏 wake 且
+//   持锁死等 —— 已修复：batch 非空时不进入任何 wait）。
+static void* coro_timer_thread(void* arg) {
+    (void)arg;
+    for (;;) {
+        PxCoro* batch = NULL;
+        pthread_mutex_lock(&g_timer_mu);
+        long long now = coro_now_us();
+        while (g_sleepers && g_sleepers->due_us <= now) {   // 摘链到期协程
+            PxCoro* c = g_sleepers;
+            g_sleepers = c->s_next;
+            c->s_next = batch; batch = c;
+        }
+        if (!batch) {
+            if (g_sleepers) {
+                struct timespec ts;
+                clock_gettime(CLOCK_REALTIME, &ts);
+                long long rel = g_sleepers->due_us - now;
+                if (rel < 1) rel = 1;
+                ts.tv_sec += rel / 1000000;
+                ts.tv_nsec += (rel % 1000000) * 1000;
+                if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
+                pthread_cond_timedwait(&g_timer_cond, &g_timer_mu, &ts);  // 绝对时间
+            } else {
+                pthread_cond_wait(&g_timer_cond, &g_timer_mu);
+            }
+        }
+        // batch 非空或 wait 被唤醒 → unlock 后 wake（循环顶重新摘/计算）
+        pthread_mutex_unlock(&g_timer_mu);
+        for (PxCoro* c = batch; c; ) { PxCoro* nx = c->s_next; c->s_next = NULL; px_coro_wake(c); c = nx; }
+    }
+    return NULL;
+}
+
+static void coro_ensure_timer(void) {
+    if (g_timer_started) return;
+    pthread_mutex_lock(&g_timer_mu);
+    if (!g_timer_started) {
+        pthread_t t;
+        if (pthread_create(&t, NULL, coro_timer_thread, NULL) == 0) pthread_detach(t);
+        g_timer_started = 1;
+    }
+    pthread_mutex_unlock(&g_timer_mu);
+}
+
+// ---- worker 线程：循环取就绪协程执行（跑到让出或完成）----
 static void* coro_worker(void* arg) {
     (void)arg;
     for (;;) {
@@ -89,17 +201,51 @@ static void* coro_worker(void* arg) {
         px_gc_unblock_stop_sig(&old);
         if (!c) break;
 
-        // 跑协程：注册 GC（即将持 px 对象）→ bind vm → 隔离执行 → 解绑 → 注销
+        // 跑协程：注册 GC → bind vm → 隔离执行 → 解绑 → 注销
+        int cid = c->id;              // 跑前保存（让出后协程可能被唤醒并回收，不可再读 c）
         px_gc_thread_enter();
         px_vm_bind(&c->vm);
-        if (px_spawn_isolate_begin()) {          // 正常：执行协程体
-            px_vm_entry(c->args, c->nargs, (void*)c->f);
+        g_cur_coro = c;
+        int yield_rc = 0;
+        if (px_spawn_isolate_begin()) {
+            if (c->first) {                    // 首次：压顶层帧跑（可让出）
+                c->first = 0;
+                yield_rc = px_vm_run_coro(&c->vm, c->f, c->args, c->nargs);
+            } else {                            // 恢复：从让出点继续（不压帧）
+                yield_rc = px_vm_resume(&c->vm);
+            }
             px_spawn_isolate_end();
         }                                        // 错误：longjmp 回 → 协程异常终止
+        g_cur_coro = NULL;
         px_vm_unbind();
         px_gc_thread_leave();
 
-        // 完成 → 从全局存活表摘除 + 回收
+        if (yield_rc) {
+            // M93-S3：协程让出（运行函数返回码 1 —— 已登记到等待队列 cw 链表/sleep
+            //   定时表）。状态机收敛在 g_coro_mu 内：置 BLOCKED（此刻起可被唤醒方
+            //   take+wake 调度）；若让出窗口内已被唤醒（wake_pending，唤醒方见
+            //   RUNNING 延迟入队）→ 立即入就绪队列。完成后本 worker 不再触碰 c
+            //   （c 可能随即被其它 worker 唤醒/恢复/回收 —— use-after-free 防护）。
+            sigset_t old2;
+            px_gc_block_stop_sig(&old2);
+            pthread_mutex_lock(&g_coro_mu);
+            c->state = CORO_BLOCKED;
+            if (c->wake_pending) {
+                c->wake_pending = 0;
+                c->state = CORO_READY;
+                c->next = NULL;
+                if (g_rq_tail) g_rq_tail->next = c; else g_rq = c;
+                g_rq_tail = c;
+            }
+            pthread_mutex_unlock(&g_coro_mu);
+            px_gc_unblock_stop_sig(&old2);
+            pthread_cond_signal(&g_coro_cond);
+            if (g_coro_diag == 1)
+                fprintf(stderr, "[px-coro] #%d block-wait\n", cid);
+            continue;
+        }
+
+        // 完成 → 从全局存活表摘除 + 回收（完成协程未被并发触碰：未让出 = 未登记）
         px_gc_block_stop_sig(&old);
         pthread_mutex_lock(&g_coro_mu);
         c->state = CORO_DONE;
@@ -109,7 +255,8 @@ static void* coro_worker(void* arg) {
         pthread_mutex_unlock(&g_coro_mu);
         px_gc_unblock_stop_sig(&old);
         if (g_coro_diag == 1)
-            fprintf(stderr, "[px-coro] #%d done (f=%s)\n", c->id, c->f && c->f->name ? c->f->name : "?");
+            fprintf(stderr, "[px-coro] #%d done (f=%s)\n", cid,
+                    c->f && c->f->name ? c->f->name : "?");
         free(c->args);
         coro_vm_free(&c->vm);
         free(c);
@@ -155,6 +302,7 @@ void px_coro_spawn(void* ctx, LXValue* args, int nargs) {
     if (c->args && nargs > 0 && args)
         memcpy(c->args, args, sizeof(LXValue) * nargs);
     c->state = CORO_READY;
+    c->first = 1;                 // M93-S3：首次需压顶层帧
     if (g_coro_diag < 0) {   // 首个 spawn 前初始化诊断开关（worker 池惰性启动同读）
         const char* diag = getenv("PX_CORO_DIAG");
         g_coro_diag = (diag && diag[0] == '1') ? 1 : 0;
@@ -178,9 +326,140 @@ void px_coro_spawn(void* ctx, LXValue* args, int nargs) {
     pthread_cond_signal(&g_coro_cond);
 }
 
+// ==================== M93-S3：阻塞登记 API ====================
+// 返回码（runtime.h 约定）：0 = 不在协程 ctx（调用方走原 pthread 阻塞）；
+//   PX_CORO_WAIT_BLOCKED(1) = 已登记并让出（state=BLOCKED）；PX_CORO_WAIT_RETRY(2)
+//   = 条件已满足（调用方重新 try）。登记在对象 mu 内「复查 + 挂链 + BLOCKED」原子
+//   完成（唤醒方同锁 take → 无 lost wakeup）。仅在 g_cur_coro 非 NULL（协程 ctx）
+//   生效；逃生舱 pthread spawn / 主线程 / 嵌套 native 回调返回 0 → 走阻塞版。
+
+int px_coro_active(void) { return g_cur_coro != NULL; }
+
+static void coro_list_append(struct PxCoro** head, PxCoro* c) {
+    c->w_next = NULL;
+    if (!*head) { *head = c; return; }
+    PxCoro* t = *head;
+    while (t->w_next) t = t->w_next;
+    t->w_next = c;
+}
+
+// chan send：满 / 无缓冲无接收者 → 挂 cw_send；closed → 0（调用方走阻塞版报 R1011）
+int px_coro_chan_send_wait(LXValue ch) {
+    if (!g_cur_coro) return 0;
+    if (ch.type != PX_CHAN) return 0;
+    LXObject* o = ch.as.obj;
+    int r = 0;
+    pthread_mutex_lock(&o->as.chan.mu);
+    if (o->as.chan.closed) {
+        r = 0;
+    } else if (o->as.chan.cap == 0
+                 ? (o->as.chan.recv_waiting > 0 || o->as.chan.cw_recv != NULL)
+                 : o->as.chan.len < o->as.chan.cap) {
+        r = PX_CORO_WAIT_RETRY;                    // 登记前资源已腾出 → 重试 try
+    } else {
+        coro_list_append(&o->as.chan.cw_send, g_cur_coro);
+        r = PX_CORO_WAIT_BLOCKED;
+    }
+    pthread_mutex_unlock(&o->as.chan.mu);
+    return r;
+}
+
+// chan recv：空 → 挂 cw_recv；closed 且空 → 0（阻塞版报 R1011）
+int px_coro_chan_recv_wait(LXValue ch) {
+    if (!g_cur_coro) return 0;
+    if (ch.type != PX_CHAN) return 0;
+    LXObject* o = ch.as.obj;
+    int r = 0;
+    pthread_mutex_lock(&o->as.chan.mu);
+    if (o->as.chan.len > 0) {
+        r = PX_CORO_WAIT_RETRY;
+    } else if (o->as.chan.closed) {
+        r = 0;
+    } else {
+        coro_list_append(&o->as.chan.cw_recv, g_cur_coro);
+        r = PX_CORO_WAIT_BLOCKED;
+    }
+    pthread_mutex_unlock(&o->as.chan.mu);
+    return r;
+}
+
+// mutex lock：被占 → 挂 cw（mutex 无 closed，全部协程 ctx 内可让出）
+int px_coro_mutex_wait(LXValue m) {
+    if (!g_cur_coro) return 0;
+    if (m.type != PX_MUTEX) return 0;
+    LXObject* o = m.as.obj;
+    int r;
+    pthread_mutex_lock(&o->as.mutex.mu);
+    if (!o->as.mutex.locked) {
+        r = PX_CORO_WAIT_RETRY;
+    } else {
+        coro_list_append(&o->as.mutex.cw, g_cur_coro);
+        r = PX_CORO_WAIT_BLOCKED;
+    }
+    pthread_mutex_unlock(&o->as.mutex.mu);
+    return r;
+}
+
+// rwlock rlock：写者持有或写者等待 → 挂 cw_r（条件对齐 try_rlock）
+int px_coro_rwlock_wait_r(LXValue m) {
+    if (!g_cur_coro) return 0;
+    if (m.type != PX_RWLOCK) return 0;
+    LXObject* o = m.as.obj;
+    int r;
+    pthread_mutex_lock(&o->as.rwlock.mu);
+    if (!o->as.rwlock.writer && o->as.rwlock.writer_waiting == 0) {
+        r = PX_CORO_WAIT_RETRY;
+    } else {
+        coro_list_append(&o->as.rwlock.cw_r, g_cur_coro);
+        r = PX_CORO_WAIT_BLOCKED;
+    }
+    pthread_mutex_unlock(&o->as.rwlock.mu);
+    return r;
+}
+
+// rwlock wlock：写者/读者活跃 → 挂 cw_w（条件对齐 try_wlock；写优先由唤醒方保证）
+int px_coro_rwlock_wait_w(LXValue m) {
+    if (!g_cur_coro) return 0;
+    if (m.type != PX_RWLOCK) return 0;
+    LXObject* o = m.as.obj;
+    int r;
+    pthread_mutex_lock(&o->as.rwlock.mu);
+    if (!o->as.rwlock.writer && o->as.rwlock.readers == 0) {
+        r = PX_CORO_WAIT_RETRY;
+    } else {
+        coro_list_append(&o->as.rwlock.cw_w, g_cur_coro);
+        r = PX_CORO_WAIT_BLOCKED;
+    }
+    pthread_mutex_unlock(&o->as.rwlock.mu);
+    return r;
+}
+
+// sleep/sleep_us：登记全局定时表（timer 线程到点唤醒入就绪）→ 让出。
+//   us<=0 立即返回（RETRY → 调用方写 null 继续）；非协程 ctx → 0（走 nanosleep）。
+int px_coro_sleep_us(long long us) {
+    if (!g_cur_coro) return 0;
+    if (us <= 0) return PX_CORO_WAIT_RETRY;
+    coro_ensure_timer();
+    PxCoro* c = g_cur_coro;
+    c->due_us = coro_now_us() + us;
+    sigset_t old;
+    px_gc_block_stop_sig(&old);
+    pthread_mutex_lock(&g_timer_mu);
+    PxCoro** pp = &g_sleepers;                       // 按到期升序插入
+    while (*pp && (*pp)->due_us <= c->due_us) pp = &(*pp)->s_next;
+    c->s_next = *pp;
+    *pp = c;
+    pthread_mutex_unlock(&g_timer_mu);
+    px_gc_unblock_stop_sig(&old);
+    pthread_cond_signal(&g_timer_cond);              // 新最近到期 → timer 重算
+    return PX_CORO_WAIT_BLOCKED;
+}
+
 // ---- GC 根面：全部存活协程（runtime.c 标记期 weak 调用）----
-// 就绪协程 args 副本仅本表可达 → 必须补标（漏标 = worker 取到悬空引用 UAF）；
-// 运行中协程 vm 帧槽已由所属 worker 的 ti->vm_state 覆盖标（重复无害，此处兜底）。
+// 就绪/阻塞协程 args 副本与帧槽仅本表可达 → 必须补标（漏标 = worker 取到悬空
+// 引用 UAF）；运行中协程 vm 帧槽已由所属 worker 的 ti->vm_state 覆盖标（重复无害）。
+// BLOCKED 协程帧栈保留在堆（让出点），经 px_vm_gc_mark_state 精确标记 —— 挂起
+// 协程无 C 栈 = 纯帧槽根（M92 精确 GC 直接受益）。
 void px_coro_gc_mark_roots(void) {
     sigset_t old;
     px_gc_block_stop_sig(&old);

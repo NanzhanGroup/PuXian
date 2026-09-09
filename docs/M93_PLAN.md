@@ -1,6 +1,6 @@
 # M93_PLAN · 帧协程 M:N（M88 C 类旗舰落地：px_spawn 用户态协程化）
 
-> 状态：🚧 **S2 协程内核完成（本 commit）**。S3 阻塞让出进行中。
+> 状态：🚧 **S3 阻塞原语让出完成（路线 B，本 commit）**。S4 GC 压力验证中。
 > 上游：M88_PLAN §一 C 档（用户态协程 M:N，Go runtime 简化版）+ M89_vm_design D3
 > （显式帧 = 槽数组，挂起 = 帧拷贝存档，"本设计为其铺路"）+ M89_vm_prestudy §2.4
 > （C 类协程在 VM 上自然可得；C 递归模型完全不可行）+ M91 默认轨切 VM + M92 精确 GC
@@ -194,4 +194,55 @@
 - **工具链备注**：仓库 tools/px 与安装版 /usr/bin/px 并存——本里程碑起验证一律用
   仓库 `./tools/px`（安装版为旧打包，pxc_vm 行为/默认轨不一致，勿混用）。
 
-### S3 阻塞原语让出（chan/mutex/rwlock/sleep 协程化）—— 待办
+### S3 阻塞原语让出（路线 B：解释循环 C 层自动包装）—— 完成（本 commit）
+- **技术决策**：放弃 PLAN D3 原设计的发射器正规军（bc_emit CALLTRY/BLOCK 编译，
+  需全链自举重建 + 双 golden 迁移），采用**路线 B —— 让出逻辑集中在 vm.c 解释
+  循环 C 层**（M89「显式帧 VM = 单一执行引擎」哲学：阻塞点让出本是解释器内核职责，
+  非发射器知识）。白名单由 runtime 导出识别，不动编译器/bc_emit，无自举重建。
+- **代码**：
+  - runtime.h：PX_CHAN/PX_MUTEX/PX_RWLOCK 对象增协程等待者链表（cw_send/cw_recv/
+    cw/cw_w/cw_r，struct PxCoro* 前向）；px_chan_try_send 补；阻塞 native 识别
+    px_native_blocking_kind（sleep/sleep_us 函数指针白名单）；协程登记/唤醒桥
+    （px_coro_*_wait 返回 0/1/2 = 非协程 ctx 走原阻塞 / 已登记让出 / 条件满足重试）。
+  - runtime.c：chan send/recv/try_recv/try_send/close 各成功/关闭点 cond_signal +
+    take 摘链协程等待者（解锁后 wake）；mutex unlock、rwlock runlock/wunlock 同；
+    px_chan_send 无缓冲接收者判据含 cw_recv。
+  - vm.c/vm.h：解释循环抽 vm_run_loop(st, base, yield_ok, &ret)（返回 1=让出 0=完成）；
+    px_vm_run_func = 不可让出（主线程/嵌套 native 回调 → 原 pthread 语义零变化）；
+    px_vm_run_coro/px_vm_resume = 可让出（返回码 1/0，**不经协程对象字段传让出标志
+    —— 见下 bug 修复**）。CALL 预检 sleep/sleep_us（定时器让出，不回退 pc 预写 null）；
+    CALLM 预检 chan send/recv、mutex lock/with、rwlock rlock/wlock/with_read/with_write
+    （vm_coro_method：try 变体失败 → 登记让出；成功 → 写 dst）。with 系列展开 = 压 fn
+    帧 + PxFrame.unlock_kind/unlock_obj（帧弹公共路径自动解锁；fn 中途让出锁随帧
+    保留，恢复后 fn RET 弹帧解锁；px_vm_gc_mark_state 补标 unlock_obj 防 fn 内 GC
+    误回收锁对象；异常 longjmp 泄漏锁 = 与现 px_method with 同语义）。
+  - coro.c：PxCoro 增 w_next（对象等待链）/s_next（sleep 定时链）/wake_pending/
+    first；worker 循环改「跑到让出或完成」；px_coro_wake/px_coro_take_waiter；
+    登记 wait API（chan/mutex/rwlock/sleep，对象锁内复查+挂链原子）；sleep 定时器
+    （单后台 timer 线程 + g_sleepers 按到期升序链表 + cond_timedwait 绝对时间）；
+    px_coro_gc_mark_roots 覆盖 BLOCKED 协程帧槽（精确根）。
+- **两处并发 bug 修复（压力暴露，非路线问题）**：
+  1. **让出窗口双执行/UAF**：登记（对象锁内 append cw）到 worker 真正让出（运行函数
+     返回）之间有窗口，唤醒方 take+wake 会把仍 RUNNING 的协程立即入队 → 第二个
+     worker 并行 resume（帧撕裂）；且让出 worker 读 c->vm.suspended 时协程可能已被
+     唤醒-恢复-回收（use-after-free，ASAN 实锤 coro.c:206 read-after-free）。修复 =
+     让出标志改经运行函数**返回码**传递（不读协程字段）+ state 状态机收敛在
+     g_coro_mu：登记不置 BLOCKED（保持 RUNNING）；wake 见 RUNNING → 置 wake_pending
+     延迟调度；worker 让出收敛时置 BLOCKED + 查 pending（置则自行入队）。W=1/2 稳定、
+     W=8 必崩 → 修复后 12+ 轮 ASAN 零报 + 8 轮 release 零崩。
+  2. **timer 线程漏唤醒**：摘到到期协程后 g_sleepers 空 → 走 `else cond_wait` 永久
+     阻塞（持 g_timer_mu，batch 永不 wake）。修复 = batch 非空时不进入任何 wait，
+     直接 unlock + wake，循环顶重摘。
+- **验证**（examples/m93_s3/verify.sh PASS=6 FAIL=0）：
+  1) coro_mutex 4×1000 临界区计数 4000（lock 让出密集）
+  2) coro_chan 8 对 × cap=1 乒乓 300 轮累计和 8758800（send 满/recv 空大量让出）
+  3) coro_sleep_par 40 协程并发 sleep 40..120ms → wall≈121ms（≈max，串行 pthread 会 3.2s）
+  4) coro_with mutex.with ×4×200 + rwlock with_write ×2×200 + with_read（帧弹解锁）
+  5) coro_gc_block 60 协程乒乓 × 对象分配 × PX_GC_THRESHOLD=4000（BLOCKED 帧 = 精确根）
+  6) C 轨逃生舱 --c coro_chan（pthread 语义对拍同 8758800）
+- **回归门**：m93_s2 verify 6 PASS · m89_s3d 9 PASS · vm_ab 31 PASS/7 GAP(已知)/0 FAIL
+  · diffcheck --all 全 ✅ · 万级 spawn（10000 协程纯算）3.26s 完成。
+- **工具链**：调试用 `-g`/`-fsanitize=address` 为临时改动 tools/px（已还原 + 清
+  rtcache 重编 release）；libasan 通过 yum 安装（RHEL9 gcc11 runtime 缺失）。
+
+### S4 GC 集成 + 万级压力 —— 待办

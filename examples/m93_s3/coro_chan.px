@@ -1,0 +1,34 @@
+# M93-S3 验证：帧协程 chan 乒乓（有缓冲 cap=1，满/空大量让出 + 唤醒循环）
+# 8 对 sender/recver 独立通道；每对 300 次收发（send 满时让出、recv 空时让出）；
+# recver 累加和经聚合 chan 送主线程校验（确定性数值对拍）。
+def sender(sid, ch):
+    for j in range(300):
+        ch.send(sid * 1000 + j)
+
+def recver(sid, ch, agg):
+    var sum = 0
+    var got = 0
+    while got < 300:
+        var v = ch.recv()
+        sum += v
+        got += 1
+    agg.send(sum)
+
+let N = 8
+var chans = []
+for i in range(N):
+    chans.append(chan[int](1))
+let agg = chan[int](N)
+for i in range(N):
+    spawn sender(i, chans[i])
+    spawn recver(i, chans[i], agg)
+
+var total = 0
+for i in range(N):
+    total += agg.recv()
+
+var expect = 0
+for i in range(N):
+    expect += 300 * i * 1000 + 300 * 299 / 2
+assert(total == expect, "chan 乒乓累计和错误")
+print("CHAN-PINGPONG OK total=" + str(total))

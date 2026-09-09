@@ -41,6 +41,7 @@ typedef enum {
 
 typedef struct LXValue LXValue;
 typedef struct LXObject LXObject;
+struct PxCoro;   // M93-S3：帧协程（coro.c）——对象协程等待者链表节点类型前向声明
 
 // 用户函数签名：args 数组 + 参数个数 + 上下文
 typedef LXValue (*LXFuncPtr)(LXValue* args, int nargs, void* ctx);
@@ -78,11 +79,16 @@ struct LXObject {
             pthread_cond_t cv_send;  // 发送者等待（缓冲满 / 无缓冲等接收者）
             pthread_cond_t cv_recv;  // 接收者等待（缓冲空）
             int recv_waiting;        // 无缓冲：等待中的接收者数
+            // M93-S3：协程等待者链表（帧协程让出登记；与 pthread cond_wait 双轨共存，
+            //   唤醒方在 mu 保护下摘链入就绪队列）。协程节点 next 指针 = PxCoro.w_next。
+            struct PxCoro* cw_send;  // 协程 send 等待者（满 / 无缓冲等接收者）
+            struct PxCoro* cw_recv;  // 协程 recv 等待者（空）
         } chan;
         struct {
             pthread_mutex_t mu;      // 保护 locked
             pthread_cond_t cv;       // 等待者
             int locked;              // 是否被持有
+            struct PxCoro* cw;       // M93-S3：协程 lock 等待者（互斥锁持有者让出）
         } mutex;
         struct {
             pthread_mutex_t mu;      // 保护状态
@@ -90,6 +96,9 @@ struct LXObject {
             int readers;             // 活跃读者数
             int writer;              // 写者持有
             int writer_waiting;      // 等待中的写者数（写优先）
+            // M93-S3：协程等待者链表（写优先：先唤醒 cw_w，无则 cw_r）
+            struct PxCoro* cw_w;
+            struct PxCoro* cw_r;
         } rwlock;
         struct {
             LXValue  list;           // 物化后的列表
@@ -311,6 +320,7 @@ LXValue px_chan_create(int cap);
 LXValue px_chan_send(LXValue ch, LXValue v);  // 阻塞发送（满则等待，关闭报错）
 LXValue px_chan_recv(LXValue ch);             // 阻塞接收（空则等待，关闭且空报错）
 bool px_chan_try_recv(LXValue ch, LXValue* out); // 非阻塞尝试（select 用）
+bool px_chan_try_send(LXValue ch, LXValue v);    // M93-S3：非阻塞发送（满/无接收者 false）
 void px_chan_close(LXValue ch);               // 关闭：唤醒等待者
 bool px_is_chan(LXValue v);
 
@@ -348,6 +358,32 @@ void px_spawn_isolate_end(void);
 //   不被 STW 打断 → GC executor 标记协程表拿锁不与其死锁）。
 void px_gc_block_stop_sig(sigset_t* old);
 void px_gc_unblock_stop_sig(const sigset_t* old);
+
+// ==================== M93-S3：阻塞原语让出桥（协程登记 + 唤醒） ====================
+// 设计（docs/M93_PLAN.md D3/D4，路线 B）：阻塞 native（chan/mutex/rwlock/sleep）在
+//   VM 解释循环（CALL/CALLM）被预检拦截 —— 协程上下文里先走 try 变体，失败则把
+//   当前协程登记到对象等待链表并让出（worker 不阻塞、继续取下一协程），条件满足
+//   后由唤醒方摘链入就绪队列 → 协程恢复重试 try。非协程上下文（主线程 / 逃生舱
+//   pthread / 嵌套 native 回调）返回 0 → 调用方走原 pthread 阻塞路径（语义零变化）。
+// 返回码约定（各 wait 函数）：0 = 不在协程上下文（走原阻塞）；1 = 已登记并让出；
+//   2 = 条件已满足（调用方重新 try）。
+#define PX_CORO_WAIT_BLOCKED 1   // 已登记让出（worker 继续取下一协程）
+#define PX_CORO_WAIT_RETRY    2   // 条件已满足，重新 try
+int  px_coro_active(void);                          // 当前线程是否在协程上下文
+int  px_coro_chan_send_wait(LXValue ch);            // try_send 失败后登记 send 等待
+int  px_coro_chan_recv_wait(LXValue ch);            // try_recv 失败后登记 recv 等待
+int  px_coro_mutex_wait(LXValue m);                 // try_lock 失败后登记 lock 等待
+int  px_coro_rwlock_wait_r(LXValue m);              // try_rlock 失败后登记 rlock 等待
+int  px_coro_rwlock_wait_w(LXValue m);              // try_wlock 失败后登记 wlock 等待
+int  px_coro_sleep_us(long long us);                // 协程 ctx：登记定时器让出；否则 0
+// 唤醒原语（runtime.c 在对象锁内摘链 → 解锁后 wake；协程恢复后重试 try 成功）
+struct PxCoro* px_coro_take_waiter(struct PxCoro** head);  // 摘链首节点（调用方持对象锁）
+void           px_coro_wake(struct PxCoro* c);             // 入就绪队列（内部 g_coro_mu）
+// 阻塞 native 识别（vm.c CALL 预检用）：fn 为 sleep/sleep_us 返回类型码，否则 0
+#define PX_BLK_NONE 0
+#define PX_BLK_SLEEP_MS 1
+#define PX_BLK_SLEEP_US 2
+int px_native_blocking_kind(LXValue fn);
 
 // select：阻塞等待任一通道可接收（返回索引），chan 活动后由运行时自动唤醒
 int px_select_wait_any(LXValue* chans, int n);
