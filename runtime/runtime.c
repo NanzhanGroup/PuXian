@@ -1885,12 +1885,16 @@ void px_srcfunc(const char* name) { g_px_src_func = name; }
 // （走 GC 注销路径），宿主进程继续。主线程不设捕获 → 顶层错误保持 exit(1)。
 static __thread jmp_buf g_err_jmp;
 static __thread int g_err_jmp_set = 0;
+static __thread char g_err_last_msg[512];   // M96-S2：本线程最后 px_error 文本（px_err_last）
 
 void px_error(const char* fmt, ...) {
     // 先刷新 stdout 缓冲：print 输出在管道/重定向下是全缓冲，exit 前不刷会丢
     fflush(stdout);
     va_list ap;
     va_start(ap, fmt);
+    // M96-S2：记录本线程最后一次错误文本（offload 外包线程捕获后回传协程重抛用）。
+    //   va_copy 独立消费（vfprintf 随后仍需原 ap）。
+    { va_list ap2; va_copy(ap2, ap); vsnprintf(g_err_last_msg, sizeof(g_err_last_msg), fmt, ap2); va_end(ap2); }
     // M72-S2（Issue 10 D1）：运行时错误带 .px 源位置（编译产物路径；pxi 解释器
     // 走 i_err line:col 不受影响）。无追踪位置（native 初始化期）→ 原样前缀。
     if (g_px_src_line > 0) {
@@ -3983,6 +3987,22 @@ int px_native_blocking_kind(LXValue fn) {
     if (fp == bi_sleep)    return PX_BLK_SLEEP_MS;
     if (fp == bi_sleep_us) return PX_BLK_SLEEP_US;
     return PX_BLK_NONE;
+}
+
+// M96-S2：阻塞网络 native offload 识别（vm.c CALL 预检）。名单 = C 层全协议阻塞桥
+//   （http 解析 recv 循环/mbedtls TLS 阻塞/s3 连接池/ws/tcp/udp/dns —— 阻塞点在 C
+//   native 内部，M93-S3 让出（VM 层可控等待）与 M94 抢占（VM 指令边界）都救不了）。
+//   协程 ctx 命中 → 外包执行线程池（D1/D2，β 路线）；否则 px_call 直调（pthread 阻塞）。
+//   按 native 名匹配（as.native.name）：跨文件安全（ws 在 runtime_ws.c 注册同名 native）
+//   且不依赖 static 函数指针跨编译单元可见性。S2 试点 http_get + tcp_recv；S3 扩全集。
+int px_native_offload_kind(LXValue fn) {
+    if (fn.type != PX_NATIVE) return 0;
+    const char* nm = fn.as.obj->as.native.name;
+    if (!nm || !nm[0]) return 0;
+    // S2 试点（C 层全协议阻塞客户端；resp = 整包 str/bytes）
+    if (strcmp(nm, "http_get") == 0) return 1;
+    if (strcmp(nm, "tcp_recv") == 0) return 1;
+    return 0;
 }
 
 static LXValue bi_now_us(LXValue* args, int nargs, void* ctx) {
@@ -7426,6 +7446,24 @@ int px_spawn_isolate_begin(void) {
 }
 void px_spawn_isolate_end(void) {
     g_err_jmp_set = 0;
+}
+// M96-S2：通用错误捕获点（offload 外包线程用，见 runtime.h）。纯 setjmp 安装：
+//   px_error → longjmp 回返回 0（错误文本已打印 + g_err_last_msg 可经 px_err_last 取）；
+//   与 px_spawn_isolate_begin 不同：不打印「已隔离」消息（外包线程错误由协程恢复
+//   后重抛，语义与直调一致 —— 隔离消息留待协程侧 px_error 一并体现）。
+int px_err_capture_begin(void) {
+    if (setjmp(g_err_jmp) == 0) {
+        g_err_jmp_set = 1;
+        return 1;
+    }
+    g_err_jmp_set = 0;
+    return 0;
+}
+void px_err_capture_end(void) {
+    g_err_jmp_set = 0;
+}
+const char* px_err_last(void) {
+    return g_err_last_msg;
 }
 void px_gc_block_stop_sig(sigset_t* old) {
     gc_block_stop(old);

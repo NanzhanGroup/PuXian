@@ -45,11 +45,15 @@
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
+#include <errno.h>       // M96-S2：ETIMEDOUT（offload executor 空闲回收 timedwait）
+
+// ---- M96-S2：offload 外包任务（阻塞网络 native 外包执行线程池；前向声明见下）----
+typedef struct PxOffTask PxOffTask;
 
 // ---- 协程状态机 ----
 #define CORO_READY   0
 #define CORO_RUNNING 1
-#define CORO_BLOCKED 2   // 已登记等待（chan/mutex/rwlock/sleep），唤醒后重入就绪
+#define CORO_BLOCKED 2   // 已登记等待（chan/mutex/rwlock/sleep/offload），唤醒后重入就绪
 #define CORO_DONE    3
 
 typedef struct PxCoro {
@@ -74,6 +78,12 @@ typedef struct PxCoro {
     //   回调内须 PX_KEEP 保护 ret 再转移给全局 GC 根。）
     void (*done_cb)(void* ud, LXValue ret);
     void*          done_ud;
+    // M96-S2：offload 外包任务（阻塞 native 让出后待消费；resume 时 px_coro_offload_
+    //   consume 写结果回让出点帧槽 off_dst / 错误重抛，然后置 NULL 释放任务）。字段
+    //   访问皆在 g_coro_mu 内（挂载/消费/GC 标记互斥；外包线程完成也持 g_coro_mu
+    //   发布 result/done）→ 无数据竞争。
+    PxOffTask*     off_task;
+    int            off_dst;   // 让出点 CALL 结果槽号（resume 写回；让出帧 = 当时最顶帧）
 } PxCoro;
 
 static pthread_mutex_t g_coro_mu   = PTHREAD_MUTEX_INITIALIZER;
@@ -86,6 +96,41 @@ static int     g_worker_target = 0;
 static int     g_coro_seq = 0;
 static volatile int g_coro_diag = -1;   // PX_CORO_DIAG=1 诊断输出
 static __thread PxCoro* g_cur_coro = NULL;  // M93-S3：当前 worker 正在执行的协程
+
+// ---- M96-S2：offload 外包任务（D1/D2，β 路线）----
+// 任务生命周期：px_coro_offload_submit 创建（vm.c CALL 预检，args 数组所有权转移）
+//   → 入执行队列 → 外包线程 px_call 执行（fn/args 由协程根保护：任务挂 g_all 协程
+//   c->off_task，GC 标记补标）→ 完成：持 g_coro_mu 发布 result+done → px_coro_wake
+//   协程 → resume 后 px_coro_offload_consume 持 g_coro_mu 取结果写回让出点帧槽 /
+//   错误重抛 → free(args)+free(t)。
+// 并发安全：result/done 的发布（外包线程）与读（GC 标记 / consume）皆在 g_coro_mu
+//   临界区内（且临界区屏蔽 SIG_GC_STOP）→ 无数据竞争；fn/args 只读（提交后不变）
+//   → 标记任意时刻安全；外包线程执行期 px_gc_thread_enter 注册 GC + PX_KEEP 保护
+//   返回结果（写 t->result 前可被 STW）。
+typedef struct PxOffTask {
+    PxOffTask* next;      // 执行队列链
+    LXValue  fn;          // native 函数对象（px_call 目标）
+    LXValue* args;        // 实参数组（submit 转移；consume 释放）
+    int      nargs;
+    LXValue  result;      // 完成结果（done=1 后稳定，协程根保护）
+    char     errmsg[512]; // 完成错误文本（done=1 后稳定；空串 = 成功）
+    int      done;        // 1 = result/errmsg 已发布（g_coro_mu 内写/读）
+    PxCoro*  coro;        // 唤醒目标协程
+} PxOffTask;
+
+// 外包执行线程池（独立锁/cond —— 不与 g_coro_mu 共享 cond：signal 须精确唤醒
+//   executor 而非 coro worker，否则就绪协程可能被 executor 抢醒后空等）。
+//   按需创建（提交时无空闲且未达上限）、空闲回收（PX_OFFLOAD_IDLE_MS 超时退）、
+//   上限 PX_OFFLOAD_MAX（默认 max(8, CPU×2)）。
+static pthread_mutex_t g_off_mu   = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  g_off_cond = PTHREAD_COND_INITIALIZER;
+static PxOffTask* g_off_q = NULL;
+static PxOffTask* g_off_q_tail = NULL;
+static int g_off_threads = 0;    // 现存执行线程数
+static int g_off_idle = 0;       // 空闲（cond 等待中）线程数
+static int g_off_max = 0;        // 上限（惰性读 env）
+static int g_off_idle_ms = -1;   // 空闲回收超时 ms（惰性读 env，默认 3000）
+static void* offload_exec(void* arg);   // 前向（offload_ensure_threads 引用）
 
 // ---- M94-S3：sleep 定时表（并入调度循环，g_coro_mu 保护 —— 无独立 timer 线程）----
 // g_sleepers 按 due_us 升序。登记 = 持 g_coro_mu 升序插入；摘取 = worker 取就绪
@@ -529,7 +574,201 @@ void px_coro_gc_mark_roots(void) {
     for (PxCoro* c = g_all; c; c = c->all_next) {
         if (c->args && c->nargs > 0) px_gc_mark_slots(c->args, c->nargs);
         if (c->vm.nframes > 0) px_vm_gc_mark_state(&c->vm);
+        // M96-S2：offload 任务根面（fn/args 提交后只读任意时刻标；result 仅 done 后
+        //   稳定 —— 发布与读皆持本锁 → 无竞争）
+        if (c->off_task) {
+            PxOffTask* t = c->off_task;
+            px_gc_mark_slots(&t->fn, 1);
+            if (t->nargs > 0 && t->args) px_gc_mark_slots(t->args, t->nargs);
+            if (t->done) px_gc_mark_slots(&t->result, 1);
+        }
     }
     pthread_mutex_unlock(&g_coro_mu);
     px_gc_unblock_stop_sig(&old);
+}
+
+// ==================== M96-S2：offload 外包执行线程池 ====================
+// 阻塞网络 native（http_get/tcp_recv 等 C 层全协议阻塞桥）在协程 ctx 的执行从
+// 「worker 线程内同步阻塞（卡死整 worker，M94 抢占救不了）」→「外包线程池异步
+// 执行完 → 协程登记等待让出（不占 worker）→ 完成唤醒 resume 取结果直行」。
+// 线程池参数（惰性读一次，首个任务提交前）：
+//   PX_OFFLOAD_MAX      上限（默认 max(8, CPU×2)，夹 [1,256]）
+//   PX_OFFLOAD_IDLE_MS  空闲回收超时 ms（默认 3000，夹 [100, 600000]）
+// 执行线程职责 = 只跑外包 px_call（native 直调，含沙箱检查——g_sandbox_active 为
+//   进程级全局 → 外包线程语义与直调一致）；不碰 VM 帧栈 / 不回调用户 VM 函数
+//   （名单约束：纯网络 C native，D5）。
+
+// 执行参数惰性初始化（首个任务前；g_off_max/g_off_idle_ms 此后只读）
+static void offload_ensure_params(void) {
+    if (g_off_max <= 0) {
+        const char* env = getenv("PX_OFFLOAD_MAX");
+        int n = env ? atoi(env) : 0;
+        if (n < 1) {
+            long cpu = sysconf(_SC_NPROCESSORS_ONLN);
+            n = (int)(cpu > 0 ? cpu * 2 : 8);
+            if (n < 8) n = 8;
+        }
+        if (n > 256) n = 256;
+        if (n < 1) n = 1;
+        g_off_max = n;
+    }
+    if (g_off_idle_ms < 0) {
+        const char* e2 = getenv("PX_OFFLOAD_IDLE_MS");
+        int v = e2 ? atoi(e2) : 3000;
+        if (v < 100) v = 100;
+        if (v > 600000) v = 600000;
+        g_off_idle_ms = v;
+    }
+}
+
+// 按需补执行线程：持 g_off_mu 内复查（无空闲且未达上限 → 创建）。调用方已解锁。
+static void offload_ensure_threads(void) {
+    offload_ensure_params();
+    pthread_mutex_lock(&g_off_mu);
+    while (g_off_idle == 0 && g_off_threads < g_off_max) {
+        pthread_t t;
+        if (pthread_create(&t, NULL, offload_exec, NULL) != 0) break;
+        pthread_detach(t);
+        g_off_threads++;
+    }
+    pthread_mutex_unlock(&g_off_mu);
+}
+
+// 外包线程执行一个任务：px_call（native 直调 + 沙箱检查）→ 结果/错误持 g_coro_mu
+//   发布（result+done）→ wake 协程。args 由 consume 释放（本函数不 free）。
+static void offload_run_task(PxOffTask* t) {
+    if (!t) return;
+    // 执行期注册 GC（px_call 内构造普贤对象；precise 模式根 = TLS 登记栈）。
+    px_gc_thread_enter();
+    px_root_push();                      // 作用域根标记（错误 longjmp 也统一走 pop）
+    if (px_err_capture_begin()) {
+        LXValue r = px_call(t->fn, t->args, t->nargs);
+        PX_KEEP(r);                      // px_call 返回后保护（写 t->result 前可被 STW）
+        px_err_capture_end();
+        pthread_mutex_lock(&g_coro_mu);  // 发布 result+done（与 GC 标记/消费互斥）
+        t->result = r;
+        t->done = 1;
+        pthread_mutex_unlock(&g_coro_mu);
+    } else {
+        // px_error 已打印（外包线程 TLS 无 VM 源位置 → 无位置前缀）；文本经 px_err_last
+        //   回传，由协程恢复后 px_error 重抛（带让出点源位置，语义 = 直调）。
+        const char* lm = px_err_last();
+        snprintf(t->errmsg, sizeof(t->errmsg), "%s", lm && lm[0] ? lm : "外包执行失败");
+        pthread_mutex_lock(&g_coro_mu);
+        t->result = px_null();
+        t->done = 1;
+        pthread_mutex_unlock(&g_coro_mu);
+    }
+    px_root_pop();                       // 结果已转移 t->result（done=1 后由协程根保护）
+    px_gc_thread_leave();
+    px_coro_wake(t->coro);               // 入就绪队列唤醒协程（wake 内部 g_coro_mu）
+}
+
+// 外包执行线程主循环：取任务执行；队列空 → cond_timedwait（空闲回收：超时仍空 → 退）。
+static void* offload_exec(void* arg) {
+    (void)arg;
+    for (;;) {
+        pthread_mutex_lock(&g_off_mu);
+        PxOffTask* t = NULL;
+        for (;;) {
+            if (g_off_q) {
+                t = g_off_q;
+                g_off_q = t->next;
+                if (!g_off_q) g_off_q_tail = NULL;
+                t->next = NULL;
+                break;
+            }
+            // 队列空 → 空闲等待（提交 signal / 新任务唤醒）；空闲超时回收线程
+            g_off_idle++;
+            struct timespec ts;
+            clock_gettime(CLOCK_REALTIME, &ts);
+            long long rel = (long long)g_off_idle_ms * 1000;   // ms → us
+            ts.tv_sec += rel / 1000000;
+            ts.tv_nsec += (rel % 1000000) * 1000;
+            if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
+            int rc = pthread_cond_timedwait(&g_off_cond, &g_off_mu, &ts);
+            g_off_idle--;
+            if (rc == ETIMEDOUT && !g_off_q) {
+                g_off_threads--;         // 空闲回收（后续任务再按需创建）
+                pthread_mutex_unlock(&g_off_mu);
+                return NULL;
+            }
+        }
+        pthread_mutex_unlock(&g_off_mu);
+        offload_run_task(t);
+    }
+    return NULL;
+}
+
+// ---- M96-S2：offload 提交（vm.c CALL 预检调；协程 ctx）----
+// 返回 PX_CORO_WAIT_BLOCKED：任务已入队 + 协程已登记（c->off_task/off_dst），调用方
+//   让出（pc 不回退 —— native 在外包线程执行完，resume 后 consume 写结果回 dst 槽，
+//   与 M93 sleep「预写 dst 让出」同构的推广）。返回 0：非协程 ctx / 内存失败（调用方
+//   落 px_call 直调 —— pthread 阻塞语义，逃生舱/主线程零变化）。
+int px_coro_offload_submit(LXValue fn, LXValue* args, int nargs, int dst) {
+    PxCoro* c = g_cur_coro;
+    if (!c) return 0;
+    PxOffTask* t = (PxOffTask*)calloc(1, sizeof(PxOffTask));
+    if (!t) return 0;
+    t->fn = fn;
+    t->args = args;              // 实参数组所有权转移（consume 释放）
+    t->nargs = nargs;
+    t->coro = c;
+    t->result = px_null();
+    // 挂协程 off_task（g_coro_mu 内 + 屏蔽 SIG_GC_STOP：GC 标记遍历 g_all 同锁）
+    sigset_t old;
+    px_gc_block_stop_sig(&old);
+    pthread_mutex_lock(&g_coro_mu);
+    c->off_task = t;
+    c->off_dst = dst;
+    pthread_mutex_unlock(&g_coro_mu);
+    px_gc_unblock_stop_sig(&old);
+    // 入执行队列（独立锁）+ 无空闲则确保至少一个执行线程
+    pthread_mutex_lock(&g_off_mu);
+    t->next = NULL;
+    if (g_off_q_tail) g_off_q_tail->next = t; else g_off_q = t;
+    g_off_q_tail = t;
+    int need = (g_off_idle == 0);
+    pthread_mutex_unlock(&g_off_mu);
+    if (need) offload_ensure_threads();
+    pthread_cond_signal(&g_off_cond);
+    return PX_CORO_WAIT_BLOCKED;
+}
+
+// ---- M96-S2：offload 完成消费（vm_run_loop 循环顶，协程 resume 后首个循环迭代调）----
+// 本协程（g_cur_coro）有待消费 offload 任务（外包线程已完成，done=1）→ 结果写回让出
+//   点帧槽 off_dst（resume 后最顶帧 = 让出帧）/ 错误文本经 px_error 重抛（longjmp
+//   worker 隔离点 → 协程异常终止，语义 = 直调 px_error）；然后 free(args)+free(t)、
+//   c->off_task=NULL。返回 1=已消费 / 0=无任务（chan/mutex/sleep/抢占 resume 皆 0）。
+int px_coro_offload_consume(PxVmState* st) {
+    PxCoro* c = g_cur_coro;
+    if (!c) return 0;
+    char errmsg[512];
+    int has_err = 0;
+    int consumed = 0;
+    sigset_t old;
+    px_gc_block_stop_sig(&old);          // 临界区不被打断（结果拷贝进帧槽原子于 GC）
+    pthread_mutex_lock(&g_coro_mu);
+    PxOffTask* t = c->off_task;
+    if (t && t->done) {
+        c->off_task = NULL;
+        has_err = t->errmsg[0] != 0;
+        if (has_err) {
+            snprintf(errmsg, sizeof(errmsg), "%s", t->errmsg);
+        } else if (st && st->nframes > 0) {
+            // 结果写回让出点帧槽（锁内完成：GC 信号屏蔽期无 STW 打断，无中间态漏根）
+            PxFrame* fr = &st->frames[st->nframes - 1];
+            int d = c->off_dst;
+            if (d >= 0 && d < fr->nslots) fr->slots[d] = t->result;
+        }
+        free(t->args);
+        free(t);
+        consumed = 1;
+    }
+    pthread_mutex_unlock(&g_coro_mu);
+    px_gc_unblock_stop_sig(&old);
+    if (consumed && has_err) {
+        px_error("%s", errmsg);          // 锁外重抛 → longjmp worker 隔离点（协程终止）
+    }
+    return consumed;
 }

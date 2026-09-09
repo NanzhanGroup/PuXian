@@ -498,6 +498,23 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
                     }
                 }
             }
+            // —— M96-S2：阻塞网络 native offload 预检（http_get/tcp_recv 试点；名单见
+            //   runtime.c px_native_offload_kind）——
+            // 协程 ctx 命中名单（C 层全协议阻塞桥：阻塞点在 C native 内部 recv 循环/
+            //   TLS，M93-S3 让出与 M94 抢占都救不了）→ 投递外包执行线程池异步执行，
+            //   协程登记 offload 等待让出（pc 不回退：native 已在外包线程跑，resume 后
+            //   px_coro_offload_consume 把结果写 dst 槽 —— M93 sleep「预写 dst 让出」模式
+            //   的推广）。主线程/嵌套回调/逃生舱（yield_ok=0）→ 落 px_call 直调
+            //   （pthread 阻塞语义零变化）。
+            if (yield_ok && px_coro_active() && px_native_offload_kind(fnv)) {
+                int r = px_coro_offload_submit(fnv, abuf, argc, dst);
+                if (r == PX_CORO_WAIT_BLOCKED) {
+                    abuf = NULL;          // 实参数组所有权已转移给外包任务（consume 释放）
+                    st->suspended = 1;
+                    return 1;             // 让出；pc 已前进（不回退）
+                }
+                // r==0：提交失败（非协程 ctx 理论不达 / 内存失败）→ 落 px_call 直调兜底
+            }
             if (fnv.type == PX_FUNC &&
                 fnv.as.obj->as.func.fn == px_vm_entry) {
                 PxVMFunc* cf2 = (PxVMFunc*)fnv.as.obj->as.func.ctx;
@@ -823,6 +840,12 @@ int px_vm_run_coro(PxVmState* st, const PxVMFunc* f, LXValue* args, int nargs) {
 
 int px_vm_resume(PxVmState* st) {
     st->suspended = 0;
+    // M96-S2：offload 完成消费 —— 仅 resume 路径调一次（不占热循环）：若本协程有待
+    //   消费 offload 任务（阻塞 native 已在外包线程执行完）→ 结果写回让出点帧槽 /
+    //   错误重抛（px_error → longjmp worker 隔离点，协程异常终止，语义 = 直调）。
+    //   chan/mutex/sleep/抢占 resume 无任务（off_task==NULL）→ 判空即返，开销可忽略；
+    //   抢占 resume 协程必未登记 offload（抢占点不在 native 内）→ 恒无任务。
+    px_coro_offload_consume(st);
     LXValue ret = px_null();
     int rc = vm_run_loop(st, 0, 1, &ret);
     if (rc == 0) st->ret_val = ret;         // M95-S2：同上

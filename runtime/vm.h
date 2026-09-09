@@ -210,6 +210,9 @@ LXValue px_vm_run_func(PxVmState* st, const PxVMFunc* f, LXValue* args, int narg
 //   协程对象字段（避免"登记可被唤醒后 worker 仍读协程"的 use-after-free 竞态）。
 int px_vm_run_coro(PxVmState* st, const PxVMFunc* f, LXValue* args, int nargs);
 int px_vm_resume(PxVmState* st);
+// M96-S2：offload 完成消费（coro.c 定义；vm_run_loop 循环顶调，协程 resume 后首个
+//   循环迭代）。结果写回让出点帧槽 / 错误 px_error 重抛；返回 1=已消费 0=无任务。
+int px_coro_offload_consume(PxVmState* st);
 
 // 运行模块顶层（Top bc：注册全局 + 顶层语句 + main 调用；A1+）。
 LXValue px_vm_run_module(PxVmState* st, const PxBCModule* m);

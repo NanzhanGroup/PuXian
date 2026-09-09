@@ -1,0 +1,64 @@
+# M96-S2 核心验证 A+B：PX_CORO_WORKERS=1 极限 + 混合并发 + 对拍
+# A) 不卡 worker：1 慢 http(/slow2 500ms) + 快 sleep(60ms) 协程 —— offload 下 sleep
+#    在 http 完成前即跑完（完成时刻 <300ms）；若 http 阻塞 1 worker，sleep 饿到
+#    http 完（≥500ms）才跑 → 完成时刻 ≥500ms 暴露。
+# B) 对拍：4 协程 offload http_get(/data) 内容 == 主线程直调基准（逐字节一致）。
+def hs(id, ch):
+    var r = http_get("http://127.0.0.1:18889/slow2")
+    var dt = (now_us() - g_start) // 1000
+    ch.send("http" + str(id) + ":" + str(dt) + ":" + r)
+
+def qs(id, ch):
+    sleep(60 + id * 5)
+    var done_at = (now_us() - g_start) // 1000
+    ch.send("q" + str(id) + ":" + str(done_at))
+
+def off_get(id, ch, exp):
+    var r = http_get("http://127.0.0.1:18889/data")
+    var okv = 0
+    if r == exp:
+        okv = 1
+    ch.send("c" + str(id) + ":" + str(okv))
+
+# 直调基准（主线程，px_call 直调 → 语义基准）
+var exp = http_get("http://127.0.0.1:18889/data")
+var ch = chan[string](16)
+g_start = now_us()
+spawn hs(0, ch)
+spawn qs(1, ch)
+spawn qs(2, ch)
+for i in range(4):
+    spawn off_get(i, ch, exp)
+
+# 收集 7 条：1 http + 2 q + 4 对拍
+var msgs = []
+for k in range(7):
+    msgs.append(ch.recv())
+var wall = (now_us() - g_start) // 1000
+var s = ""
+for m in msgs:
+    s += m + " "
+print("NB msgs=" + s)
+print("NB wall_ms=" + str(wall))
+# 断言：2 个 q 完成时刻 < 300ms（http 500ms 未完成前 sleep 已跑 → 不卡 worker）
+var qbad = 0
+var hbad = 0
+var cbad = 0
+for m in msgs:
+    if m.starts_with("q"):
+        var at = int(m.split(":")[1])
+        if at >= 300:
+            qbad += 1
+    if m.starts_with("http"):
+        if not m.ends_with("ok2"):
+            hbad += 1
+    if m.starts_with("c"):
+        if not m.ends_with(":1"):
+            cbad += 1
+if qbad == 0 and hbad == 0 and cbad == 0:
+    print("NOTBLOCK-ALL-OK")
+else:
+    print("NOTBLOCK-BAD q=" + str(qbad) + " h=" + str(hbad) + " c=" + str(cbad))
+assert(qbad == 0, "快 sleep 协程在慢 http 完成前执行（worker 不被阻塞 native 卡死）")
+assert(hbad == 0, "慢 http_get 结果正确")
+assert(cbad == 0, "offload http_get 与直调逐字节一致")
