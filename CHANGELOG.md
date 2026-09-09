@@ -6,6 +6,41 @@
 
 ## [Unreleased]
 
+### M94 · 协程调度完备性（D8 二期-A：抢占 + 定时器并入调度循环 + 逃生舱边界决策）
+
+> M94 = M93_PLAN §D8 二期第 ③④ 条落地（①② 网络 IO / handler 协程化编排 M95/M96）。
+> commit 链：391ea8e（S1 立项 + 设计 D1-D3 + D0 侦察）+ 30d94c6（S2 抢占）
+> + b2f9426（S3 定时器合并）+ 本 commit（S4 收口 + tag v0.2.0-m94）。
+> - **S2 抢占式时间片**（补 M93 真实缺口：纯计算不阻塞协程独占 worker 至进程退出，
+>   WORKERS=1 时死循环可饿死其它 spawn）：PxCoro.run_begin_us + vm_run_loop 每 4096
+>   条指令 weak 查 px_coro_preempt_check（本次运行 ≥ PX_CORO_QUANTUM_US 默认 5ms）
+>   → return 2（新返回码：抢占让出）。抢占点仅解释循环指令边界（绝不在 native C
+>   内部 / 让出登记临界区内）→ 协程未登记任何等待 = 无唤醒源 → worker 直接放回
+>   就绪队尾 FIFO 轮转（无 lost-wakeup / 双执行竞态；区别于阻塞让出 return 1）。
+>   PX_CORO_QUANTUM_US=0 关闭（回归 M93 无抢占语义逃生阀）。验证：WORKERS=1 死循环
+>   ×2 vs 有限×8 公平轮转 PASS（M93 无抢占必饿死）；quantum=0 饿死重现（逃生阀
+>   实证）；200us 小量子正确；coro_many 1000/1000 完成无吞吐回归。
+> - **S3 定时器并入调度循环**（退役独立 timer 线程）：g_sleepers 移入 g_coro_mu 单锁
+>   （登记/摘取/就绪队列同锁 → 消除旧双锁 g_timer_mu→g_coro_mu 锁序）；worker 取
+>   协程前置摘到期 sleeper 入就绪（唤醒规则同 px_coro_wake：RUNNING→wake_pending
+>   由让出 worker 自入队 / BLOCKED→直接入队）；就绪空且有未来 sleeper →
+>   cond_timedwait 到最近到期（绝对时间自醒重摘）；sleep 登记成链表新头才 signal
+>   （非头则 worker 已 timedwait ≤ 该 due，免打扰）。收益：线程数 -1（WORKERS=4 +
+>   20 sleeper = 5 线程，旧版含 timer=6）；并发 sleep 精度保持（40 并发 wall≈max 121ms）。
+> - **D8-④ 逃生舱边界决策**（文档收口，不改 codegen）：逃生舱（--c fn_* C 递归产物）
+>   保持 pthread spawn —— fn_* 无 VM 显式帧状态，帧协程在其上不可行（M89 prestudy
+>   §2.4 定论）；逃生舱产物内 spawn **VM 函数目标早已协程化**（M93-S2 分派按目标
+>   函数 fn==px_vm_entry，与调用者轨无关）；逃生舱整体 VM 化/精确化降级为 codegen
+>   golden 大迁移立项候选。M93_PLAN D8 状态更新（③④ 完成，①②→M95/M96 编排）。
+> - **验证门全绿**：m94_s2 verify 4 PASS + m94_s3 verify 4 PASS + m93_s2 6 + m93_s3 6
+>   + m89_s3d 9 + **vm_ab 38 PASS 0 GAP 0 FAIL** + diffcheck --all ✅ + m82 + m83_s6 ✅；
+>   双自举证明：compiler_new/compiler_vm 全链重链（含 M94 runtime）后 compiler_vm
+>   重放 compiler.px dump 30582 行与 golden **逐字节一致**；bootstrap/pxi_vm 重链
+>   吸收新调度器（9,329,184 → 9,329,128B，hello 一致）。详见 docs/M94_PLAN.md。
+> - ⚠️ 后续编排（D8 二期 ①②）：**M95** 服务端 handler 协程化（http_serve/sse/
+>   px_serve 活跃请求占协程不占 fserve worker）；**M96** 客户端网络 IO 协程化
+>   （http/tcp/udp/ws/s3/dns/fd_wait 阻塞桥 → 事件登记让出）。work-stealing 后置。
+
 ### M93-S2/S3 · 帧协程 M:N 内核 + 阻塞原语让出（chan/mutex/rwlock/sleep 协程化）
 
 > M93（候选③，M88 C 类旗舰）落地：`px_spawn` VM 函数从每 spawn 一个 pthread →
