@@ -14350,17 +14350,27 @@ typedef struct PxPend {
     int fd;
     int active;        // 连接槽位在用（conn 存活）
     PxConn* conn;      // 堆连接（跨 worker 存活；含 TLS 会话/读缓冲）
-    int stage;         // 0 = 无挂起（处理中/空闲循环）；1 = route/vhost handler 协程运行中；
+    int stage;         // 0 = 无挂起（处理中/空闲循环）；1 = handler/middleware 协程运行中；
                        // 2 = 已完成待续处理（段2 respond）
     int method_head;   // 挂起请求 HEAD
     int client_close;  // 挂起请求 Connection: close（1 = 响应后关连接）
     char req_id[64];   // 挂起请求 X-Request-Id
     char tmp_path[1024]; // 挂起期 body 临时文件（done 回调清理；handler 期需可读）
     int kind;          // M98-S2b：0 = route 拆段（段2 px_route_respond）；1 = vhost 拆段
-                       //   （段2：resp 非 null → px_vhost_respond；null → docroot 回退续管道）
+                       //   （段2：resp 非 null → px_vhost_respond；null → docroot 回退续管道）；
+                       //   M100：2 = middleware 链 defer 运行中（链状态机，见 mw_* 字段）；
+                       //   3 = middleware 短路完成（段2 px_route_mw_short_respond）
     char vroot[1024];  // M98-S2b：vhost 拆段登记时的解析 docroot（null 回退段2 store 用）
     LXValue req;       // GC 根（stage>=1）
     LXValue resp;      // GC 根（stage==2）
+    // M100：middleware 链 defer 字段（kind==2 期间有效；px_pxserve_pend_gc_mark 补标）
+    int mw_i;          // 当前 middleware 段索引（运行中段 = mw_chain[mw_i]；==mw_n 表示
+                       //   链全 null 已通过 → handler 段运行中）
+    int mw_n;          // 链长快照（defer 登记时拷入；0 = 无链 defer）
+    LXValue mw_chain[32]; // 链快照（MAX_MIDDLEWARES=32；GC 根——逐段 spawn 函数值跨
+                       //   协程保活，不依赖 g_middlewares 运行期一致性）
+    LXValue mw_handler;   // 链通过后的 route handler（GC 根；handler 段 spawn 用）
+    LXValue mw_params;    // route 匹配 params（GC 根；handler 段 args[1]）
 } PxPend;
 static PxPend* g_pxpend = NULL;
 static int g_pxpend_cap = 0;
@@ -14387,6 +14397,9 @@ static int px_pxpend_ensure(int fd) {
         np[i].req_id[0] = 0; np[i].tmp_path[0] = 0;
         np[i].kind = 0; np[i].vroot[0] = 0;
         np[i].req.type = PX_NULL; np[i].resp.type = PX_NULL;
+        np[i].mw_i = 0; np[i].mw_n = 0;
+        np[i].mw_handler.type = PX_NULL; np[i].mw_params.type = PX_NULL;
+        for (int j = 0; j < 32; j++) np[i].mw_chain[j].type = PX_NULL;
     }
     g_pxpend = np; g_pxpend_cap = ncap;
     return 0;
@@ -14427,6 +14440,9 @@ static PxPend* px_pxpend_enter(int fd) {
     e->req_id[0] = 0; e->tmp_path[0] = 0;
     e->kind = 0; e->vroot[0] = 0;
     e->req.type = PX_NULL; e->resp.type = PX_NULL;
+    e->mw_i = 0; e->mw_n = 0;
+    e->mw_handler.type = PX_NULL; e->mw_params.type = PX_NULL;
+    for (int j = 0; j < 32; j++) e->mw_chain[j].type = PX_NULL;
     __sync_fetch_and_add(&g_px_inflight, 1);
     gc_unblock_stop(&old);
     pthread_mutex_unlock(&g_pxpend_mu);
@@ -14529,6 +14545,15 @@ void px_pxserve_pend_gc_mark(void) {
             if (e->active && (e->stage == 1 || e->stage == 2)) {
                 if (e->req.type != PX_NULL) px_gc_mark_slots(&e->req, 1);
                 if (e->resp.type != PX_NULL) px_gc_mark_slots(&e->resp, 1);
+                // M100：middleware 链 defer 运行中（kind==2）→ 链快照 + handler/params
+                //   补标（逐段 spawn 的函数值跨协程保活，漏标 = GC 误回收 → 悬垂 PxVMFunc）
+                if (e->stage == 1 && e->kind == 2) {
+                    int n = e->mw_n;
+                    if (n > 32) n = 32;
+                    if (n > 0) px_gc_mark_slots(e->mw_chain, n);
+                    if (e->mw_handler.type != PX_NULL) px_gc_mark_slots(&e->mw_handler, 1);
+                    if (e->mw_params.type != PX_NULL) px_gc_mark_slots(&e->mw_params, 1);
+                }
             }
         }
     }
@@ -14605,6 +14630,139 @@ int px_pxserve_defer(PxHttpOut* out, LXValue req, LXValue handler, LXValue* harg
     if (!ok) return 0;
     px_coro_spawn_ex(handler.as.obj->as.func.ctx, hargs, nargs,
                      px_serve_route_done, (void*)(intptr_t)fd);
+    return 1;
+}
+
+// ==================== M100：middleware 链 defer（链状态机） ====================
+// middleware 链（runtime_route.c px_route_try_dispatch）全 VM 且 async_ok → 不再在
+// g_pool worker 内同步 for 循环逐个 px_call，改登记 PxPend kind=2 链 defer + spawn
+// 首段（middleware[0]）。每段完成回调 px_serve_mw_done（coro worker 线程）推进链：
+//   · 段是 middleware（mw_i < mw_n）：ret==null → 推进下一段（mw_i++ 后仍 < mw_n →
+//     spawn mw_chain[mw_i] 继续链；== mw_n → 链全 null 通过 → spawn handler 段）；
+//     ret!=null → 短路：resp=ret + stage=2 + kind=3 → 投回续处理（段2
+//     px_route_mw_short_respond，文案 (middleware) 与同步短路一致）。
+//   · 段是 handler（mw_i == mw_n，链已全通过）：resp=ret + stage=2 + kind=0 → 投回
+//     （段2 px_route_respond = route handler 完成语义，与 M98 route handler defer 一致）。
+// req/mw_chain/mw_handler/mw_params 为挂起表 GC 根（px_pxserve_pend_gc_mark 补标）。
+// 锁协议沿用 px_serve_route_done：g_pxpend_mu + SIG_GC_STOP 屏蔽；spawn 在出锁后做
+// （锁序：g_pxpend_mu 不嵌套其它锁）。连接已关/表项已清（fd 复用）→ 丢弃 ret；
+// g_px_stop（优雅关闭，池 worker 已退出）→ 直接收尾防 push 无消费者挂死。
+static void px_serve_mw_done(void* ud, LXValue ret) {
+    int fd = (int)(intptr_t)ud;
+    if (fd < 0) return;
+    px_root_push();
+    PX_KEEP(ret);
+    int push = 0;
+    int cont = 0;          // 续段 spawn（链推进 / 进 handler 段）
+    int fnargs = 0;
+    LXValue fn = px_null();
+    LXValue fargs[2];
+    fargs[0].type = PX_NULL; fargs[1].type = PX_NULL;
+    char tmp[1024]; tmp[0] = 0;
+    sigset_t old;
+    pthread_mutex_lock(&g_pxpend_mu);
+    gc_block_stop(&old);
+    PxPend* e = px_pxpend_ctx(fd);
+    if (e && e->active && e->stage == 1 && e->kind == 2) {
+        if (e->mw_i < e->mw_n) {
+            // —— middleware 段完成 ——
+            if (ret.type != PX_NULL) {
+                // 短路：响应段2（kind=3 → px_route_mw_short_respond，(middleware) 文案）
+                e->resp = ret;          // GC 根接管
+                e->stage = 2;
+                e->kind = 3;
+                push = 1;
+                if (e->tmp_path[0]) { snprintf(tmp, sizeof(tmp), "%s", e->tmp_path); e->tmp_path[0] = 0; }
+            } else {
+                // null → 推进链
+                e->mw_i++;
+                if (e->mw_i < e->mw_n) {
+                    fn = e->mw_chain[e->mw_i];   // 下一 middleware 段
+                    fargs[0] = e->req;
+                    fnargs = 1;
+                } else {
+                    // 链全 null 通过 → handler 段（args = [req, params]，同步路径同参）
+                    fn = e->mw_handler;
+                    fargs[0] = e->req;
+                    fargs[1] = e->mw_params;
+                    fnargs = 2;
+                }
+                cont = 1;
+            }
+        } else {
+            // —— handler 段完成（链已全通过；kind 复位 0 = route handler 段2 语义）——
+            e->resp = ret;              // GC 根接管
+            e->stage = 2;
+            e->kind = 0;
+            push = 1;
+            if (e->tmp_path[0]) { snprintf(tmp, sizeof(tmp), "%s", e->tmp_path); e->tmp_path[0] = 0; }
+        }
+    }
+    gc_unblock_stop(&old);
+    pthread_mutex_unlock(&g_pxpend_mu);
+    if (cont) {
+        // 续段 spawn（fn/fargs 已拷出锁；PX_KEEP 保活到 spawn memcpy 完成）
+        PX_KEEP(fn);
+        PX_KEEP(fargs[0]);
+        if (fnargs == 2) PX_KEEP(fargs[1]);
+        if (fn.type == PX_FUNC && fn.as.obj && fn.as.obj->as.func.fn == px_vm_entry)
+            px_coro_spawn_ex(fn.as.obj->as.func.ctx, fargs, fnargs,
+                             px_serve_mw_done, (void*)(intptr_t)fd);
+        else
+            px_pxpend_close(fd);   // 防御（理论不达：登记时已全 VM 校验）：收尾防悬挂
+    } else if (push) {
+        if (tmp[0]) unlink(tmp);
+        if (g_px_stop) px_pxpend_close(fd);   // 关闭期：池 worker 已退出 → 直接收尾
+        else px_pool_push(fd);                // 续处理：段2 respond + keep-alive
+    }
+    px_root_pop();
+}
+
+// 登记 middleware 链 defer 并 spawn 首段（kind=2）。调用点 runtime_route.c
+// px_route_try_dispatch（middleware 链全 VM + handler VM + async_ok 时）。
+// mws[0..mw_count) 链快照拷入 PxPend（GC 根）；handler/params 同入根（handler 段
+// spawn 用，跨多段 defer 存活）。返回 1 = 已登记+已 spawn 首段（调用方返回 DEFER/2）；
+// 0 = 退回原同步直调路径（非 px_serve 连接 / 槽忙 / 无协程内核 / 非 VM handler）。
+int px_pxserve_mw_defer(PxHttpOut* out, LXValue req, LXValue handler, LXValue params,
+                        LXValue* mws, int mw_count, int head_only, int keep_alive,
+                        const char* req_id) {
+    PxConn* c = (out && out->impl) ? (PxConn*)out->impl : NULL;
+    if (!c) return 0;
+    int fd = c->fd;
+    if (fd < 0) return 0;
+    if (!px_coro_spawn_ex || !px_vm_entry) return 0;          // 无协程内核 → 同步
+    if (mw_count <= 0 || mw_count > 32) return 0;
+    if (handler.type != PX_FUNC || !handler.as.obj ||
+        handler.as.obj->as.func.fn != px_vm_entry) return 0;   // 仅 VM handler 链 defer
+    int ok = 0;
+    sigset_t old;
+    pthread_mutex_lock(&g_pxpend_mu);
+    gc_block_stop(&old);
+    PxPend* e = px_pxpend_ctx(fd);
+    if (e && e->active && e->conn == c && e->stage == 0) {
+        e->stage = 1;
+        e->kind = 2;                 // middleware 链 defer 运行中
+        e->mw_i = 0;
+        e->mw_n = mw_count;
+        e->mw_handler = handler;     // GC 根（handler 段 spawn 用）
+        e->mw_params = params;       // GC 根（handler 段 args[1]）
+        for (int i = 0; i < 32; i++)
+            e->mw_chain[i] = (i < mw_count && mws) ? mws[i] : px_null();
+        e->method_head = head_only ? 1 : 0;
+        e->client_close = keep_alive ? 0 : 1;
+        e->req_id[0] = 0;
+        if (req_id) snprintf(e->req_id, sizeof(e->req_id), "%s", req_id);
+        e->req = req;                // GC 根接管（调用方根随后失效无碍）
+        e->resp.type = PX_NULL;
+        ok = 1;
+    }
+    gc_unblock_stop(&old);
+    pthread_mutex_unlock(&g_pxpend_mu);
+    if (!ok) return 0;
+    LXValue fargs[1];
+    fargs[0] = req;
+    px_coro_spawn_ex(mws[0].as.obj->as.func.ctx, fargs, 1,
+                     px_serve_mw_done, (void*)(intptr_t)fd);
     return 1;
 }
 
@@ -14685,12 +14843,18 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
             }
         } else {
 #ifdef PX_NO_ROUTE
-            // 理论不达（route 表空 → 无 route 拆段登记）；防御：释放连接收尾
+            // 理论不达（route 表空 → 无 route/middleware 拆段登记）；防御：释放连接收尾
             px_pxpend_close(fd);
             g_cur_conn = NULL;
             return px_null();
 #else
-            px_route_respond(&out, sreq, sm, sh, sc ? 0 : 1, srid, sresp);
+            if (skind == 3) {
+                // M100：middleware 短路完成段2（归一化 + respond + (middleware) 访问
+                //   日志，与同步短路共用 px_route_mw_short_respond，文案逐字一致）
+                px_route_mw_short_respond(&out, sreq, sm, sh, sc ? 0 : 1, srid, sresp);
+            } else {
+                px_route_respond(&out, sreq, sm, sh, sc ? 0 : 1, srid, sresp);
+            }
 #endif
         }
         px_root_pop();
