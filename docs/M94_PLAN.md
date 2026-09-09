@@ -1,6 +1,9 @@
 # M94_PLAN · D8 二期-A：协程调度完备性（抢占 + 定时器并入调度循环 + 逃生舱边界决策）
 
-> 状态：🚧 S1 立项（本 commit）。S2 抢占 / S3 定时器合并 / S4 收口。
+> 状态：✅ **S4 收口完成（tag v0.2.0-m94）**。S2 抢占（30d94c6，m94_s2 4 PASS）
+> + S3 定时器合并（b2f9426，m94_s3 4 PASS）+ 全量回归绿（m93_s2/s3 · m89_s3d ·
+> vm_ab 38P/0GAP/0F · diffcheck --all · m82 · m83_s6）+ 双自举证明（compiler_vm
+> 重放 30582 行逐字节一致）+ bootstrap/pxi_vm 重链。D8-①② 编排 M95/M96（见 §五）。
 > 上游：M93_PLAN §D8 二期边界（四条预埋：①网络 IO 协程化 ②http_serve/sse handler
 >   协程化 ③抢占式调度与 work-stealing；定时器堆合并调度器循环 ④C 轨逃生舱精确化 +
 >   逃生舱内 spawn 协程化）。本里程碑 = D8 第 **③④** 条；①② 编排 M95/M96（见 §五）。

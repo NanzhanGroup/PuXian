@@ -1,6 +1,9 @@
 # M93_PLAN · 帧协程 M:N（M88 C 类旗舰落地：px_spawn 用户态协程化）
 
-> 状态：🚧 **S3 阻塞原语让出完成（路线 B，本 commit）**。S4 GC 压力验证中。
+> 状态：✅ **S4/S5 收口完成（tag v0.2.0-m93，92149c9）**。D8 二期后续：
+> ③ 抢占+定时器合并 → **M94 已收口**（v0.2.0-m94，docs/M94_PLAN.md）；
+> ④ 逃生舱边界决策 → M94-D3 文档收口（保持 pthread，降级 codegen 候选）；
+> ①② 网络 IO / handler 协程化 → 编排 M95 / M96（见 M94_PLAN §五）。
 > 上游：M88_PLAN §一 C 档（用户态协程 M:N，Go runtime 简化版）+ M89_vm_design D3
 > （显式帧 = 槽数组，挂起 = 帧拷贝存档，"本设计为其铺路"）+ M89_vm_prestudy §2.4
 > （C 类协程在 VM 上自然可得；C 递归模型完全不可行）+ M91 默认轨切 VM + M92 精确 GC
@@ -124,11 +127,17 @@
   （D2：主线程参与 worker），chan 收尾（现用 sleep 轮询/select 的测试写法保持可用）。
 
 ### D8 · 二期边界（本里程碑不做，文档预埋）
+> 状态更新（M94 已收口，2026-09-10）：③ **完成**（M94-S2/S3：抢占时间片 + 定时器
+> 并入调度循环退役 timer 线程）；④ **决策收口**（M94-D3：逃生舱保持 pthread，
+> 逃生舱内 spawn VM 函数目标已协程化；整体 VM 化降级 codegen golden 候选）。
+> ①② 网络 IO / handler 协程化 → 编排 **M95 / M96**（M94_PLAN §五）。
 - 网络 IO 协程化：http_request/tcp/udp/ws/s3/dns 同步阻塞桥 → epoll 挂起/唤醒
-  （M88 B 事件内核复用）+ fd_wait 全协程化。
-- http_serve/sse handler 协程化（请求突发占协程不占 fserve worker）。
+  （M88 B 事件内核复用）+ fd_wait 全协程化。→ **M96**
+- http_serve/sse handler 协程化（请求突发占协程不占 fserve worker）。→ **M95**
 - 抢占式调度（时间片）与 work-stealing（负载均衡）后置；定时器堆合并调度器循环。
+  → **M94 已完成**（work-stealing 仍后置）
 - C 轨逃生舱产物精确化 + 逃生舱内 spawn 协程化（codegen 改造，golden 大迁移范畴）。
+  → **M94-D3 决策收口**（保持 pthread；整体 VM 化降级候选）
 
 ## 四、范围
 
