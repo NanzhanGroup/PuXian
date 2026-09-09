@@ -1,0 +1,30 @@
+# M94-S2 验证：抢占式时间片（死循环协程 vs 有限协程公平轮转）
+# ------------------------------------------------------------
+# 背景：M93 协程无抢占 —— 纯计算不阻塞协程（while true）独占 worker 至进程退出；
+#   WORKERS=1 时一个死循环协程可饿死所有其它 spawn（真实缺陷）。
+# M94-S2：vm_run_loop 每 4096 条指令查时间片预算（PX_CORO_QUANTUM_US 默认 5000us），
+#   超时 → return 2 抢占让出 → worker 直接放回就绪队尾（FIFO 轮转）。
+# 本用例：2 个死循环 busy + 8 个有限 wkr（各 5 万迭代后 chan.send）。
+#   正验证（WORKERS=1 + 默认量子）：busy 每片让出 → wkr 分到片 → 8 个 done 全收。
+#   负验证（WORKERS=1 + PX_CORO_QUANTUM_US=0 逃生阀）：busy 独占 worker → wkr 饿死
+#     → main chan.recv 永不返回 → shell timeout（预期失败，证明逃生阀生效）。
+def busy():
+    var i = 0
+    while true:
+        i = i + 1
+
+def wkr(i, done):
+    var s = 0
+    for j in range(50000):
+        s = s + (j & 31) + i
+    done.send(1)
+
+let N = 8
+let done = chan[int](N)
+spawn busy()
+spawn busy()
+for i in range(N):
+    spawn wkr(i, done)
+for i in range(N):
+    done.recv()
+print("PREEMPT-FAIR OK N=" + str(N))
