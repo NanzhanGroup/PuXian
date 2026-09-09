@@ -1,0 +1,44 @@
+# M101-SNI daemon —— SNI 多证书 + 并发 TLS 握手修复验证（docs/M101_PLAN.md §四）
+# tls_server 注册默认证书（无 hostname）+ SNI 证书（hostname=sni.local，RSA）→
+# px_serve accept 后 px_conn_init 走 mbedtls 握手；px_sni_cb（M101 改：p_ctx=PxConn* +
+#   命中 slot 且 RSA key → per-连接 clone 到 c->own_pk_sni）在并发 SNI 握手下验证：
+#   openssl s_client -servername sni.local 应拿到 CN=sni.local 证书（SNI clone 生效
+#   且不破坏默认证书路径）。
+# 用法：m101_sni_daemon [port] [def_cert] [def_key] [sni_cert] [sni_key]（默认 18202 /
+#   /tmp/px_m101_cert.pem / key / /tmp/px_m101_snicert.pem / snikey）。
+var m101s_port = 18202
+var m101s_dc = "/tmp/px_m101_cert.pem"
+var m101s_dk = "/tmp/px_m101_key.pem"
+var m101s_sc = "/tmp/px_m101_snicert.pem"
+var m101s_sk = "/tmp/px_m101_snikey.pem"
+let m101s_av = args()
+if len(m101s_av) > 1:
+    m101s_port = int(m101s_av[1])
+if len(m101s_av) > 2:
+    m101s_dc = m101s_av[2]
+if len(m101s_av) > 3:
+    m101s_dk = m101s_av[3]
+if len(m101s_av) > 4:
+    m101s_sc = m101s_av[4]
+if len(m101s_av) > 5:
+    m101s_sk = m101s_av[5]
+
+def fast_handler(req, params):
+    return {"status": 200, "body": "SNI-FAST"}
+
+def setup():
+    let r1 = tls_server(m101s_dc, m101s_dk)                    # 默认证书
+    let r2 = tls_server(m101s_sc, m101s_sk, "sni.local")       # SNI 证书（RSA）
+    if r1 != true or r2 != true:
+        print("tls_server failed r1=" + str(r1) + " r2=" + str(r2))
+        exit(1)
+    route("GET", "/fast", fast_handler)
+    let D = "/tmp/px_m101_sni_docroot"
+    mkdir(D)
+    write_file(D + "/index.txt", "SNI-OK")
+    px_serve(m101s_port, D, 30000, {"max_conn": 16})
+    exit(0)
+
+spawn setup()
+sleep(300000)
+exit(0)
