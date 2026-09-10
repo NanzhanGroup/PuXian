@@ -6,6 +6,33 @@
 
 ## [Unreleased]
 
+### M105 · 运行时热点路径重构（S1 量化 + S2 全局表 O(1) 名解析）
+
+> 依据 `docs/M104_PLAN.md` §7.3 归因（「真瓶颈在 runtime 侧的名解析与锁路径，而非解释循环分派」），
+> M105 承接该结论**先量化、再动手**。计划、量化表与实测见 `docs/M105_PLAN.md`。
+> - **S1 量化（零侵入，插桩件不入库）**——真实负载 `compiler_vm bc stdlib/yaml.px`：
+>   - 动态指令 **5,302,670** 条，其中 `GETG` **723,980（13.7%）**、`SRCLINE` 869,191、`CALL` 312,181；
+>   - `LD_PRELOAD` 计数：`strcmp` 调用 **262,956,746** 次，其中 **95.0%（249,747,716）来自全局表线性扫描**
+>     （`px_get_global` 240,083,442 = 91.3% + `px_set_global` 22,601,530 = 8.6%）→
+>     **平均每次 GETG 探测 331.6 项**（`g_len≈537`，平均扫过全表 62%）；
+>   - 单元成本：`rwlock rdlock+unlock` **12ns**（锁不是问题）、`pthread_sigmask` 屏蔽+还原对
+>     **343~372ns**（2 次系统调用）、`px_get_global` 全表均值 **2.08µs**；
+>   - **数据否决原计划 S3「字段/字典名解析缓存」**（`field_while` 全程仅 18M strcmp ≈ 0.1s），
+>     真实支配项是 `px_field_set`/`px_list_push`/`px_dict_set` 每操作一次的
+>     `pthread_mutex_lock(g_gc_mu)` + `sigprocmask` 对（`field_while`/`loop_sum` 的 sys 时间 ≈ user 时间）。
+> - **S2 全局表 O(1) 名解析**（`runtime/runtime.c`，+67/-30）：64 位名哈希开放寻址索引
+>   （`GHASH_CAP = 2×GLOBAL_CAP`，负载 ≤0.5），`px_get_global`/`px_global_native`/`px_set_global`/
+>   `px_method`(struct 方法) 四处线性扫描改为哈希查找（命中时 1 次 strcmp 兜底）；**锁语义、GC 根面
+>   （根扫描仍线性遍历 `g_vals`）、插入点唯一性、溢出与错误文案全部不变**。
+>   - 实测：`compiler_vm bc stdlib/yaml.px` **5.080s → 3.600s = 1.41x**（5 轮 min CPU，产物 dump 逐字节一致）；
+>     `strcmp` 调用数 **262,956,746 → 1,047,279（-99.6%）**。
+>   - 验证：`vm_ab` v2 **38P/0GAP/0F** · `diffcheck --all` **rc=0** · m89_s3d **9P/0F** · m93_s3 **6P/0F** ·
+>     m96_s2 **8P/0F** · m103_s2d **rc=0** · C/VM 双轨 `hello`/`fib` 一致。
+> - **S3 预备（未动手）**：`compiler_vm` 实测**单线程**，而 GC 的 stop-the-world 以
+>   `g_active_threads > 0` 为闸门 → `gc_block_stop/unblock` 存在可证明安全的快速旁路；
+>   收益上限已实测（裸跳过 sigmask = 2.570s，即 S2 之上再 **1.41x**，累计 **1.87x**），
+>   实现需按 thread-local 层栈保证 block/unblock 成对判定一致。
+
 ### M104 · VM 性能增强（LTO 构建档 + 执行引擎优化）
 
 > 依据 `docs/M104_native_prestudy.md`（③ native 旗舰 D0 预研）**路线 ① 裁定**：native 天花板 = C 轨
