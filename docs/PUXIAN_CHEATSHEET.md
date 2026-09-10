@@ -91,6 +91,10 @@ print("upper=" + to_upper("px"))
 10. 注释/字符串里长行可加 `# noqa` 供 `px lint` 跳过。
 11. **pxi（解释器）为 Mini 子集：不支持 `spawn`/`chan` 等并发关键字** → 并发/服务端（http_serve/ws_serve 等常驻回调）程序用 `px build`；纯计算与客户端脚本 pxi/编译双模式皆可。
 12. **pxi 的脚本参数必须在最后一个**（`selfhost/interp.px`：`let f = a[len(a) - 1]`）：直接调 `bootstrap/pxi` 要写 `pxi [数据文件...] script.px`；**写反会把数据文件当源码编译**，报 `未定义变量: 'xxx'` / `读取文件失败`，与真实病因（参数顺序）毫不相干。`tools/px run`（M106-S4 起）已自动把脚本置于末尾，`px run script.px [args...]` 可放心用。
+13. **性能红线（写热循环前必读，M107-S0 实测）**：
+    - **全局名访问 ≈40~50 ns/次**（顶层 `var`/`let`、native、`def` 皆然）。百万级热循环把**循环体内用到的全局名**（含循环上界、累加器、被调函数）先取到 `var` 局部：VM 轨 1MB 实测 **195 ms → 105 ms（1.9×）**（C 轨 97 ms → 20 ms）。小循环无感，大循环建议照做。
+    - `s[i]` / `len(s)` / `for ch in s` 对 `str` 自 **M106** 起为**摊还 O(1)**（修复前 O(n²)：64KB 逐字符扫 4.74s→0.03s）。但**大文本逐字符**仍优先 `bytes(s)` 视图 + `bytes_get` / `b[i]`（bytes 下标本就是 O(1)，且无 rune 解码开销）。
+    - **`{n,}` 无上限量词正则有 O(n²) 风险**（64KB 命中输入 8.8 s；固定 `{20}` / 纯字面 0 ms）——M107-S1 修。此前对**大文本**做密钥/敏感串扫描，先用**字面前缀预筛**（如 `contains(s, "sk-")` 为假即跳过该正则）。
 
 ## 2. native 内置速查（306 全量见 `docs/native_index.json`，本表为常用）
 
