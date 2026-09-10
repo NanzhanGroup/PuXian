@@ -4886,6 +4886,9 @@ typedef struct RNode {
     struct RNode* child;     // RN_REP / RN_GROUP
     int min, max;            // RN_REP
     int gidx;                // RN_GROUP
+    // M107-S1b（Issue 34 建议 A 的保守子集）：根节点的「必备字面前缀」（由 rcompile 填充，预筛用）
+    unsigned char lit[32];
+    int lit_len;
 } RNode;
 
 typedef struct { int end; int64_t groups[RG_N]; } RCand;
@@ -5123,6 +5126,113 @@ static RNode* rp_parse_alt(RParser* p) {
     return n;
 }
 
+// ---- M107-S1b（Issue 34 建议 A 的保守子集）：必备字面前缀预筛 ----
+// 目的：rsearch_from 原本在**每个起点**都试一次 rmatch；若模式必以某字面串 P 开头（|P|=L>0），
+//   则任何匹配起点必落在 P 的出现位置上 ⇒ 用 memchr/自实现字面扫描跳过其余起点。
+//   ws-approve 的 7 条 secret_patterns 全部以字面开头（`sk-`/`ghp_`/`AKIA`…），
+//   干净大文本上原本「逐起点重试」的 ~104ms/1MB 降为一次扫描（<1ms）。
+// 可靠性：**只用于「可证明必消费 P」的形态，其余一律返回 0 = 不启用预筛（回落逐起点原行为）**。
+//   1) RN_CHAR / RN_GROUP / RN_SEQ / RN_ALT 直接由结构给出；
+//   2) RN_REP 仅当 **min ≥ 1 且 child 恰为固定字面串**（最少消费 min 份该字面）；
+//   3) RN_ANY / RN_CLASS 贡献为空；RN_START / RN_END 零宽（确定消费 0 字节）⇒ `^abc` 仍可取得前缀
+//      `abc`：预筛只减少「试哪些起点」，且按出现位置**升序**推进，与逐起点升序等价，
+//      故不影响「首个匹配起点」的判定（`x|^y` 一类由 ALT 取公共前缀天然排除）；
+//   4) 可匹配空串的模式取不到非空前缀（min=0 的 REP / 空分支 ⇒ 返回 0）⇒ 零长匹配语义不受影响；
+//   5) 前缀含 NUL 时禁用（避免与 C 字符串扫描混用）。
+static int rn_lit_exact(RNode* n, unsigned char* out, int cap, int* outlen) {
+    switch (n->type) {
+        case RN_CHAR:
+            if (cap < 1) return 0;
+            out[0] = n->ch; *outlen = 1; return 1;
+        case RN_GROUP:
+            return rn_lit_exact(n->child, out, cap, outlen);
+        case RN_START: case RN_END:      // 零宽：确定消费 0 字节
+            *outlen = 0; return 1;
+        case RN_SEQ: {
+            int tot = 0;
+            for (int i = 0; i < n->nkids; i++) {
+                int l = 0;
+                if (!rn_lit_exact(n->kids[i], out + tot, cap - tot, &l)) return 0;
+                tot += l;
+            }
+            *outlen = tot; return 1;
+        }
+        case RN_REP:
+            if (n->min != n->max) return 0;              // 只有定长 {k} 才算「恰为字面」
+            {
+                unsigned char tmp[64];
+                int l = 0;
+                if (n->min > 0 && !rn_lit_exact(n->child, tmp, (int)sizeof(tmp), &l)) return 0;
+                if (l > 0 && n->min > cap / l) return 0; // 放不下完整字面 → 不声称「恰为字面」
+                for (int i = 0; i < n->min; i++) memcpy(out + i * l, tmp, (size_t)l);
+                *outlen = n->min * l; return 1;
+            }
+        default:
+            return 0;                                    // RN_ANY / RN_CLASS / RN_ALT → 非固定字面
+    }
+}
+
+static int rn_lit_prefix(RNode* n, unsigned char* out, int cap) {
+    switch (n->type) {
+        case RN_CHAR:
+            if (cap < 1) return 0;
+            out[0] = n->ch; return 1;
+        case RN_GROUP:
+            return rn_lit_prefix(n->child, out, cap);
+        case RN_SEQ: {
+            int tot = 0;
+            for (int i = 0; i < n->nkids; i++) {
+                int l = 0;
+                if (rn_lit_exact(n->kids[i], out + tot, cap - tot, &l)) { tot += l; continue; }
+                tot += rn_lit_prefix(n->kids[i], out + tot, cap - tot);  // 非字面块：取其必备前缀后停止
+                break;
+            }
+            return tot;
+        }
+        case RN_REP:
+            if (n->min < 1) return 0;                    // 可能一次都不消费 ⇒ 无必备前缀
+            {
+                unsigned char tmp[64];
+                int l = 0;
+                if (!rn_lit_exact(n->child, tmp, (int)sizeof(tmp), &l) || l == 0) return 0;
+                int tot = 0;
+                for (int i = 0; i < n->min && tot + l <= cap; i++) { memcpy(out + tot, tmp, (size_t)l); tot += l; }
+                return tot;
+            }
+        case RN_ALT: {
+            int best = -1;
+            for (int i = 0; i < n->nkids; i++) {
+                unsigned char tmp[64];
+                int l = rn_lit_prefix(n->kids[i], tmp, (int)sizeof(tmp));
+                if (l == 0) return 0;
+                if (best < 0) { best = l; memcpy(out, tmp, (size_t)l); continue; }
+                int m = best < l ? best : l;
+                int j = 0;
+                while (j < m && out[j] == tmp[j]) j++;
+                best = j;
+                if (best == 0) return 0;
+                memcpy(out, tmp, (size_t)j);
+            }
+            return best < 0 ? 0 : best;
+        }
+        default:
+            return 0;                                    // RN_ANY / RN_CLASS / RN_START / RN_END
+    }
+}
+
+// 保守字面扫描（不依赖 memmem：musl/mingw 无该扩展）
+static const unsigned char* rn_find_lit(const unsigned char* hay, int hlen, const unsigned char* pat, int plen) {
+    if (plen <= 0 || plen > hlen) return NULL;
+    if (plen == 1) return (const unsigned char*)memchr(hay, pat[0], (size_t)hlen);
+    const unsigned char c0 = pat[0];
+    int last = hlen - plen;
+    for (int i = 0; i <= last; i++) {
+        if (hay[i] != c0) continue;
+        if (memcmp(hay + i + 1, pat + 1, (size_t)(plen - 1)) == 0) return hay + i;
+    }
+    return NULL;
+}
+
 static RNode* rcompile(const char* pat, char* errbuf, int errsz) {
     RParser p;
     memset(&p, 0, sizeof(p));
@@ -5135,11 +5245,43 @@ static RNode* rcompile(const char* pat, char* errbuf, int errsz) {
         return NULL;
     }
     if (!root && errbuf) snprintf(errbuf, errsz, "%s", p.err);
+    if (root) root->lit_len = rn_lit_prefix(root, root->lit, (int)sizeof(root->lit));
     return root;
 }
 
 // ---- 匹配（候选列表回溯，与 Rust 端同序） ----
 static RCandList rmatch(RNode* n, const unsigned char* text, int len, int pos, const int64_t* groups);
+
+// ---- M107-S1（Issue 34）：`X{n,}` / `X*` / `X+` 的「单字节原子」快速路径 ----
+// 病灶（qg-issue/34-puxian-regex-throughput/34-ADDENDUM-20260911.md）：RN_REP 用 BFS 枚举
+//   **所有**重复层数候选，再对每个候选做 O(#候选) 的重复检查 + 收尾 O(k²) 插入排序
+//   ⇒ 当 child 是「每次恰好吃 1 字节」的原子（RN_CHAR / RN_ANY / RN_CLASS）且输入是长连续段时
+//   （如 `[A-Za-z0-9]{20,}` 命中 64KB 连续字母），候选数 ≈ 段长 ⇒ O(n²)（实测 64KB 10598ms）。
+// 等价性（可证明，无需放宽语义）：此类 child 在任意位置**至多 1 个候选**，end 恒为 pos+1，
+//   且不改 groups ⇒ BFS 的 level L 恰对应唯一候选 end=pos+L，各层 end 两两不同（dup 检查恒不命中）。
+//   故「贪心优先（level 降序）」的候选序列 == end 从 k 递减到 min，其中 k = min(max, 连续命中长度)。
+//   本快速路径按此线性产出：**数量、顺序（end 降序）、groups 与原实现逐项相同**。
+// 覆盖范围：`{n,}`（本次主诉）、`{n,m}`、`*`、`+`、`?` 中所有 child 为上述三类原子的情形；
+//   其余 child（含分组/交替/多字符序列）一律回落原 BFS，行为不变。
+static int rn_byte_atom(RNode* k) {
+    return k->type == RN_CHAR || k->type == RN_ANY || k->type == RN_CLASS;
+}
+
+static int rn_byte_match(RNode* k, const unsigned char* text, int len, int pos) {
+    if (pos >= len) return 0;
+    unsigned char ch = text[pos];
+    switch (k->type) {
+        case RN_CHAR: return ch == k->ch;
+        case RN_ANY: return ch != '\n';
+        case RN_CLASS: {
+            int hit = 0;
+            for (int i = 0; i < k->ncls; i++)
+                if (ch >= k->cls_lo[i] && ch <= k->cls_hi[i]) { hit = 1; break; }
+            return hit != k->neg;
+        }
+        default: return 0;
+    }
+}
 
 static RCandList rmatch(RNode* n, const unsigned char* text, int len, int pos, const int64_t* groups) {
     RCandList out = rcand_new();
@@ -5186,6 +5328,16 @@ static RCandList rmatch(RNode* n, const unsigned char* text, int len, int pos, c
             break;
         }
         case RN_REP: {
+            // M107-S1（Issue 34）：单字节原子 → 线性产出候选（等价性证明见 rn_byte_atom 上方）
+            if (rn_byte_atom(n->child)) {
+                int k = 0;
+                while (n->max < 0 || k < n->max) {
+                    if (!rn_byte_match(n->child, text, len, pos + k)) break;
+                    k++;
+                }
+                for (int lv = k; lv >= n->min; lv--) rcand_add(&out, pos + lv, groups);
+                break;
+            }
             // BFS：all 记录 (end, groups, level)；贪心优先 = level 降序
             typedef struct { int end; int64_t groups[RG_N]; int level; } RRepCand;
             RRepCand* all = NULL;
@@ -5272,6 +5424,32 @@ static RCandList rmatch(RNode* n, const unsigned char* text, int len, int pos, c
 static int rsearch_from(RNode* root, const unsigned char* text, int len, int start, int* out_s, int* out_e, int64_t* out_g) {
     int64_t g0[RG_N];
     for (int i = 0; i < RG_N; i++) g0[i] = -1;
+    // M107-S1b：必备字面前缀预筛（只跳过「结构上不可能成为起点」的位置；顺序语义不变）
+    {
+        int L = root->lit_len;
+        int usable = L > 0;
+        for (int i = 0; usable && i < L; i++) if (root->lit[i] == 0) usable = 0;
+        if (usable) {
+            int s = start;
+            while (s <= len - L) {
+                const unsigned char* hit = rn_find_lit(text + s, len - s, root->lit, L);
+                if (!hit) return 0;
+                int cand = (int)(hit - text);
+                RCandList l = rmatch(root, text, len, cand, g0);
+                if (l.len > 0) {
+                    *out_s = cand;
+                    *out_e = l.items[0].end;
+                    memcpy(out_g, l.items[0].groups, sizeof(int64_t) * RG_N);
+                    out_g[0] = ((int64_t)cand << 32) | (unsigned)l.items[0].end;
+                    rcand_free(&l);
+                    return 1;
+                }
+                rcand_free(&l);
+                s = cand + 1;
+            }
+            return 0;
+        }
+    }
     for (int s = start; s <= len; s++) {
         RCandList l = rmatch(root, text, len, s, g0);
         if (l.len > 0) {
