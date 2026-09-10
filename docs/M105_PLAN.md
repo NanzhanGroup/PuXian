@@ -5,7 +5,7 @@
 >
 > 修订纪律：S1 未出量化表前不动实现；量化表否定的子项立即降级（不许按立项时的想象推进）。
 >
-> **进度**：S1 量化 ✅ · S2 全局表 O(1) ✅（`a4debda`，实测 1.41x）· **S3 GC 同步瘦身 ✅（§七，实测再 1.30~1.33x，累计 ~1.9x）** · S5 收口（双自举 + 重链 + CI + tag）待办。
+> **进度**：S1 量化 ✅ · S2 全局表 O(1) ✅（`a4debda`，实测 1.41x）· **S3 GC 同步瘦身 ✅（§七，实测再 1.30~1.33x，累计 ~1.9x）** · **S5 收口 ✅（§八：双自举 + pxi/pxi_vm 重链 + 回归 + tag `v0.2.0-m105`）**。
 
 ---
 
@@ -269,10 +269,61 @@ GC 根面（根扫描仍线性遍历 `g_vals`，索引不参与 GC）、插入�
 ⇒ **延迟暂停确实被触发**（deferred 计数增长）且**并发 GC 压测 3/3 全过**（零崩、零 UAF、token 和精确）
 —— 兜底路径不是纸面论证，是被真实并发 GC 走过且安全的。
 
-### 7.7 待办（S5 收口）
+### 7.7 待办（S5 收口）→ **已于 §八全部完成**
 
-- 双自举证明（`bootstrap_prove.sh` + `bootstrap_prove_bc.sh --fresh`，runtime 变更需重链）；
-- `bootstrap/pxi` / `bootstrap/pxi_vm` 重链吸收 M105（S2+S3）；
-- CI 全绿 + tag `v0.2.0-m105`；
-- S4 复评：容器/字段写路径（6M~8M 次/负载）在 S3 后的剩余占比需重测（S3 已消掉其中 sigmask 一半，mutex 仍在）。
+---
+
+## 八、S5 收口记录（2026-09-11 · 本机 8 核 16G）
+
+### 8.1 交付清单
+
+| 项 | 结果 |
+|---|---|
+| **C 轨自举证明** | `selfhost/bootstrap_prove.sh --fresh` → B.c == `golden/compiler.c`（**15060 行**）**逐字节一致** ✅ |
+| **BC 轨自举证明** | `selfhost/bootstrap_prove_bc.sh --fresh` → `compiler_vm`（新链，runtime = M105 S2+S3）重放 dump == `golden/compiler.bc.dump`（**30581 行**）**逐字节一致** ✅ |
+| **pxi 重链**（C 轨） | `tools/pxc build --c --full selfhost/interp.px` → **9,626,368 → 9,626,960 B**（+592）✅ |
+| **pxi_vm 重链**（VM 轨） | `tools/pxc build --full selfhost/interp.px` → **9,460,200 → 9,460,784 B**（+584）✅ |
+| tag | **`v0.2.0-m105`** |
+
+**重链口径核实（先判轨、再重链，非盲改）**：
+
+| 判据 | `bootstrap/pxi` | `bootstrap/pxi_vm` |
+|---|---|---|
+| `fn_*` 符号（C 轨生成函数） | **235**（`t fn_advance` / `t fn_cg_load_module` …） | 6（runtime 侧残留） |
+| `s_bc_*` 字节码表（VM 轨） | 0 | **230**（`r s_bc_100` …） |
+| 模块符号集 | quic 728 / h3 59 / stbi 146 / sqlite3 277 / ws 30 | **完全一致** |
+| ⇒ 判定 | **C 轨 · 全能力** | **VM 轨 · 全能力** |
+| 产物 | statically linked x86-64 ELF，`--version` = `pxi 0.2.0` | 同左 |
+
+### 8.2 回归（全部跑在 M105 runtime 上）
+
+| 门 | 结果 |
+|---|---|
+| `examples/m89_a2/vm_ab.sh v2`（38 例 VM vs 旧轨对拍） | **38 PASS / 0 GAP / 0 FAIL** ✅ |
+| `selfhost/diffcheck.sh --all` | **rc=0**（lex/parse/codegen/value/interp 全绿；**跑在重链后的 pxi 上**）✅ |
+| `examples/m89_s3d/verify.sh`（并发 GC ×3 / 生成器 / VM 堆回落 / 混合压测） | **9 PASS / 0 FAIL** ✅ |
+| `examples/m93_s3/verify.sh`（帧协程 chan/mutex/rwlock/sleep + 并发 GC + C 轨逃生舱） | **6 PASS / 0 FAIL** ✅ |
+| `examples/m96_s2/verify.sh`（daemon / 线程池上限收敛+空闲回收 / 逃生舱 / VM 重建） | **8 PASS / 0 FAIL** ✅ |
+| `examples/m103_s2d/verify.sh`（img 链路 + Go 对拍） | **rc=0**（512x384，px 13209B vs go_ref 13177B 同量级）✅ |
+| 生态索引防漂移（CI 同款：`gen_ecosystem.px` + `gen_native_table.sh` → `git diff --exit-code`） | **无漂移** ✅ |
+| 冒烟：C 轨 / VM 轨 `hello` 产物 + `pxi` / `pxi_vm` 解释 | **四方输出逐字节一致** ✅ |
+
+### 8.3 S4 复评（保留为二期候选，本里程碑不承载）
+
+S1 §2.5 指认的容器/字段写路径支配项 = `pthread_mutex_lock(g_gc_mu)` + `sigprocmask` 对；
+**S3 已消掉其中 sigmask 一半**（实测 4,384,444 → 0），`mutex_lock` 仍在
+（**2,932,655 次/负载**，S3 前后计数逐项不变）。
+⇒ S4（`px_field_set` / `px_list_push` / `px_dict_set` 的 GC 锁粒度）**须在 S3 之上重测剩余占比再定**，
+与 M104 §七二期候选（O5 内联缓存 / O6 计算跳转 / O8 超指令）合并排序。
+
+### 8.4 里程碑结论
+
+1. **达成且超额**：立项预期「1.4~2x、工期 1~1.5 周」；实测**真实负载 1.88~1.90x**，实际投入 ~1 天。
+2. **「先量化、再动手」是决定性变量**：S1 量化表**否决**了立项时的第一直觉（字段/字典名解析缓存，
+   实测全程仅 18M strcmp ≈ 0.1s），把火力对准真支配项（全局表线性扫描占 95% strcmp + 4.38M 次 sigmask 对）。
+   若照立项想象推进，收益大概率 <1.1x（等于重演 M104）。
+3. **成本结构刻画（两次实验合并）**：M104 证伪「分派层常数优化」→ M105 命中「名解析 O(n)→O(1) + 系统调用消除」
+   ⇒ 本运行时的成本序：**动态值层（boxed `LXValue`）> 名解析/锁路径 > 分派层**。
+4. **安全性纪律有效**：S3 引入协议级改动（GC 暂停协议）却零并发回归——真屏蔽分支原样保留（并发模式逐字等价）
+   + 层栈保证嵌套判定唯一 + **对抗性验证**（/tmp 变体强制并发软屏蔽，逼出「延迟暂停」路径且 3/3 PASSED）。
 

@@ -6,7 +6,7 @@
 
 ## [Unreleased]
 
-### M105 · 运行时热点路径重构（S1 量化 + S2 全局表 O(1) 名解析 + S3 GC 同步瘦身）
+### M105 · 运行时热点路径重构（S1 量化 + S2 全局表 O(1) 名解析 + S3 GC 同步瘦身 + S5 收口）
 
 > 依据 `docs/M104_PLAN.md` §7.3 归因（「真瓶颈在 runtime 侧的名解析与锁路径，而非解释循环分派」），
 > M105 承接该结论**先量化、再动手**。计划、量化表与实测见 `docs/M105_PLAN.md`。
@@ -48,7 +48,22 @@
 >     diffcheck --all **rc=0**（全部经 rtcache/产物核对确认跑在 S3 runtime 上）；
 >     **对抗性验证**：/tmp 专用变体强制并发下也走软屏蔽 ⇒ 延迟暂停真被触发
 >     （deferred 0→2→24→26 / 0→10→95）且并发 GC 压测 **3/3 PASSED**（零崩零 UAF）。
->   - 待办（S5 收口）：双自举 + `bootstrap/pxi`/`pxi_vm` 重链 + CI 全绿 + tag `v0.2.0-m105`。
+> - **S5 收口（双自举 + 重链 + 全量回归）**：
+>   - **双自举证明**：C 轨 `bootstrap_prove.sh --fresh` → B.c == `golden/compiler.c`（**15060 行**）逐字节一致；
+>     BC 轨 `bootstrap_prove_bc.sh --fresh`（新链 `compiler_vm`，runtime = M105 S2+S3）→ 重放 dump ==
+>     `golden/compiler.bc.dump`（**30581 行**）逐字节一致；
+>   - **`bootstrap/pxi` / `bootstrap/pxi_vm` 重链吸收 M105 runtime**：pxi（C 轨，`fn_*`）**9,626,368 → 9,626,960 B**、
+>     pxi_vm（VM 轨，`s_G/s_K/s_bc_*`）**9,460,200 → 9,460,784 B**；均 statically linked、`--version` = 0.2.0，
+>     双轨 `hello` 产物输出 + pxi/pxi_vm 解释输出四方逐字节一致（全能力 `--full` 构建，模块符号集不变）；
+>   - **回归**：`vm_ab.sh v2` **38 PASS / 0 GAP / 0 FAIL** · `diffcheck --all` **rc=0** · m89_s3d **9P/0F** ·
+>     m93_s3 **6P/0F** · m96_s2 **8P/0F** · m103_s2d **rc=0** · 生态索引防漂移（`gen_ecosystem` +
+>     `gen_native_table` 后 `git diff --exit-code`）**无漂移**；
+>   - **M105 累计收益**（真实负载 `compiler_vm bc stdlib/yaml.px`）：**5.35~5.40s → 2.84~2.99s = 1.88~1.90x**
+>     （S2 1.41x × S3 1.30~1.33x），距「无任何保护」理论上限仅 **2.2%**；
+>   - **遗留（二期候选）**：S4「容器/字段写路径 `pthread_mutex_lock(g_gc_mu)` 粒度」复评——S3 已消掉该路径
+>     sigmask 一半，`mutex_lock` 仍在（**2,932,655 次/负载**，S3 后占比需重测再定）；与 M104 §七 的
+>     O5 内联缓存 / O6 计算跳转 / O8 超指令合并排序；
+>   - tag **`v0.2.0-m105`**。
 
 ### M104 · VM 性能增强（LTO 构建档 + 执行引擎优化）
 
