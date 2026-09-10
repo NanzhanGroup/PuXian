@@ -184,6 +184,30 @@ int px_rate_limit_try(const char* key, long long max, long long window_sec);
 static void gc_block_stop(sigset_t* old);
 static void gc_unblock_stop(const sigset_t* old);
 
+// ---- M105-S3：GC 暂停信号「软屏蔽」临界区（免 sigprocmask 系统调用）----
+// 依据（M105-S1 量化，见 docs/M105_PLAN.md §2.4/§2.5/§6.5）：gc_block_stop/unblock_stop 一对
+//   = 2 次 rt_sigprocmask 系统调用，实测 **343~372ns**；真实负载 compiler_vm bc yaml.px 中
+//   4,384,444 次（field_while/loop_sum 的 sys 时间 ≈ user 时间即此项）——S2 削掉名解析后，
+//   这是第一大户（裸跳过 sigmask 实测 3.600s→2.570s，即 S2 之上 1.41x）。
+// 做法：临界区不再真正屏蔽 SIG_GC_STOP，改为置本线程 TLS 计数 g_gc_crit；暂停信号处理器
+//   入口先查 g_gc_crit，非 0 即「延迟暂停」——**立刻返回**，交 GC executor 既有的重发循环
+//   （200us 间隔 + 5s 兜底）稍后重试。
+// 为什么仍然安全（关键不变量）：GC 只有在**所有已注册线程都上报本轮 paused** 之后才进入 mark；
+//   软屏蔽临界区内的线程永不上报 paused ⇒ **标记期绝不与临界区并发**，与「真屏蔽」完全等价。
+//   最坏退化 = 既有的 5 秒兜底跳过（与本改动前「信号被阻塞 → 线程不上报 paused」的行为一致）；
+//   常态代价 = 临界区退出后 GC 最多晚 1 个重发周期拿到暂停（真屏蔽是挂起信号在解锁瞬间送达）。
+// 层栈：block/unblock 与既有 sigprocmask 用法严格 LIFO 配对，**仅最外层做决策**（g_gcs_skip），
+//   内层直接返回——外层已建立排他，嵌套重入决策无二义（防「临界区内 spawn → 谓词翻转」导致
+//   内外层判定不一致）。
+// 谓词：g_active_threads == 0 —— 与 GC executor 的发送闸门（px_gc_collect 并发路径入口）同一
+//   变量、同一判据，即「无人会发 SIG_GC_STOP」⇒ 屏蔽是可证明的空操作。该读值若因并发陈旧
+//   （临界区内恰好 spawn 线程致谓词翻转），信号确实可能到达，但处理器只做延迟暂停 ⇒
+//   **安全性不依赖该读值的时序**（只影响性能）。
+static __thread int g_gcs_depth = 0;         // block/unblock 嵌套深度（本线程；仅最外层决策）
+static __thread int g_gcs_skip  = 0;         // 最外层是否走软屏蔽（免 sigprocmask）分支
+static __thread volatile int g_gc_crit = 0;  // 软屏蔽临界区标志（信号处理器据此延迟暂停）
+static long g_gc_deferred = 0;               // 观测：延迟暂停次数（g_gc_debug 输出）
+
 // std.net（M5.2/M10）前向声明（定义在文件尾部，注册函数在前部使用）
 static LXValue bi_tcp_listen(LXValue* args, int nargs, void* ctx);
 static LXValue bi_tcp_accept(LXValue* args, int nargs, void* ctx);
@@ -1103,6 +1127,9 @@ static void gc_scan_stack(GCHash* set) {
 // 信号处理器：暂停当前线程直到 GC 完成
 static void gc_stop_handler(int sig, siginfo_t* si, void* ctx) {
     (void)sig; (void)si;
+    // M105-S3：软屏蔽临界区 → 延迟暂停。临界区不被打断（不保存 ucontext / 不上报 paused），
+    // 交 executor 的重发循环稍后重试；临界区退出（g_gc_crit=0）后下一次重发即正常暂停。
+    if (g_gc_crit) { __sync_fetch_and_add(&g_gc_deferred, 1); return; }
     pthread_t me = pthread_self();
     // M11 修复⑤：若我是当前 GC 执行者（正在跑 px_gc_collect），忽略暂停信号——
     // 否则延迟信号在本轮 GC 执行中投递，handler 自旋等 epoch，而 epoch 只有
@@ -1159,6 +1186,15 @@ static void gc_stop_handler(int sig, siginfo_t* si, void* ctx) {
     __sync_fetch_and_add(&g_paused_count, -1);
 }
 
+// M105-S3：fork 后子进程继承父线程 TLS → 复位软屏蔽层栈（防「父进程恰在软屏蔽临界区
+//   fork」致子进程永久处于 skip 态：不再屏蔽信号、也不上报暂停）。子进程不再持有父进程的
+//   锁与线程，故仅复位 TLS 计数。
+static void gc_atfork_child(void) {
+    g_gcs_depth = 0;
+    g_gcs_skip = 0;
+    g_gc_crit = 0;
+}
+
 static void gc_install_handler(void) {
     static int installed = 0;
     if (installed) return;
@@ -1172,20 +1208,48 @@ static void gc_install_handler(void) {
     sa.sa_sigaction = gc_stop_handler;
     sa.sa_flags = SA_SIGINFO | SA_RESTART;  // SA_RESTART：被信号打断的系统调用自动重启
     sigemptyset(&sa.sa_mask);
+#ifndef _WIN32
+    pthread_atfork(NULL, NULL, gc_atfork_child);   // M105-S3：fork 子进程复位软屏蔽层栈
+#endif
     sigaction(SIG_GC_STOP, &sa, NULL);
     installed = 1;
 }
 
-// 结构修改关键区信号屏蔽：防止线程在 realloc/写元素中途被 GC 信号挂起，
-// 导致 GC 标记读到半更新状态（旧 items 指针已 free / 容量未同步等）。
-// 仅屏蔽 SIG_GC_STOP，不影响其他信号；chan.buf 单 word 原子写无需屏蔽。
+// 结构修改关键区「软屏蔽」（M105-S3，语义与安全性论证见文件头 g_gcs_* 注释）：
+//   真屏蔽分支保留（并发模式**零行为变化**）；无并发 GC 时免 2 次 rt_sigprocmask
+//   （实测 343~372ns/对，M105-S1）。仅涉及 SIG_GC_STOP，不影响其他信号；
+//   chan.buf 单 word 原子写无需屏蔽。配对纪律同既有 sigprocmask 用法：LIFO 成对。
 static void gc_block_stop(sigset_t* old) {
+    int d = ++g_gcs_depth;
+    if (d > 16) {   // 防御：block/unblock 疑似不配对（只告警一次，不改变行为）
+        static int warned = 0;
+        if (!warned) { warned = 1; fprintf(stderr, "lx: gc_block_stop 嵌套 %d 层（block/unblock 不配对？）\n", d); }
+    }
+    if (d > 1) return;                        // 内层：外层已建立排他（信号已屏蔽 或 g_gc_crit 已置）
+    if (g_active_threads == 0) {              // 无并发 GC ⇒ 无人发 SIG_GC_STOP（见文件头论证）
+        g_gcs_skip = 1;
+        g_gc_crit = 1;
+        __atomic_signal_fence(__ATOMIC_SEQ_CST);   // 临界区写入不得被提到标志之前
+        return;
+    }
+    g_gcs_skip = 0;
     sigset_t set;
     sigemptyset(&set);
     sigaddset(&set, SIG_GC_STOP);
     pthread_sigmask(SIG_BLOCK, &set, old);
 }
 static void gc_unblock_stop(const sigset_t* old) {
+    if (g_gcs_depth <= 0) {                   // 防御：不配对（不应发生）→ 复位，绝不越界
+        g_gcs_depth = 0; g_gcs_skip = 0; g_gc_crit = 0;
+        return;
+    }
+    if (--g_gcs_depth > 0) return;            // 内层：外层退出时才解除
+    if (g_gcs_skip) {
+        __atomic_signal_fence(__ATOMIC_SEQ_CST);   // 标志清零不得被提到临界区写入之前
+        g_gc_crit = 0;
+        g_gcs_skip = 0;
+        return;
+    }
     pthread_sigmask(SIG_SETMASK, old, NULL);
 }
 
@@ -1311,7 +1375,7 @@ void px_gc_collect(void) {
         pthread_t me = pthread_self();
         if (g_gc_debug) {
             char dbg[512]; int dn = 0;
-            dn += snprintf(dbg+dn, sizeof(dbg)-dn, "[gc] me=%lx active=%d\n", (unsigned long)me, g_active_threads);
+            dn += snprintf(dbg+dn, sizeof(dbg)-dn, "[gc] me=%lx active=%d deferred=%ld\n", (unsigned long)me, g_active_threads, g_gc_deferred);
             for (int i = 0; i < g_thread_cap; i++)
                 if (g_threads[i].in_use)
                     dn += snprintf(dbg+dn, sizeof(dbg)-dn, "  [%d] tid=%lx main=%d paused=%d\n", i, (unsigned long)g_threads[i].tid, g_threads[i].is_main, g_threads[i].paused);
