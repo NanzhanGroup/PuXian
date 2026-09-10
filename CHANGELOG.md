@@ -6,7 +6,7 @@
 
 ## [Unreleased]
 
-### M105 · 运行时热点路径重构（S1 量化 + S2 全局表 O(1) 名解析）
+### M105 · 运行时热点路径重构（S1 量化 + S2 全局表 O(1) 名解析 + S3 GC 同步瘦身）
 
 > 依据 `docs/M104_PLAN.md` §7.3 归因（「真瓶颈在 runtime 侧的名解析与锁路径，而非解释循环分派」），
 > M105 承接该结论**先量化、再动手**。计划、量化表与实测见 `docs/M105_PLAN.md`。
@@ -28,10 +28,27 @@
 >     `strcmp` 调用数 **262,956,746 → 1,047,279（-99.6%）**。
 >   - 验证：`vm_ab` v2 **38P/0GAP/0F** · `diffcheck --all` **rc=0** · m89_s3d **9P/0F** · m93_s3 **6P/0F** ·
 >     m96_s2 **8P/0F** · m103_s2d **rc=0** · C/VM 双轨 `hello`/`fib` 一致。
-> - **S3 预备（未动手）**：`compiler_vm` 实测**单线程**，而 GC 的 stop-the-world 以
->   `g_active_threads > 0` 为闸门 → `gc_block_stop/unblock` 存在可证明安全的快速旁路；
->   收益上限已实测（裸跳过 sigmask = 2.570s，即 S2 之上再 **1.41x**，累计 **1.87x**），
->   实现需按 thread-local 层栈保证 block/unblock 成对判定一致。
+> - **S3 GC 同步瘦身 ——「软屏蔽 + 延迟暂停」**（`runtime/runtime.c`，+68/-4）：
+>   `gc_block_stop/unblock_stop` 每对 = 2 次 `rt_sigprocmask`（实测 343~372ns），真实负载中 4,384,444 次
+>   （S2 后第一大户）。改动：① 临界区不再真屏蔽 `SIG_GC_STOP`，改置本线程 TLS 标志 `g_gc_crit`；
+>   ② 暂停信号处理器**首行**查该标志，非 0 即**延迟暂停**（立刻返回：不保存 ucontext / 不上报 paused），
+>   交 executor 既有重发循环（200us + 5s 兜底）稍后重试；③ 判定用 **thread-local 层栈**
+>   （`g_gcs_depth/g_gcs_skip`，仅最外层决策，内层直接返回）⇒ 嵌套重入判定唯一，防「临界区内
+>   spawn → 谓词翻转」；④ 谓词 `g_active_threads == 0` 与 executor 发送闸门同判据 ⇒ 单线程下是
+>   可证明的空操作，读值陈旧也**只影响性能不影响安全**（处理器只延迟暂停）；⑤ `pthread_atfork`
+>   复位层栈（`#ifndef _WIN32`）；⑥ 真屏蔽分支原样保留 ⇒ **并发模式零行为变化**（实测 9 轮并发
+>   GC `deferred=0`）。
+>   - 实测（`taskset -c 3`，5 轮 min CPU，真实负载 `compiler_vm bc stdlib/yaml.px`，同会话交替）：
+>     baseline(M104) **5.35~5.40s** · S2 **3.69~3.94s** · h2(裸跳过·不安全上限) **2.78~2.98s** ·
+>     **S3 2.84~2.99s** ⇒ **S3 vs S2 = 1.30~1.33x**、**vs M104 基线 = 1.88~1.90x**，
+>     且**距「无任何保护」上限仅 2.2%**（保护成本≈0）；`pthread_sigmask` 调用 **4,384,444 → 0**，
+>     `strcmp`/`mutex`/`rwlock` 计数逐项不变；产物 dump 与 baseline/S2 **md5 相同**。
+>   - 验证：m89_s3d **9P/0F**（并发 GC 压测×3）· m93_s3 **6P/0F** · m96_s2 **8P/0F** ·
+>     m98_s2 **7P/0F** · m99_s2 **8P/0F** · m103_s2d **rc=0** · vm_ab v2 **38P/0GAP/0F** ·
+>     diffcheck --all **rc=0**（全部经 rtcache/产物核对确认跑在 S3 runtime 上）；
+>     **对抗性验证**：/tmp 专用变体强制并发下也走软屏蔽 ⇒ 延迟暂停真被触发
+>     （deferred 0→2→24→26 / 0→10→95）且并发 GC 压测 **3/3 PASSED**（零崩零 UAF）。
+>   - 待办（S5 收口）：双自举 + `bootstrap/pxi`/`pxi_vm` 重链 + CI 全绿 + tag `v0.2.0-m105`。
 
 ### M104 · VM 性能增强（LTO 构建档 + 执行引擎优化）
 

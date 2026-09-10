@@ -4,6 +4,8 @@
 > 真瓶颈在 runtime 侧的名解析与锁路径」。M105 承接该结论，**先量化、再动手**。
 >
 > 修订纪律：S1 未出量化表前不动实现；量化表否定的子项立即降级（不许按立项时的想象推进）。
+>
+> **进度**：S1 量化 ✅ · S2 全局表 O(1) ✅（`a4debda`，实测 1.41x）· **S3 GC 同步瘦身 ✅（§七，实测再 1.30~1.33x，累计 ~1.9x）** · S5 收口（双自举 + 重链 + CI + tag）待办。
 
 ---
 
@@ -179,3 +181,98 @@ GC 根面（根扫描仍线性遍历 `g_vals`，索引不参与 GC）、插入�
   保证 block/unblock 成对判定一致）。
 - **收益上限已实测**：h2（不安全版，直接跳过 sigmask）= 2.570s，即 **1.87x vs 基线**；
   S2 之上再增 **1.41x**（3.600→2.570s）。
+
+---
+
+## 七、S3 实施记录（入库：`runtime/runtime.c`，+68/−4）
+
+### 7.1 改动：真屏蔽 → 「软屏蔽 + 延迟暂停」
+
+| 位置 | 改动 |
+|---|---|
+| `gc_block_stop` 前向声明后（文件头） | 新增 TLS 状态：`g_gcs_depth`（block/unblock 嵌套深度）· `g_gcs_skip`（最外层是否走软屏蔽）· `g_gc_crit`（软屏蔽临界区标志，处理器据此**延迟暂停**）· `g_gc_deferred`（观测计数） |
+| `gc_stop_handler` **首行** | `if (g_gc_crit) { g_gc_deferred++; return; }` —— 临界区内收到暂停信号时**立刻返回**：不保存 ucontext、不上报 `paused`、不写线程表，交 executor 既有重发循环（200us 间隔 + 5s 兜底）稍后重试 |
+| `gc_block_stop` / `gc_unblock_stop` | **仅最外层决策**：`g_active_threads == 0` ⇒ 免 `pthread_sigmask`（只置/清 `g_gc_crit` + `__atomic_signal_fence` 防编译器跨临界区重排）；否则走**原真屏蔽分支**。内层直接返回（LIFO 层栈 ⇒ 内外层判定不可能不一致）。含不配对防御（深度 >16 告警一次；负深度复位） |
+| `gc_install_handler` | `pthread_atfork(NULL, NULL, gc_atfork_child)`（`#ifndef _WIN32`）：fork 子进程复位层栈——防「父进程恰在软屏蔽临界区 fork」致子进程永久 skip 态 |
+| `px_gc_collect` 调试输出 | `[gc] me=… active=… deferred=…`（观测延迟暂停次数，S3 验证用） |
+
+**语义不变项（红线）**：真屏蔽分支**原样保留**；GC 根面 / 标记-清扫 / 暂停协议 / 锁语义 / 锁序**全部未动**；
+公共 API `px_gc_block_stop_sig / px_gc_unblock_stop_sig` 签名不变（`coro.c` 20 处调用零改动）。
+
+### 7.2 安全性论证（为什么「不屏蔽」≡「屏蔽」）
+
+1. **关键不变量**：GC executor 只有在**所有已注册线程都上报本轮 `paused`** 之后才进入 mark（§-6.5 的等待循环）。
+   软屏蔽临界区内的线程**永不上报 paused** ⇒ **标记期绝不与任何临界区并发** —— 与「真屏蔽」完全等价。
+2. **最坏退化 = 改动前的最坏情况**：真屏蔽时「信号被阻塞 → 线程不上报 paused → executor 重发至 5s 兜底跳过」；
+   延迟暂停时「处理器返回 → 线程不上报 paused → executor 重发至 5s 兜底跳过」—— **同一条退化路径**。
+3. **常态代价**：真屏蔽是「挂起信号在解锁瞬间递达 → 立即暂停」；软屏蔽是「临界区退出后 ≤1 个重发周期（200us）暂停」。
+4. **谓词陈旧不破坏安全**：`g_active_threads` 的无锁读若陈旧（临界区内恰好 spawn 线程 ⇒ 谓词翻转），
+   信号确实可能到达 —— 但处理器只做**延迟暂停**，故**安全性不依赖该读值的时序**（仅影响性能）。
+5. **层栈必要性**：若不按层栈而逐层独立决策，嵌套时会出现「外层 skip / 内层真屏蔽」的混合，
+   使内层 unblock 误走 skip 分支（真掩码未还原 + `g_gc_crit` 下溢）—— 层栈保证成对判定唯一。
+
+### 7.3 实测（`taskset -c 3`，5 轮取 min CPU 时间；真实负载 `compiler_vm bc stdlib/yaml.px`）
+
+> 同会话三组交替（消除机器状态漂移；跨会话绝对值不可比，比值可比）：
+
+| 变体 | CPU 时间（三轮取优） | 相对 S2 |
+|---|---|---|
+| baseline（M104 入库二进制） | 5.350 ~ 5.400 s | — |
+| S2（全局表哈希名解析） | 3.690 / 3.940 / 3.770 s | 1.00x |
+| h2（**裸跳过 sigmask，不安全**，仅测上限） | 2.900 / 2.980 / 2.780 s | 1.27~1.33x |
+| **S3（软屏蔽，入库版）** | **2.950 / 2.990 / 2.840 s** | **1.30~1.33x** |
+
+- **S3 vs S2 = 1.30~1.33x**；**S3 vs M104 基线 = 1.88~1.90x**（M105 累计）。
+- **S3 贴着上限**：与 h2（无任何保护）差距 **2.2%** ⇒ 软屏蔽把可拿的收益**吃满**，保护成本≈0。
+
+### 7.4 机制旁证（`LD_PRELOAD` 计数，S1 同一 shim）
+
+| 指标 | S2 | S3 |
+|---|---|---|
+| `pthread_sigmask` 调用 | **4,384,444** | **0** |
+| `strcmp` 调用 | 1,047,279 | 1,047,279（不变） |
+| `rwlock_rdlock` / `mutex_lock` | 723,981 / 2,932,655 | 723,981 / 2,932,655（不变） |
+
+→ 系统调用**全部消除**，且**其余行为计数逐项不变**（无副作用外溢）。
+产物 dump：baseline / S2 / S3 三轮 **md5 相同**（`36a0f9d655d7d8122a961ca7f77d9436`，54380B）。
+
+### 7.5 回归（全部在 S3 runtime 上重跑；缓存核对见下）
+
+| 门 | 结果 |
+|---|---|
+| `examples/m89_s3d/verify.sh`（并发 GC 压测 ×3 / spawn / 生成器 / 堆回落） | **9 PASS / 0 FAIL** ✅ |
+| `examples/m93_s3/verify.sh`（帧协程 chan/mutex/rwlock/sleep + 并发 GC） | **6 PASS / 0 FAIL** ✅ |
+| `examples/m96_s2/verify.sh`（daemon / 线程池 / 逃生舱） | **8 PASS / 0 FAIL** ✅ |
+| `examples/m98_s2/verify.sh`（px_serve handler 协程化；含线程峰值 12≤18） | **7 PASS / 0 FAIL** ✅ |
+| `examples/m99_s2/verify.sh`（连接级事件化 IDLE + TLS 空闲事件化） | **8 PASS / 0 FAIL** ✅ |
+| `examples/m103_s2d/verify.sh`（img 链路） | **rc=0** ✅ |
+| `examples/m89_a2/vm_ab.sh v2` | **38 PASS / 0 GAP / 0 FAIL** ✅ |
+| `selfhost/diffcheck.sh --all` | **rc=0** ✅ |
+| 冒烟（`hello`/`fib`，C 轨 + VM 轨） | 双轨一致 ✅ |
+
+**缓存核对**（防「跑的是旧 runtime」）：本次回归窗口内新建的 3 个 rtcache（22:29:43 最小档 / 22:30:42 route 档 /
+22:31:27 image 档）`runtime.c` 均含 S3 标记；`m96/m98/m99` 的 daemon 产物 22:30 重建且带 `deferred` 符号 ⇒
+**并发/服务面套件确实跑在 S3 runtime 上**。
+**并发面零行为变化实测**：正常谓词下并发 GC 9 轮 `deferred=0`（⇒ 并发模式全部走真屏蔽分支，与改动前逐字等价）。
+
+### 7.6 对抗性验证（把「延迟暂停」路径逼出来）
+
+延迟暂停是单线程负载**用不到**的兜底路径（单线程无人发信号）⇒ 用一个 **/tmp 专用变体**
+（`runtime_force.c`：谓词强制恒真，并发下也走软屏蔽；**不入库**）链 `vm_conc_gc_stress` 跑并发 GC 压测：
+
+| 轮 | rc | 结果 | 每轮 GC 的累计 `deferred` |
+|---|---|---|---|
+| 1 | 0 | **VM-CONCURRENT-GC-STRESS PASSED** | 0 → 2 → 24 → 26 |
+| 2 | 0 | **PASSED** | 0 → 0 → 10 → 95 |
+| 3 | 0 | **PASSED** | 0 → 2 → 2 → 12 |
+
+⇒ **延迟暂停确实被触发**（deferred 计数增长）且**并发 GC 压测 3/3 全过**（零崩、零 UAF、token 和精确）
+—— 兜底路径不是纸面论证，是被真实并发 GC 走过且安全的。
+
+### 7.7 待办（S5 收口）
+
+- 双自举证明（`bootstrap_prove.sh` + `bootstrap_prove_bc.sh --fresh`，runtime 变更需重链）；
+- `bootstrap/pxi` / `bootstrap/pxi_vm` 重链吸收 M105（S2+S3）；
+- CI 全绿 + tag `v0.2.0-m105`；
+- S4 复评：容器/字段写路径（6M~8M 次/负载）在 S3 后的剩余占比需重测（S3 已消掉其中 sigmask 一半，mutex 仍在）。
+
