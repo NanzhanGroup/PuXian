@@ -6,6 +6,62 @@
 
 ## [Unreleased]
 
+### M103 · 清歌 Issue 29/30 语言层缺口收官（ws-ddns / api-server PuXian 化阻塞清零）
+
+> M103 = 清歌 Issue 29（29-puxian-ddns-gaps：dns TXT + ed25519_keygen）+ Issue 30
+> （30-puxian-api-server-gaps：YAML 序列化 + 图片 JPEG）全量收官——qg-issue 29/30
+> 归档 done，ws-ddns .px 纯 native 移植与 api-server 头像/配置写回缺口清零。
+> 规划 docs/M103_PLAN.md。性质：**L0 runtime（native 301 → 306（+5））+ L1 stdlib**。
+> 基线 v0.2.0-m102（8377953）。commit 链：01eed4d（S1 立项 + D0 侦察）+ 9216c71
+> （S2a）+ ae707ff（S2b）+ b6d262e（S2c）+ 996f4b4（S2d）+ 本收口（S3）。
+> - **S2a · dns_txt(domain) → list[str]**（Issue 29 GAP-DNS-TXT-1，native 302）：
+>   getaddrinfo 只 A/AAAA 结构上不可能返回 TXT；libc res_query 在 musl（交叉
+>   aarch64/armv7/riscv64）仅 A/AAAA 桩、mingw 无 → **手写 DNS UDP wire 查询**
+>   （resolv.conf nameserver → QTYPE=16 报文 → SO_RCVTIMEO 3s → 解析响应，label/
+>   压缩指针 dns_skip_name、多段 character-string 合并、TC 截断/格式错 Err 可判定）。
+>   语义对齐 Go net.LookupTXT：**无 TXT/NXDOMAIN → 空 list（非报错）**——授权 TXT
+>   可能未配置，调用方按无记录处理。examples/m103_s2a 9P/0F（qq.com SPF + .invalid/
+>   localhost 空 list + 空域/坏 label Err + dns_lookup A/AAAA 零回归）+ Go
+>   net.LookupTXT 对拍 CMP-EQUAL + m84_s3_dns 回归全绿。
+> - **S2b · ed25519_keygen() → dict{pk_hex,sk_hex,pk_pem,sk_pem}**（Issue 29
+>   GAP-ED25519-2，native 303）：tweetnacl randombytes seed32 → crypto_sign_seed_keypair
+>   展开 sk64=seed||pub；PKCS8/SPKI DER（RFC 8410，SPKI 44B=30 2A 内容 42、PKCS8 48B
+>   嵌套 OCTET 04 22 04 20）**与 Go crypto/ed25519 + x509 逐字节互通**；e_b64enc/
+>   e_pem 行 64 PEM；runtime.h 声明 + PX_NO_ED25519 注册 + native_mod_map。修 S2b
+>   SPKI 数组 42→44 越界（2B 栈写 + 编码丢尾）bug。examples/m103_s2b 14P/0F + Go
+>   字节级互通三断言 PASS（SPKI pub==pk_hex / PKCS8 seed 派生 pub==pk_hex / Go 验 px
+>   签）+ m83_s3_ed25519 sign/verify 零回归。
+> - **S2c · std.yaml 补 yaml_stringify(value) → str**（Issue 30 GAP-YAML-SER，
+>   stdlib/yaml.px 纯 .px 扩展，native 不变）：M66-S2 parse 的写回对称——api-server
+>   models.go/config.go 写 token-cache-llm.yaml / references_*.yaml「反序列化→改字段→
+>   序列化→落盘」闭环。yl_needs_quote 歧义判定（空/数字/null·bool 字面量/含 : # " '
+>   换行制表反斜杠/首字符 YAML 特殊符 → 双引号转义，与 parse yl_unescape_dq 集对齐）、
+>   嵌套缩进 2、seq-map 首键 "- " 行内 + child_col 对齐 parse yl_parse_seq、空容器
+>   {} / []（Go/标准语义；px parse 流式集合不支持记录）。examples/m103_s2c 46P/0F
+>   （api-server 形状 roundtrip deep-equal + 特殊字符串矩阵 27 项 + 标量保型 int 大数/
+>   float + Go yaml.v3 写→px 读互认）+ Go yaml.v3 读 px 产出互认 + m66_yaml 现有
+>   parse 双模式 35P 零回归。
+> - **S2d · img_decode / img_scale / img_encode_jpeg**（Issue 30 GAP-IMG，native
+>   306）：stb_image v2.30 + stb_image_write v1.16（public domain，sha256 归档）入库
+>   runtime/third_party/stb/；runtime_image.c 单 TU（STB_IMAGE_IMPLEMENTATION，裁
+>   PIC/PNM/HDR/TGA/PSD/PVR/PKM 留 png/jpeg/webp）；img_decode(data:bytes|str)→
+>   {w,h,pixels:bytes RGBA w*h*4}（强制 4 通道 + 1 亿像素上限）；img_scale 双线性
+>   中心对齐等比缩放（≤512，avatar 语义）；img_encode_jpeg RGBA→RGB +
+>   stbi_write_jpg_to_func 内存缓冲（调用局部 JpgCtx 无全局态线程安全，q 1-100 clamp）。
+>   独立 **img 裁剪模块 --no-img**（mod_srcs/rt_src_files/5 处 for 循环/mod_macro
+>   PX_NO_IMG/runtime.c 注册/native_mod_map，--full img 增量 ~100KB）。examples/
+>   m103_s2d 21P/0F（scene.png 640×480 decode + 等比 512×384 + JPEG q70 魔数 FFD8/
+>   FFD9 + decode back + Go jpeg 输入 decode 200×150 + 小图不缩放 + 畸形 Err）+
+>   Go image.Decode 验 px JPEG 合法 512×384 + 体积 13209B vs Go ref 13177B 同量级。
+> - **收口（S3）**：native_index 306 + CHEATSHEET 306 同步；回归总闸 vm_ab 38P/
+>   0GAP/0F + diffcheck --all rc=0 + 双自举证明（C 轨 B.c 15060 行一致 + BC 轨
+>   compiler.bc.dump 逐字节）+ pxi/pxi_vm 重链（吸收 M103 runtime）+ ROADMAP M83–M103
+>   （连续 20 里程碑）+ qg-issue 29/30 归档 done + CHANGELOG/M103_PLAN 完成
+>   + tag **v0.2.0-m103**。
+> - 意义：ws-ddns（Issue 29）local -genkey / server 授权 TXT 校验与 api-server
+>   （Issue 30）头像 JPEG / YAML 配置写回四个语言层缺口全部 native/stdlib 落地，
+>   两模块纯 PuXian 移植阻塞清零；二期候选续：URL 直达 .px 管道 defer / h2 生产化 /
+>   px_serve 事件化连接剩余面 / 远景 ③ native 机器码旗舰。
 ### M102 · .px 子进程池协程化（语言层 px_exec offload）+ h2/URL 侦察收口
 
 > M102 = 二期候选 B（.px 子进程池协程化）+ C（h2 handler 协程化）侦察驱动里程碑

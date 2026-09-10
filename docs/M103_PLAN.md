@@ -1,15 +1,29 @@
 # M103_PLAN · 清歌 Issue 29 + 30 语言层缺口全量收官（dns TXT / ed25519_keygen / YAML 写 / 图片 JPEG）
 
-> 状态：🔄 **进行中（S1 立项 + D0 侦察定稿）**。
-> 基线 v0.2.0-m102（8377953，.px 子进程池 px_exec offload 收口后）。native **301**（M84-S3
-> 后无新增；M89-M102 为 VM/协程内核与管道改造，未增 native）。
+> 状态：✅ **已完成（S1–S2d + S3 收口）**——四缺口全量落地，qg-issue 29/30 归档 done。
+> 基线 v0.2.0-m102（8377953，.px 子进程池 px_exec offload 收口后）。native **301 → 306**。
 > 来源：/data/qg-issue **29-puxian-ddns-gaps** + **30-puxian-api-server-gaps**（清歌提报，
 > 2026-09-07，官方基准 v0.1.0-m88b——现已推进至 v0.2.0-m102 成熟期，缺口仍在）。
 > 用户指令（2026-09-10）：**「开工 M103」**（远景路线坐标检查后，按三连计划推进 M103 =
 > 清歌 Issue 29/30 能力交付批）。
-> 性质：**L0 runtime（3 native 模块面 + 1 stdlib）**——native **301 → 306**（+5：
-> dns_txt / ed25519_keygen / img_decode / img_encode_jpeg / img_scale）；stdlib yaml.px 纯
-> .px 扩展（不增 native 计数）。需重链 bootstrap ELF + 自举证明 + 全量回归 + qg-issue 归档。
+> 性质：**L0 runtime（native 301 → 306，+5）+ L1 stdlib**——需重链 bootstrap ELF + 自举
+> 证明 + 全量回归 + qg-issue 归档。
+
+## 〇-1、实施结果（2026-09-10，S3 前汇总）
+
+- **S2a · dns_txt(domain) → list[str]**（Issue 29-1）✅：手写 DNS UDP TXT 查询（native 302）。
+  examples/m103_s2a 9P/0F + Go net.LookupTXT 对拍 CMP-EQUAL + m84_s3_dns 回归全绿。
+- **S2b · ed25519_keygen() → dict{pk_hex,sk_hex,pk_pem,sk_pem}**（Issue 29-2）✅：
+  RFC 8410 PKCS8/SPKI 与 Go x509 逐字节互通（native 303）。m103_s2b 14P/0F + Go 字节级
+  互通三断言 + m83_s3 零回归。
+- **S2c · std.yaml yaml_stringify**（Issue 30-2）✅：stdlib/yaml.px 纯 .px 序列化。
+  m103_s2c 46P/0F + Go yaml.v3 双向互认 + m66_yaml 35P 零回归。
+- **S2d · img_decode/img_scale/img_encode_jpeg**（Issue 30-1）✅：stb_image v2.30 +
+  stb_image_write v1.16 public domain 入库；img 模块 --no-img 裁剪（native 306）。
+  m103_s2d 21P/0F + Go image.Decode 验 px JPEG 512×384 合法 + 体积 13209 vs 13177B 同量级。
+- **S3 收口**：native_index 306 + CHEATSHEET 306；vm_ab 38P/0GAP/0F + diffcheck --all rc=0
+  + 双自举证明（C/BC 轨）+ pxi/pxi_vm 重链 + ROADMAP M83–M103（20 连）+ qg-issue 29/30
+  归档 done + tag **v0.2.0-m103**。
 
 ## 〇、范围（Issue 29/30 四缺口，全量做）
 
