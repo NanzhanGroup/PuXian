@@ -91,7 +91,7 @@ print("upper=" + to_upper("px"))
 10. 注释/字符串里长行可加 `# noqa` 供 `px lint` 跳过。
 11. **pxi（解释器）为 Mini 子集：不支持 `spawn`/`chan` 等并发关键字** → 并发/服务端（http_serve/ws_serve 等常驻回调）程序用 `px build`；纯计算与客户端脚本 pxi/编译双模式皆可。
 
-## 2. native 内置速查（301 全量见 `docs/native_index.json`，本表为常用）
+## 2. native 内置速查（306 全量见 `docs/native_index.json`，本表为常用）
 
 ### 核心 / 值
 `print` `len` `range` `type` `str` `int` `float` `bool` `assert` `input` `exit` `sleep` `abs` `sqrt` `min` `max` `pow` `sorted` `reversed` `sum` `map` `filter` `reduce` `contains` `env` `args` `gc` · 数学（M59）：`sin/cos/tan/atan2/floor/ceil/round/log/log10/exp/random/random_int/random_seed` + 常量 `pi/e`
@@ -262,6 +262,6 @@ set_timeout(fn (): print("once after 2s"), 2000)
 
 ## 5. 防漂移与源
 
-- **native 清单**（301，单一事实源 = runtime 注册表）：`bash tools/gen_native_table.sh` → `docs/native_index.json`；CI 重跑 diff 防漂移。**本表计数必须 == count**（现 301）。
+- **native 清单**（306，单一事实源 = runtime 注册表）：`bash tools/gen_native_table.sh` → `docs/native_index.json`；CI 重跑 diff 防漂移。**本表计数必须 == count**（现 306）。
 - **stdlib 索引**：`tools/px run tools/gen_ecosystem.px` → `docs/ecosystem_index.json`。
 - 规范：`docs/spec.md`（§8 模块/import、§9 双模式、§12 AI 协议）· `docs/MINI_SUBSET.md`（子集边界）· 缺口与写库规范：`docs/ECOSYSTEM_GAPS.md`。
