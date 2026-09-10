@@ -90,6 +90,7 @@ print("upper=" + to_upper("px"))
 9. **stdlib 内参数名不用 `fn`**（`fn` 是匿名函数关键字），用 `f` 等。
 10. 注释/字符串里长行可加 `# noqa` 供 `px lint` 跳过。
 11. **pxi（解释器）为 Mini 子集：不支持 `spawn`/`chan` 等并发关键字** → 并发/服务端（http_serve/ws_serve 等常驻回调）程序用 `px build`；纯计算与客户端脚本 pxi/编译双模式皆可。
+12. **pxi 的脚本参数必须在最后一个**（`selfhost/interp.px`：`let f = a[len(a) - 1]`）：直接调 `bootstrap/pxi` 要写 `pxi [数据文件...] script.px`；**写反会把数据文件当源码编译**，报 `未定义变量: 'xxx'` / `读取文件失败`，与真实病因（参数顺序）毫不相干。`tools/px run`（M106-S4 起）已自动把脚本置于末尾，`px run script.px [args...]` 可放心用。
 
 ## 2. native 内置速查（306 全量见 `docs/native_index.json`，本表为常用）
 

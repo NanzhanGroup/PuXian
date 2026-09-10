@@ -140,6 +140,12 @@ px $RELEASE_VER
                                                  --zlib-lib      目标架构 zlib 库目录
                                                                   （缺省按 cc 自动探测：gcc→lib，aarch64/armv7/riscv64→lib-<arch>）
   px run <file.px> [args...]                 解释执行
+                                             （M106-S4 注：解释器约定的脚本位置是**最后一个
+                                             参数**（selfhost/interp.px a[len(a)-1]）；px run
+                                             已自动把脚本置于末尾，前面的 [args...] 按数据
+                                             文件透传。直接调 bootstrap/pxi 时必须写成
+                                             pxi [数据文件...] script.px，写反会把数据
+                                             文件当源码编译）
   px lex <file.px>                           词法分析并打印 Token 流（调试）
   px parse <file.px>                         语法分析并打印 AST（调试）
   px fmt <file.px> [-w] [--check] [--diff]   代码格式化（M64a 自举；默认 stdout，
@@ -588,8 +594,12 @@ cmd_build() {
 
 cmd_run() {
     local file="$1"; shift
-    # pxi 取最后一个参数为文件；其余参数透传（当前 Mini 子集解释器仅支持单文件）
-    "$PXI_BIN" "$file" "$@" 2>&1
+    # pxi 约定：**最后一个参数**才是脚本（selfhost/interp.px：`let f = a[len(a) - 1]`），
+    # 前置参数按数据文件透传（当前 Mini 子集解释器仅支持单文件）。
+    # M106-S4 修正：$file 必须放**末尾**。旧版放首位 → `px run prog.px data.txt`
+    # 会把 data.txt 当源码编译，症状是 "未定义变量: 'just'" / "读取文件失败"，
+    # 与真实病因（参数顺序）毫不相干，极难定位（本次自测即踩中）。
+    "$PXI_BIN" "$@" "$file" 2>&1
 }
 
 cmd_lex() {
