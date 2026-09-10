@@ -369,14 +369,38 @@ typedef struct Slab {
     size_t slot_count;      // 槽总数
     size_t free_count;      // 空闲槽数（0 → 不可分配，需新 slab）
     void* free_head;        // 空闲链表头（槽内首 word 存 next，NULL 结束）
-    unsigned char* in_use;  // 调试：槽占用位图（1=已分配），检测双重分配/释放
+    unsigned char* in_use;  // 槽占用位图（1=已分配），检测双重分配/释放（M107-S3a 起内联在映射尾部）
+    // ---- M107-S3（qg-issue 34 内存路径）字段 ----
+    size_t map_bytes;       // S3a：本 slab 的 mmap 长度（回收 munmap 用；位图已内联其后，不再单独映射）
+    int empty_streak;       // S3c：连续被观测到「完全空闲」的 GC 轮数（≥ SLAB_FREE_STREAK 才归还 OS）
+    int class_idx;          // S3b：所属 size-class 下标（免去每次按 class_size 反查的线性扫描）
+    int on_list;            // S3b：是否在所属 class 的「有空槽」链上（防重复入链）
 } Slab;
 
 static pthread_mutex_t g_slab_mu = PTHREAD_MUTEX_INITIALIZER;
+// M107-S3b：g_slab_heads[ci] 的链式语义被强化为**不变量**：
+//   链上「恰好」是该 class 中**尚有空槽（free_count > 0）**的 slab，链首即下一个分配来源。
+//   · 分配：只取链首；该 slab 因分配变满 → 摘链首（O(1)：g_slab_heads[ci] = s->next）；
+//          链首为空（该 class 已无任何空槽 slab）→ slab_create 新建并置链首。
+//   · 释放：槽位归还所属 slab；该 slab 由「满」变「有空槽」 → 头插回链（O(1)）。
+//   动机（qg-issue 34 内存路径）：原实现只从链首分配、**归还的空槽永不入链复用** ⇒
+//   每个 class 的 slab 只增不减、反复 mmap/munmap（实测 59.4k 建 / 24.1k 拆）。
+//   代价：分配/释放各增 O(1) 常数（一次判断 + 可能的摘/插链首），与改动前同阶。
 static Slab* g_slab_heads[SLAB_CLASS_COUNT] = {0};
 // ISSUE28-B1：xfree 局部性 hint——sweep 成批释放同一批 slab 的对象/数据时，跳过 O(log R)
 // 反查二分（实测全量 STW 主要耗时在 sweep 的 xfree：120k 对象 ~250ms，单发 p95 尖刺根因）。
 #define XFREE_HINT_N 16
+// M107-S3c：空 slab 归还水位——连续观察到此轮数仍「完全空闲」才 munmap 归还 OS。
+//   原实现每轮 GC 把**所有**空 slab 全量归还 ⇒ 下轮分配又 mmap 新建（真负载实测
+//   24.1k 拆 / 59.4k 建交替冲刷）。滞留 1 轮即可吸收「分配-释放-再分配」抖动，
+//   同时保持「程序真正缩容时内存最终回吐 OS」的 ISSUE28-B2 语义（最多滞后 1 轮）。
+#define SLAB_FREE_STREAK 4
+// M107-S3e：单 slab 最小页数（默认 4 页 = 16KB）。原实现按「≥4 槽」定页数，小 class
+//   （≤1020B）只映射 1 页 ⇒ 槽位少的 class 会为很少的活对象反复 mmap「每 slab 一次」。
+//   抬高到 16KB 让单次 mmap 覆盖更多槽位，直接按比例稀释该固定成本；代价是低占用 class
+//   的尾部内部碎片（回收靠 S3b/S3c 的复用与水位兜住，实测 RSS 仍远低于改动前）。
+//   约束：class 16 时槽数 = (16384-72)/17 = 958 < slab_find_locked 的 1024 健全性上限。
+#define SLAB_MIN_PAGES 4
 static Slab* g_xfree_hint[XFREE_HINT_N];
 static int g_xfree_hint_head = 0;
 static __thread int g_in_gc_sweep = 0;  // ISSUE28-B1：GC sweep 中（executor 已屏蔽 SIG_GC_STOP、单线程），xfree 跳过每趟 sigprocmask 屏蔽/恢复（实测全量 STW 耗时大头）
@@ -416,14 +440,28 @@ static int slab_cmp(const void* a, const void* b) {
 }
 
 // 创建新 slab（调用方须持 g_slab_mu）：映射可容纳 ≥4 槽的页数，初始化空闲链表
+//
+// M107-S3a（qg-issue 34 内存路径）：原位图单独 slab_raw_alloc 一次（另一次 mmap），
+//   实测每次 slab_create = 2 次 4KB mmap、每次回收 = 2 次 4KB munmap（真负载 24.1k 拆/
+//   59.4k 建）。改为**位图内联在 slab 映射尾部**：
+//       [Slab 头(8B 对齐)][槽区 slot_count*class_size][in_use 位图 slot_count 字节]
+//   三者同属一次 mmap ⇒ 建 1 次 / 拆 1 次，且不改变任何对外语义（红线 2/3/5）。
+//   位图是 1 字节/槽的占用标记（原实现即如此），尺寸 ≤ 槽数 ≤ 1024 字节级。
+#define SLAB_HEADER ((sizeof(Slab) + 7) & ~(size_t)7)
 static Slab* slab_create(size_t class_size, int class_idx) {
-    size_t slot_count = (4 * class_size + PX_PAGE - 1) / PX_PAGE;  // 至少 4 槽的页数
-    size_t pages = slot_count < 1 ? 1 : slot_count;
-    size_t slab_bytes = pages * PX_PAGE;
-    // 头部对齐：Slab 结构体放映射起点，槽区紧随其后（8 字节对齐）
-    size_t header = (sizeof(Slab) + 7) & ~(size_t)7;
-    size_t slots_in_bytes = (slab_bytes - header) / class_size;
-    if (slots_in_bytes < 1) slots_in_bytes = 1;
+    size_t header = SLAB_HEADER;
+    size_t pages = (4 * class_size + PX_PAGE - 1) / PX_PAGE;   // 至少 4 槽的页数
+    if (pages < SLAB_MIN_PAGES) pages = SLAB_MIN_PAGES;        // S3e：单 slab 最小 16KB
+    // 求最小页数，使 [槽区 + 位图] 能放下 ≥4 槽（位图 = 1 字节/槽）
+    size_t slab_bytes = 0, slots_in_bytes = 0;
+    for (;;) {
+        slab_bytes = pages * PX_PAGE;
+        if (slab_bytes > header + 1) {
+            slots_in_bytes = (slab_bytes - header) / (class_size + 1);
+            if (slots_in_bytes >= 4) break;
+        }
+        pages++;
+    }
     void* p = mmap(NULL, slab_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (p == MAP_FAILED) { fprintf(stderr, "lx: 内存不足\n"); exit(1); }
     Slab* s = (Slab*)p;
@@ -433,7 +471,11 @@ static Slab* slab_create(size_t class_size, int class_idx) {
     s->slot_count = slots_in_bytes;
     s->free_count = slots_in_bytes;
     s->free_head = NULL;
-    s->in_use = (unsigned char*)slab_raw_alloc(slots_in_bytes);
+    s->map_bytes = slab_bytes;
+    s->empty_streak = 0;
+    s->class_idx = class_idx;
+    s->on_list = 1;                     // S3b：新 slab 有空槽 → 立即在「有空槽」链上
+    s->in_use = (unsigned char*)p + header + slots_in_bytes * class_size;  // S3a：内联在槽区之后
     memset(s->in_use, 0, slots_in_bytes);
     char* slots = (char*)p + header;
     // 空闲链表：从后往前串（槽内首 word 存 next）
@@ -485,8 +527,8 @@ static Slab* slab_find_locked(const void* p) {
         }
         if (p < s->base) hi = mid;
         else {
-            size_t header = (sizeof(Slab) + 7) & ~(size_t)7;
-            void* end = (char*)s->base + ((header + s->slot_count * s->class_size + PX_PAGE - 1) & ~(size_t)(PX_PAGE - 1));
+            // M107-S3a：映射长度直接取自 Slab（位图内联后含位图；原按 header+槽区页对齐推算）
+            void* end = (char*)s->base + s->map_bytes;
             if ((const char*)p < (const char*)end) return s;
             lo = mid + 1;
         }
@@ -521,14 +563,21 @@ static void* xmalloc(size_t n) {
     gc_block_stop(&old);
     pthread_mutex_lock(&g_slab_mu);
     Slab* s = g_slab_heads[ci];
-    if (!s || s->free_count == 0) s = slab_create(cs, ci);
+    // M107-S3b：链首即「有空槽」的 slab（不变量见 g_slab_heads 声明处注释）；
+    //   链为空 ⇒ 该 class 已无空槽可复用，新建（新建后自动置链首）。
+    if (!s) s = slab_create(cs, ci);
     void* slot = s->free_head;
-    size_t header = (sizeof(Slab) + 7) & ~(size_t)7;
+    size_t header = SLAB_HEADER;
     size_t idx = ((const char*)slot - ((const char*)s->base + header)) / cs;
     if (s->in_use[idx]) { fprintf(stderr, "SLAB BUG: double-alloc slot %zu class %zu\n", idx, cs); abort(); }
     s->in_use[idx] = 1;
     s->free_head = *(void**)slot;
     s->free_count--;
+    if (s->free_count == 0) {   // S3b：本 slab 已满 → 摘链首（O(1)），链首换成下一个有空槽的 slab
+        g_slab_heads[ci] = s->next;
+        s->next = NULL;
+        s->on_list = 0;
+    }
     pthread_mutex_unlock(&g_slab_mu);
     gc_unblock_stop(&old);
     memset(slot, 0, cs);   // 清零：gc_mark 等字段依赖零初始化
@@ -547,15 +596,15 @@ static void xfree(void* p) {
     for (int hi = 0; hi < XFREE_HINT_N; hi++) {
         Slab* h = g_xfree_hint[hi];
         if (!h) continue;
-        size_t hh = (sizeof(Slab) + 7) & ~(size_t)7;
-        uintptr_t hend = ((uintptr_t)h + hh + h->slot_count * h->class_size + PX_PAGE - 1) & ~(uintptr_t)(PX_PAGE - 1);
+        // M107-S3a：映射长度取自 Slab（位图内联后含位图）
+        uintptr_t hend = (uintptr_t)h + h->map_bytes;
         if ((uintptr_t)p >= (uintptr_t)h && (uintptr_t)p < hend) { s = h; break; }
     }
     if (!s) s = slab_find_locked(p);
     if (s) {
         g_xfree_hint[g_xfree_hint_head] = s;
         g_xfree_hint_head = (g_xfree_hint_head + 1) % XFREE_HINT_N;
-        size_t header = (sizeof(Slab) + 7) & ~(size_t)7;
+        size_t header = SLAB_HEADER;
         size_t off = (const char*)p - ((const char*)s->base + header);
         size_t idx = off / s->class_size;
         int aligned = (off % s->class_size == 0);
@@ -573,7 +622,14 @@ static void xfree(void* p) {
         s->in_use[idx] = 0;
         *(void**)p = s->free_head;
         s->free_head = p;
+        int was_full = (s->free_count == 0);
         s->free_count++;
+        // M107-S3b：该 slab 由「满」变「有空槽」 → 头插回本 class 的复用链（O(1)）
+        if (was_full && !s->on_list) {
+            s->next = g_slab_heads[s->class_idx];
+            g_slab_heads[s->class_idx] = s;
+            s->on_list = 1;
+        }
         pthread_mutex_unlock(&g_slab_mu);
         if (blk) gc_unblock_stop(&old);
         return;
@@ -625,25 +681,54 @@ static char* xstrdup(const char* s) {
 static void slab_reclaim_empty(void) {
     pthread_mutex_lock(&g_slab_mu);
     // 以 g_slab_ranges（全量登记）为准遍历：任何完全空闲 slab（含游离/链上遗漏）
-    // 一律摘链 + 移除登记 + munmap；每 class 保留当前头 slab 作分配缓冲防抖动。
+    // 一律移除登记 + munmap；每 class 保留当前头 slab 作分配缓冲防抖动。
+    //
+    // M107-S3（关键）：**不再逐 slab 走链摘除**。原实现每个待归还 slab 都从
+    //   g_slab_heads[ci] 单链头开始找自己（O(链长)），合计 O(归还数 × 链长) ——
+    //   真负载实测该内层循环占采样 **77%**（top PC 落在本函数 +0x90 的链式搜索）。
+    //   改为两遍：①过滤 + 归还（不算链）②按保留集合**整链重建**（O(保留数 + class 数)）。
+    //   链序语义不变（分配只用链首 + S3b hint），头 slab 仍置链首。
     size_t w = 0;
     for (size_t i = 0; i < g_slab_range_count; i++) {
         Slab* s = g_slab_ranges[i];
-        if (s->free_count != s->slot_count) { g_slab_ranges[w++] = s; continue; }  // 非空保留
-        int ci = -1;
-        for (int k = 0; k < SLAB_CLASS_COUNT; k++) if (slab_classes[k] == s->class_size) { ci = k; break; }
-        if (ci < 0) { g_slab_ranges[w++] = s; continue; }   // 防御：无法归类则不回收
+        if (s->free_count != s->slot_count) { s->empty_streak = 0; g_slab_ranges[w++] = s; continue; }  // 非空保留
+        int ci = s->class_idx;
+        if (ci < 0 || ci >= SLAB_CLASS_COUNT || slab_classes[ci] != s->class_size) {
+            ci = -1;
+            for (int k = 0; k < SLAB_CLASS_COUNT; k++) if (slab_classes[k] == s->class_size) { ci = k; break; }
+        }
+        if (ci < 0) { s->empty_streak = 0; g_slab_ranges[w++] = s; continue; }   // 防御：无法归类则不回收
+        s->class_idx = ci;
         if (s == g_slab_heads[ci]) { g_slab_ranges[w++] = s; continue; }  // 头 slab 缓冲保留
-        // 从 class 链摘除
-        Slab** pp = &g_slab_heads[ci];
-        while (*pp) { if (*pp == s) { *pp = s->next; break; } pp = &(*pp)->next; }
-        // 先释放 in_use 位图（独立 mmap），再 munmap slab 本体
-        slab_raw_free(s->in_use);
-        size_t hdr = (sizeof(Slab) + 7) & ~(size_t)7;
-        size_t bytes = (hdr + s->slot_count * s->class_size + PX_PAGE - 1) & ~(size_t)(PX_PAGE - 1);
-        munmap(s, bytes);
+        // M107-S3c：空 slab 滞留水位——连续 SLAB_FREE_STREAK 轮仍空才归还（防 mmap/munmap 抖动）
+        if (++s->empty_streak < SLAB_FREE_STREAK) { g_slab_ranges[w++] = s; continue; }
+        // S3b：该 slab 若在复用链上，摘除交给下方整链重建（O(N) 一次完成，不做逐 slab 走链）
+        // M107-S3a：位图已内联在映射尾部 ⇒ 一次 munmap 覆盖 [Slab 头 + 槽区 + 位图]
+        munmap(s, s->map_bytes);
     }
     g_slab_range_count = w;
+    // ---- 第 2 遍：整链重建（一次 O(N)，取代逐 slab 走链）----
+    //   重建不变量：链上只保留「有空槽（free_count > 0）」的 slab（S3b 复用语义）；
+    //   原链首（分配缓冲）仍置链首，其余按登记序头插（顺序无语义）。
+    Slab* keep_head[SLAB_CLASS_COUNT];
+    for (int k = 0; k < SLAB_CLASS_COUNT; k++) { keep_head[k] = g_slab_heads[k]; g_slab_heads[k] = NULL; }
+    for (size_t i = 0; i < w; i++) {
+        Slab* s = g_slab_ranges[i];
+        int ci = s->class_idx;
+        if (ci < 0 || ci >= SLAB_CLASS_COUNT || s->free_count == 0) { s->on_list = 0; s->next = NULL; continue; }
+        if (keep_head[ci] == s) continue;                 // 头 slab 稍后统一置顶
+        s->next = g_slab_heads[ci];
+        g_slab_heads[ci] = s;
+        s->on_list = 1;
+    }
+    for (int k = 0; k < SLAB_CLASS_COUNT; k++) {
+        Slab* s = keep_head[k];
+        if (!s) continue;
+        if (s->free_count == 0) { s->on_list = 0; s->next = NULL; continue; }   // 防御：满 slab 不入链
+        s->next = g_slab_heads[k];
+        g_slab_heads[k] = s;
+        s->on_list = 1;
+    }
     memset(g_xfree_hint, 0, sizeof(g_xfree_hint));   // 归还 slab 后清 hint（同锁，防悬垂）
     g_xfree_hint_head = 0;
     pthread_mutex_unlock(&g_slab_mu);
@@ -952,7 +1037,8 @@ static bool px_value_is_obj(LXValue v) {
 // 释放对象内部子分配 + 对象本体（sweep 阶段调用）
 static void px_obj_free(LXObject* o) {
     switch (o->type) {
-        case PX_STR: xfree(o->as.str.data); xfree(o->as.str.rune_offs); break;   // M106-S2：连缓存偏移表一起回收
+        case PX_STR: xfree(o->as.str.rune_offs); break;   // M106-S2：连缓存偏移表一起回收
+        // M107-S3d：data 已内联在对象分配块内，随下方 xfree(o) 一并释放（不再单独 xfree）
         // M57-S2：mmap bytes（is_mmap=1）的 data 是 mmap 映射区 → munmap；普通 bytes → xfree
         case PX_BYTES:
             if (o->is_mmap) {
@@ -1700,9 +1786,17 @@ LXValue px_float(double f) { LXValue v; v.type = PX_FLOAT; v.as.f = f; return v;
 
 LXValue px_str_len(const char* s, int len) {
     LXValue v; v.type = PX_STR;
-    LXObject* o = xmalloc(sizeof(LXObject));
+    // M107-S3d（qg-issue 34 内存路径）：LXObject 与字符串数据**合并为一次 xmalloc**
+    //   （原 2 次：LXObject 一次 + data 一次）。M106-S1 采样归因显示 xmalloc 占 28.84%，
+    //   其中 95.25% 来自本函数 ⇒ 分配次数减半直接砍掉近半分配热成本。
+    //   语义不变量：PX_STR 的 data 恒不可变（全仓无任何就地改写 as.str 的站点）且恒由
+    //   本函数生产（PX_BYTES 走 px_bytes_len 分支、mmap bytes 走独立路径）⇒
+    //   px_obj_free 的 PX_STR 分支不再单独释放 data。
+    //   红线 2/4：xmalloc 返回值仍被整体清零；**LXObject 尺寸与 union 布局未变**，
+    //   仅「对象内存块的容量」变大（同一个 slab class 机制，超 16KB 自动回落 mmap）。
+    LXObject* o = xmalloc(sizeof(LXObject) + (size_t)len + 1);
     o->type = PX_STR;
-    char* d = xmalloc(len + 1);
+    char* d = (char*)o + sizeof(LXObject);   // data 内联在对象之后（同一次分配内）
     memcpy(d, s, len); d[len] = 0;
     o->as.str.data = d; o->as.str.len = len;
     o->as.str.rune_len = -1; o->as.str.offs_cnt = 0; o->as.str.rune_offs = NULL;  // M106-S2：惰性缓存初值
