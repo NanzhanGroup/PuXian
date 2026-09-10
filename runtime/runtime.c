@@ -175,6 +175,7 @@ static void px_pool_push(int fd);
 static void* px_pool_worker(void* arg);
 static void px_vhost_normalize(LXValue v, int* status, const char** ct, const char** body, int* body_len,
                                char* extra, int extra_sz);
+static int px_vhost_header_allowed(const char* k);
 static void px_vhost_docroot_store(const char* root);
 static const char* px_vhost_docroot(void);
 int px_rate_limit_try(const char* key, long long max, long long window_sec);
@@ -10208,6 +10209,7 @@ static const char* px_http_status_reason(int code) {
         case 201: return "Created";
         case 202: return "Accepted";
         case 204: return "No Content";
+        case 206: return "Partial Content";
         case 301: return "Moved Permanently";
         case 302: return "Found";
         case 304: return "Not Modified";
@@ -14138,8 +14140,89 @@ static int px_resp_gzipable(LXValue* headers, const char* ct, int body_len) {
 // vhost handler 返回非 null → vhost_normalize（M57-S7 白名单响应头）+ respond；返回
 // null → 空操作（调用方续 docroot 管道）。vhost 历史语义：无访问日志。
 static void px_vhost_respond(PxHttpOut* pout, const char* method, int head_only,
-                             int keep_alive, const char* req_id, LXValue r) {
+                             int keep_alive, const char* req_id, LXValue req, LXValue r) {
     if (r.type == PX_NULL) return;
+    // M58-S1 补齐（mahesvara ISSUE-01 2026-09-10）：vhost handler 返回 dict 含 "file": path
+    // → C 层 64KB 分块流式发送 + Range 206。此前 file 键被忽略（仅 http_conn_worker 直连
+    // 模式实现）→ 大文件 HTTP 200 空 body（soft.wsai.chat 发布源 ws update 下载失败）。
+    {
+        LXValue file_v = (r.type == PX_DICT) ? px_dict_get(r, "file") : px_null();
+        if (file_v.type == PX_STR) {
+            const char* fpath = file_v.as.obj->as.str.data;
+            struct stat fst;
+            if (stat(fpath, &fst) != 0 || !S_ISREG(fst.st_mode)) {
+                char e404[256];
+                snprintf(e404, sizeof(e404), "X-Request-Id: %s\r\n", req_id);
+                pout->respond(pout, 404, "text/plain; charset=utf-8", "404 Not Found", 13,
+                              head_only, keep_alive, e404);
+                return;
+            }
+            long long fsz = (long long)fst.st_size;
+            long long rstart = 0, rend = fsz - 1;
+            int is_range = 0;
+            LXValue headers = px_dict_get(req, "headers");
+            if (headers.type == PX_DICT) {
+                LXValue rv2 = px_header_get(&headers, "Range");
+                if (rv2.type == PX_STR && fsz > 0) {
+                    if (px_parse_range(rv2.as.obj->as.str.data, fsz, &rstart, &rend)) is_range = 1;
+                }
+            }
+            long long seg_len = rend - rstart + 1;
+            int fst_code = is_range ? 206 : 200;
+            const char* fct = px_mime_type(fpath);
+            char fextra[1536];
+            int feo = snprintf(fextra, sizeof(fextra), "X-Request-Id: %s\r\n", req_id);
+            if (feo < 0 || feo >= (int)sizeof(fextra)) feo = (int)sizeof(fextra) - 1;
+            LXValue fh = px_dict_get(r, "headers");
+            if (fh.type == PX_DICT) {
+                LXObject* fo = fh.as.obj;
+                for (int fi = 0; fi < fo->as.dict.len; fi++) {
+                    LXValue hv = fo->as.dict.vals[fi];
+                    if (hv.type != PX_STR) continue;
+                    const char* hk = fo->as.dict.keys[fi];
+                    if (!hk) continue;
+                    if (strcasecmp(hk, "Content-Type") == 0) {
+                        fct = hv.as.obj->as.str.data;
+                        continue;
+                    }
+                    if (!px_vhost_header_allowed(hk)) continue;
+                    const char* hvv = hv.as.obj->as.str.data;
+                    size_t klen = strlen(hk), vlen = hv.as.obj->as.str.len;
+                    if (memchr(hk, '\r', klen) || memchr(hk, '\n', klen)) continue;
+                    if (memchr(hvv, '\r', vlen) || memchr(hvv, '\n', vlen)) continue;
+                    int cur = (int)strlen(fextra);
+                    long long need = (long long)klen + 2 + (long long)vlen + 2;
+                    if ((long long)cur + need < (long long)sizeof(fextra))
+                        snprintf(fextra + cur, (size_t)(sizeof(fextra) - cur), "%s: %s\r\n", hk, hvv);
+                }
+            }
+            if (is_range) {
+                int cur2 = (int)strlen(fextra);
+                snprintf(fextra + cur2, sizeof(fextra) - (size_t)cur2,
+                         "Content-Range: bytes %lld-%lld/%lld\r\nAccept-Ranges: bytes\r\n",
+                         rstart, rend, fsz);
+            }
+            pout->begin(pout, fst_code, fct, seg_len, head_only, keep_alive, fextra);
+            if (!head_only && seg_len > 0) {
+                FILE* f = fopen(fpath, "rb");
+                if (f) {
+                    fseeko(f, (off_t)rstart, SEEK_SET);
+                    long long remain = seg_len;
+                    char chunk[65536];
+                    while (remain > 0) {
+                        size_t want = (size_t)(remain < 65536 ? remain : 65536);
+                        size_t got = fread(chunk, 1, want, f);
+                        if (got == 0) break;
+                        pout->write(pout, chunk, got);
+                        remain -= (long long)got;
+                    }
+                    fclose(f);
+                }
+            }
+            pout->end(pout);
+            return;
+        }
+    }
     int vst = 200;
     const char* vct = "text/plain; charset=utf-8";
     const char* vbody = "";
@@ -14262,7 +14345,7 @@ static int px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
                 PX_KEEP(r);   // M92-S2c precise：vhost handler 返回值（normalize/respond 期间使用）
                 if (r.type != PX_NULL) {
                     px_vhost_respond(pout, method, strcmp(method, "HEAD") == 0,
-                                     client_keep_alive, req_id, r);
+                                     client_keep_alive, req_id, req, r);
                     px_root_pop();   // M92-S2c precise
                     return 0;
                 }
@@ -15131,7 +15214,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         if (skind == 1) {
             // vhost 段2
             if (sresp.type != PX_NULL) {
-                px_vhost_respond(&out, sm, sh, sc ? 0 : 1, srid, sresp);
+                px_vhost_respond(&out, sm, sh, sc ? 0 : 1, srid, sreq, sresp);
             } else {
                 // null 回退 docroot：续管道（route + 静态/.px）完成本请求
                 px_vhost_docroot_store(svroot);
