@@ -40,7 +40,19 @@
 >     覆盖建表路径与回落路径）的 `len(s)` + **每个 `s[i]` 的字节序列** before vs after **逐字节相同**；
 >     负索引（`s[-1]`/`s[-n]`）+ 3 个越界用例报错文案一致（含 `字符串索引越界: 8192`）。
 >   - 代价与已知边界（如实记录）：`LXObject.str` **+8 字节/串**（`LXValue` 不变）；
->     偏移表 4B×字节、随对象回收，且**当前无上限** ⇒ 建议二期加 `PX_STR_OFFS_MAX`（超过则回落原线性走查 = 与改动前同行为）。
+>     偏移表 4B×字节、随对象回收；上界护栏见下 **S3**。
+> - **S3 内存上界护栏（`PX_STR_OFFS_MAX`）**：偏移表 ≈ `sizeof(int)×(字节数+1)` ≈ 4× 串长，巨串（数百 MB）
+>   反复取 `s[i]` 会 4× 放大内存。加 `PX_STR_OFFS_MAX = 16 MiB`（`#ifndef` 可 `-D` 覆盖，便于边界试验）：
+>   超过上界的串**不建表**，回落 `px_index` 原线性走查（与 M105 及更早逐字节同行为），
+>   仅保留 `rune_len` 惰性计数（O(1) 空间）。
+>   - **对照实验**（同一输入、仅上界不同：A = 16 MiB 护栏生效 vs B = 1 GiB 护栏关闭）：
+>     20 MiB ASCII / 20 MiB CJK / 1 MiB / 5 KB 四输入，`len(s)` + 13 个下标（含负索引）
+>     的字节序列 **A ≡ B 逐字节相同** ⇒ 回落路径与建表路径在真实巨串上等价；
+>   - **峰值 RSS（实测）**：20 MiB ASCII **43.1 MB(A) vs 123.0 MB(B) = +79.9 MB ≈ 4×20 MiB**；
+>     20 MiB CJK **43.1 vs 72.4 MB = +28.9 MB ≈ 4×7.23M runes**（未触页不计入 RSS）⇒ 护栏确实拦住 4× 放大。
+>   - **收口**：pxi（C 轨）/ pxi_vm（VM 轨）重链吸收含护栏 runtime；`vm_ab` v2 **38P/0GAP/0F**、
+>     `diffcheck --all` **rc=0**、m89_s3d **9P/0F**、m93_s3 **6P/0F**、m96_s2 **8P/0F**、m103_s2d **rc=0**；
+>     tag **`v0.2.0-m106s3`**。
 > - **S5 收口（双自举 + 重链 + 全量回归）**：
 >   - **双自举**：C 轨 `bootstrap_prove.sh --fresh` → B.c == `golden/compiler.c`（**15060 行**）逐字节一致；
 >     BC 轨 `bootstrap_prove_bc.sh --fresh` → 重放 dump == `golden/compiler.bc.dump`（**30581 行**）逐字节一致；

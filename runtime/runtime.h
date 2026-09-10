@@ -68,7 +68,8 @@ struct LXObject {
             //   (-1, 0, NULL)，且按 type 分派，绝不为 bytes 建表。
             //     rune_len ：px_unicode_len_n 的缓存值（-1 = 未计算）
             //     offs_cnt ：rune_offs 表有效条目数（表已分配 offs_cnt 个 int）
-            //     rune_offs：惰性 rune→byte 起始偏移表（仅字节长度 ≥ PX_STR_OFFS_MIN 时建）
+            //     rune_offs：惰性 rune→byte 起始偏移表（PX_STR_OFFS_MIN ≤ 字节长度 ≤ PX_STR_OFFS_MAX 时建；
+            //               超上界回落线性走查，防巨串 4× 内存放大 —— M106-S3 护栏）
             //   二者均为纯数据（非 LXObject*）→ gc_mark_obj 的 PX_STR/PX_BYTES
             //   default 分支不扫描 union，precise/conservative 双模式都不受影响。
             int rune_len; int offs_cnt; int* rune_offs;

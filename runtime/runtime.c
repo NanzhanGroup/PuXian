@@ -2072,7 +2072,16 @@ int px_unicode_len(const char* s) {
 //   3. 索引 i ≥ 表步数时（仅畸形 UTF-8 可能）**回落原线性走查**，连越界读行为都保持原样；
 //   4. 单字符结果仍按原 c0 判长（px_utf8_clen(c0)）构造，不改 clen 语义。
 // 内存/性能取舍：仅字节长度 ≥ PX_STR_OFFS_MIN 的串才建表（表 = 4B×步数），小串线性走更划算。
-#define PX_STR_OFFS_MIN 1024
+#ifndef PX_STR_OFFS_MIN
+#define PX_STR_OFFS_MIN 1024          // 可 -DPX_STR_OFFS_MIN=… 覆盖（用于等价性/边界试验）
+#endif
+// 上界护栏（M106-S3）：偏移表内存 ≈ sizeof(int)×(字节数+1) ≈ 4× 串长。KB 级串无碍；
+//   但若对数百 MB 的巨串反复取 s[i]，4× 放大可能压垮内存 ⇒ 超过 PX_STR_OFFS_MAX 的串
+//   一律不建表，回落 px_index 原线性走查（与 M105 及更早逐字节同行为），仅保留
+//   rune_len 惰性计数（O(1) 空间）。阈值 16 MiB 串 ⇒ 表上界 ≈ 64 MiB。
+#ifndef PX_STR_OFFS_MAX
+#define PX_STR_OFFS_MAX (16 * 1024 * 1024)   // 可 -DPX_STR_OFFS_MAX=… 覆盖
+#endif
 
 // 前导字节 → 该字符字节数（与 px_index 原实现的判定式逐字相同）
 static inline int px_utf8_clen(unsigned char cc) {
@@ -2099,6 +2108,7 @@ static int* px_str_offs_get(LXObject* o) {
     if (p) return p;
     int n = o->as.str.len;
     if (n < PX_STR_OFFS_MIN) return NULL;          // 小串：不建表（避免小串也付分配代价）
+    if (n > PX_STR_OFFS_MAX) return NULL;          // M106-S3 巨串：不建表（护栏，防 4× 内存放大）→ 回落线性走查
     const unsigned char* s = (const unsigned char*)o->as.str.data;
     if (!s) return NULL;
     int* offs = (int*)xmalloc(sizeof(int) * ((size_t)n + 1));   // 步数 ≤ 字节数 ⇒ n+1 足够
