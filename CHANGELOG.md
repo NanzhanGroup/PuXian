@@ -6,6 +6,37 @@
 
 ## [Unreleased]
 
+### M104 · VM 性能增强（LTO 构建档 + 执行引擎优化）
+
+> 依据 `docs/M104_native_prestudy.md`（③ native 旗舰 D0 预研）**路线 ① 裁定**：native 天花板 = C 轨
+> ≈1.04~1.5x VM 且成本 18~25 周，故 M104 转为**纯运行时/工具链性能增强**（不动语言语义、不动发射器、
+> 不动 golden）。计划与完整实测见 `docs/M104_PLAN.md`（§七）。
+> - **执行引擎优化（默认 VM 轨；`runtime/vm.c`）**
+>   - **O3 类型特化快路径**（主要收益）：`ADD/SUB/MUL/DIV/IDIV/MOD/EQ/NE/LT/LE/GT/GE/BITAND/BITOR/
+>     BITXOR/SHL/SHR/SHRU/NEG/BITNOT/NOT/JMPT/JMPF/INDEX` 的 **INT⊗INT** 分支在解释循环内联构造
+>     `LXValue`（逐 op 与 runtime 源码同语义）；其余类型/浮点/分配/错误分支**一律回落**原 `px_*`。
+>   - **O1/O2 源位置追踪镜像去重**：runtime 的 `g_px_src_func/g_px_src_line` 均为 `__thread` 且在 VM 轨
+>     **仅由 vm.c 写入** → 以 `__thread` 镜像指针比较，值变才跨 TU 调用（**与 M104 前「每指令无条件
+>     px_srcfunc / 每 SRCLINE 无条件 px_srcline」逐字节等价**，含 native 重入、帧弹回同行号等场景；
+>     不用 push/pop 版本，避免「弹帧后 tracker 驻留 callee 行号」一类偏差）。
+>   - **O4**：帧槽数组指针提到循环局部（槽数组在堆上、不随 frames 数组 realloc 移动 → native 重入亦安全）。
+> - **O7 LTO 构建档**：`px build --lto` / `PX_BUILD_LTO=1`（runtime 预编译 .o + 产物 C + 链接**全链**
+>   `-flto`；rtcache 键含 `lto` 位，与默认档互不污染）。**默认关**（收益负载相关，见下）。
+> - **实测**（本机 8 核 16G；`taskset -c 3` + CPU 时间取 min，7 轮）
+>   - VM 轨（O1–O4 全开 vs 基线 v0.2.0-m103）：`while_sum` **1.07x** / `fib26` **1.10x** /
+>     `field_while` **1.06x** / `loop_sum` 1.02x / **真实负载** `compiler_vm bc stdlib/yaml.px` **1.04x**
+>     （产物 dump 逐字节一致）。
+>   - C 轨 LTO 档：`while_sum`（紧循环）**1.39x** / `fib26`（深递归）**0.88x**——跨 TU 内联的双向副作用，
+>     故交付为可选档、默认关（`--help` 写明适用场景）。
+> - **判定：性能目标未达成**（计划 §六 判据「VM 轨在 2/3 微基准上 ≥1.25x」）。实验**证伪**了「优化解释
+>   循环分派可拿到 1.2~1.5x」的假设，与 D0 判据互为印证：**成本主体是动态值层，不是分派层**——
+>   O1/O2/O4（循环固定开销）合计仅 ~2–4%，O3（绕开动态分派）拿走大部分收益；负载一旦进入容器/字段
+>   路径（`px_field` 线性 strcmp + `px_field_set` 的 mutex/sigprocmask、`px_get_global` 的 rwlock+扫描）
+>   类型特化即失效。**O5 内联缓存 / O6 计算跳转 / O8 超指令 → 二期候选**（归因与优先级入档 §七）。
+> - **验证**：`vm_ab` v2 **38P/0GAP/0F** + `diffcheck --all` rc=0 + 双自举证明（C 轨 B.c 15060 行逐字节
+>   一致 + BC 轨 compiler.bc.dump 重放逐字节一致）+ `pxi` 9,622,128→**9,626,368B** / `pxi_vm`
+>   9,455,952→**9,460,200B** 重链吸收 M104 runtime（双轨 hello 一致、statically linked）。
+
 ### CI 修复 · fmt 门收敛（selfhost/bc_emit.px + stdlib/yaml.px）
 
 > GitHub Actions #211（M103-S3 收口 run）toolchain job `fmt --check selfhost/*.px`

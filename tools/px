@@ -124,6 +124,13 @@ px $RELEASE_VER
                                                  --no-route      优先级 > 自动，自动只补未声明模块；全能力
                                                  --no-zlib       --full/--max；解析失败自动退全量保编译成功）
                                                  --no-h2
+                                                 --lto           LTO 构建档（M104-S5）：全链 -flto
+                                                                  （runtime 预编译 .o + 产物 C + 链接）。
+                                                                  收益负载相关（M104 实测 C 轨紧循环
+                                                                  1.39x / 深递归 0.88x——跨 TU 内联的
+                                                                  双向副作用）→ 默认关，适合循环密集型
+                                                                  纯计算程序。等价环境变量 PX_BUILD_LTO=1；
+                                                                  缓存键含 lto 位，与默认档互不干扰
                                                  --cc <cc>       指定 C 编译器（交叉用，
                                                                   如 aarch64-linux-musl-gcc）
                                                  --mbedtls-lib   目标架构 mbedtls 库目录
@@ -216,8 +223,8 @@ rt_src_files() {
     echo "$list"
 }
 rt_key() {
-    # 参数：cuts cc → 16 位缓存键（runtime 源 + miniz + sqlite 头内容哈希 + cuts）
-    local cuts="$1" cc="$2" f key_src=""
+    # 参数：cuts cc [lto] → 16 位缓存键（runtime 源 + miniz + sqlite 头内容哈希 + cuts + lto）
+    local cuts="$1" cc="$2" lto="${3:-0}" f key_src=""
     for f in $(rt_src_files "$cuts") \
              third_party/miniz/miniz.c third_party/miniz/miniz_tinfl.c \
              third_party/miniz/miniz_tdef.c third_party/miniz/miniz.h \
@@ -228,11 +235,11 @@ rt_key() {
             key_src="$key_src $(sha256sum "$RT_DIR/$f" | cut -c1-16)"
         fi
     done
-    echo "$key_src cc=$(basename "$cc") cuts=$cuts" | sha256sum | cut -c1-16
+    echo "$key_src cc=$(basename "$cc") cuts=$cuts lto=$lto" | sha256sum | cut -c1-16
 }
 rt_cache_compile() {
-    # 参数：dir（cache 目录）cuts cc —— 复制源到 dir 并逐 .c 预编译 .o（一次性）
-    local dir="$1" cuts="$2" cc="$3"
+    # 参数：dir（cache 目录）cuts cc [lto] —— 复制源到 dir 并逐 .c 预编译 .o（一次性）
+    local dir="$1" cuts="$2" cc="$3" lto="${4:-0}"
     local mbedtls_inc="$RT_DIR/mbedtls/include"
     local zlib_inc="$RT_DIR/third_party/zlib/include"
     local sqlite_dir="$RT_DIR/third_party/sqlite3"
@@ -249,7 +256,7 @@ rt_cache_compile() {
     # 预编译 .c（runtime 源 + miniz；sqlite3 走既有预编译 .o/.c 通道不进缓存）
     local common="-O2 -pthread -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_FOREIGN_KEYS=1 \
         -I\"$dir\" -I\"$RT_DIR/third_party/miniz\" -I\"$mbedtls_inc\" \
-        -I\"$sqlite_dir\" -I\"$zlib_inc\""
+        -I\"$sqlite_dir\" -I\"$zlib_inc\"$([ "$lto" = 1 ] && echo " -flto")"
     local m
     for m in quic sqlite ws zip xml aes rsa ed25519 img route zlib h2; do
         if cut_has "$cuts" "$m"; then
@@ -277,16 +284,16 @@ rt_cache_compile() {
     return 0
 }
 rt_ensure() {
-    # 参数：cuts cc → stdout 输出 cache_dir；缺失则现编
-    local cuts="$1" cc="$2" key dir
-    key="$(rt_key "$cuts" "$cc")"
+    # 参数：cuts cc [lto] → stdout 输出 cache_dir；缺失则现编
+    local cuts="$1" cc="$2" lto="${3:-0}" key dir
+    key="$(rt_key "$cuts" "$cc" "$lto")"
     dir="$PXC_HOME/.rtcache/$key"
     if [ -d "$dir" ] && [ -f "$dir/.complete" ]; then
         echo "$dir"
         return 0
     fi
     mkdir -p "$dir"
-    if ! rt_cache_compile "$dir" "$cuts" "$cc"; then
+    if ! rt_cache_compile "$dir" "$cuts" "$cc" "$lto"; then
         rm -rf "$dir"
         return 1
     fi
@@ -349,6 +356,10 @@ cmd_build() {
     #   > PX_BUILD_ENGINE env(c|vm) > 默认 vm。--c = C 轨逃生舱（fn_* 文本轨）。
     local no_quic=0 cc="gcc" mbedtls_lib="" sqlite_obj="" zlib_lib="" target="" full=0
     local engine="${PX_BUILD_ENGINE:-vm}"
+    # M104-S5：LTO 构建档（--lto / PX_BUILD_LTO=1）—— 跨 TU 内联（D0 实测 C 轨 1.16x）。
+    #   默认 0（保持既有构建口径）；开启时 runtime 预编译缓存键含 lto 位，不与默认档混用。
+    local lto=0
+    case "${PX_BUILD_LTO:-0}" in 1|true|yes|on) lto=1 ;; esac
     case "$engine" in
         c|vm) ;;
         *) echo "警告: 未知 PX_BUILD_ENGINE=$engine（取 c|vm，退默认 vm）" >&2; engine=vm ;;
@@ -362,6 +373,7 @@ cmd_build() {
             --full|--max) full=1; shift ;;
             --c) engine=c; shift ;;              # M91：C 轨逃生舱（显式）
             --vm|--bc) engine=vm; shift ;;       # M91：VM 轨（显式 = 新默认；保留旧 flag 兼容）
+            --lto) lto=1; shift ;;               # M104-S5：LTO 构建档（gcc -flto 全链）
             --no-sqlite) mods="$mods sqlite"; shift ;;
             --no-ws) mods="$mods ws"; shift ;;
             --no-zip) mods="$mods zip"; shift ;;
@@ -505,7 +517,7 @@ cmd_build() {
         rm -f "$refs_tmp"
     fi
     cuts="$mods"; [ "$no_quic" = "1" ] && cuts="$cuts quic"
-    cache_dir="$(rt_ensure "$cuts" "$cc")" || { echo "错误: runtime 预编译缓存建立失败" >&2; return 1; }
+    cache_dir="$(rt_ensure "$cuts" "$cc" "$lto")" || { echo "错误: runtime 预编译缓存建立失败" >&2; return 1; }
     # 3) 编译生成的 C 单文件 + 链接预编译 .o（不再每次全量现编 runtime）
     local mbedtls_inc="$RT_DIR/mbedtls/include"
     local sqlite_dir="$RT_DIR/third_party/sqlite3"
@@ -517,10 +529,11 @@ cmd_build() {
     else
         sqlite_src="$sqlite_dir/sqlite3.c"
     fi
+    local lto_flag=""; [ "$lto" = 1 ] && lto_flag=" -flto"
     local cc_cmd
     local common_def="-O2 -pthread -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_FOREIGN_KEYS=1 \
         -I\"$cache_dir\" -I\"$RT_DIR/third_party/miniz\" -I\"$mbedtls_inc\" \
-        -I\"$sqlite_dir\" -I\"$RT_DIR/third_party/zlib/include\""
+        -I\"$sqlite_dir\" -I\"$RT_DIR/third_party/zlib/include\"$lto_flag"
     local m2
     for m2 in quic sqlite ws zip xml aes rsa ed25519 img route zlib h2; do
         if cut_has "$cuts" "$m2"; then
@@ -546,7 +559,7 @@ cmd_build() {
     # relocations" → riscv64 交叉加 -no-pie 传统静态
     local pie_flag=""
     case "$cc" in *riscv64*) pie_flag=" -no-pie" ;; esac
-    cc_cmd="$cc -static -O2 -pthread$pie_flag -o \"$out_path\" \"$build_dir/$base.o\" $objs"
+    cc_cmd="$cc -static -O2 -pthread$pie_flag$lto_flag -o \"$out_path\" \"$build_dir/$base.o\" $objs"
     if ! cut_has "$cuts" sqlite; then
         cc_cmd="$cc_cmd \"$sqlite_src\""
     fi

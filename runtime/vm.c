@@ -35,6 +35,57 @@
 //   → weak 空转不抢占；VM 轨 vm.o 与 coro.o 同链 → 生效。
 extern int px_coro_preempt_check(void) __attribute__((weak));
 
+// ============================================================
+// M104-S2：热路径内联助手（O3 类型特化 + O1 真值判定）
+// ------------------------------------------------------------
+// 定位：本 VM 每个值操作原先一律调用 runtime 的 px_add/px_lt/... 动态分派
+//   函数（跨 TU，-O2 下无法内联）。对「INT ⊕ INT」这一无歧义、无分配、无
+//   GC/错误副作用的分支，直接在解释循环内联构造 LXValue —— 语义与对应 px_*
+//   函数逐字一致（见各 case 注释）；其余类型一律回落原函数，语义零变化。
+// 纪律：只内联「与 runtime 源码逐字等价」的分支；任何分配/错误/跨类型
+//   语义一律回落，保证 vm_ab 38 例 + diffcheck 逐字节对拍不变。
+// ============================================================
+static inline LXValue vm_int(int64_t i)  { LXValue v; v.type = PX_INT;   v.as.i = i; return v; }
+static inline LXValue vm_bool(bool b)    { LXValue v; v.type = PX_BOOL;  v.as.b = b; return v; }
+static inline LXValue vm_float(double f) { LXValue v; v.type = PX_FLOAT; v.as.f = f; return v; }
+
+// 真值判定快路径（对齐 px_is_truthy 的 NULL/BOOL/INT/FLOAT 分支；其余回落）。
+static inline bool vm_truthy(LXValue v) {
+    switch (v.type) {
+    case PX_NULL:  return false;
+    case PX_BOOL:  return v.as.b;
+    case PX_INT:   return v.as.i != 0;
+    case PX_FLOAT: return v.as.f != 0.0;
+    default:       return px_is_truthy(v);
+    }
+}
+
+// M104-S2：INT⊕INT 二元快路径宏（用于 B 表运算 case）。_x/_y = 两源槽值；
+//   均为 INT → 用 fast_expr（引用 _x.as.i/_y.as.i）；否则调 slow_call（原 px_*）。
+//   仅在同 case 内使用（依赖解释循环的 fr/in 局部）。
+#define VM_BIN_F(fast_expr, slow_call) do {                                     \
+        LXValue _x = fr->slots[in.b], _y = fr->slots[in.c];                     \
+        fr->slots[in.a] = (_x.type == PX_INT && _y.type == PX_INT)              \
+                          ? (fast_expr) : (slow_call);                          \
+    } while (0)
+
+// M104-S2（O1/O2）：源位置追踪去重 —— 线程局部「已写入 runtime 的镜像」。
+//   语义冻结论证：runtime 的 g_px_src_func/g_px_src_line 均为 __thread，且在
+//   VM 轨下【仅】由 vm.c 写入（runtime.c 只定义、cg 发射点只服务 C 轨产物，
+//   两者不混跑）→ 本线程 tracker 与镜像恒相等，故「镜像值未变即跳过跨 TU 调用」
+//   与 M104 前「每指令无条件 px_srcfunc / 每 SRCLINE 无条件 px_srcline」的
+//   可观测行为逐字一致（含 native 重入 / 帧弹回后同行号等全部场景）。
+//   与 push/pop 版本的区别：不依赖帧切换点，故无「弹帧后 tracker 驻留 callee 行号」
+//   一类偏差。
+static __thread const char* vm_lsf = NULL;   // 镜像：最近写入 g_px_src_func 的指针
+static __thread int         vm_lsl = -1;     // 镜像：最近写入 g_px_src_line 的行号
+static inline void vm_track_func(const char* nm) {
+    if (nm != vm_lsf) { px_srcfunc(nm); vm_lsf = nm; }
+}
+static inline void vm_track_line(int ln) {
+    if (ln != vm_lsl) { px_srcline(ln); vm_lsl = ln; }
+}
+
 // ---- 指令名表（指定初始化，避免顺序漂移）----
 const char* px_op_name(int op) {
     static const char* names[PXM_MAX] = {
@@ -416,8 +467,15 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
         // 帧可能因 CALL（A4 起）被推入/弹出，每次循环取当前帧
         fr = &st->frames[st->nframes - 1];
         const PxVMFunc* cf = fr->f;          // 当前帧所属函数
-        px_srcfunc(cf->name);                // A5：同步 runtime 错误追踪（px_error 文案带函数名）
+        // M104-S2（O1）：函数名追踪改为「镜像去重」（见 vm_track_func 注释）——
+        //   等价于原「每指令 px_srcfunc(cf->name)」，值未变时免一次跨 TU 调用。
+        vm_track_func(cf->name);
         int pc = fr->pc;
+        // M104-S2（O4）：槽数组指针提到局部 —— 原每条指令经 `fr->slots[..]` 两次
+        //   间接（fr 解引用 + slots 读取）→ 提到寄存器后每条操作数访问省一次内存读。
+        //   帧切换（CALL/RET/TRY 传播）后 break 回循环顶重新取 fr/slots，故恒有效；
+        //   slots 指向的堆槽数组不随帧数组 realloc 移动，native 递归回调亦安全。
+        LXValue* slots = fr->slots;
         if (pc < 0 || pc >= cf->nbc) {       // 越界 → 视作自然落尾
             vm_frame_pop(st);
             if (st->nframes == base) done = 1;
@@ -431,7 +489,7 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             if (st->nframes == base) done = 1;
             break;
         case PXOP_RET: {
-            LXValue v = fr->slots[in.a];
+            LXValue v = slots[in.a];
             int rd = fr->ret_dst;
             vm_frame_pop(st);
             if (st->nframes == base) { ret = v; done = 1; }
@@ -457,7 +515,7 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             // 返回写槽 in.a。分派：VM 函数（PX_FUNC 且 fn==px_vm_entry）→ 手动压帧
             // （D3：px→px 不回 C 递归，帧栈承接递归深度）；PX_NATIVE / 旧 C 编译产物
             // （fn != px_vm_entry）→ px_call 直调（C 递归一层，与 CPython 同构）。
-            LXValue fnv = fr->slots[in.b];
+            LXValue fnv = slots[in.b];
             int argc = in.c;
             int dst = in.a;
             LXValue* abuf = NULL;
@@ -466,7 +524,7 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
                 if (in.b + 1 + n > fr->nslots) n = fr->nslots - (int)in.b - 1;
                 if (n > 0) {
                     abuf = (LXValue*)malloc((size_t)n * sizeof(LXValue));
-                    for (int i = 0; i < n; i++) abuf[i] = fr->slots[in.b + 1 + i];
+                    for (int i = 0; i < n; i++) abuf[i] = slots[in.b + 1 + i];
                     argc = n;
                 } else argc = 0;
             }
@@ -485,12 +543,12 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
                         int r = px_coro_sleep_us(us);
                         if (r == PX_CORO_WAIT_RETRY) {       // us<=0：立即完成
                             free(abuf);
-                            if (dst < fr->nslots) fr->slots[dst] = px_null();
+                            if (dst < fr->nslots) slots[dst] = px_null();
                             break;
                         }
                         if (r == PX_CORO_WAIT_BLOCKED) {     // 已登记定时器 → 让出（不回退 pc）
                             free(abuf);
-                            if (dst < fr->nslots) fr->slots[dst] = px_null();
+                            if (dst < fr->nslots) slots[dst] = px_null();
                             st->suspended = 1;
                             return 1;
                         }
@@ -530,22 +588,24 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
                 LXValue r = px_call(fnv, abuf, argc);     // native/旧C/非函数
                 free(abuf);
                 fr = &st->frames[st->nframes - 1];        // 刷新（未 push，帧不变）
-                if (dst < fr->nslots) fr->slots[dst] = r;
+                if (dst < fr->nslots) slots[dst] = r;
             }
             break;
         }
         case PXOP_SRCLINE:
+            // M104-S2（O2）：行号追踪改为「镜像去重」（见 vm_track_line 注释）——
+            //   等价于原「每 SRCLINE 无条件 px_srcline(fr->line)」，值未变时免一次调用。
             fr->line = (int)(int16_t)in.b;
-            px_srcline(fr->line);            // A5：同步 runtime 错误追踪（行号）
+            vm_track_line(fr->line);
             break;
         case PXOP_IMM:
-            fr->slots[in.a] = px_int((int64_t)(int16_t)in.b);
+            slots[in.a] = px_int((int64_t)(int16_t)in.b);
             break;
         case PXOP_NARGS:   // M90-S1/F1：槽a = 本帧实际实参数（默认参数入口填充依据）
-            fr->slots[in.a] = px_int((int64_t)fr->nargs);
+            slots[in.a] = px_int((int64_t)fr->nargs);
             break;
         case PXOP_MOV:
-            fr->slots[in.a] = fr->slots[in.b];
+            slots[in.a] = slots[in.b];
             break;
         case PXOP_GETG: {
             // A1：v1 经 px_get_global（D8 无锁化后置）；b=G idx
@@ -554,7 +614,7 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
                 px_error("VM %s:%d GETG 全局越界 g=%d (nG=%d)",
                          cf->name, fr->line, in.b, m ? m->nG : -1);
             }
-            fr->slots[in.a] = px_get_global(m->G[in.b]);
+            slots[in.a] = px_get_global(m->G[in.b]);
             break;
         }
         case PXOP_SETG: {
@@ -564,7 +624,7 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
                 px_error("VM %s:%d SETG 全局越界 g=%d (nG=%d)",
                          cf->name, fr->line, in.a, m ? m->nG : -1);
             }
-            px_set_global(m->G[in.a], fr->slots[in.b]);
+            px_set_global(m->G[in.a], slots[in.b]);
             break;
         }
         case PXOP_LOADK: {
@@ -573,32 +633,77 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
                 px_error("VM %s: LOADK 常量越界 k=%d (nK=%d)",
                          cf->name, in.b, m ? m->nK : -1);
             }
-            fr->slots[in.a] = vm_loadk(&m->K[in.b], m);
+            slots[in.a] = vm_loadk(&m->K[in.b], m);
             break;
         }
         // ---- B 表：一元/二元运算（A2，语义=调现 px_* C 函数，错误由 px_* 保证）----
-        case PXOP_NEG:    fr->slots[in.a] = px_neg(fr->slots[in.b]); break;
-        case PXOP_NOT:    fr->slots[in.a] = px_not(fr->slots[in.b]); break;
-        case PXOP_BITNOT: fr->slots[in.a] = px_bitnot(fr->slots[in.b]); break;
-        case PXOP_ADD:    fr->slots[in.a] = px_add(fr->slots[in.b], fr->slots[in.c]); break;
-        case PXOP_SUB:    fr->slots[in.a] = px_sub(fr->slots[in.b], fr->slots[in.c]); break;
-        case PXOP_MUL:    fr->slots[in.a] = px_mul(fr->slots[in.b], fr->slots[in.c]); break;
-        case PXOP_DIV:    fr->slots[in.a] = px_div(fr->slots[in.b], fr->slots[in.c]); break;
-        case PXOP_IDIV:   fr->slots[in.a] = px_idiv(fr->slots[in.b], fr->slots[in.c]); break;
-        case PXOP_MOD:    fr->slots[in.a] = px_mod(fr->slots[in.b], fr->slots[in.c]); break;
-        case PXOP_POW:    fr->slots[in.a] = px_pow(fr->slots[in.b], fr->slots[in.c]); break;
-        case PXOP_EQ:     fr->slots[in.a] = px_eq(fr->slots[in.b], fr->slots[in.c]); break;
-        case PXOP_NE:     fr->slots[in.a] = px_ne(fr->slots[in.b], fr->slots[in.c]); break;
-        case PXOP_LT:     fr->slots[in.a] = px_lt(fr->slots[in.b], fr->slots[in.c]); break;
-        case PXOP_LE:     fr->slots[in.a] = px_le(fr->slots[in.b], fr->slots[in.c]); break;
-        case PXOP_GT:     fr->slots[in.a] = px_gt(fr->slots[in.b], fr->slots[in.c]); break;
-        case PXOP_GE:     fr->slots[in.a] = px_ge(fr->slots[in.b], fr->slots[in.c]); break;
-        case PXOP_BITAND: fr->slots[in.a] = px_bitand(fr->slots[in.b], fr->slots[in.c]); break;
-        case PXOP_BITOR:  fr->slots[in.a] = px_bitor(fr->slots[in.b], fr->slots[in.c]); break;
-        case PXOP_BITXOR: fr->slots[in.a] = px_bitxor(fr->slots[in.b], fr->slots[in.c]); break;
-        case PXOP_SHL:    fr->slots[in.a] = px_shl(fr->slots[in.b], fr->slots[in.c]); break;
-        case PXOP_SHR:    fr->slots[in.a] = px_shr(fr->slots[in.b], fr->slots[in.c]); break;
-        case PXOP_SHRU:   fr->slots[in.a] = px_ushr(fr->slots[in.b], fr->slots[in.c]); break;
+        // ---- B 表运算：INT⊕INT 类型特化快路径（M104-S2/O3）----
+        //   每个 case 先取槽值到局部（避免重复索引 + 让编译器把值留在寄存器）；
+        //   快路径命中 → 内联构造结果；未命中 → 回落原 px_* 函数（语义零变化）。
+        //   快路径与 runtime 对应函数逐字同语义（见 vm_int/vm_bool 注释）。
+        case PXOP_NEG: {
+            LXValue x = slots[in.b];
+            if (x.type == PX_INT)        slots[in.a] = vm_int(-x.as.i);
+            else if (x.type == PX_FLOAT) slots[in.a] = vm_float(-x.as.f);
+            else                         slots[in.a] = px_neg(x);   // 其余=px_error 路径
+            break;
+        }
+        case PXOP_NOT:    slots[in.a] = vm_bool(!vm_truthy(slots[in.b])); break;
+        case PXOP_BITNOT: {
+            LXValue x = slots[in.b];
+            slots[in.a] = (x.type == PX_INT) ? vm_int(~x.as.i) : px_bitnot(x);
+            break;
+        }
+        case PXOP_ADD:    VM_BIN_F(vm_int(_x.as.i + _y.as.i), px_add(_x, _y)); break;
+        case PXOP_SUB:    VM_BIN_F(vm_int(_x.as.i - _y.as.i), px_sub(_x, _y)); break;
+        case PXOP_MUL:    VM_BIN_F(vm_int(_x.as.i * _y.as.i), px_mul(_x, _y)); break;
+        case PXOP_DIV: {
+            // px_div：d=num_val(b) 为 0 → px_error，随后仍返回 float 除法（逐字对齐）
+            LXValue x = slots[in.b], y = slots[in.c];
+            if (x.type == PX_INT && y.type == PX_INT) {
+                double d = (double)y.as.i;
+                if (d == 0) px_error("除零错误");
+                slots[in.a] = vm_float((double)x.as.i / d);
+            } else slots[in.a] = px_div(x, y);
+            break;
+        }
+        case PXOP_IDIV: {
+            // px_idiv（INT-INT 分支）：欧几里得商（余数非负）；d==0 回落 px_idiv 报错
+            LXValue x = slots[in.b], y = slots[in.c];
+            if (x.type == PX_INT && y.type == PX_INT && y.as.i != 0) {
+                int64_t d = y.as.i, n = x.as.i;
+                int64_t r = n % d;
+                if (r < 0) r += (d < 0 ? -d : d);
+                slots[in.a] = vm_int((n - r) / d);
+            } else slots[in.a] = px_idiv(x, y);
+            break;
+        }
+        case PXOP_MOD: {
+            // px_mod（INT-INT 分支）：rem_euclid（余数非负）；d==0 回落 px_mod 报错
+            LXValue x = slots[in.b], y = slots[in.c];
+            if (x.type == PX_INT && y.type == PX_INT && y.as.i != 0) {
+                int64_t d = y.as.i, n = x.as.i;
+                int64_t r = n % d;
+                if (r < 0) r += (d < 0 ? -d : d);
+                slots[in.a] = vm_int(r);
+            } else slots[in.a] = px_mod(x, y);
+            break;
+        }
+        case PXOP_POW:    slots[in.a] = px_pow(slots[in.b], slots[in.c]); break;
+        case PXOP_EQ:     VM_BIN_F(vm_bool(_x.as.i == _y.as.i), px_eq(_x, _y)); break;
+        case PXOP_NE:     VM_BIN_F(vm_bool(_x.as.i != _y.as.i), px_ne(_x, _y)); break;
+        case PXOP_LT:     VM_BIN_F(vm_bool(_x.as.i <  _y.as.i), px_lt(_x, _y)); break;
+        case PXOP_LE:     VM_BIN_F(vm_bool(_x.as.i <= _y.as.i), px_le(_x, _y)); break;
+        case PXOP_GT:     VM_BIN_F(vm_bool(_x.as.i >  _y.as.i), px_gt(_x, _y)); break;
+        case PXOP_GE:     VM_BIN_F(vm_bool(_x.as.i >= _y.as.i), px_ge(_x, _y)); break;
+        case PXOP_BITAND: VM_BIN_F(vm_int(_x.as.i & _y.as.i),  px_bitand(_x, _y)); break;
+        case PXOP_BITOR:  VM_BIN_F(vm_int(_x.as.i | _y.as.i),  px_bitor(_x, _y)); break;
+        case PXOP_BITXOR: VM_BIN_F(vm_int(_x.as.i ^ _y.as.i),  px_bitxor(_x, _y)); break;
+        case PXOP_SHL:    VM_BIN_F(vm_int(_x.as.i << _y.as.i), px_shl(_x, _y)); break;
+        case PXOP_SHR:    VM_BIN_F(vm_int(_x.as.i >> _y.as.i), px_shr(_x, _y)); break;
+        // px_ushr：按 uint64 逻辑右移，移位量 &63（逐字对齐）
+        case PXOP_SHRU:   VM_BIN_F(vm_int((int64_t)((uint64_t)_x.as.i >> ((uint64_t)_y.as.i & 63u))),
+                                   px_ushr(_x, _y)); break;
 
         // ---- C 表：容器 / 字段（S3-B B1；语义=调现 px_* C 函数，错误由 px_* 保证）----
         // NEWLIST/NEWTUPLE：a=dst，b=连续槽基址，c=n；自 槽 b..b+n-1 拷贝建容器
@@ -610,10 +715,10 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             else if (n > 0) cap = fr->nslots - (int)in.b;
             if (cap > 0) {
                 tmp2 = (LXValue*)malloc((size_t)cap * sizeof(LXValue));
-                for (int i = 0; i < cap; i++) tmp2[i] = fr->slots[in.b + i];
-                fr->slots[in.a] = px_list_n(tmp2, cap);
+                for (int i = 0; i < cap; i++) tmp2[i] = slots[in.b + i];
+                slots[in.a] = px_list_n(tmp2, cap);
                 free(tmp2);
-            } else fr->slots[in.a] = px_list_n(NULL, 0);
+            } else slots[in.a] = px_list_n(NULL, 0);
             break;
         }
         case PXOP_NEWTUPLE: {
@@ -624,10 +729,10 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             else if (n > 0) cap = fr->nslots - (int)in.b;
             if (cap > 0) {
                 tmp2 = (LXValue*)malloc((size_t)cap * sizeof(LXValue));
-                for (int i = 0; i < cap; i++) tmp2[i] = fr->slots[in.b + i];
-                fr->slots[in.a] = px_tuple(tmp2, cap);
+                for (int i = 0; i < cap; i++) tmp2[i] = slots[in.b + i];
+                slots[in.a] = px_tuple(tmp2, cap);
                 free(tmp2);
-            } else fr->slots[in.a] = px_tuple(NULL, 0);
+            } else slots[in.a] = px_tuple(NULL, 0);
             break;
         }
         // NEWDICT：a=dst，b=连续槽基址，c=项数 n（槽 b..b+2n-1 为 k0,v0,k1,v1..）；
@@ -637,10 +742,10 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             int n = (int)in.c;
             for (int i = 0; i < n; i++) {
                 int k0 = (int)in.b + 2 * i;
-                if (k0 + 1 < fr->nslots && fr->slots[k0].type == PX_STR)
-                    px_dict_set(d, fr->slots[k0].as.obj->as.str.data, fr->slots[k0 + 1]);
+                if (k0 + 1 < fr->nslots && slots[k0].type == PX_STR)
+                    px_dict_set(d, slots[k0].as.obj->as.str.data, slots[k0 + 1]);
             }
-            fr->slots[in.a] = d;
+            slots[in.a] = d;
             break;
         }
         // NEWSTRUCT（B2）：a=dst，b=struct 元数据 idx（mod->structs），
@@ -656,8 +761,8 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             int nf = sd->nfields;
             LXValue* vals = nf > 0 ? (LXValue*)malloc((size_t)nf * sizeof(LXValue)) : NULL;
             char** fns = nf > 0 ? (char**)malloc((size_t)nf * sizeof(char*)) : NULL;
-            for (int i = 0; i < nf; i++) { vals[i] = fr->slots[in.c + i]; fns[i] = (char*)sd->fnames[i]; }
-            fr->slots[in.a] = px_struct(sd->name, fns, vals, nf);
+            for (int i = 0; i < nf; i++) { vals[i] = slots[in.c + i]; fns[i] = (char*)sd->fnames[i]; }
+            slots[in.a] = px_struct(sd->name, fns, vals, nf);
             free(vals); free(fns);
             break;
         }
@@ -667,7 +772,7 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             if (!mm || in.b >= (uint16_t)mm->nN || in.c >= (uint16_t)mm->nN)
                 px_error("VM %s:%d NEWENUM 名字越界 b=%d c=%d (nN=%d)",
                          cf->name, fr->line, in.b, in.c, mm ? mm->nN : -1);
-            fr->slots[in.a] = px_enum(mm->N[in.b], mm->N[in.c]);
+            slots[in.a] = px_enum(mm->N[in.b], mm->N[in.c]);
             break;
         }
         // NEWGEN（B3，M34 惰性生成器）：a=dst，b=seq 槽，c=2 连续槽基址
@@ -675,59 +780,69 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
         //   GenExp：elt 恒为 transform 闭包，cond 有则 filter 闭包）。槽越界容错（防御）。
         case PXOP_NEWGEN: {
             LXValue tf = px_null(), fl = px_null();
-            if ((int)in.c >= 0 && (int)in.c < fr->nslots) tf = fr->slots[in.c];
-            if ((int)in.c + 1 < fr->nslots) fl = fr->slots[in.c + 1];
-            fr->slots[in.a] = px_gen_lazy(fr->slots[in.b], tf, fl);
+            if ((int)in.c >= 0 && (int)in.c < fr->nslots) tf = slots[in.c];
+            if ((int)in.c + 1 < fr->nslots) fl = slots[in.c + 1];
+            slots[in.a] = px_gen_lazy(slots[in.b], tf, fl);
             break;
         }
         // ENUMVAR（B3b）：a=dst，b=obj 槽 —— enum→px_str(variant)、非 enum→null
         //   （match 模式匹配 variant 判断；对齐 cg subject.type==PX_ENUM && strcmp）
         case PXOP_ENUMVAR:
-            fr->slots[in.a] = px_enum_variant(fr->slots[in.b]);
+            slots[in.a] = px_enum_variant(slots[in.b]);
             break;
         // GENFROMLIST（S3-C C2）：a=dst，b=list 槽 → px_gen_from_list —— 物化
         //   GenExp（多 for/多变量子句）先收集 list 再包成 generator（对齐 codegen
         //   cg GenExp 物化路径 px_gen_from_list；pxi 轨 i_eval GenExp it_gen 同语义）
         case PXOP_GENFROMLIST:
-            fr->slots[in.a] = px_gen_from_list(fr->slots[in.b]);
+            slots[in.a] = px_gen_from_list(slots[in.b]);
             break;
         case PXOP_LISTPUSH:  // a=val 槽，b=list 槽（值入列表尾）
-            px_list_push(fr->slots[in.b], fr->slots[in.a]);
+            px_list_push(slots[in.b], slots[in.a]);
             break;
-        case PXOP_INDEX:     // a=dst，b=obj，c=idx
-            fr->slots[in.a] = px_index(fr->slots[in.b], fr->slots[in.c]);
+        case PXOP_INDEX: {   // a=dst，b=obj，c=idx
+            // M104-S2（O3）：LIST[INT] 快路径（逐字对齐 px_index 的 PX_LIST 分支：
+            //   负索引回绕 + 越界 px_error 文案一致）；其余类型回落 px_index。
+            LXValue obj = slots[in.b], idx = slots[in.c];
+            if (obj.type == PX_LIST && idx.type == PX_INT) {
+                int i = (int)idx.as.i;
+                int len = obj.as.obj->as.list.len;
+                if (i < 0) i += len;
+                if (i < 0 || i >= len) px_error("列表索引越界: %d (len=%d)", i, len);
+                slots[in.a] = obj.as.obj->as.list.items[i];
+            } else slots[in.a] = px_index(obj, idx);
             break;
+        }
         case PXOP_SETIDX:    // a=val 槽，b=obj，c=idx（赋值表达式结果=val）
-            px_index_set(fr->slots[in.b], fr->slots[in.c], fr->slots[in.a]);
+            px_index_set(slots[in.b], slots[in.c], slots[in.a]);
             break;
         case PXOP_SLICE:     // a=dst，b=obj，c=3 连续槽基址[start,end,step]
             if ((int)in.c + 2 < fr->nslots)
-                fr->slots[in.a] = px_slice(fr->slots[in.b], fr->slots[in.c],
-                                           fr->slots[in.c + 1], fr->slots[in.c + 2]);
+                slots[in.a] = px_slice(slots[in.b], slots[in.c],
+                                           slots[in.c + 1], slots[in.c + 2]);
             else px_error("VM %s:%d SLICE 槽越界 base=%d", cf->name, fr->line, in.c);
             break;
         case PXOP_GETF:      // a=dst，b=obj，c=N 名字 idx（px_field）
             if (cf->mod && in.c < cf->mod->nN)
-                fr->slots[in.a] = px_field(fr->slots[in.b], cf->mod->N[in.c]);
+                slots[in.a] = px_field(slots[in.b], cf->mod->N[in.c]);
             else px_error("VM %s:%d GETF 名字越界 n=%d", cf->name, fr->line, in.c);
             break;
         case PXOP_GETF_OPT: { // OptionalField：obj null→null，否则 px_field
-            LXValue o = fr->slots[in.b];
+            LXValue o = slots[in.b];
             if (cf->mod && in.c < cf->mod->nN)
-                fr->slots[in.a] = px_is_null(o) ? px_null()
+                slots[in.a] = px_is_null(o) ? px_null()
                                                 : px_field(o, cf->mod->N[in.c]);
             else px_error("VM %s:%d GETF_OPT 名字越界 n=%d", cf->name, fr->line, in.c);
             break;
         }
         case PXOP_SETF:      // a=val 槽，b=obj，c=N 名字 idx（px_field_set）
             if (cf->mod && in.c < cf->mod->nN)
-                px_field_set(fr->slots[in.b], cf->mod->N[in.c], fr->slots[in.a]);
+                px_field_set(slots[in.b], cf->mod->N[in.c], slots[in.a]);
             else px_error("VM %s:%d SETF 名字越界 n=%d", cf->name, fr->line, in.c);
             break;
         // CALLM：方法调用桥（px_method obj.name(args..)，obj=槽 b，方法名=N[c]，
         //   fl=argc，实参=槽 b+1..b+argc；返回写槽 a）——px_method 语义=现 C 桥
         case PXOP_CALLM: {
-            LXValue ov = fr->slots[in.b];
+            LXValue ov = slots[in.b];
             int argc = (int)in.fl;
             int dst = in.a;
             LXValue* abuf = NULL;
@@ -736,7 +851,7 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
                 if (in.b + 1 + n > fr->nslots) n = fr->nslots - (int)in.b - 1;
                 if (n > 0) {
                     abuf = (LXValue*)malloc((size_t)n * sizeof(LXValue));
-                    for (int i = 0; i < n; i++) abuf[i] = fr->slots[in.b + 1 + i];
+                    for (int i = 0; i < n; i++) abuf[i] = slots[in.b + 1 + i];
                     argc = n;
                 } else argc = 0;
             }
@@ -755,7 +870,7 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
                 r = px_method(ov, cf->mod->N[in.c], abuf, argc);
             else px_error("VM %s:%d CALLM 名字越界 n=%d", cf->name, fr->line, in.c);
             free(abuf);
-            if (in.a < fr->nslots) fr->slots[in.a] = r;
+            if (in.a < fr->nslots) slots[in.a] = r;
             break;
         }
 
@@ -763,7 +878,7 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
         // TRY（?）：Result-Err → 就地返回 Err（RET 语义回传）；null → 返回 null；
         // Ok → 就地解包覆写槽。对齐 codegen err_tag 模型（函数尾仅转发，语义等价）。
         case PXOP_TRY: {
-            LXValue v = fr->slots[in.a];
+            LXValue v = slots[in.a];
             int is_err = px_is_result(v) && !px_result_ok(v);
             int is_nul = !is_err && px_is_null(v);
             if (is_err || is_nul) {
@@ -778,29 +893,29 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
                 break;
             }
             if (px_is_result(v)) v = px_result_unwrap(v);   // Ok 就地解包
-            fr->slots[in.a] = v;
+            slots[in.a] = v;
             break;
         }
         // FORCE（!）：Result-Err → px_error；null → px_error；否则就地解包
         case PXOP_FORCE: {
-            LXValue v = fr->slots[in.a];
+            LXValue v = slots[in.a];
             if (px_is_result(v)) {
                 if (!px_result_ok(v))
                     px_error("force unwrap Err: %s", px_to_string(px_result_unwrap(v)));
                 v = px_result_unwrap(v);
             }
             if (px_is_null(v)) px_error("force unwrap null");
-            fr->slots[in.a] = v;
+            slots[in.a] = v;
             break;
         }
         case PXOP_JMP:
             fr->pc += (int)(int16_t)in.b;   // off 相对下一条：目标=(pc+1)+off
             break;
         case PXOP_JMPT:
-            if (px_is_truthy(fr->slots[in.a])) fr->pc += (int)(int16_t)in.b;
+            if (vm_truthy(slots[in.a])) fr->pc += (int)(int16_t)in.b;
             break;
         case PXOP_JMPF:
-            if (!px_is_truthy(fr->slots[in.a])) fr->pc += (int)(int16_t)in.b;
+            if (!vm_truthy(slots[in.a])) fr->pc += (int)(int16_t)in.b;
             break;
         default:
             // A1 起逐批实现；错误现场含函数名/行号/op 名，对齐 px_error 语义
