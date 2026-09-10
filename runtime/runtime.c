@@ -952,7 +952,7 @@ static bool px_value_is_obj(LXValue v) {
 // 释放对象内部子分配 + 对象本体（sweep 阶段调用）
 static void px_obj_free(LXObject* o) {
     switch (o->type) {
-        case PX_STR: xfree(o->as.str.data); break;
+        case PX_STR: xfree(o->as.str.data); xfree(o->as.str.rune_offs); break;   // M106-S2：连缓存偏移表一起回收
         // M57-S2：mmap bytes（is_mmap=1）的 data 是 mmap 映射区 → munmap；普通 bytes → xfree
         case PX_BYTES:
             if (o->is_mmap) {
@@ -961,6 +961,7 @@ static void px_obj_free(LXObject* o) {
             } else {
                 xfree(o->as.str.data);
             }
+            xfree(o->as.str.rune_offs);   // M106-S2：bytes 恒不建表（NULL），防御性释放
             break;
         case PX_LIST: xfree(o->as.list.items); break;
         case PX_DICT:
@@ -1704,6 +1705,7 @@ LXValue px_str_len(const char* s, int len) {
     char* d = xmalloc(len + 1);
     memcpy(d, s, len); d[len] = 0;
     o->as.str.data = d; o->as.str.len = len;
+    o->as.str.rune_len = -1; o->as.str.offs_cnt = 0; o->as.str.rune_offs = NULL;  // M106-S2：惰性缓存初值
     v.as.obj = o;
     gc_register(o, sizeof(LXObject) + len + 1);
     return v;
@@ -1720,6 +1722,7 @@ LXValue px_bytes_len(const void* data, int len) {
     if (len > 0 && data) memcpy(d, data, (size_t)len);
     d[len] = 0;
     o->as.str.data = d; o->as.str.len = len;
+    o->as.str.rune_len = -1; o->as.str.offs_cnt = 0; o->as.str.rune_offs = NULL;  // M106-S2：bytes 恒不建表
     v.as.obj = o;
     gc_register(o, sizeof(LXObject) + len + 1);
     return v;
@@ -2054,6 +2057,58 @@ int px_unicode_len_n(const char* s, int n) {
 
 int px_unicode_len(const char* s) {
     return px_unicode_len_n(s, (int)strlen(s));
+}
+
+// ==================== M106-S2（Issue 33-A）：str 惰性 rune 缓存 ====================
+// 病灶：px_index / px_len 的 PX_STR 分支每次调用都 px_unicode_len_n 全扫一遍（O(n)），
+//   且 px_index 还要从 byte0 线性走到第 i 个 rune（O(i)）⇒ 逐字符扫描 .px 代码天然 O(n²)
+//   （64KB 实测 5.4s；ws-approve /check 因 json_valid 逐字符两趟 → 11.6s → 越过 fail-closed）。
+// 解法：str 对象上挂两个惰性缓存（见 runtime.h 的 str 子结构注释）——
+//   rune_len（一次 O(n)，之后 O(1)）+ rune_offs（一次 O(n) 建表，之后 s[i] 取起始偏移 O(1)）。
+// 语义红线（逐条对齐改动前）：
+//   1. rune_len 值 = px_unicode_len_n 的原结果（**不是**建表步数——畸形 UTF-8 下二者不等）；
+//   2. 偏移表按 px_index 原线性走查**完全相同的步进规则**建（前导字节判长），
+//      故表中 offs[i] 与旧代码走 i 步后的 p 逐字节相同；
+//   3. 索引 i ≥ 表步数时（仅畸形 UTF-8 可能）**回落原线性走查**，连越界读行为都保持原样；
+//   4. 单字符结果仍按原 c0 判长（px_utf8_clen(c0)）构造，不改 clen 语义。
+// 内存/性能取舍：仅字节长度 ≥ PX_STR_OFFS_MIN 的串才建表（表 = 4B×步数），小串线性走更划算。
+#define PX_STR_OFFS_MIN 1024
+
+// 前导字节 → 该字符字节数（与 px_index 原实现的判定式逐字相同）
+static inline int px_utf8_clen(unsigned char cc) {
+    if ((cc & 0x80) == 0) return 1;
+    if ((cc & 0xE0) == 0xC0) return 2;
+    if ((cc & 0xF0) == 0xE0) return 3;
+    if ((cc & 0xF8) == 0xF0) return 4;
+    return 1;
+}
+
+// 惰性 rune 计数（结果与 px_unicode_len_n 完全一致；str 不可变 ⇒ 无失效逻辑）
+static inline int px_str_rune_len(LXObject* o) {
+    int c = __atomic_load_n(&o->as.str.rune_len, __ATOMIC_RELAXED);
+    if (c < 0) {
+        c = px_unicode_len_n(o->as.str.data, o->as.str.len);
+        __atomic_store_n(&o->as.str.rune_len, c, __ATOMIC_RELAXED);
+    }
+    return c;
+}
+
+// 惰性 rune→byte 起始偏移表；返回 NULL 表示"小串/空串，走原线性走查"
+static int* px_str_offs_get(LXObject* o) {
+    int* p = __atomic_load_n(&o->as.str.rune_offs, __ATOMIC_ACQUIRE);
+    if (p) return p;
+    int n = o->as.str.len;
+    if (n < PX_STR_OFFS_MIN) return NULL;          // 小串：不建表（避免小串也付分配代价）
+    const unsigned char* s = (const unsigned char*)o->as.str.data;
+    if (!s) return NULL;
+    int* offs = (int*)xmalloc(sizeof(int) * ((size_t)n + 1));   // 步数 ≤ 字节数 ⇒ n+1 足够
+    int c = 0, i = 0;
+    while (i < n) { offs[c++] = i; i += px_utf8_clen(s[i]); }   // 与 px_index 原走查同步进规则
+    int* old = __atomic_load_n(&o->as.str.rune_offs, __ATOMIC_ACQUIRE);
+    if (old) { xfree(offs); return old; }          // 竞态：他线程已建 → 用它的，丢弃本次
+    __atomic_store_n(&o->as.str.offs_cnt, c, __ATOMIC_RELAXED);
+    __atomic_store_n(&o->as.str.rune_offs, offs, __ATOMIC_RELEASE);   // 先放数据后发布指针
+    return offs;
 }
 
 // 简单数字转字符串（int/float）
@@ -2520,29 +2575,24 @@ LXValue px_index(LXValue obj, LXValue idx) {
         // M89-S3-C1 补漏（M83-S1 GAP-STR-1-B1）：索引越界须用 str.len 字节边界（strlen 在
         //   内嵌 NUL 处截断 → 含 \u{0} 的串 len()=N 但 s[0] 判越界，自举编译 pxlexer.px 崩）
         int i = (int)int_val(idx);
-        int ulen = px_unicode_len_n(obj.as.obj->as.str.data, obj.as.obj->as.str.len);
+        int ulen = px_str_rune_len(obj.as.obj);   // M106-S2：惰性 rune 计数（首次 O(n)，之后摊还 O(1)）
         if (i < 0) i += ulen;
         if (i < 0 || i >= ulen) px_error("字符串索引越界: %d", i);
-        const unsigned char* p = (const unsigned char*)obj.as.obj->as.str.data;
-        int count = 0;
-        while (count < i) {
-            unsigned char cc = *p;
-            int cl2 = 1;
-            if ((cc & 0x80) == 0) cl2 = 1;
-            else if ((cc & 0xE0) == 0xC0) cl2 = 2;
-            else if ((cc & 0xF0) == 0xE0) cl2 = 3;
-            else if ((cc & 0xF8) == 0xF0) cl2 = 4;
-            else cl2 = 1;
-            p += cl2;
-            count++;
+        const unsigned char* base = (const unsigned char*)obj.as.obj->as.str.data;
+        const unsigned char* p;
+        int* offs = px_str_offs_get(obj.as.obj);  // M106-S2：≥1KB 的串建一次偏移表
+        int ocnt = offs ? __atomic_load_n(&obj.as.obj->as.str.offs_cnt, __ATOMIC_RELAXED) : 0;
+        if (offs && i < ocnt) {
+            p = base + offs[i];                   // 第 i 个 rune 的起始字节 —— O(1)
+        } else {
+            // 回落原线性走查（小串未建表；或 i ≥ 建表步数——仅畸形 UTF-8 可达）：
+            //   步进规则与建表完全一致，故 offs[i] 与"走 i 步"结果逐字节相同，此处纯为等义兜底。
+            p = base;
+            int count = 0;
+            while (count < i) { p += px_utf8_clen(*p); count++; }
         }
         unsigned char c0 = *p;
-        int clen = 1;
-        if ((c0 & 0x80) == 0) clen = 1;
-        else if ((c0 & 0xE0) == 0xC0) clen = 2;
-        else if ((c0 & 0xF0) == 0xE0) clen = 3;
-        else if ((c0 & 0xF8) == 0xF0) clen = 4;
-        else clen = 1;
+        int clen = px_utf8_clen(c0);              // M106-S2：与原判定式逐字等价
         char buf[8] = {0};
         memcpy(buf, p, clen);
         // M89-S3-C1 补漏：单字符结果须按 clen 带长构造（px_str 用 strlen → 取到 NUL 字符时
@@ -2601,7 +2651,7 @@ LXValue px_slice(LXValue obj, LXValue start, LXValue end, LXValue step) {
     int len, kind = 0; // 0=list 1=tuple 2=str 3=bytes
     if (obj.type == PX_LIST) { kind = 0; len = obj.as.obj->as.list.len; }
     else if (obj.type == PX_TUPLE) { kind = 1; len = obj.as.obj->as.tuple.len; }
-    else if (obj.type == PX_STR) { kind = 2; len = px_unicode_len_n(obj.as.obj->as.str.data, obj.as.obj->as.str.len); }
+    else if (obj.type == PX_STR) { kind = 2; len = px_str_rune_len(obj.as.obj); }   // M106-S2：惰性缓存
     else if (obj.type == PX_BYTES) { kind = 3; len = obj.as.obj->as.str.len; }
     else { px_error("无法切片: %s", px_type_name(obj)); return px_null(); }
 
@@ -2799,7 +2849,7 @@ bool px_dict_has(LXValue dict, const char* key) {
 
 int px_len(LXValue v) {
     switch (v.type) {
-        case PX_STR: return px_unicode_len_n(v.as.obj->as.str.data, v.as.obj->as.str.len); // M83-S1：尊重 str.len（内嵌 NUL 不再截断）
+        case PX_STR: return px_str_rune_len(v.as.obj); // M106-S2：惰性 rune 计数（原为每次 px_unicode_len_n 全扫）；M83-S1：尊重 str.len（内嵌 NUL 不再截断）
         case PX_LIST: return v.as.obj->as.list.len;
         case PX_DICT: return v.as.obj->as.dict.len;
         case PX_TUPLE: return v.as.obj->as.tuple.len;
@@ -4052,6 +4102,7 @@ static LXValue bi_mmap(LXValue* args, int nargs, void* ctx) {
     o->type = PX_BYTES;
     o->as.str.data = (char*)p;
     o->as.str.len = (int)len;
+    o->as.str.rune_len = -1; o->as.str.offs_cnt = 0; o->as.str.rune_offs = NULL;  // M106-S2：mmap bytes 恒不建表
     v.as.obj = o;
     gc_register(o, sizeof(LXObject) + len);  // 置 gc_mark=0/is_mmap=0 并注册（可能触发 GC；对象受 g_tmp_root 保护）
     o->is_mmap = 1;                          // 注册后再标 mmap，防 sweep 在标记前误判回收
@@ -4067,6 +4118,8 @@ static LXValue bi_munmap(LXValue* args, int nargs, void* ctx) {
     if (munmap(o->as.str.data, (size_t)o->as.str.len) != 0) return px_bool(false);
     o->as.str.data = NULL;
     o->as.str.len = 0;
+    o->as.str.rune_len = -1; o->as.str.offs_cnt = 0;   // M106-S2：连缓存一起复位（防解除后误用旧表）
+    o->as.str.rune_offs = NULL;                        // （bytes 本不建表，纯防御）
     o->is_mmap = 0;
     return px_bool(true);
 }

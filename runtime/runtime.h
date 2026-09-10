@@ -61,7 +61,18 @@ struct LXObject {
     unsigned gc_mark : 1;   // M8 GC：标记-清除标记位
     unsigned is_mmap : 1;   // M57-S2：PX_BYTES 的 data 指向 mmap 映射区（GC 回收走 munmap 而非 xfree）
     union {
-        struct { char* data; int len; } str;
+        struct {
+            char* data; int len;
+            // M106-S2（Issue 33-A）：str 惰性 rune 缓存 —— 把 s[i] / len(s) / for ch in s
+            //   从 O(n) 降为摊还 O(1)。仅 PX_STR 使用；PX_BYTES 共享同一表示，但恒为
+            //   (-1, 0, NULL)，且按 type 分派，绝不为 bytes 建表。
+            //     rune_len ：px_unicode_len_n 的缓存值（-1 = 未计算）
+            //     offs_cnt ：rune_offs 表有效条目数（表已分配 offs_cnt 个 int）
+            //     rune_offs：惰性 rune→byte 起始偏移表（仅字节长度 ≥ PX_STR_OFFS_MIN 时建）
+            //   二者均为纯数据（非 LXObject*）→ gc_mark_obj 的 PX_STR/PX_BYTES
+            //   default 分支不扫描 union，precise/conservative 双模式都不受影响。
+            int rune_len; int offs_cnt; int* rune_offs;
+        } str;
         struct { LXValue* items; int len, cap; } list;
         struct { char** keys; LXValue* vals; int len, cap; } dict;
         struct { char* name; LXFuncPtr fn; void* ctx; } func;
