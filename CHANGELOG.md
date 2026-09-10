@@ -6,6 +6,53 @@
 
 ## [Unreleased]
 
+### M106 · 字符串下标原语 O(n)→摊还 O(1)（qg-issue 33-A 语言层主修 · 真实负载 1.78~1.89x）
+
+> 依据 `/data/qg-issue/33-puxian-str-index-on-n2/ISSUE.md`（清歌新建，L0 runtime 性能缺陷）。Issue 33 的用户可见现象是
+> 审批链路的 fail-closed 统一文案，但根因**不在连接**（那是 Issue 31/32）而在 **`s[i]` / `len(s)` 为 O(n)/次**：
+> `px_index` 的 PX_STR 分支先全串扫一遍拿 rune 数、再从 byte0 走到第 i 个 rune ⇒ 逐字符扫字符串天然 **O(n²)**；
+> ws-approve 的纯 .px `json_valid`（`/check` 调两次）在 64KB body 上放大成 11.6s，越过 2s/5s fail-closed 阈值。
+> 计划、量化表与实测见 `docs/M106_PLAN.md`。
+> - **S1 量化（零侵入采样剖析 + 调用者归因，插桩件不入库）**——真实负载 `compiler_vm bc stdlib/yaml.px`：
+>   - 基线 **3080 样本**，`px_index` 独占 **46.43%**；补丁后 **1663 样本**，`px_index` **0.06%**，
+>     且 `3080 − 1430 = 1650 ≈ 1663` ⇒ **差值恰好是这一项，零新热点**（其余符号绝对计数持平）；
+>   - 采样计数比 **3080/1663 = 1.85x**，与计时实测 1.78~1.89x **互证**；
+>   - 补丁后第一大户转为分配器/页回收（~87%），调用者归因（v2 采样器采 `[RBP+8]`）：
+>     `xmalloc` **95.25% ← `px_str_len`**、`slab_reclaim_empty` **100% ← `px_gc_collect`**
+>     （对上 libc `munmap`/`mmap` 19.4%、`strace` 系统调用时间 mmap 53.94% / munmap 43.31%）
+>     ⇒ **M107 候选方向：①字符串分配抖动 ②GC 页回收风暴**（优于继续抠解释循环分派，M104 已证伪）。
+> - **S2 实施**（`runtime/runtime.c` +70/−23、`runtime/runtime.h` +13/−1）：`LXObject.str` 加两个惰性缓存
+>   `rune_len`（惰性 rune 计数）+ `rune_offs`/`offs_cnt`（惰性 rune→byte 偏移表，`PX_STR_OFFS_MIN=1024`，
+>   仅字节长度 ≥1KB 的串建表），接入 `px_index`/`px_len`/`px_slice`——
+>   覆盖两种 `for ch in s` 形态（C 轨 `cg_stmt.px` 生成 `for(i;i<px_len(x);i++) x[i]`；
+>   VM 轨 `bc_emit.px` 生成 `n=len(its)` + 每元素 `INDEX`）；`px_obj_free`/`px_str_len`/`px_bytes_len`/
+>   `bi_mmap`/`bi_munmap` 配平。**语义红线 9 条**逐条对齐改动前：`rune_len` 存的是原 `px_unicode_len_n` 结果
+>   （**不是**建表步数，畸形 UTF-8 下二者不等）、偏移表与旧线性走查**同步进规则**、`i ≥ 表步数` **回落原走查**
+>   （连越界读行为都保留）、单字符仍按前导字节判长构造、负索引/内嵌 NUL/M89-S3-C1 语义不动、
+>   str 不可变 ⇒ 无失效逻辑、缓存字段为纯数据（`gc_mark_obj` 不扫 union；`LXValue` 尺寸不变 ⇒ 精确 GC 路径逐字不变）、
+>   建表路径 `__atomic_*` 先数据后发布指针（竞态时他线程已建的胜出）。
+>   - 实测（`taskset -c 3`，5 轮取 min CPU=user+sys；两二进制同旗标、同非 runtime 源文件（逐项 md5 核验），
+>     仅 `runtime.c/h` 不同；机器静默 load≈0.86）：**基线 2.730~2.870s → 修复 1.510~1.610s = 1.78~1.89x**；
+>   - 语言层微基准（对口 ISSUE §2.1/§7 判据 1）：`s[i]` 逐字符扫 64KB **4.740s → 0.030s（158x）**、
+>     `while i < len(s)` 形态 **8.250s → 0.040s（206x）**；修复前规模 ×2 耗时 ×4（0.08→0.29→1.18→4.74 = 标准 O(n²)），
+>     修复后**平坦**（≥1KB 建表后摊还 O(1)）；
+>   - 等价性对拍：16 个输入（ASCII/CJK/emoji/CRLF/6 类畸形 UTF-8/2KB 长畸形/NUL 头/NUL 中/混合，
+>     覆盖建表路径与回落路径）的 `len(s)` + **每个 `s[i]` 的字节序列** before vs after **逐字节相同**；
+>     负索引（`s[-1]`/`s[-n]`）+ 3 个越界用例报错文案一致（含 `字符串索引越界: 8192`）。
+>   - 代价与已知边界（如实记录）：`LXObject.str` **+8 字节/串**（`LXValue` 不变）；
+>     偏移表 4B×字节、随对象回收，且**当前无上限** ⇒ 建议二期加 `PX_STR_OFFS_MAX`（超过则回落原线性走查 = 与改动前同行为）。
+> - **S5 收口（双自举 + 重链 + 全量回归）**：
+>   - **双自举**：C 轨 `bootstrap_prove.sh --fresh` → B.c == `golden/compiler.c`（**15060 行**）逐字节一致；
+>     BC 轨 `bootstrap_prove_bc.sh --fresh` → 重放 dump == `golden/compiler.bc.dump`（**30581 行**）逐字节一致；
+>   - **`bootstrap/pxi` / `bootstrap/pxi_vm` 重链吸收 M106 runtime**（先判轨再重链）；
+>   - **回归**（套件自报 rtcache = 补丁版运行时缓存目录，确认跑在新 runtime 上）：`vm_ab.sh v2`
+>     **38 PASS / 0 GAP / 0 FAIL** · `diffcheck --all` **rc=0**（s01–s15 与 golden 一致；value/interp 全量通过）·
+>     m89_s3d **PASS=9/FAIL=0** · m93_s3 **PASS=6/FAIL=0** · m96_s2 **PASS=8/FAIL=0** · m103_s2d **rc=0** ·
+>     生态索引防漂移（`gen_ecosystem.px` + `gen_native_table.sh` → `git diff --exit-code`）**无漂移** ·
+>     冒烟：C 轨/VM 轨 `hello` 产物 + `pxi`/`pxi_vm` 解释**四方逐字节一致**。
+>   - tag **`v0.2.0-m106`**。
+
+
 ### M105 · 运行时热点路径重构（S1 量化 + S2 全局表 O(1) 名解析 + S3 GC 同步瘦身 + S5 收口）
 
 > 依据 `docs/M104_PLAN.md` §7.3 归因（「真瓶颈在 runtime 侧的名解析与锁路径，而非解释循环分派」），
