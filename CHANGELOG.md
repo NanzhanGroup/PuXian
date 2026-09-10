@@ -6,6 +6,29 @@
 
 ## [Unreleased]
 
+### CI 修复 · fmt 门收敛（selfhost/bc_emit.px + stdlib/yaml.px）
+
+> GitHub Actions #211（M103-S3 收口 run）toolchain job `fmt --check selfhost/*.px`
+> 报 `selfhost/bc_emit.px` 格式不符。根因：两文件增量写入时绕过格式门、累积至
+> #211 暴露——bc_emit.px（M89-S3-C2 并入 compiler.px 后从未收敛，老账）+
+> stdlib/yaml.px（M103-S2c 新增 yaml_stringify 段）。
+> - **修复**：bootstrap/pxfmt -w 规范化两文件。`git diff -w` 为空 → 纯空行/行内
+>   尾注释对齐变化，**零代码语义变化**（bc_emit.px -55 行空行 -14 行尾注释对齐、
+>   yaml.px -11 行空行）。
+> - **基准同步**：编译器源码行号平移 → 产物调试行号字段同步，双 golden 更新
+>   （compiler.c 1453 处 px_srcline 值、compiler.bc.dump 1453 处 SRCLINE 值，
+>   非行号差异 0 处）+ 重链 bootstrap/pxc_vm（源码↔二进制对应）。
+> - **生态索引同步**（#211 第二处红，fmt 步骤过后才暴露）：M103-S2c 扩展
+>   stdlib/yaml.px 后未重跑 `tools/gen_ecosystem.px` → docs/ecosystem_index.json
+>   的 yaml `lines` 仍为 404（滞后）→ 重生成同步为 592；native_index.json 无漂移。
+> - **验证**：C 轨自举 rc=0 + BC 轨自举全链重建 rc=0 + vm_ab v2 **38P/0GAP/0F** +
+>   diffcheck --all rc=0 + m66_yaml 35P/0F + m103_s2c 46P/0F + pxlint
+>   selfhost/compiler.px 0 错 0 警 + fmt --check 全收敛域（selfhost+tools+stdlib）绿。
+> - **pxc_vm 保持入库版**：本次仅源码行号平移（无功能变化），VM 编译器产物语义
+>   零影响（vm_ab/diffcheck 全绿）；重链方式与 M92 常量级不同，不做不可控变更。
+> - **防复发**：改动/新增 .px 先 `px fmt -w` 再入库；收口流程前置 fmt 收敛域检查
+>   + 生态/native 索引重生成（CI toolchain job 两道门）。
+
 ### M103 · 清歌 Issue 29/30 语言层缺口收官（ws-ddns / api-server PuXian 化阻塞清零）
 
 > M103 = 清歌 Issue 29（29-puxian-ddns-gaps：dns TXT + ed25519_keygen）+ Issue 30

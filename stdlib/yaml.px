@@ -401,7 +401,6 @@ def yaml_parse(text):
     if r["idx"] < len(ls):
         return {"ok": false, "error": "line " + str(ls[r["idx"]]["line"]) + ": 解析未消费完整输入"}
     return {"ok": true, "value": r["node"]}
-
 # ============================================================
 # YAML 序列化（M103-S2c，Issue 30 GAP-YAML-SER）：yaml_stringify(value)
 # ------------------------------------------------------------
@@ -423,7 +422,6 @@ def yl_sp(n):
         s += " "
         i += 1
     return s
-
 # 字符串裸输出是否会与 parse 子集歧义/破坏结构 → 需双引号
 def yl_needs_quote(s):
     if len(s) == 0:
@@ -453,7 +451,6 @@ def yl_needs_quote(s):
                 return true
         i += 1
     return false
-
 # 双引号转义（与 parse yl_unescape_dq 支持集对齐：\" \\ \n \t \r）
 def yl_esc_dq(s):
     var out = "\""
@@ -474,12 +471,10 @@ def yl_esc_dq(s):
             out += c
         i += 1
     return out + "\""
-
 def yl_key_str(k):
     if type(k) == "string":
         return k
     return str(k)
-
 # 标量 → 单行文本（引号/转义在此决策）
 def yl_scalar_str(v):
     let t = type(v)
@@ -500,14 +495,12 @@ def yl_scalar_str(v):
     if t == "bytes":
         return yl_esc_dq(bytes_to_str(v))
     return yl_esc_dq(str(v))
-
 # 键渲染：引号判定同值（含 ':'+空白的键裸写会被 kv 切分提前切断）
 def yl_render_key(k):
     let ks = yl_key_str(k)
     if yl_needs_quote(ks):
         return yl_esc_dq(ks)
     return ks
-
 # dict 键值行（容器值 → 键行 + 换行缩进块；空容器 → 行内 {} / []）
 def yl_kv_line(k, v, ind):
     let p = yl_sp(ind) + yl_render_key(k) + ":"
@@ -521,7 +514,6 @@ def yl_kv_line(k, v, ind):
             return p + " []"
         return p + "\n" + yl_render(v, ind + 2)
     return p + " " + yl_scalar_str(v)
-
 # list 中的 dict 项（- key: val 首键行内，后续键缩进 ind+2 对齐 child_col；
 #   容器值块缩进 ind+4 与 parse yl_parse_seq 吸收规则对齐）
 def yl_seq_map(m, ind):
@@ -552,7 +544,6 @@ def yl_seq_map(m, ind):
         else:
             out += p + " " + yl_scalar_str(v)
     return out
-
 # list 项（标量 - v；dict → seq map；list → 空行缩进块；空容器行内）
 def yl_item_line(v, ind):
     let p = yl_sp(ind) + "-"
@@ -566,7 +557,6 @@ def yl_item_line(v, ind):
             return p + " []"
         return p + "\n" + yl_render(v, ind + 2)
     return p + " " + yl_scalar_str(v)
-
 # 块渲染（node 为 dict/list/标量；标量仅顶层调用可达）
 def yl_render(node, ind):
     let t = type(node)
@@ -593,7 +583,6 @@ def yl_render(node, ind):
             out += yl_item_line(item, ind)
         return out
     return yl_sp(ind) + yl_scalar_str(node)
-
 # 公共入口：value → YAML 文本（尾随 \n 对齐 Go yaml.Marshal）
 def yaml_stringify(value):
     let s = yl_render(value, 0)
