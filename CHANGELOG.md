@@ -6,6 +6,27 @@
 
 ## [Unreleased]
 
+### M107-S3 · 内存路径：slab 分配器复用 + 页回收收口（qg-issue 34 内存路径 · 真负载 5.6× / mmap+munmap −97.8%）
+
+> 依据 `docs/M107_PLAN.md` §3.5，病灶由 M106-S1 的**调用者归因**钉死（`xmalloc` 采样 28.84% 中 **95.25% ← `px_str_len`**；
+> `slab_reclaim_empty` 25.82% 中 **100% ← `px_gc_collect`**）+ `strace -f` 逐调用计数（真负载 mmap 59,369 / munmap 24,113，
+> 其中 **99.9% 是 4KB 单页**）。
+> - **S3a 位图内联**：`in_use` 位图由「独立 `slab_raw_alloc`（第二次 mmap）」改为**内联在 slab 映射尾部**
+>   （`[Slab 头][槽区][位图]` 同属一次 mmap）⇒ 每 slab 建 1 次 / 拆 1 次。
+> - **S3b 空槽复用不变量**：`g_slab_heads[ci]` 链语义强化为「链上恰好是该 class 中**尚有空槽**的 slab，
+>   链首即分配来源」；分配取满即摘链首、释放使 slab 由「满」变「有空槽」即头插回链（均 O(1)）。
+>   原实现只从链首分配 ⇒ **非头 slab 的空槽永不复用**（slab 只增不减、内存放大）。
+> - **S3c 空 slab 滞留水位**（`SLAB_FREE_STREAK=4`）：连续 4 轮 GC 观测到完全空闲才 `munmap`（原每轮全量归还 ⇒ 拆了又建）。
+> - **S3d 字符串合并分配**：`px_str_len` 由 **2 次 xmalloc**（`LXObject` + `data`）改为 **1 次**（`data` 内联在对象块后）。
+> - **S3e 单 slab 最小 16KB**：原按「≥4 槽」定页数，小 class 只映射 1 页 ⇒「每 slab 一次 mmap」固定成本被放大。
+> - **关键修复（消 O(N²)）**：`slab_reclaim_empty` 原对**每个**待归还 slab 走链摘除（O(链长)）⇒ O(归还数 × 链长)；
+>   真负载采样 top PC 正落在该内层循环（**77% 采样**）。改为「过滤 + **整链重建**」（O(N)）。
+> - **实测（真负载 `compiler_vm bc stdlib/yaml.px`，静默，3 轮取最好）**：real **1.554s → 0.280s（5.6×）**；
+>   mmap **59,369 → 1,827**、munmap **24,113 → 37**（合计 **−97.8%**）；峰值 RSS **144.7 → 38.5 MB（−73%）**；
+>   产物 **md5 逐字节一致**。旁证：分配器压力/边界用例 **2.29s → 0.48s（4.8×）**、32 例语料逐字节一致、**0 条 SLAB 告警**。
+> - `bootstrap/pxi` / `bootstrap/pxi_vm` 重链吸收 M107-S3 runtime。
+> - 计划、量化表与两次**实测纠错**（首版整链搜索退化 ~10s、次版单 hint 退化 ~14.5s）见 `docs/M107_PLAN.md` §3.5。
+
 ### M106 · 字符串下标原语 O(n)→摊还 O(1)（qg-issue 33-A 语言层主修 · 真实负载 1.78~1.89x）
 
 > 依据 `/data/qg-issue/33-puxian-str-index-on-n2/ISSUE.md`（清歌新建，L0 runtime 性能缺陷）。Issue 33 的用户可见现象是
