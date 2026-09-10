@@ -643,6 +643,42 @@ static int g_len = 0;
 // 锁序固定 g_gc_mu → g_globals_mu，无反向获取。
 static pthread_rwlock_t g_globals_mu = PTHREAD_RWLOCK_INITIALIZER;
 
+// M105-S2：全局表名解析 O(1) 哈希索引。
+// 依据（M105-S1 量化，见 docs/M105_PLAN.md）：真实负载 compiler_vm bc yaml.px 中
+//   95.0% 的 strcmp 调用来自本表线性扫描，平均每次 GETG 探测 331.6 项（g_len≈537，
+//   即平均扫过全表 62%）——px_get_global 均值 2.08µs，而 rdlock 仅 12ns。
+// 设计与约束：
+//   - 与 g_keys/g_vals 严格同步：唯一新增槽位点 = px_set_global 的 g_len++ 处落位；
+//   - 容量 = 2×GLOBAL_CAP（负载因子 ≤0.5），开放寻址线性探测，按 64 位名哈希比对，
+//     仅哈希命中时做一次 strcmp 兜底（保正确性下限）；
+//   - **锁语义不变**：读锁下只读索引、写锁下只写索引（与 g_keys/g_vals 同锁保护）；
+//   - **GC 根面不变**：根扫描仍线性遍历 g_vals，索引不参与 GC。
+#define GHASH_CAP (GLOBAL_CAP * 2)
+static uint32_t g_hidx[GHASH_CAP];   // 槽位号 + 1；0 表示空
+static uint64_t g_hval[GHASH_CAP];   // 对应探测位的 64 位名哈希
+static uint64_t g_name_hash(const char* s) {            // FNV-1a 64 位
+    uint64_t h = 1469598103934665603ULL;
+    while (*s) { h ^= (unsigned char)*s++; h *= 1099511628211ULL; }
+    return h;
+}
+// 查找：返回 g_keys/g_vals 槽位号；-1 = 未定义。调用方须持 g_globals_mu（读或写）。
+static int g_hash_find(const char* name, uint64_t hv) {
+    uint32_t h = (uint32_t)hv & (GHASH_CAP - 1);
+    for (;;) {
+        uint32_t e = g_hidx[h];
+        if (e == 0) return -1;                          // 空位 = 探测链终止
+        if (g_hval[h] == hv && strcmp(g_keys[e - 1], name) == 0) return (int)(e - 1);
+        h = (h + 1) & (GHASH_CAP - 1);
+    }
+}
+// 落位：仅在 px_set_global 新增槽位时调用（持写锁），此后键指针恒稳定（永不回收）。
+static void g_hash_put(uint64_t hv, int slot) {
+    uint32_t h = (uint32_t)hv & (GHASH_CAP - 1);
+    while (g_hidx[h] != 0) h = (h + 1) & (GHASH_CAP - 1);
+    g_hidx[h] = (uint32_t)slot + 1;
+    g_hval[h] = hv;
+}
+
 // ==================== GC（M8：保守标记-清除，值对象自动释放） ====================
 // 所有 LXObject 注册到全局对象表 g_objs。分配累计超阈值 → gc_collect()：
 //   1) mark：根 = 全局表 + 暂存根（刚创建对象）+ 当前线程栈保守扫描
@@ -2922,12 +2958,11 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
         sigset_t old;
         pthread_rwlock_rdlock(&g_globals_mu);
         gc_block_stop(&old);
-        for (int i = 0; i < g_len; i++) {
-            if (strcmp(g_keys[i], buf) == 0 && (g_vals[i].type == PX_FUNC || g_vals[i].type == PX_NATIVE)) {
-                m = g_vals[i];
-                m_found = true;
-                break;
-            }
+        // M105-S2：原线性 strcmp 扫描 → O(1) 哈希查找（CALLM 热路径；名=「类型.方法」）
+        int mslot = g_hash_find(buf, g_name_hash(buf));
+        if (mslot >= 0 && (g_vals[mslot].type == PX_FUNC || g_vals[mslot].type == PX_NATIVE)) {
+            m = g_vals[mslot];
+            m_found = true;
         }
         gc_unblock_stop(&old);
         pthread_rwlock_unlock(&g_globals_mu);
@@ -2953,13 +2988,13 @@ LXValue px_get_global(const char* name) {
     sigset_t old;
     pthread_rwlock_rdlock(&g_globals_mu);
     gc_block_stop(&old);
-    for (int i = 0; i < g_len; i++) {
-        if (strcmp(g_keys[i], name) == 0) {
-            LXValue v = g_vals[i];
-            gc_unblock_stop(&old);
-            pthread_rwlock_unlock(&g_globals_mu);
-            return v;
-        }
+    // M105-S2：原 O(g_len) 线性 strcmp 扫描 → O(1) 哈希查找（命中数/返回值不变）
+    int gi = g_hash_find(name, g_name_hash(name));
+    if (gi >= 0) {
+        LXValue v = g_vals[gi];
+        gc_unblock_stop(&old);
+        pthread_rwlock_unlock(&g_globals_mu);
+        return v;
     }
     gc_unblock_stop(&old);
     pthread_rwlock_unlock(&g_globals_mu);
@@ -2976,17 +3011,17 @@ bool px_global_native(const char* name, LXValue* out) {
     sigset_t old;
     pthread_rwlock_rdlock(&g_globals_mu);
     gc_block_stop(&old);
-    for (int i = 0; i < g_len; i++) {
-        if (strcmp(g_keys[i], name) == 0) {
-            LXValue v = g_vals[i];
-            gc_unblock_stop(&old);
-            pthread_rwlock_unlock(&g_globals_mu);
-            if (v.type == PX_NATIVE) {
-                if (out) *out = v;
-                return true;
-            }
-            return false;   // 名存在但非内置函数（用户变量/常量/结构体等）
+    // M105-S2：同 px_get_global，改 O(1) 哈希查找（语义：名存在则按类型返回）
+    int gi = g_hash_find(name, g_name_hash(name));
+    if (gi >= 0) {
+        LXValue v = g_vals[gi];
+        gc_unblock_stop(&old);
+        pthread_rwlock_unlock(&g_globals_mu);
+        if (v.type == PX_NATIVE) {
+            if (out) *out = v;
+            return true;
         }
+        return false;   // 名存在但非内置函数（用户变量/常量/结构体等）
     }
     gc_unblock_stop(&old);
     pthread_rwlock_unlock(&g_globals_mu);
@@ -2998,15 +3033,16 @@ void px_set_global(const char* name, LXValue v) {
     // 写入），与 px_get_global 读、GC 根扫描互斥；g_len 在锁内更新保证原子可见。
     // 错误路径先解锁再 px_error（px_error 不持锁返回，避免锁泄漏/死锁）。
     sigset_t old;
+    uint64_t hv = g_name_hash(name);   // M105-S2：哈希在拿写锁前算（纯函数，只读 name）
     pthread_rwlock_wrlock(&g_globals_mu);
     gc_block_stop(&old);
-    for (int i = 0; i < g_len; i++) {
-        if (strcmp(g_keys[i], name) == 0) {
-            g_vals[i] = v;
-            gc_unblock_stop(&old);
-            pthread_rwlock_unlock(&g_globals_mu);
-            return;
-        }
+    // M105-S2：原 O(g_len) 线性 strcmp 扫描 → O(1) 哈希查找；新增槽位处同步落位索引
+    int gi = g_hash_find(name, hv);
+    if (gi >= 0) {
+        g_vals[gi] = v;
+        gc_unblock_stop(&old);
+        pthread_rwlock_unlock(&g_globals_mu);
+        return;
     }
     if (g_len >= GLOBAL_CAP) {
         gc_unblock_stop(&old);
@@ -3016,6 +3052,7 @@ void px_set_global(const char* name, LXValue v) {
     }
     g_keys[g_len] = xstrdup(name);
     g_vals[g_len] = v;
+    g_hash_put(hv, g_len);
     g_len++;
     gc_unblock_stop(&old);
     pthread_rwlock_unlock(&g_globals_mu);
