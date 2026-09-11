@@ -311,8 +311,17 @@ void px_route_respond(PxHttpOut* out, LXValue req, const char* method, int head_
     RouteResp rr;
     route_normalize(resp, &rr);
     fprintf(stderr, "[px-serve] [route] %s %s -> %d\n", method, pstr, rr.status);
-    char rsp_extra[512];
-    snprintf(rsp_extra, sizeof(rsp_extra), "X-Request-Id: %s\r\n", req_id);
+    char rsp_extra[PX_HDR_EXTRA_CAP];
+    int rsp_off = snprintf(rsp_extra, sizeof(rsp_extra), "X-Request-Id: %s\r\n", req_id);
+    if (rsp_off < 0 || rsp_off >= (int)sizeof(rsp_extra)) rsp_off = (int)sizeof(rsp_extra) - 1;
+    // M109-S1/S3：route() handler 的 headers 与 vhost 走**同一套判定**
+    //   （拒绝名单 + CRLF 防护 + 预算）。原实现只取 Content-Type，其余全丢 →
+    //   301 连 Location 都发不出（qg-issue 36 的 route 同族缺陷）。
+    {
+        LXValue rh = px_dict_get(resp, "headers");
+        if (rh.type == PX_DICT)
+            rsp_off = px_hdr_append(rh, rsp_extra, rsp_off, (int)sizeof(rsp_extra), 1, NULL);
+    }
     route_send(out, rr.status, rr.ct, rr.body, rr.body_len, head_only, keep_alive, rsp_extra);
     // M36：route 响应统一访问日志（与解释器 log_access 一致）
     {
@@ -333,8 +342,14 @@ void px_route_mw_short_respond(PxHttpOut* out, LXValue req, const char* method, 
     RouteResp rr;
     route_normalize(r, &rr);
     fprintf(stderr, "[px-serve] [route] %s %s -> %d (middleware)\n", method, pstr, rr.status);
-    char rsp_extra[512];
-    snprintf(rsp_extra, sizeof(rsp_extra), "X-Request-Id: %s\r\n", req_id);
+    char rsp_extra[PX_HDR_EXTRA_CAP];
+    int rsp_off = snprintf(rsp_extra, sizeof(rsp_extra), "X-Request-Id: %s\r\n", req_id);
+    if (rsp_off < 0 || rsp_off >= (int)sizeof(rsp_extra)) rsp_off = (int)sizeof(rsp_extra) - 1;
+    {
+        LXValue rh = px_dict_get(r, "headers");     // M109-S1/S3：与 vhost 同一套判定
+        if (rh.type == PX_DICT)
+            rsp_off = px_hdr_append(rh, rsp_extra, rsp_off, (int)sizeof(rsp_extra), 1, NULL);
+    }
     route_send(out, rr.status, rr.ct, rr.body, rr.body_len, head_only, keep_alive, rsp_extra);
     // M36：middleware 短路响应统一访问日志（与解释器 log_access 一致）
     {
