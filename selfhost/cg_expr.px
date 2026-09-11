@@ -169,10 +169,10 @@ def cg_gen_expr(expr):
         if callee[0] == "Var":
             let cname = rust_unescape(callee[1])
             # M42：extern def → FFI 调用（统一走 ffi_call C 桥，双模式一致）
+            # M112-S0（Issue 46）：E3004 移交共享语义层（VM 轨同一条）
+            cg_sem_call(callee, args)
             if cg_ffi.has(cname):
                 let decl_params = cg_ffi[cname]
-                if len(args) != len(decl_params):
-                    cg_perr("E3004", "FFI 函数 " + cname + " 需要 " + str(len(decl_params)) + " 个参数，给出 " + str(len(args)))
                 let parts = []
                 var ai = 0
                 while ai < len(args):
