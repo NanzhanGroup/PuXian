@@ -80,9 +80,15 @@ def cg_mark_immutable(name):
     cg_immutables[name] = 1
 def cg_is_immutable(name):
     return cg_immutables.has(name)
+# M112-S0（Issue 45）：诊断通道必须 = stderr
+#   原先 print() 走 stdout，而 C 轨的产物正是 stdout → 错误文本被写进 .c，
+#   用户看到的是 gcc 抱怨一个中括号（误导性失败，比静默失败更难查）。
 def cg_perr(code, msg):
-    print("编译错误 " + code + ": " + msg)
+    print_err("编译错误 " + code + ": " + msg)
     exit(1)
+# M112-S0（Issue 45）：非致命诊断（模块缺失等）同样走 stderr，不污染产物
+def cg_pwarn(msg):
+    print_err("[警告] " + msg)
 # M41.3：空安全 E3003——null 赋给非可空类型 = 编译错误
 # 渐进类型：仅显式标注非空类型时检查；省略标注（any）/TyOptional 不查
 def cg_is_nonnull_ty(ty):
@@ -98,6 +104,54 @@ def cg_is_null_lit(e):
     if e[0] == "Null":
         return true
     return false
+# ============================================================
+# M112-S0（Issue 46）：轨无关共享语义检查 —— C 轨 / VM 轨唯一真相
+# ------------------------------------------------------------
+# 问题：E3002/E3003/E3004 原先是内联在 C 轨发射器（cg_stmt / cg_expr）里的。
+#   M89 文档记着"VM 侧收口时对齐"，而 M91 把默认轨切成 VM ⇒ 欠账变成默认行为：
+#   VM 轨语义错误码 0 个，C 轨 3 条；cases_bad 只在 C 轨跑 ⇒ 负例对默认轨零覆盖。
+# 设计：三条检查抽到此共享层（两轨消费的是同一个 prog，天然可插）。
+#   C 轨：cg_stmt.px / cg_expr.px 各调一行
+#   VM 轨：bc_emit.px 在 VarDecl / Assign / Call 三个 hook 各调一行
+#   → 单一真相：未来第三条轨（AOT/原生）白拿，不再靠"记得对齐"。
+# 约束：本层只用 codegen.px 自己的状态（cg_immutables / cg_nonnull / cg_ffi），
+#   零 C 轨发射器状态依赖 ⇒ bc_emit 侧调用安全。
+# 形参一律用 AST 节点（与两轨喂法一致）。
+# ============================================================
+# 声明语义：let/const 记不可变；显式非空标注 + null 初值 = E3003
+def cg_sem_vardecl(stmt):
+    # kind=stmt[1] name=stmt[2] ty=stmt[3] init=stmt[4]
+    let name = rust_unescape(stmt[2])
+    if stmt[1] == "Let" or stmt[1] == "Const":
+        cg_mark_immutable(name)
+    let decl_ty = stmt[3]
+    if cg_is_nonnull_ty(decl_ty):
+        cg_nonnull[name] = 1
+        if cg_is_null_lit(stmt[4]):
+            cg_perr("E3003", "无法将 null 赋给非可空类型 '" + cg_ty_name(decl_ty) + "'（可空类型请用 " + cg_ty_name(decl_ty) + "? 声明）")
+# 赋值语义：对不可变变量赋值 = E3002；对非空变量赋 null = E3003
+# 仅 Var 目标（Index/Field 目标两轨一致不查）
+def cg_sem_assign(tgt, op, rhs):
+    if tgt == null:
+        return
+    if tgt[0] != "Var":
+        return
+    let name = rust_unescape(tgt[1])
+    if cg_is_immutable(name):
+        cg_perr("E3002", "对不可变变量 '" + name + "' 赋值（let 默认不可变，需用 let mut/var 声明可变）")
+    if cg_is_null_lit(rhs) and cg_nonnull.has(name):
+        cg_perr("E3003", "无法将 null 赋给非可空类型变量 '" + name + "'（可空类型请声明为 " + name + ": T?）")
+# 调用语义：extern def 声明的 FFI 函数实参个数不匹配 = E3004
+def cg_sem_call(callee, args):
+    if callee == null:
+        return
+    if callee[0] != "Var":
+        return
+    let cname = rust_unescape(callee[1])
+    if cg_ffi.has(cname):
+        let decl_params = cg_ffi[cname]
+        if len(args) != len(decl_params):
+            cg_perr("E3004", "FFI 函数 " + cname + " 需要 " + str(len(decl_params)) + " 个参数，给出 " + str(len(args)))
 # 类型显示名（错误消息用）
 def cg_ty_name(ty):
     if ty == null:

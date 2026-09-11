@@ -480,12 +480,20 @@ cmd_build() {
         cmp_sub="--emit-c"
         [ -x "$cmp_bin" ] || { echo "错误: VM 引擎需要 VM 版编译器 $cmp_bin（bootstrap/pxc_vm 或先跑 selfhost/bootstrap_prove_bc.sh 生成；逃生舱 PX_BUILD_ENGINE=c）" >&2; return 1; }
     fi
-    "$cmp_bin" $cmp_sub "$file" > "$c_path" 2>/dev/null || {
+    # M112-S0（Issue 45）：产物 = stdout，诊断 = stderr —— 必须分 fd。
+    #   原先 `> "$c_path" 2>/dev/null` 把 stderr 丢掉，而编译器把报错写 stdout
+    #   （cg_perr 旧实现用 print）→ 错误文本被当作 C 源码存进 .c。
+    local cerr_log="${c_path}.stderr"
+    if ! "$cmp_bin" $cmp_sub "$file" > "$c_path" 2> "$cerr_log"; then
         echo "错误: 编译失败（$file）" >&2
-        # 重跑拿错误信息
-        "$cmp_bin" $cmp_sub "$file" 2>&1 | head -20 >&2
+        head -20 "$cerr_log" >&2
         return 1
-    }
+    fi
+    # M112-S0（Issue 42）：编译成功但有非致命诊断（如模块缺失）→ 透传给用户，不再吞掉
+    if [ -s "$cerr_log" ]; then
+        echo "警告: 编译期诊断（$file）:" >&2
+        head -20 "$cerr_log" >&2
+    fi
     # 2) M71-S1：runtime 预编译 .o 缓存（命中 → 只编 base.c + 链接；miss → 现编入缓存）
     local cache_dir
     # M86-S2 / M91：自动按需裁剪 —— 裸 `px build <file>` = 按引用集自动最小；
@@ -666,7 +674,7 @@ cmd_refs() {
     [ -f "$file" ] || { echo "错误: 无法读取文件 $file" >&2; exit 1; }
     local c
     c="$(mktemp /tmp/px_refs_XXXXXX.c)" || return 1
-    if ! "$PXC_BIN" build "$file" > "$c" 2>/dev/null; then
+    if ! "$PXC_BIN" build "$file" > "$c" 2>/tmp/px_refs_err.log; then
         rm -f "$c"
         echo "错误: 编译失败（$file）—— 自动裁剪退全量" >&2
         return 1
