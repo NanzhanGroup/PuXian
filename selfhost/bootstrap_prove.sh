@@ -8,8 +8,11 @@
 #       源码改动若破坏一致性，此证明立即失败。
 #
 # 用法：
-#   ./bootstrap_prove.sh            # 自举证明（B.c 缓存有效则复用）
-#   ./bootstrap_prove.sh --fresh    # 强制重新生成 B.c（约 3.5 分钟）
+#   ./bootstrap_prove.sh                  # 自举证明（B.c 缓存有效则复用）
+#   ./bootstrap_prove.sh --fresh           # 强制重新生成 B.c（实测约 6.5-7 分钟，8 核 16G）
+#   ./bootstrap_prove.sh --update-golden   # 有意改动编译器后重定基 golden/compiler.c
+#                                          # （重定基后强制重跑步骤 1 自证；改过源码/基准须同批
+#                                          #   重烘入库二进制：cp selfhost/build/compiler_vm bootstrap/pxc_vm）
 # ============================================================
 set -u
 cd "$(dirname "$0")"
@@ -42,11 +45,49 @@ echo "══════════ M-B9a 自举证明（PuXian-only）══�
 [ -f "$GOLDEN" ] || { echo "❌ 缺少基准 golden/compiler.c（= 引导编译器自身的 C 产物）" >&2; exit 1; }
 echo "── 基准：golden/compiler.c（$(wc -l < "$GOLDEN") 行 C 源码，引导编译器自身产物）"
 
+# ---- M112/Issue 48：--update-golden：把「指引」变成可执行（重定基后自证）----
+UPDATE_GOLDEN=0
+for a in "$@"; do [ "$a" = "--update-golden" ] && UPDATE_GOLDEN=1; done
+if [ "$UPDATE_GOLDEN" = "1" ]; then
+    echo "── [--update-golden] 重定基 golden/compiler.c（原 $(wc -l < "$GOLDEN") 行）"
+    cp -a "$GOLDEN" "$WORK/compiler.c.bak"
+    ug_rc=0
+    timeout 900 "$PXC" build compiler.px > "$GOLDEN" 2>"$WORK/golden.err" || ug_rc=$?
+    if [ "$ug_rc" -ne 0 ] || [ ! -s "$GOLDEN" ]; then
+        echo "❌ 重定基失败（exit=$ug_rc），已回滚 golden" >&2
+        cp -a "$WORK/compiler.c.bak" "$GOLDEN"
+        tail -5 "$WORK/golden.err" >&2
+        exit 1
+    fi
+    echo "    新基准 $(wc -l < "$GOLDEN") 行 / 旧 $(wc -l < "$WORK/compiler.c.bak") 行，差异 $(diff "$WORK/compiler.c.bak" "$GOLDEN" | grep -c '^[<>]') 行"
+    # 自证（不靠“应该一致”）：优先与既有 B.c 缓存对拍（同一源码链）；
+    # 无缓存或对不上 → 清缓存，让步骤 1 现算、步骤 2 复核。
+    if [ -s "$WORK/B.c" ]; then
+        if diff -q <(norm_c < "$WORK/B.c") <(norm_c < "$GOLDEN") >/dev/null 2>&1; then
+            echo "    ✅ 自证：新基准 == 既有 B.c 缓存（norm_c 后逐字节一致）"
+        else
+            echo "    ⚠️ 新基准与 B.c 缓存不一致（缓存可能来自旧源码）→ 步骤 1 重跑复核"
+            rm -f "$WORK/B.c"
+        fi
+    else
+        echo "    无 B.c 缓存 → 步骤 1 将现算并由步骤 2 复核"
+    fi
+fi
+
 # ---- 步骤 1：用引导编译器编译 compiler.px → B.c ----
 if [ "${1:-}" = "--fresh" ] || ! cache_valid; then
-    echo "── 步骤 1：bootstrap/pxc 编译 compiler.px → B.c（约 3.5 分钟）"
-    timeout 900 "$PXC" build compiler.px > "$WORK/B.c" 2>&1
-    echo "    （exit=$?，$(wc -c < "$WORK/B.c") 字节）"
+    echo "── 步骤 1：bootstrap/pxc 编译 compiler.px → B.c（实测约 6.5-7 分钟，8 核 16G 单线程）"
+    # Issue 49：产物通道与诊断通道必须分开，且必须判退出码。
+    # 旧写法 `> B.c 2>&1` 会把诊断文本写进“产物”，失败时 B.c 仍非空 →
+    # 步骤 1 表面通过，错误被推迟到步骤 2 报成“产物有差异”（误导）。
+    step1_rc=0
+    timeout 900 "$PXC" build compiler.px > "$WORK/B.c" 2>"$WORK/B.err" || step1_rc=$?
+    echo "    （exit=$step1_rc，$(wc -c < "$WORK/B.c") 字节；诊断 → $WORK/B.err）"
+    if [ "$step1_rc" -ne 0 ]; then
+        echo "❌ 步骤 1 编译失败（exit=$step1_rc）：B.c 不是有效产物，后续 diff 无意义" >&2
+        tail -5 "$WORK/B.err" >&2
+        exit 1
+    fi
 else
     echo "── 步骤 1：B.c 缓存有效，复用（--fresh 强制重跑）"
 fi
@@ -68,6 +109,10 @@ else
     diff "$WORK/A.n.c" "$WORK/B.n.c" | head -20
     echo ""
     echo "提示：若刚改了编译器源码，需先确认改动是有意的；"
-    echo "     有意改动请重新生成基准：tools/bootstrap.sh --update-golden"
+    echo "     有意改动请重定基（Issue 48：旧提示指向不存在的 tools/bootstrap.sh）："
+    echo "       cd selfhost && ./bootstrap_prove.sh --update-golden      # 重定基 golden/compiler.c"
+    echo "       cd selfhost && ./bootstrap_prove_bc.sh --update-golden   # 重定基 golden/compiler.bc.dump"
+    echo "     两条基准须与源码同批提交；改过基准后入库二进制同步重烘："
+    echo "       cp selfhost/build/compiler_vm bootstrap/pxc_vm && ./selfhost/engine_parity.sh"
     exit 1
 fi

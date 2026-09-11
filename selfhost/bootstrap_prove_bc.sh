@@ -19,6 +19,9 @@
 # 用法：
 #   ./bootstrap_prove_bc.sh             # BC 轨自举证明（缓存有效则复用）
 #   ./bootstrap_prove_bc.sh --fresh     # 强制全链重建（约 12-15 分钟）
+#   ./bootstrap_prove_bc.sh --update-golden  # 有意改动后重定基 golden/compiler.bc.dump
+#                                            # （基准由 C 引擎 compiler_new 生成，再由 VM 引擎
+#                                            #   compiler_vm 重放逐字节自证——跨引擎才算真定基）
 # 前置：bootstrap/pxc（引导编译器）；.rtcache 含 vm.o 的缓存（px build 任一
 #   程序生成）；gcc。golden/compiler.c 的 C 轨同步由 bootstrap_prove.sh 守护。
 # ============================================================
@@ -48,6 +51,10 @@ newest_src() {
 
 fresh_build() { [ "${1:-}" = "--fresh" ]; }
 
+# M112/Issue 48：--update-golden（重定基 golden/compiler.bc.dump，步骤 5 的 VM 重放即自证）
+UPDATE_GOLDEN=0
+for a in "$@"; do [ "$a" = "--update-golden" ] && UPDATE_GOLDEN=1; done
+
 echo "══════════ M89-S3-C2 自举证明（BC 轨 · 字节码权威）══════════"
 [ -x "$PXC" ] || { echo "❌ 缺少引导编译器 bootstrap/pxc" >&2; exit 1; }
 [ -f "$GOLDEN_BC" ] || { echo "❌ 缺少基准 golden/compiler.bc.dump" >&2; exit 1; }
@@ -56,9 +63,9 @@ echo "── 基准：golden/compiler.bc.dump（$(wc -l < "$GOLDEN_BC") 行字�
 # ---- 步骤 1：B.c（pxc 编 compiler.px，C 引擎产物）----
 if fresh_build "$@" || [ ! -s "$BUILD/compiler_new.c" ] \
    || [ "$(stat -c %Y "$BUILD/compiler_new.c" 2>/dev/null || echo 0)" -lt "$(newest_src)" ]; then
-    echo "── 步骤 1：bootstrap/pxc 编译 compiler.px → compiler_new.c（约 3.5 分钟）"
-    timeout 900 "$PXC" build compiler.px > "$BUILD/compiler_new.c" 2>&1 || {
-        echo "❌ pxc build compiler.px 失败" >&2; tail -5 "$BUILD/compiler_new.c" >&2; exit 1; }
+    echo "── 步骤 1：bootstrap/pxc 编译 compiler.px → compiler_new.c（实测约 6.5-7 分钟）"
+    timeout 900 "$PXC" build compiler.px > "$BUILD/compiler_new.c" 2>/tmp/bpbc_build.log || {
+        echo "❌ pxc build compiler.px 失败" >&2; tail -5 /tmp/bpbc_build.log >&2; exit 1; }
 else
     echo "── 步骤 1：compiler_new.c 缓存有效，复用"
 fi
@@ -91,6 +98,22 @@ else
     echo "── 步骤 2：compiler_new 缓存有效，复用"
 fi
 [ -x "$BUILD/compiler_new" ] || { echo "❌ compiler_new 不存在" >&2; exit 1; }
+
+# ---- M112/Issue 48：--update-golden：用 C 引擎重定基 BC 基准（步骤 5 由 VM 引擎重放自证）----
+if [ "$UPDATE_GOLDEN" = "1" ]; then
+    echo "── [--update-golden] 重定基 golden/compiler.bc.dump（原 $(wc -l < "$GOLDEN_BC") 行）"
+    cp -a "$GOLDEN_BC" "$WORK/compiler.bc.dump.bak"
+    ug_rc=0
+    ( ulimit -v 10000000; timeout 1500 "$BUILD/compiler_new" bc compiler.px \
+        > "$WORK/new_golden.bc.dump" 2>/tmp/bpbc_golden.log ) || ug_rc=$?
+    if [ "$ug_rc" -ne 0 ] || [ ! -s "$WORK/new_golden.bc.dump" ]; then
+        echo "❌ 重定基失败（exit=$ug_rc），golden 未改动" >&2
+        tail -5 /tmp/bpbc_golden.log >&2
+        exit 1
+    fi
+    cp -a "$WORK/new_golden.bc.dump" "$GOLDEN_BC"
+    echo "    新基准 $(wc -l < "$GOLDEN_BC") 行 / 旧 $(wc -l < "$WORK/compiler.bc.dump.bak") 行"
+fi
 
 # ---- 步骤 3：VM 驱动版编译器 compiler_vm（compiler.px 的字节码镜像 + VM）----
 need_vm=0
@@ -153,6 +176,8 @@ else
     diff "$WORK/golden_bc.n" "$WORK/vm_replay.n" | head -20
     echo ""
     echo "提示：若刚改了编译器源码，需先确认改动是有意的；"
-    echo "     有意改动请同步 golden/compiler.bc.dump（pxc 编 compiler.px bc 模式）。"
+    echo "     有意改动请重定基：cd selfhost && ./bootstrap_prove_bc.sh --update-golden"
+    echo "     （基准由 C 引擎 compiler_new 生成，再由 VM 引擎 compiler_vm 重放自证；"
+    echo "       重烘入库二进制：cp selfhost/build/compiler_vm bootstrap/pxc_vm）"
     exit 1
 fi
