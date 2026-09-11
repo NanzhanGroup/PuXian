@@ -608,13 +608,17 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             slots[in.a] = slots[in.b];
             break;
         case PXOP_GETG: {
-            // A1：v1 经 px_get_global（D8 无锁化后置）；b=G idx
+            // M107-S2（Issue 35）：经「稳定指针槽位记忆」取值——m->G[b] 是编译期常量指针，
+            //   首次按名查找后记忆槽位号，其后 O(1) 命中（语义与 px_get_global 逐字一致：
+            //   未定义仍报同一文案、取值同在 g_globals_mu 读锁内拷贝）。
             const PxBCModule* m = cf->mod;
             if (!m || in.b >= (uint16_t)m->nG) {
                 px_error("VM %s:%d GETG 全局越界 g=%d (nG=%d)",
                          cf->name, fr->line, in.b, m ? m->nG : -1);
             }
-            slots[in.a] = px_get_global(m->G[in.b]);
+            int gi_g = px_global_resolve_stable(m->G[in.b]);
+            if (gi_g < 0) px_error("未定义变量: %s", m->G[in.b]);
+            slots[in.a] = px_global_at(gi_g);
             break;
         }
         case PXOP_SETG: {

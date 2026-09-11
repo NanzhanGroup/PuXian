@@ -262,6 +262,13 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs);
 void px_register_builtins(void);
 LXValue px_get_global(const char* name);
 void px_set_global(const char* name, LXValue v);
+// M107-S2（Issue 35）：VM 轨全局名「稳定指针槽位记忆」——把「按名查找」摊到每处全局访问一次。
+//   px_global_resolve_stable：name 必须是**地址稳定**的字符串（BCModule 全局名表 m->G[b] 即
+//     编译期常量指针）；首次按名查找后记忆槽位号，其后 O(1) 命中。返回槽位号，-1 = 未定义。
+//     ⚠️ 不可用于可能被回收的堆字符串（地址复用会致误命中）——那些调用方继续用 px_get_global。
+//   px_global_at：按槽位号取值（持 g_globals_mu 读锁拷贝，语义同 px_get_global 的取值部分）。
+int     px_global_resolve_stable(const char* name);
+LXValue px_global_at(int gi);
 void px_args_init(int argc, char** argv);
 
 // ==================== M19 P1：AES / XML / zip ====================

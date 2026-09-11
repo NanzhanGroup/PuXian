@@ -3199,8 +3199,54 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
 
 // ==================== 全局表 ====================
 
-LXValue px_get_global(const char* name) {
-    // M55/P0（issue#2）：与 px_set_global/GC 根扫描经 g_globals_mu 互斥。持锁 +
+// ==================== M107-S2（Issue 35）：VM 轨全局名「稳定指针槽位记忆」 ====================
+// 依据（M107-S0 三轨实测）：每次全局名访问 ≈30ns，其中 strlen + FNV-1a + 开放寻址探测 + strcmp
+//   占大半。VM 轨 GETG 传入的名字来自 BCModule 全局名表 m->G[b]——**编译期常量字符串指针，
+//   程序生命周期内地址不变** ⇒ 可以「名字指针」为键做一级记忆，命中即整条按名查找链全省。
+// 不失效论证（红线 7）：全局表 name→槽位 映射**只增不改**——px_set_global 仅在未命中时
+//   xstrdup 追加（g_len++），命中时只覆写 g_vals[gi]（槽位号恒定）；表永不删除/移动/压缩。
+//   ⇒ 记忆项一旦落位，槽位号在进程余下生命周期内恒有效；同名重定义只改值、仍走同一槽位，
+//     取值结果与逐次按名查找**逐字一致**。
+// 适用边界（**调用方契约**）：仅限**地址稳定**的名字（VM 轨常量池名表）。其它调用方
+//   （如 spawn 的运行时函数名、总线 topic 键）可能传入会被 GC 回收的堆字符串，继续走
+//   px_get_global 的按名查找，**不进本记忆**（否则地址复用会致误命中）。
+// 并发：记忆只缓存**槽位号**，取值仍在校验同款读锁内从 g_vals 拷贝 ⇒ 可见性与改动前一致。
+#define PX_NG_CACHE 128                    // 2 的幂；直接映射，冲突即换出
+static __thread struct { const char* nm; int gi; } g_ng_memo[PX_NG_CACHE];
+
+static inline int px_ng_slot(const char* nm) {
+    // 乘性折叠取**高位**：字符串常量在 .rodata 中常相邻（地址仅低几位不同），
+    //   若先右移会把这些区分位丢掉 ⇒ 相邻名撞同一槽（实测 G_b/G_n 撞槽致 50% 未命中、
+    //   反而比按名查找更慢）。裸指针乘黄金常数后取高 7 位可把低位差异扩散到高位。
+    return (int)((uintptr_t)nm * 0x9E3779B97F4A7C15ULL >> (64 - 7));   // 7 位 ⇒ 128 槽
+}
+
+// 解析「地址稳定」全局名 → 槽位号（-1 = 未定义）。首次按名查找，其后走记忆。
+int px_global_resolve_stable(const char* name) {
+    int cs = px_ng_slot(name);
+    if (g_ng_memo[cs].nm == name) return g_ng_memo[cs].gi;   // 命中：免 strlen+哈希+探测+strcmp
+    sigset_t old;
+    pthread_rwlock_rdlock(&g_globals_mu);
+    gc_block_stop(&old);
+    int gi = g_hash_find(name, g_name_hash(name));
+    gc_unblock_stop(&old);
+    pthread_rwlock_unlock(&g_globals_mu);
+    if (gi >= 0) { g_ng_memo[cs].nm = name; g_ng_memo[cs].gi = gi; }
+    return gi;
+}
+
+// 按已解析槽位号取值（持读锁拷贝，语义同 px_get_global 取到值的部分）
+LXValue px_global_at(int gi) {
+    sigset_t old;
+    pthread_rwlock_rdlock(&g_globals_mu);
+    gc_block_stop(&old);
+    LXValue v = g_vals[gi];
+    gc_unblock_stop(&old);
+    pthread_rwlock_unlock(&g_globals_mu);
+    return v;
+}
+
+LXValue px_get_global(const char* name) {    // M55/P0（issue#2）：与 px_set_global/GC 根扫描经 g_globals_mu 互斥。持锁 +
     // 屏蔽 SIG_GC_STOP（协议同 g_gc_mu）：临界区不被 GC 暂停，stop-the-world 取
     // 本锁不会被"已暂停持锁线程"卡死；确保读到完整值（锁内拷贝，解锁返回）。
     sigset_t old;
