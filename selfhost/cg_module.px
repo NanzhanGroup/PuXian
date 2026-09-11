@@ -156,9 +156,19 @@ def cg_load_module(module, names, base_dir, out, std_defined):
         return
     let path = cg_find_module_path(module, base_dir)
     if path == null:
-        # std 模块缺失 → 静默跳过；用户模块缺失 → 打印警告
-        if module[0] != "std":
-            print("[module] 警告: 找不到模块 '" + key + "'（已跳过）")
+        # M112-S0（Issue 42）：模块缺失一律不再静默。
+        #   静默跳过 std 会把"编译失败"降级成"运行期未定义符号"——而这正是
+        #   默认轨（M91 起 = VM 轨）最常走的路径，诊断却最少。
+        #   · 诊断走 stderr（Issue 45）→ 不污染 .c 产物
+        #   · 默认非致命：兼容安装布局差异（PX_STDLIB 未设 / stdlib 未随装）
+        #   · 逃生舱 PX_STRICT_MODULE=1 → 直接编译错误（CI 建议开启）
+        let dir = cg_stdlib_dir()
+        var hint = ""
+        if module[0] == "std" and dir == null:
+            hint = "；stdlib 未找到（设 PX_STDLIB 或放置 stdlib/）"
+        if env("PX_STRICT_MODULE") != null:
+            cg_perr("E3005", "找不到模块 '" + key + "'" + hint)
+        cg_pwarn("找不到模块 '" + key + "'（已跳过 → 运行期将报未定义）" + hint)
         return
     loaded[key] = path
     let src = read_file(path)
