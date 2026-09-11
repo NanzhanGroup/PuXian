@@ -64,16 +64,34 @@ px build repro_route.px && ./build/repro_route # route 路径 5 头全丢
 - **必须编译模式**（`px build`）：pxi 下 `vhost(host, def_fn)` 报"第二参数需要 docroot 字符串或 handler 函数"——**这是第二个已记录现象**，本里程碑**不改变**其结论，但需在 S4 决定是"修 pxi 支持 handler"还是"文档明示仅编译模式可用"（先记录，不阻塞）。
 - S0 产出：基线数字入本文件 §3.1 + `docs/M109_PLAN.md` 附原始输出路径。
 
-### 3.1 基线（待 S0 实测填入）
+### 3.1 基线（S0 实测已填入，2026-09-11 · 编译模式 · 本机 `dongyue`）
 
-| 指标 | 现状 | 目标 |
+S0 实测命令与结果（**与 Issue 完全一致 ⇒ 复现成立**）：
+
+| 指标 | 现状（S0 实测） | 目标 | S1~S3 后实测 |
+|---|---|---|---|
+| Mahesvara 放行的 17 头到达数 | **7/17**（丢 ETag/Vary/HSTS/CSP/X-Content-Type-Options/X-Frame-Options/Referrer-Policy/WWW-Authenticate/Retry-After/Accept-Ranges） | **17/17** | **17/17 ✅** |
+| ma-cache 可观测头 | `Age`/`X-Cache`/`X-Cache-Key` **全丢** | 全通 | **3/3 ✅** |
+| `Content-Type` 独立通道 | 通 | 不变 | 通 ✅ |
+| 单头值可透传上限 | **970B**（`sweep.px` 900→1030 扫描：970 OK / 980 DROPPED） | ≥4096B 完整透传 | **4000B 完整（len=4000）✅** |
+| `route()` headers | 仅 `Content-Type`（**301 的 Location 收不到**） | 与 vhost 同集合 | **5/5 ✅** |
+| CRLF 防护（`/evilval`、`/evilkey`） | PASS | **仍 PASS** | **仍 PASS ✅** |
+
+> 复现原始输出：`/tmp/m109s0/`（`repro` / `sweep` / `repro_route` 三个二进制的 S0 前后对照）；
+> 验收测试固化在仓库 `examples/m109_s0/hdr_pass.px`（27 断言，末行 `M109-HDR ALL OK`）。
+
+### 3.2 S0 补充核对：白名单之外还有**第二、第三处**同类违约（计划外发现）
+
+S0 读码时在计划外多找到两处**同族缺陷**，一并纳入本里程碑（否则修一半等于没修）：
+
+| # | 位置（M109 前行号） | 违约 |
 |---|---|---|
-| Mahesvara 放行的 17 头到达数 | **7/17** | **17/17** |
-| ma-cache 可观测头 | `Age`/`X-Cache`/`X-Cache-Key` 全丢 | 全通 |
-| `Content-Type` 独立通道 | 通 | 不变 |
-| 单头值可透传上限 | **970B**（超则整条丢） | ≥4096B 完整透传 |
-| `route()` headers | 仅 `Content-Type` | 与 vhost 同集合 |
-| CRLF 防护（`/evilval`、`/evilkey`） | PASS | **仍 PASS** |
+| ⑥ | `runtime/runtime.c` `px_out11_begin`：`char head[2048]` | **头缓冲硬顶 2048B**，且 `if (off + l < sizeof(head))` 不满足时**把整个 extra 块丢弃**（不是截断）⇒ 只把 `extra[1024]` 提到 4096 会把"静默丢"从 extra 搬到 head。**必须同步提高**（S2 已改为 8192 + 只在 `\r\n` 边界截断） |
+| ⑦ | `runtime/runtime.c` **脚本 handler 路径**（`.px` 输出 `__PX_RESPONSE__:{json}`）：`gz_extra[512]` | 与 vhost/route 同族：headers 里**只取 Content-Type**，其余全丢。S3 已并入同一套判定 |
+
+> 这三处（vhost / route / 脚本 handler）+ 两处预算（extra/fextra/head）= **响应头通路的完整集合**；
+> 只改 §1 表里的 ①~⑤ 会让"脚本 handler 风格"的站点仍然丢头。
+
 
 ---
 
@@ -115,3 +133,126 @@ M109 与 M106/M107/M108 一并**随发布包下发**；本里程碑**不含**节
 | Issue 31/32（连接生命周期） | M108 | 症状易混（同一 fail-closed 文案），根因不同 |
 | Issue 33/34/35（性能） | M107 | 口径不同（耗时 vs 语义） |
 | Mahesvara 侧 `resp_header_pass` 收紧/放宽 | 业务侧（清歌） | 本里程碑只保证"runtime 不再单方面作废应用层意图"，应用层策略自控 |
+
+---
+
+## 8. 实施（S1 / S2 / S3 已全部落地）
+
+### 8.1 S1 判定哲学改造：白名单 → **拒绝名单**
+
+`runtime/runtime.c` 删除 `px_vhost_header_allowed()`（12 项白名单），改为：
+
+```c
+static const char* const PX_HDR_DENY[] = {
+    "Content-Length", "Transfer-Encoding", "Connection", "Keep-Alive",
+    "Trailer", "Upgrade", "Date", "Server", "X-Request-Id", NULL
+};
+int px_hdr_blocked(const char* k);     // strcasecmp，大小写不敏感
+```
+
+**默认放行**，只有拒绝名单被拦。拒绝理由逐条（对应红线 1）：
+
+| 头 | 为什么必须由 runtime 自管 |
+|---|---|
+| `Content-Length` | runtime 按 `body_len` 计算；handler 可写 → 长度错乱 / HTTP 走私面 |
+| `Transfer-Encoding` | 分帧方式由 runtime 决定（当前不发 chunked） |
+| `Connection` / `Keep-Alive` | 逐跳头，由 runtime 的 keep-alive 决策决定 |
+| `Trailer` / `Upgrade` | 逐跳/协议升级头，非 handler 语义 |
+| `Date` / `Server` | 运行时保留（避免 handler 伪造 Server 指纹、与运行时 Date 重复） |
+| `X-Request-Id` | runtime 已注入；handler 再写会产生**重复头**，且访问日志关联会错 |
+
+**CRLF 防护完整保留**（红线 2）：键/值任一含 `\r`/`\n` 一律丢弃，位于拒绝名单判定**之后**（叠加）。
+
+### 8.2 S1/S3 统一实现：`px_hdr_append()`（新增，`runtime/runtime.c` 实现、`runtime.h` 声明）
+
+```c
+int px_hdr_append(LXValue hdrs, char* extra, int off, int extra_sz, int skip_ct, int* out_dropped);
+```
+
+**四条通路全部改用它**（保证「同一套判定」这条红线）：
+
+| 通路 | 位置 | S1 前 | S1 后 |
+|---|---|---|---|
+| vhost（`px_vhost_normalize`，443） | `runtime.c` | 白名单 12 项 + `extra[1024]` | `px_hdr_append(..., skip_ct=1)` + `extra[4096]` |
+| fserve / `{"file":…}` 流式 | `runtime.c` | 白名单 + `fextra[1536]` | `px_hdr_append` + `fextra[4096]` |
+| **脚本 handler**（`__PX_RESPONSE__`） | `runtime.c` | 只取 Content-Type + `gz_extra[512]` | `px_hdr_append` + `gz_extra[4096]` |
+| **`route()`** | `runtime_route.c` ×2 处 | 只取 Content-Type | `px_hdr_append` + `rsp_extra[4096]` |
+
+### 8.3 S2 预算与「不静默」
+
+| 项 | S1 前 | S1 后 | 理由 |
+|---|---|---|---|
+| vhost extra | `extra[1024]` | `extra[4096]` | 原 1024 使 >970B 单头**整条丢弃** |
+| fserve extra | `fextra[1536]` | `fextra[4096]` | 同上 |
+| 脚本 handler extra | `gz_extra[512]` | `gz_extra[4096]` | 同上 |
+| route extra | `rsp_extra[512]` | `rsp_extra[4096]` | 同上 |
+| **HTTP/1.1 头缓冲** | `head[2048]` | **`head[8192]`** | **关键**：2048 会使 4096 预算在此处再次静默丢弃 |
+| 头缓冲溢出行为 | 整块静默丢弃 | **只在 `\r\n` 边界截断 + stderr** | 半行 = 畸形响应；宁少发几个完整头 |
+| 预算超限 | **静默丢弃**（无任何信号） | `g_hdr_drop_budget` 计数 + stderr（首 10 条 + 每 1000 条限频） | 红线 7「不静默」 |
+
+### 8.4 可观测性（并入 M108-S1c 的 `PX_SERVE_DIAG` 健康摘要）
+
+```
+[px-serve:diag] pool=… busy=… queue=… inflight=… hs(…) enter_null=… push_tmo=…
+                hdr(pass=… deny=… crlf=… budget=…)
+```
+
+- `pass` 成功透传头数 · `deny` 被拒绝名单拦下 · `crlf` 被 CRLF 防护拦下 · `budget` 因预算丢弃
+- `budget` 非 0 即说明**仍有头没发出去**（且已在 stderr 打了具体头名与长度）——这类"看得见的丢"取代原来的"看不见的丢"
+
+### 8.5 回归测试同步（红线 3）
+
+`examples/m57_s7_vhost_headers.px` **原断言 `assert not has(ks,"X-Custom")` 把本缺陷固化成了期望** ⇒
+S1 已改写为**拒绝名单语义**，并新增用例：
+
+- `/ok`：原白名单时代的头仍放行；`X-Custom` **改为必须放行**（M109 修复点）
+- `/new`：ETag / Vary / HSTS / CSP / X-Content-Type-Options / Retry-After / Accept-Ranges **必须到达**
+- `/deny`：9 个拒绝名单头**覆盖必须无效**（`Content-Length` 实为 runtime 自算值、`Connection` 非 `close`、`X-Request-Id` 非伪造值）；同 dict 的 `X-Keep` 照常透传
+- `/evilval`、`/evilkey`：CRLF 两例**仍 PASS**
+- `/ct`：`Content-Type` 仍走独立通道
+
+新增 `examples/m109_s0/hdr_pass.px` + `run.sh`：**27 断言**的端到端验收（含 4000B 完整透传、预算溢出时同响应小头仍存活、route 301 带 Location）。
+
+---
+
+## 9. 实测（S0 复现 → S1~S3 修复，同机同编译模式）
+
+| 用例 | S0 复现（M109 前） | S1~S3 后 |
+|---|---|---|
+| `/ma` 17 头 | **7/17** | **17/17** |
+| `/cache` 三头 | 0/3 | **3/3** |
+| `/budget` 1200B | 整条丢失 | **len=1200 完整** |
+| `sweep` 900→1030 扫描 | 970 OK / 980 DROPPED（上限 970B） | 全 OK（上限 >1030B；实测 4000B 通过） |
+| `repro_route` 301 | `[Content-Length, Connection, Content-Type, X-Request-Id]`（Location 丢） | **+ Location / Cache-Control / Set-Cookie / ETag / X-Custom** |
+| `hdr_pass` 27 断言 | —（新增） | **`M109-HDR ALL OK`** |
+| `m57_s7` | 旧断言要求 `X-Custom` 被丢（固化缺陷） | **`M57-S7 ALL OK (M109-S1 deny-list semantics)`** |
+
+**语义等价性说明**：本改动**有意改变**的行为 = 7/17 → 17/17、>970B → 4000B、route 仅 CT → 全集合；
+**有意保持不变**的行为 = CRLF 两例拦截、`Content-Type` 独立通道、runtime 自发头（静态文件 ETag/Last-Modified/Content-Range/Alt-Svc/Accept-Ranges）逐字节不变、拒绝名单内的头（`Content-Length` 等）仍不可被 handler 覆盖。
+
+---
+
+## 10. 闸门（提交前）
+
+沿用 M107/M108 口径，见 `/tmp/m109/gate.sh`：G0 规范 rtcache（清缓存重建 + md5 ≡ 仓库）·
+G1/G2 双自举 `--fresh` 逐字节 · G3 `vm_ab.sh v2` · G4 `diffcheck --all` ·
+G5–G8 m89_s3d/m93_s3/m96_s2/m103_s2d · G9 生态索引无漂移 · G10 p3_regex 双模式 ·
+**G11 m57_s7 回归** · **G12 m109_s0 验收** · G13 pxi/pxi_vm 重链 + 冒烟 · **G14 真 serve + `curl -i` 端到端**。
+
+---
+
+## 11. 遗留与边界（诚实交代）
+
+1. **`Set-Cookie` 多值受 dict 结构限制**：`headers` 是 dict ⇒ **同一头名只能有一条**，
+   "多值不合并"这条红线**由结构天然满足**（不存在合并路径）。若将来需要同名多值
+   （多 cookie / 多 `Vary` 分量），需把 `headers` 扩展为 list-of-pairs 或值支持数组 —— **本里程碑不做**，先记录。
+2. **`Date`/`Server` 被拒是"策略"而非"冲突"**：当前 runtime 并不主动发这两个头，
+   拒绝是为了避免 handler 伪造指纹与将来冲突。若业务确需自定义 `Server`，应改在**反向代理层**注入。
+3. **`pxi` 下 `vhost(host, handler)` 仍报错**（既有现象，与本次改动无关）：
+   `examples/m57_s7_vhost_headers.px`、`examples/m109_s0/hdr_pass.px` **均须编译模式**运行。
+   S4 定夺：修 pxi 支持 handler / 或文档明示仅编译模式。
+4. **外部复核未做**：Mahesvara `cache_test` 12/12 与 17 头现网到达表需**晨曦/清歌侧**在部署后跑
+   （本机无 Mahesvara）——**不能算已完成**。
+5. **分发**：随自动更新线下发（用户决策），本里程碑不含节点变更窗口；
+   生效观测法 = "某 handler 设 `ETag` → 客户端可见"。
+

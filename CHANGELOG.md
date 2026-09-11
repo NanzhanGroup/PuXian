@@ -6,6 +6,52 @@
 
 ## [Unreleased]
 
+### M109 · HTTP 响应头通路：白名单 → 拒绝名单（qg-issue 36 · handler 响应头不再被静默丢弃 + 预算 4KB + route/脚本通路统一）
+
+> 依据 `docs/M109_PLAN.md`。现场：晨曦 Mahesvara 明确放行的 **17 个响应头只有 7 个到达客户端**，
+> 10 个被**静默丢弃**（`ETag`/`Vary`/HSTS/CSP/`X-Content-Type-Options`/`X-Frame-Options`/`Referrer-Policy`/
+> `WWW-Authenticate`/`Retry-After`/`Accept-Ranges`）；ma-cache 的 `Age`/`X-Cache`/`X-Cache-Key` **全丢**
+> → CDN 命中率 68% 却无任何 HIT/MISS 标识，**险些误报「边缘没缓存」**；
+> `route()` 路径连 **301 的 `Location` 都发不出**；单头值 **>970B 整条丢弃**（非截断）。
+> 三处违约**都是静默的**（不报错、不打日志、调用方不可知）。
+
+#### 根因
+`M57-S7`（`da85065`，2026-09-03）引入「**默认拒绝**」白名单 `px_vhost_header_allowed()`（12 项）——
+它把「本框架还不知道的头」与「危险的头」混为一谈：**每新增一类头都要改 C 运行时，且漏改不报错**。
+此后 M104 ma-cache 的可观测头、Mahesvara P0a 的安全头**均未同步**，缺陷在静默中扩大。
+S0 读码时另在计划外发现**两处同族违约**（否则只修一半）：
+`px_out11_begin` 的 `head[2048]`（头缓冲硬顶，溢出时**整块丢弃**）与**脚本 handler 路径**
+（`__PX_RESPONSE__` json 的 headers 同样只取 `Content-Type`）。
+
+#### 修复（S1/S2/S3）
+| 片 | 内容 |
+|---|---|
+| **S1** | 删除 12 项白名单，改为**拒绝名单** `PX_HDR_DENY`：`Content-Length`/`Transfer-Encoding`/`Connection`/`Keep-Alive`/`Trailer`/`Upgrade`/`Date`/`Server`/`X-Request-Id`（runtime 自管，handler 不得覆盖）；**默认放行** |
+| **S1** | 新增 `px_hdr_append()`（`runtime.c` 实现、`runtime.h` 声明）——**四条通路统一**：vhost（443）/ fserve 流式 / **脚本 handler** / **`route()`**，终结「同一特性四份实现」 |
+| **S1** | **CRLF 防护完整保留**（叠加而非替代）：键/值任一含 `\r`/`\n` 一律丢弃，且位于拒绝名单判定之后 |
+| **S2** | 预算 `extra[1024]`/`fextra[1536]`/`gz_extra[512]`/`rsp_extra[512]` → **4096**；**头缓冲 `head[2048]` → 8192**（不提它等于把「静默丢」从 extra 搬到 head）；溢出改为**只在 `\r\n` 边界截断**（半行 = 畸形响应） |
+| **S2** | **不再静默**：预算丢弃 → stderr（头名/klen/vlen/need/剩余，首 10 条 + 每 1000 条限频）+ 计数 |
+| **S2** | 并入 M108-S1c 的 `PX_SERVE_DIAG` 健康摘要：`hdr(pass=… deny=… crlf=… budget=…)` |
+| **S3** | `route()` 归一化复用同套判定（`runtime_route.c` 两处：正常响应 + middleware 短路） |
+| **测试** | `examples/m57_s7_vhost_headers.px` 的 `assert not has(ks,"X-Custom")` **把缺陷固化成了期望** ⇒ 已改为拒绝名单语义 + 新增 `/new`(7 个原先被丢的头) / `/deny`(9 个拒绝名单头覆盖无效) 用例；新增 `examples/m109_s0/`（`hdr_pass.px` + `run.sh`，**27 断言**端到端验收） |
+
+#### 实测（S0 复现 → 修复后，同机同编译模式）
+| 用例 | 修复前 | 修复后 |
+|---|---|---|
+| `/ma` 17 头 | **7/17** | **17/17** |
+| `/cache` 三头 | 0/3 | **3/3** |
+| `/budget` 1200B | 整条丢失 | **len=1200 完整** |
+| `sweep` 900→1030 | 970 OK / **980 DROPPED**（上限 970B） | 全 OK（**4000B 实测完整**） |
+| `repro_route` 301 | Location **丢失** | **+ Location/Cache-Control/Set-Cookie/ETag/X-Custom** |
+| `m109_s0` 27 断言 | —（新增） | **`M109-HDR ALL OK`** |
+
+#### 边界（诚实交代）
+- `headers` 是 dict ⇒ 同一头名只能一条，「`Set-Cookie` 多值不合并」由结构天然满足；
+  **同名多值需扩展为 list-of-pairs —— 本里程碑不做**，已记录。
+- `Date`/`Server` 被拒是**策略**（避免伪造指纹/将来冲突），当前 runtime 并不主动发这两个头。
+- `pxi` 下 `vhost(host, handler)` 仍报错（既有现象，与本改动无关）⇒ 相关测试**须编译模式**运行。
+- Mahesvara `cache_test` 12/12 与现网 17 头到达表**待晨曦/清歌侧部署后复核**（本机无 Mahesvara）。
+
 ### M108 · 服务端连接生命周期族：TLS 握手不再拖死整端口（qg-issue 37 · 443 假死根因修复 + 池自愈 + 有界入队 + 可见性）
 
 > 依据 `docs/M108_PLAN.md`。现场：晨曦 Mahesvara **443 全站不可用 2h41m**（80/443 同进程，80 全好）、

@@ -595,6 +595,19 @@ void px_http_dispatch_h3(PxHttpOut* pout, LXValue req, int client_keep_alive);
 // cert/key 为空串 → 运行时自签（测试）；返回 listener id | -1（runtime_h3.c 定义）。
 int64_t px_h3_server_listen_pipe(int port, const char* cert, const char* key);
 
+// ==================== M109：handler 响应头透传（拒绝名单 + CRLF 防护 + 预算） ====================
+// 背景见 runtime.c 中 PX_HDR_DENY 的注释（qg-issue 36）。runtime.c 与 runtime_route.c 共用。
+//   · 默认放行，仅拦 PX_HDR_DENY（runtime 自管 / 破坏报文完整性 / 逐跳头）；
+//   · 键/值任一含 \r\n 一律丢弃（M57-S7 CRLF 防护完整保留，叠加而非替代）；
+//   · 预算上限 PX_HDR_EXTRA_CAP（注意：px_out11_begin 的头缓冲须 ≥ 此值 + 状态行余量）。
+#define PX_HDR_EXTRA_CAP 4096
+
+// 把 headers dict 追加为 "K: V\r\n" 到 extra（起始偏移 off）；skip_ct=1 跳过 Content-Type。
+// 返回追加后的新偏移；out_dropped（可 NULL）返回因预算丢弃的条数。丢弃均计入全局计数并可观测。
+int px_hdr_append(LXValue hdrs, char* extra, int off, int extra_sz, int skip_ct, int* out_dropped);
+// 是否在拒绝名单内（大小写不敏感）
+int px_hdr_blocked(const char* k);
+
 #ifdef __cplusplus
 }
 #endif

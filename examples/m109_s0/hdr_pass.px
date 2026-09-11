@@ -1,0 +1,172 @@
+# M109-S0/S1 验收测试：handler 响应头通路（qg-issue 36）
+# 覆盖：
+#   A. vhost：Mahesvara 放行的 17 个头 —— 目标 17/17 到达（M109 前为 7/17）
+#   B. vhost：ma-cache 可观测头 Age / X-Cache / X-Cache-Key
+#   C. vhost：单头 4000B 完整透传（M109 前 >970B 整条丢弃）
+#   D. vhost：拒绝名单（Content-Length/Transfer-Encoding/Connection/Keep-Alive/
+#      Trailer/Upgrade/Date/Server/X-Request-Id）—— handler 覆盖必须无效，且同 dict 里
+#      的非拒绝名单头照常透传
+#   E. vhost：预算溢出时同响应内小头仍存活（不因一个大头整体失败）
+#   F. vhost：CRLF 防护不回归（值注入 / 键注入）
+#   G. route()：301 + Location/Cache-Control/Set-Cookie/ETag/X-Custom 全部到达
+#      （M109 前仅 Content-Type，连 301 的 Location 都发不出）
+# 运行：sh run.sh   （或 px build hdr_pass.px && ./build/hdr_pass）
+# 注：PuXian 无闭包捕获外层可变变量 —— 计数一律在顶层累加（ck 返回 0/1）
+
+PORT = 18612
+
+MS_ALLOW = ["Content-Type", "Set-Cookie", "Location", "Cache-Control", "Content-Disposition", "ETag", "Vary", "X-Robots-Tag", "Strict-Transport-Security", "Content-Security-Policy", "X-Content-Type-Options", "X-Frame-Options", "Referrer-Policy", "WWW-Authenticate", "Retry-After", "Accept-Ranges", "Access-Control-Allow-Origin"]
+CACHE_HDRS = ["Age", "X-Cache", "X-Cache-Key"]
+
+def mk(vals):
+    d = json_parse("{}")
+    for k in vals:
+        d[k] = "v"
+    return d
+
+def vh(req):
+    p = req.path
+    if p == "/ma":
+        return {"status": 200, "body": "ma", "headers": mk(MS_ALLOW)}
+    if p == "/cache":
+        return {"status": 200, "body": "c", "headers": mk(CACHE_HDRS)}
+    if p == "/big4000":
+        b = json_parse("{}")
+        b["Cache-Control"] = "x" * 4000
+        return {"status": 200, "body": "b", "headers": b}
+    if p == "/over":
+        b = json_parse("{}")
+        b["Cache-Control"] = "y" * 6000        # 超预算 → 丢弃（不得影响其他头/报文完整性）
+        b["X-Small"] = "1"
+        return {"status": 200, "body": "bbb", "headers": b}
+    if p == "/deny":
+        b = json_parse("{}")
+        b["Content-Length"] = "99999"
+        b["Transfer-Encoding"] = "chunked"
+        b["Connection"] = "close"
+        b["Keep-Alive"] = "timeout=99"
+        b["Trailer"] = "X-T"
+        b["Upgrade"] = "h2c"
+        b["Date"] = "Thu, 01 Jan 1970 00:00:00 GMT"
+        b["Server"] = "fake/1.0"
+        b["X-Request-Id"] = "spoofed"
+        b["X-Keep"] = "yes"
+        return {"status": 200, "body": "dd", "headers": b}
+    if p == "/evilval":
+        return {"status": 200, "body": "e", "headers": {"Location": "/a\r\nX-Evil: 1"}}
+    if p == "/evilkey":
+        return {"status": 200, "body": "e", "headers": {"X-Evil\r\nInjected: 1": "x"}}
+    return {"status": 404, "body": "nf"}
+
+def rh(req):
+    hd = json_parse("{}")
+    hd["Location"] = "https://example.com/x"
+    hd["Cache-Control"] = "max-age=60"
+    hd["Set-Cookie"] = "sid=1"
+    hd["ETag"] = "abc"
+    hd["X-Custom"] = "1"
+    return {"status": 301, "body": "", "headers": hd}
+
+vhost("t.test", vh)
+route("GET", "/r", rh)
+
+def serve():
+    px_serve(PORT, "/tmp", 10000)
+spawn serve()
+sleep(400)
+
+def get(path):
+    hh = json_parse("{}")
+    hh.set("Host", "t.test")
+    return http_request("http://127.0.0.1:" + str(PORT) + path, "GET", "", hh)
+
+# route() 与 vhost 分派互斥：vhost 命中该 Host 时不会再走 route ——
+# 故 route 用例使用另一个 Host（r.test），确保走 route 分派路径（与 repro_route.px 一致）
+def get_route(path):
+    hh = json_parse("{}")
+    hh.set("Host", "r.test")
+    return http_request("http://127.0.0.1:" + str(PORT) + path, "GET", "", hh)
+
+def has(ks, name):
+    return contains(ks, name)
+
+def ck(name, cond):
+    if cond:
+        print("   [PASS] " + name)
+        return 0
+    print("   [FAIL] " + name)
+    return 1
+
+fail = 0
+
+print("=== A. vhost：MS_ALLOW 17 个头 ===")
+r = get("/ma")
+ks = str(r["headers"].keys())
+n = 0
+for k in MS_ALLOW:
+    if has(ks, k):
+        n = n + 1
+    else:
+        print("      丢失: " + k)
+fail = fail + ck("17/17 到达（实测 " + str(n) + "/17）", n == 17)
+
+print("=== B. vhost：ma-cache 可观测头 ===")
+r = get("/cache")
+ks = str(r["headers"].keys())
+m = 0
+for k in CACHE_HDRS:
+    if has(ks, k):
+        m = m + 1
+fail = fail + ck("Age/X-Cache/X-Cache-Key 3/3", m == 3)
+
+print("=== C. vhost：单头 4000B 完整透传 ===")
+r = get("/big4000")
+ks = str(r["headers"].keys())
+got = 0
+if has(ks, "Cache-Control"):
+    got = len(str(r["headers"]["Cache-Control"]))
+fail = fail + ck("4000B 值完整到达（实测 " + str(got) + "）", got == 4000)
+
+print("=== D. vhost：拒绝名单（runtime 自管头不可覆盖）===")
+r = get("/deny")
+ks = str(r["headers"].keys())
+fail = fail + ck("Content-Length 未被覆盖（实为 " + str(r["headers"]["Content-Length"]) + "，body=dd→2）", r["headers"]["Content-Length"] == "2")
+fail = fail + ck("Transfer-Encoding 未出现", not has(ks, "Transfer-Encoding"))
+fail = fail + ck("Connection 未被覆盖为 close", r["headers"]["Connection"] != "close")
+fail = fail + ck("Keep-Alive 未出现", not has(ks, "Keep-Alive"))
+fail = fail + ck("Trailer 未出现", not has(ks, "Trailer"))
+fail = fail + ck("Upgrade 未出现", not has(ks, "Upgrade"))
+fail = fail + ck("Date 未出现（运行时保留）", not has(ks, "Date"))
+fail = fail + ck("Server 未出现（运行时保留）", not has(ks, "Server"))
+fail = fail + ck("X-Request-Id 未被伪造", r["headers"]["X-Request-Id"] != "spoofed")
+fail = fail + ck("非拒绝名单头 X-Keep 照常透传", has(ks, "X-Keep"))
+
+print("=== E. vhost：预算溢出时同响应内小头仍存活 ===")
+r = get("/over")
+ks = str(r["headers"].keys())
+fail = fail + ck("超预算的 Cache-Control 被丢弃", not has(ks, "Cache-Control"))
+fail = fail + ck("同 dict 的 X-Small 仍到达", has(ks, "X-Small"))
+fail = fail + ck("Content-Length 仍正确（body=bbb→3）", r["headers"]["Content-Length"] == "3")
+
+print("=== F. vhost：CRLF 防护不回归 ===")
+r = get("/evilval")
+ks = str(r["headers"].keys())
+fail = fail + ck("值含 CRLF → Location 丢弃且无 X-Evil", not has(ks, "Location") and not has(ks, "X-Evil"))
+r = get("/evilkey")
+ks = str(r["headers"].keys())
+fail = fail + ck("键含 CRLF → 丢弃且无 X-Evil、服务不崩", not has(ks, "X-Evil"))
+
+print("=== G. route()：301 + 全部 headers 到达 ===")
+r = get_route("/r")
+ks = str(r["headers"].keys())
+fail = fail + ck("status=301", r["status"] == 301)
+for k in ["Location", "Cache-Control", "Set-Cookie", "ETag", "X-Custom"]:
+    fail = fail + ck("route 头到达: " + k, has(ks, k))
+fail = fail + ck("route Location 值正确", r["headers"]["Location"] == "https://example.com/x")
+
+print("")
+if fail == 0:
+    print("M109-HDR ALL OK")
+else:
+    print("M109-HDR FAIL=" + str(fail))
+    assert fail == 0

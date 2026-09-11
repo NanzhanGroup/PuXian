@@ -1,23 +1,38 @@
 # M57-S7 vhost handler 自定义响应头透传 + 注入防护（回归测试，双模式一致）
 # 背景：BUG_REPORT —— vhost(host, handler) 返回 dict{status,headers,body} 时，
 #       headers 除 Content-Type 外全部丢失（301 无 Location、Cache-Control 失效等）。
-# 修复：px_vhost_normalize 增加 extra 出参 + 白名单透传（Location/Cache-Control/
-#       Set-Cookie/Content-Disposition/CORS 等）+ CRLF 注入防护（键值任一含 \r\n 即丢弃）。
-# 本测试覆盖：① 白名单头正常透传 ② 非白名单头丢弃 ③ 值含 CRLF 丢弃（防注入）
-#           ④ 键含 CRLF 不崩溃（防注入）⑤ Content-Type 仍走独立通道
+#
+# M109-S1 改写（qg-issue 36）：原「默认拒绝白名单」把「框架还不知道的头」与「危险的头」
+#   混为一谈 → 每加一类头都要改 C 运行时且漏改不报错（实测 17 个头只有 7 个到达）。
+#   现改为 **默认放行 + 拒绝名单**：
+#     · 放行：除拒绝名单外一律透传（含 X-Custom 这类自定义头 —— 这正是本缺陷的修复点）
+#     · 拒绝：Content-Length / Transfer-Encoding / Connection / Keep-Alive / Trailer /
+#             Upgrade / Date / Server / X-Request-Id（runtime 自管，handler 不得覆盖）
+#     · CRLF 防护**完整保留**（叠加）：键/值任一含 \r\n 一律丢弃
+# 本测试覆盖：① 白名单时代放行的头仍放行 ② 新增头（X-Custom/ETag/Vary/HSTS）开始透传
+#           ③ 拒绝名单头的覆盖被拦下 ④ 值含 CRLF 丢弃 ⑤ 键含 CRLF 丢弃 ⑥ Content-Type 走独立通道
 
 PORT = 18608
 
 def h(req):
     p = req.path
     if p == "/ok":
-        return {"status": 200, "body": "ok", "headers": {"Location": "/dest", "Cache-Control": "max-age=3600", "Set-Cookie": "sid=abc123; Path=/", "Content-Type": "text/html", "X-Custom": "should-not-leak"}}
+        return {"status": 200, "body": "ok", "headers": {"Location": "/dest", "Cache-Control": "max-age=3600", "Set-Cookie": "sid=abc123; Path=/", "Content-Type": "text/html", "X-Custom": "custom-ok"}}
+    if p == "/new":
+        # M109 修复点：这些头在 M57-S7 白名单时代被静默丢弃
+        return {"status": 200, "body": "n", "headers": {"ETag": "W/\"abc\"", "Vary": "Accept-Encoding", "Strict-Transport-Security": "max-age=31536000", "Content-Security-Policy": "default-src 'self'", "X-Content-Type-Options": "nosniff", "Retry-After": "120", "Accept-Ranges": "bytes"}}
+    if p == "/deny":
+        # 拒绝名单：runtime 自管的头，handler 不得覆盖
+        return {"status": 200, "body": "d", "headers": {"Content-Length": "99999", "Transfer-Encoding": "chunked", "Connection": "close", "Keep-Alive": "timeout=99", "Upgrade": "h2c", "Trailer": "X-T", "Date": "Thu, 01 Jan 1970 00:00:00 GMT", "Server": "fake/1.0", "X-Request-Id": "spoofed", "X-Keep": "yes"}}
     if p == "/evilval":
         # Location 值注入 CRLF → 该头应整体丢弃（X-Evil 不得出现）
         return {"status": 200, "body": "ok", "headers": {"Location": "/a\r\nX-Evil: 1", "Content-Type": "text/html"}}
     if p == "/evilkey":
-        # 键含 CRLF → 不在白名单，应安全丢弃（X-Evil 不得出现、服务不崩）
+        # 键含 CRLF → 应安全丢弃（X-Evil 不得出现、服务不崩）
         return {"status": 200, "body": "ok", "headers": {"X-Evil\r\nInjected: 1": "x", "Content-Type": "text/html"}}
+    if p == "/ct":
+        # Content-Type 仍走独立通道（不进 extra），且按字典顺序最后一条生效语义不变
+        return {"status": 200, "body": "c", "headers": {"Content-Type": "application/x-ndjson", "X-Marker": "m"}}
     return {"status": 404, "body": "nf"}
 
 vhost("t.test", h)
@@ -43,8 +58,35 @@ assert has(ks, "Location") and r["headers"]["Location"] == "/dest"
 assert has(ks, "Cache-Control") and r["headers"]["Cache-Control"] == "max-age=3600"
 assert has(ks, "Set-Cookie") and r["headers"]["Set-Cookie"] == "sid=abc123; Path=/"
 assert r["headers"]["Content-Type"] == "text/html"
-assert not has(ks, "X-Custom")          # 非白名单头不得透传
+assert has(ks, "X-Custom") and r["headers"]["X-Custom"] == "custom-ok"   # M109：自定义头开始透传
 print("ok-path PASS")
+
+r = get("/new")
+ks = str(r["headers"].keys())
+print("NEW keys:", ks)
+assert has(ks, "ETag") and r["headers"]["ETag"] == "W/\"abc\""
+assert has(ks, "Vary") and r["headers"]["Vary"] == "Accept-Encoding"
+assert has(ks, "Strict-Transport-Security")
+assert has(ks, "Content-Security-Policy")
+assert has(ks, "X-Content-Type-Options")
+assert has(ks, "Retry-After") and r["headers"]["Retry-After"] == "120"
+assert has(ks, "Accept-Ranges") and r["headers"]["Accept-Ranges"] == "bytes"
+print("new-headers-path PASS (M109 fix)")
+
+r = get("/deny")
+ks = str(r["headers"].keys())
+print("DENY keys:", ks)
+assert r["headers"]["Content-Length"] != "99999"          # runtime 自算，handler 覆盖无效
+assert r["headers"]["Content-Length"] == "1"              # body "d" 长度 1
+assert not has(ks, "Transfer-Encoding")                   # 不得出现 chunked
+assert r["headers"]["Connection"] != "close"              # 由 keep-alive 决策
+assert not has(ks, "Keep-Alive")
+assert not has(ks, "Upgrade")
+assert not has(ks, "Trailer")
+assert not has(ks, "Server") and not has(ks, "Date")
+assert r["headers"]["X-Request-Id"] != "spoofed"          # runtime 注入，handler 不得伪造
+assert has(ks, "X-Keep") and r["headers"]["X-Keep"] == "yes"   # 非拒绝名单头照常透传
+print("deny-path PASS (runtime-managed headers protected)")
 
 r = get("/evilval")
 ks = str(r["headers"].keys())
@@ -58,4 +100,9 @@ print("EVILKEY keys:", ks)
 assert not has(ks, "X-Evil")
 print("evilkey-path PASS (CRLF key dropped)")
 
-print("M57-S7 ALL OK")
+r = get("/ct")
+assert r["headers"]["Content-Type"] == "application/x-ndjson"
+assert has(str(r["headers"].keys()), "X-Marker")
+print("content-type-path PASS")
+
+print("M57-S7 ALL OK (M109-S1 deny-list semantics)")

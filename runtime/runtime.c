@@ -212,7 +212,9 @@ static void px_serve_watchdog_start(void);
 static void* px_pool_worker(void* arg);
 static void px_vhost_normalize(LXValue v, int* status, const char** ct, const char** body, int* body_len,
                                char* extra, int extra_sz);
-static int px_vhost_header_allowed(const char* k);
+// M109-S1：handler 响应头透传（拒绝名单 + CRLF 防护 + 预算），定义见文件尾部
+int px_hdr_append(LXValue hdrs, char* extra, int off, int extra_sz, int skip_ct, int* out_dropped);
+int px_hdr_blocked(const char* k);
 static void px_vhost_docroot_store(const char* root);
 static const char* px_vhost_docroot(void);
 int px_rate_limit_try(const char* key, long long max, long long window_sec);
@@ -14665,14 +14667,23 @@ static void px_out11_begin(PxHttpOut* o, int status, const char* ct, long long b
     (void)head_only;  // HTTP/1.1 响应头总是带 Content-Length；HEAD 由上层不写 body 控制
     PxConn* c = (PxConn*)o->impl;
     const char* reason = px_http_status_reason(status);
-    char head[2048];
+    char head[8192];   // M109-S2：2048 → 8192（extra 预算升至 4096 后，原 2048 会在此处静默截断）
     int off = snprintf(head, sizeof(head),
                        "HTTP/1.1 %d %s\r\nContent-Length: %lld\r\nConnection: %s\r\n",
                        status, reason, body_len, keep_alive ? "keep-alive" : "close");
     if (ct && *ct) off += snprintf(head + off, sizeof(head) - (size_t)off, "Content-Type: %s\r\n", ct);
     if (extra_headers && *extra_headers) {
         int l = (int)strlen(extra_headers);
-        if (off + l < (int)sizeof(head)) { memcpy(head + off, extra_headers, (size_t)l); off += l; }
+        int room = (int)sizeof(head) - off - 1;      // 留 NUL
+        // 只在 "\r\n" 边界截断：宁可少发几个完整头，也绝不发出半行（半行 = 畸形响应）
+        // 注：预算（PX_HDR_EXTRA_CAP）已保证不触发；此处为纵深防御。
+        if (l > room) {
+            int cut = room;
+            while (cut > 0 && !(extra_headers[cut - 1] == '\n' && extra_headers[cut - 2] == '\r')) cut--;
+            fprintf(stderr, "[px-serve] 响应头超头缓冲：extra=%d 可容=%d 截断至 %d\n", l, room, cut);
+            l = cut;
+        }
+        if (l > 0) { memcpy(head + off, extra_headers, (size_t)l); off += l; }
     }
     // M33：Alt-Svc 通告（HTTP/3 协商；px_serve opts{alt_svc}，extra 未含时统一注入）
     if (g_px_alt_svc[0] && !(extra_headers && strstr(extra_headers, "Alt-Svc:"))) {
@@ -14813,31 +14824,15 @@ static void px_vhost_respond(PxHttpOut* pout, const char* method, int head_only,
             long long seg_len = rend - rstart + 1;
             int fst_code = is_range ? 206 : 200;
             const char* fct = px_mime_type(fpath);
-            char fextra[1536];
+            char fextra[PX_HDR_EXTRA_CAP];
             int feo = snprintf(fextra, sizeof(fextra), "X-Request-Id: %s\r\n", req_id);
             if (feo < 0 || feo >= (int)sizeof(fextra)) feo = (int)sizeof(fextra) - 1;
             LXValue fh = px_dict_get(r, "headers");
             if (fh.type == PX_DICT) {
-                LXObject* fo = fh.as.obj;
-                for (int fi = 0; fi < fo->as.dict.len; fi++) {
-                    LXValue hv = fo->as.dict.vals[fi];
-                    if (hv.type != PX_STR) continue;
-                    const char* hk = fo->as.dict.keys[fi];
-                    if (!hk) continue;
-                    if (strcasecmp(hk, "Content-Type") == 0) {
-                        fct = hv.as.obj->as.str.data;
-                        continue;
-                    }
-                    if (!px_vhost_header_allowed(hk)) continue;
-                    const char* hvv = hv.as.obj->as.str.data;
-                    size_t klen = strlen(hk), vlen = hv.as.obj->as.str.len;
-                    if (memchr(hk, '\r', klen) || memchr(hk, '\n', klen)) continue;
-                    if (memchr(hvv, '\r', vlen) || memchr(hvv, '\n', vlen)) continue;
-                    int cur = (int)strlen(fextra);
-                    long long need = (long long)klen + 2 + (long long)vlen + 2;
-                    if ((long long)cur + need < (long long)sizeof(fextra))
-                        snprintf(fextra + cur, (size_t)(sizeof(fextra) - cur), "%s: %s\r\n", hk, hvv);
-                }
+                // M109-S1：Content-Type 走独立通道（fct），其余默认放行（拒绝名单 + CRLF + 预算）
+                LXValue fctv = px_dict_get_ci(fh, "Content-Type");
+                if (fctv.type == PX_STR) fct = fctv.as.obj->as.str.data;
+                feo = px_hdr_append(fh, fextra, feo, (int)sizeof(fextra), 1, NULL);
             }
             if (is_range) {
                 int cur2 = (int)strlen(fextra);
@@ -14870,7 +14865,7 @@ static void px_vhost_respond(PxHttpOut* pout, const char* method, int head_only,
     const char* vct = "text/plain; charset=utf-8";
     const char* vbody = "";
     int vblen = 0;
-    char extra[1024];
+    char extra[PX_HDR_EXTRA_CAP];   // M109-S2：1024 → 4096（原 1024 使 >970B 的单头整条丢弃）
     int extra_off = snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
     if (extra_off < 0 || extra_off >= (int)sizeof(extra)) extra_off = (int)sizeof(extra) - 1;
     // M57-S7：vhost handler dict 自定义响应头（Location/Cache-Control/Set-Cookie/CORS 等）
@@ -15106,6 +15101,7 @@ static int px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
             const char* ct2 = "text/html; charset=utf-8";
             char* body = out;
             int blen = out_len;
+            LXValue script_hdrs = px_null();   // M109-S3：脚本 handler 的 headers（与 vhost/route 同一套透传）
             char* marker = out ? strstr(out, "__PX_RESPONSE__:") : NULL;
             if (marker) {
                 *marker = 0;
@@ -15124,6 +15120,7 @@ static int px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
                     }
                     LXValue h = px_dict_get(resp, "headers");
                     if (h.type == PX_DICT) {
+                        script_hdrs = h;
                         LXObject* ho = h.as.obj;
                         for (int i = 0; i < ho->as.dict.len; i++) {
                             if (strcasecmp(ho->as.dict.keys[i], "Content-Type") == 0 &&
@@ -15136,8 +15133,12 @@ static int px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
                 }
             }
             // M29：gzip 响应压缩（Accept-Encoding: gzip + 文本类 + >1KB）
-            char gz_extra[512];
+            char gz_extra[PX_HDR_EXTRA_CAP];
             int hdr_off = snprintf(gz_extra, sizeof(gz_extra), "X-Request-Id: %s\r\n", req_id);
+            if (hdr_off < 0 || hdr_off >= (int)sizeof(gz_extra)) hdr_off = (int)sizeof(gz_extra) - 1;
+            // M109-S3：脚本 handler（__PX_RESPONSE__ json 的 headers）与 vhost/route 同一套判定
+            if (script_hdrs.type == PX_DICT)
+                hdr_off = px_hdr_append(script_hdrs, gz_extra, hdr_off, (int)sizeof(gz_extra), 1, NULL);
             if (px_resp_gzipable(&headers, ct2, blen)) {
                 int gzlen = 0;
                 char* gz = px_gzip_compress(body ? body : "", blen, &gzlen);
@@ -16479,21 +16480,88 @@ static const char* px_vhost_docroot(void) {
 
 // vhost handler 响应归一化（同解释器 normalize_route_resp）：
 // int → 状态码；str → 200 text/plain；dict{status,headers,body} → 完整控制；其他 → px_to_string
-// vhost handler 自定义响应头白名单（M57-S7）：键/值均须无 CRLF（防注入），
-// 值含 \0 时按 str.len 检测仍拦 \r\n，写出经 %s 以 \0 截断（头值本应为文本）
-static int px_vhost_header_allowed(const char* k) {
-    static const char* allow[] = {
-        "Location", "Cache-Control", "Content-Disposition", "Content-Language",
-        "Set-Cookie", "X-Robots-Tag",
-        "Access-Control-Allow-Origin", "Access-Control-Allow-Methods",
-        "Access-Control-Allow-Headers", "Access-Control-Allow-Credentials",
-        "Access-Control-Expose-Headers", "Access-Control-Max-Age",
-        NULL
-    };
-    for (int i = 0; allow[i]; i++)
-        if (strcasecmp(k, allow[i]) == 0) return 1;
+// ==================== M109-S1：handler 响应头「拒绝名单」（取代 M57-S7 白名单）====================
+// 背景（qg-issue 36）：M57-S7 的「默认拒绝」白名单把「本框架还不知道的头」与「危险的头」
+//   混为一谈 —— 每新增一类头都要改 C 运行时，且**漏改不报错**。实测（晨曦 QA 隔离复现）：
+//   Mahesvara 明确放行的 17 个头**只有 7 个到达客户端**，10 个被静默丢弃
+//   （ETag / Vary / HSTS / CSP / X-Content-Type-Options / X-Frame-Options / Referrer-Policy /
+//    WWW-Authenticate / Retry-After / Accept-Ranges），ma-cache 的 Age / X-Cache / X-Cache-Key 全丢
+//   → CDN 命中 68% 却无任何 HIT/MISS 标识，险些误报「边缘没缓存」。
+// 改为：**默认放行 + 拒绝名单**，只拦「runtime 自管」或「会破坏报文完整性」的头。
+//
+// 安全不变量（一条都不放松；M109 语义红线 1/2/4）：
+//   ① Content-Length / Transfer-Encoding 必须由 runtime 计算 —— handler 可写会导致长度错乱
+//      与 HTTP 走私面；
+//   ② Connection / Keep-Alive / Trailer / Upgrade 是逐跳头，由 runtime 的 keep-alive 决策决定；
+//   ③ Date / Server 由运行时保留（避免 handler 伪造 Server 指纹、与运行时 Date 重复）；
+//   ④ X-Request-Id 由 runtime 注入（handler 再写 → 重复头，且日志关联会错）；
+//   ⑤ **CRLF 防护是叠加而非替代** —— 键/值任一含 \r\n 一律丢弃（M57-S7 语义完整保留）。
+//   注：白名单→拒绝名单后，`X-Custom` 这类自定义头会**开始透传**（这正是本缺陷的修复点），
+//       因此既有回归 examples/m57_s7_vhost_headers.px 中「X-Custom 必须被丢弃」的断言必须同步改写。
+static const char* const PX_HDR_DENY[] = {
+    "Content-Length", "Transfer-Encoding", "Connection", "Keep-Alive",
+    "Trailer", "Upgrade", "Date", "Server", "X-Request-Id",
+    NULL
+};
+
+int px_hdr_blocked(const char* k) {
+    for (int i = 0; PX_HDR_DENY[i]; i++)
+        if (strcasecmp(k, PX_HDR_DENY[i]) == 0) return 1;
     return 0;
 }
+
+// M109 观测计数（S1c 不静默：任何丢弃都留可观测信号）
+static long g_hdr_pass          = 0;   // 成功透传的头数
+static long g_hdr_drop_blocked   = 0;  // 被拒绝名单拦下
+static long g_hdr_drop_crlf      = 0;  // 被 CRLF 防护拦下
+static long g_hdr_drop_budget    = 0;  // 因 extra 预算不足被丢弃（**不再静默**）
+
+// 把 handler 提供的 headers dict 追加为 "K: V\r\n" 到 extra（起始偏移 off）。
+//   skip_ct=1 → 跳过 Content-Type（由调用方走独立通道，避免与 ct 参数重复）
+// 返回追加后的新偏移。语义：默认放行（除拒绝名单）、保持原顺序、大小写不敏感匹配拒绝名单。
+int px_hdr_append(LXValue hdrs, char* extra, int off, int extra_sz, int skip_ct, int* out_dropped) {
+    if (hdrs.type != PX_DICT || !extra || extra_sz <= 0 || off < 0 || off >= extra_sz) {
+        if (out_dropped) *out_dropped = 0;
+        return off < 0 ? 0 : off;
+    }
+    LXObject* ho = hdrs.as.obj;
+    int dropped = 0;
+    for (int i = 0; i < ho->as.dict.len; i++) {
+        LXValue hv = ho->as.dict.vals[i];
+        if (hv.type != PX_STR) continue;                 // 非字符串值：跳过（与原行为一致）
+        const char* hk = ho->as.dict.keys[i];
+        if (!hk || !*hk) continue;
+        if (skip_ct && strcasecmp(hk, "Content-Type") == 0) continue;
+        if (px_hdr_blocked(hk)) {
+            __atomic_add_fetch(&g_hdr_drop_blocked, 1, __ATOMIC_RELAXED);
+            continue;
+        }
+        const char* hvv = hv.as.obj->as.str.data;
+        size_t klen = strlen(hk), vlen = hv.as.obj->as.str.len;
+        // ⑤ CRLF 防护（叠加，不替代）；值含 \0 时仍按 str.len 检 \r\n（与原实现一致）
+        if (memchr(hk, '\r', klen) || memchr(hk, '\n', klen) ||
+            memchr(hvv, '\r', vlen) || memchr(hvv, '\n', vlen)) {
+            __atomic_add_fetch(&g_hdr_drop_crlf, 1, __ATOMIC_RELAXED);
+            continue;
+        }
+        long long need = (long long)klen + 2 + (long long)vlen + 2;
+        if ((long long)off + need < (long long)extra_sz) {
+            snprintf(extra + off, (size_t)(extra_sz - off), "%s: %s\r\n", hk, hvv);
+            off += (int)strlen(extra + off);             // 写出经 %s → 值内 \0 自然截断
+            __atomic_add_fetch(&g_hdr_pass, 1, __ATOMIC_RELAXED);
+        } else {
+            dropped++;
+            long nd = __atomic_add_fetch(&g_hdr_drop_budget, 1, __ATOMIC_RELAXED);
+            // 不静默：限频告警（首次 10 条 + 之后每 1000 条），避免每请求刷屏
+            if (nd <= 10 || nd % 1000 == 0)
+                fprintf(stderr, "[px-serve] 响应头因预算丢弃: %s (klen=%zu vlen=%zu need=%lld 剩余=%d) 累计=%ld\n",
+                        hk, klen, vlen, need, extra_sz - off, nd);
+        }
+    }
+    if (out_dropped) *out_dropped = dropped;
+    return off;
+}
+
 
 static void px_vhost_normalize(LXValue v, int* status, const char** ct, const char** body, int* body_len,
                                char* extra, int extra_sz) {
@@ -16525,26 +16593,9 @@ static void px_vhost_normalize(LXValue v, int* status, const char** ct, const ch
         if (h.type == PX_DICT) {
             LXValue ctv = px_dict_get_ci(h, "Content-Type");
             if (ctv.type == PX_STR) *ct = ctv.as.obj->as.str.data;
-            // M57-S7：vhost handler 自定义响应头白名单透传（防 CRLF 注入）——
-            // 键/值任一含 \r\n 即丢弃；extra 写满安全截断（px_out11_begin 头缓冲 2048 兜底）
-            if (extra && extra_sz > 0) {
-                LXObject* ho = h.as.obj;
-                for (int i = 0; i < ho->as.dict.len; i++) {
-                    LXValue hv = ho->as.dict.vals[i];
-                    if (hv.type != PX_STR) continue;
-                    const char* hk = ho->as.dict.keys[i];
-                    if (!hk || strcasecmp(hk, "Content-Type") == 0) continue;
-                    if (!px_vhost_header_allowed(hk)) continue;
-                    const char* hvv = hv.as.obj->as.str.data;
-                    size_t klen = strlen(hk), vlen = hv.as.obj->as.str.len;
-                    if (memchr(hk, '\r', klen) || memchr(hk, '\n', klen)) continue;
-                    if (memchr(hvv, '\r', vlen) || memchr(hvv, '\n', vlen)) continue;
-                    int cur = (int)strlen(extra);
-                    long long need = (long long)klen + 2 + (long long)vlen + 2;
-                    if ((long long)cur + need < (long long)extra_sz)
-                        snprintf(extra + cur, (size_t)(extra_sz - cur), "%s: %s\r\n", hk, hvv);
-                }
-            }
+            // M109-S1：拒绝名单透传 + CRLF 防护 + 预算（实现见 px_hdr_append）
+            if (extra && extra_sz > 0)
+                (void)px_hdr_append(h, extra, 0, extra_sz, 1, NULL);
         }
     } else {
         char* s = px_to_string(v);
@@ -17168,14 +17219,19 @@ static void* px_serve_watchdog(void* argp) {
             busy = __atomic_load_n(&g_pool_busy_cnt, __ATOMIC_RELAXED);
             fprintf(stderr, "[px-serve:diag] pool=%d busy=%d queue=%lld inflight=%d "
                             "hs(ok=%lld fail=%lld tmo=%lld inflight=%lld lockmax=%lldms) "
-                            "enter_null=%lld push_tmo=%lld\n",
+                            "enter_null=%lld push_tmo=%lld "
+                            "hdr(pass=%ld deny=%ld crlf=%ld budget=%ld)\n",
                     sz, busy, q, g_px_inflight,
                     __atomic_load_n(&g_diag_hs_ok, __ATOMIC_RELAXED),
                     __atomic_load_n(&g_diag_hs_fail, __ATOMIC_RELAXED),
                     __atomic_load_n(&g_diag_hs_tmo, __ATOMIC_RELAXED),
                     inf, __atomic_load_n(&g_diag_hs_lock_max_ms, __ATOMIC_RELAXED),
                     __atomic_load_n(&g_diag_enter_null, __ATOMIC_RELAXED),
-                    __atomic_load_n(&g_diag_push_tmo, __ATOMIC_RELAXED));
+                    __atomic_load_n(&g_diag_push_tmo, __ATOMIC_RELAXED),
+                    __atomic_load_n(&g_hdr_pass, __ATOMIC_RELAXED),
+                    __atomic_load_n(&g_hdr_drop_blocked, __ATOMIC_RELAXED),
+                    __atomic_load_n(&g_hdr_drop_crlf, __ATOMIC_RELAXED),
+                    __atomic_load_n(&g_hdr_drop_budget, __ATOMIC_RELAXED));
             fflush(stderr);
         }
     }
