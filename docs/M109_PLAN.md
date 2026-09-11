@@ -77,8 +77,9 @@ S0 实测命令与结果（**与 Issue 完全一致 ⇒ 复现成立**）：
 | `route()` headers | 仅 `Content-Type`（**301 的 Location 收不到**） | 与 vhost 同集合 | **5/5 ✅** |
 | CRLF 防护（`/evilval`、`/evilkey`） | PASS | **仍 PASS** | **仍 PASS ✅** |
 
-> 复现原始输出：`/tmp/m109s0/`（`repro` / `sweep` / `repro_route` 三个二进制的 S0 前后对照）；
-> 验收测试固化在仓库 `examples/m109_s0/hdr_pass.px`（27 断言，末行 `M109-HDR ALL OK`）。
+> 复现原始输出：issue 目录内 `repro.px` / `sweep.px` / `repro_route.px`（用 `tools/px build` 重建即可重跑，
+> **S0 期间使用的临时构建目录已清理**，避免留残留产物）；验收测试固化为仓库资产
+> `examples/m109_s0/hdr_pass.px` + `run.sh`（**27 断言**，末行 `M109-HDR ALL OK`）。
 
 ### 3.2 S0 补充核对：白名单之外还有**第二、第三处**同类违约（计划外发现）
 
