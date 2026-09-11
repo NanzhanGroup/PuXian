@@ -9355,7 +9355,31 @@ static int h_exchange(HPoolSlot* slot, const char* req, int rlen,
                 if (strcasecmp(v, "close") == 0) keep_alive = 0;
                 else if (resp10 && strcasecmp(v, "keep-alive") == 0) keep_alive = 1;
             }
-            px_dict_set(*out_headers, k, px_str(v));
+            // M109-S5：同名头不再互相覆盖 —— 首次出现仍是 str（单值路径逐字节向后兼容），
+            //   第二次起升级为 list[str]；键名沿用首次出现的拼写，匹配大小写不敏感（RFC 7230）。
+            {
+                LXObject* oh = (*out_headers).as.obj;
+                int found = -1;
+                for (int hi = 0; hi < oh->as.dict.len; hi++) {
+                    if (strcasecmp(oh->as.dict.keys[hi], k) == 0) { found = hi; break; }
+                }
+                if (found < 0) {
+                    px_dict_set(*out_headers, k, px_str(v));
+                } else {
+                    char kstore[4096];
+                    snprintf(kstore, sizeof(kstore), "%s", oh->as.dict.keys[found]);
+                    LXValue cur = oh->as.dict.vals[found];
+                    LXValue nv = px_str(v);
+                    if (cur.type == PX_LIST) {
+                        px_list_push(cur, nv);
+                    } else {
+                        LXValue lst = px_list(4);
+                        px_list_push(lst, cur);
+                        px_list_push(lst, nv);
+                        px_dict_set(*out_headers, kstore, lst);
+                    }
+                }
+            }
         }
         hline = eol + 2;
     }
@@ -16515,6 +16539,7 @@ static long g_hdr_pass          = 0;   // 成功透传的头数
 static long g_hdr_drop_blocked   = 0;  // 被拒绝名单拦下
 static long g_hdr_drop_crlf      = 0;  // 被 CRLF 防护拦下
 static long g_hdr_drop_budget    = 0;  // 因 extra 预算不足被丢弃（**不再静默**）
+static long g_hdr_drop_val       = 0;  // M109-S4：值类型不受支持（非 str/list[str]）或 list 元素非 str
 
 // 把 handler 提供的 headers dict 追加为 "K: V\r\n" 到 extra（起始偏移 off）。
 //   skip_ct=1 → 跳过 Content-Type（由调用方走独立通道，避免与 ct 参数重复）
@@ -16528,16 +16553,35 @@ int px_hdr_append(LXValue hdrs, char* extra, int off, int extra_sz, int skip_ct,
     int dropped = 0;
     for (int i = 0; i < ho->as.dict.len; i++) {
         LXValue hv = ho->as.dict.vals[i];
-        if (hv.type != PX_STR) continue;                 // 非字符串值：跳过（与原行为一致）
         const char* hk = ho->as.dict.keys[i];
         if (!hk || !*hk) continue;
+        // M109-S4：值可为 str 或 list[str]（同名多值）。其余类型**不再静默跳过**。
+        int is_list = (hv.type == PX_LIST);
+        int nvals = is_list ? hv.as.obj->as.list.len : 1;
+        if (!is_list && hv.type != PX_STR) {
+            long nv = __atomic_add_fetch(&g_hdr_drop_val, 1, __ATOMIC_RELAXED);
+            if (nv <= 10 || nv % 1000 == 0)
+                fprintf(stderr, "[px-serve] 响应头值类型不支持（需 str 或 list[str]）: %s type=%s 累计=%ld\n",
+                        hk, px_type_name(hv), nv);
+            continue;
+        }
         if (skip_ct && strcasecmp(hk, "Content-Type") == 0) continue;
         if (px_hdr_blocked(hk)) {
             __atomic_add_fetch(&g_hdr_drop_blocked, 1, __ATOMIC_RELAXED);
             continue;
         }
-        const char* hvv = hv.as.obj->as.str.data;
-        size_t klen = strlen(hk), vlen = hv.as.obj->as.str.len;
+        // M109-S4：str → 单元素；list[str] → 逐元素展开（元素级 CRLF / 预算判定，键级判定在循环外）
+        for (int ei = 0; ei < nvals; ei++) {
+            LXValue ev = is_list ? hv.as.obj->as.list.items[ei] : hv;
+            if (ev.type != PX_STR) {
+                long nv2 = __atomic_add_fetch(&g_hdr_drop_val, 1, __ATOMIC_RELAXED);
+                if (nv2 <= 10 || nv2 % 1000 == 0)
+                    fprintf(stderr, "[px-serve] 响应头 list 元素非字符串（已跳过）: %s idx=%d type=%s 累计=%ld\n",
+                            hk, ei, px_type_name(ev), nv2);
+                continue;
+            }
+        const char* hvv = ev.as.obj->as.str.data;
+        size_t klen = strlen(hk), vlen = ev.as.obj->as.str.len;
         // ⑤ CRLF 防护（叠加，不替代）；值含 \0 时仍按 str.len 检 \r\n（与原实现一致）
         if (memchr(hk, '\r', klen) || memchr(hk, '\n', klen) ||
             memchr(hvv, '\r', vlen) || memchr(hvv, '\n', vlen)) {
@@ -16556,6 +16600,7 @@ int px_hdr_append(LXValue hdrs, char* extra, int off, int extra_sz, int skip_ct,
             if (nd <= 10 || nd % 1000 == 0)
                 fprintf(stderr, "[px-serve] 响应头因预算丢弃: %s (klen=%zu vlen=%zu need=%lld 剩余=%d) 累计=%ld\n",
                         hk, klen, vlen, need, extra_sz - off, nd);
+        }
         }
     }
     if (out_dropped) *out_dropped = dropped;
@@ -17220,7 +17265,7 @@ static void* px_serve_watchdog(void* argp) {
             fprintf(stderr, "[px-serve:diag] pool=%d busy=%d queue=%lld inflight=%d "
                             "hs(ok=%lld fail=%lld tmo=%lld inflight=%lld lockmax=%lldms) "
                             "enter_null=%lld push_tmo=%lld "
-                            "hdr(pass=%ld deny=%ld crlf=%ld budget=%ld)\n",
+                            "hdr(pass=%ld deny=%ld crlf=%ld budget=%ld badval=%ld)\n",
                     sz, busy, q, g_px_inflight,
                     __atomic_load_n(&g_diag_hs_ok, __ATOMIC_RELAXED),
                     __atomic_load_n(&g_diag_hs_fail, __ATOMIC_RELAXED),
@@ -17231,7 +17276,8 @@ static void* px_serve_watchdog(void* argp) {
                     __atomic_load_n(&g_hdr_pass, __ATOMIC_RELAXED),
                     __atomic_load_n(&g_hdr_drop_blocked, __ATOMIC_RELAXED),
                     __atomic_load_n(&g_hdr_drop_crlf, __ATOMIC_RELAXED),
-                    __atomic_load_n(&g_hdr_drop_budget, __ATOMIC_RELAXED));
+                    __atomic_load_n(&g_hdr_drop_budget, __ATOMIC_RELAXED),
+                    __atomic_load_n(&g_hdr_drop_val, __ATOMIC_RELAXED));
             fflush(stderr);
         }
     }
