@@ -312,3 +312,27 @@ G10 `p3_regex` 双模式 ALL PASSED。
 - `headers` 仍是 dict ⇒ **同一个键**才聚合；若要表达「同名多值的顺序与跨键顺序」，需要 list-of-pairs 形态（本里程碑不做）。
 - `Date` / `Server` 被拒仍属**策略**（runtime 自管），不是遗漏。
 - 外部复核（晨曦/清歌侧）不变：Mahesvara `cache_test` 12/12 与现网 17 头到达表；本次新增的 list 通路建议在观音双 serve 对拍时一并覆盖。
+
+### 14.5 流程错误记录（一次真实的 CI 失败与修复）
+
+**现象**：M109 二期首推（`cc99506` + tag `v0.2.0-m109s2`）中，**Release #49 success**，但
+**PuXian CI #235 failure** —— 失败步骤：`工具链自举质量门（fmt + lint）→ 生态索引防漂移`。
+
+**根因**：本次改了 `stdlib/cookiejar.px` 的**头注**（`⚠️ 语言层限制` → `✅ 同名多值`），
+而 `docs/ecosystem_index.json` 是由 `tools/gen_ecosystem.px` **从 stdlib 头注生成**的
+（含 `lines` 与 `header` 数组）⇒ 索引未同步（cookiejar `lines` 273→274、header 内容变化）。
+
+**为什么本地闸门没拦住**：G9「生态索引防漂移」**跑在门脚本里、即在 23:50 启动的那一轮**，
+而我对 `stdlib/cookiejar.px` 的头注修改是在**门跑完之后**（00:07 之后）才做的，
+之后再没重跑 G9 ⇒ **"先跑门、后改文件"使门失效**。
+
+**修复**：`a8852bb` 重跑两生成器（ecosystem 13 libs / native 306）并提交索引；
+本地复核 `git diff --exit-code -- docs/ecosystem_index.json docs/native_index.json` → **rc=0**；
+CI #236 / Release 全绿。
+
+**教训（写给后续里程碑）**：
+1. **门必须在最后一次改动之后跑**；若门跑完后仍要动 `stdlib/` / `runtime/`，
+   必须**重跑受影响的那一项**（本题是生态索引）。
+2. 改 `stdlib/*.px` 的**任何**内容（含头注、注释行、行数）都会改变生态索引 ⇒ 不是"改代码才要同步"。
+3. 部署/发布也受影响：`Release #49` 在索引未同步的提交上就已成功发版 ⇒
+   **CI 门与 Release 是并行的，Release 绿不等于门绿**，判绿要看 CI。
