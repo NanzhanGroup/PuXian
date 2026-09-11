@@ -238,10 +238,15 @@ static void gc_unblock_stop(const sigset_t* old);
 // 层栈：block/unblock 与既有 sigprocmask 用法严格 LIFO 配对，**仅最外层做决策**（g_gcs_skip），
 //   内层直接返回——外层已建立排他，嵌套重入决策无二义（防「临界区内 spawn → 谓词翻转」导致
 //   内外层判定不一致）。
-// 谓词：g_active_threads == 0 —— 与 GC executor 的发送闸门（px_gc_collect 并发路径入口）同一
-//   变量、同一判据，即「无人会发 SIG_GC_STOP」⇒ 屏蔽是可证明的空操作。该读值若因并发陈旧
-//   （临界区内恰好 spawn 线程致谓词翻转），信号确实可能到达，但处理器只做延迟暂停 ⇒
-//   **安全性不依赖该读值的时序**（只影响性能）。
+// 谓词（M105-S3 原设计）：g_active_threads == 0 —— 与 GC executor 的发送闸门（px_gc_collect
+//   并发路径入口）同一变量、同一判据，即「无人会发 SIG_GC_STOP」⇒ 屏蔽是可证明的空操作。
+// 门控取消（**M110-S2 / qg-issue 38**）：该门控在**服务进程里恒不成立**（px serve 池 worker
+//   常驻注册，实测 PX_SERVE_WORKERS 默认 256），于是全进程（含主线程）每次 xmalloc/xfree 都
+//   退回真屏蔽路径 ⇒ 单次 64KB 正则扫描 **1,053,631 次 rt_sigprocmask**、sys 占墙钟 56%、
+//   serve 内比 CLI 慢 **13.5×**。M110-S2 改为**软屏蔽常开 + 临界区出口协作式安全点**
+//   （见 gc_unblock_stop / gc_pause_if_requested）：出口处若本轮 GC 正等本线程，则补发一次
+//   SIG_GC_STOP，由内核在同一位置投递 → 处理器执行与真屏蔽**逐位同源**的暂停流程 ⇒ 等价。
+//   逃逸阀 PX_GS_HARD=1 保留旧路径。
 static __thread int g_gcs_depth = 0;         // block/unblock 嵌套深度（本线程；仅最外层决策）
 static __thread int g_gcs_skip  = 0;         // 最外层是否走软屏蔽（免 sigprocmask）分支
 static __thread volatile int g_gc_crit = 0;  // 软屏蔽临界区标志（信号处理器据此延迟暂停）
@@ -1345,24 +1350,61 @@ static void gc_install_handler(void) {
 //   真屏蔽分支保留（并发模式**零行为变化**）；无并发 GC 时免 2 次 rt_sigprocmask
 //   （实测 343~372ns/对，M105-S1）。仅涉及 SIG_GC_STOP，不影响其他信号；
 //   chan.buf 单 word 原子写无需屏蔽。配对纪律同既有 sigprocmask 用法：LIFO 成对。
+// M110-S2：协作式安全点 —— 软屏蔽临界区**出口**自查。若本轮 GC 正在等本线程上报暂停，
+//   则向本线程补发一次 SIG_GC_STOP（pthread_kill）：内核在该次系统调用返回用户态的
+//   **同一位置**投递信号 ⇒ 处理器执行与「真屏蔽」下**完全相同**的暂停流程（同一 ucontext、
+//   同一暂停点、同一根面快照）。故「软屏蔽 + 本安全点」≡「真屏蔽」。
+//   选「补发信号」而非「内联暂停体」：① 不依赖 getcontext（musl 无）；② 寄存器快照与真屏蔽
+//   路径逐位同源；③ 处理器已有的防重入/过期信号保护天然复用。
+//   代价：活跃轮次内每线程 1 次 tgkill，而非每次分配 2 次 rt_sigprocmask。
+//   免锁：与信号处理器同款只读 g_threads（executor 正持 g_gc_mu 等暂停，此处取锁必死锁）。
+static void gc_pause_if_requested(void) {
+    if (!g_gc_stop_in_progress) return;       // 绝大多数分配止步于此：一次 volatile 读
+    if (g_active_threads <= 0) return;        // 无并发 GC（单线程）⇒ 无人等本线程
+    if (!g_threads) return;
+    pthread_t me = pthread_self();
+    if (g_gc_executor && pthread_equal(g_gc_executor, me)) return;   // GC 执行者不自暂停
+    GCThreadInfo* ti = NULL;
+    for (int i = 0; i < g_thread_cap; i++) {
+        if (g_threads[i].in_use && pthread_equal(g_threads[i].tid, me)) { ti = &g_threads[i]; break; }
+    }
+    if (!ti) return;                          // 未注册线程（不受 GC 管辖）
+    if (ti->paused && ti->epoch == g_gc_epoch) return;   // 本轮已真暂停 → 无需再补发
+    __sync_synchronize();
+    if (!g_gc_stop_in_progress) return;       // 二次确认：本轮可能已结束（免无谓信号）
+    pthread_kill(me, SIG_GC_STOP);
+}
+
+// M110-S2（Issue 38）：软屏蔽**常开**（原门控 g_active_threads==0 取消）+ 出口协作式安全点。
+//   病灶：门控在服务进程里恒不成立（池 worker 常驻注册）⇒ 每次 xmalloc/xfree 付 2 次
+//   rt_sigprocmask（实测单次 64KB 正则扫描 1,053,631 次、sys 占墙钟 56%；serve 内 13.5×）。
+//   门控存在的唯一原因是**停顿及时性**（软屏蔽下处理器只做延迟暂停，连续海量临界区的线程
+//   可能一直抢不到 g_gc_crit==0 的窗口 → 拖到 5s 兜底 = 漏扫）。出口安全点补回该性质。
+//   逃逸阀：PX_GS_HARD=1 → 旧「真屏蔽」路径（A/B 对拍与一键回滚）。
+static int g_gs_hard = -1;                    // -1=未初始化（首次 gc_block_stop 惰性读 env）
+
 static void gc_block_stop(sigset_t* old) {
     int d = ++g_gcs_depth;
     if (d > 16) {   // 防御：block/unblock 疑似不配对（只告警一次，不改变行为）
         static int warned = 0;
         if (!warned) { warned = 1; fprintf(stderr, "lx: gc_block_stop 嵌套 %d 层（block/unblock 不配对？）\n", d); }
     }
-    if (d > 1) return;                        // 内层：外层已建立排他（信号已屏蔽 或 g_gc_crit 已置）
-    if (g_active_threads == 0) {              // 无并发 GC ⇒ 无人发 SIG_GC_STOP（见文件头论证）
-        g_gcs_skip = 1;
-        g_gc_crit = 1;
-        __atomic_signal_fence(__ATOMIC_SEQ_CST);   // 临界区写入不得被提到标志之前
+    if (d > 1) return;                        // 内层：外层已建立排他（g_gc_crit 已置）
+    if (g_gs_hard < 0) {                      // 惰性读 env（多线程同写同值 → 良性竞争）
+        const char* e = getenv("PX_GS_HARD");
+        g_gs_hard = (e && e[0] == '1') ? 1 : 0;
+    }
+    if (g_gs_hard) {                          // 逃逸阀：旧「真屏蔽」路径
+        g_gcs_skip = 0;
+        sigset_t set;
+        sigemptyset(&set);
+        sigaddset(&set, SIG_GC_STOP);
+        pthread_sigmask(SIG_BLOCK, &set, old);
         return;
     }
-    g_gcs_skip = 0;
-    sigset_t set;
-    sigemptyset(&set);
-    sigaddset(&set, SIG_GC_STOP);
-    pthread_sigmask(SIG_BLOCK, &set, old);
+    g_gcs_skip = 1;                           // 软屏蔽：0 次系统调用
+    g_gc_crit = 1;
+    __atomic_signal_fence(__ATOMIC_SEQ_CST);   // 临界区写入不得被提到标志之前
 }
 static void gc_unblock_stop(const sigset_t* old) {
     if (g_gcs_depth <= 0) {                   // 防御：不配对（不应发生）→ 复位，绝不越界
@@ -1374,6 +1416,7 @@ static void gc_unblock_stop(const sigset_t* old) {
         __atomic_signal_fence(__ATOMIC_SEQ_CST);   // 标志清零不得被提到临界区写入之前
         g_gc_crit = 0;
         g_gcs_skip = 0;
+        gc_pause_if_requested();              // M110-S2：临界区出口协作式安全点
         return;
     }
     pthread_sigmask(SIG_SETMASK, old, NULL);
@@ -5053,6 +5096,11 @@ static LXValue bi_xxhash(LXValue* args, int nargs, void* ctx) {
 enum { RN_CHAR = 0, RN_ANY, RN_CLASS, RN_SEQ, RN_ALT, RN_REP, RN_GROUP, RN_START, RN_END };
 #define RG_N 10
 
+// M110-S1（Issue 34 附页2 / Issue 38）：交替「必备字面核心」整串预筛（见 §2.2 论证，写在
+//   rn_necess_core 处）。每项长度上限 RN_CORE_LEN；项数上限 RN_CORE_MAX（超出即放弃预筛，保守）。
+#define RN_CORE_MAX 16
+#define RN_CORE_LEN 24
+
 typedef struct RNode {
     int type;
     unsigned char ch;        // RN_CHAR
@@ -5068,6 +5116,13 @@ typedef struct RNode {
     // M107-S1b（Issue 34 建议 A 的保守子集）：根节点的「必备字面前缀」（由 rcompile 填充，预筛用）
     unsigned char lit[32];
     int lit_len;
+    // M110-S1（Issue 34 附页2 / Issue 38）：根节点的「必备字面核心」集合（由 rcompile 填充）。
+    //   前缀对「无公共前缀的大交替」（现网 secret_patterns[1]）取不到 ⇒ 回落逐起点 rmatch
+    //   （1MB 干净文本 1.54s）。本集合是该情形下的整串预筛：每项都是「模式若匹配则必出现于
+    //   文本」的字面串；若一项都不出现 ⇒ 必不匹配 ⇒ 直接返回无匹配。仅根节点使用。
+    unsigned char core[RN_CORE_MAX][RN_CORE_LEN];
+    unsigned char core_len[RN_CORE_MAX];
+    int core_n;
 } RNode;
 
 typedef struct { int end; int64_t groups[RG_N]; } RCand;
@@ -5399,6 +5454,107 @@ static int rn_lit_prefix(RNode* n, unsigned char* out, int cap) {
     }
 }
 
+// ---- M110-S1（Issue 34 附页2 / Issue 38）：交替「必备字面核心」整串预筛 ----
+// 目的：M107-S1b 的必备字面前缀对**无公共前缀的大交替**（现网 `secret_patterns[1]`：
+//   `(api[_-]?key|apikey|access[_-]?key|…|auth)\s*(?::=|[:=])…`）取不到前缀 ⇒ 回落
+//   `for (s=start; s<=len; s++) rmatch(root,s)`，1MB 干净文本 ≈1541ms（1.5us/字节）。
+// 做法：把「前缀」推广为「必备字面核心集合」——对交替的**每个分支**各取一个**可证明必出现于
+//   匹配文本中**的字面串，取并集；若整段文本中一个都不出现 ⇒ 该模式必不匹配 ⇒ 直接返回无匹配。
+// 可靠性（保守扩张，逐类可证；「若 n 匹配则 out 中至少一项出现于被匹配文本」）：
+//   RN_CHAR → {该字符}（匹配即消费该字符）；RN_GROUP → child；
+//   RN_REP(min≥1) → child（至少消费一次）；RN_REP(min=0) → 无（可一次都不消费）；
+//   RN_SEQ → **首个能给出核心的 kid**（SEQ 匹配 ⇒ 每个 kid 均匹配 ⇒ 该 kid 的核心必出现）；
+//   RN_ALT → **每个分支都能给出核心**时取并集（匹配必落在某一分支），任一分支给不出 ⇒ 放弃；
+//   RN_ANY / RN_CLASS / RN_START / RN_END → 无（前两者太弱，后两者零宽）。
+// 优先复用 rn_lit_prefix（最强；且长度自然截断到 RN_CORE_LEN —— **截断仍保持必要性**）。
+// 含 NUL / 超长 / 超项数 一律弃用（保守：宁可放弃预筛，绝不误判）。
+typedef struct {
+    unsigned char lit[RN_CORE_MAX][RN_CORE_LEN];
+    unsigned char len[RN_CORE_MAX];
+    int n;
+} RCoreSet;
+
+// 加入一项（去重）。返回 0 = 无法容纳（含 NUL / 超长 / 超项数）→ 调用方必须放弃整次预筛。
+static int rn_core_add(RCoreSet* s, const unsigned char* p, int l) {
+    if (l <= 0 || l > RN_CORE_LEN) return 0;
+    for (int i = 0; i < l; i++) if (p[i] == 0) return 0;
+    for (int i = 0; i < s->n; i++) {
+        if (s->len[i] == l && memcmp(s->lit[i], p, (size_t)l) == 0) return 1;   // 去重：已存在
+    }
+    if (s->n >= RN_CORE_MAX) return 0;
+    memcpy(s->lit[s->n], p, (size_t)l);
+    s->len[s->n] = (unsigned char)l;
+    s->n++;
+    return 1;
+}
+
+static int rn_necess_core(RNode* n, RCoreSet* out) {
+    // 1) 先试「必备字面前缀」——最强，且长度自然截断（截断不破坏必要性）
+    unsigned char buf[RN_CORE_LEN];
+    int L = rn_lit_prefix(n, buf, RN_CORE_LEN);
+    if (L > 0) return rn_core_add(out, buf, L);
+    switch (n->type) {
+        case RN_GROUP:
+            return rn_necess_core(n->child, out);
+        case RN_REP:
+            if (n->min < 1) return 0;                       // 可不消费 ⇒ 无必备核心
+            return rn_necess_core(n->child, out);
+        case RN_SEQ: {
+            for (int i = 0; i < n->nkids; i++) {
+                RCoreSet tmp; memset(&tmp, 0, sizeof(tmp));
+                if (!rn_necess_core(n->kids[i], &tmp) || tmp.n == 0) continue;   // 该 kid 给不出 → 试下一个
+                for (int j = 0; j < tmp.n; j++) if (!rn_core_add(out, tmp.lit[j], tmp.len[j])) return 0;
+                return 1;
+            }
+            return 0;
+        }
+        case RN_ALT: {
+            for (int i = 0; i < n->nkids; i++) {
+                RCoreSet tmp; memset(&tmp, 0, sizeof(tmp));
+                if (!rn_necess_core(n->kids[i], &tmp) || tmp.n == 0) return 0;   // 任一分支给不出 → 整条放弃
+                for (int j = 0; j < tmp.n; j++) if (!rn_core_add(out, tmp.lit[j], tmp.len[j])) return 0;
+            }
+            return out->n > 0;
+        }
+        default:
+            return 0;                                        // RN_ANY / RN_CLASS / RN_START / RN_END
+    }
+}
+
+// 任一核心是否出现于 hay[0..hlen)。**首两字节哈希位图**（512B）剪枝，再逐串 memcmp
+// （保守字面匹配，不依赖 memmem）。纯「存在性」判定，不关心出现位置。
+// 用哈希对 (b0,b1) 而非两个独立位图：交替的多个核心常共享首字节（api/apikey/access/
+// authorization/auth 都以 'a' 起），独立位图对纯 'a' 文本无效；对 (b0,b1) 则 ('a','a') 直接出局。
+// 哈希碰撞只会造成误放行（→ 精确 memcmp 判定），不影响正确性。
+static int rn_find_any_lit(const unsigned char* hay, int hlen,
+                           unsigned char lits[][RN_CORE_LEN], const unsigned char* lens, int n) {
+    if (hlen <= 0 || n <= 0) return 0;
+    for (int i = 0; i < n; i++) {                // 单字节核心（极少见）：直接一次 memchr
+        if (lens[i] < 2 && memchr(hay, lits[i][0], (size_t)hlen)) return 1;
+    }
+    unsigned char pf[512];
+    memset(pf, 0, sizeof(pf));
+    int m = 0;
+    for (int i = 0; i < n; i++) {
+        if (lens[i] < 2) continue;
+        unsigned idx = (unsigned)lits[i][0] * 257u + lits[i][1];
+        pf[(idx & 4095u) >> 3] |= (unsigned char)(1u << (idx & 7u));
+        m++;
+    }
+    if (m == 0) return 0;
+    for (int i = 0; i + 1 < hlen; i++) {
+        unsigned idx = (unsigned)hay[i] * 257u + hay[i + 1];
+        if (!(pf[(idx & 4095u) >> 3] & (1u << (idx & 7u)))) continue;
+        for (int j = 0; j < n; j++) {
+            int l = lens[j];
+            if (l < 2 || lits[j][0] != hay[i]) continue;
+            if (i + l > hlen) continue;
+            if (memcmp(hay + i + 1, lits[j] + 1, (size_t)(l - 1)) == 0) return 1;
+        }
+    }
+    return 0;
+}
+
 // 保守字面扫描（不依赖 memmem：musl/mingw 无该扩展）
 static const unsigned char* rn_find_lit(const unsigned char* hay, int hlen, const unsigned char* pat, int plen) {
     if (plen <= 0 || plen > hlen) return NULL;
@@ -5424,7 +5580,22 @@ static RNode* rcompile(const char* pat, char* errbuf, int errsz) {
         return NULL;
     }
     if (!root && errbuf) snprintf(errbuf, errsz, "%s", p.err);
-    if (root) root->lit_len = rn_lit_prefix(root, root->lit, (int)sizeof(root->lit));
+    if (root) {
+        root->lit_len = rn_lit_prefix(root, root->lit, (int)sizeof(root->lit));
+        // M110-S1：仅当「必备字面前缀」不可用（无公共前缀的大交替等）才计算「必备字面核心」。
+        //   前缀可用时那条路更强（直接跳过起点），无需再做整串预筛。
+        if (root->lit_len == 0) {
+            RCoreSet cs;
+            memset(&cs, 0, sizeof(cs));
+            if (rn_necess_core(root, &cs) && cs.n > 0) {
+                for (int i = 0; i < cs.n; i++) {
+                    memcpy(root->core[i], cs.lit[i], cs.len[i]);
+                    root->core_len[i] = cs.len[i];
+                }
+                root->core_n = cs.n;
+            }
+        }
+    }
     return root;
 }
 
@@ -5628,6 +5799,13 @@ static int rsearch_from(RNode* root, const unsigned char* text, int len, int sta
             }
             return 0;
         }
+    }
+    // M110-S1（Issue 34 附页2 / Issue 38）：前缀不可用时改用「必备字面核心」整串预筛 ——
+    //   每个核心都是「模式若匹配则必出现于文本」的字面串；一个都不出现 ⇒ 必不匹配 ⇒
+    //   直接返回无匹配（免去 len 次 rmatch 及其 O(len) 级分配 —— 现网 p1 1MB 的主诉）。
+    //   只做「不成立即整段跳过」：首个匹配起点、零宽匹配、组捕获等语义一律不变。
+    if (root->core_n > 0 && start <= len) {
+        if (!rn_find_any_lit(text + start, len - start, root->core, root->core_len, root->core_n)) return 0;
     }
     for (int s = start; s <= len; s++) {
         RCandList l = rmatch(root, text, len, s, g0);

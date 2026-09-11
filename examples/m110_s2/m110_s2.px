@@ -1,0 +1,63 @@
+# M110-S2 验收：serve 上下文分配放大（Issue 38）—— 软屏蔽常开 + 协作式安全点
+# 覆盖：
+#   A. alloc_loop（纯分配密集，2 万次字符串拼接）—— 与 CLI 基线同档 = S2 的直接判据
+#   B. scan_core：文本**含核心字面** → 正则走回落路径（每次 8 次分配级）—— 同上，纯 S2 效应
+#   C. scan_clean：文本不含核心 → S1 预筛整段跳过（与 S2 无关，记录用）
+#   同一二进制、同一代码路径，仅「CLI 单线程进程」vs「serve 多线程进程」作对照。
+# 运行：sh run.sh   （自动做 改前/改后 A/B）
+var PAT = "(api[_-]?key|apikey|access[_-]?key|secret[_-]?key|secret|token|password|passwd|pwd|authorization|auth)\\s*(?::=|[:=])\\s*(\"[^\"]{8,}\"|'[^']{8,}'|[A-Za-z0-9_\\-\\.+/=]{8,})([^A-Za-z0-9_\\-\\.+/=(]|$)"
+
+var CLEAN = "a" * 131072          # 无核心 → S1 预筛整段跳过
+var CORE = "auth a" * 21845       # ~128KB 含核心 → 走回落路径（本片焦点）
+
+def t_alloc(tag):
+    var t0 = now_ms()
+    var acc = ""
+    var i = 0
+    while i < 20000:
+        acc = acc + "x"
+        if len(acc) > 64:
+            acc = ""
+        i = i + 1
+    var dt = now_ms() - t0
+    print("[" + tag + "] alloc_loop ms=" + str(dt))
+
+def t_core(tag):
+    var t0 = now_ms()
+    var r = regex_find(PAT, CORE)
+    var dt = now_ms() - t0
+    print("[" + tag + "] scan_core ms=" + str(dt) + " hit=" + str(r != null))
+
+def t_clean(tag):
+    var t0 = now_ms()
+    var r = regex_find(PAT, CLEAN)
+    var dt = now_ms() - t0
+    print("[" + tag + "] scan_clean ms=" + str(dt) + " hit=" + str(r != null))
+
+def handler(req):
+    if req["path"] == "/alloc":
+        t_alloc("worker")
+    elif req["path"] == "/core":
+        t_core("worker")
+    else:
+        t_clean("worker")
+    return "ok"
+
+var A = args()
+if len(A) > 1 and A[1] == "cli":
+    print("=== cli（单线程进程）===")
+    t_alloc("cli")
+    t_core("cli")
+    t_clean("cli")
+else:
+    print("=== serve（多线程进程）===")
+    spawn http_serve_unix("/tmp/m110_s2.sock", handler)
+    sleep(400)
+    var h1 = http_unix("/tmp/m110_s2.sock", "/alloc", "GET")
+    var h2 = http_unix("/tmp/m110_s2.sock", "/core", "GET")
+    var h3 = http_unix("/tmp/m110_s2.sock", "/clean", "GET")
+    print("unix status=" + str(h1["status"]) + str(h2["status"]) + str(h3["status"]))
+    t_alloc("main")
+    t_core("main")
+    t_clean("main")
+    sleep(200)

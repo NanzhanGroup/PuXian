@@ -1,0 +1,110 @@
+# M110-S1 验收：交替「必备字面核心」整串预筛（qg-issue 34 附页2 / 38）
+# 覆盖：
+#   A. 正确性对拍（输出须与 M110 前逐字节一致）：命中/未命中、组捕获、find_all/replace/split、
+#      零宽匹配、锚点、无核心可抽取的形态（\d+ / . / class 起头）、多字节文本
+#   B. 边界：文本「含核心字面但不匹配」→ 预筛必须放行到回落路径（不得误判为无匹配）
+#   C. 计时：现网 secret_patterns[1] 1MB 干净文本（改前 1541ms，验收线 < 50ms）
+# 运行：sh run.sh
+var P1 = "(api[_-]?key|apikey|access[_-]?key|secret[_-]?key|secret|token|password|passwd|pwd|authorization|auth)\\s*(?::=|[:=])\\s*(\"[^\"]{8,}\"|'[^']{8,}'|[A-Za-z0-9_\\-\\.+/=]{8,})([^A-Za-z0-9_\\-\\.+/=(]|$)"
+
+def show(tag, d):
+    if d == null:
+        print(tag + " = null")
+        return
+    print(tag + " match=[" + d["match"] + "] start=" + str(d["start"]) + " end=" + str(d["end"]))
+    gs = d["groups"]
+    var acc = ""
+    var i = 0
+    while i < len(gs):
+        if gs[i] == null:
+            acc = acc + "|null"
+        else:
+            acc = acc + "|[" + gs[i] + "]"
+        i = i + 1
+    print(tag + " groups=" + acc)
+
+def f1(tag, pat, text):
+    var r = regex_find(pat, text)
+    if r == null:
+        print(tag + " find=null")
+    else:
+        print(tag + " find=[" + r + "]")
+
+def fl(tag, pat, text):
+    var r = regex_find_all(pat, text)
+    var acc = ""
+    var i = 0
+    while i < len(r):
+        acc = acc + "|[" + r[i] + "]"
+        i = i + 1
+    print(tag + " all=" + acc)
+
+print("== A1 现网 p1：干净文本 ==")
+f1("p1.clean-small", P1, "aaaa aaaa aaaa bbbb cccc")
+
+print("== A2 现网 p1：命中 + 组捕获 ==")
+show("p1.hit1", regex_search(P1, "prefix apikey = \"abcdefgh1234\" suffix"))
+show("p1.hit2", regex_search(P1, "hello auth: \"xyzxyzxyzxyzxyzxyz\" end"))
+show("p1.hit3", regex_search(P1, "x pwd='1234567890abc' y"))
+
+print("== A3 现网 p1：含核心字面但不匹配（必须回落 → null）==")
+f1("p1.core-only", P1, "please authorize this user, no assignment here")
+
+print("== A4 单字面前缀模式（M107-S1b 路径，不得回归）==")
+f1("sk.clean", "sk-[A-Za-z0-9_-]{16,}", "nothing to see here at all")
+f1("sk.hit", "sk-[A-Za-z0-9_-]{16,}", "key = sk-abcdefghij1234567890 ok")
+f1("bearer", "Bearer\\s+[A-Za-z0-9_\\-\\.]+", "Authorization: Bearer abc.def-ghi")
+f1("eyj", "eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.", "tok eyJabcdefghij.KLMNOPQRST.uvw")
+
+print("== A5 交替：分支含无核心形态 → 必须放弃预筛（仍须正确）==")
+f1("alt-nocore.clean", "(\\d+|api)key", "aaa bbb ccc")
+f1("alt-nocore.hit", "(\\d+|api)key", "zz apikey zz")
+f1("alt-class.clean", "(\\s*foo|\\s*bar)", "no match at all")
+f1("alt-class.hit", "(\\s*foo|\\s*bar)", "x  bar y")
+
+print("== A6 无核心可抽取的形态（不得回归）==")
+f1("digits.none", "\\d+", "abcdef")
+f1("digits.hit", "\\d+", "ab12cd")
+f1("any.dot", ".", "")
+f1("empty-star", "(a|b)*c", "xyz")
+f1("empty-star.hit", "(a|b)*c", "aabbc")
+
+print("== A7 锚点 / 零宽 ==")
+show("anchor", regex_search("(cat|dog)\\s+(\\w+)", "the dog barks"))
+f1("caret", "^abc", "xabc")
+f1("caret.hit", "^abc", "abcx")
+show("zero-width-alt", regex_search("(x|y)?z", "qz"))
+
+print("== A8 find_all / replace / split（交替）==")
+fl("all-alt", "(foo|bar)baz", "foobaz barbaz x foobaz")
+print("replace-alt=[" + regex_replace("(foo|bar)baz", "foobaz barbaz", "<$1>") + "]")
+print("replace2=[" + regex_replace(P1, "k = \"abcdefgh1234\"", "REDACTED") + "]")
+fl("all-p1", P1, "a auth = \"aaaaaaaaaa\" b pwd='bbbbbbbbbb' c")
+
+print("== A9 多字节文本 ==")
+f1("utf8.clean", "(api|auth)", "汉字汉字汉字")
+f1("utf8.hit", "(api|auth)", "汉字apikey汉字")
+f1("utf8.p1", P1, "汉字 auth = \"abcdefghijkl\" 汉字")
+
+print("== B 文本含核心但不命中（预筛放行 → 回落）==")
+f1("bound.p1", P1, "auth auth auth but no value assignment")
+
+print("== C 计时 ==")
+var BIG = "a" * 1048576
+var t0 = now_ms()
+var r0 = regex_find(P1, BIG)
+var d0 = now_ms() - t0
+print("TIME p1[1MB clean，预筛应整段跳过] ms=" + str(d0) + " hit=" + str(r0 != null))
+
+var B64 = "a" * 65536
+var t1 = now_ms()
+var r1 = regex_find(P1, B64)
+var d1 = now_ms() - t1
+print("TIME p1[64KB clean] ms=" + str(d1) + " hit=" + str(r1 != null))
+
+# 诚实记录：文本**含核心字面**时预筛放行 → 仍走回落逐起点路径（本片对此情形无收益）
+var CORE256 = "auth a" * 43690
+var t2 = now_ms()
+var r2 = regex_find(P1, CORE256)
+var d2 = now_ms() - t2
+print("TIME p1[256KB 含核心但不命中→回落路径] ms=" + str(d2) + " hit=" + str(r2 != null))
