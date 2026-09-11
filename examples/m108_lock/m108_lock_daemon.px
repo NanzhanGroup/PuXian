@@ -1,0 +1,48 @@
+# M108 ①「握手锁争用量化」服务端 daemon
+#
+# 目的：提供一个可切换 tls / plain 的 px_serve，供同一套客户端压测对比。
+#   tls(0)   = tls_server 注册 → accept 后必走 mbedtls 握手（= 待测路径，受 g_srv_hs_mu 约束）
+#   plain(1) = 不注册 TLS → 同一套 serve 栈但不握手（= 对照基线，用来剥离
+#              「池/事件循环/HTTP 解析」自身成本，剩下差额才是握手 + 握手锁）
+#
+# 用法：m108_lock_daemon [port] [cert] [key] [max_conn] [mode]
+#   默认：18202 / /tmp/px_m108_cert.pem / /tmp/px_m108_key.pem / 256 / 0
+#   注：max_conn 默认拉高到 256，避免「池容量」成为吞吐瓶颈而掩盖握手锁效应。
+var m108_port = 18202
+var m108_cert = "/tmp/px_m108_cert.pem"
+var m108_key = "/tmp/px_m108_key.pem"
+var m108_maxc = 256
+var m108_mode = 0
+
+let m108_av = args()
+if len(m108_av) > 1:
+    m108_port = int(m108_av[1])
+if len(m108_av) > 2:
+    m108_cert = m108_av[2]
+if len(m108_av) > 3:
+    m108_key = m108_av[3]
+if len(m108_av) > 4:
+    m108_maxc = int(m108_av[4])
+if len(m108_av) > 5:
+    m108_mode = int(m108_av[5])
+
+def m108_fast(req, params):
+    return {"status": 200, "body": "M108-FAST"}
+
+def m108_setup():
+    if m108_mode == 0:
+        let r = tls_server(m108_cert, m108_key)      # 进程级服务端 TLS（g_srv_tls_ready）
+        if r != true:
+            print("tls_server failed: " + str(r))
+            exit(1)
+    route("GET", "/fast", m108_fast)
+    let D = "/tmp/px_m108_docroot"
+    mkdir(D)
+    write_file(D + "/index.txt", "M108-OK")
+    print("m108_daemon ready port=" + str(m108_port) + " mode=" + str(m108_mode) + " max_conn=" + str(m108_maxc))
+    px_serve(m108_port, D, 300000, {"max_conn": m108_maxc})
+    exit(0)
+
+spawn m108_setup()
+sleep(300000)   # 兜底保活（正常路径 m108_setup 内 px_serve 返回后 exit(0) 提前终止）
+exit(0)
