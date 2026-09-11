@@ -17,7 +17,9 @@
 #   而 CI 全绿。⇒ 「CI 绿 ≠ 用户拿到修复」。
 #
 # 已知缺口显式登记（不得沉默放行；缺口修好后本门会主动报 XPASS 要求摘除）：
-#   codegen_b04_ffi_args —— VM 轨尚无 ffi（E3004 未覆盖）
+#   当前为空 —— M112-S2（Issue 52）已闭合 codegen_b04_ffi_args：VM 轨
+#   bc_emit_program 补齐 cg_ffi（ExternDef → 声明表），E3004 在默认轨生效。
+#   新增缺口在此登记，不要用「跳过」代替登记。
 #
 # 用法：
 #   ./engine_parity.sh                     # 全部 codegen_b* 负例
@@ -33,8 +35,9 @@ WORK=/tmp/px_engine_parity
 mkdir -p "$WORK"
 
 xfail_reason() {
+    # 登记格式（新增缺口时照写；返回 0 表示已登记）：
+    #   codegen_bNN_xxx) echo "原因" ;;
     case "$1" in
-        codegen_b04_ffi_args) echo "VM 轨无 ffi，E3004 未覆盖" ;;
         *) return 1 ;;
     esac
 }

@@ -511,9 +511,20 @@ cmd_build() {
             sed -n '/s_G\[\] = {/,/};/p' "$c_path" \
                 | grep -oE '"([^"]+)"' | tr -d '"' | LC_ALL=C sort -u > "$refs_tmp"
         else
-            grep -oE 'px_get_global\("([^"]+)"' "$c_path" \
-                | sed 's/px_get_global("//; s/"$//' \
-                | LC_ALL=C sort -u > "$refs_tmp"
+            # M86-S1：C 轨引用集 = C 产物里的 px_get_global("名") 调用串
+            # M112-S2（Issue 53）：**外加 C 轨 FFI 调用桥里的函数名**。
+            #   C 轨 FFI 名以字符串字面量出现在 ffi_call 桥里
+            #   （px_call(px_get_global("ffi_call"), (LXValue[]){px_str("sqlite_query"), …}），
+            #   不是 px_get_global 调用 ⇒ 原提取看不见 ⇒ 自动裁剪把 sqlite 模块裁掉
+            #   ⇒ 运行期 bi_ffi_call 命中不到注册表，返回 px_err（result 类型），
+            #   下游表现为 "len 不支持类型 result" —— 与真实病因（模块被裁）毫不相干。
+            #   VM 轨无此问题（FFI 名经 GETG 落进 s_G，上面 sed 已覆盖）。
+            {
+                grep -oE 'px_get_global\("([^"]+)"' "$c_path" \
+                    | sed 's/px_get_global("//; s/"$//'
+                grep -oE 'px_get_global\("ffi_call"\), \(LXValue\[\]\)\{px_str\("[^"]+"\)' "$c_path" \
+                    | grep -oE 'px_str\("[^"]+"\)' | sed 's/px_str("//; s/")$//'
+            } | LC_ALL=C sort -u > "$refs_tmp"
         fi
         local MAP="$PXC_HOME/runtime/native_mod_map.txt"
         if [ -f "$MAP" ]; then
@@ -679,9 +690,15 @@ cmd_refs() {
         echo "错误: 编译失败（$file）—— 自动裁剪退全量" >&2
         return 1
     fi
-    grep -oE 'px_get_global\("([^"]+)"' "$c" \
-        | sed 's/px_get_global("//; s/"$//' \
-        | LC_ALL=C sort -u
+    # M112-S2（Issue 53）：与 cmd_build 自动裁剪同一口径 —— 必须**同时**提取
+    #   FFI 桥函数名（px_str("名")），否则 px refs 与自动裁剪两处结论不一致
+    #   （「两处各写一遍」正是本轮收口的病根族）。
+    {
+        grep -oE 'px_get_global\("([^"]+)"' "$c" \
+            | sed 's/px_get_global("//; s/"$//'
+        grep -oE 'px_get_global\("ffi_call"\), \(LXValue\[\]\)\{px_str\("[^"]+"\)' "$c" \
+            | grep -oE 'px_str\("[^"]+"\)' | sed 's/px_str("//; s/")$//'
+    } | LC_ALL=C sort -u
     rm -f "$c"
 }
 
