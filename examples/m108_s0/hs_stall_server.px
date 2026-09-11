@@ -1,0 +1,25 @@
+# M108-S0 复现服务端：TLS px_serve（走 px_serve/g_pool 路径 + 全局握手串行锁）
+# 用法：hs_stall_server <port> <cert> <key> <docroot>
+# 目的：暴露「443 假死」——一个不完成 TLS 握手的连接即可拖死整个 TLS 端口。
+# 依赖：本文件由 tools/px build 编译（走 C runtime），不是 px run（解释器是另一实现）。
+A = args()
+
+def arg(i, d):
+    if len(A) > i + 1:
+        return A[i + 1]
+    return d
+
+PORT = int(arg(0, "18443"))
+CERT = arg(1, "/tmp/m108/cert.pem")
+KEY = arg(2, "/tmp/m108/key.pem")
+ROOT = arg(3, "/tmp/m108/site")
+
+assert(tls_server(CERT, KEY))
+
+def h(req):
+    return {"status": 200, "body": "M108-OK", "headers": {"Content-Type": "text/plain"}}
+
+vhost("localhost", h)
+print("[m108s0] serving tls port=" + str(PORT))
+px_serve(PORT, ROOT, 10000, {"max_conn": 32})
+print("[m108s0] serve returned")
