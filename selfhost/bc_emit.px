@@ -590,9 +590,9 @@ def bc_emit_expr(expr, dst, func):
         # A4 普通调用 / B1 方法调用（callee Field → CALLM px_method 桥）/
         # B2 struct/enum 构造（callee Var 为类型名 → NEWSTRUCT/NEWENUM）
         let callee = expr[1]
-        # M112-S0（Issue 46）：E3004 走共享语义层。VM 轨当前尚无 extern/ffi
-        #   （bc_emit 全文零 ffi），故此调用暂为 no-op —— 但 FFI 落地时校验
-        #   自动跟随，不必再"记得对齐"。
+        # M112-S0（Issue 46）：E3004 走共享语义层（与 C 轨同一条检查）。
+        # M112-S2（Issue 52）：VM 轨 cg_ffi 已由 bc_emit_program 从 ExternDef 填充
+        #   ⇒ 此处检查真正生效（此前 cg_ffi 恒空 → no-op）。
         cg_sem_call(callee, expr[2])
         if callee[0] == "Var":
             let cname = rust_unescape(callee[1])
@@ -1610,6 +1610,10 @@ def bc_emit_program(prog):
         i += 1
     bc_collect_consts(items)
     let impl_list = bc_collect_impl_list(items)
+    # M112-S2（Issue 52）：FFI 声明表复位 —— 与 C 轨 cg_generate 同一句（cg_ffi = cg_new_dict()）。
+    #   原 VM 轨从不清空、也从填充 cg_ffi ⇒ 轨无关共享层 cg_sem_call 的 E3004 恒不触发
+    #   （engine_parity 曾以 xfail 登记该缺口）。
+    cg_ffi = cg_new_dict()
     # 第一遍：收集全局名（对齐 cg_generate 顺序：FuncDef/ExternDef/VarDecl/Assign）
     i = 0
     while i < len(items):
@@ -1617,6 +1621,13 @@ def bc_emit_program(prog):
         let ty = st[0]
         if ty == "FuncDef":
             bc_g_add(m["globals"], rust_unescape(st[1]))
+        elif ty == "ExternDef":
+            # M112-S2（Issue 52）：extern def → FFI 声明表（name → params）。
+            #   C 轨在 cg_generate 里同一句；VM 轨缺此步 = 共享语义检查对 extern 全盲。
+            #   运行期调用不需额外发射：VM 轨 GETG 经 px_get_global 解析到 runtime
+            #   注册的 native（runtime.c px_set_global("sqlite_open", …)），与 C 轨
+            #   ffi_call 桥殊途同归（实测 ok_ffi 双轨运行结果一致）。
+            cg_ffi[rust_unescape(st[1])] = st[2]
         elif ty == "VarDecl":
             bc_g_add(m["globals"], rust_unescape(st[2]))
         elif ty == "Assign":
