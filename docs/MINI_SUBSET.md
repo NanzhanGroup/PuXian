@@ -207,7 +207,7 @@
 | # | 限制 | 现象 | 规避 |
 |---|---|---|---|
 | 1 | **编译版编译器（A/B 二进制）无法正确解析含 NUL 的源码字符串**（C 运行时字符串 NUL 截断，M-B2 §八.3 的延伸） | A 编译含 `"\u{0}"` 字面量的源码时，AST 里 NUL 变空串 | 编译器源码本身含 `"\u{0}"` 字面量（rust_unescape/scan_escape/char_debug）——Rust 版可解析但编译版截断，**自举产物 diff 由 escape_str 双端丢弃 NUL 统一**；写编译器源码避免依赖 NUL 运行时语义 |
-| 2 | **编译版编译器编译自己需 ~3.5min / 1.6GB 内存**（C 运行时解释执行 PuXian 编译器逻辑，解析 ~120KB 源码 + import 链） | `build/compiler build compiler.px` 耗时 3-4 分钟、峰值内存 1.6GB | bootstrap_prove.sh 已设 900s 超时；CI/日常不重复跑（产物缓存） |
+| 2 | **编译版编译器编译自己需 ~3.5min / 1.6GB 内存**（C 运行时解释执行 PuXian 编译器逻辑，解析 ~120KB 源码 + import 链） | `build/compiler build compiler.px` 耗时 3-4 分钟（M-B8/M-B9a 期旧二进制口径）；**2026-09-12 冬月 8 核 16G 复测当前工具链：`bootstrap/pxc build compiler.px` 405s ≈6.7min**、峰值内存 1.6GB | bootstrap_prove.sh 已设 900s 超时；CI/日常不重复跑（产物缓存） |
 
 ## 十三、M58 dogfood 新增：真实应用（pxhwmond）暴露的语言行为欠账（编译模式 runtime）
 

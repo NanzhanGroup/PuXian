@@ -37,6 +37,9 @@ jobs:
       - name: 对拍回归 — 错误场景（--errors）
         run: ./selfhost/diffcheck.sh --errors 2>&1 | tail -3
 
+      - name: 引擎一致性门 — 用户面默认轨（negative，Issue 51）
+        run: ./selfhost/engine_parity.sh 2>&1 | tail -12
+
       - name: 对拍回归 — codegen（--codegen）
         run: ./selfhost/diffcheck.sh --codegen 2>&1 | tail -5
 

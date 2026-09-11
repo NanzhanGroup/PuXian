@@ -53,12 +53,21 @@ PuXian 是自举语言，回归门槛是**双模式（编译 + 解释）行为�
 ./tools/pxc build selfhost/capability.px && ./selfhost/build/capability   # 编译模式
 
 # 3. 自举证明（PuXian 编译器编译自己与基准逐字节一致——改编译器后必须跑）
-cd selfhost && ./bootstrap_prove.sh
+cd selfhost && ./bootstrap_prove.sh          # C 轨：golden/compiler.c
+cd selfhost && ./bootstrap_prove_bc.sh       # BC 轨：golden/compiler.bc.dump（字节码权威基准）
 
-# 4. 新增/改动功能时补对应用例（selfhost/cases/ 或 examples/）并更新 golden
+# 4. 引擎一致性门（用户面默认轨 tools/px 必须与基准轨说同一句话，Issue 51）
+./selfhost/engine_parity.sh
+
+# 5. 改过编译器源码 / 基准后：重烘入库二进制（否则用户拿到的仍是旧引擎）
+cp selfhost/build/compiler_vm bootstrap/pxc_vm    # 产出见 bootstrap_prove_bc.sh 步骤 3/4
+
+# 6. 新增/改动功能时补对应用例（selfhost/cases/ 或 examples/）并更新 golden
+#    有意改动基准时重定基（两条基准须与源码同批提交）：
+#    cd selfhost && ./bootstrap_prove.sh --update-golden && ./bootstrap_prove_bc.sh --update-golden
 ```
 
-> ⚠️ 自举证明需 ~3.5 分钟与约 1.6GB 内存（见 MINI_SUBSET §十二.2）。若你的改动未触及 `selfhost/compiler.px` 及其模块，可跳过第 3 步并在 PR 描述中注明。
+> ⚠️ 自举证明 C 轨 `--fresh` 实测 ≈6.5-7 分钟（405s，8 核 16G 单线程）与约 1.6GB 内存；BC 轨全链 `--fresh` 约 12-15 分钟（见 MINI_SUBSET §十二.2）。若你的改动未触及 `selfhost/compiler.px` 及其模块，可跳过第 3 步并在 PR 描述中注明。
 
 ## 语言约束（写代码前必读）
 
