@@ -163,6 +163,40 @@ static int g_pool_head = 0, g_pool_tail = 0, g_pool_count = 0;
 static int g_pool_size = 0;
 static pthread_mutex_t g_pool_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_pool_cond = PTHREAD_COND_INITIALIZER;
+// ==== M108（qg-issue 37）连接生命周期族 ====
+// S1b：**pusher 专用 condvar** —— 原实现 pusher（队列满等待）与 worker（队列空等待）共用
+//   g_pool_cond，两个不同谓词挂同一条等待队列：worker 取走 job 的 signal 可能唤醒的仍是
+//   pusher（反之亦然），唤醒语义不可推理且放大惊群。拆分为 g_pool_full_cond（队列非满，
+//   唤醒 pusher）后，g_pool_cond 只服务 worker。队列仍为 PX_POOL_MAX 有界环（语义红线 7）。
+static pthread_cond_t g_pool_full_cond = PTHREAD_COND_INITIALIZER;
+// S1d：滚动重建（防泄漏兜底）——worker 处理满 PX_POOL_MAX_REQ 个 job 后自愿退休，
+//   accept 循环补员（只在「刚处理完 job、未持有连接」时退休，语义红线 4）。
+//   0 = 关闭（默认，保持 M108 前行为）。
+static volatile int g_pool_max_req = 0;
+static volatile int g_pool_exit_flag[PX_POOL_MAX];   // worker i 已退出（有界 join / 补员判定）
+static volatile int g_pool_retire[PX_POOL_MAX];     // worker i 自愿退休待补员
+static volatile int g_pool_busy_cnt = 0;            // 正持有连接的 worker 数（诊断/看门狗）
+static volatile int g_pool_phase[PX_POOL_MAX];      // worker 相位：0=等队列 1=处理中 2=已退出
+static volatile long long g_pool_exited = 0;        // 累计退出 worker 数（有界 join）
+// S1c：假死可见性（V5）——原子计数器 + 停滞告警。定位「443 假死」时生产现场只有外部
+//   ss/systemctl 观测（issue 37 §2.2 需逐线程 wchan），进程自身沉默是最大缺口。
+static volatile long long g_diag_hs_begin = 0;      // 进入 TLS 握手
+static volatile long long g_diag_hs_ok = 0;         // 握手成功
+static volatile long long g_diag_hs_fail = 0;       // 握手失败（协议/对端错）
+static volatile long long g_diag_hs_tmo = 0;        // 握手超时（S2a 截止，含自愈关闭）
+static volatile long long g_diag_hs_inflight = 0;   // 当前握手中连接数
+static volatile long long g_diag_hs_oldest = 0;     // 最早未完成握手的起始时刻（ms；0=无）
+static volatile long long g_diag_hs_lock_max_ms = 0;// 全局握手锁最长等待（ms）
+static volatile long long g_diag_enter_null = 0;    // px_pxpend_enter 失败（S2c 修复前=fd 泄漏）
+static volatile long long g_diag_push_tmo = 0;      // 入队有界等待超时（S3）
+static volatile long long g_diag_join_tmo = 0;      // 优雅关闭 join 超时次数（S1a）
+static volatile long long g_diag_stall = 0;         // 停滞告警次数
+static volatile long long g_diag_stall_last = 0;   // 上次 stall 告警（节流）
+static volatile long long g_diag_wd_last = 0;       // 看门狗上次巡检时刻
+// 参数（env 可覆盖；默认值见下方宏）
+static int g_pool_push_tmo_ms = 0;      // 0 = 取默认 PX_POOL_PUSH_TMO_DEFAULT_MS
+static int g_px_hs_tmo_ms = 0;          // 0 = 取默认 PX_TLS_HS_TMO_DEFAULT_MS
+static int g_serve_diag = 0;            // PX_SERVE_DIAG=1：周期健康行（默认只报异常）
 static LXValue bi_sandbox_enter(LXValue* args, int nargs, void* ctx);
 static LXValue bi_vhost(LXValue* args, int nargs, void* ctx);
 static LXValue bi_rate_limit(LXValue* args, int nargs, void* ctx);
@@ -172,6 +206,9 @@ static LXValue bi_tuple(LXValue* args, int nargs, void* ctx);
 static int px_vhost_resolve(const char* host_hdr, const char* default_root,
                             char* out_root, int out_root_sz, LXValue* out_handler, int* has_handler);
 static void px_pool_push(int fd);
+static int px_pool_push_tmo(int fd, int tmo_ms);   // M108-S3：有界入队（0 成功 / -1 超时拒绝）
+static int px_pool_push_bounded(int fd);           // M108-S3：按 env 参数有界入队 + 拒绝收尾
+static void px_serve_watchdog_start(void);
 static void* px_pool_worker(void* arg);
 static void px_vhost_normalize(LXValue v, int* status, const char** ct, const char** body, int* body_len,
                                char* extra, int extra_sz);
@@ -11005,6 +11042,7 @@ static int px_evc_idle_put(int fd, int kind);
 static int px_evc_idle_put_fd(int fd, int kind, int nonblock);
 static void px_ev_ensure(void);
 static void px_fd_nonblock(int fd);
+static void px_fd_block(int fd);
 static void px_pxpend_close(int fd);   // M99：px_serve 连接统一 close（px_ev_loop tick/断开分支用；定义见 px_conn_worker 区）
 
 // ---- M95-S2：http handler 协程化 —— pending 表前向声明（实现在 ConnCtx 区后）----
@@ -11683,6 +11721,12 @@ static void px_fd_nonblock(int fd) {
     if (fl >= 0 && !(fl & O_NONBLOCK)) fcntl(fd, F_SETFL, fl | O_NONBLOCK);
 }
 
+// M108-S2a：fd 还原阻塞（TLS 握手分步期临时置非阻塞；见 px_conn_tls_handshake）
+static void px_fd_block(int fd) {
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl >= 0 && (fl & O_NONBLOCK)) fcntl(fd, F_SETFL, fl & ~O_NONBLOCK);
+}
+
 // fd 索引表扩容到至少容纳 idx=fd（上限 g_conn_max；超限返回 -1）。调用方持 g_conn_mu。
 static int px_evc_ensure(int fd) {
     if (!g_conn_max_init) {
@@ -12034,7 +12078,9 @@ static void* px_ev_loop(void* arg) {
                 if (c) {
                     __atomic_fetch_add(&g_diag_detect_http, 1, __ATOMIC_RELAXED);
                     // M99：PXSERVE → 投回 px_serve 的 g_pool（px_pool_push）；HTTP/SSE → fserve
-                    if (k2 == FSERVE_KIND_PXSERVE) px_pool_push(fd);
+                    // M108-S3：PXSERVE 改有界入队（超时拒绝 → 收尾关闭 + 告警），
+                    //   不再让「队列满」把**事件循环线程**钉死（会连带停掉 80/SSE 的 IDLE 调度）
+                    if (k2 == FSERVE_KIND_PXSERVE) px_pool_push_bounded(fd);
                     else fserve_push(fd, k2);   // 队满阻塞背压（事件循环线程暂停派发，不丢 fd）
                 }
                 continue;
@@ -12105,7 +12151,8 @@ static void* px_ev_loop(void* arg) {
                 // M99：按类型投回服务池——PXSERVE → px_serve 的 g_pool；HTTP → fserve
                 PxConnCtx* ac = px_evc_acquire(fd, kind_tmo);  // FREE→ACTIVE 重新登记
                 if (ac) {
-                    if (kind_tmo == FSERVE_KIND_PXSERVE) px_pool_push(fd);
+                    // M108-S3：PXSERVE 有界入队（超时拒绝 → px_pxpend_close 收尾 + 告警）
+                    if (kind_tmo == FSERVE_KIND_PXSERVE) px_pool_push_bounded(fd);
                     else fserve_push(fd, FSERVE_KIND_HTTP);    // 投回池，worker 接管读在途请求
                 } else {
                     // 登记失败兜底（理论不可达）：PXSERVE 走 px_pxpend_close（清 PxConn/TLS/inflight）
@@ -13917,18 +13964,132 @@ static int px_conn_tls_handshake_locked(PxConn* c) {
     mbedtls_ssl_conf_alpn_protocols(conf, alpn_list);
     if (mbedtls_ssl_setup(ssl, conf) != 0) return -1;
     mbedtls_ssl_set_bio(ssl, &c->fd, mbedtls_net_send, mbedtls_net_recv, NULL);
-    int ret;
-    while ((ret = mbedtls_ssl_handshake(ssl)) != 0) {
-        if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) return -1;
-    }
+    // M108-S2a：**不在本函数内推进握手状态机**（本函数持全局串行锁且无 I/O 预算）——
+    //   握手改由 px_conn_tls_handshake 分步驱动（每步持锁 + 步间 poll 截止）。
     return 0;
 }
 
+// M108-S1c：停滞/异常统一日志（进程自身可观测信号，V5）。诊断计数在前，日志有节流。
+#define PX_TLS_HS_TMO_DEFAULT_MS     10000
+#define PX_POOL_PUSH_TMO_DEFAULT_MS  3000
+#define PX_SHUTDOWN_JOIN_TMO_MS      2000
+#define PX_SERVE_HS_STALL_WARN_MS    5000
+static void px_serve_stall_log(const char* kind, int fd, long long ms, long long extra) {
+    __atomic_fetch_add(&g_diag_stall, 1, __ATOMIC_RELAXED);
+    fprintf(stderr, "[px-serve:STALL] %s fd=%d 停滞=%lldms extra=%lld "
+                    "(hs_inflight=%lld enter_null=%lld push_tmo=%lld hs_tmo=%lld)\n",
+            kind, fd, ms, extra,
+            __atomic_load_n(&g_diag_hs_inflight, __ATOMIC_RELAXED),
+            __atomic_load_n(&g_diag_enter_null, __ATOMIC_RELAXED),
+            __atomic_load_n(&g_diag_push_tmo, __ATOMIC_RELAXED),
+            __atomic_load_n(&g_diag_hs_tmo, __ATOMIC_RELAXED));
+    fflush(stderr);
+}
+
+// M108-S2a：TLS 握手分步驱动（qg-issue 37 根因修复）。
+// 修复前（M101 起）px_conn_tls_handshake 持 g_srv_hs_mu 调用 mbedtls_ssl_handshake()，
+//   内部是**无超时的阻塞 recv**：任一「不完成握手的连接」（半开/TCP 卡住/残缺
+//   ClientHello/不回 Finished）即长期持有全局串行锁 → 其余 worker 全部堆在
+//   pthread_mutex_lock(&g_srv_hs_mu) 上（wchan=futex，外观与「空闲等活」完全相同 ——
+//   这正是 issue 37 §2.2 把 294 futex 误判为"worker 没活干"的原因）→ 新连接的
+//   ClientHello 被 accept 后无人读、滞留内核 Recv-Q（现场实测 1525~1794B）→
+//   客户端只见沉默（15s 超时）→ 对端放弃后连接停 CLOSE-WAIT 单调增长（52→61→64）。
+//   80 端口走 fserve 明文路径、无此锁 → 精确解释「80 全好、443 全死」。无自愈、无告警。
+// 本地复现（examples/m108_s0/hs_stall_server.px + hs_stall_repro.sh）：仅 1 个发 5 字节
+//   Record 头后静默的连接，即令 curl/openssl 全部 6s 超时；wchan 直方图
+//   `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll`，与现场同形。
+// 修法：① 配置阶段（DRBG/证书/ALPN/cache/ssl_setup）持锁——纯内存、微秒级、无 I/O；
+//   ② 状态机推进改用 mbedtls_ssl_handshake_step，**每步在锁内**（同一时刻仍只有一个
+//      线程进入 mbedtls → M101 的线程安全语义完整保持），步内 fd 置非阻塞，
+//      f_recv/f_send 遇 EAGAIN 立即返回 WANT_READ/WANT_WRITE，绝不阻塞；
+//   ③ 步间**释放锁**并 poll(fd, 剩余截止)——任一连接的 I/O 等待不再占用锁；
+//   ④ 总截止 PX_TLS_HS_TMO_MS（默认 10s，0=不限）超时 → 关闭该连接（自愈）+ 计数告警。
+// 效果：单连接卡死从「整端口假死 2h41m」降级为「该连接 10s 内被回收，其余连接零影响」。
+// 返回 1 = 有事件（可继续推进）；0 = 本分片超时（**不是**总截止，调用方需回循环顶重检）；
+//      -1 = 出错/无效 fd（调用方按失败收尾）。分片语义（每片 ≤500ms）使总截止与 g_px_stop
+//      的检查足够及时，同时不会把"本片无事件"误判成"握手超时"（实测踩过的第二个坑）。
+static int px_hs_poll_io(int fd, int want_write, int remain_ms) {
+    struct pollfd p;
+    p.fd = fd;
+    p.events = want_write ? POLLOUT : POLLIN;
+    p.revents = 0;
+    int r = poll(&p, 1, remain_ms);
+    if (r < 0) return -1;
+    if (r == 0) return 0;
+    if (p.revents & (POLLERR | POLLNVAL)) return -1;
+    return 1;
+}
+
 static int px_conn_tls_handshake(PxConn* c) {
+    int fd = c->fd;
+    int tmo = g_px_hs_tmo_ms > 0 ? g_px_hs_tmo_ms : PX_TLS_HS_TMO_DEFAULT_MS;
+    long long t0 = px_ev_now_ms();
+    __atomic_fetch_add(&g_diag_hs_begin, 1, __ATOMIC_RELAXED);
+    if (__atomic_fetch_add(&g_diag_hs_inflight, 1, __ATOMIC_RELAXED) == 0)
+        __atomic_store_n(&g_diag_hs_oldest, t0, __ATOMIC_RELAXED);
+    // ① 配置阶段（持锁，无 I/O）
+    long long w0 = px_ev_now_ms();
     pthread_mutex_lock(&g_srv_hs_mu);
+    long long w1 = px_ev_now_ms();
     int rc = px_conn_tls_handshake_locked(c);
     pthread_mutex_unlock(&g_srv_hs_mu);
-    return rc;
+    if (w1 - w0 > __atomic_load_n(&g_diag_hs_lock_max_ms, __ATOMIC_RELAXED))
+        __atomic_store_n(&g_diag_hs_lock_max_ms, w1 - w0, __ATOMIC_RELAXED);
+    if (rc != 0) {
+        if (__atomic_sub_fetch(&g_diag_hs_inflight, 1, __ATOMIC_RELAXED) == 0)
+            __atomic_store_n(&g_diag_hs_oldest, 0, __ATOMIC_RELAXED);
+        __atomic_fetch_add(&g_diag_hs_fail, 1, __ATOMIC_RELAXED);
+        return -1;
+    }
+    // ② 分步握手（每步持锁 + 步间 poll 截止）
+    mbedtls_ssl_context* ssl = (mbedtls_ssl_context*)c->ssl;
+    px_fd_nonblock(fd);                    // 步内不得阻塞（EAGAIN → WANT_READ/WANT_WRITE）
+    int ret = -1, stopped = 0, done = 0, steps = 0;
+    for (;;) {
+        long long el = px_ev_now_ms() - t0;
+        if (tmo > 0 && el >= tmo) { stopped = 1; break; }          // 总截止
+        // M108-S1a：关闭期立即放弃在途握手 → 优雅关闭可快速 join（不再 90s → SIGKILL）
+        if (g_px_stop) { stopped = 1; break; }
+        if (++steps > 512) { stopped = 1; break; }                 // 防御：无 I/O 跃迁死循环
+        pthread_mutex_lock(&g_srv_hs_mu);
+        int over = mbedtls_ssl_is_handshake_over(ssl);
+        long long s0 = px_ev_now_ms();
+        ret = over ? 0 : mbedtls_ssl_handshake_step(ssl);
+        long long s1 = px_ev_now_ms();
+        pthread_mutex_unlock(&g_srv_hs_mu);
+        if (s1 - s0 > __atomic_load_n(&g_diag_hs_lock_max_ms, __ATOMIC_RELAXED))
+            __atomic_store_n(&g_diag_hs_lock_max_ms, s1 - s0, __ATOMIC_RELAXED);
+        if (ret == 0) {
+            // ⚠️ 陷阱（本地实测踩到）：mbedtls_ssl_handshake_step **每完成一个不需要 I/O 的
+            //   状态跃迁也返回 0**（例如 HELLO_REQUEST→CLIENT_HELLO），并不代表握手完成。
+            //   若把 ret==0 当成功，就会在客户端只发了 5 字节 Record 头时把"未完成握手的
+            //   连接"当成功放行 → 该连接随后阻塞在请求读取上 15s（表现为 hs ok 计数虚增、
+            //   连接槽被长期占用）。必须以 mbedtls_ssl_is_handshake_over 判定真正完成。
+            if (over) { done = 1; break; }
+            continue;                                              // 继续推进（无需等 I/O）
+        }
+        if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) break;
+        int slice = (tmo > 0) ? (int)(tmo - el) : 1000;
+        if (slice < 1) slice = 1;
+        if (slice > 500) slice = 500;        // M108-S1a：分片等待 → ≤500ms 内观察 g_px_stop
+        int pr = px_hs_poll_io(fd, ret == MBEDTLS_ERR_SSL_WANT_WRITE, slice);
+        if (pr < 0) { stopped = 1; break; }  // 出错/无效 fd
+        if (pr == 0) continue;               // 本片无事件 → 回循环顶重检总截止与 g_px_stop
+    }
+    px_fd_block(fd);                        // 还原阻塞（keep-alive 走 SO_RCVTIMEO 语义）
+    if (__atomic_sub_fetch(&g_diag_hs_inflight, 1, __ATOMIC_RELAXED) == 0)
+        __atomic_store_n(&g_diag_hs_oldest, 0, __ATOMIC_RELAXED);
+    if (stopped) {                          // 超时 → 自愈：调用方收尾关闭该连接
+        __atomic_fetch_add(&g_diag_hs_tmo, 1, __ATOMIC_RELAXED);
+        px_serve_stall_log("tls-handshake-timeout", fd, px_ev_now_ms() - t0, tmo);
+        return -1;
+    }
+    if (!done) {
+        __atomic_fetch_add(&g_diag_hs_fail, 1, __ATOMIC_RELAXED);
+        return -1;
+    }
+    __atomic_fetch_add(&g_diag_hs_ok, 1, __ATOMIC_RELAXED);
+    return 0;
 }
 
 // 初始化连接（fd 上 TLS 握手若已注册服务端证书；失败返回 -1，连接应关闭）
@@ -15274,9 +15435,13 @@ static int px_pxpend_ensure(int fd) {
 
 // px_conn_worker 每 fd job 入口：取/建连接槽。新连接（!active）→ 堆 PxConn + px_conn_init
 // （TLS 握手在锁外做，防长握手阻塞全表/GC）+ inflight++。返回槽指针；失败 NULL。
-static PxPend* px_pxpend_enter(int fd) {
+// M108-S2c：新增 out_fd_closed —— 告知调用方 fd 是否已由本函数内部收尾关闭（px_conn_init
+//   的失败路径会走 px_conn_close 关 fd；若调用方再 close 同一 fd 号即为「双重 close」，
+//   在 fd 号被复用后可能误关无关连接）。0 = fd 仍打开、由调用方负责收尾；1 = 已关闭。
+static PxPend* px_pxpend_enter(int fd, int* out_fd_closed) {
     PxPend* e = NULL;
     int create = 0;
+    if (out_fd_closed) *out_fd_closed = 0;
     sigset_t old;
     pthread_mutex_lock(&g_pxpend_mu);
     gc_block_stop(&old);
@@ -15292,14 +15457,20 @@ static PxPend* px_pxpend_enter(int fd) {
     if (!create) return e;
     // 新建：堆化连接 + TLS 握手（锁外）
     PxConn* c = (PxConn*)xmalloc(sizeof(PxConn));
-    if (!c) return NULL;
-    if (px_conn_init(c, fd) != 0) { xfree(c); return NULL; }
+    if (!c) return NULL;                        // fd 未关 → 调用方收尾
+    if (px_conn_init(c, fd) != 0) {
+        // px_conn_init 的失败路径已内部 px_conn_close（关 fd + 释放 TLS 状态）
+        if (out_fd_closed) *out_fd_closed = 1;
+        xfree(c);
+        return NULL;
+    }
     pthread_mutex_lock(&g_pxpend_mu);
     gc_block_stop(&old);
     if (e->active) {   // 防御：槽被占（理论不达，fd 唯一在途）→ 弃新建
         gc_unblock_stop(&old);
         pthread_mutex_unlock(&g_pxpend_mu);
         px_conn_close(c); xfree(c);
+        if (out_fd_closed) *out_fd_closed = 1;
         return NULL;
     }
     e->fd = fd; e->active = 1; e->stage = 0; e->conn = c;
@@ -15454,7 +15625,7 @@ static void px_serve_route_done(void* ud, LXValue ret) {
     if (tmp[0]) unlink(tmp);
     if (push) {
         if (g_px_stop) px_pxpend_close(fd);   // 关闭期：池 worker 已退出 → 直接收尾
-        else px_pool_push(fd);                // 续处理：段2 respond + keep-alive
+        else (void)px_pool_push_bounded(fd);  // 续处理：段2 respond + keep-alive（M108-S3）
     }
     px_root_pop();
 }
@@ -15580,7 +15751,7 @@ static void px_serve_mw_done(void* ud, LXValue ret) {
     } else if (push) {
         if (tmp[0]) unlink(tmp);
         if (g_px_stop) px_pxpend_close(fd);   // 关闭期：池 worker 已退出 → 直接收尾
-        else px_pool_push(fd);                // 续处理：段2 respond + keep-alive
+        else (void)px_pool_push_bounded(fd);  // 续处理：段2 respond + keep-alive（M108-S3）
     }
     px_root_pop();
 }
@@ -15638,10 +15809,27 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) return px_null();
     int fd = (int)args[0].as.i;
+    int fd_closed = 0;   // M108-S2c：槽获取失败时 fd 是否已由 px_conn_init 内部收尾
     // M98-S2a：连接槽取/建（fd→PxPend*）—— PxConn 堆化登记（跨 g_pool worker 存活，
     // TLS 会话/读缓冲不随 worker 释放而丢）；新建连接在槽内做握手 + inflight++。
-    PxPend* pend = px_pxpend_enter(fd);
-    if (!pend) return px_null();
+    PxPend* pend = px_pxpend_enter(fd, &fd_closed);
+    if (!pend) {
+        // M108-S2c：槽获取失败（fd ≥ g_conn_max / 槽被占 / 分配失败）——原实现**直接 return**，
+        //   fd 既无 worker、也不在 epoll、更无人 close ⇒ 客户端只见沉默（ClientHello 滞留
+        //   Recv-Q）、连接永久停在 CLOSE-WAIT（qg-issue 37 §2.1 形态）。统一收尾：摘 epoll
+        //   上下文 + close + 计数告警（不静默）。fd_closed=1 表示 px_conn_init 内部已收尾
+        //   （连接级失败，已由 tls-handshake-* 日志覆盖）→ 不再重复关 fd / 重复告警。
+        if (!fd_closed) {
+            // 真「无槽可用」（fd ≥ g_conn_max / 槽被占 / 分配失败）：这才是**原实现的 fd
+            // 泄漏类**——fd 无人持有也无人 close；计入 enter_null 并告警。
+            __atomic_fetch_add(&g_diag_enter_null, 1, __ATOMIC_RELAXED);
+            px_serve_stall_log("p4-enter-null", fd, 0, 0);
+            px_evc_detach(fd);
+            close(fd);
+        }
+        g_cur_conn = NULL;
+        return px_null();
+    }
     PxConn* conn = pend->conn;
     g_cur_conn = conn;
     // M99：每 job 登记连接上下文为 ACTIVE（FREE→ACTIVE 或幂等复位；事件循环照看/超时收尾用）。
@@ -16501,6 +16689,32 @@ static LXValue bi_tuple(LXValue* args, int nargs, void* ctx) {
     return px_null();
 }
 
+// M108-S1a：优雅关闭 —— 先 shutdown 唤醒阻塞在 keep-alive 读上的池 worker。
+//   池 worker 的 keep-alive 读是**阻塞 recv + SO_RCVTIMEO 15s**（M97/M99 语义，不改 fd
+//   阻塞性——改非阻塞会让 TLS 的部分 record 被误判断开，见 px_evc_idle_put_fd 注释）：
+//   SIGTERM 后这些 worker 最长 15s 才醒来 → 直接造成 join 超时（现场 07:15:46→07:17:17
+//   = 91s → SIGKILL 的成因之一）。由主线程对**仍被登记（state != FREE）**的 PXSERVE
+//   连接 shutdown(SHUT_RDWR)：阻塞 recv 立即返回 0（EOF）→ worker 正常走统一关闭路径
+//   px_pxpend_close 收尾退出（语义红线 3：不新增独立 close）。
+//   安全性论证：close(fd) 只在 px_evc_detach / px_evc_close 持 g_conn_mu 置 FREE
+//   **并出锁之后**发生 → 持 g_conn_mu 时 state != FREE ⇒ 该 fd 必然仍打开且无人正在关闭
+//   ⇒ shutdown 不会误伤已被复用/关闭的 fd 号。
+static void px_pxserve_shutdown_wake_all(void) {
+    if (g_conn_cap <= 0) return;
+    int n = 0;
+    pthread_mutex_lock(&g_conn_mu);
+    for (int i = 0; i < g_conn_cap; i++) {
+        PxConnCtx* c = &g_conns[i];
+        if (c->state != PX_CONN_STATE_FREE && c->kind == FSERVE_KIND_PXSERVE && c->fd >= 0) {
+            shutdown(c->fd, SHUT_RDWR);
+            n++;
+        }
+    }
+    pthread_mutex_unlock(&g_conn_mu);
+    if (n > 0 && g_serve_diag)
+        fprintf(stderr, "[px-serve] 优雅关闭：shutdown 唤醒 %d 个在册连接\n", n);
+}
+
 static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 2 || nargs > 4) px_error("px_serve 需要 (port, docroot[, timeout_ms[, opts]]) 参数");
@@ -16648,21 +16862,61 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
 #endif
     // M31.4b：并发模型升级——连接线程池（不占 spawn 槽位，突破 64 上限）
     // 预派生 max_conn 个常驻 worker：accept 只把 cfd 放队列，worker 取队列处理。
+    // M108：env 调参（默认值即 M108 前行为，除两项自愈默认值）+ 池状态复位 + 自愈看门狗。
+    {
+        const char* v;
+        if ((v = getenv("PX_POOL_MAX_REQ")) && atoi(v) > 0) g_pool_max_req = atoi(v);
+        if ((v = getenv("PX_POOL_PUSH_TMO_MS")) && atoi(v) >= 0) g_pool_push_tmo_ms = atoi(v);
+        if ((v = getenv("PX_TLS_HS_TMO_MS")) && atoi(v) >= 0) g_px_hs_tmo_ms = atoi(v);
+        if ((v = getenv("PX_SERVE_DIAG")) && atoi(v) > 0) g_serve_diag = 1;
+        for (int i = 0; i < PX_POOL_MAX; i++) { g_pool_exit_flag[i] = 0; g_pool_retire[i] = 0; }
+        g_pool_exited = 0; g_pool_busy_cnt = 0;
+        fprintf(stderr, "[px-serve] M108 池参数：max_conn=%d PX_POOL_MAX_REQ=%d(0=不限) "
+                        "push_tmo=%dms tls_hs_tmo=%dms diag=%d\n",
+                max_conn, g_pool_max_req,
+                g_pool_push_tmo_ms > 0 ? g_pool_push_tmo_ms : PX_POOL_PUSH_TMO_DEFAULT_MS,
+                g_px_hs_tmo_ms > 0 ? g_px_hs_tmo_ms : PX_TLS_HS_TMO_DEFAULT_MS, g_serve_diag);
+    }
+    px_serve_watchdog_start();
     g_pool_size = max_conn;
     for (int i = 0; i < g_pool_size; i++) {
-        if (pthread_create(&g_pool_threads[i], NULL, px_pool_worker, NULL) != 0) {
+        if (pthread_create(&g_pool_threads[i], NULL, px_pool_worker, (void*)(intptr_t)i) != 0) {
             g_pool_size = i;
             px_error("px_serve: 创建连接线程池失败");
         }
     }
     for (;;) {
         if (g_px_stop) break;
+        // M108-S1d：滚动重建补员——仅替补「已退休且已退出」的槽位（退休发生在 worker 刚
+        //   处理完一个 job、未持有连接时 → 不丢弃在途请求）。默认关闭（PX_POOL_MAX_REQ=0）。
+        for (int i = 0; i < g_pool_size; i++) {
+            if (g_pool_retire[i] && g_pool_exit_flag[i]) {
+                pthread_join(g_pool_threads[i], NULL);
+                g_pool_retire[i] = 0;
+                g_pool_exit_flag[i] = 0;
+                if (pthread_create(&g_pool_threads[i], NULL, px_pool_worker,
+                                   (void*)(intptr_t)i) != 0) {
+                    g_pool_retire[i] = 1;   // 补员失败 → 下轮 accept 再试（不阻塞服务）
+                    break;
+                }
+                fprintf(stderr, "[px-serve] 池 worker #%d 滚动重建完成（防泄漏自愈）\n", i);
+            }
+        }
         int cfd = accept(sfd, NULL, NULL);
         if (cfd < 0) {
             if (g_px_stop) break;
             continue;
         }
-        px_pool_push(cfd);
+        // M108-S3：有界入队——队列满（PX_POOL_MAX=256）时原实现**无限阻塞 accept 线程**，
+        //   新连接滞留内核 accept 队列 → 客户端「握手无响应」。改为有界等待；超时则拒绝
+        //   该连接并关闭 + 计数告警（不静默丢 fd，不钉死 accept）。
+        if (px_pool_push_tmo(cfd, g_pool_push_tmo_ms > 0 ? g_pool_push_tmo_ms
+                                                         : PX_POOL_PUSH_TMO_DEFAULT_MS) != 0) {
+            __atomic_fetch_add(&g_diag_push_tmo, 1, __ATOMIC_RELAXED);
+            px_serve_stall_log("accept-reject-queue-full", cfd, 0, g_pool_count);
+            px_evc_detach(cfd);
+            close(cfd);
+        }
     }
     g_px_listen_fd = -1;
     close(sfd);
@@ -16675,11 +16929,48 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     }
 #endif
     // 停止 worker：广播唤醒 → worker 处理完当前连接/清空队列后退出 → join
+    // M108-S1a：**有界 join**（qg-issue 37 §5 / C5）。原实现无条件 pthread_join 每个
+    //   worker：任一 worker 卡在不可中断的 I/O（M108-S2 前的无超时握手）即永久阻塞 →
+    //   systemd TimeoutStopSec(90s) → SIGKILL，日志里**永不出现**「优雅关闭完成」（现场
+    //   实测 07:15:46 → 07:17:17 = 91s、status=9/KILL）。改为轮询退出计数（worker 退出前
+    //   置 g_pool_exit_flag[i]）最多等 PX_SHUTDOWN_JOIN_TMO_MS(2s)：超时则打印诊断
+    //   （未退出数 + 握手中/锁等待峰值）后**继续收尾**——进程随即退出，不再吃 SIGKILL，
+    //   且「优雅关闭完成（在途 N）」契约仍打印（语义红线 5）。
     pthread_mutex_lock(&g_pool_mu);
     pthread_cond_broadcast(&g_pool_cond);
+    pthread_cond_broadcast(&g_pool_full_cond);
     pthread_mutex_unlock(&g_pool_mu);
-    for (int i = 0; i < g_pool_size; i++) pthread_join(g_pool_threads[i], NULL);
-    g_pool_size = 0;
+    // M108-S1a：先唤醒阻塞在 keep-alive 阻塞读上的 worker（≤15s SO_RCVTIMEO），再等 join
+    px_pxserve_shutdown_wake_all();
+    {
+        long long jt0 = px_ev_now_ms();
+        while (px_ev_now_ms() - jt0 < PX_SHUTDOWN_JOIN_TMO_MS) {
+            if (__atomic_load_n(&g_pool_exited, __ATOMIC_RELAXED) >= g_pool_size) break;
+            struct timespec ts = {0, 20 * 1000 * 1000};
+            nanosleep(&ts, NULL);
+        }
+        int left = 0;
+        for (int i = 0; i < g_pool_size; i++) {
+            if (g_pool_exit_flag[i]) pthread_join(g_pool_threads[i], NULL);
+            else left++;
+        }
+        if (left > 0) {
+            __atomic_fetch_add(&g_diag_join_tmo, 1, __ATOMIC_RELAXED);
+            int ph_wait = 0, ph_run = 0;
+            for (int i = 0; i < g_pool_size; i++) {
+                if (g_pool_phase[i] == 0) ph_wait++;
+                else if (g_pool_phase[i] == 1) ph_run++;
+            }
+            fprintf(stderr, "[px-serve:STALL] 优雅关闭 join 超时：%d/%d worker 未退出"
+                            "（相位：等队列=%d 处理中=%d；握手中=%lld，锁等待峰值=%lldms，"
+                            "在途=%d）—— 不阻塞退出（避免 systemd TimeoutStopSec SIGKILL）\n",
+                    left, g_pool_size, ph_wait, ph_run,
+                    __atomic_load_n(&g_diag_hs_inflight, __ATOMIC_RELAXED),
+                    __atomic_load_n(&g_diag_hs_lock_max_ms, __ATOMIC_RELAXED), g_px_inflight);
+            fflush(stderr);
+        }
+        g_pool_size = 0;
+    }
     // M99：关闭事件循环照看的 px_serve 连接（keep-alive IDLE 空闲不占 worker → join 已快；
     //   此处清 IDLE 连接使 inflight 归零，优雅关闭干净退出，不再等 15s tick / 5s 等待兜底）
     px_pxserve_ev_close_all();
@@ -16728,20 +17019,60 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
 // ==================== M31.4b 连接线程池（常驻 worker，不占 spawn 槽位） ====================
 // accept 线程 → 队列 → worker 线程 px_conn_worker。队列满时 accept 阻塞等待（TCP backlog 排队）。
 
-static void px_pool_push(int fd) {
+// M108-S3：**有界入队**（qg-issue 37 V2「容量不再硬顶」）。
+// 原实现队列满时 `while (g_pool_count >= PX_POOL_MAX) pthread_cond_wait(...)` = **无限等待**，
+//   而调用方是 accept 线程与事件循环线程本身：
+//     - accept 线程被反压卡住 → 不再 accept → 新连接滞留内核 SYN/accept 队列（issue 37
+//       候选 A 的机制，只是它被"accept 队列 Recv-Q=0"的读数否掉了）；
+//     - 事件循环被卡住 → 80/SSE/443 的 IDLE 连接**全部**停止派发与超时回收（跨端口放大）。
+//   改为有界等待 PX_POOL_PUSH_TMO_MS（默认 3000）：超时则**拒绝**该 fd（返回 -1，由调用方
+//   按连接类型收尾关闭）并计数告警——即「有界排队 + 超时拒绝」，不再把调度线程钉死。
+// 返回 0 入队成功；-1 超时拒绝（fd 未入队，调用方负责收尾）。
+static int px_pool_push_tmo(int fd, int tmo_ms) {
+    if (fd < 0) return -1;
+    struct timespec ts;
+    if (tmo_ms > 0) {
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec  += tmo_ms / 1000;
+        ts.tv_nsec += (long)(tmo_ms % 1000) * 1000000L;
+        if (ts.tv_nsec >= 1000000000L) { ts.tv_sec += 1; ts.tv_nsec -= 1000000000L; }
+    }
     pthread_mutex_lock(&g_pool_mu);
     while (g_pool_count >= PX_POOL_MAX) {
-        pthread_cond_wait(&g_pool_cond, &g_pool_mu);
+        if (tmo_ms <= 0) { pthread_cond_wait(&g_pool_full_cond, &g_pool_mu); continue; }
+        if (pthread_cond_timedwait(&g_pool_full_cond, &g_pool_mu, &ts) == ETIMEDOUT) {
+            pthread_mutex_unlock(&g_pool_mu);
+            return -1;
+        }
     }
     g_pool_fds[g_pool_tail] = fd;
     g_pool_tail = (g_pool_tail + 1) % PX_POOL_MAX;
     g_pool_count++;
     pthread_cond_signal(&g_pool_cond);
     pthread_mutex_unlock(&g_pool_mu);
+    return 0;
 }
 
-static void* px_pool_worker(void* arg) {
-    (void)arg;
+static void px_pool_push(int fd) {
+    (void)px_pool_push_tmo(fd, g_pool_push_tmo_ms > 0 ? g_pool_push_tmo_ms
+                                                      : PX_POOL_PUSH_TMO_DEFAULT_MS);
+}
+
+// M108-S3：px_serve（PXSERVE）连接的「有界入队 + 拒绝即收尾」封装。
+// 入队失败（队列满 256 且有界等待超时）时：计数告警 + 走统一关闭路径 px_pxpend_close
+//   （清 PxPend/事件循环登记/TLS 状态 + inflight--），绝不把 fd 丢在无人持有的状态。
+// 返回 0 已入队；-1 已拒绝并收尾。
+static int px_pool_push_bounded(int fd) {
+    int tmo = g_pool_push_tmo_ms > 0 ? g_pool_push_tmo_ms : PX_POOL_PUSH_TMO_DEFAULT_MS;
+    if (px_pool_push_tmo(fd, tmo) == 0) return 0;
+    __atomic_fetch_add(&g_diag_push_tmo, 1, __ATOMIC_RELAXED);
+    px_serve_stall_log("push-reject-queue-full", fd, 0, g_pool_count);
+    px_pxpend_close(fd);
+    return -1;
+}
+
+static void* px_pool_worker(void* argp) {
+    int idx = (int)(intptr_t)argp;
     // 常驻线程：注册到 GC 槽位（GC 可暂停/扫描本线程栈上对象）
     pthread_mutex_lock(&g_gc_mu);
     if (!g_gc_env_inited) gc_init_env();
@@ -16759,6 +17090,7 @@ static void* px_pool_worker(void* arg) {
         g_threads[slot].tmp_root = NULL;
     }
     pthread_mutex_unlock(&g_gc_mu);
+    long long served = 0;   // M108-S1d：本 worker 已处理 job 数（滚动重建判定）
     for (;;) {
         pthread_mutex_lock(&g_pool_mu);
         while (g_pool_count == 0 && !g_px_stop) {
@@ -16771,23 +17103,96 @@ static void* px_pool_worker(void* arg) {
         int fd = g_pool_fds[g_pool_head];
         g_pool_head = (g_pool_head + 1) % PX_POOL_MAX;
         g_pool_count--;
-        pthread_cond_broadcast(&g_pool_cond);
+        // M108-S1b：队列出空位 → 唤醒 pusher（专用 condvar；原实现与 worker 共用 g_pool_cond，
+        //   两个谓词一条等待队列 → 唤醒语义不可推理）
+        pthread_cond_signal(&g_pool_full_cond);
         pthread_mutex_unlock(&g_pool_mu);
-        LXValue arg = px_int(fd);
-        px_conn_worker(&arg, 1, NULL);
+        __atomic_fetch_add(&g_pool_busy_cnt, 1, __ATOMIC_RELAXED);
+        if (idx >= 0 && idx < PX_POOL_MAX) g_pool_phase[idx] = 1;
+        LXValue a1 = px_int(fd);
+        px_conn_worker(&a1, 1, NULL);
+        if (idx >= 0 && idx < PX_POOL_MAX) g_pool_phase[idx] = 0;
+        __atomic_fetch_sub(&g_pool_busy_cnt, 1, __ATOMIC_RELAXED);
         px_gc_poll();   // ISSUE28-B1：请求间安全点回收（px_serve 池 worker 同 fserve 语义）
+        served++;
+        // M108-S1d：滚动重建（防泄漏兜底，37 §7-B）——**只在「刚处理完 job、未持有连接」时**
+        //   自愿退休（语义红线 4：不得丢弃在途请求）；accept 循环负责补员。默认关闭。
+        if (g_pool_max_req > 0 && served >= g_pool_max_req) {
+            if (idx >= 0 && idx < PX_POOL_MAX) g_pool_retire[idx] = 1;
+            break;
+        }
     }
+    if (idx >= 0 && idx < PX_POOL_MAX) { g_pool_exit_flag[idx] = 1; g_pool_phase[idx] = 2; }
     pthread_mutex_lock(&g_gc_mu);
     g_active_threads--;
     gc_unregister_thread(pthread_self());
     pthread_mutex_unlock(&g_gc_mu);
+    __atomic_fetch_add(&g_pool_exited, 1, __ATOMIC_RELAXED);
     return NULL;
+}
+
+// M108-S1c/S1d：px_serve 自愈看门狗（qg-issue 37 V5「缺陷可见性」）。
+// 目的：把「443 假死」从「只能靠外部 ss/systemctl 事后推断」变成**进程自身可观测 + 可告警**。
+// 巡检项（每 1s 采样，异常才打印；PX_SERVE_DIAG=1 时每 5s 打印一行健康摘要）：
+//   ① 在途 TLS 握手中最老的起始时刻距今 ≥ PX_SERVE_HS_STALL_WARN_MS(5s) → `[px-serve:STALL]`
+//      （这是 37 现场的真正先兆：握手卡住 → 全局串行锁被长期持有 → 整端口假死）；
+//   ② 池状态摘要：pool/busy/queue/in_flight/hs 计数/锁等待峰值/入队拒绝数。
+// 只报告不干预（语义红线 8：默认不自动重启，避免掩盖根因）；真正的自愈由 S2a 的握手截止
+// 与 S3 的有界入队完成——「卡住的连接自己会被回收」而不是「看门狗去救」。
+static void* px_serve_watchdog(void* argp) {
+    (void)argp;
+    for (;;) {
+        struct timespec ts = {0, 200 * 1000 * 1000};
+        nanosleep(&ts, NULL);
+        if (g_px_stop) break;
+        long long now = px_ev_now_ms();
+        if (now - __atomic_load_n(&g_diag_wd_last, __ATOMIC_RELAXED) < 1000) continue;
+        __atomic_store_n(&g_diag_wd_last, now, __ATOMIC_RELAXED);
+        // ① 握手停滞告警（节流 ≥5s）
+        long long inf = __atomic_load_n(&g_diag_hs_inflight, __ATOMIC_RELAXED);
+        long long oldest = __atomic_load_n(&g_diag_hs_oldest, __ATOMIC_RELAXED);
+        if (inf > 0 && oldest > 0 && now - oldest >= PX_SERVE_HS_STALL_WARN_MS &&
+            now - __atomic_load_n(&g_diag_stall_last, __ATOMIC_RELAXED) >= PX_SERVE_HS_STALL_WARN_MS) {
+            __atomic_store_n(&g_diag_stall_last, now, __ATOMIC_RELAXED);
+            px_serve_stall_log("tls-handshake-stalled", -1, now - oldest, inf);
+        }
+        // ② 健康摘要（仅在 PX_SERVE_DIAG=1 时每 5s 打印；单线程访问 → 局部 static 即可）
+        static long long last_diag = 0;
+        if (g_serve_diag && now - last_diag >= 5000) {
+            last_diag = now;
+            int sz, busy;
+            long long q;
+            pthread_mutex_lock(&g_pool_mu);
+            q = g_pool_count; sz = g_pool_size;
+            pthread_mutex_unlock(&g_pool_mu);
+            busy = __atomic_load_n(&g_pool_busy_cnt, __ATOMIC_RELAXED);
+            fprintf(stderr, "[px-serve:diag] pool=%d busy=%d queue=%lld inflight=%d "
+                            "hs(ok=%lld fail=%lld tmo=%lld inflight=%lld lockmax=%lldms) "
+                            "enter_null=%lld push_tmo=%lld\n",
+                    sz, busy, q, g_px_inflight,
+                    __atomic_load_n(&g_diag_hs_ok, __ATOMIC_RELAXED),
+                    __atomic_load_n(&g_diag_hs_fail, __ATOMIC_RELAXED),
+                    __atomic_load_n(&g_diag_hs_tmo, __ATOMIC_RELAXED),
+                    inf, __atomic_load_n(&g_diag_hs_lock_max_ms, __ATOMIC_RELAXED),
+                    __atomic_load_n(&g_diag_enter_null, __ATOMIC_RELAXED),
+                    __atomic_load_n(&g_diag_push_tmo, __ATOMIC_RELAXED));
+            fflush(stderr);
+        }
+    }
+    return NULL;
+}
+
+static int g_serve_wd_started = 0;
+static void px_serve_watchdog_start(void) {
+    if (g_serve_wd_started) return;
+    g_serve_wd_started = 1;
+    pthread_t t;
+    if (pthread_create(&t, NULL, px_serve_watchdog, NULL) == 0) pthread_detach(t);
 }
 
 // px_exec(path, params?)：子进程执行 `px run` 并捕获 stdout
 // 文件不存在 → null；params dict → PX_INIT_GLOBALS 注入脚本全局变量
-static LXValue bi_px_exec(LXValue* args, int nargs, void* ctx) {
-    (void)ctx;
+static LXValue bi_px_exec(LXValue* args, int nargs, void* ctx) {    (void)ctx;
     if (nargs < 1 || nargs > 2) px_error("px_exec 需要 (path[, params]) 参数");
     if (args[0].type != PX_STR) px_error("px_exec 的 path 需要字符串");
     const char* path = args[0].as.obj->as.str.data;

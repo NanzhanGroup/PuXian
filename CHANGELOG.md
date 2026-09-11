@@ -6,6 +6,75 @@
 
 ## [Unreleased]
 
+### M108 · 服务端连接生命周期族：TLS 握手不再拖死整端口（qg-issue 37 · 443 假死根因修复 + 池自愈 + 有界入队 + 可见性）
+
+> 依据 `docs/M108_PLAN.md`。现场：晨曦 Mahesvara **443 全站不可用 2h41m**（80/443 同进程，80 全好）、
+> 进程活着、80/443 都 LISTEN、客户端 TLS 握手**收 0 字节直到 15s 超时**、`CLOSE-WAIT` 52→61→64 单调增长且
+> `Recv-Q` 最高 1794B、**294/300 线程 wchan=futex**、只能重启恢复、优雅关闭 91s 被 SIGKILL。
+
+#### 根因（本地一条命令复现，`examples/m108_s0/`）
+`px_conn_init → px_conn_tls_handshake` 在**持有进程级全局串行锁 `g_srv_hs_mu`** 的同时调用
+`mbedtls_ssl_handshake()`，后者内部是**没有超时的阻塞 `recv`**（`SO_RCVTIMEO` 只在 keep-alive 循环体内设置，
+握手期 socket 是默认的无限阻塞）。于是：
+
+```
+1 个「连上但不完成握手」的连接（半开 / 卡住 / 只发 Record 头 / 不回 Finished）
+        ↓ 持有 g_srv_hs_mu 进入无超时 recv（永久）
+其余 worker 全部堵在 pthread_mutex_lock(&g_srv_hs_mu) 上  ← wchan=futex（外观与「空闲等活」完全一致！）
+        ↓
+新连接被 accept 后无人读 ClientHello → 滞留内核 Recv-Q（现场 1525~1794B）
+        ↓ 客户端只见沉默（15s 超时）
+对端放弃后连接停 CLOSE-WAIT（单调增长）→ 池有效容量与可用性双降
+80 端口走 fserve 明文路径、无此锁 → **精确解释「80 全好、443 全死」**
+```
+
+**⇒ 这也纠正了 issue 37 §2.2 的关键误判**：现场把 294 个 `futex` 读成「worker 没活干」，
+从而排除候选 A/B；实际上 **`futex` 同时包含「堵在全局握手锁上」的 worker**，与被卡住的那 1 个
+`wait_woken`（socket 读）共同构成完整证据链。
+**本地复现**（同一 runtime）：基线 `200 @64ms` → 仅 1 个发 5 字节 Record 头后静默的连接 →
+`curl/openssl` 全部 6s 超时（`000`），`ss` 见服务端 `CLOSE-WAIT` 且 `Recv-Q=518/324`（= 未读 ClientHello），
+wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll` —— **与现场同形**。
+
+#### 修复
+| 片 | 内容 |
+|---|---|
+| **S2a（根因）** | 握手改**分步驱动**：① 配置阶段（DRBG/证书/ALPN/session cache/`ssl_setup`）持锁，纯内存微秒级；② 状态机推进用 `mbedtls_ssl_handshake_step`，**每步在锁内**（同一时刻仍只有一个线程进入 mbedtls，**M101 线程安全语义完整保持**），步内 fd 置非阻塞 → `EAGAIN` 立即转 `WANT_READ/WRITE`，绝不阻塞；③ **步间释放锁**并 `poll(fd, 剩余截止)`（分片 ≤500ms，便于观察关闭标志）；④ 总截止 `PX_TLS_HS_TMO_MS`（默认 **10s**，0=不限）超时 → 关闭该连接（**自愈**）+ 计数告警。 |
+| **S2c** | `px_conn_worker` 槽获取失败（原实现**直接 return**：fd 既无 worker、不在 epoll、也无人 close ⇒ 永久 CLOSE-WAIT）→ 统一收尾 `px_evc_detach + close` + 计数告警；新增 `out_fd_closed` 出参避免与 `px_conn_init` 内部 close 构成**双重 close**。 |
+| **S1a** | 优雅关闭**有界 join**（原无条件 `pthread_join` → 卡在不可中断 I/O 上永久阻塞 → systemd 90s SIGKILL）：轮询退出计数上限 `PX_SHUTDOWN_JOIN_TMO_MS`(2s) + 关闭期立即放弃在途握手 + 先对在册连接 `shutdown(SHUT_RDWR)` 唤醒阻塞在 keep-alive 读上的 worker → **91s → 24~513ms**，且保留「优雅关闭完成（在途 N）」契约行。 |
+| **S1b** | `g_pool_cond` **拆分**：`g_pool_full_cond`（队列非满，只唤醒 pusher）与 `g_pool_cond`（队列非空，只唤醒 worker）——原实现两个不同谓词共用一条 condvar（唤醒语义不可推理 + 惊群）；队列仍为 `PX_POOL_MAX` 有界环（红线 7）。 |
+| **S1c（V5）** | **进程自身可见性**：握手中/最老握手/锁等待峰值/入队拒绝/无槽失败计数 + 看门狗（每 1s 巡检，`[px-serve:STALL] tls-handshake-stalled` ≥5s 告警）+ `PX_SERVE_DIAG=1` 每 5s 健康摘要行。原现场只能靠外部 `ss`/`systemctl` 事后推断。 |
+| **S1d（自愈兜底）** | 池 worker **滚动重建**（`PX_POOL_MAX_REQ`，默认 0=关闭保持历史行为）：处理满 N 个 job 的 worker 在**刚处理完、未持有连接**时自愿退休（红线 4：不丢弃在途请求），accept 循环补员并打印；实测 `PX_POOL_MAX_REQ=2` → 72/72 请求全成功、98 次重建、优雅关闭正常。 |
+| **S3** | **有界入队**（V2 容量解耦）：`px_pool_push` 原在队列满时**无限 `cond_wait`**，而调用方是 **accept 线程与事件循环线程**——前者被钉死则新连接滞留内核队列，后者被钉死则 80/SSE/443 的 IDLE 派发与超时回收**一起停摆**（跨端口放大）。改为 `PX_POOL_PUSH_TMO_MS`(默认 3000) 有界等待，超时→按类型收尾关闭 + 计数告警（有界排队 + 超时拒绝）。 |
+
+#### 实测（同一压力台，`examples/m108_s0/hs_stall_repro.sh`，`sport = :PORT` 只统计服务端套接字）
+| 判据 | 修复前 | 修复后 |
+|---|---|---|
+| 基线（无 stall） | 200 | 200 |
+| **3 个半完成握手后探测** | **000（假死）** | **200** |
+| 服务端 CLOSE-WAIT | 不归零（1，9s 后仍 >0） | **1s 内归零** |
+| 优雅关闭（关闭期仍有卡住握手） | **8s 内未退出**（join 永久阻塞 → 需 SIGKILL） | **513ms**（另两轮 24ms / 507ms）+ 打印完成行 |
+| 缺陷可见性（V5） | 无任何信号 | `[px-serve:STALL] tls-handshake-timeout fd=5 停滞=2002ms extra=3000 (hs_inflight=5 hs_tmo=1)` |
+| 并发 64 连接（> `max_conn` 32） | 64/64 | **64/64** |
+| 前后对照结论 | **PASS=3 FAIL=4** | **PASS=7 FAIL=0（M108_REPRO_OK）** |
+
+#### 两个实测踩坑（已写入代码注释，防止回归）
+1. **`mbedtls_ssl_handshake_step` 每完成一个不需要 I/O 的**状态跃迁也返回 0**（例如 `HELLO_REQUEST→CLIENT_HELLO`），
+   并不代表握手完成**。首版把 `ret==0` 当成功 ⇒ 客户端只发 5 字节 Record 头也被当「握手成功」放行，
+   于是连接阻塞在请求读取上 15s（表现为 `hs ok` 计数虚增 2→5、连接槽被长期占用）。
+   必须以 `mbedtls_ssl_is_handshake_over()` 判定真正完成。
+2. **`poll` 分片超时 ≠ 总截止**。首版 `px_hs_poll_io` 把「本片无事件（poll 返回 0）」与「出错」都返回 0，
+   调用方一律 `stopped=1` ⇒ 3000ms 的截止在 **500ms**（第一个分片）就被误判触发（`停滞=500ms extra=3000`）。
+   改为 1/0/-1 三态：`0` 表示本片超时 → 回循环顶重检总截止与 `g_px_stop`。
+
+#### 参数（env，默认值即「M108 前行为 + 两项自愈」）
+`PX_TLS_HS_TMO_MS=10000`（握手总截止）· `PX_POOL_PUSH_TMO_MS=3000`（入队有界等待）·
+`PX_POOL_MAX_REQ=0`（滚动重建，0=不限）· `PX_SERVE_DIAG=0`（周期健康摘要）。
+
+#### 语义红线自查
+① TLS/SNI/证书行为不变（`_locked` 配置阶段逐行保留）· ② HTTP/1.1 keep-alive 复用行为不变（仅把 15s 空闲读从「单片」改为可被关闭标志打断的等待，总时限不变）· ③ 关闭路径仍**统一**走 `px_pxpend_close`/`px_evc_detach`，未新增独立 close · ④ 滚动重建只在空闲 worker 上发生 · ⑤ 保留 `优雅关闭完成（在途 N）` · ⑥ fd 复用防护未放宽（新增 `out_fd_closed` 是加强）· ⑦ 队列仍是 `PX_POOL_MAX` 有界环 · ⑧ 泄漏计数只告警不自动重启（默认），自愈靠「卡住连接被截止回收」而非看门狗抢救。
+
+`bootstrap/pxi` / `bootstrap/pxi_vm` 重链吸收本次 runtime 变更。**M106/M107/M108 均不手工推节点**（按用户决定走自动更新线）。
+
 ### M107-S2 · VM 全局名访问「稳定指针槽位记忆」（qg-issue 35 残余 · 每次访问 30ns → 18ns，−40%）
 
 > 依据 `docs/M107_PLAN.md` §2.4。M105-S2 已把 `px_get_global` 的 O(g_len) 线性扫描改成 O(1) 哈希，
