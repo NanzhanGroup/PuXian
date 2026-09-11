@@ -6,6 +6,50 @@
 
 ## [Unreleased]
 
+### M112 · 编译门自身完善 + 默认轨（VM）语义/FFI 收口（qg-issue 42/45/46/47/48/49/50/51/52/53）
+
+> **主题：失败不被表达。** 本轮逐处收口「门只会说通过」这一类系统性缺陷：编译器诊断通道被当产物、
+> 默认轨对负例零覆盖、自举门不判退出码、门给的指引指向不存在的文件、VM 轨语义检查与 FFI 声明表缺位。
+> 与性能类里程碑（M104–M111）不同，**本轮的产出是"让失败被看见"**，故验收一律以「门必须能红」为前置。
+
+**S0（Issue 42/45/46/47）**
+- **42** `cg_module.px`：模块候选全空不再静默跳过（含 std）→ stderr 显式告警；`PX_STRICT_MODULE=1` 转硬错 `E3005`。
+  原先「候选路径存在则静默改用另一棵树」，冬月实测曾误用开发树（该绝对路径被编进 `bootstrap/pxc`）。
+- **45** **诊断通道与产物通道分 fd**：`cg_perr`/`cg_pwarn` 改走 stderr；`tools/px` 产物取 stdout、诊断取 stderr（且成功但有诊断时透传）。
+  原先报错文本被当 C 源码写进 `.c`，用户看到 gcc 抱怨一个中括号。
+- **46** 抽出**轨无关共享语义层** `cg_sem_vardecl` / `cg_sem_assign` / `cg_sem_call`（E3002/E3003/E3004），C 轨与 VM 轨各调一行。
+- **47** VM 轨补**函数作用域协议**（`bc_emit_func_body` 入口/出口还原 `cg_immutables`），修正 VM 轨对编译器自身的误报。
+
+**S1（Issue 48/49/50/51）**
+- **51** 新增 **`selfhost/engine_parity.sh` + CI 一步**：**用户面默认轨**（`tools/px → bootstrap/pxc_vm`）负例门
+  —— 三断言：默认轨负例必须失败 / 失败时 stdout 必须为空 / stderr 必须含 golden 正文。此前 CI 只跑基准轨（`bootstrap/pxc`）。
+- **48** 自举脚本新增 **`--update-golden`**（原指引 `tools/bootstrap.sh` **全仓不存在**）；同一操作耗时口径按实测更正（3.5 分 → 405 秒）。
+- **49** `bootstrap_prove.sh` **判产物编译退出码**（原 `> B.c 2>&1` 掩蔽 rc：编译炸了被报成「产物有差异」）。
+- **50** `.gitignore`：`.rtcache/` → `.rtcache`（worktree 内符号链接不匹配目录模式，`git status` 常驻噪声）。
+
+**S2（Issue 52/53）**
+- **52** **VM 轨补齐 FFI 声明表**：`bc_emit_program` 从 `ExternDef` 填 `cg_ffi`（与 C 轨 `cg_generate` 同源），
+  ⇒ 共享语义层 `E3004` 在**默认轨真正生效**（此前 `cg_ffi` 恒空 = 检查是 no-op）。
+  `engine_parity.sh` 摘除 `codegen_b04_ffi_args` 的 xfail 登记（缺口闭合，转为硬断言）。
+  运行期无需额外发射：VM 轨 `GETG` 经 `px_get_global` 解析到 runtime 已注册 native，与 C 轨 `ffi_call` 桥殊途同归
+  （实测 `s12_cffi.px` 双轨产物输出**逐字节一致**）。
+- **53**（**先于本轮存在**）**C 轨 FFI 名对自动裁剪不可见**：C 轨把函数名发射成字符串字面量
+  `px_str("sqlite_query")` 而非 `px_get_global` 调用 ⇒ 引用集提取看不见 ⇒ 自动裁剪把 sqlite 模块裁掉
+  ⇒ 运行期 `bi_ffi_call` 查表不到返回 `px_err`（result 类型）⇒ 下游报 **`len 不支持类型 result`**
+  （与真实病因毫不相干，与 Issue 45 同族）。`tools/px` 的 `cmd_build` 自动裁剪与 `cmd_refs` **同口径**补提取。
+
+**验收（原始数据）**
+
+| 项 | 结果 |
+|---|---|
+| `engine_parity.sh` | 通过 **4** · 失败 0 · xfail 0 · xpass 0 ✅ |
+| 负向对照（未重烘的旧 `pxc_vm`） | `❌ codegen_b04 默认轨静默通过（rc=0/stdout 99B）` → EXIT=1 ✅（**门会红**） |
+| 4 例负例（用户面默认轨） | b01/b02/b03/b04 全部 `rc=1 · stdout 0B · stderr == golden` |
+| C 轨 + 自动裁剪（Issue 53 前后） | ❌ `len 不支持类型 result` → ✅ 输出与 VM 轨逐字节一致（3.84 MB；`--full` 对照 9.20 MB） |
+| BC 轨自举 | 重定基 30739 → **30759 行**；`compiler_vm` 重放**逐字节一致** ✅ |
+| C 轨自举 | 重定基 15181 → **15187 行**（差异 358 行）；`norm_c` 后**逐字节一致**（15186 行） ✅ |
+| 入库二进制 | `selfhost/build/compiler_vm` → `bootstrap/pxc_vm` 重烘（**不重烘则修复对用户面无效**） |
+
 ### M110 · serve 进程内分配「13.5× 放大」根因修复 + 交替「必备字面核心」整串预筛（qg-issue 38 / 34 附页2）
 
 > 依据 `docs/M110_PLAN.md`。清歌实测：**同一段代码**在 CLI 单线程进程里 83ms，在 `px serve` 进程里
