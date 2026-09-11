@@ -257,3 +257,58 @@ G5–G8 m89_s3d/m93_s3/m96_s2/m103_s2d · G9 生态索引无漂移 · G10 p3_reg
 5. **分发**：随自动更新线下发（用户决策），本里程碑不含节点变更窗口；
    生效观测法 = "某 handler 设 `ETag` → 客户端可见"。
 
+
+## 14. 二期（2026-09-11 实施完毕）：同名多值 —— 值可 `str` / `list[str]`
+
+**立项依据**（三条硬证据，均在 S0 读码中确认）：
+
+1. **客户端**：`runtime.c` 响应头解析逐行 `px_dict_set(*out_headers, k, px_str(v))` ⇒ 同名头**后写覆盖前写**
+   （多 `Set-Cookie` 只剩最后一个）。
+2. **服务端**：`px_hdr_append` 遍历 dict 时 `if (hv.type != PX_STR) continue;` ⇒ 即使 handler 传 `list`，
+   **被静默跳过** —— M109-S1 刚立下「不再静默」的原则，在 list 值上又破了一次。
+3. **契约厂内已声明**：`stdlib/cookiejar.px` 头注写明「本库接受 Set-Cookie 值为 str 或 list[str]」，
+   但**生产者端从不产出 list** ⇒ 该分支一直是**不可达代码**。
+
+### 14.1 改动
+
+| 片 | 位置 | 做法 |
+|---|---|---|
+| **S1 服务端生产者** | `runtime/runtime.c` `px_hdr_append` | 值支持 `str` 或 `list[str]`：list **逐元素展开**，每元素各做一次 CRLF 防护与预算计数；**键级判定（拒绝名单 / skip_ct）在元素循环之外** ⇒ list 不能绕过拒绝名单；非 `str`/非 list 的值、以及 list 内的非 str 元素：**计数 + 限频告警**（新增计数 `g_hdr_drop_val`，并入 `PX_SERVE_DIAG` 的 `hdr(...badval=N)`） |
+| **S2 客户端生产者** | `runtime.c` 响应头解析 | 同名头（**大小写不敏感**，RFC 7230）：首次仍写入 `str`（**单值路径逐字节不变**）；第二次起升级为 `list[str]`，键名沿用**首次出现的拼写**。实现上先以 `strcasecmp` 定位既有键，再以该键的**副本**走 `px_dict_set` 原地替换（避免把 dict 内部指针传入 setter 引发的 realloc 风险） |
+| **S3 语义红线** | — | `Content-Length` / `Transfer-Encoding` / `Connection` 等仍由 runtime 自管（键级拒绝，list 不能绕过）；输出总量仍受 `extra` 预算约束（元素级计数） |
+| **S4 契约同步** | `stdlib/cookiejar.px` 头注 | 原「⚠️ 语言层限制：同名头会覆盖」→ 改为「✅ 同名多值：从第二次起聚合为 `list[str]`；list 分支即正常路径」 |
+
+### 14.2 验收（`examples/m109_headers_multi/`，26 断言全绿）
+
+`bash examples/m109_headers_multi/run.sh` → `M109-HDRMULTI ALL OK`：
+
+| 段 | 覆盖 | 关键断言 |
+|---|---|---|
+| A | vhost `list[str]` 值 | `X-Multi` 三值全部到达且为 `list` len=3 |
+| B | 两个 `Set-Cookie` | 客户端 `list` len=2，两条值都在 |
+| C | **向后兼容** | 单值头类型仍是 `string`（`m23c_http_adv` 断言口径不变） |
+| D | 大小写不同同名头（`X-Dup` / `x-dup`） | 聚合成 `list` len=2，**不产生第二个冗余键** |
+| E | 拒绝名单不可用 list 绕过 | `Content-Length=["1","2"]` 无效（仍为 runtime 计算值），同 dict 其他头照常 |
+| F | list 元素级 CRLF | 坏元素丢弃、好元素存活；**只剩一条时仍是 `str`**（不无谓升级） |
+| G | 值类型不支持（`int`） | **不再静默**：stderr 告警 + 计数，同 dict 其他头照常 |
+| H | list 内非 str 元素 | 跳过并告警，同 list 的 str 元素照常 |
+| I | `route()` 通路 | 同样支持 list（单值仍 str） |
+| J | **`std.cookiejar` 契约** | 两条 `Set-Cookie` → jar 收录 **2 条**（此前不可达分支现为正常路径） |
+
+`run.sh` 另校验 stderr 上确实出现两类告警（证明「不静默」是**可观测**的，不只是注释）。
+
+### 14.3 全量闸门（`/tmp/m109s2/gate.sh`，`ALL_DONE`）
+
+F1~F4 功能回归全过（本二期 / M109-S1 `hdr_pass` 26 断言 / `m57_s7` / `m23c`）；
+G1 C 轨自举 rc=0（与自身逐字节一致）；G2 BC 轨自举 rc=0（dump 与 `golden/compiler.bc.dump` **30581 行**一致）；
+G3 `vm_ab.sh v2` **38 PASS / 0 GAP / 0 FAIL**；G4 `diffcheck --all` rc=0；G5 `m89_s3d` 9P0F；
+G6 `m93_s3` 6P0F；G7 `m96_s2` 8P0F；G8 `m103_s2d` rc=0；G9 生态索引**无漂移**（13 libs / **306** natives）；
+G10 `p3_regex` 双模式 ALL PASSED。
+
+`runtime.c` md5（本次改动后）= `296c53e44065d312213ad55608939acc`。
+
+### 14.4 边界（诚实交代）
+
+- `headers` 仍是 dict ⇒ **同一个键**才聚合；若要表达「同名多值的顺序与跨键顺序」，需要 list-of-pairs 形态（本里程碑不做）。
+- `Date` / `Server` 被拒仍属**策略**（runtime 自管），不是遗漏。
+- 外部复核（晨曦/清歌侧）不变：Mahesvara `cache_test` 12/12 与现网 17 头到达表；本次新增的 list 通路建议在观音双 serve 对拍时一并覆盖。

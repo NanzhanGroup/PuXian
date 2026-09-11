@@ -12,9 +12,10 @@
 #     - path 匹配：请求 path 以 cookie path 为前缀（path 缺省 "/"）
 #     - Max-Age=0 立删；expires 仅存原始串不判过期（最小实现，见文件尾注）
 #     - secure cookie 仅 https 请求携带（url scheme 判断）
-#   ⚠️ 语言层限制：http_request 返回的 headers dict 同名头会覆盖（C 层实现），
-#      多 Set-Cookie 时仅最后一个可见；本库接受 Set-Cookie 值为 str 或
-#      list[str]（调用方自行聚合多个 Set-Cookie 为 list 可完整更新）。
+#   ✅ 同名多值（M109 二期起）：http_request 返回的 headers dict 中，同名头从**第二次出现**
+#      起聚合为 list[str]（键名沿用首次出现的拼写，大小写不敏感匹配）；**单值仍是 str**。
+#      故两个 Set-Cookie 会以 list[str] 到达 —— 本库的 list 分支即正常路径
+#      （M109 二期之前该分支**不可达**：C 层是「后写覆盖前写」，多 Set-Cookie 只有最后一个可见）。
 # 用法：
 #   import std.cookiejar
 #   var jar = cj_new()

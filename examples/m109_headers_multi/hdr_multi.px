@@ -1,0 +1,173 @@
+# M109 二期验收：handler 响应头「同名多值」（值可 str / list[str]）+ 客户端重复头聚合
+# 覆盖：
+#   A. vhost：list[str] 值 → 同名三头全部到达（客户端聚合为 list，len=3）
+#   B. vhost：两个 Set-Cookie（list）→ 客户端 list len=2（std.cookiejar 已声明的契约兑现）
+#   C. 向后兼容：单值头仍是 str（不是 list）—— m23c_http_adv 既有断言口径不变
+#   D. 大小写不同的同名头（X-Dup / x-dup）→ 客户端按**首次拼写**聚合成 list len=2
+#   E. 拒绝名单不可用 list 绕过（Content-Length=[..] 无效，同 dict 其他头照常）
+#   F. list 元素级 CRLF 防护（坏元素丢弃、好元素存活）
+#   G. 值类型不支持（int）→ **不再静默**：告警 + 计数（由 run.sh 在 stderr 上校验）
+#   H. list 内非 str 元素 → 跳过并告警，同 list 的 str 元素照常
+#   I. route() 通路同样支持 list
+# 运行：bash run.sh   （或 px build hdr_multi.px && ./build/hdr_multi）
+# 注：PuXian 无闭包捕获外层可变变量 —— 计数一律在顶层累加（ck 返回 0/1）
+
+PORT = 18613
+import std.cookiejar   # J 段：验证「已声明但此前不可达」的 list[str] 契约
+
+def mk1(k, v):
+    d = json_parse("{}")
+    d[k] = v
+    return d
+
+def vh(req):
+    p = req.path
+    if p == "/multi":
+        return {"status": 200, "body": "m", "headers": mk1("X-Multi", ["a", "b", "c"])}
+    if p == "/cookie":
+        return {"status": 200, "body": "c", "headers": mk1("Set-Cookie", ["sid=1; Path=/", "theme=dark; Path=/"])}
+    if p == "/single":
+        return {"status": 200, "body": "s", "headers": mk1("X-Single", "1")}
+    if p == "/dupcase":
+        d = json_parse("{}")
+        d["X-Dup"] = "1"
+        d["x-dup"] = "2"
+        return {"status": 200, "body": "d", "headers": d}
+    if p == "/denybypass":
+        d = json_parse("{}")
+        d["Content-Length"] = ["1", "2"]
+        d["X-Keep2"] = "yes"
+        return {"status": 200, "body": "bb", "headers": d}
+    if p == "/crlfelem":
+        return {"status": 200, "body": "e", "headers": mk1("X-Crl", ["ok", "bad\r\nX-Evil: 1"])}
+    if p == "/badtype":
+        d = json_parse("{}")
+        d["X-Bad"] = 123
+        d["X-Good"] = "g"
+        return {"status": 200, "body": "bt", "headers": d}
+    if p == "/mixlist":
+        return {"status": 200, "body": "mx", "headers": mk1("X-Mix", [1, "b"])}
+    return {"status": 404, "body": "nf"}
+
+def rh(req):
+    d = json_parse("{}")
+    d["X-RMulti"] = ["r1", "r2"]
+    d["X-RSingle"] = "rs"
+    return {"status": 200, "body": "rr", "headers": d}
+
+vhost("m.test", vh)
+route("GET", "/rm", rh)
+
+def serve():
+    px_serve(PORT, "/tmp", 10000)
+spawn serve()
+sleep(400)
+
+def get(path):
+    hh = json_parse("{}")
+    hh.set("Host", "m.test")
+    return http_request("http://127.0.0.1:" + str(PORT) + path, "GET", "", hh)
+
+# vhost 命中该 Host 时不再走 route —— route 用例换 Host
+def get_route(path):
+    hh = json_parse("{}")
+    hh.set("Host", "r.test")
+    return http_request("http://127.0.0.1:" + str(PORT) + path, "GET", "", hh)
+
+def has(ks, name):
+    return contains(ks, name)
+
+def lst_at(v, i):
+    if type(v) != "list":
+        return "<不是 list>"
+    if len(v) <= i:
+        return "<越界>"
+    return v[i]
+
+def ck(name, cond):
+    if cond:
+        print("   [PASS] " + name)
+        return 0
+    print("   [FAIL] " + name)
+    return 1
+
+fail = 0
+
+print("=== A. vhost：list[str] 值 → 同名三头全部到达 ===")
+r = get("/multi")
+v = r["headers"]["X-Multi"]
+fail = fail + ck("X-Multi 值为 list", type(v) == "list")
+fail = fail + ck("X-Multi len=3（实测 " + str(len(v)) + "）", len(v) == 3)
+fail = fail + ck("X-Multi[0]=a", lst_at(v, 0) == "a")
+fail = fail + ck("X-Multi[1]=b 且 [2]=c", lst_at(v, 1) == "b" and lst_at(v, 2) == "c")
+
+print("=== B. 两个 Set-Cookie ===")
+r = get("/cookie")
+v = r["headers"]["Set-Cookie"]
+fail = fail + ck("Set-Cookie 为 list", type(v) == "list")
+fail = fail + ck("Set-Cookie len=2（实测 " + str(len(v)) + "）", len(v) == 2)
+fail = fail + ck("两条 cookie 值都在", contains(str(v), "sid=1") and contains(str(v), "theme=dark"))
+
+print("=== C. 向后兼容：单值头仍是 str ===")
+r = get("/single")
+v = r["headers"]["X-Single"]
+fail = fail + ck("X-Single 类型为 string（实测 " + type(v) + "）", type(v) == "string")
+fail = fail + ck("X-Single 值 = 1", v == "1")
+
+print("=== D. 大小写不同的同名头 → 聚合成 list（首次拼写为准）===")
+r = get("/dupcase")
+v = r["headers"]["X-Dup"]
+fail = fail + ck("X-Dup 为 list", type(v) == "list")
+fail = fail + ck("X-Dup len=2（实测 " + str(len(v)) + "）", len(v) == 2)
+fail = fail + ck("两值 1/2 都在", contains(str(v), "1") and contains(str(v), "2"))
+fail = fail + ck("未产生第二个冗余键 x-dup", not has(str(r["headers"].keys()), "x-dup"))
+
+print("=== E. 拒绝名单不可用 list 绕过 ===")
+r = get("/denybypass")
+fail = fail + ck("Content-Length 仍为 runtime 计算值 2（实测 " + str(r["headers"]["Content-Length"]) + "）", r["headers"]["Content-Length"] == "2")
+fail = fail + ck("同 dict 的 X-Keep2 照常透传", has(str(r["headers"].keys()), "X-Keep2"))
+
+print("=== F. list 元素级 CRLF 防护 ===")
+r = get("/crlfelem")
+v = r["headers"]["X-Crl"]
+fail = fail + ck("好元素存活：X-Crl=ok（实测 " + str(v) + "）", v == "ok")
+fail = fail + ck("坏元素被丢弃：无 X-Evil", not has(str(r["headers"].keys()), "X-Evil"))
+fail = fail + ck("只剩一条 → 仍是 str（单值不升级 list）", type(v) == "string")
+
+print("=== G. 值类型不支持（int）→ 不静默 ===")
+r = get("/badtype")
+fail = fail + ck("X-Good 照常到达", has(str(r["headers"].keys()), "X-Good"))
+fail = fail + ck("X-Bad（int）被拒且不出现", not has(str(r["headers"].keys()), "X-Bad"))
+fail = fail + ck("Content-Length 正确（body=bt→2）", r["headers"]["Content-Length"] == "2")
+
+print("=== H. list 内非 str 元素 ===")
+r = get("/mixlist")
+v = r["headers"]["X-Mix"]
+fail = fail + ck("str 元素存活：X-Mix=b（实测 " + str(v) + "）", v == "b")
+
+print("=== I. route() 通路同样支持 list ===")
+r = get_route("/rm")
+v = r["headers"]["X-RMulti"]
+fail = fail + ck("route: X-RMulti 为 list len=2", type(v) == "list" and len(v) == 2)
+fail = fail + ck("route: 两值 r1/r2 都在", contains(str(v), "r1") and contains(str(v), "r2"))
+fail = fail + ck("route: 单值 X-RSingle 仍为 str", type(r["headers"]["X-RSingle"]) == "string")
+
+print("=== J. std.cookiejar 契约：两条 Set-Cookie → jar 收录 2 条 ===")
+r = get("/cookie")
+jar = cj_new()
+cj_update(jar, r["headers"])
+n = len(jar["cookies"])
+fail = fail + ck("jar 收录 2 条 cookie（实测 " + str(n) + "）", n == 2)
+names = ""
+i = 0
+while i < n:
+    names = names + jar["cookies"][i]["name"] + " "
+    i = i + 1
+fail = fail + ck("含 sid 与 theme（实测 " + names + "）", contains(names, "sid") and contains(names, "theme"))
+
+print("")
+if fail == 0:
+    print("M109-HDRMULTI ALL OK")
+else:
+    print("M109-HDRMULTI FAIL=" + str(fail))
+    assert fail == 0

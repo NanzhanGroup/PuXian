@@ -6,6 +6,24 @@
 
 ## [Unreleased]
 
+### M109 二期 · 响应头「同名多值」：值支持 str / list[str]，客户端重复头聚合（qg-issue 36 收口）
+
+> 依据 `docs/M109_PLAN.md` §14。三条证据：① 客户端 `px_dict_set` 对同名头**后写覆盖前写**（多 `Set-Cookie` 只剩最后一条）；
+> ② 服务端 `px_hdr_append` 对非 `str` 值直接 `continue` ⇒ handler 传 `list` **被静默跳过**；
+> ③ `stdlib/cookiejar.px` 头注已声明「接受 `Set-Cookie` 为 `str` 或 `list[str]`」，但生产者端**从不产出 list**
+> ⇒ 该分支一直是**不可达代码**。
+
+- **服务端**（`runtime/runtime.c` `px_hdr_append`）：值可为 `str` 或 `list[str]`（同名多值）；list **逐元素**展开，
+  每元素各做一次 CRLF 防护与预算计数；键级判定（拒绝名单 / `skip_ct`）留在元素循环之外 ⇒ **list 不能绕过拒绝名单**；
+  非 str 值 / list 内非 str 元素 → **计数 + 限频告警**（新增 `g_hdr_drop_val`，并入 `PX_SERVE_DIAG` 的 `hdr(...badval=N)`），不再静默。
+- **客户端**（`runtime.c` 响应头解析）：同名头（**大小写不敏感**，RFC 7230）首次仍写入 `str`（**单值路径逐字节不变**），
+  第二次起升级为 `list[str]`，键名沿用**首次出现的拼写**。
+- **契约同步**（`stdlib/cookiejar.px`）：原「⚠️ 同名头会覆盖 / list 分支不可达」的说明改为现行语义。
+- **验收**：`examples/m109_headers_multi/`（26 断言 ALL OK —— list 展开 / 两个 Set-Cookie / 单值向后兼容 /
+  大小写不同同名头聚合 / 拒绝名单不可绕过 / 元素级 CRLF / 两类「不静默」告警 / `route` 通路 / cookiejar 收录 2 条）。
+- **回归**：`m109_s0`(26 断言) / `m57_s7` / `m23c_http_adv` 全过；双轨自举逐字节一致、`vm_ab` 38P/0GAP/0F、
+  `diffcheck --all` rc=0、`m89_s3d`/`m93_s3`/`m96_s2`/`m103_s2d`、生态索引无漂移（306 natives）、`p3_regex` 双模式 —— 全绿。
+
 ### M109 · HTTP 响应头通路：白名单 → 拒绝名单（qg-issue 36 · handler 响应头不再被静默丢弃 + 预算 4KB + route/脚本通路统一）
 
 > 依据 `docs/M109_PLAN.md`。现场：晨曦 Mahesvara 明确放行的 **17 个响应头只有 7 个到达客户端**，
