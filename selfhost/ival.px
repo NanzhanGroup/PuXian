@@ -246,19 +246,15 @@ def i_index(v, idx, pos):
             return Err(i_r1003("列表索引越界", pos))
         return Ok(v[i])
     if t == "string":
-        let chars = []
-        var ci = 0
-        while ci < len(v):
-            chars.append(v[ci])
-            ci += 1
-        let n = len(chars)
+        # M111-S1：不再物化 n 元字符表（原每次 s[i] 为 O(n) ⇒ 循环内 O(n²)）。
+        # 等价性：chars[j] ≡ v[j]（同一原生 rune 索引，len 亦同源）；原句
+        # `if i >= n: 字符串索引越界` 不可达——i_as_index 已先对 i>=n 报错。
+        let n = len(v)
         let r = i_as_index(idx, n, pos)
         if r.is_err():
             return Err(r.err())
         var i = r.unwrap()
-        if i >= n:
-            return Err(i_r1003("字符串索引越界", pos))
-        return Ok(chars[i])
+        return Ok(v[i])
     if t == "dict":
         if type(idx) != "string":
             return Err(i_r1002("字典索引键必须是字符串", pos))
@@ -351,20 +347,18 @@ def i_slice_indices(start, end, step, n):
 def i_slice(v, start, end, step, pos):
     let t = i_type_name(v)
     if t == "string":
-        let chars = []
-        var ci = 0
-        while ci < len(v):
-            chars.append(v[ci])
-            ci += 1
-        let r = i_slice_indices(start, end, step, len(chars))
+        # M111-S2：不再物化 n 元字符表；输出侧改「按索引取字符 → join 一次成串」，
+        # 同时消除 `out += …` 的二次方拼接。等价性：取到的字符序列与索引表逐项相同。
+        let r = i_slice_indices(start, end, step, len(v))
         if not r["ok"]:
             return Err(i_r1002(r["err"], pos))
-        var out = ""
+        let idxs = r["idxs"]
+        let parts = []
         var ii = 0
-        while ii < len(r["idxs"]):
-            out += chars[r["idxs"][ii]]
+        while ii < len(idxs):
+            parts.append(v[idxs[ii]])
             ii += 1
-        return Ok(out)
+        return Ok(join("", parts))
     if t == "list":
         let r = i_slice_indices(start, end, step, len(v))
         if not r["ok"]:
