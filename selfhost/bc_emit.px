@@ -590,6 +590,10 @@ def bc_emit_expr(expr, dst, func):
         # A4 普通调用 / B1 方法调用（callee Field → CALLM px_method 桥）/
         # B2 struct/enum 构造（callee Var 为类型名 → NEWSTRUCT/NEWENUM）
         let callee = expr[1]
+        # M112-S0（Issue 46）：E3004 走共享语义层。VM 轨当前尚无 extern/ffi
+        #   （bc_emit 全文零 ffi），故此调用暂为 no-op —— 但 FFI 落地时校验
+        #   自动跟随，不必再"记得对齐"。
+        cg_sem_call(callee, expr[2])
         if callee[0] == "Var":
             let cname = rust_unescape(callee[1])
             let sti = bc_struct_index(cname)
@@ -1094,6 +1098,9 @@ def bc_assign_op_name(op):
 def bc_emit_stmt_inner(stmt, func):
     let ty = stmt[0]
     if ty == "VarDecl":
+        # M112-S0（Issue 46）：语义检查走轨无关共享层 —— VM 轨原先零校验，
+        #   M91 默认轨切到 VM 后这条欠账就变成了默认行为
+        cg_sem_vardecl(stmt)
         # kind=stmt[1](Let/Var/Const) name=stmt[2] ty=stmt[3] init=stmt[4]
         let name = rust_unescape(stmt[2])
         if stmt[4] == null:
@@ -1126,6 +1133,9 @@ def bc_emit_stmt_inner(stmt, func):
             let ar = [rhs]
             bc_emit_methodcall(tgt, "append", ar, -1, func)
             return
+        # M112-S0（Issue 46）：E3002/E3003 共享语义层（Append 已在上面早退，
+        #   与 C 轨 cg_stmt 的早退位置一致 ⇒ 两轨行为逐字节对齐）
+        cg_sem_assign(tgt, op, rhs)
         let tty = tgt[0]
         if tty == "Var":
             let name = rust_unescape(tgt[1])
@@ -1478,6 +1488,14 @@ def bc_emit_impl_def(m, tname):
     return bc_emit_func_body(m, tname + "." + mname)
 # 统一函数体发射（顶层 FuncDef / impl 方法同构；name=注册名）
 def bc_emit_func_body(f, name):
+    # M112-S0（Issue 47）：复刻 C 轨 cg_gen_func_named 的作用域协议 ——
+    #   cg_immutables 在函数入口以「全局不可变集」为起点，退出时还原。
+    #   实测教训：VM 轨只把「检查」接到共享层，没接「作用域协议」⇒
+    #   bc_emit.px 的 let ty = stmt[0] 会污染 parser.px 的 var ty 赋值检查，
+    #   compiler.px 自身被默认轨判 E3002（误报）。⇒ 作用域协议与检查本身
+    #   同等重要，缺一即两轨分叉。这是 Issue 46 的必要组成部分，不是可选项。
+    let saved_imm = cg_dict_copy(cg_immutables)
+    cg_immutables = cg_dict_copy(saved_imm)
     let params = f[2]
     # M90-S1/F1：默认参数 —— arity=必需参数数（首个带默认参数下标之前；无默认=全参），
     #   ndefault=带默认参数的参数个数。对齐 codegen 宽松尾部语义：CALL 对 argc<arity
@@ -1519,6 +1537,7 @@ def bc_emit_func_body(f, name):
     if ndefault > 0:
         bc_emit_default_fill(func, params, arity)
     bc_emit_stmts(f[4], func)
+    cg_immutables = saved_imm
     bc_emit_inst(func, "RET0", 0, 0, 0)
     func["nslots"] = func["next_slot"]
     return func
