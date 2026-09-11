@@ -108,7 +108,15 @@ if t == "string":
 - `IDX n=65536`：**新构建实测**（改前按 O(n²) 外推 ≈ 23 min，不实跑）
 - `SLICE-A / SLICE-B`：显著下降即可（不设硬指标）
 
-**自举（本里程碑最大风险）**
+**自举（本里程碑最大风险）—— ✅ 已跑 `--fresh`**
+- C 轨 `bootstrap_prove.sh --fresh`：**rc=0**，`B.c` == golden 逐字节（**15 060 行**），实耗 6m57s
+- BC 轨 `bootstrap_prove_bc.sh --fresh`：**rc=0**，VM 重放 == `golden/compiler.bc.dump`（**30 581 行**）
+- 符号口径（**带前导空格**）：`pxi` `fn_*=229 / s_bc_*=0` · `pxi_vm` `fn_*=0 / s_bc_*=230`
+  （`grep -c fn_` 会把 `ossl_prop_defn_*` / `property_defn_*` 等无关符号算进来 → 235/6，**是错口径**）
+- ⚠️ **取证**：`ival.px` 的导入者**只有 `interp.px`**（`compiler.px` 链不含）⇒ 上述两条自举对本改动是
+  **"不受影响的回归项"**；本改动的真正验收在**解释轨**（`diffcheck` 的 `run`/`interp` 对拍 + 61 例直接对拍 + `vm_ab` 跨轨）
+
+**原始自举要求（存档）**
 - C 轨：`B.c == golden` **15 060 行**逐字节 · BC 轨：dump == golden **30 581 行**
 - `bootstrap/pxi` / `bootstrap/pxi_vm` **同源重建**，四项核对：**字节数 + 符号数（`fn_*`/`s_bc_*`）+ `file`/`ldd` + 冒烟**
   （M109 教训：漏 `--full` 时符号数正确、字节数只有 1/3）
