@@ -80,6 +80,14 @@ def cg_mark_immutable(name):
     cg_immutables[name] = 1
 def cg_is_immutable(name):
     return cg_immutables.has(name)
+# M113-S0（Issue 57）：弃元 / 通配名 `_`
+#   语义依据：`spec.md:349/357` 只在**模式位**把 `_` 定义为弃元；`spec.md:300` 的 E3002
+#   只管 `let` 绑定的**变量**。`_ = f()` 是「求值后丢弃」的标准写法（Python/Go/Rust 同源），
+#   `_` 从不绑定任何变量 ⇒ 对它赋值不是「改不可变变量」。
+#   但 M41.2 的不可变跟踪把 `_` 当普通名字登记 ⇒ `let _ = x` 之后的任何 `_ = y` 都误报 E3002
+#   （C 轨 / VM 轨同病）。豁免只在这一处（共享层）⇒ 两轨共享同一条真相。
+def cg_is_wildcard(name):
+    return name == "_"
 # M112-S0（Issue 45）：诊断通道必须 = stderr
 #   原先 print() 走 stdout，而 C 轨的产物正是 stdout → 错误文本被写进 .c，
 #   用户看到的是 gcc 抱怨一个中括号（误导性失败，比静默失败更难查）。
@@ -122,6 +130,9 @@ def cg_is_null_lit(e):
 def cg_sem_vardecl(stmt):
     # kind=stmt[1] name=stmt[2] ty=stmt[3] init=stmt[4]
     let name = rust_unescape(stmt[2])
+    # M113-S0（Issue 57）：`_` 不绑定变量 ⇒ 不登记不可变、不登记非空标注
+    if cg_is_wildcard(name):
+        return
     if stmt[1] == "Let" or stmt[1] == "Const":
         cg_mark_immutable(name)
     let decl_ty = stmt[3]
@@ -137,6 +148,9 @@ def cg_sem_assign(tgt, op, rhs):
     if tgt[0] != "Var":
         return
     let name = rust_unescape(tgt[1])
+    # M113-S0（Issue 57）：`_ = expr` 是弃元写法（求值后丢弃），非变量赋值 ⇒ 不查 E3002/E3003
+    if cg_is_wildcard(name):
+        return
     if cg_is_immutable(name):
         cg_perr("E3002", "对不可变变量 '" + name + "' 赋值（let 默认不可变，需用 let mut/var 声明可变）")
     if cg_is_null_lit(rhs) and cg_nonnull.has(name):
