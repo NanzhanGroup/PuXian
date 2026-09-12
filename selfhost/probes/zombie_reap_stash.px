@@ -1,0 +1,14 @@
+# Issue 54 探针（语义回归版）：兜底回收线程已收走状态后，os_wait 仍须返回正确退出码
+# 这是本改动最关键的语义约束 —— 状态箱不生效，examples/m23d 那类 spawn→wait 用法会拿到 -1
+def main():
+    p1 = os_spawn("/bin/sh", ["-c", "exit 3"])
+    sleep(500)
+    print("stash-exit（期望 3）")
+    print(os_wait(p1))
+    p2 = os_spawn("/bin/sh", ["-c", "kill -TERM $$"])
+    sleep(500)
+    print("stash-signal（期望 143）")
+    print(os_wait(p2))
+    p3 = os_spawn("/bin/echo", ["hi"])
+    print("claim-direct（期望 0）")
+    print(os_wait(p3))

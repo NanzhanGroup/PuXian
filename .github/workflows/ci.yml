@@ -40,6 +40,9 @@ jobs:
       - name: 引擎一致性门 — 用户面默认轨（negative，Issue 51）
         run: ./selfhost/engine_parity.sh 2>&1 | tail -12
 
+      - name: 子进程兜底回收门 — 僵尸泄漏（negative，Issue 54）
+        run: ./selfhost/zombie_reap_check.sh 2>&1 | tail -12
+
       - name: 对拍回归 — codegen（--codegen）
         run: ./selfhost/diffcheck.sh --codegen 2>&1 | tail -5
 
