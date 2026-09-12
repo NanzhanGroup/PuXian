@@ -6,6 +6,41 @@
 
 ## [Unreleased]
 
+### M113-S2 · VM 轨（用户面默认轨）重烘门 + 出厂源码链指纹（qg-issue 58 续）
+
+> **主题：给默认轨补上门，并让「这枚入库件是不是当前源码烘的」变成 O(1) 可判。**
+> S1 只给 **C 轨**（`bootstrap/pxc`）上了门；而用户跑的是 `tools/px` → **`bootstrap/pxc_vm`**。
+> S1 的 C 轨门只能证明「入库 pxc 的行为 == 现编 pxc 的行为」，对「VM 件漏烘」无力：
+> 实测把 main 上**未含 Issue 57 修复**的旧 `pxc_vm` 换回去，C 轨门与镜像对拍都仍绿。
+
+**① 出厂源码链指纹（两轨共用 · 强判据 · O(1)）**
+- `rebake_bin.sh` 重烘时把源码链指纹（`PXSRC-<16hex>`；口径 = `compiler.px` 全 import 链 +
+  `runtime/{vm,runtime}.{c,h}`，与 `bootstrap_prove_bc.sh` 的 `SRC_CHAIN` 对齐）作为
+  **host-only 常量**链进入库件；
+- `--check` / `--check-vm` 读回该常量与现算指纹比对：**不等或缺指纹即红**（不设"退化放行"暗门）；
+- ⇒ **改 `selfhost/*.px` 或改 `runtime/{vm,runtime}.{c,h}` 都必须重烘**（此前只约定前者）；
+- 指纹不参与 .px 语义：`golden/compiler.c` / `golden/compiler.bc.dump` 不受影响（自举证明仍逐字节一致）。
+
+**② VM 轨重烘门 `--check-vm`（新增 · 进 CI）**
+- 断言：入库 `pxc_vm` 可执行、`--version` 正常（无 panic）；`pxc_vm` 与对拍基准 `pxc` 指纹均一致；
+- **字节码镜像对拍**：`pxc_vm bc compiler.px` 与 `pxc bc compiler.px` 逐字节一致（30815 行；
+  归一化口径同 `bootstrap_prove_bc.sh` 的 `norm_bc`）；成本实测 **≈90s**（C 53s / VM 36s）；
+- CI regression job 新增步骤「VM 轨重烘门」，紧邻 C 轨门（`--check`）。
+
+**③ 门的边界（实测登记，不假装覆盖）**
+- **镜像对拍不是"来源"判据**：把 main 上未含 Issue 57 修复的旧 `pxc_vm` 换回去 → 镜像**仍逐字节一致**
+  （该修复只改语义检查、不改发射结果）⇒ 「是否重烘」由 ① 判，「跨引擎发射漂移 / VM 件能否编译自身」由 ② 判；
+- **VM 轨逐例行为**由 `engine_parity.sh` 守：同一枚旧 `pxc_vm` 在它下面 **正例 通过 0 · 失败 5**（红）；
+- `--check` 的现编参照件改为**每次现编**（此前允许复用上轮产物 ⇒ 入库件若被换掉会拿到旧参照件，
+  等于门给自己发通行证）。成本仍 ≈20s。
+
+**负向对照（全部实测——门必须能红）**
+- 入库件**无内嵌指纹**（= main 上的件）→ `--check` / `--check-vm` 均 **rc=1**（即刻，不必跑 90s）；
+- 改 `selfhost/codegen.px` 但**不重烘** → 指纹不等，两门 **rc=1**（指纹 `ad561705…` → `6273d6f3…`）；
+- 换回 main 的旧 `pxc_vm` → `engine_parity` **红**（正例 0/5），而镜像对拍**仍绿** ⇒ 两条判据的边界如 ③ 所述；
+- 重烘后：两门全绿（指纹一致 + C 轨 54 例行为对拍 + 30815 行镜像一致），
+  `engine_parity` 负例 5/5 · 正例 5/5、`diffcheck --all` 全通过、C 轨自举证明 🎉 逐字节一致。
+
 ### M113-S1 · 门判退出码 + 入库件重烘进 CI + v0 系 golden 重定基（qg-issue 58 续）
 
 > **主题：门红必须真的拦得住东西。** S0 修好了「入库件落后源码」，但**门本身还在漏**：

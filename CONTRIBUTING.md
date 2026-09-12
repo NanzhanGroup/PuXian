@@ -63,11 +63,20 @@ cd selfhost && ./bootstrap_prove_bc.sh       # BC 轨：golden/compiler.bc.dump�
 #    M113-S0（Issue 58）：此前只写了 `cp compiler_vm bootstrap/pxc_vm`，
 #    **C 轨 `bootstrap/pxc` 无人重烘**（自 M112 起落后源码，CI 结构性发现不了）。
 ./selfhost/rebake_bin.sh           # 重烘 bootstrap/pxc（静态 + 全 runtime）+ bootstrap/pxc_vm
-./selfhost/rebake_bin.sh --check   # 断言入库件与「当前源码现编产物」行为一致（能红）
-#    M113-S1：**CI 已把它当门**（regression job「入库编译器重烘门」）—— 忘了重烘，PR 会红。
+./selfhost/rebake_bin.sh --check   # C 轨门：断言入库 pxc 与「当前源码现编产物」行为一致（能红）
+./selfhost/rebake_bin.sh --check-vm# VM 轨门：入库 pxc_vm（**用户面默认轨**）同上（能红）
+#    M113-S1：**C 轨门已进 CI**（regression job「入库编译器重烘门」）—— 忘了重烘，PR 会红。
 #    探针 = selfhost/cases/ + cases_bad/ + cases_ok/ 全套（≈54 例 × 2 枚编译器），
 #    判 rc/stdout/stderr 逐字节；成本新检出 ≈17s，可忽略。
-#    注意：重烘**必须用全 runtime 档**缓存（脚本会拦裁剪档 —— 否则入库 pxc 会缺 runtime 能力）。
+#    M113-S2：**VM 轨补门**（用户跑的是 tools/px → bootstrap/pxc_vm，此前只有 C 轨有门）。
+#    两道门的判据**不重叠**：① 产物来源 —— 重烘时把「源码链指纹」链进入库件，
+#    门上读回比对（O(1)）；② C 轨走「同轨行为对拍」，VM 轨走「两轨字节码镜像对拍」
+#    （`bc compiler.px` 逐字节，实测 ≈90s：C 53s / VM 36s）。
+#    VM 轨的**逐例行为**由 engine_parity.sh 守（rc/stdout/stderr vs 基准轨/golden），不重复造门。
+#    指纹口径 = compiler.px 全 import 链 + runtime 的 vm/runtime 源（与 bootstrap_prove_bc.sh
+#    的 SRC_CHAIN 对齐）⇒ 改 selfhost/*.px **或** runtime/{vm,runtime}.{c,h} 都必须重烘。
+#    注意：重烘**必须用全 runtime 档**缓存（脚本会拦裁剪档 —— 否则入库 pxc 会缺 runtime 能力）；
+#    门则容忍裁剪档（判据与"链进多少 runtime"无关）。
 
 # 6. 新增/改动功能时补对应用例（selfhost/cases/ 或 examples/）并更新 golden
 #    有意改动基准时重定基（两条基准须与源码同批提交）：
