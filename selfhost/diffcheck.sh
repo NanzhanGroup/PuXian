@@ -119,9 +119,17 @@ check_codegen_file() {
     local base
     base="$(basename "$f" .px)"
     echo "── codegen 对拍: $f ($mode)"
-    local out
+    local out err
     # pxc build 输出 C 源码到 stdout（不经 gcc）
-    out=$("$PXC" build "$f" 2>&1)
+    # M113-S0（Issue 57/58）：**产物对拍只看 stdout** —— 与 M112-S0（Issue 45）的
+    #   「诊断通道与产物通道分 fd」同一条原则。原写法 `2>&1` 把 stderr 诊断并进产物，
+    #   于是 s08（import std.fs 缺失）在新编译器的 **Issue 42 告警** 下必然"有差异"，
+    #   而告警字节根本不属于产物。此差异长期被掩盖：CI 的 `$PXC` = 入库 bootstrap/pxc
+    #   自 M112 起未重烘（Issue 58），旧二进制不产生该告警 ⇒ 门一直"绿"。
+    #   现改为：stdout 逐字节对拍 + stderr 诊断**显式展示**（不吞、不计入判据）。
+    out=$("$PXC" build "$f" 2>"$WORK/$base.stderr")
+    err=$(cat "$WORK/$base.stderr" 2>/dev/null)
+    [ -z "$err" ] || echo "    ℹ️  stderr 诊断（不计入产物对拍）：$(echo "$err" | head -2 | tr '\n' '|')"
     norm_c <<< "$out" > "$WORK/$base.px.c"
     norm_c < "$GOLDEN_DIR/$base.c" > "$WORK/$base.gold.c" 2>/dev/null || { echo "    ⚠️ 无 golden，先生成"; return; }
     if diff -q "$WORK/$base.px.c" "$WORK/$base.gold.c" >/dev/null 2>&1; then
@@ -237,8 +245,9 @@ check_file() {
     else
         echo "    [OK]   parse"
     fi
-    # codegen → C
-    "$PXC" build "$f" 2>&1 | norm_c > "$WORK/$base.px.c"
+    # codegen → C（M113-S0 / Issue 57-58：**只看 stdout**，stderr 诊断不计入产物；
+    #   与 check_codegen_file 同口径 —— 诊断通道与产物通道分 fd，见 M112-S0/Issue 45）
+    "$PXC" build "$f" 2>"$WORK/$base.stderr" | norm_c > "$WORK/$base.px.c"
     norm_c < "$GOLDEN_DIR/$base.c" > "$WORK/$base.gold.c" 2>/dev/null || { echo "    ⚠️ 无 golden，先生成"; return 0; }
     if ! diff -q "$WORK/$base.px.c" "$WORK/$base.gold.c" >/dev/null 2>&1; then
         echo "    [FAIL] C 源码不一致"; diff "$WORK/$base.px.c" "$WORK/$base.gold.c" | head -8; ok=0

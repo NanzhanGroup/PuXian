@@ -1,0 +1,5 @@
+# M113-S0（Issue 57）正例：顶层（模块作用域）弃元赋值
+def compute():
+    return 42
+_ = compute()
+print("top-ok")

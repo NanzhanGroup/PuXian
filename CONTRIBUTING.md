@@ -60,7 +60,10 @@ cd selfhost && ./bootstrap_prove_bc.sh       # BC 轨：golden/compiler.bc.dump�
 ./selfhost/engine_parity.sh
 
 # 5. 改过编译器源码 / 基准后：重烘入库二进制（否则用户拿到的仍是旧引擎）
-cp selfhost/build/compiler_vm bootstrap/pxc_vm    # 产出见 bootstrap_prove_bc.sh 步骤 3/4
+#    M113-S0（Issue 58）：此前只写了 `cp compiler_vm bootstrap/pxc_vm`，
+#    **C 轨 `bootstrap/pxc` 无人重烘**（自 M112 起落后源码，CI 结构性发现不了）。
+./selfhost/rebake_bin.sh           # 重烘 bootstrap/pxc（静态 + 全 runtime）+ bootstrap/pxc_vm
+./selfhost/rebake_bin.sh --check   # 断言入库件与「当前源码现编产物」行为一致（能红）
 
 # 6. 新增/改动功能时补对应用例（selfhost/cases/ 或 examples/）并更新 golden
 #    有意改动基准时重定基（两条基准须与源码同批提交）：

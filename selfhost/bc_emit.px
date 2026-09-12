@@ -1610,10 +1610,22 @@ def bc_emit_program(prog):
         i += 1
     bc_collect_consts(items)
     let impl_list = bc_collect_impl_list(items)
-    # M112-S2（Issue 52）：FFI 声明表复位 —— 与 C 轨 cg_generate 同一句（cg_ffi = cg_new_dict()）。
-    #   原 VM 轨从不清空、也从填充 cg_ffi ⇒ 轨无关共享层 cg_sem_call 的 E3004 恒不触发
-    #   （engine_parity 曾以 xfail 登记该缺口）。
+    # M113-S0（Issue 57）：与 C 轨 cg_generate 的「全量复位」逐句对齐。
+    #   原先只复位 cg_ffi（M112-S2 / Issue 52），其余 8 个集合保留**声明处哨兵键** `{"_": 0}`
+    #   （compiler.px / bc_cli.px 顶层 `var cg_xxx = {"_": 0}`，空字典字面量不支持的惯用法）
+    #   ⇒ 默认轨（VM）一进来 cg_immutables 就 has("_") == true ⇒ 源码里任何 `_ = expr`
+    #   被轨无关共享层判成「对不可变变量 '_' 赋值」E3002（**默认轨致命**，C 轨逃生舱正常）。
+    #   复位后两轨起点状态一致：哨兵键不可能再泄漏进语义检查。
+    cg_structs = cg_new_dict()
+    cg_enums = cg_new_dict()
+    cg_impls = cg_new_dict()
+    cg_vars = cg_new_dict()
+    cg_var_types = cg_new_dict()
+    cg_immutables = cg_new_dict()
+    cg_nonnull = cg_new_dict()
     cg_ffi = cg_new_dict()
+    cg_const_enums = cg_new_dict()
+    cg_globals = []
     # 第一遍：收集全局名（对齐 cg_generate 顺序：FuncDef/ExternDef/VarDecl/Assign）
     i = 0
     while i < len(items):
