@@ -1,0 +1,9 @@
+# Issue 54 探针（外部计数版）：fire-and-forget 派生后进程存活，由门外层统计僵尸数
+# 期望：僵尸子进程数 == 0（运行时兜底回收生效）
+def main():
+    var i = 0
+    while i < 5:
+        print(os_spawn("/bin/true", []))
+        i = i + 1
+    sleep(5000)
+    print("ZOMBIE-PROBE-DONE")
