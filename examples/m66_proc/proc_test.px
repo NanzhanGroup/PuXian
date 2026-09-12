@@ -35,6 +35,11 @@ os_wait(p["pid"])
 # ---------- os_kill group：os_popen 子进程自成组，组杀后 wait 立即非0 ----------
 var p2 = os_popen("sh", ["-c", "sleep 30"])
 check("os_popen2 pid>0", p2["pid"] > 0)
+# 组杀竞态：os_popen 只在**子进程侧** setpgid(0,0)，而父进程的 os_popen
+# 返回 pid 时子进程未必已执行到 setpgid ⇒ 紧接的 killpg 可能 ESRCH 假失败。
+# 实测（60 次紧循环探针，main@d2172ba / 2149200 均在 ~52~62% 失败）：见 PR 说明。
+# sleep(200) 远大于 setpgid 的实测延迟（微秒~毫秒级）→ 60/60 稳定成功。
+sleep(200)
 check("os_kill group=true 成功", os_kill(p2["pid"], 9, true))
 var wc = os_wait(p2["pid"])
 check("os_wait 组杀后立即返回", wc != 0)
