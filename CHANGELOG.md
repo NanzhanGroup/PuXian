@@ -14,7 +14,7 @@
 
 **S0（Issue 42/45/46/47）**
 - **42** `cg_module.px`：模块候选全空不再静默跳过（含 std）→ stderr 显式告警；`PX_STRICT_MODULE=1` 转硬错 `E3005`。
-  原先「候选路径存在则静默改用另一棵树」，冬月实测曾误用开发树（该绝对路径被编进 `bootstrap/pxc`）。
+  原先「候选路径存在则静默改用另一棵树」，东月实测曾误用开发树（该绝对路径被编进 `bootstrap/pxc`）。
 - **45** **诊断通道与产物通道分 fd**：`cg_perr`/`cg_pwarn` 改走 stderr；`tools/px` 产物取 stdout、诊断取 stderr（且成功但有诊断时透传）。
   原先报错文本被当 C 源码写进 `.c`，用户看到 gcc 抱怨一个中括号。
 - **46** 抽出**轨无关共享语义层** `cg_sem_vardecl` / `cg_sem_assign` / `cg_sem_call`（E3002/E3003/E3004），C 轨与 VM 轨各调一行。
