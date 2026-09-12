@@ -6,6 +6,118 @@
 
 ## [Unreleased]
 
+### M113-S2 · VM 轨（用户面默认轨）重烘门 + 出厂源码链指纹（qg-issue 58 续）
+
+> **主题：给默认轨补上门，并让「这枚入库件是不是当前源码烘的」变成 O(1) 可判。**
+> S1 只给 **C 轨**（`bootstrap/pxc`）上了门；而用户跑的是 `tools/px` → **`bootstrap/pxc_vm`**。
+> S1 的 C 轨门只能证明「入库 pxc 的行为 == 现编 pxc 的行为」，对「VM 件漏烘」无力：
+> 实测把 main 上**未含 Issue 57 修复**的旧 `pxc_vm` 换回去，C 轨门与镜像对拍都仍绿。
+
+**① 出厂源码链指纹（两轨共用 · 强判据 · O(1)）**
+- `rebake_bin.sh` 重烘时把源码链指纹（`PXSRC-<16hex>`；口径 = `compiler.px` 全 import 链 +
+  `runtime/{vm,runtime}.{c,h}`，与 `bootstrap_prove_bc.sh` 的 `SRC_CHAIN` 对齐）作为
+  **host-only 常量**链进入库件；
+- `--check` / `--check-vm` 读回该常量与现算指纹比对：**不等或缺指纹即红**（不设"退化放行"暗门）；
+- ⇒ **改 `selfhost/*.px` 或改 `runtime/{vm,runtime}.{c,h}` 都必须重烘**（此前只约定前者）；
+- 指纹不参与 .px 语义：`golden/compiler.c` / `golden/compiler.bc.dump` 不受影响（自举证明仍逐字节一致）。
+
+**② VM 轨重烘门 `--check-vm`（新增 · 进 CI）**
+- 断言：入库 `pxc_vm` 可执行、`--version` 正常（无 panic）；`pxc_vm` 与对拍基准 `pxc` 指纹均一致；
+- **字节码镜像对拍**：`pxc_vm bc compiler.px` 与 `pxc bc compiler.px` 逐字节一致（30815 行；
+  归一化口径同 `bootstrap_prove_bc.sh` 的 `norm_bc`）；成本实测 **≈90s**（C 53s / VM 36s）；
+- CI regression job 新增步骤「VM 轨重烘门」，紧邻 C 轨门（`--check`）。
+
+**③ 门的边界（实测登记，不假装覆盖）**
+- **镜像对拍不是"来源"判据**：把 main 上未含 Issue 57 修复的旧 `pxc_vm` 换回去 → 镜像**仍逐字节一致**
+  （该修复只改语义检查、不改发射结果）⇒ 「是否重烘」由 ① 判，「跨引擎发射漂移 / VM 件能否编译自身」由 ② 判；
+- **VM 轨逐例行为**由 `engine_parity.sh` 守：同一枚旧 `pxc_vm` 在它下面 **正例 通过 0 · 失败 5**（红）；
+- `--check` 的现编参照件改为**每次现编**（此前允许复用上轮产物 ⇒ 入库件若被换掉会拿到旧参照件，
+  等于门给自己发通行证）。成本仍 ≈20s。
+
+**负向对照（全部实测——门必须能红）**
+- 入库件**无内嵌指纹**（= main 上的件）→ `--check` / `--check-vm` 均 **rc=1**（即刻，不必跑 90s）；
+- 改 `selfhost/codegen.px` 但**不重烘** → 指纹不等，两门 **rc=1**（指纹 `ad561705…` → `6273d6f3…`）；
+- 换回 main 的旧 `pxc_vm` → `engine_parity` **红**（正例 0/5），而镜像对拍**仍绿** ⇒ 两条判据的边界如 ③ 所述；
+- 重烘后：两门全绿（指纹一致 + C 轨 54 例行为对拍 + 30815 行镜像一致），
+  `engine_parity` 负例 5/5 · 正例 5/5、`diffcheck --all` 全通过、C 轨自举证明 🎉 逐字节一致。
+
+### M113-S1 · 门判退出码 + 入库件重烘进 CI + v0 系 golden 重定基（qg-issue 58 续）
+
+> **主题：门红必须真的拦得住东西。** S0 修好了「入库件落后源码」，但**门本身还在漏**：
+> `diffcheck.sh` 的 `--lexer/--parser/--codegen` 三个分支**恒 `exit 0`**，
+> CI 侧又是 `... 2>&1 | tail`（管道退出码取自 tail、无 pipefail）⇒ **门红在 CI 里永远是绿**。
+> S1 两头都堵，并把「改了源码忘了重烘」变成 CI 可拦。
+
+**① 入库件重烘门进 CI**
+- `.github/workflows/ci.yml` regression job 新增步骤「入库编译器重烘门 — 入库件 vs 现编件」，调用 `selfhost/rebake_bin.sh --check`。
+- `--check` 探针集合由 S0 的 10 例扩到**全套 54 例**（`cases/` + `cases_bad/` + `cases_ok/`，跳过 import 夹具）；
+  成本实测：55 例 × 2 枚编译器 ≈1.5s（只编到 C、不过 gcc），整步在新检出 ≈17s。
+- `rebake_bin.sh` 增**缓存档位守卫**：重烘必须用全 runtime 档（本机 23 个 .o），裁剪档（7 个）**直接拒绝**
+  —— S0 时正是用裁剪档误装过一枚 2.81MB 的残缺件；`--check` 则容忍裁剪档（只比对 C 产物，与链进多少 runtime 无关）。
+
+**② v0 系 codegen golden 重定基（S0 遗留的 3 例红）**
+- `golden/v01_value.c` / `v02_env.c` / `v03_module.c` 停在 M62-L5，落后 M63-L10（浮点全精度）与 M72-S2（源位置插桩）
+  ⇒ 单跑 `--codegen` 恒 3 例红。已用入库工具链重定基；差异逐行分类核对：391 + 114 + 135 行中
+  **仅 3 行非插桩**（2 行 = float 全精度 `1.41421` → `1.4142135623730951`；1 行 = 被插桩行挤掉的空行）。
+- 补 `golden/v04_module_state.c`（v0 系此前只有 01–03 有 golden），v0 系 codegen 覆盖补齐（`--codegen` 19 例全绿）。
+
+**③ 门判退出码 + 封堵"静默通过"**
+- `check_lexer_file` / `check_parser_file` / `check_codegen_file` 改为返回 0/1（此前只打印 ❌、恒返回 0）；
+- `--lexer` / `--parser` / `--codegen` 三个入口聚合失败并 `exit 1`（`--codegen` 另打 `N 例中 M 例不一致` 小结）；
+- **缺 golden 判红**（此前一律「⚠️ 无 golden，先生成」后按通过处理 ⇒ 新增用例忘带 golden 会让门静默变绿）；
+  `--all` 的 `check_file` 同步收紧（缺 golden 记 `ok=0` 并继续跑其余项，不再提前 `return 0`）；
+- 辅助夹具 `modstate.px`（M70-S3，仅被 v04 import）移入 `AUX_CASES` 名单**显式跳过**，不再以「无 golden」的形态出现在各门里。
+
+**④ CI 侧管道不再吞码**
+- regression job 的 9 个门步骤统一 `set -o pipefail`（此前 `... 2>&1 | tail -N` 的退出码取自 tail）。
+
+**负向对照（全部实测——门必须能红）**
+- 污染 1 例 C golden → `--codegen` rc=1；**删 1 例 golden → rc=1**（旧行为：静默通过）；
+- 污染 1 例 token golden → `--lexer` rc=1（旧行为：恒 rc=0）；
+- **模拟 CI 真实场景**：改 `codegen.px` 后不重烘 → `rebake_bin.sh --check` **rc=1（54 例中 24 例报"行为不同"）**。
+
+**同批复跑（全绿，rc=0）**：`--codegen`（19 例）/ `--lexer` / `--parser` / `--errors` / `--value` / `--interp` /
+`--all` / `engine_parity.sh` / `zombie_reap_check.sh`（4/4）/ `bootstrap_prove.sh`（自举成立）/ `rebake_bin.sh --check`（54 例）。
+
+**文档**
+- `CONTRIBUTING`：第 5 步注明 CI 已把重烘当门 + 全 runtime 档要求；第 6 步注明「用例必须带齐 golden（缺即红）」；
+  更正自举证明 `--fresh` 的时长描述 —— 原写"≈6.5-7 分钟"，那是**未重烘的旧入库件**的数字（S0 实测 411s），
+  入库件与源码同批时实测 **8.3s**；BC 轨历史数字未复测（CI 不跑该轨），按旧值对待。
+- `selfhost/bootstrap_prove.sh`：步骤 1 的时长提示同步更正（8s vs 旧件 ≈50× 慢）。
+
+### M113-S0 · 弃元 `_` 语义收口 + 入库编译器重烘（qg-issue 57/58）
+
+> **主题：不该报的别报。** M112 让「失败被看见」；S0 收口它的反作用面 ——
+> **默认轨（用户面 VM 轨）把合法写法判成致命编译错误**，而当时**所有门全绿**：
+> CI 没有任何**正例**门，`bootstrap/pxc` 自 M112 起就没再重烘（C 轨逃生舱离线）。
+> 验收前置两步：① 正例门必须先能红（用旧二进制复现失败）；② 入库二进制必须与源码同批。
+
+**S0（Issue 57/58）**
+- **57 弃元 `_` = 通配，不是变量**（spec.md:349/357 定义在模式位；E3002 只管 `let` 变量）：
+  - 共享语义层加**唯一一处**豁免 `cg_is_wildcard`（`codegen.px`）：`cg_sem_vardecl` 不再把 `_` 记入不可变集/非空标注；
+    `cg_sem_assign` 对 `_` 直接返回 ⇒ **C 轨 / VM 轨同时生效**（M112-S0 抽共享层的正收益）。
+  - `bc_emit_program` 补齐**其余 8 个集合复位**（原只有 `cg_ffi`，M112-S2 修的 1/9）：
+    9 个语义集合的**声明处哨兵键 `{"_": 0}`**（`compiler.px:39-48` / `bc_cli.px:33-41`）不再泄漏进语义检查 ——
+    `cg_immutables.has("_") == true` 曾是默认轨**恒报 E3002** 的直接原因。
+  - 实测（同一份输入，只换二进制）：`_ = f()` 函数内/顶层 在旧入库 `pxc_vm` 上 **rc=1 ❌**，在新件上 **rc=0 ✅**；
+    `let _ = 1` + `_ = 2` 两轨曾同时误报，现两轨通过；`let x=1; x=2` 两轨仍报 E3002（**未越界豁免**）。
+- **58 入库编译器按源码重烘 + 把指引变成可执行**：
+  - `bootstrap/pxc` 由当前源码重烘（**静态 + 全 runtime**，与 `pxi`/`pxfmt` 同口径：9.69 MB 静态 ELF）；
+  - 新增 **`selfhost/rebake_bin.sh`**（重烘）+ **`--check`**（**行为判据**断言入库件 == 现编件，
+    逐例对拍 `cases_ok` + `cases_bad` 的 rc/stdout/stderr）—— 替代此前「老 pxc 给自 golden 定基、永远自洽」的空转门；
+  - `CONTRIBUTING` 第 5 步由 `cp compiler_vm bootstrap/pxc_vm` 改为可执行脚本（原指引**漏掉 C 轨**）。
+- **门（同批）**：
+  - `engine_parity.sh` 新增**阶段 2：正例** —— `cases_ok/*.px` 两轨都必须 rc=0、stderr 必须为空，
+    有 `<case>.expected` 时**真跑产物**对拍 stdout（含「弃元右侧仍必须求值」断言）；
+  - 新负例 `cases_bad/codegen_b05_wildcard_narrow.px`：一条用例同时锁定「`_` 不报」**且**「`y` 必须报」
+    （豁免越界或未生效都会红）；
+  - `diffcheck.sh` 的 codegen 对拍改**只看 stdout**（诊断走 stderr，与 M112-S0/Issue 45 同一条原则）——
+    原 `2>&1` 把 Issue 42 的模块缺失告警并进产物，该差异被「未重烘的 pxc 不产生告警」掩盖。
+- **附带实证（Issue 58 家族）**：重烘后 `diffcheck --all` / `--errors` / 引擎一致性门全部由红转绿；
+  同一份源码、同一台机器：**旧入库 `bootstrap/pxc` 编译 `compiler.px` 实测 411 秒（6分51秒），
+  新编 pxc 8.3 秒（≈50×）** —— 旧件缺 M104–M111 全套性能修复，
+  ⇒「入库件落后源码」不只语义落后，用户侧拿到的是**慢约 50× 的编译器**。
+
 ### M112 · 编译门自身完善 + 默认轨（VM）语义/FFI 收口（qg-issue 42/45/46/47/48/49/50/51/52/53）
 
 > **主题：失败不被表达。** 本轮逐处收口「门只会说通过」这一类系统性缺陷：编译器诊断通道被当产物、

@@ -28,32 +28,83 @@ jobs:
           ./tools/pxc lex examples/hello.px | head -3
           ./tools/pxc parse examples/hello.px | head -3
 
+      # ============================================================
+      # M113-S1（Issue 58）：**入库编译器重烘门**
+      #   改 selfhost/*.px 却忘了重烘 bootstrap/pxc，是结构性失明 ——
+      #   bootstrap_prove 的 golden 由同一枚 pxc 重定基，老件+自己的 golden 永远自洽
+      #   ⇒ 门绿 ≠ 用户拿到修复（实测旧件落后 M104-M111：编 compiler.px 慢 50×）。
+      #   本步断言「入库件 == 当前源码现编产物」的行为一致（不一致即红，提示重烘）。
+      #   成本：新检出 ≈17s（含 8s 冒烟缓存）；stale 件会拖到数分钟（正是要逼出来的信号）。
+      # ============================================================
+      - name: 入库编译器重烘门 — 入库件 vs 现编件（Issue 58）
+        run: |
+          set -o pipefail
+          ./selfhost/rebake_bin.sh --check 2>&1 | tail -6
+
+      # ============================================================
+      # M113-S2（Issue 58 续）：**VM 轨（用户面默认轨）重烘门**
+      #   S1 只给 C 轨上了门，而用户跑的是 tools/px → bootstrap/pxc_vm：
+      #   入库 pxc_vm 漏烘时，只有当小事例行为刚好不同才会露（Issue 46 实况）。
+      #   本步两判据：① 内嵌「源码链指纹」== 当前源码（O(1)，重烘时链入）；
+      #   ② 两轨字节码镜像逐字节一致（`bc compiler.px`，实测 ≈90s：C 53s / VM 36s）。
+      #   VM 轨的**逐例行为**由下面的 engine_parity 门守（判据不重复）。
+      # ============================================================
+      - name: VM 轨重烘门 — 入库 pxc_vm 来源 + 字节码镜像（Issue 58）
+        run: |
+          set -o pipefail
+          ./selfhost/rebake_bin.sh --check-vm 2>&1 | tail -8
+
+      # ============================================================
+      # M113-S1（Issue 58 续）：**门的退出码必须能传到 CI**
+      #   此前每个门都写成 `... 2>&1 | tail -N` —— 管道退出码取自 tail（恒 0），
+      #   且 diffcheck 的 --lexer/--parser/--codegen 分支本身也恒 `exit 0`
+      #   ⇒ 「门红」在 CI 里永远是绿（门结构性失明的另一半，与入库件未重烘同源）。
+      #   现两头都堵：diffcheck 判退出码 + 此处 `set -o pipefail`。
+      # ============================================================
+
       - name: 对拍回归 — 词法（--lexer）
-        run: ./selfhost/diffcheck.sh --lexer 2>&1 | tail -3
+        run: |
+          set -o pipefail
+          ./selfhost/diffcheck.sh --lexer 2>&1 | tail -3
 
       - name: 对拍回归 — 语法（--parser）
-        run: ./selfhost/diffcheck.sh --parser 2>&1 | tail -3
+        run: |
+          set -o pipefail
+          ./selfhost/diffcheck.sh --parser 2>&1 | tail -3
 
       - name: 对拍回归 — 错误场景（--errors）
-        run: ./selfhost/diffcheck.sh --errors 2>&1 | tail -3
+        run: |
+          set -o pipefail
+          ./selfhost/diffcheck.sh --errors 2>&1 | tail -3
 
       - name: 引擎一致性门 — 用户面默认轨（negative，Issue 51）
-        run: ./selfhost/engine_parity.sh 2>&1 | tail -12
+        run: |
+          set -o pipefail
+          ./selfhost/engine_parity.sh 2>&1 | tail -12
 
       - name: 子进程兜底回收门 — 僵尸泄漏（negative，Issue 54）
-        run: ./selfhost/zombie_reap_check.sh 2>&1 | tail -12
+        run: |
+          set -o pipefail
+          ./selfhost/zombie_reap_check.sh 2>&1 | tail -12
 
       - name: 对拍回归 — codegen（--codegen）
-        run: ./selfhost/diffcheck.sh --codegen 2>&1 | tail -5
+        run: |
+          set -o pipefail
+          ./selfhost/diffcheck.sh --codegen 2>&1 | tail -5
 
       - name: 对拍回归 — 值系统（--value）
-        run: ./selfhost/diffcheck.sh --value 2>&1 | tail -3
+        run: |
+          set -o pipefail
+          ./selfhost/diffcheck.sh --value 2>&1 | tail -3
 
       - name: 对拍回归 — 解释器（--interp）
-        run: ./selfhost/diffcheck.sh --interp 2>&1 | tail -3
+        run: |
+          set -o pipefail
+          ./selfhost/diffcheck.sh --interp 2>&1 | tail -3
 
       - name: 自举证明（pxc 编译 compiler.px 与基准一致）
         run: |
+          set -o pipefail
           cd selfhost
           ./bootstrap_prove.sh 2>&1 | tail -6
 

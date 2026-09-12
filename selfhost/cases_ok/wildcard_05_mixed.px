@@ -1,0 +1,8 @@
+# M113-S0（Issue 57）边界：弃元豁免**不得扩散**到普通变量
+def main():
+    let fixed = 1
+    var mut = 2
+    mut = mut + 1
+    _ = fixed
+    _ = mut
+    print(str(fixed) + "," + str(mut))

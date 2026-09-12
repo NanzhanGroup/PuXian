@@ -1,0 +1,8 @@
+# M113-S0（Issue 57）语义断言：弃元的**右侧仍必须求值**（不是被优化掉）
+def bump():
+    print("bump")
+    return 1
+def main():
+    _ = bump()
+    _ = bump()
+    print("done")

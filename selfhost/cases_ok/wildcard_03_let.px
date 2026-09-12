@@ -1,0 +1,6 @@
+# M113-S0（Issue 57）正例：`let _ = ...` 之后的再次弃元（C 轨 / VM 轨曾同时误报）
+def main():
+    let _ = 1
+    _ = 2
+    _ = "x"
+    print("let-ok")
