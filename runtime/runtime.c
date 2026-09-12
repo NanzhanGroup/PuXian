@@ -7081,6 +7081,150 @@ static LXValue bi_os_pid(LXValue* args, int nargs, void* ctx) {
     return px_int((int64_t)getpid());
 }
 
+// ==================== M112-S3（Issue 54）：fire-and-forget 子进程兜底回收 ====================
+// 背景（现网实证 · 晨曦 chenxi / Mahesvara ma-sec）：
+//   os_spawn 是 fire-and-forget（fork+execvp，立刻返回 pid）。若调用方不 os_wait，
+//   子进程退出后成为僵尸并【永久驻留】父进程的进程表 —— 语言层没有任何回收路径，
+//   而 os_wait 是【阻塞】的，故"派生后不管"这一常见用法根本没有可用的回收原语。
+//   实测：ma-sec 每次封禁派生一个 ma-alertd（投递告警后立即退出，且退出码无人检查），
+//         ma-sec 自启动起 5 次封禁 = 5 个 [ma-alertd] <defunct>，只有重启 ma-sec 才清零。
+//
+// 语义约束（不得改变既有可观察行为）：
+//   ① 不安装 SIGCHLD=SIG_IGN —— SIG_IGN 会让 waitpid 返回 ECHILD，
+//      直接破坏 os_wait / os_capture / os_spawn_capture / os_popen 的退出码语义；
+//   ② 不用 waitpid(-1, ...) —— 会"偷走"其它阻塞等待者（os_capture 等）的退出状态；
+//   ③ 只对【os_spawn 登记过的 pid】做 waitpid(pid, WNOHANG)，取到状态先存入状态箱，
+//      os_wait(pid) 优先从状态箱取 ⇒ "spawn→wait" 的既有用法（examples/m23d）结果不变。
+// 逃生舱：PX_NO_CHILD_REAP=1 关闭兜底回收（仅用于反证/消融；默认关闭即启用）。
+// 已知边界：状态箱为定长环形（PX_STASH_MAX）。若调用方对某 fire-and-forget 子进程
+//   永不 os_wait，其状态会占用一个槽位直到被环形覆盖；理论上（同一进程内 pid 被复用
+//   且调用方恰好对该 pid 调 os_wait）可能取到陈旧状态。窗口极小，已记档（Issue 54）。
+#define PX_REAP_MAX 8192        // 同时未回收的 fire-and-forget 子进程上限
+#define PX_STASH_MAX 1024       // 状态箱容量（环形覆盖，防无界增长）
+
+static pthread_mutex_t g_reap_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_t g_reap_th;
+static pid_t g_reap_pids[PX_REAP_MAX];   // 待兜底回收（os_spawn 登记）
+static int   g_reap_n = 0;
+static int   g_stash_pid[PX_STASH_MAX];  // 已回收、但尚未被 os_wait 取走的状态
+static int   g_stash_st[PX_STASH_MAX];
+static int   g_stash_wr = 0;
+static int   g_stash_ready = 0;
+static int   g_reap_on = -1;             // -1 未判定 / 0 关 / 1 开
+static int   g_reap_full_warned = 0;
+
+static int px_reap_enabled(void) {
+    if (g_reap_on < 0) {
+        const char* off = getenv("PX_NO_CHILD_REAP");
+        g_reap_on = (off && *off && strcmp(off, "0") != 0) ? 0 : 1;
+    }
+    return g_reap_on;
+}
+
+// 退出码约定（与 bi_os_wait 既有实现完全一致）
+static int64_t px_wait_code(int status) {
+    if (WIFEXITED(status)) return (int64_t)WEXITSTATUS(status);
+    if (WIFSIGNALED(status)) return 128 + (int64_t)WTERMSIG(status);
+    return -1;
+}
+
+static void px_stash_init_locked(void) {
+    if (g_stash_ready) return;
+    for (int i = 0; i < PX_STASH_MAX; i++) { g_stash_pid[i] = 0; g_stash_st[i] = -1; }
+    g_stash_ready = 1;
+}
+
+static void px_stash_put_locked(int pid, int st) {   // 调用方须持 g_reap_mu
+    px_stash_init_locked();
+    g_stash_pid[g_stash_wr] = pid;
+    g_stash_st[g_stash_wr] = st;
+    g_stash_wr = (g_stash_wr + 1) % PX_STASH_MAX;
+}
+
+static int px_stash_take(int pid, int* st) {
+    pthread_mutex_lock(&g_reap_mu);
+    px_stash_init_locked();
+    int hit = 0;
+    for (int i = 0; i < PX_STASH_MAX; i++) {
+        if (g_stash_pid[i] == pid && g_stash_st[i] >= 0) {
+            *st = g_stash_st[i];
+            g_stash_st[i] = -1;
+            g_stash_pid[i] = 0;
+            hit = 1;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_reap_mu);
+    return hit;
+}
+
+// 调用方接管该 pid（os_wait）⇒ 从兜底表移除
+static void px_reap_claim(pid_t pid) {
+    pthread_mutex_lock(&g_reap_mu);
+    for (int i = 0; i < g_reap_n; i++) {
+        if (g_reap_pids[i] == pid) { g_reap_pids[i] = g_reap_pids[--g_reap_n]; break; }
+    }
+    pthread_mutex_unlock(&g_reap_mu);
+}
+
+// 兜底回收线程：只回收【本表登记的 pid】，绝不用 waitpid(-1)。
+// 不接触任何 GC 托管对象（只碰 pid 与状态字），故无需注册进 GC 线程表，
+// 也不会被 stop-the-world 扫描 —— 线程栈内无 LXValue，无悬挂引用风险。
+static void* px_reap_thread(void* arg) {
+    (void)arg;
+    for (;;) {
+        int st;
+        pthread_mutex_lock(&g_reap_mu);
+        for (int i = 0; i < g_reap_n; ) {
+            pid_t p = g_reap_pids[i];
+            int r = waitpid(p, &st, WNOHANG);
+            if (r == p) {                       // 已退出 → 收入状态箱，僵尸即刻消失
+                px_stash_put_locked((int)p, st);
+                g_reap_pids[i] = g_reap_pids[--g_reap_n];
+                continue;
+            }
+            if (r < 0 && errno != EINTR) {      // ECHILD：已被 os_wait 自己收走
+                g_reap_pids[i] = g_reap_pids[--g_reap_n];
+                continue;
+            }
+            i++;                                // 仍在运行（或 EINTR）
+        }
+        pthread_mutex_unlock(&g_reap_mu);
+        struct timespec ts;
+        ts.tv_sec = 0;
+        ts.tv_nsec = 100 * 1000 * 1000L;        // 100ms
+        while (nanosleep(&ts, &ts) == -1 && errno == EINTR) {}
+    }
+    return NULL;
+}
+
+static void px_child_reap_register(pid_t pid) {
+    if (pid <= 0 || !px_reap_enabled()) return;
+    pthread_mutex_lock(&g_reap_mu);
+    if (g_reap_n >= PX_REAP_MAX) {
+        if (!g_reap_full_warned) {
+            g_reap_full_warned = 1;
+            fprintf(stderr, "[px-reap] 待回收子进程已达上限 %d：后续 fire-and-forget 派生不再兜底回收，"
+                            "请改用具名等待（os_wait）\n", PX_REAP_MAX);
+        }
+        pthread_mutex_unlock(&g_reap_mu);
+        return;
+    }
+    g_reap_pids[g_reap_n++] = pid;
+    pthread_mutex_unlock(&g_reap_mu);
+    // 惰性启动（首次出现 fire-and-forget 派生时）：不 spawn 的程序零开销
+    static pthread_mutex_t start_mu = PTHREAD_MUTEX_INITIALIZER;
+    static int started = 0;
+    pthread_mutex_lock(&start_mu);
+    if (!started) {
+        if (pthread_create(&g_reap_th, NULL, px_reap_thread, NULL) == 0) {
+            pthread_detach(g_reap_th);
+            started = 1;
+        }
+    }
+    pthread_mutex_unlock(&start_mu);
+}
+
 static LXValue bi_os_spawn(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     // M83-S2（Issue 20 GAP-PGID-1）：第 3 参可选 group:bool（默认 false 保持现状）→
@@ -7124,6 +7268,7 @@ static LXValue bi_os_spawn(LXValue* args, int nargs, void* ctx) {
     }
     for (int i = 0; i <= argc; i++) free(argv[i]);
     free(argv);
+    px_child_reap_register(pid);   // M112-S3（Issue 54）：登记兜底回收，杜绝 fire-and-forget 僵尸
     return px_int((int64_t)pid);
 }
 
@@ -7352,10 +7497,15 @@ static LXValue bi_os_wait(LXValue* args, int nargs, void* ctx) {
     if (nargs != 1 || args[0].type != PX_INT) px_error("os_wait 需要 (pid) 参数");
     pid_t pid = (pid_t)args[0].as.i;
     int status = 0;
-    if (waitpid(pid, &status, 0) < 0) return px_int(-1);
-    if (WIFEXITED(status)) return px_int((int64_t)WEXITSTATUS(status));
-    if (WIFSIGNALED(status)) return px_int(128 + (int64_t)WTERMSIG(status));
-    return px_int(-1);
+    // M112-S3（Issue 54）：兜底回收线程可能已收走该子进程 → 先取状态箱，
+    // 保证"spawn→wait"的既有语义（examples/m23d_proc_signal 的退出码断言）不变。
+    if (px_stash_take(pid, &status)) return px_int(px_wait_code(status));
+    px_reap_claim(pid);                       // 认领：此后由本线程负责回收
+    if (waitpid(pid, &status, 0) < 0) {
+        if (px_stash_take(pid, &status)) return px_int(px_wait_code(status));  // 极小竞窗兜底
+        return px_int(-1);
+    }
+    return px_int(px_wait_code(status));
 }
 
 static LXValue bi_os_kill(LXValue* args, int nargs, void* ctx) {
