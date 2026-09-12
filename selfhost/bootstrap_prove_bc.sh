@@ -35,7 +35,7 @@ WORK=/tmp/px_bootstrap
 mkdir -p "$WORK" "$BUILD"
 
 # 源码链（compiler.px 全 import 链 + runtime vm.c 变更影响）
-SRC_CHAIN="compiler.px codegen.px parser.px pxlexer.px cg_stmt.px cg_expr.px cg_module.px bc_emit.px ../runtime/vm.c ../runtime/vm.h"
+SRC_CHAIN="compiler.px codegen.px parser.px pxlexer.px cg_stmt.px cg_expr.px cg_module.px bc_emit.px ../runtime/vm.c ../runtime/vm.h ../runtime/runtime.c ../runtime/runtime.h"
 norm_bc() { grep -vE '^# BCModule ' ; }
 
 # 最新源码时间（compiler.px import 链）
