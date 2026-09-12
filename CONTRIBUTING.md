@@ -64,13 +64,26 @@ cd selfhost && ./bootstrap_prove_bc.sh       # BC 轨：golden/compiler.bc.dump�
 #    **C 轨 `bootstrap/pxc` 无人重烘**（自 M112 起落后源码，CI 结构性发现不了）。
 ./selfhost/rebake_bin.sh           # 重烘 bootstrap/pxc（静态 + 全 runtime）+ bootstrap/pxc_vm
 ./selfhost/rebake_bin.sh --check   # 断言入库件与「当前源码现编产物」行为一致（能红）
+#    M113-S1：**CI 已把它当门**（regression job「入库编译器重烘门」）—— 忘了重烘，PR 会红。
+#    探针 = selfhost/cases/ + cases_bad/ + cases_ok/ 全套（≈54 例 × 2 枚编译器），
+#    判 rc/stdout/stderr 逐字节；成本新检出 ≈17s，可忽略。
+#    注意：重烘**必须用全 runtime 档**缓存（脚本会拦裁剪档 —— 否则入库 pxc 会缺 runtime 能力）。
 
 # 6. 新增/改动功能时补对应用例（selfhost/cases/ 或 examples/）并更新 golden
 #    有意改动基准时重定基（两条基准须与源码同批提交）：
 #    cd selfhost && ./bootstrap_prove.sh --update-golden && ./bootstrap_prove_bc.sh --update-golden
+#    M113-S1：**用例必须带齐 golden** —— 缺 golden 现在判红（此前是「⚠️ 无 golden，先生成」后按通过处理，
+#    于是新增用例忘带 golden 会让门静默变绿）。辅助夹具（仅被 import，如 modstate.px）在
+#    diffcheck.sh 的 AUX_CASES 名单里显式声明、按"跳过"处理。
 ```
 
-> ⚠️ 自举证明 C 轨 `--fresh` 实测 ≈6.5-7 分钟（405s，8 核 16G 单线程）与约 1.6GB 内存；BC 轨全链 `--fresh` 约 12-15 分钟（见 MINI_SUBSET §十二.2）。若你的改动未触及 `selfhost/compiler.px` 及其模块，可跳过第 3 步并在 PR 描述中注明。
+> ⚠️ **时长（M113-S1 复测更正）**：自举证明 C 轨 `--fresh` 的耗时**取决于入库件是否重烘** ——
+> 入库件与源码同批时 **≈8s**（实测 8.3s）；入库件落后源码时 **≈7 分钟**（S0 实测旧件 411s）。
+> 本行原写"≈6.5-7 分钟"（另一处写 405s、Memory notes 写 ≈1.6GB），那是**旧入库件（缺 M104–M111 性能修复）**
+> 的数字，已按实测更正 —— 否则等于用「没重烘」的代价去描述「已重烘」的正常路径。
+> BC 轨全链 `--fresh` 的历史数字约 12-15 分钟（见 MINI_SUBSET §十二.2），M113-S1 **未复测**（CI 不跑该轨），
+> 暂按旧数字对待。
+> 若你的改动未触及 `selfhost/compiler.px` 及其模块，可跳过第 3 步并在 PR 描述中注明。
 
 ## 语言约束（写代码前必读）
 

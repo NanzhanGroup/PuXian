@@ -54,7 +54,22 @@ done
     echo "❌ 未找到可用 .rtcache（先跑：./tools/px build --full examples/hello.px）" >&2
     exit 1
 }
-echo "── 全 runtime 缓存：$CACHE（${best} 个 .o）"
+# 缓存完整度：全量档 = runtime 源集合全编（本机 23 个 .o）；裁剪档 = 自动裁剪（本机 7 个）。
+#   该数字由 runtime 源决定、跨机器稳定，故用阈值判档。
+#   M113-S1：**重烘必须用全量档** —— 用裁剪档链出来的 bootstrap/pxc 会缺 runtime 能力
+#   （S0 时正是这么误装过一枚 2.81MB 的"动态+裁剪"件，属必须挡住的坑）。
+#   --check 则容忍裁剪档：它只比对「同一份源码在两枚编译器下的 C 产物」，与链进多少 runtime 无关。
+FULL_MIN=15
+if [ "$best" -ge "$FULL_MIN" ]; then
+    echo "── runtime 缓存：$CACHE（${best} 个 .o = 全量档）"
+else
+    echo "── runtime 缓存：$CACHE（${best} 个 .o = 裁剪档）"
+    if [ "$CHECK" != "1" ]; then
+        echo "❌ 只有裁剪档缓存，重烘会把入库 pxc 链成 runtime 能力不全的件。" >&2
+        echo "   先生成全量缓存：./tools/px build --full examples/hello.px（或清掉 .rtcache 让本脚本自动生成）" >&2
+        exit 1
+    fi
+fi
 
 src_fingerprint() {
     # 源码链指纹（口径与 bootstrap_prove_bc.sh 的 SRC_CHAIN 一致 + 运行头）
@@ -82,29 +97,36 @@ link_c_track() {   # $1 = compiler_new.c  $2 = 输出
 
 if [ "$CHECK" = "1" ]; then
     # 「是否与当前源码产物一致」= 行为判据而非 md5（跨机器 gcc 不可复现）：
-    #   用入库 pxc 与「现编 pxc」对同一组探针编译，产物必须逐字节相同。
-    #   探针集合 = cases_ok（正例）+ cases_bad 的 codegen 负例。
+    #   用入库 pxc 与「现编 pxc」对同一组探针编译，rc / stdout / stderr 必须逐字节一致。
+    #
+    # M113-S1：探针集合从「cases_ok 正例 + codegen 负例」（S0 时仅 10 例）扩到**全套用例**
+    #   （cases/ + cases_bad/ + cases_ok/，跳过 import 夹具 modstate.px）。
+    #   旧集合过窄：源码改动落在集合之外就漏判（假绿），而本门的存在意义正是"别漏"。
+    #   成本实测可忽略：55 例 × 2 枚编译器 ≈ 1.5s（只编到 C，不过 gcc）。
     echo "── [--check] 入库 pxc vs 现编 pxc 行为对拍"
     mkdir -p "$BUILD"
     timeout 900 "$PXC" build "$CK" > "$BUILD/rebake_new.c" 2>/tmp/rebake_build.log || {
         echo "❌ 入库 pxc 无法编译当前源码（已失效）" >&2; tail -5 /tmp/rebake_build.log >&2; exit 1; }
     link_c_track "$BUILD/rebake_new.c" "$BUILD/rebake_new" || exit 1
-    bad=0
-    for f in "$ROOT"/selfhost/cases_ok/*.px "$ROOT"/selfhost/cases_bad/codegen_b*.px; do
+    bad=0; cnt=0
+    for f in "$ROOT"/selfhost/cases/*.px "$ROOT"/selfhost/cases_bad/*.px "$ROOT"/selfhost/cases_ok/*.px; do
         [ -e "$f" ] || continue
+        case "$(basename "$f")" in modstate.px) continue;; esac   # M70-S3 夹具，非用例
+        cnt=$((cnt+1))
         "$PXC" build "$f" > /tmp/rb_shipped.out 2>/tmp/rb_shipped.err; s=$?
-        "$BUILD/rebake_new" build "$f" > /tmp/rb_fresh.out 2>/tmp/rb_fresh.err; n=$?
-        if [ "$s" != "$n" ] || ! cmp -s /tmp/rb_shipped.out /tmp/rb_fresh.out \
+        "$BUILD/rebake_new" build "$f" > /tmp/rb_fresh.out 2>/tmp/rb_fresh.err; t=$?
+        if [ "$s" != "$t" ] || ! cmp -s /tmp/rb_shipped.out /tmp/rb_fresh.out \
            || ! cmp -s /tmp/rb_shipped.err /tmp/rb_fresh.err; then
-            echo "    ❌ $(basename "$f")：入库 pxc 与现编 pxc 行为不同"
+            echo "    ❌ $(basename "$f")：入库 pxc 与现编 pxc 行为不同（rc $s vs $t）"
             bad=$((bad+1))
         fi
     done
     if [ "$bad" -gt 0 ]; then
-        echo "❌ 入库 bootstrap/pxc 与当前源码不一致（$bad 例）⇒ 需重烘：./selfhost/rebake_bin.sh"
+        echo "❌ 入库 bootstrap/pxc 与当前源码不一致（$cnt 例中 $bad 例不同）"
+        echo "   ⇒ 重烘：./selfhost/rebake_bin.sh   （改过 selfhost/*.px 就必须重烘，否则用户拿到的是旧语义）"
         exit 1
     fi
-    echo "✅ 入库 bootstrap/pxc 与当前源码产物行为一致"
+    echo "✅ 入库 bootstrap/pxc 与当前源码产物行为一致（$cnt 例探针）"
     exit 0
 fi
 

@@ -55,6 +55,24 @@ norm_c() {
         | sed -E 's/[[:space:]]+$//'
 }
 
+# ---- 辅助夹具（非用例）：仅被其它用例 import，本身不参与对拍门 ----
+#   modstate.px = M70-S3 模块状态库（v04_module_state.px 的 import 侧夹具），无 golden。
+#   M113-S1：此前它落在 cases/*.px 的扫描里，各门都打"⚠️ 无 golden，先生成"后**按通过处理**
+#   —— 那是"门静默变绿"的另一种形态（同 Issue 58）。现改为显式跳过 + 名单集中声明。
+AUX_CASES="modstate.px"
+is_aux_case() {
+    local b; b="$(basename "$1")"
+    case " $AUX_CASES " in *" $b "*) return 0;; esac
+    return 1
+}
+
+# ---- golden 缺失 = 失败（M113-S1）----
+#   对拍门的意义是"与期望逐字节一致"；没有期望就无从判断。此前一律 warn + return 0，
+#   于是「新增用例忘带 golden」会让门静默变绿。现统一判红。
+missing_golden() {   # $1 = golden 相对路径（打印用）
+    echo "    ❌ 缺 golden: $1 —— 对拍门要求用例必须持有 golden（用入库工具链生成后随用例提交）"
+}
+
 # ---- M-B4：错误场景对拍（PuXian 输出 vs golden/errors/ 首行错误消息） ----
 check_error_file() {
     local f="$1" kind="$2"
@@ -88,12 +106,15 @@ check_parser_file() {
     base="$(basename "$f" .px)"
     echo "── parser 对拍: $f"
     "$PXPAR" "$f" 2>&1 | norm_ast > "$WORK/$base.px.ast"
-    norm_ast < "$GOLDEN_DIR/$base.ast" > "$WORK/$base.gold.ast" 2>/dev/null || { echo "    ⚠️ 无 golden，先生成"; return; }
+    if [ ! -f "$GOLDEN_DIR/$base.ast" ]; then missing_golden "golden/$base.ast"; return 1; fi
+    norm_ast < "$GOLDEN_DIR/$base.ast" > "$WORK/$base.gold.ast"
     if diff -q "$WORK/$base.px.ast" "$WORK/$base.gold.ast" >/dev/null 2>&1; then
         echo "    ✅ $base AST 一致"
+        return 0
     else
         echo "    ❌ $base 有差异"
         diff "$WORK/$base.px.ast" "$WORK/$base.gold.ast" | head -10
+        return 1
     fi
 }
 
@@ -104,12 +125,15 @@ check_lexer_file() {
     base="$(basename "$f" .px)"
     echo "── lexer 对拍: $f ($mode)"
     "$PXL" "$f" 2>&1 | norm_tokens > "$WORK/$base.px.tokens"
+    if [ ! -f "$GOLDEN_DIR/$base.tokens" ]; then missing_golden "golden/$base.tokens"; return 1; fi
     norm_tokens < "$GOLDEN_DIR/$base.tokens" > "$WORK/$base.gold.tokens"
     if diff -q "$WORK/$base.px.tokens" "$WORK/$base.gold.tokens" >/dev/null 2>&1; then
         echo "    ✅ $base token 流一致"
+        return 0
     else
         echo "    ❌ $base 有差异"
         diff "$WORK/$base.px.tokens" "$WORK/$base.gold.tokens" | head -10
+        return 1
     fi
 }
 
@@ -131,13 +155,16 @@ check_codegen_file() {
     err=$(cat "$WORK/$base.stderr" 2>/dev/null)
     [ -z "$err" ] || echo "    ℹ️  stderr 诊断（不计入产物对拍）：$(echo "$err" | head -2 | tr '\n' '|')"
     norm_c <<< "$out" > "$WORK/$base.px.c"
-    norm_c < "$GOLDEN_DIR/$base.c" > "$WORK/$base.gold.c" 2>/dev/null || { echo "    ⚠️ 无 golden，先生成"; return; }
+    if [ ! -f "$GOLDEN_DIR/$base.c" ]; then missing_golden "golden/$base.c"; return 1; fi
+    norm_c < "$GOLDEN_DIR/$base.c" > "$WORK/$base.gold.c"
     if diff -q "$WORK/$base.px.c" "$WORK/$base.gold.c" >/dev/null 2>&1; then
-        echo "    ✅ $base C 源码一致"
-    else
         # M63-L10：浮点字面量已全精度（无 %g 截断豁免）；此处任何差异即失败
+        echo "    ✅ $base C 源码一致"
+        return 0
+    else
         echo "    ❌ $base C 源码有差异"
         diff "$WORK/$base.px.c" "$WORK/$base.gold.c" | head -10
+        return 1
     fi
 }
 
@@ -231,28 +258,40 @@ check_file() {
     local ok=1
     # lex
     "$PXL" "$f" 2>&1 | norm_tokens > "$WORK/$base.px.tokens"
-    norm_tokens < "$GOLDEN_DIR/$base.tokens" > "$WORK/$base.gold.tokens" 2>/dev/null || { echo "    ⚠️ 无 golden，先生成"; return 0; }
-    if ! diff -q "$WORK/$base.px.tokens" "$WORK/$base.gold.tokens" >/dev/null 2>&1; then
-        echo "    [FAIL] lex token 流不一致"; diff "$WORK/$base.px.tokens" "$WORK/$base.gold.tokens" | head -8; ok=0
+    if [ ! -f "$GOLDEN_DIR/$base.tokens" ]; then
+        missing_golden "golden/$base.tokens"; ok=0
     else
-        echo "    [OK]   lex"
+        norm_tokens < "$GOLDEN_DIR/$base.tokens" > "$WORK/$base.gold.tokens"
+        if ! diff -q "$WORK/$base.px.tokens" "$WORK/$base.gold.tokens" >/dev/null 2>&1; then
+            echo "    [FAIL] lex token 流不一致"; diff "$WORK/$base.px.tokens" "$WORK/$base.gold.tokens" | head -8; ok=0
+        else
+            echo "    [OK]   lex"
+        fi
     fi
     # parse
     "$PXPAR" "$f" 2>&1 | norm_ast > "$WORK/$base.px.ast"
-    norm_ast < "$GOLDEN_DIR/$base.ast" > "$WORK/$base.gold.ast" 2>/dev/null || { echo "    ⚠️ 无 golden，先生成"; return 0; }
-    if ! diff -q "$WORK/$base.px.ast" "$WORK/$base.gold.ast" >/dev/null 2>&1; then
-        echo "    [FAIL] parse AST 不一致"; diff "$WORK/$base.px.ast" "$WORK/$base.gold.ast" | head -8; ok=0
+    if [ ! -f "$GOLDEN_DIR/$base.ast" ]; then
+        missing_golden "golden/$base.ast"; ok=0
     else
-        echo "    [OK]   parse"
+        norm_ast < "$GOLDEN_DIR/$base.ast" > "$WORK/$base.gold.ast"
+        if ! diff -q "$WORK/$base.px.ast" "$WORK/$base.gold.ast" >/dev/null 2>&1; then
+            echo "    [FAIL] parse AST 不一致"; diff "$WORK/$base.px.ast" "$WORK/$base.gold.ast" | head -8; ok=0
+        else
+            echo "    [OK]   parse"
+        fi
     fi
     # codegen → C（M113-S0 / Issue 57-58：**只看 stdout**，stderr 诊断不计入产物；
     #   与 check_codegen_file 同口径 —— 诊断通道与产物通道分 fd，见 M112-S0/Issue 45）
     "$PXC" build "$f" 2>"$WORK/$base.stderr" | norm_c > "$WORK/$base.px.c"
-    norm_c < "$GOLDEN_DIR/$base.c" > "$WORK/$base.gold.c" 2>/dev/null || { echo "    ⚠️ 无 golden，先生成"; return 0; }
-    if ! diff -q "$WORK/$base.px.c" "$WORK/$base.gold.c" >/dev/null 2>&1; then
-        echo "    [FAIL] C 源码不一致"; diff "$WORK/$base.px.c" "$WORK/$base.gold.c" | head -8; ok=0
+    if [ ! -f "$GOLDEN_DIR/$base.c" ]; then
+        missing_golden "golden/$base.c"; ok=0
     else
-        echo "    [OK]   codegen(C)"
+        norm_c < "$GOLDEN_DIR/$base.c" > "$WORK/$base.gold.c"
+        if ! diff -q "$WORK/$base.px.c" "$WORK/$base.gold.c" >/dev/null 2>&1; then
+            echo "    [FAIL] C 源码不一致"; diff "$WORK/$base.px.c" "$WORK/$base.gold.c" | head -8; ok=0
+        else
+            echo "    [OK]   codegen(C)"
+        fi
     fi
     # run → stdout
     if [ -f "$GOLDEN_DIR/$base.stdout" ]; then
@@ -323,43 +362,63 @@ fi
 
 if [ "${1:-}" = "--codegen" ]; then
     shift
+    # M113-S1（Issue 58 续）：**判退出码**。原先无论多少例不一致都 `exit 0`，
+    #   叠加 CI 侧 `diffcheck.sh --codegen | tail`（无 pipefail）⇒ 门红也进不了 CI。
+    fail=0; n=0; bad=0
+    echo "── codegen 对拍（M-B6，cases/*.px vs golden/*.c；stderr 诊断不计入产物）──"
     if [ -n "${1:-}" ]; then
-        check_codegen_file "$1" run
+        n=1
+        check_codegen_file "$1" run || { fail=1; bad=1; }
     else
         for f in "$(dirname "$0")"/cases/*.px; do
             [ -e "$f" ] || continue
-            check_codegen_file "$f" run
+            if is_aux_case "$f"; then
+                echo "── codegen 对拍: $f（辅助夹具，非用例 → 跳过）"
+                continue
+            fi
+            n=$((n+1))
+            check_codegen_file "$f" run || { fail=1; bad=$((bad+1)); }
         done
     fi
-    exit 0
+    if [ "$fail" = "0" ]; then
+        echo "codegen 对拍全部一致 ✅（$n 例）"
+        exit 0
+    else
+        echo "存在差异 ❌（$n 例中 $bad 例不一致）"
+        exit 1
+    fi
 fi
 
 if [ "${1:-}" = "--parser" ]; then
     shift
+    fail=0
     if [ -n "${1:-}" ]; then
-        check_parser_file "$1"
+        check_parser_file "$1" || fail=1
     else
         for f in "$(dirname "$0")"/cases/*.px; do
             [ -e "$f" ] || continue
             case "$(basename "$f")" in v0*.px) continue;; esac  # M-B5 用例走 --value
-            check_parser_file "$f"
+            is_aux_case "$f" && continue                        # M70-S3 夹具，非用例
+            check_parser_file "$f" || fail=1
         done
     fi
-    exit 0
+    if [ "$fail" = "0" ]; then echo "parser 对拍全部一致 ✅"; exit 0; else echo "存在差异 ❌"; exit 1; fi
 fi
 
 if [ "${1:-}" = "--lexer" ]; then
     shift
+    fail=0
     if [ -n "${1:-}" ]; then
-        check_lexer_file "$1" run
+        check_lexer_file "$1" run || fail=1
     else
         for f in "$(dirname "$0")"/cases/*.px; do
             [ -e "$f" ] || continue
             case "$(basename "$f")" in v0*.px) continue;; esac  # M-B5 用例走 --value
-            check_lexer_file "$f" run
+            is_aux_case "$f" && continue                        # M70-S3 夹具，非用例
+            check_lexer_file "$f" run || fail=1
         done
     fi
-    exit 0
+    if [ "$fail" = "0" ]; then echo "lexer 对拍全部一致 ✅"; exit 0; else echo "存在差异 ❌"; exit 1; fi
 fi
 
 if [ "${1:-}" = "--all" ]; then

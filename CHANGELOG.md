@@ -6,6 +6,50 @@
 
 ## [Unreleased]
 
+### M113-S1 · 门判退出码 + 入库件重烘进 CI + v0 系 golden 重定基（qg-issue 58 续）
+
+> **主题：门红必须真的拦得住东西。** S0 修好了「入库件落后源码」，但**门本身还在漏**：
+> `diffcheck.sh` 的 `--lexer/--parser/--codegen` 三个分支**恒 `exit 0`**，
+> CI 侧又是 `... 2>&1 | tail`（管道退出码取自 tail、无 pipefail）⇒ **门红在 CI 里永远是绿**。
+> S1 两头都堵，并把「改了源码忘了重烘」变成 CI 可拦。
+
+**① 入库件重烘门进 CI**
+- `.github/workflows/ci.yml` regression job 新增步骤「入库编译器重烘门 — 入库件 vs 现编件」，调用 `selfhost/rebake_bin.sh --check`。
+- `--check` 探针集合由 S0 的 10 例扩到**全套 54 例**（`cases/` + `cases_bad/` + `cases_ok/`，跳过 import 夹具）；
+  成本实测：55 例 × 2 枚编译器 ≈1.5s（只编到 C、不过 gcc），整步在新检出 ≈17s。
+- `rebake_bin.sh` 增**缓存档位守卫**：重烘必须用全 runtime 档（本机 23 个 .o），裁剪档（7 个）**直接拒绝**
+  —— S0 时正是用裁剪档误装过一枚 2.81MB 的残缺件；`--check` 则容忍裁剪档（只比对 C 产物，与链进多少 runtime 无关）。
+
+**② v0 系 codegen golden 重定基（S0 遗留的 3 例红）**
+- `golden/v01_value.c` / `v02_env.c` / `v03_module.c` 停在 M62-L5，落后 M63-L10（浮点全精度）与 M72-S2（源位置插桩）
+  ⇒ 单跑 `--codegen` 恒 3 例红。已用入库工具链重定基；差异逐行分类核对：391 + 114 + 135 行中
+  **仅 3 行非插桩**（2 行 = float 全精度 `1.41421` → `1.4142135623730951`；1 行 = 被插桩行挤掉的空行）。
+- 补 `golden/v04_module_state.c`（v0 系此前只有 01–03 有 golden），v0 系 codegen 覆盖补齐（`--codegen` 19 例全绿）。
+
+**③ 门判退出码 + 封堵"静默通过"**
+- `check_lexer_file` / `check_parser_file` / `check_codegen_file` 改为返回 0/1（此前只打印 ❌、恒返回 0）；
+- `--lexer` / `--parser` / `--codegen` 三个入口聚合失败并 `exit 1`（`--codegen` 另打 `N 例中 M 例不一致` 小结）；
+- **缺 golden 判红**（此前一律「⚠️ 无 golden，先生成」后按通过处理 ⇒ 新增用例忘带 golden 会让门静默变绿）；
+  `--all` 的 `check_file` 同步收紧（缺 golden 记 `ok=0` 并继续跑其余项，不再提前 `return 0`）；
+- 辅助夹具 `modstate.px`（M70-S3，仅被 v04 import）移入 `AUX_CASES` 名单**显式跳过**，不再以「无 golden」的形态出现在各门里。
+
+**④ CI 侧管道不再吞码**
+- regression job 的 9 个门步骤统一 `set -o pipefail`（此前 `... 2>&1 | tail -N` 的退出码取自 tail）。
+
+**负向对照（全部实测——门必须能红）**
+- 污染 1 例 C golden → `--codegen` rc=1；**删 1 例 golden → rc=1**（旧行为：静默通过）；
+- 污染 1 例 token golden → `--lexer` rc=1（旧行为：恒 rc=0）；
+- **模拟 CI 真实场景**：改 `codegen.px` 后不重烘 → `rebake_bin.sh --check` **rc=1（54 例中 24 例报"行为不同"）**。
+
+**同批复跑（全绿，rc=0）**：`--codegen`（19 例）/ `--lexer` / `--parser` / `--errors` / `--value` / `--interp` /
+`--all` / `engine_parity.sh` / `zombie_reap_check.sh`（4/4）/ `bootstrap_prove.sh`（自举成立）/ `rebake_bin.sh --check`（54 例）。
+
+**文档**
+- `CONTRIBUTING`：第 5 步注明 CI 已把重烘当门 + 全 runtime 档要求；第 6 步注明「用例必须带齐 golden（缺即红）」；
+  更正自举证明 `--fresh` 的时长描述 —— 原写"≈6.5-7 分钟"，那是**未重烘的旧入库件**的数字（S0 实测 411s），
+  入库件与源码同批时实测 **8.3s**；BC 轨历史数字未复测（CI 不跑该轨），按旧值对待。
+- `selfhost/bootstrap_prove.sh`：步骤 1 的时长提示同步更正（8s vs 旧件 ≈50× 慢）。
+
 ### M113-S0 · 弃元 `_` 语义收口 + 入库编译器重烘（qg-issue 57/58）
 
 > **主题：不该报的别报。** M112 让「失败被看见」；S0 收口它的反作用面 ——
