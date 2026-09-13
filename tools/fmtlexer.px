@@ -60,12 +60,14 @@ def emit(kind, val):
     emit_at(kind, val, g_line, g_col)
 def emit_token(t):
     emit_at(t[0], t[1], t[2], t[3])
+# M114-S1（Issue 61）：同 selfhost/pxlexer.err —— 诊断走 stderr + exit(1)
+#   （pxfmt 的 stdout 是**格式化结果**，诊断混入会污染用户拿到的新代码）
 def err(code, msg):
-    print("错误: " + str(g_line) + ":" + str(g_col) + ": 词法错误 " + code + ": " + msg)
-    panic("lex " + code)
+    print_err("错误: " + str(g_line) + ":" + str(g_col) + ": 词法错误 " + code + ": " + msg)
+    exit(1)
 def err_at(code, msg, line, col):
-    print("错误: " + str(line) + ":" + str(col) + ": 词法错误 " + code + ": " + msg)
-    panic("lex " + code)
+    print_err("错误: " + str(line) + ":" + str(col) + ": 词法错误 " + code + ": " + msg)
+    exit(1)
 # ---------- 字符分类 ----------
 def is_digit(c):
     return c != "" and c >= "0" and c <= "9"

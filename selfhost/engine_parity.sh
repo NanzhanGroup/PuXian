@@ -2,11 +2,14 @@
 # ============================================================
 # 引擎一致性门（engine parity）—— Issue 51
 # ------------------------------------------------------------
-# 契约（三断言）：
+# 契约（四断言）：
 #   A. 默认轨（tools/px，用户面引擎）对负例必须失败：rc != 0
 #   B. 默认轨失败时 stdout 必须为空（Issue 45：诊断不得混进产物通道）
 #   C. 默认轨 stderr 必须含 golden 诊断正文；基准轨合并流首行 == golden
 #      （基准轨契约与 diffcheck.sh --errors 一致，不改既有口径）
+#   D. **基准轨（bootstrap/pxc）同样必须 stdout 空 + stderr 含 golden**
+#      （M114-S1 / Issue 61：原先基准轨只查合并流首行，且"诊断出口"仅统计不判据
+#        ⇒ lex/parse 两族把诊断写进 stdout 25/30 例而本门全绿）
 #
 # 退出码：0 = 全部门通过；1 = 有分歧
 #
@@ -54,20 +57,29 @@ pass=0; bad=0; xfail=0; xpass=0; fd_out_stdout=0; fd_out_stderr=0
 [ -x "$PXDEF" ] || { echo "❌ 缺少默认轨入口 $PXDEF" >&2; exit 1; }
 
 echo "── 引擎一致性门：默认轨（用户面）vs 基准轨 ──"
-for f in selfhost/cases_bad/codegen_b*.px; do
+# M114-S1（Issue 61）：负例集合从 codegen_b* 扩到 cases_bad/*.px —— lex/parse 两族的
+#   诊断通道与 codegen **同病**（诊断走 stdout，而 stdout 是产物通道），原先不在本门
+#   覆盖内。kind 由 base 前缀推出（lex_* / parse_* / codegen_*）→ golden 文件名同构。
+for f in selfhost/cases_bad/*.px; do
     [ -e "$f" ] || continue
     base=$(basename "$f" .px)
     if [ $# -gt 0 ] && [ "$base" != "$1" ]; then continue; fi
-    gold=$(cat "$GOLD/codegen.$base.txt" 2>/dev/null)
+    kind=${base%%_*}
+    gold=$(cat "$GOLD/$kind.$base.txt" 2>/dev/null)
     if [ -z "$gold" ]; then
-        echo "    ⚠️  $base 无 golden（$GOLD/codegen.$base.txt），跳过"
+        echo "    ⚠️  $base 无 golden（$GOLD/$kind.$base.txt），跳过"
         continue
     fi
 
-    # 基准轨（与 diffcheck --errors 同契约：合并流首行）
+    # 基准轨（M114-S1 起：诊断通道**也是判据** —— 与默认轨同样必须 stdout 空、stderr 含 golden）
     "$PXC" build "$f" >"$WORK/c.out" 2>"$WORK/c.err"; crc=$?
     cfirst=$(cat "$WORK/c.out" "$WORK/c.err" | head -1)
-    if grep -qF "$gold" "$WORK/c.out"; then fd_out_stdout=$((fd_out_stdout+1)); else fd_out_stderr=$((fd_out_stderr+1)); fi
+    cbytes=$(wc -c <"$WORK/c.out")
+    if [ "$cbytes" -eq 0 ] && grep -qF "$gold" "$WORK/c.err"; then
+        fd_out_stderr=$((fd_out_stderr+1))
+    else
+        fd_out_stdout=$((fd_out_stdout+1))
+    fi
 
     # 默认轨（用户面）
     "$PXDEF" build "$f" >"$WORK/d.out" 2>"$WORK/d.err"; drc=$?
@@ -76,6 +88,9 @@ for f in selfhost/cases_bad/codegen_b*.px; do
     why=""
     [ "$crc" -ne 0 ] || why="基准轨 rc=0（未报错）"
     [ "$cfirst" = "$gold" ] || why="${why:+$why；}基准轨首行 ≠ golden：[$cfirst]"
+    # M114-S1（Issue 61）：基准轨也必须「诊断在 stderr、产物通道干净」
+    [ "$cbytes" -eq 0 ] || why="${why:+$why；}基准轨 stdout 非空（${cbytes}B，诊断混进产物通道：Issue 61）"
+    grep -qF "$gold" "$WORK/c.err" || why="${why:+$why；}基准轨 stderr 未含 golden 正文（Issue 61）"
 
     if [ "$drc" -eq 0 ]; then
         reason=$(xfail_reason "$base") || reason=""
@@ -170,12 +185,15 @@ done
 
 echo "── 小计：负例 通过 $pass · 失败 $bad · xfail $xfail · xpass $xpass ──"
 echo "── 小计：正例 通过 $ok_pass · 失败 $ok_bad ──"
-echo "── 基准轨诊断出口：stdout $fd_out_stdout 例 / stderr $fd_out_stderr 例（仅供参考，非判据）──"
+# M114-S1（Issue 61）：诊断出口从「仅供参考」升为**判据** —— 基准轨只要还有一例
+#   把诊断写进 stdout（= 产物通道），即判红（修复前实测 25/30 例）。
+echo "── 基准轨诊断出口：stderr $fd_out_stderr 例 / stdout $fd_out_stdout 例（判据：stdout 必须 0 例）──"
+[ "$fd_out_stdout" -eq 0 ] || { echo "❌ 基准轨有 $fd_out_stdout 例把诊断写进了 stdout（产物通道）—— Issue 61 回归" >&2; bad=$((bad+1)); }
 bad=$((bad+ok_bad))
 if [ "$bad" -gt 0 ]; then
     echo "❌ 引擎一致性门失败"
     echo "   提示 1：若默认轨静默通过，先确认入库二进制是否已按当前源码重烘："
-    echo "           cp selfhost/build/compiler_vm bootstrap/pxc_vm"
+    echo "           ./selfhost/rebake_bin.sh && ./selfhost/rebake_bin.sh --check-all"
     echo "   提示 2：若基准轨首行不符，golden/errors 与编译器源码可能不同批更新。"
     exit 1
 fi

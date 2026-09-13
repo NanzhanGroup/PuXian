@@ -6,6 +6,133 @@
 
 ## [Unreleased]
 
+### M114-S4 · PR #8 首次真机 CI 两处红 —— 都是「门自己不可信」（qg-issue 61/55）
+
+> **主题：新门第一次上真机，红了两处；两处都不是新代码的功能错，而是门自身的缺陷。**
+> （另有一处红是本机复刻 CI 才暴露的：golden 未与源码同批重定基。）
+
+**① regression job 红：`--check-all` 在 CI 报 4/14 件「非当前源码烘出」（指纹依赖 locale）**
+- 根因：`closure() | LC_ALL 未钉死 sort -u` —— **排序受 locale 影响**。本机 `en_US.UTF-8`
+  （glibc 排序：`_` 基本权重可忽略）与 CI（C 语言环境，逐字节序）对 `i_err.px` vs `ibuiltin.px`、
+  `tools/../selfhost/…` vs `tools/lint_core.px` 这类名字给出**不同顺序** ⇒ 同一份源码
+  **算出不同指纹**：实测 C/C.UTF-8/POSIX 得 `PXSRC-7716b5f78932a71a`（= CI 期望值），
+  `en_US.UTF-8` 得 `PXSRC-b0e380ca15c1a775`（= 入库件内嵌值）。
+  14 件里恰好 4 件踩中（`pxi`/`pxi_vm`：闭包含 `i_err.px`；`pxcheck`/`pxlint`：闭包含 `tools/../…` 路径）。
+- 修法：脚本顶部 `export LC_ALL=C` / `LANG=C`（逐字节排序 = 可复现），`sort` 处再显式一次；
+  全件重烘固化；**同一份源码在两种 locale 下算出同一指纹**（本机双 locale 复核 14/14）。
+- 教训（与本门同源）：**一个门若依赖环境，它给出的「红/绿」就不是事实。**
+
+**② lint job 红：`tools/fmtlexer.px` L002「未定义变量: 'print_err'」（名册副本漂移）**
+- 根因：`tools/pxlint.px` 与 `tools/pxcheck.px` **各自手抄一份**内置名册（注释自称「对齐 Rust
+  lint.rs builtin_names」），而**权威名册**在 `selfhost/interp.px`（解释器运行期注册）。
+  M114-S1 把诊断改走 `print_err`（**真内置**）后 lint 立刻误报 —— 实测两份副本**各缺 27 个**
+  真实内置（`print_err` / `flush` / `round` / `floor` / `ceil` / `exp` / `log` / `sin` / `cos` /
+  `random*` / `mmap` / `ffi_call` / `flatten` / `unique` … 与 `dict` / `tuple` 构造器）。
+- 修法：两份名册补齐 27 名（254 名，两副本逐字节相等）；**新增防漂移门**
+  `selfhost/builtin_list_check.sh`（判据：interp 权威 ⊆ 两副本，且两副本彼此相等；反向不判 ——
+  `tcp_listen`/`sqlite_open` 这类由 runtime/FFI 注册的名字不在 interp 名册里，是合法的），
+  已进 CI lint job。
+- ⚠️ **残留（如实登记）**：名册**仍是副本**，本切片只做到「漂移立刻红」；根治（单一事实源：
+  把名册提为 `selfhost/` 顶层常量，`interp.px` 与两个 lint 工具共同 import）留待后续切片。
+
+**③ 本机复刻 CI 才暴露的第三处红：C 轨 / BC 轨 golden 未随 M114-S1 重定基**
+- M114-S1 改了 `selfhost/{pxlexer,parser}.px`（诊断走 stderr + `exit(1)`）却**没重定基基准**
+  ⇒ 自举证明必红。CI 上该步被前一步失败**跳过**（step 7 红 ⇒ 8–16 全 skipped），
+  是本机逐步复刻才看见的 —— **「跳过」不等于「通过」，这正是分步门要一起看的原因。**
+- 重定基前审计（拒绝盲重定基）：
+  - C 轨 `golden/compiler.c`：**忽略 `px_srcline` 后仅 12 行真差异**（3 个函数 × `print`→`print_err`、
+    `panic`→`exit`）；其余 3210 行是**源码行号位移**（S1 在 `pxlexer.px`/`parser.px` 插了注释行，
+    该文件全部语句的 `px_srcline` 顺延）。总差异 1611 改 / 1611 增删对称，行数不变。
+  - BC 轨 `golden/compiler.bc.dump`：常量池 988 → 986（`panic` 的 `"lex "` 不再引用）、
+    全局表 `panic`→`exit` 与新增 `print_err` ⇒ 常量/全局**索引级联重编号**（30816 → 30808 行）。
+- 重定基后**双轨自证**：C 轨 15228 行逐字节一致；BC 轨 30808 行逐字节一致（VM 引擎重放）。
+
+**④ 验收（全部本机实测）**
+- 复刻 CI regression job **13 步全绿**（含两道重烘门、--check-all、六个对拍模式、
+  引擎一致性门、僵尸门、自举证明）；lint job 复刻全绿（compiler 主入口 + tools 16 文件 0/0）。
+- 负向对照：名册门注掉 `print_err` ⇒ 红（报 1 缺项 + 副本漂移）；再注掉 `unique` ⇒ 红。
+- `--check-all` 在 `LANG=C` 与 `LANG=en_US.UTF-8` **两种 locale** 下均 **14/14**。
+
+### M114-S3 · `.rtcache` 陈旧缓存被重烘选中（qg-issue 62）
+
+> **主题：件是「当前源码」烘的，但链进去的 runtime 可能是旧的一份。**
+> 起因：M114-S2 给僵尸门补解释器轨断言 E 时，**重烘后的 `px run` 仍留 5 个 `<defunct>`**。
+
+**① 根因**
+- `.rtcache/<key>` 按 key（runtime 源 × cc × 裁剪集）隔离；改 runtime 后**老目录成孤儿**；
+- `select_cache()` 原判据是「`.o` 数最多」—— 而**新旧目录都是全量档、`.o` 数相同（本机 23）**
+  ⇒ 判据退化为「按遍历顺序取第一个」⇒ 命中老目录；
+- 实锤：选中项 `190308f2b1c16b59` 的 `runtime.o` **不含** `PX_NO_CHILD_REAP`（Issue 54 修复），
+  而当前 runtime 源的 key 是 `e210498567f2ca64`（含该标记）。
+
+**② 为什么三层门都看不见**
+- 重烘门比对**编译器行为**（rc/stdout/stderr、字节码镜像）—— 与 runtime 里的回收线程无关；
+- `--check-all` 的指纹口径是**源码内容**：回答「源码变过吗」，**不回答**「缓存里的 .o 是不是这份源码编的」；
+- 僵尸门 A/B/C/D 覆盖**编译产物**轨，解释器轨此前**零覆盖**（断言 E 正是为此而加）。
+
+**③ 修法**
+- `select_cache()`：**先跑 `tools/px build --full`**（按 `rt_key` 命中/生成当前缓存），
+  再选 **mtime 最新**的全量档目录；**不在本脚本内复算 key**（必然腐化）；
+- 重烘（`rebake`/`rebake-all`）强制全量档；`--check`/`--check-vm` 仍容忍裁剪档。
+
+**④ ⚠️ 回溯影响（如实登记）**
+- M113 及更早经 `rebake_bin.sh` 重烘的 `bootstrap/pxc` / `pxc_vm` **同样缺最新 runtime 修复** ——
+  本切片的全件重烘一并修正（件大小同时变化，见 S2 的体积登记）。
+
+### M114-S2 · bootstrap 全件重烘 + 全件源码链门（qg-issue 55）
+
+> **主题：Issue 58 只治了 2 件，而 `bootstrap/` 里实际有 14 件。**
+> `--check-all` 实测（全件重烘前）：**12/14 件无内嵌指纹**（来源不可判定）+ 2 件口径过期。
+> 用户面后果最重的是 `px run` → `bootstrap/pxi`：它**内嵌 runtime**，一直停在 M110
+> ⇒ Issue 54 的僵尸兜底回收在解释轨**不生效**（实测 `px run` 留 5 个 `<defunct>`，
+> 而 zombie 门 A/B/C/D 全绿 —— 门看不见用户真实走的那条路）。
+
+**① `rebake_bin.sh` 全件化**
+- 新增**入库件表**（14 件：`pxc` `pxc_vm` `pxi` `pxi_vm` `pxl` `pxpar` `pxfmt` `pxbench`
+  `pxcheck` `pxdoc` `pxlint` `pxlsp` `pxmcp` `pxtest`），生成轨（C 文本 / 字节码镜像）与
+  链接方式（static / dynamic）**照 `ldd` + `selfhost/build/interp_vm.c` 实测**，不顺手改链接形态；
+- **指纹口径升级**：`compiler.px` 专用的 8 文件清单 → **件级 import 闭包**（递归到不动点，
+  `sort -u`）。实测更严（`compiler.px` 闭包多含 `astdump.px`）；`pxc`/`pxc_vm` 共用入口源
+  ⇒ 同一指纹。旧的 `src_fingerprint()` 保留仅供对照，不再被调用；
+- 新增 `--rebake-all`（全件重烘，**逐件报告**，单件失败不连带）与 `--check-all`
+  （全件指纹门，**O(1)**，进 CI）；
+- `link_entry()` 把 static/dynamic 参数化（统一库列表）；`link_c_track`/`link_vm_track`
+  原样保留给已验证的 `--check`/`--check-vm` 路径。
+
+**② 解释器轨纳入僵尸门（Issue 54 的覆盖缺口）**
+- `zombie_reap_check.sh` 新增**断言 E**：`px run <探针>`（`bootstrap/pxi`）僵尸数必须 == 0
+  （契约由四断言扩为五断言；负向对照：旧 `pxi` ⇒ 5，门红）。
+
+**③ 全件重烘 + 回归**
+- **14/14 件**由当前源码烘出并带内嵌指纹；`--check-all` 全绿；
+- ⚠️ **体积变化（口径统一，如实登记）**：`bootstrap/pxl` 3,683,032 B → 9,256,672 B
+  （旧件是裁剪 runtime 口径，无法复现；统一为全 runtime ⇒ 仓库约 +5.6 MB）；
+  其余件 +80 ~ +249 KB（含 M72-S2 源位置插桩 + 指纹常量）；
+- 行为回归：`diffcheck --all` / `--errors` / `--lexer` / `--parser` 、`engine_parity`、
+  `zombie_reap_check`、双轨自举证明 —— 全绿（见下条 M114-S1 的实测）。
+
+### M114-S1 · 诊断通道收口：lexer/parser 的 print+panic → print_err+exit（qg-issue 61）
+
+> **主题：Issue 45 当年只修了 `cg_perr` 一处，lexer/parser 三处漏修。**
+> 25/30 个负例把诊断**写进产物通道**（stdout）—— 用户面 `px build` 只看到「编译失败」
+> 加一行 `运行时错误 [err 行62]`（内部函数名 + `pxlexer.px` 的行号），真诊断完全不可见。
+
+**① 三处 err 与 `cg_perr` 同构**
+- `selfhost/pxlexer.px` `err`/`err_at`、`selfhost/parser.px` `perr`、
+  `tools/fmtlexer.px` `err`/`err_at`：`print(...) + panic(...)` → **`print_err(...) + exit(1)`**
+  （诊断走 stderr、产物通道干净、不再泄漏内部行号）；
+- 实测：30/30 负例「stderr 首行 == golden **且 stdout == 0B**」；
+  **24/24 正常例产物逐字节不变**（只动诊断路径，不动编译结果）。
+
+**② 门收紧（两处，均可负向对照）**
+- `diffcheck.sh --errors`：`2>&1 | head -1`（合并流取首行，靠取序侥幸）→ **分离捕获**
+  + 断言「stdout 必须为空」；
+- `engine_parity.sh`：负例集 `codegen_b*.px` → **`cases_bad/*.px`**（kind 由前缀推 golden 名）；
+  **基准轨**纳入「stdout 空 + stderr 含 golden」同样断言；「诊断出口」由**统计**升为**判据**
+  （stdout 出口必须 0 例）；
+- 负向对照（修复前 + 旧入库件）：`diffcheck --errors` **26 ❌ / exit 1**；
+  `engine_parity` 负例 **通过 5 · 失败 25**、诊断出口 stdout **25 例** ⇒ exit 1。
+
 ### M113-S2 · VM 轨（用户面默认轨）重烘门 + 出厂源码链指纹（qg-issue 58 续）
 
 > **主题：给默认轨补上门，并让「这枚入库件是不是当前源码烘的」变成 O(1) 可判。**
