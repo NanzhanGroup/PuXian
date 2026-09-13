@@ -22,6 +22,13 @@ on:
 permissions:
   contents: write
 
+# ---- Issue 41-B：串行化发布 ----
+# 根治"较晚完成的旧版本发布覆盖新版本"（2026-09-11 实况：m111 先发、m110 后发覆盖）。
+# cancel-in-progress: false 是刻意的 —— 发布**不可被打断**（中断会留下半推送的仓库树）。
+concurrency:
+  group: ${{ github.workflow }}-publish
+  cancel-in-progress: false
+
 jobs:
   release:
     name: 构建发布包 + 创建 GitHub Release
@@ -379,6 +386,12 @@ jobs:
             echo "⏸ GPG_PRIVATE_KEY 未配置 —— 发布跳过"
           fi
 
+      - name: 检出代码（取发布侧单调性守卫脚本 · Issue 41）
+        if: steps.gpgkey.outputs.ok == 'true'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
       - name: 下载 el7+el9 合并仓库产物
         if: steps.gpgkey.outputs.ok == 'true'
         uses: actions/download-artifact@v4
@@ -415,8 +428,13 @@ jobs:
           fi
           git -C "$PAGES" config user.email "actions@github.com"
           git -C "$PAGES" config user.name "GitHub Actions"
-          # 同步仓库树（--delete 保证只含当前版本，旧版 rpm 由 GitHub Release 资产留存）
+          # ---- Issue 41：发布单调性守卫（拒绝「旧覆盖新」，不再静默）----
+          #   gh-pages 现役 rpm 版本 vs 待发布新仓库版本；待发布**更旧** ⇒ 本步失败，
+          #   下面的 rsync --delete **不会执行** ⇒ gh-pages 的 rpm/ 保持不变。
+          #   人工覆盖：显式设 RPM_ALLOW_REGRESSION=<理由>（会记入流水线日志）。
           mkdir -p "$PAGES/rpm"
+          bash "$GITHUB_WORKSPACE/packaging/rpm_monotonic_guard.sh" "$PAGES/rpm" /tmp/pxrepo
+          # 同步仓库树（--delete 保证只含当前版本，旧版 rpm 由 GitHub Release 资产留存）
           rsync -a --delete /tmp/pxrepo/ "$PAGES/rpm/"
           cd "$PAGES"
           git add -A
