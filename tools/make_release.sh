@@ -73,13 +73,38 @@ echo "   里程碑: $MILESTONE | commit: $SHA | 输出: $PKG"
 rm -rf "$STAGE"
 mkdir -p "$STAGE/$NAME"
 
-cp -r tools        "$STAGE/$NAME/tools"
-cp -r bootstrap    "$STAGE/$NAME/bootstrap"
-cp -r stdlib       "$STAGE/$NAME/stdlib"
-cp -r runtime      "$STAGE/$NAME/runtime"
-cp    LICENSE      "$STAGE/$NAME/LICENSE"
+# ---- Issue 56：按 git 索引白名单复制（**不再**整目录 cp -r）----
+#   为什么必须白名单：`cp -r tools` 会把 .gitignore 的 `tools/build/`（本机旧二进制
+#   + sqlite3.o + openssl/lib/*.a，实测 93MB/198 件）一并打进包 ⇒ 同一 tag 在两台机器
+#   打出**两个不同 sha256**（CI 资产 392 件 vs 本机 596 件）⇒ 包的哈希不能当发行身份。
+#   改为「git 索引即发布物内容」：`git ls-files -s` 同时给出路径与 mode（100644/100755/
+#   120000），逐件复制并**归一 mode** ⇒ 本机与 CI 检出在结构上必然一致。
+copy_tracked() {
+    local d="$1" rec meta mode path dst
+    git ls-files -s -z -- "$d" | while IFS= read -r -d '' rec; do
+        meta="${rec%%$'\t'*}"; path="${rec#*$'\t'}"
+        mode="${meta%% *}"
+        dst="$STAGE/$NAME/$path"
+        mkdir -p "$(dirname "$dst")"
+        cp -Pp -- "$path" "$dst"          # -P：保持符号链接本体（tools/pxc -> px）
+        case "$mode" in
+            100755) chmod 755 "$dst" ;;
+            100644) chmod 644 "$dst" ;;
+            120000) : ;;                  # 符号链接：-P 已复制链接本体
+            *)      echo "   ⚠ 非常规 git mode $mode: $path" ;;
+        esac
+    done
+}
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+    || { echo "❌ 不在 git 工作树内：发布物内容取自 git 索引，请在仓库内运行" >&2; exit 2; }
+for _d in tools bootstrap stdlib runtime; do copy_tracked "$_d"; done
+copy_tracked LICENSE
 # 发布脚本自身不进发布包（依赖 git 仓库，且与"无源码树"目标冲突）
 rm -f "$STAGE/$NAME/tools/make_release.sh" "$STAGE/$NAME/tools/install.sh"
+# 组装自检（Issue 56 防回归）：白名单复制后，构建产物在结构上不可能出现
+[ ! -e "$STAGE/$NAME/tools/build" ] \
+    || { echo "❌ 发布包夹带 tools/build/（Issue 56 回归：白名单复制被绕过）" >&2; exit 1; }
+echo "   组装: $(find "$STAGE/$NAME" -type f | wc -l) 件（= git 跟踪集合，已剔除 tools/build 等构建产物）"
 # runtime 下的备份/杂物不进发布包
 find "$STAGE/$NAME" -name '*.bak*' -delete
 find "$STAGE/$NAME" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
@@ -147,8 +172,15 @@ import std.* 标准库等。编译模式（build）覆盖全部能力；解释�
 （不含 vhost/quic 等重型 builtin，日常脚本与算法调试够用）。
 EOF
 
-# ---- 3. 打 tar.gz ----
-tar -C "$STAGE" -czf "$PKG" "$NAME"
+# ---- 3. 打 tar.gz（Issue 56：位级可复现 —— 固定排序/属主/mtime）----
+#   确定性四要素：① 文件集合（git 索引）② 权限（git mode）③ 属主（固定 0:0）
+#   ④ mtime（固定为本次 commit 时间）⇒ 同一 commit **在任意机器、任意时刻**打包，
+#   sha256 相同 ⇒ 「包的哈希」可以正式作为发行身份（这是 Issue 56 的验收目标）。
+#   注：这是**一次性的资产字节变更**（旧资产属主是 runner / mtime 是打包时刻），
+#       不影响解包与 tools/install.sh 的 sha256sums.txt 校验。
+TAR_EPOCH="$(git log -1 --format=%ct 2>/dev/null || echo 0)"
+tar -C "$STAGE" --sort=name --owner=0 --group=0 --numeric-owner \
+    --mtime="@${TAR_EPOCH}" -czf "$PKG" "$NAME"
 SZ="$(stat -c %s "$PKG")"
 echo "   ✅ tarball: $PKG （$SZ 字节）"
 # M71-S4：sha256sums.txt 与 tarball 同目录（tools/install.sh 一键安装校验用）
