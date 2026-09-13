@@ -69,6 +69,14 @@ cd selfhost && ./bootstrap_prove_bc.sh       # BC 轨：golden/compiler.bc.dump�
 #    探针 = selfhost/cases/ + cases_bad/ + cases_ok/ 全套（≈54 例 × 2 枚编译器），
 #    判 rc/stdout/stderr 逐字节；成本新检出 ≈17s，可忽略。
 #    M113-S2：**VM 轨补门**（用户跑的是 tools/px → bootstrap/pxc_vm，此前只有 C 轨有门）。
+./selfhost/rebake_bin.sh --rebake-all  # M114-S2：**全件**重烘（bootstrap/ 14 件 —— pxi/pxl/pxpar/pxfmt/…）
+./selfhost/rebake_bin.sh --check-all   # M114-S2：全件源码链门（O(1) 逐件断言来源；已进 CI）
+#    M114-S2（Issue 55）：入库件**不是 2 件而是 14 件** —— 此前其余 12 件既无内嵌指纹、也无门，
+#    于是 `px run`（bootstrap/pxi，**内嵌 runtime**）一直停在 M110：Issue 54 的僵尸兜底回收
+#    在解释轨不生效（实测 `px run` 留 5 个 <defunct>，而 zombie 门 A/B/C/D 全绿）。
+#    指纹口径由「compiler.px 的 8 文件清单」升级为**件级 import 闭包**（递归到不动点，实测
+#    更严：多含 astdump.px）；pxc/pxc_vm 仍共用同一入口源 ⇒ 同一指纹。改 `selfhost/*.px`、
+#    `tools/*.px` 或 `runtime/{vm,runtime}.{c,h}` 中**任何被某件闭包覆盖**的文件都必须重烘。
 #    两道门的判据**不重叠**：① 产物来源 —— 重烘时把「源码链指纹」链进入库件，
 #    门上读回比对（O(1)）；② C 轨走「同轨行为对拍」，VM 轨走「两轨字节码镜像对拍」
 #    （`bc compiler.px` 逐字节，实测 ≈90s：C 53s / VM 36s）。

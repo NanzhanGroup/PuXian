@@ -48,11 +48,13 @@ ROOT=$(pwd)
 MODE=rebake
 for a in "$@"; do
     case "$a" in
-        --rebake)   MODE=rebake ;;
-        --check)    MODE=check ;;
-        --check-vm) MODE=check-vm ;;
-        -h|--help)  sed -n '2,44p' "$0"; exit 0 ;;
-        *) echo "未知参数：$a（可用：--check / --check-vm）" >&2; exit 2 ;;
+        --rebake)     MODE=rebake ;;
+        --check)      MODE=check ;;
+        --check-vm)   MODE=check-vm ;;
+        --rebake-all) MODE=rebake-all ;;   # M114-S2（Issue 55）：重烘表内全部入库件
+        --check-all)  MODE=check-all ;;    # M114-S2（Issue 55）：全件指纹门（O(1) 逐件断言来源）
+        -h|--help)  sed -n '2,60p' "$0"; exit 0 ;;
+        *) echo "未知参数：$a（可用：--check / --check-vm / --rebake-all / --check-all）" >&2; exit 2 ;;
     esac
 done
 
@@ -69,6 +71,8 @@ PARITY_CNT=0
 # ---- 源码链指纹（口径与 bootstrap_prove_bc.sh 的 SRC_CHAIN 对齐）----
 FP_FILES="compiler.px codegen.px parser.px pxlexer.px cg_stmt.px cg_expr.px cg_module.px bc_emit.px"
 FP_FILES="$FP_FILES ../runtime/vm.c ../runtime/vm.h ../runtime/runtime.c ../runtime/runtime.h"
+# ⚠️ M114-S2（Issue 55）起**已不再被调用**：指纹口径统一由下方 entry_fp()（import 闭包）
+#   承担 —— 它比这份 8 文件清单更严（实测多含 astdump.px）。保留仅供对照/考古。
 src_fingerprint() {
     ( cd "$ROOT/selfhost" && cat $FP_FILES 2>/dev/null ) | sha256sum | cut -c1-16
 }
@@ -102,43 +106,108 @@ rebake_hint() {
     echo "   ⇒ 重烘：./selfhost/rebake_bin.sh   （改过 selfhost/*.px 或 runtime/ 下的 vm/runtime 源就必须重烘，否则用户拿到的是旧引擎）"
 }
 
+# ---- M114-S2（Issue 55）：入库件表 + 全件指纹口径 ----
+# 为什么（Issue 55）：Issue 58 只治了 pxc/pxc_vm 两件，而 `bootstrap/` 里实际有 14 件
+#   —— 其余件「是否由当前源码烘出」既**不可判定**（无内嵌指纹）也**无门**。
+#   更糟的是**用户面**：`tools/px run` 走 `bootstrap/pxi`（解释器），它一直停在 M110
+#   ⇒ Issue 54 的僵尸回收修复在解释轨不生效（实测 `px run` 仍留 5 个 <defunct>）。
+#
+# 表格式：件名|入口源（相对 $ROOT）|生成轨（c=C 文本 / vm=字节码镜像）|链接（static/dynamic）
+# 口径来源：实测 `ldd bootstrap/*`（13 件静态 + pxc_vm 动态）+ `selfhost/build/interp_vm.c`
+#   的存在（pxi_vm 与 pxc_vm 同为 `--emit-c` 产物，只是历史链接方式不同 —— 按实测保留，
+#   不在本切片统一它，避免顺手改掉用户面件的链接形态）。
+ENTRIES="pxc|selfhost/compiler.px|c|static
+pxc_vm|selfhost/compiler.px|vm|dynamic
+pxi|selfhost/interp.px|c|static
+pxi_vm|selfhost/interp.px|vm|static
+pxl|selfhost/lexer.px|c|static
+pxpar|selfhost/parser.px|c|static
+pxfmt|tools/pxfmt.px|c|static
+pxbench|tools/pxbench.px|c|static
+pxcheck|tools/pxcheck.px|c|static
+pxdoc|tools/pxdoc.px|c|static
+pxlint|tools/pxlint.px|c|static
+pxlsp|tools/pxlsp.px|c|static
+pxmcp|tools/pxmcp.px|c|static
+pxtest|tools/pxtest.px|c|static"
+
+entry_field() {   # $1=件名 $2=字段号(2=源 3=轨 4=链接)
+    local n s t l
+    while IFS='|' read -r n s t l; do
+        if [ "$n" = "$1" ]; then
+            case "$2" in
+                2) printf '%s' "$s" ;;
+                3) printf '%s' "$t" ;;
+                4) printf '%s' "$l" ;;
+            esac
+            break
+        fi
+    done <<< "$ENTRIES"
+}
+entry_src()   { entry_field "$1" 2; }
+entry_gen()   { entry_field "$1" 3; }
+entry_link()  { entry_field "$1" 4; }
+entry_list()  { printf '%s\n' "$ENTRIES" | cut -d'|' -f1; }
+
+# import 闭包（递归、含自身、绝对路径）。递归展开 import "x.px" 到不动点；
+#   `sort -u` 去重。比 pxc 专用的 8 文件清单**更严**（实测多含 astdump.px）——
+#   宁可要求重烘，不可漏（Issue 58 的成因正是"口径比真实依赖窄"）。
+closure() {
+    local f="$1" d m
+    d=$(dirname "$f")
+    printf '%s\n' "$f"
+    grep -o 'import "[^"]*\.px"' "$f" 2>/dev/null | sed 's/import "//;s/"//' | while read -r m; do
+        [ -f "$d/$m" ] && closure "$d/$m"
+    done
+}
+# 件的源码链指纹 = 该件 import 闭包内容 + runtime vm/runtime 源
+entry_fp() {
+    local src; src=$(entry_src "$1")
+    [ -n "$src" ] || return 1
+    { closure "$ROOT/$src" | sort -u | while read -r p; do cat "$p"; done
+      cat "$ROOT/runtime/vm.c" "$ROOT/runtime/vm.h" \
+          "$ROOT/runtime/runtime.c" "$ROOT/runtime/runtime.h" 2>/dev/null; } \
+      | sha256sum | cut -c1-16
+}
+
 # ---- 全 runtime 档缓存（重烘/现编 用；纯镜像对拍不需要）----
 select_cache() {
-    local d n best=0
+    # M114-S3（Issue 62）：**先让 tools/px 按 rt_key 命中/生成「当前 runtime 源」的缓存**，
+    #   再选**最新写入**的全量档目录（而不是「.o 数最多的」）。
+    # 为什么（实锤）：`.rtcache/<key>` 按 key（runtime 源内容 × cc × 裁剪集）隔离 —— 改
+    #   runtime 后老目录成为**孤儿**，而**新旧目录的全量档 .o 数相同**（本机都是 23 个）
+    #   ⇒ 「选 .o 最多」会按遍历顺序**随机命中旧 runtime 的 .o**，把「缺最新 runtime 修复」
+    #   的件烘进入库件，而**所有门都看不见**（门测编译器行为，不测 runtime 层修复）。
+    #   实测：`190308f2…`（23 个 .o）的 `runtime.o` **不含** `PX_NO_CHILD_REAP`（Issue 54 修复），
+    #   却是历轮重烘实际选中的那一份；正解是 `e210498567f2ca64`（含该标记）。
+    local d n m best=0 best_m=0
     CACHE=""
+    echo "── 先按 rt_key 命中/生成「当前 runtime 源」缓存（tools/px build --full）"
+    "$ROOT/tools/px" build --full "$ROOT/examples/hello.px" >/tmp/rebake_cache_gen.log 2>&1 || \
+        echo "⚠️  tools/px build --full 失败（见 /tmp/rebake_cache_gen.log）；回退按 mtime 选已有缓存" >&2
+    FULL_MIN=15
+    # 重烘/重烘门要求**全量档**；--check/--check-vm 容忍裁剪档（判据与"链进多少 runtime"无关）
+    local min=1
+    case "$MODE" in rebake|rebake-all|check-all) min=$FULL_MIN ;; esac
     for d in "$ROOT"/.rtcache/*/; do
         [ -d "$d" ] || continue
         [ -f "$d/.complete" ] || continue
         n=$(ls "$d"/*.o 2>/dev/null | wc -l)
-        if [ "$n" -gt "$best" ]; then best=$n; CACHE="$d"; fi
+        [ "$n" -ge "$min" ] || continue
+        m=$(stat -c %Y "$d")
+        if [ "$m" -gt "$best_m" ]; then best_m=$m; best=$n; CACHE="$d"; fi
     done
-    if [ -z "$CACHE" ]; then
-        echo "── 无 .rtcache，先用 tools/px 生成【全 runtime】缓存（--full）"
-        "$ROOT/tools/px" build --full "$ROOT/examples/hello.px" >/dev/null 2>&1 || true
-        for d in "$ROOT"/.rtcache/*/; do
-            [ -d "$d" ] || continue
-            [ -f "$d/.complete" ] || continue
-            n=$(ls "$d"/*.o 2>/dev/null | wc -l)
-            if [ "$n" -gt "$best" ]; then best=$n; CACHE="$d"; fi
-        done
-    fi
     [ -n "$CACHE" ] || {
         echo "❌ 未找到可用 .rtcache（先跑：./tools/px build --full examples/hello.px）" >&2
         return 1
     }
-    # 缓存完整度：全量档 = runtime 源集合全编（本机 23 个 .o）；裁剪档 = 自动裁剪（本机 7 个）。
-    #   该数字由 runtime 源决定、跨机器稳定，故用阈值判档。
-    #   重烘**必须全量档** —— 用裁剪档链出来的 bootstrap/pxc 会缺 runtime 能力
-    #   （S0 时正是这么误装过一枚 2.81MB 的"动态+裁剪"件，属必须挡住的坑）。
-    #   门（--check/--check-vm）容忍裁剪档：判据与"链进多少 runtime"无关。
-    FULL_MIN=15
     if [ "$best" -ge "$FULL_MIN" ]; then
         echo "── runtime 缓存：$CACHE（${best} 个 .o = 全量档）"
     else
         echo "── runtime 缓存：$CACHE（${best} 个 .o = 裁剪档）"
-        if [ "$MODE" = "rebake" ]; then
-            echo "❌ 只有裁剪档缓存，重烘会把入库 pxc 链成 runtime 能力不全的件。" >&2
-            echo "   先生成全量缓存：./tools/px build --full examples/hello.px（或清掉 .rtcache 让本脚本自动生成）" >&2
+        if [ "$MODE" = "rebake" ] || [ "$MODE" = "rebake-all" ]; then
+            echo "❌ 只有裁剪档缓存，重烘会把入库件链成 runtime 能力不全的件。" >&2
+            echo "   先生成全量缓存：./tools/px build --full examples/hello.px" >&2
             return 1
         fi
     fi
@@ -174,6 +243,60 @@ link_vm_track() {    # $1=compiler_vm.c  $2=输出（动态 = 用户面默认轨
         "$RT/third_party/openssl/lib/libssl.a" "$RT/third_party/openssl/lib/libcrypto.a" \
         "$RT/third_party/zlib/lib/libz.a" -lm -ldl -lpthread 2>/tmp/rebake_vmlink.log || {
         echo "❌ compiler_vm 链接失败" >&2; tail -10 /tmp/rebake_vmlink.log >&2; return 1; }
+    return 0
+}
+
+# ---- M114-S2：通用链接（轨/链接方式参数化）与单件重烘 ----
+# 与 link_c_track/link_vm_track 同一库列表与同一口径，仅 static/dynamic 可选 ——
+# 旧函数保留给 --check/--check-vm（已验证的路径不动），本条服务全件表。
+LINK_LIBS_STATIC() {
+    printf '%s' \
+      "$RT/third_party/sqlite3/sqlite3.o \
+       $RT/mbedtls/lib/libmbedtls.a $RT/mbedtls/lib/libmbedx509.a $RT/mbedtls/lib/libmbedcrypto.a \
+       $RT/third_party/ngtcp2/lib/libngtcp2.a $RT/third_party/ngtcp2/lib/libngtcp2_crypto_quictls.a \
+       $RT/third_party/openssl/lib/libssl.a $RT/third_party/openssl/lib/libcrypto.a \
+       $RT/third_party/zlib/lib/libz.a"
+}
+link_entry() {       # $1=标签 $2=C 源 $3=输出 $4=static|dynamic
+    local tag="$1" cfile="$2" out="$3" how="$4" objs="" f fp="" st="" libs=""
+    [ "$LINK_FP" = "1" ] && fp="$FP_OBJ"
+    [ "$how" = "static" ] && st="-static"
+    libs=$(LINK_LIBS_STATIC)
+    gcc -c -O2 -I"$CACHE" -I"$RT" "$cfile" -o "/tmp/rebake_$tag.o" 2>"/tmp/rebake_$tag.cc.log" || {
+        echo "❌ $tag：gcc -c 失败" >&2; tail -10 "/tmp/rebake_$tag.cc.log" >&2; return 1; }
+    for f in "$CACHE"*.o; do objs="$objs $f"; done
+    # shellcheck disable=SC2086
+    gcc $st -O2 -pthread -o "$out" "/tmp/rebake_$tag.o" $objs $fp $libs -lm -ldl -lpthread \
+        2>"/tmp/rebake_$tag.link.log" || {
+        echo "❌ $tag：链接失败 $out" >&2; tail -10 "/tmp/rebake_$tag.link.log" >&2; return 1; }
+    return 0
+}
+rebake_one() {       # $1=件名 → 0 成功 / 1 失败（含指纹自证）
+    local name="$1" src gen lnk out fp got
+    src=$(entry_src "$name"); gen=$(entry_gen "$name"); lnk=$(entry_link "$name")
+    out="$ROOT/bootstrap/$name"
+    [ -n "$src" ] || { echo "❌ 未知件：$name" >&2; return 1; }
+    [ -f "$ROOT/$src" ] || { echo "❌ $name：缺入口源 $src" >&2; return 1; }
+    fp=$(entry_fp "$name") || return 1
+    echo "── [$name] $src（轨 $gen/$lnk · 源码链 PXSRC-$fp）"
+    emit_fp_object "$fp" || return 1      # 每件用**自己的**指纹对象（不是全局 FP 那份）
+    mkdir -p "$BUILD"
+    if [ "$gen" = "c" ]; then
+        timeout 900 "$PXC" build "$ROOT/$src" > "$BUILD/rebake_$name.c" 2>"/tmp/rebake_$name.build.err" || {
+            echo "❌ $name：pxc build $src 失败" >&2; tail -5 "/tmp/rebake_$name.build.err" >&2; return 1; }
+        LINK_FP=1
+        link_entry "$name" "$BUILD/rebake_$name.c" "$out" "$lnk" || return 1
+    else
+        [ -x "$BUILD/compiler_new" ] || {
+            echo "❌ $name：VM 轨需要 $BUILD/compiler_new（先重烘 pxc）" >&2; return 1; }
+        timeout 1500 "$BUILD/compiler_new" --emit-c "$ROOT/$src" > "$BUILD/rebake_$name.vm.c" 2>"/tmp/rebake_$name.vmerr" || {
+            echo "❌ $name：--emit-c $src 失败" >&2; tail -5 "/tmp/rebake_$name.vmerr" >&2; return 1; }
+        LINK_FP=1
+        link_entry "$name" "$BUILD/rebake_$name.vm.c" "$out" "$lnk" || return 1
+    fi
+    got=$(artifact_fp "$out")
+    [ "$got" = "$fp" ] || { echo "❌ $name：内嵌指纹读回失败（got=${got:-空} ≠ $fp）" >&2; return 1; }
+    echo "    ✅ $name  PXSRC-$got  $(stat -c%s "$out")B  sha256 $(sha256sum "$out" | cut -c1-16)"
     return 0
 }
 
@@ -240,7 +363,7 @@ build_fresh_c() {    # 用入库 pxc 现编「当前源码的 C 轨件」→ $BU
 # ============================================================
 if [ "$MODE" = "check" ]; then
     echo "── [--check] C 轨重烘门（入库 bootstrap/pxc）"
-    FP=$(src_fingerprint)
+    FP=$(entry_fp pxc)
     echo "── 当前源码链指纹：${FP_TAG}-${FP}"
     fp_gate "$PXC" "入库 bootstrap/pxc"; fprc=$?
     if [ "$fprc" = "1" ]; then echo "❌ 入库 pxc 不是当前源码烘出的"; rebake_hint; exit 1; fi
@@ -260,7 +383,7 @@ if [ "$MODE" = "check-vm" ]; then
     [ -x "$PXVM" ] || { echo "❌ 缺少可执行 bootstrap/pxc_vm" >&2; exit 1; }
     "$PXVM" --version >/dev/null 2>&1 || {
         echo "❌ bootstrap/pxc_vm --version 失败（件已损或不可执行）" >&2; exit 1; }
-    FP=$(src_fingerprint)
+    FP=$(entry_fp pxc)
     echo "── 当前源码链指纹：${FP_TAG}-${FP}"
     fp_gate "$PXVM" "入库 bootstrap/pxc_vm"; r1=$?
     [ "$r1" = "1" ] && { echo "❌ 入库 pxc_vm 不是当前源码烘出的"; rebake_hint; exit 1; }
@@ -274,9 +397,39 @@ if [ "$MODE" = "check-vm" ]; then
 fi
 
 # ============================================================
+# 门 ①（全件）：源码链指纹门 —— O(1) 逐件断言「此件是否当前源码烘出」
+# ============================================================
+if [ "$MODE" = "check-all" ]; then
+    echo "── [--check-all] 全件源码链指纹门（bootstrap/ 共 $(entry_list | wc -l) 件）"
+    n=0; bad=0; miss=0
+    for name in $(entry_list); do
+        n=$((n+1))
+        out="$ROOT/bootstrap/$name"
+        if [ ! -x "$out" ]; then echo "    ❌ $name：缺件或不可执行"; bad=$((bad+1)); continue; fi
+        fp=$(entry_fp "$name") || { echo "    ❌ $name：无法计算源码链"; bad=$((bad+1)); continue; }
+        got=$(artifact_fp "$out")
+        if [ -z "$got" ]; then
+            echo "    ❌ $name：无内嵌指纹（引入指纹前烘的旧件 / 从未重烘）"; miss=$((miss+1)); bad=$((bad+1))
+        elif [ "$got" != "$fp" ]; then
+            echo "    ❌ $name：内嵌 PXSRC-$got ≠ 当前源码链 PXSRC-$fp"; bad=$((bad+1))
+        else
+            echo "    ✅ $name：PXSRC-$got"
+        fi
+    done
+    echo "── 小计：$((n-bad))/$n 件与当前源码一致（其中无指纹 $miss 件）"
+    if [ "$bad" -gt 0 ]; then
+        echo "❌ 有 $bad 件不是当前源码烘出的（用户拿到的是旧引擎）"
+        echo "   ⇒ 全件重烘：./selfhost/rebake_bin.sh --rebake-all"
+        exit 1
+    fi
+    echo "✅ 全件源码链一致"
+    exit 0
+fi
+
+# ============================================================
 # 重烘
 # ============================================================
-FP=$(src_fingerprint)
+FP=$(entry_fp pxc)
 echo "── 源码链指纹：${FP_TAG}-${FP}"
 select_cache || exit 1
 emit_fp_object "$FP" || exit 1
@@ -314,3 +467,22 @@ echo "    pxc    sha256 $(sha256sum "$PXC" | cut -c1-16)"
 echo "    pxc_vm sha256 $(sha256sum "$PXVM" | cut -c1-16)"
 echo "✅ 重烘完成 —— 接下来必须跑：./selfhost/rebake_bin.sh --check && ./selfhost/rebake_bin.sh --check-vm"
 echo "   以及：./selfhost/engine_parity.sh && ./selfhost/diffcheck.sh --errors"
+
+# ============================================================
+# M114-S2（Issue 55）：全件重烘（表内其余件；pxc/pxc_vm 上面已烘）
+# ============================================================
+if [ "$MODE" = "rebake-all" ]; then
+    echo ""
+    echo "══ 全件重烘（表内 $(entry_list | wc -l) 件；pxc/pxc_vm 已在上一步完成）══"
+    ok=0; fail=0; failed=""
+    for name in $(entry_list); do
+        case "$name" in pxc|pxc_vm) continue;; esac
+        if rebake_one "$name"; then ok=$((ok+1)); else fail=$((fail+1)); failed="$failed $name"; fi
+    done
+    echo "── 全件重烘小计：成功 $ok · 失败 $fail"
+    if [ -n "$failed" ]; then
+        echo "   ❌ 失败件：$failed"
+        echo "   （失败件保持原样、不影响已成功件；逐件日志见 /tmp/rebake_<件名>.*）"
+    fi
+    echo "   ⇒ 验收：./selfhost/rebake_bin.sh --check-all"
+fi

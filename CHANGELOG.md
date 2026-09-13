@@ -6,6 +6,86 @@
 
 ## [Unreleased]
 
+### M114-S3 · `.rtcache` 陈旧缓存被重烘选中（qg-issue 62）
+
+> **主题：件是「当前源码」烘的，但链进去的 runtime 可能是旧的一份。**
+> 起因：M114-S2 给僵尸门补解释器轨断言 E 时，**重烘后的 `px run` 仍留 5 个 `<defunct>`**。
+
+**① 根因**
+- `.rtcache/<key>` 按 key（runtime 源 × cc × 裁剪集）隔离；改 runtime 后**老目录成孤儿**；
+- `select_cache()` 原判据是「`.o` 数最多」—— 而**新旧目录都是全量档、`.o` 数相同（本机 23）**
+  ⇒ 判据退化为「按遍历顺序取第一个」⇒ 命中老目录；
+- 实锤：选中项 `190308f2b1c16b59` 的 `runtime.o` **不含** `PX_NO_CHILD_REAP`（Issue 54 修复），
+  而当前 runtime 源的 key 是 `e210498567f2ca64`（含该标记）。
+
+**② 为什么三层门都看不见**
+- 重烘门比对**编译器行为**（rc/stdout/stderr、字节码镜像）—— 与 runtime 里的回收线程无关；
+- `--check-all` 的指纹口径是**源码内容**：回答「源码变过吗」，**不回答**「缓存里的 .o 是不是这份源码编的」；
+- 僵尸门 A/B/C/D 覆盖**编译产物**轨，解释器轨此前**零覆盖**（断言 E 正是为此而加）。
+
+**③ 修法**
+- `select_cache()`：**先跑 `tools/px build --full`**（按 `rt_key` 命中/生成当前缓存），
+  再选 **mtime 最新**的全量档目录；**不在本脚本内复算 key**（必然腐化）；
+- 重烘（`rebake`/`rebake-all`）强制全量档；`--check`/`--check-vm` 仍容忍裁剪档。
+
+**④ ⚠️ 回溯影响（如实登记）**
+- M113 及更早经 `rebake_bin.sh` 重烘的 `bootstrap/pxc` / `pxc_vm` **同样缺最新 runtime 修复** ——
+  本切片的全件重烘一并修正（件大小同时变化，见 S2 的体积登记）。
+
+### M114-S2 · bootstrap 全件重烘 + 全件源码链门（qg-issue 55）
+
+> **主题：Issue 58 只治了 2 件，而 `bootstrap/` 里实际有 14 件。**
+> `--check-all` 实测（全件重烘前）：**12/14 件无内嵌指纹**（来源不可判定）+ 2 件口径过期。
+> 用户面后果最重的是 `px run` → `bootstrap/pxi`：它**内嵌 runtime**，一直停在 M110
+> ⇒ Issue 54 的僵尸兜底回收在解释轨**不生效**（实测 `px run` 留 5 个 `<defunct>`，
+> 而 zombie 门 A/B/C/D 全绿 —— 门看不见用户真实走的那条路）。
+
+**① `rebake_bin.sh` 全件化**
+- 新增**入库件表**（14 件：`pxc` `pxc_vm` `pxi` `pxi_vm` `pxl` `pxpar` `pxfmt` `pxbench`
+  `pxcheck` `pxdoc` `pxlint` `pxlsp` `pxmcp` `pxtest`），生成轨（C 文本 / 字节码镜像）与
+  链接方式（static / dynamic）**照 `ldd` + `selfhost/build/interp_vm.c` 实测**，不顺手改链接形态；
+- **指纹口径升级**：`compiler.px` 专用的 8 文件清单 → **件级 import 闭包**（递归到不动点，
+  `sort -u`）。实测更严（`compiler.px` 闭包多含 `astdump.px`）；`pxc`/`pxc_vm` 共用入口源
+  ⇒ 同一指纹。旧的 `src_fingerprint()` 保留仅供对照，不再被调用；
+- 新增 `--rebake-all`（全件重烘，**逐件报告**，单件失败不连带）与 `--check-all`
+  （全件指纹门，**O(1)**，进 CI）；
+- `link_entry()` 把 static/dynamic 参数化（统一库列表）；`link_c_track`/`link_vm_track`
+  原样保留给已验证的 `--check`/`--check-vm` 路径。
+
+**② 解释器轨纳入僵尸门（Issue 54 的覆盖缺口）**
+- `zombie_reap_check.sh` 新增**断言 E**：`px run <探针>`（`bootstrap/pxi`）僵尸数必须 == 0
+  （契约由四断言扩为五断言；负向对照：旧 `pxi` ⇒ 5，门红）。
+
+**③ 全件重烘 + 回归**
+- **14/14 件**由当前源码烘出并带内嵌指纹；`--check-all` 全绿；
+- ⚠️ **体积变化（口径统一，如实登记）**：`bootstrap/pxl` 3,683,032 B → 9,256,672 B
+  （旧件是裁剪 runtime 口径，无法复现；统一为全 runtime ⇒ 仓库约 +5.6 MB）；
+  其余件 +80 ~ +249 KB（含 M72-S2 源位置插桩 + 指纹常量）；
+- 行为回归：`diffcheck --all` / `--errors` / `--lexer` / `--parser` 、`engine_parity`、
+  `zombie_reap_check`、双轨自举证明 —— 全绿（见下条 M114-S1 的实测）。
+
+### M114-S1 · 诊断通道收口：lexer/parser 的 print+panic → print_err+exit（qg-issue 61）
+
+> **主题：Issue 45 当年只修了 `cg_perr` 一处，lexer/parser 三处漏修。**
+> 25/30 个负例把诊断**写进产物通道**（stdout）—— 用户面 `px build` 只看到「编译失败」
+> 加一行 `运行时错误 [err 行62]`（内部函数名 + `pxlexer.px` 的行号），真诊断完全不可见。
+
+**① 三处 err 与 `cg_perr` 同构**
+- `selfhost/pxlexer.px` `err`/`err_at`、`selfhost/parser.px` `perr`、
+  `tools/fmtlexer.px` `err`/`err_at`：`print(...) + panic(...)` → **`print_err(...) + exit(1)`**
+  （诊断走 stderr、产物通道干净、不再泄漏内部行号）；
+- 实测：30/30 负例「stderr 首行 == golden **且 stdout == 0B**」；
+  **24/24 正常例产物逐字节不变**（只动诊断路径，不动编译结果）。
+
+**② 门收紧（两处，均可负向对照）**
+- `diffcheck.sh --errors`：`2>&1 | head -1`（合并流取首行，靠取序侥幸）→ **分离捕获**
+  + 断言「stdout 必须为空」；
+- `engine_parity.sh`：负例集 `codegen_b*.px` → **`cases_bad/*.px`**（kind 由前缀推 golden 名）；
+  **基准轨**纳入「stdout 空 + stderr 含 golden」同样断言；「诊断出口」由**统计**升为**判据**
+  （stdout 出口必须 0 例）；
+- 负向对照（修复前 + 旧入库件）：`diffcheck --errors` **26 ❌ / exit 1**；
+  `engine_parity` 负例 **通过 5 · 失败 25**、诊断出口 stdout **25 例** ⇒ exit 1。
+
 ### M113-S2 · VM 轨（用户面默认轨）重烘门 + 出厂源码链指纹（qg-issue 58 续）
 
 > **主题：给默认轨补上门，并让「这枚入库件是不是当前源码烘的」变成 O(1) 可判。**
