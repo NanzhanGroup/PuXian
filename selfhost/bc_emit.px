@@ -1018,7 +1018,15 @@ def bc_match_cond(pattern, t, func):
 # 复合赋值语义：先读目标旧值 → 求值 rhs → 二元运算 → 写回（对齐 cg_assign_op_*）
 def bc_assign_local_slot(s, op, rhs, func):
     if op == "Assign":
-        bc_emit_expr(rhs, s, func)
+        # qg-issue 67：**不得**把「目标变量自己的槽」直接当 dst —— Binary 的
+        #   「左值直接入 dst（两地址）」、NullCoalesce / And / Or 的「左值先入 dst」
+        #   都会在求右操作数**之前**写 dst；若 rhs 又引用了这个变量，右操作数读到的
+        #   就是被覆盖后的左值（`x = "b" + x` 得 "bb"、`x = 1 + x` 得 2、零填充
+        #   `s = "0" + s` 长度恒 2 ⇒ 死循环）。统一「先求进临时槽，再 MOV 回目标槽」：
+        #   左→右求值顺序不变，dst 也不再与 rhs 内的自引用别名。
+        let t = bc_tmp(func)
+        bc_emit_expr(rhs, t, func)
+        bc_emit_inst(func, "MOV", s, t, 0)
         return
     let tr = bc_tmp(func)
     bc_emit_expr(rhs, tr, func)
@@ -1120,8 +1128,12 @@ def bc_emit_stmt_inner(stmt, func):
             bc_emit_inst(func, "SETG", g, t, 0)
             return
         # 函数内 VarDecl = 局部槽（hoist 已预占或就地分配；遮蔽同名全局）
+        # qg-issue 67：同 bc_assign_local_slot —— 初值先入临时槽再 MOV 回目标槽，
+        #   否则 `var x = "0" + x` 这类自引用初值读到的是被覆盖后的 x。
         let s = bc_slot(func, name)
-        bc_emit_expr(stmt[4], s, func)
+        let t = bc_tmp(func)
+        bc_emit_expr(stmt[4], t, func)
+        bc_emit_inst(func, "MOV", s, t, 0)
         return
     if ty == "Assign":
         # B1：Assign 目标 ∈ Var/Index/Field；op ∈ Assign/复合/Append
