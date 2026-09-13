@@ -15,8 +15,16 @@
 # ⚠️ 范围（M114 尾显式声明）：**只做 lint 层**（规则 L001-L008）+ 词法/语法错误 + import 名收集；
 #   **不含**编译期静态语义层 E3002/E3003/E3004（那属编译器，两轨均已实现，见 qg-issue 46）。
 #   故对 `let x = 1` / `x = 2` 这类语义负例，本工具输出 `[]` 且 rc=0 —— 这是**契约内行为**，
-#   不是静默放行。编辑器若要语义诊断，须另接编译器（缺口登记：qg-issue 65）。
-# 用法（编译版）：pxcheck <file.px> [--base <dir>] [--version]
+#   不是静默放行。**--semantic（M115 · qg-issue 65）**：显式开启后，本工具再起一次编译器
+#   （默认 VM 轨 pxc_vm --emit-c，stdout 丢弃 / stderr 分离捕获），把编译期语义诊断
+#   （E3002/E3003/E3004…）**并入同一个 JSON 数组**，level=E 且整体 rc=1。
+#   ⚠️ 位置限制（不假装）：编译器**目前不输出行/列**（共享语义层 cg_perr 只打印
+#     `编译错误 CODE: msg`）⇒ 语义类诊断一律上报 line=1/col=1，message 正文与
+#     `px build` 的 stderr **逐字一致**。位置缺口属编译器侧，非本工具可闭合。
+#   ⚠️ 不静默放行：编译器找不到 → level=W 的 L000 显式上报；编译器 rc≠0 却无
+#     可解析诊断行 → E3000 + 原始首行，绝不返回空数组当作"语义无错"。
+#   编译器定位：PX_SEMANTIC_BIN → 本程序同目录 pxc_vm → 同目录 pxc → PATH pxc_vm。
+# 用法（编译版）：pxcheck <file.px> [--base <dir>] [--semantic] [--version]
 #   --base：import 名收集的解析根目录（LSP 文档在临时目录但 import 相对
 #   真实文件所在目录，M65-S2 决策）——缺省用文件自身目录（pxlint 语义）
 # 架构：同 pxlint（import parser + lint_core，主文件声明全局），仅输出
@@ -40,6 +48,8 @@ let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn"
 let CTRL_ALL = "\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}\u{8}\u{b}\u{c}\u{e}\u{f}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1a}\u{1b}\u{1c}\u{1d}\u{1e}\u{1f}\u{7f}\u{80}\u{81}\u{82}\u{83}\u{84}\u{85}\u{86}\u{87}\u{88}\u{89}\u{8a}\u{8b}\u{8c}\u{8d}\u{8e}\u{8f}\u{90}\u{91}\u{92}\u{93}\u{94}\u{95}\u{96}\u{97}\u{98}\u{99}\u{9a}\u{9b}\u{9c}\u{9d}\u{9e}\u{9f}"  # noqa
 var p_toks = []
 var p_pos = 0
+var g_semantic = 0  # --semantic：并入编译器语义诊断（M115 · qg-issue 65）
+var g_self = ""  # argv[0]（同目录编译器定位用）
 # ---------- 内置函数/构造器已知名 ----------
 # 名册**单一事实源**：lint_core.px 的 BUILTIN_NAMES（本文件 import 取用，与 pxlint 同源）。
 # 源 = runtime 注册表（tools/gen_builtin_list.sh 派生），门 = selfhost/builtin_list_check.sh。
@@ -132,6 +142,75 @@ def px_collect_import_names(items, known, base_root):
                     ci = len(cands)
                 ci += 1
         i += 1
+# ---------- 语义诊断（M115 · qg-issue 65）：起编译器，stderr 分离捕获 ----------
+# 编译器定位：PX_SEMANTIC_BIN → 本程序同目录 pxc_vm → 同目录 pxc → PATH pxc_vm
+def px_semantic_bin():
+    let e1 = env("PX_SEMANTIC_BIN")
+    if e1 != null and e1 != "":
+        return e1
+    let d = px_dirname(g_self)
+    if d != "" and d != ".":
+        if exists(d + "/pxc_vm"):
+            return d + "/pxc_vm"
+        if exists(d + "/pxc"):
+            return d + "/pxc"
+    return "pxc_vm"
+# 编译器 stderr 文本 → 诊断数组（只取 `编译错误 CODE: msg` 行；位置见文件头说明）
+def px_sem_lines(text):
+    let out = []
+    let lines = split(text, "\n")
+    var i = 0
+    while i < len(lines):
+        let ln = trim(lines[i])
+        if starts_with(ln, "编译错误 "):
+            let toks = split(ln, " ")
+            if len(toks) >= 2:
+                let head = toks[1]
+                let code = split(head, ":")[0]
+                let msg = trim(replace(ln, "编译错误 " + head + " ", ""))
+                let jo = {"code": code}
+                jo["level"] = "E"
+                jo["line"] = 1
+                jo["col"] = 1
+                jo["message"] = msg
+                out.append(jo)
+        i += 1
+    return out
+# 编译一次（--emit-c 产物丢弃）→ 语义诊断；不可用/异常显式上报，不静默放行
+def px_semantic_diags(file):
+    let bin = px_semantic_bin()
+    var ok = false
+    if contains(bin, "/"):
+        ok = exists(bin)
+    else:
+        let probe = os_capture("command", ["-v", bin])
+        ok = probe["rc"] == 0
+    if not ok:
+        let jo = {"code": "L000"}
+        jo["level"] = "W"
+        jo["line"] = 1
+        jo["col"] = 1
+        jo["message"] = "语义检查不可用：未找到编译器 '" + bin + "'（--semantic 本次未生效，可用 PX_SEMANTIC_BIN 指定绝对路径）"
+        let only = [jo]
+        return only
+    let r = os_capture(bin, ["--emit-c", file])
+    let ds = px_sem_lines(r["stderr"])
+    if len(ds) > 0:
+        return ds
+    if r["rc"] != 0:
+        var raw = trim(r["stderr"])
+        if raw == "":
+            raw = "编译器以 rc=" + str(r["rc"]) + " 退出且无 stderr 正文"
+        let fs = split(raw, "\n")
+        let je = {"code": "E3000"}
+        je["level"] = "E"
+        je["line"] = 1
+        je["col"] = 1
+        je["message"] = fs[0]
+        let only2 = [je]
+        return only2
+    let empty = []
+    return empty
 # ---------- 主流程：诊断 JSON（仅 stdout 单行） ----------
 def px_err(msg):
     write(2, msg + "\n")
@@ -168,19 +247,30 @@ def px_run(file, base_root):
         if d[1] == "E":
             errs += 1
         di += 1
+    if g_semantic == 1:
+        let sds = px_semantic_diags(file)
+        var sj = 0
+        while sj < len(sds):
+            out.append(sds[sj])
+            if sds[sj]["level"] == "E":
+                errs += 1
+            sj += 1
     print(json_stringify(out))
     if errs > 0:
         exit(1)
     exit(0)
 def usage():
     print("pxcheck —— PuXian 独立诊断器（LSP 子进程，M65-S2）")
-    print("用法: pxcheck <file.px> [--base <dir>] [--version]")
+    print("用法: pxcheck <file.px> [--base <dir>] [--semantic] [--version]")
+    print("  --semantic  并入编译期语义诊断（E3002/E3003/E3004…；位置一律 1/1，见文件头）")
     print("输出: parse 成功 → stdout JSON 诊断数组；parse 失败 → 文本错误行")
 def main():
     let as_ = args()
     # 编译版 args() 首元素 = 程序自身路径，用户参数自 i=1 起
     var file = ""
     var base_root = ""
+    if len(as_) > 0:
+        g_self = as_[0]
     var i = 1
     while i < len(as_):
         let a = as_[i]
@@ -197,6 +287,8 @@ def main():
             else:
                 px_err("pxcheck: --base 缺目录")
                 exit(2)
+        elif a == "--semantic":
+            g_semantic = 1
         elif starts_with(a, "-"):
             px_err("pxcheck: 未知选项 '" + a + "'")
             usage()
