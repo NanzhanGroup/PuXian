@@ -2,11 +2,13 @@
 # ============================================================
 # 子进程兜底回收门（zombie reap）—— Issue 54
 # ------------------------------------------------------------
-# 契约（四断言）：
+# 契约（五断言）：
 #   A. 默认轨（tools/px = 用户面 VM 引擎）：os_spawn 后不 os_wait ⇒ 僵尸数必须 == 0
 #   B. C 轨（tools/px --c 逃生舱）：同断言 —— 回收在 runtime 层，必须与轨无关
 #   C. 反证：PX_NO_CHILD_REAP=1 关掉兜底回收 ⇒ 僵尸数必须 == 5（**门必须能红**）
 #   D. 语义回归：兜底线程已收走状态后，os_wait(pid) 仍须返回 3 / 143 / 0
+#   E. **解释器轨**（`px run` → bootstrap/pxi，内嵌 runtime）：同 A/B 断言
+#      （M114-S2 / Issue 55 新增：pxi 与 pxc_vm 是两套二进制，修复须分别重烘）
 #
 # 为什么要有这条门（Issue 54 · 现网实证）：
 #   晨曦 chenxi 的 Mahesvara ma-sec 每次封禁派生一个 ma-alertd（投递告警后立即退出），
@@ -41,6 +43,20 @@ zombies_of() {  # $1=binary  $2=env 赋值（可空）
     z=$(ps --ppid "$pid" -o stat= 2>/dev/null | grep -c '^Z')
     wait "$pid" 2>/dev/null
     echo "${z:-0}"
+}
+
+# 解释器轨：`px run <src>` 的僵尸数（僵尸挂在内层 pxi 下，不是 bash 包装层）
+run_zombies() {  # $1=.px 探针 → 僵尸数
+    local src=$1 pid p z=0
+    "$PXDEF" run "$src" >"$WORK/run.out" 2>&1 &
+    pid=$!
+    sleep 2
+    for p in $(pgrep -P "$pid" 2>/dev/null); do
+        z=$((z + $(ps --ppid "$p" -o stat= 2>/dev/null | grep -c '^Z')))
+    done
+    [ "$z" -eq 0 ] && z=$(ps --ppid "$pid" -o stat= 2>/dev/null | grep -c '^Z')
+    wait "$pid" 2>/dev/null
+    printf '%s' "${z:-0}"
 }
 
 bad=0
@@ -89,9 +105,17 @@ got=$(grep -E '^[0-9]+$' "$WORK/stash.out" | tr '\n' ' ' | sed 's/ *$//')
 want="3 143 0"
 [ "$got" = "$want" ]; chk $? "D os_wait 状态箱语义（exit/signal/直接认领）" "$got" "$want"
 
+# ---- E. 解释器轨（`px run` → bootstrap/pxi）：M114-S2（Issue 55）新增 ----
+#   单列的原因：`px run` 与 `px build` 是**两套二进制** —— build 走 tools/px →
+#   bootstrap/pxc_vm（生成产物，runtime 在产物里）；run 走 bootstrap/pxi（**内嵌** runtime）。
+#   Issue 54 的修复因此必须**分别**重烘才生效。实测（重烘前）：`px run` 留 5 个 <defunct>
+#   而本门 A/B/C/D 全绿 —— 又一次「门看不见用户真实走的那条路」（同 Issue 51/61 族）。
+z_run=$(run_zombies "$LEAK")
+[ "$z_run" -eq 0 ]; chk $? "E 解释器轨（px run）fire-and-forget 无僵尸残留" "$z_run" 0
+
 echo "───────────────────────────────"
 if [ "$bad" -eq 0 ]; then
-    echo "🎉 门通过：4/4（僵尸 0 / 0；反证泄漏 $z_off == $EXPECT_LEAK；状态箱 3 143 0）"
+    echo "🎉 门通过：5/5（僵尸 vm 0 / c 0 / run $z_run；反证泄漏 $z_off == $EXPECT_LEAK；状态箱 3 143 0）"
     exit 0
 fi
 echo "❌ 门失败：$bad 项不一致"

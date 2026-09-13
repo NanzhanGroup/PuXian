@@ -74,29 +74,33 @@ missing_golden() {   # $1 = golden 相对路径（打印用）
 }
 
 # ---- M-B4：错误场景对拍（PuXian 输出 vs golden/errors/ 首行错误消息） ----
+# M114-S1（Issue 61）：**分离捕获** + 「stdout 必须为空」断言。原先 `2>&1 | head -1`
+#   把产物通道与诊断通道合并，靠合并流的取序侥幸拿到诊断（诊断本在 stdout 里，而这
+#   正是病根）⇒ 一旦诊断归位 stderr 或取序变化，门就会误判。诊断必须在 stderr。
 check_error_file() {
-    local f="$1" kind="$2"
-    local base; base=$(basename "$f" .px)
-    local gold="$ERR_GOLDEN_DIR/$kind.$base.txt"
+    local f="$1" kind="$2" base gold obytes out gold_out
+    base=$(basename "$f" .px)
+    gold="$ERR_GOLDEN_DIR/$kind.$base.txt"
     [ -f "$gold" ] || { echo "    ⚠️ 无 golden: $gold（先生成）"; return 0; }
-    local out
     if [ "$kind" = "lex" ]; then
-        out=$("$PXL" "$f" 2>&1 | head -1)
+        "$PXL" "$f" >"$WORK/err.out" 2>"$WORK/err.err"
     elif [ "$kind" = "codegen" ]; then
-        out=$("$PXC" build "$f" 2>&1 | head -1)
+        "$PXC" build "$f" >"$WORK/err.out" 2>"$WORK/err.err"
     else
-        out=$("$PXPAR" "$f" 2>&1 | head -1)
+        "$PXPAR" "$f" >"$WORK/err.out" 2>"$WORK/err.err"
     fi
-    local gold_out; gold_out=$(cat "$gold")
-    if [ "$out" = "$gold_out" ]; then
+    obytes=$(wc -c <"$WORK/err.out")
+    out=$(head -1 "$WORK/err.err")
+    gold_out=$(cat "$gold")
+    if [ "$obytes" -eq 0 ] && [ "$out" = "$gold_out" ]; then
         echo "    ✅ $base"
-    else
-        echo "    ❌ $base"
-        echo "      golden: $gold_out"
-        echo "      PX    : $out"
-        return 1
+        return 0
     fi
-    return 0
+    echo "    ❌ $base"
+    [ "$obytes" -eq 0 ] || echo "      stdout 非空（${obytes}B）：诊断混进产物通道（Issue 61）"
+    echo "      golden: $gold_out"
+    echo "      stderr: $out"
+    return 1
 }
 
 # ---- M-B3：parser 对拍（AST dump vs golden/*.ast） ----

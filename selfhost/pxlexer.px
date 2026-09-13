@@ -57,12 +57,17 @@ def emit(kind, val):
     emit_at(kind, val, g_line, g_col)
 def emit_token(t):
     emit_at(t[0], t[1], t[2], t[3])
+# M114-S1（Issue 61）：诊断通道必须 = stderr，与 cg_perr（M112-S0/Issue 45）同构
+#   原先 print() 走 stdout，而驱动（pxc build / px build）的 stdout 正是 **C 产物** ⇒
+#   词法诊断被写进 .c，用户看到的是 gcc 抱怨一个中文字（误导性失败）；
+#   且 panic 冒泡到 runtime 会多打一行「运行时错误 [err 行62]: lex E1003」内部噪音。
+#   ⇒ print_err + exit(1)：诊断可见、产物通道干净、无内部行号泄漏。
 def err(code, msg):
-    print("错误: " + str(g_line) + ":" + str(g_col) + ": 词法错误 " + code + ": " + msg)
-    panic("lex " + code)
+    print_err("错误: " + str(g_line) + ":" + str(g_col) + ": 词法错误 " + code + ": " + msg)
+    exit(1)
 def err_at(code, msg, line, col):
-    print("错误: " + str(line) + ":" + str(col) + ": 词法错误 " + code + ": " + msg)
-    panic("lex " + code)
+    print_err("错误: " + str(line) + ":" + str(col) + ": 词法错误 " + code + ": " + msg)
+    exit(1)
 # ---------- 字符分类 ----------
 def is_digit(c):
     return c != "" and c >= "0" and c <= "9"

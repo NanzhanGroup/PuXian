@@ -69,6 +69,14 @@ cd selfhost && ./bootstrap_prove_bc.sh       # BC 轨：golden/compiler.bc.dump�
 #    探针 = selfhost/cases/ + cases_bad/ + cases_ok/ 全套（≈54 例 × 2 枚编译器），
 #    判 rc/stdout/stderr 逐字节；成本新检出 ≈17s，可忽略。
 #    M113-S2：**VM 轨补门**（用户跑的是 tools/px → bootstrap/pxc_vm，此前只有 C 轨有门）。
+./selfhost/rebake_bin.sh --rebake-all  # M114-S2：**全件**重烘（bootstrap/ 14 件 —— pxi/pxl/pxpar/pxfmt/…）
+./selfhost/rebake_bin.sh --check-all   # M114-S2：全件源码链门（O(1) 逐件断言来源；已进 CI）
+#    M114-S2（Issue 55）：入库件**不是 2 件而是 14 件** —— 此前其余 12 件既无内嵌指纹、也无门，
+#    于是 `px run`（bootstrap/pxi，**内嵌 runtime**）一直停在 M110：Issue 54 的僵尸兜底回收
+#    在解释轨不生效（实测 `px run` 留 5 个 <defunct>，而 zombie 门 A/B/C/D 全绿）。
+#    指纹口径由「compiler.px 的 8 文件清单」升级为**件级 import 闭包**（递归到不动点，实测
+#    更严：多含 astdump.px）；pxc/pxc_vm 仍共用同一入口源 ⇒ 同一指纹。改 `selfhost/*.px`、
+#    `tools/*.px` 或 `runtime/{vm,runtime}.{c,h}` 中**任何被某件闭包覆盖**的文件都必须重烘。
 #    两道门的判据**不重叠**：① 产物来源 —— 重烘时把「源码链指纹」链进入库件，
 #    门上读回比对（O(1)）；② C 轨走「同轨行为对拍」，VM 轨走「两轨字节码镜像对拍」
 #    （`bc compiler.px` 逐字节，实测 ≈90s：C 53s / VM 36s）。
@@ -77,8 +85,17 @@ cd selfhost && ./bootstrap_prove_bc.sh       # BC 轨：golden/compiler.bc.dump�
 #    的 SRC_CHAIN 对齐）⇒ 改 selfhost/*.px **或** runtime/{vm,runtime}.{c,h} 都必须重烘。
 #    注意：重烘**必须用全 runtime 档**缓存（脚本会拦裁剪档 —— 否则入库 pxc 会缺 runtime 能力）；
 #    门则容忍裁剪档（判据与"链进多少 runtime"无关）。
+#    M114-S4：重烘脚本已钉死 `LC_ALL=C` —— 指纹曾是**环境相关**的：`closure | sort -u` 的排序
+#    受 locale 影响，同一份源码在本机 (en_US.UTF-8) 与 CI (C) 算出**不同指纹**，CI 上 4/14 件假红。
+#    改这几行脚本时请保持 `LC_ALL=C`（门若依赖环境，它的"红/绿"就不是事实）。
 
-# 6. 新增/改动功能时补对应用例（selfhost/cases/ 或 examples/）并更新 golden
+# 6. 内置名册防漂移（M114-S4）
+#    `selfhost/interp.px` 是内置名的**权威名册**；`tools/pxlint.px` / `tools/pxcheck.px` 各自持
+#    一份**副本**（单文件 lint 需要）。副本会漂移 —— 实测两处各缺 27 个真实内置（M114-S1 把诊断
+#    改走 `print_err` 后，lint 立刻误报 L002「未定义变量」）。本门判「权威 ⊆ 两副本」且「两副本彼此相等」：
+./selfhost/builtin_list_check.sh
+
+# 7. 新增/改动功能时补对应用例（selfhost/cases/ 或 examples/）并更新 golden
 #    有意改动基准时重定基（两条基准须与源码同批提交）：
 #    cd selfhost && ./bootstrap_prove.sh --update-golden && ./bootstrap_prove_bc.sh --update-golden
 #    M113-S1：**用例必须带齐 golden** —— 缺 golden 现在判红（此前是「⚠️ 无 golden，先生成」后按通过处理，
