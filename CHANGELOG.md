@@ -6,6 +6,39 @@
 
 ## [Unreleased]
 
+### px_serve 握手停滞可归因：`peer=` / `reason=` / 计数聚合（qg-issue 66 D1 · 仅观测面）
+
+> **主题：把「每天约 60 起握手停滞」从「看得见数量」推进到「说得清是谁、是哪一类」。
+> 不改自愈语义、不改保护参数、不触自动重启。**
+
+- **① 对端标识** `peer=`：`px_serve_stall_log` 用 `getpeername` + `inet_ntop` 打印 `ip:port`
+  （`AF_INET` / `AF_INET6` / `AF_UNIX` → `unix`；取不到 → `-`）。
+  **必须在握手入口捕获**：对端一旦 RST，套接字随即脱离连接态，日志点再取会得 `ENOTCONN`
+  （本地实测 `peer=-`）—— 而 `poll-error` 恰是自然事件里「停滞 < 1s」那一大类的形态，
+  **不预置就会恰好漏掉要归因的那一类**。故入口捕获后经 `_ex` 变体传入。
+- **② 停止原因** `reason=`：原先 4 条 `break` 路径共用 `tls-handshake-timeout` 一个名字
+  （Issue 66 F10「名过其实」）⇒ 分桶为 `deadline` / `shutdown` / `step-guard` / `poll-error`；
+  原因名与计数桶**同一处映射**（`px_hsstop_name`），不会出现「日志写 A、计数进 B」。
+- **③ 计数聚合**：`g_diag_hs_stop[]` 并入 `PX_SERVE_DIAG` 摘要 —— `hs_stop(deadline= shutdown= guard= pollerr=)`。
+- **④ 兼容性**：旧字段 `fd=` / `停滞=` / `extra=` / `hs_inflight=` / `hs_tmo=` **全部保留**，
+  既有取证脚本与告警口径不破。
+- **⑤ 看门狗行 `tls-handshake-stalled` 的 `peer` 恒为 `-`（故意）**：看门狗只持有「在途计数 +
+  最早起始时刻」，**不持有 fd**；在此处猜 fd 会取到已关闭/被复用的 fd ⇒ **错误归因**。
+  该行负责**及时性**（≥5s），对端身份由随后（≤10s）**真截止行**给出（同一连接）。
+- **验收台** `examples/m108_s0/hs_stall_d1_verify.sh`（**11 PASS / 0 FAIL / 0 SKIP**）
+  + `rst_client.go`（RST 需 `SO_LINGER=0`，shell 无法表达）：三桶实测命中
+  `deadline`(3000ms) / `poll-error`(301ms) / `shutdown`(1001ms)，**均带 `peer=`**；`guard=0`；
+  diag 计数与日志条数**逐项相等**；优雅关闭 205ms（有界 join 未被破坏）。
+- **副产物**：Issue 66 的 F10 从「推断」升级为「可复现」—— 96 条自然 `timeout` 中 62 条
+  「停滞 < 1s」现可被判为 `poll-error`（对端 RST），而非 10s 总截止。
+- **回归**：m108 原复现台 7/7 · `diffcheck --all` 全量通过 · `engine_parity` 30+5/0 ·
+  `zombie_reap` 5/5 · `rebake --check` / `--check-vm` / `--check-all`(**14/14**) · 自举证明 ·
+  **本机复刻 CI regression job 128s 全绿**；`bootstrap/` 14 件随 `runtime.c` 变更**全件重烘**
+  （源码链指纹 `PXSRC-dd62f342c44c0dcb`）。
+- **⚠️ 边界（不算已闭合）**：Issue 66 的 **G2 仍开着** —— 本次补的是「能力」，生产上要跑
+  **含 D1 的构建**才会产出 `peer=`/`reason=`；晨曦现役件不含 D1 ⇒ 需**发布 → 部署 → 再取一段
+  日志**才能定性（Q1 对端是谁）并在 D1/D2/D3 间定档。故 Issue 66 保持「待定性」，不因本次结案。
+
 ### M114 尾 · 内置名册根治为单一事实源 + Issue 46 结案核验 + CI 步「假绿」修复（qg-issue 63/46/64）
 
 > **主题：把「手抄副本」换成「从 runtime 注册表派生」；顺带查出并修掉一个让整个
