@@ -193,6 +193,11 @@ static volatile long long g_diag_join_tmo = 0;      // 优雅关闭 join 超时�
 static volatile long long g_diag_stall = 0;         // 停滞告警次数
 static volatile long long g_diag_stall_last = 0;   // 上次 stall 告警（节流）
 static volatile long long g_diag_wd_last = 0;       // 看门狗上次巡检时刻
+// D1（qg-issue 66）：握手「停止原因」分桶 —— 原实现 4 条 break 路径共用
+//   `tls-handshake-timeout` 一个名字（F10「名过其实」）。分桶后可归因、可告警。
+enum { PX_HSSTOP_NONE = 0, PX_HSSTOP_DEADLINE, PX_HSSTOP_SHUTDOWN,
+       PX_HSSTOP_GUARD, PX_HSSTOP_POLLERR, PX_HSSTOP__N };
+static volatile long long g_diag_hs_stop[PX_HSSTOP__N];  // [reason] = 次数
 // 参数（env 可覆盖；默认值见下方宏）
 static int g_pool_push_tmo_ms = 0;      // 0 = 取默认 PX_POOL_PUSH_TMO_DEFAULT_MS
 static int g_px_hs_tmo_ms = 0;          // 0 = 取默认 PX_TLS_HS_TMO_DEFAULT_MS
@@ -14328,16 +14333,75 @@ static int px_conn_tls_handshake_locked(PxConn* c) {
 #define PX_POOL_PUSH_TMO_DEFAULT_MS  3000
 #define PX_SHUTDOWN_JOIN_TMO_MS      2000
 #define PX_SERVE_HS_STALL_WARN_MS    5000
-static void px_serve_stall_log(const char* kind, int fd, long long ms, long long extra) {
+// D1（qg-issue 66）：对端标识格式化。**只读、非阻塞、不持任何锁**（getpeername 对
+//   已连接套接字是查表式系统调用，不会阻塞）——调用方均在 g_srv_hs_mu 之外调用，
+//   故不改变 M108「握手 I/O 不持全局锁」的语义。AF_UNIX → "unix"；取不到 → "-"。
+static void px_peer_fmt(int fd, char* out, size_t out_sz) {
+    if (out_sz < 8) { if (out_sz) out[0] = 0; return; }
+    out[0] = '-'; out[1] = 0;
+    if (fd < 0) return;
+    struct sockaddr_storage ss;
+    socklen_t sl = sizeof(ss);
+    memset(&ss, 0, sizeof(ss));
+    if (getpeername(fd, (struct sockaddr*)&ss, &sl) != 0) return;
+    char host[80] = {0};
+    int port = 0;
+    if (ss.ss_family == AF_INET) {
+        struct sockaddr_in* a = (struct sockaddr_in*)&ss;
+        if (!inet_ntop(AF_INET, &a->sin_addr, host, sizeof(host))) return;
+        port = (int)ntohs(a->sin_port);
+    } else if (ss.ss_family == AF_INET6) {
+        struct sockaddr_in6* a = (struct sockaddr_in6*)&ss;
+        if (!inet_ntop(AF_INET6, &a->sin6_addr, host, sizeof(host))) return;
+        port = (int)ntohs(a->sin6_port);
+    } else if (ss.ss_family == AF_UNIX) {
+        snprintf(out, out_sz, "unix");
+        return;
+    } else {
+        return;
+    }
+    if (port > 0) snprintf(out, out_sz, "%s:%d", host, port);
+    else          snprintf(out, out_sz, "%s", host);
+}
+
+// D1：停止原因名（与 g_diag_hs_stop 同源：日志里写的名字与计数用的桶同一处映射，
+//   不会出现「日志写 A、计数进 B」的漂移）
+static const char* px_hsstop_name(int r) {
+    switch (r) {
+        case PX_HSSTOP_DEADLINE: return "deadline";
+        case PX_HSSTOP_SHUTDOWN: return "shutdown";
+        case PX_HSSTOP_GUARD:    return "step-guard";
+        case PX_HSSTOP_POLLERR:  return "poll-error";
+        default:                 return "none";
+    }
+}
+
+// D1：对端可由 peer_in 预置（**入口捕获**）——对端一旦 RST，套接字随即脱离连接态，
+//   日志点再 getpeername 会得 ENOTCONN（实测 poll-error 事件 peer 为 "-"）⇒ 而这正是
+//   自然事件里「停滞<1s」那一大类的形态，不预置就会**恰好漏掉要归因的那一类**。
+//   peer_in 为空则按 fd 现取（调用点套接字仍处已连接态时用后者）。
+static void px_serve_stall_log_ex(const char* kind, const char* reason, int fd,
+                                  const char* peer_in, long long ms, long long extra) {
+    char peer[128];
+    if (peer_in && peer_in[0] && strcmp(peer_in, "-") != 0)
+        snprintf(peer, sizeof(peer), "%s", peer_in);
+    else
+        px_peer_fmt(fd, peer, sizeof(peer));
     __atomic_fetch_add(&g_diag_stall, 1, __ATOMIC_RELAXED);
-    fprintf(stderr, "[px-serve:STALL] %s fd=%d 停滞=%lldms extra=%lld "
+    fprintf(stderr, "[px-serve:STALL] %s reason=%s peer=%s fd=%d 停滞=%lldms extra=%lld "
                     "(hs_inflight=%lld enter_null=%lld push_tmo=%lld hs_tmo=%lld)\n",
-            kind, fd, ms, extra,
+            kind, reason, peer, fd, ms, extra,
             __atomic_load_n(&g_diag_hs_inflight, __ATOMIC_RELAXED),
             __atomic_load_n(&g_diag_enter_null, __ATOMIC_RELAXED),
             __atomic_load_n(&g_diag_push_tmo, __ATOMIC_RELAXED),
             __atomic_load_n(&g_diag_hs_tmo, __ATOMIC_RELAXED));
     fflush(stderr);
+}
+
+// D1：未预置对端的调用点（此时套接字仍在已连接态）——按 fd 现取。
+static void px_serve_stall_log(const char* kind, const char* reason, int fd,
+                               long long ms, long long extra) {
+    px_serve_stall_log_ex(kind, reason, fd, NULL, ms, extra);
 }
 
 // M108-S2a：TLS 握手分步驱动（qg-issue 37 根因修复）。
@@ -14378,6 +14442,9 @@ static int px_conn_tls_handshake(PxConn* c) {
     int fd = c->fd;
     int tmo = g_px_hs_tmo_ms > 0 ? g_px_hs_tmo_ms : PX_TLS_HS_TMO_DEFAULT_MS;
     long long t0 = px_ev_now_ms();
+    // D1：入口捕获对端（此刻套接字必为已连接态；见经此捕获而非在日志点取的原因）
+    char peer[128];
+    px_peer_fmt(fd, peer, sizeof(peer));
     __atomic_fetch_add(&g_diag_hs_begin, 1, __ATOMIC_RELAXED);
     if (__atomic_fetch_add(&g_diag_hs_inflight, 1, __ATOMIC_RELAXED) == 0)
         __atomic_store_n(&g_diag_hs_oldest, t0, __ATOMIC_RELAXED);
@@ -14399,12 +14466,13 @@ static int px_conn_tls_handshake(PxConn* c) {
     mbedtls_ssl_context* ssl = (mbedtls_ssl_context*)c->ssl;
     px_fd_nonblock(fd);                    // 步内不得阻塞（EAGAIN → WANT_READ/WANT_WRITE）
     int ret = -1, stopped = 0, done = 0, steps = 0;
+    int hs_stop = PX_HSSTOP_NONE;          // D1：停止原因（见 px_hsstop_name）
     for (;;) {
         long long el = px_ev_now_ms() - t0;
-        if (tmo > 0 && el >= tmo) { stopped = 1; break; }          // 总截止
+        if (tmo > 0 && el >= tmo) { stopped = 1; hs_stop = PX_HSSTOP_DEADLINE; break; }   // 总截止
         // M108-S1a：关闭期立即放弃在途握手 → 优雅关闭可快速 join（不再 90s → SIGKILL）
-        if (g_px_stop) { stopped = 1; break; }
-        if (++steps > 512) { stopped = 1; break; }                 // 防御：无 I/O 跃迁死循环
+        if (g_px_stop) { stopped = 1; hs_stop = PX_HSSTOP_SHUTDOWN; break; }
+        if (++steps > 512) { stopped = 1; hs_stop = PX_HSSTOP_GUARD; break; }             // 防御：无 I/O 跃迁死循环
         pthread_mutex_lock(&g_srv_hs_mu);
         int over = mbedtls_ssl_is_handshake_over(ssl);
         long long s0 = px_ev_now_ms();
@@ -14427,7 +14495,7 @@ static int px_conn_tls_handshake(PxConn* c) {
         if (slice < 1) slice = 1;
         if (slice > 500) slice = 500;        // M108-S1a：分片等待 → ≤500ms 内观察 g_px_stop
         int pr = px_hs_poll_io(fd, ret == MBEDTLS_ERR_SSL_WANT_WRITE, slice);
-        if (pr < 0) { stopped = 1; break; }  // 出错/无效 fd
+        if (pr < 0) { stopped = 1; hs_stop = PX_HSSTOP_POLLERR; break; }  // 出错/无效 fd / POLLERR
         if (pr == 0) continue;               // 本片无事件 → 回循环顶重检总截止与 g_px_stop
     }
     px_fd_block(fd);                        // 还原阻塞（keep-alive 走 SO_RCVTIMEO 语义）
@@ -14435,7 +14503,10 @@ static int px_conn_tls_handshake(PxConn* c) {
         __atomic_store_n(&g_diag_hs_oldest, 0, __ATOMIC_RELAXED);
     if (stopped) {                          // 超时 → 自愈：调用方收尾关闭该连接
         __atomic_fetch_add(&g_diag_hs_tmo, 1, __ATOMIC_RELAXED);
-        px_serve_stall_log("tls-handshake-timeout", fd, px_ev_now_ms() - t0, tmo);
+        if (hs_stop > PX_HSSTOP_NONE && hs_stop < PX_HSSTOP__N)
+            __atomic_fetch_add(&g_diag_hs_stop[hs_stop], 1, __ATOMIC_RELAXED);
+        px_serve_stall_log_ex("tls-handshake-timeout", px_hsstop_name(hs_stop),
+                              fd, peer, px_ev_now_ms() - t0, tmo);
         return -1;
     }
     if (!done) {
@@ -16176,7 +16247,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
             // 真「无槽可用」（fd ≥ g_conn_max / 槽被占 / 分配失败）：这才是**原实现的 fd
             // 泄漏类**——fd 无人持有也无人 close；计入 enter_null 并告警。
             __atomic_fetch_add(&g_diag_enter_null, 1, __ATOMIC_RELAXED);
-            px_serve_stall_log("p4-enter-null", fd, 0, 0);
+            px_serve_stall_log("p4-enter-null", "enter-null", fd, 0, 0);
             px_evc_detach(fd);
             close(fd);
         }
@@ -17337,7 +17408,7 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
         if (px_pool_push_tmo(cfd, g_pool_push_tmo_ms > 0 ? g_pool_push_tmo_ms
                                                          : PX_POOL_PUSH_TMO_DEFAULT_MS) != 0) {
             __atomic_fetch_add(&g_diag_push_tmo, 1, __ATOMIC_RELAXED);
-            px_serve_stall_log("accept-reject-queue-full", cfd, 0, g_pool_count);
+            px_serve_stall_log("accept-reject-queue-full", "queue-full", cfd, 0, g_pool_count);
             px_evc_detach(cfd);
             close(cfd);
         }
@@ -17490,7 +17561,7 @@ static int px_pool_push_bounded(int fd) {
     int tmo = g_pool_push_tmo_ms > 0 ? g_pool_push_tmo_ms : PX_POOL_PUSH_TMO_DEFAULT_MS;
     if (px_pool_push_tmo(fd, tmo) == 0) return 0;
     __atomic_fetch_add(&g_diag_push_tmo, 1, __ATOMIC_RELAXED);
-    px_serve_stall_log("push-reject-queue-full", fd, 0, g_pool_count);
+    px_serve_stall_log("push-reject-queue-full", "queue-full", fd, 0, g_pool_count);
     px_pxpend_close(fd);
     return -1;
 }
@@ -17578,7 +17649,10 @@ static void* px_serve_watchdog(void* argp) {
         if (inf > 0 && oldest > 0 && now - oldest >= PX_SERVE_HS_STALL_WARN_MS &&
             now - __atomic_load_n(&g_diag_stall_last, __ATOMIC_RELAXED) >= PX_SERVE_HS_STALL_WARN_MS) {
             __atomic_store_n(&g_diag_stall_last, now, __ATOMIC_RELAXED);
-            px_serve_stall_log("tls-handshake-stalled", -1, now - oldest, inf);
+            // D1：看门狗只能看到「计数 + 最早起始时刻」，**不持 fd**（fd 的持有者是
+            //   worker 线程；此处若去猜一个 fd 会取到已关闭/被复用的 fd ⇒ 归因错误）。
+            //   故 peer 恒为 "-"：本条负责「及时性」，对端身份由随后的 10s 截止行给出。
+            px_serve_stall_log("tls-handshake-stalled", "inflight-slow", -1, now - oldest, inf);
         }
         // ② 健康摘要（仅在 PX_SERVE_DIAG=1 时每 5s 打印；单线程访问 → 局部 static 即可）
         static long long last_diag = 0;
@@ -17592,6 +17666,7 @@ static void* px_serve_watchdog(void* argp) {
             busy = __atomic_load_n(&g_pool_busy_cnt, __ATOMIC_RELAXED);
             fprintf(stderr, "[px-serve:diag] pool=%d busy=%d queue=%lld inflight=%d "
                             "hs(ok=%lld fail=%lld tmo=%lld inflight=%lld lockmax=%lldms) "
+                            "hs_stop(deadline=%lld shutdown=%lld guard=%lld pollerr=%lld) "
                             "enter_null=%lld push_tmo=%lld "
                             "hdr(pass=%ld deny=%ld crlf=%ld budget=%ld badval=%ld)\n",
                     sz, busy, q, g_px_inflight,
@@ -17599,6 +17674,10 @@ static void* px_serve_watchdog(void* argp) {
                     __atomic_load_n(&g_diag_hs_fail, __ATOMIC_RELAXED),
                     __atomic_load_n(&g_diag_hs_tmo, __ATOMIC_RELAXED),
                     inf, __atomic_load_n(&g_diag_hs_lock_max_ms, __ATOMIC_RELAXED),
+                    __atomic_load_n(&g_diag_hs_stop[PX_HSSTOP_DEADLINE], __ATOMIC_RELAXED),
+                    __atomic_load_n(&g_diag_hs_stop[PX_HSSTOP_SHUTDOWN], __ATOMIC_RELAXED),
+                    __atomic_load_n(&g_diag_hs_stop[PX_HSSTOP_GUARD], __ATOMIC_RELAXED),
+                    __atomic_load_n(&g_diag_hs_stop[PX_HSSTOP_POLLERR], __ATOMIC_RELAXED),
                     __atomic_load_n(&g_diag_enter_null, __ATOMIC_RELAXED),
                     __atomic_load_n(&g_diag_push_tmo, __ATOMIC_RELAXED),
                     __atomic_load_n(&g_hdr_pass, __ATOMIC_RELAXED),
