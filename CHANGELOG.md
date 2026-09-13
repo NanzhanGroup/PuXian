@@ -6,6 +6,50 @@
 
 ## [Unreleased]
 
+### 发布侧「身份与顺序」加固 —— rpm 单调性守卫 + 发布包白名单复制/位级可复现（qg-issue 41 · 56）
+
+> **主题：发出去的东西，身份要唯一、顺序要单调。** 两条都是**发布流水线**缺陷，与 runtime 无关；
+> 均**不碰任何节点、不触发发布**，全部本地可离线单测。发现方 = 东月。
+
+- **Issue 41（顺序）**：`release.yml` 的 `rpm-publish` 用 `rsync -a --delete` 把新仓库覆盖到
+  `gh-pages/rpm/`，注释写「只保留最新版」，但**从不比较新旧**；且全仓 workflow **无 `concurrency`**。
+  2026-09-11 实况：`v0.2.0-m111` 先发布（18:04Z）→ `v0.2.0-m110` 后发布（18:54Z）**覆盖**。
+  这次侥幸无害（m111 的提交恰是 m110 的祖先）；**若先后关系反过来、或有人重跑旧 tag 的 release**，
+  `rsync --delete` 会把 rpm 与 repodata **整体替换成旧版且零告警** ⇒ 对外表现为「dnf 升级后能力回落」。
+  - **新增 `packaging/rpm_monotonic_guard.sh`**（发布前比较「已发布 rpm 版本」vs「待发布 rpm 版本」，
+    更旧即 `exit 1`，让流水线红，而不是静默覆盖）。**不依赖 rpm**（`rpm-publish` job 未装 rpm），
+    纯 bash 从文件名解析 `<ver>-<release>`（rpm 规范禁止 version 段含 `-`，故首个 `-` 即分界），
+    里程碑 `m<NNN>` 补零后 `sort -V` 比较；多 dist 基线取 **max**；无基线（首次发布）放行；
+    待发布树里**没有任何 puxian rpm** ⇒ `rc=2`（防把空/残仓库推上去）。人工回退须显式设
+    `RPM_ALLOW_REGRESSION=<理由>`（留痕，可审计）。
+  - **`release.yml` 顶层加 `concurrency: {group: <wf>-publish, cancel-in-progress: false}`**
+    （刻意不 cancel —— 发布不可被打断，中断会留下半推送的仓库树）；`rpm-publish` 加 `checkout`
+    取守卫脚本，并在 `rsync --delete` **之前**调用守卫 ⇒ 守卫失败时 `rsync` 不执行，`gh-pages` 无变化。
+- **Issue 56（身份）**：`tools/make_release.sh` 用 `cp -r tools` **整目录复制**，把 `.gitignore` 的
+  `tools/build/`（本机旧二进制 + `sqlite3.o` + `openssl/lib/*.a`，实测 93 MB）一并打进包 ⇒
+  **同一 tag、两台机器、两个 sha256**（CI 资产 **392** 条目 vs 本机 **596** 条目）⇒ 包的哈希不能当发行身份。
+  - **组装改为「git 索引即发布物内容」**：`copy_tracked()` 用 `git ls-files -s -z` 逐件复制，
+    同时按索引 mode 归一权限（`100644/100755/120000`），符号链接用 `cp -Pp` 保持链接本体
+    （`tools/pxc -> px` 不再被解引用成副本）；并加**防回归自检**（包内出现 `tools/build/` 即 `exit 1`）。
+  - **打包改为位级可复现**：`tar --sort=name --owner=0 --group=0 --numeric-owner --mtime=@<commit-ts>`
+    ⇒ 确定性四要素（文件集合 + 权限 + 属主 + mtime）全部固定，**同一 commit 在任意机器、任意时刻
+    打出的 sha256 相同**，包的哈希从此可作发行身份。
+    ⚠️ 这是一次性的资产字节变更（旧资产属主为 runner、mtime 为打包时刻）；解包与
+    `tools/install.sh` 的 `sha256sums.txt` 校验不受影响。
+- **交叉印证（结构同构，非自证）**：m112 tag 处跟踪件 362 ⇒ 期望非目录条目 `362-2+3=363`，
+  加目录条目 29 ⇒ **总计 392**，与 qg-issue 56 实测的「CI 官方资产 392 条目」**同口径吻合**；
+  本机 HEAD 打包 364 件 + 29 目录 = 393 条目，**本机与 CI 已同构**。
+- **新增离线自测（已接入 CI `toolchain` job，独立成行、不用 `&&` —— 沿用 Issue 64 的教训）**：
+  - `packaging/selftest_rpm_monotonic_guard.sh`：**22 通过 / 0 失败**。含 ISSUE §5 判据 1
+    「旧版本后发布 ⇒ 必须失败且给出明确原因」、判据 2「正常新版仍成功」、同版本幂等、主版本回退、
+    多 dist 混装取 max、`aarch64` 文件名、无 rpm ⇒ `rc=2`、逃生舱留痕、**空 `RPM_ALLOW_REGRESSION` 仍拒绝**。
+    （自测本身踩过一个坑并已写明：`set -o pipefail` 下 `tar | grep -q` 命中即 SIGPIPE ⇒ **假红**，
+    故清单先入变量、判定用 bash `case`，不接 `grep -q`。）
+  - `packaging/selftest_make_release.sh`：**6 通过 / 0 失败**。断言 ①无 `tools/build/` ②条目数
+    == git 跟踪集合（自适应公式，不写死数字）③`tools/pxc` 仍是符号链接 ④**连打两次 sha256 相同**。
+  - **真机验收（用真实 `gh-pages` 树，非合成）**：基线 `0.2.0-1.m112.el9` + 待发布 `m110`
+    ⇒ `rc=1` 并打印「拒绝发布 / 整体替换为旧版 / 处置」；待发布 `m113` ⇒ `rc=0`。
+
 ### VM 轨「赋值目标出现在右操作数」右操作数被左值覆盖 —— 赋值发射点改「临时槽求值 + MOV 回写」（qg-issue 67）
 
 > **主题：`x = <左> + x` 在 VM 轨（M91 起 = 用户面默认轨）恒得「左 + 左」；字符串零填充
