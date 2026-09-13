@@ -15,6 +15,7 @@
 # ============================================================
 import json
 import os
+import re
 import select
 import subprocess
 import sys
@@ -148,7 +149,7 @@ def main():
         res = r["result"]
         txt = res["content"][0]["text"] if res.get("content") else ""
         check("version isError=false", res.get("isError") is False)
-        check("version 文本含 pxc", "pxc 0.1.0" in txt)
+        check("version 文本含 pxc", re.search(r"pxc \d+\.\d+\.\d+", txt) is not None)
     else:
         check("version 有 result", False)
 

@@ -30,7 +30,7 @@ echo "══════════ M64-S2 pxfmt 验证 ═══════�
 
 echo "── 版本"
 v=$("$PXFMT" --version 2>&1); chk $? "pxfmt --version exit 0"
-echo "$v" | grep -q "pxfmt 0.1.0" && vok=0 || vok=1; chk $vok "pxfmt --version 文本 (pxfmt 0.1.0 ...)"
+echo "$v" | grep -qE "pxfmt [0-9]+\.[0-9]+\.[0-9]+" && vok=0 || vok=1; chk $vok "pxfmt --version 文本 (pxfmt <semver> ...)"
 
 echo "── ① 输入→golden 一致"
 "$PXFMT" "$IN" > /tmp/m64f_out.px 2>/dev/null; o=$?
