@@ -108,7 +108,17 @@ bash tools/gen_builtin_list.sh --check  # 只比不写（CI 用）
 #    改动 pxlint / pxcheck / lint_core 后须重烘那两件（M114 尾新增**按件重烘**）：
 ./selfhost/rebake_bin.sh --entries=pxlint,pxcheck   # 再跑 --check-all 验收
 
-# 7. 新增/改动功能时补对应用例（selfhost/cases/ 或 examples/）并更新 golden
+# 7. 门自身的纪律（三条，都是真机 CI 的实锤教训 · qg-issue 61/64）
+#    ① **不许用 `&&` 串命令**：GitHub Actions 默认 shell 是 `bash -e {0}`，而 `set -e`
+#       **不作用于 AND-OR 列表**（实测 `bash -ec 'false && true; echo X'` → 打印 X、rc=0）。
+#       写成 `a && b` ⇒ a 的失败被吞、该步恒绿。一条命令一行。
+#    ② **干净检出才算数**：本机测试可能因为**遗留构建产物**而假绿（实锤：`m65_lsp` 依赖
+#       `examples/*/build/` 里的陈旧二进制，干净检出上必红，被吞了很久）。验收请用
+#       `git archive HEAD | tar -x -C /tmp/clean && cd /tmp/clean` 复本重跑关键步。
+#    ③ **PASS 必须由断言驱动**：失败路径上也打印 `PASS[...]` / `✅` 属于**自我粉饰**，
+#       会让日志与 rc 互相矛盾。凡「通过」字样，只能在全绿分支里打印。
+
+# 8. 新增/改动功能时补对应用例（selfhost/cases/ 或 examples/）并更新 golden
 #    有意改动基准时重定基（两条基准须与源码同批提交）：
 #    cd selfhost && ./bootstrap_prove.sh --update-golden && ./bootstrap_prove_bc.sh --update-golden
 #    M113-S1：**用例必须带齐 golden** —— 缺 golden 现在判红（此前是「⚠️ 无 golden，先生成」后按通过处理，
