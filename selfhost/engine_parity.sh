@@ -134,6 +134,10 @@ done
 #   B. 默认轨（用户面 tools/px）rc=0、stdout 非空、**stderr 必须为空**
 #   C. 若存在 `<case>.expected` → 实际运行默认轨产物，stdout 逐字节相符
 #      （弃元右侧**仍必须求值**：`_ = f()` 不是把 f() 删掉）
+#   E. **两轨产物输出逐字节一致**（qg-issue 67）—— 原先阶段 2 只跑默认轨产物，
+#      「两轨行为是否一致」无人守：`x = "b" + x` 在 VM 轨恒得 "bb"、C 轨得 "bA"，
+#      而当时所有门全绿（阶段 1 只查「该报的报」，`.expected` 只对拍默认轨）。
+#      现同时用 `tools/px build --c` 真编真跑 C 轨产物并与默认轨产物对拍。
 # ============================================================
 echo "── 阶段 2：正例（两轨都必须编译通过 + 产物运行对拍）──"
 ok_pass=0; ok_bad=0
@@ -158,18 +162,40 @@ for f in selfhost/cases_ok/*.px; do
     [ "$dbytes" -gt 0 ] || why="${why:+$why；}默认轨无产物"
     [ ! -s "$WORK/ok_d.err" ] || why="${why:+$why；}默认轨 stderr 非空（$(head -1 "$WORK/ok_d.err" | tr -d '\n')）"
 
-    if [ -z "$why" ] && [ -f "$exp_file" ]; then
+    if [ -z "$why" ]; then
         bin=$(cat "$WORK/ok_d.out" "$WORK/ok_d.err" \
               | sed -n 's/^编译成功: \([^ ]*\).*/\1/p' | head -1)
-        if [ -n "$bin" ] && [ -x "$bin" ]; then
-            "$bin" >"$WORK/ok_run.out" 2>"$WORK/ok_run.err"; rrc=$?
-            if [ "$rrc" -ne 0 ]; then
-                why="产物运行退出码 $rrc（$(head -1 "$WORK/ok_run.err" | tr -d '\n')）"
-            elif ! diff -q "$exp_file" "$WORK/ok_run.out" >/dev/null 2>&1; then
+        # qg-issue 67：**C 轨也真编真跑** —— 与默认轨产物输出逐字节对拍。
+        #   （C 轨产物落在源文件旁的 build/，故用独立目录 $WORK/okc/$base 编译，
+        #     避免覆盖默认轨产物。）
+        mkdir -p "$WORK/okc/$base"
+        cp -a "$f" "$WORK/okc/$base/$base.px"
+        "$PXDEF" build --c "$WORK/okc/$base/$base.px" \
+            >"$WORK/okc_c.out" 2>"$WORK/okc_c.err"; crcc=$?
+        cbin=$(cat "$WORK/okc_c.out" "$WORK/okc_c.err" \
+               | sed -n 's/^编译成功: \([^ ]*\).*/\1/p' | head -1)
+        if [ "$crcc" -ne 0 ] || [ -z "$cbin" ] || [ ! -x "$cbin" ]; then
+            why="C 轨产物构建失败（rc=$crcc；$(head -1 "$WORK/okc_c.err" | tr -d '\n')）"
+        elif [ -z "$bin" ] || [ ! -x "$bin" ]; then
+            why="未从默认轨输出解析到可执行产物路径"
+        else
+            # 产物运行必须带超时：本案（qg-issue 67 零填充死循环）在未修复时**永不返回**，
+            #   无超时的门会把 CI 挂死而不是判红。
+            timeout 30 "$bin" >"$WORK/ok_run.out" 2>"$WORK/ok_run.err"; rrc=$?
+            timeout 30 "$cbin" >"$WORK/ok_run_c.out" 2>"$WORK/ok_run_c.err"; crc_run=$?
+            if [ "$rrc" -eq 124 ]; then
+                why="默认轨产物运行超时（30s，疑似死循环）"
+            elif [ "$crc_run" -eq 124 ]; then
+                why="C 轨产物运行超时（30s，疑似死循环）"
+            elif [ "$rrc" -ne 0 ]; then
+                why="默认轨产物运行退出码 $rrc（$(head -1 "$WORK/ok_run.err" | tr -d '\n')）"
+            elif [ "$crc_run" -ne 0 ]; then
+                why="C 轨产物运行退出码 $crc_run（$(head -1 "$WORK/ok_run_c.err" | tr -d '\n')）"
+            elif ! diff -q "$WORK/ok_run.out" "$WORK/ok_run_c.out" >/dev/null 2>&1; then
+                why="两轨产物输出不一致（VM：$(tr '\n' '|' <"$WORK/ok_run.out")／C：$(tr '\n' '|' <"$WORK/ok_run_c.out")）—— qg-issue 67 家族"
+            elif [ -f "$exp_file" ] && ! diff -q "$exp_file" "$WORK/ok_run.out" >/dev/null 2>&1; then
                 why="产物运行输出 ≠ expected：$(tr '\n' '|' <"$WORK/ok_run.out")"
             fi
-        else
-            why="未从默认轨输出解析到可执行产物路径"
         fi
     fi
 
