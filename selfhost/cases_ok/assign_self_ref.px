@@ -1,0 +1,90 @@
+# M115 / qg-issue 67 正例：**赋值目标出现在右操作数**的自引用赋值
+# 背景：VM 轨（M91 起 = 用户面默认轨）原先把「目标变量自己的槽」直接当 dst，
+#   而 Binary / NullCoalesce / And / Or 都是「左值先入 dst」，于是右操作数读到
+#   被覆盖后的左值 ⇒ `x = "b" + x` 恒得 "bb"、`x = 1 + x` 恒得 2、
+#   `while len(s) < 4: s = "0" + s` 长度恒 2 ⇒ **死循环**。C 轨正确 ⇒ 两轨不一致。
+# 本件要求：**两轨产物输出逐字节一致**且等于本文件 .expected（engine_parity 阶段 2 对拍）。
+# 注：main 由编译器隐式调用（顶层再写一次 `main()` 会执行两遍）。
+def t2():
+    var x = "A"
+    x = "b" + x
+    return x
+
+
+def t4():
+    var x = "A"
+    var y = "b"
+    x = y + x
+    return x
+
+
+def t6():
+    var x = "A"
+    x = "z" + x[0:1]
+    return x
+
+
+def t8():
+    var x = "A"
+    var y = "b"
+    x = y + x[0:1]
+    return x
+
+
+def t_m1():
+    var x = "A"
+    x = x + "b"
+    return x
+
+
+def t_int():
+    var x = 5
+    x = 1 + x
+    return x
+
+
+def t_var_decl():
+    var x = "A"
+    var z = "q" + x
+    return z
+
+
+def t_nested():
+    var x = "A"
+    var y = "b"
+    x = y + (y + x)
+    return x
+
+
+def t_nullcoalesce():
+    var x = "A"
+    x = null ?? x
+    return x
+
+
+def t_and():
+    var x = "A"
+    var y = true
+    x = y and x
+    return x
+
+
+def zeropad(n):
+    var s = str(n)
+    while len(s) < 4:
+        s = "0" + s
+    return s
+
+
+def main():
+    print(t2())
+    print(t4())
+    print(t6())
+    print(t8())
+    print(t_m1())
+    print(t_int())
+    print(t_var_decl())
+    print(t_nested())
+    print(t_nullcoalesce())
+    print(t_and())
+    print(zeropad(42))

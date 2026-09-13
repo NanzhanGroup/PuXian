@@ -58,6 +58,9 @@ cd selfhost && ./bootstrap_prove_bc.sh       # BC 轨：golden/compiler.bc.dump�
 
 # 4. 引擎一致性门（用户面默认轨 tools/px 必须与基准轨说同一句话，Issue 51）
 ./selfhost/engine_parity.sh
+#    qg-issue 67 起阶段 2 扩了一条判据：**两轨产物输出逐字节一致** —— 原先只跑默认轨产物，
+#    「两轨行为是否一致」无人守（`x = "b" + x` 在 VM 轨得 "bb"、C 轨得 "bA" 而全门绿）。
+#    现同时用 `tools/px build --c` 真编真跑 C 轨产物并与默认轨对拍（产物运行带 `timeout 30`）。
 
 # 5. 改过编译器源码 / 基准后：重烘入库二进制（否则用户拿到的仍是旧引擎）
 #    M113-S0（Issue 58）：此前只写了 `cp compiler_vm bootstrap/pxc_vm`，
@@ -117,6 +120,10 @@ bash tools/gen_builtin_list.sh --check  # 只比不写（CI 用）
 #       `git archive HEAD | tar -x -C /tmp/clean && cd /tmp/clean` 复本重跑关键步。
 #    ③ **PASS 必须由断言驱动**：失败路径上也打印 `PASS[...]` / `✅` 属于**自我粉饰**，
 #       会让日志与 rc 互相矛盾。凡「通过」字样，只能在全绿分支里打印。
+#    ④ **门执行「被测程序」必须带超时**（qg-issue 67）：被测物的缺陷形态**包含「不终止」**——
+#       `engine_parity` 阶段 2 原先直接 `"$bin"`，遇到零填充死循环时门是**挂死**（等 CI 30 分钟
+#       超时），而不是判红。凡跑产物一律 `timeout 30 <cmd>`：死循环要在门里**判红**，
+#       不能在门里**挂死**。与 ② / M114-S4 的 locale 同源：先问「这个门失败时会怎样」。
 
 # 8. 新增/改动功能时补对应用例（selfhost/cases/ 或 examples/）并更新 golden
 #    有意改动基准时重定基（两条基准须与源码同批提交）：
