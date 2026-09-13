@@ -159,6 +159,9 @@ jobs:
             ./bootstrap/pxlint "$f" >/dev/null || { echo "❌ lint 失败: $f"; exit 1; }
           done
           echo "✅ lint 全绿（compiler 主入口 0 错 + tools 16 文件 0/0）"
+      - name: 内置名册防漂移（interp.px 权威 ⊆ pxlint/pxcheck 副本）
+        run: |
+          bash selfhost/builtin_list_check.sh
       - name: 生态索引防漂移（stdlib → ecosystem_index.json + native_index.json + ECOSYSTEM/CHEATSHEET 同步）
         run: |
           chmod +x bootstrap/pxi

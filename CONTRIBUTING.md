@@ -85,8 +85,17 @@ cd selfhost && ./bootstrap_prove_bc.sh       # BC 轨：golden/compiler.bc.dump�
 #    的 SRC_CHAIN 对齐）⇒ 改 selfhost/*.px **或** runtime/{vm,runtime}.{c,h} 都必须重烘。
 #    注意：重烘**必须用全 runtime 档**缓存（脚本会拦裁剪档 —— 否则入库 pxc 会缺 runtime 能力）；
 #    门则容忍裁剪档（判据与"链进多少 runtime"无关）。
+#    M114-S4：重烘脚本已钉死 `LC_ALL=C` —— 指纹曾是**环境相关**的：`closure | sort -u` 的排序
+#    受 locale 影响，同一份源码在本机 (en_US.UTF-8) 与 CI (C) 算出**不同指纹**，CI 上 4/14 件假红。
+#    改这几行脚本时请保持 `LC_ALL=C`（门若依赖环境，它的"红/绿"就不是事实）。
 
-# 6. 新增/改动功能时补对应用例（selfhost/cases/ 或 examples/）并更新 golden
+# 6. 内置名册防漂移（M114-S4）
+#    `selfhost/interp.px` 是内置名的**权威名册**；`tools/pxlint.px` / `tools/pxcheck.px` 各自持
+#    一份**副本**（单文件 lint 需要）。副本会漂移 —— 实测两处各缺 27 个真实内置（M114-S1 把诊断
+#    改走 `print_err` 后，lint 立刻误报 L002「未定义变量」）。本门判「权威 ⊆ 两副本」且「两副本彼此相等」：
+./selfhost/builtin_list_check.sh
+
+# 7. 新增/改动功能时补对应用例（selfhost/cases/ 或 examples/）并更新 golden
 #    有意改动基准时重定基（两条基准须与源码同批提交）：
 #    cd selfhost && ./bootstrap_prove.sh --update-golden && ./bootstrap_prove_bc.sh --update-golden
 #    M113-S1：**用例必须带齐 golden** —— 缺 golden 现在判红（此前是「⚠️ 无 golden，先生成」后按通过处理，

@@ -44,6 +44,17 @@
 set -u
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
+# ---- M114-S4（CI 首跑红）：指纹必须**与语言环境无关** ----
+# 实锤（PR #8 首次真机 CI）：`closure | sort -u` 的**排序受 locale 影响** ——
+#   本机 LANG=en_US.UTF-8（glibc 排序：`_` 基本权重可忽略）算出的 pxi 指纹是
+#   PXSRC-b0e380ca15c1a775，而 CI runner（C 语言环境，逐字节序）算出的同一份源码
+#   是 PXSRC-7716b5f78932a71a ⇒ 同样源码、同样脚本，两处结论不同；14 件里恰好有
+#   4 件（pxi/pxi_vm：闭包含 i_err.px；pxcheck/pxlint：闭包含 `tools/../selfhost/…`
+#   这类路径）踩中排序差异，门在 CI 上**假红**。
+# 修法：全脚本钉死 LC_ALL=C（逐字节排序 = 可复现），并在 sort 处再显式一次。
+# 教训与本门同源：**一个门若依赖环境，它给出的"红/绿"就不是事实**。
+export LC_ALL=C
+export LANG=C
 
 MODE=rebake
 for a in "$@"; do
@@ -164,7 +175,7 @@ closure() {
 entry_fp() {
     local src; src=$(entry_src "$1")
     [ -n "$src" ] || return 1
-    { closure "$ROOT/$src" | sort -u | while read -r p; do cat "$p"; done
+    { closure "$ROOT/$src" | LC_ALL=C sort -u | while read -r p; do cat "$p"; done
       cat "$ROOT/runtime/vm.c" "$ROOT/runtime/vm.h" \
           "$ROOT/runtime/runtime.c" "$ROOT/runtime/runtime.h" 2>/dev/null; } \
       | sha256sum | cut -c1-16

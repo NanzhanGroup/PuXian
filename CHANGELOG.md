@@ -6,6 +6,53 @@
 
 ## [Unreleased]
 
+### M114-S4 · PR #8 首次真机 CI 两处红 —— 都是「门自己不可信」（qg-issue 61/55）
+
+> **主题：新门第一次上真机，红了两处；两处都不是新代码的功能错，而是门自身的缺陷。**
+> （另有一处红是本机复刻 CI 才暴露的：golden 未与源码同批重定基。）
+
+**① regression job 红：`--check-all` 在 CI 报 4/14 件「非当前源码烘出」（指纹依赖 locale）**
+- 根因：`closure() | LC_ALL 未钉死 sort -u` —— **排序受 locale 影响**。本机 `en_US.UTF-8`
+  （glibc 排序：`_` 基本权重可忽略）与 CI（C 语言环境，逐字节序）对 `i_err.px` vs `ibuiltin.px`、
+  `tools/../selfhost/…` vs `tools/lint_core.px` 这类名字给出**不同顺序** ⇒ 同一份源码
+  **算出不同指纹**：实测 C/C.UTF-8/POSIX 得 `PXSRC-7716b5f78932a71a`（= CI 期望值），
+  `en_US.UTF-8` 得 `PXSRC-b0e380ca15c1a775`（= 入库件内嵌值）。
+  14 件里恰好 4 件踩中（`pxi`/`pxi_vm`：闭包含 `i_err.px`；`pxcheck`/`pxlint`：闭包含 `tools/../…` 路径）。
+- 修法：脚本顶部 `export LC_ALL=C` / `LANG=C`（逐字节排序 = 可复现），`sort` 处再显式一次；
+  全件重烘固化；**同一份源码在两种 locale 下算出同一指纹**（本机双 locale 复核 14/14）。
+- 教训（与本门同源）：**一个门若依赖环境，它给出的「红/绿」就不是事实。**
+
+**② lint job 红：`tools/fmtlexer.px` L002「未定义变量: 'print_err'」（名册副本漂移）**
+- 根因：`tools/pxlint.px` 与 `tools/pxcheck.px` **各自手抄一份**内置名册（注释自称「对齐 Rust
+  lint.rs builtin_names」），而**权威名册**在 `selfhost/interp.px`（解释器运行期注册）。
+  M114-S1 把诊断改走 `print_err`（**真内置**）后 lint 立刻误报 —— 实测两份副本**各缺 27 个**
+  真实内置（`print_err` / `flush` / `round` / `floor` / `ceil` / `exp` / `log` / `sin` / `cos` /
+  `random*` / `mmap` / `ffi_call` / `flatten` / `unique` … 与 `dict` / `tuple` 构造器）。
+- 修法：两份名册补齐 27 名（254 名，两副本逐字节相等）；**新增防漂移门**
+  `selfhost/builtin_list_check.sh`（判据：interp 权威 ⊆ 两副本，且两副本彼此相等；反向不判 ——
+  `tcp_listen`/`sqlite_open` 这类由 runtime/FFI 注册的名字不在 interp 名册里，是合法的），
+  已进 CI lint job。
+- ⚠️ **残留（如实登记）**：名册**仍是副本**，本切片只做到「漂移立刻红」；根治（单一事实源：
+  把名册提为 `selfhost/` 顶层常量，`interp.px` 与两个 lint 工具共同 import）留待后续切片。
+
+**③ 本机复刻 CI 才暴露的第三处红：C 轨 / BC 轨 golden 未随 M114-S1 重定基**
+- M114-S1 改了 `selfhost/{pxlexer,parser}.px`（诊断走 stderr + `exit(1)`）却**没重定基基准**
+  ⇒ 自举证明必红。CI 上该步被前一步失败**跳过**（step 7 红 ⇒ 8–16 全 skipped），
+  是本机逐步复刻才看见的 —— **「跳过」不等于「通过」，这正是分步门要一起看的原因。**
+- 重定基前审计（拒绝盲重定基）：
+  - C 轨 `golden/compiler.c`：**忽略 `px_srcline` 后仅 12 行真差异**（3 个函数 × `print`→`print_err`、
+    `panic`→`exit`）；其余 3210 行是**源码行号位移**（S1 在 `pxlexer.px`/`parser.px` 插了注释行，
+    该文件全部语句的 `px_srcline` 顺延）。总差异 1611 改 / 1611 增删对称，行数不变。
+  - BC 轨 `golden/compiler.bc.dump`：常量池 988 → 986（`panic` 的 `"lex "` 不再引用）、
+    全局表 `panic`→`exit` 与新增 `print_err` ⇒ 常量/全局**索引级联重编号**（30816 → 30808 行）。
+- 重定基后**双轨自证**：C 轨 15228 行逐字节一致；BC 轨 30808 行逐字节一致（VM 引擎重放）。
+
+**④ 验收（全部本机实测）**
+- 复刻 CI regression job **13 步全绿**（含两道重烘门、--check-all、六个对拍模式、
+  引擎一致性门、僵尸门、自举证明）；lint job 复刻全绿（compiler 主入口 + tools 16 文件 0/0）。
+- 负向对照：名册门注掉 `print_err` ⇒ 红（报 1 缺项 + 副本漂移）；再注掉 `unique` ⇒ 红。
+- `--check-all` 在 `LANG=C` 与 `LANG=en_US.UTF-8` **两种 locale** 下均 **14/14**。
+
 ### M114-S3 · `.rtcache` 陈旧缓存被重烘选中（qg-issue 62）
 
 > **主题：件是「当前源码」烘的，但链进去的 runtime 可能是旧的一份。**
