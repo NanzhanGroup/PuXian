@@ -1,87 +1,135 @@
 #!/usr/bin/env bash
 # ============================================================
-# 内置名册防漂移门（builtin name list drift gate）— M114-S4
+# 内置名册防漂移门（builtin name list drift gate）
+#   M114-S4 建立（Issue 63）· M114 尾重写为「单一事实源」判据
 # ------------------------------------------------------------
-# 背景（PR #8 首次真机 CI 实锤）：
-#   `tools/pxlint.px` 与 `tools/pxcheck.px` **各自手抄了一份**「内置函数名」白名单
-#   （注释自称"对齐 Rust lint.rs builtin_names"），而**权威名册**在 `selfhost/interp.px`
-#   （解释器运行期注册的内置名列表）。副本 → 必然漂移：
+# 背景（Issue 63，PR #8 首次真机 CI 实锤）：
+#   原先 `tools/pxlint.px` 与 `tools/pxcheck.px` **各自手抄一份**「内置函数名」
+#   白名单，而真正的事实源是 **runtime 注册表**。手抄 ⇒ 双向漂移：
+#     · 各缺 27 个真实内置（print_err / flush / round / floor / mmap / ffi_call …）
+#       ⇒ M114-S1 的诊断改走 `print_err` 后，lint 立刻误报 L002（门红得对、
+#         但红的原因是名册缺项，不是代码错）；
+#     · 反向漏收 54 项 runtime 已注册名（quic_connect / dns_lookup /
+#       img_encode_jpeg / h3_frame 实测均被误报 L002）；
+#     · 残留死名 bus_new（runtime 侧已改名 event_bus）。
 #
-#   M114-S1 把 lexer/parser/fmtlexer 的诊断从 `print` 改走 `print_err`（**真内置**，
-#   interp.px 名册里有）之后，lint 立刻报：
-#       tools/fmtlexer.px:66:5: E L002: 未定义变量: 'print_err'
-#   —— 门红得对，但**红的原因是名册缺项，不是代码错**。实测 pxlint/pxcheck 各缺
-#   **27 个**真实内置（print_err / flush / round / floor / ceil / exp / log / sin …
-#   与 dict / tuple 这类构造器）。
+# M114 尾的**根治**：名册不再手抄，而是从 runtime 注册表**派生**——
+#   生成器 `tools/gen_builtin_list.sh` → 写入 `tools/lint_core.px` 的标记块
+#   （pxlint / pxcheck 共同 import 该文件）⇒ 全仓名册载体**唯一**。
 #
-# 本门判据（三项，任一不成立即红）：
-#   ① interp.px 名册 ⊆ pxlint 名册（解释器认得的名字，lint 不许报未定义）
-#   ② interp.px 名册 ⊆ pxcheck 名册
-#   ③ pxlint 名册 == pxcheck 名册（两份工具名册本就声明"对齐"，不许各自漂移）
-#   ⚠️ 反向**不判**：工具名册里有 interp.px 名册外的名字（如 tcp_listen / sqlite_open
-#      这类由 runtime/FFI 注册、不经 interp 名册的内置）是**合法**的，故只判单向包含。
+# 本门判据（五项，任一不成立即 rc=1；解析异常 rc=2，门坏掉不许静默变绿）：
+#   ① **生成器无漂移**：重跑 gen_builtin_list.sh --check（不写盘），
+#     `tools/lint_core.px` 的标记块必须与 runtime 现算结果逐字节一致。
+#   ② **名册载体唯一**：标记块恰在 lint_core.px 出现 1 次；pxlint/pxcheck 里
+#     只允许**引用** BUILTIN_NAMES，不得再有 `* BUILTINS = split(` 手抄定义。
+#   ③ **interp ⊆ 名册**：解释器 interp.px 运行期注册的名字，lint 不许误报。
+#   ④ **runtime native ⊆ 名册**：`px_set_global(..., px_native)` 全量必须覆盖
+#     （防生成器口径被收窄后本门「跟着变绿」——判据独立于生成器）。
+#   ⑤ 解析健全性：名册 < 200 名即判 rc=2（正则失配 / 文件缺失不许静默）。
 #
-# 用法：selfhost/builtin_list_check.sh      # rc=0 一致 / rc=1 漂移（并打印缺项）
+# 用法：bash selfhost/builtin_list_check.sh
 # ============================================================
 set -u
 cd "$(dirname "$0")/.."
 # 名册解析必须是**确定性**的：排序一律逐字节（locale 无关）。
-# 教训见 selfhost/rebake_bin.sh 顶部（同一轮 PR #8 CI 红：`sort` 受 locale 影响）。
+# 教训见 selfhost/rebake_bin.sh 顶部（PR #8 CI 假红：`sort` 受 locale 影响）。
 export LC_ALL=C
 export LANG=C
 
 INTERP=selfhost/interp.px
+CORE=tools/lint_core.px
 PLINT=tools/pxlint.px
 PCHK=tools/pxcheck.px
+GEN=tools/gen_builtin_list.sh
+BEGIN_MARK='# >>> BEGIN BUILTIN_NAMES >>>'
+END_MARK='# <<< END BUILTIN_NAMES <<<'
 
-for f in "$INTERP" "$PLINT" "$PCHK"; do
+for f in "$INTERP" "$CORE" "$PLINT" "$PCHK" "$GEN"; do
     [ -f "$f" ] || { echo "❌ 缺文件：$f" >&2; exit 2; }
 done
 
-# 权威名册：interp.px 里 `let names = [ "a", "b", ... ]`（运行期注册的内置名）。
+bad=0
+
+# 名册本体：lint_core.px 标记块内那一行 split("...", " ") 的名字集。
+core_names() {
+    sed -n "/^${BEGIN_MARK}\$/,/^${END_MARK}\$/p" "$CORE" \
+        | sed -n 's/.*split("\(.*\)", " ").*/\1/p' | tr ' ' '\n' | sed '/^$/d' | sort -u
+}
+# 解释器名册：interp.px 里 `let names = [ "a", "b", ... ]`（运行期注册）。
 interp_names() {
     grep -o 'let names = \[[^]]*\]' "$INTERP" \
         | grep -o '"[^"]*"' | tr -d '"' | sort -u
 }
-# 工具名册：`let BUILTINS = split("a b c", " ")`（空格分隔字符串 + split 构造）。
-tool_names() {
-    sed -n 's/.*split("\(.*\)", " ").*/\1/p' "$1" | tr ' ' '\n' | sed '/^$/d' | sort -u
+# runtime native 名：与 gen_builtin_list.sh / gen_native_table.sh 同源口径。
+runtime_native_names() {
+    grep -h 'px_set_global("' runtime/*.c 2>/dev/null \
+        | sed -n 's/.*px_set_global("\([A-Za-z_][A-Za-z0-9_]*\)", *px_native.*/\1/p' | sort -u
 }
 
-ni=$(interp_names | wc -l)
-[ "$ni" -ge 50 ] || { echo "❌ 名册解析异常：interp.px 只解析出 $ni 个名字（正则失配？）" >&2; exit 2; }
-nl=$(tool_names "$PLINT" | wc -l)
-nc=$(tool_names "$PCHK" | wc -l)
-[ "$nl" -ge 50 ] && [ "$nc" -ge 50 ] || {
-    echo "❌ 名册解析异常：pxlint=$nl / pxcheck=$nc 个名字（正则失配？）" >&2; exit 2; }
+n_core=$(core_names | wc -l)
+n_int=$(interp_names | wc -l)
+n_rt=$(runtime_native_names | wc -l)
+[ "$n_core" -ge 200 ] || { echo "❌ 名册解析异常：$CORE 只解析出 $n_core 个名字（标记块缺失/正则失配？）" >&2; exit 2; }
+[ "$n_int"  -ge 50  ] || { echo "❌ 名册解析异常：interp.px 只解析出 $n_int 个名字（正则失配？）" >&2; exit 2; }
+[ "$n_rt"   -ge 100 ] || { echo "❌ 名册解析异常：runtime/*.c 只解析出 $n_rt 个 native（正则失配？）" >&2; exit 2; }
 
-bad=0
+echo "── 内置名册防漂移门（单一事实源：runtime 注册表）──"
 
-# ① ② interp ⊆ 工具
-for pair in "pxlint|$PLINT" "pxcheck|$PCHK"; do
-    tag=${pair%%|*}; file=${pair#*|}
-    miss=$(comm -23 <(interp_names) <(tool_names "$file"))
-    if [ -n "$miss" ]; then
-        echo "❌ $tag 名册缺 $(printf '%s\n' "$miss" | wc -l) 个真实内置（interp.px 认得、$tag 会误报 L002）："
-        printf '%s\n' "$miss" | sed 's/^/     /'
-        bad=$((bad+1))
-    else
-        echo "    ✅ $tag 名册 ⊇ interp.px 内置名册（${ni} 个名字全覆盖）"
-    fi
-done
-
-# ③ 两份工具名册彼此一致
-if diff <(tool_names "$PLINT") <(tool_names "$PCHK") > /tmp/builtin_list_drift.txt; then
-    echo "    ✅ pxlint 名册 == pxcheck 名册（${nl} 个名字逐字节一致）"
+# ① 生成器无漂移
+if out=$(bash "$GEN" --check 2>&1); then
+    echo "    ✅ ① 名册 == runtime 注册表现算结果（$n_core 名，生成器 --check 无差异）"
 else
-    echo "❌ pxlint 与 pxcheck 名册彼此漂移（两文件都声明「对齐」，应同增同减）："
-    sed 's/^/     /' /tmp/builtin_list_drift.txt | head -20
+    echo "❌ ① 名册漂移（重跑 bash $GEN 同步）："
+    printf '%s\n' "$out" | sed 's/^/     /'
     bad=$((bad+1))
 fi
 
+# ② 名册载体唯一
+nb=$(grep -cF "$BEGIN_MARK" "$CORE" || true)
+if [ "$nb" -ne 1 ]; then
+    echo "❌ ② $CORE 的标记块出现 $nb 次（应为 1 次：名册载体必须唯一）"
+    bad=$((bad+1))
+fi
+dup=$(grep -n 'BUILTINS *= *split(' "$PLINT" "$PCHK" 2>/dev/null || true)
+if [ -n "$dup" ]; then
+    echo "❌ ② pxlint/pxcheck 又出现手抄名册定义（应只 import lint_core 的 BUILTIN_NAMES）："
+    printf '%s\n' "$dup" | sed 's/^/     /'
+    bad=$((bad+1))
+fi
+ref=0
+for f in "$PLINT" "$PCHK"; do
+    grep -q 'BUILTIN_NAMES' "$f" && ref=$((ref+1))
+done
+if [ "$ref" -ne 2 ]; then
+    echo "❌ ② pxlint/pxcheck 未都引用 BUILTIN_NAMES（引用数=$ref，应为 2）"
+    bad=$((bad+1))
+else
+    [ "$nb" -eq 1 ] && [ -z "$dup" ] && echo "    ✅ ② 名册载体唯一（$CORE 生成块 1 处；pxlint/pxcheck 仅引用）"
+fi
+
+# ③ interp ⊆ 名册
+miss=$(comm -23 <(interp_names) <(core_names))
+if [ -n "$miss" ]; then
+    echo "❌ ③ interp.px 名册有 $(printf '%s\n' "$miss" | wc -l) 个名字不在内置名册（lint 会误报 L002）："
+    printf '%s\n' "$miss" | sed 's/^/     /'
+    bad=$((bad+1))
+else
+    echo "    ✅ ③ interp.px 名册 ⊆ 内置名册（$n_int 名全覆盖）"
+fi
+
+# ④ runtime native ⊆ 名册
+miss4=$(comm -23 <(runtime_native_names) <(core_names))
+if [ -n "$miss4" ]; then
+    echo "❌ ④ runtime/*.c 有 $(printf '%s\n' "$miss4" | wc -l) 个 native 不在内置名册（lint 会误报 L002）："
+    printf '%s\n' "$miss4" | sed 's/^/     /'
+    bad=$((bad+1))
+else
+    echo "    ✅ ④ runtime native ⊆ 内置名册（$n_rt 名全覆盖）"
+fi
+
 if [ "$bad" -gt 0 ]; then
-    echo "❌ 内置名册漂移 $bad 处（权威名册在 $INTERP；工具名册是副本，必须同步）"
+    echo "❌ 内置名册门失败 $bad 处"
     exit 1
 fi
-echo "✅ 内置名册一致（interp.px 权威 ⊆ pxlint/pxcheck 副本，且两副本相同）"
+echo "✅ 内置名册一致（唯一载体 $CORE；源 = runtime 注册表，生成器 + 门双守）"
 exit 0

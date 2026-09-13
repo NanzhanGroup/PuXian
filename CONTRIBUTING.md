@@ -89,13 +89,36 @@ cd selfhost && ./bootstrap_prove_bc.sh       # BC 轨：golden/compiler.bc.dump�
 #    受 locale 影响，同一份源码在本机 (en_US.UTF-8) 与 CI (C) 算出**不同指纹**，CI 上 4/14 件假红。
 #    改这几行脚本时请保持 `LC_ALL=C`（门若依赖环境，它的"红/绿"就不是事实）。
 
-# 6. 内置名册防漂移（M114-S4）
-#    `selfhost/interp.px` 是内置名的**权威名册**；`tools/pxlint.px` / `tools/pxcheck.px` 各自持
-#    一份**副本**（单文件 lint 需要）。副本会漂移 —— 实测两处各缺 27 个真实内置（M114-S1 把诊断
-#    改走 `print_err` 后，lint 立刻误报 L002「未定义变量」）。本门判「权威 ⊆ 两副本」且「两副本彼此相等」：
-./selfhost/builtin_list_check.sh
+# 6. 内置名册（M114-S4 建门 → M114 尾**根治为单一事实源**）
+#    名册**不再手抄**：源 = runtime 注册表（`runtime/*.c` 的 `px_set_global(...)` +
+#    `px_ffi_register(...)`，再加 `selfhost/interp.px` 的 Mini 名册），由
+#    `tools/gen_builtin_list.sh` 派生、写入 `tools/lint_core.px` 的标记块
+#    （pxlint / pxcheck 共同 import 该文件 ⇒ 全仓**唯一**载体）。
+#    改过 runtime 注册表或 interp.px 名册后，**先重跑生成器**再提交：
+bash tools/gen_builtin_list.sh          # 写入 lint_core.px（幂等）
+bash tools/gen_builtin_list.sh --check  # 只比不写（CI 用）
+./selfhost/builtin_list_check.sh        # 门：生成器无漂移 + 载体唯一 + interp/native ⊆ 名册
+#    为什么（qg-issue 63）：两份手抄副本**双向**漂移 —— 各缺 27 个真实内置
+#    （`print_err` 被 lint 误报 L002），又反向漏收 54 项 runtime 已注册名
+#    （`quic_connect` / `dns_lookup` / `img_encode_jpeg` / `h3_frame` 实测全被误报），
+#    还残留 1 个死名 `bus_new`。派生之后这一类误差不可能再出现。
+#    同族第二例（同批修）：lint 递归扫描 import 时只收**函数**名、不收顶层 let/var/const
+#    ⇒ `import "mod.px"` 后引用模块顶层变量，三行全被误报 L002。扫描口径已与
+#    M70-S3（import 导出非 Const 顶层 VarDecl）对齐。
+#    改动 pxlint / pxcheck / lint_core 后须重烘那两件（M114 尾新增**按件重烘**）：
+./selfhost/rebake_bin.sh --entries=pxlint,pxcheck   # 再跑 --check-all 验收
 
-# 7. 新增/改动功能时补对应用例（selfhost/cases/ 或 examples/）并更新 golden
+# 7. 门自身的纪律（三条，都是真机 CI 的实锤教训 · qg-issue 61/64）
+#    ① **不许用 `&&` 串命令**：GitHub Actions 默认 shell 是 `bash -e {0}`，而 `set -e`
+#       **不作用于 AND-OR 列表**（实测 `bash -ec 'false && true; echo X'` → 打印 X、rc=0）。
+#       写成 `a && b` ⇒ a 的失败被吞、该步恒绿。一条命令一行。
+#    ② **干净检出才算数**：本机测试可能因为**遗留构建产物**而假绿（实锤：`m65_lsp` 依赖
+#       `examples/*/build/` 里的陈旧二进制，干净检出上必红，被吞了很久）。验收请用
+#       `git archive HEAD | tar -x -C /tmp/clean && cd /tmp/clean` 复本重跑关键步。
+#    ③ **PASS 必须由断言驱动**：失败路径上也打印 `PASS[...]` / `✅` 属于**自我粉饰**，
+#       会让日志与 rc 互相矛盾。凡「通过」字样，只能在全绿分支里打印。
+
+# 8. 新增/改动功能时补对应用例（selfhost/cases/ 或 examples/）并更新 golden
 #    有意改动基准时重定基（两条基准须与源码同批提交）：
 #    cd selfhost && ./bootstrap_prove.sh --update-golden && ./bootstrap_prove_bc.sh --update-golden
 #    M113-S1：**用例必须带齐 golden** —— 缺 golden 现在判红（此前是「⚠️ 无 golden，先生成」后按通过处理，
