@@ -18,7 +18,7 @@
 #
 # 用法：
 #   ./bootstrap_prove_bc.sh             # BC 轨自举证明（缓存有效则复用）
-#   ./bootstrap_prove_bc.sh --fresh     # 强制全链重建（约 12-15 分钟）
+#   ./bootstrap_prove_bc.sh --fresh     # 强制全链重建（实测 ≈2 分钟，2026-09-14 复测 121s/126s）
 #   ./bootstrap_prove_bc.sh --update-golden  # 有意改动后重定基 golden/compiler.bc.dump
 #                                            # （基准由 C 引擎 compiler_new 生成，再由 VM 引擎
 #                                            #   compiler_vm 重放逐字节自证——跨引擎才算真定基）
