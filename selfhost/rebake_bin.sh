@@ -40,6 +40,9 @@
 #   ./selfhost/rebake_bin.sh              # 重烘两个入库件（含出厂指纹）
 #   ./selfhost/rebake_bin.sh --check      # C 轨重烘门
 #   ./selfhost/rebake_bin.sh --check-vm   # VM 轨重烘门（用户面默认轨）
+#   ./selfhost/rebake_bin.sh --rebake-all            # 全件重烘（表内 14 件）
+#   ./selfhost/rebake_bin.sh --check-all             # 全件指纹门（O(1) 逐件）
+#   ./selfhost/rebake_bin.sh --entries=pxlint,pxcheck # 只重烘指定件（M114 尾）
 # ============================================================
 set -u
 cd "$(dirname "$0")/.."
@@ -57,6 +60,7 @@ export LC_ALL=C
 export LANG=C
 
 MODE=rebake
+ENTRY_ONLY=""
 for a in "$@"; do
     case "$a" in
         --rebake)     MODE=rebake ;;
@@ -64,8 +68,12 @@ for a in "$@"; do
         --check-vm)   MODE=check-vm ;;
         --rebake-all) MODE=rebake-all ;;   # M114-S2（Issue 55）：重烘表内全部入库件
         --check-all)  MODE=check-all ;;    # M114-S2（Issue 55）：全件指纹门（O(1) 逐件断言来源）
+        --entries=*)  MODE=entry; ENTRY_ONLY="${a#--entries=}" ;;
+                                           # M114 尾：**只重烘指定件**（逗号分隔），
+                                           # 不动其余件 —— 改单个工具（如 pxlint）时不必
+                                           # 重烘全部 14 件。验收仍走 --check-all。
         -h|--help)  sed -n '2,60p' "$0"; exit 0 ;;
-        *) echo "未知参数：$a（可用：--check / --check-vm / --rebake-all / --check-all）" >&2; exit 2 ;;
+        *) echo "未知参数：$a（可用：--check / --check-vm / --rebake-all / --check-all / --entries=<件名,件名>）" >&2; exit 2 ;;
     esac
 done
 
@@ -199,7 +207,7 @@ select_cache() {
     FULL_MIN=15
     # 重烘/重烘门要求**全量档**；--check/--check-vm 容忍裁剪档（判据与"链进多少 runtime"无关）
     local min=1
-    case "$MODE" in rebake|rebake-all|check-all) min=$FULL_MIN ;; esac
+    case "$MODE" in rebake|rebake-all|check-all|entry) min=$FULL_MIN ;; esac
     for d in "$ROOT"/.rtcache/*/; do
         [ -d "$d" ] || continue
         [ -f "$d/.complete" ] || continue
@@ -443,6 +451,24 @@ fi
 FP=$(entry_fp pxc)
 echo "── 源码链指纹：${FP_TAG}-${FP}"
 select_cache || exit 1
+
+# ---- M114 尾：单件重烘（--entries=<件名,...>）----
+# 只重烘指定件：不动 pxc/pxc_vm，也不动其余 12 件。适用「改了某个工具源文件」
+# 这类收口（逐件自证内嵌指纹；整体验收仍由 --check-all 守）。
+if [ "$MODE" = "entry" ]; then
+    ok=0; fail=0; failed=""
+    for name in $(printf '%s' "$ENTRY_ONLY" | tr ',' ' '); do
+        if rebake_one "$name"; then ok=$((ok+1)); else fail=$((fail+1)); failed="$failed $name"; fi
+    done
+    echo "── 单件重烘小计：成功 $ok · 失败 $fail"
+    if [ -n "$failed" ]; then
+        echo "   ❌ 失败件：$failed" >&2
+        exit 1
+    fi
+    echo "   ⇒ 验收：./selfhost/rebake_bin.sh --check-all"
+    exit 0
+fi
+
 emit_fp_object "$FP" || exit 1
 
 echo "── 步骤 1/4：入库 pxc 编译 compiler.px → compiler_new.c"

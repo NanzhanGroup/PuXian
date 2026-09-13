@@ -6,6 +6,55 @@
 
 ## [Unreleased]
 
+### M114 尾 · 内置名册根治为单一事实源 + Issue 46 结案核验 + CI 步「假绿」修复（qg-issue 63/46/64）
+
+> **主题：把「手抄副本」换成「从 runtime 注册表派生」；顺带查出并修掉一个让整个
+> CI 步恒绿的机制性缺陷 —— 改完之后，门第一次真的会红。**
+
+**① 内置名册：两份手抄副本 → runtime 注册表派生（qg-issue 63 根治）**
+- 源 = `runtime/*.c` 的 `px_set_global("name", …)`（排除 `__` 前缀内部名）+ `px_ffi_register("name", …)`
+  + `selfhost/interp.px` 的 Mini 名册（与 `tools/gen_native_table.sh` 同一口径）= **320 名**。
+- 新增 `tools/gen_builtin_list.sh`（幂等写入 / `--check` 只比不写）→ 写入 `tools/lint_core.px`
+  的 `BEGIN/END BUILTIN_NAMES` 标记块；`tools/pxlint.px` / `tools/pxcheck.px` **删掉各自的
+  254 名副本**，改 import 取用 ⇒ 全仓名册载体**唯一**。
+- 实测修掉的误报（旧副本双向漂移）：缺 27 名（`print_err`/`flush`/`round`/`mmap`/`ffi_call`…）；
+  **反向漏收 54 项** runtime 已注册名（`quic_connect` / `dns_lookup` / `img_encode_jpeg` /
+  `h3_frame` 逐个实测被误报 L002）；残留死名 `bus_new`（runtime 侧早已改名 `event_bus`）。
+- **同族第二例**：lint 递归扫描 import 时只收 `FuncDef` 名、不收顶层 `let/var/const`
+  ⇒ `import "mod.px"` 后引用模块顶层变量，**三行全被误报 L002**。新增 `lc_decl_names()`
+  （lint_core）统一口径，与 M70-S3（import 导出非 Const 顶层 VarDecl）对齐。
+- 门 `selfhost/builtin_list_check.sh` 重写为**单一事实源**判据（五项）：① 生成器 `--check`
+  无漂移 ② 名册载体唯一（标记块 1 处 + 工具侧只许引用、不许再定义）③ `interp ⊆ 名册`
+  ④ `runtime native ⊆ 名册`（判据独立于生成器，防口径被收窄后门跟着变绿）⑤ 解析异常 rc=2。
+- 验证：真 typo（`no_such_thing` / `quic_conect`）仍被 L002 命中（**没有变成宽松的 linter**）；
+  含新 import 的 17 文件 lint 全 0/0；fmt --check 全绿；重烘 `pxlint`/`pxcheck` 后
+  `--check-all` **14/14** 指纹一致。
+
+**② CI 步「假绿」修复（qg-issue 64 · 本轮最重要的一处）**
+- 根因：GitHub Actions 默认 shell 是 `bash -e {0}`，而 **`set -e` 不作用于 AND-OR 列表** ——
+  `a && b` 里 a 失败只令列表返回非零、**不中止脚本**。实测 `bash -ec 'false && true; echo X'`
+  → **打印 X、rc=0**。
+- 后果：lint job 的「工具自测」步把 9 个 verify 用 `&&` 串起来，最后一行是 `echo "✅ … 全 PASS"`
+  ⇒ **该步恒绿**。实测（本机）：`m64_fmt` 与 `m65_mcp` 其实 **rc=1**，长期静默失败 ——
+  两者都在等早已不存在的 `0.1.0` 版本串（`tools/pxfmt.px` / `tools/pxmcp.px` 自版本升至
+  `0.2.0` 起就对不上）。CI 日志里那行「全 PASS」正是被吞掉失败后打出来的。
+- 修法：把该步（及 LSP/MCP 冒烟步、多架构语法冒烟步）的 `&&` 链**拆成独立行**
+  （`bash -e` 下普通行失败会真的中止）；陈旧断言改为**版本无关**：
+  `m64_fmt` 用 `grep -qE "pxfmt [0-9]+\.[0-9]+\.[0-9]+"`，`m65_mcp` 用
+  `re.search(r"pxc \d+\.\d+\.\d+", txt)`。修完 9 个 verify **全部 rc=0**。
+
+**③ 按件重烘（工具收口用）**
+- `selfhost/rebake_bin.sh` 新增 `--entries=<件名,…>`：只重烘指定入库件，不必因改一个工具
+  而重烘全部 14 件。验收仍走 `--check-all`。
+
+**④ Issue 46 结案核验（qg-issue 46）**
+- 两编译器轨实测**均已**报静态语义错：C 轨 `rc=1` / 默认 VM 轨 `--emit-c` `rc=1`，stderr 正文
+  与 golden 一致（E3002/E3003/E3004 走轨无关共享层 + `engine_parity.sh` 双轨负例门）。
+- 文档口径补正：`docs/ECOSYSTEM_GAPS.md` G3 注明「**两编译器轨一致**；`px run` 解释器宽松」；
+  `tools/pxcheck.px` 头注释显式声明其**范围 = lint 层**（L001-L008），**不含**编译期语义层
+  ⇒ `pxcheck` 对 E3002 负例输出 `[]` rc=0 是**契约内行为**，不是静默放行。
+- 残留新登记 `qg-issue 65`：LSP（经 `pxcheck`）**看不到** E3002/E3003/E3004 类语义诊断。
+
 ### M114-S4 · PR #8 首次真机 CI 两处红 —— 都是「门自己不可信」（qg-issue 61/55）
 
 > **主题：新门第一次上真机，红了两处；两处都不是新代码的功能错，而是门自身的缺陷。**
