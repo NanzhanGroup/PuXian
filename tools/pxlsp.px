@@ -137,6 +137,12 @@ def lsp_analyze(uri, text):
     if real != "":
         args.append("--base")
         args.append(lsp_dirname(real))
+    # M115（qg-issue 65）：语义诊断按需开启（默认关 = 零成本）。
+    #   PX_LSP_SEMANTIC=1 ⇒ pxcheck --semantic（每次诊断多跑一次编译器，秒级）
+    #   ⚠️ 编译器目前不给行/列 ⇒ 语义类诊断落在 1/1，正文与 px build stderr 一致。
+    let sem = env("PX_LSP_SEMANTIC")
+    if sem != null and sem != "" and sem != "0":
+        args.append("--semantic")
     let res = os_spawn_capture(pxcheck, args)
     remove(tmp)
     if type(res) != "list":

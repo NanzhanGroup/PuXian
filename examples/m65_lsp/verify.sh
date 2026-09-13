@@ -3,6 +3,8 @@
 # examples/m65_lsp/verify.sh —— M65 LSP 里程碑验收
 # ------------------------------------------------------------
 # S1：双模式 jsonrpc 回环 33 PASS + os_spawn_capture 冒烟 5 PASS
+# S2b：pxcheck --semantic（M115 / qg-issue 65）：语义诊断上报 + 正例不误报
+#      + 编译器缺失显式上报 L000（不静默放行）
 # S2：pxlsp 端到端（python3 模拟标准 LSP client 双向管道）：
 #     initialize → didOpen(didChange/didSave/didClose) → publishDiagnostics
 #     → shutdown → exit，17 断言全绿
@@ -75,11 +77,38 @@ else
   echo "PASS: S3 client completion/definition/hover 全绿"
 fi
 
+echo ""
+echo "== M65-S2b verify：语义诊断（--semantic · M115 / qg-issue 65）=="
+
+# 判据（不设暗门）：
+#   ① 不带 --semantic：维持原契约（lint 层）—— 语义负例仍输出 []/rc=0
+#   ② 带 --semantic：必须出现编译器诊断（E3002）且 rc=1
+#   ③ 正例在 --semantic 下仍为 []/rc=0
+#   ④ 编译器不可用：必须显式上报 L000（W），不静默放行
+BAD=selfhost/cases_bad/codegen_b01_immutable.px
+GOOD=examples/hello.px
+S_SEMOK=1
+if [ ! -x "$BOOT/pxcheck" ] || [ ! -x "$BOOT/pxc_vm" ]; then
+  echo "SKIP: 缺 bootstrap/pxcheck 或 bootstrap/pxc_vm（语义门跳过）"
+else
+  OUT1=$("$BOOT/pxcheck" "$BAD" 2>&1); RC1=$?
+  [ "$RC1" = "0" ] && [ "$OUT1" = "[]" ] || { echo "FAIL: 不带 --semantic 的契约被改动（rc=$RC1 out=$OUT1）"; S_SEMOK=0; }
+  OUT2=$("$BOOT/pxcheck" "$BAD" --semantic 2>&1); RC2=$?
+  echo "$OUT2" | grep -q '"code":"E3002"' || { echo "FAIL: --semantic 未报 E3002（out=$OUT2）"; S_SEMOK=0; }
+  [ "$RC2" = "1" ] || { echo "FAIL: --semantic 语义错误下 rc=$RC2（应为 1）"; S_SEMOK=0; }
+  OUT3=$("$BOOT/pxcheck" "$GOOD" --semantic 2>&1); RC3=$?
+  [ "$RC3" = "0" ] && [ "$OUT3" = "[]" ] || { echo "FAIL: 正例在 --semantic 下 rc=$RC3 out=$OUT3"; S_SEMOK=0; }
+  OUT4=$(PX_SEMANTIC_BIN=/nonexistent/pxc_vm "$BOOT/pxcheck" "$GOOD" --semantic 2>&1)
+  echo "$OUT4" | grep -q '"code":"L000"' || { echo "FAIL: 编译器缺失时未显式上报 L000（out=$OUT4）"; S_SEMOK=0; }
+  [ "$S_SEMOK" = "1" ] && echo "PASS: S2b --semantic（E3002 上报 / 正例不误报 / 编译器缺失显式上报）"
+fi
+[ "$S_SEMOK" = "1" ] || FAIL=1
+
 if [ $FAIL -eq 0 ]; then
   echo ""
-  echo "== M65-S1/S2/S3 verify: ALL PASS =="
+  echo "== M65-S1/S2/S2b/S3 verify: ALL PASS =="
   exit 0
 fi
 echo ""
-echo "== M65-S1/S2/S3 verify: FAILED =="
+echo "== M65-S1/S2/S2b/S3 verify: FAILED =="
 exit 1

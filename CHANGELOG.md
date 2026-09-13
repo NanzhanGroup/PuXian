@@ -6,6 +6,29 @@
 
 ## [Unreleased]
 
+### 编辑器侧语义诊断 —— `pxcheck --semantic`（qg-issue 65）
+
+> **主题：把「默认轨无静态语义校验」的收口补到编辑器侧。** 编译器侧早在 M112-S0（Issue 46）已收口，
+> 但编辑器用的 `pxcheck` 只做 lint 层 ⇒ 写 `let x = 1` 后 `x = 2`，LSP **一个诊断都不报**，
+> 直到 `px build` 才红 —— 缺口不在 `pxcheck` 违约（它头注释只承诺 lint），而在**用户面覆盖**。
+
+- **`pxcheck --semantic`（opt-in，默认不改行为）**：再起一次编译器（默认 VM 轨 `pxc_vm --emit-c`，
+  stdout 丢弃 / stderr 分离捕获，`os_capture`），把编译期语义诊断（E3002/E3003/E3004…）并入**同一个
+  JSON 数组**，level=E、整体 rc=1。编译器定位顺序：`PX_SEMANTIC_BIN` → 本程序同目录 `pxc_vm`
+  → 同目录 `pxc` → PATH `pxc_vm`。
+- **不静默放行（两条退化路径都显式上报）**：编译器找不到 ⇒ level=W 的 `L000`；编译器 rc≠0 却无
+  可解析诊断行 ⇒ `E3000` + stderr 首行。**都不会返回空数组冒充「语义无错」**。
+- **⚠️ 位置限制（如实登记，未闭合）**：编译器目前**不输出行/列**（共享语义层 `cg_perr` 只打印
+  `编译错误 CODE: msg`）⇒ 语义类诊断一律上报 `line=1/col=1`，`message` 正文与 `px build` 的
+  stderr **逐字一致**。位置缺口在**编译器侧**，本 PR 不动语义层（避免改动编译器热路径）。
+- **`pxlsp` 按需接线**：`PX_LSP_SEMANTIC=1` 时 pxlsp 给 pxcheck 追加 `--semantic`（默认关 = 零成本；
+  开启后每次诊断多跑一次编译器，秒级）。
+- **门**：`examples/m65_lsp/verify.sh` 新增 **S2b** —— ① 不带 `--semantic` 的原契约不变（`[]`/rc=0）
+  ② 语义负例必须报 `E3002` 且 rc=1 ③ 正例不误报（`[]`/rc=0）④ **编译器缺失必须显式上报 `L000`**。
+- **入库件重烘**：`bootstrap/pxcheck`、`bootstrap/pxlsp` 以
+  `./selfhost/rebake_bin.sh --entries=pxcheck,pxlsp`（全 runtime 静态档）重烘入库 ——
+  落地后 `./bootstrap/pxcheck <文件> --semantic` **免环境变量**即可用（同目录 `pxc_vm` 自动命中）。
+
 ### 发布侧「身份与顺序」加固 —— rpm 单调性守卫 + 发布包白名单复制/位级可复现（qg-issue 41 · 56）
 
 > **主题：发出去的东西，身份要唯一、顺序要单调。** 两条都是**发布流水线**缺陷，与 runtime 无关；
