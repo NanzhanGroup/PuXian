@@ -113,6 +113,11 @@ jobs:
           set -o pipefail
           ./selfhost/diffcheck.sh --interp 2>&1 | tail -3
 
+      - name: 双轨内置一致性门 — 解释器 vs 编译（内置转发丢参，qg-issue 69）
+        run: |
+          set -o pipefail
+          ./selfhost/interp_builtin_parity.sh 2>&1 | tail -14
+
       - name: 自举证明（pxc 编译 compiler.px 与基准一致）
         run: |
           set -o pipefail
