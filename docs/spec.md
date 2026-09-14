@@ -1281,6 +1281,45 @@ spawn http_serve_unix("/tmp/approve.sock", handler)   # 编译模式运行（同
 
 ---
 
+### 8.23 服务进程/环境原语补全（M115，ws-center / ws-ddns PuXian 化实测）
+
+> M115（docs/M115_PLAN.md）来自 **ws-center**（2717 行 Go · 中心管理服务）与 **ws-ddns**（1141 行 Go ·
+> DNS 授权签名系统）两个真实模块的 PuXian 化开发：把 Go 服务端每次都要用、而 PuXian 缺的原语
+> 当场补齐（**不许绕过** —— 绕过等于把"语言缺什么"这件事藏起来）。四条缺口均**无现成代偿**：
+> ① `os.Setenv` 无对应原语（配置只读不写 ⇒ 子进程继承不到）② daemonize 三件套
+> （`os.Executable` + `Setsid` + stdio 重定向）只能靠 `/bin/sh -c` 拼串（shell 依赖 + 拿不到真实 pid）
+> ③ TTY 判定无处可查（`tty_config` 是**设置**语义，不能当查询）④ 缺"当前 Unix 秒"
+> （`now()` 返回**本地时间字符串**，`time_format(now(), …)` 直接类型报错）。
+
+**新增 native（C 写进 runtime；pxi 白名单 / ibuiltin dispatch / pxlint 名册三处同步）**：
+
+- `env_set(name, value) → bool`：`setenv(…, 1)`。写进程环境，**`os_spawn` 子进程可继承**；
+  name 为空或含 `=` → 参数错误（px_error）；底层失败 → false。
+- `env_unset(name) → bool`：`unsetenv`（同上校验）。
+- `os_self_path() → str | null`：当前可执行文件绝对路径（Linux `/proc/self/exe`）。
+  守护化重新 exec 自身、自升级替换自身必需 —— 此前语言层拿不到"我是谁"。
+- `isatty(fd) → bool`：`isatty(3)`。管道 / 重定向 / 后台 → false（交互式提示仅在终端弹出）。
+- `now_sec() → int`：Unix 秒（UTC 基准，与 `time_format` / `time_parse` / `tz_offset` 同一时间轴）。
+
+**扩展 native：`os_spawn(cmd, args[, opts])`**
+
+- 第 3 参兼容旧语义（`bool`/`int` = `group`，零回归），**新增 dict 形式**：
+  `{group: bool, setsid: bool, stdout: str, stderr: str, stdin: str|bool, cwd: str, env: dict}`。
+- 子进程侧顺序：`setsid` → `setpgid` → `chdir` → stdio 重定向 → `execvpe`；
+  `stdin: false` 等价 `/dev/null`（守护化必需：不占终端、`read` 立即 EOF）。
+- **`env` 在 fork 之前**备成 `char** envp`（父侧分配）；fork 之后子进程只做 async-signal-safe 调用
+  —— 不在 fork 后调 `setenv`（会摸 malloc 锁，多线程下可能死锁）。`execvpe` 保留 `PATH` 查找。
+- `opts.env` **只作用于子进程**，不污染父进程环境；父侧沿用既有 `setpgid(pid, pid)` 同调约定。
+- 收益：`os_spawn("/path/self", ["--serve"], {setsid: true, stdout: "/var/log/x.log",
+  stdin: false, env: {"MODE": "daemon"}})` —— 守护化不再需要 shell 中转，且拿到**真实守护进程 pid**
+  （pidfile / `--stop` 精确停机语义成立）。
+
+**验证**：示例 `examples/m115_proc_env.px`（编译/解释双模式，9 组断言含"setsid 后 `ps -o sid= -p PID`
+== PID"、"子进程继承 env_set"、"opts.env 不污染父进程"）+ 负控脚本 `examples/m115_proc_env.sh`；
+名册门 / native 表漂移门 / 自举证明 / 引擎一致性门全绿。
+
+---
+
 ## 9. 双模式执行
 
 ### 9.1 脚本模式
