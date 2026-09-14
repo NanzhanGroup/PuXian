@@ -347,6 +347,36 @@ def i_call_builtin(name, args, pos):
         return Ok(unix_connect(args[0]))
     if name == "env":
         return Ok(env(args[0]))
+    # M115：服务进程/环境原语（ws-center / ws-ddns PuXian 化实测缺口）
+    # ⚠️ env_set 必须走 ffi_call 显式按名调用宿主 native：
+    #   本文件与 selfhost/env.px（编译器内部**变量环境**）一起编译，env.px 里有同名
+    #   PuXian 函数 `def env_set(env, name, value)` ⇒ 直接写 `env_set(a, b)` 会**静默**
+    #   绑到内部辅助函数上（实参类型不符，报错还指向无关行列：实测
+    #   `运行时错误 [env_set 行40]: 期望整数，实际是 string`）。ffi_call 是 M42 起的
+    #   按名调用逃生舱，正是为这种"宿主名被同编译单元遮蔽"的情形准备的。
+    if name == "env_set":
+        if len(args) != 2:
+            return Err(i_r1002("env_set 需要 (name, value) 两个字符串参数", pos))
+        return Ok(ffi_call("env_set", [args[0], args[1]]))
+    if name == "env_unset":
+        if len(args) != 1:
+            return Err(i_r1002("env_unset 需要一个变量名", pos))
+        return Ok(env_unset(args[0]))
+    if name == "os_self_path":
+        return Ok(os_self_path())
+    if name == "isatty":
+        if len(args) != 1:
+            return Err(i_r1002("isatty 需要一个 fd（int）", pos))
+        return Ok(isatty(args[0]))
+    if name == "now_sec":
+        return Ok(now_sec())
+    if name == "tz_local":
+        return Ok(tz_local())
+    if name == "args":
+        # M115：被解释程序实参 —— 规范化后与**编译产物**同形（argv[0]=程序，其后用户实参）。
+        #   修复前解释轨根本没注册 `args`（`px run` 下报 R1001 未定义变量），
+        #   而编译产物可用；且两轨形状不同（详见 interp.px main() 注释）。
+        return Ok(g_script_args)
     if name == "now":
         return Ok(now())
     if name == "sleep":

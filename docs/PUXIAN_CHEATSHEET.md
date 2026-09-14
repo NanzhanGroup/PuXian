@@ -66,10 +66,12 @@ var x = div_safe(4, 2)          # Ok(v)；is_ok()/is_err()/unwrap()/v? 解包
 # 顶层 `?` 传播 Err/None；`!` 强制解包（Err 则 panic）
 
 # 并发：spawn 真并发 + channel 阻塞通信 + select 随机就绪
+# ⚠️ M115 实测更正：通道收发是**方法**写法 `ch.send(v)` / `ch.recv()`；
+#    速查包旧版写的 `send(ch, v)` / `recv(ch)` **不存在**（直接报 E2001 意外的 token: send）。
 var ch = chan(2)
 spawn fn ():
-    send(ch, "hi")
-print(recv(ch))
+    ch.send("hi")
+print(ch.recv())
 
 # 列表推导/切片/字符串插值/管道
 var sq = [x * x for x in range(5)]
@@ -95,11 +97,21 @@ print("upper=" + to_upper("px"))
     - **全局名访问 ≈40~50 ns/次**（顶层 `var`/`let`、native、`def` 皆然）。百万级热循环把**循环体内用到的全局名**（含循环上界、累加器、被调函数）先取到 `var` 局部：VM 轨 1MB 实测 **195 ms → 105 ms（1.9×）**（C 轨 97 ms → 20 ms）。小循环无感，大循环建议照做。
     - `s[i]` / `len(s)` / `for ch in s` 对 `str` 自 **M106** 起为**摊还 O(1)**（修复前 O(n²)：64KB 逐字符扫 4.74s→0.03s）。但**大文本逐字符**仍优先 `bytes(s)` 视图 + `bytes_get` / `b[i]`（bytes 下标本就是 O(1)，且无 rune 解码开销）。
     - **`{n,}` 无上限量词正则有 O(n²) 风险**（64KB 命中输入 8.8 s；固定 `{20}` / 纯字面 0 ms）——M107-S1 修。此前对**大文本**做密钥/敏感串扫描，先用**字面前缀预筛**（如 `contains(s, "sk-")` 为假即跳过该正则）。
+14. **保留字坑（M115 实测，ws-ddns PuXian 化当场踩）**：`self` / `pub` / `send` / `recv` / `capture` / `trait` / `impl` / `match` … 都是**关键字**，
+    不能当变量名（`var self = …` / `var pub = …` → `E2001 期望变量名，实际得到 self|pub`）。写端口/系统代码时 `self` 是高频命名，请改用 `exe` / `this` / `srv` 等。
+15. **`args` 必须写成 `args()`**（M115 修）：此前解释轨**未注册**该内置名 ⇒ `px run` 下裸写 `args` 报 `R1001 未定义变量: 'args'`（仅编译产物可用）；
+    且两轨形状不一致（解释轨给的是宿主 argv `[<path>/pxi, 用户参…, 脚本]`）。现已规范化：`px run s.px a b` 与编译产物同为 **`[程序, a, b]`**。
+16. **`env_set` 的遮蔽坑（M115）**：解释器内置分发层 `selfhost/ibuiltin.px` 与编译器内部的 `selfhost/env.px`（变量环境）**同处一个编译单元**，
+    而 `env.px` 里有同名 PuXian 函数 `def env_set(env, name, value)` ⇒ 在 ibuiltin 里直接写 `env_set(a, b)` 会**静默绑到内部辅助函数**上
+    （报 `运行时错误 [env_set 行40]: 期望整数，实际是 string`，行列完全指不到病根）。新增宿主 native 若与 `selfhost/*.px` 内部函数同名，分发层**必须走 `ffi_call("名字", [...])`** 按名调用。
+17. **`def main()` 是自动入口，别再手写 `main()`（M115 实测）**：定义了 `def main()` 时，**程序会在所有顶层语句之后自动调用它一次**（编译轨/解释轨一致）。
+    若在文件末尾再显式写一行 `main()`，**整个程序会跑两遍**（实测：服务端日志重复、签名器会 spawn 两个守护进程、写文件写两次）。
+    仓库内 `tools/gen_ecosystem.px`、`examples/repro_h2_vhost.px` 曾踩此坑（M115 修正）。
 
-## 2. native 内置速查（306 全量见 `docs/native_index.json`，本表为常用）
+## 2. native 内置速查（311 全量见 `docs/native_index.json`，本表为常用）
 
 ### 核心 / 值
-`print` `len` `range` `type` `str` `int` `float` `bool` `assert` `input` `exit` `sleep` `abs` `sqrt` `min` `max` `pow` `sorted` `reversed` `sum` `map` `filter` `reduce` `contains` `env` `args` `gc` · 数学（M59）：`sin/cos/tan/atan2/floor/ceil/round/log/log10/exp/random/random_int/random_seed` + 常量 `pi/e`
+`print` `len` `range` `type` `str` `int` `float` `bool` `assert` `input` `exit` `sleep` `abs` `sqrt` `min` `max` `pow` `sorted` `reversed` `sum` `map` `filter` `reduce` `contains` `env` `args()`（**调用式**：`px run s.px a b` 与编译产物同形 `[程序, a, b]`——M115 修；见 §1.1 事实清单）`gc` · 数学（M59）：`sin/cos/tan/atan2/floor/ceil/round/log/log10/exp/random/random_int/random_seed` + 常量 `pi/e`
 > **M72 诊断（Issue 9/10）**：`print/println` 已**逐行实时**（管道/journald 下不再攒 8KB）；`flush()` 显式刷 stdout/stderr；`print_err(...)` 输出到 **stderr**（渲染同 print）。**编译产物运行时错误带 .px 源位置**：`运行时错误 [函数 行N]: 消息`（pxi 解释器本就带 `错误 [code] 行:列`）。**spawn 协程内运行时错误默认隔离**（打印现场后宿主继续；`PX_SPAWN_ISOLATE=0` 关 → 回退原 exit 语义）。
 
 ### 文件系统
@@ -112,7 +124,7 @@ print("upper=" + to_upper("px"))
 `bytes(s)` `bytes_len` `bytes_get/set` `bytes_slice` `bytes_concat` `bytes_to_str` `int_to_bytes` `bytes_to_int` `bytes_base64` `bytes_find` · `bit_count` `bit_length`
 
 ### 时间 / 定时 / 调度
-`now()` `now_ms()` `now_us()` `sleep(sec)` `sleep_us` `time_format(t, fmt)` `time_parse` `tz_offset` · `set_timeout(f, ms, ...)` `set_interval` `clear_timer` · `cron("分 时 日 月 周", f)`（6 字段）
+`now()`（**本地时间字符串** `YYYY-MM-DD HH:MM:SS`）`now_ms()` `now_us()` `now_sec()`（M115：Unix 秒，配 `time_format`）`sleep(sec)` `sleep_us` `time_format(t, fmt)` `time_parse` `tz_offset` · `set_timeout(f, ms, ...)` `set_interval` `clear_timer` · `cron("分 时 日 月 周", f)`（6 字段）
 
 ### HTTP（客户端/服务端）
 客户端：`http_get(url)` `http_post(url, body[, headers])` `http_request(method, url[, body, headers])` `http_get_stream` · 服务端：`http_serve(port, handler)`（TCP 每请求回调）· `http_serve_unix(sock_path, handler)`（**Unix socket 服务端**，M82；自动清残留 + 0600）· `px_serve(port, docroot[, tls, opts])`（静态 + .px 应用服务器，opts 可 {http3:true, max_body_size, rate_limit...}）· `px_exec`（语言内嵌 .px）· `http_unix(sock, path, ...)`（Unix socket 客户端，M56）
@@ -136,7 +148,9 @@ AES：`aes_encrypt(key, iv, data)` / `aes_decrypt`（CBC-PKCS7）· `aes_gcm_enc
 Session：`session_open()/session_id/get/set/del/destroy` · `basic_auth(user, pass)` · `route(method, pattern, fn)`（:id 参数 / * 通配）· `middleware(fn)` `rate_limit` `vhost` `sandbox_enter` · 上下文 `ctx_set/get/clear` · 消息总线 `bus_new/subscribe/publish/unsubscribe` · `event_bus` · `gen_next`（生成器取下一项）· `list(xs)`（生成器→list）
 
 ### 进程 / 系统（M66 五件套 + M42+）
-`os_pid()` · `os_exec(cmd, args)`（替换进程）· `os_spawn(cmd, args[, group])` / `os_spawn_capture`（group=true 子进程 setpgid 自成组，M83-S2）· `os_wait(pid)` · `os_kill(pid[, sig[, group]])`（group 组杀）· `os_capture(cmd)`（双管道分离捕获）· `os_popen(cmd, mode)`（双向）· `os_rename` `os_remove_all`（防删根）· `os_random_hex(n)` `os_file_sha256(path)` · `unix_connect(sockpath)` · `signal(sig, fn)` · `gc()`
+`os_pid()` · `os_exec(cmd, args)`（替换进程）· `os_spawn(cmd, args[, group|opts])` / `os_spawn_capture`（group=true 子进程 setpgid 自成组，M83-S2）· `os_wait(pid)` · `os_kill(pid[, sig[, group]])`（group 组杀）· `os_capture(cmd)`（双管道分离捕获）· `os_popen(cmd, mode)`（双向）· `os_rename` `os_remove_all`（防删根）· `os_random_hex(n)` `os_file_sha256(path)` · `unix_connect(sockpath)` · `signal(sig, fn)` · `gc()`
+> **M115 服务进程/环境补全**（ws-center / ws-ddns PuXian 化实测缺口）：`env_set(name, value)` / `env_unset(name)`（进程环境**可写**，子进程可继承）· `os_self_path()`（当前可执行文件绝对路径，守护化/自升级用）· `isatty(fd)`（TTY 判定，交互式提示只在终端弹）· `now_sec()`（Unix 秒，与 `time_format` 同轴 —— `now()` 是**本地时间字符串**，喂 `time_format` 会类型报错）。
+> **`os_spawn` opts dict（M115）**：`os_spawn(cmd, args, {group:true, setsid:true, stdout:"/log/x.log", stderr:"…", stdin:false, cwd:"/tmp", env:{"K":"V"}})` —— 守护化不再需要 `/bin/sh -c "setsid … >>log 2>&1 &"`（旧法拿不到真实 pid）。`stdin:false` = `/dev/null`；`opts.env` **不污染父进程**；第 3 参传 bool 时语义不变（零回归）。
 
 ### fd / 边缘设备（Linux）
 `open(path, flags[, mode])` `close(fd)` `read(fd, n)` `write(fd, data)` `ioctl(fd, req[, arg])` `os_errno()` · `mmap/munmap/mem_write`（活映射）· `fcntl` `tty_config` `fd_wait`（poll）· GPIO/I2C/串口/PWM 走 `import std.edge`
@@ -267,6 +281,6 @@ set_timeout(fn (): print("once after 2s"), 2000)
 
 ## 5. 防漂移与源
 
-- **native 清单**（306，单一事实源 = runtime 注册表）：`bash tools/gen_native_table.sh` → `docs/native_index.json`；CI 重跑 diff 防漂移。**本表计数必须 == count**（现 306）。
+- **native 清单**（311，单一事实源 = runtime 注册表）：`bash tools/gen_native_table.sh` → `docs/native_index.json`；CI 重跑 diff 防漂移。**本表计数必须 == count**（现 311）。
 - **stdlib 索引**：`tools/px run tools/gen_ecosystem.px` → `docs/ecosystem_index.json`。
 - 规范：`docs/spec.md`（§8 模块/import、§9 双模式、§12 AI 协议）· `docs/MINI_SUBSET.md`（子集边界）· 缺口与写库规范：`docs/ECOSYSTEM_GAPS.md`。

@@ -6,6 +6,34 @@
 
 ## [Unreleased]
 
+### 服务进程/环境原语补全 —— ws-center / ws-ddns PuXian 化实测缺口（M115）
+
+> **主题：把 `ws-center`（2717 行 Go）与 `ws-ddns`（1141 行 Go）两个真实模块 PuXian 化，
+> 在开发过程中把语言缺的原语顶出来，当场补齐（不绕过）。** 详细缺口-决策-门见 `docs/M115_PLAN.md`。
+
+- **缺口（四条，均无现成代偿）**：
+  - ① `os.Setenv` 无对应原语 ⇒ 配置文件无法注入进程环境，**子进程继承不到**（只能改全局 dict，语义漂移）；
+  - ② daemonize 三件套（`os.Executable()` + `Setsid` + stdio 重定向）在语言层无法表达 ⇒
+    只能 `/bin/sh -c "setsid … >>log 2>&1 &"`：**shell 依赖** + **拿不到守护进程真实 pid**（pidfile/`--stop` 失效）；
+  - ③ TTY 判定无处可查（`tty_config` 是*设置*语义，不能当查询）⇒ 交互式选择无法表达；
+  - ④ 缺"当前 Unix 秒"：`now()` 返回**本地时间字符串**，`time_format(now(), …)` **类型报错**（服务端签名协议的基本字段）。
+- **新增 native（runtime C 写；pxi 名册 / ibuiltin dispatch / pxlint 名册三处同步）**：
+  `env_set(name, value)`·`env_unset(name)`·`os_self_path()`·`isatty(fd)`·`now_sec()`。
+  native 表 **306 → 311**（`docs/native_index.json` 重生成，防漂移门照跑）。
+- **`os_spawn` 第 3 参扩展**：`bool group`（旧语义，零回归）→ 亦可为 **opts dict**
+  `{group, setsid, stdout, stderr, stdin, cwd, env}`。子进程侧 `setsid → setpgid → chdir → stdio → execvpe`；
+  `stdin:false` = `/dev/null`；**`env` 在 fork 前备成 `char** envp`**（fork 后只跑 AS-safe 调用，
+  不在 fork 后 `setenv` —— 多线程下会摸 malloc 锁）；`opts.env` **不污染父进程**。
+- **验证**：`examples/m115_proc_env.px`（双模式 9 组断言：env 读写 / 子进程继承 / opts.env 隔离 /
+  cwd+stdout / `stdin:false` EOF / **`setsid` 后 `ps -o sid= -p PID` == PID** / `os_self_path` 存在 /
+  `isatty` 契约 / `now_sec` 与 `now_ms//1000` 一致）+ `examples/m115_proc_env.sh`（含**负控**：故意错值必红）。
+- **顺手更正（纯文档，来自本次实测）**：速查包 §1 给的通道写法 `send(ch, v)` / `recv(ch)`
+  **不存在**（实测 `E2001 意外的 token: send`），真写法是方法式 `ch.send(v)` / `ch.recv()`；已改正。
+- **独立立项（本步不做）**：`px` **续行缩进**缺陷 —— `return {\n …}`、`f(1,\n 2)` 这类
+  *闭合括号比语句行更深缩进*（人写代码的常态）报 `E2001 意外的 token: 去缩进`，
+  且**行列指向无辜的下一行**；与 M70-S1「括号内换行/缩进 token 被 parser 忽略」的规范描述不一致。
+  修在 lexer/parser（token 流 / golden 面广），与本次 runtime native 不耦合，单独立项。
+
 ### 解释器轨内置转发丢参 + `os_*` 组杀竞态（qg-issue 69）
 
 > **主题：核验「PuXian 是否已无问题」时，把 m66 专项用例在解释器轨与编译轨**分别**复跑 —— 解释器轨恒红。**
