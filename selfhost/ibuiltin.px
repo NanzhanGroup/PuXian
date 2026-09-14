@@ -101,6 +101,12 @@ def i_call_builtin(name, args, pos):
     if name == "pow":
         if len(args) != 2:
             return Err(i_r1002("pow 需要两个参数", pos))
+        let p0 = i_type_name(args[0])
+        let p1 = i_type_name(args[1])
+        if (p0 != "int" and p0 != "float"):
+            return Err(i_r1002("pow 参数必须是数字，实际是 " + p0, pos))
+        if (p1 != "int" and p1 != "float"):
+            return Err(i_r1002("pow 参数必须是数字，实际是 " + p1, pos))
         let r = i_eval_binary("Pow", args[0], args[1], pos)
         return r
     # ---- M59-S4 数学（双模式同步：编译模式 bi_* 已注册；解释器参数预检后直调 C libm） ----
@@ -165,10 +171,14 @@ def i_call_builtin(name, args, pos):
     if name == "to_upper":
         if len(args) != 1:
             return Err(i_r1002("to_upper 需要一个参数", pos))
+        if type(args[0]) != "string":
+            return Err(i_r1002("to_upper 需要一个字符串参数", pos))
         return Ok(args[0].upper())
     if name == "to_lower":
         if len(args) != 1:
             return Err(i_r1002("to_lower 需要一个参数", pos))
+        if type(args[0]) != "string":
+            return Err(i_r1002("to_lower 需要一个字符串参数", pos))
         return Ok(args[0].lower())
     if name == "replace":
         if len(args) != 3:
@@ -176,11 +186,15 @@ def i_call_builtin(name, args, pos):
         return Ok(args[0].replace(args[1], args[2]))
     if name == "starts_with":
         if len(args) != 2:
-            return Err(i_r1002("starts_with 需要两个参数", pos))
+            return Err(i_r1002("starts_with 需要 2 个字符串参数", pos))
+        if type(args[0]) != "string" or type(args[1]) != "string":
+            return Err(i_r1002("starts_with 需要 2 个字符串参数", pos))
         return Ok(args[0].starts_with(args[1]))
     if name == "ends_with":
         if len(args) != 2:
-            return Err(i_r1002("ends_with 需要两个参数", pos))
+            return Err(i_r1002("ends_with 需要 2 个字符串参数", pos))
+        if type(args[0]) != "string" or type(args[1]) != "string":
+            return Err(i_r1002("ends_with 需要 2 个字符串参数", pos))
         return Ok(args[0].ends_with(args[1]))
     if name == "gen_next":
         # M41.2 补：解释器生成器 gen_next（对齐 C 层 bi_gen_next 逐项取值语义）
@@ -210,6 +224,8 @@ def i_call_builtin(name, args, pos):
             return Ok(tuple(args[0]))
         return Err(i_r1002("tuple 参数需要 list/tuple", pos))
     if name == "dict":
+        if len(args) != 0:
+            return Err(i_r1002("dict 不需要参数", pos))
         return Ok(it_new_dict())
     if name == "unique":
         # std.collections.unique：去重保持顺序
@@ -262,8 +278,12 @@ def i_call_builtin(name, args, pos):
             return Ok(append_file(args[0], args[1], args[2]))
         return Ok(append_file(args[0], args[1]))
     if name == "exists":
+        if len(args) != 1:
+            return Err(i_r1002("exists 需要一个路径参数", pos))
         return Ok(exists(args[0]))
     if name == "remove":
+        if len(args) != 1:
+            return Err(i_r1002("remove 需要一个路径参数", pos))
         return Ok(remove(args[0]))
     if name == "mkdir":
         # M116（qg-issue 71 D6）：mode 透传（同 write_file/append_file 缺陷类：
@@ -274,38 +294,70 @@ def i_call_builtin(name, args, pos):
             return Ok(mkdir(args[0], args[1]))
         return Ok(mkdir(args[0]))
     if name == "list_dir":
+        if len(args) != 1:
+            return Err(i_r1002("list_dir 需要一个路径参数", pos))
         return Ok(list_dir(args[0]))
     if name == "file_size":
+        if len(args) != 1:
+            return Err(i_r1002("file_size 需要一个路径参数", pos))
         return Ok(file_size(args[0]))
     if name == "read_bytes":
+        if len(args) != 1:
+            return Err(i_r1002("read_bytes 需要一个路径参数", pos))
         return Ok(read_bytes(args[0]))
     if name == "write_bytes":
+        if len(args) != 2:
+            return Err(i_r1002("write_bytes 需要 (路径, bytes) 参数", pos))
         return Ok(write_bytes(args[0], args[1]))
     if name == "regex_match":
+        if len(args) != 2:
+            return Err(i_r1002("regex_match 需要 2 个参数: (pattern, text)", pos))
         return Ok(regex_match(args[0], args[1]))
     if name == "regex_find":
+        if len(args) != 2:
+            return Err(i_r1002("regex_find 需要 2 个参数: (pattern, text)", pos))
         return Ok(regex_find(args[0], args[1]))
     if name == "regex_search":
+        if len(args) != 2:
+            return Err(i_r1002("regex_search 需要 2 个参数: (pattern, text)", pos))
         return Ok(regex_search(args[0], args[1]))
     if name == "regex_find_all":
+        if len(args) != 2:
+            return Err(i_r1002("regex_find_all 需要 2 个参数: (pattern, text)", pos))
         return Ok(regex_find_all(args[0], args[1]))
     if name == "regex_replace":
+        if len(args) != 3:
+            return Err(i_r1002("regex_replace 需要 3 个参数: (pattern, text, repl)", pos))
         return Ok(regex_replace(args[0], args[1], args[2]))
     if name == "regex_split":
+        if len(args) != 2:
+            return Err(i_r1002("regex_split 需要 2 个参数: (pattern, text)", pos))
         return Ok(regex_split(args[0], args[1]))
     if name == "json_parse":
+        if len(args) != 1:
+            return Err(i_r1002("json_parse 需要一个字符串参数", pos))
         return Ok(json_parse(args[0]))
     if name == "json_stringify":
+        if len(args) != 1:
+            return Err(i_r1002("json_stringify 需要一个参数", pos))
         return Ok(json_stringify(args[0]))
     if name == "json_path":
+        if len(args) != 2:
+            return Err(i_r1002("json_path 需要 (json, path) 参数", pos))
         return Ok(json_path(args[0], args[1]))
     if name == "json_path_set":
+        if len(args) != 3:
+            return Err(i_r1002("json_path_set 需要 (json, path, value) 参数", pos))
         return Ok(json_path_set(args[0], args[1], args[2]))
     if name == "sha256":
         # M45：完整性哈希（lockfile 校验；runtime.c 已注册，pxi 直调）
+        if len(args) != 1:
+            return Err(i_r1002("sha256 需要一个参数", pos))
         return Ok(sha256(args[0]))
     if name == "http_get":
         # M45：远程依赖下载（runtime.c 已注册，pxi 直调）
+        if len(args) != 1:
+            return Err(i_r1002("http_get 需要 (url) 参数", pos))
         return Ok(http_get(args[0]))
     if name == "os_spawn":
         # M114 尾修（qg-issue 69）：第 3 参 group **必须透传**。
@@ -316,11 +368,15 @@ def i_call_builtin(name, args, pos):
         return Ok(os_spawn(args[0], args[1]))
     if name == "os_spawn_capture":
         # M65：子进程输出捕获（LSP 诊断器 / MCP run/test/bench 编排，双模式对齐）
+        if len(args) != 2:
+            return Err(i_r1002("os_spawn_capture 需要 (cmd, args) 参数", pos))
         return Ok(os_spawn_capture(args[0], args[1]))
     if name == "ffi_call":
         # M42：FFI C 桥 —— ffi_call(name, args_list) 调 runtime 注册的 C 绑定
         return i_builtin_ffi_call(args, pos)
     if name == "os_wait":
+        if len(args) != 1:
+            return Err(i_r1002("os_wait 需要 (pid) 参数", pos))
         return Ok(os_wait(args[0]))
     if name == "os_kill":
         # M66：支持 (pid, sig[, group])；pxi 传宿主同名函数（解释器自身是编译产物，宿主已注册）
@@ -335,23 +391,39 @@ def i_call_builtin(name, args, pos):
             return Ok(os_exec(args[0]))
         return Ok(os_exec(args[0], args[1]))
     if name == "os_rename":
+        if len(args) != 2:
+            return Err(i_r1002("os_rename 需要 (old_path, new_path) 参数", pos))
         return Ok(os_rename(args[0], args[1]))
     if name == "os_remove_all":
+        if len(args) != 1:
+            return Err(i_r1002("os_remove_all 需要 (path) 参数", pos))
         return Ok(os_remove_all(args[0]))
     if name == "os_random_hex":
+        if len(args) != 1:
+            return Err(i_r1002("os_random_hex 需要 (nbytes) 参数", pos))
         return Ok(os_random_hex(args[0]))
     if name == "os_file_sha256":
+        if len(args) != 1:
+            return Err(i_r1002("os_file_sha256 需要 (path) 参数", pos))
         return Ok(os_file_sha256(args[0]))
     if name == "os_capture":
         # M66：子进程 stdout/stderr 分离捕获 → {rc, stdout, stderr}
+        if len(args) != 2:
+            return Err(i_r1002("os_capture 需要 (cmd, args) 参数", pos))
         return Ok(os_capture(args[0], args[1]))
     if name == "os_popen":
         # M66：双向管道 → {pid, stdin_fd, stdout_fd}
+        if len(args) != 2:
+            return Err(i_r1002("os_popen 需要 (cmd, args) 参数", pos))
         return Ok(os_popen(args[0], args[1]))
     if name == "unix_connect":
         # M66：AF_UNIX 裸连接 → fd（复用 read/write 收发）
+        if len(args) != 1:
+            return Err(i_r1002("unix_connect 需要 (socket_path) 参数", pos))
         return Ok(unix_connect(args[0]))
     if name == "env":
+        if len(args) != 1:
+            return Err(i_r1002("env 需要一个变量名", pos))
         return Ok(env(args[0]))
     # M115：服务进程/环境原语（ws-center / ws-ddns PuXian 化实测缺口）
     # ⚠️ env_set 必须走 ffi_call 显式按名调用宿主 native：
@@ -369,14 +441,20 @@ def i_call_builtin(name, args, pos):
             return Err(i_r1002("env_unset 需要一个变量名", pos))
         return Ok(env_unset(args[0]))
     if name == "os_self_path":
+        if len(args) != 0:
+            return Err(i_r1002("os_self_path 不需要参数", pos))
         return Ok(os_self_path())
     if name == "isatty":
         if len(args) != 1:
             return Err(i_r1002("isatty 需要一个 fd（int）", pos))
         return Ok(isatty(args[0]))
     if name == "now_sec":
+        if len(args) != 0:
+            return Err(i_r1002("now_sec 不需要参数", pos))
         return Ok(now_sec())
     if name == "tz_local":
+        if len(args) != 0:
+            return Err(i_r1002("tz_local 不需要参数", pos))
         return Ok(tz_local())
     if name == "args":
         # M115：被解释程序实参 —— 规范化后与**编译产物**同形（argv[0]=程序，其后用户实参）。
@@ -384,15 +462,26 @@ def i_call_builtin(name, args, pos):
         #   而编译产物可用；且两轨形状不同（详见 interp.px main() 注释）。
         return Ok(g_script_args)
     if name == "now":
+        if len(args) != 0:
+            return Err(i_r1002("now 不需要参数", pos))
         return Ok(now())
     if name == "sleep":
-        sleep(args[0])
-        return Ok(null)
+        if len(args) != 1:
+            return Err(i_r1002("sleep 需要 1 个参数", pos))
+        return Ok(sleep(args[0]))
     if name == "exit":
+        if len(args) > 1:
+            return Err(i_r1002("exit 需要 0-1 个参数", pos))
+        if len(args) == 0:
+            return Ok(exit())
         return Ok(exit(args[0]))
     if name == "hex_to_int":
+        if len(args) != 1:
+            return Err(i_r1002("hex_to_int 需要一个参数", pos))
         return Ok(hex_to_int(args[0]))
     if name == "int_to_hex":
+        if len(args) != 2:
+            return Err(i_r1002("int_to_hex 需要 (n, width) 参数", pos))
         return Ok(int_to_hex(args[0], args[1]))
     if name == "int_to_bytes":
         # C 层 int_to_bytes(n, size[, endian[, signed]])：2-4 参，按实参数量透传
@@ -400,21 +489,31 @@ def i_call_builtin(name, args, pos):
             return Ok(int_to_bytes(args[0], args[1], args[2]))
         return Ok(int_to_bytes(args[0], args[1]))
     if name == "bytes_to_int":
+        if len(args) < 1 or len(args) > 3:
+            return Err(i_r1002("bytes_to_int 需要 (bytes[, endian[, signed]]) 参数", pos))
         return Ok(bytes_to_int(args[0]))
     # ---- M62-L7：bytes 族白名单补齐（pxi 双模式对齐编译模式；C runtime 已注册，pxi 直调） ----
     # 语义：参数个数/类型错误由 C 层 px_error 终止（编程契约，与编译模式一致——与
     # read_file 等 io 可恢复错误走 Err 不同，bytes 族参数错属编程契约）。
     if name == "bytes":
         # bytes(x) → bytes（str/bytes/数值按 UTF-8/十进制字节原样）
+        if len(args) != 1:
+            return Err(i_r1002("bytes 需要一个参数", pos))
         return Ok(bytes(args[0]))
     if name == "bytes_len":
         # bytes_len(b) → int
+        if len(args) != 1:
+            return Err(i_r1002("bytes_len 需要一个参数", pos))
         return Ok(bytes_len(args[0]))
     if name == "bytes_get":
         # bytes_get(b, i) → int|null（负索引支持）
+        if len(args) != 2:
+            return Err(i_r1002("bytes_get 需要 (bytes, index) 参数", pos))
         return Ok(bytes_get(args[0], args[1]))
     if name == "bytes_set":
         # bytes_set(b, i, v) → bytes（函数式：返回新 bytes，v ∈ 0..255）
+        if len(args) != 3:
+            return Err(i_r1002("bytes_set 需要 (bytes, index, value) 参数", pos))
         return Ok(bytes_set(args[0], args[1], args[2]))
     if name == "bytes_slice":
         # bytes_slice(b[, start[, end]]) → bytes（start/end 可 null/int，负索引/越界 clamp）
@@ -437,27 +536,43 @@ def i_call_builtin(name, args, pos):
         return Ok(acc)
     if name == "bytes_to_str":
         # bytes_to_str(b) → str（UTF-8）
+        if len(args) != 1:
+            return Err(i_r1002("bytes_to_str 需要一个参数", pos))
         return Ok(bytes_to_str(args[0]))
     if name == "bytes_to_hex":
         # bytes_to_hex(b) → str（hex 小写）
+        if len(args) != 1:
+            return Err(i_r1002("bytes_to_hex 需要一个参数", pos))
         return Ok(bytes_to_hex(args[0]))
     if name == "hex_to_bytes":
         # hex_to_bytes(s) → bytes|null
+        if len(args) != 1:
+            return Err(i_r1002("hex_to_bytes 需要一个参数", pos))
         return Ok(hex_to_bytes(args[0]))
     if name == "bytes_find":
         # bytes_find(b, sub) → int|null（子串下标；sub 可 bytes/str）
+        if len(args) != 2:
+            return Err(i_r1002("bytes_find 需要 (bytes, sub) 参数", pos))
         return Ok(bytes_find(args[0], args[1]))
     if name == "bytes_base64":
         # bytes_base64(b) → str（base64）
+        if len(args) != 1:
+            return Err(i_r1002("bytes_base64 需要一个参数", pos))
         return Ok(bytes_base64(args[0]))
     if name == "base64_to_bytes":
         # base64_to_bytes(s) → bytes|null（严格解码）
+        if len(args) != 1:
+            return Err(i_r1002("base64_to_bytes 需要一个参数", pos))
         return Ok(base64_to_bytes(args[0]))
     if name == "base64_encode":
         # base64_encode(s) → str（字符串 base64）
+        if len(args) != 1:
+            return Err(i_r1002("base64_encode 需要一个参数", pos))
         return Ok(base64_encode(args[0]))
     if name == "base64_decode":
         # base64_decode(s) → str|null
+        if len(args) != 1:
+            return Err(i_r1002("base64_decode 需要一个参数", pos))
         return Ok(base64_decode(args[0]))
     if name == "Ok":
         if len(args) == 0:
@@ -741,7 +856,7 @@ def i_builtin_range(args, pos):
     else:
         return Err(i_r1002("range 需要 1-3 个参数", pos))
     if type(start) != "int" or type(end) != "int" or type(step) != "int":
-        return Err(i_r1002("range 参数需要整数", pos))
+        return Err(i_r1002("期望整数，实际是 " + i_type_name(args[0]), pos))
     if step == 0:
         return Err(i_r1006("range step 不能为 0", pos))
     return Ok(range(start, end, step))
