@@ -353,7 +353,7 @@ def scan_interp_nested_string(str_pos_line, str_pos_col):
     #   （而不是裸 "）；其余转义按字面意图解释：\\n 换行、\\t 制表、\\\\ 反斜杠。
     let pos_line = g_line
     let pos_col = g_col
-    advance()   # 吃掉开引号（调用方已确认是转义引号）
+    advance()  # 吃掉开引号（调用方已确认是转义引号）
     var s = ""
     while true:
         let c = peek()
