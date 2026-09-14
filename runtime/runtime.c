@@ -955,6 +955,10 @@ int  px_spawn_isolate_begin(void);
 void px_spawn_isolate_end(void);
 void px_gc_block_stop_sig(sigset_t* old);
 void px_gc_unblock_stop_sig(const sigset_t* old);
+// M116（qg-issue 71 D7）：协程终止原因（TLS，定义见 coro.c）—— done_cb 同线程同步读
+int  px_coro_errored(void);
+// M116（qg-issue 71 D7）：handler/middleware 运行时错误的标准 500 响应值（定义见文件尾）
+LXValue px_serve_error_resp(int kind);
 
 // 开放寻址哈希集合（对象地址快速查询，供保守栈扫描）
 typedef struct {
@@ -2799,7 +2803,16 @@ LXValue px_index(LXValue obj, LXValue idx) {
     }
     if (obj.type == PX_DICT) {
         if (idx.type == PX_STR) {
-            return px_dict_get(obj, idx.as.obj->as.str.data);
+            // M116（qg-issue 71 D2）：**缺键 = 运行时错误**，与解释器轨 R1008 同口径。
+            //   此前 C/VM 轨静默返回 null，而 `pxi` 直接抛 R1008 杀进程 —— 同一份源码
+            //   两轨行为不同（违背 docs/MINI_SUBSET §五 双模式一致契约，也与
+            //   docs/M65_PLAN.md 记载的「R1008 + .has() 守卫」口径相悖）。
+            //   实测被它坑过：移植 ws-center 时 `str(r["role"])`（键缺失）在编译轨下
+            //   得到字符串 "null" 并被**写进数据库**，解释轨则当场报错。
+            const char* k = idx.as.obj->as.str.data;
+            if (!px_dict_has(obj, k))
+                px_error("R1008: 字典没有键 '%s'", k);
+            return px_dict_get(obj, k);
         }
         // M37：dict 整数索引 → 返回第 i 个键（for-in dict 用 px_len/px_index 遍历，与解释器 keys 一致）
         if (idx.type == PX_INT) {
@@ -2811,7 +2824,7 @@ LXValue px_index(LXValue obj, LXValue idx) {
             }
             px_error("字典索引越界: %d (len=%d)", i, o->as.dict.len);
         }
-        px_error("字典索引需要字符串键");
+        px_error("R1002: 字典索引键必须是字符串");
     }
     px_error("无法索引: %s", px_type_name(obj));
     return px_null();
@@ -2960,7 +2973,11 @@ LXValue px_field(LXValue obj, const char* name) {
         }
         px_error("结构体 %s 没有字段 %s", o->as.struct_inst.type_name, name);
     }
-    if (obj.type == PX_DICT) return px_dict_get(obj, name);
+    if (obj.type == PX_DICT) {
+        // M116（qg-issue 71 D2）：同 px_index —— 缺键报 R1008（对齐解释器 i_field）
+        if (!px_dict_has(obj, name)) px_error("R1008: 字典没有键 '%s'", name);
+        return px_dict_get(obj, name);
+    }
     px_error("无法取字段: %s.%s", px_type_name(obj), name);
     return px_null();
 }
@@ -4870,6 +4887,60 @@ static int dns_skip_name(const unsigned char* b, int blen, int off) {
     }
     return -1;
 }
+// ---- M116（qg-issue 71 D5）：DNS over TCP 回退（RFC 1035 §4.2.2）----
+//   UDP 响应置 TC（截断）时改用 TCP 重发。此前直接 Err("response truncated (TCP
+//   回退二期)")，后果不是"少个功能"而是**能力面倒挂**：Go 的 net.LookupTXT 自动
+//   回退 TCP，故 `dns_txt("google.com")` / `dns_txt("cloudflare.com")` 这类多记录、
+//   长 TXT 域名在 PuXian 侧直接失败 —— 而 ws-ddns 这类"TXT 就是协议载体"的系统里
+//   多记录/长 TXT 恰恰是常态。
+//   线格式：2 字节长度前缀（大端）+ 原查询报文；响应同为 2 字节长度前缀。
+//   返回响应字节数，失败 -1 并把原因写入 msg。
+static int dns_tcp_query(const char* ns, const unsigned char* q, int ql,
+                         unsigned char* rb, int rbsz, char* msg, size_t msgsz) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) { snprintf(msg, msgsz, "dns: tcp socket() failed"); return -1; }
+    struct sockaddr_in sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(53);
+    if (inet_pton(AF_INET, ns, &sa.sin_addr) != 1) {
+        close(fd); snprintf(msg, msgsz, "dns: bad nameserver %s", ns); return -1;
+    }
+    struct timeval tv;
+    tv.tv_sec = 3; tv.tv_usec = 0;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    if (connect(fd, (struct sockaddr*)&sa, sizeof(sa)) != 0) {
+        close(fd); snprintf(msg, msgsz, "dns: tcp connect() failed"); return -1;
+    }
+    if (ql + 2 > 4096) { close(fd); snprintf(msg, msgsz, "dns: tcp query too large"); return -1; }
+    unsigned char wb[4096];
+    wb[0] = (unsigned char)((ql >> 8) & 0xFF);
+    wb[1] = (unsigned char)(ql & 0xFF);
+    memcpy(wb + 2, q, (size_t)ql);
+    if (send(fd, wb, (size_t)ql + 2, 0) != ql + 2) {
+        close(fd); snprintf(msg, msgsz, "dns: tcp send() failed"); return -1;
+    }
+    // TCP 是字节流：长度前缀与报文体都可能短读 → 循环读满
+    int got = 0;
+    while (got < 2) {
+        ssize_t n = recv(fd, wb + got, (size_t)(2 - got), 0);
+        if (n <= 0) { close(fd); snprintf(msg, msgsz, "dns: tcp length read failed"); return -1; }
+        got += (int)n;
+    }
+    int rlen = (wb[0] << 8) | wb[1];
+    if (rlen <= 0 || rlen > rbsz) {
+        close(fd); snprintf(msg, msgsz, "dns: tcp response size %d out of range", rlen); return -1;
+    }
+    got = 0;
+    while (got < rlen) {
+        ssize_t n = recv(fd, rb + got, (size_t)(rlen - got), 0);
+        if (n <= 0) { close(fd); snprintf(msg, msgsz, "dns: tcp body read failed"); return -1; }
+        got += (int)n;
+    }
+    close(fd);
+    return rlen;
+}
 static LXValue bi_dns_txt(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) px_error("dns_txt 需要一个参数 (domain)");
@@ -4949,6 +5020,13 @@ static LXValue bi_dns_txt(LXValue* args, int nargs, void* ctx) {
         snprintf(msg, sizeof(msg), "dns: %s: query timeout", host);
         return px_err(px_str(msg));
     }
+    // 3b) M116（qg-issue 71 D5）：TC=1（UDP 放不下）→ TCP 重发同一查询
+    //     （RFC 1035 §4.2.2；QUERY 的 TC 位在 flags 高位字节 bit1）
+    if (rl >= 4 && (rb[2] & 0x02) != 0) {
+        int tl = dns_tcp_query(ns, q, ql, rb, (int)sizeof(rb), msg, sizeof(msg));
+        if (tl < 0) return px_err(px_str(msg));
+        rl = tl;
+    }
     // 4) 解析响应
     if (rl < 12) return px_err(px_str("dns: short response"));
     uint16_t rid = (uint16_t)((rb[0] << 8) | rb[1]);
@@ -4962,7 +5040,9 @@ static LXValue bi_dns_txt(LXValue* args, int nargs, void* ctx) {
         return px_err(px_str(msg));
     }
     if (flags & 0x0200) {
-        snprintf(msg, sizeof(msg), "dns: %s: response truncated (TCP 回退二期)", host);
+        // M116（qg-issue 71 D5）：正常路径已在上面走 TCP 回退；此处仅剩"TCP 响应
+        //   仍置 TC"的病态情形（服务端实现异常），保留显式报错不静默。
+        snprintf(msg, sizeof(msg), "dns: %s: response truncated (TCP 回退后仍置 TC)", host);
         return px_err(px_str(msg));
     }
     int qd = (rb[4] << 8) | rb[5];
@@ -6079,7 +6159,17 @@ static LXValue bi_list_dir(LXValue* args, int nargs, void* ctx) {
 
 static LXValue bi_mkdir(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1 || args[0].type != PX_STR) px_error("mkdir 需要一个路径参数");
+    // M116（qg-issue 71 D6）：新增可选 mode —— `mkdir(path[, mode])`。
+    //   此前权限恒 0755（且**不可传**），Go 的 os.MkdirAll(dir, 0700) 这种"放私钥的目录"
+    //   表达不出，只能退化为 0755 或外挂 chmod（引入 shell 依赖）。语义对齐 Go：
+    //   mode 作用于**所有新建层级**，最终仍受进程 umask 约束（POSIX 标准行为）。
+    if ((nargs != 1 && nargs != 2) || args[0].type != PX_STR)
+        px_error("mkdir 需要 (path[, mode]) 参数");
+    int mode = 0755;
+    if (nargs == 2) {
+        if (args[1].type != PX_INT) px_error("mkdir 的 mode 需要整数（如 0o700）");
+        mode = (int)(args[1].as.i & 07777);
+    }
     const char* path = args[0].as.obj->as.str.data;
     // 递归创建
     char tmp[1024];
@@ -6088,11 +6178,11 @@ static LXValue bi_mkdir(LXValue* args, int nargs, void* ctx) {
     for (int i = 1; i < len; i++) {
         if (tmp[i] == '/') {
             tmp[i] = 0;
-            mkdir(tmp, 0755);
+            mkdir(tmp, (mode_t)mode);
             tmp[i] = '/';
         }
     }
-    mkdir(tmp, 0755);
+    mkdir(tmp, (mode_t)mode);
     return px_null();
 }
 
@@ -8718,12 +8808,20 @@ static void* spawn_thread(void* p) {
 //   coro.c worker 每个协程执行前调 begin（setjmp 环境在 worker 栈帧，longjmp 回卷安全）；
 //   g_err_jmp/g_err_jmp_set 为 TLS static，跨文件不可直接访问 → 经本导出函数使用。
 //   语义对齐 spawn_thread：错误打印现场后隔离，宿主/worker 继续（协程异常终止回收）。
+// M116（qg-issue 71 D7）：**终止原因另走 TLS 标志，不依赖调用方对该返回值的判断** ——
+//   见 runtime.h「returns_twice 语义不跨编译单元」告警（同 M96-S2 的教训）：实测
+//   coro.c 里 `if (px_spawn_isolate_begin())` 在错误路径下**未必**被当成第二次返回，
+//   故"协程是否因错误终止"改由本 TU 在 longjmp 落点直接置位、调用方事后查询。
+static __thread int t_isolate_errored = 0;
+int px_isolate_errored(void) { return t_isolate_errored; }
 int px_spawn_isolate_begin(void) {
     if (setjmp(g_err_jmp) == 0) {
         g_err_jmp_set = 1;
+        t_isolate_errored = 0;
         return 1;   // 正常路径：错误捕获点已安装，继续执行协程体
     }
     g_err_jmp_set = 0;
+    t_isolate_errored = 1;   // longjmp 落点：立即置位（此处必然执行）
     fprintf(stderr, "[px-coro] 协程运行时错误已隔离，宿主继续（错误现场见上）\n");
     fflush(stderr);
     return 0;       // 错误路径：longjmp 回此，协程异常终止
@@ -11256,8 +11354,12 @@ static void px_parse_multipart(LXValue req, const char* body, int body_len, cons
         }
         xfree(head);
         int clen = (int)(ce - cs);
-        if (clen > 0 && cs[clen - 1] == '\n') clen--;
-        if (clen > 0 && cs[clen - 1] == '\r') clen--;
+        // ⚠️ M116（qg-issue 71 D13）：**不得再削掉一个尾部 CRLF/LF**。
+        //   正式 multipart 段体内是 `...内容\r\n--boundary`，上面的 ce 扫描已经停在
+        //   内容之后、boundary 之前的那个 `\r`，故 clen 恰好是"内容字节"——
+        //   原先这里多削一次 `\n`/`\r`，会把**文件自身的结尾换行吃掉**
+        //   （实测：上传 18 字节文本，服务端保存成 17 字节；ws-center 文件接口
+        //     /v1/files/upload 的 size 与 Go 侧对不上，一眼可见）。
         if (filename[0]) {
             px_dict_set(files, filename, px_str_len(cs, clen));
         } else if (name[0]) {
@@ -12008,8 +12110,12 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
             if (!http_pend_put(fd, req, head_flag, client_close)) {
                 // 登记失败（fd 超容量等）→ 退回原同步路径（行为零变化）
                 LXValue resp = px_null();
-                if (handler.type == PX_FUNC || handler.type == PX_NATIVE)
-                    resp = px_call(handler, &req, 1);
+                char vherr1[256];
+                if (handler.type == PX_FUNC || handler.type == PX_NATIVE) {
+                    // M116（qg-issue 71 D7）：错误边界 —— 同步轨 handler 出错不再打穿到进程级
+                    if (px_native_call_capture(handler, &req, 1, &resp, vherr1, (int)sizeof(vherr1)))
+                        resp = px_serve_error_resp(0);
+                }
                 PX_KEEP(resp);
                 int act = http_send_resp(fd, req, resp, head_flag, client_close);
                 px_root_pop();
@@ -12026,8 +12132,11 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
         }
         // —— 逃生舱（PX_NATIVE / 非 VM handler）：原同步直调路径（行为零变化）——
         LXValue resp = px_null();
+        char vherr2[256];
         if (handler.type == PX_FUNC || handler.type == PX_NATIVE) {
-            resp = px_call(handler, &req, 1);
+            // M116（qg-issue 71 D7）：错误边界（同 route 同步轨）
+            if (px_native_call_capture(handler, &req, 1, &resp, vherr2, (int)sizeof(vherr2)))
+                resp = px_serve_error_resp(0);
         }
         PX_KEEP(resp);   // M92-S2c precise：px_call 返回值裸局部（后续构建响应可能 GC）
         if (body_buf) { xfree(body_buf); body_buf = NULL; }
@@ -12435,6 +12544,11 @@ static void http_handler_done(void* ud, LXValue ret) {
     if (fd < 0) return;
     px_root_push();
     PX_KEEP(ret);
+    // M116（qg-issue 71 D7）：http_serve 的 handler 出错同样不得静默 —— 此前错误协程的
+    //   ret 是 vm.ret_val 初值 PX_NULL，http_send_resp 收到 null ⇒ **200 + 空 body**
+    //   （比 px_serve 轨的 204 更隐蔽：客户端以为拿到一个正常但空白的响应）。
+    //   本轨（http_serve/http_serve_unix）与 px_serve 轨共用 500 语义。
+    if (px_coro_errored()) ret = px_serve_error_resp(0);
     int push = 0;
     sigset_t old;
     pthread_mutex_lock(&g_hpend_mu);
@@ -16234,11 +16348,28 @@ void px_pxserve_pend_gc_mark(void) {
 // 顺序：PX_KEEP 保护 ret（precise 窗口）→ g_pxpend_mu 内 stage 1→2 写 resp + tmp 移交
 //   → 出锁后清理 tmp + px_pool_push(fd) 投回续处理。连接已关/表项已清（fd 复用）→
 //   丢弃 ret。g_px_stop（优雅关闭，池 worker 已退出）→ 直接关连接防 push 无消费者挂死。
+// M116（qg-issue 71 D7）：handler/middleware 因运行时错误终止 → 500 响应值。
+//   此前错误协程的 ret 是 vm.ret_val 初值 PX_NULL ⇒ route_normalize 判 PX_NULL →
+//   status 204（"无内容" = 成功语义）⇒ 客户端/监控把崩溃当成功，现场只在 stderr。
+//   非协程路径（C 轨 / 非 VM handler）此前更糟：错误直接 longjmp 到进程级 → 整台
+//   服务器 exit(1)（实测：出错一次即 Connection refused）。两条路径共用本函数。
+LXValue px_serve_error_resp(int kind) {
+    LXValue d = px_dict();
+    PX_KEEP(d);
+    px_dict_set(d, "status", px_int(500));
+    px_dict_set(d, "body", px_str(kind == 3
+        ? "500 Internal Server Error：middleware 运行时错误（现场见服务端 stderr）\n"
+        : "500 Internal Server Error：handler 运行时错误（现场见服务端 stderr）\n"));
+    return d;
+}
+
 static void px_serve_route_done(void* ud, LXValue ret) {
     int fd = (int)(intptr_t)ud;
     if (fd < 0) return;
     px_root_push();
     PX_KEEP(ret);
+    // M116（qg-issue 71 D7）：见上 —— 出错协程不得以 null（204）冒充成功
+    if (px_coro_errored()) ret = px_serve_error_resp(0);
     int push = 0;
     char tmp[1024]; tmp[0] = 0;
     sigset_t old;
@@ -16321,6 +16452,9 @@ static void px_serve_mw_done(void* ud, LXValue ret) {
     if (fd < 0) return;
     px_root_push();
     PX_KEEP(ret);
+    // M116（qg-issue 71 D7）：middleware 出错 → 500 短路（此前 ret=null 被当成
+    //   "本段放行" ⇒ 链继续往下走：错误被静默吞掉、下游 handler 照常执行）
+    if (px_coro_errored()) ret = px_serve_error_resp(3);
     int push = 0;
     int cont = 0;          // 续段 spawn（链推进 / 进 handler 段）
     int fnargs = 0;
