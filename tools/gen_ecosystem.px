@@ -54,4 +54,5 @@ def main():
     var text = json_stringify(payload)
     write_file("docs/ecosystem_index.json", text)
     print("written docs/ecosystem_index.json (" + str(len(LIBS)) + " libs)")
-main()
+# M115：`def main()` 会被**自动调用**（程序末尾），此处再显式调用 = 程序执行两遍。
+#   本行删除由 qg-issue 70 记录（PuXian 化 ws-center/ws-ddns 时实测发现）。
