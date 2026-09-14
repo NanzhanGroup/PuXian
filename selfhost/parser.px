@@ -1149,7 +1149,28 @@ def parse_closure():
         body = ["Block", stmts, bpos]
     elif chk(":"):
         adv()
-        body = parse_expr()
+        # M118：匿名函数**多行体**（换行 + 缩进块）。此前只认单表达式 ⇒
+        #   `var f = fn ():\n    stmt` 与 `spawn fn ():\n    stmt`（速查包 §1 自己的示例）
+        #   一律报 `E2001 意外的 token: 换行`，多语句回调在语言里没有可用写法。
+        if chk("换行"):
+            let bpos = ppos()
+            adv()
+            if chk("缩进"):
+                let stmts = parse_block()
+                body = ["Block", stmts, bpos]
+            else:
+                # M118：**括号内**的多行匿名函数体（调用实参场景，如 map(xs, fn (x): ...)）。
+                #   括号内 lexer 不产 INDENT/DEDENT（spec §4.1），因此这里按换行逐语句
+                #   解析，直到闭合括号 / 逗号 / 去缩进。
+                let stmts = []
+                while true:
+                    skip_newlines()
+                    if chk(")") or chk("]") or chk(",") or chk("}") or chk("去缩进") or chk("EOF"):
+                        break
+                    stmts.append(parse_stmt())
+                body = ["Block", stmts, bpos]
+        else:
+            body = parse_expr()
     else:
         perr("E2001", "匿名函数体期望 '{' 或 ':'")
     return ["Closure", params, ret_ty, body, captures, pos]

@@ -13250,10 +13250,28 @@ static struct {
     int pend_cap;
     // M32：自动重连（sse_connect(url, reconnect_ms)）
     long long reconnect_ms;   // >0 时断线自动重连
-    char url[512];            // 原始 URL（重连用）
+    char url[512];            // 原始 URL（重连用）；unix 模式下为请求路径
     char last_event_id[512];  // 最近事件 id（重连时带 Last-Event-ID）
+    // M118（qg-issue 74）：SSE 客户端支持 Unix domain socket + POST + 自定义头/体。
+    //   现场：文殊 chat 的 LLM 全走 token-cache 的 Unix socket（POST /v1/chat/completions，
+    //   stream=true）—— 此前 sse_connect 只有「GET + TCP/TLS」，这条通路**无法表达**；
+    //   http_unix/http_request 又是全缓冲（非流式），拿不到逐块到达的 token。
+    char sock[512];           // 非空 = Unix domain socket；此时 url 只作请求路径
+    char method[16];          // 请求方法（默认 GET）
+    char content_type[128];   // 请求体 Content-Type（默认 application/json）
+    char* req_headers;        // 额外请求头（已序列化的 "K: V\r\n" 串；可为 NULL）
+    char* req_body;           // 请求体（二进制安全；可为 NULL）
+    int req_body_len;
 } g_sse_clients[MAX_SSE_CLIENTS];
 static int64_t g_sse_cli_next_id = 1;
+
+// M118：释放某 slot 的请求体/附加头（slot 复用、断开重连、sse_close 都要清）
+static void sse_cli_free_opts(int slot) {
+    if (slot < 0 || slot >= MAX_SSE_CLIENTS) return;
+    if (g_sse_clients[slot].req_headers) { xfree(g_sse_clients[slot].req_headers); g_sse_clients[slot].req_headers = NULL; }
+    if (g_sse_clients[slot].req_body) { xfree(g_sse_clients[slot].req_body); g_sse_clients[slot].req_body = NULL; }
+    g_sse_clients[slot].req_body_len = 0;
+}
 
 static int sse_cli_find(int64_t id) {
     for (int i = 0; i < MAX_SSE_CLIENTS; i++) {
@@ -13700,6 +13718,7 @@ static LXValue bi_sse_close(LXValue* args, int nargs, void* ctx) {
         if (g_sse_clients[cidx].pending) xfree(g_sse_clients[cidx].pending);
         g_sse_clients[cidx].pending = NULL;
         g_sse_clients[cidx].pend_len = g_sse_clients[cidx].pend_cap = 0;
+        sse_cli_free_opts(cidx);
         pthread_mutex_unlock(&g_sse_cli_mu);
         shutdown(cfd, SHUT_RDWR);
         if (ctl) https_close(ctl); else close(cfd);
@@ -13901,39 +13920,65 @@ static LXValue sse_parse_event_c(const char* text, int len) {
 // 返回 0 成功；失败时 slot 数据未填充（调用方负责清理旧数据）。
 static int sse_cli_connect_slot(int slot, const char* url, long long reconnect_ms,
                                 const char* last_event_id) {
+    // M118：opts 已由 bi_sse_connect 存进 slot（sock/method/req_headers/req_body）——
+    //   重连走同一条函数，因此这些选项**跨重连保持**（不需要新的参数搬运）。
     int is_https = 0;
     const char* rest;
-    if (strncmp(url, "https://", 8) == 0) {
-        is_https = 1;
-        rest = url + 8;
-    } else if (strncmp(url, "http://", 7) == 0) {
-        rest = url + 7;
-    } else {
-        return -1; // 仅支持 http:// 与 https://
-    }
+    const int use_unix = (g_sse_clients[slot].sock[0] != 0);
     char host[256];
-    int port = is_https ? 443 : 80;
-    const char* path = "/";
-    const char* slash = strchr(rest, '/');
-    int hl;
-    if (slash) {
-        hl = (int)(slash - rest);
-        path = slash;
+    int port;
+    const char* path;
+    char* colon = NULL;
+    if (use_unix) {
+        // Unix domain socket：url 即请求路径（如 /v1/chat/completions）
+        is_https = 0;
+        port = 0;
+        path = (url && url[0]) ? url : "/";
+        snprintf(host, sizeof(host), "%s", "localhost");
     } else {
-        hl = (int)strlen(rest);
-    }
-    if (hl <= 0 || hl >= (int)sizeof(host)) return -1;
-    memcpy(host, rest, (size_t)hl);
-    host[hl] = 0;
-    char* colon = strchr(host, ':');
-    if (colon) {
-        *colon = 0;
-        port = atoi(colon + 1);
-        if (port <= 0) return -1;
+        port = 80;
+        path = "/";
+        if (strncmp(url, "https://", 8) == 0) {
+            is_https = 1;
+            port = 443;
+            rest = url + 8;
+        } else if (strncmp(url, "http://", 7) == 0) {
+            rest = url + 7;
+        } else {
+            return -1; // 非 unix 模式仅支持 http:// 与 https://
+        }
+        const char* slash = strchr(rest, '/');
+        int hl;
+        if (slash) {
+            hl = (int)(slash - rest);
+            path = slash;
+        } else {
+            hl = (int)strlen(rest);
+        }
+        if (hl <= 0 || hl >= (int)sizeof(host)) return -1;
+        memcpy(host, rest, (size_t)hl);
+        host[hl] = 0;
+        colon = strchr(host, ':');
+        if (colon) {
+            *colon = 0;
+            port = atoi(colon + 1);
+            if (port <= 0) return -1;
+        }
     }
     int fd = -1;
     HttpsSession* tls = NULL;
-    if (is_https) {
+    if (use_unix) {
+        fd = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (fd < 0) return -1;
+        struct sockaddr_un ua;
+        memset(&ua, 0, sizeof(ua));
+        ua.sun_family = AF_UNIX;
+        snprintf(ua.sun_path, sizeof(ua.sun_path), "%s", g_sse_clients[slot].sock);
+        if (connect(fd, (struct sockaddr*)&ua, sizeof(ua)) != 0) {
+            close(fd);
+            return -1;
+        }
+    } else if (is_https) {
         tls = https_connect(host, port);
         if (!tls) return -1;
         fd = tls->net.fd;
@@ -13951,18 +13996,37 @@ static int sse_cli_connect_slot(int slot, const char* url, long long reconnect_m
     }
     char req[8192];
     char hosthdr[512];
-    if (colon) snprintf(hosthdr, sizeof(hosthdr), "%s:%d", host, port);
+    if (use_unix) snprintf(hosthdr, sizeof(hosthdr), "%s", "localhost");
+    else if (colon) snprintf(hosthdr, sizeof(hosthdr), "%s:%d", host, port);
     else snprintf(hosthdr, sizeof(hosthdr), "%s", host);
+    const char* method = (g_sse_clients[slot].method[0] != 0) ? g_sse_clients[slot].method : "GET";
     int rl = snprintf(req, sizeof(req),
-        "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: PuXian/0.1\r\nAccept: text/event-stream\r\nConnection: close\r\nCache-Control: no-cache\r\n",
-        path, hosthdr);
+        "%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: PuXian/0.1\r\nAccept: text/event-stream\r\nConnection: close\r\nCache-Control: no-cache\r\n",
+        method, path, hosthdr);
+    if (g_sse_clients[slot].req_headers && rl > 0 && rl < (int)sizeof(req)) {
+        int need = (int)strlen(g_sse_clients[slot].req_headers);
+        if (rl + need < (int)sizeof(req))
+            rl += snprintf(req + rl, sizeof(req) - (size_t)rl, "%s", g_sse_clients[slot].req_headers);
+    }
     if (last_event_id && *last_event_id) {
         rl += snprintf(req + rl, sizeof(req) - (size_t)rl, "Last-Event-ID: %s\r\n", last_event_id);
     }
+    if (g_sse_clients[slot].req_body && g_sse_clients[slot].req_body_len > 0) {
+        const char* ctype = (g_sse_clients[slot].content_type[0] != 0)
+            ? g_sse_clients[slot].content_type : "application/json";
+        rl += snprintf(req + rl, sizeof(req) - (size_t)rl,
+                       "Content-Type: %s\r\nContent-Length: %d\r\n", ctype, g_sse_clients[slot].req_body_len);
+    }
     rl += snprintf(req + rl, sizeof(req) - (size_t)rl, "\r\n");
-    if (rl <= 0 || conn_send(tls, fd, req, rl) < 0) {
+    if (rl <= 0 || rl >= (int)sizeof(req) || conn_send(tls, fd, req, rl) < 0) {
         if (tls) https_close(tls); else close(fd);
         return -1;
+    }
+    if (g_sse_clients[slot].req_body && g_sse_clients[slot].req_body_len > 0) {
+        if (conn_send(tls, fd, g_sse_clients[slot].req_body, g_sse_clients[slot].req_body_len) < 0) {
+            if (tls) https_close(tls); else close(fd);
+            return -1;
+        }
     }
     // 读响应头（直到 \r\n\r\n，上限 64KB）
     unsigned char hbuf[65536];
@@ -14029,12 +14093,47 @@ static int sse_cli_connect_slot(int slot, const char* url, long long reconnect_m
 // reconnect_ms>0：断线自动重连（等待该毫秒后重连，带 Last-Event-ID）
 static LXValue bi_sse_connect(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || nargs > 2 || args[0].type != PX_STR) px_error("sse_connect 需要 (url[, reconnect_ms]) 参数");
+    if (nargs < 1 || nargs > 2 || args[0].type != PX_STR)
+        px_error("sse_connect 需要 (url[, reconnect_ms|opts]) 参数");
     const char* url = args[0].as.obj->as.str.data;
     long long reconnect_ms = 0;
+    // ── M118：第 2 参可以是 reconnect_ms（原语义，零回归），也可以是 opts dict：
+    //    {reconnect_ms, sock, method, body, headers, content_type}
+    //    sock 非空 → 走 Unix domain socket（此时 url 只作请求路径），
+    //    method/body/headers → 让 SSE 客户端能表达 POST + JSON 体 + 鉴权头
+    //    （LLM 流式补全的标准形状：POST /v1/chat/completions, stream=true）。
+    const char* opt_sock = NULL;
+    const char* opt_method = NULL;
+    const char* opt_body = NULL;
+    int opt_body_len = 0;
+    const char* opt_ctype = NULL;
+    LXValue opt_headers;
+    opt_headers.type = PX_NULL;
+    opt_headers.as.obj = NULL;
     if (nargs == 2) {
-        if (args[1].type != PX_INT) px_error("sse_connect 的 reconnect_ms 需要整数");
-        reconnect_ms = args[1].as.i;
+        if (args[1].type == PX_INT) {
+            reconnect_ms = args[1].as.i;
+        } else if (args[1].type == PX_DICT) {
+            LXValue rm = px_dict_get(args[1], "reconnect_ms");
+            if (rm.type == PX_INT) reconnect_ms = rm.as.i;
+            LXValue sk = px_dict_get(args[1], "sock");
+            if (sk.type == PX_STR) opt_sock = sk.as.obj->as.str.data;
+            LXValue mt = px_dict_get(args[1], "method");
+            if (mt.type == PX_STR) opt_method = mt.as.obj->as.str.data;
+            LXValue ct = px_dict_get(args[1], "content_type");
+            if (ct.type == PX_STR) opt_ctype = ct.as.obj->as.str.data;
+            LXValue bd = px_dict_get(args[1], "body");
+            if (bd.type == PX_STR) {
+                opt_body = bd.as.obj->as.str.data;
+                opt_body_len = (int)bd.as.obj->as.str.len;
+            } else if (bd.type == PX_BYTES) {
+                opt_body = bd.as.obj->as.str.data;   // PX_BYTES 与 PX_STR 共享 str 表示
+                opt_body_len = (int)bd.as.obj->as.str.len;
+            }
+            opt_headers = px_dict_get(args[1], "headers");
+        } else {
+            px_error("sse_connect 第 2 参需要 reconnect_ms(int) 或 opts dict{reconnect_ms,sock,method,body,headers,content_type}");
+        }
     }
     pthread_mutex_lock(&g_sse_cli_mu);
     int slot = sse_cli_alloc_slot();
@@ -14047,6 +14146,28 @@ static LXValue bi_sse_connect(LXValue* args, int nargs, void* ctx) {
     g_sse_clients[slot].tls = NULL;
     g_sse_clients[slot].pending = NULL;
     g_sse_clients[slot].pend_len = g_sse_clients[slot].pend_cap = 0;
+    g_sse_clients[slot].sock[0] = 0;
+    g_sse_clients[slot].method[0] = 0;
+    g_sse_clients[slot].content_type[0] = 0;
+    sse_cli_free_opts(slot);
+    if (opt_sock) snprintf(g_sse_clients[slot].sock, sizeof(g_sse_clients[slot].sock), "%s", opt_sock);
+    if (opt_method) snprintf(g_sse_clients[slot].method, sizeof(g_sse_clients[slot].method), "%s", opt_method);
+    if (opt_ctype) snprintf(g_sse_clients[slot].content_type, sizeof(g_sse_clients[slot].content_type), "%s", opt_ctype);
+    if (opt_body && opt_body_len > 0) {
+        g_sse_clients[slot].req_body = (char*)xmalloc((size_t)opt_body_len + 1);
+        memcpy(g_sse_clients[slot].req_body, opt_body, (size_t)opt_body_len);
+        g_sse_clients[slot].req_body[opt_body_len] = 0;
+        g_sse_clients[slot].req_body_len = opt_body_len;
+    }
+    if (opt_headers.type == PX_DICT && opt_headers.as.obj) {
+        // M118：复用既有头序列化器（str / list[str] 多值、CRLF 防护、预算控制都在里面）；
+        //   skip_ct=1：Content-Type 由独通道写（避免与 content_type 选项重复一条）。
+        char* hb = (char*)xmalloc(4096);
+        hb[0] = 0;
+        int dropped = 0;
+        px_hdr_append(opt_headers, hb, 0, 4096, 1, &dropped);
+        g_sse_clients[slot].req_headers = hb;
+    }
     pthread_mutex_unlock(&g_sse_cli_mu);
     if (sse_cli_connect_slot(slot, url, reconnect_ms, NULL) != 0) {
         // 连接失败：清理 slot
@@ -14056,6 +14177,7 @@ static LXValue bi_sse_connect(LXValue* args, int nargs, void* ctx) {
         if (g_sse_clients[slot].pending) { xfree(g_sse_clients[slot].pending); g_sse_clients[slot].pending = NULL; }
         g_sse_clients[slot].pend_len = g_sse_clients[slot].pend_cap = 0;
         g_sse_clients[slot].tls = NULL;
+        sse_cli_free_opts(slot);
         pthread_mutex_unlock(&g_sse_cli_mu);
         return px_null();
     }
@@ -14138,6 +14260,7 @@ static LXValue bi_sse_read(LXValue* args, int nargs, void* ctx) {
             if (t2) https_close(t2); else close(fd);
             if (rms > 0 && url[0]) {
                 usleep((useconds_t)(rms * 1000));
+                // 注意：重连**复用** slot 内的 opts（sock/method/body/headers），不要在这里释放
                 if (sse_cli_connect_slot(idx, url, rms, eid) == 0) {
                     pthread_mutex_lock(&g_sse_cli_mu);
                     g_sse_clients[idx].id = conn;  // 保持同一 conn id
@@ -14146,6 +14269,7 @@ static LXValue bi_sse_read(LXValue* args, int nargs, void* ctx) {
                     continue;  // 重连成功，继续读
                 }
             }
+            sse_cli_free_opts(idx);   // M118：不再重连 → 释放请求体/附加头
             return px_null();
         }
         pthread_mutex_lock(&g_sse_cli_mu);
