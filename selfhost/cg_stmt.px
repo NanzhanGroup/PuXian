@@ -179,8 +179,12 @@ def cg_gen_stmt_inner(stmt, indent):
                     parts.append(cg_gen_expr(args[ai]))
                     ai += 1
                 return pad + "px_spawn_name(\"" + fname + "\", (LXValue[]){" + join(", ", parts) + "}, " + str(len(parts)) + ");\n"
-            return "编译模式 spawn 仅支持直接函数调用（方法调用请用 `lx run`）"
-        return "编译模式 spawn 仅支持函数调用表达式"
+            let p = stmt[2]
+            print_err("错误: " + str(p[0]) + ":" + str(p[1]) + ": 语义错误 E2011: spawn 只支持「直接函数调用」：spawn f(args)（方法调用请先绑定命名函数）")
+            exit(1)
+        let p2 = stmt[2]
+        print_err("错误: " + str(p2[0]) + ":" + str(p2[1]) + ": 语义错误 E2011: spawn 只支持「直接函数调用」：spawn f(args)；匿名函数请先绑定命名函数（def work(): ... 然后 spawn work()）")
+        exit(1)
     if ty == "Select":
         return cg_gen_select(stmt[1], stmt[2], indent)
     if ty == "Import":

@@ -1264,7 +1264,13 @@ def bc_emit_stmt_inner(stmt, func):
                 ai += 1
             bc_emit_inst(func, "CALL", t, cs, argc)
             return
-        panic("bc_emit Spawn 仅支持直接函数调用: " + str(ex))
+        # M118：给用户可读诊断。此前把**编译器内部函数名 + AST dump**抛给用户：
+        #   运行时错误 [bc_emit_stmt_inner 行1267]: bc_emit Spawn 仅支持直接函数调用: [Closure, [], ...]
+        #   —— 无源位置、无建议、还泄漏内部实现（用户看不懂 Closure/槽位 dump）。
+        #   实测触发：`spawn fn (): ...`（速查包 §1 自己的示例写法）。
+        let p = stmt[2]
+        print_err("错误: " + str(p[0]) + ":" + str(p[1]) + ": 语义错误 E2011: spawn 只支持「直接函数调用」：spawn f(args)；匿名函数请先绑定命名函数（def work(): ... 然后 spawn work()），多行匿名函数体见 M118")
+        exit(1)
     if ty == "Select":
         bc_emit_select(stmt, func)
         return
