@@ -174,6 +174,7 @@ def cg_load_module(module, names, base_dir, out, std_defined):
     let src = read_file(path)
     p_toks = lex_tokens(src)
     p_pos = 0
+    p_brack = 0
     let sprog = parse_program()
     # 递归：模块内部 import（以模块所在目录为基准）
     let mod_dir = cg_dirname(path)
