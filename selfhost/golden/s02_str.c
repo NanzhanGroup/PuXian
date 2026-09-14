@@ -1,4 +1,3 @@
-/* 由普贤 (PuXian) 编译器自动生成 — px build */
 #include "runtime.h"
 #include <string.h>
 #include <stdio.h>
@@ -54,6 +53,6 @@ int main(int argc, char** argv) {
       } else if (_r.type == PX_INT) {
         _code = (int)_r.as.i;
       }
-      return _code;
+      return px_exit_code_final(_code);   // M120（qg-issue 76 E1）
     }
 }
