@@ -197,7 +197,8 @@ jobs:
           bash examples/m117_realworld_defects/verify.sh > /tmp/v_m117_realworld_defects.log 2>&1 || { echo "❌ m117_realworld_defects verify 失败"; tail -40 /tmp/v_m117_realworld_defects.log; exit 1; }
           bash examples/m118_realworld_defects/verify.sh > /tmp/v_m118_realworld_defects.log 2>&1 || { echo "❌ m118_realworld_defects verify 失败"; tail -40 /tmp/v_m118_realworld_defects.log; exit 1; }
           bash examples/m119_multiline_expr/verify.sh > /tmp/v_m119_multiline_expr.log 2>&1 || { echo "❌ m119_multiline_expr verify 失败"; tail -40 /tmp/v_m119_multiline_expr.log; exit 1; }
-          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr verify 全 PASS"
+          bash examples/m120_dict_strict/verify.sh > /tmp/v_m120_dict_strict.log 2>&1 || { echo "❌ m120_dict_strict verify 失败"; tail -40 /tmp/v_m120_dict_strict.log; exit 1; }
+          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict verify 全 PASS"
       - name: LSP / MCP 服务器冒烟（--version + 协议入口存在性）
         run: |
           chmod +x bootstrap/pxlsp bootstrap/pxmcp bootstrap/pxcheck

@@ -647,10 +647,10 @@ def cg_generate(prog):
         out += "      } else if (_r.type == PX_INT) {\n"
         out += "        _code = (int)_r.as.i;\n"
         out += "      }\n"
-        out += "      return _code;\n"
+        out += "      return px_exit_code_final(_code);   // M120（qg-issue 76 E1）\n"
         out += "    }\n"
     else:
-        out += "    return 0;\n"
+        out += "    return px_exit_code_final(0);   // M120（qg-issue 76 E1）\n"
     out += "}\n"
     # 合并闭包定义（放在所有函数定义之前）
     let pos = cg_find(out, "int main(")

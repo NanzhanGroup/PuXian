@@ -2205,6 +2205,44 @@ static __thread jmp_buf g_err_jmp;
 static __thread int g_err_jmp_set = 0;
 static __thread char g_err_last_msg[512];   // M96-S2：本线程最后 px_error 文本（px_err_last）
 
+// M120（qg-issue 76 E1）：被隔离的协程运行时错误**进程级计数** —— 隔离是为了让宿主
+//   继续（Issue 10 D2），但"继续"不等于"没发生"。此前顶层工作全部跑在协程里的程序
+//   （服务/轮询器常见）出错后进程**以 rc=0 退出**= 假成功：CI 判绿、systemd 不判失败、
+//   监控看不出。修法：隔离落点计数 + 生成产物 main 收尾调 px_exit_code_final。
+//   计数口径 = **未被应用层消费**的隔离错误数：handler/middleware 把错误变成 HTTP 500
+//   属于"被处理的请求失败"，不是"进程假成功"，**不计入退出码** —— 否则长跑服务只要历史
+//   上有过一次失败请求，优雅关闭就会返回非 0 ⇒ systemd/脚本误判（与本项目 Issue 72
+//   「重启风暴」同类风险）。裸 spawn 的协程死了没人管 → 计入。
+static _Atomic int g_coro_err_count = 0;
+static _Atomic int g_coro_err_atexit_reg = 0;   // atexit 兜底是否已注册
+static _Atomic int g_coro_err_reported = 0;     // 退出码是否已在 main 收尾反映
+int px_coro_err_count(void) { return atomic_load(&g_coro_err_count); }
+// 应用层消费（handler/middleware → 500 的边界调用）
+void px_coro_err_consume(void) {
+    int n = atomic_load(&g_coro_err_count);
+    while (n > 0 && !atomic_compare_exchange_weak(&g_coro_err_count, &n, n - 1)) { }
+}
+// 时序兜底：顶层先返回、协程错误随后才被观测到的窗口（实测 sleep 0.3 的场景）——
+//   仍在进程退出前把话说清楚并把退出码拉成 1。
+static void px_coro_err_exit_sink(void) {
+    int n = atomic_load(&g_coro_err_count);
+    if (n <= 0) return;
+    if (atomic_load(&g_coro_err_reported)) return;
+    fprintf(stderr, "退出码修正（exit 收尾）：本次运行有 %d 个协程因运行时错误被隔离终止（现场见上）\n", n);
+    fflush(stderr);
+    _exit(1);
+}
+int px_exit_code_final(int code) {
+    int n = atomic_load(&g_coro_err_count);
+    if (n > 0) {
+        atomic_store(&g_coro_err_reported, 1);
+        fprintf(stderr, "退出码修正：本次运行有 %d 个协程因运行时错误被隔离终止（现场见上）\n", n);
+        fflush(stderr);
+        if (code == 0) return 1;
+    }
+    return code;
+}
+
 void px_error(const char* fmt, ...) {
     // 先刷新 stdout 缓冲：print 输出在管道/重定向下是全缓冲，exit 前不刷会丢
     fflush(stdout);
@@ -2762,7 +2800,7 @@ LXValue px_index(LXValue obj, LXValue idx) {
         int i = (int)int_val(idx);
         int len = obj.as.obj->as.list.len;
         if (i < 0) i += len;
-        if (i < 0 || i >= len) px_error("列表索引越界: %d (len=%d)", i, len);
+        if (i < 0 || i >= len) px_error("R1003: 列表索引越界: %d (len=%d)", i, len);
         return obj.as.obj->as.list.items[i];
     }
     if (obj.type == PX_TUPLE) {
@@ -2779,7 +2817,7 @@ LXValue px_index(LXValue obj, LXValue idx) {
         int i = (int)int_val(idx);
         int ulen = px_str_rune_len(obj.as.obj);   // M106-S2：惰性 rune 计数（首次 O(n)，之后摊还 O(1)）
         if (i < 0) i += ulen;
-        if (i < 0 || i >= ulen) px_error("字符串索引越界: %d", i);
+        if (i < 0 || i >= ulen) px_error("R1003: 字符串索引越界: %d", i);
         const unsigned char* base = (const unsigned char*)obj.as.obj->as.str.data;
         const unsigned char* p;
         int* offs = px_str_offs_get(obj.as.obj);  // M106-S2：≥1KB 的串建一次偏移表
@@ -2822,11 +2860,11 @@ LXValue px_index(LXValue obj, LXValue idx) {
             if (i >= 0 && i < o->as.dict.len) {
                 return px_str(o->as.dict.keys[i]);
             }
-            px_error("字典索引越界: %d (len=%d)", i, o->as.dict.len);
+            px_error("R1003: 字典索引越界: %d (len=%d)", i, o->as.dict.len);
         }
         px_error("R1002: 字典索引键必须是字符串");
     }
-    px_error("无法索引: %s", px_type_name(obj));
+    px_error("R1002: 此类型不支持索引: %s", px_type_name(obj));
     return px_null();
 }
 
@@ -2943,7 +2981,7 @@ void px_index_set(LXValue obj, LXValue idx, LXValue val) {
         int i = (int)int_val(idx);
         int len = obj.as.obj->as.list.len;
         if (i < 0) i += len;
-        if (i < 0 || i >= len) px_error("列表索引越界: %d", i);
+        if (i < 0 || i >= len) px_error("R1003: 列表索引越界: %d", i);
         // M11：与 GC 互斥（见 px_list_push 注释）。注意：必须先拿锁再屏蔽信号——
         // 等锁期间不能屏蔽 SIG_GC_STOP，否则 GC 无法暂停该线程（信号 pending），
         // 导致 stop-the-world 空转/降级/漏扫描。
@@ -2960,9 +2998,9 @@ void px_index_set(LXValue obj, LXValue idx, LXValue val) {
             px_dict_set(obj, idx.as.obj->as.str.data, val);   // 内部已互斥
             return;
         }
-        px_error("字典索引需要字符串键");
+        px_error("R1002: 字典索引键必须是字符串");
     }
-    px_error("无法索引赋值: %s", px_type_name(obj));
+    px_error("R1002: 此类型不支持索引赋值: %s", px_type_name(obj));
 }
 
 LXValue px_field(LXValue obj, const char* name) {
@@ -2971,14 +3009,14 @@ LXValue px_field(LXValue obj, const char* name) {
         for (int i = 0; i < o->as.struct_inst.nfields; i++) {
             if (strcmp(o->as.struct_inst.fnames[i], name) == 0) return o->as.struct_inst.fvals[i];
         }
-        px_error("结构体 %s 没有字段 %s", o->as.struct_inst.type_name, name);
+        px_error("R1008: 结构体没有字段 '%s'", name);
     }
     if (obj.type == PX_DICT) {
         // M116（qg-issue 71 D2）：同 px_index —— 缺键报 R1008（对齐解释器 i_field）
         if (!px_dict_has(obj, name)) px_error("R1008: 字典没有键 '%s'", name);
         return px_dict_get(obj, name);
     }
-    px_error("无法取字段: %s.%s", px_type_name(obj), name);
+    px_error("R1007: 类型 %s 没有字段 '%s'", px_type_name(obj), name);
     return px_null();
 }
 
@@ -2997,9 +3035,9 @@ void px_field_set(LXValue obj, const char* name, LXValue val) {
                 return;
             }
         }
-        px_error("结构体 %s 没有字段 %s", o->as.struct_inst.type_name, name);
+        px_error("R1008: 结构体没有字段 '%s'", name);
     }
-    px_error("无法字段赋值: %s.%s", px_type_name(obj), name);
+    px_error("R1002: 类型 %s 不支持字段赋值: '%s'", px_type_name(obj), name);
 }
 
 void px_list_push(LXValue list, LXValue val) {
@@ -3092,7 +3130,7 @@ LXValue px_call(LXValue fn, LXValue* args, int nargs) {
         }
         return fn.as.obj->as.native.fn(args, nargs, NULL);
     }
-    px_error("无法调用非函数: %s", px_type_name(fn));
+    px_error("R1002: 无法调用非函数: %s", px_type_name(fn));
     return px_null();
 }
 
@@ -3196,20 +3234,29 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
     }
     if (obj.type == PX_DICT) {
         if (strcmp(name, "get") == 0) {
-            if (nargs < 1) px_error("get 需要 1 个参数");
+            if (nargs < 1) px_error("R1005: 方法 get 需要 1 个参数");
+            // M120（qg-issue 76 E4）：**实参类型校验**。此前直接解引用 args[0] 的 str 载荷，
+            //   传非字符串（如 int）→ 段错误（实测 rc=139 core dumped）；解释轨友好报 R1002。
+            if (args[0].type != PX_STR || !args[0].as.obj)
+                px_error("R1002: 方法 get 参数 1 需要 string");
             // M-B1：支持默认值参数（第 2 参数，键不存在时返回）
             LXValue v = px_dict_get(obj, args[0].as.obj->as.str.data);
             if (px_is_null(v) && nargs >= 2) return args[1];
             return v;
         }
         if (strcmp(name, "set") == 0) {
-            if (nargs < 2) px_error("set 需要 2 个参数");
+            if (nargs < 2) px_error("R1005: 方法 set 需要 2 个参数");
+            if (args[0].type != PX_STR || !args[0].as.obj)
+                px_error("R1002: 方法 set 参数 1 需要 string");
             px_dict_set(obj, args[0].as.obj->as.str.data, args[1]);
             return px_null();
         }
         if (strcmp(name, "len") == 0) return px_int(px_len(obj));
         if (strcmp(name, "has") == 0 || strcmp(name, "contains") == 0) {
-            if (nargs < 1) px_error("has 需要 1 个参数");
+            if (nargs < 1) px_error("R1005: 方法 %s 需要 1 个参数", name);
+            // M120（qg-issue 76 E4）：非字符串键此前直接解引用 → SIGSEGV（实测 d.has(1) rc=139）
+            if (args[0].type != PX_STR || !args[0].as.obj)
+                px_error("R1002: 方法 %s 参数 1 需要 string", name);
             return px_bool(px_dict_has(obj, args[0].as.obj->as.str.data));
         }
         if (strcmp(name, "keys") == 0) {
@@ -3232,7 +3279,9 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
         }
         if (strcmp(name, "remove") == 0) {
             // M37 修复：C 端 dict.remove 真删除（原"置 null"导致键残留：has() 仍 true、keys() 仍列出）
-            if (nargs < 1) px_error("remove 需要 1 个参数");
+            if (nargs < 1) px_error("R1005: 方法 remove 需要 1 个参数");
+            if (args[0].type != PX_STR || !args[0].as.obj)
+                px_error("R1002: 方法 remove 参数 1 需要 string");
             LXObject* o = obj.as.obj;
             const char* key = args[0].as.obj->as.str.data;
             LXValue v = px_null();
@@ -3304,7 +3353,8 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
             return r;
         }
     }
-    px_error("对象 %s 没有方法 %s", px_type_name(obj), name);
+    // M120（qg-issue 76 E3）：补错误码 R1007 + 文案对齐解释轨（此前无码、且用"对象"而非"类型"）
+    px_error("R1007: 类型 %s 没有方法 '%s'", px_type_name(obj), name);
     return px_null();
 }
 
@@ -8850,8 +8900,7 @@ static void* spawn_thread(void* p) {
             g_err_jmp_set = 0;
         } else {
             g_err_jmp_set = 0;
-            fprintf(stderr, "[px-spawn] 协程运行时错误已隔离，宿主继续（错误现场见上）\n");
-            fflush(stderr);
+            px_coro_err_note("px-spawn");
         }
     } else {
         job->fn(job->args, job->nargs, job->ctx);
@@ -8881,7 +8930,23 @@ static void* spawn_thread(void* p) {
 //   故"协程是否因错误终止"改由本 TU 在 longjmp 落点直接置位、调用方事后查询。
 static __thread int t_isolate_errored = 0;
 int px_isolate_errored(void) { return t_isolate_errored; }
+// M120（qg-issue 76 E2）：**PX_SPAWN_ISOLATE=0 此前在本路径完全无效** —— 文档承诺
+//   "关 → 回退原 exit 语义"，但本函数不读该 env（只有另一个 spawn_thread 路径读），
+//   VM/px-coro 轨（=默认轨、服务与守护走的就是它）拿不到逃生舱。现同样尊重。
+void px_coro_err_note(const char* where) {
+    int n = atomic_fetch_add(&g_coro_err_count, 1) + 1;
+    if (atomic_exchange(&g_coro_err_atexit_reg, 1) == 0) atexit(px_coro_err_exit_sink);
+    fprintf(stderr, "[px-coro] 协程运行时错误已隔离（第 %d 次，%s）：该协程已终止，宿主继续；\n"
+                    "          进程正常退出时将返回 1（handler/middleware 已转 500 的除外；立即终止请设 PX_SPAWN_ISOLATE=0）\n", n, where);
+    fflush(stderr);
+}
 int px_spawn_isolate_begin(void) {
+    const char* iso0 = getenv("PX_SPAWN_ISOLATE");
+    if (iso0 && iso0[0] == '0') {
+        g_err_jmp_set = 0;        // 不装捕获点 → px_error 直接打印现场并 exit(1)
+        t_isolate_errored = 0;
+        return 1;
+    }
     if (setjmp(g_err_jmp) == 0) {
         g_err_jmp_set = 1;
         t_isolate_errored = 0;
@@ -8889,8 +8954,7 @@ int px_spawn_isolate_begin(void) {
     }
     g_err_jmp_set = 0;
     t_isolate_errored = 1;   // longjmp 落点：立即置位（此处必然执行）
-    fprintf(stderr, "[px-coro] 协程运行时错误已隔离，宿主继续（错误现场见上）\n");
-    fflush(stderr);
+    px_coro_err_note("px-coro");
     return 0;       // 错误路径：longjmp 回此，协程异常终止
 }
 void px_spawn_isolate_end(void) {
@@ -12677,7 +12741,7 @@ static void http_handler_done(void* ud, LXValue ret) {
     //   ret 是 vm.ret_val 初值 PX_NULL，http_send_resp 收到 null ⇒ **200 + 空 body**
     //   （比 px_serve 轨的 204 更隐蔽：客户端以为拿到一个正常但空白的响应）。
     //   本轨（http_serve/http_serve_unix）与 px_serve 轨共用 500 语义。
-    if (px_coro_errored()) ret = px_serve_error_resp(0);
+    if (px_coro_errored()) { ret = px_serve_error_resp(0); px_coro_err_consume(); }
     int push = 0;
     sigset_t old;
     pthread_mutex_lock(&g_hpend_mu);
@@ -16622,7 +16686,7 @@ static void px_serve_route_done(void* ud, LXValue ret) {
     px_root_push();
     PX_KEEP(ret);
     // M116（qg-issue 71 D7）：见上 —— 出错协程不得以 null（204）冒充成功
-    if (px_coro_errored()) ret = px_serve_error_resp(0);
+    if (px_coro_errored()) { ret = px_serve_error_resp(0); px_coro_err_consume(); }
     int push = 0;
     char tmp[1024]; tmp[0] = 0;
     sigset_t old;
@@ -16707,7 +16771,7 @@ static void px_serve_mw_done(void* ud, LXValue ret) {
     PX_KEEP(ret);
     // M116（qg-issue 71 D7）：middleware 出错 → 500 短路（此前 ret=null 被当成
     //   "本段放行" ⇒ 链继续往下走：错误被静默吞掉、下游 handler 照常执行）
-    if (px_coro_errored()) ret = px_serve_error_resp(3);
+    if (px_coro_errored()) { ret = px_serve_error_resp(3); px_coro_err_consume(); }
     int push = 0;
     int cont = 0;          // 续段 spawn（链推进 / 进 handler 段）
     int fnargs = 0;
