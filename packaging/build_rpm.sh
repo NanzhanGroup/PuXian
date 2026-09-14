@@ -71,9 +71,26 @@ echo "== RPM 构建: puxian-$VER-$MILESTONE-$SHA (dist=$DL, repo_dir=$DIST) =="
 
 # ---- 1) 发布 tarball（make_release.sh --no-check，打包不冒烟）----
 chmod +x tools/pxc tools/make_release.sh bootstrap/pxc bootstrap/pxi 2>/dev/null || true
-TARBALL="$(bash tools/make_release.sh --no-check 2>&1 | grep -o '/tmp/puxian-[^ ]*\.tar\.gz' | head -1)"
-TARBALL="${TARBALL:-$(ls -t /tmp/puxian-$VER-$MILESTONE-*.tar.gz | head -1)}"
-[ -f "$TARBALL" ] || { echo "❌ tarball 生成失败"; exit 1; }
+#   qg-issue 68：原写法 `bash … 2>&1 | grep -o … | head -1` 有两个坑 ——
+#   ① 子脚本的**全部输出**被管道吞掉 ⇒ 失败时日志里只剩一句 `exit code 64`，零原因；
+#   ② `set -o pipefail` 下，grep 命中了子脚本开头那行「输出: /tmp/xxx.tar.gz」，
+#      于是管道的非零值取到子脚本的真实退出码（el7 tar 1.26 不认识 --sort ⇒ 64）。
+#   改为：输出落盘 + 显式判退出码 + 失败时**原样回显**子脚本输出（可诊断优先）。
+REL_LOG="${REL_LOG:-/tmp/make_release.$$.log}"
+if bash tools/make_release.sh --no-check >"$REL_LOG" 2>&1; then
+    TARBALL="$(grep -o '/tmp/puxian-[^ ]*\.tar\.gz' "$REL_LOG" | head -1)"
+else
+    _rc=$?
+    echo "❌ make_release.sh 失败（exit=$_rc），完整输出：" >&2
+    sed 's/^/    | /' "$REL_LOG" >&2
+    exit "$_rc"
+fi
+TARBALL="${TARBALL:-$(ls -t /tmp/puxian-$VER-$MILESTONE-*.tar.gz 2>/dev/null | head -1 || true)}"
+[ -f "$TARBALL" ] || {
+    echo "❌ tarball 生成失败（输出里无路径，且无 $VER-$MILESTONE 历史包）" >&2
+    sed 's/^/    | /' "$REL_LOG" >&2
+    exit 1
+}
 echo "   tarball: $TARBALL ($(du -h "$TARBALL" | cut -f1))"
 
 # ---- 2) rpmbuild -bb（Release 后缀带 .el<dist>，与仓库目录 dist 对齐）----

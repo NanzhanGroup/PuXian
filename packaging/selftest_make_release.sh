@@ -2,12 +2,14 @@
 # ============================================================
 # packaging/selftest_make_release.sh —— 发布包组装自测（qg-issue 56）
 # ------------------------------------------------------------
-# 离线自测（不联网、不打 rpm），断言四件事：
+# 离线自测（不联网、不打 rpm），断言五件事：
 #   ① 发布包里**不含** gitignore 的构建产物（tools/build/，回归即红）
 #   ② 条目数 == git 跟踪集合（tools/bootstrap/stdlib/runtime − 显式排除 + LICENSE/VERSION/RELEASE.md）
 #      ⇒ 本机打包与 CI 打包**内容同构**，不再出现"同 tag 两个 sha256"
 #   ③ 符号链接 tools/pxc -> px 在包内仍是链接（不是被解引用的副本）
 #   ④ 同一 commit 连打两次 ⇒ sha256 逐字节相同（位级可复现）
+#   ⑤ 老 tar（无 --sort=name，如 CentOS 7 的 tar 1.26）下**仍能出包**且**显式告警**
+#      —— qg-issue 68：el7 RPM 轨曾因该选项以 exit 64 整条红，且报错被管道吞掉
 # 用法: bash packaging/selftest_make_release.sh
 # 退出码: 0 = 全部通过；非 0 = 失败用例数
 #
@@ -109,6 +111,35 @@ else
     else
         bad "两次打包 sha256 不同 ⇒ 不可复现（A=${H_A:0:16}… B=${H_B:0:16}…）"
     fi
+fi
+
+# ---- ⑤ 老 tar 兼容（qg-issue 68）----
+#   shim 复刻 CentOS 7 自带 GNU tar 1.26：对 --sort=* 报「unrecognized option」并 exit 64
+#   （与 glibc argp 的 EX_USAGE 行为一致；2026-09-14 真机复现结论见 ISSUE 68）。
+#   断言：① 不硬失败（仍出货）② 有显式告警（不静默降级）。
+REAL_TAR="$(command -v tar)"
+OLD="$TMP/oldtar"
+mkdir -p "$OLD/bin"
+cat > "$OLD/bin/tar" <<SHIM
+#!/usr/bin/env bash
+for a in "\$@"; do
+    case "\$a" in
+        --sort=*) echo "tar: unrecognized option '\$a'" >&2; exit 64 ;;
+    esac
+done
+exec "$REAL_TAR" "\$@"
+SHIM
+chmod +x "$OLD/bin/tar"
+PKG_C="$TMP/c/pkg.tar.gz"; mkdir -p "$TMP/c"
+if PATH="$OLD/bin:$PATH" tools/make_release.sh --no-check -o "$PKG_C" >"$TMP/oldtar.log" 2>&1; then
+    ok "老 tar（无 --sort=name，模拟 el7 tar 1.26）下仍能出包"
+    case "$(cat "$TMP/oldtar.log")" in
+        *"不支持 --sort=name"*) ok "老 tar 降级有显式告警（未静默降级）" ;;
+        *) bad "老 tar 降级无告警 ⇒ 静默降级，现场无从判读" ;;
+    esac
+else
+    bad "老 tar 下打包失败（el7 RPM 轨会红）"
+    sed 's/^/       | /' "$TMP/oldtar.log"
 fi
 
 echo "== 自测结果: $pass 通过 / $fail 失败 =="
