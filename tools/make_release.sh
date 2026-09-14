@@ -179,8 +179,30 @@ EOF
 #   注：这是**一次性的资产字节变更**（旧资产属主是 runner / mtime 是打包时刻），
 #       不影响解包与 tools/install.sh 的 sha256sums.txt 校验。
 TAR_EPOCH="$(git log -1 --format=%ct 2>/dev/null || echo 0)"
-tar -C "$STAGE" --sort=name --owner=0 --group=0 --numeric-owner \
-    --mtime="@${TAR_EPOCH}" -czf "$PKG" "$NAME"
+# ---- 兼容探测（qg-issue 68）：--sort=name 是 GNU tar 1.28+ 才有的选项 ----
+#   实况 2026-09-14：release.yml 的 rpm-build-7 job 在 centos:7 容器里构建，该镜像自带
+#   tar 1.26 ⇒ `--sort=name` 属未知长选项，glibc argp 直接以 **64**（EX_USAGE）退出
+#   ⇒ make_release.sh 起 `set -e` 一并退出 64 ⇒ el7 RPM 轨整条红。
+#   故此处逐项探测、按能力组装；不支持的选项**不加**，但**必须显式告警**（不静默降级）。
+tar_supports() {                        # $1=待测选项；在空目录上试建一个最小包
+    tar -C "$TAR_PROBE" "$1" -cf "$TAR_PROBE/p.tgz" f >/dev/null 2>&1
+}
+TAR_PROBE="$(mktemp -d)"; : > "$TAR_PROBE/f"
+TAR_OPTS=(--owner=0 --group=0 --numeric-owner)
+if tar_supports "--mtime=@0"; then
+    TAR_OPTS+=(--mtime="@${TAR_EPOCH}")          # ④ mtime 固定为本次 commit 时间
+else
+    echo "   ⚠ 本机 tar 不支持 --mtime（$(tar --version 2>/dev/null | head -1)）：包内 mtime 非固定值" >&2
+fi
+if tar_supports "--sort=name"; then
+    TAR_OPTS+=(--sort=name)                      # ① 文件顺序按名字固定
+else
+    echo "   ⚠ 本机 tar 不支持 --sort=name（$(tar --version 2>/dev/null | head -1)）：" >&2
+    echo "     文件顺序改由 readdir 决定 ⇒ 该 tar 下打出的包 sha256 不保证跨机器一致。" >&2
+    echo "     影响面：仅 el7 RPM 轨的 rpm 源 tarball（对外发布件走 el9 的现代 tar，仍位级可复现）。" >&2
+fi
+rm -rf "$TAR_PROBE"
+tar -C "$STAGE" "${TAR_OPTS[@]}" -czf "$PKG" "$NAME"
 SZ="$(stat -c %s "$PKG")"
 echo "   ✅ tarball: $PKG （$SZ 字节）"
 # M71-S4：sha256sums.txt 与 tarball 同目录（tools/install.sh 一键安装校验用）
