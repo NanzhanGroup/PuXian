@@ -95,6 +95,8 @@ let LAYOUT = {
 # ---------- parser 状态 ----------
 var p_toks = []
 var p_pos = 0
+# M119：括号深度（( [ { 计数）——供「括号内隐式续行」判定
+var p_brack = 0
 # ---------- 工具 ----------
 def pk():
     return p_toks[p_pos][0]
@@ -125,6 +127,12 @@ def adv():
     let t = p_toks[p_pos]
     if p_pos + 1 < len(p_toks):
         p_pos += 1
+    # M119：括号深度记账（lexer 只在深度 0 产 INDENT/DEDENT，此处补齐深度信息）
+    if t[0] == "(" or t[0] == "[" or t[0] == "{":
+        p_brack += 1
+    elif t[0] == ")" or t[0] == "]" or t[0] == "}":
+        if p_brack > 0:
+            p_brack -= 1
     return t
 def chk(k):
     return pk() == k
@@ -182,6 +190,32 @@ def skip_expr_ws():
 def skip_newlines_in_block():
     while chk("换行"):
         adv()
+# M119（Issue 72 现场暴露）：**括号内隐式续行** —— Go/Python 都允许在括号内任意断行，
+#   此前 PuXian 两种写法都报错：
+#     print("a" +\n        "b")   → E2001 意外的 token: 换行
+#     print("a"\n      + "b")     → E2001 期望 ')'，实际得到 +
+#   ⇒ 长表达式/长字符串拼接只能挤在一行（编译器自身源码亦被迫如此）。
+#   实现：括号深度 > 0 时
+#     ① 期望操作数处跳过换行（parse_unary 开头）→ 覆盖「运算符在行尾」；
+#     ② 检查运算符时向后看穿换行（本函数）→ 覆盖「运算符在行首」。
+#   ⚠️ 行首一元运算符（- ~ not）**不**参与 ②：与「新语句以一元运算符开头」歧义
+#   （括号内唯一的语句上下文是 M118 的匿名函数多行体）；写成行尾运算符即可。
+def chk_op(k):
+    if chk(k):
+        return true
+    if p_brack <= 0:
+        return false
+    if k == "-" or k == "~" or k == "not":
+        return false
+    if not chk("换行"):
+        return false
+    var i = p_pos
+    while i < len(p_toks) and p_toks[i][0] == "换行":
+        i += 1
+    if i < len(p_toks) and p_toks[i][0] == k:
+        p_pos = i
+        return true
+    return false
 def node_pos(node):
     return node[len(node) - 1]
 def qstr(s):
@@ -676,7 +710,7 @@ def parse_expr():
     return parse_pipe()
 def parse_pipe():
     var left = parse_null_coalesce()
-    while chk("|>"):
+    while chk_op("|>"):
         let pos = ppos()
         adv()
         let right = parse_null_coalesce()
@@ -684,7 +718,7 @@ def parse_pipe():
     return left
 def parse_null_coalesce():
     var left = parse_or()
-    while chk("??"):
+    while chk_op("??"):
         let pos = ppos()
         adv()
         let right = parse_or()
@@ -692,7 +726,7 @@ def parse_null_coalesce():
     return left
 def parse_or():
     var left = parse_and()
-    while chk("or"):
+    while chk_op("or"):
         let pos = ppos()
         adv()
         let right = parse_and()
@@ -700,7 +734,7 @@ def parse_or():
     return left
 def parse_and():
     var left = parse_comparison()
-    while chk("and"):
+    while chk_op("and"):
         let pos = ppos()
         adv()
         let right = parse_comparison()
@@ -710,17 +744,17 @@ def parse_comparison():
     var left = parse_bitor()
     while true:
         var op = null
-        if chk("=="):
+        if chk_op("=="):
             op = "Eq"
-        elif chk("!="):
+        elif chk_op("!="):
             op = "Ne"
-        elif chk("<"):
+        elif chk_op("<"):
             op = "Lt"
-        elif chk("<="):
+        elif chk_op("<="):
             op = "Le"
-        elif chk(">"):
+        elif chk_op(">"):
             op = "Gt"
-        elif chk(">="):
+        elif chk_op(">="):
             op = "Ge"
         if op == null:
             break
@@ -731,7 +765,7 @@ def parse_comparison():
     return left
 def parse_bitor():
     var left = parse_bitxor()
-    while chk("|"):
+    while chk_op("|"):
         let pos = ppos()
         adv()
         let right = parse_bitxor()
@@ -739,7 +773,7 @@ def parse_bitor():
     return left
 def parse_bitxor():
     var left = parse_bitand()
-    while chk("^"):
+    while chk_op("^"):
         let pos = ppos()
         adv()
         let right = parse_bitand()
@@ -747,7 +781,7 @@ def parse_bitxor():
     return left
 def parse_bitand():
     var left = parse_shift()
-    while chk("&"):
+    while chk_op("&"):
         let pos = ppos()
         adv()
         let right = parse_shift()
@@ -757,11 +791,11 @@ def parse_shift():
     var left = parse_add()
     while true:
         var op = null
-        if chk("<<"):
+        if chk_op("<<"):
             op = "Shl"
-        elif chk(">>"):
+        elif chk_op(">>"):
             op = "Shr"
-        elif chk(">>>"):
+        elif chk_op(">>>"):
             op = "ShrU"
         if op == null:
             break
@@ -774,9 +808,9 @@ def parse_add():
     var left = parse_mul()
     while true:
         var op = null
-        if chk("+"):
+        if chk_op("+"):
             op = "Add"
-        elif chk("-"):
+        elif chk_op("-"):
             op = "Sub"
         if op == null:
             break
@@ -789,13 +823,13 @@ def parse_mul():
     var left = parse_pow()
     while true:
         var op = null
-        if chk("*"):
+        if chk_op("*"):
             op = "Mul"
-        elif chk("/"):
+        elif chk_op("/"):
             op = "Div"
-        elif chk("//"):
+        elif chk_op("//"):
             op = "IntDiv"
-        elif chk("%"):
+        elif chk_op("%"):
             op = "Mod"
         if op == null:
             break
@@ -806,13 +840,16 @@ def parse_mul():
     return left
 def parse_pow():
     var left = parse_unary()
-    if chk("**"):
+    if chk_op("**"):
         let pos = ppos()
         adv()
         let right = parse_pow()
         return ["Binary", "Pow", left, right, pos]
     return left
 def parse_unary():
+    # M119：括号内「运算符在行尾」的续行（此刻正需要操作数，跳过换行无歧义）
+    if p_brack > 0:
+        skip_newlines()
     let k = pk()
     if k == "-":
         let pos = ppos()
@@ -1094,6 +1131,11 @@ def parse_brace():
             expect("}", "'}'")
             return ["DictComp", k, v, clauses[0], clauses[1], pos]
         let entries = [[k, v]]
+        # M119：第一对之后的换行（`{"k": "v"\n}` 这种**无尾逗号**的多行字典）
+        #   原先直接 expect("}") ⇒ 报「期望 '}'，实际得到 换行」；后续对之所以没事，
+        #   是循环内已有 skip_newlines。此处补齐，让首对与后续对对称。
+        skip_newlines()
+        skip_brace_indents()
         while chk(","):
             adv()
             skip_newlines()
@@ -1332,6 +1374,7 @@ def main():
     let f = args()[len(args()) - 1]
     p_toks = lex_tokens(read_file(f))
     p_pos = 0
+    p_brack = 0
     let ast = parse_program()
     print(dump_program(ast))
     print("语法分析成功：" + str(len(ast[1])) + " 条顶层语句")
