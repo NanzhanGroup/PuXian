@@ -7271,6 +7271,7 @@ static LXValue bi_os_spawn(LXValue* args, int nargs, void* ctx) {
         execvp(cmd, argv);
         _exit(127);
     }
+    if (group) setpgid(pid, pid);   // M66 竞态修：父侧同调 setpgid（仅成组时）
     for (int i = 0; i <= argc; i++) free(argv[i]);
     free(argv);
     px_child_reap_register(pid);   // M112-S3（Issue 54）：登记兜底回收，杜绝 fire-and-forget 僵尸
@@ -7599,6 +7600,9 @@ static LXValue bi_os_capture(LXValue* args, int nargs, void* ctx) {
         execvp(cmd, argv);
         _exit(127);
     }
+    setpgid(pid, pid);   // M66 竞态修：父侧同调 setpgid —— 子进程尚未跑到自己的 setpgid 时，
+                         //   紧随的 killpg(pid) 会 ESRCH 假失败（实测紧循环 ~10%）；
+                         //   父侧在子进程 exec 前调用必定生效（后到者 EACCES/no-op，故意忽略）
     close(pout[1]); close(perr[1]);
     for (int i = 0; i <= argc; i++) free(argv[i]);
     free(argv);
@@ -7684,6 +7688,7 @@ static LXValue bi_os_popen(LXValue* args, int nargs, void* ctx) {
         execvp(cmd, argv);
         _exit(127);
     }
+    setpgid(pid, pid);   // M66 竞态修：父侧同调 setpgid（同上，消除 killpg 的 ESRCH 假失败）
     close(pin[0]); close(pout[1]);
     for (int i = 0; i <= argc; i++) free(argv[i]);
     free(argv);
