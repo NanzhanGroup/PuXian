@@ -1,0 +1,78 @@
+# M115：服务进程/环境原语 —— env_set / env_unset / os_self_path / isatty / now_sec
+#       + os_spawn opts dict（group / setsid / stdout / stderr / stdin / cwd / env）
+# 来源：ws-center / ws-ddns 两个 Go 模块 PuXian 化实测缺口（docs/M115_PLAN.md）
+# 双模式：px run == px build（本文件只用解释器轨已注册的内置，无 spawn/chan）
+
+let WORKDIR = "/tmp/m115_proc_env"
+mkdir(WORKDIR)
+
+def say(s):
+    print("[m115] " + s)
+
+# ---- 1. env_set / env_unset：进程环境读写 ----
+assert(env_set("MQ115_A", "v1") == true, "env_set 应成功")
+assert(env("MQ115_A") == "v1", "env_set 后应可读回")
+assert(env_unset("MQ115_A") == true, "env_unset 应成功")
+assert(env("MQ115_A") == null, "env_unset 后应为 null")
+say("1. env_set/env_unset OK")
+
+# ---- 2. 子进程继承：env_set 的结果必须对 os_spawn 子进程可见 ----
+env_set("MQ115_B", "v2")
+var r = os_capture("/bin/sh", ["-c", "printf %s \"$MQ115_B\""])
+assert(r["rc"] == 0, "子进程应正常退出")
+assert(trim(r["stdout"]) == "v2", "子进程应继承 env_set 的环境：实际=" + trim(r["stdout"]))
+say("2. 子进程继承 env OK")
+
+# ---- 3. os_spawn opts.env：子进程环境覆盖（不进父进程） ----
+var outp = WORKDIR + "/env.txt"
+remove(outp)   # 自净：stdout 按 O_APPEND 打开，跨次运行会累积（qg-issue 69 同族教训）
+var p1 = os_spawn("/bin/sh", ["-c", "printf %s \"$MQ115_C\""], {"env": {"MQ115_C": "v3"}, "stdout": outp})
+assert(p1 != null, "os_spawn 应返回 pid")
+assert(os_wait(p1) == 0, "opts.env 子进程应退出 0")
+assert(trim(read_file(outp)) == "v3", "子进程应看到 opts.env 覆盖值：实际=" + trim(read_file(outp)))
+assert(env("MQ115_C") == null, "opts.env 不得污染父进程环境")
+say("3. os_spawn opts.env OK")
+
+# ---- 4. opts.stdout / opts.cwd：无需 /bin/sh 重定向 ----
+remove(WORKDIR + "/pwd.txt")
+var p2 = os_spawn("/bin/pwd", [], {"cwd": "/tmp", "stdout": WORKDIR + "/pwd.txt"})
+assert(os_wait(p2) == 0, "pwd 应退出 0")
+assert(trim(read_file(WORKDIR + "/pwd.txt")) == "/tmp", "cwd 应生效")
+say("4. opts.cwd/stdout OK")
+
+# ---- 5. opts.stdin=false → /dev/null（守护化必需：不占终端不阻塞） ----
+remove(WORKDIR + "/stdin.txt")
+var p3 = os_spawn("/bin/sh", ["-c", "read x; echo rc=$?"], {"stdin": false, "stdout": WORKDIR + "/stdin.txt"})
+assert(os_wait(p3) == 0, "stdin=/dev/null 时 read 立即 EOF，shell 正常退出")
+assert(contains(read_file(WORKDIR + "/stdin.txt"), "rc=1"), "read 应读到 EOF")
+say("5. opts.stdin=false OK")
+
+# ---- 6. opts.setsid：子进程成为新会话首进程（守护化脱离控制终端） ----
+var p4 = os_spawn("/bin/sleep", ["2"], {"setsid": true})
+assert(p4 != null, "setsid 子进程应启动")
+var sidr = os_capture("/bin/sh", ["-c", "ps -o sid= -p " + str(p4)])
+assert(sidr["rc"] == 0, "ps 应成功")
+assert(int(trim(sidr["stdout"])) == p4, "setsid 后 sid 应等于自身 pid：实际=" + trim(sidr["stdout"]))
+os_kill(p4, 15)
+assert(os_wait(p4) == 143, "setsid 子进程应被 SIGTERM 结束")
+say("6. opts.setsid OK（sid == pid）")
+
+# ---- 7. os_self_path：当前可执行文件绝对路径 ----
+var exe = os_self_path()
+assert(exe != null, "os_self_path 应返回路径")
+assert(exists(exe), "os_self_path 指向的文件应存在：" + str(exe))
+say("7. os_self_path=" + exe)
+
+# ---- 8. isatty：管道/重定向下为 false；非法 fd 恒 false ----
+assert(type(isatty(1)) == "bool", "isatty 返回 bool")
+assert(isatty(3) == false, "未打开 fd 3 不是 tty")
+say("8. isatty(1)=" + str(isatty(1)) + " isatty(3)=false")
+
+# ---- 9. now_sec：与 now_ms 同一时间轴（±2s 容差） ----
+var sec = now_sec()
+var diff = abs(sec - now_ms() // 1000)
+assert(diff <= 2, "now_sec 应与 now_ms//1000 一致：diff=" + str(diff))
+assert(contains(time_format(sec, "%Y", "UTC"), "20"), "now_sec 应可喂 time_format")
+say("9. now_sec=" + str(sec) + " fmt=" + time_format(sec, "%Y-%m-%d %H:%M:%S", "UTC"))
+
+say("M115_PROC_ENV_OK")

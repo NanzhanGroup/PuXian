@@ -48,5 +48,5 @@ def main():
     # 主服务：默认 docroot 仅作「h2 绕过 vhost 时」的对照输出
     px_serve(PORT, DOCROOT, 10000, {})
     print("server exited")
-
-main()
+# M115：`def main()` 会被**自动调用**（程序末尾），此处再显式调用 = 程序执行两遍。
+#   本行删除由 qg-issue 70 记录（PuXian 化 ws-center/ws-ddns 时实测发现）。

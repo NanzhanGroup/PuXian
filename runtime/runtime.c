@@ -332,6 +332,13 @@ static LXValue bi_os_wait(LXValue* args, int nargs, void* ctx);
 static LXValue bi_os_kill(LXValue* args, int nargs, void* ctx);
 static LXValue bi_os_capture(LXValue* args, int nargs, void* ctx); // M66
 static LXValue bi_os_popen(LXValue* args, int nargs, void* ctx);   // M66
+// M115：服务进程/环境原语（env_set/env_unset/os_self_path/isatty/now_sec）
+static LXValue bi_env_set(LXValue* args, int nargs, void* ctx);
+static LXValue bi_env_unset(LXValue* args, int nargs, void* ctx);
+static LXValue bi_os_self_path(LXValue* args, int nargs, void* ctx);
+static LXValue bi_isatty(LXValue* args, int nargs, void* ctx);
+static LXValue bi_now_sec(LXValue* args, int nargs, void* ctx);
+static LXValue bi_tz_local(LXValue* args, int nargs, void* ctx);
 static LXValue bi_unix_connect(LXValue* args, int nargs, void* ctx); // M66
 
 static LXValue bi_signal(LXValue* args, int nargs, void* ctx);
@@ -7012,6 +7019,25 @@ void px_register_builtins(void) {
     px_set_global("unix_connect", px_native("unix_connect", bi_unix_connect));
     px_set_global("os_capture", px_native("os_capture", bi_os_capture));
     px_set_global("os_popen", px_native("os_popen", bi_os_popen));
+    // M115：服务进程/环境原语（env_set/env_unset/os_self_path/isatty/now_sec）
+    //   —— ws-center / ws-ddns PuXian 化实测缺口（docs/M115_PLAN.md）
+    px_set_global("env_set", px_native("env_set", bi_env_set));
+    px_set_global("env_unset", px_native("env_unset", bi_env_unset));
+    px_set_global("os_self_path", px_native("os_self_path", bi_os_self_path));
+    px_set_global("isatty", px_native("isatty", bi_isatty));
+    px_set_global("now_sec", px_native("now_sec", bi_now_sec));
+    px_set_global("tz_local", px_native("tz_local", bi_tz_local));
+    // 同时登记进 FFI 桥（ffi_call 按名调用表）：
+    //   解释器轨的内置分发层 selfhost/ibuiltin.px 与 selfhost/env.px 同编译单元，
+    //   env.px 有同名 PuXian 函数 `def env_set(env, name, value)`（编译器内部变量环境）
+    //   ⇒ 直接写 `env_set(a, b)` 会**静默绑到内部辅助函数**（实参类型不符，报错还指向无关行列）。
+    //   故 ibuiltin 改走 ffi_call("env_set", …) 按名调用宿主 native —— 那条路要求此处登记。
+    px_ffi_register("env_set", bi_env_set);
+    px_ffi_register("env_unset", bi_env_unset);
+    px_ffi_register("os_self_path", bi_os_self_path);
+    px_ffi_register("isatty", bi_isatty);
+    px_ffi_register("now_sec", bi_now_sec);
+    px_ffi_register("tz_local", bi_tz_local);
 
     px_set_global("signal", px_native("signal", bi_signal));
 // M85-S1：--no-rsa 裁剪（去 runtime_rsa.o + mbedtls rsa/pk 引用面；rsa_* native 缺 → R1001）
@@ -7230,17 +7256,148 @@ static void px_child_reap_register(pid_t pid) {
     pthread_mutex_unlock(&start_mu);
 }
 
+// ==================== M115：服务进程/环境原语补全 ====================
+// 来源：ws-center / ws-ddns 两个 Go 模块的 **PuXian 化实测缺口**（docs/M115_PLAN.md）：
+//   ① `os.Setenv`（配置文件 → 进程环境，且**子进程可继承**）无对应原语；
+//   ② Go daemonize 三件套 `os.Executable()` + `Setsid` + stdout/stderr 重定向在语言层
+//      无法表达 —— 只能借 `/bin/sh -c "setsid … >>log 2>&1 &"` 拼串（引入 shell 依赖，
+//      且拿不到守护进程**真实 pid**，pidfile 语义失效）；
+//   ③ `os.Stdin.Stat()` 的 TTY 判定（`ModeCharDevice`，交互式选择只在终端弹出）无对应原语；
+//   ④ `time.Now().Unix()` 无对应原语（`now()` 返回**本地时间字符串**，`time_format` 要 int 秒，
+//      `time_format(now(), …)` 直接类型报错）。
+//   `tty_config` 不能代偿 ③（它会改波特率，非查询语义）。
+static LXValue bi_env_set(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2 || args[0].type != PX_STR || args[1].type != PX_STR)
+        px_error("env_set 需要 (name, value) 两个字符串参数");
+    const char* name = args[0].as.obj->as.str.data;
+    if (name[0] == '\0' || strchr(name, '=') != NULL)
+        px_error("env_set 的 name 不能为空且不能含 '='");
+    return px_bool(setenv(name, args[1].as.obj->as.str.data, 1) == 0);
+}
+
+static LXValue bi_env_unset(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_STR) px_error("env_unset 需要一个变量名");
+    const char* name = args[0].as.obj->as.str.data;
+    if (name[0] == '\0' || strchr(name, '=') != NULL)
+        px_error("env_unset 的 name 不能为空且不能含 '='");
+    return px_bool(unsetenv(name) == 0);
+}
+
+// os_self_path() → str | null（当前可执行文件绝对路径；Linux 走 /proc/self/exe）
+//   重新 exec 自身（守护化 / 自升级）必需 —— 此前语言层拿不到「我是谁」。
+static LXValue bi_os_self_path(LXValue* args, int nargs, void* ctx) {
+    (void)args; (void)nargs; (void)ctx;
+    char buf[4096];
+    ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (n <= 0) return px_null();
+    buf[n] = '\0';
+    return px_str(buf);
+}
+
+// isatty(fd) → bool（0=stdin 1=stdout 2=stderr 常用；管道/重定向/后台 → false）
+static LXValue bi_isatty(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_INT) px_error("isatty 需要一个 fd（int）");
+    return px_bool(isatty((int)args[0].as.i) == 1);
+}
+
+// now_sec() → int（Unix 秒，UTC 基准；与 time_format/time_parse/tz_offset 同一时间轴）
+static LXValue bi_now_sec(LXValue* args, int nargs, void* ctx) {
+    (void)args; (void)nargs; (void)ctx;
+    return px_int((int64_t)time(NULL));
+}
+
+// tz_local() → int（本机时区相对 UTC 的偏移秒；DST 由系统 TZ 数据判定）
+//   实测缺口：time_format 的 tz 参数只认 "UTC"/"+08:00" 这类**字面量**，
+//   无字面量时按 UTC 处理 ⇒ 语言层**无法按本机时区**格式化任意时间戳
+//   （Go time.Now().Format(...) 默认就是本地时区，服务端日志/时间戳到处在用）。
+//   配套：time_format/time_parse 的 tz 参数现接受 "LOCAL"/"local"。
+static int64_t px_local_off(void);
+static LXValue bi_tz_local(LXValue* args, int nargs, void* ctx) {
+    (void)args; (void)nargs; (void)ctx;
+    return px_int((int64_t)px_local_off());
+}
+
+// M115：父侧构造子进程环境数组（"K=V" 列表，env 覆盖项合并进 environ）
+//   fork 之后不调 setenv（非 async-signal-safe）——在 fork **之前**备好，子进程直接 execvpe。
+extern char** environ;
+static char** px_build_envp(LXValue env_dict) {
+    if (env_dict.type != PX_DICT || env_dict.as.obj->as.dict.len == 0) return NULL;
+    LXObject* d = env_dict.as.obj;
+    int base = 0;
+    while (environ && environ[base]) base++;
+    int cap = base + d->as.dict.len + 2;
+    char** envp = (char**)calloc((size_t)cap, sizeof(char*));
+    if (!envp) return NULL;
+    int n = 0;
+    for (int i = 0; i < base; i++) envp[n++] = strdup(environ[i]);
+    for (int i = 0; i < d->as.dict.len; i++) {
+        const char* k = d->as.dict.keys[i];
+        LXValue v = d->as.dict.vals[i];
+        if (v.type != PX_STR && v.type != PX_INT && v.type != PX_BOOL) continue;
+        char* val = px_to_string(v);
+        size_t klen = strlen(k);
+        char* ent = (char*)calloc(klen + strlen(val) + 2, 1);
+        if (!ent) continue;
+        snprintf(ent, klen + strlen(val) + 2, "%s=%s", k, val);
+        int replaced = 0;
+        for (int j = 0; j < n; j++) {
+            if (strncmp(envp[j], k, klen) == 0 && envp[j][klen] == '=') {
+                free(envp[j]);
+                envp[j] = ent;
+                replaced = 1;
+                break;
+            }
+        }
+        if (!replaced) envp[n++] = ent;
+    }
+    envp[n] = NULL;
+    return envp;
+}
+
+static void px_free_envp(char** envp) {
+    if (!envp) return;
+    for (int i = 0; envp[i]; i++) free(envp[i]);
+    free(envp);
+}
+
 static LXValue bi_os_spawn(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     // M83-S2（Issue 20 GAP-PGID-1）：第 3 参可选 group:bool（默认 false 保持现状）→
     //   fork 后子进程 setpgid(0,0) 自成进程组（supervisor 停服需 kill(-pgid) 连孙进程一起清）
-    int group = 0;
+    // M115：第 3 参亦可为 opts dict（group/setsid/stdout/stderr/stdin/cwd/env）——守护化不再依赖 shell
+    int group = 0, do_setsid = 0;
+    const char *out_path = NULL, *err_path = NULL, *in_path = NULL, *cwd = NULL;
+    LXValue env_dict;
+    env_dict.type = PX_NULL;
+    env_dict.as.obj = NULL;
     if (nargs == 3) {
         if (args[2].type == PX_BOOL) group = args[2].as.b ? 1 : 0;
         else if (args[2].type == PX_INT) group = args[2].as.i != 0;
-        else px_error("os_spawn 的 group 需要 bool");
+        else if (args[2].type == PX_DICT) {
+            LXValue g = px_dict_get(args[2], "group");
+            if (g.type == PX_BOOL) group = g.as.b ? 1 : 0;
+            else if (g.type == PX_INT) group = g.as.i != 0;
+            LXValue ss = px_dict_get(args[2], "setsid");
+            if (ss.type == PX_BOOL) do_setsid = ss.as.b ? 1 : 0;
+            else if (ss.type == PX_INT) do_setsid = ss.as.i != 0;
+            LXValue ov = px_dict_get(args[2], "stdout");
+            if (ov.type == PX_STR) out_path = ov.as.obj->as.str.data;
+            LXValue ev = px_dict_get(args[2], "stderr");
+            if (ev.type == PX_STR) err_path = ev.as.obj->as.str.data;
+            LXValue iv = px_dict_get(args[2], "stdin");
+            if (iv.type == PX_STR) in_path = iv.as.obj->as.str.data;
+            else if (iv.type == PX_BOOL && !iv.as.b) in_path = "/dev/null";
+            LXValue cv = px_dict_get(args[2], "cwd");
+            if (cv.type == PX_STR) cwd = cv.as.obj->as.str.data;
+            env_dict = px_dict_get(args[2], "env");
+        } else {
+            px_error("os_spawn 第 3 参需要 bool 或 opts dict{group,setsid,stdout,stderr,stdin,cwd,env}");
+        }
     } else if (nargs != 2) {
-        px_error("os_spawn 需要 (cmd, args[, group]) 参数");
+        px_error("os_spawn 需要 (cmd, args[, group|opts]) 参数");
     }
     if (args[0].type != PX_STR || args[1].type != PX_LIST)
         px_error("os_spawn 需要 (cmd, args) 参数");
@@ -7259,21 +7416,47 @@ static LXValue bi_os_spawn(LXValue* args, int nargs, void* ctx) {
         argv[i + 1] = strdup(v.as.obj->as.str.data);
     }
     argv[argc + 1] = NULL;
+    // M115：环境覆盖在 fork **之前**备好（子进程只能 exec AS-safe 调用）
+    char** envp = px_build_envp(env_dict);
     pid_t pid = fork();
     if (pid < 0) {
         for (int i = 0; i <= argc; i++) free(argv[i]);
         free(argv);
+        px_free_envp(envp);
         return px_null();
     }
     if (pid == 0) {
-        // 子进程：setpgid（可选）后 execvp（argv[0]=cmd）
+        // 子进程：setpgid/setsid（可选）→ cwd → stdio 重定向 → exec
+        //   全为 async-signal-safe 调用（无 malloc / 无 px_error）
+        if (do_setsid) setsid();
         if (group) setpgid(0, 0);
-        execvp(cmd, argv);
+        if (cwd && chdir(cwd) != 0) _exit(127);
+        if (in_path) {
+            int fd = open(in_path, O_RDONLY);
+            if (fd < 0) _exit(127);
+            if (dup2(fd, 0) < 0) _exit(127);
+            if (fd != 0) close(fd);
+        }
+        if (out_path) {
+            int fd = open(out_path, O_CREAT | O_WRONLY | O_APPEND, 0644);
+            if (fd < 0) _exit(127);
+            if (dup2(fd, 1) < 0) _exit(127);
+            if (fd != 1) close(fd);
+        }
+        if (err_path) {
+            int fd = open(err_path, O_CREAT | O_WRONLY | O_APPEND, 0644);
+            if (fd < 0) _exit(127);
+            if (dup2(fd, 2) < 0) _exit(127);
+            if (fd != 2) close(fd);
+        }
+        if (envp) execvpe(cmd, argv, envp);
+        else execvp(cmd, argv);
         _exit(127);
     }
     if (group) setpgid(pid, pid);   // M66 竞态修：父侧同调 setpgid（仅成组时）
     for (int i = 0; i <= argc; i++) free(argv[i]);
     free(argv);
+    px_free_envp(envp);
     px_child_reap_register(pid);   // M112-S3（Issue 54）：登记兜底回收，杜绝 fire-and-forget 僵尸
     return px_int((int64_t)pid);
 }
@@ -12602,7 +12785,18 @@ static void px_ev_ensure(void) { (void)0; }
 
 static LXValue bi_http_serve(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2 || args[0].type != PX_INT) px_error("http_serve 需要 (port, handler) 参数");
+    // M115：第 3 参可选 opts dict —— 目前支持 {host: "127.0.0.1"}（绑定地址）
+    //   实测缺口：http_serve 原先恒 INADDR_ANY（全接口监听），而 Go 侧 net.Listen("tcp",
+    //   "127.0.0.1:8190") 这类**只监听回环**的写法极常见（状态/指标/token 端点绝不能外露）
+    //   —— 语言层表达不出"只听本机"，只能靠防火墙代偿（=绕过）。
+    if (nargs < 2 || nargs > 3 || args[0].type != PX_INT)
+        px_error("http_serve 需要 (port, handler[, opts]) 参数");
+    const char* bind_host = NULL;
+    if (nargs == 3) {
+        if (args[2].type != PX_DICT) px_error("http_serve 的 opts 需要 dict");
+        LXValue hv = px_dict_get(args[2], "host");
+        if (hv.type == PX_STR) bind_host = hv.as.obj->as.str.data;
+    }
     LXValue handler = args[1];
     if (handler.type != PX_FUNC && handler.type != PX_NATIVE) px_error("http_serve 的 handler 必须是函数");
     // handler 存入全局表（GC 扫描根），连接线程经全局表取回
@@ -12616,6 +12810,14 @@ static LXValue bi_http_serve(LXValue* args, int nargs, void* ctx) {
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
+    if (bind_host && *bind_host && strcmp(bind_host, "0.0.0.0") != 0) {
+        if (strcmp(bind_host, "localhost") == 0) {
+            addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        } else if (inet_pton(AF_INET, bind_host, &addr.sin_addr) != 1) {
+            close(sfd);
+            px_error("http_serve: 非法 host: %s（IPv4 或 localhost）", bind_host);
+        }
+    }
     addr.sin_port = htons((uint16_t)port);
     if (bind(sfd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
         close(sfd);
@@ -17776,9 +17978,18 @@ static void px_civil_from_days(int64_t z, int64_t* y, int64_t* m, int64_t* d) {
 }
 
 // tz → 偏移秒；非法返回 0（UTC）
+// M115：本机时区偏移（秒）—— glibc tm_gmtoff（系统 TZ 数据 + DST）；失败回落 0（UTC）
+static int64_t px_local_off(void) {
+    time_t t = time(NULL);
+    struct tm lt;
+    if (localtime_r(&t, &lt) == NULL) return 0;
+    return (int64_t)lt.tm_gmtoff;
+}
+
 static int64_t px_tz_off(const char* tz) {
     if (!tz || !*tz) return 0;
     if (strcasecmp(tz, "utc") == 0 || strcmp(tz, "Z") == 0) return 0;
+    if (strcasecmp(tz, "local") == 0) return px_local_off();   // M115：本机时区
     if (tz[0] != '+' && tz[0] != '-') return 0;
     int64_t sign = tz[0] == '-' ? -1 : 1;
     const char* rest = tz + 1;
