@@ -148,6 +148,22 @@ print("upper=" + to_upper("px"))
     `[[:graph:]]` / `[[:cntrl:]]`。**M117 前**这些写法**静默不匹配**（`regex_search` 返回 `null`，不报错）；
     现未知类名（`[[:nope:]]`）**直接报错**。注意 `\s` 系列一直是支持的。
 
+27. **字符串插值里可以写转义引号了（M118）**：`print("v=\${d[\"k\"]}")`、`print("\${contains(s, \"x\")}")` 两轨都合法。
+    M118 前报 `E1001 非法字符: '\'`（位置指向反斜杠，与病根"插值扫描不认转义"无关）。
+    注意：插值内的嵌套字符串仍以 `\"` 为定界符书写。
+28. **匿名函数支持多行体（M118）**：`var f = fn (x):` + 换行缩进块；**调用实参位**同样支持
+    （`map(ys, fn (x):` + 换行语句体，括号内 lexer 不产 INDENT/DEDENT，parser 按换行解析到 `)`/`]`/`,`）。
+    M118 前这两处都报 `E2001 意外的 token: 换行`——**速查包 §1 自己的示例就编译不过**。
+29. **`spawn` 只支持直接函数调用（`spawn f(args)`）**；`spawn fn (): …` / `spawn <闭包>` 现在是
+    带源位置的 `E2011`（含两种可用写法）。M118 前 VM 轨把**编译器内部函数名 + AST dump** 抛给用户，
+    C 轨甚至把错误文案当 C 代码返回。
+30. **`int_to_hex(n, width)` 是「取低 width×4 位」，不是「转十六进制」**：`int_to_hex(12345678901, 1) == "5"`、
+    `int_to_hex(255, 4) == "00ff"`。移植 Go 的 `%x` 请用 `int_to_hex(n, 16)` 再去前导零。
+31. **Result 没有「取错误值」原语**：只有 `is_ok/is_err/unwrap`（`unwrap` 在 Err 上 panic）。
+    移植 Go 的 `(val, err)` 双返回时只能从 `str(Ok(v)) == "Ok(v)"` / `str(Err(e)) == "Err(e)"` 剥壳。
+    （原生缺口：建议补 `unwrap_err`/`expect`。）
+32. **`fn` 也是保留字**：`var fn = json_parse("{}")` → `E2001 期望变量名，实际得到 fn`（改用 `fndef` 等）。
+
 ## 2. native 内置速查（312 全量见 `docs/native_index.json`，本表为常用）
 
 ### 核心 / 值
@@ -170,7 +186,7 @@ print("upper=" + to_upper("px"))
 ### HTTP（客户端/服务端）
 客户端：`http_get(url)` `http_post(url, body[, headers])` ·
 **`http_request(url, method[, body[, headers[, opts]]])`**（⚠️ **url 在前**；opts = `{timeout_ms, retries, proxy}`，
-timeout_ms **含连接阶段**，默认 30000；`http_get`/`http_post` 无 opts 入口时同样受这 30s 上限约束）· `http_get_stream` · 服务端：`http_serve(port, handler)`（TCP 每请求回调）· `http_serve_unix(sock_path, handler)`（**Unix socket 服务端**，M82；自动清残留 + 0600）· `px_serve(port, docroot[, tls, opts])`（静态 + .px 应用服务器，opts 可 {http3:true, max_body_size, rate_limit...}）· `px_exec`（语言内嵌 .px）· `http_unix(sock, path, ...)`（Unix socket 客户端，M56）
+timeout_ms **含连接阶段**，默认 30000；`http_get`/`http_post` 无 opts 入口时同样受这 30s 上限约束）· **`sse_connect(url[, opts])`（M118 起支持 Unix socket + POST）**：`opts = {reconnect_ms, sock, method, body, headers, content_type}` —— `sock` 非空则走 AF_UNIX（`url` 只作请求路径），配 `method`/`body`/`headers` 即可表达「POST + JSON 体 + 鉴权头的 SSE 流」（LLM 补全的标准形状；M118 前只有 GET/TCP，这条通路无法表达）· `http_get_stream` · 服务端：`http_serve(port, handler)`（TCP 每请求回调）· `http_serve_unix(sock_path, handler)`（**Unix socket 服务端**，M82；自动清残留 + 0600）· `px_serve(port, docroot[, tls, opts])`（静态 + .px 应用服务器，opts 可 {http3:true, max_body_size, rate_limit...}）· `px_exec`（语言内嵌 .px）· `http_unix(sock, path, ...)`（Unix socket 客户端，M56）
 > **M116：handler/middleware 内抛运行时错误 → 客户端收 `500`（含说明 body），服务继续可用**（此前 VM 轨收 204 静默成功、C 轨整台服务器退出，见 §1.1 事实 19）。
 
 ### WebSocket / SSE

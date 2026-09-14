@@ -347,12 +347,67 @@ def scan_multiline_string_tokens(quote, pos_line, pos_col, interp):
             advance()
     out.append(["字符串", rust_str_debug(s), pos_line, pos_col])
     return out
+def scan_interp_nested_string(str_pos_line, str_pos_col):
+    # M118：插值内的**转义引号字符串**字面量（${d[\"k\"]} 这类写法）。
+    #   外层是双引号字符串时，插值里的引号必须转义书写 ⇒ 嵌套字符串的**定界符**是 \"
+    #   （而不是裸 "）；其余转义按字面意图解释：\\n 换行、\\t 制表、\\\\ 反斜杠。
+    let pos_line = g_line
+    let pos_col = g_col
+    advance()  # 吃掉开引号（调用方已确认是转义引号）
+    var s = ""
+    while true:
+        let c = peek()
+        if c == "":
+            err_at("E1002", "字符串未闭合（缺少 \"）", str_pos_line, str_pos_col)
+        if c == "\\":
+            let n = peek2()
+            if n == "\"" or n == "'":
+                advance()
+                advance()
+                break
+            if n == "\\":
+                advance()
+                advance()
+                s += "\\"
+                continue
+            if n == "n":
+                advance()
+                advance()
+                s += "\n"
+                continue
+            if n == "t":
+                advance()
+                advance()
+                s += "\t"
+                continue
+            if n == "r":
+                advance()
+                advance()
+                s += "\r"
+                continue
+            advance()
+            s += c
+            continue
+        if c == "\n":
+            err_at("E1002", "单行字符串不能跨行，请使用 \"\"\" 多行字符串", str_pos_line, str_pos_col)
+        s += c
+        advance()
+    return ["字符串", rust_str_debug(s), pos_line, pos_col]
 def scan_interp_expr(str_pos_line, str_pos_col):
     let toks = []
     while true:
         let c = peek()
         if c == "":
             err_at("E1002", "字符串插值 \${ 未闭合（缺少 }）", str_pos_line, str_pos_col)
+        # M118：插值内允许**转义引号** —— 外层字符串里的 \" 在插值表达式里就是一个普通引号。
+        #   现场：`print("v=${d[\"k\"]}")` / `print("${contains(s, \"x\")}")` 此前报
+        #   `E1001 非法字符: '\'`（位置指向反斜杠，与病根"插值扫描不认转义"毫不相干）。
+        #   取消转义后下一个字符按嵌套字符串字面量走（下面 c == "\"" 分支）。
+        if c == "\\" and (peek2() == "\"" or peek2() == "'"):
+            advance()
+            let t = scan_interp_nested_string(str_pos_line, str_pos_col)
+            toks.append(t)
+            continue
         if c == "}":
             advance()
             break
