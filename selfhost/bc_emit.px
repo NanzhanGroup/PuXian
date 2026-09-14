@@ -1857,6 +1857,6 @@ def bc_emit_c_program(prog):
     out += "                printf(\"%s=%s\\n\", s_mod.G[_i], px_to_string(_v));\n"
     out += "        }\n"
     out += "    }\n"
-    out += "    return _code;\n"
+    out += "    return px_exit_code_final(_code);   // M120（qg-issue 76 E1）：协程隔离错误 → 退出码非 0\n"
     out += "}\n"
     return out

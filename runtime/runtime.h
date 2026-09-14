@@ -384,6 +384,12 @@ void px_spawn_isolate_end(void);
 //   跨编译单元的 returns_twice 语义不可靠（同 M96-S2 教训），实测错误路径下
 //   `if (px_spawn_isolate_begin())` 可能仍走真分支。
 int  px_isolate_errored(void);
+// M120（qg-issue 76 E1/E2）：隔离计数 + 退出码修正 + 隔离落点记录（详见 runtime.c）。
+void px_coro_err_note(const char* where);
+int  px_coro_err_count(void);
+int  px_exit_code_final(int code);
+// 应用层消费一次隔离错误（handler/middleware → 500 的边界调用；消费后不计入退出码）。
+void px_coro_err_consume(void);
 // M93-S2：GC 暂停信号屏蔽原语（coro.c 临界区用；屏蔽 SIG_GC_STOP → 持锁临界区
 //   不被 STW 打断 → GC executor 标记协程表拿锁不与其死锁）。
 void px_gc_block_stop_sig(sigset_t* old);
