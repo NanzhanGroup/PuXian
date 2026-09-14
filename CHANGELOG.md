@@ -6,6 +6,29 @@
 
 ## [Unreleased]
 
+### 真实模块 `ws-install` PuXian 化暴露的三类缺陷修复（M117）
+
+> **主题：继续拿真实模块当探针** —— 这三条都"写得出来、跑得起来"，但**静默错 / 无限等**。
+> 详细缺口-决策-门见 `docs/M117_PLAN.md`，台账 `qg-issue 72`。
+
+- **F1 · `read_file` 读 `st_size==0` 的伪文件返回空串** —— `/proc`、`/sys` 的 `st_size` 恒为 0，
+  旧实现按 `fseek/ftell` 的大小分配缓冲 ⇒ **一个字节都不读**（`read_file("/proc/sys/kernel/hostname")`
+  = `""`；Go `os.ReadFile` 走 read-until-EOF 不受影响 ⇒ 移植后**静默分叉**）。
+  修：能 seek 且 size>0 走原快路径，否则逐块读到 EOF。
+- **F2 · `http_request` 的 `opts.timeout_ms` 不约束 connect** —— 该值此前只写进
+  `SO_RCVTIMEO`/`SO_SNDTIMEO`，而它们**不约束 `connect()`** ⇒ 对不可达对端（丢 SYN）
+  实测 **45 s 仍未返回**（Go `http.Client{Timeout}` 覆盖连接）。对装机器/守护进程是
+  "**永久卡死且无超时报错**"级。修：非阻塞 connect + `poll(POLLOUT, timeout_ms)` +
+  `SO_ERROR` 判定；HTTPS 同路径；无 `opts` 入口的 `http_get`/`http_post`/`px_http_request`/`s3_*`
+  统一受默认上限 **30 s**（`timeout_ms<=0` 保持原阻塞语义，零回归）。
+- **F3 · 正则 POSIX 字符类 `[[:space:]]` 静默不匹配** —— 类解析器把 `[` 当字面量、内层 `]` 当类结束
+  ⇒ 返回 `null` 且**不报错**。修：识别 `[:name:]` 并展开（12 类）；**未知类名直接报错**。
+- **文档漂移**：`http_request` 签名（§2 曾写反成 `(method, url)`）、native 计数（311 → 312），
+  并补事实条目 20–26（浮点除、`join` 顺序、`env` 返回 `null`、`str(bytes)` 占位符、HTTP 返回类型
+  不统一、POSIX 类、`read_file` 伪文件）。
+- 门：`examples/m117_realworld_defects/`（双轨 + 2 条负控）· `selfhost/m117_gates.sh`（27 项全绿）·
+  `rebake_bin.sh --rebake-all` + `--check-all`。
+
 ### 真实模块 PuXian 化暴露的**静默错/致命错**五条修复（M116）
 
 > **主题：继续用 `ws-center` / `ws-ddns` 的 PuXian 化当"探针"，专治"不报错但结果错"与

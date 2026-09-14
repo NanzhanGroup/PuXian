@@ -9,6 +9,15 @@
 > 不再每连接 spawn，接入**常驻连接池**（队满阻塞背压，服务进程不因连接数/spawn 槽满退出）；GC 线程槽
 > 固定 64 → 动态上限。env `PX_SERVE_WORKERS`（池容量，默认 256，夹取 [8,4095]）/ `PX_MAX_THREADS`
 > （spawn 线程上限，默认 1024，夹取 [64,4096]）。并发 100×500 压测全 200、0 失败、进程不崩。B 档（M88-B）起**空闲连接事件驱动**（Linux epoll）：http keep-alive / SSE 长连接 handler 返回后交还 IDLE 由事件循环照看，**空闲连接不占 worker**（池 8 挂 1 万 idle keep-alive / 1000 SSE 线程恒 10；SSE 空闲不超时，keep-alive 15s 超时语义保留）。env 追加 `PX_MAX_CONNS`（ConnCtx 连接登记上限，默认 16384，夹取 [1024,131072]）/ `PX_MAX_SSE_CONNS`（服务端 SSE 注册表容量，默认 4096，夹取 [64,65536]）。
+> M117（2026-09-14，qg-issue 72）：**真实模块 ws-install PuXian 化暴露的三类缺陷修复** ——
+> ① `read_file` 对 **st_size==0 的伪文件**（`/proc`、`/sys`）此前返回**空串**（Go `os.ReadFile` 不受影响）⇒
+>    现按块读到 EOF（`/proc/sys/kernel/hostname`、`/proc/uptime` 正常）；
+> ② `http_request` 的 `opts.timeout_ms` 此前**只约束收发、不约束 connect** ⇒ 对不可达对端挂到内核重传超时
+>    （实测 >45s 不返回）⇒ 现连接阶段走**非阻塞 connect + poll**，且 `http_get`/`http_post` 等无 opts 入口
+>    的路径统一受默认上限 **30s** 约束；
+> ③ 正则字符类**不认识 POSIX 类** `[[:space:]]` ⇒ **静默不匹配**（返回 null、不报错）⇒ 现支持
+>    `space/digit/alpha/alnum/upper/lower/xdigit/blank/punct/print/graph/cntrl`，**未知类名报错**。
+> 另修文档漂移：`http_request` 签名（§2 曾写反为 `(method, url)`）、native 计数（311→312）。
 
 ---
 
@@ -118,10 +127,32 @@ print("upper=" + to_upper("px"))
     C 轨/同步轨更糟 —— 错误直接打穿到进程级，**整台服务器退出**（后续请求 Connection refused）。
     写 handler 请把"可能失败"的路径显式 `return {"status": 500, "body": ...}`，别指望它自己变成 500。
 
-## 2. native 内置速查（311 全量见 `docs/native_index.json`，本表为常用）
+20. **`/` 是浮点除（int/int → float）**：`7/2 = 3.5`、`6/3 = 2.0`，`type(7/2) == "float"`。
+    从 Go/Java/C 移植时**照抄 `a / b` 会静默算出小数**（实测：ws-install 的八进制权限位转换、
+    人类可读大小格式化当场算错）。整除写 `int(a / b)`（向零截断）或 `floor`。
+    另：超过 2^53 的整数经 `/ 1` 会丢精度（`9007199254740993/1` → `9.007199254740992e+15`）。
+21. **`join(sep, list)` 分隔符在前**，与 `split(s, sep)` 相反（M117 实测：写错时错误信息是
+    "join 分隔符需要 string"，指不到病根）。速查包此前未标签名 —— 本表已补。
+22. **`env(name)` 变量不存在返回 `null`**（Go `os.Getenv` 返回 `""`）：`str(null) == "null"`，
+    直接拼进配置就是**静默污染**；请先判 `null` 再取值。
+23. **`str(bytes)` 返回占位符 `"<bytes N>"`**（不是内容、也不报错）—— bytes→str 用 `bytes_to_str`；
+    `len(bytes)` 不支持（用 `bytes_len`）；二进制写盘用 `write_bytes`（无 mode 参数，权限位需 `write_file` 或系统 `chmod`）。
+24. **`read_file` 支持伪文件（M117 修）**：`st_size==0` 的 `/proc`、`/sys` 文件此前读出**空串**
+    （`/proc/sys/kernel/hostname` 读不到主机名）；现按块读到 EOF。补充：`read_file` 读不存在路径是**报错**，不是返回空串。
+25. **HTTP 客户端返回类型不是统一的**（M117 起连接阶段也受超时约束）：
+    - `http_get(url)` 成功 → **str**（body），失败 → **Result(Err)**；`http_request(...)` 成功 → **dict**，失败 → **Result(Err)**；
+    - 因此**不能**直接 `.is_err()`（成功时抛 `R1007 dict/string 没有方法 is_err`），正确写法是先 `if type(r) == "result":` 再判；
+    - `opts.timeout_ms`（默认 30000）**含连接阶段**（M117 前只管收发，对不可达对端会挂到内核重传超时）。
+26. **正则支持 POSIX 字符类（M117 起）**：`[[:space:]]` / `[[:digit:]]` / `[[:alpha:]]` / `[[:alnum:]]` /
+    `[[:upper:]]` / `[[:lower:]]` / `[[:xdigit:]]` / `[[:blank:]]` / `[[:punct:]]` / `[[:print:]]` /
+    `[[:graph:]]` / `[[:cntrl:]]`。**M117 前**这些写法**静默不匹配**（`regex_search` 返回 `null`，不报错）；
+    现未知类名（`[[:nope:]]`）**直接报错**。注意 `\s` 系列一直是支持的。
+
+## 2. native 内置速查（312 全量见 `docs/native_index.json`，本表为常用）
 
 ### 核心 / 值
-`print` `len` `range` `type` `str` `int` `float` `bool` `assert` `input` `exit` `sleep` `abs` `sqrt` `min` `max` `pow` `sorted` `reversed` `sum` `map` `filter` `reduce` `contains` `env` `args()`（**调用式**：`px run s.px a b` 与编译产物同形 `[程序, a, b]`——M115 修；见 §1.1 事实清单）`gc` · 数学（M59）：`sin/cos/tan/atan2/floor/ceil/round/log/log10/exp/random/random_int/random_seed` + 常量 `pi/e`
+`print` `len` `range` `type` `str` `int` `float` `bool` `assert` `input` `exit` `sleep` `abs` `sqrt` `min` `max` `pow` `sorted` `reversed` `sum` `map` `filter` `reduce` `contains` `env`（⚠️ **变量不存在返回 `null`**，不是 `""` —— `str(null)` 会得到 `"null"`，取值请先判 null） `args()`（**调用式**：`px run s.px a b` 与编译产物同形 `[程序, a, b]`——M115 修；见 §1.1 事实清单）
+· 易错：`join(sep, list)` 分隔符在前（见下）· `/` 是**浮点除**（见 §1.1 事实 20）`gc` · 数学（M59）：`sin/cos/tan/atan2/floor/ceil/round/log/log10/exp/random/random_int/random_seed` + 常量 `pi/e`
 > **M72 诊断（Issue 9/10）**：`print/println` 已**逐行实时**（管道/journald 下不再攒 8KB）；`flush()` 显式刷 stdout/stderr；`print_err(...)` 输出到 **stderr**（渲染同 print）。**编译产物运行时错误带 .px 源位置**：`运行时错误 [函数 行N]: 消息`（pxi 解释器本就带 `错误 [code] 行:列`）。**spawn 协程内运行时错误默认隔离**（打印现场后宿主继续；`PX_SPAWN_ISOLATE=0` 关 → 回退原 exit 语义）。
 
 ### 文件系统
@@ -131,13 +162,15 @@ print("upper=" + to_upper("px"))
 `json_parse(s)` → dict/list/标量 · `json_stringify(v)` → str · `json_path(d, expr)` / `json_path_set` · `base64_encode/decode` · `int_to_hex/hex_to_int` · `bytes_to_hex/hex_to_bytes`
 
 ### bytes 二进制
-`bytes(s)` `bytes_len` `bytes_get/set` `bytes_slice` `bytes_concat` `bytes_to_str` `int_to_bytes` `bytes_to_int` `bytes_base64` `bytes_find` · `bit_count` `bit_length`
+`bytes(s)`（⚠️ **`str(bytes)` 得到的是占位符 `"<bytes N>"`，不是内容**，也不报错 —— bytes→str 必须用 `bytes_to_str(b)`；`len(bytes)` 不支持，用 `bytes_len(b)`）`bytes_len` `bytes_get/set` `bytes_slice` `bytes_concat` `bytes_to_str` `int_to_bytes` `bytes_to_int` `bytes_base64` `bytes_find` · `bit_count` `bit_length`
 
 ### 时间 / 定时 / 调度
 `now()`（**本地时间字符串** `YYYY-MM-DD HH:MM:SS`）`now_ms()` `now_us()` `now_sec()`（M115：Unix 秒，配 `time_format`）`sleep(sec)` `sleep_us` `time_format(t, fmt)` `time_parse` `tz_offset` · `set_timeout(f, ms, ...)` `set_interval` `clear_timer` · `cron("分 时 日 月 周", f)`（6 字段）
 
 ### HTTP（客户端/服务端）
-客户端：`http_get(url)` `http_post(url, body[, headers])` `http_request(method, url[, body, headers])` `http_get_stream` · 服务端：`http_serve(port, handler)`（TCP 每请求回调）· `http_serve_unix(sock_path, handler)`（**Unix socket 服务端**，M82；自动清残留 + 0600）· `px_serve(port, docroot[, tls, opts])`（静态 + .px 应用服务器，opts 可 {http3:true, max_body_size, rate_limit...}）· `px_exec`（语言内嵌 .px）· `http_unix(sock, path, ...)`（Unix socket 客户端，M56）
+客户端：`http_get(url)` `http_post(url, body[, headers])` ·
+**`http_request(url, method[, body[, headers[, opts]]])`**（⚠️ **url 在前**；opts = `{timeout_ms, retries, proxy}`，
+timeout_ms **含连接阶段**，默认 30000；`http_get`/`http_post` 无 opts 入口时同样受这 30s 上限约束）· `http_get_stream` · 服务端：`http_serve(port, handler)`（TCP 每请求回调）· `http_serve_unix(sock_path, handler)`（**Unix socket 服务端**，M82；自动清残留 + 0600）· `px_serve(port, docroot[, tls, opts])`（静态 + .px 应用服务器，opts 可 {http3:true, max_body_size, rate_limit...}）· `px_exec`（语言内嵌 .px）· `http_unix(sock, path, ...)`（Unix socket 客户端，M56）
 > **M116：handler/middleware 内抛运行时错误 → 客户端收 `500`（含说明 body），服务继续可用**（此前 VM 轨收 204 静默成功、C 轨整台服务器退出，见 §1.1 事实 19）。
 
 ### WebSocket / SSE
@@ -154,7 +187,7 @@ print("upper=" + to_upper("px"))
 `sqlite_open(path)` → conn · `sqlite_exec(conn, sql[, params])` · `sqlite_query(conn, sql[, params])` → list[dict] · `sqlite_close` · `sqlite_escape` · `sqlite_last_insert_rowid`
 
 ### 加密 / 哈希 / 压缩 / XML / ZIP
-AES：`aes_encrypt(key, iv, data)` / `aes_decrypt`（CBC-PKCS7）· `aes_gcm_encrypt/decrypt`（hex 文本版）· **M72 bytes 版（二进制安全，含 \0/非 UTF-8，GCM 输出 密文||tag 原始 bytes 与 Go crypto/aes-gcm 互通）**：`aes_gcm_encrypt_bytes/decrypt_bytes` `aes_encrypt_bytes/decrypt_bytes` · **M83-S2 ECB（PKCS7 无 IV，微信网关媒体 AES-128-ECB）：hex 版与 openssl enc -aes-128-ecb 逐字节一致，bytes 版供二进制媒体** `aes_encrypt_ecb/decrypt_ecb` `aes_encrypt_ecb_bytes/decrypt_ecb_bytes` · **M83-S2 gzip 通用**：`gzip_compress(bytes)`→bytes（标准 gzip 容器，与系统 gzip/Go compress/gzip 互通）`gzip_uncompress(gz)`→bytes|null · RSA：`rsa_gen_key(bits)` `rsa_encrypt/decrypt/sign/verify` · **M83-S4 标准签名（PKCS1v15-SHA256 + DigestInfo，与 Go `rsa.SignPKCS1v15`/openssl 互通；PEM 入参 `pk_parse` 自动 PKCS8/PKCS1/SPKI；msg str\|bytes 二进制安全、超长自动 sha256 无长度限制；不支持加密 PEM）**：`rsa_sign_pkcs1v15_sha256(pem_priv, msg)`→sig_hex `rsa_verify_pkcs1v15_sha256(pem_pub, msg, sig_hex)`→bool · **M83-S3 ed25519（RFC8032，与 Go crypto/ed25519 互通，确定性签名同 seed 同 msg 逐字节一致；PEM 收 Go x509 PKCS8/SPKI）**：`ed25519_sign(priv, msg)`→sig_hex（priv 收 hex seed32/sk64 或 PKCS8 PEM；msg 收 str|bytes）`ed25519_verify(pub, msg, sig)`→bool（pub 收 hex 或 SPKI PEM）· **M84-S2 HMAC-SHA256（RFC4231 官方向量 / 腾讯云 TC3 / SigV4 / webhook / JWT HS256；key/msg 均 str\|bytes 二进制安全可含 NUL，key>64B 自动先哈希）**：`hmac_sha256(key, msg)`→hex · `sha256(s)`（M84-S2 增强：收 str\|bytes 含 NUL 全哈希，不再 strlen 截断）`xxhash(s)` · 压缩/解压（zlib，M61 FFI）：`zlib_compress` `zlib_uncompress` `zlib_crc32` · XML：`xml_parse(s)` `xml_escape` `xml_unescape` `xml_build` · ZIP：`zip_pack(files_dict, out)` `zip_unpack(bytes[, password])`（M66 支持 zipcrypto/AES-256 密码）
+AES：`aes_encrypt(key, iv, data)` / `aes_decrypt`（CBC-PKCS7）· `aes_gcm_encrypt/decrypt`（hex 文本版）· ⚠️ **bytes 版参数序是 `(data, key, iv)`，数据在前**，返回 `密文||tag`（nonce 要调用方自己拼，才能与 Go `aead.Seal(nonce, nonce, pt, nil)` 互通）· **M72 bytes 版（二进制安全，含 \0/非 UTF-8，GCM 输出 密文||tag 原始 bytes 与 Go crypto/aes-gcm 互通）**：`aes_gcm_encrypt_bytes/decrypt_bytes` `aes_encrypt_bytes/decrypt_bytes` · **M83-S2 ECB（PKCS7 无 IV，微信网关媒体 AES-128-ECB）：hex 版与 openssl enc -aes-128-ecb 逐字节一致，bytes 版供二进制媒体** `aes_encrypt_ecb/decrypt_ecb` `aes_encrypt_ecb_bytes/decrypt_ecb_bytes` · **M83-S2 gzip 通用**：`gzip_compress(bytes)`→bytes（标准 gzip 容器，与系统 gzip/Go compress/gzip 互通）`gzip_uncompress(gz)`→bytes|null · RSA：`rsa_gen_key(bits)` `rsa_encrypt/decrypt/sign/verify` · **M83-S4 标准签名（PKCS1v15-SHA256 + DigestInfo，与 Go `rsa.SignPKCS1v15`/openssl 互通；PEM 入参 `pk_parse` 自动 PKCS8/PKCS1/SPKI；msg str\|bytes 二进制安全、超长自动 sha256 无长度限制；不支持加密 PEM）**：`rsa_sign_pkcs1v15_sha256(pem_priv, msg)`→sig_hex `rsa_verify_pkcs1v15_sha256(pem_pub, msg, sig_hex)`→bool · **M83-S3 ed25519（RFC8032，与 Go crypto/ed25519 互通，确定性签名同 seed 同 msg 逐字节一致；PEM 收 Go x509 PKCS8/SPKI）**：`ed25519_sign(priv, msg)`→sig_hex（priv 收 hex seed32/sk64 或 PKCS8 PEM；msg 收 str|bytes）`ed25519_verify(pub, msg, sig)`→bool（pub 收 hex 或 SPKI PEM）· **M84-S2 HMAC-SHA256（RFC4231 官方向量 / 腾讯云 TC3 / SigV4 / webhook / JWT HS256；key/msg 均 str\|bytes 二进制安全可含 NUL，key>64B 自动先哈希）**：`hmac_sha256(key, msg)`→hex · `sha256(s)`（M84-S2 增强：收 str\|bytes 含 NUL 全哈希，不再 strlen 截断）`xxhash(s)` · 压缩/解压（zlib，M61 FFI）：`zlib_compress` `zlib_uncompress` `zlib_crc32` · XML：`xml_parse(s)` `xml_escape` `xml_unescape` `xml_build` · ZIP：`zip_pack(files_dict, out)` `zip_unpack(bytes[, password])`（M66 支持 zipcrypto/AES-256 密码）
 
 ### Web 应用平台
 Session：`session_open()/session_id/get/set/del/destroy` · `basic_auth(user, pass)` · `route(method, pattern, fn)`（:id 参数 / * 通配）· `middleware(fn)` `rate_limit` `vhost` `sandbox_enter` · 上下文 `ctx_set/get/clear` · 消息总线 `bus_new/subscribe/publish/unsubscribe` · `event_bus` · `gen_next`（生成器取下一项）· `list(xs)`（生成器→list）
@@ -293,6 +326,6 @@ set_timeout(fn (): print("once after 2s"), 2000)
 
 ## 5. 防漂移与源
 
-- **native 清单**（311，单一事实源 = runtime 注册表）：`bash tools/gen_native_table.sh` → `docs/native_index.json`；CI 重跑 diff 防漂移。**本表计数必须 == count**（现 311）。
+- **native 清单**（312，单一事实源 = runtime 注册表）：`bash tools/gen_native_table.sh` → `docs/native_index.json`；CI 重跑 diff 防漂移。**本表计数必须 == count**（现 312）。
 - **stdlib 索引**：`tools/px run tools/gen_ecosystem.px` → `docs/ecosystem_index.json`。
 - 规范：`docs/spec.md`（§8 模块/import、§9 双模式、§12 AI 协议）· `docs/MINI_SUBSET.md`（子集边界）· 缺口与写库规范：`docs/ECOSYSTEM_GAPS.md`。
