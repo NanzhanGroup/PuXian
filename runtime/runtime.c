@@ -4064,14 +4064,37 @@ static LXValue bi_read_file(LXValue* args, int nargs, void* ctx) {
     const char* path = args[0].as.obj->as.str.data;
     FILE* f = fopen(path, "rb");
     if (!f) px_error("io: 读取文件失败 %s", path);
-    fseek(f, 0, SEEK_END);
-    long sz = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    char* buf = xmalloc(sz + 1);
-    size_t rd = fread(buf, 1, sz, f);
-    buf[rd] = 0;
+    // M117（qg-issue 72 F1）：st_size==0 的**伪文件**（/proc、/sys）此前读出**空串** ——
+    //   fseek/ftell 给 0 ⇒ 一个字节都不读（Go os.ReadFile 走 read-until-EOF 不受 st_size 影响）。
+    //   实测：read_file("/proc/sys/kernel/hostname") = ""（宿主机名 dongyue 读不到），
+    //   而 /proc 下的一切（uptime/meminfo/hostname…）全中。
+    //   修法：能 seek 且 size>0 走原快路径；否则（size==0 / 不可 seek）**逐块读到 EOF**。
+    long sz = -1;
+    if (fseek(f, 0, SEEK_END) == 0) {
+        sz = ftell(f);
+        if (sz < 0) sz = -1;
+    }
+    if (sz > 0 && fseek(f, 0, SEEK_SET) == 0) {
+        char* buf = xmalloc((size_t)sz + 1);
+        size_t rd = fread(buf, 1, (size_t)sz, f);
+        buf[rd] = 0;
+        fclose(f);
+        return px_str_len(buf, (int)rd);
+    }
+    // 慢路径：清错误标志并回到起点（能 seek 已 seek 过 SEEK_END ⇒ 必须重置）
+    clearerr(f);
+    if (sz >= 0) fseek(f, 0, SEEK_SET);
+    size_t cap = 4096, len = 0;
+    char* buf = xmalloc(cap + 1);
+    for (;;) {
+        if (len == cap) { cap *= 2; buf = xrealloc(buf, cap + 1); }
+        size_t rd = fread(buf + len, 1, cap - len, f);
+        len += rd;
+        if (rd == 0) break;
+    }
+    buf[len] = 0;
     fclose(f);
-    return px_str_len(buf, (int)rd);
+    return px_str_len(buf, (int)len);
 }
 
 static LXValue bi_write_file(LXValue* args, int nargs, void* ctx) {
@@ -5282,6 +5305,29 @@ static int rp_parse_class_elem(RParser* p, unsigned char* lo, unsigned char* hi)
     return 1;
 }
 
+// M117（qg-issue 72 F3）：**POSIX 字符类** `[[:space:]]` / `[[:digit:]]` / `[[:alpha:]]` …
+//   缺陷现场：字符类解析器不认识 `[:name:]`，把 `[` 当字面量、并把内层 `]` 当**类结束**，
+//   于是 `^[[:space:]]{2,}api_key:…` 这类正则**静默不匹配**（regex_search 返回 null，
+//   不报错、不告警）—— 实测在 ws-install 的 YAML 行解析上直接失效。
+//   修法：在类元素处识别 `[:name:]` 并展开为等价区间；未知名字**报错**（不静默）。
+static int rp_posix_class(const char* name, unsigned char* lo, unsigned char* hi) {
+    if (strcmp(name, "space") == 0) { lo[0]='\t';hi[0]='\r'; lo[1]=' ';hi[1]=' '; return 2; }
+    if (strcmp(name, "digit") == 0) { lo[0]='0';hi[0]='9'; return 1; }
+    if (strcmp(name, "alpha") == 0) { lo[0]='A';hi[0]='Z'; lo[1]='a';hi[1]='z'; return 2; }
+    if (strcmp(name, "alnum") == 0) { lo[0]='0';hi[0]='9'; lo[1]='A';hi[1]='Z'; lo[2]='a';hi[2]='z'; return 3; }
+    if (strcmp(name, "upper") == 0) { lo[0]='A';hi[0]='Z'; return 1; }
+    if (strcmp(name, "lower") == 0) { lo[0]='a';hi[0]='z'; return 1; }
+    if (strcmp(name, "xdigit") == 0) { lo[0]='0';hi[0]='9'; lo[1]='A';hi[1]='F'; lo[2]='a';hi[2]='f'; return 3; }
+    if (strcmp(name, "blank") == 0) { lo[0]='\t';hi[0]='\t'; lo[1]=' ';hi[1]=' '; return 2; }
+    if (strcmp(name, "punct") == 0) {
+        lo[0]='!';hi[0]='/'; lo[1]=':';hi[1]='@'; lo[2]='[';hi[2]='`'; lo[3]='{';hi[3]='~'; return 4;
+    }
+    if (strcmp(name, "print") == 0) { lo[0]=' ';hi[0]='~'; return 1; }
+    if (strcmp(name, "graph") == 0) { lo[0]='!';hi[0]='~'; return 1; }
+    if (strcmp(name, "cntrl") == 0) { lo[0]=0;hi[0]=0x1f; lo[1]=0x7f;hi[1]=0x7f; return 2; }
+    return -1;
+}
+
 static RNode* rp_parse_class(RParser* p) {
     p->pos++; // '['
     int neg = 0;
@@ -5293,6 +5339,27 @@ static RNode* rp_parse_class(RParser* p) {
         if (c < 0) { snprintf(p->err, sizeof(p->err), "字符类缺少 ]"); return NULL; }
         if (c == ']' && !first) { p->pos++; break; }
         first = 0;
+        // M117：`[[:name:]]` —— 类元素为 POSIX 字符类名
+        if (c == '[' && p->pos + 1 < p->len && p->b[p->pos + 1] == ':') {
+            int close = -1;
+            for (int k = p->pos + 2; k + 1 < p->len; k++) {
+                if (p->b[k] == ':' && p->b[k + 1] == ']') { close = k; break; }
+            }
+            if (close > 0) {
+                char nm[24];
+                int nl = close - (p->pos + 2);
+                if (nl > 0 && nl < (int)sizeof(nm)) {
+                    memcpy(nm, p->b + p->pos + 2, (size_t)nl);
+                    nm[nl] = 0;
+                    unsigned char plo[16], phi[16];
+                    int pn = rp_posix_class(nm, plo, phi);
+                    if (pn < 0) { snprintf(p->err, sizeof(p->err), "未知 POSIX 字符类 [[:%s:]]", nm); return NULL; }
+                    p->pos = close + 2;
+                    for (int i = 0; i < pn && ncls < 256; i++) { lo[ncls] = plo[i]; hi[ncls] = phi[i]; ncls++; }
+                    continue;
+                }
+            }
+        }
         unsigned char elo[10], ehi[10];
         int n = rp_parse_class_elem(p, elo, ehi);
         if (n < 0) return NULL;
@@ -9672,7 +9739,10 @@ static void px_tls_debug(const char* fmt, ...) {
 }
 
 // 建立 HTTPS 连接（TCP + TLS 握手完成；尝试会话票据恢复）；失败返回 NULL
-static HttpsSession* https_connect(const char* host, int port) {
+// M117（qg-issue 72 F2）：带超时的 TCP 连接（定义在 hconnect 附近，此处前置声明）
+static int px_tcp_connect_timeout(const char* host, int port, int timeout_ms);
+
+static HttpsSession* https_connect_t(const char* host, int port, int timeout_ms) {
     HttpsSession* s = (HttpsSession*)xmalloc(sizeof(HttpsSession));
     memset(s, 0, sizeof(*s));
     mbedtls_net_init(&s->net);
@@ -9686,7 +9756,13 @@ static HttpsSession* https_connect(const char* host, int port) {
     int ret;
     if ((ret = mbedtls_ctr_drbg_seed(&s->ctr_drbg, mbedtls_entropy_func, &s->entropy,
                                      (const unsigned char*)pers, strlen(pers))) != 0) goto fail;
-    if ((ret = mbedtls_net_connect(&s->net, host, portstr, MBEDTLS_NET_PROTO_TCP)) != 0) goto fail;
+    // M117（qg-issue 72 F2）：HTTPS 也走带超时的连接（mbedtls_net_connect 是无超时阻塞，
+    //   对黑洞地址同样挂死）。timeout_ms<=0 → 保持原 mbedtls 路径（零回归）。
+    if (timeout_ms > 0) {
+        int cfd = px_tcp_connect_timeout(host, port, timeout_ms);
+        if (cfd < 0) goto fail;
+        s->net.fd = cfd;   // mbedtls_net_context 就是 fd 包装；后续 send/recv/close 均由 mbedtls 走
+    } else if ((ret = mbedtls_net_connect(&s->net, host, portstr, MBEDTLS_NET_PROTO_TCP)) != 0) goto fail;
     px_ensure_cacert();
     if ((ret = mbedtls_ssl_config_defaults(&s->conf, MBEDTLS_SSL_IS_CLIENT,
                                            MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT)) != 0) goto fail;
@@ -9755,6 +9831,16 @@ static void https_close(HttpsSession* s) {
 
 // ==================== M32 wss 客户端导出（runtime_ws.c 复用） ====================
 // HttpsSession 为 runtime.c 内部类型；对 runtime_ws.c 暴露 void* 包装。
+// 连接阶段默认上限：与 http_request 的 opts.timeout_ms 默认值同口径（30s）。
+// M117（qg-issue 72 F2）：http_get / http_post / px_http_request / s3_* 等**没有 opts 入口**
+//   的路径此前是"无限等待"（对不可达对端挂到内核重传超时，实测 >45s），现统一受此上限约束。
+#define PX_DEFAULT_CONNECT_TIMEOUT_MS 30000
+
+// https_connect：默认上限包装（无 opts 的调用点用）
+static HttpsSession* https_connect(const char* host, int port) {
+    return https_connect_t(host, port, PX_DEFAULT_CONNECT_TIMEOUT_MS);
+}
+
 void* px_https_connect_ex(const char* host, int port) {
     return (void*)https_connect(host, port);
 }
@@ -9889,7 +9975,14 @@ static LXValue px_net_err(const char* fmt, ...) {
 }
 
 // 建立 TCP 连接（域名解析），返回 fd；失败返回 -1
-static int hconnect(const char* host, int port) {
+// M117（qg-issue 72 F2）：**带超时的 TCP 连接**。
+//   缺陷现场：http_request/http_get 的 opts.timeout_ms 只被写进 SO_RCVTIMEO/SO_SNDTIMEO，
+//   而这两个选项**不约束 connect()** ⇒ 对"连不上的对端"（黑洞地址/丢 SYN）会阻塞到
+//   内核默认重传超时（实测 >45s 仍未返回；Go 的 http.Client{Timeout} 覆盖连接阶段）。
+//   对安装器/守护进程是"永久卡死"级别的：一个不可达镜像就能让整条流程挂住。
+//   修法：socket 置非阻塞 → connect 期望 EINPROGRESS → poll(POLLOUT, timeout_ms) →
+//         getsockopt(SO_ERROR) 判定 → 恢复阻塞模式（后续 SO_RCVTIMEO 语义不变）。
+static int px_tcp_connect_timeout(const char* host, int port, int timeout_ms) {
     struct addrinfo hints, *res = NULL;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_INET;
@@ -9899,9 +9992,44 @@ static int hconnect(const char* host, int port) {
     if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) return -1;
     int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (fd < 0) { freeaddrinfo(res); return -1; }
-    if (connect(fd, res->ai_addr, res->ai_addrlen) < 0) { freeaddrinfo(res); close(fd); return -1; }
+    if (timeout_ms <= 0) {
+        // 未指定超时 → 保持原阻塞语义（零回归）
+        if (connect(fd, res->ai_addr, res->ai_addrlen) < 0) { freeaddrinfo(res); close(fd); return -1; }
+        freeaddrinfo(res);
+        return fd;
+    }
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    int rc = connect(fd, res->ai_addr, res->ai_addrlen);
+    if (rc < 0 && errno != EINPROGRESS) {
+        freeaddrinfo(res); close(fd); return -1;
+    }
+    if (rc < 0) {
+        struct pollfd pfd;
+        pfd.fd = fd; pfd.events = POLLOUT; pfd.revents = 0;
+        int prc;
+        do { prc = poll(&pfd, 1, timeout_ms); } while (prc < 0 && errno == EINTR);
+        if (prc <= 0) {   // 0=超时，-1=错误
+            freeaddrinfo(res); close(fd); return -1;
+        }
+        int soerr = 0;
+        socklen_t sl = sizeof(soerr);
+        if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &sl) != 0 || soerr != 0) {
+            freeaddrinfo(res); close(fd); return -1;
+        }
+    }
+    if (flags >= 0) fcntl(fd, F_SETFL, flags);   // 恢复阻塞（SO_RCVTIMEO/SO_SNDTIMEO 生效）
     freeaddrinfo(res);
     return fd;
+}
+
+// hconnect_t：hconnect 的带超时版（timeout_ms<=0 时与原语义一致）
+static int hconnect_t(const char* host, int port, int timeout_ms) {
+    return px_tcp_connect_timeout(host, port, timeout_ms);
+}
+
+static int hconnect(const char* host, int port) {
+    return px_tcp_connect_timeout(host, port, PX_DEFAULT_CONNECT_TIMEOUT_MS);
 }
 
 // 在已建立连接上完成一次 HTTP 往返（keep-alive 安全：按 Content-Length/chunked 精确读）
@@ -10171,11 +10299,12 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
             slot.is_tls = is_https;
             slot.fd = -1;
             slot.tls = NULL;
+            // M117（qg-issue 72 F2）：连接阶段也受 opts.timeout_ms 约束（此前只管收发）
             if (is_https) {
-                slot.tls = https_connect(conn_host, conn_port);
+                slot.tls = https_connect_t(conn_host, conn_port, timeout_ms);
                 slot.fd = slot.tls ? slot.tls->net.fd : -1;
             } else {
-                slot.fd = hconnect(conn_host, conn_port);
+                slot.fd = hconnect_t(conn_host, conn_port, timeout_ms);
             }
             if (slot.fd < 0) {
                 if (attempt < max_attempts - 1) continue;
