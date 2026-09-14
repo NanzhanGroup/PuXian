@@ -10520,13 +10520,13 @@ static LXValue fn_cg_generate(LXValue* args, int nargs, void* ctx) {
         px_srcline(649);
          _v1158 = px_add(_v1158, px_str("      }\n"));
         px_srcline(650);
-         _v1158 = px_add(_v1158, px_str("      return _code;\n"));
+         _v1158 = px_add(_v1158, px_str("      return px_exit_code_final(_code);   // M120（qg-issue 76 E1）\n"));
         px_srcline(651);
          _v1158 = px_add(_v1158, px_str("    }\n"));
     }
     else {
         px_srcline(653);
-         _v1158 = px_add(_v1158, px_str("    return 0;\n"));
+         _v1158 = px_add(_v1158, px_str("    return px_exit_code_final(0);   // M120（qg-issue 76 E1）\n"));
     }
     px_srcline(654);
      _v1158 = px_add(_v1158, px_str("}\n"));
@@ -14926,7 +14926,7 @@ static LXValue fn_bc_emit_c_program(LXValue* args, int nargs, void* ctx) {
     px_srcline(1859);
      _v1743 = px_add(_v1743, px_str("    }\n"));
     px_srcline(1860);
-     _v1743 = px_add(_v1743, px_str("    return _code;\n"));
+     _v1743 = px_add(_v1743, px_str("    return px_exit_code_final(_code);   // M120（qg-issue 76 E1）：协程隔离错误 → 退出码非 0\n"));
     px_srcline(1861);
      _v1743 = px_add(_v1743, px_str("}\n"));
     px_srcline(1862);
@@ -15504,6 +15504,6 @@ int main(int argc, char** argv) {
       } else if (_r.type == PX_INT) {
         _code = (int)_r.as.i;
       }
-      return _code;
+      return px_exit_code_final(_code);   // M120（qg-issue 76 E1）
     }
 }

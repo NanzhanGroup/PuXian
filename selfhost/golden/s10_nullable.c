@@ -1,4 +1,3 @@
-/* 由普贤 (PuXian) 编译器自动生成 — px build */
 #include "runtime.h"
 #include <string.h>
 #include <stdio.h>
@@ -41,5 +40,5 @@ int main(int argc, char** argv) {
     (void)(px_call(px_get_global("print"), (LXValue[]){px_str("d==null:"), px_eq(px_get_global("d"), px_null())}, 2));
     px_srcline(16);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_str("maybe:"), ({ LXValue _t4 = px_call(px_get_global("maybe"), (LXValue[]){px_null()}, 1); px_is_null(_t4) ? px_neg(px_int(1LL)) : _t4; }), ({ LXValue _t5 = px_call(px_get_global("maybe"), (LXValue[]){px_int(9LL)}, 1); px_is_null(_t5) ? px_neg(px_int(1LL)) : _t5; })}, 3));
-    return 0;
+    return px_exit_code_final(0);   // M120（qg-issue 76 E1）
 }

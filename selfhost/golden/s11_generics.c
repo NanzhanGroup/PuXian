@@ -1,4 +1,3 @@
-/* 由普贤 (PuXian) 编译器自动生成 — px build */
 #include "runtime.h"
 #include <string.h>
 #include <stdio.h>
@@ -86,5 +85,5 @@ int main(int argc, char** argv) {
     px_set_global("nums", px_list_n((LXValue[]){px_int(5LL), px_int(6LL), px_int(7LL)}, 3));
     px_srcline(46);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_str("typed-first:"), px_call(px_get_global("first"), (LXValue[]){px_get_global("nums")}, 1)}, 2));
-    return 0;
+    return px_exit_code_final(0);   // M120（qg-issue 76 E1）
 }

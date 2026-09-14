@@ -1141,5 +1141,5 @@ int main(int argc, char** argv) {
         px_srcline(249);
         (void)(px_call(px_get_global("exit"), (LXValue[]){px_int(1LL)}, 1));
     }
-    return 0;
+    return px_exit_code_final(0);   // M120（qg-issue 76 E1）
 }
