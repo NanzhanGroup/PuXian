@@ -568,6 +568,20 @@ def lc_check_program(items, src, known, diags):
     lc_check_lines(src, diags)
     # 2) 顶层定义集合 + L005 + L006
     let top = lc_collect_top(items, diags)
+    # M116（qg-issue 71 D1）：`def main()` **是自动入口**（编译轨/解释轨都在所有
+    #   顶层语句之后自动调用一次）。顶层再显式写一行 `main()` ⇒ 整个程序跑两遍，
+    #   **副作用全部翻倍**（实测：服务端日志重复、签名器 spawn 两个守护进程、文件写两次）。
+    #   只告警不改语义（老代码零破坏）；从 C/Go/Java 过来的人几乎必踩。
+    if lc_dhas(top, "main"):
+        var mi = 0
+        while mi < len(items):
+            let mst = items[mi]
+            if mst[0] == "ExprStmt":
+                let mex = mst[1]
+                if mex[0] == "Call" and mex[1][0] == "Var" and lc_unq(mex[1][1]) == "main":
+                    lc_warn(diags, "L009", lc_stmt_pos(mst),
+                        "顶层显式调用 main() 与 def main() 自动入口重复 → 程序会跑两遍（删掉这行）")
+            mi += 1
     let ks = top.keys()
     var ki = 0
     while ki < len(ks):

@@ -17,6 +17,9 @@ var g_line = 1
 var g_col = 1
 var g_indent_stack = [0]
 var g_at_line_start = true
+# M116（qg-issue 71 D4）：括号深度（( [ { 配对）。>0 = 当前处于续行状态，
+#   行首缩进不参与缩进栈、不发「缩进/去缩进」。
+var g_bracket_depth = 0
 var g_toks = []  # 结构化 token 列表 [kind, val, line, col]
 var g_count = 0
 var g_pending = []  # 插值产生的中间 token：[kind, val, line, col]
@@ -51,6 +54,12 @@ def advance():
     return c
 # ---------- 输出 / 错误 ----------
 def emit_at(kind, val, line, col):
+    # M116（qg-issue 71 D4）：括号深度在此**唯一入口**记账 —— 含插值展开的 g_pending
+    #   路径（scan_interp_expr 自产 "(" / ")" 各一枚），保证配平。
+    if kind == "(" or kind == "[" or kind == "{":
+        g_bracket_depth += 1
+    elif (kind == ")" or kind == "]" or kind == "}") and g_bracket_depth > 0:
+        g_bracket_depth -= 1
     g_toks.append([kind, val, line, col])
     g_count += 1
 def emit(kind, val):
@@ -113,6 +122,15 @@ def handle_line_start():
             skip_comment()
             continue
         break
+    # M116（qg-issue 71 D4）：括号内续行**不参与缩进栈**。
+    #   spec §4.1 只说"括号内 INDENT/DEDENT 被 parser 忽略"，但缩进栈此前照常压栈：
+    #   续行比语句更深时压入一个永不配对的层级，行尾一次弹两级 ⇒ 多出一枚「去缩进」，
+    #   把外层代码块**提前结束**（实测：函数体里任何多行字面量都在 def 体后留下孤儿
+    #   DEDENT，parser 报在下一行行首，指向与真因无关）。此处直接不参与，
+    #   同时天然支持"续行缩进较浅"（闭合括号顶格）这种写法。
+    if g_bracket_depth > 0:
+        g_at_line_start = false
+        return
     let cur = g_indent_stack[len(g_indent_stack) - 1]
     if indent > cur:
         g_indent_stack.append(indent)
@@ -715,6 +733,7 @@ def lex_tokens(src):
     g_col = 1
     g_indent_stack = [0]
     g_at_line_start = true
+    g_bracket_depth = 0
     g_toks = []
     g_count = 0
     g_pending = []

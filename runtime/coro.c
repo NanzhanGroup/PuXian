@@ -50,6 +50,13 @@
 // ---- M96-S2：offload 外包任务（阻塞网络 native 外包执行线程池；前向声明见下）----
 typedef struct PxOffTask PxOffTask;
 
+// ---- M116（qg-issue 71 D7）：协程终止原因（TLS）----
+//   done_cb 由同一 worker 线程**同步**调用，故此 TLS 读写无数据竞争；
+//   runtime.c 的 px_serve_route_done / px_serve_mw_done 据此把"handler 出错"
+//   变成 500 响应（此前静默 204）。
+static __thread int t_coro_errored = 0;
+int px_coro_errored(void) { return t_coro_errored; }
+
 // ---- 协程状态机 ----
 #define CORO_READY   0
 #define CORO_RUNNING 1
@@ -255,15 +262,23 @@ static void* coro_worker(void* arg) {
         g_cur_coro = c;
         int yield_rc = 0;
         c->run_begin_us = coro_now_us();   // M94-S2：本次时间片起点（抢占预算基准）
-        if (px_spawn_isolate_begin()) {
+        // M116（qg-issue 71 D7）：**协程终止原因** —— 不再依赖 px_spawn_isolate_begin
+        //   的返回值（跨编译单元 returns_twice 语义不可靠，见 runtime.h 告警；实测
+        //   错误路径下 `if (px_spawn_isolate_begin())` 仍走真分支）。改为：调用方全程
+        //   不判返回值，事后查 runtime.c 在 longjmp 落点置位的 TLS 标志。
+        //   此前错误协程被当成"正常跑完"，done_cb 收到 vm.ret_val 初值 PX_NULL ⇒
+        //   HTTP handler 出错时客户端拿到 **204 No Content**（静默成功语义）。
+        px_spawn_isolate_begin();
+        if (!px_isolate_errored()) {
             if (c->first) {                    // 首次：压顶层帧跑（可让出）
                 c->first = 0;
                 yield_rc = px_vm_run_coro(&c->vm, c->f, c->args, c->nargs);
             } else {                            // 恢复：从让出点继续（不压帧）
                 yield_rc = px_vm_resume(&c->vm);
             }
-            px_spawn_isolate_end();
-        }                                        // 错误：longjmp 回 → 协程异常终止
+        }
+        int errored = px_isolate_errored();
+        px_spawn_isolate_end();
         g_cur_coro = NULL;
         px_vm_unbind();
         px_gc_thread_leave();
@@ -326,10 +341,15 @@ static void* coro_worker(void* arg) {
                     c->f && c->f->name ? c->f->name : "?");
         // M95-S2：完成回调（摘除 g_all 后、free 前；worker 仍注册 GC。ret 已存
         //   vm.ret_val；回调内须 PX_KEEP 保护后再转移给全局 GC 根 —— 见调用方约定）
+        // M116（qg-issue 71 D7）：把"本次协程终止是否因运行时错误"以 **TLS** 告知
+        //   done_cb —— done_cb 由本 worker **同一线程同步**调用（不跨线程、不排队），
+        //   故 TLS 读写无竞争；回调返回后立即复位，不影响后续协程。
+        t_coro_errored = errored;
         if (c->done_cb) {
             LXValue rv = c->vm.ret_val;
             c->done_cb(c->done_ud, rv);
         }
+        t_coro_errored = 0;
         free(c->args);
         coro_vm_free(&c->vm);
         free(c);

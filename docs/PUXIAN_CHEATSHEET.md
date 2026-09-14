@@ -83,7 +83,7 @@ print("upper=" + to_upper("px"))
 
 1. **`{}` 字面量 = `null`**，不是空 dict；空 dict 用 `json_parse("{}")`。
 2. **无 `d[k] = v` 赋值**；dict 写用 `.set(k, v)`、查 `.has(k)`、读 `d[k]`。
-3. **表达式可跨行（M70 起）**：list/dict/调用参数/元组/索引在括号（`[` `(` `{`）内可换行（含尾部逗号），语义与单行等价；但 `=` 后、二元/一元运算符后仍**不能**换行（语句边界以换行为准，需续行用括号包裹，如 `let x = (\n  a + b\n)`）；续行缩进须与缩进栈相容（不规则缩进仍 E2002）。
+3. **表达式可跨行（M70 起；M116 修好"闭合行缩进"）**：list/dict/调用参数/元组/索引在括号（`[` `(` `{`）内可换行（含尾部逗号），语义与单行等价；**括号内续行完全不受缩进栈约束** —— 闭合括号比语句更深（`return [1,\n            2]`）或顶格（`2]` 对齐第 0 列）都合法（M116 前：续行更深会在行尾多弹一级缩进，**把外层代码块提前结束**，报错行号还指向下一行行首）。但 `=` 后、二元/一元运算符后仍**不能**换行（语句边界以换行为准，需续行用括号包裹，如 `let x = (\n  a + b\n)`）。
 4. **dict 键限定 str**；键非 str 先 `str(k)`。
 5. **`let` 不可变**（重新赋值报错），要改的用 `var`。
 6. **顶层 `var`/`let` = 全局状态槽（M70-S3）**：主程序与 import 模块的顶层 var/let 声明均可跨函数访问/读写（var 可写、let 只读报 E3002；import 方启动时初始化一次，同名冲突用户值优先）；写**纯函数库**仍建议显式传参（确定性优先）。
@@ -107,6 +107,16 @@ print("upper=" + to_upper("px"))
 17. **`def main()` 是自动入口，别再手写 `main()`（M115 实测）**：定义了 `def main()` 时，**程序会在所有顶层语句之后自动调用它一次**（编译轨/解释轨一致）。
     若在文件末尾再显式写一行 `main()`，**整个程序会跑两遍**（实测：服务端日志重复、签名器会 spawn 两个守护进程、写文件写两次）。
     仓库内 `tools/gen_ecosystem.px`、`examples/repro_h2_vhost.px` 曾踩此坑（M115 修正）。
+    **M116 起 `px lint` 会报 `L009` 告警**（只告警不改语义），见到就删掉那行。
+18. **dict 缺键：两条轨都报 R1008（M116 统一）**：`d["缺的键"]` / `d.缺的字段` 在**编译轨与解释轨都**是运行时错误
+    `R1008 字典没有键 'xxx'`（进程以非零码退出）。M116 前编译轨**静默返回 null**、解释轨才报错 ——
+    实测后果：`str(r["role"])`（键缺失）在编译轨下得到字符串 `"null"` 并**被写进数据库**，是"静默数据损坏"。
+    正确写法是**先守卫**：`if d.has("k"): ... d["k"] ...`；`{}` 的字面量是 `null` 不是空 dict（见第 1 条）。
+19. **服务端 handler 出错 → 500（M116）**：`px_serve` / `http_serve` 的 handler / middleware 内抛运行时错误时，
+    客户端收到 **`500 Internal Server Error`**（body 说明现场在服务端 stderr），**服务继续可用**。
+    M116 前：VM 轨（协程化 handler）客户端收到 **`204 No Content`**（= 成功语义，客户端与监控全部误判、现场只在 stderr）；
+    C 轨/同步轨更糟 —— 错误直接打穿到进程级，**整台服务器退出**（后续请求 Connection refused）。
+    写 handler 请把"可能失败"的路径显式 `return {"status": 500, "body": ...}`，别指望它自己变成 500。
 
 ## 2. native 内置速查（311 全量见 `docs/native_index.json`，本表为常用）
 
@@ -115,7 +125,7 @@ print("upper=" + to_upper("px"))
 > **M72 诊断（Issue 9/10）**：`print/println` 已**逐行实时**（管道/journald 下不再攒 8KB）；`flush()` 显式刷 stdout/stderr；`print_err(...)` 输出到 **stderr**（渲染同 print）。**编译产物运行时错误带 .px 源位置**：`运行时错误 [函数 行N]: 消息`（pxi 解释器本就带 `错误 [code] 行:列`）。**spawn 协程内运行时错误默认隔离**（打印现场后宿主继续；`PX_SPAWN_ISOLATE=0` 关 → 回退原 exit 语义）。
 
 ### 文件系统
-`read_file(path)` → str · `write_file(path, s[, mode])` · `append_file` · `exists` · `list_dir` · `mkdir` · `remove` · `read_at/write_at`（随机）· `file_size` · `fsync_file` · `truncate_file` · `read_bytes/write_bytes`（bytes 读写）
+`read_file(path)` → str · `write_file(path, s[, mode])` · `append_file` · `exists` · `list_dir` · `mkdir(path[, mode])`（M116：mode 作用于**所有新建层级**，缺省 0755，最终仍受 umask 约束 —— `mkdir(dir, 0o700)` 才能表达"放私钥的目录"）· `remove` · `read_at/write_at`（随机）· `file_size` · `fsync_file` · `truncate_file` · `read_bytes/write_bytes`（bytes 读写）
 
 ### JSON / 编码
 `json_parse(s)` → dict/list/标量 · `json_stringify(v)` → str · `json_path(d, expr)` / `json_path_set` · `base64_encode/decode` · `int_to_hex/hex_to_int` · `bytes_to_hex/hex_to_bytes`
@@ -128,6 +138,7 @@ print("upper=" + to_upper("px"))
 
 ### HTTP（客户端/服务端）
 客户端：`http_get(url)` `http_post(url, body[, headers])` `http_request(method, url[, body, headers])` `http_get_stream` · 服务端：`http_serve(port, handler)`（TCP 每请求回调）· `http_serve_unix(sock_path, handler)`（**Unix socket 服务端**，M82；自动清残留 + 0600）· `px_serve(port, docroot[, tls, opts])`（静态 + .px 应用服务器，opts 可 {http3:true, max_body_size, rate_limit...}）· `px_exec`（语言内嵌 .px）· `http_unix(sock, path, ...)`（Unix socket 客户端，M56）
+> **M116：handler/middleware 内抛运行时错误 → 客户端收 `500`（含说明 body），服务继续可用**（此前 VM 轨收 204 静默成功、C 轨整台服务器退出，见 §1.1 事实 19）。
 
 ### WebSocket / SSE
 `ws_serve(port, onmsg)` `ws_connect(url)` `ws_send` `ws_recv` `ws_close` `ws_ping` `ws_heartbeat(conn, ms, cb)` `ws_broadcast(server, msg)` `ws_connect_auto(url, ...)` · SSE：`sse_serve(port, cb)` `sse_send` `sse_close` `sse_connect(url)` `sse_read` · **M83-S6 同端口流式（http_serve/http_serve_unix）**：`http_stream(path, on_connect)` 把同端口某 path 注册为流式 SSE（on_connect(req) 内 `sse_send(req["conn"], chunk)` 逐块推、可 `sse_send` dict {event,data,id,retry}，on_connect 返回自动关闭；普通 JSON handler 同端口共存，流式路由优先；明文 HTTP/HTTP-over-unix，px_serve 面暂不接入）
@@ -137,6 +148,7 @@ print("upper=" + to_upper("px"))
 
 ### DNS（域名解析）
 `dns_lookup(domain)` → list[str]（**M84-S3**，A+AAAA 全量返回，getaddrinfo；顺序即解析器返回序）——失败（NXDOMAIN/超时/无地址记录）返回 **Err("dns: ...")**，调用方可 `is_err()`/`?` 判定（区别于空 list）。守护域名解析（bs-safeip resolve_ips 类）不再依赖 getent 外部命令代偿。
+`dns_txt(domain)` → list[str]（**M103-S2a**，手写 DNS TXT 查询，**M116 起 UDP 截断自动回退 TCP**）——多记录/长 TXT 域名（`google.com` 17 条、`cloudflare.com` 28 条）此前因 TC 截断直接 Err，现按 RFC 1035 §4.2.2 自动 TCP 重发。**语义注意**：无 TXT 记录 **与 NXDOMAIN 都返回空 list（非报错）** —— 与 Go `net.LookupTXT`（NXDOMAIN 报错）**不同**，移植 Go 代码时按"空 = 无记录"处理。
 
 ### SQLite
 `sqlite_open(path)` → conn · `sqlite_exec(conn, sql[, params])` · `sqlite_query(conn, sql[, params])` → list[dict] · `sqlite_close` · `sqlite_escape` · `sqlite_last_insert_rowid`

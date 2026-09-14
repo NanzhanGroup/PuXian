@@ -6,6 +6,76 @@
 
 ## [Unreleased]
 
+### 真实模块 PuXian 化暴露的**静默错/致命错**五条修复（M116）
+
+> **主题：继续用 `ws-center` / `ws-ddns` 的 PuXian 化当"探针"，专治"不报错但结果错"与
+> "错得没信号"这两类缺陷** —— 详细缺口-决策-门见 `docs/M116_PLAN.md`、台账 `qg-issue 71`。
+> 共同点：既有门（对拍/自举/示例）**全绿**，因为**两条轨各错各的、或错在同一方向**。
+
+- **D2 · 字典缺键：编译轨静默 `null`、解释轨 `R1008`（两轨分叉 → 静默数据损坏）**
+  - 实测代价：ws-center 移植时 `str(r["role"])`（键缺失）在编译轨下得到字符串 `"null"`
+    并**被写进数据库**；解释轨当场报错。违背 `docs/MINI_SUBSET §五`「双模式一致」与
+    `docs/M65_PLAN.md` 的 R1008 口径。
+  - 修：`px_index` / `px_field` 的 dict 分支补 `px_dict_has` 判定 → 缺键统一
+    `R1008: 字典没有键 'xxx'`（编译轨非零退出，与解释轨同口径）；
+    `px_index` 的非 str 键文案对齐解释轨 `R1002`。
+- **D4 · 括号内续行缩进** —— 函数体被**提前结束**，报错行号指向无辜的下一行**
+  - 实测最小复现：`def f():` 内 `return [1,` 换行后 `            2]` ⇒
+    `4:1 语法错误 E2001: 意外的 token: 去缩进`（真因是缩进栈被压入一个**永不配对**的层级，
+    行尾一次弹两级 → 多出一枚「去缩进」，把 `def` 体截断）。同形：dict 字面量、调用实参、嵌套括号。
+  - 修：`pxlexer.px` 增 `g_bracket_depth`（括号深度，在 `emit_at` **唯一入口**记账，含字符串插值
+    产出的 `(` `)`）—— 深度 >0 时行首缩进**不参与缩进栈、不发缩进/去缩进**（对齐 spec §4.1
+    「括号内这些 token 被忽略」的本意）。顺带支持"闭合括号顶格"（缩进更浅）写法。
+  - **旁证（说明命中率）**：`px fmt` 对多行调用的规范续行缩进（`add3(1,` 换行后 `    2,`）
+    恰好是**修复前不可解析**的写法 —— 即"工具自己产出的风格，编译器自己不认"。
+  - **golden 变更（有意、有据）**：`selfhost/golden/s15_multiline.tokens` 重定基 ——
+    该用例是唯一含"括号内续行缩进"的 lexer 用例，旧 golden（Rust 版遗留）里有 24 条
+    `缩进/去缩进` 位于括号内；新词法器按 spec §4.1 不再发这些 token。
+    已逐条核验：**差异只有这 24 条，没有任何其它 token 漂移**（310 → 287 行）。
+    该用例的 **AST/codegen/stdout golden 零变化**（parser 本就忽略这些 token）。
+- **D7 · handler 出错没有错误信号（VM 轨 204 / C 轨整台服务器退出）**
+  - VM 轨实测：handler 内一次 `req["headers"]["X-Missing"]` → 协程隔离后**客户端收到
+    `204 No Content`**（= 无内容/成功语义），现场只在服务端 stderr；访问日志也记 204。
+  - C 轨/同步轨实测更糟：错误直接打穿到进程级（无隔离点）→ **进程 `exit(1)`**，
+    下一个请求 `Connection refused`。
+  - 根因（顺带修掉一个**跨编译单元 `returns_twice` 语义**的坑）：`px_spawn_isolate_begin()`
+    的错误路径返回值在 `coro.c` 里**未被当作第二次返回**（同 M96-S2 的教训，runtime.h 早有告警）
+    ⇒ "协程是否出错"改由该函数在 longjmp 落点**置 TLS 标志**、调用方事后查询；
+    新增 `px_serve_error_resp(kind)`（handler/middleware 通用 500 响应值），
+    协程轨（`px_serve_route_done` / `px_serve_mw_done`）与同步轨
+    （`runtime_route.c` + vhost 直调，改用既有 `px_native_call_capture` 做错误边界）**行为一致**。
+- **D5 · `dns_txt` 无 TCP 回退（Go 能查的域名 PuXian 查不了）**
+  - 实测：`dns_txt("google.com")` / `dns_txt("cloudflare.com")` 直接
+    `Err(response truncated (TCP 回退二期))`，而 Go `net.LookupTXT` 自动回退 TCP ⇒ **能力面倒挂**；
+    对 ws-ddns 这类"TXT 即协议载体"的系统，多记录/长 TXT 是常态。
+  - 修：按 RFC 1035 §4.2.2 实现 UDP 截断（TC）→ TCP 重发（2 字节长度前缀，短读循环读满）；
+    实测 `google.com` 17 条、`cloudflare.com` 28 条均正常返回。
+    保留显式口径：**无 TXT 记录与 NXDOMAIN 都返回空 list**（与 Go 不同，已在速查包注明）。
+- **D6 · `mkdir(path[, mode])`（密钥目录 0700 表达不出）**
+  - 实测：`mkdir` 单参、权限恒 0755；Go `os.MkdirAll(keyout, 0700)` 只能退化 0755 或外挂 `chmod`。
+  - 修：新增可选 `mode`（作用于**所有新建层级**，最终仍受 umask 约束，同 Go 语义）；
+    解释器内置分发层 `selfhost/ibuiltin.px` **同步透传**（qg-issue 69 的同族缺陷：手写转发层
+    漏列尾参 = 解释器轨静默丢弃）。
+- **D1 · `def main()` + 顶层 `main()` = 整个程序跑两遍 → `px lint` 新增 `L009`**
+  - 只告警不改语义（老代码零破坏）；实测踩点：服务端日志重复、签名器 spawn 两个守护进程、
+    文件写两次。仓库内 4 处已登记。
+- **D7 续 · `http_serve` 轨（不止 `px_serve`）也有同一个洞**：`http_handler_done` 未纳入
+  M116 修复 ⇒ 同上场景（handler 出错）实测是 **200 + 空 body**（比 204 更隐蔽：客户端以为
+  拿到一个正常但空白的响应）。已一并修（`px_serve_route_done` / `px_serve_mw_done` /
+  `http_handler_done` / `runtime_route.c` 同步轨 / vhost 直调轨 —— 五处行为一致）。
+- **D13 · multipart 段体被多削一个尾部换行（文件内容静默少 1 字节）**
+  - 实锤：ws-center `/v1/files/upload` 上传 18 字节文本，PuXian 侧 `size=17`、Go 侧 `18`。
+  - 根因：`px_parse_multipart` 在 `ce` 扫描（已停在段体之后、boundary 之前的 CRLF）之后
+    **又**削了一次尾部 `\n`/`\r` ⇒ 吃掉**数据自身**的结尾换行。
+  - 影响面：任何上传文本/CRLF 结尾文件都会少字节（数据完整性，非显示问题）。
+- **门**：新增 `examples/m116_builtin_semantics/verify.sh`（双轨语义 + D2 两轨负控 + D5 联网
+  软检 + D7 端到端 500/存活 **VM 与 C 轨各一遍** + 门自检负控 + D4 反例自检），并入 CI 工具自测步；
+  D13 的回归覆盖在 `ws-center/px/tests/parity_center.sh`（上传 size 逐字节对拍）。
+- **真实模块验收（本轮）**：`ws-center` PuXian 化**补齐最后 5 组路由**（files/routing/billing/
+  agents/群消息 dispatch），对拍 **97/97**（此前 38/38）；`ws-ddns` 17/17 复跑仍全绿，
+  并改用 `mkdir(keyout, 448)` 与 Go 的 0700 对齐。**移植过程中被 D2 当场照出 3 个"编译轨恰好
+  能跑"的静默缺陷**（裸取缺键、前缀切片差一、bytes body 不生效），详见 `ws-center/px/center/README.md`。
+
 ### 服务进程/环境原语补全 —— ws-center / ws-ddns PuXian 化实测缺口（M115）
 
 > **主题：把 `ws-center`（2717 行 Go）与 `ws-ddns`（1141 行 Go）两个真实模块 PuXian 化，

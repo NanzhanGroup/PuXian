@@ -266,6 +266,12 @@ def i_call_builtin(name, args, pos):
     if name == "remove":
         return Ok(remove(args[0]))
     if name == "mkdir":
+        # M116（qg-issue 71 D6）：mode 透传（同 write_file/append_file 缺陷类：
+        #   手写转发层漏列尾参 = 解释器轨静默丢弃，而解释器不校验实参个数）
+        if len(args) < 1 or len(args) > 2:
+            return Err(i_r1002("mkdir 需要 (路径[, mode])", pos))
+        if len(args) == 2:
+            return Ok(mkdir(args[0], args[1]))
         return Ok(mkdir(args[0]))
     if name == "list_dir":
         return Ok(list_dir(args[0]))
