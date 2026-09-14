@@ -8,6 +8,10 @@
 #   4. `sse_connect` 只支持 GET/TCP：LLM 走 Unix socket 的 POST+SSE 无法表达（chat 的核心通路）
 #
 # 用法：bash examples/m118_realworld_defects/verify.sh
+#
+# 稳健性铁律（M118 尾实测教训）：**不许用固定 sleep 等 socket 就绪** ——
+#   CI 冷启动实测 >0.6s，固定 sleep 会假红（本地不可能复现）。统一改成轮询到就绪；
+#   长驻/联网步骤一律挂 `timeout`，宁可快速失败也不要挂死 CI。
 set -u
 cd "$(dirname "$0")/../.."
 PX=./tools/px
@@ -24,8 +28,8 @@ def main():
     var s = "ab"
     print("k=${d[\"k\"]} len=${len(s)} c=${contains(s, \"a\")} j=${join(\",\", [\"x\", \"y\"])}")
 PXEOF
-if out=$($PX run "$TMP/t1.px" 2>&1) && [ "$out" = "k=v len=2 c=true j=x,y" ]; then ok "解释轨"; else bad "解释轨: $out"; fi
-if $PX build "$TMP/t1.px" >/dev/null 2>&1 && out=$("$TMP/build/t1" 2>&1) && [ "$out" = "k=v len=2 c=true j=x,y" ]; then ok "编译轨"; else bad "编译轨: $out"; fi
+if out=$(timeout 60 $PX run "$TMP/t1.px" 2>&1) && [ "$out" = "k=v len=2 c=true j=x,y" ]; then ok "解释轨"; else bad "解释轨: $out"; fi
+if $PX build "$TMP/t1.px" >/dev/null 2>&1 && out=$(timeout 60 "$TMP/build/t1" 2>&1) && [ "$out" = "k=v len=2 c=true j=x,y" ]; then ok "编译轨"; else bad "编译轨: $out"; fi
 
 echo "── 2. 匿名函数多行体（语句位 + 调用实参位）"
 cat > "$TMP/t2.px" <<'PXEOF'
@@ -40,8 +44,8 @@ def main():
         return r == 0)
     print("evens=", json_stringify(evens))
 PXEOF
-if out=$($PX run "$TMP/t2.px" 2>&1 | tr '\n' '|') && [ "$out" = "f= 6|evens= [2,4]|" ]; then ok "解释轨"; else bad "解释轨: $out"; fi
-if $PX build "$TMP/t2.px" >/dev/null 2>&1 && out=$("$TMP/build/t2" 2>&1 | tr '\n' '|') && [ "$out" = "f= 6|evens= [2,4]|" ]; then ok "编译轨（VM 轨）"; else bad "编译轨: $out"; fi
+if out=$(timeout 60 $PX run "$TMP/t2.px" 2>&1 | tr '\n' '|') && [ "$out" = "f= 6|evens= [2,4]|" ]; then ok "解释轨"; else bad "解释轨: $out"; fi
+if $PX build "$TMP/t2.px" >/dev/null 2>&1 && out=$(timeout 60 "$TMP/build/t2" 2>&1 | tr '\n' '|') && [ "$out" = "f= 6|evens= [2,4]|" ]; then ok "编译轨（VM 轨）"; else bad "编译轨: $out"; fi
 
 echo "── 3. spawn <闭包>：必须是 E2011 可读诊断（不再泄漏内部 AST）"
 cat > "$TMP/t3.px" <<'PXEOF'
@@ -61,21 +65,28 @@ def handler(req):
 def main():
     var sock = "/tmp/m118_sse.sock"
     spawn http_serve_unix(sock, handler)
-    sleep(0.6)
     var opts = json_parse("{}")
     opts.set("sock", sock)
     opts.set("method", "POST")
     opts.set("body", "{\"stream\":true}")
     var hdrs = json_parse("{}")
-    hdrs.set("Authorization", "Bearer t")
+    hdrs.set("Authorization", "Bearer ***")
     opts.set("headers", hdrs)
-    var id = sse_connect("/v1/chat/completions", opts)
+    # 就绪轮询：等到连得上为止（最多 10s）。固定 sleep 在冷启动 CI 上会假红。
+    var id = null
+    var tries = 0
+    while tries < 100:
+        id = sse_connect("/v1/chat/completions", opts)
+        if id != null:
+            break
+        sleep(0.1)
+        tries = tries + 1
     if id == null:
-        print("FAIL connect")
+        print("FAIL connect tries=", tries)
         exit(1)
     var n = 0
     var last = ""
-    while true:
+    while n < 100:
         var ev = sse_read(id)
         if ev == null:
             break
@@ -86,7 +97,7 @@ def main():
     sse_close(id)
     print("events=", n, " last=", last)
 PXEOF
-if $PX build "$TMP/t4.px" >/dev/null 2>&1 && out=$("$TMP/build/t4" 2>&1) && [ "$out" = "events= 3  last= [DONE]" ]; then ok "unix+POST+自定义头+SSE 解析通（3 事件）"; else bad "unix+POST+SSE: $out"; fi
+if $PX build "$TMP/t4.px" >/dev/null 2>&1 && out=$(timeout 60 "$TMP/build/t4" 2>&1) && [ "$out" = "events= 3  last= [DONE]" ]; then ok "unix+POST+自定义头+SSE 解析通（3 事件）"; else bad "unix+POST+SSE: $out"; fi
 
 echo "── 5. 负控：坏 socket / 非流式响应必须优雅失败（不 panic、不挂死）"
 cat > "$TMP/t5.px" <<'PXEOF'
@@ -100,7 +111,7 @@ def main():
     var id2 = sse_connect("unix:///tmp/x.sock/v1")
     print("old_form_id=", id2)
 PXEOF
-if $PX build "$TMP/t5.px" >/dev/null 2>&1 && out=$("$TMP/build/t5" 2>&1 | tr '\n' '|') && [ "$out" = "bad_sock_id= null|old_form_id= null|" ]; then ok "坏 socket → null，旧 URL 形式 → null（零回归）"; else bad "负控: $out"; fi
+if $PX build "$TMP/t5.px" >/dev/null 2>&1 && out=$(timeout 60 "$TMP/build/t5" 2>&1 | tr '\n' '|') && [ "$out" = "bad_sock_id= null|old_form_id= null|" ]; then ok "坏 socket → null，旧 URL 形式 → null（零回归）"; else bad "负控: $out"; fi
 
 echo "── 6. 负控：M117 的 POSIX 类名仍要报错（防本轮改动回退）"
 cat > "$TMP/t6.px" <<'PXEOF'
@@ -108,7 +119,7 @@ def main():
     var r = regex_search("[[:nope:]]", "x")
     print("should_not_reach=", r)
 PXEOF
-err=$($PX run "$TMP/t6.px" 2>&1 | tr '\n' ' ')
+err=$(timeout 60 $PX run "$TMP/t6.px" 2>&1 | tr '\n' ' ')
 if echo "$err" | grep -q "字符类"; then ok "未知 POSIX 类名 → 运行期明确报错"; else bad "负控: $err"; fi
 
 echo

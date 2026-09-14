@@ -174,7 +174,7 @@ jobs:
           bash tools/gen_native_table.sh
           git diff --exit-code -- docs/ecosystem_index.json docs/native_index.json || { echo "❌ stdlib/runtime 变更未同步生态/native 索引 → 重跑生成器并同步 docs/ECOSYSTEM.md 与 docs/PUXIAN_CHEATSHEET.md"; exit 1; }
           echo "✅ 生态索引与 stdlib 一致 + native 清单与 runtime 一致"
-      - name: 工具自测（m64_fmt / m64_lint / m65_lsp / m65_mcp + m66_yaml/pxml/lunar + m71_mcp_build + m82_http_serve_unix）
+      - name: 工具自测（m64_fmt / m64_lint / m65_lsp / m65_mcp + m66_yaml/pxml/lunar + m71_mcp_build + m82_http_serve_unix + m116/m117/m118 真实缺陷用例）
         # ⚠️ 每条 verify **必须独立成行**：GitHub Actions 默认 shell 是 `bash -e {0}`，
         #    而 `set -e` **不**作用于 AND-OR 列表 —— `a && b` 里 a 失败只令该列表返回
         #    非零、**不会**中止脚本（实测 `bash -ec 'false && true; echo X'` 仍打印 X、
@@ -183,19 +183,19 @@ jobs:
         #    （两者都在等早已不存在的 0.1.0 版本串，二进制从 M-某 起就是 0.2.0）。
         #    登记：qg-issue 64。⇒ 新增门时**不要**用 `&&` 串联命令。
         run: |
-          bash examples/m64_fmt/verify.sh >/dev/null
-          bash examples/m64_lint/verify.sh >/dev/null
+          bash examples/m64_fmt/verify.sh > /tmp/v_m64_fmt.log 2>&1 || { echo "❌ m64_fmt verify 失败"; tail -40 /tmp/v_m64_fmt.log; exit 1; }
+          bash examples/m64_lint/verify.sh > /tmp/v_m64_lint.log 2>&1 || { echo "❌ m64_lint verify 失败"; tail -40 /tmp/v_m64_lint.log; exit 1; }
           python3 -c "import sys; assert sys.version_info[0]==3"
-          bash examples/m65_lsp/verify.sh >/dev/null
-          bash examples/m65_mcp/verify.sh >/dev/null
-          bash examples/m66_yaml/verify.sh >/dev/null
-          bash examples/m66_pxml/verify.sh >/dev/null
-          bash examples/m66_lunar/verify.sh >/dev/null
-          bash examples/m71_mcp_build/verify.sh >/dev/null
-          bash examples/m82_http_serve_unix/verify.sh >/dev/null
-          bash examples/m116_builtin_semantics/verify.sh >/dev/null
-          bash examples/m117_realworld_defects/verify.sh >/dev/null
-          bash examples/m118_realworld_defects/verify.sh >/dev/null
+          bash examples/m65_lsp/verify.sh > /tmp/v_m65_lsp.log 2>&1 || { echo "❌ m65_lsp verify 失败"; tail -40 /tmp/v_m65_lsp.log; exit 1; }
+          bash examples/m65_mcp/verify.sh > /tmp/v_m65_mcp.log 2>&1 || { echo "❌ m65_mcp verify 失败"; tail -40 /tmp/v_m65_mcp.log; exit 1; }
+          bash examples/m66_yaml/verify.sh > /tmp/v_m66_yaml.log 2>&1 || { echo "❌ m66_yaml verify 失败"; tail -40 /tmp/v_m66_yaml.log; exit 1; }
+          bash examples/m66_pxml/verify.sh > /tmp/v_m66_pxml.log 2>&1 || { echo "❌ m66_pxml verify 失败"; tail -40 /tmp/v_m66_pxml.log; exit 1; }
+          bash examples/m66_lunar/verify.sh > /tmp/v_m66_lunar.log 2>&1 || { echo "❌ m66_lunar verify 失败"; tail -40 /tmp/v_m66_lunar.log; exit 1; }
+          bash examples/m71_mcp_build/verify.sh > /tmp/v_m71_mcp_build.log 2>&1 || { echo "❌ m71_mcp_build verify 失败"; tail -40 /tmp/v_m71_mcp_build.log; exit 1; }
+          bash examples/m82_http_serve_unix/verify.sh > /tmp/v_m82_http_serve_unix.log 2>&1 || { echo "❌ m82_http_serve_unix verify 失败"; tail -40 /tmp/v_m82_http_serve_unix.log; exit 1; }
+          bash examples/m116_builtin_semantics/verify.sh > /tmp/v_m116_builtin_semantics.log 2>&1 || { echo "❌ m116_builtin_semantics verify 失败"; tail -40 /tmp/v_m116_builtin_semantics.log; exit 1; }
+          bash examples/m117_realworld_defects/verify.sh > /tmp/v_m117_realworld_defects.log 2>&1 || { echo "❌ m117_realworld_defects verify 失败"; tail -40 /tmp/v_m117_realworld_defects.log; exit 1; }
+          bash examples/m118_realworld_defects/verify.sh > /tmp/v_m118_realworld_defects.log 2>&1 || { echo "❌ m118_realworld_defects verify 失败"; tail -40 /tmp/v_m118_realworld_defects.log; exit 1; }
           echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects verify 全 PASS"
       - name: LSP / MCP 服务器冒烟（--version + 协议入口存在性）
         run: |
