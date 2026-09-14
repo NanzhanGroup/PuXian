@@ -1,0 +1,86 @@
+# M117 专项：真实模块（ws-install）PuXian 化暴露的三类缺陷回归
+#   ① read_file 读 st_size==0 的伪文件（/proc、/sys）此前返回空串
+#   ② http_request/http_get 的 opts.timeout_ms 不约束 connect（连不上的对端挂死）
+#   ③ 正则 POSIX 字符类 [[:space:]] 静默不匹配
+# 用法：px run examples/m117_realworld_defects/m117_defects.px   （双轨皆可）
+#      px build examples/m117_realworld_defects/m117_defects.px
+
+def main():
+    var pass = 0
+    var fail = 0
+
+    # ① 伪文件读取：宿主 /proc/sys/kernel/hostname 必非空（Go os.ReadFile 同口径）
+    var host = trim(read_file("/proc/sys/kernel/hostname"))
+    if len(host) > 0:
+        print("✅ ① read_file(/proc/sys/kernel/hostname) 非空，长度 " + str(len(host)))
+        pass += 1
+    else:
+        print("❌ ① read_file 伪文件返回空串（M117 前的老行为）")
+        fail += 1
+    # ①b 伪文件内容与 read_at 逐字节一致（两个 API 不打架）
+    var uptime = read_file("/proc/uptime")
+    var uptime2 = str(read_at("/proc/uptime", 0, 4096))
+    if len(uptime) > 0 and trim(uptime) == trim(uptime2):
+        print("✅ ①b read_file 与 read_at 的 /proc/uptime 内容一致")
+        pass += 1
+    else:
+        print("❌ ①b read_file=|" + uptime + "| read_at=|" + uptime2 + "|")
+        fail += 1
+    # ①c 空文件仍是空串（不是"读满缓冲"的假数据）
+    if len(read_file("/dev/null")) == 0:
+        print("✅ ①c /dev/null 仍是空串")
+        pass += 1
+    else:
+        print("❌ ①c /dev/null 非空")
+        fail += 1
+
+    # ② 连接超时：不可达地址必须在 timeout_ms 量级返回（此前挂到内核重传超时）
+    var t0 = now_ms()
+    var r = http_request("http://10.255.255.1/x", "GET", null, null, {"timeout_ms": 700})
+    var dt = now_ms() - t0
+    if dt < 5000:
+        print("✅ ② http_request 连接超时生效：用时 " + str(dt) + "ms（阈值 700ms）")
+        pass += 1
+    else:
+        print("❌ ② 连接阶段不受 timeout_ms 约束：用时 " + str(dt) + "ms")
+        fail += 1
+    # ②b 失败必须是 Err（可判定），不是静默 null
+    if type(r) == "result":
+        print("✅ ②b 连接失败返回 Result（可 is_err 判定）")
+        pass += 1
+    else:
+        print("❌ ②b 连接失败未返回 Result，type=" + type(r))
+        fail += 1
+    # ②c http_get 同口径（它没有 opts 入口 → 走默认上限 30s；
+    #    本测试用"立刻 refuse"的端口验证失败路径仍是 Err 且快返回，避免白等 30s）
+    var t1 = now_ms()
+    var g = http_get("http://127.0.0.1:1/x")
+    var dt2 = now_ms() - t1
+    if dt2 < 5000 and type(g) == "result":
+        print("✅ ②c http_get 失败返回 Result 且快返回（用时 " + str(dt2) + "ms）")
+        pass += 1
+    else:
+        print("❌ ②c http_get 行为异常 dt=" + str(dt2) + " type=" + type(g))
+        fail += 1
+
+    # ③ POSIX 字符类
+    var line = "  api_key: sk-abcdef123456"
+    var pat = "^[[:space:]]{2,}api_key:[[:space:]]*([^[:space:]#]+)"
+    var m = regex_search(pat, line)
+    if m != null and len(m["groups"]) > 0 and str(m["groups"][0]) == "sk-abcdef123456":
+        print("✅ ③ [[:space:]] 命中并取出捕获组")
+        pass += 1
+    else:
+        print("❌ ③ [[:space:]] 未命中（M117 前静默返回 null）：" + json_stringify(m))
+        fail += 1
+    # ③b digit/alpha 也认
+    if regex_match("^[[:digit:]]+$", "12345") and regex_match("^[[:alpha:]]+$", "abcXY"):
+        print("✅ ③b [[:digit:]] / [[:alpha:]] 生效")
+        pass += 1
+    else:
+        print("❌ ③b 其他 POSIX 类不生效")
+        fail += 1
+    print("")
+    print("M117 专项：pass=" + str(pass) + " fail=" + str(fail))
+    if fail > 0:
+        exit(1)
