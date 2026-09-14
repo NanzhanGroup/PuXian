@@ -6,6 +6,32 @@
 
 ## [Unreleased]
 
+### 发布流水线 el7 兼容修复 —— tar 选项能力探测 + 报错不再被吞（qg-issue 68）
+
+> **主题：v0.2.0-m114 首次发布时 el7 RPM 轨红，根因是「发布侧加固」自己引入的。**
+
+- **现象**：`Release` run `34799367421` —— `构建发布包 + 创建 GitHub Release` 绿，
+  但 `构建 el7 RPM + 运行自检（centos:7）` 以 **exit code 64** 失败（日志里**只有这一句、零原因**），
+  其后 el9 代签 / 最终双验签 / gh-pages 发布全部 skipped ⇒ rpm 通道停在 m112。
+- **根因（两条，都在发布侧）**：
+  1. `tools/make_release.sh` 的位级可复现打包用了 `tar --sort=name` —— 该选项 **GNU tar 1.28+** 才有，
+     而 `rpm-build-7` job 的 **centos:7 镜像自带 tar 1.26** ⇒ 未知长选项由 glibc argp 以
+     **64（EX_USAGE）** 退出 ⇒ 脚本 `set -e` 一并退出。
+  2. `packaging/build_rpm.sh` 用 `bash tools/make_release.sh --no-check 2>&1 | grep -o … | head -1`
+     取包名 ⇒ ① 子脚本**全部输出被管道吞掉**（故日志里零原因）；② `set -o pipefail` 下 grep 命中了
+     子脚本开头那行「输出: /tmp/xxx.tar.gz」，管道的非零值于是取到子脚本的 **64**。
+- **修复**：
+  - `make_release.sh`：打包前**逐项探测** `--mtime` / `--sort=name`，按 tar 能力组装选项；
+    不支持的**不加**，但**显式告警**（`⚠ 本机 tar 不支持 --sort=name …`）⇒ 不静默降级。
+  - `build_rpm.sh`：子脚本输出**落盘** → 显式判退出码 → 失败时**原样回显**输出并以其退出码结束。
+- **本机复现与验证**（离线，无需 el7 容器）：用 shim 复刻 tar 1.26（只对 `--sort=*` 报错 exit 64）
+  ⇒ 修复前 `make_release.sh` rc=64、`build_rpm.sh` rc=64（与 CI 一致）；修复后仍出货 + 显式告警。
+  `packaging/selftest_make_release.sh` 由 **6 通过** 扩到 **8 通过 / 0 失败**（新增 ⑤ 老 tar 兼容两断言）。
+- **影响面（如实登记）**：老 tar 下降级后文件顺序由 readdir 决定 ⇒ 该环境下包的 sha256
+  **不保证跨机器一致**；受影响的只有 el7 RPM 轨的 rpm 源 tarball，**对外发布件（GitHub Release 资产）
+  走 el9 的现代 tar，仍位级可复现**。
+- **发现方/实现方**：东月（发布实测暴露）。判定权在清歌/本源。
+
 ### 编辑器侧语义诊断 —— `pxcheck --semantic`（qg-issue 65）
 
 > **主题：把「默认轨无静态语义校验」的收口补到编辑器侧。** 编译器侧早在 M112-S0（Issue 46）已收口，
