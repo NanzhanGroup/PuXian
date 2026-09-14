@@ -1,10 +1,10 @@
 # ============================================================
 # tools/pxlint.px —— PuXian 静态检查器 CLI（自举版，px lint 等价物）
 # ------------------------------------------------------------
-# 对齐 Rust archive/rust-compiler/src/lint.rs 的 L001-L008：
+# 对齐 Rust archive/rust-compiler/src/lint.rs 的 L001-L008（+ M116 新增 L009：
 #   L001 未使用变量  L002 未定义变量引用  L003 不可达代码
 #   L004 空块        L005 重复顶层定义    L006 命名规范
-#   L007 长行(>100)  L008 行尾空白
+#   L007 长行(>100)  L008 行尾空白  L009 顶层显式 main() 与 def main() 自动入口重复（M116）
 # 用法（编译版）：pxlint <file.px> [--json] [--strict] [--version]
 #   退出码：有 Error → 1；仅 Warning → 0；--strict 时 Warning 也 → 1
 # 架构：

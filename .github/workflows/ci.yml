@@ -193,7 +193,8 @@ jobs:
           bash examples/m66_lunar/verify.sh >/dev/null
           bash examples/m71_mcp_build/verify.sh >/dev/null
           bash examples/m82_http_serve_unix/verify.sh >/dev/null
-          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix verify 全 PASS"
+          bash examples/m116_builtin_semantics/verify.sh >/dev/null
+          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics verify 全 PASS"
       - name: LSP / MCP 服务器冒烟（--version + 协议入口存在性）
         run: |
           chmod +x bootstrap/pxlsp bootstrap/pxmcp bootstrap/pxcheck

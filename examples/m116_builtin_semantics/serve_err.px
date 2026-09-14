@@ -1,0 +1,22 @@
+# ============================================================
+# M116（qg-issue 71 D7）负控：handler 运行时错误必须变成 **500**，且服务不许死
+# ------------------------------------------------------------
+# 修复前实测（VM 轨）：handler 内一次 `req["headers"]["X-Missing"]`（缺头 → R1008）
+#   → 协程被隔离，但错误协程的返回值是 PX_NULL ⇒ route_normalize 判 null → **204
+#   No Content**（"无内容" = 成功语义）⇒ 客户端与监控都把崩溃当成功，现场只在 stderr。
+# 修复前实测（C 轨/同步轨）：错误直接打穿到进程级 → **整台服务器 exit(1)**
+#   （下一个请求 Connection refused）。
+# 修复后：两条轨都返回 500 + 明确 body，并且**服务继续可用**（verify.sh 用第二个
+#   请求断言存活）。
+# 注：本文件用 route + px_serve（服务端栈）；端口由 verify.sh 经环境变量注入。
+# ============================================================
+def bad_handler(req, params):
+    let x = req["headers"]["X-Missing-Header"]   # R1008（缺头）
+    return {"status": 200, "body": "never"}
+
+def setup():
+    route("GET", "/bad", bad_handler)
+    px_serve(int(env("M116_PORT")), "/tmp/m116_docroot", 65536, {"max_conn": 2})
+
+spawn setup()
+sleep(60000)

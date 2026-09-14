@@ -427,7 +427,14 @@ int px_route_try_dispatch(PxHttpOut* out, LXValue req, const char* method, int h
         }
     }
     for (int i = 0; i < mw_count; i++) {
-        LXValue r = px_call(mws[i], &req, 1);
+        LXValue r = px_null();
+        char mwerr[256];
+        // M116（qg-issue 71 D7）：同步轨 middleware 也要有错误边界 —— 此前 px_error
+        //   直接冒到进程级（无隔离点）⇒ **整台服务器 exit(1)**（实测：出错一次后
+        //   后续请求 Connection refused）。捕获后按 500 短路，语义与协程轨一致。
+        if (px_native_call_capture(mws[i], &req, 1, &r, mwerr, (int)sizeof(mwerr))) {
+            r = px_serve_error_resp(3);
+        }
         PX_KEEP(r);   // M92-S2c precise：middleware px_call 返回值（route_normalize/route_send 期间使用）
         if (r.type != PX_NULL) {
             // M100：短路响应抽公共函数（同步短路与协程段2 kind=3 共用，文案逐字一致）
@@ -447,7 +454,12 @@ int px_route_try_dispatch(PxHttpOut* out, LXValue req, const char* method, int h
         px_root_pop();   // M92-S2c precise（req 已入挂起表 GC 根；params 已随 spawn 拷贝）
         return 2;        // 已拆段：调用方释放 worker，不发送响应
     }
-    LXValue r = px_call(handler, hargs, 2);
+    LXValue r = px_null();
+    char herr[256];
+    // M116（qg-issue 71 D7）：同上 —— 同步轨 handler 出错不再打穿到进程级
+    if (px_native_call_capture(handler, hargs, 2, &r, herr, (int)sizeof(herr))) {
+        r = px_serve_error_resp(0);
+    }
     PX_KEEP(r);   // M92-S2c precise：handler px_call 返回值（route_normalize/route_send 期间使用）
     px_route_respond(out, req, method, head_only, keep_alive, req_id, r);
     px_root_pop();   // M92-S2c precise

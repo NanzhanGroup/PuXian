@@ -1,0 +1,102 @@
+# ============================================================
+# M116 语义断言集（双轨：px run == px build）
+#   D4 括号内续行（含"闭合行缩进更深/更浅"两种写法）不再破坏缩进栈
+#   D6 mkdir(path[, mode])
+#   D2 缺键守卫的正向写法（.has() 守卫下不得报错）
+#   D7 handler 出错 → 500（服务端轨在 verify.sh 里独立验）
+# 来源：ws-center / ws-ddns 两个真实模块 PuXian 化暴露的缺陷（qg-issue 71）
+# 双模式：本文件只用解释器轨已注册的内置（无 spawn/chan）
+# ============================================================
+var g_pass = 0
+var g_fail = 0
+
+def check(name, cond, extra):
+    if cond:
+        g_pass += 1
+        print("[m116] OK   " + name)
+    else:
+        g_fail += 1
+        print("[m116] FAIL " + name + " " + str(extra))
+
+# ---------- D4：括号内续行 ----------
+# 病灶（修复前）：续行比语句更深时压入一个永不配对的缩进层级，行尾多弹一级
+#   ⇒ 多出一枚「去缩进」，把**外层代码块提前结束**；报错行号还指向下一行行首。
+def d4_deeper_close():
+    return [1,
+            2,
+            3]
+
+def d4_shallow_close():
+    var xs = [
+        10,
+        20
+    ]
+    xs.append(30)          # 修复前：函数体在此前被截断，这行根本不属于本函数
+    return xs
+
+def d4_dict():
+    return {"a": 1,
+            "b": 2}
+
+def d4_call():
+    return max(3,
+               7)
+
+def d4_nested():
+    return [[1,
+             2],
+            [3,
+             4]]
+
+def d4_tupleish():
+    var parts = [
+        "x" + "y",
+        trim("  z  "),
+    ]
+    return parts
+
+check("D4 闭合行更深缩进", d4_deeper_close() == [1, 2, 3], d4_deeper_close())
+check("D4 闭合行顶格（更浅）", d4_shallow_close() == [10, 20, 30], d4_shallow_close())
+check("D4 dict 字面量跨行", d4_dict()["b"] == 2, d4_dict())
+check("D4 调用实参跨行", d4_call() == 7, d4_call())
+check("D4 嵌套括号跨行", d4_nested()[1][0] == 3, d4_nested())
+check("D4 尾逗号 + 表达式跨行", d4_tupleish() == ["xy", "z"], d4_tupleish())
+
+# ---------- D6：mkdir(path[, mode]) ----------
+var UDIR = "/tmp/m116_mkdir"
+os_remove_all(UDIR)
+# stat -c %a 输出**八进制**字符串（"700"），int() 按十进制解析会错 → 经 sh 折算成十进制
+def mode_of(p):
+    let ms = trim(os_capture("/bin/stat", ["-c", "%a", p])["stdout"])
+    if ms == "":
+        return -1
+    return int(trim(os_capture("/bin/sh", ["-c", "printf %d 0" + ms])["stdout"]))
+# umask 影响最终权限位（POSIX 标准语义，与 Go os.MkdirAll 一致）→ 期望值按 umask 折算
+let umask_s = trim(os_capture("/bin/sh", ["-c", "printf '%d' 0$(umask)"])["stdout"])
+let umask_v = int(umask_s)
+let allow = (~umask_v) & 511
+mkdir(UDIR + "/a/b", 448)          # 0o700
+let m1 = mode_of(UDIR + "/a/b")
+check("D6 mkdir mode=0o700", m1 == (448 & allow), str(m1) + " umask=" + umask_s)
+let m1p = mode_of(UDIR + "/a")
+check("D6 mode 作用于所有新建层级", m1p == (448 & allow), str(m1p))
+os_remove_all(UDIR + "/c")
+mkdir(UDIR + "/c")                 # 缺省 0o755（零回归）
+let m2 = mode_of(UDIR + "/c")
+check("D6 mkdir 缺省 mode=0o755", m2 == (493 & allow), str(m2))
+os_remove_all(UDIR)
+
+# ---------- D2：缺键守卫的**正向**写法（守卫下不得报错） ----------
+let d = json_parse("{\"a\": 1}")
+check("D2 .has() 判缺键", d.has("nope") == false, "has 应为 false")
+if d.has("a"):
+    check("D2 有键可读", d["a"] == 1, d["a"])
+else:
+    check("D2 有键可读", false, "has(a) 为假")
+# 修复前两轨行为不同（编译轨静默 null / 解释轨 R1008）；修复后**同口径**（见
+#   dict_missing_key.px + verify.sh：两轨都必须以 R1008 失败退出）。此处的价值是
+#   钉住"守卫写法在两条轨上都活"。
+
+print("M116_SEMANTICS:" + str(g_pass) + "P/" + str(g_fail) + "F")
+if g_fail > 0:
+    exit(1)
