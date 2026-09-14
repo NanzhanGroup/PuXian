@@ -10,12 +10,23 @@ def check(name, cond):
         fail += 1
         print("FAIL " + name)
 # ---------- write_file / append_file mode ----------
+# 用例必须自净：write_file/append_file 走 O_TRUNC，**不改变已存在文件的权限位** ——
+#   上一轮遗留的 600 会把「丢 mode」的缺陷伪装成 PASS，反之也会让「默认 644」假红（实测踩过）。
+if exists("/tmp/m66_mode.txt"):
+    remove("/tmp/m66_mode.txt")
+if exists("/tmp/m66_default.txt"):
+    remove("/tmp/m66_default.txt")
+if exists("/tmp/m66_append.txt"):
+    remove("/tmp/m66_append.txt")
 write_file("/tmp/m66_mode.txt", "secret", 0o600)
 var st = os_capture("stat", ["-c", "%a", "/tmp/m66_mode.txt"])
 check("write_file mode 0600", st["stdout"].trim() == "600")
 write_file("/tmp/m66_default.txt", "x")  # 不传 mode 保持默认
 var st2 = os_capture("stat", ["-c", "%a", "/tmp/m66_default.txt"])
 check("write_file 无 mode 默认 644", st2["stdout"].trim() == "644")
+append_file("/tmp/m66_append.txt", "y", 0o600)
+var st3 = os_capture("stat", ["-c", "%a", "/tmp/m66_append.txt"])
+check("append_file mode 0600", st3["stdout"].trim() == "600")
 # ---------- os_capture：stdout/stderr 分离 + rc ----------
 var r = os_capture("sh", ["-c", "echo out1; echo err1 >&2; exit 3"])
 check("os_capture rc=3", r["rc"] == 3)
@@ -38,6 +49,11 @@ check("os_popen2 pid>0", p2["pid"] > 0)
 check("os_kill group=true 成功", os_kill(p2["pid"], 9, true))
 var wc = os_wait(p2["pid"])
 check("os_wait 组杀后立即返回", wc != 0)
+# ---------- os_spawn group：第 3 参必须生效（解释器轨曾静默丢弃该参）----------
+var p3 = os_spawn("sleep", ["30"], true)
+check("os_spawn group=true pid>0", p3 > 0)
+check("os_spawn 组杀成功", os_kill(p3, 9, true))
+os_wait(p3)
 # 旧两参调用仍兼容
 var p3 = os_popen("sh", ["-c", "sleep 30"])
 check("os_kill 两参兼容", os_kill(p3["pid"], 9))

@@ -6,6 +6,33 @@
 
 ## [Unreleased]
 
+### 解释器轨内置转发丢参 + `os_*` 组杀竞态（qg-issue 69）
+
+> **主题：核验「PuXian 是否已无问题」时，把 m66 专项用例在解释器轨与编译轨**分别**复跑 —— 解释器轨恒红。**
+
+- **缺陷 A（解释器轨静默丢可选尾参）**：`selfhost/ibuiltin.px` 是**手写列参**的转发层，而解释器不校验实参个数
+  ⇒ 可选尾参漏写既不报错也不告警：`write_file/append_file(p, s, 0o600)` 实际落 **0644**（编译轨 0600，
+  这正是「写密钥文件」的用法）、`os_spawn(cmd, argv, true)` **不成进程组**（后续 `kill(-pgid)` 语义失效）。
+  已对转发层**全部 55 条**逐条与 `runtime.c` 的 arity 检查对账：**仅这 3 条**不符，其余 52 条（含
+  `os_kill`/`os_exec`/`regex_replace` 等正确处理可选参数者）无此问题。
+- **缺陷 B（`os_*` 组杀竞态，两轨都有）**：`os_popen`/`os_capture`/`os_spawn(group=true)` 只在**子进程侧**
+  `setpgid(0,0)`，父进程返回 `pid` 时子进程未必已执行到该行 ⇒ 窗口内紧接 `killpg` 会 **`ESRCH` 假失败**
+  （实测解释器轨 ≈10%、编译轨 1/13）。用户按文档「popen 后立刻组杀」会**随机**失败且无线索。
+- **修复**：
+  - `ibuiltin.px`：三处补齐尾参透传（`len(args)==3` 时传 `args[2]`），超范围实参返回与 C 轨同措辞的 `Err`；
+  - `runtime.c`：三处补**父侧同调** `setpgid(pid, pid)`（子进程 `exec` 前必定生效；后到者 `EACCES`/no-op，忽略返回值）。
+- **用例自净**：`examples/m66_proc/proc_test.px` 原**不自净** —— `write_file` 走 `O_TRUNC` **不改已存在文件的权限位**，
+  上一轮遗留的 600 会把「丢 mode」**伪装成 PASS**（反之让「默认 644」假红，实测踩过）；现先 `remove` 旧文件，
+  并新增 `append_file mode` / `os_spawn group` 三处丢参各自的断言。
+- **新增门（负控 → 转绿）**：`selfhost/interp_builtin_parity.sh` —— 同一用例跑**解释器轨 vs 编译轨**，
+  要求两轨 `fail=0`、`pass` 相同，且对 `mode=600 / append mode=600 / os_spawn 组杀成功` 做**绝对值**断言
+  （防「两轨一起错」被「一致」放过）。修复前：解释器 `pass=14 fail=3` / 编译 `pass=17 fail=0` ⇒ 判红；
+  修复后两轨 `pass=17 fail=0` ⇒ 通过。已接入 CI（`regression` 作业）。
+- **重烘与验证**：runtime 变更必须重烘 ⇒ `--rebake-all`（RC=0，12 件成功 0 失败）、`--check-all` **14/14 一致**；
+  `--check`（C 轨，含 55 例行为对拍）/`--check-vm`/`engine_parity`/`diffcheck`（lexer/parser/errors/codegen/value/interp）/
+  `bootstrap_prove`/fmt/lint/名册门 **全绿**；组杀紧循环复测 **60 次 × 2 轨 = 0 失败**；
+  入库 `pxc` 的 `setpgid` 调用点 **6 → 9**（+3，父侧同调的结构旁证）。
+
 ### 发布流水线 el7 兼容修复 —— tar 选项能力探测 + 报错不再被吞（qg-issue 68）
 
 > **主题：v0.2.0-m114 首次发布时 el7 RPM 轨红，根因是「发布侧加固」自己引入的。**
