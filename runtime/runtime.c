@@ -289,6 +289,7 @@ static LXValue bi_http_get(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_post(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_serve(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_serve_unix(LXValue* args, int nargs, void* ctx); // M8x（Issue 15 GAP-SRV-1）
+static LXValue bi_http_conn_alive(LXValue* args, int nargs, void* ctx); // M123（qg-issue 78）
 // M23c P1：HTTP 生产化（http_request 连接池 / http_get_stream 流式下载）
 static LXValue bi_http_request(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_get_stream(LXValue* args, int nargs, void* ctx);
@@ -944,6 +945,10 @@ extern void px_coro_spawn_ex(void* ctx, LXValue* args, int nargs,
                              void (*done_cb)(void* ud, LXValue ret),
                              void* done_ud) __attribute__((weak));
 extern void px_coro_gc_mark_roots(void) __attribute__((weak));
+// M123：serve handler 上下文中的「对端是否仍在」原语 —— 协程内核提供 fd 载体
+//   （coro.c：PxCoro::srv_fd 继承 + run 时装载到 TLS）；无协程链接时空转（返回 -1 = 无上下文）
+extern int  px_coro_srv_fd_get(void) __attribute__((weak));
+extern void px_coro_srv_fd_set(int fd) __attribute__((weak));
 // M95-S2：http handler 协程化 pending 表 gc 标记（实现在 ConnCtx 区后；前向声明供
 //   gc 标记期调用 —— 挂起连接的 req/resp 须入精确根面，漏标 = GC 误回收 UAF）
 static void http_pend_gc_mark(void);
@@ -7080,6 +7085,8 @@ void px_register_builtins(void) {
     px_set_global("http_serve", px_native("http_serve", bi_http_serve));
     // M8x：Issue 15 GAP-SRV-1 —— unix socket HTTP 服务端（与 http_serve 同族，AF_UNIX 服务端维度）
     px_set_global("http_serve_unix", px_native("http_serve_unix", bi_http_serve_unix));
+    // M123：handler 内「对端是否仍在」原语（qg-issue 78；ws-approve 治本项 P0）
+    px_set_global("http_conn_alive", px_native("http_conn_alive", bi_http_conn_alive));
     // M23c P1：HTTP 生产化（http_request 连接池 / http_get_stream 流式下载）
     px_set_global("http_request", px_native("http_request", bi_http_request));
     px_set_global("http_get_stream", px_native("http_get_stream", bi_http_get_stream));
@@ -11998,6 +12005,54 @@ static const char* px_file_content_type(const char* path);
 // 同一连接循环处理多个请求：HTTP/1.1 默认 keep-alive；客户端 Connection: close、
 // handler 返回 keep_alive:false、或空闲超时(15s) → 关闭。handler 返回 dict 支持
 // "file": path（流式文件响应，大文件不占内存）。
+// ==================== M123：对端断开感知 / 请求取消原语（qg-issue 78） ====================
+// 需求来源：ws-approve（unix socket HTTP 服务）大载荷 /check 单字节成本 ≈1ms/KB，
+//   客户端断开后服务端仍把请求算完（1 并发 1MB 断连后仍烧 0.89s；4 并发 ≈4.0s）
+//   → 触发自愈守卫 CPU 误判重启 → token-cache fail-closed。
+// 根因（本节修）：handler 在 VM 里跑期间，**连接不在 epoll 中**（fserve 派发时已 DEL /
+//   新连接从未登记，state=ACTIVE），px_ev_loop 的 EPOLLHUP|EPOLLERR|EPOLLRDHUP 分支
+//   只覆盖 IDLE 连接 ⇒ 应用层没有任何「对端是否仍在」的可观测状态，只能算完再写死连接。
+// 本原语：O(1)、无副作用、可在循环里高频调用（实测 0.74µs/次，见 m123 gate）。
+//   · poll(POLLIN|POLLRDHUP, 0)：FIN 即使在「本端仍有未读数据」时也上报 POLLRDHUP
+//     （不受 RDHUP 前的未读缓冲遮蔽）——这是"尽早翻 0"的关键，MSG_PEEK 单独做不到；
+//   · 再 recv(MSG_PEEK|MSG_DONTWAIT) 兜底：0 = FIN；ECONNRESET/ENOTCONN = RST/失效；
+//     EAGAIN = 在线空闲；>0 = 有在途数据（不消费，后续正常读不受影响）。
+//   · 语义边界（**必须写进文档**）：本函数判「对端不会再来数据」，
+//     收到 FIN 的下一次调用即翻 0（≤ 一个调用周期，与 handler 当前是否在算无关）；
+//     RST / POLLHUP / POLLERR / fd 已失效 → 立即 0；非 serve handler 上下文 → 0。
+//     ⚠️ 因此它**不能**区分「半关(SHUT_WR)但仍在等响应」的客户端（对端 FIN 后仍可收包），
+//     故 P1「跳过写响应」的判据不用本函数，而用写侧真失效（POLLHUP/POLLERR/POLLNVAL）。
+static int px_http_conn_alive_fd(int fd) {
+    if (fd < 0) return 0;
+    struct pollfd p;
+    p.fd = fd;
+    p.events = POLLIN | POLLRDHUP;
+    p.revents = 0;
+    int pr = poll(&p, 1, 0);
+    if (pr < 0) return 0;                                  // EBADF/ENOMEM：不可判定 → 0（不可用）
+    if (p.revents & (POLLRDHUP | POLLHUP | POLLERR | POLLNVAL)) return 0;   // FIN/RST/异常
+    char b[1];
+    ssize_t n = recv(fd, b, 1, MSG_PEEK | MSG_DONTWAIT);
+    if (n == 0) return 0;                                  // 对端关（EOF）
+    if (n < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return 1;   // 在线空闲
+        if (errno == EINTR) return 1;                            // 不确定 → 保守判在线
+        return 0;                                                // ECONNRESET/ENOTCONN/...
+    }
+    return 1;                                              // 有在途数据（未消费）
+}
+
+// 应用层入口：handler 内经 px_coro_srv_fd_get() 拿本请求连接 fd。
+//   fd < 0（非 serve handler 上下文 / 非协程轨）→ 0（与「已断开」不可区分 → 调用方应视为
+//   "能力不可用"，建议只在确认 fd 有效时才据此提前收尾；见文档「语义」一节）。
+static LXValue bi_http_conn_alive(LXValue* args, int nargs, void* ctx) {
+    (void)args; (void)nargs; (void)ctx;
+    if (!px_coro_srv_fd_get) return px_int(0);
+    int fd = px_coro_srv_fd_get();
+    if (fd < 0) return px_int(0);
+    return px_int(px_http_conn_alive_fd(fd));
+}
+
 // ==================== M95-S2（D8-②）：http_serve 系 handler 协程化 ====================
 // http_conn_worker 拆段：读+解析（段1）→ VM handler 以帧协程执行（chan/sleep 让出
 //   占协程不占 fserve worker）→ 完成回调（http_handler_done，coro worker 线程）写
@@ -12010,6 +12065,17 @@ static const char* px_file_content_type(const char* path);
 // 返回：0 = 连接已收尾（px_evc_close 已调，调用方 return）；1 = 已交还 IDLE 事件
 //       循环（调用方 return）；2 = 连接可继续读下一请求（调用方 continue）。
 static int http_send_resp(int fd, LXValue req, LXValue resp, int method_head, int client_close) {
+    // M123 P1（qg-issue 78）：handler 返回时对端**写侧已失效**（RST/HUP/ERR）→ 无需再 send
+    //   （省掉一次对已死连接的写 + SIGPIPE 防护路径；文件流式/SSE 半截写同样受益）。
+    //   判据刻意**不含 FIN**：半关(SHUT_WR)的客户端仍可读响应，跳过写 = 丢响应（行为倒退）。
+    {
+        struct pollfd wp;
+        wp.fd = fd; wp.events = POLLOUT; wp.revents = 0;
+        if (poll(&wp, 1, 0) > 0 && (wp.revents & (POLLHUP | POLLERR | POLLNVAL))) {
+            px_evc_close(fd);
+            return 0;
+        }
+    }
     // 7. 响应：file 流式（Connection: close，发送后关闭）或普通（keep-alive 判定）
     LXValue file_v = (resp.type == PX_DICT) ? px_dict_get(resp, "file") : px_null();
     if (file_v.type == PX_STR) {
@@ -12324,33 +12390,41 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
                 // 登记失败（fd 超容量等）→ 退回原同步路径（行为零变化）
                 LXValue resp = px_null();
                 char vherr1[256];
+                if (px_coro_srv_fd_set) px_coro_srv_fd_set(fd);   // M123：同步轨同样可查
                 if (handler.type == PX_FUNC || handler.type == PX_NATIVE) {
                     // M116（qg-issue 71 D7）：错误边界 —— 同步轨 handler 出错不再打穿到进程级
                     if (px_native_call_capture(handler, &req, 1, &resp, vherr1, (int)sizeof(vherr1)))
                         resp = px_serve_error_resp(0);
                 }
+                if (px_coro_srv_fd_set) px_coro_srv_fd_set(-1);
                 PX_KEEP(resp);
                 int act = http_send_resp(fd, req, resp, head_flag, client_close);
                 px_root_pop();
                 if (act == 2) continue;          // 下一请求在途 → 继续迭代
                 return px_null();                // close(0) / 已交还 IDLE(1)
             }
+            // M123：把本连接 fd 交给 handler 协程（spawn 时由 PxCoro 继承本 worker TLS）
+            //   → handler 内 http_conn_alive() 可用；spawn 后立即复位本 worker TLS。
+            if (px_coro_srv_fd_set) px_coro_srv_fd_set(fd);
             if (px_coro_spawn_ex)
                 px_coro_spawn_ex(handler.as.obj->as.func.ctx, &req, 1,
                                  http_handler_done, (void*)(intptr_t)fd);
             else
                 http_pend_clear(fd);             // 无协程内核（理论不达）→ 清项兜底
+            if (px_coro_srv_fd_set) px_coro_srv_fd_set(-1);
             px_root_pop();
             return px_null();                    // worker 释放；完成回调投回续处理
         }
         // —— 逃生舱（PX_NATIVE / 非 VM handler）：原同步直调路径（行为零变化）——
         LXValue resp = px_null();
         char vherr2[256];
+        if (px_coro_srv_fd_set) px_coro_srv_fd_set(fd);   // M123：同步轨同样可查
         if (handler.type == PX_FUNC || handler.type == PX_NATIVE) {
             // M116（qg-issue 71 D7）：错误边界（同 route 同步轨）
             if (px_native_call_capture(handler, &req, 1, &resp, vherr2, (int)sizeof(vherr2)))
                 resp = px_serve_error_resp(0);
         }
+        if (px_coro_srv_fd_set) px_coro_srv_fd_set(-1);   // M123：退出 handler 上下文
         PX_KEEP(resp);   // M92-S2c precise：px_call 返回值裸局部（后续构建响应可能 GC）
         if (body_buf) { xfree(body_buf); body_buf = NULL; }
         int act2 = http_send_resp(fd, req, resp, head_flag, client_close);
