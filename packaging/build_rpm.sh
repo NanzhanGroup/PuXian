@@ -181,5 +181,5 @@ else
     echo "   包:       $RPK"
     echo "   baseurl:  file://$REPO_OUT/$DIST/$(uname -m)/"
     echo "   gpgkey:   file://$REPO_OUT/PUXIAN-GPG-KEY.asc"
-    echo "   （正式托管后替换 file:// → https://nanzhangroup.github.io/PuXian/rpm/...）"
+    echo "   （正式托管：国内镜像 https://soft.xiusoft.cn/puxian/rpm/... ／ 上游 https://nanzhangroup.github.io/PuXian/rpm/...）"
 fi
