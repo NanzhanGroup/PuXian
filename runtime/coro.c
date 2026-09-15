@@ -91,6 +91,7 @@ typedef struct PxCoro {
     //   发布 result/done）→ 无数据竞争。
     PxOffTask*     off_task;
     int            off_dst;   // 让出点 CALL 结果槽号（resume 写回；让出帧 = 当时最顶帧）
+    int            srv_fd;    // M123：本协程携带的 serve 连接 fd（-1 = 非 serve handler 上下文）
 } PxCoro;
 
 static pthread_mutex_t g_coro_mu   = PTHREAD_MUTEX_INITIALIZER;
@@ -103,6 +104,14 @@ static int     g_worker_target = 0;
 static int     g_coro_seq = 0;
 static volatile int g_coro_diag = -1;   // PX_CORO_DIAG=1 诊断输出
 static __thread PxCoro* g_cur_coro = NULL;  // M93-S3：当前 worker 正在执行的协程
+
+// M123：当前执行上下文的 serve 连接 fd（-1 = 无）。
+//   · 协程会跨 worker 迁移 → 不能用「spawn 时线程的 TLS」当 fd 载体，必须随协程走
+//     （PxCoro::srv_fd 在 spawn 时**继承**调用方上下文，run 时装载到本 TLS）；
+//   · 读方（runtime.c px_http_conn_alive）只读本 TLS + 一次 poll/recv，O(1) 无副作用。
+static __thread int g_cur_srv_fd = -1;
+int  px_coro_srv_fd_get(void) { return g_cur_srv_fd; }
+void px_coro_srv_fd_set(int fd) { g_cur_srv_fd = fd; }
 
 // ---- M96-S2：offload 外包任务（D1/D2，β 路线）----
 // 任务生命周期：px_coro_offload_submit 创建（vm.c CALL 预检，args 数组所有权转移）
@@ -260,6 +269,7 @@ static void* coro_worker(void* arg) {
         px_gc_thread_enter();
         px_vm_bind(&c->vm);
         g_cur_coro = c;
+        g_cur_srv_fd = c->srv_fd;   // M123：装载本协程的 serve 连接 fd（跨 worker 迁移后仍正确）
         int yield_rc = 0;
         c->run_begin_us = coro_now_us();   // M94-S2：本次时间片起点（抢占预算基准）
         // M116（qg-issue 71 D7）：**协程终止原因** —— 不再依赖 px_spawn_isolate_begin
@@ -280,6 +290,7 @@ static void* coro_worker(void* arg) {
         int errored = px_isolate_errored();
         px_spawn_isolate_end();
         g_cur_coro = NULL;
+        g_cur_srv_fd = -1;          // M123：本 worker 退出协程上下文 → 清 fd（done_cb 内不可见）
         px_vm_unbind();
         px_gc_thread_leave();
 
@@ -411,6 +422,7 @@ void px_coro_spawn_ex(void* ctx, LXValue* args, int nargs,
     c->first = 1;                 // M93-S3：首次需压顶层帧
     c->done_cb = done_cb;         // M95-S2
     c->done_ud = done_ud;         // M95-S2
+    c->srv_fd  = g_cur_srv_fd;    // M123：继承调用方上下文的 serve 连接 fd（默认 -1）
     if (g_coro_diag < 0) {   // 首个 spawn 前初始化诊断开关（worker 池惰性启动同读）
         const char* diag = getenv("PX_CORO_DIAG");
         g_coro_diag = (diag && diag[0] == '1') ? 1 : 0;
