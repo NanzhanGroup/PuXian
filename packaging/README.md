@@ -38,15 +38,49 @@ GitHub Actions secrets（已配置）：`GPG_PRIVATE_KEY` / `GPG_PASSPHRASE` / `
 ## 用户安装
 
 ```bash
-curl -fsSL -o install-rpm.sh https://nanzhangroup.github.io/PuXian/install-rpm.sh
+curl -fsSL -o install-rpm.sh https://soft.xiusoft.cn/puxian/install-rpm.sh   # 国内镜像（默认）
+#   上游兜底同文件： https://nanzhangroup.github.io/PuXian/install-rpm.sh
 sudo bash install-rpm.sh          # 写入 repo + 导入公钥（自动识别 dnf/yum、el7/el9）
 sudo dnf install puxian           # EL9 一行安装（el7 用 yum install puxian）
 sudo dnf upgrade puxian           # 里程碑升级自动拉新（el7 yum update）
 ```
 
 脚本也随仓库提供：`packaging/install-rpm.sh`；支持 `install`/`remove` 参数。
-仓库 URL：`https://nanzhangroup.github.io/PuXian/rpm/$releasever/$basearch/`
+**仓库双活**（同一发布产物在两处的等价副本，GPG 签名链两处相同、不绑定域名）：
+
+| 仓库 | baseurl | 说明 |
+|---|---|---|
+| 国内镜像（默认） | `https://soft.xiusoft.cn/puxian/rpm/$releasever/$basearch/` | 脚本内置 3s 探测，通过即用 |
+| 上游 GitHub Pages | `https://nanzhangroup.github.io/PuXian/rpm/$releasever/$basearch/` | 探测失败自动回退；亦可 `PUXIAN_RPM_BASE=` 强制指定 |
+
 （el7 → `rpm/7/x86_64/`，el9 → `rpm/9/x86_64/`；gpgkey 在 `rpm/PUXIAN-GPG-KEY.asc`）。
+国内镜像另托管发布 tarball：`https://soft.xiusoft.cn/puxian/releases/`。
+
+## 国内镜像站点（soft.xiusoft.cn/puxian）
+
+上游 GitHub Pages 国内实测 TTFB ≈ 0.30s，国内镜像 ≈ 0.07s（同节点同文件，约 4 倍）。
+镜像由**边缘侧同步器**从 GitHub 拉取后落静态站点，再由既有的 soft-mirror 分发到各节点：
+
+```
+GitHub（tag + gh-pages/rpm + Release 资产）
+   ↓  packaging/pxrepo_mirror.sh（幂等 · 单调 · 原子 · 可回滚）
+<站点源目录>/puxian/                      ← 落地点（--dest）
+   ↓  soft-mirror（rsync -a --delete-delay，本机 + 广州节点）
+https://soft.xiusoft.cn/puxian/           ← install-rpm.sh / rpm/ / releases/ / version.json
+```
+
+| 物料 | 说明 |
+|---|---|
+| `packaging/pxrepo_mirror.sh` | 同步器参考实现（<300 行，仅依赖 git/curl/rsync/rpm/tar；`--dry-run` 空跑） |
+| `packaging/systemd/pxrepo-sync.{service,timer}` | 单元模板（30min 周期 + 开机 2min 后即跑；失败由下一轮承担） |
+| `/puxian/version.json` | 镜像自证（version/tag/synced_at/tarball sha256）——既是 `install-rpm.sh` 的 3s 探测探针，也是监控与用户对账口径 |
+
+**同步契约**：① 版本序取自远端 tag（非 API `latest`）② 与 gh-pages `rpm/` 树内实际
+`.mNNN` 交叉校验，不一致 ⇒ 中止、保持上一版；③ 比现役旧 ⇒ 拒绝（`PXREPO_ALLOW_REGRESSION=<理由>`
+人工放行）；④ tarball sha256 == `sha256sums.txt`、每包 `rpm -Kv`、`repomd.xml.asc` 全过才落盘；
+⑤ 发布顺序 **新 rpm（不删旧）→ repodata → 删旧 rpm**，消除「元数据与包不匹配」窗口。
+
+> ⚠️ `--work` 暂存目录**必须位于 `--dest` 之外**，否则会被 soft-mirror 一并分发出去。
 
 ## CI 发布（release.yml，tag `v*` 推送触发，如 v0.2.0 / v0.1.0-mXX）
 
