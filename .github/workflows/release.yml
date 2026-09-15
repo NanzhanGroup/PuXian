@@ -114,7 +114,8 @@ jobs:
   # 发布后用户（packaging/install-rpm.sh）：
   #   EL9: sudo bash install-rpm.sh && dnf install puxian
   #   EL7: sudo bash install-rpm.sh && yum install puxian
-  # baseurl: https://nanzhangroup.github.io/PuXian/rpm/$releasever/$basearch/
+  # baseurl: https://soft.xiusoft.cn/puxian/rpm/$releasever/$basearch/   （国内镜像·默认）
+  #          回退 https://nanzhangroup.github.io/PuXian/rpm/$releasever/$basearch/
   # 目录语义：rpm/7/x86_64 与 rpm/9/x86_64（$releasever 展开，EL 系通用）
   # ============================================================
   rpm-build-9:
@@ -436,6 +437,14 @@ jobs:
           bash "$GITHUB_WORKSPACE/packaging/rpm_monotonic_guard.sh" "$PAGES/rpm" /tmp/pxrepo
           # 同步仓库树（--delete 保证只含当前版本，旧版 rpm 由 GitHub Release 资产留存）
           rsync -a --delete /tmp/pxrepo/ "$PAGES/rpm/"
+          # ---- 站点根文件由仓库同步（防漂移：2026-09-16 发现 gh-pages 的 install-rpm.sh
+          #      停在 M73 期、只支持 el9，与仓库 packaging/install-rpm.sh diff 79 行）----
+          for f in install-rpm.sh pages/index.html; do
+            [ -f "$GITHUB_WORKSPACE/packaging/$f" ] || { echo "❌ 缺少 packaging/$f"; exit 1; }
+          done
+          install -m 0755 "$GITHUB_WORKSPACE/packaging/install-rpm.sh" "$PAGES/install-rpm.sh"
+          install -m 0644 "$GITHUB_WORKSPACE/packaging/pages/index.html" "$PAGES/index.html"
+          echo "✅ 站点根文件已同步（install-rpm.sh / index.html）"
           cd "$PAGES"
           git add -A
           if git diff --cached --quiet; then
@@ -449,7 +458,7 @@ jobs:
             fi
             echo "✅ 已推送到 gh-pages/rpm/（${GITHUB_REF_NAME}）"
           fi
-          echo "🌐 仓库地址: https://nanzhangroup.github.io/${GITHUB_REPOSITORY#*/}/rpm/{7,9}/x86_64/"
+          echo "🌐 仓库地址: 国内 https://soft.xiusoft.cn/puxian/rpm/{7,9}/x86_64/  ｜ 上游 https://nanzhangroup.github.io/${GITHUB_REPOSITORY#*/}/rpm/{7,9}/x86_64/"
 
       - name: 密钥未配置提示（占位，保持 job 绿）
         if: steps.gpgkey.outputs.ok != 'true'

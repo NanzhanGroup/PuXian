@@ -10,16 +10,38 @@
 #   sudo bash install-rpm.sh install     # 添加仓库后立即 dnf/yum install puxian
 #   sudo bash install-rpm.sh remove      # 移除 PuXian 仓库
 # 原理：repo 文件内保留 $releasever/$basearch 字面量，由 dnf/yum 展开为
-#   7/x86_64 或 9/x86_64 → https://nanzhangroup.github.io/PuXian/rpm/7|x9/x86_64/
+#   7/x86_64 或 9/x86_64 → <BASE>/7|x9/x86_64/
+# 双活（两处仓库内容等价，public 资产同一发布产物）：
+#   国内镜像  https://soft.xiusoft.cn/puxian/rpm     ← 默认优先（探测通过即用）
+#   上游兜底  https://nanzhangroup.github.io/PuXian/rpm
+#   覆盖方式  sudo PUXIAN_RPM_BASE=<任意 baseurl> bash install-rpm.sh
 # 校验链：repo_gpgcheck=1 验 repomd.xml.asc，gpgcheck=1 验每个 rpm 包签名，
-#   公钥来自 GitHub Pages 同源托管的 PUXIAN-GPG-KEY.asc。
+#   公钥来自与仓库同源托管的 PUXIAN-GPG-KEY.asc（签名不绑定域名，两处等价）。
 # ============================================================
 set -euo pipefail
 
-BASE="https://nanzhangroup.github.io/PuXian/rpm"
+MIRROR_ROOT="https://soft.xiusoft.cn/puxian"
+UPSTREAM_ROOT="https://nanzhangroup.github.io/PuXian"
 REPO_FILE=/etc/yum.repos.d/puxian.repo
 REPO_ID=puxian
 ACTION="${1:-}"
+
+# ---- 仓库基址选择（双活：默认国内镜像；探测失败自动回退上游）----
+#   探测探针 = <mirror>/version.json（镜像侧「自证」文件，恒存在且极小）
+pick_base() {
+  if [ -n "${PUXIAN_RPM_BASE:-}" ]; then
+    printf '%s|环境变量 PUXIAN_RPM_BASE 指定' "$PUXIAN_RPM_BASE"; return 0
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    printf '%s|国内镜像（未装 curl，跳过探测）' "${MIRROR_ROOT}/rpm"; return 0
+  fi
+  if curl -fsS -m 3 -o /dev/null "${MIRROR_ROOT}/version.json" 2>/dev/null; then
+    printf '%s|国内镜像探测通过' "${MIRROR_ROOT}/rpm"
+  else
+    printf '%s|国内镜像探测失败，回退上游 GitHub Pages' "${UPSTREAM_ROOT}/rpm"
+  fi
+}
+IFS='|' read -r BASE WHY <<< "$(pick_base)"
 
 # ---- 权限与系统探测 ----
 [ "$(id -u)" = 0 ] || { echo "❌ 请用 root 或 sudo 运行"; exit 1; }
@@ -37,6 +59,7 @@ case "$ID" in
   *) echo "❌ 暂支持 RHEL 系 7/9（当前 $ID），本脚本面向 dnf/yum"; exit 1 ;;
 esac
 echo "== 系统: $ID $VERSION_ID（el$RV，包管理器 $PM）=="
+echo "== 仓库基址: $BASE（$WHY）=="
 
 if [ "$ACTION" = "remove" ]; then
   rm -f "$REPO_FILE"

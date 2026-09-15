@@ -1,0 +1,20 @@
+# ============================================================
+# pxrepo-sync.timer —— 周期调度（30min，开机 2min 后即跑一次）
+# ------------------------------------------------------------
+# 落地位置示例：/etc/systemd/system/pxrepo-sync.timer
+# 启用：systemctl daemon-reload && systemctl enable --now pxrepo-sync.timer
+# 手动跑一轮：systemctl start pxrepo-sync.service && journalctl -u pxrepo-sync -n 50
+# 本轮结果自证：/var/www... 见 version.json 的 synced_at / version 字段
+# ============================================================
+[Unit]
+Description=定时同步 PuXian 发布镜像（每 30min）
+
+[Timer]
+Unit=pxrepo-sync.service
+OnBootSec=2min
+OnUnitActiveSec=30min
+AccuracySec=1min
+# 不设 Persistent=：本单元用 OnUnitActiveSec（非 OnCalendar），无「补跑」语义
+
+[Install]
+WantedBy=timers.target
