@@ -4,6 +4,8 @@
 #   ③ 正则 POSIX 字符类 [[:space:]] 静默不匹配
 # 用法：px run examples/m117_realworld_defects/m117_defects.px   （双轨皆可）
 #      px build examples/m117_realworld_defects/m117_defects.px
+# 注（CI 稳定性）：① 的「跨 API 一致性」只在**稳定**伪文件上做逐字节比较；
+#   时变伪文件（/proc/uptime）走容差断言 —— 详见 ①b / ①b2 处注释。
 
 def main():
     var pass = 0
@@ -17,14 +19,37 @@ def main():
     else:
         print("❌ ① read_file 伪文件返回空串（M117 前的老行为）")
         fail += 1
-    # ①b 伪文件内容与 read_at 逐字节一致（两个 API 不打架）
-    var uptime = read_file("/proc/uptime")
-    var uptime2 = str(read_at("/proc/uptime", 0, 4096))
-    if len(uptime) > 0 and trim(uptime) == trim(uptime2):
-        print("✅ ①b read_file 与 read_at 的 /proc/uptime 内容一致")
+    # ①b 跨 API 一致性·严格判据：**稳定**伪文件必须逐字节相等
+    #    ⚠️ 不可拿 /proc/uptime 这类**时变**伪文件做逐字节比较：HZ=100 ⇒ 刻度 10ms，
+    #    两次独立读天然会跨刻度 ⇒ 这是**必现抖动**的断言（CI 实测
+    #    read_file=|200.97 703.04| vs read_at=|200.98 703.04|；本机 2000 次循环复现率
+    #    解释轨 5.9% / 编译轨 0.65%）⇒ 改用 st_size==0 且内容恒定的 hostname。
+    var hn1 = trim(read_file("/proc/sys/kernel/hostname"))
+    var hn2 = trim(str(read_at("/proc/sys/kernel/hostname", 0, 4096)))
+    if len(hn1) > 0 and hn1 == hn2:
+        print("✅ ①b 稳定伪文件逐字节一致（hostname=" + hn1 + "）")
         pass += 1
     else:
-        print("❌ ①b read_file=|" + uptime + "| read_at=|" + uptime2 + "|")
+        print("❌ ①b read_file=|" + hn1 + "| read_at=|" + hn2 + "|")
+        fail += 1
+    # ①b2 跨 API 一致性·时变伪文件：仍要覆盖，但**只证明"读到实时内容"**，不与时钟刻度赛跑
+    #    判据：两读都非空 + 都是 2 字段 + up 差值 ≤5s（孔径同 m58_hwmond：运行瞬间差用宽松容差）
+    #    ⇒ 足以拦住「返回空串 / 返回快照缓存 / 截断」这三类真缺陷
+    var up1s = trim(read_file("/proc/uptime"))
+    var up2s = trim(str(read_at("/proc/uptime", 0, 4096)))
+    var f1 = split(up1s, " ")
+    var f2 = split(up2s, " ")
+    var live = false
+    var dup = -1.0
+    if len(f1) == 2 and len(f2) == 2:
+        dup = abs(float(f1[0]) - float(f2[0]))
+        if dup <= 5.0:
+            live = true
+    if live:
+        print("✅ ①b2 时变伪文件两读均实时（up 差 " + str(dup) + "s）")
+        pass += 1
+    else:
+        print("❌ ①b2 read_file=|" + up1s + "| read_at=|" + up2s + "| d=" + str(dup))
         fail += 1
     # ①c 空文件仍是空串（不是"读满缓冲"的假数据）
     if len(read_file("/dev/null")) == 0:
