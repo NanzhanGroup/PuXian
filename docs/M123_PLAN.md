@@ -1,7 +1,8 @@
 # M123 · http_serve 对端断开感知 / 请求取消原语（qg-issue 78）
 
-> 提出方：清歌（2026-09-16）· 承接：东月 · 状态：原型已在 `feat/m123-http-conn-alive` 跑通并实测达标，
-> 待与 ws-approve 侧联调 + 合并入 main。
+> 提出方：清歌（2026-09-16）· 承接：东月 · 状态：**已收口** —— T1（本机 runtime 门）达标，
+> T2（清歌侧 ws-approve 应用集成，补 1 处 3 行）达标，已合入 main。
+> 随批：`bootstrap/` 14 件重烘（改 runtime 必需）+ `docs/native_index.json` 同步（新 native 入册）。
 
 ## 一、问题（清歌实测，本机复核一致）
 
@@ -104,3 +105,14 @@ ws-approve 处理大载荷 `/check`（单字节成本 ≈1ms/KB）时 CPU 高企
 5. **P3 现状更正**：P3(b) 的"并发/队列信号量"已有雏形——`PX_SERVE_WORKERS` 有界池 +
    `fserve_push` 队满背压 + `PX_MAX_CONNS` 登记上限。P3(a)"单请求 CPU/时间预算中断 handler"
    需要从 VM 里 longjmp 出 handler（M94-S2 的抢占只让出、不中断），风险高于收益，暂不做。
+
+## 六 收口记录（2026-09-16）
+
+| 项 | 内容 |
+|---|---|
+| 分支 | `feat/m123-http-conn-alive` → 合 main（先 merge `5231856`，取 m117 断言去抖动修复）|
+| 本机门（T1）| `examples/m123_http_conn_alive/verify.sh`：语义 4 项全绿 + 定量 **13.20s → 0.03s（0.23%）**（验收线 ≤30%）|
+| 应用集成（T2）| 清歌侧 ws-approve `/check` 补 1 处 3 行：1 并发 1MB 断连 **0.00s**、4 并发 **0.01s（0.26%）**；无回归 |
+| 随批①（最易漏）| **`bootstrap/` 14 件全部重烘** —— 改 `runtime/*.c` ⇒ 源码链指纹**全件失配**（实测 0/14；重烘后 14/14）。门：`selfhost/rebake_bin.sh --check-all` |
+| 随批②（最易漏）| **`docs/native_index.json` 312 → 313** —— 新 native `http_conn_alive` 入册，否则「生态索引防漂移门」红。门：`tools/gen_native_table.sh` + `git diff --exit-code` |
+| 本地复核 | `rebake --check`（指纹 + 55 例行为对拍）/ `--check-vm` / `engine_parity` / `interp_builtin_parity` / `diffcheck` 六项 / m82·m116–m120·m122 用例 / `builtin_list_check` 4 项 / fmt + lint 全绿 |

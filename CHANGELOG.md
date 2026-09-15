@@ -6,6 +6,32 @@
 
 ## [Unreleased]
 
+### http_serve「对端断开感知 / 请求可取消」原语 `http_conn_alive`（M123 · qg-issue 78）
+
+> **主题：把「客户端已经走了」变成 handler 能观测到的事实** —— 处理过程从此可提前收尾。
+> 缺口-决策-门见 `docs/M123_PLAN.md`；T2 集成验收见 qg-issue 78（清歌）。
+
+- **P0 · `http_conn_alive()` → 1 / 0**（runtime native，VM / C 双轨可用）：同连接内幂等、
+  无副作用、**不消费任何数据**（`poll(POLLRDHUP)` + `recv(MSG_PEEK|MSG_DONTWAIT)`），
+  实测 **0.738 µs/次**（ws-approve 每 KB 查一次 = 载荷成本 ~0.07%）。
+  `1` = 对端仍在线；`0` = 已 FIN / RST / 连接失效 / **当前不在 http_serve 系 handler 上下文**。
+  实现要点：handler 跑在**帧协程**上且会跨 worker 迁移 ⇒ fd 随协程走（`PxCoro::srv_fd` 继承 +
+  run 时装载 TLS），不能用 spawn 线程的 TLS。
+- **P1 · `http_send_resp` 写侧快速失败**：入口 `poll(POLLOUT)` 报 `POLLHUP|POLLERR|POLLNVAL`
+  直接收尾；判据**刻意不含 FIN**（FIN 后对端仍可收包，见 §边界）。
+- **实测（本机门 `examples/m123_http_conn_alive`）**：1MB 客户端发完即断 —— 完整处理 **13.20s**
+  → 原语提前收尾 **0.03s（0.23%）**，验收线 ≤30%。清歌侧 T2（ws-approve `/check` 补 1 处 3 行）：
+  1 并发 1MB 断连 0.87s → **0.00s**；4 并发 3.79s → **0.01s（0.26%）**；无回归
+  （`/health` ok、小载荷与 512KB `/check` → L1）。
+- **随批（结构性，最易漏）**：① 改 `runtime/*.c` ⇒ **`bootstrap/` 14 件全部重烘**
+  （源码链指纹口径 = 件 import 闭包 + `runtime/vm.c,vm.h,runtime.c,runtime.h`）；
+  ② 新 native 入册 ⇒ **`docs/native_index.json` 312 → 313**。两项均已由 CI 门
+  （全件源码链门 / 生态索引防漂移门）覆盖，随批落地。
+- **边界（文档明写，避免误用）**：`http_conn_alive()` 判「对端**不会再发数据**」，
+  **不区分**「半关（`shutdown(SHUT_WR)`）但仍等响应」的客户端；SSE 路径（`http_stream` 接管后
+  走 `sse_send`，自带 EPIPE 处理）本次未接；非 Linux 平台无 `POLLRDHUP`，该原语退化为
+  「仅 FIN / ERR」（`MSG_PEEK` 路径仍有效，行为不劣化）。
+
 ### CI 稳定性：M117 ①b 断言去抖动（时变伪文件不做逐字节比较）
 
 > **主题：CI「随机红」的定位与根治** —— 不是被测代码坏了，是断言在和时钟赛跑。
