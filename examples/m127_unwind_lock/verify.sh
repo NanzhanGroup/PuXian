@@ -105,7 +105,10 @@ fi
 
 echo
 echo "[2/6] B 关键：**持 g_gc_mu** 时注入失败 ⇒ 必须 _exit(1)（绝不留锁假死）"
-start_bin B 1 PX_ALLOC_FAIL_IN_LOCK=g_gc_mu
+# M128 说明：默认路径上 px_list_push/px_dict_set/gc_register 的扩容分配已移到**临界区之外**
+#   （这正是 M128 的成果，见 examples/m128_unlock_grow）⇒ 本用例需显式把扩容压回**锁内**
+#   （PX_GROW_RETRY_MAX=0 = 兜底路径，与 M127 及以前的行为逐字一致）才能验收审计闸本身。
+start_bin B 1 PX_GROW_RETRY_MAX=0 PX_ALLOC_FAIL_IN_LOCK=g_gc_mu
 if [ -n "$PID" ]; then
   R=$(req_full /grow /tmp/m127_B_grow.out); echo "     /grow → '${R:-（无响应：进程已退出）}'"
   if wait_gone 10; then ok "B 进程在 10s 内退出（未假死）"; else bad "B 进程 10s 后仍存活 = 假死"; kill9; fi
@@ -120,7 +123,7 @@ fi
 
 echo
 echo "[3/6] C 负控：同一注入 + PX_UNWIND_LOCK_GUARD=0 ⇒ **必须复现假死**"
-start_bin C 1 PX_ALLOC_FAIL_IN_LOCK=g_gc_mu PX_UNWIND_LOCK_GUARD=0
+start_bin C 1 PX_GROW_RETRY_MAX=0 PX_ALLOC_FAIL_IN_LOCK=g_gc_mu PX_UNWIND_LOCK_GUARD=0
 if [ -n "$PID" ]; then
   R=$(req_full /grow /tmp/m127_C_grow.out); echo "     /grow → '${R:-（无响应）}'"
   sleep 2
