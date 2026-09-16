@@ -3,7 +3,7 @@
 改动：`runtime/runtime.c`（M128 段：两阶段辅助 + 兜底开关 + 站点注入钩子；改写
 `px_list_push` / `px_dict_set` / `gc_register`，并保留 `px_list_push_locked` /
 `px_dict_set_locked` 两个锁内兜底函数）
-例子：`examples/m128_unlock_grow/{unlock_grow.px, verify.sh}`（本门 **pass=62 / fail=0**）
+例子：`examples/m128_unlock_grow/{unlock_grow.px, verify.sh}`（本门 **pass=86 / fail=0**）
 前置里程碑：M125（分配失败分类）· M126（信号处理器隔离）· **M127（锁审计闸）**
 
 ## 1 病灶（两个）
@@ -59,7 +59,7 @@ o->as.dict.keys = xrealloc(o->as.dict.keys, sizeof(char*) * o->as.dict.cap);  //
 - **兜底（不回归、不无限循环）**：锁外重试 `PX_GROW_RETRY_MAX` 次（默认 32）仍不足 ⇒ 回退
   **锁内扩容**（= M127 及以前的行为，函数保留原样）。
 
-## 3 门（`examples/m128_unlock_grow/verify.sh`）· pass=62 / fail=0
+## 3 门（`examples/m128_unlock_grow/verify.sh`）· pass=86 / fail=0
 
 | 用例 | 判据（实测） |
 |---|---|
@@ -121,7 +121,7 @@ M127 门的关键用例（B/C）依赖「**持 `g_gc_mu` 时**分配失败」这
 ## 7 复跑
 
 ```bash
-bash examples/m128_unlock_grow/verify.sh          # pass=62 fail=0
+bash examples/m128_unlock_grow/verify.sh          # pass=86 fail=0
 # 单看关键两例：
 #   C6 不变量：arm(list_grow,131072) → /inv?kind=list → 200 body 含 before=4096 … len=4097
 #   C8 对照：PX_GROW_RETRY_MAX=0 PX_ALLOC_FAIL_MIN=2097152 → /list?n=70000 → 进程退出（审计列 g_gc_mu）
