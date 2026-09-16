@@ -1,0 +1,66 @@
+name: PuXian Tag Guard
+
+# ============================================================
+# 发布 tag 守卫（qg-issue 86）
+# ------------------------------------------------------------
+# 为什么需要：本仓发布**完全由 tag 驱动** —— release.yml 的触发条件只有
+#   on: push: tags: ['v*']
+# ⇒「推了 main」不等于「发了一版」。2026-09-17 实况：M126/M127/M128 连续三个
+#   里程碑只推 main、一个 tag 都没打，而 main 与全部门/CI **全绿** ——
+#   唯一信号是本源自己去翻 Releases 页（最新仍是 v0.2.0-m125）。
+# 本工作流把「最高里程碑缺 tag」变成一次**红的 run**，并把处置命令写进 run 摘要。
+#
+# 触发设计：
+#   · schedule  —— 主检测路径。每天一次，不受「刚推上来还没打 tag」窗口影响。
+#   · push(main) —— 窗口期检查，用 --grace-min 45 跳过刚推上来的提交；
+#                   覆盖「几天后又有一次 main 推送、里程碑仍缺 tag」的情形。
+#   · workflow_dispatch —— 随时手动复核。
+# ⚠️ 已知边界：GitHub 会在仓库 **60 天无活动后停用定时工作流**（且不告警）
+#    ⇒ 长期静默后请手动 dispatch 一次，或把守卫挂到自有巡检上。
+# ============================================================
+
+on:
+  schedule:
+    - cron: '17 1 * * *'   # 每天 09:17 CST（UTC+8）
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  tag-guard:
+    name: 最高里程碑必须有 v*-m<NNN> 发布 tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 检出代码（含全部 tag 与历史）
+        uses: actions/checkout@v4
+        with:
+          # ⚠️ 必须 0：默认浅克隆**既没有 tag 也没有历史** ⇒ 守卫会判 rc=2
+          fetch-depth: 0
+
+      - name: 跑守卫（push 触发带 45 分钟窗口，定时触发 0 窗口）
+        env:
+          # push：刚推上来的提交允许「tag 还没打」，避免正常发布流程误报
+          GRACE_MIN: ${{ github.event_name == 'push' && '45' || '0' }}
+        run: |
+          set -o pipefail
+          bash packaging/tag_guard.sh --ref "$GITHUB_SHA" --grace-min "$GRACE_MIN" 2>&1 \
+            | tee "$RUNNER_TEMP/tag_guard.log"
+
+      - name: 失败时写摘要（含可直接复制的处置命令）
+        if: failure()
+        run: |
+          {
+            echo "### ❌ 发布 tag 守卫未通过"
+            echo ""
+            echo "发布只由 tag 驱动（\`on: push: tags: ['v*']\`）—— 推 main 不会发布任何东西。"
+            echo ""
+            echo '```'
+            cat "$RUNNER_TEMP/tag_guard.log" 2>/dev/null || echo "(无日志)"
+            echo '```'
+            echo ""
+            echo "SOP: \`docs/RELEASE_PROCESS.md\`（守卫一节）"
+          } >> "$GITHUB_STEP_SUMMARY"

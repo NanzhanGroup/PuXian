@@ -207,12 +207,13 @@ jobs:
           ./tools/pxc mcp --version
           ./bootstrap/pxcheck --version
           echo "✅ pxlsp / pxmcp / pxcheck 就绪"
-      - name: 发布侧守卫自测（Issue 41 单调性守卫 + Issue 56 发布包内容/可复现）
+      - name: 发布侧守卫自测（Issue 41 单调性守卫 + Issue 56 发布包内容/可复现 + Issue 86 tag 守卫）
         # ⚠️ 沿用 Issue 64 的教训：**每条独立成行**，不要用 `&&` 串联（`&&` 会吞掉前件失败）。
         run: |
           bash packaging/selftest_rpm_monotonic_guard.sh
           bash packaging/selftest_make_release.sh
-          echo "✅ 发布侧守卫自测全绿（41：旧覆盖新必红 · 56：内容同构 + 位级可复现）"
+          bash packaging/selftest_tag_guard.sh
+          echo "✅ 发布侧守卫自测全绿（41：旧覆盖新必红 · 56：内容同构 + 位级可复现 · 86：最高里程碑缺 tag 必红）"
       - name: M67 x86_64 native 档（m67_multiarch：hello/http/sqlite + gc_stress/gc_single GC 压力）
         run: |
           bash examples/m67_multiarch/verify.sh --arch x86_64 >/dev/null
