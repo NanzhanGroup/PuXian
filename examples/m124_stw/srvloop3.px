@@ -1,0 +1,42 @@
+# M124 · qg-issue 80 P2 最小复现：serve handler 做 short_id 形态字符串循环 + 客户端自环
+#   现象：base（93f114d）与 M124 均 3~5s 内 SIGSEGV（崩在 __vfprintf_internal / __strlen_avx2）。
+#   与「分配风暴协程」无关（churn=0 亦崩）→ 疑与并发 GC 根集/对象生命周期有关。
+#   用法：./build/srvloop2 <请求轮数> [每轮探测次数]
+def probe_once(id: int) -> int:
+    var hx = str(id)
+    var s = ""
+    var need = 4 - len(hx)
+    if need < 1:
+        need = 1
+    while len(s) < need:
+        s = "0" + s
+    return len(s)
+
+def probe_batch(n: int) -> int:
+    var h = 0
+    var i = 0
+    while i < n:
+        h = h + probe_once(i)
+        i = i + 1
+    return h
+
+def handler(req):
+    var h = probe_batch(5000)
+    return "ok" + str(h)
+
+var A = args()
+var ROUNDS = 300
+if len(A) > 1:
+    ROUNDS = int(A[1])
+
+print("=== srvloop2: rounds=" + str(ROUNDS) + " ===")
+spawn http_serve_unix("/tmp/m124_min2.sock", handler)
+sleep(200)
+
+var i = 0
+while i < ROUNDS:
+    var r = http_unix("/tmp/m124_min2.sock", "/x", "GET")
+    i = i + 1
+    if i % 25 == 0:
+        print("  rounds=" + str(i))
+print("=== srvloop2 done rounds=" + str(i) + " ===")

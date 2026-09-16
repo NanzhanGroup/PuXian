@@ -1,0 +1,20 @@
+# M124 · serve/客户端自环最小复现（与 GC 压力无关：churn=0 也崩）
+def handler(req):
+    return "ok"
+
+var A = args()
+var N = 3000
+if len(A) > 1:
+    N = int(A[1])
+
+print("=== srvloop: N=" + str(N) + " ===")
+spawn http_serve_unix("/tmp/m124_min.sock", handler)
+sleep(200)
+
+var i = 0
+while i < N:
+    var r = http_unix("/tmp/m124_min.sock", "/x", "GET")
+    i = i + 1
+    if i % 200 == 0:
+        print("  i=" + str(i))
+print("=== srvloop done ok=" + str(i) + " ===")
