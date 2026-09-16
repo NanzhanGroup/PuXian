@@ -82,6 +82,13 @@ https://soft.xiusoft.cn/puxian/           ← install-rpm.sh / rpm/ / releases/ 
 
 > ⚠️ `--work` 暂存目录**必须位于 `--dest` 之外**，否则会被 soft-mirror 一并分发出去。
 
+**落地页链接规范（2026-09-16 修 · 静默错链）**：站点 `…/puxian` **无尾斜杠时不 301 补斜杠**，
+落地页会被直接 200 返回 —— 此时**裸相对链接被解析到站点根**：`version.json` → `/version.json`
+（该路径**存在**，但内容是**文殊 App 的 `{"version":"1.7.141"}`**，用户点「镜像自证」会拿到
+**别人的版本号**，不报错）、`rpm/PUXIAN-GPG-KEY.asc` → `/rpm/…`（**404**）。
+⇒ `packaging/pages/index.html` 的**站内链接必须根相对**（`/puxian/…`）或绝对 URL，
+由 `packaging/selftest_pages_links.sh` 离线把关（禁止裸相对；含负控）。
+
 ## CI 发布（release.yml，tag `v*` 推送触发，如 v0.2.0 / v0.1.0-mXX）
 
 构建与发布分离（避免并发 push gh-pages 冲突）：
