@@ -26,6 +26,7 @@
 #include <poll.h>
 #include <pthread.h>
 #include "mbedtls/sha1.h"
+#include "locktrack.h"   // M127（qg-issue 84）：回卷锁审计 —— 必须放在**最后一个 include**
 
 // M32：wss 客户端复用 runtime.c 的 HTTPS 会话（HttpsSession 为内部类型，void* 包装）
 extern void* px_https_connect_ex(const char* host, int port);

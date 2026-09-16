@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include "locktrack.h"   // M127（qg-issue 84）：回卷锁审计 —— 必须放在**最后一个 include**
 
 // M100：VM 函数判定（px_vm_entry 为 runtime.c weak extern —— C 轨逃生舱无 vm.o → NULL）
 extern LXValue px_vm_entry(LXValue* args, int nargs, void* ctx) __attribute__((weak));

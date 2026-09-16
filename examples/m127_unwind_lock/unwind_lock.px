@@ -1,0 +1,62 @@
+# M127（qg-issue 84）门：**隔离点回卷的锁安全审计**（不再「带锁回卷 ⇒ 留锁假死」）
+# ---------------------------------------------------------------------------
+# 病灶（修复前）：
+#   M125/M126 把「运行时错误 / 分配失败」从进程级收紧到请求级（longjmp 回隔离点），
+#   但 **longjmp 不展开 pthread 锁**：若失败点落在临界区内，回卷会把锁永久留在「已锁」
+#   状态 ⇒ 其他线程随后阻塞在 pthread_mutex_lock 上 ⇒ 进程**既不服务也不退出**（假死）。
+#   本文件就是这条路径的确定性复现器 + 验收器：
+#     /grow  → 制造 >8192 个存活对象，迫使 `gc_register` 在**持 g_gc_mu**时
+#              `xrealloc(g_objs,…)` → `xmalloc` 扩容；配合 PX_ALLOC_FAIL_IN_LOCK=g_gc_mu
+#              让这次扩容分配失败 ⇒ 失败点正好落在 g_gc_mu 的临界区内。
+#   修复后：审计发现「本线程仍持锁」⇒ 打印持锁清单并 `_exit(1)`（systemd 拉起），
+#           **绝不留锁**（绝不假死）；无锁在身时行为与 M125/M126 完全一致（请求级 5xx）。
+# 环境（由 verify.sh 驱动）：
+#   HOLD_MS          主循环持有时长（默认 60000 ms）
+#   PX_ALLOC_FAIL_MIN         <字节>：xmalloc 请求 ≥ 该值即注入失败（M125 钩子，无锁场景）
+#   PX_ALLOC_FAIL_IN_LOCK     <锁名子串>：仅当持锁且处于隔离点内时注入失败（M127 钩子）
+#   PX_UNWIND_LOCK_GUARD=0    逃生舱：回退「无条件 longjmp」（M127 门负控用，生产勿设）
+#   PX_GC_THRESHOLD           拉高 = 不做 GC，保证存活对象数能涨过 8192（触发扩容）
+PORT = 18099
+GROW_N = 6000          # 每轮约 2~3 个对象 ⇒ 足以越过 g_objs 初始容量 8192
+
+def read_all(path):
+    let s = tcp_connect("127.0.0.1", PORT)
+    tcp_send(s, "GET " + path + " HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+    var b = ""
+    var i = 0
+    while i < 50:
+        let c = tcp_recv(s, 65536)
+        if c == "":
+            break
+        b = b + c
+        i = i + 1
+    tcp_close(s)
+    return b
+
+def handler(req):
+    let p = req["path"]
+    if p == "/health":
+        return {"status": 200, "body": "alive"}
+    if p == "/plain":
+        # 正控：**无锁在身**时的大分配失败（PX_ALLOC_FAIL_MIN）⇒ 应仍是请求级 5xx，进程存活
+        let d = read_file("/tmp/m127_payload.bin")
+        return {"status": 200, "body": "len=" + str(len(d))}
+    if p == "/grow":
+        # 目标路径：制造足够多的存活对象，使 gc_register 在持 g_gc_mu 时扩容 xrealloc
+        # 注：PuXian 里函数体内的 `var d = {}` 会被当成**块**（实测 R1002 索引赋值 null），
+        #     空字典的既有写法是 json_parse("{}")（见 examples/m109_headers_multi）。
+        var d = json_parse("{}")
+        var i = 0
+        while i < GROW_N:
+            d["k" + str(i)] = "o" + str(i)
+            i = i + 1
+        return {"status": 200, "body": "objs=" + str(len(d))}
+    return {"status": 404, "body": "nf"}
+
+spawn http_serve(PORT, handler)
+print("M127 READY pid=" + str(os_pid()) + " port=" + str(PORT))
+var hold = env("HOLD_MS")
+if hold == "":
+    hold = "60000"
+sleep(int(hold))
+print("M127 MAIN-EXIT-NORMAL")
