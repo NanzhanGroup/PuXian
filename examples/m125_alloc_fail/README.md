@@ -1,4 +1,4 @@
-# M125 · 分配失败改「请求级失败」（qg-issue 81）· 验收材料
+# M125 · 分配失败改「请求级失败」（qg-issue 82）· 验收材料
 
 分支：`fix/m125-alloc-fail-request-scoped`（也在 `main`）
 改动：`runtime/runtime.c`（+105 / −7）
