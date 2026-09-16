@@ -1,0 +1,86 @@
+# M126（qg-issue 83）门：**信号处理器**内运行时错误 / 分配失败 ⇒ 只终止本次处理器调用
+# ---------------------------------------------------------------------------
+# 病灶（修复前，本文件同时是复现器）：
+#   runtime `sig_dispatch_thread` 直接 `px_call(handler)`：
+#   ⓐ 不装隔离点 ⇒ 处理器内 px_error / 分配失败 → `exit(1)` ⇒ **一个信号带走整个进程**
+#      （生产实证：mahesvara SIGHUP reload 处理器一错，8 站点同进程一起死）；
+#   ⓑ 不注册 GC（无 px_gc_thread_enter）⇒ 处理器持有的普贤对象不被标记 ⇒ UAF
+#      （实测崩点 #0 px_add / #1 vm_run_loop / #2 px_vm_entry / #3 sig_dispatch_thread）。
+# 用法（由 verify.sh 驱动）：
+#   FX=ok     处理器只打印（**正控**：证明信号确实被投递、分发线程真跑了处理器）
+#   FX=abort  处理器内普通运行时错误（assert 失败 → px_error）
+#   FX=huge   处理器内真·大分配（read_file 100 GB 稀疏文件 ⇒ 一次 100 GB mmap 必被内核拒）
+#   FX=inject 处理器内 8 MB 分配，配合 PX_ALLOC_FAIL_MIN=4MB 注入失败
+#   FX=storm  处理器内 5000 次字符串拼接并持有 + 后台分配风暴（配 PX_GC_THRESHOLD=100 强化）
+#   HOLD_MS   主循环持有时长（默认 60000 ms；用于「自然退出时退出码不变」判据）
+# 环境：PX_SPAWN_ISOLATE=0 = 逃生舱（回退旧的「一错即退」致命语义，本门负控用）
+PORT = 18098
+
+def read_all(path):
+    # 读到 EOF（不能见头部结束标记就停：body 可能落在下一个 recv）
+    let s = tcp_connect("127.0.0.1", PORT)
+    tcp_send(s, "GET " + path + " HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+    var b = ""
+    var i = 0
+    while i < 50:
+        let c = tcp_recv(s, 65536)
+        if c == "":
+            break
+        b = b + c
+        i = i + 1
+    tcp_close(s)
+    return b
+
+def handler(req):
+    let p = req["path"]
+    if p == "/health":
+        return {"status": 200, "body": "alive"}
+    if p == "/big":
+        let d = read_file("/tmp/m126_payload.bin")
+        return {"status": 200, "body": "len=" + str(len(d))}
+    return {"status": 404, "body": "nf"}
+
+def sig_handler(sig):
+    let fx = env("FX")
+    print("M126 HANDLER-ENTER fx=" + fx)
+    if fx == "abort":
+        # 普通运行时错误（px_error）——修复前 = 整个进程 exit(1)
+        assert(false, "M126 处理器内断言失败（模拟 reload 处理器自身缺陷）")
+    if fx == "storm":
+        # 处理器内大量分配并**持有**：修复前信号线程不在 GC 根集 ⇒ 对象被回收 ⇒ SIGSEGV
+        var acc = ""
+        var i = 0
+        while i < 5000:
+            acc = acc + "xxxx"
+            i = i + 1
+        print("M126 HANDLER-ALLOC-DONE len=" + str(len(acc)))
+    if fx == "huge":
+        # 真·大分配：100 GB 稀疏文件（内核 overcommit 必拒）→ 走 px_alloc_fail 真因分类
+        let d = read_file("/tmp/m126_huge.bin")
+        print("M126 HANDLER-HUGE len=" + str(len(d)))
+    if fx == "inject":
+        # 注入失败（PX_ALLOC_FAIL_MIN=4MB）：8 MB 分配必失败
+        let d = read_file("/tmp/m126_payload.bin")
+        print("M126 HANDLER-INJECT len=" + str(len(d)))
+    print("M126 HANDLER-EXIT-OK")
+
+def storm_loop():
+    # 后台分配风暴：持续制造并发 GC 压力（放大 ⓑ 的漏标窗口）
+    var j = 0
+    var keep = ""
+    while j < 20000000:
+        keep = keep + "abcdefghij"
+        if len(keep) > 4096:
+            keep = ""
+        j = j + 1
+    return
+
+spawn http_serve(PORT, handler)
+signal(10, sig_handler)          # SIGUSR1
+spawn storm_loop()
+print("M126 READY pid=" + str(os_pid()) + " port=" + str(PORT))
+var hold = env("HOLD_MS")
+if hold == "":
+    hold = "60000"
+sleep(int(hold))
+print("M126 MAIN-EXIT-NORMAL")

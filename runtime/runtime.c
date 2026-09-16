@@ -489,6 +489,7 @@ static size_t g_slab_range_cap = 0;
 #define PX_ALLOC_ABSURD ((size_t)1 << 62)
 static void px_alloc_fail(size_t n, size_t total, const char* what);  // 定义见 px_error 之后
 static size_t px_alloc_fail_min(void);                                // 测试钩子（PX_ALLOC_FAIL_MIN）
+static _Atomic int g_sig_err_count;   // M126：信号处理器隔离计数（定义在 sig 段；此处前置声明）
 static size_t px_map_bytes(size_t n, int* overflow);
 
 // 请求字节数 → mmap 长度（含头部 + 页对齐）。**显式检出回绕**：原实现把回绕当「内存不足」，
@@ -2337,6 +2338,10 @@ void px_srcfunc(const char* name) { g_px_src_func = name; }
 // （走 GC 注销路径），宿主进程继续。主线程不设捕获 → 顶层错误保持 exit(1)。
 static __thread jmp_buf g_err_jmp;
 static __thread int g_err_jmp_set = 0;
+// M126（qg-issue 83）：隔离点**种类** —— 只用于失败文案精确化，生死判定仍只看 g_err_jmp_set。
+//   1 = 协程/spawn 隔离点（请求级：HTTP 5xx）；2 = 信号处理器隔离点（本次处理器调用级）；
+//   0 = 无隔离点（启动期 / GC 上下文 → 保留致命语义）。
+static __thread int t_isolate_kind = 0;
 static __thread char g_err_last_msg[512];   // M96-S2：本线程最后 px_error 文本（px_err_last）
 
 // M120（qg-issue 76 E1）：被隔离的协程运行时错误**进程级计数** —— 隔离是为了让宿主
@@ -2373,6 +2378,20 @@ int px_exit_code_final(int code) {
         fprintf(stderr, "退出码修正：本次运行有 %d 个协程因运行时错误被隔离终止（现场见上）\n", n);
         fflush(stderr);
         if (code == 0) return 1;
+    }
+    // M126（qg-issue 83）：信号处理器隔离**不改变退出码** —— 属「服务侧已处理的
+    //   生命周期事件」（对齐 nginx：reload 失败保留旧配置、服务不受影响），不是
+    //   「进程假成功」；若计入退出码，长跑服务只要历史上有过一次 reload 失败，
+    //   systemd 就会在**计划内**重启时判 failed（qg-issue 72 重启风暴同源）。
+    //   此处只做收尾提示（证据主渠道是 stderr 的 [px-signal] 行，可被监控 grep）。
+    {
+        int sn = atomic_load(&g_sig_err_count);
+        if (sn > 0) {
+            fprintf(stderr,
+                    "收尾提示：本次运行有 %d 次信号处理器错误被隔离（**退出码不变**：服务未中断，"
+                    "详见上方 [px-signal] 行）\n", sn);
+            fflush(stderr);
+        }
     }
     return code;
 }
@@ -2434,9 +2453,11 @@ static void px_alloc_fail(size_t n, size_t total, const char* what) {
             "          处理：%s\n",
             illegal ? "分配尺寸非法（尺寸计算溢出 / 负长度）" : "内存不足",
             what ? what : "?", n, total, e, strerror(e),
-            g_err_jmp_set
-                ? "协程隔离点内 → 只终止本请求（HTTP 层转 5xx），进程继续服务"
-                : "无协程隔离点 → 保留致命语义退出（启动期 / GC / 信号上下文）");
+            !g_err_jmp_set
+                ? "无隔离点 → 保留致命语义退出（启动期 / GC 上下文）"
+                : (t_isolate_kind == 2
+                       ? "信号处理器隔离点内 → 只终止本次处理器调用（进程与在途连接不受影响）"
+                       : "协程隔离点内 → 只终止本请求（HTTP 层转 5xx），进程继续服务"));
     fflush(stderr);
     if (g_err_jmp_set) longjmp(g_err_jmp, 1);
     _exit(1);
@@ -8297,6 +8318,83 @@ static void sig_bridge(int sig) {
     }
 }
 
+// ==================== M126（qg-issue 83）：信号处理器隔离点 + 纳入 GC ====================
+// 病灶（实测；两侧都在**同一个** `sig_dispatch_thread` 上）：
+//   ⓐ 该线程直接 `px_call(handler, …)`，**不装隔离点** ⇒ 处理器内任何运行时错误 /
+//      分配失败都走「无隔离点 → 保留致命语义」分支 = `exit(1)` ⇒ **一个信号带走整个进程**。
+//      生产实证：mahesvara 的 SIGHUP reload 处理器（`main.px:318 signal(1, reload_sig_handler)`）
+//      一旦抛错，8 站点同进程一起死（journal 00:40–00:43 三分钟内 5 次重启）。
+//   ⓑ 该线程**从未注册进 g_threads**（`px_gc_thread_enter` 此前只有 spawn / 协程 worker /
+//      H3 连接线程在用）⇒ 并发 GC 既不暂停它、也不标它的 `ti->vm_state`（见本文件 GC 根4：
+//      只遍历 `g_threads[]` 里**已注册**线程）⇒ **处理器持有的普贤对象被回收** = UAF。
+//      实测崩点（gdb 4/4 复现，FX=storm + PX_GC_THRESHOLD=100）：
+//        #0 px_add  #1 vm_run_loop  #2 px_vm_entry  #3 sig_dispatch_thread
+//      （处理器内 5000 次字符串拼接 + 后台分配风暴 ⇒ 读已回收字符串 ⇒ SIGSEGV）
+// 语义（对齐 nginx「reload 失败保留旧配置、服务不受影响」）：
+//   · 处理器内运行时错误 → **只终止本次处理器调用**；进程与在途连接不受影响；
+//   · **不改变退出码**（与 spawn 隔离**有意不同**）：信号处理器失败属「服务侧已处理的
+//     生命周期事件」，不是「进程假成功」。若计入 `g_coro_err_count`，长跑服务只要历史上
+//     有过一次 reload 失败，systemd 就会在**计划内**重启时判 failed（与 qg-issue 72
+//     「重启风暴」同源）。事实以 stderr 的 `[px-signal]` 行 + 进程退出时的收尾提示为准。
+//   · 逃生舱：`PX_SPAWN_ISOLATE=0` → 回退原 `exit(1)` 致命语义（与其它隔离点一致）。
+// 边界（如实，勿误读）：`longjmp` 不展开 pthread 锁、也不还原**应用侧**状态 —— 处理器若持有
+//   「忙」标志之类的状态，隔离后可能残留（mahesvara 的 `reload_busy` 即此类）；处理器应自行
+//   用 Result/? 收敛可预期错误。本隔离是「bug 兜底」，不是「错误处理替代品」。
+static _Atomic int g_sig_err_count = 0;   // 被隔离的信号处理器错误数（仅计数 + 收尾提示）
+
+static const char* px_sig_name(int sig) {
+    switch (sig) {
+        case 1:  return "SIGHUP";
+        case 2:  return "SIGINT";
+        case 3:  return "SIGQUIT";
+        case 10: return "SIGUSR1";
+        case 12: return "SIGUSR2";
+        case 15: return "SIGTERM";
+        default: return "(signal)";
+    }
+}
+
+static void px_sig_err_note(int sig) {
+    int n = atomic_fetch_add(&g_sig_err_count, 1) + 1;
+    fprintf(stderr,
+            "[px-signal] 信号处理器运行时错误已隔离（第 %d 次，%d %s）：本次处理器调用已终止，\n"
+            "            进程与在途连接不受影响（旧行为 = 整个进程退出）。\n"
+            "            若处理器持有「忙」标志等外部状态，请自行复位；\n"
+            "            需要旧的致命语义（一错即退）请设 PX_SPAWN_ISOLATE=0。\n",
+            n, sig, px_sig_name(sig));
+    fflush(stderr);
+}
+
+static __thread int t_sig_isolate_errored = 0;
+static int px_sig_isolate_errored(void) { return t_sig_isolate_errored; }
+
+// 装隔离点。语义与 px_spawn_isolate_begin 同款（调用方**不判返回值**，只查 errored 标志——
+//   跨编译单元 returns_twice 语义不可靠，见 runtime.h 告警；此处同 TU 亦然，统一纪律）。
+static int px_sig_isolate_begin(void) {
+    const char* iso0 = getenv("PX_SPAWN_ISOLATE");
+    if (iso0 && iso0[0] == '0') {
+        g_err_jmp_set = 0;          // 逃生舱：不装捕获点 → 处理器内错误回到 exit(1)
+        t_isolate_kind = 0;
+        t_sig_isolate_errored = 0;
+        return 1;
+    }
+    if (setjmp(g_err_jmp) == 0) {
+        g_err_jmp_set = 1;
+        t_isolate_kind = 2;
+        t_sig_isolate_errored = 0;
+        return 1;
+    }
+    g_err_jmp_set = 0;              // longjmp 落点（必然执行）
+    t_isolate_kind = 0;
+    t_sig_isolate_errored = 1;
+    return 0;
+}
+
+static void px_sig_isolate_end(void) {
+    g_err_jmp_set = 0;
+    t_isolate_kind = 0;
+}
+
 static void* sig_dispatch_thread(void* arg) {
     (void)arg;
     unsigned char buf[64];
@@ -8313,7 +8411,19 @@ static void* sig_dispatch_thread(void* arg) {
             pthread_mutex_unlock(&g_sig_mu);
             if (h.type == PX_FUNC || h.type == PX_NATIVE) {
                 LXValue arg = px_int(sig);
-                px_call(h, &arg, 1);
+                // M126 ⓑ：纳入并发 GC —— 纪律同 coro.c worker / M53-S3 连接线程：
+                //   enter（注册槽位 + 活跃计数）→ 跑用户代码 → leave。注册窗口**只覆盖
+                //   处理器执行期**（间歇期仍不注册，避免长期占槽 + 让单线程程序误入并发 GC）。
+                px_gc_thread_enter();
+                // M126 ⓐ：隔离点 —— 处理器内运行时错误 / 分配失败到此为止。
+                (void)px_sig_isolate_begin();
+                if (!px_sig_isolate_errored()) {
+                    px_call(h, &arg, 1);
+                }
+                int sig_errored = px_sig_isolate_errored();
+                px_sig_isolate_end();
+                px_gc_thread_leave();
+                if (sig_errored) px_sig_err_note(sig);
             }
         }
     }
@@ -9087,10 +9197,13 @@ static void* spawn_thread(void* p) {
     if (isolate) {
         if (setjmp(g_err_jmp) == 0) {
             g_err_jmp_set = 1;
+            t_isolate_kind = 1;       // M126：spawn 隔离点 = 请求/协程级
             job->fn(job->args, job->nargs, job->ctx);
             g_err_jmp_set = 0;
+            t_isolate_kind = 0;
         } else {
             g_err_jmp_set = 0;
+            t_isolate_kind = 0;
             px_coro_err_note("px-spawn");
         }
     } else {
@@ -9135,21 +9248,25 @@ int px_spawn_isolate_begin(void) {
     const char* iso0 = getenv("PX_SPAWN_ISOLATE");
     if (iso0 && iso0[0] == '0') {
         g_err_jmp_set = 0;        // 不装捕获点 → px_error 直接打印现场并 exit(1)
+        t_isolate_kind = 0;
         t_isolate_errored = 0;
         return 1;
     }
     if (setjmp(g_err_jmp) == 0) {
         g_err_jmp_set = 1;
+        t_isolate_kind = 1;       // M126：本隔离点为协程/请求级（失败文案据此区分）
         t_isolate_errored = 0;
         return 1;   // 正常路径：错误捕获点已安装，继续执行协程体
     }
     g_err_jmp_set = 0;
+    t_isolate_kind = 0;
     t_isolate_errored = 1;   // longjmp 落点：立即置位（此处必然执行）
     px_coro_err_note("px-coro");
     return 0;       // 错误路径：longjmp 回此，协程异常终止
 }
 void px_spawn_isolate_end(void) {
     g_err_jmp_set = 0;
+    t_isolate_kind = 0;
 }
 // M96-S2：受保护 native 调用（offload 外包线程用；见 runtime.h）。setjmp 在本函数内
 //   消化 longjmp —— px_call → px_error → longjmp 回本函数 setjmp → return 1（错误已
@@ -9160,13 +9277,16 @@ int px_native_call_capture(LXValue fn, LXValue* args, int nargs,
                            LXValue* out, char* errbuf, int errbuf_sz) {
     if (setjmp(g_err_jmp) == 0) {
         g_err_jmp_set = 1;
+        t_isolate_kind = 1;          // M126：外包调用隔离点 = 请求/协程级
         LXValue r = px_call(fn, args, nargs);
         PX_KEEP(r);                  // 返回前保护（*out 拷出前可被并发 GC STW 暂停）
         g_err_jmp_set = 0;
+        t_isolate_kind = 0;
         if (out) *out = r;
         return 0;
     }
     g_err_jmp_set = 0;
+    t_isolate_kind = 0;
     if (errbuf && errbuf_sz > 0)
         snprintf(errbuf, (size_t)errbuf_sz, "%s",
                  g_err_last_msg[0] ? g_err_last_msg : "外包执行失败");
