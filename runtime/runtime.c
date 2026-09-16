@@ -816,6 +816,79 @@ static char* xstrdup(const char* s) {
     return p;
 }
 
+// ==================== M128（qg-issue 85）：扩容分配移出临界区 ====================
+// 病灶（M127 门坐实）：`px_dict_set` / `px_list_push` / `gc_register` 在**持 g_gc_mu**
+//   期间做可失败分配（`xrealloc` / `xstrdup`）。分配失败 ⇒ M127 审计判定「带锁回卷 ⇒ 留锁
+//   ⇒ 假死」，故只能退回 `_exit(1)`（服务中断约 3 s）⇒ 这三处上「OOM ⇒ 请求级 5xx」
+//   **尚未**成立。次生病灶：原实现先 `cap *= 2` 再 `xrealloc`，失败会留下「cap 已翻倍、
+//   数组仍是旧长度」⇒ 之后按新 cap 写入即**越界写**（真实堆破坏，对长生命期对象尤其致命）。
+// 做法（两阶段；对齐 M125 对 g_slab_mu 的处置「先分配、后进临界区」）：
+//   · 阶段 A（**临界区外**）：按无锁快照预判是否需要更大的数组 / 是否需要键副本，需要则先
+//     分配好。备货是**本线程私有、尚未发布**的裸数组（GC 不可见）⇒ 此处任何失败都发生在
+//     **无锁在身**时 ⇒ 走常规隔离 ⇒ 请求级 5xx（正是本源要的语义）。
+//   · 阶段 B（临界区内）：只做**指针发布**（memcpy + 换指针 + 释放旧数组），不含任何可失败
+//     分配。发现备货不足（并发增长把槽位用掉了）⇒ 解锁重来（备货在锁外释放）。
+//   · 不变量：备货只是「更大的空数组」，**未发布即不可见** ⇒ 中途失败**不改变对象状态**
+//     （顺带修掉上面那条 cap 与数组长度不一致的越界写缺陷）。
+// 兜底（不回归、不无限循环）：锁外重试 `PX_GROW_RETRY_MAX` 次（默认 32）仍不足 ⇒ 回退
+//   **锁内扩容**（= M127 及以前的行为）。`PX_GROW_RETRY_MAX=0` 直接走锁内路径（M127 门
+//   对照用：证明审计闸在兜底路径上仍然生效）。
+// 站点标签注入（默认关）：`PX_ALLOC_FAIL_SITE=<子串>`（可选 `PX_ALLOC_FAIL_SITE_MIN=<字节>`
+//   设下限）⇒ 让**指定站点**的阶段 A 分配失败。**一次性**（只触发第一次命中）是刻意的：
+//   这样「失败之后对象是否仍然完好、服务是否仍可用」才能由后续请求验证（若每次都触发，
+//   后续核对请求自己也会失败，就什么都证不了）。注入落点在临界区外 ⇒ 期望「请求级 5xx ＋
+//   进程存活 ＋ **无**锁审计行」，这正是与 M127 门（锁内失败 ⇒ `_exit(1)`）的对照面。
+#define M128_GROW_SLACK 8     // 预留余量：降低并发增长下「备货不足 ⇒ 重试」的概率
+static int m128_retry_max(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char* e = getenv("PX_GROW_RETRY_MAX");
+        cached = (e && *e) ? atoi(e) : 32;
+        if (cached < 0) cached = 0;
+        if (cached > 1000) cached = 1000;   // 上界：病态竞争下也不至于长转
+    }
+    return cached;
+}
+// 站点标签注入（测试钩子，默认关；一次性）
+// 注：环境变量**每次读**（不缓存）—— 这样门可以先用一个请求 env_set 打开钩子（避免启动期
+//   或 HTTP 层的无关分配抢先命中），且「关」时成本仅两次 getenv（只发生在扩容路径上）。
+static int m128_site_hit(size_t n, const char* site) {
+    static int fired = 0;
+    if (fired || !site) return 0;
+    const char* pat = getenv("PX_ALLOC_FAIL_SITE");
+    if (!pat || !*pat) return 0;
+    if (strstr(site, pat) == NULL) return 0;
+    const char* m = getenv("PX_ALLOC_FAIL_SITE_MIN");
+    size_t min_bytes = (m && *m) ? (size_t)strtoull(m, NULL, 10) : 0;
+    if (n < min_bytes) return 0;
+    fired = 1;
+    fprintf(stderr, "[px-m128] 注入命中：站点=%s，申请 %zu 字节（临界区外 ⇒ 期望请求级 5xx）\n",
+            site, n);
+    fflush(stderr);
+    return 1;
+}
+// 阶段 A 分配（**只允许在临界区之外调用**）。失败/注入 ⇒ px_alloc_fail：
+//   此刻无锁在身 ⇒ longjmp 回隔离点 ⇒ HTTP 5xx、进程继续（M125 语义）。
+static void* m128_alloc(size_t n, const char* site) {
+    if (m128_site_hit(n, site)) {
+        int o = 0;
+        size_t t = px_map_bytes(n, &o);
+        px_alloc_fail(n, o ? 0 : t, site);
+    }
+    return xmalloc(n);
+}
+static char* m128_strdup(const char* s, const char* site) {
+    size_t n = strlen(s) + 1;
+    if (m128_site_hit(n, site)) {
+        int o = 0;
+        size_t t = px_map_bytes(n, &o);
+        px_alloc_fail(n, o ? 0 : t, site);
+    }
+    char* p = (char*)xmalloc(n);
+    memcpy(p, s, n);
+    return p;
+}
+
 // ==================== ISSUE28-B2（qg-issue 28）：slab 空页归还 OS ====================
 // 现象：高频短请求场景堆"只涨不落"（40MB→380MB→1.1GB 不回吐）——对象 sweep 释放后
 // 槽位回空闲链表复用，但整块 slab 的 mmap 映射从不归还 OS（无 munmap/madvise 路径）。
@@ -1980,14 +2053,34 @@ void px_root_keep(const LXValue* v) {
 
 // 注册对象（构造时调用）。est = 估算占用字节（触发字节阈值用，当前主用对象数阈值）。
 static void gc_register(LXObject* o, long long est) {
+    // M128：对象表扩容移到临界区外（两阶段，见本文件 M128 段）—— 锁内只做指针发布。
+    //   `PX_GROW_RETRY_MAX=0` ⇒ 不备货，直接走锁内 xrealloc（= M127 及以前行为，供对照验收）。
+    LXObject** spare = NULL;
+    int spare_cap = 0;
+    if (m128_retry_max() > 0 && g_obj_count >= g_obj_cap) {
+        int ncap = g_obj_cap ? g_obj_cap * 2 : 8192;
+        if (ncap < g_obj_count + M128_GROW_SLACK) ncap = g_obj_count + M128_GROW_SLACK;
+        spare = (LXObject**)m128_alloc(sizeof(LXObject*) * (size_t)ncap, "gc_objs_grow");
+        spare_cap = ncap;
+    }
     pthread_mutex_lock(&g_gc_mu);
     if (!g_gc_env_inited) gc_init_env();
     o->gc_mark = 0;   // 关键：xmalloc 未清零，gc_mark 垃圾值=1 会导致 DFS 跳过该节点（子对象漏标）
     o->is_mmap = 0;   // M57-S2：同上，is_mmap 垃圾值=1 会导致 sweep 误对普通 data 走 munmap
     if (g_obj_count >= g_obj_cap) {
-        int ncap = g_obj_cap ? g_obj_cap * 2 : 8192;
-        g_objs = xrealloc(g_objs, sizeof(LXObject*) * ncap);
-        g_obj_cap = ncap;
+        if (spare && spare_cap > g_obj_count) {          // 发布备货（只换指针，无分配）
+            if (g_obj_count > 0) memcpy(spare, g_objs, sizeof(LXObject*) * (size_t)g_obj_count);
+            LXObject** oldobjs = g_objs;
+            g_objs = spare;
+            g_obj_cap = spare_cap;
+            spare = NULL;
+            if (oldobjs) xfree(oldobjs);                 // 旧数组：锁内释放（同 xrealloc 语义）
+        } else {                                         // 备货不足（并发增长）或未备货 ⇒ 兜底
+            int ncap = g_obj_cap ? g_obj_cap * 2 : 8192;
+            if (ncap < g_obj_count + M128_GROW_SLACK) ncap = g_obj_count + M128_GROW_SLACK;
+            g_objs = xrealloc(g_objs, sizeof(LXObject*) * ncap);
+            g_obj_cap = ncap;
+        }
     }
     g_objs[g_obj_count++] = o;
     g_alloc_bytes += est;
@@ -1998,6 +2091,7 @@ static void gc_register(LXObject* o, long long est) {
     int snap_thr = g_gc_threshold;
     int deferrable = (g_active_threads > 0) && !g_gc_force_inline;   // 服务/并发模式：存在请求间安全点（PX_GC_INLINE=1 对拍强制内联）
     pthread_mutex_unlock(&g_gc_mu);
+    if (spare) xfree(spare);   // M128：备料未用（提交时发现无需扩容）⇒ 锁外释放（从未发布 ⇒ 安全）
     if (need) {
         // ISSUE28-B1：多线程服务模式（spawn/连接池活跃）把 GC 延迟到安全点（worker 空闲/
         // 池循环顶），避免全量 STW 落在请求热路径；对象数超过 阈值×4 硬上限仍强制内联
@@ -3319,12 +3413,9 @@ void px_field_set(LXValue obj, const char* name, LXValue val) {
     px_error("R1002: 类型 %s 不支持字段赋值: '%s'", px_type_name(obj), name);
 }
 
-void px_list_push(LXValue list, LXValue val) {
+// M127 及以前的锁内扩容路径（兜底 + `PX_GROW_RETRY_MAX=0` 对照用）。与历史实现逐字一致。
+static void px_list_push_locked(LXValue list, LXValue val) {
     LXObject* o = list.as.obj;
-    // M11：对象结构修改与 GC 标记/清扫通过 g_gc_mu 互斥（消除数据竞争）。
-    // 必须先拿锁再屏蔽信号：等锁期间若屏蔽 SIG_GC_STOP，GC 无法暂停本线程
-    // （信号 pending），导致 stop-the-world 空转、GC 降级、栈漏扫描（use-after-free）。
-    // 持锁后屏蔽：持锁期间 GC 主线程在等锁（不会发信号），不会被挂起。
     sigset_t old;
     pthread_mutex_lock(&g_gc_mu);
     gc_block_stop(&old);
@@ -3337,9 +3428,67 @@ void px_list_push(LXValue list, LXValue val) {
     pthread_mutex_unlock(&g_gc_mu);
 }
 
-void px_dict_set(LXValue dict, const char* key, LXValue val) {
+void px_list_push(LXValue list, LXValue val) {
+    LXObject* o = list.as.obj;
+    // M11：对象结构修改与 GC 标记/清扫通过 g_gc_mu 互斥（消除数据竞争）。
+    // 必须先拿锁再屏蔽信号：等锁期间若屏蔽 SIG_GC_STOP，GC 无法暂停本线程
+    // （信号 pending），导致 stop-the-world 空转、GC 降级、栈漏扫描（use-after-free）。
+    // 持锁后屏蔽：持锁期间 GC 主线程在等锁（不会发信号），不会被挂起。
+    // M128：扩容分配移到临界区外（两阶段，见本文件 M128 段）—— 锁内只做指针发布。
+    int maxr = m128_retry_max();
+    int retry = 0;
+    void* spare = NULL;          // 备好的新 items 数组（本线程私有、未发布 ⇒ GC 不可见）
+    int spare_cap = 0;
+    sigset_t old;
+    for (;;) {
+        if (retry >= maxr) {     // 兜底 / 对照：锁内扩容（M127 及以前行为）
+            if (spare) xfree(spare);
+            px_list_push_locked(list, val);
+            return;
+        }
+        // —— 阶段 A（临界区外，可失败）——
+        int len0 = o->as.list.len, cap0 = o->as.list.cap;   // 无锁快照（仅用于预估容量）
+        if (!spare && len0 >= cap0) {
+            int ncap = cap0 ? cap0 * 2 : 8;
+            if (ncap < len0 + M128_GROW_SLACK) ncap = len0 + M128_GROW_SLACK;
+            spare = m128_alloc(sizeof(LXValue) * (size_t)ncap, "list_grow");
+            spare_cap = ncap;
+        }
+        // —— 阶段 B（临界区内，不可失败）——
+        pthread_mutex_lock(&g_gc_mu);
+        gc_block_stop(&old);
+        int len = o->as.list.len;
+        if (len < o->as.list.cap) {          // 仍有空槽：直接追加
+            o->as.list.items[len] = val;
+            o->as.list.len = len + 1;
+            gc_unblock_stop(&old);
+            pthread_mutex_unlock(&g_gc_mu);
+            if (spare) xfree(spare);         // 备货未用：锁外释放（从未发布 ⇒ 安全）
+            return;
+        }
+        if (spare && spare_cap > len) {      // 发布备货（只换指针，无分配）
+            if (len > 0) memcpy(spare, o->as.list.items, sizeof(LXValue) * (size_t)len);
+            void* oldbuf = o->as.list.items;
+            o->as.list.items = (LXValue*)spare;
+            o->as.list.cap = spare_cap;
+            o->as.list.items[len] = val;
+            o->as.list.len = len + 1;
+            spare = NULL;
+            if (oldbuf) xfree(oldbuf);       // 旧数组：锁内释放（同 xrealloc 语义）
+            gc_unblock_stop(&old);
+            pthread_mutex_unlock(&g_gc_mu);
+            return;
+        }
+        gc_unblock_stop(&old);
+        pthread_mutex_unlock(&g_gc_mu);
+        if (spare) { xfree(spare); spare = NULL; spare_cap = 0; }   // 备货不足 ⇒ 丢弃重来
+        retry++;
+    }
+}
+
+// M127 及以前的锁内扩容 + 锁内键副本路径（兜底 + `PX_GROW_RETRY_MAX=0` 对照用）。与历史实现逐字一致。
+static void px_dict_set_locked(LXValue dict, const char* key, LXValue val) {
     LXObject* o = dict.as.obj;
-    // M11：与 GC 通过 g_gc_mu 互斥（见 px_list_push 注释）。先拿锁再屏蔽信号。
     sigset_t old;
     pthread_mutex_lock(&g_gc_mu);
     gc_block_stop(&old);
@@ -3361,6 +3510,101 @@ void px_dict_set(LXValue dict, const char* key, LXValue val) {
     o->as.dict.len++;
     gc_unblock_stop(&old);
     pthread_mutex_unlock(&g_gc_mu);
+}
+
+void px_dict_set(LXValue dict, const char* key, LXValue val) {
+    LXObject* o = dict.as.obj;
+    // M11：与 GC 通过 g_gc_mu 互斥（见 px_list_push 注释）。先拿锁再屏蔽信号。
+    // M128：键副本与扩容数组都在临界区外备好（两阶段，见本文件 M128 段）——锁内只做指针发布。
+    int maxr = m128_retry_max();
+    int retry = 0;
+    char** spare_keys = NULL;    // 备好的新 keys 数组（未发布 ⇒ GC 不可见）
+    LXValue* spare_vals = NULL;
+    int spare_cap = 0;
+    char* spare_key = NULL;      // 备好的键副本（只在「已判定键缺失」后才备，避免热路径多做一次分配）
+    int absent = 0;              // 上一轮锁内判定：键缺失
+    int absent_len = -1;         // 判定时的 len —— 无删除 ⇒ 键集单调，len 未变即可免重扫（O(1) 复核）
+    sigset_t old;
+    for (;;) {
+        if (retry >= maxr) {     // 兜底 / 对照：锁内扩容 + 锁内 xstrdup（M127 及以前行为）
+            if (spare_keys) xfree(spare_keys);
+            if (spare_vals) xfree(spare_vals);
+            if (spare_key) xfree(spare_key);
+            px_dict_set_locked(dict, key, val);
+            return;
+        }
+        // —— 阶段 A（临界区外，可失败）——
+        int len0 = o->as.dict.len, cap0 = o->as.dict.cap;   // 无锁快照（仅用于预估容量）
+        if (!spare_key && absent) spare_key = m128_strdup(key, "dict_key_dup");
+        // 只在「快照显示需要扩容」时备数组 —— 插入路径**仅有**在 len0 >= cap0 时才需要更大的数组
+        //   （快照陈旧时提交阶段会走「备货不足 ⇒ 解锁重来」，故正确性不依赖本预判）。
+        if (!spare_keys && len0 >= cap0) {
+            int ncap = cap0 ? cap0 * 2 : 8;
+            if (ncap < len0 + M128_GROW_SLACK) ncap = len0 + M128_GROW_SLACK;
+            spare_keys = (char**)m128_alloc(sizeof(char*) * (size_t)ncap, "dict_keys_grow");
+            spare_vals = (LXValue*)m128_alloc(sizeof(LXValue) * (size_t)ncap, "dict_vals_grow");
+            spare_cap = ncap;
+        }
+        // —— 阶段 B（临界区内，不可失败）——
+        pthread_mutex_lock(&g_gc_mu);
+        gc_block_stop(&old);
+        int len = o->as.dict.len;
+        int idx = -1;
+        if (absent && len == absent_len) {
+            idx = len;   // 免重扫：无删除 ⇒ i<len 的键集未变；len 未变 ⇒ 期间没有插入发生
+        } else {
+            for (int i = 0; i < len; i++) {
+                if (strcmp(o->as.dict.keys[i], key) == 0) { idx = i; break; }
+            }
+            if (idx < 0) { absent = 1; absent_len = len; } else { absent = 0; }
+        }
+        if (idx >= 0 && idx < len) {         // 命中已有键：只改值（零分配）
+            o->as.dict.vals[idx] = val;
+            gc_unblock_stop(&old);
+            pthread_mutex_unlock(&g_gc_mu);
+            if (spare_keys) xfree(spare_keys);
+            if (spare_vals) xfree(spare_vals);
+            if (spare_key) xfree(spare_key);
+            return;
+        }
+        if (!spare_key) {                    // 键缺失但还没备键副本 ⇒ 解锁备货后重来（不改对象状态）
+            gc_unblock_stop(&old);
+            pthread_mutex_unlock(&g_gc_mu);
+            absent = 1; absent_len = len;
+            retry++;
+            continue;
+        }
+        if (len >= o->as.dict.cap) {          // 需要更大的数组：发布备货（只换指针）
+            if (!spare_keys || spare_cap <= len) {   // 备货不足 ⇒ 解锁重来
+                gc_unblock_stop(&old);
+                pthread_mutex_unlock(&g_gc_mu);
+                if (spare_keys) xfree(spare_keys);
+                if (spare_vals) xfree(spare_vals);
+                spare_keys = NULL; spare_vals = NULL; spare_cap = 0;
+                retry++;
+                continue;
+            }
+            if (len > 0) {
+                memcpy(spare_keys, o->as.dict.keys, sizeof(char*) * (size_t)len);
+                memcpy(spare_vals, o->as.dict.vals, sizeof(LXValue) * (size_t)len);
+            }
+            char** oldk = o->as.dict.keys;
+            LXValue* oldv = o->as.dict.vals;
+            o->as.dict.keys = spare_keys;
+            o->as.dict.vals = spare_vals;
+            o->as.dict.cap = spare_cap;
+            spare_keys = NULL; spare_vals = NULL;
+            if (oldk) xfree(oldk);            // 旧数组：锁内释放（同 xrealloc 语义）
+            if (oldv) xfree(oldv);
+        }
+        o->as.dict.keys[len] = spare_key;      // 插入（此处必有空槽）
+        o->as.dict.vals[len] = val;
+        o->as.dict.len = len + 1;
+        spare_key = NULL;
+        gc_unblock_stop(&old);
+        pthread_mutex_unlock(&g_gc_mu);
+        return;
+    }
 }
 
 LXValue px_dict_get(LXValue dict, const char* key) {

@@ -1,0 +1,151 @@
+# M128（qg-issue 85）门：**扩容分配移出临界区**（px_list_push / px_dict_set / gc_register）
+# ---------------------------------------------------------------------------
+# 病灶（修复前）：这三处在**持 g_gc_mu** 期间做可失败分配（xrealloc / xstrdup）。
+#   分配失败 ⇒ M127 审计判定「带锁回卷 ⇒ 留锁 ⇒ 假死」，只能退回 _exit(1)（服务中断 ~3s）
+#   ⇒ 这些站点上「OOM ⇒ 请求级 5xx」尚未成立。
+# 修复后：扩容/键副本分配全部搬到**临界区之外**（两阶段：锁外备货 → 锁内只做指针发布）。
+#   本文件 = 这条路径的确定性验收器：
+#     /arm?site=<站点名>&min=<字节>   → env_set 打开站点注入钩子（PX_ALLOC_FAIL_SITE[/_MIN]）
+#     /list?n=N     → list 扩容（站点 list_grow）
+#     /dict?n=N     → dict 扩容（站点 dict_keys_grow / dict_vals_grow）
+#     /dictlong?n=N → 长键（~300B）⇒ 唯一大分配是「键副本」（站点 dict_key_dup）
+#     /grown?n=N    → 造大量对象 ⇒ 对象表扩容（站点 gc_objs_grow）
+#     /inv?kind=…   → **不变量**验收：子协程向父协程持有的对象追加（扩容时被隔离终止），
+#                     父协程随后核对「对象完好 + 仍可继续追加」（旧实现会留下 cap 与数组长度
+#                     不一致 ⇒ 下一次追加越界写）
+#     /rates        → 调 rate_limit（新键建桶）—— 用于记录「默认路径仍有锁内分配站点」
+# 环境（由 verify.sh 驱动）：
+#   HOLD_MS              主循环持有时长（默认 60000 ms）
+#   PX_ALLOC_FAIL_SITE      站点注入（子串匹配；**一次性**）
+#   PX_ALLOC_FAIL_SITE_MIN  站点注入下限（字节，默认 0）
+#   PX_GC_THRESHOLD      拉高 = 不做 GC，保证存活对象数能涨过对象表初始容量 8192
+PORT = 18199
+INV_CAP = 4096     # 注入下限 131072 = (4096×2)×16 = 从 4096 槽扩到 8192 槽时数组的字节数
+
+def qint(query, key, dflt):
+    if query == "":
+        return dflt
+    let parts = split(query, "&")
+    var i = 0
+    while i < len(parts):
+        let kv = split(parts[i], "=")
+        if len(kv) == 2 and kv[0] == key:
+            return int(kv[1])
+        i = i + 1
+    return dflt
+
+def qstr(query, key, dflt):
+    if query == "":
+        return dflt
+    let parts = split(query, "&")
+    var i = 0
+    while i < len(parts):
+        let kv = split(parts[i], "=")
+        if len(kv) == 2 and kv[0] == key:
+            return kv[1]
+        i = i + 1
+    return dflt
+
+# 子协程：向**父协程传入的** list 追加 n 项。扩容分配被注入失败时本协程被隔离终止
+#   （父协程继续），但父协程仍持有同一个 list ⇒ 可核对「失败后对象状态」。
+def grower(l, n):
+    var i = 0
+    while i < n:
+        l.push(i)
+        i = i + 1
+
+def dgrower(d, n):
+    var i = 0
+    while i < n:
+        d["k" + str(i)] = "v" + str(i)
+        i = i + 1
+
+def handler(req):
+    let p = req["path"]
+    let q = req["query"]
+    if p == "/health":
+        return {"status": 200, "body": "alive"}
+    if p == "/arm":
+        let s = qstr(q, "site", "none")
+        let m = qint(q, "min", 0)
+        env_set("PX_ALLOC_FAIL_SITE", s)
+        env_set("PX_ALLOC_FAIL_SITE_MIN", str(m))
+        return {"status": 200, "body": "armed=" + s + " min=" + str(m)}
+    if p == "/list":
+        let n = qint(q, "n", 100)
+        let l = json_parse("[]")
+        var i = 0
+        while i < n:
+            l.push(i)
+            i = i + 1
+        return {"status": 200, "body": "list=" + str(len(l))}
+    if p == "/dict":
+        let n = qint(q, "n", 100)
+        let d = json_parse("{}")
+        var i = 0
+        while i < n:
+            d["k" + str(i)] = "v" + str(i)
+            i = i + 1
+        return {"status": 200, "body": "dict=" + str(len(d))}
+    if p == "/dictlong":
+        let n = qint(q, "n", 10)
+        var k = ""
+        while len(k) < 300:
+            k = k + "K"
+        let d = json_parse("{}")
+        var i = 0
+        while i < n:
+            d[k + str(i)] = "v"
+            i = i + 1
+        return {"status": 200, "body": "dictlong=" + str(len(d))}
+    if p == "/grown":
+        let n = qint(q, "n", 9000)
+        let d = json_parse("{}")
+        var i = 0
+        while i < n:
+            d["g" + str(i)] = "o" + str(i)
+            i = i + 1
+        return {"status": 200, "body": "objs=" + str(len(d))}
+    if p == "/inv":
+        let kind = qstr(q, "kind", "list")
+        if kind == "list":
+            let l = json_parse("[]")
+            spawn grower(l, 20000)
+            var guard = 0
+            while len(l) < INV_CAP and guard < 30000:
+                sleep_us(200)
+                guard = guard + 1
+            let l_before = len(l)
+            let l_first = str(l[0])
+            let l_last = str(l[l_before - 1])
+            l.push(999999)
+            let l_after = len(l)
+            let l_tail = str(l[l_after - 1])
+            return {"status": 200, "body": "before=" + str(l_before) + " first=" + l_first +
+                    " last=" + l_last + " tail=" + l_tail + " len=" + str(l_after)}
+        let d = json_parse("{}")
+        spawn dgrower(d, 20000)
+        var g2 = 0
+        while len(d) < INV_CAP and g2 < 30000:
+            sleep_us(200)
+            g2 = g2 + 1
+        let d_before = len(d)
+        let d_first = d["k0"]
+        let d_last = d["k" + str(d_before - 1)]
+        d["after"] = "ok"
+        let d_after = len(d)
+        let d_tail = d["after"]
+        return {"status": 200, "body": "before=" + str(d_before) + " v0=" + d_first +
+                " vlast=" + d_last + " tail=" + d_tail + " len=" + str(d_after)}
+    if p == "/rates":
+        let ok = rate_limit("rl-" + str(now_us()), 100, 60)
+        return {"status": 200, "body": "rl=" + str(ok)}
+    return {"status": 404, "body": "nf"}
+
+spawn http_serve(PORT, handler)
+print("M128 READY pid=" + str(os_pid()) + " port=" + str(PORT))
+var hold = env("HOLD_MS")
+if hold == "":
+    hold = "60000"
+sleep(int(hold))
+print("M128 MAIN-EXIT-NORMAL")
