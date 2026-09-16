@@ -470,7 +470,7 @@ static Slab** g_slab_ranges = NULL;
 static size_t g_slab_range_count = 0;
 static size_t g_slab_range_cap = 0;
 
-// ==================== M125（qg-issue 81）：分配失败「请求级失败」化 ====================
+// ==================== M125（qg-issue 82）：分配失败「请求级失败」化 ====================
 // 病灶：三处 mmap 失败（slab_raw_alloc / slab_create / xmalloc 大对象）一律
 //   `fprintf(stderr,"lx: 内存不足"); exit(1);` —— **一个请求**即可带走整个服务进程。
 //   实测 mahesvara（8 站点同进程）因此整站不可达约 3 s：journal `lx: 内存不足` →
@@ -2407,7 +2407,7 @@ void px_error(const char* fmt, ...) {
     exit(1);
 }
 
-// ==================== M125（qg-issue 81）：分配失败处理 ====================
+// ==================== M125（qg-issue 82）：分配失败处理 ====================
 // 测试钩子（默认关）：PX_ALLOC_FAIL_MIN=<字节>，xmalloc 请求 ≥ 该值即注入一次失败。
 //   用途 = 让「分配失败 → 请求级 5xx、进程不死」这条语义**可被自动化门验证**
 //   （否则只能等真 OOM）。首次读取后缓存；未设或 0 → 恒不触发。
