@@ -6,6 +6,22 @@
 
 ## [Unreleased]
 
+### packaging · 镜像落地页站内链接改「根相对」（根治静默错链）
+
+> **实测根因（东月 2026-09-16）**：镜像站 `…/puxian` **无尾斜杠时不 301 补斜杠**，
+> 落地页直接 200 返回。此时裸相对 `href="version.json"` 被解析到**站点根**
+> `/version.json` —— 该路径**存在**，内容却是**文殊 App 的 `{"version":"1.7.141"}`**，
+> 用户点「镜像自证文件」拿到的是**别人的版本号**（不报错 · 静默错）；
+> `href="rpm/PUXIAN-GPG-KEY.asc"` 则解析为 `/rpm/…` → **404**。
+
+- `packaging/pages/index.html`：两处站内链接由裸相对改为**根相对**
+  （`/puxian/version.json`、`/puxian/rpm/PUXIAN-GPG-KEY.asc`）——
+  与「是否带尾斜杠」「从哪个域名进入」（`soft.xiusoft.cn` / `soft.wsai.chat`）**均无关**。
+- 新增 `packaging/selftest_pages_links.sh`：离线判据「禁止裸相对 href/src」
+  ＋两支关键自证链接齐备（**含负控**：改回裸相对必须报 ❌）。
+- **传播**：`packaging/pages/index.html` 由 CI 同步到 `gh-pages/index.html`，
+  再由镜像器同步到站点 ⇒ 后续站点同步**不再回退**为相对链接。
+
 ### http_serve「对端断开感知 / 请求可取消」原语 `http_conn_alive`（M123 · qg-issue 78）
 
 > **主题：把「客户端已经走了」变成 handler 能观测到的事实** —— 处理过程从此可提前收尾。
