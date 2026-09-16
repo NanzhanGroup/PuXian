@@ -18,6 +18,8 @@
 # 校验：tarball sha256 == sha256sums.txt；每个 rpm `rpm -Kv` 验签；repomd.xml.asc 必须存在
 # 发布顺序（消除「元数据与包不匹配」窗口）：新 rpm（不删旧）→ repodata → 删旧 rpm
 # 原子性：全部在 WORK 暂存并通过校验后才写入 DEST；任一步失败 ⇒ DEST 保持原样
+# 站点根文件指纹：index.html / install-rpm.sh **不随版本号变化** ⇒ 版本相同也要比内容，
+#   否则「只改落地页、版本不变」的更新会被下面的幂等短路永久挡住（2026-09-16 实测踩到）
 #
 # 用法：
 #   pxrepo_mirror.sh --dest <站点子目录>
@@ -84,6 +86,33 @@ done <<< "$TAGS"
 TAG="$BEST"
 log "   权威版本 = $TAG"
 
+# ---------- 1b. 公用：浅取 gh-pages / 站点根文件指纹 ----------
+# fetch_pages 幂等：无变化时是秒级空转；跑完 FETCH_HEAD = gh-pages tip。
+fetch_pages() {
+  if [ -d "$CLONE/.git" ]; then
+    git -C "$CLONE" fetch -q --depth 1 origin gh-pages
+  else
+    mkdir -p "$CLONE"; git -C "$CLONE" init -q
+    git -C "$CLONE" remote add origin "$REMOTE_URL" 2>/dev/null || true
+    git -C "$CLONE" fetch -q --depth 1 origin gh-pages
+  fi
+}
+
+# >>> rootfiles-fresh >>>  （selftest_pxrepo_mirror.sh 按此标记抽取本段做离线回归，勿删改标记行）
+# 站点根文件（index.html / install-rpm.sh）与版本号无关：只比 version.json 会把
+# 「只改落地页」的更新永久挡住 ⇒ 直接比内容，打印「与 gh-pages 不一致的文件名」。
+# 用法：rootfiles_stale <clone> <ref> <dest> <file>...   → 输出 " a b"（空 = 一致）
+rootfiles_stale() {
+  local cl="$1" ref="$2" dest="$3"; shift 3
+  local f out=""
+  for f in "$@"; do
+    if [ ! -f "$dest/$f" ]; then out="$out $f"; continue; fi
+    git -C "$cl" show "$ref:$f" 2>/dev/null | cmp -s - "$dest/$f" || out="$out $f"
+  done
+  printf '%s' "$out"
+}
+# <<< rootfiles-fresh <<<
+
 # ---------- 2. 单调守卫（相对 DEST 现役） ----------
 if [ -f "$DEST/version.json" ]; then
   CUR="$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$DEST/version.json" | head -1 | sed 's/.*"\([^"]*\)"$/\1/')"
@@ -100,20 +129,22 @@ if [ -f "$DEST/version.json" ]; then
     fi
   fi
   if [ "${CUR:-}" = "$TAG" ]; then
-    log "✅ DEST 已是 $TAG —— 无变化，退出"
-    exit 0
+    # ⚠ 幂等短路前先看**站点根文件**：index.html / install-rpm.sh 与版本号无关。
+    #   2026-09-16 实测踩到：落地页链接修复推上 gh-pages 后，本轮同步因「版本相同」
+    #   直接 exit 0 ⇒ 修复永远到不了站点。故按内容指纹判定。
+    fetch_pages
+    STALE_ROOT="$(rootfiles_stale "$CLONE" FETCH_HEAD "$DEST" index.html install-rpm.sh)"
+    if [ -z "$STALE_ROOT" ]; then
+      log "✅ DEST 已是 $TAG 且站点根文件一致 —— 无变化，退出"
+      exit 0
+    fi
+    log "⚠ 版本未变（$TAG）但站点根文件有更新：$STALE_ROOT ⇒ 继续同步（本次会重走完整校验）"
   fi
 fi
 
 # ---------- 3. 取 gh-pages 树（rpm/ + 站点根文件）并交叉校验版本 ----------
 log "② 取 gh-pages 树"
-if [ -d "$CLONE/.git" ]; then
-  git -C "$CLONE" fetch -q --depth 1 origin gh-pages
-else
-  mkdir -p "$CLONE"; git -C "$CLONE" init -q
-  git -C "$CLONE" remote add origin "$REMOTE_URL" 2>/dev/null || true
-  git -C "$CLONE" fetch -q --depth 1 origin gh-pages
-fi
+fetch_pages
 PAGES_MSG="$(git -C "$CLONE" log -1 --format=%s FETCH_HEAD)"
 log "   gh-pages tip: $PAGES_MSG"
 # 交叉校验真值 = rpm 树内的实际里程碑版本（.mNNN），不是提交信息。

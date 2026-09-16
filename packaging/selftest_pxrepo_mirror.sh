@@ -26,6 +26,11 @@ HDR
 sed -n '/^# >>> xcheck-rpm-tree >>>/,/^# <<< xcheck-rpm-tree <<<$/p' "$SCRIPT" >> "$BLOCK"
 grep -q 'RPM_MS=' "$BLOCK" || { echo "❌ 抽取失败：$SCRIPT 里的标记行缺失或被改"; exit 2; }
 
+# 站点根文件指纹判据：单独抽一份（纯函数，无 log/die 依赖）
+BLOCK2="$W/rootfiles.sh"
+sed -n '/^# >>> rootfiles-fresh >>>/,/^# <<< rootfiles-fresh <<<$/p' "$SCRIPT" > "$BLOCK2"
+grep -q 'rootfiles_stale()' "$BLOCK2" || { echo "❌ 抽取失败：$SCRIPT 里的 rootfiles-fresh 标记行缺失或被改"; exit 2; }
+
 PASS=0; FAIL=0
 mk_repo() { # $1=名 $2..=rpm文件名列表
   local d="$W/$1" f; shift
@@ -69,6 +74,42 @@ tip_msg d "rpm: 发布 PuXian v0.2.0-m122"
 check "D 树内多版本共存 → 放行 + 告警" 0 "多个里程碑版本" "$W/d" "v0.2.0-m122"
 
 check "E tag 无 -mNNN 后缀 → 跳过" 0 "跳过 rpm 树版本交叉校验" "$W/a" "v0.2.0"
+
+echo "== 站点根文件指纹判据（抽取自 $SCRIPT）=="
+# 背景：index.html / install-rpm.sh 与版本号无关，只比 version.json 会把「只改落地页」
+# 的更新永久挡住（2026-09-16 实测）。此判据决定「版本相同时是否还要继续同步」。
+RF="$W/rf"
+mkdir -p "$RF/dest" "$RF/clone"
+git -C "$RF/clone" init -q
+printf 'NEW-HTML\n'    > "$RF/clone/index.html"
+printf 'NEW-INSTALL\n' > "$RF/clone/install-rpm.sh"
+git -C "$RF/clone" -c user.email=t@t -c user.name=t add -A
+git -C "$RF/clone" -c user.email=t@t -c user.name=t commit -qm c
+rf() { bash -c 'source "$1"; shift; rootfiles_stale "$@"' _ "$BLOCK2" "$RF/clone" HEAD "$1" index.html install-rpm.sh; }
+
+o="$(rf "$RF/dest")"
+if [ "$o" = " index.html install-rpm.sh" ]; then
+  echo "✅ ① DEST 缺两份 → 两份都列出"; PASS=$((PASS+1))
+else
+  echo "❌ ① 期望「 index.html install-rpm.sh」，实得「$o」"; FAIL=$((FAIL+1))
+fi
+
+cp "$RF/clone/index.html" "$RF/dest/index.html"
+cp "$RF/clone/install-rpm.sh" "$RF/dest/install-rpm.sh"
+o="$(rf "$RF/dest")"
+if [ -z "$o" ]; then
+  echo "✅ ② 与 gh-pages 完全一致 → 空（幂等短路仍生效）"; PASS=$((PASS+1))
+else
+  echo "❌ ② 期望空，实得「$o」"; FAIL=$((FAIL+1))
+fi
+
+printf 'OLD-HTML\n' > "$RF/dest/index.html"
+o="$(rf "$RF/dest")"
+if [ "$o" = " index.html" ]; then
+  echo "✅ ③ 只改落地页（版本不变）→ 只列出 index.html ★本次真实场景"; PASS=$((PASS+1))
+else
+  echo "❌ ③ 期望「 index.html」，实得「$o」"; FAIL=$((FAIL+1))
+fi
 
 echo "== 结果：通过 $PASS / 失败 $FAIL =="
 [ "$FAIL" = 0 ] || exit 1

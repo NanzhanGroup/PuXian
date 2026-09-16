@@ -22,6 +22,18 @@
 - **传播**：`packaging/pages/index.html` 由 CI 同步到 `gh-pages/index.html`，
   再由镜像器同步到站点 ⇒ 后续站点同步**不再回退**为相对链接。
 
+### packaging · 镜像器：版本相同也要刷新站点根文件（修幂等短路漏洞）
+
+- **实测踩到**：落地页链接修复推上 `gh-pages` 后，本轮同步因 `DEST/version.json` 已是
+  `v0.2.0-m122` 而**直接 `exit 0`** ⇒ 修复**永远到不了站点**。
+  **根因**：幂等短路只看版本号，而 `index.html` / `install-rpm.sh` 与版本号无关。
+- `pxrepo_mirror.sh`：短路前先取 `gh-pages`，对两支站点根文件做**内容指纹**比对
+  （新增 `rootfiles_stale()`，置于 `# >>> rootfiles-fresh >>>` 标记段供离线回归）；
+  不一致 ⇒ 继续走完整校验与发布；一致 ⇒ 仍照原样「无变化，退出」（**幂等性不丢**）。
+- `selftest_pxrepo_mirror.sh`：新增 3 例（DEST 缺文件 / 完全一致 / 只改落地页），
+  **离线 8/8 通过**；真实网络三场景实测：A 版本不变+旧落地页 → 走完校验、
+  B 完全一致 → 幂等退出、C 手改版 → 判为有更新 ⇒ 覆盖为标准版。
+
 ### http_serve「对端断开感知 / 请求可取消」原语 `http_conn_alive`（M123 · qg-issue 78）
 
 > **主题：把「客户端已经走了」变成 handler 能观测到的事实** —— 处理过程从此可提前收尾。
