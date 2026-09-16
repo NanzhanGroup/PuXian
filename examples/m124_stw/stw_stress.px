@@ -1,0 +1,42 @@
+# M124（qg-issue 80）验收：STW 屏障自旋放大复现 / 回归
+#   场景：N 个协程各自密集分配（高频并发 GC），复现「参与暂停的线程 × GC 时长」CPU 税。
+#   用法：./build/stw_stress <worker数> <跑秒数>
+#   观测：strace -c -f -e trace=sched_yield -p <pid> -- sleep 6
+#         per-thread CPU: /proc/<pid>/task/*/stat
+def churn(ms: int, ch):
+    var acc = ""
+    var t0 = now_ms()
+    var i = 0
+    var alive = true
+    while alive:
+        acc = acc + "0123456789" + str(i)
+        if len(acc) > 256:
+            acc = ""
+        i = i + 1
+        if i % 4096 == 0 and now_ms() - t0 >= ms:
+            alive = false
+    ch.send(i)
+
+var A = args()
+var N = 8
+var SECS = 40
+if len(A) > 1:
+    N = int(A[1])
+if len(A) > 2:
+    SECS = int(A[2])
+
+print("=== stw_stress: workers=" + str(N) + " secs=" + str(SECS) + " ===")
+var T0 = now_ms()
+var ch = chan[int](N + 1)
+var k = 0
+while k < N:
+    spawn churn(SECS * 1000, ch)
+    k = k + 1
+var got = 0
+var total = 0
+while got < N:
+    var v = ch.recv()
+    total = total + v
+    got = got + 1
+var el = now_ms() - T0
+print("=== stw_stress done: iters=" + str(total) + " elapsed=" + str(el) + "ms iters_s=" + str(total * 1000 / el) + " ===")

@@ -1,0 +1,59 @@
+# M124 / qg-issue 80 §5-P2 复核探针：帧协程「跨 worker 迁移 / 抢占」下，循环内累加是否会丢
+#   设计：N 个协程各自把 n=961 的补零循环跑 ITERS 次（正确结果恒 s="0961"、g=1），
+#   同时叠加分配压力抬高 GC 频率 → 若存在「让出/抢占后帧槽写回丢失」，会出现
+#     · 循环次数 g != 1（多跑几轮才凑够 4 位）或
+#     · 结果串不是 "0961"（字符丢了/多了）
+#   任一异常则该协程 bad>0 并打印 first=<首个异常样本>；全对 bad=0。
+#   对照：PX_CORO_QUANTUM_US=0 关闭抢占再跑一次（同一二进制）。
+
+def pad_check(id, iters, ch, det):
+    var bad = 0
+    var bad_first = ""
+    var gmax = 0
+    var acc = ""
+    var i = 0
+    while i < iters:
+        var s = str(961)
+        var g = 0
+        while len(s) < 4:
+            g += 1
+            s = "0" + s
+            if g > 8:
+                break
+        if g > gmax:
+            gmax = g
+        if s != "0961" or g != 1:
+            bad += 1
+            if bad_first == "":
+                bad_first = "s=[" + s + "] g=" + str(g) + " len=" + str(len(s))
+        acc = acc + "0123456789"
+        if len(acc) > 512:
+            acc = ""
+        i += 1
+    det.send("coro" + str(id) + " iters=" + str(iters) + " gmax=" + str(gmax) + " first=" + bad_first)
+    ch.send(bad)
+
+var A = args()
+var N = 8
+var ITERS = 60000
+if len(A) > 1:
+    N = int(A[1])
+if len(A) > 2:
+    ITERS = int(A[2])
+
+print("=== p2_probe: coros=" + str(N) + " iters=" + str(ITERS) + " ===")
+var ch = chan[int](N + 1)
+var det = chan[str](N + 1)
+var k = 0
+while k < N:
+    spawn pad_check(k, ITERS, ch, det)
+    k += 1
+var got = 0
+var totbad = 0
+while got < N:
+    var b = ch.recv()
+    var d = det.recv()
+    print("  " + d + " bad=" + str(b))
+    totbad = totbad + b
+    got += 1
+print("=== p2_probe done: coros=" + str(N) + " total_bad=" + str(totbad) + " verdict=" + str(totbad == 0) + " ===")

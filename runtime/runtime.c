@@ -37,6 +37,10 @@
 #endif
 #include "miniz.h"   // M21 gzip 压缩/解压（raw deflate + gzip 容器，M19 zip 同源）
 #include "arch.h"    // M67-S4：GC 架构抽象层（arch_read_sp / arch_scan_registers / arch_uc_sp）
+#if defined(__linux__)
+#include <linux/futex.h>   // M124（qg-issue 80）：STW 屏障 futex 阻塞等待
+#include <sys/syscall.h>   //   —— handler 内用裸 syscall（async-signal-safe）
+#endif
 
 // M10 HTTPS：mbedtls 静态库（compiler/runtime/mbedtls/）
 #include "mbedtls/net_sockets.h"
@@ -906,7 +910,8 @@ typedef struct {
 static GCThreadInfo* g_threads = NULL;              // 动态线程表（gc_init_env 分配，此后指针恒定）
 static int g_thread_cap = 0;                        // 表容量（= 配置上限，gc_init_env 置位后不变）
 static int g_thread_max = PX_DEFAULT_THREAD_MAX;    // 槽上限（env PX_MAX_THREADS 夹取 [64,4096]）
-static int g_paused_count = 0;      // 已暂停线程数（调试用；控制流以 paused 标志 + epoch 为准）
+static volatile int g_paused_count = 0;  // 已暂停线程数（调试用；控制流以 paused 标志 + epoch 为准）
+                                         // M124：volatile —— 兼作 executor 的 futex 等待字
 static volatile int g_gc_resume = 0;// （保留字段，控制流以 epoch 为准）
 static volatile int g_gc_epoch = 0; // GC 轮次号：每轮开始/结束各 ++，handler 等待其变化
 static volatile int g_gc_stop_in_progress = 0; // 本轮 GC 是否在进行中（handler 用其区分过期堆积信号）
@@ -916,6 +921,45 @@ static int g_gc_freed = 0;
 static int g_gc_skips = 0;
 static long long g_gc_marked = 0;   // 调试：最近一轮 GC 标记数
 static __thread LXObject* g_tmp_root = NULL;  // 暂存根：保护刚创建对象（构造函数内触发 GC）
+
+// ---------- M124（qg-issue 80）：STW 屏障「阻塞等待」原语 ----------
+// 病灶：gc_stop_handler / gc_stop_world 三处 sched_yield() 自旋 —— 每个被暂停线程
+//   在**整段 GC 期间**空转，executor 等恢复时同样空转 ⇒ CPU 税 = 参与暂停的线程数 ×
+//   GC 时长。生产实测：一个僵死协程把 GC 顶到 3.7 次/秒 → 稳定烧 ~2 核（sched_yield
+//   占 perf 采样 ~48%）；本机压测 8 协程 = 186k sched_yield/s、5.1 核。
+// 修法：改 futex 阻塞等待。等待字两个（都是 int，4 字节对齐）：
+//   · g_gc_epoch      —— 被暂停线程等「本轮结束」（executor 每轮开始/结束各 ++）
+//   · g_paused_count  —— executor 等「暂停/恢复进度」（handler 上报暂停、退出时递减）
+// handler 内用**裸 syscall**（async-signal-safe；不可用 pthread_cond 等）；executor 侧
+// 显式 FUTEX_WAKE。所有等待都带超时兜底 ⇒ 即使漏唤醒也只是迟到超时时长，绝不卡死。
+// 非 Linux（mingw 交叉等）无 SYS_futex：退化为 nanosleep 轮询，语义不变。
+#if defined(__linux__) && defined(SYS_futex)
+#define PX_HAVE_FUTEX 1
+static inline int px_futex_wait(volatile int* addr, int expect, long timeout_us) {
+    struct timespec ts;
+    struct timespec* tsp = NULL;
+    if (timeout_us >= 0) {
+        ts.tv_sec = timeout_us / 1000000;
+        ts.tv_nsec = (timeout_us % 1000000) * 1000;
+        tsp = &ts;
+    }
+    return (int)syscall(SYS_futex, (int*)addr, FUTEX_WAIT_PRIVATE, expect, tsp, NULL, 0);
+}
+static inline void px_futex_wake(volatile int* addr) {
+    (void)syscall(SYS_futex, (int*)addr, FUTEX_WAKE_PRIVATE, 0x7fffffff, NULL, NULL, 0);
+}
+#else
+#define PX_HAVE_FUTEX 0
+static inline int px_futex_wait(volatile int* addr, int expect, long timeout_us) {
+    (void)addr; (void)expect;
+    if (timeout_us > 0) {
+        struct timespec ts = { timeout_us / 1000000, (timeout_us % 1000000) * 1000 };
+        nanosleep(&ts, NULL);
+    }
+    return 0;
+}
+static inline void px_futex_wake(volatile int* addr) { (void)addr; }
+#endif
 
 // ---- M92 精确 GC：precise/conservative 双模式 + native 桥 TLS 登记根栈 ----
 // precise（VM 轨产物）：退役整栈保守扫描（gc_scan_stack/registers/thread_stack 跳过），
@@ -1271,7 +1315,7 @@ static void gc_scan_stack(GCHash* set) {
 
 // ==================== M11 并发 GC：线程暂停协议 ====================
 // 设计：GC 需要 stop-the-world 时，向所有已注册活跃线程发送 SIG_GC_STOP 实时信号。
-// 线程在信号处理器中（async-signal-safe，仅内存读写 + sched_yield）：
+// 线程在信号处理器中（async-signal-safe，仅内存读写 + 裸 futex syscall）：
 //   保存 ucontext（寄存器）+ 本线程暂存根 → 计数 paused → 自旋等待 g_gc_resume → 恢复。
 // GC 主线程（触发 GC 的线程）不暂停自己，扫描：全局表 + 自己栈/寄存器 + 所有暂停
 // 线程的寄存器/栈/暂存根，然后设置 g_gc_resume=1 唤醒全部线程。
@@ -1323,6 +1367,7 @@ static void gc_stop_handler(int sig, siginfo_t* si, void* ctx) {
     ti->paused = 1;
     __sync_fetch_and_add(&g_paused_count, 1);
     __sync_synchronize();
+    px_futex_wake(&g_paused_count);   // M124：通知 executor「本线程已暂停」（替代 200us 定长轮询）
     // 自旋等待本轮 GC 结束：条件 = 本轮仍在进行（stop_in_progress）且 epoch 未变。
     // 若本轮已结束（stop 已清除，信号为延迟/堆积）→ 立即退出，绝不空等——
     // 否则会自旋等待一个永远不会到来的"本轮结束"（偶发死锁）。
@@ -1330,12 +1375,18 @@ static void gc_stop_handler(int sig, siginfo_t* si, void* ctx) {
     int my_epoch = g_gc_epoch;
     int hspins = 0;
     while (g_gc_stop_in_progress && g_gc_epoch == my_epoch) {
-        sched_yield();
-        if (++hspins > 5000000) break;
+        // M124：阻塞等待本轮 GC 结束（原 sched_yield 自旋 ⇒ 每个被暂停线程空转 1 核）。
+        // 唤醒源：executor 本轮结束 g_gc_epoch++ 后的 px_futex_wake；20ms 超时兜底
+        // （漏唤醒最多迟 20ms 恢复），300 次 ≈ 6s 绝对上限（原 5s 兜底语义不变）。
+        int cur = g_gc_epoch;
+        if (!g_gc_stop_in_progress || g_gc_epoch != my_epoch) break;
+        px_futex_wait(&g_gc_epoch, cur, 20000);
+        if (++hspins > 300) break;
     }
     __sync_synchronize();
     ti->paused = 0;
     __sync_fetch_and_add(&g_paused_count, -1);
+    px_futex_wake(&g_paused_count);   // M124：通知 executor「本线程已恢复」（resume-wait 阻塞字）
 }
 
 // M105-S3：fork 后子进程继承父线程 TLS → 复位软屏蔽层栈（防「父进程恰在软屏蔽临界区
@@ -1586,7 +1637,7 @@ void px_gc_collect(void) {
         //    判定"本轮真暂停"：ti->paused==1 且 ti->epoch==当前 epoch。
         //    堆积信号（stop 已清除）会让 paused 短暂置 1 后立即返回，但 epoch 是旧值
         //    → 不算本轮暂停 → 重发信号直到真正本轮暂停。已退出线程（ESRCH）忽略。
-        int spins = 0;
+        long long stop_deadline = gc_mono_ms() + 5000;   // M124：兜底改「真实 5s 预算」
         for (;;) {
             int remain = 0;
             __sync_synchronize();
@@ -1600,12 +1651,21 @@ void px_gc_collect(void) {
                 /* ESRCH：线程已退出，忽略 */
             }
             if (remain == 0) break;
-            if (++spins > 5000000) {   // 兜底：约 5 秒未全部暂停 → 降级跳过本轮（绝不卡死）
+            // M124（qg-issue 80）兜底：约 5 秒未全部暂停 → 降级跳过本轮（绝不卡死）。
+            //   原实现用自旋计数 5,000,000 配 200us nanosleep ⇒ 实际 ≈1000s（注释与行为不符），
+            //   现改为时钟预算，行为与注释一致；GC 真正卡住的场景不再拖到 16 分钟。
+            if (gc_mono_ms() >= stop_deadline) {
                 g_gc_skips++;
                 g_gc_epoch++;
                 g_gc_stop_in_progress = 0;
                 __sync_synchronize();
-                while (g_paused_count > 0) sched_yield();
+                px_futex_wake(&g_gc_epoch);      // M124：唤醒已在等待的暂停线程（否则等满 20ms 超时）
+                // M124：等已暂停线程恢复 —— 阻塞等待（原 sched_yield 自旋），上限 1s
+                for (int w = 0; w < 1000 && g_paused_count > 0; w++) {
+                    int pc = g_paused_count;
+                    if (pc <= 0) break;
+                    px_futex_wait(&g_paused_count, pc, 1000);
+                }
                 pthread_rwlock_unlock(&g_globals_mu);   // M55：释放暂停前持有的全局表锁
                 pthread_mutex_unlock(&g_gc_mu);
                 g_gc_executor = 0;
@@ -1614,9 +1674,10 @@ void px_gc_collect(void) {
             }
             // M22：重发间隔加小延时，避免对长时间屏蔽信号的线程狂轰信号（实时信号排队 →
             // 解除屏蔽时堆积触发 → 信号处理器重入覆盖 ucontext，丢用户态寄存器）。
-            struct timespec ts = {0, 200000};   // 200us
-            nanosleep(&ts, NULL);
-            sched_yield();
+            // M124：延时改 futex 阻塞等待（原 nanosleep + sched_yield 双份让出）——
+            //   有线程上报暂停即被 handler 的 wake 提前唤醒，比定长 200us 更快收敛。
+            int pc = g_paused_count;
+            px_futex_wait(&g_paused_count, pc, 200);   // 200us
         }
         // 3) 标记
         GCHash set;
@@ -1702,9 +1763,13 @@ void px_gc_collect(void) {
         // 5) 本轮结束：epoch++ 唤醒所有暂停线程；清除进行中标志；等待其全部恢复
         g_gc_epoch++;
         g_gc_stop_in_progress = 0;
+        px_futex_wake(&g_gc_epoch);   // M124：唤醒全部「等本轮结束」的暂停线程（原自旋轮询 epoch）
         __sync_synchronize();
         if (g_gc_debug) (void)write(2, "[mk] resume-wait\n", 17);
-        int wspins = 0, wstable = 0;
+        // M124：等全部暂停线程恢复 —— 阻塞等待（原 sched_yield 自旋 ⇒ executor 在整段恢复
+        //   窗口空转 1 核）。唤醒源 = handler 退出时 g_paused_count 递减后的 px_futex_wake。
+        int wstable = 0;
+        long long wdeadline = gc_mono_ms() + 5000;   // 兜底：5s 未全部恢复 → 强制继续（绝不卡死）
         for (;;) {
             int any_paused = 0;
             __sync_synchronize();
@@ -1712,8 +1777,9 @@ void px_gc_collect(void) {
                 if (g_threads[i].in_use && g_threads[i].paused) { any_paused = 1; break; }
             if (!any_paused) { if (++wstable >= 2) break; }
             else wstable = 0;
-            if (++wspins > 5000000) break;   // 兜底：约 5 秒未全部恢复 → 强制继续（绝不卡死）
-            sched_yield();
+            if (gc_mono_ms() >= wdeadline) break;
+            int pc = g_paused_count;
+            px_futex_wait(&g_paused_count, pc, 200);   // 200us：阻塞等待，线程恢复即被唤醒
         }
         if (g_gc_debug) (void)write(2, "[mk] resume-done\n", 17);
         pthread_mutex_unlock(&g_gc_mu);
