@@ -38,6 +38,7 @@
 #include <openssl/pem.h>
 #include <openssl/provider.h>
 #include <openssl/objects.h>
+#include "locktrack.h"   // M127（qg-issue 84）：回卷锁审计 —— 必须放在**最后一个 include**
 
 #define QUIC_MAX 64
 #define QUIC_PKT_BUF 65536

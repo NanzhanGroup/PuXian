@@ -206,7 +206,7 @@ mod_macro() { # $1=mod → -DPX_NO_<MOD>
 rt_src_files() {
     # 参数：cuts（空格分隔已裁项）→ 输出需进缓存的 runtime 源（相对 $RT_DIR）
     local cuts="$1"
-    local list="runtime.h runtime.c runtime_aes.c runtime_xml.c runtime_zip.c \
+    local list="runtime.h locktrack.h runtime.c runtime_aes.c runtime_xml.c runtime_zip.c \
         runtime_ws.c runtime_rsa.c runtime_sqlite.c runtime_route.c runtime_h2.c \
         runtime_ffi.c runtime_zlib.c runtime_ed25519.c tweetnacl.c tweetnacl.h \
         runtime_image.c third_party/stb/stb_image.h third_party/stb/stb_image_write.h \

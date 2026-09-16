@@ -46,6 +46,7 @@
 #include <unistd.h>
 #include <time.h>
 #include <errno.h>       // M96-S2：ETIMEDOUT（offload executor 空闲回收 timedwait）
+#include "locktrack.h"   // M127（qg-issue 84）：回卷锁审计 —— 必须放在**最后一个 include**
 
 // ---- M96-S2：offload 外包任务（阻塞网络 native 外包执行线程池；前向声明见下）----
 typedef struct PxOffTask PxOffTask;

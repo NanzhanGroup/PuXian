@@ -15,6 +15,7 @@
 #include <string.h>
 #include <pthread.h>
 #include "sqlite3.h"
+#include "locktrack.h"   // M127（qg-issue 84）：回卷锁审计 —— 必须放在**最后一个 include**
 
 #define MAX_SQLITE_DBS 128
 static sqlite3* g_sqlite_dbs[MAX_SQLITE_DBS];

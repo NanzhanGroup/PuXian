@@ -6,6 +6,48 @@
 
 ## [Unreleased]
 
+### runtime · 隔离点回卷的锁审计：不再「带锁回卷 ⇒ 留锁 ⇒ 假死」（M127 · qg-issue 84）
+
+> **实测病灶（2026-09-17，承 M125/M126）**：M125/M126 把运行时错误从**进程级**收紧到
+> **请求级**（`longjmp` 回隔离点 → HTTP 5xx）。但 **`longjmp` 不展开 pthread 锁**：失败点
+> 若落在临界区内，回卷把该锁**永久**留在「已锁」状态 ⇒ 其他线程随后阻塞在
+> `pthread_mutex_lock` ⇒ **进程既不服务也不退出**（假死：systemd 视为健康、监控看不到 failed，
+> 比旧的 `exit(1)` 更难发现）。**gdb 实测现场（全线程栈）**：
+> `#0 __lll_lock_wait / #1 pthread_mutex_lock / #2 px_dict_set / #3 vm_run_loop / #4 coro_worker`。
+> **具体机制（本次坐实到调用链）**：`px_dict_set` 在**持 `g_gc_mu`** 时做可失败分配
+> （`xrealloc` ×2 ＋ `xstrdup(key)`），而**几乎每个 HTTP 响应**都要构造字典（响应头 / JSON body）
+> ⇒ 这条路径上任何一次分配失败都会整进程假死；`px_list_push`（`xrealloc`）、`gc_register`
+> （对象表扩容）同型。
+
+- **锁追踪**（新增 `runtime/locktrack.h`）：所有运行时 pthread 锁的加/解锁**同时**记进
+  「本线程持锁栈」（TLS，O(1)、无分配、任意上下文可用）。以**宏接管**实现
+  （`pthread_mutex_lock` → `px_lt_lock_` 等，包装函数定义在 `#define` 之前故不自递归），
+  因此**不需要改 216 处调用点**；覆盖 6 个持锁 TU（`runtime.c` / `coro.c` / `runtime_ws.c` /
+  `runtime_route.c` / `runtime_sqlite.c` / `runtime_quic.c`）。`pthread_cond_wait` 期间互斥量由
+  pthread 释放 ⇒ 追踪表在等待期间出栈（口径 = 此刻不持锁）。
+- **审计闸**：`px_error` / `px_alloc_fail` 在 `longjmp` **之前**调用 `px_unwind_lock_guard()`：
+  **无锁在身 → 照旧回卷**（请求级 5xx，与 M125/M126 行为完全一致，绝大多数情况）；
+  **有锁在身 → 不回卷**：打印持锁清单（锁名 + 深度）＋假死后果 ＋处理建议，然后
+  `_exit(1)`（systemd 3s 内拉起，服务中断约 3 秒，**绝不留锁**）。
+- **诊断钩子**（默认关）`PX_ALLOC_FAIL_IN_LOCK=<锁名子串>`：仅当本线程**此刻持有**匹配的运行时锁
+  且**处在隔离点内**时，让这次分配失败 —— 让上述路径**确定性可复现**（否则只能撞真 OOM）。
+  命中时打印持锁栈，避免「锁没记上」与「记上了但审计没跑」混淆。
+- **逃生舱** `PX_UNWIND_LOCK_GUARD=0` → 回退「无条件 `longjmp`」（**门负控专用，生产勿设**）。
+- **工具链**：`tools/px` 的 rtcache 源清单纳入 `locktrack.h`（进缓存键 ⇒ 改它自动重建）。
+- **门 `examples/m127_unwind_lock/verify.sh`（33/33）**：A 正控（**无锁**在身失败 → 仍 5xx ＋
+  未触发审计 ＋ 自然退出 rc=0）· **B 关键**（**持 `g_gc_mu`** 失败 → 10s 内 `_exit(1)`，文案含
+  「无法安全回滚」＋清单列出 `&g_gc_mu` ＋后果 ＋处置建议）· **C 负控**（同注入 ＋
+  `PX_UNWIND_LOCK_GUARD=0` → **复现假死**：进程不退出且 `/health` 无响应 ⇒ 证明假死真实存在、
+  且正是审计拦住它）· D 无注入回归（`/health`·`/plain`·`/grow` 全 200，零假阳性，rc=0）·
+  E 启动期注入（无隔离点 → 文案区分、未误报）· F 材料完整性。
+- **回归**：M126 门 42/42 · M125 门 11/11 · M120 dict 门 31/31 · M123 门 PASS（定量 0.14% ≤ 30%）·
+  m93_s2 6/6 · `engine_parity` 通过（负例 30/30 · 正例 6/6）。
+- **边界（如实）**：有锁在身时进程仍会 `_exit(1)`（约 3s 中断）——「OOM → 请求级 5xx」在
+  **持锁分配**的站点**尚未**成立（候选后续：把 `px_dict_set` / `px_list_push` / `gc_register`
+  的分配移出临界区，对齐 M125 对 `g_slab_mu` 的处置）；`cond_wait` 中被丢弃的等待会绕过 glibc
+  的 cond 组计数清理（罕见）；只覆盖 pthread 锁；持锁深度 >24 只计数不记名；既有「加锁后提前
+  return 不解锁」类缺陷会表现为审计假阳性（保守方向）。
+
 ### runtime · 信号处理器（reload 等）内错误不再带走整个服务进程（M126 · qg-issue 83）
 
 > **实测病灶（2026-09-17，生产 mahesvara 同进程承载 8 站点）**：`runtime/runtime.c` 的

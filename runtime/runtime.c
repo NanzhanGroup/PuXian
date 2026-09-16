@@ -52,6 +52,16 @@
 #include "mbedtls/error.h"
 #include "mbedtls/sha256.h"
 
+// ==================== M127（qg-issue 84）：回卷的锁安全审计 ====================
+// 病灶与做法见 runtime/locktrack.h 头部说明。此处 = 存储（TLS，跨 TU 共享）+ 宏接管本 TU 的锁调用。
+// ⚠ 位置要求：必须在**最后一个系统/三方 include 之后** —— 下面的宏会把此后本 TU 内所有
+//   `pthread_mutex_lock(...)` 形态的文本改写成带追踪的包装（本文件后段仅还有一个
+//   `#include <sys/epoll.h>`（无同名声明），无影响）。
+#include "locktrack.h"
+__thread const void* px_lt_mu[PX_LT_MAX];
+__thread const char* px_lt_name[PX_LT_MAX];
+__thread int         px_lt_n = 0;
+
 // M27 P0：服务端 TLS + WebServer 生产化
 // - tls_server(cert, key)：注册进程级服务端 TLS（px_serve/sse_serve/ws_serve 自动 TLS）
 // - g_cur_conn：当前线程处理中的连接（px_px_send 等旧 fd 接口自动转发 TLS 写）
@@ -489,6 +499,8 @@ static size_t g_slab_range_cap = 0;
 #define PX_ALLOC_ABSURD ((size_t)1 << 62)
 static void px_alloc_fail(size_t n, size_t total, const char* what);  // 定义见 px_error 之后
 static size_t px_alloc_fail_min(void);                                // 测试钩子（PX_ALLOC_FAIL_MIN）
+static int px_alloc_fail_in_lock_hit(size_t n);                       // M127 测试钩子（PX_ALLOC_FAIL_IN_LOCK）
+static __thread const char* t_alt_match;                              // M127：注入命中的锁名（诊断用）
 static _Atomic int g_sig_err_count;   // M126：信号处理器隔离计数（定义在 sig 段；此处前置声明）
 static size_t px_map_bytes(size_t n, int* overflow);
 
@@ -654,6 +666,14 @@ static Slab* slab_find(const void* p) {
 
 static void* xmalloc(size_t n) {
     if (n <= 0) n = 1;
+    if (px_alloc_fail_in_lock_hit(n)) {
+        // M127 测试钩子：**在调用方仍持有运行时锁时**注入分配失败 —— 用于确定性复现
+        //   「失败点落在临界区内 ⇒ 回卷留锁 ⇒ 进程假死」这条路径（见 locktrack.h）。
+        int o = 0;
+        size_t t = px_map_bytes(n, &o);
+        px_alloc_fail(n, o ? 0 : t, t_alt_match ? "xmalloc（PX_ALLOC_FAIL_IN_LOCK 注入：临界区内）"
+                                                : "xmalloc（注入）");
+    }
     if (n >= px_alloc_fail_min()) {
         // M125 测试钩子：按"映射失败"语义注入（total 传真实值，避免被分类成尺寸非法）
         int o = 0;
@@ -2338,6 +2358,69 @@ void px_srcfunc(const char* name) { g_px_src_func = name; }
 // （走 GC 注销路径），宿主进程继续。主线程不设捕获 → 顶层错误保持 exit(1)。
 static __thread jmp_buf g_err_jmp;
 static __thread int g_err_jmp_set = 0;
+
+// ==================== M127（qg-issue 84）：回卷的锁安全审计 ====================
+// 机制与边界见 runtime/locktrack.h 头部。此处 = 两件东西：
+//   ① 测试钩子（默认关）：让「失败点落在临界区内」这条路径**确定性可复现**；
+//   ② 审计：隔离点 longjmp 之前调用 —— 无锁在身照旧隔离（请求级 5xx）；有锁在身则
+//      **不能带锁回卷**（longjmp 不展开 pthread 锁 ⇒ 该锁永久遗留 ⇒ 全进程假死），
+//      改为打印持锁清单并 `_exit(1)` 保留致命语义（systemd 3s 内拉起）。
+//
+// ① PX_ALLOC_FAIL_IN_LOCK=<锁名子串>：仅当**本线程此刻持有一把名字含该子串的运行时锁**、
+//    且**正处在隔离点内**（g_err_jmp_set）时，才让这次分配失败。放在隔离点内的条件很关键：
+//    启动期的临界区内分配（如 gc_init_env）本来就没有隔离点、本来就 exit(1)，注入它只会
+//    让门测不到真正想测的路径。
+static int px_alloc_fail_in_lock_hit(size_t n) {
+    static const char* pat = NULL;
+    static int inited = 0;
+    if (!inited) {
+        const char* e = getenv("PX_ALLOC_FAIL_IN_LOCK");
+        pat = (e && *e) ? e : NULL;
+        inited = 1;
+    }
+    if (!pat) return 0;
+    if (!g_err_jmp_set) return 0;      // 无隔离点：注入无意义（那条路径本来就致命）
+    int cnt = px_lt_n < PX_LT_MAX ? px_lt_n : PX_LT_MAX;
+    for (int i = 0; i < cnt; i++) {
+        const char* nm = px_lt_name[i];
+        if (nm && strstr(nm, pat)) {
+            t_alt_match = nm;
+            // 诊断（仅开钩子时出现）：说清「本次注入踩在哪把锁上、当时栈上还有谁」——
+            //   否则门失败时无法区分「锁没记上」与「记上了但审计没跑」。
+            fprintf(stderr, "[px-locktrack] 注入命中：本线程持锁栈深度=%d，匹配=%s，申请 %zu 字节；栈=",
+                    px_lt_n, nm, n);
+            for (int j = 0; j < cnt; j++) fprintf(stderr, "%s%s", j ? "," : "", px_lt_name[j] ? px_lt_name[j] : "?");
+            fprintf(stderr, "\n");
+            fflush(stderr);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// ② 审计。返回 = 可以安全回卷；判定「不可」时打印清单并 _exit(1)（不返回）。
+static void px_unwind_lock_guard(const char* where) {
+    if (px_lt_n <= 0) return;                        // 无锁在身：照旧隔离（绝大多数情况）
+    const char* esc = getenv("PX_UNWIND_LOCK_GUARD");
+    if (esc && esc[0] == '0') return;                // 逃生舱：无条件回卷（M127 门负控用；生产勿设）
+    fprintf(stderr,
+            "运行时错误: 隔离点无法安全回滚【%s】—— 本线程此刻仍持有 %d 个运行时锁：\n",
+            where, px_lt_n);
+    int shown = px_lt_n < PX_LT_MAX ? px_lt_n : PX_LT_MAX;
+    for (int i = 0; i < shown; i++)
+        fprintf(stderr, "            · %s\n", px_lt_name[i] ? px_lt_name[i] : "?");
+    if (px_lt_n > shown) fprintf(stderr, "            · （另有 %d 个未记录）\n", px_lt_n - shown);
+    fprintf(stderr,
+            "          原因：longjmp 不展开 pthread 锁 ⇒ 回卷会把上述锁**永久**留在「已锁」状态，\n"
+            "                其他线程随后阻塞在 pthread_mutex_lock 上 = 进程既不服务也不退出\n"
+            "                （假死：systemd 看不到失败、监控看不到异常，比旧的 exit(1) 更难发现）。\n"
+            "          故此处保留致命语义：_exit(1)（systemd 会拉起，服务中断约 3 秒）。\n"
+            "          处理建议：把该失败点移出临界区（临界区内先用 Result/? 收敛可预期错误），\n"
+            "                    或缩小临界区范围。逃生舱 PX_UNWIND_LOCK_GUARD=0（仅调试用）。\n");
+    fflush(stderr);
+    _exit(1);
+}
+
 // M126（qg-issue 83）：隔离点**种类** —— 只用于失败文案精确化，生死判定仍只看 g_err_jmp_set。
 //   1 = 协程/spawn 隔离点（请求级：HTTP 5xx）；2 = 信号处理器隔离点（本次处理器调用级）；
 //   0 = 无隔离点（启动期 / GC 上下文 → 保留致命语义）。
@@ -2421,6 +2504,7 @@ void px_error(const char* fmt, ...) {
     // M72-S3（Issue 10 D2）：spawn 协程内错误 → longjmp 隔离（宿主继续）；主线程
     // /无捕获点 → exit(1)（带现场）。隔离由 spawn_thread setjmp 提供。
     if (g_err_jmp_set) {
+        px_unwind_lock_guard("px_error 运行时错误");   // M127：带锁回卷 ⇒ 留锁假死，宁可致命退出
         longjmp(g_err_jmp, 1);
     }
     exit(1);
@@ -2459,7 +2543,10 @@ static void px_alloc_fail(size_t n, size_t total, const char* what) {
                        ? "信号处理器隔离点内 → 只终止本次处理器调用（进程与在途连接不受影响）"
                        : "协程隔离点内 → 只终止本请求（HTTP 层转 5xx），进程继续服务"));
     fflush(stderr);
-    if (g_err_jmp_set) longjmp(g_err_jmp, 1);
+    if (g_err_jmp_set) {
+        px_unwind_lock_guard("px_alloc_fail 分配失败");   // M127：带锁回卷 ⇒ 留锁假死，宁可致命退出
+        longjmp(g_err_jmp, 1);
+    }
     _exit(1);
 }
 
