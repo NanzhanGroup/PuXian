@@ -62,10 +62,19 @@ echo "── 5) C 轨逃生舱（--c fn_* spawn → pthread：线程 = spawn+1�
 "$PX" build --c "$DIR/thr_count.px" >/dev/null 2>&1 || { echo "build fail"; exit 1; }
 "$DIR/build/thr_count" >/tmp/m93s2_5.out 2>&1 &
 BP=$!
-sleep 1.2
-TP=$(pgrep -x thr_count | head -1)
-[ -n "$TP" ] || TP=$BP
-TH=$(grep Threads /proc/$TP/status 2>/dev/null | awk '{print $2}')
+# 线程是随 spawn 陆续创建的：固定 sleep 1.2s 采样会抖（8 核机上实测出现过 124/127 的偶发 FAIL）。
+# 改为「轮询 + 重采样」：等到达到期望值 129，或最多等 8s。
+TH=0
+for _ in $(seq 1 80); do
+    TP=$(pgrep -x thr_count | head -1)
+    [ -n "$TP" ] || TP=$BP
+    T=$(grep Threads /proc/$TP/status 2>/dev/null | awk '{print $2}')
+    if [ -n "$T" ]; then
+        TH=$T
+        [ "$TH" = "129" ] && break
+    fi
+    sleep 0.1
+done
 wait $BP
 chk "C轨逃生舱 线程数=$TH (=129, pthread 语义保留)" $([ -n "$TH" ] && [ "$TH" = "129" ] && echo 0 || echo 1)
 
