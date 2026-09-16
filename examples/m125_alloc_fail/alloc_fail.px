@@ -1,0 +1,87 @@
+# M125（qg-issue 81）门：分配失败 = 请求级 5xx，**进程不死**
+# ---------------------------------------------------------------
+# 病灶（原实现）：三处 mmap 失败一律 `fprintf(stderr,"lx: 内存不足"); exit(1);`
+#   ⇒ 一个请求就能带走整个服务进程（mahesvara 8 站点同进程 ⇒ 整站约 3 s 不可达）。
+# 本门验证两条语义同时成立：
+#   ① 失败被**分类报真因**（尺寸非法 / 内存不足 + 字节数 + errno），不再只有一句「内存不足」；
+#   ② 失败在协程隔离点内被 longjmp 收敛成**请求级错误** ⇒ HTTP 层 5xx，进程与其余连接不受影响。
+# 注入方式（两条，都不依赖真实 OOM 时机）：
+#   A. PX_ALLOC_FAIL_MIN=<字节>：xmalloc 请求 ≥ 阈值即失败（M125 测试钩子，默认关）；
+#   B. 真·大分配：read_file 一个 100 GB 稀疏文件（fseek 拿到 size ⇒ 一次 100 GB mmap
+#      必被内核 overcommit 拒绝）——覆盖"真内存不足"分支。
+# 用法：FX=<a|b|n> ./alloc_fail   （由 verify.sh 驱动；端口 18099）
+
+PORT = 18099
+PAYLOAD = "/tmp/m125_payload.bin"   # verify.sh 生成，8 MB（走 xmalloc 大对象路径）
+HUGE = "/tmp/m125_huge.bin"         # verify.sh 生成，100 GB 稀疏文件
+
+def read_all(path):
+    # 读到 EOF（请求带 Connection: close）——不能见 "\r\n\r\n" 就停：那是**头部**结束标记，
+    #   body 可能落在下一个 recv，会把「长度正确」类判据误判成失败。
+    let s = tcp_connect("127.0.0.1", PORT)
+    tcp_send(s, "GET " + path + " HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+    var b = ""
+    var i = 0
+    while i < 50:
+        let c = tcp_recv(s, 65536)
+        if c == "":
+            break
+        b = b + c
+        i = i + 1
+    tcp_close(s)
+    return b
+
+def is5xx(r):
+    return contains(r, "HTTP/1.1 5")
+
+def is200(r):
+    return contains(r, "HTTP/1.1 200")
+
+def handler(req):
+    let p = req["path"]
+    if p == "/health":
+        return {"status": 200, "body": "alive"}
+    if p == "/small":
+        return {"status": 200, "body": "small-ok"}
+    if p == "/big":
+        # 走 xmalloc 大对象路径（> 16 KB 的字符串对象）
+        let d = read_file(PAYLOAD)
+        return {"status": 200, "body": "len=" + str(len(d))}
+    if p == "/huge":
+        # 真·大分配：100 GB（内核 overcommit 必拒）→ 覆盖"真内存不足"分支
+        let d = read_file(HUGE)
+        return {"status": 200, "body": "len=" + str(len(d))}
+    return {"status": 404, "body": "nf"}
+
+spawn http_serve(PORT, handler)
+sleep(600)
+
+var fx = env("FX")
+if fx == "":
+    fx = "a"
+
+# ---- 关键判据：无论哪条注入路径，进程都必须还活着并继续服务（旧实现此处早已 exit(1)）----
+if fx == "a":
+    # A：阈值注入 —— /big 必须失败（5xx），但不影响同进程的其它请求
+    let ra = read_all("/big")
+    assert(is5xx(ra), "A1 /big 应返回 5xx（实得：" + ra[:80] + "）")
+    let r1 = read_all("/health")
+    assert(is200(r1) and contains(r1, "alive"), "A2 分配失败后进程仍存活（/health 200）")
+    let r2 = read_all("/small")
+    assert(is200(r2) and contains(r2, "small-ok"), "A3 小分配不受影响（/small 200）")
+elif fx == "b":
+    # B：真·大分配 —— /huge 必须失败（5xx），而正常的 /big 必须成功
+    let rb = read_all("/huge")
+    assert(is5xx(rb), "B1 /huge 应返回 5xx（实得：" + rb[:80] + "）")
+    let r1 = read_all("/health")
+    assert(is200(r1) and contains(r1, "alive"), "B2 分配失败后进程仍存活（/health 200）")
+    let r2 = read_all("/big")
+    assert(is200(r2) and contains(r2, "len=8388609"), "B3 正常大分配仍成功（实得：" + r2[:120] + "）")
+else:
+    # 负控：不做任何注入 —— 两条正常路径都必须 200（证明断言不是恒真）
+    let r1 = read_all("/big")
+    assert(is200(r1) and contains(r1, "len=8388609"), "N1 /big 正常 200 + 长度正确（实得：" + r1[:120] + "）")
+    let r2 = read_all("/health")
+    assert(is200(r2), "N2 /health 正常 200")
+
+print("M125 ALLOC-FAIL GATE PASSED")

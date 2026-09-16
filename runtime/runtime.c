@@ -470,12 +470,45 @@ static Slab** g_slab_ranges = NULL;
 static size_t g_slab_range_count = 0;
 static size_t g_slab_range_cap = 0;
 
-// 反查数组的裸分配：slab_create 在持 g_slab_mu 期间调用，不能走 xmalloc（会重入锁）
-static void* slab_raw_alloc(size_t n) {
+// ==================== M125（qg-issue 81）：分配失败「请求级失败」化 ====================
+// 病灶：三处 mmap 失败（slab_raw_alloc / slab_create / xmalloc 大对象）一律
+//   `fprintf(stderr,"lx: 内存不足"); exit(1);` —— **一个请求**即可带走整个服务进程。
+//   实测 mahesvara（8 站点同进程）因此整站不可达约 3 s：journal `lx: 内存不足` →
+//   `Main process exited, code=exited, status=1` → systemd 重启；07:17、09:06 两轮复现，
+//   `NRestarts` 累计 10 次。更糟的是**归因误导**——真因往往不是内存不足，而是
+//   「尺寸算成 0/负数」：`(n + 8 + pg-1) & ~(pg-1)` 在 n 接近 SIZE_MAX 时回绕成 0，
+//   `mmap(NULL,0)` 返回 EINVAL，却被报成「内存不足」。
+// 新语义（先给真实原因，再决定死不死）：
+//   ① 尺寸非法（回绕为 0 / ≥ 1<<62）→ 报「分配尺寸非法（尺寸计算溢出/负长度）」+ 字节数；
+//   ② 映射失败 → 报「内存不足」+ 字节数 + errno；
+//   ③ 两种情况统一走「先隔离、后致命」：协程隔离点内（serve handler / spawn，即
+//      g_err_jmp_set 为真）→ longjmp **只终止本协程** ⇒ HTTP 层按既有 M116 语义转 5xx，
+//      进程与其余连接完全不受影响；无隔离点（启动期 / GC / 信号上下文）→ 保留原
+//      致命语义（_exit(1)，不静默续跑，避免状态不一致）。
+// 与文档口径一致：runtime 运行时错误从「进程级」收紧到「请求级」。
+#define PX_ALLOC_ABSURD ((size_t)1 << 62)
+static void px_alloc_fail(size_t n, size_t total, const char* what);  // 定义见 px_error 之后
+static size_t px_alloc_fail_min(void);                                // 测试钩子（PX_ALLOC_FAIL_MIN）
+static size_t px_map_bytes(size_t n, int* overflow);
+
+// 请求字节数 → mmap 长度（含头部 + 页对齐）。**显式检出回绕**：原实现把回绕当「内存不足」，
+// 掩盖真实缺陷。overflow=1 时返回值不可用（调用方直接走 px_alloc_fail）。
+static size_t px_map_bytes(size_t n, int* overflow) {
     size_t pg = PX_PAGE;
-    size_t total = (n + sizeof(size_t) + pg - 1) & ~(size_t)(pg - 1);
+    *overflow = 0;
+    if (n > SIZE_MAX - sizeof(size_t) - (pg - 1)) { *overflow = 1; return 0; }
+    return (n + sizeof(size_t) + pg - 1) & ~(size_t)(pg - 1);
+}
+
+// 反查数组的裸分配：slab_create 在持 g_slab_mu 期间调用，不能走 xmalloc（会重入锁）
+// M125：失败不再 exit(1) —— **返回 NULL**，由 slab_create 回滚已建成员后再让 xmalloc
+//   解锁并走 px_alloc_fail（否则带锁 longjmp 会遗留 g_slab_mu ⇒ 全进程死锁）。
+static void* slab_raw_alloc(size_t n) {
+    int ovf = 0;
+    size_t total = px_map_bytes(n, &ovf);
+    if (ovf) { errno = ENOMEM; return NULL; }
     void* p = mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (p == MAP_FAILED) { fprintf(stderr, "lx: 内存不足\n"); exit(1); }
+    if (p == MAP_FAILED) return NULL;
     *(size_t*)p = total;
     return (char*)p + sizeof(size_t);
 }
@@ -524,7 +557,8 @@ static Slab* slab_create(size_t class_size, int class_idx) {
         pages++;
     }
     void* p = mmap(NULL, slab_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (p == MAP_FAILED) { fprintf(stderr, "lx: 内存不足\n"); exit(1); }
+    // M125：失败返回 NULL（调用方 xmalloc 解锁后走 px_alloc_fail）—— 不再 exit(1)
+    if (p == MAP_FAILED) return NULL;
     Slab* s = (Slab*)p;
     s->next = g_slab_heads[class_idx];
     s->base = p;
@@ -552,6 +586,15 @@ static Slab* slab_create(size_t class_size, int class_idx) {
     if (g_slab_range_count >= g_slab_range_cap) {
         size_t ncap = g_slab_range_cap ? g_slab_range_cap * 2 : 64;
         Slab** nr = (Slab**)slab_raw_alloc(ncap * sizeof(Slab*));
+        if (!nr) {
+            // M125：反查数组扩容失败 → **回滚**刚建好、尚未登记的 slab（保持不变量：
+            //   g_slab_heads 链 / g_slab_ranges 反查数组必须一致），返回 NULL 交调用方
+            //   解锁后走 px_alloc_fail。绝不带锁 longjmp（会遗留 g_slab_mu）。
+            g_slab_heads[class_idx] = s->next;
+            munmap(s->base, s->map_bytes);
+            errno = ENOMEM;
+            return NULL;
+        }
         if (g_slab_ranges) { memcpy(nr, g_slab_ranges, g_slab_range_count * sizeof(Slab*)); slab_raw_free(g_slab_ranges); }
         g_slab_ranges = nr;
         g_slab_range_cap = ncap;
@@ -610,12 +653,20 @@ static Slab* slab_find(const void* p) {
 
 static void* xmalloc(size_t n) {
     if (n <= 0) n = 1;
+    if (n >= px_alloc_fail_min()) {
+        // M125 测试钩子：按"映射失败"语义注入（total 传真实值，避免被分类成尺寸非法）
+        int o = 0;
+        size_t t = px_map_bytes(n, &o);
+        px_alloc_fail(n, o ? 0 : t, "xmalloc（PX_ALLOC_FAIL_MIN 注入）");
+    }
     int ci = slab_class_index(n);
     if (ci < 0) {  // 大对象：mmap 每分配一映射（带大小头，行为同 M11）
-        size_t pg = PX_PAGE;
-        size_t total = (n + sizeof(size_t) + pg - 1) & ~(size_t)(pg - 1);
+        int ovf = 0;
+        size_t total = px_map_bytes(n, &ovf);
+        // M125：回绕 / 映射失败 → 请求级失败（原为 `lx: 内存不足` + exit(1)，整站陪葬）
+        if (ovf) px_alloc_fail(n, 0, "xmalloc 大对象");
         void* p = mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (p == MAP_FAILED) { fprintf(stderr, "lx: 内存不足\n"); exit(1); }
+        if (p == MAP_FAILED) px_alloc_fail(n, total, "xmalloc 大对象");
         *(size_t*)p = total;
         return (char*)p + sizeof(size_t);
     }
@@ -627,6 +678,15 @@ static void* xmalloc(size_t n) {
     // M107-S3b：链首即「有空槽」的 slab（不变量见 g_slab_heads 声明处注释）；
     //   链为空 ⇒ 该 class 已无空槽可复用，新建（新建后自动置链首）。
     if (!s) s = slab_create(cs, ci);
+    if (!s) {
+        // M125：建 slab（或其反查数组扩容）失败 —— **必须先在锁内、解锁之后**再走失败处理：
+        //   带锁 longjmp 不展开 pthread 锁 ⇒ g_slab_mu 永久遗留 ⇒ 全进程死锁。
+        int ferr = errno;
+        pthread_mutex_unlock(&g_slab_mu);
+        gc_unblock_stop(&old);
+        errno = ferr;
+        px_alloc_fail(cs, 0, "slab_create");
+    }
     void* slot = s->free_head;
     size_t header = SLAB_HEADER;
     size_t idx = ((const char*)slot - ((const char*)s->base + header)) / cs;
@@ -720,6 +780,9 @@ static void* xrealloc(void* p, size_t n) {
 }
 
 static void* xcalloc(size_t n, size_t sz) {
+    // M125：乘法回绕检出 —— 原实现 n*sz 回绕时只映射出**过小**的块（随后 memset 按回绕后的
+    //   小值写，看似"正常"），一旦调用方按 n*sz 使用即越界写（静默堆损坏）。
+    if (sz != 0 && n > SIZE_MAX / sz) px_alloc_fail(SIZE_MAX, 0, "xcalloc 尺寸溢出");
     void* p = xmalloc(n * sz);
     memset(p, 0, n * sz);
     return p;
@@ -2342,6 +2405,41 @@ void px_error(const char* fmt, ...) {
         longjmp(g_err_jmp, 1);
     }
     exit(1);
+}
+
+// ==================== M125（qg-issue 81）：分配失败处理 ====================
+// 测试钩子（默认关）：PX_ALLOC_FAIL_MIN=<字节>，xmalloc 请求 ≥ 该值即注入一次失败。
+//   用途 = 让「分配失败 → 请求级 5xx、进程不死」这条语义**可被自动化门验证**
+//   （否则只能等真 OOM）。首次读取后缓存；未设或 0 → 恒不触发。
+static size_t px_alloc_fail_min(void) {
+    static size_t cached = 0;
+    if (cached == 0) {
+        const char* e = getenv("PX_ALLOC_FAIL_MIN");
+        cached = (e && *e) ? (size_t)strtoull(e, NULL, 10) : 0;
+        if (cached == 0) cached = SIZE_MAX;   // 0 / 未设 → 阈值拉到 u64 上限（含比较恒假）
+    }
+    return cached;
+}
+
+// 分配失败统一出口（三处 mmap 失败 + xcalloc 溢出）。语义见文件头部 M125 段：
+//   协程隔离点内 → longjmp（只终止本协程 ⇒ HTTP 层转 5xx，进程与其余连接不受影响）；
+//   隔离点外（启动期 / GC / 信号上下文）→ _exit(1)（保留原致命语义，绝不静默续跑）。
+// 无论哪种，都先把**真实原因**（尺寸 / errno / 判定类别）打到 stderr —— 原实现只有
+// 一句 `lx: 内存不足`，把「尺寸算成 0 / 负数」这类真缺陷一律误报为内存不足。
+static void px_alloc_fail(size_t n, size_t total, const char* what) {
+    int e = errno;
+    int illegal = (total == 0 || n >= PX_ALLOC_ABSURD);
+    fprintf(stderr,
+            "运行时错误: %s【%s】申请 %zu 字节（映射 %zu 字节）errno=%d (%s)\n"
+            "          处理：%s\n",
+            illegal ? "分配尺寸非法（尺寸计算溢出 / 负长度）" : "内存不足",
+            what ? what : "?", n, total, e, strerror(e),
+            g_err_jmp_set
+                ? "协程隔离点内 → 只终止本请求（HTTP 层转 5xx），进程继续服务"
+                : "无协程隔离点 → 保留致命语义退出（启动期 / GC / 信号上下文）");
+    fflush(stderr);
+    if (g_err_jmp_set) longjmp(g_err_jmp, 1);
+    _exit(1);
 }
 
 // ==================== 字符串工具 ====================

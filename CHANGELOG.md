@@ -6,6 +6,50 @@
 
 ## [Unreleased]
 
+### runtime · 分配失败改「请求级失败」—— 一个请求不再带走整个服务进程（M125 · qg-issue 81）
+
+> **实测病灶（2026-09-16，生产 mahesvara 同进程承载 8 站点）**：三处 mmap 失败一律
+> `fprintf(stderr,"lx: 内存不足"); exit(1);` ⇒ **一个请求即可终止整个服务进程**，
+> 实测整站不可达约 3 s（journal：`lx: 内存不足` → `Main process exited, code=exited,
+> status=1` → systemd 重启）；07:17、09:06 两轮外部复现，`NRestarts` 累计 10 次。
+> **归因误导（更坏的一面）**：真因往往不是「内存不足」，而是**尺寸算成 0 / 负数** ——
+> `(n + 8 + pg-1) & ~(pg-1)` 在 n 接近 SIZE_MAX 时回绕为 0，`mmap(NULL,0)` 返回 EINVAL，
+> 却被报成「内存不足」，把真缺陷藏起来了。
+> **静态大文件本身无责**：`http.px static_file` 对 >1 MB 早已走 `{"file": path}` 流式
+> （M58-S1，runtime 侧 64 KB 分块 + Range 206），实测 70 MB 下载 RSS 恒定 ~7 MB；
+> 真正把进程带走的正是本节这条「分配失败 = 进程级退出」。
+
+- **三处失败点统一收敛**（`slab_raw_alloc` / `slab_create` / `xmalloc` 大对象）：
+  改为返回 NULL / 走统一失败出口，**不再 `exit(1)`**。
+- **统一失败出口 `px_alloc_fail(n, total, what)`**：先按类别打印**真因**——
+  `分配尺寸非法（尺寸计算溢出 / 负长度）` 或 `内存不足`，并附 **申请字节数 + 映射字节数 +
+  errno**（旧文案只有一句「lx: 内存不足」）——再按上下文决定生死：
+  - **协程隔离点内**（serve handler / spawn，`g_err_jmp_set` 为真）→ `longjmp`
+    **只终止本协程**，沿用 M116（qg-issue 71）既有语义 ⇒ HTTP 层转 **5xx**，
+    进程与其余连接完全不受影响；
+  - **隔离点外**（启动期 / GC / 信号上下文）→ 保留致命语义（`_exit(1)`，绝不静默续跑）。
+- **尺寸回绕显式检出**（新增 `px_map_bytes`）：回绕不再被误报成「内存不足」。
+- **`xcalloc` 乘法回绕检出**：原 `n*sz` 回绕时只映射出**过小**的块（随后 `memset` 按回绕后的
+  小值写，看似正常），调用方按 `n*sz` 使用时即越界写（静默堆损坏）——现按尺寸非法直接报错。
+- **`longjmp` 与锁的约束**：longjmp 不展开 pthread 锁，故失败出口**一律先解锁再抛出**
+  （`xmalloc` 的 slab 路径显式 `pthread_mutex_unlock(&g_slab_mu)`；`slab_create` 反查数组
+  扩容失败时**回滚**已建 slab 以保持 `g_slab_heads` / `g_slab_ranges` 不变量）。
+- **测试钩子** `PX_ALLOC_FAIL_MIN=<字节>`（默认关）：`xmalloc` 请求 ≥ 阈值即注入失败 ——
+  使「分配失败 → 请求级 5xx、进程不死」这条语义**可被自动化门验证**，不必等真 OOM。
+- **门 `examples/m125_alloc_fail/verify.sh`（11/11 通过）**：
+  A 阈值注入 → `/big` 拿到 5xx 且同进程 `/health`、`/small` 仍 200；
+  B 真·大分配（`read_file` 一个 100 GB 稀疏文件 ⇒ 一次 100 GB mmap 必被内核 overcommit 拒）
+  → `/huge` 5xx 且正常 `/big` 仍 200；负控（不注入）→ 全部 200；
+  并断言 **旧文案 `lx: 内存不足` 不再出现**（证明测的是真变化）。
+- **回归**：M117（read_file 伪文件 / connect 超时 / POSIX 类）双轨全 PASS；
+  M123（http_conn_alive）语义 4/4 + 定量 0.30%；m93_s2（并发 GC/协程）6/6 —— 全部零回归。
+- **边界（文档明写，避免误读）**：
+  ① 本改动把「内存不足」从**进程级**收紧到**请求级**，但**不承诺**真·OOM 一定可恢复
+  （隔离点外仍致命；`PX_SPAWN_ISOLATE=0` 时隔离关闭 → 仍为致命语义）；
+  ② 门 A 走的是 `xmalloc` 大对象路径，**slab 小对象路径**的失败出口（解锁后抛出）由代码
+  审查 + 回滚逻辑覆盖，未做注入验证（测试钩子对所有 xmalloc 生效，但阈值必须高于启动期
+  最大分配 1 MB，故无法单独命中 slab 路径）—— 该覆盖缺口已在 `examples/m125_alloc_fail/README.md` 标注。
+
 ### packaging · 镜像落地页站内链接改「根相对」（根治静默错链）
 
 > **实测根因（东月 2026-09-16）**：镜像站 `…/puxian` **无尾斜杠时不 301 补斜杠**，
