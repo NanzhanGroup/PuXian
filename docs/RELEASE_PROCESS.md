@@ -34,12 +34,50 @@ tools/make_release.sh --no-check # 跳过冒烟自检
 tools/make_release.sh -o /tmp/x.tar.gz
 ```
 
+## 守卫：漏打 tag 不再静默（qg-issue 86）
+
+**发布只由 tag 驱动** ⇒ 推 `main` **不会**发布任何东西，两件事必须都做。
+2026-09-17 实况：M126 / M127 / M128 连续三个里程碑只推 main、一个 tag 都没打，
+Releases 页最新仍是 `v0.2.0-m125`，而 CI 全绿 —— 没有任何信号。
+为此新增 `packaging/tag_guard.sh`：
+
+```bash
+packaging/tag_guard.sh                  # 检查 HEAD
+packaging/tag_guard.sh --ref <提交>      # 检查指定提交
+packaging/tag_guard.sh --grace-min 45   # 刚推上来的提交允许窗口期（push 触发用）
+```
+
+**判据（唯一）**：被检查提交的 `CHANGELOG.md` **标题行**里最大的里程碑号 `M<NNN>`，
+必须存在一个 **可达的** `v*-m<NNN>` tag（容忍前导零；打在旁支上的 tag 不算）。
+缺 ⇒ `rc=1` 并打印「里程碑名册 → tag」对照与可直接复制的补打命令；
+参数/环境错误（无 CHANGELOG、标题行无里程碑、ref 不存在）⇒ `rc=2`。
+
+只看**标题行**是有意的：正文常出现「⇒ 建议 M129」这类**未来**里程碑，会把判据带偏。
+
+**自动化**：
+
+- `ci.yml` 的「发布侧守卫自测」步跑 `packaging/selftest_tag_guard.sh`（22 断言，守脚本自身）。
+- `.github/workflows/tag-guard.yml`：每日 **09:17 CST** 复查 main（主检测路径，0 窗口）
+  ＋ `push(main)` 窗口期检查（`--grace-min 45`）＋ 可手动 `workflow_dispatch`。
+  失败会把守卫输出写进 run 摘要。
+
+**看到这道门红怎么办**：先问「这个里程碑要不要发」。
+
+- 要发 ⇒ 按上面「一键发布」补 tag（`git tag -a v<版本>-m<NNN> <提交>` 并 push）。
+- 不发（纯文档/CI 提交）⇒ 显式放行并与 CHANGELOG 说明：
+  `TAG_GUARD_ALLOW_MISSING='<理由>' bash packaging/tag_guard.sh --ref <提交>`。
+
+**边界（如实）**：① 只要求**最高**里程碑有 tag，中间里程碑缺 tag 只提示（发布包含全部提交）；
+② 不校验版本段该不该升主版本（人工判断）；③ 只认 `-m<NNN>` 结尾的 tag；
+④ GitHub 在仓库 **60 天无活动后停用定时工作流**（不告警）⇒ 长期静默时需手动 dispatch。
+
 ## 发布前核对清单
 
 - [ ] `main` 已含待发代码并推送（工作区干净）
 - [ ] 本地先跑一次 `tools/make_release.sh` 确认冒烟全 PASS（避免 workflow 白跑）
 - [ ] CHANGELOG 已记录本版变更
 - [ ] 打 tag 前 `git log --oneline <上一tag>..HEAD` 确认入版范围符合预期
+- [ ] 打完 tag 后 `packaging/tag_guard.sh` 通过（或 CI 的 **Tag Guard** run 是绿的）
 
 ## 已知边界
 
