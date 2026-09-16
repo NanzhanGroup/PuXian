@@ -78,7 +78,9 @@ https://soft.xiusoft.cn/puxian/           ← install-rpm.sh / rpm/ / releases/ 
 **同步契约**：① 版本序取自远端 tag（非 API `latest`）② 与 gh-pages `rpm/` 树内实际
 `.mNNN` 交叉校验，不一致 ⇒ 中止、保持上一版；③ 比现役旧 ⇒ 拒绝（`PXREPO_ALLOW_REGRESSION=<理由>`
 人工放行）；④ tarball sha256 == `sha256sums.txt`、每包 `rpm -Kv`、`repomd.xml.asc` 全过才落盘；
-⑤ 发布顺序 **新 rpm（不删旧）→ repodata → 删旧 rpm**，消除「元数据与包不匹配」窗口。
+⑤ 发布顺序 **新 rpm（不删旧）→ repodata → 删旧 rpm**，消除「元数据与包不匹配」窗口；
+⑥ 站点根文件（`index.html` / `install-rpm.sh`）按**内容指纹**判定 —— **版本相同也要刷新**，
+   否则「只改落地页、版本不变」的更新会被幂等短路永久挡住（2026-09-16 实测踩到）。
 
 > ⚠️ `--work` 暂存目录**必须位于 `--dest` 之外**，否则会被 soft-mirror 一并分发出去。
 
