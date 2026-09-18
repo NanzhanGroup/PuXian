@@ -7,6 +7,8 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$DIR/../.." && pwd)"
 PX="$ROOT/tools/px"
 WORK="$(mktemp -d /tmp/m120_gate.XXXXXX)"
+# 第 21 轮：补 trap（同 m122 —— 本门原先每跑一次就把 build/ 产物留在 /tmp 不回收）
+trap 'rm -rf "$WORK"' EXIT
 PASS=0; FAIL=0
 chk(){ if [ "$2" = "$3" ]; then echo "  ✅ $1"; PASS=$((PASS+1)); else echo "  ❌ $1 — 期望[$3] 实得[$2]"; FAIL=$((FAIL+1)); fi; }
 chk_has(){ if grep -q -- "$3" "$2"; then echo "  ✅ $1（含 '$3'）"; PASS=$((PASS+1)); else echo "  ❌ $1 — 输出未见 '$3'"; sed -n '1,5p' "$2"; FAIL=$((FAIL+1)); fi; }

@@ -78,6 +78,8 @@ run m137_sse_connect_ex bash examples/m137_sse_connect_ex/verify.sh
 # ⚠️ m138（正则的 Go 保真门）需要 Go 产真值，口径同 m136 ⇒ 只在本地全门跑，
 #     CI 侧由 ci.yml 的 toolchain 步骤显式跑（该 runner 自带 Go）。
 run m139_bare_ident_stmt bash examples/m139_bare_ident_stmt/verify.sh
+# m140（连接失败成因分类 + 双栈）：**不依赖任何外部服务**，CI 也跑
+run m140_http_conn_errno bash examples/m140_http_conn_errno/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

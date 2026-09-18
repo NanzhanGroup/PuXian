@@ -10,6 +10,9 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$DIR/../.." && pwd)"
 PX="$ROOT/tools/px"
 WORK="$(mktemp -d /tmp/m122_gate.XXXXXX)"
+# 第 21 轮（第 18 轮登记的待办）：此前无 trap ⇒ 门每跑一次泄漏 ~87MB（build/ 产物）。
+#   门是常驻回归门，必须自己收尾。
+trap 'rm -rf "$WORK"' EXIT
 PASS=0; FAIL=0
 chk(){ if [ "$2" = "$3" ]; then echo "  ✅ $1"; PASS=$((PASS+1)); else echo "  ❌ $1 — 期望[$3] 实得[$2]"; FAIL=$((FAIL+1)); fi; }
 chk_has(){ if grep -q -- "$3" "$2"; then echo "  ✅ $1（含 '$3'）"; PASS=$((PASS+1)); else echo "  ❌ $1 — 输出未见 '$3'"; head -2 "$2"; FAIL=$((FAIL+1)); fi; }

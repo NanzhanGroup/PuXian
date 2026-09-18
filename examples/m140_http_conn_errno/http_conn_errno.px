@@ -1,0 +1,130 @@
+# ═══════════════════════════════════════════════════════════════════════
+# http_conn_errno.px — 缺陷 108 自检（M140 · qg-issue 87 第 21 轮）
+# ---------------------------------------------------------------
+# 修前：`px_tcp_connect_timeout` 的失败路径在 `freeaddrinfo()`/`close()` **之后**才构造
+#   错误（这两者都会覆盖 errno）⇒ 函数一律 `return -1`，语言层只剩一句
+#   `net: 连接 X:Y 失败` —— 无法区分「端口没开」/「网络不可达」/「无路由」/「被丢包超时」，
+#   也无法区分「域名解析失败」。生产机 e2e 实测：netns 里 lo 为 DOWN 时
+#   Go 打 `connect: network is unreachable`，本运行时打 `connection refused`
+#   （同一上游、同一请求、同一次运行）。
+# 同轮第二件事：`hints.ai_family` 从 AF_INET 改 AF_UNSPEC（Go 的 dial 是双栈），
+#   并让失败文案里的地址用**数字形式**（Go 亦然：给的是解析结果，IPv6 带方括号）。
+#
+# 本门断言（**不依赖任何外部服务**；VM 轨 + C 轨断言集相同）：
+#   A 端口不可达     → `net: 连接 127.0.0.1:1 失败 (111)`（ECONNREFUSED）
+#   B 域名解析失败   → `net: 解析主机失败 nosuchhost-zzz.invalid (eai=-2)`（EAI_NONAME）
+#   C IPv6 可达性    → errno 必须是 101(ENETUNREACH) 或 110(ETIMEDOUT)，**不得**是 111
+#                      （证明「不是 refused」）；地址形如 `[2001:db8::1]:9`
+#   D 双栈 localhost → 文案里是**数字地址**（`[::1]:1` 或 `127.0.0.1:1`），**不是**主机名
+#                      （Go 的 dial 文案给的也是解析结果 —— 门的核心断言）
+#   E IPv6 字面量    → `http://[::1]:1/x` 必须能被 URL 解析（修前 hparse_url 把 `[`
+#                      当成主机名、端口解析成 0）且失败文案是 `[::1]:1`
+#   F http_get 通路  → legacy `px_http_once` 与 `http_request` 共用同一分类
+#   G sse_connect_ex → refused：stage=2/errno=111；DNS：stage=**8**（本轮新增）/eai=-2
+#   H 负控           → DNS 失败**不得**出现 `connection refused`（缺陷 108 的原症状）
+# ═══════════════════════════════════════════════════════════════════════
+import std.strings
+
+const DNS_HOST = "nosuchhost-zzz.invalid"
+const V6_DEAD = "http://[2001:db8::1]:9/x"
+
+def emsg(r):
+    if type(r) != "result":
+        return "<非 result: " + str(r) + ">"
+    if not r.is_err():
+        return "<Ok: " + str(r.unwrap()) + ">"
+    var e = r.err()
+    if e == null:
+        return ""
+    return str(e)
+
+def main():
+    var passes = 0
+    var fails = 0
+    var opt = {"timeout_ms": 3000}
+
+    # ── A 端口不可达（127.0.0.1:1 必然无监听）──
+    var a = emsg(http_request("http://127.0.0.1:1/x", "POST", "{}", {"Content-Type": "application/json"}, opt))
+    if contains(a, "net: 连接 127.0.0.1:1 失败 (111)"):
+        print("PASS A 端口不可达 → " + a)
+        passes = passes + 1
+    else:
+        print("FAIL A 期望 `net: 连接 127.0.0.1:1 失败 (111)`，实得 " + a)
+        fails = fails + 1
+
+    # ── B 域名解析失败（.invalid 由 RFC 2606 保证不解析）──
+    var b = emsg(http_request("http://" + DNS_HOST + ":9/x", "POST", "{}", {"Content-Type": "application/json"}, opt))
+    if contains(b, "net: 解析主机失败 " + DNS_HOST + " (eai=-2)"):
+        print("PASS B 解析失败 → " + b)
+        passes = passes + 1
+    else:
+        print("FAIL B 期望 `net: 解析主机失败 " + DNS_HOST + " (eai=-2)`，实得 " + b)
+        fails = fails + 1
+
+    # ── H 负控：解析失败**不得**被当成 connection refused（缺陷 108 的原症状）──
+    if contains(b, "connection refused") or contains(b, "(111)"):
+        print("FAIL H 负控：解析失败被误报为 refused → " + b)
+        fails = fails + 1
+    else:
+        print("PASS H 负控：解析失败未被误报为 refused")
+        passes = passes + 1
+
+    # ── C IPv6 可达性：errno ∈ {101 无路由, 110 被丢弃}，**不得**是 111 ──
+    var c = emsg(http_request(V6_DEAD, "GET", null, null, opt))
+    var c_ok = contains(c, "net: 连接 [2001:db8::1]:9 失败 (101)")
+    var c_to = contains(c, "net: 连接 [2001:db8::1]:9 失败 (110)")
+    if c_ok or c_to:
+        print("PASS C IPv6 无路由 → " + c)
+        passes = passes + 1
+    else:
+        print("FAIL C 期望 `连接 [2001:db8::1]:9 失败 (101|110)`，实得 " + c)
+        fails = fails + 1
+
+    # ── D 双栈（localhost）：文案给**数字地址**（Go 亦然），不是主机名 ──
+    var d = emsg(http_request("http://localhost:1/x", "GET", null, null, opt))
+    var d_v6 = contains(d, "net: 连接 [::1]:1 失败 (111)")
+    var d_v4 = contains(d, "net: 连接 127.0.0.1:1 失败 (111)")
+    if (d_v6 or d_v4) and not contains(d, "localhost"):
+        print("PASS D 双栈数字地址 → " + d)
+        passes = passes + 1
+    else:
+        print("FAIL D 期望数字地址（[::1]:1 或 127.0.0.1:1）且不含主机名，实得 " + d)
+        fails = fails + 1
+
+    # ── E IPv6 字面量 URL：修前 hparse_url 解析出 host=`[` + port=0 ──
+    var e = emsg(http_request("http://[::1]:1/x", "GET", null, null, opt))
+    if contains(e, "net: 连接 [::1]:1 失败 (111)"):
+        print("PASS E IPv6 字面量 URL → " + e)
+        passes = passes + 1
+    else:
+        print("FAIL E 期望 `net: 连接 [::1]:1 失败 (111)`，实得 " + e)
+        fails = fails + 1
+
+    # ── F legacy 通路（http_get → px_http_once）共用同一分类 ──
+    var f = emsg(http_get("http://127.0.0.1:1/x"))
+    if contains(f, "net: 连接 127.0.0.1:1 失败 (111)"):
+        print("PASS F http_get 通路 → " + f)
+        passes = passes + 1
+    else:
+        print("FAIL F 期望 `net: 连接 127.0.0.1:1 失败 (111)`，实得 " + f)
+        fails = fails + 1
+
+    # ── G sse_connect_ex 的 stage/errno ──
+    var g1 = sse_connect_ex("http://127.0.0.1:1/x", opt)
+    if bool(g1["ok"]) == false and int(g1["stage"]) == 2 and int(g1["errno"]) == 111:
+        print("PASS G1 sse refused stage=2 errno=111")
+        passes = passes + 1
+    else:
+        print("FAIL G1 sse refused 期望 stage=2/errno=111，实得 stage=" + str(g1["stage"]) + " errno=" + str(g1["errno"]))
+        fails = fails + 1
+    var g2 = sse_connect_ex("http://" + DNS_HOST + ":9/x", opt)
+    if bool(g2["ok"]) == false and int(g2["stage"]) == 8 and int(g2["errno"]) == -2:
+        print("PASS G2 sse DNS stage=8(新) eai=-2")
+        passes = passes + 1
+    else:
+        print("FAIL G2 sse DNS 期望 stage=8/eai=-2，实得 stage=" + str(g2["stage"]) + " errno=" + str(g2["errno"]))
+        fails = fails + 1
+
+    print("── " + str(passes) + " PASS / " + str(fails) + " FAIL")
+    if fails > 0:
+        exit(1)
