@@ -1,0 +1,54 @@
+# M145 门（附）：`object_id()` —— 对象同一性原语（环检测 / 指针语义移植的基础）
+#   契约：堆对象返回其地址（不透明）；非堆值（int/float/bool/null）返回 0；
+#     同一对象恒等；不同对象（即便结构相同）不同；存活期内跨 `gc()` 不变。
+
+var n_pass = 0
+var n_fail = 0
+def ck(name, cond):
+    if cond:
+        n_pass = n_pass + 1
+        print("PASS " + name)
+    else:
+        n_fail = n_fail + 1
+        print("FAIL " + name)
+
+var a = {"x": 1}
+var b = {"x": 1}
+ck("A1 同对象同 id", object_id(a) == object_id(a))
+ck("A2 结构相同的不同对象 id 不同", object_id(a) != object_id(b))
+
+var l1 = [1, 2]
+var l2 = [1, 2]
+ck("A3 list 同上", object_id(l1) != object_id(l2))
+
+var n = a
+ck("A4 经变量传递仍是同一 id", object_id(n) == object_id(a))
+
+var g = {}
+g.set("me", g)
+ck("A5 环上同一对象 id 相同", object_id(g["me"]) == object_id(g))
+
+ck("B1 int 非堆 ⇒ 0", object_id(1) == 0)
+ck("B2 float 非堆 ⇒ 0", object_id(1.5) == 0)
+ck("B3 bool 非堆 ⇒ 0", object_id(true) == 0)
+ck("B4 null 非堆 ⇒ 0", object_id(null) == 0)
+
+var s1 = "abc"
+ck("B5 字符串是堆对象（id != 0）", object_id(s1) != 0)
+ck("B6 bytes 是堆对象", object_id(bytes("ab")) != 0)
+
+var keep = {"k": 1}
+var id_before = object_id(keep)
+var junk = []
+var i = 0
+while i < 2000:
+    var t = {"i": i}
+    junk.append(t)
+    i = i + 1
+gc()
+ck("C1 gc 后存活对象 id 不变", object_id(keep) == id_before)
+ck("C2 存活对象仍可访问", keep["k"] == 1)
+
+print("SUMMARY object_id pass=" + str(n_pass) + " fail=" + str(n_fail))
+if n_fail != 0:
+    exit(1)
