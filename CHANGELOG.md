@@ -1,3 +1,27 @@
+## M144 —— HTTP 大请求体（内存安全）+ chunked 收发 + 连接级余留缓冲（第 25 轮）
+
+- **缺陷 120/121/122（内存安全 P0，皆已修）**：请求体被 `memcpy` 进**栈缓冲** ——
+  `http_unix`（`req[16384]`，>16KB 段错误）· `http_post`（`req[4096]`，>3.9KB）·
+  `s3_put`（`pbody[4096]`，>4KB 且修前**放不下就静默丢体、Content-Length 照报**
+  ⇒ 请求自相矛盾）。修法：体一律独立发送（`h_exchange` 的 body/body_n；`px_s3_exec` 改堆缓冲）。
+- **缺陷 123（服务端静默丢数据，已修）**：`http_serve` / `http_serve_unix` 的 worker 此前**只认**
+  `Content-Length` ⇒ 客户端发 `Transfer-Encoding: chunked` 请求体时 handler 拿到**空体**却回 200。
+  现新增 `px_read_chunked_body`（chunk 扩展 / trailer / 上限 413 / 与 CL 路径同语义）。
+- **缺陷 124（HTTP 管道化，已修）**：同一 TCP 段里的**下一请求**字节被丢弃（worker 每轮从 socket
+  重读）⇒ 管道化第二请求永不应答、连接空等 15s。现存**连接上下文 `PxConnCtx.pbuf`**
+  （跨 worker 调用与 handler 协程续写存续），并有余留字节时**不交还 IDLE**
+  （`http_send_resp` 新增 `has_pending`）。`px_evc_acquire` 同 fd 重新登记时**保留 pbuf**
+  （仅 fd 真复用才清）。
+- **特性**：`http_unix(..., {"chunked": true})` —— chunked 发送、分帧 **32768/块**
+  （= Go `net/http` 的 `io.Copy` 缓冲 ⇒ 线上格式逐字节同形）；`px_chunked_encode_n` 抽出
+  maxchunk（服务端响应沿用 4096）。
+- **门 `examples/m144_http_bigbody/`**：进程内 spawn 服务端 + 客户端自调用，**不依赖外部服务**；
+  A 大请求体 9 尺寸（含 20000 复现尺寸）· B chunked 8 尺寸（含 200000 跨读缓冲）·
+  C `http_post` 6 尺寸 · D `s3_put` 4 尺寸 · E 空体/无体 · **F 裸 socket：chunk 扩展 +
+  trailer + 同段第二请求不串包**；**115 断言 × VM/C 双轨**（`M144-ALL-OK`）。
+- **CI/全门**：m144 接进 `selfhost/m116_gates.sh`、`m117_gates.sh`、`.github/workflows/ci.yml`。
+- **速查表 +113–116**（服务端两条 body 通路 / 客户端大体贴 / `opts.chunked` / 管道化与余留缓冲）。
+
 # Changelog
 
 本项目的所有重要变更都会记录在此文件。

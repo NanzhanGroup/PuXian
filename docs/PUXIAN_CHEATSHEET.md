@@ -930,3 +930,23 @@ set_timeout(fn (): print("once after 2s"), 2000)
     （token-cache LogWriter），而 `append_file` 失败即杀进程 ⇒ 磁盘满/权限不足会**整服务死**。
     与 `write_file_opt` 同款纪律：**不** fchmod（Go 的 perm 只在**创建**时生效）·
     `+ append_file_opt` 也进了解释轨名册（转发层 + names 两处同步，见第 22 轮教训）。
+
+113. **HTTP 服务端（`http_serve` / `http_serve_unix`）的请求体两条通路**（第 25 轮 · 缺陷 121–124）：
+    `Content-Length`（定长）与 **`Transfer-Encoding: chunked`**（分块）**都支持**，handler 都从
+    `req["body"]` 取**解码后**的体。上限默认 256MB（`PX_HTTP_BODY_MAX` 可改），超限回 **413**
+    并关闭连接（两条通路同语义）。⚠️ 此前 chunked **静默丢体**（handler 拿到空串却回 200）——
+    客户端发 chunked 体时必须走本修正后的 runtime。**边界**：`req["headers"]` 保留
+    `Transfer-Encoding` 原文（Go 的 `net/http` 会把它从 `r.Header` 删掉放进 `r.TransferEncoding`
+    —— 这一条是**已登记分叉**）。
+114. **HTTP 客户端的大请求体**：`http_request` / `http_unix` / `http_post` / `s3_put` 的体
+    **不再 memcpy 进栈缓冲**（修前 >16KB / >3.9KB / >4KB 直接**段错误**，而服务端却收到完整请求
+    —— 典型「看起来成功」的内存安全 bug）。除 `http_post`（`px_http_once`，HTTP/1.0 短连接）外
+    都支持**任意大小**体（体由 `h_exchange` 独立发送，`Content-Length` 按字节长度计算）。
+115. **`http_unix(sock, path, method, body, headers, {"chunked": true})`**：用
+    `Transfer-Encoding: chunked` 发送体（**不发** Content-Length），分帧 **32768/块**
+    —— 与 Go `net/http`（未知长度 Reader ⇒ `io.Copy` 32KB 缓冲）**逐字节同形**。
+    `opts` 与 `timeout_ms` 同字典共存（`{"chunked": true, "timeout_ms": 2000}` 合法）。
+116. **HTTP 管道化 / 连接级余留缓冲**（第 25 轮 · 缺陷 124）：同一 TCP 段里读进来的**下一请求**
+    字节不再被丢弃（存 `PxConnCtx.pbuf`，跨 worker 调用 / handler 协程续写存续），
+    管道化的第二个请求**照常应答**；余留字节在响应后若存在，本 worker **不再交还 IDLE**
+    （否则字节随 worker 栈一起丢）。判据不能用 `fd 可读`：那些字节早在用户态缓冲里。
