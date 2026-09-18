@@ -6339,7 +6339,13 @@ static LXValue bi_xxhash(LXValue* args, int nargs, void* ctx) {
 // 候选列表法：rmatch 返回节点从 pos 起的所有 (end, groups) 候选，贪心优先（次数多在前）。
 // 支持：字面量/./字符类/\d\w\s(及取反)/量词 * + ? {n,m}/锚点 ^$/(捕获组 9 个)/交替 |/转义
 
-enum { RN_CHAR = 0, RN_ANY, RN_CLASS, RN_SEQ, RN_ALT, RN_REP, RN_GROUP, RN_START, RN_END };
+enum { RN_CHAR = 0, RN_ANY, RN_CLASS, RN_SEQ, RN_ALT, RN_REP, RN_GROUP, RN_START, RN_END,
+       // M138（qg-issue 87 缺陷 84）：零宽断言。`\b` / `\B` 是 Go `regexp` 的 ASCII 词边界
+       //   （\w 一侧、\W/\A/\z 一侧）；`\A` / `\z` 复用 RN_START / RN_END。
+       //   追加在末尾 ⇒ 既有 9 个取值不变（无任何按类型下标存储/序列化的地方，已核）。
+       RN_WB, RN_NWB,
+       // M138：`(?m)`（多行）模式下的 ^ $ —— 零宽、按行判定（匹配器 2 行，见 rmatch）
+       RN_START_ML, RN_END_ML };
 #define RG_N 10
 
 // M110-S1（Issue 34 附页2 / Issue 38）：交替「必备字面核心」整串预筛（见 §2.2 论证，写在
@@ -6387,7 +6393,9 @@ static void rcand_extend(RCandList* dst, RCandList* src) {
 }
 
 // ---- 解析 ----
-typedef struct { const unsigned char* b; int len; int pos; int groups; char err[160]; } RParser;
+// M138：内联标志（`(?i)` `(?s)` `(?m)`）——**解析期**落到节点形状，匹配器零改动。
+//   作用域：作用于「本组剩余部分」，遇 `)` 由 rp_parse_atom 恢复（与 Go 的组作用域一致）。
+typedef struct { const unsigned char* b; int len; int pos; int groups; int f_i; int f_s; int f_m; char err[160]; } RParser;
 
 static int rp_peek(RParser* p) { return p->pos < p->len ? p->b[p->pos] : -1; }
 static RNode* rp_new(int type) { RNode* n = xmalloc(sizeof(RNode)); memset(n, 0, sizeof(RNode)); n->type = type; return n; }
@@ -6412,26 +6420,183 @@ static RNode* rp_parse_class(RParser* p);
 static RNode* rp_parse_escape(RParser* p);
 static int rp_parse_class_elem(RParser* p, unsigned char* lo, unsigned char* hi);
 
+// ---- M138（qg-issue 87 缺陷 84）：转义表**照 Go `regexp/syntax` 实测** ----
+// 语料由 Go 本尊生成（examples/m138_regex_go_parity/truth）：**穷举** 0x20..0x7e 全部可打印
+//   ASCII 的 `\c`（类外）与 `[\c]`（类内），逐条比对「合法/非法」。
+// Go 的规则（ASCII）：
+//   · 类转义：d D w W s S（大小写 = 取反）
+//   · 控制字符：a f n r t v（**没有 \e**）
+//   · 锚点/断言：b B（词边界）· A z（文本首尾）——**类内非法**
+//   · 字面引用：Q…E（**类内非法**）· Unicode 类：p P（本引擎无 Unicode 表 ⇒ 显式报错）
+//   · 码点：x（`\xHH` / `\x{H…}`）· 八进制 `\0`..`\377`（最多 3 位）
+//   · 字面量转义：见下方 rn_escapable_literal（比"标点"更宽：非字母数字皆可，含空格/控制字符）
+//   · 其余（`\q` `\e` `\8` `\C` `\Z` `\N` …）一律 `invalid escape sequence`
+// ⚠️ 与 POSIX 类的区别：Go 的 `\s` == `[\t\n\f\r ]`（**不含 \v**），
+//   而 `[[:space:]]` == `[\t\n\v\f\r ]`（**含 \v**）。本引擎此前两处都用"含 \v"⇒ 已按此拆分。
+// M138（Go 实测）：**除 ASCII 字母/数字与非 ASCII 字节外**，任何字节都能转义成字面量
+//   —— 含控制字符（0x01..0x1f、0x7f）与空格：`\ ` `\-` `\/` `\,` `\!` `\^` 皆合法。
+//   非 ASCII（`\中`）Go 报 invalid escape sequence，本引擎同样报错（按字节判定）。
+//   ⚠️ 这张表由 examples/m138_regex_go_parity **穷举** 0x20..0x7e 对照 Go 生成，不靠语感。
+static int rn_escapable_literal(int e) {
+    if (e < 0 || e > 0x7f) return 0;
+    if (e >= '0' && e <= '9') return 0;
+    if (e >= 'A' && e <= 'Z') return 0;
+    if (e >= 'a' && e <= 'z') return 0;
+    return 1;
+}
+
+// 码点 → UTF-8 字节数（定义见下；此处前置声明 —— rp_mk_utf8 用它）
+static int rp_utf8_encode(int cp, unsigned char* out);
+// M138 `(?i)`：大小写折叠辅助（定义在 rp_parse_atom 之前；此处前置声明 —— rp_parse_class /
+//   rp_parse_escape 都比它早用到）
+static RNode* rp_case_char(int c);
+static void rp_fold_class(RNode* cls);
+
+// `\0`..`\777`：首位已在 first，最多再看 2 位八进制（Go 同）
+static int rp_octal_escape(RParser* p, int first) {
+    int v = first - '0';
+    for (int i = 0; i < 2; i++) {
+        int c = rp_peek(p);
+        if (c < '0' || c > '7') break;
+        v = v * 8 + (c - '0');
+        p->pos++;
+    }
+    return v;
+}
+
+// `\xHH` 或 `\x{H…}`（进入时 p->pos 指向 'x' 之后）→ 码点；失败返回 -1 并填 p->err
+static int rp_hex_escape(RParser* p) {
+    int v = 0, n = 0;
+    if (rp_peek(p) == '{') {
+        p->pos++;
+        for (;;) {
+            int c = rp_peek(p);
+            if (c == '}') { p->pos++; break; }
+            int d = -1;
+            if (c >= '0' && c <= '9') d = c - '0';
+            else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+            else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+            if (d < 0 || n > 8) { snprintf(p->err, sizeof(p->err), "invalid escape sequence: `\\x`"); return -1; }
+            v = v * 16 + d;
+            n++;
+            p->pos++;
+        }
+        if (n == 0) { snprintf(p->err, sizeof(p->err), "invalid escape sequence: `\\x`"); return -1; }
+    } else {
+        for (int i = 0; i < 2; i++) {
+            int c = rp_peek(p);
+            int d = -1;
+            if (c >= '0' && c <= '9') d = c - '0';
+            else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+            else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+            if (d < 0) { snprintf(p->err, sizeof(p->err), "invalid escape sequence: `\\x`"); return -1; }
+            v = v * 16 + d;
+            p->pos++;
+        }
+    }
+    // Go 只拒绝 > U+10FFFF 与空 `\x{}`；**surrogate 合法**（`\x{D800}` 实测合法）
+    if (v > 0x10FFFF) {
+        snprintf(p->err, sizeof(p->err), "invalid escape sequence: `\\x`");
+        return -1;
+    }
+    return v;
+}
+
+// 码点 → 节点：< 0x80 单字节 RN_CHAR；否则展开 UTF-8 字节序列（引擎按字节匹配）
+static RNode* rp_mk_utf8(int v) {
+    unsigned char b[4];
+    int bl = rp_utf8_encode(v, b);
+    RNode* seq = rp_new(RN_SEQ);
+    for (int i = 0; i < bl; i++) {
+        RNode* ch = rp_new(RN_CHAR);
+        ch->ch = b[i];
+        rp_add_kid(seq, ch);
+    }
+    return seq;
+}
+
+// 码点 → UTF-8（最多 4 字节）；返回写入长度
+static int rp_utf8_encode(int cp, unsigned char* out) {
+    if (cp < 0x80) { out[0] = (unsigned char)cp; return 1; }
+    if (cp < 0x800) {
+        out[0] = (unsigned char)(0xC0 | (cp >> 6));
+        out[1] = (unsigned char)(0x80 | (cp & 0x3F));
+        return 2;
+    }
+    if (cp < 0x10000) {
+        out[0] = (unsigned char)(0xE0 | (cp >> 12));
+        out[1] = (unsigned char)(0x80 | ((cp >> 6) & 0x3F));
+        out[2] = (unsigned char)(0x80 | (cp & 0x3F));
+        return 3;
+    }
+    out[0] = (unsigned char)(0xF0 | (cp >> 18));
+    out[1] = (unsigned char)(0x80 | ((cp >> 12) & 0x3F));
+    out[2] = (unsigned char)(0x80 | ((cp >> 6) & 0x3F));
+    out[3] = (unsigned char)(0x80 | (cp & 0x3F));
+    return 4;
+}
+
+// 字符类内的转义（e = 反斜杠后的字符，p->pos 已越过 e）。
+//   类内合法性 = Go 实测；取反类（D W S）按**字节**展开为互补区间（引擎是字节的）。
+static int rp_class_escape(RParser* p, int e, unsigned char* lo, unsigned char* hi) {
+    switch (e) {
+        case 'd': lo[0] = '0'; hi[0] = '9'; return 1;
+        case 'D': lo[0] = 0x00; hi[0] = '/'; lo[1] = ':'; hi[1] = 0xff; return 2;
+        case 'w': lo[0]='0';hi[0]='9'; lo[1]='A';hi[1]='Z'; lo[2]='a';hi[2]='z'; lo[3]='_';hi[3]='_'; return 4;
+        case 'W': lo[0]=0x00;hi[0]='/'; lo[1]=':';hi[1]='@'; lo[2]='[';hi[2]='^'; lo[3]='`';hi[3]='`'; lo[4]='{';hi[4]=0xff; return 5;
+        case 's': lo[0]='\t';hi[0]='\n'; lo[1]=0x0c;hi[1]='\r'; lo[2]=' ';hi[2]=' '; return 3;
+        case 'S': lo[0]=0x00;hi[0]=0x08; lo[1]=0x0b;hi[1]=0x0b; lo[2]=0x0e;hi[2]=0x1f; lo[3]='!';hi[3]=0xff; return 4;
+        case 'a': lo[0]=0x07; hi[0]=0x07; return 1;
+        case 'f': lo[0]=0x0c; hi[0]=0x0c; return 1;
+        case 'n': lo[0]='\n'; hi[0]='\n'; return 1;
+        case 'r': lo[0]='\r'; hi[0]='\r'; return 1;
+        case 't': lo[0]='\t'; hi[0]='\t'; return 1;
+        case 'v': lo[0]=0x0b; hi[0]=0x0b; return 1;
+        default: break;
+    }
+    // M138：八进制转义的**入口条件是 Go 的**（非"首位 0-7"）：
+    //   首位 `0` ⇒ 合法（后随最多 2 位八进制）；首位 `1`-`7` ⇒ 仅当**后面还有一位八进制**才合法
+    //   （`\77` 合法 = 0o77、`\7` 非法：Go 视单字符 `\1`..`\9` 为不支持的反向引用）；
+    //   首位 `8`/`9` ⇒ 非法。旧实现（首位 0-7 一律收）把 `\1`..`\7` 误判为合法。
+    if (e == '0' || (e >= '1' && e <= '7' && rp_peek(p) >= '0' && rp_peek(p) <= '7')) {
+        int v = rp_octal_escape(p, e);
+        if (v > 0xff) {
+            snprintf(p->err, sizeof(p->err), "字符类内不支持 U+00FF 以上的转义（本引擎按字节匹配）");
+            return -1;
+        }
+        lo[0] = (unsigned char)v; hi[0] = (unsigned char)v; return 1;
+    }
+    if (e == 'x') {
+        int v = rp_hex_escape(p);
+        if (v < 0) return -1;
+        if (v > 0xff) {
+            // 字节引擎无法在字符类里表达多字节码点 —— 报错，绝不静默截断成单个字节
+            snprintf(p->err, sizeof(p->err), "字符类内不支持 U+00FF 以上的转义（本引擎按字节匹配）");
+            return -1;
+        }
+        lo[0] = (unsigned char)v; hi[0] = (unsigned char)v; return 1;
+    }
+    if (e == 'p' || e == 'P') {
+        snprintf(p->err, sizeof(p->err), "不支持的转义 \\%c（Unicode 类别：本引擎无 Unicode 表）", e);
+        return -1;
+    }
+    if (e == '\\' || rn_escapable_literal(e)) {
+        lo[0] = (unsigned char)e; hi[0] = (unsigned char)e; return 1;
+    }
+    snprintf(p->err, sizeof(p->err), "invalid escape sequence: `\\%c`", e);   // b B A z Q E C Z …
+    return -1;
+}
+
 static int rp_parse_class_elem(RParser* p, unsigned char* lo, unsigned char* hi) {
     int c = rp_peek(p);
     if (c < 0) { snprintf(p->err, sizeof(p->err), "字符类提前结束"); return -1; }
+    p->pos++;
     if (c == '\\') {
-        p->pos++;
         int e = rp_peek(p);
         if (e < 0) { snprintf(p->err, sizeof(p->err), "转义提前结束"); return -1; }
         p->pos++;
-        switch (e) {
-            case 'd': lo[0] = '0'; hi[0] = '9'; return 1;
-            case 'w': lo[0]='0';hi[0]='9'; lo[1]='A';hi[1]='Z'; lo[2]='a';hi[2]='z'; lo[3]='_';hi[3]='_'; return 4;
-            case 's': lo[0]=' ';hi[0]=' '; lo[1]='\t';hi[1]='\t'; lo[2]='\n';hi[2]='\n'; lo[3]='\r';hi[3]='\r'; lo[4]=0x0b;hi[4]=0x0b; lo[5]=0x0c;hi[5]=0x0c; return 6;
-            default: {
-                unsigned char ch = (unsigned char)e;
-                switch (e) { case 'n': ch = '\n'; break; case 't': ch = '\t'; break; case 'r': ch = '\r'; break; case '0': ch = 0; break; case 'f': ch = 0x0c; break; case 'v': ch = 0x0b; break; }
-                lo[0] = ch; hi[0] = ch; return 1;
-            }
-        }
+        return rp_class_escape(p, e, lo, hi);   // M138：表驱动（含 D/W/S 取反、b/B 非法）
     }
-    p->pos++;
     lo[0] = (unsigned char)c; hi[0] = (unsigned char)c;
     return 1;
 }
@@ -6514,6 +6679,7 @@ static RNode* rp_parse_class(RParser* p) {
     memcpy(nd->cls_hi, hi, ncls);
     nd->ncls = ncls;
     nd->neg = neg;
+    if (p->f_i) rp_fold_class(nd);                   // M138 `(?i)`：字符类补大小写对侧
     return nd;
 }
 
@@ -6532,8 +6698,10 @@ static RNode* rp_parse_escape(RParser* p) {
                 case 'D': lo[0]='0'; hi[0]='9'; cnt = 1; neg = 1; break;
                 case 'w': lo[0]='0';hi[0]='9'; lo[1]='A';hi[1]='Z'; lo[2]='a';hi[2]='z'; lo[3]='_';hi[3]='_'; cnt = 4; break;
                 case 'W': lo[0]='0';hi[0]='9'; lo[1]='A';hi[1]='Z'; lo[2]='a';hi[2]='z'; lo[3]='_';hi[3]='_'; cnt = 4; neg = 1; break;
-                case 's': lo[0]=' ';hi[0]=' '; lo[1]='\t';hi[1]='\t'; lo[2]='\n';hi[2]='\n'; lo[3]='\r';hi[3]='\r'; lo[4]=0x0b;hi[4]=0x0b; lo[5]=0x0c;hi[5]=0x0c; cnt = 6; break;
-                case 'S': lo[0]=' ';hi[0]=' '; lo[1]='\t';hi[1]='\t'; lo[2]='\n';hi[2]='\n'; lo[3]='\r';hi[3]='\r'; lo[4]=0x0b;hi[4]=0x0b; lo[5]=0x0c;hi[5]=0x0c; cnt = 6; neg = 1; break;
+                // M138：Go 的 \s == [\t\n\f\r ]（**不含 \v**，与 POSIX [[:space:]] 不同）——
+                //   旧实现含 0x0b ⇒ `\s` 会多匹一个字节（静默语义差）。
+                case 's': lo[0]='\t';hi[0]='\n'; lo[1]=0x0c;hi[1]='\r'; lo[2]=' ';hi[2]=' '; cnt = 3; break;
+                case 'S': lo[0]='\t';hi[0]='\n'; lo[1]=0x0c;hi[1]='\r'; lo[2]=' ';hi[2]=' '; cnt = 3; neg = 1; break;
                 default: break;
             }
             n->cls_lo = xmalloc(cnt);
@@ -6544,17 +6712,94 @@ static RNode* rp_parse_escape(RParser* p) {
             n->neg = neg;
             return n;
         }
+        // M138（缺陷 84）：零宽断言/锚点
+        case 'b': return rp_new(RN_WB);
+        case 'B': return rp_new(RN_NWB);
+        case 'A': return rp_new(RN_START);
+        case 'z': return rp_new(RN_END);
+        // M138：字面引用 `\Q…\E`（中间全部字面，含 `\` 自身；无 `\E` 则引到模式末尾）
+        case 'Q': {
+            RNode* seq = rp_new(RN_SEQ);
+            while (p->pos < p->len) {
+                if (p->b[p->pos] == '\\' && p->pos + 1 < p->len && p->b[p->pos + 1] == 'E') { p->pos += 2; break; }
+                RNode* ch = rp_new(RN_CHAR);
+                ch->ch = p->b[p->pos];
+                p->pos++;
+                rp_add_kid(seq, ch);
+            }
+            return seq;
+        }
+        case 'a': { RNode* n = rp_new(RN_CHAR); n->ch = 0x07; return n; }
         case 'n': { RNode* n = rp_new(RN_CHAR); n->ch = '\n'; return n; }
         case 't': { RNode* n = rp_new(RN_CHAR); n->ch = '\t'; return n; }
         case 'r': { RNode* n = rp_new(RN_CHAR); n->ch = '\r'; return n; }
-        case '0': { RNode* n = rp_new(RN_CHAR); n->ch = 0; return n; }
         case 'f': { RNode* n = rp_new(RN_CHAR); n->ch = 0x0c; return n; }
         case 'v': { RNode* n = rp_new(RN_CHAR); n->ch = 0x0b; return n; }
-        case '.': case '*': case '+': case '?': case '(': case ')': case '[': case ']':
-        case '{': case '}': case '|': case '^': case '$': case '\\': case '/': {
-            RNode* n = rp_new(RN_CHAR); n->ch = (unsigned char)e; return n;
-        }
-        default: snprintf(p->err, sizeof(p->err), "未知转义 \\%c", e); return NULL;
+        default: break;
+    }
+    if (e == '0' || (e >= '1' && e <= '7' && rp_peek(p) >= '0' && rp_peek(p) <= '7')) {
+        // 八进制 `\0`..`\777`（Go 允许到 U+01FF）；首位非 0 时**必须**还有一位八进制（照 Go）
+        int v = rp_octal_escape(p, e);
+        if (v < 0x80) { RNode* n = rp_new(RN_CHAR); n->ch = (unsigned char)v; return n; }
+        return rp_mk_utf8(v);                         // M138：`\400` = U+0100 ⇒ 展开 UTF-8（旧实现静默截断）
+    }
+    if (e == 'x') {                                   // `\xHH` / `\x{H…}`
+        int v = rp_hex_escape(p);
+        if (v < 0) return NULL;
+        if (v < 0x80) { RNode* n = rp_new(RN_CHAR); n->ch = (unsigned char)v; return n; }
+        return rp_mk_utf8(v);
+    }
+    if (e == 'p' || e == 'P') {
+        snprintf(p->err, sizeof(p->err), "不支持的转义 \\%c（Unicode 类别：本引擎无 Unicode 表）", e);
+        return NULL;
+    }
+    // 除 ASCII 字母/数字与非 ASCII 外的任何字节：字面量（照 Go）
+    if (e == '\\' || rn_escapable_literal(e)) {
+        if (p->f_i) return rp_case_char(e);          // M138 `(?i)`：转义字面量同样不敏感
+        RNode* n = rp_new(RN_CHAR); n->ch = (unsigned char)e; return n;
+    }
+    snprintf(p->err, sizeof(p->err), "invalid escape sequence: `\\%c`", e);
+    return NULL;
+}
+
+// ---- M138：内联标志 `(?i)` `(?s)` `(?m)` 与命名组 `(?P<n>…)` `(?<n>…)` ----
+//   `(?i)`：字面量 → 大小写两个区间；字符类 → 每个区间补上大小写对侧
+//   `(?s)`：`.` → 0x00-0xFF 的类（匹配任意字节，含换行）
+//   `(?m)`：`^` `$` → RN_START_ML / RN_END_ML
+//   `(?P<n>…)` `(?<n>…)`：**捕获组**（名字只是别名，不改匹配语义）
+//   其余 `(?…)`（环视等）→ 显式报错
+static int rp_fold_lo(int c) { return (c >= 'A' && c <= 'Z') ? c + 32 : c; }
+static int rp_fold_up(int c) { return (c >= 'a' && c <= 'z') ? c - 32 : c; }
+
+// `(?i)` 下的字面量：单字符 → 单区间；ASCII 字母 → 两区间（小写与大写）
+static RNode* rp_case_char(int c) {
+    RNode* n = rp_new(RN_CLASS);
+    n->cls_lo = xmalloc(2);
+    n->cls_hi = xmalloc(2);
+    unsigned char lo = (unsigned char)rp_fold_lo(c), up = (unsigned char)rp_fold_up(c);
+    n->ncls = 0;
+    n->cls_lo[n->ncls] = lo; n->cls_hi[n->ncls] = lo; n->ncls++;
+    if (up != lo) { n->cls_lo[n->ncls] = up; n->cls_hi[n->ncls] = up; n->ncls++; }
+    n->neg = 0;
+    return n;
+}
+
+// 字符类在 `(?i)` 下的折叠：把每个区间的大小写对侧补进去（原区间保留）
+static void rp_fold_class(RNode* cls) {
+    int extra_lo[128], extra_hi[128], nx = 0;
+    for (int i = 0; i < cls->ncls && nx + 2 < 128; i++) {
+        int lo = cls->cls_lo[i], hi = cls->cls_hi[i];
+        if (lo >= 'a' && hi <= 'z') { extra_lo[nx] = lo - 32; extra_hi[nx] = hi - 32; nx++; }
+        if (lo >= 'A' && hi <= 'Z') { extra_lo[nx] = lo + 32; extra_hi[nx] = hi + 32; nx++; }
+    }
+    if (nx == 0) return;
+    unsigned char* nl = xrealloc(cls->cls_lo, (size_t)(cls->ncls + nx));
+    unsigned char* nh = xrealloc(cls->cls_hi, (size_t)(cls->ncls + nx));
+    cls->cls_lo = nl; cls->cls_hi = nh;
+    for (int i = 0; i < nx; i++) {
+        cls->cls_lo[cls->ncls] = (unsigned char)extra_lo[i];
+        cls->cls_hi[cls->ncls] = (unsigned char)extra_hi[i];
+        cls->ncls++;
     }
 }
 
@@ -6564,10 +6809,60 @@ static RNode* rp_parse_atom(RParser* p) {
     switch (c) {
         case '(': {
             p->pos++;
+            // M138（qg-issue 87）：`(?:…)` **非捕获组**。此前引擎把 `?:` 当**字面量**
+            //   （`(` → 捕获组包裹，`?` 因后面是 ':' 不成量词 ⇒ 字面 '?'，再字面 ':'）⇒
+            //   `(?:api[_-]?key|apikey|…)` 这样的模式**永不匹配**，且不报错 ——
+            //   实测：`regex_find("(?:ab)", "xaby")` 返回 null（应命中 "ab"）。
+            //   现场：token-cache 的 `secret_patterns` 正是这种写法 ⇒ 本地快判静默漏检。
+            int noncap = 0;
+            int save_i = p->f_i, save_s = p->f_s, save_m = p->f_m;
+            if (rp_peek(p) == '?') {
+                int c1 = (p->pos + 1 < p->len) ? p->b[p->pos + 1] : -1;
+                if (c1 == ':') {
+                    p->pos += 2;
+                    noncap = 1;
+                } else if (c1 == 'P' || c1 == '<') {
+                    // (?P<name>…) / (?<name>…) → 捕获组（名字只是别名）
+                    int k = (c1 == 'P') ? p->pos + 2 : p->pos + 1;
+                    if (k >= p->len || p->b[k] != '<') {
+                        snprintf(p->err, sizeof(p->err), "非法的命名组语法 `(?%c…`", c1);
+                        return NULL;
+                    }
+                    k++;
+                    while (k < p->len && p->b[k] != '>') k++;
+                    if (k >= p->len) { snprintf(p->err, sizeof(p->err), "命名组缺少 `>`"); return NULL; }
+                    p->pos = k + 1;
+                } else {
+                    // 内联标志：形如 (?i) (?is) (?i-s) —— 到一个 ')' 结束且只含标志字符/'-'
+                    int k = p->pos + 1, si = 0, ss = 0, sm = 0, neg_seen = 0, bad = 0;
+                    while (k < p->len && p->b[k] != ')') {
+                        int ch = p->b[k];
+                        if (ch == '-') { neg_seen = 1; k++; continue; }
+                        if (ch == 'i') { if (neg_seen) p->f_i = 0; else si = 1; }
+                        else if (ch == 's') { if (neg_seen) p->f_s = 0; else ss = 1; }
+                        else if (ch == 'm') { if (neg_seen) p->f_m = 0; else sm = 1; }
+                        else { bad = 1; break; }
+                        k++;
+                    }
+                    if (bad || k >= p->len || k == p->pos + 1) {
+                        // 环视（?= ?! ?<= ?<!）等其余形式：**显式报错**，绝不静默降级成字面量
+                        snprintf(p->err, sizeof(p->err),
+                                 "不支持的组语法 `(?…)`（支持 `(?:…)` `(?P<n>…)` `(?i)` `(?s)` `(?m)`）");
+                        return NULL;
+                    }
+                    if (si) p->f_i = 1;
+                    if (ss) p->f_s = 1;
+                    if (sm) p->f_m = 1;
+                    p->pos = k + 1;              // 越过 ')'
+                    return rp_parse_repeat(p);   // 标志本身零宽：继续解析其后的原子
+                }
+            }
             RNode* node = rp_parse_alt(p);
+            p->f_i = save_i; p->f_s = save_s; p->f_m = save_m;   // 组作用域结束 ⇒ 恢复标志
             if (!node) return NULL;
             if (rp_peek(p) != ')') { rp_free(node); snprintf(p->err, sizeof(p->err), "缺少 )"); return NULL; }
             p->pos++;
+            if (noncap) return node;                       // 不占捕获组编号、不加 RN_GROUP
             if (p->groups >= 9) { rp_free(node); snprintf(p->err, sizeof(p->err), "捕获组最多 9 个"); return NULL; }
             p->groups++;
             RNode* g = rp_new(RN_GROUP);
@@ -6576,12 +6871,22 @@ static RNode* rp_parse_atom(RParser* p) {
             return g;
         }
         case '[': return rp_parse_class(p);
-        case '.': p->pos++; return rp_new(RN_ANY);
-        case '^': p->pos++; return rp_new(RN_START);
-        case '$': p->pos++; return rp_new(RN_END);
+        case '.': p->pos++;
+            if (p->f_s) {                       // M138 `(?s)`：`. ` 匹配任意字节（含换行）
+                RNode* n = rp_new(RN_CLASS);
+                n->cls_lo = xmalloc(1); n->cls_hi = xmalloc(1);
+                n->cls_lo[0] = 0x00; n->cls_hi[0] = 0xFF; n->ncls = 1; n->neg = 0;
+                return n;
+            }
+            return rp_new(RN_ANY);
+        case '^': p->pos++; return rp_new(p->f_m ? RN_START_ML : RN_START);
+        case '$': p->pos++; return rp_new(p->f_m ? RN_END_ML : RN_END);
         case '\\': return rp_parse_escape(p);
         case ')': snprintf(p->err, sizeof(p->err), "意外的 )"); return NULL;
-        default: p->pos++; { RNode* n = rp_new(RN_CHAR); n->ch = (unsigned char)c; return n; }
+        default:
+            p->pos++;
+            if (p->f_i) return rp_case_char(c);      // M138 `(?i)`：字面量大小写不敏感
+            { RNode* n = rp_new(RN_CHAR); n->ch = (unsigned char)c; return n; }
     }
 }
 
@@ -6671,6 +6976,8 @@ static int rn_lit_exact(RNode* n, unsigned char* out, int cap, int* outlen) {
         case RN_GROUP:
             return rn_lit_exact(n->child, out, cap, outlen);
         case RN_START: case RN_END:      // 零宽：确定消费 0 字节
+        case RN_WB: case RN_NWB:         // M138：词边界同为零宽（`\bapi_key\b` 仍能取得前缀 api_key）
+        case RN_START_ML: case RN_END_ML: // M138 `(?m)`：行首/行尾同为确定零宽
             *outlen = 0; return 1;
         case RN_SEQ: {
             int tot = 0;
@@ -6903,6 +7210,24 @@ static RCandList rmatch(RNode* n, const unsigned char* text, int len, int pos, c
 //   本快速路径按此线性产出：**数量、顺序（end 降序）、groups 与原实现逐项相同**。
 // 覆盖范围：`{n,}`（本次主诉）、`{n,m}`、`*`、`+`、`?` 中所有 child 为上述三类原子的情形；
 //   其余 child（含分组/交替/多字符序列）一律回落原 BFS，行为不变。
+// ---- M138（qg-issue 87 缺陷 84）：零宽断言 \b / \B / \A / \z ----
+// Go 的 `\b` 是 **ASCII 词边界**（文档：\w 一侧、\W/\A/\z 一侧；`\w` == [0-9A-Za-z_]）。
+//   实测（examples/m138_regex_go_parity 的语料由 Go 本尊生成）：`\b` 在「前一字节是词字符」与
+//   「后一字节是词字符」**恰好一个成立**的位置命中；文本首尾视作非词字符。
+static int rn_is_word(unsigned char c) {
+    return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_';
+}
+static int rn_word_boundary(const unsigned char* text, int len, int pos) {
+    int a = (pos > 0) && rn_is_word(text[pos - 1]);
+    int b = (pos < len) && rn_is_word(text[pos]);
+    return a != b;
+}
+// 零宽节点：匹配不消费任何字节 ⇒ 量词语义特殊（见 rmatch 的 RN_REP 分支）
+static int rn_zero_width(RNode* n) {
+    return n->type == RN_START || n->type == RN_END || n->type == RN_WB || n->type == RN_NWB ||
+           n->type == RN_START_ML || n->type == RN_END_ML;
+}
+
 static int rn_byte_atom(RNode* k) {
     return k->type == RN_CHAR || k->type == RN_ANY || k->type == RN_CLASS;
 }
@@ -6946,6 +7271,18 @@ static RCandList rmatch(RNode* n, const unsigned char* text, int len, int pos, c
         case RN_END:
             if (pos == len) rcand_add(&out, pos, groups);
             break;
+        case RN_START_ML:   // M138 `(?m)`：行首（^）—— 文本开头或前一字节是 \n
+            if (pos == 0 || (pos > 0 && text[pos - 1] == '\n')) rcand_add(&out, pos, groups);
+            break;
+        case RN_END_ML:     // M138 `(?m)`：行尾（$）—— 文本结尾或当前字节是 \n
+            if (pos == len || (pos < len && text[pos] == '\n')) rcand_add(&out, pos, groups);
+            break;
+        case RN_WB:      // M138：ASCII 词边界（零宽）
+            if (rn_word_boundary(text, len, pos)) rcand_add(&out, pos, groups);
+            break;
+        case RN_NWB:     // M138：非词边界（零宽）
+            if (!rn_word_boundary(text, len, pos)) rcand_add(&out, pos, groups);
+            break;
         case RN_ALT:
             for (int i = 0; i < n->nkids; i++) {
                 RCandList sub = rmatch(n->kids[i], text, len, pos, groups);
@@ -6968,6 +7305,19 @@ static RCandList rmatch(RNode* n, const unsigned char* text, int len, int pos, c
             break;
         }
         case RN_REP: {
+            // M138（qg-issue 87 缺陷 84）：child 是**零宽断言**（\b \B ^ $）时，
+            //   每次"重复"都落在同一位置、产出同一候选 ⇒ BFS 的「end 必须前进」去重守卫会把
+            //   level ≥ 1 全丢掉 ⇒ `\b{2}` 永不匹配。而 Go 实测（语料 m138）：
+            //     min == 0 → 至少可匹配 0 次 ⇒ **恒匹配（零宽）**：`\b*` `\b?` `\b{0}` `$*` 皆然
+            //     min ≥ 1 → 等价于断言本身：`\b+` `\b{2}` `\b{3,}` `\B{2}` `^{2}` `$+` 皆然
+            //   （证明：零宽 child 的任意 level 候选恒为 (pos, groups) 同一项，去重后只剩一项。）
+            if (rn_zero_width(n->child)) {
+                RCandList sub = rmatch(n->child, text, len, pos, groups);
+                int holds = sub.len > 0;
+                rcand_free(&sub);
+                if (n->min == 0 || holds) rcand_add(&out, pos, groups);
+                break;
+            }
             // M107-S1（Issue 34）：单字节原子 → 线性产出候选（等价性证明见 rn_byte_atom 上方）
             if (rn_byte_atom(n->child)) {
                 int k = 0;
@@ -7056,6 +7406,10 @@ static RCandList rmatch(RNode* n, const unsigned char* text, int len, int pos, c
             }
             return cur;
         }
+        default:
+            // M138：新增节点类型若忘记在此处理，旧代码会**静默返回「永不匹配」**
+            //   （空候选列表 = 正则静默失效）。按缺陷 86 的纪律：绝不静默 ⇒ 显式报错。
+            px_error("R9001: 正则节点类型未实现: %d（引擎内部错误）", n->type);
     }
     return out;
 }
@@ -7152,18 +7506,27 @@ static void r_expand_repl(const char* repl, const int64_t* g, const unsigned cha
 }
 
 static void r_replace(RNode* root, const unsigned char* text, int len, const char* repl, RStrBuf* out) {
-    int pos = 0;
+    // M138：与 bi_regex_find_all 同一迭代规则（Go ReplaceAllString 复用 allMatches）。
+    //   空匹配紧跟前一次匹配尾部 ⇒ 跳过（不产出替换、也不额外拷贝字节）。
+    int pos = 0, prev_end = -1, copy_from = 0;
     while (pos <= len) {
         int s, e;
         int64_t g[RG_N];
         if (!rsearch_from(root, text, len, pos, &s, &e, g)) break;
-        rsb_append(out, (const char*)text + pos, s - pos);
-        g[0] = ((int64_t)s << 32) | (unsigned)e;
-        r_expand_repl(repl, g, text, len, out);
-        pos = (e == s) ? s + 1 : e;
-        if (e == s && pos <= len) rsb_append(out, (const char*)text + s, 1);
+        // ⚠️ 「搜索位置 pos」与「上次已拷贝到的位置 copy_from」必须分开：
+        //   丢弃一个空匹配时 pos 前进、copy_from 不动（否则会漏拷一个字节）。
+        if (e == s && s == prev_end) {                   // 丢弃：不拷贝、不替换，仅前进搜索位置
+            pos = s + 1;
+        } else {
+            rsb_append(out, (const char*)text + copy_from, s - copy_from);
+            g[0] = ((int64_t)s << 32) | (unsigned)e;
+            r_expand_repl(repl, g, text, len, out);
+            copy_from = e;                               // 空匹配时 e == s（不吞字节，留给下一次拷贝）
+            pos = (e == s) ? s + 1 : e;
+        }
+        prev_end = e;
     }
-    rsb_append(out, (const char*)text + pos, len - pos);
+    rsb_append(out, (const char*)text + copy_from, len - copy_from);
 }
 
 static void r_split(RNode* root, const unsigned char* text, int len, LXValue list) {
@@ -7285,13 +7648,22 @@ static LXValue bi_regex_find_all(LXValue* args, int nargs, void* ctx) {
     LXValue r = px_list(0);
     px_root_push();
     PX_KEEP(r);   // M92 precise：累积 list 跨 px_list_push/px_str_len 分配
-    int pos = 0;
+    // M138：迭代规则照 Go `allMatches`（Rust find_iter 同）——
+    //   非空匹配：下一个搜索位置 = 匹配尾部；空匹配：位置 +1，**且若其起点恰为前一次匹配的尾部
+    //   则丢弃该空匹配**。旧实现无此丢弃 ⇒ `a*` 在 "baab" 上多产出一个 [3,3]（Go: [[0,0],[1,3],[4,4]]）。
+    int pos = 0, prev_end = -1;
     while (pos <= tlen) {
         int s, e;
         int64_t g[RG_N];
         if (!rsearch_from(root, (const unsigned char*)text, tlen, pos, &s, &e, g)) break;
-        px_list_push(r, px_str_len(text + s, e - s));
-        pos = (e == s) ? s + 1 : e;
+        if (e == s) {
+            if (s != prev_end) px_list_push(r, px_str_len(text + s, e - s));
+            pos = s + 1;
+        } else {
+            px_list_push(r, px_str_len(text + s, e - s));
+            pos = e;
+        }
+        prev_end = e;
     }
     rp_free(root);
     px_root_pop();
@@ -13544,31 +13916,38 @@ static char* px_gzip_decompress(const char* in, int inlen, int* outlen) {
     if (flg & 2) hdr += 2;
     if (hdr + 8 > inlen) return NULL;
     int clen = inlen - hdr - 8;
-    mz_stream s;
-    memset(&s, 0, sizeof(s));
-    if (mz_inflateInit2(&s, -15) != MZ_OK) return NULL;
+    // M138（qg-issue 87 缺陷 107）：**输出缓冲不够不是错误**，而是「换个更大的重来」。
+    //   现场：686 字节的 gzip 解压出 327680 字节（压缩比 477×）—— 旧实现按 `inlen*3 + 4096`
+    //   一次定容（6154 字节），miniz 在 MZ_FINISH 下满载即返回 MZ_BUF_ERROR，
+    //   旧代码把「非 OK/非 STREAM_END」一律当失败 ⇒ 返回 NULL ⇒ 调用方（h_exchange）
+    //   静默保留**压缩体**：`http_request` 于是给出 682 字节的 gzip 流而不是 320KB 文本
+    //   （m24_http_adv 的那条断言因此一直不成立 —— 它此前是**死断言**，见 M138 §parser）。
+    //   为何不是"扩容后续跑"：miniz 在 `avail_in == 0` 且 flush=MZ_FINISH 时直接返回
+    //   MZ_BUF_ERROR（NEEDS_MORE_INPUT 且入口输入已空），**无法接着跑** ⇒ 只能重来一次
+    //   （容量翻倍，均摊 O(n)）。上限 2^30 防 zip bomb。
     int cap = inlen * 3 + 4096;
-    char* out = xmalloc((size_t)cap);
-    s.next_in = (const unsigned char*)in + hdr;
-    s.avail_in = (mz_ulong)clen;
-    s.next_out = (unsigned char*)out;
-    s.avail_out = (mz_ulong)cap;
-    int r;
-    for (;;) {
-        r = mz_inflate(&s, MZ_FINISH);
-        if (r == MZ_STREAM_END) break;
-        if (r != MZ_OK) { mz_inflateEnd(&s); xfree(out); return NULL; }
-        int used = (int)(s.next_out - (unsigned char*)out);
-        int nc = cap * 2;
-        char* nout = xrealloc(out, (size_t)nc);
-        s.next_out = (unsigned char*)nout + used;
-        s.avail_out = (mz_ulong)(nc - used);
-        out = nout;
-        cap = nc;
+    for (int attempt = 0; attempt < 24 && cap > 0; attempt++) {
+        mz_stream s;
+        memset(&s, 0, sizeof(s));
+        if (mz_inflateInit2(&s, -15) != MZ_OK) return NULL;
+        char* out = xmalloc((size_t)cap);
+        s.next_in = (const unsigned char*)in + hdr;
+        s.avail_in = (mz_ulong)clen;
+        s.next_out = (unsigned char*)out;
+        s.avail_out = (mz_ulong)cap;
+        int r = mz_inflate(&s, MZ_FINISH);
+        int left = (int)s.avail_out;
+        int total = (int)s.total_out;
+        mz_inflateEnd(&s);
+        if (r == MZ_STREAM_END) {
+            *outlen = total;
+            return out;
+        }
+        xfree(out);
+        if (r == MZ_BUF_ERROR && left == 0) { cap = cap * 2; continue; }
+        return NULL;      // 数据错误 / 输入截断 ⇒ 保持"返回 NULL"的既有语义
     }
-    mz_inflateEnd(&s);
-    *outlen = (int)s.total_out;
-    return out;
+    return NULL;
 }
 
 // ==================== M83-S2（Issue 20 GAP-ARC-1）：gzip 语言层通用压缩/解压 ====================
