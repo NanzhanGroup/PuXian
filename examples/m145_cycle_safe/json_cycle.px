@@ -1,0 +1,9 @@
+# M145 门（3/3）：环上的 JSON 序列化必须**受控报错**（不是段错误）
+#   调用方（verify.sh）断言：rc == 1（运行时错误）且 stderr 含
+#   `json: unsupported value: encountered a cycle via dict`；rc == 139（SIGSEGV）判红。
+
+var g = {"n": 1}
+g.set("me", g)
+print("BEFORE-SERIALIZE")
+var s = json_stringify(g)
+print("AFTER-SERIALIZE len=" + str(len(s)))

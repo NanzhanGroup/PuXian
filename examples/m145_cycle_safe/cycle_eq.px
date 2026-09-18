@@ -1,0 +1,86 @@
+# M145 门（1/3）：循环引用值上的**相等**（缺陷 125）
+#   契约：与编译轨 runtime `compare_values`（对齐 Go reflect.DeepEqual）一致 ——
+#     环上「已访问对象对」再次出现 ⇒ 视为相等；非环的共享对象语义不变。
+#   断言集与验证脚本的两轨（VM / C）＋解释轨（pxi）共用，输出须逐字节一致。
+
+var n_pass = 0
+var n_fail = 0
+
+def ck(name, cond):
+    if cond:
+        n_pass = n_pass + 1
+        print("PASS " + name)
+    else:
+        n_fail = n_fail + 1
+        print("FAIL " + name)
+
+# ── A 自反 / 自环 ──
+var g = {"n": 1}
+g.set("me", g)
+ck("A1 自环 dict 与自身相等", g == g)
+ck("A2 自环 dict 深读后仍相等", g["me"]["me"]["me"]["me"] == g)
+
+var l = [1]
+l.append(l)
+ck("A3 自环 list 与自身相等", l == l)
+
+# ── B 两个结构相同**且都带环**的对象 ⇒ 相等（DeepEqual 语义）──
+var e1 = {"n": 1}
+e1.set("me", e1)
+var e2 = {"n": 1}
+e2.set("me", e2)
+ck("B1 同构自环相等", e1 == e2)
+var e3 = {"n": 2}
+e3.set("me", e3)
+ck("B2 同构自环但标量不同 ⇒ 不等", not (e1 == e3))
+
+# ── C 共享（非环）不得被误判 ──
+var a = {"x": 1}
+var shared = {"p": a, "q": a}
+var shared2 = {"p": {"x": 1}, "q": {"x": 1}}
+ck("C1 共享子对象与结构相同的两份副本相等", shared == shared2)
+var shared3 = {"p": {"x": 1}, "q": {"x": 2}}
+ck("C2 共享 vs 不同 ⇒ 不等", not (shared == shared3))
+
+# ── D 间接环 ──
+var p1 = {}
+var q1 = {"p": p1}
+p1.set("q", q1)
+var p2 = {}
+var q2 = {"p": p2}
+p2.set("q", q2)
+ck("D1 间接环同构相等", p1 == p2)
+ck("D2 间接环自反", p1 == p1)
+
+# ── E 深但无环：不受环保护影响 ──
+var d1 = {"v": 0}
+var d2 = {"v": 0}
+var k = 0
+while k < 400:
+    var w1 = {}
+    w1.set("c", d1)
+    d1 = w1
+    var w2 = {}
+    w2.set("c", d2)
+    d2 = w2
+    k = k + 1
+ck("E1 400 层等深结构仍相等", d1 == d2)
+
+# ── F 标量/普通容器语义不变 ──
+ck("F1 int", 1 == 1)
+ck("F2 跨型数值", 1 == 1.0)
+ck("F3 str", "ab" == "ab")
+ck("F4 普通 dict", {"a": 1} == {"a": 1})
+ck("F5 不等 dict", not ({"a": 1} == {"a": 2}))
+ck("F6 list", [1, [2, 3]] == [1, [2, 3]])
+ck("F7 null", null == null)
+ck("F8 类型不同", not ([1] == {"0": 1}))
+
+# ── G 环参与不等比较不崩 ──
+var e4 = {"n": 3}
+e4.set("me", e4)
+ck("G1 环 vs 普通 dict 不等", not (e1 == {"n": 1}))
+
+print("SUMMARY eq pass=" + str(n_pass) + " fail=" + str(n_fail))
+if n_fail != 0:
+    exit(1)

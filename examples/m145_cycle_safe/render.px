@@ -1,0 +1,68 @@
+# M145 门（2/3）：循环引用值上的**渲染**（缺陷 125）
+#   契约：`str()`/`print` 在**路径**上再次遇到同一对象 ⇒ 渲染 `...`
+#     （共享而非环的对象**必须完整渲染** —— 用累积集合会误判，见实现注释）。
+#   `json_stringify` / `json_stringify_go` 在环上**报错**（Go encoding/json 同族文案），
+#     由本目录 `json_cycle.px` 单独验证「受控报错而非段错误」。
+
+var n_pass = 0
+var n_fail = 0
+def ck(name, cond):
+    if cond:
+        n_pass = n_pass + 1
+        print("PASS " + name)
+    else:
+        n_fail = n_fail + 1
+        print("FAIL " + name)
+
+# ── A 自环 ──
+var g = {"n": 1}
+g.set("me", g)
+ck("A1 自环 dict 渲染含省略号", str(g) == "{me: ..., n: 1}")
+ck("A2 自环 dict 渲染不含 me 的子内容", not (contains(str(g), "me: {me")))
+
+var l = [1]
+l.append(l)
+ck("A3 自环 list 渲染", str(l) == "[1, ...]")
+
+# ── B 共享（非环）**完整**渲染 ──
+var a = {"x": 1}
+var shared = {"p": a, "q": a}
+ck("B1 共享子对象完整渲染", str(shared) == "{p: {x: 1}, q: {x: 1}}")
+
+var a3 = {"x": 1}
+var three = {"p": a3, "q": a3, "r": a3}
+ck("B2 三处共享仍完整", str(three) == "{p: {x: 1}, q: {x: 1}, r: {x: 1}}")
+
+# ── C 间接环 ──
+var p = {}
+var q = {"p": p}
+p.set("q", q)
+ck("C1 间接环渲染", str(p) == "{q: {p: ...}}")
+
+# ── D 深但无环：不受影响（400 层）──
+var deep = {"v": 0}
+var i = 0
+while i < 400:
+    var w = {}
+    w.set("c", deep)
+    deep = w
+    i = i + 1
+var s = str(deep)
+ck("D1 400 层渲染含最内层", contains(s, "v: 0"))
+ck("D2 400 层渲染无省略号", not (contains(s, "...")))
+
+# ── E 环出现在 list 里 ──
+var holder = []
+var inner = {"back": holder}
+holder.append(inner)
+ck("E1 list→dict→list 环", str(holder) == "[{back: ...}]")
+
+# ── F 纯标量渲染不变 ──
+ck("F1 int", str(1) == "1")
+ck("F2 str", str("x") == "x")
+ck("F3 null", str(null) == "null")
+ck("F4 bytes", str(bytes("ab")) == "<bytes 2>")
+
+print("SUMMARY render pass=" + str(n_pass) + " fail=" + str(n_fail))
+if n_fail != 0:
+    exit(1)
