@@ -89,6 +89,9 @@ run m141_now_ns bash examples/m141_now_ns/verify.sh
 #   **需要 Go 产真值**（encoding/json 本尊），口径同 m136/m138 —— 本机全门跑，
 #   CI runner 自带 Go ⇒ ci.yml 里也跑。
 run m142_go_json_indent bash examples/m142_go_json_indent/verify.sh
+# m143（float32 值族 / 位模式 / Go encoding/json 的 **32 位**浮点文本 + append_file_opt，
+#   缺陷 115/117/118/119）：**需要 Go 产真值**，口径同 m136/m138/m142。
+run m143_float32 bash examples/m143_float32/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

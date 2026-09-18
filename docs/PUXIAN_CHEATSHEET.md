@@ -884,3 +884,49 @@ set_timeout(fn (): print("once after 2s"), 2000)
     `["中文中文"]x` 的偏移是 **17**（1 基**字节**）；0x80 的上下文是 `looking for beginning of value`
     而不是 `after array element`。⇒ 纪律：**期望值只能从真值产**（本门最终形态：696 行真值 diff 为准，
     断言只钉"不变量 + 已实测常量"）。
+
+108. **float32 值族：语言里只有 float64，float32 必须 `f32()` 逐步收口（第 24 轮 · M143 · 缺陷 115）**：
+    原语三件套 —— `float32(x)`（舍入到最近的 float32，IEEE754 round-to-nearest-even，以 float64
+    **精确**承载）· `float32_bits(x)`（`math.Float32bits(float32(x))` 的 uint32，int 承载）·
+    `bits_to_float32(u)`（`math.Float32frombits(uint32(u))`，只取低 32 位）。
+    **纪律**：float32 的 + - * / sqrt，其**精确结果**在 float64 里可精确表示（53 ≥ 2\*24+2 位）
+    ⇒ `f32(a op b)` 与 Go 的 float32 直接算**逐位相同**（无二次舍入），不必为每种运算造原语；
+    但**循环累加必须每步收口**：`f32(acc + b)` 而非「float64 累加、最后窄化一次」——
+    实证 `1.0f 每次 +1e-8f × 1000` ⇒ 每步收口停在 `3f800000`(1.0)，float64 累加后窄化 = `3f800054`(1.00001)。
+    ⚠️ 另两处实测：`float32(1e40)` = `+Inf`（位模式 7f800000，**不报错**）；`int → float32`
+    必须走 C 的直接转换（先 double 再 float 会**二次舍入**）。
+109. **Go `encoding/json` 的浮点数文本按**位宽**分两套（第 24 轮 · M143 · 缺陷 117）**：
+    `strconv.AppendFloat(f, 'f'|'e', -1, bits)` —— `bits=64` 给 float64 最短往返，
+    `bits=32` 给 **float32 最短往返**（`1/3` → `0.33333334` 而非 `0.3333333333333333`；
+    `0.1` → `0.1`）。科学计数阈值也按位宽比较（`float32(abs) < 1e-6 || >= 1e21`）。
+    口岸值（Go 1.26.6 实测）：`1e-7`→`"1e-7"`（`e-0d`→`e-d` **收敛**）· `1e-6`→`"0.000001"`
+    （**阈值不含**）· `1e20`→`"100000000000000000000"`（定点）· `1e21`→`"1e+21"`（`+0d` **不**收敛）·
+    `-0.0`→`"-0"`（Go **不**把负零写成 0；注意源码字面量 `-0.0` 会被常量折叠成 +0，真值须用
+    `math.Copysign(0,-1)` / `-1.0*0.0` 造）· `MaxFloat32`→`"3.4028235e+38"` · 最小次正规→`"1e-45"`。
+    现成 API：`json_num_str(x[, bits])`（非有限值 → **null**，对应 Go 的 `UnsupportedValueError`；
+    `json_stringify_go(v[,opts])` 已按 bits=64 走同一条渲染路径）。**注意**：语言自有的
+    `json_stringify` 仍走语言习惯（`1e-07`、`-0`）—— 需要 Go 兼容时**必须**用 `json_stringify_go` /
+    `json_num_str`；两者不是同一个口径，这是**已登记边界**（不是缺陷）。
+    ⚠️ **已登记边界**：`str(某 float32 值)` 走的是 **float64** 最短往返（运行时只有 float64
+    值，无从得知"它原本是 float32"）⇒ 与 Go 的 `fmt.Sprint(float32)`（32 位 'g' 最短）**不同**；
+    需要 Go 文本时用 `json_num_str(x, 32)`。
+110. **浮点除零：Go 是良定义（±Inf / NaN），PuXian 目前 `px_error` 杀进程（缺陷 118，未修）**：
+    `px_div` 对**任何**零除数（含 `0.0`）都报「除零错误」⇒ Go 里合法的 `x/0.0`（Inf）、
+    `0.0/0.0`（NaN）、向量归一化的退化分支若写成除法就会**打挂进程**。本轮的浮点门语料
+    **刻意不含零除数**（避免把语义分歧混进保真门），该分歧按独立里程碑跟踪（改语义要配
+    双轨负控门 + 全仓回归）。判据：`float(1.0)/float(0.0)` 在 Go 给 `+Inf`，在此报错。
+111. **float32/float64 混用表达式必须逐项核对 Go 源码的「窄化位置」（第 24 轮 · 缺陷 119）**：
+    `embedding_types.go::CosineSimilarity` 写的是 `dot += float64(a[i] * b[i])` ——
+    **乘积先在 float32 里算**再拓宽累加；而 `vector_util.go::DotProduct` 写的是
+    `sum += float64(a[i]) * float64(b[i])` —— **乘积在 float64 里算**。同一个文件里两种写法并存，
+    「看起来等价」，在**恰好是 float32 精确值**的语料（0.5/2.0/1024.5）上**完全同值**
+    （第 23 轮的 G 段因此全绿），换 0.1 / 1÷3 / 1e-8 语料后当场分叉
+    （实测 `CosineSimilarity` Go 给 `0`，float64 乘积版给 `3.0000000590866564e-21`）。
+    ⇒ 纪律：**语料里必须混入 float32 不能精确表示的值**（0.1 / 1÷3 / 1e-8 / 次正规），
+    否则窄化面等于没测。
+112. **`append_file_opt(path, content[, mode])`（第 24 轮 · 缺陷 115 收口）**：`append_file` 的
+    **Result 版** —— `Ok(null) | Err("io: 追加写入失败 …: No such file or directory (os error 2)")`。
+    Go 侧 `os.OpenFile(..., O_APPEND|O_CREATE|O_WRONLY, 0644)` 的 err 通道是「只记日志、不阻塞主流程」
+    （token-cache LogWriter），而 `append_file` 失败即杀进程 ⇒ 磁盘满/权限不足会**整服务死**。
+    与 `write_file_opt` 同款纪律：**不** fchmod（Go 的 perm 只在**创建**时生效）·
+    `+ append_file_opt` 也进了解释轨名册（转发层 + names 两处同步，见第 22 轮教训）。

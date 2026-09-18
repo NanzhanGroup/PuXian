@@ -480,6 +480,36 @@ def i_call_builtin(name, args, pos):
         if len(args) == 3:
             return Ok(write_file_opt(args[0], args[1], args[2]))
         return Ok(write_file_opt(args[0], args[1]))
+    if name == "append_file_opt":
+        # M143（第 24 轮 · 缺陷 115）：Result 版追加写 —— 对齐 Go `os.OpenFile(..., O_APPEND)`
+        #   的 err 通道（token-cache LogWriter：写失败只记日志、不阻塞主流程）。
+        if len(args) < 2 or len(args) > 3:
+            return Err(i_r1002("append_file_opt 需要 (路径, 内容[, mode])", pos))
+        if len(args) == 3:
+            return Ok(append_file_opt(args[0], args[1], args[2]))
+        return Ok(append_file_opt(args[0], args[1]))
+    if name == "float32":
+        # M143：舍入到最近的 float32（IEEE754 round-to-nearest-even），以 float64 精确承载。
+        if len(args) != 1:
+            return Err(i_r1002("float32 需要一个参数", pos))
+        return Ok(float32(args[0]))
+    if name == "float32_bits":
+        # M143：`math.Float32bits(float32(x))` 的 uint32（int 承载）。
+        if len(args) != 1:
+            return Err(i_r1002("float32_bits 需要一个参数", pos))
+        return Ok(float32_bits(args[0]))
+    if name == "bits_to_float32":
+        # M143：`math.Float32frombits(uint32(u))`（只取低 32 位）。
+        if len(args) != 1:
+            return Err(i_r1002("bits_to_float32 需要一个参数", pos))
+        return Ok(bits_to_float32(args[0]))
+    if name == "json_num_str":
+        # M143：Go `encoding/json` 的浮点文本（bits=32 走 32 位最短往返；非有限值 → null）。
+        if len(args) != 1 and len(args) != 2:
+            return Err(i_r1002("json_num_str 需要 (值[, bits])", pos))
+        if len(args) == 2:
+            return Ok(json_num_str(args[0], args[1]))
+        return Ok(json_num_str(args[0]))
     if name == "isatty":
         if len(args) != 1:
             return Err(i_r1002("isatty 需要一个 fd（int）", pos))
