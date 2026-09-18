@@ -35,6 +35,14 @@
 > 的 `i_eq`/`i_to_str` 同批加环保护（三轨输出逐字节一致）。新 native **`object_id(v)`**（对象
 > 同一性，`==` 是结构相等 ⇒ 指针语义移植/环检测必需）；native 计数 336→337、内置名册 350→351。
 > 门 `examples/m145_cycle_safe/`（VM/C/解释轨 + 2 负控）。详见事实 117。
+> M146（2026-09-20，qg-issue 87 第 27 轮）：**float64 位模式族 + 比较运算的 NaN 语义** ——
+> ① 新增 native **`float64_bits(x)` / `bits_to_float64(u)`**（对应 M143 的 32 位一对；无它则读不出
+>    float64 位模式、也**造不出** NaN/±Inf/非规格化数/−0.0）；native 计数 337→**339**、
+>    内置名册 351→**353**；② 顺带根治 **缺陷 126**：`NaN != NaN` 曾为**假**、
+>    `NaN <= x` / `NaN >= x` 曾为**真**（`compare_values` 三态器把 NaN 落进"相等"分支），
+>    现为 IEEE754「四路皆假」且**容器**里 NaN 判不等（对齐 Go `reflect.DeepEqual`）；
+>    ③ 门 `examples/m146_float64_bits/`（577 行语料 × Go 本尊逐字节 × VM/C 双轨 + 54 自断言 + 3 负控）。
+>    详见事实 118 / 119。
 
 ---
 
@@ -300,7 +308,7 @@ print("upper=" + to_upper("px"))
       字符串形态（`r/w/a/rw/w+`）表达不了"有则开、无则建、不截断"（`w+` 带 `O_TRUNC`），
       也表达不了 `O_EXCL`。字符串形态**行为零变化**。
       ⚠️ 第三参只在第二参是 int 时可用。
-## 2. native 内置速查（331 全量见 `docs/native_index.json`，本表为常用）
+## 2. native 内置速查（339 全量见 `docs/native_index.json`，本表为常用）
 
 ### 核心 / 值
 `print` `len` `range` `type` `str` `int` `float` `bool` `assert` `input` `exit` `sleep` `abs` `sqrt` `min` `max` `pow` `sorted` `reversed` `sum` `map` `filter` `reduce` `contains` `env`（⚠️ **变量不存在返回 `null`**，不是 `""` —— `str(null)` 会得到 `"null"`，取值请先判 null） `args()`（**调用式**：`px run s.px a b` 与编译产物同形 `[程序, a, b]`——M115 修；见 §1.1 事实清单）
@@ -973,3 +981,35 @@ set_timeout(fn (): print("once after 2s"), 2000)
        以及**移植带指针语义的 Go 代码**（`child == leaf` 这类判断 —— PuXian 的 `==` 是结构相等，
        做不到「是不是同一个对象」）。
      门：`examples/m145_cycle_safe/`（三轨 VM/C/解释轨输出逐字节一致 + 环上 JSON 受控报错 + 2 负控）。
+118. **float64 位模式族：`float64_bits(x)` / `bits_to_float64(u)`（第 27 轮 · M146）**：M143 补了 32 位的
+     一对（`float32_bits` / `bits_to_float32`），**64 位的对应项一直缺失** —— 后果不是"少个糖"：
+     · **读不出** float64 的位模式 ⇒ 跨语言/跨机器对拍 float64（SS / 半径 / 置信度 / 距离 /
+       `time.Duration`）时没有**无损指纹**，只能靠"最短往返文本实现一致"这个弱前提；
+       M143 的 `json_num_str(x, 64)` 是替代品，但它要先约定文本格式。
+     · **造不出** NaN / ±Inf / **非规格化数** / −0.0 —— 这四类**没有十进制字面量**：
+       `bits_to_float64(0x7FF0000000000000)` 才有 +Inf，`bits_to_float64(1)` 才有 4.9e-324。
+       移植任何"按位构造浮点"的 Go 代码（`math.Float64frombits`）时这是**唯一入口**。
+     语义与 Go 一一对应（`math.Float64bits` / `Float64frombits`）：返回的 uint64 以 **int64
+     二进制补码**承载 ⇒ ≥2^63 的位模式是**负值**（= Go `int64(math.Float64bits(f))` 的再解释口径），
+     取十六进制文本用 `int_to_hex(v, 16)`（"取低 64 位"，对负值同样给正确的补码文本）。
+     `bits_to_float64` 只取**低 64 位**（负值 = 回绕）。
+     ⚠️ **`-0.0` 字面量是 +0.0**（与 Go 一致）：Go 的常量是无符号零，`var a = -0.0` 后
+     `math.Signbit(a)` 为 **false**；PuXian 同。要 −0.0 只能 `bits_to_float64(0x8000000000000000)`
+     或 `float("-0.0")`（`strtod` 保号）。同理 **±0 的 `==` 相等**，只有位模式能区分。
+     门：`examples/m146_float64_bits/`（577 行语料 = 十进制口岸 + 整数 + 512 个伪随机 64 位模式
+     + 21 个位模式口岸，与 Go 本尊逐字节 diff × VM/C 双轨 + 54 条自断言 + 3 道负控）。
+119. **比较运算的 NaN 语义：IEEE754「四路皆假」（第 27 轮 · 缺陷 126，M146 根治）**：这是 M146
+     补出 `bits_to_float64` 后**当轮就被门照出**的真缺陷（此前语言里造不出 NaN ⇒ 通路不可达）：
+     · 修前：`NaN != NaN` → **假**、`NaN <= 1.0` → **真**、`NaN >= 1.0` → **真**
+       （`NaN < x` / `NaN > x` / `NaN == x` 恰好是对的）。
+     · 根因：`compare_values` 是**三态**比较器（-1/0/1），数值分支是
+       `x < y ? -1 : (x > y ? 1 : 0)` —— NaN 两个判断都假 ⇒ **落进 else 被当成"相等"**；
+       而 `px_ne` / `px_le` / `px_ge` 都借道它。
+     · 修法：`px_eq/ne/lt/le/gt/ge` 对**数值**直接走 C 的浮点比较（IEEE 原生正确），
+       非数值仍走 `compare_values` ⇒ 容器 / 字符串 / 枚举的**全序**（`sorted` / `sort_by` /
+       `min` / `max`）语义**零变化**；`compare_values_raw` 的数值分支里 NaN 返回**非零**
+       （三态器只能以"非零"表达"不可比"）⇒ `[NaN] == [NaN]` 为**假**，
+       与 Go `reflect.DeepEqual`（`v1.Float() == v2.Float()`）一致。
+     · ⚠️ **INT-INT 必须保留整数比较**（不绕 double）：否则 `9007199254740993 == 9007199254740992`
+       会因丢精度误判为真。修后全表：`==`假 `!=`真 `<`假 `<=`假 `>`假 `>=`假（6 条自断言钉住）。
+     · 解释轨（`px run`）的 `Ne` 走 `not i_eq`，本就对；修 runtime 后两轨一致。
