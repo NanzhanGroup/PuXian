@@ -281,6 +281,11 @@ def i_call_builtin(name, args, pos):
         if len(args) != 1:
             return Err(i_r1002("exists 需要一个路径参数", pos))
         return Ok(exists(args[0]))
+    # M129（qg-issue 87 缺陷 44）：is_dir —— 「路径存在且是目录」（Go fi.IsDir() 等价物）
+    if name == "is_dir":
+        if len(args) != 1:
+            return Err(i_r1002("is_dir 需要一个路径参数", pos))
+        return Ok(is_dir(args[0]))
     if name == "remove":
         if len(args) != 1:
             return Err(i_r1002("remove 需要一个路径参数", pos))
@@ -333,6 +338,11 @@ def i_call_builtin(name, args, pos):
         if len(args) != 2:
             return Err(i_r1002("regex_split 需要 2 个参数: (pattern, text)", pos))
         return Ok(regex_split(args[0], args[1]))
+    if name == "json_parse_opt":
+        # M129（qg-issue 87 缺陷 38）：Result 版 JSON 解析（对齐 Go json.Unmarshal 的 err 通道）
+        if len(args) != 1:
+            return Err(i_r1002("json_parse_opt 需要一个字符串参数", pos))
+        return Ok(json_parse_opt(args[0]))
     if name == "json_parse":
         if len(args) != 1:
             return Err(i_r1002("json_parse 需要一个字符串参数", pos))
@@ -341,6 +351,15 @@ def i_call_builtin(name, args, pos):
         if len(args) != 1:
             return Err(i_r1002("json_stringify 需要一个参数", pos))
         return Ok(json_stringify(args[0]))
+    if name == "json_stringify_go":
+        # M129（qg-issue 87 缺陷 16）：Go encoding/json 兼容序列化（键排序 + HTML/控制符转义
+        #   + 最短往返浮点）。解释器轨必须**逐条显式转发**（本文件是手写转发层，漏写即静默丢参）。
+        #   M129-2：可选 opts（{"sort_keys":bool,"escape_html":bool}）—— 少了这一支就是"丢参"。
+        if len(args) == 1:
+            return Ok(json_stringify_go(args[0]))
+        if len(args) == 2:
+            return Ok(json_stringify_go(args[0], args[1]))
+        return Err(i_r1002("json_stringify_go 需要 (值[, opts]) 参数", pos))
     if name == "json_path":
         if len(args) != 2:
             return Err(i_r1002("json_path 需要 (json, path) 参数", pos))
@@ -444,6 +463,23 @@ def i_call_builtin(name, args, pos):
         if len(args) != 0:
             return Err(i_r1002("os_self_path 不需要参数", pos))
         return Ok(os_self_path())
+    if name == "hostname":
+        # M129（qg-issue 87 缺陷 18）：本机主机名（对齐 Go os.Hostname）
+        if len(args) != 0:
+            return Err(i_r1002("hostname 不需要参数", pos))
+        return Ok(hostname())
+    if name == "read_file_opt":
+        # M129（qg-issue 87 缺陷 19）：Result 版读文件（对齐 Go os.ReadFile 的 err 通道）
+        if len(args) != 1:
+            return Err(i_r1002("read_file_opt 需要一个路径参数", pos))
+        return Ok(read_file_opt(args[0]))
+    if name == "write_file_opt":
+        # M129-3（qg-issue 87 缺陷 25）：Result 版写文件（对齐 Go os.WriteFile 的 err 通道）
+        if len(args) < 2 or len(args) > 3:
+            return Err(i_r1002("write_file_opt 需要 (路径, 内容[, mode])", pos))
+        if len(args) == 3:
+            return Ok(write_file_opt(args[0], args[1], args[2]))
+        return Ok(write_file_opt(args[0], args[1]))
     if name == "isatty":
         if len(args) != 1:
             return Err(i_r1002("isatty 需要一个 fd（int）", pos))
@@ -588,9 +624,15 @@ def i_call_builtin(name, args, pos):
         return Ok(args[0])
     # ---- M57 边缘设备层（直接转发 runtime C builtin；可选参数按实参个数透传） ----
     if name == "open":
-        # open(path[, mode]) → fd
-        if len(args) < 1 or len(args) > 2:
-            return Err(i_r1002("open 需要 (path[, mode])", pos))
+        # open(path[, mode]) / open(path, flags[, perm]) → fd
+        # ⚠️ M133（qg-issue 87 缺陷 78）：M130 给 **C 轨**加了「原始 flags」三参形态
+        #    （Go `os.OpenFile` 的等价物），**解释轨漏跟** —— 实测 `px run main.px`
+        #    在 PID 锁处直接 `R1002: open 需要 (path[, mode])` 起不来。
+        #    两轨必须同形：这里放行第三个参数（perm），继续透传宿主 native。
+        if len(args) < 1 or len(args) > 3:
+            return Err(i_r1002("open 需要 (path[, mode]) 或 (path, flags[, perm])", pos))
+        if len(args) == 3:
+            return Ok(open(args[0], args[1], args[2]))
         if len(args) == 2:
             return Ok(open(args[0], args[1]))
         return Ok(open(args[0]))
@@ -640,13 +682,16 @@ def i_call_builtin(name, args, pos):
         return Ok(mem_write(args[0], args[1], args[2]))
     if name == "http_unix":
         # M56：http_unix(sock_path, url_path, method[, body[, headers]]) → dict
-        if len(args) < 3 or len(args) > 5:
-            return Err(i_r1002("http_unix 需要 (sock_path, url_path, method[, body[, headers]])", pos))
+        # M133（第 13 轮）：第 6 参 opts = {"timeout_ms": N} 一并透传（总时限，覆盖连接+收发）。
+        if len(args) < 3 or len(args) > 6:
+            return Err(i_r1002("http_unix 需要 (sock_path, url_path, method[, body[, headers[, opts]]])", pos))
         if len(args) == 3:
             return Ok(http_unix(args[0], args[1], args[2]))
         if len(args) == 4:
             return Ok(http_unix(args[0], args[1], args[2], args[3]))
-        return Ok(http_unix(args[0], args[1], args[2], args[3], args[4]))
+        if len(args) == 5:
+            return Ok(http_unix(args[0], args[1], args[2], args[3], args[4]))
+        return Ok(http_unix(args[0], args[1], args[2], args[3], args[4], args[5]))
     # ---- M63-L8: 网络真实应用补白名单（http_request 连接池 / S3 客户端） ----
     # Result 透传（i_call_c_net）：C 网络函数失败返回 Err("net: ...") result，不杀进程
     # （M57 语义），直接透传保失败路径双模式一致；成功返回普通值 Ok 包裹。
@@ -707,6 +752,43 @@ def i_call_builtin(name, args, pos):
         if len(args) == 3:
             return Ok(fcntl(args[0], args[1], args[2]))
         return Ok(fcntl(args[0], args[1]))
+    if name == "flock":
+        # flock(fd, op) → int（BSD 文件锁；成功 0，失败 -1 + os_errno）
+        if len(args) != 2:
+            return Err(i_r1002("flock 需要 (fd, op)", pos))
+        return Ok(flock(args[0], args[1]))
+    if name == "regex_valid":
+        # regex_valid(pattern) → bool（M133：只编译不匹配；非法返回 false **不杀进程**）
+        if len(args) != 1:
+            return Err(i_r1002("regex_valid 需要 (pattern)", pos))
+        return Ok(regex_valid(args[0]))
+    if name == "ord":
+        # ord(s) → int（M133：首字符码点；空串 0；非法 UTF-8 → 0xFFFD）
+        if len(args) != 1:
+            return Err(i_r1002("ord 需要一个字符串参数", pos))
+        return Ok(ord(args[0]))
+    if name == "chr":
+        # chr(n) → str（M133：码点 → UTF-8；非法码点 → U+FFFD）
+        if len(args) != 1:
+            return Err(i_r1002("chr 需要 (码点)", pos))
+        return Ok(chr(args[0]))
+    if name == "chmod":
+        # chmod(path, mode) → bool（Go os.Chmod 等价物；失败 false + os_errno）
+        if len(args) != 2:
+            return Err(i_r1002("chmod 需要 (path, mode)", pos))
+        return Ok(chmod(args[0], args[1]))
+    if name == "file_stat":
+        # file_stat(path) → dict | null（M133：Go os.Stat 的等价物；失败 null 不杀进程）
+        #   键：size/mtime/mtime_ns/is_dir/mode（对齐 Go FileInfo 的常用面）
+        if len(args) != 1:
+            return Err(i_r1002("file_stat 需要一个路径参数", pos))
+        return Ok(file_stat(args[0]))
+    if name == "go_errno_string":
+        # go_errno_string(errno) → str（M133：**Go** syscall.Errno.Error() 的文案；
+        #   对齐 Go *PathError.Error() 的文案段。不用 libc strerror —— 大小写/实现均不同）
+        if len(args) != 1:
+            return Err(i_r1002("go_errno_string 需要 (errno)", pos))
+        return Ok(go_errno_string(args[0]))
     if name == "tty_config":
         # tty_config(fd, baud, raw) → bool（串口 termios 波特率/raw）
         if len(args) != 3:

@@ -40,6 +40,8 @@ var cg_enums = {"_": 0}
 var cg_impls = {"_": 0}
 var cg_vars = {"_": 0}
 var cg_var_types = {"_": 0}
+# M129（qg-issue 87 缺陷 21）：本帧需要"装箱"的局部名（闭包捕获 → upvalue cell）
+var cg_cells = {"_": 0}
 var cg_immutables = {"_": 0}
 var cg_nonnull = {"_": 0}
 var cg_ffi = {"_": 0}
@@ -71,11 +73,76 @@ def cg_tmp():
 def cg_new_var(name):
     let v = "_v" + str(cg_uid())
     cg_vars[name] = v
+    # M129（缺陷 21）：新绑定遮蔽同名旧绑定 ⇒ 旧 cell 标记必须失效
+    #   （否则读该名会生成 px_cell_get(非 cell)，语义/类型全错）
+    if cg_cells.has(name):
+        cg_cells.remove(name)
     return v
 def cg_var_of(name):
     if cg_vars.has(name):
         return cg_vars[name]
     return null
+# ── M129（qg-issue 87 缺陷 21）：编译轨真词法闭包（upvalue cell）──
+# 读：cell 变量自动解引用；写：cell 变量写回 cell。二者必须成对使用，
+# 否则会出现"声明成 list 却当普通值用"的 C 类型错误（好在是**响的**，不是静默）。
+def cg_load_of(name, cv):
+    if cg_cells.has(name):
+        return "px_cell_get(" + cv + ")"
+    return cv
+def cg_store_of(name, cv, val):
+    if cg_cells.has(name):
+        return "px_cell_set(" + cv + ", " + val + ")"
+    return cv + " = " + val
+def cg_name_add(out, n):
+    if n != "" and not contains(out, n):
+        out.append(n)
+# 收集 AST（语句或表达式，深层）里出现的所有变量引用名
+def cg_ast_used(x, out):
+    if type(x) != "list" or len(x) == 0:
+        return
+    if type(x[0]) == "string" and x[0] == "Var" and len(x) >= 2 and type(x[1]) == "string":
+        cg_name_add(out, rust_unescape(x[1]))
+        return
+    for c in x:
+        cg_ast_used(c, out)
+# 收集 AST（深层）里所有"绑定名"：VarDecl 名 / Assign 目标 / For 变量 / 闭包参数
+def cg_ast_bound(x, out):
+    if type(x) != "list" or len(x) == 0:
+        return
+    let h = x[0]
+    if type(h) == "string":
+        if h == "VarDecl":
+            cg_name_add(out, rust_unescape(x[2]))
+        elif h == "Assign":
+            let tg = x[1]
+            if type(tg) == "list" and len(tg) > 0 and tg[0] == "Var":
+                cg_name_add(out, rust_unescape(tg[1]))
+        elif h == "For":
+            cg_name_add(out, rust_unescape(x[1]))
+        elif h == "Closure":
+            for p in x[1]:
+                cg_name_add(out, rust_unescape(p[1]))
+    for c in x:
+        cg_ast_bound(c, out)
+# 单个闭包节点的自由变量集 = 体内引用名 − 体内绑定名 − 自身参数
+def cg_closure_caps(cl, out):
+    let used = []
+    cg_ast_used(cl[3], used)
+    let bound = []
+    cg_ast_bound(cl[3], bound)
+    for p in cl[1]:
+        cg_name_add(bound, rust_unescape(p[1]))
+    for n in used:
+        if not contains(bound, n):
+            cg_name_add(out, n)
+# 扫描整个 AST，并集所有闭包的自由变量（**超集**：多标无妨，少标才会错）
+def cg_scan_closure_caps(x, out):
+    if type(x) != "list" or len(x) == 0:
+        return
+    if type(x[0]) == "string" and x[0] == "Closure":
+        cg_closure_caps(x, out)
+    for c in x:
+        cg_scan_closure_caps(c, out)
 # M41.2：不可变变量跟踪（E3002——对 let/const 变量赋值 = 编译错误）
 def cg_mark_immutable(name):
     cg_immutables[name] = 1
@@ -349,6 +416,15 @@ def cg_fmt_float(v):
     let n = len(s)
     if n >= 2 and s[n - 2:n] == ".0":
         return s[0:n - 2]
+    # M129（qg-issue 87 缺陷 17）：展开科学计数法后若只剩**纯整数字面量**，C 对
+    #   **十进制整型常量**只允许 int/long long（unsigned 不在十进制常量的类型列表里），
+    #   ≥ 19 位即可能越过 int64 上界 ⇒ 编译器按扩展规则环绕到 2^64，**浮点字面量静默变值**。
+    #   实测：`1e21` / `1000000000000000000000.0` / `1.0e21` 全部变成 3.8758200196842127e+18
+    #   （= 1e21 mod 2^64）；`1e19` 恰好 < 2^64 只是**碰巧**对，`1e300` 同样错。
+    #   修法：位数 ≥ 19 时补 `.0`，强制 C 按**浮点常量**解析（数值不变；< 19 位保持原样，
+    #   不扰动既有产物/golden）。
+    if not contains(s, ".") and n >= 19:
+        return s + ".0"
     return s
 # ---------- 类型表收集 ----------
 def cg_collect_types(prog):
@@ -463,25 +539,37 @@ def cg_gen_func_named(f, cname):
     s += "    px_srcfunc(\"" + rust_unescape(f[1]) + "\");\n"
     let saved_vars = cg_dict_copy(cg_vars)
     let saved_types = cg_dict_copy(cg_var_types)
+    let saved_cells = cg_dict_copy(cg_cells)
     let saved_imm = cg_dict_copy(cg_immutables)
     cg_vars = cg_new_dict()
     cg_var_types = cg_new_dict()
+    cg_cells = cg_new_dict()
     cg_immutables = cg_dict_copy(saved_imm)
+    # M129（缺陷 21）：**先**扫出本函数体内所有闭包的自由变量。凡"本帧局部名"命中者
+    #   一律装箱成 cell（这一步必须在生成任何读/写之前定下来，否则先生成的读取点
+    #   会按普通值生成，而声明变成 cell ⇒ C 类型错误）。
+    let cap_free = []
+    cg_scan_closure_caps(f[4], cap_free)
     # 参数绑定
     let params = f[2]
     var i = 0
+    var param_decls = []
     while i < len(params):
         let p = params[i]
-        let v = cg_new_var(rust_unescape(p[1]))
+        let pname = rust_unescape(p[1])
+        let v = cg_new_var(pname)
+        if contains(cap_free, pname):
+            cg_cells[pname] = 1
         var default_c = "px_null()"
         if p[3] != null:
             default_c = cg_gen_expr(p[3])
-        s += "    LXValue " + v + " = (nargs > " + str(i) + ") ? args[" + str(i) + "] : " + default_c + ";\n"
+        param_decls.append([v, pname, "(nargs > " + str(i) + ") ? args[" + str(i) + "] : " + default_c])
         i += 1
     # 预扫描：函数体内需提升到函数顶的局部变量（Assign 目标 + VarDecl + For 循环变量，
     # Python 语义局部变量；顶层全局名除外）——M62-L5 块作用域对齐（解释器不新建块作用域）
     let hoist_names = []
     cg_collect_hoist_vars(f[4], hoist_names)
+    var hoist_decls = []
     var ai = 0
     while ai < len(hoist_names):
         let name = hoist_names[ai]
@@ -492,8 +580,27 @@ def cg_gen_func_named(f, cname):
             ai += 1
             continue
         let v = cg_new_var(name)
-        s += "    LXValue " + v + " = px_null();\n"
+        if contains(cap_free, name):
+            cg_cells[name] = 1
+        hoist_decls.append([v, name])
         ai += 1
+    # 声明区（参数 → 提升局部），cell 者包一层 px_cell
+    var di = 0
+    while di < len(param_decls):
+        let d = param_decls[di]
+        if cg_cells.has(d[1]):
+            s += "    LXValue " + d[0] + " = px_cell(" + d[2] + ");\n"
+        else:
+            s += "    LXValue " + d[0] + " = " + d[2] + ";\n"
+        di += 1
+    di = 0
+    while di < len(hoist_decls):
+        let hd = hoist_decls[di]
+        if cg_cells.has(hd[1]):
+            s += "    LXValue " + hd[0] + " = px_cell(px_null());\n"
+        else:
+            s += "    LXValue " + hd[0] + " = px_null();\n"
+        di += 1
     # M39：? 错误传播标签
     let err_tag = "px_err_" + str(cg_uid())
     cg_err_labels.append(err_tag)
@@ -512,6 +619,7 @@ def cg_gen_func_named(f, cname):
     cg_err_labels = cg_err_labels[0:len(cg_err_labels) - 1]
     cg_vars = saved_vars
     cg_var_types = saved_types
+    cg_cells = saved_cells
     cg_immutables = saved_imm
     return s
 # ---------- generate 主流程 ----------
@@ -523,6 +631,7 @@ def cg_generate(prog):
     cg_impls = cg_new_dict()
     cg_vars = cg_new_dict()
     cg_var_types = cg_new_dict()
+    cg_cells = cg_new_dict()
     cg_immutables = cg_new_dict()
     cg_nonnull = cg_new_dict()
     cg_ffi = cg_new_dict()

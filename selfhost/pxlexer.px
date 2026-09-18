@@ -21,10 +21,30 @@ var g_at_line_start = true
 #   行首缩进不参与缩进栈、不发「缩进/去缩进」。
 var g_bracket_depth = 0
 var g_toks = []  # 结构化 token 列表 [kind, val, line, col]
+# M129（Issue 87 缺陷 33）：上一个**已发出**的 token kind —— 供 Go 式
+#   「行尾运算符续行」判断（行尾是运算符 ⇒ 不插语句分隔符）。
+var g_last_kind = ""
 var g_count = 0
 var g_pending = []  # 插值产生的中间 token：[kind, val, line, col]
 # ---------- 关键字表（spec §2.4，None 别名 null，type 是普通标识符） ----------
 let KEYWORDS = {"let": "let", "var": "var", "const": "const", "def": "def", "fn": "fn", "struct": "struct", "enum": "enum", "trait": "trait", "impl": "impl", "match": "match", "case": "case", "if": "if", "elif": "elif", "else": "else", "for": "for", "while": "while", "in": "in", "and": "and", "or": "or", "not": "not", "return": "return", "break": "break", "continue": "continue", "import": "import", "from": "from", "pub": "pub", "as": "as", "spawn": "spawn", "chan": "chan", "send": "send", "recv": "recv", "select": "select", "true": "true", "false": "false", "null": "null", "None": "null", "self": "self", "capture": "capture", "extern": "extern"}
+# ---------- 续行运算符表（Go 自动分号插入规则的等价物） ----------
+# Go 规定：仅当行尾 token 是「标识符 / 字面量 / break·continue·fallthrough·return /
+#   ++ -- / ) ] }」时才插入分号。等价地：**行尾是运算符 ⇒ 表达式继续**。
+# 本表列出「其后必须跟操作数」的 token kind。
+# ⚠️ 三个刻意的排除项：
+#   · `not` —— 一元前缀，`not\n x` 若要续行应写成 `not x`；
+#   · `:`   —— PuXian 的**块头终止符**（`if x:` / `def f():`），若视作续行会吞掉所有缩进块；
+#   · `(` `[` `{` —— 由 g_bracket_depth 单独处理（括号内的续行是既有 M116/M119 行为）。
+let CONT_OPS = {"+": 1, "-": 1, "*": 1, "/": 1, "//": 1, "%": 1, "**": 1,
+    "==": 1, "!=": 1, "<": 1, ">": 1, "<=": 1, ">=": 1,
+    "and": 1, "or": 1, "&": 1, "|": 1, "^": 1,
+    "<<": 1, ">>": 1, ">>>": 1, "??": 1, "|>": 1,
+    "=": 1, "+=": 1, "-=": 1, "*=": 1, "/=": 1, "//=": 1, "%=": 1,
+    "**=": 1, "&=": 1, "|=": 1, "^=": 1, "<<=": 1, ">>=": 1, ">>>=": 1,
+    ".": 1, "?.": 1, "=>": 1, ",": 1}
+def is_cont_op(k):
+    return CONT_OPS.has(k)
 # ---------- 控制字符表（0x01-0x1f 除 \n\t\r\0，0x7f-0x9f） ----------
 # 单行字符串拼接 61 个控制字符（顺序即码点映射基准，见 ctrl_codepoint）
 let CTRL_ALL = "\u{1}\u{2}\u{3}\u{4}\u{5}\u{6}\u{7}\u{8}\u{b}\u{c}\u{e}\u{f}\u{10}\u{11}\u{12}\u{13}\u{14}\u{15}\u{16}\u{17}\u{18}\u{19}\u{1a}\u{1b}\u{1c}\u{1d}\u{1e}\u{1f}\u{7f}\u{80}\u{81}\u{82}\u{83}\u{84}\u{85}\u{86}\u{87}\u{88}\u{89}\u{8a}\u{8b}\u{8c}\u{8d}\u{8e}\u{8f}\u{90}\u{91}\u{92}\u{93}\u{94}\u{95}\u{96}\u{97}\u{98}\u{99}\u{9a}\u{9b}\u{9c}\u{9d}\u{9e}\u{9f}"
@@ -62,6 +82,7 @@ def emit_at(kind, val, line, col):
         g_bracket_depth -= 1
     g_toks.append([kind, val, line, col])
     g_count += 1
+    g_last_kind = kind
 def emit(kind, val):
     emit_at(kind, val, g_line, g_col)
 def emit_token(t):
@@ -737,6 +758,18 @@ def next_token():
         emit("EOF", "")
         return false
     if c == "\n":
+        # M129（Issue 87 缺陷 33）：Go 式「行尾运算符续行」。
+        #   上一个 token 是运算符 ⇒ 本换行**不是**语句分隔符：既不产「换行」，
+        #   也不置 g_at_line_start（于是下一行的缩进被当作普通空白吃掉，
+        #   **不参与缩进栈**、不发「缩进/去缩进」）—— 与括号内的续行行为一致。
+        # M129b（Issue 87 缺陷 53）：括号内（g_bracket_depth > 0）**不应用**续行规则 ——
+        #   括号内的「换行」token 是 M116/M119 多行字面量/实参的既有语义（parser 靠它
+        #   解析多行集合），且括号内本就不参与缩进栈。若在此吞掉 `,`/`+` 后的换行 token，
+        #   会破坏 token 流 golden（实测 s15_multiline：16:11/17:11/18:11/23:17/24:17
+        #   五处「换行」被吞）。续行只对**语句层**（括号外）有意义。
+        if g_bracket_depth == 0 and is_cont_op(g_last_kind):
+            advance()
+            return true
         let nl_line = g_line
         let nl_col = g_col
         advance()

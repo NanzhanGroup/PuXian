@@ -105,10 +105,49 @@ static void img_bilinear(const unsigned char* src, int sw, int sh,
     }
 }
 
+// M129（qg-issue 87 缺陷 39）：**最近邻**缩放 —— Go `image/draw` 风格手写缩放的等价物。
+//   背景：Go 侧的缩放实现是
+//       for y … { for x … { sx := x * srcW / newW; sy := y * srcH / newH; dst.Set(x,y,img.At(sx,sy)) } }
+//   即**整数除法定位 + 最近邻取样**（api-server/avatar.go 的 resizeImage 正是如此）。
+//   而 runtime 原有的 img_scale 只有**双线性**，两者在放大/缩小后的像素值不同
+//   （例如把 1024×768 缩到 512×384，最近邻是「隔点取样」，双线性是加权平均）
+//   ⇒ 移植头像接口时无法复刻 Go 的像素结果，且**没有任何绕过手段**
+//   （纯 PuXian 逐像素循环要走 bytes_get/bytes_set，512×512 即百万次原生调用）。
+//   故新增本函数，并把 `img_scale` 扩展出可选 opts `{"filter": "nearest"}`。
+static void img_nearest(const unsigned char* src, int sw, int sh,
+                        unsigned char* dst, int dw, int dh) {
+    for (int y = 0; y < dh; y++) {
+        int sy = (int)((long long)y * sh / dh);
+        if (sy >= sh) sy = sh - 1;
+        for (int x = 0; x < dw; x++) {
+            int sx = (int)((long long)x * sw / dw);
+            if (sx >= sw) sx = sw - 1;
+            const unsigned char* p = src + ((long long)sy * sw + sx) * 4;
+            unsigned char* o = dst + ((long long)y * dw + x) * 4;
+            o[0] = p[0]; o[1] = p[1]; o[2] = p[2]; o[3] = p[3];
+        }
+    }
+}
+
 // img_scale(pixels RGBA, w, h, nw, nh) → bytes RGBA | Err
 LXValue bi_img_scale(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 5) px_error("img_scale 需要 5 个参数: (pixels, w, h, nw, nh)");
+    if (nargs != 5 && nargs != 6) px_error("img_scale 需要 (pixels, w, h, nw, nh[, opts]) 参数");
+    // M129（缺陷 39）：可选 opts {"filter": "nearest"|"bilinear"}
+    //   缺省 "bilinear"（保持既有行为逐字节不变）；"nearest" = Go 手写缩放的等价物。
+    int use_nearest = 0;
+    if (nargs == 6) {
+        if (args[5].type != PX_DICT) px_error("img_scale 的 opts 需要 dict");
+        LXObject* od = args[5].as.obj;
+        for (int i = 0; i < od->as.dict.len; i++) {
+            const char* k = od->as.dict.keys[i];
+            if (strcmp(k, "filter") != 0) continue;
+            const char* f = px_val_cstr(od->as.dict.vals[i]);
+            if (f && strcmp(f, "nearest") == 0) use_nearest = 1;
+            else if (f && strcmp(f, "bilinear") == 0) use_nearest = 0;
+            else return px_err(px_str("img: filter 只支持 nearest/bilinear"));
+        }
+    }
     int plen = 0;
     const unsigned char* pix = img_bytes(args[0], &plen);
     int64_t w = args[1].as.i, h = args[2].as.i, nw = args[3].as.i, nh = args[4].as.i;
@@ -121,7 +160,8 @@ LXValue bi_img_scale(LXValue* args, int nargs, void* ctx) {
     if ((int64_t)nw * nh > 100000000LL) return px_err(px_str("img: 输出过大"));
     unsigned char* tmp = (unsigned char*)malloc((size_t)(nw * nh * 4));
     if (!tmp) return px_err(px_str("img: OOM"));
-    img_bilinear(pix, (int)w, (int)h, tmp, (int)nw, (int)nh);
+    if (use_nearest) img_nearest(pix, (int)w, (int)h, tmp, (int)nw, (int)nh);
+    else img_bilinear(pix, (int)w, (int)h, tmp, (int)nw, (int)nh);
     LXValue r = px_bytes_len(tmp, (int)(nw * nh * 4));
     free(tmp);
     return r;

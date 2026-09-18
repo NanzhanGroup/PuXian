@@ -514,6 +514,7 @@ int px_coro_mutex_wait(LXValue m) {
     if (!g_cur_coro) return 0;
     if (m.type != PX_MUTEX) return 0;
     LXObject* o = m.as.obj;
+    px_dbg_mutex_check(o, "px_coro_mutex_wait");
     int r;
     pthread_mutex_lock(&o->as.mutex.mu);
     if (!o->as.mutex.locked) {

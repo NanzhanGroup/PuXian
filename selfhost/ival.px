@@ -200,7 +200,20 @@ def i_eq(a, b):
         if a.is_ok() != b.is_ok():
             return false
         return i_eq(a.ok(), b.ok()) and i_eq(a.err(), b.err())
-    return false
+    # M129（qg-issue 87 缺陷 43）：**bytes 按内容比较** —— 原实现漏了 bytes 分支，
+    #   落到函数末尾的 `return false`（本函数是**白名单**设计，未列举类型恒不相等）。
+    #   而编译轨（runtime `compare_values`）对 PX_BYTES **有**逐字节 memcmp 分支 ⇒
+    #   同一程序两条轨行为相反，且解释器侧**静默错误**（不报错、只是分支走错）。
+    #   影响面：所有用 `px run` 执行的自检/对拍/工具脚本（本仓库几乎全部 .px 自检都走
+    #   px run）—— `bytes == bytes` 恒 false，会静默跳过断言分支。
+    #   修法：hex 编码后比字符串（hex 是单射，二进制安全、含 NUL 亦无损）。
+    if ta == "bytes" and tb == "bytes":
+        return bytes_to_hex(a) == bytes_to_hex(b)
+    # M129（缺陷 43 续）：末尾兜底对齐**编译轨**语义 —— runtime `compare_values` 的
+    #   默认分支是 `strcmp(px_type_name(a), px_type_name(b))`，即「类型名相同即相等」。
+    #   原实现 `return false` 会让 range 等类型与编译轨相反（`range == range`：
+    #   编译轨 true / 解释器 false）。此处改为按类型名判定，与编译轨一致。
+    return ta == tb
 # ---------- 迭代（对齐 iter_values） ----------
 def i_iter(v, pos):
     let t = i_type_name(v)
