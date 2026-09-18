@@ -1,0 +1,3 @@
+if true:
+    pass
+print("bad_pass")

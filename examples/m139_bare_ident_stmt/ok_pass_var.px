@@ -1,0 +1,3 @@
+var pass = 0
+pass = pass + 1
+print("ok_pass_var " + str(pass))

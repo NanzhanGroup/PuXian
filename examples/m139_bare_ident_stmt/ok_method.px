@@ -1,0 +1,3 @@
+let xs = [1, 2, 3]
+xs.append(4)
+print("ok_method " + str(len(xs)))

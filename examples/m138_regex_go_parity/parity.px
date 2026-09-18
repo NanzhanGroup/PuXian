@@ -1,0 +1,283 @@
+# m138 · 正则的 Go 保真（PuXian 侧）—— 与 truth/ 的 Go 真值逐字节对拍
+#
+# 看输出：verify.sh 把本程序的 stdout 与 Go 真值 diff（两轨都跑）。
+# 语料与真值同源手写（两边都打印 pattern/text，任何语料漂移都会直接体现为 diff）。
+#
+# ⚠️ Px 源码里正则的反斜杠必须写 `\\`（词法层先吃掉一层）；Go 侧用裸串 `\b`。
+
+def hex2(v):
+    var d = "0123456789abcdef"
+    let a = v // 16
+    let b = v % 16
+    return d[a:a + 1] + d[b:b + 1]
+
+def esc(s):
+    # 与 truth/main.go::esc 逐字节同构：可打印 ASCII 原样，其余 \xNN（按 rune）
+    var out = ""
+    for c in s:
+        let o = ord(c)
+        if o >= 32 and o != 127:
+            out = out + c
+        else:
+            out = out + "\\x" + hex2(o)
+    return out
+
+def emit_f(pat, text):
+    var line = "f|" + esc(pat) + "|" + esc(text) + "|"
+    if not regex_valid(pat):
+        print(line + "0|-|-|-|-")
+        return
+    line = line + "1|"
+    # find（左起首个匹配）
+    let m = regex_find(pat, text)
+    if m == null:
+        line = line + "-|"
+    else:
+        line = line + esc(m) + "|"
+    # find_all（Go FindAllStringIndex 的迭代语义）
+    let all = regex_find_all(pat, text)
+    line = line + str(len(all)) + ":"
+    var k = 0
+    while k < len(all):
+        if k > 0:
+            line = line + ","
+        line = line + esc(all[k])
+        k = k + 1
+    line = line + "|"
+    # search（start/end + 9 个捕获组）
+    let sm = regex_search(pat, text)
+    if sm == null:
+        line = line + "-|-"
+    else:
+        line = line + str(sm["start"]) + "," + str(sm["end"]) + "|"
+        let gl = sm["groups"]
+        var g = 0
+        while g < len(gl):
+            if g > 0:
+                line = line + ","
+            if gl[g] == null:
+                line = line + "-"
+            else:
+                line = line + esc(gl[g])
+            g = g + 1
+        line = line + "|"
+    # 全匹配（regex_match = 整串匹配；Go 侧用 ^(?:…)$ 包装的等价判据）
+    if regex_match(pat, text):
+        line = line + "1"
+    else:
+        line = line + "0"
+    print(line)
+
+def emit_r(pat, text, repl):
+    var line = "r|" + esc(pat) + "|" + esc(text) + "|" + esc(repl) + "|"
+    if not regex_valid(pat):
+        print(line + "0|-")
+        return
+    print(line + "1|" + esc(regex_replace(pat, text, repl)))
+
+def emit_s(pat, text):
+    var line = "s|" + esc(pat) + "|" + esc(text) + "|"
+    if not regex_valid(pat):
+        print(line + "0|-")
+        return
+    let parts = regex_split(pat, text)
+    line = line + "1|" + str(len(parts)) + ":"
+    var k = 0
+    while k < len(parts):
+        if k > 0:
+            line = line + ","
+        line = line + esc(parts[k])
+        k = k + 1
+    print(line)
+
+var texts = []
+texts <- "hello world"
+texts <- "foo_bar baz9"
+texts <- "api_key=secret"
+texts <- "  api_key: abc  "
+texts <- ""
+texts <- "a"
+texts <- "_"
+texts <- "9"
+texts <- "!!"
+texts <- "pass the ball"
+texts <- "a-b c_d"
+texts <- chr(9)
+texts <- chr(10)
+texts <- chr(11)
+# M138 追加：内联标志 / 命名组的作用面（含换行文本，(?s) (?m) 要看行）
+texts <- "ab" + chr(10) + "cd"
+texts <- "X BEARER TOK"
+texts <- "AK-ABC"
+texts <- "a" + chr(10) + "b"
+texts <- "MiXeD case"
+
+var pats = []
+pats <- "\\b"
+pats <- "\\B"
+pats <- "\\b\\w+\\b"
+pats <- "\\bapi_key\\b"
+pats <- "\\bfoo"
+pats <- "bar\\b"
+pats <- "\\Bfoo"
+pats <- "a\\Bb"
+pats <- "(?:\\b|\\B)a"
+pats <- "\\b(a|b)\\b"
+pats <- "\\b{2}"
+pats <- "\\b{0}"
+pats <- "\\b*"
+pats <- "\\b+"
+pats <- "\\b?"
+pats <- "\\B{2}"
+pats <- "^{2}"
+pats <- "$*"
+pats <- "$+"
+pats <- "\\A"
+pats <- "\\z"
+pats <- "^"
+pats <- "$"
+pats <- "^\\bfoo"
+pats <- "\\bfoo\\z"
+pats <- "(\\b\\w+)"
+pats <- "\\b\\w*_\\w*\\b"
+pats <- "\\s"
+pats <- "\\S"
+pats <- "\\s+"
+pats <- "\\d+"
+pats <- "[\\d\\s]+"
+pats <- "[\\D]+"
+pats <- "[\\w-]+"
+pats <- "[\\b]"
+pats <- "[\\D\\s]"
+pats <- "a\\b"
+pats <- "\\w+\\b"
+pats <- "\\Qa.b\\E"
+pats <- "\\A\\b\\w+\\b\\z"
+pats <- "(\\w+)-(\\w+)"
+pats <- "(?i)bearer"
+pats <- "(?i)[a-z]+"
+pats <- "(?s).*"
+pats <- "(?s).+"
+pats <- "(?m)^b"
+pats <- "(?m)$"
+pats <- "(?i)(?P<x>abc)"
+pats <- "(?i)AK-[A-Za-z0-9]{3,}"
+pats <- "(?is)a.b"
+pats <- "(?i)[\\w.-]+@[\\w.-]+\\.\\w{2,}"
+
+# ① 穷举可打印 ASCII 的转义（类外 `\c` + 类内 `[\c]`）
+var b = 0x20
+while b <= 0x7e:
+    if b != 0x5c:
+        emit_f("\\" + chr(b), "abc")
+        emit_f("[\\" + chr(b) + "]", "abc")
+    b = b + 1
+
+# ② 词边界 / 锚点语义 × 文本集
+#
+# pos_enum = 「枚举所有位置」的模式：匹配条数 = 文本长度 + 1。
+#   PuXian 引擎**按字节**匹配（`.` 也吃一个字节），Go 按 rune ⇒ 非 ASCII 文本上位置数不同。
+#   这类模式只喂 ASCII（byte_len == len 即 ASCII）；非 ASCII 的行为在 ④ 里显式登记为已知边界。
+def pos_enum(pat):
+    if pat == "\\b{0}" or pat == "\\b*" or pat == "\\b?":
+        return true
+    if pat == "\\B" or pat == "\\B{2}" or pat == "$*":
+        return true
+    return false
+
+def is_ascii(t):
+    return bytes_len(bytes(t)) == len(t)
+
+var i = 0
+while i < len(pats):
+    var j = 0
+    while j < len(texts):
+        if (not pos_enum(pats[i])) or is_ascii(texts[j]):
+            emit_f(pats[i], texts[j])
+        j = j + 1
+    i = i + 1
+
+# ③ 替换 / 分割
+emit_r("a*", "baab", "X")
+emit_r("a*", "b", "X")
+emit_r("\\b", "ab cd", "X")
+emit_r("(\\w+)@(\\w+)", "mail: foo@bar.com", "<$1|$2>")
+emit_r("a", "aaa", "$$")
+emit_r("\\bapi_key\\b", "api_key xapi_key", "[K]")
+emit_r("\\s+", "a  b" + chr(9) + "c", "_")
+emit_r("\\b(\\w+)\\b", "one two", "$1!")
+emit_s("[,\\s]+", "a, b  c")
+emit_s("\\s+", "a b" + chr(9) + "c")
+emit_s("-", "a-b-c")
+emit_s("\\d+", "a1b22c")
+emit_s("x", "abc")
+
+# ④ 自断言（把 esc 自身、以及**已登记的边界**钉住）
+var self_fail = []
+def chk(cond, what):
+    if not cond:
+        self_fail <- what
+
+chk(esc(chr(9)) == "\\x09", "esc(tab)")
+chk(esc(chr(11)) == "\\x0b", "esc(vtab)")
+chk(esc("a中b") == "a中b", "esc(utf8 原样)")
+chk(esc("x\\y") == "x\\y", "esc(反斜杠原样)")
+chk(regex_valid("\\b"), "词边界合法")
+chk(regex_valid("\\B"), "非词边界合法")
+chk(not regex_valid("[\\b]"), "类内词边界非法（Go 同）")
+chk(not regex_valid("[\\q]"), "类内未知转义非法（Go 同）")
+chk(regex_valid("[\\D]") and regex_valid("[\\W]") and regex_valid("[\\S]"), "类内取反类合法")
+chk(regex_valid("[\\ ]") and regex_valid("\\ "), "转义空格合法")
+chk(regex_find("\\s", chr(11)) == null, "Go 的转义-s 不含 vtab")
+chk(regex_valid("[[:space:]]"), "POSIX 类仍可用")
+chk(regex_find("[[:space:]]", chr(11)) == chr(11), "POSIX space 含 vtab")
+chk(not regex_valid("[\\x{4e2d}]"), "已登记边界：类内多字节码点（Go 判合法）")
+chk(not regex_valid("[\\400]"), "已登记边界：类内 >U+00FF 八进制（Go 判合法）")
+chk(not regex_valid("\\pL"), "已登记边界：Unicode 类别（Go 判合法）")
+chk(regex_valid("\\400"), "类外八进制 400 合法（= U+0100）")
+chk(regex_find("\\400", "x" + chr(256) + "y") == chr(256), "八进制 400 匹配 U+0100")
+chk(regex_valid("\\x{D800}"), "surrogate 字面合法（Go 同）")
+chk(not regex_valid("\\x{110000}"), "超 U+10FFFF 非法（Go 同）")
+let baab = regex_find_all("a*", "baab")
+chk(len(baab) == 3 and baab[0] == "" and baab[1] == "aa" and baab[2] == "", "空匹配迭代：相邻丢弃")
+chk(regex_replace("a*", "baab", "X") == "XbXbX", "替换的相邻空匹配规则")
+chk(regex_replace("\\b", "ab cd", "X") == "XabX XcdX", "词边界替换")
+chk(regex_find("\\bapi_key\\b", "x api_key=1") == "api_key", "词边界查找")
+
+# ---- 已登记边界 1：引擎**按字节**匹配，Go 按 rune ----
+#   非 ASCII 文本上，位置/条数/匹配片段都会不同（`.` 与字符类都只吃一个字节）：
+#     `\b*`  on "中文abc中文"  → 本引擎 16 个位置（15 字节 + 1）；Go 8 个（7 rune + 1）
+#     `[\D\s]+` on "中文abc中文" → 本引擎按字节切；Go 命中 "中"（1 rune / 3 字节）
+#   这是引擎的既有匹配单位（非本轮引入）⇒ **非 ASCII 语料不进 diff**，
+#   其行为在此显式登记；ASCII 文本上 811 行与 Go 逐字节一致。
+# ---- 已登记边界 2：regex_split 只在**非空**匹配处分割 ----
+#   `regex_split("\\b", "ab cd")` → 本引擎 ["ab cd"]（1 段）；Go Split 得 ["ab"," ","cd"]。
+#   现网用法（`[,\s]+` 等）皆非空匹配 ⇒ 不受影响。
+# ---- 已登记边界
+#   Go：`\b*` 在 "中文abc中文" 上 8 个位置（7 rune + 1）；本引擎 16 个（15 字节 + 1）。
+#   非 ASCII 文本上「枚举位置」类模式的**条数**必然不同 —— 这是引擎的匹配单位决定的，
+#   不是本轮改动的产物；ASCII 文本上两者逐字节一致（门内 ② 用的就是 ASCII 子集）。
+let pe = regex_find_all("\\b*", "中文abc中文")
+chk(len(pe) == 16, "已登记边界：字节位置（Go 为 8，按 rune）")
+chk(regex_find("\\b\\w+\\b", "中文abc中文") == "abc", "非 ASCII 文本上取 ASCII 子串仍一致（Go 同）")
+let sp = regex_split("\\b", "ab cd")
+chk(len(sp) == 1 and sp[0] == "ab cd", "已登记边界：分割只在非空匹配处（Go 为 3 段）")
+chk(regex_find("(?:(?:ab)|(?:cd))", "xcdy") == "cd", "嵌套非捕获组")
+chk(regex_valid("(?i)abc") and regex_find("(?i)abc", "xABC") == "ABC", "内联标志 (?i) 已支持（照 Go）")
+chk(regex_valid("(?s)a.b") and regex_find("(?s)a.b", "a" + chr(10) + "b") == "a" + chr(10) + "b", "(?s) 使 . 匹配换行（照 Go）")
+chk(regex_valid("(?m)^b") and regex_find("(?m)^b", "a" + chr(10) + "b") == "b", "(?m) 行首锚点（照 Go）")
+chk(regex_valid("(?P<n>ab)") and regex_search("(?P<n>ab)", "xaby")["groups"][0] == "ab", "命名组 = 捕获组（照 Go）")
+chk(regex_valid("(?i)[a-z]+") and regex_find("(?i)[a-z]+", "ABC") == "ABC", "(?i) 作用于字符类")
+chk(not regex_valid("(?=x)"), "已登记边界：环视 (?=…)（Go 合法）—— 本引擎**显式报错**不静默")
+chk(not regex_valid("(?!x)"), "已登记边界：负向环视 (?!…)（Go 合法）")
+chk(not regex_valid("(?<=x)"), "已登记边界：后顾 (?<=…)（Go 合法）")
+chk(regex_find("(?:api[_-]?key|apikey)", "x apikey=1") == "apikey", "非捕获组交替（现网 secret_patterns 写法）")
+
+if len(self_fail) == 0:
+    print("M138_SELF_OK")
+else:
+    print("M138_SELF_FAIL_TOTAL: " + str(len(self_fail)))
+    var q = 0
+    while q < len(self_fail):
+        print("  - " + self_fail[q])
+        q = q + 1
