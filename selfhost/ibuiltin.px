@@ -745,6 +745,15 @@ def i_call_builtin(name, args, pos):
         if len(args) != 0:
             return Err(i_r1002("now_us 不需要参数", pos))
         return Ok(now_us())
+    if name == "now_ns":
+        # now_ns() → int（**墙钟** Unix 纳秒）
+        #   M141（第 22 轮 · 缺陷 109）：now_us()/now_ms() 是 CLOCK_MONOTONIC（自 boot 起算，
+        #   测量语义）、now_sec() 只到秒 ⇒ 解释轨对 Go 的 `time.Now().UnixNano()` 与
+        #   纳秒时间戳格式（"20060102-150405.000000000"）**没有来源**；拿单调钟冒充时
+        #   值与数量级都完全不同（~1.8e18 vs ~1.2e11）。此处与编译轨同轴（CLOCK_REALTIME）。
+        if len(args) != 0:
+            return Err(i_r1002("now_ns 不需要参数", pos))
+        return Ok(now_ns())
     if name == "fcntl":
         # fcntl(fd, cmd[, arg]) → int（标准 fcntl；失败 -1 + os_errno）
         if len(args) < 2 or len(args) > 3:
