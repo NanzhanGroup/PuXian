@@ -6,6 +6,38 @@
 
 ## [Unreleased]
 
+### M140 · HTTP 客户端连接失败成因分类 + 双栈 + IPv6 字面量（缺陷 108 · qg-issue 87 第 21 轮）
+
+> **背景**：token-cache（PuXian 移植版）上生产机端到端实测时照出 —— netns 里 lo 为 DOWN 时
+> Go 打 `dial tcp …: connect: network is unreachable`，而本运行时打 `connection refused`：
+> **同一上游、同一请求、同一次运行**。根因在语言层：连接失败的成因不可编程获取。
+
+- **缺陷 108 根治**：`px_tcp_connect_timeout` 的失败路径此前是
+  `freeaddrinfo(res); close(fd); return -1;` —— **`close()` 会覆盖 errno**，故对
+  「解析失败 / socket 失败 / 连接被拒 / 网络不可达 / 无路由 / 被丢包超时」一律只回 `-1`，
+  语言层只剩一句 `net: 连接 <host>:<端口> 失败`。现改为**在失败点当场**把 `stage` / `errno` /
+  **数字地址**记进位参（新增 `px_conn_try` / `px_addr_text` / `px_host_bare` / `px_net_conn_err`
+  / `px_net_conn_fail`），失败文案即分类：
+  `net: 解析主机失败 <host> (eai=<EAI 码>)` · `net: 创建 socket 失败 <地址>:<端口> (<errno>)` ·
+  `net: 连接 <地址>:<端口> 失败 (<errno>)`（超时用 `ETIMEDOUT`）· `net: TLS 握手失败 (<mbedtls 码>)`。
+- **双栈**：`hints.ai_family` 由 `AF_INET` 改 **`AF_UNSPEC`**（Go 的 `dial tcp` 就是双栈，
+  「仅 AAAA 的上游」此前连不上）；逐地址尝试，**顺序 = getaddrinfo 返回序，全部失败时返回第一个
+  地址的成因**（与 Go 的 `dialParallel` 实测一致：`localhost:P` 双栈皆拒 ⇒ Go 打 `[::1]:P` 的错）。
+- **失败文案里的地址用数字形式**（Go 亦然：给的是解析结果而非主机名，IPv6 带方括号）⇒
+  `http://localhost:1/` 的 Err 是 `… 连接 [::1]:1 失败 (111)` 而不是 `localhost:1`。
+- **URL 里的 IPv6 字面量**：`hparse_url` / `px_http_once` / `sse_cli_connect_slot` 三处补方括号
+  解析（修前 `http://[::1]:8080/` 的 host 是 `[`、端口是 `atoi(":1]")` = 0）。
+- **顺带对齐两条通路**：① `px_http_once`（`http_get`/`http_post`）的明文连接从**裸阻塞 connect**
+  改为共享的带超时/双栈/分类版本（此前只有 `hconnect` 一族受 M117 的超时覆盖）；
+  ② `sse_connect_ex` 的明文连接从 `gethostbyname`（IPv4-only）+ **无 connect 超时**的阻塞 connect
+  改为同一个 `px_tcp_connect_timeout`，其 stage 枚举**新增 `8` = 域名解析**
+  （不能直接透传 `px_tcp_connect_timeout` 的 stage：它的 `3` 是 connect，而 sse 的 `3` 是发送）。
+- **门**：`examples/m140_http_conn_errno/`（VM+C 双轨 × 9 断言 + 逐字节一致；**不依赖任何外部服务**：
+  `127.0.0.1:1` 必拒、`.invalid` 必不解析、`2001:db8::/32` 无路由时必 `ENETUNREACH`）。
+- **已知边界**：`stage >= 3`（发送/读头）时 Go 的 `*url.Error` 含本端地址
+  （`write tcp 127.0.0.1:41234->…`）取不到；`TLS 握手失败` 只有 mbedtls 码（Go 的证书文案依赖
+  x509 细节）⇒ 由消费方原样透传，不再谎称 refused。
+
 ### M138 · 正则的「Go 保真」+ 裸标识符语句编译错误 + gzip 解码定容（缺陷 84 / 101 / 107 · qg-issue 87 第 19 轮）
 
 > **背景**：第 19 轮把「正则引擎与 Go 的逐字节保真」这件事做成**可回归的门**（`examples/m138_regex_go_parity/`：
