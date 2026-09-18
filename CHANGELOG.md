@@ -6,6 +6,29 @@
 
 ## [Unreleased]
 
+### M141 · 墙钟纳秒 `now_ns()` + unix 服务端 `remote` = "@"（缺陷 109/110 · qg-issue 87 第 22 轮）
+
+> **背景**：继续把 token-cache 往**生产机端到端实测**推进时照出两处「Go 表达得出、本运行时表达不出」
+> 的缺口 —— 一处缺**原语**（墙钟纳秒），一处**形状不同**（unix socket 的来源地址）。
+
+- **缺陷 109 · 新增 native `now_ns()`**：CLOCK_REALTIME 的 `tv_sec*1e9 + tv_nsec`（与 `now_sec()` /
+  `time_format()` **同一时间轴**；`now_ms()`/`now_us()` 是 CLOCK_MONOTONIC）。修前语言里**没有墙钟
+  纳秒**：Go 的 `time.Now().UnixNano()`、`time.Now().Format("20060102-150405.000000000")`
+  （token-cache 的 ContextDebug 时间戳目录名 / `CacheLogEntry.Timestamp`）无法表达，只能拿单调钟
+  冒充 —— **值与数量级都不同**（墙钟 ~1.8e18 vs 单调 ~1.2e11）。编译轨（runtime 注册）与解释轨
+  （`selfhost/ibuiltin.px` 转发 + `selfhost/interp.px` 名册）**同轮补齐**，双轨一致。
+- **缺陷 110 · `http_serve_unix` 的 `req["remote"]` → `"@"`**：Go `net/http` 在 AF_UNIX 上
+  `r.RemoteAddr` 得 `"@"`（未 bind 的客户端对端地址为空 ⇒ `RawSockaddrUnix.path` 空 ⇒ Go 的 autobind
+  占位符；**Go 1.26.6 实测**）。本运行时原给 `"unix"` ⇒ 移植 Go 代码时「来源地址」字段
+  （ContextDebug `up.md`、audit 日志）无法对齐。`http_conn_worker` 与 `px_conn_worker` **两处**同改；
+  AF_INET 仍 `ip:port`（形状未变，门内有断言钉住「没误伤」）。
+- **门**：`examples/m141_now_ns/`（VM+C 双轨 × 9 断言 + 逐字节一致；**不依赖任何外部服务** ——
+  now_ns 面 6 条自洽断言 + 负控「单调钟冒充」量级差；remote 面自带 unix + TCP 本地服务端）。
+  已接入 `m116_gates.sh` / `m117_gates.sh` / `ci.yml`（纪律：新增门同轮进本地全门与 CI）。
+- **联动**：`docs/native_index.json` 330 → **331**、`tools/lint_core.px` 内置名册 344 → **345**
+  （由 `tools/gen_native_table.sh` / `gen_builtin_list.sh` 从 runtime 注册表重新派生，非手抄）；
+  `examples/m82_http_serve_unix/` 的期望值随缺陷 110 据实改写（`unix` → `@`）。
+
 ### M140 · HTTP 客户端连接失败成因分类 + 双栈 + IPv6 字面量（缺陷 108 · qg-issue 87 第 21 轮）
 
 > **背景**：token-cache（PuXian 移植版）上生产机端到端实测时照出 —— netns 里 lo 为 DOWN 时
