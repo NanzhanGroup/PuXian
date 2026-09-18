@@ -48,8 +48,9 @@ E=$(curl -s --max-time 3 --unix-socket "$SOCK" -X POST --data 'hello-curl' http:
 echo "PASS curl --unix-socket POST /echo"
 
 R=$(curl -s --max-time 3 --unix-socket "$SOCK" http://localhost/remote)
-[ "$R" = "remote=unix" ] || { echo "FAIL curl /remote（期望 remote=unix）: $R"; kill $DAEMON 2>/dev/null; exit 1; }
-echo "PASS curl /remote = unix（AF_UNIX remote 兼容）"
+# M141（缺陷 110）：AF_UNIX 的 remote 对齐 Go（"@"）—— 原断言为 "remote=unix"
+[ "$R" = "remote=@" ] || { echo "FAIL curl /remote（期望 remote=@）: $R"; kill $DAEMON 2>/dev/null; exit 1; }
+echo "PASS curl /remote = @（AF_UNIX remote 对齐 Go）"
 
 # ③ 权限 0600
 M=$(stat -c '%a' "$SOCK" 2>/dev/null)

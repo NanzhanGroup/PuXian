@@ -38,10 +38,13 @@ else:
     exit(1)
 
 let hr = http_unix("/tmp/m82_puxian.sock", "/remote", "GET")
-if hr["body"] == "remote=unix":
+# M141（缺陷 110）：AF_UNIX 的 req["remote"] 由 "unix" 改为 "@"（对齐 Go net/http 的
+#   r.RemoteAddr —— 未 bind 的客户端对端地址为空 ⇒ syscall.RawSockaddrUnix 的 autobind
+#   占位符 "@"；Go 1.26.6 实测）。m141_now_ns/remote_unix.px 是这条语义的专门门。
+if hr["body"] == "remote=@":
     print("SELFCHECK-OK unix /remote body=[" + hr["body"] + "]")
 else:
-    print("SELFCHECK-FAIL unix /remote body=[" + hr["body"] + "] (期望 remote=unix)")
+    print("SELFCHECK-FAIL unix /remote body=[" + hr["body"] + "] (期望 remote=@)")
     exit(1)
 
 print("SELFCHECK-PASS http_serve_unix 冒烟通过")

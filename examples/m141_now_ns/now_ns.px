@@ -1,0 +1,106 @@
+# ═══════════════════════════════════════════════════════════════════════
+# now_ns.px — 缺陷 109 自检（M141 · qg-issue 87 第 22 轮）
+# ---------------------------------------------------------------
+# 修前：语言里**没有墙钟纳秒**。
+#   · now_ms() / now_us() 是 **CLOCK_MONOTONIC**（自 boot 起算，测量语义）
+#   · now_sec() 只到秒
+#   ⇒ Go 的 `time.Now().UnixNano()`、`time.Now().Format("20060102-150405.000000000")`
+#     （token-cache 的 ContextDebug 时间戳目录名、CacheLogEntry.Timestamp 字段）
+#     **无法表达**：拿单调钟冒充的话值与其数量级都完全不同（前者 ~1.8e18 / 后者 ~1.2e11）。
+# 修法：新增 `now_ns()` → CLOCK_REALTIME 的 sec*1e9 + nsec（与 now_sec/time_format 同轴）。
+#
+# 本门断言（**不依赖外部服务**；VM 轨 + C 轨断言集相同）：
+#   A 与 now_sec 同轴         |now_sec() - now_ns()//1e9| <= 1
+#   B 墙钟（不是单调钟）      time_format(now_ns()//1e9,"%Y-%m-%d %H:%M:%S","local") 与
+#                             now() 相差不超过 1 秒（now() 是本地时间字符串）
+#   C 目录名形态              time_format(...,"%Y%m%d-%H%M%S","local") + "." + 9 位零填充
+#                             ⇒ 长度 25、第 16 位是 '.'、其余全数字/'-'（Go 的格式）
+#   D 非递减 + 分辨率         连续 4 次 now_ns() 非递减，且至少有 2 个不同值
+#   E 负控（缺陷 109 原症状） now_us()//1000 与 now_ns()//1000000 数量级不同
+#                             （单调钟冒充墙钟 ⇒ 差 > 1e11 毫秒）
+#   F 亚秒位是纳秒不是毫秒    ns % 1e9 在 [0,1e9)，且同一秒内两次调用的差 < 1e9
+# ═══════════════════════════════════════════════════════════════════════
+import std.strings
+
+var FAILS = 0
+
+def ok(cond, name, extra):
+    if cond:
+        print("PASS " + name)
+        return 0
+    print("FAIL " + name + " " + extra)
+    return 1
+
+# 9 位零填充（PuXian 无 sprintf；Go 的 "000000000" 是 %09d）
+def z9(n):
+    var s = str(n)
+    while len(s) < 9:
+        s = "0" + s
+    return s
+
+# ── A 同轴 ──
+let ns1 = now_ns()
+let d = now_sec() - ns1 // 1000000000
+FAILS = FAILS + ok(d >= -1 and d <= 1, "A_now_ns_与_now_sec_同轴", "diff=" + str(d) + " ns=" + str(ns1))
+
+# ── B 墙钟 ──
+let fmt_hms = "%Y-%m-%d %H:%M:%S"
+let s_ns = time_format(now_ns() // 1000000000, fmt_hms, "local")
+let s_now = now()
+let tp_ns = time_parse(s_ns, fmt_hms, "local")
+let tp_now = time_parse(s_now, fmt_hms, "local")
+var dd = tp_ns - tp_now
+if dd < 0:
+    dd = -dd
+FAILS = FAILS + ok(dd <= 1, "B_墙钟(与_now_一致)", "ns=" + s_ns + " now=" + s_now)
+
+# ── C 目录名形态（Go: 20060102-150405.000000000）──
+let dirname = time_format(now_ns() // 1000000000, "%Y%m%d-%H%M%S", "local") + "." + z9(now_ns() % 1000000000)
+var isdig = true
+var i = 0
+while i < len(dirname):
+    let ch = dirname[i]
+    if ch == "-" or ch == ".":
+        0
+    elif ch < "0" or ch > "9":
+        isdig = false
+    i = i + 1
+FAILS = FAILS + ok(len(dirname) == 25 and dirname[15] == "." and isdig,
+   "C_目录名形态_YYYYMMDD-HHMMSS.nnnnnnnnn",
+   "len=" + str(len(dirname)) + " v=" + dirname)
+
+# ── D 非递减 + 至少两个不同值 ──
+let s1 = now_ns()
+let s2 = now_ns()
+let s3 = now_ns()
+let s4 = now_ns()
+let nondec = s2 >= s1 and s3 >= s2 and s4 >= s3
+var distinct = 0
+if s2 != s1:
+    distinct = distinct + 1
+if s3 != s1 and s3 != s2:
+    distinct = distinct + 1
+if s4 != s1 and s4 != s2 and s4 != s3:
+    distinct = distinct + 1
+FAILS = FAILS + ok(nondec and distinct >= 1, "D_非递减且分辨率足够", "distinct=" + str(distinct) + " d1=" + str(s2 - s1))
+
+# ── E 负控：now_us 是单调钟（数量级不同）──
+let wall_ms = now_ns() // 1000000
+let mono_ms = now_us() // 1000
+var gap = wall_ms - mono_ms
+if gap < 0:
+    gap = -gap
+FAILS = FAILS + ok(gap > 100000000000, "E_负控_now_us_为单调钟(数量级不同)", "wall_ms=" + str(wall_ms) + " mono_ms=" + str(mono_ms))
+
+# ── F 亚秒位是纳秒 ──
+let frac = now_ns() % 1000000000
+var inc = 0
+let t1 = now_ns()
+let t2 = now_ns()
+if t2 > t1:
+    inc = t2 - t1
+FAILS = FAILS + ok(frac >= 0 and frac < 1000000000 and inc < 1000000000,
+   "F_亚秒位为纳秒", "frac=" + str(frac) + " inc=" + str(inc))
+
+print("now_ns RC=" + str(FAILS))
+exit(FAILS)
