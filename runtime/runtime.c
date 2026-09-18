@@ -477,6 +477,8 @@ static void px_ensure_cacert(void);
 // M21 gzip / chunked 辅助（px_http_request 客户端解码用，定义在后方）
 static char* px_gzip_decompress(const char* in, int inlen, int* outlen);
 static char* px_chunked_decode(const char* in, int inlen, int* outlen);
+// M144：分块编码（maxchunk 可参数化）—— 客户端 opts.chunked 用，定义在后方
+static char* px_chunked_encode_n(const char* in, int inlen, int maxchunk, int* outlen);
 
 // ==================== 内存分配（M22：size-class slab 子分配器 + 大对象 mmap 兜底） ====================
 // M11 并发 GC：sweep 会释放对象，而其他线程可能正在 malloc/free 中被 GC 信号挂起
@@ -13038,11 +13040,16 @@ static LXValue bi_http_unix(LXValue* args, int nargs, void* ctx) {
     //   ⚠️ 边界：这是"每次 IO 的上限"，Go 的 Client.Timeout 是"整个请求的上限"；
     //      对端匀速滴数据时二者不同（已登记 README §边界）。
     int timeout_ms = 0;
+    int chunked = 0;   // M144：opts.chunked —— 用 Transfer-Encoding: chunked 发送体
     if (nargs >= 6 && args[5].type == PX_DICT) {
         LXObject* oo = args[5].as.obj;
         for (int i = 0; i < oo->as.dict.len; i++) {
             if (strcmp(oo->as.dict.keys[i], "timeout_ms") == 0 && oo->as.dict.vals[i].type == PX_INT)
                 timeout_ms = (int)oo->as.dict.vals[i].as.i;
+            if (strcmp(oo->as.dict.keys[i], "chunked") == 0) {
+                LXValue cv = oo->as.dict.vals[i];
+                if ((cv.type == PX_BOOL && cv.as.b) || (cv.type == PX_INT && cv.as.i != 0)) chunked = 1;
+            }
         }
     }
     int fd = px_unix_connect_timeout(sock_path, timeout_ms);
@@ -13069,11 +13076,26 @@ static LXValue bi_http_unix(LXValue* args, int nargs, void* ctx) {
         if (!px_extra_hdr_has(extra_headers, "Content-Type"))
             rlen += snprintf(req + rlen, sizeof(req) - rlen,
                 "Content-Type: application/x-www-form-urlencoded\r\n");
-        if (!px_extra_hdr_has(extra_headers, "Content-Length"))
+        // M144（缺陷 120）：体不再 memcpy 进 req[16384]（>16KB 的体贴着溢出 ⇒ 段错误），
+        //   改由 h_exchange 的 body/body_n 独立发送（与 bi_http_request 同法）。
+        if (chunked) {
+            if (!px_extra_hdr_has(extra_headers, "Transfer-Encoding"))
+                rlen += snprintf(req + rlen, sizeof(req) - rlen, "Transfer-Encoding: chunked\r\n");
+        } else if (!px_extra_hdr_has(extra_headers, "Content-Length")) {
             rlen += snprintf(req + rlen, sizeof(req) - rlen, "Content-Length: %d\r\n", (int)strlen(body));
+        }
     }
     rlen += snprintf(req + rlen, sizeof(req) - rlen, "\r\n");
-    if (body) { memcpy(req + rlen, body, strlen(body)); rlen += (int)strlen(body); }
+    // M144：chunked 时把分帧后的体放进堆缓冲（32768/块，= Go net/http 的 io.Copy 缓冲）
+    const char* send_body = body;
+    int send_body_n = body ? (int)strlen(body) : 0;
+    char* chunk_buf = NULL;
+    if (body && chunked) {
+        int cl = 0;
+        chunk_buf = px_chunked_encode_n(body, (int)strlen(body), 32768, &cl);
+        send_body = chunk_buf;
+        send_body_n = cl;
+    }
     HPoolSlot slot;
     slot.is_tls = 0;
     slot.fd = fd;
@@ -13081,11 +13103,13 @@ static LXValue bi_http_unix(LXValue* args, int nargs, void* ctx) {
     int status = 0, body_len = 0, keep_alive = 1;
     LXValue headers = px_null();
     char* resp_body = NULL;
-    if (h_exchange(&slot, req, rlen, NULL, 0, &status, &headers, &resp_body, &body_len, &keep_alive, 1) != 0) {
+    if (h_exchange(&slot, req, rlen, send_body, send_body_n, &status, &headers, &resp_body, &body_len, &keep_alive, 1) != 0) {
         int e = errno;   // M133：close() 会覆盖 errno ⇒ 先取成因
+        if (chunk_buf) xfree(chunk_buf);
         close(fd);
         return px_net_err("net: http_unix 请求失败: 连接关闭 (%d)", e);
     }
+    if (chunk_buf) xfree(chunk_buf);
     close(fd);
     LXValue d = px_dict();
     px_root_push();   // M92-S2c precise：http_unix 响应 dict 构造登记
@@ -13188,9 +13212,11 @@ static int px_s3_exec(const char* endpoint, const char* method, const char* buck
     if (colon) { port = atoi(colon + 1); *colon = 0; }
     char path[1024];
     snprintf(path, sizeof(path), "/%s/%s", bucket, key ? key : "");
-    char pbody[4096];
+    // M144（缺陷 122）：体不再进 pbody[4096]（>4KB 的体贴着溢出 ⇒ 段错误），改堆缓冲。
     int blen = body ? (int)strlen(body) : 0;
-    memcpy(pbody, body ? body : "", (size_t)blen);
+    char* pbody = xmalloc((size_t)blen + 1);
+    if (blen > 0) memcpy(pbody, body, (size_t)blen);
+    pbody[blen] = 0;
     // 时间
     time_t now = time(NULL);
     struct tm tmv;
@@ -13213,10 +13239,8 @@ static int px_s3_exec(const char* endpoint, const char* method, const char* buck
         "Content-Length: %d\r\n\r\n",
         method, path, query[0] ? "?" : "", query,
         host, amz_date, phash, auth, blen);
-    if (blen > 0 && rlen + blen < (int)sizeof(req)) {
-        memcpy(req + rlen, pbody, (size_t)blen);
-        rlen += blen;
-    }
+    // M144：体由 h_exchange 独立发送（修前是 memcpy 进 req[8192] 且**只在放得下时**才拷 ⇒
+    //   放不下时静默丢弃体、Content-Length 却照报 blen，请求体与长度自相矛盾）。
     HPoolSlot slot;
     slot.is_tls = is_https;
     slot.fd = -1;
@@ -13234,17 +13258,20 @@ static int px_s3_exec(const char* endpoint, const char* method, const char* buck
     if (slot.fd < 0) {
         px_net_conn_fail(errbuf, errcap, host, port, c_stage, c_errno, c_addr);
         if (slot.tls) https_close(slot.tls);
+        xfree(pbody);
         return 0;
     }
     int status = 0, resp_len = 0, keep = 0;
     LXValue hdrs = px_null();
     char* resp = NULL;
-    if (h_exchange(&slot, req, rlen, NULL, 0, &status, &hdrs, &resp, &resp_len, &keep, 1) != 0) {
+    if (h_exchange(&slot, req, rlen, blen > 0 ? pbody : NULL, blen, &status, &hdrs, &resp, &resp_len, &keep, 1) != 0) {
         if (slot.tls) https_close(slot.tls);
         close(slot.fd);
+        xfree(pbody);
         px_net_fail(errbuf, errcap, "net: S3 请求失败: 连接中断");
         return 0;
     }
+    xfree(pbody);
     if (body_out && resp && body_out_sz > 0) {
         int cp = resp_len < body_out_sz - 1 ? resp_len : body_out_sz - 1;
         memcpy(body_out, resp, (size_t)cp);
@@ -13854,25 +13881,34 @@ static char* px_http_once(const char* url, const char* method, const char* body,
     const char* path = (*p == '/') ? p : "/";
 
     // 构建请求
-    char req[4096];
-    int rlen = snprintf(req, sizeof(req),
+    // M144（缺陷 121）：体不再 memcpy 进 req[4096]（>~3.9KB 的体贴着溢出 ⇒ 段错误），
+    //   改为「头 + 体」一次性进**堆缓冲**（send 语义与修前逐字节相同，只是不再越界）。
+    char reqbuf[4096];
+    char* req = reqbuf;
+    int rlen = snprintf(req, sizeof(reqbuf),
         "%s %s HTTP/1.0\r\nHost: %s:%d\r\nUser-Agent: PuXian/0.1\r\nConnection: close\r\n",
         method, path, host, port);
     if (body) {
-        rlen += snprintf(req + rlen, sizeof(req) - rlen,
+        rlen += snprintf(req + rlen, sizeof(reqbuf) - rlen,
             "Content-Type: application/x-www-form-urlencoded\r\nContent-Length: %d\r\n",
             (int)strlen(body));
     }
-    rlen += snprintf(req + rlen, sizeof(req) - rlen, "\r\n");
+    rlen += snprintf(req + rlen, sizeof(reqbuf) - rlen, "\r\n");
+    char* req_alloc = NULL;
     if (body) {
-        memcpy(req + rlen, body, strlen(body));
-        rlen += (int)strlen(body);
+        int bn = (int)strlen(body);
+        req_alloc = xmalloc((size_t)rlen + (size_t)bn + 1);
+        memcpy(req_alloc, reqbuf, (size_t)rlen);
+        memcpy(req_alloc + rlen, body, (size_t)bn);
+        req = req_alloc;
+        rlen = rlen + bn;
     }
 
     char* resp = NULL;
     int resp_len = 0;
     if (is_https) {
         int r = px_https_request(host, port, req, &resp, &resp_len);
+        if (req_alloc) xfree(req_alloc);
         if (r != 0) { px_net_fail(errbuf, errcap, "net: HTTPS 请求失败 (%d) %s", r, host); return NULL; }
     } else {
         // 明文 http
@@ -13886,10 +13922,12 @@ static char* px_http_once(const char* url, const char* method, const char* body,
         int fd = px_tcp_connect_timeout(host, port, PX_DEFAULT_CONNECT_TIMEOUT_MS,
                                         &c_stage, &c_errno, c_addr, (int)sizeof(c_addr));
         if (fd < 0) {
+            if (req_alloc) xfree(req_alloc);
             px_net_conn_fail(errbuf, errcap, host, port, c_stage, c_errno, c_addr);
             return NULL;
         }
         sock_send_all(fd, req, rlen);
+        if (req_alloc) { xfree(req_alloc); req_alloc = NULL; }
         int cap = 4096, len = 0;
         resp = xmalloc(cap);
         for (;;) {
@@ -13902,6 +13940,7 @@ static char* px_http_once(const char* url, const char* method, const char* body,
         resp[len] = 0;
         resp_len = len;
     }
+    if (req_alloc) xfree(req_alloc);
 
     // 解析状态码与 Location
     int status = 0;
@@ -14418,19 +14457,22 @@ static LXValue bi_gzip_uncompress(LXValue* args, int nargs, void* ctx) {
 }
 
 // chunked 传输编码。返回 xmalloc，调用者 xfree。
-static char* px_chunked_encode(const char* in, int inlen, int* outlen) {
+// M144：抽出 maxchunk 参数 —— 服务端响应沿用 4096（分块大小不影响语义），
+//   客户端 `opts.chunked` 用 **32768**（= Go net/http 的 io.Copy 缓冲，逐字节对齐 Go 的分帧）。
+static char* px_chunked_encode_n(const char* in, int inlen, int maxchunk, int* outlen) {
     if (inlen <= 0) {
         char* out = xmalloc(8);
         memcpy(out, "0\r\n\r\n", 5);
         *outlen = 5;
         return out;
     }
+    if (maxchunk <= 0) maxchunk = 4096;
     int cap = inlen + inlen / 16 + 64;
     char* out = xmalloc((size_t)cap);
     int oi = 0, i = 0;
     while (i < inlen) {
         int chunk = inlen - i;
-        if (chunk > 4096) chunk = 4096;
+        if (chunk > maxchunk) chunk = maxchunk;
         oi += snprintf(out + oi, (size_t)(cap - oi), "%x\r\n", chunk);
         memcpy(out + oi, in + i, (size_t)chunk);
         oi += chunk;
@@ -14442,6 +14484,10 @@ static char* px_chunked_encode(const char* in, int inlen, int* outlen) {
     oi += 5;
     *outlen = oi;
     return out;
+}
+
+static char* px_chunked_encode(const char* in, int inlen, int* outlen) {
+    return px_chunked_encode_n(in, inlen, 4096, outlen);
 }
 
 // chunked 解码。返回 xmalloc，调用者 xfree；失败返回 NULL。
@@ -14673,6 +14719,11 @@ static void px_evc_close(int fd);
 static int px_evc_idle_put(int fd, int kind);
 // M99：px_serve 版交 IDLE（fd 保持阻塞；px_evc_idle_put 对 http_serve 强制 px_fd_nonblock）
 static int px_evc_idle_put_fd(int fd, int kind, int nonblock);
+// M144（缺陷 124）：连接级余留字节（HTTP 管道化 / 同段下一请求）—— 存 PxConnCtx.pbuf，
+//   跨 worker 调用与 handler 协程续写存续（定义见 PxConnCtx 区）。
+static int px_conn_pend_len(int fd);
+static int px_conn_pend_take(int fd, char* out, int cap);
+static void px_conn_pend_put(int fd, const char* data, int n);
 static void px_ev_ensure(void);
 static void px_fd_nonblock(int fd);
 static void px_fd_block(int fd);
@@ -14828,7 +14879,8 @@ static LXValue bi_http_conn_alive(LXValue* args, int nargs, void* ctx) {
 // 响应写 + keep-alive 决策（原 http_conn_worker step7-8 抽出；同步/协程续处理共用）。
 // 返回：0 = 连接已收尾（px_evc_close 已调，调用方 return）；1 = 已交还 IDLE 事件
 //       循环（调用方 return）；2 = 连接可继续读下一请求（调用方 continue）。
-static int http_send_resp(int fd, LXValue req, LXValue resp, int method_head, int client_close) {
+static int http_send_resp(int fd, LXValue req, LXValue resp, int method_head, int client_close,
+                          int has_pending) {
     // M123 P1（qg-issue 78）：handler 返回时对端**写侧已失效**（RST/HUP/ERR）→ 无需再 send
     //   （省掉一次对已死连接的写 + SIGPIPE 防护路径；文件流式/SSE 半截写同样受益）。
     //   判据刻意**不含 FIN**：半关(SHUT_WR)的客户端仍可读响应，跳过写 = 丢响应（行为倒退）。
@@ -14898,11 +14950,133 @@ static int http_send_resp(int fd, LXValue req, LXValue resp, int method_head, in
     // 15s 空闲超时 / 对端断开由事件循环 tick close（语义与原 SO_RCVTIMEO 对齐）。
     // 交还成功即返回释放本 worker 去取新 job；失败（非 Linux / fd 未登记）→ 继续读下一请求
     // （px_recv_wait 15s 超时 = 原空闲语义，功能不降仅无事件驱动优化）。
-    if (!px_fd_readable_now(fd)) {
+    // M144（缺陷 124）：has_pending = 本 worker 手里**已有下一请求的字节**（同一 TCP 段
+    //   读进来的管道化请求）——此时交还 IDLE 会把字节连同 worker 栈一起丢掉，必须就地
+    //   继续读（返回 2 让 worker 循环续跑）。判据不能用 px_fd_readable_now：那些字节
+    //   早已被本 worker 读进用户态缓冲，内核缓冲区看起来"空"。
+    if (!has_pending && !px_fd_readable_now(fd)) {
         px_ev_ensure();
         if (px_evc_idle_put(fd, FSERVE_KIND_HTTP) == 0) return 1;
     }
     return 2;
+}
+
+// M144（缺陷 123）：服务端 chunked 请求体解码。
+//   Go 的 net/http 服务端**支持** `Transfer-Encoding: chunked` 请求体（r.ContentLength = -1，
+//   body 可正常读）；而本 worker（http_serve / http_serve_unix 共用）此前**只**认
+//   Content-Length ⇒ 客户端发 chunked 体时 handler 拿到**空体**，且服务端照回 200
+//   —— 典型「静默丢数据却看起来成功」。
+//   返回：0 = 正常结束（*out / *out_len 有效，可为 0 字节空体）
+//         1 = 体超上限 body_max（调用方回 413）
+//         2 = 对端关闭 / 超时（按已收数据返回，与 Content-Length 路径语义一致）
+static int px_read_chunked_body(int fd, const char* pend, int pend_len,
+                                int body_max, char** out, int* out_len) {
+    char rbuf[65536];
+    int rlen = 0, rpos = 0;
+    if (pend_len > 0) {
+        if (pend_len > (int)sizeof(rbuf)) pend_len = (int)sizeof(rbuf);
+        memcpy(rbuf, pend, (size_t)pend_len);
+        rlen = pend_len;
+    }
+    int dcap = 8192;
+    char* dbuf = xmalloc((size_t)dcap);
+    int dlen = 0;
+    int rc = 2;
+    for (;;) {
+        // ① 读 chunk 大小行：hex [;扩展] CRLF
+        char line[256];
+        int ll = 0;
+        for (;;) {
+            int nl = -1;
+            for (int i = rpos; i < rlen; i++) if (rbuf[i] == '\n') { nl = i; break; }
+            if (nl >= 0) {
+                int take = nl - rpos;
+                if (take > 0 && rbuf[rpos + take - 1] == '\r') take--;
+                if (ll + take > 250) take = 250 - ll;
+                if (take > 0) { memcpy(line + ll, rbuf + rpos, (size_t)take); ll += take; }
+                line[ll] = 0;
+                rpos = nl + 1;
+                break;
+            }
+            // 行跨读缓冲 → 压缩后补读
+            if (rpos > 0) { memmove(rbuf, rbuf + rpos, (size_t)(rlen - rpos)); rlen -= rpos; rpos = 0; }
+            if (rlen >= (int)sizeof(rbuf)) { rc = 2; goto fin; }   // 单行 > 64KB = 畸形
+            ssize_t n = px_recv_wait(fd, rbuf + rlen, (size_t)((int)sizeof(rbuf) - rlen), 15000);
+            if (n <= 0) { rc = 2; goto fin; }
+            rlen += (int)n;
+        }
+        long long csize = 0;
+        {
+            char* semi = strchr(line, ';');
+            if (semi) *semi = 0;
+            csize = strtoll(line, NULL, 16);
+        }
+        if (csize <= 0) {
+            // 末块（0）：吞掉 trailer 区（0 个或多个头行）直到空行 —— 否则残留字节会被
+            //   当成**下一个请求**（keep-alive 串包）。
+            int lines = 0;
+            while (lines < 128) {
+                int nl = -1;
+                for (int i = rpos; i < rlen; i++) if (rbuf[i] == '\n') { nl = i; break; }
+                if (nl < 0) {
+                    if (rpos > 0) { memmove(rbuf, rbuf + rpos, (size_t)(rlen - rpos)); rlen -= rpos; rpos = 0; }
+                    if (rlen >= (int)sizeof(rbuf)) break;
+                    ssize_t n = px_recv_wait(fd, rbuf + rlen, (size_t)((int)sizeof(rbuf) - rlen), 15000);
+                    if (n <= 0) break;
+                    rlen += (int)n;
+                    continue;
+                }
+                int seg = nl - rpos;
+                int is_blank = (seg == 0) || (seg == 1 && rbuf[rpos] == '\r');
+                rpos = nl + 1;
+                lines++;
+                if (is_blank) break;
+            }
+            rc = 0;
+            break;
+        }
+        if (dlen + (int)csize > body_max) { rc = 1; goto fin; }
+        if (dlen + (int)csize + 1 > dcap) {
+            while (dcap < dlen + (int)csize + 1) dcap *= 2;
+            dbuf = xrealloc(dbuf, (size_t)dcap);
+        }
+        // ② 读 csize 字节数据
+        {
+            int need = (int)csize;
+            while (need > 0) {
+                if (rpos < rlen) {
+                    int take = rlen - rpos;
+                    if (take > need) take = need;
+                    memcpy(dbuf + dlen, rbuf + rpos, (size_t)take);
+                    dlen += take; rpos += take; need -= take;
+                    continue;
+                }
+                rpos = 0; rlen = 0;
+                ssize_t n = px_recv_wait(fd, rbuf, sizeof(rbuf), 15000);
+                if (n <= 0) { rc = 2; goto fin; }
+                rlen = (int)n;
+            }
+        }
+        // ③ 跳过块尾 CRLF（2 字节）
+        {
+            int skip = 2;
+            while (skip > 0) {
+                if (rpos < rlen) { rpos++; skip--; continue; }
+                rpos = 0; rlen = 0;
+                ssize_t n = px_recv_wait(fd, rbuf, sizeof(rbuf), 15000);
+                if (n <= 0) break;
+                rlen = (int)n;
+            }
+        }
+    }
+fin:
+    dbuf[dlen] = 0;
+    *out = dbuf;
+    *out_len = dlen;
+    // M144（缺陷 124）：读缓冲里**未消费**的字节 = 下一请求的开头（同段管道化请求），
+    //   直接存入**连接上下文** —— 否则被当成垃圾丢掉，连接空等 15s 才关。
+    if (rpos < rlen) px_conn_pend_put(fd, rbuf + rpos, rlen - rpos);
+    return rc;
 }
 
 static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
@@ -14916,6 +15090,12 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
     // keep-alive 空闲超时语义：非阻塞 fd 上 SO_RCVTIMEO 不生效，由 px_recv_wait 的 15s poll 等待取代
     // （IDLE 连接空闲超时由 B-S1 事件循环 tick 同样 15s 对齐）。
 
+    // M144（缺陷 124）：连接级**余留缓冲** —— 前一请求读完后落在同一个 TCP 段里的
+    //   后续字节属于**下一个请求**（HTTP 管道化 / pipelining）。Go 的 net/http 用
+    //   bufio.Reader 缓冲整条连接，余留字节天然留给下一请求；而本 worker 每轮都从
+    //   socket 重读 ⇒ 余留字节被静默丢弃（管道化的第二个请求永远不被应答，
+    //   连接空等 15s 空闲超时才关）。存放点 = **连接上下文 pbuf**（不是 worker 栈：
+    //   VM handler 的段1/段2 可能落在不同 worker 调用上）。
     for (;;) {
         // M95-S2：handler 协程完成待响应（finish 续处理）→ 先于读下一请求执行。
         //   take 后项已出表（GC 根失效）→ 临时 push 保活 req/resp 至 http_send_resp 完。
@@ -14925,7 +15105,7 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
             if (http_pend_take(fd, &fr, &fs, &fh, &fc)) {
                 px_root_push();
                 PX_KEEP(fr); PX_KEEP(fs);
-                int act = http_send_resp(fd, fr, fs, fh, fc);
+                int act = http_send_resp(fd, fr, fs, fh, fc, px_conn_pend_len(fd) > 0);
                 px_root_pop();
                 if (act == 0 || act == 1) return px_null();   // close / 已交还 IDLE
                 continue;                  // act==2：下一请求在途 → 继续读
@@ -14935,7 +15115,17 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
         char buf[65536];
         int len = 0;
         int header_end = -1;
-        while (len < (int)sizeof(buf) - 1) {
+        // M144（缺陷 124）：先吃上一轮余留字节（同一 TCP 段里的下一请求）
+        {
+            int cp = px_conn_pend_take(fd, buf, (int)sizeof(buf) - 1);
+            if (cp > 0) {
+                len = cp;
+                buf[len] = 0;
+                char* sep0 = strstr(buf, "\r\n\r\n");
+                if (sep0) header_end = (int)(sep0 - buf);
+            }
+        }
+        while (header_end < 0 && len < (int)sizeof(buf) - 1) {
             ssize_t n = px_recv_wait(fd, buf + len, (size_t)((int)sizeof(buf) - 1 - len), 15000);
             if (n == 0) { px_evc_close(fd); return px_null(); }    // 对端关闭
             if (n < 0) { px_evc_close(fd); return px_null(); }     // 空闲超时(15s)/错误
@@ -15027,13 +15217,13 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
         //    共享本 worker，一处改两入口通。
         char* body_buf = NULL;
         int body_len = 0;
+        int body_max = 256 * 1024 * 1024;
+        const char* bm_env = getenv("PX_HTTP_BODY_MAX");
+        if (bm_env && atol(bm_env) > 0) {
+            long bmv = atol(bm_env);
+            body_max = bmv > 0x7fffffffL ? 0x7fffffff : (int)bmv;
+        }
         if (content_length > 0) {
-            int body_max = 256 * 1024 * 1024;
-            const char* bm_env = getenv("PX_HTTP_BODY_MAX");
-            if (bm_env && atol(bm_env) > 0) {
-                long bmv = atol(bm_env);
-                body_max = bmv > 0x7fffffffL ? 0x7fffffff : (int)bmv;
-            }
             if (content_length > body_max) {
                 const char* r413 = "HTTP/1.1 413 Payload Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
                 px_send_all(fd, r413, strlen(r413));   // M97-S3：全量写（尽力；随即 close）
@@ -15056,6 +15246,31 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
             }
             if (body_len > content_length) body_len = content_length;
             body_buf[body_len] = 0;
+            // M144（缺陷 124）：本请求之后的余留字节 → 连接上下文（下一轮的起始字节）
+            {
+                int used = (header_end + 4) + body_len;
+                if (len > used) px_conn_pend_put(fd, buf + used, len - used);
+            }
+        } else {
+            // M144（缺陷 123）：Transfer-Encoding: chunked 请求体（Go net/http 服务端支持，
+            //   本 worker 此前**只**认 Content-Length ⇒ handler 拿到空体却回 200）。
+            LXValue te_v = px_dict_get_ci(headers, "Transfer-Encoding");
+            if (te_v.type == PX_STR && strcasestr(te_v.as.obj->as.str.data, "chunked")) {
+                char* cbuf = NULL;
+                int clen = 0;
+                int crc = px_read_chunked_body(fd, buf + header_end + 4, len - (header_end + 4),
+                                               body_max, &cbuf, &clen);
+                if (crc == 1) {
+                    if (cbuf) xfree(cbuf);
+                    const char* r413 = "HTTP/1.1 413 Payload Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                    px_send_all(fd, r413, strlen(r413));
+                    px_evc_close(fd);
+                    px_root_pop();   // M92-S2c precise
+                    return px_null();
+                }
+                body_buf = cbuf;
+                body_len = clen;
+            }
         }
 
         // 5. 构造请求 dict
@@ -15179,7 +15394,7 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
                 }
                 if (px_coro_srv_fd_set) px_coro_srv_fd_set(-1);
                 PX_KEEP(resp);
-                int act = http_send_resp(fd, req, resp, head_flag, client_close);
+                int act = http_send_resp(fd, req, resp, head_flag, client_close, px_conn_pend_len(fd) > 0);
                 px_root_pop();
                 if (act == 2) continue;          // 下一请求在途 → 继续迭代
                 return px_null();                // close(0) / 已交还 IDLE(1)
@@ -15208,7 +15423,7 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
         if (px_coro_srv_fd_set) px_coro_srv_fd_set(-1);   // M123：退出 handler 上下文
         PX_KEEP(resp);   // M92-S2c precise：px_call 返回值裸局部（后续构建响应可能 GC）
         if (body_buf) { xfree(body_buf); body_buf = NULL; }
-        int act2 = http_send_resp(fd, req, resp, head_flag, client_close);
+        int act2 = http_send_resp(fd, req, resp, head_flag, client_close, px_conn_pend_len(fd) > 0);
         px_root_pop();
         if (act2 == 2) continue;                 // 下一请求在途 → 继续迭代
         return px_null();                        // close(0) / 已交还 IDLE(1) 均已收尾
@@ -15638,6 +15853,52 @@ static PxConnCtx* px_evc_ctx(int fd) {
     return &g_conns[fd];
 }
 
+// M144（缺陷 124）：连接级**余留字节**存取 —— HTTP 管道化 / 同一 TCP 段里的下一请求。
+//   为什么必须挂在连接上（而不是 worker 栈上）：VM handler 走「协程 + fserve 投回」路径
+//   —— 段1（读+解析）与段2（写响应 + keep-alive 判定）**可能落在不同 worker 调用**上，
+//   worker 栈上的余留字节会随之丢失（管道化的第二个请求永远不被应答）。
+//   存放点 = PxConnCtx.pbuf（其字段注释即「半请求续接缓冲」，语义一致），
+//   随 px_evc_close 释放；ctx 不存在（fd 超容量/非 Linux）→ 退化为原「丢弃」行为。
+static int px_conn_pend_len(int fd) {
+    if (fd < 0) return 0;
+    pthread_mutex_lock(&g_conn_mu);
+    PxConnCtx* c = px_evc_ctx(fd);
+    int n = (c && c->fd == fd) ? c->pbuf_len : 0;
+    pthread_mutex_unlock(&g_conn_mu);
+    return n;
+}
+
+static int px_conn_pend_take(int fd, char* out, int cap) {
+    if (fd < 0 || cap <= 0) return 0;
+    pthread_mutex_lock(&g_conn_mu);
+    PxConnCtx* c = px_evc_ctx(fd);
+    int n = 0;
+    if (c && c->fd == fd && c->pbuf_len > 0) {
+        n = c->pbuf_len < cap ? c->pbuf_len : cap;
+        memcpy(out, c->pbuf, (size_t)n);
+        c->pbuf_len = 0;
+    }
+    pthread_mutex_unlock(&g_conn_mu);
+    return n;
+}
+
+static void px_conn_pend_put(int fd, const char* data, int n) {
+    if (fd < 0 || n <= 0 || !data) return;
+    pthread_mutex_lock(&g_conn_mu);
+    PxConnCtx* c = px_evc_ctx(fd);
+    if (c && c->fd == fd) {
+        if (n > c->pbuf_cap) {
+            int ncap = c->pbuf_cap > 0 ? c->pbuf_cap : 4096;
+            while (ncap < n) ncap *= 2;
+            c->pbuf = c->pbuf ? xrealloc(c->pbuf, (size_t)ncap) : xmalloc((size_t)ncap);
+            c->pbuf_cap = ncap;
+        }
+        memcpy(c->pbuf, data, (size_t)n);
+        c->pbuf_len = n;
+    }
+    pthread_mutex_unlock(&g_conn_mu);
+}
+
 #if defined(__linux__)
 // 事件循环唤醒（注册/摘除/关闭后写一字节，epoll_wait 立即醒来重算）
 static void px_ev_wake(void) {
@@ -15654,8 +15915,13 @@ static PxConnCtx* px_evc_acquire(int fd, int kind) {
     PxConnCtx* c = px_evc_ctx(fd);
     if (c->state != PX_CONN_STATE_FREE) {
         // 旧上下文未收尾（异常路径）：强制清理（调用方须保证该 fd 已 close 或即将接管）
-        if (c->ev_reg && g_ev_epfd >= 0) { epoll_ctl(g_ev_epfd, EPOLL_CTL_DEL, fd, NULL); c->ev_reg = 0; }
-        if (c->pbuf) { xfree(c->pbuf); c->pbuf = NULL; c->pbuf_len = c->pbuf_cap = 0; }
+        // M144（缺陷 124）：**仅当 fd 确实不是同一个连接**时才清 pbuf —— 同一 fd 的重新登记
+        //   （keep-alive 续处理 / handler 协程完成后 fserve 投回）属正常续跑，
+        //   清掉 pbuf 等于丢掉已读进来的下一请求字节（管道化请求丢失）。
+        if (c->fd != fd) {
+            if (c->ev_reg && g_ev_epfd >= 0) { epoll_ctl(g_ev_epfd, EPOLL_CTL_DEL, fd, NULL); c->ev_reg = 0; }
+            if (c->pbuf) { xfree(c->pbuf); c->pbuf = NULL; c->pbuf_len = c->pbuf_cap = 0; }
+        }
     }
     c->fd = fd; c->kind = kind; c->state = PX_CONN_STATE_ACTIVE; c->idle_since = 0;
     c->idle_ev_cnt = 0;
