@@ -4002,3 +4002,24 @@ wchan 直方图 `39 futex_do_wait / 1 wait_woken / 1 inet_csk_accept / 1 ep_poll
 > 大迁移）不在 S3-C 段做——VM 轨当前解释执行无 JIT/native，默认切换性能倒退
 > 且动主干验证体系（fn_* .c golden 全量重生成），收益未到兑现点；技术可行性
 > 已由三切片实证，工程化铺开挂起为后置决策项（详见 docs/M89_PLAN.md）。
+
+## M143 —— float32 值族 / 位模式 / Go `encoding/json` 的 32 位浮点文本（第 24 轮）
+
+- **新增 native 5 个**：`float32(x)` · `float32_bits(x)` · `bits_to_float32(u)` ·
+  `json_num_str(x[, bits])` · `append_file_opt(path, content[, mode])`
+  （后者 = `append_file` 的 Result 版，缺陷 115 收口；前四个解开了 token-cache 向量族
+  `[]float32` 的运算与位模式序列化）。
+- **`json_num_str` / `json_stringify_go`**：Go `encoding/json` 的浮点文本按**位宽**分两套渲染
+  （float32 最短往返 + 阈值按 float32 比较）——抽取 `jgo_render_num` 为**唯一渲染路径**
+  （float64/float32 共用，防两份实现漂移）。
+- **解释轨**：`selfhost/ibuiltin.px` 转发层 + `selfhost/interp.px` 名册各补 5 条
+  （含既缺的 `write_file_opt` —— 第 22 轮同族教训）。名册 345→350、native 331→336。
+- **门 `examples/m143_float32/`**：1625 行语料（含 1536 个伪随机 float32 位模式 + 24 个口岸值）
+  与 **Go 本尊**（`math.Float32bits` / `Float32frombits` / `encoding/json`）**逐字节 diff** ×
+  VM/C 双轨 + 37 条绝对自断言 + **3 道负控**（篡改真值 / 32→64 位文本 / 改坏位模式面）。
+- **缺陷 115 收口**：`append_file_opt`（写失败走 err 通道，不杀进程）。
+- **缺陷 118 登记（未修）**：浮点除零 Go 给 ±Inf/NaN，PuXian `px_error` 杀进程。
+- **缺陷 119 根治（token-cache 侧）**：`cosine_similarity` 的乘积窄化位置 —— Go 在 float32 里
+  算乘积（`float64(a[i]*b[i])`），移植初版按 float64 乘积写 ⇒ 被 M143 的 0.1/1÷3 语料照出。
+- **速查表 +108–112**（float32 纪律 / JSON 位宽文本 / 浮点除零 / 窄化位置 / append_file_opt）。
+- **CI**：m143 接进 `selfhost/m116_gates.sh`、`m117_gates.sh`、`.github/workflows/ci.yml`。

@@ -366,6 +366,31 @@ static LXValue bi_now_sec(LXValue* args, int nargs, void* ctx);
 //   `time.Now().Format("...000000000")`（纳秒目录名/日志时间戳）**无法表达**。
 static LXValue bi_now_ns(LXValue* args, int nargs, void* ctx);
 static LXValue bi_tz_local(LXValue* args, int nargs, void* ctx);
+// ═══ M143（第 24 轮 · 缺陷 115/117）：float32 值族 + Go 编码器的 32 位浮点文本 ═══
+//   背景：token-cache 的向量族（vector_util.go / l2_schema.go / birch_*）全部是
+//   `[]float32` 的运算与 `math.Float32bits/Float32frombits` 位模式序列化，而语言里
+//   **只有 float64**：用 float64 冒充 float32 ⇒ 最后一位**静默漂移**
+//   （float32(0.1) = 0.100000001490116… ≠ float64 0.1）—— 序列化出的 BLOB 与 Go 不同。
+//   ① float32(x)         —— 舍入到最近的 float32（IEEE754 round-to-nearest-even），
+//                            以 float64 精确承载（float32 ⊂ float64，无信息损失）。
+//   ② float32_bits(x)    —— Go `math.Float32bits(float32(x))` → uint32（int 承载）。
+//   ③ bits_to_float32(u) —— Go `math.Float32frombits(uint32(u))`。
+//   ④ json_num_str(x, bits) —— Go `encoding/json` 对该浮点（按 bits 位宽）写出的**文本**
+//      （`AppendFloat(f,'f'|'e',-1,bits)` + `e-0d`→`e-d` 收敛）—— float32 数组的 JSON
+//      是 **32 位最短往返**，与 float64 的文本**不同**（0.1 → "0.1" vs "0.1"；1/3 →
+//      "0.33333334" vs "0.3333333333333333"）。非有限值 → null（Go 侧 Marshal 报错）。
+//   纪律（速查表）：**float32 复合运算 = 每一步 f32(...) 收口**。数学依据：float32 的
+//      + - * / sqrt 的**精确结果**在 float64 里可精确表示（53 ≥ 2*24+2 位）⇒
+//      `f32(a 的 float64 运算)` 与 float32 直接算**逐位相同**（无二次舍入），故无需为
+//      每种运算再造 native。
+static LXValue bi_float32(LXValue* args, int nargs, void* ctx);
+static LXValue bi_float32_bits(LXValue* args, int nargs, void* ctx);
+static LXValue bi_bits_to_float32(LXValue* args, int nargs, void* ctx);
+static LXValue bi_json_num_str(LXValue* args, int nargs, void* ctx);
+// ⑤ append_file_opt —— append_file 的 Result 版（缺陷 115：Go `os.OpenFile(..., O_APPEND)`
+//    的失败走 err 通道「只记日志、不阻塞主流程」，而 `append_file` 失败即杀进程 ⇒
+//    token-cache 的 LogWriter（Go 侧写失败仅 log.Printf）**无法表达**。）
+static LXValue bi_append_file_opt(LXValue* args, int nargs, void* ctx);
 // M129（qg-issue 87 缺陷 38）：json_parse_opt —— 错误捕获式 JSON 解析
 static LXValue bi_json_parse_opt(LXValue* args, int nargs, void* ctx);
 // ---------------------------------------------------------------------
@@ -5062,6 +5087,51 @@ static LXValue bi_append_file(LXValue* args, int nargs, void* ctx) {
     return px_null();
 }
 
+// M143（第 24 轮 · 缺陷 115）：append_file_opt —— append_file 的 Result 版
+//   背景（实测缺口）：token-cache 的 LogWriter（Go）写日志失败时只 `log.Printf`、
+//   **不中断主流程**（`os.OpenFile(..., O_APPEND|O_CREATE|O_WRONLY, 0644)` 的 err 通道）；
+//   而 `append_file` / `write_file`（非 _opt 版）失败即 `px_error` **杀进程** ⇒
+//   「磁盘满 / 权限不足 / 目录不可写」在移植侧变成服务整体死掉。
+//   语义：append_file_opt(path, content[, mode]) → Ok(null) | Err("io: 追加写入失败 …")
+//   注意：**不** fchmod —— Go `os.OpenFile` 的 perm 只在**创建**时生效（且受 umask 掩码），
+//   对已存在文件不改权限（与 write_file_opt 的同款纪律，缺陷 25 的实证）。
+static LXValue bi_append_file_opt(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 2 || nargs > 3 || args[0].type != PX_STR) px_error("R1002: append_file_opt 需要 (路径, 内容[, mode])");
+    const char* path = args[0].as.obj->as.str.data;
+    const char* content;
+    int clen;
+    if (args[1].type == PX_STR) { content = args[1].as.obj->as.str.data; clen = args[1].as.obj->as.str.len; }
+    else { content = px_to_string(args[1]); clen = (int)strlen(content); }
+    mode_t mode = 0666;
+    if (nargs == 3) {
+        if (args[2].type != PX_INT) px_error("R1002: append_file_opt 的 mode 需要 int（八进制权限，如 0o644）");
+        mode = (mode_t)args[2].as.i;
+    }
+    int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, mode);
+    if (fd < 0) {
+        char msg[512];
+        snprintf(msg, sizeof(msg), "io: 追加写入失败 %s: %s (os error %d)", path, strerror(errno), errno);
+        return px_err(px_str(msg));
+    }
+    const char* p = content;
+    int left = clen;
+    while (left > 0) {
+        ssize_t n = write(fd, p, (size_t)left);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            int e = errno;
+            close(fd);
+            char msg[512];
+            snprintf(msg, sizeof(msg), "io: 追加写入失败 %s: %s (os error %d)", path, strerror(e), e);
+            return px_err(px_str(msg));
+        }
+        p += n; left -= (int)n;
+    }
+    close(fd);
+    return px_ok(px_null());
+}
+
 static LXValue bi_read_at(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 3 || args[0].type != PX_STR) px_error("R1002: read_at 需要 (路径, 偏移, 长度)");
@@ -8243,33 +8313,16 @@ static void jout_escape_go(JOut* o, const char* s, int n) {
 //   上游收到的请求体不同）。
 //   修法：① 用 `%.*e` 递增精度扫出**最短数字串**（含十进制指数）；
 //        ② 按 Go 规则（|x|∈[1e-6,1e21) 用 'f'，否则 'e'）渲染该数字串。
-static void jgo_format_float(char* out, int cap, double f) {
-    if (!isfinite(f)) { snprintf(out, (size_t)cap, "null"); return; }
-    double a = fabs(f);
-    char style = 'f';
-    if (a != 0 && (a < 1e-6 || a >= 1e21)) style = 'e';
-    // ① 最短往返数字串（%.*e 递增精度，首个能回读相等的即最短）
-    char sci[64];
-    sci[0] = 0;
-    for (int p = 0; p <= 17; p++) {
-        snprintf(sci, sizeof(sci), "%.*e", p, f);
-        if (strtod(sci, NULL) == f) break;
-    }
-    int neg = 0;
-    const char* s = sci;
-    if (*s == '-') { neg = 1; s++; }
-    char digits[40];
-    int nd = 0;
-    const char* q = s;
-    while (*q && *q != 'e' && *q != 'E') {
-        if (*q != '.' && nd < 39) digits[nd++] = *q;
-        q++;
-    }
-    digits[nd] = 0;
-    if (nd == 0) { snprintf(out, (size_t)cap, "0"); return; }
-    const char* ep = strchr(s, 'e');
-    if (!ep) ep = strchr(s, 'E');
-    int exp10 = ep ? atoi(ep + 1) : 0;
+// M143（第 24 轮 · 缺陷 117 同族）：把「符号 + 最短数字串 + 十进制指数」渲染成 Go
+//   `encoding/json` 的数字文本 —— 从 jgo_format_float 里**抽出**，float64 / float32
+//   两条路径共用（渲染规则唯一，杜绝两份实现漂移；本工程的既有教训：同一语义两处
+//   实现必然分叉）。两条路径的差别只在**取哪套数字**（位数 + 回读函数）与**科学计数
+//   阈值**，渲染完全一致：
+//     · 'f' 定点：小数点位置由 exp10 决定（pt = exp10+1），pt<=0 补 "0."+前导零、
+//       pt>=nd 补尾零、否则插小数点；
+//     · 'e' 科学：d.ddd e±NN（指数**至少两位** + 负号收敛 `e-0d`→`e-d`，Go 原文
+//       `clean up e-09 to e-9` 逐字照抄；正指数**不**收敛 —— Go 的判据只看 `b[n-3]=='-'`）。
+static void jgo_render_num(char* out, int cap, int neg, const char* digits, int nd, int exp10, char style) {
     int pt = exp10 + 1;   // 小数点前应有的位数
     char buf[64];
     int k = 0;
@@ -8313,6 +8366,73 @@ static void jgo_format_float(char* out, int cap, double f) {
         }
     }
     snprintf(out, (size_t)cap, "%s", buf);
+}
+
+// 从 `%.*e` 文本里取「符号 / 数字串 / 十进制指数」—— 两条路径共用的解析段。
+static void jgo_split_sci(const char* sci, int* neg, char* digits, int* nd, int* exp10) {
+    *neg = 0;
+    const char* s = sci;
+    if (*s == '-') { *neg = 1; s++; }
+    *nd = 0;
+    for (const char* q = s; *q && *q != 'e' && *q != 'E'; q++) {
+        if (*q != '.' && *nd < 39) digits[(*nd)++] = *q;
+    }
+    digits[*nd] = 0;
+    const char* ep = strchr(s, 'e');
+    if (!ep) ep = strchr(s, 'E');
+    *exp10 = ep ? atoi(ep + 1) : 0;
+}
+
+static void jgo_format_float(char* out, int cap, double f) {
+    if (!isfinite(f)) { snprintf(out, (size_t)cap, "null"); return; }
+    double a = fabs(f);
+    char style = 'f';
+    if (a != 0 && (a < 1e-6 || a >= 1e21)) style = 'e';
+    // ① 最短往返数字串（%.*e 递增精度，首个能回读相等的即最短）
+    char sci[64];
+    sci[0] = 0;
+    for (int p = 0; p <= 17; p++) {
+        snprintf(sci, sizeof(sci), "%.*e", p, f);
+        if (strtod(sci, NULL) == f) break;
+    }
+    int neg = 0, nd = 0, exp10 = 0;
+    char digits[40];
+    jgo_split_sci(sci, &neg, digits, &nd, &exp10);
+    if (nd == 0) { snprintf(out, (size_t)cap, "0"); return; }
+    jgo_render_num(out, cap, neg, digits, nd, exp10, style);
+}
+
+// M143：Go `encoding/json` 的 **float32** 文本（floatEncoder 的 bits=32 分支）。
+//   与 float64 路径的差别只有三处：
+//     ① 先把值**窄化到 float32**（Go 侧值本身就是 float32 类型，序列化前已窄化）；
+//     ② 科学计数阈值按 **float32** 比较（Go：`float32(abs) < 1e-6 || float32(abs) >= 1e21`）；
+//     ③ 最短往返位数上界 **9**（float32 的 round-trip 位数上界）、回读用 `strtof`。
+//   实测口径（Go 1.26.6，M143 门内真值，`json.Marshal(float32(v))`）：
+//     0.1 → "0.1" · 1/3 → "0.33333334"（**32 位最短**，与 float64 的
+//     "0.3333333333333333" 不同）· -2.5e-8 → "-2.5e-8"（`e-0d`→`e-d`）·
+//     1e-6 → "0.000001"（阈值不含）· 1e-7 → "1e-7" · 1e20 → "100000000000000000000"
+//     （float32(1e20) 仍是 1e20 < 1e21 ⇒ 定点）· 1e21 → "1e+21" ·
+//     -0.0 → "-0"（**Go 的 JSON 不把负零写成 0**；注意 Go 源码里字面量 `-0.0` 会被
+//     常量折叠成 +0，真值必须用 `math.Copysign(0,-1)` 造）·
+//     MaxFloat32 → "3.4028235e+38" · 最小次正规 → "1e-45"。
+static void jgo_format_float32(char* out, int cap, double f) {
+    if (!isfinite(f)) { snprintf(out, (size_t)cap, "null"); return; }
+    float g = (float)f;
+    if (!isfinite((double)g)) { snprintf(out, (size_t)cap, "null"); return; }
+    float ag = fabsf(g);
+    char style = 'f';
+    if (ag != 0 && (ag < 1e-6f || ag >= 1e21f)) style = 'e';
+    char sci[64];
+    sci[0] = 0;
+    for (int p = 0; p <= 9; p++) {
+        snprintf(sci, sizeof(sci), "%.*e", p, (double)g);
+        if (strtof(sci, NULL) == g) break;
+    }
+    int neg = 0, nd = 0, exp10 = 0;
+    char digits[40];
+    jgo_split_sci(sci, &neg, digits, &nd, &exp10);
+    if (nd == 0) { snprintf(out, (size_t)cap, "0"); return; }
+    jgo_render_num(out, cap, neg, digits, nd, exp10, style);
 }
 
 typedef struct { const char* k; LXValue v; } JGoKV;
@@ -9153,6 +9273,12 @@ void px_register_builtins(void) {
     px_set_global("now_sec", px_native("now_sec", bi_now_sec));
     px_set_global("now_ns", px_native("now_ns", bi_now_ns));   // M141：墙钟 Unix 纳秒
     px_set_global("tz_local", px_native("tz_local", bi_tz_local));
+    // M143（第 24 轮）：float32 值族 + Go JSON 的 32 位浮点文本 + append_file_opt（缺陷 115）
+    px_set_global("float32", px_native("float32", bi_float32));
+    px_set_global("float32_bits", px_native("float32_bits", bi_float32_bits));
+    px_set_global("bits_to_float32", px_native("bits_to_float32", bi_bits_to_float32));
+    px_set_global("json_num_str", px_native("json_num_str", bi_json_num_str));
+    px_set_global("append_file_opt", px_native("append_file_opt", bi_append_file_opt));
     // 同时登记进 FFI 桥（ffi_call 按名调用表）：
     //   解释器轨的内置分发层 selfhost/ibuiltin.px 与 selfhost/env.px 同编译单元，
     //   env.px 有同名 PuXian 函数 `def env_set(env, name, value)`（编译器内部变量环境）
@@ -9166,6 +9292,11 @@ void px_register_builtins(void) {
     px_ffi_register("now_sec", bi_now_sec);
     px_ffi_register("now_ns", bi_now_ns);
     px_ffi_register("tz_local", bi_tz_local);
+    px_ffi_register("float32", bi_float32);
+    px_ffi_register("float32_bits", bi_float32_bits);
+    px_ffi_register("bits_to_float32", bi_bits_to_float32);
+    px_ffi_register("json_num_str", bi_json_num_str);
+    px_ffi_register("append_file_opt", bi_append_file_opt);
 
     px_set_global("signal", px_native("signal", bi_signal));
 // M85-S1：--no-rsa 裁剪（去 runtime_rsa.o + mbedtls rsa/pk 引用面；rsa_* native 缺 → R1001）
@@ -9471,6 +9602,76 @@ static int64_t px_local_off(void);
 static LXValue bi_tz_local(LXValue* args, int nargs, void* ctx) {
     (void)args; (void)nargs; (void)ctx;
     return px_int((int64_t)px_local_off());
+}
+
+// ═══ M143：float32 值族（float32 / float32_bits / bits_to_float32）+ json_num_str ═══
+//   设计说明见文件顶部声明处。要点：
+//     · int → float32 **必须**走 C 的直接转换（`(float)int64`，单次正确舍入）；
+//       若先转 double 再转 float 会有**二次舍入**，对贴近 float32 精度边界的整数
+//       会差 1 ulp（与 Go 的 `float32(i)` 分叉）。
+//     · `float32_bits` 读不出 float32 的**位模式**在语言里就没有来源 ⇒ Float32sToBytes
+//       这类「小端 4 字节 BLOB」序列化无法复刻（缺陷 115 的位模式面）。
+static LXValue bi_float32(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: float32 需要一个参数");
+    LXValue a = args[0];
+    if (a.type == PX_INT) return px_float((double)(float)a.as.i);
+    if (a.type == PX_FLOAT) return px_float((double)(float)a.as.f);
+    if (a.type == PX_STR) return px_float((double)(float)atof(a.as.obj->as.str.data));
+    if (a.type == PX_BOOL) return px_float(a.as.b ? 1.0 : 0.0);
+    px_error("R1002: float32 不支持类型 %s", px_type_name(a));
+    return px_null();
+}
+
+// float32_bits(x) → int —— `math.Float32bits(float32(x))` 的 uint32 位模式。
+static LXValue bi_float32_bits(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: float32_bits 需要一个参数");
+    LXValue a = args[0];
+    float f;
+    if (a.type == PX_INT) f = (float)a.as.i;
+    else if (a.type == PX_FLOAT) f = (float)a.as.f;
+    else if (a.type == PX_STR) f = (float)atof(a.as.obj->as.str.data);
+    else { px_error("R1002: float32_bits 不支持类型 %s", px_type_name(a)); return px_null(); }
+    uint32_t u;
+    memcpy(&u, &f, 4);   // 位模式转换走 memcpy（-O2 下与位运算等价，且不触发严格别名规则）
+    return px_int((int64_t)u);
+}
+
+// bits_to_float32(u) → 数 —— `math.Float32frombits(uint32(u))`。
+//   只取低 32 位（负值 = Go 的 uint32 回绕语义，与 `uint32(x)` 的取模口径一致）。
+static LXValue bi_bits_to_float32(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: bits_to_float32 需要一个参数");
+    uint32_t u = (uint32_t)((uint64_t)int_val(args[0]) & 0xFFFFFFFFu);
+    float f;
+    memcpy(&f, &u, 4);
+    return px_float((double)f);
+}
+
+// json_num_str(x[, bits]) → str | null —— Go `encoding/json` 对该浮点写出的文本。
+//   bits 缺省 64；bits=32 时先窄化到 float32（Go 侧值本身就是 float32）再取**32 位**
+//   最短往返数字。非有限值（NaN/±Inf）→ null —— Go 的 Marshal 在此返回
+//   `UnsupportedValueError`（我们不给 runtime 造错误通道，改由调用方判 null，
+//   与 `json_stringify_go` 写 "null" 的既有约定一致、且**可检测**）。
+static LXValue bi_json_num_str(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 && nargs != 2) px_error("R1002: json_num_str 需要 (值[, bits])");
+    double d;
+    if (args[0].type == PX_FLOAT) d = args[0].as.f;
+    else if (args[0].type == PX_INT) d = (double)args[0].as.i;
+    else { px_error("R1002: json_num_str 的第一个参数需要数值"); return px_null(); }
+    int bits = 64;
+    if (nargs == 2) {
+        if (args[1].type != PX_INT) px_error("R1002: json_num_str 的 bits 需要 int（32 / 64）");
+        bits = (int)args[1].as.i;
+    }
+    if (bits != 32 && bits != 64) px_error("R1002: json_num_str 的 bits 只支持 32 / 64");
+    if (!isfinite(d)) return px_null();
+    char buf[64];
+    if (bits == 32) jgo_format_float32(buf, sizeof(buf), d);
+    else jgo_format_float(buf, sizeof(buf), d);
+    return px_str(buf);
 }
 
 // M115：父侧构造子进程环境数组（"K=V" 列表，env 覆盖项合并进 environ）

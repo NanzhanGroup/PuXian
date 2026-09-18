@@ -1,0 +1,162 @@
+# ═══════════════════════════════════════════════════════════════════════
+# M143 · float32 值族 / 位模式 / Go `encoding/json` 的 32 位浮点文本 + append_file_opt
+# ---------------------------------------------------------------
+# 真值：`truth/`（**Go 本尊** —— math.Float32bits / Float32frombits / encoding/json，见 main.go）
+# 语料：`corpus.txt`（由 gen_corpus.py 生成，**两侧共用同一份**）
+#
+# 本门做三件事：
+#   ① 真值对拍：v/b/m/d 四类共 ~1200 例（含 1536 个伪随机 float32 位模式），
+#      每例一行，与 Go 真值逐字节 diff（VM 轨 + C 轨各自跑一遍，断言集相同）
+#   ② 自断言：绝对期望值（不依赖真值）—— 窄化是否真的发生、位模式往返、
+#      Go JSON 文本的 6 条口岸值、非有限值 → null、float32 溢出 → +Inf、
+#      「每步 f32 收口 = 直接 float32 运算」的位模式实证
+#   ③ 负控（verify.sh）：篡改真值 / 把 32 位文本换成 64 位 / 改坏位模式面 ⇒ 都必须变红
+#
+# 为什么值得一道门：token-cache 的向量族（vector_util.go / l2_schema.go / birch_*）
+#   全部是 `[]float32` 的运算与 `math.Float32bits` 位模式序列化（写进 SQLite 的 BLOB、
+#   写进 L2 条目 JSON 的 centroid 数组）。用 float64 冒充 float32：
+#     · **最后一位静默漂移**（0.1 → 0.10000000149011612）⇒ BLOB 与 Go 不同；
+#     · JSON 里的 centroid 是 **32 位最短往返**（0.33333334）而非 64 位（0.3333333333333333）。
+#   两条都是**静默错值**，正是本工程最忌讳的一类（对拍才看得见）。
+#
+# ⚠️ 已登记边界（README §M143）：`str(float32值)` 走 **float64 最短往返**（本运行时只有
+#   float64 值），与 Go 的 `fmt.Sprint(float32)`（32 位 'g' 最短）**不同** ——
+#   需要 Go 文本时用 `json_num_str(x, 32)`（JSON 口径）或后续的 float32 显示原语。
+# ═══════════════════════════════════════════════════════════════════════
+import std.strings
+
+var P = 0
+var F = 0
+
+def ck(name, cond):
+    if cond:
+        P = P + 1
+        print("  ✅ " + name)
+    else:
+        F = F + 1
+        print("  ❌ " + name)
+
+# hex8(u) —— uint32 → 8 位小写十六进制（与 truth/main.go 的 %08x 同形）
+def hex8(u):
+    return int_to_hex(u, 8)
+
+# j64(x) / j32(x) —— Go encoding/json 的文本；非有限值 Go 侧 Marshal 报错 ⇒ 两侧都写 null
+def j64(x):
+    var s = json_num_str(x, 64)
+    if s == null:
+        return "null"
+    return s
+
+def j32(x):
+    var s = json_num_str(x, 32)
+    if s == null:
+        return "null"
+    return s
+
+def main():
+    var data = read_file("corpus.txt")
+    var lines = split(data, "\n")
+    var idx = 0
+
+    # ── ① 逐例输出（与 Go 真值逐行比对）──
+    for line in lines:
+        if line == "":
+            continue
+        if starts_with(line, "v "):
+            var x = float(line[2:len(line)])
+            print("v|" + str(idx) + "|" + j64(x) + "|" + j32(x) + "|" + hex8(float32_bits(x)))
+        elif starts_with(line, "b "):
+            var v = bits_to_float32(hex_to_int(line[2:len(line)]))
+            print("b|" + str(idx) + "|" + j64(v) + "|" + j32(v) + "|" + hex8(float32_bits(v)))
+        elif starts_with(line, "m "):
+            var parts = split(trim(line[2:len(line)]), " ")
+            var a = float(parts[0])
+            var b = float(parts[1])
+            # 纪律：**每一步都 f32 收口**（不靠 float64 中间结果冒充 float32）
+            var af = float32(a)
+            var bf = float32(b)
+            print("m|" + str(idx) + "|" + hex8(float32_bits(float32(af * bf))) + "|" +
+                  hex8(float32_bits(float32(af + bf))) + "|" + hex8(float32_bits(float32(af / bf))))
+        elif starts_with(line, "d "):
+            var parts = split(trim(line[2:len(line)]), " ")
+            var a = float32(float(parts[0]))
+            var b = float32(float(parts[1]))
+            var n = int(parts[2])
+            var acc = a
+            var i = 0
+            while i < n:
+                acc = float32(acc + b)
+                i += 1
+            print("d|" + str(idx) + "|" + hex8(float32_bits(acc)) + "|" + hex8(float32_bits(float32(a / b))))
+        else:
+            print("❌ 未知语料行: " + line)
+            F = F + 1
+        idx += 1
+
+    # ── ② 自断言（绝对期望值，全部来自 Go 1.26.6 实测）──
+    print("")
+    print("── 自断言 ──")
+    ck("float32(0.1) 的位模式 = 3dcccccd", float32_bits(0.1) == 0x3dcccccd)
+    ck("float32(0.1) != 0.1（窄化**真的**发生）", float32(0.1) != 0.1)
+    ck("float32(1/3) != 1/3", float32(1.0 / 3.0) != 1.0 / 3.0)
+    ck("float32(1e40) 溢出 → +Inf（位模式 7f800000）", float32_bits(1.0e40) == 0x7f800000)
+    ck("float32(-1e40) 溢出 → -Inf（位模式 ff800000）", float32_bits(-1.0e40) == 0xff800000)
+    ck("float32 幂等：float32(float32(0.1)) == float32(0.1)", float32(float32(0.1)) == float32(0.1))
+    ck("bits_to_float32 取低 32 位（0x1_3dcccccd）", bits_to_float32(0x13dcccccd) == float32(0.1))
+    ck("bits_to_float32 负值回绕（-1 → ffffffff）", float32_bits(bits_to_float32(-1)) == 0xffffffff)
+    ck("位模式往返（非 NaN）：3dcccccd", float32_bits(bits_to_float32(0x3dcccccd)) == 0x3dcccccd)
+    ck("位模式往返（次正规）：00000001", float32_bits(bits_to_float32(0x00000001)) == 0x00000001)
+    ck("位模式往返（MaxFloat32）：7f7fffff", float32_bits(bits_to_float32(0x7f7fffff)) == 0x7f7fffff)
+    ck("位模式往返（+0 / -0 各自保持）", float32_bits(bits_to_float32(0x00000000)) == 0 and float32_bits(bits_to_float32(0x80000000)) == 0x80000000)
+    ck("json_num_str(0.1,64) = \"0.1\"", json_num_str(0.1, 64) == "0.1")
+    ck("json_num_str(1/3,64) = \"0.3333333333333333\"", json_num_str(1.0 / 3.0, 64) == "0.3333333333333333")
+    ck("json_num_str(1/3,32) = \"0.33333334\"（32 位最短！）", json_num_str(1.0 / 3.0, 32) == "0.33333334")
+    ck("json_num_str(1e-7,64) = \"1e-7\"（e-0d 收敛）", json_num_str(1.0e-7, 64) == "1e-7")
+    ck("json_num_str(1e-6,64) = \"0.000001\"（阈值不含）", json_num_str(1.0e-6, 64) == "0.000001")
+    ck("json_num_str(1e-7,32) = \"1e-7\"", json_num_str(1.0e-7, 32) == "1e-7")
+    ck("json_num_str(1e20,64) = \"100000000000000000000\"（定点）", json_num_str(1.0e20, 64) == "100000000000000000000")
+    ck("json_num_str(1e21,64) = \"1e+21\"（科学，+ 不收敛）", json_num_str(1.0e21, 64) == "1e+21")
+    ck("json_num_str(-0.0,64) = \"-0\"（Go 不把负零写成 0）", json_num_str(-1.0 * 0.0, 64) == "-0")
+    ck("json_num_str(0.0,64) = \"0\"", json_num_str(0.0, 64) == "0")
+    ck("json_num_str(+Inf) == null", json_num_str(bits_to_float32(0x7f800000), 64) == null)
+    ck("json_num_str(NaN) == null", json_num_str(bits_to_float32(0x7fc00000), 64) == null)
+    ck("json_num_str(MaxFloat32,32) = \"3.4028235e+38\"", json_num_str(bits_to_float32(0x7f7fffff), 32) == "3.4028235e+38")
+    ck("json_num_str(最小次正规,32) = \"1e-45\"", json_num_str(bits_to_float32(0x00000001), 32) == "1e-45")
+    ck("json_num_str(1e20,32) = \"100000000000000000000\"", json_num_str(1.0e20, 32) == "100000000000000000000")
+    # 「每步 f32 收口 = 直接 float32 运算」的位模式实证（Go 实测：0.1f*0.3f = 3cf5c290）
+    ck("f32(0.1f*0.3f) = 3cf5c290（与 Go 的 float32 乘法逐位相同）",
+       float32_bits(float32(float32(0.1) * float32(0.3))) == 0x3cf5c290)
+    ck("f32(0.1f+0.3f) = 3ecccccd", float32_bits(float32(float32(0.1) + float32(0.3))) == 0x3ecccccd)
+    ck("f32(0.1f/0.3f) = 3eaaaaaa", float32_bits(float32(float32(0.1) / float32(0.3))) == 0x3eaaaaaa)
+    ck("累加 10 次 0.2f 于 0.1f = 40066667", float32_bits(float32(accumulate(0.1, 0.2, 10))) == 0x40066667)
+    # 「每步 f32 收口」为什么必须显式：1.0f 每次 +1e-8f，float32 累加**永远停在 1.0**
+    #   （1e-8 相对 1.0 小于半个 ulp ⇒ 每步都被舍回）；而在 float64 里累加、最后只窄化
+    #   一次 ⇒ 1.00001（位模式 3f800054）。两条都是「Go 的 float32 循环」与「float64 冒充」
+    #   的**分岔实证**（Go 1.26.6 实测值）。
+    ck("float32 逐步累加 1.0+1000×1e-8f 停在 1.0（3f800000）",
+       float32_bits(accumulate(1.0, 1.0e-8, 1000)) == 0x3f800000)
+    ck("float64 累加后只窄化一次 ⇒ 1.00001（3f800054）——两者**不同**",
+       float32_bits(float32(1.0 + 1000.0 * 1.0e-8)) == 0x3f800054)
+    # append_file_opt（缺陷 115）：Result 通道 + 不杀进程
+    if exists("/tmp/m143_opt_probe.txt"):
+        remove("/tmp/m143_opt_probe.txt")
+    ck("append_file_opt 成功 → Ok(null)", append_file_opt("/tmp/m143_opt_probe.txt", "a").is_ok())
+    ck("append_file_opt 追加语义（第二次调用后内容为 aa）",
+       append_file_opt("/tmp/m143_opt_probe.txt", "a").is_ok() and read_file("/tmp/m143_opt_probe.txt") == "aa")
+    ck("append_file_opt 失败 → Err（**不杀进程**）", append_file_opt("/no_such_dir_zz/m143.txt", "x").is_err())
+    ck("append_file_opt 失败文案含 errno",
+       append_file_opt("/no_such_dir_zz/m143.txt", "x").err() == "io: 追加写入失败 /no_such_dir_zz/m143.txt: No such file or directory (os error 2)")
+    if exists("/tmp/m143_opt_probe.txt"):
+        remove("/tmp/m143_opt_probe.txt")
+
+    print("")
+    print("M143_ASSERT: " + str(P) + "P/" + str(F) + "F")
+
+# accumulate(a, b, n) —— float32 逐步累加（每步收口）
+def accumulate(a, b, n):
+    var acc = float32(a)
+    var i = 0
+    while i < n:
+        acc = float32(acc + b)
+        i += 1
+    return acc
