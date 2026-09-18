@@ -1,0 +1,199 @@
+# M146 门（PuXian 侧）—— float64 位模式族（float64_bits / bits_to_float64）
+# ---------------------------------------------------------------
+# 与 examples/m146_float64_bits/truth/main.go（**Go 本尊**：math.Float64bits /
+# Float64frombits / encoding/json）**逐字节**对拍同一份 corpus.txt。
+#
+# 输出（前 NTRUTH 行，与 Go 侧同格式）：
+#     <tag>|<输入>|<bits16hex>|<json文本或 !err>|<类别>
+# 之后才是自断言行（M146_ASSERT: nP/mF）—— verify.sh 只 diff 前 NTRUTH 行。
+#
+# 为什么要这个门：M143 补了 float32 的位模式**对偶**，64 位的一直缺失 ⇒
+#   · 读不出 float64 的位模式（跨语言对拍 float64 时没有无损指纹）；
+#   · **造不出** NaN / ±Inf / 非规格化数（只能靠十进制文本近似，且 −0.0 / NaN 根本写不出）。
+#   本门把「64 位模式全域」与 Go 逐位对齐，并把 位模式→数→位模式 的**往返**钉死。
+
+import std.strings
+
+const M6_MAXF = 1.7976931348623157e308
+const M6_SMALL = 2.2250738585072014e-308
+
+var m6_pass = 0
+var m6_fail = 0
+
+def m6_ck(name, cond):
+    if cond:
+        m6_pass = m6_pass + 1
+        print("PASS " + name)
+    else:
+        m6_fail = m6_fail + 1
+        print("FAIL " + name)
+
+# m6_class(f) —— 与 Go 侧 classOf 同源：zero / -zero / sub / fin / +inf / -inf / nan
+#   ⚠️ Zero 的符号只能从**位模式**读（`f == 0.0` 对 ±0 都为真；语言里没有 Signbit）。
+#      这正是「缺 float64_bits 就没法表达」的一处实证。
+def m6_class(f):
+    if f != f:
+        return "nan"
+    if f > M6_MAXF:
+        return "+inf"
+    if f < (0.0 - M6_MAXF):
+        return "-inf"
+    if f == 0.0:
+        if float64_bits(f) < 0:
+            return "-zero"
+        return "zero"
+    if abs(f) < M6_SMALL:
+        return "sub"
+    return "fin"
+
+# m6_hex16(u) —— 低 64 位的十六进制（int_to_hex 是「取低 width*4 位」，
+#   对 ≥2^63 的位模式（int64 补码负值）同样给出正确的 64 位文本）。
+def m6_hex16(u):
+    return int_to_hex(u, 16)
+
+# m6_parse_bits(s) —— 把 16 位十六进制**文本**还原成 int64 承载的位模式。
+#   ⚠️ 不能直接用 hex_to_int(16 位)：>2^63 的位模式会**溢出返回 null**
+#      （实测 `hex_to_int("fff0000000000000") == null`）⇒ 拆高低 32 位再拼，
+#      拼合时的 int64 溢出正是我们要的**补码回绕**（与 `uint32(x)` 的取模口径同族）。
+def m6_parse_bits(s):
+    var hi = hex_to_int(s[0:8])
+    var lo = hex_to_int(s[8:16])
+    return hi * 4294967296 + lo
+
+def m6_line(tag, txt):
+    var f = 0.0
+    if tag == "v":
+        f = float(txt)
+    elif tag == "i":
+        f = float(int(txt))
+    else:
+        f = bits_to_float64(m6_parse_bits(txt))
+    var bits = float64_bits(f)
+    var jt = json_num_str(f, 64)
+    if jt == null:
+        jt = "!err"
+    print(tag + "|" + txt + "|" + m6_hex16(bits) + "|" + jt + "|" + m6_class(f))
+    return [bits, f]
+
+def main():
+    var text = read_file("corpus.txt")
+    var lines = split(text, "\n")
+    var n_corpus = 0
+    var n_rt_bad = 0
+    var n_nan = 0
+    var n_inf = 0
+    var n_sub = 0
+    var n_negzero = 0
+    for line in lines:
+        if len(line) == 0:
+            continue
+        var tag = line[0:1]
+        var txt = line[2:]
+        var r = m6_line(tag, txt)
+        n_corpus = n_corpus + 1
+        # 位模式**往返**：数 → 位模式 → 数 → 位模式 必须逐位相同（NaN 也在内）
+        var back = float64_bits(bits_to_float64(int(r[0])))
+        if back != int(r[0]):
+            n_rt_bad = n_rt_bad + 1
+        var k = m6_class(float(r[1]))
+        if k == "nan":
+            n_nan = n_nan + 1
+        elif k == "sub":
+            n_sub = n_sub + 1
+        elif k == "-zero":
+            n_negzero = n_negzero + 1
+        elif k == "+inf" or k == "-inf":
+            n_inf = n_inf + 1
+    print("M146_ASSERT-BEGIN")
+    m6_ck("A1 语料非空（>=500 行）", n_corpus >= 500)
+    m6_ck("A2 位模式往返零失败（含 NaN/±Inf/非规格化）", n_rt_bad == 0)
+    # 口岸值：位模式文本必须与 IEEE754 定义一致
+    m6_ck("A3 float64_bits(1.0) == 3ff0000000000000",
+          m6_hex16(float64_bits(1.0)) == "3ff0000000000000")
+    m6_ck("A4 float64_bits(0.1) == 3fb999999999999a",
+          m6_hex16(float64_bits(0.1)) == "3fb999999999999a")
+    m6_ck("A5 float64_bits(-1.0) == bff0000000000000",
+          m6_hex16(float64_bits(0 - 1.0)) == "bff0000000000000")
+    m6_ck("A6 float64_bits(2.0) == 4000000000000000",
+          m6_hex16(float64_bits(2.0)) == "4000000000000000")
+    # bits_to_float64：±0 与符号位
+    var pz = bits_to_float64(0)
+    var nz = bits_to_float64(0 - 9223372036854775807 - 1)
+    m6_ck("A7 +0 的位模式为 0（含符号位为 0）", float64_bits(pz) == 0)
+    m6_ck("A8 −0 的位模式为 8000000000000000（**符号位可读**）",
+          m6_hex16(float64_bits(nz)) == "8000000000000000")
+    m6_ck("A9 −0 与 +0 的 == 相等（IEEE 语义）", nz == pz)
+    m6_ck("A10 −0 与 +0 的位模式**不同**（== 判不出，只有位模式能）",
+          float64_bits(nz) != float64_bits(pz))
+    m6_ck("A11 str(−0) 保留负号", str(nz) == "-0.0")
+    m6_ck("A12 −0 是零（类别 -zero）", m6_class(nz) == "-zero")
+    # 非有限值：只能由位模式造出来
+    var pinf = bits_to_float64(9218868437227405312)      # 0x7ff0000000000000
+    var ninf = bits_to_float64(0 - 4503599627370496)     # 0xfff0000000000000
+    m6_ck("A13 +Inf 位模式往返", m6_hex16(float64_bits(pinf)) == "7ff0000000000000")
+    m6_ck("A14 −Inf 位模式往返", m6_hex16(float64_bits(ninf)) == "fff0000000000000")
+    m6_ck("A15 +Inf 类别 +inf", m6_class(pinf) == "+inf")
+    m6_ck("A16 −Inf 类别 -inf", m6_class(ninf) == "-inf")
+    m6_ck("A17 +Inf == +Inf 为真", pinf == pinf)
+    m6_ck("A18 −Inf < 最大有限值", ninf < (0.0 - M6_MAXF))
+    var qnan = bits_to_float64(9221120237041090560)      # 0x7ff8000000000000
+    m6_ck("A19 NaN 位模式往返", m6_hex16(float64_bits(qnan)) == "7ff8000000000000")
+    m6_ck("A20 NaN != 自身（这是 NaN 的判据）", qnan != qnan)
+    m6_ck("A21 NaN 类别 nan", m6_class(qnan) == "nan")
+    m6_ck("A22 NaN 的 JSON 文本无表示（json_num_str → null）", json_num_str(qnan, 64) == null)
+    # 非规格化数：十进制文本写起来要靠猜，位模式是唯一直给
+    var sub_min = bits_to_float64(1)                     # 0x0000000000000001 = 4.9e-324
+    m6_ck("A23 最小非规格化数位模式", m6_hex16(float64_bits(sub_min)) == "0000000000000001")
+    m6_ck("A24 最小非规格化数类别 sub", m6_class(sub_min) == "sub")
+    m6_ck("A25 最小非规格化数 ≠ 0", sub_min != 0.0)
+    m6_ck("A26 最小规格化数 0010000000000000（类别 fin）",
+          m6_hex16(float64_bits(bits_to_float64(4503599627370496))) == "0010000000000000")
+    # int64 承载：≥2^63 为负值，但 int_to_hex 仍给出 64 位补码文本
+    m6_ck("A27 ≥2^63 的位模式以负值承载", float64_bits(ninf) < 0)
+    m6_ck("A28 int_to_hex(负位模式, 16) 仍是 16 位十六进制",
+          len(m6_hex16(float64_bits(ninf))) == 16)
+    # json_num_str 的 64 位口径（Go encoding/json）：与 32 位文本不同
+    m6_ck("A29 0.1 的 64 位文本（Go JSON）", json_num_str(0.1, 64) == "0.1")
+    m6_ck("A30 1/3 的 64 位文本（17 位有效数字）",
+          json_num_str(0.3333333333333333, 64) == "0.3333333333333333")
+    m6_ck("A31 1e300 的 64 位文本（指数形式）", json_num_str(1e300, 64) == "1e+300")
+    m6_ck("A32 2^53 的 64 位文本", json_num_str(9007199254740992.0, 64) == "9007199254740992")
+    m6_ck("A33 float64_bits 与 float32_bits 是**不同**的族（1.0 的 32 位是 3f800000）",
+          float32_bits(1.0) == 1065353216)
+    m6_ck("A34 语料覆盖非有限值/非规格化/−0（nan>=1, inf>=2, sub>=1, -zero>=1）",
+          n_nan >= 1 and n_inf >= 2 and n_sub >= 1 and n_negzero >= 1)
+    # ── 缺陷 126：NaN 的比较语义（IEEE754 / Go 四路皆假，只有 != 为真）──
+    m6_ck("A35 NaN == NaN 为假", (qnan == qnan) == false)
+    m6_ck("A36 NaN != NaN 为真（Go/IEEE；修前为假 —— 缺陷 126）", (qnan != qnan) == true)
+    m6_ck("A37 NaN < 1.0 为假", (qnan < 1.0) == false)
+    m6_ck("A38 NaN <= 1.0 为假（修前为真 —— 缺陷 126）", (qnan <= 1.0) == false)
+    m6_ck("A39 NaN > 1.0 为假", (qnan > 1.0) == false)
+    m6_ck("A40 NaN >= 1.0 为假（修前为真 —— 缺陷 126）", (qnan >= 1.0) == false)
+    m6_ck("A41 1.0 < NaN 为假（交换侧同样）", (1.0 < qnan) == false)
+    m6_ck("A42 1.0 >= NaN 为假（交换侧同样）", (1.0 >= qnan) == false)
+    m6_ck("A43 NaN == 1.0 为假 且 NaN != 1.0 为真",
+          (qnan == 1.0) == false and (qnan != 1.0) == true)
+    m6_ck("A44 含 NaN 的 list 与自身**不等**（对齐 Go reflect.DeepEqual）",
+          ([qnan] == [qnan]) == false)
+    m6_ck("A45 含 NaN 的 dict 与自身**不等**（同上）",
+          ({"k": qnan} == {"k": qnan}) == false)
+    m6_ck("A46 不含 NaN 的等值容器仍相等（回归：不能顺手改坏）",
+          ([1.0, 2.0] == [1.0, 2.0]) and ({"k": 1.5} == {"k": 1.5}))
+    # ±Inf 的比较是**正常的**（只有 NaN 不可比）
+    m6_ck("A47 +Inf > 最大有限值 且 +Inf == +Inf", pinf > M6_MAXF and pinf == pinf)
+    m6_ck("A48 −Inf < 最小有限值 且 −Inf != +Inf",
+          ninf < (0.0 - M6_MAXF) and ninf != pinf)
+    m6_ck("A49 +Inf >= +Inf 为真（Inf 可比）", pinf >= pinf)
+    # INT-INT 仍是**精确整数**比较（不绕 double）：>2^53 的大整数不许丢精度
+    m6_ck("A50 9007199254740993 == 9007199254740992 为假（>2^53 精确性）",
+          (9007199254740993 == 9007199254740992) == false)
+    m6_ck("A51 9007199254740993 != 9007199254740992 为真",
+          (9007199254740993 != 9007199254740992) == true)
+    m6_ck("A52 9007199254740993 > 9007199254740992 为真",
+          (9007199254740993 > 9007199254740992) == true)
+    # 跨类型数值比较（1 == 1.0）语义未变
+    m6_ck("A53 1 == 1.0 且 1.0 <= 1 且 1 >= 1.0",
+          (1 == 1.0) and (1.0 <= 1) and (1 >= 1.0))
+    m6_ck("A54 1.5 > 1 且 1 < 1.5 且 2 != 2.0 为假（等值跨类型）",
+          (1.5 > 1) and (1 < 1.5) and ((2 != 2.0) == false))
+    print("M146_ASSERT: " + str(m6_pass) + "P/" + str(m6_fail) + "F")

@@ -99,6 +99,7 @@ run m144_http_bigbody bash examples/m144_http_bigbody/verify.sh
 #   （VM / C / 解释轨 pxi）断言集相同 + 输出逐字节一致 + 环上 JSON 受控报错 + 2 道负控。
 #   **不依赖任何外部服务** ⇒ 本机全门与 CI 都跑。
 run m145_cycle_safe bash examples/m145_cycle_safe/verify.sh
+run m146_float64_bits bash examples/m146_float64_bits/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们
