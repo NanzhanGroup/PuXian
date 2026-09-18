@@ -18,25 +18,25 @@ sleep(1200)
 # ============ 1. Session：创建 + Set-Cookie 注入 ============
 rr = http_request("http://127.0.0.1:18085/", "GET")
 print("index status:", rr["status"])
-assert rr["status"] == 200
+assert(rr["status"] == 200)
 h = rr["headers"]
 sc = str(h["Set-Cookie"])
 print("set-cookie:", sc)
-assert contains(sc, "pxsid=")
+assert(contains(sc, "pxsid="))
 parts = sc.split("pxsid=")
 sid = parts[1].split(";")[0]
 
 # ============ 2. 无 cookie → 新会话（got=null） ============
 r2 = http_get("http://127.0.0.1:18085/check.px")
 print("check no-cookie:", r2)
-assert contains(r2, "got=null")
+assert(contains(r2, "got=null"))
 
 # ============ 3. 基础认证：无凭据 → 401 ============
 r3 = http_request("http://127.0.0.1:18085/auth.px", "GET")
 print("auth status:", r3["status"])
-assert r3["status"] == 401
+assert(r3["status"] == 401)
 h3 = r3["headers"]
-assert contains(str(h3["WWW-Authenticate"]), "Basic realm")
+assert(contains(str(h3["WWW-Authenticate"]), "Basic realm"))
 print("auth assert ok")
 
 # ============ 4. 请求体大小限制：>1024 → 413 ============
@@ -47,13 +47,13 @@ while i < 2000:
     i = i + 1
 r4 = http_request("http://127.0.0.1:18085/", "POST", big)
 print("oversize status:", r4["status"])
-assert r4["status"] == 413
+assert(r4["status"] == 413)
 
 # ============ 5. 优雅关闭（SIGTERM → 停止 accept + 等在途后退出） ============
 os_kill(p, 15)
 sleep(800)
 rc = os_wait(p)
 print("server exit code after TERM:", rc)
-assert rc == 0
+assert(rc == 0)
 
 print("M27A_WEBPROD_OK")

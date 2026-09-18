@@ -37,40 +37,40 @@ def main():
 
     # ---- SSE 客户端 ----
     conn = sse_connect("http://127.0.0.1:" + str(port) + "/events")
-    assert conn != null
+    assert(conn != null)
     ev1 = sse_read(conn)
-    assert ev1 != null
-    assert ev1["event"] == "hello"
-    assert ev1["data"] == "world"
+    assert(ev1 != null)
+    assert(ev1["event"] == "hello")
+    assert(ev1["data"] == "world")
     ev2 = sse_read(conn)
-    assert ev2 != null
-    assert ev2["data"] == "line1\nline2"
+    assert(ev2 != null)
+    assert(ev2["data"] == "line1\nline2")
     ev3 = sse_read(conn)
-    assert ev3 != null
-    assert ev3["data"] == "plain"
-    assert ev3["event"] == "message"
+    assert(ev3 != null)
+    assert(ev3["data"] == "plain")
+    assert(ev3["event"] == "message")
     # 服务器 600ms 后关闭，连接关闭后 sse_read 返回 null
     sleep(700)
     ev4 = sse_read(conn)
-    assert ev4 == null
+    assert(ev4 == null)
     ok_close = sse_close(conn)
     # 已断开可能返回 false；此处不断言
     print("SSE-CLIENT OK")
 
     # ---- WebSocket 心跳/超时 ----
     c = ws_connect("127.0.0.1", port2, "/")
-    assert c != null
+    assert(c != null)
     ws_send(c, "hello")
     m = ws_recv(c, 2000)
-    assert m == "pong:hello"
+    assert(m == "pong:hello")
     ok = ws_ping(c)
-    assert ok == true
+    assert(ok == true)
     # 心跳后服务器仍工作；无消息时超时返回 null
     m2 = ws_recv(c, 200)
-    assert m2 == null
+    assert(m2 == null)
     ws_send(c, "again")
     m3 = ws_recv(c, 2000)
-    assert m3 == "pong:again"
+    assert(m3 == "pong:again")
     ws_send(c, "quit")
     ws_close(c)
     print("WS-HEARTBEAT OK")

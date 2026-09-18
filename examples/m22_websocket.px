@@ -18,16 +18,16 @@ if conn == null:
     print("connect failed")
     exit(1)
 ws_send(conn, "hello ws")
-assert ws_recv(conn) == "echo:hello ws"
+assert(ws_recv(conn) == "echo:hello ws")
 ws_send(conn, "中文消息测试")
-assert ws_recv(conn) == "echo:中文消息测试"
+assert(ws_recv(conn) == "echo:中文消息测试")
 # 大消息（>125 字节走 16 位扩展长度）
 big = ""
 for i in range(0, 1000):
     big = big + "x"
 ws_send(conn, big)
 r = ws_recv(conn)
-assert len(r) == 1005 and r == "echo:" + big
+assert(len(r) == 1005 and r == "echo:" + big)
 ws_close(conn)
 sleep(200)
 print("M22 WEBSOCKET TESTS PASSED")
