@@ -1,0 +1,76 @@
+## go_strings.px — **字节语义**字符串工具（L1 stdlib）
+##
+## 建立背景（qg-issue 87 缺陷 45）：api-server / token-cache PuXian 化时照出
+## **PuXian 的字符串索引/切片/`len()` 是「字符（rune）」语义**：
+##   len("中文ab") == 4        （Go len() == 8）
+##   "中文ab"[0:3] == "中文a"  （Go "中文ab"[0:3] == 6 字节 = "中" + 半个"文"，其实是 "中"）
+##   index_of("中x","x") == 1  （Go strings.Index == 3）
+## 而 Go 的 `len(s)` / `s[i:j]` / `strings.Index` / `s[:n]` 全是**字节**语义。
+## ⇒ 移植 Go 代码时，凡涉及长度/切片的表达式在**非 ASCII 输入上静默分叉**
+##   （无编译期警告、无运行期报错，只是结果不同）——这是移植保真最危险的一类。
+##
+## 典型受害者：`truncate(s, n)`（Go `s[:n]`）、`strings.Index` 定位后切片、
+##   `len(s) > N` 的日志/字段长度校验、按字节截断的协议字段。
+##
+## 本模块提供**字节语义**等价物（对照 Go 同名 API），移植时凡 Go 用的是 byte 语义
+## 就改调这里的函数；PuXian 原生语义（字符）适合"给人看的"截断。
+##
+## 实现：走 `bytes(s)` / `bytes_slice` / `bytes_len` / `bytes_find`。
+## ⚠️ 已知边界（缺陷 28）：`bytes` 底层是带长的字节串，但 `bytes_to_str` 出的 `str`
+##   不能承载内嵌 NUL ⇒ 对**含 \0 的输入**本模块不适用（协议字段本就该走 bytes 直传）。
+import std.strings
+# byte_len(s) → 字节长度（= Go `len(s)`）
+def byte_len(s):
+    return bytes_len(bytes(s))
+# go_slice(s, i, j) → 字节切片（= Go `s[i:j]`，j 排他）
+def go_slice(s, i, j):
+    var b = bytes(s)
+    var n = bytes_len(b)
+    var a = i
+    var e = j
+    if a < 0:
+        a = 0
+    if e > n:
+        e = n
+    if a >= e:
+        return ""
+    return bytes_to_str(bytes_slice(b, a, e))
+# go_prefix(s, n) → 前 n **字节**（Go `s[:n]`；n 超长则原样）
+def go_prefix(s, n):
+    return go_slice(s, 0, n)
+# go_truncate(s, n) → 对齐 Go api-server/webhook.go 的 truncate()：
+#   `if len(s) <= n { return s }; return s[:n] + "…（已截断）"`
+def go_truncate(s, n):
+    if byte_len(s) <= n:
+        return s
+    return go_prefix(s, n) + "…（已截断）"
+# go_index(s, sub) → sub 在 s 中的**字节**下标（= Go `strings.Index`）；无命中 -1
+def go_index(s, sub):
+    if len(sub) == 0:
+        return 0
+    return bytes_find(bytes(s), bytes(sub))
+# go_parse_i64(s) → Ok(int) | Err("")（= Go `strconv.ParseInt(s, 10, 64)` 的成功/失败）
+# 建立背景（qg-issue 87 缺陷 47 续）：`int(s)` 对畸形输入是**运行时错误**（500），
+# 与 Go「返回 err、调用方按零值处理」相反；而 parse_int_or 的哨兵值会被
+# 「合法但等于哨兵」的输入误判。故提供显式 Ok/Err 版本（与 read_file_opt 同族）。
+# 注意：不校验 int64 溢出（Go 会在溢出时返回 err；本机 64 位整型内部即 int64）。
+def go_parse_i64(s):
+    var t = trim(s)
+    if t == "":
+        return Err("")
+    var body = t
+    var neg = false
+    if t[0] == "-":
+        neg = true
+        body = t[1:len(t)]
+    elif t[0] == "+":
+        body = t[1:len(t)]
+    if body == "":
+        return Err("")
+    for ch in body:
+        if ch < "0" or ch > "9":
+            return Err("")
+    var v = int(body)
+    if neg:
+        v = 0 - v
+    return Ok(v)

@@ -1,0 +1,97 @@
+## path.px — 路径工具（L1 stdlib），POSIX 语义，对齐 Go `path/filepath` 的 Unix 行为
+##
+## 建立背景（qg-issue 87 缺陷 2）：api-server / token-cache PuXian 化时照出
+## **语言缺路径原语** —— `filepath.Join` / `filepath.Dir` / `filepath.Base` 在 native 表（313 项）
+## 里都没有，于是各项目**各自手搓**：
+##   supervisor/util.px:190 `dirname` · sup-prefix/util.px:190 `dirname`
+##   chat/px/sys.px:57 `dir_name` + :65 `base_name` · ws-install/fileutil.px:74/82 同名
+## 四处重复实现 = 语言级缺口，按「发现即修、不绕过」收进 stdlib。
+##
+## 关键语义：Go 的 `Join` 会**顺带 Clean**（`"cfg/../data"` → `"data"`），
+## 移植时若只做字符串拼接会得到 `"cfg/../data"` —— 路径仍然可用但**字符串不等**，
+## 凡把路径写进响应体/日志/数据库的比较都会漂移。此处严格对齐 Clean。
+import std.strings
+## path_clean(p) → 规范化：合并重复 `/`、消除 `.`、回溯 `..`；结果为空返回 "."。
+## 对齐 Go `filepath.Clean`（Unix）。
+def path_clean(p):
+    if p == "":
+        return "."
+    var abs = starts_with(p, "/")
+    var parts = split(p, "/")
+    var out = []
+    for part in parts:
+        if part == "" or part == ".":
+            continue
+        if part == "..":
+            if len(out) > 0 and out[len(out) - 1] != "..":
+                out = out[0:len(out) - 1]
+            elif abs:
+                continue
+            else:
+                out.append("..")
+        else:
+            out.append(part)
+    var res = join("/", out)
+    if abs:
+        res = "/" + res
+    if res == "":
+        res = "."
+    if abs and res == "/":
+        return "/"
+    return res
+## path_join_list(ps) → 以 `/` 连接并 Clean；空列表返回 ""。对齐 Go `filepath.Join(ps...)`。
+def path_join_list(ps):
+    var s = ""
+    for p in ps:
+        if p == "":
+            continue
+        if s == "":
+            s = p
+        else:
+            s = s + "/" + p
+    if s == "":
+        return ""
+    return path_clean(s)
+## path_join(a, b) → 两段连接（最常用形态）。
+def path_join(a, b):
+    return path_join_list([a, b])
+## path_join3(a, b, c) → 三段连接。
+def path_join3(a, b, c):
+    return path_join_list([a, b, c])
+## path_join4(a, b, c, d) → 四段连接（`filepath.Join(cfgDir, "..", "data", "chat")` 这类移植点）。
+def path_join4(a, b, c, d):
+    return path_join_list([a, b, c, d])
+## dir_name(p) → 目录部分，对齐 Go `filepath.Dir`（"/a/b"→"/a"、"b"→"."、"/"→"/"）。
+def dir_name(p):
+    var c = path_clean(p)
+    if c == "/":
+        return "/"
+    var i = last_index_of(c, "/")
+    if i < 0:
+        return "."
+    if i == 0:
+        return "/"
+    return c[0:i]
+## base_name(p) → 文件名部分，对齐 Go `filepath.Base`（""→"."、"/"→"/"、"/a/b/"→"b"）。
+def base_name(p):
+    if p == "":
+        return "."
+    var c = p
+    while len(c) > 1 and ends_with(c, "/"):
+        c = c[0:len(c) - 1]
+    if c == "/":
+        return "/"
+    var i = last_index_of(c, "/")
+    if i < 0:
+        return c
+    return c[i + 1:len(c)]
+## path_ext(p) → 扩展名（含点），无扩展名返回 ""，对齐 Go `filepath.Ext`。
+def path_ext(p):
+    var b = base_name(p)
+    var i = last_index_of(b, ".")
+    if i < 0:
+        return ""
+    return b[i:len(b)]
+## path_is_abs(p) → 是否绝对路径（POSIX：以 `/` 起）。
+def path_is_abs(p):
+    return starts_with(p, "/")

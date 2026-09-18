@@ -1,0 +1,355 @@
+# ═══════════════════════════════════════════════════════════════════════
+# stdlib/yamlx.px — Go `gopkg.in/yaml.v3` 兼容序列化（`yaml_stringify_go`）
+# ---------------------------------------------------------------------
+# 为什么需要它
+#   `yaml.px` 的 `yaml_stringify` 面向「本生态自洽」：缩进 2、双引号策略宽松。
+#   Go `yaml.Marshal` 的输出**逐字节不同**：缩进 4、标量四种风格（plain /
+#   single / double / literal）各有严格判定表、空容器 inline、块标量带
+#   indent/chomp 提示符……只要目标是「写盘产物与 Go 逐字节一致」（例如把 Go
+#   服务的配置文件读写端点移植过来），就必须用本模块。
+#
+# 分工
+#   · `stdlib/yamlx_style.px` —— 标量语义层（字符分类 / 类型解析 / 风格判定）
+#   · 本文件 —— 引号与块标量排版、Go `strconv.FormatFloat(f,'g',-1,64)` 等价、
+#     容器递归（缩进规则见下）与公共入口
+#
+# 用法
+#   yaml_stringify_go(v)                        # dict 按**插入序**（对齐 Go 结构体）
+#   yaml_stringify_go(v, {"sort_keys": true})   # dict **按键排序**（对齐 Go map）
+#
+# 缩进规则（复刻 yaml.v3 `yaml_emitter_increase_indent`）
+#   映射的值 → `4*floor((ind+4)/4)`；块序列项 → `ind+2`（跳过 "- " 两列）。
+#   因此「映射的值」与「序列项」的缩进**不同**，这也是 Go 输出里
+#   `a:\n    b: 1` 与 `- a: 1\n  b: 2` 并存的原因。
+#
+# 已知不覆盖（如实记录，不静默）
+#   · **str 不能承载内嵌 NUL** —— 本生态 `str` 底层是 C 字符串，`"\u{0000}ab"`
+#     一旦进入字符串就截断（`len` 为 0）。Go 会输出 `"\0ab"`。凡文本里出现
+#     NUL 的场景（二进制）必须走 `bytes`，不能走本模块。
+#   · Go `[]byte` → `!!binary` base64（本生态用 bytes，语义不同，未做）
+#   · 非法 UTF-8（Go 走 base64+`!!binary` 分支）
+#   · Go map 的**数字键**排序（yaml.v3 有专门的 keyList 比较器）
+#
+# 验证：225 例逐字节对拍（含嵌套/空容器/literal 收尾/单引号/时间戳/emoji/
+# 结构体声明序），全绿。对拍器 `tools/diff_yaml_go.py`。
+# ═══════════════════════════════════════════════════════════════════════
+import std.strings
+import std.yamlx_style
+# ── 双引号转义（对齐 yaml_emitter_write_double_quoted_scalar） ──
+def ylx_hex(cp, width):
+    let digits = "0123456789ABCDEF"
+    var out = ""
+    var k = width - 1
+    while k >= 0:
+        out += digits[int(cp / pow(16, k)) % 16]
+        k -= 1
+    return out
+def ylx_dq(s):
+    var out = "\""
+    var i = 0
+    while i < len(s):
+        let c = s[i]
+        var esc = ""
+        if not ylx_is_printable(c) or ylx_is_break(c) or c == "\"" or c == "\\":
+            if c == "\u{0000}":
+                esc = "\\0"
+            elif c == "\u{0007}":
+                esc = "\\a"
+            elif c == "\u{0008}":
+                esc = "\\b"
+            elif c == "\t":
+                esc = "\\t"
+            elif c == "\n":
+                esc = "\\n"
+            elif c == "\u{000b}":
+                esc = "\\v"
+            elif c == "\u{000c}":
+                esc = "\\f"
+            elif c == "\r":
+                esc = "\\r"
+            elif c == "\u{001b}":
+                esc = "\\e"
+            elif c == "\u{0085}":
+                esc = "\\N"
+            elif c == "\u{00a0}":
+                esc = "\\_"
+            elif c == "\u{2028}":
+                esc = "\\L"
+            elif c == "\u{2029}":
+                esc = "\\P"
+            elif c == "\"":
+                esc = "\\\""
+            elif c == "\\":
+                esc = "\\\\"
+            else:
+                let bl = ylx_byte_len(c)
+                if bl == 4:
+                    esc = "\\U" + ylx_hex(ylx_cp(c), 8)
+                elif bl == 3:
+                    esc = "\\u" + ylx_hex(ylx_cp(c), 4)
+                else:
+                    esc = "\\x" + ylx_hex(ylx_cp(c), 2)
+        if esc == "":
+            out += c
+        else:
+            out += esc
+        i += 1
+    return out + "\""
+# 单 rune 字符 → 码点（native 表无 ord/chr，按 UTF-8 手解；s[i] 本就是 rune）
+def ylx_cp(c):
+    let b = bytes(c)
+    let n = bytes_len(b)
+    var v = 0
+    if n == 1:
+        return bytes_get(b, 0)
+    if n == 2:
+        v = bytes_get(b, 0) % 32
+    elif n == 3:
+        v = bytes_get(b, 0) % 16
+    else:
+        v = bytes_get(b, 0) % 8
+    var i = 1
+    while i < n:
+        v = v * 64 + bytes_get(b, i) % 64
+        i += 1
+    return v
+def ylx_sq(s, ind):
+    var out = "'"
+    var at_line_start = false
+    var i = 0
+    while i < len(s):
+        let c = s[i]
+        if c == "'":
+            out += "''"
+            at_line_start = false
+        elif ylx_is_break(c):
+            out += c
+            at_line_start = true
+        else:
+            if at_line_start:
+                out += ylx_pad(ind)
+                at_line_start = false
+            out += c
+        i += 1
+    return out + "'"
+# ── 块标量（literal）→ 文本（对齐 yaml_emitter_write_literal_scalar） ──
+# 头 = `|` + indent 提示(4, 首字符是空格/换行时) + chomp 提示(- 无尾换行 / + 全换行或≥2 尾换行)
+# 正文：逐字符搬运；遇到换行就落一个真实换行（空行**不缩进**），
+#       换行后的首个非换行字符前补缩进（write_indent：不在行首才补换行）
+def ylx_literal_text(value, ind):
+    let n = len(value)
+    var hdr = "|"
+    if n > 0 and (value[0] == " " or ylx_is_break(value[0])):
+        hdr += "4"
+    if n > 0:
+        if ylx_is_break(value[n - 1]):
+            if n == 1 or ylx_is_break(value[n - 2]):
+                hdr += "+"
+        else:
+            hdr += "-"
+    var out = hdr
+    var indention = false
+    var breaks = true
+    var i = 0
+    while i < n:
+        let c = value[i]
+        if ylx_is_break(c):
+            out += "\n"
+            indention = true
+            breaks = true
+        else:
+            if breaks:
+                if not indention:
+                    out += "\n"
+                out += ylx_pad(ind)
+                indention = true
+            out += c
+            indention = false
+            breaks = false
+        i += 1
+    return out
+# ── Go strconv.FormatFloat(f,'g',-1,64) 等价 ──
+# 本生态 `str(float)` 的**有效数字正确**（最短往返），但整数值/大指数时的**形式**
+# 与 Go 不同（Go 3e8 → "3e+08"，本生态 "300000000.0"）。故取 str() 后解析出
+# (digits, dp) 再按 Go 规则重排：exp = dp-1，exp < -4 或 ≥ 6 用 %e，否则用 %f。
+def ylx_float_str(f):
+    if f != f:
+        return ".nan"
+    if f > 1.7976931348623157e308:
+        return ".inf"
+    if f < -1.7976931348623157e308:
+        return "-.inf"
+    let s = str(f)
+    var neg = false
+    var body = s
+    if starts_with(s, "-"):
+        neg = true
+        body = s[1:len(s)]
+    var exp = 0
+    let epos = index_of(body, "e")
+    if epos >= 0:
+        exp = int(body[epos + 1:len(body)])
+        body = body[0:epos]
+    var intp = body
+    var frac = ""
+    let dpos = index_of(body, ".")
+    if dpos >= 0:
+        intp = body[0:dpos]
+        frac = body[dpos + 1:len(body)]
+    var digits = intp + frac
+    var dp = len(intp) + exp
+    var k = 0
+    while k < len(digits) and digits[k] == "0":
+        k += 1
+    if k > 0:
+        digits = digits[k:len(digits)]
+        dp -= k
+    if len(digits) == 0:
+        return "0"
+    let nd = len(digits)
+    let ex = dp - 1
+    var out = ""
+    if ex < -4 or ex >= 6:
+        out = digits[0:1]
+        if nd > 1:
+            out += "." + digits[1:nd]
+        var ae = ex
+        var esign = "+"
+        if ae < 0:
+            esign = "-"
+            ae = -ae
+        var es = str(ae)
+        if len(es) < 2:
+            es = "0" + es
+        out += "e" + esign + es
+    else:
+        if dp <= 0:
+            out = "0." + ylx_pad(-dp) + digits
+        elif dp >= nd:
+            out = digits + ylx_pad(dp - nd)
+        else:
+            out = digits[0:dp] + "." + digits[dp:nd]
+    if neg:
+        return "-" + out
+    return out
+# ── 标量 → 文本块 ──
+# 块标量文本可能**内含换行且以换行收尾**；收尾换行只是行终止符，由 ylx_join 的
+# 「上一块已以换行收尾则不再补分隔换行」规则吸收（对齐 yaml.v3 里 write_indent
+# 见到 indention 就不再补换行）。
+def ylx_scalar_chunk(v, ind):
+    let t = type(v)
+    if t == "null":
+        return "null"
+    if t == "bool":
+        if v:
+            return "true"
+        return "false"
+    if t == "int":
+        return str(v)
+    if t == "float":
+        return ylx_float_str(v)
+    var s = str(v)
+    let st = ylx_style(s, false)
+    if st == "literal":
+        return ylx_literal_text(s, ind)
+    if st == "single":
+        return ylx_sq(s, ind)
+    if st == "double":
+        return ylx_dq(s)
+    return s
+def ylx_key_text(k):
+    var s = str(k)
+    if type(k) != "string":
+        return s
+    let st = ylx_style(s, true)
+    if st == "plain":
+        return s
+    if st == "single":
+        return ylx_sq(s, 0)
+    return ylx_dq(s)
+# ── 容器 → 文本块列表 ──
+# 每「块」= 一个映射条目 / 一个序列项（可含多行、可含收尾换行）。
+def ylx_join(chunks):
+    var out = ""
+    var i = 0
+    while i < len(chunks):
+        if i > 0 and not ends_with(out, "\n"):
+            out += "\n"
+        out += chunks[i]
+        i += 1
+    return out
+def ylx_dict_chunks(m, ind, inline_first, sortk):
+    var out = []
+    var keys = m.keys()
+    if sortk:
+        keys = sorted(keys)
+    var first = true
+    for k in keys:
+        let v = m[k]
+        let t = type(v)
+        var head = ""
+        if first and inline_first:
+            head = ""
+        else:
+            head = ylx_pad(ind)
+        first = false
+        head += ylx_key_text(k) + ":"
+        if t == "dict":
+            if len(v) == 0:
+                out.append(head + " {}")
+            else:
+                out.append(head + "\n" + ylx_join(ylx_dict_chunks(v, ylx_round4(ind), false, sortk)))
+        elif t == "list":
+            if len(v) == 0:
+                out.append(head + " []")
+            else:
+                out.append(head + "\n" + ylx_join(ylx_list_chunks(v, ylx_round4(ind), false, sortk)))
+        else:
+            out.append(head + " " + ylx_scalar_chunk(v, ylx_round4(ind)))
+    return out
+def ylx_list_chunks(items, ind, inline_first, sortk):
+    var out = []
+    var first = true
+    for item in items:
+        let t = type(item)
+        let ci = ind + 2
+        var head = ""
+        if first and inline_first:
+            head = ""
+        else:
+            head = ylx_pad(ind)
+        first = false
+        if t == "dict":
+            if len(item) == 0:
+                out.append(head + "- {}")
+            else:
+                out.append(head + "- " + ylx_join(ylx_dict_chunks(item, ci, true, sortk)))
+        elif t == "list":
+            if len(item) == 0:
+                out.append(head + "- []")
+            else:
+                out.append(head + "- " + ylx_join(ylx_list_chunks(item, ci, true, sortk)))
+        else:
+            out.append(head + "- " + ylx_scalar_chunk(item, ci))
+    return out
+# ── 公共入口 ──
+# value → YAML 文本（尾随换行对齐 Go yaml.Marshal）
+def yaml_stringify_go(value, opts = {}):
+    var sortk = false
+    if type(opts) == "dict" and opts.has("sort_keys"):
+        sortk = opts["sort_keys"]
+    let t = type(value)
+    var out = ""
+    if t == "dict":
+        if len(value) == 0:
+            return "{}\n"
+        out = ylx_join(ylx_dict_chunks(value, 0, false, sortk))
+    elif t == "list":
+        if len(value) == 0:
+            return "[]\n"
+        out = ylx_join(ylx_list_chunks(value, 0, false, sortk))
+    else:
+        out = ylx_scalar_chunk(value, 4)
+    if not ends_with(out, "\n"):
+        out += "\n"
+    return out

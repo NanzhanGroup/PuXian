@@ -1,0 +1,43 @@
+## jsonx.px — JSON 序列化补齐（L1 stdlib）
+##
+## 建立背景（qg-issue 87 缺陷 11）：Go 侧 `json.MarshalIndent(v, "", "  ")`（缩进美化）
+## 在 native 表（313 项）里**没有等价物** —— 只有紧凑的 `json_stringify`。
+## api-server 移植 agents.go（`external_agents.json` 落盘用 MarshalIndent）当场踩到：
+## 紧凑写盘再读回**语义等价但字节不同**，凡对拍/人读/版本库 diff 都会漂移。
+## 按「发现即修、不绕过」收进 stdlib。
+##
+## 语义对齐 Go `encoding/json` 的 `MarshalIndent`：
+##   · 每层缩进一个 `ind` 单位（Go 的 "" + "  " ⇒ ind = "  "）；
+##   · 空 dict/空 list 仍写 `{}` / `[]`（不换行展开）；
+##   · 标量与键名走 **`json_stringify_go`**（M129 起；对齐 Go 的 map 键递归排序 +
+##     `SetEscapeHTML(true)` 的 `<`/`>`/`&` → `\u003c` 等 + 控制字符 `\u00XX` + 最短往返浮点）。
+##     ⚠️ 修正（qg-issue 87 缺陷 16）：本文件旧注写"`json_stringify` 已与 Go 一致"是**错的** ——
+##     实测 `json_stringify("<")` 长度 3（未转义），且键序不排序 ⇒ 直接用 `json_stringify`
+##     落盘与 Go 的 `MarshalIndent` **逐字节不同**。
+import std.strings
+## json_pretty(v[, ind]) → 缩进美化后的 JSON 文本（ind 缺省两个空格）。
+def json_pretty(v):
+    return json_pretty_indent(v, "  ")
+def json_pretty_indent(v, ind):
+    return jp_walk(v, ind, 0)
+# 内部递归；depth 为当前层深度（决定收尾缩进量）。
+def jp_walk(v, ind, depth):
+    var t = type(v)
+    if t == "dict":
+        var ks = v.keys()
+        if len(ks) == 0:
+            return "{}"
+        var pad = repeat_str(ind, depth + 1)
+        var parts = []
+        for k in ks:
+            parts.append(json_stringify_go(str(k)) + ": " + jp_walk(v[k], ind, depth + 1))
+        return "{\n" + pad + join(",\n" + pad, parts) + "\n" + repeat_str(ind, depth) + "}"
+    if t == "list":
+        if len(v) == 0:
+            return "[]"
+        var pad2 = repeat_str(ind, depth + 1)
+        var parts2 = []
+        for x in v:
+            parts2.append(jp_walk(x, ind, depth + 1))
+        return "[\n" + pad2 + join(",\n" + pad2, parts2) + "\n" + repeat_str(ind, depth) + "]"
+    return json_stringify_go(v)

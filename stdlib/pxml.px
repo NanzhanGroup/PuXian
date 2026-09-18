@@ -21,7 +21,7 @@
 # 语法 EBNF 见 docs/CONFIG-FORMAT.md §5.2
 # ============================================================
 # ---- 工具 ----
-def px_nd():  # 空 dict（{} 字面量是 null，须经 json_parse）
+def px_nd():  # 空 dict（M129 起 {} 即空 dict；此处保留 json_parse 旧写法，行为一致）
     return json_parse("{}")
 def px_isdigit(c):
     return c >= "0" and c <= "9"
