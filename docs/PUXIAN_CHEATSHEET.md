@@ -785,3 +785,39 @@ set_timeout(fn (): print("once after 2s"), 2000)
       5 个"正例"全报 `env: 'x.px': No such file or directory` —— 而**负例**照样"通过"（因为报错）。
       教训：负例不能只看"有没有报错"，要 **grep 具体诊断片段**（否则门在自欺）。
     · 一次 `pkill -f <脚本名>` 又把自己那一行命令行匹配上了（第 10 轮同款）⇒ 用 `ps|grep "[x]"` 形态。
+100. **HTTP 客户端连接失败的成因分类（第 21 轮 · 缺陷 108，M140）**：`http_request` / `http_get` /
+    `http_post` / `s3_*` 的底层连接函数是同一个 `px_tcp_connect_timeout`。修前它的失败路径是
+    `freeaddrinfo(res); close(fd); return -1;` —— **`close()` 会覆盖 errno**，于是函数对
+    「域名解析失败 / socket 建不出来 / connect 被拒 / 网络不可达 / 无路由 / 被丢包超时」一律只回 -1，
+    语言层只剩一句 `net: 连接 <host>:<port> 失败`，**成因不可编程获取**。
+    现行为（失败文案即分类，`out_stage`/`out_errno`/`out_addr` 位参回给调用方）：
+
+    | 阶段 | 文案 | `out_errno` |
+    |---|---|---|
+    | 解析（getaddrinfo） | `net: 解析主机失败 <host> (eai=<码>)` | `EAI_*`（负码，如 `-2` = EAI_NONAME） |
+    | socket(2) | `net: 创建 socket 失败 <地址>:<端口> (<errno>)` | errno |
+    | connect(2) | `net: 连接 <地址>:<端口> 失败 (<errno>)` | errno（超时用 `ETIMEDOUT=110`） |
+    | TLS 握手 | `net: TLS 握手失败 (<mbedtls 码>)` | mbedtls 返回码 |
+
+    · 同轮把 `hints.ai_family` 由 `AF_INET` 改成 **`AF_UNSPEC`**（Go 的 `dial tcp` 是双栈）⇒
+      「仅 AAAA 的上游」能连上了；返回前逐个地址尝试，**顺序 = getaddrinfo 返回序，全部失败时
+      返回第一个地址的成因**（Go 的 `dialParallel`/`dialSerial` 也是给首选地址的错 ——
+      Go 1.26 实测：`localhost:P` 双栈皆拒时 Go 打 `dial tcp [::1]:P: connect: connection refused`）。
+    · 失败文案里的地址是**数字地址**（Go 亦然：给解析结果而非主机名；IPv6 加方括号）。
+      故 `http://localhost:1/` 的 Err 是 `... 连接 [::1]:1 失败 (111)` 而**不是** `localhost:1`。
+    · **URL 里的 IPv6 字面量**（`http://[::1]:8080/`）此前解析不出来（`hparse_url` 把 `[` 当主机名
+      起点、端口解析成 `atoi(":1]")` = 0）。现在 `hparse_url` / `px_http_once` /
+      `sse_cli_connect_slot` 三处都按方括号取主机（host 保留括号：Host 头与 Go 的 dial 文案都用
+      带括号形式），去括号后才交给 `getaddrinfo`。
+    · **`sse_connect_ex` 顺带对齐**：明文连接从「`gethostbyname`（IPv4-only）+ **无 connect 超时**
+      的阻塞 connect」改为同一个 `px_tcp_connect_timeout`（获得双栈 + 连接期超时 + 同一套 errno）。
+      它的 `stage` 枚举（1 参数/2 连接/3 发送/4 读头/5 状态码/6 CT/7 槽满）**新增 `8` = 域名解析**
+      —— `px_tcp_connect_timeout` 自己的 stage 码（1/2/3/4）**不能**直接透传（它的 `3` 是 connect，
+      而 sse 的 `3` 是发送）。
+    · 门：`examples/m140_http_conn_errno/`（VM+C 双轨 9 断言 ×2 + 逐字节一致；不依赖任何外部服务：
+      `127.0.0.1:1` 必拒、`.invalid` 必不解析、`2001:db8::/32` 无路由时必 `ENETUNREACH`）。
+      项目侧门：`diff_llm_go.py` 的 `up-refused` / `up-dns` / `up-v6-noroute`（含流式），
+      **负控实测**：把分类关掉 ⇒ `up-dns`/`up-v6-noroute` 判红。
+    · 已知边界：`stage >= 3`（发送/读头）时 Go 的 `*url.Error` 含**本端地址**
+      （`write tcp 127.0.0.1:41234->…`），本实现取不到（仍按 dial 形状输出）；`TLS 握手失败`
+      只有 mbedtls 码，Go 的证书/握手文案依赖 x509 细节 ⇒ 消费方**原样透传**，不再谎称 refused。
