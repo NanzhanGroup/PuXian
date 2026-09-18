@@ -44,6 +44,49 @@ run m66_lunar bash examples/m66_lunar/verify.sh
 run m71_mcp_build bash examples/m71_mcp_build/verify.sh
 run m82_http_serve_unix bash examples/m82_http_serve_unix/verify.sh
 run interp_builtin_list bash selfhost/builtin_list_check.sh
+step "CI 同款 fmt / lint 门（CI 有、本地全门原先没有 —— 第 18 轮补进来）"
+# 现场（第 18 轮，提交前预检）：`git push` 前按 CI 的 toolchain 步逐条预跑，发现
+#   **15 个文件 fmt --check 不符**（`selfhost/codegen.px` `selfhost/pxlexer.px` +
+#   `stdlib/` 13 个），而本地 m116/m117 **全绿** —— 又一条「CI 有、本地没有」的门：
+#   本地门再全，只要 CI 独有的那几步不在本地，推上去就是红的。
+#   （不符内容均为空行/续行缩进的规范化，语义零变化；但 CI 会判红。）
+# 口径与 ci.yml 的 toolchain 步**逐字一致**：fmt 覆盖 selfhost+tools+stdlib，
+#   lint 覆盖 compiler 主入口 + 16 个 tools 文件。
+run fmt_check bash -c 'for f in selfhost/*.px tools/*.px stdlib/*.px; do ./bootstrap/pxfmt --check "$f" >/dev/null || { echo "❌ 格式不符: $f"; exit 1; }; done; echo "fmt --check 全绿（selfhost+tools+stdlib）"'
+run lint_gate bash -c './bootstrap/pxlint selfhost/compiler.px >/dev/null || { echo "❌ compiler.px 项目级 lint 失败"; exit 1; }; for f in tools/fmt_core.px tools/fmtlexer.px tools/jsonrpc_core.px tools/lint_core.px tools/lsp_core.px tools/pxbench.px tools/pxcheck.px tools/pxdoc.px tools/pxfmt.px tools/pxlint.px tools/pxlsp.px tools/pxmcp.px tools/pxpkg.px tools/pxslice.px tools/pxtest.px tools/routegen.px; do ./bootstrap/pxlint "$f" >/dev/null || { echo "❌ lint 失败: $f"; exit 1; }; done; echo "lint 全绿（compiler 入口 0 错 + tools 16 文件 0/0）"'
+step "生态索引防漂移（CI 有、本地全门原先没有 —— 第 17 轮补进来）"
+# 现场（第 17 轮实测）：`docs/native_index.json` 停在 **313** 个 native，而 runtime 实际
+#   **330** —— 自第 9 轮起新增的 17 个（chmod/chr/file_stat/flock/go_errno_string/ord/
+#   json_parse_opt/regex_valid/sse_connect_ex/rpc… 等）**一个都没进索引**；
+#   `docs/ecosystem_index.json` 同样停在 yaml 拆分前的形态。而这条门只写在 ci.yml 的
+#   toolchain 步里，本地 m116/m117 都没有 ⇒ "本地全绿、CI 红"能潜伏好几轮。
+# ⚠️ 本地不能照抄 CI 的 `git diff --exit-code`：本地工作区通常**未提交**（改动一堆），
+#   那样必然假红。改为"**重生成 → 与 docs/ 现值比内容**"，与是否提交无关、语义等价。
+run eco_index bash -c 'cp docs/ecosystem_index.json /tmp/eco_before_a.json && cp docs/native_index.json /tmp/eco_before_b.json && ./bootstrap/pxi tools/gen_ecosystem.px >/dev/null && bash tools/gen_native_table.sh >/dev/null && diff -q /tmp/eco_before_a.json docs/ecosystem_index.json && diff -q /tmp/eco_before_b.json docs/native_index.json && echo "索引与 stdlib/runtime 一致"'
+step "语言侧常驻门（M130–M137：由 qg-issue 87 各轮真实缺陷攒下的回归门）"
+# 说明（第 17 轮补）：这批门此前**只在本地跑**，CI 与 m116/m117 都不含 ——
+#   等于"修好的缺陷没有防线"。此处显式纳入（顺序与台账一致）。
+# ⚠️ m136 需要 Go（用真 encoding/json 产出真值），CI 无 Go 步骤，故只在本地全门里跑。
+run m130_flock_chmod bash examples/m130_flock_chmod/verify.sh
+run m131_stream_post bash examples/m131_http_stream_post/verify.sh
+run m132_sse_chunked bash examples/m132_sse_chunked/verify.sh
+run m133_unix_timeout bash examples/m133_http_unix_timeout/verify.sh
+run m134_gc_obj_roots bash examples/m134_gc_obj_roots/verify.sh
+run m136_go_json_fidelity bash examples/m136_go_json_fidelity/verify.sh
+run m137_sse_connect_ex bash examples/m137_sse_connect_ex/verify.sh
+step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
+# 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
+#   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们
+#   只在 CI 跑、而这段时间只有本地跑 ⇒ 无人看见。这是「本地全绿、CI 红」的第三次现身。
+#   m67_multiarch（x86_64 档）与 bootstrap_prove(_bc) 亦属 CI 独占，但耗时长
+#   （前者含 GC 压力；后者 ≈7min + ≈20min），保留在 CI 与手工预检，不进门。
+run m118 bash examples/m118_realworld_defects/verify.sh
+run m119 bash examples/m119_multiline_expr/verify.sh
+run m120 bash examples/m120_dict_strict/verify.sh
+run m122 bash examples/m122_builtin_args/verify.sh
+run pkg_guard_monotonic bash packaging/selftest_rpm_monotonic_guard.sh
+run pkg_make_release bash packaging/selftest_make_release.sh
+run pkg_tag_guard bash packaging/selftest_tag_guard.sh
 step "示例编译"
 run ex_fib ./tools/pxc build examples/fib.px
 run ex_match ./tools/pxc build examples/match.px
