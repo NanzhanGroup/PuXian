@@ -361,6 +361,10 @@ static LXValue bi_env_unset(LXValue* args, int nargs, void* ctx);
 static LXValue bi_os_self_path(LXValue* args, int nargs, void* ctx);
 static LXValue bi_isatty(LXValue* args, int nargs, void* ctx);
 static LXValue bi_now_sec(LXValue* args, int nargs, void* ctx);
+// M141（第 22 轮 · 缺陷 109）：now_ns —— **墙钟** Unix 纳秒
+//   now_us()/now_ms() 是 CLOCK_MONOTONIC（测量语义）⇒ Go `time.Now().UnixNano()`、
+//   `time.Now().Format("...000000000")`（纳秒目录名/日志时间戳）**无法表达**。
+static LXValue bi_now_ns(LXValue* args, int nargs, void* ctx);
 static LXValue bi_tz_local(LXValue* args, int nargs, void* ctx);
 // M129（qg-issue 87 缺陷 38）：json_parse_opt —— 错误捕获式 JSON 解析
 static LXValue bi_json_parse_opt(LXValue* args, int nargs, void* ctx);
@@ -9107,6 +9111,7 @@ void px_register_builtins(void) {
     px_set_global("write_file_opt", px_native("write_file_opt", bi_write_file_opt));
     px_set_global("isatty", px_native("isatty", bi_isatty));
     px_set_global("now_sec", px_native("now_sec", bi_now_sec));
+    px_set_global("now_ns", px_native("now_ns", bi_now_ns));   // M141：墙钟 Unix 纳秒
     px_set_global("tz_local", px_native("tz_local", bi_tz_local));
     // 同时登记进 FFI 桥（ffi_call 按名调用表）：
     //   解释器轨的内置分发层 selfhost/ibuiltin.px 与 selfhost/env.px 同编译单元，
@@ -9119,6 +9124,7 @@ void px_register_builtins(void) {
     px_ffi_register("hostname", bi_hostname);
     px_ffi_register("isatty", bi_isatty);
     px_ffi_register("now_sec", bi_now_sec);
+    px_ffi_register("now_ns", bi_now_ns);
     px_ffi_register("tz_local", bi_tz_local);
 
     px_set_global("signal", px_native("signal", bi_signal));
@@ -9401,6 +9407,19 @@ static LXValue bi_isatty(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_now_sec(LXValue* args, int nargs, void* ctx) {
     (void)args; (void)nargs; (void)ctx;
     return px_int((int64_t)time(NULL));
+}
+
+// now_ns() → int（**墙钟** Unix 纳秒，与 now_sec/time_format 同一时间轴）
+//   M141（第 22 轮 · 缺陷 109）实测缺口：token-cache 的 ContextDebug 目录名用
+//   Go `time.Now().Format("20060102-150405.000000000")`、CacheLogEntry.Timestamp
+//   用 `time.Now().UnixNano()`；而 now_us()/now_ms() 是 CLOCK_MONOTONIC（自 boot 起算），
+//   now_sec() 只到秒 ⇒ 纳秒时间戳在语言里**没有来源**，只能拿单调钟冒充（值完全不同）。
+//   用 CLOCK_REALTIME 的 tv_sec*1e9 + tv_nsec（与 bi_now_ms 同源，同一时刻必然一致）。
+static LXValue bi_now_ns(LXValue* args, int nargs, void* ctx) {
+    (void)args; (void)nargs; (void)ctx;
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return px_int((int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec);
 }
 
 // tz_local() → int（本机时区相对 UTC 的偏移秒；DST 由系统 TZ 数据判定）
@@ -14813,7 +14832,11 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
         PX_KEEP(form);   // M92-S2c precise：form 裸局部跨 px_dict_set/px_str 分配
         {
             // M8x：remote 兼容 AF_UNIX（http_serve_unix 连接无 IP）——sockaddr_storage 判族，
-            // AF_INET → ip:port（http_serve 原行为）；AF_UNIX → "unix"（客户端 peer 无 sun_path）
+            // AF_INET → ip:port（http_serve 原行为）；
+            // AF_UNIX → "@"（M141 第 22 轮 · 缺陷 110：原为 "unix"，与 Go `net` 分叉 ——
+            //   Go 服务端在 unix socket 上 `r.RemoteAddr` 得 "@"（未 bind 的客户端对端地址，
+            //   syscall.RawSockaddrUnix.path 为空 ⇒ Go 的 autobind 占位符；Go 1.26.6 实测）
+            //   ⇒ token-cache 的 ContextDebug「来源地址」等字段无法对齐。）
             struct sockaddr_storage raddr;
             memset(&raddr, 0, sizeof(raddr));
             socklen_t rl = sizeof(raddr);
@@ -14825,7 +14848,7 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
                 snprintf(rbuf, sizeof(rbuf), "%s:%d", inet_ntoa(rin->sin_addr), ntohs(rin->sin_port));
                 px_dict_set(req, "remote", px_str(rbuf));
             } else if (raddr.ss_family == AF_UNIX) {
-                px_dict_set(req, "remote", px_str("unix"));
+                px_dict_set(req, "remote", px_str("@"));
             } else {
                 px_dict_set(req, "remote", px_str(""));
             }
@@ -20661,7 +20684,11 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         PX_KEEP(form);   // M92-S2c precise：form 裸局部跨 px_dict_set/px_parse_urlenc 分配
         {
             // M8x：remote 兼容 AF_UNIX（http_serve_unix 连接无 IP）——sockaddr_storage 判族，
-            // AF_INET → ip:port（http_serve 原行为）；AF_UNIX → "unix"（客户端 peer 无 sun_path）
+            // AF_INET → ip:port（http_serve 原行为）；
+            // AF_UNIX → "@"（M141 第 22 轮 · 缺陷 110：原为 "unix"，与 Go `net` 分叉 ——
+            //   Go 服务端在 unix socket 上 `r.RemoteAddr` 得 "@"（未 bind 的客户端对端地址，
+            //   syscall.RawSockaddrUnix.path 为空 ⇒ Go 的 autobind 占位符；Go 1.26.6 实测）
+            //   ⇒ token-cache 的 ContextDebug「来源地址」等字段无法对齐。）
             struct sockaddr_storage raddr;
             memset(&raddr, 0, sizeof(raddr));
             socklen_t rl = sizeof(raddr);
@@ -20673,7 +20700,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
                 snprintf(rbuf, sizeof(rbuf), "%s:%d", inet_ntoa(rin->sin_addr), ntohs(rin->sin_port));
                 px_dict_set(req, "remote", px_str(rbuf));
             } else if (raddr.ss_family == AF_UNIX) {
-                px_dict_set(req, "remote", px_str("unix"));
+                px_dict_set(req, "remote", px_str("@"));
             } else {
                 px_dict_set(req, "remote", px_str(""));
             }
