@@ -1,0 +1,170 @@
+# m144_http_bigbody / http_bigbody.px —— HTTP 客户端的**大请求体**与 chunked 分帧
+#
+# 缺陷 120（语言 P0 · 已修）：`http_unix` 把请求体 `memcpy` 进 `char req[16384]`
+#   ⇒ 体 > ~16KB 时**贴着栈缓冲溢出**，实测 20000 字节直接**段错误**（进程崩，
+#     而服务端却收到了完整请求 —— 典型"看起来成功"的内存安全 bug）。
+# 缺陷 121（同族 · 已修）：`http_post`（`px_http_once` 的 `req[4096]`）⇒ > ~3.9KB 段错误。
+# 缺陷 122（同族 · 已修）：`s3_put`（`px_s3_exec` 的 `pbody[4096]`）⇒ > 4KB 段错误；
+#     且修前"放不下就**静默丢弃体**、Content-Length 却照报"⇒ 请求自相矛盾。
+# 特性（M144）：`http_unix(sock, path, method, body, headers, {"chunked": true})`
+#   ⇒ `Transfer-Encoding: chunked`（**不发** Content-Length），分帧 **32768/块**
+#     —— 与 Go `net/http`（未知长度 Reader = io.Copy 32KB 缓冲）**逐字节同形**，
+#        用于 1:1 复刻 Go 客户端的线上格式（token-cache 的 BatchEmbed 就是这种形状）。
+#
+# 本门自检（进程内 spawn 服务端 + 客户端自调用）：
+#   A 大请求体逐个尺寸：服务端收到的**字节数 + sha256** 必须与发出的逐字节相同
+#   B 线上头：非 chunked ⇒ 有 Content-Length 无 Transfer-Encoding；chunked ⇒ 反之
+#   C http_post（`px_http_once` 通路）大请求体
+#   D s3_put（`px_s3_exec` 通路）大请求体
+#   E 回归：空体 / 无体（null）不发 CT/CL，`req["body"]` 为空
+
+# jparse(s) —— `json_parse_opt` 返回 **Result**（Ok/Err），这里取成值/ null
+def jparse(s):
+    var r = json_parse_opt(s)
+    if type(r) == "result":
+        if r.is_err():
+            return null
+        return r.unwrap()
+    return r
+
+def body_sha(s):
+    return sha256(bytes(s))
+
+def bytes_sub(s, a, b):
+    var bb = bytes(s)
+    return bytes_to_str(bytes_slice(bb, a, b))
+
+# mkdata(n) —— 确定性字节体（每 16 字节一个可校验的花样，避免"全 a"看不出错位）
+def mkdata(n):
+    var blk = "0123456789abcdef"
+    var out = ""
+    var i = 0
+    while i < n:
+        out = out + blk
+        i = i + 16
+    if bytes_len(bytes(out)) > n:
+        out = bytes_sub(out, 0, n)
+    return out
+
+# hget(hd, name) —— 头名大小写不敏感取值（服务端字典的键 = 线上原样）
+def hget(hd, name):
+    var want = to_lower(name)
+    for k in hd.keys():
+        if to_lower(str(k)) == want:
+            return str(hd[k])
+    return "<none>"
+
+def handler(req):
+    var b = req["body"]
+    var hd = req["headers"]
+    var d = {}
+    d.set("blen", bytes_len(bytes(b)))
+    d.set("sha", body_sha(b))
+    d.set("cl", hget(hd, "Content-Length"))
+    d.set("te", hget(hd, "Transfer-Encoding"))
+    d.set("ct", hget(hd, "Content-Type"))
+    d.set("path", req["path"])
+    return json_stringify_go(d, {"sort_keys": true})
+
+var SOCK = "/tmp/m144_puxian.sock"
+var PORT = 18993
+var PASS = 0
+var FAIL = 0
+
+def ck(cond, name, extra):
+    if cond:
+        PASS = PASS + 1
+    else:
+        FAIL = FAIL + 1
+        print("FAIL " + name + " " + extra)
+
+spawn http_serve_unix(SOCK, handler)
+spawn http_serve(PORT, handler)
+sleep(300)
+
+# ── A：http_unix 大请求体（含缺陷 120 的 20000 字节复现尺寸）──
+for n in [0, 1, 4095, 4096, 16383, 16384, 20000, 65536, 100000]:
+    var data = mkdata(n)
+    var r = http_unix(SOCK, "/info?n=" + str(n), "POST", data, {"Content-Type": "application/octet-stream"})
+    var o = jparse(r["body"])
+    var tag = "unix n=" + str(n)
+    ck(r["status"] == 200, tag + " status", "status=" + str(r["status"]))
+    ck(int(o["blen"]) == bytes_len(bytes(data)), tag + " blen", "srv=" + str(o["blen"]) + " want=" + str(bytes_len(bytes(data))))
+    ck(str(o["sha"]) == body_sha(data), tag + " sha", "srv=" + str(o["sha"])[:16] + " want=" + body_sha(data)[:16])
+    ck(str(o["cl"]) == str(n), tag + " content-length", "cl=" + str(o["cl"]))
+    ck(str(o["te"]) == "<none>", tag + " 无 TE", "te=" + str(o["te"]))
+
+# ── B：chunked 分帧（32768/块）──
+for n in [0, 1, 32767, 32768, 32769, 40014, 70000, 200000]:
+    var data2 = mkdata(n)
+    var r2 = http_unix(SOCK, "/info?n=" + str(n), "POST", data2, {"Content-Type": "application/json"}, {"chunked": true})
+    var o2 = jparse(r2["body"])
+    var tag2 = "chunked n=" + str(n)
+    ck(r2["status"] == 200, tag2 + " status", "status=" + str(r2["status"]))
+    ck(int(o2["blen"]) == bytes_len(bytes(data2)), tag2 + " blen", "srv=" + str(o2["blen"]))
+    ck(str(o2["sha"]) == body_sha(data2), tag2 + " sha", "srv=" + str(o2["sha"])[:16])
+    ck(str(o2["te"]) == "chunked", tag2 + " 有 TE", "te=" + str(o2["te"]))
+    ck(str(o2["cl"]) == "<none>", tag2 + " 无 CL", "cl=" + str(o2["cl"]))
+
+# ── C：http_post（px_http_once 通路）大请求体（缺陷 121）──
+for n in [0, 1, 3900, 4000, 8000, 100000]:
+    var data3 = mkdata(n)
+    var r3 = http_post("http://127.0.0.1:" + str(PORT) + "/info?n=" + str(n), data3)
+    var o3 = jparse(r3)
+    var tag3 = "post n=" + str(n)
+    ck(int(o3["blen"]) == bytes_len(bytes(data3)), tag3 + " blen", "srv=" + str(o3["blen"]))
+    ck(str(o3["sha"]) == body_sha(data3), tag3 + " sha", "srv=" + str(o3["sha"])[:16])
+    ck(str(o3["cl"]) == str(n), tag3 + " content-length", "cl=" + str(o3["cl"]))
+
+# ── D：s3_put（px_s3_exec 通路）大请求体（缺陷 122）──
+for n in [1, 4000, 8000, 100000]:
+    var data4 = mkdata(n)
+    var ok = s3_put("http://127.0.0.1:" + str(PORT), "bkt", "k" + str(n), data4, "AK", "SK")
+    var tag4 = "s3 n=" + str(n)
+    ck(ok == true, tag4 + " 返回 true", "ok=" + str(ok))
+
+# ── E：空体 / 无体 ──
+var rE1 = http_unix(SOCK, "/info", "GET", null)
+var oE1 = jparse(rE1["body"])
+ck(int(oE1["blen"]) == 0, "无体 blen", str(oE1["blen"]))
+ck(str(oE1["cl"]) == "<none>", "无体不发 CL", str(oE1["cl"]))
+ck(str(oE1["ct"]) == "<none>", "无体不发 CT", str(oE1["ct"]))
+var rE2 = http_unix(SOCK, "/info", "POST", "", {})
+var oE2 = jparse(rE2["body"])
+ck(int(oE2["blen"]) == 0, "空串体 blen", str(oE2["blen"]))
+
+# ── F：裸 socket —— 服务端 chunked 请求体解析的**边界形态**（缺陷 123 的深层保真）──
+#   ① 分帧带**扩展**（`5;ext=1\r\nhello\r\n`）必须解出 hello（RFC 7230 chunk-ext）
+#   ② 末块后的 **trailer 区**（`0\r\nX-Trailer: v\r\n\r\n`）必须被吞掉 ——
+#      不吞则残留字节被当成**下一个请求**解析（keep-alive 串包 = 最阴的一类错）
+#   ③ 同连接紧接的第二个请求必须照常拿到**自己的**体（3 字节）
+var ffd = unix_connect(SOCK)
+if ffd < 0:
+    FAIL = FAIL + 1
+    print("FAIL F 裸连接失败 fd=" + str(ffd))
+else:
+    var freq = "POST /info HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\nContent-Type: text/plain\r\n\r\n"
+    freq = freq + "5;ext=1\r\nhello\r\n0\r\nX-Trailer: v\r\n\r\n"
+    freq = freq + "POST /info HTTP/1.1\r\nHost: localhost\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc"
+    write(ffd, bytes(freq))
+    var raw = ""
+    var guard = 0
+    while guard < 200:
+        var bb = read(ffd, 65536)
+        if type(bb) == "int":
+            break
+        if bytes_len(bb) == 0:
+            break
+        raw = raw + bytes_to_str(bb)
+        guard = guard + 1
+    close(ffd)
+    var n200 = len(split(raw, "HTTP/1.1 200")) - 1
+    ck(n200 == 2, "F 两个响应", "n200=" + str(n200))
+    ck(contains(raw, "\"blen\":5"), "F 扩展块解出 5 字节", str(len(raw)))
+    ck(contains(raw, body_sha("hello")), "F 扩展块内容正确", "sha 未命中")
+    ck(contains(raw, "\"blen\":3"), "F trailer 后第二请求不串包", "未见到第二个响应体")
+
+print("PASS=" + str(PASS) + " FAIL=" + str(FAIL))
+if FAIL > 0:
+    exit(1)
+print("M144-VERIFY-OK")

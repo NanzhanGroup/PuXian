@@ -91,6 +91,10 @@ run m142_go_json_indent bash examples/m142_go_json_indent/verify.sh
 #   缺陷 115/117/118/119）：**需要 Go 产真值**（math.Float32bits / Float32frombits /
 #   encoding/json 本尊），口径同 m136/m138/m142 —— 本机全门跑，CI 里也跑。
 run m143_float32 bash examples/m143_float32/verify.sh
+# m144（HTTP 客户端大请求体 / opts.chunked / 服务端 chunked 请求体 + 连接级余留缓冲，
+#   缺陷 120/121/122/123/124）：进程内 spawn 服务端 + 客户端自调用，**不依赖外部服务**
+#   ⇒ 本机全门与 CI 都跑。
+run m144_http_bigbody bash examples/m144_http_bigbody/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们
