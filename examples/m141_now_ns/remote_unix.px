@@ -1,0 +1,64 @@
+# ═══════════════════════════════════════════════════════════════════════
+# remote_unix.px — 缺陷 110 自检（M141 · qg-issue 87 第 22 轮）
+# ---------------------------------------------------------------
+# 修前：`http_serve_unix` 的 `req["remote"]` 对 AF_UNIX 连接返回 **"unix"**。
+#   而 Go 的 `net/http` 在 unix socket 上 `r.RemoteAddr` == **"@"**
+#   （未 bind 的客户端对端地址为空 ⇒ `syscall.RawSockaddrUnix` 的 autobind 占位符；
+#     Go 1.26.6 实测）。移植 Go 代码时，"来源地址"字段（token-cache 的
+#     ContextDebug `up.md`、audit 日志）**无法对齐**。
+#   修法：AF_UNIX → "@"（AF_INET 仍 `ip:port`，与 Go 同形）。
+#
+# 本门断言：
+#   A unix 服务端 req["remote"] == "@"      （且**不得**为 "unix" —— 缺陷 110 原症状）
+#   B TCP  服务端 req["remote"] 形如 127.0.0.1:<客户端源端口>（AF_INET 分叉没被误伤；
+#                            注意服务端看到的是**客户端源端口**，不是监听端口）
+#   C unix 服务端的 remote 长度 < 40 且不含 ":"（"unix"/"ip:port" 的混同会立刻暴露）
+# ═══════════════════════════════════════════════════════════════════════
+import std.strings
+
+const SOCK = "/tmp/m141_remote.sock"
+const PORT = 18091
+
+def handler(req):
+    let path = req["path"]
+    if path == "/remote":
+        return "remote=" + req["remote"]
+    return "ok"
+
+spawn http_serve_unix(SOCK, handler)
+spawn http_serve(PORT, handler)
+sleep(400)
+
+var FAILS = 0
+
+def ok(cond, name, extra):
+    if cond:
+        print("PASS " + name)
+        return 0
+    print("FAIL " + name + " " + extra)
+    return 1
+
+# ── A unix ──
+let ru = http_unix(SOCK, "/remote", "GET")
+let body_u = ru["body"]
+FAILS = FAILS + ok(body_u == "remote=@" and body_u != "remote=unix", "A_unix_remote_为_@", "body=" + body_u)
+
+# ── B TCP ──
+let rt = http_get("http://127.0.0.1:" + str(PORT) + "/remote")
+let body_t = rt
+var digits = true
+var j = 17
+while j < len(body_t):
+    let c = body_t[j]
+    if c < "0" or c > "9":
+        digits = false
+    j = j + 1
+FAILS = FAILS + ok(body_t[0:17] == "remote=127.0.0.1:" and digits and len(body_t) > 17,
+   "B_tcp_remote 为 ip:port", "body=" + body_t)
+
+# ── C 形态不混同 ──
+let val_u = body_u[7:len(body_u)]
+FAILS = FAILS + ok(len(val_u) < 40 and contains(val_u, ":") == false, "C_unix_remote 形态独占", "v=" + val_u)
+
+print("remote_unix RC=" + str(FAILS))
+exit(FAILS)
