@@ -28,21 +28,21 @@ sleep(1200)
 # ============ 1. HTTPS 请求（PX_TLS_CA_FILE 信任自签） ============
 r = http_request("https://localhost:18086/", "GET")
 print("https status:", r["status"])
-assert r["status"] == 200
+assert(r["status"] == 200)
 b = r["body"]
 print("https body:", b)
-assert contains(b, "https-sid=")
+assert(contains(b, "https-sid="))
 
 # ============ 2. HTTPS 上 basic_auth ============
 ra = http_request("https://localhost:18086/auth.px", "GET")
 print("https auth status:", ra["status"])
-assert ra["status"] == 401
+assert(ra["status"] == 401)
 
 # ============ 3. 优雅关闭 ============
 os_kill(p, 15)
 sleep(800)
 rc = os_wait(p)
 print("server exit code:", rc)
-assert rc == 0
+assert(rc == 0)
 
 print("M27B_TLS_OK")

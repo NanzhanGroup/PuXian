@@ -33,36 +33,36 @@ def on_chunk(c):
 total = 0
 chunks = 0
 ok = http_get_stream("http://127.0.0.1:8891/gz", on_chunk)
-assert ok == true
-assert total == len(big)
-assert chunks >= 1
+assert(ok == true)
+assert(total == len(big))
+assert(chunks >= 1)
 
 # 2. chunked + gzip 组合流式解压
 total = 0
 chunks = 0
 ok = http_get_stream("http://127.0.0.1:8891/cgz", on_chunk)
-assert ok == true
-assert total == len(big)
+assert(ok == true)
+assert(total == len(big))
 
 # 3. 普通流式（回归）
 total = 0
 ok = http_get_stream("http://127.0.0.1:8891/plain", on_chunk)
-assert ok == true
-assert total == len(big)
+assert(ok == true)
+assert(total == len(big))
 
 # 4. http_request 整包 gzip（回归）
 r = http_request("http://127.0.0.1:8891/gz", "GET")
-assert r.status == 200
-assert len(r.body) == len(big)
+assert(r.status == 200)
+assert(len(r.body) == len(big))
 
 # 5. https 连接池：外网同 host 连续请求（TLS 连接复用；明文池 M23c 已验证）
 h1 = http_request("https://www.baidu.com/", "GET")
-assert h1.status == 200
+assert(h1.status == 200)
 h2 = http_request("https://www.baidu.com/", "GET")
-assert h2.status == 200
+assert(h2.status == 200)
 h3 = http_request("https://www.baidu.com/", "GET")
-assert h3.status == 200
-assert len(h1.body) > 0
+assert(h3.status == 200)
+assert(len(h1.body) > 0)
 
 print("M24 HTTP-ADV TESTS PASSED")
 exit(0)

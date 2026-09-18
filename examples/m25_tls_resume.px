@@ -14,5 +14,5 @@ for i in range(6):
     let s = done.recv()
     if s == 200:
         ok = ok + 1
-assert ok == 6
+assert(ok == 6)
 print("M25 TLS RESUME TESTS PASSED")

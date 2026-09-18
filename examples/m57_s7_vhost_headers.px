@@ -53,56 +53,56 @@ def has(ks, name):
 r = get("/ok")
 ks = str(r["headers"].keys())
 print("OK keys:", ks)
-assert r["status"] == 200
-assert has(ks, "Location") and r["headers"]["Location"] == "/dest"
-assert has(ks, "Cache-Control") and r["headers"]["Cache-Control"] == "max-age=3600"
-assert has(ks, "Set-Cookie") and r["headers"]["Set-Cookie"] == "sid=abc123; Path=/"
-assert r["headers"]["Content-Type"] == "text/html"
-assert has(ks, "X-Custom") and r["headers"]["X-Custom"] == "custom-ok"   # M109：自定义头开始透传
+assert(r["status"] == 200)
+assert(has(ks, "Location") and r["headers"]["Location"] == "/dest")
+assert(has(ks, "Cache-Control") and r["headers"]["Cache-Control"] == "max-age=3600")
+assert(has(ks, "Set-Cookie") and r["headers"]["Set-Cookie"] == "sid=abc123; Path=/")
+assert(r["headers"]["Content-Type"] == "text/html")
+assert(has(ks, "X-Custom") and r["headers"]["X-Custom"] == "custom-ok")# M109：自定义头开始透传
 print("ok-path PASS")
 
 r = get("/new")
 ks = str(r["headers"].keys())
 print("NEW keys:", ks)
-assert has(ks, "ETag") and r["headers"]["ETag"] == "W/\"abc\""
-assert has(ks, "Vary") and r["headers"]["Vary"] == "Accept-Encoding"
-assert has(ks, "Strict-Transport-Security")
-assert has(ks, "Content-Security-Policy")
-assert has(ks, "X-Content-Type-Options")
-assert has(ks, "Retry-After") and r["headers"]["Retry-After"] == "120"
-assert has(ks, "Accept-Ranges") and r["headers"]["Accept-Ranges"] == "bytes"
+assert(has(ks, "ETag") and r["headers"]["ETag"] == "W/\"abc\"")
+assert(has(ks, "Vary") and r["headers"]["Vary"] == "Accept-Encoding")
+assert(has(ks, "Strict-Transport-Security"))
+assert(has(ks, "Content-Security-Policy"))
+assert(has(ks, "X-Content-Type-Options"))
+assert(has(ks, "Retry-After") and r["headers"]["Retry-After"] == "120")
+assert(has(ks, "Accept-Ranges") and r["headers"]["Accept-Ranges"] == "bytes")
 print("new-headers-path PASS (M109 fix)")
 
 r = get("/deny")
 ks = str(r["headers"].keys())
 print("DENY keys:", ks)
-assert r["headers"]["Content-Length"] != "99999"          # runtime 自算，handler 覆盖无效
-assert r["headers"]["Content-Length"] == "1"              # body "d" 长度 1
-assert not has(ks, "Transfer-Encoding")                   # 不得出现 chunked
-assert r["headers"]["Connection"] != "close"              # 由 keep-alive 决策
-assert not has(ks, "Keep-Alive")
-assert not has(ks, "Upgrade")
-assert not has(ks, "Trailer")
-assert not has(ks, "Server") and not has(ks, "Date")
-assert r["headers"]["X-Request-Id"] != "spoofed"          # runtime 注入，handler 不得伪造
-assert has(ks, "X-Keep") and r["headers"]["X-Keep"] == "yes"   # 非拒绝名单头照常透传
+assert(r["headers"]["Content-Length"] != "99999")# runtime 自算，handler 覆盖无效
+assert(r["headers"]["Content-Length"] == "1")# body "d" 长度 1
+assert(not has(ks, "Transfer-Encoding"))# 不得出现 chunked
+assert(r["headers"]["Connection"] != "close")# 由 keep-alive 决策
+assert(not has(ks, "Keep-Alive"))
+assert(not has(ks, "Upgrade"))
+assert(not has(ks, "Trailer"))
+assert(not has(ks, "Server") and not has(ks, "Date"))
+assert(r["headers"]["X-Request-Id"] != "spoofed")# runtime 注入，handler 不得伪造
+assert(has(ks, "X-Keep") and r["headers"]["X-Keep"] == "yes")# 非拒绝名单头照常透传
 print("deny-path PASS (runtime-managed headers protected)")
 
 r = get("/evilval")
 ks = str(r["headers"].keys())
 print("EVILVAL keys:", ks)
-assert not has(ks, "X-Evil") and not has(ks, "Location")
+assert(not has(ks, "X-Evil") and not has(ks, "Location"))
 print("evilval-path PASS (CRLF value dropped)")
 
 r = get("/evilkey")
 ks = str(r["headers"].keys())
 print("EVILKEY keys:", ks)
-assert not has(ks, "X-Evil")
+assert(not has(ks, "X-Evil"))
 print("evilkey-path PASS (CRLF key dropped)")
 
 r = get("/ct")
-assert r["headers"]["Content-Type"] == "application/x-ndjson"
-assert has(str(r["headers"].keys()), "X-Marker")
+assert(r["headers"]["Content-Type"] == "application/x-ndjson")
+assert(has(str(r["headers"].keys()), "X-Marker"))
 print("content-type-path PASS")
 
 print("M57-S7 ALL OK (M109-S1 deny-list semantics)")

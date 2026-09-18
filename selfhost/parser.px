@@ -317,6 +317,11 @@ def parse_var_decl(kind):
         value = parse_expr()
     return ["VarDecl", kind, qstr(name), ty, value, pos]
 def parse_assign_or_expr():
+    # M138：记下「以标识符开头」的名字 —— 若整条语句恰为该标识符（表达式节点 = Var），
+    #   这个名字就是它自己（parse_expr 只吃掉了这一个 token），用于错误信息（免去去引号）。
+    var lead_name = null
+    if pk() == "标识符":
+        lead_name = pv()
     var expr = parse_expr()
     let pos = node_pos(expr)
     var op = null
@@ -356,6 +361,27 @@ def parse_assign_or_expr():
         adv()
         var value = parse_expr()
         return ["Assign", expr, op, value, pos]
+    # M138（qg-issue 87 缺陷 101）：**裸标识符语句**在语句位置上永远没有效果
+    #   （调用必须带括号、赋值必须带 `=`，没有第二种解释；cg_stmt 对 ExprStmt 直接
+    #   `(void)(...)` 丢弃值，istmt 同样返回 null ⇒ 值也不会被隐式返回）。
+    #   此前它**能过编译**：名字未定义 ⇒ 运行时 R1001 打挂进程；名字已定义 ⇒ **静默什么都不做**。
+    #   两种都是最坏的形态（编译通过、运行才炸 / 静默错）。
+    #   现场（第 17 轮实撞）：token-cache 的 llm_resp.px / llm_msgs.px 共 8 处「字段为 null 就
+    #     什么都不做」的分支被写成 `pass` ⇒ 上游 JSON 里出现任何 `null` 就**打挂整个服务进程**
+    #     （负控实测：换回 `pass` ⇒ 连接被拒；换成 `0` ⇒ 5/5 对齐）。第 17 轮只改了那 8 处，
+    #     没有堵住这条路 —— 本处才是根治。
+    #   ⚠️ `pass` **不能**改成关键字：本仓库确有 `var pass = 0`（pass=通过计数）作变量名
+    #     （examples/m66_proc/*.px），关键字化会静默改变这些程序的含义。
+    #     故统一按「裸标识符」处理，只给恰好叫 `pass` 的加一句"空语句请写 0"的提示。
+    if expr[0] == "Var":
+        var nm = null
+        if lead_name != null:
+            nm = lead_name
+        else:
+            nm = expr[1]
+        if nm == "pass":
+            perr("E2012", "`pass` 不是 PuXian 关键字（它是普通标识符，`var pass = 0` 合法）：空语句请写 `0`，或直接删掉这一行")
+        perr("E2012", "裸标识符语句没有效果：" + nm + "（调用需要括号 `()`；若想要空语句请写 `0`）")
     return ["ExprStmt", expr, pos]
 def parse_if():
     let pos = ppos()
