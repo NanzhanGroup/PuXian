@@ -199,7 +199,16 @@ jobs:
           bash examples/m119_multiline_expr/verify.sh > /tmp/v_m119_multiline_expr.log 2>&1 || { echo "❌ m119_multiline_expr verify 失败"; tail -40 /tmp/v_m119_multiline_expr.log; exit 1; }
           bash examples/m120_dict_strict/verify.sh > /tmp/v_m120_dict_strict.log 2>&1 || { echo "❌ m120_dict_strict verify 失败"; tail -40 /tmp/v_m120_dict_strict.log; exit 1; }
           bash examples/m122_builtin_args/verify.sh > /tmp/v_m122_builtin_args.log 2>&1 || { echo "❌ m122_builtin_args verify 失败"; tail -40 /tmp/v_m122_builtin_args.log; exit 1; }
-          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args verify 全 PASS"
+          # ── 第 17 轮补：M130–M137 常驻门（此前只在本地跑 ⇒ CI 无防线）──
+          # ⚠️ m136 需要 Go（真 encoding/json 产真值），本工作流无 Go 步骤 ⇒ 刻意不列入
+          #    （它在 selfhost/m116_gates.sh 的本地全门里跑）。
+          bash examples/m130_flock_chmod/verify.sh > /tmp/v_m130.log 2>&1 || { echo "❌ m130_flock_chmod verify 失败"; tail -40 /tmp/v_m130.log; exit 1; }
+          bash examples/m131_http_stream_post/verify.sh > /tmp/v_m131.log 2>&1 || { echo "❌ m131_http_stream_post verify 失败"; tail -40 /tmp/v_m131.log; exit 1; }
+          bash examples/m132_sse_chunked/verify.sh > /tmp/v_m132.log 2>&1 || { echo "❌ m132_sse_chunked verify 失败"; tail -40 /tmp/v_m132.log; exit 1; }
+          bash examples/m133_http_unix_timeout/verify.sh > /tmp/v_m133.log 2>&1 || { echo "❌ m133_http_unix_timeout verify 失败"; tail -40 /tmp/v_m133.log; exit 1; }
+          bash examples/m134_gc_obj_roots/verify.sh > /tmp/v_m134.log 2>&1 || { echo "❌ m134_gc_obj_roots verify 失败"; tail -40 /tmp/v_m134.log; exit 1; }
+          bash examples/m137_sse_connect_ex/verify.sh > /tmp/v_m137.log 2>&1 || { echo "❌ m137_sse_connect_ex verify 失败"; tail -40 /tmp/v_m137.log; exit 1; }
+          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 verify 全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"
       - name: LSP / MCP 服务器冒烟（--version + 协议入口存在性）
         run: |
           chmod +x bootstrap/pxlsp bootstrap/pxmcp bootstrap/pxcheck
