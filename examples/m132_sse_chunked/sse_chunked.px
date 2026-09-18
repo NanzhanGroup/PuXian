@@ -1,0 +1,69 @@
+# ═══════════════════════════════════════════════════════════════════
+# M132 示例：SSE 客户端对 **chunked 上游** 的解码 + sse_read_line 原始行读取
+# ---------------------------------------------------------------
+# 背景（qg-issue 87 缺陷 69）：
+#   sse_connect 只读响应头，其余字节**原样**进 pending。上游若用
+#   Transfer-Encoding: chunked（Go 的 SSE handler「写头 + 边写边 Flush」必然如此），
+#   pending 里就是 `1a\r\ndata: {...}\r\n` 这类分块帧。
+#   修前：sse_read 的 `\n\r\n` 事件分隔把块长行当"无冒号行"丢掉 ⇒ **只在块边界与
+#   事件边界重合时侥幸可用**；块边界落在 data 行中间时内容被块长行污染，且终结块处
+#   多出空事件（实测：4 块 → 多 2 个空事件）。
+#   修后：连接时记住 chunked，到达字节先进 rbuf，由 sse_cli_pump 按 RFC 7230 §4.1
+#   解码进 pending —— sse_read 与 sse_read_line 共用**唯一**解码点。
+#
+# 本示例对照两种块切法（verify.sh 的 python 桩按参数提供）：
+#   · seg=1   每块 1 字节（最恶劣：任何一行都被切开）
+#   · seg=3   每块 3 字节
+#   · seg=0   不分块（Transfer-Encoding 缺省，逐行 flush）
+# 断言：三种上游下，sse_read_line 的行序列与 sse_read 的事件序列**完全相同**。
+# ═══════════════════════════════════════════════════════════════════
+import std.strings
+
+# 逻辑响应体（三种分块方式承载同一串字节）
+BODY = "data: {\"a\":1}\n\ndata: [DONE]\n\n"
+var g_sock = ""
+
+def dump_lines(tag):
+    var o = {}
+    o.set("sock", g_sock)
+    var c = sse_connect("http://localhost/v1/chat/completions", o)
+    if c == null:
+        print("LINES " + tag + ": CONNECT_FAIL")
+        return
+    var i = 0
+    while i < 12:
+        var ln = sse_read_line(c)
+        if ln == null:
+            break
+        print("LINES " + tag + " " + str(i) + ":<" + ln + ">")
+        i += 1
+    sse_close(c)
+
+def dump_events(tag):
+    var o = {}
+    o.set("sock", g_sock)
+    var c = sse_connect("http://localhost/v1/chat/completions", o)
+    if c == null:
+        print("EVENTS " + tag + ": CONNECT_FAIL")
+        return
+    var i = 0
+    while i < 12:
+        var ev = sse_read(c)
+        if ev == null:
+            break
+        print("EVENTS " + tag + " " + str(i) + ":<" + json_stringify(ev) + ">")
+        i += 1
+    sse_close(c)
+
+def main():
+    var a = args()
+    if len(a) < 2:
+        print("usage: sse_chunked <sock> <tag>")
+        return
+    g_sock = a[1]
+    var tag = a[2]
+    dump_lines(tag)
+    dump_events(tag)
+
+# ⚠️ 不显式写 `main()`：PuXian 运行时会自动调用入口 main（缺陷 37），
+#    再写一次会静默跑两遍（多占一个连接）。

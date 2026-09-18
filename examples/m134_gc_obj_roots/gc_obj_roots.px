@@ -1,0 +1,108 @@
+# ═══════════════════════════════════════════════════════════════════════
+# M134 · GC 根面必须覆盖**全部堆对象类型**（qg-issue 87 缺陷 86 根治 + 复发防线）
+# ---------------------------------------------------------------
+# 缺陷：runtime.c 的 `px_value_is_obj` 原是 switch 白名单，**漏 PX_MUTEX /
+#   PX_RWLOCK / PX_GEN** ⇒ 这三种值放在 list/dict/struct/tuple/gen/chan 里，
+#   或作为**全局/帧槽的直接值**时都不被标记 ⇒ 对象被 sweep 回收（悬垂）。
+#   实测症状（token-cache 生产链路）：第 6 个"走审批判定"的请求起**永久挂死** ——
+#   `pthread_mutex_lock` 阻塞在已回收内存的 __lock 上（无持有者、无唤醒源；
+#   gdb 栈：__lll_lock_wait ← pthread_mutex_lock ← px_mutex_lock ← vm_run_loop）。
+# 本门：把每种堆对象放进 容器 / 全局 / 帧 三种持有方式，**强制整轮 GC**（gc()），
+#   再逐个使用。漏标的类型 → runtime 的 px_dbg_obj_check 立即 abort（悬垂现场），
+#   或读出垃圾值（内容断言变红）。
+# 复发防线（编译期）：runtime.c 的 `g_type_is_obj[PX_TYPE_MAX]` + `_Static_assert`
+#   尺寸断言 —— LXType 新增成员而没在表里表态 → **直接编译失败**。
+# ═══════════════════════════════════════════════════════════════════════
+var P = 0
+var F = 0
+
+struct Box:
+    n: int
+
+var g_mu = mutex()          # 全局：直接持有锁
+var g_rw = rwlock()
+var g_gen = null            # 全局：直接持有生成器
+var g_nested = {}           # dict → mutex / dict → list → rwlock
+var g_holder = []           # 容器：list / dict / 嵌套 / 闭包 cell / struct / result
+
+def ck(name, cond):
+    if cond:
+        P = P + 1
+        print("  ✅ " + name)
+    else:
+        F = F + 1
+        print("  ❌ " + name)
+
+def main():
+    # ── 布置：每种堆对象 × 每种持有方式 ──
+    g_holder.append(mutex())                      # 0  mutex in list
+    g_holder.append(rwlock())                     # 1  rwlock in list
+    g_holder.append("hello-中文")                 # 2  str in list
+    g_holder.append({"k": 1})                     # 3  dict in list
+    g_holder.append([1, 2, 3])                    # 4  list in list
+    g_holder.append(Box(7))                       # 5  struct in list
+    g_holder.append(Ok(41))                       # 6  result in list
+    g_holder.append(Err("e"))                     # 7  result in list
+    g_holder.append(chan[int](4))                      # 8  chan in list
+    g_holder.append([x * 2 for x in [1, 2, 3]])   # 9  gen in list
+    g_nested.set("mu", mutex())                   # dict → mutex
+    g_nested.set("deep", [rwlock()])               # dict → list → rwlock
+    g_gen = [x + 10 for x in [1, 2]]              # 全局直接持有 gen
+    var fmu = mutex()                             # 帧槽直接持有
+    var frw = rwlock()
+    var fstr = "frame-中文"
+    var fdict = {"a": 1}
+    var fgen = [x for x in [5, 6]]
+
+    gc()                                          # ← 关键：强制整轮 GC
+
+    # ── 用（悬垂 → 立即 abort / 内容变红）──
+    g_holder[0].lock()
+    g_holder[0].unlock()
+    ck("list 里的 mutex 经 GC 后可用", true)
+
+    g_holder[1].rlock()
+    g_holder[1].runlock()
+    g_holder[1].wlock()
+    g_holder[1].wunlock()
+    ck("list 里的 rwlock 经 GC 后可用", true)
+
+    g_nested["mu"].lock()
+    g_nested["mu"].unlock()
+    ck("dict→mutex 经 GC 后可用", true)
+
+    g_nested["deep"][0].wlock()
+    g_nested["deep"][0].wunlock()
+    ck("dict→list→rwlock 经 GC 后可用", true)
+
+    g_mu.lock()
+    g_mu.unlock()
+    ck("全局直接持有的 mutex 经 GC 后可用", true)
+
+    g_rw.rlock()
+    g_rw.runlock()
+    ck("全局直接持有的 rwlock 经 GC 后可用", true)
+
+    fmu.lock()
+    fmu.unlock()
+    frw.rlock()
+    frw.runlock()
+    ck("帧槽直接持有的 mutex / rwlock 经 GC 后可用", true)
+
+    ck("全局直接持有的生成器经 GC 后仍可物化", list(g_gen) == [11, 12])
+    ck("list 里的生成器经 GC 后仍可物化", list(g_holder[9]) == [2, 4, 6])
+    ck("帧槽直接持有的生成器经 GC 后仍可物化", list(fgen) == [5, 6])
+
+    ck("list 里的 str 内容未变", g_holder[2] == "hello-中文")
+    ck("帧槽 str 内容未变", fstr == "frame-中文")
+    ck("list 里的 dict / list 内容未变", g_holder[3]["k"] == 1 and g_holder[4][2] == 3)
+    ck("帧槽 dict 内容未变", fdict["a"] == 1)
+    ck("list 里的 struct 字段未变", g_holder[5].n == 7)
+    ck("list 里的 result 未变", g_holder[6].unwrap() == 41 and g_holder[7].is_err())
+
+    g_holder[8].send (1)
+    ck("list 里的 chan 经 GC 后可用", g_holder[8].recv() == 1)
+
+    print("M134_ASSERT: " + str(P) + "P/" + str(F) + "F")
+    if F > 0:
+        exit(1)

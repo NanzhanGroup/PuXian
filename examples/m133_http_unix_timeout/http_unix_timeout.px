@@ -1,0 +1,114 @@
+# ═══════════════════════════════════════════════════════════════════════
+# http_unix_timeout.px — 缺陷 80/81 自检（M133）
+# ---------------------------------------------------------------
+# A) 套接字路径不存在 → 立即失败；`os_errno()` = ENOENT(2)（成因可编程获取）
+# B) 对端 accept 后不回包 + opts.timeout_ms=500 → 约 0.5s 失败，errno = EAGAIN(11)
+#    （**修前** RCVTIMEO 固定 180s —— 这条通路表达不出"2s 内必须失败"）
+# C) 不传 opts（第 5 参形态）→ 行为不变，正常应答
+# D) 对端正常应答 + opts → dict{status,headers,body}
+# E) 负控：两个不同 timeout_ms 的失败耗时必须**成比例不同**
+#    （否则说明 opts 被忽略、超时值没生效）
+# ═══════════════════════════════════════════════════════════════════════
+import std.strings
+import std.io
+
+const SOCK_FAST = "/tmp/m133_fast.sock"
+const SOCK_SLOW = "/tmp/m133_slow.sock"
+
+def msg_of(r):
+    if type(r) == "result" and r.is_err():
+        return str(r.err())
+    return ""
+
+def main():
+    var ok = 0
+    var fail = 0
+
+    spawn serve_fast()
+    if not wait_sock(SOCK_FAST):
+        print("FAIL 服务端套接字未就绪")
+        exit(1)
+
+    # C) 不传 opts（老形态，零回归）
+    var rc0 = http_unix(SOCK_FAST, "/check", "POST", "{\"x\":1}",
+                        {"Content-Type": "application/json"})
+    if type(rc0) == "dict" and int(rc0["status"]) == 200 and str(rc0["body"]) == "pong":
+        print("PASS C 第五参形态（无 opts）行为不变 status=200 body=pong")
+        ok = ok + 1
+    else:
+        print("FAIL C " + str(rc0))
+        fail = fail + 1
+
+    # D) 正常应答 + opts
+    var rd = http_unix(SOCK_FAST, "/check", "POST", "{\"x\":1}",
+                       {"Content-Type": "application/json"}, {"timeout_ms": 2000})
+    if type(rd) == "dict" and int(rd["status"]) == 200 and str(rd["body"]) == "pong":
+        print("PASS D opts 形态正常应答 status=200 body=pong")
+        ok = ok + 1
+    else:
+        print("FAIL D " + str(rd))
+        fail = fail + 1
+
+    # A) 路径不存在
+    var t0 = now_ms()
+    var ra = http_unix("/tmp/m133_nosuch.sock", "/check", "POST", "{}", {},
+                       {"timeout_ms": 500})
+    var da = now_ms() - t0
+    var ea = os_errno()
+    if msg_of(ra) != "" and da < 300 and ea == 2:
+        print("PASS A 立即失败 " + str(da) + "ms errno=2(ENOENT) msg=" + msg_of(ra))
+        ok = ok + 1
+    else:
+        print("FAIL A " + str(da) + "ms errno=" + str(ea) + " msg=" + msg_of(ra))
+        fail = fail + 1
+
+    # B) + E) 对端 accept 后不回包：两个超时值
+    spawn serve_slow()
+    if not wait_sock(SOCK_SLOW):
+        print("FAIL 慢服务端套接字未就绪")
+        exit(1)
+    var t1 = now_ms()
+    var rb = http_unix(SOCK_SLOW, "/check", "POST", "{}", {}, {"timeout_ms": 500})
+    var db = now_ms() - t1
+    var eb = os_errno()
+    if msg_of(rb) != "" and db >= 400 and db < 1200 and eb == 11:
+        print("PASS B 超时失败 " + str(db) + "ms errno=11(EAGAIN) msg=" + msg_of(rb))
+        ok = ok + 1
+    else:
+        print("FAIL B " + str(db) + "ms errno=" + str(eb) + " msg=" + msg_of(rb))
+        fail = fail + 1
+
+    var t2 = now_ms()
+    var re = http_unix(SOCK_SLOW, "/check", "POST", "{}", {}, {"timeout_ms": 1500})
+    var de = now_ms() - t2
+    if msg_of(re) != "" and de >= 1300 and de < 2500:
+        print("PASS E 负控：timeout_ms=1500 → " + str(de) + "ms（500 时 " + str(db) + "ms）")
+        ok = ok + 1
+    else:
+        print("FAIL E " + str(de) + "ms（opts 是否被忽略？）")
+        fail = fail + 1
+
+    print("── ok=" + str(ok) + " fail=" + str(fail))
+    if fail > 0:
+        exit(1)
+    exit(0)
+
+def wait_sock(p):
+    var w = 0
+    while file_stat(p) == null and w < 300:
+        sleep(10)
+        w = w + 1
+    return file_stat(p) != null
+
+def serve_fast():
+    http_serve_unix(SOCK_FAST, fast_handler)
+
+def fast_handler(req):
+    return {"status": 200, "headers": {"Content-Type": "text/plain"}, "body": "pong"}
+
+def serve_slow():
+    http_serve_unix(SOCK_SLOW, slow_handler)
+
+def slow_handler(req):
+    sleep(8000)
+    return {"status": 200, "headers": {"Content-Type": "text/plain"}, "body": "late"}

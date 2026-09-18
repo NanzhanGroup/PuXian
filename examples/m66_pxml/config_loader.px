@@ -18,7 +18,7 @@
 #       native，建议 pxc build 编译产物运行解密演示（见 README）。
 # ============================================================
 import std.pxml
-# ---- 空 dict / 基础工具（PuXian 中 {} 字面量是 null）----
+# ---- 空 dict / 基础工具（M129 起 {} 即空 dict；此前是 null，故这里历史上用 json_parse）----
 def lx_nd():
     return json_parse("{}")
 def lx_is_call(node):

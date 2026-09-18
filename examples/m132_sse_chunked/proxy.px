@@ -1,0 +1,45 @@
+# ═══════════════════════════════════════════════════════════════════
+# M132 代理自检：**同进程同时**持有一个下游服务端连接 + 一个上游客户端连接
+#   —— 覆盖 qg-issue 87 缺陷 70（两个 id 命名空间重合 ⇒ sse_close 关错连接）。
+#
+# 形状与生产一致：下游 POST 进来 → sse_connect 上游 → 逐行透传 → 收尾。
+# 若 id 撞名，sse_close(上游) 会把**下游**连接关掉 ⇒ 响应缺 chunked 终块。
+# ═══════════════════════════════════════════════════════════════════
+import std.strings
+
+def on_p(req):
+    var conn = req["conn"]
+    var o = {}
+    o.set("sock", g_up)
+    o.set("method", "POST")
+    o.set("body", "{}")
+    o.set("content_type", "application/json")
+    var up = sse_connect("http://localhost/v1/chat/completions", o)
+    if up == null:
+        return {"status": 502, "body": "upstream-fail"}
+    var h = {}
+    h.set("Content-Type", "text/event-stream")
+    h.set("Cache-Control", "no-cache")
+    h.set("Connection", "keep-alive")
+    h.set("Transfer-Encoding", "chunked")
+    sse_start(conn, 200, h)
+    while true:
+        var ln = sse_read_line(up)
+        if ln == null:
+            break
+        sse_write(conn, ln + "\n")
+    sse_close(up)
+    return null
+
+def handler(req):
+    return {"status": 404, "body": "no"}
+
+def main():
+    var a = args()
+    g_up = a[1]
+    http_stream("/proxy", on_p, {"methods": ["POST"], "manual": true})
+    print("M132_PROXY_READY")
+    flush()
+    http_serve(int(a[2]), handler)
+
+var g_up = ""

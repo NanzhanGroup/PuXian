@@ -1,0 +1,131 @@
+# ═══════════════════════════════════════════════════════════════════════
+# M136 · JSON 往返 / str() 的「Go 逐字节保真」（qg-issue 87 缺陷 92–95 根治 + 复发防线）
+# ---------------------------------------------------------------
+# 本门把第 16 轮修掉的 4 处「静默数据变形」钉死：
+#   92 `str(s)` 对**含内嵌 NUL** 的字符串按 C 串重造 ⇒ 首个 0x00 处静默截断
+#      （PX_STR 本身是长度感知的；只有 str() 这一跳丢长度）
+#   93 `json_parse` 遇 **int64 溢出**用 strtoll 的夹钳值（LLONG_MAX）当结果 ⇒
+#      12345678901234567890 变成 9223372036854775807（Go：经 float64 ⇒ 1.2345678901234567e19）
+#   94 JSON 字符串解码 `\u0000` 后同样按 C 串重造 ⇒ 值在首个 NUL 处被截断
+#   95 `jgo_format_float` 用 `%.*f` 递增精度扫「最短」⇒ 1.23e19 得**精确值**
+#      12345678901234567168，而 Go 的 -1 精度是**最短往返数字**展开
+#      ⇒ 12345678901234567000（差 168）
+#
+# 三件事：
+#   ① 真值对拍：examples/m136_go_json_fidelity/truth（**Go encoding/json 本尊**）
+#      与 fidelity.px 的 22 条 corpus 逐行 diff（由 verify.sh 做）
+#   ② 自断言：str()/bytes 的 NUL 保真、JSON 往返的 4 类边界（本文件内 ck() 计数）
+#   ③ 负控：verify.sh 把 truth 的一行改错 ⇒ diff **必须**变红（门自欺检测）
+# ═══════════════════════════════════════════════════════════════════════
+
+import std.strings
+import std.go_strings
+import std.go_json
+
+var P = 0
+var F = 0
+
+def ck(name, cond):
+    if cond:
+        P = P + 1
+        print("  ✅ " + name)
+    else:
+        F = F + 1
+        print("  ❌ " + name)
+
+# 与 truth/main.go 的 corpus **逐行对应**（顺序不可换）
+let CORPUS = [
+    "{\"s\":\"a\\u0000b\\u001fc\",\"z\":\"<&>\\u00e9\\u4e2d\"}",
+    "{\"b\":12345678901234567890}",
+    "{\"b\":-12345678901234567890}",
+    "{\"n\":9223372036854775807}",
+    "{\"n\":-9223372036854775808}",
+    "{\"f\":0.7}",
+    "{\"f\":0.1}",
+    "{\"f\":1e-7}",
+    "{\"f\":1e-6}",
+    "{\"f\":1e20}",
+    "{\"f\":1e21}",
+    "{\"f\":123456789.123}",
+    "{\"f\":9007199254740993}",
+    "{\"f\":9007199254740992}",
+    "{\"f\":1.7976931348623157e308}",
+    "{\"f\":5e-324}",
+    "{\"f\":-0.0}",
+    "{\"f\":100000}",
+    "{\"f\":250.0}",
+    "{\"f\":3.141592653589793}",
+    "{\"f\":0.30000000000000004}",
+    "{\"a\":[1,2,{\"c\":true}],\"empty\":\"\",\"zero\":0,\"t\":true,\"nil\":null}",
+    "{\"big\":[1,12345678901234567890,[2,3.5]]}"
+]
+
+def mk_nul_bytes():
+    # "AB\0CD\0EF"（8 字节）—— 全是长度感知原语，**不经** 字符串字面量
+    var b = bytes("AB")
+    b = bytes_concat(b, int_to_bytes(0, 1))
+    b = bytes_concat(b, bytes("CD"))
+    b = bytes_concat(b, int_to_bytes(0, 1))
+    b = bytes_concat(b, bytes("EF"))
+    return b
+
+def main():
+    # ── ① JSON 往返（这 23 行由 verify.sh 与 Go 真值逐字节 diff）──
+    #   注意：必须经 go_json_widen_numbers —— Go 的 truth 走的是
+    #   json.Unmarshal → interface{} → Marshal，数字一律 float64 中转。
+    for s in CORPUS:
+        var r = json_parse_opt(s)
+        if r.is_err():
+            print("ERR")
+        else:
+            print(json_stringify_go(go_json_widen_numbers(r.unwrap())))
+
+    # ── ② str() / bytes 的 NUL 保真（缺陷 92）──
+    var b = mk_nul_bytes()
+    ck("bytes 长度 8", bytes_len(b) == 8)
+    var s1 = bytes_to_str(b)
+    ck("bytes_to_str 保长 8", byte_len(s1) == 8)
+    var s2 = str(s1)
+    ck("str(已字符串) 保长 8（修前 2）", byte_len(s2) == 8)
+    ck("str() 与原文逐字节相同", s2 == s1)
+    ck("str() 后仍可切出尾部（bytes 视角）", byte_len(go_slice(s2, 6, 8)) == 2)
+    ck("str(int) 仍是数字串", str(41) == "41")
+    ck("str(bool) 仍可用", str(true) == "true")
+    ck("str(list) 仍是渲染式（未被本改动影响）", str([1, 2]) == "[1, 2]")
+
+    # ── ③ JSON 内嵌 NUL 往返（缺陷 94）──
+    var jn = json_parse("{\"s\":\"a\\u0000b\\u001fc\"}")
+    ck("JSON 解析 \\u0000 保长（3 字符：a NUL b…）", byte_len(str(jn["s"])) == 5)
+    ck("JSON 重编码 \\u0000 不回退成截断",
+       json_stringify_go(jn) == "{\"s\":\"a\\u0000b\\u001fc\"}")
+
+    # ── ④ int64 溢出 ⇒ 回落浮点（缺陷 93）──
+    var ob = json_parse("{\"b\":12345678901234567890}")
+    ck("溢出整数被解析为 float", type(ob["b"]) == "float")
+    ck("溢出整数重编码 = Go（float64 中转）",
+       json_stringify_go(ob) == "{\"b\":12345678901234567000}")
+    var nb = json_parse("{\"b\":-12345678901234567890}")
+    ck("负溢出同理", json_stringify_go(nb) == "{\"b\":-12345678901234567000}")
+    var mx = json_parse("{\"n\":9223372036854775807}")
+    ck("int64 上界仍是 int（语言语义，非 Go interface{}）", type(mx["n"]) == "int")
+    ck("int64 上界加宽后 = Go 的 interface{} 形态（缺陷 96）",
+       json_stringify_go(go_json_widen_numbers(mx)) == "{\"n\":9223372036854776000}")
+    var z = json_parse("{\"z\":9007199254740993}")
+    ck("2^53+1 未加宽时保留整数（语言语义）", json_stringify_go(z) == "{\"z\":9007199254740993}")
+    ck("2^53+1 加宽后 = Go（9007199254740992）",
+       json_stringify_go(go_json_widen_numbers(z)) == "{\"z\":9007199254740992}")
+    ck("加宽是深拷贝：原值类型不被改动", type(z["z"]) == "int")
+
+    # ── ⑤ 浮点最短往返 + Go 的 f/e 分界（缺陷 95）──
+    ck("大整数值走最短数字（修前 …7184 类）",
+       json_stringify_go(json_parse("{\"f\":1e20}")) == "{\"f\":100000000000000000000}")
+    ck("1e21 起走科学计数", json_stringify_go(json_parse("{\"f\":1e21}")) == "{\"f\":1e+21}")
+    ck("1e-7 科学 + Go 的 e-0d 收敛", json_stringify_go(json_parse("{\"f\":1e-7}")) == "{\"f\":1e-7}")
+    ck("1e-6 仍走定点", json_stringify_go(json_parse("{\"f\":1e-6}")) == "{\"f\":0.000001}")
+    ck("0.1+0.2 全精度", json_stringify_go(json_parse("{\"f\":0.30000000000000004}")) ==
+       "{\"f\":0.30000000000000004}")
+    ck("-0.0 与 Go 同形", json_stringify_go(json_parse("{\"f\":-0.0}")) == "{\"f\":-0}")
+
+    print("M136_ASSERT: " + str(P) + "P/" + str(F) + "F")
+    if F > 0:
+        exit(1)
