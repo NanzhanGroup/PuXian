@@ -6,6 +6,156 @@
 
 ## [Unreleased]
 
+### api-server / token-cache PuXian 化：语言侧缺陷 15–102 全修（M129–M137 · qg-issue 87）
+
+> **背景**：本源令「把 `/data/code/api-server` 与 `/data/code/token-cache` 两个 Go 模块 **PuXian 化**；
+> 期间发现的语言缺陷**不要绕过**，自动立项完善语言后继续」。两个模块均以「**生产在跑的那个 Go 二进制**」
+> 为参考实现（`--version` 两侧一致）做逐字节对拍；对拍照出的语言缺陷**一律修在 language / runtime**
+> （能进 stdlib 的进 stdlib，须动编译器/运行时的走 selfhost + 回归门），累计 **88 条缺陷（15–102）**，
+> 其中 **3 条会静默打死服务进程**（缺陷 86 / 101 与 `str()` 截断族）、**9 条会静默改值**。
+> 两个模块自身**不入本仓**（另有版本库），本仓收的是**语言侧修复 + 新增 stdlib + 常驻回归门**。
+
+#### M129 · 语言侧补口第 1 批 + 两处真 bug（缺陷 15–55）
+
+- **新增 native**：`json_parse_opt`（解析失败返回 `Err`，不再 Fatal 终止）· `json_stringify_go`
+  （Go `encoding/json` 逐字节语义）· `hostname` · `read_file_opt` / `write_file_opt`（失败不杀进程）。
+- **词法（真 bug，缺陷 53）**：第 6 轮引入的续行规则把**括号内的「换行」token 吞掉了**
+  （`CONT_OPS` 含 `,` `.` `=`，而括号内换行是 M116/M119 多行语义的既有契约，golden 明确记有换行 token）
+  ⇒ 改为 `if g_bracket_depth == 0 and is_cont_op(...)`（续行**只对语句层有意义**）。
+  潜伏两轮的原因：第 6 轮只跑了前端回归、**漏跑 `diffcheck --lexer`**。
+- **codegen（真 bug，缺陷 54）**：**无捕获的闭包不再建 env**（`px_func` 而非 `px_func_env`）——
+  省一次字段写、且与既有 golden 形式一致。
+- **编译轨闭包 upvalue cell（缺陷 21）**· **`{}` 字面量 = `null` 而非空字典**（缺陷 15，文档化）。
+- **流程（缺陷 52/55）**：语义变更与 `golden/errors`、`golden/compiler.{c,bc.dump}` **必须同批更新**
+  （新语义下用例本就该在更晚处报错）；已按门指引重定基并人工核对「仅相关结构变化、无语义漂移」。
+- **验证**：`bootstrap/*` **14 件全件重烘**（`--check-all` 14/14）· `--check`（C 轨 55 例 rc/stdout/stderr）
+  · `--check-vm`（字节码镜像 34178 行逐字节）· `bootstrap_prove` / `bootstrap_prove_bc`
+  · `engine_parity` · `diffcheck` 六模式（`--lexer/--parser/--errors/--codegen/--value/--interp`）。
+
+#### M130–M133 · 文件锁 / 权限 / 元信息 / 错误文案 / 流式端点（缺陷 56–85）
+
+- **`flock(fd, op)`**：native 表原本**一个锁原语都没有** —— `fcntl(fd, cmd, arg)` 的 arg 只收 int/bool
+  ⇒ 传不了 `struct flock*`，POSIX 记录锁表达不出。**不能拿 `O_EXCL` 建文件替代**（会留 stale 死锁文件，
+  正是 PID 锁要避开的）。跨进程实证：他进程持锁 → `-1 / errno=11`；退出即自动可取。
+- **`chmod(path, mode)`** · **`open` 新增原始 flags 形态**（「有则开、无则建、**不截断**」——
+  `w+` 带 `O_TRUNC`、`rw` 无 `O_CREAT`，两种写法都表达不出）。
+- **`file_stat`**（size/mtime/mode/is_dir，失败返回 null 而非杀进程）· **`go_errno_string`**
+  （错误文案表由 `tools/gen_go_errno_table.go` **从 Go 自身导出**，杜绝手抄漂移）· **`ord` / `chr`**
+  · **`regex_valid`**（只编译不匹配 —— 原本 `regex_*` 一律 `px_error`，**一个坏正则就能杀掉服务**）。
+- **服务端不再给空体补嗅探 Content-Type**（缺陷 59）：Go 的 sniffing 发生在**首次 Write**，
+  `http.Redirect` 对非 GET 只 `WriteHeader` ⇒ 响应**没有** Content-Type。
+- **`http_unix` 新增总时限**（缺陷 80/81）＋ **失败成因可辨**（EOF / 超时 / 拒连 / reset·pipe / 头过大）
+  ——原本「先 close 再构造错误」使 errno 被覆盖，无法区分「连不上」（可重试）与「超时/断连」（重试放大对端 CPU）。
+- **`http_stream(path, fn, {methods, headers, manual})` + `sse_start` + `sse_write` + `sse_read_line`**
+  （缺陷 65/69/70）：Go 侧两个最高频的流式端点**都是 POST**，而 `http_stream` 只在 **GET** 上接管
+  ⇒ POST 的 SSE 只能「上游收齐再整体返回」；`manual` 让 handler 在校验失败时能先回普通响应。
+  同批修掉 `sse_connect` **不解码 chunked**（`sse_read` 只在块边界与事件边界重合时侥幸可用）
+  与**服务端/客户端 conn id 命名空间重合**（`sse_close` 会关错连接 —— 症状是「每行都正常、只有收尾块消失」，
+  端口在、进程在、零报错）。
+- **`int(str)` 是近似 `strtoll`**（缺陷 60）：`int("12ab") == 12` 且不报错 ⇒ 惯用写法把 `e/f/d` 一律算成 10；
+  顺带修出 `stdlib/yaml_lex.px::yl_hexv` 的同类潜伏 bug（YAML 双引号标量里的 `\uXXXX` 只要含 `a-f`
+  就**一直解错**，而 225 例对拍语料恰好没覆盖 hex 转义）。
+- **新增常驻门**：`examples/m130_flock_chmod` · `m131_http_stream_post` · `m132_sse_chunked`
+  · `m133_http_unix_timeout`。
+
+#### M134 / M135 · 类型白名单 → 位置表：一颗「GC 把活锁当垃圾回收」的哑雷（缺陷 86）
+
+> **现象**：`http_stream`(manual) 路由下，同进程内第 6 个「走审批判定」的请求起，
+> 连接**被 accept 但永不派发**（handler 完全不执行、客户端 0 字节），此后全部挂住；
+> `fds` 不变、线程数不变、**无日志、不可自愈**。
+> **取证**：`gdb -p` 按帧签名聚合 → worker 阻塞在 `pthread_mutex_lock`，对象头 `type=6`（`PX_LIST`）
+> 而**不是 14（`PX_MUTEX`）**、`__lock` 词已被写坏 ⇒ 不是「等活锁」，是**等在复用内存上**。
+> **根因（单一）**：`px_value_is_obj()` 的 `switch` 白名单漏了 `PX_MUTEX` / `PX_RWLOCK` / `PX_GEN`
+> ⇒ 这三种值放进容器/全局/帧时**不被标记**，锁对象被 GC 回收（悬垂），`pthread_mutex_lock`
+> 便阻塞在已回收内存的 `__lock` 上：**无持有者、无唤醒源、无日志**。
+
+- **修法（纪律级）**：`static const bool g_type_is_obj[PX_TYPE_MAX]` **位置表**（逐项表态）
+  ＋ `_Static_assert(sizeof == PX_TYPE_MAX)` ⇒ **新增 `LXType` 成员而不表态 = 编译失败**；
+  同族历史缺陷（43：`i_eq` 白名单漏 `bytes` ⇒ `bytes == bytes` 恒 false）一并收口。
+- **诊断**：`px_dbg_obj_check` 在锁原语入口抓拍「标签是锁、对象头 type 不符」⇒
+  把**静默永久挂死**变成**立刻可见、可 gdb 的崩溃**。
+- **新门**：`examples/m134_gc_obj_roots/`（每种堆对象 × 每种持有方式 → `gc()` → 逐个使用；
+  17 断言 × VM/C 双轨 ＋ 静态门「枚举全集 ↔ 表条目」＋ 双负控）。
+- **修复后**：真系统 **30/30 请求全 200**、`fds` 恒 11；GC 风暴（`PX_GC_THRESHOLD=100`）下正常启动并服务。
+
+#### M136 · 「静默变形」七条：Go JSON / 字符串保真（缺陷 88–96）
+
+- ⚠️ **`str(s)` 对含内嵌 NUL 的字符串按 C 串重造 ⇒ 静默截断**（`PX_STR` 本身长度感知，
+  只有 `str()` 这一跳丢长度 ⇒ 25 字节音频响应变 **3 字节**）。
+- ⚠️ **浮点「最短往返」取法错**（按 `%.*f` 精度扫 ⇒ `1.23e19` 得 `12345678901234567168`，Go 给
+  `12345678901234567000`，**差 168**）· **JSON 整数溢出夹到 `INT64_MAX`**（`12345678901234567890`
+  静默变 `9223372036854775807` ⇒ **上游收到的请求体不同**）· **JSON 字符串里的 `\u0000` 同样被截断**。
+- **多值头（`Set-Cookie` 等）被静默丢弃**（响应/请求两侧都对非 `str` 值 `continue`）
+  · **服务端只给「整体解码后」的查询串**（`?key=a%26b` 拿到 `"a"`，`+` 不再是空格）⇒
+  新增 `req["raw_query"]` + `util.q()`。
+- `http_request` 新增 **`opts.decode_gzip`**（Go 只在调用方未自带 `Accept-Encoding` 时透明解压）；
+  `json_parse` 保留整数 vs Go `interface{}` 把数字全变 float64 ⇒ 新增
+  `stdlib/go_json.px::go_json_widen_numbers()`。
+- **新门**：`examples/m136_go_json_fidelity/`（23 行语料与 **Go `encoding/json` 本尊**逐字节 diff
+  ＋ 24 断言 × 双轨 ＋ 双负控）。
+
+#### M137 · 真流式：`sse_connect_ex` + 失败可分类（缺陷 97–102）
+
+- **新增 `sse_connect_ex(url, opts)` → `dict{ok, conn, status, ctype, retry_after, body, errno, stage}`**：
+  失败**可分类**（参数 / 连接 / 发送 / 读头 / 状态码 / CT 不符 / 槽满）；`opts.require_ct`（默认 `false`
+  —— Go 的 `forwardStream` **不看 CT**）、`opts.timeout_ms`；非 200 时**读全响应体**
+  （按 `Content-Length` / 终结块 / EOF 三条停药条件，**不依赖定时器**）；响应头改**逐行解析**
+  （原 `strstr` 只认两种大小写、且会被头**值**里的同名子串误命中）。**`sse_connect` 语义零变化**。
+- **真流式落地**：慢速上游实测 **首字节 Go 0.002s / PuXian 0.005s**（「收齐再给」必然 ≥1.5s），
+  去分块体与**分块帧序列**逐字节一致（分帧边界 = Go 的 **Flush 点**，非 `data: ` 行不 flush）。
+- ⚠️ **`pass` 不是关键字、能编译通过、运行时打挂整个进程**（缺陷 101）：8 处「JSON 字段 `null` ⇒ 接受」
+  分支写成 `pass` ⇒ 上游任何 `"created": null` / `"tool_calls": null` 都让 token-cache **整进程死**；
+  已改合法空语句并加**负控**（换回 `pass` ⇒ 进程被打挂，5/5 对齐）。**语言侧定案待办**（no-op 关键字 vs 编译期报错）。
+- 同批：「**靠别人的 import 活着**」（用了 `byte_len` / `go_slice` 却没 import，只因别的文件恰好 import 了）
+  ⇒ 新增 `tools/lint_gate.py`（**逐文件** `px lint` + 基线 + **只禁新增**）：
+  注意 `px lint <入口>` **不 lint 被 import 的文件**（缺陷 99），"只 lint 入口"当门是错的。
+- **新门**：`examples/m137_sse_connect_ex/`（PASS=102 × VM/C 双轨）。
+
+#### stdlib · Go 语义与通用库（11 个新库 + `yaml` 拆分）
+
+- 新增 `stdlib/go_json.px`（Go `interface{}` 数字加宽）· `go_strings.px`（Go `strings` 语义）
+  · `io.px` · `jsonx.px` · `path.px` · `strings.px` · `time_go.px`
+  · `url.px`（`url_path_escape` / `url_parse_query`，按 41 例 + Go `ParseQuery` 真值）。
+- `stdlib/yaml.px` **592 行 → 364 行拆分层化**：词法/标量层 → `yaml_lex.px`，
+  行/块标量层 → `yaml_lines.px`，Go 逐字节序列化 → `yamlx.px` / `yamlx_style.px`。
+
+#### 常驻门 · M130–M137 七道门 + 索引门接入 CI（此前只在本地跑 ⇒ CI 无防线）
+
+- 新增 `examples/m130_flock_chmod` · `m131_http_stream_post` · `m132_sse_chunked`
+  · `m133_http_unix_timeout` · `m134_gc_obj_roots` · `m136_go_json_fidelity` · `m137_sse_connect_ex`，
+  并接入 `selfhost/m116_gates.sh` / `m117_gates.sh` 与 `.github/workflows/ci.yml`
+  （`ci.yml` 原本只到 `m122`；`m136` 需 Go，只在本地全门里跑）。
+- `docs/native_index.json` **313 → 330**：第 9–17 轮新增的 **17 个 native 一个都没进索引**
+  （`ecosystem_index.json` 也停在 `yaml.px` 拆分前）——属「本地全绿、CI 红」潜伏 8 轮，
+  已同步并把该门补进 `m116`/`m117`。
+
+
+#### 提交前 CI 对齐预检（本轮新增的一类工作：把「CI 独有、本地没有」的门补齐）
+
+首轮把这批改动真正推上 GitHub 之前，按 `ci.yml` 逐条预跑了一遍 —— 结果**发现 4 类问题**，
+都不是"新写的代码有 bug"，而是**"门只在 CI 里、本地从来看不见"**：
+
+1. **`fmt --check`：15 个文件不符**（`selfhost/codegen.px` `selfhost/pxlexer.px` + `stdlib/` 13 个新库）
+   ⇒ 推上去 CI 必红。已格式化（改动**只有空行与续行缩进的规范化**，语义零变化；并已复验
+   `px_srcline` 行号漂移以外的产物逐字节一致）；同时把 `fmt --check` + `lint` 两步**补进
+   `selfhost/m116_gates.sh` / `m117_gates.sh`**（口径与 `ci.yml` 逐字一致）。
+2. **m119 / m122 两道门里各有一条断言已经是红的**（而它们在本地从不跑）：
+   - `m119` 第 5 节：负控「**括号外**行尾运算符必须报错（与 Python 同边界）」—— 该语义已被
+     M129 的「行尾运算符续行」（Go 自动分号插入，缺陷 33）**有意变更**；据实改为
+     「括号外行尾续行」**正控** + 新增「括号外**行首**运算符 → `E2001`」负控。
+   - `m122`：正控 `json_stringify({}) == "null"` —— `{}` 自 M129（缺陷 15）起是**空 dict**
+     ⇒ 期望值改为 `{}`，并**补一条** `json_stringify(null) == "null"`（原意图不丢）。
+3. **文档漂移（用户可见）**：速查表此前仍写「`{}` 字面量 = `null`」（4 处），且第 33 条
+   「括号外不续行」与第 43 条「行尾运算符续行」**自相矛盾**；`stdlib/collections.px` /
+   `pxml.px` / `examples/m66_pxml` 的注释同族。已全部据实改写（并实测 `{}` 与 `[]` 一样是**假值**，
+   无「空容器真值」陷阱）。
+4. **其余 CI 独占步**（`m118` / `m119` / `m120` / `m122` + 发布侧守卫三条自测）**补进
+   `m116`/`m117`**；`m67_multiarch`（x86_64 档，含 GC 压力）与 `bootstrap_prove(_bc)`
+   因耗时长保留在 CI 与手工预检，本轮均已手工跑绿。
+
+同一提交内：`golden/compiler.{c,bc.dump}` 按新源码重定基（差异**仅** `px_srcline` / `SRCLINE`
+行号，已用归一化比对自证）、`bootstrap/*` 14 件重烘（`--check-all` 14/14）。
+
 ### 发布治理 · 「推 main 必须打 tag」守卫 —— 漏打 tag 不再静默（qg-issue 86）
 
 > **病灶（发布链路的最后一段没有守卫）**：本仓发布**完全由 tag 驱动** ——

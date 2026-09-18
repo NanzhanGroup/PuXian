@@ -42,7 +42,7 @@
 ### dict / list / str 操作（易错重点）
 
 ```px
-var d = json_parse("{}")        # ⚠️ 空 dict 不能写 {}（{} 字面量 = null！）
+var d = {}                      # 空 dict：M129 起可直写（此前 {} 是 null，旧写法 json_parse("{}") 仍可用）
 d.set("a", 1)                   # 写键：.set(k, v)（无 d[k]=v 语法）
 if d.has("a"):                  # 查键 .has(k)
     var v = d["a"]              # 读键 d[k]
@@ -90,7 +90,7 @@ print("upper=" + to_upper("px"))
 
 ### ⚠️ 语言事实与坑（写代码前必读）
 
-1. **`{}` 字面量 = `null`**，不是空 dict；空 dict 用 `json_parse("{}")`。
+1. **`{}` 字面量 = 空 dict（M129 起；qg-issue 87 缺陷 15）** —— 此前求值为 `null`（导致「空字典字面量」在语言里没有写法，只能 `json_parse("{}")`）。旧写法仍可用、行为一致；空 dict 与空 list 一样是**假值**。
 2. **无 `d[k] = v` 赋值**；dict 写用 `.set(k, v)`、查 `.has(k)`、读 `d[k]`。
 3. **表达式可跨行（M70 起；M116 修好"闭合行缩进"）**：list/dict/调用参数/元组/索引在括号（`[` `(` `{`）内可换行（含尾部逗号），语义与单行等价；**括号内续行完全不受缩进栈约束** —— 闭合括号比语句更深（`return [1,\n            2]`）或顶格（`2]` 对齐第 0 列）都合法（M116 前：续行更深会在行尾多弹一级缩进，**把外层代码块提前结束**，报错行号还指向下一行行首）。但 `=` 后、二元/一元运算符后仍**不能**换行（语句边界以换行为准，需续行用括号包裹，如 `let x = (\n  a + b\n)`）。
 4. **dict 键限定 str**；键非 str 先 `str(k)`。
@@ -108,6 +108,7 @@ print("upper=" + to_upper("px"))
     - **`{n,}` 无上限量词正则有 O(n²) 风险**（64KB 命中输入 8.8 s；固定 `{20}` / 纯字面 0 ms）——M107-S1 修。此前对**大文本**做密钥/敏感串扫描，先用**字面前缀预筛**（如 `contains(s, "sk-")` 为假即跳过该正则）。
 14. **保留字坑（M115 实测，ws-ddns PuXian 化当场踩）**：`self` / `pub` / `send` / `recv` / `capture` / `trait` / `impl` / `match` … 都是**关键字**，
     不能当变量名（`var self = …` / `var pub = …` → `E2001 期望变量名，实际得到 self|pub`）。写端口/系统代码时 `self` 是高频命名，请改用 `exe` / `this` / `srv` 等。
+    **M128 补充**：`from` 同样是保留字（`var from = ""` → `E2001 期望变量名，实际得到 from`；api-server 移植 `handlers_session.go` 的变量名 `from` 当场踩到，改名 `src`）。
 15. **`args` 必须写成 `args()`**（M115 修）：此前解释轨**未注册**该内置名 ⇒ `px run` 下裸写 `args` 报 `R1001 未定义变量: 'args'`（仅编译产物可用）；
     且两轨形状不一致（解释轨给的是宿主 argv `[<path>/pxi, 用户参…, 脚本]`）。现已规范化：`px run s.px a b` 与编译产物同为 **`[程序, a, b]`**。
 16. **`env_set` 的遮蔽坑（M115）**：解释器内置分发层 `selfhost/ibuiltin.px` 与编译器内部的 `selfhost/env.px`（变量环境）**同处一个编译单元**，
@@ -120,7 +121,7 @@ print("upper=" + to_upper("px"))
 18. **dict 缺键：两条轨都报 R1008（M116 统一）**：`d["缺的键"]` / `d.缺的字段` 在**编译轨与解释轨都**是运行时错误
     `R1008 字典没有键 'xxx'`（进程以非零码退出）。M116 前编译轨**静默返回 null**、解释轨才报错 ——
     实测后果：`str(r["role"])`（键缺失）在编译轨下得到字符串 `"null"` 并**被写进数据库**，是"静默数据损坏"。
-    正确写法是**先守卫**：`if d.has("k"): ... d["k"] ...`；`{}` 的字面量是 `null` 不是空 dict（见第 1 条）。
+    正确写法是**先守卫**：`if d.has("k"): ... d["k"] ...`（`{}` 自 M129 起是空 dict，见第 1 条）。
 19. **服务端 handler 出错 → 500（M116）**：`px_serve` / `http_serve` 的 handler / middleware 内抛运行时错误时，
     客户端收到 **`500 Internal Server Error`**（body 说明现场在服务端 stderr），**服务继续可用**。
     M116 前：VM 轨（协程化 handler）客户端收到 **`204 No Content`**（= 成功语义，客户端与监控全部误判、现场只在 stderr）；
@@ -168,13 +169,14 @@ print("upper=" + to_upper("px"))
     多行字典**不需要尾逗号**：`{"k": "v"` ⏎ `}`。
     M119 前：行尾 `+` → `E2001 意外的 token: 换行`；行首 `+` → `E2001 期望 ')'，实际得到 +`
     ⇒ 长表达式只能挤成一行（**编译器自身源码亦被迫如此**，supervisor 加一行日志就撞上）。
-    边界（与 Python 的隐式续行同）：**括号外不续行**；括号内**行首**的一元运算符
+    边界：**括号外行尾**运算符自 M129 起同样续行（见第 43 条，Go 自动分号插入语义），
+    **括号外行首**运算符仍报错；括号内**行首**的一元运算符
     （`-` `~` `not`）不参与续行（与「新语句以一元运算符开头」歧义）—— 把运算符写到行尾即可。
 
 34. **缺键 = 运行时错误 `R1008`（M116 起三轨统一；M120 起配套完善，口径=「保持严格」）**：
     `d["缺失键"]` 不返回 `null`，直接报错杀进程（非协程路径 rc=1）。**可选键必须显式守卫**：
-    `if st.has("k"): … st["k"] …`（嵌套逐层守卫）。**`{}` 字面量是 `null`，不是空 dict**（空 dict 用
-    `json_parse("{}")`）；`d.get(k, 默认)` 的默认值**只覆盖「键不存在」**，键在而值为 null 仍返回 null。
+    `if st.has("k"): … st["k"] …`（嵌套逐层守卫）。`d.get(k, 默认)` 的默认值**只覆盖「键不存在」**，
+    键在而值为 null 仍返回 null。（`{}` 自 M129 起是空 dict，见第 1 条 —— 此前是 null。）
     迁移指引（逐条错误码表 + 存量扫法 + ws-core 案例）：**`docs/DICT_STRICT_MIGRATION.md`**。
 35. **索引/字段/方法族的错误码三轨一致（M120）**：dict 缺键 `R1008: 字典没有键 'k'` · 结构体缺字段
     `R1008` · 其它类型缺字段/无方法 `R1007: 类型 <t> 没有方法 'm'` · 索引越界 `R1003` ·
@@ -188,7 +190,100 @@ print("upper=" + to_upper("px"))
     **SIGSEGV rc=139**、解释轨友好报 `R1002`；现编译轨同样 `R1002`。**同族**（`startswith` 等内建）
     尚未收口 —— 键/参数来自外部数据（`json_parse`）时先用 `type()` 判型。
 
-## 2. native 内置速查（312 全量见 `docs/native_index.json`，本表为常用）
+38. **JSON 序列化有两个原语，别拿错（M129，qg-issue 87 缺陷 16）**：
+    - `json_stringify(v)` —— **插入序**、不做 HTML 转义、控制字符**裸输出**（可产出非法 JSON）、浮点 `%g`（6 位有效数字，**会丢精度**）。
+    - `json_stringify_go(v)` —— **对齐 Go `encoding/json`**：dict 键**递归按字节序排序**、`<` `>` `&` → `\u003c \u003e \u0026`、
+      控制字符 → `\u00XX`、U+2028/9 → `\u2028/9`、非法 UTF-8 → `\ufffd`、浮点走**最短往返**、
+      `bytes` 按 Go `[]byte` 出 **base64**。
+      可选第二参：`json_stringify_go(v, {"sort_keys": false, "escape_html": false})` ——
+      Go 侧 **map 排序 / 结构体保声明序**，而 PuXian 里二者都是 dict，故排序必须可关：
+      遇到"map 里嵌结构体"的响应（如 `{"agents":[ExternalAgent…],"ok":true}`）用
+      `{"sort_keys": false}` 并**手工按字母序 set 外层键**。
+    凡"移植 Go 代码"或"要输出给人/机器对齐的 JSON"（响应体、落盘配置文件）一律用 `json_stringify_go`；
+    `json_stringify` 保留给"内部紧凑编码、不关心键序"的场景。**两者不可混用比较**。
+39. **`type()` 对字符串返回 `"string"`，不是 `"str"`**（M129 实测）：`type("a") == "string"`、
+    `type([1]) == "list"`、`type(json_parse("{}")) == "dict"`、`type(1) == "int"`、`type(null) == "null"`、
+    `type(true) == "bool"`。与 native 报错文案里的 `str` **不一致** —— 写类型分派时用错会**恒 false**
+    （不报错，静默走错分支）。
+40. **`sqlite_query` 的 dict 键 = SQLite 返回的**列名**（M129，qg-issue 87 缺陷 20）**：
+    `SELECT COALESCE(base_url,'') FROM ...` 的键是字符串 `"COALESCE(base_url,'')"`，
+    `r["base_url"]` 取不到（返回前先 `r.keys()` 看一眼最省事）。
+    移植 Go 的 `rows.Scan`（**按位置**取值）时**必须写 `AS` 别名**，否则字段恒空 —— 且写库路径会把空值写回去（静默清库）。
+41. **闭包捕获：轨间语义分叉（M129，qg-issue 87 缺陷 21）**：
+    - **字节码 VM 轨（`px build` 默认）**：闭包为 M89-S3 **P1「无捕获」**版 —— 闭包体里引用**外层函数的参数/局部**
+      会退化成全局名查找 ⇒ 运行期 `未定义变量` 或取到 null。**只能捕获模块级全局**。
+    - **C 轨（`px build --c`）**：M129 起**真词法捕获**（upvalue cell，按引用）。
+    - **解释器轨（`px run`）**：env 链，一直是真捕获。
+    ⇒ 写**需要捕获外层局部**的回调（`with_db(cfg, fn(db): …)` 这类）时，字节码轨会报"未定义变量"。
+    规避写法（P2 落地前）：把事务体**内联展开**，或把所需值作为**显式参数**传入；
+    同时注意 `for` 循环里创建的闭包在解释轨是**每次迭代新绑定**。
+42. **`os_capture`/`os_spawn_capture` 的 opts**（M129，缺陷 7）：`{"stdin_data": "…"|bytes(), "stdin": "/path", "cwd": "/tmp", "env": {...}, "group": true, "timeout_ms": 3000}`；
+    `os_capture` → `{rc, stdout, stderr}`（分离），`os_spawn_capture` → `[rc, output]`（合并）。
+    ⚠️ `os_popen` 的 stderr **未重定向**（会漏进宿主 stderr，缺陷 14 待修）。
+
+
+43. **「行尾运算符续行」（M129，qg-issue 87 缺陷 33）**：Go 风格的长表达式**可以**这样写 ——
+    ```px
+    var s = "a" +
+            "b"
+    var ok = x == "ab" and
+             y == 3
+    ```
+    规则 = Go 的自动分号插入：**上一 token 是双目运算符**（`+ - * / // % ** == != < > <= >=
+    and or & | ^ << >> >>> ?? |> = += …` 以及 `.` `?.` `=>` `,`）时，换行**不是**语句分隔符，
+    且下一行的缩进**不参与缩进栈**（等价括号内续行）。
+    ⚠️ **仍是错误**的写法：把运算符放到**下一行行首**（`a` 换行 `+ b`）—— Go 也不接受；
+    `not` 是一元前缀，不在续行表内；`:` 是块头终止符，**绝不**参与续行（否则吞掉所有缩进块）。
+44. **`json_parse_opt(s) → Ok(v) | Err(msg)`（M129，缺陷 38）**：**解析外部 JSON 必须用它**。
+    裸 `json_parse` 遇到畸形输入会 `px_error` —— 在 `http_serve` 里表现为 **500**
+    （而 Go 的 `json.Unmarshal` 只是返回 error，由调用方按零值处理，这是 HTTP handler 的常态）。
+    失败**不打印、不退出、不污染 stderr**；不支持嵌套调用（捕获点只有一个）。
+    配套 stdlib 便捷函数：`px/util.px::json_parse_safe(s)`（失败返回 `null`）。
+45. **`hex_to_bytes("")` 返回零长度 `bytes`（M129，缺陷 34）**：与 Go `hex.DecodeString("")` 一致。
+    此前返回 `null` ⇒ `bytes_len` 直接 R1002 杀进程。顺带登记**宽容差异**（缺陷 36）：
+    本实现会先剥掉空白字符再解码，Go 对空白**报错**。
+46. **`null` 字符串化为 `"null"`（M129，缺陷 35）**：`str(null)` 与 `val_cstr(null)`
+    （`sha256`/`base64_encode`/`hex_to_bytes` 等 native 的入参转换）现已一致。
+    此前 `sha256(null)` = `sha256("0.0")` —— **静默错误结果**。仍建议：**别给 native 传 null**。
+47. **`def main(): …` 会被运行时自动调用（缺陷 37）**：**不要**在文件末尾再写 `main()` ——
+    会**静默执行两遍**（Go 移植里 `func main(){…}` + 顶层 `main()` 是高频写法，务必删掉后者）。
+48. **`bytes` 可以直接当 HTTP 响应体（M129）**：`http_serve` 的 handler 返回
+    `{"status":…, "body": <bytes>, "headers":…}`，`runtime_route.c` 支持 `PX_BYTES`。
+    ⚠️ **M129 二次修订（缺陷 49）**：`http_serve(port, fn)` 这条最常用的路径走的是
+    `runtime.c::px_http_build_response`，而它**原先没有 `PX_BYTES` 分支** ⇒ 返回 bytes 体时
+    **响应体恒为空**（`Content-Length: 0`），状态码/其它头一切正常、**无任何报错**。
+    同族另外两处（`runtime_route.c::route_normalize`、`runtime.c::px_vhost_normalize`）本来就有。
+    现已补齐（顶层 + dict 两处），并加最小复现断言。**凡二进制响应必跑一次端到端 curl 自查**。
+    返回**二进制**（zip/图片/音视频）**必须**用 `bytes`：走 `str` 会因「str 不能承载内嵌 NUL」
+    在第一个 `0x00` 处**静默截断**。
+49. **stdlib `url.px`（M129，缺陷 32）**：`url_query_escape` / `url_values_encode`（键字节序排序）/
+    `url_query_unescape` / `url_parse`（`path` 为**解码后**值，`+` 不当空格）。native 表里
+    **没有**任何 URL 编码原语，签名类代码务必用本模块而非手搓。
+50. **`fn` 是保留字（缺陷 4 补充）**：`fn` 不能当变量名/循环变量/参数名（`for fn in …` → E2001）。
+    另注意 `t`、`s` 这类短名极易**遮蔽**项目里的同名函数（如 i18n 的 `t()`）—— 遮蔽后调用会 500。
+
+51. **`int(str)` 是近似 `strtoll`，不报错（M130，qg-issue 87 缺陷 60）**：
+    `int("e") == 0`、`int("a") == 0`、`int("") == 0`、**`int("12ab") == 12`** ——
+    解析到第一个非数字字符即停，**无数字前缀返回 0 且不报错**。
+    ⚠️ 与 Go `strconv.Atoi`（报错）**不同**；且**不要**用 `int(c) - int("0")` 做字符→数字：
+    十六进制逐位转换的惯用写法 `int(c) - int("a") + 10` 会把 `e/f/d` **一律算成 10**
+    （应 14/15/13）= 静默错值（`stdlib/yaml_lex.px::yl_hexv` 曾因此把 YAML `\uXXXX`/`\xNN`
+    解错，只要含字母 a-f）。**正确姿势 = 查表**：`index_of("0123456789abcdef", to_lower(c))`。
+    （速查包旧文与若干移植注释曾把 `int()` 记为"畸形输入报运行时错误"—— 与实测相反，已更正。）
+
+52. **文件锁 / 权限 / `open` 原始 flags（M130，缺陷 56/57/58）**：
+    - `flock(fd, op)` → `0` 成功 / `-1` + `os_errno()` 失败；
+      op = `LOCK_SH=1 / LOCK_EX=2 / LOCK_NB=4 / LOCK_UN=8`（可按位或，如 `2|4`）。
+      **BSD 锁语义**：进程退出或关闭 fd 即释放 ⇒ 无 stale 锁文件（PID 锁的正确基础）。
+      对照：`fcntl(fd, cmd[, arg])` 的 arg **只收 int/bool**，**传不了 `struct flock*`**，
+      POSIX 记录锁（`F_SETLK`）**表达不了** ⇒ 要锁文件用 `flock`。
+    - `chmod(path, mode)` → bool（= Go `os.Chmod`）；失败 `false` + `os_errno()`。
+    - `open(path, flags_int[, perm])`：**原始 flags** 形态（新增）。
+      `open(p, 0o100|2, 0o644)` 即 Go `os.OpenFile(p, O_CREATE|O_RDWR, 0644)`（**不截断**）——
+      字符串形态（`r/w/a/rw/w+`）表达不了"有则开、无则建、不截断"（`w+` 带 `O_TRUNC`），
+      也表达不了 `O_EXCL`。字符串形态**行为零变化**。
+      ⚠️ 第三参只在第二参是 int 时可用。
+## 2. native 内置速查（330 全量见 `docs/native_index.json`，本表为常用）
 
 ### 核心 / 值
 `print` `len` `range` `type` `str` `int` `float` `bool` `assert` `input` `exit` `sleep` `abs` `sqrt` `min` `max` `pow` `sorted` `reversed` `sum` `map` `filter` `reduce` `contains` `env`（⚠️ **变量不存在返回 `null`**，不是 `""` —— `str(null)` 会得到 `"null"`，取值请先判 null） `args()`（**调用式**：`px run s.px a b` 与编译产物同形 `[程序, a, b]`——M115 修；见 §1.1 事实清单）
@@ -205,7 +300,7 @@ print("upper=" + to_upper("px"))
 `bytes(s)`（⚠️ **`str(bytes)` 得到的是占位符 `"<bytes N>"`，不是内容**，也不报错 —— bytes→str 必须用 `bytes_to_str(b)`；`len(bytes)` 不支持，用 `bytes_len(b)`）`bytes_len` `bytes_get/set` `bytes_slice` `bytes_concat` `bytes_to_str` `int_to_bytes` `bytes_to_int` `bytes_base64` `bytes_find` · `bit_count` `bit_length`
 
 ### 时间 / 定时 / 调度
-`now()`（**本地时间字符串** `YYYY-MM-DD HH:MM:SS`）`now_ms()` `now_us()` `now_sec()`（M115：Unix 秒，配 `time_format`）`sleep(sec)` `sleep_us` `time_format(t, fmt)` `time_parse` `tz_offset` · `set_timeout(f, ms, ...)` `set_interval` `clear_timer` · `cron("分 时 日 月 周", f)`（6 字段）
+`now()`（**本地时间字符串** `YYYY-MM-DD HH:MM:SS`）`now_ms()` `now_us()` `now_sec()`（M115：Unix 秒，配 `time_format`）**`sleep(ms)`**（⚠️ M128 实测更正：参数是**毫秒**不是秒！runtime `bi_sleep` 按 ms 换算；`sleep(1)`=1ms、`sleep(1500)`=1500ms；且 `int_val` **截断小数** ⇒ `sleep(0.5)` 等于不睡。移植 Go `time.Sleep(30*time.Second)` 若写成 `sleep(30)` 会少睡 1000 倍）`sleep_us`（微秒） `time_format(t, fmt)` `time_parse` `tz_offset` · `set_timeout(f, ms, ...)` `set_interval` `clear_timer` · `cron("分 时 日 月 周", f)`（6 字段）
 
 ### HTTP（客户端/服务端）
 客户端：`http_get(url)` `http_post(url, body[, headers])` ·
@@ -233,12 +328,22 @@ AES：`aes_encrypt(key, iv, data)` / `aes_decrypt`（CBC-PKCS7）· `aes_gcm_enc
 Session：`session_open()/session_id/get/set/del/destroy` · `basic_auth(user, pass)` · `route(method, pattern, fn)`（:id 参数 / * 通配）· `middleware(fn)` `rate_limit` `vhost` `sandbox_enter` · 上下文 `ctx_set/get/clear` · 消息总线 `bus_new/subscribe/publish/unsubscribe` · `event_bus` · `gen_next`（生成器取下一项）· `list(xs)`（生成器→list）
 
 ### 进程 / 系统（M66 五件套 + M42+）
-`os_pid()` · `os_exec(cmd, args)`（替换进程）· `os_spawn(cmd, args[, group|opts])` / `os_spawn_capture`（group=true 子进程 setpgid 自成组，M83-S2）· `os_wait(pid)` · `os_kill(pid[, sig[, group]])`（group 组杀）· `os_capture(cmd)`（双管道分离捕获）· `os_popen(cmd, mode)`（双向）· `os_rename` `os_remove_all`（防删根）· `os_random_hex(n)` `os_file_sha256(path)` · `unix_connect(sockpath)` · `signal(sig, fn)` · `gc()`
+`os_pid()` · `os_exec(cmd, args)`（替换进程）· `os_spawn(cmd, args[, group|opts])` / `os_spawn_capture(cmd, args[, opts])`（group=true 子进程 setpgid 自成组，M83-S2）· `os_wait(pid)` · `os_kill(pid[, sig[, group]])`（group 组杀）· `os_capture(cmd, args[, opts])`（双管道**分离**捕获 stdout/stderr）· `os_popen(cmd, args)`（双向）· `os_rename` `os_remove_all`（防删根）· `os_random_hex(n)` `os_file_sha256(path)` · `unix_connect(sockpath)` · `signal(sig, fn)` · `gc()`
 > **M115 服务进程/环境补全**（ws-center / ws-ddns PuXian 化实测缺口）：`env_set(name, value)` / `env_unset(name)`（进程环境**可写**，子进程可继承）· `os_self_path()`（当前可执行文件绝对路径，守护化/自升级用）· `isatty(fd)`（TTY 判定，交互式提示只在终端弹）· `now_sec()`（Unix 秒，与 `time_format` 同轴 —— `now()` 是**本地时间字符串**，喂 `time_format` 会类型报错）。
-> **`os_spawn` opts dict（M115）**：`os_spawn(cmd, args, {group:true, setsid:true, stdout:"/log/x.log", stderr:"…", stdin:false, cwd:"/tmp", env:{"K":"V"}})` —— 守护化不再需要 `/bin/sh -c "setsid … >>log 2>&1 &"`（旧法拿不到真实 pid）。`stdin:false` = `/dev/null`；`opts.env` **不污染父进程**；第 3 参传 bool 时语义不变（零回归）。
+> **`os_spawn` opts dict（M115）**：`os_spawn(cmd, args, {"group":true, "setsid":true, "stdout":"/log/x.log", "stderr":"…", "stdin":false, "cwd":"/tmp", "env":{"K":"V"}})`（⚠️ M128 实测更正：键**必须带引号** —— `{k: v}` 的键是**表达式**，`{group:true}` 会当成变量 `group` 求值 ⇒ `R1001 未定义变量`；非字符串键 ⇒ `R1002 字典键必须是字符串`。旧文档示例是无引号写法，照抄必踩。另：`stdin` 只接受**路径**，不能直接喂字符串数据） —— 守护化不再需要 `/bin/sh -c "setsid … >>log 2>&1 &"`（旧法拿不到真实 pid）。`stdin:false` = `/dev/null`；`opts.env` **不污染父进程**；第 3 参传 bool 时语义不变（零回归）。
+>
+> **`os_capture` / `os_spawn_capture` opts dict（M129）**：`{"stdin_data": "…"|bytes(), "stdin": "/path", "cwd": "/tmp", "env": {"K":"V"}, "group": true, "timeout_ms": 3000}`
+> —— 补齐 Go 侧最常见的三种子进程形状（原先语言里各缺一角，`qg-issue 87` 缺陷 7）：
+> - **`"stdin_data"`：把内存里的数据喂给子进程 stdin**（建管道写入，写完即关 = EOF；空串也建管道 ⇒ 子进程立刻 EOF）。这是 `cmd.Stdin = bytes.NewReader(s)` 的等价物 —— 旧文档只有 `stdin` **路径**，无法表达"参数走 stdin"的工具协议。与大输出并发时用 **poll 双工**驱动（既写 stdin 又读 stdout），**不会互锁**。
+> - **`"timeout_ms"`：超时 SIGKILL 整组**（需配 `"group": true`；工具常自己再 fork，只杀父会留孤儿）。超时后 rc = **137**（=128+SIGKILL），并**继续读尽残余输出**（不是丢弃）。
+> - `"env"` 与 `environ` **合并**（同名覆盖、其余继承）⇒ 等价 Go `os.Environ()` + `append`；`"cwd"` 同 `os_spawn`。
+> - 区别只在输出形状：`os_capture` → `{rc, stdout, stderr}`（分离，= Go `cmd.Output()`）；`os_spawn_capture` → `[rc, output]`（**合并**，= Go `cmd.CombinedOutput()`）。
+> - ⚠️ `os_popen` 的 stderr **未重定向**（会落进宿主进程的 stderr）—— 要"只要 stdout"请用 `os_capture`（已知缺陷，见 `qg-issue 87` 缺陷 14）。
+>
+> **HTTP 状态行 reason（M129 补全）**：runtime 的状态码→reason 表已**全表对齐 Go `net/http`**（含 307 `Temporary Redirect`、308、4xx/5xx 全量）。此前只有 22 项且未知码回退 `"OK"` ⇒ 307 会被写成 `HTTP/1.1 307 OK`。未登记码现按 Go 的字面值输出 `status code NNN`（**不再伪装成 OK**）。
 
 ### fd / 边缘设备（Linux）
-`open(path, flags[, mode])` `close(fd)` `read(fd, n)` `write(fd, data)` `ioctl(fd, req[, arg])` `os_errno()` · `mmap/munmap/mem_write`（活映射）· `fcntl` `tty_config` `fd_wait`（poll）· GPIO/I2C/串口/PWM 走 `import std.edge`
+`open(path, flags[, perm])`（M130：第二参给 **int** 即原始 flags，如 `64|2` = `O_CREAT|O_RDWR`；字符串形态 `r/w/a/rw/w+` 不变）`close(fd)` `read(fd, n)` `write(fd, data)` `ioctl(fd, req[, arg])` `os_errno()` · **`flock(fd, op)`（M130）** · **`chmod(path, mode)`（M130）** · `mmap/munmap/mem_write`（活映射）· `fcntl` `tty_config` `fd_wait`（poll）· GPIO/I2C/串口/PWM 走 `import std.edge`
 
 ### QUIC / HTTP/3（完整编译含 64 项；`--no-quic` 裁剪不含）
 `quic_listen/accept/connect/close/close_listener` · `quic_open_stream/open_uni_stream/send_stream/recv_stream/poll` · `h3_server_listen` `h3_serve_read_request(_stream)` `h3_client_*` · QPACK：`h3_huff/unhuff` `h3_qenc/qdec/qs_*` `h3_settings_enc/dec` `h3_conn_*` —— 生产路径推荐直接 `px_serve(..., {http3: true})`（HTTP/1.1+2+3 三栈合一）。
@@ -270,7 +375,13 @@ Session：`session_open()/session_id/get/set/del/destroy` · `basic_auth(user, p
 ```px
 # ⚠️ http_serve 常驻服务 + spawn → 用 `px build`（pxi Mini 子集无 spawn）
 def handler(req):
-    # req: {method, path, query, headers, body, form, files, ...}（dict）
+    # req: {method, path, query, headers, body, form, files, file_fields, ...}（dict）
+    #   form       —— 非文件段的「字段名 → 值」
+    #   files      —— 文件段的「**文件名** → 内容」（历史语义，保持不变）
+    #   file_fields—— 文件段的「**文件名 → 字段名**」（M129 新增，qg-issue 87 缺陷 10）
+    #     ⇒ Go `r.FormFile("avatar")`（按**字段名**取件）的等价物：
+    #       `for fn in req["files"]: if req["file_fields"][fn] == "avatar": data = req["files"][fn]`
+    #       此前 files 只以文件名为键，多文件且字段名不同时**无法区分**（单文件只能"取唯一项"近似）。
     if req["path"] == "/" and req["method"] == "GET":
         return "hello"                        # str → 200 text/plain body
     if req["path"] == "/json":
@@ -369,3 +480,262 @@ set_timeout(fn (): print("once after 2s"), 2000)
 - **native 清单**（312，单一事实源 = runtime 注册表）：`bash tools/gen_native_table.sh` → `docs/native_index.json`；CI 重跑 diff 防漂移。**本表计数必须 == count**（现 312）。
 - **stdlib 索引**：`tools/px run tools/gen_ecosystem.px` → `docs/ecosystem_index.json`。
 - 规范：`docs/spec.md`（§8 模块/import、§9 双模式、§12 AI 协议）· `docs/MINI_SUBSET.md`（子集边界）· 缺口与写库规范：`docs/ECOSYSTEM_GAPS.md`。
+
+---
+
+## 移植 Go 代码的**静默漂移**清单（M129 第 7 轮补齐，逐条实测）
+
+51. **`/` 是浮点除法，`//` 才是整除（缺陷 42）**：`16640 / 3600` → `4.622222222222222`（float），
+    `16640 // 3600` → `4`。Go 的 `int/int` 是整除 ⇒ 移植 `estTokens := totalBytes / 2`、
+    `h := h * maxSize / w`、`sx := x * srcW / newW` 这类表达式**必须写 `//`**。
+    症状：结果变 float ⇒ `str()` 打出 `"8.0"`（不是 `"8"`）、比较/切片下标全歪，**不报错**。
+52. **`len(s)` / `s[i:j]` / `s[i]` 是「字符（rune）」语义，Go 是「字节」（缺陷 45）**：
+    `len("中文ab") == 4`（Go 8）、`"中x"` 的 `index_of(x) == 1`（Go 3）、`s[0:3] == "中文a"`。
+    移植 `s[:n]` 截断、`len(s) > N` 长度校验、`strings.Index` 后切片时，**凡涉及非 ASCII 必分叉**。
+    ⇒ 用 `stdlib/go_strings.px`：`byte_len` / `go_slice` / `go_prefix` / `go_truncate` / `go_index`。
+53. **`bytes == bytes` 按内容比较，但解释器（`px run`）曾恒 false（缺陷 43）**：解释器 `i_eq` 是
+    白名单实现、`bytes` 落到末尾 `return false`；编译轨按 memcmp。已修（两轨一致）。
+    历史影响：所有 `px run` 下的自检脚本里 `bytes == bytes` 恒否 —— 静默跳过断言分支。
+54. **字符串→数字转换对畸形输入是「运行时错误」（缺陷 47）**：`int("12ab")` 杀进程（http_serve 下 500），
+    而 Go 的 `strconv.Atoi` 只返回 err。同理 `hex_to_bytes("zz")`。⇒ 先判 `is_hex(s)`，
+    或用 `stdlib/go_strings.px::go_parse_i64(s) → Ok/Err`。
+55. **`is_dir(path)`（缺陷 44）**：Go 的 `fi.IsDir()` 等价物。`exists("/tmp")` 对目录返回 **true**
+    （与文件不可区分）、`file_size("/tmp")` 返回目录项大小。`read_file_opt(dir)` 虽报 EISDIR，
+    但 EACCES 同形 ⇒ 分不出。
+56. **`stdlib/time_go.px`（缺陷 41）**：Go 参考布局（`time.RFC3339` / `"2006-01-02 15:04:05"` …）。
+    ⚠️ 别用 strftime 手搓 RFC3339：`time_format(..., "%z")` 给的是 `+0800`（**无冒号**）、
+    `%Z` 给 `UTC`，而 Go 是 `+08:00` 且**偏移为 0 时输出 `Z`**。用 `go_rfc3339(ts)` / `go_format(ts, layout)`。
+57. **`img_scale` 的滤波（缺陷 39）**：默认双线性；`{"filter":"nearest"}` 才是 Go 手写缩放
+    （`x*srcW/newW` 整数除法 + 取样）的等价物。实测 6/6 组尺寸 RGBA 逐字节一致。
+58. **multipart 文件内容：`req["file_bytes"]` 才是二进制安全的（缺陷 50）**：
+    `req["files"]` 的值是 **str**，**遇首个 `\x00` 静默截断**（实测 8 字节 PNG 魔数+NUL → 7~8 字节，
+    `type()` 仍是 "string"）。凡二进制上传（图片/附件/S3）一律用 `file_bytes`；
+    `file_fields` 给「文件名 → 字段名」（缺陷 10），二者配合才等价 Go 的 `r.FormFile("name")`。
+59. **`json_stringify_go` 的 opts 是 TLS（缺陷 51）**：`{"sort_keys": false}` 曾经是**进程全局**，
+    在 `http_serve`（多线程）+ `spawn` 并发下会互相污染（响应键序偶发错乱、无报错）。现已 `__thread`。
+    写代码时仍建议：**同一线程内序列化前不要依赖跨调用的 opts 状态**。
+60. **「未注册路径」在 Go 是 404（先于认证），不是 401（缺陷 48）**：`http.ServeMux` 无匹配即
+    `404 page not found`，任何认证包装都没机会跑。移植时若把认证判定内联进 dispatch，
+    未注册路径会落到认证分支 ⇒ 状态码与 Go 相反。
+61. **`tz_offset(tz)` 现在接受 `"local"`（缺陷 40）**：与 `time_format(ts, fmt, "local")` 同轴
+    （此前 `tz_offset("local")` 返回 `null`，一个入口有一个没有）。
+62. **保留字清单再补**：`fn`（缺陷 4）、`from`（缺陷 12）、**`pub`**（第 7 轮实测：
+    `def f(pub):` → `E2001 意外的 token: pub`）。参数名/循环变量避开这三个。
+63. **不支持单行 `if cond: stmt`（第 10 轮实测 · 缺陷 63）**：Python 习惯的
+    `if n == 2: return "x"` 会被解析器拒（`E2001 期望 换行，实际得到 return`）——
+    `:` 后**必须换行 + 缩进块**。同一函数里混写（有的单行有的多行）时，报错位置会落在
+    **入口文件**的某个无关行号上（本例报 `main.px:100`，真凶在 `token_cache.px`），**看行号会误导**。
+64. **`index_of`/`last_index_of` 是「字节」下标，而 `s[i:j]` 是「rune」切片（第 10 轮实测）**：
+    这是缺陷 45 的**组合陷阱** —— 串里只要有中文，`s[last_index_of(s,"(") : ...]` 取到的是错位片段
+    （不报错、静默取错值）。要定位/切分含多字节字符的串，**一律用 `split`**（rune 安全）。
+65. **`http_stream(path, cb)` 只在 GET 上接管（第 10 轮实测）**：runtime 的分流条件是
+    `if (strcmp(method, "GET") == 0)` 才查流式路由表 ⇒ **POST 的 SSE 端点无法走流式接管**
+    （Go 的 `handleStream` 正是 POST）。POST 只能走普通 handler 一次性返回，**失去逐块 flush**。
+66. **`http.Error` 会给响应补 `X-Content-Type-Options: nosniff`（第 10 轮实测）**：
+    移植 `http.Error(w, msg, code)` 时除了 `text/plain; charset=utf-8` + 尾缀 `\n`，
+    还要**同时补 nosniff 头**，否则逐字节不符（404/405 一律如此）。
+67. **Go 里「裸 `json.NewEncoder(w).Encode(...)`、从不 Set Content-Type」的端点，
+    Content-Type 是**嗅探**出来的 `text/plain; charset=utf-8`（第 10 轮实测）**：
+    `handleToolsExec` / `handleTaskNotify` 即此类。移植时**不要顺手补 `application/json`**
+    （用 `json_res_sniffed`）；判据很简单：**Go 源里有没有 `w.Header().Set("Content-Type", ...)`**。
+68. **map 键序不是「看着像字母序」就算**：`server` 块里 `tls` < `token_cache`
+    （'l' < 'o'，第 10 轮实测照出/修正）；写死插入序时**务必按键的 ASCII 逐字比较**，
+    别凭语感（`token_cache` 会被误以为在 `tls` 前面）。
+69. **`http_stream` 现在支持 POST / 自定义响应头 / 手写响应头（第 11 轮 · 缺陷 65 已修）**：
+    第三参 opts（全部可选）—— `{"methods": ["POST", ...]}`（默认 `["GET"]`，**按方法掩码**命中，
+    未列出的方法落普通 dispatch）、`{"headers": {...}}`（按名大小写不敏感**覆写**默认 SSE 三头，
+    未消费的按原序追加）、`{"manual": true}`（接管时**不写任何响应头**）。
+    配套两个 native：**`sse_start(conn, status, headers)`**（语言层自写响应头；headers 里若声明
+    `Transfer-Encoding: chunked`，本连接后续写出自动分块，收尾自动补 `0\r\n\r\n`）、
+    **`sse_write(conn, data)`**（**原文**写出，不做 SSE 分帧；`sse_send` 会按 SSE 规则加 `data: ` 前缀）。
+    ⚠️ 为什么需要 manual：Go 的 handler 是「**先校验、后 Set 头**」——400/405 必须在响应头发出**之前**
+    返回普通 HTTP 响应；auto 模式会先写 200 + SSE 头，之后就回不了头了。
+70. **`sse_read_line(conn)` —— 上游 SSE 的**逐行原文**读取（第 11 轮新增）**：返回下一行
+    （不含行尾 `\n`；行尾 `\r` 一并去掉），EOF 返回 `null`。语义 = Go 的 `bufio.Scanner` 循环
+    （`line := scanner.Text(); fmt.Fprintf(w, "%s\n", line); flusher.Flush()`）。
+    **透传上游 SSE 时不要用 `sse_read`**：它把事件解析成 dict 再重新分帧，会多出 `event:` 行、
+    打乱字段序、丢掉注释行 —— 关心语义用 `sse_read`，关心字节用 `sse_read_line`。
+    本函数**不做**断线重连（透传语义下重连会把内容重发一遍）。
+71. **SSE 客户端原先**没有**解码 chunked**（第 11 轮实测 · 缺陷 69 已修）**：上游用
+    `Transfer-Encoding: chunked`（Go 的 SSE handler「写头 + 边写边 Flush」必然如此）时，
+    分块帧会原样进缓冲 —— `sse_read` 的 `\n\r\n` 事件分隔**恰好**把块长行当成"无冒号行"丢掉，
+    于是**只在块边界与事件边界重合时侥幸可用**；块边界落在 data 行中间时内容被块长行污染，
+    且终结块处会多出空事件（实测：4 块 → 多 2 个空事件）。现在 `sse_read` / `sse_read_line`
+    共用**唯一**解码点（RFC 7230 §4.1），三种切法（1 字节/块、13 字节/块、不分块）输出逐字节一致。
+72. **`sse_close` / `sse_send` / `sse_write` 的 conn 是两套 id（第 11 轮实测 · 缺陷 70 已修）**：
+    服务端连接（`sse_serve` / `http_stream` 接管）与客户端连接（`sse_connect`）**原先各自从 1 自增**，
+    命名空间重合；而 `sse_close(conn)` **先查服务端表、再查客户端表** ⇒ 同进程里
+    「`sse_close(上游客户端 conn)`」在 id 撞上**下游服务端 conn** 时**关掉的是自己的下游连接**
+    （症状：响应缺收尾块、连接提前关，且只在 id 相同时复现，极难定位）。
+    现已把客户端 id 起点移到 `1<<40`（不相交区间）。**同进程同时持两类连接时务必注意这条**。
+73. **`file_stat(path)` —— 文件元信息（第 12 轮 · 缺陷 71 已修）**：返回
+    `{size, mtime, mtime_ns, is_dir, mode} | null`（**失败返回 null，不杀进程**；跟随符号链接）。
+    ⚠️ 此前只有 `file_size`（失败**px_error 杀进程**）与 `is_dir`，**没有 mtime** ——
+    Go `os.Stat()` 的「先看存在性、再看年龄」这个常态写法（缓存/快照过期判定）表达不出。
+74. **`go_errno_string(errno)` —— errno → 文案（第 12 轮 · 缺陷 72 已修）**：返回 **Go**
+    `syscall.Errno.Error()` 的文案（**小写**、表驱动、表外回落 `errno N`）。
+    ⚠️ **不要用 libc `strerror`**：glibc 给 `"No such file or directory"`，Go 给
+    `"no such file or directory"` —— 移植 `*PathError.Error()`（`stat <p>: <errno>`）必然分叉。
+    表由 `tools/gen_go_errno_table.go` 从 Go 自身导出（勿手抄）。
+75. **`ord(s)` / `chr(n)` —— 码点 ↔ 字符（第 12 轮 · 缺陷 73 已修 · 落实缺陷 29）**：
+    `ord` 取**首字符**码点（空串 0；非法 UTF-8 按 Go `utf8.DecodeRune` 给 `0xFFFD`）；
+    `chr` 非法码点（<0 / 代理区 / >0x10FFFF）→ `U+FFFD`。**项目内不应再手写 UTF-8 解码**。
+76. **`regex_valid(pattern) → bool` —— 只编译不匹配（第 12 轮 · 缺陷 74 已修）**：
+    ⚠️ native 表里的 `regex_match/regex_find/...` 对坏正则一律 **`px_error`（杀进程）**，
+    Go 侧常态的「探测合法性」（`if _, err := regexp.Compile(p); err != nil`）**表达不出**。
+    探测用 `regex_valid`，别用 `regex_match(p, "")` 去试。
+77. **`url.Parse` 的文案面（第 12 轮 · 缺陷 75 已修，见 `token-cache/px/go_urlerr.px`）**：
+    ① `Parse` = 「先切 `#frag` → `parse(主体)` → `setFragment(frag)`」，两段失败时
+    **`parse "<串>"` 里引用的串不同**（前者是去片段的主体，后者是完整原始串）；
+    ② host 段的 `%XX` 只允许**解码后非 ASCII**（`%25` 例外）⇒ `http://a%41.com/` 报错、
+    `http://x/%41` 合法（path 段只查十六进制）；
+    ③ **端口取最后一个冒号**（Go ≤1.25；Go 1.26 的 GODEBUG `urlstrictcolons` 按模块
+    `go` 版本门控 —— 本仓库 `go 1.25.0` ⇒ 用旧行为）；
+    ④ query/fragment/userinfo **不做转义校验**（`?q=%zz` 合法）。
+78. **顶层 `def` 没有模块命名空间：跨文件重名 = 静默覆盖（第 12 轮 · 缺陷 77 已修+加门）**：
+    ⚠️ 多文件合入同一作用域，**后 import 的赢**，且**无任何告警**。实测事故：新增的
+    `stats_inc` 撞了 `client.px` 里带守卫的同名函数 ⇒ `/stats` 的 `sets` 行为随 import 顺序变化。
+    **写新文件前先跑 `python3 px/tools/symcheck.py main.px`**（门已纳入常驻集）。
+79. **`open` 的三参形态两轨同形（第 12 轮 · 缺陷 78 已修）**：`open(path, flags_int[, perm])`
+    在**解释轨**同样可用（`px run` 与编译产物行为一致；此前解释轨只收 1–2 参而直接 `R1002`）。
+    另记：**解释器不支持 `mutex`（Mini 子集排除，缺陷 79 未修）** ⇒ 像 token-cache 这种
+    "启动即建 mutex"的程序**跑不了 `px run`**，验证请用编译轨。
+
+80. **`http_unix` 的第 6 参 `opts.timeout_ms` —— 总时限（第 13 轮 · 缺陷 80 已修）**：
+    `http_unix(sock, path, method[, body[, headers[, opts]]]])`，`opts = {"timeout_ms": N}`。
+    `N > 0` 时**连接阶段**也受该时限（非阻塞 connect + poll），收发用 `SO_RCVTIMEO/SNDTIMEO`。
+    ⚠️ 修前 RCVTIMEO **固定 180s** ⇒ 对"accept 了但不回包"的对端要挂 180s；
+    Go 的 `http.Client{Timeout}`（总时限）在这条通路上**表达不出**（不是慢，是语义缺失）。
+    ⚠️ 边界：这是"**每次 IO** 的上限"，Go 是"**整个请求**的上限" —— 对端匀速滴数据时二者不同。
+    门：`examples/m133_http_unix_timeout/`（VM+C 双轨 · 含"不同 timeout 必须成比例"的负控）。
+81. **网络原语失败后的 `os_errno()` 有了语义（第 13 轮 · 缺陷 81 已修）**：
+    `http_unix` / `http_request` 失败时把**成因**留在 errno 上（修前被之后的 `close()` 覆盖）：
+    `0` = 对端干净关闭（EOF）· `11`(EAGAIN) = 读超时 · `111`(ECONNREFUSED) = 连不上 ·
+    `2`(ENOENT) = 路径不存在 · `104`/`32` = 对端 reset / broken pipe · `90` = 响应头过大。
+    用途：区分「连不上」（可重试）与「超时/对端断开」（重试会放大对端 CPU）——
+    token-cache 审批重试策略的分类重试**正是**靠它（`px/approval_retry.px`）。
+82. **import 关系必须与实际依赖一致：跨文件的"顺手用"会在**单模块导入**时炸（第 13 轮 · 缺陷 82 已修）**：
+    PuXian 顶层符号**无命名空间**（见第 78 条），于是"某个文件定义了 X"就够——只要**有人**
+    把它 import 进来。`approval_cfg.px::expand_ws_path` 用了 `expand_env`（定义在 `config.px`），
+    但 `approval_cfg.px` 只 import 了 `config_fields.px`；主程序 main.px 恰好 import 了 config.px
+    ⇒ 一直"看起来正常"，**单独 import 审批子系统**（探针）时报 `未定义变量: expand_env`。
+    修法：把 `expand_env` 迁到双方都 import 的 `config_fields.px`。
+    ⇒ **写探针/子模块是检验隐式依赖的最省事手段**（探针自带那份 import 闭包）。
+83. **`http_request` 成功时返回 `dict`，失败才返回 `Err(result)`（第 13 轮 · 缺陷 83 已修）**：
+    ⚠️ 直接 `var r = http_request(...); if r.is_err():` 会在**成功**路径抛
+    `R1007 类型 dict 没有方法 'is_err'` **把进程打挂**。必须先 `if type(r) == "result":` 再判。
+    实测事故：告警上报**成功**时（ws-alertd 可达）把 token-cache 打挂 —— 越正常越先死。
+    同类语义：`http_get`/`http_post`（成功 → str）、`/set`/`ssl` 等"成功值 + Err 失败"的 native。
+84. **`\b` / `\B` 零宽断言：Go RE2 有，PuXian 正则引擎没有（第 13 轮 · 未修 · 已登记）**：
+    `regex_valid("\\bsecret\\b") == false`（`rp_parse_escape` 的 default 分支 → "未知转义"）。
+    影响面：**凡用 `regex_valid` 做"能编译就用、不能编译就整体禁用"的项目侧判定**，两侧会分叉。
+    token-cache 本地快判：规则快照的 `secret_patterns` 里只要有一个 `\b…\b`，PuXian 就会把
+    **整个本地快判禁用**（Go 保持启用）⇒ 全部改走远程（**fail-safe 方向**，但行为不同）。
+    门：`px/tools/diff_approval.py::fastpath_wordboundary`（断言"分叉形状正确"而非假装全绿）。
+    ⟹ 根治要在引擎里加零宽断言节点（含 M107/M110 前缀预筛路径的适配），留单独一轮。
+85. **就地改写脚本必须断言"结束锚点已找到"（第 13 轮 · 我自己踩的坑）**：
+    `j = s.find(marker); s2 = s[:i] + s[j+1:]` —— 当 `find` 返回 **-1** 时 `s[j+1:]` 就是
+    `s[0:]`（整份文件），结果是**前半段 + 整份原文**（配置类文件会静默变成两份，
+    编译期表现为顶层符号重名）。修法：`if j < 0: raise`；改完**必须**跑符号查重门
+    （`symcheck.py` —— 这次正是它抓到的）。
+86. ★ **「是否为堆对象」**绝不能是 switch 白名单 —— 漏项 = GC 误回收 = 悬垂（第 15 轮 · 缺陷 86 已修，P0）**：
+    `runtime.c::px_value_is_obj()` 决定 **GC 根标记**（全局表 / 帧槽 / 容器递归 / TLS 根栈全走它）。
+    它原来是 `switch (v.type)` 白名单，**漏了 `PX_MUTEX` / `PX_RWLOCK` / `PX_GEN`** ⇒
+    这三种值放进 `list/dict/struct/tuple/gen/chan`，**或**作为全局/帧槽的**直接值**时都不被标记
+    ⇒ 对象被 sweep 回收（悬垂）。
+    实测症状（token-cache 生产链路，**最凶的一类：静默永久挂死**）：同一进程内第 6 个
+    「走审批判定」的请求起，连接**被 accept 但 handler 永不执行**、客户端收 0 字节，此后全部挂住；
+    `fds/线程数`都不变、无任何日志。gdb 栈：`__lll_lock_wait ← pthread_mutex_lock ← px_mutex_lock
+    ← vm_run_loop` —— `pthread_mutex_lock` 阻塞在**已回收内存的 `__lock`** 上（`__lock=2` 但
+    无持有者、无唤醒源）。同一把锁在 `px_coro_mutex_wait`/`px_mutex_try_lock` 上也一样。
+    修法：改成 `static const bool g_type_is_obj[PX_TYPE_MAX]` **位置表**（逐项表态）
+    ＋ `_Static_assert(sizeof(...) == PX_TYPE_MAX)` ⇒ **LXType 新增成员而不表态 = 编译失败**。
+    同族历史缺陷 43（解释器 `i_eq` 白名单漏 `bytes` ⇒ `bytes == bytes` 恒 false）——
+    ⇒ **纪律：凡"按 LXType 分类"的函数一律用位置表 + 尺寸断言，不用 switch 白名单。**
+    回归门：`examples/m134_gc_obj_roots/`（17 断言 × VM/C 双轨 + 静态门 + 两个负控）。
+87. **测"对象会不会被误回收"：把它放进容器/全局/帧，然后 `gc()`（第 15 轮）**：
+    `gc()` 是 naitive，**强制整轮 mark+sweep**（不等阈值），比"造 10 万垃圾逼 GC"确定性高得多：
+    ```
+    var g = []
+    g.append(mutex())
+    var fmu = rwlock()        # 帧槽也要试
+    gc()
+    g[0].lock(); g[0].unlock()   # 悬垂 → 立即 abort 并打印 obj/type
+    ```
+    runtime 侧配套：`px_dbg_obj_check()`（`px_mutex_lock/try_lock/unlock`、
+    `px_rwlock_*`、`px_coro_mutex_wait` 入口）——标签是锁但对象头 type 不是 ⇒ 打印
+    `[FATAL-obj] 位置 obj=0x… type=…（期望 …）` 后 abort。**把"静默永久挂死"变成"立刻可见的崩溃"**。
+88. **"卡死"类问题的 gdb 取证套路（第 15 轮实战，10 分钟定位）**：
+    ```
+    gdb -p <pid> -batch -ex 'thread apply all bt 14' > bt.txt
+    # ① 按帧签名聚合（几百个线程秒看出谁是异常）：把每线程的 `in <fn>` 拼成签名计数
+    # ② 只看异常线程：`thread N` + `frame 2` + `info registers rdi` → 取被锁对象地址
+    # ③ 读对象内存：`x/6wx <addr>` → `__lock=2` + 其余字段是垃圾 ⇒ 悬垂/被复用；
+    #    若 `__owner` 是真 TID，再按 TID 找持有者线程（才是真互斥等待）
+    ```
+    判别要点：**阻塞在 `pthread_mutex_lock` ≠ 等锁**；`futex` 的 `__lock` 词被写坏时，
+    它是"等在垃圾上"，任何超时/重试都不会救回来 —— 这类必须先证明"对象还活着"。
+
+89. **`str(x)` 对**含内嵌 NUL 的字符串**曾静默截断（第 16 轮 · 缺陷 92，已修）**：
+    `PX_STR` 本身是**长度感知**的（`px_str_len` 带显式 len，`len()`/切片/JSON 转义都按长度走），
+    只有 `str()` 这一跳走的是 `px_fmt_value()` → `char*` → 在首个 `0x00` 处断掉。
+    ```
+    var b = bytes("AB"); b = bytes_concat(b, int_to_bytes(0,1)); b = bytes_concat(b, bytes("CD"))
+    byte_len(bytes_to_str(b))     # 5 ✓（本来就对）
+    byte_len(str(bytes_to_str(b))) # 修前 2 ✗ / 修后 5 ✓
+    ```
+    ⇒ **纪律：二进制体不要经 `str()` 中转**；必须转就把长度一起带走（`bytes` / `px_str_len`）。
+    HTTP 响应体若用 `str` 承载，运行时按 `.len` 写出（`px_http_build_response`），NUL 安全。
+90. **JSON 解析的三个「Go 保真」坑（第 16 轮 · 缺陷 93/94/96，已修/已补）**：
+    · **整数溢出**：`strtoll` 溢出返回 `LLONG_MAX` 且 `end` 越过全部数字 ⇒ 旧实现当"整数解析成功"，
+      `12345678901234567890` 静默变成 `9223372036854775807`。修法：`errno==ERANGE` 时回落 `strtod`。
+    · **`\u0000` 截断**：JSON 字符串解码出的 0x00 在重造时被 C 串截断（同 89）⇒ 解析侧改为长度感知。
+    · **Go 的 `interface{}` 把数字全变 float64**：`json.Unmarshal` 到 `map[string]interface{}` 后
+      Marshal，`9223372036854775807` → `9223372036854776000`、`9007199254740993` → `9007199254740992`。
+      PuXian 的 `json_parse` **保留整数**（语言语义）⇒ 需要 Go 那一侧语义时必须显式加宽：
+      ```px
+      import std.go_json
+      json_stringify_go(go_json_widen_numbers(json_parse(text)))
+      ```
+91. **浮点转字符串的「最短往返」要用数字串，不是精度扫描（第 16 轮 · 缺陷 95，已修）**：
+    对 `1.2345678901234567e19`，`%.0f` 给的是**精确值** `12345678901234567168`，
+    而 Go 的 `strconv.FormatFloat(f,'f',-1,64)` 是**最短往返数字**再按 'f' 展开 ⇒ `12345678901234567000`（差 168）。
+    正确做法：先用 `%.*e` 递增精度扫出**最短数字串**（首个能 `strtod` 回读相等者），再按
+    Go 的 `|x| ∈ [1e-6, 1e21)` ⇒ 'f' 否则 'e' 规则渲染该数字串（'e' 还要做 `e-0d` → `e-d` 收敛）。
+    回归门：`examples/m136_go_json_fidelity/`（23 行语料与 **Go encoding/json 本尊**逐字节 diff + 24 断言 × VM/C 双轨 + 双负控）。
+92. **HTTP 头的「多值」与「原始查询串」（第 16 轮 · 缺陷 88/90，已修）**：
+    · 响应头 dict 的值可以是 **list**（同名多头，如 `Set-Cookie`）—— 修前 `px_http_build_response`
+      与 `http_request` 的请求头拼接都把非 `str` 值 `continue` 掉 ⇒ **整条头静默消失**（透传上游时必踩）。
+    · 服务端请求 dict 现在提供 **`req["raw_query"]`**（= Go `r.URL.RawQuery`，**不解码**）；
+      旧字段 `req["query"]` 是**整体解码后**的串 ⇒ `?key=a%26b` 会被解码成 `key=a&b`，再按 `&` 切分**必然切错**。
+      取值一律 `url_parse_query(req["raw_query"])`（`stdlib/url.px`，含 `+`→空格与非法转义的 Go 语义）。
+    · 新增 `url_path_escape`（= Go `url.PathEscape`：`,` `;` `/` `?` `!` `'` `(` `)` `*` 都要转义）。
+93. **`http_request` 的透明 gzip 解码可关（第 16 轮 · 缺陷 89，新增）**：
+    `http_request(url, method, body, headers, {"decode_gzip": false})` ——
+    Go 的 `Transport` **只在调用方未自带 `Accept-Encoding` 时**才自己加头并透明解压；
+    调用方自带时 Go 原样透传压缩体。要复刻后者（如媒体/文件代理逐头逐体透传）就必须关掉本开关。
+94. **`pass` **不是**关键字 —— 但能编译通过、**运行时 R1001 且打挂整个进程**（第 17 轮 · 缺陷 101，必记）**：
+    `if cond:` 下写 `pass` 会被解析成"求值标识符 `pass`"的**表达式语句** ⇒ `px build` 通过、
+    `px lint` 报 `E L002: 未定义变量: 'pass'`（**编译期唯一的线索**）、跑到那条分支才炸。
+    空块请用合法空语句 **`0`**（实测：lint 0 错 0 警、编译通过、分支真空转）。
+    实测现场：token-cache `llm_resp.px` 7 处 + `llm_msgs.px` 1 处写了 `pass`，上游 JSON 里
+    出现任何 `null`（`"created": null` / `"tool_calls": null` / `"function": null` …）即整进程死。
+    ⇒ **改了 .px 先跑 `px lint <file>`**：缺 import、缺定义（删函数漏删引用）、`pass` 三类
+    **都报 L002**，是一把刀。
+95. **`sse_connect_ex(url, opts)` —— SSE 客户端"失败可分类"版（第 17 轮 · 缺陷 97，新增 native）**：
+    `→ dict{ok, conn, status, ctype, retry_after, body, errno, stage}`；`stage` = 1 参数 / 2 连接 /
+    3 发送 / 4 读头 / 5 状态码 / 6 CT 不符 / 7 槽位耗尽。`opts={method, body, headers, sock,
+    content_type, require_ct, timeout_ms, reconnect_ms}`。
+    · `require_ct: false`（**ex 模式默认**）⇒ 200 即接通，**不管 Content-Type**
+      （Go 的 `forwardStream` 就只看行）；`sse_connect` 保持旧语义（要求 `text/event-stream`）。
+    · 非 200 时 `status`/`ctype`/`retry_after`/**`body`（已解码 chunked）** 都有值 ⇒
+      可以像 Go 那样分流"可重试（429/5xx/408 → 换候选）"与"不可重试（400 → 原样报错）"。
+    · `timeout_ms` ⇒ `SO_RCVTIMEO/SNDTIMEO`（**每次 IO** 上限；0=不设=永久阻塞，旧行为）。
+    · `req_headers` 里已给的同名默认头（UA/Accept/Connection/Cache-Control）**不再重复发**。
+96. **真流式代理的两个"必须照抄 Go"的点（第 17 轮）**：
+    ① **分帧边界 = Flush 点，不是 write 点** —— 逐行 `sse_write` 会得到"每行一块"，
+       与 Go 不同；正确做法是非 `data: ` 行**只攒不写**、到 `data: ` 行把攒下的字节
+       **一起**写出，**流末**再刷一次（Go 在 handler 返回时刷 bufio）。
+    ② 上游响应**收齐再给**与**边到边给**在"字节内容"上完全一样 ⇒ **必须测时序**
+       （记首字节到达时刻 TTFB）：本机实测 Go 0.002s / PuXian 0.005s（上游 1.5s 分两段），
+       收齐再给的话 TTFB 必然 ≥1.5s。门见 `px/tools/diff_stream_inc.py`。
