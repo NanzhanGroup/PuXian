@@ -170,4 +170,4 @@ if fail == 0:
     print("M109-HDRMULTI ALL OK")
 else:
     print("M109-HDRMULTI FAIL=" + str(fail))
-    assert fail == 0
+    assert(fail == 0)

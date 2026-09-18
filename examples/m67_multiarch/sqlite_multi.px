@@ -6,15 +6,15 @@
 # ============================================================
 def main():
     var db = sqlite_open(":memory:")
-    assert type(db) == "int" and db > 0
+    assert(type(db) == "int" and db > 0)
     sqlite_exec(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, score REAL)")
     sqlite_exec(db, "INSERT INTO t(name, score) VALUES ('alice', 90.5), ('bob', 88.0)")
     var rows = sqlite_query(db, "SELECT id, name, score FROM t ORDER BY id")
-    assert len(rows) == 2
-    assert rows[0]["name"] == "alice"
-    assert rows[0]["score"] == 90.5
-    assert rows[1]["name"] == "bob"
+    assert(len(rows) == 2)
+    assert(rows[0]["name"] == "alice")
+    assert(rows[0]["score"] == 90.5)
+    assert(rows[1]["name"] == "bob")
     var r2 = sqlite_query(db, "SELECT name FROM t WHERE score >= ?", [89])
-    assert len(r2) == 1 and r2[0]["name"] == "alice"
+    assert(len(r2) == 1 and r2[0]["name"] == "alice")
     sqlite_close(db)
     print("sqlite multiarch OK (m67)")

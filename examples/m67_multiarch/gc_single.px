@@ -34,7 +34,7 @@ def main():
     var c = h
     var t = 0
     while c != null and t < 60:
-        assert type(c) == "list"
+        assert(type(c) == "list")
         c = c[1]
         t = t + 1
     print("gc_single OK depth=" + str(t))
