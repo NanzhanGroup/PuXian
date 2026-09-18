@@ -37,7 +37,23 @@ def i_type_name(v):
             return "generator"
     return t
 # ---------- 字符串渲染（对齐 fmt_value） ----------
+# 缺陷 125（M145）：**环保护**。此前 `var g = {}; g.set("me", g); str(g)` 在解释轨
+#   无界递归 ⇒ C 栈溢出 ⇒ 段错误（编译轨 px_fmt_value 同族，两条轨同批修）。
+#   语义：**路径**上的对象再次出现 ⇒ 渲染 `...`（共享而非环的对象照常完整渲染，
+#   不采用累积集合——那会把 `{"p":a,"q":a}` 的第二次出现误渲染成 `...`）。
+var STR_S_PATH = []
 def i_to_str(v):
+    let t0 = i_type_name(v)
+    if t0 == "list" or t0 == "tuple" or t0 == "dict":
+        let idv = object_id(v)
+        if idv != 0 and contains(STR_S_PATH, idv):
+            return "..."
+        STR_S_PATH.append(idv)
+        let r = i_to_str_raw(v)
+        STR_S_PATH = STR_S_PATH[0:(len(STR_S_PATH) - 1)]
+        return r
+    return i_to_str_raw(v)
+def i_to_str_raw(v):
     let t = i_type_name(v)
     if t == "list":
         let parts = []
@@ -114,7 +130,26 @@ def i_truthy(v):
         return len(v) > 0
     return true
 # ---------- 相等（对齐 value.rs PartialEq） ----------
+# 缺陷 125（M145）：**环保护**，语义与编译轨（runtime `compare_values`，对齐
+#   Go `reflect.DeepEqual`）一致 —— 维护「已访问对象对」，再次遇到同一对 ⇒ 视为相等。
+#   此前带 parent↔child 环的结构（BIRCH CF 树）上 `==` 无界递归 ⇒ 段错误。
+var EQ_S_PATH = []
+var EQ_S_DEPTH = 0
+def eq_pair_seen(ida, idb):
+    var i = 0
+    while i < len(EQ_S_PATH):
+        if EQ_S_PATH[i][0] == ida and EQ_S_PATH[i][1] == idb:
+            return true
+        i += 1
+    return false
 def i_eq(a, b):
+    EQ_S_DEPTH += 1
+    let r = i_eq_raw(a, b)
+    EQ_S_DEPTH -= 1
+    if EQ_S_DEPTH == 0:
+        EQ_S_PATH = []
+    return r
+def i_eq_raw(a, b):
     let ta = i_type_name(a)
     let tb = i_type_name(b)
     if ta == "int" and tb == "int":
@@ -131,6 +166,14 @@ def i_eq(a, b):
         return a == b
     if ta == "null" and tb == "null":
         return true
+    # 缺陷 125（M145）：进入容器递归前登记对象对（环上不再下潜；与编译轨同源）
+    if ta == "list" or ta == "tuple" or ta == "dict" or ta == "enum" or ta == "struct" or ta == "generator":
+        let ida = object_id(a)
+        let idb = object_id(b)
+        if ida != 0 and idb != 0:
+            if eq_pair_seen(ida, idb):
+                return true
+            EQ_S_PATH.append([ida, idb])
     if ta == "list" and tb == "list":
         if len(a) != len(b):
             return false

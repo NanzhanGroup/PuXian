@@ -49,6 +49,11 @@ def i_call_builtin(name, args, pos):
         if len(args) != 1:
             return Err(i_r1002("type 需要一个参数", pos))
         return Ok(i_type_name(args[0]))
+    # M145：对象同一性（环检测 / 指针语义移植用；非堆值 0）
+    if name == "object_id":
+        if len(args) != 1:
+            return Err(i_r1002("object_id 需要一个参数", pos))
+        return Ok(object_id(args[0]))
     if name == "bool":
         if len(args) != 1:
             return Err(i_r1002("bool 需要一个参数", pos))
