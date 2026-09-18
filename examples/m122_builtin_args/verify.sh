@@ -77,7 +77,11 @@ gate_err bys   'print(str(bytes_set(bytes("ab"), 0, 1, 2)))'         "bytes_set 
 gate_err exit2 'print(str(exit(0, 1)))'                              "exit 需要 0-1 个参数"
 
 echo "══ C 组：合法调用护栏（回归） ══"
-gate_ok ok_jsp 'print(str(json_stringify({})))'                      "null"
+# ⚠️ 第 18 轮修订：`{}` 自 M129（qg-issue 87 缺陷 15）起求值为**空 dict**（此前是 null）
+#   ⇒ `json_stringify({})` 输出 `{}`。本用例原期望 "null"（陈旧），据实改写；
+#   同时**补一条**覆盖 null 的序列化，使「null 也能序列化」这一意图不丢。
+gate_ok ok_jsp 'print(str(json_stringify({})))'                      "{}"
+gate_ok ok_jsp_null 'print(str(json_stringify(null)))'               "null"
 gate_ok ok_sha 'print(str(sha256("abc")))'                           "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
 gate_ok ok_env 'print(str(env("PATH")))'                             "/"
 gate_ok ok_int 'print(str(int("42")))'                               "42"

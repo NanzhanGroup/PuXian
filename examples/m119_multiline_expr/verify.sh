@@ -10,8 +10,10 @@
 # 修法（M119）：括号深度 > 0 时
 #   ① 期望操作数处跳过换行（parse_unary 开头）→ 覆盖「运算符在行尾」；
 #   ② 检查运算符时向后看穿换行（chk_op）→ 覆盖「运算符在行首」。
-#   ⚠️ 行首一元运算符（- ~ not）不参与 ②（与「新语句以一元运算符开头」歧义），
-#      括号外（深度 0）一律不续行 —— 与 Python 的隐式续行规则同边界。
+#   ⚠️ 行首一元运算符（- ~ not）不参与 ②（与「新语句以一元运算符开头」歧义）。
+#   ⚠️ 第 18 轮修订：**括号外（深度 0）**的边界**不再是**「一律不续行」—— M129
+#      （qg-issue 87 缺陷 33）起，括号外**行尾**运算符也续行（Go 的自动分号插入语义，
+#      见 docs/PUXIAN_CHEATSHEET.md 第 43 条），本门第 5 节据实改为正控 + 行首负控。
 #
 # 用法：bash examples/m119_multiline_expr/verify.sh
 set -u
@@ -93,15 +95,28 @@ PXEOF
 if out=$(timeout 60 $PX run "$TMP/t4.px" 2>&1) && [ "$out" = "[2,4]" ]; then ok "多行匿名函数体 解释轨"; else bad "多行匿名函数体 解释轨：$out"; fi
 if $PX build "$TMP/t4.px" >/dev/null 2>&1 && out=$(timeout 60 "$TMP/build/t4" 2>&1) && [ "$out" = "[2,4]" ]; then ok "多行匿名函数体 编译轨"; else bad "多行匿名函数体 编译轨：$out"; fi
 
-echo "── 5. 负控：**括号外**行尾运算符仍报错（与 Python 同边界，不得放行）"
+echo "── 5. 括号外：**行尾**运算符续行（M129/缺陷 33 的 Go 语义；本节原为「必须报错」的负控，"
+echo "        该期望已被 M129 有意变更 → 第 18 轮提交前预检据实改写）"
 cat > "$TMP/t5.px" <<'PXEOF'
 def main():
     var s = "a" +
             "b"
     print(s)
+    var ok = 1 == 1 and
+             2 == 2
+    print(ok)
 PXEOF
-err=$(timeout 60 $PX run "$TMP/t5.px" 2>&1 | tr '\n' ' ')
-if echo "$err" | grep -q "E2001"; then ok "括号外续行 → E2001（边界与 Python 一致）"; else bad "负控未报错：$err"; fi
+both "括号外·行尾运算符续行" "$TMP/t5.px" "$(printf 'ab\ntrue')"
+
+echo "── 5b. 负控：括号外**行首**运算符不续行（Go 亦不接受；见速查表第 43 条）"
+cat > "$TMP/t5b.px" <<'PXEOF'
+def main():
+    var s = "a"
+            + "b"
+    print(s)
+PXEOF
+err=$(timeout 60 $PX run "$TMP/t5b.px" 2>&1 | tr '\n' ' ')
+if echo "$err" | grep -q "E2001"; then ok "括号外·行首运算符 → E2001（与 Go 同边界）"; else bad "负控未报错：$err"; fi
 
 echo "── 6. 负控：括号内**行首一元运算符**不参与续行（歧义保护：与新语句同形）"
 cat > "$TMP/t6.px" <<'PXEOF'

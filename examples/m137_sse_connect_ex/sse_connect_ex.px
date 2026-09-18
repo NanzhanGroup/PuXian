@@ -1,0 +1,191 @@
+# ═══════════════════════════════════════════════════════════════════
+# M137 示例：sse_connect_ex —— 失败**可分类** + CT 不硬要求 + IO 超时
+# ---------------------------------------------------------------
+# 缺陷（qg-issue 87 第 17 轮 · token-cache 真流式代理的前置）：
+#   旧 sse_connect 对所有失败一律 return null ⇒ 语言层拿不到
+#     ① 上游非 200 的**状态码与响应体**（Go forwardStream 要合成
+#        `LLM 调用失败: API 返回 %d: %s`）；
+#     ② **可重试状态码**（429/5xx/408）与不可重试 4xx 之别（failover 分流）；
+#     ③ 连不上的成因（errno）—— 重试会放大对端压力的场景要能识别；
+#   且旧 sse_connect **强制要求 Content-Type: text/event-stream**，
+#   而 Go 的 forwardStream 根本不看 CT（只按行扫 `data: `）。
+#   ⇒ 只能"上游收齐再整体返回"（客户端收不到增量）。第 17 轮补齐。
+#
+# 本探针对照 tools 里的可控上游桩（fake_up.py），**VM 轨与 C 轨跑同一断言集**。
+# ═══════════════════════════════════════════════════════════════════
+import std.strings
+
+var g_pass = 0
+var g_fail = 0
+var g_port = 0
+var g_sock = ""
+var g_dead = 0
+
+def ck(name, cond):
+    if bool(cond):
+        g_pass = g_pass + 1
+        print("PASS " + name)
+    else:
+        g_fail = g_fail + 1
+        print("FAIL " + name)
+
+def tcp_opts(path, extra):
+    var o = {}
+    o.set("method", "POST")
+    o.set("body", "{\"k\":1}")
+    o.set("content_type", "application/json")
+    o.set("headers", {"Authorization": "Bearer T1"})
+    if extra != null:
+        for k in extra.keys():
+            o.set(str(k), extra[str(k)])
+    return o
+
+def url_tcp(p):
+    return "http://127.0.0.1:" + str(g_port) + p
+
+def count_sub(s, sub):
+    if sub == "":
+        return 0
+    return len(split(s, sub)) - 1
+
+# ── 1. 正常流：ok=true / status=200 / ctype / 逐行读尽 ──
+def case_ok():
+    var r = sse_connect_ex(url_tcp("/ok"), tcp_opts("/ok", null))
+    ck("ok: ok=true", bool(r["ok"]))
+    ck("ok: status=200", int(r["status"]) == 200)
+    ck("ok: ctype=text/event-stream", contains(str(r["ctype"]), "text/event-stream"))
+    if not bool(r["ok"]):
+        return
+    var c = int(r["conn"])
+    var l1 = sse_read_line(c)
+    var l2 = sse_read_line(c)
+    var l3 = sse_read_line(c)
+    var l4 = sse_read_line(c)
+    var l5 = sse_read_line(c)
+    ck("ok: line1", str(l1) == "data: {\"a\":1}")
+    ck("ok: line2 空行", str(l2) == "")
+    ck("ok: line3 DONE", str(l3) == "data: [DONE]")
+    ck("ok: line4 空行", str(l4) == "")
+    ck("ok: line5 = EOF(null)", l5 == null)
+    sse_close(c)
+
+# ── 2. 200 但 CT 不是 SSE：Go 的 forwardStream 不看 CT ⇒ ex 必须接通；
+#        旧 sse_connect 必须仍拒绝（零回归） ──
+def case_nocat():
+    var r = sse_connect_ex(url_tcp("/nocat"), tcp_opts("/nocat", null))
+    ck("nocat: ex 接通（Go 不检查 CT）", bool(r["ok"]))
+    ck("nocat: status=200", int(r["status"]) == 200)
+    ck("nocat: ctype 记录原文", contains(str(r["ctype"]), "application/json"))
+    if bool(r["ok"]):
+        var c = int(r["conn"])
+        var ln = sse_read_line(c)
+        ck("nocat: 体可读", str(ln) == "{\"x\":1}")
+        sse_close(c)
+    var old = sse_connect(url_tcp("/nocat"), tcp_opts("/nocat", null))
+    ck("nocat: 旧 sse_connect 仍拒绝（CT 硬要求，零回归）", old == null)
+
+# ── 3/4/5. 非 200：状态码 + 响应体 + Retry-After ──
+def case_status(status_path, want_status, want_body, want_ra):
+    var r = sse_connect_ex(url_tcp(status_path), tcp_opts(status_path, null))
+    ck(status_path + ": ok=false", not bool(r["ok"]))
+    ck(status_path + ": stage=5(状态码)", int(r["stage"]) == 5)
+    ck(status_path + ": status=" + str(want_status), int(r["status"]) == want_status)
+    ck(status_path + ": body 逐字节", str(r["body"]) == want_body)
+    ck(status_path + ": retry_after=" + want_ra, str(r["retry_after"]) == want_ra)
+    ck(status_path + ": conn=null", r["conn"] == null)
+
+# ── 6. 连不上（TCP）：stage=2 + errno=111(ECONNREFUSED) ──
+def case_dead_tcp():
+    var o = tcp_opts("/", null)
+    var r = sse_connect_ex("http://127.0.0.1:" + str(g_dead) + "/chat", o)
+    ck("dead-tcp: ok=false", not bool(r["ok"]))
+    ck("dead-tcp: stage=2(连接)", int(r["stage"]) == 2)
+    ck("dead-tcp: errno=111", int(r["errno"]) == 111)
+
+# ── 7. Unix socket 文件不存在：stage=2 + errno=2(ENOENT) ──
+def case_dead_unix():
+    var o = {}
+    o.set("sock", "/tmp/m137_no_such.sock")
+    o.set("method", "POST")
+    o.set("body", "{\"k\":1}")
+    var r = sse_connect_ex("/v1/chat/completions", o)
+    ck("dead-unix: ok=false", not bool(r["ok"]))
+    ck("dead-unix: stage=2(连接)", int(r["stage"]) == 2)
+    ck("dead-unix: errno=2(ENOENT)", int(r["errno"]) == 2)
+
+# ── 8. 请求头去重：调用方自备同名头时运行时不再重复发一条 ──
+def case_echo():
+    var o = tcp_opts("/echo", null)
+    var h = {}
+    h.set("Authorization", "Bearer T1")
+    h.set("User-Agent", "probe-ua")
+    h.set("Accept", "text/event-stream")
+    o.set("headers", h)
+    var r = sse_connect_ex(url_tcp("/echo"), o)
+    var req = str(r["body"])
+    ck("echo: 收到 400（stage=5）", int(r["status"]) == 400)
+    ck("echo: Authorization 已发", count_sub(req, "Authorization: Bearer T1") == 1)
+    ck("echo: 自定义 UA 生效且只有一条", count_sub(req, "User-Agent: probe-ua") == 1)
+    ck("echo: 默认 UA 被抑制（去重）", count_sub(req, "PuXian/0.1") == 0)
+    ck("echo: Accept 只有一条", count_sub(req, "Accept: text/event-stream") == 1)
+    ck("echo: Content-Length=7（体已发）", contains(req, "Content-Length: 7"))
+    ck("echo: Content-Type 已发", contains(req, "Content-Type: application/json"))
+
+# ── 9. 增量到达：上游先给 1 个事件、1.2s 后再给后续 ⇒ 首行必须"立即"到手 ──
+def case_slow():
+    var t0 = now_ms()
+    var r = sse_connect_ex(url_tcp("/slow"), tcp_opts("/slow", null))
+    ck("slow: 接通", bool(r["ok"]))
+    if not bool(r["ok"]):
+        return
+    var c = int(r["conn"])
+    var l1 = sse_read_line(c)
+    var t1 = now_ms()
+    var n = 0
+    while true:
+        var ln = sse_read_line(c)
+        if ln == null:
+            break
+        n = n + 1
+        if n > 20:
+            break
+    var t2 = now_ms()
+    sse_close(c)
+    ck("slow: 首行内容", str(l1) == "data: {\"n\":1}")
+    ck("slow: 首行到达 <700ms（增量，不是收齐再给）", t1 - t0 < 700)
+    ck("slow: 全程 >1100ms（确实等了第二块）", t2 - t0 > 1100)
+
+# ── 10. IO 超时：上游只收请求不回字节 ⇒ 到点即失败（不再永久占线程） ──
+def case_hang():
+    var o = tcp_opts("/hang", null)
+    o.set("timeout_ms", 800)
+    var t0 = now_ms()
+    var r = sse_connect_ex(url_tcp("/hang"), o)
+    var dt = now_ms() - t0
+    ck("hang: ok=false", not bool(r["ok"]))
+    ck("hang: stage=4(读头)", int(r["stage"]) == 4)
+    ck("hang: 800ms 生效（<3000ms 返回）", dt < 3000)
+
+def main():
+    var a = args()
+    if len(a) < 4:
+        print("用法: sse_connect_ex <tcp_port> <unix_sock_path> <dead_tcp_port>")
+        return
+    g_port = int(a[1])
+    g_sock = a[2]
+    g_dead = int(a[3])
+    case_ok()
+    case_nocat()
+    case_status("/e404", 404, "{\"error\":\"not found\"}", "")
+    case_status("/e500chunk", 500, "{\"error\":\"boom\"}", "3")
+    case_status("/e429", 429, "{\"error\":\"rate\"}", "7")
+    case_dead_tcp()
+    case_dead_unix()
+    case_echo()
+    case_slow()
+    case_hang()
+    print("M137 PASS=" + str(g_pass) + " FAIL=" + str(g_fail))
+    if g_fail > 0:
+        exit(1)
+
+main()

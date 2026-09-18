@@ -1,0 +1,90 @@
+# M130 · 文件锁 / 权限 / open 原始 flags / 空体响应 CT（qg-issue 87 缺陷 56–59）
+# ---------------------------------------------------------------
+# 这些原语来自 token-cache PuXian 化第 1 批（Go `lock.PID` 用 syscall.Flock；
+# `os.Chmod(socket, 0666)`；`os.OpenFile(O_CREATE|O_RDWR, 0644)`）。
+# 每一断言都在两轨（VM 默认 / C 轨）下跑，见 verify.sh。
+#
+# 断言：
+#   1  open(path, O_CREAT|O_RDWR, 0o644) 建文件并返回可用 fd
+#   2  flock(fd, LOCK_EX|LOCK_NB) → 0（成功）
+#   3  **跨进程互斥**：他进程（python fcntl.flock，同一 flock(2) 锁空间）持锁时 → -1 + errno=EWOULDBLOCK(11)
+#   4  他进程退出后锁**自动释放**（BSD 锁语义；无 stale 锁文件 = PID 锁的正确性基础）
+#   5  flock(fd, LOCK_UN) 后再取成功
+#   6  **不截断**：O_CREAT|O_RDWR 重开既有文件，内容保留（Go os.OpenFile 语义）
+#   7  chmod(path, 0o600) → true 且 stat 实测 600
+#   8  chmod(不存在路径) → false + os_errno() 可用
+var P = 0
+var F = 0
+
+def ck(name, cond):
+    if cond:
+        P = P + 1
+        print("  ✅ " + name)
+    else:
+        F = F + 1
+        print("  ❌ " + name)
+
+def main():
+    var O_RDWR = 2
+    var O_CREAT = 64
+    var LOCK_EX = 2
+    var LOCK_NB = 4
+    var LOCK_UN = 8
+    var dir = "/tmp/m130_flock"
+    if not is_dir(dir):
+        mkdir(dir, 0o755)
+    var lockpath = dir + "/t.lock"
+    if exists(lockpath):
+        remove(lockpath)
+
+    # 1
+    var fd = open(lockpath, O_CREAT | O_RDWR, 0o644)
+    ck("open(path, O_CREAT|O_RDWR, 0644) 建文件", fd > 0 and exists(lockpath))
+    # 2
+    ck("flock(fd, LOCK_EX|LOCK_NB) → 0", flock(fd, LOCK_EX | LOCK_NB) == 0)
+    # 5（先释放再取，避免与 3 混在一起）
+    ck("flock(fd, LOCK_UN) → 0", flock(fd, LOCK_UN) == 0)
+    ck("释放后再取成功", flock(fd, LOCK_EX | LOCK_NB) == 0)
+    ck("再次释放", flock(fd, LOCK_UN) == 0)
+
+    # 3 / 4：他进程持锁
+    var py = "import fcntl,time,sys\n" +
+             "f=open('" + lockpath + "','r+')\n" +
+             "fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)\n" +
+             "sys.stdout.write('locked\\n'); sys.stdout.flush()\n" +
+             "time.sleep(1.0)\n"
+    write_file(dir + "/hold.py", py)
+    var sp = os_spawn("/usr/bin/python3", [dir + "/hold.py"], {"group": true})
+    sleep(500)
+    var rc = flock(fd, LOCK_EX | LOCK_NB)
+    var en = os_errno()
+    ck("他进程持锁时 flock → -1", rc == -1)
+    ck("errno = EWOULDBLOCK(11)", en == 11)
+    os_wait(sp)
+    sleep(200)
+    ck("他进程退出后锁自动释放（无 stale 锁）", flock(fd, LOCK_EX | LOCK_NB) == 0)
+    flock(fd, LOCK_UN)
+    close(fd)
+
+    # 6：不截断
+    write_file(lockpath, "1234567\n")
+    var fd2 = open(lockpath, O_CREAT | O_RDWR, 0o644)
+    close(fd2)
+    ck("O_CREAT|O_RDWR 重开不截断（内容保留）", trim(read_file(lockpath)) == "1234567")
+
+    # 7：chmod
+    ck("chmod(path, 0644...) 返回 true", chmod(lockpath, 0o600))
+    var st = os_capture("/usr/bin/stat", ["-c", "%a", lockpath])
+    ck("stat 实测 600", trim(st["stdout"]) == "600")
+    # 8：失败路径
+    ck("chmod(不存在路径) → false", chmod(dir + "/nope_xyz", 0o600) == false)
+
+    # 清理
+    if exists(lockpath):
+        remove(lockpath)
+    if exists(dir + "/hold.py"):
+        remove(dir + "/hold.py")
+
+    print("M130_ASSERT: " + str(P) + "P/" + str(F) + "F")
+    if F > 0:
+        exit(1)

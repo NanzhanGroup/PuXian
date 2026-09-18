@@ -1,0 +1,65 @@
+# ═══════════════════════════════════════════════════════════════════
+# M131 示例：http_stream 的 POST 流式端点 + manual 手写响应头 + 分块传输
+# ---------------------------------------------------------------
+# 背景（qg-issue 87 缺陷 65）：Go 侧「POST + 边写边 Flush」的 SSE 端点
+#   （api-server /v1/chat/stream、token-cache /v1/chat/completions 代理）
+#   在 PuXian 里**表达不了** —— http_stream 只在 GET 上接管连接。
+#
+# 本示例覆盖四条语义：
+#   ① methods 掩码：POST 命中；未列出的方法落普通 dispatch（不接管）
+#   ② manual：接管不写响应头 —— 校验失败可先回**普通** 400/405（Go http.Error 的位置）
+#   ③ sse_start 声明的 Transfer-Encoding: chunked ⇒ 分块编码 + 收尾 0\r\n\r\n
+#   ④ sse_write 原样写出（sse_send 会按 SSE 规则加 "data: "，透传上游时不能加）
+# 另含回归项：不带 opts 的 http_stream（GET 自动 SSE）行为不变。
+# ═══════════════════════════════════════════════════════════════════
+import std.strings
+
+CHUNKS = ["data: {\"i\":1}\n", "\n", "data: {\"i\":2}\n", "\n", "data: [DONE]\n", "\n"]
+
+# ① + ② + ③ + ④：POST /s —— 手动头 + 分块 + 原文透传
+def on_s(req):
+    if str(req["method"]) != "POST":
+        return {"status": 405, "body": "{\"error\":\"POST required\"}",
+                "headers": {"Content-Type": "application/json"}}
+    var conn = req["conn"]
+    var h = {}
+    h.set("Content-Type", "text/event-stream")
+    h.set("Cache-Control", "no-cache")
+    h.set("Connection", "keep-alive")
+    h.set("Transfer-Encoding", "chunked")
+    sse_start(conn, 200, h)
+    for c in CHUNKS:
+        sse_write(conn, c)
+    return null
+
+# ②：校验失败 → 普通 400（此时响应头尚未发出，这正是 manual 的意义）
+def on_s3(req):
+    if index_of(str(req["body"]), "x") < 0:
+        return {"status": 400, "body": "{\"error\":\"bad request\"}",
+                "headers": {"Content-Type": "application/json"}}
+    var conn = req["conn"]
+    var h = {}
+    h.set("Content-Type", "text/event-stream")
+    h.set("Connection", "keep-alive")
+    sse_start(conn, 200, h)
+    sse_write(conn, "data: ok\n\n")
+    return null
+
+# 回归项：不带 opts 的 http_stream（默认 GET + 自动 SSE 头）
+def on_s2(req):
+    sse_send(req["conn"], "hello-auto")
+    return null
+
+# ①：method 掩码 —— POST /s2 不应被接管，落到本函数
+def handler(req):
+    return {"status": 200, "body": "root"}
+
+def main():
+    http_stream("/s", on_s, {"methods": ["POST"], "manual": true})
+    http_stream("/s3", on_s3, {"methods": ["POST"], "manual": true})
+    http_stream("/s2", on_s2)
+    print("M131_READY")
+    flush()
+    http_serve(19871, handler)
+
+main()
