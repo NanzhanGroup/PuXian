@@ -2763,14 +2763,53 @@ static void px_alloc_fail(size_t n, size_t total, const char* what) {
     _exit(1);
 }
 
+// 前导字节 → 该字符**声称**的字节数（只读首字节，不校验后续）
+static inline int px_utf8_clen(unsigned char cc) {
+    if ((cc & 0x80) == 0) return 1;
+    if ((cc & 0xE0) == 0xC0) return 2;
+    if ((cc & 0xF0) == 0xE0) return 3;
+    if ((cc & 0xF8) == 0xF0) return 4;
+    return 1;
+}
+
+// M142（缺陷 111/112）：**全运行时唯一的「一个字符 = 多少字节」判定**。
+//   p = 当前位置，rem = 本串剩余字节数。返回该字符的字节数（1..4）。
+//   规则：合法序列 → 其长度；ASCII → 1；**孤立续字节 / 尾部截断的前导字节 /
+//   后续字节不是续字节** → 1（即"每个非法字节各自成字符"）。
+//   这样保证：① 走查永不越过 rem（不存在越界读，缺陷 112 由构造消除）；
+//             ② 合法 UTF-8 下的结果与旧实现逐字节相同（零回归）；
+//             ③ 畸形 UTF-8 下 len(s) == 走查步数，且 offs[c] 单调覆盖**全部字节**
+//                （旧实现里"声称长度"会吞掉后续字节，导致 s[i] 与 s[i:i+1] 不一致）。
+static inline int px_utf8_step(const unsigned char* p, int rem) {
+    if (rem <= 0) return 1;
+    int n = px_utf8_clen(p[0]);
+    if (n == 1) return 1;
+    if (n > rem) return 1;
+    for (int k = 1; k < n; k++) {
+        if ((p[k] & 0xC0) != 0x80) return 1;
+    }
+    return n;
+}
+
 // ==================== 字符串工具 ====================
 
 // M83-S1（Issue 16 GAP-STR-1-B1）：带字节长度边界的 UTF-8 字符计数——str 内嵌 NUL 时
 // len() 尊重 str.len（完整字节边界）而非 C strlen（在首个 NUL 截断）。边界 n 为字节数。
+//
+// 缺陷 111（M142）：原实现数「非连续字节」⇒ **孤立续字节（0x80..0xBF）不计入**：
+//     len("A\x80B") == 2，而 s[i] / 单字符切片按 px_utf8_clen 前导字节走查（3 步），
+//     rune_offs 偏移表也建 3 项 —— 同一份值上「字符数」有两个互不相容的定义。
+//     后果（实测）：逐字符扫描器在**畸形 UTF-8** 上索引错位（len 与 s[i] 不同源），
+//     即"看得见的字节数"与"循环次数"对不上（`for i in range(len(s))` 会漏字节）。
+//   修法：与 px_index / 偏移表同源 —— 按前导字节走查，**一个走查步 = 一个字符**
+//     （孤立续字节自身成一步，故其 len 与 bytes_len 一致；合法 UTF-8 结果不变）。
 int px_unicode_len_n(const char* s, int n) {
     int c = 0;
-    for (int i = 0; i < n; i++) {
-        if (((unsigned char)s[i] & 0xC0) != 0x80) c++;  // 非连续字节 = 新字符
+    int i = 0;
+    const unsigned char* p = (const unsigned char*)s;
+    while (i < n) {
+        i += px_utf8_step(p + i, n - i);
+        c++;
     }
     return c;
 }
@@ -2785,12 +2824,14 @@ int px_unicode_len(const char* s) {
 //   （64KB 实测 5.4s；ws-approve /check 因 json_valid 逐字符两趟 → 11.6s → 越过 fail-closed）。
 // 解法：str 对象上挂两个惰性缓存（见 runtime.h 的 str 子结构注释）——
 //   rune_len（一次 O(n)，之后 O(1)）+ rune_offs（一次 O(n) 建表，之后 s[i] 取起始偏移 O(1)）。
-// 语义红线（逐条对齐改动前）：
-//   1. rune_len 值 = px_unicode_len_n 的原结果（**不是**建表步数——畸形 UTF-8 下二者不等）；
-//   2. 偏移表按 px_index 原线性走查**完全相同的步进规则**建（前导字节判长），
-//      故表中 offs[i] 与旧代码走 i 步后的 p 逐字节相同；
+// 语义红线（逐条对齐改动前；第 1/2/4 条经 M142 缺陷 111 修订，见下）：
+//   1. rune_len 值 = px_unicode_len_n 的结果；M142 起 px_unicode_len_n 与建表**同源**
+//      （px_utf8_step）⇒ 畸形 UTF-8 下二者也相等（旧注："不是建表步数"已不成立）；
+//   2. 偏移表按 px_utf8_step 建（前导字节判长 + 校验后续续字节；非法字节各自成步），
+//      合法 UTF-8 下与旧代码走 i 步后的 p 逐字节相同；
 //   3. 索引 i ≥ 表步数时（仅畸形 UTF-8 可能）**回落原线性走查**，连越界读行为都保持原样；
-//   4. 单字符结果仍按原 c0 判长（px_utf8_clen(c0)）构造，不改 clen 语义。
+//   4. 单字符结果按 px_utf8_step 判长（M142：原为 px_utf8_clen 只读首字节 ⇒ 尾部截断的
+//      前导字节会越读到 str.len 之外的字节，缺陷 112）；
 // 内存/性能取舍：仅字节长度 ≥ PX_STR_OFFS_MIN 的串才建表（表 = 4B×步数），小串线性走更划算。
 #ifndef PX_STR_OFFS_MIN
 #define PX_STR_OFFS_MIN 1024          // 可 -DPX_STR_OFFS_MIN=… 覆盖（用于等价性/边界试验）
@@ -2803,14 +2844,8 @@ int px_unicode_len(const char* s) {
 #define PX_STR_OFFS_MAX (16 * 1024 * 1024)   // 可 -DPX_STR_OFFS_MAX=… 覆盖
 #endif
 
-// 前导字节 → 该字符字节数（与 px_index 原实现的判定式逐字相同）
-static inline int px_utf8_clen(unsigned char cc) {
-    if ((cc & 0x80) == 0) return 1;
-    if ((cc & 0xE0) == 0xC0) return 2;
-    if ((cc & 0xF0) == 0xE0) return 3;
-    if ((cc & 0xF8) == 0xF0) return 4;
-    return 1;
-}
+// 前导字节 → 该字符字节数：**定义已上移至「字符串工具」段**（缺陷 111：px_unicode_len_n
+// 需要它 ⇒ 单一来源，避免两处判定式漂移）。
 
 // 惰性 rune 计数（结果与 px_unicode_len_n 完全一致；str 不可变 ⇒ 无失效逻辑）
 static inline int px_str_rune_len(LXObject* o) {
@@ -2833,7 +2868,7 @@ static int* px_str_offs_get(LXObject* o) {
     if (!s) return NULL;
     int* offs = (int*)xmalloc(sizeof(int) * ((size_t)n + 1));   // 步数 ≤ 字节数 ⇒ n+1 足够
     int c = 0, i = 0;
-    while (i < n) { offs[c++] = i; i += px_utf8_clen(s[i]); }   // 与 px_index 原走查同步进规则
+    while (i < n) { offs[c++] = i; i += px_utf8_step(s + i, n - i); }   // 与 px_index / px_slice 同源（缺陷 111）
     int* old = __atomic_load_n(&o->as.str.rune_offs, __ATOMIC_ACQUIRE);
     if (old) { xfree(offs); return old; }          // 竞态：他线程已建 → 用它的，丢弃本次
     __atomic_store_n(&o->as.str.offs_cnt, c, __ATOMIC_RELAXED);
@@ -3321,10 +3356,12 @@ LXValue px_index(LXValue obj, LXValue idx) {
             //   步进规则与建表完全一致，故 offs[i] 与"走 i 步"结果逐字节相同，此处纯为等义兜底。
             p = base;
             int count = 0;
-            while (count < i) { p += px_utf8_clen(*p); count++; }
+            while (count < i) { p += px_utf8_step(p, (int)(base + obj.as.obj->as.str.len - p)); count++; }
         }
         unsigned char c0 = *p;
-        int clen = px_utf8_clen(c0);              // M106-S2：与原判定式逐字等价
+        // 缺陷 111/112（M142）：字符长度与 **offs 表 / len() 同一判定**（px_utf8_step），
+        //   clen 由构造保证 ≤ 剩余字节 ⇒ 原「按声称长度 memcpy 越读尾部」不再可能。
+        int clen = px_utf8_step(p, (int)(base + obj.as.obj->as.str.len - p));
         char buf[8] = {0};
         memcpy(buf, p, clen);
         // M89-S3-C1 补漏：单字符结果须按 clen 带长构造（px_str 用 strlen → 取到 NUL 字符时
@@ -3433,14 +3470,17 @@ LXValue px_slice(LXValue obj, LXValue start, LXValue end, LXValue step) {
         return r;
     }
     // str：按 UTF-8 字符收集（预构建字符字节偏移表）
+    //   缺陷 111（M142）：此处原用「走 1 字节再跳过续字节」的**第三种**字符定义 ⇒
+    //   与 px_index / len() 在畸形 UTF-8 上互相矛盾（同一串 s[1] 与 s[1:2] 不同）。
+    //   现改为与 px_index / len() **同一判定**（px_utf8_step）⇒ offs[len] == blen
+    //   （覆盖全部字节，无字节被"吞掉"），合法 UTF-8 下结果不变。
     const char* data = obj.as.obj->as.str.data;
     int blen = obj.as.obj->as.str.len;
     int* offs = xmalloc(sizeof(int) * (size_t)(len + 1));
     int boff = 0;
     offs[0] = 0;
     for (int c = 0; c < len; c++) {
-        boff++;
-        while (boff < blen && ((unsigned char)data[boff] & 0xC0) == 0x80) boff++;
+        boff += px_utf8_step((const unsigned char*)data + boff, blen - boff);
         offs[c + 1] = boff;
     }
     int total = 0;

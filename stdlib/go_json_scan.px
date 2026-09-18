@@ -1,0 +1,460 @@
+# ═══════════════════════════════════════════════════════════════════════
+# go_json_scan.px — Go `encoding/json` 的 scanner 状态机（逐字节复刻）
+# ---------------------------------------------------------------
+# 单一事实源：$GOROOT/src/encoding/json/scanner.go（go1.26.6 实测）
+#
+# 为什么需要它：Go 的 `Indent` / `Compact` / `Marshal`(escape) 都不是「先解再
+# 重新编码」，而是**在原文上按 scanner 的分类结果做插入/删除**：
+#   · scanSkipSpace  → 该字节是空白（Indent 丢弃 / Compact 丢弃）
+#   · scanContinue   → 「无趣字节」（**含字符串字面量内的所有字节**）原样输出
+#   · scanBeginLiteral / scanEndObject / … → 决定缩进层级与冒号后空格
+#   · scanError      → 整个输出作废（Indent 返回 err、dst 回退）
+# ⇒ 要做到**逐字节**一致，就必须复刻 scanner 的状态机，而不是自己写个格式化器。
+#
+# 与 Go 的唯一实现差异（已登记速查包）：
+#   Go 逐**字节**喂 `step`；本实现逐**字符**喂（PuXian 无 O(1) 字节索引）。
+#   两者对**合法 UTF-8** 输入完全等价：多字节字符在状态机里只可能是
+#   「字符串内的 scanContinue」（原样输出，字节不变）或「非法字符」错误。
+#   错误**偏移**按字节折算（`gjs_off`），与 Go 的 `SyntaxError.Offset` 同值。
+#   非法 UTF-8 输入属登记边界（速查包）；`gjs_quote_char` 按 Go 规则用**首字节**。
+# ═══════════════════════════════════════════════════════════════════════
+import std.strings
+# ── step 返回值（对齐 scanner.go 常量序，数值必须一致：Compact 用 `v >= scanSkipSpace`）──
+const GJS_CONTINUE = 0
+const GJS_BEGIN_LITERAL = 1
+const GJS_BEGIN_OBJECT = 2
+const GJS_OBJECT_KEY = 3
+const GJS_OBJECT_VALUE = 4
+const GJS_END_OBJECT = 5
+const GJS_BEGIN_ARRAY = 6
+const GJS_ARRAY_VALUE = 7
+const GJS_END_ARRAY = 8
+const GJS_SKIP_SPACE = 9
+const GJS_END = 10
+const GJS_ERROR = 11
+# ── parseState 栈值 ──
+const GJP_OBJECT_KEY = 0
+const GJP_OBJECT_VALUE = 1
+const GJP_ARRAY_VALUE = 2
+const GJS_MAX_DEPTH = 10000
+# ── 状态编号（内部；只用于 gjs_step 的分派，与 Go 的函数名一一对应）──
+const GJSS_BEGIN_VALUE = 0
+const GJSS_BEGIN_VALUE_OR_EMPTY = 1
+const GJSS_BEGIN_STRING_OR_EMPTY = 2
+const GJSS_BEGIN_STRING = 3
+const GJSS_END_VALUE = 4
+const GJSS_END_TOP = 5
+const GJSS_IN_STRING = 6
+const GJSS_IN_STRING_ESC = 7
+const GJSS_IN_STRING_ESC_U = 8
+const GJSS_IN_STRING_ESC_U1 = 9
+const GJSS_IN_STRING_ESC_U12 = 10
+const GJSS_IN_STRING_ESC_U123 = 11
+const GJSS_NEG = 12
+const GJSS_1 = 13
+const GJSS_0 = 14
+const GJSS_DOT = 15
+const GJSS_DOT0 = 16
+const GJSS_E = 17
+const GJSS_ESIGN = 18
+const GJSS_E0 = 19
+const GJSS_T = 20
+const GJSS_TR = 21
+const GJSS_TRU = 22
+const GJSS_F = 23
+const GJSS_FA = 24
+const GJSS_FAL = 25
+const GJSS_FALS = 26
+const GJSS_N = 27
+const GJSS_NU = 28
+const GJSS_NUL = 29
+const GJSS_ERROR = 30
+const GJS_HEXD = "0123456789abcdef"
+# ── 构造 / 工具 ──
+# gjs_new() → scanner 状态（对应 Go 的 newScanner+reset）
+def gjs_new():
+    var s = {}
+    s.set("st", GJSS_BEGIN_VALUE)
+    s.set("ps", [])  # parseState 栈（容量复用，见 gjs_push）
+    s.set("n", 0)  # 栈长度（Pop 只减 n，不裁列表 —— 与 Go 的 slice 复用同效）
+    s.set("eof_top", false)
+    s.set("err", null)
+    s.set("err_ri", 0)  # 出错处的**字符**下标（-1 = 合成 EOF 调用，见 gjs_off）
+    s.set("err_eof", false)  # true = 合成 EOF 错误（偏移 = 输入总**字节**数）
+    return s
+# gjs_is_space(c) — 对齐 scanner.go::isSpace（**只有** 空格/TAB/CR/LF）
+def gjs_is_space(c):
+    return c == " " or c == "\t" or c == "\r" or c == "\n"
+# gjs_byte0(c) — 字符的首字节（Go 的 stateInString 判 `c < 0x20` 用字节）
+def gjs_byte0(c):
+    return bytes_get(bytes(c), 0)
+# gjs_char(b) — 单字节 b（ASCII）→ 单字符 str
+def gjs_char(b):
+    return bytes_to_str(int_to_bytes(b, 1, "little"))
+# gjs_latin1(b) — 码点 b(0xA1..0xFF) 的 UTF-8 编码（Go `string(byte)`` 的语义）
+def gjs_latin1(b):
+    if b < 192:
+        return bytes_to_str(bytes_concat(int_to_bytes(194, 1, "little"), int_to_bytes(b, 1, "little")))
+    return bytes_to_str(bytes_concat(int_to_bytes(195, 1, "little"), int_to_bytes(b - 64, 1, "little")))
+# gjs_quote_char(c) — 复刻 Go `quoteChar(c byte)`：
+#   c 是**字节**，`string(c)` 把字节按 Latin-1 解释成 U+0000..U+00FF，再 `strconv.Quote`。
+#   规则：' 与 " 特例；\\ → \\\\；IsPrint（0x20..0x7E，以及 0xA1..0xFF 除 0xAD）→ 字符本身；
+#        \a\b\f\n\r\t\v → 转义；其余 <0x20 与 0x7F → \xNN（小写）；其余 ≤0xFF → \uNNNN（小写）。
+def gjs_quote_char(c):
+    var b = gjs_byte0(c)
+    if b == 39:
+        return "'\\''"
+    if b == 34:
+        return "'\"'"
+    if b == 92:
+        return "'\\\\'"
+    if b >= 32 and b <= 126:
+        return "'" + gjs_char(b) + "'"
+    if b == 7:
+        return "'\\a'"
+    if b == 8:
+        return "'\\b'"
+    if b == 12:
+        return "'\\f'"
+    if b == 10:
+        return "'\\n'"
+    if b == 13:
+        return "'\\r'"
+    if b == 9:
+        return "'\\t'"
+    if b == 11:
+        return "'\\v'"
+    if b < 32 or b == 127:
+        return "'\\x" + gjs_hexd(b // 16) + gjs_hexd(b % 16) + "'"
+    if b >= 161 and b != 173:
+        return "'" + gjs_latin1(b) + "'"
+    return "'\\u00" + gjs_hexd(b // 16) + gjs_hexd(b % 16) + "'"
+# gjs_hexchar(n) — 0..15 → 小写十六进制字符
+def gjs_hexd(n):
+    return GJS_HEXD[n:n + 1]
+# ── 错误 / 栈（对齐 scanner.go::error / pushParseState / popParseState）──
+def gjs_err(s, c, ctx, i):
+    s.set("st", GJSS_ERROR)
+    s.set("err", "invalid character " + gjs_quote_char(c) + " " + ctx)
+    s.set("err_ri", i)
+    return GJS_ERROR
+def gjs_push(s, c, ps, success, i):
+    var p = s["ps"]
+    var n = s["n"]
+    if len(p) == n:
+        p.append(ps)
+    else:
+        p[n] = ps
+    n = n + 1
+    s.set("n", n)
+    if n <= GJS_MAX_DEPTH:
+        return success
+    return gjs_err(s, c, "exceeded max depth", i)
+def gjs_pop(s):
+    var n = s["n"] - 1
+    s.set("n", n)
+    if n == 0:
+        s.set("st", GJSS_END_TOP)
+        s.set("eof_top", true)
+    else:
+        s.set("st", GJSS_END_VALUE)
+# ── 状态函数 ──
+# stateBeginValue —— 输入开始处
+def gjs_s_begin_value(s, c, i):
+    if gjs_is_space(c):
+        return GJS_SKIP_SPACE
+    if c == "{":
+        s.set("st", GJSS_BEGIN_STRING_OR_EMPTY)
+        return gjs_push(s, c, GJP_OBJECT_KEY, GJS_BEGIN_OBJECT, i)
+    if c == "[":
+        s.set("st", GJSS_BEGIN_VALUE_OR_EMPTY)
+        return gjs_push(s, c, GJP_ARRAY_VALUE, GJS_BEGIN_ARRAY, i)
+    if c == "\"":
+        s.set("st", GJSS_IN_STRING)
+        return GJS_BEGIN_LITERAL
+    if c == "-":
+        s.set("st", GJSS_NEG)
+        return GJS_BEGIN_LITERAL
+    if c == "0":
+        s.set("st", GJSS_0)
+        return GJS_BEGIN_LITERAL
+    if c == "t":
+        s.set("st", GJSS_T)
+        return GJS_BEGIN_LITERAL
+    if c == "f":
+        s.set("st", GJSS_F)
+        return GJS_BEGIN_LITERAL
+    if c == "n":
+        s.set("st", GJSS_N)
+        return GJS_BEGIN_LITERAL
+    if c >= "1" and c <= "9":
+        s.set("st", GJSS_1)
+        return GJS_BEGIN_LITERAL
+    return gjs_err(s, c, "looking for beginning of value", i)
+# stateBeginValueOrEmpty —— `[` 之后
+def gjs_s_begin_value_or_empty(s, c, i):
+    if gjs_is_space(c):
+        return GJS_SKIP_SPACE
+    if c == "]":
+        return gjs_end_value(s, c, i)
+    return gjs_s_begin_value(s, c, i)
+# stateBeginStringOrEmpty —— `{` 之后
+def gjs_s_begin_string_or_empty(s, c, i):
+    if gjs_is_space(c):
+        return GJS_SKIP_SPACE
+    if c == "}":
+        var n = s["n"]
+        s["ps"][n - 1] = GJP_OBJECT_VALUE
+        return gjs_end_value(s, c, i)
+    return gjs_s_begin_string(s, c, i)
+# stateBeginString —— `{"key": value,` 之后
+def gjs_s_begin_string(s, c, i):
+    if gjs_is_space(c):
+        return GJS_SKIP_SPACE
+    if c == "\"":
+        s.set("st", GJSS_IN_STRING)
+        return GJS_BEGIN_LITERAL
+    return gjs_err(s, c, "looking for beginning of object key string", i)
+# stateEndValue —— 一个值结束之后
+def gjs_s_end_value(s, c, i):
+    var n = s["n"]
+    if n == 0:
+        # 顶层值在此字节**之前**已结束
+        s.set("st", GJSS_END_TOP)
+        s.set("eof_top", true)
+        return gjs_s_end_top(s, c, i)
+    if gjs_is_space(c):
+        s.set("st", GJSS_END_VALUE)
+        return GJS_SKIP_SPACE
+    var ps = s["ps"][n - 1]
+    if ps == GJP_OBJECT_KEY:
+        if c == ":":
+            s["ps"][n - 1] = GJP_OBJECT_VALUE
+            s.set("st", GJSS_BEGIN_VALUE)
+            return GJS_OBJECT_KEY
+        return gjs_err(s, c, "after object key", i)
+    if ps == GJP_OBJECT_VALUE:
+        if c == ",":
+            s["ps"][n - 1] = GJP_OBJECT_KEY
+            s.set("st", GJSS_BEGIN_STRING)
+            return GJS_OBJECT_VALUE
+        if c == "}":
+            gjs_pop(s)
+            return GJS_END_OBJECT
+        return gjs_err(s, c, "after object key:value pair", i)
+    if ps == GJP_ARRAY_VALUE:
+        if c == ",":
+            s.set("st", GJSS_BEGIN_VALUE)
+            return GJS_ARRAY_VALUE
+        if c == "]":
+            gjs_pop(s)
+            return GJS_END_ARRAY
+        return gjs_err(s, c, "after array element", i)
+    return gjs_err(s, c, "", i)
+# stateEndTop —— 顶层值之后：只允许空白
+def gjs_s_end_top(s, c, i):
+    if not gjs_is_space(c):
+        # 错误记下即返回 scanEnd（Go 注释：下一字节再抱怨）
+        gjs_err(s, c, "after top-level value", i)
+    return GJS_END
+# stateInString —— `"` 之内
+def gjs_s_in_string(s, c, i):
+    if c == "\"":
+        s.set("st", GJSS_END_VALUE)
+        return GJS_CONTINUE
+    if c == "\\":
+        s.set("st", GJSS_IN_STRING_ESC)
+        return GJS_CONTINUE
+    if gjs_byte0(c) < 32:
+        return gjs_err(s, c, "in string literal", i)
+    return GJS_CONTINUE
+# stateInStringEsc —— `"\` 之后
+def gjs_s_in_string_esc(s, c, i):
+    if c == "b" or c == "f" or c == "n" or c == "r" or c == "t" or c == "\\" or c == "/" or c == "\"":
+        s.set("st", GJSS_IN_STRING)
+        return GJS_CONTINUE
+    if c == "u":
+        s.set("st", GJSS_IN_STRING_ESC_U)
+        return GJS_CONTINUE
+    return gjs_err(s, c, "in string escape code", i)
+# `\u` 的 4 位十六进制（ESC_U / U1 / U12 / U123 四态）
+def gjs_is_hex(c):
+    if c >= "0" and c <= "9":
+        return true
+    if c >= "a" and c <= "f":
+        return true
+    if c >= "A" and c <= "F":
+        return true
+    return false
+def gjs_esc_u(s, c, i, next_st):
+    if gjs_is_hex(c):
+        s.set("st", next_st)
+        return GJS_CONTINUE
+    return gjs_err(s, c, "in \\u hexadecimal character escape", i)
+# stateNeg —— `-` 之后
+def gjs_s_neg(s, c, i):
+    if c == "0":
+        s.set("st", GJSS_0)
+        return GJS_CONTINUE
+    if c >= "1" and c <= "9":
+        s.set("st", GJSS_1)
+        return GJS_CONTINUE
+    return gjs_err(s, c, "in numeric literal", i)
+# state1 —— 非零整数中
+def gjs_s_1(s, c, i):
+    if c >= "0" and c <= "9":
+        s.set("st", GJSS_1)
+        return GJS_CONTINUE
+    return gjs_s_0(s, c, i)
+# state0 —— `0` 之后
+def gjs_s_0(s, c, i):
+    if c == ".":
+        s.set("st", GJSS_DOT)
+        return GJS_CONTINUE
+    if c == "e" or c == "E":
+        s.set("st", GJSS_E)
+        return GJS_CONTINUE
+    return gjs_s_end_value(s, c, i)
+# stateDot —— 小数点之后
+def gjs_s_dot(s, c, i):
+    if c >= "0" and c <= "9":
+        s.set("st", GJSS_DOT0)
+        return GJS_CONTINUE
+    return gjs_err(s, c, "after decimal point in numeric literal", i)
+# stateDot0 —— 小数位之后
+def gjs_s_dot0(s, c, i):
+    if c >= "0" and c <= "9":
+        return GJS_CONTINUE
+    if c == "e" or c == "E":
+        s.set("st", GJSS_E)
+        return GJS_CONTINUE
+    return gjs_s_end_value(s, c, i)
+# stateE —— 指数符之后
+def gjs_s_e(s, c, i):
+    if c == "+" or c == "-":
+        s.set("st", GJSS_ESIGN)
+        return GJS_CONTINUE
+    return gjs_s_esign(s, c, i)
+# stateESign —— 指数符号之后
+def gjs_s_esign(s, c, i):
+    if c >= "0" and c <= "9":
+        s.set("st", GJSS_E0)
+        return GJS_CONTINUE
+    return gjs_err(s, c, "in exponent of numeric literal", i)
+# stateE0 —— 指数数字之后
+def gjs_s_e0(s, c, i):
+    if c >= "0" and c <= "9":
+        return GJS_CONTINUE
+    return gjs_s_end_value(s, c, i)
+# stateEndValue（供 state0/stateDot0/stateE0/stateTru 等「字面量直接结束」复用）
+def gjs_end_value(s, c, i):
+    return gjs_s_end_value(s, c, i)
+# 字面量 true / false / null 的三态链（每步只接受一个固定字符，否则报错）
+def gjs_lit(s, c, i, want, msg, next_st, next_kind):
+    if c == want:
+        s.set("st", next_st)
+        return next_kind
+    return gjs_err(s, c, msg, i)
+# ── 主分派（对应 Go 的 `s.step(s, c)`）──
+def gjs_step(s, c, i):
+    var st = s["st"]
+    if st == GJSS_IN_STRING:
+        return gjs_s_in_string(s, c, i)
+    if st == GJSS_END_VALUE:
+        return gjs_s_end_value(s, c, i)
+    if st == GJSS_BEGIN_VALUE:
+        return gjs_s_begin_value(s, c, i)
+    if st == GJSS_BEGIN_VALUE_OR_EMPTY:
+        return gjs_s_begin_value_or_empty(s, c, i)
+    if st == GJSS_BEGIN_STRING_OR_EMPTY:
+        return gjs_s_begin_string_or_empty(s, c, i)
+    if st == GJSS_BEGIN_STRING:
+        return gjs_s_begin_string(s, c, i)
+    if st == GJSS_END_TOP:
+        return gjs_s_end_top(s, c, i)
+    if st == GJSS_ERROR:
+        return GJS_ERROR
+    if st == GJSS_IN_STRING_ESC:
+        return gjs_s_in_string_esc(s, c, i)
+    if st == GJSS_IN_STRING_ESC_U:
+        return gjs_esc_u(s, c, i, GJSS_IN_STRING_ESC_U1)
+    if st == GJSS_IN_STRING_ESC_U1:
+        return gjs_esc_u(s, c, i, GJSS_IN_STRING_ESC_U12)
+    if st == GJSS_IN_STRING_ESC_U12:
+        return gjs_esc_u(s, c, i, GJSS_IN_STRING_ESC_U123)
+    if st == GJSS_IN_STRING_ESC_U123:
+        return gjs_esc_u(s, c, i, GJSS_IN_STRING)
+    if st == GJSS_NEG:
+        return gjs_s_neg(s, c, i)
+    if st == GJSS_1:
+        return gjs_s_1(s, c, i)
+    if st == GJSS_0:
+        return gjs_s_0(s, c, i)
+    if st == GJSS_DOT:
+        return gjs_s_dot(s, c, i)
+    if st == GJSS_DOT0:
+        return gjs_s_dot0(s, c, i)
+    if st == GJSS_E:
+        return gjs_s_e(s, c, i)
+    if st == GJSS_ESIGN:
+        return gjs_s_esign(s, c, i)
+    if st == GJSS_E0:
+        return gjs_s_e0(s, c, i)
+    if st == GJSS_T:
+        return gjs_lit(s, c, i, "r", "in literal true (expecting 'r')", GJSS_TR, GJS_CONTINUE)
+    if st == GJSS_TR:
+        return gjs_lit(s, c, i, "u", "in literal true (expecting 'u')", GJSS_TRU, GJS_CONTINUE)
+    if st == GJSS_TRU:
+        if c == "e":
+            s.set("st", GJSS_END_VALUE)
+            return GJS_CONTINUE
+        return gjs_err(s, c, "in literal true (expecting 'e')", i)
+    if st == GJSS_F:
+        return gjs_lit(s, c, i, "a", "in literal false (expecting 'a')", GJSS_FA, GJS_CONTINUE)
+    if st == GJSS_FA:
+        return gjs_lit(s, c, i, "l", "in literal false (expecting 'l')", GJSS_FAL, GJS_CONTINUE)
+    if st == GJSS_FAL:
+        return gjs_lit(s, c, i, "s", "in literal false (expecting 's')", GJSS_FALS, GJS_CONTINUE)
+    if st == GJSS_FALS:
+        if c == "e":
+            s.set("st", GJSS_END_VALUE)
+            return GJS_CONTINUE
+        return gjs_err(s, c, "in literal false (expecting 'e')", i)
+    if st == GJSS_N:
+        return gjs_lit(s, c, i, "u", "in literal null (expecting 'u')", GJSS_NU, GJS_CONTINUE)
+    if st == GJSS_NU:
+        return gjs_lit(s, c, i, "l", "in literal null (expecting 'l')", GJSS_NUL, GJS_CONTINUE)
+    if st == GJSS_NUL:
+        if c == "l":
+            s.set("st", GJSS_END_VALUE)
+            return GJS_CONTINUE
+        return gjs_err(s, c, "in literal null (expecting 'l')", i)
+    return GJS_ERROR
+# gjs_eof(s, nchars) — 对齐 scanner.go::eof
+#   ① 已有错误 → 直接 ERROR；② 顶层已结束 → END；
+#   ③ 用**合成空格**再推一步（Go 不递增 bytes 计数）；④ 仍未结束 → "unexpected end of JSON input"
+def gjs_eof(s, nchars):
+    if s["err"] != null:
+        return GJS_ERROR
+    if s["eof_top"]:
+        return GJS_END
+    gjs_step(s, " ", nchars)
+    if s["eof_top"]:
+        return GJS_END
+    if s["err"] == null:
+        s.set("err", "unexpected end of JSON input")
+        s.set("err_eof", true)
+    else:
+        # 合成空格触发的错误：Go 的 s.bytes 不递增 ⇒ 偏移 = 输入总字节数
+        s.set("err_ri", -1)
+    return GJS_ERROR
+# gjs_off(s, src) — 复刻 Go `SyntaxError.Offset`（**1 基字节偏移**）
+def gjs_off(s, src):
+    if s["err_eof"] or s["err_ri"] < 0:
+        return bytes_len(bytes(src))
+    return bytes_len(bytes(src[0:s["err_ri"]])) + 1
+# gjs_errtext(s) — 错误文案（无错误时返回空串）
+def gjs_errtext(s):
+    if s["err"] == null:
+        return ""
+    return s["err"]

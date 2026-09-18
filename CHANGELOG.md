@@ -6,6 +6,45 @@
 
 ## [Unreleased]
 
+### M142 · Go `encoding/json` 的 Indent/Compact/HTMLEscape 逐字节复刻 + 「字符定义唯一性」（缺陷 111/112 · qg-issue 87 第 23 轮）
+
+> **背景**：按「token-cache 一律移植、一律复现」的要求继续清未移植面时，第一站是**旁路族**
+> （`ctx_debug.go` / `log_writer.go` / 向量工具）—— 而 `ContextDebug.prettyJSON` 用的是
+> `json.Indent(&out, data, "", "  ")`，**失败则回退原文**。要让它逐字节一致，就必须复刻
+> `encoding/json` 的 `Indent`/`Compact` 与它们共用的 **scanner 状态机**（`indent.go` +
+> `scanner.go`），不是"自己写个美化器"。顺带在这条路上挖出两个运行时缺陷。
+
+- **新增 stdlib `std/go_json_scan.px` + `std/go_json_indent.px`**（Go `encoding/json` 保真族）：
+  - `go_json_indent(src, prefix, indent)` → `str|null`（语法错误返回 null，调用方回退原文——
+    正是 token-cache `ContextDebug.prettyJSON` 的语义）；`go_json_indent_ex` → `{ok,out,err,offset}`；
+  - `go_json_compact(src, escape)` → `str|null`（`escape=true` = `Marshal` 的 `<`/`>`/`&`/
+    U+2028/U+2029 转义路径）；`go_json_htmescape(src)` → `str`（纯字节替换、永不报错）；
+  - scanner 层可独立使用：`gjs_new/gjs_step/gjs_eof/gjs_byte0/gjs_hexd/gjs_quote_char`
+    （含 `quoteChar(byte)` 的 **Latin-1 语义**：0x80..0xA0 与 0xAD → `\u00NN`，
+    0xA1..0xFF 除 0xAD → 该字符本身，其余按 Go `strconv.Quote` 规则）。
+  - **必抄的三点**：字符串内字节**原样搬运**（不重新编码数字/转义）；空容器**不成行**
+    （延迟缩进语义）；最大嵌套深度（10000）属 scanner 行为。
+  - ⚠️ **Go 语义陷阱（实测登记）**：`json.Compact` 的 `*SyntaxError.Offset` **恒为 0**
+    （`appendCompact` 不递增 `scan.bytes`），`json.Indent` 才是真实的 1 基**字节**偏移 ——
+    两者不是一个口径，照抄 Indent 会错。
+- **缺陷 111 · 「字符」定义唯一化**（runtime）：修前 `len()` 数「非连续字节」、`px_index` 按前导
+  字节的**声称**长度走查、`px_slice` 走 1 字节再跳续字节 —— **三套判定**，合法 UTF-8 下同值
+  （所以长期无人发现），**畸形 UTF-8 下互相矛盾**：`len("A\x80B") == 2` 而 `s[1]` 能取到 0x80；
+  `len("{\xe4}") == 2`（尾部截断的前导字节**吞掉**后面的 `}`）⇒ `for i in range(len(s))`
+  **访问不到全部字节**，逐字符扫描器（JSON/HTTP 解析）在畸形输入上索引错位。
+  现统一为新函数 `px_utf8_step(p, rem)`：**合法序列 → 其长度；ASCII / 孤立续字节 / 尾部截断 /
+  后继不是续字节 → 1**。⇒ `len(s) == 走查步数`、`offs[len] == bytes_len`（无字节被吞），
+  **合法 UTF-8 零行为变化**（`--check-all` / `--check-vm` / 全示例门复跑为证）。
+- **缺陷 112 · 单字符提取的越界读**（runtime）：`px_index` 原按「声称长度」`memcpy` ⇒ 串尾的
+  截断前导字节（如单个 0xE4）会**读越过 `str.len` 尾界**，把相邻内存的垃圾字节当字符返回；
+  现在长度由 `px_utf8_step` 保证 ≤ 剩余字节，越界不可能（由构造消除）。
+- **门**：`examples/m142_go_json_indent/` —— 真值来自 **Go `encoding/json` 本尊**（`truth/`，含
+  `quoteChar` 用公开 API 1:1 复刻），语料 `corpus.txt`（88 例 hex 行，覆盖空/纯空白/幂等/转义/
+  多字节/非法 UTF-8/深嵌套/超深/真实 chat 体），**696 行**（88 × 4 面 + `quoteChar` 全 256 取值）
+  逐字节 diff × 双轨 + **31 断言** + **三道负控**（篡改真值 / 篡改 stdlib 实现 / 篡改语料）。
+  已接入 `m116_gates.sh` / `m117_gates.sh` / `ci.yml`。
+- **纪律**：本轮 6 条断言首跑红**全部是门自己写错期望值**（见速查包 107）⇒ 期望值只能从真值产。
+
 ### M141 · 墙钟纳秒 `now_ns()` + unix 服务端 `remote` = "@"（缺陷 109/110 · qg-issue 87 第 22 轮）
 
 > **背景**：继续把 token-cache 往**生产机端到端实测**推进时照出两处「Go 表达得出、本运行时表达不出」

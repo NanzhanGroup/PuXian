@@ -1,0 +1,162 @@
+# ═══════════════════════════════════════════════════════════════════════
+# M142 · Go `encoding/json` 的 Indent / Compact / HTMLEscape 逐字节复刻
+# ---------------------------------------------------------------
+# 新增 stdlib：`std/go_json_scan.px`（scanner 状态机）+ `std/go_json_indent.px`（三个公开函数）
+# 真值：`truth/`（**Go encoding/json 本尊**，见该目录 main.go）
+# 语料：`corpus.txt`（hex 行，由 gen_corpus.py 生成，两侧共用同一份）
+#
+# 本门做四件事：
+#   ① 真值对拍：88 例 × 4 面（Indent / Compact / Marshal 转义路径 / HTMLEscape）
+#      逐字节 diff（VM 轨 + C 轨各自跑一遍）
+#   ② 自断言：幂等性、compact∘indent 一致性、错误面（文案 + 1 基字节偏移）、
+#      错误字符的 Latin-1 文案、负控（缺陷级反例）
+#   ③ 负控 A：篡改真值一行 ⇒ diff 必须变红
+#   ④ 负控 B：篡改 stdlib 实现 ⇒ 输出必须变化（否则门在自欺）
+#
+# 为什么值得一道门：token-cache 的 `ContextDebug.prettyJSON` 就是
+#   `json.Indent(&out, data, "", "  ")` + **失败回退原文**；只要有一个字节不同，
+#   `up.md` / `up2llm.md` 就与 Go 版不一致（旁路文件也是可对拍面）。
+# ═══════════════════════════════════════════════════════════════════════
+import std.strings
+import std.go_json_scan
+import std.go_json_indent
+
+var P = 0
+var F = 0
+
+def ck(name, cond):
+    if cond:
+        P = P + 1
+        print("  ✅ " + name)
+    else:
+        F = F + 1
+        print("  ❌ " + name)
+
+# one_byte(pre, b, suf) — 造含**非 ASCII 单字节**的字符串（源码不能写 `\xNN`，E1005）
+def one_byte(pre, b, suf):
+    return pre + bytes_to_str(int_to_bytes(b, 1, "little")) + suf
+
+# hex2(b) — 0..255 → 两位小写十六进制（与 truth 的 %02x 同形）
+def hex2(b):
+    return gjs_hexd(b // 16) + gjs_hexd(b % 16)
+
+# 与 truth/main.go 的 emit 同格式：<label>|<ok>|<out_hex>|<err>|<offset>
+def row(label, r):
+    if r["ok"]:
+        return label + "|1|" + bytes_to_hex(bytes(r["out"])) + "||0"
+    return label + "|0||" + r["err"] + "|" + str(r["offset"])
+
+def main():
+    var data = read_file("corpus.txt")
+    var lines = split(data, "\n")
+    var idx = 0
+
+    # ── ① 逐例输出（与 Go 真值逐行比对）──
+    for line in lines:
+        if line == "" or starts_with(line, "#"):
+            continue
+        var src = bytes_to_str(hex_to_bytes(line[1:len(line)]))
+        print("CASE " + str(idx))
+        # 与 truth/main.go 同规则：>8192 字节只跑 Compact/HTMLEscape
+        # （Indent 的输出是 O(depth²)；最大嵌套深度由 Compact 面覆盖）
+        if bytes_len(bytes(src)) > 8192:
+            print("I|SKIP")
+        else:
+            print(row("I", go_json_indent_ex(src, "", "  ")))
+        var c0 = go_json_compact_ex(src, false)
+        print(row("C0", c0))
+        if c0["ok"]:
+            print(row("C1", go_json_compact_ex(src, true)))
+        else:
+            print("C1|SKIP")
+        print("E|" + bytes_to_hex(bytes(go_json_htmlescape(src))))
+        idx = idx + 1
+
+    # ── Q 面：quoteChar(byte) 的全部 256 个取值（与 truth/main.go 的 Q 面逐行对应）──
+    var qb = 0
+    while qb < 256:
+        print("Q|" + hex2(qb) + "|" + gjs_quote_char(one_byte("", qb, "")))
+        qb = qb + 1
+
+    # ── ② 自断言（真值对拍之外的**不变量**：Go 语义必须自洽）──
+    print("M142_ASSERT_BEGIN")
+
+    # A 幂等：indent(indent(x)) == indent(x)（合法且结构化时）
+    var a1 = go_json_indent("{\"a\":1,\"b\":[1,2,{\"c\":null}]}", "", "  ")
+    var a2 = go_json_indent(a1, "", "  ")
+    ck("A indent 幂等", a1 == a2 and a1 != null)
+
+    # B compact∘indent == compact
+    var b1 = go_json_compact(a1, false)
+    var b2 = go_json_compact("{\"a\":1,\"b\":[1,2,{\"c\":null}]}", false)
+    ck("B compact(indent(x)) == compact(x)", b1 == b2 and b1 == "{\"a\":1,\"b\":[1,2,{\"c\":null}]}")
+
+    # C 空容器不成行（Go 的 needIndent 延迟语义）
+    ck("C {} → {}", go_json_indent("{}", "", "  ") == "{}")
+    ck("C [] → []", go_json_indent("[]", "", "  ") == "[]")
+    ck("C {\"a\":{}} → 内层不成行", go_json_indent("{\"a\":{}}", "", "  ") == "{\n  \"a\": {}\n}")
+
+    # D 冒号后一个空格；逗号后换行按当前 depth
+    ck("D 冒号/逗号间距", go_json_indent("[1,2]", "", "  ") == "[\n  1,\n  2\n]")
+
+    # E 原文保留（不重新编码数字/转义/多字节）
+    ck("E 数字原文保留 1.50", go_json_indent("[1.50]", "", "  ") == "[\n  1.50\n]")
+    ck("E 字符串转义原文保留", go_json_indent("[\"\\u4e2d\"]", "", "  ") == "[\n  \"\\u4e2d\"\n]")
+
+    # F 前缀参与换行（Go 的 prefix 语义）
+    ck("F prefix 生效", go_json_indent("[1]", "  ", "\t") == "[\n  \t1\n  ]")
+
+    # G 错误面：文案 + **1 基字节偏移**
+    var g = go_json_indent_ex("{", "", "  ")
+    ck("G 语法错误 ⇒ ok=false / out 空", (not g["ok"]) and g["out"] == "")
+    ck("G 错误文案（unexpected end）", g["err"] == "unexpected end of JSON input")
+    ck("G 偏移 = 输入字节数", g["offset"] == 1)
+    var g2 = go_json_indent_ex("[1,]", "", "  ")
+    ck("G 错误文案（尾随逗号 ⇒ looking for beginning of value）",
+       g2["err"] == "invalid character ']' looking for beginning of value")
+    ck("G 偏移（1 基）", g2["offset"] == 4)
+    var g3 = go_json_indent_ex("{\"a\":1} extra", "", "  ")
+    ck("G 顶层值后非空白 ⇒ 报错", g3["err"] == "invalid character 'e' after top-level value")
+    ck("G 偏移（顶层值后）", g3["offset"] == 9)
+
+    # H 偏移是**字节**不是字符（Go 用 s.bytes 计数；Go 实测 off=17）
+    var h = go_json_indent_ex("[\"中文中文\"]x", "", "  ")
+    ck("H 多字节前缀下的字节偏移", h["offset"] == 17 and h["err"] == "invalid character 'x' after top-level value")
+
+    # I 错误字符的 Latin-1 文案（Go quoteChar(byte)）；期望值取自 **Go 真值**（见 verify.sh 的 Q 面）
+    #   注意：PuXian 源码**不支持 `\xNN` 转义**（词法 E1005）⇒ 非 ASCII 字节用 int_to_bytes 造
+    var i1 = go_json_indent_ex(one_byte("[", 128, "]"), "", "  ")
+    ck("I 0x80 → '\\u0080'", i1["err"] == "invalid character '\\u0080' looking for beginning of value")
+    var i2 = go_json_indent_ex(one_byte("{", 173, ":1}"), "", "  ")
+    ck("I 0xAD 软连字符 → '\\u00ad'", i2["err"] == "invalid character '\\u00ad' looking for beginning of object key string")
+    var i3 = go_json_indent_ex(one_byte("[", 161, "]"), "", "  ")
+    ck("I 0xA1 可打印 → '¡'", i3["err"] == "invalid character '¡' looking for beginning of value")
+    var i4 = go_json_indent_ex("['a']", "", "  ")
+    ck("I 单引号特例 '\\''", i4["err"] == "invalid character '\\'' looking for beginning of value")
+
+    # J max depth（>10000 层）—— 用 **Compact** 面（O(n)）验证：深度限制属 scanner 行为；
+    #   偏移固定 0 是 Go 的 `json.Compact` 语义（appendCompact 不递增 scan.bytes，实测）
+    var deep = join("", ["[" for k in range(10001)])
+    var j = go_json_compact_ex(deep, false)
+    ck("J 超深 ⇒ exceeded max depth", (not j["ok"]) and j["err"] == "invalid character '[' exceeded max depth")
+    ck("J Compact 偏移恒 0（Go 语义）", j["offset"] == 0)
+
+    # K HTMLEscape 只动 <>&（且不动转义序列里的字母）
+    ck("K HTMLEscape", go_json_htmlescape("{\"s\":\"<a>&b\"}") == "{\"s\":\"\\u003ca\\u003e\\u0026b\"}")
+    ck("K HTMLEscape 无改动时原样", go_json_htmlescape("{\"s\":\"ab\"}") == "{\"s\":\"ab\"}")
+
+    # L 转义路径（escape=true）与不转义路径的差别只在 <>& 与 U+2028/2029
+    var l0 = go_json_compact("{\"s\":\"<a>\"}", false)
+    var l1 = go_json_compact("{\"s\":\"<a>\"}", true)
+    ck("L escape=false 保留 <>", l0 == "{\"s\":\"<a>\"}")
+    ck("L escape=true 转 \\u003c", l1 == "{\"s\":\"\\u003ca\\u003e\"}")
+    ck("L U+2028 转义", go_json_compact("[\"\u{2028}\"]", true) == "[\"\\u2028\"]")
+
+    # M 负控（缺陷级反例）：这些**必须**不成立
+    ck("M 负控：错误不得静默成功", go_json_indent("{\"a\":1", "", "  ") == null)
+    ck("M 负控：不得重新编码数字", go_json_indent("[1.50]", "", "  ") != "[\n  1.5\n]")
+    ck("M 负控：{} 不得成两行", go_json_indent("{}", "", "  ") != "{\n}")
+
+    print("M142_ASSERT: " + str(P) + "P/" + str(F) + "F")
+    if F != 0:
+        print("M142-ASSERT-FAIL")

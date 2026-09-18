@@ -358,7 +358,7 @@ Session：`session_open()/session_id/get/set/del/destroy` · `basic_auth(user, p
 ### QUIC / HTTP/3（完整编译含 64 项；`--no-quic` 裁剪不含）
 `quic_listen/accept/connect/close/close_listener` · `quic_open_stream/open_uni_stream/send_stream/recv_stream/poll` · `h3_server_listen` `h3_serve_read_request(_stream)` `h3_client_*` · QPACK：`h3_huff/unhuff` `h3_qenc/qdec/qs_*` `h3_settings_enc/dec` `h3_conn_*` —— 生产路径推荐直接 `px_serve(..., {http3: true})`（HTTP/1.1+2+3 三栈合一）。
 
-## 3. 标准库速查（13 库，纯语言 .px，双模式一致）
+## 3. 标准库速查（27 库，纯语言 .px，双模式一致；下表为常用）
 
 | 库 | import | 核心函数（一行式） |
 |---|---|---|
@@ -375,6 +375,7 @@ Session：`session_open()/session_id/get/set/del/destroy` · `basic_auth(user, p
 | cookiejar | `import std.cookiejar` | `cj_new()` → jar · `cj_update(jar, resp_headers)` 解析 Set-Cookie · `cj_header(jar, url)` → "n=v; n2=v2"（domain/path/secure 匹配，会话保持）· `cj_clean` / `cj_len` |
 | multipart | `import std.multipart` | `mp_encode(fields, files)` → {body: bytes, content_type: "multipart/form-data; boundary=…", len}（files 值 {filename, data: str\|bytes, type}）· `mp_boundary` |
 | smtp | `import std.smtp` | `smtp_send(host, port, from, to, msg, opts?)` → bool（msg {subject, text\|html}；opts {user, password, helo} AUTH LOGIN）· `smtp_try` → {ok, err} 诊断 |
+| go_json 族 | `import std.go_json_indent` | **Go `encoding/json` 保真族**（M142）：`go_json_widen_numbers(v)`（int→float 的 interface{} 语义）· `go_json_indent(src, prefix, indent)` → str\|null（`json.Indent` 逐字节）· `go_json_indent_ex` → {ok,out,err,offset} · `go_json_compact(src, escape)` → str\|null（`json.Compact` / `Marshal` 转义路径）· `go_json_htmescape(src)` → str · scanner 层 `gjs_new/gjs_step/gjs_eof/gjs_byte0/gjs_hexd/gjs_quote_char` |
 
 > 完整 API 文档：`tools/px doc stdlib/<name>.px`；用法示例见 `docs/ECOSYSTEM.md §2`。
 
@@ -844,3 +845,42 @@ set_timeout(fn (): print("once after 2s"), 2000)
     ⇒ 移植 Go 代码时「来源地址」字段（ContextDebug `up.md`、audit 日志）无法对齐。现 AF_UNIX → `"@"`，
     AF_INET 仍 `ip:port`。⚠️ 判据要**三面**齐：形态独占（无 `:`、长度 < 40）+ TCP 面**没被误伤**
     （服务端看到的是**客户端源端口**而非监听端口）+ 负控（`!= "unix"`）。
+
+103. **`len(s)` / `s[i]` / `s[a:b]` 的「字符」定义必须唯一（第 23 轮 · 缺陷 111/112，M142 根治）**：
+    修前运行时里有**三套**判定 —— `len()` 数「非连续字节」、`px_index` 按前导字节的**声称**长度走查、
+    `px_slice` 走 1 字节再跳续字节。**合法 UTF-8 下三者同值**（所以长期没人发现），**畸形 UTF-8 下互相矛盾**：
+    `len("A\x80B") == 2`（孤立续字节被 len 忽略）却 `s[1]` 能取到 0x80；`len("{\xe4}") == 2`（尾部截断的
+    前导字节**吞掉**后面的 `}`）⇒ `for i in range(len(s))` **访问不到全部字节**，逐字符扫描器（JSON/HTTP 解析）
+    在畸形输入上索引错位。现统一为 `px_utf8_step(p, rem)`：**合法序列 → 其长度；ASCII / 孤立续字节 /
+    尾部截断 / 后继不是续字节 → 1**。⇒ `len(s) == 走查步数`、`offs[len] == bytes_len`（无字节被吞），
+    合法 UTF-8 **零行为变化**。缺陷 112（同轮）：单字符提取原按「声称长度」`memcpy` ⇒ **越读 `str.len` 尾界**
+    （把相邻内存的垃圾当字符返回）；现在长度由构造保证 ≤ 剩余字节，越读不可能。
+    判据：`len(bytes_to_str(int_to_bytes(0x80,1,"little"))) == 1`、`len("{\xe4}") == 3`（= 字节数），
+    且**双轨一致**（VM+C；门 `examples/m142_go_json_indent/` 的 N 段断言）。
+104. **`json.Indent` 不是「格式化器」——它是在原文上按 scanner 分类**插入/删除**（第 23 轮 · M142）**：
+    ① 字符串内字节**原样搬运**（`1.50` 不变成 `1.5`、`\u4e2d` 不变成 `中`、非法 UTF-8 也不重新编码）；
+    ② 空对象/空数组**不成行**（Go 的 `needIndent` 延迟缩进语义；`{}` → `{}` 而不是 `{\n}`）；
+    ③ 顶层值**之后**的空白：Indent 保留、Compact 丢弃；最大嵌套深度（10000）属 **scanner** 行为，
+    Compact/Indent 同源。⇒ 复刻必须**连 scanner 一起复刻**（`std/go_json_scan.px`），不能自己写美化器。
+    ⚠️ **Go 的语义陷阱**：`json.Compact` 返回的 `*SyntaxError.Offset` **恒为 0**（`appendCompact` 从不递增
+    `scan.bytes`，实测 12 例全 0），而 `Indent` 给真实的 **1 基字节偏移** —— 两者**不是一个口径**，别照抄。
+    现成 API：`go_json_indent(src, prefix, indent)` → str|null（错则调用方回退原文，正是 token-cache
+    `ContextDebug.prettyJSON` 的用法）· `go_json_indent_ex` → {ok,out,err,offset} · `go_json_compact(src, escape)`
+    （escape=true = `Marshal` 的 `<`/`>`/`&`/U+2028/29 转义路径）· `go_json_htmescape(src)`。
+    门：`examples/m142_go_json_indent/`（88 例 × 4 面 + `quoteChar` **全 256 取值** = 696 行与 Go 本尊逐字节 diff
+    + 31 断言 × 双轨 + 三道负控）。
+105. **源码里不能写 `\xNN`；Unicode 转义是 `\u{XXXX}`（第 23 轮实测）**：`"\x80"` 报
+    `词法错误 E1005: 非法转义序列 \x`；`"\u2028"` 报 `E1005: Unicode 转义须为 \u{XXXX} 形式`。要造含
+    **非 ASCII 单字节**的串（测错误文案、构造二进制头）必须
+    `bytes_to_str(int_to_bytes(b, 1, "little"))`（`bytes(list)` **不是**字节缓冲 —— 它是 `str(list)`！）。
+106. **同一文件用两种 import 写法引入 ⇒ C 轨重复定义（第 23 轮 · 新的「双轨不一致」面）**：
+    `stdlib/go_json_indent.px` 原写 `import "./go_json_scan.px"`，而门里又 `import std.go_json_scan`
+    ⇒ C 轨把两边都发射 ⇒ `error: redefinition of 'fn_gjs_step'`（**编译期暴露，好**）；
+    **VM 轨按顶层符号名覆盖、静默通过**（坏）。修法：**一律用规范路径**（`std.<name>`，stdlib 之间互
+    import 也照此，与 yaml/yamlx 同惯例）。
+107. **门自己写错（第 23 轮 · 又一次）**：M142 首跑 6 条断言红，**全部是我把期望值写错**，不是实现错 ——
+    `[1,]` 在 Go 的 scanner 里是**语法错误**（`invalid character ']' looking for beginning of value`，
+    尾随逗号**不**被接受：逗号后进的是 `stateBeginValue` 而不是 `stateBeginValueOrEmpty`）；
+    `["中文中文"]x` 的偏移是 **17**（1 基**字节**）；0x80 的上下文是 `looking for beginning of value`
+    而不是 `after array element`。⇒ 纪律：**期望值只能从真值产**（本门最终形态：696 行真值 diff 为准，
+    断言只钉"不变量 + 已实测常量"）。
