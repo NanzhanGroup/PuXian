@@ -1,0 +1,251 @@
+# ═══════════════════════════════════════════════════════════════════════
+# url.px — URL 百分号编码 / 查询串 / 解析（对齐 Go `net/url`）
+# ---------------------------------------------------------------
+# 动机（qg-issue 87 缺陷 32）：native 表里**没有任何 URL 编码原语**，
+#   而 SigV4 签名、OAuth、各类 HTTP 客户端都要 `url.QueryEscape` 的**逐字节**行为。
+#   手搓出来的版本在 `~`/`!`/`*`/`'`/`(` 等边界字符上极易与 Go 不一致，
+#   而签名一旦差一个字节就是 403 —— 属"静默漂移"，必须收进 stdlib 单一实现。
+#
+# 与 Go 的对照（已逐条实测 go1.26.7 `url.QueryEscape`）：
+#   · 安全字符（不转义）：A-Z a-z 0-9  - _ . ~        ← 仅这 66 个
+#   · 空格 → `+`（查询分量特有；Go 的 encodeQueryComponent 行为）
+#   · 其余字节一律 `%XX`（**大写**十六进制，逐 UTF-8 字节转义）
+#   · 注意 `/ : @ & = + , ; $` 在 Go 的 query 分量里**全部转义**（与 PathEscape 不同）
+# ═══════════════════════════════════════════════════════════════════════
+import std.strings
+# 66 个安全字符（下标即编码所需序号，避免依赖 chr/ord —— native 表无此二者）
+let _URL_SAFE = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~"
+def _hex2upper(c):
+    return to_upper(int_to_hex(c, 2))
+# url_query_escape — 等价 Go `url.QueryEscape`
+def url_query_escape(s):
+    var b = bytes(s)
+    var n = bytes_len(b)
+    var out = ""
+    var i = 0
+    while i < n:
+        var c = bytes_get(b, i)
+        if c >= 65 and c <= 90:
+            out += _URL_SAFE[c - 65]
+        elif c >= 97 and c <= 122:
+            out += _URL_SAFE[26 + c - 97]
+        elif c >= 48 and c <= 57:
+            out += _URL_SAFE[52 + c - 48]
+        elif c == 45:
+            out += _URL_SAFE[62]
+        elif c == 95:
+            out += _URL_SAFE[63]
+        elif c == 46:
+            out += _URL_SAFE[64]
+        elif c == 126:
+            out += _URL_SAFE[65]
+        elif c == 32:
+            out += "+"
+        else:
+            out += "%" + _hex2upper(c)
+        i += 1
+    return out
+# url_values_encode — 等价 Go `url.Values.Encode()`：键按**字节序**升序（sort.Strings），
+# 值可以是 str 或 str 列表（列表按插入序重复同名键）。
+def url_values_encode(d):
+    var ks = sorted(d.keys())
+    var out = ""
+    for k in ks:
+        var ke = url_query_escape(k)
+        var v = d[k]
+        if type(v) == "list":
+            for item in v:
+                if out != "":
+                    out += "&"
+                out += ke + "=" + url_query_escape(str(item))
+        else:
+            if out != "":
+                out += "&"
+            out += ke + "=" + url_query_escape(str(v))
+    return out
+# _hexval — 1 个 hex 字符 → 数值（非法返回 -1）
+def _hexval(ch):
+    var v = hex_to_int(ch)
+    if v == null:
+        return -1
+    return v
+# url_query_unescape — 等价 Go `url.QueryUnescape`（`+` → 空格；
+# 非法 `%` 序列按 Go 的宽容语义**原样保留**，不抛错、不吞字符）。
+def url_query_unescape(s):
+    var b = bytes(s)
+    var n = bytes_len(b)
+    var acc = bytes("")
+    var i = 0
+    while i < n:
+        var c = bytes_get(b, i)
+        if c == 37 and i + 2 < n:
+            var h1 = _hexval(bytes_to_str(bytes_slice(b, i + 1, i + 2)))
+            var h2 = _hexval(bytes_to_str(bytes_slice(b, i + 2, i + 3)))
+            if h1 >= 0 and h2 >= 0:
+                acc = bytes_concat(acc, int_to_bytes(h1 * 16 + h2, 1))
+                i += 3
+                continue
+            acc = bytes_concat(acc, int_to_bytes(c, 1))
+            i += 1
+            continue
+        if c == 43:
+            acc = bytes_concat(acc, int_to_bytes(32, 1))
+        else:
+            acc = bytes_concat(acc, int_to_bytes(c, 1))
+        i += 1
+    return bytes_to_str(acc)
+# url_parse — Go `url.Parse` 的常用子集：scheme / user / host / path / rawquery / fragment。
+# 说明：`path` 返回**已解码**值（等价 Go `u.Path`，Go 在此处做 unescape）；
+#       `rawquery` 原样返回（Go `u.RawQuery` 不解码）。
+def url_parse(raw):
+    var scheme = ""
+    var user = ""
+    var host = ""
+    var path = ""
+    var rawquery = ""
+    var fragment = ""
+    var rest = raw
+    var si = index_of(raw, "://")
+    if si >= 0:
+        scheme = raw[:si]
+        rest = raw[si + 3:]
+    var hi = index_of(rest, "#")
+    if hi >= 0:
+        fragment = rest[hi + 1:]
+        rest = rest[:hi]
+    var qi = index_of(rest, "?")
+    if qi >= 0:
+        rawquery = rest[qi + 1:]
+        rest = rest[:qi]
+    var pi = index_of(rest, "/")
+    if pi >= 0:
+        host = rest[:pi]
+        path = rest[pi:]
+    else:
+        if index_of(rest, "://") >= 0 or index_of(rest, ".") >= 0 or scheme != "":
+            host = rest
+            path = ""
+        else:
+            path = rest
+    var ai = index_of(host, "@")
+    if ai >= 0:
+        user = host[:ai]
+        host = host[ai + 1:]
+    if path != "":
+        path = url_query_unescape_keep_q(path)
+    return {
+        "scheme": scheme,
+        "user": user,
+        "host": host,
+        "path": path,
+        "rawquery": rawquery,
+        "fragment": fragment
+    }
+# url_query_unescape_keep_q — Go `url.Parse` 对 u.Path 使用的 unescape 模式：
+# 与 QueryUnescape 的区别是**不把 `+` 当空格**。
+def url_query_unescape_keep_q(s):
+    var b = bytes(s)
+    var n = bytes_len(b)
+    var acc = bytes("")
+    var i = 0
+    while i < n:
+        var c = bytes_get(b, i)
+        if c == 37 and i + 2 < n:
+            var h1 = _hexval(bytes_to_str(bytes_slice(b, i + 1, i + 2)))
+            var h2 = _hexval(bytes_to_str(bytes_slice(b, i + 2, i + 3)))
+            if h1 >= 0 and h2 >= 0:
+                acc = bytes_concat(acc, int_to_bytes(h1 * 16 + h2, 1))
+                i += 3
+                continue
+        acc = bytes_concat(acc, int_to_bytes(c, 1))
+        i += 1
+    return bytes_to_str(acc)
+# ── M136（qg-issue 87 缺陷 91）：PathEscape / ParseQuery ──
+# safe 字符：A-Za-z0-9 - _ . ~ 与 `$ & + : = @`
+#   （Go `shouldEscape(c, encodePathSegment)`：`,` `;` `/` `?` 与其它一律转义；
+#     实测 go1.26.7：`a!b`→`a%21b`、`a'b`→`a%27b`、`a*b`→`a%2Ab`、`a(b)`→`a%28b%29`）
+def _url_path_safe(c):
+    if c >= 65 and c <= 90:
+        return true
+    if c >= 97 and c <= 122:
+        return true
+    if c >= 48 and c <= 57:
+        return true
+    if c == 45 or c == 95 or c == 46 or c == 126:
+        return true
+    if c == 36 or c == 38 or c == 43 or c == 58 or c == 61 or c == 64:
+        return true
+    return false
+# url_path_escape — 等价 Go `url.PathEscape`（逐字节、大写十六进制）
+def url_path_escape(s):
+    var b = bytes(s)
+    var n = bytes_len(b)
+    var out = ""
+    var i = 0
+    while i < n:
+        var c = bytes_get(b, i)
+        if _url_path_safe(c):
+            out += bytes_to_str(int_to_bytes(c, 1))
+        else:
+            out += "%" + _hex2upper(c)
+        i += 1
+    return out
+# _url_qunesc_ok(s) → [值, ok]：Go `url.QueryUnescape` 的**可判错**版本。
+#   ok=false ⇔ 出现非法 `%` 序列（Go 返回 EscapeError；调用方一律当"整串不可用"）。
+def _url_qunesc_ok(s):
+    var b = bytes(s)
+    var n = bytes_len(b)
+    var acc = bytes("")
+    var i = 0
+    while i < n:
+        var c = bytes_get(b, i)
+        if c == 37:
+            if i + 2 < n:
+                var h1 = _hexval(bytes_to_str(bytes_slice(b, i + 1, i + 2)))
+                var h2 = _hexval(bytes_to_str(bytes_slice(b, i + 2, i + 3)))
+                if h1 >= 0 and h2 >= 0:
+                    acc = bytes_concat(acc, int_to_bytes(h1 * 16 + h2, 1))
+                    i += 3
+                    continue
+            return ["", false]
+        if c == 43:
+            acc = bytes_concat(acc, int_to_bytes(32, 1))
+        else:
+            acc = bytes_concat(acc, int_to_bytes(c, 1))
+        i += 1
+    return [bytes_to_str(acc), true]
+# url_parse_query(raw) → [values, ok]：等价 Go `url.ParseQuery`。
+#   values：键 → 值列表（按出现序）；ok=false ⇔ 出现解码错误/Segment 含 ';'。
+#   语义细节（逐条对齐 Go）：
+#     · 空段（`&&`）跳过；段内含 ';' ⇒ 记错并**跳过该段**（Go 1.17+ 不再把 ';' 当分隔符）
+#     · 先按首个 '=' 切分（缺 '=' ⇒ 值为空串），再分别 QueryUnescape
+#     · 任一旁解码失败 ⇒ 记错并跳过该段（**其余段照常解析**，Go 亦然）
+def url_parse_query(raw):
+    var vals = json_parse("{}")
+    var bad = false
+    for seg in split(raw, "&"):
+        if seg == "":
+            continue
+        if index_of(seg, ";") >= 0:
+            bad = true
+            continue
+        var i = index_of(seg, "=")
+        var k = seg
+        var v = ""
+        if i >= 0:
+            k = seg[0:i]
+            v = seg[i + 1:len(seg)]
+        var kk = _url_qunesc_ok(k)
+        if not bool(kk[1]):
+            bad = true
+            continue
+        var vv = _url_qunesc_ok(v)
+        if not bool(vv[1]):
+            bad = true
+            continue
+        var ks = str(kk[0])
+        if vals.has(ks):
+            vals[ks].append(str(vv[0]))
+        else:
+            vals.set(ks, [str(vv[0])])
+    return [vals, not bad]

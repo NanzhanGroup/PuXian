@@ -1,0 +1,211 @@
+# ============================================================
+# 普贤标准库：std.yaml_lines —— YAML 子集解析器的**行/块标量层**
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态）。本文件承担：
+#   · 行预处理（缩进计数、行尾注释剥离、制表符拒绝）；
+#   · **块标量 `|` 折叠**（`|` / `|N` / `|-` / `|+`，含 chomping 与缩进推断）
+#     —— 在建行阶段折叠成双引号标量，交回递归下降解析器；
+#   · 行表构建 `yl_build_lines`。
+# 标量类型/引号/流式集合在 `stdlib/yaml_lex.px`；
+# 块式解析与序列化在 `stdlib/yaml.px`。
+# 拆文件的理由：单文件超 500 行不利维护（项目约定），且三层本就单向依赖。
+# ============================================================
+def yl_isd(c):
+    return c >= "0" and c <= "9"
+def yl_isws(c):
+    return c == " " or c == "\t"
+# ---- 行尾注释剥离（感知双/单引号；# 前有空白或行首才算注释）----
+# 返回 {"ok":bool, "text":str, "err":str}
+def yl_strip_comment(line):
+    var out = ""
+    var i = 0
+    var q = ""
+    while i < len(line):
+        let c = line[i]
+        if q == "\"":
+            if c == "\\" and i + 1 < len(line):
+                out += c
+                out += line[i + 1]
+                i += 2
+                continue
+            if c == "\"":
+                q = ""
+            out += c
+            i += 1
+            continue
+        if q == "'":
+            if c == "'":
+                if i + 1 < len(line) and line[i + 1] == "'":
+                    out += c
+                    out += "'"
+                    i += 2
+                    continue
+                q = ""
+            out += c
+            i += 1
+            continue
+        if c == "\"" or c == "'":
+            q = c
+            out += c
+            i += 1
+            continue
+        if c == "#" and (i == 0 or yl_isws(line[i - 1])):
+            break
+        out += c
+        i += 1
+    if q != "":
+        return {"ok": false, "text": "", "err": "引号未闭合"}
+    return {"ok": true, "text": out, "err": ""}
+# ---- 行预处理：剥注释 + 缩进 ----
+# 返回 {"skip":bool,"indent":int,"text":str,"err":str,"line":int}
+def yl_prep_line(raw, no):
+    var i = 0
+    while i < len(raw) and raw[i] == " ":
+        i += 1
+    if i < len(raw) and raw[i] == "\t":
+        return {"skip": false, "indent": 0, "text": "", "err": "line " + str(no) + ": 制表符缩进不支持", "line": no}  # noqa
+    let sc = yl_strip_comment(raw)
+    if not sc["ok"]:
+        return {"skip": false, "indent": 0, "text": "", "err": "line " + str(no) + ": " + sc["err"], "line": no}  # noqa
+    let body = sc["text"]
+    var ind = 0
+    while ind < len(body) and body[ind] == " ":
+        ind += 1
+    if ind >= len(body):
+        return {"skip": true, "indent": 0, "text": "", "err": "", "line": no}
+    # 内容区前导 tab
+    if body[ind] == "\t":
+        return {"skip": false, "indent": 0, "text": "", "err": "line " + str(no) + ": 制表符缩进不支持", "line": no}  # noqa
+    return {"skip": false, "indent": ind, "text": trim(body[ind:len(body)]), "err": "", "line": no}
+# ---- 块标量（literal `|`）支持 ----
+# 背景（qg-issue 87 缺陷 24）：Go `yaml.Marshal` 对**含换行的字符串**输出块标量
+# `key: |-`（并在键后继续缩进 4 列）。本解析器原先只把 `|` 当普通标量 ⇒
+# **自己写出去的文件读不回来**（多行引用文本 PUT 落盘后 GET 直接「解析失败」）。
+# 处理方式：在**建行阶段**把块标量折叠成一个双引号标量交回既有递归下降解析器，
+# 从而完全不改解析器（且块标量内的 `#`/`:` 等不会被误判）。
+# 覆盖：`|`、`|N`（缩进提示）、`|-` / `|+` / `|N-` / `|N+`（chomping）。
+# 不覆盖：折行 `>`（Go 不产出，保持旧行为）。
+def yl_lit_header(text):
+    var i = len(text) - 1
+    var chomp = ""
+    var ind = 0
+    var pos = -1
+    if i < 0:
+        return {"is": false, "chomp": chomp, "ind": ind, "pos": pos}
+    if text[i] == "-" or text[i] == "+":
+        chomp = text[i]
+        i -= 1
+    if i >= 1 and text[i] >= "1" and text[i] <= "9":
+        ind = int(text[i])
+        i -= 1
+    if i < 0 or text[i] != "|":
+        return {"is": false, "chomp": chomp, "ind": ind, "pos": pos}
+    # `|` 必须是独立 token：要么整行只有它，要么前面以 ": " / "- " / ":" / "-" 结尾
+    if i == 0:
+        return {"is": true, "chomp": chomp, "ind": ind, "pos": 0}
+    let prev = text[i - 1]
+    if prev == " " or prev == ":" or prev == "-":
+        return {"is": true, "chomp": chomp, "ind": ind, "pos": i}
+    return {"is": false, "chomp": chomp, "ind": ind, "pos": pos}
+# 收集块标量正文（raw 原文行，不解注释）；返回 {"body":str,"next":idx}
+def yl_collect_literal(raw, base_indent, hi):
+    var j = hi + 1
+    var content = []
+    var min_ind = -1
+    while j < len(raw):
+        let rl = raw[j]
+        var k = 0
+        while k < len(rl) and rl[k] == " ":
+            k += 1
+        if k >= len(rl):
+            content.append({"blank": true, "text": ""})
+            j += 1
+            continue
+        if k <= base_indent:
+            break
+        if min_ind < 0 or k < min_ind:
+            min_ind = k
+        content.append({"blank": false, "text": rl[k:len(rl)]})
+        j += 1
+    # 若最后一批是空行且后面紧跟更浅缩进/文件尾 —— 这些空行属内容（由 chomping 决定去留）
+    var body = ""
+    for c in content:
+        if c["blank"]:
+            body += "\n"
+        else:
+            body += c["text"] + "\n"
+    return {"body": body, "next": j}
+# 按 chomping 处理尾部换行，再折叠成双引号标量
+def yl_lit_quote(body, chomp):
+    var b = body
+    if chomp == "":
+        while ends_with(b, "\n"):
+            b = b[0:len(b) - 1]
+        if len(body) > 0:
+            b += "\n"
+    elif chomp == "-":
+        while ends_with(b, "\n"):
+            b = b[0:len(b) - 1]
+    return yl_dq_escape(b)
+# 双引号转义（只用 yl_unescape_dq 支持集：\n \t \r \" \\ \uXXXX）
+def yl_dq_escape(s):
+    var out = "\""
+    for c in s:
+        if c == "\\":
+            out += "\\\\"
+        elif c == "\"":
+            out += "\\\""
+        elif c == "\n":
+            out += "\\n"
+        elif c == "\t":
+            out += "\\t"
+        elif c == "\r":
+            out += "\\r"
+        elif c < " " or c == "\u{007f}":
+            out += "\\u" + yl_hex4(yl_cp_ord(c))
+        else:
+            out += c
+    return out + "\""
+def yl_hex4(v):
+    let d = "0123456789abcdef"
+    return d[int(v / 4096) % 16] + d[int(v / 256) % 16] + d[int(v / 16) % 16] + d[v % 16]
+# 单 rune → 码点（按 UTF-8 手解，native 无 ord）
+def yl_cp_ord(c):
+    let b = bytes(c)
+    let n = bytes_len(b)
+    var v = 0
+    if n == 1:
+        return bytes_get(b, 0)
+    if n == 2:
+        v = bytes_get(b, 0) % 32
+    elif n == 3:
+        v = bytes_get(b, 0) % 16
+    else:
+        v = bytes_get(b, 0) % 8
+    var i = 1
+    while i < n:
+        v = v * 64 + bytes_get(b, i) % 64
+        i += 1
+    return v
+# ---- 构建行表 ----
+def yl_build_lines(text):
+    let raw = split(text, "\n")
+    var ls = []
+    var i = 0
+    while i < len(raw):
+        let p = yl_prep_line(raw[i], i + 1)
+        if len(p["err"]) > 0:
+            return {"ok": false, "err": p["err"], "lines": []}
+        if not p["skip"]:
+            let lh = yl_lit_header(p["text"])
+            if lh["is"]:
+                # 块标量：把后续缩进行折叠成双引号标量（见本函数上方说明）
+                let lit = yl_collect_literal(raw, p["indent"], i)
+                ls.append({"indent": p["indent"],
+                    "text": p["text"][0:lh["pos"]] + yl_lit_quote(lit["body"], lh["chomp"]),
+                    "line": p["line"]})
+                i = lit["next"]
+                continue
+            ls.append({"indent": p["indent"], "text": p["text"], "line": p["line"]})
+        i += 1
+    return {"ok": true, "err": "", "lines": ls}

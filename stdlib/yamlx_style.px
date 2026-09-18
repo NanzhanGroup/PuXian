@@ -1,0 +1,275 @@
+# ═══════════════════════════════════════════════════════════════════════
+# stdlib/yamlx_style.px — yaml.v3 标量语义层（`yaml_stringify_go` 底层）
+# ---------------------------------------------------------------------
+# 本文件只做「一个标量字符串在 Go yaml.v3 下该用什么形态输出」的判定：
+#   · 字符分类（换行/可打印，逐条对齐 yamlprivateh.go）；
+#   · plain 文本会不会被解析成非字符串（encode.go `canUsePlain`：bool/null/
+#     整数/浮点/时间戳/基 60）；
+#   · 标量风格判定（emitterc.go `analyze_scalar` + `select_scalar_style`），
+#     输出 "plain" / "single" / "double" / "literal" 之一。
+#
+# 上层见 `stdlib/yamlx.px`（真正的排版与容器递归）。
+# 拆两文件的理由：单文件超 500 行不利维护（项目约定），且风格判定表与排版
+# 逻辑本就无耦合，便于各自回归。
+#
+# 判定依据均为 Go yaml.v3 源码逐行对照 + 225 例逐字节对拍（见
+# `/data/code/api-server/px/tools/diff_yaml_go.py`）。
+# ═══════════════════════════════════════════════════════════════════════
+import std.strings
+# ── 基础工具 ──
+def ylx_pad(n):
+    var s = ""
+    var i = 0
+    while i < n:
+        s += " "
+        i += 1
+    return s
+# yaml.v3 的 increase_indent：不在块序列项内 → 向上取整到 best_indent(4) 的倍数
+def ylx_round4(i):
+    return 4 * int((i + 4) / 4)
+# ── 字符分类（对齐 yaml.v3 yamlprivateh.go） ──
+def ylx_is_break(c):
+    return c == "\n" or c == "\r" or c == "\u{0085}" or c == "\u{2028}" or c == "\u{2029}"
+def ylx_byte_len(c):
+    return bytes_len(bytes(c))
+# is_printable：0x0A、0x20-0x7E、0xA0-0xD7FF、0xE000-0xFFFD（除 BOM）
+# 注意 yaml.v3 的实现**不含 4 字节 UTF-8**（emoji 会被判为 special → 双引号）
+def ylx_is_printable(c):
+    if ylx_byte_len(c) >= 4:
+        return false
+    if c == "\n":
+        return true
+    if c >= " " and c <= "~":
+        return true
+    if c >= "\u{00a0}" and c <= "\u{d7ff}":
+        return true
+    if c >= "\u{e000}" and c <= "\u{fffd}":
+        return c != "\u{feff}"
+    return false
+# ── plain 文本会不会被解析成非字符串（yaml.v3 encode.go canUsePlain） ──
+def ylx_is_old_bool(s):
+    if s == "y" or s == "Y" or s == "yes" or s == "Yes" or s == "YES":
+        return true
+    if s == "on" or s == "On" or s == "ON":
+        return true
+    if s == "n" or s == "N" or s == "no" or s == "No" or s == "NO":
+        return true
+    if s == "off" or s == "Off" or s == "OFF":
+        return true
+    return false
+def ylx_is_base60(s):
+    # 形如 1:30 / 1:30:00 / 1:30.5（YAML 1.1 基 60 整数/浮点）
+    var i = 0
+    if len(s) > 0 and (s[0] == "-" or s[0] == "+"):
+        i = 1
+    var colons = 0
+    var digits = 0
+    var dot = 0
+    while i < len(s):
+        let c = s[i]
+        if c == ":":
+            colons += 1
+            digits = 0
+        elif c == ".":
+            dot += 1
+        elif c >= "0" and c <= "9":
+            digits += 1
+        else:
+            return false
+        i += 1
+    if colons == 0 or digits == 0:
+        return false
+    if dot > 1:
+        return false
+    return true
+def ylx_is_int(s):
+    if regex_match("^[+-]?[0-9][0-9_]*$", s):
+        return true
+    if regex_match("^[+-]?0[xX][0-9a-fA-F_]+$", s):
+        return true
+    if regex_match("^[+-]?0[oO][0-7_]+$", s):
+        return true
+    if regex_match("^[+-]?0[bB][01_]+$", s):
+        return true
+    return ylx_is_base60(s)
+def ylx_is_float(s):
+    if s == ".inf" or s == "-.inf" or s == "+.inf" or s == ".Inf" or s == "-.Inf" or s == "+.Inf":
+        return true
+    if s == ".INF" or s == "-.INF" or s == "+.INF":
+        return true
+    if s == ".nan" or s == ".NaN" or s == ".NAN":
+        return true
+    if regex_match("^[+-]?([0-9][0-9_]*)?\\.[0-9_]*([eE][+-]?[0-9]+)?$", s) and contains(s, "."):
+        let body = replace(s, ".", "")
+        if len(replace(replace(body, "+", ""), "-", "")) > 0:
+            return true
+    if regex_match("^[+-]?[0-9][0-9_]*([eE][+-]?[0-9]+)$", s):
+        return true
+    return false
+# yaml.v3 parseTimestamp 接受的四种格式（短日期字段）
+def ylx_is_timestamp(s):
+    if regex_match("^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}$", s):
+        return ylx_date_ok(s)
+    if regex_match("^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}[Tt][0-9]{1,2}:[0-9]{1,2}:[0-9]{1,2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$", s):
+        return ylx_date_ok(s)
+    if regex_match("^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2} [0-9]{1,2}:[0-9]{1,2}:[0-9]{1,2}(\\.[0-9]+)?$", s):
+        return ylx_date_ok(s)
+    return false
+def ylx_date_ok(s):
+    let p = split(s, "-")
+    if len(p) < 3:
+        return false
+    let m = int(p[1])
+    let dd = int(p[2][0:2])
+    if m < 1 or m > 12:
+        return false
+    if dd < 1 or dd > 31:
+        return false
+    return true
+def ylx_resolve_nonstring(s):
+    if s == "" or s == "~" or s == "null" or s == "Null" or s == "NULL":
+        return true
+    if s == "true" or s == "True" or s == "TRUE" or s == "false" or s == "False" or s == "FALSE":
+        return true
+    if ylx_is_old_bool(s):
+        return true
+    if ylx_is_int(s):
+        return true
+    if ylx_is_float(s):
+        return true
+    if ylx_is_timestamp(s):
+        return true
+    return false
+# ── 标量风格判定（analyze_scalar + select_scalar_style） ──
+# 返回 "plain" / "single" / "double" / "literal"
+# 逻辑顺序严格按 emitterc.go：先定「请求风格」（含 \n → literal；解析成非字符串
+# → double；否则 plain），再按 analyze 出的六个 allowed 标志逐级降级。
+def ylx_style(s, is_key):
+    let n = len(s)
+    var req = "plain"
+    if contains(s, "\n"):
+        req = "literal"
+    elif ylx_resolve_nonstring(s):
+        req = "double"
+    var flow_ind = false
+    var block_ind = false
+    var line_breaks = false
+    var special = false
+    var tab_c = false
+    var leading_space = false
+    var leading_break = false
+    var trailing_space = false
+    var trailing_break = false
+    var break_space = false
+    var space_break = false
+    var prev_space = false
+    var prev_break = false
+    if n >= 3 and (starts_with(s, "---") or starts_with(s, "...")):
+        block_ind = true
+        flow_ind = true
+    var i = 0
+    while i < n:
+        let c = s[i]
+        var followed_ws = false
+        if i + 1 >= n:
+            followed_ws = true
+        elif s[i + 1] == " " or s[i + 1] == "\t":
+            followed_ws = true
+        var prev_ws = false
+        if i == 0:
+            prev_ws = true
+        elif s[i - 1] == " " or s[i - 1] == "\t" or ylx_is_break(s[i - 1]):
+            prev_ws = true
+        if i == 0:
+            if c == "#" or c == "," or c == "[" or c == "]" or c == "{" or c == "}":
+                flow_ind = true
+                block_ind = true
+            elif c == "&" or c == "*" or c == "!" or c == "|" or c == ">" or c == "'":
+                flow_ind = true
+                block_ind = true
+            elif c == "\"" or c == "%" or c == "@" or c == "`":
+                flow_ind = true
+                block_ind = true
+            elif c == "?" or c == ":":
+                flow_ind = true
+                if followed_ws:
+                    block_ind = true
+            elif c == "-":
+                if followed_ws:
+                    flow_ind = true
+                    block_ind = true
+        else:
+            if c == "," or c == "?" or c == "[" or c == "]" or c == "{" or c == "}":
+                flow_ind = true
+            elif c == ":":
+                flow_ind = true
+                if followed_ws:
+                    block_ind = true
+            elif c == "#":
+                if prev_ws:
+                    flow_ind = true
+                    block_ind = true
+        if c == "\t":
+            tab_c = true
+        elif not ylx_is_printable(c):
+            special = true
+        if c == " ":
+            if i == 0:
+                leading_space = true
+            if i + 1 == n:
+                trailing_space = true
+            if prev_break:
+                break_space = true
+            prev_space = true
+            prev_break = false
+        elif ylx_is_break(c):
+            line_breaks = true
+            if i == 0:
+                leading_break = true
+            if i + 1 == n:
+                trailing_break = true
+            if prev_space:
+                space_break = true
+            prev_space = false
+            prev_break = true
+        else:
+            prev_space = false
+            prev_break = false
+        i += 1
+    var fp = true
+    var bp = true
+    var sq = true
+    var bl = true
+    if leading_space or leading_break or trailing_space or trailing_break:
+        fp = false
+        bp = false
+    if trailing_space:
+        bl = false
+    if break_space:
+        fp = false
+        bp = false
+        sq = false
+    if space_break or tab_c or special:
+        fp = false
+        bp = false
+        sq = false
+    if space_break or special:
+        bl = false
+    if line_breaks:
+        fp = false
+        bp = false
+    if flow_ind:
+        fp = false
+    if block_ind:
+        bp = false
+    var st = req
+    if is_key and line_breaks:
+        st = "double"
+    if st == "plain":
+        if not bp:
+            st = "single"
+    if st == "single" and not sq:
+        st = "double"
+    if st == "literal" and (not bl or is_key):
+        st = "double"
+    return st

@@ -1,0 +1,306 @@
+# ============================================================
+# 普贤标准库：std.yaml_lex —— YAML 子集解析器的**词法/标量层**
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态）。本文件承担：
+#   · 行构建（缩进、注释剥离、引号感知）；
+#   · 标量类型推断与反转义（null/bool/int/float/引号串）；
+#   · **流式集合** `[]` / `{}` / `[a, b]` / `{a: 1, b: 2}`（含嵌套与引号）；
+#   · 键值拆分 `key: value`。
+# 递归下降解析器与序列化在 `stdlib/yaml.px`（import 本文件）。
+# 拆两文件的理由：单文件超 500 行不利维护（项目约定），且词法层与块解析层
+# 本就无循环依赖。
+#
+import std.strings
+# 边界（不支持，如实记录）：锚点&/别名*、多行块 |>、多文档 ---、标签 !!、
+#   制表符缩进、内联嵌套序列 `- - a`。
+#   （内联嵌套序列 Go yaml.Marshal 会产出，读侧暂缺 —— 见 qg-issue 87 缺陷 24）
+# ============================================================
+def yl_nd():
+    return json_parse("{}")
+# ---- 单引号/双引号解包（输入已 trim，且首尾为引号）----
+def yl_hexv(c):
+    # ⚠️ 修正（M130，qg-issue 87 缺陷 60）：原实现是 `int(c) - int("a") + 10`，
+    #    而 `int(str)` 是**近似 strtoll**（无数字前缀 → 0 且不报错）⇒ 'e' 得 10（应 14）、
+    #    'f' 得 10（应 15）、'd' 得 10（应 13）：**双引号标量里的 `\uXXXX` / `\xNN`
+    #    只要含字母 a-f 就静默解错**。改用查表定位（index_of）。
+    return index_of(YL_HEXDIGITS, to_lower(c))
+const YL_HEXDIGITS = "0123456789abcdef"
+# codepoint → UTF-8 字符串（仅 BMP，≥0x10000 返回 null 标记）
+def yl_cp_utf8(cp):
+    if cp < 0x80:
+        return bytes_to_str(int_to_bytes(cp, 1))
+    if cp < 0x800:
+        let b1 = 0xC0 | (cp >> 6)
+        let b2 = 0x80 | (cp & 0x3F)
+        return bytes_to_str(bytes_concat(int_to_bytes(b1, 1), int_to_bytes(b2, 1)))
+    # 代理区拒绝
+    if cp >= 0xD800 and cp <= 0xDFFF:
+        return null
+    if cp < 0x10000:
+        let b1 = 0xE0 | (cp >> 12)
+        let b2 = 0x80 | ((cp >> 6) & 0x3F)
+        let b3 = 0x80 | (cp & 0x3F)
+        return bytes_to_str(bytes_concat(int_to_bytes(b1, 1), int_to_bytes(b2, 1), int_to_bytes(b3, 1)))  # noqa
+    return null
+# 双引号转义解包（不含首尾引号）
+def yl_unescape_dq(inner):
+    var out = ""
+    var i = 0
+    while i < len(inner):
+        let c = inner[i]
+        if c != "\\":
+            out += c
+            i += 1
+            continue
+        if i + 1 >= len(inner):
+            out += "\\"
+            i += 1
+            continue
+        let e = inner[i + 1]
+        if e == "n":
+            out += "\n"
+            i += 2
+        elif e == "t":
+            out += "\t"
+            i += 2
+        elif e == "r":
+            out += "\r"
+            i += 2
+        elif e == "\"":
+            out += "\""
+            i += 2
+        elif e == "\\":
+            out += "\\"
+            i += 2
+        elif e == "/":
+            out += "/"
+            i += 2
+        elif e == "0":
+            out += "0"
+            i += 2
+        elif e == "u":
+            if i + 6 <= len(inner):
+                let hs = inner[i + 2:i + 6]
+                let v0 = yl_hexv(hs[0])
+                let v1 = yl_hexv(hs[1])
+                let v2 = yl_hexv(hs[2])
+                let v3 = yl_hexv(hs[3])
+                if v0 >= 0 and v1 >= 0 and v2 >= 0 and v3 >= 0:
+                    let cp = (v0 << 12) | (v1 << 8) | (v2 << 4) | v3
+                    let u = yl_cp_utf8(cp)
+                    if u == null:
+                        out += "\\u" + hs
+                    else:
+                        out += u
+                    i += 6
+                    continue
+            out += "\\u"
+            i += 2
+        else:
+            out += e
+            i += 2
+    return out
+# 引号值解包：若以引号开头尝试整体解包；失败返回原字符串（含引号）
+def yl_unquote(s):
+    if len(s) >= 2 and s[0] == "\"" and s[len(s) - 1] == "\"":
+        return yl_unescape_dq(s[1:len(s) - 1])
+    if len(s) >= 2 and s[0] == "'" and s[len(s) - 1] == "'":
+        let inner = s[1:len(s) - 1]
+        var out = ""
+        var i = 0
+        while i < len(inner):
+            if inner[i] == "'" and i + 1 < len(inner) and inner[i + 1] == "'":
+                out += "'"
+                i += 2
+            else:
+                out += inner[i]
+                i += 1
+        return out
+    return s
+# ---- 流式集合（`[]` / `{}` / `[a, b]` / `{a: 1}`，含嵌套与引号）----
+# 背景（qg-issue 87 缺陷 23）：Go `yaml.Marshal` 对**空**容器固定输出流式
+# `[]` / `{}`（非空才用块式），而本解析器原先把 `refs: []` 读成字符串 "[]"，
+# 与 Go 侧语义不一致。故补齐单行流式集合解析。
+def ylf_balanced(s):
+    # s[0] 是开括号、s[len-1] 是闭括号；确认首尾**配对**（中间不提前闭合），感知引号
+    let open = s[0]
+    var close = "]"
+    if open == "{":
+        close = "}"
+    var depth = 0
+    var q = ""
+    var i = 0
+    while i < len(s):
+        let c = s[i]
+        if q != "":
+            if q == "\"" and c == "\\" and i + 1 < len(s):
+                i += 2
+                continue
+            if c == q:
+                q = ""
+            i += 1
+            continue
+        if c == "\"" or c == "'":
+            q = c
+        elif c == open:
+            depth += 1
+        elif c == close:
+            depth -= 1
+            if depth == 0:
+                return i == len(s) - 1
+        i += 1
+    return false
+def ylf_flow_kind(s):
+    # 返回 "seq" / "map" / ""（非流式）
+    if len(s) < 2:
+        return ""
+    if s[0] == "[" and s[len(s) - 1] == "]":
+        if ylf_balanced(s):
+            return "seq"
+    if s[0] == "{" and s[len(s) - 1] == "}":
+        if ylf_balanced(s):
+            return "map"
+    return ""
+def ylf_split_top(s, sep):
+    # 顶层分隔（感知引号与 [] {} 嵌套）
+    var parts = []
+    var cur = ""
+    var depth = 0
+    var q = ""
+    var i = 0
+    while i < len(s):
+        let c = s[i]
+        if q != "":
+            cur += c
+            if q == "\"" and c == "\\" and i + 1 < len(s):
+                cur += s[i + 1]
+                i += 2
+                continue
+            if c == q:
+                q = ""
+            i += 1
+            continue
+        if c == "\"" or c == "'":
+            q = c
+            cur += c
+        elif c == "[" or c == "{":
+            depth += 1
+            cur += c
+        elif c == "]" or c == "}":
+            depth -= 1
+            cur += c
+        elif c == sep and depth == 0:
+            parts.append(trim(cur))
+            cur = ""
+        else:
+            cur += c
+        i += 1
+    parts.append(trim(cur))
+    return parts
+def ylf_split_first_colon(s):
+    # 首个顶层冒号 → [key, val]；无则 []
+    var depth = 0
+    var q = ""
+    var i = 0
+    while i < len(s):
+        let c = s[i]
+        if q != "":
+            if q == "\"" and c == "\\" and i + 1 < len(s):
+                i += 2
+                continue
+            if c == q:
+                q = ""
+            i += 1
+            continue
+        if c == "\"" or c == "'":
+            q = c
+        elif c == "[" or c == "{":
+            depth += 1
+        elif c == "]" or c == "}":
+            depth -= 1
+        elif c == ":" and depth == 0:
+            return [trim(s[0:i]), trim(s[i + 1:len(s)])]
+        i += 1
+    return []
+def ylf_parse_flow(s):
+    let kind = ylf_flow_kind(s)
+    let inner = s[1:len(s) - 1]
+    if kind == "seq":
+        if trim(inner) == "":
+            return []
+        var out = []
+        for p in ylf_split_top(inner, ","):
+            out.append(yl_parse_scalar(p))
+        return out
+    var m = yl_nd()
+    if trim(inner) == "":
+        return m
+    for p in ylf_split_top(inner, ","):
+        let kv = ylf_split_first_colon(p)
+        if len(kv) == 2:
+            m.set(yl_unquote(kv[0]), yl_parse_scalar(kv[1]))
+    return m
+# ---- 标量类型推断 ----
+def yl_parse_scalar(s):
+    if len(s) == 0 or s == "~" or s == "null" or s == "Null" or s == "NULL":
+        return null
+    if s == "true" or s == "True" or s == "TRUE":
+        return true
+    if s == "false" or s == "False" or s == "FALSE":
+        return false
+    if s[0] == "\"" or s[0] == "'":
+        return yl_unquote(s)
+    if ylf_flow_kind(s) != "":
+        return ylf_parse_flow(s)
+    if regex_match("^[+-]?[0-9]+$", s):
+        return int(s)
+    if regex_match("^[+-]?([0-9]+\\.[0-9]*|\\.[0-9]+)([eE][+-]?[0-9]+)?$", s):
+        return float(s)
+    if regex_match("^[+-]?[0-9]+[eE][+-]?[0-9]+$", s):
+        return float(s)
+    return s
+# ---- 键值拆分（冒号不在引号内且后跟空白/行尾才算分隔）----
+# 返回 {"found":bool, "key":str, "val":str, "has_val":bool}
+def yl_split_kv(content):
+    var q = ""
+    var i = 0
+    while i < len(content):
+        let c = content[i]
+        if q != "":
+            if q == "\"" and c == "\\" and i + 1 < len(content):
+                i += 2
+                continue
+            if c == q:
+                q = ""
+            i += 1
+            continue
+        if c == "\"" or c == "'":
+            q = c
+            i += 1
+            continue
+        if c == ":":
+            let after = i + 1
+            if after >= len(content) or content[after] == " " or content[after] == "\t":
+                let key = content[0:i]
+                var k = key
+                var a = 0
+                while a < len(k) and k[a] == " ":
+                    a += 1
+                k = k[a:len(k)]
+                var b = len(k)
+                while b > 0 and k[b - 1] == " ":
+                    b -= 1
+                k = k[0:b]
+                let val = content[after:len(content)]
+                var v = trim(val)
+                return {"found": true, "key": k, "val": v, "has_val": len(v) > 0}
+        i += 1
+    return {"found": false, "key": "", "val": "", "has_val": false}
+def yl_is_seq_item(content):
+    if len(content) == 0:
+        return false
+    if content[0] != "-":
+        return false
+    if len(content) == 1:
+        return true
+    return content[1] == " "

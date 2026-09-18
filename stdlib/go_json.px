@@ -1,0 +1,40 @@
+# ═══════════════════════════════════════════════════════════════════════
+# go_json.px — Go `encoding/json` 的「interface{} 语义」辅助（对齐 net/json）
+# ---------------------------------------------------------------
+# 动机（qg-issue 87 缺陷 96）：Go 把 JSON 解到 `map[string]interface{}`（或
+# `[]interface{}`）时，**所有数字一律成为 float64** —— 于是
+#     `{"n":9223372036854775807}`  → 重新 Marshal 得 `{"n":9223372036854776000}`
+#     `{"z":9007199254740993}`     → `{"z":9007199254740992}`（2^53 之上丢精度）
+# 而 PuXian 的 `json_parse` 把整数字面量保留为 int（这是语言语义，且与 Go 的
+# **强类型**解码一致：`{"created":1700000000}` 解到 int64 字段就该是整数）。
+#
+# ⇒ 需要「Go interface{} 路径」的场景（如 token-cache 媒体代理的
+#   `replaceBodyModel`：Go 用 `map[string]interface{}` 中转再 Marshal），
+#   必须在 Marshal 之前显式做一次**数字加宽**，否则两侧上游请求体不同。
+#
+# 用法：
+#     var v = json_parse(text)
+#     var w = go_json_widen_numbers(v)      # 深度拷贝并把 int 换成 float
+#     print(json_stringify_go(w))
+#
+# ⚠️ 本函数返回**新值**（不改动入参）—— int→float 的替换如果就地做，会让
+#    调用方持有的原值类型突变（静默语义漂移）。
+# ═══════════════════════════════════════════════════════════════════════
+# go_json_widen_numbers(v) — 深度遍历：int → float；list/tuple/dict 递归；其余原样。
+def go_json_widen_numbers(v):
+    if v == null:
+        return null
+    var t = type(v)
+    if t == "int":
+        return float(v)
+    if t == "list":
+        var out = []
+        for item in v:
+            out.append(go_json_widen_numbers(item))
+        return out
+    if t == "dict":
+        var d = json_parse("{}")
+        for k in v.keys():
+            d.set(str(k), go_json_widen_numbers(v[k]))
+        return d
+    return v

@@ -1,0 +1,203 @@
+## strings.px — 字符串工具（L1 stdlib）
+##
+## 建立背景（qg-issue 87 缺陷 1）：api-server / token-cache PuXian 化时照出
+## **语言缺「子串定位」原语** —— `index_of` / `last_index_of` 不在 native 表（313 项）里，
+## 也不在 stdlib 里，于是各项目**各自手搓同一函数**：
+##   supervisor/util.px:76 `str_index` · chat/px/util.px:18 `index_of` + :33 `last_index_of`
+##   ws-install/env.px:275 `index_of` · sup-prefix/util.px:76 `str_index` · ws-install/fileutil.px:88 `last_index`
+## 五处重复实现 = 语言级缺口，按「发现即修、不绕过」收进 stdlib 统一提供。
+##
+## 语义对齐 Go `strings.Index` / `strings.LastIndex`（空 needle → 0 / len(s)）。
+## 下标为**字节序**下标（与 `s[a:b]` 切片同轴）。
+## index_of(s, sub) → sub 在 s 中**首次**出现的下标；不存在返回 -1；sub 为空串返回 0。
+def index_of(s, sub):
+    var n = len(s)
+    var m = len(sub)
+    if m == 0:
+        return 0
+    if m > n:
+        return -1
+    var i = 0
+    var lim = n - m
+    while i <= lim:
+        if s[i:i + m] == sub:
+            return i
+        i += 1
+    return -1
+## index_of_from(s, sub, start) → 自 start（含）起首次出现的下标；不存在返回 -1。
+def index_of_from(s, sub, start):
+    var n = len(s)
+    var st = start
+    if st < 0:
+        st = 0
+    if st > n:
+        return -1
+    var r = index_of(s[st:n], sub)
+    if r < 0:
+        return -1
+    return r + st
+## last_index_of(s, sub) → sub 在 s 中**最后**一次出现的下标；不存在返回 -1；sub 为空串返回 len(s)。
+def last_index_of(s, sub):
+    var n = len(s)
+    var m = len(sub)
+    if m == 0:
+        return n
+    if m > n:
+        return -1
+    var i = n - m
+    while i >= 0:
+        if s[i:i + m] == sub:
+            return i
+        i -= 1
+    return -1
+## count_of(s, sub) → sub 在 s 中**非重叠**出现次数；sub 为空串返回 0（对齐 Go strings.Count 之约定除外）。
+def count_of(s, sub):
+    var m = len(sub)
+    if m == 0:
+        return 0
+    var c = 0
+    var i = 0
+    var n = len(s)
+    while i + m <= n:
+        if s[i:i + m] == sub:
+            c += 1
+            i += m
+        else:
+            i += 1
+    return c
+## split_n(s, sep, n) → 至多切成 n 段（第 n 段含剩余全部），对齐 Go `strings.SplitN`。
+## n < 1 视为 1；sep 为空串返回 [s]。
+def split_n(s, sep, n):
+    var out = []
+    if n < 1:
+        n = 1
+    if len(sep) == 0:
+        out.append(s)
+        return out
+    var rest = s
+    var cnt = 1
+    while cnt < n:
+        var i = index_of(rest, sep)
+        if i < 0:
+            break
+        out.append(rest[0:i])
+        rest = rest[i + len(sep):len(rest)]
+        cnt += 1
+    out.append(rest)
+    return out
+## split_lines(s) → 按 \n 切分并去掉每行尾部的 \r（CRLF 安全），对齐「逐行读」的常见需求。
+def split_lines(s):
+    var raw = split(s, "\n")
+    var out = []
+    for ln in raw:
+        var l = ln
+        if ends_with(l, "\r"):
+            l = l[0:len(l) - 1]
+        out.append(l)
+    return out
+## repeat_str(s, n) → s 重复 n 次；n <= 0 返回 ""。
+def repeat_str(s, n):
+    var out = ""
+    var i = 0
+    while i < n:
+        out = out + s
+        i += 1
+    return out
+## pad_left(s, width, ch) → 左侧补齐到 width（ch 取首字符，默认 "0"）。数字定宽输出用。
+def pad_left(s, width, ch):
+    var c = ch
+    if len(c) == 0:
+        c = "0"
+    c = c[0:1]
+    var out = s
+    while len(out) < width:
+        out = c + out
+    return out
+## pad_right(s, width, ch) → 右侧补齐到 width。
+def pad_right(s, width, ch):
+    var c = ch
+    if len(c) == 0:
+        c = " "
+    c = c[0:1]
+    var out = s
+    while len(out) < width:
+        out = out + c
+    return out
+## str_reverse(s) → 反转字符串。
+def str_reverse(s):
+    var out = ""
+    var i = len(s) - 1
+    while i >= 0:
+        out = out + s[i]
+        i -= 1
+    return out
+## trim_chars(s, cutset) → 去掉首尾出现在 cutset 中的**任意**字符，对齐 Go `strings.Trim`。
+## 与 `trim(s)`（只去空白）不同；典型用途 YAML/清单里的 `strings.Trim(v, "\"'")` 去引号。
+def trim_chars(s, cutset):
+    if len(cutset) == 0:
+        return s
+    var a = 0
+    var b = len(s)
+    while a < b and contains(cutset, s[a:a + 1]):
+        a += 1
+    while b > a and contains(cutset, s[b - 1:b]):
+        b -= 1
+    return s[a:b]
+## trim_left_chars(s, cutset) → 只去左侧，对齐 Go `strings.TrimLeft`。
+def trim_left_chars(s, cutset):
+    if len(cutset) == 0:
+        return s
+    var a = 0
+    while a < len(s) and contains(cutset, s[a:a + 1]):
+        a += 1
+    return s[a:len(s)]
+## trim_right_chars(s, cutset) → 只去右侧，对齐 Go `strings.TrimRight`。
+def trim_right_chars(s, cutset):
+    if len(cutset) == 0:
+        return s
+    var b = len(s)
+    while b > 0 and contains(cutset, s[b - 1:b]):
+        b -= 1
+    return s[0:b]
+## trim_prefix(s, prefix) → 去掉前缀（= Go `strings.TrimPrefix`；无前缀则原样）。
+## 建立背景（qg-issue 87 缺陷 46）：api-server/family.px 移植时发现 native 表有
+## `trim` 但**没有** TrimPrefix/TrimSuffix，而 Go 侧 family.go 里出现 4 次
+## （`strings.TrimPrefix(id, "wsa-")` / `strings.TrimSuffix(endpoint, "/")`）。
+## 手搓 `s[len(p):]` 会在「前缀不存在」时静默截错（Go 返回原串）⇒ 收进 stdlib。
+def trim_prefix(s, prefix):
+    var n = len(prefix)
+    if n == 0:
+        return s
+    if len(s) < n:
+        return s
+    if s[0:n] == prefix:
+        return s[n:len(s)]
+    return s
+## trim_suffix(s, suffix) → 去掉后缀（= Go `strings.TrimSuffix`；无后缀则原样）。
+def trim_suffix(s, suffix):
+    var n = len(suffix)
+    if n == 0:
+        return s
+    var m = len(s)
+    if m < n:
+        return s
+    if s[m - n:m] == suffix:
+        return s[0:m - n]
+    return s
+## is_hex(s) → 是否全为 ASCII hex 且长度为偶数（= Go `hex.DecodeString` 的合法性判定）。
+## 建立背景（qg-issue 87 缺陷 47）：webhook/family 的 nonce、签名都要先判「是不是合法 hex」，
+## 而 `hex_to_bytes` 对畸形输入是**运行时错误**（px_error → http_serve 下 500），
+## 与 Go 的 `_, err := hex.DecodeString(nonce)` 语义相反 ⇒ 只能先判定再解码。
+def is_hex(s):
+    var n = len(s)
+    if n == 0:
+        return false
+    if n % 2 != 0:
+        return false
+    var i = 0
+    while i < n:
+        var c = s[i]
+        if not ((c >= "0" and c <= "9") or (c >= "a" and c <= "f") or (c >= "A" and c <= "F")):
+            return false
+        i = i + 1
+    return true

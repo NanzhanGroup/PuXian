@@ -49,7 +49,7 @@ def chunk(items, n):
 ## 按键分组：group_by([1,2,3,4], f) -> {"0": [2,4], "1": [1,3]}
 ## 注意：普贤字典键限定为字符串，key_fn 结果会转 str
 def group_by(items, key_fn):
-    result = json_parse("{}")  # {} 字面量是 null（语言事实），空 dict 须经 json_parse
+    result = json_parse("{}")  # 建空 dict（M129 起可直接写 {}；此处保留旧写法，行为一致）
     for item in items:
         k = str(key_fn(item))
         if result.has(k):

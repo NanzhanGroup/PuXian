@@ -1,0 +1,280 @@
+## time_go.px — Go `time` 参考布局（reference layout）格式化（L1 stdlib）
+##
+## 建立背景（qg-issue 87 缺陷 41）：api-server / token-cache PuXian 化时照出
+## **语言只有 strftime 风格格式化**（`time_format(ts, "%Y-%m-%d")`），而 Go 代码里
+## 满地 `t.Format(time.RFC3339)` / `t.Format("2006-01-02 15:04:05")` /
+## `t.Format("2006-01-02")` —— 这是 **Go 专有的"参考时间"布局**，不是 strftime。
+##
+## 两处**静默漂移**（用 strftime 手搓必踩）：
+##   ① RFC3339 的 `Z07:00`：偏移为 0 时输出 **"Z"**，非 0 时输出 `+08:00`
+##      （**带冒号**）。而 `%z` 给的是 `+0800`（无冒号）、`%Z` 给的是 `UTC`/`+0800`
+##      —— 三个都不同（`time.Now().Format(time.RFC3339)` 与
+##      `time_format(now_sec(), "%Y-%m-%dT%H:%M:%S%z", "local")` 结果不等）。
+##   ② `Jan`/`Mon`/`PM`/`_2`/`-07` 等 Go 专有 token 在 strftime 里没有等价写法。
+## ⇒ 每个移植文件只能各自手搓拼接，跨时区/跨日必然分叉。故收进 stdlib 统一提供。
+##
+## 实现：先用 `time_format(ts, "%Y %m %d %H %M %S %a %z", tz)` 取齐分量
+## （tz 语义与 `time_format` 第三参完全一致，支持 `"local"`/`"UTC"`/`"+08:00"`），
+## 再按 Go `nextStdChunk` 的 token 表做**最长匹配**逐段替换。
+##
+## 已知不足（如实登记，见 ISSUE 缺陷 41 续）：
+##   · `MST` token 取不到**时区缩写**（本机是 "CST"，PuXian 无此原语）——
+##     此处回落为「偏移 0 → "UTC"，否则 ±hhmm」，与 Go 在 UTC(0) 时一致，
+##     非 0 时与 Go 的缩写形式不同。本项目（api-server/token-cache）未用到 MST。
+##   · 亚秒分量（`.999` / `.000`）恒按**整秒**输出（`ts` 是 Unix 秒，本无亚秒）。
+##     故 `.000` → 全 0；`.999` → 空串（与 Go 在 ns==0 时一致）。
+import std.strings
+# ── 分量常量（与 Go time 包一致，0=Sunday） ──
+const TG_WD_S = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+const TG_WD_F = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+const TG_MON_S = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+const TG_MON_F = ["January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"]
+# ── 小块工具 ──
+def tg_pad2(n):
+    if n < 0:
+        n = -n
+    if n < 10:
+        return "0" + str(n)
+    return str(n)
+def tg_pad4(n):
+    var s = str(n)
+    while len(s) < 4:
+        s = "0" + s
+    return s
+# tg_slice(s, i, j) — 越界安全字节切片（Go layout 全是 ASCII，按字节即可）
+def tg_slice(s, i, j):
+    var n = len(s)
+    if i < 0:
+        i = 0
+    if j > n:
+        j = n
+    if i >= j:
+        return ""
+    return s[i:j]
+# ── 分量拆解 ──
+# tg_parts(ts, tz) → dict{y,mo,d,h,mi,s,wd,off,zh}
+#   · wd  = 0(Sun)..6(Sat)
+#   · off = 该时刻的 UTC 偏移秒（DST 感知，因为走 %z）
+#   · zh  = ±hh（供 -07 / Z07 用）
+def tg_parts(ts, tz):
+    var p = json_parse("{}")
+    p.set("y", int(time_format(ts, "%Y", tz)))
+    p.set("mo", int(time_format(ts, "%m", tz)))
+    p.set("d", int(time_format(ts, "%d", tz)))
+    p.set("h", int(time_format(ts, "%H", tz)))
+    p.set("mi", int(time_format(ts, "%M", tz)))
+    p.set("s", int(time_format(ts, "%S", tz)))
+    var wds = time_format(ts, "%a", tz)
+    var wd = 0
+    var k = 0
+    while k < 7:
+        if TG_WD_S[k] == wds:
+            wd = k
+        k = k + 1
+    p.set("wd", wd)
+    # %z → "+0800" / "-0430" / "+0000"；转成偏移秒（负偏移要整体取负）
+    var z = time_format(ts, "%z", tz)
+    var neg = false
+    var body = z
+    if starts_with(z, "-"):
+        neg = true
+        body = tg_slice(z, 1, len(z))
+    elif starts_with(z, "+"):
+        body = tg_slice(z, 1, len(z))
+    var os_ = 0
+    if len(body) >= 4:
+        os_ = int(tg_slice(body, 0, 2)) * 3600 + int(tg_slice(body, 2, 4)) * 60
+    elif len(body) == 2:
+        os_ = int(body) * 3600
+    if neg:
+        os_ = -os_
+    p.set("off", os_)
+    return p
+# tg_off_hhmm(off, colon) — ±hh:mm / ±hhmm（始终带符号，Go 的 `-0700` 语义）
+def tg_off_hhmm(off, colon):
+    var a = off
+    if a < 0:
+        a = -a
+    var hh = a // 3600
+    var mm = (a % 3600) // 60
+    var sign = "+"
+    if off < 0:
+        sign = "-"
+    if colon:
+        return sign + tg_pad2(hh) + ":" + tg_pad2(mm)
+    return sign + tg_pad2(hh) + tg_pad2(mm)
+# tg_off_hh(off) — ±hh（Go 的 `-07` 语义）
+def tg_off_hh(off):
+    var a = off
+    if a < 0:
+        a = -a
+    var sign = "+"
+    if off < 0:
+        sign = "-"
+    return sign + tg_pad2(a // 3600)
+# ── token 表（严格按长度降序；匹配取最长，与 Go nextStdChunk 的实际效果一致） ──
+const TG_TOKENS = [
+    "February", "January", "Monday",
+    "-07:00", "Z07:00", "-0700", "Z0700",
+    "2006", "MST", "Jan", "Mon", "-07", "Z07",
+    "01", "02", "03", "04", "05", "06", "15", "PM", "pm", "_2",
+    "1", "2", "3", "4", "5"
+]
+# tg_match(layout, i) → 命中的 token（无命中返回 ""）
+def tg_match(layout, i):
+    for tok in TG_TOKENS:
+        if len(tok) <= len(layout) - i:
+            if tg_slice(layout, i, i + len(tok)) == tok:
+                return tok
+    return ""
+# tg_frac(layout, i) — `.` + 同字符数字串（Go 的亚秒 token）；无命中返回 0（未消费）
+def tg_frac(layout, i):
+    var n = len(layout)
+    if i + 1 >= n:
+        return 0
+    if tg_slice(layout, i, i + 1) != ".":
+        return 0
+    var c = tg_slice(layout, i + 1, i + 2)
+    if c != "0" and c != "9":
+        return 0
+    var j = i + 1
+    while j < n and tg_slice(layout, j, j + 1) == c:
+        j = j + 1
+    return j - i
+# ── 渲染 ──
+def tg_render(tok, p):
+    var y = int(p["y"])
+    var mo = int(p["mo"])
+    var d = int(p["d"])
+    var h = int(p["h"])
+    var mi = int(p["mi"])
+    var s = int(p["s"])
+    var wd = int(p["wd"])
+    var off = int(p["off"])
+    if tok == "January":
+        return TG_MON_F[mo - 1]
+    if tok == "Jan":
+        return TG_MON_S[mo - 1]
+    if tok == "Monday":
+        return TG_WD_F[wd]
+    if tok == "Mon":
+        return TG_WD_S[wd]
+    if tok == "2006":
+        return tg_pad4(y)
+    if tok == "06":
+        var y2 = y % 100
+        if y2 < 0:
+            y2 = y2 + 100
+        return tg_pad2(y2)
+    if tok == "01":
+        return tg_pad2(mo)
+    if tok == "1":
+        return str(mo)
+    if tok == "02":
+        return tg_pad2(d)
+    if tok == "2":
+        return str(d)
+    if tok == "_2":
+        if d < 10:
+            return " " + str(d)
+        return str(d)
+    if tok == "15":
+        return tg_pad2(h)
+    if tok == "03":
+        return tg_pad2(tg_h12(h))
+    if tok == "3":
+        return str(tg_h12(h))
+    if tok == "04":
+        return tg_pad2(mi)
+    if tok == "4":
+        return str(mi)
+    if tok == "05":
+        return tg_pad2(s)
+    if tok == "5":
+        return str(s)
+    if tok == "PM":
+        if h < 12:
+            return "AM"
+        return "PM"
+    if tok == "pm":
+        if h < 12:
+            return "am"
+        return "pm"
+    if tok == "MST":
+        # 时区缩写不可得（如实登记）；UTC 与 Go 一致
+        if off == 0:
+            return "UTC"
+        return tg_off_hhmm(off, false)
+    if tok == "-07:00":
+        return tg_off_hhmm(off, true)
+    if tok == "-0700":
+        return tg_off_hhmm(off, false)
+    if tok == "-07":
+        return tg_off_hh(off)
+    if tok == "Z07:00":
+        if off == 0:
+            return "Z"
+        return tg_off_hhmm(off, true)
+    if tok == "Z0700":
+        if off == 0:
+            return "Z"
+        return tg_off_hhmm(off, false)
+    if tok == "Z07":
+        if off == 0:
+            return "Z"
+        return tg_off_hh(off)
+    return tok
+# tg_h12(h) — 24h → 12h（0 → 12）
+def tg_h12(h):
+    var r = h % 12
+    if r == 0:
+        return 12
+    return r
+# ── 对外 ──
+# go_format(ts, layout[, tz]) → str
+#   语义等价 `time.Unix(ts, 0).In(loc).Format(layout)`。
+#   tz 缺省 "local"（与 Go 的 time.Local 一致）；取值同 `time_format` 第三参。
+def go_format(ts, layout):
+    return go_format_tz(ts, layout, "local")
+def go_format_tz(ts, layout, tz):
+    var p = tg_parts(ts, tz)
+    var out = ""
+    var i = 0
+    var n = len(layout)
+    while i < n:
+        var fl = tg_frac(layout, i)
+        if fl > 0:
+            var c = tg_slice(layout, i + 1, i + 2)
+            var zeros = ""
+            while len(zeros) < fl - 1:
+                zeros = zeros + "0"
+            if c == "0":
+                out = out + "." + zeros
+            i = i + fl
+            continue
+        var tok = tg_match(layout, i)
+        if tok == "":
+            out = out + tg_slice(layout, i, i + 1)
+            i = i + 1
+        else:
+            out = out + tg_render(tok, p)
+            i = i + len(tok)
+    return out
+# ── Go 常用布局快捷函数（对齐 Go 的 time 常量） ──
+def go_rfc3339(ts):
+    return go_format_tz(ts, "2006-01-02T15:04:05Z07:00", "local")
+def go_rfc3339_tz(ts, tz):
+    return go_format_tz(ts, "2006-01-02T15:04:05Z07:00", tz)
+# go_date(ts) — `t.Format("2006-01-02")`（Go 的 time.DateOnly）
+def go_date(ts):
+    return go_format_tz(ts, "2006-01-02", "local")
+def go_date_tz(ts, tz):
+    return go_format_tz(ts, "2006-01-02", tz)
+def go_date_time(ts):
+    return go_format_tz(ts, "2006-01-02 15:04:05", "local")
+def go_date_time_tz(ts, tz):
+    return go_format_tz(ts, "2006-01-02 15:04:05", tz)
+# go_rfc1123(ts) — `time.RFC1123`（Tue, 02 Jan 2006 15:04:05 MST）
+def go_rfc1123(ts):
+    return go_format_tz(ts, "Mon, 02 Jan 2006 15:04:05 MST", "local")

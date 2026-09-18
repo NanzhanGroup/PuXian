@@ -1,0 +1,42 @@
+## io.px — fd 写出/读入补齐（L1 stdlib）
+##
+## 建立背景（qg-issue 87 缺陷 6）：`unix_connect(path)` 的文档明写
+## **「收发复用 M57 read(fd)/write(fd,data)」**，但两者语义**不对称**：
+##   · `tcp_send(fd, data)` → 内部 `sock_send_all()`，**写满为止**（对齐 Go conn.Write）
+##   · `write(fd, data)`    → **只调一次 write(2)**，返回本次写入字节数
+## 对 AF_UNIX SOCK_STREAM，阻塞态下短写（short write）是**合法**的：对端读得慢 /
+## 发送缓冲不足时 write(2) 会返回 < len。此时调用方若把返回值当成「已全部写出」，
+## 报文就被**静默截断**（行协议里表现为对端 JSON 解析失败或半条消息）。
+## api-server 移植 notify.go 的 ws-push.sock 推送（H3 AUTH 握手 + JSON 行）当场踩到：
+## 这是**语言级缺口**（不是某个项目的问题），按「发现即修、不绕过」收进 stdlib。
+##
+## 说明：`write` 本身保持单次语义（与 Go `os.File.Write` 一致，返回 n 供调用方判断），
+## 需要「写满」语义时用本文件的 `write_all`（与 Go `io.Copy`/`net.Conn.Write` 对齐）。
+## write_all(fd, data) → 已写出字节数；出错返回 -1。
+## `data` 收 str 或 bytes；str 按**字节**切片（与 `s[a:b]` 同轴）。
+def write_all(fd, data):
+    var is_bytes = type(data) == "bytes"
+    var n = 0
+    if is_bytes:
+        n = bytes_len(data)
+    else:
+        n = len(data)
+    var sent = 0
+    while sent < n:
+        var chunk = null
+        if is_bytes:
+            chunk = bytes_slice(data, sent, n)
+        else:
+            chunk = data[sent:n]
+        var w = write(fd, chunk)
+        if w < 0:
+            return -1
+        if w == 0:
+            # 内核返回 0 表示本次未写出任何字节（非 EOF 语义，fd 是写端）；
+            # 继续循环会空转，故直接返回进度让调用方决策。
+            return sent
+        sent += w
+    return sent
+## write_line(fd, s) → 写出 `s` + "\n"（行协议惯用），返回字节数 / -1。
+def write_line(fd, s):
+    return write_all(fd, s + "\n")
