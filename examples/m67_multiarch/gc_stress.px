@@ -77,7 +77,7 @@ def main():
     var c3 = h
     var t3 = 0
     while c3 != null and t3 < 100:
-        assert type(c3) == "list"
+        assert(type(c3) == "list")
         c3 = c3[1]
         t3 = t3 + 1
     # 等 4 worker 全部完成
