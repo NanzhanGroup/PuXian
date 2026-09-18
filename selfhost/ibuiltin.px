@@ -508,6 +508,18 @@ def i_call_builtin(name, args, pos):
         if len(args) != 1:
             return Err(i_r1002("bits_to_float32 需要一个参数", pos))
         return Ok(bits_to_float32(args[0]))
+    if name == "float64_bits":
+        # M146（第 27 轮）：`math.Float64bits(float64(x))` 的 uint64（int 承载，
+        #   ≥2^63 的位模式为 int64 补码负值）；配 `int_to_hex(v, 16)` 取位模式文本。
+        if len(args) != 1:
+            return Err(i_r1002("float64_bits 需要一个参数", pos))
+        return Ok(float64_bits(args[0]))
+    if name == "bits_to_float64":
+        # M146：`math.Float64frombits(uint64(u))`（只取低 64 位）—— 造 NaN/±Inf/
+        #   非规格化数的唯一入口。
+        if len(args) != 1:
+            return Err(i_r1002("bits_to_float64 需要一个参数", pos))
+        return Ok(bits_to_float64(args[0]))
     if name == "json_num_str":
         # M143：Go `encoding/json` 的浮点文本（bits=32 走 32 位最短往返；非有限值 → null）。
         if len(args) != 1 and len(args) != 2:

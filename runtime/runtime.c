@@ -387,6 +387,24 @@ static LXValue bi_float32(LXValue* args, int nargs, void* ctx);
 static LXValue bi_float32_bits(LXValue* args, int nargs, void* ctx);
 static LXValue bi_bits_to_float32(LXValue* args, int nargs, void* ctx);
 static LXValue bi_json_num_str(LXValue* args, int nargs, void* ctx);
+// ═══ M146（第 27 轮）：float64 位模式族（float64_bits / bits_to_float64）═══
+//   M143 补了 32 位的一对（float32_bits / bits_to_float32），但 **64 位的对应项**一直缺失
+//   ⇒ 语言里读不出 float64 的位模式。后果不是"少个糖"：
+//     · Go 侧 `math.Float64bits(f)` 是**无损指纹**的标准做法（跨语言/跨机器对拍 float64
+//       时，文本最短往返仍要挑格式，位模式不需要）；移植门（diff_*_go.py）逐字节对拍
+//       float64 字段（SS/radius/置信度/距离）时，文本面只能靠"最短往返实现一致"这个
+//       较弱的前提。
+//     · 反方向：`bits_to_float64` 是把整数位模式**注入**浮点的唯一手段 ⇒ 没有它就造不出
+//       普通的 NaN / ±Inf / 非规格化数（subnormal）语料，也无法复刻任何"按位构造浮点"
+//       的 Go 代码（`math.Float64frombits(x)`）。
+//   语义与 Go 一一对应：
+//     · `float64_bits(x)`  → Go `math.Float64bits(float64(x))` 的 uint64；**int 承载**，
+//       ≥ 2^63 的位模式以 int64 二进制补码呈**负值**（= Go `int64(math.Float64bits(f))`
+//       的再解释口径；取十六进制用 `int_to_hex(v, 16)`，即低 64 位）。
+//     · `bits_to_float64(u)` → Go `math.Float64frombits(uint64(u))`；只取**低 64 位**
+//       （负值 = 补码回绕，与 `uint32(x)` 的取模口径一致）。
+static LXValue bi_float64_bits(LXValue* args, int nargs, void* ctx);
+static LXValue bi_bits_to_float64(LXValue* args, int nargs, void* ctx);
 // ⑤ append_file_opt —— append_file 的 Result 版（缺陷 115：Go `os.OpenFile(..., O_APPEND)`
 //    的失败走 err 通道「只记日志、不阻塞主流程」，而 `append_file` 失败即杀进程 ⇒
 //    token-cache 的 LogWriter（Go 侧写失败仅 log.Printf）**无法表达**。）
@@ -3344,6 +3362,14 @@ static int compare_values_raw(LXValue a, LXValue b) {
     }
     if ((a.type == PX_INT || a.type == PX_FLOAT) && (b.type == PX_INT || b.type == PX_FLOAT)) {
         double x = num_val(a), y = num_val(b);
+        // M146（第 27 轮 · 缺陷 126 同族）：NaN 与任何值（**含自身**）不可比 ⇒ 返回**非零**。
+        //   为什么：`px_eq` 对**两个标量**已改走直接浮点比较（IEEE 正确），但**容器**的相等
+        //   仍经 compare_values 递归到元素 —— 旧的三态 else 分支会把 NaN 对判成"相等"，
+        //   于是 `[NaN] == [NaN]` 为**真**；而 Go `reflect.DeepEqual`（M145 的对齐目标）
+        //   用 `v1.Float() == v2.Float()` ⇒ 含 NaN 的容器**判不等**。
+        //   三态比较器只能以"非零"表达"不可比"；符号只为给出确定性顺序，无数学含义。
+        if (x != x) return (y != y) ? 2 : 1;
+        if (y != y) return -1;
         return x < y ? -1 : (x > y ? 1 : 0);
     }
     if (a.type == PX_STR && b.type == PX_STR) {
@@ -3407,17 +3433,52 @@ static int compare_values_raw(LXValue a, LXValue b) {
     return strcmp(px_type_name(a), px_type_name(b));
 }
 
+// M146（第 27 轮 · 缺陷 126）：**数值比较的 NaN 语义**（IEEE754 / Go）——
+//   `compare_values` 是**三态**比较器（-1/0/1），它**无法表达** NaN 的
+//   「既不小于、也不等于、也不大于」。旧实现让 px_ne / px_le / px_ge 借道三态，
+//   NaN 落进 `x < y ? -1 : (x > y ? 1 : 0)` 的 **else 分支**被当成**相等**：
+//     `NaN != NaN` → **假**（Go：真）· `NaN <= 1.0` → **真**（Go：假）·
+//     `NaN >= 1.0` → **真**（Go：假）。Go/IEEE 的口径是**四路皆假**（只有 `!=` 为真）。
+//   为什么以前没暴露：语言里**造不出 NaN**（M143 只给了 float32 的位模式族，64 位的一直缺）
+//   ⇒ 这条通路对用户不可达。M146 补上 `bits_to_float64` 后**当轮就被 m146 门照出**。
+//   修法：数值情形**直接**用 C 的浮点比较（IEEE 语义原生正确）；非数值情形仍走
+//   `compare_values` ⇒ 容器 / 字符串 / 枚举的**全序**（`sorted` / `sort_by` / `min` / `max`）
+//   语义**零变化**。
+//   ⚠️ INT-INT 保留**整数**比较（不绕 double）：否则 >2^53 的大整数会丢精度 ——
+//      `9007199254740993 == 9007199254740992` 会误判为真。
+static int px_is_num(LXValue v) { return v.type == PX_INT || v.type == PX_FLOAT; }
+
 LXValue px_eq(LXValue a, LXValue b) {
     // 数值跨类型相等：1 == 1.0
-    if ((a.type == PX_INT || a.type == PX_FLOAT) && (b.type == PX_INT || b.type == PX_FLOAT))
-        return px_bool(num_val(a) == num_val(b));
+    if (a.type == PX_INT && b.type == PX_INT) return px_bool(a.as.i == b.as.i);
+    if (px_is_num(a) && px_is_num(b)) return px_bool(num_val(a) == num_val(b));
     return px_bool(compare_values(a, b) == 0);
 }
-LXValue px_ne(LXValue a, LXValue b) { return px_bool(compare_values(a, b) != 0); }
-LXValue px_lt(LXValue a, LXValue b) { return px_bool(compare_values(a, b) < 0); }
-LXValue px_le(LXValue a, LXValue b) { return px_bool(compare_values(a, b) <= 0); }
-LXValue px_gt(LXValue a, LXValue b) { return px_bool(compare_values(a, b) > 0); }
-LXValue px_ge(LXValue a, LXValue b) { return px_bool(compare_values(a, b) >= 0); }
+LXValue px_ne(LXValue a, LXValue b) {
+    if (a.type == PX_INT && b.type == PX_INT) return px_bool(a.as.i != b.as.i);
+    if (px_is_num(a) && px_is_num(b)) return px_bool(num_val(a) != num_val(b));
+    return px_bool(compare_values(a, b) != 0);
+}
+LXValue px_lt(LXValue a, LXValue b) {
+    if (a.type == PX_INT && b.type == PX_INT) return px_bool(a.as.i < b.as.i);
+    if (px_is_num(a) && px_is_num(b)) return px_bool(num_val(a) < num_val(b));
+    return px_bool(compare_values(a, b) < 0);
+}
+LXValue px_le(LXValue a, LXValue b) {
+    if (a.type == PX_INT && b.type == PX_INT) return px_bool(a.as.i <= b.as.i);
+    if (px_is_num(a) && px_is_num(b)) return px_bool(num_val(a) <= num_val(b));
+    return px_bool(compare_values(a, b) <= 0);
+}
+LXValue px_gt(LXValue a, LXValue b) {
+    if (a.type == PX_INT && b.type == PX_INT) return px_bool(a.as.i > b.as.i);
+    if (px_is_num(a) && px_is_num(b)) return px_bool(num_val(a) > num_val(b));
+    return px_bool(compare_values(a, b) > 0);
+}
+LXValue px_ge(LXValue a, LXValue b) {
+    if (a.type == PX_INT && b.type == PX_INT) return px_bool(a.as.i >= b.as.i);
+    if (px_is_num(a) && px_is_num(b)) return px_bool(num_val(a) >= num_val(b));
+    return px_bool(compare_values(a, b) >= 0);
+}
 
 LXValue px_and(LXValue a, LXValue b) {
     return px_is_truthy(a) ? b : a;  // 短路由 codegen 保证
@@ -9413,6 +9474,9 @@ void px_register_builtins(void) {
     px_set_global("float32", px_native("float32", bi_float32));
     px_set_global("float32_bits", px_native("float32_bits", bi_float32_bits));
     px_set_global("bits_to_float32", px_native("bits_to_float32", bi_bits_to_float32));
+    // M146（第 27 轮）：float64 位模式族（与 M143 的 32 位对偶，成对补齐）
+    px_set_global("float64_bits", px_native("float64_bits", bi_float64_bits));
+    px_set_global("bits_to_float64", px_native("bits_to_float64", bi_bits_to_float64));
     px_set_global("json_num_str", px_native("json_num_str", bi_json_num_str));
     px_set_global("append_file_opt", px_native("append_file_opt", bi_append_file_opt));
     // 同时登记进 FFI 桥（ffi_call 按名调用表）：
@@ -9431,6 +9495,9 @@ void px_register_builtins(void) {
     px_ffi_register("float32", bi_float32);
     px_ffi_register("float32_bits", bi_float32_bits);
     px_ffi_register("bits_to_float32", bi_bits_to_float32);
+    // M146（第 27 轮）：float64 位模式族
+    px_ffi_register("float64_bits", bi_float64_bits);
+    px_ffi_register("bits_to_float64", bi_bits_to_float64);
     px_ffi_register("json_num_str", bi_json_num_str);
     px_ffi_register("append_file_opt", bi_append_file_opt);
 
@@ -9783,6 +9850,43 @@ static LXValue bi_bits_to_float32(LXValue* args, int nargs, void* ctx) {
     float f;
     memcpy(&f, &u, 4);
     return px_float((double)f);
+}
+
+// ═══ M146（第 27 轮）：float64 位模式族 ═══
+//   设计说明见文件顶部声明处。要点：
+//     · 位模式转换一律走 memcpy（与 float32 侧同法：不触发严格别名规则，
+//       -O2 下与位运算等价）；
+//     · 返回的 uint64 以 **int64 二进制补码**呈递 ⇒ ≥2^63 时为负值。这不是"缺陷"，
+//       而是与 Go `int64(math.Float64bits(f))` 相同的再解释；取十六进制请用
+//       `int_to_hex(v, 16)`（"取低 16*4 位"，对负值同样给出正确的 64 位补码文本）。
+//     · 类型接受面与 float32_bits 保持一致（int / float / str / bool）——
+//       语言里 native 的入参转换历来是同族的，不做"64 位更严格"的特例。
+
+// float64_bits(x) → int —— `math.Float64bits(float64(x))` 的 uint64 位模式。
+static LXValue bi_float64_bits(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: float64_bits 需要一个参数");
+    LXValue a = args[0];
+    double d;
+    if (a.type == PX_INT) d = (double)a.as.i;
+    else if (a.type == PX_FLOAT) d = a.as.f;
+    else if (a.type == PX_STR) d = atof(a.as.obj->as.str.data);
+    else if (a.type == PX_BOOL) d = a.as.b ? 1.0 : 0.0;
+    else { px_error("R1002: float64_bits 不支持类型 %s", px_type_name(a)); return px_null(); }
+    uint64_t u;
+    memcpy(&u, &d, 8);   // 位模式转换走 memcpy（同上）
+    return px_int((int64_t)u);
+}
+
+// bits_to_float64(u) → 数 —— `math.Float64frombits(uint64(u))`。
+//   只取低 64 位（负值 = Go 的 uint64 回绕语义）。这条是**造 NaN/±Inf/非规格化数**的唯一入口。
+static LXValue bi_bits_to_float64(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: bits_to_float64 需要一个参数");
+    uint64_t u = (uint64_t)int_val(args[0]);
+    double d;
+    memcpy(&d, &u, 8);
+    return px_float(d);
 }
 
 // json_num_str(x[, bits]) → str | null —— Go `encoding/json` 对该浮点写出的文本。
