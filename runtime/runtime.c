@@ -21,6 +21,8 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <fcntl.h>
+#include <sys/file.h>   // M130: flock(2)（BSD 文件锁，PID 锁原语）
+#include <sys/stat.h>   // M130: chmod(2)
 #include <termios.h>    // M60-S2: tty_config（串口 termios 波特率/raw 模式）
 #include <errno.h>
 #include <strings.h>
@@ -326,12 +328,18 @@ static LXValue bi_sse_send(LXValue* args, int nargs, void* ctx);
 static LXValue bi_sse_close(LXValue* args, int nargs, void* ctx);
 // M83-S6（Issue 19 GAP-SRV-SSE）：http_stream 同端口流式路由（http_serve/http_serve_unix）
 static LXValue bi_http_stream(LXValue* args, int nargs, void* ctx);
-static int stream_match(const char* path);   // 流式路由表匹配（http_conn_worker 用）
+static LXValue bi_sse_start(LXValue* args, int nargs, void* ctx);   // M131：手写流式响应头
+static LXValue bi_sse_write(LXValue* args, int nargs, void* ctx);   // M131：原始写出（不分帧）
+static int stream_match(const char* path, int method_bit);   // 流式路由表匹配（http_conn_worker 用）
 // 流式接管连接（定义在 SSE 注册表区之后）；http_conn_worker 前向引用
 static LXValue stream_takeover_conn(int fd, LXValue req, int route_idx);
 // M23 P1：SSE 客户端（流式消费 / 事件订阅）
 static LXValue bi_sse_connect(LXValue* args, int nargs, void* ctx);
+static LXValue bi_sse_connect_ex(LXValue* args, int nargs, void* ctx);   // M137：失败可分类
 static LXValue bi_sse_read(LXValue* args, int nargs, void* ctx);
+static LXValue bi_sse_read_line(LXValue* args, int nargs, void* ctx);   // M131
+static void sse_cli_pump(int idx);
+static void sse_cli_feed(int idx, const unsigned char* data, int n);
 // M22 P1：强制垃圾回收（gc()）
 static LXValue bi_gc(LXValue* args, int nargs, void* ctx);
 // M23 P1：进程/信号（os_pid/os_spawn/os_wait/os_kill/signal）
@@ -354,6 +362,27 @@ static LXValue bi_os_self_path(LXValue* args, int nargs, void* ctx);
 static LXValue bi_isatty(LXValue* args, int nargs, void* ctx);
 static LXValue bi_now_sec(LXValue* args, int nargs, void* ctx);
 static LXValue bi_tz_local(LXValue* args, int nargs, void* ctx);
+// M129（qg-issue 87 缺陷 38）：json_parse_opt —— 错误捕获式 JSON 解析
+static LXValue bi_json_parse_opt(LXValue* args, int nargs, void* ctx);
+// ---------------------------------------------------------------------
+// M129（qg-issue 87 缺陷 38）：**错误捕获点**（json_parse_opt 专用）。
+//   问题：`json_parse` 对畸形输入直接 `px_error`（在 http_serve 里表现为 **500**）。
+//     而 Go 的 `json.NewDecoder(...).Decode(&v)` / `json.Unmarshal` 是**返回 error**、
+//     调用方忽略即可（HTTP handler 里这是最普通的写法）。移植任何"解析客户端的
+//     请求体"的代码，畸形 JSON 都会让两者行为分叉（Go 200 vs PuXian 500）——
+//     而且这是**外部可触发**的（公网请求即可）。
+//   修法：新增 `json_parse_opt(s) → Ok(v) | Err(msg)`，与 read_file_opt/write_file_opt
+//     同一族（"把 Go 的 err 通道显式化"）。实现上用一个**局部捕获点**：
+//     px_error 在 g_json_opt_active 期间不再落 stderr/退出，而是 longjmp 回本函数。
+//     ⇒ 不改动 json 解析器内部任何代码，也就不会有"漏掉某个错误分支"的风险。
+static jmp_buf g_json_opt_jb;
+static int g_json_opt_active = 0;
+static char g_json_opt_msg[256];
+
+// M129（qg-issue 87 缺陷 18/19）：hostname / read_file_opt —— 定义在注册函数之后，需前置声明
+static LXValue bi_hostname(LXValue* args, int nargs, void* ctx);
+static LXValue bi_read_file_opt(LXValue* args, int nargs, void* ctx);
+static LXValue bi_write_file_opt(LXValue* args, int nargs, void* ctx);
 static LXValue bi_unix_connect(LXValue* args, int nargs, void* ctx); // M66
 
 static LXValue bi_signal(LXValue* args, int nargs, void* ctx);
@@ -385,6 +414,15 @@ static LXValue bi_mem_write(LXValue* args, int nargs, void* ctx);
 static LXValue bi_sleep_us(LXValue* args, int nargs, void* ctx);
 static LXValue bi_now_us(LXValue* args, int nargs, void* ctx);
 static LXValue bi_fcntl(LXValue* args, int nargs, void* ctx);
+// M130：文件锁 / 权限（flock/chmod，qg-issue 87 缺陷 56/57）
+static LXValue bi_flock(LXValue* args, int nargs, void* ctx);
+static LXValue bi_chmod(LXValue* args, int nargs, void* ctx);
+// M133：文件元信息 + errno → 文案（file_stat / go_errno_string，qg-issue 87 缺陷 73/74）
+static LXValue bi_file_stat(LXValue* args, int nargs, void* ctx);
+static LXValue bi_go_errno_string(LXValue* args, int nargs, void* ctx);
+// M133：码点 ↔ 字符（ord / chr，qg-issue 87 缺陷 29）
+static LXValue bi_ord(LXValue* args, int nargs, void* ctx);
+static LXValue bi_chr(LXValue* args, int nargs, void* ctx);
 // M60-S2：设备组（tty_config/fd_wait）
 static LXValue bi_tty_config(LXValue* args, int nargs, void* ctx);
 static LXValue bi_fd_wait(LXValue* args, int nargs, void* ctx);
@@ -1281,23 +1319,45 @@ static void gc_debug(const char* fmt, ...) {
     (void)write(2, buf, (size_t)n);
 }
 
+// 「是否为**堆对象**」单一事实源（GC 根标记 / 帧槽 / 全局表 / 容器递归 全靠它）。
+//
+// ⚠️ M135（qg-issue 87 缺陷 86 根治）：原实现是 switch 白名单，**漏了 PX_MUTEX /
+//    PX_RWLOCK / PX_GEN** ⇒ 这三种值放在 list/dict/struct/tuple/result/gen/chan 里、
+//    或作为全局/帧槽的**直接**值时**不被标记**，其对象被 sweep 回收 ⇒ 悬垂。
+//    实测症状（token-cache 生产链路）：第 6 个「走审批判定」的请求起**永久挂死**
+//    （pthread_mutex_lock 阻塞在已回收内存的 __lock 上，无持有者、无唤醒源）；
+//    最小复现：`var g = [mutex()]` + 触发 GC + `g[0].lock()` 即 abort。
+//
+//    现改为「按 LXType **逐项列全**的位置表」+ 编译期尺寸断言：
+//    新增类型必须在表里显式表态，否则 `_Static_assert` 直接编译失败 ——
+//    从根上消灭这一类「白名单静默漏项」（同族历史缺陷 43：i_eq 白名单漏 bytes）。
+static const bool g_type_is_obj[PX_TYPE_MAX] = {
+    /* PX_NULL   */ false,
+    /* PX_BOOL   */ false,
+    /* PX_INT    */ false,
+    /* PX_FLOAT  */ false,
+    /* PX_STR    */ true,
+    /* PX_BYTES  */ true,
+    /* PX_LIST   */ true,
+    /* PX_DICT   */ true,
+    /* PX_FUNC   */ true,
+    /* PX_NATIVE */ true,
+    /* PX_STRUCT */ true,
+    /* PX_ENUM   */ true,
+    /* PX_TUPLE  */ true,
+    /* PX_CHAN   */ true,
+    /* PX_MUTEX  */ true,
+    /* PX_RWLOCK */ true,
+    /* PX_GEN    */ true,
+    /* PX_RESULT */ true,
+};
+_Static_assert(sizeof(g_type_is_obj) / sizeof(g_type_is_obj[0]) == PX_TYPE_MAX,
+               "LXType 新增成员未在 g_type_is_obj 表态（缺陷 86 的复发防线）");
+
 static bool px_value_is_obj(LXValue v) {
-    switch (v.type) {
-        case PX_STR:
-        case PX_BYTES:
-        case PX_LIST:
-        case PX_DICT:
-        case PX_FUNC:
-        case PX_NATIVE:
-        case PX_STRUCT:
-        case PX_ENUM:
-        case PX_TUPLE:
-        case PX_CHAN:
-        case PX_RESULT:
-            return true;
-        default:
-            return false;
-    }
+    int t = (int)v.type;
+    if (t < 0 || t >= PX_TYPE_MAX) return false;
+    return g_type_is_obj[t];
 }
 
 // 释放对象内部子分配 + 对象本体（sweep 阶段调用）
@@ -1321,7 +1381,7 @@ static void px_obj_free(LXObject* o) {
             xfree(o->as.dict.keys);
             xfree(o->as.dict.vals);
             break;
-        case PX_FUNC: xfree(o->as.func.name); break;
+        case PX_FUNC: xfree(o->as.func.name); break;   // env 为 LXValue，随对象一并丢弃（无内部分配）
         case PX_NATIVE: xfree(o->as.native.name); break;
         case PX_STRUCT:
             xfree(o->as.struct_inst.type_name);
@@ -1342,6 +1402,9 @@ static void px_obj_free(LXObject* o) {
             pthread_cond_destroy(&o->as.chan.cv_recv);
             break;
         case PX_MUTEX:
+            if (getenv("PX_DBG_GC_MUTEX"))
+                fprintf(stderr, "[GC-free-mutex] obj=%p locked=%d\n",
+                        (void*)o, o->as.mutex.locked);
             pthread_mutex_destroy(&o->as.mutex.mu);
             pthread_cond_destroy(&o->as.mutex.cv);
             break;
@@ -1431,7 +1494,14 @@ static void gc_mark_obj(GCHash* set, LXObject* o) {
                 }
                 break;
             }
-            default: break;  // STR / FUNC / NATIVE / ENUM / MUTEX / RWLOCK 无子对象
+            case PX_FUNC: {
+                // M129（缺陷 21）：闭包捕获环境必须参与标记 —— 否则"只被闭包引用"的
+                //   cell 会被误回收，闭包调用时读到悬垂 cell（use-after-free）。
+                if (px_value_is_obj(cur->as.func.env) && cur->as.func.env.as.obj)
+                    PUSH_OBJ(cur->as.func.env.as.obj);
+                break;
+            }
+            default: break;  // STR / NATIVE / ENUM / MUTEX / RWLOCK 无子对象
         }
     }
     xfree(stack);
@@ -2203,9 +2273,44 @@ LXValue px_func(const char* name, LXFuncPtr fn, void* ctx) {
     LXObject* o = xmalloc(sizeof(LXObject));
     o->type = PX_FUNC;
     o->as.func.name = xstrdup(name); o->as.func.fn = fn; o->as.func.ctx = ctx;
+    o->as.func.env = px_null();          // M129：无捕获（旧行为零变化）
     v.as.obj = o;
     gc_register(o, sizeof(LXObject) + strlen(name) + 1);
     return v;
+}
+
+// ── M129（qg-issue 87 缺陷 21）：编译轨真词法闭包（upvalue cell） ──
+// 背景：编译轨此前**没有词法闭包** —— 闭包体里引用外层函数的参数/局部变量会被
+//   当作"全局名"编译（px_get_global），运行时要么取到 null、要么报「未定义变量」。
+//   而解释器轨（env 链）一直是真捕获 ⇒ 双轨语义分叉（M89_PLAN 记为 B4「闭包 P2」）。
+// 方案：**按引用捕获（cell）**，与解释器轨语义一致（捕获后再改外层变量，闭包读到新值）。
+//   · cell = 单元素 list（GC 自动可达，无需新类型）
+//   · 闭包对象的 env 字段 = {名 → cell}；ctx 指向该字段（见 runtime.h 注释）
+//   · 闭包体用 px_env_lookup(ctx, name) 取回 cell，读写都过 cell ⇒ 引用语义
+LXValue px_func_env(const char* name, LXFuncPtr fn, LXValue env) {
+    LXValue v = px_func(name, fn, NULL);
+    v.as.obj->as.func.env = env;
+    v.as.obj->as.func.ctx = &v.as.obj->as.func.env;
+    return v;
+}
+
+LXValue px_cell(LXValue val) {
+    LXValue l = px_list(1);
+    px_list_push(l, val);
+    return l;
+}
+
+LXValue px_cell_get(LXValue cell) {
+    return px_index(cell, px_int(0));
+}
+
+void px_cell_set(LXValue cell, LXValue val) {
+    px_index_set(cell, px_int(0), val);
+}
+
+LXValue px_env_lookup(void* ctx, const char* name) {
+    if (!ctx) return px_null();
+    return px_dict_get(*(LXValue*)ctx, name);
 }
 
 LXValue px_native(const char* name, LXFuncPtr fn) {
@@ -2574,6 +2679,16 @@ int px_exit_code_final(int code) {
 }
 
 void px_error(const char* fmt, ...) {
+    // M129（缺陷 38）：json_parse_opt 的局部捕获点在最优先位置 —— 期间任何 px_error
+    //   都变成 Err(msg) 返回给调用方，既不打印也不退出（等价 Go 的 error 返回）。
+    //   ⚠️ 必须放在 fflush/日志**之前**，否则畸形 JSON 仍会污染服务端 stderr。
+    if (g_json_opt_active) {
+        va_list cap;
+        va_start(cap, fmt);
+        vsnprintf(g_json_opt_msg, sizeof(g_json_opt_msg), fmt, cap);
+        va_end(cap);
+        longjmp(g_json_opt_jb, 1);
+    }
     // 先刷新 stdout 缓冲：print 输出在管道/重定向下是全缓冲，exit 前不刷会丢
     fflush(stdout);
     va_list ap;
@@ -4104,6 +4219,15 @@ static LXValue bi_type(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_str(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) px_error("R1002: str 需要一个参数");
+    // M136（qg-issue 87 缺陷 92）：**入参已是字符串 ⇒ 原样返回**。
+    //   此前一律走 px_fmt_value（返回 char*）→ px_str() ⇒ 在**首个 0x00 处静默截断**：
+    //   PX_STR 自身是长度感知的（能承载内嵌 NUL），只有 `str()` 这一跳把它按 C 串重造。
+    //   实证（examples/m135_multi_header 同批的最小复现）：
+    //     bytes("AB\0CD\0EF") → bytes_to_str ⇒ 8 字节 ✓；再 str() ⇒ **2 字节** ✗
+    //   影响面：一切"二进制体经 str() 中转"的路径 —— 媒体代理透传 25 字节音频响应
+    //   时被截成 3 字节（第 16 轮对拍门当场判红）。
+    //   注：PX_BYTES 保持既有显示形式（`<bytes N>`）不变，避免改动 str(bytes) 的既有语义。
+    if (args[0].type == PX_STR) return args[0];
     // M-B5：统一用 px_fmt_value——str() 支持全部类型（list/dict/enum/struct/result 等），
     // 对齐 Rust 内置 str()（fmt_value 渲染）
     char* s = px_fmt_value(args[0]);
@@ -4200,6 +4324,63 @@ static LXValue bi_to_lower(LXValue* args, int nargs, void* ctx) {
     }
     d[len] = 0;
     return px_str(d);
+}
+
+// ==================== M133：码点 ↔ 字符（ord / chr） ====================
+// 背景（token-cache PuXian 化第 12 轮）：native 表里**没有 ord/chr**（qg-issue 87 缺陷 29），
+//   而 Go 侧到处是 `s[i]` 逐字节/逐码点比较（`hex.DecodeString` 的 `U+007A 'z'` 错误文案、
+//   控制字符扫描、UTF-8 手写解码）。项目里的旧做法是**手写 UTF-8 解码**（api-server 移植即如此）
+//   —— 每处都可能写错边界（过长编码/代理区/孤立续字节），且与 Go 的 utf8.DecodeRune 语义
+//   悄悄分叉。补成原语后这种手写可以彻底消失。
+// 语义：
+//   ord(s) → int：返回 s **第一个字符**（码点）的 Unicode 码点；s 为空 → 0。
+//                 非法 UTF-8 序列按 Go `utf8.DecodeRune` 的 RuneError(0xFFFD) 处理。
+//   chr(n) → str：码点 → UTF-8 字符串（Go `string(rune(n))`）；非法码点（<0、代理区、
+//                 >0x10FFFF）→ "\uFFFD"（三者都对齐 Go 的行为）。
+static LXValue bi_ord(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: ord 需要一个字符串参数");
+    const char* p = px_val_cstr(args[0]);
+    if (!p || !*p) return px_int(0);
+    const unsigned char* s = (const unsigned char*)p;
+    unsigned cp = 0;
+    int need = 0;
+    if (s[0] < 0x80)      { return px_int(s[0]); }
+    else if (s[0] >= 0xC2 && s[0] <= 0xDF) { cp = s[0] & 0x1F; need = 1; }
+    else if (s[0] >= 0xE0 && s[0] <= 0xEF) { cp = s[0] & 0x0F; need = 2; }
+    else if (s[0] >= 0xF0 && s[0] <= 0xF4) { cp = s[0] & 0x07; need = 3; }
+    else return px_int(0xFFFD);
+    for (int i = 1; i <= need; i++) {
+        if (s[i] == 0) return px_int(0xFFFD);          // 截断
+        if ((s[i] & 0xC0) != 0x80) return px_int(0xFFFD);
+        cp = (cp << 6) | (s[i] & 0x3F);
+    }
+    if ((need == 2 && cp < 0x800) || (need == 3 && cp < 0x10000) ||
+        (cp >= 0xD800 && cp <= 0xDFFF) || cp > 0x10FFFF)
+        return px_int(0xFFFD);
+    return px_int((int64_t)cp);
+}
+
+static LXValue bi_chr(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: chr 需要 (码点) 参数");
+    int64_t cp = int_val(args[0]);
+    char buf[8];
+    int n = 0;
+    if (cp < 0 || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
+        buf[0] = (char)0xEF; buf[1] = (char)0xBF; buf[2] = (char)0xBD; n = 3;  // U+FFFD
+    } else if (cp < 0x80) {
+        buf[0] = (char)cp; n = 1;
+    } else if (cp < 0x800) {
+        buf[0] = (char)(0xC0 | (cp >> 6)); buf[1] = (char)(0x80 | (cp & 0x3F)); n = 2;
+    } else if (cp < 0x10000) {
+        buf[0] = (char)(0xE0 | (cp >> 12)); buf[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        buf[2] = (char)(0x80 | (cp & 0x3F)); n = 3;
+    } else {
+        buf[0] = (char)(0xF0 | (cp >> 18)); buf[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+        buf[2] = (char)(0x80 | ((cp >> 6) & 0x3F)); buf[3] = (char)(0x80 | (cp & 0x3F)); n = 4;
+    }
+    return px_str_len(buf, n);
 }
 
 static LXValue bi_trim(LXValue* args, int nargs, void* ctx) {
@@ -4649,17 +4830,13 @@ static LXValue bi_reversed(LXValue* args, int nargs, void* ctx) {
 
 // ---- std.io / std.fs ----
 
-static LXValue bi_read_file(LXValue* args, int nargs, void* ctx) {
-    (void)ctx;
-    if (nargs != 1 || args[0].type != PX_STR) px_error("R1002: read_file 需要一个路径参数");
-    const char* path = args[0].as.obj->as.str.data;
-    FILE* f = fopen(path, "rb");
-    if (!f) px_error("io: 读取文件失败 %s", path);
-    // M117（qg-issue 72 F1）：st_size==0 的**伪文件**（/proc、/sys）此前读出**空串** ——
-    //   fseek/ftell 给 0 ⇒ 一个字节都不读（Go os.ReadFile 走 read-until-EOF 不受 st_size 影响）。
-    //   实测：read_file("/proc/sys/kernel/hostname") = ""（宿主机名 dongyue 读不到），
-    //   而 /proc 下的一切（uptime/meminfo/hostname…）全中。
-    //   修法：能 seek 且 size>0 走原快路径；否则（size==0 / 不可 seek）**逐块读到 EOF**。
+// M129（qg-issue 87 缺陷 19）：把「读尽整个文件」抽成公共实现 ——
+//   Go 的 `data, err := os.ReadFile(p)` 有**两条**出路（值 / err），而 PuXian 的
+//   `read_file` 只有一条（失败即 R2001 **杀进程**）。api-server 里 `err != nil` 分支有 31 处，
+//   移植时只能退化为 `exists(p)` 预检 —— 但有三个真实差异：① 预检与读之间是竞态；
+//   ② 目录 / 权限不足（EACCES/EISDIR）时 exists 为真却照样 panic；③ 无法区分错误种类。
+//   故新增 `read_file_opt(path)` → Ok(str) | Err(msg)（语义 = Go ReadFile 的 err 通道）。
+static char* px_read_all(FILE* f, int* out_len) {
     long sz = -1;
     if (fseek(f, 0, SEEK_END) == 0) {
         sz = ftell(f);
@@ -4670,9 +4847,9 @@ static LXValue bi_read_file(LXValue* args, int nargs, void* ctx) {
         size_t rd = fread(buf, 1, (size_t)sz, f);
         buf[rd] = 0;
         fclose(f);
-        return px_str_len(buf, (int)rd);
+        *out_len = (int)rd;
+        return buf;
     }
-    // 慢路径：清错误标志并回到起点（能 seek 已 seek 过 SEEK_END ⇒ 必须重置）
     clearerr(f);
     if (sz >= 0) fseek(f, 0, SEEK_SET);
     size_t cap = 4096, len = 0;
@@ -4685,7 +4862,52 @@ static LXValue bi_read_file(LXValue* args, int nargs, void* ctx) {
     }
     buf[len] = 0;
     fclose(f);
-    return px_str_len(buf, (int)len);
+    *out_len = (int)len;
+    return buf;
+}
+
+static LXValue bi_read_file(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_STR) px_error("R1002: read_file 需要一个路径参数");
+    const char* path = args[0].as.obj->as.str.data;
+    FILE* f = fopen(path, "rb");
+    if (!f) px_error("io: 读取文件失败 %s", path);
+    // M117（qg-issue 72 F1）：st_size==0 的**伪文件**（/proc、/sys）此前读出**空串** ——
+    //   fseek/ftell 给 0 ⇒ 一个字节都不读（Go os.ReadFile 走 read-until-EOF 不受 st_size 影响）。
+    //   实测：read_file("/proc/sys/kernel/hostname") = ""（宿主机名 dongyue 读不到），
+    //   而 /proc 下的一切（uptime/meminfo/hostname…）全中。
+    //   修法：能 seek 且 size>0 走原快路径；否则（size==0 / 不可 seek）**逐块读到 EOF**。
+    int n = 0;
+    char* buf = px_read_all(f, &n);
+    LXValue v = px_str_len(buf, n);
+    xfree(buf);
+    return v;
+}
+
+// read_file_opt(path) → Ok(str) | Err(msg)（对齐 Go `os.ReadFile` 的 err 通道）
+static LXValue bi_read_file_opt(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_STR) px_error("R1002: read_file_opt 需要一个路径参数");
+    const char* path = args[0].as.obj->as.str.data;
+    // 目录：fopen("rb") 在 Linux 上**会成功**，读时才 EISDIR ⇒ 必须显式判目录，
+    //   否则 Ok("") 与 Go 的 `os.ReadFile`（返回 "is a directory" 错误）静默分叉。
+    struct stat st;
+    if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
+        char msg[512];
+        snprintf(msg, sizeof(msg), "io: 读取文件失败 %s: Is a directory (os error %d)", path, EISDIR);
+        return px_err(px_str(msg));
+    }
+    FILE* f = fopen(path, "rb");
+    if (!f) {
+        char msg[512];
+        snprintf(msg, sizeof(msg), "io: 读取文件失败 %s: %s (os error %d)", path, strerror(errno), errno);
+        return px_err(px_str(msg));
+    }
+    int n = 0;
+    char* buf = px_read_all(f, &n);
+    LXValue v = px_str_len(buf, n);
+    xfree(buf);
+    return px_ok(v);
 }
 
 static LXValue bi_write_file(LXValue* args, int nargs, void* ctx) {
@@ -4715,6 +4937,56 @@ static LXValue bi_write_file(LXValue* args, int nargs, void* ctx) {
     }
     close(fd);
     return px_null();
+}
+
+// M129-3（qg-issue 87 缺陷 25）：write_file_opt —— write_file 的 Result 版
+// 背景：`write_file` 失败即 px_error 杀进程（与 read_file 同病，缺陷 19），
+//   Go 侧 `os.WriteFile` 走的是 `err` 通道（`if err != nil { jsonError(...) }`）。
+//   移植 api-server config.go 的 PUT 落盘当场踩到：写失败要回 `{"ok":false,
+//   "error":"写入失败"}`，而不是把进程打死。
+// 语义：write_file_opt(path, content[, mode]) → Ok(null) | Err(msg)
+static LXValue bi_write_file_opt(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 2 || nargs > 3 || args[0].type != PX_STR) px_error("R1002: write_file_opt 需要 (路径, 内容[, mode])");
+    const char* path = args[0].as.obj->as.str.data;
+    const char* content;
+    int clen;
+    if (args[1].type == PX_STR) { content = args[1].as.obj->as.str.data; clen = args[1].as.obj->as.str.len; }
+    else { content = px_to_string(args[1]); clen = (int)strlen(content); }
+    mode_t mode = 0666;
+    int has_mode = 0;
+    if (nargs == 3) {
+        if (args[2].type != PX_INT) px_error("R1002: write_file_opt 的 mode 需要 int（八进制权限，如 0o600）");
+        mode = (mode_t)args[2].as.i;
+        has_mode = 1;
+    }
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, mode);
+    if (fd < 0) {
+        char msg[512];
+        snprintf(msg, sizeof(msg), "io: 写入文件失败 %s: %s (os error %d)", path, strerror(errno), errno);
+        return px_err(px_str(msg));
+    }
+    // 注意：**不** fchmod —— Go `os.WriteFile` 的 perm 只在**创建**时生效（且受 umask
+    //   掩码），对已存在的文件不改权限。这里必须同语义，否则「已存在的 0644 文件」
+    //   会被本函数改成 0600，与 Go 写盘的权限副作用分叉（api-server 的
+    //   SECURITY.MD 就是这种既有文件，对拍当场照出来了）。
+    (void)has_mode;
+    const char* p = content;
+    int left = clen;
+    while (left > 0) {
+        ssize_t n = write(fd, p, (size_t)left);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            int e = errno;
+            close(fd);
+            char msg[512];
+            snprintf(msg, sizeof(msg), "io: 写入文件失败 %s: %s (os error %d)", path, strerror(e), e);
+            return px_err(px_str(msg));
+        }
+        p += n; left -= (int)n;
+    }
+    close(fd);
+    return px_ok(px_null());
 }
 
 static LXValue bi_append_file(LXValue* args, int nargs, void* ctx) {
@@ -4823,6 +5095,12 @@ static LXValue bi_truncate_file(LXValue* args, int nargs, void* ctx) {
 // 取任意值的字符串表示（与解释器 to_string 一致：str 原样，其余 str(v)）
 static const char* val_cstr(LXValue v) {
     if (v.type == PX_STR) return v.as.obj->as.str.data;
+    // M129（Issue 87 缺陷 35）：null 必须字符串化为 "null"，与 `str(null)` 一致。
+    //   原先落到 fmt_num()：null 的 as.f 恰为 0.0 ⇒ 得到 **"0.0"** —— 于是
+    //   `sha256(null)` = sha256("0.0")、`base64_encode(null)` = base64("0.0")，
+    //   **静默给出错误结果**（不是崩溃，最难查）。`str()` 走的是另一条路，故此前
+    //   二者行为不一致（str(null)=="null" 而 sha256(null) 按 "0.0" 算）。
+    if (v.type == PX_NULL) return "null";
     static char tmp[64];
     snprintf(tmp, sizeof(tmp), "%s", fmt_num(v));
     return tmp;
@@ -4852,8 +5130,22 @@ const char* px_val_cstr(LXValue v) { return val_cstr(v); }
 //   request 为 32 位码（_IOC 编码，最高 2 位方向位可 >2^31；语言里用 0x 字面量/十进制均可）
 static LXValue bi_open(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || nargs > 2) px_error("R1002: open 需要 (path[, mode]) 参数");
+    // M130：新增「原始 flags」形态 open(path, flags_int[, mode_int]) —— Go `os.OpenFile`
+    //   的等价物（qg-issue 87 缺陷 58）。此前第二参只认 mode 字符串（r/w/a/rw/w+），
+    //   而 w+ = O_RDWR|O_CREAT|**O_TRUNC**、rw = O_RDWR 无 O_CREAT ⇒ 两种都表达不了
+    //   「有则开、无则建、**不截断**」（PID/锁文件/追加式 fd 的常态），也表达不了 O_EXCL。
+    //   字符串形态**逐字节零变化**（下方原分支不动），仅当第二参是 int 时走原始 flags。
+    if (nargs < 1 || nargs > 3) px_error("R1002: open 需要 (path[, mode]) 或 (path, flags[, perm]) 参数");
     const char* path = val_cstr(args[0]);
+    if (nargs >= 2 && args[1].type == PX_INT) {
+        int rflags = (int)args[1].as.i;
+        int perm = 0644;
+        if (nargs >= 3) perm = (int)int_val(args[2]);
+        int rfd = open(path, rflags, (mode_t)perm);
+        if (rfd < 0) return px_int(-1);   // os_errno() 查询具体原因
+        return px_int((int64_t)rfd);
+    }
+    if (nargs == 3) px_error("R1002: open 的第三参仅在第二参为 int flags 时可用");
     const char* mode = (nargs >= 2) ? val_cstr(args[1]) : "r";
     int flags;
     if (!strcmp(mode, "r") || !strcmp(mode, "rb")) flags = O_RDONLY;
@@ -5121,6 +5413,245 @@ static LXValue bi_fcntl(LXValue* args, int nargs, void* ctx) {
     return px_int((int64_t)rc);
 }
 
+// ==================== M130：文件锁 / 权限（flock/chmod，qg-issue 87 缺陷 56/57） ====================
+// 背景（token-cache PuXian 化）：Go 侧防多实例用 `syscall.Flock(fd, LOCK_EX|LOCK_NB)`
+//   （lock/lock.go），本移植发现 native 表**没有任何锁原语**：
+//     · `fcntl(fd, cmd, arg)` 的 arg 只收 int/bool ⇒ 传不了 `struct flock*`，
+//       POSIX 记录锁（F_SETLK）**表达不了**；
+//     · 而 flock(2) 的语义（进程退出/关闭任意 fd 即释放、无 stale 锁文件）正是
+//       PID 锁想要的 —— 用 O_EXCL 建文件替代会留死锁文件（崩溃后必须人工清理）。
+//   ⇒ 缺的是语言原语，不是项目特例，故补在 runtime（不绕过）。
+// 语义（延续 M57 设备失败语义：失败返回 -1/false + os_errno()，不杀进程）：
+//   flock(fd, op) → int：op 取 LOCK_SH=1 / LOCK_EX=2 / LOCK_NB=4 / LOCK_UN=8
+//                        （与 Linux <sys/file.h> 数值一致，可直接按位或，如 2|4=6）。
+//                        成功 0，失败 -1；被占用（含 LOCK_NB）时 errno=EWOULDBLOCK(11)。
+//   chmod(path, mode) → bool：Go `os.Chmod` 的等价物（socket 0666 / 私钥 0600 等）。
+//                        八进制写法 `0o600` 与十进制 `384` 等价（mode 按整数值传递）。
+static LXValue bi_flock(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) px_error("R1002: flock 需要 (fd, op) 参数");
+    if (args[0].type != PX_INT) px_error("R1002: flock 的 fd 需要 int");
+    int fd = (int)args[0].as.i;
+    int op = 0;
+    if (args[1].type == PX_INT) op = (int)args[1].as.i;
+    else if (args[1].type == PX_BOOL) op = args[1].as.b ? 1 : 0;
+    else px_error("R1002: flock 的 op 需要 int/bool，实际 %s", px_type_name(args[1]));
+    int rc;
+    do { rc = flock(fd, op); } while (rc < 0 && errno == EINTR);
+    if (rc < 0) return px_int(-1);   // os_errno() 查询具体原因
+    return px_int(0);
+}
+
+static LXValue bi_chmod(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) px_error("R1002: chmod 需要 (path, mode) 参数");
+    if (args[0].type != PX_STR) px_error("R1002: chmod 的 path 需要 string");
+    int mode = (int)int_val(args[1]);
+    if (chmod(args[0].as.obj->as.str.data, (mode_t)mode) != 0) return px_bool(0);
+    return px_bool(1);
+}
+
+// ==================== M133：文件元信息 + errno 文案（file_stat / os_strerror） ====================
+// 背景（token-cache PuXian 化第 12 轮）：/health 之前的 LLM 配置源需要 Go 的
+// `os.Stat(path).ModTime()` 语义（规则快照的「过期 / 源比快照新」判定、
+// 按 mtime 记忆的重载去重），而 native 表里**只有 `file_size` 和 `is_dir`**：
+//   · `file_size` 失败时 **px_error**（杀进程）⇒ 表达不出 Go 的
+//     `st, err := os.Stat(p); if err != nil { ... }` 这个"先看存在性再看年龄"的常态写法；
+//   · mtime **完全没有**（`is_dir`/`file_size` 都不带）。
+//   ⇒ 缺的是语言原语，补在 runtime（不绕过）：
+//     `file_stat(path)` → dict | null（**失败返回 null，不杀进程**）
+//         { size, mtime, mtime_ns, is_dir, mode }
+//         · size     = 字节数（int）
+//         · mtime    = 秒（int，Unix epoch；Go ModTime().Unix()）
+//         · mtime_ns = 纳秒（int，Unix epoch；Go ModTime().UnixNano()，用于 mtime 相等/先后判定）
+//         · is_dir   = bool（Go FileInfo.IsDir()）
+//         · mode     = 权限位（int，Go FileInfo.Mode().Perm() 的十进制值）
+//     语义对齐 Go os.Stat：**跟随符号链接**（stat(2) 而非 lstat(2)）。
+// 另：`go_errno_string(n)` → str（**Go** 的 `syscall.Errno.Error()` 文案，见下）。Go 的
+//     `*PathError.Error()` 文案是 `"stat <path>: no such file or directory"` —— 移植时若把
+//     errno 文案**手抄成表**（api-server 移植早期即如此），表外的 errno 会静默退化成
+//     "errno 63" 之类；而直接调 libc `strerror` 又会因**大小写/实现差异**分叉
+//     （glibc "No such file or directory" ≠ Go "no such file or directory"）。
+static LXValue bi_file_stat(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_STR) px_error("R1002: file_stat 需要一个路径参数");
+    struct stat st;
+    if (stat(args[0].as.obj->as.str.data, &st) != 0) return px_null();
+    LXValue d = px_dict();
+    px_root_push();
+    PX_KEEP(d);   // 结果 dict 跨 px_dict_set/px_str_len 内部分配
+    px_dict_set(d, "size", px_int((int64_t)st.st_size));
+    px_dict_set(d, "mtime", px_int((int64_t)st.st_mtime));
+    px_dict_set(d, "mtime_ns", px_int((int64_t)st.st_mtim.tv_sec * 1000000000LL + (int64_t)st.st_mtim.tv_nsec));
+    px_dict_set(d, "is_dir", px_bool(S_ISDIR(st.st_mode)));
+    px_dict_set(d, "mode", px_int((int64_t)(st.st_mode & 07777)));
+    px_root_pop();
+    return d;
+}
+
+// Go syscall.Errno 文案表（Linux amd64）：由 tools/gen_go_errno_table.go 从 Go 自身导出
+// 索引 = errno 值；空串 = Go 该值无文案 ⇒ 回落 "errno <N>"（与 Go Errno.Error() 一致）
+static const char* const GO_ERRNO_STR[] = {
+    /*   0 */ "",
+    /*   1 */ "operation not permitted",
+    /*   2 */ "no such file or directory",
+    /*   3 */ "no such process",
+    /*   4 */ "interrupted system call",
+    /*   5 */ "input/output error",
+    /*   6 */ "no such device or address",
+    /*   7 */ "argument list too long",
+    /*   8 */ "exec format error",
+    /*   9 */ "bad file descriptor",
+    /*  10 */ "no child processes",
+    /*  11 */ "resource temporarily unavailable",
+    /*  12 */ "cannot allocate memory",
+    /*  13 */ "permission denied",
+    /*  14 */ "bad address",
+    /*  15 */ "block device required",
+    /*  16 */ "device or resource busy",
+    /*  17 */ "file exists",
+    /*  18 */ "invalid cross-device link",
+    /*  19 */ "no such device",
+    /*  20 */ "not a directory",
+    /*  21 */ "is a directory",
+    /*  22 */ "invalid argument",
+    /*  23 */ "too many open files in system",
+    /*  24 */ "too many open files",
+    /*  25 */ "inappropriate ioctl for device",
+    /*  26 */ "text file busy",
+    /*  27 */ "file too large",
+    /*  28 */ "no space left on device",
+    /*  29 */ "illegal seek",
+    /*  30 */ "read-only file system",
+    /*  31 */ "too many links",
+    /*  32 */ "broken pipe",
+    /*  33 */ "numerical argument out of domain",
+    /*  34 */ "numerical result out of range",
+    /*  35 */ "resource deadlock avoided",
+    /*  36 */ "file name too long",
+    /*  37 */ "no locks available",
+    /*  38 */ "function not implemented",
+    /*  39 */ "directory not empty",
+    /*  40 */ "too many levels of symbolic links",
+    /*  41 */ "",
+    /*  42 */ "no message of desired type",
+    /*  43 */ "identifier removed",
+    /*  44 */ "channel number out of range",
+    /*  45 */ "level 2 not synchronized",
+    /*  46 */ "level 3 halted",
+    /*  47 */ "level 3 reset",
+    /*  48 */ "link number out of range",
+    /*  49 */ "protocol driver not attached",
+    /*  50 */ "no CSI structure available",
+    /*  51 */ "level 2 halted",
+    /*  52 */ "invalid exchange",
+    /*  53 */ "invalid request descriptor",
+    /*  54 */ "exchange full",
+    /*  55 */ "no anode",
+    /*  56 */ "invalid request code",
+    /*  57 */ "invalid slot",
+    /*  58 */ "",
+    /*  59 */ "bad font file format",
+    /*  60 */ "device not a stream",
+    /*  61 */ "no data available",
+    /*  62 */ "timer expired",
+    /*  63 */ "out of streams resources",
+    /*  64 */ "machine is not on the network",
+    /*  65 */ "package not installed",
+    /*  66 */ "object is remote",
+    /*  67 */ "link has been severed",
+    /*  68 */ "advertise error",
+    /*  69 */ "srmount error",
+    /*  70 */ "communication error on send",
+    /*  71 */ "protocol error",
+    /*  72 */ "multihop attempted",
+    /*  73 */ "RFS specific error",
+    /*  74 */ "bad message",
+    /*  75 */ "value too large for defined data type",
+    /*  76 */ "name not unique on network",
+    /*  77 */ "file descriptor in bad state",
+    /*  78 */ "remote address changed",
+    /*  79 */ "can not access a needed shared library",
+    /*  80 */ "accessing a corrupted shared library",
+    /*  81 */ ".lib section in a.out corrupted",
+    /*  82 */ "attempting to link in too many shared libraries",
+    /*  83 */ "cannot exec a shared library directly",
+    /*  84 */ "invalid or incomplete multibyte or wide character",
+    /*  85 */ "interrupted system call should be restarted",
+    /*  86 */ "streams pipe error",
+    /*  87 */ "too many users",
+    /*  88 */ "socket operation on non-socket",
+    /*  89 */ "destination address required",
+    /*  90 */ "message too long",
+    /*  91 */ "protocol wrong type for socket",
+    /*  92 */ "protocol not available",
+    /*  93 */ "protocol not supported",
+    /*  94 */ "socket type not supported",
+    /*  95 */ "operation not supported",
+    /*  96 */ "protocol family not supported",
+    /*  97 */ "address family not supported by protocol",
+    /*  98 */ "address already in use",
+    /*  99 */ "cannot assign requested address",
+    /* 100 */ "network is down",
+    /* 101 */ "network is unreachable",
+    /* 102 */ "network dropped connection on reset",
+    /* 103 */ "software caused connection abort",
+    /* 104 */ "connection reset by peer",
+    /* 105 */ "no buffer space available",
+    /* 106 */ "transport endpoint is already connected",
+    /* 107 */ "transport endpoint is not connected",
+    /* 108 */ "cannot send after transport endpoint shutdown",
+    /* 109 */ "too many references: cannot splice",
+    /* 110 */ "connection timed out",
+    /* 111 */ "connection refused",
+    /* 112 */ "host is down",
+    /* 113 */ "no route to host",
+    /* 114 */ "operation already in progress",
+    /* 115 */ "operation now in progress",
+    /* 116 */ "stale file handle",
+    /* 117 */ "structure needs cleaning",
+    /* 118 */ "not a XENIX named type file",
+    /* 119 */ "no XENIX semaphores available",
+    /* 120 */ "is a named type file",
+    /* 121 */ "remote I/O error",
+    /* 122 */ "disk quota exceeded",
+    /* 123 */ "no medium found",
+    /* 124 */ "wrong medium type",
+    /* 125 */ "operation canceled",
+    /* 126 */ "required key not available",
+    /* 127 */ "key has expired",
+    /* 128 */ "key has been revoked",
+    /* 129 */ "key was rejected by service",
+    /* 130 */ "owner died",
+    /* 131 */ "state not recoverable",
+    /* 132 */ "operation not possible due to RF-kill",
+    /* 133 */ "",
+    /* 134 */ "",
+    /* 135 */ "",
+    /* 136 */ "",
+    /* 137 */ "",
+    /* 138 */ "",
+    /* 139 */ "",
+    /* 140 */ "",
+};
+static const int GO_ERRNO_STR_N = (int)(sizeof(GO_ERRNO_STR) / sizeof(GO_ERRNO_STR[0]));
+
+// go_errno_string(errno) → str：返回 **Go** `syscall.Errno.Error()` 的文案。
+//   为什么不用 libc 的 strerror：① 大小写不同（glibc 给 "No such file or directory"，
+//   Go 给 "no such file or directory"）——移植 Go 的 `*PathError.Error()` 文案时**必然分叉**；
+//   ② 跨 libc 不确定（glibc/musl 文案不同）⇒ 对拍门会随运行环境漂移。
+//   表由 `tools/gen_go_errno_table.go` 从 Go 自身导出（单一事实源，非手抄）；
+//   表外/空文案 → `"errno <N>"`（与 Go 的兜底分支逐字一致）。
+static LXValue bi_go_errno_string(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: go_errno_string 需要 (errno) 参数");
+    int n = (int)int_val(args[0]);
+    if (n >= 0 && n < GO_ERRNO_STR_N && GO_ERRNO_STR[n][0] != '\0') return px_str(GO_ERRNO_STR[n]);
+    char buf[32];
+    snprintf(buf, sizeof(buf), "errno %d", n);
+    return px_str(buf);
+}
+
 // ==================== M60-S2：设备组 tty_config / fd_wait ====================
 // 设计（docs/M60_PLAN.md §三.2）：服务边缘设备 GAP #3（串口 UART 无 termios：设不了
 // 波特率/raw 模式）与 #2（GPIO 边沿中断/多 fd 等待无 fd 多路复用）。内部 poll 已有
@@ -5345,6 +5876,14 @@ static LXValue bi_bytes_to_hex(LXValue* args, int nargs, void* ctx) {
 }
 
 // hex_to_bytes(hex) → bytes 或 null（hex → 原始字节；非法/奇数长度 → null）
+// M129（Issue 87 缺陷 34）：**空串必须返回零长度 bytes，而不是 null** ——
+//   Go 的 `hex.DecodeString("")` 返回空切片（无错误），因此 `hex_to_bytes("")` 的
+//   null 会让 `bytes_len`/`bytes_concat` 直接 R1002 杀进程；更糟的是把 null 一路
+//   传给 `sha256`/`base64_encode` 会**静默**算出错误摘要（见缺陷 35）。
+//   合法性与"非法 hex"必须分开：空串合法，奇数长度/非 hex 字符才是 null。
+//   ⚠️ 已知与 Go 的**宽容差异**（缺陷 36，暂留以保兼容）：本实现会**剥掉空白字符**
+//   后再解码，Go `hex.DecodeString` 则对空白报错。移植代码若依赖"含空格即失败"的
+//   行为需自行校验（本仓库的所有调用点都先 trim，不受影响）。
 static LXValue bi_hex_to_bytes(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) px_error("R1002: hex_to_bytes 需要一个参数");
@@ -5356,7 +5895,8 @@ static LXValue bi_hex_to_bytes(LXValue* args, int nargs, void* ctx) {
         if (s[i] != ' ' && s[i] != '\t' && s[i] != '\n' && s[i] != '\r') clean[m++] = s[i];
     }
     clean[m] = 0;
-    if (m % 2 != 0 || m == 0) { xfree(clean); return px_null(); }
+    if (m % 2 != 0) { xfree(clean); return px_null(); }
+    if (m == 0) { xfree(clean); return px_bytes_len(NULL, 0); }
     size_t olen = m / 2;
     char* out = xmalloc(olen + 1);
     for (size_t i = 0; i < m; i += 2) {
@@ -6663,6 +7203,24 @@ static LXValue bi_regex_find(LXValue* args, int nargs, void* ctx) {
     return px_null();
 }
 
+// regex_valid(pattern) → bool（M133：**只编译不匹配**，失败返回 false 而**不杀进程**）
+//   背景（token-cache PuXian 化第 12 轮 · qg-issue 87 缺陷 75）：Go 侧
+//   `regexp.Compile(p)` 的常态用法是「探测合法性」——`if _, err := regexp.Compile(p); err != nil {...}`
+//   （token-cache 的本地快判：secret_patterns **任一**编译失败即整体禁用快判）。
+//   而 native 表里的 regex_* 一律 `px_error("regex: %s", err)` ⇒ **一个坏正则直接杀掉服务进程**，
+//   "探测合法性"这个语义根本表达不出来（只能 try 别的办法猜，或干脆不检查）。
+static LXValue bi_regex_valid(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: regex_valid 需要 (pattern) 参数");
+    const char* pat = px_val_cstr(args[0]);
+    char err[160];
+    err[0] = 0;
+    RNode* root = rcompile(pat, err, sizeof(err));
+    if (!root) return px_bool(false);
+    rp_free(root);
+    return px_bool(true);
+}
+
 static LXValue bi_regex_match(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 2) px_error("R1002: regex_match 需要 2 个参数: (pattern, text)");
@@ -6785,6 +7343,17 @@ static LXValue bi_exists(LXValue* args, int nargs, void* ctx) {
     return px_bool(stat(args[0].as.obj->as.str.data, &st) == 0);
 }
 
+// is_dir(path) → bool（M129 / qg-issue 87 缺陷 44）：路径存在**且**是目录。
+//   对齐 Go `fi, err := os.Stat(p); err == nil && fi.IsDir()`。
+//   不存在 / 非目录 / stat 失败 → false（不报错，与 Go 的 err 分支一致）。
+static LXValue bi_is_dir(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_STR) px_error("R1002: is_dir 需要一个路径参数");
+    struct stat st;
+    if (stat(args[0].as.obj->as.str.data, &st) != 0) return px_bool(false);
+    return px_bool(S_ISDIR(st.st_mode) ? true : false);
+}
+
 static LXValue bi_list_dir(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1 || args[0].type != PX_STR) px_error("R1002: list_dir 需要一个路径参数");
@@ -6861,7 +7430,12 @@ typedef struct {
 static void json_ws(JsonCtx* j) {
     while (*j->p == ' ' || *j->p == '\t' || *j->p == '\n' || *j->p == '\r') j->p++;
 }
-static char* json_str_raw(JsonCtx* j) {
+// M136（qg-issue 87 缺陷 94）：**字符串值必须长度感知** ——
+//   `\u0000` 解码出来是真正的 0x00，此前调用方用 `px_str(s)` 重造 ⇒
+//   在首个 NUL 处**静默截断**（`{"s":"a\u0000b"}` 变成 `"a"`，而 Go 原样保留）。
+//   对拍实证（第 16 轮媒体代理 rep-nul 用例）：上游收到 `"s":"a"` vs Go `"a\u0000b\u001fc"`。
+//   out_len 为 NULL 时退化为旧行为（仅键路径仍如此 —— dict 键是 C 串，NUL 键无法表示，见 README §五）。
+static char* json_str_raw(JsonCtx* j, int* out_len) {
     // 前置：已消费 '"'；返回 malloc 字符串（已解码）
     char* out = xmalloc(strlen(j->p) + 1);
     int k = 0;
@@ -6902,6 +7476,7 @@ static char* json_str_raw(JsonCtx* j) {
     }
     if (*j->p == '"') j->p++;
     out[k] = 0;
+    if (out_len) *out_len = k;
     return out;
 }
 
@@ -6920,7 +7495,7 @@ static LXValue json_parse_value(JsonCtx* j) {
             json_ws(j);
             if (*j->p != '"') px_error("json: 期望对象键");
             j->p++;
-            char* key = json_str_raw(j);
+            char* key = json_str_raw(j, NULL);   // 键仍是 C 串（NUL 键不可表示，已登记）
             json_ws(j);
             if (*j->p != ':') px_error("json: 期望 ':'");
             j->p++;
@@ -6955,8 +7530,9 @@ static LXValue json_parse_value(JsonCtx* j) {
     }
     if (*j->p == '"') {
         j->p++;
-        char* s = json_str_raw(j);
-        LXValue r = px_str(s);
+        int slen = 0;
+        char* s = json_str_raw(j, &slen);
+        LXValue r = px_str_len(s, slen);   // 长度感知（可含 NUL）
         xfree(s);
         return r;
     }
@@ -6965,8 +7541,20 @@ static LXValue json_parse_value(JsonCtx* j) {
     if (strncmp(j->p, "null", 4) == 0) { j->p += 4; return px_null(); }
     // 数字
     char* end;
+    // M136（qg-issue 87 缺陷 93）：**整数溢出必须回落浮点，而不是夹到 INT64_MAX**。
+    //   此前 `strtoll` 溢出返回 LLONG_MAX 且 end 已越过全部数字 ⇒ 判定"整数解析成功"
+    //   ⇒ 静默把值改成 9223372036854775807。
+    //   实证（第 16 轮媒体代理对拍）：`{"b":12345678901234567890}` 经本实现重编码为
+    //   `{"b":9223372036854775807}`，而 Go（`json.Unmarshal` 到 `interface{}` =
+    //   float64 中转）给出 `{"b":12345678901234567000}` —— 上游收到的**请求体**不同。
+    //   修法：`errno==ERANGE` 时按浮点走（与 Go 的 interface{} 语义一致）。
+    //   ⚠️ errno 存取要成对（本函数会被嵌在别的 IO 路径里调用）。
+    int saved_errno = errno;
+    errno = 0;
     long long iv = strtoll(j->p, &end, 10);
-    if (end != j->p && (*end == 0 || *end == ',' || *end == '}' || *end == ']' || *end == ' ' || *end == '\t' || *end == '\n' || *end == '\r')) {
+    int int_ovf = (errno == ERANGE);
+    errno = saved_errno;
+    if (!int_ovf && end != j->p && (*end == 0 || *end == ',' || *end == '}' || *end == ']' || *end == ' ' || *end == '\t' || *end == '\n' || *end == '\r')) {
         j->p = end;
         return px_int(iv);
     }
@@ -7079,6 +7667,23 @@ static void json_stringify_value(JOut* o, LXValue v) {
         default: px_error("json: 无法序列化类型 %s", px_type_name(v));
     }
 }
+// json_parse_opt(s) → Ok(值) | Err(文案)（对齐 Go `json.Unmarshal` 的 error 返回）
+//   失败**不抛错、不退出、不污染 stderr**；嵌套调用被拒绝（捕获点只有一个）。
+static LXValue bi_json_parse_opt(LXValue* args, int nargs, void* ctx) {
+    if (nargs != 1) px_error("R1002: json_parse_opt 需要一个参数");
+    if (g_json_opt_active)
+        return px_err(px_str("json_parse_opt 不支持嵌套调用"));
+    g_json_opt_msg[0] = 0;
+    g_json_opt_active = 1;
+    if (setjmp(g_json_opt_jb) == 0) {
+        LXValue r = bi_json_parse(args, nargs, ctx);
+        g_json_opt_active = 0;
+        return px_ok(r);
+    }
+    g_json_opt_active = 0;
+    return px_err(px_str(g_json_opt_msg[0] ? g_json_opt_msg : "json 解析失败"));
+}
+
 static LXValue bi_json_stringify(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) px_error("R1002: json_stringify 需要一个参数");
@@ -7087,6 +7692,315 @@ static LXValue bi_json_stringify(LXValue* args, int nargs, void* ctx) {
     json_stringify_value(&o, args[0]);
     LXValue r = px_str(o.buf);
     xfree(o.buf);
+    return r;
+}
+
+// ═══ M129（qg-issue 87 缺陷 16）：json_stringify_go —— Go encoding/json 兼容序列化 ═══
+// 建立背景：api-server（Go）大量用 `json.NewEncoder(w).Encode(v)` / `json.Marshal` 输出
+//   **json.Unmarshal 得到的 interface{}**（透传上游 JSON、回显落盘文件）。Go 对
+//   map[string]interface{} 的序列化有四条与 PuXian `json_stringify` **逐字节不同**的语义，
+//   而它们全都静默（不报错、字段看着对）——是移植保真最危险的一类：
+//   ① **dict 键递归按字节序排序**（Go 对 map 恒排序；json_stringify 保持插入序）；
+//   ② **SetEscapeHTML(true)**：`<` `>` `&` → \u003c \u003e \u0026（Go 默认开）；
+//   ③ 控制字符 < 0x20（\n \r \t 除外）→ \u00XX；U+2028/U+2029 恒转义；
+//      非法 UTF-8 → \ufffd（Go 的 encodeString；json_stringify 直接吐**裸控制字节 = 非法 JSON**）；
+//   ④ float64 走**最短往返**（strconv.FormatFloat(f,'f'|-1|64)，|x|<1e-6 或 ≥1e21 用 'e'，
+//      并把 `e-0X` 收敛为 `e-X`）；json_stringify 用 `%g`（6 位有效数字）会**丢精度**。
+// 另：本函数按 str.len 写出（Go 字符串可含 NUL）；json_stringify 走 C 串遇 NUL 截断。
+// 约定：非有限浮点（NaN/Inf）Go 会返回 UnsupportedValueError，此处写 `null` 并在文档标注
+//   （api-server 全部字段均不会出现，不为此在 runtime 里造错误通道）。
+// 注：kwargs 语义与 json_stringify 同名共用（dict/list/tuple/Result）；PX_BYTES 按 Go `[]byte`
+//   语义输出 **base64 字符串**（json_stringify 对 bytes 直接报错，故此处是纯增量）。
+static void jgo_b64(JOut* o, const unsigned char* d, int n) {
+    static const char* T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    jout_append(o, "\"");
+    int i = 0;
+    while (i + 2 < n) {
+        int v = (d[i] << 16) | (d[i + 1] << 8) | d[i + 2];
+        char t[5] = { T[(v >> 18) & 63], T[(v >> 12) & 63], T[(v >> 6) & 63], T[v & 63], 0 };
+        jout_append(o, t);
+        i += 3;
+    }
+    if (i < n) {
+        int rem = n - i;
+        int v = d[i] << 16;
+        if (rem == 2) v |= d[i + 1] << 8;
+        char t[6] = { T[(v >> 18) & 63], T[(v >> 12) & 63], rem == 2 ? T[(v >> 6) & 63] : '=', '=', 0, 0 };
+        jout_append(o, t);
+    }
+    jout_append(o, "\"");
+}
+
+// 追加 n 个原始字节（用于合法多字节 UTF-8 序列直出）
+static void jout_append_n(JOut* o, const char* s, int n) {
+    if (o->len + n + 1 > o->cap) {
+        o->cap = o->cap * 2 + n + 16;
+        o->buf = xrealloc(o->buf, o->cap);
+    }
+    memcpy(o->buf + o->len, s, (size_t)n);
+    o->len += n;
+    o->buf[o->len] = 0;
+}
+
+// M129-2：`json_stringify_go` 的可选项（定义见文件后方 bi_json_stringify_go 上方）。
+// M129（qg-issue 87 缺陷 51）：opts 状态必须是**线程局部**（__thread）。
+//   背景：`json_stringify_go(v, {"sort_keys": false})` 的 opts 原先是两个**进程全局**
+//   变量（g_json_go_sort / g_json_go_escape_html），调用前后 save/restore。单线程下没问题，
+//   但 `http_serve` 是**多线程**（连接线程池）+ 语言层有 `spawn` 协程 —— 两个线程同时
+//   序列化时，A 线程设的 sort_keys=false 会污染 B 线程的输出。
+//   实测（第 7 轮对拍，webhook heavy 分支）：请求线程正在序列化响应 `{"ok":true,"event_id":…}`
+//   的同时，`spawn` 出来的异步处置线程在写事件日志（那里用 sort_keys:false）⇒ **响应键序
+//   被污染成插入序** `{"ok":…,"event_id":…}`，而 Go 恒为字母序。偶发、无报错。
+//   修法：改 `__thread`（TLS），逐线程独立、语义与单线程完全一致（零回归）。
+static __thread int g_json_go_sort = 1;
+static __thread int g_json_go_escape_html = 1;
+
+// Go encoding/json 的 encodeString 等价物（s 带显式长度，可含 NUL）
+static void jout_escape_go(JOut* o, const char* s, int n) {
+    jout_append(o, "\"");
+    int i = 0;
+    while (i < n) {
+        unsigned char c = (unsigned char)s[i];
+        if (c < 0x80) {
+            switch (c) {
+                case '"': jout_append(o, "\\\""); break;
+                case '\\': jout_append(o, "\\\\"); break;
+                case '\n': jout_append(o, "\\n"); break;
+                case '\r': jout_append(o, "\\r"); break;
+                case '\t': jout_append(o, "\\t"); break;
+                case '<': if (g_json_go_escape_html) jout_append(o, "\\u003c"); else jout_append_n(o, s + i, 1); break;
+                case '>': if (g_json_go_escape_html) jout_append(o, "\\u003e"); else jout_append_n(o, s + i, 1); break;
+                case '&': if (g_json_go_escape_html) jout_append(o, "\\u0026"); else jout_append_n(o, s + i, 1); break;
+                default: {
+                    if (c < 0x20) {
+                        char tmp[8];
+                        snprintf(tmp, sizeof(tmp), "\\u%04x", (unsigned)c);
+                        jout_append(o, tmp);
+                    } else {
+                        jout_append_n(o, s + i, 1);
+                    }
+                }
+            }
+            i++;
+            continue;
+        }
+        // 多字节序列：严格校验（对齐 Go 的 utf8.DecodeRune：过长/孤立续字节/代理区/越界 → 1 字节非法）
+        int len = 0;
+        unsigned cp = 0;
+        if (c >= 0xC2 && c <= 0xDF) { len = 2; cp = c & 0x1F; }
+        else if (c >= 0xE0 && c <= 0xEF) { len = 3; cp = c & 0x0F; }
+        else if (c >= 0xF0 && c <= 0xF4) { len = 4; cp = c & 0x07; }
+        int ok = len > 0 && i + len <= n;
+        if (ok) {
+            for (int k = 1; k < len; k++) {
+                unsigned char cc = (unsigned char)s[i + k];
+                if ((cc & 0xC0) != 0x80) { ok = 0; break; }
+                cp = (cp << 6) | (cc & 0x3F);
+            }
+            if (ok) {
+                // 过长编码 / 代理区 / >U+10FFFF 一律判非法（Go 同样拒绝）
+                if ((len == 3 && cp < 0x800) || (len == 4 && cp < 0x10000) ||
+                    (cp >= 0xD800 && cp <= 0xDFFF) || cp > 0x10FFFF)
+                    ok = 0;
+            }
+        }
+        if (!ok) {
+            jout_append(o, "\\ufffd");
+            i++;
+            continue;
+        }
+        if (cp == 0x2028) { jout_append(o, "\\u2028"); i += len; continue; }
+        if (cp == 0x2029) { jout_append(o, "\\u2029"); i += len; continue; }
+        jout_append_n(o, s + i, len);
+        i += len;
+    }
+    jout_append(o, "\"");
+}
+
+// 最短往返浮点（对齐 Go strconv.FormatFloat(f, fmt, -1, 64) + json 的 e-0X 收敛）
+//
+// M136（qg-issue 87 缺陷 95）：**先取"最短数字串"再按样式渲染**。
+//   此前按 fmt 直接扫 `%.*f` / `%.*e` 的精度：'f' 样式下 `%.0f` 对
+//   1.2345678901234567e19 直接给出**精确值** 12345678901234567168（17 位以外全是
+//   二进制补零），而 Go 的 -1 精度给的是**最短往返数字** 12345678901234567 再按 'f'
+//   展开 ⇒ 12345678901234567000。差 168 —— 对拍实证（媒体代理 rep-bigint 用例：
+//   上游收到的请求体不同）。
+//   修法：① 用 `%.*e` 递增精度扫出**最短数字串**（含十进制指数）；
+//        ② 按 Go 规则（|x|∈[1e-6,1e21) 用 'f'，否则 'e'）渲染该数字串。
+static void jgo_format_float(char* out, int cap, double f) {
+    if (!isfinite(f)) { snprintf(out, (size_t)cap, "null"); return; }
+    double a = fabs(f);
+    char style = 'f';
+    if (a != 0 && (a < 1e-6 || a >= 1e21)) style = 'e';
+    // ① 最短往返数字串（%.*e 递增精度，首个能回读相等的即最短）
+    char sci[64];
+    sci[0] = 0;
+    for (int p = 0; p <= 17; p++) {
+        snprintf(sci, sizeof(sci), "%.*e", p, f);
+        if (strtod(sci, NULL) == f) break;
+    }
+    int neg = 0;
+    const char* s = sci;
+    if (*s == '-') { neg = 1; s++; }
+    char digits[40];
+    int nd = 0;
+    const char* q = s;
+    while (*q && *q != 'e' && *q != 'E') {
+        if (*q != '.' && nd < 39) digits[nd++] = *q;
+        q++;
+    }
+    digits[nd] = 0;
+    if (nd == 0) { snprintf(out, (size_t)cap, "0"); return; }
+    const char* ep = strchr(s, 'e');
+    if (!ep) ep = strchr(s, 'E');
+    int exp10 = ep ? atoi(ep + 1) : 0;
+    int pt = exp10 + 1;   // 小数点前应有的位数
+    char buf[64];
+    int k = 0;
+    if (neg) buf[k++] = '-';
+    if (style == 'f') {
+        if (pt <= 0) {
+            buf[k++] = '0';
+            buf[k++] = '.';
+            for (int z = 0; z < -pt && k < 60; z++) buf[k++] = '0';
+            for (int i = 0; i < nd && k < 62; i++) buf[k++] = digits[i];
+        } else if (pt >= nd) {
+            for (int i = 0; i < nd && k < 62; i++) buf[k++] = digits[i];
+            for (int z = 0; z < pt - nd && k < 62; z++) buf[k++] = '0';
+        } else {
+            for (int i = 0; i < pt && k < 60; i++) buf[k++] = digits[i];
+            buf[k++] = '.';
+            for (int i = pt; i < nd && k < 62; i++) buf[k++] = digits[i];
+        }
+    } else {
+        buf[k++] = digits[0];
+        if (nd > 1) {
+            buf[k++] = '.';
+            for (int i = 1; i < nd && k < 60; i++) buf[k++] = digits[i];
+        }
+        buf[k++] = 'e';
+        int e2 = exp10;
+        buf[k++] = (e2 < 0) ? '-' : '+';
+        if (e2 < 0) e2 = -e2;
+        char eb[8];
+        snprintf(eb, sizeof(eb), "%d", e2);
+        if (strlen(eb) < 2) buf[k++] = '0';   // Go 指数至少两位
+        for (const char* pe = eb; *pe && k < 63; pe++) buf[k++] = *pe;
+    }
+    buf[k] = 0;
+    // Go json：仅把 `e-0d` 收敛成 `e-d`（`e+0d` 保持两位）
+    if (style == 'e') {
+        int n = k;
+        if (n >= 4 && buf[n - 4] == 'e' && buf[n - 3] == '-' && buf[n - 2] == '0') {
+            buf[n - 2] = buf[n - 1];
+            buf[n - 1] = 0;
+        }
+    }
+    snprintf(out, (size_t)cap, "%s", buf);
+}
+
+typedef struct { const char* k; LXValue v; } JGoKV;
+static int jgo_kv_cmp(const void* a, const void* b) {
+    return strcmp(((const JGoKV*)a)->k, ((const JGoKV*)b)->k);
+}
+
+// M129-2：`json_stringify_go` 的可选 opts（Go 侧 map/struct 之别在 PuXian 里同是 dict，
+//   故排序与转义必须**可分别关闭** —— 例如 "map 里嵌结构体数组" 的响应：map 要排序、
+//   结构体字段要保持声明序，此时用 {"sort_keys": false} 并手工按序 set）。
+
+static void json_go_value(JOut* o, LXValue v) {
+    switch (v.type) {
+        case PX_NULL: jout_append(o, "null"); break;
+        case PX_BOOL: jout_append(o, v.as.b ? "true" : "false"); break;
+        case PX_INT: {
+            char tmp[32];
+            snprintf(tmp, sizeof(tmp), "%lld", (long long)v.as.i);
+            jout_append(o, tmp);
+            break;
+        }
+        case PX_FLOAT: {
+            char tmp[64];
+            jgo_format_float(tmp, sizeof(tmp), v.as.f);
+            jout_append(o, tmp);
+            break;
+        }
+        case PX_STR:
+            jout_escape_go(o, v.as.obj->as.str.data, v.as.obj->as.str.len);
+            break;
+        case PX_BYTES:
+            jgo_b64(o, (const unsigned char*)v.as.obj->as.str.data, v.as.obj->as.str.len);
+            break;
+        case PX_LIST: {
+            jout_append(o, "[");
+            LXObject* ob = v.as.obj;
+            for (int i = 0; i < ob->as.list.len; i++) {
+                if (i) jout_append(o, ",");
+                json_go_value(o, ob->as.list.items[i]);
+            }
+            jout_append(o, "]");
+            break;
+        }
+        case PX_TUPLE: {
+            jout_append(o, "[");
+            LXObject* ob = v.as.obj;
+            for (int i = 0; i < ob->as.tuple.len; i++) {
+                if (i) jout_append(o, ",");
+                json_go_value(o, ob->as.tuple.items[i]);
+            }
+            jout_append(o, "]");
+            break;
+        }
+        case PX_DICT: {
+            jout_append(o, "{");
+            LXObject* ob = v.as.obj;
+            int n = ob->as.dict.len;
+            JGoKV* kv = n > 0 ? (JGoKV*)xmalloc(sizeof(JGoKV) * (size_t)n) : NULL;
+            for (int i = 0; i < n; i++) { kv[i].k = ob->as.dict.keys[i]; kv[i].v = ob->as.dict.vals[i]; }
+            if (n > 1 && g_json_go_sort) qsort(kv, (size_t)n, sizeof(JGoKV), jgo_kv_cmp);
+            for (int i = 0; i < n; i++) {
+                if (i) jout_append(o, ",");
+                jout_escape_go(o, kv[i].k, (int)strlen(kv[i].k));
+                jout_append(o, ":");
+                json_go_value(o, kv[i].v);
+            }
+            if (kv) xfree(kv);
+            jout_append(o, "}");
+            break;
+        }
+        case PX_RESULT: {
+            LXObject* ob = v.as.obj;
+            jout_append(o, "{\"ok\":");
+            jout_append(o, ob->as.result.ok ? "true" : "false");
+            jout_append(o, ",\"value\":");
+            json_go_value(o, ob->as.result.value);
+            jout_append(o, "}");
+            break;
+        }
+        default: px_error("json: 无法序列化类型 %s", px_type_name(v));
+    }
+}
+
+static LXValue bi_json_stringify_go(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 && nargs != 2) px_error("R1002: json_stringify_go 需要 (值[, opts]) 参数");
+    int old_sort = g_json_go_sort, old_esc = g_json_go_escape_html;
+    if (nargs == 2) {
+        if (args[1].type != PX_DICT) px_error("R1002: json_stringify_go 的 opts 需要 dict");
+        LXObject* od = args[1].as.obj;
+        for (int i = 0; i < od->as.dict.len; i++) {
+            const char* k = od->as.dict.keys[i];
+            LXValue vv = od->as.dict.vals[i];
+            if (strcmp(k, "sort_keys") == 0) g_json_go_sort = px_is_truthy(vv) ? 1 : 0;
+            else if (strcmp(k, "escape_html") == 0) g_json_go_escape_html = px_is_truthy(vv) ? 1 : 0;
+        }
+    }
+    JOut o = { NULL, 0, 0 };
+    o.buf = xmalloc(64); o.cap = 64; o.buf[0] = 0;
+    json_go_value(&o, args[0]);
+    LXValue r = px_str_len(o.buf, o.len);
+    xfree(o.buf);
+    g_json_go_sort = old_sort;
+    g_json_go_escape_html = old_esc;
     return r;
 }
 
@@ -7520,6 +8434,15 @@ void px_register_builtins(void) {
     px_set_global("read_at", px_native("read_at", bi_read_at));
     px_set_global("write_at", px_native("write_at", bi_write_at));
     px_set_global("file_size", px_native("file_size", bi_file_size));
+    // M129（qg-issue 87 缺陷 44）：is_dir(path) → bool —— Go `fi.IsDir()` 的等价物。
+    //   背景：native 表有 exists/file_size/list_dir，但**没有**「路径是不是目录」的判定。
+    //   `exists()` 对目录返回 **true**（与文件不可区分）；`file_size()` 对目录返回目录项
+    //   大小（4096/94208，Linux 上等于 st_blksize 或实际目录大小），也无法判；
+    //   唯一"间接"办法是 `read_file_opt(p).is_err()` —— 但 EACCES / ELOOP 同样报错，
+    //   分不出「是目录」与「没权限」。而 Go 里 `os.Stat` + `fi.IsDir()` 是高频写法
+    //   （api-server/security.go 的 executeToolInner 就是 `err != nil || fi.IsDir()`）。
+    //   ⇒ 移植时无等价原语，只能改代码迁就语言（= 绕过）。此处补齐。
+    px_set_global("is_dir", px_native("is_dir", bi_is_dir));
     px_set_global("fsync_file", px_native("fsync_file", bi_fsync_file));
     px_set_global("truncate_file", px_native("truncate_file", bi_truncate_file));
     // M57-S1：边缘设备层 fd 原语（open/close/ioctl/os_errno）
@@ -7537,6 +8460,15 @@ void px_register_builtins(void) {
     px_set_global("sleep_us", px_native("sleep_us", bi_sleep_us));
     px_set_global("now_us", px_native("now_us", bi_now_us));
     px_set_global("fcntl", px_native("fcntl", bi_fcntl));
+    // M130：文件锁 / 权限（flock/chmod）
+    px_set_global("flock", px_native("flock", bi_flock));
+    px_set_global("chmod", px_native("chmod", bi_chmod));
+    // M133：文件元信息 + errno 文案（file_stat/go_errno_string）
+    px_set_global("file_stat", px_native("file_stat", bi_file_stat));
+    px_set_global("go_errno_string", px_native("go_errno_string", bi_go_errno_string));
+    // M133：码点 ↔ 字符（ord/chr，缺陷 29：此前只有手写 UTF-8 解码）
+    px_set_global("ord", px_native("ord", bi_ord));
+    px_set_global("chr", px_native("chr", bi_chr));
     // M60-S2：设备组（tty_config/fd_wait）
     px_set_global("tty_config", px_native("tty_config", bi_tty_config));
     px_set_global("fd_wait", px_native("fd_wait", bi_fd_wait));
@@ -7547,6 +8479,7 @@ void px_register_builtins(void) {
     px_set_global("dns_txt", px_native("dns_txt", bi_dns_txt));              // M103-S2a (Issue 29 GAP-DNS-TXT-1)
     px_set_global("xxhash", px_native("xxhash", bi_xxhash));
     // M15 P1：正则表达式（文本解析 / 日志分析 / 参数抽取）
+    px_set_global("regex_valid", px_native("regex_valid", bi_regex_valid));   // M133：只编译不匹配
     px_set_global("regex_find", px_native("regex_find", bi_regex_find));
     px_set_global("regex_match", px_native("regex_match", bi_regex_match));
     px_set_global("regex_search", px_native("regex_search", bi_regex_search));
@@ -7558,7 +8491,9 @@ void px_register_builtins(void) {
     px_set_global("mkdir", px_native("mkdir", bi_mkdir));
     px_set_global("remove", px_native("remove", bi_remove));
     px_set_global("json_parse", px_native("json_parse", bi_json_parse));
+    px_set_global("json_parse_opt", px_native("json_parse_opt", bi_json_parse_opt));
     px_set_global("json_stringify", px_native("json_stringify", bi_json_stringify));
+    px_set_global("json_stringify_go", px_native("json_stringify_go", bi_json_stringify_go));
     // M29：JSON 路径运算符（JSONB 基石）
     px_set_global("json_path", px_native("json_path", bi_json_path));
     px_set_global("json_path_set", px_native("json_path_set", bi_json_path_set));
@@ -7668,9 +8603,30 @@ void px_register_builtins(void) {
     px_set_global("sse_close", px_native("sse_close", bi_sse_close));
     // M83-S6（Issue 19）：http_serve/http_serve_unix 同端口流式路由注册
     px_set_global("http_stream", px_native("http_stream", bi_http_stream));
+    // M131（qg-issue 87 缺陷 65）：POST 流式端点。Go 的 handleStream / LLM 代理的 SSE
+    //   主链路都是 **POST**，而此前 http_stream 只在 GET 上接管连接 ⇒ POST 的 SSE 端点
+    //   无法流式（只有"收集完再整体返回"）。两条端点为此无法保真，是本语言缺口。
+    //   ① http_stream(path, fn, opts)：opts.methods（默认 ["GET"]）/ opts.manual /
+    //      opts.headers（覆写或追加响应头）；
+    //   ② manual=true 时接管**不写任何响应头**，由语言层 sse_start 自写 —— 这样
+    //      "校验失败 → 普通 400/405" 与 "通过 → SSE 流" 才能共存（Go 正是如此）；
+    //   ③ sse_write(conn, data)：**原始**写出（sse_send 会按 SSE 规则加 "data: " 行，
+    //      而 LLM 代理要逐行透传上游 SSE 原文，不能再分帧）。
+    px_set_global("sse_start", px_native("sse_start", bi_sse_start));
+    px_set_global("sse_write", px_native("sse_write", bi_sse_write));
     // M23 P1：SSE 客户端（流式消费 / 事件订阅）
     px_set_global("sse_connect", px_native("sse_connect", bi_sse_connect));
+    // M137（qg-issue 87 第 17 轮）：sse_connect_ex(url[, opts]) → dict{ok,conn,status,
+    //   ctype,retry_after,body,errno,stage} —— 失败**可分类** + CT 不硬要求 + 可设 IO 超时。
+    //   现场：token-cache 的 LLM 流式代理（Go llm_forward.go::forwardStream）要求
+    //   ① 上游非 200 时能拿到状态码与响应体（合成 502 文案）；
+    //   ② 可重试状态码（429/5xx/408）要能 failover 换下一个候选；
+    //   ③ 200 时不看 Content-Type 也照扫（Go 只按行扫 data:）。
+    //   旧 sse_connect 一律 return null ⇒ 三件事都表达不了（第 17 轮前只能全缓冲）。
+    px_set_global("sse_connect_ex", px_native("sse_connect_ex", bi_sse_connect_ex));
     px_set_global("sse_read", px_native("sse_read", bi_sse_read));
+    // M131（qg-issue 87 缺陷 65/69）：原始行读取（上游 SSE 逐行透传用）
+    px_set_global("sse_read_line", px_native("sse_read_line", bi_sse_read_line));
     // M22 P1：位运算 / 二进制数据视图（存储引擎序列化基石）
     px_set_global("int_to_hex", px_native("int_to_hex", bi_int_to_hex));
     px_set_global("hex_to_int", px_native("hex_to_int", bi_hex_to_int));
@@ -7774,6 +8730,9 @@ void px_register_builtins(void) {
     px_set_global("env_set", px_native("env_set", bi_env_set));
     px_set_global("env_unset", px_native("env_unset", bi_env_unset));
     px_set_global("os_self_path", px_native("os_self_path", bi_os_self_path));
+    px_set_global("hostname", px_native("hostname", bi_hostname));
+    px_set_global("read_file_opt", px_native("read_file_opt", bi_read_file_opt));
+    px_set_global("write_file_opt", px_native("write_file_opt", bi_write_file_opt));
     px_set_global("isatty", px_native("isatty", bi_isatty));
     px_set_global("now_sec", px_native("now_sec", bi_now_sec));
     px_set_global("tz_local", px_native("tz_local", bi_tz_local));
@@ -7785,6 +8744,7 @@ void px_register_builtins(void) {
     px_ffi_register("env_set", bi_env_set);
     px_ffi_register("env_unset", bi_env_unset);
     px_ffi_register("os_self_path", bi_os_self_path);
+    px_ffi_register("hostname", bi_hostname);
     px_ffi_register("isatty", bi_isatty);
     px_ffi_register("now_sec", bi_now_sec);
     px_ffi_register("tz_local", bi_tz_local);
@@ -8046,6 +9006,18 @@ static LXValue bi_os_self_path(LXValue* args, int nargs, void* ctx) {
     return px_str(buf);
 }
 
+// hostname() → str（等价 Go os.Hostname()：gethostname(2)，失败返回 ""）
+//   M129（qg-issue 87 缺陷 18）：api-server avatar.go handleInfo 的 agent_id 兜底路径
+//   用 os.Hostname()，而 native 表里**没有任何主机名原语**（此前只能外挂 `hostname` 命令
+//   或读 /proc/sys/kernel/hostname —— 后者是 Linux 私有路径，且语言层无法表达「本机身份」）。
+static LXValue bi_hostname(LXValue* args, int nargs, void* ctx) {
+    (void)args; (void)nargs; (void)ctx;
+    char buf[256];
+    if (gethostname(buf, sizeof(buf) - 1) != 0) return px_str("");
+    buf[sizeof(buf) - 1] = '\0';
+    return px_str(buf);
+}
+
 // isatty(fd) → bool（0=stdin 1=stdout 2=stderr 常用；管道/重定向/后台 → false）
 static LXValue bi_isatty(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
@@ -8211,17 +9183,58 @@ static LXValue bi_os_spawn(LXValue* args, int nargs, void* ctx) {
     return px_int((int64_t)pid);
 }
 
-// os_spawn_capture(cmd, args) → [rc:int, output:str] | null（M65：LSP/MCP 子进程捕获）
-// fork+execvp，子进程 stdout+stderr 合并到同一管道（2>&1 语义），父进程读尽后
-// waitpid 回收。rc：正常=exit code；信号终止=128+sig；exec 失败=127；wait 失败=-1(null)。
-// 用途：MCP run/test/bench、LSP 诊断器（pxcheck）子进程输出捕获 —— 语言内编排真自举。
-// 注意：输出为整串 str（二进制安全按字节长度截断）；大输出全量驻留内存（演示级上限自持）。
-static LXValue bi_os_spawn_capture(LXValue* args, int nargs, void* ctx) {
-    (void)ctx;
-    if (nargs != 2 || args[0].type != PX_STR || args[1].type != PX_LIST)
-        px_error("R1002: os_spawn_capture 需要 (cmd, args) 参数");
-    const char* cmd = args[0].as.obj->as.str.data;
-    LXObject* list = args[1].as.obj;
+// ── M129 · 子进程捕获的公共实现（qg-issue 87 缺陷 7）──────────────────────────
+// 背景：Go 侧最常见的三种子进程形状，PuXian 原先各缺一角 ——
+//   ① cmd.Stdin = bytes.NewReader(s) + CombinedOutput()   → stdin 只收路径、stderr 无法并入
+//   ② cmd.Stdin = strings.NewReader(s) + Output()          → 同上
+//   ③ CommandContext(ctx, …) + CombinedOutput()            → 无超时/无进程组杀
+// 故抽出**一份** poll 双工实现，os_spawn_capture / os_capture 都薄封装到它，
+// 避免两套 poll 各自演化（历史 os_capture 与 os_spawn_capture 就是这么分叉的）。
+typedef struct {
+    const char* in_path;    // {"stdin": path}   以文件为 stdin（in_data 存在时优先）
+    const void* in_data;    // {"stdin_data": str|bytes} 内存数据喂 stdin
+    int in_len;
+    int has_stdin_data;     // 区分「未给 stdin_data」与「给了空串」
+    const char* cwd;        // {"cwd": path}
+    LXValue env_dict;       // {"env": {k:v}}  与 environ 合并（同名覆盖，见 px_build_envp）
+    int group;              // {"group": bool} 子进程 setpgid(0,0) 自成组（配合超时组杀）
+    int timeout_ms;         // {"timeout_ms": n} 超时 → SIGKILL **整组**（杜绝孤儿），继续读尽输出
+} PxSpawnOpts;
+
+static void px_spawn_opts_parse(LXValue opts, PxSpawnOpts* o, int default_group) {
+    o->in_path = NULL;
+    o->in_data = NULL;
+    o->in_len = 0;
+    o->has_stdin_data = 0;
+    o->cwd = NULL;
+    o->group = default_group;
+    o->timeout_ms = 0;
+    o->env_dict = px_null();
+    if (opts.type == PX_NULL) return;
+    if (opts.type != PX_DICT)
+        px_error("R1002: 第 3 参需要 opts dict{stdin_data,stdin,cwd,env,group,timeout_ms}");
+    LXValue dv = px_dict_get(opts, "stdin_data");
+    if (dv.type == PX_STR || dv.type == PX_BYTES) {
+        o->in_data = dv.as.obj->as.str.data;
+        o->in_len = dv.as.obj->as.str.len;
+        o->has_stdin_data = 1;
+    } else if (dv.type != PX_NULL) {
+        px_error("R1002: opts 的 stdin_data 需要 str/bytes");
+    }
+    LXValue iv = px_dict_get(opts, "stdin");
+    if (iv.type == PX_STR) o->in_path = iv.as.obj->as.str.data;
+    LXValue cv = px_dict_get(opts, "cwd");
+    if (cv.type == PX_STR) o->cwd = cv.as.obj->as.str.data;
+    LXValue gv = px_dict_get(opts, "group");
+    if (gv.type == PX_BOOL) o->group = gv.as.b ? 1 : 0;
+    else if (gv.type == PX_INT) o->group = gv.as.i != 0;
+    LXValue tv = px_dict_get(opts, "timeout_ms");
+    if (tv.type == PX_INT) o->timeout_ms = (int)tv.as.i;
+    o->env_dict = px_dict_get(opts, "env");
+}
+
+static char** px_argv_build(const char* cmd, LXValue args_list, const char* fname) {
+    LXObject* list = args_list.as.obj;
     int argc = list->as.list.len;
     char** argv = (char**)calloc((size_t)argc + 2, sizeof(char*));
     argv[0] = strdup(cmd);
@@ -8230,64 +9243,180 @@ static LXValue bi_os_spawn_capture(LXValue* args, int nargs, void* ctx) {
         if (v.type != PX_STR) {
             for (int j = 0; j <= i; j++) free(argv[j]);
             free(argv);
-            px_error("R1002: os_spawn_capture 的 args 必须是字符串列表");
+            px_error("R1002: %s 的 args 必须是字符串列表", fname);
         }
         argv[i + 1] = strdup(v.as.obj->as.str.data);
     }
     argv[argc + 1] = NULL;
-    int fds[2];
-    if (pipe(fds) != 0) {
-        for (int i = 0; i <= argc; i++) free(argv[i]);
-        free(argv);
-        return px_null();
-    }
-    pid_t pid = fork();
-    if (pid < 0) {
-        close(fds[0]);
-        close(fds[1]);
-        for (int i = 0; i <= argc; i++) free(argv[i]);
-        free(argv);
-        return px_null();
-    }
-    if (pid == 0) {
-        close(fds[0]);
-        dup2(fds[1], 1);
-        dup2(fds[1], 2);
-        close(fds[1]);
-        execvp(cmd, argv);
-        _exit(127);
-    }
-    close(fds[1]);
+    return argv;
+}
+
+static void px_argv_free(char** argv, int argc) {
     for (int i = 0; i <= argc; i++) free(argv[i]);
     free(argv);
-    size_t cap = 8192, n = 0;
-    char* buf = (char*)xmalloc(cap);
-    for (;;) {
-        if (n + 4096 > cap) {
-            cap *= 2;
-            buf = (char*)xrealloc(buf, cap);
+}
+
+// 跑子进程并捕获输出。merge_stderr=1 → stderr 在 fd 层并入 stdout（2>&1）。
+// 成功返回 0，并把 rc / 输出缓冲（xmalloc，调用方 xfree）写到出参；失败返回 -1。
+// 关键：**poll 双工** —— 父进程同时要写 stdin、读 stdout/stderr，若「先写尽再读」
+// 或「先读尽再写」都会与子进程互锁（子进程等 stdin 读完才开口，父进程等输出才继续写）。
+static int px_spawn_run_capture(const char* cmd, char** argv, const PxSpawnOpts* o,
+                                int merge_stderr, int* rc,
+                                char** obuf, int* olen, char** ebuf, int* elen) {
+    *rc = -1;
+    *obuf = NULL;
+    *ebuf = NULL;
+    *olen = 0;
+    *elen = 0;
+    char** envp = px_build_envp(o->env_dict);
+    int outp[2] = {-1, -1}, inp[2] = {-1, -1}, errp[2] = {-1, -1};
+    if (pipe(outp) != 0) { px_free_envp(envp); return -1; }
+    if (o->in_data && pipe(inp) != 0) goto fail;
+    if (!merge_stderr && pipe(errp) != 0) goto fail;
+    pid_t pid = fork();
+    if (pid < 0) goto fail;
+    if (pid == 0) {
+        // 子进程：全为 async-signal-safe 调用（无 malloc / 无 px_error）
+        if (o->group) setpgid(0, 0);
+        if (inp[0] >= 0) {
+            if (dup2(inp[0], 0) < 0) _exit(127);
+            close(inp[0]);
+            close(inp[1]);
+        } else if (o->in_path) {
+            int fd = open(o->in_path, O_RDONLY);
+            if (fd < 0) _exit(127);
+            if (dup2(fd, 0) < 0) _exit(127);
+            if (fd != 0) close(fd);
         }
-        ssize_t r = read(fds[0], buf + n, cap - n);
-        if (r < 0) {
-            if (errno == EINTR) continue;
-            break;
-        }
-        if (r == 0) break;
-        n += (size_t)r;
+        if (dup2(outp[1], 1) < 0) _exit(127);
+        if (merge_stderr) { if (dup2(outp[1], 2) < 0) _exit(127); }
+        else if (errp[1] >= 0) { if (dup2(errp[1], 2) < 0) _exit(127); }
+        close(outp[0]);
+        close(outp[1]);
+        if (errp[1] >= 0) close(errp[1]);
+        if (o->cwd && chdir(o->cwd) != 0) _exit(127);
+        if (envp) execvpe(cmd, argv, envp);
+        else execvp(cmd, argv);
+        _exit(127);
     }
-    close(fds[0]);
+    if (o->group) setpgid(pid, pid);   // 父侧同调：防「子还没跑到自己的 setpgid 就组杀」ESRCH 假失败
+    close(outp[1]); outp[1] = -1;
+    if (inp[1] >= 0) { close(inp[0]); inp[0] = -1; }
+    if (errp[1] >= 0) { close(errp[1]); errp[1] = -1; }
+    size_t capo = 8192, no = 0, cape = 8192, ne = 0, sent = 0;
+    char* bo = (char*)xmalloc(capo);
+    char* be = (errp[0] >= 0) ? (char*)xmalloc(cape) : NULL;
+    int eof_o = 0, eof_e = (errp[0] < 0), killed = 0;
+    long long deadline = 0;
+    if (o->timeout_ms > 0) {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        deadline = (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000 + o->timeout_ms;
+    }
+    if (inp[1] >= 0) { int fl = fcntl(inp[1], F_GETFL); if (fl >= 0) fcntl(inp[1], F_SETFL, fl | O_NONBLOCK); }
+    { int fl = fcntl(outp[0], F_GETFL); if (fl >= 0) fcntl(outp[0], F_SETFL, fl | O_NONBLOCK); }
+    if (errp[0] >= 0) { int fl = fcntl(errp[0], F_GETFL); if (fl >= 0) fcntl(errp[0], F_SETFL, fl | O_NONBLOCK); }
+    while (!eof_o || !eof_e) {
+        struct pollfd fds[3];
+        int n = 0, wi = -1, oi = -1, ei = -1;
+        if (inp[1] >= 0) { fds[n].fd = inp[1]; fds[n].events = POLLOUT; fds[n].revents = 0; wi = n; n++; }
+        if (!eof_o) { fds[n].fd = outp[0]; fds[n].events = POLLIN; fds[n].revents = 0; oi = n; n++; }
+        if (!eof_e) { fds[n].fd = errp[0]; fds[n].events = POLLIN; fds[n].revents = 0; ei = n; n++; }
+        if (n == 0) break;
+        int wait_ms = -1;
+        if (deadline > 0) {
+            struct timespec ts;
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+            long long now = (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+            wait_ms = (int)(deadline - now);
+            if (wait_ms < 0) wait_ms = 0;
+        }
+        int pr = poll(fds, (nfds_t)n, wait_ms);
+        if (pr < 0) { if (errno == EINTR) continue; break; }
+        if (pr == 0 && deadline > 0 && !killed) {
+            killed = 1;
+            deadline = 0;                     // 之后不再计时：只等读尽残余输出
+            if (o->group) kill(-pid, SIGKILL); // 整组杀：工具常自己再 fork，只杀父会留孤儿
+            kill(pid, SIGKILL);
+        }
+        if (wi >= 0 && (fds[wi].revents & (POLLOUT | POLLERR | POLLHUP))) {
+            ssize_t w = write(inp[1], (const char*)o->in_data + sent, (size_t)o->in_len - sent);
+            if (w > 0) sent += (size_t)w;
+            else if (w < 0 && errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
+                close(inp[1]); inp[1] = -1;   // 子进程提前关 stdin（EPIPE）→ 弃余量，继续读输出
+            }
+            if (inp[1] >= 0 && sent >= (size_t)o->in_len) { close(inp[1]); inp[1] = -1; }  // 写完即关 = EOF
+        }
+        if (oi >= 0 && (fds[oi].revents & (POLLIN | POLLHUP | POLLERR))) {
+            for (;;) {
+                if (no + 65536 > capo) { capo *= 2; bo = (char*)xrealloc(bo, capo); }
+                ssize_t r = read(outp[0], bo + no, capo - no);
+                if (r > 0) { no += (size_t)r; continue; }
+                if (r == 0) { eof_o = 1; break; }
+                if (errno == EINTR) continue;
+                if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+                eof_o = 1; break;
+            }
+        }
+        if (ei >= 0 && (fds[ei].revents & (POLLIN | POLLHUP | POLLERR))) {
+            for (;;) {
+                if (ne + 65536 > cape) { cape *= 2; be = (char*)xrealloc(be, cape); }
+                ssize_t r = read(errp[0], be + ne, cape - ne);
+                if (r > 0) { ne += (size_t)r; continue; }
+                if (r == 0) { eof_e = 1; break; }
+                if (errno == EINTR) continue;
+                if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+                eof_e = 1; break;
+            }
+        }
+    }
+    if (inp[1] >= 0) close(inp[1]);
+    close(outp[0]);
+    if (errp[0] >= 0) close(errp[0]);
+    px_free_envp(envp);
     int status = 0;
-    if (waitpid(pid, &status, 0) < 0) {
-        xfree(buf);
-        return px_null();
-    }
-    int rc = -1;
-    if (WIFEXITED(status)) rc = WEXITSTATUS(status);
-    else if (WIFSIGNALED(status)) rc = 128 + (int)WTERMSIG(status);
+    if (waitpid(pid, &status, 0) < 0) { xfree(bo); xfree(be); return -1; }
+    if (WIFEXITED(status)) *rc = WEXITSTATUS(status);
+    else if (WIFSIGNALED(status)) *rc = 128 + (int)WTERMSIG(status);
+    *obuf = bo;
+    *olen = (int)no;
+    *ebuf = be;
+    *elen = (int)ne;
+    return 0;
+fail:
+    if (outp[0] >= 0) close(outp[0]);
+    if (outp[1] >= 0) close(outp[1]);
+    if (inp[0] >= 0) close(inp[0]);
+    if (inp[1] >= 0) close(inp[1]);
+    if (errp[0] >= 0) close(errp[0]);
+    if (errp[1] >= 0) close(errp[1]);
+    px_free_envp(envp);
+    return -1;
+}
+
+// os_spawn_capture(cmd, args[, opts]) → [rc:int, output:str] | null（M65；M129 扩展 opts）
+// 子进程 stdout+stderr **合并**捕获（2>&1 = Go `cmd.CombinedOutput()`），父进程读尽后 waitpid。
+// rc：正常=exit code；信号终止=128+sig（超时被 SIGKILL → 137）；exec 失败=127；wait 失败=-1(null)。
+// opts：{"stdin_data"|"stdin"|"cwd"|"env"|"group"|"timeout_ms"}（语义见 PxSpawnOpts 注释）
+// 注意：输出为整串 str（按字节长度构造，二进制安全）；大输出全量驻留内存（演示级上限自持）。
+static LXValue bi_os_spawn_capture(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 2 || nargs > 3 || args[0].type != PX_STR || args[1].type != PX_LIST)
+        px_error("R1002: os_spawn_capture 需要 (cmd, args[, opts]) 参数");
+    PxSpawnOpts o;
+    px_spawn_opts_parse(nargs == 3 ? args[2] : px_null(), &o, 0);
+    const char* cmd = args[0].as.obj->as.str.data;
+    int argc = args[1].as.obj->as.list.len;
+    char** argv = px_argv_build(cmd, args[1], "os_spawn_capture");
+    int rc = -1, no = 0, ne = 0;
+    char *bo = NULL, *be = NULL;
+    int r = px_spawn_run_capture(cmd, argv, &o, 1, &rc, &bo, &no, &be, &ne);
+    px_argv_free(argv, argc);
+    if (r != 0) return px_null();
     LXValue res[2];
     res[0] = px_int((int64_t)rc);
-    res[1] = px_str_len(buf, (int)n);
-    xfree(buf);
+    res[1] = px_str_len(bo, no);
+    xfree(bo);
     return px_list_n(res, 2);
 }
 
@@ -8489,92 +9618,33 @@ static LXValue bi_unix_connect(LXValue* args, int nargs, void* ctx) {
     return px_int((int64_t)fd);
 }
 
-// os_capture(cmd, args) → {rc:int, stdout:str, stderr:str} | null（05 G1 / 06 T2）
-// fork+execvp，子进程 stdout/stderr 各接一条管道（分离捕获），父进程 poll 双 fd
-// 读净后 waitpid。rc 约定同 os_spawn_capture：正常=exit code；信号=128+sig；
-// exec 失败=127；pipe/fork/wait 失败=null。用途：安装器/系统管理"跑命令判输出"。
+// os_capture(cmd, args[, opts]) → {rc:int, stdout:str, stderr:str} | null（05 G1 / 06 T2）
+// 子进程 stdout / stderr **分离**捕获（Go `cmd.Output()` 的形状：只要 stdout，
+// 而 stderr 不落进宿主进程 —— 原先 os_capture 是分离的，os_popen 的 stderr 才会漏给宿主）。
+// M129 起与 os_spawn_capture 共用同一份 poll 双工实现（px_spawn_run_capture），opts 同族：
+//   {"stdin_data"|"stdin"|"cwd"|"env"|"group"|"timeout_ms"}
+// 默认 group=1（保持 M66 起的既有行为：自成进程组，支持 os_kill(pid, sig, true) 组杀）。
+// 未给 opts 时行为与旧版**逐字节一致**（无 stdin 重定向、继承父环境、无超时）。
 static LXValue bi_os_capture(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2 || args[0].type != PX_STR || args[1].type != PX_LIST)
-        px_error("R1002: os_capture 需要 (cmd, args) 参数");
+    if (nargs < 2 || nargs > 3 || args[0].type != PX_STR || args[1].type != PX_LIST)
+        px_error("R1002: os_capture 需要 (cmd, args[, opts]) 参数");
+    PxSpawnOpts o;
+    px_spawn_opts_parse(nargs == 3 ? args[2] : px_null(), &o, 1);
     const char* cmd = args[0].as.obj->as.str.data;
-    LXObject* list = args[1].as.obj;
-    int argc = list->as.list.len;
-    char** argv = (char**)calloc((size_t)argc + 2, sizeof(char*));
-    argv[0] = strdup(cmd);
-    for (int i = 0; i < argc; i++) {
-        LXValue v = list->as.list.items[i];
-        if (v.type != PX_STR) {
-            for (int j = 0; j <= i; j++) free(argv[j]);
-            free(argv);
-            px_error("R1002: os_capture 的 args 必须是字符串列表");
-        }
-        argv[i + 1] = strdup(v.as.obj->as.str.data);
-    }
-    argv[argc + 1] = NULL;
-    int pout[2], perr[2];
-    if (pipe(pout) != 0 || pipe(perr) != 0) {
-        for (int i = 0; i <= argc; i++) free(argv[i]);
-        free(argv);
-        return px_null();
-    }
-    pid_t pid = fork();
-    if (pid < 0) {
-        close(pout[0]); close(pout[1]); close(perr[0]); close(perr[1]);
-        for (int i = 0; i <= argc; i++) free(argv[i]);
-        free(argv);
-        return px_null();
-    }
-    if (pid == 0) {
-        setpgid(0, 0);  // M66：自成进程组 → 支持 os_kill(pid, sig, true) 组杀
-        close(pout[0]); close(perr[0]);
-        dup2(pout[1], 1); dup2(perr[1], 2);
-        close(pout[1]); close(perr[1]);
-        execvp(cmd, argv);
-        _exit(127);
-    }
-    setpgid(pid, pid);   // M66 竞态修：父侧同调 setpgid —— 子进程尚未跑到自己的 setpgid 时，
-                         //   紧随的 killpg(pid) 会 ESRCH 假失败（实测紧循环 ~10%）；
-                         //   父侧在子进程 exec 前调用必定生效（后到者 EACCES/no-op，故意忽略）
-    close(pout[1]); close(perr[1]);
-    for (int i = 0; i <= argc; i++) free(argv[i]);
-    free(argv);
-    // poll 双管道读净（防单管道写满死锁）
-    size_t cap_o = 8192, n_o = 0, cap_e = 8192, n_e = 0;
-    char* bo = (char*)xmalloc(cap_o);
-    char* be = (char*)xmalloc(cap_e);
-    int eof_o = 0, eof_e = 0;
-    while (!eof_o || !eof_e) {
-        struct pollfd fds[2];
-        fds[0].fd = pout[0]; fds[0].events = POLLIN; fds[0].revents = 0;
-        fds[1].fd = perr[0]; fds[1].events = POLLIN; fds[1].revents = 0;
-        int pr = poll(fds, 2, -1);
-        if (pr < 0) { if (errno == EINTR) continue; break; }
-        for (int i = 0; i < 2; i++) {
-            if ((fds[i].revents & (POLLIN | POLLHUP)) == 0) continue;
-            int rfd = (i == 0) ? pout[0] : perr[0];
-            int* eof = (i == 0) ? &eof_o : &eof_e;
-            char** buf = (i == 0) ? &bo : &be;
-            size_t* cap = (i == 0) ? &cap_o : &cap_e;
-            size_t* n = (i == 0) ? &n_o : &n_e;
-            if (*n + 4096 > *cap) { *cap *= 2; *buf = (char*)xrealloc(*buf, *cap); }
-            ssize_t r = read(rfd, *buf + *n, *cap - *n);
-            if (r < 0) { if (errno == EINTR) continue; *eof = 1; }
-            else if (r == 0) *eof = 1;
-            else *n += (size_t)r;
-        }
-    }
-    close(pout[0]); close(perr[0]);
-    int status = 0;
-    if (waitpid(pid, &status, 0) < 0) { xfree(bo); xfree(be); return px_null(); }
-    int rc = -1;
-    if (WIFEXITED(status)) rc = WEXITSTATUS(status);
-    else if (WIFSIGNALED(status)) rc = 128 + (int)WTERMSIG(status);
+    int argc = args[1].as.obj->as.list.len;
+    char** argv = px_argv_build(cmd, args[1], "os_capture");
+    int rc = -1, no = 0, ne = 0;
+    char *bo = NULL, *be = NULL;
+    int r = px_spawn_run_capture(cmd, argv, &o, 0, &rc, &bo, &no, &be, &ne);
+    px_argv_free(argv, argc);
+    if (r != 0) return px_null();
     LXValue d = px_dict();
     px_dict_set(d, "rc", px_int((int64_t)rc));
-    px_dict_set(d, "stdout", px_str_len(bo, (int)n_o));
-    px_dict_set(d, "stderr", px_str_len(be, (int)n_e));
-    xfree(bo); xfree(be);
+    px_dict_set(d, "stdout", px_str_len(bo, no));
+    px_dict_set(d, "stderr", px_str_len(be, ne));
+    xfree(bo);
+    xfree(be);
     return d;
 }
 
@@ -9015,7 +10085,7 @@ static LXValue bi_bytes_find(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_read_bytes(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) px_error("R1002: read_bytes 需要一个路径参数");
-    const char* p = val_cstr(args[0]);
+    const char* p = px_val_cstr(args[0]);
     FILE* f = fopen(p, "rb");
     if (!f) px_error("io: 读取文件失败 %s", p);
     fseek(f, 0, SEEK_END);
@@ -9035,7 +10105,7 @@ static LXValue bi_read_bytes(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_write_bytes(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 2) px_error("R1002: write_bytes 需要 (路径, bytes) 参数");
-    const char* p = val_cstr(args[0]);
+    const char* p = px_val_cstr(args[0]);
     const char* d = bdata(args[1]);
     int len = blen(args[1]);
     FILE* f = fopen(p, "wb");
@@ -9162,6 +10232,31 @@ static LXObject* px_mutex_obj(LXValue m, const char* op) {
     return m.as.obj;
 }
 
+// 第 15 轮诊断（缺陷 86）：悬垂锁对象现场抓拍（coro.c 亦用，非 static；声明见 runtime.h）
+//
+// LXValue 的标签是 PX_MUTEX/PX_RWLOCK，但对象头 type 已不是同类型 ⇒ 该对象已被 GC 回收
+// （或被复用为别的类型）：悬垂指针。此时 pthread_mutex_lock 会永久阻塞在垃圾 __lock 上
+// （无持有者、无唤醒源）——正是"第 N 个请求起永久挂死"的直接现场。
+// 命中即打印对象地址与 type 后 abort：把"静默挂死"变成"立刻可见、可 gdb 的崩溃"。
+void px_dbg_obj_check(LXObject* o, LXType want, const char* where) {
+    if (o->type != want) {
+        fprintf(stderr,
+                "[FATAL-obj] %s: obj=%p type=%d（期望 %d）"
+                "—— LXValue 标签是锁，但对象已非该类型（悬垂/被复用）\n",
+                where, (void*)o, (int)o->type, (int)want);
+        fflush(stderr);
+        abort();
+    }
+}
+
+void px_dbg_mutex_check(LXObject* o, const char* where) {
+    px_dbg_obj_check(o, PX_MUTEX, where);
+}
+
+void px_dbg_rwlock_check(LXObject* o, const char* where) {
+    px_dbg_obj_check(o, PX_RWLOCK, where);
+}
+
 LXValue px_mutex_create(void) {
     LXObject* o = xcalloc(1, sizeof(LXObject));
     o->type = PX_MUTEX;
@@ -9175,6 +10270,7 @@ LXValue px_mutex_create(void) {
 
 LXValue px_mutex_lock(LXValue m) {
     LXObject* o = px_mutex_obj(m, "lock");
+    px_dbg_mutex_check(o, "px_mutex_lock");
     pthread_mutex_lock(&o->as.mutex.mu);
     while (o->as.mutex.locked) pthread_cond_wait(&o->as.mutex.cv, &o->as.mutex.mu);
     o->as.mutex.locked = 1;
@@ -9184,6 +10280,7 @@ LXValue px_mutex_lock(LXValue m) {
 
 LXValue px_mutex_try_lock(LXValue m) {
     LXObject* o = px_mutex_obj(m, "try_lock");
+    px_dbg_mutex_check(o, "px_mutex_try_lock");
     pthread_mutex_lock(&o->as.mutex.mu);
     int ok = 0;
     if (!o->as.mutex.locked) { o->as.mutex.locked = 1; ok = 1; }
@@ -9193,6 +10290,7 @@ LXValue px_mutex_try_lock(LXValue m) {
 
 LXValue px_mutex_unlock(LXValue m) {
     LXObject* o = px_mutex_obj(m, "unlock");
+    px_dbg_mutex_check(o, "px_mutex_unlock");
     struct PxCoro* w = NULL;
     pthread_mutex_lock(&o->as.mutex.mu);
     o->as.mutex.locked = 0;
@@ -9205,6 +10303,7 @@ LXValue px_mutex_unlock(LXValue m) {
 
 static LXObject* px_rwlock_obj(LXValue m, const char* op) {
     if (m.type != PX_RWLOCK) px_error("%s: 目标不是读写锁（%s）", op, px_type_name(m));
+    px_dbg_rwlock_check(m.as.obj, op);   // M135：悬垂锁抓拍（同缺陷 86）
     return m.as.obj;
 }
 
@@ -10746,7 +11845,8 @@ static int hconnect(const char* host, int port) {
 static int h_exchange(HPoolSlot* slot, const char* req, int rlen,
                       const char* body, int body_n,
                       int* out_status, LXValue* out_headers,
-                      char** out_body, int* out_body_len, int* out_keep_alive) {
+                      char** out_body, int* out_body_len, int* out_keep_alive,
+                      int gzip_decode) {
     int fd = slot->fd;
     HttpsSession* tls = slot->is_tls ? slot->tls : NULL;
     if (conn_send(tls, fd, req, rlen) < 0) return -1;
@@ -10760,12 +11860,14 @@ static int h_exchange(HPoolSlot* slot, const char* req, int rlen,
     for (;;) {
         if (len + 4096 > cap) { cap *= 2; buf = xrealloc(buf, cap); }
         int n = conn_recv(tls, fd, buf + len, 4096);
-        if (n <= 0) { xfree(buf); return -1; }
+        // M133：把成因留在 errno 上供 os_errno() 读取（n==0 = 对端干净关闭 → 0 表 EOF；
+        //   n<0 = 真实 errno，如 EAGAIN(11) 表读超时、ECONNRESET(104)/EPIPE(32)）。
+        if (n <= 0) { int e = (n == 0) ? 0 : errno; xfree(buf); errno = e; return -1; }
         len += n;
         buf[len] = 0;
         char* sep = strstr(buf, "\r\n\r\n");
         if (sep) { header_end = (int)(sep - buf); break; }
-        if (len > 65536) { xfree(buf); return -1; }
+        if (len > 65536) { xfree(buf); errno = EMSGSIZE; return -1; }
     }
     // 解析状态码 + 头部
     // M97-S2（qg-issue 31）：解析响应协议版本——keep_alive 判定须按 HTTP 版本语义
@@ -10878,7 +11980,12 @@ static int h_exchange(HPoolSlot* slot, const char* req, int rlen,
         if (body_buf) body_buf[body_len] = 0;
         keep_alive = 0; // 读到 EOF，连接不可复用
     }
-    if (gzip) {
+    if (gzip && gzip_decode) {
+        // M136（qg-issue 87 缺陷 89）：`gzip_decode=0` 时**不做透明解压** ——
+        //   Go 的 `http.Transport` 只在「调用方未自带 Accept-Encoding」时才自己加
+        //   `Accept-Encoding: gzip` 并透明解压（`Response.Uncompressed=true`，
+        //   并 **删除** resp.Header 的 Content-Encoding/Content-Length）；
+        //   调用方自带 AE 时 Go **原样透传压缩体**。本开关用于复刻后者。
         char* dec = px_gzip_decompress(body_buf, body_len, &body_len);
         if (dec) { xfree(body_buf); body_buf = dec; }
     }
@@ -10925,15 +12032,30 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
         LXObject* ho = args[3].as.obj;
         int off = 0;
         for (int i = 0; i < ho->as.dict.len && off < 4095; i++) {
-            if (ho->as.dict.vals[i].type != PX_STR) continue;
+            // M136（qg-issue 87 缺陷 88）：请求头的**多值**同样逐条写出（同名多行）——
+            //   与响应侧同族（值非 PX_STR 即 continue 会静默丢头）。h_exchange 解析
+            //   响应头时同名头本就升级为 list（M109-S5），此处对称支持。
+            LXValue hv = ho->as.dict.vals[i];
+            if (hv.type == PX_LIST) {
+                LXObject* lo = hv.as.obj;
+                for (int j = 0; j < lo->as.list.len && off < 4095; j++) {
+                    if (lo->as.list.items[j].type != PX_STR) continue;
+                    off += snprintf(extra_headers + off, 4096 - (size_t)off, "%s: %s\r\n",
+                                    ho->as.dict.keys[i], lo->as.list.items[j].as.obj->as.str.data);
+                }
+                continue;
+            }
+            if (hv.type != PX_STR) continue;
             off += snprintf(extra_headers + off, 4096 - (size_t)off, "%s: %s\r\n",
-                            ho->as.dict.keys[i], ho->as.dict.vals[i].as.obj->as.str.data);
+                            ho->as.dict.keys[i], hv.as.obj->as.str.data);
         }
     }
     // M37：opts{retries, timeout_ms, proxy}
     int retries = 1;
     int timeout_ms = 30000;
     char proxy[256] = {0};
+    // M136（qg-issue 87 缺陷 89）：opts.decode_gzip（默认 1 = 与既有行为/Go 透明解压一致）
+    int gzip_decode = 1;
     if (nargs >= 5 && args[4].type == PX_DICT) {
         LXValue rv = px_dict_get(args[4], "retries");
         if (rv.type == PX_INT && rv.as.i >= 0) retries = (int)rv.as.i + 1;
@@ -10941,6 +12063,8 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
         if (tv.type == PX_INT && tv.as.i > 0) timeout_ms = (int)tv.as.i;
         LXValue pv = px_dict_get(args[4], "proxy");
         if (pv.type == PX_STR) snprintf(proxy, sizeof(proxy), "%s", pv.as.obj->as.str.data);
+        LXValue gv = px_dict_get(args[4], "decode_gzip");
+        if (gv.type == PX_BOOL) gzip_decode = gv.as.b ? 1 : 0;
     }
     int is_https = 0;
     char host[256];
@@ -11024,7 +12148,8 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
         int status = 0, body_len = 0, keep_alive = 1;
         LXValue headers = px_null();
         char* resp_body = NULL;
-        if (h_exchange(&slot, req, rlen, body, body_n, &status, &headers, &resp_body, &body_len, &keep_alive) == 0) {
+        if (h_exchange(&slot, req, rlen, body, body_n, &status, &headers, &resp_body, &body_len, &keep_alive,
+                       gzip_decode) == 0) {
             if (keep_alive) hpool_put(key, slot);
             else { if (slot.tls) https_close(slot.tls); close(slot.fd); }
             LXValue d = px_dict();
@@ -11056,9 +12181,48 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
 // M56：http_unix(socket_path, url_path, method[, body[, headers]]) → dict{status, headers, body}
 // Unix domain socket 上的 HTTP 客户端（本地服务/LLM 网关/容器 daemon 常用）。
 // 不池化：每次新建连接、Connection: close，用完即关（本地低频调用足够）。
+// M133（第 13 轮 · 缺陷 80/81）：带超时的 AF_UNIX 连接。
+//   timeout_ms <= 0 → 保持原**阻塞**语义（零回归）；> 0 → 非阻塞 connect + poll。
+//   失败时把成因留在 errno（含 ETIMEDOUT），供 `os_errno()` 读取。
+static int px_unix_connect_timeout(const char* sock_path, int timeout_ms) {
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", sock_path);
+    if (timeout_ms <= 0) {
+        if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) != 0) { int e = errno; close(fd); errno = e; return -1; }
+        return fd;
+    }
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    int rc = connect(fd, (struct sockaddr*)&addr, sizeof(addr));
+    if (rc != 0 && errno != EINPROGRESS) { int e = errno; close(fd); errno = e; return -1; }
+    if (rc != 0) {
+        struct pollfd p;
+        p.fd = fd;
+        p.events = POLLOUT;
+        p.revents = 0;
+        int pr;
+        do { pr = poll(&p, 1, timeout_ms); } while (pr < 0 && errno == EINTR);
+        if (pr == 0) { close(fd); errno = ETIMEDOUT; return -1; }
+        if (pr < 0) { int e = errno; close(fd); errno = e; return -1; }
+        int soerr = 0;
+        socklen_t sl = sizeof(soerr);
+        if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &sl) != 0 || soerr != 0) {
+            close(fd);
+            errno = soerr ? soerr : ECONNREFUSED;
+            return -1;
+        }
+    }
+    if (flags >= 0) fcntl(fd, F_SETFL, flags);   // 恢复阻塞模式（SO_RCVTIMEO 语义不变）
+    return fd;
+}
+
 static LXValue bi_http_unix(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 3 || nargs > 5) px_error("R1002: http_unix 需要 (socket_path, url_path, method[, body[, headers]]) 参数");
+    if (nargs < 3 || nargs > 6) px_error("R1002: http_unix 需要 (socket_path, url_path, method[, body[, headers[, opts]]]]) 参数");
     const char* sock_path = val_cstr(args[0]);
     const char* url_path = val_cstr(args[1]);
     const char* method = val_cstr(args[2]);
@@ -11074,19 +12238,30 @@ static LXValue bi_http_unix(LXValue* args, int nargs, void* ctx) {
                             ho->as.dict.keys[i], ho->as.dict.vals[i].as.obj->as.str.data);
         }
     }
-    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0) return px_net_err("net: 创建 unix socket 失败");
-    struct sockaddr_un addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sun_family = AF_UNIX;
-    snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", sock_path);
-    if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
-        int e = errno;
-        close(fd);
+    // M133：opts.timeout_ms —— 总时限（覆盖连接 + 收发）。
+    //   此前无超时入口（RCVTIMEO 固定 180s）⇒ "accept 了但不回包"的对端挂 180s。
+    //   ⚠️ 边界：这是"每次 IO 的上限"，Go 的 Client.Timeout 是"整个请求的上限"；
+    //      对端匀速滴数据时二者不同（已登记 README §边界）。
+    int timeout_ms = 0;
+    if (nargs >= 6 && args[5].type == PX_DICT) {
+        LXObject* oo = args[5].as.obj;
+        for (int i = 0; i < oo->as.dict.len; i++) {
+            if (strcmp(oo->as.dict.keys[i], "timeout_ms") == 0 && oo->as.dict.vals[i].type == PX_INT)
+                timeout_ms = (int)oo->as.dict.vals[i].as.i;
+        }
+    }
+    int fd = px_unix_connect_timeout(sock_path, timeout_ms);
+    if (fd < 0) {
+        int e = errno;   // M133：close 已在 helper 内做过，errno 已还原
         return px_net_err("net: 连接 unix socket %s 失败 (%d)", sock_path, e);
     }
-    // 本地网关可能响应慢（如 LLM 长文本），接收/发送超时放宽到 180s
+    // 本地网关可能响应慢（如 LLM 长文本），接收/发送超时放宽到 180s；
+    // M133：opts.timeout_ms > 0 时按调用方给的上限收紧。
     struct timeval tv = { 180, 0 };
+    if (timeout_ms > 0) {
+        tv.tv_sec = timeout_ms / 1000;
+        tv.tv_usec = (timeout_ms % 1000) * 1000;
+    }
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
     char req[16384];
@@ -11111,9 +12286,10 @@ static LXValue bi_http_unix(LXValue* args, int nargs, void* ctx) {
     int status = 0, body_len = 0, keep_alive = 1;
     LXValue headers = px_null();
     char* resp_body = NULL;
-    if (h_exchange(&slot, req, rlen, NULL, 0, &status, &headers, &resp_body, &body_len, &keep_alive) != 0) {
+    if (h_exchange(&slot, req, rlen, NULL, 0, &status, &headers, &resp_body, &body_len, &keep_alive, 1) != 0) {
+        int e = errno;   // M133：close() 会覆盖 errno ⇒ 先取成因
         close(fd);
-        return px_net_err("net: http_unix 请求失败: 连接关闭");
+        return px_net_err("net: http_unix 请求失败: 连接关闭 (%d)", e);
     }
     close(fd);
     LXValue d = px_dict();
@@ -11264,7 +12440,7 @@ static int px_s3_exec(const char* endpoint, const char* method, const char* buck
     int status = 0, resp_len = 0, keep = 0;
     LXValue hdrs = px_null();
     char* resp = NULL;
-    if (h_exchange(&slot, req, rlen, NULL, 0, &status, &hdrs, &resp, &resp_len, &keep) != 0) {
+    if (h_exchange(&slot, req, rlen, NULL, 0, &status, &hdrs, &resp, &resp_len, &keep, 1) != 0) {
         if (slot.tls) https_close(slot.tls);
         close(slot.fd);
         px_net_fail(errbuf, errcap, "net: S3 请求失败: 连接中断");
@@ -11507,6 +12683,8 @@ static LXValue bi_http_get_stream(LXValue* args, int nargs, void* ctx) {
     int retries = 1;
     int timeout_ms = 30000;
     char proxy[256] = {0};
+    // M136（qg-issue 87 缺陷 89）：opts.decode_gzip（默认 1 = 与既有行为/Go 透明解压一致）
+    int gzip_decode = 1;
     if (nargs >= 5 && args[4].type == PX_DICT) {
         LXValue rv = px_dict_get(args[4], "retries");
         if (rv.type == PX_INT && rv.as.i >= 0) retries = (int)rv.as.i + 1;
@@ -11514,6 +12692,8 @@ static LXValue bi_http_get_stream(LXValue* args, int nargs, void* ctx) {
         if (tv.type == PX_INT && tv.as.i > 0) timeout_ms = (int)tv.as.i;
         LXValue pv = px_dict_get(args[4], "proxy");
         if (pv.type == PX_STR) snprintf(proxy, sizeof(proxy), "%s", pv.as.obj->as.str.data);
+        LXValue gv = px_dict_get(args[4], "decode_gzip");
+        if (gv.type == PX_BOOL) gzip_decode = gv.as.b ? 1 : 0;
     }
     int is_https = 0;
     char host[256];
@@ -12148,6 +13328,22 @@ static char* px_mime_attr(const char* line, const char* key) {
 static void px_parse_multipart(LXValue req, const char* body, int body_len, const char* boundary) {
     LXValue form = px_dict();
     LXValue files = px_dict();
+    // M129（qg-issue 87 缺陷 10）：**补出「字段名」这一维**。
+    //   `files` 以**文件名**为键（历史语义，不改），于是 Go 的 `r.FormFile("avatar")`
+    //   （按**字段名**取件）在语言里没有等价物：多文件且字段名不同时无法区分，
+    //   客户端把文件放进别的字段名时 Go 会 400 而本实现会照收（宽容度不同）。
+    //   新增 `file_fields`：文件名 → 字段名（仅带 filename 的段）。**纯增量键**，
+    //   既有 `files`/`form` 语义与字节序完全不变，老代码不受影响。
+    LXValue file_fields = px_dict();
+    // M129（qg-issue 87 缺陷 50）：**二进制安全的上传内容** —— filename → bytes。
+    //   背景：`files` 的值是 **str**（px_str_len），而 str 底层以 NUL 结尾、多处操作走
+    //   strlen ⇒ **首个 \x00 处静默截断**。实测：上传 8 字节 PNG 魔数 + NUL 开头的负载，
+    //   服务端只拿到 7~8 字节（`type()` 仍是 "string"，不报错）。Go 的 `multipart.File`
+    //   是二进制安全的（`io.Copy(dst, file)` / `image.Decode`），故头像上传、S3 上传、
+    //   任何二进制附件在移植后**必被截断**且**无任何报错**。
+    //   修法：并行提供 `file_bytes`（filename → bytes，二进制安全）；`files` 保持原样
+    //   以免破坏既有调用方（examples / ws-center 共 7 处），新代码一律用 `file_bytes`。
+    LXValue file_bytes = px_dict();
     char delim[512];
     snprintf(delim, sizeof(delim), "--%s", boundary);
     int dlen = (int)strlen(delim);
@@ -12197,6 +13393,9 @@ static void px_parse_multipart(LXValue req, const char* body, int body_len, cons
         //     /v1/files/upload 的 size 与 Go 侧对不上，一眼可见）。
         if (filename[0]) {
             px_dict_set(files, filename, px_str_len(cs, clen));
+            px_dict_set(file_bytes, filename, px_bytes_len((const unsigned char*)cs, clen));
+            if (name[0]) px_dict_set(file_fields, filename, px_str_len(name, (int)strlen(name)));
+            else px_dict_set(file_fields, filename, px_str(""));
         } else if (name[0]) {
             px_dict_set(form, name, px_str_len(cs, clen));
         }
@@ -12204,33 +13403,93 @@ static void px_parse_multipart(LXValue req, const char* body, int body_len, cons
     }
     px_dict_set(req, "form", form);
     px_dict_set(req, "files", files);
+    px_dict_set(req, "file_fields", file_fields);
+    px_dict_set(req, "file_bytes", file_bytes);
 }
 
 static const char* px_http_status_reason(int code) {
+    // M129（qg-issue 87 缺陷 13）：**全表对齐 Go net/http 的 statusText**。
+    //   原先只有 22 项且 default 回退 "OK" —— 于是 307 被写成 `HTTP/1.1 307 OK`
+    //   （状态码对、reason 错），任何**按状态行文本判读**的代理/日志/对拍工具都会看到
+    //   与 Go 不一致（api-server 的 ServeMux 重定向正好落在 307，实测暴露）。
+    //   口径：reason 文本以 Go 的 net/http 为基准（含 Go 保留的 413 "Request Entity Too Large"、
+    //   414 "Request URI Too Long"、416 "Requested Range Not Satisfiable" 旧称），
+    //   既满足 RFC 9110 语义，又与 Go 侧逐字节可比。
     switch (code) {
+        // 1xx
+        case 100: return "Continue";
+        case 101: return "Switching Protocols";
+        case 102: return "Processing";
+        case 103: return "Early Hints";
+        // 2xx
         case 200: return "OK";
         case 201: return "Created";
         case 202: return "Accepted";
+        case 203: return "Non-Authoritative Information";
         case 204: return "No Content";
+        case 205: return "Reset Content";
         case 206: return "Partial Content";
+        case 207: return "Multi-Status";
+        case 208: return "Already Reported";
+        case 226: return "IM Used";
+        // 3xx
+        case 300: return "Multiple Choices";
         case 301: return "Moved Permanently";
         case 302: return "Found";
+        case 303: return "See Other";
         case 304: return "Not Modified";
+        case 305: return "Use Proxy";
+        case 307: return "Temporary Redirect";
+        case 308: return "Permanent Redirect";
+        // 4xx
         case 400: return "Bad Request";
         case 401: return "Unauthorized";
+        case 402: return "Payment Required";
         case 403: return "Forbidden";
         case 404: return "Not Found";
         case 405: return "Method Not Allowed";
+        case 406: return "Not Acceptable";
+        case 407: return "Proxy Authentication Required";
+        case 408: return "Request Timeout";
         case 409: return "Conflict";
-        case 413: return "Payload Too Large";
+        case 410: return "Gone";
+        case 411: return "Length Required";
+        case 412: return "Precondition Failed";
+        case 413: return "Request Entity Too Large";
+        case 414: return "Request URI Too Long";
+        case 415: return "Unsupported Media Type";
+        case 416: return "Requested Range Not Satisfiable";
+        case 417: return "Expectation Failed";
+        case 418: return "I'm a teapot";
+        case 421: return "Misdirected Request";
+        case 422: return "Unprocessable Entity";
+        case 423: return "Locked";
+        case 424: return "Failed Dependency";
+        case 425: return "Too Early";
+        case 426: return "Upgrade Required";
+        case 428: return "Precondition Required";
         case 429: return "Too Many Requests";
         case 431: return "Request Header Fields Too Large";
+        case 451: return "Unavailable For Legal Reasons";
+        // 5xx
         case 500: return "Internal Server Error";
         case 501: return "Not Implemented";
         case 502: return "Bad Gateway";
         case 503: return "Service Unavailable";
         case 504: return "Gateway Timeout";
-        default: return "OK";
+        case 505: return "HTTP Version Not Supported";
+        case 506: return "Variant Also Negotiates";
+        case 507: return "Insufficient Storage";
+        case 508: return "Loop Detected";
+        case 510: return "Not Extended";
+        case 511: return "Network Authentication Required";
+        // 未登记码：对齐 Go —— 写 `status code NNN`（Go 的 net/http 对未知码正是这个文本），
+        //   而不是回退成 "OK"（那会把「未知码」伪装成「一切正常」，日志与代理都读不出来）。
+        default: {
+            static __thread char px_reason_unknown[32];
+            snprintf(px_reason_unknown, sizeof(px_reason_unknown), "status code %d", code);
+            return px_reason_unknown;
+        }
     }
 }
 
@@ -12425,15 +13684,41 @@ static char* px_http_build_response(LXValue v, int* out_len, int* keep_alive_out
         if (b.type == PX_STR) {
             body = b.as.obj->as.str.data;
             body_len = b.as.obj->as.str.len;
+        } else if (b.type == PX_BYTES) {
+            // M129（qg-issue 87 缺陷 49）：**补 bytes 分支** —— 这是 http_serve(port, fn)
+            //   的响应构造器（`px_http_build_response`），也是 `.px` 服务 handler 最常用的一条。
+            //   同一族另外两处（runtime_route.c::route_normalize 与 runtime.c::px_vhost_normalize）
+            //   都**有** PX_BYTES 分支，唯独此处漏了 ⇒ 路由返回 {"body": <bytes>} 时
+            //   **响应体恒为空**（Content-Length: 0），状态码与其余响应头一切正常、**无任何报错**。
+            //   影响面：一切二进制响应 —— 头像（/v1/avatar GET）、S3 文件下载、目录打包 zip。
+            //   实证：examples 级最小复现 bytes("HELLOBYTES") → Go 10 字节 / 修前 0 字节。
+            body = (const char*)b.as.obj->as.str.data;
+            body_len = b.as.obj->as.str.len;
         }
         LXValue h = px_dict_get(v, "headers");
         if (h.type == PX_DICT) {
             LXObject* ho = h.as.obj;
             int off = 0;
             for (int i = 0; i < ho->as.dict.len && off < (int)sizeof(extra_headers) - 64; i++) {
-                if (ho->as.dict.vals[i].type != PX_STR) continue;
+                // M136（qg-issue 87 缺陷 88）：**多值头**（值为 list）此前被静默丢弃 ——
+                //   值非 PX_STR 即 continue ⇒ 透传上游响应时同名多头（Set-Cookie 等）
+                //   **全部消失**（Go 的 `w.Header()[k] = v` 会把 []string 逐行写出）。
+                //   实证：媒体代理透传 `Set-Cookie: a=1` + `Set-Cookie: b=2`
+                //         ⇒ 修前 0 行 / 修后 2 行（examples/m135_multi_header）。
+                LXValue hv = ho->as.dict.vals[i];
+                if (hv.type == PX_LIST) {
+                    LXObject* lo = hv.as.obj;
+                    for (int j = 0; j < lo->as.list.len && off < (int)sizeof(extra_headers) - 64; j++) {
+                        if (lo->as.list.items[j].type != PX_STR) continue;
+                        off += snprintf(extra_headers + off, sizeof(extra_headers) - (size_t)off,
+                                        "%s: %s\r\n", ho->as.dict.keys[i],
+                                        lo->as.list.items[j].as.obj->as.str.data);
+                    }
+                    continue;
+                }
+                if (hv.type != PX_STR) continue;
                 off += snprintf(extra_headers + off, sizeof(extra_headers) - (size_t)off,
-                                "%s: %s\r\n", ho->as.dict.keys[i], ho->as.dict.vals[i].as.obj->as.str.data);
+                                "%s: %s\r\n", ho->as.dict.keys[i], hv.as.obj->as.str.data);
             }
         }
         // M21：gzip / chunked 标志
@@ -12443,6 +13728,10 @@ static char* px_http_build_response(LXValue v, int* out_len, int* keep_alive_out
         if (ch.type == PX_BOOL && ch.as.b) chunked = 1;
     } else if (v.type == PX_STR) {
         body = v.as.obj->as.str.data;
+        body_len = v.as.obj->as.str.len;
+    } else if (v.type == PX_BYTES) {
+        // 缺陷 49 续：顶层直接返回 bytes（`return read_bytes(p)`）同族补齐
+        body = (const char*)v.as.obj->as.str.data;
         body_len = v.as.obj->as.str.len;
     } else if (v.type == PX_INT) {
         status = (int)v.as.i;
@@ -12480,7 +13769,11 @@ static char* px_http_build_response(LXValue v, int* out_len, int* keep_alive_out
     if (chunked) {
         off += snprintf(out + off, 8192 + body_len - off, "Transfer-Encoding: chunked\r\n");
     }
-    if (!has_ct) {
+    if (!has_ct && body_len > 0) {
+        // M130（qg-issue 87 缺陷 59）：**空响应体不加嗅探 CT** —— 对齐 Go net/http。
+        // Go 的 sniffing 发生在**首次 Write** 时：handler 只 WriteHeader、不写体
+        // （如 http.Redirect 对非 GET 请求）⇒ 响应**没有 Content-Type 头**。
+        // 此前本实现无条件补 text/plain，导致「307 空体跳转」多出一个头（对拍实证）。
         off += snprintf(out + off, 8192 + body_len - off, "Content-Type: text/plain; charset=utf-8\r\n");
     }
     memcpy(out + off, "\r\n", 2);
@@ -12500,11 +13793,53 @@ static char* px_http_build_response(LXValue v, int* out_len, int* keep_alive_out
 // 全局表须在 http_conn_worker（下方）使用前定义；函数实现见 SSE 区（bi_http_stream/
 // stream_takeover_conn，定义在 g_sse_conns 注册表可用处之后）。
 #define MAX_STREAM_ROUTES 64
+#define MAX_STREAM_OVR 8    // 每路由最多 8 个响应头覆写（名 64B / 值 512B）
 static pthread_mutex_t g_stream_mu = PTHREAD_MUTEX_INITIALIZER;
-static struct {
+typedef struct {
     char path[256];
     int active;
-} g_stream_routes[MAX_STREAM_ROUTES];
+    int mmask;          // 方法位掩码（默认 HTTP_MM_GET；opts.methods 可扩展）
+    int manual;         // 1 = 接管时不写响应头，由语言层 sse_start 自写
+    int novr;           // 响应头覆写条数
+    char oname[MAX_STREAM_OVR][64];
+    char oval[MAX_STREAM_OVR][512];
+} StreamRoute;
+static StreamRoute g_stream_routes[MAX_STREAM_ROUTES];
+
+// 方法位掩码（M131）。未登记的方法 → 0 ⇒ 不参与流式接管（落普通 dispatch）
+#define HTTP_MM_GET   1
+#define HTTP_MM_POST  2
+#define HTTP_MM_PUT   4
+#define HTTP_MM_DEL   8
+#define HTTP_MM_HEAD  16
+#define HTTP_MM_OPT   32
+#define HTTP_MM_PATCH 64
+static int http_method_bit(const char* m) {
+    if (!strcmp(m, "GET")) return HTTP_MM_GET;
+    if (!strcmp(m, "POST")) return HTTP_MM_POST;
+    if (!strcmp(m, "PUT")) return HTTP_MM_PUT;
+    if (!strcmp(m, "DELETE")) return HTTP_MM_DEL;
+    if (!strcmp(m, "HEAD")) return HTTP_MM_HEAD;
+    if (!strcmp(m, "OPTIONS")) return HTTP_MM_OPT;
+    if (!strcmp(m, "PATCH")) return HTTP_MM_PATCH;
+    return 0;
+}
+
+// 响应头块里是否声明了 Transfer-Encoding: chunked（M131）
+// 判据与 px_http_parse_response 同口径（strncasecmp + strcasestr）。
+// 为什么需要：Go 的 handler 写头后**边写边 Flush** ⇒ net/http 用 **chunked** 分帧
+//   （Content-Length 未知）。要逐字节对齐这种响应，本实现也得分块编码 + 终结块。
+static int hdr_block_chunked(const char* h) {
+    const char* p = h;
+    while (*p) {
+        const char* e = strstr(p, "\r\n");
+        if (!e) break;
+        if (e - p > 18 && strncasecmp(p, "Transfer-Encoding:", 18) == 0
+            && strcasestr(p, "chunked") && strcasestr(p, "chunked") < e) return 1;
+        p = e + 2;
+    }
+    return 0;
+}
 
 // ==================== M88-B-S2（qg-issue 27 B 类）：http_conn_worker 请求级重构（空闲连接事件驱动） ====================
 // 目标：keep-alive 空闲连接不占 worker——响应写完且无下一请求数据在途 → 连接交还 IDLE
@@ -12814,11 +14149,17 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
             memcpy(version, ver, (size_t)vlen);
             version[vlen] = 0;
         }
-        char path[2048] = {0}, query[2048] = {0};
+        char path[2048] = {0}, query[2048] = {0}, raw_query[2048] = {0};
         char* q = strchr(target, '?');
         char* dec;
         if (q) {
             *q = 0;
+            // M136（qg-issue 87 缺陷 90）：**原始查询串**（未解码）单列一份 ——
+            //   Go 的 r.URL.RawQuery 不解码，r.URL.Query() 才「先按 & / = / + 切分、
+            //   再逐项百分号解码」；此前只给整体解码后的 query（key=a%26b 变成 key=a&b），
+            //   调用方再按 & 切分必然切错（值里的 %26 / %3D 被当成分隔符）。
+            //   实证：/get?key=a%26b 时 Go 取到 a&b，修前本实现取到 a。
+            snprintf(raw_query, sizeof(raw_query), "%s", q + 1);
             dec = px_url_decode(target);
             snprintf(path, sizeof(path), "%s", dec ? dec : target);
             xfree(dec);
@@ -12910,6 +14251,7 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
         px_dict_set(req, "target", px_str(target));
         px_dict_set(req, "path", px_str(path));
         px_dict_set(req, "query", px_str(query));
+        px_dict_set(req, "raw_query", px_str(raw_query));   // M136 缺陷 90
         px_dict_set(req, "version", px_str(version));
         px_dict_set(req, "headers", headers);
         px_dict_set(req, "body", body_buf ? px_str_len(body_buf, body_len) : px_str("")); // M83-S1：body_buf NULL(无 body) → 空串（避免 px_str_len(NULL,0) UB）
@@ -12976,12 +14318,18 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
         }
 
         // 5.5（M83-S6 / Issue 19 GAP-SRV-SSE）：http_stream 流式路由优先——
-        //    命中（GET）→ 连接转 SSE 通道（复用 sse_send/sse_close），不再走普通 handler/keep-alive。
+        //    命中 → 连接转 SSE 通道（复用 sse_send/sse_close/sse_write），不再走普通 handler。
         //    http_serve 与 http_serve_unix 共享本 worker → 两入口同享。
-        if (strcmp(method, "GET") == 0) {
-            pthread_mutex_lock(&g_stream_mu);
-            int s_idx = stream_match(path);
-            pthread_mutex_unlock(&g_stream_mu);
+        //    M131（qg-issue 87 缺陷 65）：命中判据由「方法 == GET」改为**路由方法掩码**，
+        //      POST 的 SSE 端点（Go handleStream / LLM 代理）由此可流式。
+        {
+            int s_mbit = http_method_bit(method);
+            int s_idx = -1;
+            if (s_mbit) {
+                pthread_mutex_lock(&g_stream_mu);
+                s_idx = stream_match(path, s_mbit);
+                pthread_mutex_unlock(&g_stream_mu);
+            }
             if (s_idx >= 0) {
                 if (body_buf) { xfree(body_buf); body_buf = NULL; }
                 LXValue _s2c_sr = stream_takeover_conn(fd, req, s_idx);
@@ -13920,7 +15268,8 @@ static LXValue bi_http_serve_unix(LXValue* args, int nargs, void* ctx) {
 //      连接注册表项保留供 sse_send/sse_close）；2 = handler 协程完成待续处理
 //      （done 回调置位 + fserve_push(fd, SSE) 投回 → sse_conn_worker 入口检测
 //      stage==2 → 执行原 step8 hold 收尾：明文交 IDLE / TLS 阻塞保持读）。
-typedef struct SseServerConn { int fd; int64_t id; int active; PxConn* conn; int stage; } SseServerConn;
+typedef struct SseServerConn { int fd; int64_t id; int active; PxConn* conn; int stage;
+                               int started; int chunked; } SseServerConn;
 static pthread_mutex_t g_sse_mu = PTHREAD_MUTEX_INITIALIZER;
 static SseServerConn* g_sse_conns = NULL;
 static int g_sse_cap = 0;            // 当前容量（首次使用时按 env 上限一次性分配）
@@ -14013,14 +15362,23 @@ static void sse_server_close_fd(int fd) {
 
 #define MAX_SSE_CLIENTS 256
 static pthread_mutex_t g_sse_cli_mu = PTHREAD_MUTEX_INITIALIZER;
-static struct {
+typedef struct {
     int fd;
     int64_t id;
     int active;
     HttpsSession* tls;        // 非空 = https（mbedtls 会话；fd 为底层 TCP）
-    unsigned char* pending;   // 已读未解析缓冲
+    unsigned char* pending;   // 已解码、未解析缓冲（sse_read / sse_read_line 只看它）
     int pend_len;
     int pend_cap;
+    // ── M131（qg-issue 87 缺陷 69）：chunked 解码状态 ──
+    //   原始到达字节先进 rbuf，经 sse_cli_pump 按 RFC 7230 §4.1 解码进 pending。
+    unsigned char* rbuf;
+    int rlen;
+    int rcap;
+    int chunked;              // 响应头声明 Transfer-Encoding: chunked
+    long long chunk_left;     // 当前块剩余字节
+    int chunk_crlf;           // 块数据后待吃掉的 CRLF 计数（0/2）
+    int chunk_done;           // 终结块（0 长度）已到
     // M32：自动重连（sse_connect(url, reconnect_ms)）
     long long reconnect_ms;   // >0 时断线自动重连
     char url[512];            // 原始 URL（重连用）；unix 模式下为请求路径
@@ -14035,8 +15393,36 @@ static struct {
     char* req_headers;        // 额外请求头（已序列化的 "K: V\r\n" 串；可为 NULL）
     char* req_body;           // 请求体（二进制安全；可为 NULL）
     int req_body_len;
-} g_sse_clients[MAX_SSE_CLIENTS];
-static int64_t g_sse_cli_next_id = 1;
+    // ── M137（qg-issue 87 第 17 轮）：连接失败的**可分类**记录 ──
+    //   病灶：sse_cli_connect_slot 对所有失败一律 `return -1` ⇒ 语言层拿不到
+    //     「连不上（该 failover）」「收到 4xx/5xx（要带状态码 + 响应体）」「CT 不符」之别；
+    //     而 Go 的 doUpstream 正是按「可重试状态码 / 传输错误 / 正常响应」三分支处理的
+    //     ⇒ token-cache 的**真流式**代理（forwardStream）无法落地。
+    //   修法：把失败阶段/errno/状态码/响应体/Retry-After 记进 slot，经 sse_connect_ex
+    //     一次性回给语言层（语言层负责合成 Go 形状的错误文案）。
+    //   ⚠️ require_ct：Go 的 forwardStream **不检查** Content-Type（只按行扫），
+    //     故 ex 模式必须能"200 + 任意 CT"也接通；sse_connect 保持原语义（要求 SSE）。
+    int f_stage;              // 0=无 1=参数 2=连接 3=发送 4=读头 5=状态码 6=CT 不符
+    int f_errno;              // 失败处 errno（connect/send/recv；0=无）
+    int f_status;             // 收到的 HTTP 状态码（0=未收到）
+    char f_ctype[256];        // 响应 Content-Type 原文（小写名，值原样）
+    char f_retry_after[128];  // Retry-After 原文（'' = 无）
+    char* f_body;             // 响应体（二进制安全；stage=5 时填充）
+    int f_body_len;
+    int timeout_ms;           // SO_RCVTIMEO/SO_SNDTIMEO（0=不设 → 阻塞无超时，原语义）
+    int require_ct;           // 1=sse_connect 原语义（要求 text/event-stream）；0=ex 模式
+} SseClientSlot;
+static SseClientSlot g_sse_clients[MAX_SSE_CLIENTS];
+// ── M131（qg-issue 87 缺陷 70）：客户端连接 id 从**高位**起分配 ──
+// 病灶（api-server /v1/chat/stream 实测照出）：sse_serve/http_stream 的**服务端**
+//   连接 id 与 sse_connect 的**客户端**连接 id 各自从 1 开始自增，两个命名空间**重合**。
+//   而 sse_close(conn) 先在服务端表 g_sse_conns 里查、查不到才查客户端表 g_sse_clients
+//   ⇒ 「sse_close(上游客户端 conn)」在 id 恰好撞上**下游服务端 conn** 时，
+//   关掉的是自己的下游连接：响应缺收尾块（chunked 的 0\r\n\r\n）、连接被提前关。
+//   实测症状：透传最后一行正常、终结块消失，且极难定位（id 相同时才复现）。
+// 修法：客户端 id 取**不相交区间**（1<<40 起）；服务端 id 仍从 1 起，实际不可能撞上。
+// 说明：不改 sse_close 的查表顺序 —— 那样只是把撞名换个方向，仍靠运气。
+static int64_t g_sse_cli_next_id = (1LL << 40);
 
 // M118：释放某 slot 的请求体/附加头（slot 复用、断开重连、sse_close 都要清）
 static void sse_cli_free_opts(int slot) {
@@ -14044,6 +15430,25 @@ static void sse_cli_free_opts(int slot) {
     if (g_sse_clients[slot].req_headers) { xfree(g_sse_clients[slot].req_headers); g_sse_clients[slot].req_headers = NULL; }
     if (g_sse_clients[slot].req_body) { xfree(g_sse_clients[slot].req_body); g_sse_clients[slot].req_body = NULL; }
     g_sse_clients[slot].req_body_len = 0;
+}
+
+// M137：清失败记录（释放响应体、归零各字段）
+static void sse_cli_clear_fail(int slot) {
+    if (slot < 0 || slot >= MAX_SSE_CLIENTS) return;
+    g_sse_clients[slot].f_stage = 0;
+    g_sse_clients[slot].f_errno = 0;
+    g_sse_clients[slot].f_status = 0;
+    g_sse_clients[slot].f_ctype[0] = 0;
+    g_sse_clients[slot].f_retry_after[0] = 0;
+    if (g_sse_clients[slot].f_body) { xfree(g_sse_clients[slot].f_body); g_sse_clients[slot].f_body = NULL; }
+    g_sse_clients[slot].f_body_len = 0;
+}
+
+// M137：失败打点（stage 见 SseClientSlot 注释；err 为该处 errno）
+static void sse_cli_fail(int slot, int stage, int err) {
+    if (slot < 0 || slot >= MAX_SSE_CLIENTS) return;
+    g_sse_clients[slot].f_stage = stage;
+    g_sse_clients[slot].f_errno = err;
 }
 
 static int sse_cli_find(int64_t id) {
@@ -14055,11 +15460,136 @@ static int sse_cli_find(int64_t id) {
 
 static int sse_cli_alloc_slot(void) {
     for (int i = 0; i < MAX_SSE_CLIENTS; i++) {
-        if (!g_sse_clients[i].active) return i;
+        if (!g_sse_clients[i].active) {
+            // M131：复用槽位前清残留缓冲（防上一连接的解码态/字节串扰本连接）
+            if (g_sse_clients[i].pending) { xfree(g_sse_clients[i].pending); g_sse_clients[i].pending = NULL; }
+            if (g_sse_clients[i].rbuf) { xfree(g_sse_clients[i].rbuf); g_sse_clients[i].rbuf = NULL; }
+            g_sse_clients[i].pend_len = g_sse_clients[i].pend_cap = 0;
+            g_sse_clients[i].rlen = g_sse_clients[i].rcap = 0;
+            g_sse_clients[i].chunked = 0;
+            g_sse_clients[i].chunk_left = 0;
+            g_sse_clients[i].chunk_crlf = 0;
+            g_sse_clients[i].chunk_done = 0;
+            // M137：失败记录/超时/CT 要求一并归位（防上一连接的失败态串到本连接）
+            g_sse_clients[i].f_stage = 0;
+            g_sse_clients[i].f_errno = 0;
+            g_sse_clients[i].f_status = 0;
+            g_sse_clients[i].f_ctype[0] = 0;
+            g_sse_clients[i].f_retry_after[0] = 0;
+            if (g_sse_clients[i].f_body) { xfree(g_sse_clients[i].f_body); g_sse_clients[i].f_body = NULL; }
+            g_sse_clients[i].f_body_len = 0;
+            g_sse_clients[i].timeout_ms = 0;
+            g_sse_clients[i].require_ct = 1;   // 默认 = sse_connect 原语义
+            return i;
+        }
     }
     return -1;
 }
 
+// ── M131（qg-issue 87 缺陷 69）：SSE 客户端 chunked 解码 ──
+// 病灶：sse_cli_connect_slot 只读响应头，其余字节**原样**进 pending。而上游若用
+//   Transfer-Encoding: chunked（Go 的 SSE handler「写头 + 边写边 Flush」必然如此），
+//   pending 里是 `1a\r\ndata: {...}\r\n` 这类**分块帧**。sse_read 的 `\n\r\n` 事件
+//   分隔恰好把块长行当成"无冒号行"丢掉 ⇒ **仅在块边界与事件边界重合时侥幸可用**；
+//   一旦某块的边界落在 data 行中间（LLM 逐 token 推送的常态），块长行就会被并进
+//   内容里。实测：探针喂 4 个块 ⇒ sse_read 多出 2 个空事件（终结块处）。
+// 修法：连接时记住 chunked；到达字节先进 rbuf，由 sse_cli_pump 解码进 pending。
+//   sse_read / sse_read_line 都只看 pending ⇒ 二者随之变正确（单一解码点）。
+// 调用方需持 g_sse_cli_mu。
+static void sse_cli_pump(int idx) {
+    SseClientSlot* c = &g_sse_clients[idx];
+    for (;;) {
+        if (c->rlen <= 0) break;
+        if (!c->chunked) {
+            int need = c->pend_len + c->rlen;
+            if (need > c->pend_cap) {
+                int ncap = c->pend_cap ? c->pend_cap : 64;
+                while (ncap < need) ncap *= 2;
+                unsigned char* np = xmalloc((size_t)ncap);
+                if (c->pend_len > 0) memcpy(np, c->pending, (size_t)c->pend_len);
+                if (c->pending) xfree(c->pending);
+                c->pending = np; c->pend_cap = ncap;
+            }
+            memcpy(c->pending + c->pend_len, c->rbuf, (size_t)c->rlen);
+            c->pend_len += c->rlen;
+            c->rlen = 0;
+            break;
+        }
+        if (c->chunk_done) { c->rlen = 0; break; }
+        if (c->chunk_crlf > 0) {
+            // 块数据后的 CRLF（可能跨 recv 边界 → 未齐就等下一轮）
+            while (c->chunk_crlf > 0 && c->rlen > 0
+                   && (c->rbuf[0] == '\r' || c->rbuf[0] == '\n')) {
+                memmove(c->rbuf, c->rbuf + 1, (size_t)(c->rlen - 1));
+                c->rlen--;
+                c->chunk_crlf--;
+            }
+            if (c->chunk_crlf > 0) {
+                if (c->rlen > 0) c->chunk_crlf = 0;   // 下一字节非 CR/LF ⇒ 流异常，不再等
+                break;
+            }
+            continue;
+        }
+        if (c->chunk_left <= 0) {
+            // 读块长行（十六进制，可带 `;扩展`）
+            int nl = -1;
+            for (int i = 0; i < c->rlen; i++) if (c->rbuf[i] == '\n') { nl = i; break; }
+            if (nl < 0) break;
+            long long sz = 0;
+            int bad = 0;
+            for (int i = 0; i < nl; i++) {
+                unsigned char ch = c->rbuf[i];
+                if (ch == '\r' || ch == ';') break;
+                int d = -1;
+                if (ch >= '0' && ch <= '9') d = ch - '0';
+                else if (ch >= 'a' && ch <= 'f') d = ch - 'a' + 10;
+                else if (ch >= 'A' && ch <= 'F') d = ch - 'A' + 10;
+                else { bad = 1; break; }
+                sz = sz * 16 + d;
+                if (sz > (1LL << 40)) { bad = 1; break; }
+            }
+            memmove(c->rbuf, c->rbuf + nl + 1, (size_t)(c->rlen - nl - 1));
+            c->rlen -= nl + 1;
+            if (bad || sz == 0) { c->chunk_done = 1; c->rlen = 0; break; }
+            c->chunk_left = sz;
+            continue;
+        }
+        // 块数据
+        int take = (c->rlen < c->chunk_left) ? c->rlen : (int)c->chunk_left;
+        if (take <= 0) break;
+        int need = c->pend_len + take;
+        if (need > c->pend_cap) {
+            int ncap = c->pend_cap ? c->pend_cap : 64;
+            while (ncap < need) ncap *= 2;
+            unsigned char* np = xmalloc((size_t)ncap);
+            if (c->pend_len > 0) memcpy(np, c->pending, (size_t)c->pend_len);
+            if (c->pending) xfree(c->pending);
+            c->pending = np; c->pend_cap = ncap;
+        }
+        memcpy(c->pending + c->pend_len, c->rbuf, (size_t)take);
+        c->pend_len += take;
+        memmove(c->rbuf, c->rbuf + take, (size_t)(c->rlen - take));
+        c->rlen -= take;
+        c->chunk_left -= take;
+        if (c->chunk_left == 0) c->chunk_crlf = 2;
+    }
+}
+
+// 把刚 recv 到的 n 字节追加进 rbuf（必要时扩容）——调用方需持 g_sse_cli_mu。
+static void sse_cli_feed(int idx, const unsigned char* data, int n) {
+    SseClientSlot* c = &g_sse_clients[idx];
+    if (n <= 0) return;
+    if (c->rlen + n > c->rcap) {
+        int ncap = c->rcap ? c->rcap : 64;
+        while (ncap < c->rlen + n) ncap *= 2;
+        unsigned char* np = xmalloc((size_t)ncap);
+        if (c->rlen > 0) memcpy(np, c->rbuf, (size_t)c->rlen);
+        if (c->rbuf) xfree(c->rbuf);
+        c->rbuf = np; c->rcap = ncap;
+    }
+    memcpy(c->rbuf + c->rlen, data, (size_t)n);
+    c->rlen += n;
+}
 
 // SSE 帧编码：str → `data: xxx\n\n`；dict → event/data/id/retry。返回 xmalloc，调用者 xfree。
 static char* sse_frame_c(LXValue data) {
@@ -14264,11 +15794,12 @@ static LXValue sse_conn_worker(LXValue* args, int nargs, void* ctx) {
         memcpy(version, ver, (size_t)vlen);
         version[vlen] = 0;
     }
-    char path[2048] = {0}, query[2048] = {0};
+    char path[2048] = {0}, query[2048] = {0}, raw_query[2048] = {0};
     char* q = strchr(target, '?');
     char* dec;
     if (q) {
         *q = 0;
+        snprintf(raw_query, sizeof(raw_query), "%s", q + 1);   // M136 缺陷 90：原始查询串
         dec = px_url_decode(target);
         snprintf(path, sizeof(path), "%s", dec ? dec : target);
         xfree(dec);
@@ -14317,6 +15848,7 @@ static LXValue sse_conn_worker(LXValue* args, int nargs, void* ctx) {
     px_dict_set(req, "target", px_str(target));
     px_dict_set(req, "path", px_str(path));
     px_dict_set(req, "query", px_str(query));
+    px_dict_set(req, "raw_query", px_str(raw_query));   // M136 缺陷 90
     px_dict_set(req, "version", px_str(version));
     px_dict_set(req, "headers", headers);
     px_dict_set(req, "body", px_str(""));
@@ -14465,6 +15997,84 @@ static LXValue bi_sse_send(LXValue* args, int nargs, void* ctx) {
     return px_bool(true);
 }
 
+// ── M131（qg-issue 87 缺陷 65）：手写流式响应头 + 原始写出 ──
+// sse_start(conn, status, headers) → bool
+//   仅用于 http_stream 的 manual 路由：语言层校验通过后**自己**发响应头。
+//   headers 为 dict（值须为字符串），按插入序写出；其中若声明
+//   Transfer-Encoding: chunked，则本连接后续 sse_write/终结块走分块编码。
+static LXValue bi_sse_start(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 3 || args[0].type != PX_INT || args[1].type != PX_INT || args[2].type != PX_DICT)
+        px_error("R1002: sse_start 需要 (conn, status, headers) 参数");
+    int64_t conn = args[0].as.i;
+    int status = (int)args[1].as.i;
+    char block[8192];
+    int off = 0;
+    off += snprintf(block + off, sizeof(block) - (size_t)off,
+                    "HTTP/1.1 %d %s\r\n", status, px_http_status_reason(status));
+    LXObject* ho = args[2].as.obj;
+    for (int i = 0; i < ho->as.dict.len; i++) {
+        LXValue vv = ho->as.dict.vals[i];
+        if (vv.type != PX_STR)
+            px_error("R1002: sse_start 的 headers 值必须是字符串（键: %s）", ho->as.dict.keys[i]);
+        off += snprintf(block + off, sizeof(block) - (size_t)off, "%s: %s\r\n",
+                        ho->as.dict.keys[i], vv.as.obj->as.str.data);
+    }
+    off += snprintf(block + off, sizeof(block) - (size_t)off, "\r\n");
+    int ck = hdr_block_chunked(block);
+    pthread_mutex_lock(&g_sse_mu);
+    int idx = sse_find(conn);
+    if (idx < 0) { pthread_mutex_unlock(&g_sse_mu); return px_bool(false); }
+    PxConn* pc = g_sse_conns[idx].conn;
+    g_sse_conns[idx].started = 1;
+    g_sse_conns[idx].chunked = ck;
+    pthread_mutex_unlock(&g_sse_mu);
+    if (!pc) return px_bool(false);
+    return px_bool(px_conn_write(pc, block, (size_t)off) >= 0);
+}
+
+// sse_write(conn, data) → bool：**原始**写出（不分帧、即写即刷）
+//   与 sse_send 的区别：sse_send 会按 SSE 规则给每行加 "data: " 前缀（帧化），
+//   sse_write 原样写出 —— LLM 代理要逐行**透传上游 SSE 原文**，不能再分帧。
+//   data 支持 str 与 bytes（bytes 用于二进制安全的透传；str 不能承载内嵌 NUL）。
+static LXValue bi_sse_write(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2 || args[0].type != PX_INT)
+        px_error("R1002: sse_write 需要 (conn, data) 参数");
+    int64_t conn = args[0].as.i;
+    const char* data = NULL;
+    int n = 0;
+    if (args[1].type == PX_STR) { data = args[1].as.obj->as.str.data; n = args[1].as.obj->as.str.len; }
+    else if (args[1].type == PX_BYTES) { data = args[1].as.obj->as.str.data; n = args[1].as.obj->as.str.len; }
+    else px_error("R1002: sse_write 的 data 必须是 str 或 bytes");
+
+    pthread_mutex_lock(&g_sse_mu);
+    int idx = sse_find(conn);
+    if (idx < 0) { pthread_mutex_unlock(&g_sse_mu); return px_bool(false); }
+    PxConn* pc = g_sse_conns[idx].conn;
+    int cfd = g_sse_conns[idx].fd;
+    int ck = g_sse_conns[idx].chunked;
+    ssize_t w = -1;
+    if (pc) {
+        if (ck) {
+            char pre[32];
+            int pl = snprintf(pre, sizeof(pre), "%zx\r\n", (size_t)n);
+            w = px_conn_write(pc, pre, (size_t)pl);
+            if (w >= 0) w = px_conn_write(pc, data, (size_t)n);
+            if (w >= 0) w = px_conn_write(pc, "\r\n", 2);
+        } else {
+            w = px_conn_write(pc, data, (size_t)n);
+        }
+    }
+    pthread_mutex_unlock(&g_sse_mu);
+    if (w < 0) {
+        // 与 sse_send 同一收尾口径：写失败 = 对端已断 → 统一关闭路径
+        sse_server_close_fd(cfd);
+        return px_bool(false);
+    }
+    return px_bool(true);
+}
+
 // sse_close(conn) → bool（服务端连接 shutdown 唤醒 / 事件化摘除；客户端连接直接关闭）
 static LXValue bi_sse_close(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
@@ -14530,9 +16140,10 @@ static LXValue bi_sse_close(LXValue* args, int nargs, void* ctx) {
 //       worker）暂不接入（文档注明，后续扩展）
 // （全局表 g_stream_mu/g_stream_routes 定义于 http_conn_worker 之前，见上）
 // 流式路由精确匹配（调用方需持 g_stream_mu）；命中返回路由下标，否则 -1
-static int stream_match(const char* path) {
+static int stream_match(const char* path, int method_bit) {
     for (int i = 0; i < MAX_STREAM_ROUTES; i++) {
-        if (g_stream_routes[i].active && strcmp(g_stream_routes[i].path, path) == 0) return i;
+        if (g_stream_routes[i].active && strcmp(g_stream_routes[i].path, path) == 0
+            && (g_stream_routes[i].mmask & method_bit)) return i;
     }
     return -1;
 }
@@ -14540,11 +16151,52 @@ static int stream_match(const char* path) {
 // http_stream(path, on_connect) → bool
 static LXValue bi_http_stream(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2 || args[0].type != PX_STR) px_error("R1002: http_stream 需要 (path, on_connect) 参数");
+    if ((nargs != 2 && nargs != 3) || args[0].type != PX_STR)
+        px_error("R1002: http_stream 需要 (path, on_connect[, opts]) 参数");
     const char* p = args[0].as.obj->as.str.data;
     if (p[0] != '/') px_error("R1002: http_stream 的 path 必须以 / 开头");
     LXValue fn = args[1];
     if (fn.type != PX_FUNC && fn.type != PX_NATIVE) px_error("R1002: http_stream 的 on_connect 必须是函数");
+
+    // opts（M131，全部可选）：methods / manual / headers
+    int mmask = HTTP_MM_GET;
+    int manual = 0;
+    int novr = 0;
+    char oname[MAX_STREAM_OVR][64];
+    char oval[MAX_STREAM_OVR][512];
+    if (nargs == 3) {
+        if (args[2].type != PX_DICT) px_error("R1002: http_stream 的 opts 必须是字典");
+        LXValue mv = px_dict_get(args[2], "methods");
+        if (mv.type != PX_NULL) {
+            if (mv.type != PX_LIST) px_error("R1002: http_stream 的 opts.methods 必须是列表");
+            int mm = 0;
+            for (int i = 0; i < mv.as.obj->as.list.len; i++) {
+                LXValue it = mv.as.obj->as.list.items[i];
+                if (it.type != PX_STR)
+                    px_error("R1002: http_stream 的 opts.methods 元素必须是字符串");
+                int b = http_method_bit(it.as.obj->as.str.data);
+                if (!b) px_error("R1002: http_stream 的 opts.methods 含未知方法: %s",
+                                 it.as.obj->as.str.data);
+                mm |= b;
+            }
+            if (mm) mmask = mm;
+        }
+        if (px_is_truthy(px_dict_get(args[2], "manual"))) manual = 1;
+        LXValue hv = px_dict_get(args[2], "headers");
+        if (hv.type == PX_DICT) {
+            LXObject* ho = hv.as.obj;
+            for (int i = 0; i < ho->as.dict.len; i++) {
+                LXValue vv = ho->as.dict.vals[i];
+                if (vv.type != PX_STR) continue;
+                if (novr >= MAX_STREAM_OVR)
+                    px_error("R1002: http_stream 的 opts.headers 最多 %d 条", MAX_STREAM_OVR);
+                snprintf(oname[novr], sizeof(oname[novr]), "%s", ho->as.dict.keys[i]);
+                snprintf(oval[novr], sizeof(oval[novr]), "%s", vv.as.obj->as.str.data);
+                novr++;
+            }
+        }
+    }
+
     pthread_mutex_lock(&g_stream_mu);
     int idx = -1;
     for (int i = 0; i < MAX_STREAM_ROUTES; i++) {
@@ -14557,6 +16209,14 @@ static LXValue bi_http_stream(LXValue* args, int nargs, void* ctx) {
         if (idx < 0) { pthread_mutex_unlock(&g_stream_mu); return px_bool(false); }
         snprintf(g_stream_routes[idx].path, sizeof(g_stream_routes[idx].path), "%s", p);
         g_stream_routes[idx].active = 1;
+    }
+    // 复用既有槽位（同路径重注册）时**必须整体重置**选项，否则旧 options 残留
+    g_stream_routes[idx].mmask = mmask;
+    g_stream_routes[idx].manual = manual;
+    g_stream_routes[idx].novr = novr;
+    for (int i = 0; i < novr; i++) {
+        snprintf(g_stream_routes[idx].oname[i], 64, "%s", oname[i]);
+        snprintf(g_stream_routes[idx].oval[i], 512, "%s", oval[i]);
     }
     pthread_mutex_unlock(&g_stream_mu);
     // handler 存全局表（GC 扫描根），连接线程经全局表取回
@@ -14589,21 +16249,97 @@ static LXValue stream_takeover_conn(int fd, LXValue req, int route_idx) {
     g_sse_conns[slot].id = conn;
     g_sse_conns[slot].active = 1;
     g_sse_conns[slot].conn = c;
+    g_sse_conns[slot].started = 0;
+    g_sse_conns[slot].chunked = 0;
     pthread_mutex_unlock(&g_sse_mu);
     px_dict_set(req, "conn", px_int(conn));
 
-    // SSE 响应头（Connection: close——本连接不 keep-alive 复用）
-    const char* hdr = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\n"
-                      "Cache-Control: no-cache\r\nConnection: close\r\n\r\n";
-    px_conn_write(c, hdr, strlen(hdr));
+    // 路由选项快照（M131）：manual / headers 覆写
+    int manual = 0;
+    int novr = 0;
+    char oname[MAX_STREAM_OVR][64];
+    char oval[MAX_STREAM_OVR][512];
+    pthread_mutex_lock(&g_stream_mu);
+    if (route_idx >= 0 && route_idx < MAX_STREAM_ROUTES) {
+        manual = g_stream_routes[route_idx].manual;
+        novr = g_stream_routes[route_idx].novr;
+        for (int i = 0; i < novr; i++) {
+            snprintf(oname[i], sizeof(oname[i]), "%s", g_stream_routes[route_idx].oname[i]);
+            snprintf(oval[i], sizeof(oval[i]), "%s", g_stream_routes[route_idx].oval[i]);
+        }
+    }
+    pthread_mutex_unlock(&g_stream_mu);
+
+    int auto_chunked = 0;
+    if (!manual) {
+        // 默认 SSE 头（Connection: close——本连接不 keep-alive 复用）；
+        // opts.headers 按名（大小写不敏感）**覆写**默认三项，未消费的按原序追加。
+        const char* dname[3] = { "Content-Type", "Cache-Control", "Connection" };
+        const char* dval[3]  = { "text/event-stream; charset=utf-8", "no-cache", "close" };
+        int used[MAX_STREAM_OVR];
+        for (int i = 0; i < novr; i++) used[i] = 0;
+        char block[8192];
+        int off = 0;
+        off += snprintf(block + off, sizeof(block) - (size_t)off, "HTTP/1.1 200 OK\r\n");
+        for (int i = 0; i < 3; i++) {
+            const char* v = dval[i];
+            for (int j = 0; j < novr; j++) {
+                if (!used[j] && strcasecmp(oname[j], dname[i]) == 0) { v = oval[j]; used[j] = 1; break; }
+            }
+            off += snprintf(block + off, sizeof(block) - (size_t)off, "%s: %s\r\n", dname[i], v);
+        }
+        for (int j = 0; j < novr; j++) {
+            if (!used[j])
+                off += snprintf(block + off, sizeof(block) - (size_t)off, "%s: %s\r\n",
+                                oname[j], oval[j]);
+        }
+        off += snprintf(block + off, sizeof(block) - (size_t)off, "\r\n");
+        px_conn_write(c, block, (size_t)off);
+        auto_chunked = hdr_block_chunked(block);
+        if (auto_chunked) {
+            pthread_mutex_lock(&g_sse_mu);
+            int ix = sse_find(conn);
+            if (ix >= 0) { g_sse_conns[ix].started = 1; g_sse_conns[ix].chunked = 1; }
+            pthread_mutex_unlock(&g_sse_mu);
+        }
+    }
 
     // 调 on_connect(req)（路由 fn 经全局表取回，防 GC）
     char key[300];
     snprintf(key, sizeof(key), "__stream_fn_%d", route_idx);
     LXValue fn = px_get_global(key);
+    LXValue ret = px_null();
     if (fn.type == PX_FUNC || fn.type == PX_NATIVE) {
-        px_call(fn, &req, 1);
+        ret = px_call(fn, &req, 1);
     }
+    px_root_push();
+    PX_KEEP(ret);
+    int started = 0, chunked = 0;
+    pthread_mutex_lock(&g_sse_mu);
+    {
+        int ix = sse_find(conn);
+        if (ix >= 0) { started = g_sse_conns[ix].started; chunked = g_sse_conns[ix].chunked; }
+    }
+    pthread_mutex_unlock(&g_sse_mu);
+    if (manual && !started) {
+        // manual 模式且语言层未 sse_start：返回值按**普通 HTTP 响应**原样写出。
+        // 对齐 Go：头未发时的 400/405 是普通响应（http.Error），不是 SSE 流 ——
+        // 这正是 manual 模式存在的理由（否则错误分支会被迫先发 SSE 头）。
+        if (ret.type == PX_DICT) {
+            int out_len = 0;
+            int ka = 1;
+            char* out = px_http_build_response(ret, &out_len, &ka);
+            if (out) {
+                if (out_len > 0) px_conn_write(c, out, (size_t)out_len);
+                xfree(out);
+            }
+        }
+    } else if (chunked && started) {
+        // 分块传输终结块。Go net/http 对"头已发 + 边写边 Flush"的响应用 chunked 分帧，
+        // 收尾写 0\r\n\r\n；缺失则客户端读不到响应结束（挂起或报错）。
+        px_conn_write(c, "0\r\n\r\n", 5);
+    }
+    px_root_pop();
 
     // on_connect 返回 → 注销 + 关闭（语言层若已 sse_close，注册项已清 → 不再二次关闭）
     int still = 0;
@@ -14691,10 +16427,89 @@ static LXValue sse_parse_event_c(const char* text, int len) {
 // sse_connect(url) → conn id | null
 // M32：SSE 客户端连接核心（建立连接并填充 slot；不持锁，调用方管理 g_sse_cli_mu）
 // 返回 0 成功；失败时 slot 数据未填充（调用方负责清理旧数据）。
+// M137：按行取响应头（大小写不敏感）。hstr = NUL 结尾的头块（含结尾空行）。
+//   返回值的首字节指针（*len 写回值长，已去首尾空白）；找不到 → NULL。
+//   为何不用 strstr 找 "Content-Type:"（原实现）：① 只试了两种大小写组合；
+//   ② 头**值**里出现同名子串会被误命中。逐行解析没有这两个问题。
+static const char* sse_hdr_get(const char* hstr, const char* name, int* len) {
+    int nl = (int)strlen(name);
+    const char* p = hstr;
+    if (len) *len = 0;
+    while (p && *p) {
+        const char* eol = strstr(p, "\r\n");
+        const char* end = eol ? eol : (p + strlen(p));
+        const char* colon = (const char*)memchr(p, ':', (size_t)(end - p));
+        if (colon) {
+            int hn = (int)(colon - p);
+            if (hn == nl && strncasecmp(p, name, (size_t)nl) == 0) {
+                const char* v = colon + 1;
+                while (v < end && (*v == ' ' || *v == '\t')) v++;
+                const char* ve = end;
+                while (ve > v && (ve[-1] == ' ' || ve[-1] == '\t')) ve--;
+                if (len) *len = (int)(ve - v);
+                return v;
+            }
+        }
+        if (!eol) break;
+        p = eol + 2;
+    }
+    return NULL;
+}
+
+// M137：req_headers 里是否已给出该头名（行首 `Name:` 判定，大小写不敏感）
+//   用途：调用方自己要发 User-Agent/Accept/Cache-Control/Connection 时，运行时不再重复发一条
+//   （重复头在真实上游上是脏数据；Go 的 Header.Set 语义是"覆盖"）。
+static int sse_req_hdr_has(int slot, const char* name) {
+    const char* h = g_sse_clients[slot].req_headers;
+    if (!h || !*h) return 0;
+    int nl = (int)strlen(name);
+    const char* p = h;
+    while (*p) {
+        const char* eol = strstr(p, "\r\n");
+        const char* end = eol ? eol : (p + strlen(p));
+        const char* colon = (const char*)memchr(p, ':', (size_t)(end - p));
+        if (colon && (int)(colon - p) == nl && strncasecmp(p, name, (size_t)nl) == 0) return 1;
+        if (!eol) break;
+        p = eol + 2;
+    }
+    return 0;
+}
+
+// M137：把 pending（已按 chunked/identity 解码）拷进失败响应体缓冲（二进制安全）
+static void sse_cli_fail_body_from_pending(int slot) {
+    if (slot < 0 || slot >= MAX_SSE_CLIENTS) return;
+    int n = g_sse_clients[slot].pend_len;
+    if (g_sse_clients[slot].f_body) { xfree(g_sse_clients[slot].f_body); g_sse_clients[slot].f_body = NULL; }
+    g_sse_clients[slot].f_body_len = 0;
+    if (n <= 0) return;
+    char* b = (char*)xmalloc((size_t)n + 1);
+    memcpy(b, g_sse_clients[slot].pending, (size_t)n);
+    b[n] = 0;
+    g_sse_clients[slot].f_body = b;
+    g_sse_clients[slot].f_body_len = n;
+}
+
 static int sse_cli_connect_slot(int slot, const char* url, long long reconnect_ms,
                                 const char* last_event_id) {
     // M118：opts 已由 bi_sse_connect 存进 slot（sock/method/req_headers/req_body）——
     //   重连走同一条函数，因此这些选项**跨重连保持**（不需要新的参数搬运）。
+    // M137：本函数现在把失败**分类记录**进 slot（stage/errno/status/ctype/body/retry-after），
+    //   由 bi_sse_connect_ex 一次性回给语言层。返回码仍是 0=成功 / -1=失败（零回归）。
+    sse_cli_clear_fail(slot);
+    // M137：清解码态 —— 重连路径的 slot 可能残留上一连接的 rbuf/pending/chunk 态
+    //   （bi_sse_read 只清了 pending；rbuf 与 chunk 游标原先无人清）。
+    {
+        pthread_mutex_lock(&g_sse_cli_mu);
+        if (g_sse_clients[slot].pending) { xfree(g_sse_clients[slot].pending); g_sse_clients[slot].pending = NULL; }
+        if (g_sse_clients[slot].rbuf) { xfree(g_sse_clients[slot].rbuf); g_sse_clients[slot].rbuf = NULL; }
+        g_sse_clients[slot].pend_len = g_sse_clients[slot].pend_cap = 0;
+        g_sse_clients[slot].rlen = g_sse_clients[slot].rcap = 0;
+        g_sse_clients[slot].chunked = 0;
+        g_sse_clients[slot].chunk_left = 0;
+        g_sse_clients[slot].chunk_crlf = 0;
+        g_sse_clients[slot].chunk_done = 0;
+        pthread_mutex_unlock(&g_sse_cli_mu);
+    }
     int is_https = 0;
     const char* rest;
     const int use_unix = (g_sse_clients[slot].sock[0] != 0);
@@ -14718,7 +16533,8 @@ static int sse_cli_connect_slot(int slot, const char* url, long long reconnect_m
         } else if (strncmp(url, "http://", 7) == 0) {
             rest = url + 7;
         } else {
-            return -1; // 非 unix 模式仅支持 http:// 与 https://
+            sse_cli_fail(slot, 1, 0);   // 非 unix 模式仅支持 http:// 与 https://
+            return -1;
         }
         const char* slash = strchr(rest, '/');
         int hl;
@@ -14728,44 +16544,68 @@ static int sse_cli_connect_slot(int slot, const char* url, long long reconnect_m
         } else {
             hl = (int)strlen(rest);
         }
-        if (hl <= 0 || hl >= (int)sizeof(host)) return -1;
+        if (hl <= 0 || hl >= (int)sizeof(host)) { sse_cli_fail(slot, 1, 0); return -1; }
         memcpy(host, rest, (size_t)hl);
         host[hl] = 0;
         colon = strchr(host, ':');
         if (colon) {
             *colon = 0;
             port = atoi(colon + 1);
-            if (port <= 0) return -1;
+            if (port <= 0) { sse_cli_fail(slot, 1, 0); return -1; }
         }
     }
     int fd = -1;
     HttpsSession* tls = NULL;
     if (use_unix) {
         fd = socket(AF_UNIX, SOCK_STREAM, 0);
-        if (fd < 0) return -1;
+        if (fd < 0) { sse_cli_fail(slot, 2, errno); return -1; }
         struct sockaddr_un ua;
         memset(&ua, 0, sizeof(ua));
         ua.sun_family = AF_UNIX;
         snprintf(ua.sun_path, sizeof(ua.sun_path), "%s", g_sse_clients[slot].sock);
         if (connect(fd, (struct sockaddr*)&ua, sizeof(ua)) != 0) {
+            int e = errno;
             close(fd);
+            sse_cli_fail(slot, 2, e);
             return -1;
         }
     } else if (is_https) {
         tls = https_connect(host, port);
-        if (!tls) return -1;
+        if (!tls) { sse_cli_fail(slot, 2, errno); return -1; }
         fd = tls->net.fd;
     } else {
         fd = socket(AF_INET, SOCK_STREAM, 0);
-        if (fd < 0) return -1;
+        if (fd < 0) { sse_cli_fail(slot, 2, errno); return -1; }
         struct hostent* he = gethostbyname(host);
-        if (!he) { close(fd); return -1; }
+        if (!he) {
+            int e = errno;
+            close(fd);
+            sse_cli_fail(slot, 2, e ? e : 2);
+            return -1;
+        }
         struct sockaddr_in addr;
         memset(&addr, 0, sizeof(addr));
         addr.sin_family = AF_INET;
         addr.sin_port = htons((uint16_t)port);
         memcpy(&addr.sin_addr, he->h_addr, (size_t)he->h_length);
-        if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) { close(fd); return -1; }
+        if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+            int e = errno;
+            close(fd);
+            sse_cli_fail(slot, 2, e);
+            return -1;
+        }
+    }
+    // M137：超时（opts.timeout_ms）→ SO_RCVTIMEO/SO_SNDTIMEO。
+    //   ⚠️ 语义边界：这是**每次 IO**上限，而 Go 的 http.Client.Timeout 是**整请求**上限
+    //     （含流式读取全程）—— 已在 token-cache README §五 登记。
+    //   为何要它：流式代理一旦上游被黑洞（连接建立后对端消失），阻塞 recv 会**永久**占住
+    //   线程与 slot（Go 侧 180s 必断）。默认 0 = 不设（保持原"无超时"语义，零回归）。
+    if (g_sse_clients[slot].timeout_ms > 0) {
+        struct timeval tv;
+        tv.tv_sec = g_sse_clients[slot].timeout_ms / 1000;
+        tv.tv_usec = (g_sse_clients[slot].timeout_ms % 1000) * 1000;
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
     }
     char req[8192];
     char hosthdr[512];
@@ -14773,9 +16613,16 @@ static int sse_cli_connect_slot(int slot, const char* url, long long reconnect_m
     else if (colon) snprintf(hosthdr, sizeof(hosthdr), "%s:%d", host, port);
     else snprintf(hosthdr, sizeof(hosthdr), "%s", host);
     const char* method = (g_sse_clients[slot].method[0] != 0) ? g_sse_clients[slot].method : "GET";
-    int rl = snprintf(req, sizeof(req),
-        "%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: PuXian/0.1\r\nAccept: text/event-stream\r\nConnection: close\r\nCache-Control: no-cache\r\n",
-        method, path, hosthdr);
+    int rl = snprintf(req, sizeof(req), "%s %s HTTP/1.1\r\nHost: %s\r\n", method, path, hosthdr);
+    // M137：默认头**按需**发 —— 调用方（opts.headers）自备同名头时不再重复发一条。
+    if (!sse_req_hdr_has(slot, "User-Agent"))
+        rl += snprintf(req + rl, sizeof(req) - (size_t)rl, "User-Agent: PuXian/0.1\r\n");
+    if (!sse_req_hdr_has(slot, "Accept"))
+        rl += snprintf(req + rl, sizeof(req) - (size_t)rl, "Accept: text/event-stream\r\n");
+    if (!sse_req_hdr_has(slot, "Connection"))
+        rl += snprintf(req + rl, sizeof(req) - (size_t)rl, "Connection: close\r\n");
+    if (!sse_req_hdr_has(slot, "Cache-Control"))
+        rl += snprintf(req + rl, sizeof(req) - (size_t)rl, "Cache-Control: no-cache\r\n");
     if (g_sse_clients[slot].req_headers && rl > 0 && rl < (int)sizeof(req)) {
         int need = (int)strlen(g_sse_clients[slot].req_headers);
         if (rl + need < (int)sizeof(req))
@@ -14792,12 +16639,16 @@ static int sse_cli_connect_slot(int slot, const char* url, long long reconnect_m
     }
     rl += snprintf(req + rl, sizeof(req) - (size_t)rl, "\r\n");
     if (rl <= 0 || rl >= (int)sizeof(req) || conn_send(tls, fd, req, rl) < 0) {
+        int e = errno;
         if (tls) https_close(tls); else close(fd);
+        sse_cli_fail(slot, 3, e);
         return -1;
     }
     if (g_sse_clients[slot].req_body && g_sse_clients[slot].req_body_len > 0) {
         if (conn_send(tls, fd, g_sse_clients[slot].req_body, g_sse_clients[slot].req_body_len) < 0) {
+            int e = errno;
             if (tls) https_close(tls); else close(fd);
+            sse_cli_fail(slot, 3, e);
             return -1;
         }
     }
@@ -14818,7 +16669,9 @@ static int sse_cli_connect_slot(int slot, const char* url, long long reconnect_m
         if (header_end >= 0) break;
     }
     if (header_end < 0) {
+        int e = errno;
         if (tls) https_close(tls); else close(fd);
+        sse_cli_fail(slot, 4, e);
         return -1;
     }
     char* hstr = xmalloc((size_t)header_end + 1);
@@ -14827,17 +16680,108 @@ static int sse_cli_connect_slot(int slot, const char* url, long long reconnect_m
     int status = 0;
     char* sp = strchr(hstr, ' ');
     if (sp) status = atoi(sp + 1);
-    int ct_ok = 0;
-    char* ctp = strstr(hstr, "Content-Type:");
-    if (!ctp) ctp = strstr(hstr, "content-type:");
-    if (ctp) {
-        ctp += 14;
-        while (*ctp == ' ') ctp++;
-        if (strstr(ctp, "text/event-stream")) ct_ok = 1;
+    g_sse_clients[slot].f_status = status;
+    // M137：Content-Type / Transfer-Encoding / Retry-After 一律逐行取（不再 strstr 猜）
+    int ctv = 0;
+    const char* ctp = sse_hdr_get(hstr, "Content-Type", &ctv);
+    char ctype[256];
+    ctype[0] = 0;
+    if (ctp && ctv > 0) {
+        int k = ctv < 255 ? ctv : 255;
+        memcpy(ctype, ctp, (size_t)k);
+        ctype[k] = 0;
     }
-    xfree(hstr);
-    if (status != 200 || !ct_ok) {
+    int rav = 0;
+    const char* rap = sse_hdr_get(hstr, "Retry-After", &rav);
+    if (rap && rav > 0) {
+        int k = rav < 127 ? rav : 127;
+        memcpy(g_sse_clients[slot].f_retry_after, rap, (size_t)k);
+        g_sse_clients[slot].f_retry_after[k] = 0;
+    }
+    int chunked_resp = 0;
+    {
+        int tev = 0;
+        const char* tep = sse_hdr_get(hstr, "Transfer-Encoding", &tev);
+        if (tep && tev > 0) {
+            char te[64];
+            int k = tev < 63 ? tev : 63;
+            memcpy(te, tep, (size_t)k);
+            te[k] = 0;
+            if (strcasestr(te, "chunked")) chunked_resp = 1;
+        }
+    }
+    snprintf(g_sse_clients[slot].f_ctype, sizeof(g_sse_clients[slot].f_ctype), "%s", ctype);
+    // ── 状态码非 200：读响应体（stage=5）──
+    //   Go 侧对应两处：① doUpstream 对**可重试**状态码（429/5xx/408）读 4096 字节后
+    //   TrimSpace 进错误文案；② forwardStream 对**其余**非 200 io.ReadAll 全读进
+    //   `API 返回 %d: %s` 的文案。这里统一**读全**，由语言层按需截断/去空白。
+    //   停止条件（三条，都不依赖定时器）：① 声明了 chunked 且等到终结块；
+    //   ② 声明了 Content-Length 且已读够；③ 对端关闭（我们发的是 Connection: close）。
+    if (status != 200) {
+        long long clen = -1;
+        {
+            int vl = 0;
+            const char* cl = sse_hdr_get(hstr, "Content-Length", &vl);
+            if (cl && vl > 0) {
+                char tmp[32];
+                int k = vl < 31 ? vl : 31;
+                memcpy(tmp, cl, (size_t)k);
+                tmp[k] = 0;
+                clen = atoll(tmp);
+            }
+        }
+        {
+            pthread_mutex_lock(&g_sse_cli_mu);
+            g_sse_clients[slot].chunked = chunked_resp;
+            g_sse_clients[slot].chunk_left = 0;
+            g_sse_clients[slot].chunk_crlf = 0;
+            g_sse_clients[slot].chunk_done = 0;
+            pthread_mutex_unlock(&g_sse_cli_mu);
+        }
+        int remain = hn - header_end;
+        if (remain > 0) {
+            pthread_mutex_lock(&g_sse_cli_mu);
+            sse_cli_feed(slot, hbuf + header_end, remain);
+            sse_cli_pump(slot);
+            pthread_mutex_unlock(&g_sse_cli_mu);
+        }
+        const int CAP = 4 * 1024 * 1024;   // 上限（Go 无上限；错误体实际都很小）
+        for (;;) {
+            pthread_mutex_lock(&g_sse_cli_mu);
+            int done = 0;
+            if (g_sse_clients[slot].chunked && g_sse_clients[slot].chunk_done) done = 1;
+            if (clen >= 0 && (long long)g_sse_clients[slot].pend_len >= clen) done = 1;
+            if (g_sse_clients[slot].pend_len >= CAP) done = 1;
+            pthread_mutex_unlock(&g_sse_cli_mu);
+            if (done) break;
+            unsigned char rb[8192];
+            int n = conn_recv(tls, fd, (char*)rb, (int)sizeof(rb));
+            if (n <= 0) break;
+            pthread_mutex_lock(&g_sse_cli_mu);
+            sse_cli_feed(slot, rb, n);
+            sse_cli_pump(slot);
+            pthread_mutex_unlock(&g_sse_cli_mu);
+        }
+        pthread_mutex_lock(&g_sse_cli_mu);
+        sse_cli_fail_body_from_pending(slot);
+        if (g_sse_clients[slot].pending) { xfree(g_sse_clients[slot].pending); g_sse_clients[slot].pending = NULL; }
+        g_sse_clients[slot].pend_len = g_sse_clients[slot].pend_cap = 0;
+        if (g_sse_clients[slot].rbuf) { xfree(g_sse_clients[slot].rbuf); g_sse_clients[slot].rbuf = NULL; }
+        g_sse_clients[slot].rlen = g_sse_clients[slot].rcap = 0;
+        pthread_mutex_unlock(&g_sse_cli_mu);
+        xfree(hstr);
         if (tls) https_close(tls); else close(fd);
+        sse_cli_fail(slot, 5, 0);
+        return -1;
+    }
+    int ct_ok = 0;
+    if (ctype[0] && strcasestr(ctype, "text/event-stream")) ct_ok = 1;
+    xfree(hstr);
+    // ⚠️ require_ct=0（sse_connect_ex）：Go 的 forwardStream **不看** Content-Type
+    //   （只按行扫 data:），故 ex 模式 200 即接通、由语言层自己判断。
+    if (g_sse_clients[slot].require_ct && !ct_ok) {
+        if (tls) https_close(tls); else close(fd);
+        sse_cli_fail(slot, 6, 0);
         return -1;
     }
     // 填充 slot（剩余字节进 pending）
@@ -14850,24 +16794,27 @@ static int sse_cli_connect_slot(int slot, const char* url, long long reconnect_m
     snprintf(g_sse_clients[slot].last_event_id, sizeof(g_sse_clients[slot].last_event_id),
              "%s", last_event_id ? last_event_id : "");
     if (g_sse_clients[slot].pending) xfree(g_sse_clients[slot].pending);
+    g_sse_clients[slot].pending = NULL;
+    g_sse_clients[slot].pend_len = g_sse_clients[slot].pend_cap = 0;
+    if (g_sse_clients[slot].rbuf) xfree(g_sse_clients[slot].rbuf);
+    g_sse_clients[slot].rbuf = NULL;
+    g_sse_clients[slot].rlen = g_sse_clients[slot].rcap = 0;
+    g_sse_clients[slot].chunked = chunked_resp;
+    g_sse_clients[slot].chunk_left = 0;
+    g_sse_clients[slot].chunk_crlf = 0;
+    g_sse_clients[slot].chunk_done = 0;
     if (remain > 0) {
-        g_sse_clients[slot].pend_cap = remain + 64;
-        g_sse_clients[slot].pending = xmalloc((size_t)g_sse_clients[slot].pend_cap);
-        memcpy(g_sse_clients[slot].pending, hbuf + header_end, (size_t)remain);
-        g_sse_clients[slot].pend_len = remain;
-    } else {
-        g_sse_clients[slot].pending = NULL;
-        g_sse_clients[slot].pend_len = g_sse_clients[slot].pend_cap = 0;
+        sse_cli_feed(slot, hbuf + header_end, remain);
+        sse_cli_pump(slot);
     }
     return 0;
 }
 
-// sse_connect(url[, reconnect_ms]) → int conn | null
-// reconnect_ms>0：断线自动重连（等待该毫秒后重连，带 Last-Event-ID）
-static LXValue bi_sse_connect(LXValue* args, int nargs, void* ctx) {
-    (void)ctx;
-    if (nargs < 1 || nargs > 2 || args[0].type != PX_STR)
-        px_error("R1002: sse_connect 需要 (url[, reconnect_ms|opts]) 参数");
+// M137：sse_connect / sse_connect_ex 共用的「第 2 参解析 + slot 初始化」。
+//   成功返回 slot(>=0)，并经出参回传 url / reconnect_ms；槽位耗尽返回 -1。
+//   抽出动机：ex 模式与旧模式必须走**同一份**选项解析 —— 两份必然漂移。
+static int sse_cli_prepare(LXValue* args, int nargs, const char** out_url, long long* out_reconnect_ms,
+                           int default_require_ct) {
     const char* url = args[0].as.obj->as.str.data;
     long long reconnect_ms = 0;
     // ── M118：第 2 参可以是 reconnect_ms（原语义，零回归），也可以是 opts dict：
@@ -14875,11 +16822,16 @@ static LXValue bi_sse_connect(LXValue* args, int nargs, void* ctx) {
     //    sock 非空 → 走 Unix domain socket（此时 url 只作请求路径），
     //    method/body/headers → 让 SSE 客户端能表达 POST + JSON 体 + 鉴权头
     //    （LLM 流式补全的标准形状：POST /v1/chat/completions, stream=true）。
+    // ── M137 追加：{require_ct, timeout_ms}
+    //    require_ct=false → 200 即接通（不管 Content-Type）——Go 的 forwardStream 不查 CT；
+    //    timeout_ms>0 → SO_RCVTIMEO/SO_SNDTIMEO（每次 IO 上限；0=不设，原语义）。
     const char* opt_sock = NULL;
     const char* opt_method = NULL;
     const char* opt_body = NULL;
     int opt_body_len = 0;
     const char* opt_ctype = NULL;
+    int opt_require_ct = -1;     // -1 = 未给（用 slot 默认：sse_connect=要求，ex=不要求）
+    int opt_timeout_ms = -1;
     LXValue opt_headers;
     opt_headers.type = PX_NULL;
     opt_headers.as.obj = NULL;
@@ -14903,16 +16855,20 @@ static LXValue bi_sse_connect(LXValue* args, int nargs, void* ctx) {
                 opt_body = bd.as.obj->as.str.data;   // PX_BYTES 与 PX_STR 共享 str 表示
                 opt_body_len = (int)bd.as.obj->as.str.len;
             }
+            LXValue rq = px_dict_get(args[1], "require_ct");
+            if (rq.type == PX_BOOL) opt_require_ct = rq.as.i ? 1 : 0;
+            LXValue tm = px_dict_get(args[1], "timeout_ms");
+            if (tm.type == PX_INT) opt_timeout_ms = (int)tm.as.i;
             opt_headers = px_dict_get(args[1], "headers");
         } else {
-            px_error("R1002: sse_connect 第 2 参需要 reconnect_ms(int) 或 opts dict{reconnect_ms,sock,method,body,headers,content_type}");
+            px_error("R1002: sse_connect 第 2 参需要 reconnect_ms(int) 或 opts dict{reconnect_ms,sock,method,body,headers,content_type,require_ct,timeout_ms}");
         }
     }
     pthread_mutex_lock(&g_sse_cli_mu);
     int slot = sse_cli_alloc_slot();
     if (slot < 0) {
         pthread_mutex_unlock(&g_sse_cli_mu);
-        return px_null();
+        return -1;
     }
     g_sse_clients[slot].active = 0;
     g_sse_clients[slot].fd = -1;
@@ -14922,6 +16878,11 @@ static LXValue bi_sse_connect(LXValue* args, int nargs, void* ctx) {
     g_sse_clients[slot].sock[0] = 0;
     g_sse_clients[slot].method[0] = 0;
     g_sse_clients[slot].content_type[0] = 0;
+    // M137：CT 要求的**默认值由调用方给** —— sse_connect 要求 text/event-stream（原语义），
+    //   sse_connect_ex 不要求（Go 的 forwardStream 只看行、不看 CT）。
+    g_sse_clients[slot].require_ct = default_require_ct;
+    if (opt_require_ct >= 0) g_sse_clients[slot].require_ct = opt_require_ct;
+    if (opt_timeout_ms >= 0) g_sse_clients[slot].timeout_ms = opt_timeout_ms;
     sse_cli_free_opts(slot);
     if (opt_sock) snprintf(g_sse_clients[slot].sock, sizeof(g_sse_clients[slot].sock), "%s", opt_sock);
     if (opt_method) snprintf(g_sse_clients[slot].method, sizeof(g_sse_clients[slot].method), "%s", opt_method);
@@ -14942,22 +16903,113 @@ static LXValue bi_sse_connect(LXValue* args, int nargs, void* ctx) {
         g_sse_clients[slot].req_headers = hb;
     }
     pthread_mutex_unlock(&g_sse_cli_mu);
+    *out_url = url;
+    *out_reconnect_ms = reconnect_ms;
+    return slot;
+}
+
+// M137：连接失败后的槽位清理（原 bi_sse_connect 内联块，两个调用方共用）
+static void sse_cli_release_slot(int slot) {
+    pthread_mutex_lock(&g_sse_cli_mu);
+    g_sse_clients[slot].active = 0;
+    g_sse_clients[slot].fd = -1;
+    if (g_sse_clients[slot].pending) { xfree(g_sse_clients[slot].pending); g_sse_clients[slot].pending = NULL; }
+    g_sse_clients[slot].pend_len = g_sse_clients[slot].pend_cap = 0;
+    if (g_sse_clients[slot].rbuf) { xfree(g_sse_clients[slot].rbuf); g_sse_clients[slot].rbuf = NULL; }
+    g_sse_clients[slot].rlen = g_sse_clients[slot].rcap = 0;
+    g_sse_clients[slot].tls = NULL;
+    sse_cli_free_opts(slot);
+    sse_cli_clear_fail(slot);
+    pthread_mutex_unlock(&g_sse_cli_mu);
+}
+
+// M137：把 slot 的失败记录填进 d（二进制安全）。
+//   ⚠️ 调用方须自行 px_root_push/PX_KEEP 保护 d（本函数内部会分配字符串/整数）。
+static void sse_cli_fail_fill(LXValue d, int slot) {
+    px_dict_set(d, "ok", px_bool(0));
+    px_dict_set(d, "conn", px_null());
+    px_dict_set(d, "stage", px_int((int64_t)g_sse_clients[slot].f_stage));
+    px_dict_set(d, "errno", px_int((int64_t)g_sse_clients[slot].f_errno));
+    px_dict_set(d, "status", px_int((int64_t)g_sse_clients[slot].f_status));
+    px_dict_set(d, "ctype", px_str(g_sse_clients[slot].f_ctype));
+    px_dict_set(d, "retry_after", px_str(g_sse_clients[slot].f_retry_after));
+    if (g_sse_clients[slot].f_body && g_sse_clients[slot].f_body_len > 0)
+        px_dict_set(d, "body", px_str_len(g_sse_clients[slot].f_body, g_sse_clients[slot].f_body_len));
+    else
+        px_dict_set(d, "body", px_str(""));
+}
+
+// sse_connect(url[, reconnect_ms]) → int conn | null
+// reconnect_ms>0：断线自动重连（等待该毫秒后重连，带 Last-Event-ID）
+static LXValue bi_sse_connect(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || nargs > 2 || args[0].type != PX_STR)
+        px_error("R1002: sse_connect 需要 (url[, reconnect_ms|opts]) 参数");
+    const char* url = NULL;
+    long long reconnect_ms = 0;
+    int slot = sse_cli_prepare(args, nargs, &url, &reconnect_ms, 1);
+    if (slot < 0) return px_null();
     if (sse_cli_connect_slot(slot, url, reconnect_ms, NULL) != 0) {
-        // 连接失败：清理 slot
-        pthread_mutex_lock(&g_sse_cli_mu);
-        g_sse_clients[slot].active = 0;
-        g_sse_clients[slot].fd = -1;
-        if (g_sse_clients[slot].pending) { xfree(g_sse_clients[slot].pending); g_sse_clients[slot].pending = NULL; }
-        g_sse_clients[slot].pend_len = g_sse_clients[slot].pend_cap = 0;
-        g_sse_clients[slot].tls = NULL;
-        sse_cli_free_opts(slot);
-        pthread_mutex_unlock(&g_sse_cli_mu);
+        sse_cli_release_slot(slot);
         return px_null();
     }
     pthread_mutex_lock(&g_sse_cli_mu);
     g_sse_clients[slot].id = g_sse_cli_next_id++;
     pthread_mutex_unlock(&g_sse_cli_mu);
     return px_int(g_sse_clients[slot].id);
+}
+
+// ── M137（qg-issue 87 第 17 轮）：sse_connect_ex(url[, opts]) → dict ──
+//   与 sse_connect 的差别（真流式代理需要）：失败**可分类**、CT 不作硬要求、可设 IO 超时。
+//   返回：
+//     {ok, conn, status, ctype, retry_after, body, errno, stage}
+//     ok=true  → conn = 连接 id（200 已收到；须由调用方 sse_read_line 读流）
+//     ok=false → stage 说明失败阶段（1 参数 2 连接 3 发送 4 读头 5 状态码 6 CT 不符）
+//                其中 stage=5 时 status/ctype/body 有值（body 已按 chunked/identity 解码）。
+//   ⚠️ 与 Go 的对应关系（token-cache doUpstream）：Go 的 http.Client.Do 返回
+//     (resp, err) —— 传输错误 → err；非 2xx 也是 resp（不是 err），由 doUpstream 按
+//     "可重试状态码"分流。本函数把两种情形都回给语言层，由语言层复刻那套分流。
+static LXValue bi_sse_connect_ex(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || nargs > 2 || args[0].type != PX_STR)
+        px_error("R1002: sse_connect_ex 需要 (url[, opts]) 参数");
+    const char* url = NULL;
+    long long reconnect_ms = 0;
+    int slot = sse_cli_prepare(args, nargs, &url, &reconnect_ms, 0);
+    if (slot < 0) {
+        LXValue d0 = px_dict();
+        px_root_push();
+        PX_KEEP(d0);
+        px_dict_set(d0, "ok", px_bool(0));
+        px_dict_set(d0, "conn", px_null());
+        px_dict_set(d0, "stage", px_int(7));   // 7 = 槽位耗尽
+        px_dict_set(d0, "errno", px_int(0));
+        px_dict_set(d0, "status", px_int(0));
+        px_dict_set(d0, "ctype", px_str(""));
+        px_dict_set(d0, "retry_after", px_str(""));
+        px_dict_set(d0, "body", px_str(""));
+        px_root_pop();
+        return d0;
+    }
+    int rc = sse_cli_connect_slot(slot, url, reconnect_ms, NULL);
+    LXValue d = px_dict();
+    px_root_push();
+    PX_KEEP(d);   // M92 precise：跨 sse_cli_fail_fill / px_int 分配
+    if (rc != 0) {
+        sse_cli_fail_fill(d, slot);
+        sse_cli_release_slot(slot);
+        px_root_pop();
+        return d;
+    }
+    pthread_mutex_lock(&g_sse_cli_mu);
+    g_sse_clients[slot].id = g_sse_cli_next_id++;
+    int64_t id = g_sse_clients[slot].id;
+    pthread_mutex_unlock(&g_sse_cli_mu);
+    sse_cli_fail_fill(d, slot);          // 先填（含 status=200 / ctype / retry_after）
+    px_dict_set(d, "ok", px_bool(1));
+    px_dict_set(d, "conn", px_int(id));
+    px_root_pop();
+    return d;
 }
 
 // sse_read(conn) → 事件 dict | null（阻塞读一条；断开 → null）
@@ -14975,6 +17027,7 @@ static LXValue bi_sse_read(LXValue* args, int nargs, void* ctx) {
     for (;;) {
         // 尝试从 pending 取完整事件（\n\n 或 \r\n\r\n）
         pthread_mutex_lock(&g_sse_cli_mu);
+        if (g_sse_clients[idx].active) sse_cli_pump(idx);   // M131：先解码（chunked）
         if (g_sse_clients[idx].active && g_sse_clients[idx].pending && g_sse_clients[idx].pend_len > 0) {
             unsigned char* p = g_sse_clients[idx].pending;
             int n = g_sse_clients[idx].pend_len;
@@ -15050,18 +17103,88 @@ static LXValue bi_sse_read(LXValue* args, int nargs, void* ctx) {
             pthread_mutex_unlock(&g_sse_cli_mu);
             return px_null();
         }
-        if (g_sse_clients[idx].pend_len + n > g_sse_clients[idx].pend_cap) {
-            int ncap = g_sse_clients[idx].pend_cap ? g_sse_clients[idx].pend_cap * 2 : (n + 64);
-            if (ncap < g_sse_clients[idx].pend_len + n) ncap = g_sse_clients[idx].pend_len + n + 64;
-            unsigned char* np = xmalloc((size_t)ncap);
-            if (g_sse_clients[idx].pend_len > 0)
-                memcpy(np, g_sse_clients[idx].pending, (size_t)g_sse_clients[idx].pend_len);
-            if (g_sse_clients[idx].pending) xfree(g_sse_clients[idx].pending);
-            g_sse_clients[idx].pending = np;
-            g_sse_clients[idx].pend_cap = ncap;
+        // M131：原始字节入 rbuf，再解码进 pending（chunked 与非 chunked 同一路径）
+        sse_cli_feed(idx, tmp, n);
+        sse_cli_pump(idx);
+        pthread_mutex_unlock(&g_sse_cli_mu);
+    }
+}
+
+// ── M131（qg-issue 87 缺陷 65）：sse_read_line(conn) → str | null ──
+//   取下一**原始行**（不含行尾 \n；行尾 \r 一并去掉）。EOF → null。
+//   用途：把上游 SSE **逐行原样透传**给下游（Go 的 bufio.Scanner 循环就是这件事：
+//   `line := scanner.Text(); fmt.Fprintf(w, "%s\n", line); flusher.Flush()`）。
+//   与 sse_read 的分工：sse_read 解析成事件 dict（关心语义），sse_read_line 保留原文
+//   （关心字节）—— 透传方不能用 sse_read，否则 `event:`/注释行/字段顺序都会被改写。
+//   ⚠️ 本函数**不做**断线自动重连：透传语义下重连会把内容重发一遍（Go 也没有）。
+//   ⚠️ 实现约束（M131 教训）：**不能用 goto 跳过局部变量初始化** —— 初版在
+//      "待续行" 分支里 goto 到 recv 段，跳过了 fd/tls 的赋值 ⇒ 首次进入即用未初始化
+//      的 tls 调 conn_recv（api-server 进程当场死掉、客户端只收到半截响应）。
+//      现改为循环顶部统一取 fd/tls，无跳转。
+static LXValue bi_sse_read_line(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_INT) px_error("R1002: sse_read_line 需要 (conn) 参数");
+    int64_t conn = args[0].as.i;
+    for (;;) {
+        pthread_mutex_lock(&g_sse_cli_mu);
+        int idx = sse_cli_find(conn);
+        if (idx < 0) { pthread_mutex_unlock(&g_sse_cli_mu); return px_null(); }
+        sse_cli_pump(idx);   // M131：chunked 解码（唯一解码点）
+        int fd = g_sse_clients[idx].fd;
+        HttpsSession* tls = g_sse_clients[idx].tls;
+        int need_more = 1;
+        if (g_sse_clients[idx].pending && g_sse_clients[idx].pend_len > 0) {
+            unsigned char* p = g_sse_clients[idx].pending;
+            int n = g_sse_clients[idx].pend_len;
+            int nl = -1;
+            for (int i = 0; i < n; i++) if (p[i] == '\n') { nl = i; break; }
+            int have = (nl >= 0);
+            if (!have && (g_sse_clients[idx].chunk_done || !g_sse_clients[idx].active))
+                have = 1;                      // EOF：残余按最后一行返回（Go Scanner 同口径）
+            if (have) {
+                int take = (nl >= 0) ? nl : n;
+                int cut = (nl >= 0) ? nl + 1 : n;
+                int ll = take;
+                if (ll > 0 && p[ll - 1] == '\r') ll--;
+                char* tmp = xmalloc((size_t)ll + 1);
+                if (ll > 0) memcpy(tmp, p, (size_t)ll);
+                tmp[ll] = 0;
+                int rest = n - cut;
+                if (rest > 0) memmove(p, p + cut, (size_t)rest);
+                g_sse_clients[idx].pend_len = rest;
+                pthread_mutex_unlock(&g_sse_cli_mu);
+                LXValue r = px_str(tmp);
+                xfree(tmp);
+                return r;
+            }
+            need_more = 1;                     // 半行：等更多字节
         }
-        memcpy(g_sse_clients[idx].pending + g_sse_clients[idx].pend_len, tmp, (size_t)n);
-        g_sse_clients[idx].pend_len += n;
+        pthread_mutex_unlock(&g_sse_cli_mu);
+        if (!need_more) continue;
+        unsigned char tmp2[4096];
+        int got = conn_recv(tls, fd, (char*)tmp2, (int)sizeof(tmp2));
+        if (got <= 0) {
+            pthread_mutex_lock(&g_sse_cli_mu);
+            if (g_sse_clients[idx].pending && g_sse_clients[idx].pend_len > 0) {
+                int n = g_sse_clients[idx].pend_len;
+                unsigned char* p = g_sse_clients[idx].pending;
+                int ll = n;
+                if (ll > 0 && p[ll - 1] == '\r') ll--;
+                char* tmp = xmalloc((size_t)ll + 1);
+                if (ll > 0) memcpy(tmp, p, (size_t)ll);
+                tmp[ll] = 0;
+                g_sse_clients[idx].pend_len = 0;
+                pthread_mutex_unlock(&g_sse_cli_mu);
+                LXValue r = px_str(tmp);
+                xfree(tmp);
+                return r;
+            }
+            pthread_mutex_unlock(&g_sse_cli_mu);
+            return px_null();
+        }
+        pthread_mutex_lock(&g_sse_cli_mu);
+        if (!g_sse_clients[idx].active) { pthread_mutex_unlock(&g_sse_cli_mu); return px_null(); }
+        sse_cli_feed(idx, tmp2, got);
         pthread_mutex_unlock(&g_sse_cli_mu);
     }
 }
@@ -17059,10 +19182,11 @@ void px_http_dispatch_h3(PxHttpOut* pout, LXValue req, int client_keep_alive) {
     const char* target = (pv.type == PX_STR) ? pv.as.obj->as.str.data : "/";
     char tbuf[4096];
     snprintf(tbuf, sizeof(tbuf), "%s", target);
-    char path[2048] = {0}, query[2048] = {0};
+    char path[2048] = {0}, query[2048] = {0}, raw_query[2048] = {0};
     char* q = strchr(tbuf, '?');
     if (q) {
         *q = 0;
+        snprintf(raw_query, sizeof(raw_query), "%s", q + 1);   // M136 缺陷 90：原始查询串
         char* dec = px_url_decode(tbuf);
         snprintf(path, sizeof(path), "%s", dec ? dec : tbuf);
         if (dec) xfree(dec);
@@ -17079,6 +19203,7 @@ void px_http_dispatch_h3(PxHttpOut* pout, LXValue req, int client_keep_alive) {
     g_px_ctx_n = 0;                  // M36：每请求清除线程局部上下文（同 HTTP/1.1 worker）
     px_dict_set(req, "path", px_str(path));
     px_dict_set(req, "query", px_str(query));
+    px_dict_set(req, "raw_query", px_str(raw_query));   // M136 缺陷 90
     px_dict_set(req, "version", px_str("HTTP/3"));
     px_dict_set(req, "request_id", px_str(req_id));
     LXValue headers = px_dict_get(req, "headers");
@@ -17750,11 +19875,12 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         char* target = sp1 + 1;
         char* sp2 = strchr(target, ' ');
         if (sp2) *sp2 = 0;
-        char path[2048] = {0}, query[2048] = {0};
+        char path[2048] = {0}, query[2048] = {0}, raw_query[2048] = {0};
         char* q = strchr(target, '?');
         char* dec;
         if (q) {
             *q = 0;
+            snprintf(raw_query, sizeof(raw_query), "%s", q + 1);   // M136 缺陷 90：原始查询串
             dec = px_url_decode(target); snprintf(path, sizeof(path), "%s", dec ? dec : target); xfree(dec);
             dec = px_url_decode(q + 1); snprintf(query, sizeof(query), "%s", dec ? dec : q + 1); xfree(dec);
         } else {
@@ -17949,6 +20075,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         px_dict_set(req, "target", px_str(target));
         px_dict_set(req, "path", px_str(path));
         px_dict_set(req, "query", px_str(query));
+        px_dict_set(req, "raw_query", px_str(raw_query));   // M136 缺陷 90
         px_dict_set(req, "version", px_str(ver));
         px_dict_set(req, "headers", headers);
         px_dict_set(req, "request_id", px_str(req_id));
@@ -19347,6 +21474,12 @@ LXValue bi_tz_offset(LXValue* args, int nargs, void* ctx) {
     const char* tz = args[0].as.obj->as.str.data;
     // 非法时区 → null（与解释器一致）；合法返回偏移
     if (strcasecmp(tz, "utc") == 0 || strcmp(tz, "Z") == 0) return px_int(0);
+    // M129（qg-issue 87 缺陷 40）：与 time_format 第三参**对齐** —— 此前
+    //   time_format(ts, fmt, "local") 经 px_tz_off 支持 "local"（本机时区，含 DST），
+    //   而 tz_offset("local") 走的是本函数入口的 `tz[0] != '+' && '−'` 判定 → 返回 null。
+    //   同一语义两个入口一个有一个没有 ⇒ 移植 Go 的 `_, off := time.Now().Zone()`
+    //   没有等价原语（只能手搓 time_format(..., "%z") 再解析）。此处补齐。
+    if (strcasecmp(tz, "local") == 0) return px_int(px_local_off());
     if (tz[0] != '+' && tz[0] != '-') return px_null();
     const char* rest = tz + 1;
     int ok = 0;

@@ -37,6 +37,7 @@ typedef enum {
     PX_RWLOCK,  // 读写锁（M13：读多写少）
     PX_GEN,     // 生成器（M32：生成器表达式延迟物化）
     PX_RESULT,  // Result 值（M39：Ok(T) | Err(E)，spec §3.5 错误处理唯一通道）
+    PX_TYPE_MAX // ← M135（缺陷 86 根治）哨兵：仅用于「类型表尺寸」编译期断言，不是真实类型
 } LXType;
 
 typedef struct LXValue LXValue;
@@ -76,7 +77,11 @@ struct LXObject {
         } str;
         struct { LXValue* items; int len, cap; } list;
         struct { char** keys; LXValue* vals; int len, cap; } dict;
-        struct { char* name; LXFuncPtr fn; void* ctx; } func;
+        // M129（qg-issue 87 缺陷 21）：闭包捕获环境（upvalue cell 字典）。
+        //   `env` 为 px_null() = 无捕获（旧行为零变化）。有捕获时 **ctx 指向本字段**
+        //   （`&o->as.func.env`）—— 必须存在对象内：GC 只扫已知对象字段，
+        //   把环境挂成堆上裸指针会漏标（环境被回收 ⇒ 闭包读悬垂）。
+        struct { char* name; LXFuncPtr fn; void* ctx; LXValue env; } func;
         struct { char* name; LXFuncPtr fn; } native;
         struct { char* type_name; char** fnames; LXValue* fvals; int nfields; } struct_inst;
         struct { char* type_name; char* variant; } enum_inst;
@@ -142,6 +147,14 @@ LXValue px_list(int cap);
 LXValue px_list_n(LXValue* items, int n);
 LXValue px_dict(void);
 LXValue px_func(const char* name, LXFuncPtr fn, void* ctx);
+// M129（qg-issue 87 缺陷 21）：带捕获环境的函数对象（闭包）。ctx 自动指向 env 字段。
+LXValue px_func_env(const char* name, LXFuncPtr fn, LXValue env);
+// M129：upvalue cell（单元素盒子，引用语义）。以 list 承载 ⇒ GC 自动可达。
+LXValue px_cell(LXValue v);
+LXValue px_cell_get(LXValue cell);
+void    px_cell_set(LXValue cell, LXValue v);
+// M129：闭包体内取捕获 cell（ctx = &env）；取不到返回 px_null()。
+LXValue px_env_lookup(void* ctx, const char* name);
 LXValue px_native(const char* name, LXFuncPtr fn);
 
 // M42：FFI 注册表（runtime_ffi.c）—— 显式 C 库 import 的 C 桥
@@ -355,6 +368,10 @@ LXValue px_mutex_create(void);
 LXValue px_mutex_lock(LXValue m);
 LXValue px_mutex_unlock(LXValue m);
 LXValue px_mutex_try_lock(LXValue m);   // 成功 true / 失败 false
+// 第 15 轮诊断（缺陷 86）：悬垂锁对象现场抓拍（runtime.c 定义；命中即打印并 abort）
+void px_dbg_obj_check(LXObject* o, LXType want, const char* where);
+void px_dbg_mutex_check(LXObject* o, const char* where);
+void px_dbg_rwlock_check(LXObject* o, const char* where);
 LXValue px_rwlock_create(void);
 LXValue px_rwlock_rlock(LXValue m);
 LXValue px_rwlock_runlock(LXValue m);

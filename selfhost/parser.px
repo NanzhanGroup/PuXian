@@ -97,6 +97,11 @@ var p_toks = []
 var p_pos = 0
 # M119：括号深度（( [ { 计数）——供「括号内隐式续行」判定
 var p_brack = 0
+# M129（qg-issue 87 缺陷 3）：**括号内匿名函数体**上下文计数。
+#   括号内 lexer 不产 INDENT/DEDENT（spec §4.1），M118 只把「多语句体」打通；
+#   一旦体里出现**块语句**（if/for/while），`expect("缩进")` 必然失败。
+#   >0 时块边界退化为**按列**判定（见 parse_block_ctxt）。
+var p_paren_ctxt = 0
 # ---------- 工具 ----------
 def pk():
     return p_toks[p_pos][0]
@@ -354,11 +359,12 @@ def parse_assign_or_expr():
     return ["ExprStmt", expr, pos]
 def parse_if():
     let pos = ppos()
+    let hcol = pcol()
     adv()
     let cond = parse_expr()
     expect(":", "':'")
     expect("换行", "换行")
-    var body = parse_block()
+    var body = parse_block_ctxt(hcol)
     let branches = [[cond, body]]
     var else_branch = null
     while true:
@@ -367,35 +373,58 @@ def parse_if():
             let c = parse_expr()
             expect(":", "':'")
             expect("换行", "换行")
-            let b = parse_block()
+            let b = parse_block_ctxt(hcol)
             branches.append([c, b])
         elif chk("else"):
             adv()
             expect(":", "':'")
             expect("换行", "换行")
-            else_branch = parse_block()
+            else_branch = parse_block_ctxt(hcol)
             break
         else:
             break
     return ["If", branches, else_branch, pos]
 def parse_for():
     let pos = ppos()
+    let hcol = pcol()
     adv()
     let lv = expect_ident("循环变量")
     expect("in", "'in'")
     let iterable = parse_expr()
     expect(":", "':'")
     expect("换行", "换行")
-    var body = parse_block()
+    var body = parse_block_ctxt(hcol)
     return ["For", qstr(lv), iterable, body, pos]
 def parse_while():
     let pos = ppos()
+    let hcol = pcol()
     adv()
     let cond = parse_expr()
     expect(":", "':'")
     expect("换行", "换行")
-    var body = parse_block()
+    var body = parse_block_ctxt(hcol)
     return ["While", cond, body, pos]
+# M129（qg-issue 87 缺陷 3）：块解析的**上下文感知**版本。
+#   缩进令牌存在 ⇒ 与 parse_block 完全等价（零行为变化）。
+#   缩进令牌缺失且处于**括号内匿名函数体** ⇒ 按**列**定块界：
+#     列 > 头部列 ⇒ 仍属本块；列 ≤ 头部列 或 闭合括号/逗号 ⇒ 块结束（不消费该 token）。
+#   其余情形维持原报错文案（不静默降级）。
+def parse_block_ctxt(header_col):
+    if chk("缩进"):
+        return parse_block()
+    if p_paren_ctxt <= 0:
+        expect("缩进", "缩进块")
+        return []
+    let stmts = []
+    while true:
+        skip_newlines_in_block()
+        let k = pk()
+        if k == "去缩进" or k == "EOF" or k == ")" or k == "]" or k == "}" or k == ",":
+            break
+        if pcol() <= header_col:
+            break
+        stmts.append(parse_stmt())
+    return stmts
 def parse_block():
     expect("缩进", "缩进块")
     let stmts = []
@@ -848,8 +877,13 @@ def parse_pow():
     return left
 def parse_unary():
     # M119：括号内「运算符在行尾」的续行（此刻正需要操作数，跳过换行无歧义）
-    if p_brack > 0:
-        skip_newlines()
+    # M129（Issue 87 缺陷 33）：**扩展到任意括号深度** —— 语句层同样支持 Go 的
+    #   「行尾运算符续行」。依据 Go 的自动分号插入规则：行尾是运算符 ⇒ 不插分号 ⇒
+    #   表达式继续。此处位于「已消费完运算符、正需要操作数」的唯一位置，跳过换行**无歧义**
+    #   （运算符已吃掉，换行后必然是操作数）。
+    #   ⚠️ 「行首运算符」在语句层**仍不支持**（`chk_op` 的看穿逻辑仍限定 p_brack>0）——
+    #   那是 Go 也不接受的写法（`a \n + b` 在 Go 里先插分号再报错），故不引入方言。
+    skip_newlines()
     let k = pk()
     if k == "-":
         let pos = ppos()
@@ -1121,6 +1155,19 @@ def parse_brace():
     adv()
     skip_newlines()
     skip_brace_indents()
+    # M129（qg-issue 87 缺陷 15）：**空花括号 `{}` = 空字典**。
+    #   原先 `{}` 落进下面的 Block 分支 ⇒ 零语句块 ⇒ 求值为 **null**。后果是
+    #   「空字典字面量」在语言里没有写法（只能 `json_parse("{}")`），而**人人都在写 `{}` 当字典**：
+    #   全生态实测 9 处（`px_exec(f, {})` / `px_serve(..., {})` / `http_request(u,m,b,{})` /
+    #   `var done = {}` …），全部是「传空 opts / 空 headers / 空集合」的**字典意图** ——
+    #   它们在旧行为下"碰巧能跑"（因为多处 native 把 null 与"未给"同等对待），
+    #   但 `var d = {}` 再 `d["k"] = v` 会**运行期** R1002（examples/m127 已把这条坑写进注释）。
+    #   空块在没有语句的语境下本就无意义（`:` 开闭包体的花括号走 parse_closure 自己的分支，
+    #   不经此处），故把这一格让给空字典：**唯一变化就是 `{}` 的求值结果**。
+    #   全生态影响面 = 真的写了 `{}` 的文件（9 处），逐处 diff 过（见 qg-issue 87 第 3 轮清单）。
+    if chk("}"):
+        adv()
+        return ["Dict", [], pos]
     let is_dict = brace_looks_like_dict()
     if is_dict:
         let k = parse_expr()
@@ -1204,12 +1251,16 @@ def parse_closure():
                 # M118：**括号内**的多行匿名函数体（调用实参场景，如 map(xs, fn (x): ...)）。
                 #   括号内 lexer 不产 INDENT/DEDENT（spec §4.1），因此这里按换行逐语句
                 #   解析，直到闭合括号 / 逗号 / 去缩进。
+                # M129（qg-issue 87 缺陷 3）：置 p_paren_ctxt，使体内的 if/for/while
+                #   走 parse_block_ctxt 的**按列定块**路径（此前一律 E2001）。
                 let stmts = []
+                p_paren_ctxt += 1
                 while true:
                     skip_newlines()
                     if chk(")") or chk("]") or chk(",") or chk("}") or chk("去缩进") or chk("EOF"):
                         break
                     stmts.append(parse_stmt())
+                p_paren_ctxt -= 1
                 body = ["Block", stmts, bpos]
         else:
             body = parse_expr()

@@ -42,6 +42,8 @@ var cg_structs = {"_": 0}
 var cg_enums = {"_": 0}
 var cg_impls = {"_": 0}
 var cg_vars = {"_": 0}
+# M129（qg-issue 87 缺陷 21）：闭包捕获装箱名（与 codegen.px 同名全局）
+var cg_cells = {"_": 0}
 var cg_var_types = {"_": 0}
 var cg_immutables = {"_": 0}
 var cg_nonnull = {"_": 0}
