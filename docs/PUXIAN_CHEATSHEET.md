@@ -18,6 +18,16 @@
 > ③ 正则字符类**不认识 POSIX 类** `[[:space:]]` ⇒ **静默不匹配**（返回 null、不报错）⇒ 现支持
 >    `space/digit/alpha/alnum/upper/lower/xdigit/blank/punct/print/graph/cntrl`，**未知类名报错**。
 > 另修文档漂移：`http_request` 签名（§2 曾写反为 `(method, url)`）、native 计数（311→312）。
+> M141（2026-09-18，qg-issue 87 第 22 轮）：**墙钟纳秒 + unix 服务端 remote 对齐 Go** ——
+> ① 新增 native **`now_ns()`**（CLOCK_REALTIME 的 `sec*1e9+nsec`，与 `now_sec`/`time_format`
+>    同一时间轴）。此前语言里**没有墙钟纳秒**：`now_ms()`/`now_us()` 是 CLOCK_MONOTONIC
+>    （自 boot 起算，测量语义）、`now_sec()` 只到秒 ⇒ Go 的 `time.Now().UnixNano()`、
+>    `time.Now().Format("20060102-150405.000000000")`（纳秒目录名 / 日志时间戳）**表达不出来**；
+>    拿单调钟冒充时**值与数量级都完全不同**（墙钟 ~1.8e18 vs 单调 ~1.2e11）。
+> ② `http_serve_unix` 的 `req["remote"]` 由 `"unix"` 改 **`"@"`**（Go `net/http` 在 unix socket 上
+>    `r.RemoteAddr` == `"@"`：未 bind 的对端 `RawSockaddrUnix.path` 为空 ⇒ Go 的 autobind 占位符；
+>    Go 1.26.6 实测）。AF_INET 仍 `ip:port`，形状未变。
+>    门 `examples/m141_now_ns/`（VM+C 双轨）；native 计数 330→331、内置名册 344→345。
 
 ---
 
@@ -283,7 +293,7 @@ print("upper=" + to_upper("px"))
       字符串形态（`r/w/a/rw/w+`）表达不了"有则开、无则建、不截断"（`w+` 带 `O_TRUNC`），
       也表达不了 `O_EXCL`。字符串形态**行为零变化**。
       ⚠️ 第三参只在第二参是 int 时可用。
-## 2. native 内置速查（330 全量见 `docs/native_index.json`，本表为常用）
+## 2. native 内置速查（331 全量见 `docs/native_index.json`，本表为常用）
 
 ### 核心 / 值
 `print` `len` `range` `type` `str` `int` `float` `bool` `assert` `input` `exit` `sleep` `abs` `sqrt` `min` `max` `pow` `sorted` `reversed` `sum` `map` `filter` `reduce` `contains` `env`（⚠️ **变量不存在返回 `null`**，不是 `""` —— `str(null)` 会得到 `"null"`，取值请先判 null） `args()`（**调用式**：`px run s.px a b` 与编译产物同形 `[程序, a, b]`——M115 修；见 §1.1 事实清单）
@@ -300,7 +310,7 @@ print("upper=" + to_upper("px"))
 `bytes(s)`（⚠️ **`str(bytes)` 得到的是占位符 `"<bytes N>"`，不是内容**，也不报错 —— bytes→str 必须用 `bytes_to_str(b)`；`len(bytes)` 不支持，用 `bytes_len(b)`）`bytes_len` `bytes_get/set` `bytes_slice` `bytes_concat` `bytes_to_str` `int_to_bytes` `bytes_to_int` `bytes_base64` `bytes_find` · `bit_count` `bit_length`
 
 ### 时间 / 定时 / 调度
-`now()`（**本地时间字符串** `YYYY-MM-DD HH:MM:SS`）`now_ms()` `now_us()` `now_sec()`（M115：Unix 秒，配 `time_format`）**`sleep(ms)`**（⚠️ M128 实测更正：参数是**毫秒**不是秒！runtime `bi_sleep` 按 ms 换算；`sleep(1)`=1ms、`sleep(1500)`=1500ms；且 `int_val` **截断小数** ⇒ `sleep(0.5)` 等于不睡。移植 Go `time.Sleep(30*time.Second)` 若写成 `sleep(30)` 会少睡 1000 倍）`sleep_us`（微秒） `time_format(t, fmt)` `time_parse` `tz_offset` · `set_timeout(f, ms, ...)` `set_interval` `clear_timer` · `cron("分 时 日 月 周", f)`（6 字段）
+`now()`（**本地时间字符串** `YYYY-MM-DD HH:MM:SS`）`now_ms()` `now_us()` `now_sec()`（M115：Unix 秒，配 `time_format`）**`now_ns()`**（M141：**墙钟** Unix **纳秒** = `sec*1e9+nsec`；⚠️ `now_ms`/`now_us` 是 **CLOCK_MONOTONIC**（自 boot 起算），**`now_ns` 才是墙钟** —— 移植 Go 的 `time.Now().UnixNano()` / `Format("...000000000")` 必须用它，拿 `now_us()*1000` 冒充得到的是完全不同的值与数量级）**`sleep(ms)`**（⚠️ M128 实测更正：参数是**毫秒**不是秒！runtime `bi_sleep` 按 ms 换算；`sleep(1)`=1ms、`sleep(1500)`=1500ms；且 `int_val` **截断小数** ⇒ `sleep(0.5)` 等于不睡。移植 Go `time.Sleep(30*time.Second)` 若写成 `sleep(30)` 会少睡 1000 倍）`sleep_us`（微秒） `time_format(t, fmt)` `time_parse` `tz_offset` · `set_timeout(f, ms, ...)` `set_interval` `clear_timer` · `cron("分 时 日 月 周", f)`（6 字段）
 
 ### HTTP（客户端/服务端）
 客户端：`http_get(url)` `http_post(url, body[, headers])` ·
@@ -821,3 +831,16 @@ set_timeout(fn (): print("once after 2s"), 2000)
     · 已知边界：`stage >= 3`（发送/读头）时 Go 的 `*url.Error` 含**本端地址**
       （`write tcp 127.0.0.1:41234->…`），本实现取不到（仍按 dial 形状输出）；`TLS 握手失败`
       只有 mbedtls 码，Go 的证书/握手文案依赖 x509 细节 ⇒ 消费方**原样透传**，不再谎称 refused。
+101. **语言里没有「墙钟纳秒」（第 22 轮 · 缺陷 109，M141 新增 native `now_ns`）**：三个时间原语各有其轴 ——
+    `now()` = 本地时间**字符串**、`now_sec()` = 墙钟**秒**、`now_ms()`/`now_us()` = **CLOCK_MONOTONIC**
+    （自 boot 起算，**测量语义**）。所以「纳秒时间戳」在语言里**没有来源**。移植 Go 的
+    `time.Now().UnixNano()` / `time.Now().Format("20060102-150405.000000000")`（token-cache 的
+    ContextDebug 目录名 / `CacheLogEntry.Timestamp`）时若拿 `now_us()*1000` 冒充 ⇒ **值与数量级都不同**
+    （墙钟 ~1.8e18 vs 单调 ~1.2e11；门内负控断言量级差 > 1e11）。**判断口径**：要「与 `time_format`
+    同轴、可与墙钟互换」就用 `now_ns()`；要「测流逝（不受系统时间调整影响）」才用 `now_ms`/`now_us`。
+102. **unix socket 服务端的 `req["remote"]` 是 `"@"` 而不是 `"unix"`（第 22 轮 · 缺陷 110，M141）**：
+    Go `net/http` 在 AF_UNIX 上 `r.RemoteAddr` == `"@"`（**未 bind 的客户端**对端地址为空 ⇒
+    `syscall.RawSockaddrUnix.path` 空 ⇒ Go 的 autobind 占位符；Go 1.26.6 实测）；本运行时原给 `"unix"`
+    ⇒ 移植 Go 代码时「来源地址」字段（ContextDebug `up.md`、audit 日志）无法对齐。现 AF_UNIX → `"@"`，
+    AF_INET 仍 `ip:port`。⚠️ 判据要**三面**齐：形态独占（无 `:`、长度 < 40）+ TCP 面**没被误伤**
+    （服务端看到的是**客户端源端口**而非监听端口）+ 负控（`!= "unix"`）。
