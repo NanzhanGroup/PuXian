@@ -85,6 +85,10 @@ run m140_http_conn_errno bash examples/m140_http_conn_errno/verify.sh
 # m141（墙钟纳秒 now_ns + unix 服务端 remote = "@"，缺陷 109/110）：**不依赖任何外部服务**
 #   （门内自带 unix + TCP 本地服务端），CI 也跑。
 run m141_now_ns bash examples/m141_now_ns/verify.sh
+# m142（Go encoding/json 的 Indent/Compact/HTMLEscape/quoteChar 逐字节复刻 + 缺陷 111/112）：
+#   **需要 Go 产真值**（encoding/json 本尊），口径同 m136/m138 —— 本机全门跑，
+#   CI runner 自带 Go ⇒ ci.yml 里也跑。
+run m142_go_json_indent bash examples/m142_go_json_indent/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

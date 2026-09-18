@@ -1,0 +1,171 @@
+# ═══════════════════════════════════════════════════════════════════════
+# go_json_indent.px — Go `encoding/json` 的 Indent / Compact / HTMLEscape 复刻
+# ---------------------------------------------------------------
+# 单一事实源：$GOROOT/src/encoding/json/indent.go（go1.26.6 实测）
+# 依赖：`go_json_scan.px`（scanner 状态机，见该文件头部的保真说明）
+#
+# 为什么需要（而不是"自己写个美化器"）：Go 的三个函数都是**在原文上做插入/删除**，
+# 不解析、不重新编码，因此能原样保留：
+#   · 数字/字符串的**原始写法**（`1.50` 不会变 `1.5`、`\u4e2d` 不会变 `中`）
+#   · 键的顺序（不做排序）
+#   · 字符串里的任意字节（含 `<>` 与非法 UTF-8 —— **scanner 不校验 UTF-8**）
+#   · 顶层值**之后**的空白（Indent 保留原文尾部空白；Compact 丢弃）
+# 典型用途：token-cache 的 `ContextDebug.prettyJSON`
+#   `json.Indent(&out, data, "", "  ")`，**失败则原样回退** `string(data)`。
+#
+# 公开 API：
+#   go_json_indent(src, prefix, indent)      → str|null    （null = 语法错误，调用方回退原文）
+#   go_json_indent_ex(src, prefix, indent)   → {ok,out,err,offset}
+#   go_json_compact(src, escape)             → str|null
+#   go_json_compact_ex(src, escape)          → {ok,out,err,offset}
+#   go_json_htmlescape(src)                  → str         （纯字节替换，无 scanner、无错误）
+#
+# ⚠️ `escape=true` = Go `Marshal` 内部用的 `appendCompact(..., true)`：
+#     把字符串里的 `<` `>` `&` 换成 `\u003c` 等（防 `</script>` 注入）。
+#     注意它在**扫描之前**做替换，且对**非字符串上下文**同样替换（Go 亦然）。
+# ═══════════════════════════════════════════════════════════════════════
+import std.strings
+import std.go_json_scan
+# ── appendNewline —— "\n" + prefix + indent×depth ──
+def gji_newline(prefix, indent, depth):
+    var s = "\n" + prefix
+    var k = 0
+    while k < depth:
+        s = s + indent
+        k = k + 1
+    return s
+# ── appendIndent —— 逐字节复刻 ──
+def go_json_indent_ex(src, prefix, indent):
+    var parts = []
+    var s = gjs_new()
+    var depth = 0
+    var need = false
+    var n = len(src)
+    var i = 0
+    var bad = false
+    while i < n:
+        var c = src[i:i + 1]
+        var v = gjs_step(s, c, i)
+        if v == GJS_SKIP_SPACE:
+            i = i + 1
+            continue
+        if v == GJS_ERROR:
+            bad = true
+            break
+        # 延迟缩进：空对象/空数组要格式化成 {} 与 []
+        if need and v != GJS_END_OBJECT and v != GJS_END_ARRAY:
+            need = false
+            depth = depth + 1
+            parts.append(gji_newline(prefix, indent, depth))
+        if v == GJS_CONTINUE:
+            parts.append(c)
+            i = i + 1
+            continue
+        # 真正的标点才加空白
+        if c == "{" or c == "[":
+            need = true
+            parts.append(c)
+        elif c == ",":
+            parts.append(c)
+            parts.append(gji_newline(prefix, indent, depth))
+        elif c == ":":
+            parts.append(c)
+            parts.append(" ")
+        elif c == "}" or c == "]":
+            if need:
+                need = false
+            else:
+                depth = depth - 1
+                parts.append(gji_newline(prefix, indent, depth))
+            parts.append(c)
+        else:
+            parts.append(c)
+        i = i + 1
+    if not bad:
+        if gjs_eof(s, n) == GJS_ERROR:
+            bad = true
+    if bad:
+        # Go 失败时 dst 被 Truncate 回原长（即"什么都没写"）⇒ 本实现 out=""
+        return {"ok": false, "out": "", "err": gjs_errtext(s), "offset": gjs_off(s, src)}
+    return {"ok": true, "out": join("", parts), "err": "", "offset": 0}
+def go_json_indent(src, prefix, indent):
+    var r = go_json_indent_ex(src, prefix, indent)
+    if r["ok"]:
+        return r["out"]
+    return null
+# ── appendCompact —— `Compact` 与 `Marshal` 的转义路径 ──
+def go_json_compact_ex(src, escape):
+    var parts = []
+    var s = gjs_new()
+    var n = len(src)
+    var i = 0
+    var start = 0
+    var bad = false
+    while i < n:
+        var c = src[i:i + 1]
+        var b = gjs_byte0(c)
+        if escape and (b == 60 or b == 62 or b == 38):
+            if start < i:
+                parts.append(src[start:i])
+            parts.append("\\u00" + gjs_hexd(b // 16) + gjs_hexd(b % 16))
+            start = i + 1
+        elif escape and (c == "\u{2028}" or c == "\u{2029}"):
+            # Go 按字节判 E2 80 A8/A9（= U+2028/U+2029）并**替换成转义文本**；
+            # 本实现按字符判，等价（`c` 本身是多字节，必须写成 `\u2028` 的 6 个字节）
+            if start < i:
+                parts.append(src[start:i])
+            if c == "\u{2028}":
+                parts.append("\\u2028")
+            else:
+                parts.append("\\u2029")
+            start = i + 1
+        var v = gjs_step(s, c, i)
+        if v >= GJS_SKIP_SPACE:
+            if v == GJS_ERROR:
+                bad = true
+                break
+            if start < i:
+                parts.append(src[start:i])
+            start = i + 1
+        i = i + 1
+    if not bad:
+        if gjs_eof(s, n) == GJS_ERROR:
+            bad = true
+    if bad:
+        # ⚠️ Go 语义陷阱（实测，见 README/速查包）：`appendCompact` **从不递增**
+        #    `scan.bytes` ⇒ `json.Compact` 返回的 `*SyntaxError.Offset` **恒为 0**，
+        #    与 `json.Indent`（逐字节递增，偏移真实）**不是一个口径**。
+        #    本移植照抄该行为：Compact 面的 offset 固定 0。
+        return {"ok": false, "out": "", "err": gjs_errtext(s), "offset": 0}
+    # 尾部残留（Go 的 `if start < len(src)` 在 eof 检查**之后**）
+    if start < n:
+        parts.append(src[start:n])
+    return {"ok": true, "out": join("", parts), "err": "", "offset": 0}
+def go_json_compact(src, escape):
+    var r = go_json_compact_ex(src, escape)
+    if r["ok"]:
+        return r["out"]
+    return null
+# ── appendHTMLEscape —— 纯字节替换（无 scanner、永不报错） ──
+def go_json_htmlescape(src):
+    var parts = []
+    var n = len(src)
+    var i = 0
+    var start = 0
+    while i < n:
+        var c = src[i:i + 1]
+        var b = gjs_byte0(c)
+        if b == 60 or b == 62 or b == 38:
+            parts.append(src[start:i])
+            parts.append("\\u00" + gjs_hexd(b // 16) + gjs_hexd(b % 16))
+            start = i + 1
+        elif c == "\u{2028}" or c == "\u{2029}":
+            parts.append(src[start:i])
+            if c == "\u{2028}":
+                parts.append("\\u2028")
+            else:
+                parts.append("\\u2029")
+            start = i + 1
+        i = i + 1
+    parts.append(src[start:n])
+    return join("", parts)
