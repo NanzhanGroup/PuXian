@@ -74,6 +74,10 @@ run m133_unix_timeout bash examples/m133_http_unix_timeout/verify.sh
 run m134_gc_obj_roots bash examples/m134_gc_obj_roots/verify.sh
 run m136_go_json_fidelity bash examples/m136_go_json_fidelity/verify.sh
 run m137_sse_connect_ex bash examples/m137_sse_connect_ex/verify.sh
+# M139（第 19 轮）：裸标识符语句 = 编译错误（缺陷 101）。
+# ⚠️ m138（正则的 Go 保真门）需要 Go 产真值，口径同 m136 ⇒ 只在本地全门跑，
+#     CI 侧由 ci.yml 的 toolchain 步骤显式跑（该 runner 自带 Go）。
+run m139_bare_ident_stmt bash examples/m139_bare_ident_stmt/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们
