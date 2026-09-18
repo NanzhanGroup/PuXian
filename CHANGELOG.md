@@ -1,3 +1,37 @@
+## M145 —— 循环引用值的比较 / 渲染 / JSON 不再段错误（第 26 轮 · 缺陷 125）
+
+- **缺陷 125（P0 · 双击必现的段错误，已修）**：`var g = {}; g.set("me", g)`（或 list 自环、
+  间接环）之后
+  - `g == g` → runtime `compare_values` **无界递归** ⇒ C 栈溢出 ⇒ SIGSEGV（VM 轨与 C 轨同源，
+    实测 rc=139）；
+  - `str(g)` / `print(g)` → `px_fmt_value`（编译轨）/ `selfhost/ival.px::i_to_str`（解释轨）同族；
+  - `json_stringify(g)` / `json_stringify_go(g)` → `json_stringify_value` / `json_go_value` 同族。
+
+  这条通路此前**从未被测过**：CF 树（token-cache 聚类族）这类带 parent↔child 环的结构是
+  第一个真实用例（移植前夜才发现）。
+- **修法（语义分层，非「加个深度上限」）**：
+  1. **比较**（`compare_values`）：对齐 Go `reflect.DeepEqual` —— 维护「已访问对象对」
+     集合（`__thread`，仅在一次顶层比较期间存在；标量走零开销快路径），再次遇到同一对
+     ⇒ 视为相等。**非环的共享子对象语义完全不变**（配对是 (ptrA,ptrB)，不是单边指针）。
+  2. **渲染**（`px_fmt_value`）：按**路径**判定（不是累积集合）—— 只有「当前递归路径上」
+     的对象再次出现才渲染 `...`。共享而非环的 `{"p":a,"q":a}` **必须完整渲染**，
+     用累积集合会把它误渲染成省略号（既有合法输出会被改坏）。
+  3. **JSON**（`json_stringify_value` / `json_go_value`）：环上 `px_error`
+     `json: unsupported value: encountered a cycle via <type>`（Go `json.Marshal` 同族文案）
+     ⇒ 受控退出（rc=1），而不是段错误。
+  4. **解释轨**（`selfhost/ival.px`）：`i_eq` / `i_to_str` 同批加环保护（`i_eq` 用
+     「已访问对象对」、`i_to_str` 用路径栈），与编译轨同语义。
+- **新 native `object_id(v)`**：对象的**不透明**标识 —— PuXian 的 `==` 是结构相等，语言里
+  原本无法表达「是不是同一个对象」；环检测（解释轨）与**指针语义移植**（如 Go 的
+  `child == leaf`）都需要它。堆对象 → 地址（mark-sweep 非移动 GC ⇒ 存活期内恒定）；
+  非堆值（int/float/bool/null）→ 0。内置名册 350 → **351**，native 索引 336 → **337**。
+- **门 `examples/m145_cycle_safe/`**：`cycle_eq.px`（18 断言）· `render.px`（13 断言）·
+  `object_id.px`（13 断言）· `json_cycle.px`（受控报错）；**三轨**（VM / C / 解释轨 pxi）
+  断言集相同且**输出逐字节一致**；另含 2 道负控（篡改期望值必须判红 / 路径语义断言在位）。
+  口径：**不依赖任何外部服务** ⇒ 本机全门与 CI 都跑。
+- **CI/全门**：m145 接进 `selfhost/m116_gates.sh`、`m117_gates.sh`、`.github/workflows/ci.yml`。
+- **速查表 +117**（环安全的三层语义 + `object_id`）。
+
 ## M144 —— HTTP 大请求体（内存安全）+ chunked 收发 + 连接级余留缓冲（第 25 轮）
 
 - **缺陷 120/121/122（内存安全 P0，皆已修）**：请求体被 `memcpy` 进**栈缓冲** ——

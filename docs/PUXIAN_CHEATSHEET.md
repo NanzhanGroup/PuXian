@@ -28,6 +28,13 @@
 >    `r.RemoteAddr` == `"@"`：未 bind 的对端 `RawSockaddrUnix.path` 为空 ⇒ Go 的 autobind 占位符；
 >    Go 1.26.6 实测）。AF_INET 仍 `ip:port`，形状未变。
 >    门 `examples/m141_now_ns/`（VM+C 双轨）；native 计数 330→331、内置名册 344→345。
+> M145（2026-09-19，qg-issue 87 第 26 轮）：**循环引用值的比较/渲染/JSON 不再段错误** ——
+> ① `==` 对齐 Go `reflect.DeepEqual`（环上「已访问对象对」再遇 ⇒ 相等）；② `str()`/`print` 按
+> **路径**判定（共享而非环的对象完整渲染，环上渲染 `...`）；③ `json_stringify`/`json_stringify_go`
+> 环上 `px_error`（`encountered a cycle via dict`，受控 rc=1 而非 139）；④ 解释轨 `ival.px`
+> 的 `i_eq`/`i_to_str` 同批加环保护（三轨输出逐字节一致）。新 native **`object_id(v)`**（对象
+> 同一性，`==` 是结构相等 ⇒ 指针语义移植/环检测必需）；native 计数 336→337、内置名册 350→351。
+> 门 `examples/m145_cycle_safe/`（VM/C/解释轨 + 2 负控）。详见事实 117。
 
 ---
 
@@ -950,3 +957,19 @@ set_timeout(fn (): print("once after 2s"), 2000)
     字节不再被丢弃（存 `PxConnCtx.pbuf`，跨 worker 调用 / handler 协程续写存续），
     管道化的第二个请求**照常应答**；余留字节在响应后若存在，本 worker **不再交还 IDLE**
     （否则字节随 worker 栈一起丢）。判据不能用 `fd 可读`：那些字节早在用户态缓冲里。
+117. **循环引用值的「比较 / 渲染 / JSON」三层语义（第 26 轮 · M145 · 缺陷 125）**：M145 前
+     `var g = {}; g.set("me", g)` 之后 `g == g` / `str(g)` / `json_stringify(g)` **一律段错误**
+     （三条通路各自无界递归 ⇒ C 栈溢出；VM/C 双轨同源，实测 rc=139）。现语义：
+     · **`==`**：环上「已访问对象对」再次出现 ⇒ 视为**相等**（对齐 Go `reflect.DeepEqual`）；
+       非环的**共享**子对象不受影响（`{"p":a,"q":a}` 与 `{"p":{…},"q":{…}}` 照常按内容比）。
+     · **`str()` / `print()`**：**路径**上的对象再次出现 ⇒ 渲染 `...`
+       （`str(g)` == `{me: ..., n: 1}`）；**共享而非环**的必须完整渲染 —— 所以用**路径栈**
+       而不是累积集合（后者会把 `{"p":a,"q":a}` 的第二处误渲染成 `...`，改坏既有合法输出）。
+     · **`json_stringify` / `json_stringify_go`**：环上 **`px_error`**
+       `json: unsupported value: encountered a cycle via dict`（Go `json.Marshal` 同族文案）
+       ⇒ 受控退出 rc=1（**不是** 139）。解释轨（`px run`）同三条契约（`ival.px` 同步修）。
+     · 新 native **`object_id(v)`**：对象**不透明**标识（同一性）。堆对象 → 地址（存活期内恒定，
+       mark-sweep 非移动 GC）；非堆值（int/float/bool/null）→ 0。用途：解释轨环检测、
+       以及**移植带指针语义的 Go 代码**（`child == leaf` 这类判断 —— PuXian 的 `==` 是结构相等，
+       做不到「是不是同一个对象」）。
+     门：`examples/m145_cycle_safe/`（三轨 VM/C/解释轨输出逐字节一致 + 环上 JSON 受控报错 + 2 负控）。
