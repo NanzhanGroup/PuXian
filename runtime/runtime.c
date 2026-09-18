@@ -2990,7 +2990,60 @@ static int px_cmp_cstr(const void* a, const void* b) {
 // 递归渲染 list/dict/tuple/enum/struct/result/gen；原子类型直接格式化
 // 返回 malloc 字符串（调用方 free）
 // 注意：dict 按完整 "k: v" 字符串排序（对齐 Rust parts.sort()，而非按键排序）
+// ═══ 缺陷 125（M145）：循环引用值上的比较/渲染**不得**无界递归 ═══
+//   背景：BIRCH CF 树（token-cache 聚类族）天然带 parent↔child 环；此前
+//     `var g = {}; g.set("me", g); g == g` ⇒ compare_values 无限递归 ⇒ C 栈溢出 ⇒ SIGSEGV
+//     （VM 轨与 C 轨同源，实测 rc=139；`str()`/`json_stringify()` 同族三条通路同样段错误）。
+//   比较语义对齐 Go `reflect.DeepEqual`：维护「已访问对象对」(ptrA,ptrB) 集合，
+//     再次遇到同一对 ⇒ 视为相等（不再下潜）。非容器值走零开销快路径。
+typedef struct { const LXObject* a; const LXObject* b; } PxEqPair;
+typedef struct { PxEqPair* it; int n; int cap; } PxEqCtx;
+static __thread PxEqCtx* g_eq_ctx = NULL;
+
+static int px_is_container(LXValue v) {
+    return v.type == PX_LIST || v.type == PX_TUPLE || v.type == PX_DICT || v.type == PX_RESULT;
+}
+static void px_eq_ctx_free(void) {
+    if (g_eq_ctx) { xfree(g_eq_ctx->it); xfree(g_eq_ctx); g_eq_ctx = NULL; }
+}
+
+// ── 渲染（str/print/json）的**路径**环保护：只认「当前递归路径上」的对象 ──
+//   为何不用累积集合：`var a = {"x":1}; var d = {"p":a,"q":a}` 是**共享而非环**，
+//     累积集合会把第二次出现误渲染成 `...`（既有合法输出会被改坏）⇒ 用路径栈。
+typedef struct { const LXObject** it; int n; int cap; } PxPath;
+static __thread PxPath g_fmt_path = { NULL, 0, 0 };   // 人类可读渲染（px_fmt_value）
+static __thread PxPath g_json_path = { NULL, 0, 0 };  // JSON 序列化（stringify / stringify_go）
+static void px_path_reset(PxPath* p) { p->n = 0; }
+static int px_path_has(PxPath* p, const LXObject* o) {
+    for (int i = 0; i < p->n; i++) if (p->it[i] == o) return 1;
+    return 0;
+}
+static void px_path_push(PxPath* p, const LXObject* o) {
+    if (p->n == p->cap) {
+        p->cap = p->cap ? p->cap * 2 : 16;
+        p->it = (const LXObject**)xrealloc(p->it, (size_t)p->cap * sizeof(LXObject*));
+    }
+    p->it[p->n++] = o;
+}
+static void px_path_pop(PxPath* p) { if (p->n > 0) p->n--; }
+
+static char* px_fmt_value_raw(LXValue v);
 static char* px_fmt_value(LXValue v) {
+    // 缺陷 125（M145）：环保护（**路径**语义 ⇒ 共享而非环的对象照常完整渲染）
+    if (px_is_container(v)) {
+        if (px_path_has(&g_fmt_path, v.as.obj)) {
+            RStrBuf b = {0};
+            rsb_append(&b, "...", 3);
+            return rsb_done(&b);
+        }
+        px_path_push(&g_fmt_path, v.as.obj);
+        char* out = px_fmt_value_raw(v);
+        px_path_pop(&g_fmt_path);
+        return out;
+    }
+    return px_fmt_value_raw(v);
+}
+static char* px_fmt_value_raw(LXValue v) {
     RStrBuf b = {0};
     switch (v.type) {
         case PX_NULL: rsb_append(&b, "null", 4); break;
@@ -3254,7 +3307,38 @@ LXValue px_ushr(LXValue a, LXValue b) {
     return px_int((int64_t)(v >> sh));
 }
 
+static int compare_values_raw(LXValue a, LXValue b);
 static int compare_values(LXValue a, LXValue b) {
+    // 快路径：任一侧不是容器 ⇒ 不可能成环（标量无引用）
+    if (!px_is_container(a) || !px_is_container(b)) return compare_values_raw(a, b);
+    int root = (g_eq_ctx == NULL);
+    if (root) {
+        g_eq_ctx = (PxEqCtx*)xmalloc(sizeof(PxEqCtx));
+        g_eq_ctx->it = NULL; g_eq_ctx->n = 0; g_eq_ctx->cap = 0;
+    }
+    const LXObject* oa = a.as.obj;
+    const LXObject* ob = b.as.obj;
+    for (int i = 0; i < g_eq_ctx->n; i++) {
+        if (g_eq_ctx->it[i].a == oa && g_eq_ctx->it[i].b == ob) {
+            // 这一对正在（或已经）比较中 ⇒ 环上视为相等（DeepEqual 语义）
+            if (root) px_eq_ctx_free();
+            return 0;
+        }
+    }
+    if (g_eq_ctx->n == g_eq_ctx->cap) {
+        g_eq_ctx->cap = g_eq_ctx->cap ? g_eq_ctx->cap * 2 : 16;
+        g_eq_ctx->it = (PxEqPair*)xrealloc(g_eq_ctx->it, (size_t)g_eq_ctx->cap * sizeof(PxEqPair));
+    }
+    g_eq_ctx->it[g_eq_ctx->n].a = oa;
+    g_eq_ctx->it[g_eq_ctx->n].b = ob;
+    g_eq_ctx->n++;
+    int r = compare_values_raw(a, b);
+    // 不弹出：与 Go reflect.DeepEqual 一致（已比较过的对象对再次出现即视为相等）
+    if (root) px_eq_ctx_free();
+    return r;
+}
+
+static int compare_values_raw(LXValue a, LXValue b) {
     if (a.type == PX_INT && b.type == PX_INT) {
         return a.as.i < b.as.i ? -1 : (a.as.i > b.as.i ? 1 : 0);
     }
@@ -4285,6 +4369,26 @@ static LXValue bi_type(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) px_error("R1002: type 需要一个参数");
     return px_str(px_type_name(args[0]));
+}
+
+// M145（缺陷 125 配套）：`object_id(v)` —— 对象的**不透明**标识（同一性判断）。
+//   动机：PuXian 的 `==` 是**结构相等**，语言里无法表达「是不是同一个对象」⇒
+//     ① 解释器（selfhost/ival.px）的环检测拿不到对象身份；
+//     ② 移植带指针语义的 Go 代码（如 BIRCH CF 树的 `child == leaf`）只能靠下标近似。
+//   语义：堆对象返回其地址（mark-sweep 非移动 GC ⇒ 存活期内恒定）；非堆值（int/float/
+//     bool/null/range/chan/锁…）返回 0。**仅供同一性比较，不保证跨进程/跨次运行稳定**。
+static LXValue bi_object_id(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: object_id 需要一个参数");
+    LXValue v = args[0];
+    switch (v.type) {
+        case PX_LIST: case PX_TUPLE: case PX_DICT: case PX_STR: case PX_BYTES:
+        case PX_RESULT: case PX_STRUCT: case PX_ENUM: case PX_FUNC: case PX_NATIVE:
+        case PX_GEN:
+            return px_int((int64_t)(intptr_t)v.as.obj);
+        default:
+            return px_int(0);
+    }
 }
 
 static LXValue bi_str(LXValue* args, int nargs, void* ctx) {
@@ -8093,7 +8197,21 @@ static void jout_escape(JOut* o, const char* s) {
     }
     jout_append(o, "\"");
 }
+static void json_stringify_value_raw(JOut* o, LXValue v);
 static void json_stringify_value(JOut* o, LXValue v) {
+    // 缺陷 125（M145）：环上**报错**（不段错误）。Go `json.Marshal` 在环上返回
+    //   `json: unsupported value: encountered a cycle via ...` ⇒ 此处同族文案可诊断。
+    if (px_is_container(v)) {
+        if (px_path_has(&g_json_path, v.as.obj))
+            px_error("json: unsupported value: encountered a cycle via %s", px_type_name(v));
+        px_path_push(&g_json_path, v.as.obj);
+        json_stringify_value_raw(o, v);
+        px_path_pop(&g_json_path);
+        return;
+    }
+    json_stringify_value_raw(o, v);
+}
+static void json_stringify_value_raw(JOut* o, LXValue v) {
     switch (v.type) {
         case PX_NULL: jout_append(o, "null"); break;
         case PX_BOOL: jout_append(o, v.as.b ? "true" : "false"); break;
@@ -8177,6 +8295,7 @@ static LXValue bi_json_stringify(LXValue* args, int nargs, void* ctx) {
     if (nargs != 1) px_error("R1002: json_stringify 需要一个参数");
     JOut o = { NULL, 0, 0 };
     o.buf = xmalloc(64); o.cap = 64; o.buf[0] = 0;
+    px_path_reset(&g_json_path);
     json_stringify_value(&o, args[0]);
     LXValue r = px_str(o.buf);
     xfree(o.buf);
@@ -8446,7 +8565,20 @@ static int jgo_kv_cmp(const void* a, const void* b) {
 //   故排序与转义必须**可分别关闭** —— 例如 "map 里嵌结构体数组" 的响应：map 要排序、
 //   结构体字段要保持声明序，此时用 {"sort_keys": false} 并手工按序 set）。
 
+static void json_go_value_raw(JOut* o, LXValue v);
 static void json_go_value(JOut* o, LXValue v) {
+    // 缺陷 125（M145）：同 json_stringify_value —— 环上报错而非段错误
+    if (px_is_container(v)) {
+        if (px_path_has(&g_json_path, v.as.obj))
+            px_error("json: unsupported value: encountered a cycle via %s", px_type_name(v));
+        px_path_push(&g_json_path, v.as.obj);
+        json_go_value_raw(o, v);
+        px_path_pop(&g_json_path);
+        return;
+    }
+    json_go_value_raw(o, v);
+}
+static void json_go_value_raw(JOut* o, LXValue v) {
     switch (v.type) {
         case PX_NULL: jout_append(o, "null"); break;
         case PX_BOOL: jout_append(o, v.as.b ? "true" : "false"); break;
@@ -8534,6 +8666,7 @@ static LXValue bi_json_stringify_go(LXValue* args, int nargs, void* ctx) {
     }
     JOut o = { NULL, 0, 0 };
     o.buf = xmalloc(64); o.cap = 64; o.buf[0] = 0;
+    px_path_reset(&g_json_path);
     json_go_value(&o, args[0]);
     LXValue r = px_str_len(o.buf, o.len);
     xfree(o.buf);
@@ -8919,6 +9052,7 @@ void px_register_builtins(void) {
     px_set_global("len", px_native("len", bi_len));
     px_set_global("range", px_native("range", bi_range));
     px_set_global("type", px_native("type", bi_type));
+    px_set_global("object_id", px_native("object_id", bi_object_id));
     px_set_global("str", px_native("str", bi_str));
     px_set_global("int", px_native("int", bi_int));
     px_set_global("float", px_native("float", bi_float));
