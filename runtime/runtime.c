@@ -11917,9 +11917,18 @@ static void px_tls_debug(const char* fmt, ...) {
 
 // 建立 HTTPS 连接（TCP + TLS 握手完成；尝试会话票据恢复）；失败返回 NULL
 // M117（qg-issue 72 F2）：带超时的 TCP 连接（定义在 hconnect 附近，此处前置声明）
-static int px_tcp_connect_timeout(const char* host, int port, int timeout_ms);
+static int px_tcp_connect_timeout(const char* host, int port, int timeout_ms,
+                                  int* out_stage, int* out_errno, char* out_addr, int addr_cap);
 
-static HttpsSession* https_connect_t(const char* host, int port, int timeout_ms) {
+// M140（qg-issue 87 第 21 轮 · 缺陷 108）：连接失败**成因分类**的 stage 码。
+//   定义在此（https_connect_t 之前）—— TLS 阶段也用它。详见下方 px_tcp_connect_timeout。
+#define PX_CONN_STAGE_RESOLVE 1   // 域名解析（getaddrinfo）
+#define PX_CONN_STAGE_SOCKET  2   // socket(2)
+#define PX_CONN_STAGE_CONNECT 3   // connect(2)（含 poll 超时 / SO_ERROR）
+#define PX_CONN_STAGE_TLS     4   // TLS 握手（https_connect_t 内部）
+
+static HttpsSession* https_connect_t(const char* host, int port, int timeout_ms,
+                                     int* out_stage, int* out_errno, char* out_addr, int addr_cap) {
     HttpsSession* s = (HttpsSession*)xmalloc(sizeof(HttpsSession));
     memset(s, 0, sizeof(*s));
     mbedtls_net_init(&s->net);
@@ -11930,13 +11939,13 @@ static HttpsSession* https_connect_t(const char* host, int port, int timeout_ms)
     const char* pers = "px_https";
     char portstr[16];
     snprintf(portstr, sizeof(portstr), "%d", port);
-    int ret;
+    int ret = 0;   // M140：fail 路径可能在任何赋值前到达（如 TCP 连接阶段失败）
     if ((ret = mbedtls_ctr_drbg_seed(&s->ctr_drbg, mbedtls_entropy_func, &s->entropy,
                                      (const unsigned char*)pers, strlen(pers))) != 0) goto fail;
     // M117（qg-issue 72 F2）：HTTPS 也走带超时的连接（mbedtls_net_connect 是无超时阻塞，
     //   对黑洞地址同样挂死）。timeout_ms<=0 → 保持原 mbedtls 路径（零回归）。
     if (timeout_ms > 0) {
-        int cfd = px_tcp_connect_timeout(host, port, timeout_ms);
+        int cfd = px_tcp_connect_timeout(host, port, timeout_ms, out_stage, out_errno, out_addr, addr_cap);
         if (cfd < 0) goto fail;
         s->net.fd = cfd;   // mbedtls_net_context 就是 fd 包装；后续 send/recv/close 均由 mbedtls 走
     } else if ((ret = mbedtls_net_connect(&s->net, host, portstr, MBEDTLS_NET_PROTO_TCP)) != 0) goto fail;
@@ -11979,6 +11988,13 @@ static HttpsSession* https_connect_t(const char* host, int port, int timeout_ms)
     }
     return s;
 fail:
+    // M140：TCP 连接阶段已把 stage/errno 记进（out_stage/out_errno）；此处**只**补 TLS 阶段
+    //   （DNS/socket/connect 成功后的 setup/handshake 失败）—— 不可覆盖掉更具体的成因。
+    if (out_stage && *out_stage == 0) {
+        if (out_errno) *out_errno = ret;
+        *out_stage = PX_CONN_STAGE_TLS;
+        if (out_addr && addr_cap > 0 && !out_addr[0]) snprintf(out_addr, (size_t)addr_cap, "%s", host);
+    }
     mbedtls_net_free(&s->net);
     mbedtls_ssl_free(&s->ssl);
     mbedtls_ssl_config_free(&s->conf);
@@ -12015,7 +12031,7 @@ static void https_close(HttpsSession* s) {
 
 // https_connect：默认上限包装（无 opts 的调用点用）
 static HttpsSession* https_connect(const char* host, int port) {
-    return https_connect_t(host, port, PX_DEFAULT_CONNECT_TIMEOUT_MS);
+    return https_connect_t(host, port, PX_DEFAULT_CONNECT_TIMEOUT_MS, NULL, NULL, NULL, 0);
 }
 
 void* px_https_connect_ex(const char* host, int port) {
@@ -12114,7 +12130,15 @@ static int hparse_url(const char* url, int* is_https, char* host, int host_cap, 
     else if (strncmp(url, "http://", 7) == 0) { rest = url + 7; }
     else return -1;  // 不支持的协议（不再终止；调用方转 Err 返回）
     int hl = 0;
-    while (rest[hl] && rest[hl] != '/' && rest[hl] != ':' && hl < host_cap - 1) { host[hl] = rest[hl]; hl++; }
+    // M140：IPv6 字面量 `[::1]` —— 方括号内的冒号不是端口分隔符（host 保留方括号：
+    //   Host 请求头与 Go 的 dial 文案都用带括号形式）
+    if (rest[0] == '[') {
+        while (rest[hl] && rest[hl] != ']' && hl < host_cap - 1) { host[hl] = rest[hl]; hl++; }
+        if (rest[hl] != ']' || hl >= host_cap - 1) return -1;   // 未闭合 / 过长
+        host[hl] = ']'; hl++;
+    } else {
+        while (rest[hl] && rest[hl] != '/' && rest[hl] != ':' && hl < host_cap - 1) { host[hl] = rest[hl]; hl++; }
+    }
     host[hl] = 0;
     *port = *is_https ? 443 : 80;
     const char* p = rest + hl;
@@ -12159,54 +12183,186 @@ static LXValue px_net_err(const char* fmt, ...) {
 //   对安装器/守护进程是"永久卡死"级别的：一个不可达镜像就能让整条流程挂住。
 //   修法：socket 置非阻塞 → connect 期望 EINPROGRESS → poll(POLLOUT, timeout_ms) →
 //         getsockopt(SO_ERROR) 判定 → 恢复阻塞模式（后续 SO_RCVTIMEO 语义不变）。
-static int px_tcp_connect_timeout(const char* host, int port, int timeout_ms) {
-    struct addrinfo hints, *res = NULL;
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-    char portstr[16];
-    snprintf(portstr, sizeof(portstr), "%d", port);
-    if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) return -1;
-    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (fd < 0) { freeaddrinfo(res); return -1; }
+//
+// M140（qg-issue 87 第 21 轮 · 缺陷 108）：失败**成因分类** + 双栈。
+//   病灶：失败路径 `freeaddrinfo()`+`close()` 之后 errno 已被覆盖，函数一律 `return -1`
+//     ⇒ 语言层只剩一句 `net: 连接 X:Y 失败`，无法区分「端口没开」(ECONNREFUSED)、
+//     「网络不可达」(ENETUNREACH)、「无路由」(EHOSTUNREACH)、「被丢包超时」(ETIMEDOUT)。
+//     生产机 e2e 实测（token-cache）：netns 里 lo 为 DOWN 时 Go 打
+//     `connect: network is unreachable`、本运行时打 `connection refused`
+//     —— 同一上游、同一请求、同一次运行。
+//   修法 ①：失败点**当场**把 errno 与 stage 记进位参（在 freeaddrinfo/close 之前取，
+//     这两者都会覆盖 errno）。
+//   修法 ②：`hints.ai_family` AF_INET → **AF_UNSPEC**。Go 的 `dial tcp` 是双栈；此前
+//     强制 IPv4 ⇒ 「仅 AAAA 的上游」与 URL 里的 `[::1]` 字面量直接连不上。
+//     逐地址尝试，顺序 = getaddrinfo 返回序；**全部失败时返回第一个地址的成因**
+//     （Go 的 dialParallel/dialSerial 同样返回首选地址的错 —— Go 1.26 实测：
+//      `localhost:P` 双栈皆拒时 Go 打 `dial tcp [::1]:P: connect: connection refused`）。
+//   修法 ③：失败文案里的地址用**数字形式**（Go 亦然：给的是解析结果而非主机名，
+//     IPv6 加方括号）—— 由 `out_addr` 位参回给调用方。
+//   （stage 码 PX_CONN_STAGE_* 定义在本文件上方 https_connect_t 之前。）
+
+// 把 sockaddr 转成 Go 风格地址串（IPv6 加方括号；Go 的 dial 文案形如 `[::1]:42487`）
+static void px_addr_text(const struct sockaddr* sa, char* out, int cap) {
+    if (!out || cap <= 0) return;
+    out[0] = 0;
+    if (!sa) return;
+    if (sa->sa_family == AF_INET6) {
+        const struct sockaddr_in6* s6 = (const struct sockaddr_in6*)sa;
+        char ip[INET6_ADDRSTRLEN];
+        ip[0] = 0;
+        inet_ntop(AF_INET6, &s6->sin6_addr, ip, sizeof(ip));
+        snprintf(out, (size_t)cap, "[%s]", ip);
+    } else if (sa->sa_family == AF_INET) {
+        const struct sockaddr_in* s4 = (const struct sockaddr_in*)sa;
+        char ip[INET_ADDRSTRLEN];
+        ip[0] = 0;
+        inet_ntop(AF_INET, &s4->sin_addr, ip, sizeof(ip));
+        snprintf(out, (size_t)cap, "%s", ip);
+    }
+}
+
+// M140：host 可能是 URL 里的 IPv6 字面量 `[::1]`（getaddrinfo 不接受方括号；Go 会去括号）
+static const char* px_host_bare(const char* host, char* buf, int cap) {
+    size_t n = strlen(host);
+    if (n >= 2 && host[0] == '[' && host[n - 1] == ']' && (int)(n - 2) < cap) {
+        memcpy(buf, host + 1, n - 2);
+        buf[n - 2] = 0;
+        return buf;
+    }
+    return host;
+}
+
+// 单个地址的一次尝试；成功返回 fd，失败返回 -1 并把 stage/errno 写进位参
+static int px_conn_try(const struct addrinfo* ai, int timeout_ms, int* out_stage, int* out_errno) {
+    int fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+    if (fd < 0) { *out_stage = PX_CONN_STAGE_SOCKET; *out_errno = errno; return -1; }
     if (timeout_ms <= 0) {
         // 未指定超时 → 保持原阻塞语义（零回归）
-        if (connect(fd, res->ai_addr, res->ai_addrlen) < 0) { freeaddrinfo(res); close(fd); return -1; }
-        freeaddrinfo(res);
+        if (connect(fd, ai->ai_addr, ai->ai_addrlen) < 0) {
+            int e = errno;
+            close(fd);
+            *out_stage = PX_CONN_STAGE_CONNECT;
+            *out_errno = e;
+            return -1;
+        }
         return fd;
     }
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-    int rc = connect(fd, res->ai_addr, res->ai_addrlen);
+    int rc = connect(fd, ai->ai_addr, ai->ai_addrlen);
     if (rc < 0 && errno != EINPROGRESS) {
-        freeaddrinfo(res); close(fd); return -1;
+        int e = errno;
+        close(fd);
+        *out_stage = PX_CONN_STAGE_CONNECT;
+        *out_errno = e;
+        return -1;
     }
     if (rc < 0) {
         struct pollfd pfd;
         pfd.fd = fd; pfd.events = POLLOUT; pfd.revents = 0;
         int prc;
         do { prc = poll(&pfd, 1, timeout_ms); } while (prc < 0 && errno == EINTR);
-        if (prc <= 0) {   // 0=超时，-1=错误
-            freeaddrinfo(res); close(fd); return -1;
+        if (prc <= 0) {   // 0=超时（Go 打 `i/o timeout` ⇒ 用 ETIMEDOUT 对齐），-1=错误
+            int e = (prc == 0) ? ETIMEDOUT : errno;
+            close(fd);
+            *out_stage = PX_CONN_STAGE_CONNECT;
+            *out_errno = e;
+            return -1;
         }
         int soerr = 0;
         socklen_t sl = sizeof(soerr);
         if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &sl) != 0 || soerr != 0) {
-            freeaddrinfo(res); close(fd); return -1;
+            int e = soerr ? soerr : errno;
+            close(fd);
+            *out_stage = PX_CONN_STAGE_CONNECT;
+            *out_errno = e;
+            return -1;
         }
     }
     if (flags >= 0) fcntl(fd, F_SETFL, flags);   // 恢复阻塞（SO_RCVTIMEO/SO_SNDTIMEO 生效）
-    freeaddrinfo(res);
     return fd;
 }
 
-// hconnect_t：hconnect 的带超时版（timeout_ms<=0 时与原语义一致）
-static int hconnect_t(const char* host, int port, int timeout_ms) {
-    return px_tcp_connect_timeout(host, port, timeout_ms);
+static int px_tcp_connect_timeout(const char* host, int port, int timeout_ms,
+                                  int* out_stage, int* out_errno, char* out_addr, int addr_cap) {
+    if (out_stage) *out_stage = 0;
+    if (out_errno) *out_errno = 0;
+    if (out_addr && addr_cap > 0) out_addr[0] = 0;
+    char bare[256];
+    const char* h = px_host_bare(host, bare, (int)sizeof(bare));
+    struct addrinfo hints, *res = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;   // M140：双栈（原为 AF_INET）
+    hints.ai_socktype = SOCK_STREAM;
+    char portstr[16];
+    snprintf(portstr, sizeof(portstr), "%d", port);
+    errno = 0;
+    int gai = getaddrinfo(h, portstr, &hints, &res);
+    if (gai != 0 || !res) {
+        if (out_stage) *out_stage = PX_CONN_STAGE_RESOLVE;
+        if (out_errno) *out_errno = gai;   // EAI_* 负码（0 = 无信息）
+        return -1;
+    }
+    // M140：逐地址尝试；全部失败 → 返回**第一个**地址的成因与数字地址
+    int fd = -1, f_stage = 0, f_errno = 0;
+    char f_addr[128];
+    f_addr[0] = 0;
+    for (struct addrinfo* ai = res; ai; ai = ai->ai_next) {
+        if (ai->ai_family != AF_INET && ai->ai_family != AF_INET6) continue;
+        int st = 0, er = 0;
+        int rfd = px_conn_try(ai, timeout_ms, &st, &er);
+        if (rfd >= 0) { fd = rfd; break; }
+        if (f_stage == 0) {
+            f_stage = st ? st : PX_CONN_STAGE_CONNECT;
+            f_errno = er;
+            px_addr_text(ai->ai_addr, f_addr, (int)sizeof(f_addr));
+        }
+    }
+    freeaddrinfo(res);
+    if (fd >= 0) return fd;
+    if (out_stage) *out_stage = f_stage ? f_stage : PX_CONN_STAGE_CONNECT;
+    if (out_errno) *out_errno = f_errno;
+    if (out_addr && addr_cap > 0) snprintf(out_addr, (size_t)addr_cap, "%s", f_addr);
+    return -1;
 }
 
-static int hconnect(const char* host, int port) {
-    return px_tcp_connect_timeout(host, port, PX_DEFAULT_CONNECT_TIMEOUT_MS);
+// M140：连接失败 → 语言层 Err 文案（四态：解析 / socket / connect / TLS）
+static LXValue px_net_conn_err(const char* host, int port, int stage, int er, const char* addr) {
+    if (stage == PX_CONN_STAGE_RESOLVE)
+        return px_net_err("net: 解析主机失败 %s (eai=%d)", host, er);
+    if (stage == PX_CONN_STAGE_SOCKET)
+        return px_net_err("net: 创建 socket 失败 %s:%d (%d)", (addr && addr[0]) ? addr : host, port, er);
+    if (stage == PX_CONN_STAGE_TLS)
+        return px_net_err("net: TLS 握手失败 (%d)", er);
+    return px_net_err("net: 连接 %s:%d 失败 (%d)", (addr && addr[0]) ? addr : host, port, er);
+}
+static void px_net_conn_fail(char* errbuf, int errcap, const char* host, int port,
+                             int stage, int er, const char* addr) {
+    if (!errbuf || errcap <= 0) return;
+    if (stage == PX_CONN_STAGE_RESOLVE) {
+        snprintf(errbuf, (size_t)errcap, "net: 解析主机失败 %s (eai=%d)", host, er);
+    } else if (stage == PX_CONN_STAGE_SOCKET) {
+        snprintf(errbuf, (size_t)errcap, "net: 创建 socket 失败 %s:%d (%d)",
+                 (addr && addr[0]) ? addr : host, port, er);
+    } else if (stage == PX_CONN_STAGE_TLS) {
+        snprintf(errbuf, (size_t)errcap, "net: TLS 握手失败 (%d)", er);
+    } else {
+        snprintf(errbuf, (size_t)errcap, "net: 连接 %s:%d 失败 (%d)",
+                 (addr && addr[0]) ? addr : host, port, er);
+    }
+}
+
+// hconnect_t：hconnect 的带超时版（timeout_ms<=0 时与原语义一致）
+static int hconnect_t(const char* host, int port, int timeout_ms,
+                      int* out_stage, int* out_errno, char* out_addr, int addr_cap) {
+    return px_tcp_connect_timeout(host, port, timeout_ms, out_stage, out_errno, out_addr, addr_cap);
+}
+
+static int hconnect(const char* host, int port,
+                    int* out_stage, int* out_errno, char* out_addr, int addr_cap) {
+    return px_tcp_connect_timeout(host, port, PX_DEFAULT_CONNECT_TIMEOUT_MS,
+                                  out_stage, out_errno, out_addr, addr_cap);
 }
 
 // 在已建立连接上完成一次 HTTP 往返（keep-alive 安全：按 Content-Length/chunked 精确读）
@@ -12502,15 +12658,22 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
             slot.fd = -1;
             slot.tls = NULL;
             // M117（qg-issue 72 F2）：连接阶段也受 opts.timeout_ms 约束（此前只管收发）
+            // M140（缺陷 108）：失败成因（stage/errno/数字地址）由连接函数回填，
+            //   供下面组文案 —— 语言层据此区分 refused / unreachable / timeout / DNS。
+            int c_stage = 0, c_errno = 0;
+            char c_addr[128];
+            c_addr[0] = 0;
             if (is_https) {
-                slot.tls = https_connect_t(conn_host, conn_port, timeout_ms);
+                slot.tls = https_connect_t(conn_host, conn_port, timeout_ms,
+                                           &c_stage, &c_errno, c_addr, (int)sizeof(c_addr));
                 slot.fd = slot.tls ? slot.tls->net.fd : -1;
             } else {
-                slot.fd = hconnect_t(conn_host, conn_port, timeout_ms);
+                slot.fd = hconnect_t(conn_host, conn_port, timeout_ms,
+                                     &c_stage, &c_errno, c_addr, (int)sizeof(c_addr));
             }
             if (slot.fd < 0) {
                 if (attempt < max_attempts - 1) continue;
-                return px_net_err("net: 连接 %s:%d 失败", conn_host, conn_port);
+                return px_net_conn_err(conn_host, conn_port, c_stage, c_errno, c_addr);
             }
             // M37：超时配置（SO_RCVTIMEO）
             struct timeval tv = { timeout_ms / 1000, (timeout_ms % 1000) * 1000 };
@@ -12798,14 +12961,18 @@ static int px_s3_exec(const char* endpoint, const char* method, const char* buck
     slot.is_tls = is_https;
     slot.fd = -1;
     slot.tls = NULL;
+    // M140（缺陷 108）：失败成因（stage/errno/数字地址）—— https 走 mbedtls 内部（无分类）
+    int c_stage = 0, c_errno = 0;
+    char c_addr[128];
+    c_addr[0] = 0;
     if (is_https) {
         slot.tls = https_connect(host, port);
         slot.fd = slot.tls ? slot.tls->net.fd : -1;
     } else {
-        slot.fd = hconnect(host, port);
+        slot.fd = hconnect(host, port, &c_stage, &c_errno, c_addr, (int)sizeof(c_addr));
     }
     if (slot.fd < 0) {
-        px_net_fail(errbuf, errcap, "net: 连接 %s:%d 失败", host, port);
+        px_net_conn_fail(errbuf, errcap, host, port, c_stage, c_errno, c_addr);
         if (slot.tls) https_close(slot.tls);
         return 0;
     }
@@ -13098,9 +13265,13 @@ static LXValue bi_http_get_stream(LXValue* args, int nargs, void* ctx) {
     slot.is_tls = is_https;
     slot.fd = -1;
     slot.tls = NULL;
+    // M140（缺陷 108）：失败成因（stage/errno/数字地址）—— https 走 mbedtls 内部（无分类）
+    int c_stage = 0, c_errno = 0;
+    char c_addr[128];
+    c_addr[0] = 0;
     if (is_https) { slot.tls = https_connect(host, port); slot.fd = slot.tls ? slot.tls->net.fd : -1; }
-    else slot.fd = hconnect(host, port);
-    if (slot.fd < 0) return px_net_err("net: 连接 %s:%d 失败", host, port);
+    else slot.fd = hconnect(host, port, &c_stage, &c_errno, c_addr, (int)sizeof(c_addr));
+    if (slot.fd < 0) return px_net_conn_err(host, port, c_stage, c_errno, c_addr);
     int fd = slot.fd;
     HttpsSession* tls = slot.is_tls ? slot.tls : NULL;
     char req[8192];
@@ -13398,9 +13569,16 @@ static char* px_http_once(const char* url, const char* method, const char* body,
 
     char host[256];
     int hostlen = 0;
-    while (rest[hostlen] && rest[hostlen] != '/' && rest[hostlen] != ':' && hostlen < 255) {
-        host[hostlen] = rest[hostlen];
-        hostlen++;
+    // M140：IPv6 字面量 `[::1]`（方括号内的冒号不是端口分隔符；host 保留括号）
+    if (rest[0] == '[') {
+        while (rest[hostlen] && rest[hostlen] != ']' && hostlen < 255) { host[hostlen] = rest[hostlen]; hostlen++; }
+        if (rest[hostlen] != ']' || hostlen >= 255) { px_net_fail(errbuf, errcap, "net: 非法 URL"); return NULL; }
+        host[hostlen] = ']'; hostlen++;
+    } else {
+        while (rest[hostlen] && rest[hostlen] != '/' && rest[hostlen] != ':' && hostlen < 255) {
+            host[hostlen] = rest[hostlen];
+            hostlen++;
+        }
     }
     host[hostlen] = 0;
     if (hostlen == 0) { px_net_fail(errbuf, errcap, "net: 主机名为空"); return NULL; }
@@ -13438,22 +13616,19 @@ static char* px_http_once(const char* url, const char* method, const char* body,
         if (r != 0) { px_net_fail(errbuf, errcap, "net: HTTPS 请求失败 (%d) %s", r, host); return NULL; }
     } else {
         // 明文 http
-        struct addrinfo hints, *res = NULL;
-        memset(&hints, 0, sizeof(hints));
-        hints.ai_family = AF_INET;
-        hints.ai_socktype = SOCK_STREAM;
-        char portstr[16];
-        snprintf(portstr, sizeof(portstr), "%d", port);
-        if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) { px_net_fail(errbuf, errcap, "net: 解析主机失败 %s", host); return NULL; }
-        int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-        if (fd < 0) { freeaddrinfo(res); px_net_fail(errbuf, errcap, "net: 创建 socket 失败"); return NULL; }
-        if (connect(fd, res->ai_addr, res->ai_addrlen) < 0) {
-            freeaddrinfo(res);
-            close(fd);
-            px_net_fail(errbuf, errcap, "net: 连接 %s:%d 失败", host, port);
+        // M140（缺陷 108）：改用共享的「带超时 + 双栈 + 成因分类」连接。
+        //   此前这里是裸阻塞 connect —— 既不在 opts/默认超时约束内（M117 只覆盖了
+        //   hconnect 一族，与本文件上方 PX_DEFAULT_CONNECT_TIMEOUT_MS 的注释不符），
+        //   失败也只有一句 `net: 连接 X:Y 失败`（无 errno ⇒ 无法区分 refused/unreachable）。
+        int c_stage = 0, c_errno = 0;
+        char c_addr[128];
+        c_addr[0] = 0;
+        int fd = px_tcp_connect_timeout(host, port, PX_DEFAULT_CONNECT_TIMEOUT_MS,
+                                        &c_stage, &c_errno, c_addr, (int)sizeof(c_addr));
+        if (fd < 0) {
+            px_net_conn_fail(errbuf, errcap, host, port, c_stage, c_errno, c_addr);
             return NULL;
         }
-        freeaddrinfo(res);
         sock_send_all(fd, req, rlen);
         int cap = 4096, len = 0;
         resp = xmalloc(cap);
@@ -16896,6 +17071,7 @@ static int sse_cli_connect_slot(int slot, const char* url, long long reconnect_m
     int port;
     const char* path;
     char* colon = NULL;
+    int has_port = 0;   // M140：Host 头是否带端口（IPv6 字面量走方括号分支）
     if (use_unix) {
         // Unix domain socket：url 即请求路径（如 /v1/chat/completions）
         is_https = 0;
@@ -16926,11 +17102,27 @@ static int sse_cli_connect_slot(int slot, const char* url, long long reconnect_m
         if (hl <= 0 || hl >= (int)sizeof(host)) { sse_cli_fail(slot, 1, 0); return -1; }
         memcpy(host, rest, (size_t)hl);
         host[hl] = 0;
-        colon = strchr(host, ':');
-        if (colon) {
-            *colon = 0;
-            port = atoi(colon + 1);
-            if (port <= 0) { sse_cli_fail(slot, 1, 0); return -1; }
+        // M140：IPv6 字面量 `[::1]:8080`（方括号内的冒号不是端口分隔符）
+        if (host[0] == '[') {
+            char* rb = strchr(host, ']');
+            if (!rb) { sse_cli_fail(slot, 1, 0); return -1; }
+            if (rb[1] == ':') {
+                has_port = 1;
+                port = atoi(rb + 2);
+                if (port <= 0) { sse_cli_fail(slot, 1, 0); return -1; }
+            } else if (rb[1] != 0) {
+                sse_cli_fail(slot, 1, 0);
+                return -1;
+            }
+            rb[1] = 0;   // host 只留 `[::1]`（端口已取出）—— 与 hparse_url 同口径
+        } else {
+            colon = strchr(host, ':');
+            if (colon) {
+                has_port = 1;
+                *colon = 0;
+                port = atoi(colon + 1);
+                if (port <= 0) { sse_cli_fail(slot, 1, 0); return -1; }
+            }
         }
     }
     int fd = -1;
@@ -16953,24 +17145,17 @@ static int sse_cli_connect_slot(int slot, const char* url, long long reconnect_m
         if (!tls) { sse_cli_fail(slot, 2, errno); return -1; }
         fd = tls->net.fd;
     } else {
-        fd = socket(AF_INET, SOCK_STREAM, 0);
-        if (fd < 0) { sse_cli_fail(slot, 2, errno); return -1; }
-        struct hostent* he = gethostbyname(host);
-        if (!he) {
-            int e = errno;
-            close(fd);
-            sse_cli_fail(slot, 2, e ? e : 2);
-            return -1;
-        }
-        struct sockaddr_in addr;
-        memset(&addr, 0, sizeof(addr));
-        addr.sin_family = AF_INET;
-        addr.sin_port = htons((uint16_t)port);
-        memcpy(&addr.sin_addr, he->h_addr, (size_t)he->h_length);
-        if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-            int e = errno;
-            close(fd);
-            sse_cli_fail(slot, 2, e);
+        // M140（缺陷 108 同族）：改用共享的「带超时 + 双栈 + 成因分类」连接。
+        //   此前是 IPv4-only 的 gethostbyname + **无 connect 超时**的阻塞 connect
+        //   （对不可达对端同样会挂到内核重传超时；且仅 AAAA 的上游连不上）。
+        //   stage 映射：本函数用的是 M137 的 stage 枚举（1 参数/2 连接/3 发送/4 读头/
+        //   5 状态码/6 CT/7 槽满），**不能**直接把 px_tcp_connect_timeout 的
+        //   CONNECT=3 透传（那是"发送"）。故：解析失败 → 新增的 8（DNS）；其余 → 2。
+        int st2 = 0, er2 = 0;
+        fd = px_tcp_connect_timeout(host, port, g_sse_clients[slot].timeout_ms, &st2, &er2, NULL, 0);
+        if (fd < 0) {
+            if (st2 == PX_CONN_STAGE_RESOLVE) sse_cli_fail(slot, 8, er2);
+            else sse_cli_fail(slot, 2, er2);
             return -1;
         }
     }
@@ -16989,7 +17174,7 @@ static int sse_cli_connect_slot(int slot, const char* url, long long reconnect_m
     char req[8192];
     char hosthdr[512];
     if (use_unix) snprintf(hosthdr, sizeof(hosthdr), "%s", "localhost");
-    else if (colon) snprintf(hosthdr, sizeof(hosthdr), "%s:%d", host, port);
+    else if (has_port) snprintf(hosthdr, sizeof(hosthdr), "%s:%d", host, port);
     else snprintf(hosthdr, sizeof(hosthdr), "%s", host);
     const char* method = (g_sse_clients[slot].method[0] != 0) ? g_sse_clients[slot].method : "GET";
     int rl = snprintf(req, sizeof(req), "%s %s HTTP/1.1\r\nHost: %s\r\n", method, path, hosthdr);
