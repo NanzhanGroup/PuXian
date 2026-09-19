@@ -137,16 +137,23 @@ rebake_hint() {
 #   ② 缓存目录里放一枚 `__rtfp.o`（`PXRT-<key>` 常量，随 `*.o` 自动链进产物）；
 #   ③ 本门读回产物里的 `PXRT-…` 与当前 rt_key 比对 ⇒ "链对没有"变成**可自动发现**。
 rt_key_of_cache() {                   # 打印当前源码对应的 rt_key（失败则空）
-    local d; d="$("$ROOT/tools/px" rtcache 2>/dev/null | tail -1)"
-    [ -n "$d" ] && basename "$d"
+    # M153（缺陷 147）：改用 `tools/px rtkey`（**只算 key，不编译**）——
+    #   原用 `rtcache` 会现编 runtime，runtime 源码有编译错误时它会失败 ⇒ 门"取不到 key"
+    #   就跳过核对 ⇒ 在**链了别的 runtime** 的情况下报绿（第 35 轮实测踩中）。
+    "$ROOT/tools/px" rtkey 2>/dev/null | tail -1
 }
 rtfp_gate() {                         # $1=二进制 $2=标签 → 0 一致 / 1 不一致或缺指纹
     local want got
     want="$(rt_key_of_cache)"
     got=$(grep -ao "PXRT-[0-9a-f]\{16\}" "$1" 2>/dev/null | head -1 | cut -d- -f2)
     if [ -z "$want" ]; then
-        echo "    ⚠️  $2：取不到当前 rt_key（tools/px rtcache 失败）⇒ 跳过 runtime 缓存核对"
-        return 0
+        # M153（缺陷 147）：**失败即判红**。原来这里 `return 0`（跳过）是"退化放行暗门"：
+        #   第 35 轮实测 —— runtime.c 有编译错误 ⇒ tools/px rtcache 失败 ⇒ 本门打印"⚠️ 取不到
+        #   当前 rt_key ⇒ 跳过 runtime 缓存核对"，却仍输出"✅ 全件源码链一致 · runtime 链错 0 件"，
+        #   而当时的入库件其实**链的是旧 cache 里的 runtime**。门自己红不了，就不是门。
+        echo "    ❌ $2：取不到当前 rt_key（tools/px rtkey 返回空）⇒ **判红**"
+        echo "       （不设「取不到就跳过」的退化放行；先查 runtime 源能否编译、工具是否可用）"
+        return 1
     fi
     if [ -z "$got" ]; then
         echo "    ❌ $2：无内嵌 runtime 缓存指纹（PXRT-）⇒ 无法判定链的是哪份 runtime"
