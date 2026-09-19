@@ -1,7 +1,7 @@
 {
  "generator": "tools/gen_native_table.sh",
  "source": "runtime/*.c px_set_global(px_native)",
- "count": 353,
+ "count": 357,
  "names": [
   "Err",
   "Ok",
@@ -182,6 +182,10 @@
   "now_sec",
   "now_us",
   "object_id",
+  "onnx_info",
+  "onnx_initializer",
+  "onnx_model_close",
+  "onnx_model_open",
   "open",
   "ord",
   "os_capture",
