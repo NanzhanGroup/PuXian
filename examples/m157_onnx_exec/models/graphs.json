@@ -1,0 +1,2523 @@
+{
+ "e01_eltwise_exact": {
+  "name": "e01_eltwise_exact",
+  "opset": 14,
+  "inputs": [
+   {
+    "name": "A",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "B",
+    "dims": [
+     3
+    ],
+    "dtype": 1
+   }
+  ],
+  "outputs": [
+   {
+    "name": "C",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "D",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "E",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "F",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "G",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "I",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "J",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "K",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "L",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "M",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "CE",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "FL",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "RO",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "SG",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "H",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 7
+   },
+   {
+    "name": "RC",
+    "dims": [
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "GT",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 9
+   },
+   {
+    "name": "LT",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 9
+   },
+   {
+    "name": "EQ",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 9
+   },
+   {
+    "name": "LE",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 9
+   },
+   {
+    "name": "GE",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 9
+   },
+   {
+    "name": "NT",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 9
+   },
+   {
+    "name": "AN",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 9
+   },
+   {
+    "name": "OR",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 9
+   },
+   {
+    "name": "XO",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 9
+   }
+  ],
+  "initializers": [
+   {
+    "name": "two",
+    "dims": [],
+    "vals": [
+     2.0
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "seven",
+    "dims": [],
+    "vals": [
+     7.0
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "four",
+    "dims": [],
+    "vals": [
+     4.0
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "MI",
+    "dims": [
+     6
+    ],
+    "vals": [
+     11,
+     22,
+     33,
+     14,
+     25,
+     36
+    ],
+    "dtype": 7
+   },
+   {
+    "name": "MI7",
+    "dims": [],
+    "vals": [
+     7
+    ],
+    "dtype": 7
+   }
+  ],
+  "nodes": [
+   {
+    "op": "Add",
+    "in": [
+     "A",
+     "B"
+    ],
+    "out": [
+     "C"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Sub",
+    "in": [
+     "C",
+     "A"
+    ],
+    "out": [
+     "D"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Mul",
+    "in": [
+     "C",
+     "A"
+    ],
+    "out": [
+     "E"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Div",
+    "in": [
+     "C",
+     "B"
+    ],
+    "out": [
+     "F"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Pow",
+    "in": [
+     "A",
+     "two"
+    ],
+    "out": [
+     "G"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Mod",
+    "in": [
+     "MI",
+     "MI7"
+    ],
+    "out": [
+     "H"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Max",
+    "in": [
+     "A",
+     "four"
+    ],
+    "out": [
+     "I"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Min",
+    "in": [
+     "A",
+     "four"
+    ],
+    "out": [
+     "J"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Sum",
+    "in": [
+     "A",
+     "B"
+    ],
+    "out": [
+     "K"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Mean",
+    "in": [
+     "A",
+     "B"
+    ],
+    "out": [
+     "L"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Neg",
+    "in": [
+     "A"
+    ],
+    "out": [
+     "NA"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Abs",
+    "in": [
+     "NA"
+    ],
+    "out": [
+     "M"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Ceil",
+    "in": [
+     "A"
+    ],
+    "out": [
+     "CE"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Floor",
+    "in": [
+     "A"
+    ],
+    "out": [
+     "FL"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Round",
+    "in": [
+     "A"
+    ],
+    "out": [
+     "RO"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Sign",
+    "in": [
+     "NA"
+    ],
+    "out": [
+     "SG"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Greater",
+    "in": [
+     "A",
+     "four"
+    ],
+    "out": [
+     "GT"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Less",
+    "in": [
+     "A",
+     "four"
+    ],
+    "out": [
+     "LT"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Equal",
+    "in": [
+     "A",
+     "four"
+    ],
+    "out": [
+     "EQ"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "LessOrEqual",
+    "in": [
+     "A",
+     "four"
+    ],
+    "out": [
+     "LE"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "GreaterOrEqual",
+    "in": [
+     "A",
+     "four"
+    ],
+    "out": [
+     "GE"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Not",
+    "in": [
+     "GT"
+    ],
+    "out": [
+     "NT"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "And",
+    "in": [
+     "GT",
+     "LT"
+    ],
+    "out": [
+     "AN"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Or",
+    "in": [
+     "GT",
+     "LT"
+    ],
+    "out": [
+     "OR"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Xor",
+    "in": [
+     "GT",
+     "LT"
+    ],
+    "out": [
+     "XO"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Reciprocal",
+    "in": [
+     "B"
+    ],
+    "out": [
+     "RC"
+    ],
+    "attrs": {},
+    "name": null
+   }
+  ]
+ },
+ "e02_matmul_identity": {
+  "name": "e02_matmul_identity",
+  "opset": 14,
+  "inputs": [
+   {
+    "name": "A",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 1
+   }
+  ],
+  "outputs": [
+   {
+    "name": "AI",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "AWb",
+    "dims": [
+     2,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "AWbI",
+    "dims": [
+     2,
+     4
+    ],
+    "dtype": 1
+   }
+  ],
+  "initializers": [
+   {
+    "name": "I3",
+    "dims": [
+     3,
+     3
+    ],
+    "vals": [
+     1.0,
+     0.0,
+     0.0,
+     0.0,
+     1.0,
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "W",
+    "dims": [
+     3,
+     4
+    ],
+    "vals": [
+     1.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     1.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "bias",
+    "dims": [
+     4
+    ],
+    "vals": [
+     0.5,
+     -0.5,
+     1.5,
+     2.5
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "I4",
+    "dims": [
+     4,
+     4
+    ],
+    "vals": [
+     1.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     1.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     1.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "dtype": 1
+   }
+  ],
+  "nodes": [
+   {
+    "op": "MatMul",
+    "in": [
+     "A",
+     "I3"
+    ],
+    "out": [
+     "AI"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "MatMul",
+    "in": [
+     "A",
+     "W"
+    ],
+    "out": [
+     "AW"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Add",
+    "in": [
+     "AW",
+     "bias"
+    ],
+    "out": [
+     "AWb"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "MatMul",
+    "in": [
+     "AWb",
+     "I4"
+    ],
+    "out": [
+     "AWbI"
+    ],
+    "attrs": {},
+    "name": null
+   }
+  ]
+ },
+ "e03_softmax_uniform": {
+  "name": "e03_softmax_uniform",
+  "opset": 14,
+  "inputs": [
+   {
+    "name": "X",
+    "dims": [
+     2,
+     3,
+     4
+    ],
+    "dtype": 1
+   }
+  ],
+  "outputs": [
+   {
+    "name": "S",
+    "dims": [
+     2,
+     3,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "RM",
+    "dims": [
+     2,
+     3,
+     1
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "RS",
+    "dims": [
+     2,
+     3,
+     1
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "RX",
+    "dims": [
+     2,
+     3,
+     1
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "RN",
+    "dims": [
+     2,
+     3,
+     1
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "RP",
+    "dims": [
+     2,
+     3,
+     1
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "AM",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 7
+   }
+  ],
+  "initializers": [],
+  "nodes": [
+   {
+    "op": "Softmax",
+    "in": [
+     "X"
+    ],
+    "out": [
+     "S"
+    ],
+    "attrs": {
+     "axis": 2
+    },
+    "name": null
+   },
+   {
+    "op": "ReduceMean",
+    "in": [
+     "S"
+    ],
+    "out": [
+     "RM"
+    ],
+    "attrs": {
+     "axes": [
+      2
+     ]
+    },
+    "name": null
+   },
+   {
+    "op": "ReduceSum",
+    "in": [
+     "S"
+    ],
+    "out": [
+     "RS"
+    ],
+    "attrs": {
+     "axes": [
+      2
+     ]
+    },
+    "name": null
+   },
+   {
+    "op": "ReduceMax",
+    "in": [
+     "S"
+    ],
+    "out": [
+     "RX"
+    ],
+    "attrs": {
+     "axes": [
+      2
+     ]
+    },
+    "name": null
+   },
+   {
+    "op": "ReduceMin",
+    "in": [
+     "S"
+    ],
+    "out": [
+     "RN"
+    ],
+    "attrs": {
+     "axes": [
+      2
+     ]
+    },
+    "name": null
+   },
+   {
+    "op": "ReduceProd",
+    "in": [
+     "S"
+    ],
+    "out": [
+     "RP"
+    ],
+    "attrs": {
+     "axes": [
+      2
+     ]
+    },
+    "name": null
+   },
+   {
+    "op": "ArgMax",
+    "in": [
+     "X"
+    ],
+    "out": [
+     "AM"
+    ],
+    "attrs": {
+     "axis": 2,
+     "keepdims": 0
+    },
+    "name": null
+   }
+  ]
+ },
+ "e04_movement": {
+  "name": "e04_movement",
+  "opset": 14,
+  "inputs": [
+   {
+    "name": "X",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 1
+   }
+  ],
+  "outputs": [
+   {
+    "name": "T",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "R",
+    "dims": [
+     6
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "U",
+    "dims": [
+     1,
+     6
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "U2",
+    "dims": [
+     6
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "FL",
+    "dims": [
+     1,
+     6
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "CT",
+    "dims": [
+     4,
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "ST",
+    "dims": [
+     2
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "GT1",
+    "dims": [
+     1
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "SL",
+    "dims": [
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "TL",
+    "dims": [
+     12
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "SP0",
+    "dims": [
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "SP1",
+    "dims": [
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "EX",
+    "dims": [
+     2,
+     6
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "CI",
+    "dims": [
+     1,
+     6
+    ],
+    "dtype": 7
+   },
+   {
+    "name": "CB",
+    "dims": [
+     1,
+     6
+    ],
+    "dtype": 9
+   }
+  ],
+  "initializers": [
+   {
+    "name": "idx1",
+    "dims": [
+     1
+    ],
+    "vals": [
+     1
+    ],
+    "dtype": 7
+   },
+   {
+    "name": "sh6",
+    "dims": [
+     1
+    ],
+    "vals": [
+     6
+    ],
+    "dtype": 7
+   },
+   {
+    "name": "sh26",
+    "dims": [
+     2
+    ],
+    "vals": [
+     2,
+     6
+    ],
+    "dtype": 7
+   },
+   {
+    "name": "rep2",
+    "dims": [
+     1
+    ],
+    "vals": [
+     2
+    ],
+    "dtype": 7
+   },
+   {
+    "name": "ax0",
+    "dims": [
+     1
+    ],
+    "vals": [
+     0
+    ],
+    "dtype": 7
+   },
+   {
+    "name": "sp33",
+    "dims": [
+     2
+    ],
+    "vals": [
+     3,
+     3
+    ],
+    "dtype": 7
+   },
+   {
+    "name": "sl_s",
+    "dims": [
+     1
+    ],
+    "vals": [
+     1
+    ],
+    "dtype": 7
+   },
+   {
+    "name": "sl_e",
+    "dims": [
+     1
+    ],
+    "vals": [
+     4
+    ],
+    "dtype": 7
+   }
+  ],
+  "nodes": [
+   {
+    "op": "Transpose",
+    "in": [
+     "X"
+    ],
+    "out": [
+     "T"
+    ],
+    "attrs": {
+     "perm": [
+      1,
+      0
+     ]
+    },
+    "name": null
+   },
+   {
+    "op": "Reshape",
+    "in": [
+     "X",
+     "sh6"
+    ],
+    "out": [
+     "R"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Unsqueeze",
+    "in": [
+     "R",
+     "ax0"
+    ],
+    "out": [
+     "U"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Squeeze",
+    "in": [
+     "U",
+     "ax0"
+    ],
+    "out": [
+     "U2"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Flatten",
+    "in": [
+     "X"
+    ],
+    "out": [
+     "FL"
+    ],
+    "attrs": {
+     "axis": 1
+    },
+    "name": null
+   },
+   {
+    "op": "Concat",
+    "in": [
+     "T",
+     "T"
+    ],
+    "out": [
+     "CT"
+    ],
+    "attrs": {
+     "axis": 0
+    },
+    "name": null
+   },
+   {
+    "op": "Shape",
+    "in": [
+     "T"
+    ],
+    "out": [
+     "ST"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Gather",
+    "in": [
+     "ST",
+     "idx1"
+    ],
+    "out": [
+     "GT1"
+    ],
+    "attrs": {
+     "axis": 0
+    },
+    "name": null
+   },
+   {
+    "op": "Slice",
+    "in": [
+     "R",
+     "sl_s",
+     "sl_e"
+    ],
+    "out": [
+     "SL"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Tile",
+    "in": [
+     "R",
+     "rep2"
+    ],
+    "out": [
+     "TL"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Split",
+    "in": [
+     "R",
+     "sp33"
+    ],
+    "out": [
+     "SP0",
+     "SP1"
+    ],
+    "attrs": {
+     "axis": 0
+    },
+    "name": null
+   },
+   {
+    "op": "Cast",
+    "in": [
+     "U"
+    ],
+    "out": [
+     "CI"
+    ],
+    "attrs": {
+     "to": 7
+    },
+    "name": null
+   },
+   {
+    "op": "Cast",
+    "in": [
+     "CI"
+    ],
+    "out": [
+     "CB"
+    ],
+    "attrs": {
+     "to": 9
+    },
+    "name": null
+   },
+   {
+    "op": "Expand",
+    "in": [
+     "R",
+     "sh26"
+    ],
+    "out": [
+     "EX"
+    ],
+    "attrs": {},
+    "name": null
+   }
+  ]
+ },
+ "e05_funcs": {
+  "name": "e05_funcs",
+  "opset": 14,
+  "inputs": [
+   {
+    "name": "X",
+    "dims": [
+     1,
+     4
+    ],
+    "dtype": 1
+   }
+  ],
+  "outputs": [
+   {
+    "name": "D",
+    "dims": [
+     1,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "E",
+    "dims": [
+     1,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "E1",
+    "dims": [
+     1,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "H",
+    "dims": [
+     1,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "GELU",
+    "dims": [
+     1,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "AB",
+    "dims": [
+     1,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "SQ",
+    "dims": [
+     1,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "EX",
+    "dims": [
+     1,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "LG",
+    "dims": [
+     1,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "TH",
+    "dims": [
+     1,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "SI",
+    "dims": [
+     1,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "RE",
+    "dims": [
+     1,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "LR",
+    "dims": [
+     1,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "EL",
+    "dims": [
+     1,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "SP",
+    "dims": [
+     1,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "CL",
+    "dims": [
+     1,
+     4
+    ],
+    "dtype": 1
+   }
+  ],
+  "initializers": [
+   {
+    "name": "sq2",
+    "dims": [],
+    "vals": [
+     1.4142135623730951
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "half",
+    "dims": [],
+    "vals": [
+     0.5
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "one",
+    "dims": [],
+    "vals": [
+     1.0
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "lo",
+    "dims": [],
+    "vals": [
+     -0.5
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "hi",
+    "dims": [],
+    "vals": [
+     0.5
+    ],
+    "dtype": 1
+   }
+  ],
+  "nodes": [
+   {
+    "op": "Div",
+    "in": [
+     "X",
+     "sq2"
+    ],
+    "out": [
+     "D"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Erf",
+    "in": [
+     "D"
+    ],
+    "out": [
+     "E"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Add",
+    "in": [
+     "E",
+     "one"
+    ],
+    "out": [
+     "E1"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Mul",
+    "in": [
+     "E1",
+     "half"
+    ],
+    "out": [
+     "H"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Mul",
+    "in": [
+     "H",
+     "X"
+    ],
+    "out": [
+     "GELU"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Abs",
+    "in": [
+     "X"
+    ],
+    "out": [
+     "AB"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Sqrt",
+    "in": [
+     "AB"
+    ],
+    "out": [
+     "SQ"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Exp",
+    "in": [
+     "X"
+    ],
+    "out": [
+     "EX"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Log",
+    "in": [
+     "EX"
+    ],
+    "out": [
+     "LG"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Tanh",
+    "in": [
+     "X"
+    ],
+    "out": [
+     "TH"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Sigmoid",
+    "in": [
+     "X"
+    ],
+    "out": [
+     "SI"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Relu",
+    "in": [
+     "X"
+    ],
+    "out": [
+     "RE"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "LeakyRelu",
+    "in": [
+     "X"
+    ],
+    "out": [
+     "LR"
+    ],
+    "attrs": {
+     "alpha": 0.1
+    },
+    "name": null
+   },
+   {
+    "op": "Elu",
+    "in": [
+     "X"
+    ],
+    "out": [
+     "EL"
+    ],
+    "attrs": {
+     "alpha": 1.0
+    },
+    "name": null
+   },
+   {
+    "op": "Softplus",
+    "in": [
+     "X"
+    ],
+    "out": [
+     "SP"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Clip",
+    "in": [
+     "X",
+     "lo",
+     "hi"
+    ],
+    "out": [
+     "CL"
+    ],
+    "attrs": {},
+    "name": null
+   }
+  ]
+ },
+ "e06_layernorm": {
+  "name": "e06_layernorm",
+  "opset": 17,
+  "inputs": [
+   {
+    "name": "X",
+    "dims": [
+     2,
+     4
+    ],
+    "dtype": 1
+   }
+  ],
+  "outputs": [
+   {
+    "name": "LN",
+    "dims": [
+     2,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "W",
+    "dims": [
+     2,
+     4
+    ],
+    "dtype": 1
+   }
+  ],
+  "initializers": [
+   {
+    "name": "scale",
+    "dims": [
+     4
+    ],
+    "vals": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "bias",
+    "dims": [
+     4
+    ],
+    "vals": [
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "zero",
+    "dims": [],
+    "vals": [
+     0.0
+    ],
+    "dtype": 1
+   }
+  ],
+  "nodes": [
+   {
+    "op": "LayerNormalization",
+    "in": [
+     "X",
+     "scale",
+     "bias"
+    ],
+    "out": [
+     "LN"
+    ],
+    "attrs": {
+     "axis": 1
+    },
+    "name": null
+   },
+   {
+    "op": "Less",
+    "in": [
+     "LN",
+     "zero"
+    ],
+    "out": [
+     "NEG"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Where",
+    "in": [
+     "NEG",
+     "zero",
+     "LN"
+    ],
+    "out": [
+     "W"
+    ],
+    "attrs": {},
+    "name": null
+   }
+  ]
+ },
+ "e07_const_range_triu": {
+  "name": "e07_const_range_triu",
+  "opset": 14,
+  "inputs": [
+   {
+    "name": "X",
+    "dims": [
+     1,
+     3
+    ],
+    "dtype": 1
+   }
+  ],
+  "outputs": [
+   {
+    "name": "CZ",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "RG",
+    "dims": [
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "SUM",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "TU",
+    "dims": [
+     3,
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "TU1",
+    "dims": [
+     3,
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "ID",
+    "dims": [
+     1,
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "EXP",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 1
+   }
+  ],
+  "initializers": [
+   {
+    "name": "sh",
+    "dims": [
+     2
+    ],
+    "vals": [
+     2,
+     3
+    ],
+    "dtype": 7
+   },
+   {
+    "name": "seven",
+    "dims": [],
+    "vals": [
+     7.0
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "r0",
+    "dims": [],
+    "vals": [
+     0.0
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "r3",
+    "dims": [],
+    "vals": [
+     3.0
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "r1",
+    "dims": [],
+    "vals": [
+     1.0
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "M3",
+    "dims": [
+     3,
+     3
+    ],
+    "vals": [
+     1.0,
+     2.0,
+     3.0,
+     4.0,
+     5.0,
+     6.0,
+     7.0,
+     8.0,
+     9.0
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "sh23",
+    "dims": [
+     2
+    ],
+    "vals": [
+     2,
+     3
+    ],
+    "dtype": 7
+   }
+  ],
+  "nodes": [
+   {
+    "op": "ConstantOfShape",
+    "in": [
+     "sh"
+    ],
+    "out": [
+     "CZ"
+    ],
+    "attrs": {
+     "value": {
+      "kind": "tensor",
+      "name": "v",
+      "dims": [
+       1
+      ],
+      "vals": [
+       7.0
+      ],
+      "dtype": 1
+     }
+    },
+    "name": null
+   },
+   {
+    "op": "Range",
+    "in": [
+     "r0",
+     "r3",
+     "r1"
+    ],
+    "out": [
+     "RG"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Add",
+    "in": [
+     "CZ",
+     "RG"
+    ],
+    "out": [
+     "SUM"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Triu",
+    "in": [
+     "M3"
+    ],
+    "out": [
+     "TU"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Triu",
+    "in": [
+     "M3"
+    ],
+    "out": [
+     "TU1"
+    ],
+    "attrs": {
+     "k": -1
+    },
+    "name": null
+   },
+   {
+    "op": "Identity",
+    "in": [
+     "X"
+    ],
+    "out": [
+     "ID"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Expand",
+    "in": [
+     "RG",
+     "sh23"
+    ],
+    "out": [
+     "EXP"
+    ],
+    "attrs": {},
+    "name": null
+   }
+  ]
+ },
+ "e08_attn_mask": {
+  "name": "e08_attn_mask",
+  "opset": 14,
+  "inputs": [
+   {
+    "name": "X",
+    "dims": [
+     1,
+     3,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "mask_in",
+    "dims": [
+     3
+    ],
+    "dtype": 1
+   }
+  ],
+  "outputs": [
+   {
+    "name": "Q",
+    "dims": [
+     1,
+     3,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "AT",
+    "dims": [
+     1,
+     3,
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "CTX",
+    "dims": [
+     1,
+     3,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "OUT",
+    "dims": [
+     1,
+     3,
+     4
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "SH",
+    "dims": [
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "GT",
+    "dims": [
+     1
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "MS",
+    "dims": [
+     1,
+     3,
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "Z",
+    "dims": [
+     1,
+     3,
+     3
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "MB2",
+    "dims": [
+     1,
+     3
+    ],
+    "dtype": 1
+   }
+  ],
+  "initializers": [
+   {
+    "name": "Wq",
+    "dims": [
+     4,
+     4
+    ],
+    "vals": [
+     1.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     1.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     1.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "Wk",
+    "dims": [
+     4,
+     4
+    ],
+    "vals": [
+     0.5,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.5,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.5,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.5
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "two",
+    "dims": [],
+    "vals": [
+     2.0
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "neg",
+    "dims": [],
+    "vals": [
+     -1000000000.0
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "zero",
+    "dims": [],
+    "vals": [
+     0.0
+    ],
+    "dtype": 1
+   },
+   {
+    "name": "shidx",
+    "dims": [
+     1
+    ],
+    "vals": [
+     1
+    ],
+    "dtype": 7
+   },
+   {
+    "name": "ax1",
+    "dims": [
+     1
+    ],
+    "vals": [
+     1
+    ],
+    "dtype": 7
+   }
+  ],
+  "nodes": [
+   {
+    "op": "MatMul",
+    "in": [
+     "X",
+     "Wq"
+    ],
+    "out": [
+     "Q"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "MatMul",
+    "in": [
+     "X",
+     "Wk"
+    ],
+    "out": [
+     "K"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Transpose",
+    "in": [
+     "K"
+    ],
+    "out": [
+     "KT"
+    ],
+    "attrs": {
+     "perm": [
+      0,
+      2,
+      1
+     ]
+    },
+    "name": null
+   },
+   {
+    "op": "MatMul",
+    "in": [
+     "Q",
+     "KT"
+    ],
+    "out": [
+     "S"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Div",
+    "in": [
+     "S",
+     "two"
+    ],
+    "out": [
+     "SS"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Greater",
+    "in": [
+     "mask_in",
+     "zero"
+    ],
+    "out": [
+     "MB"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Unsqueeze",
+    "in": [
+     "MB",
+     "ax1"
+    ],
+    "out": [
+     "MB2"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Where",
+    "in": [
+     "MB2",
+     "SS",
+     "neg"
+    ],
+    "out": [
+     "MS"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Softmax",
+    "in": [
+     "MS"
+    ],
+    "out": [
+     "AT"
+    ],
+    "attrs": {
+     "axis": -1
+    },
+    "name": null
+   },
+   {
+    "op": "Shape",
+    "in": [
+     "AT"
+    ],
+    "out": [
+     "SH"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Gather",
+    "in": [
+     "SH",
+     "shidx"
+    ],
+    "out": [
+     "GT"
+    ],
+    "attrs": {
+     "axis": 0
+    },
+    "name": null
+   },
+   {
+    "op": "MatMul",
+    "in": [
+     "AT",
+     "X"
+    ],
+    "out": [
+     "CTX"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Add",
+    "in": [
+     "CTX",
+     "X"
+    ],
+    "out": [
+     "OUT"
+    ],
+    "attrs": {},
+    "name": null
+   },
+   {
+    "op": "Mul",
+    "in": [
+     "AT",
+     "zero"
+    ],
+    "out": [
+     "Z"
+    ],
+    "attrs": {},
+    "name": null
+   }
+  ]
+ },
+ "e09_erf_grid": {
+  "name": "e09_erf_grid",
+  "opset": 14,
+  "inputs": [
+   {
+    "name": "X",
+    "dims": [
+     1001
+    ],
+    "dtype": 1
+   }
+  ],
+  "outputs": [
+   {
+    "name": "E",
+    "dims": [
+     1001
+    ],
+    "dtype": 1
+   }
+  ],
+  "initializers": [],
+  "nodes": [
+   {
+    "op": "Erf",
+    "in": [
+     "X"
+    ],
+    "out": [
+     "E"
+    ],
+    "attrs": {},
+    "name": null
+   }
+  ]
+ },
+ "e10_gather_rank2": {
+  "name": "e10_gather_rank2",
+  "opset": 14,
+  "inputs": [
+   {
+    "name": "D",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 1
+   }
+  ],
+  "outputs": [
+   {
+    "name": "G",
+    "dims": [
+     2,
+     3
+    ],
+    "dtype": 1
+   }
+  ],
+  "initializers": [
+   {
+    "name": "idx2",
+    "dims": [
+     2
+    ],
+    "vals": [
+     1,
+     0
+    ],
+    "dtype": 7
+   }
+  ],
+  "nodes": [
+   {
+    "op": "Gather",
+    "in": [
+     "D",
+     "idx2"
+    ],
+    "out": [
+     "G"
+    ],
+    "attrs": {
+     "axis": 0
+    },
+    "name": null
+   }
+  ]
+ }
+}

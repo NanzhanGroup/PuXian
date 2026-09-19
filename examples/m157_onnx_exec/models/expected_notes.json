@@ -1,0 +1,85 @@
+{
+ "e01_eltwise_exact": {
+  "C": "A+B 手算",
+  "D": "C-A = B（手算）",
+  "E": "C*A 手算",
+  "G": "A^2 手算",
+  "I": "max(A,4) 手算",
+  "J": "min(A,4) 手算",
+  "K": "A+B 手算",
+  "L": "mean = (A+B)/2 手算",
+  "M": "abs(neg(A)) = A",
+  "CE": "整数值 ceil 不变",
+  "FL": "整数值 floor 不变",
+  "RO": "整数值 round 不变",
+  "SG": "sign(-x) = -1",
+  "GT": "A>4",
+  "LT": "A<4",
+  "EQ": "A==4",
+  "LE": "A<=4",
+  "GE": "A>=4",
+  "NT": "not(A>4)",
+  "AN": "(A>4) and (A<4)",
+  "OR": "(A>4) or (A<4)：A=4 处两者皆假",
+  "XO": "(A>4) xor (A<4)：A=4 处两者皆假",
+  "H": "整型 Mod 手算（int64）",
+  "F": "C/B（float32 舍入后比对，用容差）",
+  "RC": "1/B"
+ },
+ "e02_matmul_identity": {
+  "AI": "A@I3 = A（逐位精确）",
+  "AWb": "A@W + bias 手算（W 取 3 列截断的偏移矩阵）",
+  "AWbI": "(A@W+b)@I3 = A@W+b"
+ },
+ "e03_softmax_uniform": {
+  "S": "全 0 输入 ⇒ softmax 均匀 1/4（0.25 二进制精确）",
+  "RM": "均值 = 1/4",
+  "RS": "和 = 1",
+  "RX": "max = 1/4",
+  "RN": "min = 1/4",
+  "RP": "prod = (1/4)^4 = 2^-8 精确",
+  "AM": "全相等 ⇒ 首个最大（下标 0）"
+ },
+ "e04_movement": {
+  "T": "转置手算",
+  "R": "reshape 行主序",
+  "U": "unsqueeze 不改数据",
+  "U2": "squeeze 回来",
+  "FL": "flatten axis=1 ⇒ [1,6]",
+  "CT": "concat 两遍",
+  "ST": "shape(T) = [3,2]",
+  "GT1": "shape(T)[1] = 2",
+  "SL": "slice R[1:4] 手算",
+  "TL": "tile ×2",
+  "SP0": "split 前半",
+  "SP1": "split 后半",
+  "EX": "expand [6]→[2,6] = 复制两行",
+  "CI": "cast float→int64 手算",
+  "CB": "cast 非零→true"
+ },
+ "e05_funcs": {
+  "GELU": "GELU 手算 0.5x(1+erf(x/√2))（x=0 ⇒ 精确 0）",
+  "AB": "abs 手算",
+  "RE": "relu 手算",
+  "CL": "clip(x,-0.5,0.5) 手算",
+  "LG": "log(exp(x)) = x（容差）"
+ },
+ "e06_layernorm": {
+  "LN": "常数行 ⇒ 归一化后恒 0（与 eps 无关，精确；只断言第 0 行）",
+  "W": "行 0 非负 ⇒ where 取 LN，仍为 0"
+ },
+ "e07_const_range_triu": {
+  "CZ": "ConstantOfShape(value=7) 手算",
+  "RG": "Range(0,3,1)",
+  "SUM": "CZ + RG 广播手算",
+  "TU": "上三角 k=0",
+  "TU1": "上三角 k=-1",
+  "EXP": "expand [3]→[2,3] = 复制两行"
+ },
+ "e08_attn_mask": {
+  "Z": "AT * 0 = 0（手算）"
+ },
+ "e10_gather_rank2": {
+  "G": "按 axis=0 取 [1,0] ⇒ 两行互换"
+ }
+}

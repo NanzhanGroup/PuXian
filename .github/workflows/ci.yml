@@ -232,6 +232,10 @@ jobs:
           # M155（第 37 轮）：含内嵌 NUL 的字符串 —— 字面量/常量池/渲染/输出四段（缺陷 148/150/151/152）。
           # 含三轨语义（41 断言 × 3 轨）+ stdout/落盘原始字节逐字节 + 发射形状 + 4 道负控（负控会重编 runtime）。
           bash examples/m155_nul_bytes/verify.sh > /tmp/v_m155.log 2>&1 || { echo "❌ m155_nul_bytes verify 失败"; tail -60 /tmp/v_m155.log; exit 1; }
+          # M156（第 38 轮）：零依赖 ONNX 解析面（结构 + 权重字节）。
+          bash examples/m156_onnx/verify.sh > /tmp/v_m156.log 2>&1 || { echo "❌ m156_onnx verify 失败"; tail -60 /tmp/v_m156.log; exit 1; }
+          # M157（第 39 轮）：ONNX 执行面 —— 张量/64 算子/拓扑执行器；三方对拍 + 覆盖率 + 负控。
+          bash examples/m157_onnx_exec/verify.sh > /tmp/v_m157.log 2>&1 || { echo "❌ m157_onnx_exec verify 失败"; tail -60 /tmp/v_m157.log; exit 1; }
           # 发射冻结门（M153 建立）：255 个用例的 --emit-c 输出必须逐字节不变。
           bash selfhost/emitc_freeze.sh --check > /tmp/v_emitc_freeze.log 2>&1 || { echo "❌ emitc_freeze 失败"; tail -30 /tmp/v_emitc_freeze.log; exit 1; }
           echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 / m153 / m154 / m155 verify + 发射冻结门（255 件 --emit-c）全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"

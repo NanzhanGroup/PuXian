@@ -75,6 +75,9 @@ examples/m154_alloc2/m154_sem.px src=dbb502b1c62ec4be rc=0 out=035e4fe4bb8fa7ef1
 examples/m155_nul_bytes/nul_io.px src=f71c7406b4ef7fbe rc=0 out=688d9349586ccfe2fd767cb301970bd2 err=e3b0c44298fc1c14
 examples/m155_nul_bytes/nul_sem.px src=a5e162033b64181b rc=0 out=d3948892db823a72662d685af2e81445 err=e3b0c44298fc1c14
 examples/m156_onnx/onnx_dump.px src=dbc371c0cc3a6a82 rc=0 out=9a0699075941b23a148a8a7e5fd47881 err=e3b0c44298fc1c14
+examples/m157_onnx_exec/embed_mini.px src=34c7d0b94eb2f0a3 rc=0 out=0c263567c073fcbbc5582ba056766772 err=e3b0c44298fc1c14
+examples/m157_onnx_exec/onnx_exec.px src=28ac79f5fab92ba0 rc=0 out=16c2b2b1cc474e0910b20024a05a83db err=e3b0c44298fc1c14
+examples/m157_onnx_exec/opnames.px src=51df99788de8f3f4 rc=0 out=c786bd48088a16c76020424aab12e806 err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=ca57a90d693278f051ce29d427bb006a err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=864a86fa0f3b5c69d3239ebdb2eac63a err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14
