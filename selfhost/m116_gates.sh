@@ -129,6 +129,11 @@ run m153_alloc bash examples/m153_alloc/verify.sh
 #   含：三轨语义（57 断言，含内嵌 NUL 的 join/`+` 逐字节一致）· 分配预算硬阈值 · 输出冻结
 #   · 3 道负控（关 rune 池 / 关整数文本池 ⇒ 预算红；join 退回 strlen ⇒ 语义红）。
 run m154_alloc2 bash examples/m154_alloc2/verify.sh
+# M155（第 37 轮）：含内嵌 NUL 的字符串 —— 字面量 → 常量池 → 渲染 → 输出（缺陷 148/150/151/152）。
+#   含：三轨语义（41 断言 × 3 轨，VM/C/解释轨逐字节一致）· stdout/落盘**原始字节**逐字节
+#   · 发射形状（PX_STR_LIT/PXK_STR_LIT 恒 3 位八进制）· 词法/AST 面 · 自举安全不变式
+#   · 4 道负控（长度退回 strlen / print 退回 printf / 长度多算 1 / VM 忽略 K 长度）。
+run m155_nul_bytes bash examples/m155_nul_bytes/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们
