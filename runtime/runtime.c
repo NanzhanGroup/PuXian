@@ -53,6 +53,8 @@
 #include "mbedtls/x509_crt.h"
 #include "mbedtls/error.h"
 #include "mbedtls/sha256.h"
+#include "mbedtls/md5.h"      // M150：MD5（PostgreSQL md5 认证 / 通用摘要）
+#include "mbedtls/pkcs5.h"    // M150：PBKDF2-HMAC-SHA256（SCRAM-SHA-256 的 Hi）
 
 // ==================== M127（qg-issue 84）：回卷的锁安全审计 ====================
 // 病灶与做法见 runtime/locktrack.h 头部说明。此处 = 存储（TLS，跨 TU 共享）+ 宏接管本 TU 的锁调用。
@@ -285,6 +287,21 @@ static LXValue bi_tcp_connect_ex(LXValue* args, int nargs, void* ctx);
 static LXValue bi_tcp_opt(LXValue* args, int nargs, void* ctx);
 static LXValue bi_tcp_recv_ex(LXValue* args, int nargs, void* ctx);
 static LXValue bi_tcp_send_ex(LXValue* args, int nargs, void* ctx);
+// ═══ M150（第 32 轮）：TLS 客户端族（tls_connect / tls_send / tls_recv / tls_close）═══
+//   语言此前**只有服务端 TLS**（`tls_server`）；客户端 TLS 只存在于 `http_get`/
+//   `http_post`/`s3_*` 的**内部**（`https_connect_t`）⇒ 任何「自己的协议跑在 TLS 之上」
+//   的客户端都写不出来。最直接的需求来自 PostgreSQL：lib/pq 的 `sslmode` **缺省即
+//   require**（ssl.go：`case mode == "" || mode == SSLModeRequire`），而 require 的
+//   语义是 `InsecureSkipVerify = true`（**加密但不校验证书**）。
+//   实现体定义在文件后段 `https_close` 之后（复用 HttpsSession / px_tcp_connect_timeout）。
+static LXValue bi_tls_connect(LXValue* args, int nargs, void* ctx);
+static LXValue bi_tls_send(LXValue* args, int nargs, void* ctx);
+static LXValue bi_tls_recv(LXValue* args, int nargs, void* ctx);
+static LXValue bi_tls_close(LXValue* args, int nargs, void* ctx);
+// M150：连接失败分类（定义在文件后段 px_tcp_connect_timeout 一带；TLS 族也要用）
+static void px_net_conn_fail(char* errbuf, int errcap, const char* host, int port,
+                             int stage, int er, const char* addr);
+static const char* px_conn_stage_name(int stage);
 // M149：带超时的 TCP 连接（定义在文件后段 px_conn_try 之后；既有 hconnect/https 亦用它）
 static int px_tcp_connect_timeout(const char* host, int port, int timeout_ms,
                                   int* out_stage, int* out_errno, char* out_addr, int addr_cap);
@@ -6322,6 +6339,69 @@ static LXValue bi_hmac_sha256(LXValue* args, int nargs, void* ctx) {
     return px_str(hex);
 }
 
+// ═══ M150（第 32 轮）：摘要 / 密钥派生族（md5 / md5_bytes / pbkdf2_sha256）═══
+// 动机（token-cache 的 PostgreSQL 驱动移植 = lib/pq v1.12.3 的**认证面**）：
+//   ① **MD5**：`AuthenticationMD5Password`(code 5) 的应答是一个嵌套 MD5 ——
+//        "md5" + hex( md5( hex(md5(password || user)) || salt ) )
+//      语言里只有 sha256 / hmac_sha256（M84-S2），**没有 md5**。
+//   ② **PBKDF2-HMAC-SHA256**：`SCRAM-SHA-256`（PG 14+ 服务端的默认认证方式）里
+//        `SaltedPassword = Hi(password, salt, i)` 就是 PBKDF2 迭代；语言里没有 PBKDF2，
+//        手搓只能借 `hmac_sha256`（返回 **hex 文本**）⇒ 每轮都要 hex↔bytes 往返。
+// 口径（与既有族一致，不发明新约定）：
+//   md5(data)        → 32 字符**小写 hex**（= `hex.EncodeToString(md5.Sum(x)[:])`）
+//   md5_bytes(data)  → 16 **字节**（= `md5.Sum(x)` 本身；要文本用 bytes_to_hex）
+//   pbkdf2_sha256(password, salt, iterations, dklen) → **原始字节**（密钥材料是二进制）
+//     · password/salt 收 str|bytes（二进制安全可含 NUL；数值自动字符串化，同 bytes()）
+//     · iterations < 1 → 1（RFC 8018 要求 c ≥ 1；Go 的 x/crypto/pbkdf2 亦如此收敛）
+//     · dklen < 1 → 32（SHA-256 输出宽度）；dklen > 4096 → 4096（防误用巨量分配）
+//   底层取 mbedtls 3.6.2 的 `mbedtls_md5` / `mbedtls_pkcs5_pbkdf2_hmac_ext`（与 RFC 逐字节一致）。
+static LXValue bi_md5(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: md5 需要一个参数 (data)");
+    const unsigned char* d = (const unsigned char*)bdata(args[0]);
+    int n = blen(args[0]);
+    unsigned char digest[16];
+    if (mbedtls_md5(d, (size_t)n, digest) != 0) px_error("md5 计算失败");
+    char hex[33];
+    bytes_to_hex(digest, 16, hex);
+    return px_str(hex);
+}
+
+static LXValue bi_md5_bytes(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: md5_bytes 需要一个参数 (data)");
+    const unsigned char* d = (const unsigned char*)bdata(args[0]);
+    int n = blen(args[0]);
+    unsigned char digest[16];
+    if (mbedtls_md5(d, (size_t)n, digest) != 0) px_error("md5 计算失败");
+    return px_bytes_len(digest, 16);
+}
+
+static LXValue bi_pbkdf2_sha256(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 4) px_error("R1002: pbkdf2_sha256 需要 (password, salt, iterations, dklen) 参数");
+    if (args[2].type != PX_INT || args[3].type != PX_INT)
+        px_error("R1002: pbkdf2_sha256 的 iterations/dklen 需要 int");
+    const unsigned char* pw = (const unsigned char*)bdata(args[0]);
+    int pwl = blen(args[0]);
+    const unsigned char* salt = (const unsigned char*)bdata(args[1]);
+    int sl = blen(args[1]);
+    int64_t iters = args[2].as.i;
+    int64_t dklen = args[3].as.i;
+    if (iters < 1) iters = 1;
+    if (iters > 0x7fffffffLL) iters = 0x7fffffffLL;
+    if (dklen < 1) dklen = 32;
+    if (dklen > 4096) dklen = 4096;
+    unsigned char* out = (unsigned char*)xmalloc((size_t)dklen);
+    int ret = mbedtls_pkcs5_pbkdf2_hmac_ext(MBEDTLS_MD_SHA256, pw, (size_t)pwl,
+                                            salt, (size_t)sl, (unsigned int)iters,
+                                            (uint32_t)dklen, out);
+    if (ret != 0) { xfree(out); px_error("pbkdf2_sha256 计算失败 (%d)", ret); }
+    LXValue r = px_bytes_len(out, (int)dklen);
+    xfree(out);
+    return r;
+}
+
 // dns_lookup(domain) → list[str]（IPv4+IPv6 全部地址，A/AAAA）
 // M84-S3（Issue 22 GAP-DNS-1）：getaddrinfo(AF_UNSPEC+SOCK_STREAM) 域名解析原生实现——
 // 守护类模块（bs-safeip util.px resolve_ips 每轮解析）不再依赖 getent 外部命令代偿。
@@ -9314,6 +9394,19 @@ void px_register_builtins(void) {
     px_set_global("tcp_opt", px_native("tcp_opt", bi_tcp_opt));
     px_set_global("tcp_recv_ex", px_native("tcp_recv_ex", bi_tcp_recv_ex));
     px_set_global("tcp_send_ex", px_native("tcp_send_ex", bi_tcp_send_ex));
+    // ═══ M150（第 32 轮）：摘要 / 密钥派生族 ═══
+    //   PostgreSQL 的认证面：`md5`（AuthenticationMD5Password）与 `pbkdf2_sha256`
+    //   （SCRAM-SHA-256 的 Hi）。详见 bi_md5 一带的注释。
+    px_set_global("md5", px_native("md5", bi_md5));
+    px_set_global("md5_bytes", px_native("md5_bytes", bi_md5_bytes));
+    px_set_global("pbkdf2_sha256", px_native("pbkdf2_sha256", bi_pbkdf2_sha256));
+    // ═══ M150：TLS 客户端族 ═══
+    //   与 `tls_server` 相对的另一半：自持协议的客户端（PostgreSQL 缺省 sslmode=require）。
+    //   返回结果 dict、永不杀进程，与 tcp_*_ex 逐条同构。
+    px_set_global("tls_connect", px_native("tls_connect", bi_tls_connect));
+    px_set_global("tls_send", px_native("tls_send", bi_tls_send));
+    px_set_global("tls_recv", px_native("tls_recv", bi_tls_recv));
+    px_set_global("tls_close", px_native("tls_close", bi_tls_close));
     // M33：UDP 基础设施（HTTP/3/QUIC 预研）
     px_set_global("udp_open", px_native("udp_open", bi_udp_open));
     px_set_global("udp_send", px_native("udp_send", bi_udp_send));
@@ -12713,6 +12806,388 @@ static void https_close(HttpsSession* s) {
     mbedtls_ctr_drbg_free(&s->ctr_drbg);
     mbedtls_entropy_free(&s->entropy);
     xfree(s);
+}
+
+// ═══ M150（第 32 轮）：TLS 客户端族（tls_connect / tls_send / tls_recv / tls_close）═══
+// 语义与 M149 的 tcp_*_ex **逐条同构**（一律返回结果 dict，**永不杀进程**），便于按需互换：
+//   tls_connect(host, port[, opts]) → {ok, id, fd, peer, version, version_num, cipher, cipher_id,
+//                                       verify, stage, errno, err}
+//     · version      = mbedtls 文本（"TLSv1.3"）；version_num = **Go `tls.VersionTLS13` 口径**
+//       （0x0304）
+//     · cipher       = **Go `tls.CipherSuiteName` 口径**（"TLS_AES_256_GCM_SHA384"）；
+//       cipher_id    = IANA 套件号（= Go 的 `tls.CipherSuite` 常量值，如 0x1302）
+//     opts = { timeout_ms:int      （0 = 不限；与 tcp_connect_ex 同口径，缺省 0）
+//              verify:bool         （**缺省 false** = libpq 的 require 语义：加密不验证）
+//              servername:str      （SNI 名；缺省用 host。**host 是 IP 字面量时不发 SNI** ——
+//                                   与 RFC 6066 及 Go `crypto/tls` 的 hostnameInSNI 同口径）
+//              read_timeout_ms:int （0 = 阻塞读；>0 时 mbedtls_ssl_conf_read_timeout）}
+//     成功 → {ok:true,  id, fd, peer:"ip:port", version:"TLSv1.3", cipher:"TLS_AES_256_GCM_SHA384",
+//                        verify, stage:"", errno:0, err:""}
+//     失败 → {ok:false, id:0, fd:-1, ..., stage:resolve|socket|connect|tls, errno, err}
+//            （stage 与 px_tcp_connect_timeout 同码，见 PX_CONN_STAGE_*）
+//   tls_send(id, data) → {ok, n, err}   （data 收 str|bytes；失败时 n = **已写出**字节数）
+//   tls_recv(id, maxlen) → {ok, data:bytes, n, eof, timeout, err}
+//     · 对端 close_notify / FIN ⇒ n=0, eof=true（**不是错误**，与 tcp_recv_ex 同口径）
+//     · read_timeout_ms 到期 ⇒ timeout=true（MBEDTLS_ERR_SSL_TIMEOUT）
+//   tls_close(id) → bool（幂等：重复关闭 / 非法 id → false）
+// 句柄：进程级定长表 + 互斥量；id 从 1 起。与 `tcp_*` 的裸 fd 同属"调用方负责生命周期"的
+//   口径：**关闭后槽位可被下一条连接复用**，故不要重用已关闭的 id。
+//   `fd` 一并回传**仅供只读查询**（getsockname / tcp_opt 的 nodelay·keepalive）；**不要**用它
+//   做读写、也不要给它设 SO_RCVTIMEO（会与 mbedtls 的 read_timeout 打架，表现为 WANT_READ 自旋）。
+#define PX_TLS_MAX 64
+typedef struct { HttpsSession* s; int used; } PxTlsSlot;
+static PxTlsSlot g_tls_slots[PX_TLS_MAX];
+static pthread_mutex_t g_tls_slots_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static int px_tls_slot_put(HttpsSession* s) {
+    int id = 0;
+    pthread_mutex_lock(&g_tls_slots_mu);
+    for (int i = 0; i < PX_TLS_MAX; i++) {
+        if (!g_tls_slots[i].used) {
+            g_tls_slots[i].used = 1;
+            g_tls_slots[i].s = s;
+            id = i + 1;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_tls_slots_mu);
+    return id;
+}
+static HttpsSession* px_tls_slot_get(int id) {
+    HttpsSession* s = NULL;
+    if (id < 1 || id > PX_TLS_MAX) return NULL;
+    pthread_mutex_lock(&g_tls_slots_mu);
+    if (g_tls_slots[id - 1].used) s = g_tls_slots[id - 1].s;
+    pthread_mutex_unlock(&g_tls_slots_mu);
+    return s;
+}
+// 取出并释放槽位（tls_close 用）；成功返回 1 且 *out 拿到会话指针
+static int px_tls_slot_take(int id, HttpsSession** out) {
+    int ok = 0;
+    if (id < 1 || id > PX_TLS_MAX) return 0;
+    pthread_mutex_lock(&g_tls_slots_mu);
+    if (g_tls_slots[id - 1].used) {
+        *out = g_tls_slots[id - 1].s;
+        g_tls_slots[id - 1].s = NULL;
+        g_tls_slots[id - 1].used = 0;
+        ok = 1;
+    }
+    pthread_mutex_unlock(&g_tls_slots_mu);
+    return ok;
+}
+
+// host 是否为 IP 字面量（决定是否发 SNI；与 Go crypto/tls 的 hostnameInSNI 同口径）
+static int px_host_is_ip_literal(const char* h) {
+    char buf[64];
+    if (!h || !h[0]) return 0;
+    if (h[0] == '[') {   // [::1] 形态
+        size_t n = strlen(h);
+        if (n < 3 || n >= sizeof(buf)) return 0;
+        memcpy(buf, h + 1, n - 2);
+        buf[n - 2] = 0;
+        struct in6_addr a6;
+        return inet_pton(AF_INET6, buf, &a6) == 1;
+    }
+    struct in_addr a4;
+    struct in6_addr a6;
+    if (inet_pton(AF_INET, h, &a4) == 1) return 1;
+    if (inet_pton(AF_INET6, h, &a6) == 1) return 1;
+    return 0;
+}
+
+// mbedtls 的 IANA 名 → Go `tls.CipherSuiteName` 口径（**逐字节可比**）。
+//   mbedtls: "TLS-ECDHE-RSA-WITH-AES-128-GCM-SHA256" / "TLS1-3-AES-256-GCM-SHA384"
+//   Go:      "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256" / "TLS_AES_256_GCM_SHA384"
+// 映射规则就两条（对 mbedtls 支持的全部套件都成立，非有损近似）：
+//   ① 每一段的分隔符 '-' → '_'；② 前缀 "TLS1_3_" → "TLS_"。
+static void px_tls_cipher_go_name(const char* in, char* out, int cap) {
+    int i = 0, j = 0;
+    if (!in) { if (cap > 0) out[0] = 0; return; }
+    for (; in[i] && j < cap - 1; i++) out[j++] = (in[i] == '-') ? '_' : in[i];
+    out[j] = 0;
+    if (!strncmp(out, "TLS1_3_", 7)) {
+        // "TLS1_3_xxx" → "TLS_xxx"（把前 7 字符 "TLS1_3_" 换成 4 字符 "TLS_"）
+        memmove(out + 4, out + 7, strlen(out + 7) + 1);
+        memcpy(out, "TLS_", 4);
+    }
+}
+
+// 建立 TLS 客户端连接（TCP + 握手完成）；失败返回 NULL 并填 out_stage/out_errno
+static HttpsSession* px_tls_connect_opt(const char* host, int port, int timeout_ms,
+                                        int verify, const char* servername, int read_timeout_ms,
+                                        int* out_stage, int* out_errno, char* out_addr, int addr_cap) {
+    HttpsSession* s = (HttpsSession*)xmalloc(sizeof(HttpsSession));
+    memset(s, 0, sizeof(*s));
+    mbedtls_net_init(&s->net);
+    mbedtls_ssl_init(&s->ssl);
+    mbedtls_ssl_config_init(&s->conf);
+    mbedtls_ctr_drbg_init(&s->ctr_drbg);
+    mbedtls_entropy_init(&s->entropy);
+    const char* pers = "px_tls";
+    int ret = 0;
+    char portstr[16];
+    snprintf(portstr, sizeof(portstr), "%d", port);
+    if ((ret = mbedtls_ctr_drbg_seed(&s->ctr_drbg, mbedtls_entropy_func, &s->entropy,
+                                     (const unsigned char*)pers, strlen(pers))) != 0) goto fail;
+    if (timeout_ms > 0) {
+        int cfd = px_tcp_connect_timeout(host, port, timeout_ms, out_stage, out_errno, out_addr, addr_cap);
+        if (cfd < 0) goto fail;
+        s->net.fd = cfd;   // 后续 send/recv/close 均由 mbedtls 走（mbedtls_net_context = fd 包装）
+    } else if ((ret = mbedtls_net_connect(&s->net, host, portstr, MBEDTLS_NET_PROTO_TCP)) != 0) goto fail;
+    if ((ret = mbedtls_ssl_config_defaults(&s->conf, MBEDTLS_SSL_IS_CLIENT,
+                                           MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT)) != 0) goto fail;
+    if (verify) {
+        px_ensure_cacert();   // 走运行时内置 CA（与 http_get/https 同一份）
+        mbedtls_ssl_conf_authmode(&s->conf, g_cacert_loaded ? MBEDTLS_SSL_VERIFY_REQUIRED : MBEDTLS_SSL_VERIFY_NONE);
+        mbedtls_ssl_conf_ca_chain(&s->conf, &g_cacert, NULL);
+    } else {
+        // libpq 的 require / Go 的 InsecureSkipVerify=true：加密但不验证身份
+        mbedtls_ssl_conf_authmode(&s->conf, MBEDTLS_SSL_VERIFY_NONE);
+    }
+    mbedtls_ssl_conf_rng(&s->conf, mbedtls_ctr_drbg_random, &s->ctr_drbg);
+    mbedtls_ssl_conf_min_version(&s->conf, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_3);
+    mbedtls_ssl_conf_session_tickets(&s->conf, MBEDTLS_SSL_SESSION_TICKETS_ENABLED);
+    if (read_timeout_ms > 0) mbedtls_ssl_conf_read_timeout(&s->conf, (uint32_t)read_timeout_ms);
+    if ((ret = mbedtls_ssl_setup(&s->ssl, &s->conf)) != 0) goto fail;
+    // SNI：显式 servername 优先；否则用 host，且 host 为 IP 字面量时不发
+    {
+        const char* sni = NULL;
+        if (servername && servername[0]) sni = servername;
+        else if (!px_host_is_ip_literal(host)) sni = host;
+        if (sni) mbedtls_ssl_set_hostname(&s->ssl, sni);
+    }
+    // ⚠️ 陷阱（本地实测踩到）：`mbedtls_ssl_conf_read_timeout` **只对 BIO 的
+    //   `f_recv_timeout` 回调生效** —— 若第 5 个参数传 NULL（= 退回阻塞 `mbedtls_net_recv`），
+    //   设置的读超时**完全不生效**（表现为 tls_recv 永久挂起）。故 >0 时必须换上
+    //   `mbedtls_net_recv_timeout`（mbedtls 的文档称之为 "socket with timeout"）。
+    mbedtls_ssl_set_bio(&s->ssl, &s->net, mbedtls_net_send, mbedtls_net_recv,
+                        read_timeout_ms > 0 ? mbedtls_net_recv_timeout : NULL);
+    int guard = 0;
+    while ((ret = mbedtls_ssl_handshake(&s->ssl)) != 0) {
+        if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) goto fail;
+        if (++guard > 40) goto fail;
+    }
+    return s;
+fail:
+    // 只补 TLS 阶段：DNS/socket/connect 的具体成因由 px_tcp_connect_timeout 先填，
+    // **不可覆盖**（与 https_connect_t 的 M140 约定同源）。
+    if (out_stage && *out_stage == 0) {
+        if (out_errno) *out_errno = ret;
+        *out_stage = PX_CONN_STAGE_TLS;
+        if (out_addr && addr_cap > 0 && !out_addr[0]) snprintf(out_addr, (size_t)addr_cap, "%s", host);
+    }
+    mbedtls_net_free(&s->net);
+    mbedtls_ssl_free(&s->ssl);
+    mbedtls_ssl_config_free(&s->conf);
+    mbedtls_ctr_drbg_free(&s->ctr_drbg);
+    mbedtls_entropy_free(&s->entropy);
+    xfree(s);
+    return NULL;
+}
+
+static LXValue bi_tls_connect(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 2 || nargs > 3) px_error("R1002: tls_connect 需要 (host, port[, opts]) 参数");
+    const char* host = val_cstr(args[0]);
+    if (args[1].type != PX_INT) px_error("R1002: tls_connect 的 port 需要 int");
+    int port = (int)args[1].as.i;
+    int64_t timeout_ms = 0;
+    int verify = 0;
+    int64_t read_timeout_ms = 0;
+    char servername[256];
+    servername[0] = 0;
+    if (nargs == 3) {
+        if (args[2].type != PX_DICT)
+            px_error("R1002: tls_connect 的 opts 需要 dict{timeout_ms,verify,servername,read_timeout_ms}");
+        LXValue tv = px_dict_get(args[2], "timeout_ms");
+        if (tv.type == PX_INT) timeout_ms = tv.as.i;
+        LXValue vv = px_dict_get(args[2], "verify");
+        if (vv.type == PX_BOOL) verify = vv.as.b ? 1 : 0;
+        LXValue rt = px_dict_get(args[2], "read_timeout_ms");
+        if (rt.type == PX_INT) read_timeout_ms = rt.as.i;
+        LXValue sv = px_dict_get(args[2], "servername");
+        if (sv.type == PX_STR) {
+            const char* p = sv.as.obj->as.str.data;
+            snprintf(servername, sizeof(servername), "%s", p ? p : "");
+        }
+    }
+    if (timeout_ms < 0) timeout_ms = 0;
+    if (timeout_ms > 2147483647LL) timeout_ms = 2147483647LL;
+    if (read_timeout_ms < 0) read_timeout_ms = 0;
+    if (read_timeout_ms > 2147483647LL) read_timeout_ms = 2147483647LL;
+    int stage = 0, er = 0;
+    char addr[128];
+    addr[0] = 0;
+    HttpsSession* s = px_tls_connect_opt(host, port, (int)timeout_ms, verify,
+                                         servername[0] ? servername : NULL, (int)read_timeout_ms,
+                                         &stage, &er, addr, (int)sizeof(addr));
+    int id = 0;
+    if (s) {
+        id = px_tls_slot_put(s);
+        if (id == 0) {   // 句柄表满：立即收掉（不留悬空连接）
+            https_close(s);
+            s = NULL;
+            px_error("tls_connect: 句柄表已满（上限 %d，请先 tls_close）", PX_TLS_MAX);
+        }
+    }
+    char peer[192];
+    peer[0] = 0;
+    const char* ver = "";
+    const char* cip = "";
+    int ver_num = 0;
+    int cip_id = 0;
+    char cipbuf[96];
+    cipbuf[0] = 0;
+    if (s) {
+        struct sockaddr_storage ss;
+        socklen_t sl = sizeof(ss);
+        memset(&ss, 0, sizeof(ss));
+        if (getpeername(s->net.fd, (struct sockaddr*)&ss, &sl) == 0) {
+            int pnum = 0;
+            if (ss.ss_family == AF_INET) {
+                inet_ntop(AF_INET, &((struct sockaddr_in*)&ss)->sin_addr, addr, (socklen_t)sizeof(addr));
+                pnum = (int)ntohs(((struct sockaddr_in*)&ss)->sin_port);
+            } else if (ss.ss_family == AF_INET6) {
+                inet_ntop(AF_INET6, &((struct sockaddr_in6*)&ss)->sin6_addr, addr, (socklen_t)sizeof(addr));
+                pnum = (int)ntohs(((struct sockaddr_in6*)&ss)->sin6_port);
+            }
+            if (addr[0]) snprintf(peer, sizeof(peer), "%s:%d", addr, pnum);
+        }
+        ver = mbedtls_ssl_get_version(&s->ssl);
+        if (!ver) ver = "";
+        // version_num：= Go 的 tls.VersionTLS13 等常量（0x0304/0x0303/0x0302/0x0301）
+        ver_num = mbedtls_ssl_get_version_number(&s->ssl);
+        // cipher：Go `tls.CipherSuiteName` 口径（见 px_tls_cipher_go_name）；
+        // cipher_id：IANA 套件号（= Go 的 tls.CipherSuite 常量值，如 0x1302）
+        {
+            const char* mn = mbedtls_ssl_get_ciphersuite(&s->ssl);
+            px_tls_cipher_go_name(mn, cipbuf, (int)sizeof(cipbuf));
+            cip = cipbuf;
+            if (mn) cip_id = mbedtls_ssl_get_ciphersuite_id(mn);
+        }
+    }
+    char ebuf[256];
+    ebuf[0] = 0;
+    if (!s) px_net_conn_fail(ebuf, (int)sizeof(ebuf), host, port, stage, er, addr);
+    LXValue d = px_dict();
+    px_root_push();
+    PX_KEEP(d);
+    px_dict_set(d, "ok", px_bool(s != NULL));
+    px_dict_set(d, "id", px_int(id));
+    px_dict_set(d, "fd", px_int(s ? s->net.fd : -1));
+    px_dict_set(d, "peer", px_str(peer));
+    px_dict_set(d, "version", px_str(ver));
+    px_dict_set(d, "cipher", px_str(cip));
+    px_dict_set(d, "cipher_id", px_int(cip_id));
+    px_dict_set(d, "version_num", px_int(ver_num));
+    px_dict_set(d, "verify", px_bool(verify != 0));
+    px_dict_set(d, "stage", px_str(px_conn_stage_name(stage)));
+    px_dict_set(d, "errno", px_int(er));
+    px_dict_set(d, "err", px_str(ebuf));
+    px_root_pop();
+    return d;
+}
+
+static LXValue bi_tls_send(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) px_error("R1002: tls_send 需要 (id, data) 参数");
+    if (args[0].type != PX_INT) px_error("R1002: tls_send 的 id 需要 int");
+    LXValue d = px_dict();
+    px_root_push();
+    PX_KEEP(d);
+    px_dict_set(d, "ok", px_bool(0));
+    px_dict_set(d, "n", px_int(0));
+    px_dict_set(d, "err", px_str(""));
+    HttpsSession* s = px_tls_slot_get((int)args[0].as.i);
+    if (!s) {
+        px_dict_set(d, "err", px_str("tls_send: 无效或已关闭的句柄"));
+        px_root_pop();
+        return d;
+    }
+    const unsigned char* p = (const unsigned char*)bdata(args[1]);
+    int len = blen(args[1]);
+    int sent = 0;
+    while (sent < len) {
+        int w = mbedtls_ssl_write(&s->ssl, p + sent, (size_t)(len - sent));
+        if (w == MBEDTLS_ERR_SSL_WANT_WRITE || w == MBEDTLS_ERR_SSL_WANT_READ) continue;
+        if (w <= 0) {
+            char eb[128];
+            snprintf(eb, sizeof(eb), "tls: 写出失败 (-0x%04x)", (unsigned)(-w));
+            px_dict_set(d, "n", px_int(sent));
+            px_dict_set(d, "err", px_str(eb));
+            px_root_pop();
+            return d;
+        }
+        sent += w;
+    }
+    px_dict_set(d, "ok", px_bool(1));
+    px_dict_set(d, "n", px_int(sent));
+    px_root_pop();
+    return d;
+}
+
+static LXValue bi_tls_recv(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) px_error("R1002: tls_recv 需要 (id, maxlen) 参数");
+    if (args[0].type != PX_INT) px_error("R1002: tls_recv 的 id 需要 int");
+    if (args[1].type != PX_INT) px_error("R1002: tls_recv 的 maxlen 需要 int");
+    int maxlen = (int)args[1].as.i;
+    if (maxlen < 1) maxlen = 1;
+    if (maxlen > (1 << 20)) maxlen = 1 << 20;
+    LXValue d = px_dict();
+    px_root_push();
+    PX_KEEP(d);
+    px_dict_set(d, "ok", px_bool(0));
+    px_dict_set(d, "data", px_bytes_len(NULL, 0));
+    px_dict_set(d, "n", px_int(0));
+    px_dict_set(d, "eof", px_bool(0));
+    px_dict_set(d, "timeout", px_bool(0));
+    px_dict_set(d, "err", px_str(""));
+    HttpsSession* s = px_tls_slot_get((int)args[0].as.i);
+    if (!s) {
+        px_dict_set(d, "err", px_str("tls_recv: 无效或已关闭的句柄"));
+        px_root_pop();
+        return d;
+    }
+    unsigned char* buf = (unsigned char*)xmalloc((size_t)maxlen);
+    int n = mbedtls_ssl_read(&s->ssl, buf, (size_t)maxlen);
+    if (n > 0) {
+        px_dict_set(d, "ok", px_bool(1));
+        px_dict_set(d, "data", px_bytes_len(buf, n));
+        px_dict_set(d, "n", px_int(n));
+    } else if (n == 0 || n == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) {
+        // 对端 close_notify / FIN：**不是错误**（与 tcp_recv_ex 的 EOF 同口径）
+        px_dict_set(d, "ok", px_bool(1));
+        px_dict_set(d, "eof", px_bool(1));
+    } else if (n == MBEDTLS_ERR_SSL_TIMEOUT) {
+        px_dict_set(d, "timeout", px_bool(1));
+        px_dict_set(d, "err", px_str("i/o timeout"));
+    } else if (n == MBEDTLS_ERR_SSL_WANT_READ || n == MBEDTLS_ERR_SSL_WANT_WRITE) {
+        // 非阻塞语义下才会出现；阻塞 + read_timeout 组合下不应到达（保守处理为超时）
+        px_dict_set(d, "timeout", px_bool(1));
+        px_dict_set(d, "err", px_str("i/o timeout"));
+    } else {
+        char eb[128];
+        snprintf(eb, sizeof(eb), "tls: 读取失败 (-0x%04x)", (unsigned)(-n));
+        px_dict_set(d, "err", px_str(eb));
+    }
+    xfree(buf);
+    px_root_pop();
+    return d;
+}
+
+static LXValue bi_tls_close(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: tls_close 需要 (id) 参数");
+    if (args[0].type != PX_INT) px_error("R1002: tls_close 的 id 需要 int");
+    HttpsSession* s = NULL;
+    if (!px_tls_slot_take((int)args[0].as.i, &s)) return px_bool(0);
+    if (s) {
+        // 发 close_notify（尽力而为）；对端已断时 mbedtls 会给错误，忽略
+        mbedtls_ssl_close_notify(&s->ssl);
+        https_close(s);
+    }
+    return px_bool(1);
 }
 
 // ==================== M32 wss 客户端导出（runtime_ws.c 复用） ====================
