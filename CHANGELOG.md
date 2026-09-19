@@ -1,4 +1,51 @@
+## M156 —— 零依赖 ONNX 解析面（第 38 轮 · qg-issue 87 · 缺陷 154/155/156）
+
+- **背景（覆盖表最后一行）**：token-cache 的 embedding 引擎在 Go 侧是
+  `embedding_engine_onnx.go`（`//go:build embed_onnx`），靠 `github.com/yalue/onnxruntime_go`
+  **cgo + dlopen** `/usr/local/onnxruntime-linux-x64-1.20.1/lib/libonnxruntime.so`；
+  **不带 tag 时是空桩**（生产二进制就是空桩 —— 实测 `编译时未指定 embed_onnx build tag` 命中 1 次）。
+  本轮把「.onnx 文件 → 结构 + 权重」这条链在**语言运行时内**打通：**不 dlopen 任何外部库**，
+  自己解 protobuf（wire 格式手解，未知字段一律按 wire type 跳过 ⇒ 新 opset 加字段不影响）。
+- **交付（3 文件 + 5 native + 模块化）**：
+  · `runtime/onnx.h`：proto 子集的结构定义（Model/Graph/Node/Attribute/Tensor/ValueInfo）。
+  · `runtime/onnx_proto.c`：protobuf wire 解码 + ONNX 解析 + **结构摘要 JSON 渲染器**
+    （`onnx_info` 与对拍门**共用**这一个渲染器 ⇒ 不存在「门和实现各写一套口径」）。
+    字节序：`raw_data`/`float_data` 等一律**显式按小端**解释/写出，不依赖宿主字节序。
+    规范细节：**int64/int32 是补码 varint**（`-1` 是 10 字节）；窄类型（int8/uint8/bool/fp16/bf16）
+    在 `int32_data` 里每元素一个 int32 ⇒ **取低 elem_w 字节**。
+  · `runtime/runtime_onnx.c`：语言侧 `onnx_model_open` / `onnx_info` / `onnx_initializer` /
+    `onnx_initializer_names` / `onnx_model_close`（句柄表 8 槽，`strdup` 路径；解析后原缓冲即释放，
+    权重由解析器持有）。注册走 `px_onnx_register()`，`--no-onnx` 可裁剪（源文件一并移出编译集）。
+  · `tools/px` 加 `onnx` 模块（`mod_srcs` + 源清单 + 自动裁剪 cuts）；`tools/gen_native_map.sh`
+    加扫 `runtime_onnx.c`；`tools/gen_native_table.sh` 同上 ⇒ 名册/索引与 runtime 同源不漂移。
+- **门 `examples/m156_onnx/`（`M156-VERIFY-OK`）**：判据分五层，每层可单独变红：
+  · ① **构造性真值**：`tools/gen_models.py` 手写 protobuf 编码器造 16 个模型（本机无 pip/无 onnx 包），
+    每个构造函数返回 `(bytes, fact)` —— **一份描述同时产出字节与真值**，真值直接来自生成参数。
+  · ② **独立实现**：`tools/onnx_ref.py`（另一份手写 protobuf 解码器）。
+  · ③ **C 侧语言接口**：`onnx_dump.px` 走真 native。**三重**一致才算过：
+    ①↔② 与 ③↔①（只做 ②↔③ 会漏「两侧一致地错」）。
+  · ④ 负控 4 个必须报错：无 graph / 截断 / field 0 / 9 维超界。
+  · ⑤ 权重 `head16` 逐字节（float32 `raw_data` + fp16 低 2 字节截断）。
+  · 另：VM 默认轨 ↔ 解释轨结构 JSON 逐字节；**真实模型（90MB MiniLM）可选，SKIP 显式不计入 PASS**
+    （遵缺陷 147：取不到判据 ≠ 判据满足）。实测真实模型：780 节点 / 101 initializer / 三元输入、
+    `embeddings.word_embeddings.weight` 46,881,792 字节、head16 三方一致。
+- **缺陷 154（超界维度静默丢弃）**：`parse_type_proto` 对第 9 个 dim 走 `else { free(dpar); }` ——
+  **把「我没解析」伪装成「解析成功」**（9 维模型被当合法收下）。改为显式失败（t16 负控因此成立）。
+- **缺陷 155（解释轨漏项）**：新 native 必须**两处**同步 —— `selfhost/interp.px` 的内置**名册**
+  （否则 `R1001 未定义变量`）与 `selfhost/ibuiltin.px` 的**分发**（否则 `R1002 未知内置函数`）。
+  本轮先只改了名册，解释轨仍然红 —— 名册与分发是两件事。
+- **缺陷 156（门自身：tuple/list 形状不一致）**：`facts_from_c`/`facts_from_ref`/构造真值三方的
+  容器类型分别是 list/tuple ⇒ 内容相同而 `==` 为假，12/12 全判「不一致」。修法：比较前统一 `norm()`。
+  **教训：门自己也要被验证**（与 M154 的「阈值太松 ⇒ 负控漏网」同族）。
+- **方法论（本轮最贵的一条）**：只做「两个实现互拍」会有一个盲区 —— **两侧可能在同一份错误输入上
+  一致地错**。本轮实踩两次：`node()` 漏包 `GraphProto.node` 的 field 1（内容泄漏到上一层）、
+  `node()` 漏包 `NodeProto.attribute` 的 field 5（属性被两侧一起当未知字段丢掉），两次都是
+  「事实集完全一致」而模型其实是错的。⇒ **构造性真值不可省**。
+- **登记（未修）· 缺陷 153**：`len(bytes)` 不支持（速查表已记为语言约定，用 `bytes_len`）——
+  与 Go 的 `len([]byte)` 有差异；本轮 ONNX 权重访问按既有约定走 `bytes_len`/`bytes_slice`。
+
 ## M155 —— 含内嵌 NUL 的字符串：字面量 → 常量池 → 渲染 → 输出（第 37 轮 · qg-issue 87 · 缺陷 148/150/151/152）
+
 
 - **背景（第 35 轮登记的缺陷 148）**：`"\u{0}"` 字面量在三轨被**静默丢弃**（`len("\u{0}") == 0`；
   `"\u{0}a"` 长 1 内容 `a`），且「三轨一致」——所以它不是轨道差异，而是**共同的上游**。

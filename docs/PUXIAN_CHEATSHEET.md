@@ -62,6 +62,14 @@
 >    门 `examples/m148_ieee_div/`（1176 行语料 × Go 本尊 × **VM/C/解释轨三轨** + 44 断言 +
 >    **往返性质** + **5 道负控**）。详见事实 124–127。
 
+> M156（2026-09-20，qg-issue 87 第 38 轮）：**零依赖 ONNX 解析面（覆盖表最后一行）** ——
+> token-cache 的 embedding 引擎在 Go 侧是 `embedding_engine_onnx.go`（`//go:build embed_onnx`），
+> 靠 **cgo + dlopen** `libonnxruntime.so`（生产二进制是**空桩**）。本轮在语言运行时内自己解
+> **protobuf wire**，**不 dlopen 任何外部库**。语言侧：`onnx_model_open(path)` /
+> `onnx_info(id)` / `onnx_initializer(id, name)` / `onnx_initializer_names(id)` /
+> `onnx_model_close(id)`（`--no-onnx` 可裁剪）。实测解析 90MB 的 MiniLM：**0.09s**、
+> 780 节点 / 101 initializer；`embeddings.word_embeddings.weight` 46,881,792 字节与
+> 独立参考实现 head16 逐字节一致。事实 163–166。
 > M155（2026-09-20，qg-issue 87 第 37 轮）：**含内嵌 NUL 的字符串：字面量 → 常量池 → 渲染 → 输出** ——
 > ① **缺陷 148 根治**（第 35 轮登记）：`"\u{0}"` 字面量此前在三轨被**静默丢弃**（`len("\u{0}") == 0`）。
 >    两层成因咬在一起：**发射层**（`cg_escape_str` 明确「NUL 丢弃」+ `px_str()` 按 C 串重造）与
@@ -1535,3 +1543,23 @@ set_timeout(fn (): print("once after 2s"), 2000)
      `PX_STR_LIT` 在生成的 C 里"未知"（pxfmt/pxdoc 直接编译失败）；此前 10 件"成功"只是因为它们
      的闭包里没有含 NUL 的字面量 ——**坑一直在，只是从未被照出来**。根治：重烘前删除同名副本
      （`shadow_clean`）。与缺陷 144（链错 runtime）同族：**「用哪一份运行时」必须可判定、可发现**。
+163. **`onnx_model_open` 一族的形状与错误约定（第 38 轮 · M156）**：成功 → `dict{ok,id,ir_version,graph,nodes,initializers,inputs,outputs}`；
+     失败 → **Err(result)**（用 `if type(r) == "result":` 判定，别直接 `.is_err()`）；
+     `onnx_info(id)` → JSON 字符串；`onnx_initializer(id,name)` → `{name,dtype,dtype_id,dims,nbytes,data:bytes}`；
+     `onnx_initializer_names(id)` → `[str]`；`onnx_model_close(id)` → bool（**幂等**：重复关返回 false；
+     关闭后再用别的接口 → Err）。句柄上限 **8** 个同时打开（模型含权重，90MB 级）。
+     三轨同候选（VM 默认轨 / C 轨 / 解释轨），解释轨需在 `interp.px` **名册**与 `ibuiltin.px` **分发**
+     两处同步（缺陷 155）。
+164. **protobuf 的两个坑（第 38 轮 · M156）**：① `int64`/`int32` 是**补码 varint** —— `-1` 编码成
+     **10 字节**（`ff ×9` + `01`），无符号读出来是 `2^64-1`；② **窄类型**（int8/uint8/bool/fp16/bf16）
+     在 `int32_data` 里**每元素一个 int32** ⇒ 必须取**低 elem_w 字节**（直接拷 4 字节会得到 4 倍长度
+     且字节错位）。另：`raw_data` 规范即**小端**，解析一律显式按小端解释（四档目标架构都是小端，
+     但代码不依赖这一点）。
+165. **`len(bytes)` 不支持（登记项）**：语言约定是 `bytes_len(b)`（见事实 496 一带），与 Go 的
+     `len([]byte)` 有差异 —— 本轮 ONNX 权重访问按既有约定走 `bytes_len` / `bytes_slice` /
+     `bytes_to_hex`。**这是已知的语言与 Go 的差异，不是缺陷**（写入登记以免每次都要重新发现）。
+166. **门的三种真值缺一不可（第 38 轮 · M156 的方法论）**：构造性真值（生成参数直接给出）+
+     独立实现（另一份手写解码器）+ 被测实现。**只做「两实现互拍」会漏「两侧在同一份错误输入上
+     一致地错」** —— 本轮实踩两次（生成器漏包 `GraphProto.node` 的 field 1 / 漏包
+     `NodeProto.attribute` 的 field 5，两次都是"事实集完全一致"而模型是错的）。同理：门自己的
+     比较逻辑也要验证（缺陷 156：tuple/list 形状不一致 ⇒ 12/12 全判不一致）。
