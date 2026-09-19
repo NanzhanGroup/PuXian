@@ -19,6 +19,38 @@ def cg_dirname(path):
             return path[0:i]
         i -= 1
     return "."
+# 缺陷 131：路径规范化（词法级）—— 消除 "./x.px" 与 "./../dir/x.px" 指向同一文件却
+# 当成两个模块的情形。只做 ".", "..", 重复 "/" 的折叠，不碰真实文件系统（不解析符号链接）。
+def cg_norm_path(p):
+    let abs = len(p) > 0 and p[0] == "/"
+    let parts = []
+    var cur = ""
+    var i = 0
+    while i <= len(p):
+        if i == len(p) or p[i] == "/":
+            if cur == "..":
+                if len(parts) > 0 and parts[len(parts) - 1] != "..":
+                    parts.pop()
+                elif not abs:
+                    parts.append("..")
+            elif cur != "" and cur != ".":
+                parts.append(cur)
+            cur = ""
+        else:
+            cur += p[i]
+        i += 1
+    var out = ""
+    var j = 0
+    while j < len(parts):
+        out += "/" + parts[j]
+        j += 1
+    if abs:
+        if out == "":
+            return "/"
+        return out
+    if out == "":
+        return "."
+    return out[1:len(out)]
 # stdlib 目录定位：PX_STDLIB env → 候选路径（开发/安装布局）
 def cg_stdlib_dir():
     let e = env("PX_STDLIB")
@@ -170,7 +202,14 @@ def cg_load_module(module, names, base_dir, out, std_defined):
             cg_perr("E3005", "找不到模块 '" + key + "'" + hint)
         cg_pwarn("找不到模块 '" + key + "'（已跳过 → 运行期将报未定义）" + hint)
         return
+    # 缺陷 131：同一文件经不同拼写（"./x.px" / "./../dir/x.px"）到达时 key 不同
+    # ⇒ 修前重复加载并重复导出定义（C 轨 redefinition / VM 轨静默覆盖）。
+    # 以规范化路径做二次去重；"#" 前缀键与模块名键隔离，无需新增全局。
+    let nkey = "#" + cg_norm_path(path)
+    if loaded.has(nkey):
+        return
     loaded[key] = path
+    loaded[nkey] = path
     let src = read_file(path)
     p_toks = lex_tokens(src)
     p_pos = 0

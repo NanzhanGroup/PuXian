@@ -528,6 +528,15 @@ def i_call_builtin(name, args, pos):
         if len(args) == 2:
             return Ok(fmt_float_dec(args[0], args[1]))
         return Ok(fmt_float_dec(args[0]))
+    if name == "go_float_text":
+        # M148（第 30 轮，缺陷 132）：Go `fmt.Sprint` 的浮点文本（`%v`：
+        #   最短往返、不带尾随 ".0"、十进制指数 >=6 即科学计数、两位指数）。
+        #   与语言自身的 str() 约定**不同**，两族并存。bits 缺省 64（可用 32）。
+        if len(args) != 1 and len(args) != 2:
+            return Err(i_r1002("go_float_text 需要 (值[, bits])", pos))
+        if len(args) == 2:
+            return Ok(go_float_text(args[0], args[1]))
+        return Ok(go_float_text(args[0]))
     if name == "json_num_str":
         # M143：Go `encoding/json` 的浮点文本（bits=32 走 32 位最短往返；非有限值 → null）。
         if len(args) != 1 and len(args) != 2:

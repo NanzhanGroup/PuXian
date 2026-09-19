@@ -98,8 +98,18 @@ def i_to_str_raw(v):
     return str(v)
 # 浮点渲染（对齐 value.rs fmt_float）：
 #   整值且有限且 |f| < 1e15 → 确保 ".0" 后缀（编译模式 str(float) 用 %g 会丢 .0）
+#   M148：**非有限值在返回前短路** —— 文本仍走 `str(f)` 的**语言约定**
+#     （`inf` / `-inf` / `nan`，与 golden/s09 一致；Go 的 `+Inf`/`NaN` 由
+#     `go_float_text` / `fmt_float_dec` 提供），短路只为**避免 `int(±Inf)`**
+#     这种未定义转换。
 def i_fmt_float(f):
     var s = str(f)
+    if f != f:
+        return s
+    if f > 1.7976931348623157e308:
+        return s
+    if f < (0.0 - 1.7976931348623157e308):
+        return s
     var absf = f
     if f < 0.0:
         absf = -f
@@ -506,8 +516,10 @@ def i_bin_numeric(op, l, r, pos):
         if op == "Mul":
             return Ok(l * r)
         if op == "Div":
-            if r == 0:
-                return Err(i_r1006("除零错误", pos))
+            # M148（缺陷 118）：`/` = IEEE 754 浮点除法，永不报错（÷0 → ±Inf / NaN）。
+            #   整数操作数也走浮点除法（语言定义：`/` 就是浮点除法，`//` 才是整除）
+            #   ⇒ 与 C 轨 px_div / VM 轨 PXOP_DIV 逐字对齐。修前这里对 r==0 报
+            #   R1006「除零错误」。
             return Ok(float(l) / float(r))
         if op == "IntDiv":
             if r == 0:
@@ -545,8 +557,7 @@ def i_bin_numeric(op, l, r, pos):
     if op == "Mul":
         return Ok(a * b)
     if op == "Div":
-        if b == 0.0:
-            return Err(i_r1006("除零错误", pos))
+        # M148（缺陷 118）：同上 —— 浮点除法完全 IEEE（÷0 → ±Inf / NaN）
         return Ok(a / b)
     if op == "IntDiv":
         if b == 0.0:
