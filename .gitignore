@@ -57,3 +57,7 @@ examples/m103_s2a/artifacts/
 examples/m103_s2b/artifacts/
 examples/m103_s2c/artifacts/
 examples/m103_s2d/artifacts/
+
+# Python 字节码缓存（M157 顺手清理：m156 的两个 .pyc 曾被误提交，且每次 import 都会变）
+__pycache__/
+*.pyc
