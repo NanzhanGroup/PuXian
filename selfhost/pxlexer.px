@@ -165,36 +165,43 @@ def handle_line_start():
     g_at_line_start = false
 # ---------- 注释 ----------
 def skip_comment():
-    var text = ""
+    # M154（第 36 轮 · 分配率第二刀）：注释体 `text += advance()` 逐字符追加 ⇒ 分配数 =
+    #   注释长度、复制量 O(L²)（实测整图编译 18.4 万次分配，榜第 4）。改「列表 + 一次 join」。
+    var _parts = []
     if peek2() == "|":
-        text += advance()
-        text += advance()
+        _parts.append(advance())
+        _parts.append(advance())
         var depth = 1
         while depth > 0:
             let c = peek()
             if c == "":
                 err("E1002", "块注释未闭合（缺少 |#）")
             elif c == "#" and peek2() == "|":
-                text += advance()
-                text += advance()
+                _parts.append(advance())
+                _parts.append(advance())
                 depth += 1
             elif c == "|" and peek2() == "#":
-                text += advance()
-                text += advance()
+                _parts.append(advance())
+                _parts.append(advance())
                 depth -= 1
             else:
-                text += advance()
+                _parts.append(advance())
     else:
         while peek() != "" and peek() != "\n":
-            text += advance()
-    return text
+            _parts.append(advance())
+    return join("", _parts)
 # ---------- 标识符 / 关键字 ----------
 def scan_ident_token():
     let pos_line = g_line
     let pos_col = g_col
-    var s = ""
+    # M154（第 36 轮 · 分配率第二刀）：`s += advance()` 是逐字符追加 ⇒ 长度 L 的标识符
+    #   产生 L 次字符串分配 + O(L²) 复制（实测整图编译本循环 **17.6 万次分配**，榜第 5）。
+    #   改为「字符列表 + 一次 join」：join 单次分配（M152 游标 memcpy），列表元素是
+    #   已池化的单字符对象（M153）⇒ 循环内近乎零分配。字节口径不变。
+    var _parts = []
     while is_ident_continue(peek()):
-        s += advance()
+        _parts.append(advance())
+    let s = join("", _parts)
     if KEYWORDS.has(s):
         return [KEYWORDS[s], "", pos_line, pos_col]
     return ["标识符", s, pos_line, pos_col]
@@ -555,33 +562,35 @@ def char_debug(c):
     return "'" + c + "'"
 # ---------- 字符串 debug 表示（对齐 Rust {:?}） ----------
 def rust_str_debug(s):
-    var out = "\""
+    # M154（第 36 轮 · 分配率第二刀）：逐字符 `out += …` 累积 ⇒ 分配数 = 串长、
+    #   复制量 O(L²)（实测整图编译 19.0+3.9 万次分配）。改「片段列表 + 一次 join」。
+    var _parts = ["\""]
     var i = 0
     while i < len(s):
         let c = s[i]
         if c == "\n":
-            out += "\\n"
+            _parts.append("\\n")
         elif c == "\t":
-            out += "\\t"
+            _parts.append("\\t")
         elif c == "\r":
-            out += "\\r"
+            _parts.append("\\r")
         elif c < "\u{1}":
-            out += "\\0"
+            _parts.append("\\0")
         elif c == "\"":
-            out += "\\\""
+            _parts.append("\\\"")
         elif c == "\\":
-            out += "\\\\"
+            _parts.append("\\\\")
         elif c >= " " and c <= "~":
-            out += c
+            _parts.append(c)
         elif c == "\u{a0}":
-            out += "\\u{a0}"
+            _parts.append("\\u{a0}")
         elif c > "\u{a0}":
-            out += c
+            _parts.append(c)
         else:
-            out += "\\u{" + ctrl_hex(c) + "}"
+            _parts.append("\\u{" + ctrl_hex(c) + "}")
         i += 1
-    out += "\""
-    return out
+    _parts.append("\"")
+    return join("", _parts)
 def ctrl_codepoint(c):
     var idx = 0
     while idx < len(CTRL_ALL):

@@ -55,45 +55,45 @@ def it_find(s, sub):
 # 对齐 codegen.px rust_unescape（AST 字段为 debug 格式）
 def rust_unescape(s):
     let body = s[1:len(s) - 1]
-    var out = ""
+    var _out = []
     var i = 0
     while i < len(body):
         let c = body[i]
         if c == "\\":
             let nxt = body[i + 1]
             if nxt == "n":
-                out += "\n"
+                _out.append("\n")
                 i += 2
             elif nxt == "t":
-                out += "\t"
+                _out.append("\t")
                 i += 2
             elif nxt == "r":
-                out += "\r"
+                _out.append("\r")
                 i += 2
             elif nxt == "0":
-                out += "\u{0}"
+                _out.append("\u{0}")
                 i += 2
             elif nxt == "\"":
-                out += "\""
+                _out.append("\"")
                 i += 2
             elif nxt == "\\":
-                out += "\\"
+                _out.append("\\")
                 i += 2
             elif nxt == "u":
                 var j = i + 3
-                var hex = ""
+                var _hex = []
                 while j < len(body) and body[j] != "}":
-                    hex += body[j]
+                    _hex.append(body[j])
                     j += 1
-                out += hex_to_char(hex)
+                _out.append(hex_to_char(join("", _hex)))
                 i = j + 1
             else:
-                out += nxt
+                _out.append(nxt)
                 i += 2
         else:
-            out += c
+            _out.append(c)
             i += 1
-    return out
+    return join("", _out)
 # ---------- 值包装构造 ----------
 # 用户函数包装：{"__ufn__": {"name","params","ret","body","closure","implicit"}}
 #   body：list（stmts）或表达式节点；闭包 fn 表达式用 [ExprStmt]

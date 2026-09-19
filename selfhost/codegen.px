@@ -248,7 +248,7 @@ def cg_ty_name(ty):
         return "{" + cg_ty_name(ty[1]) + ": " + cg_ty_name(ty[2]) + "}"
     return "any"
 def cg_func_cname(name):
-    var out = ""
+    var _out = []
     var i = 0
     while i < len(name):
         let c = name[i]
@@ -256,11 +256,11 @@ def cg_func_cname(name):
         let b = c >= "A" and c <= "Z"
         let d = c >= "0" and c <= "9"
         if a or b or d:
-            out += c
+            _out.append(c)
         else:
-            out += "_"
+            _out.append("_")
         i += 1
-    return out
+    return join("", _out)
 def cg_find(s, sub):
     let n = len(s)
     let m = len(sub)
@@ -278,86 +278,86 @@ def cg_find(s, sub):
         i += 1
     return -1
 def cg_pad(n):
-    var s = ""
+    var _s = []
     var i = 0
     while i < n:
-        s += "    "
+        _s.append("    ")
         i += 1
-    return s
+    return join("", _s)
 # 字符串 debug 格式（rust_str_debug，带引号）→ 原始字符串
 def rust_unescape(s):
     let body = s[1:len(s) - 1]
-    var out = ""
+    var _out = []
     var i = 0
     while i < len(body):
         let c = body[i]
         if c == "\\":
             let nxt = body[i + 1]
             if nxt == "n":
-                out += "\n"
+                _out.append("\n")
                 i += 2
             elif nxt == "t":
-                out += "\t"
+                _out.append("\t")
                 i += 2
             elif nxt == "r":
-                out += "\r"
+                _out.append("\r")
                 i += 2
             elif nxt == "0":
-                out += "\u{0}"
+                _out.append("\u{0}")
                 i += 2
             elif nxt == "\"":
-                out += "\""
+                _out.append("\"")
                 i += 2
             elif nxt == "\\":
-                out += "\\"
+                _out.append("\\")
                 i += 2
             elif nxt == "u":
                 var j = i + 3
-                var hex = ""
+                var _hex = []
                 while j < len(body) and body[j] != "}":
-                    hex += body[j]
+                    _hex.append(body[j])
                     j += 1
-                out += hex_to_char(hex)
+                _out.append(hex_to_char(join("", _hex)))
                 i = j + 1
             else:
-                out += nxt
+                _out.append(nxt)
                 i += 2
         else:
-            out += c
+            _out.append(c)
             i += 1
-    return out
+    return join("", _out)
 # 对齐 Rust codegen.escape_str（原始字符串 → C 字面量转义）
 def cg_escape_str(s):
-    var out = ""
+    var _out = []
     var i = 0
     while i < len(s):
         let c = s[i]
         if c == "\\":
-            out += "\\\\"
+            _out.append("\\\\")
         elif c == "\"":
-            out += "\\\""
+            _out.append("\\\"")
         elif c == "\n":
-            out += "\\n"
+            _out.append("\\n")
         elif c == "\r":
-            out += "\\r"
+            _out.append("\\r")
         elif c == "\t":
-            out += "\\t"
+            _out.append("\\t")
         elif c == "\u{0}":
             # NUL：编译版字符串按 strlen 截断无法表达 NUL；与 Rust codegen.rs
             # escape_str（NUL 丢弃）保持一致（M-B8 自举证明）
-            out += ""
+            _out.append("")
         else:
-            out += c
+            _out.append(c)
         i += 1
-    return out
+    return join("", _out)
 # 指数格式展开（编译版 C 运行时 %g 输出 "1.5e+10" → Rust f64 Display 定点 "15000000000"）
 def cg_pad_zeros(n):
-    var s = ""
+    var _s = []
     var i = 0
     while i < n:
-        s += "0"
+        _s.append("0")
         i += 1
-    return s
+    return join("", _s)
 def cg_expand_sci(s):
     var ei = -1
     var i = 0

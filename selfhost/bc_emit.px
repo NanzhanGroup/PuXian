@@ -1833,7 +1833,12 @@ def bc_emit_c_program(prog):
         var pc = 0
         while pc < len(f["bc"]):
             let ins = f["bc"][pc]
-            out.push("    {PXOP_" + ins[0] + ", " + str(ins[1]) + ", " + str(ins[2]) + ", " + str(ins[3]) + ", " + str(ins[4]) + "},\n")
+            # M154（第 36 轮 · 分配率第二刀）：单条指令的 C 文本由 **7 段 `+` 链**改为
+            #   `join("", [...])` —— 前者每条指令新建 6 个中间串（且**逐级复制前缀**），
+            #   后者一次装配（M152 的 join 是游标 memcpy、单次分配）。实测整图编译里本行
+            #   独占 **108.9 万次分配（占全部 36%）**，是分配榜第一名。字节口径不变
+            #   （join 与 `+` 同为按显式长度拼接，见 M154 缺陷 149）。
+            out.push(join("", ["    {PXOP_", ins[0], ", ", str(ins[1]), ", ", str(ins[2]), ", ", str(ins[3]), ", ", str(ins[4]), "},\n"]))
             pc += 1
         out.push("};\n")
         fi += 1
