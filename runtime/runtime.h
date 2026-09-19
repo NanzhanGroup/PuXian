@@ -141,8 +141,13 @@ LXValue px_int(int64_t i);
 LXValue px_float(double f);
 LXValue px_str(const char* s);
 LXValue px_str_len(const char* s, int len);
+// M155（第 37 轮 · 缺陷 148）：含内嵌 NUL 的**常量** —— 长度由 C 的 `sizeof(lit) - 1` 在
+//   **编译期**给出（发射器无需「字节长」函数；八进制 `\000` 转义与值字节一一对应）。
+//   红线：只能用于**字符串字面量**（sizeof 对指针/表达式语义不同）。
+#define PX_STR_LIT(lit) px_str_len(lit, (int)sizeof(lit) - 1)
 // M153（第 35 轮）：常量池 —— **仅限地址恒定的静态字面量**（不得传栈/堆缓冲）
 LXValue px_str_const(const char* s);
+LXValue px_str_const_n(const char* s, int len);   // M155：显式字节长（含内嵌 NUL 的常量）
 // M23b：二进制安全字节串构造（复制 len 字节，可含 NUL）
 LXValue px_bytes_len(const void* data, int len);
 LXValue px_list(int cap);

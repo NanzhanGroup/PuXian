@@ -270,8 +270,12 @@ static LXValue vm_loadk(const PxK* k, const PxBCModule* mod) {
     switch (k->kind) {
     case PXK_INT:   return px_int(k->i);
     case PXK_FLT:   return px_float(k->f);
-    case PXK_STR:   return px_str_const(k->s ? k->s : "");   // M153：字面量常量池
-                                                                // （BC 镜像的 K 表 payload 地址恒定）
+    case PXK_STR: {                                  // M153：字面量常量池
+                                                     // （BC 镜像的 K 表 payload 地址恒定）
+        const char* s = k->s ? k->s : "";
+        if (k->i > 0) return px_str_const_n(s, (int)k->i);  // M155：显式字节长（含内嵌 NUL）
+        return px_str_const(s);                             // 旧口径（i=0 ⇒ strlen）
+    }
     case PXK_BOOL:  return px_bool(k->i != 0);
     case PXK_FUNC:
         if (mod && k->i >= 0 && k->i < mod->nfuncs) {
