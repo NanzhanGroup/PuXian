@@ -410,7 +410,7 @@ def cg_expand_sci(s):
 # 对齐 Rust f64 Display（codegen 里 px_float({}) 用 Display：2.0 → "2"；1e15 → "1000000000000000"）
 def cg_fmt_float(v):
     var s = str(v)
-    if s == "inf" or s == "-inf" or s == "nan":
+    if s == "inf" or s == "-inf" or s == "nan" or s == "-nan":
         return s
     s = cg_expand_sci(s)
     let n = len(s)

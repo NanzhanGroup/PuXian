@@ -662,12 +662,12 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
         case PXOP_SUB:    VM_BIN_F(vm_int(_x.as.i - _y.as.i), px_sub(_x, _y)); break;
         case PXOP_MUL:    VM_BIN_F(vm_int(_x.as.i * _y.as.i), px_mul(_x, _y)); break;
         case PXOP_DIV: {
-            // px_div：d=num_val(b) 为 0 → px_error，随后仍返回 float 除法（逐字对齐）
+            // M148（缺陷 118）：`/` = IEEE 754 浮点除法，**永不报错**（÷0 → ±Inf /
+            //   NaN），与 px_div 逐字对齐。修前 INT-INT 分支对零除数 px_error，
+            //   与 C 轨（px_div 亦报错）一致 —— 现在两条都放开。
             LXValue x = slots[in.b], y = slots[in.c];
             if (x.type == PX_INT && y.type == PX_INT) {
-                double d = (double)y.as.i;
-                if (d == 0) px_error("除零错误");
-                slots[in.a] = vm_float((double)x.as.i / d);
+                slots[in.a] = vm_float((double)x.as.i / (double)y.as.i);
             } else slots[in.a] = px_div(x, y);
             break;
         }
