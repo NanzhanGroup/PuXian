@@ -48,7 +48,11 @@ def bc_k_find(pool, kind, i, f, s):
                 if e["i"] == i:
                     return idx
             elif kind == "float":
-                if e["f"] == f:
+                # 缺陷 129：**必须按位模式比**。`-0.0 == 0.0` 为真 ⇒ 按 == 去重会把
+                #   `-0.0` 常量折到先出现的 `+0.0` 上，符号位在**常量池**就丢了
+                #   （缺陷 128 的两条通路之一；另一条是一元负号的折叠写法）。
+                #   顺带：NaN 的 `==` 恒假 ⇒ 按 == 比会每次新增常量（也不对）。
+                if float64_bits(e["f"]) == float64_bits(f):
                     return idx
             elif kind == "str":
                 if e["s"] == s:
@@ -286,6 +290,13 @@ def bc_emit_int(func, dst, i):
     else:
         let k = bc_k_add(g_bcm["k_pool"], "int", i, 0.0, "")
         bc_emit_inst(func, "LOADK", dst, k, 0)
+# bc_neg_float(v) —— 一元负号（**翻 IEEE754 符号位**）。
+#   缺陷 128：`0 - v` 在 v == 0.0 时给 +0.0（IEEE 的 0-0=+0，舍入到最近），
+#   而一元负号在 C 轨/解释轨是 `-x`（翻符号位）⇒ 修前 VM 轨的 `-0.0` 字面量
+#   丢失符号位、与其余两轨**不一致**。位模式异或对 ±0/±Inf/NaN 全部逐位正确。
+#   `0 - 9223372036854775807 - 1` = INT64_MIN = 0x8000000000000000（只用符号位）。
+def bc_neg_float(v):
+    return bits_to_float64(float64_bits(v) ^ (0 - 9223372036854775807 - 1))
 # 发 float 常量到 dst 槽（K 池 LOADK）
 def bc_emit_float(func, dst, f):
     let k = bc_k_add(g_bcm["k_pool"], "float", 0, f, "")
@@ -359,7 +370,13 @@ def bc_emit_expr(expr, dst, func):
             bc_emit_int(func, dst, 0 - inner[1])
             return dst
         if inner[0] == "Float" and op == "Neg":
-            bc_emit_float(func, dst, 0 - inner[1])
+            # 缺陷 128：**不能**用 `0 - v` 折叠 —— IEEE754 的 `0 - 0` 是 **+0.0**，
+            #   而一元负号是"翻符号位"（`-0.0` 必须保持 `0x8000000000000000`）。
+            #   修前 VM 轨 `float64_bits(-0.0)` 给 `0000000000000000`（符号丢失），
+            #   而 C 轨/解释轨给 `8000000000000000` ⇒ **双轨不一致**（m147 门照出）。
+            #   修法：直接翻位模式的符号位（M146 的 float64_bits / bits_to_float64），
+            #   对 ±0 / ±Inf / NaN 全部逐位正确。
+            bc_emit_float(func, dst, bc_neg_float(inner[1]))
             return dst
         var d = dst
         if d < 0:

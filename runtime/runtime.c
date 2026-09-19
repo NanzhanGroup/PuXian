@@ -387,6 +387,21 @@ static LXValue bi_float32(LXValue* args, int nargs, void* ctx);
 static LXValue bi_float32_bits(LXValue* args, int nargs, void* ctx);
 static LXValue bi_bits_to_float32(LXValue* args, int nargs, void* ctx);
 static LXValue bi_json_num_str(LXValue* args, int nargs, void* ctx);
+// ═══ M147（第 29 轮）：定点小数文本 native `fmt_float_dec(x[, dec])` ═══
+//   问题：语言里**没有** `%.Nf`。token-cache 侧三个地方需要 Go `fmt.Sprintf("%.2f")`
+//   语义的文案（规则摘要的置信度 %.2f / 聚类的阈值 %.2f / 探索日志 %.3f、%.4f），
+//   而此前是**手搓定点**（`ceng_pct2` 走 `floor(x*100+0.5)` ⇒ 四舍五入-半**向上**）。
+//   Go（以及 glibc）对**精确并列**用 round-half-even：
+//        0.125  → Go "0.12"   手搓 "0.13"
+//        2.625  → Go "2.62"   手搓 "2.63"
+//        3.5/4.5 的 %.0f → Go "4"/"4"   手搓 "4"/"5"
+//   ⇒ 只要语料里出现可精确表示的 `.x5`，手搓实现就与 Go 分叉（不是"很少见"，是**必然**）。
+//   修法：交给 libc 的 `snprintf("%.*f")` —— glibc 与 Go 都按**二进制精确值**做正确舍入、
+//   并列取偶，逐字节一致（`1e20` 两侧都给精确整数展开 `100000000000000000000.00`）。
+//   Go 的 fmt 对非有限值有专门文本（`NaN` / `+Inf` / `-Inf`），libc 给 `nan`/`inf`
+//   ⇒ 必须显式分支（否则移植会在探针里"看起来只是大小写不同"）。
+//   `dec` 缺省 6（= Go `%f` 的默认精度）；钳到 0..64。
+static LXValue bi_fmt_float_dec(LXValue* args, int nargs, void* ctx);
 // ═══ M146（第 27 轮）：float64 位模式族（float64_bits / bits_to_float64）═══
 //   M143 补了 32 位的一对（float32_bits / bits_to_float32），但 **64 位的对应项**一直缺失
 //   ⇒ 语言里读不出 float64 的位模式。后果不是"少个糖"：
@@ -9478,6 +9493,7 @@ void px_register_builtins(void) {
     px_set_global("float64_bits", px_native("float64_bits", bi_float64_bits));
     px_set_global("bits_to_float64", px_native("bits_to_float64", bi_bits_to_float64));
     px_set_global("json_num_str", px_native("json_num_str", bi_json_num_str));
+    px_set_global("fmt_float_dec", px_native("fmt_float_dec", bi_fmt_float_dec));   // M147：Go %.<dec>f
     px_set_global("append_file_opt", px_native("append_file_opt", bi_append_file_opt));
     // 同时登记进 FFI 桥（ffi_call 按名调用表）：
     //   解释器轨的内置分发层 selfhost/ibuiltin.px 与 selfhost/env.px 同编译单元，
@@ -9499,6 +9515,7 @@ void px_register_builtins(void) {
     px_ffi_register("float64_bits", bi_float64_bits);
     px_ffi_register("bits_to_float64", bi_bits_to_float64);
     px_ffi_register("json_num_str", bi_json_num_str);
+    px_ffi_register("fmt_float_dec", bi_fmt_float_dec);
     px_ffi_register("append_file_opt", bi_append_file_opt);
 
     px_set_global("signal", px_native("signal", bi_signal));
@@ -9911,6 +9928,32 @@ static LXValue bi_json_num_str(LXValue* args, int nargs, void* ctx) {
     char buf[64];
     if (bits == 32) jgo_format_float32(buf, sizeof(buf), d);
     else jgo_format_float(buf, sizeof(buf), d);
+    return px_str(buf);
+}
+
+// fmt_float_dec(x[, dec]) → str —— Go `strconv.FormatFloat(x,'f',dec,64)` /
+//   `fmt.Sprintf("%.*f", dec, x)`。**并列取偶**（libc `snprintf` 与 Go 同规则）。
+//   NaN → "NaN"、±Inf → "+Inf"/"-Inf"（Go 的 fmt 文本；libc 是 nan/inf）。
+//   入参类型面：int / float（bool 与 str 不接受 —— 定点文本只有数值有意义，
+//   与 `json_num_str` 的"数值或报错"同口径）。
+static LXValue bi_fmt_float_dec(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 && nargs != 2) px_error("R1002: fmt_float_dec 需要 (值[, 小数位])");
+    double d;
+    if (args[0].type == PX_FLOAT) d = args[0].as.f;
+    else if (args[0].type == PX_INT) d = (double)args[0].as.i;
+    else { px_error("R1002: fmt_float_dec 的第一个参数需要数值"); return px_null(); }
+    int dec = 6;
+    if (nargs == 2) {
+        if (args[1].type != PX_INT) px_error("R1002: fmt_float_dec 的小数位需要 int");
+        dec = (int)args[1].as.i;
+    }
+    if (dec < 0) dec = 0;
+    if (dec > 64) dec = 64;
+    if (isnan(d)) return px_str("NaN");
+    if (isinf(d)) return px_str(d > 0 ? "+Inf" : "-Inf");
+    char buf[512];
+    snprintf(buf, sizeof(buf), "%.*f", dec, d);
     return px_str(buf);
 }
 
