@@ -1,0 +1,44 @@
+# M158（第 40 轮 · 缺陷 114）加强层：解释轨闭包捕获经桥传入 runtime native
+# ------------------------------------------------------------
+# 判据：**闭包捕获（upvalue / cell）在 native 回调里语义正确** —— 即桥把**原函数值**
+#   带过去了，而不是造了个空壳函数：
+#     · hits 是 make_ticker 的**局部变量**，回调里累加 ⇒ 跨多次回调保持
+#     · 引用语义（与解释轨 env 链、编译轨 M129 cell 一致）
+# 覆盖轨：解释轨（bootstrap/pxi）+ C 轨逃生舱。
+#   形态用**匿名 fn 表达式**（编译轨 M129 cell 覆盖的形态）。
+#   VM 轨当前有已知缺口（缺陷 159：闭包 upvalue 未实现；且 bc_emit 不支持函数体内
+#   FuncDef）⇒ 门按 SKIP 处理并打印缺口编号（修好后应升为三轨一致）。
+var pass = 0
+var fail = 0
+
+def check(cond, name):
+    if cond:
+        pass = pass + 1
+    else:
+        fail = fail + 1
+        print("FAIL " + name)
+
+var n_interval = 0
+var seen = []
+
+def make_ticker():
+    var hits = 0
+    let on_tick = fn ():
+        hits = hits + 1
+        n_interval = hits
+        seen.append(hits)
+    return on_tick
+
+def main():
+    let ticker = make_ticker()
+    check(type(ticker) == "function", "闭包值类型是 function")
+    let tid = set_interval(ticker, 20)
+    sleep(140)
+    clear_timer(tid)
+    check(n_interval >= 3, "闭包回调 >= 3 次，实际 " + str(n_interval))
+    check(len(seen) >= 2 and seen[0] == 1, "首次回调 hits == 1（闭包初值）")
+    check(len(seen) >= 2 and seen[1] == 2, "第二次回调 hits == 2（upvalue 引用语义累加）")
+    check(len(seen) == n_interval, "回调序列长度与计数同步")
+    print("pass=" + str(pass) + " fail=" + str(fail))
+    if fail > 0:
+        exit(1)

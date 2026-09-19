@@ -1,0 +1,55 @@
+# M158（第 40 轮 · 缺陷 114）：解释轨函数值 → runtime native 桥
+# ------------------------------------------------------------
+# 背景：解释轨把用户函数包装成 dict（__ufn__ / __builtin__），而 runtime native
+#   按 PX_FUNC/PX_NATIVE 校验函数参数 ⇒ 直接转发会 px_error（**不可捕获**）终止进程
+#   ⇒ 解释轨用户代码里「把函数值传给 runtime native」整族不可用（缺陷 114）。
+#   M158 建立双向桥（interp_bridge_install 注册调度器 + bi_ffi_call 自动桥接）。
+# 本用例只使用**三轨都可编译**的写法（顶层命名函数），判据：
+#   ① 解释轨 / VM 轨 / C 轨 stdout 逐字节一致；
+#   ② 用例内含绝对值断言（不是"三轨一起错就看不出"）。
+# 闭包捕获（upvalue）另见 interp_fn_closure.px（VM 轨有已知缺口 159）。
+var pass = 0
+var fail = 0
+
+def check(cond, name):
+    if cond:
+        pass = pass + 1
+    else:
+        fail = fail + 1
+        print("FAIL " + name)
+
+# ---- 1) set_timeout：顶层命名函数 ----
+var n_timeout = 0
+def on_timeout():
+    n_timeout = n_timeout + 1
+
+# ---- 2) set_interval：顶层命名函数（周期回调，验证多次调用） ----
+var n_interval = 0
+var seen = []
+def on_tick():
+    n_interval = n_interval + 1
+    seen.append(n_interval)
+
+# ---- 3) signal：顶层命名函数（只验证注册路径走通；触发需外部 kill） ----
+var n_signal = 0
+def on_sig(sig):
+    n_signal = n_signal + 1
+
+def main():
+    set_timeout(on_timeout, 10)
+    let tid = set_interval(on_tick, 20)
+    let sigok = signal(10, on_sig)
+    check(sigok == true, "signal 注册成功")
+    check(type(on_tick) == "function", "函数值类型是 fn")
+    check(type(on_timeout) == "function", "函数值类型是 fn（timeout）")
+    sleep(150)
+    clear_timer(tid)
+    check(n_timeout == 1, "set_timeout 回调恰 1 次，实际 " + str(n_timeout))
+    check(n_interval >= 3, "set_interval 回调 >= 3 次，实际 " + str(n_interval))
+    check(len(seen) == n_interval, "回调序列长度与计数同步")
+    check(len(seen) >= 1 and seen[0] == 1, "首次回调计数 == 1")
+    check(len(seen) >= 2 and seen[1] == 2, "第二次回调计数 == 2")
+    check(n_signal == 0, "未发信号的 handler 计数为 0")
+    print("pass=" + str(pass) + " fail=" + str(fail))
+    if fail > 0:
+        exit(1)

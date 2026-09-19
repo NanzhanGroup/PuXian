@@ -146,6 +146,13 @@ run m156_onnx bash examples/m156_onnx/verify.sh
 #   · 执行器行为（乱序可跑 / 未知算子·环·广播·缺 feed 必须报错）· erf 1001 点精度
 #   · 真实模型端到端（可选）· C 侧负控 2 道（含"编译失败也算没能证明"）
 run m157_onnx_exec bash examples/m157_onnx_exec/verify.sh
+# ── M158（第 40 轮）：解释轨函数值 → runtime native 桥（缺陷 114 根治）+ type 口径（缺陷 161）──
+#   背景：解释轨把用户函数包装成 dict，而 runtime native 按 PX_FUNC 校验 ⇒ 解释轨
+#   `set_interval(fn (): …)` 报 R1002（**不可捕获**）⇒ 函数值传给 native 整族不可用。
+#   判据：三轨（解释轨 / VM / C）stdout 逐字节一致 + type(函数值)=="function" 口径守卫
+#   + 3 道负控（关自动桥接 / 不装调度器 / 调度器忽略函数值 —— 每道必须判红 + 逐字节还原）。
+#   另含已知缺口报告（缺陷 159 VM 轨闭包 upvalue / 160 C 轨嵌套闭包捕获，SKIP 不计失败）。
+run m158_interp_fn bash examples/m158_interp_fn/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们
