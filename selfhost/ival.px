@@ -19,14 +19,18 @@
 # + 容器递归（可能内嵌包装值）+ 错误消息对齐。
 # 返回 Result 的函数用 ? 传播子错误（仅 i_call_function 边界区分 __prop__）。
 # ============================================================
-# ---------- 类型名（对齐 interp.rs type_name） ----------
+# ---------- 类型名（对齐 runtime px_type_name） ----------
+# M158 附带修复（缺陷 161）：函数值类型名此前是 "fn"/"builtin"，而 runtime
+#   （px_type_name）返回 "function"/"native" ⇒ `type(f)` 三轨分叉（速查表事实
+#   39/122 的"三轨一致"契约、MINI_SUBSET 类型名表都写 function）。本文件与
+#   icall.px 的类型判断同步改为 runtime 口径。
 def i_type_name(v):
     let t = type(v)
     if t == "dict":
         if v.has("__ufn__"):
-            return "fn"
+            return "function"
         if v.has("__builtin__"):
-            return "builtin"
+            return "native"
         if v.has("__struct__"):
             return "struct"
         if v.has("__enum__"):
@@ -78,9 +82,9 @@ def i_to_str_raw(v):
             i += 1
         let sp = sorted(parts)
         return "{" + join(", ", sp) + "}"
-    if t == "fn":
+    if t == "function":
         return "<fn " + v["__ufn__"]["name"] + ">"
-    if t == "builtin":
+    if t == "native":
         return "<builtin " + v["__builtin__"] + ">"
     if t == "struct":
         return "<struct " + v["__struct__"] + ">"
@@ -239,11 +243,11 @@ def i_eq_raw(a, b):
                 return false
             i += 1
         return true
-    if ta == "fn" and tb == "fn":
+    if ta == "function" and tb == "function":
         return a["__ufn__"]["name"] == b["__ufn__"]["name"]
     if ta == "type" and tb == "type":
         return a["name"] == b["name"]
-    if ta == "builtin" and tb == "builtin":
+    if ta == "native" and tb == "native":
         return a["__builtin__"] == b["__builtin__"]
     if ta == "generator" and tb == "generator":
         return i_eq(a["__gen__"], b["__gen__"])
