@@ -1,0 +1,33 @@
+# ══════════════════════════════════════════════════════════════════════
+# onnx_exec.px —— M157 门用：跑一张 .onnx 图并把输出落盘（语言侧唯一入口）
+# ---------------------------------------------------------------
+# 用法： onnx_exec <model.onnx> <feeds.json> <out.json>
+#   feeds.json 形如 {"X": {"dims":[1,4], "dtype":"float", "f32":[...]}, ...}
+#   —— 该字典**直接**就是 onnx_run 的 feeds 参数（门与参考实现共用同一份）。
+# 输出 JSON：{"ok":true,"nodes":N,"by_op":{...},"outputs":{名:{"dims","dtype","nbytes","hex"}}}
+#   用 hex 而不是数值列表：二进制安全（float32 逐字节），参考实现自己解码。
+# 失败：解析/执行错误打印 ONNX-ERR / RUN-ERR 并以非 0 退出（门据此判负控）。
+# ══════════════════════════════════════════════════════════════════════
+let a = args()
+if len(a) < 4:
+    print("用法: onnx_exec <model.onnx> <feeds.json> <out.json>\n")
+    exit(2)
+let r = onnx_model_open(a[1])
+if type(r) == "result":
+    print("ONNX-ERR: " + str(r) + "\n")
+    exit(3)
+let feeds = json_parse(read_file(a[2]))
+let res = onnx_run(r["id"], feeds)
+if type(res) == "result":
+    print("RUN-ERR: " + str(res) + "\n")
+    print("CLOSED=" + str(onnx_model_close(r["id"])) + "\n")
+    exit(4)
+var outs = {}
+for nm in res["outputs"].keys():
+    let o = res["outputs"][nm]
+    outs[str(nm)] = {"dims": o["dims"], "dtype": o["dtype"], "nbytes": o["nbytes"],
+        "hex": bytes_to_hex(o["data"])}
+let dump = {"ok": true, "nodes": res["nodes"], "by_op": res["stats"]["by_op"], "outputs": outs}
+write_file(a[3], json_stringify(dump))
+print("M157-RUN-OK nodes=" + str(res["nodes"]) + " outputs=" + str(len(outs)) + "\n")
+print("CLOSED=" + str(onnx_model_close(r["id"])) + "\n")

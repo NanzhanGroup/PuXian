@@ -141,6 +141,11 @@ run m155_nul_bytes bash examples/m155_nul_bytes/verify.sh
 #   · 权重 head16 逐字节（含窄类型低字节截断）· VM 轨与解释轨逐字节一致
 #   · 真实模型（90MB MiniLM）可选，SKIP 显式不计入 PASS。
 run m156_onnx bash examples/m156_onnx/verify.sh
+# ── M157（第 39 轮）：ONNX **执行面**（张量 + 64 算子 + 拓扑执行器）──
+#   三方对拍（C ↔ 独立参考 ↔ 手算真值）· 算子覆盖率（注册表 64 个必须全被执行过）
+#   · 执行器行为（乱序可跑 / 未知算子·环·广播·缺 feed 必须报错）· erf 1001 点精度
+#   · 真实模型端到端（可选）· C 侧负控 2 道（含"编译失败也算没能证明"）
+run m157_onnx_exec bash examples/m157_onnx_exec/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

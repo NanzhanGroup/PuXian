@@ -1,0 +1,123 @@
+# ══════════════════════════════════════════════════════════════════════
+# embed_mini.px —— M157 门用：**端到端**跑真 MiniLM（零依赖，无 dlopen）
+# ---------------------------------------------------------------
+# 对照物是 token-cache 的 Go 实现 `embedding_engine_onnx.go`（cgo + dlopen
+#   onnxruntime.so）。本程序做同一件事，但：解析自己在 runtime 里、算子在
+#   runtime 里、池化与归一化在**语言里**。
+#
+# 与 Go Encode 对齐的两处口径（照抄，不改）：
+#   ① token 切分（simpleTokenize）：[CLS]=101 + 逐 rune `code % 21128`（<103 则 +103）+ [SEP]=102，
+#      序列长上限 512；padding 到 512。
+#   ② 池化：对**前 tokenLen 行**取均值（Go 用 tokenLen = len(tokens)，含 CLS/SEP，不除 padding 行），
+#      然后 L2 归一化。
+#
+# 用法： embed_mini <model.onnx> <out.json> [text1] [text2]
+#   输出 JSON：{"ok":true,"shape":[...],"norm":..,"head":[...],"sha256":"..",
+#              "cos_sim":..,"nodes":N,"secs":..}
+# ══════════════════════════════════════════════════════════════════════
+let a = args()
+if len(a) < 3:
+    print("用法: embed_mini <model.onnx> <out.json> [text1] [text2]\n")
+    exit(2)
+var t1 = "普贤语言零依赖推理"
+var t2 = "普贤语言不依赖外部库"
+if len(a) >= 4:
+    t1 = a[3]
+if len(a) >= 5:
+    t2 = a[4]
+let MAXLEN = 512  # 模型位置编码上限（见 position_embeddings 的 [512,H]）
+var DIM = 384  # 由输出形状决定（见下；不写死 —— 不同 MiniLM 变体 H 不同）
+def tokenize(text):
+    var ids = [101]
+    for ch in text:
+        if len(ids) >= MAXLEN - 1:
+            break
+        var v = ord(ch) % 21128
+        if v < 103:
+            v = v + 103
+        ids = ids + [v]
+    ids = ids + [102]
+    return ids
+def encode(model_id, text):
+    let toks = tokenize(text)
+    # padding 到 512（Go 用 int64 全 0 缓冲 + attention_mask 全 1）
+    var ids = []
+    var mask = []
+    for i in range(MAXLEN):
+        if i < len(toks):
+            ids = ids + [toks[i]]
+            mask = mask + [1]
+        else:
+            ids = ids + [0]
+            mask = mask + [0]
+    let feeds = {
+        "input_ids": {"dims": [1, MAXLEN], "dtype": "int64", "i64": ids},
+        "attention_mask": {"dims": [1, MAXLEN], "dtype": "int64", "i64": mask},
+        "token_type_ids": {"dims": [1, MAXLEN], "dtype": "int64", "i64": mask}
+    }
+    let r = onnx_run(model_id, feeds)
+    if type(r) == "result":
+        return r
+    let o = r["outputs"]["last_hidden_state"]
+    let data = o["data"]
+    DIM = o["dims"][len(o["dims"]) - 1]
+    # 均值池化（前 len(toks) 行）+ L2 归一化 —— 与 Go Encode 同口径
+    let nrow = len(toks)
+    var vec = []
+    for j in range(DIM):
+        vec = vec + [0.0]
+    for row in range(nrow):
+        let base = row * DIM
+        for j in range(DIM):
+            vec[j] = vec[j] + f32_at(data, base + j)
+    let scale = 1.0 / float(nrow)
+    var sq = 0.0
+    for j in range(DIM):
+        vec[j] = vec[j] * scale
+        sq = sq + vec[j] * vec[j]
+    let norm_raw = sqrt(sq)
+    if norm_raw > 0.0:
+        for j in range(DIM):
+            vec[j] = vec[j] / norm_raw
+    # 归一化**之后**再量一次范数：判据用它（norm_raw 只是池化后的模长，不是 1）
+    var sq2 = 0.0
+    for j in range(DIM):
+        sq2 = sq2 + vec[j] * vec[j]
+    let packed = f32_bytes(vec)
+    return {"ok": true, "shape": o["dims"], "nbytes": o["nbytes"],
+        "norm": norm_raw, "norm_after": sqrt(sq2), "vec": vec, "data": packed,
+        "nodes": r["nodes"], "by_op": r["stats"]["by_op"]}
+def cos_sim(x, y):
+    var s = 0.0
+    for i in range(len(x)):
+        s = s + x[i] * y[i]
+    return s
+let mo = onnx_model_open(a[1])
+if type(mo) == "result":
+    print("ONNX-ERR: " + str(mo) + "\n")
+    exit(3)
+let t0 = now_ns()
+let e1 = encode(mo["id"], t1)
+if type(e1) == "result":
+    print("RUN-ERR: " + str(e1) + "\n")
+    exit(4)
+let t1n = now_ns()
+let e2 = encode(mo["id"], t2)
+if type(e2) == "result":
+    print("RUN-ERR: " + str(e2) + "\n")
+    exit(4)
+let t2n = now_ns()
+var head = []
+for i in range(5):
+    head = head + [e1["vec"][i]]
+let out = {"ok": true, "shape": e1["shape"], "norm": e1["norm"],
+    "norm_after": e1["norm_after"], "head": head,
+    "sha256": sha256(e1["data"]), "sha256_b": sha256(e2["data"]),
+    "cos_sim": cos_sim(e1["vec"], e2["vec"]), "nodes": e1["nodes"],
+    "by_op": e1["by_op"], "ms_a": (t1n - t0) / 1000000, "ms_b": (t2n - t1n) / 1000000,
+    "dim": DIM}
+write_file(a[2], json_stringify(out))
+print("M157-EMBED-OK shape=" + str(e1["shape"]) + " norm=" + str(e1["norm_after"]) +
+    " cos=" + str(out["cos_sim"]) + " nodes=" + str(e1["nodes"]) + "\n")
+print("sha_a=" + out["sha256"] + " ms=" + str(out["ms_a"]) + "\n")
+onnx_model_close(mo["id"])

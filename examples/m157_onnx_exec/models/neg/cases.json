@@ -1,0 +1,1 @@
+[{"name": "n01_reversed", "expect_fail": false}, {"name": "n02_unknown_op", "expect_fail": true}, {"name": "n03_cycle", "expect_fail": true}, {"name": "n04_bad_broadcast", "expect_fail": true}, {"name": "n05_missing_feed", "expect_fail": true}]
