@@ -120,6 +120,10 @@ run m150_tls_crypto bash examples/m150_tls_crypto/verify.sh
 #      `tls_connect` 自建 socket 表达不出）③ 解释轨「模块缺失」诊断不再打挂进程（缺陷 138）。
 #   受控服务端（回显 / PG 式协商）+ **Go crypto/tls 同一服务端对拍** + 3 道负控 ⇒ 不依赖外网。
 run m151_pg_tls_bytes bash examples/m151_pg_tls_bytes/verify.sh
+# M153（第 35 轮）：常量池 / 短串池化（缺陷 145 第一刀）+ 分配统计可观测 + 缺陷 147
+#   （runtime 编译失败 ⇒ 重烘门静默跳过 ⇒ **退化放行暗门**）。
+#   含：三轨语义（37 断言）· 分配预算硬阈值（计数可复现）· 输出冻结 · 3 道负控。
+run m153_alloc bash examples/m153_alloc/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们
@@ -133,6 +137,10 @@ run m122 bash examples/m122_builtin_args/verify.sh
 run pkg_guard_monotonic bash packaging/selftest_rpm_monotonic_guard.sh
 run pkg_make_release bash packaging/selftest_make_release.sh
 run pkg_tag_guard bash packaging/selftest_tag_guard.sh
+step "发射冻结门（M153 建立）：253+ 个用例的 --emit-c 输出必须逐字节不变"
+# 为什么：`--check`/`prove` 只看 **compiler.px 自己**的产物；"改了 runtime/发射路径却顺手
+#   动摇了别的程序的发射结果"这类回归此前没有任何门看得见（第 34 轮起靠临时脚本手查）。
+run emitc_freeze bash selfhost/emitc_freeze.sh --check
 step "示例编译"
 run ex_fib ./tools/pxc build examples/fib.px
 run ex_match ./tools/pxc build examples/match.px
