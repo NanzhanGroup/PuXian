@@ -1,0 +1,83 @@
+ok   lit.len1
+
+ok   lit.nul_eq_rt
+
+ok   lit.a0b.len3
+
+ok   lit.a0b.idx0
+
+ok   lit.a0b.idx1
+
+ok   lit.a0b.idx2
+
+ok   lit.not_empty
+
+ok   lit.backslash0
+
+ok   lit.backslash0_eq
+
+ok   lit.head_nul
+
+ok   lit.tail_nul
+
+ok   lit.multi_nul
+
+ok   lit.octal_amb.len2
+
+ok   lit.octal_amb.ch1
+
+ok   lit.octal_amb.ch0
+
+ok   lit.octal_amb3.len3
+
+ok   lit.octal_amb3.ch1
+
+ok   lit.octal_amb3.ch2
+
+ok   rt.bytes_roundtrip
+
+ok   rt.join_keeps
+
+ok   rt.join_rt_keeps
+
+ok   rt.plus_keeps
+
+ok   rt.slice_keeps
+
+ok   rt.contains
+
+ok   rt.eq_lit
+
+ok   rt.ne_truncated
+
+ok   rt.dict_key_lit
+
+ok   rt.dict_key_rt
+
+ok   render.str_identity
+
+ok   render.list_len5
+
+ok   render.dict_len8
+
+ok   render.result_len7
+
+ok   render.nested
+
+ok   hash.sha256
+
+ok   b64.encode
+
+ok   json.go_len10
+
+ok   json.go_text
+
+ok   json.go_ctrl_escaped
+
+ok   json.go_roundtrip
+
+ok   json.raw_len_no_truncate
+
+ok   json.raw_tail_kept
+
+M155-SEM-DONE
