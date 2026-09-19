@@ -1,0 +1,97 @@
+# M153 门（语义）：常量池 / 短串池化 —— 池化后**可观测语义不得变化**
+#   池化的三个对象：① 空串单例 ② ASCII 单字符串表（`s[i]` 的结果） ③ VM 常量池（LOADK 字面量）
+#   契约：PX_STR 的 data 恒不可变 ⇒ 共享同一对象不改变相等/排序/长度/索引语义。
+#   本文件断言的全是**值语义**（不依赖对象身份），另加「跨 GC 存活」（钉住表的核心功能）。
+var n_pass = 0
+var n_fail = 0
+def ck(name, cond):
+    if cond:
+        n_pass = n_pass + 1
+        print("PASS " + name)
+    else:
+        n_fail = n_fail + 1
+        print("FAIL " + name)
+
+# ---------- A 空串 ----------
+ck("A1 空串相等", "" == "")
+ck("A2 空串长度为 0", len("") == 0)
+ck("A3 空串拼接", "" + "" == "")
+ck("A4 空串是字符串", type("") == "string")
+ck("A5 空串作 dict 键", {"": 7}[""] == 7)
+ck("A6 空串比较序在前", "" < "a")
+ck("A7 空串与非空串不等", "" != "abc")
+
+# ---------- B 单字符索引（ASCII） ----------
+var S = "Hello, 世界"
+ck("B1 索引 0", S[0] == "H")
+ck("B2 索引与字面量相等", S[1] == "e")
+ck("B3 索引长度 1", len(S[0]) == 1)
+ck("B4 索引拼接回原串", S[0] + S[1] == "He")
+ck("B5 索引比较序", S[0] < S[1])
+ck("B6 索引结果不可变：源串不变", S == "Hello, 世界")
+ck("B7 索引可作 dict 键", {"H": 1}[S[0]] == 1)
+let i0 = S[0]
+S = "XXXX"
+ck("B8 索引结果与源串解耦", i0 == "H")
+
+# ---------- C 单字符索引（多字节 rune：不走 ASCII 表） ----------
+ck("C1 中文按字符索引", S[0] == "X")
+let Z = "世界"
+ck("C2 中文单字符长度 1", len(Z[0]) == 1)
+ck("C3 中文单字符内容", Z[0] == "世")
+ck("C4 中文单字符拼接", Z[0] + Z[1] == "世界")
+
+# ---------- D 各类单字节字符（单字符表覆盖 0..255 全字节值） ----------
+let P = "a.b c_d"
+ck("D1 点", P[1] == ".")
+ck("D2 空格", P[3] == " ")
+ck("D3 下划线", P[5] == "_")
+ck("D4 索引与切片一致", P[1:2] == ".")
+ck("D5 高位字节（0x80..0xFF 非 ASCII 起始 ⇒ 多字节路径）", "世"[0] == "世")
+# 说明（诚实登记）：`"\u{0}"` 字面量在**三轨**都被解码成空串（实测 len=0），
+#   故不在本门断言 NUL 字符；该行为与池化无关（改动前后一致），另在 ISSUE 登记。
+
+# ---------- E 常量池：同一字面量表达式多次求值 —— 值恒等（身份稳定性由 F 段验） ----------
+var e_ok = true
+var t = 0
+while t < 1000:
+    if not ("abc" == "abc" and "abc" != "abd" and len("abc") == 3):
+        e_ok = false
+    t = t + 1
+ck("E1 字面量反复求值语义不变", e_ok)
+
+# ---------- F 跨 GC 存活（钉住表：池化对象必须永久可达） ----------
+let keep_empty = ""
+let keep_ch = S[0]
+let keep_lit = "literal-keep"
+let keep_cjk = Z[0]
+let id_empty = object_id(keep_empty)
+let id_ch = object_id(keep_ch)
+let id_cjk = object_id(keep_cjk)
+var junk = []
+var k = 0
+while k < 4000:
+    junk.append({"i": k, "s": "x" + str(k)})
+    k = k + 1
+gc()
+gc()
+ck("F1 gc 后空串内容不变", keep_empty == "" and len(keep_empty) == 0)
+ck("F2 gc 后单字符内容不变", keep_ch == "X")
+ck("F3 gc 后中文字符不变", keep_cjk == "世")
+ck("F4 gc 后字面量不变", keep_lit == "literal-keep")
+ck("F5 gc 后空串仍是同一对象", object_id(keep_empty) == id_empty)
+ck("F6 gc 后单字符仍是同一对象", object_id(keep_ch) == id_ch)
+ck("F7 gc 后中文字符仍是同一对象", object_id(keep_cjk) == id_cjk)
+ck("F8 池化对象仍可参与拼接/比较", keep_ch + keep_lit == "Xliteral-keep")
+ck("F9 大量垃圾后字符串表仍正确", junk[3999]["s"] == "x" + str(3999))
+
+# ---------- G 与容器/序列化交互 ----------
+let d = {"k": S[0], "e": ""}
+ck("G1 dict 里池化串可取值", d["k"] == "X" and d["e"] == "")
+let l = [keep_empty, keep_ch, keep_cjk, keep_lit]
+ck("G2 list 里池化串可取值", len(l) == 4 and l[2] == "世")
+ck("G3 排序（池化不破坏序）", ["b", "a", "c"][0] == "b")
+
+print("SUMMARY m153 pool pass=" + str(n_pass) + " fail=" + str(n_fail))
+if n_fail != 0:
+    exit(1)

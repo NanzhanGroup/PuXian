@@ -222,7 +222,12 @@ jobs:
           bash examples/m149_tcp_deadline/verify.sh > /tmp/v_m149.log 2>&1 || { echo "❌ m149_tcp_deadline verify 失败"; tail -40 /tmp/v_m149.log; exit 1; }
           bash examples/m150_tls_crypto/verify.sh > /tmp/v_m150.log 2>&1 || { echo "❌ m150_tls_crypto verify 失败"; tail -40 /tmp/v_m150.log; exit 1; }
           bash examples/m151_pg_tls_bytes/verify.sh > /tmp/v_m151.log 2>&1 || { echo "❌ m151_pg_tls_bytes verify 失败"; tail -40 /tmp/v_m151.log; exit 1; }
-          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 verify 全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"
+          # M153（第 35 轮）：常量池 / 短串池化（缺陷 145）+ 分配统计 + 缺陷 147。
+          # 含三轨语义 / 分配预算硬阈值 / 输出冻结 / 3 道负控（负控会重编 runtime，耗时数分钟）。
+          bash examples/m153_alloc/verify.sh > /tmp/v_m153.log 2>&1 || { echo "❌ m153_alloc verify 失败"; tail -60 /tmp/v_m153.log; exit 1; }
+          # 发射冻结门（M153 建立）：255 个用例的 --emit-c 输出必须逐字节不变。
+          bash selfhost/emitc_freeze.sh --check > /tmp/v_emitc_freeze.log 2>&1 || { echo "❌ emitc_freeze 失败"; tail -30 /tmp/v_emitc_freeze.log; exit 1; }
+          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 / m153 verify + 发射冻结门（255 件 --emit-c）全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"
       - name: LSP / MCP 服务器冒烟（--version + 协议入口存在性）
         run: |
           chmod +x bootstrap/pxlsp bootstrap/pxmcp bootstrap/pxcheck
