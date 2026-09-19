@@ -62,6 +62,37 @@
 >    门 `examples/m148_ieee_div/`（1176 行语料 × Go 本尊 × **VM/C/解释轨三轨** + 44 断言 +
 >    **往返性质** + **5 道负控**）。详见事实 124–127。
 
+> M150（2026-09-20，qg-issue 87 第 32 轮）：**摘要/密钥派生族 + TLS 客户端族** —— 移植
+> PostgreSQL 驱动（lib/pq v1.12.3）时撞到的两块硬缺口：
+> **① 认证面**：`AuthenticationMD5Password` 的应答是一条**嵌套 MD5**
+> （`"md5" + hex(md5(hex(md5(password||user)) || salt))`），而语言里只有 `sha256`/`hmac_sha256`；
+> `SCRAM-SHA-256`（PG 14+ 服务端默认认证）的 `SaltedPassword = Hi(pw, salt, i)` 就是
+> **PBKDF2-HMAC-SHA256**，手搓只能用 `hmac_sha256`（返回 **hex 文本**）做每轮 hex↔bytes 往返。
+> 新增 `md5(data)`（32 位小写 hex）/ `md5_bytes(data)`（16 字节）/
+> `pbkdf2_sha256(password, salt, iterations, dklen)`（**原始字节**；`iters<1→1`、
+> `dklen<1→32`、`dklen>4096→4096`）。
+> **② 客户端 TLS**：语言此前**只有服务端 TLS**（`tls_server`），客户端 TLS 只存在于
+> `http_get`/`http_post`/`s3_*` 的**内部**（`https_connect_t`）⇒ 任何"自己的协议跑在 TLS 之上"
+> 的客户端都写不出来。而 lib/pq 的 `sslmode` **缺省即 `require`**（`ssl.go` 的 `mode == ""`
+> 分支），require 的语义是 `InsecureSkipVerify = true`（**加密但不校验证书**）—— 没有这一族，
+> PG 客户端只能靠 `sslmode=disable` "装得像"。新增四个 native（与 `tcp_*_ex` 逐条同构，
+> 一律返回结果 dict、**永不杀进程**）：
+>   · `tls_connect(host, port[, opts])` → `{ok, id, fd, peer, version, version_num, cipher, cipher_id, verify, stage, errno, err}`；
+>     `opts = {"timeout_ms": int, "verify": bool（**缺省 false** = libpq 的 require 语义）, "servername": str, "read_timeout_ms": int}`；
+>     `version_num` = **Go `tls.VersionTLS13` 口径**（0x0304）；`cipher_id` = IANA 套件号
+>     （= Go 的 `tls.CipherSuite` 常量值）；`cipher` = **Go `tls.CipherSuiteName` 口径**
+>     （`TLS_AES_256_GCM_SHA384`，不是 mbedtls 的 `TLS1-3-AES-256-GCM-SHA384`）；
+>     `stage ∈ ""|"resolve"|"socket"|"connect"|"tls"`。
+>   · `tls_send(id, data)` → `{ok, n, err}`（失败时 `n` = 已写出字节数）。
+>   · `tls_recv(id, maxlen)` → `{ok, data, n, eof, timeout, err}`（`close_notify`/FIN ⇒ `eof=true`，**非错误**）。
+>   · `tls_close(id)` → bool（幂等；重复关闭返回 false）。
+> 门 `examples/m150_tls_crypto/`：`corpus.txt` **148 条**（md5 47 + pbkdf2 81 + PG md5 认证 20）
+> ⇒ 与 **Go 本尊**（crypto/md5 + crypto/hmac·sha256 手写 PBKDF2）**195 行逐字节**对拍 ×
+> **VM+C 双轨** + 自断言 **26 条** + 解释轨冒烟 11 条；TLS 侧用**受控 Python TLS 服务端**
+> （自签证书）把 PuXian 与 **Go `crypto/tls`** 放**同一个服务端**上跑同一套动作（实现无关子集
+> 逐字节一致 + `tls.CipherSuiteName(px_cipher_id) == px_cipher` + 服务端 `sni_callback`
+> 确实收到显式 `servername` + IP 字面量**不发** SNI）+ **3 道负控**（md5 只取 15 字节 /
+> pbkdf2 钳位改 2 / TLS 缺省改校验证书 ⇒ 全判红）。
 > M149（2026-09-20，qg-issue 87 第 31 轮）：**TCP「带超时 + 可辨别失败」族** —— 旧 `tcp_*` 的**失败面**
 > 表达不出 Go 的 `net`（连接失败**杀进程**、无连接超时、`tcp_recv` 把 EOF/超时/出错**都返回 ""**），
 > 于是「网络是常态故障源」的客户端（Redis / PostgreSQL / 任意带 deadline 的协议）**无法移植**。
@@ -349,7 +380,7 @@ print("upper=" + to_upper("px"))
       字符串形态（`r/w/a/rw/w+`）表达不了"有则开、无则建、不截断"（`w+` 带 `O_TRUNC`），
       也表达不了 `O_EXCL`。字符串形态**行为零变化**。
       ⚠️ 第三参只在第二参是 int 时可用。
-## 2. native 内置速查（345 全量见 `docs/native_index.json`，本表为常用）
+## 2. native 内置速查（352 全量见 `docs/native_index.json`，本表为常用）
 
 ### 核心 / 值
 `print` `len` `range` `type` `str` `int` `float` `bool` `assert` `input` `exit` `sleep` `abs` `sqrt` `min` `max` `pow` `sorted` `reversed` `sum` `map` `filter` `reduce` `contains` `env`（⚠️ **变量不存在返回 `null`**，不是 `""` —— `str(null)` 会得到 `"null"`，取值请先判 null） `args()`（**调用式**：`px run s.px a b` 与编译产物同形 `[程序, a, b]`——M115 修；见 §1.1 事实清单）
@@ -1163,4 +1194,32 @@ set_timeout(fn (): print("once after 2s"), 2000)
      （第 31 轮 · M149）：首个写往往**成功**（进本地发送缓冲），要对端 RST 回来后的**第二次**写才失败
      ⇒ 断言要写成"循环写到失败为止"（门内实测第 1 次就拿到 `EPIPE`）。
      另：运行时**已忽略 `SIGPIPE`**（M88-S2），所以这条路径是**拿到 errno**而不是进程被信号打死。
+
+131. **`mbedtls_ssl_conf_read_timeout` 必须配 `mbedtls_net_recv_timeout` 才生效**（第 32 轮 · M150）：
+     `mbedtls_ssl_set_bio(ssl, net, send, recv, recv_timeout)` 的**第 5 个参数**是 `f_recv_timeout`；
+     传 `NULL` 时 mbedtls 退回**阻塞** `mbedtls_net_recv`，读超时**完全不生效**（表现为 `tls_recv`
+     永久挂起，而不是报错）。⇒ `read_timeout_ms > 0` 时必须换上 `mbedtls_net_recv_timeout`。
+     到期返回 `MBEDTLS_ERR_SSL_TIMEOUT`，本族归成 `timeout=true` + `err="i/o timeout"`。
+132. **服务端读不到 `SSLSocket.server_hostname` —— 那是客户端属性**（第 32 轮 · M150 的**夹具**教训）：
+     Python 侧服务端要拿到对端 SNI 只能挂 `SSLContext.sni_callback`。第一版用 `server_hostname`
+     打印，于是"客户端根本没发 SNI"与"服务端不会读 SNI"两种成因**看起来一模一样**（都是空）
+     ⇒ 差点把运行时判成 SNI 没生效。**夹具自己也会撒谎，先证夹具。**
+133. **`bytes_set(b, i, v)` 是写时复制、返回新 bytes，不是原地改**（第 32 轮 · M150）：
+     要"逐字节改一个缓冲"必须写成 `b = bytes_set(b, i, v)`。同一族的 `bytes_get`/`bytes_concat`
+     同理。用 `hmac_sha256`（返回 hex 文本）手搓 PBKDF2 时，`hex_to_bytes(...)` 往返是必须的语法。
+134. **Go 的 `hex.EncodeToString(...)` 结果再入哈希时是 32 字节 ASCII**（第 32 轮 · M150 的**门**教训）：
+     PostgreSQL md5 认证链是 `md5( hex(md5(pw||user)) || salt )` —— 内层摘要以 **hex 文本**（32 字节）
+     参与外层哈希，**不是** 16 字节原始摘要。门的第一版写成 `hex_to_bytes(h1)`（= 16 字节），
+     pgauth 20 行整段与 Go 分叉（**门当场照出**）。注意 `hex_to_bytes(md5(x))` 与 `md5_bytes(x)`
+     是**同一串 16 字节**，拿它们互比是恒真的假断言。
+135. **IP 字面量不发 SNI**（第 32 轮 · M150）：`tls_connect` 的 `servername` 缺省用 `host`，但
+     `host` 是 IPv4/IPv6 字面量（含 `[::1]`）时 **不发 SNI** —— 与 RFC 6066 及 Go
+     `crypto/tls` 的 `hostnameInSNI` 同口径。要强制发就给 `servername`。
+136. **TLS 套件的"名字"与"数字"两套口径都要给**（第 32 轮 · M150）：`cipher_id` 是 IANA 号
+     （Go 的 `tls.CipherSuite` 常量），`cipher` 是 Go `tls.CipherSuiteName` 的**文本**；
+     mbedtls 自己给的是 `TLS1-3-AES-256-GCM-SHA384` 这种**带横线**的 IANA 名 —— 运行时做了
+     `-`→`_` 与 `TLS1_3_`→`TLS_` 两步映射（对 mbedtls 支持的全部套件都成立），
+     **不是**有损近似。但**不要**拿套件名去跨实现比：Go 与 mbedtls 的**偏好序**不同
+     （本机实测 Go 选 `0x1301`，mbedtls 选 `0x1302`）—— 比 `version_num` / 收发字节 / EOF 这些
+     实现无关量，套件名只与**同一 id 的 Go 文本**比。
        要 Go 的口径（`+Inf` / `-Inf` / `NaN`）用 `go_float_text` / `fmt_float_dec`。
