@@ -1,0 +1,27 @@
+# ══════════════════════════════════════════════════════════════════════
+# onnx_dump.px —— M156 门用：把 .onnx 的结构摘要落盘（语言侧唯一入口）
+# ---------------------------------------------------------------
+# 用法： onnx_dump <model.onnx> <out.json> [init_name]
+#   走了哪条路：onnx_model_open（解析）→ onnx_info（JSON 渲染）→ write_file。
+#   第三参可选：额外打印该 initializer 的 head16（权重数据对拍用）。
+# 失败：打印 ONNX-ERR 并以非 0 退出（门据此判定负控模型）。
+# ══════════════════════════════════════════════════════════════════════
+let a = args()
+if len(a) < 3:
+    print("用法: onnx_dump <model.onnx> <out.json> [init_name]\n")
+    exit(2)
+let r = onnx_model_open(a[1])
+if type(r) == "result":
+    # 解析失败：必然是 Err（onnx_model_open 成功路径返回 dict）
+    print("ONNX-ERR\n")
+    exit(3)
+let info = onnx_info(r["id"])
+write_file(a[2], info)
+print("nodes=" + str(r["nodes"]) + " inits=" + str(r["initializers"]) + " in=" + str(r["inputs"]) + " out=" + str(r["outputs"]) + "\n")
+if len(a) >= 4:
+    let t = onnx_initializer(r["id"], a[3])
+    if type(t) == "result":
+        print("INIT-ERR\n")
+    else:
+        print("init." + a[3] + " dtype=" + t["dtype"] + " dims=" + str(t["dims"]) + " nbytes=" + str(t["nbytes"]) + " head16=" + bytes_to_hex(bytes_slice(t["data"], 0, 16)) + "\n")
+print("CLOSED=" + str(onnx_model_close(r["id"])) + "\n")
