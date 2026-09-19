@@ -134,6 +134,13 @@ run m154_alloc2 bash examples/m154_alloc2/verify.sh
 #   · 发射形状（PX_STR_LIT/PXK_STR_LIT 恒 3 位八进制）· 词法/AST 面 · 自举安全不变式
 #   · 4 道负控（长度退回 strlen / print 退回 printf / 长度多算 1 / VM 忽略 K 长度）。
 run m155_nul_bytes bash examples/m155_nul_bytes/verify.sh
+# M156（第 38 轮）：零依赖 ONNX 解析面（token-cache embedding 引擎的 Go 侧是
+#   cgo + onnxruntime .so；本实现自解 protobuf，零外部依赖）。
+#   含：**构造性真值 ↔ 独立参考解码器 ↔ C 侧 native** 三重对拍（12 个正例）
+#   · 负控 4 个模型必须报错（无 graph / 截断 / field 0 / 9 维超界）
+#   · 权重 head16 逐字节（含窄类型低字节截断）· VM 轨与解释轨逐字节一致
+#   · 真实模型（90MB MiniLM）可选，SKIP 显式不计入 PASS。
+run m156_onnx bash examples/m156_onnx/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

@@ -1,0 +1,805 @@
+{
+ "t01_basic.onnx": {
+  "graph": "g",
+  "initializers": [
+   [
+    "W",
+    "float",
+    [
+     2,
+     3
+    ],
+    24
+   ]
+  ],
+  "inputs": [
+   [
+    "X",
+    "float",
+    [
+     1,
+     2
+    ]
+   ]
+  ],
+  "ir_version": 7,
+  "nodes": [
+   [
+    "MatMul",
+    "mm",
+    "",
+    [
+     "X",
+     "W"
+    ],
+    [
+     "Y"
+    ],
+    []
+   ]
+  ],
+  "opset": [
+   [
+    "",
+    14
+   ]
+  ],
+  "outputs": [
+   [
+    "Y",
+    "float",
+    [
+     1,
+     3
+    ]
+   ]
+  ],
+  "producer": "puxian-m156",
+  "producer_version": "",
+  "value_infos": []
+ },
+ "t02_attrs.onnx": {
+  "graph": "g",
+  "initializers": [],
+  "inputs": [
+   [
+    "A",
+    "float",
+    [
+     1,
+     3
+    ]
+   ]
+  ],
+  "ir_version": 7,
+  "nodes": [
+   [
+    "Foo",
+    "n_attr",
+    "",
+    [
+     "A"
+    ],
+    [
+     "B"
+    ],
+    [
+     [
+      "alpha",
+      "FLOAT",
+      0.5
+     ],
+     [
+      "axis",
+      "INT",
+      -1
+     ],
+     [
+      "mode",
+      "STRING",
+      "test"
+     ],
+     [
+      "axes",
+      "INTS",
+      [
+       0,
+       2
+      ]
+     ],
+     [
+      "scales",
+      "FLOATS",
+      [
+       1.0,
+       2.5
+      ]
+     ],
+     [
+      "value",
+      "TENSOR",
+      [
+       "float",
+       [
+        2
+       ],
+       8
+      ]
+     ]
+    ]
+   ]
+  ],
+  "opset": [
+   [
+    "",
+    14
+   ]
+  ],
+  "outputs": [
+   [
+    "B",
+    "float",
+    [
+     1,
+     3
+    ]
+   ]
+  ],
+  "producer": "puxian-m156",
+  "producer_version": "",
+  "value_infos": []
+ },
+ "t03_unpacked.onnx": {
+  "graph": "g",
+  "initializers": [
+   [
+    "B",
+    "float",
+    [
+     3
+    ],
+    12
+   ],
+   [
+    "I",
+    "int64",
+    [
+     2
+    ],
+    16
+   ],
+   [
+    "D",
+    "double",
+    [
+     2
+    ],
+    16
+   ]
+  ],
+  "inputs": [
+   [
+    "A",
+    "float",
+    [
+     1,
+     3
+    ]
+   ]
+  ],
+  "ir_version": 7,
+  "nodes": [
+   [
+    "Add",
+    "add",
+    "",
+    [
+     "A",
+     "B"
+    ],
+    [
+     "C"
+    ],
+    [
+     [
+      "axes",
+      "INTS",
+      [
+       -1,
+       2
+      ]
+     ]
+    ]
+   ]
+  ],
+  "opset": [
+   [
+    "",
+    14
+   ]
+  ],
+  "outputs": [
+   [
+    "C",
+    "float",
+    [
+     1,
+     3
+    ]
+   ]
+  ],
+  "producer": "puxian-m156",
+  "producer_version": "",
+  "value_infos": []
+ },
+ "t04_narrow.onnx": {
+  "graph": "g",
+  "initializers": [
+   [
+    "i8",
+    "int8",
+    [
+     3
+    ],
+    3
+   ],
+   [
+    "u8",
+    "uint8",
+    [
+     3
+    ],
+    3
+   ],
+   [
+    "bo",
+    "bool",
+    [
+     2
+    ],
+    2
+   ],
+   [
+    "f16",
+    "float16",
+    [
+     2
+    ],
+    4
+   ]
+  ],
+  "inputs": [
+   [
+    "A",
+    "uint8",
+    [
+     1,
+     3
+    ]
+   ]
+  ],
+  "ir_version": 7,
+  "nodes": [
+   [
+    "Cast",
+    "cast",
+    "",
+    [
+     "A"
+    ],
+    [
+     "C"
+    ],
+    []
+   ]
+  ],
+  "opset": [
+   [
+    "",
+    14
+   ]
+  ],
+  "outputs": [
+   [
+    "C",
+    "uint8",
+    [
+     1,
+     3
+    ]
+   ]
+  ],
+  "producer": "puxian-m156",
+  "producer_version": "",
+  "value_infos": []
+ },
+ "t05_notype.onnx": {
+  "graph": "g",
+  "initializers": [],
+  "inputs": [
+   [
+    "A",
+    "float",
+    [
+     1
+    ]
+   ]
+  ],
+  "ir_version": 7,
+  "nodes": [
+   [
+    "Bar",
+    "n5",
+    "",
+    [
+     "A"
+    ],
+    [
+     "B"
+    ],
+    [
+     [
+      "i_axis",
+      "INT",
+      3
+     ],
+     [
+      "fl",
+      "FLOATS",
+      [
+       0.5,
+       1.0
+      ]
+     ],
+     [
+      "t",
+      "TENSOR",
+      [
+       "float",
+       [
+        2
+       ],
+       8
+      ]
+     ]
+    ]
+   ]
+  ],
+  "opset": [
+   [
+    "",
+    14
+   ]
+  ],
+  "outputs": [
+   [
+    "B",
+    "float",
+    [
+     1
+    ]
+   ]
+  ],
+  "producer": "puxian-m156",
+  "producer_version": "",
+  "value_infos": []
+ },
+ "t06_unknown.onnx": {
+  "graph": "g",
+  "initializers": [
+   [
+    "U",
+    "float",
+    [
+     1
+    ],
+    4
+   ]
+  ],
+  "inputs": [
+   [
+    "A",
+    "float",
+    [
+     1
+    ]
+   ]
+  ],
+  "ir_version": 7,
+  "nodes": [
+   [
+    "Baz",
+    "n6",
+    "",
+    [
+     "A"
+    ],
+    [
+     "B"
+    ],
+    []
+   ]
+  ],
+  "opset": [
+   [
+    "",
+    14
+   ]
+  ],
+  "outputs": [
+   [
+    "B",
+    "float",
+    [
+     1
+    ]
+   ]
+  ],
+  "producer": "puxian-m156",
+  "producer_version": "",
+  "value_infos": []
+ },
+ "t07_symbolic.onnx": {
+  "graph": "g",
+  "initializers": [],
+  "inputs": [
+   [
+    "X",
+    "int64",
+    [
+     "batch",
+     "seq"
+    ]
+   ]
+  ],
+  "ir_version": 7,
+  "nodes": [
+   [
+    "Relu",
+    "relu",
+    "",
+    [
+     "X"
+    ],
+    [
+     "Y"
+    ],
+    []
+   ]
+  ],
+  "opset": [
+   [
+    "",
+    14
+   ]
+  ],
+  "outputs": [
+   [
+    "Y",
+    "int64",
+    [
+     "batch",
+     "seq"
+    ]
+   ]
+  ],
+  "producer": "puxian-m156",
+  "producer_version": "",
+  "value_infos": []
+ },
+ "t08_negative.onnx": {
+  "graph": "g",
+  "initializers": [],
+  "inputs": [
+   [
+    "X",
+    "float",
+    [
+     2,
+     3
+    ]
+   ]
+  ],
+  "ir_version": 7,
+  "nodes": [
+   [
+    "Softmax",
+    "sm",
+    "",
+    [
+     "X"
+    ],
+    [
+     "Y"
+    ],
+    [
+     [
+      "axis",
+      "INT",
+      -1
+     ]
+    ]
+   ],
+   [
+    "ReduceMean",
+    "rm",
+    "",
+    [
+     "Y"
+    ],
+    [
+     "Z"
+    ],
+    [
+     [
+      "axes",
+      "INTS",
+      [
+       -1,
+       -2
+      ]
+     ]
+    ]
+   ]
+  ],
+  "opset": [
+   [
+    "",
+    14
+   ]
+  ],
+  "outputs": [
+   [
+    "Z",
+    "float",
+    [
+     2,
+     1
+    ]
+   ]
+  ],
+  "producer": "puxian-m156",
+  "producer_version": "",
+  "value_infos": []
+ },
+ "t09_emptygraph.onnx": {
+  "graph": "g",
+  "initializers": [],
+  "inputs": [],
+  "ir_version": 7,
+  "nodes": [],
+  "opset": [
+   [
+    "",
+    14
+   ]
+  ],
+  "outputs": [],
+  "producer": "puxian-m156",
+  "producer_version": "",
+  "value_infos": []
+ },
+ "t13_bigdim.onnx": {
+  "graph": "g",
+  "initializers": [],
+  "inputs": [
+   [
+    "A",
+    "float",
+    [
+     1099511627776
+    ]
+   ]
+  ],
+  "ir_version": 7,
+  "nodes": [
+   [
+    "Identity",
+    "id",
+    "",
+    [
+     "A"
+    ],
+    [
+     "B"
+    ],
+    []
+   ]
+  ],
+  "opset": [
+   [
+    "",
+    14
+   ]
+  ],
+  "outputs": [
+   [
+    "B",
+    "float",
+    [
+     1099511627776
+    ]
+   ]
+  ],
+  "producer": "puxian-m156",
+  "producer_version": "",
+  "value_infos": []
+ },
+ "t14_dupname.onnx": {
+  "graph": "g",
+  "initializers": [
+   [
+    "D",
+    "float",
+    [
+     1
+    ],
+    4
+   ],
+   [
+    "D",
+    "float",
+    [
+     1
+    ],
+    4
+   ]
+  ],
+  "inputs": [],
+  "ir_version": 7,
+  "nodes": [
+   [
+    "Identity",
+    "id2",
+    "",
+    [
+     "D"
+    ],
+    [
+     "E"
+    ],
+    []
+   ]
+  ],
+  "opset": [
+   [
+    "",
+    14
+   ]
+  ],
+  "outputs": [
+   [
+    "E",
+    "float",
+    [
+     1
+    ]
+   ]
+  ],
+  "producer": "puxian-m156",
+  "producer_version": "",
+  "value_infos": []
+ },
+ "t15_rank8.onnx": {
+  "graph": "g",
+  "initializers": [],
+  "inputs": [
+   [
+    "A",
+    "float",
+    [
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8
+    ]
+   ]
+  ],
+  "ir_version": 7,
+  "nodes": [
+   [
+    "Identity",
+    "id8",
+    "",
+    [
+     "A"
+    ],
+    [
+     "B"
+    ],
+    []
+   ]
+  ],
+  "opset": [
+   [
+    "",
+    14
+   ]
+  ],
+  "outputs": [
+   [
+    "B",
+    "float",
+    [
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8
+    ]
+   ]
+  ],
+  "producer": "puxian-m156",
+  "producer_version": "",
+  "value_infos": []
+ },
+ "t16_rank9.onnx": {
+  "graph": "g",
+  "initializers": [],
+  "inputs": [
+   [
+    "A",
+    "float",
+    [
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9
+    ]
+   ]
+  ],
+  "ir_version": 7,
+  "nodes": [
+   [
+    "Identity",
+    "id9",
+    "",
+    [
+     "A"
+    ],
+    [
+     "B"
+    ],
+    []
+   ]
+  ],
+  "opset": [
+   [
+    "",
+    14
+   ]
+  ],
+  "outputs": [
+   [
+    "B",
+    "float",
+    [
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9
+    ]
+   ]
+  ],
+  "producer": "puxian-m156",
+  "producer_version": "",
+  "value_infos": []
+ }
+}
