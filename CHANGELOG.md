@@ -1,3 +1,52 @@
+## M157 —— ONNX 执行面：张量 + 64 算子 + 拓扑执行器（第 39 轮 · qg-issue 87 · 缺陷 157/158/159）
+
+- **背景（覆盖表最后一行收尾）**：M156 只到"字节 → 结构 + 权重访问"；本轮把**执行**补齐：
+  真 MiniLM（780 节点 / 101 initializer / 隐藏维 384）在**语言运行时内**跑完，**不 dlopen 任何外部库**
+  （Go 侧是 `onnxruntime_go` + `libonnxruntime.so`，不带 `embed_onnx` tag 时是空桩）。
+- **交付（3 个新文件 + 8 个新 native + 执行器）**：
+  · `runtime/onnx_tensor.h/.c`：运行期张量（N 维 + 行主序 + 小端）+ 竞技场（中间张量一次释放）
+    + 形状/广播工具 + 属性助手 + erf + 搬运类算子（Reshape/Transpose/Concat/Shape/Cast/Unsqueeze/
+    Squeeze/Flatten/Gather/Slice/Expand/Tile/Split/Identity）。
+  · `runtime/onnx_ops.c`：**广播引擎**（右对齐 + 里程表进位，一遍线性扫描同时读多输入）
+    + 逐元素算术/比较/逻辑（Add/Sub/Mul/Div/Pow/Mod/Max/Min/Sum/Mean/Equal/Less/Greater/LessOrEqual/
+    GreaterOrEqual/And/Or/Xor/Not）+ 一元族（Sqrt/Erf/Exp/Log/Abs/Neg/Ceil/Floor/Round/Reciprocal/Sign/
+    Tanh/Sigmoid/Relu/LeakyRelu/Elu/Softplus/Clip）+ MatMul（batched + 广播）· Softmax · Reduce{Mean,Sum,
+    Max,Min,Prod} · ArgMax · LayerNormalization · Where · ConstantOfShape · Range · Triu —— **共 64 个算子**。
+  · `runtime/onnx_exec.c`：执行器（**"输入齐了就执行"**：不依赖节点文件顺序、报得出环与缺失来源），
+    `PX_ONNX_TRACE=1` 输出节点/形状轨迹（真模型调试就靠它一眼看出上游把形状做歪了）。
+  · `runtime/runtime_onnx.c`：`onnx_run(id, feeds)` / `onnx_op_names()` /
+    `f32_bytes|f32_at|f32_count` / `i64_bytes|i64_at|i64_count`（张量字节助手；feeds 可给
+    `data` 原始字节或 `f32/i64/i32/f64` 数值列表）。`tools/px` 的 onnx 模块源清单同步扩充。
+  · `selfhost/interp.px` 名册 + `selfhost/ibuiltin.px` 分发**同时**补齐 8 个新 native
+    （缺陷 155 的教训：两处缺一不可；门的第 ⑧ 层常驻检查这条）。
+- **门 `examples/m157_onnx_exec/`（`M157-VERIFY-OK`）**：判据八层，每层可单独变红：
+  ① 语料：10 个正例模型 + 5 个行为负控（乱序/未知算子/环/广播不兼容/缺 feed），一份描述产出
+     `.onnx` 字节 + 图级 JSON + **手算真值**；
+  ② **三方对拍**：C ↔ 独立参考（`tools/exec_ref.py`，从 ONNX 定义从零实现）↔ 手算真值
+     （先立"参考 vs 手算"，再谈"C vs 参考"）；
+  ③ **算子覆盖**：注册表 64 个算子**必须全部在语料里真的执行过**（`by_op` 并集逐条对齐）；
+  ④ 执行器行为：乱序图必须能跑；未知算子/环/广播不兼容/缺 feed 必须报错（错误消息带节点名与原因）；
+  ⑤ erf 精度：1001 点网格（[-6,6]）对 `math.erf` 最大绝对误差 **4.11e-08**（阈值 1.5e-7）；
+  ⑥ 真实模型（可选，SKIP 不计入 PASS）：MiniLM 端到端 → 均值池化（前 tokenLen 行，Go 口径）→
+     L2 归一化；断言形状/归一化后范数=1/有限/两次编码 sha256/耗时 —— 实测 **13.5s/次**（初版 36.4s）；
+  ⑦ C 侧负控 2 道（Gather 形状插回末尾 / erf 符号翻回）**必须判红**并逐字节还原（含"篡改后编译失败
+     也算没能证明门能红"）；
+  ⑧ 三轨一致：VM 默认轨 ↔ 解释轨的执行结果 JSON **逐字节相同**。
+  另：`M157_REAL_REF=1` 时追加"**真模型 × 独立参考数值对拍**"（seq=2，纯 Python 约 20 分钟）——
+  本地实测通过：C 侧 `last_hidden_state` 与独立参考在容差内一致（覆盖 23 种算子 / 780 节点）。
+- **缺陷 157（`Gather` 输出形状：indices 插在 axis 位置）**：写成"追加到末尾"在 data 秩 ≥ 2 且 axis=0 时
+  把 `[2,3]` 做成 `[3,2]`；真模型第一个 `Add` 就广播失败。**教训**：负控的判据语料必须能区分两种写法
+  （用秩 1 的 `Shape` 输出时前后缀都为空、形状相同 ⇒ 观察不到）⇒ 补 `e10_gather_rank2`。
+- **缺陷 158（erf 负半轴整体翻号）**：级数含 `x^(2n+1)` 已带符号，又乘 `(x<0?-1:1)` ⇒ 1001 点网格
+  max err = 2.0；修后 4.11e-08。
+- **缺陷 159（发射冻结门的诊断力）**：第 37 轮末"只过 fmt"的提交让 CI 质量门红（`PXOP_SRCLINE` 行号
+  是产物的一部分）—— 冻结基准每行新增 `src=<源文件 sha256>` 诊断列 + 差异分类（A 源码变 / B 发射回归 /
+  源码变而产物未变 ⇒ 判绿），并把"旧格式基准"的兼容路径写成显式分支（不自动重定基）。
+- **数值口径**：算子中间累加 **double**、末步落 float32；MatMul 快路径（float32 直指针）与慢路径
+  在相同累加顺序下**逐字节同结果**（36.4s → 13.5s 而输出向量 sha256 不变）。
+- **覆盖表状态**：ONNX 行**收尾**（解析 M156 + 执行 M157）⇒ api-server / token-cache 的 PuXian 化
+  所需运行时能力全部到位（PG / Redis / TLS / HTTP2 / SSE / SQLite / ONNX 执行）。
+
 ## M156 —— 零依赖 ONNX 解析面（第 38 轮 · qg-issue 87 · 缺陷 154/155/156）
 
 - **背景（覆盖表最后一行）**：token-cache 的 embedding 引擎在 Go 侧是
