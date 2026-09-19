@@ -18,6 +18,7 @@ names_file=$(mktemp)
 grep -h 'px_set_global("' \
   runtime/runtime.c runtime/runtime_quic.c runtime/runtime_h3.c \
   runtime/runtime_h3_qpack_dyn.c runtime/runtime_ws.c \
+  runtime/runtime_onnx.c \
   | sed -n 's/.*px_set_global("\([A-Za-z_][A-Za-z0-9_]*\)", px_native.*/\1/p' \
   | LC_ALL=C sort -u > "$names_file"   # LC_ALL=C 固定字节序排序：sort 输出不受 runner locale 影响（否则 en_US.UTF-8 与 C locale 排序不同 → CI 防漂移假红）
 

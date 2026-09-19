@@ -54,7 +54,7 @@ gen() {
     }
     ' "$RT/runtime.c"
     # 模块文件全量注册名（quic 栈 / zlib / ws）
-    for f in runtime_quic.c runtime_h3.c runtime_h3_qpack_dyn.c runtime_zlib.c runtime_ws.c; do
+    for f in runtime_quic.c runtime_h3.c runtime_h3_qpack_dyn.c runtime_zlib.c runtime_ws.c runtime_onnx.c; do
         grep -oE 'px_(set_global|ffi_register)\("[^"]+"' "$RT/$f" 2>/dev/null \
             | sed -E 's/.*\("([^"]+)".*/\1/' \
             | awk -v m="${f#runtime_}" '{ m2=m; sub(/\.c$/, "", m2); if (m2=="h3"||m2=="h3_qpack_dyn") m2="quic"; print $0 "=" m2 }' \

@@ -944,6 +944,29 @@ def i_call_builtin(name, args, pos):
         if len(args) == 2:
             return Ok(tls_upgrade(args[0], args[1]))
         return Ok(tls_upgrade(args[0]))
+    # ---- M156（第 38 轮）：零依赖 ONNX 解析面（原生 native 直转发；三轨同候选）----
+    #   返回约定：onnx_model_open 成功给 dict、失败给 Err(result)；其余成功给值、失败给
+    #   Err(result)（与 md5/tls_* 同族）。解释轨**只做参数个数预检**，语义全在 runtime。
+    if name == "onnx_model_open":
+        if len(args) != 1:
+            return Err(i_r1002("onnx_model_open 需要 1 个参数 (path)", pos))
+        return Ok(onnx_model_open(args[0]))
+    if name == "onnx_info":
+        if len(args) != 1:
+            return Err(i_r1002("onnx_info 需要 1 个参数 (id)", pos))
+        return Ok(onnx_info(args[0]))
+    if name == "onnx_initializer":
+        if len(args) != 2:
+            return Err(i_r1002("onnx_initializer 需要 2 个参数 (id, name)", pos))
+        return Ok(onnx_initializer(args[0], args[1]))
+    if name == "onnx_initializer_names":
+        if len(args) != 1:
+            return Err(i_r1002("onnx_initializer_names 需要 1 个参数 (id)", pos))
+        return Ok(onnx_initializer_names(args[0]))
+    if name == "onnx_model_close":
+        if len(args) != 1:
+            return Err(i_r1002("onnx_model_close 需要 1 个参数 (id)", pos))
+        return Ok(onnx_model_close(args[0]))
     return Err(i_r1002("未知内置函数: " + name, pos))
 # ---- M59-S4 数学直调 helper（双模式对齐） ----
 # 解释器参数错误返回 Err（不终止进程，区别于编译模式 px_error 终止）；
