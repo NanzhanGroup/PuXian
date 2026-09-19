@@ -7,11 +7,10 @@
 # 注意：**不能用 `xxd | grep` 之类的「人看」方式当判据** —— 必须是 `cmp` 逐字节。
 # ══════════════════════════════════════════════════════════════════════
 let N = bytes_to_str(int_to_bytes(0, 1))
-let s = bytes_to_str(hex_to_bytes("410042"))       # A NUL B
-
-print("L" + N + "R")                               # 期望：4c 00 52 0a
-print("a\u{0}b" + "\u{0}")                         # 期望：61 00 62 00 0a（字面量路径）
-print(s)                                           # 期望：41 00 42 0a（运行期路径）
-print([s])                                         # 期望：5b 41 00 42 5d 0a（容器渲染）
-write_file("nul_bytes_out.bin", s + "\u{0}" + "x\u{0}")   # 期望：41 00 42 00 78 00
+let s = bytes_to_str(hex_to_bytes("410042"))  # A NUL B
+print("L" + N + "R")  # 期望：4c 00 52 0a
+print("a\u{0}b" + "\u{0}")  # 期望：61 00 62 00 0a（字面量路径）
+print(s)  # 期望：41 00 42 0a（运行期路径）
+print([s])  # 期望：5b 41 00 42 5d 0a（容器渲染）
+write_file("nul_bytes_out.bin", s + "\u{0}" + "x\u{0}")  # 期望：41 00 42 00 78 00
 print("M155-IO-DONE")

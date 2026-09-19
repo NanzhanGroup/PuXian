@@ -12,15 +12,13 @@
 #       json.Marshal(s)        ⇒ "A\u0000B"（10 字节：NUL 转义成 6 字符）
 #       fmt.Sprint([]string{s})⇒ [A\x00B]（5 字节）
 # ══════════════════════════════════════════════════════════════════════
-let N = bytes_to_str(int_to_bytes(0, 1))          # 运行期构造的 NUL（不依赖字面量）
-let A0B = "A" + N + "B"                           # A NUL B（3 字节）
-
+let N = bytes_to_str(int_to_bytes(0, 1))  # 运行期构造的 NUL（不依赖字面量）
+let A0B = "A" + N + "B"  # A NUL B（3 字节）
 def ck(name, cond):
     if cond:
         print("ok   " + name + "\n")
     else:
         print("FAIL " + name + "\n")
-
 # ── ① 字面量（缺陷 148 的直接判据：修前 len("\u{0}") == 0） ──
 ck("lit.len1", len("\u{0}") == 1)
 ck("lit.nul_eq_rt", "\u{0}" == N)
@@ -41,7 +39,6 @@ ck("lit.octal_amb.ch0", "\u{0}1"[0] == N)
 ck("lit.octal_amb3.len3", len("\u{0}07") == 3)
 ck("lit.octal_amb3.ch1", "\u{0}07"[1] == "0")
 ck("lit.octal_amb3.ch2", "\u{0}07"[2] == "7")
-
 # ── ② 运行期构造 / 运算（与字面量同口径） ──
 ck("rt.bytes_roundtrip", len(bytes_to_str(hex_to_bytes("410042"))) == 3)
 ck("rt.join_keeps", len(join("", ["a\u{0}b"])) == 3)
@@ -53,14 +50,12 @@ ck("rt.eq_lit", A0B == "A\u{0}B")
 ck("rt.ne_truncated", A0B != "AB")
 ck("rt.dict_key_lit", {"A\u{0}B": 7}["A\u{0}B"] == 7)
 ck("rt.dict_key_rt", {"A" + N + "B": 9}[A0B] == 9)
-
 # ── ③ 渲染长度（str / str(容器)：内嵌 NUL 不得被 strlen 截断） ──
 ck("render.str_identity", len(str(A0B)) == 3)
-ck("render.list_len5", len(str([A0B])) == 5)          # [ A NUL B ] = 5
-ck("render.dict_len8", len(str({"k": A0B})) == 8)      # { k :   A NUL B } = 8
-ck("render.result_len7", len(str(Ok(A0B))) == 7)       # O k ( A NUL B ) = 7
-ck("render.nested", len(str([A0B, "z"])) == 8)         # [ A NUL B ,   z ] = 8
-
+ck("render.list_len5", len(str([A0B])) == 5)  # [ A NUL B ] = 5
+ck("render.dict_len8", len(str({"k": A0B})) == 8)  # { k :   A NUL B } = 8
+ck("render.result_len7", len(str(Ok(A0B))) == 7)  # O k ( A NUL B ) = 7
+ck("render.nested", len(str([A0B, "z"])) == 8)  # [ A NUL B ,   z ] = 8
 # ── ④ 编码 / 摘要 / JSON（外部真值 = Go 本尊） ──
 ck("hash.sha256", sha256(A0B) == "76fe3925c7167317f2df68454339f5ec3650e4062178b4f2be219b105a507907")
 ck("b64.encode", base64_encode(A0B) == "QQBC")
@@ -71,7 +66,6 @@ ck("json.go_ctrl_escaped", json_stringify_go("A" + bytes_to_str(int_to_bytes(1, 
 ck("json.go_roundtrip", json_parse(json_stringify_go(A0B)) == A0B)
 #   `json_stringify` = 语言自有变体（**控制字符裸输出**，契约见速查表 369 行）——
 #   M155（缺陷 152）起**不再按 C 串截断**：长度与尾巴都保住，只是 NUL 裸出头
-ck("json.raw_len_no_truncate", len(json_stringify(A0B)) == 5)      # " A NUL B " = 5
+ck("json.raw_len_no_truncate", len(json_stringify(A0B)) == 5)  # " A NUL B " = 5
 ck("json.raw_tail_kept", json_stringify(A0B)[4] == "\"")
-
 print("M155-SEM-DONE")
