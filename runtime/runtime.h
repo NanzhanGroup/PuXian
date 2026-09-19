@@ -141,6 +141,8 @@ LXValue px_int(int64_t i);
 LXValue px_float(double f);
 LXValue px_str(const char* s);
 LXValue px_str_len(const char* s, int len);
+// M153（第 35 轮）：常量池 —— **仅限地址恒定的静态字面量**（不得传栈/堆缓冲）
+LXValue px_str_const(const char* s);
 // M23b：二进制安全字节串构造（复制 len 字节，可含 NUL）
 LXValue px_bytes_len(const void* data, int len);
 LXValue px_list(int cap);
