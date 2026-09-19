@@ -897,6 +897,44 @@ def i_call_builtin(name, args, pos):
         if len(args) != 2:
             return Err(i_r1002("tcp_send_ex 需要 (fd, data)", pos))
         return Ok(tcp_send_ex(args[0], args[1]))
+    # ═══ M150（第 32 轮）：摘要 / 密钥派生 + TLS 客户端族 ═══
+    if name == "md5":
+        # md5(data) → 32 字符小写 hex
+        if len(args) != 1:
+            return Err(i_r1002("md5 需要 (data)", pos))
+        return Ok(md5(args[0]))
+    if name == "md5_bytes":
+        # md5_bytes(data) → 16 字节
+        if len(args) != 1:
+            return Err(i_r1002("md5_bytes 需要 (data)", pos))
+        return Ok(md5_bytes(args[0]))
+    if name == "pbkdf2_sha256":
+        # pbkdf2_sha256(password, salt, iterations, dklen) → bytes
+        if len(args) != 4:
+            return Err(i_r1002("pbkdf2_sha256 需要 (password, salt, iterations, dklen)", pos))
+        return Ok(pbkdf2_sha256(args[0], args[1], args[2], args[3]))
+    if name == "tls_connect":
+        # tls_connect(host, port[, opts]) → dict{ok,id,fd,peer,version,version_num,cipher,cipher_id,verify,stage,errno,err}
+        if len(args) != 2 and len(args) != 3:
+            return Err(i_r1002("tls_connect 需要 (host, port[, opts])", pos))
+        if len(args) == 3:
+            return Ok(tls_connect(args[0], args[1], args[2]))
+        return Ok(tls_connect(args[0], args[1]))
+    if name == "tls_send":
+        # tls_send(id, data) → dict{ok,n,err}
+        if len(args) != 2:
+            return Err(i_r1002("tls_send 需要 (id, data)", pos))
+        return Ok(tls_send(args[0], args[1]))
+    if name == "tls_recv":
+        # tls_recv(id, maxlen) → dict{ok,data,n,eof,timeout,err}
+        if len(args) != 2:
+            return Err(i_r1002("tls_recv 需要 (id, maxlen)", pos))
+        return Ok(tls_recv(args[0], args[1]))
+    if name == "tls_close":
+        # tls_close(id) → bool（幂等）
+        if len(args) != 1:
+            return Err(i_r1002("tls_close 需要 (id)", pos))
+        return Ok(tls_close(args[0]))
     return Err(i_r1002("未知内置函数: " + name, pos))
 # ---- M59-S4 数学直调 helper（双模式对齐） ----
 # 解释器参数错误返回 Err（不终止进程，区别于编译模式 px_error 终止）；

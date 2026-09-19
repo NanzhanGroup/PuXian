@@ -197,8 +197,20 @@ PY
     fi
 }
 
+# ⚠️ 锚点必须**唯一定位**：M150（第 32 轮）把同一对钳位语句也写进了 `bi_tls_connect`
+#   ⇒ 原先两行的锚点变成"出现 2 次"，本门报 **"篡改未生效（锚点与源码不同步）"**。
+#   这不只是改错——**它证明了门在自查"锚点是否还唯一"**。此处把锚点加长到含 `int fd = ...`
+#   那一行（`px_tcp_connect_timeout` 的调用形态只在 `bi_tcp_connect_ex` 里出现一次）。
 negctl_explicit A '    if (timeout_ms < 0) timeout_ms = 0;
-    if (timeout_ms > 2147483647LL) timeout_ms = 2147483647LL;' '    timeout_ms = 0;   /* NEGCTL-149A */' '连接超时面（黑洞连接必须按 timeout_ms 返回）'
+    if (timeout_ms > 2147483647LL) timeout_ms = 2147483647LL;
+    int stage = 0, er = 0;
+    char addr[128];
+    addr[0] = 0;
+    int fd = px_tcp_connect_timeout(host, port, (int)timeout_ms, &stage, &er, addr, (int)sizeof(addr));' '    timeout_ms = 0;   /* NEGCTL-149A */
+    int stage = 0, er = 0;
+    char addr[128];
+    addr[0] = 0;
+    int fd = px_tcp_connect_timeout(host, port, (int)timeout_ms, &stage, &er, addr, (int)sizeof(addr));' '连接超时面（黑洞连接必须按 timeout_ms 返回）'
 negctl_explicit B '    int64_t timeout_ms = 0;
     int nodelay = 1;' '    int64_t timeout_ms = 0;
     int nodelay = 0;   /* NEGCTL-149B */' 'NODELAY 默认（Go net.Dial 默认开启）'
