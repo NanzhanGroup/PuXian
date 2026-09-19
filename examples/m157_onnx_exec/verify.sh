@@ -16,7 +16,9 @@
 set -u
 cd "$(dirname "$0")"
 HERE="$(pwd)"
-ROOT=/data/code/puxian
+# 仓库根：**按脚本位置推导**（不写死 /data/code/puxian —— 写死的话本地绿、CI 红：
+#   GitHub Actions 的 workspace 根本不是那个路径。M157 接 CI 时发现 m156 也写死了。）
+ROOT="$(cd "$HERE/../.." && pwd)"
 PX="$ROOT/tools/px"
 TMP="$(mktemp -d /tmp/m157.XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
