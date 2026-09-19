@@ -1,0 +1,154 @@
+# M147 门（PuXian 侧）—— 定点小数文本 native `fmt_float_dec(x[, dec])`
+# ---------------------------------------------------------------
+# 与 truth/main.go（**Go 本尊**：strconv.FormatFloat(x,'f',dec,64)）**逐字节**对拍
+# 同一份 corpus.txt。
+#
+# 输出（前 NTRUTH 行，与 Go 侧同格式）：
+#     <dec>|<kind>|<txt>|<Go 的 %.dec f 文本>
+# 之后才是自断言行（M147_ASSERT: nP/mF）—— verify.sh 只 diff 前 NTRUTH 行。
+#
+# 为什么要这个门（缺陷 127）：语言此前没有 `%.Nf`，token-cache 用手搓
+#   `floor(x*100+0.5)`（半向上）逼近 Go `%.2f`，而 Go/glibc 是 **round-half-even**
+#   ⇒ 只要出现可精确表示的 `.x5` 就分叉（0.125 → Go "0.12" / 手搓 "0.13"）。
+#   本门把「定点文本」与 Go 钉死，并把**并列值灌满**（TIE_VALS 是主判据）。
+# 顺带（缺陷 128）：VM 轨把浮点一元负号折叠成 `0 - v` ⇒ `-0.0` 丢失符号位。
+#   本门断言 `-0.0` 的位模式（三轨一致），修前 VM 轨必红。
+
+import std.strings
+
+var m7_pass = 0
+var m7_fail = 0
+
+def m7_ck(name, cond):
+    if cond:
+        m7_pass = m7_pass + 1
+        print("PASS " + name)
+    else:
+        m7_fail = m7_fail + 1
+        print("FAIL " + name)
+
+const M7_NANBIT = 9221120237041090560      # 0x7ff8000000000000
+const M7_PINFBIT = 9218868437227405312     # 0x7ff0000000000000
+const M7_NEGZERO = 0 - 9223372036854775807 - 1   # 0x8000000000000000（-0.0 位模式）
+
+def m7_hex16(u):
+    return int_to_hex(u, 16)
+
+# 位模式文本 → int64 承载（>2^63 溢出 ⇒ 拆高低 32 位拼，拼合的回绕正是补码语义）
+def m7_parse_bits(s):
+    var hi = hex_to_int(s[0:8])
+    var lo = hex_to_int(s[8:16])
+    return hi * 4294967296 + lo
+
+def m7_val(kind, txt):
+    if kind == "b":
+        return bits_to_float64(m7_parse_bits(txt))
+    return float(txt)
+
+# m7_is_tie_text(txt) —— 该十进制文本在**其出现精度**下是否落在并列（half-way）点上。
+#   语料生成器（gen_corpus.py）的 TIE_VALS 是唯一事实源；这里只做**文本**成员判定，
+#   不做浮点算术反推（那会因为二进制表示本身不精确而漏判）。
+def m7_is_tie_text(txt):
+    var ties = ["0.125", "0.375", "0.625", "0.875", "0.0625", "0.03125", "0.0078125",
+                "2.625", "4.125", "8.5", "0.5", "1.5", "2.5", "3.5", "4.5", "10.5",
+                "-0.125", "-2.625", "-3.5", "-4.5", "1.005", "2.675", "0.145", "0.35", "0.45"]
+    for t in ties:
+        if txt == t:
+            return true
+    return false
+
+def main():
+    var text = read_file("corpus.txt")
+    var lines = split(text, "\n")
+    var n = 0
+    var n_tie = 0
+    var n_neg = 0
+    for line in lines:
+        if len(line) == 0:
+            continue
+        var p = split(line, "|")
+        if len(p) != 4:
+            continue
+        var dec = int(p[0])
+        var kind = p[1]
+        var txt = p[2]
+        var f = m7_val(kind, txt)
+        print(p[0] + "|" + kind + "|" + txt + "|" + fmt_float_dec(f, dec))
+        n = n + 1
+        # 统计：并列判据（值的小数位恰好落在 .5 上）与负值覆盖。
+        #   ⚠️ 用**语料文本**判定（TIE_TEXTS 是生成器里的并列值集合），不靠浮点算术
+        #      反推 —— 浮点边界判断本身就会因舍入而漏判（第一版就这么漏了 225 条）。
+        if kind == "v":
+            if m7_is_tie_text(txt):
+                n_tie = n_tie + 1
+            if f < 0.0 or m7_hex16(float64_bits(f)) == "8000000000000000":
+                n_neg = n_neg + 1
+    print("M147_ASSERT-BEGIN")
+    m7_ck("A1 语料非空（>=600 行）", n >= 600)
+    # ── 并列（round-half-even）是**主判据**：这是手搓实现的死穴 ──
+    m7_ck("A2 0.125 两位 → \"0.12\"（取偶；手搓给 0.13 —— 缺陷 127）",
+          fmt_float_dec(0.125, 2) == "0.12")
+    m7_ck("A3 0.375 两位 → \"0.38\"", fmt_float_dec(0.375, 2) == "0.38")
+    m7_ck("A4 2.625 两位 → \"2.62\"", fmt_float_dec(2.625, 2) == "2.62")
+    m7_ck("A5 2.675 两位 → \"2.67\"（二进制上其实小于 .675）",
+          fmt_float_dec(2.675, 2) == "2.67")
+    m7_ck("A6 3.5 零位 → \"4\"（取偶）", fmt_float_dec(3.5, 0) == "4")
+    m7_ck("A7 4.5 零位 → \"4\"（取偶；手搓给 5）", fmt_float_dec(4.5, 0) == "4")
+    m7_ck("A8 0.5 零位 → \"0\"（取偶）", fmt_float_dec(0.5, 0) == "0")
+    m7_ck("A9 1.5 零位 → \"2\"", fmt_float_dec(1.5, 0) == "2")
+    m7_ck("A10 语料里并列值数量 >= 40（判据真的被灌进去了）", n_tie >= 40)
+    # ── 非有限值：Go 的 fmt 文本（libc 给 nan/inf，必须显式分支）──
+    var qnan = bits_to_float64(M7_NANBIT)
+    m7_ck("A11 NaN → \"NaN\"（不是 libc 的 nan）", fmt_float_dec(qnan, 2) == "NaN")
+    m7_ck("A12 +Inf → \"+Inf\"（不是 inf）",
+          fmt_float_dec(bits_to_float64(M7_PINFBIT), 2) == "+Inf")
+    m7_ck("A13 -Inf → \"-Inf\"",
+          fmt_float_dec(bits_to_float64(0 - 4503599627370496), 2) == "-Inf")
+    m7_ck("A14 -NaN 也给 \"NaN\"",
+          fmt_float_dec(bits_to_float64(0 - 2251799813685248), 3) == "NaN")
+    m7_ck("A15 NaN 的任意精度都是 \"NaN\"（精度不影响）", fmt_float_dec(qnan, 0) == "NaN" and fmt_float_dec(qnan, 17) == "NaN")
+    # ── 符号与零 ──
+    m7_ck("A16 -0.0 两位 → \"-0.00\"",
+          fmt_float_dec(bits_to_float64(M7_NEGZERO), 2) == "-0.00")
+    m7_ck("A17 +0.0 两位 → \"0.00\"", fmt_float_dec(0.0, 2) == "0.00")
+    m7_ck("A18 负值 -1.25 两位 → \"-1.25\"", fmt_float_dec(0.0 - 1.25, 2) == "-1.25")
+    m7_ck("A19 负零位 -0.5 → \"-0\" 或 \"0\"（取偶：-0.5 → -0）",
+          fmt_float_dec(0.0 - 0.5, 0) == "-0")
+    # ── 精度参数面 ──
+    m7_ck("A20 dec 缺省 = 6（Go `%f` 的默认精度）", fmt_float_dec(0.5) == "0.500000")
+    m7_ck("A21 dec 缺省 = 6（1/3）", fmt_float_dec(1.0 / 3.0) == "0.333333")
+    m7_ck("A22 dec=17 全精度（1/3）", fmt_float_dec(1.0 / 3.0, 17) == "0.33333333333333331")
+    m7_ck("A23 dec=0 整数文本（无小数点）", fmt_float_dec(123.7, 0) == "124")
+    m7_ck("A24 大数按精确值展开（1e20）",
+          fmt_float_dec(1e20, 2) == "100000000000000000000.00")
+    m7_ck("A25 整型入参等价（int 100 → \"100.00\"）", fmt_float_dec(100, 2) == "100.00")
+    m7_ck("A26 dec<0 钳到 0（Go 的 strconv 里 -1 是\"最短往返\"，本 native **不提供**该语义，见 README 边界）",
+          fmt_float_dec(1.5, 0 - 1) == "2")
+    m7_ck("A27 dec>64 钳到 64（不越界）", len(fmt_float_dec(0.5, 100)) == 66)
+    # ── 与既有两个渲染族**不混**（本门是"定点"，json_num_str 是"最短往返"）──
+    m7_ck("A28 json_num_str 仍是最短往返（1/3 给 17 位有效数字，不带尾部补零）",
+          json_num_str(1.0 / 3.0, 64) == "0.3333333333333333")
+    m7_ck("A29 定点族与最短往返族**必然不同**（0.5：\"0.500000\" vs \"0.5\"）",
+          fmt_float_dec(0.5) != json_num_str(0.5, 64))
+    m7_ck("A30 str() 的浮点文本未被本改动影响（1/3）",
+          str(1.0 / 3.0) == "0.3333333333333333")
+    # ── 缺陷 128：一元负号的**符号位**（三轨必须一致）──
+    m7_ck("A31 字面量 -0.0 的位模式是 8000000000000000（缺陷 128）",
+          m7_hex16(float64_bits(-0.0)) == "8000000000000000")
+    m7_ck("A32 变量取负 -v（v=0.0）也是 8000000000000000",
+          m7_hex16(float64_bits(-0.0 * 1.0)) == "8000000000000000")
+    var zv = 0.0
+    var nzv = -zv
+    m7_ck("A33 运行期一元负号保符号（含变量）",
+          m7_hex16(float64_bits(nzv)) == "8000000000000000")
+    m7_ck("A34 +0.0 与 -0.0 的 == 相等但位模式不同",
+          (0.0 == nzv) and (float64_bits(0.0) != float64_bits(nzv)))
+    m7_ck("A35 负值字面量仍然正确（-1.0 → bff0000000000000）",
+          m7_hex16(float64_bits(-1.0)) == "bff0000000000000")
+    m7_ck("A36 负值字面量的折叠仍是精确算术（-1.25 → bff4000000000000）",
+          m7_hex16(float64_bits(-1.25)) == "bff4000000000000")
+    m7_ck("A37 语料里负值数量 >= 40", n_neg >= 40)
+    m7_ck("A38 位模式语料覆盖 NaN/±Inf/-0.0/非规格化（真值域完整）",
+          m7_hex16(float64_bits(qnan)) == "7ff8000000000000"
+          and m7_hex16(float64_bits(bits_to_float64(1))) == "0000000000000001")
+    print("M147_ASSERT: " + str(m7_pass) + "P/" + str(m7_fail) + "F")

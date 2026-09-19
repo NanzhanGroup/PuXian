@@ -520,6 +520,14 @@ def i_call_builtin(name, args, pos):
         if len(args) != 1:
             return Err(i_r1002("bits_to_float64 需要一个参数", pos))
         return Ok(bits_to_float64(args[0]))
+    if name == "fmt_float_dec":
+        # M147（第 29 轮）：Go `fmt.Sprintf("%.<dec>f", x)` 的定点文本
+        #   （并列取偶；NaN/±Inf 给 Go 文本）。dec 缺省 6。
+        if len(args) != 1 and len(args) != 2:
+            return Err(i_r1002("fmt_float_dec 需要 (值[, 小数位])", pos))
+        if len(args) == 2:
+            return Ok(fmt_float_dec(args[0], args[1]))
+        return Ok(fmt_float_dec(args[0]))
     if name == "json_num_str":
         # M143：Go `encoding/json` 的浮点文本（bits=32 走 32 位最短往返；非有限值 → null）。
         if len(args) != 1 and len(args) != 2:
