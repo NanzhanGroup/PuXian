@@ -1,0 +1,32 @@
+# M150 门 · 解释轨冒烟（md5 / md5_bytes / pbkdf2_sha256 / tls_* 的**名册**与基本语义）
+# ---------------------------------------------------------------
+# 解释轨（`px run`）走 selfhost/interp.px 的 Mini 名册 + ibuiltin.px 的转发层 ——
+# 一处漏登记就是 `R1002 未知内置函数`。本文件不依赖任何外部服务：
+#   · md5 / md5_bytes / pbkdf2_sha256 只跑纯计算
+#   · tls_* 只跑**失败面**（连 127.0.0.1:1 必被拒）与非法句柄 —— 证名册与"永不杀进程"
+#     这两件事在解释轨成立；成功面由 tls_probe.px 在 VM/C 双轨覆盖。
+var s15p = 0
+var s15f = 0
+def s15_ck(name, cond):
+    if cond:
+        s15p = s15p + 1
+    else:
+        s15f = s15f + 1
+        print("FAIL " + name)
+
+def main():
+    s15_ck("1 md5(\"abc\")", md5("abc") == "900150983cd24fb0d6963f7d28e17f72")
+    s15_ck("2 md5(\"\")", md5("") == "d41d8cd98f00b204e9800998ecf8427e")
+    s15_ck("3 md5_bytes 长度 16", bytes_len(md5_bytes("abc")) == 16)
+    s15_ck("4 md5_bytes 与 md5 同值", bytes_to_hex(md5_bytes("abc")) == md5("abc"))
+    s15_ck("5 pbkdf2 dklen 生效", bytes_len(pbkdf2_sha256("pw", "salt", 3, 20)) == 20)
+    s15_ck("6 pbkdf2 确定性", bytes_to_hex(pbkdf2_sha256("pw", "salt", 5, 32))
+           == bytes_to_hex(pbkdf2_sha256("pw", "salt", 5, 32)))
+    s15_ck("7 pbkdf2 iters 钳位（0 == 1）", bytes_to_hex(pbkdf2_sha256("pw", "salt", 0, 32))
+           == bytes_to_hex(pbkdf2_sha256("pw", "salt", 1, 32)))
+    var dead = tls_connect("127.0.0.1", 1, {"timeout_ms": 800})
+    s15_ck("8 tls_connect 失败不杀进程且可辨别", dead["ok"] == false and dead["stage"] == "connect")
+    s15_ck("9 tls_send 非法句柄不杀进程", tls_send(9999, "x")["ok"] == false)
+    s15_ck("10 tls_recv 非法句柄不杀进程", tls_recv(9999, 8)["ok"] == false)
+    s15_ck("11 tls_close 非法句柄返回 false", tls_close(0) == false)
+    print("M150_SMOKE: " + str(s15p) + "P/" + str(s15f) + "F")

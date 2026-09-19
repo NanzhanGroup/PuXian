@@ -105,6 +105,9 @@ run m148_ieee_div bash examples/m148_ieee_div/verify.sh
 # m149（TCP「带超时 + 可辨别失败」族 —— Redis/PG 客户端移植的前提；
 #   连接超时 / 读超时 / EOF 可辨别 / TCP_NODELAY 默认对齐 Go；3 道负控）：VM+C+解释轨
 run m149_tcp_deadline bash examples/m149_tcp_deadline/verify.sh
+# M150（第 32 轮）：摘要/密钥派生族（md5/md5_bytes/pbkdf2_sha256）+ TLS 客户端族
+#   （tls_connect/tls_send/tls_recv/tls_close）；Go 本尊对拍 + 受控 TLS 服务端
+run m150_tls_crypto bash examples/m150_tls_crypto/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们
