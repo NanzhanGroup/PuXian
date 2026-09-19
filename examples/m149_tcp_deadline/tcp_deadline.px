@@ -1,0 +1,292 @@
+# ═══════════════════════════════════════════════════════════════════════
+# tcp_deadline.px — M149 门（客户端断言主体）
+# ---------------------------------------------------------------
+# 门要证明的四件事（都是 Go `net` 处处依赖、而旧 tcp_* 表达不出的）：
+#   ① **连接超时**：`net.DialTimeout` 的等价物 —— 黑洞地址在 timeout_ms 后
+#      返回**结果**（不杀进程），且 errno=ETIMEDOUT(110)。
+#   ② **读超时**：`SetReadDeadline` 的等价物 —— 对端沉默时 tcp_recv_ex 在
+#      timeout_ms 后返回 timeout=true + err="i/o timeout"，而不是永久阻塞。
+#   ③ **EOF / 超时 / 出错可辨别**：旧 tcp_recv 三者**都返回 ""**；新接口分别给
+#      eof=true / timeout=true / errnon 非零。Redis 客户端靠这个区分
+#      「连接被对端关闭（应重连）」与「暂无数据（应重试）」。
+#   ④ **选项可回读**：`tcp_opt` 改完 getsockopt 回读生效值；默认 TCP_NODELAY=1
+#      （Go `net.Dial` 对 TCP 默认开 NODELAY ⇒ 不设就与 Go 的时序行为分叉）。
+#
+# 服务端是**独立进程** m149_server.px（协议见其头注释），端口由 M149_PORT 传入。
+# ⚠️ 断言里凡是「时间」都取**宽上下界**（CI 机器可能被抢占），只要求
+#    「超时被真正遵守（下界）」与「没有远超（上界）」。
+# ═══════════════════════════════════════════════════════════════════════
+var PASS = 0
+var FAIL = 0
+var SKIP = 0
+
+def ck(name, cond):
+    if cond:
+        PASS = PASS + 1
+        print("PASS " + name)
+    else:
+        FAIL = FAIL + 1
+        print("FAIL " + name)
+
+def skip(name, why):
+    SKIP = SKIP + 1
+    print("SKIP " + name + " —— " + why)
+
+def info(name, text):
+    print("INFO " + name + " " + text)
+
+var HOST = "127.0.0.1"
+var PORT = int(env("M149_PORT"))
+var BLACKHOLE = "192.0.2.1"      # RFC 5737 TEST-NET-1：文档用网段，通常无路由 ⇒ 丢包
+
+def dial(opts):
+    return tcp_connect_ex(HOST, PORT, opts)
+
+def main():
+    # ── A 连接超时（黑洞地址）──
+    var t0 = now_ms()
+    var a = tcp_connect_ex(BLACKHOLE, 6379, {"timeout_ms": 300})
+    var dta = now_ms() - t0
+    ck("A1 黑洞连接返回结果（未杀进程）", type(a) == "dict")
+    ck("A2 连接失败（ok=false）", a["ok"] == false)
+    ck("A3 stage=connect", a["stage"] == "connect")
+    var ae = int(a["errno"])
+    if ae == 110:
+        ck("A4 超时被遵守（≥250ms）", dta >= 250)
+        ck("A5 未远超超时（≤2500ms）", dta <= 2500)
+        ck("A6 errno=ETIMEDOUT(110)", true)
+    elif ae == 101 or ae == 113:
+        skip("A4-A6 超时语义", "本机对该网段直达不可达（errno=" + str(ae) + "，非丢包）⇒ 试不到 ETIMEDOUT")
+        ck("A4 不可达即失败（≤2500ms）", dta <= 2500)
+        ck("A5 不是 refused（101/113，非 111）", ae != 111)
+        ck("A6 err 文案非空", len(str(a["err"])) > 0)
+    else:
+        ck("A4 errno 必须是 110/101/113", false)
+        ck("A5 errno 异常明细", false)
+        ck("A6 err 文案非空", len(str(a["err"])) > 0)
+    info("A.dt", "dt=" + str(dta) + "ms errno=" + str(ae) + " err=" + str(a["err"]))
+    ck("A7 失败后进程仍存活（后续断言继续执行）", true)
+
+    # ── B 连接被拒（即时失败，与超时可区分）──
+    var b0 = now_ms()
+    var b = tcp_connect_ex("127.0.0.1", 1, {"timeout_ms": 3000})
+    var dtb = now_ms() - b0
+    ck("B1 端口 1 无监听 → ok=false", b["ok"] == false)
+    ck("B2 errno=ECONNREFUSED(111)", int(b["errno"]) == 111)
+    ck("B3 stage=connect", b["stage"] == "connect")
+    ck("B4 即时失败（<1000ms，不被 timeout 拖住）", dtb < 1000)
+    info("B.dt", "dt=" + str(dtb) + "ms")
+
+    # ── C 域名解析失败（stage=resolve，与连接失败可区分）──
+    var c = tcp_connect_ex("nosuchhost-zzz.invalid", 80, {"timeout_ms": 1000})
+    ck("C1 解析失败 → ok=false", c["ok"] == false)
+    ck("C2 stage=resolve", c["stage"] == "resolve")
+    ck("C3 err 含「解析主机失败」", contains(str(c["err"]), "解析主机失败"))
+    info("C.err", str(c["err"]))
+
+    # ── D 正常连接 + 选项**回读**（证明超时/选项真的落到内核）──
+    var d = dial({"timeout_ms": 2000})
+    ck("D1 连接成功（ok=true）", d["ok"] == true)
+    var dfd = int(d["fd"])
+    ck("D2 fd≥0", dfd >= 0)
+    ck("D3 addr 非空（数字地址）", len(str(d["addr"])) > 0)
+    ck("D3b peer 是 Go RemoteAddr 形态（ip:port）", str(d["peer"]) == HOST + ":" + str(PORT))
+    var o1 = tcp_opt(dfd, {})
+    ck("D4 默认 TCP_NODELAY=1（对齐 Go net.Dial）", o1["nodelay"] == true)
+    ck("D5 默认读超时=0（无限）", int(o1["read_timeout_ms"]) == 0)
+    ck("D6 默认写超时=0（无限）", int(o1["write_timeout_ms"]) == 0)
+    tcp_opt(dfd, {"read_timeout_ms": 400, "write_timeout_ms": 250})
+    var o2 = tcp_opt(dfd, {})
+    ck("D7 读超时回读=400", int(o2["read_timeout_ms"]) == 400)
+    ck("D8 写超时回读=250", int(o2["write_timeout_ms"]) == 250)
+    tcp_opt(dfd, {"read_timeout_ms": 0})
+    var o3 = tcp_opt(dfd, {})
+    ck("D9 读超时清零回读=0", int(o3["read_timeout_ms"]) == 0)
+    tcp_opt(dfd, {"keepalive": true})
+    var o4 = tcp_opt(dfd, {})
+    ck("D10 keepalive 回读=true", o4["keepalive"] == true)
+    info("D.opts", "nodelay=" + str(o1["nodelay"]) + " rt=" + str(o2["read_timeout_ms"]))
+    tcp_close(dfd)
+
+    # ── E 读超时（对端沉默）──
+    var e = dial({"timeout_ms": 2000})
+    ck("E0 连接成功", e["ok"] == true)
+    var efd = int(e["fd"])
+    tcp_opt(efd, {"read_timeout_ms": 300})
+    tcp_send_ex(efd, "silent\n")
+    var e0 = now_ms()
+    var er = tcp_recv_ex(efd, 4096)
+    var dte = now_ms() - e0
+    ck("E1 沉默对端 → ok=false", er["ok"] == false)
+    ck("E2 timeout=true（与 EOF 区分）", er["timeout"] == true)
+    ck("E3 eof=false（不是对端关闭）", er["eof"] == false)
+    ck("E4 err=\"i/o timeout\"（Go os.ErrDeadlineExceeded 文案）", str(er["err"]) == "i/o timeout")
+    ck("E5 errno=EAGAIN(11)", int(er["errno"]) == 11)
+    ck("E6 读超时被遵守（≥250ms）", dte >= 250)
+    ck("E7 未远超读超时（≤2000ms）", dte <= 2000)
+    info("E.dt", "dt=" + str(dte) + "ms errno=" + str(er["errno"]))
+    tcp_close(efd)
+
+    # ── F EOF 可辨别（对端发完就关）──
+    var f = dial({"timeout_ms": 2000})
+    ck("F0 连接成功", f["ok"] == true)
+    var ffd = int(f["fd"])
+    tcp_opt(ffd, {"read_timeout_ms": 5000})
+    tcp_send_ex(ffd, "greet\n")
+    var acc = ""
+    var eof_seen = false
+    var eof_to = true
+    var rounds = 0
+    while rounds < 12:
+        var fr = tcp_recv_ex(ffd, 4096)
+        if fr["eof"]:
+            eof_seen = true
+            eof_to = fr["timeout"]
+            break
+        if fr["ok"]:
+            acc = acc + fr["data"]
+        rounds = rounds + 1
+    ck("F1 收到 hello", acc == "hello")
+    ck("F2 EOF 可辨别（eof=true）", eof_seen)
+    ck("F3 EOF 不是超时（timeout=false）", eof_seen and not eof_to)
+    info("F.rounds", "recv 轮数=" + str(rounds))
+    tcp_close(ffd)
+
+    # ── G 分段到达（TCP 无消息边界）──
+    var g = dial({"timeout_ms": 2000})
+    ck("G0 连接成功", g["ok"] == true)
+    var gfd = int(g["fd"])
+    tcp_opt(gfd, {"read_timeout_ms": 5000})
+    tcp_send_ex(gfd, "frag\n")
+    var gacc = ""
+    var gr = 0
+    while gr < 12:
+        if len(gacc) >= 9:
+            break
+        var x = tcp_recv_ex(gfd, 4096)
+        if x["n"] == 0:
+            break
+        gacc = gacc + x["data"]
+        gr = gr + 1
+    ck("G1 累计内容 AAA BBB CCC（与分段无关）", gacc == "AAABBBCCC")
+    info("G.rounds", "recv 轮数=" + str(gr) + "（≥1 即可，仅记录）")
+    tcp_close(gfd)
+
+    # ── H 大包接收（100000 字节，maxlen 16384 ⇒ 必然多轮）──
+    var h = dial({"timeout_ms": 2000})
+    ck("H0 连接成功", h["ok"] == true)
+    var hfd = int(h["fd"])
+    tcp_opt(hfd, {"read_timeout_ms": 5000})
+    tcp_send_ex(hfd, "big 100000\n")
+    var hacc = ""
+    var hr = 0
+    while hr < 200:
+        if len(hacc) >= 100000:
+            break
+        var y = tcp_recv_ex(hfd, 16384)
+        if y["n"] == 0:
+            break
+        hacc = hacc + y["data"]
+        hr = hr + 1
+    ck("H1 收满 100000 字节", len(hacc) == 100000)
+    ck("H2 首 10 字节对齐", hacc[0:10] == "0123456789")
+    ck("H3 末 10 字节对齐", hacc[99990:100000] == "0123456789")
+    ck("H4 中段（50000..50010）对齐", hacc[50000:50010] == "0123456789")
+    ck("H5 多轮到达（maxlen 16384 ⇒ 轮数≥6）", hr >= 6)
+    info("H.rounds", "recv 轮数=" + str(hr))
+    tcp_close(hfd)
+
+    # ── I 大包发送（100000 字节）+ 对端确认 ──
+    var i = dial({"timeout_ms": 2000})
+    ck("I0 连接成功", i["ok"] == true)
+    var ifd = int(i["fd"])
+    tcp_opt(ifd, {"read_timeout_ms": 5000, "write_timeout_ms": 5000})
+    tcp_send_ex(ifd, "drain 100000\n")
+    var ready = false
+    var iacc = ""
+    var ir = 0
+    while ir < 20:
+        var z = tcp_recv_ex(ifd, 4096)
+        if z["n"] == 0:
+            break
+        iacc = iacc + z["data"]
+        if contains(iacc, "ready"):
+            ready = true
+            break
+        ir = ir + 1
+    ck("I1 服务端 ready 应答", ready)
+    var pay = ""
+    var k = 0
+    while k < 1638:
+        pay = pay + "0123456789"
+        k = k + 1
+    var sent_total = 0
+    var send_ok = true
+    var k2 = 0
+    while k2 < 7:
+        var piece = pay
+        var left = 100000 - sent_total
+        if left < len(pay):
+            piece = pay[0:left]
+        var w = tcp_send_ex(ifd, piece)
+        if not w["ok"]:
+            send_ok = false
+            break
+        sent_total = sent_total + int(w["n"])
+        if sent_total >= 100000:
+            break
+        k2 = k2 + 1
+    ck("I2 发送成功（ok=true）", send_ok)
+    ck("I3 发送字节数=100000", sent_total == 100000)
+    var reply = ""
+    var ir2 = 0
+    while ir2 < 20:
+        var q = tcp_recv_ex(ifd, 4096)
+        if q["n"] == 0:
+            break
+        reply = reply + q["data"]
+        if contains(reply, "got "):
+            break
+        ir2 = ir2 + 1
+    ck("I4 对端确认 got 100000", reply == "got 100000")
+    info("I.reply", "reply=" + reply)
+    tcp_close(ifd)
+
+    # ── J 对端关闭后写（EPIPE/ECONNRESET 可辨别，不杀进程）──
+    var j = dial({"timeout_ms": 2000})
+    ck("J0 连接成功", j["ok"] == true)
+    var jfd = int(j["fd"])
+    tcp_send_ex(jfd, "bye\n")
+    sleep_us(120000)
+    var wfail = false
+    var jerr = 0
+    var jn = 0
+    while jn < 40:
+        var jw = tcp_send_ex(jfd, "0123456789abcdef0123456789abcdef")
+        if not jw["ok"]:
+            wfail = true
+            jerr = int(jw["errno"])
+            break
+        sleep_us(20000)
+        jn = jn + 1
+    ck("J1 对端关闭后写最终失败", wfail)
+    ck("J2 errno ∈ {EPIPE(32), ECONNRESET(104)}", jerr == 32 or jerr == 104)
+    info("J.detail", "写到第 " + str(jn) + " 次失败 errno=" + str(jerr))
+    tcp_close(jfd)
+
+    # ── K 旧 tcp_recv 对照（三态不可辨；仅记录差异，非断言）──
+    var kk = dial({"timeout_ms": 2000})
+    var kfd = int(kk["fd"])
+    tcp_opt(kfd, {"read_timeout_ms": 300})
+    tcp_send_ex(kfd, "silent\n")
+    var old = tcp_recv(kfd, 4096)          # 旧接口：超时/EOF/出错都是 ""
+    info("K.旧接口对照", "tcp_recv 超时返回 [" + old + "]（与 EOF 同为 \"\" ⇒ 不可辨）")
+    tcp_close(kfd)
+
+    # ── 收尾：让服务端退出 ──
+    var bye = dial({"timeout_ms": 2000})
+    if bye["ok"] == true:
+        tcp_send_ex(int(bye["fd"]), "exit\n")
+        tcp_close(int(bye["fd"]))
+
+    print("M149_ASSERT: " + str(PASS) + "P/" + str(FAIL) + "F/" + str(SKIP) + "S")

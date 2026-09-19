@@ -1,7 +1,7 @@
 {
  "generator": "tools/gen_native_table.sh",
  "source": "runtime/*.c px_set_global(px_native)",
- "count": 341,
+ "count": 345,
  "names": [
   "Err",
   "Ok",
@@ -301,9 +301,13 @@
   "tcp_accept",
   "tcp_close",
   "tcp_connect",
+  "tcp_connect_ex",
   "tcp_listen",
+  "tcp_opt",
   "tcp_recv",
+  "tcp_recv_ex",
   "tcp_send",
+  "tcp_send_ex",
   "time_format",
   "time_parse",
   "tls_server",
