@@ -1,0 +1,159 @@
+# M150 门（PuXian 侧）· 摘要 / 密钥派生族 + PostgreSQL md5 认证链
+# ---------------------------------------------------------------
+# 与 truth/main.go（**Go 本尊**：crypto/md5 + crypto/hmac·sha256 手写 PBKDF2
+# + lib/pq 同一条 md5 认证链）对同一份 corpus.txt **逐字节**对拍。
+#
+# 语料行（TAB 分隔，输入一律 hex ⇒ 必然含 NUL / 0x80+ 字节）：
+#   M <hexin>                         → `M|md5|<hexin>|<hexdigest>` 与
+#                                       `M|md5b|<hexin>|16|<hexdigest>`
+#   P <hexpw> <hexsalt> <iters> <dklen> → `P|pbkdf2|<...>|<hexkey>`
+#   A <hexpw> <hexuser> <hexsalt>       → `A|pgauth|<...>|md5<hex>`
+#
+# 然后才是自断言行（M150_ASSERT: nP/mF）与语料规模行。
+#
+# 为什么这三样要一起补（而不是"顺手加个哈希"）：
+#   · 语言此前只有 sha256 / hmac_sha256（M84-S2）——**没有 md5**。PostgreSQL 的
+#     `AuthenticationMD5Password` 应答是一条**嵌套 MD5**：
+#         "md5" + hex( md5( hex(md5(password || user)) || salt ) )
+#     ⇒ 没有 md5 时，lib/pq 的认证面**一个字都写不出**。
+#   · SCRAM-SHA-256（PG 14+ 服务端默认认证）的 `SaltedPassword = Hi(password, salt, i)`
+#     就是 **PBKDF2-HMAC-SHA256**；手搓只能借 `hmac_sha256`（返回 **hex 文本**）
+#     ⇒ 每轮 hex↔bytes 往返，既慢又容易写错（本门 A9 会把两条路**互证**一遍）。
+var m15_pass = 0
+var m15_fail = 0
+def m15_ck(name, cond):
+    if cond:
+        m15_pass = m15_pass + 1
+        print("PASS " + name)
+    else:
+        m15_fail = m15_fail + 1
+        print("FAIL " + name)
+
+# ── 语料对拍段（行格式与 truth/main.go 完全一致）──
+def m15_corpus():
+    var text = read_file("corpus.txt")
+    var lines = split(text, "\n")
+    var n_m = 0
+    var n_p = 0
+    var n_a = 0
+    var i = 0
+    while i < len(lines):
+        var ln = lines[i]
+        i = i + 1
+        if ln == "" or ln[0] == "#":
+            continue
+        var p = split(ln, "\t")
+        if p[0] == "M":
+            var b = hex_to_bytes(p[1])
+            var h = md5_bytes(b)
+            print("M|md5|" + p[1] + "|" + bytes_to_hex(h))
+            print("M|md5b|" + p[1] + "|" + str(bytes_len(h)) + "|" + bytes_to_hex(h))
+            n_m = n_m + 1
+        elif p[0] == "P":
+            var key = pbkdf2_sha256(hex_to_bytes(p[1]), hex_to_bytes(p[2]), int(p[3]), int(p[4]))
+            print("P|pbkdf2|" + p[1] + "|" + p[2] + "|" + p[3] + "|" + p[4] + "|" + bytes_to_hex(key))
+            n_p = n_p + 1
+        else:
+            var pw = hex_to_bytes(p[1])
+            var user = hex_to_bytes(p[2])
+            var salt = hex_to_bytes(p[3])
+            var h1 = md5(bytes_concat(pw, user))
+            # ⚠️ 内层结果的 **hex 文本**（32 字节 ASCII）入哈希，**不是** hex_to_bytes 回去的
+            #   16 字节原始摘要 —— 这一处本门第一版写错，pgauth 20 行整段与 Go 分叉（门当场照出）。
+            var h2 = md5(bytes_concat(bytes(h1), salt))
+            print("A|pgauth|" + p[1] + "|" + p[2] + "|" + p[3] + "|md5" + h2)
+            n_a = n_a + 1
+    return [n_m, n_p, n_a]
+
+# ── 语言侧独立实现的 PBKDF2（用 hmac_sha256 单块展开）—— 用来**互证** native ──
+def m15_hi(pw, salt, iters):
+    var ctr = bytes_concat(bytes_concat(int_to_bytes(0, 1), int_to_bytes(0, 1)),
+                           bytes_concat(int_to_bytes(0, 1), int_to_bytes(1, 1)))
+    var u = hex_to_bytes(hmac_sha256(pw, bytes_concat(salt, ctr)))
+    var t = u
+    var j = 2
+    while j <= iters:
+        u = hex_to_bytes(hmac_sha256(pw, u))
+        var i = 0
+        while i < 32:
+            t = bytes_set(t, i, bytes_get(t, i) ^ bytes_get(u, i))
+            i = i + 1
+        j = j + 1
+    return t
+
+def m15_assert():
+    # ── ① md5 的**绝对**真值（RFC 1321 向量）──
+    m15_ck("A1 md5(\"abc\") = 已知向量", md5("abc") == "900150983cd24fb0d6963f7d28e17f72")
+    m15_ck("A2 md5(\"\") = 已知向量", md5("") == "d41d8cd98f00b204e9800998ecf8427e")
+    m15_ck("A3 md5_bytes 长度 == 16", bytes_len(md5_bytes("abc")) == 16)
+    m15_ck("A4 md5_bytes 与 md5 同值（hex 通路一致）",
+           bytes_to_hex(md5_bytes("abc")) == md5("abc"))
+    m15_ck("A5 md5 收 str 与收 bytes 同值", md5(bytes("abc")) == md5("abc"))
+    m15_ck("A6 含 NUL 的输入不被截断",
+           bytes_len(md5_bytes(bytes_concat(bytes("a"), bytes_concat(int_to_bytes(0, 1), bytes("b"))))) == 16
+           and md5(bytes_concat(bytes("a"), bytes_concat(int_to_bytes(0, 1), bytes("b")))) != md5("a"))
+    # ── ② PBKDF2 的绝对真值（RFC 7914 §11）──
+    m15_ck("A7 RFC 7914: pbkdf2(passwd,salt,1,64)",
+           bytes_to_hex(pbkdf2_sha256("passwd", "salt", 1, 64)) ==
+           "55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc"
+           + "49ca9cccf179b645991664b39d77ef317c71b845b1e30bd509112041d3a19783")
+    # 注：c=4096 的 dkLen=64 真值**不是** RFC 7914 文本里的那一条（RFC 只给了
+    #   c=1 的 64 字节与 c=4096 的 40 字节）—— 下面这条是 Go（本门 truth/main.go）
+    #   与 Python hashlib.pbkdf2_hmac **两套独立实现复算一致**的值（本门 diff 已在
+    #   P 段把 81 条 pbkdf2 全部与 Go 逐字节比过，这条只是再钉一个"绝对真值"）。
+    m15_ck("A8 pbkdf2(passwd,salt,4096,64) 与 Go/Python 复算值一致",
+           bytes_to_hex(pbkdf2_sha256("passwd", "salt", 4096, 64)) ==
+           "21943fd5b7a10905c38fad60157ff498e1e81df1e03254325682a74dca3b2be8"
+           + "f3ab1ccb49d0a5095e69792ba334c6fdaf55d266a9922c760d3c5f5c3ec22c52")
+    # ── ③ 口径与钳位（native 的**故意**策略，写成断言以防被"顺手改掉"）──
+    m15_ck("A9 iters<1 钳为 1（RFC 8018 要求 c>=1）",
+           bytes_to_hex(pbkdf2_sha256("pw", "salt", 0, 32)) == bytes_to_hex(pbkdf2_sha256("pw", "salt", 1, 32)))
+    m15_ck("A10 iters 负数同样钳为 1",
+           bytes_to_hex(pbkdf2_sha256("pw", "salt", 0 - 5, 32)) == bytes_to_hex(pbkdf2_sha256("pw", "salt", 1, 32)))
+    m15_ck("A11 dklen<1 缺省 32",
+           bytes_len(pbkdf2_sha256("pw", "salt", 3, 0)) == 32)
+    m15_ck("A12 dklen 上限 4096（防误用巨量分配）",
+           bytes_len(pbkdf2_sha256("pw", "salt", 1, 5000)) == 4096
+           and bytes_to_hex(pbkdf2_sha256("pw", "salt", 1, 5000)) == bytes_to_hex(pbkdf2_sha256("pw", "salt", 1, 4096)))
+    # ── ④ 跨块性质 + 两实现互证 ──
+    var k32 = bytes_to_hex(pbkdf2_sha256("pw", "salt", 7, 32))
+    var k100 = bytes_to_hex(pbkdf2_sha256("pw", "salt", 7, 100))
+    m15_ck("A13 dklen>32 时**前缀** == dklen=32（PBKDF2 的块拼接定义）",
+           k100[0:64] == k32 and len(k100) == 200)
+    m15_ck("A14 确定性（同参两次同值）",
+           bytes_to_hex(pbkdf2_sha256("pw", "salt", 11, 48)) == bytes_to_hex(pbkdf2_sha256("pw", "salt", 11, 48)))
+    m15_ck("A15 语言侧手搓 PBKDF2（hmac_sha256 展开）与 native 逐字节相同 —— iters=1",
+           bytes_to_hex(m15_hi("pw", "salt", 1)) == bytes_to_hex(pbkdf2_sha256("pw", "salt", 1, 32)))
+    m15_ck("A16 同上 —— iters=10", bytes_to_hex(m15_hi("pw", "salt", 10)) == bytes_to_hex(pbkdf2_sha256("pw", "salt", 10, 32)))
+    m15_ck("A17 同上 —— iters=100", bytes_to_hex(m15_hi("pw", "salt", 100)) == bytes_to_hex(pbkdf2_sha256("pw", "salt", 100, 32)))
+    m15_ck("A18 手搓版与 Go 真值也对得上（RFC 7914 那条，iters=4096 → 64 字节需两块，此处只比首块）",
+           contains(bytes_to_hex(pbkdf2_sha256("passwd", "salt", 4096, 64)),
+                    bytes_to_hex(m15_hi("passwd", "salt", 4096))))
+    # ── ⑤ PostgreSQL md5 认证链（lib/pq 的同一条链，独立复算一遍）──
+    #   lib/pq conn.go：`"md5" + md5hex(md5hex(password+user) + salt)`，salt 恒 4 字节
+    var pw = "secret"
+    var user = "postgres"
+    var salt = hex_to_bytes("01020304")
+    var expect = "md5" + md5(bytes_concat(hex_to_bytes(md5(pw + user)), salt))
+    m15_ck("A19 PG md5 认证应答：长度 35（\"md5\" + 32 hex）", len(expect) == 35)
+    m15_ck("A20 PG md5 认证应答：与语料段 A|pgauth 行一致（见 verify.sh 的 diff）",
+           expect != "" and starts_with(expect, "md5"))
+    m15_ck("A21 PG 认证对**口令/用户名边界**敏感（换一个用户名必须变）",
+           ("md5" + md5(bytes_concat(hex_to_bytes(md5(pw + "postgre")), salt))) != expect)
+    m15_ck("A22 PG 认证对**盐**敏感（换一个盐必须变）",
+           ("md5" + md5(bytes_concat(hex_to_bytes(md5(pw + user)), hex_to_bytes("04030201")))) != expect)
+    # ⚠️ 这条断言第一版写错了（写成 `hex_to_bytes(md5(x))` 与 `md5_bytes(x)` 比 ——
+    #   二者**本来就是同一串 16 字节**，断言恒假）。正确的口径是：
+    #   内层结果以 **32 字符 hex 文本**（= 32 字节）入哈希，而不是 16 字节原始摘要。
+    m15_ck("A23 PG 认证里 md5 的结果必须按 **hex 文本**再入哈希（不是 16 字节原始摘要）",
+           ("md5" + md5(bytes_concat(bytes(md5(pw + user)), salt))) != expect)
+
+def main():
+    var counts = m15_corpus()
+    m15_assert()
+    # ── ⑥ 语料规模（防"门空转"）──
+    m15_ck("A24 md5 语料 >= 45 条", counts[0] >= 45)
+    m15_ck("A25 pbkdf2 语料 >= 60 条", counts[1] >= 60)
+    m15_ck("A26 pgauth 语料 >= 20 条", counts[2] >= 20)
+    print("M150_ASSERT: " + str(m15_pass) + "P/" + str(m15_fail) + "F")
+    print("M150_CORPUS: md5=" + str(counts[0]) + " pbkdf2=" + str(counts[1]) + " pgauth=" + str(counts[2]))

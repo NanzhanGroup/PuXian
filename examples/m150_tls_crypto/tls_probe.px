@@ -1,0 +1,159 @@
+# M150 门 · TLS 客户端族探针（PuXian 侧）
+# ---------------------------------------------------------------
+# 与 truth_tls/main.go（**Go 本尊 crypto/tls**）在**同一个**受控服务端上跑同一套动作，
+# 输出 `TLS|` 行；verify.sh 只 diff **实现无关**的那一子集
+# （insecure_ok / insecure_version_num / send_ok / recv_ok / recv_data / recv_n /
+#   after_bye_n / eof / close_ok / verify_ok / peer_port）。
+#
+# 为什么套件不在比对子集里：Go 与 mbedtls 的**偏好序**不同（本机实测 Go 选
+#   0x1301 AES-128-GCM，mbedtls 选 0x1302 AES-256-GCM）—— 这是实现自由，不是分叉。
+#   套件口径改由两条**与实现无关**的判据钉住：
+#     · PuXian 自报的 `cipher_id` 交给 Go 的 `tls.CipherSuiteName(id)`，必须与
+#       PuXian 自报的 `cipher` **逐字节相同**（证明文本口径 = Go 口径）；
+#     · 服务端日志里必须出现 PuXian 协商出的那个套件名（证明这确实是握手的产物）。
+#
+# 环境变量：
+#   M150_TLS_PORT  受控服务端端口（缺省则整段 SKIP，断言计数里标 S）
+#   M150_TLS_HOST  缺省 127.0.0.1
+var t15p = 0
+var t15f = 0
+var t15s = 0
+def t15_ck(name, cond):
+    if cond:
+        t15p = t15p + 1
+    else:
+        t15f = t15f + 1
+        print("FAIL " + name)
+
+def t15_skip(name):
+    t15s = t15s + 1
+    print("SKIP " + name)
+
+# 读到一个以 `sep` 结尾的整串（有限次 recv；超时/EOF 都返回已累积部分）
+def t15_read_until(id, sep, maxloop):
+    var acc = bytes("")
+    var i = 0
+    while i < maxloop:
+        var g = tls_recv(id, 4096)
+        if not g["ok"]:
+            return bytes_to_str(acc)
+        if g["n"] <= 0:
+            return bytes_to_str(acc)
+        acc = bytes_concat(acc, g["data"])
+        if contains(bytes_to_str(acc), sep):
+            return bytes_to_str(acc)
+        i = i + 1
+    return bytes_to_str(acc)
+
+def t15_main():
+    var port_s = env("M150_TLS_PORT")
+    if port_s == null or port_s == "":
+        t15_skip("TLS 段（M150_TLS_PORT 未设置）")
+        print("M150_TLS: 0P/0F/1S")
+        return
+    var host = env("M150_TLS_HOST")
+    if host == null or host == "":
+        host = "127.0.0.1"
+    var port = int(port_s)
+
+    # ── ① verify=false（libpq 的 require 语义）：必须成功 ──
+    var r = tls_connect(host, port, {"timeout_ms": 3000, "read_timeout_ms": 3000})
+    print("TLS|insecure_ok|" + str(r["ok"]))
+    if not r["ok"]:
+        print("TLS|insecure_err|" + r["err"])
+        print("M150_TLS: " + str(t15p) + "P/" + str(t15f) + "F/" + str(t15s) + "S")
+        return
+    print("TLS|insecure_version_num|" + str(r["version_num"]))
+    print("TLS|cipher|" + r["cipher"])
+    print("TLS|cipher_id|" + str(r["cipher_id"]))
+    print("TLS|peer_port|" + str(int(split(r["peer"], ":")[1])))
+    var id = r["id"]
+
+    # ── ② 服务端问候 + 回显（字节面）──
+    var greet = t15_read_until(id, "\n", 20)
+    print("TLS|greet|" + trim(greet))
+    var s1 = tls_send(id, "hello")
+    print("TLS|send_ok|" + str(s1["ok"]))
+    print("TLS|send_n|" + str(s1["n"]))
+    var got = t15_read_until(id, "ECHO:hello", 20)
+    print("TLS|recv_ok|" + str(contains(got, "ECHO:hello")))
+    print("TLS|recv_data|" + trim(got))
+    print("TLS|recv_n|" + str(len(trim(got))))
+    t15_ck("B1 回显内容 == ECHO:hello", contains(got, "ECHO:hello"))
+    t15_ck("B2 问候语来自服务端（SRV <ver>）", starts_with(trim(greet), "SRV "))
+
+    # ── ③ bye ⇒ 服务端关连接 ⇒ 必须读到 EOF（不是错误）──
+    tls_send(id, "bye")
+    var got2 = t15_read_until(id, "ECHO:bye", 20)
+    print("TLS|after_bye_n|" + str(len(trim(got2))))
+    var eof = false
+    var k = 0
+    while k < 10:
+        var g2 = tls_recv(id, 4096)
+        if g2["eof"]:
+            eof = true
+            break
+        if not g2["ok"]:
+            break
+        k = k + 1
+    print("TLS|eof|" + str(eof))
+    t15_ck("C1 对端关闭 ⇒ eof=true（不是错误）", eof)
+    print("TLS|close_ok|" + str(tls_close(id)))
+    print("TLS|close_idem|" + str(tls_close(id)))
+    t15_ck("C2 tls_close 幂等（第二次 false）", tls_close(id) == false)
+
+    # ── ④ SNI：显式 servername ⇒ 服务端日志必须出现（verify.sh 侧查）──
+    var r2 = tls_connect(host, port, {"timeout_ms": 3000, "servername": "example.test",
+                                      "read_timeout_ms": 1000})
+    print("TLS|sni_ok|" + str(r2["ok"]))
+    t15_ck("D1 带 servername 的连接成功", r2["ok"])
+    if r2["ok"]:
+        tls_recv(r2["id"], 4096)   # 吃掉问候
+        tls_close(r2["id"])
+
+    # ── ⑤ 读超时：连上不发数据 ⇒ timeout=true（且耗时 >= 设定值）──
+    var r3 = tls_connect(host, port, {"timeout_ms": 3000, "read_timeout_ms": 300})
+    var t0 = now_ms()
+    var g3 = tls_recv(r3["id"], 4096)     # 先吃掉问候（服务端立刻发）—— 不算超时面
+    var t1 = now_ms()
+    var g4 = tls_recv(r3["id"], 4096)     # 这一次必须超时
+    var t2 = now_ms()
+    print("TLS|timeout_flag|" + str(g4["timeout"]))
+    print("TLS|timeout_err|" + g4["err"])
+    t15_ck("E1 300ms 读超时生效（timeout=true）", g4["timeout"])
+    t15_ck("E2 超时耗时 >= 250ms", (t2 - t1) >= 250)
+    t15_ck("E3 问候语不是超时（区分\"有数据\"与\"到期\"）", not g3["timeout"])
+    t15_ck("E4 阈值确实在 300ms 量级（首读 < 250ms）", (t1 - t0) < 250)
+    tls_close(r3["id"])
+
+    # ── ⑥ verify=true：自签证书必须**握手失败**（且失败归类为 tls 阶段）──
+    var bad = tls_connect(host, port, {"timeout_ms": 3000, "verify": true,
+                                       "servername": "localhost"})
+    print("TLS|verify_ok|" + str(bad["ok"]))
+    print("TLS|verify_stage|" + bad["stage"])
+    t15_ck("F1 verify=true 对自签证书必须失败", not bad["ok"])
+    t15_ck("F2 失败归类为 tls 阶段（不是 connect）", bad["stage"] == "tls")
+    if bad["ok"]:
+        tls_close(bad["id"])
+
+    # ── ⑦ 连接失败可辨别（端口 1 必然拒绝）──
+    var dead = tls_connect(host, 1, {"timeout_ms": 1000})
+    print("TLS|dead_ok|" + str(dead["ok"]))
+    print("TLS|dead_stage|" + dead["stage"])
+    t15_ck("G1 拒连 ⇒ ok=false", not dead["ok"])
+    t15_ck("G2 拒连归类为 connect 阶段", dead["stage"] == "connect")
+    t15_ck("G3 失败不杀进程（能走到这一行）", true)
+
+    # ── ⑧ 句柄纪律 ──
+    t15_ck("H1 非法句柄：tls_send 返回 ok=false 而不杀进程",
+           tls_send(9999, "x")["ok"] == false)
+    t15_ck("H2 非法句柄：tls_recv 返回 ok=false 而不杀进程",
+           tls_recv(9999, 16)["ok"] == false)
+    t15_ck("H3 非法句柄：tls_close 返回 false", tls_close(0) == false)
+    t15_ck("H4 已关闭句柄再 send ⇒ ok=false（不写坏连接）",
+           tls_send(id, "x")["ok"] == false)
+
+    print("M150_TLS: " + str(t15p) + "P/" + str(t15f) + "F/" + str(t15s) + "S")
+
+def main():
+    t15_main()
