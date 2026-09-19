@@ -402,6 +402,17 @@ static LXValue bi_json_num_str(LXValue* args, int nargs, void* ctx);
 //   ⇒ 必须显式分支（否则移植会在探针里"看起来只是大小写不同"）。
 //   `dec` 缺省 6（= Go `%f` 的默认精度）；钳到 0..64。
 static LXValue bi_fmt_float_dec(LXValue* args, int nargs, void* ctx);
+// ═══ M148（第 30 轮）：Go 的 `%v` 浮点文本 native `go_float_text(x[, bits])` ═══
+//   缺陷 132：`str()` 的**有限**浮点文本是**语言自身约定**（250.0 → "250.0"、定点
+//   舒适区 x ∈ [-4,15)），而 Go 的 `fmt.Sprint`（= `strconv.FormatFloat(f,'g',-1,bits)`）
+//   完全不同：**不带尾随 ".0"**（250.0 → "250"）、**十进制指数 >= 6 即转科学计数**
+//   （1234567.0 → "1.234567e+06"、1e15 → "1e+15"），科学计数一律带符号 + **至少两位**
+//   指数（"1e+06" / "1e-05"，不是 JSON 的 "1e-5"）。移植 Go 的日志/文本输出
+//   （`fmt.Sprintf("%v", f)`）时必须能表达 Go 的这一族 ⇒ 新增独立 native，
+//   **不覆盖** `str()`（语言约定不动，两族并存）。
+//   bits=32 → 先窄化到 float32，最短往返用 `strtof`、位数上界 9（Go 的 bitSize=32 分支）；
+//   缺省 64（位数上界 17）。
+static LXValue bi_go_float_text(LXValue* args, int nargs, void* ctx);
 // ═══ M146（第 27 轮）：float64 位模式族（float64_bits / bits_to_float64）═══
 //   M143 补了 32 位的一对（float32_bits / bits_to_float32），但 **64 位的对应项**一直缺失
 //   ⇒ 语言里读不出 float64 的位模式。后果不是"少个糖"：
@@ -2952,8 +2963,18 @@ static const char* fmt_num(LXValue v) {
         // 精度：roundtrip 所需最小位数——%.*f（定点）/%.*e（科学）逐位递增 + strtod
         // 回读校验，首个相等即最短（位数单调，IEEE754 17 位内必达）。区别于早期实现
         // 全扫 %.g 取字符最短（会把 100000.0 显成科学 "1e+05"、250.0 显 "2.5e+02"）。
-        if (isnan(f) || isinf(f)) {
-            snprintf(num_buf, sizeof(num_buf), "%g", f);          /* nan / inf / -inf */
+        if (isnan(f)) {
+            // M148（顺带发现的一条**潜伏**缺陷）：NaN 的文本**归一为 `nan`**（丢掉符号位）。
+            //   原先走 libc `%g`：glibc 对**负 NaN** 给 `-nan`（符号位来自位模式），
+            //   而 `str()` 是**语言约定**，必须是**确定值**（负 NaN 的符号位是平台/运算
+            //   相关的：x86 的 `0.0/0.0` 就给负 NaN）。更要紧的是编译器侧
+            //   `selfhost/codegen.px::cg_fmt_float` 的非有限值名单只列了
+            //   `"inf" / "-inf" / "nan"` ⇒ 一旦真出现 `"-nan"` 就会**漏过该分支**，
+            //   继续走去掉 `.0` 的逻辑（与缺陷 130 同族的手法）⇒ 产出错误字面量。
+            //   ⇒ 从源头归一，并给 codegen 的名单补上 `-nan` 作纵深防御。
+            strcpy(num_buf, "nan");
+        } else if (isinf(f)) {
+            snprintf(num_buf, sizeof(num_buf), "%g", f);          /* inf / -inf */
         } else if (f == 0.0) {
             strcpy(num_buf, signbit(f) ? "-0" : "0");             /* ±0，.0 补丁同下 */
         } else {
@@ -2964,7 +2985,16 @@ static const char* fmt_num(LXValue v) {
             else if (a2 >= p10 * 10.0) { x++; p10 *= 10.0; }
             int dec;
             if (x >= -4 && x < 15) {                              /* 定点舒适区 */
-                for (dec = 0; dec <= 17; dec++) {
+                /* M148（缺陷 133）：上界必须按**有效位数**定。定点文本的"位数"是
+                   小数点后的位数，要覆盖 17 位有效数字需要 `17 - x` 位；原先写死
+                   `dec <= 17`，在 x ∈ [-4,-1]（0.000… 形态）**不够** ⇒ 循环跑到最后
+                   一个候选仍未回读相等，num_buf 就留下了一串**不可往返**的文本
+                   （实测 0x3f2d1ac1aeaf35e2 → "0.00022204984938272"，读回来已不是
+                   原值 —— 静默丢精度，比"报错"更糟）。 */
+                int maxdec = 17 - x;
+                if (maxdec < 1) maxdec = 1;
+                if (maxdec > 21) maxdec = 21;
+                for (dec = 0; dec <= maxdec; dec++) {
                     snprintf(num_buf, sizeof(num_buf), "%.*f", dec, f);
                     if (strtod(num_buf, NULL) == f) break;
                 }
@@ -3276,15 +3306,23 @@ LXValue px_mul(LXValue a, LXValue b) {
 }
 
 LXValue px_div(LXValue a, LXValue b) {
-    double d = num_val(b);
-    if (d == 0) px_error("除零错误");
-    return px_float(num_val(a) / d);
+    // M148（第 30 轮，缺陷 118）：`/` 是**浮点除法** ⇒ 完全 IEEE-754 语义，
+    //   永不报错：x/±0.0 → ±Inf、0.0/0.0 → NaN、溢出 → ±Inf、下溢 → ±0.0。
+    //   与 Go 的**浮点**除法一致（`float64(x)/float64(0)` = ±Inf）。
+    //   对齐 Go 的**整数**除零（panic `integer divide by zero`）由 `//`（px_idiv）
+    //   与整数 `%`（px_mod 的整数分支）守护 —— 那两条仍然 px_error。
+    //   修前这里对零除数一律 px_error 杀进程 ⇒ Go 侧「÷0 → Inf/NaN」这条路
+    //   在语言里**表达不出来**（比值/余弦/成功率/均值都要手写零判断）。
+    return px_float(num_val(a) / num_val(b));
 }
 
 LXValue px_idiv(LXValue a, LXValue b) {
     // M-B5：对齐 Rust div_euclid / floor 语义
     //   int//int：欧几里得除法（余数非负 0<=r<|d|）-7//2=-4, 7//-2=-3, -7//-2=4
     //   float 参与：floor(af/bf) 转 int（-5.5//2=-3）
+    // M148（缺陷 118）：零除数**仍然** px_error —— 对齐 Go 的整数除零 panic
+    //   （`integer divide by zero`）；本语言的浮点除法走 `/`，那里才是 IEEE。
+    //   浮点 `//` 在本语言无 Go 对应物，保持 fail-fast（不静默给 Inf/NaN）。
     if (a.type == PX_FLOAT || b.type == PX_FLOAT) {
         double d = num_val(b);
         if (d == 0.0) px_error("除零错误");
@@ -3299,9 +3337,13 @@ LXValue px_idiv(LXValue a, LXValue b) {
 }
 
 LXValue px_mod(LXValue a, LXValue b) {
+    // M148（缺陷 118）：**浮点**取模 = `fmod`（IEEE），÷0 → NaN —— 对齐 Go
+    //   `math.Mod(x, 0)` = NaN、`math.Mod(±Inf, y)` = NaN。注意 fmod 的余数取
+    //   **被除数**符号（fmod(-5,3) = -2），与下面整数分支的**欧几里得**余数
+    //   （-7 % 3 = 2，Rust rem_euclid 语义）**不是一回事**。
+    if (a.type == PX_FLOAT || b.type == PX_FLOAT) return px_float(fmod(num_val(a), num_val(b)));
     int64_t d = int_val(b);
     if (d == 0) px_error("取模除零错误");
-    if (a.type == PX_FLOAT || b.type == PX_FLOAT) return px_float(fmod(num_val(a), num_val(b)));
     // M-B5：对齐 Rust rem_euclid（余数非负）-7%3=2, 7%-3=1, -7%-3=2
     int64_t n = int_val(a);
     int64_t r = n % d;
@@ -9495,6 +9537,8 @@ void px_register_builtins(void) {
     px_set_global("json_num_str", px_native("json_num_str", bi_json_num_str));
     px_set_global("fmt_float_dec", px_native("fmt_float_dec", bi_fmt_float_dec));   // M147：Go %.<dec>f
     px_set_global("append_file_opt", px_native("append_file_opt", bi_append_file_opt));
+    // M148（第 30 轮，缺陷 132）：Go `%v` 浮点文本（与 str() 的语言约定并存，互不覆盖）
+    px_set_global("go_float_text", px_native("go_float_text", bi_go_float_text));
     // 同时登记进 FFI 桥（ffi_call 按名调用表）：
     //   解释器轨的内置分发层 selfhost/ibuiltin.px 与 selfhost/env.px 同编译单元，
     //   env.px 有同名 PuXian 函数 `def env_set(env, name, value)`（编译器内部变量环境）
@@ -9516,6 +9560,7 @@ void px_register_builtins(void) {
     px_ffi_register("bits_to_float64", bi_bits_to_float64);
     px_ffi_register("json_num_str", bi_json_num_str);
     px_ffi_register("fmt_float_dec", bi_fmt_float_dec);
+    px_ffi_register("go_float_text", bi_go_float_text);
     px_ffi_register("append_file_opt", bi_append_file_opt);
 
     px_set_global("signal", px_native("signal", bi_signal));
@@ -9954,6 +9999,97 @@ static LXValue bi_fmt_float_dec(LXValue* args, int nargs, void* ctx) {
     if (isinf(d)) return px_str(d > 0 ? "+Inf" : "-Inf");
     char buf[512];
     snprintf(buf, sizeof(buf), "%.*f", dec, d);
+    return px_str(buf);
+}
+
+// M148（缺陷 132）：Go `%v` 的浮点文本渲染 —— 由「最短往返数字串 + 十进制指数」还原。
+//   规则（Go `strconv` fmtFloat 'g' + shortest，实测 Go 1.26.6 校准）：
+//     ① 风格：exp10 < -4 || exp10 >= 6 → 科学计数（shortest 时 eprec 固定 6）；
+//     ② 科学计数：`[-]d[.dddd]e±XX`，指数**至少两位**且**必带符号**；
+//     ③ 定点：按 dp = exp10+1 展开，**不补尾随 ".0"**（250.0 → "250"）。
+static void go_v_render(char* out, int cap, int neg, const char* digits, int nd, int exp10) {
+    int pos = 0;
+    if (nd <= 0) { snprintf(out, (size_t)cap, "%s0", neg ? "-" : ""); return; }
+    if (neg && pos < cap - 1) out[pos++] = '-';
+    if (exp10 < -4 || exp10 >= 6) {
+        if (pos < cap - 1) out[pos++] = digits[0];
+        if (nd > 1) {
+            if (pos < cap - 1) out[pos++] = '.';
+            for (int i = 1; i < nd && pos < cap - 1; i++) out[pos++] = digits[i];
+        }
+        if (pos < cap - 1) out[pos++] = 'e';
+        int e = exp10;
+        if (pos < cap - 1) out[pos++] = (e < 0) ? '-' : '+';
+        if (e < 0) e = -e;
+        char eb[8];
+        int n = snprintf(eb, sizeof(eb), "%d", e);
+        if (n < 2 && pos < cap - 1) out[pos++] = '0';   /* 指数至少两位 */
+        for (int i = 0; eb[i] && pos < cap - 1; i++) out[pos++] = eb[i];
+    } else {
+        int dp = exp10 + 1;                              /* 小数点前的位数 */
+        if (dp <= 0) {
+            if (pos < cap - 1) out[pos++] = '0';
+            if (pos < cap - 1) out[pos++] = '.';
+            for (int i = 0; i < -dp && pos < cap - 1; i++) out[pos++] = '0';
+            for (int i = 0; i < nd && pos < cap - 1; i++) out[pos++] = digits[i];
+        } else if (dp >= nd) {
+            for (int i = 0; i < nd && pos < cap - 1; i++) out[pos++] = digits[i];
+            for (int i = nd; i < dp && pos < cap - 1; i++) out[pos++] = '0';
+        } else {
+            for (int i = 0; i < dp && pos < cap - 1; i++) out[pos++] = digits[i];
+            if (pos < cap - 1) out[pos++] = '.';
+            for (int i = dp; i < nd && pos < cap - 1; i++) out[pos++] = digits[i];
+        }
+    }
+    out[pos] = 0;
+}
+
+static void go_v_text(char* out, int cap, double f, int bits) {
+    if (bits == 32) {
+        float g = (float)f;
+        if (isnan(g)) { snprintf(out, (size_t)cap, "NaN"); return; }
+        if (isinf(g)) { snprintf(out, (size_t)cap, g > 0 ? "+Inf" : "-Inf"); return; }
+        char sci[64];
+        sci[0] = 0;
+        for (int p = 0; p <= 9; p++) {                   /* float32 最短往返上界 9 位 */
+            snprintf(sci, sizeof(sci), "%.*e", p, (double)g);
+            if (strtof(sci, NULL) == g) break;
+        }
+        int neg = 0, nd = 0, exp10 = 0;
+        char digits[40];
+        jgo_split_sci(sci, &neg, digits, &nd, &exp10);
+        go_v_render(out, cap, neg, digits, nd, exp10);
+        return;
+    }
+    if (isnan(f)) { snprintf(out, (size_t)cap, "NaN"); return; }
+    if (isinf(f)) { snprintf(out, (size_t)cap, f > 0 ? "+Inf" : "-Inf"); return; }
+    char sci[64];
+    sci[0] = 0;
+    for (int p = 0; p <= 17; p++) {
+        snprintf(sci, sizeof(sci), "%.*e", p, f);
+        if (strtod(sci, NULL) == f) break;
+    }
+    int neg = 0, nd = 0, exp10 = 0;
+    char digits[40];
+    jgo_split_sci(sci, &neg, digits, &nd, &exp10);
+    go_v_render(out, cap, neg, digits, nd, exp10);
+}
+
+static LXValue bi_go_float_text(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 && nargs != 2) px_error("R1002: go_float_text 需要 (值[, bits])");
+    double d;
+    if (args[0].type == PX_FLOAT) d = args[0].as.f;
+    else if (args[0].type == PX_INT) d = (double)args[0].as.i;
+    else { px_error("R1002: go_float_text 的第一个参数需要数值"); return px_null(); }
+    int bits = 64;
+    if (nargs == 2) {
+        if (args[1].type != PX_INT) px_error("R1002: go_float_text 的 bits 需要 int（32 / 64）");
+        bits = (int)args[1].as.i;
+    }
+    if (bits != 32 && bits != 64) px_error("R1002: go_float_text 的 bits 只支持 32 / 64");
+    char buf[512];
+    go_v_text(buf, (int)sizeof(buf), d, bits);
     return px_str(buf);
 }
 
