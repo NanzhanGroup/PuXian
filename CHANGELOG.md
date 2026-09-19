@@ -1,3 +1,47 @@
+## M155 —— 含内嵌 NUL 的字符串：字面量 → 常量池 → 渲染 → 输出（第 37 轮 · qg-issue 87 · 缺陷 148/150/151/152）
+
+- **背景（第 35 轮登记的缺陷 148）**：`"\u{0}"` 字面量在三轨被**静默丢弃**（`len("\u{0}") == 0`；
+  `"\u{0}a"` 长 1 内容 `a`），且「三轨一致」——所以它不是轨道差异，而是**共同的上游**。
+- **根因（两层，互相咬合）**：
+  · **发射层**：`cg_escape_str` 的 NUL 分支显式写 `_out.append("")`（M-B8 为与 Rust 版逐字节一致而
+    立；那时整条链按 `strlen` 走，NUL 本就表达不出来），且标量常量一律发射成 `px_str("…")`（C 串）。
+  · **编译器自身源码**：`codegen.px` / `pxlexer.px` / `it_util.px` 里共 **5 处 `"\u{0}"` 字面量**
+    （`rust_unescape` 的 `_out.append("\u{0}")`、`char_debug` 的 `c == "\u{0}"`、`cg_escape_str` 的
+    比较、`scan_escape` 的 `return`）—— 它们由**旧编译器**编成**空串** ⇒ `_out.append("")`、
+    `c == ""` ⇒ **三轨一致地错**（这也解释了为什么它一直没被三轨对拍照出来）。
+- **修法（自举安全优先）**：
+  · 编译器源码里的 NUL 字面量 → **运行时构造** `nul_char()` / `cg_nul_char()` / `it_nul_char()` /
+    `lx_nul_char()`（各文件本地定义，避免跨模块依赖）＝ `bytes_to_str(int_to_bytes(0, 1))`。
+    **为什么必须这样**：修好发射器并不能修「已经用旧发射器烘出来的编译器」—— 用旧编译器编新源码时，
+    字面量仍是空串；运行时构造在**新旧编译器下都正确**。
+  · 发射：含 NUL 的常量 → `PX_STR_LIT(lit)`（C 轨）/ `PXK_STR_LIT(lit)`（VM 轨 K 表），长度 =
+    `(int)sizeof(lit) - 1`（**C 编译期**给出 ⇒ 发射器不需要「字节长」函数）；`cg_escape_str` 的 NUL
+    改 C 八进制转义 **`\000`（恒 3 位）**（`\0` 会把后随八进制数字吞掉：`"a\01"` == `0x01`）。
+  · `vm_loadk`：K 项 `i > 0` ⇒ `px_str_const_n(s, i)`（**指针键常量池复用** ⇒ LOADK 仍零分配）；
+    `i == 0` 保持旧口径 ⇒ **不含 NUL 的常量发射文本一字不变**。
+- **缺陷 150（print 截断）**：`px_fmt_value` 只回 `char*`，调用方一律 `strlen`/`printf("%s")`
+  ⇒ `print("A\0B")` 实测只写 `A`（Go `fmt.Print` 写 3 字节）。新增 **`px_fmt_value_n(v, &len)`**；
+  `px_print_value` / `bi_print_err` 改 `fwrite(…, n)`；容器渲染的 list/tuple/Result 用子项长度；
+  **dict 的排序项改「文本 + 长度」随行**（qsort 比较器 `PxDisp`，排序键仍 `strcmp`）；`bi_str` 的非串
+  分支改 `px_str_len(s, n)`。
+- **缺陷 151（陈旧头遮蔽）**：`selfhost/build/` 里一份 **2025-09-05 的 `runtime.{c,h}` 副本**盖过了
+  `-I"$CACHE"`（`#include "runtime.h"` 先搜**包含者目录**）⇒ 用旧头编译新 C。实测：pxfmt/pxdoc 重烘
+  失败（`implicit declaration of function 'PX_STR_LIT'` → `incompatible types`）；此前 10 件"成功"只是
+  因为它们的闭包里没有含 NUL 的字面量。修法：`rebake_bin.sh` 加 `shadow_clean`（重烘前删除与 runtime/
+  同名的副本，实测清掉 22 个）。
+- **缺陷 152（`json_stringify` 丢尾巴）**：`jout_escape` 走 C 串 + 尾串 `px_str(o.buf)` ⇒
+  `json_stringify("A\0B")` → `"A"`（**丢掉整个尾巴**），与文档化契约「控制字符**裸输出**」不符。
+  改为长度感知（新增 `jout_append_n` 合一定义；尾串 `px_str_len(o.buf, o.len)`），NUL 也如实裸出。
+  **Go 保真口径由 `json_stringify_go` 承担**（NUL → `\u0000`、0x01 → `\u0001`，M129 已对齐）。
+- **门 `examples/m155_nul_bytes/`**：① 语义 **41 断言 × 三轨**（VM 默认轨 / C 轨 / 解释轨）逐字节一致
+  （含 Go 本尊真值：`sha256` / `base64` / JSON 文本 / 渲染长度）；② **stdout 与 `write_file` 落盘的
+  原始字节**与 Go 语义期望块 `cmp` 逐字节（不是人眼看）；③ **发射形状**：含 NUL 常量必须是
+  `PX_STR_LIT("…\000…")`、不含 NUL 的必须仍是 `px_str("…")`（修复是增量的证据）；
+  ④ 词法/AST 面（`"\0"` 仍是 token 文本/AST 值 —— 这两层本来没坏）；⑤ **自举安全不变式**：
+  `codegen/pxlexer/it_util` 的**代码行**里不得再有 `\u{0}` 字面量；⑥ **4 道负控**（长度退回 strlen /
+  `print` 退回 `printf("%s")` / 长度多算 1 / VM 忽略 K 长度）全判红，还原后复跑全绿 + 4 个文件逐字节还原。
+- 速查表新增事实 **158–162**（并把第 35 轮那条「未修 · 缺陷 148」改成指向 M155）。
+
 ## M154 —— 分配率第二刀（编译器自身热路径）+ `join` 字节口径（第 36 轮 · qg-issue 87 · 缺陷 149）
 
 - **背景**：M153 把 runtime 侧三条「每次执行都新建对象」清掉后，插桩归因显示整图编译（73 模块 /

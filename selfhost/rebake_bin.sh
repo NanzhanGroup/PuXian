@@ -532,6 +532,35 @@ select_cache || exit 1
 # ---- M114 尾：单件重烘（--entries=<件名,...>）----
 # 只重烘指定件：不动 pxc/pxc_vm，也不动其余 12 件。适用「改了某个工具源文件」
 # 这类收口（逐件自证内嵌指纹；整体验收仍由 --check-all 守）。
+# ══════════════════════════════════════════════════════════════════════
+# M155（第 37 轮 · 缺陷 151）：清掉 $BUILD 下的**运行时影子副本**
+# ──────────────────────────────────────────────────────────────────────
+# 实锤（本轮）：pxfmt / pxdoc 重烘失败
+#   `rebake_pxfmt.c:1379:16: warning: implicit declaration of function 'PX_STR_LIT'`
+#   `error: incompatible types when returning type 'int' but 'LXValue' was expected`
+# 成因**不是**发射器：`#include "runtime.h"` 的搜索顺序是「**包含者所在目录** → -I 列表」，
+#   而 `$BUILD` 里躺着一份 **2025-09-05 的 runtime.{c,h} 副本**（某次以 `$BUILD` 为输出目录的
+#   `px build` 留下的），它**盖过** `-I"$CACHE"`（按 rt_key 现生成的当前 runtime 源）。
+#   ⇒ 编译用的是**旧头文件**：新增的宏/原型对生成的 C 不可见。前 10 件「成功」只是因为它们
+#   的闭包里没有含 NUL 的字面量（不发射 PX_STR_LIT）—— 也就是说：**影子副本一直在，只是
+#   从未被照出来**。同类坑（缺陷 144）是「链错 runtime」，本坑是「编译期用了旧头」。
+# 根治：重烘前删除与 runtime/ 同名的副本（头与源都靠 -I 解析，不再依赖 $BUILD 影子文件）。
+shadow_clean() {
+    local f n=0
+    [ -d "$BUILD" ] || return 0
+    for f in "$RT"/*.h "$RT"/*.c "$RT"/third_party/stb/*.h; do
+        [ -f "$f" ] || continue
+        if [ -e "$BUILD/$(basename "$f")" ]; then
+            rm -f "$BUILD/$(basename "$f")" 2>/dev/null && n=$((n+1))
+        fi
+    done
+    if [ "$n" -gt 0 ]; then
+        echo "── 影子清理：删除 $BUILD 下 $n 个运行时副本（缺陷 151；旧头会遮蔽 -I 解析）"
+    fi
+    return 0
+}
+shadow_clean
+
 if [ "$MODE" = "entry" ]; then
     ok=0; fail=0; failed=""
     for name in $(printf '%s' "$ENTRY_ONLY" | tr ',' ' '); do
@@ -547,6 +576,7 @@ if [ "$MODE" = "entry" ]; then
 fi
 
 emit_fp_object "$FP" || exit 1
+
 
 echo "── 步骤 1/4：入库 pxc 编译 compiler.px → compiler_new.c"
 mkdir -p "$BUILD"
