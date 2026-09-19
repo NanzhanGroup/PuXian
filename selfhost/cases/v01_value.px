@@ -203,10 +203,21 @@ def check_arith_err(name, op, a, b):
     let r = v_arith(op, a, b)
     check(name + " 报错", not r["ok"])
 
-check_arith_err("div by zero int", "/", 7, 0)
 check_arith_err("idiv by zero", "//", 7, 0)
 check_arith_err("mod by zero", "%", 7, 0)
-check_arith_err("div by zero float", "/", 7.0, 0.0)
+# M148（缺陷 118）：`/` 是**浮点除法** ⇒ 完全 IEEE-754，**除零不再报错**
+#   （`7/0` → +Inf、`-7/0` → -Inf、`0/0` → NaN）；`//` 与**整数** `%` 仍然报错
+#   （对齐 Go 的整数除零 panic）—— 上面两条就是那半边。
+let rz = v_arith("/", 7, 0)
+check("div by zero int ok（IEEE，不报错）", rz["ok"])
+check("div by zero int → inf", rz["ok"] and str(rz["v"]) == "inf")
+let rzn = v_arith("/", -7, 0)
+check("div by zero int 负 → -inf", rzn["ok"] and str(rzn["v"]) == "-inf")
+let rzf = v_arith("/", 7.0, 0.0)
+check("div by zero float → inf", rzf["ok"] and str(rzf["v"]) == "inf")
+let rzz = v_arith("/", 0, 0)
+check("0/0 → nan", rzz["ok"] and str(rzz["v"]) == "nan")
+check("0/0 是 NaN（自反为假）", rzz["ok"] and rzz["v"] != rzz["v"])
 check_arith_err("str*int 不支持", "*", "ab", 3)
 check_arith_err("int+str 不支持", "+", 1, "a")
 check_arith_err("str+int 不支持", "+", "a", 1)
@@ -215,9 +226,9 @@ check_arith_err("str>> 不支持", ">>", "a", 1)
 check_arith_err("float&int 位运算不支持", "&", 1.5, 1)
 check_arith_err("dict+dict 不支持", "+", {"a": 1}, {"b": 2})
 
-# 除零错误消息对齐
-let r0 = v_arith("/", 7, 0)
-check("除零错误消息", not r0["ok"] and r0["err"] == "除零错误")
+# 除零错误消息对齐 —— M148 后只剩整数 `//`（`/` 已改走 IEEE，见上）
+let r0 = v_arith("//", 7, 0)
+check("// 除零错误消息", not r0["ok"] and r0["err"] == "除零错误")
 let r1 = v_arith("+", 1, "a")
 check("+ 不支持消息", not r1["ok"] and r1["err"] == "+ 不支持: int + string")
 
