@@ -1195,6 +1195,16 @@ static volatile int g_gc_pending = 0;
 static int g_gc_force_inline = 0;   // 调试/对拍：PX_GC_INLINE=1 强制请求热路径内联（还原 B1 前行为，验证 A/B）
 static int g_gc_env_inited = 0;
 static int g_gc_debug = 0;
+// 分配统计（可观测性）：`PX_GC_ALLOC_STATS=1` ⇒ 进程退出时按类型打印分配计数。
+//   为什么要有：本轮（缺陷 145）的判据本身就是「分配率」，没有分配率数字就只能靠时间
+//   （受机器负载影响、不可复现）。计数完全确定（同一源码 + 同一实现 ⇒ 同一数字），
+//   故可做**硬阈值门**。默认关闭 ⇒ 只多一次可预测的分支。
+static int g_alloc_stats = 0;
+static long long g_a_by_type[PX_TYPE_MAX];
+static long long g_a_bytes;
+static long long g_a_total;
+static void px_alloc_stats_dump(void);
+
 static int g_active_threads = 0;   // spawn 活跃线程数（>0 时进入并发 GC 路径）
 
 // M11 并发 GC：线程注册表 + 暂停协议
@@ -1395,6 +1405,9 @@ static void gc_init_env(void) {
     }
     const char* inl = getenv("PX_GC_INLINE");
     if (inl && inl[0] == '1') g_gc_force_inline = 1;
+    // M153：分配统计（见 g_alloc_stats 注释）
+    const char* as = getenv("PX_GC_ALLOC_STATS");
+    if (as && as[0] == '1') { g_alloc_stats = 1; atexit(px_alloc_stats_dump); }
     // M92：PX_GC_PRECISE=1 强制 precise 模式（debug/回归驱动；产物插桩正式生效前用）。
     // ⚠️ 仅限 VM 轨产物——C 轨逃生舱产物 + precise = fn_* C 局部失去保守扫栈根 → 误回收。
     const char* pr = getenv("PX_GC_PRECISE");
@@ -1944,6 +1957,136 @@ void px_gc_mark_slots(LXValue* base, int n) {
 extern void px_vm_gc_mark(void) __attribute__((weak));
 
 // 主回收入口：mark + sweep（M11：spawn 活跃时 stop-the-world）
+// ==================== M153（第 35 轮 · 缺陷 145）：常量池 / 短串池化 ====================
+// 归因实测（第 35 轮 · 插桩 runtime 的逐行归因）：VM 轨**每次 LOADK 字符串常量都新建对象**、
+//   `s[i]` **每取一个字符都新建对象**、`""` **每求值一次都新建对象** —— 单次编译 284 万次
+//   分配里 **96.4% 是字符串**（513MB 字符串 / 24MB 列表 / 其余个位数十万）。
+// 依据（可核）：`px_str_len` 的语义不变量写明「PX_STR 的 data 恒不可变，全仓无任何就地改写
+//   as.str 的站点」⇒ 同内容的字符串**共享同一对象不改变任何可观测语义**（相等/排序/长度/
+//   字符索引全按字节比）；这也是 Go 的做法（字面量落只读段，同内容字面量可被合并）。
+// 为什么必须「钉住」：池里的对象一旦被 GC 扫掉，池里就是悬垂指针 ⇒ 单列一张钉住表，
+//   在**两条**标记路径（并发 / 单线程）里与全局表一同标记。对象仍在对象表 g_objs 内，
+//   故 gc_mark_obj 的 gc_hash_has 校验自然通过。
+// 边界（诚实登记）：池化后 `object_id()` 对**同内容的短串/字面量**返回同一 id（此前每次
+//   求值都不同）。契约只对容器/结构断言「不同对象不同 id」（m145 门），字符串是不可变值，
+//   本改动不触碰该契约。
+static LXObject** g_pinned = NULL;
+static int g_pinned_n = 0, g_pinned_cap = 0;
+static pthread_mutex_t g_pinned_mu = PTHREAD_MUTEX_INITIALIZER;
+static void px_pin_obj(LXObject* o) {
+    if (!o) return;
+    pthread_mutex_lock(&g_pinned_mu);
+    for (int i = 0; i < g_pinned_n; i++) {
+        if (g_pinned[i] == o) { pthread_mutex_unlock(&g_pinned_mu); return; }
+    }
+    if (g_pinned_n >= g_pinned_cap) {
+        int nc = g_pinned_cap ? g_pinned_cap * 2 : 512;
+        g_pinned = (LXObject**)xrealloc(g_pinned, sizeof(LXObject*) * (size_t)nc);
+        g_pinned_cap = nc;
+    }
+    g_pinned[g_pinned_n++] = o;
+    pthread_mutex_unlock(&g_pinned_mu);
+}
+// 常量池：按**指针**缓存 —— 只允许「地址恒定的静态字符串」= 编译期字面量（VM 轨 BC 镜像的
+//   K 表 payload；C 轨产物的字符串字面量）。**不得**传入栈上/堆上临时缓冲：地址会复用 ⇒
+//   后续命中会取到**旧值**。表只建一次、只增不减；装到 3/4 或探针用尽即停止缓存（回落普通
+//   分配 ⇒ 只是不省，不会错）。
+#define PX_CONST_SLOTS (1 << 15)
+typedef struct { const char* key; LXObject* obj; } PxConstEnt;
+static PxConstEnt* g_ctab = NULL;
+static int g_ctab_n = 0;
+static pthread_mutex_t g_ctab_mu = PTHREAD_MUTEX_INITIALIZER;
+static unsigned px_const_hash(const char* p) {
+    unsigned h = 2166136261u;
+    while (*p) { h ^= (unsigned char)*p++; h *= 16777619u; }
+    return h;
+}
+static LXObject* px_const_get(const char* s) {
+    PxConstEnt* t = __atomic_load_n(&g_ctab, __ATOMIC_ACQUIRE);
+    if (!t) return NULL;
+    unsigned i = px_const_hash(s) & (PX_CONST_SLOTS - 1);
+    for (int k = 0; k < 8; k++) {
+        unsigned j = (i + (unsigned)k) & (PX_CONST_SLOTS - 1);
+        const char* key = __atomic_load_n(&t[j].key, __ATOMIC_ACQUIRE);
+        if (!key) return NULL;                       // 空槽 ⇒ 未缓存
+        if (key == s) return t[j].obj;
+    }
+    return NULL;
+}
+static void px_const_put(const char* s, LXObject* o) {
+    pthread_mutex_lock(&g_ctab_mu);
+    if (!g_ctab) {
+        g_ctab = (PxConstEnt*)xcalloc(PX_CONST_SLOTS, sizeof(PxConstEnt));
+    }
+    if (g_ctab_n >= PX_CONST_SLOTS * 3 / 4) { pthread_mutex_unlock(&g_ctab_mu); return; }
+    unsigned i = px_const_hash(s) & (PX_CONST_SLOTS - 1);
+    for (int k = 0; k < 8; k++) {
+        unsigned j = (i + (unsigned)k) & (PX_CONST_SLOTS - 1);
+        if (g_ctab[j].key == s) { pthread_mutex_unlock(&g_ctab_mu); return; }
+        if (!g_ctab[j].key) {
+            g_ctab[j].obj = o;
+            __atomic_store_n(&g_ctab[j].key, s, __ATOMIC_RELEASE);
+            g_ctab_n++;
+            pthread_mutex_unlock(&g_ctab_mu);
+            return;
+        }
+    }
+    pthread_mutex_unlock(&g_ctab_mu);
+}
+static LXValue px_str_len_raw(const char* s, int len);   // 前置声明（定义见下方 px_str 区）
+// 空串单例：`""` 与 `px_str_len(x, 0)` 一律返回同一对象（Go 里空串零分配）
+static LXValue g_empty_str;
+static int g_empty_ready = 0;
+static pthread_mutex_t g_empty_mu = PTHREAD_MUTEX_INITIALIZER;
+static LXValue px_empty_str_get(void) {
+    if (__atomic_load_n(&g_empty_ready, __ATOMIC_ACQUIRE)) return g_empty_str;
+    pthread_mutex_lock(&g_empty_mu);
+    if (!g_empty_ready) {
+        LXValue v = px_str_len_raw("", 0);
+        px_pin_obj(v.as.obj);
+        g_empty_str = v;
+        __atomic_store_n(&g_empty_ready, 1, __ATOMIC_RELEASE);
+    }
+    pthread_mutex_unlock(&g_empty_mu);
+    return g_empty_str;
+}
+// ASCII 单字符串表（`s[i]` 的结果）：单个字节的字符只有 256 种 ⇒ 用字节值直接索引，
+//   零哈希、零探测、有界 256 项（全是钉住对象，约 256×~80B ≈ 20KB）。多字节字符
+//   （非 ASCII 的单个 rune）不走此表，回落普通分配。
+static LXValue g_ch1[256];
+static unsigned char g_ch1_init[256];
+static LXValue px_char1(unsigned char c) {
+    if (!__atomic_load_n(&g_ch1_init[c], __ATOMIC_ACQUIRE)) {
+        char buf[2];
+        buf[0] = (char)c; buf[1] = 0;
+        LXValue v = px_str_len_raw(buf, 1);          // 单字节原始构造（含 NUL 字符）
+        px_pin_obj(v.as.obj);
+        g_ch1[c] = v;
+        __atomic_store_n(&g_ch1_init[c], 1, __ATOMIC_RELEASE);
+    }
+    return g_ch1[c];
+}
+// 分配统计：导出（声明见文件前部 g_alloc_stats 处）
+static void px_alloc_stats_dump(void) {
+    if (!g_alloc_stats) return;
+    char b[256];
+    int n = snprintf(b, sizeof(b), "[px-alloc-stats] total=%lld bytes=%lldMB\n",
+                     g_a_total, g_a_bytes / (1024 * 1024));
+    (void)write(2, b, (size_t)n);
+    for (int t = 0; t < PX_TYPE_MAX; t++) {
+        if (!g_a_by_type[t]) continue;
+        n = snprintf(b, sizeof(b), "[px-alloc-stats] type=%d n=%lld\n", t, g_a_by_type[t]);
+        (void)write(2, b, (size_t)n);
+    }
+}
+
+// 标记钉住表（两条 GC 路径各调用一次；与全局表同批）
+static void gc_mark_pinned(GCHash* set) {
+    pthread_mutex_lock(&g_pinned_mu);
+    for (int i = 0; i < g_pinned_n; i++) gc_mark_obj(set, g_pinned[i]);
+    pthread_mutex_unlock(&g_pinned_mu);
+}
+
 void px_gc_collect(void) {
     // M11 修复④：GC 执行期间屏蔽自己的 SIG_GC_STOP——防止上一轮"延迟信号"
     // 在本轮 GC 执行中投递（handler 会自旋等 epoch，而 epoch 只有本线程能推进
@@ -2049,6 +2192,7 @@ void px_gc_collect(void) {
         }
         pthread_rwlock_unlock(&g_globals_mu);
         if (g_gc_debug) (void)write(2, "[mk] globals\n", 13);
+        gc_mark_pinned(&set);   // M153：常量池/短串池化对象（永久根）
         // 根2：本线程（GC 执行者）暂存根
         if (g_tmp_root) gc_mark_obj(&set, g_tmp_root);
         // S3-D-1：VM 帧槽精确根 —— executor 自身 VM 状态 + 各暂停线程 VM 状态。
@@ -2155,6 +2299,7 @@ void px_gc_collect(void) {
         if (px_value_is_obj(g_vals[i]) && g_vals[i].as.obj) gc_mark_obj(&set, g_vals[i].as.obj);
     }
     pthread_rwlock_unlock(&g_globals_mu);
+    gc_mark_pinned(&set);   // M153：常量池/短串池化对象（永久根）
     if (g_tmp_root) gc_mark_obj(&set, g_tmp_root);
     // M92 precise：退役整栈保守扫描 → 跳过本线程栈/寄存器扫描（conservative 保持旧行为）
     if (!g_gc_precise) {
@@ -2283,6 +2428,12 @@ static void gc_register(LXObject* o, long long est) {
         }
     }
     g_objs[g_obj_count++] = o;
+    if (g_alloc_stats) {
+        int _t = (int)o->type;
+        if (_t > 0 && _t < PX_TYPE_MAX) g_a_by_type[_t]++;
+        g_a_bytes += est;
+        g_a_total++;
+    }
     g_alloc_bytes += est;
     g_tmp_root = o;  // 保护刚创建对象
     int need = (g_obj_count >= g_gc_threshold) ||
@@ -2331,7 +2482,7 @@ LXValue px_bool(bool b) { LXValue v; v.type = PX_BOOL; v.as.b = b; return v; }
 LXValue px_int(int64_t i) { LXValue v; v.type = PX_INT; v.as.i = i; return v; }
 LXValue px_float(double f) { LXValue v; v.type = PX_FLOAT; v.as.f = f; return v; }
 
-LXValue px_str_len(const char* s, int len) {
+static LXValue px_str_len_raw(const char* s, int len) {
     LXValue v; v.type = PX_STR;
     // M107-S3d（qg-issue 34 内存路径）：LXObject 与字符串数据**合并为一次 xmalloc**
     //   （原 2 次：LXObject 一次 + data 一次）。M106-S1 采样归因显示 xmalloc 占 28.84%，
@@ -2353,6 +2504,23 @@ LXValue px_str_len(const char* s, int len) {
 }
 
 LXValue px_str(const char* s) { return px_str_len(s, (int)strlen(s)); }
+
+// M153：空串单例（len <= 0 一律返回同一对象）—— 见本文件 M153 段
+LXValue px_str_len(const char* s, int len) {
+    if (len <= 0) return px_empty_str_get();
+    return px_str_len_raw(s, len);
+}
+
+// M153：常量池入口（**仅限静态字面量**；见本文件 M153 段的红线说明）
+LXValue px_str_const(const char* s) {
+    if (!s || s[0] == '\0') return px_empty_str_get();
+    LXObject* o = px_const_get(s);
+    if (o) { LXValue v; v.type = PX_STR; v.as.obj = o; return v; }
+    LXValue v = px_str_len_raw(s, (int)strlen(s));
+    px_pin_obj(v.as.obj);
+    px_const_put(s, v.as.obj);
+    return v;
+}
 
 // M23b：二进制安全字节串构造（复制 len 字节，可含 NUL；union 复用 str data/len）
 LXValue px_bytes_len(const void* data, int len) {
@@ -3650,6 +3818,7 @@ LXValue px_index(LXValue obj, LXValue idx) {
         memcpy(buf, p, clen);
         // M89-S3-C1 补漏：单字符结果须按 clen 带长构造（px_str 用 strlen → 取到 NUL 字符时
         //   截断成空串，与 compare_values 的 memcmp+len 字节安全语义不一致）
+        if (clen == 1) return px_char1((unsigned char)buf[0]);   // M153：ASCII 单字符串表
         return px_str_len(buf, clen);
     }
     if (obj.type == PX_DICT) {
