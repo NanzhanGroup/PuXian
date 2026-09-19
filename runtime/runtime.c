@@ -10087,6 +10087,12 @@ void px_register_builtins(void) {
     px_set_global("img_scale", px_native("img_scale", bi_img_scale));
     px_set_global("img_encode_jpeg", px_native("img_encode_jpeg", bi_img_encode_jpeg));
 #endif // PX_NO_IMG
+// M156（第 38 轮）：零依赖 ONNX 解析面（runtime_onnx.c + onnx_proto.c）
+//   对照 Go 侧 token-cache/embedding_engine_onnx.go（cgo + onnxruntime .so）；本实现在
+//   语言运行时内自解 protobuf，**零外部依赖**。--no-onnx 裁剪（源文件一并移出编译集）。
+#ifndef PX_NO_ONNX
+    px_onnx_register();
+#endif // PX_NO_ONNX
 // M85-S1：--no-rsa 裁剪（去 runtime_rsa.o + mbedtls rsa/pk 引用面；rsa_* native 缺 → R1001）
 #ifndef PX_NO_RSA
     // M83-S4（Issue 18 GAP-RSA-1）：RSA PKCS1v15-SHA256 标准签名（PEM 入参，DigestInfo 自动封装）

@@ -173,6 +173,12 @@ void    px_register_quic(void);                          // M46：QUIC 绑定（
 void    px_register_h3(void);                            // M47：HTTP/3 语义层（runtime_h3.c）
 void    px_register_h3_qpack_dyn(void);                  // M49：QPACK 动态表 + SETTINGS（runtime_h3_qpack_dyn.c）
 void    px_register_zlib(void);                          // M61-S1：zlib 外部库绑定（runtime_zlib.c）
+// M156（第 38 轮）：零依赖 ONNX 解析面（runtime_onnx.c + onnx_proto.c）
+//   语言侧：onnx_model_open / onnx_info / onnx_initializer / onnx_initializer_names /
+//           onnx_model_close —— 解析 .onnx（protobuf wire 自解），**不 dlopen 外部库**
+//           （对照 Go 侧 embedding_engine_onnx.go 的 onnxruntime .so + cgo）。
+//   模块裁剪：--no-onnx → -DPX_NO_ONNX（native 缺 → R1001），源文件同时移出编译集。
+void    px_onnx_register(void);
 // M47：QUIC raw 接口（runtime_quic.c 导出，供 runtime_h3.c 复用底层收发）
 int64_t px_quic_raw_listen(int port);
 int64_t px_quic_raw_accept(int64_t listener, int timeout_ms);
