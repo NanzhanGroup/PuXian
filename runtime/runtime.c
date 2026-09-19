@@ -1205,6 +1205,8 @@ static long long g_a_bytes;
 static long long g_a_total;
 static void px_alloc_stats_dump(void);
 
+
+
 static int g_active_threads = 0;   // spawn 活跃线程数（>0 时进入并发 GC 路径）
 
 // M11 并发 GC：线程注册表 + 暂停协议
@@ -1973,12 +1975,26 @@ extern void px_vm_gc_mark(void) __attribute__((weak));
 static LXObject** g_pinned = NULL;
 static int g_pinned_n = 0, g_pinned_cap = 0;
 static pthread_mutex_t g_pinned_mu = PTHREAD_MUTEX_INITIALIZER;
+// M154：钉住表去重集合（开放寻址；从不删除 ⇒ 无 tombstone）。容量 16K 指针 = 128KB，
+//   惰性分配；满则退化为直接追加（见 px_pin_obj）。
+#define PX_PIN_SLOTS (1 << 14)
+static LXObject** g_pin_set = NULL;
 static void px_pin_obj(LXObject* o) {
     if (!o) return;
     pthread_mutex_lock(&g_pinned_mu);
-    for (int i = 0; i < g_pinned_n; i++) {
-        if (g_pinned[i] == o) { pthread_mutex_unlock(&g_pinned_mu); return; }
+    // M154（第 36 轮）：去重改**哈希集合** —— 旧实现每次线性扫全表（O(已钉数)）。
+    //   M153/M154 的池化把钉住表从「几百」推到「数千」（字面量 + 256 单字符 + 4096 rune
+    //   + 4161 小整数文本），于是每次 pin 都要数千次比较、总代价 O(n²)：实测占整图编译
+    //   **10.0% 采样**（榜第二，仅次于解释循环）。改为开放寻址指针集合后 pin = O(1)。
+    //   集合满/探针用尽时**退化为直接追加**（数组里重复一项，标记同一对象两次无害）。
+    if (!g_pin_set) g_pin_set = (LXObject**)xcalloc(PX_PIN_SLOTS, sizeof(LXObject*));
+    unsigned h = (unsigned)((((uintptr_t)o >> 4) * 0x9E3779B97F4A7C15ULL) >> 40) & (PX_PIN_SLOTS - 1);
+    for (int k = 0; k < 16; k++) {
+        unsigned j = (h + (unsigned)k) & (PX_PIN_SLOTS - 1);
+        if (g_pin_set[j] == o) { pthread_mutex_unlock(&g_pinned_mu); return; }
+        if (!g_pin_set[j]) { g_pin_set[j] = o; goto append; }
     }
+append:
     if (g_pinned_n >= g_pinned_cap) {
         int nc = g_pinned_cap ? g_pinned_cap * 2 : 512;
         g_pinned = (LXObject**)xrealloc(g_pinned, sizeof(LXObject*) * (size_t)nc);
@@ -1996,10 +2012,16 @@ typedef struct { const char* key; LXObject* obj; } PxConstEnt;
 static PxConstEnt* g_ctab = NULL;
 static int g_ctab_n = 0;
 static pthread_mutex_t g_ctab_mu = PTHREAD_MUTEX_INITIALIZER;
+// M154（第 36 轮）：**按指针哈希**。键本来就是指针（命中判据仍是 `key == s`，见上「只允许
+//   地址恒定的字面量」），但旧实现按**内容**逐字节 FNV ⇒ 每次求值一次 strlen + 全串扫描；
+//   实测在整图编译（73 模块 / 16936 行）里 px_str_const 占 3.8% 采样、strcmp 3.3%。
+//   改为指针乘性散列后：查找 = 一次乘法 + 掩码 + 指针比较，**与内容无关**。
+//   桶映射改变不影响正确性（键相等判据与装的条目集合都不变）；分布反而更好 ——
+//   内容哈希把「同内容、不同地址」的字面量挤进同一探测链（8 探针用尽即停止缓存），
+//   指针哈希把它们摊开。容量口径不变（3/4 装填 + 8 探针，用尽只回落普通分配）。
 static unsigned px_const_hash(const char* p) {
-    unsigned h = 2166136261u;
-    while (*p) { h ^= (unsigned char)*p++; h *= 16777619u; }
-    return h;
+    uint64_t h = (uint64_t)(uintptr_t)p * 0x9E3779B97F4A7C15ULL;
+    return (unsigned)(h >> 33);
 }
 static LXObject* px_const_get(const char* s) {
     PxConstEnt* t = __atomic_load_n(&g_ctab, __ATOMIC_ACQUIRE);
@@ -2065,6 +2087,87 @@ static LXValue px_char1(unsigned char c) {
         __atomic_store_n(&g_ch1_init[c], 1, __ATOMIC_RELEASE);
     }
     return g_ch1[c];
+}
+
+// ---- M154（第 36 轮）：多字节 rune 短串池（px_index 的多字节分支专用）----
+// 为什么：M153 的单字节表只覆盖 ASCII；`s[i]`（或 `s[g_pos]`）落在**多字节 rune**
+//   （中文/拉丁扩展…）时仍走 `px_str_len(buf, clen)` ⇒ 每次索引一个新对象。实测整图
+//   编译（含中文注释/字符串）里 peek/advance/ppos 三处的 `g_src[g_pos]` 合计 ~24 万次
+//   分配（前三名之一）。汉字集合有界，故**按内容**池化 2..4 字节 rune 即可基本清零。
+// 安全前提（与 M153 同一条不变量）：PX_STR 的 data 恒不可变、无就地改写站点 ⇒
+//   同内容的两个串在语言层不可区分（相等/序/长度/索引/join/哈希全按字节）；唯一可见差异
+//   是 object_id（契约只对容器/结构断言「不同对象不同 id」，短串一处早已登记为边界）。
+// 结构：直接映射 + 4 探针；**不换出**（用尽即回落普通分配 —— 只是不省，不会错）。
+//   条目对象一律 px_pin_obj 钉住（复用 M153 的钉住表 ⇒ 两条 GC 标记路径同批标记）。
+#define PX_RUNE_SLOTS 4096
+typedef struct { unsigned int key; unsigned char len; unsigned char used; LXValue v; } PxRuneEnt;
+static PxRuneEnt g_rune[PX_RUNE_SLOTS];
+static LXValue px_rune_pool(const char* buf, int clen) {
+    if (clen < 2 || clen > 4) return px_str_len(buf, clen);   // 口径之外的长度：普通构造
+    unsigned int key = 0;
+    for (int i = 0; i < clen; i++) key |= ((unsigned int)(unsigned char)buf[i]) << (8 * i);
+    unsigned h = (key * 2654435761u) ^ ((unsigned)clen * 0x9E3779B1u);
+    unsigned base = h & (PX_RUNE_SLOTS - 1);
+    for (int k = 0; k < 4; k++) {
+        unsigned j = (base + (unsigned)k) & (PX_RUNE_SLOTS - 1);
+        if (!__atomic_load_n(&g_rune[j].used, __ATOMIC_ACQUIRE)) break;   // 空槽 ⇒ 未缓存
+        if (g_rune[j].key == key && g_rune[j].len == (unsigned char)clen) return g_rune[j].v;
+    }
+    LXValue v = px_str_len(buf, clen);        // 先构造（未发布）
+    px_pin_obj(v.as.obj);                     // 再钉住（发布前必须已钉，否则可能被回收）
+    for (int k = 0; k < 4; k++) {
+        unsigned j = (base + (unsigned)k) & (PX_RUNE_SLOTS - 1);
+        if (!__atomic_load_n(&g_rune[j].used, __ATOMIC_ACQUIRE)) {
+            g_rune[j].key = key; g_rune[j].len = (unsigned char)clen; g_rune[j].v = v;
+            __atomic_store_n(&g_rune[j].used, 1, __ATOMIC_RELEASE);
+            return v;
+        }
+        if (g_rune[j].key == key && g_rune[j].len == (unsigned char)clen) return g_rune[j].v;
+    }
+    return v;                                 // 探针用尽：返回本次构造（不换出已有条目）
+}
+
+// ---- M154（第 36 轮）：小整数 `str()` 池 ----
+// 为什么：`str(i)` 的常见入参是**下标 / 计数 / 操作数**（编译器发射器每条指令 4 次
+//   `str(int)`），而 px_fmt_value → xmalloc → px_str 每次都要一条新对象（Go 的
+//   strconv.Itoa 同样每次分配）。实测整图编译里单条指令发射那行占分配榜首（46.6 万），
+//   其中 4/6 就是这四次 str()。池化后该区间**零分配**。
+// 文本口径：与 `px_fmt_value(px_int(v))`（即 px_fmt_value_raw 的 `snprintf("%lld")` 分支）
+//   逐字节相同 —— 见 px_fmt_value_raw 的 PX_INT 分支；本函数用同一格式串。
+// 值域：[PX_INTSTR_LO, PX_INTSTR_HI]；域外走原路（不池化）。表惰性建、只增不减，
+//   条目对象一律 px_pin_obj 钉住（复用 M153 钉住表）。
+// 可见性边界（与 M153 的池化同款、同一条已登记边界）：同值 `str()` 返回**同一对象**，
+//   故 object_id 对它们相同；语言层其余一切（相等/序/长度/连接/索引/哈希）只看字节。
+#define PX_INTSTR_LO (-64)
+#define PX_INTSTR_HI 4096
+static LXValue* g_intstr = NULL;
+static unsigned char* g_intstr_init = NULL;
+static pthread_mutex_t g_intstr_mu = PTHREAD_MUTEX_INITIALIZER;
+static LXValue px_str_int_pool(int64_t v) {
+    if (v < PX_INTSTR_LO || v > PX_INTSTR_HI) {
+        char t[32];
+        int n = snprintf(t, sizeof(t), "%lld", (long long)v);
+        return px_str_len(t, n);
+    }
+    int idx = (int)(v - PX_INTSTR_LO);
+    if (g_intstr_init && __atomic_load_n(&g_intstr_init[idx], __ATOMIC_ACQUIRE)) return g_intstr[idx];
+    pthread_mutex_lock(&g_intstr_mu);
+    if (!g_intstr_init) {
+        int n = PX_INTSTR_HI - PX_INTSTR_LO + 1;
+        g_intstr = (LXValue*)xmalloc(sizeof(LXValue) * (size_t)n);
+        g_intstr_init = (unsigned char*)xcalloc((size_t)n, 1);
+    }
+    if (!g_intstr_init[idx]) {
+        char t[32];
+        int n = snprintf(t, sizeof(t), "%lld", (long long)v);
+        LXValue r = px_str_len(t, n);
+        px_pin_obj(r.as.obj);
+        g_intstr[idx] = r;
+        __atomic_store_n(&g_intstr_init[idx], 1, __ATOMIC_RELEASE);
+    }
+    LXValue r = g_intstr[idx];
+    pthread_mutex_unlock(&g_intstr_mu);
+    return r;
 }
 // 分配统计：导出（声明见文件前部 g_alloc_stats 处）
 static void px_alloc_stats_dump(void) {
@@ -3637,6 +3740,10 @@ static int compare_values(LXValue a, LXValue b) {
 }
 
 static int compare_values_raw(LXValue a, LXValue b) {
+    // M154（第 36 轮）：同一性快路径 —— 同一对象必同值（PX_STR/PX_BYTES 的 data 恒不可变），
+    //   故三态比较直接判 0。覆盖「次序比较」这一族（px_lt/le/gt/ge → compare_values_raw），
+    //   它们没有 px_eq 那样的独立快路径；池化后 `c >= "0"` 常在**同一对象**上比较。
+    if (a.type == b.type && (a.type == PX_STR || a.type == PX_BYTES) && a.as.obj == b.as.obj) return 0;
     if (a.type == PX_INT && b.type == PX_INT) {
         return a.as.i < b.as.i ? -1 : (a.as.i > b.as.i ? 1 : 0);
     }
@@ -3732,11 +3839,29 @@ LXValue px_eq(LXValue a, LXValue b) {
     // 数值跨类型相等：1 == 1.0
     if (a.type == PX_INT && b.type == PX_INT) return px_bool(a.as.i == b.as.i);
     if (px_is_num(a) && px_is_num(b)) return px_bool(num_val(a) == num_val(b));
+    // M154（第 36 轮）：串类快路径 —— 同对象 ⇒ 相等（PX_STR/PX_BYTES 的 data 恒不可变）；
+    //   长度不同 ⇒ 不等；其余才 memcmp。M153/M154 的池化（字面量 / ASCII 单字符 /
+    //   2..4 字节 rune）让「同一对象」成为高频情形（`c == "/"`、`tok == "let"`、
+    //   `peek() == ""`），旧路径每次都要经 compare_values → compare_values_raw 再做
+    //   一次全串 memcmp（实测 px_eq 分支占整图编译 7.0% 采样 + memcmp 4.0%）。
+    if (a.type == b.type && (a.type == PX_STR || a.type == PX_BYTES)) {
+        if (a.as.obj == b.as.obj) return px_bool(true);
+        int la = a.as.obj->as.str.len, lb = b.as.obj->as.str.len;
+        if (la != lb) return px_bool(false);
+        return px_bool(memcmp(a.as.obj->as.str.data, b.as.obj->as.str.data, (size_t)la) == 0);
+    }
     return px_bool(compare_values(a, b) == 0);
 }
 LXValue px_ne(LXValue a, LXValue b) {
     if (a.type == PX_INT && b.type == PX_INT) return px_bool(a.as.i != b.as.i);
     if (px_is_num(a) && px_is_num(b)) return px_bool(num_val(a) != num_val(b));
+    // M154：与 px_eq 同构的串类快路径
+    if (a.type == b.type && (a.type == PX_STR || a.type == PX_BYTES)) {
+        if (a.as.obj == b.as.obj) return px_bool(false);
+        int la = a.as.obj->as.str.len, lb = b.as.obj->as.str.len;
+        if (la != lb) return px_bool(true);
+        return px_bool(memcmp(a.as.obj->as.str.data, b.as.obj->as.str.data, (size_t)la) != 0);
+    }
     return px_bool(compare_values(a, b) != 0);
 }
 LXValue px_lt(LXValue a, LXValue b) {
@@ -3819,7 +3944,7 @@ LXValue px_index(LXValue obj, LXValue idx) {
         // M89-S3-C1 补漏：单字符结果须按 clen 带长构造（px_str 用 strlen → 取到 NUL 字符时
         //   截断成空串，与 compare_values 的 memcmp+len 字节安全语义不一致）
         if (clen == 1) return px_char1((unsigned char)buf[0]);   // M153：ASCII 单字符串表
-        return px_str_len(buf, clen);
+        return px_rune_pool(buf, clen);                          // M154：多字节 rune 短串池（2..4 字节）
     }
     if (obj.type == PX_DICT) {
         if (idx.type == PX_STR) {
@@ -4745,6 +4870,9 @@ static LXValue bi_str(LXValue* args, int nargs, void* ctx) {
     //   时被截成 3 字节（第 16 轮对拍门当场判红）。
     //   注：PX_BYTES 保持既有显示形式（`<bytes N>`）不变，避免改动 str(bytes) 的既有语义。
     if (args[0].type == PX_STR) return args[0];
+    // M154（第 36 轮）：整数快路径 —— 小整数池（见 px_str_int_pool）。文本与
+    //   px_fmt_value(px_int(v)) 逐字节相同；池化的是**对象**，不改变任何字节语义。
+    if (args[0].type == PX_INT) return px_str_int_pool(args[0].as.i);
     // M-B5：统一用 px_fmt_value——str() 支持全部类型（list/dict/enum/struct/result 等），
     // 对齐 Rust 内置 str()（fmt_value 渲染）
     char* s = px_fmt_value(args[0]);
@@ -5165,12 +5293,24 @@ static LXValue bi_split(LXValue* args, int nargs, void* ctx) {
     return r;
 }
 
+// M154：join 取项字节 —— PX_STR 用 (data, str.len)（**字节精确**，含内嵌 NUL）；其它类型走
+//   px_to_string（数字/布尔/null 的文本表示无内嵌 NUL ⇒ strlen 与显式长等价）。
+static inline void bi_join_item(LXValue item, const char** pp, int* lp) {
+    if (item.type == PX_STR) { *pp = item.as.obj->as.str.data; *lp = item.as.obj->as.str.len; return; }
+    const char* ts = px_to_string(item);
+    *pp = ts; *lp = (int)strlen(ts);
+}
+
 // join(sep, list) -> str
 static LXValue bi_join(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 2 || args[0].type != PX_STR) px_error("R1002: join 需要 2 个参数（分隔符, 列表）");
     const char* sep = args[0].as.obj->as.str.data;
-    int sep_len = (int)strlen(sep);
+    // M154（第 36 轮 · 缺陷 149）：分隔符与项一律按**显式字节长**拼接 —— 与 `+`
+    //   （px_add 的 PX_STR/PX_STR 分支同样按 str.len）及 Go `strings.Join` 口径一致。
+    //   旧实现用 strlen ⇒ 内嵌 NUL 处静默截断，于是 join 与 `+` 对同一数据给出**不同**结果
+    //   （`["a\u{0}b"]` join 出 "a"，`"a\u{0}b" + ""` 得 4 字节）。
+    int sep_len = args[0].as.obj->as.str.len;
     if (args[1].type != PX_LIST && args[1].type != PX_TUPLE) px_error("R1002: join 第二参数需要 list/tuple");
     LXObject* o = args[1].as.obj;
     int n = (args[1].type == PX_LIST) ? o->as.list.len : o->as.tuple.len;
@@ -5178,22 +5318,23 @@ static LXValue bi_join(LXValue* args, int nargs, void* ctx) {
     size_t total = 1;
     for (int i = 0; i < n; i++) {
         LXValue item = (args[1].type == PX_LIST) ? o->as.list.items[i] : o->as.tuple.items[i];
-        char* ts = px_to_string(item);
-        total += strlen(ts) + (i ? sep_len : 0);
+        const char* ts; int tl;
+        bi_join_item(item, &ts, &tl);
+        total += (size_t)tl + (i ? (size_t)sep_len : 0);
     }
     char* out = xmalloc(total);
     out[0] = 0;
     // M152（第 34 轮 · 缺陷 141a）：**游标写入** —— 旧实现每项都 strcat/strncat 从
     //   头上重扫（Σ 前缀长 ⇒ O(n × 总长) 平方级）。而 `join("", 块表)` 正是编译器
     //   整图渲染的必经路（块数 = 语句/指令数，总长 = 整份 C 文本）⇒ 平方级被放大到
-    //   语句数 × 文本长。字节口径不变（仍逐项 strlen ⇒ 项内内嵌 NUL 处截断）。
+    //   语句数 × 文本长。
     char* wp = out;
     for (int i = 0; i < n; i++) {
         if (i) { memcpy(wp, sep, (size_t)sep_len); wp += sep_len; }
         LXValue item = (args[1].type == PX_LIST) ? o->as.list.items[i] : o->as.tuple.items[i];
-        char* ts = px_to_string(item);
-        size_t tl = strlen(ts);
-        memcpy(wp, ts, tl); wp += tl;
+        const char* ts; int tl;
+        bi_join_item(item, &ts, &tl);
+        memcpy(wp, ts, (size_t)tl); wp += tl;
     }
     *wp = 0;
     // 缺陷 141b：旧实现 `px_str(out)` 是**复制**（px_str_len 把字节内联拷进新对象）
