@@ -195,7 +195,7 @@ mod_srcs() { # $1=mod → 该模块 runtime 源文件（空格分隔，从 rt_sr
         rsa)      echo "runtime_rsa.c" ;;
         ed25519)  echo "runtime_ed25519.c tweetnacl.c tweetnacl.h" ;;
         img)      echo "runtime_image.c third_party/stb/stb_image.h third_party/stb/stb_image_write.h" ;;
-        onnx)     echo "onnx.h onnx_proto.c runtime_onnx.c" ;;
+        onnx)     echo "onnx.h onnx_proto.c onnx_tensor.h onnx_tensor.c onnx_ops.c onnx_exec.c runtime_onnx.c" ;;
         route)    echo "runtime_route.c" ;;
         zlib)     echo "runtime_zlib.c" ;;
         h2)       echo "runtime_h2.c" ;;
@@ -211,7 +211,7 @@ rt_src_files() {
         runtime_ws.c runtime_rsa.c runtime_sqlite.c runtime_route.c runtime_h2.c \
         runtime_ffi.c runtime_zlib.c runtime_ed25519.c tweetnacl.c tweetnacl.h \
         runtime_image.c third_party/stb/stb_image.h third_party/stb/stb_image_write.h \
-        onnx.h onnx_proto.c runtime_onnx.c \
+        onnx.h onnx_proto.c onnx_tensor.h onnx_tensor.c onnx_ops.c onnx_exec.c runtime_onnx.c \
         vm.h vm.c coro.c \
         arch.h arch_x86_64.h arch_aarch64.h \
         arch_armv7.h arch_riscv64.h"
