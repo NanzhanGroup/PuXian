@@ -72,6 +72,19 @@ def i_register_builtins():
     # 避免高精度浮点字面量被编译期截断 ~6 位（M59-S1 实测）导致 e/pi 精度损失。
     env_define(g_globals, "pi", pi)
     env_define(g_globals, "e", e)
+# ---------- M158（第 40 轮 · 缺陷 114）：解释轨函数值桥调度器 ----------
+# runtime 侧桥对象（interp_bridge / bi_ffi_call 自动桥接）被 native 调用时回调到这里：
+#   参数 (fnvalue, args_list) —— fnvalue 是解释轨的函数值包装（__ufn__ / __builtin__），
+#   args_list 是 native 传来的实参列表；返回值即被调函数的返回值。
+# 语义：完整走解释轨调用层 i_call_value（真闭包 / env 链 / 默认参数 / self 绑定与解释轨一致）。
+# 边界：错误（未捕获 ? 传播）在 native 边界不可捕获 ⇒ 打印 stderr 并返回 null
+#   （编译模式此处等价路径是 px_error 终止进程）。
+def i_bridge_dispatch(fnvalue, args):
+    let r = i_call_value(fnvalue, args, 0)
+    if r.is_err():
+        print_err("运行时错误: " + i_err_display(r.err()))
+        return null
+    return r.unwrap()
 # ---------- 程序入口（对齐 run_program） ----------
 def i_run_program(prog):
     let items = prog[1]
@@ -153,6 +166,10 @@ def main():
     g_loop_depth = 0
     g_exit_code = 0
     i_register_builtins()
+    # M158（第 40 轮 · 缺陷 114）：注册解释轨函数值桥调度器 —— 此后 runtime native
+    #   收到的解释轨函数值（__ufn__ / __builtin__ 包装）会自动桥成真 PX_FUNC，
+    #   回调进 i_bridge_dispatch 执行。未安装时桥被调用会明确报错（不静默）。
+    interp_bridge_install(i_bridge_dispatch)
     let r = i_run_program(prog)
     if r.is_err():
         let e = r.err()

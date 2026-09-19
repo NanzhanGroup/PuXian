@@ -15,9 +15,9 @@
 # ---------- 调用任意可调用值（对齐 call_value） ----------
 def i_call_value(cv, args, pos):
     let t = i_type_name(cv)
-    if t == "fn":
+    if t == "function":
         return i_call_function(cv["__ufn__"], args, null, pos)
-    if t == "builtin":
+    if t == "native":
         return i_call_builtin(cv["__builtin__"], args, pos)
     if t == "type":
         if cv["__typeref__"] == "struct":
