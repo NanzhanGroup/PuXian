@@ -286,7 +286,30 @@ rt_cache_compile() {
             return 1
         fi
     done
+    rt_fp_emit "$dir" "$(basename "$dir")" "$cc" "$common" || return 1
     touch "$dir/.complete"
+    return 0
+}
+# M152（第 34 轮 · 缺陷 144）：**runtime 缓存指纹** —— 把 `PXRT-<key>` 常量编成缓存目录里的
+#   一个 .o（`__rtfp.o`）。它随 `$CACHE/*.o` 一起被链进产物 ⇒「这个产物链的是哪份 runtime」
+#   从"只能靠目录 mtime 猜"变成**可从产物读回的事实**（与既有 `PXSRC-…` 编译器源码链指纹同族）。
+#   为什么必须有：`.rtcache/<key>` 按 key 隔离，但**选中哪个 key** 是另一个问题 ——
+#   第 34 轮实锤：`rebake_bin.sh` 的 check_cache 按"目录 mtime 最新"选，源码回退后当前 key 的
+#   目录**不是最新写入**（缓存命中不再刷新 mtime）⇒ 把**另一份 runtime** 的 .o 链进入库件，
+#   而所有门都绿（门测编译器行为、指纹只看源码，都不看 runtime 层）。
+#   实锤证据：以 M151 源码重烘出的 `bootstrap/pxc` 里 `strings | grep PX_GC_TRIGGER_BYTES` = 1
+#   （该串只存在于尚未提交的 M152 runtime）。**能"自动挑选"的东西，也要能"自动核对挑对没有"。**
+rt_fp_emit() {   # $1=dir $2=key $3=cc $4=common_flags（引号原样，走 eval）
+    local dir="$1" key="$2" cc="$3" common="$4"
+    [ -f "$dir/__rtfp.o" ] && return 0
+    cat > "$dir/__rtfp.c" <<EOF
+/* 自动生成（tools/px）：runtime 缓存指纹。勿手改。 */
+const char* px_rt_fp_$key(void) { return "PXRT-$key"; }
+EOF
+    eval "$cc -c $common -o \"$dir/__rtfp.o\" \"$dir/__rtfp.c\"" 2>>/tmp/pxc_rtcc.log || {
+        echo "错误: runtime 缓存指纹编译失败（$cc）—— 日志 /tmp/pxc_rtcc.log" >&2
+        return 1
+    }
     return 0
 }
 rt_ensure() {
@@ -295,6 +318,11 @@ rt_ensure() {
     key="$(rt_key "$cuts" "$cc" "$lto")"
     dir="$PXC_HOME/.rtcache/$key"
     if [ -d "$dir" ] && [ -f "$dir/.complete" ]; then
+        # 旧缓存（M152 前）没有指纹 .o ⇒ 就地补上（不重编 runtime）
+        local common="-O2 -pthread -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_FOREIGN_KEYS=1 \
+        -I\"$dir\" -I\"$RT_DIR/third_party/miniz\" -I\"$RT_DIR/mbedtls/include\" \
+        -I\"$RT_DIR/third_party/sqlite3\" -I\"$RT_DIR/third_party/zlib/include\""
+        rt_fp_emit "$dir" "$key" "$cc" "$common" || return 1
         echo "$dir"
         return 0
     fi
@@ -723,6 +751,9 @@ case "$cmd" in
     lsp)   shift; cmd_lsp "$@" ;;
     mcp)   shift; cmd_mcp "$@" ;;
     refs)  shift; cmd_refs "$@" ;;
+    # M152（缺陷 144）：打印当前源码对应的 runtime 缓存目录（**按 rt_key**，不猜 mtime）
+    #   用法：px rtcache [cuts...] —— 供 rebake_bin.sh 等"必须链对 runtime"的路径使用。
+    rtcache) shift; rt_ensure "${1:-}" "${2:-gcc}" "${3:-0}" ;;
     --version|-v) echo "px $RELEASE_VER";;
     help|--help|-h) usage ;;
     *) echo "未知子命令: $cmd" >&2; usage >&2; exit 1 ;;

@@ -38,6 +38,19 @@ mkdir -p build
 #   （不能用 `git diff` 判 —— 门跑的时候 runtime.c 本来就有本轮的未提交改动。）
 cp "$RT" /tmp/m150_rt_snapshot.c
 
+# ── 缺陷 139（第 33 轮）：负控会改写 runtime/*.c；门**被打断**时篡改态会静默留在工作区 ──
+#   （语法合法、语义反向 ⇒ 编译器不报错；而本轮 runtime.c 本来就带未提交改动 ⇒ `git diff` 判不出来。）
+#   两道防线：① 开门先查「负控残留标记 NEGCTL」；② 信号兜底还原快照。
+for _f in ../../runtime/runtime.c ../../runtime/vm.c; do
+    if [ -f "$_f" ] && grep -q 'NEGCTL' "$_f" 2>/dev/null; then
+        echo "FAIL 负控残留：$_f 仍含 NEGCTL 标记（上一轮门被中断？先还原再跑）"
+        exit 1
+    fi
+done
+
+restore_rt() { [ -f /tmp/m150_rt_snapshot.c ] && cp /tmp/m150_rt_snapshot.c "$RT" 2>/dev/null; }
+trap restore_rt INT TERM HUP
+
 need_gcc_note() { echo "   （编译器：$(gcc --version 2>/dev/null | head -1)）"; }
 
 # ── 端口：找第一个空闲 ──
@@ -265,6 +278,8 @@ done
 # ── ⑥ 负控：篡改 runtime.c → 重建 → 门必须变红 ──
 negctl() {
     local tag="$1" old="$2" new="$3" why="$4"
+    # 缺陷 139：负控必须留下**可检测的标记** —— 门被打断时靠它识别残留篡改态
+    new="$new  /* NEGCTL-150-${tag} */"
     echo "== [⑥ 负控 $tag] 篡改 runtime.c ⇒ 门必须变红（$why）=="
     cp "$RT" /tmp/m150_runtime_keep.c
     local pok=1
@@ -304,6 +319,7 @@ PY
     fi
     stop_server
     cp /tmp/m150_runtime_keep.c "$RT"
+    if grep -q 'NEGCTL' "$RT"; then echo "FAIL 负控 $tag：runtime.c 还原后仍有 NEGCTL 标记"; FAIL=$((FAIL+1)); fi
     if [ "$verdict" = "green" ]; then
         echo "FAIL 负控 $tag 未判红（门没有真的在跑这条面）"
         FAIL=$((FAIL+1))
