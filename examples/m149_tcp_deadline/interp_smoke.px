@@ -1,0 +1,38 @@
+# ═══════════════════════════════════════════════════════════════════════
+# interp_smoke.px — M149 解释轨冒烟（四个 native 在**解释器轨**可达）
+# ---------------------------------------------------------------
+# 解释器（bootstrap/pxi）不支持 `spawn`，也**没有** tcp_listen/accept 名册项
+# ⇒ 起不了服务端。因此本文件只走**无需服务端**的三条通路：
+#   ① tcp_connect_ex 到必然被拒的端口 → ok=false + errno=111（分类可用）
+#   ② tcp_connect_ex 到 .invalid 域名   → stage=resolve（与连接失败可区分）
+#   ③ tcp_opt / tcp_recv_ex / tcp_send_ex 对**非法 fd** → ok=false + EBADF，
+#      **不杀进程**（这正是 M149 要替代的旧语义：旧 tcp_* 一律 px_error）
+# 该文件在三轨（解释/VM/C）都能跑 ⇒ 也用来钉「名册与转发层都已补齐」。
+# ═══════════════════════════════════════════════════════════════════════
+var P = 0
+var F = 0
+
+def ck(n, c):
+    if c:
+        P = P + 1
+        print("PASS " + n)
+    else:
+        F = F + 1
+        print("FAIL " + n)
+
+def main():
+    var r = tcp_connect_ex("127.0.0.1", 1, {"timeout_ms": 1000})
+    ck("S1 拒绝 → ok=false", r["ok"] == false)
+    ck("S2 errno=ECONNREFUSED(111)", int(r["errno"]) == 111)
+    ck("S3 stage=connect", r["stage"] == "connect")
+    var r2 = tcp_connect_ex("nosuchhost-zzz.invalid", 80, {"timeout_ms": 500})
+    ck("S4 解析失败 stage=resolve", r2["stage"] == "resolve")
+    var o = tcp_opt(9999, {"read_timeout_ms": 100})
+    ck("S5 tcp_opt 非法 fd → ok=false", o["ok"] == false)
+    ck("S6 errno=EBADF(9)", int(o["errno"]) == 9)
+    ck("S7 err=bad file descriptor（Go 文案）", str(o["err"]) == "bad file descriptor")
+    var rr = tcp_recv_ex(9999, 16)
+    ck("S8 tcp_recv_ex 非法 fd → ok=false", rr["ok"] == false)
+    var ss = tcp_send_ex(9999, "x")
+    ck("S9 tcp_send_ex 非法 fd → ok=false", ss["ok"] == false)
+    print("M149_SMOKE: " + str(P) + "P/" + str(F) + "F")

@@ -872,6 +872,31 @@ def i_call_builtin(name, args, pos):
         if len(args) != 2:
             return Err(i_r1002("fd_wait 需要 (fds, timeout_ms)", pos))
         return Ok(fd_wait(args[0], args[1]))
+    if name == "tcp_connect_ex":
+        # tcp_connect_ex(host, port[, opts]) → dict{ok,fd,addr,stage,errno,err}
+        #   （M149：带超时 + 失败不杀进程；opts={"timeout_ms":int,"nodelay":bool}）
+        if len(args) != 2 and len(args) != 3:
+            return Err(i_r1002("tcp_connect_ex 需要 (host, port[, opts])", pos))
+        if len(args) == 3:
+            return Ok(tcp_connect_ex(args[0], args[1], args[2]))
+        return Ok(tcp_connect_ex(args[0], args[1]))
+    if name == "tcp_opt":
+        # tcp_opt(fd, opts) → dict{ok,nodelay,keepalive,read_timeout_ms,write_timeout_ms,errno,err}
+        #   （改完回读生效值 ⇒ 超时配置可编程验证）
+        if len(args) != 2:
+            return Err(i_r1002("tcp_opt 需要 (fd, opts)", pos))
+        return Ok(tcp_opt(args[0], args[1]))
+    if name == "tcp_recv_ex":
+        # tcp_recv_ex(fd, maxlen) → dict{ok,data,n,eof,timeout,errno,err}
+        #   （**EOF / 超时 / 出错可分辨** —— 旧 tcp_recv 三者都返回 ""）
+        if len(args) != 2:
+            return Err(i_r1002("tcp_recv_ex 需要 (fd, maxlen)", pos))
+        return Ok(tcp_recv_ex(args[0], args[1]))
+    if name == "tcp_send_ex":
+        # tcp_send_ex(fd, data) → dict{ok,n,timeout,errno,err}（失败时 n=已写出字节数）
+        if len(args) != 2:
+            return Err(i_r1002("tcp_send_ex 需要 (fd, data)", pos))
+        return Ok(tcp_send_ex(args[0], args[1]))
     return Err(i_r1002("未知内置函数: " + name, pos))
 # ---- M59-S4 数学直调 helper（双模式对齐） ----
 # 解释器参数错误返回 Err（不终止进程，区别于编译模式 px_error 终止）；

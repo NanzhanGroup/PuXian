@@ -1,3 +1,37 @@
+## M149 —— TCP「带超时 + 可辨别失败」族（第 31 轮 · qg-issue 87 · token-cache L2 Redis 移植的前提）
+
+- **背景**：token-cache 的 L2 是 Redis（`redis.addr` 非空即接），而既有 `tcp_*` 的**失败面**
+  表达不出 Go 的 `net`：
+  ① `tcp_connect` 失败 ⇒ `px_error` **杀进程**（Go：`return err`，上层降级/重试）；
+  ② `tcp_connect` **无超时** ⇒ SYN 被丢时永久挂起（Go：`DialTimeout`）；
+  ③ `tcp_recv` 无读超时，且 **EOF / 超时 / 出错全部返回 `""`**（三者不可分辨）；
+  ④ `tcp_send` 出错同杀进程，且拿不到「已发出多少字节」（Go：`n, err := conn.Write`）。
+  ⇒ Redis/PostgreSQL 这类「网络是常态故障源」的客户端**无法移植**（同族：缺陷 115 `append_file_opt`）。
+- **新增 4 个 native**（与旧 `tcp_*` **并存不覆盖**，一律返回结果 dict、**永不杀进程**）：
+  - `tcp_connect_ex(host, port[, opts])` → `{ok, fd, addr, peer, stage, errno, err}`；
+    `opts = {"timeout_ms": int, "nodelay": bool}`；`stage ∈ ""|"resolve"|"socket"|"connect"`；
+    **默认 `setsockopt(TCP_NODELAY, 1)`**（Go `net.Dial` 对 TCP 连接默认开启 —— 不设则小请求撞
+    Nagle + 延迟 ACK）；成功时 `peer` = Go `RemoteAddr()` 形态（`ip:port`），
+    `addr` = 数字地址（IPv6 带方括号，与失败路径同形）。复用既有的
+    `px_tcp_connect_timeout`（双栈 + 非阻塞 connect + poll 超时 + 逐地址尝试）。
+  - `tcp_opt(fd, opts)` → `{ok, nodelay, keepalive, read_timeout_ms, write_timeout_ms, errno, err}`：
+    改完 `getsockopt` **回读生效值**（超时配置可编程验证）；缺键=不改；`0` = **无限**。
+  - `tcp_recv_ex(fd, maxlen)` → `{ok, data, n, eof, timeout, errno, err}`：
+    `n==0 ⇒ eof=true`（对端 FIN，非错误）；`EAGAIN/EWOULDBLOCK ⇒ timeout=true` +
+    `err="i/o timeout"`（Go `os.ErrDeadlineExceeded` 文案）；EINTR 自动续读。
+  - `tcp_send_ex(fd, data)` → `{ok, n, timeout, errno, err}`：循环写完（EINTR 续写），
+    失败时 `n` = **已写出**字节数（对齐 Go `Conn.Write` 的 `n`）。
+- **名册/索引**：`selfhost/ibuiltin.px` 转发层 + `selfhost/interp.px` 名册各补 4 条；
+  `tools/lint_core.px` 名册由生成器重派生（359 名）；`docs/native_index.json` **341 → 345**。
+- **门 `examples/m149_tcp_deadline/`**：受控服务端（独立进程 `m149_server.px`，按首行 mode 扮演
+  沉默 / 问候即关 / 分段发 / 大包 / 收取并回执 / 立即关）⇒ **VM + C 双轨各 53 断言**（黑洞地址连接
+  超时 300ms 被真正遵守且 `errno=ETIMEDOUT(110)`、`refused=111`、解析失败 `stage=resolve`、
+  `nodelay` 默认 true、读超时 ≥250ms 且 `errno=EAGAIN(11)`、EOF ≠ 超时、分段到达无帧边界、
+  100000 字节收发、对端关闭后写 `EPIPE`）+ 解释轨冒烟 9 断言 + **3 道负控**
+  （去掉连接超时 / 关掉 NODELAY 默认 / 把 EOF 报成非 EOF ⇒ 全判红）。
+  已接入 `selfhost/m116_gates.sh` / `m117_gates.sh` / `.github/workflows/ci.yml`。
+- **口径**：两轨输出含实测毫秒（`INFO *.dt`）⇒ 门的"两轨逐字节一致"对这两行做**走钟归一**（其余逐字节）。
+
 ## 缺陷 131 —— `import` 模块去重按**真实路径**（第 30 轮 · 自举/模块系统）
 
 - **症状**：同一文件经**两种拼写**到达时被当成两个模块 ⇒ 定义**导出两次** ⇒

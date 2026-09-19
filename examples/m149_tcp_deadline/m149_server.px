@@ -1,0 +1,89 @@
+# ═══════════════════════════════════════════════════════════════════════
+# m149_server.px — M149 门（受控 TCP 服务端）
+# ---------------------------------------------------------------
+# 为什么是**独立进程**而不是门内 `spawn`：
+#   门要验的是「**读超时**（SO_RCVTIMEO → EAGAIN）」与「EOF 可辨别」，
+#   这要求对端能**故意沉默**、**发完就关**、**分段发**、**发大包**。
+#   与既有门（m144 用 spawn 起 http_serve）不同，本门走 `tcp_listen/tcp_accept`
+#   的**阻塞**时序：把服务端放独立进程可让「客户端在等超时」与「服务端在睡」
+#   互不干扰，也不依赖任何轨道的协程调度语义（VM/C 两轨共用同一份服务端）。
+#
+# 协议（客户端先发一行 `<mode>[ <arg>]\n`，服务端按 mode 行事）：
+#   silent      → 沉默 700ms 后关闭（客户端读超时 300ms ⇒ 必然先超时）
+#   greet       → 发 "hello" 后关闭（客户端应能先读到数据、再看到 EOF）
+#   frag        → 分三次发 AAA/BBB/CCC（各隔 30ms）后关闭（无帧边界）
+#   big <n>     → 发 n 字节 "0123456789" 重复串后关闭（n 为 10 的倍数）
+#   drain <n>   → 回 "ready"；累计收满 n 字节后回 "got <n>" 并关闭
+#   bye         → 收到即关闭（客户端随后写 ⇒ 应拿到 EPIPE/ECONNRESET）
+#   exit        → 关闭监听并退出
+# ⚠️ "drain" 必须先回 "ready" 再收载荷：否则首行读取会把**载荷前若干字节**
+#   一并读进来（TCP 无消息边界）⇒ 服务端少计数、客户端看到假差异。
+# 用法：M149_PORT=<port> ./build/m149_server
+# ═══════════════════════════════════════════════════════════════════════
+var SRV_PORT = int(env("M149_PORT"))
+var SRV_LFD = tcp_listen(SRV_PORT)
+print("M149SRV listening " + str(SRV_PORT))
+
+def srv_rep(s, k):
+    var out = ""
+    var i = 0
+    while i < k:
+        out = out + s
+        i = i + 1
+    return out
+
+var SRV_CHUNK = srv_rep("0123456789", 1638)   # 16380 字节
+
+var SRV_ALIVE = true
+while SRV_ALIVE:
+    var cfd = tcp_accept(SRV_LFD)
+    var rr = tcp_recv_ex(cfd, 256)
+    var line = trim(rr["data"])
+    var mode = line
+    var arg = ""
+    if contains(line, " "):
+        var parts = split(line, " ")
+        mode = parts[0]
+        arg = parts[1]
+    if mode == "exit":
+        SRV_ALIVE = false
+        tcp_close(cfd)
+        print("M149SRV exiting")
+        break
+    if mode == "silent":
+        sleep_us(700000)
+    elif mode == "greet":
+        tcp_send_ex(cfd, "hello")
+    elif mode == "frag":
+        tcp_send_ex(cfd, "AAA")
+        sleep_us(30000)
+        tcp_send_ex(cfd, "BBB")
+        sleep_us(30000)
+        tcp_send_ex(cfd, "CCC")
+    elif mode == "big":
+        var want = int(arg)
+        var sent = 0
+        while sent < want:
+            var left = want - sent
+            var piece = SRV_CHUNK
+            if left < len(SRV_CHUNK):
+                piece = SRV_CHUNK[0:left]
+            var w = tcp_send_ex(cfd, piece)
+            if not w["ok"]:
+                break
+            sent = sent + len(piece)
+    elif mode == "drain":
+        var exp = int(arg)
+        tcp_send_ex(cfd, "ready")
+        var total = 0
+        while total < exp:
+            var r2 = tcp_recv_ex(cfd, 65536)
+            if r2["n"] == 0:
+                break
+            total = total + int(r2["n"])
+        tcp_send_ex(cfd, "got " + str(total))
+    elif mode == "bye":
+        tcp_close(cfd)
+        continue
+    tcp_close(cfd)
+tcp_close(SRV_LFD)

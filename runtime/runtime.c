@@ -280,6 +280,14 @@ static LXValue bi_tcp_connect(LXValue* args, int nargs, void* ctx);
 static LXValue bi_tcp_send(LXValue* args, int nargs, void* ctx);
 static LXValue bi_tcp_recv(LXValue* args, int nargs, void* ctx);
 static LXValue bi_tcp_close(LXValue* args, int nargs, void* ctx);
+// M149（第 31 轮）：TCP「带超时 + 可辨别失败」族（Go net 语义可表达；见下方实现处长注释）
+static LXValue bi_tcp_connect_ex(LXValue* args, int nargs, void* ctx);
+static LXValue bi_tcp_opt(LXValue* args, int nargs, void* ctx);
+static LXValue bi_tcp_recv_ex(LXValue* args, int nargs, void* ctx);
+static LXValue bi_tcp_send_ex(LXValue* args, int nargs, void* ctx);
+// M149：带超时的 TCP 连接（定义在文件后段 px_conn_try 之后；既有 hconnect/https 亦用它）
+static int px_tcp_connect_timeout(const char* host, int port, int timeout_ms,
+                                  int* out_stage, int* out_errno, char* out_addr, int addr_cap);
 // M33：UDP 基础设施（HTTP/3/QUIC 预研）
 static LXValue bi_udp_open(LXValue* args, int nargs, void* ctx);
 static LXValue bi_udp_send(LXValue* args, int nargs, void* ctx);
@@ -9300,6 +9308,12 @@ void px_register_builtins(void) {
     px_set_global("tcp_send", px_native("tcp_send", bi_tcp_send));
     px_set_global("tcp_recv", px_native("tcp_recv", bi_tcp_recv));
     px_set_global("tcp_close", px_native("tcp_close", bi_tcp_close));
+    // M149（第 31 轮）：TCP「带超时 + 可辨别失败」族（Redis/PG 客户端移植的前提；
+    //   旧 tcp_* 语义零变化，四个新名一律返回结果 dict、失败不杀进程）
+    px_set_global("tcp_connect_ex", px_native("tcp_connect_ex", bi_tcp_connect_ex));
+    px_set_global("tcp_opt", px_native("tcp_opt", bi_tcp_opt));
+    px_set_global("tcp_recv_ex", px_native("tcp_recv_ex", bi_tcp_recv_ex));
+    px_set_global("tcp_send_ex", px_native("tcp_send_ex", bi_tcp_send_ex));
     // M33：UDP 基础设施（HTTP/3/QUIC 预研）
     px_set_global("udp_open", px_native("udp_open", bi_udp_open));
     px_set_global("udp_send", px_native("udp_send", bi_udp_send));
@@ -13030,6 +13044,244 @@ static void px_net_conn_fail(char* errbuf, int errcap, const char* host, int por
         snprintf(errbuf, (size_t)errcap, "net: 连接 %s:%d 失败 (%d)",
                  (addr && addr[0]) ? addr : host, port, er);
     }
+}
+
+// ==================== M149：TCP「带超时 + 可辨别失败」族（Go net 语义可表达） ====================
+// 背景（第 31 轮）：token-cache 的 L2 是 Redis，而既有 tcp_* 的**失败面**表达不出 Go 的 net：
+//   ① tcp_connect 失败 ⇒ px_error **杀进程**（Go：`return err`，上层降级/重试）；
+//   ② tcp_connect 无超时 ⇒ SYN 被丢时永久挂起（Go：DialTimeout）；
+//   ③ tcp_recv 无读超时，且 **EOF / 超时 / 出错全部返回 ""**（三者不可分辨）；
+//   ④ tcp_send 出错同杀进程，且拿不到「已发出多少字节」（Go：`n, err := conn.Write`）。
+//   ⇒ Redis/PostgreSQL 这类「网络是常态故障源」的客户端无法移植（同族：缺陷 115 append_file_opt）。
+// 本族与既有 tcp_* **并存不覆盖**（旧语义零变化），一律返回结果 dict、**永不杀进程**：
+//   tcp_connect_ex(host, port[, opts]) → {ok, fd, addr, stage, errno, err}
+//     opts = {timeout_ms:int, nodelay:bool}；timeout_ms<=0 = 阻塞（同 tcp_connect）。
+//     ⚠️ 默认 setsockopt(TCP_NODELAY, 1)：Go `net.Dial` 对 TCP 连接**默认开** NODELAY，
+//       不设则小请求撞 Nagle + 延迟 ACK（Redis 的 request/response 形态最吃亏）。
+//     stage ∈ "" | "resolve" | "socket" | "connect"（与 px_net_conn_fail 四态同源）
+//   tcp_opt(fd, opts) → {ok, nodelay, keepalive, read_timeout_ms, write_timeout_ms, errno, err}
+//     改完**回读**（getsockopt）返回**生效值** ⇒ 超时配置可编程验证（否则只能"相信"）。
+//     opts 缺键 = 不改；read/write_timeout_ms = 0 ⇒ **无限**（SO_RCVTIMEO/SO_SNDTIMEO 清零）。
+//   tcp_recv_ex(fd, maxlen) → {ok, data, n, eof, timeout, errno, err}
+//     n>0 ⇒ ok=true；n==0 ⇒ **eof=true**（对端 FIN，非错误）；EAGAIN/EWOULDBLOCK ⇒
+//     **timeout=true** + err="i/o timeout"（Go `os.ErrDeadlineExceeded` 文案）。
+//   tcp_send_ex(fd, data) → {ok, n, timeout, errno, err}
+//     循环写完（EINTR 续写）；失败时 n = **已写出**字节数（对齐 Go `Conn.Write` 的 n）。
+// ⚠️ 边界：解析（getaddrinfo）阶段**不受 timeout_ms 约束**（libc 解析无异步取消入口）。
+static void px_go_errno_into(char* buf, int cap, int n) {
+    if (!buf || cap <= 0) return;
+    if (n >= 0 && n < GO_ERRNO_STR_N && GO_ERRNO_STR[n][0] != '\0') snprintf(buf, (size_t)cap, "%s", GO_ERRNO_STR[n]);
+    else snprintf(buf, (size_t)cap, "errno %d", n);
+}
+
+static const char* px_conn_stage_name(int stage) {
+    switch (stage) {
+        case PX_CONN_STAGE_RESOLVE: return "resolve";
+        case PX_CONN_STAGE_SOCKET:  return "socket";
+        case PX_CONN_STAGE_CONNECT: return "connect";
+        case PX_CONN_STAGE_TLS:     return "tls";
+        default:                    return "";
+    }
+}
+
+// ms → timeval（<=0 表示**无限**：timeval 清零 = 关闭 SO_*TIMEO）
+static void px_ms_to_timeval(int64_t ms, struct timeval* tv) {
+    if (ms <= 0) { tv->tv_sec = 0; tv->tv_usec = 0; return; }
+    tv->tv_sec = (time_t)(ms / 1000);
+    tv->tv_usec = (suseconds_t)((ms % 1000) * 1000);
+}
+static int64_t px_timeval_to_ms(const struct timeval* tv) {
+    return (int64_t)tv->tv_sec * 1000 + (int64_t)tv->tv_usec / 1000;
+}
+
+static LXValue bi_tcp_connect_ex(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 2 || nargs > 3) px_error("R1002: tcp_connect_ex 需要 (host, port[, opts]) 参数");
+    if (args[0].type != PX_STR) px_error("R1002: tcp_connect_ex 的 host 需要 str");
+    if (args[1].type != PX_INT) px_error("R1002: tcp_connect_ex 的 port 需要 int");
+    const char* host = args[0].as.obj->as.str.data;
+    int port = (int)args[1].as.i;
+    int64_t timeout_ms = 0;
+    int nodelay = 1;
+    if (nargs == 3) {
+        if (args[2].type != PX_DICT) px_error("R1002: tcp_connect_ex 的 opts 需要 dict{timeout_ms,nodelay}");
+        LXValue tv = px_dict_get(args[2], "timeout_ms");
+        if (tv.type == PX_INT) timeout_ms = tv.as.i;
+        LXValue nv = px_dict_get(args[2], "nodelay");
+        if (nv.type == PX_BOOL) nodelay = nv.as.b ? 1 : 0;
+    }
+    if (timeout_ms < 0) timeout_ms = 0;
+    if (timeout_ms > 2147483647LL) timeout_ms = 2147483647LL;
+    int stage = 0, er = 0;
+    char addr[128];
+    addr[0] = 0;
+    int fd = px_tcp_connect_timeout(host, port, (int)timeout_ms, &stage, &er, addr, (int)sizeof(addr));
+    char ebuf[256];
+    ebuf[0] = 0;
+    char peer[160];
+    peer[0] = 0;
+    // 成功路径：px_tcp_connect_timeout 的 out_addr 只在**失败**时填（既有约定）
+    // ⇒ 这里用 getpeername 取对端地址：addr = IP（IPv6 带方括号，与失败路径同形），
+    //   peer = "ip:port"（Go `net.Conn.RemoteAddr().String()` 的形态）
+    if (fd >= 0) {
+        struct sockaddr_storage ss;
+        socklen_t sl = sizeof(ss);
+        memset(&ss, 0, sizeof(ss));
+        if (getpeername(fd, (struct sockaddr*)&ss, &sl) == 0) {
+            px_addr_text((struct sockaddr*)&ss, addr, (int)sizeof(addr));
+            int pnum = 0;
+            if (ss.ss_family == AF_INET) pnum = (int)ntohs(((struct sockaddr_in*)&ss)->sin_port);
+            else if (ss.ss_family == AF_INET6) pnum = (int)ntohs(((struct sockaddr_in6*)&ss)->sin6_port);
+            if (addr[0]) snprintf(peer, sizeof(peer), "%s:%d", addr, pnum);
+        }
+    }
+    if (fd >= 0 && nodelay) {
+        int on = 1;
+        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
+    }
+    if (fd < 0) px_net_conn_fail(ebuf, (int)sizeof(ebuf), host, port, stage, er, addr);
+    LXValue d = px_dict();
+    px_root_push();
+    PX_KEEP(d);
+    px_dict_set(d, "ok", px_bool(fd >= 0));
+    px_dict_set(d, "fd", px_int(fd >= 0 ? fd : -1));
+    px_dict_set(d, "addr", px_str(addr));
+    px_dict_set(d, "peer", px_str(peer));
+    px_dict_set(d, "stage", px_str(px_conn_stage_name(stage)));
+    px_dict_set(d, "errno", px_int(er));
+    px_dict_set(d, "err", px_str(ebuf));
+    px_root_pop();
+    return d;
+}
+
+static LXValue bi_tcp_opt(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) px_error("R1002: tcp_opt 需要 (fd, opts) 参数");
+    if (args[0].type != PX_INT) px_error("R1002: tcp_opt 的 fd 需要 int");
+    if (args[1].type != PX_DICT) px_error("R1002: tcp_opt 的 opts 需要 dict{nodelay,keepalive,read_timeout_ms,write_timeout_ms}");
+    int fd = (int)args[0].as.i;
+    int ok = 1, er = 0;
+    LXValue v = px_dict_get(args[1], "nodelay");
+    if (v.type == PX_BOOL) {
+        int on = v.as.b ? 1 : 0;
+        if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on)) != 0) { ok = 0; er = errno; }
+    }
+    v = px_dict_get(args[1], "keepalive");
+    if (v.type == PX_BOOL) {
+        int on = v.as.b ? 1 : 0;
+        if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof(on)) != 0) { ok = 0; er = errno; }
+    }
+    v = px_dict_get(args[1], "read_timeout_ms");
+    if (v.type == PX_INT) {
+        struct timeval tv;
+        px_ms_to_timeval(v.as.i, &tv);
+        if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) != 0) { ok = 0; er = errno; }
+    }
+    v = px_dict_get(args[1], "write_timeout_ms");
+    if (v.type == PX_INT) {
+        struct timeval tv;
+        px_ms_to_timeval(v.as.i, &tv);
+        if (setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) != 0) { ok = 0; er = errno; }
+    }
+    int nodelay_v = -1, keepalive_v = -1;
+    socklen_t sl = sizeof(int);
+    if (getsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &nodelay_v, &sl) != 0) { if (ok) { ok = 0; er = errno; } }
+    sl = sizeof(int);
+    if (getsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &keepalive_v, &sl) != 0) { if (ok) { ok = 0; er = errno; } }
+    struct timeval rt, wt;
+    memset(&rt, 0, sizeof(rt));
+    memset(&wt, 0, sizeof(wt));
+    sl = sizeof(struct timeval);
+    if (getsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rt, &sl) != 0) { if (ok) { ok = 0; er = errno; } }
+    sl = sizeof(struct timeval);
+    if (getsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &wt, &sl) != 0) { if (ok) { ok = 0; er = errno; } }
+    char ebuf[128];
+    px_go_errno_into(ebuf, (int)sizeof(ebuf), er);
+    LXValue d = px_dict();
+    px_root_push();
+    PX_KEEP(d);
+    px_dict_set(d, "ok", px_bool(ok != 0));
+    px_dict_set(d, "nodelay", px_bool(nodelay_v == 1));
+    px_dict_set(d, "keepalive", px_bool(keepalive_v == 1));
+    px_dict_set(d, "read_timeout_ms", px_int(px_timeval_to_ms(&rt)));
+    px_dict_set(d, "write_timeout_ms", px_int(px_timeval_to_ms(&wt)));
+    px_dict_set(d, "errno", px_int(er));
+    px_dict_set(d, "err", px_str(ok ? "" : ebuf));
+    px_root_pop();
+    return d;
+}
+
+static LXValue bi_tcp_recv_ex(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) px_error("R1002: tcp_recv_ex 需要 (fd, maxlen) 参数");
+    if (args[0].type != PX_INT) px_error("R1002: tcp_recv_ex 的 fd 需要 int");
+    if (args[1].type != PX_INT) px_error("R1002: tcp_recv_ex 的 maxlen 需要 int");
+    int fd = (int)args[0].as.i;
+    int64_t maxlen = args[1].as.i;
+    if (maxlen <= 0) px_error("R1002: tcp_recv_ex 的 maxlen 需要 > 0");
+    if (maxlen > 64 * 1024 * 1024) maxlen = 64 * 1024 * 1024;
+    char* buf = (char*)xmalloc((size_t)maxlen + 1);
+    int n, er = 0, tmo = 0;
+    for (;;) {
+        n = (int)recv(fd, buf, (size_t)maxlen, 0);
+        if (n >= 0) break;
+        if (errno == EINTR) continue;
+        er = errno;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) tmo = 1;
+        break;
+    }
+    int ok = (n >= 0);
+    int eof = (n == 0);
+    char ebuf[128];
+    if (!ok) px_go_errno_into(ebuf, (int)sizeof(ebuf), er);
+    else ebuf[0] = 0;
+    LXValue d = px_dict();
+    px_root_push();
+    PX_KEEP(d);
+    px_dict_set(d, "ok", px_bool(ok != 0));
+    px_dict_set(d, "data", n > 0 ? px_str_len(buf, n) : px_str(""));
+    px_dict_set(d, "n", px_int(n > 0 ? n : 0));
+    px_dict_set(d, "eof", px_bool(eof != 0));
+    px_dict_set(d, "timeout", px_bool(tmo != 0));
+    px_dict_set(d, "errno", px_int(er));
+    px_dict_set(d, "err", px_str(tmo ? "i/o timeout" : (ok ? "" : ebuf)));
+    px_root_pop();
+    xfree(buf);
+    return d;
+}
+
+static LXValue bi_tcp_send_ex(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) px_error("R1002: tcp_send_ex 需要 (fd, data) 参数");
+    if (args[0].type != PX_INT) px_error("R1002: tcp_send_ex 的 fd 需要 int");
+    int fd = (int)args[0].as.i;
+    const char* data;
+    int len;
+    if (args[1].type == PX_STR) { data = args[1].as.obj->as.str.data; len = args[1].as.obj->as.str.len; }
+    else { data = px_to_string(args[1]); len = (int)strlen(data); }
+    int sent = 0, er = 0, tmo = 0, ok = 1;
+    while (sent < len) {
+        ssize_t w = send(fd, data + sent, (size_t)(len - sent), 0);
+        if (w > 0) { sent += (int)w; continue; }
+        if (w < 0 && errno == EINTR) continue;
+        ok = 0;
+        er = (w < 0) ? errno : 0;
+        if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) tmo = 1;
+        break;
+    }
+    char ebuf[128];
+    if (!ok) px_go_errno_into(ebuf, (int)sizeof(ebuf), er);
+    else ebuf[0] = 0;
+    LXValue d = px_dict();
+    px_root_push();
+    PX_KEEP(d);
+    px_dict_set(d, "ok", px_bool(ok != 0));
+    px_dict_set(d, "n", px_int(sent));
+    px_dict_set(d, "timeout", px_bool(tmo != 0));
+    px_dict_set(d, "errno", px_int(er));
+    px_dict_set(d, "err", px_str(tmo ? "i/o timeout" : (ok ? "" : ebuf)));
+    px_root_pop();
+    return d;
 }
 
 // hconnect_t：hconnect 的带超时版（timeout_ms<=0 时与原语义一致）

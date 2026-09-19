@@ -62,6 +62,29 @@
 >    门 `examples/m148_ieee_div/`（1176 行语料 × Go 本尊 × **VM/C/解释轨三轨** + 44 断言 +
 >    **往返性质** + **5 道负控**）。详见事实 124–127。
 
+> M149（2026-09-20，qg-issue 87 第 31 轮）：**TCP「带超时 + 可辨别失败」族** —— 旧 `tcp_*` 的**失败面**
+> 表达不出 Go 的 `net`（连接失败**杀进程**、无连接超时、`tcp_recv` 把 EOF/超时/出错**都返回 ""**），
+> 于是「网络是常态故障源」的客户端（Redis / PostgreSQL / 任意带 deadline 的协议）**无法移植**。
+> 新增四个 native（与旧 `tcp_*` **并存不覆盖**，一律返回结果 dict、**永不杀进程**）：
+>   · `tcp_connect_ex(host, port[, opts])` → `{ok, fd, addr, peer, stage, errno, err}`；
+>     `opts = {"timeout_ms": int, "nodelay": bool}`；`stage ∈ ""|"resolve"|"socket"|"connect"`；
+>     **默认 setsockopt(TCP_NODELAY,1)**（Go `net.Dial` 对 TCP 默认开启）；成功时 `peer` = Go
+>     `RemoteAddr()` 形态（`ip:port`），`addr` = 数字地址（IPv6 带方括号，与失败路径同形）。
+>   · `tcp_opt(fd, opts)` → `{ok, nodelay, keepalive, read_timeout_ms, write_timeout_ms, errno, err}`：
+>     **改完回读（getsockopt）并返回生效值** ⇒ 超时配置**可编程验证**（否则只能"相信"）；
+>     缺键=不改；`*_timeout_ms = 0` = **无限**（`SO_RCVTIMEO`/`SO_SNDTIMEO` 清零）。
+>   · `tcp_recv_ex(fd, maxlen)` → `{ok, data, n, eof, timeout, errno, err}`：`n==0 ⇒ eof=true`
+>     （对端 FIN，**非错误**）；`EAGAIN/EWOULDBLOCK ⇒ timeout=true` + `err="i/o timeout"`
+>     （Go `os.ErrDeadlineExceeded` 文案）。**EOF / 超时 / 出错三者可辨别**。
+>   · `tcp_send_ex(fd, data)` → `{ok, n, timeout, errno, err}`：循环写完（EINTR 续写），
+>     失败时 `n` = **已写出**字节数（对齐 Go `Conn.Write` 的 `n`）。
+> 门 `examples/m149_tcp_deadline/`：**受控服务端**（独立进程，按首行 mode 扮演沉默/问候即关/
+> 分段/大包/收取/立即关）⇒ VM+C 双轨各 **53 断言**（连接超时 300ms 被真正遵守、黑洞地址 errno=110、
+> refused=111、解析失败 stage=resolve、`nodelay` 默认 true、读超时 ≥250ms 且 errno=EAGAIN、
+> EOF≠超时、分段无帧边界、100000 字节收发、对端关闭后写 EPIPE）+ 解释轨冒烟 9 断言 +
+> **3 道负控**（去掉连接超时 / 关掉 NODELAY 默认 / 把 EOF 报成非 EOF ⇒ 全判红）。详见事实 128–130。
+
+
 ---
 
 ## 0. 三件套先记住
@@ -326,7 +349,7 @@ print("upper=" + to_upper("px"))
       字符串形态（`r/w/a/rw/w+`）表达不了"有则开、无则建、不截断"（`w+` 带 `O_TRUNC`），
       也表达不了 `O_EXCL`。字符串形态**行为零变化**。
       ⚠️ 第三参只在第二参是 int 时可用。
-## 2. native 内置速查（339 全量见 `docs/native_index.json`，本表为常用）
+## 2. native 内置速查（345 全量见 `docs/native_index.json`，本表为常用）
 
 ### 核心 / 值
 `print` `len` `range` `type` `str` `int` `float` `bool` `assert` `input` `exit` `sleep` `abs` `sqrt` `min` `max` `pow` `sorted` `reversed` `sum` `map` `filter` `reduce` `contains` `env`（⚠️ **变量不存在返回 `null`**，不是 `""` —— `str(null)` 会得到 `"null"`，取值请先判 null） `args()`（**调用式**：`px run s.px a b` 与编译产物同形 `[程序, a, b]`——M115 修；见 §1.1 事实清单）
@@ -355,7 +378,7 @@ timeout_ms **含连接阶段**，默认 30000；`http_get`/`http_post` 无 opts 
 `ws_serve(port, onmsg)` `ws_connect(url)` `ws_send` `ws_recv` `ws_close` `ws_ping` `ws_heartbeat(conn, ms, cb)` `ws_broadcast(server, msg)` `ws_connect_auto(url, ...)` · SSE：`sse_serve(port, cb)` `sse_send` `sse_close` `sse_connect(url)` `sse_read` · **M83-S6 同端口流式（http_serve/http_serve_unix）**：`http_stream(path, on_connect)` 把同端口某 path 注册为流式 SSE（on_connect(req) 内 `sse_send(req["conn"], chunk)` 逐块推、可 `sse_send` dict {event,data,id,retry}，on_connect 返回自动关闭；普通 JSON handler 同端口共存，流式路由优先；明文 HTTP/HTTP-over-unix，px_serve 面暂不接入）
 
 ### TCP / UDP / TLS
-`tcp_listen/accept/connect/send/recv/close` · `udp_open/send/recv/close` `udp_serve(port, cb)` · TLS：`tls_server(cert, key[, hostname])`（注册后 px_serve/WS/SSE 支持 HTTPS/WSS/TLS）
+`tcp_listen/accept/connect/send/recv/close` · **`tcp_connect_ex` `tcp_opt` `tcp_recv_ex` `tcp_send_ex`（M149：带超时 + 失败不杀进程 + EOF/超时可辨别；新代码优先用这一族）** · `udp_open/send/recv/close` `udp_serve(port, cb)` · TLS：`tls_server(cert, key[, hostname])`（注册后 px_serve/WS/SSE 支持 HTTPS/WSS/TLS）
 
 ### DNS（域名解析）
 `dns_lookup(domain)` → list[str]（**M84-S3**，A+AAAA 全量返回，getaddrinfo；顺序即解析器返回序）——失败（NXDOMAIN/超时/无地址记录）返回 **Err("dns: ...")**，调用方可 `is_err()`/`?` 判定（区别于空 list）。守护域名解析（bs-safeip resolve_ips 类）不再依赖 getent 外部命令代偿。
@@ -521,7 +544,7 @@ set_timeout(fn (): print("once after 2s"), 2000)
 
 ## 5. 防漂移与源
 
-- **native 清单**（340，单一事实源 = runtime 注册表）：`bash tools/gen_native_table.sh` → `docs/native_index.json`；CI 重跑 diff 防漂移。**本表计数必须 == count**（现 340）。
+- **native 清单**（345，单一事实源 = runtime 注册表）：`bash tools/gen_native_table.sh` → `docs/native_index.json`；CI 重跑 diff 防漂移。**本表计数必须 == count**（现 345）。
 - **stdlib 索引**：`tools/px run tools/gen_ecosystem.px` → `docs/ecosystem_index.json`。
 - 规范：`docs/spec.md`（§8 模块/import、§9 双模式、§12 AI 协议）· `docs/MINI_SUBSET.md`（子集边界）· 缺口与写库规范：`docs/ECOSYSTEM_GAPS.md`。
 
@@ -1115,4 +1138,29 @@ set_timeout(fn (): print("once after 2s"), 2000)
        并给 `cg_fmt_float` 的白名单补 `"-nan"` 作**纵深防御**（`str()` 已不会再产出它）。
      · 约定（记牢）：**`inf` / `-inf` / `nan`** 是 `str()` 对非有限值的文本；`+inf`/`-inf`
        由 `%g` 给出（各 libc 一致），NaN 一律 `nan`（**不看符号位**）。
+
+128. **要用 TCP 就得用 `tcp_*_ex` 族 —— 旧 `tcp_*` 的失败面会杀进程、也没有超时**（第 31 轮 · M149）：
+     · 旧接口三个硬伤：`tcp_connect` 失败 `px_error` **杀进程**、**无连接超时**（SYN 被丢就永久挂起）、
+       `tcp_recv` 把 **EOF / 读超时 / 出错** 一律返回 `""`（三者不可分辨）；`tcp_send` 出错同样杀进程
+       且拿不到"已写出多少字节"。
+     · Go 的对应物：`net.DialTimeout` / `SetReadDeadline` / `Conn.Write` 的 `(n, err)` ⇒
+       **没有这一族，"网络是常态故障源"的客户端（Redis/PostgreSQL/任何带 deadline 的协议）就移植不了**。
+     · 用法（拿结果 dict，**永不杀进程**）：
+       `d = tcp_connect_ex(h, p, {"timeout_ms": 300})` → `d["ok"]` / `d["fd"]` / `d["stage"]` / `d["errno"]`；
+       `tcp_opt(d["fd"], {"read_timeout_ms": 300, "write_timeout_ms": 300})` → **回读生效值**；
+       `r = tcp_recv_ex(fd, 65536)` → `r["eof"]`（对端关）/ `r["timeout"]`（读超时）/ `r["errno"]`（其它错误）三者可分辨。
+     · **`nodelay` 默认 true**是刻意的：Go `net.Dial` 对 TCP 连接**默认开** `TCP_NODELAY`，
+       不设就让小请求撞 Nagle + 延迟 ACK（request/response 形态最吃亏）。
+     · 边界：`getaddrinfo` 阶段**不受 `timeout_ms` 约束**（libc 解析无异步取消入口）。
+     门：`examples/m149_tcp_deadline/`（VM+C 双轨 53 断言 × 2 + 解释轨 9 断言 + 3 道负控）。
+
+129. **`tcp_opt` 的"回读"不是装饰**（第 31 轮 · M149）：超时若只"设"不回读，测试就只能断言
+     "调用没报错" —— 那等于什么都没验。`tcp_opt(fd, {...})` 改完立刻 `getsockopt` 并返回**生效值**
+     （`nodelay` / `keepalive` / `read_timeout_ms` / `write_timeout_ms`），于是门可以断言
+     `400ms 设进去、400ms 读回来`；`0` 的语义 = **无限**（timeval 清零）。
+
+130. **"对端关闭后写"的 errno 是 `EPIPE(32)` 或 `ECONNRESET(104)`，不是"发送失败"这一句话**
+     （第 31 轮 · M149）：首个写往往**成功**（进本地发送缓冲），要对端 RST 回来后的**第二次**写才失败
+     ⇒ 断言要写成"循环写到失败为止"（门内实测第 1 次就拿到 `EPIPE`）。
+     另：运行时**已忽略 `SIGPIPE`**（M88-S2），所以这条路径是**拿到 errno**而不是进程被信号打死。
        要 Go 的口径（`+Inf` / `-Inf` / `NaN`）用 `go_float_text` / `fmt_float_dec`。
