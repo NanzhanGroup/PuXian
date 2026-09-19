@@ -1764,116 +1764,120 @@ def bc_dump_module(m):
 #   （对齐 codegen 行为）；PX_BC_DUMP 环境变量 → 打印非函数全局值（A 阶段对拍）。
 def bc_emit_c_program(prog):
     let m = bc_emit_program(prog)
-    var out = "/* 由 bc_emit.px (M89-S3) 自动生成 — 字节码模块（VM 执行） */\n"
-    out += "#include \"runtime.h\"\n#include \"vm.h\"\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\n"
-    out += "static const PxBCModule s_mod;\n\n"
+    # M152（第 34 轮 · 缺陷 141）：整图渲染改为**块表 + 一次 join** ——
+    #   旧版逐段 `out += …` 每次都在 px_add 里**整串重分配 + 整串拷贝**
+    #   （且 px_str_len 再深拷一次）⇒ 时间/分配都是 O(块数 × 文本长) 平方级；
+    #   块表 push 是摊还 O(1)，末尾 join 一次线性拼装。发射顺序与字节**不变**。
+    var out = ["/* 由 bc_emit.px (M89-S3) 自动生成 — 字节码模块（VM 执行） */\n"]
+    out.push("#include \"runtime.h\"\n#include \"vm.h\"\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n\n")
+    out.push("static const PxBCModule s_mod;\n\n")
     # K 常量池
-    out += "static const PxK s_K[] = {\n"
+    out.push("static const PxK s_K[] = {\n")
     var ki = 0
     while ki < len(m["k_pool"]):
         let k = m["k_pool"][ki]
         if k["kind"] == "int":
-            out += "    {PXK_INT, " + str(k["i"]) + ", 0, NULL},\n"
+            out.push("    {PXK_INT, " + str(k["i"]) + ", 0, NULL},\n")
         elif k["kind"] == "float":
-            out += "    {PXK_FLT, 0, " + cg_fmt_float(k["f"]) + ", NULL},\n"
+            out.push("    {PXK_FLT, 0, " + cg_fmt_float(k["f"]) + ", NULL},\n")
         elif k["kind"] == "str":
-            out += "    {PXK_STR, 0, 0, \"" + cg_escape_str(k["s"]) + "\"},\n"
+            out.push("    {PXK_STR, 0, 0, \"" + cg_escape_str(k["s"]) + "\"},\n")
         elif k["kind"] == "bool":
             var bv = "0"
             if k["i"] != 0:
                 bv = "1"
-            out += "    {PXK_BOOL, " + bv + ", 0, NULL},\n"
+            out.push("    {PXK_BOOL, " + bv + ", 0, NULL},\n")
         elif k["kind"] == "func":
-            out += "    {PXK_FUNC, " + str(k["i"]) + ", 0, NULL},\n"
+            out.push("    {PXK_FUNC, " + str(k["i"]) + ", 0, NULL},\n")
         else:
-            out += "    {PXK_NULL, 0, 0, NULL},\n"
+            out.push("    {PXK_NULL, 0, 0, NULL},\n")
         ki += 1
-    out += "};\n\n"
+    out.push("};\n\n")
     # N 名字池（A1 预留，空表也输出保持结构完整）
-    out += "static const char* s_N[] = {\n"
+    out.push("static const char* s_N[] = {\n")
     var ni = 0
     while ni < len(m["n_pool"]):
-        out += "    \"" + cg_escape_str(m["n_pool"][ni]) + "\",\n"
+        out.push("    \"" + cg_escape_str(m["n_pool"][ni]) + "\",\n")
         ni += 1
-    out += "};\n\n"
+    out.push("};\n\n")
     # G 全局槽名表
-    out += "static const char* s_G[] = {\n"
+    out.push("static const char* s_G[] = {\n")
     var gi = 0
     while gi < len(m["globals"]):
-        out += "    \"" + cg_escape_str(m["globals"][gi]) + "\",\n"
+        out.push("    \"" + cg_escape_str(m["globals"][gi]) + "\",\n")
         gi += 1
-    out += "};\n\n"
+    out.push("};\n\n")
     # B2：struct 类型元数据表（NEWSTRUCT 运行时字段名来源）
     var sti = 0
     while sti < len(m["structs"]):
         let sd = m["structs"][sti]
-        out += "static const char* s_st_" + str(sti) + "[] = {\n"
+        out.push("static const char* s_st_" + str(sti) + "[] = {\n")
         var sfi = 0
         while sfi < len(sd["fnames"]):
-            out += "    \"" + cg_escape_str(sd["fnames"][sfi]) + "\",\n"
+            out.push("    \"" + cg_escape_str(sd["fnames"][sfi]) + "\",\n")
             sfi += 1
-        out += "};\n"
+        out.push("};\n")
         sti += 1
-    out += "static const PxStructDef s_structs[] = {\n"
+    out.push("static const PxStructDef s_structs[] = {\n")
     sti = 0
     while sti < len(m["structs"]):
         let sd = m["structs"][sti]
-        out += "    {\"" + cg_escape_str(sd["name"]) + "\", s_st_" + str(sti) + ", " + str(len(sd["fnames"])) + "},\n"
+        out.push("    {\"" + cg_escape_str(sd["name"]) + "\", s_st_" + str(sti) + ", " + str(len(sd["fnames"])) + "},\n")
         sti += 1
-    out += "};\n\n"
+    out.push("};\n\n")
     # funcs：每个函数一个 bc 数组（s_bc_<fi>）
     var fi = 0
     while fi < len(m["funcs"]):
         let f = m["funcs"][fi]
-        out += "static const PxInst s_bc_" + str(fi) + "[] = {\n"
+        out.push("static const PxInst s_bc_" + str(fi) + "[] = {\n")
         var pc = 0
         while pc < len(f["bc"]):
             let ins = f["bc"][pc]
-            out += "    {PXOP_" + ins[0] + ", " + str(ins[1]) + ", " + str(ins[2]) + ", " + str(ins[3]) + ", " + str(ins[4]) + "},\n"
+            out.push("    {PXOP_" + ins[0] + ", " + str(ins[1]) + ", " + str(ins[2]) + ", " + str(ins[3]) + ", " + str(ins[4]) + "},\n")
             pc += 1
-        out += "};\n"
+        out.push("};\n")
         fi += 1
-    out += "\n"
+    out.push("\n")
     # 函数表（mod 前向引用 s_mod）
-    out += "static const PxVMFunc s_funcs[] = {\n"
+    out.push("static const PxVMFunc s_funcs[] = {\n")
     fi = 0
     while fi < len(m["funcs"]):
         let f = m["funcs"][fi]
-        out += "    {.name=\"" + cg_escape_str(f["name"]) + "\", .arity=" + str(f["arity"]) + ", .ndefault=" + str(f["ndefault"]) + ", .nslots=" + str(f["nslots"]) + ", .bc=s_bc_" + str(fi) + ", .nbc=" + str(len(f["bc"])) + ", .mod=&s_mod, .upvals=NULL},\n"
+        out.push("    {.name=\"" + cg_escape_str(f["name"]) + "\", .arity=" + str(f["arity"]) + ", .ndefault=" + str(f["ndefault"]) + ", .nslots=" + str(f["nslots"]) + ", .bc=s_bc_" + str(fi) + ", .nbc=" + str(len(f["bc"])) + ", .mod=&s_mod, .upvals=NULL},\n")
         fi += 1
-    out += "};\n\n"
+    out.push("};\n\n")
     # 模块
-    out += "static const PxBCModule s_mod = {\n"
-    out += "    .name=\"<module>\", .K=s_K, .nK=" + str(len(m["k_pool"])) + ", .N=s_N, .nN=" + str(len(m["n_pool"])) + ",\n"
-    out += "    .G=s_G, .nG=" + str(len(m["globals"])) + ", .funcs=s_funcs, .nfuncs=" + str(len(m["funcs"])) + ", .top_idx=" + str(m["top"]) + ",\n"
-    out += "    .structs=s_structs, .nstructs=" + str(len(m["structs"])) + ",\n"
-    out += "};\n\n"
+    out.push("static const PxBCModule s_mod = {\n")
+    out.push("    .name=\"<module>\", .K=s_K, .nK=" + str(len(m["k_pool"])) + ", .N=s_N, .nN=" + str(len(m["n_pool"])) + ",\n")
+    out.push("    .G=s_G, .nG=" + str(len(m["globals"])) + ", .funcs=s_funcs, .nfuncs=" + str(len(m["funcs"])) + ", .top_idx=" + str(m["top"]) + ",\n")
+    out.push("    .structs=s_structs, .nstructs=" + str(len(m["structs"])) + ",\n")
+    out.push("};\n\n")
     # main（A2：跑 Top；main() 用户函数调用约定随 S3-B/CALL 接入）
-    out += "int main(int argc, char** argv) {\n"
-    out += "    px_args_init(argc, argv);\n"
-    out += "    px_register_builtins();\n"
-    out += "    px_gc_set_precise(1);   // M92-S2d：VM 轨产物默认 precise 精确根面（退役保守栈扫描；C 轨逃生舱产物不插此调用 → conservative）\n"
-    out += "    LXValue _r = px_vm_run_module(px_vm_state(), &s_mod);\n"
-    out += "    int _code = 0;\n"
-    out += "    if (px_is_result(_r)) {\n"
-    out += "        if (!px_result_ok(_r)) {\n"
-    out += "            fprintf(stderr, \"错误: %s\\n\", px_to_string(px_result_unwrap(_r)));\n"
-    out += "            _code = 1;\n"
-    out += "        } else {\n"
-    out += "            LXValue _uv = px_result_unwrap(_r);\n"
-    out += "            if (_uv.type == PX_INT) _code = (int)_uv.as.i;\n"
-    out += "        }\n"
-    out += "    } else if (_r.type == PX_INT) {\n"
-    out += "        _code = (int)_r.as.i;\n"
-    out += "    }\n"
-    out += "    if (getenv(\"PX_BC_DUMP\")) {\n"
-    out += "        int _i;\n"
-    out += "        for (_i = 0; _i < (int)s_mod.nG; _i++) {\n"
-    out += "            LXValue _v = px_get_global(s_mod.G[_i]);\n"
-    out += "            if (_v.type != PX_FUNC && _v.type != PX_NATIVE)\n"
-    out += "                printf(\"%s=%s\\n\", s_mod.G[_i], px_to_string(_v));\n"
-    out += "        }\n"
-    out += "    }\n"
-    out += "    return px_exit_code_final(_code);   // M120（qg-issue 76 E1）：协程隔离错误 → 退出码非 0\n"
-    out += "}\n"
-    return out
+    out.push("int main(int argc, char** argv) {\n")
+    out.push("    px_args_init(argc, argv);\n")
+    out.push("    px_register_builtins();\n")
+    out.push("    px_gc_set_precise(1);   // M92-S2d：VM 轨产物默认 precise 精确根面（退役保守栈扫描；C 轨逃生舱产物不插此调用 → conservative）\n")
+    out.push("    LXValue _r = px_vm_run_module(px_vm_state(), &s_mod);\n")
+    out.push("    int _code = 0;\n")
+    out.push("    if (px_is_result(_r)) {\n")
+    out.push("        if (!px_result_ok(_r)) {\n")
+    out.push("            fprintf(stderr, \"错误: %s\\n\", px_to_string(px_result_unwrap(_r)));\n")
+    out.push("            _code = 1;\n")
+    out.push("        } else {\n")
+    out.push("            LXValue _uv = px_result_unwrap(_r);\n")
+    out.push("            if (_uv.type == PX_INT) _code = (int)_uv.as.i;\n")
+    out.push("        }\n")
+    out.push("    } else if (_r.type == PX_INT) {\n")
+    out.push("        _code = (int)_r.as.i;\n")
+    out.push("    }\n")
+    out.push("    if (getenv(\"PX_BC_DUMP\")) {\n")
+    out.push("        int _i;\n")
+    out.push("        for (_i = 0; _i < (int)s_mod.nG; _i++) {\n")
+    out.push("            LXValue _v = px_get_global(s_mod.G[_i]);\n")
+    out.push("            if (_v.type != PX_FUNC && _v.type != PX_NATIVE)\n")
+    out.push("                printf(\"%s=%s\\n\", s_mod.G[_i], px_to_string(_v));\n")
+    out.push("        }\n")
+    out.push("    }\n")
+    out.push("    return px_exit_code_final(_code);   // M120（qg-issue 76 E1）：协程隔离错误 → 退出码非 0\n")
+    out.push("}\n")
+    return join("", out)
