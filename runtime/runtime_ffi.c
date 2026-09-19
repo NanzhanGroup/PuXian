@@ -44,6 +44,88 @@ void px_ffi_register(const char* name, LXFuncPtr fn) {
 //    裸名调用即 px_get_global 查此表）→ pxi 零 extern def 裸脚本可达性对齐。
 // 两表均未命中 → 返回 px_err（可辨错误，不杀进程）：pxi 回退据此转 R1001，
 // 真拼错名不误调、错误语义不漂移。
+// ==================== M158（第 40 轮 · 缺陷 114 根治）：解释轨函数值桥 ====================
+// 背景：解释轨（bootstrap/pxi）把用户函数包装成 dict（{"__ufn__": {...}} /
+//   {"__builtin__": name}），而 runtime 的 native（set_interval / set_timeout /
+//   signal / http_serve / http_serve_unix / http_stream / sse_serve / ws_serve /
+//   udp_serve / http_get_stream / route / middleware …）一律按 PX_FUNC/PX_NATIVE
+//   校验函数参数 ⇒ 解释轨把包装 dict 直接转发 ⇒ px_error「R1002: set_interval:
+//   第一个参数必须是函数」（**不可捕获**，直接终止进程）——即缺陷 114：解释轨
+//   用户代码里「把函数值传给 runtime native」整族不可用。
+// 方案（双向桥，零语言语法改动）：
+//   ① 桥对象 = px_func_env(name, px_interp_bridge_entry, fnvalue)：复用 M129 的 env
+//      字段承载解释轨函数值（PX_FUNC 对象被 GC 标记 ⇒ env 自动可达 ⇒ 无需额外
+//      注册表、不泄漏；ctx 由 px_func_env 指向 env 字段 ⇒ entry 取回原值）。
+//   ② 调度器 = 解释器启动时 interp_bridge_install(cb) 把**它自己的**编译版函数
+//      i_bridge_dispatch 存进全局表 __interp_dispatch__（全局表 = GC 根）。
+//   ③ 桥 entry 被 native 调用 ⇒ 取回 fnvalue ⇒ px_call(dispatcher, [fnvalue,
+//      args_list]) ⇒ 回到解释器执行（解释轨的真闭包 / env 链语义完整保留）。
+//   ④ bi_ffi_call **自动桥接**：解释轨裸脚本（零 extern def）调 runtime native 走
+//      ffi_call 按名兜底，此处对参数列表做「包装 dict → 桥」替换 ⇒ 一处修复、全族生效。
+// 边界：调度器全局唯一（同进程多解释器实例不支持）；桥被 native 跨线程调用时解释器
+//   状态非线程安全（与编译模式"用户自负责"同级，登记为边界）。
+
+// 是否解释轨函数值包装（用户函数 / 内置函数）
+static int px_interp_is_fnwrap(LXValue v) {
+    if (v.type != PX_DICT) return 0;
+    return px_dict_has(v, "__ufn__") || px_dict_has(v, "__builtin__");
+}
+
+// 包装里的名字（桥对象显示名；取不到给 interp-fn）
+static const char* px_interp_fnwrap_name(LXValue v) {
+    LXValue inner = px_dict_get(v, "__ufn__");
+    if (inner.type == PX_DICT) {
+        LXValue nm = px_dict_get(inner, "name");
+        if (nm.type == PX_STR) return nm.as.obj->as.str.data;
+    }
+    LXValue bn = px_dict_get(v, "__builtin__");
+    if (bn.type == PX_STR) return bn.as.obj->as.str.data;
+    return "interp-fn";
+}
+
+// 桥 entry：被 runtime（native / 定时器 / 服务循环）回调 ⇒ 转回解释器执行
+static LXValue px_interp_bridge_entry(LXValue* args, int nargs, void* ctx) {
+    if (!ctx) px_error("R1002: 解释轨函数桥缺少上下文");
+    LXValue fnvalue = *(LXValue*)ctx;                     // px_func_env 把 ctx 指向 env 字段
+    LXValue disp = px_get_global("__interp_dispatch__");   // 未安装 ⇒ 未定义变量（明确）
+    if (disp.type != PX_FUNC && disp.type != PX_NATIVE) {
+        px_error("R1002: 解释轨函数桥的调度器不是函数（interp_bridge_install）");
+    }
+    LXValue lst = px_list(nargs);
+    LXValue callargs[2];
+    callargs[0] = fnvalue;
+    callargs[1] = lst;
+    px_root_push();
+    PX_KEEP(callargs[0]);
+    PX_KEEP(callargs[1]);
+    for (int i = 0; i < nargs; i++) {
+        PX_KEEP(args[i]);
+        px_list_push(lst, args[i]);
+    }
+    LXValue r = px_call(disp, callargs, 2);
+    px_root_pop();
+    return r;
+}
+
+// 显式造桥（解释轨可主动调用；已是真函数值则原样返回）
+LXValue bi_interp_bridge(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: interp_bridge 需要 1 个参数（解释轨函数值）");
+    if (!px_interp_is_fnwrap(args[0])) return args[0];
+    return px_func_env(px_interp_fnwrap_name(args[0]), px_interp_bridge_entry, args[0]);
+}
+
+// 安装调度器（解释器启动时调用一次）
+LXValue bi_interp_bridge_install(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: interp_bridge_install 需要 1 个参数（调度函数）");
+    if (args[0].type != PX_FUNC && args[0].type != PX_NATIVE) {
+        px_error("R1002: interp_bridge_install 的参数必须是函数");
+    }
+    px_set_global("__interp_dispatch__", args[0]);
+    return px_bool(true);
+}
+
 LXValue bi_ffi_call(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 2) px_error("ffi_call 需要 (name, args_list) 参数");
@@ -52,19 +134,41 @@ LXValue bi_ffi_call(LXValue* args, int nargs, void* ctx) {
     const char* name = args[0].as.obj->as.str.data;
     LXObject*   lst  = args[1].as.obj;
     int         i;
+    // M158：先解析目标绑定（两表兜底顺序与语义不变：① ffi 表 ② 宿主全局 native 表）
+    LXFuncPtr target = NULL;
     for (i = 0; i < g_ffi_n; i++) {
-        if (strcmp(g_ffi_syms[i].name, name) == 0) {
-            return g_ffi_syms[i].fn(lst->as.list.items, lst->as.list.len, NULL);
+        if (strcmp(g_ffi_syms[i].name, name) == 0) { target = g_ffi_syms[i].fn; break; }
+    }
+    if (!target) {
+        LXValue gv;
+        if (px_global_native(name, &gv)) target = gv.as.obj->as.native.fn;
+    }
+    if (!target) {
+        char msg[512];
+        snprintf(msg, sizeof(msg), "ffi_call: 未注册函数: %s", name);
+        return px_err(px_str(msg));
+    }
+    // M158（第 40 轮 · 缺陷 114）：解释轨函数值桥 —— 一处修复、全族 native 生效。
+    //   无包装参数时零额外开销（一次线性探测后直调原路径，语义与改前逐字节相同）。
+    LXValue* items = lst->as.list.items;
+    int      n     = lst->as.list.len;
+    int      need  = 0;
+    for (i = 0; i < n; i++) { if (px_interp_is_fnwrap(items[i])) { need = 1; break; } }
+    if (!need) return target(items, n, NULL);
+    px_root_push();
+    LXValue nl = px_list(n);
+    PX_KEEP(nl);
+    for (i = 0; i < n; i++) {
+        LXValue v = items[i];
+        if (px_interp_is_fnwrap(v)) {
+            v = px_func_env(px_interp_fnwrap_name(v), px_interp_bridge_entry, v);
         }
+        PX_KEEP(v);
+        px_list_push(nl, v);
     }
-    LXValue gv;
-    if (px_global_native(name, &gv)) {
-        LXFuncPtr fn = gv.as.obj->as.native.fn;
-        return fn(lst->as.list.items, lst->as.list.len, NULL);
-    }
-    char msg[512];
-    snprintf(msg, sizeof(msg), "ffi_call: 未注册函数: %s", name);
-    return px_err(px_str(msg));
+    LXValue r = target(nl.as.obj->as.list.items, n, NULL);
+    px_root_pop();
+    return r;
 }
 
 // FFI 符号是否已注册（语言层 extern 调用前的运行时诊断）

@@ -9963,6 +9963,9 @@ void px_register_builtins(void) {
 #endif // PX_NO_SQLITE
     // M42：FFI C 桥（runtime_ffi.c）—— ffi_call(name, args_list)
     px_set_global("ffi_call", px_native("ffi_call", bi_ffi_call));
+    // M158（第 40 轮 · 缺陷 114）：解释轨函数值桥（runtime_ffi.c）
+    px_set_global("interp_bridge", px_native("interp_bridge", bi_interp_bridge));
+    px_set_global("interp_bridge_install", px_native("interp_bridge_install", bi_interp_bridge_install));
 // M85-S1：--no-sqlite 裁剪（去 runtime_sqlite.o + sqlite3.o；sqlite_* native 缺 → R1001）
 #ifndef PX_NO_SQLITE
     // M42：已链 C 库绑定进 FFI 注册表（语言层 extern def 按名字查找）

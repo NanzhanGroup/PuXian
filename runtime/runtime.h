@@ -169,6 +169,14 @@ void    px_ffi_register(const char* name, LXFuncPtr fn);
 bool    px_ffi_has(const char* name);
 bool    px_global_native(const char* name, LXValue* out);   // M68：非致命全局 native 查询（ffi_call 双表兜底）
 LXValue bi_ffi_call(LXValue* args, int nargs, void* ctx);   // ffi_call(name, args_list)
+// M158（第 40 轮 · 缺陷 114）：解释轨函数值桥（runtime_ffi.c）——
+//   解释轨把用户函数包装成 dict（{"__ufn__":…}/{"__builtin__":…}），而 runtime native
+//   按 PX_FUNC/PX_NATIVE 校验函数参数 ⇒ 直接把包装 dict 转发会 px_error（不可捕获）。
+//   interp_bridge_install(cb)：解释器启动时注册它自己的调度函数（全局表，GC 根）；
+//   interp_bridge(v)：显式造桥（包装 dict → PX_FUNC 桥；已是真函数值原样返回）。
+//   bi_ffi_call 内部对参数列表**自动桥接** ⇒ 解释轨零 extern def 的裸脚本一处修复全族生效。
+LXValue bi_interp_bridge(LXValue* args, int nargs, void* ctx);
+LXValue bi_interp_bridge_install(LXValue* args, int nargs, void* ctx);
 void    px_register_quic(void);                          // M46：QUIC 绑定（runtime_quic.c）
 void    px_register_h3(void);                            // M47：HTTP/3 语义层（runtime_h3.c）
 void    px_register_h3_qpack_dyn(void);                  // M49：QPACK 动态表 + SETTINGS（runtime_h3_qpack_dyn.c）
