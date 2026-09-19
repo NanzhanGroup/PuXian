@@ -4,6 +4,13 @@ set -uo pipefail
 cd /data/code/puxian
 export LC_ALL=C LANG=C
 FAIL=0
+
+# ── 缺陷 139（第 33 轮）：负控门被打断会把 runtime/*.c 留在「篡改态」（语法合法、语义反向）——
+#   全门开跑前先查残留标记，避免整轮白跑 / 篡改态被误提交。
+if grep -l 'NEGCTL' runtime/*.c >/dev/null 2>&1; then
+    echo "❌ 负控残留：$(grep -l 'NEGCTL' runtime/*.c | tr '\n' ' ') 仍含 NEGCTL 标记（上一轮门被中断？先还原再跑）"
+    exit 1
+fi
 step() { echo ""; echo "══ $* ══"; }
 run() {  # $1=名 $2..=命令
     local name="$1"; shift
@@ -108,6 +115,11 @@ run m149_tcp_deadline bash examples/m149_tcp_deadline/verify.sh
 # M150（第 32 轮）：摘要/密钥派生族（md5/md5_bytes/pbkdf2_sha256）+ TLS 客户端族
 #   （tls_connect/tls_send/tls_recv/tls_close）；Go 本尊对拍 + 受控 TLS 服务端
 run m150_tls_crypto bash examples/m150_tls_crypto/verify.sh
+# M151（第 33 轮）：① `tcp_send*` 认 **bytes**（缺陷 137：修前发的是占位符 `"<bytes N>"`）
+#   ② `tls_upgrade(fd, opts)` —— 在**已连接 fd** 上升级 TLS（PG 式 SSLRequest 协商必需，
+#      `tls_connect` 自建 socket 表达不出）③ 解释轨「模块缺失」诊断不再打挂进程（缺陷 138）。
+#   受控服务端（回显 / PG 式协商）+ **Go crypto/tls 同一服务端对拍** + 3 道负控 ⇒ 不依赖外网。
+run m151_pg_tls_bytes bash examples/m151_pg_tls_bytes/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

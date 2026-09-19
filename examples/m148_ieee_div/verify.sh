@@ -24,6 +24,20 @@ cd "$(dirname "$0")"
 PX=../../tools/px
 LOG=/tmp/m148_build.log
 FAIL=0
+
+# ── 缺陷 139（第 33 轮）：负控会改写 runtime/*.c；门**被打断**时篡改态会静默留在工作区 ──
+#   （语法合法、语义反向 ⇒ 编译器不报错；而本轮 runtime.c 本来就带未提交改动 ⇒ `git diff` 判不出来。）
+#   两道防线：① 开门先查「负控残留标记 NEGCTL」；② 信号兜底还原快照。
+for _f in ../../runtime/runtime.c ../../runtime/vm.c; do
+    if [ -f "$_f" ] && grep -q 'NEGCTL' "$_f" 2>/dev/null; then
+        echo "FAIL 负控残留：$_f 仍含 NEGCTL 标记（上一轮门被中断？先还原再跑）"
+        exit 1
+    fi
+done
+
+cp ../../runtime/runtime.c /tmp/m148_runtime_keep.c
+restore_rt() { cp /tmp/m148_runtime_keep.c ../../runtime/runtime.c 2>/dev/null; }
+trap restore_rt INT TERM HUP
 NTRUTH=0
 
 mkdir -p build

@@ -125,6 +125,42 @@ rebake_hint() {
     echo "   ⇒ 重烘：./selfhost/rebake_bin.sh   （改过 selfhost/*.px 或 runtime/ 下的 vm/runtime 源就必须重烘，否则用户拿到的是旧引擎）"
 }
 
+# ---- M152（第 34 轮 · 缺陷 144）：**runtime 缓存指纹门** ----
+# 为什么（实锤）：入库件链的是 `$CACHE/*.o`，而 `$CACHE` 过去是"按目录 mtime 最新"挑的
+#   （见 check_cache 的注释：M114-S3 治的是"挑 .o 最多的"→"挑最新写入的"）。但**缓存命中
+#   不刷新目录 mtime** ⇒ 当前源码对应的 key 若不是"最后写入的那个目录"，就会**静默链上
+#   另一份 runtime**：以 M151 源码重烘的 `bootstrap/pxc` 里 `grep -c PX_GC_TRIGGER_BYTES` = 1
+#   （该串只存在于未提交的 M152 runtime.c），而 `PXSRC-…` 指纹与 --check/--check-vm 全绿
+#   —— 门只看"编译器源码链"，看不见"runtime 层链错"。
+# 三道修法（同批）：
+#   ① `tools/px rtcache` 输出**当前源码 rt_key** 的目录（不再猜 mtime）；check_cache 用它；
+#   ② 缓存目录里放一枚 `__rtfp.o`（`PXRT-<key>` 常量，随 `*.o` 自动链进产物）；
+#   ③ 本门读回产物里的 `PXRT-…` 与当前 rt_key 比对 ⇒ "链对没有"变成**可自动发现**。
+rt_key_of_cache() {                   # 打印当前源码对应的 rt_key（失败则空）
+    local d; d="$("$ROOT/tools/px" rtcache 2>/dev/null | tail -1)"
+    [ -n "$d" ] && basename "$d"
+}
+rtfp_gate() {                         # $1=二进制 $2=标签 → 0 一致 / 1 不一致或缺指纹
+    local want got
+    want="$(rt_key_of_cache)"
+    got=$(grep -ao "PXRT-[0-9a-f]\{16\}" "$1" 2>/dev/null | head -1 | cut -d- -f2)
+    if [ -z "$want" ]; then
+        echo "    ⚠️  $2：取不到当前 rt_key（tools/px rtcache 失败）⇒ 跳过 runtime 缓存核对"
+        return 0
+    fi
+    if [ -z "$got" ]; then
+        echo "    ❌ $2：无内嵌 runtime 缓存指纹（PXRT-）⇒ 无法判定链的是哪份 runtime"
+        echo "       （M152 起入库件必须带 PXRT 指纹；本门不设「退化放行」的暗门）"
+        return 1
+    fi
+    if [ "$got" != "$want" ]; then
+        echo "    ❌ $2：内嵌 PXRT-${got} ≠ 当前源码 rt_key ${want} ⇒ 链了**别的** runtime 缓存"
+        return 1
+    fi
+    echo "    ✅ $2：内嵌 PXRT-${got} == 当前源码 rt_key（runtime 缓存对齐）"
+    return 0
+}
+
 # ---- M114-S2（Issue 55）：入库件表 + 全件指纹口径 ----
 # 为什么（Issue 55）：Issue 58 只治了 pxc/pxc_vm 两件，而 `bootstrap/` 里实际有 14 件
 #   —— 其余件「是否由当前源码烘出」既**不可判定**（无内嵌指纹）也**无门**。
@@ -208,6 +244,24 @@ select_cache() {
     # 重烘/重烘门要求**全量档**；--check/--check-vm 容忍裁剪档（判据与"链进多少 runtime"无关）
     local min=1
     case "$MODE" in rebake|rebake-all|check-all|entry) min=$FULL_MIN ;; esac
+    # M152（缺陷 144）：**先按当前源码 rt_key 取目录**（tools/px rtcache = 不猜 mtime），
+    #   取不到才回退旧的"mtime 最新"启发式（并**明确告警**，不静默）。
+    local keyed=""
+    keyed="$("$ROOT/tools/px" rtcache 2>/dev/null | tail -1)"
+    [ -n "$keyed" ] && keyed="${keyed%/}/"     # ⚠️ 旧口径来自 `for d in "$ROOT"/.rtcache/*/`，**带尾斜杠**；
+                                               #   而 "$CACHE"*.o 的 glob 在无尾斜杠时会拼成 `dir*.o` ⇒ 不展开
+                                               #   （实锤：ld: cannot find .../b6f76ec7…*.o）。此处统一补上。
+    if [ -n "$keyed" ] && [ -d "$keyed" ]; then
+        n=$(ls "$keyed"/*.o 2>/dev/null | wc -l)
+        if [ "$n" -ge "$min" ]; then
+            CACHE="$keyed"; best=$n; best_m=$(stat -c %Y "$keyed")
+        else
+            echo "⚠️  当前源码 rt_key 目录只有 ${n} 个 .o（< ${min}）⇒ 回退按 mtime 选（重烘会被拒）" >&2
+        fi
+    elif [ -n "$keyed" ]; then
+        echo "⚠️  rt_key 目录不存在：$keyed ⇒ 回退按 mtime 选已有缓存" >&2
+    fi
+    if [ -z "$CACHE" ]; then
     for d in "$ROOT"/.rtcache/*/; do
         [ -d "$d" ] || continue
         [ -f "$d/.complete" ] || continue
@@ -216,6 +270,7 @@ select_cache() {
         m=$(stat -c %Y "$d")
         if [ "$m" -gt "$best_m" ]; then best_m=$m; best=$n; CACHE="$d"; fi
     done
+    fi
     [ -n "$CACHE" ] || {
         echo "❌ 未找到可用 .rtcache（先跑：./tools/px build --full examples/hello.px）" >&2
         return 1
@@ -386,6 +441,8 @@ if [ "$MODE" = "check" ]; then
     echo "── 当前源码链指纹：${FP_TAG}-${FP}"
     fp_gate "$PXC" "入库 bootstrap/pxc"; fprc=$?
     if [ "$fprc" = "1" ]; then echo "❌ 入库 pxc 不是当前源码烘出的"; rebake_hint; exit 1; fi
+    rtfp_gate "$PXC" "入库 bootstrap/pxc"; rtrc=$?
+    [ "$rtrc" = "1" ] && { echo "❌ 入库 pxc 链的 runtime 缓存不是当前源码那份"; rebake_hint; exit 1; }
     select_cache || exit 1
     build_fresh_c || exit 1
     parity "$PXC" "$BUILD/rebake_new" "入库 pxc vs 现编 pxc" || {
@@ -406,6 +463,8 @@ if [ "$MODE" = "check-vm" ]; then
     echo "── 当前源码链指纹：${FP_TAG}-${FP}"
     fp_gate "$PXVM" "入库 bootstrap/pxc_vm"; r1=$?
     [ "$r1" = "1" ] && { echo "❌ 入库 pxc_vm 不是当前源码烘出的"; rebake_hint; exit 1; }
+    rtfp_gate "$PXVM" "入库 bootstrap/pxc_vm"; rv=$?
+    [ "$rv" = "1" ] && { echo "❌ 入库 pxc_vm 链的 runtime 缓存不是当前源码那份"; rebake_hint; exit 1; }
     # 对拍基准（C 轨件）也必须是当前源码烘出的，否则"基准"不可信
     fp_gate "$PXC" "入库 bootstrap/pxc（对拍基准）"; r2=$?
     [ "$r2" = "1" ] && { echo "❌ 对拍基准 bootstrap/pxc 不是当前源码烘出的（先过 --check）"; rebake_hint; exit 1; }
@@ -420,7 +479,8 @@ fi
 # ============================================================
 if [ "$MODE" = "check-all" ]; then
     echo "── [--check-all] 全件源码链指纹门（bootstrap/ 共 $(entry_list | wc -l) 件）"
-    n=0; bad=0; miss=0
+    n=0; bad=0; miss=0; rtbad=0
+    rt_want="$(rt_key_of_cache)"
     for name in $(entry_list); do
         n=$((n+1))
         out="$ROOT/bootstrap/$name"
@@ -432,10 +492,20 @@ if [ "$MODE" = "check-all" ]; then
         elif [ "$got" != "$fp" ]; then
             echo "    ❌ $name：内嵌 PXSRC-$got ≠ 当前源码链 PXSRC-$fp"; bad=$((bad+1))
         else
-            echo "    ✅ $name：PXSRC-$got"
+            # M152（缺陷 144）：同批核对 **runtime 缓存指纹**（链错 runtime 的表现是"门全绿但行为是别份的"）
+            rtgot=$(grep -ao "PXRT-[0-9a-f]\{16\}" "$out" 2>/dev/null | head -1 | cut -d- -f2)
+            if [ -z "$rt_want" ]; then
+                echo "    ✅ $name：PXSRC-$got（⚠️ 取不到当前 rt_key ⇒ 跳过 runtime 核对）"
+            elif [ -z "$rtgot" ]; then
+                echo "    ❌ $name：PXSRC-$got 但**无 PXRT 指纹**（链的 runtime 不可判定 ⇒ 需重烘）"; rtbad=$((rtbad+1)); bad=$((bad+1))
+            elif [ "$rtgot" != "$rt_want" ]; then
+                echo "    ❌ $name：PXSRC-$got 但内嵌 PXRT-$rtgot ≠ 当前 rt_key $rt_want（链错 runtime 缓存）"; rtbad=$((rtbad+1)); bad=$((bad+1))
+            else
+                echo "    ✅ $name：PXSRC-$got · PXRT-$rtgot"
+            fi
         fi
     done
-    echo "── 小计：$((n-bad))/$n 件与当前源码一致（其中无指纹 $miss 件）"
+    echo "── 小计：$((n-bad))/$n 件与当前源码一致（其中无指纹 $miss 件 · runtime 链错 $rtbad 件）"
     if [ "$bad" -gt 0 ]; then
         echo "❌ 有 $bad 件不是当前源码烘出的（用户拿到的是旧引擎）"
         echo "   ⇒ 全件重烘：./selfhost/rebake_bin.sh --rebake-all"

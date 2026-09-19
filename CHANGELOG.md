@@ -1,3 +1,89 @@
+## M151 —— `tls_upgrade`（同一 fd 上升级 TLS）+ `tcp_send*` 认 bytes + 解释轨模块诊断自足（第 33 轮 · qg-issue 87 · 缺陷 137/138/139）
+
+- **背景**：token-cache 的 **PostgreSQL 驱动**（lib/pq v1.12.3 的线上行为）本轮落地。它比 Redis
+  多一道**协商**：lib/pq 在 `sslmode != disable` 时先发 8 字节 `SSLRequest`
+  （`int32(8) + int32(80877103)`）→ 读 1 字节 `'S'` → **再在同一个 fd 上做 TLS 握手**。
+  而 M150 的 `tls_connect` **自己建 socket**（`mbedtls_net_connect`）⇒ 这条路**表达不出来**：
+  一边是"先明文发协商包"，一边是"从握手开始"，两者不在同一个 socket 生命周期里。
+- **本轮先啃的三块语言侧前置**：
+  1. **`tls_upgrade(fd[, opts])`（新 native）** —— 在**已连接**的 fd 上完成 TLS 握手：
+     `opts = {"verify"(**缺省 false**), "servername", "host", "read_timeout_ms"}`；
+     返回 dict 与 `tls_connect` **同形**（`ok/id/fd/peer/version/version_num/cipher/cipher_id/verify/
+     stage/errno/err`）。`host` 只用于 SNI 决策与 `peer` 文本（fd 已连上，不再解析地址）。
+     **所有权**：成功 ⇒ 句柄表**接管** fd（不要再 `tcp_close`，否则 mbedtls 的 BIO 会读到已关闭的
+     fd）；失败 ⇒ fd **仍归调用方**（可继续明文用或关闭）。
+  2. **缺陷 137 —— `tcp_send` / `tcp_send_ex` 不认 `bytes`**：`args[1]` 只判 `PX_STR`，其它一律走
+     `px_to_string()` —— 而 `str(bytes)` 是**占位符** `"<bytes N>"` ⇒ `tcp_send_ex(fd, b)` 把 9 字节
+     占位符发出去，**载荷本身一个字节都没发**。这是"二进制协议静默损坏"级缺陷，且**只有**在
+     真发二进制时才现形（此前调用方都发 str）。对齐 `sse_write`（同一族早就两种都认）。
+     **实证**：受控回显服务端收到的是 `"<bytes 7>"` 的 hex，而不是 `410042ffc3285a`。
+  3. **缺陷 138 —— 解释轨的"模块缺失"诊断会把进程打挂**：`cg_perr` / `cg_pwarn` 定义在
+     `codegen.px`，而 `cg_module.px` **同时**被 `interp.px` 直接 import（解释轨的 import 合并）
+     —— 解释轨里没有 `codegen.px` ⇒ 走到"模块缺失"这条诊断路径时抛
+     `运行时错误 [cg_stdlib_dir 行203]: 未定义变量: cg_pwarn`：**诊断本身成了崩溃源**，
+     `px run` 一个 `import "./nope.px"` 的文件退出码 1，用户看到的是内部符号名而不是"找不到模块"。
+     修法：在 `cg_module.px` **本文件内**实现 `cgm_perr` / `cgm_pwarn`（文案与 `codegen.px`
+     逐字节相同），调用点改走 `cgm_*`；`codegen.px` 的同名函数保留（其内部调用点不动）。
+     > 教训（速查表 138）：**同一个文件被两条轨以不同 import 闭包加载时，任何"靠邻居提供"的
+     > 依赖都会在另一条轨里变成未定义变量。诊断代码必须与被诊断对象同自足性。**
+- **内部重构：TLS 会话"装配三段式"** —— 把 `px_tls_connect_opt` 拆成 `px_tls_session_alloc`
+  （分配 + DRBG 播种）/ `px_tls_session_config`（verify / SNI / 读超时 / 版本下限 / BIO）/
+  `px_tls_session_handshake`（握手 + 主机名校验 + 结果 dict 组装），`tls_connect` 与
+  `tls_upgrade` **共用 100% 的配置与握手代码** —— 不给"两份实现必然漂移"留机会。
+- **`tools/px`：`cmd_run` 不再 `2>&1`** —— 旧版尾部带 `2>&1`（M86-S0 起的顺带写法）⇒ 诊断
+  （`[警告] 找不到模块 …` / `运行时错误 …`）与程序输出混进同一个流：`px run p.px > data.txt`
+  会把警告写进数据文件。编译轨（`pxc`）从不合并（Issue 45：诊断走 stderr ⇒ 不污染 `.c` 产物），
+  同一工具链两条入口不该两套口径。需要的调用方自己写 `2>&1`（仓库内既有脚本本来就是这么写的）。
+- **名册/索引**：`ibuiltin.px` 转发层 + `interp.px` 名册各补 1 条（`tls_upgrade`）；
+  `docs/native_index.json` **352 → 353**（生成器重派生）。
+- **门 `examples/m151_pg_tls_bytes/`**（`M151-VERIFY-OK`）：
+  - ① **二进制安全**：`tcp_send_ex(fd, bytes)` / `tcp_send(fd, bytes)` 打受控回显服务端，
+    逐字节比 hex（载荷含 `00` / `FF` / **非法 UTF-8** `C3 28`）；**服务端视角**也要收到原始载荷。
+  - ② **`tls_upgrade`**：PG 式 SSLRequest 协商（服务端记录 8 字节原文 + 回 `'S'`）→ 同一 fd 升级
+    → `READY\n` 问候 + 二进制回显；与 **Go `crypto/tls`** 放**同一个服务端**上跑同一套动作 ⇒
+    实现无关子集（协商包 / 首字节 / 问候语 hex / 回显 hex / `version_num` / `verify`）逐字节一致；
+    服务端侧另有两条独立断言（握手成功且 **SNI 为空** —— IP 字面量不发 SNI；确实先收到 SSLRequest）。
+  - ③ **解释轨模块诊断**：`px run` 一个含 `import "./definitely_not_here.px"` 的文件必须
+    **退出码 0 + stdout 只有程序输出 + stderr 有 `[警告] 找不到模块`**；`PX_STRICT_MODULE=1` 时
+    编译错误退出（`E3005`）。
+  - ④ **3 道负控**（篡改 `runtime.c` → 重建）：A `tcp_send*` 退回只认 `PX_STR` ⇒ A/B 段 `same=false`；
+    B `tls_upgrade` 的 `verify` 缺省改 `true` ⇒ 自签证书握手失败；C 篡改探针期望 hex ⇒ `same=false`。
+    负控后**还原验收**：`runtime.c` 与开门前**逐字节一致**、`px_probe.px` 已还原。
+- **接门**：`m116_gates.sh` / `m117_gates.sh` / `ci.yml`（工具链质量门）各加一步 —— 门**不依赖外网**
+  （服务端在本机回环，证书复用 m150 的自签对，`openssl` 现场校验）。
+- **缺陷 139（本轮开工时抓到的「上一轮残留」）· 负控门被打断 ⇒ 篡改态静默留在工作区**：负控靠"改字面量 /
+  改条件"再重建来验红，改动**语法合法、语义反向** ⇒ 编译器不报错、`pxc` 照常构建；而当门自己带着未提交
+  改动时，`git diff` 也判不出来（本轮开工实测 `runtime/runtime.c` 与门内快照 **md5 不一致**，差异正是
+  M150 负控 C 的 `MBEDTLS_SSL_VERIFY_REQUIRED` 篡改体 —— **差一步就带着篡改态提交上库**）。
+  三道防线：① 负控写入 `/* NEGCTL-… */` 标记 + **开门预检**（命中即退出"上一轮门被中断？先还原再跑"，
+  还原后再查一次）；② `m116_gates.sh` / `m117_gates.sh` **全门预检**同样 grep（不让整轮全门建在脏源上）；
+  ③ `trap restore_rt INT TERM HUP` + 开门快照。
+  ⚠️ **诚实登记 trap 的局限**（本地实测）：bash 的 trap 在**当前前台命令结束之后**才执行（实测
+  `kill -TERM` 后文件是在 `sleep` 跑完那一刻才被还原），对 **SIGKILL 无效** ⇒ 真正的兜底是"标记 + 预检"。
+  **能"自动还原"的东西，也要能"自动发现没还原"。**（速查表事实 139）
+- **附带发现**：`selfhost/m116_gates.sh` 在 git 里是 **100644**（`m117_gates.sh` / `rebake_bin.sh` /
+  `tools/px` 都是 100755）⇒ `./selfhost/m116_gates.sh` 报 `Permission denied`（rc=126）—— 第
+  10/19/25 轮"后台脚本要用 `bash x.sh`"的**根因**终于定位到 git mode。已 `chmod +x` 入库。
+- **缺陷 144（本版发布流程中当场抓到，随本提交根治）· 重烘门会静默链上「别的 runtime」**：
+  `rebake_bin.sh` 的 `check_cache` 选缓存目录的口径是"**目录 mtime 最新**"（M114-S3 治的
+  是"挑 .o 最多的"，见其注释），而**缓存命中不刷新目录 mtime** ⇒ 当前源码对应的 `rt_key`
+  目录若不是"最后写入的那个"，就会链上**另一份 runtime** 的 `.o`。**实锤**：以 M151 源码
+  重烘出的 `bootstrap/pxc` 里 `strings | grep -c PX_GC_TRIGGER_BYTES` = **1** —— 该串只存在于
+  **尚未提交的 M152** `runtime.c`，而 `PXSRC-…` 指纹、`--check`、`--check-vm` 当时**全绿**
+  （门测编译器源码链与行为，**看不见 runtime 层链错**）。三道修法：
+  ① `tools/px rtcache` 输出**当前源码 `rt_key`** 的目录（不再猜 mtime），`check_cache` 用它
+  （取不到才回退旧启发式，且**明确告警**）；
+  ② 缓存目录里放一枚 `__rtfp.o`（`PXRT-<key>` 常量）—— 随 `$CACHE/*.o` **自动链进产物**，
+  旧缓存就地补写（不重编 runtime）；
+  ③ `--check-all` / `--check` / `--check-vm` **读回产物里的 `PXRT-…` 与当前 `rt_key` 比对**
+  ⇒「链对没有」从"只能猜"变成**可自动发现**（与 `PXSRC-…` 编译器源码链指纹同族、两把尺子）。
+  > 教训（速查表 144）：**能"自动挑选"的东西，也要能"自动核对挑对没有"** —— 上一轮把
+  > "挑 .o 最多的"修成"挑最新写入的"，只是换了一种猜法；**正确的判据是"按当前源码算出的 key"**。
+- **（同轮 · token-cache 侧，按令不入本仓库）PostgreSQL 驱动本体**：
+  `px/{pg_dsn,pg_wire,pg_auth,pg_conn,pg_sql,postgres,migrate}.px` + 门 `px/tools/diff_pg_go.py`
+  ⇒ **`PG-DIFF-OK`**（md5 / password / scram 三档 × 24 探针行 × **120/120/121 条线上协议单元**逐条一致）
+  + **`NEGCTL-OK`**（4 道负控全红）。
+
 ## M150 —— 摘要/密钥派生族 + TLS 客户端族（第 32 轮 · qg-issue 87 · token-cache PostgreSQL 驱动移植的前提）
 
 - **背景**：token-cache 的持久层有 `postgres` 驱动（`storage.go` 的 `createDriver`），而要用

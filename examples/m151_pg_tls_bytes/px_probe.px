@@ -1,0 +1,100 @@
+# ═══════════════════════════════════════════════════════════════════════
+# px_probe.px — M151 门（PuXian 侧）
+# ---------------------------------------------------------------
+# 三段：
+#   A  `tcp_send_ex(fd, bytes)` 的**二进制安全**（缺陷 137：修前发出去的是
+#      占位符 `"<bytes N>"` 的 9 个字节，而不是载荷本身）
+#   B  `tcp_send(fd, bytes)` 同上（老接口同族缺陷，同批修）
+#   C  `tls_upgrade(fd, opts)` —— PG 式 SSLRequest 协商后**在同一个 fd 上升级 TLS**
+#      （M151-S1；`tls_connect` 自建 socket 表达不出这条路）
+# 用法：./px_probe <echo_port> <pgssl_port>
+# ═══════════════════════════════════════════════════════════════════════
+
+# PG SSLRequest：int32(8) + int32(80877103)（用 int_to_bytes 拼，语言无 \x 转义）
+# 期望值（**独立于 payload()** 的一份语料）—— 负控 C 就是篡改它
+const EXPECT_HEX = "410042ffc3285a"
+
+def payload():
+    # 41 00 42 FF C3 28 5A —— 含 NUL、0xFF、以及**非法 UTF-8** 的 0xC3 0x28
+    var p = bytes("A")
+    p = bytes_concat(p, int_to_bytes(0, 1, "big"))
+    p = bytes_concat(p, bytes("B"))
+    p = bytes_concat(p, int_to_bytes(255, 1, "big"))
+    p = bytes_concat(p, int_to_bytes(195, 1, "big"))
+    p = bytes_concat(p, int_to_bytes(40, 1, "big"))
+    p = bytes_concat(p, bytes("Z"))
+    return p
+
+def read_n(fd, n):
+    var acc = bytes("")
+    var guard = 0
+    while bytes_len(acc) < n and guard < 50:
+        var r = tcp_recv_ex(fd, 4096)
+        if not bool(r["ok"]) or bytes_len(bytes(r["data"])) == 0:
+            break
+        acc = bytes_concat(acc, bytes(r["data"]))
+        guard += 1
+    return acc
+
+def main():
+    var echo_port = int(args()[1])
+    var ssl_port = int(args()[2])
+    var pay = payload()
+    var phex = bytes_to_hex(pay)
+
+    # ── A：tcp_send_ex + bytes ──
+    var c = tcp_connect_ex("127.0.0.1", echo_port, {"timeout_ms": 3000})
+    if not bool(c["ok"]):
+        print("A|conn|fail|" + str(c["err"]))
+        return 1
+    var s = tcp_send_ex(c["fd"], pay)
+    var a = read_n(c["fd"], bytes_len(pay))
+    print("A|sent=" + phex + "|n=" + str(s["n"]) + "|recv=" + bytes_to_hex(a)
+          + "|same=" + str(bytes_to_hex(a) == EXPECT_HEX))
+    tcp_send_ex(c["fd"], bytes("bye"))
+    tcp_close(c["fd"])
+
+    # ── B：tcp_send（老接口）+ bytes ──
+    var c2 = tcp_connect_ex("127.0.0.1", echo_port, {"timeout_ms": 3000})
+    var s2 = tcp_send(c2["fd"], pay)
+    var b = read_n(c2["fd"], bytes_len(pay))
+    print("B|sent=" + phex + "|n=" + str(s2) + "|recv=" + bytes_to_hex(b)
+          + "|same=" + str(bytes_to_hex(b) == EXPECT_HEX))
+    tcp_send(c2["fd"], bytes("bye"))
+    tcp_close(c2["fd"])
+
+    # ── C：PG 式协商 + tls_upgrade ──
+    var c3 = tcp_connect_ex("127.0.0.1", ssl_port, {"timeout_ms": 3000})
+    if not bool(c3["ok"]):
+        print("C|conn|fail|" + str(c3["err"]))
+        print("C|neg=|first=|up=false|ver_num=0|verify=false")
+        print("C|greet=|echo=|close=false")
+        return 0
+    var fd = c3["fd"]
+    var neg = bytes_concat(int_to_bytes(8, 4, "big"), int_to_bytes(80877103, 4, "big"))
+    tcp_send_ex(fd, neg)
+    var one = read_n(fd, 1)
+    var fc = ""
+    if bytes_len(one) > 0:
+        fc = bytes_to_str(one)
+    var up = tls_upgrade(fd, {"host": "127.0.0.1", "read_timeout_ms": 5000})
+    print("C|neg=" + bytes_to_hex(neg) + "|first=" + fc + "|up=" + str(up["ok"])
+          + "|ver_num=" + str(up["version_num"]) + "|verify=" + str(up["verify"]))
+    if bool(up["ok"]):
+        var rid = int(up["id"])
+        var greeting = tls_recv(rid, 64)
+        tls_send(rid, pay)
+        var back = bytes("")
+        var guard = 0
+        while bytes_len(back) < bytes_len(pay) + 5 and guard < 20:
+            var r = tls_recv(rid, 4096)
+            if not bool(r["ok"]) or bytes_len(bytes(r["data"])) == 0:
+                break
+            back = bytes_concat(back, bytes(r["data"]))
+            guard += 1
+        print("C|greet=" + bytes_to_hex(bytes(greeting["data"])) + "|echo=" + bytes_to_hex(back))
+        tls_send(rid, bytes("bye"))
+        print("C|close=" + str(tls_close(rid)))
+    else:
+        print("C|greet=|echo=|close=false")
+    return 0

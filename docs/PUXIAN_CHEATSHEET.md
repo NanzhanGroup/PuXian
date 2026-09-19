@@ -62,6 +62,25 @@
 >    门 `examples/m148_ieee_div/`（1176 行语料 × Go 本尊 × **VM/C/解释轨三轨** + 44 断言 +
 >    **往返性质** + **5 道负控**）。详见事实 124–127。
 
+> M151（2026-09-20，qg-issue 87 第 33 轮）：**`tls_upgrade`（同一 fd 上升级 TLS）+ 三处根治** ——
+> PostgreSQL 驱动的线上行为比 Redis 多一道**协商**：lib/pq 在 `sslmode != disable` 时先在**明文**上发
+> 8 字节 `SSLRequest`（`int32(8) + int32(80877103)`）→ 读 1 字节 `'S'` → **再在同一个 fd 上**做 TLS
+> 握手。而 `tls_connect`（M150）**自己建 socket** ⇒ 这条路**表达不出来**（"先明文发协商包"与
+> "从握手开始"不在同一个 socket 生命周期里）。新增 **`tls_upgrade(fd[, opts])`**：返回 dict 与
+> `tls_connect` **同形**，`opts = {"verify"（**缺省 false**）, "servername", "host", "read_timeout_ms"}`；
+> **所有权**：成功 ⇒ 句柄表**接管 fd**（此后**不要再 `tcp_close`**）；失败 ⇒ fd **仍归调用方**。
+> 与 `tls_connect` 共用 100% 的"配置 + 握手"代码（`px_tls_session_alloc` / `_config` / `_handshake`
+> 三段式）—— 不给"两份实现必然漂移"留机会。
+> 三处根治：**缺陷 137** `tcp_send` / `tcp_send_ex` 不认 `bytes` ⇒ 把 `str(bytes)` 的占位符
+> `"<bytes N>"` 发上线（**载荷一个字节都没发，却返回成功**）—— 二进制协议静默损坏，对齐 `sse_write`；
+> **缺陷 138** 解释轨的"模块缺失"诊断本身把进程打挂（`cg_pwarn` 未定义 —— `cg_module.px` 被两条轨以
+> 不同 import 闭包加载）⇒ 诊断在 `cg_module.px` 内**自足**（`cgm_perr` / `cgm_pwarn`），且 **`px run`
+> 不再合并 stderr**（与 `pxc` 同口径：诊断走 stderr、不污染数据流）；**缺陷 139** 负控门被打断 ⇒
+> `runtime/*.c` 会**静默**留在**篡改态**（本轮开工实测 md5 与门内快照不一致 —— 差一步就带着它上库）⇒
+> `NEGCTL` 残留标记 + 开门预检 + 全门预检 + 信号兜底。
+> 门 `examples/m151_pg_tls_bytes/`（① 二进制安全 ② `tls_upgrade` 与 **Go `crypto/tls`** 同一服务端对拍
+> ③ 解释轨诊断 ④ **3 道负控**）⇒ `M151-VERIFY-OK`；不依赖外网。详见事实 **137–140**。
+
 > M150（2026-09-20，qg-issue 87 第 32 轮）：**摘要/密钥派生族 + TLS 客户端族** —— 移植
 > PostgreSQL 驱动（lib/pq v1.12.3）时撞到的两块硬缺口：
 > **① 认证面**：`AuthenticationMD5Password` 的应答是一条**嵌套 MD5**
@@ -1223,3 +1242,56 @@ set_timeout(fn (): print("once after 2s"), 2000)
      （本机实测 Go 选 `0x1301`，mbedtls 选 `0x1302`）—— 比 `version_num` / 收发字节 / EOF 这些
      实现无关量，套件名只与**同一 id 的 Go 文本**比。
        要 Go 的口径（`+Inf` / `-Inf` / `NaN`）用 `go_float_text` / `fmt_float_dec`。
+
+137. **`tcp_send` / `tcp_send_ex` 只认 str 时，二进制载荷会静默变成占位符**（第 33 轮 · M151 · 缺陷 137）：
+     `args[1]` 只判 `PX_STR`，其余一律走 `px_to_string()` —— 而 `str(bytes)` 是占位符 `<bytes N>`
+     ⇒ `tcp_send_ex(fd, b)` 把 10 字节的 `"<bytes 7>"` 发出去，**载荷一个字节都没发**，而且**返回成功**。
+     同族 `sse_write` 早就两种都认 ⇒ **同一 runtime 里两种口径就是漂移源**。
+     门内实证：受控回显服务端收到 `3c6f626a6563743e`（= `"<object>"`）而不是 `410042ffc3285a`。
+     教训：**`px_to_string()` 对 bytes 是给日志看的占位符，永远不要让它碰线协议。**
+
+138. **同一文件被两条轨以不同 import 闭包加载时，「靠邻居提供」的依赖会在另一条轨变成未定义变量**
+     （第 33 轮 · M151 · 缺陷 138）：`cg_perr` / `cg_pwarn` 定义在 `codegen.px`，而 `cg_module.px`
+     **同时**被 `interp.px` 直接 import（解释轨里没有 `codegen.px`）⇒ 解释轨走到「找不到模块」这条
+     **诊断**路径时抛 `运行时错误 [cg_stdlib_dir 行203]: 未定义变量: cg_pwarn` —— **诊断本身成了崩溃源**
+     （`px run` 一个 `import "./nope.px"` 的文件退出码 1，用户看到的是内部符号名，而不是「找不到模块」）。
+     修法：在 `cg_module.px` **本文件内**实现 `cgm_perr` / `cgm_pwarn`（文案与 `codegen.px` 逐字节相同），
+     调用点改走 `cgm_*`。**诊断代码必须与被诊断对象同自足性。**
+     ↳ 同族纪律：**`px run` 不再 `2>&1` 合并 stderr**（改成与 `pxc` 同口径，Issue 45：诊断走 stderr、
+       不污染数据流）—— 否则「诊断走了 stderr」这件事**断言不出来**（会被混进 stdout 里看起来一样）。
+
+139. **负控门被打断 ⇒ `runtime/*.c` 会「静默」留在篡改态**（第 33 轮 · M151 · 缺陷 139）：
+     负控靠"改字面量 / 改条件再重建"来验红，改动**语法合法、语义反向** ⇒ 编译器不报错、`pxc` 照常构建；
+     而门自己带着未提交改动时，`git diff` 也判不出来（本轮开工实测：`runtime/runtime.c` 与门内快照
+     **md5 不一致**，差异正是 M150 负控 C 的 `MBEDTLS_SSL_VERIFY_REQUIRED` 篡改体
+     —— **差一步就带着篡改态提交上库**）。三道防线：
+     · **残留标记 + 开门预检**：负控写入 `/* NEGCTL-<门>-<项> */` 注释；门开头查 `runtime/{runtime,vm}.c`
+       是否含 `NEGCTL` ⇒ 命中立刻退出（"上一轮门被中断？先还原再跑"）；**还原之后再查一次**。
+     · **全门预检**：`m116_gates.sh` / `m117_gates.sh` 开头同样 `grep -l 'NEGCTL' runtime/*.c` ⇒
+       不让**整轮全门**建在脏源上（否则一轮几十个门全白跑，还看不出为什么）。
+     · **信号兜底**：`cp runtime.c <快照>` + `trap restore_rt INT TERM HUP`。
+       ⚠️ **局限（本地实测）**：bash 的 trap 在**当前前台命令结束之后**才执行（`kill -TERM` 后文件是在
+       `sleep` 跑完那一刻才被还原），对 **SIGKILL 无效** ⇒ 真正的兜底是"标记 + 预检"。
+     教训：**能"自动还原"的东西，也要能"自动发现没还原"。**
+
+140. **`tls_upgrade(fd, opts)` 的所有权是「成功即接管」**（第 33 轮 · M151）：在**已连接**的 fd 上做 TLS
+     握手（PG 的 `SSLRequest` 协商必需 —— `tls_connect` 自己建 socket，表达不出「先明文发 8 字节、
+     再在同一 fd 上升级」）。成功 ⇒ 句柄表**接管 fd**（此后 **不要再 `tcp_close`**，否则 mbedtls 的 BIO
+     会读到已关闭的 fd）；失败 ⇒ fd **仍归调用方**（可继续明文用或关闭）。返回 dict 与 `tls_connect`
+     **同形**，且两者共用 100% 的「配置 + 握手」代码（`px_tls_session_alloc` / `_config` / `_handshake`
+     三段式）—— 不给「两份实现必然漂移」留机会。
+
+144. **重烘会「静默链上别的 runtime」**（第 33 轮 · M151 发布流程中实锤 · 缺陷 144）：
+     `rebake_bin.sh` 的 `check_cache` 挑缓存目录的口径是"**目录 mtime 最新**"（M114-S3 治的是"挑 .o
+     最多的"），而 **缓存命中不刷新目录 mtime** ⇒ 当前源码对应的 `rt_key` 目录若不是"最后写入的那个"，
+     就链上**另一份 runtime**。实锤：以 M151 源码重烘的 `bootstrap/pxc` 里
+     `strings | grep -c PX_GC_TRIGGER_BYTES` = **1**（该串只存在于**未提交的 M152** `runtime.c`），
+     而 `PXSRC-…` 指纹 / `--check` / `--check-vm` **全绿**。三道修法：
+     ① `tools/px rtcache` 直接输出**当前源码 rt_key** 的目录（不再猜 mtime），`check_cache` 用它；
+     ② 缓存目录放一枚 `__rtfp.o`（`PXRT-<key>` 常量，随 `$CACHE/*.o` 自动链进产物；旧缓存就地补写）；
+     ③ 三道门**读回产物里的 `PXRT-…` 与当前 rt_key 比对** ⇒「链对没有」可自动发现。
+     教训：**能"自动挑选"的东西，也要能"自动核对挑对没有"** —— 把"挑 .o 最多的"改成"挑最新写入的"
+     只是**换了一种猜法**；正确判据是"按当前源码算出的 key"。
+     ↳ 同族陷阱（本轮实测）：`"$CACHE"*.o` 的 glob 在 `$CACHE` **无尾斜杠**时会拼成 `dir*.o` ⇒ 不展开
+       （`ld: cannot find …*.o`）；而 gcc **链接失败会删掉输出文件** ⇒ `bootstrap/pxc` 被删（有
+       `/tmp/pxc.bak-*` 兜底可恢复）。"选目录"和"拼路径"是两处都必须自洽的契约。
