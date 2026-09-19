@@ -62,6 +62,19 @@
 >    门 `examples/m148_ieee_div/`（1176 行语料 × Go 本尊 × **VM/C/解释轨三轨** + 44 断言 +
 >    **往返性质** + **5 道负控**）。详见事实 124–127。
 
+> M157（2026-09-20，qg-issue 87 第 39 轮）：**ONNX 执行面 —— 张量 + 64 算子 + 拓扑执行器（零依赖、无 dlopen）** ——
+> 语言侧：`onnx_run(id, feeds)` → `{ok,nodes,outputs:{名:{dtype,dims,nbytes,data}},stats:{nodes,by_op}}`；
+> `onnx_op_names()`（运行时算子表，64 个）；张量字节助手 `f32_bytes/f32_at/f32_count`、
+> `i64_bytes/i64_at/i64_count`。`feeds` 的每个值形如
+> `{dims:[…], dtype?:"float"|"int64"|…, data?:bytes | f32?:[…] | i64?:[…] | i32?:[…] | f64?:[…]}`。
+> 交付：`runtime/onnx_tensor.{h,c}`（张量/广播/搬运类算子）+ `runtime/onnx_ops.c`（逐元素广播引擎、
+> MatMul、Softmax、归约、LayerNormalization、erf 双路径）+ `runtime/onnx_exec.c`（**"输入齐了就执行"**，
+> 不依赖节点顺序、能报出环与缺失来源；`PX_ONNX_TRACE=1` 打节点/形状轨迹）。
+> 门 `examples/m157_onnx_exec/`：**三方对拍**（C ↔ 独立参考 ↔ 手算真值）· **算子覆盖**（注册表 64 个
+> 必须全被执行过）· 执行器行为负控（乱序可跑 / 未知算子·环·广播·缺 feed 必报错）· erf 1001 点精度
+> （实测 max abs err **4.1e-8**）· 真模型端到端（MiniLM 780 节点 → 均值池化 → L2 归一化，
+> **13.5s/次**，与 768 维写死的 Go 侧不同：**维度从输出形状取 = 384**）· C 侧负控 2 道。
+> 事实 167–172。
 > M156（2026-09-20，qg-issue 87 第 38 轮）：**零依赖 ONNX 解析面（覆盖表最后一行）** ——
 > token-cache 的 embedding 引擎在 Go 侧是 `embedding_engine_onnx.go`（`//go:build embed_onnx`），
 > 靠 **cgo + dlopen** `libonnxruntime.so`（生产二进制是**空桩**）。本轮在语言运行时内自己解
@@ -1558,6 +1571,29 @@ set_timeout(fn (): print("once after 2s"), 2000)
 165. **`len(bytes)` 不支持（登记项）**：语言约定是 `bytes_len(b)`（见事实 496 一带），与 Go 的
      `len([]byte)` 有差异 —— 本轮 ONNX 权重访问按既有约定走 `bytes_len` / `bytes_slice` /
      `bytes_to_hex`。**这是已知的语言与 Go 的差异，不是缺陷**（写入登记以免每次都要重新发现）。
+167. **格式是「发射可见」的（第 39 轮 · M157 开轮自查）**：`px fmt` 只动空格/空行，但发射产物里带
+     **`PXOP_SRCLINE`（源码行号）** ⇒ 删空行会移动行号 ⇒ `--emit-c` 逐字节变 ⇒ 发射冻结门**正确地红**
+     （实测 `nul_io.px`：`36d89a3c` → `688d9349`）。第 37 轮末那个"只过 fmt"的提交因此让 CI 质量门红过一次。
+     冻结基准现在每行带 **`src=<源文件 sha256>`**（诊断列，不算判据）：`src 变 + 产物变` ⇒ 类别 A（确认后
+     `--freeze`）；`src 未变 + 产物变` ⇒ **类别 B = 发射回归**（先查）；`src 变而产物未变` ⇒ **判绿**只提示。
+168. **`Gather` 的输出形状：indices 的维度插在 `axis` 位置（第 39 轮 · M157）**：ONNX 定义是
+     `data.dims[:axis] + indices.dims + data.dims[axis+1:]`。若写成"追加到末尾"，在 **data 秩 ≥ 2 且 axis=0**
+     时形状会从 `[2,3]` 变成 `[3,2]`（实测：真 MiniLM 的 `Gather` 之后第一个 `Add` 就广播失败）。
+     ⚠️ 判据语料要挑**能区分**的：用 `Shape` 的输出（秩 1）当判据时前缀/后缀都为空、两种写法**形状相同**，
+     负控观察不到 —— 于是补了 `e10_gather_rank2`（data 秩 2）当负控锚点。
+169. **erf 级数不要再按 `x<0` 翻符号（第 39 轮 · M157）**：Maclaurin 级数含 `x^(2n+1)`，负 x 自然给负值；
+     实现里多乘一个 `(x<0?-1:1)` 会把**整个负半轴翻号**（实测 1001 点网格 max abs err = **2.0**）。
+     实现口径：`|x|<2.5` 走级数、`≥2.5` 走 erfc 连分式（Lentz），double 中间量 → float32 输出，
+     实测 max abs err **4.11e-8**（阈值 1.5e-7）。比较/整数算术在整型 dtype 上走 **int64 路径**（不经 double）。
+170. **ONNX 维度不要写死（第 39 轮 · M157）**：token-cache 的 Go `embedding_engine_onnx.go` 写死
+     `dim = 768` / `outputShape = (1,512,768)`，而 `models/embed/model.onnx` 的真实隐藏维是 **384**
+     ⇒ 一旦启用 `embed_onnx` tag 就会与模型不符。PuXian 侧一律**从输出形状取**（`o["dims"][-1]`）。
+171. **数值口径与"优化位精确"（第 39 轮 · M157）**：算子中间累加一律 **double**、末步落 float32；
+     MatMul 的快路径（float32 直指针访问）与慢路径在同一累加顺序下 **逐字节同结果**（优化后
+     整机真模型 36.4s → **13.5s**，输出向量 sha256 不变）。
+172. **写文件时 heredoc 不能嵌套同终止符（第 39 轮 · M157 我的错）**：用 `python3 - <<'PY'` 去生成
+     **本身含 `PY` 终止符**的 shell 片段时，外层 heredoc 会提前终止 ⇒ 补丁**静默不生效**（现象是
+     "改了脚本但跑的还是旧逻辑"）。修法：先把片段 `write_file` 落盘，再 splice；**改完必须回读产物**。
 166. **门的三种真值缺一不可（第 38 轮 · M156 的方法论）**：构造性真值（生成参数直接给出）+
      独立实现（另一份手写解码器）+ 被测实现。**只做「两实现互拍」会漏「两侧在同一份错误输入上
      一致地错」** —— 本轮实踩两次（生成器漏包 `GraphProto.node` 的 field 1 / 漏包
