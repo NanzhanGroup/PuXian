@@ -1,3 +1,46 @@
+## M158 —— 解释轨函数值 → runtime native 桥（第 40 轮 · qg-issue 87 · 缺陷 114/161 根治）
+
+- **缺陷 114（语言侧 · 解释轨整族不可用）**：解释轨把用户函数包装成 dict（`{"__ufn__": …}` /
+  `{"__builtin__": …}`），而 runtime 的 native 一律按 `PX_FUNC/PX_NATIVE` 校验函数参数 ⇒
+  解释轨把包装 dict 直接转发 ⇒ `px_error`（**不可捕获**，直接终止进程）：
+  `R1002: set_interval: 第一个参数必须是函数`。受影响的是**整族**：`set_timeout` /
+  `set_interval` / `signal` / `http_serve` / `http_serve_unix` / `http_stream` / `sse_serve` /
+  `ws_serve` / `udp_serve` / `http_get_stream` / `route` / `middleware` … 实测复现：
+  `set_interval(fn (): …)` 与**传顶层命名函数同样报错**（不只是闭包）。
+- **修法（双向桥，零语言语法改动）**：
+  · 桥对象 = `px_func_env(name, px_interp_bridge_entry, fnvalue)` —— 复用 M129 的 `env` 字段
+    承载解释轨函数值（`PX_FUNC` 对象被 GC 标记 ⇒ `env` 自动可达，**无需额外注册表、不泄漏**；
+    `ctx` 由 `px_func_env` 指向 `env` 字段 ⇒ 桥 entry 取回原值）；
+  · 调度器 = 解释器启动时 `interp_bridge_install(i_bridge_dispatch)` 把**它自己的**编译版函数
+    存进全局表 `__interp_dispatch__`（全局表 = GC 根）；
+  · 桥 entry 被 native 调用 ⇒ `px_call(dispatcher, [fnvalue, args_list])` ⇒ 回到解释器执行
+    （解释轨的真闭包 / env 链语义完整保留）；
+  · **`bi_ffi_call` 自动桥接**：解释轨裸脚本（零 extern def）调 runtime native 走 `ffi_call`
+    按名兜底，此处对参数列表做「包装 dict → 桥」替换 ⇒ **一处修复、全族 native 生效**
+    （无包装参数时零额外开销：一次线性探测后直调原路径）。
+- **顺带根治缺陷 161（三轨分叉 · 真缺陷）**：`type(函数值)` 编译轨（VM/C）返回 `"function"`，
+  解释轨返回 `"fn"` ⇒ `type(f)` 三轨不一致（速查表事实 39/122 的"三轨一致"契约、
+  `MINI_SUBSET` 类型名表都写 `function`）。修法：解释轨 `i_type_name` 与全部比较点
+  （`ival.px` 6 处 + `icall.px` 2 处）对齐 runtime `px_type_name`。
+- **门 `examples/m158_interp_fn/`（`M158-VERIFY-OK`）**：判据逐层可单独变红：
+  ① 解释轨跑用例 `pass=9 fail=0`（用例内含绝对值断言）；② VM 轨（用户面默认轨）编译 + 运行 ⇒
+  stdout 与解释轨**逐字节一致**；③ C 轨逃生舱同样逐字节一致；④ `type(函数值) == "function"`
+  口径守卫；⑤ 已知缺口报告（**不计失败**，但必须打印缺口编号）；⑥ **负控 3 道**（关闭
+  `bi_ffi_call` 自动桥接 / 解释器不安装调度器 / 调度器忽略真实函数值）—— 三道**实测全部判红**
+  （`R1002: set_timeout: 第一个参数必须是函数` / `未定义变量: __interp_dispatch__` /
+  `列表索引越界: 0 (len=0)`），每道逐字节还原 + 收尾重烘 + `--check-all` 复绿。
+- **顺带照出两个新缺口（登记 · 下一轮修）**：
+  · **缺陷 159（VM 轨 = 用户面默认轨）**：`bc_emit` **不支持函数体内 `FuncDef`**
+    （`bc_emit_stmt 未实现: [FuncDef, …]`），且**闭包捕获无 upvalue 机制**
+    （匿名 `fn` 里引用外层局部 ⇒ `运行时错误: 无法相加: null + int`）；而 C 轨 M129 起有 cell 捕获。
+  · **缺陷 160（C 轨）**：函数体内 `def` 的闭包捕获在运行期 `未定义变量: hits`
+    （M129 的 cell 只覆盖部分形态）。
+  ⇒ 闭包族（VM 轨 upvalue + 嵌套 def）是下一轮主题；本门已把复现器 `interp_fn_closure.px`
+  与 SKIP 报告就位（修好后门会提示"升级为三轨一致"）。
+- **验证**：`rebake --rebake-all` 成功 12 · 失败 0 → `--check-all` **14/14**（PXSRC/PXRT 全对齐）；
+  `m116_gates` 失败 0 项（含新接入的 `m158_interp_fn`）；`docs/native_index.json` 重派生
+  （+2 native：`interp_bridge` / `interp_bridge_install`）。
+
 ## M157 —— ONNX 执行面：张量 + 64 算子 + 拓扑执行器（第 39 轮 · qg-issue 87 · 缺陷 157/158/159）
 
 - **背景（覆盖表最后一行收尾）**：M156 只到"字节 → 结构 + 权重访问"；本轮把**执行**补齐：

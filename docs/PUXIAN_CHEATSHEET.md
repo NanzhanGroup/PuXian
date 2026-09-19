@@ -18,6 +18,15 @@
 > ③ 正则字符类**不认识 POSIX 类** `[[:space:]]` ⇒ **静默不匹配**（返回 null、不报错）⇒ 现支持
 >    `space/digit/alpha/alnum/upper/lower/xdigit/blank/punct/print/graph/cntrl`，**未知类名报错**。
 > 另修文档漂移：`http_request` 签名（§2 曾写反为 `(method, url)`）、native 计数（311→312）。
+> M158（2026-09-20，qg-issue 87 第 40 轮）：**解释轨函数值 → runtime native 桥（缺陷 114 根治）** ——
+> 解释轨把用户函数包装成 dict（`__ufn__`/`__builtin__`），而 runtime native 按 `PX_FUNC/PX_NATIVE`
+> 校验函数参数 ⇒ 直接转发会 `px_error`（**不可捕获**）终止进程：`R1002: set_interval: 第一个参数必须是函数`
+> （传**顶层命名函数**同样报错，不只是闭包）。受影响的是**整族**（`set_timeout`/`set_interval`/`signal`/
+> `http_serve`/`http_serve_unix`/`http_stream`/`sse_serve`/`ws_serve`/`udp_serve`/`route`/`middleware` …）。
+> 现建立双向桥（`interp_bridge_install` 注册调度器 + `bi_ffi_call` 对参数列表**自动桥接**）⇒
+> 一处修复全族生效；桥对象复用 M129 的 `env` 字段承载原函数值（GC 可达、不泄漏）。
+> 同轮修 **`type(函数值)` 三轨口径**（解释轨 `"fn"` → 编译轨口径 `"function"`）。门 `examples/m158_interp_fn/`。
+> 已知缺口（下一轮）：**VM 轨闭包 upvalue + 函数体内 `def`**（缺陷 159）、C 轨嵌套 `def` 捕获（缺陷 160）。
 > M141（2026-09-18，qg-issue 87 第 22 轮）：**墙钟纳秒 + unix 服务端 remote 对齐 Go** ——
 > ① 新增 native **`now_ns()`**（CLOCK_REALTIME 的 `sec*1e9+nsec`，与 `now_sec`/`time_format`
 >    同一时间轴）。此前语言里**没有墙钟纳秒**：`now_ms()`/`now_us()` 是 CLOCK_MONOTONIC
@@ -1599,3 +1608,28 @@ set_timeout(fn (): print("once after 2s"), 2000)
      一致地错」** —— 本轮实踩两次（生成器漏包 `GraphProto.node` 的 field 1 / 漏包
      `NodeProto.attribute` 的 field 5，两次都是"事实集完全一致"而模型是错的）。同理：门自己的
      比较逻辑也要验证（缺陷 156：tuple/list 形状不一致 ⇒ 12/12 全判不一致）。
+
+
+173. **`type(函数值) == "function"`（第 40 轮 · M158 统一口径）**：编译轨（VM/C）一直是 `"function"`
+     （runtime `px_type_name`），而解释轨此前返回 `"fn"` ⇒ **三轨分叉**（违反事实 39/122 的"三轨一致"）。
+     M158 起解释轨对齐 `"function"`（`"builtin"` → `"native"`）。`str(f)` 仍是 `<fn 名字>`（三轨一致）。
+     ⚠️ 别写 `type(f) == "fn"` —— 那在**任何一轨**都恒 false。
+174. **解释轨把「函数值」交给 runtime native 已可用（第 40 轮 · M158 · 缺陷 114 根治）**：
+     `set_timeout(on_timeout, 10)` / `set_interval(ticker, 20)` / `signal(10, on_sig)` /
+     `http_serve(port, handler)` 这类**接受函数参数**的 native，在解释轨（`px run` / `bootstrap/pxi`）里
+     现在与你传顶层函数、闭包（`fn ():`）都一致工作 —— 此前一律 `R1002 …必须是函数`（不可捕获、直接终止）。
+     机制：`bi_ffi_call` 把参数里的 `__ufn__`/`__builtin__` 包装**自动桥**成真 `PX_FUNC`，
+     native 回调时回到解释器执行 ⇒ **闭包捕获（env 链）语义完整**。
+     ⚠️ 边界：桥的调度器全局唯一（同进程多解释器实例不支持）；定时器/服务循环回调跑在**别的线程**，
+     解释器状态非线程安全 —— 与编译模式"用户自负责"同级（回调里只碰自己的数据，别与主线程抢同一份）。
+175. **VM 轨（用户面默认轨）闭包仍未打通（第 40 轮 · M158 实测 · 缺陷 159）**：
+     `def` 写在**函数体内** ⇒ 编译期 `运行时错误 [bc_emit_stmt_inner 行1294]: bc_emit_stmt 未实现:
+     [FuncDef, …]`；匿名 `fn ():` 引用**外层局部变量** ⇒ 运行期 `无法相加: null + int`
+     （VM 轨没有 upvalue/cell 机制，闭包体把外层局部当全局名）。**C 轨（`--c`）匿名 `fn` 有 cell 捕获，
+     但函数体内 `def` 同样失败（缺陷 160：`未定义变量: hits`）**。
+     ⇒ 写移植代码时：**需要闭包的场景先用解释轨或 C 轨验证**；VM 轨等 M159 修。
+     （门 `examples/m158_interp_fn/verify.sh` 的第 ⑤ 层每天盯着这两个缺口，修好会提示升级。）
+176. **门里的负控要「跑得动」才算有（第 40 轮 · M158 我的错）**：第一版门的收尾步骤是
+     `rebake --entries=pxi,pxi_vm`，而 `pxi_vm` 的重烘依赖 `selfhost/build/compiler_new`
+     —— 恰好被门自己的清理 `rm -rf selfhost/build` 删掉 ⇒ **收尾必红**（正判据全绿 + 负控全判红，
+     却整体 FAIL）。教训两条：① 清理要**精准**（删产物，别删目录）；② 门的收尾也要能解释自己为什么红。
