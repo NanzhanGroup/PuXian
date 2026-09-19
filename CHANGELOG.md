@@ -1,3 +1,62 @@
+## M150 —— 摘要/密钥派生族 + TLS 客户端族（第 32 轮 · qg-issue 87 · token-cache PostgreSQL 驱动移植的前提）
+
+- **背景**：token-cache 的持久层有 `postgres` 驱动（`storage.go` 的 `createDriver`），而要用
+  PuXian 重写它（lib/pq v1.12.3 的线上行为）会撞到**两块语言缺口**：
+  ① **认证面**：`AuthenticationMD5Password`（code 5）的应答是一条**嵌套 MD5** ——
+     `"md5" + hex( md5( hex(md5(password || user)) || salt ) )`，而语言里只有 `sha256` /
+     `hmac_sha256`（M84-S2），**没有 md5**；`SCRAM-SHA-256`（PG 14+ 服务端默认认证方式）的
+     `SaltedPassword = Hi(password, salt, i)` 就是 **PBKDF2-HMAC-SHA256**，语言里没有 PBKDF2，
+     手搓只能借 `hmac_sha256`（返回 **hex 文本**）⇒ 每轮 hex↔bytes 往返，既慢又易错。
+  ② **客户端 TLS**：语言此前**只有服务端 TLS**（`tls_server`）；客户端 TLS 只存在于
+     `http_get`/`http_post`/`s3_*` 的**内部**（`https_connect_t`）⇒ 任何"自己的协议跑在 TLS
+     之上"的客户端都写不出来。而 lib/pq 的 `sslmode` **缺省即 `require`**（`ssl.go`：
+     `case mode == "" || mode == SSLModeRequire`），且 require 的语义是
+     `InsecureSkipVerify = true`（**加密但不校验证书**）—— 没有这一族，PG 客户端只能在
+     `sslmode=disable` 下"装得像"，**"一律复现"就无从谈起**。
+- **新增 7 个 native**：
+  - `md5(data)` → 32 字符**小写 hex**（= `hex.EncodeToString(md5.Sum(x)[:])`）；收 str|bytes，二进制安全。
+  - `md5_bytes(data)` → **16 字节**（= `md5.Sum(x)` 本身；要文本用 `bytes_to_hex`）。
+  - `pbkdf2_sha256(password, salt, iterations, dklen)` → **原始字节**（密钥材料是二进制）。
+    `iterations < 1 → 1`（RFC 8018 要求 c ≥ 1）；`dklen < 1 → 32`；`dklen > 4096 → 4096`（防误用巨量分配）。
+    实现取 mbedtls 3.6.2 的 `mbedtls_md5` / `mbedtls_pkcs5_pbkdf2_hmac_ext`。
+  - `tls_connect(host, port[, opts])` → `{ok, id, fd, peer, version, version_num, cipher, cipher_id,
+    verify, stage, errno, err}`；`opts = {"timeout_ms", "verify"(**缺省 false**), "servername",
+    "read_timeout_ms"}`。`version_num` = **Go `tls.VersionTLS13` 口径**（0x0304）；
+    `cipher_id` = IANA 号（= Go `tls.CipherSuite` 常量）；`cipher` = **Go `tls.CipherSuiteName`
+    口径**（做了 `-`→`_` 与 `TLS1_3_`→`TLS_` 两步映射）；`stage` 与 `px_tcp_connect_timeout`
+    同码（多一档 `tls`）。**IP 字面量不发 SNI**（RFC 6066 / Go `hostnameInSNI` 同口径）。
+  - `tls_send(id, data)` → `{ok, n, err}`（失败时 n = 已写出字节数）。
+  - `tls_recv(id, maxlen)` → `{ok, data, n, eof, timeout, err}`（`close_notify`/FIN ⇒ `eof=true`，非错误）。
+  - `tls_close(id)` → bool（幂等；重复关闭 / 非法 id → false）。
+  - 句柄：进程级定长表（64）+ 互斥量；与 `tcp_*` 的裸 fd 同属"调用方负责生命周期"口径。
+- **本地实测踩到并写进注释的两个坑**：
+  - `mbedtls_ssl_conf_read_timeout` **只对 BIO 的 `f_recv_timeout` 回调生效** ——
+    `mbedtls_ssl_set_bio` 第 5 个参数传 `NULL` 时读超时**完全不生效**（表现为 `tls_recv` 永久挂起）；
+  - 服务端侧读不到 `SSLSocket.server_hostname`（那是**客户端**属性）⇒ 夹具只能挂 `sni_callback`
+    （第一版两侧都"读不到 SNI"，差点把夹具的问题判成运行时的缺陷）。
+- **名册/索引**：`selfhost/ibuiltin.px` 转发层 + `selfhost/interp.px` 名册各补 7 条；
+  `tools/lint_core.px` 名册由生成器重派生（359 → **366** 名）；`docs/native_index.json` **345 → 352**。
+- **门 `examples/m150_tls_crypto/`**：
+  - `corpus.txt` **148 条**（md5 47 + pbkdf2 81 + PG md5 认证 20；输入一律 hex 承载 ⇒ 必然含
+    NUL / 0x80+ 字节；md5 覆盖 512-bit 分块的**补位分界** 54/55/56/57 与 119/120/127/128/129、
+    全 0x00/0xFF、UTF-8 与**畸形** UTF-8；pbkdf2 覆盖 RFC 7914 §11 向量 + 迭代 {1,2,3,10,100,1000,4096}
+    × dklen {1,16,20,31,32,33,64,100}（**跨块**）+ 空口令/空盐/长口令）。
+  - 真值 = **Go 本尊**（crypto/md5 + crypto/hmac·sha256 **手写 PBKDF2**，只用标准库、CI 无需联网取依赖）
+    ⇒ **195 行**与 VM / C **双轨逐字节**一致。
+  - 自断言 **26 条**（含 RFC 真值、钳位策略、跨块前缀性质、**语言侧手搓 PBKDF2 与 native 互证**、
+    PG 认证链的独立复算与敏感性）+ 解释轨冒烟 **11 条**（run / vm / c 三条通路）。
+  - **TLS 三方对齐**：受控 Python TLS 服务端（自签证书，本机回环）把 PuXian 与 **Go `crypto/tls`**
+    放**同一个服务端**上跑同一套动作 ⇒ 实现无关子集（`insecure_ok` / `insecure_version_num` /
+    收发字节 / `eof` / `close_ok` / `verify_ok` / `peer_port`）**逐字节一致**；
+    `tls.CipherSuiteName(px_cipher_id) == px_cipher`；服务端 `sni_callback` 确实收到显式
+    `servername=example.test` 且**收不到** IP 字面量的 SNI；两侧对自签证书 + `verify=true` 的判定一致。
+  - **3 道负控**（篡改 `runtime.c` → 重建 → 门必须变红）：A md5 只取 15 字节做 hex（`red-assert`）·
+    B pbkdf2 的 `iters<1` 钳到 2（`red-assert`）· C TLS 缺省改成"校验证书"（`red-tls`）。
+  - 门**自身**的三处修正也记档：`bytes_set` 写时复制、PG 认证内层用 hex 文本（32 字节）而非
+    16 字节原始摘要、以及"0P/0F/0S 不是绿，是没跑"（负控 C 第一版**假绿**）。
+- **口径说明**：套件名**不跨实现比**（Go 与 mbedtls 的偏好序不同：本机实测 Go 选 0x1301、
+  mbedtls 选 0x1302）—— 比 `version_num` / 收发字节 / EOF，套件名只与**同一 id 的 Go 文本**比。
+
 ## M149 —— TCP「带超时 + 可辨别失败」族（第 31 轮 · qg-issue 87 · token-cache L2 Redis 移植的前提）
 
 - **背景**：token-cache 的 L2 是 Redis（`redis.addr` 非空即接），而既有 `tcp_*` 的**失败面**
