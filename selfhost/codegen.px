@@ -615,11 +615,15 @@ def cg_gen_func_named(f, cname):
     s += "    LXValue " + err_tag + "_val = px_null();\n"
     s += "    int " + err_tag + "_proped = 0;\n"
     # 函数体
+    # M152（缺陷 141）：逐语句的字符串累加同样平方级（同一函数内 N 条语句 ⇒
+    #   O(N × 函数体字数)）⇒ 语句块表 + 一次 join。
     let body = f[4]
+    var bchunks = []
     var bi = 0
     while bi < len(body):
-        s += cg_gen_stmt(body[bi], 1)
+        bchunks.push(cg_gen_stmt(body[bi], 1))
         bi += 1
+    s += join("", bchunks)
     s += err_tag + ":\n"
     s += "    if (" + err_tag + "_proped) return " + err_tag + "_val;\n"
     s += "    return px_null();\n"
@@ -695,22 +699,27 @@ def cg_generate(prog):
             j -= 1
         si += 1
     # 生成 impl 方法函数（先于顶层函数，静态分派需要前置定义）
+    # M152（第 34 轮 · 缺陷 141）：函数块先进**块表**，末尾一次 `join` 拼进 out ——
+    #   旧版 `out += cg_gen_func_named(...)` 每次都整串重分配 + 整串拷贝（px_add），
+    #   N 个函数 ⇒ O(N × 全文字数) 平方级；块表 push 摊还 O(1)。发射顺序/字节不变。
+    var fn_chunks = []
     var ii = 0
     while ii < len(impl_list):
         let type_name = impl_list[ii][0]
         let m = impl_list[ii][1]
         let fname = "fn_" + cg_func_cname(type_name) + "_" + cg_func_cname(rust_unescape(m[1]))
-        out += cg_gen_func_named(m, fname)
-        out += "\n"
+        fn_chunks.push(cg_gen_func_named(m, fname))
+        fn_chunks.push("\n")
         ii += 1
     # 生成顶层 def 函数
     var di = 0
     while di < len(items):
         let st = items[di]
         if st[0] == "FuncDef":
-            out += cg_gen_func(st)
-            out += "\n"
+            fn_chunks.push(cg_gen_func(st))
+            fn_chunks.push("\n")
         di += 1
+    out += join("", fn_chunks)
     # main()
     out += "int main(int argc, char** argv) {\n"
     out += "    px_args_init(argc, argv);\n"
@@ -734,13 +743,16 @@ def cg_generate(prog):
         out += "    px_set_global(\"" + type_name + "." + mname + "\", px_func(\"" + type_name + "." + mname + "\", " + fname + ", NULL));\n"
         ii2 += 1
     # 执行顶层语句（除定义/import 外）
+    # M152（缺陷 141）：同上，块表 + 一次 join（顶层语句可能成百上千条）。
+    var top_chunks = []
     var si2 = 0
     while si2 < len(items):
         let st = items[si2]
         let ty = st[0]
         if ty != "FuncDef" and ty != "StructDef" and ty != "EnumDef" and ty != "TraitDef" and ty != "ImplDef" and ty != "Import" and ty != "ExternDef":
-            out += cg_gen_stmt(st, 1)
+            top_chunks.push(cg_gen_stmt(st, 1))
         si2 += 1
+    out += join("", top_chunks)
     # 调用顶层 main()
     var has_main = false
     var mi3 = 0

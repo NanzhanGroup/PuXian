@@ -1155,7 +1155,28 @@ static void g_hash_put(uint64_t hv, int slot) {
 // 保守扫描只认对象本体地址（8 字节对齐），误标仅推迟回收（安全），漏标由暂存根
 // + 全局表 + 栈扫描综合兜底。
 
-#define GC_THRESHOLD_DEFAULT 100000   // 对象数触发阈值（可被 PX_GC_THRESHOLD 覆盖）
+// M152（第 34 轮 · 缺陷 143）：对象数触发阈值 **10 万 → 100 万**。
+//   实测（同为 VM 轨编译器整图发射 `--emit-c`，本机 8 核）：
+//     · stmt 语料 4000 语句：10 万 ⇒ **10.45s / 97MB**（GC 339 次、每次 10-33ms，
+//       占 70% 墙钟；其中后 200+ 次「回收 0 个」，纯白跑）
+//       100 万 ⇒ **2.03s / 292MB**（5.1× 提速，内存仍 < 旧版 450MB）
+//     · func 语料 1000 函数：10 万 ⇒ 8.58s/133MB ；100 万 ⇒ **3.39s/306MB**（2.5×）
+//   10 万对象 ≈ 8MB 堆 —— 对 16GB 机器是**荒谬地小**的阈值：GC 次数由
+//   「分配量 / 阈值」决定，而每次 GC 的代价是 O(全堆) ⇒ 阈值越小、白跑越多。
+//   内存下界由**字节阈值**（GC_TRIGGER_BYTES_DEFAULT）兜底，故对象阈值可以放大。
+//   （`PX_GC_THRESHOLD` 仍可覆盖；两者一起构成「时间 ↔ 内存」的显式旋钮。）
+#define GC_THRESHOLD_DEFAULT 1000000
+// M152（第 34 轮 · 缺陷 142）：**字节**触发阈值 —— 旧版 g_gc_trigger_bytes 是死代码
+//   （全仓无任何赋值点、无环境变量）⇒ 回收只由**对象数**决定，而「少量大对象、海量
+//   分配字节」的相位（字符串逐段拼接 / 逐块渲染）**永远打不到对象数阈值**：
+//   GC 不跑、RSS 无界增长。实测（第 34 轮）：VM 轨编译器整图渲染 16000 语句的整图
+//   ⇒ 114s / **峰值 7.2GB**（对比 2000 语句 3.0s/125MB），token-cache 整图 3:37 达
+//   8.1GB 仍未完成 —— 这正是 2026-09-19 全机 OOM（QQ 网关被 systemd 停掉→闪断）
+//   的枪。**对象数阈值管不住字节**，故补字节阈值：
+//     · 缺省 512MiB（PX_GC_TRIGGER_BYTES 覆盖；<=0 显式关闭）
+//     · 单线程 CLI/编译轨：到量即内联回收（无安全点问题）
+//     · 多线程服务轨：仍走既有「延迟到安全点」路径（改动只影响**何时**触发）
+#define GC_TRIGGER_BYTES_DEFAULT (512LL * 1024 * 1024)
 #define GC_HASH_MIN_CAP 4096          // 对象地址哈希集合初始容量
 
 static pthread_mutex_t g_gc_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -1364,6 +1385,14 @@ static void gc_init_env(void) {
     if (d && d[0] == '1') g_gc_debug = 1;
     const char* t = getenv("PX_GC_THRESHOLD");
     if (t && atoi(t) > 0) g_gc_threshold = atoi(t);
+    // M152（缺陷 142）：字节阈值 —— 未设环境变量时启用缺省（内存有界兜底）
+    const char* tb = getenv("PX_GC_TRIGGER_BYTES");
+    if (tb) {
+        long long v = atoll(tb);
+        g_gc_trigger_bytes = (v > 0) ? v : 0;   // <=0 ⇒ 显式关闭（旧行为）
+    } else {
+        g_gc_trigger_bytes = GC_TRIGGER_BYTES_DEFAULT;
+    }
     const char* inl = getenv("PX_GC_INLINE");
     if (inl && inl[0] == '1') g_gc_force_inline = 1;
     // M92：PX_GC_PRECISE=1 强制 precise 模式（debug/回归驱动；产物插桩正式生效前用）。
@@ -4985,13 +5014,24 @@ static LXValue bi_join(LXValue* args, int nargs, void* ctx) {
     }
     char* out = xmalloc(total);
     out[0] = 0;
+    // M152（第 34 轮 · 缺陷 141a）：**游标写入** —— 旧实现每项都 strcat/strncat 从
+    //   头上重扫（Σ 前缀长 ⇒ O(n × 总长) 平方级）。而 `join("", 块表)` 正是编译器
+    //   整图渲染的必经路（块数 = 语句/指令数，总长 = 整份 C 文本）⇒ 平方级被放大到
+    //   语句数 × 文本长。字节口径不变（仍逐项 strlen ⇒ 项内内嵌 NUL 处截断）。
+    char* wp = out;
     for (int i = 0; i < n; i++) {
-        if (i) strncat(out, sep, sep_len);
+        if (i) { memcpy(wp, sep, (size_t)sep_len); wp += sep_len; }
         LXValue item = (args[1].type == PX_LIST) ? o->as.list.items[i] : o->as.tuple.items[i];
         char* ts = px_to_string(item);
-        strcat(out, ts);
+        size_t tl = strlen(ts);
+        memcpy(wp, ts, tl); wp += tl;
     }
-    return px_str(out);
+    *wp = 0;
+    // 缺陷 141b：旧实现 `px_str(out)` 是**复制**（px_str_len 把字节内联拷进新对象）
+    //   ⇒ 拼装缓冲整段泄漏（每次 join 漏一个总长缓冲）。改为按显式长度构造 + 归还。
+    LXValue rv = px_str_len(out, (int)(wp - out));
+    xfree(out);
+    return rv;
 }
 
 // M83-S1（Issue 16 GAP-STR-1-B1）：字节级子串查找（hay[0..hl)/ned[0..nl)，可含 NUL），
@@ -12207,8 +12247,10 @@ static int sock_send_all(int fd, const char* data, int len) {
     int sent = 0;
     while (sent < len) {
         int n = (int)send(fd, data + sent, len - sent, 0);
-        if (n <= 0) return -1;
-        sent += n;
+        if (n > 0) { sent += n; continue; }
+        // M152（缺陷 146）：EINTR 重试（stop-the-world GC 的暂停信号会打断阻塞写）
+        if (n < 0 && errno == EINTR) continue;
+        return -1;
     }
     return sent;
 }
@@ -12298,7 +12340,12 @@ static LXValue bi_tcp_recv(LXValue* args, int nargs, void* ctx) {
     int maxlen = (int)args[1].as.i;
     if (maxlen <= 0) maxlen = 1;
     char* buf = xmalloc(maxlen + 1);
-    int n = (int)recv(fd, buf, maxlen, 0);
+    int n;
+    // M152（缺陷 146）：EINTR 重试（与 px_tcp_recv_ex 同口径）
+    for (;;) {
+        n = (int)recv(fd, buf, maxlen, 0);
+        if (n >= 0 || errno != EINTR) break;
+    }
     if (n <= 0) { xfree(buf); return px_str(""); }
     buf[n] = 0;
     LXValue r = px_str_len(buf, n);
@@ -13382,6 +13429,12 @@ PxConn* px_pxconn_from_https(void* hs) {
 }
 
 // 统一发送（tls 非空走 mbedtls，否则走 fd send）
+// M152（第 34 轮 · 缺陷 146）：**EINTR 必须重试** —— 多线程/协程模式下 stop-the-world GC
+//   会向工作线程投递暂停信号（SIG_GC_STOP）⇒ 阻塞在 `recv`/`send` 上的线程被中断，
+//   系统调用返回 -1/EINTR(4)。旧实现把它当成"连接关闭"，于是**在途请求被 GC 打成网络错误**
+//   （实测：m144 门 VM 轨在大请求体 + 字节阈值触发 GC 时稳定报
+//    `net: http_unix 请求失败: 连接关闭 (4)` —— 4 就是 EINTR）。
+//   POSIX 口径：EINTR 是「信号打断、调用未成功」，**重试**是唯一正确处理。
 static int conn_send(HttpsSession* tls, int fd, const char* data, int len) {
     if (!tls) return sock_send_all(fd, data, len);
     int sent = 0;
@@ -13394,7 +13447,15 @@ static int conn_send(HttpsSession* tls, int fd, const char* data, int len) {
     return sent;
 }
 static int conn_recv(HttpsSession* tls, int fd, char* buf, int len) {
-    if (!tls) return (int)recv(fd, buf, (size_t)len, 0);
+    if (!tls) {
+        // M152（缺陷 146）：EINTR 重试（同 px_tcp_recv_ex 的既有口径）
+        for (;;) {
+            int n = (int)recv(fd, buf, (size_t)len, 0);
+            if (n >= 0) return n;
+            if (errno == EINTR) continue;
+            return n;
+        }
+    }
     for (;;) {
         int n = mbedtls_ssl_read(&tls->ssl, (unsigned char*)buf, (size_t)len);
         if (n == MBEDTLS_ERR_SSL_WANT_READ || n == MBEDTLS_ERR_SSL_WANT_WRITE) continue;
@@ -15236,6 +15297,7 @@ static char* px_http_once(const char* url, const char* method, const char* body,
         for (;;) {
             if (len + 4096 > cap) { cap *= 2; resp = xrealloc(resp, cap); }
             int n = (int)recv(fd, resp + len, 4096, 0);
+            if (n < 0 && errno == EINTR) continue;   // M152（缺陷 146）：EINTR 重试
             if (n <= 0) break;
             len += n;
         }
