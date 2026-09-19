@@ -1781,7 +1781,11 @@ def bc_emit_c_program(prog):
         elif k["kind"] == "float":
             out.push("    {PXK_FLT, 0, " + cg_fmt_float(k["f"]) + ", NULL},\n")
         elif k["kind"] == "str":
-            out.push("    {PXK_STR, 0, 0, \"" + cg_escape_str(k["s"]) + "\"},\n")
+            # M155（缺陷 148）：含 NUL 的常量走 `PXK_STR_LIT`（K 项 i 字段 = 真字节长）
+            if cg_has_nul(k["s"]):
+                out.push("    PXK_STR_LIT(\"" + cg_escape_str(k["s"]) + "\"),\n")
+            else:
+                out.push("    {PXK_STR, 0, 0, \"" + cg_escape_str(k["s"]) + "\"},\n")
         elif k["kind"] == "bool":
             var bv = "0"
             if k["i"] != 0:
