@@ -754,6 +754,11 @@ case "$cmd" in
     # M152（缺陷 144）：打印当前源码对应的 runtime 缓存目录（**按 rt_key**，不猜 mtime）
     #   用法：px rtcache [cuts...] —— 供 rebake_bin.sh 等"必须链对 runtime"的路径使用。
     rtcache) shift; rt_ensure "${1:-}" "${2:-gcc}" "${3:-0}" ;;
+    # M153（缺陷 147）：**只算 key 不编译** —— 门用。为什么需要：rtcache 会因为
+    #   runtime 编译失败而报错退出，而调用方若把"取不到 key"当成"跳过核对"，
+    #   就会在**runtime 链错**的情况下报绿（第 35 轮实测踩中：门打印"⚠️ 取不到
+    #   当前 rt_key ⇒ 跳过 runtime 核对"，随后仍输出"✅ 全件源码链一致"）。
+    rtkey)   shift; rt_key "${1:-}" "${2:-gcc}" "${3:-0}" ;;
     --version|-v) echo "px $RELEASE_VER";;
     help|--help|-h) usage ;;
     *) echo "未知子命令: $cmd" >&2; usage >&2; exit 1 ;;
