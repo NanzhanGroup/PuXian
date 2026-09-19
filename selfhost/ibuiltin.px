@@ -967,6 +967,41 @@ def i_call_builtin(name, args, pos):
         if len(args) != 1:
             return Err(i_r1002("onnx_model_close 需要 1 个参数 (id)", pos))
         return Ok(onnx_model_close(args[0]))
+    # ---- M157（第 39 轮）：ONNX **执行面** + 张量字节助手（同样只做参数个数预检）----
+    #   ⚠️ 缺陷 155 的教训：新 native 必须**同时**进 interp.px 名册（否则 R1001）与
+    #   这里的分发（否则 R1002）—— 两件事，缺一不可。
+    if name == "onnx_run":
+        if len(args) != 2:
+            return Err(i_r1002("onnx_run 需要 2 个参数 (id, feeds)", pos))
+        return Ok(onnx_run(args[0], args[1]))
+    if name == "onnx_op_names":
+        if len(args) != 0:
+            return Err(i_r1002("onnx_op_names 需要 0 个参数", pos))
+        return Ok(onnx_op_names())
+    if name == "f32_bytes":
+        if len(args) != 1:
+            return Err(i_r1002("f32_bytes 需要 1 个参数 (列表)", pos))
+        return Ok(f32_bytes(args[0]))
+    if name == "f32_at":
+        if len(args) != 2:
+            return Err(i_r1002("f32_at 需要 2 个参数 (bytes, i)", pos))
+        return Ok(f32_at(args[0], args[1]))
+    if name == "f32_count":
+        if len(args) != 1:
+            return Err(i_r1002("f32_count 需要 1 个参数 (bytes)", pos))
+        return Ok(f32_count(args[0]))
+    if name == "i64_bytes":
+        if len(args) != 1:
+            return Err(i_r1002("i64_bytes 需要 1 个参数 (列表)", pos))
+        return Ok(i64_bytes(args[0]))
+    if name == "i64_at":
+        if len(args) != 2:
+            return Err(i_r1002("i64_at 需要 2 个参数 (bytes, i)", pos))
+        return Ok(i64_at(args[0], args[1]))
+    if name == "i64_count":
+        if len(args) != 1:
+            return Err(i_r1002("i64_count 需要 1 个参数 (bytes)", pos))
+        return Ok(i64_count(args[0]))
     return Err(i_r1002("未知内置函数: " + name, pos))
 # ---- M59-S4 数学直调 helper（双模式对齐） ----
 # 解释器参数错误返回 Err（不终止进程，区别于编译模式 px_error 终止）；
