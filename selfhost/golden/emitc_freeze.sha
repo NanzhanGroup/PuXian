@@ -70,6 +70,8 @@ examples/m150_tls_crypto/tls_probe.px rc=0 out=fdaf8330f61a59ac4f1d82622a123609 
 examples/m151_pg_tls_bytes/px_probe.px rc=0 out=ee1dfb1be0a318936b6ed0e5708e72f4 err=e3b0c44298fc1c14
 examples/m153_alloc/alloc_corpus.px rc=0 out=c5906760dcf3688cd7bd9a183fa5916e err=e3b0c44298fc1c14
 examples/m153_alloc/pool.px rc=0 out=262f7682e7b8b0d2574ae8ed0231c0f3 err=e3b0c44298fc1c14
+examples/m154_alloc2/budget2.px rc=0 out=f0c08580a663d0b4b47e1ca7c703cc6c err=e3b0c44298fc1c14
+examples/m154_alloc2/m154_sem.px rc=0 out=035e4fe4bb8fa7ef17bd3348865aa8cc err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px rc=0 out=ca57a90d693278f051ce29d427bb006a err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px rc=0 out=864a86fa0f3b5c69d3239ebdb2eac63a err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14

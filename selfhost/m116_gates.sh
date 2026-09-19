@@ -124,6 +124,11 @@ run m151_pg_tls_bytes bash examples/m151_pg_tls_bytes/verify.sh
 #   （runtime 编译失败 ⇒ 重烘门静默跳过 ⇒ **退化放行暗门**）。
 #   含：三轨语义（37 断言）· 分配预算硬阈值（计数可复现）· 输出冻结 · 3 道负控。
 run m153_alloc bash examples/m153_alloc/verify.sh
+# M154（第 36 轮）：分配率第二刀 —— 小整数 `str()` 池 + 多字节 rune 池 + join 字节精确
+#   （缺陷 149）+ 常量池按指针哈希 + 比较器同一性快路径 + 钉住表去重集合。
+#   含：三轨语义（57 断言，含内嵌 NUL 的 join/`+` 逐字节一致）· 分配预算硬阈值 · 输出冻结
+#   · 3 道负控（关 rune 池 / 关整数文本池 ⇒ 预算红；join 退回 strlen ⇒ 语义红）。
+run m154_alloc2 bash examples/m154_alloc2/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们
