@@ -935,6 +935,15 @@ def i_call_builtin(name, args, pos):
         if len(args) != 1:
             return Err(i_r1002("tls_close 需要 (id)", pos))
         return Ok(tls_close(args[0]))
+    if name == "tls_upgrade":
+        # tls_upgrade(fd[, opts]) → dict{ok,id,fd,peer,version,version_num,cipher,cipher_id,verify,stage,errno,err}
+        # M151-S1：在已连接 fd 上升级 TLS（PostgreSQL SSLRequest 协商必需）。
+        #   成功 ⇒ 句柄表接管 fd；失败 ⇒ fd 仍归调用方。
+        if len(args) != 1 and len(args) != 2:
+            return Err(i_r1002("tls_upgrade 需要 (fd[, opts])", pos))
+        if len(args) == 2:
+            return Ok(tls_upgrade(args[0], args[1]))
+        return Ok(tls_upgrade(args[0]))
     return Err(i_r1002("未知内置函数: " + name, pos))
 # ---- M59-S4 数学直调 helper（双模式对齐） ----
 # 解释器参数错误返回 Err（不终止进程，区别于编译模式 px_error 终止）；

@@ -9,6 +9,18 @@
 #   - 递归加载子 import；loaded 缓存避免重复
 # 对拍：含 import 的用例（s08）C 源码与 Rust 版逐字节一致
 # ============================================================
+# ---------- 诊断（**本文件自足**，缺陷 138） ----------
+# cg_perr / cg_pwarn 定义在 codegen.px，而本文件**同时**被 interp.px 直接 import
+# （解释轨的 import 合并）—— 解释轨里没有 codegen.px ⇒ 走到"模块缺失"这条诊断路径时
+# `未定义变量: cg_pwarn` / `cg_perr`，**诊断本身把进程打挂**（实测：`px run` 一个
+# `import "./nope.px"` 的文件，报的是 cg_module 行 203 的未定义变量，而不是那句警告）。
+# 修法：把这两个诊断在**本文件**里实现一份（文案与 codegen.px 逐字节相同），
+# 调用点改走 cgm_*；codegen.px 的同名函数保留（其内部调用点不动）。
+def cgm_perr(code, msg):
+    print_err("编译错误 " + code + ": " + msg)
+    exit(1)
+def cgm_pwarn(msg):
+    print_err("[警告] " + msg)
 # ---------- 工具 ----------
 def cg_dirname(path):
     var i = len(path) - 1
@@ -199,8 +211,8 @@ def cg_load_module(module, names, base_dir, out, std_defined):
         if module[0] == "std" and dir == null:
             hint = "；stdlib 未找到（设 PX_STDLIB 或放置 stdlib/）"
         if env("PX_STRICT_MODULE") != null:
-            cg_perr("E3005", "找不到模块 '" + key + "'" + hint)
-        cg_pwarn("找不到模块 '" + key + "'（已跳过 → 运行期将报未定义）" + hint)
+            cgm_perr("E3005", "找不到模块 '" + key + "'" + hint)
+        cgm_pwarn("找不到模块 '" + key + "'（已跳过 → 运行期将报未定义）" + hint)
         return
     # 缺陷 131：同一文件经不同拼写（"./x.px" / "./../dir/x.px"）到达时 key 不同
     # ⇒ 修前重复加载并重复导出定义（C 轨 redefinition / VM 轨静默覆盖）。
