@@ -1,0 +1,37 @@
+# M154 门（预算语料）：分配率硬阈值门的输入
+#   三个相位分别打本轮三处池化目标：
+#     ① 多字节 rune 索引（2..4 字节短串池）② 小整数 str()（[-64,4096] 文本池）
+#     ③ join 组装（单次分配 + 列表）
+#   任一池化退回 ⇒ 对应相位计数成量级回升（阈值见 verify.sh）。
+#   注意：计数**完全确定**（同源码 + 同实现 ⇒ 同数字），故可做硬门；时间不做门。
+var N = 200000
+let W = "世界经济"
+
+def phase_rune():
+    var i = 0
+    var n = 0
+    while i < N:
+        let c = W[i % 4]
+        n = n + len(c)
+        i = i + 1
+    return n
+
+def phase_intstr():
+    var i = 0
+    var n = 0
+    while i < N:
+        let s = str(i % 1000)
+        n = n + len(s)
+        i = i + 1
+    return n
+
+def phase_join():
+    var i = 0
+    var n = 0
+    while i < N:
+        let s = join("", ["ab", str(i % 10), "cd", str(i % 7), "e", "f"])
+        n = n + len(s)
+        i = i + 1
+    return n
+
+print("alloc2-corpus " + str(phase_rune()) + " " + str(phase_intstr()) + " " + str(phase_join()))

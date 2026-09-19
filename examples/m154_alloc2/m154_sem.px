@@ -1,0 +1,105 @@
+# M154 门（语义）：分配率第二刀 —— 池化与 join 字节口径的**可观测语义不得变化**
+#   本轮四处改动：
+#     ① join / 分隔符按**显式字节长**拼接（缺陷 149：旧实现 strlen ⇒ 内嵌 NUL 静默截断）
+#     ② 小整数 `str()` 池（[-64, 4096]，域外走原路）
+#     ③ 多字节 rune 短串池（2..4 字节，`s[i]` 的多字节分支）
+#     ④ 常量池按指针哈希 + 比较器对象同一性快路径 + 钉住表去重集合（①②③ 的支撑）
+#   本文件断言的全是**值语义**（不依赖对象身份），另加「跨 GC 存活」（钉住表的核心功能）。
+#   口径来源：Go `strings.Join`（字节精确，不因 NUL 截断）= `+`（px_add 按 str.len）。
+var n_pass = 0
+var n_fail = 0
+def ck(name, cond):
+    if cond:
+        n_pass = n_pass + 1
+        print("PASS " + name)
+    else:
+        n_fail = n_fail + 1
+        print("FAIL " + name)
+
+# ---------- A 缺陷 149：join 字节精确（含内嵌 NUL） ----------
+# 含 NUL 的串只能从 bytes 造（`"\u{0}"` 字面量三轨都解码成空串 —— 缺陷 148，另登记）
+let SN = bytes_to_str(hex_to_bytes("410042"))          # "A\0B" = 3 字节
+let SL = bytes_to_str(hex_to_bytes("007c00"))          # "\0|\0" = 3 字节（分隔符含 NUL）
+ck("A1 bytes_to_str 长度 3", len(SN) == 3)
+ck("A2 join 单元素保 NUL", len(join("", [SN])) == 3)
+ck("A3 join 单元素与 + 一致", join("", [SN]) == SN)
+ck("A4 join 带分隔符保 NUL（长度）", len(join("|", [SN, "x"])) == 5)
+ck("A5 join 等价 + 链（内容）", join("|", [SN, "x"]) == SN + "|" + "x")
+ck("A6 含 NUL 分隔符：join 与 + 一致", join(SL, ["a", "b"]) == "a" + SL + "b")
+ck("A7 含 NUL 分隔符：长度", len(join(SL, ["a", "b"])) == 5)
+ck("A8 数字项 join 不受影响", join("-", [1, 2, 3]) == "1-2-3")
+ck("A9 空列表 join", join(",", []) == "")
+ck("A10 单元素 join 无分隔符", join(",", ["a"]) == "a")
+ck("A11 多项含 NUL 项与 + 链一致", join("", [SN, SN, "z"]) == SN + SN + "z")
+ck("A12 元组 join", join("|", (SN, "y")) == SN + "|" + "y")
+
+# ---------- B 小整数 str() 池（域内/域外口径一致） ----------
+ck("B1 str(0)", str(0) == "0")
+ck("B2 str(-64) 域下界", str(-64) == "-64")
+ck("B3 str(4096) 域上界", str(4096) == "4096")
+ck("B4 str(4097) 域外同口径", str(4097) == "4097")
+ck("B5 str(-65) 域外同口径", str(-65) == "-65")
+ck("B6 str(12345) 域外同口径", str(12345) == "12345")
+ck("B7 池化后拼接一致", str(7) + str(8) == "78")
+ck("B8 池化结果作 dict 键", {"12": 5}[str(12)] == 5)
+ck("B9 往返 int(str(v))", int(str(321)) == 321)
+ck("B10 同值同文本", str(9) == str(9))
+ck("B11 池化结果与字面量相等", str(3) == "3")
+ck("B12 池化结果可比较序", str(2) < str(3))
+ck("B13 大整数", str(9223372036854775807) == "9223372036854775807")
+ck("B14 str 结果长度", len(str(4096)) == 4)
+
+# ---------- C 多字节 rune 池（2..4 字节 rune） ----------
+let W = "世界经济"
+let E = "\u{1d11e}x"                                    # U+1D11E = 4 字节
+ck("C1 三字节 rune 索引", W[0] == "世")
+ck("C2 三字节 rune 末位", W[3] == "济")
+ck("C3 rune 长度", len(W) == 4)
+ck("C4 索引拼接", W[0] + W[3] == "世济")
+ck("C5 四字节 rune（补充平面）", E[0] == "\u{1d11e}")
+ck("C6 四字节 rune 字节数", bytes_len(bytes(E[0])) == 4)
+ck("C7 索引与切片一致", E[0] == E[0:1])
+ck("C8 索引结果作 dict 键", {W[0]: 1}[W[0]] == 1)
+ck("C9 索引结果可比较序", W[0] < W[1])
+ck("C10 索引结果不可变：源串不变", W == "世界经济")
+# 口径备忘：`len()` 是 **rune 数**（字符数），字节数走 `bytes_len(bytes(s))`。
+ck("C11 NUL 与 rune 混合串字节数", bytes_len(bytes(bytes_to_str(hex_to_bytes("e4b89600")))) == 4)
+ck("C11b 混合串 rune 数", len(bytes_to_str(hex_to_bytes("e4b89600"))) == 2)
+ck("C12 池化边界 2 字节 rune", "é"[0] == "é")
+ck("C13 二字节 rune 字节数", bytes_len(bytes("é"[0])) == 2)
+
+# ---------- D 对象同一性快路径不改语义 ----------
+let q = "abc"
+let r = "abc" + ""
+ck("D1 相等", q == r)
+ck("D2 长度相等", len(q) == len(r))
+ck("D3 序关系（同长同内容）", not (q < r))
+ck("D4 内容等价：dict 键可换", {q: 1}[r] == 1)
+ck("D5 contains 按内容", contains(["abc"], r))
+ck("D6 不等仍然不等", q != "abd")
+ck("D7 前缀不等", not (q == "ab"))
+ck("D8 池化单字符参与相等", W[0] == W[0])
+ck("D9 池化单字符参与不等", W[0] != W[1])
+ck("D10 数字文本与整数字面量比较", str(42) == "42")
+
+# ---------- E 跨 GC 存活（池化对象一律钉住） ----------
+let keep_cjk = W[0]
+let keep_int = str(1234)
+let keep_ch = "pool"[0]
+let keep_nul = SN
+ck("E1 保留值初态", keep_cjk == "世" and keep_int == "1234" and keep_ch == "p" and len(keep_nul) == 3)
+var junk = []
+var k = 0
+while k < 40000:
+    junk.append("t" + str(k) + W[k % 4])
+    if len(junk) > 64:
+        junk = []
+    k = k + 1
+ck("E2 大分配后 CJK 池对象仍有效", keep_cjk == "世" and bytes_len(bytes(keep_cjk)) == 3)
+ck("E3 大分配后整数文本仍有效", keep_int == "1234" and int(keep_int) == 1234)
+ck("E4 大分配后单字符仍有效", keep_ch == "p")
+ck("E5 大分配后含 NUL 串仍有效", len(keep_nul) == 3 and join("", [keep_nul]) == keep_nul)
+ck("E6 池对象重新索引一致", keep_cjk == W[0])
+ck("E7 池对象参加 join 一致", join("-", [keep_cjk, keep_int]) == "世-1234")
+
+print("pass=" + str(n_pass) + " fail=" + str(n_fail))
