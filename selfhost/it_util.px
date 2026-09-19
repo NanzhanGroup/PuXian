@@ -53,6 +53,8 @@ def it_find(s, sub):
     return -1
 # 字符串 debug 格式（rust_str_debug，带引号）→ 原始字符串
 # 对齐 codegen.px rust_unescape（AST 字段为 debug 格式）
+def it_nul_char():
+    return bytes_to_str(int_to_bytes(0, 1))
 def rust_unescape(s):
     let body = s[1:len(s) - 1]
     var _out = []
@@ -71,7 +73,7 @@ def rust_unescape(s):
                 _out.append("\r")
                 i += 2
             elif nxt == "0":
-                _out.append("\u{0}")
+                _out.append(it_nul_char())
                 i += 2
             elif nxt == "\"":
                 _out.append("\"")

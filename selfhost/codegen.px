@@ -285,6 +285,21 @@ def cg_pad(n):
         i += 1
     return join("", _s)
 # 字符串 debug 格式（rust_str_debug，带引号）→ 原始字符串
+# M155（第 37 轮 · 缺陷 148）：NUL 字符的**运行时构造**（不用字面量 `"\u{0}"`）。
+#   为什么：**自举安全** —— 修复前的编译器把 `"\u{0}"` 编成空串（旧发射器 NUL 丢弃 +
+#   `px_str()` 按 C 串重造），于是"用旧编译器编新源码"时本文件里的 NUL 字面量会静默变 `""`
+#   （这正是缺陷 148 的成因之一：三轨「一致地错」）。运行时构造在**新旧编译器下都正确**。
+def cg_nul_char():
+    return bytes_to_str(int_to_bytes(0, 1))
+# M155：字面量里是否含 NUL（决定发射成 `px_str` 还是长度精确的 `PX_STR_LIT`）
+def cg_has_nul(s):
+    let n = cg_nul_char()
+    var i = 0
+    while i < len(s):
+        if s[i] == n:
+            return true
+        i += 1
+    return false
 def rust_unescape(s):
     let body = s[1:len(s) - 1]
     var _out = []
@@ -303,7 +318,7 @@ def rust_unescape(s):
                 _out.append("\r")
                 i += 2
             elif nxt == "0":
-                _out.append("\u{0}")
+                _out.append(cg_nul_char())
                 i += 2
             elif nxt == "\"":
                 _out.append("\"")
@@ -342,10 +357,14 @@ def cg_escape_str(s):
             _out.append("\\r")
         elif c == "\t":
             _out.append("\\t")
-        elif c == "\u{0}":
-            # NUL：编译版字符串按 strlen 截断无法表达 NUL；与 Rust codegen.rs
-            # escape_str（NUL 丢弃）保持一致（M-B8 自举证明）
-            _out.append("")
+        elif c == cg_nul_char():
+            # M155（缺陷 148）：NUL 改为 **C 八进制转义 `\\000`（恒 3 位）**。
+            #   · 为什么是 3 位：C 的八进制转义最多吃 3 位 —— 写 `\\0` 时后随的八进制
+            #     数字会被吞掉（`"a\\01"` 是 `0x01` 而不是 `NUL` + `'1'`），3 位后**必停**。
+            #   · 旧的「NUL 丢弃」是 M-B8 为与 Rust 版逐字节一致而立项的（那时 C 串按
+            #     strlen 重造，NUL 本就表达不出来）；M155 起配套 `PX_STR_LIT` / `PXK_STR_LIT`
+            #     用 `sizeof(lit) - 1` 带长度 ⇒ **NUL 可被如实表达**（对齐 Go：`"\x00"` 是 1 字节串）。
+            _out.append("\\000")
         else:
             _out.append(c)
         i += 1

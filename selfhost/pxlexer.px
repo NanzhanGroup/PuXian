@@ -460,6 +460,12 @@ def scan_interp_expr(str_pos_line, str_pos_col):
         else:
             toks.append(scan_operator_token())
     return toks
+# M155（第 37 轮 · 缺陷 148）：NUL 字符的**运行时构造**（不用字面量 `"\u{0}"`）。
+#   为什么：**自举安全** —— 修复前的编译器把 `"\u{0}"` 编成空串（旧发射器 NUL 丢弃 +
+#   `px_str()` 按 C 串重造），于是"用旧编译器编新源码"时本文件里的 NUL 字面量会静默变 `""`
+#   （这正是缺陷 148 的成因之一：三轨「一致地错」）。运行时构造在**新旧编译器下都正确**。
+def lx_nul_char():
+    return bytes_to_str(int_to_bytes(0, 1))
 def hex_to_char(hex):
     let cp = hex_to_int(hex)
     if cp <= 127:
@@ -503,7 +509,7 @@ def scan_escape(str_pos_line, str_pos_col):
         return "'"
     if c == "0":
         advance()
-        return "\u{0}"
+        return lx_nul_char()
     if c == "$":
         advance()
         return "$"
@@ -554,7 +560,7 @@ def char_debug(c):
         return "'\\r'"
     if c == "\t":
         return "'\\t'"
-    if c == "\u{0}":
+    if c == lx_nul_char():
         return "'\\0'"
     let code = ctrl_codepoint(c)
     if code >= 0:

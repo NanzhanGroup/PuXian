@@ -91,7 +91,13 @@ def cg_gen_expr(expr):
     if ty == "Float":
         return "px_float(" + cg_fmt_float(expr[1]) + ")"
     if ty == "Str":
-        return "px_str(\"" + cg_escape_str(rust_unescape(expr[1])) + "\")"
+        let sv = rust_unescape(expr[1])
+        # M155（缺陷 148）：含 NUL 的常量改用长度精确的 `PX_STR_LIT`
+        #   （`sizeof(lit)-1` 在 C 编译期给出**含内嵌 NUL 的**真字节长）；
+        #   不含 NUL 的常量发射文本**一字不变**（emitc_freeze 门守）。
+        if cg_has_nul(sv):
+            return "PX_STR_LIT(\"" + cg_escape_str(sv) + "\")"
+        return "px_str(\"" + cg_escape_str(sv) + "\")"
     if ty == "Bool":
         if expr[1]:
             return "px_bool(true)"
