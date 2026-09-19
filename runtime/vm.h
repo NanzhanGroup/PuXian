@@ -122,6 +122,11 @@ typedef struct {
     const char* s;     // PXK_STR
 } PxK;
 
+// M155（第 37 轮 · 缺陷 148）：含内嵌 NUL 的字符串常量 —— K 项的 `i` 字段携带**真字节长**
+//   （由 C 编译期 `sizeof(lit) - 1` 给出）。i == 0 表示「旧口径：按 strlen」（发射文本不变，
+//   既有 emitc_freeze 契约不破）；i > 0 ⇒ vm_loadk 走 px_str_const_n(s, i)。
+#define PXK_STR_LIT(lit) {PXK_STR, (int)sizeof(lit) - 1, 0.0, lit}
+
 // ==================== 函数/模块元数据 ====================
 // PxVMFunc 非 LXObject（进程级常驻，不参与 GC 回收，S3-D 才纳入标记根面）；
 // 统一函数对象 PX_FUNC {name, fn=px_vm_entry, ctx=PxVMFunc*} → px_call 零改动（D2）。

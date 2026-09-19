@@ -2625,6 +2625,20 @@ LXValue px_str_const(const char* s) {
     return v;
 }
 
+// M155（缺陷 148）：**显式字节长**的字面量常量池入口（含 NUL 的常量）。
+//   键仍是**指针**（同一地址 ⇒ 同一内容与长度：发射器里 `PX_STR_LIT` 的 `sizeof(lit)-1`
+//   与字面量一一对应，C 的字面量合并只在字节完全相同（含结尾）时发生）⇒ 与 `px_str_const`
+//   共用同一张表不冲突。复用缓存 ⇒ LOADK 的热路径仍零分配。
+LXValue px_str_const_n(const char* s, int len) {
+    if (!s || len <= 0) return px_empty_str_get();
+    LXObject* o = px_const_get(s);
+    if (o) { LXValue v; v.type = PX_STR; v.as.obj = o; return v; }
+    LXValue v = px_str_len_raw(s, len);
+    px_pin_obj(v.as.obj);
+    px_const_put(s, v.as.obj);
+    return v;
+}
+
 // M23b：二进制安全字节串构造（复制 len 字节，可含 NUL；union 复用 str data/len）
 LXValue px_bytes_len(const void* data, int len) {
     LXValue v; v.type = PX_BYTES;
@@ -3369,8 +3383,15 @@ static char* rsb_done(RStrBuf* b) {
     xfree(b->data);
     return out;
 }
-static int px_cmp_cstr(const void* a, const void* b) {
-    return strcmp(*(const char* const*)a, *(const char* const*)b);
+static char* rsb_done_len(RStrBuf* b, int* out_len) {   // M155：带长度收尾（内嵌 NUL 也算）
+    if (out_len) *out_len = b->len;
+    return rsb_done(b);
+}
+// M155（缺陷 150）：dict 渲染的排序项「文本 + 长度」随行 —— 排序键仍是 strcmp（口径不变），
+//   但 append 用真长度（此前 append 用 strlen(parts[i])，含内嵌 NUL 的值会被截断）。
+typedef struct { char* p; int len; } PxDisp;
+static int px_cmp_disp(const void* a, const void* b) {
+    return strcmp(((const PxDisp*)a)->p, ((const PxDisp*)b)->p);
 }
 
 // ==================== 输出 ====================
@@ -3416,23 +3437,29 @@ static void px_path_push(PxPath* p, const LXObject* o) {
 }
 static void px_path_pop(PxPath* p) { if (p->n > 0) p->n--; }
 
-static char* px_fmt_value_raw(LXValue v);
-static char* px_fmt_value(LXValue v) {
+// M155（第 37 轮 · 缺陷 150）：渲染结果**带长度**。此前 `px_fmt_value` 只回 `char*`，
+//   而全部调用方一律 `strlen(s)` / `printf("%s")` ⇒ **渲染出的内嵌 NUL 被截断**：
+//   实测 `print(bytes_to_str(hex_to_bytes("410042")))` 只写出 `A`（Go 的 `fmt.Print` 写 3 字节）。
+//   命名口径：`_n(v, &len)` 出长度；`px_fmt_value(v)` 保留为包装（语义逐字节不变）。
+static char* px_fmt_value_raw_n(LXValue v, int* out_len);
+static char* px_fmt_value_raw(LXValue v) { int n; return px_fmt_value_raw_n(v, &n); }
+static char* px_fmt_value_n(LXValue v, int* out_len) {
     // 缺陷 125（M145）：环保护（**路径**语义 ⇒ 共享而非环的对象照常完整渲染）
     if (px_is_container(v)) {
         if (px_path_has(&g_fmt_path, v.as.obj)) {
             RStrBuf b = {0};
             rsb_append(&b, "...", 3);
-            return rsb_done(&b);
+            return rsb_done_len(&b, out_len);
         }
         px_path_push(&g_fmt_path, v.as.obj);
-        char* out = px_fmt_value_raw(v);
+        char* out = px_fmt_value_raw_n(v, out_len);
         px_path_pop(&g_fmt_path);
         return out;
     }
-    return px_fmt_value_raw(v);
+    return px_fmt_value_raw_n(v, out_len);
 }
-static char* px_fmt_value_raw(LXValue v) {
+static char* px_fmt_value(LXValue v) { int n; return px_fmt_value_n(v, &n); }
+static char* px_fmt_value_raw_n(LXValue v, int* out_len) {
     RStrBuf b = {0};
     switch (v.type) {
         case PX_NULL: rsb_append(&b, "null", 4); break;
@@ -3446,8 +3473,9 @@ static char* px_fmt_value_raw(LXValue v) {
             rsb_append(&b, "[", 1);
             for (int i = 0; i < o->as.list.len; i++) {
                 if (i) rsb_append(&b, ", ", 2);
-                char* s = px_fmt_value(o->as.list.items[i]);
-                rsb_append(&b, s, (int)strlen(s));
+                int sn = 0;
+                char* s = px_fmt_value_n(o->as.list.items[i], &sn);
+                rsb_append(&b, s, sn);
                 xfree(s);
             }
             rsb_append(&b, "]", 1);
@@ -3458,8 +3486,9 @@ static char* px_fmt_value_raw(LXValue v) {
             rsb_append(&b, "(", 1);
             for (int i = 0; i < o->as.tuple.len; i++) {
                 if (i) rsb_append(&b, ", ", 2);
-                char* s = px_fmt_value(o->as.tuple.items[i]);
-                rsb_append(&b, s, (int)strlen(s));
+                int sn = 0;
+                char* s = px_fmt_value_n(o->as.tuple.items[i], &sn);
+                rsb_append(&b, s, sn);
                 xfree(s);
             }
             rsb_append(&b, ")", 1);
@@ -3468,24 +3497,25 @@ static char* px_fmt_value_raw(LXValue v) {
         case PX_DICT: {
             LXObject* o = v.as.obj;
             int n = o->as.dict.len;
-            char** parts = n > 0 ? xmalloc(n * sizeof(char*)) : NULL;
+            PxDisp* parts = n > 0 ? xmalloc((size_t)n * sizeof(PxDisp)) : NULL;
             for (int i = 0; i < n; i++) {
-                char* vs = px_fmt_value(o->as.dict.vals[i]);
+                int vlen = 0;
+                char* vs = px_fmt_value_n(o->as.dict.vals[i], &vlen);
                 int klen = (int)strlen(o->as.dict.keys[i]);
-                int vlen = (int)strlen(vs);
-                parts[i] = xmalloc((size_t)klen + vlen + 4);
-                memcpy(parts[i], o->as.dict.keys[i], klen);
-                parts[i][klen] = ':'; parts[i][klen + 1] = ' ';
-                memcpy(parts[i] + klen + 2, vs, vlen);
-                parts[i][klen + vlen + 2] = 0;
+                parts[i].p = xmalloc((size_t)klen + vlen + 4);
+                memcpy(parts[i].p, o->as.dict.keys[i], klen);
+                parts[i].p[klen] = ':'; parts[i].p[klen + 1] = ' ';
+                memcpy(parts[i].p + klen + 2, vs, vlen);
+                parts[i].p[klen + vlen + 2] = 0;
+                parts[i].len = klen + vlen + 2;
                 xfree(vs);
             }
-            if (n > 1) qsort(parts, (size_t)n, sizeof(char*), px_cmp_cstr);
+            if (n > 1) qsort(parts, (size_t)n, sizeof(PxDisp), px_cmp_disp);
             rsb_append(&b, "{", 1);
             for (int i = 0; i < n; i++) {
                 if (i) rsb_append(&b, ", ", 2);
-                rsb_append(&b, parts[i], (int)strlen(parts[i]));
-                xfree(parts[i]);
+                rsb_append(&b, parts[i].p, parts[i].len);
+                xfree(parts[i].p);
             }
             rsb_append(&b, "}", 1);
             xfree(parts);
@@ -3497,14 +3527,15 @@ static char* px_fmt_value_raw(LXValue v) {
         case PX_ENUM: { char t[256]; int n = snprintf(t, sizeof(t), "%s.%s", v.as.obj->as.enum_inst.type_name, v.as.obj->as.enum_inst.variant); rsb_append(&b, t, n); break; }
         case PX_RESULT: {
             LXObject* o = v.as.obj;
-            char* s = px_fmt_value(o->as.result.value);
+            int sn = 0;
+            char* s = px_fmt_value_n(o->as.result.value, &sn);
             if (o->as.result.ok) {
                 rsb_append(&b, "Ok(", 3);
-                rsb_append(&b, s, (int)strlen(s));
+                rsb_append(&b, s, sn);
                 rsb_append(&b, ")", 1);
             } else {
                 rsb_append(&b, "Err(", 4);
-                rsb_append(&b, s, (int)strlen(s));
+                rsb_append(&b, s, sn);
                 rsb_append(&b, ")", 1);
             }
             xfree(s);
@@ -3520,7 +3551,7 @@ static char* px_fmt_value_raw(LXValue v) {
         }
         default: rsb_append(&b, "?", 1); break;
     }
-    return rsb_done(&b);
+    return rsb_done_len(&b, out_len);
 }
 
 static char* escape_str(const char* s, int len) {
@@ -3545,10 +3576,12 @@ static char* escape_str(const char* s, int len) {
 
 void px_print_value(LXValue v, bool newline) {
     // M-B5：统一用 px_fmt_value（对齐 Rust fmt_value），保证 print 与 str() 容器渲染一致
-    char* s = px_fmt_value(v);
-    printf("%s", s);
+    // M155（缺陷 150）：按**长度**写（fwrite）—— 此前 `printf("%s")` 在首个 0x00 处截断。
+    int n = 0;
+    char* s = px_fmt_value_n(v, &n);
+    if (n > 0) fwrite(s, 1, (size_t)n, stdout);
     xfree(s);
-    if (newline) printf("\n");
+    if (newline) fputc('\n', stdout);
 }
 
 char* px_to_string(LXValue v) {
@@ -4781,9 +4814,10 @@ static LXValue bi_print_err(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     pthread_mutex_lock(&g_print_mu);
     for (int i = 0; i < nargs; i++) {
-        if (i) fputs(" ", stderr);
-        char* s = px_fmt_value(args[i]);
-        fputs(s, stderr);
+        if (i) fputc(' ', stderr);
+        int n = 0;
+        char* s = px_fmt_value_n(args[i], &n);
+        if (n > 0) fwrite(s, 1, (size_t)n, stderr);
         xfree(s);
     }
     fputc('\n', stderr);
@@ -4875,8 +4909,9 @@ static LXValue bi_str(LXValue* args, int nargs, void* ctx) {
     if (args[0].type == PX_INT) return px_str_int_pool(args[0].as.i);
     // M-B5：统一用 px_fmt_value——str() 支持全部类型（list/dict/enum/struct/result 等），
     // 对齐 Rust 内置 str()（fmt_value 渲染）
-    char* s = px_fmt_value(args[0]);
-    LXValue r = px_str(s);
+    int n = 0;
+    char* s = px_fmt_value_n(args[0], &n);
+    LXValue r = px_str_len(s, n);   // M155（缺陷 150）：容器渲染里的内嵌 NUL 不再被 strlen 截断
     xfree(s);
     return r;
 }
@@ -8726,34 +8761,44 @@ static LXValue bi_json_parse(LXValue* args, int nargs, void* ctx) {
 
 // Value -> JSON 字符串（写入动态缓冲）
 typedef struct { char* buf; int len, cap; } JOut;
-static void jout_append(JOut* o, const char* s) {
-    int l = (int)strlen(s);
-    if (o->len + l + 1 > o->cap) {
-        o->cap = o->cap * 2 + l + 16;
+// 追加 n 个原始字节（原供合法多字节 UTF-8 序列直出；M155 起为**唯一**实现，`jout_append`
+//   也走它）。M155（缺陷 152）：长度感知追加 —— `jout_append` 走 strlen，**追加单个 NUL 字节做不到**
+//   （`{c, 0}` 的 strlen 恒 0 ⇒ 该字节被静默丢掉）。`json_stringify` 的默认分支（控制字符
+//   裸输出）因此既截断又丢字节；本函数给出「按长度」的追加路径。
+static void jout_append_n(JOut* o, const char* s, int n) {
+    if (n <= 0) return;
+    if (o->len + n + 1 > o->cap) {
+        o->cap = o->cap * 2 + n + 16;
         o->buf = xrealloc(o->buf, o->cap);
     }
-    memcpy(o->buf + o->len, s, l);
-    o->len += l;
+    memcpy(o->buf + o->len, s, (size_t)n);
+    o->len += n;
     o->buf[o->len] = 0;
 }
-static void jout_escape(JOut* o, const char* s) {
+static void jout_append(JOut* o, const char* s) {
+    jout_append_n(o, s, (int)strlen(s));
+}
+// M155（第 37 轮 · 缺陷 152）：**长度感知**。此前的 `for (p = s; *p; p++)` 在首个 0x00
+//   处**丢掉整条尾巴**（实测 `json_stringify("A\0B")` → `"A"`）—— 与本文档化的契约
+//   「控制字符**裸输出**（可产出非法 JSON）」也不一致：契约说的是「裸输出」，不是「截断」。
+//   注：Go 保真口径由 `json_stringify_go`（`jout_escape_go(o, s, n)`）承担，此处**不改**
+//   转义风格（仍不转义 0x01 等控制字符），只把「按 C 串走」改成「按显式长度走」。
+static void jout_escape_n(JOut* o, const char* s, int n) {
     jout_append(o, "\"");
-    for (const char* p = s; *p; p++) {
-        char c = *p;
+    for (int _i = 0; _i < n; _i++) {
+        char c = s[_i];
         switch (c) {
             case '"': jout_append(o, "\\\""); break;
             case '\\': jout_append(o, "\\\\"); break;
             case '\n': jout_append(o, "\\n"); break;
             case '\r': jout_append(o, "\\r"); break;
             case '\t': jout_append(o, "\\t"); break;
-            default: {
-                char tmp[2] = { c, 0 };
-                jout_append(o, tmp);
-            }
+            default: jout_append_n(o, &c, 1);   /* M155：裸输出（含 0x00），不再按 C 串丢字节 */
         }
     }
     jout_append(o, "\"");
 }
+static void jout_escape(JOut* o, const char* s) { jout_escape_n(o, s, (int)strlen(s)); }
 static void json_stringify_value_raw(JOut* o, LXValue v);
 static void json_stringify_value(JOut* o, LXValue v) {
     // 缺陷 125（M145）：环上**报错**（不段错误）。Go `json.Marshal` 在环上返回
@@ -8784,7 +8829,7 @@ static void json_stringify_value_raw(JOut* o, LXValue v) {
             jout_append(o, tmp);
             break;
         }
-        case PX_STR: jout_escape(o, v.as.obj->as.str.data); break;
+        case PX_STR: jout_escape_n(o, v.as.obj->as.str.data, v.as.obj->as.str.len); break;   // M155
         case PX_LIST: {
             jout_append(o, "[");
             LXObject* ob = v.as.obj;
@@ -8854,7 +8899,7 @@ static LXValue bi_json_stringify(LXValue* args, int nargs, void* ctx) {
     o.buf = xmalloc(64); o.cap = 64; o.buf[0] = 0;
     px_path_reset(&g_json_path);
     json_stringify_value(&o, args[0]);
-    LXValue r = px_str(o.buf);
+    LXValue r = px_str_len(o.buf, o.len);   // M155（缺陷 152）：尾串不再 strlen 截断
     xfree(o.buf);
     return r;
 }
@@ -8870,7 +8915,8 @@ static LXValue bi_json_stringify(LXValue* args, int nargs, void* ctx) {
 //      非法 UTF-8 → \ufffd（Go 的 encodeString；json_stringify 直接吐**裸控制字节 = 非法 JSON**）；
 //   ④ float64 走**最短往返**（strconv.FormatFloat(f,'f'|-1|64)，|x|<1e-6 或 ≥1e21 用 'e'，
 //      并把 `e-0X` 收敛为 `e-X`）；json_stringify 用 `%g`（6 位有效数字）会**丢精度**。
-// 另：本函数按 str.len 写出（Go 字符串可含 NUL）；json_stringify 走 C 串遇 NUL 截断。
+// 另：本函数按 str.len 写出（Go 字符串可含 NUL）；json_stringify 在 M155 前走 C 串遇 NUL
+//   截断，M155（缺陷 152）起同样按长度写出（保持「控制字符裸输出」的既有契约）。
 // 约定：非有限浮点（NaN/Inf）Go 会返回 UnsupportedValueError，此处写 `null` 并在文档标注
 //   （api-server 全部字段均不会出现，不为此在 runtime 里造错误通道）。
 // 注：kwargs 语义与 json_stringify 同名共用（dict/list/tuple/Result）；PX_BYTES 按 Go `[]byte`
@@ -8895,16 +8941,7 @@ static void jgo_b64(JOut* o, const unsigned char* d, int n) {
     jout_append(o, "\"");
 }
 
-// 追加 n 个原始字节（用于合法多字节 UTF-8 序列直出）
-static void jout_append_n(JOut* o, const char* s, int n) {
-    if (o->len + n + 1 > o->cap) {
-        o->cap = o->cap * 2 + n + 16;
-        o->buf = xrealloc(o->buf, o->cap);
-    }
-    memcpy(o->buf + o->len, s, (size_t)n);
-    o->len += n;
-    o->buf[o->len] = 0;
-}
+// 追加 n 个原始字节（含 NUL）：定义见上方 `jout_append_n`（M155 合一，避免重复定义）。
 
 // M129-2：`json_stringify_go` 的可选项（定义见文件后方 bi_json_stringify_go 上方）。
 // M129（qg-issue 87 缺陷 51）：opts 状态必须是**线程局部**（__thread）。
