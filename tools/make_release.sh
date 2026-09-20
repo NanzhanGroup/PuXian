@@ -139,6 +139,13 @@ PuXian 开发应用"，不提供源码改动/推送通道。源码见开源仓�
 - Linux x86_64；\`gcc\` + \`make\`（构建默认全量含 QUIC/H3，需链接 ngtcp2/openssl 静态库，
   本包已带；机器无需装这两库）
 - 交叉编译 aarch64：\`aarch64-linux-musl-gcc\`（见下）
+- **aarch64 / riscv64 原生用户注意（M159）**：本包 \`bootstrap/*\` 是 **x86_64 件**（在 arm 上直接
+  \`Exec format error\`）⇒ 请改用并列发布的 \`puxian-bootstrap-aarch64-<tag>.tar.gz\`
+  （原生 arm64 runner 从源码现编 + 自证）；或在本机自举整套：
+  \`./selfhost/native_bootstrap.sh --install\`（仅需 gcc，源码见仓库）
+- 本包 \`tools/px\` 已做**宿主架构自适应**：非 x86_64 宿主自动取 \`runtime/mbedtls/lib-<arch>\`、
+  \`sqlite3-<arch>.o\`、\`zlib/lib-<arch>\` 并自动 \`--no-quic\`（该平台无预编译 ngtcp2/openssl）；
+  \`px build --print-plan\` 可打印解析后的构建计划（含编译轨与可执行性）
 
 ## 快速开始
 \`\`\`bash
