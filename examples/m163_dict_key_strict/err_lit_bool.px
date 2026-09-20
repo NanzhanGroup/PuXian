@@ -1,0 +1,6 @@
+# M163 门 ③-d：字面量键是 **bool** ⇒ R1002「字典键必须是字符串，实际是 bool」
+# 注意 bool 是独立类型（`type(true)` == "bool"），**不得**被当成 int。
+def main():
+    let d = {true: 1}
+    print("len=" + str(len(d)))
+

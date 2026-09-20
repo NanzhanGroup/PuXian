@@ -16,7 +16,7 @@ static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     px_srcline(4);
     _v2 = px_int(2LL);
     px_srcline(5);
-    _v3 = ({ LXValue _d = px_dict(); { LXValue _k = px_str("k"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_int(3LL)); } _d; });
+    _v3 = ({ LXValue _d = px_dict(); { LXValue _k = px_str("k"); LXValue _v = px_int(3LL); px_dict_set_checked(_d, _k, _v); } _d; });
     px_srcline(6);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_add(px_str("hello "), px_call(px_get_global("str"), (LXValue[]){_v1}, 1)), px_str(""))}, 1));
     px_srcline(7);

@@ -49,7 +49,9 @@ def i_eval_expr(node, env):
                 return Err(kr.err())
             var kv = kr.unwrap()
             if type(kv) != "string":
-                return Err(i_r1002("字典键必须是字符串", node[2]))
+                # M163（第 49 轮 · 缺陷 168）：文案补「实际是 <类型名>」——与编译两轨统一
+                #   （VM NEWDICT / C px_dict_set_checked 同词条；修前编译轨静默丢弃该项）
+                return Err(i_r1002("字典键必须是字符串，实际是 " + i_type_name(kv), node[2]))
             let vr = i_eval_expr(e[1], env)
             if vr.is_err():
                 return Err(vr.err())
@@ -422,7 +424,9 @@ def i_eval_comp(clauses, ci, sink, list_expr, dict_key, dict_val, cond, env, pos
                 return Err(kr.err())
             let k = kr.unwrap()
             if type(k) != "string":
-                return Err(i_r1002("字典推导键必须是字符串，实际是 " + i_type_name(k), pos))
+                # M163（缺陷 169）：词条「字典推导键必须是字符串」→「字典键必须是字符串」
+                #   （字面量与推导式**同一条真相**；三轨逐字一致，见 docs/DICT_STRICT_MIGRATION.md §1）
+                return Err(i_r1002("字典键必须是字符串，实际是 " + i_type_name(k), pos))
             let vr = i_eval_expr(dict_val, env)
             if vr.is_err():
                 return Err(vr.err())

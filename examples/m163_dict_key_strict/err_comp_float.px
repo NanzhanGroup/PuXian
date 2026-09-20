@@ -1,0 +1,6 @@
+# M163 门 ③-f：带条件的推导式、键为 float ⇒ R1002「字典键必须是字符串，实际是 float」
+# （覆盖推导式 + cond 分支下的键检查，以及 float 类型名。）
+def main():
+    let d = {x / 2: x for x in [1, 2, 3] if x > 1}
+    print("len=" + str(len(d)))
+

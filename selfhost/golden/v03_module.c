@@ -134,7 +134,7 @@ static LXValue fn_loader_new(LXValue* args, int nargs, void* ctx) {
     LXValue px_err_33_val = px_null();
     int px_err_33_proped = 0;
     px_srcline(63);
-    return ({ LXValue _d = px_dict(); { LXValue _k = px_str("base_dir"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, _v31); } { LXValue _k = px_str("stdlib"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, _v32); } { LXValue _k = px_str("search_paths"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_call(px_get_global("module_search_paths"), (LXValue[]){_v31}, 1)); } { LXValue _k = px_str("loaded"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, ({ LXValue _d = px_dict(); { LXValue _k = px_str("_"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_int(0LL)); } _d; })); } { LXValue _k = px_str("stack"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_list_n((LXValue[]){}, 0)); } _d; });
+    return ({ LXValue _d = px_dict(); { LXValue _k = px_str("base_dir"); LXValue _v = _v31; px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("stdlib"); LXValue _v = _v32; px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("search_paths"); LXValue _v = px_call(px_get_global("module_search_paths"), (LXValue[]){_v31}, 1); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("loaded"); LXValue _v = ({ LXValue _d = px_dict(); { LXValue _k = px_str("_"); LXValue _v = px_int(0LL); px_dict_set_checked(_d, _k, _v); } _d; }); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("stack"); LXValue _v = px_list_n((LXValue[]){}, 0); px_dict_set_checked(_d, _k, _v); } _d; });
 px_err_33:
     if (px_err_33_proped) return px_err_33_val;
     return px_null();
@@ -197,7 +197,7 @@ static LXValue fn_loader_load(LXValue* args, int nargs, void* ctx) {
     px_srcline(87);
     if (px_is_truthy(px_eq(px_call(px_get_global("len"), (LXValue[]){_v44}, 1), px_int(0LL)))) {
         px_srcline(88);
-        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("ok"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_bool(false)); } { LXValue _k = px_str("err"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_str("空模块")); } _d; });
+        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("ok"); LXValue _v = px_bool(false); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("err"); LXValue _v = px_str("空模块"); px_dict_set_checked(_d, _k, _v); } _d; });
     }
     px_srcline(89);
     _v46 = px_call(px_get_global("join"), (LXValue[]){px_str("."), _v44}, 2);
@@ -206,12 +206,12 @@ static LXValue fn_loader_load(LXValue* args, int nargs, void* ctx) {
         px_srcline(92);
         LXValue _v50 = px_index(_v43, px_str("loaded"));
         px_srcline(93);
-        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("ok"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_bool(true)); } { LXValue _k = px_str("path"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_index(_v50, _v46)); } { LXValue _k = px_str("cached"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_bool(true)); } _d; });
+        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("ok"); LXValue _v = px_bool(true); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("path"); LXValue _v = px_index(_v50, _v46); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("cached"); LXValue _v = px_bool(true); px_dict_set_checked(_d, _k, _v); } _d; });
     }
     px_srcline(95);
     if (px_is_truthy(px_call(px_get_global("contains"), (LXValue[]){px_index(_v43, px_str("stack")), _v46}, 2))) {
         px_srcline(96);
-        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("ok"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_bool(false)); } { LXValue _k = px_str("err"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_add(px_str("循环导入: "), _v46)); } _d; });
+        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("ok"); LXValue _v = px_bool(false); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("err"); LXValue _v = px_add(px_str("循环导入: "), _v46); px_dict_set_checked(_d, _k, _v); } _d; });
     }
     px_srcline(98);
     _v47 = px_null();
@@ -239,15 +239,15 @@ static LXValue fn_loader_load(LXValue* args, int nargs, void* ctx) {
         px_srcline(108);
         if (px_is_truthy(px_ne(px_index(_v44, px_int(0LL)), px_str("std")))) {
             px_srcline(109);
-            return ({ LXValue _d = px_dict(); { LXValue _k = px_str("ok"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_bool(false)); } { LXValue _k = px_str("err"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_add(px_add(px_str("[module] 警告: 找不到模块 '"), _v46), px_str("'（已跳过）"))); } _d; });
+            return ({ LXValue _d = px_dict(); { LXValue _k = px_str("ok"); LXValue _v = px_bool(false); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("err"); LXValue _v = px_add(px_add(px_str("[module] 警告: 找不到模块 '"), _v46), px_str("'（已跳过）")); px_dict_set_checked(_d, _k, _v); } _d; });
         }
         px_srcline(111);
-        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("ok"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_bool(false)); } { LXValue _k = px_str("err"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_str("")); } _d; });
+        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("ok"); LXValue _v = px_bool(false); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("err"); LXValue _v = px_str(""); px_dict_set_checked(_d, _k, _v); } _d; });
     }
     px_srcline(112);
     (void)(px_call(px_get_global("loader_mark_loaded"), (LXValue[]){_v43, _v46, _v47}, 3));
     px_srcline(113);
-    return ({ LXValue _d = px_dict(); { LXValue _k = px_str("ok"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_bool(true)); } { LXValue _k = px_str("path"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, _v47); } { LXValue _k = px_str("cached"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_bool(false)); } _d; });
+    return ({ LXValue _d = px_dict(); { LXValue _k = px_str("ok"); LXValue _v = px_bool(true); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("path"); LXValue _v = _v47; px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("cached"); LXValue _v = px_bool(false); px_dict_set_checked(_d, _k, _v); } _d; });
 px_err_49:
     if (px_err_49_proped) return px_err_49_val;
     return px_null();

@@ -1,0 +1,77 @@
+# M163 门 ①：字典键类型严格化 —— 正常路径（字符串键）三轨逐字节一致
+# 语义基准（修后）：**字典构造位置上的非字符串键 ⇒ R1002**（三轨同码同文）
+#   · 字面量 `{k: v}`           → `字典键必须是字符串，实际是 <t>`（VM NEWDICT / C px_dict_set_checked）
+#   · 推导式 `{k: v for ...}`   → 同上（VM DICTSET / C px_dict_set_checked / 解释轨 iexpr 推导路径）
+#   · 索引读写 `d[k]`(k 非串)    → `字典索引键必须是字符串`（M120 文档口径，未变）
+#   · 方法族 `d.set(k,v)`(k 非串)→ `方法 set 参数 1 需要 string`（文档口径，未变）
+# 本文件只跑**正常路径**（字符串键），断言全为绝对值（不靠两轨互比）。
+# 用法：pxi / px build / px build --c 三轨 stdout 应逐字节一致（pass=16 fail=0）
+var fails = 0
+
+def chk(cond, tag):
+    if not cond:
+        fails = fails + 1
+        print("FAIL " + tag)
+
+def build_from_var():
+    let k = "x"
+    return {k: 9}
+
+def merge(a, b):
+    var out = {k: a[k] for k in a}
+    for k in b:
+        out[k] = b[k]
+    return out
+
+def main():
+    # ---- 1-4 字面量：字符串键 ----
+    let d1 = {"a": 1, "b": 2}
+    chk(len(d1) == 2, "1-lit-two-keys")
+    chk(d1["a"] == 1 and d1["b"] == 2, "2-lit-values")
+    let d2 = build_from_var()
+    chk(d2["x"] == 9, "3-lit-var-key")
+    chk(len(build_from_var()) == 1, "4-lit-var-key-len")
+
+    # ---- 5-7 推导式：字符串键（str() / 条件 / 多 for） ----
+    let d3 = {str(x): x * 2 for x in [1, 2, 3]}
+    chk(len(d3) == 3 and d3["3"] == 6, "5-comp-str-key")
+    let d4 = {str(x): x for x in [1, 2, 3, 4] if x % 2 == 0}
+    chk(len(d4) == 2 and d4["4"] == 4, "6-comp-cond")
+    let d5 = {str(x) + str(y): x * y for x in [1, 2] for y in [3, 4]}
+    chk(len(d5) == 4 and d5["24"] == 8, "7-comp-multi-for")
+
+    # ---- 8-9 嵌套字典 ----
+    let d6 = {"outer": {"inner": 42}}
+    chk(d6["outer"]["inner"] == 42, "8-nested-dict")
+    chk(len(d6["outer"]) == 1, "9-nested-len")
+
+    # ---- 10 重复键：后者覆盖（键集不重复） ----
+    let d7 = {"k": 1, "k": 2}
+    chk(len(d7) == 1 and d7["k"] == 2, "10-dup-key-last-wins")
+
+    # ---- 11 插值键（字符串） ----
+    let n = 7
+    let d8 = {"n${n}": n}
+    chk(d8["n7"] == 7, "11-interp-key")
+
+    # ---- 12-13 方法族（字符串键）不回归 ----
+    var d9 = {"a": 1}
+    d9.set("b", 2)
+    chk(len(d9) == 2 and d9.get("b", 0) == 2, "12-method-set-get")
+    chk(d9.has("a") and not d9.has("z"), "13-method-has")
+
+    # ---- 14 索引赋值（字符串键） ----
+    var d10 = {"a": 1}
+    d10["b"] = 2
+    chk(d10["b"] == 2, "14-setitem-str")
+
+    # ---- 15 合并（含 remove 造空 dict 的路径） ----
+    let m = merge({"a": 1}, {"b": 2})
+    chk(len(m) == 2 and m["a"] == 1 and m["b"] == 2, "15-merge")
+
+    # ---- 16 空推导式 ----
+    let e = {str(x): x for x in []}
+    chk(len(e) == 0, "16-empty-comp")
+
+    print("pass=" + str(16 - fails) + " fail=" + str(fails))
+

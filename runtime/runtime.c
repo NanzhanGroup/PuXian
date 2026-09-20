@@ -4377,6 +4377,22 @@ void px_dict_set(LXValue dict, const char* key, LXValue val) {
     }
 }
 
+// ==================== M163（第 49 轮 · 缺陷 168/169）：字典键类型严格化 ====================
+// 病灶：`{1: "a"}`（字面量）与 `{x: x for x in [1]}`（推导式）的非字符串键在 **VM 轨与 C 轨
+//   被静默丢弃**（`if (_k.type == PX_STR) px_dict_set(...)` / NEWDICT 同名条件）⇒
+//   ① 与解释轨（R1002）分叉；② **静默数据丢失**（`{1: 11, 2: 22}` 得 `len=0`）。
+//   `px_dict_set` 的签名收 `const char* key` ⇒ 调用方早已决定「不是字符串就不传」，
+//   键类型检查只能发生在值层 ⇒ 新增本入口（字面量 / 推导式 / VM 的 DICTSET 指令共用）。
+// 契约（三轨同码同文，见 docs/DICT_STRICT_MIGRATION.md §1）：
+//   · 构造位置上非字符串键 ⇒ R1002 `字典键必须是字符串，实际是 <类型名>`
+//   · 索引读/写 `d[k]` 仍为 R1002 `字典索引键必须是字符串`（M120 起文档口径，未变）
+//   · 方法族 `d.set(k, v)` 仍为 R1002 `方法 set 参数 1 需要 string`（文档口径，未变）
+void px_dict_set_checked(LXValue dict, LXValue k, LXValue v) {
+    if (k.type != PX_STR)
+        px_error("R1002: 字典键必须是字符串，实际是 %s", px_type_name(k));
+    px_dict_set(dict, k.as.obj->as.str.data, v);
+}
+
 LXValue px_dict_get(LXValue dict, const char* key) {
     LXObject* o = dict.as.obj;
     for (int i = 0; i < o->as.dict.len; i++) {

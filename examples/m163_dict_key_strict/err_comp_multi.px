@@ -1,0 +1,6 @@
+# M163 门 ⑤（负控辅助件）：推导式多 for 下的非字符串键 —— 负控 C 用它区分
+#   「只有字面量收紧、推导式没收紧」的半截实现。
+def main():
+    let d = {x + y: 1 for x in [1, 2] for y in [3, 4]}
+    print("len=" + str(len(d)))
+
