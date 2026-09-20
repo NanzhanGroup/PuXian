@@ -1,0 +1,153 @@
+# M160（第 46 轮 · 缺陷 159/160）· 闭包 / 函数体内 def —— 三轨一致主用例
+# ------------------------------------------------------------
+# 语义基准 = 解释轨（env 链，按引用捕获）。判据全用**绝对值断言**（打印 pass/fail），
+#   便于三轨 stdout 逐字节对拍（非零退出码是副判据）。
+# 覆盖形态（缺陷 159 = VM 轨 / 缺陷 160 = C 轨）：
+#   1 匿名 fn 写外层局部（Assign 目标即捕获：cg_ast_bound 的绑定口径）
+#   2 匿名 fn 只读外层局部
+#   3 函数体内 def（命名嵌套函数）+ 自递归（捕获自身名字）
+#   4 两个闭包共享同一外层局部（引用语义互见）
+#   5 捕获外层**参数**
+#   6 捕获后外层再改 / 闭包改后外层读（双向引用可见）
+#   8 捕获参数 + **默认参数**（默认参数槽也要装箱：入口填充必须经 CELLSET）
+#   9 闭包存入容器后取出调用
+#   10 闭包作实参传给另一个函数
+#   12 两个函数体内 def 共享同一外层局部
+var pass = 0
+var fail = 0
+
+def check(cond, name):
+    if cond:
+        pass = pass + 1
+    else:
+        fail = fail + 1
+        print("FAIL " + name)
+
+# ---- 形态 1：匿名 fn 写外层局部 ----
+def f1():
+    var x = 0
+    let g = fn ():
+        x = x + 1
+    g()
+    g()
+    g()
+    return x
+
+# ---- 形态 2：匿名 fn 只读外层局部 ----
+def f2():
+    let base = 100
+    let g = fn ():
+        return base + 1
+    return g()
+
+# ---- 形态 3：函数体内 def + 自递归 ----
+def f3():
+    var hits = 0
+    def bump():
+        hits = hits + 1
+        return hits
+    bump()
+    bump()
+    return hits
+
+def f3r():
+    def fact(n):
+        if n <= 1:
+            return 1
+        return n * fact(n - 1)
+    return fact(5)
+
+# ---- 形态 4：两个闭包共享同一外层局部 ----
+def f4():
+    var n = 0
+    let inc = fn ():
+        n = n + 1
+    let get = fn ():
+        return n
+    inc()
+    inc()
+    return get()
+
+# ---- 形态 5：捕获外层参数 ----
+def f5(k):
+    let g = fn (v):
+        return v * k
+    return g(6)
+
+# ---- 形态 6：捕获后外层再改；闭包改后外层读 ----
+def f6():
+    var tag = "a"
+    let g = fn ():
+        return tag
+    let r1 = g()
+    tag = "b"
+    let r2 = g()
+    return r1 + r2
+
+def f6b():
+    var v = 1
+    let get = fn ():
+        return v
+    let set = fn (x):
+        v = x
+    set(42)
+    let r = get()
+    v = 7
+    return r * 100 + get()
+
+# ---- 形态 8：捕获参数 + 默认参数 ----
+def f8(a, b = 10):
+    let g = fn ():
+        return a + b
+    return g()
+
+# ---- 形态 9：闭包入容器再取出 ----
+def f9():
+    var n = 0
+    let inc = fn ():
+        n = n + 1
+        return n
+    let box = [inc, inc]
+    box[0]()
+    box[1]()
+    return n
+
+# ---- 形态 10：闭包作实参 ----
+def apply(f, v):
+    return f(v)
+
+def f10():
+    let k = 3
+    return apply(fn (x):
+        return x * k
+    , 7)
+
+# ---- 形态 12：两个函数体内 def 共享外层 ----
+def f12():
+    var acc = 1
+    def mul(x):
+        acc = acc * x
+        return acc
+    def run():
+        mul(2)
+        mul(3)
+        return acc
+    return run()
+
+def main():
+    check(f1() == 3, "形态1 匿名fn写外层: " + str(f1()))
+    check(f2() == 101, "形态2 匿名fn读外层: " + str(f2()))
+    check(f3() == 2, "形态3 函数体内def: " + str(f3()))
+    check(f3r() == 120, "形态3b 嵌套def自递归: " + str(f3r()))
+    check(f4() == 2, "形态4 两闭包共享: " + str(f4()))
+    check(f5(7) == 42, "形态5 捕获参数: " + str(f5(7)))
+    check(f6() == "ab", "形态6 捕获后改外层: " + str(f6()))
+    check(f6b() == 4207, "形态6b 双向引用可见: " + str(f6b()))
+    check(f8(5) == 15, "形态8 捕获参数+默认参数: " + str(f8(5)))
+    check(f8(5, 100) == 105, "形态8b 显式给默认参数: " + str(f8(5, 100)))
+    check(f9() == 2, "形态9 闭包入容器: " + str(f9()))
+    check(f10() == 21, "形态10 闭包作实参: " + str(f10()))
+    check(f12() == 6, "形态12 两嵌套def共享外层: " + str(f12()))
+    print("pass=" + str(pass) + " fail=" + str(fail))
+    if fail > 0:
+        exit(1)

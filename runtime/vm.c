@@ -113,6 +113,8 @@ const char* px_op_name(int op) {
         [PXOP_ENUMVAR] = "ENUMVAR",
         [PXOP_GENFROMLIST] = "GENFROMLIST",
         [PXOP_NARGS] = "NARGS",
+        [PXOP_CELLGET] = "CELLGET", [PXOP_CELLSET] = "CELLSET",
+        [PXOP_CELLNEW] = "CELLNEW", [PXOP_MKCLO] = "MKCLO",
     };
     if (op < 0 || op >= PXM_MAX || !names[op]) return "?";
     return names[op];
@@ -239,8 +241,35 @@ static PxFrame* vm_frame_push(PxVmState* st, const PxVMFunc* f,
     fr->nargs = nargs;          // M90-S1/F1：默认参数入口填充依 NARGS 读此
     fr->unlock_kind = 0;        // M93-S3：with 展开后置解锁（帧复用清零）
     fr->unlock_obj = px_null();
+    fr->env = px_null();        // M160：普通帧无捕获环境（帧复用清零）
     __sync_synchronize();     // 帧字段写完成后再发布 nframes（弱序架构显式屏障）
     st->nframes = idx + 1;
+    return fr;
+}
+
+// M160（缺陷 159）：闭包对象的 env → 所属 PxVMFunc*。
+//   编码：env dict 的保留键 "$f" = PX_INT（PxVMFunc* 整型化）。PxVMFunc 是**进程级静态
+//   常驻对象**（不入 GC 堆）⇒ 不需要登记根面；键名含 '$'，不可能与 .px 标识符冲突。
+#define PX_VM_CLO_KEY "$f"
+static const PxVMFunc* vm_closure_func(LXValue env) {
+    if (env.type != PX_DICT) return NULL;
+    LXValue v = px_dict_get(env, PX_VM_CLO_KEY);
+    if (v.type != PX_INT) return NULL;
+    return (const PxVMFunc*)(intptr_t)v.as.i;
+}
+
+// M160：压**闭包**帧 —— 先常规压帧（参数/槽），再把捕获名对应的 cell 从 env 绑到
+//   槽（槽 = 本帧参数数 + i，与发射器 bc_emit_push_lambda 的槽分配同源）。
+static PxFrame* vm_frame_push_clo(PxVmState* st, const PxVMFunc* f,
+                                  LXValue* args, int nargs, int ret_dst, LXValue env) {
+    PxFrame* fr = vm_frame_push(st, f, args, nargs, ret_dst);
+    fr->env = env;
+    int npar = f->arity + f->ndefault;
+    for (int i = 0; i < f->nup; i++) {
+        int slot = npar + i;
+        if (slot >= 0 && slot < fr->nslots && f->upvals && f->upvals[i])
+            fr->slots[slot] = px_dict_get(env, f->upvals[i]);
+    }
     return fr;
 }
 
@@ -589,6 +618,24 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
                 }
                 vm_frame_push(st, cf2, abuf, argc, dst);  // 压子帧，循环继续
                 free(abuf);
+            } else if (fnv.type == PX_FUNC &&
+                       fnv.as.obj->as.func.fn == px_vm_closure_entry) {
+                // M160：闭包调用 —— 所属函数由 env 保留键给出，捕获 cell 由帧入口绑定
+                LXValue cenv = *(LXValue*)fnv.as.obj->as.func.ctx;
+                const PxVMFunc* cf2 = vm_closure_func(cenv);
+                if (!cf2) {
+                    free(abuf);
+                    px_error("VM %s:%d CALL 闭包对象缺少所属函数", fr->f->name, fr->line);
+                    break;
+                }
+                if (argc < cf2->arity) {
+                    free(abuf);
+                    px_error("VM %s:%d CALL %s 参数不足: 需 %d 给 %d",
+                             fr->f->name, fr->line, cf2->name, cf2->arity, argc);
+                    break;
+                }
+                vm_frame_push_clo(st, cf2, abuf, argc, dst, cenv);
+                free(abuf);
             } else {
                 LXValue r = px_call(fnv, abuf, argc);     // native/旧C/非函数
                 free(abuf);
@@ -609,6 +656,35 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
         case PXOP_NARGS:   // M90-S1/F1：槽a = 本帧实际实参数（默认参数入口填充依据）
             slots[in.a] = px_int((int64_t)fr->nargs);
             break;
+        // ---- M160（缺陷 159）：闭包 cell 四指令 ----
+        case PXOP_CELLGET:
+            slots[in.a] = px_cell_get(slots[in.b]);
+            break;
+        case PXOP_CELLSET:
+            px_cell_set(slots[in.b], slots[in.a]);
+            break;
+        case PXOP_CELLNEW:
+            slots[in.a] = px_cell(slots[in.b]);
+            break;
+        case PXOP_MKCLO: {
+            const PxBCModule* m = cf->mod;
+            int fidx = (int)in.b;
+            if (!m || fidx < 0 || fidx >= m->nfuncs) {
+                px_error("VM %s:%d MKCLO 函数下标越界 %d (nfuncs=%d)",
+                         cf->name, fr->line, fidx, m ? m->nfuncs : -1);
+                break;
+            }
+            const PxVMFunc* nf = &m->funcs[fidx];
+            LXValue env = px_dict();
+            for (int i = 0; i < nf->nup; i++) {          // 捕获 cell 按 callee 的 upnames 序
+                int src = (int)in.c + i;
+                LXValue cell = (src >= 0 && src < fr->nslots) ? slots[src] : px_null();
+                px_dict_set(env, nf->upvals[i], cell);
+            }
+            px_dict_set(env, PX_VM_CLO_KEY, px_int((int64_t)(intptr_t)nf));
+            if (in.a < fr->nslots) slots[in.a] = px_func_env(nf->name, px_vm_closure_entry, env);
+            break;
+        }
         case PXOP_MOV:
             slots[in.a] = slots[in.b];
             break;
@@ -983,6 +1059,24 @@ LXValue px_vm_entry(LXValue* args, int nargs, void* ctx) {
     return px_vm_run_func(px_vm_state(), f, args, nargs);
 }
 
+// ---- M160（缺陷 159）：闭包 trampoline（ctx=&env；PX_FUNC.env 字段，px_func_env 建）----
+//   px→px 的闭包调用在解释循环里走 vm_frame_push_clo（不回 C 递归）；本入口覆盖
+//   px_call 路径（native 回调拿到的闭包、CALLM/with 等），语义与之一致。
+LXValue px_vm_closure_entry(LXValue* args, int nargs, void* ctx) {
+    LXValue env = ctx ? *(LXValue*)ctx : px_null();
+    const PxVMFunc* f = vm_closure_func(env);
+    if (!f) {
+        px_error("VM: 闭包对象缺少所属函数（env 无 %s）", PX_VM_CLO_KEY);
+        return px_null();
+    }
+    PxVmState* st = px_vm_state();
+    int base = st->nframes;
+    vm_frame_push_clo(st, f, args, nargs, -1, env);
+    LXValue ret = px_null();
+    vm_run_loop(st, base, 0, &ret);
+    return ret;
+}
+
 // ---- 运行模块顶层（A1：注册全局函数 + Top bc；main() 调用约定随 S3-B CALL 接入）----
 LXValue px_vm_run_module(PxVmState* st, const PxBCModule* m) {
     if (!m) return px_null();
@@ -1030,6 +1124,8 @@ void px_vm_gc_mark_state(void* vst) {
             px_gc_mark_slots(fr->slots, fr->nslots);
         if (fr->unlock_kind && fr->unlock_obj.type != PX_NULL)   // M93-S3：with 展开
             px_gc_mark_slots(&fr->unlock_obj, 1);                // 持锁对象保活（帧弹前）
+        if (fr->env.type != PX_NULL)                             // M160：闭包帧 env 保活
+            px_gc_mark_slots(&fr->env, 1);                       //   （闭包对象可能已不可达）
     }
 }
 

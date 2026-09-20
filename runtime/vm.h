@@ -102,7 +102,21 @@ typedef struct {
                             //   对齐 codegen px_gen_from_list —— 多 for/多变量推导先收集再包 gen）
 #define PXOP_NARGS   57      // a=dst s（M90-S1/F1：槽s = 本帧实际实参数 nargs（int）——
                             //   默认参数入口填充序列读取「实参是否提供槽 i」用 nargs ≤ i 判定）
-#define PXM_MAX      58
+// M160（第 46 轮 · 缺陷 159）：**词法闭包 / 函数体内 `def`** —— cell 四指令。
+// 背景：VM 轨此前无捕获机制 —— 闭包体引用外层局部一律编译成 GETG（按全局名查）
+//   ⇒ 运行期「未定义变量」；函数体内 `def` 更是发射期直接 panic（bc_emit 未实现）。
+// 模型（与 C 轨 M129 / 解释轨 env 链**同语义：按引用捕获**）：
+//   · cell = 单元素 list（px_cell/px_cell_get/px_cell_set；GC 自动可达，无新类型）
+//   · 外层帧把「被本帧内闭包捕获」的局部槽改存 cell：入口 CELLNEW 原地装箱，
+//     其后本帧读写一律 CELLGET/CELLSET（引用语义：闭包写 ⇒ 外层可见，反之亦然）
+//   · 创建闭包 MKCLO：把外层 cell 搬到连续临时槽区 → 装进 env dict（名 → cell）
+//     → 包成 PX_FUNC（px_func_env，ctx=&env ⇒ GC 标记 env）
+//   · 被调帧入口：按 upnames 把 env 里的 cell 填回槽（槽 = 本帧参数数 + i）
+#define PXOP_CELLGET 58  // a=dst s, b=cell 槽 s2   slots[a] = px_cell_get(slots[b])
+#define PXOP_CELLSET 59  // a=val 槽 s, b=cell 槽 s2   px_cell_set(slots[b], slots[a])
+#define PXOP_CELLNEW 60  // a=dst s, b=val 槽 s2   slots[a] = px_cell(slots[b])
+#define PXOP_MKCLO   61  // a=dst s, b=funcs 下标, c=捕获 cell 连续槽基址（个数 = 被调 nup）
+#define PXM_MAX      62
 
 // ==================== 常量子（K 池） ====================
 // 发射器按 kind 生成静态项；LOADK 时物化为 LXValue（str 需 strdup/常驻，
@@ -139,8 +153,13 @@ typedef struct {
     const PxInst*   bc;        // 字节码数组
     int             nbc;       // 指令条数
     const PxBCModule* mod;     // 所属模块（K/N/G 池访问；发射器前向声明静态初值）
-    // P2（闭包 cell）预留：upvalue 描述表指针
-    const void*     upvals;
+    // M160（缺陷 159）：闭包捕获（upvalue cell）——
+    //   upvals = 捕获名表（nup 项，顺序 = 帧内槽序）；帧入口按「槽 = 本帧参数数 + i」
+    //   从闭包 env 逐个取 cell 填入该槽。发射器保证 MKCLO 装槽序与 upvals 序**同源**。
+    //   nup=0（无捕获，绝大多数函数）时发射器仍写 `.upvals=NULL` ⇒ 既有 emit-c 产物
+    //   逐字节不变（发射冻结门只对**真有闭包**的样例变化，信号不被稀释）。
+    const char**    upvals;
+    int             nup;
 } PxVMFunc;
 
 // B2：struct 类型元数据（NEWSTRUCT 运行时字段名来源；发射器按声明序收集）
@@ -178,6 +197,9 @@ typedef struct {
     // M93-S3：with 系列展开（mutex.with/rwlock.with_read/with_write）——压 fn 帧时
     //   登记返回后自动解锁动作（帧弹公共路径执行，含正常 RET/RET0/TRY 传播）。
     //   unlock_kind：0=无 / 1=px_mutex_unlock / 2=px_rwlock_runlock / 3=px_rwlock_wunlock
+    // M160（缺陷 159）：闭包帧的捕获环境（名 → cell）—— GC 标记根（帧存活期间
+    //   保活 env：闭包对象可能已被调用方槽覆盖/回收，而本帧仍在用它）。
+    LXValue         env;
     int             unlock_kind;
     LXValue         unlock_obj;  // 锁对象（GC 标记根：帧弹前保活锁对象，防 fn 内 GC 误回收）
 } PxFrame;
@@ -203,6 +225,10 @@ PxVmState*  px_vm_unbind(void);                 // M93-S2：解绑（返回当�
 // D2 trampoline：与 LXFuncPtr 兼容 —— 统一函数对象 func.fn = px_vm_entry。
 // ctx 必须是 PxVMFunc*（px_func 构造 PX_FUNC 时传入）。
 LXValue px_vm_entry(LXValue* args, int nargs, void* ctx);
+
+// M160（缺陷 159）：闭包入口 —— ctx = &func.env（px_func_env 约定，LXValue*）。
+//   所属 PxVMFunc* 由 env 的保留键携带（见 vm.c）；压帧时把 env 里的 cell 绑到 upvalue 槽。
+LXValue px_vm_closure_entry(LXValue* args, int nargs, void* ctx);
 
 // 在 st 上运行函数 f（压帧→解释→弹帧→返回值）。递归入口（顶层/px_call 回调用）。
 // 不可让出（嵌套/主线程场景：遇阻塞 native 走原 pthread 路径）。

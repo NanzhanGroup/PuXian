@@ -15,9 +15,9 @@
 #   ③ C 轨（px build --c）编译 + 运行 ⇒ **stdout 与解释轨逐字节一致**；
 #   ④ type() 口径守卫：三轨 `type(函数值) == "function"`（缺陷 161 的回归守卫，
 #      改回 "fn" 会让 ①-③ 的断言计数变化 ⇒ 必红）；
-#   ⑤ 已知缺口报告（**不算失败**，但必须打印编号，修好后本门应升级）：
-#      缺陷 159（VM 轨闭包 upvalue 未实现 + bc_emit 不支持函数体内 FuncDef）、
-#      缺陷 160（C 轨嵌套 def 运行期未定义变量）—— 见 interp_fn_closure.px；
+#   ⑤ 闭包三轨一致（**M160 起由"缺口 SKIP"升格为硬判据**）：interp_fn_closure.px
+#      在 VM 轨 / C 轨都要 pass=5 fail=0 且 stdout 与解释轨逐字节一致
+#      —— 缺陷 159（VM 轨 upvalue/函数体内 FuncDef）、缺陷 160（C 轨嵌套 def 捕获）。
 #   ⑥ 负控 3 道（默认跑，`--neg-skip` 可跳过）：关闭自动桥接（runtime）/
 #      不安装调度器（interp.px）/ 调度器忽略函数值（interp.px）—— **三道必须判红**，
 #      且每道都要逐字节还原并复跑全绿。
@@ -93,7 +93,7 @@ if [ -f "$WORK/case_vm" ] && [ -f "$WORK/case_c" ]; then
     note "三轨 type(函数值) == \"function\"（口径一致）"
 fi
 
-echo "── [5/5] 已知缺口报告（不计失败）"
+echo "── [5/5] 闭包三轨一致（M160：缺陷 159/160 已收口，硬判据）"
 timeout 60 "$PXI" "$CLOSURE" > "$WORK/clo.interp.out" 2>&1
 if grep -q '^pass=5 fail=0$' "$WORK/clo.interp.out"; then
     note "解释轨闭包捕获（upvalue）经桥正确：pass=5 fail=0"
@@ -108,24 +108,26 @@ if timeout 400 ./tools/px build "$WORK/clo.px" > "$WORK/clo.vm.log" 2>&1 && [ -x
     cp "$WORK/build/clo" "$WORK/clo_vm"
     timeout 60 "$WORK/clo_vm" > "$WORK/clo.vm.out" 2>&1
     if grep -q '^pass=5 fail=0$' "$WORK/clo.vm.out"; then
-        note "…VM 轨闭包用例运行全过（缺陷 159 已修？请复核本门并升级为三轨一致）"
+        note "✅ VM 轨闭包用例运行全过（缺陷 159 已收口 · M160）"
     else
-        note "SKIP 缺陷 159：VM 轨闭包**运行**未通过 —— $(grep -m1 -E '运行时错误|FAIL' "$WORK/clo.vm.out" | head -c 100)"
+        bad "缺陷 159 回归：VM 轨闭包**运行**未通过 —— $(grep -m1 -E '运行时错误|FAIL' "$WORK/clo.vm.out" | head -c 100)"
     fi
+    cmp -s "$WORK/clo.interp.out" "$WORK/clo.vm.out" || bad "VM 轨闭包 stdout 与解释轨不一致（缺陷 159 回归）"
 else
-    note "SKIP 缺陷 159：VM 轨闭包用例编译失败（bc_emit 不支持函数体内 FuncDef / 无 upvalue 机制）"
+    bad "VM 轨闭包用例编译失败（缺陷 159 回归：bc_emit 不支持函数体内 FuncDef / 无 cell 捕获）"
 fi
 rm -rf "$WORK/build"
 if timeout 500 ./tools/px build --c "$WORK/clo.px" > "$WORK/clo.c.log" 2>&1 && [ -x "$WORK/build/clo" ]; then
     cp "$WORK/build/clo" "$WORK/clo_c"
     timeout 60 "$WORK/clo_c" > "$WORK/clo.c.out" 2>&1
     if grep -q '^pass=5 fail=0$' "$WORK/clo.c.out"; then
-        note "…C 轨闭包用例运行全过（缺陷 160 已修？请复核本门）"
+        note "✅ C 轨闭包用例运行全过（缺陷 160 已收口 · M160）"
     else
-        note "SKIP 缺陷 160：C 轨闭包**运行**未通过 —— $(grep -m1 -E '运行时错误|FAIL' "$WORK/clo.c.out" | head -c 100)"
+        bad "缺陷 160 回归：C 轨闭包**运行**未通过 —— $(grep -m1 -E '运行时错误|FAIL' "$WORK/clo.c.out" | head -c 100)"
     fi
+    cmp -s "$WORK/clo.interp.out" "$WORK/clo.c.out" || bad "C 轨闭包 stdout 与解释轨不一致（缺陷 160 回归）"
 else
-    note "SKIP 缺陷 160：C 轨闭包用例编译失败"
+    bad "C 轨闭包用例编译失败（缺陷 160 回归）"
 fi
 rm -rf "$WORK/build"
 

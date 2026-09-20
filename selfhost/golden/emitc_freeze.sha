@@ -78,8 +78,10 @@ examples/m156_onnx/onnx_dump.px src=dbc371c0cc3a6a82 rc=0 out=9a0699075941b23a14
 examples/m157_onnx_exec/embed_mini.px src=34c7d0b94eb2f0a3 rc=0 out=0c263567c073fcbbc5582ba056766772 err=e3b0c44298fc1c14
 examples/m157_onnx_exec/onnx_exec.px src=28ac79f5fab92ba0 rc=0 out=16c2b2b1cc474e0910b20024a05a83db err=e3b0c44298fc1c14
 examples/m157_onnx_exec/opnames.px src=51df99788de8f3f4 rc=0 out=c786bd48088a16c76020424aab12e806 err=e3b0c44298fc1c14
-examples/m158_interp_fn/interp_fn_closure.px src=a4dd60425d33381c rc=0 out=cd2a88b00bdaca24391a82d6e6a55007 err=e3b0c44298fc1c14
+examples/m158_interp_fn/interp_fn_closure.px src=a4dd60425d33381c rc=0 out=7d5062c41f91a5bb0a2221ea6864f530 err=e3b0c44298fc1c14
 examples/m158_interp_fn/interp_fn_test.px src=4c321e0d76fc586d rc=0 out=5300d2fa26016d4560bb4be3a03663c8 err=e3b0c44298fc1c14
+examples/m160_closure/closure_edge.px src=7ae1d229458079a6 rc=0 out=517105b3cbe36759ed925e91ccc0611c err=e3b0c44298fc1c14
+examples/m160_closure/closure_test.px src=137ecbf8d4c0f442 rc=0 out=f79c3f78189955a414c7a4817fee3018 err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=ca57a90d693278f051ce29d427bb006a err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=864a86fa0f3b5c69d3239ebdb2eac63a err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14
@@ -220,7 +222,7 @@ examples/m93_s3/coro_chan.px src=8b3ea44f2753e3f4 rc=0 out=4f5b123110db9b9a2d4ef
 examples/m93_s3/coro_gc_block.px src=5687a5561a1d2e4a rc=0 out=fb4c256c08f685d972af2cdcca85a01e err=e3b0c44298fc1c14
 examples/m93_s3/coro_mutex.px src=d69b337a0e22369a rc=0 out=3598c5127cf49bdd37f1ee8daddd1d8d err=e3b0c44298fc1c14
 examples/m93_s3/coro_sleep_par.px src=e3d92c625080d91e rc=0 out=e12af119d3ab7d1cf464f4d188205098 err=e3b0c44298fc1c14
-examples/m93_s3/coro_with.px src=e83eca6d2b39a314 rc=0 out=3c862f6f03af4cfc8dbbb04f6256d919 err=e3b0c44298fc1c14
+examples/m93_s3/coro_with.px src=e83eca6d2b39a314 rc=0 out=6ac82679f84e72f52d0b84dcf82bcaa5 err=e3b0c44298fc1c14
 examples/m94_s2/coro_preempt.px src=d9ae5ab3b3c4081a rc=0 out=fa2e8bcd97796f39b1adab98957de720 err=e3b0c44298fc1c14
 examples/m94_s3/coro_timer_thr.px src=def1c85fbf9e72c8 rc=0 out=796f103fa1f45c064bed4e53f90b1291 err=e3b0c44298fc1c14
 examples/m95_s2/m95_daemon.px src=78c3d021f5bfa1ae rc=0 out=709c78a22dbe0607f9a82573409d980e err=e3b0c44298fc1c14

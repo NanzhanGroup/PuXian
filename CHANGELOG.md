@@ -1,3 +1,60 @@
+## M160 —— 词法闭包 / 函数体内 `def`：VM 轨 + C 轨两缺口收口（第 46 轮 · 缺陷 159/160/162/163）
+
+- **背景（M158 登记的两个缺口）**：
+  · **缺陷 159（VM 轨 = 用户面默认轨）**：`bc_emit` **不支持函数体内 `FuncDef`**（发射期
+    `panic: bc_emit_stmt 未实现: [FuncDef, …]`），且**没有捕获机制** —— 闭包体引用外层局部
+    一律编译成 `GETG`（按全局名查）⇒ 运行期「未定义变量」/「无法相加: null + int」。
+  · **缺陷 160（C 轨）**：函数体内 `def` 在运行期「未定义变量: hits」；更基本的是
+    `cg_ast_bound` 把 **Assign 目标当「绑定」** ⇒ 与体里的引用相消 ⇒ 自由变量集漏掉它
+    （`var x = 0` + `let g = fn (): x = x + 1` ⇒ 运行期「未定义变量: x」）。
+- **统一语义（两轨同一条真相 · 与解释轨 env 链一致：按引用捕获）**：
+  · **C 轨**：① `cg_ast_bound` 不再把 Assign 目标当绑定（**它是"使用"**，闭包体内 `x = x + 1`
+    是对外层 x 的读写）；② `cg_collect_hoist_vars` 提升函数体内 `def` 名；③ `cg_scan_closure_caps`
+    把函数体内 `FuncDef` 视同闭包参与自由变量并集；④ 闭包发射抽成
+    **`cg_gen_closure(params, body, dispname)`** —— 匿名 `fn` 与具名 `def` 共用同一条路径
+    （`cg_stmt` 里 `FuncDef` → 局部绑定闭包值，体是语句列表故包一层 `Block`）。
+  · **VM 轨**：新增 **cell 四指令** —— `CELLGET`(58) / `CELLSET`(59) / `CELLNEW`(60) /
+    `MKCLO`(61)（`PXM_MAX` 58 → 62）+ `PxVMFunc.upvals/nup`（捕获名表）+ `PxFrame.env`
+    （闭包帧捕获环境，GC 标记根）+ `px_vm_closure_entry` / `vm_frame_push_clo`。
+    发射器（`bc_emit.px`）：`bc_box_frame` 在**任何指令发射之前**把「被帧内闭包捕获的本帧
+    绑定（参数 ∪ hoist 局部）」标记为 cell 并入口 `CELLNEW` 原地装箱；读走 `CELLGET`、
+    写走 `CELLSET`（**默认参数填充也不例外** —— 直写槽会把 cell 冲掉）；闭包创建发
+    `MKCLO`（把外层 cell 搬到连续临时槽 → 装 env dict → 包成 `PX_FUNC`）；帧入口按
+    `upvals` 序把 env 里的 cell 绑回槽（槽 = 本帧参数数 + i）。
+- **顺带照出并修掉两个真缺陷（都在 VM 轨发射器）**：
+  · **缺陷 162 · 嵌套闭包的 funcs 下标取错**：`bc_emit_push_lambda` 用 `len(funcs)-1` 当返回下标，
+    而**函数体发射期间还会压入内层闭包/函数体内 def** ⇒ 外层闭包的引用指到内层函数（实测：
+    三层嵌套捕获时 `mid` 被指成 `deeper`，运行期「无法调用非函数: int」）。修法：**压入时即取下标**。
+  · **lambda 内局部漏装箱**：`bc_emit_push_lambda` 原先没有 hoist 预扫描 ⇒「闭包内的局部又被
+    内层闭包捕获」这一类看不见（实测「此类型不支持索引: function」）。修法：先按
+    `bc_lambda_hoist` 预占槽，再做捕获分析（与 `bc_emit_func_body` 同一条纪律）。
+- **缺陷 163 登记（未修 · 下一轮）**：生成器 `transform/filter` 引用**外层局部**时，VM 轨仍按
+  全局名解析（该 lambda 由 `bc_emit_genexp` 合成、不在 AST 的闭包分析面内；C 轨 M129 是按值
+  `px_cell(...)` 兜底、同样不是引用语义）⇒ 门里按**缺口报告**打印编号，不计失败。
+- **门 `examples/m160_closure/`（`M160-VERIFY-OK`）**：判据逐层可单独变红 ——
+  ① 解释轨 13 断言 `pass=13 fail=0`；② VM 轨（默认轨）编译+运行 ⇒ stdout 与解释轨**逐字节一致**；
+  ③ C 轨逃生舱同上；④ 加强面（跨两层/三层捕获 + 闭包经 `set_interval` native 回调）三轨一致；
+  ⑤ **交叉判据**：M158 的缺口复现器 `interp_fn_closure.px` 三轨一致（M158 门第 ⑤ 层由此
+  **由 SKIP 升格为硬判据**）；⑥ 缺口登记（缺陷 163）；⑦ **负控 3 道**（实测全判红）：
+  A 恢复 Assign 绑定口径 ⇒ C 轨 `未定义变量: x`；B 关掉本帧装箱 ⇒ VM 轨 `此类型不支持索引赋值: null`；
+  C `MKCLO` 捕获槽基址 +1 ⇒ VM 轨 `此类型不支持索引: null`。每道逐字节还原 + `--check-all` 复绿。
+- **发射冻结门重定基（267 件 · 有意改发射，逐条已核）**：① `interp_fn_closure.px`（闭包产物
+  改走 cell/MKCLO = 本次修复）；② `coro_with.px`（lambda 内局部预占槽 ⇒ 槽号平移，语义等价）；
+  ③ +2 件新增门语料。**为此把 `PxVMFunc` 的捕获字段名保持 `upvals`**（nup=0 时仍写
+  `.upvals=NULL`）⇒ 无闭包的样例 emit-c **逐字节不变**，冻结门的信号不被稀释。
+- **格式门（fmt_check）与"行号即发射"**：`cg_expr.px` 被 `pxfmt` 判出**多一个空行**。空行属于
+  **发射可见**的东西（编译器自身产物带 `PXOP_SRCLINE` ⇒ 删空行会平移其后所有行号 ⇒ 两条
+  golden 同时变），故本轮**不删空行**，改为在该位置放一行注释：行号不变 ⇒
+  `golden/compiler.c` 与 `golden/compiler.bc.dump` 的重定基范围不被无谓放大（实测 BC 基线与
+  本次改动无关、一次没动）。
+- **验证**：`rebake_bin.sh --rebake-all`（14 件）+ `--check-all` **14/14 指纹一致** + `--check`
+  （55 例行为对拍）+ `--check-vm`（字节码镜像逐字节一致）；`bootstrap_prove.sh`（C 轨自举成立）+
+  `bootstrap_prove_bc.sh`（BC 镜像重定基后自举成立）；`emitc_freeze --freeze` 后 267/267 绿；
+  `examples/m158_interp_fn/verify.sh`（第 ⑤ 层升格后全绿）；`examples/m160_closure/verify.sh` 全绿。
+- **边界（诚实登记）**：① 跨层捕获靠"自由变量逐层上提"成立（门内已测两层/三层），但
+  **跨帧自由变量仍以"本帧绑定"为界**；② 闭包与 `spawn` 的交互未变（`spawn` 仍只支持直接调用）；
+  ③ 生成器 `transform/filter` 见缺陷 163；④ VM 轨仍不建模块级遮蔽（与既有口径一致）。
+
 ## M159 —— aarch64 官方通道（第 45 轮 · qg-issue 87 · 缺口 G1/G2/G4 · 第三方上游照出）
 
 - **背景（两个第三方上游仓库照出的缺口）**：`banshanhanfu/px-openEuler-bootstrap`（openEuler aarch64
