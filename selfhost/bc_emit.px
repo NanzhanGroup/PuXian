@@ -1057,11 +1057,12 @@ def bc_emit_comp(func, kind, elems, cond, rv, clauses, ci):
     let jf = len(func["bc"])
     bc_emit_inst(func, "JMPF", lt, 0, 0)
     if len(vars) == 1:
-        bc_emit_inst(func, "INDEX", func["smap"][rust_unescape(vars[0])], its, ctr)
+        # M164（缺陷 170）：迭代元素走 ITERAT（dict 键位置语义仅在迭代可见）
+        bc_emit_inst(func, "ITERAT", func["smap"][rust_unescape(vars[0])], its, ctr)
     else:
         # 多变量解包：迭代元素入 item 槽，再逐字段 INDEX 到各变量槽
         let item = bc_tmp(func)
-        bc_emit_inst(func, "INDEX", item, its, ctr)
+        bc_emit_inst(func, "ITERAT", item, its, ctr)
         var fi = 0
         while fi < len(vars):
             let iv = bc_tmp(func)
@@ -1114,16 +1115,27 @@ def bc_emit_caps_snapshot(func, caps):
     return snap_base
 # M161（缺陷 163）：生成器合成 lambda 的捕获表 = 自由变量 ∩ 本帧局部名
 #   （顺序同 cg_closure_caps —— 与 MKCLO 装槽序、帧入口 upvals 序同源）
-def bc_genexp_caps(params_ast, body_expr, func):
-    let cap_free = []
-    cg_closure_caps(["Closure", params_ast, null, body_expr, [], null], cap_free)
+def bc_genexp_caps(param_names, body_expr, func):
+    # M164（第 50 轮 · 缺陷 175）：**形参必须先被正确排除**。
+    #   原实现把「已经 rust_unescape 过的名字」包成 Param 节点再交给 cg_closure_caps，
+    #   而那条路会再调 `rust_unescape(p[1])` —— 它假定字符串带引号、**无条件剥掉首尾各一个
+    #   字符** ⇒ "c" 变 ""，再被 cg_name_add 的 `n != ""` 判据**静默丢弃** ⇒ 形参没进 bound、
+    #   被当成自由变量；一旦本帧**恰好有同名局部**（如 `var c = "Z"`），该局部就被装箱并被
+    #   捕获到生成器里，体内读到的成了外层变量的值。
+    #   实测（修前）：`(c for c in ["1","2"])` 且外层有 `var c = "Z"` ⇒
+    #     解释轨 "12" ✓ / C 轨 "12" ✓ / **VM 轨 "ZZ" ✗**（用户面默认轨）。
+    #   ⇒ 参数改为**已 unescape 的平铺名表**（形参名），并在此只做集合差：
+    #     自由变量 = 体内引用名 − 形参，再 ∩ 本帧局部（与 C 轨 cg_gen_lambda 同一条真相）。
+    #     ⚠️ 本函数**绝不**再对名字调 rust_unescape —— 它不幂等（见上）。
+    let used = []
+    cg_ast_used(body_expr, used)
     let caps = []
-    var i = 0
-    while i < len(cap_free):
-        let cn = cap_free[i]
-        if func["smap"].has(cn):
+    var ui = 0
+    while ui < len(used):
+        let cn = used[ui]
+        if not contains(param_names, cn) and func["smap"].has(cn):
             caps.append(cn)
-        i += 1
+        ui += 1
     return caps
 # GenExp 单 for 单变量 → NEWGEN 惰性（px_gen_lazy：seq + transform=fn(x){elt}
 #   + filter=fn(x){cond}，对齐 codegen cg GenExp 单 for 惰性路径）
@@ -1140,13 +1152,13 @@ def bc_emit_genexp(expr, dst, func):
         bc_emit_expr(clauses[0][2], seq, func)
         # M161（缺陷 163）：合成的 lambda 必须带上捕获 —— 否则体内引用本帧局部时
         #   按全局名解析（实测「未定义变量: k」）。顺序与 MKCLO 装槽序同源。
-        #   ⚠️ params 元素是 **Param 节点**（名字在索引 1，见 parser `["Param", name, ty, default, pos]`）；
-        #      写成 [name, null] 会让 cg_closure_caps 的 rust_unescape(p[1]) 收到 null ⇒ 编译期崩。
-        let pms = [["Param", vn, null, null, null]]
-        let tcaps = bc_genexp_caps(pms, expr[1], func)
+        #   ⚠️ 参数是**已 unescape 的平铺形参名表**（`[vn]`）—— 不要再造 Param 节点、
+        #      也不要再 unescape：bc_genexp_caps 的头部注释记了两次去引号会静默吃掉形参
+        #      （缺陷 175，M164 修）。
+        let tcaps = bc_genexp_caps([vn], expr[1], func)
         var fcaps = []
         if expr[3] != null:
-            fcaps = bc_genexp_caps(pms, expr[3], func)
+            fcaps = bc_genexp_caps([vn], expr[3], func)
         let tidx = bc_emit_push_lambda([vn], expr[1], tcaps)
         var fidx = -1
         if expr[3] != null:
@@ -1698,7 +1710,9 @@ def bc_emit_for(stmt, func):
     let jf = len(func["bc"])
     bc_emit_inst(func, "JMPF", lt, 0, 0)
     # 循环变量 = its[ctr]
-    bc_emit_inst(func, "INDEX", vs, its, ctr)
+    # M164（缺陷 170）：迭代走 **ITERAT**（px_iter_at）—— dict 取第 i 个键只属迭代机制，
+    #   用户面 `d[i]` 走 INDEX（现严格报 R1002）。修前两者共用 INDEX ⇒ 位置语义外漏。
+    bc_emit_inst(func, "ITERAT", vs, its, ctr)
     let ctx = bc_new_dict()
     ctx["breaks"] = []
     ctx["conts"] = []

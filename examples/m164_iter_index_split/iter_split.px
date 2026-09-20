@@ -1,0 +1,95 @@
+# M164 门 ①：**迭代位置语义与用户索引分离** —— 正常路径（迭代仍然可用）
+# 语义基准（修后）：
+#   · `for k in d`          → 迭代机制走 **px_iter_at / ITERAT**（dict → 第 i 个键，插入序）
+#   · `[k for k in d]`      → 同上（推导式展开的迭代步）
+#   · `d[k]`（用户索引）    → 一律 R1002「字典索引键必须是字符串」（见 err_* 用例）
+# 本文件只跑**正常路径**，断言全为绝对值（不靠两轨互比）。
+# 用法：pxi / px build / px build --c 三轨 stdout 应逐字节一致（pass=22 fail=0）
+var fails = 0
+
+def chk(cond, tag):
+    if not cond:
+        fails = fails + 1
+        print("FAIL " + tag)
+
+def count_iter(it):
+    var n = 0
+    for x in it:
+        n = n + 1
+    return n
+
+def sum_values(d):
+    var s = 0
+    for k in d:
+        s = s + d[k]
+    return s
+
+def main():
+    let d = {"a": 1, "b": 2, "c": 3}
+
+    # ---- 1-4 dict for-in：键序（插入序）+ 计数 + 累加 ----
+    let ks = [k for k in d]
+    chk(ks == ["a", "b", "c"], "1-dict-forin-keys-order")
+    chk(count_iter(d) == 3, "2-dict-forin-count")
+    chk(sum_values(d) == 6, "3-dict-forin-sum-values")
+    var joined = ""
+    for k in d:
+        joined = joined + k
+    chk(joined == "abc", "4-dict-forin-concat")
+
+    # ---- 5-7 dict methods 与 for-in 同源 ----
+    chk(d.keys() == ks, "5-keys-equals-forin")
+    chk(count_iter(d.keys()) == 3, "6-iter-dot-keys")
+    chk(count_iter(d.values()) == 3, "7-iter-dot-values")
+
+    # ---- 8-11 其它可迭代类型（迭代步走 px_iter_at，非 dict 时与索引等价） ----
+    let xs = [10, 20, 30]
+    chk(count_iter(xs) == 3, "8-list-forin")
+    chk(count_iter((1, 2, 3, 4)) == 4, "9-tuple-forin")
+    var s = ""
+    for ch in "汉字ab":
+        s = s + ch
+    chk(s == "汉字ab" and len(s) == 4, "10-str-forin-runes")
+    chk(count_iter(range(5)) == 5, "11-range-forin")
+
+    # ---- 12-15 推导式展开的迭代步 ----
+    let lc = [k for k in d]
+    chk(lc == ["a", "b", "c"], "12-comp-list-over-dict")
+    let dc = {k: d[k] * 10 for k in d}
+    chk(dc["a"] == 10 and dc["c"] == 30 and len(dc) == 3, "13-comp-dict-over-dict")
+    let pairs = [("x", 1), ("y", 2), ("z", 3)]
+    let kv = [k for k, v in pairs]
+    chk(kv == ["x", "y", "z"], "14-comp-unpack-tuple")
+    let dc2 = {k: v * 2 for k, v in pairs}
+    chk(dc2["z"] == 6 and len(dc2) == 3, "15-comp-dict-from-pairs")
+
+    # ---- 16-18 多 for / 嵌套 / 条件（迭代步在嵌套层也要正确） ----
+    let flat = [y for row in [[1, 2], [3, 4]] for y in row]
+    chk(flat == [1, 2, 3, 4], "16-comp-multi-for")
+    let nested = [[y for y in range(2)] for x in range(2)]
+    chk(nested == [[0, 1], [0, 1]], "17-comp-nested")
+    let ev = [x for x in [1, 2, 3, 4] if x % 2 == 0]
+    chk(ev == [2, 4], "18-comp-cond")
+
+    # ---- 19-22 break / continue / 空容器 / 批量 ----
+    var first = ""
+    for k in d:
+        first = k
+        break
+    chk(first == "a", "19-forin-break")
+    var cnt = 0
+    for k in d:
+        if k == "b":
+            continue
+        cnt = cnt + 1
+    chk(cnt == 2, "20-forin-continue")
+    let empty = {}
+    chk(count_iter(empty) == 0, "21-forin-empty-dict")
+    var big = {}
+    var i = 0
+    while i < 300:
+        big[str(i)] = i
+        i = i + 1
+    chk(count_iter(big) == 300 and len(big) == 300, "22-forin-bulk-300")
+
+    print("pass=" + str(22 - fails) + " fail=" + str(fails))

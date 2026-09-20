@@ -26,7 +26,7 @@ static LXValue fn_module_search_paths(LXValue* args, int nargs, void* ctx) {
         px_srcline(25);
         LXValue _t7 = _v4;
         for (int _t8 = 0; _t8 < px_len(_t7); _t8++) {
-            _v5 = px_index(_t7, px_int(_t8));
+            _v5 = px_iter_at(_t7, px_int(_t8));
             px_srcline(26);
             (void)(px_method(_v2, "append", (LXValue[]){_v5}, 1));
         }
@@ -66,7 +66,7 @@ static LXValue fn_module_candidates(LXValue* args, int nargs, void* ctx) {
         px_srcline(40);
         LXValue _t19 = px_call(px_get_global("range"), (LXValue[]){px_int(1LL), px_call(px_get_global("len"), (LXValue[]){_v9}, 1)}, 2);
         for (int _t20 = 0; _t20 < px_len(_t19); _t20++) {
-            _v14 = px_index(_t19, px_int(_t20));
+            _v14 = px_iter_at(_t19, px_int(_t20));
             px_srcline(41);
              _v13 = px_add(px_add(_v13, px_str("/")), px_index(_v9, _v14));
         }
@@ -82,7 +82,7 @@ static LXValue fn_module_candidates(LXValue* args, int nargs, void* ctx) {
     px_srcline(48);
     LXValue _t21 = _v9;
     for (int _t22 = 0; _t22 < px_len(_t21); _t22++) {
-        _v15 = px_index(_t21, px_int(_t22));
+        _v15 = px_iter_at(_t21, px_int(_t22));
         px_srcline(49);
          _v13 = px_add(px_add(_v13, px_str("/")), _v15);
     }
@@ -112,7 +112,7 @@ static LXValue fn_module_find(LXValue* args, int nargs, void* ctx) {
     px_srcline(56);
     LXValue _t29 = _v26;
     for (int _t30 = 0; _t30 < px_len(_t29); _t30++) {
-        _v27 = px_index(_t29, px_int(_t30));
+        _v27 = px_iter_at(_t29, px_int(_t30));
         px_srcline(57);
         if (px_is_truthy(px_call(px_get_global("exists"), (LXValue[]){_v27}, 1))) {
             px_srcline(58);
@@ -224,7 +224,7 @@ static LXValue fn_loader_load(LXValue* args, int nargs, void* ctx) {
         px_srcline(103);
         LXValue _t51 = px_index(_v43, px_str("search_paths"));
         for (int _t52 = 0; _t52 < px_len(_t51); _t52++) {
-            _v48 = px_index(_t51, px_int(_t52));
+            _v48 = px_iter_at(_t51, px_int(_t52));
             px_srcline(104);
              _v47 = px_call(px_get_global("module_find"), (LXValue[]){_v44, _v48, px_index(_v43, px_str("stdlib"))}, 3);
             px_srcline(105);

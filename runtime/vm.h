@@ -121,7 +121,11 @@ typedef struct {
 //   （解释轨 iexpr 推导路径的词条；修前 VM 走 set 方法报「方法 set 参数 1 需要 string」、
 //   C 轨 `if (_k.type == PX_STR)` **静默丢弃**）。顺带省掉一次方法查找 + 一次 CALL。
 #define PXOP_DICTSET 62  // a=dict 槽, b=key 槽, c=val 槽（结果丢弃；px_dict_set_checked）
-#define PXM_MAX      63
+// M164（第 50 轮 · 缺陷 170）：**迭代专用索引** —— 语义 = px_iter_at（dict → 第 i 个键；
+//   其余类型同 INDEX）。for-in / 推导式展开改走本指令，用户 `d[i]` 仍走 INDEX（现在严格报
+//   R1002）。修前 VM 轨复用 INDEX，把「第 i 个键」漏成用户可见语义（解释轨是报错的）⇒ 三轨分叉。
+#define PXOP_ITERAT  63  // a=dst, b=obj 槽, c=idx 槽（px_iter_at）
+#define PXM_MAX      64
 
 // ==================== 常量子（K 池） ====================
 // 发射器按 kind 生成静态项；LOADK 时物化为 LXValue（str 需 strdup/常驻，

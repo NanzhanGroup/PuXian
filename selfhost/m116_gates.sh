@@ -202,6 +202,25 @@ step "M163 字典键类型严格化（第 49 轮 · 缺陷 168/169/171 —— �
 # 判据：三轨 stdout 逐字节一致（16 + 6 断言）+ **严格性层 8 用例 × 三轨（rc≠0 + R1002 + 统一词条）**
 #   + 3 道负控（VM NEWDICT 恢复跳过 / C checked 恢复静默 / 解释轨推导词条退回旧文案）。
 run m163_dict_key bash examples/m163_dict_key_strict/verify.sh
+step "M164 迭代位置语义与用户索引分离（第 50 轮 · 缺陷 170/174/175 —— d[int] / 惰性 GenExp seq / GenExp 形参捕获）"
+# 背景：三处同病根的缺口 ——
+#   ① 缺陷 170：`d[int]`（读取）解释轨报 R1002，而 VM/C 轨返回**第 i 个键**（M37 为 `for k in d`
+#      迭代内部把「位置语义」塞进了用户可见的 `px_index`）⇒ 三轨分叉；
+#   ② 缺陷 174：惰性生成器的 seq **只认 list/gen** ⇒ `(c for c in "abc")` / `(e for e in (1,2,3))`
+#      / `(k for k in d)` 在 VM/C 轨**静默产出空生成器**（解释轨正常；range 看着正常只因 C 端
+#      range 早已物化成 list）；
+#   ③ 缺陷 175：`bc_genexp_caps` 把**已 unescape 的名字**再塞回 Param 节点，而 `cg_closure_caps`
+#      又调 `rust_unescape(p[1])`（该函数假定带引号、**无条件剥首尾各一字符**）⇒ "c"→""，被
+#      `cg_name_add` 的空串判据静默丢弃 ⇒ 形参被当自由变量；一旦本帧有同名局部（`var c = "Z"`）
+#      就被装箱捕获 ⇒ **VM 轨**读到外层值（解释/C 轨正确）。
+# 修法：迭代协议与用户索引**彻底分离** —— runtime 新增 `px_iter_at`（迭代专用：dict → 第 i 个键）
+#   并**删除** `px_index` 的 dict-int 分支；VM 新指令 **ITERAT**；C 轨 cg_stmt/cg_expr 的迭代步
+#   改走 `px_iter_at`；`px_lazy_seq_get` 补 dict/str/tuple（走同一协议）；`bc_genexp_caps` 改
+#   「体内引用名 − 形参，再 ∩ 本帧局部」（与 C 轨 cg_gen_lambda 同一条真相，且不再二次 unescape）。
+# 判据：三轨 stdout 逐字节一致（22 + 10 + 4 断言）+ **严格性层 5 用例 × 三轨（rc≠0 + R1002 + 统一词条）**
+#   + 4 道负控（px_index 恢复 dict-int / 两轨发射器退回 INDEX / 惰性 seq 退回只认 list/gen /
+#   bc_genexp_caps 退回旧捕获算法 —— 每道必须判红 + 逐字节还原）。
+run m164_iter bash examples/m164_iter_index_split/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

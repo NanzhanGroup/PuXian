@@ -1,0 +1,4 @@
+# M164 门 ③-e：`d[bool]` —— 非字符串键 ⇒ R1002（三轨同码同文）
+def main():
+    let d = {"a": 1}
+    print(d[true])

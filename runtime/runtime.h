@@ -271,6 +271,12 @@ LXValue px_ushr(LXValue a, LXValue b);
 // ==================== 容器操作 ====================
 
 LXValue px_index(LXValue obj, LXValue idx);
+// M164（第 50 轮 · 缺陷 170）：**迭代专用**索引入口 —— 「位置语义」（dict → 第 i 个键）
+//   只属于 for-in / 推导式展开的内部机制，**不再**从用户可见的 `d[i]`（px_index）暴露。
+//   实测（本轮修前）：解释轨 `d[0]` 报 R1002，而 VM/C 轨返回**第 0 个键** ⇒ 三轨分叉，
+//   而那个位置语义当年（M37）只是为了让 `for k in d` 能用 px_index 遍历。
+//   现拆开：`for k in d` 走本入口，`d[i]` 一律 R1002「字典索引键必须是字符串」。
+LXValue px_iter_at(LXValue obj, LXValue idx);
 // M21/M24：切片 a[start:end] / a[start:end:step]（start/end/step 为 null 表示省略；
 // str 按 UTF-8 字符、list/tuple/bytes 取元素；step<0 反向，step=0 报错）
 LXValue px_slice(LXValue obj, LXValue start, LXValue end, LXValue step);

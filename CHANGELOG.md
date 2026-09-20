@@ -1,3 +1,75 @@
+## M164 —— 迭代**位置语义**与用户索引**分离**（第 50 轮 · 缺陷 170/174/175：`d[int]` / 惰性 GenExp 的 seq / GenExp 形参捕获）
+
+- **背景（三处缺口，同一个病根：当年为了让 `for k in d` 能用 `px_index` 遍历，把「位置语义」
+  塞进了用户可见的索引入口）**：
+  · **缺陷 170（`d[int]` 读取位置 · 三轨分叉）**：解释轨 `d[0]` 报
+    `R1002 字典索引键必须是字符串`，而 **VM 轨与 C 轨返回第 0 个键**（M37 遗留：`px_index(d, int)`
+    被**迭代机制与用户索引共用**）。用户很容易把它误读成「第 0 个元素」。
+  · **缺陷 174（惰性 GenExp 的 seq 类型 · 静默空结果）**：`px_lazy_seq_get` **只认 list/gen**
+    ⇒ `(c for c in "abc")` / `(e for e in (1, 2, 3))` / `(k for k in d)` 在 **VM 轨与 C 轨
+    静默产出空生成器**（解释轨正常给出 rune / 元素 / 键）。`range(...)` 之所以「看着正常」，
+    只是因为 C 端 range 早已物化成 list。
+  · **缺陷 175（GenExp 合成 lambda 的形参捕获 · VM 轨读错变量）**：`bc_genexp_caps` 把
+    **已经 `rust_unescape` 过的名字**再包成 Param 节点交给 `cg_closure_caps`，而那条路会再调
+    `rust_unescape(p[1])` —— 该函数假定字符串带引号、**无条件剥掉首尾各一个字符** ⇒ `"c"` 变 `""`，
+    被 `cg_name_add` 的 `n != ""` 判据**静默丢弃** ⇒ 形参没进 bound、被当成自由变量；一旦本帧
+    **恰好有同名局部**（`var c = "Z"`），该局部就被装箱并被捕获，体内读到外层变量的值。
+    实测：`(c for c in ["1","2"])` + 外层 `var c = "Z"` ⇒ 解释轨 `12` ✓ / C 轨 `12` ✓ /
+    **VM 轨（用户面默认轨）`ZZ` ✗**。
+- **统一语义（三轨同一条真相）**：
+  · **迭代协议**（`for x in it` / 推导式展开 / 惰性生成器取值）= 由**迭代专用入口**提供：
+    `dict` → 第 i 个键（插入序，与解释轨 `i_iter` 的 `v.keys()` 逐位对应）；其余类型与整数
+    索引等价。
+  · **用户索引** `d[k]`：`k` 非字符串 ⇒ `R1002 字典索引键必须是字符串`（三轨同码同文）；
+    「第 i 个键」这一位置语义**不再从用户面可见**。
+  · **GenExp 的 seq**：接受**全部可迭代类型**（list / tuple / str / dict / range / generator）。
+  · **GenExp 的形参**：在体内**遮蔽**同名外层局部（与 C 轨 `cg_gen_lambda` 同一条真相）。
+- **实现**：
+  · **runtime**：新增 **`px_iter_at`**（`runtime/runtime.c` + `runtime.h`）—— 迭代专用：
+    dict → 第 i 个键，其余回落 `px_index`；并**删除 `px_index` 的 dict-int 分支**（用户索引
+    从此严格）。`px_lazy_seq_get` 补 `PX_DICT` / `PX_STR` / `PX_TUPLE`（走同一迭代协议，
+    长度取 `px_len`，与解释轨 `len(seq)` 同源）。
+  · **VM 轨**：新增指令 **`PXOP_ITERAT`**（`runtime/vm.h`/`vm.c`，a=dst/b=obj/c=idx）——
+    `bc_emit_for` 与推导式展开的迭代步从 `INDEX` 改走它；LIST[int] 快路径与 `INDEX` 同构
+    （for 循环热路径不掉速）。`bc_genexp_caps` 重写为「体内引用名 − 形参，再 ∩ 本帧局部」，
+    参数改为**已 unescape 的平铺形参名表**（`[vn]`），**不再二次 unescape**。
+  · **C 轨**：`cg_stmt.px` 的 `For` 与 `cg_expr.px` 的推导式展开改走 `px_iter_at`
+    （内层解包 / 用户索引仍走 `px_index` —— 那是用户语义）。
+- **门 `examples/m164_iter_index_split/`（`M164-VERIFY-OK`）**：判据逐层可单独变红 ——
+  ① 解释轨主用例 **22 断言**（dict/list/tuple/str/range 的 for-in、`keys()`/`values()` 同源、
+  break/continue、空容器、300 键批量、推导式四种形态）；② VM 轨（用户面默认轨）与 ③ C 轨
+  ⇒ stdout 与解释轨**逐字节一致**；④ 加强面 **10 断言**（嵌套双字典、函数返回/参数字典、
+  推导式条件与键序、**GenExp 的 str/tuple/dict 三种 seq**）；⑤ 形参遮蔽 **4 断言**
+  （含「真自由变量仍必须被捕获」的正面保证）；⑥ **严格性层（本门主职）5 个错误用例 × 三轨**
+  —— `d[0]` / `d[i]` / `d[1.5]` / `d[-1]` / `d[true]`，每轨都必须 `rc≠0` + 含 `R1002` +
+  含**统一词条**（修前 VM/C 在这些用例上是 `rc=0` 且打印首键 ⇒ 当场判红）；
+  ⑦ **负控 4 道**（实测全判红 + 逐字节还原）：A `px_index` 恢复 dict-int 分支（缺陷 170 原样）
+  ⇒ 严格性层红；B 两轨发射器的迭代步同时退回 `INDEX` ⇒ 正判据主用例红；
+  C `px_lazy_seq_get` 退回「只认 list/gen」（缺陷 174 原样）⇒ 加强面红；
+  D `bc_genexp_caps` 退回旧捕获算法（缺陷 175 原样）⇒ 形参遮蔽用例红。
+- **重定基（全部按「差异行是否全属本次有意改动族」逐条核对后才覆盖）**：
+  · 入库件 **14/14** 重烘（`PXSRC-fd0e69aab2cd4a4e` / `PXRT-baa2b4eaf87f08de`）；
+    `--check`（55 例 rc/stdout/stderr 逐字节）与 `--check-vm`（字节码镜像逐字节）全绿。
+  · `selfhost/golden/compiler.c` 16983 → **16980 行**：核对法 = 把新基准里的 `px_iter_at(`
+    还原成 `px_index(` 后与旧基准逐字节比对 ⇒ 剩余差异**只有 `px_srcline(N)` 行号**（因注释行
+    插入而位移）⇒ 唯一语义差异就是那 14 处迭代步。
+  · `selfhost/golden/compiler.bc.dump` 35924 → **35920 行**（`ITERAT` 0 → 13 处），由
+    `bootstrap_prove_bc.sh --update-golden` 重定基并跨引擎重放自证。
+  · **codegen golden 7 件**（`s04_ctrl` / `s08_comprehensive` / `s12_cffi` / `s15_multiline` /
+    `v01_value` / `v02_env` / `v03_module`）：逐件核对「新基准把 `px_iter_at(` 还原成
+    `px_index(` 后与旧基准逐字节一致」⇒ 7/7 通过后才覆盖；复跑 `diffcheck --codegen` **19/19 绿**。
+  · **发射冻结门**：`--freeze` 重定基 **291 件**（273 语料 + 本门 8 件 + 新增）。
+    类别 B（源码未变而产物变）**82 件**，用「旧 `pxc_vm`（= HEAD 二进制）vs 新 `pxc_vm`」
+    逐件分类核对：**206 件完全相同 · 83 件仅 `PXOP_ITERAT` ↔ `PXOP_INDEX` 之差 · 2 件为本门
+    新增文件**（其差异 = `CELLGET`/upval → `MOV`(param)，即缺陷 175 的修复本身）⇒ **无回归**。
+- **文档**：cheatsheet 事实 192（迭代协议 vs 用户索引 + GenExp seq/形参口径）；
+  `docs/DICT_STRICT_MIGRATION.md` §1 把「别用 `d[0]`」由「未收口差异」改为**正式契约**
+  （`d[非字符串键]` ⇒ R1002）；`selfhost/m116_gates.sh` 与 `.github/workflows/ci.yml` 注册本门。
+- **教训（本轮最值得记的一条）**：`rust_unescape` **不幂等**（`s[1:len(s)-1]` 假定带引号）——
+  凡是「把已 unescape 的名字再传进按 AST 口径工作的函数」都**静默**得到空串；空串又被
+  `cg_name_add` 的 `n != ""` 判据吞掉 ⇒ 症状远离病灶（表现是「读错变量」，病灶是「形参名变空」）。
+  同类风险点已在 `bc_genexp_caps` 头部注释里点名。
+
 ## M163 —— 字典**构造位置**的非字符串键 = R1002：**静默数据丢失**收口（第 49 轮 · 缺陷 168/169/171）
 
 - **背景（一处静默数据丢失 + 一处同码不同文，全部本轮实测）**：

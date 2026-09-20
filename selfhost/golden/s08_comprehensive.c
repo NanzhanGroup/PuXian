@@ -47,7 +47,7 @@ static LXValue fn_each(LXValue* args, int nargs, void* ctx) {
     px_srcline(10);
     LXValue _t6 = _v2;
     for (int _t7 = 0; _t7 < px_len(_t6); _t7++) {
-        _v4 = px_index(_t6, px_int(_t7));
+        _v4 = px_iter_at(_t6, px_int(_t7));
         px_srcline(11);
         (void)(px_call(_v3, (LXValue[]){_v4}, 1));
     }
@@ -69,7 +69,7 @@ static LXValue fn_unique(LXValue* args, int nargs, void* ctx) {
     px_srcline(15);
     LXValue _t12 = _v8;
     for (int _t13 = 0; _t13 < px_len(_t12); _t13++) {
-        _v10 = px_index(_t12, px_int(_t13));
+        _v10 = px_iter_at(_t12, px_int(_t13));
         px_srcline(16);
         if (px_is_truthy(px_not(px_call(px_get_global("contains"), (LXValue[]){_v9, _v10}, 2)))) {
             px_srcline(17);
@@ -97,13 +97,13 @@ static LXValue fn_flatten(LXValue* args, int nargs, void* ctx) {
     px_srcline(22);
     LXValue _t19 = _v14;
     for (int _t20 = 0; _t20 < px_len(_t19); _t20++) {
-        _v16 = px_index(_t19, px_int(_t20));
+        _v16 = px_iter_at(_t19, px_int(_t20));
         px_srcline(23);
         if (px_is_truthy(px_eq(px_call(px_get_global("type"), (LXValue[]){_v16}, 1), px_str("list")))) {
             px_srcline(24);
             LXValue _t21 = _v16;
             for (int _t22 = 0; _t22 < px_len(_t21); _t22++) {
-                _v17 = px_index(_t21, px_int(_t22));
+                _v17 = px_iter_at(_t21, px_int(_t22));
                 px_srcline(25);
                 (void)(px_method(_v15, "append", (LXValue[]){_v17}, 1));
             }
@@ -137,7 +137,7 @@ static LXValue fn_zip_lists(LXValue* args, int nargs, void* ctx) {
     px_srcline(33);
     LXValue _t29 = px_call(px_get_global("range"), (LXValue[]){_v26}, 1);
     for (int _t30 = 0; _t30 < px_len(_t29); _t30++) {
-        _v27 = px_index(_t29, px_int(_t30));
+        _v27 = px_iter_at(_t29, px_int(_t30));
         px_srcline(34);
         (void)(px_method(_v25, "append", (LXValue[]){px_list_n((LXValue[]){px_index(_v23, _v27), px_index(_v24, _v27)}, 2)}, 1));
     }
@@ -204,7 +204,7 @@ static LXValue fn_group_by(LXValue* args, int nargs, void* ctx) {
     px_srcline(53);
     LXValue _t46 = _v39;
     for (int _t47 = 0; _t47 < px_len(_t46); _t47++) {
-        _v42 = px_index(_t46, px_int(_t47));
+        _v42 = px_iter_at(_t46, px_int(_t47));
         px_srcline(54);
          _v43 = px_call(px_get_global("str"), (LXValue[]){px_call(_v40, (LXValue[]){_v42}, 1)}, 1);
         px_srcline(55);
@@ -244,7 +244,7 @@ static LXValue fn_sort_by(LXValue* args, int nargs, void* ctx) {
     px_srcline(65);
     LXValue _t55 = _v48;
     for (int _t56 = 0; _t56 < px_len(_t55); _t56++) {
-        _v51 = px_index(_t55, px_int(_t56));
+        _v51 = px_iter_at(_t55, px_int(_t56));
         px_srcline(66);
         (void)(px_method(_v50, "append", (LXValue[]){px_list_n((LXValue[]){px_call(_v49, (LXValue[]){_v51}, 1), _v51}, 2)}, 1));
     }
@@ -255,7 +255,7 @@ static LXValue fn_sort_by(LXValue* args, int nargs, void* ctx) {
     px_srcline(69);
     LXValue _t57 = _v50;
     for (int _t58 = 0; _t58 < px_len(_t57); _t58++) {
-        _v53 = px_index(_t57, px_int(_t58));
+        _v53 = px_iter_at(_t57, px_int(_t58));
         px_srcline(70);
         (void)(px_method(_v52, "append", (LXValue[]){px_index(_v53, px_int(1LL))}, 1));
     }
@@ -309,11 +309,11 @@ static LXValue fn_process(LXValue* args, int nargs, void* ctx) {
     LXValue px_err_74_val = px_null();
     int px_err_74_proped = 0;
     px_srcline(31);
-    _v65 = ({ LXValue _t75 = px_list(0); LXValue _t76 = _v64; for (int _t78=0; _t78<px_len(_t76); _t78++) { LXValue _t77 = px_index(_t76, px_int(_t78)); LXValue _cv79 = _t77; if (px_is_truthy(px_gt(_cv79, px_int(0LL)))) { px_list_push(_t75, px_mul(_cv79, px_int(2LL))); }  }  _t75; });
+    _v65 = ({ LXValue _t75 = px_list(0); LXValue _t76 = _v64; for (int _t78=0; _t78<px_len(_t76); _t78++) { LXValue _t77 = px_iter_at(_t76, px_int(_t78)); LXValue _cv79 = _t77; if (px_is_truthy(px_gt(_cv79, px_int(0LL)))) { px_list_push(_t75, px_mul(_cv79, px_int(2LL))); }  }  _t75; });
     px_srcline(32);
-    _v66 = ({ LXValue _t80 = px_list(0); LXValue _t81 = px_call(px_get_global("range"), (LXValue[]){px_int(10LL)}, 1); for (int _t83=0; _t83<px_len(_t81); _t83++) { LXValue _t82 = px_index(_t81, px_int(_t83)); LXValue _cv84 = _t82; if (px_is_truthy(({ LXValue _t85 = px_eq(px_mod(_cv84, px_int(2LL)), px_int(1LL)); px_is_truthy(_t85) ? px_ne(_cv84, px_int(5LL)) : _t85; }))) { px_list_push(_t80, _cv84); }  }  _t80; });
+    _v66 = ({ LXValue _t80 = px_list(0); LXValue _t81 = px_call(px_get_global("range"), (LXValue[]){px_int(10LL)}, 1); for (int _t83=0; _t83<px_len(_t81); _t83++) { LXValue _t82 = px_iter_at(_t81, px_int(_t83)); LXValue _cv84 = _t82; if (px_is_truthy(({ LXValue _t85 = px_eq(px_mod(_cv84, px_int(2LL)), px_int(1LL)); px_is_truthy(_t85) ? px_ne(_cv84, px_int(5LL)) : _t85; }))) { px_list_push(_t80, _cv84); }  }  _t80; });
     px_srcline(33);
-    _v67 = ({ LXValue _t86 = px_dict(); LXValue _t87 = px_method(_v64, "items", (LXValue[]){}, 0); for (int _t89=0; _t89<px_len(_t87); _t89++) { LXValue _t88 = px_index(_t87, px_int(_t89)); LXValue _cv90_0 = px_index(_t88, px_int(0)); LXValue _cv91_1 = px_index(_t88, px_int(1)); { LXValue _k = px_call(px_get_global("str"), (LXValue[]){_cv90_0}, 1); LXValue _v = _cv90_0; px_dict_set_checked(_t86, _k, _v); }  }  _t86; });
+    _v67 = ({ LXValue _t86 = px_dict(); LXValue _t87 = px_method(_v64, "items", (LXValue[]){}, 0); for (int _t89=0; _t89<px_len(_t87); _t89++) { LXValue _t88 = px_iter_at(_t87, px_int(_t89)); LXValue _cv90_0 = px_index(_t88, px_int(0)); LXValue _cv91_1 = px_index(_t88, px_int(1)); { LXValue _k = px_call(px_get_global("str"), (LXValue[]){_cv90_0}, 1); LXValue _v = _cv90_0; px_dict_set_checked(_t86, _k, _v); }  }  _t86; });
     px_srcline(34);
     _v68 = px_index(_v64, px_int(0LL));
     px_srcline(35);

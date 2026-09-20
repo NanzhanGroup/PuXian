@@ -146,7 +146,7 @@ static LXValue fn_env_items(LXValue* args, int nargs, void* ctx) {
     px_srcline(56);
     LXValue _t31 = px_method(_v28, "keys", (LXValue[]){}, 0);
     for (int _t32 = 0; _t32 < px_len(_t31); _t32++) {
-        _v29 = px_index(_t31, px_int(_t32));
+        _v29 = px_iter_at(_t31, px_int(_t32));
         px_srcline(57);
         (void)(px_method(_v27, "append", (LXValue[]){px_list_n((LXValue[]){_v29, px_index(_v28, _v29)}, 2)}, 1));
     }
@@ -327,7 +327,7 @@ int main(int argc, char** argv) {
     px_srcline(99);
     LXValue _t39 = px_get_global("items");
     for (int _t40 = 0; _t40 < px_len(_t39); _t40++) {
-        LXValue _v41 = px_index(_t39, px_int(_t40));
+        LXValue _v41 = px_iter_at(_t39, px_int(_t40));
         px_srcline(100);
         (void)(px_method(px_get_global("item_names"), "append", (LXValue[]){px_index(_v41, px_int(0LL))}, 1));
     }

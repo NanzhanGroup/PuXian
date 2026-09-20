@@ -2880,6 +2880,26 @@ static LXValue px_lazy_seq_get(LXValue seq, int i, int* has) {
             return l.as.obj->as.list.items[i];
         }
     }
+    // M164（第 50 轮 · 缺陷 174）：惰性生成器的 seq 支持**全部可迭代类型**。
+    //   修前只认 list/gen ⇒ `(c for c in "abc")` / `(e for e in (1,2,3))` / `(k for k in d)`
+    //   在 VM 轨与 C 轨**静默产出空生成器**（解释轨正常给出 rune / 元素 / 键）；
+    //   `range(...)` 之所以「看起来正常」只是因为 C 端 range 早已物化成 list。
+    //   走 px_iter_at（迭代位置语义）：dict → 第 i 个键；str/tuple → 与整数索引等价。
+    //   长度由 px_len（与解释轨 `len(seq)` 同源）给定 —— 超出即结束。
+    if (seq.type == PX_DICT) {
+        LXObject* o = seq.as.obj;
+        if (i >= 0 && i < o->as.dict.len) {
+            *has = 1;
+            return px_str(o->as.dict.keys[i]);
+        }
+    }
+    if (seq.type == PX_STR || seq.type == PX_TUPLE) {
+        int n = px_len(seq);
+        if (i >= 0 && i < n) {
+            *has = 1;
+            return px_iter_at(seq, px_int(i));
+        }
+    }
     *has = 0;
     return px_null();
 }
@@ -3992,20 +4012,37 @@ LXValue px_index(LXValue obj, LXValue idx) {
                 px_error("R1008: 字典没有键 '%s'", k);
             return px_dict_get(obj, k);
         }
-        // M37：dict 整数索引 → 返回第 i 个键（for-in dict 用 px_len/px_index 遍历，与解释器 keys 一致）
-        if (idx.type == PX_INT) {
-            LXObject* o = obj.as.obj;
-            int i = (int)idx.as.i;
-            if (i < 0) i += o->as.dict.len;
-            if (i >= 0 && i < o->as.dict.len) {
-                return px_str(o->as.dict.keys[i]);
-            }
-            px_error("R1003: 字典索引越界: %d (len=%d)", i, o->as.dict.len);
-        }
+        // M164（第 50 轮 · 缺陷 170）：**删掉 M37 的「dict 整数索引 → 第 i 个键」分支**。
+        //   那个位置语义本是为 `for k in d`（用 px_len/px_index 遍历）开的后门，却同时
+        //   成了用户可见的 `d[0]` —— 于是解释轨 `d[0]` 报 R1002 而 VM/C 轨返回第 0 个键
+        //   （三轨分叉，且 C 轨用户会把「第 i 个键」误读成「第 i 个元素」）。
+        //   现在迭代机制走**独立入口** px_iter_at（见下），用户索引一律严格。
         px_error("R1002: 字典索引键必须是字符串");
     }
     px_error("R1002: 此类型不支持索引: %s", px_type_name(obj));
     return px_null();
+}
+
+// ==================== M164（第 50 轮 · 缺陷 170）：迭代专用索引 ====================
+// 语义：**dict → 第 i 个键**（与解释轨 `i_iter` 的 `v.keys()` 逐位对应，插入序）；
+//   其余类型 → 与 px_index 完全一致（list/tuple/string/bytes 的整数索引）。
+// 为什么单列一个入口：`for k in d` 需要「第 i 个键」，而 `d[i]` 必须是**错误**。
+//   两者此前共用 px_index ⇒ 位置语义从迭代机制漏进用户语言面。拆开后：
+//     · C 轨  cg_stmt For / cg_expr 推导式  → px_iter_at
+//     · VM 轨 PXOP_ITERAT（for / 推导式）  → px_iter_at
+//     · 用户 `d[i]`：三轨一律 R1002「字典索引键必须是字符串」
+LXValue px_iter_at(LXValue obj, LXValue idx) {
+    if (obj.type == PX_DICT) {
+        if (idx.type != PX_INT)
+            px_error("R1002: 字典索引键必须是字符串");
+        LXObject* o = obj.as.obj;
+        int i = (int)idx.as.i;
+        if (i < 0) i += o->as.dict.len;
+        if (i >= 0 && i < o->as.dict.len)
+            return px_str(o->as.dict.keys[i]);
+        px_error("R1003: 字典索引越界: %d (len=%d)", i, o->as.dict.len);
+    }
+    return px_index(obj, idx);
 }
 
 // ==================== M21/M24 切片 a[start:end] / a[start:end:step] ====================
