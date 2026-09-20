@@ -38,6 +38,15 @@
   真编译真运行。
 - **附带（生产侧 · 非本仓）**：镜像站 `soft.xiusoft.cn/puxian/releases/` 目录请求 500 已根治
   （Mahesvara `http.px` 在 `read_file` 前分叉 `is_dir`：301 / index / autoindex，见事实 182）。
+- **顺带修一处真缺陷（第三方通道照出来的）**：`runtime/runtime_ed25519.c` 用了 `snprintf` 却
+  **缺 `#include <stdio.h>`** —— gcc 只给 `-Wimplicit-function-declaration` 警告（入库件因此
+  一直"看起来没事"），而 **clang ≥16 / zig cc 直接当错误** ⇒ 任何 Clang 系的交叉/原生构建都
+  编不过（本轮 CI 交叉自举档首跑即撞上：`error: call to undeclared library function 'snprintf'`）。
+  已补 include，并**全件重烘**入库件（`PXRT-f067e64562ba5f56`）：`--rebake-all` 14/14、
+  `--check-all` 全件一致、`--check` 55 例行为对拍、`--check-vm` 字节码镜像 34749 行逐字节一致。
+- **门 `examples/m159_hostarch/` 第 ⑧ 层改为「随宿主自适应」判据**：原写法钉死「VM 轨 + 入库
+  pxc_vm」，在真机 aarch64 上必然红（那里 pxc_vm 不可执行 ⇒ 按设计就是要落 C 轨）。
+  现判据 = 规则本身：可执行则保持 VM 轨；不可执行则**必须**自动落 C 轨 + 有提示。
 
 ## M158 —— 解释轨函数值 → runtime native 桥（第 40 轮 · qg-issue 87 · 缺陷 114/161 根治）
 

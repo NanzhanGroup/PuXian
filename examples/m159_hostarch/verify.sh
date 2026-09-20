@@ -87,13 +87,22 @@ grep -q "无法在本机执行" "$W/n7.txt" && ok "报错点明「无法在本�
 grep -q "native_bootstrap.sh" "$W/n7.txt" && ok "报错给出修复命令（native_bootstrap.sh）" || bad "报错未给修复命令"
 grep -q "PX_PXC_BIN" "$W/n7.txt" && ok "报错给出逃生舱 PX_PXC_BIN" || bad "报错未给逃生舱"
 
-echo "== ⑧ 计划可断言编译轨（plan: pxc / pxc_run）=="
-PX_HOST_ARCH=aarch64 $PX build --print-plan "$W/h.px" > "$W/p8.txt" 2>&1
-has "$W/p8.txt" "plan: pxc=$ROOT/bootstrap/pxc_vm" "VM 轨编译器 = 入库 pxc_vm"
-grep -q "^plan: pxc_sub=--emit-c" "$W/p8.txt" && ok "计划含 pxc_sub=--emit-c" || bad "计划缺 pxc_sub"
+echo "== ⑧ 计划可断言编译轨（plan: pxc / pxc_run · **随宿主自适应**）=="
+# 规则（不依赖宿主是什么）：① 编译轨必须可在本机执行；② 若入库 VM 版编译器在本机不可执行，
+#   计划必须**自动落到 C 轨**并给出提示。x86_64 宿主走 ①（VM 轨可用），非 x86_64 宿主走 ②
+#   （CI 的 native-arm64 真机 job 即走 ②）—— 故判据写成条件分支，而不是钉死 x86_64 的结论。
+PX_HOST_ARCH=aarch64 $PX build --print-plan "$W/h.px" > "$W/p8.txt" 2>"$W/e8.txt"
+grep -q "^plan: pxc=" "$W/p8.txt" && ok "计划含 pxc（编译轨路径）" || bad "计划缺 pxc"
 grep -q "^plan: pxc_run=" "$W/p8.txt" && ok "计划含 pxc_run（可执行性）" || bad "计划缺 pxc_run"
+if grep -q "^plan: pxc_run=ok" "$W/p8.txt"; then
+    has "$W/p8.txt" "plan: engine=vm" "本机可执行 VM 版编译器 ⇒ 保持 VM 轨（宿主 $(uname -m)）"
+    has "$W/p8.txt" "plan: pxc_sub=--emit-c" "VM 轨 pxc_sub=--emit-c"
+else
+    has "$W/p8.txt" "plan: engine=c" "VM 版编译器不可执行 ⇒ 自动落 C 轨（宿主 $(uname -m)）"
+    grep -q "宿主机" "$W/e8.txt" && ok "落轨有明确提示（不静默）" || bad "落轨无提示"
+fi
 PX_BUILD_ENGINE=c $PX build --print-plan "$W/h.px" > "$W/p8c.txt" 2>&1
-has "$W/p8c.txt" "plan: pxc=$ROOT/bootstrap/pxc" "C 轨编译器 = 入库 pxc"
+grep -qE "^plan: pxc=.*/bootstrap/pxc(-[a-z0-9_]+)?$" "$W/p8c.txt" && ok "C 轨编译器来自 bootstrap/（pxc 或 pxc-<arch>）" || bad "C 轨编译器路径异常"
 grep -q "^plan: pxc_sub=build" "$W/p8c.txt" && ok "C 轨 pxc_sub=build" || bad "C 轨 pxc_sub 错"
 
 echo "== ⑥+ 真机回归：按**本机宿主**默认档真编译真运行（x86_64 ⇒ lib+QUIC；aarch64 ⇒ lib-aarch64+no-quic）=="

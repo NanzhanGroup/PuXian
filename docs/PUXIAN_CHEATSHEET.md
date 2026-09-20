@@ -1672,4 +1672,18 @@ set_timeout(fn (): print("once after 2s"), 2000)
      `xmalloc(2^63)` 失败 ⇒ 协程被隔离、HTTP 层 500（**进程存活** ⇒ "页面崩了没人知道"）。
      m158 实测该路径已不再崩：`read_file(目录)` 三轨均返回**空串**（`type` = `string`）。
      ⇒ 写静态文件服务时**仍要显式分叉目录**（`is_dir` → 301/索引/404），别指望报错。
+183. **`snprintf` 必须自己 include `<stdio.h>`（第 45 轮 · M159 真缺陷）**：`runtime_ed25519.c`
+     用了 `snprintf` 却缺该 include —— **gcc 只警告**（`-Wimplicit-function-declaration`，入库件
+     因此一直"看起来没事"），而 **clang ≥16 / zig cc 直接报错**
+     （`error: call to undeclared library function 'snprintf'`）⇒ Clang 系的原生/交叉构建全编不过。
+     教训：**"只在 gcc 下绿"不是绿**；跨编译器（clang/zig）与跨架构（aarch64）都是同一件事的
+     两个面 —— 我方 CI 现在两边都有档（`native-arm64` + `multiarch-cross` 交叉自举档）。
+184. **CI 日志读不到时的取证姿势（第 45 轮 · M159）**：GitHub 的 **job 日志下载要 admin 权限**
+     （匿名 API 403），但 **check-run annotations 匿名可读**（
+     `GET /repos/{o}/{r}/commits/{sha}/check-runs` → `/check-runs/{id}/annotations`）。故在
+     workflow 里把失败细节打成注解即可远程定位：
+     `if ! cmd > log 2>&1; then tail -30 log | sed 's/^/::error:: /'; exit 1; fi`
+     ⇒ 「门红在哪一行」不再依赖 gh CLI / token。另：**另开一档**或用 `set -o pipefail`，
+     否则 `cmd | tee` 会把退出码吃掉（本项目 §39/§40 已因同类问题吃过两次亏）。
+
 
