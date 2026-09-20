@@ -195,7 +195,14 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           cd "$RUNNER_TEMP/pkg"
           PKG="puxian-bootstrap-aarch64-${TAG}.tar.gz"
-          gh release upload "$TAG" "$PKG" "$PKG.sha256" --clobber
+          ls -l
+          # ⚠ 必须显式 --repo：本步骤 cwd 在 $RUNNER_TEMP 下（**不在 git 仓库内**），
+          #   gh 无法从本地仓库推断目标 ⇒ 会以 "not a git repository" 收场（m159 首跑即栽此）。
+          if ! gh release upload "$TAG" "$PKG" "$PKG.sha256" --clobber --repo "$GITHUB_REPOSITORY"; then
+            echo "::error::gh release upload 失败（tag=$TAG repo=$GITHUB_REPOSITORY cwd=$PWD）"
+            gh release view "$TAG" --repo "$GITHUB_REPOSITORY" 2>&1 | sed 's/^/::error::release /' || true
+            exit 1
+          fi
           echo "✅ 已上传 $PKG（并列主包资产）"
 
   # ============================================================
