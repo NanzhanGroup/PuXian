@@ -96,11 +96,14 @@ echo "== ⑧ 计划可断言编译轨（plan: pxc / pxc_run · **随宿主自适
 env -u PX_BUILD_ENGINE PX_HOST_ARCH=aarch64 $PX build --print-plan "$W/h.px" > "$W/p8.txt" 2>"$W/e8.txt"
 grep -q "^plan: pxc=" "$W/p8.txt" && ok "计划含 pxc（编译轨路径）" || bad "计划缺 pxc"
 grep -q "^plan: pxc_run=" "$W/p8.txt" && ok "计划含 pxc_run（可执行性）" || bad "计划缺 pxc_run"
-if grep -q "^plan: pxc_run=ok" "$W/p8.txt"; then
-    has "$W/p8.txt" "plan: engine=vm" "本机可执行 VM 版编译器 ⇒ 保持 VM 轨（宿主 $(uname -m)）"
+if grep -q "^plan: engine=vm" "$W/p8.txt"; then
+    # 保持 VM 轨 ⇒ 这条轨的编译器必须**确实能在本机执行**（否则就是"选了跑不动的轨"）
+    has "$W/p8.txt" "plan: pxc_run=ok" "保持 VM 轨 ⇒ 编译轨可在本机执行（宿主 $(uname -m)）"
     has "$W/p8.txt" "plan: pxc_sub=--emit-c" "VM 轨 pxc_sub=--emit-c"
 else
-    has "$W/p8.txt" "plan: engine=c" "VM 版编译器不可执行 ⇒ 自动落 C 轨（宿主 $(uname -m)）"
+    has "$W/p8.txt" "plan: engine=c" "非 VM 轨 ⇒ 自动落 C 轨（宿主 $(uname -m)）"
+    has "$W/p8.txt" "plan: pxc_sub=build" "C 轨 pxc_sub=build"
+    # 落 C 轨的唯一正当理由 = VM 版编译器在本机不可执行 ⇒ 必须**明确提示**（不静默）
     grep -q "宿主机" "$W/e8.txt" && ok "落轨有明确提示（不静默）" || bad "落轨无提示"
 fi
 PX_BUILD_ENGINE=c $PX build --print-plan "$W/h.px" > "$W/p8c.txt" 2>&1
