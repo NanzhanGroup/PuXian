@@ -577,8 +577,11 @@ def cg_gen_lambda(params, body):
         var ee = "({ LXValue _capenv = px_dict(); "
         for cn in caps:
             let cv = cg_var_of(cn)
+            # M161（缺陷 164）：生成器的捕获必须**按值快照** —— 即使外层已把该局部装箱为
+            #   cell（因被同帧闭包按引用捕获），生成器也要取**当前值**再造新 cell，
+            #   对齐解释轨（GenExp 创建时求值）与 VM 轨（bc_emit_caps_snapshot: CELLGET+CELLNEW）。
             if cg_cells.has(cn):
-                ee += "px_dict_set(_capenv, \"" + cn + "\", " + cv + "); "
+                ee += "px_dict_set(_capenv, \"" + cn + "\", px_cell(px_cell_get(" + cv + "))); "
             else:
                 ee += "px_dict_set(_capenv, \"" + cn + "\", px_cell(" + cv + ")); "
         ee += "_capenv; })"

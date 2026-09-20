@@ -1,0 +1,49 @@
+# M161 缺口复现器：生成器 transform / filter 引用**外层局部**（缺陷 163 最小复现）
+# 语义基准（三轨同一条真相 = 创建时快照）：
+#   解释轨 iexpr.px GenExp 一律物化 + 创建时求值；C 轨 M129 px_cell 兜底；
+#   VM 轨 M161 bc_emit_caps_snapshot（CELLGET 取值 → CELLNEW 造新 cell）。
+# 用法：pxi / px build / px build --c 三轨 stdout 应逐字节一致（pass=5 fail=0）
+var fails = 0
+
+def chk(cond, tag):
+    if not cond:
+        fails = fails + 1
+        print("FAIL " + tag)
+
+# ---- 1. transform 引用外层局部 ----
+def make_transform():
+    var k = 10
+    let g = (x + k for x in [1, 2, 3])
+    return gen_next(g)
+chk(make_transform() == 11, "1-transform-local")
+
+# ---- 2. filter 引用外层局部 ----
+def make_filter():
+    var lim = 2
+    let g = (x for x in [1, 2, 3, 4] if x > lim)
+    return gen_next(g)
+chk(make_filter() == 3, "2-filter-local")
+
+# ---- 3. filter 引用形参（捕获源是参数槽） ----
+def by_param(lo):
+    let g = (x for x in [1, 2, 3, 4] if x > lo)
+    return gen_next(g)
+chk(by_param(2) == 3, "3-filter-param")
+
+# ---- 4. 嵌套闭包帧内的生成器引用最外层局部 ----
+def nested():
+    var k = 3
+    def inner():
+        let g = (x * k for x in [1, 2])
+        return gen_next(g)
+    return inner()
+chk(nested() == 3, "4-nested-frame")
+
+# ---- 5. 顶层**全局**引用（回归：不走捕获路径，必须不回归） ----
+var gk = 100
+def from_global():
+    let g = (x + gk for x in [1, 2])
+    return gen_next(g)
+chk(from_global() == 101, "5-global-ref")
+
+print("pass=" + str(5 - fails) + " fail=" + str(fails))

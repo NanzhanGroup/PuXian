@@ -82,6 +82,9 @@ examples/m158_interp_fn/interp_fn_closure.px src=a4dd60425d33381c rc=0 out=7d506
 examples/m158_interp_fn/interp_fn_test.px src=4c321e0d76fc586d rc=0 out=5300d2fa26016d4560bb4be3a03663c8 err=e3b0c44298fc1c14
 examples/m160_closure/closure_edge.px src=7ae1d229458079a6 rc=0 out=517105b3cbe36759ed925e91ccc0611c err=e3b0c44298fc1c14
 examples/m160_closure/closure_test.px src=137ecbf8d4c0f442 rc=0 out=f79c3f78189955a414c7a4817fee3018 err=e3b0c44298fc1c14
+examples/m161_genexp_capture/genexp_capture.px src=b88a8c3953432a13 rc=0 out=f8a0db73ee90a3d07d13cc06f4289756 err=e3b0c44298fc1c14
+examples/m161_genexp_capture/genexp_capture_edge.px src=dcc982f107b136e7 rc=0 out=c04debf1c12605b5e50a72d92e885915 err=e3b0c44298fc1c14
+examples/m161_genexp_capture/genexp_local.px src=3682ec76325d6e97 rc=0 out=63ddc6a1e959e58f1fda9cd439d752d9 err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=ca57a90d693278f051ce29d427bb006a err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=864a86fa0f3b5c69d3239ebdb2eac63a err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14

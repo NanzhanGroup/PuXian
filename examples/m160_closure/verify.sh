@@ -103,7 +103,8 @@ three_tracks "$M158CASE" m158
 expect_all_three m158 "pass=5 fail=0"
 
 hdr "[4/4] 缺口登记（不计失败）"
-note "缺陷 163（待下一轮）：生成器 transform/filter 引用**外层局部**时，VM 轨按全局名解析"
+note "✅ 缺陷 163（生成器 transform/filter 引用外层局部）已由 **M161 收口** ——"
+note "   该登记由此**升格**为 M161 门第 ⑤ 层的硬判据（examples/m161_genexp_capture/）"
 
 # ---------------- 负控 ----------------
 run_neg() {              # $1=标签 $2=引擎(c|vm) $3=文件 $4=旧文本 $5=新文本 $6=说明
