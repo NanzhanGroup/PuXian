@@ -170,6 +170,17 @@ run m159_hostarch bash examples/m159_hostarch/verify.sh
 #   判据：三轨 stdout 逐字节一致（13 + 5 + 5 断言）+ 交叉判据（M158 缺口复现器升格为硬判据）
 #   + 3 道负控（恢复 Assign 绑定口径 ⇒ C 轨必红 / 关本帧装箱 ⇒ VM 必红 / MKCLO 槽基址 +1 ⇒ VM 必红）。
 run m160_closure bash examples/m160_closure/verify.sh
+# ── M161（第 47 轮）：生成器捕获（GenExp）—— 缺陷 163（VM 轨）+ 164（C 轨）收口 ──
+#   背景：生成器 `transform`/`filter` 合成的 lambda **没有捕获表** ⇒ VM 轨（用户面默认轨）
+#   把外层局部按全局名解析（M160 门第 ⑥ 层登记为缺陷 163）；而**同帧里闭包已把该局部装箱
+#   为 cell** 时，C 轨的生成器直接**共享该 cell** ⇒ 退化成引用语义（本轮加强面抓到，登记 164）。
+#   修法：三轨同一条真相 = **按值快照**（= 解释轨 GenExp 创建时求值）——VM 轨先取捕获值
+#   （CELLGET/MOV）到连续临时槽、再逐个 CELLNEW 造新 cell；C 轨 `px_cell(px_cell_get(cv))`。
+#   **闭包**捕获仍按引用（不动）。
+#   判据：三轨 stdout 逐字节一致（13 + 6 + 5 断言）+ 交叉判据（缺陷 163 最小复现器由报告
+#   升格为硬判据）+ 3 道负控（捕获表置空 ⇒ VM 必红 / 快照退化为普通值槽 ⇒ VM 必红 /
+#   filter 捕获表丢弃 ⇒ VM 必红）。
+run m161_genexp bash examples/m161_genexp_capture/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

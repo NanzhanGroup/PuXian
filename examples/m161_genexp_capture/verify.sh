@@ -1,34 +1,35 @@
 #!/usr/bin/env bash
 # ============================================================
-# M160 门（第 46 轮）：词法闭包 / 函数体内 `def` —— 缺陷 159（VM 轨）+ 缺陷 160（C 轨）
+# M161 门（第 47 轮）：生成器捕获（GenExp）—— 缺陷 163（VM 轨）+ 缺陷 164（C 轨）
 # ------------------------------------------------------------
-# 背景（M158 登记、本轮收口）：
-#   · 缺陷 159（VM 轨 = **用户面默认轨**）：`bc_emit` 不支持函数体内 `FuncDef`
-#     （发射期 panic），且**没有捕获机制** —— 闭包体引用外层局部一律按全局名查
-#     ⇒ 运行期「未定义变量」/「无法相加: null + int」。
-#   · 缺陷 160（C 轨）：函数体内 `def` 的闭包捕获在运行期「未定义变量: hits」；
-#     更基本的是 `cg_ast_bound` 把 **Assign 目标当"绑定"** ⇒ 与体里的引用相消 ⇒
-#     自由变量集漏掉它 ⇒ 外层不装箱、闭包把外层局部当全局名。
-# 修法（两轨同一条真相：**按引用捕获**，与解释轨 env 链语义一致）：
-#   · C 轨：Assign 目标改判为"使用"；函数体内 `def` 提升为本帧局部 + 闭包发射抽成
-#     `cg_gen_closure(params, body, dispname)`（匿名 fn / 具名 def 共用）。
-#   · VM 轨：新增 cell 四指令（CELLGET/CELLSET/CELLNEW/MKCLO）+ `PxVMFunc.upvals/nup`
-#     + `PxFrame.env`；发射器做同一份自由变量分析，装 cell 入 env，帧入口按 upnames 绑槽。
+# 背景（M160 门第 ⑥ 层登记、本轮收口）：
+#   · 缺陷 163（VM 轨 = **用户面默认轨**）：生成器 `transform` / `filter` 合成的 lambda
+#     **不带捕获表** —— 体内引用外层局部（函数帧）时按全局名解析 ⇒ 运行期
+#     「未定义变量: k」或错值。
+#   · 缺陷 164（C 轨，本轮加强面抓到）：同帧里该局部**已被闭包按引用捕获**（⇒ 已装箱
+#     为 cell）时，生成器的捕获直接**共享该 cell** ⇒ 外层之后的修改对生成器可见
+#     （实测 co_live：解释/VM 轨 [7,2]，C 轨 [7,8]）。
+# 修法（三轨**同一条真相：按值快照** —— 与解释轨「创建时求值」对齐）：
+#   · VM 轨：`bc_genexp_caps` 求捕获表（自由变量 ∩ 本帧局部名，顺序同 cg_closure_caps）；
+#     非空 ⇒ MKCLO，捕获槽由 `bc_emit_caps_snapshot` 造：先 CELLGET（cell 源取当前值）
+#     / MOV（普通槽复制值）到连续临时槽，再逐个 CELLNEW **造新 cell**。空捕获 ⇒ 原 LOADK
+#     路径不变（不回归）。
+#   · C 轨：`cg_gen_lambda` 的 cell 源改为 `px_cell(px_cell_get(cv))`（取当前值 → 新 cell），
+#     与 VM 轨的 CELLGET+CELLNEW 对称。**闭包**（cg_gen_closure）仍按引用，不动。
 # 判据（逐层可单独变红）：
-#   ① 解释轨闭包用例 pass=13 fail=0（绝对值断言）；
+#   ① 解释轨主用例 pass=13 fail=0（绝对值断言）；
 #   ② VM 轨（默认轨）编译+运行 ⇒ stdout 与解释轨**逐字节一致**；
 #   ③ C 轨（逃生舱）⇒ stdout 与解释轨**逐字节一致**；
-#   ④ 加强面（跨两层/三层捕获 + 闭包经 runtime native 回调）三轨一致；
-#   ⑤ M158 缺口复现器（interp_fn_closure.px）三轨一致 —— M158 门第 ⑤ 层由此**升格**
-#      为硬判据（原为 SKIP 报告）；
-#   ⑥ 缺口登记（**不计失败**，但必须打印编号）：生成器 `transform/filter` 引用外层局部
-#      时 VM 轨仍按全局名解析（缺陷 163，待下一轮）；
+#   ④ 加强面（多捕获/形参来源/循环多实例独立快照/引用类型值快照/闭包共存）三轨一致；
+#   ⑤ 缺口最小复现器 genexp_local.px（缺陷 163/164）三轨一致 —— M160 门第 ⑥ 层由此
+#      **升格**为硬判据（原为 SKIP 报告）；
+#   ⑥ 缺口登记（**不计失败**，但必须打印编号）；
 #   ⑦ 负控 3 道（默认跑，`--neg-skip` 跳过）—— 每道必须判红 + 逐字节还原：
-#      A C 轨：把 Assign 目标重新当「绑定」（恢复缺陷 160 的绑定口径）⇒ C 轨必红
-#      B VM 轨：关掉本帧装箱（不发 CELLNEW）⇒ VM 轨必红
-#      C VM 轨：MKCLO 的捕获槽基址 +1（装错 cell）⇒ VM 轨必红
-# 用法：./examples/m160_closure/verify.sh            （完整门：正判据 + 负控）
-#       ./examples/m160_closure/verify.sh --neg-skip （只跑正判据，CI 用）
+#      A VM 轨：生成器捕获表置空（恢复缺陷 163）⇒ 主用例必红
+#      B VM 轨：快照退化为「把快照值槽当 cell 交给 MKCLO」⇒ 必红
+#      C VM 轨：filter 的捕获表丢弃（只留 transform）⇒ 主用例必红
+# 用法：./examples/m161_genexp_capture/verify.sh            （完整门：正判据 + 负控）
+#       ./examples/m161_genexp_capture/verify.sh --neg-skip （只跑正判据，CI 用）
 # 退出码：0 = 绿，1 = 红。
 # ============================================================
 set -u
@@ -41,10 +42,10 @@ NEG_SKIP=0
 [ "${1:-}" = "--neg-skip" ] && NEG_SKIP=1
 
 PXI=./bootstrap/pxi
-CASE=$HERE/closure_test.px
-EDGE=$HERE/closure_edge.px
-M158CASE=examples/m158_interp_fn/interp_fn_closure.px
-WORK=$(mktemp -d /tmp/m160.XXXXXX)
+CASE=$HERE/genexp_capture.px
+EDGE=$HERE/genexp_capture_edge.px
+LOCAL=$HERE/genexp_local.px
+WORK=$(mktemp -d /tmp/m161.XXXXXX)
 trap 'rm -rf "$WORK"' EXIT
 
 fail=0
@@ -90,25 +91,26 @@ expect_all_three() {     # $1=标签 $2=期望行（如 "pass=13 fail=0"）
     done
 }
 
-hdr "[1/4] 解释轨 + VM 轨 + C 轨：闭包/函数体内 def 主用例（13 断言）"
+hdr "[1/4] 解释轨 + VM 轨 + C 轨：生成器捕获主用例（13 断言）"
 three_tracks "$CASE" main
 expect_all_three main "pass=13 fail=0"
 
-hdr "[2/4] 加强面：跨两层/三层捕获 + 闭包经 runtime native 回调（5 断言）"
+hdr "[2/4] 加强面：多捕获/形参/循环多实例/引用类型快照/闭包共存（6 断言）"
 three_tracks "$EDGE" edge
-expect_all_three edge "pass=5 fail=0"
+expect_all_three edge "pass=6 fail=0"
 
-hdr "[3/4] 交叉判据：M158 缺口复现器（缺陷 159/160）三轨一致"
-three_tracks "$M158CASE" m158
-expect_all_three m158 "pass=5 fail=0"
+hdr "[3/4] 交叉判据：缺陷 163/164 最小复现器（genexp_local.px）三轨一致"
+three_tracks "$LOCAL" local
+expect_all_three local "pass=5 fail=0"
 
 hdr "[4/4] 缺口登记（不计失败）"
-note "✅ 缺陷 163（生成器 transform/filter 引用外层局部）已由 **M161 收口** ——"
-note "   该登记由此**升格**为 M161 门第 ⑤ 层的硬判据（examples/m161_genexp_capture/）"
+note "语义登记：生成器捕获 = **按值快照**（解释轨创建时求值 / C 轨 cg_gen_lambda / VM 轨 bc_emit_caps_snapshot）"
+note "缺陷 165（待下一轮）：GenExp **惰性路径**已定按值快照，但 M32 **物化路径**（多 for /"
+note "  多变量）与 ListComp/DictComp 的捕获语义尚未逐条核查"
 
 # ---------------- 负控 ----------------
-run_neg() {              # $1=标签 $2=引擎(c|vm) $3=文件 $4=旧文本 $5=新文本 $6=说明
-    local tag=$1 eng=$2 file=$3 from=$4 to=$5 what=$6
+run_neg() {              # $1=标签 $2=引擎(c|vm) $3=文件 $4=旧文本 $5=新文本 $6=说明 $7=用例
+    local tag=$1 eng=$2 file=$3 from=$4 to=$5 what=$6 case=${7:-$CASE}
     echo "── 负控 $tag：$what"
     cp "$file" "$WORK/$(basename "$file").bak"
     python3 - "$file" "$from" "$to" <<'PY'
@@ -133,13 +135,15 @@ PY
         bad "$tag 负控编译器构建失败"; tail -3 "$WORK/neg$tag.build.log" | sed 's/^/      /'
     else
         if [ "$eng" = "c" ]; then
-            PX_PXC_BIN="$WORK/pxc_neg" three_tracks "$CASE" neg$tag
+            PX_PXC_BIN="$WORK/pxc_neg" three_tracks "$case" neg$tag
         else
-            PXC_VM_BIN="$WORK/pxc_vm_neg" three_tracks "$CASE" neg$tag
+            PXC_VM_BIN="$WORK/pxc_vm_neg" three_tracks "$case" neg$tag
         fi
         local out="$WORK/neg$tag.$eng.out"
         if [ "$eng" = "c" ]; then out="$WORK/neg$tag.c.out"; else out="$WORK/neg$tag.vm.out"; fi
-        if grep -q '^pass=13 fail=0$' "$out"; then
+        local want="pass=13 fail=0"
+        [ "$case" = "$EDGE" ] && want="pass=6 fail=0"
+        if grep -q "^$want\$" "$out"; then
             bad "$tag 负控**未判红**（篡改后仍全绿 ⇒ 门的判别力不足）"
         else
             local why
@@ -153,22 +157,20 @@ PY
 }
 
 if [ $NEG_SKIP -eq 0 ]; then
-    run_neg A c selfhost/codegen.px \
-        '        if h == "VarDecl":
-            cg_name_add(out, rust_unescape(x[2]))' \
-        '        if h == "VarDecl":
-            cg_name_add(out, rust_unescape(x[2]))
-        elif h == "Assign" and type(x[1]) == "list" and len(x[1]) > 0 and x[1][0] == "Var":
-            cg_name_add(out, rust_unescape(x[1][1]))' \
-        "恢复缺陷 160：把 Assign 目标重新当「绑定」（cg_ast_bound）"
+    run_neg A vm selfhost/bc_emit.px \
+        '            caps.append(cn)
+        i += 1' \
+        '            let _m161_negA = cn
+        i += 1' \
+        "生成器捕获表置空（恢复缺陷 163）"
     run_neg B vm selfhost/bc_emit.px \
-        '            bc_emit_inst(func, "CELLNEW", func["smap"][cn], func["smap"][cn], 0)' \
-        '            let _m160_negB = func["smap"][cn]' \
-        "关掉 VM 轨本帧装箱（不发 CELLNEW）"
+        '    return snap_base' \
+        '    return vb' \
+        "快照退化为「把快照值槽当 cell 交给 MKCLO」"
     run_neg C vm selfhost/bc_emit.px \
-        '    let base = func["next_slot"]' \
-        '    let base = func["next_slot"] + 1' \
-        "MKCLO 捕获槽基址 +1（装错 cell）"
+        '            fcaps = bc_genexp_caps(pms, expr[3], func)' \
+        '            fcaps = []' \
+        "filter 的捕获表丢弃（只留 transform）"
     # 负控跑完后源码已逐字节还原；入库件不受影响（负控只用 /tmp 现场件），仍复核指纹门。
     echo "── 负控收尾：复核入库件指纹门 + 复跑正判据"
     bash selfhost/rebake_bin.sh --check-all > "$WORK/checkall.log" 2>&1 \
@@ -181,8 +183,8 @@ rm -rf "$ROOT/selfhost/build" "$WORK/build"
 
 echo
 if [ $fail -eq 0 ]; then
-    echo "M160-VERIFY-OK（词法闭包 / 函数体内 def：三轨一致；缺陷 159 + 160 收口）"
+    echo "M161-VERIFY-OK（生成器捕获：三轨一致 · 按值快照；缺陷 163 + 164 收口）"
 else
-    echo "M160-VERIFY-FAIL"
+    echo "M161-VERIFY-FAIL"
 fi
 exit $fail

@@ -1081,6 +1081,45 @@ def bc_emit_comp(func, kind, elems, cond, rv, clauses, ci):
         else:
             func["smap"][s[0]] = s[1]
         ri += 1
+# M161（缺陷 163）：生成器 lambda 的捕获**按值快照**（装连续 cell 区，返回基址）。
+#   为什么不是闭包那种"按引用"：解释轨（iexpr.px 的 GenExp）与 C 轨（M129 px_cell 兜底）
+#   都是**创建时求值/快照** —— 实测「创建后改外层局部」解释轨得 11、VM 轨按引用得 21
+#   ⇒ 三轨不一致。故：先把捕获值取到连续临时槽（cell ⇒ CELLGET 取当前值；
+#   普通槽 ⇒ MOV 复制值），再逐个 CELLNEW 造**新 cell** ⇒ MKCLO 装的是快照，
+#   外层之后的修改对生成器不可见（与解释轨/C 轨同一条真相）。
+def bc_emit_caps_snapshot(func, caps):
+    let n = len(caps)
+    let vb = func["next_slot"]
+    var i = 0
+    while i < n:
+        let cn = caps[i]
+        let s = func["smap"][cn]
+        let tv = bc_tmp(func)
+        if bc_cell_has(func, cn):
+            bc_emit_inst(func, "CELLGET", tv, s, 0)
+        else:
+            bc_emit_inst(func, "MOV", tv, s, 0)
+        i += 1
+    let snap_base = func["next_slot"]
+    var j = 0
+    while j < n:
+        let t = bc_tmp(func)
+        bc_emit_inst(func, "CELLNEW", t, vb + j, 0)
+        j += 1
+    return snap_base
+# M161（缺陷 163）：生成器合成 lambda 的捕获表 = 自由变量 ∩ 本帧局部名
+#   （顺序同 cg_closure_caps —— 与 MKCLO 装槽序、帧入口 upvals 序同源）
+def bc_genexp_caps(params_ast, body_expr, func):
+    let cap_free = []
+    cg_closure_caps(["Closure", params_ast, null, body_expr, [], null], cap_free)
+    let caps = []
+    var i = 0
+    while i < len(cap_free):
+        let cn = cap_free[i]
+        if func["smap"].has(cn):
+            caps.append(cn)
+        i += 1
+    return caps
 # GenExp 单 for 单变量 → NEWGEN 惰性（px_gen_lazy：seq + transform=fn(x){elt}
 #   + filter=fn(x){cond}，对齐 codegen cg GenExp 单 for 惰性路径）
 def bc_emit_genexp(expr, dst, func):
@@ -1094,18 +1133,37 @@ def bc_emit_genexp(expr, dst, func):
             d = bc_tmp(func)
         let seq = bc_tmp(func)
         bc_emit_expr(clauses[0][2], seq, func)
-        let tidx = bc_emit_push_lambda([vn], expr[1], [])
+        # M161（缺陷 163）：合成的 lambda 必须带上捕获 —— 否则体内引用本帧局部时
+        #   按全局名解析（实测「未定义变量: k」）。顺序与 MKCLO 装槽序同源。
+        #   ⚠️ params 元素是 **Param 节点**（名字在索引 1，见 parser `["Param", name, ty, default, pos]`）；
+        #      写成 [name, null] 会让 cg_closure_caps 的 rust_unescape(p[1]) 收到 null ⇒ 编译期崩。
+        let pms = [["Param", vn, null, null, null]]
+        let tcaps = bc_genexp_caps(pms, expr[1], func)
+        var fcaps = []
+        if expr[3] != null:
+            fcaps = bc_genexp_caps(pms, expr[3], func)
+        let tidx = bc_emit_push_lambda([vn], expr[1], tcaps)
         var fidx = -1
         if expr[3] != null:
-            fidx = bc_emit_push_lambda([vn], expr[3], [])
+            fidx = bc_emit_push_lambda([vn], expr[3], fcaps)
         let base = bc_tmp(func)
         while func["next_slot"] < base + 2:
             bc_tmp(func)
-        let tk = bc_k_add(g_bcm["k_pool"], "func", tidx, 0.0, "")
-        bc_emit_inst(func, "LOADK", base, tk, 0)
+        # transform → base / filter → base+1：有捕获走 MKCLO，无捕获走 LOADK。
+        #   cell 装槽用 bc_tmp（单调递增）⇒ 不会压到已预留的 base/base+1。
+        if len(tcaps) == 0:
+            let tk = bc_k_add(g_bcm["k_pool"], "func", tidx, 0.0, "")
+            bc_emit_inst(func, "LOADK", base, tk, 0)
+        else:
+            let tb = bc_emit_caps_snapshot(func, tcaps)
+            func["bc"].push(["MKCLO", 0, base, tidx, tb])
         if fidx >= 0:
-            let fk = bc_k_add(g_bcm["k_pool"], "func", fidx, 0.0, "")
-            bc_emit_inst(func, "LOADK", base + 1, fk, 0)
+            if len(fcaps) == 0:
+                let fk = bc_k_add(g_bcm["k_pool"], "func", fidx, 0.0, "")
+                bc_emit_inst(func, "LOADK", base + 1, fk, 0)
+            else:
+                let fb = bc_emit_caps_snapshot(func, fcaps)
+                func["bc"].push(["MKCLO", 0, base + 1, fidx, fb])
         else:
             bc_emit_null(func, base + 1)
         bc_emit_inst(func, "NEWGEN", d, seq, base)

@@ -1,0 +1,127 @@
+# M161① 生成器捕获（GenExp 引用**外层局部**）—— 13 断言 · 三轨一致
+# 语义基准（三轨同一条真相 = **创建时快照**）：
+#   解释轨 iexpr.px GenExp 一律物化 + 创建时求值；C 轨 M129 px_cell 兜底；
+#   VM 轨 M161 bc_emit_caps_snapshot（CELLGET 取值 → CELLNEW 造新 cell）。
+# 用法：pxi / px build / px build --c 三轨 stdout 应逐字节一致（pass=13 fail=0）
+var fails = 0
+
+def chk(cond, tag):
+    if not cond:
+        fails = fails + 1
+        print("FAIL " + tag)
+
+# ---- 1. transform 引用外层局部（函数帧） ----
+def sum_transform():
+    var k = 10
+    let g = (x + k for x in [1, 2, 3])
+    var s = 0
+    for v in g:
+        s = s + v
+    return s
+chk(sum_transform() == 36, "1-transform-local")
+
+# ---- 2. filter 引用外层局部 ----
+def sum_filter():
+    var lim = 2
+    let g = (x for x in [1, 2, 3, 4] if x > lim)
+    var s = 0
+    for v in g:
+        s = s + v
+    return s
+chk(sum_filter() == 7, "2-filter-local")
+
+# ---- 3. iterable 引用外层局部（`(x * 2 for x in items)`） ----
+def sum_iter():
+    var items = [1, 2, 3]
+    let g = (x * 2 for x in items)
+    var s = 0
+    for v in g:
+        s = s + v
+    return s
+chk(sum_iter() == 12, "3-iterable-local")
+
+# ---- 4. **按值快照**：创建后改外层局部 ⇒ 生成器仍用创建时的值 ----
+def snapshot():
+    var k = 10
+    let g = (x + k for x in [1, 2])
+    k = 20
+    return gen_next(g)
+chk(snapshot() == 11, "4-value-snapshot")
+
+# ---- 5. transform + filter 同时引用外层局部 ----
+def both():
+    var k = 1
+    var lim = 1
+    let g = (x + k for x in [1, 2, 3] if x > lim)
+    var s = 0
+    for v in g:
+        s = s + v
+    return s
+chk(both() == 7, "5-both-local")
+
+# ---- 6. 同一外层局部既被 fn 闭包（按引用）又被生成器（快照）引用 ----
+def mixed():
+    var k = 5
+    let f = fn (): k + 1
+    let g = (x + k for x in [1, 2])
+    return f() + gen_next(g)
+chk(mixed() == 12, "6-mixed-ref-snapshot")
+
+# ---- 7. 嵌套闭包内的生成器引用最外层局部 ----
+def nested():
+    var k = 3
+    def inner():
+        let g = (x * k for x in [1, 2])
+        return gen_next(g)
+    return inner()
+chk(nested() == 3, "7-nested-closure-gen")
+
+# ---- 8. 经 list() 物化 ----
+def via_list():
+    var k = 2
+    let g = (x + k for x in [1, 2, 3])
+    return len(list(g))
+chk(via_list() == 3, "8-via-list")
+
+# ---- 9. 顶层**全局**引用（回归：不走捕获路径，必须不回归） ----
+var gk = 100
+def from_global():
+    let g = (x + gk for x in [1, 2])
+    return gen_next(g)
+chk(from_global() == 101, "9-global-ref")
+
+# ---- 10. 形参作为捕获源 ----
+def param_cap(k):
+    let g = (x + k for x in [1, 2])
+    return gen_next(g)
+chk(param_cap(7) == 8, "10-param-cap")
+
+# ---- 11. 闭包体内的生成器捕获该闭包的形参 ----
+def clo_gen(n):
+    let f = fn ():
+        let g = (x * n for x in [1, 2])
+        return gen_next(g)
+    return f()
+chk(clo_gen(4) == 4, "11-closure-gen-param")
+
+# ---- 12. filter 的 cond 引用外层局部（无 transform 捕获） ----
+def cond_only():
+    var limit = 1
+    let g = (x for x in [1, 2, 3] if x > limit)
+    var n = 0
+    for v in g:
+        n = n + 1
+    return n
+chk(cond_only() == 2, "12-cond-only")
+
+# ---- 13. 生成器捕获后外层帧已返回（快照 cell 独立存活） ----
+def escape():
+    var k = 42
+    let g = (x + k for x in [1])
+    return g
+def use_escaped():
+    let g = escape()
+    return gen_next(g)
+chk(use_escaped() == 43, "13-escaped-frame")
+
+print("pass=" + str(13 - fails) + " fail=" + str(fails))

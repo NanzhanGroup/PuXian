@@ -1,0 +1,67 @@
+# M161② 生成器捕获 · 加强面 —— 6 断言 · 三轨一致
+# 覆盖：多捕获（顺序）/ 形参来源 / 循环内多实例各自快照 / 引用类型值快照 /
+#       闭包与生成器同帧共存 / 外层两次修改
+var fails = 0
+
+def chk(cond, tag):
+    if not cond:
+        fails = fails + 1
+        print("FAIL " + tag)
+
+# ---- 1. 生成器一次捕获**两个**外层局部（多捕获 · 顺序） ----
+def two_caps():
+    var a = 10
+    var b = 100
+    let g = (x + a * b for x in [1])
+    return gen_next(g)
+chk(two_caps() == 1001, "1-two-caps-order")
+
+# ---- 2. filter 引用形参 + transform 引用局部（两个捕获表都非空） ----
+def pcap(k):
+    var lim = 1
+    let g = (x + k for x in [1, 2, 3] if x > lim)
+    var s = 0
+    for v in g:
+        s = s + v
+    return s
+chk(pcap(10) == 25, "2-param-and-local")
+
+# ---- 3. 循环内建多个生成器：各自快照当时的值（互不串扰） ----
+def loop_instances():
+    var ks = [1, 2, 3]
+    var gs = []
+    for k in ks:
+        gs.append((x + k for x in [10]))
+    var s = 0
+    for g in gs:
+        s = s + gen_next(g)
+    return s
+chk(loop_instances() == 36, "3-loop-independent-snapshots")
+
+# ---- 4. 引用类型（list）的值快照：共享同一对象（与解释轨一致） ----
+def list_cap():
+    var items = [1, 2, 3]
+    let g = (x * 2 for x in items)
+    items = [9, 9]
+    return gen_next(g)
+chk(list_cap() == 2, "4-list-value-snapshot")
+
+# ---- 5. 闭包与生成器同帧共存（闭包按引用 · 生成器快照） ----
+def co_live():
+    var k = 1
+    let f = fn (): k
+    let g = (x + k for x in [1])
+    k = 7
+    return f() + gen_next(g)
+chk(co_live() == 9, "5-closure-ref-gen-snapshot")
+
+# ---- 6. 外层两次修改：生成器仍用创建时值 ----
+def twice():
+    var k = 1
+    let g = (x + k for x in [1])
+    k = 2
+    k = 3
+    return gen_next(g)
+chk(twice() == 2, "6-twice-modified")
+
+print("pass=" + str(6 - fails) + " fail=" + str(fails))
