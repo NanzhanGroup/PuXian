@@ -381,6 +381,23 @@ jobs:
           fi
           bash examples/m67_multiarch/verify.sh --arch ${{ matrix.arch }}
 
+      - name: M159 交叉自举档（x86_64 → aarch64 · musl 静态 · 只对 aarch64 档做）
+        if: matrix.arch == 'aarch64'
+        run: |
+          set -e
+          export PATH=/opt/muslcc/${{ steps.musl-map.outputs.DIR }}/bin:$PATH
+          ./selfhost/native_bootstrap.sh --target-arch aarch64 --outdir /tmp/nb-a64
+          file /tmp/nb-a64/pxc
+          file -b /tmp/nb-a64/pxc | grep -q "ARM aarch64" || { echo "❌ 产物不是 aarch64"; exit 1; }
+          file -b /tmp/nb-a64/pxc | grep -q "static"      || { echo "❌ 产物不是静态链接"; exit 1; }
+          echo "── qemu 下真跑自举件（第三方报告 R1002 的现场就在这一步）"
+          qemu-aarch64-static /tmp/nb-a64/pxc --version
+          mkdir -p /tmp/nb-a64/s && printf 'print("a64-boot-ok")\n' > /tmp/nb-a64/s/h.px
+          qemu-aarch64-static /tmp/nb-a64/pxc build /tmp/nb-a64/s/h.px > /tmp/nb-a64/s/h.c
+          grep -q "a64-boot-ok" /tmp/nb-a64/s/h.c || { echo "❌ 生成的 C 缺字面量"; exit 1; }
+          wc -l /tmp/nb-a64/s/h.c
+          echo "✅ M159 交叉自举档：aarch64 静态自举件可用（qemu 实测）"
+
       - name: cross_multiarch.sh / cross_aarch64.sh 冒烟（存在性 + 语法）
         run: |
           [ -f tools/cross_multiarch.sh ] || { echo "❌ 缺 tools/cross_multiarch.sh"; exit 1; }
@@ -388,3 +405,93 @@ jobs:
           bash -n tools/cross_multiarch.sh
           bash -n tools/cross_aarch64.sh
           echo "✅ cross_multiarch.sh / cross_aarch64.sh 存在且语法 OK（发布包已含）"
+
+  # ============================================================
+  # M159（R45 · 缺口 G4）：**原生 aarch64 自举自证** —— 全仓此前只在 x86_64 上自举，
+  #   aarch64 档只做"交叉编译 + qemu 跑用例"（examples/m67_aarch64），**从不**问
+  #   「在 aarch64 上从源码自举能不能成」。第三方仓库 px-openEuler-bootstrap 正是填这条缝
+  #   （并报告了 gcc11-aarch64 上 pxc0 编译 compiler.px 报 R1002 索引 null）。
+  #   本 job 把这条链变成官方能力（只用 runner 自带 gcc）：
+  #     ① selfhost/native_bootstrap.sh：编 runtime → 用基准 golden/compiler.c 编原生 pxc0
+  #        → **自证**（pxc0 编 compiler.px 与基准逐字节一致）——R1002 若存在，必在此步红；
+  #     ② 把现编原生 pxc 装成工具链，验证**裸 `px build` 在 aarch64 上零参数可用**
+  #        （M159 宿主机架构自适应：自动 lib-aarch64 + 自动 --no-quic）；
+  #     ③ 跑 m159_hostarch 门（宿主架构决策）。
+  #   GitHub 公开仓库可用 arm64 runner（ubuntu-24.04-arm），故这条覆盖不再需要自备机器。
+  # ============================================================
+  native-arm64:
+    name: 原生 aarch64 自举自证 + 裸 build（gcc-only，M159）
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 环境自述（宿主架构 / gcc / libc —— R1002 现场取证用）
+        run: |
+          uname -m; uname -sr
+          gcc --version | head -1
+          ldd --version | head -1
+          ls -la bootstrap/ | head -20
+
+      - name: 原生自举（gcc-only）—— 含自证：pxc0 编 compiler.px ↔ golden/compiler.c
+        run: |
+          bash selfhost/native_bootstrap.sh --outdir "$RUNNER_TEMP/nb" 2>&1 | tee "$RUNNER_TEMP/nb.log"
+          test -x "$RUNNER_TEMP/nb/pxc"
+          grep -q "NATIVE-BOOTSTRAP-OK" "$RUNNER_TEMP/nb.log"
+
+      - name: 现编其余原生工具（pxi / pxl / pxpar）并装成工具链（仅本 run 生效，不入库）
+        # 口径：`bootstrap/pxc build <f>` 只把 C 写到 stdout，链接/runtime 缓存由 tools/px 负责
+        #   ⇒ 先把**原生 pxc** 顶上 bootstrap/pxc，再用 tools/px 的 **C 轨**（--c）现编其余件。
+        #   VM 轨（用户面默认）需要入库 pxc_vm（x86_64），本 job 不用它，故全程 PX_BUILD_ENGINE=c。
+        run: |
+          set -e
+          cp -f "$RUNNER_TEMP/nb/pxc" bootstrap/pxc
+          for e in "pxi|selfhost/interp.px" "pxl|selfhost/lexer.px" "pxpar|selfhost/parser.px"; do
+            n="${e%%|*}"; s="${e#*|}"
+            PX_BUILD_ENGINE=c tools/px build "$s" 2>&1 | tail -1
+            out="$(dirname "$s")/build/$(basename "$s" .px)"
+            [ -x "$out" ] || { echo "❌ $n 现编失败（缺产物 $out）"; exit 1; }
+            cp -f "$out" "bootstrap/$n"
+            echo "✅ bootstrap/$n（原生 aarch64 现编，$(stat -c %s "bootstrap/$n") 字节）"
+          done
+          file bootstrap/pxc bootstrap/pxi bootstrap/pxl bootstrap/pxpar | sed 's/^/   /'
+
+      - name: 裸 px build / px run 冒烟（**零参数**，靠 M159 宿主架构自适应）
+        run: |
+          set -e
+          mkdir -p "$RUNNER_TEMP/smoke" && cd "$RUNNER_TEMP/smoke"
+          printf 'print("native-aarch64-ok")\\n' > hello.px
+          # 仓库根有 .px_modules / stdlib 依赖 → 用仓库内的 tools/px（PX_STDLIB 自发现）
+          cd "$GITHUB_WORKSPACE"
+          echo "── 计划（应自动 lib-aarch64 + no_quic=1 + **engine 自动落 C 轨**）"
+          tools/px build --print-plan "$RUNNER_TEMP/smoke/hello.px" | tee /tmp/plan.txt
+          grep -q "^plan: engine=c" /tmp/plan.txt || { echo "❌ 计划未自动落 C 轨（aarch64 上 VM 轨不可用）"; exit 1; }
+          grep -q "^plan: no_quic=1" /tmp/plan.txt || { echo "❌ 计划未自动裁 QUIC"; exit 1; }
+          echo "── 裸 build（零参数：自动 C 轨 + lib-aarch64 + no-quic）"
+          tools/px build "$RUNNER_TEMP/smoke/hello.px" 2>&1 | tail -3
+          out="$RUNNER_TEMP/smoke/build/hello"
+          file "$out"
+          ldd "$out" 2>&1 | head -3 || true
+          test "$("$out")" = "native-aarch64-ok" && echo "✅ 原生 aarch64 产物运行正确"
+          echo "── 解释轨（pxi 原生）"
+          tools/px run "$RUNNER_TEMP/smoke/hello.px"
+
+      - name: 宿主机架构自适应门（m159_hostarch）
+        env:
+          PX_BUILD_ENGINE: c
+        run: bash examples/m159_hostarch/verify.sh
+
+      - name: 交叉档冒烟（确认 aarch64 原生宿主上交叉档仍可用）
+        run: |
+          bash -n tools/cross_aarch64.sh
+          bash -n tools/cross_multiarch.sh
+          echo "✅ 交叉脚本语法 OK（详细交叉档由 multiarch-cross job 在 x86_64 上跑）"
+
+      - name: 失败时留现场（自举日志）
+        if: failure()
+        run: |
+          echo "──── native_bootstrap 日志尾部 ────"
+          tail -60 "$RUNNER_TEMP/nb.log" 2>/dev/null || true
+          echo "──── pxc0 自证 stderr ────"
+          tail -40 "$RUNNER_TEMP/nb/B.err" 2>/dev/null || true

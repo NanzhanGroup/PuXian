@@ -96,6 +96,109 @@ jobs:
           echo "✅ GitHub Release 已创建: ${TAG}（tarball + sha256sums.txt）"
 
   # ============================================================
+  # M159（R45 · 缺口 G1）：**aarch64 自举件**做成一等发布资产
+  # ------------------------------------------------------------
+  # 缺口（第三方仓库照出来）：入库 bootstrap/* 只有 x86_64 件 ⇒ aarch64 用户解压主包后
+  #   `px build` 直接 Exec format error，只能自己搓自举链 —— banshanhanfu/px-openEuler-bootstrap
+  #   正是为填这条缝而生的第三方仓。
+  # 本 job 在 GitHub **原生 arm64 runner** 上从源码现编一整套 aarch64 工具链（**含自证**：
+  #   自举出的 pxc 编译 compiler.px 与入库 golden 逐字节一致），打成并列资产
+  #   `puxian-bootstrap-aarch64-<tag>.tar.gz`（包内 bootstrap/* 即 aarch64 原生件，解压即可用）。
+  # 为何不塞进主包：主包 bootstrap/* 受「全件源码链指纹门」（selfhost/rebake_bin.sh
+  #   --check-all）与发布包可复现性守卫（Issue 56）约束 —— 跨 runner 现编件不进那套记账，
+  #   故单独成资产、单独带 sha256。
+  # ============================================================
+  bootstrap-arm64:
+    name: aarch64 自举件（原生 arm64 runner · gcc-only · 含自证）
+    needs: [release]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 环境自述（宿主 / gcc / libc —— 供 R1002 取证）
+        run: |
+          uname -m; uname -sr
+          gcc --version | head -1
+          ldd --version | head -1
+
+      - name: 原生自举 + 自证（pxc0 编 compiler.px ↔ golden/compiler.c）
+        run: |
+          set -e
+          bash selfhost/native_bootstrap.sh --outdir "$RUNNER_TEMP/nb" 2>&1 | tee "$RUNNER_TEMP/nb.log"
+          grep -q "NATIVE-BOOTSTRAP-OK" "$RUNNER_TEMP/nb.log"
+          test -x "$RUNNER_TEMP/nb/pxc"
+
+      - name: 现编核心工具（pxi / pxl / pxpar · C 轨）
+        run: |
+          set -e
+          cp -f "$RUNNER_TEMP/nb/pxc" bootstrap/pxc
+          for e in "pxi|selfhost/interp.px" "pxl|selfhost/lexer.px" "pxpar|selfhost/parser.px"; do
+            n="${e%%|*}"; s="${e#*|}"
+            PX_BUILD_ENGINE=c tools/px build "$s" 2>&1 | tail -1
+            out="$(dirname "$s")/build/$(basename "$s" .px)"
+            [ -x "$out" ] || { echo "❌ $n 现编失败（缺产物 $out）"; exit 1; }
+            cp -f "$out" "bootstrap/$n"
+            echo "✅ bootstrap/$n $(stat -c %s "bootstrap/$n") 字节"
+          done
+          file bootstrap/pxc bootstrap/pxi bootstrap/pxl bootstrap/pxpar
+
+      - name: 冒烟（**零参数**裸 px build + px run）
+        run: |
+          set -e
+          mkdir -p "$RUNNER_TEMP/s" && cd "$RUNNER_TEMP/s"
+          printf 'print("aarch64-pkg-ok")\n' > h.px
+          cd "$GITHUB_WORKSPACE"
+          tools/px build --print-plan "$RUNNER_TEMP/s/h.px"
+          tools/px build "$RUNNER_TEMP/s/h.px" 2>&1 | tail -2
+          test "$("$RUNNER_TEMP/s/build/h")" = "aarch64-pkg-ok"
+          tools/px run "$RUNNER_TEMP/s/h.px" | grep -q aarch64-pkg-ok
+          echo "✅ aarch64 包内工具链零参数可用"
+
+      - name: 打包（bootstrap/ + tools/ + runtime/ + stdlib/ + VERSION）
+        run: |
+          set -e
+          TAG="${GITHUB_REF_NAME}"
+          STAGE="$RUNNER_TEMP/pkg/puxian-bootstrap-aarch64-${TAG}"
+          mkdir -p "$STAGE"
+          cp -a bootstrap tools runtime stdlib "$STAGE"/ 2>/dev/null || true
+          [ -f VERSION ] && cp -f VERSION "$STAGE"/VERSION
+          printf '%s\n' \
+            "# PuXian aarch64 自举件（bootstrap-aarch64 · ${TAG}）" "" \
+            "本包由 GitHub 原生 arm64 runner **从源码现编**（gcc-only，含自证：自举出的 pxc" \
+            "编译 selfhost/compiler.px 与入库 golden/compiler.c 逐字节一致）。" "" \
+            "包内 bootstrap/* 是 **aarch64 原生件**（主发布包里的 bootstrap/* 是 x86_64 件，" \
+            "在 aarch64 上执行会报 Exec format error）。" "" \
+            "用法（解压后）：" "" \
+            "    export PATH=\$PWD/tools:\$PATH" \
+            "    px build hello.px && ./build/hello" \
+            "    px run hello.px" "" \
+            "说明：" "" \
+            "- 宿主非 x86_64 时 tools/px 会自动切 C 轨（入库 VM 版编译器 pxc_vm 仅 x86_64），" \
+            "  并自动使用 runtime/*/lib-aarch64 布局 + 裁剪 QUIC/H3（该平台无预编译 ngtcp2/openssl）。" \
+            "- 其余入库工具（pxfmt/pxlint/pxdoc/pxtest/pxbench/pxlsp/pxmcp/pxcheck）可现编：" \
+            "    ./bootstrap/pxc build tools/pxfmt.px   # 产物落 tools/build/pxfmt" \
+            "- 或在任意 aarch64 机器上自举整套：./selfhost/native_bootstrap.sh --install" "" \
+            "校验：sha256sum -c puxian-bootstrap-aarch64-${TAG}.tar.gz.sha256" \
+            > "$STAGE/README-aarch64.md"
+          ( cd "$RUNNER_TEMP/pkg" && tar czf "puxian-bootstrap-aarch64-${TAG}.tar.gz" "puxian-bootstrap-aarch64-${TAG}" )
+          cd "$RUNNER_TEMP/pkg"
+          sha256sum "puxian-bootstrap-aarch64-${TAG}.tar.gz" > "puxian-bootstrap-aarch64-${TAG}.tar.gz.sha256"
+          ls -l; cat "puxian-bootstrap-aarch64-${TAG}.tar.gz.sha256"
+
+      - name: 上传 aarch64 自举件到 Release（并列资产）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          TAG="${GITHUB_REF_NAME}"
+          cd "$RUNNER_TEMP/pkg"
+          PKG="puxian-bootstrap-aarch64-${TAG}.tar.gz"
+          gh release upload "$TAG" "$PKG" "$PKG.sha256" --clobber
+          echo "✅ 已上传 $PKG（并列主包资产）"
+
+  # ============================================================
   # rpm —— 构建签名 RPM 仓库并发布到 GitHub Pages（M73 dnf + M77 el7 yum）
   # ------------------------------------------------------------
   # 前置：GitHub Actions secrets 配置正式签名子密钥后自动启用：
