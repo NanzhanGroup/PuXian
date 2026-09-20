@@ -1,0 +1,138 @@
+# M165 门 ①：**C 轨实参求值顺序 = 左→右**（第 51 轮 · 缺陷 178/179）
+# 背景（修前实测）：
+#   · C 标准**不规定**函数实参求值顺序，gcc 实测**右→左**；而解释轨（AST 序）与 VM 轨
+#     （字节码序）都是左→右 ⇒ 同一个 C 表达式里 ≥2 个带副作用的操作数就三轨分叉：
+#       `f() + g()`                  → 解释/VM 轨 F,G；**C 轨 G,F**
+#       `"${f()}${g()}"`             → 同上
+#       `str(l.pop()) + str(len(l))` → C 轨 len 先求 ⇒ 打印 `len=3`（解释/VM 轨 `len=2`）
+#   · 赋值：解释轨**先算右值**（`o[k] = v` → V,O,K；`o.f = v` → V,O），VM 轨 O,K,V / O,V
+#     ⇒ 也是三轨分叉（缺陷 179）。
+# 修后语义（对齐 Go 规范：表达式/赋值/实参按**词法左→右**求值；C 未定义）：
+#   · C 轨：一个表达式里 ≥2 个含副作用的操作数 ⇒ 按序提升为临时变量（语句表达式），
+#     纯操作数内联；短路运算（and/or/??/?:）**不受影响**（其右操作数不提前求值）。
+#   · 解释轨：赋值改为「目标对象 → 键 → 右值」。
+# 本文件用**副作用日志**直接观测求值顺序（断言全为绝对值，不靠两轨互比）。
+# 用法：pxi / px build / px build --c 三轨 stdout 应逐字节一致（pass=24 fail=0）
+var log = []
+var fails = 0
+
+def chk(cond, tag):
+    if not cond:
+        fails = fails + 1
+        print("FAIL " + tag)
+
+# 记录并返回（副作用标记）
+def m(tag, v):
+    log.append(str(tag))
+    return v
+
+def two(a, b):
+    log.append("two")
+    return a + b
+
+def seq():
+    var s = ""
+    var i = 0
+    while i < len(log):
+        s = s + log[i]
+        i = i + 1
+    return s
+
+def reset():
+    log = []
+
+struct Pt:
+    x: int
+    y: int
+
+def main():
+    # ---- 1-3 二元运算链（px_add / px_sub / px_lt 的两实参）----
+    reset()
+    let a = m(1, 1) + m(2, 2) + m(3, 3)
+    chk(a == 6 and seq() == "123", "1-add-chain")
+    reset()
+    let b = m(4, 10) - m(5, 3)
+    chk(b == 7 and seq() == "45", "2-sub-order")
+    reset()
+    let c = m(6, 2) < m(7, 5)
+    chk(c and seq() == "67", "3-cmp-order")
+
+    # ---- 4-6 调用：实参 / 嵌套 ----
+    reset()
+    let d = two(m(8, 4), m(9, 5))
+    chk(d == 9 and seq() == "89two", "4-call-args")
+    reset()
+    let e = two(two(m(10, 1), m(11, 2)), m(12, 3))
+    chk(e == 6 and seq() == "1011two12two", "5-call-nested")
+    reset()
+    let f = len([m(13, 1), m(14, 2), m(15, 3)])
+    chk(f == 3 and seq() == "131415", "6-arg-call-args")
+
+    # ---- 7-8 字符串插值 / 拼接（插值即 px_add 链）----
+    reset()
+    let g = "${m(16, "x")}${m(17, "y")}${m(18, "z")}"
+    chk(g == "xyz" and seq() == "161718", "7-interp-chain")
+    reset()
+    let h = "p" + str(m(19, 1)) + str(m(20, 2))
+    chk(h == "p12" and seq() == "1920", "8-concat-str")
+
+    # ---- 9-10 字面量（列表 / 元组）----
+    reset()
+    let i1 = [m(21, 1), m(22, 2), m(23, 3)]
+    chk(i1 == [1, 2, 3] and seq() == "212223", "9-list-lit")
+    reset()
+    let j1 = (m(24, 1), m(25, 2))
+    chk(j1[1] == 2 and seq() == "2425", "10-tuple-lit")
+
+    # ---- 11-13 索引 / 切片 / 索引赋值 ----
+    reset()
+    let xs = [10, 20, 30]
+    let k1 = xs[m(26, 1)]
+    chk(k1 == 20 and seq() == "26", "11-index-order")
+    reset()
+    let l1 = xs[m(27, 0):m(28, 2)]
+    chk(l1 == [10, 20] and seq() == "2728", "12-slice-order")
+    reset()
+    var dd = {}
+    dd[m(29, "k")] = m(30, 7)
+    chk(dd["k"] == 7 and seq() == "2930", "13-index-set-order")
+
+    # ---- 14-15 方法（接收者与实参都带副作用）/ 追加简写 ----
+    reset()
+    m(31, []).append(m(32, 1))
+    chk(seq() == "3132", "14-method-recv-arg")
+    reset()
+    var l2 = []
+    l2 <- m(33, 9)
+    chk(l2 == [9] and seq() == "33", "15-append-shortcut")
+
+    # ---- 16-18 结构体构造 / 字段赋值（目标对象先）----
+    reset()
+    let p = Pt(m(34, 1), m(35, 2))
+    chk(p.x == 1 and p.y == 2 and seq() == "3435", "16-struct-args")
+    reset()
+    var q = Pt(0, 0)
+    m(36, q).x = m(37, 5)
+    chk(q.x == 5 and seq() == "3637", "17-field-set-order")
+    reset()
+    var ee = {}
+    m(38, ee)[m(39, "z")] = m(40, 6)
+    chk(ee["z"] == 6 and seq() == "383940", "18-index-set-order2")
+
+    # ---- 19-20 逻辑短路**不受序列化影响**（右操作数不得被提前求值）----
+    reset()
+    let r1 = m(41, false) and m(42, true)
+    chk(r1 == false and seq() == "41", "19-and-shortcircuit")
+    reset()
+    let r2 = m(43, true) or m(44, false)
+    chk(r2 == true and seq() == "43", "20-or-shortcircuit")
+
+    # ---- 21-22 生成器 / 推导式里的顺序（迭代协议不变）----
+    reset()
+    let s1 = [x for x in [m(45, 1), m(46, 2)]]
+    chk(s1 == [1, 2] and seq() == "4546", "21-comp-seq")
+    reset()
+    let t1 = ((m(47, 1) + m(48, 2)) for x in [0])
+    chk([y for y in t1] == [3] and seq() == "4748", "22-genexp-order")
+
+    print("pass=" + str(24 - fails) + " fail=" + str(fails))

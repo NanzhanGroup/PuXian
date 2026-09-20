@@ -96,7 +96,7 @@ static LXValue fn_sv_index_of(LXValue* args, int nargs, void* ctx) {
     px_srcline(39);
     _v13 = px_int(0LL);
     px_srcline(40);
-    while (px_is_truthy(px_le(_v13, px_sub(px_call(px_get_global("len"), (LXValue[]){_v11}, 1), px_call(px_get_global("len"), (LXValue[]){_v12}, 1))))) {
+    while (px_is_truthy(px_le(_v13, ({ LXValue _s1 = px_call(px_get_global("len"), (LXValue[]){_v11}, 1); LXValue _s2 = px_call(px_get_global("len"), (LXValue[]){_v12}, 1); px_sub(_s1, _s2); })))) {
         px_srcline(41);
         if (px_is_truthy(px_eq(px_slice(_v11, _v13, px_add(_v13, px_call(px_get_global("len"), (LXValue[]){_v12}, 1)), px_null()), _v12))) {
             px_srcline(42);
@@ -335,7 +335,7 @@ static LXValue fn_sv_cmp(LXValue* args, int nargs, void* ctx) {
         px_srcline(129);
         if (px_is_truthy(({ LXValue _t51 = _v45; px_is_truthy(_t51) ? _v46 : _t51; }))) {
             px_srcline(130);
-            if (px_is_truthy(px_lt(px_call(px_get_global("int"), (LXValue[]){_v43}, 1), px_call(px_get_global("int"), (LXValue[]){_v44}, 1)))) {
+            if (px_is_truthy(({ LXValue _s3 = px_call(px_get_global("int"), (LXValue[]){_v43}, 1); LXValue _s4 = px_call(px_get_global("int"), (LXValue[]){_v44}, 1); px_lt(_s3, _s4); }))) {
                 px_srcline(131);
                 return px_neg(px_int(1LL));
             }
@@ -361,12 +361,12 @@ static LXValue fn_sv_cmp(LXValue* args, int nargs, void* ctx) {
         return px_int(1LL);
     }
     px_srcline(140);
-    if (px_is_truthy(px_lt(px_call(px_get_global("len"), (LXValue[]){_v40}, 1), px_call(px_get_global("len"), (LXValue[]){_v41}, 1)))) {
+    if (px_is_truthy(({ LXValue _s5 = px_call(px_get_global("len"), (LXValue[]){_v40}, 1); LXValue _s6 = px_call(px_get_global("len"), (LXValue[]){_v41}, 1); px_lt(_s5, _s6); }))) {
         px_srcline(141);
         return px_neg(px_int(1LL));
     }
     px_srcline(142);
-    if (px_is_truthy(px_gt(px_call(px_get_global("len"), (LXValue[]){_v40}, 1), px_call(px_get_global("len"), (LXValue[]){_v41}, 1)))) {
+    if (px_is_truthy(({ LXValue _s7 = px_call(px_get_global("len"), (LXValue[]){_v40}, 1); LXValue _s8 = px_call(px_get_global("len"), (LXValue[]){_v41}, 1); px_gt(_s7, _s8); }))) {
         px_srcline(143);
         return px_int(1LL);
     }
@@ -471,7 +471,7 @@ static LXValue fn_sv_range_parse(LXValue* args, int nargs, void* ctx) {
     px_srcline(185);
     if (px_is_truthy(({ LXValue _t72 = ({ LXValue _t71 = px_eq(_v54, px_str("")); px_is_truthy(_t71) ? px_ge(_v60, px_int(0LL)) : _t71; }); px_is_truthy(_t72) ? px_ge(_v61, px_int(0LL)) : _t72; }))) {
         px_srcline(186);
-        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("lo"); LXValue _v = _v53; px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("hi"); LXValue _v = px_add(px_add(px_add(px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")), px_call(px_get_global("str"), (LXValue[]){_v60}, 1)), px_str(".")), px_call(px_get_global("str"), (LXValue[]){px_add(_v61, px_int(1LL))}, 1)); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("pre"); LXValue _v = px_str(""); px_dict_set_checked(_d, _k, _v); } _d; });
+        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("lo"); LXValue _v = _v53; px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("hi"); LXValue _v = ({ LXValue _s11 = px_add(({ LXValue _s9 = px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")); LXValue _s10 = px_call(px_get_global("str"), (LXValue[]){_v60}, 1); px_add(_s9, _s10); }), px_str(".")); LXValue _s12 = px_call(px_get_global("str"), (LXValue[]){px_add(_v61, px_int(1LL))}, 1); px_add(_s11, _s12); }); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("pre"); LXValue _v = px_str(""); px_dict_set_checked(_d, _k, _v); } _d; });
     }
     px_srcline(187);
     if (px_is_truthy(({ LXValue _t73 = px_eq(_v54, px_str("")); px_is_truthy(_t73) ? px_lt(_v60, px_int(0LL)) : _t73; }))) {
@@ -481,7 +481,7 @@ static LXValue fn_sv_range_parse(LXValue* args, int nargs, void* ctx) {
     px_srcline(190);
     if (px_is_truthy(({ LXValue _t74 = px_eq(_v54, px_str("")); px_is_truthy(_t74) ? px_lt(_v61, px_int(0LL)) : _t74; }))) {
         px_srcline(192);
-        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("lo"); LXValue _v = px_add(px_add(px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")), px_call(px_get_global("str"), (LXValue[]){_v60}, 1)), px_str(".0")); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("hi"); LXValue _v = px_add(px_add(px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")), px_call(px_get_global("str"), (LXValue[]){px_add(_v60, px_int(1LL))}, 1)), px_str(".0")); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("pre"); LXValue _v = px_str(""); px_dict_set_checked(_d, _k, _v); } _d; });
+        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("lo"); LXValue _v = px_add(({ LXValue _s13 = px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")); LXValue _s14 = px_call(px_get_global("str"), (LXValue[]){_v60}, 1); px_add(_s13, _s14); }), px_str(".0")); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("hi"); LXValue _v = px_add(({ LXValue _s15 = px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")); LXValue _s16 = px_call(px_get_global("str"), (LXValue[]){px_add(_v60, px_int(1LL))}, 1); px_add(_s15, _s16); }), px_str(".0")); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("pre"); LXValue _v = px_str(""); px_dict_set_checked(_d, _k, _v); } _d; });
     }
     px_srcline(194);
     if (px_is_truthy(px_eq(_v54, px_str("^")))) {
@@ -492,13 +492,13 @@ static LXValue fn_sv_range_parse(LXValue* args, int nargs, void* ctx) {
         px_srcline(198);
         if (px_is_truthy(px_gt(_v59, px_int(0LL)))) {
             px_srcline(199);
-             _v62 = px_add(px_add(px_add(px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")), px_call(px_get_global("str"), (LXValue[]){_v60}, 1)), px_str(".")), px_call(px_get_global("str"), (LXValue[]){_v61}, 1));
+             _v62 = ({ LXValue _s19 = px_add(({ LXValue _s17 = px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")); LXValue _s18 = px_call(px_get_global("str"), (LXValue[]){_v60}, 1); px_add(_s17, _s18); }), px_str(".")); LXValue _s20 = px_call(px_get_global("str"), (LXValue[]){_v61}, 1); px_add(_s19, _s20); });
             px_srcline(200);
              _v63 = px_add(px_call(px_get_global("str"), (LXValue[]){px_add(_v59, px_int(1LL))}, 1), px_str(".0.0"));
         }
         else if (px_is_truthy(px_gt(_v60, px_int(0LL)))) {
             px_srcline(202);
-             _v62 = px_add(px_add(px_add(px_str("0."), px_call(px_get_global("str"), (LXValue[]){_v60}, 1)), px_str(".")), px_call(px_get_global("str"), (LXValue[]){_v61}, 1));
+             _v62 = ({ LXValue _s21 = px_add(px_add(px_str("0."), px_call(px_get_global("str"), (LXValue[]){_v60}, 1)), px_str(".")); LXValue _s22 = px_call(px_get_global("str"), (LXValue[]){_v61}, 1); px_add(_s21, _s22); });
             px_srcline(203);
              _v63 = px_add(px_add(px_str("0."), px_call(px_get_global("str"), (LXValue[]){px_add(_v60, px_int(1LL))}, 1)), px_str(".0"));
         }
@@ -519,10 +519,10 @@ static LXValue fn_sv_range_parse(LXValue* args, int nargs, void* ctx) {
     px_srcline(212);
     if (px_is_truthy(({ LXValue _t77 = ({ LXValue _t76 = px_ge(_v59, px_int(0LL)); px_is_truthy(_t76) ? px_ge(_v60, px_int(0LL)) : _t76; }); px_is_truthy(_t77) ? px_lt(_v61, px_int(0LL)) : _t77; }))) {
         px_srcline(214);
-        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("lo"); LXValue _v = px_add(px_add(px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")), px_call(px_get_global("str"), (LXValue[]){_v60}, 1)), px_str(".0")); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("hi"); LXValue _v = px_add(px_add(px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")), px_call(px_get_global("str"), (LXValue[]){px_add(_v60, px_int(1LL))}, 1)), px_str(".0")); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("pre"); LXValue _v = px_str(""); px_dict_set_checked(_d, _k, _v); } _d; });
+        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("lo"); LXValue _v = px_add(({ LXValue _s23 = px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")); LXValue _s24 = px_call(px_get_global("str"), (LXValue[]){_v60}, 1); px_add(_s23, _s24); }), px_str(".0")); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("hi"); LXValue _v = px_add(({ LXValue _s25 = px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")); LXValue _s26 = px_call(px_get_global("str"), (LXValue[]){px_add(_v60, px_int(1LL))}, 1); px_add(_s25, _s26); }), px_str(".0")); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("pre"); LXValue _v = px_str(""); px_dict_set_checked(_d, _k, _v); } _d; });
     }
     px_srcline(216);
-    return ({ LXValue _d = px_dict(); { LXValue _k = px_str("lo"); LXValue _v = px_add(px_add(px_add(px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")), px_call(px_get_global("str"), (LXValue[]){_v60}, 1)), px_str(".")), px_call(px_get_global("str"), (LXValue[]){_v61}, 1)); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("hi"); LXValue _v = px_add(px_add(px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")), px_call(px_get_global("str"), (LXValue[]){px_add(_v60, px_int(1LL))}, 1)), px_str(".0")); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("pre"); LXValue _v = px_str(""); px_dict_set_checked(_d, _k, _v); } _d; });
+    return ({ LXValue _d = px_dict(); { LXValue _k = px_str("lo"); LXValue _v = ({ LXValue _s29 = px_add(({ LXValue _s27 = px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")); LXValue _s28 = px_call(px_get_global("str"), (LXValue[]){_v60}, 1); px_add(_s27, _s28); }), px_str(".")); LXValue _s30 = px_call(px_get_global("str"), (LXValue[]){_v61}, 1); px_add(_s29, _s30); }); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("hi"); LXValue _v = px_add(({ LXValue _s31 = px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")); LXValue _s32 = px_call(px_get_global("str"), (LXValue[]){px_add(_v60, px_int(1LL))}, 1); px_add(_s31, _s32); }), px_str(".0")); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("pre"); LXValue _v = px_str(""); px_dict_set_checked(_d, _k, _v); } _d; });
 px_err_64:
     if (px_err_64_proped) return px_err_64_val;
     return px_null();
@@ -609,11 +609,11 @@ static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     px_srcline(7);
     _v91 = px_call(px_get_global("sv_parse"), (LXValue[]){px_str("1.2.3-alpha.1+build5")}, 1);
     px_srcline(8);
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_add(px_add(px_add(px_add(px_str("major: "), px_call(px_get_global("str"), (LXValue[]){px_index(_v91, px_str("major"))}, 1)), px_str(" minor: ")), px_call(px_get_global("str"), (LXValue[]){px_index(_v91, px_str("minor"))}, 1)), px_str(" patch: ")), px_call(px_get_global("str"), (LXValue[]){px_index(_v91, px_str("patch"))}, 1))}, 1));
+    (void)(px_call(px_get_global("print"), (LXValue[]){({ LXValue _s35 = px_add(({ LXValue _s33 = px_add(px_add(px_str("major: "), px_call(px_get_global("str"), (LXValue[]){px_index(_v91, px_str("major"))}, 1)), px_str(" minor: ")); LXValue _s34 = px_call(px_get_global("str"), (LXValue[]){px_index(_v91, px_str("minor"))}, 1); px_add(_s33, _s34); }), px_str(" patch: ")); LXValue _s36 = px_call(px_get_global("str"), (LXValue[]){px_index(_v91, px_str("patch"))}, 1); px_add(_s35, _s36); })}, 1));
     px_srcline(9);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_add(px_add(px_str("pre: "), px_index(_v91, px_str("pre"))), px_str(" build: ")), px_index(_v91, px_str("build")))}, 1));
     px_srcline(10);
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_add(px_add(px_add(px_add(px_str("bad: "), px_call(px_get_global("str"), (LXValue[]){px_eq(px_call(px_get_global("sv_parse"), (LXValue[]){px_str("1.2")}, 1), px_null())}, 1)), px_str(" ")), px_call(px_get_global("str"), (LXValue[]){px_eq(px_call(px_get_global("sv_parse"), (LXValue[]){px_str("01.2.3")}, 1), px_null())}, 1)), px_str(" ")), px_call(px_get_global("str"), (LXValue[]){px_eq(px_call(px_get_global("sv_parse"), (LXValue[]){px_str("1.2.3-01")}, 1), px_null())}, 1))}, 1));
+    (void)(px_call(px_get_global("print"), (LXValue[]){({ LXValue _s39 = px_add(({ LXValue _s37 = px_add(px_add(px_str("bad: "), px_call(px_get_global("str"), (LXValue[]){px_eq(px_call(px_get_global("sv_parse"), (LXValue[]){px_str("1.2")}, 1), px_null())}, 1)), px_str(" ")); LXValue _s38 = px_call(px_get_global("str"), (LXValue[]){px_eq(px_call(px_get_global("sv_parse"), (LXValue[]){px_str("01.2.3")}, 1), px_null())}, 1); px_add(_s37, _s38); }), px_str(" ")); LXValue _s40 = px_call(px_get_global("str"), (LXValue[]){px_eq(px_call(px_get_global("sv_parse"), (LXValue[]){px_str("1.2.3-01")}, 1), px_null())}, 1); px_add(_s39, _s40); })}, 1));
     px_srcline(13);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_str("cmp 1.2.3 vs 1.2.10: "), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("sv_cmp"), (LXValue[]){px_str("1.2.3"), px_str("1.2.10")}, 2)}, 1))}, 1));
     px_srcline(14);
@@ -623,15 +623,15 @@ static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     px_srcline(16);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_str("cmp 1 vs alpha: "), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("sv_cmp"), (LXValue[]){px_str("1.0.0-1"), px_str("1.0.0-alpha")}, 2)}, 1))}, 1));
     px_srcline(19);
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_add(px_add(px_str("^1.2.0: "), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("sv_satisfies"), (LXValue[]){px_str("1.2.5"), px_str("^1.2.0")}, 2)}, 1)), px_str(" ")), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("sv_satisfies"), (LXValue[]){px_str("2.0.0"), px_str("^1.2.0")}, 2)}, 1))}, 1));
+    (void)(px_call(px_get_global("print"), (LXValue[]){({ LXValue _s41 = px_add(px_add(px_str("^1.2.0: "), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("sv_satisfies"), (LXValue[]){px_str("1.2.5"), px_str("^1.2.0")}, 2)}, 1)), px_str(" ")); LXValue _s42 = px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("sv_satisfies"), (LXValue[]){px_str("2.0.0"), px_str("^1.2.0")}, 2)}, 1); px_add(_s41, _s42); })}, 1));
     px_srcline(20);
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_add(px_add(px_str("^0.2.3: "), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("sv_satisfies"), (LXValue[]){px_str("0.2.9"), px_str("^0.2.3")}, 2)}, 1)), px_str(" ")), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("sv_satisfies"), (LXValue[]){px_str("0.3.0"), px_str("^0.2.3")}, 2)}, 1))}, 1));
+    (void)(px_call(px_get_global("print"), (LXValue[]){({ LXValue _s43 = px_add(px_add(px_str("^0.2.3: "), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("sv_satisfies"), (LXValue[]){px_str("0.2.9"), px_str("^0.2.3")}, 2)}, 1)), px_str(" ")); LXValue _s44 = px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("sv_satisfies"), (LXValue[]){px_str("0.3.0"), px_str("^0.2.3")}, 2)}, 1); px_add(_s43, _s44); })}, 1));
     px_srcline(21);
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_add(px_add(px_str("~1.2.3: "), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("sv_satisfies"), (LXValue[]){px_str("1.2.9"), px_str("~1.2.3")}, 2)}, 1)), px_str(" ")), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("sv_satisfies"), (LXValue[]){px_str("1.3.0"), px_str("~1.2.3")}, 2)}, 1))}, 1));
+    (void)(px_call(px_get_global("print"), (LXValue[]){({ LXValue _s45 = px_add(px_add(px_str("~1.2.3: "), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("sv_satisfies"), (LXValue[]){px_str("1.2.9"), px_str("~1.2.3")}, 2)}, 1)), px_str(" ")); LXValue _s46 = px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("sv_satisfies"), (LXValue[]){px_str("1.3.0"), px_str("~1.2.3")}, 2)}, 1); px_add(_s45, _s46); })}, 1));
     px_srcline(22);
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_add(px_add(px_str("1.2.x: "), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("sv_satisfies"), (LXValue[]){px_str("1.2.9"), px_str("1.2.x")}, 2)}, 1)), px_str(" ")), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("sv_satisfies"), (LXValue[]){px_str("1.3.0"), px_str("1.2.x")}, 2)}, 1))}, 1));
+    (void)(px_call(px_get_global("print"), (LXValue[]){({ LXValue _s47 = px_add(px_add(px_str("1.2.x: "), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("sv_satisfies"), (LXValue[]){px_str("1.2.9"), px_str("1.2.x")}, 2)}, 1)), px_str(" ")); LXValue _s48 = px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("sv_satisfies"), (LXValue[]){px_str("1.3.0"), px_str("1.2.x")}, 2)}, 1); px_add(_s47, _s48); })}, 1));
     px_srcline(23);
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_add(px_add(px_str("exact: "), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("sv_satisfies"), (LXValue[]){px_str("1.2.3"), px_str("1.2.3")}, 2)}, 1)), px_str(" ")), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("sv_satisfies"), (LXValue[]){px_str("1.2.4"), px_str("1.2.3")}, 2)}, 1))}, 1));
+    (void)(px_call(px_get_global("print"), (LXValue[]){({ LXValue _s49 = px_add(px_add(px_str("exact: "), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("sv_satisfies"), (LXValue[]){px_str("1.2.3"), px_str("1.2.3")}, 2)}, 1)), px_str(" ")); LXValue _s50 = px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("sv_satisfies"), (LXValue[]){px_str("1.2.4"), px_str("1.2.3")}, 2)}, 1); px_add(_s49, _s50); })}, 1));
     px_srcline(24);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_str("pre reject: "), px_call(px_get_global("str"), (LXValue[]){px_call(px_get_global("sv_satisfies"), (LXValue[]){px_str("1.2.3-alpha"), px_str("1.2.3")}, 2)}, 1))}, 1));
     px_srcline(27);

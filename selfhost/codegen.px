@@ -50,6 +50,7 @@ var cg_globals = []
 var cg_err_labels = []
 var cg_uidc = 0
 var cg_closure_id = 0
+var cg_seq_uid = 0  # M165（缺陷 178）：序列化临时变量计数器（见 cg_gen_expr 前的说明）
 var loaded = {"_": 0}
 # ---------- 工具 ----------
 # 空 dict 创建（PuXian 限制：{} 是空块=null，非空 dict）
@@ -689,6 +690,7 @@ def cg_generate(prog):
     cg_err_labels = []
     cg_uidc = 0
     cg_closure_id = 0
+    cg_seq_uid = 0
     cg_collect_types(prog)
     # 收集顶层全局名（函数 + 顶层变量赋值）
     let items = prog[1]

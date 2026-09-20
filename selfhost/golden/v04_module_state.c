@@ -141,6 +141,6 @@ int main(int argc, char** argv) {
     px_srcline(50);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("g_counter 精确值"), px_eq(px_get_global("g_counter"), px_int(101LL))}, 2));
     px_srcline(52);
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_add(px_add(px_add(px_str("结果: "), px_call(px_get_global("str"), (LXValue[]){px_get_global("g_pass")}, 1)), px_str(" PASS / ")), px_call(px_get_global("str"), (LXValue[]){px_get_global("g_fail")}, 1)), px_str(" FAIL"))}, 1));
+    (void)(px_call(px_get_global("print"), (LXValue[]){px_add(({ LXValue _s1 = px_add(px_add(px_str("结果: "), px_call(px_get_global("str"), (LXValue[]){px_get_global("g_pass")}, 1)), px_str(" PASS / ")); LXValue _s2 = px_call(px_get_global("str"), (LXValue[]){px_get_global("g_fail")}, 1); px_add(_s1, _s2); }), px_str(" FAIL"))}, 1));
     return px_exit_code_final(0);   // M120（qg-issue 76 E1）
 }

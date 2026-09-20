@@ -350,7 +350,7 @@ int main(int argc, char** argv) {
     px_srcline(114);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_str("")}, 1));
     px_srcline(115);
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_add(px_add(px_add(px_str("结果: "), px_call(px_get_global("str"), (LXValue[]){px_get_global("g_pass")}, 1)), px_str(" PASS / ")), px_call(px_get_global("str"), (LXValue[]){px_get_global("g_fail")}, 1)), px_str(" FAIL"))}, 1));
+    (void)(px_call(px_get_global("print"), (LXValue[]){px_add(({ LXValue _s1 = px_add(px_add(px_str("结果: "), px_call(px_get_global("str"), (LXValue[]){px_get_global("g_pass")}, 1)), px_str(" PASS / ")); LXValue _s2 = px_call(px_get_global("str"), (LXValue[]){px_get_global("g_fail")}, 1); px_add(_s1, _s2); }), px_str(" FAIL"))}, 1));
     px_srcline(116);
     if (px_is_truthy(px_gt(px_get_global("g_fail"), px_int(0LL)))) {
         px_srcline(117);
