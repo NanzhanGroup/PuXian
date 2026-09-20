@@ -22,6 +22,7 @@
 //   sk64=seed||pub；PEM = PKCS8/SPKI（RFC 8410，与 Go x509 逐字节互通）
 #include "runtime.h"
 #include "tweetnacl.h"
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <fcntl.h>
