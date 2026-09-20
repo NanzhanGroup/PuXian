@@ -22,7 +22,9 @@ static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     _v2 = px_call(px_get_global("ffi_call"), (LXValue[]){px_str("sqlite_query"), px_list_n((LXValue[]){_v1, px_str("SELECT id, name FROM t ORDER BY id")}, 2)}, 2);
     px_srcline(17);
     LXValue _t6 = _v2;
-    for (int _t7 = 0; _t7 < px_len(_t6); _t7++) {
+    int _il1 = (int)px_len(_t6);
+    for (int _t7 = 0; _t7 < _il1; _t7++) {
+        px_iter_ck(_t6, _il1);
         _v3 = px_iter_at(_t6, px_int(_t7));
         px_srcline(18);
         (void)(px_call(px_get_global("print"), (LXValue[]){px_index(_v3, px_str("id")), px_index(_v3, px_str("name"))}, 2));

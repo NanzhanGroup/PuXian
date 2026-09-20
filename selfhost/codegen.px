@@ -51,6 +51,7 @@ var cg_err_labels = []
 var cg_uidc = 0
 var cg_closure_id = 0
 var cg_seq_uid = 0  # M165（缺陷 178）：序列化临时变量计数器（见 cg_gen_expr 前的说明）
+var cg_iter_uid = 0  # M166（缺陷 176）：迭代长度快照局部变量计数器（`_ilN`，与 _tN 分开编号）
 var loaded = {"_": 0}
 # ---------- 工具 ----------
 # 空 dict 创建（PuXian 限制：{} 是空块=null，非空 dict）
@@ -71,6 +72,12 @@ def cg_uid():
     return cg_uidc
 def cg_tmp():
     return "_t" + str(cg_uid())
+def cg_iter_len_tmp():
+    # M166（缺陷 176）：迭代长度快照的**专用计数器** —— 与 cg_tmp() 的 `_tN` 分开编号，
+    #   使「迭代长度校验」之外的发射文本**一字不变**（否则每个 for 都会顶掉后续 _tN 编号，
+    #   造成与本轮语义无关的大面积 diff；同 cg_seq_uid 的手法）。
+    cg_iter_uid = cg_iter_uid + 1
+    return "_il" + str(cg_iter_uid)
 def cg_new_var(name):
     let v = "_v" + str(cg_uid())
     cg_vars[name] = v
@@ -691,6 +698,7 @@ def cg_generate(prog):
     cg_uidc = 0
     cg_closure_id = 0
     cg_seq_uid = 0
+    cg_iter_uid = 0
     cg_collect_types(prog)
     # 收集顶层全局名（函数 + 顶层变量赋值）
     let items = prog[1]

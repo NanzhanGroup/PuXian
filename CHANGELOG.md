@@ -1,3 +1,59 @@
+## M166 —— **迭代期间修改被迭代容器 ⇒ R1003**（第 52 轮 · 缺陷 176：三轨**四种**行为）
+
+- **背景（一个「天天都可能踩」、但三轨互不相同且几乎全**静默**的缺口）**：同一份源码，在 `for` 期间
+  修改被迭代容器 —— 修前实测**四类**分歧：
+  · `for x in l { l.append(9) }` → 解释/C 轨按**活长度**多迭代（把新元素也当成循环项）；VM 轨按**快照长度**
+  · `for x in l { l.pop() }` → VM 轨**越界 rc=1**；解释/C 轨正常退出（**静默跳过**元素）
+  · `for k in d { d.set("z"+k, 1) }` → 解释/VM 轨按**键快照**；C 轨按**活长度**（会迭代到新键）
+  · `for k in d { d.remove(k) }` → VM 轨**越界 rc=1**；解释轨键快照（仍迭代到已删的键）；C 轨中途停
+- **语义裁定（三轨**一条真相**）**：for-in / 推导式在**进入循环时快照长度**；迭代期间被迭代容器长度
+  变化（**增或减**）一律 `R1003 迭代期间被迭代容器长度变化: n0 → n1`。
+  为什么不是「活长度」（Python list 语义）或「静默跳过」：① 三轨必须同一条真相 —— 活长度下
+  「边遍历边删」的结果依赖容器实现，跨轨必然漂移；② 静默给出的是**用户看不见的错结果**，
+  与 R1008 严格口径、M163 字典键严格化**同一哲学**（响亮优于静默）。
+  与 Python 对 dict 的 `RuntimeError: dictionary changed size during iteration` 同向，只是把 list
+  也纳入（更安全：Python 的 list 会静默跳过元素）。
+  推荐写法（「遍历时过滤/删」）：`let ks = d.keys()` / `let snap = l[:]` 先做快照；或 `d.values()`；
+  或写到**另一个**容器。
+- **实现**：
+  · **runtime**：新指令 **`PXOP_ITERLEN`**(64) + **`px_iter_ck(obj, n0)`**（`px_len(obj) != n0` ⇒ R1003）；
+    `vm.c` 指令名表同步（`PXM_MAX` 64→65）。
+  · **VM 轨**（`selfhost/bc_emit.px`）：`for` 与推导式展开在**循环体首**发射一条 `ITERLEN`
+    （`nslot` = 进循环前的 `len` 快照）—— 一条指令、零拷贝、无长度重算。
+  · **C 轨**（`selfhost/cg_stmt.px` / `cg_expr.px`）：`for` 发射 `int _ilN = (int)px_len(it);` +
+    体内 `px_iter_ck(it, _ilN);`；推导式走 for 初始化子句
+    （`for (int _ilN = (int)px_len(iv), i=0; i < _ilN; i++) { px_iter_ck(iv, _ilN); … }`）。
+    ⚠️ 长度局部用**专用计数器** `_ilN`（`cg_iter_len_tmp` / `cg_iter_uid`，**不进** `cg_tmp` 序列）
+    ⇒ 其余发射文本一字不变（同 M165 `_sN` 手法）。
+  · **解释轨**（`selfhost/istmt.px` / `iexpr.px`）：`i_exec_for` / `i_eval_comp` 取一次长度快照 +
+    每轮 `i_iter_ck`（`list` / `dict` 比较**活长度**；`str`/`tuple`/`range` 天然恒等；
+    `generator` 由原生惰性物化保证长度恒定）。
+- **门 `examples/m166_iter_mutate/`（`M166-VERIFY-OK`）**：判据逐层可单独变红 ——
+  ① 合法侧主用例 **18 断言**（只读 / **改元素值**（长度不变 ⇒ 合法）/ `l[:]` 快照 / `values()` 副本 /
+  遍历 A 写 B / `while`（不受本约束）/ 嵌套 / `range` / `str` / `tuple` / 推导式 / `break`-`continue` /
+  嵌套 list）；② VM 轨（用户面默认轨）与 ③ C 轨 stdout 与解释轨**逐字节一致**（`pass=18 fail=0`）；
+  ④ **严格性层**：**6 类**修改用例 × 三轨（每轨必须 rc≠0 + 含 `R1003` + 含**统一词条**）；
+  ⑤ **负控 3 道**（实测全判红 + 逐字节还原）：A VM 轨去掉 `ITERLEN` 发射 ⇒ 判红；
+  B C 轨去掉 `px_iter_ck` ⇒ 判红；C 解释轨 `i_iter_ck` 直接放行 ⇒ 判红。
+- **重定基（全部按「差异是否全属本族」逐条核对后才覆盖）**：
+  · 入库件 **14/14** 重烘（pxc/pxc_vm `PXSRC-f38141c72e0f97d8` · pxi/pxi_vm `PXSRC-98cddb252ea0f16e` ·
+    全件 `PXRT-fb65ccdaf4d53c70`；pxc sha256 `85ceb0aae4d1dc32…` · pxc_vm `453c9659951e57f1…` ·
+    pxi `e72c75b6170387dd…`）· `--check-all` / `--check`（55 例 rc/stdout/stderr）/ `--check-vm`
+    （字节码镜像 36743 行）全绿；
+  · `selfhost/golden/compiler.c` 17215 → **17274** 行（自举成立；归一化核对后差异只有
+    「本族发射 + 变量 hoist + `cg_iter_len_tmp` 的 err 点位移 + 行号位移」）；
+  · `selfhost/golden/compiler.bc.dump` 36632 → **36744** 行（BC 轨自举成立；指令名序列核对：
+    **无删除**，插入块 = 13 条 `ITERLEN` + `cg_iter_len_tmp` 函数块 + `cg_iter_uid` 初始化 +
+    新增字符串拼接 —— 全部可对应本轮源码改动）；
+  · codegen golden **19/19** 件：逆变换工具把「长度快照」形态还原后与旧基准**逐字节一致**
+    （13 件含该形态需覆盖、其余 12 件零差异 ⇒ 差异**全属本族**）；`diffcheck --codegen` 19/19 绿；
+  · 发射冻结门：**292 → 299 件**（+M166 门 7 件语料）· **类别 B 86 件** = 所有含 `for` 的语料
+    （每个迭代点新增一条 `PXOP_ITERLEN`；抽样实测 `ITERLEN 数 == ITERAT 数`）⇒ 属**有意改发射**。
+- **教训**：**「迭代中修改容器」是「宿主语言留空 ⇒ 三轨必然分叉」的第二处**（第一处是 M165 的求值
+  顺序）。Go 的 slice range 是 header 快照（不报错、读旧值）、Go 的 map range **有意不确定**、
+  Python 的 list **静默跳过**、Python 的 dict **直接报错** —— 四种先例、四种结果。本项目取
+  **「快照长度 + 变化即响亮报错」**：三轨可同、零拷贝、错误可诊断，并给出可操作的替代写法。
+
 ## M165 —— **求值顺序统一为「词法左→右」**（第 51 轮 · 缺陷 178 C 轨实参顺序 / 179 解释轨赋值顺序）
 
 - **背景（一个用户天天踩、但没有任何门看得见的跨轨分叉：表达式的求值顺序）**：

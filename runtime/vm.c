@@ -115,6 +115,7 @@ const char* px_op_name(int op) {
         [PXOP_NARGS] = "NARGS",
         [PXOP_DICTSET] = "DICTSET",
         [PXOP_ITERAT] = "ITERAT",
+        [PXOP_ITERLEN] = "ITERLEN",
         [PXOP_CELLGET] = "CELLGET", [PXOP_CELLSET] = "CELLSET",
         [PXOP_CELLNEW] = "CELLNEW", [PXOP_MKCLO] = "MKCLO",
     };
@@ -923,6 +924,9 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             } else slots[in.a] = px_iter_at(obj, idx);
             break;
         }
+        case PXOP_ITERLEN:   // a=obj 槽，b=期望长度槽（M166 缺陷 176：长度变化 ⇒ R1003）
+            px_iter_ck(slots[in.a], (int)slots[in.b].as.i);
+            break;
         case PXOP_SETIDX:    // a=val 槽，b=obj，c=idx（赋值表达式结果=val）
             px_index_set(slots[in.b], slots[in.c], slots[in.a]);
             break;

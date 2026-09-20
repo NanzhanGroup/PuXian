@@ -156,7 +156,12 @@ def cg_gen_stmt_inner(stmt, indent):
             # 已声明（可能是 cell）
             fv_line = cg_store_of(fv_name, vv, fv_init) + ";"
         var s = pad + "LXValue " + it_var + " = " + it + ";\n"
-        s += pad + "for (int " + idx_var + " = 0; " + idx_var + " < px_len(" + it_var + "); " + idx_var + "++) {\n"
+        # M166（缺陷 176）：**进入循环时快照长度** + 循环体开头复核 ⇒ 迭代期间长度变化报 R1003。
+        #   长度局部用 `_ilN`（cg_iter_len_tmp，不进 cg_tmp 序列 ⇒ 其余发射文本不变）。
+        let len_var = cg_iter_len_tmp()
+        s += pad + "int " + len_var + " = (int)px_len(" + it_var + ");\n"
+        s += pad + "for (int " + idx_var + " = 0; " + idx_var + " < " + len_var + "; " + idx_var + "++) {\n"
+        s += pad + "    px_iter_ck(" + it_var + ", " + len_var + ");\n"
         s += pad + "    " + fv_line + "\n"
         let body = stmt[3]
         var bi = 0

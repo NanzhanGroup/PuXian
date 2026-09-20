@@ -4045,6 +4045,23 @@ LXValue px_iter_at(LXValue obj, LXValue idx) {
     return px_index(obj, idx);
 }
 
+// ============ M166（第 52 轮 · 缺陷 176）：迭代长度校验 ============
+// 语义：for-in / 推导式在**进入循环时快照长度**（= 当时的 `len(迭代源)`）；迭代过程中被迭代
+//   容器的长度**必须恒定**，增或减一律 R1003（同码同文，三轨一致）。
+// 修前实测（同一份源码）：
+//   · `for x in l { l.append(9) }`   解释/C 轨按活长度多迭代（泄漏新元素）vs VM 轨按快照
+//   · `for x in l { l.pop() }`       VM 轨越界 rc=1 vs 解释/C 轨正常退出
+//   · `for k in d { d.set(...) }`    解释/VM 轨按键快照 vs C 轨按活长度（迭代到新键）
+//   · `for k in d { d.remove(...) }` VM 轨越界 rc=1 vs 解释轨键快照 / C 轨中途停
+// ⇒ 四类分歧。为什么不选「活长度」或「静默跳过」：前者三轨难同（且「边遍历边删」的结果
+//   依赖容器实现），后者是**静默的错**。本项目一贯口径 = 响亮优于静默（R1008 / M163 键严格化）。
+// 「遍历时过滤/收集」的推荐写法：`let ks = d.keys()` 先快照，或新建结果容器。
+void px_iter_ck(LXValue obj, int n0) {
+    int n1 = px_len(obj);
+    if (n1 != n0)
+        px_error("R1003: 迭代期间被迭代容器长度变化: %d → %d", n0, n1);
+}
+
 // ==================== M21/M24 切片 a[start:end] / a[start:end:step] ====================
 // start/end/step 为 PX_NULL 表示省略；负索引从尾部算；越界 clamp；step<0 反向，step=0 报错。
 // str 按 UTF-8 字符切（与解释器字符语义一致，中文正常）；list/tuple/bytes 取元素返回新对象。

@@ -1,0 +1,9 @@
+# M166 严格性：**嵌套 for** 内层迭代期间修改内层容器 ⇒ R1003（三轨同码同文）
+def main():
+    var a = [1, 2]
+    var b = [10, 20]
+    for x in a:
+        for y in b:
+            print(x, y)
+            b.append(99)
+    print("never")

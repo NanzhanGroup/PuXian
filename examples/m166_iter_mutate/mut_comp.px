@@ -1,0 +1,12 @@
+# M166 严格性：**推导式**迭代期间修改被迭代容器 ⇒ R1003（三轨同码同文）
+# 修前：解释/VM 轨推导式与 C 轨推导式的迭代机制不同（前者快照、后者活长度）⇒
+#   同一份源码在 C 轨会**静默多迭代**（把新元素也算进去）。
+var g = [1, 2, 3]
+
+def touch():
+    g.append(9)
+    return true
+
+def main():
+    var r = [x for x in g if touch()]
+    print("never", len(r))
