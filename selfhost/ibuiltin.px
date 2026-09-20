@@ -1158,11 +1158,18 @@ def i_builtin_sorted(args, pos):
         items.append(args[0][i])
         i += 1
     let n = len(items)
+    # M162（第 48 轮 · 缺陷 166/167）：**值比较** + **稳定**
+    #   旧实现用 `i_to_str` 渲染串比较 ⇒ 与编译轨（runtime `compare_values`）不一致：
+    #     `sorted([10, 9, 2])` 解释轨 [10, 2, 9] / 编译轨 [2, 9, 10]；
+    #     `sorted([[1,"a"],[1,"a2"]])` 解释轨 [[1,a2],[1,a]] / 编译轨 [[1,a],[1,a2]]
+    #     （后者 = 第三方 registry-px 登记的 PX-DEF-011）
+    #   改用 `i_cmp_values`（对齐 compare_values 三态）；交换条件 `> 0`
+    #   （等值不换 ⇒ **稳定**，与编译轨新算法同为稳定排序 ⇒ 同比较器下输出唯一）。
     var ii = 0
     while ii < n:
         var j = 0
         while j < n - 1 - ii:
-            if i_to_str(items[j]) > i_to_str(items[j + 1]):
+            if i_cmp_values(items[j], items[j + 1]) > 0:
                 let tmp = items[j]
                 items[j] = items[j + 1]
                 items[j + 1] = tmp

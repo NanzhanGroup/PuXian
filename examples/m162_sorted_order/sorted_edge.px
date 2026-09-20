@@ -1,0 +1,58 @@
+# M162③ sorted 加强面 —— 稳定性 / 嵌套 / 跨类型 / 同族回归 · 10 组断言
+# 判据：三轨 stdout **逐字节一致**，末行 = pass=N fail=0
+# 覆盖点（主用例未覆盖的边界）：
+#   · 稳定性在**同键多元素**、**嵌套容器**、**长列表**上的可观测性
+#   · 跨类型比较的**类型名序**（与 C 侧 compare_values 默认分支 strcmp(px_type_name) 对齐）
+#   · 同族内置（min / max / len / 原列表）**不回归**
+var passes = 0
+var fails = 0
+
+def chk(cond, tag):
+    if cond:
+        passes = passes + 1
+    else:
+        fails = fails + 1
+        print("FAIL " + tag)
+
+# ---- 1. 同键三元素：数值相等、渲染不同 ⇒ 稳定性可观测（全 float 输入） ----
+chk(str(sorted([2.0, 2, 2.00])) == "[2.0, 2, 2.0]", "1-stable-three-float")
+
+# ---- 2. 同键三元素（int 在前） ----
+chk(str(sorted([2, 2.0, 2.00])) == "[2, 2.0, 2.0]", "2-stable-three-int")
+
+# ---- 3. 嵌套容器稳定性：同键的第二元素相等但类型不同 ----
+chk(str(sorted([[1, 2.0], [1, 2], [0, "z"]])) == "[[0, z], [1, 2.0], [1, 2]]", "3-nested-stable")
+
+# ---- 4. 长列表（30 项，逆序 + 交替重复）稳定且有序 ----
+var mix = []
+var i = 15
+while i > 0:
+    mix.append(i)
+    mix.append(i)
+    i = i - 1
+let smix = sorted(mix)
+chk(str(smix[0]) == "1" and str(smix[1]) == "1" and str(smix[28]) == "15" and len(smix) == 30, "4-long-list")
+
+# ---- 5. 跨类型：数值先按**值**比较，非数值按**类型名字符串**序（bool < dict < int < list < string） ----
+chk(str(sorted([true, "a", 1])) == "[true, 1, a]", "5-cross-type-order")
+chk(str(sorted(["s", 3.5, false])) == "[false, 3.5, s]", "5b-cross-type-num-first")
+
+# ---- 6. 跨类型：list vs int（类型名 "int" < "list"） ----
+chk(str(sorted([[2], 1])) == "[1, [2]]", "6-cross-list-int")
+
+# ---- 7. 相等字符串（多份同内容）保持"长度不变、内容不乱" ----
+chk(str(sorted(["x", "x", "x"])) == "[x, x, x]", "7-same-strings")
+
+# ---- 8. min / max 同族**不回归**（走 compare，不走 sorted） ----
+chk(min(3, 1) == 1 and max(3, 1) == 3, "8-min-max-int")
+chk(min("b", "a") == "a" and max("b", "a") == "b", "8b-min-max-str")
+
+# ---- 9. 原列表不被修改 + 长度不变（副作用检查） ----
+let orig = [5, 4, 3, 2, 1]
+let out = sorted(orig)
+chk(str(orig) == "[5, 4, 3, 2, 1]" and len(out) == 5 and type(out) == "list", "9-no-side-effect")
+
+# ---- 10. 深层嵌套（两层）比较：逐元素递归 + 长度决胜 ----
+chk(str(sorted([[[2]], [[1]], [[1, 0]]])) == "[[[1]], [[1, 0]], [[2]]]", "10-deep-nested")
+
+print("pass=" + str(passes) + " fail=" + str(fails))

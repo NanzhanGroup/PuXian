@@ -1,0 +1,31 @@
+# M162② sorted —— PX-DEF-011 最小复现器（第三方 registry-px 登记）
+# ------------------------------------------------------------
+# 第三方原文（banshanhanfu/registry-px · docs/语言缺陷.md）：
+#   「`sorted([[1,"a"],[1,"a2"]])` 同键复合元素顺序：解释轨 [[1,a2],[1,a]] /
+#     编译轨 [[1,a],[1,a2]]」⇒ 两轨结论不同。
+# 根因（本轮定位）：**比较依据不同** —— 解释轨用 `i_to_str` 渲染串
+#   （"[1, a]" vs "[1, a2]"，在 `]`(0x5D) > `2`(0x32) 处判 "a" 那项**更大**），
+#   编译轨用 `compare_values` 结构化值比较（先比 1 == 1，再比 "a" < "a2"）。
+# 修法：解释轨改用 `i_cmp_values`（对齐 compare_values 三态）+ 两轨统一为**稳定**排序。
+# 判据：本文件三轨 stdout **逐字节一致**，末行 = pass=4 fail=0
+var passes = 0
+var fails = 0
+
+def chk(cond, tag):
+    if cond:
+        passes = passes + 1
+    else:
+        fails = fails + 1
+        print("FAIL " + tag)
+
+# ---- 第三方原例（两个方向都必须给出**结构序**，而不是渲染串序） ----
+chk(str(sorted([[1, "a"], [1, "a2"]])) == "[[1, a], [1, a2]]", "def011-forward")
+chk(str(sorted([[1, "a2"], [1, "a"]])) == "[[1, a], [1, a2]]", "def011-reverse")
+
+# ---- 同键三元素（稳定性 + 结构序） ----
+chk(str(sorted([[1, "b"], [1, "a"], [1, "c"]])) == "[[1, a], [1, b], [1, c]]", "def011-three")
+
+# ---- 同键、第二元素为数字（渲染串序与数值序必分叉：10 < 9 于数值、">" 于串） ----
+chk(str(sorted([[1, 10], [1, 9]])) == "[[1, 9], [1, 10]]", "def011-num-key")
+
+print("pass=" + str(passes) + " fail=" + str(fails))
