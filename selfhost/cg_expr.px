@@ -80,7 +80,9 @@ def cg_comp_body(r, cond_c, put):
         var inner_decl = ""
         if i + 1 < n:
             inner_decl = "LXValue " + r["ivs"][i + 1] + " = " + r["its"][i + 1] + "; "
-        body = "for (int " + r["idxs"][i] + "=0; " + r["idxs"][i] + "<px_len(" + r["ivs"][i] + "); " + r["idxs"][i] + "++) { LXValue " + r["itms"][i] + " = px_index(" + r["ivs"][i] + ", px_int(" + r["idxs"][i] + ")); " + r["binds"][i] + inner_decl + body + " } "
+        # M164（缺陷 170）：推导式展开的**迭代**步走 px_iter_at（dict 推导 `{k: d[k] for k in d}`
+        #   需要「第 i 个键」）；内层解包（itms/字段）仍走 px_index（那是用户语义的索引）。
+        body = "for (int " + r["idxs"][i] + "=0; " + r["idxs"][i] + "<px_len(" + r["ivs"][i] + "); " + r["idxs"][i] + "++) { LXValue " + r["itms"][i] + " = px_iter_at(" + r["ivs"][i] + ", px_int(" + r["idxs"][i] + ")); " + r["binds"][i] + inner_decl + body + " } "
         i -= 1
     return body
 # ---------- 表达式生成 ----------

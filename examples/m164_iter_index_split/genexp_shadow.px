@@ -1,0 +1,38 @@
+# M164 门 ④：生成器表达式合成 lambda 的**形参与外层同名局部**不得混淆（缺陷 175）
+# 语义基准：`(x for x in seq)` 的形参 `x` 在体内**遮蔽**同名的外层局部。
+# 修前：VM 轨（用户面默认轨）把外层同名局部当成自由变量装箱并捕获 ⇒ 体内读到外层值；
+#   解释轨与 C 轨都正确 ⇒ 三轨分叉。断言全为绝对值。
+# 期望三轨 stdout 逐字节一致（pass=4 fail=0）
+var fails = 0
+
+def chk(cond, tag):
+    if not cond:
+        fails = fails + 1
+        print("FAIL " + tag)
+
+def main():
+    # 1-2 形参 c 与外层局部 c 同名（外层值必须**不被**生成器看见）
+    var c = "Z"
+    var a = ""
+    for x in (c for c in ["1", "2"]):
+        a = a + x
+    chk(a == "12", "1-genexp-param-shadows-local")
+    chk(c == "Z", "2-outer-local-unchanged")
+
+    # 3 字典源 + 形参同名（迭代协议与捕获协议叠加）
+    var k = "Q"
+    let d = {"p": "P", "q": "R"}
+    var b = ""
+    for x in (k for k in d):
+        b = b + x
+    chk(b == "pq", "3-genexp-dict-param-shadows-local")
+
+    # 4 真自由变量仍必须被捕获（负控之外的正面保证：修捕获不能把「该捕的」也弄丢）
+    #   101 + 102 + 103 = 306
+    let base = 100
+    var s = 0
+    for v in (base + n for n in [1, 2, 3]):
+        s = s + v
+    chk(s == 306, "4-genexp-real-capture-still-works")
+
+    print("pass=" + str(4 - fails) + " fail=" + str(fails))

@@ -158,17 +158,23 @@ PY
 
 if [ $NEG_SKIP -eq 0 ]; then
     run_neg A vm selfhost/bc_emit.px \
-        '            caps.append(cn)
-        i += 1' \
-        '            let _m161_negA = cn
-        i += 1' \
+        '        if not contains(param_names, cn) and func["smap"].has(cn):
+            caps.append(cn)' \
+        '        if false and not contains(param_names, cn) and func["smap"].has(cn):
+            caps.append(cn)' \
         "生成器捕获表置空（恢复缺陷 163）"
+    # ⚠️ M164（第 50 轮）改动 bc_genexp_caps / bc_emit_genexp 后**本门两条锚点已随之更新**：
+    #   A 从旧形态（`caps.append(cn)` + `i += 1`）改为新形态（`if not contains(param_names, cn) …`）；
+    #   C 从 `bc_genexp_caps(pms, expr[3], func)` 改为 `bc_genexp_caps([vn], expr[3], func)`
+    #   （M164 缺陷 175 把参数从 Param 节点改成平铺形参名表）。
+    #   教训（R47 已记过一次，本轮再次撞上）：**改源码前先 grep 全仓的负控锚点**，否则门会
+    #   「锚点失效」判红 —— 那是门坏了，不是代码坏了，但红是一样的红。
     run_neg B vm selfhost/bc_emit.px \
         '    return snap_base' \
         '    return vb' \
         "快照退化为「把快照值槽当 cell 交给 MKCLO」"
     run_neg C vm selfhost/bc_emit.px \
-        '            fcaps = bc_genexp_caps(pms, expr[3], func)' \
+        '            fcaps = bc_genexp_caps([vn], expr[3], func)' \
         '            fcaps = []' \
         "filter 的捕获表丢弃（只留 transform）"
     # 负控跑完后源码已逐字节还原；入库件不受影响（负控只用 /tmp 现场件），仍复核指纹门。

@@ -23,7 +23,7 @@ static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     px_srcline(17);
     LXValue _t6 = _v2;
     for (int _t7 = 0; _t7 < px_len(_t6); _t7++) {
-        _v3 = px_index(_t6, px_int(_t7));
+        _v3 = px_iter_at(_t6, px_int(_t7));
         px_srcline(18);
         (void)(px_call(px_get_global("print"), (LXValue[]){px_index(_v3, px_str("id")), px_index(_v3, px_str("name"))}, 2));
     }

@@ -114,6 +114,7 @@ const char* px_op_name(int op) {
         [PXOP_GENFROMLIST] = "GENFROMLIST",
         [PXOP_NARGS] = "NARGS",
         [PXOP_DICTSET] = "DICTSET",
+        [PXOP_ITERAT] = "ITERAT",
         [PXOP_CELLGET] = "CELLGET", [PXOP_CELLSET] = "CELLSET",
         [PXOP_CELLNEW] = "CELLNEW", [PXOP_MKCLO] = "MKCLO",
     };
@@ -907,6 +908,19 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
                 if (i < 0 || i >= len) px_error("列表索引越界: %d (len=%d)", i, len);
                 slots[in.a] = obj.as.obj->as.list.items[i];
             } else slots[in.a] = px_index(obj, idx);
+            break;
+        }
+        case PXOP_ITERAT: {  // a=dst，b=obj，c=idx —— 迭代位置语义（px_iter_at）
+            // M164（缺陷 170）：LIST[INT] 快路径与 INDEX 同构（for 循环热路径，避免回落
+            //   到 px_index 的类型分派）；dict → 第 i 个键（仅迭代可见）；其余回落 px_iter_at。
+            LXValue obj = slots[in.b], idx = slots[in.c];
+            if (obj.type == PX_LIST && idx.type == PX_INT) {
+                int i = (int)idx.as.i;
+                int len = obj.as.obj->as.list.len;
+                if (i < 0) i += len;
+                if (i < 0 || i >= len) px_error("列表索引越界: %d (len=%d)", i, len);
+                slots[in.a] = obj.as.obj->as.list.items[i];
+            } else slots[in.a] = px_iter_at(obj, idx);
             break;
         }
         case PXOP_SETIDX:    // a=val 槽，b=obj，c=idx（赋值表达式结果=val）

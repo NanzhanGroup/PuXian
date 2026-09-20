@@ -138,7 +138,9 @@ def cg_gen_stmt_inner(stmt, indent):
         else:
             # M62-L5：函数内循环变量已由函数顶预声明（px_null 初始，Python 语义循环后保留最后值），循环内仅赋值
             vp = ""
-        var fv_init = "px_index(" + it_var + ", px_int(" + idx_var + "))"
+        # M164（缺陷 170）：迭代元素取 **px_iter_at** —— dict 的「第 i 个键」只属迭代机制；
+        #   用户面 `d[i]` 走 px_index（现严格报 R1002）。修前共用 px_index ⇒ 位置语义外漏。
+        var fv_init = "px_iter_at(" + it_var + ", px_int(" + idx_var + "))"
         var fv_line = ""
         if vp == "LXValue ":
             # 就地声明

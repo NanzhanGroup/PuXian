@@ -1,0 +1,72 @@
+# M164 门 ②：加强面 —— 迭代步（px_iter_at / ITERAT）在嵌套 / 函数边界 / 生成器上的表现
+# 判据全部为绝对值；三轨 stdout 应逐字节一致（pass=10 fail=0）
+var fails = 0
+
+def chk(cond, tag):
+    if not cond:
+        fails = fails + 1
+        print("FAIL " + tag)
+
+def make_dict():
+    return {"p": 1, "q": 2, "r": 3}
+
+def poke(d):
+    # 函数边界：迭代一个**参数**字典
+    var n = 0
+    for k in d:
+        n = n + 1
+    return n
+
+def main():
+    # 1 嵌套：字典的值是列表，for-in 取键后再迭代列表
+    let dd = {"a": [1, 2], "b": [3, 4, 5]}
+    var total = 0
+    for k in dd:
+        for v in dd[k]:
+            total = total + v
+    chk(total == 15, "1-nested-forin")
+
+    # 2 两个字典嵌套迭代（笛卡尔计数）
+    let d1 = {"a": 1, "b": 2}
+    let d2 = {"x": 1, "y": 2, "z": 3}
+    var cells = 0
+    for i in d1:
+        for j in d2:
+            cells = cells + 1
+    chk(cells == 6, "2-double-forin")
+
+    # 3 函数返回的字典迭代
+    var nf = 0
+    for k in make_dict():
+        nf = nf + 1
+    chk(nf == 3, "3-forin-returned-dict")
+
+    # 4 函数参数迭代
+    chk(poke(make_dict()) == 3, "4-forin-param-dict")
+
+    # 5 推导式 with 条件（套在字典上）
+    let d = {"a": 1, "b": 2, "c": 3}
+    let odd = [k for k in d if d[k] % 2 == 1]
+    chk(odd == ["a", "c"], "5-comp-cond-on-dict")
+
+    # 6 字典推导 from 字典（值变换 + 键保持不变、序保持）
+    let scaled = {k: d[k] * 100 for k in d}
+    chk(scaled.keys() == ["a", "b", "c"], "6-comp-key-order")
+    chk(scaled["b"] == 200, "7-comp-value")
+
+    # 8-10 生成器表达式（缺陷 174）：惰性 seq 也走同一迭代协议 —— str / tuple / dict
+    let g = (k for k in d)
+    var gs = ""
+    for x in g:
+        gs = gs + x
+    chk(gs == "abc", "8-genexp-over-dict")
+    var gstr = ""
+    for c in (c for c in "汉字"):
+        gstr = gstr + c
+    chk(gstr == "汉字", "9-genexp-over-str")
+    var gtup = 0
+    for e in (e for e in (1, 2, 3)):
+        gtup = gtup + e
+    chk(gtup == 6, "10-genexp-over-tuple")
+
+    print("pass=" + str(10 - fails) + " fail=" + str(fails))
