@@ -84,6 +84,70 @@ def cg_comp_body(r, cond_c, put):
         i -= 1
     return body
 # ---------- 表达式生成 ----------
+# ---------- M160（缺陷 160）：闭包 / 函数体内 def 的统一发射 ----------
+# params/body = 形参与函数体；dispname = 函数值名（匿名 "<closureN>" / 具名 def 的名字）。
+# 捕获规则（对齐解释轨 env 链、C 轨 M129 cell）：自由变量 ∩ 当前帧局部 = 捕获集，
+#   捕获按**引用**（cell）：外层把该局部装箱，闭包共享同一个 cell。
+def cg_gen_closure(params, body, dispname):
+    cg_closure_id = cg_closure_id + 1
+    let cid = cg_closure_id
+    let fnname = "fn_closure_" + str(cid)
+    # M129（缺陷 21）：自由变量 ∩ 当前帧局部 = 本次捕获集（**必须先于清空 cg_vars 求**）
+    let cap_free = []
+    cg_closure_caps(["Closure", params, null, body, [], null], cap_free)
+    let caps = []
+    for cn in cap_free:
+        if cg_var_of(cn) != null:
+            caps.append(cn)
+    # env 构造表达式（在**外层**作用域求值，读的是外层 cell 变量）
+    var env_expr = "px_null()"
+    if len(caps) > 0:
+        var ee = "({ LXValue _capenv = px_dict(); "
+        for cn in caps:
+            let cv = cg_var_of(cn)
+            # 外层已是 cell → 直接共享该 cell（引用语义）；否则按值新建 cell
+            #   （仅当"闭包体里的局部又被内层闭包捕获"这类未支持场景才会走到）
+            if cg_cells.has(cn):
+                ee += "px_dict_set(_capenv, \"" + cn + "\", " + cv + "); "
+            else:
+                ee += "px_dict_set(_capenv, \"" + cn + "\", px_cell(" + cv + ")); "
+        ee += "_capenv; })"
+        env_expr = ee
+    var fdef = "static LXValue " + fnname + "(LXValue* args, int nargs, void* ctx) {\n"
+    if len(caps) > 0:
+        fdef += "    (void)nargs;\n"
+    else:
+        fdef += "    (void)ctx;\n"
+    let saved_vars = cg_dict_copy(cg_vars)
+    let saved_types = cg_dict_copy(cg_var_types)
+    let saved_cells = cg_dict_copy(cg_cells)
+    cg_vars = cg_new_dict()
+    cg_var_types = cg_new_dict()
+    cg_cells = cg_new_dict()
+    var pi = 0
+    while pi < len(params):
+        let v = cg_new_var(rust_unescape(params[pi][1]))
+        fdef += "    LXValue " + v + " = (nargs > " + str(pi) + ") ? args[" + str(pi) + "] : px_null();\n"
+        pi += 1
+    # 捕获名：闭包体内各绑定一个同名的**新 C 变量**持 cell，并标记为 cell
+    for cn in caps:
+        let cv2 = cg_new_var(cn)
+        cg_cells[cn] = 1
+        fdef += "    LXValue " + cv2 + " = px_env_lookup(ctx, \"" + cn + "\");\n"
+    let b = cg_gen_expr(body)
+    fdef += "    return " + b + ";\n"
+    fdef += "}\n"
+    cg_closures += fdef
+    cg_vars = saved_vars
+    cg_var_types = saved_types
+    cg_cells = saved_cells
+    # M129b（缺陷 54）：**无捕获**的闭包沿用 `px_func(..., NULL)` —— 不必建 env、
+    #   不必让 ctx 指向自身 env 字段（省一次字段写 + 与既有 golden 形式一致：
+    #   仅"确有捕获"的闭包才需要 px_func_env 携带 upvalue cell）。
+    if len(caps) > 0:
+        return "px_func_env(\"" + dispname + "\", " + fnname + ", " + env_expr + ")"
+    return "px_func(\"" + dispname + "\", " + fnname + ", NULL)"
+# M160：cg_gen_closure 与下方 cg_gen_expr 之间不留空行（pxfmt 口径）—— 行号刻意不动
 def cg_gen_expr(expr):
     let ty = expr[0]
     if ty == "Int":
@@ -367,65 +431,9 @@ def cg_gen_expr(expr):
         var body = cg_comp_body(r, cond_c, put)
         return "({ LXValue " + rv + " = px_dict(); LXValue " + r["ivs"][0] + " = " + r["its"][0] + "; " + body + " " + rv + "; })"
     if ty == "Closure":
-        cg_closure_id = cg_closure_id + 1
-        let cid = cg_closure_id
-        let fnname = "fn_closure_" + str(cid)
-        # M129（缺陷 21）：自由变量 ∩ 当前帧局部 = 本次捕获集（**必须先于清空 cg_vars 求**）
-        let cap_free = []
-        cg_closure_caps(expr, cap_free)
-        let caps = []
-        for cn in cap_free:
-            if cg_var_of(cn) != null:
-                caps.append(cn)
-        # env 构造表达式（在**外层**作用域求值，读的是外层 cell 变量）
-        var env_expr = "px_null()"
-        if len(caps) > 0:
-            var ee = "({ LXValue _capenv = px_dict(); "
-            for cn in caps:
-                let cv = cg_var_of(cn)
-                # 外层已是 cell → 直接共享该 cell（引用语义）；否则按值新建 cell
-                #   （仅当"闭包体里的局部又被内层闭包捕获"这类未支持场景才会走到）
-                if cg_cells.has(cn):
-                    ee += "px_dict_set(_capenv, \"" + cn + "\", " + cv + "); "
-                else:
-                    ee += "px_dict_set(_capenv, \"" + cn + "\", px_cell(" + cv + ")); "
-            ee += "_capenv; })"
-            env_expr = ee
-        var fdef = "static LXValue " + fnname + "(LXValue* args, int nargs, void* ctx) {\n"
-        if len(caps) > 0:
-            fdef += "    (void)nargs;\n"
-        else:
-            fdef += "    (void)ctx;\n"
-        let saved_vars = cg_dict_copy(cg_vars)
-        let saved_types = cg_dict_copy(cg_var_types)
-        let saved_cells = cg_dict_copy(cg_cells)
-        cg_vars = cg_new_dict()
-        cg_var_types = cg_new_dict()
-        cg_cells = cg_new_dict()
-        let params = expr[1]
-        var pi = 0
-        while pi < len(params):
-            let v = cg_new_var(rust_unescape(params[pi][1]))
-            fdef += "    LXValue " + v + " = (nargs > " + str(pi) + ") ? args[" + str(pi) + "] : px_null();\n"
-            pi += 1
-        # 捕获名：闭包体内各绑定一个同名的**新 C 变量**持 cell，并标记为 cell
-        for cn in caps:
-            let cv2 = cg_new_var(cn)
-            cg_cells[cn] = 1
-            fdef += "    LXValue " + cv2 + " = px_env_lookup(ctx, \"" + cn + "\");\n"
-        let b = cg_gen_expr(expr[3])
-        fdef += "    return " + b + ";\n"
-        fdef += "}\n"
-        cg_closures += fdef
-        cg_vars = saved_vars
-        cg_var_types = saved_types
-        cg_cells = saved_cells
-        # M129b（缺陷 54）：**无捕获**的闭包沿用 `px_func(..., NULL)` —— 不必建 env、
-        #   不必让 ctx 指向自身 env 字段（省一次字段写 + 与既有 golden 形式一致：
-        #   仅"确有捕获"的闭包才需要 px_func_env 携带 upvalue cell）。
-        if len(caps) > 0:
-            return "px_func_env(\"<closure" + str(cid) + ">\", " + fnname + ", " + env_expr + ")"
-        return "px_func(\"<closure" + str(cid) + ">\", " + fnname + ", NULL)"
+        # M160（缺陷 160）：发射逻辑抽到 cg_gen_closure —— 与「函数体内 def」共用同一条
+        #   真相（同一份自由变量分析 + 同一份 cell 捕获协议）。dispname 取本次将分配的 id。
+        return cg_gen_closure(expr[1], expr[3], "<closure" + str(cg_closure_id + 1) + ">")
     if ty == "Block":
         var s = "({ "
         s += "LXValue _blk = px_null(); "

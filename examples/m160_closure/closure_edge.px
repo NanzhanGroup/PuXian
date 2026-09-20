@@ -1,0 +1,66 @@
+# M160（第 46 轮 · 缺陷 159）· 闭包加强面：跨两层捕获 + 经 runtime native 回调（桥）
+# ------------------------------------------------------------
+# 判据（三轨 stdout 逐字节一致）：
+#   · 跨两层捕获（闭包里的闭包引用**最外层帧**的局部）：靠"自由变量逐层上提"
+#     成立 —— 中间帧因为**自己的**闭包里出现了该自由变量，也把它捕获成 upvalue ⇒
+#     链式传递。C 轨（cell）/VM 轨（upvalue slot）与解释轨 env 链同语义。
+#   · 闭包经 runtime native 回调（set_interval）：回调里再改捕获变量（跨线程引用可见）；
+#     计时相关断言取**下界**（≥3 次），避免调度抖动造成假红。
+var pass = 0
+var fail = 0
+
+def check(cond, name):
+    if cond:
+        pass = pass + 1
+    else:
+        fail = fail + 1
+        print("FAIL " + name)
+
+# ---- 跨两层捕获（最外层 var c）----
+def two_level():
+    var c = 0
+    let outer = fn ():
+        let inner = fn ():
+            c = c + 1
+            return c
+        return inner()
+    return outer() + outer()
+
+# ---- 跨三层捕获 ----
+def three_level():
+    var c = 100
+    let mid = fn ():
+        let inner = fn ():
+            c = c + 1
+            return c
+        let deeper = fn ():
+            return inner()
+        return deeper()
+    return mid() + mid()
+
+# ---- 闭包经 native 回调（定时器）----
+var ticks = 0
+var seen = []
+
+def timer_closure():
+    let step = 2
+    let cb = fn ():
+        ticks = ticks + step
+        seen.append(ticks)
+    let tid = set_interval(cb, 20)
+    sleep(140)
+    clear_timer(tid)
+    return ticks
+
+def main():
+    check(two_level() == 3, "跨两层捕获: " + str(two_level()))
+    check(three_level() == 203, "跨三层捕获: " + str(three_level()))
+    ticks = 0
+    seen = []
+    let t = timer_closure()
+    check(t >= 6, "定时器闭包回调累加 >= 6，实际 " + str(t))
+    check(len(seen) >= 3 and seen[0] == 2, "回调序列首项 == 2（捕获初值）")
+    check(len(seen) >= 2 and seen[1] == 4, "回调序列第二项 == 4（引用语义累加）")
+    print("pass=" + str(pass) + " fail=" + str(fail))
+    if fail > 0:
+        exit(1)

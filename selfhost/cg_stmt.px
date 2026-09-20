@@ -203,7 +203,20 @@ def cg_gen_stmt_inner(stmt, indent):
         return cg_gen_select(stmt[1], stmt[2], indent)
     if ty == "Import":
         return pad + "/* import 忽略（MVP） */\n"
-    # StructDef/EnumDef/TraitDef/ImplDef/FuncDef → 空（顶层在 generate 处理）
+    if ty == "FuncDef":
+        # M160（缺陷 160）：**函数体内的 `def`**（顶层 def 走 cg_generate，不进这里）——
+        #   绑定为本帧局部，值 = 与匿名 fn 同构的闭包（自由变量按引用捕获，cell）。
+        #   递归：该局部在函数顶已提升声明（cg_collect_hoist_vars），def 语句处赋值；
+        #   闭包体读它时走的是**捕获的同一个 cell** ⇒ 自引用（递归）成立。
+        let dname = rust_unescape(stmt[1])
+        let dcv = cg_var_of(dname)
+        # 注意：FuncDef 的 stmt[4] 是**语句列表**（Closure 节点的 expr[3] 是 Block **表达式**）
+        #   ⇒ 这里显式包一层 Block，才能复用同一条闭包发射路径（否则体被当表达式生成 ⇒ 空函数）。
+        let dfn = cg_gen_closure(stmt[2], ["Block", stmt[4]], dname)
+        if dcv != null:
+            return pad + cg_store_of(dname, dcv, dfn) + ";\n"
+        return ""
+    # StructDef/EnumDef/TraitDef/ImplDef → 空（顶层在 generate 处理）
     return ""
 # M72-S2（Issue 10 D1）：cg_gen_stmt 入口 wrapper —— 编译产物运行时错误带 .px 源行号。
 # 每条可执行语句（含 if/while/for 嵌套子语句，递归均经本 wrapper）生成前插

@@ -239,9 +239,13 @@ jobs:
           # M158（第 40 轮）：解释轨函数值 → runtime native 桥（缺陷 114）+ type 口径（缺陷 161）。
           # 三轨一致 + 负控会重编解释器（耗时长）⇒ CI 用 --neg-skip，负控在本地全门 m116 跑。
           bash examples/m158_interp_fn/verify.sh --neg-skip > /tmp/v_m158.log 2>&1 || { echo "❌ m158_interp_fn verify 失败"; tail -60 /tmp/v_m158.log; exit 1; }
+          # M160（第 46 轮）：词法闭包 / 函数体内 def —— 缺陷 159（VM 轨 upvalue + 嵌套 FuncDef）
+          # 与缺陷 160（C 轨嵌套捕获）收口；三轨一致（13 + 5 + 5 断言）+ 交叉判据（M158 门第 ⑤ 层升格）。
+          # 负控会现场重编编译器（耗时长）⇒ CI 用 --neg-skip，负控在本地全门 selfhost/m116_gates.sh 跑。
+          bash examples/m160_closure/verify.sh --neg-skip > /tmp/v_m160.log 2>&1 || { echo "❌ m160_closure verify 失败"; tail -60 /tmp/v_m160.log; exit 1; }
           # 发射冻结门（M153 建立）：255 个用例的 --emit-c 输出必须逐字节不变。
           bash selfhost/emitc_freeze.sh --check > /tmp/v_emitc_freeze.log 2>&1 || { echo "❌ emitc_freeze 失败"; tail -30 /tmp/v_emitc_freeze.log; exit 1; }
-          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 / m153 / m154 / m155 / m158 verify + 发射冻结门（255 件 --emit-c）全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"
+          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 / m153 / m154 / m155 / m158 / m160 verify + 发射冻结门（267 件 --emit-c）全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"
       - name: LSP / MCP 服务器冒烟（--version + 协议入口存在性）
         run: |
           chmod +x bootstrap/pxlsp bootstrap/pxmcp bootstrap/pxcheck

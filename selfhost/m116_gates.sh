@@ -163,6 +163,13 @@ run m158_interp_fn bash examples/m158_interp_fn/verify.sh
 #   逃生舱 PX_HOST_QUIC=1 / 显式 flag 优先 / 负控：宿主库缺失必须明确报错且**不得静默退化** /
 #   真机回归：x86_64 仍能真编译真运行。
 run m159_hostarch bash examples/m159_hostarch/verify.sh
+# ── M160（第 46 轮）：词法闭包 / 函数体内 `def` —— 缺陷 159（VM 轨）+ 160（C 轨）收口 ──
+#   背景：VM 轨（**用户面默认轨**）此前无捕获机制（闭包体把外层局部当全局名）+ 不支持
+#   函数体内 `FuncDef`；C 轨的 `cg_ast_bound` 把 Assign 目标当"绑定" ⇒ 闭包自由变量漏算。
+#   修法：两轨共用同一条自由变量分析 + **按引用捕获（cell）**（与解释轨 env 链同义）。
+#   判据：三轨 stdout 逐字节一致（13 + 5 + 5 断言）+ 交叉判据（M158 缺口复现器升格为硬判据）
+#   + 3 道负控（恢复 Assign 绑定口径 ⇒ C 轨必红 / 关本帧装箱 ⇒ VM 必红 / MKCLO 槽基址 +1 ⇒ VM 必红）。
+run m160_closure bash examples/m160_closure/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

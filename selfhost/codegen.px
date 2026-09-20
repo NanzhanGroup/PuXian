@@ -113,10 +113,16 @@ def cg_ast_bound(x, out):
     if type(h) == "string":
         if h == "VarDecl":
             cg_name_add(out, rust_unescape(x[2]))
-        elif h == "Assign":
-            let tg = x[1]
-            if type(tg) == "list" and len(tg) > 0 and tg[0] == "Var":
-                cg_name_add(out, rust_unescape(tg[1]))
+        # M160（第 46 轮 · 缺陷 160）：**Assign 目标不是"绑定"而是"使用"** ——
+        #   在"按引用捕获"语义下（解释轨 env 链 / C 轨 cell / VM 轨 cell 三轨一致），
+        #   闭包体内 `x = x + 1` 是对**外层** x 的读写，不是新建局部。
+        #   此前把它记进 bound ⇒ 与 used 里的 x 相消 ⇒ 自由变量集漏掉 x
+        #   ⇒ 外层不装箱、闭包体把 x 当成全局名 ⇒ 运行期「未定义变量: x」
+        #   （实测：`var x = 0` + `let g = fn (): x = x + 1`）。
+        #   注：cg_collect_hoist_vars 仍按函数级作用域把 Assign 目标提升为**本帧**局部，
+        #   两者不矛盾 —— 只有当该函数**不是**闭包本身、而是外层帧时，提升出来的局部
+        #   才会因本函数内闭包引用它而被装箱。
+        #   （簇内 `var x = ...` 仍由上面的 VarDecl 分支计入 bound。）
         elif h == "For":
             cg_name_add(out, rust_unescape(x[1]))
         elif h == "Closure":
@@ -141,6 +147,11 @@ def cg_scan_closure_caps(x, out):
         return
     if type(x[0]) == "string" and x[0] == "Closure":
         cg_closure_caps(x, out)
+    if type(x[0]) == "string" and x[0] == "FuncDef":
+        # M160（缺陷 160）：**函数体内的 `def`** 与匿名闭包同构（同一帧内可见、按引用捕获）
+        #   ⇒ 它的自由变量同样必须让外层帧把对应局部装箱。顶层 def 不会出现在这里
+        #   （cg_scan_closure_caps 只扫函数体），故无副作用。
+        cg_closure_caps(["Closure", x[2], x[3], x[4], [], x[5]], out)
     for c in x:
         cg_scan_closure_caps(c, out)
 # M41.2：不可变变量跟踪（E3002——对 let/const 变量赋值 = 编译错误）
@@ -536,6 +547,13 @@ def cg_collect_hoist_vars(stmts, out):
                     out.append(name)
         elif ty == "VarDecl":
             let name = rust_unescape(st[2])
+            if not contains(out, name):
+                out.append(name)
+        elif ty == "FuncDef":
+            # M160（缺陷 160）：**函数体内的 `def`** 是函数级局部绑定（对齐解释轨 istmt.px：
+            #   `def` 在语句位置把函数值绑到当前 env）⇒ 提升为本帧局部，声明处赋值。
+            #   顶层 def 走 cg_generate，不经此处。
+            let name = rust_unescape(st[1])
             if not contains(out, name):
                 out.append(name)
         elif ty == "If":
