@@ -176,7 +176,23 @@ fi
 cnt=0
 for p in $libs; do [ -f "$p" ] || { cnt=$((cnt+1)); say "   ⚠ 缺库：$p"; }; done
 [ "$cnt" = 0 ] || { say "❌ 步骤 2 缺目标架构静态库（aarch64 仓库预置 lib-aarch64；armv7/riscv64 先跑 tools/cross_multiarch.sh）"; exit 1; }
-$CC -O2 -pthread $LINK_EXTRA -o "$OUTDIR/pxc0" "$OUTDIR/compiler_golden.o" "$OUTDIR"/obj/*.o $libs -lm -ldl -lpthread > "$CPX_LOG" 2>&1 || { say "❌ 链接 pxc0 失败"; tail_log "$CPX_LOG"; exit 1; }
+# ---- 链接附加库探测（M159 修正）：musl.cc 工具链带**空的** libdl/libpthread 桩，而
+#      **zig cc 的 musl 目标没有**它们（CI 走 zig fallback 时即会触发）
+#      ⇒ 先探测再决定，避免 "cannot find -ldl" 这类**与源码无关**的硬失败。
+probe_lib() {   # $1=lib flag → 0 可用 / 1 不可用
+    printf 'int main(void){return 0;}\n' > "$OUTDIR/.probe.c"
+    $CC "$OUTDIR/.probe.c" -o "$OUTDIR/.probe.bin" "$1" >/dev/null 2>&1
+}
+LIBS_EXTRA=""
+for l in -ldl -lpthread; do
+    if probe_lib "$l"; then
+        LIBS_EXTRA="$LIBS_EXTRA $l"
+    else
+        say "   （本工具链不支持 $l ⇒ 跳过；musl 已内置，无需该桩）"
+    fi
+done
+say "   链接附加库：${LIBS_EXTRA:-（无）}"
+$CC -O2 -pthread $LINK_EXTRA -o "$OUTDIR/pxc0" "$OUTDIR/compiler_golden.o" "$OUTDIR"/obj/*.o $libs -lm $LIBS_EXTRA > "$CPX_LOG" 2>&1 || { say "❌ 链接 pxc0 失败"; tail_log "$CPX_LOG"; exit 1; }
 say "   ✅ $OUTDIR/pxc0（$(stat -c %s "$OUTDIR/pxc0") 字节）· $(file -b "$OUTDIR/pxc0" 2>/dev/null | cut -c1-60)"
 
 # ---- 步骤 3：自证（pxc0 编译 compiler.px 与基准逐字节一致）—— 仅同架构可跑
