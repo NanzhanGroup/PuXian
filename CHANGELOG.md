@@ -34,13 +34,18 @@
   A 关闭全部序列化 ⇒ **11 项红**；B 仅 Binary 站点退回 ⇒ 6 项红；
   C 仅方法站点退回 ⇒ `14-method-recv-arg` 红；D 仅索引赋值站点退回 ⇒ `13/18` 红。
 - **重定基（全部按「差异行是否全属本次有意改动族」逐条核对后才覆盖）**：
-  · 入库件 **14/14** 重烘（pxc/pxc_vm `PXSRC-aa1f0caf0fc96871` · pxi/pxi_vm `PXSRC-81ea38efb2c02341` · 全件 `PXRT-baa2b4eaf87f08de`；pxc sha256 `8e7d59bec44fb1a9…` · pxc_vm `50963ce902ff1186…`）；
+  · 入库件 **14/14** 重烘（**最终值**：pxc/pxc_vm `PXSRC-2de44d417bce29a4` · pxi/pxi_vm `PXSRC-81ea38efb2c02341` ·
+    全件 `PXRT-baa2b4eaf87f08de`；pxc sha256 `ededfbf071c660fe…` · pxc_vm `55c39f0bf6b284ff…` · pxi `a372a53d0752af0d…`）；
   · `selfhost/golden/compiler.c` 16979 → **17215** 行：**唯一语义差异族 = 序列化临时变量**（把 `({ LXValue _tN = …; … })`
     解开还原后与旧基准逐字节一致），其余为 `px_srcline(N)` 行号位移；
   · `selfhost/golden/compiler.bc.dump` 35920 → **36632** 行（`compiler.px` 自身新增 `cg_seq_uid` 全局 + 4 个新函数的局部）：本次**改的是 C 轨发射器**（cg_*）/ 解释轨（istmt），
     BC 轨由 `bc_emit.px` 决定 ⇒ 逐字节不变（作交叉判据）；
   · codegen golden（`s0*.c` / `v0*.c`）：**19/19 件做「序列化逆变换」后与旧基准逐字节一致**（工具 `/tmp/m165/unseq.py`；其中 7 件含序列化点需覆盖：`s08/s10/s14/v01~v04`，其余 12 件零差异）；`diffcheck --codegen` 19/19 绿；
   · 发射冻结门：**291 → 292 件**（新增本门夹具 1 件）· **类别 B 为空**（既有 291 件的 `--emit-c` 输出逐字节不变 —— 冻结门走 BC 轨，本次未改 `bc_emit.px`）。
+- **时序留痕（一处真实踩坑）**：加完发射代码**没有先跑 fmt** ⇒ `m116_gates.sh` 的 fmt 门判红
+  （`selfhost/codegen.px` 格式不符）。`pxfmt -w` 只改**行内空白**（行数不变）⇒ 内容变、源码链指纹变
+  ⇒ **必须重烘 pxc/pxc_vm**（重烘后 `--check`/`--check-vm`/`--check-all` 全绿），而 `compiler.c`
+  基准**自证一致、无需重定基**（行数未变 ⇒ `px_srcline` 未位移）。上表已填**重烘后**的最终值。
 - **教训**：**「未定义行为」在语言里等于「三轨分叉」**——C 的实参顺序未定义，编译器可以任意选；
   而我们的三条轨道（AST 走查 / 字节码 / C 发射）**必须同一条真相**，所以「对齐 Go 规范把顺序定死」
   比「跟随 host 编译器」更符合本项目的一致性原则。凡是被 host 语言**留空**的地方，都是潜在分叉点。
