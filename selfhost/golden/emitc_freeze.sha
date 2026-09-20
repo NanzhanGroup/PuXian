@@ -106,6 +106,7 @@ examples/m164_iter_index_split/err_d_neg.px src=cd5e18f5562e3f46 rc=0 out=198012
 examples/m164_iter_index_split/genexp_shadow.px src=a9360c05ec98712e rc=0 out=96f2917c916011b6114bdbc3c8b8192c err=e3b0c44298fc1c14
 examples/m164_iter_index_split/iter_split.px src=e1e5090c2135c6bb rc=0 out=8b770521794e69b507a5766fe46ae239 err=e3b0c44298fc1c14
 examples/m164_iter_index_split/iter_split_edge.px src=4ea9dca1d2cc2c45 rc=0 out=ea2526d2819d7b6c25fe31388a5b4866 err=e3b0c44298fc1c14
+examples/m165_eval_order/eval_order.px src=80e67a2b951bbf31 rc=0 out=c77aee31f967a795653e75351687dd92 err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=ca57a90d693278f051ce29d427bb006a err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=864a86fa0f3b5c69d3239ebdb2eac63a err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14

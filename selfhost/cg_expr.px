@@ -150,6 +150,80 @@ def cg_gen_closure(params, body, dispname):
         return "px_func_env(\"" + dispname + "\", " + fnname + ", " + env_expr + ")"
     return "px_func(\"" + dispname + "\", " + fnname + ", NULL)"
 # M160：cg_gen_closure 与下方 cg_gen_expr 之间不留空行（pxfmt 口径）—— 行号刻意不动
+# ---------- M165（第 51 轮 · 缺陷 178）：C 轨实参求值顺序 = 左→右 ----------
+# C 标准**不规定**函数实参求值顺序，gcc 实测为**右→左**；而解释轨（AST 序）与
+#   VM 轨（字节码序）都是**左→右** ⇒ 同一个 C 表达式里出现 ≥2 个带副作用的操作数
+#   就三轨分叉。实测（修前）：
+#     · `"${f()}${g()}"`        → 解释/VM 轨 F,G；**C 轨 G,F**
+#     · `f() + g()`             → 同上（px_add 的两实参）
+#     · `str(l.pop()) + str(len(l))` → C 轨 len 先求 ⇒ 打印 len=3（解释/VM 轨 2）
+#   语义裁定（对齐 **Go 规范**：函数/方法实参按**词法左→右**求值；C 未定义）：
+#   一个 C 表达式里若 **≥2 个操作数含副作用**，按序把它们提升为临时变量
+#   （语句表达式 `({ LXValue _tN = <src>; <最终表达式>; })`），纯操作数保留内联
+#   （无副作用 ⇒ 相对顺序无关）。**只有 ≥2 个时才序列化** ⇒ 其余发射文本一字不变。
+def cg_side_effect(x):
+    if type(x) != "list" or len(x) == 0:
+        return false
+    let h = x[0]
+    if type(h) == "string":
+        if h == "Call" or h == "Pipe" or h == "ListComp" or h == "DictComp" or h == "GenExp":
+            return true
+        # ⚠️ Closure（lambda）：**创建**它不产生副作用，且体内表达式**此刻不求值**
+        #   ⇒ 既不算副作用，也不能往下递归（否则会把体内 Call 误当副作用）。
+        if h == "Closure":
+            return false
+    var i = 0
+    while i < len(x):
+        if cg_side_effect(x[i]):
+            return true
+        i += 1
+    return false
+# srcs = [C 源文本...]，imps = [是否含副作用...] ⇒ [decls, names]；<2 个副作用 ⇒ [null, null]
+def cg_seq_operands(srcs, imps):
+    var n = 0
+    var i = 0
+    while i < len(imps):
+        if imps[i]:
+            n += 1
+        i += 1
+    if n < 2:
+        return [null, null]
+    var decls = ""
+    let names = []
+    i = 0
+    while i < len(srcs):
+        if imps[i]:
+            # ⚠️ 用**专用计数器**（`_sN`）而不是 cg_tmp()（`_tN`）：cg_tmp 是全局编号，
+            #   若在这里消耗序号，后面所有 _tN 都会位移 ⇒ 发射文本大面积变化（与本次
+            #   语义改动无关的行也被改动），冻结门/基准的差异面会失控。
+            cg_seq_uid = cg_seq_uid + 1
+            let t = "_s" + str(cg_seq_uid)
+            decls = decls + "LXValue " + t + " = " + srcs[i] + "; "
+            names.append(t)
+        else:
+            names.append(srcs[i])
+        i += 1
+    return [decls, names]
+# 便捷：nodes = [AST...]，parts = [C 源文本...] ⇒ [decls, names]
+#   ⚠️ names 是**逐操作数的文本列表**（不是 join 后的串）—— 有的站点把部分实参留在
+#   列表外（`px_call(c, (LXValue[]){...}, n)` 的 c、`px_method(o, 名, {...}, n)` 的 o），
+#   这类站点必须按下标取名字；只有「整个实参表都在 names 里」的站点才 join。
+#   ⚠️ nodes 与 parts 必须**一一对应**。
+def cg_seq_join(nodes, parts):
+    let imps = []
+    var i = 0
+    while i < len(nodes):
+        imps.append(cg_side_effect(nodes[i]))
+        i += 1
+    let sp = cg_seq_operands(parts, imps)
+    if sp[0] == null:
+        return [null, parts]
+    return [sp[0], sp[1]]
+# decls 非 null ⇒ 包成语句表达式（最后一条语句即值）
+def cg_seq_wrap(decls, fin):
+    if decls == null:
+        return fin
+    return "({ " + decls + fin + "; })"
 def cg_gen_expr(expr):
     let ty = expr[0]
     if ty == "Int":
@@ -177,7 +251,8 @@ def cg_gen_expr(expr):
         while i < len(items):
             parts.append(cg_gen_expr(items[i]))
             i += 1
-        return "px_list_n((LXValue[]){" + join(", ", parts) + "}, " + str(len(parts)) + ")"
+        let sj = cg_seq_join(items, parts)  # M165（缺陷 178）：≥2 个含副作用的元素 ⇒ 按序提升
+        return cg_seq_wrap(sj[0], "px_list_n((LXValue[]){" + join(", ", sj[1]) + "}, " + str(len(parts)) + ")")
     if ty == "Tuple":
         let parts = []
         let items = expr[1]
@@ -185,7 +260,8 @@ def cg_gen_expr(expr):
         while i < len(items):
             parts.append(cg_gen_expr(items[i]))
             i += 1
-        return "px_tuple((LXValue[]){" + join(", ", parts) + "}, " + str(len(parts)) + ")"
+        let sj = cg_seq_join(items, parts)  # M165（缺陷 178）
+        return cg_seq_wrap(sj[0], "px_tuple((LXValue[]){" + join(", ", sj[1]) + "}, " + str(len(parts)) + ")")
     if ty == "Dict":
         var s = "({ LXValue _d = px_dict(); "
         let entries = expr[1]
@@ -231,7 +307,8 @@ def cg_gen_expr(expr):
     if ty == "Index":
         let o = cg_gen_expr(expr[1])
         var i = cg_gen_expr(expr[2])
-        return "px_index(" + o + ", " + i + ")"
+        let sj = cg_seq_join([expr[1], expr[2]], [o, i])  # M165（缺陷 178）
+        return cg_seq_wrap(sj[0], "px_index(" + sj[1][0] + ", " + sj[1][1] + ")")
     if ty == "Slice":
         let o = cg_gen_expr(expr[1])
         var s = "px_null()"
@@ -243,7 +320,8 @@ def cg_gen_expr(expr):
         var k = "px_null()"
         if expr[4] != null:
             k = cg_gen_expr(expr[4])
-        return "px_slice(" + o + ", " + s + ", " + e + ", " + k + ")"
+        let sj = cg_seq_join([expr[1], expr[2], expr[3], expr[4]], [o, s, e, k])  # M165（缺陷 178）
+        return cg_seq_wrap(sj[0], "px_slice(" + sj[1][0] + ", " + sj[1][1] + ", " + sj[1][2] + ", " + sj[1][3] + ")")
     if ty == "Call":
         let callee = expr[1]
         let args = expr[2]
@@ -259,7 +337,8 @@ def cg_gen_expr(expr):
                 while ai < len(args):
                     parts.append(cg_gen_expr(args[ai]))
                     ai += 1
-                return "px_call(px_get_global(\"ffi_call\"), (LXValue[]){px_str(\"" + cname + "\"), px_list_n((LXValue[]){" + join(", ", parts) + "}, " + str(len(parts)) + ")}, 2)"
+                let sj = cg_seq_join(args, parts)  # M165（缺陷 178）
+                return cg_seq_wrap(sj[0], "px_call(px_get_global(\"ffi_call\"), (LXValue[]){px_str(\"" + cname + "\"), px_list_n((LXValue[]){" + join(", ", sj[1]) + "}, " + str(len(parts)) + ")}, 2)")
             if cname == "chan":
                 var cap = "0"
                 if len(args) > 0:
@@ -287,7 +366,8 @@ def cg_gen_expr(expr):
                 while fi < len(fields):
                     fnames.append("\"" + fields[fi] + "\"")
                     fi += 1
-                return "px_struct(\"" + cname + "\", (char*[]){" + join(", ", fnames) + "}, (LXValue[]){" + join(", ", parts) + "}, " + str(len(fields)) + ")"
+                let sj = cg_seq_join(args, parts)  # M165（缺陷 178）
+                return cg_seq_wrap(sj[0], "px_struct(\"" + cname + "\", (char*[]){" + join(", ", fnames) + "}, (LXValue[]){" + join(", ", sj[1]) + "}, " + str(len(fields)) + ")")
             if cg_enums.has(cname):
                 if len(args) != 1:
                     return "枚举 " + cname + " 构造需要一个变体名"
@@ -315,28 +395,41 @@ def cg_gen_expr(expr):
                 if has_m:
                     let o = cg_gen_expr(obj)
                     let parts = [o]
+                    let nodes = [obj]  # M165（缺陷 178）：与 parts 同序（词法左→右）
                     var ai = 0
                     while ai < len(args):
                         parts.append(cg_gen_expr(args[ai]))
+                        nodes.append(args[ai])
                         ai += 1
                     let fnname = "fn_" + cg_func_cname(static_type) + "_" + cg_func_cname(mname)
-                    return fnname + "((LXValue[]){" + join(", ", parts) + "}, " + str(len(parts)) + ", NULL)"
+                    let sj = cg_seq_join(nodes, parts)
+                    return cg_seq_wrap(sj[0], fnname + "((LXValue[]){" + join(", ", sj[1]) + "}, " + str(len(parts)) + ", NULL)")
             # 运行时方法分派
+            # M165（缺陷 178）：接收者**词法上最先** ⇒ 与实参一起进序列化表（nodes/parts 一一对应），
+            #   但 `(LXValue[])` 实参数组只放 names[1:]（接收者是 px_method 的第 1 个参数）。
             let o = cg_gen_expr(obj)
-            let parts = []
+            let parts = [o]
+            let nodes = [obj]
             var ai = 0
             while ai < len(args):
                 parts.append(cg_gen_expr(args[ai]))
+                nodes.append(args[ai])
                 ai += 1
-            return "px_method(" + o + ", \"" + mname + "\", (LXValue[]){" + join(", ", parts) + "}, " + str(len(parts)) + ")"
+            let sj = cg_seq_join(nodes, parts)
+            return cg_seq_wrap(sj[0], "px_method(" + sj[1][0] + ", \"" + mname + "\", (LXValue[]){" + join(", ", sj[1][1:]) + "}, " + str(len(args)) + ")")
         # 普通调用
+        # M165（缺陷 178）：被调方**词法上最先** ⇒ 与实参一起进序列化表（nodes/parts 一一对应），
+        #   但 `(LXValue[])` 实参数组只放 names[1:]（被调方是 px_call 的第 1 个参数）。
         let c = cg_gen_expr(callee)
-        let parts = []
+        let parts = [c]
+        let nodes = [callee]
         var ai = 0
         while ai < len(args):
             parts.append(cg_gen_expr(args[ai]))
+            nodes.append(args[ai])
             ai += 1
-        return "px_call(" + c + ", (LXValue[]){" + join(", ", parts) + "}, " + str(len(parts)) + ")"
+        let sj = cg_seq_join(nodes, parts)
+        return cg_seq_wrap(sj[0], "px_call(" + sj[1][0] + ", (LXValue[]){" + join(", ", sj[1][1:]) + "}, " + str(len(args)) + ")")
     if ty == "Unary":
         let o = cg_gen_expr(expr[2])
         let op = expr[1]
@@ -356,20 +449,25 @@ def cg_gen_expr(expr):
             let t = cg_tmp()
             return "({ LXValue " + t + " = " + l + "; px_is_truthy(" + t + ") ? " + t + " : " + r + "; })"
         let f = cg_binop_cname(op)
-        return f + "(" + l + ", " + r + ")"
+        let sj = cg_seq_join([expr[2], expr[3]], [l, r])  # M165（缺陷 178）：两侧都含副作用 ⇒ 按序提升
+        return cg_seq_wrap(sj[0], f + "(" + sj[1][0] + ", " + sj[1][1] + ")")
     if ty == "Pipe":
         let v = cg_gen_expr(expr[1])
         let func = expr[2]
         if func[0] == "Call":
             let c = cg_gen_expr(func[1])
             let parts = [v]
+            let nodes = [expr[1]]  # M165（缺陷 178）
             var ai = 0
             while ai < len(func[2]):
                 parts.append(cg_gen_expr(func[2][ai]))
+                nodes.append(func[2][ai])
                 ai += 1
-            return "px_call(" + c + ", (LXValue[]){" + join(", ", parts) + "}, " + str(len(parts)) + ")"
+            let sj = cg_seq_join(nodes, parts)
+            return cg_seq_wrap(sj[0], "px_call(" + c + ", (LXValue[]){" + join(", ", sj[1]) + "}, " + str(len(parts)) + ")")
         let f = cg_gen_expr(func)
-        return "px_call(" + f + ", (LXValue[]){" + v + "}, 1)"
+        let sj = cg_seq_join([expr[1], expr[2]], [v, f])
+        return cg_seq_wrap(sj[0], "px_call(" + sj[1][1] + ", (LXValue[]){" + sj[1][0] + "}, 1)")
     if ty == "NullCoalesce":
         let l = cg_gen_expr(expr[1])
         let r = cg_gen_expr(expr[2])
@@ -490,7 +588,8 @@ def cg_gen_expr(expr):
             while fi < len(fields):
                 fnames.append("\"" + fields[fi] + "\"")
                 fi += 1
-            return "px_struct(\"" + name + "\", (char*[]){" + join(", ", fnames) + "}, (LXValue[]){" + join(", ", parts) + "}, " + str(len(fields)) + ")"
+            let sj = cg_seq_join(args, parts)  # M165（缺陷 178）
+            return cg_seq_wrap(sj[0], "px_struct(\"" + name + "\", (char*[]){" + join(", ", fnames) + "}, (LXValue[]){" + join(", ", sj[1]) + "}, " + str(len(fields)) + ")")
         if cg_enums.has(name):
             if len(args) != 1:
                 return "枚举 " + name + " 构造需要一个变体名"
@@ -501,7 +600,8 @@ def cg_gen_expr(expr):
         while ai < len(args):
             parts.append(cg_gen_expr(args[ai]))
             ai += 1
-        return "px_call(px_get_global(\"" + name + "\"), (LXValue[]){" + join(", ", parts) + "}, " + str(len(parts)) + ")"
+        let sj = cg_seq_join(args, parts)  # M165（缺陷 178）
+        return cg_seq_wrap(sj[0], "px_call(px_get_global(\"" + name + "\"), (LXValue[]){" + join(", ", sj[1]) + "}, " + str(len(parts)) + ")")
     return "px_null()"
 # ---------- 二元运算符 → C 函数 ----------
 def cg_binop_cname(op):

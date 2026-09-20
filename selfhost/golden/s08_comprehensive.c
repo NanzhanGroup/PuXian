@@ -133,7 +133,7 @@ static LXValue fn_zip_lists(LXValue* args, int nargs, void* ctx) {
     px_srcline(31);
      _v25 = px_list_n((LXValue[]){}, 0);
     px_srcline(32);
-     _v26 = px_call(px_get_global("min"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){_v23}, 1), px_call(px_get_global("len"), (LXValue[]){_v24}, 1)}, 2);
+     _v26 = ({ LXValue _s1 = px_call(px_get_global("len"), (LXValue[]){_v23}, 1); LXValue _s2 = px_call(px_get_global("len"), (LXValue[]){_v24}, 1); px_call(px_get_global("min"), (LXValue[]){_s1, _s2}, 2); });
     px_srcline(33);
     LXValue _t29 = px_call(px_get_global("range"), (LXValue[]){_v26}, 1);
     for (int _t30 = 0; _t30 < px_len(_t29); _t30++) {

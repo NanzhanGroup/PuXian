@@ -262,9 +262,16 @@ jobs:
           # + 严格性层 5 用例 × 三轨（rc≠0 + R1002 + 统一词条「字典索引键必须是字符串」）。
           # 负控现场重建 runtime/发射器（耗时长）⇒ CI 用 --neg-skip，负控在本地全门 selfhost/m116_gates.sh 跑。
           bash examples/m164_iter_index_split/verify.sh --neg-skip > /tmp/v_m164.log 2>&1 || { echo "❌ m164_iter_index_split verify 失败"; tail -60 /tmp/v_m164.log; exit 1; }
-          # 发射冻结门（M153 建立）：291 个用例的 --emit-c 输出必须逐字节不变。
+          # M165（第 51 轮）：**求值顺序 = 词法左→右** —— ① 缺陷 178 C 轨实参顺序（C 标准未定义，
+          # gcc 实测右→左 ⇒ `f() + g()` 在 C 轨变 `G,F`、`str(l.pop()) + str(len(l))` 结果值都不同）；
+          # ② 缺陷 179 解释轨赋值顺序（`o[k] = v` 解释轨 V,O,K 而 VM 轨 O,K,V）。统一为词法左→右
+          # （对齐 Go 规范）：C 轨 ≥2 个含副作用的操作数按序提升为临时变量；解释轨按
+          # 「目标对象 → 键 → 右值」求值。三轨一致（24 断言，副作用日志直接观测顺序）。
+          # 负控需重建 dev 件 ⇒ CI 用 --neg-skip，负控在本地全门 selfhost/m116_gates.sh 跑。
+          bash examples/m165_eval_order/verify.sh --neg-skip > /tmp/v_m165.log 2>&1 || { echo "❌ m165_eval_order verify 失败"; tail -60 /tmp/v_m165.log; exit 1; }
+          # 发射冻结门（M153 建立）：292 个用例的 --emit-c 输出必须逐字节不变。
           bash selfhost/emitc_freeze.sh --check > /tmp/v_emitc_freeze.log 2>&1 || { echo "❌ emitc_freeze 失败"; tail -30 /tmp/v_emitc_freeze.log; exit 1; }
-          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 / m153 / m154 / m155 / m158 / m160 / m161 / m162 / m163 / m164 verify + 发射冻结门（291 件 --emit-c）全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"
+          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 / m153 / m154 / m155 / m158 / m160 / m161 / m162 / m163 / m164 verify + 发射冻结门（292 件 --emit-c）全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"
       - name: LSP / MCP 服务器冒烟（--version + 协议入口存在性）
         run: |
           chmod +x bootstrap/pxlsp bootstrap/pxmcp bootstrap/pxcheck
