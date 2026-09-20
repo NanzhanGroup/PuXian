@@ -65,7 +65,7 @@ static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     px_srcline(48);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_slice(_v10, px_int(1LL), px_int(3LL), px_null())}, 1)}, 1));
     px_srcline(52);
-    _v11 = ({ LXValue _t14 = px_list(0); LXValue _t15 = px_list_n((LXValue[]){px_int(1LL), px_int(2LL), px_int(3LL), px_int(4LL), px_int(5LL), px_int(6LL)}, 6); for (int _t17=0; _t17<px_len(_t15); _t17++) { LXValue _t16 = px_iter_at(_t15, px_int(_t17)); LXValue _cv18 = _t16; if (px_is_truthy(px_eq(px_mod(_cv18, px_int(2LL)), px_int(0LL)))) { px_list_push(_t14, _cv18); }  }  _t14; });
+    _v11 = ({ LXValue _t14 = px_list(0); LXValue _t15 = px_list_n((LXValue[]){px_int(1LL), px_int(2LL), px_int(3LL), px_int(4LL), px_int(5LL), px_int(6LL)}, 6); for (int _il1 = (int)px_len(_t15), _t17=0; _t17<_il1; _t17++) { px_iter_ck(_t15, _il1); LXValue _t16 = px_iter_at(_t15, px_int(_t17)); LXValue _cv18 = _t16; if (px_is_truthy(px_eq(px_mod(_cv18, px_int(2LL)), px_int(0LL)))) { px_list_push(_t14, _cv18); }  }  _t14; });
     px_srcline(56);
     (void)(px_call(px_get_global("print"), (LXValue[]){_v11}, 1));
     px_srcline(58);

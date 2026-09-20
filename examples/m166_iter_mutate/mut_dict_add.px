@@ -1,0 +1,8 @@
+# M166 严格性：迭代期间向**被迭代 dict** 新增键 ⇒ R1003（三轨同码同文）
+# 修前：解释/VM 轨按键快照（只看到 a,b）vs C 轨按活长度（会迭代到新键）⇒ 静默分歧。
+def main():
+    var d = {"a": 1, "b": 2}
+    for k in d:
+        print(k)
+        d.set("z" + k, 9)
+    print("never")

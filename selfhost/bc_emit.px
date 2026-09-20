@@ -1056,6 +1056,8 @@ def bc_emit_comp(func, kind, elems, cond, rv, clauses, ci):
     bc_emit_inst(func, "LT", lt, ctr, nslot)
     let jf = len(func["bc"])
     bc_emit_inst(func, "JMPF", lt, 0, 0)
+    # M166（缺陷 176）：迭代期间被迭代容器长度变化 ⇒ R1003（nslot = 进入循环时的 len 快照）
+    bc_emit_inst(func, "ITERLEN", its, nslot, 0)
     if len(vars) == 1:
         # M164（缺陷 170）：迭代元素走 ITERAT（dict 键位置语义仅在迭代可见）
         bc_emit_inst(func, "ITERAT", func["smap"][rust_unescape(vars[0])], its, ctr)
@@ -1710,6 +1712,8 @@ def bc_emit_for(stmt, func):
     let jf = len(func["bc"])
     bc_emit_inst(func, "JMPF", lt, 0, 0)
     # 循环变量 = its[ctr]
+    # M166（缺陷 176）：迭代期间被迭代容器长度变化 ⇒ R1003（nslot = 进入循环时的 len 快照）
+    bc_emit_inst(func, "ITERLEN", its, nslot, 0)
     # M164（缺陷 170）：迭代走 **ITERAT**（px_iter_at）—— dict 取第 i 个键只属迭代机制，
     #   用户面 `d[i]` 走 INDEX（现严格报 R1002）。修前两者共用 INDEX ⇒ 位置语义外漏。
     bc_emit_inst(func, "ITERAT", vs, its, ctr)

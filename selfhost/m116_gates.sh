@@ -234,6 +234,16 @@ step "M165 求值顺序 = 词法左→右（第 51 轮 · 缺陷 178/179 —— 
 #   （关闭全部序列化 ⇒ 11 项红 / 仅 Binary 站点 ⇒ 6 项红 / 仅方法站点 ⇒ 1 项红 /
 #    仅索引赋值站点 ⇒ 2 项红 —— 每道必须判红 + 逐字节还原）。
 run m165_eval_order bash examples/m165_eval_order/verify.sh
+# M166（第 52 轮 · 缺陷 176）：**迭代期间修改被迭代容器 ⇒ R1003**（三轨同码同文）。
+# 背景（修前**四类**分歧，同一份源码）：`for x in l { l.append(9) }` 解释/C 轨按活长度多迭代
+#   （泄漏新元素）vs VM 轨按快照；`for x in l { l.pop() }` VM 轨越界 rc=1；`for k in d { d.set }`
+#   解释/VM 轨键快照 vs C 轨活长度；`for k in d { d.remove }` VM 轨越界 rc=1。
+# 语义裁定：for-in / 推导式**进入循环时快照长度**，迭代期间长度变化（增或减）⇒
+#   `R1003 迭代期间被迭代容器长度变化: n0 → n1`（与 Python dict 的 RuntimeError 同向，
+#   只是把 list 也纳入 —— 响亮优于静默，同 R1008 / M163 键严格化）。
+# 判据：① 合法侧 18 断言三轨逐字节一致；② 6 类修改用例 × 三轨（rc≠0 + R1003 + 统一词条）；
+#   ③ 负控 3 道（VM 去掉 ITERLEN / C 去掉 px_iter_ck / 解释轨 i_iter_ck 放行 —— 各自独立判红）。
+run m166_iter_mutate bash examples/m166_iter_mutate/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

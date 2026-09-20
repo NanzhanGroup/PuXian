@@ -82,7 +82,10 @@ def cg_comp_body(r, cond_c, put):
             inner_decl = "LXValue " + r["ivs"][i + 1] + " = " + r["its"][i + 1] + "; "
         # M164（缺陷 170）：推导式展开的**迭代**步走 px_iter_at（dict 推导 `{k: d[k] for k in d}`
         #   需要「第 i 个键」）；内层解包（itms/字段）仍走 px_index（那是用户语义的索引）。
-        body = "for (int " + r["idxs"][i] + "=0; " + r["idxs"][i] + "<px_len(" + r["ivs"][i] + "); " + r["idxs"][i] + "++) { LXValue " + r["itms"][i] + " = px_iter_at(" + r["ivs"][i] + ", px_int(" + r["idxs"][i] + ")); " + r["binds"][i] + inner_decl + body + " } "
+        # M166（缺陷 176）：迭代源长度**进入该层时快照**（for 初始化子句内取一次），循环体开头
+        #   复核 ⇒ 迭代期间长度变化报 R1003（与 for 语句 / VM 轨 / 解释轨同一条真相）。
+        let lv = cg_iter_len_tmp()
+        body = "for (int " + lv + " = (int)px_len(" + r["ivs"][i] + "), " + r["idxs"][i] + "=0; " + r["idxs"][i] + "<" + lv + "; " + r["idxs"][i] + "++) { px_iter_ck(" + r["ivs"][i] + ", " + lv + "); LXValue " + r["itms"][i] + " = px_iter_at(" + r["ivs"][i] + ", px_int(" + r["idxs"][i] + ")); " + r["binds"][i] + inner_decl + body + " } "
         i -= 1
     return body
 # ---------- 表达式生成 ----------

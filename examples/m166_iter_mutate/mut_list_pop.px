@@ -1,0 +1,8 @@
+# M166 严格性：迭代期间从**被迭代 list** 弹出 ⇒ R1003（三轨同码同文）
+# 修前：VM 轨越界 rc=1（「列表索引越界」）vs 解释/C 轨正常退出（跳过元素）⇒ 三轨分叉。
+def main():
+    var l = [1, 2, 3]
+    for x in l:
+        print(x)
+        l.pop()
+    print("never")

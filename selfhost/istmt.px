@@ -134,13 +134,30 @@ def i_exec_if(stmt, env):
         return i_exec_block(stmt[2], env)
     return Ok(null)
 # ---------- for（对齐 exec_for） ----------
+# M166（第 52 轮 · 缺陷 176）：迭代长度校验 —— 与 C 轨 `px_iter_ck` / VM 轨 `ITERLEN` 同一条真相。
+#   语义：for-in / 推导式在**进入循环时快照长度**；迭代期间被迭代容器长度变化（增或减）
+#   一律 R1003。修前解释轨 list 走**活长度**（多迭代出新元素）、dict 走 keys() 快照 ⇒ 与
+#   VM 轨（快照长度）和 C 轨（活长度）三种行为互不相同。不可变类型（str/tuple/range）
+#   天然恒等，无需比较；generator 由原生惰性物化保证长度恒定。
+def i_iter_ck(v, n0, pos):
+    let t = i_type_name(v)
+    if t != "list" and t != "dict":
+        return Ok(null)
+    let n1 = len(v)
+    if n1 != n0:
+        return Err(i_r1003("迭代期间被迭代容器长度变化: " + str(n0) + " → " + str(n1), pos))
+    return Ok(null)
 def i_exec_for(varname, iterable, body, env, pos):
     let ivr = i_iter(iterable, pos)
     if ivr.is_err():
         return Err(ivr.err())
     let items = ivr.unwrap()
+    let itn = len(items)  # M166：长度快照（进入循环时一次）
     var ii = 0
-    while ii < len(items):
+    while ii < itn:
+        let ck = i_iter_ck(iterable, itn, pos)
+        if ck.is_err():
+            return Err(ck.err())
         env_define(env, varname, items[ii])
         let r = i_exec_block(body, env)
         if r.is_err():

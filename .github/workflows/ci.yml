@@ -269,6 +269,13 @@ jobs:
           # 「目标对象 → 键 → 右值」求值。三轨一致（24 断言，副作用日志直接观测顺序）。
           # 负控需重建 dev 件 ⇒ CI 用 --neg-skip，负控在本地全门 selfhost/m116_gates.sh 跑。
           bash examples/m165_eval_order/verify.sh --neg-skip > /tmp/v_m165.log 2>&1 || { echo "❌ m165_eval_order verify 失败"; tail -60 /tmp/v_m165.log; exit 1; }
+          # M166（第 52 轮 · 缺陷 176）：**迭代期间修改被迭代容器 ⇒ R1003**（三轨同码同文）——
+          # 修前四类分歧：`l.append` 解释/C 轨活长度多迭代 vs VM 快照；`l.pop` VM 越界 rc=1；
+          # `d.set` C 轨活长度迭代到新键；`d.remove` VM 越界 rc=1。统一为「进入循环时快照长度
+          # + 迭代期间长度变化（增或减）⇒ R1003」（新指令 ITERLEN / px_iter_ck / i_iter_ck）。
+          # 判据：合法侧 18 断言三轨逐字节一致 + 6 类修改用例 × 三轨（rc≠0 + R1003 + 统一词条）。
+          # 负控需重建 dev 件 ⇒ CI 用 --neg-skip，负控在本地全门 selfhost/m116_gates.sh 跑。
+          bash examples/m166_iter_mutate/verify.sh --neg-skip > /tmp/v_m166.log 2>&1 || { echo "❌ m166_iter_mutate verify 失败"; tail -60 /tmp/v_m166.log; exit 1; }
           # 发射冻结门（M153 建立）：292 个用例的 --emit-c 输出必须逐字节不变。
           bash selfhost/emitc_freeze.sh --check > /tmp/v_emitc_freeze.log 2>&1 || { echo "❌ emitc_freeze 失败"; tail -30 /tmp/v_emitc_freeze.log; exit 1; }
           echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 / m153 / m154 / m155 / m158 / m160 / m161 / m162 / m163 / m164 verify + 发射冻结门（292 件 --emit-c）全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"

@@ -125,7 +125,15 @@ typedef struct {
 //   其余类型同 INDEX）。for-in / 推导式展开改走本指令，用户 `d[i]` 仍走 INDEX（现在严格报
 //   R1002）。修前 VM 轨复用 INDEX，把「第 i 个键」漏成用户可见语义（解释轨是报错的）⇒ 三轨分叉。
 #define PXOP_ITERAT  63  // a=dst, b=obj 槽, c=idx 槽（px_iter_at）
-#define PXM_MAX      64
+// M166（第 52 轮 · 缺陷 176）：**迭代长度校验** —— 迭代期间被迭代容器长度变化（增或减）
+//   一律 R1003。for-in / 推导式在**进入循环时快照长度**（发射侧调用 len() 一次，值存 nslot），
+//   循环体开头用本指令复核 ⇒ 三轨同码同文。
+//   为什么不做「活长度」（Python list 语义）或「静默跳过」：三轨会分叉（解释/C 轨活长度、
+//   VM 轨快照），且静默给出的是**用户看不见的错结果**（与 R1008 严格口径、M163 键严格化
+//   同一哲学）。与 Python 对 dict 的 `RuntimeError: dictionary changed size during iteration`
+//   同向，只是把 list 也纳入。「遍历时过滤」应写 `let ks = x.keys()` 或新建结果容器。
+#define PXOP_ITERLEN 64  // a=obj 槽, b=期望长度槽（px_iter_ck：≠ ⇒ R1003）
+#define PXM_MAX      65
 
 // ==================== 常量子（K 池） ====================
 // 发射器按 kind 生成静态项；LOADK 时物化为 LXValue（str 需 strdup/常驻，

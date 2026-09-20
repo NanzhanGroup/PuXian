@@ -277,6 +277,8 @@ LXValue px_index(LXValue obj, LXValue idx);
 //   而那个位置语义当年（M37）只是为了让 `for k in d` 能用 px_index 遍历。
 //   现拆开：`for k in d` 走本入口，`d[i]` 一律 R1002「字典索引键必须是字符串」。
 LXValue px_iter_at(LXValue obj, LXValue idx);
+// M166（第 52 轮 · 缺陷 176）：迭代长度校验 —— 迭代期间长度 ≠ 进入时快照 ⇒ R1003
+void px_iter_ck(LXValue obj, int n0);
 // M21/M24：切片 a[start:end] / a[start:end:step]（start/end/step 为 null 表示省略；
 // str 按 UTF-8 字符、list/tuple/bytes 取元素；step<0 反向，step=0 报错）
 LXValue px_slice(LXValue obj, LXValue start, LXValue end, LXValue step);

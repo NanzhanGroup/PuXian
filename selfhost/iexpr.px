@@ -442,8 +442,12 @@ def i_eval_comp(clauses, ci, sink, list_expr, dict_key, dict_val, cond, env, pos
     if ivr.is_err():
         return Err(ivr.err())
     var items = ivr.unwrap()
+    let itn = len(items)  # M166（缺陷 176）：长度快照（进入本层时一次）
     var ii = 0
-    while ii < len(items):
+    while ii < itn:
+        let ck = i_iter_ck(it, itn, pos)
+        if ck.is_err():
+            return Err(ck.err())
         let child = env_new(env)
         let bvr = i_bind_comp_vars(cl[1], items[ii], child, pos)
         if bvr.is_err():

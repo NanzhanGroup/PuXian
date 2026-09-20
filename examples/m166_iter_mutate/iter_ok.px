@@ -1,0 +1,130 @@
+# M166 门 ①：迭代期间**不修改**被迭代容器 —— 三轨 stdout 应逐字节一致（pass=18 fail=0）
+# 背景（修前实测：同一份源码 **四类**分歧）：
+#   · `for x in l { l.append(9) }`   解释/C 轨按**活长度**多迭代（泄漏新元素）vs VM 轨按快照
+#   · `for x in l { l.pop() }`       VM 轨**越界 rc=1** vs 解释/C 轨正常退出
+#   · `for k in d { d.set(...) }`    解释/VM 轨按**键快照** vs C 轨按活长度（迭代到新键）
+#   · `for k in d { d.remove(k) }`   VM 轨**越界 rc=1** vs 解释轨键快照 / C 轨中途停
+# 修后语义（三轨**一条真相**）：**进入循环时快照长度**；迭代期间被迭代容器长度变化（增或减）
+#   一律 `R1003 迭代期间被迭代容器长度变化: n0 → n1`。与 Python 对 dict 的
+#   `RuntimeError: dictionary changed size during iteration` 同向，只是把 list 也纳入。
+# 本文件覆盖**合法侧**：只读迭代 / 改元素（不改长度）/ 先快照（切片・keys()・values() 副本）/
+#   改**别的**容器 / while / range / str / tuple / 推导式 / break-continue / 多变量解包。
+# 用法：pxi / px build / px build --c 三轨 stdout 应逐字节一致（pass=18 fail=0）
+var fails = 0
+
+def chk(cond, tag):
+    if not cond:
+        fails = fails + 1
+        print("FAIL " + tag)
+
+def main():
+    # ---- 1-2 只读迭代 ----
+    var l1 = [1, 2, 3]
+    var s1 = 0
+    for x in l1:
+        s1 = s1 + x
+    chk(s1 == 6, "1-sum")
+    chk(len(l1) == 3, "2-len-unchanged")
+
+    # ---- 3-4 改元素值（长度不变 ⇒ 合法；迭代仍按位置走）----
+    var l3 = [1, 2, 3]
+    var seen3 = []
+    for x in l3:
+        seen3.append(x)
+        l3[0] = 99
+    chk(seen3 == [1, 2, 3], "3-elem-set-keeps-seq")
+    chk(l3[0] == 99, "4-elem-set-applied")
+
+    # ---- 5 先快照（切片）再遍历 —— 过滤类需求的推荐写法 ----
+    var l5 = [1, 2, 3, 4, 5]
+    let snap5 = l5[:]
+    var kept5 = []
+    for x in snap5:
+        if x % 2 == 1:
+            kept5.append(x)
+    chk(kept5 == [1, 3, 5], "5-snapshot-slice")
+
+    # ---- 6 遍历 A 写 B（不同容器 ⇒ 合法）----
+    var a6 = [1, 2, 3]
+    var b6 = []
+    for x in a6:
+        b6.append(x * 10)
+    chk(b6 == [10, 20, 30], "6-other-container")
+
+    # ---- 7 dict：遍历键、写到**别的** dict ----
+    var d7 = {"a": 1, "b": 2}
+    var e7 = {}
+    for k in d7:
+        e7[k] = d7[k] * 2
+    chk(len(e7) == 2 and e7["a"] == 2 and e7["b"] == 4, "7-dict-copy")
+
+    # ---- 8-9 values() 返回副本 ⇒ 遍历时改 d 合法（另一个推荐写法）----
+    var d9 = {"x": 1, "y": 2}
+    var cnt9 = 0
+    for v in d9.values():
+        d9.set("z" + str(cnt9), 9)
+        cnt9 = cnt9 + 1
+    chk(cnt9 == 2, "8-values-loop-count")
+    chk(len(d9) == 4, "9-values-copy-ok")
+
+    # ---- 10 while 循环里改容器（while 不受本约束）----
+    var l10 = [1, 2, 3]
+    var i10 = 0
+    while i10 < len(l10):
+        l10.append(9)
+        if len(l10) > 5:
+            break
+        i10 = i10 + 1
+    chk(len(l10) == 6, "10-while-ok")
+
+    # ---- 11 嵌套 for（内层迭代**别的**容器）----
+    var n11a = [1, 2]
+    var n11b = [10, 20]
+    var sum11 = 0
+    for x in n11a:
+        for y in n11b:
+            sum11 = sum11 + x * y
+    chk(sum11 == 90, "11-nested")
+
+    # ---- 12-14 range / str / tuple（不可变 ⇒ 天然恒等）----
+    var r12 = 0
+    for i in range(5):
+        r12 = r12 + i
+    chk(r12 == 10, "12-range")
+    var c13 = 0
+    for ch in "abc":
+        c13 = c13 + 1
+    chk(c13 == 3, "13-str")
+    var t14 = (1, 2, 3)
+    var s14 = 0
+    for v in t14:
+        s14 = s14 + v
+    chk(s14 == 6, "14-tuple")
+
+    # ---- 15-16 推导式（不改源 ⇒ 合法）----
+    var l15 = [1, 2, 3, 4]
+    var sq15 = [x * x for x in l15]
+    chk(sq15 == [1, 4, 9, 16], "15-listcomp")
+    var d16 = {"a": 1}
+    var d16b = {k: d16[k] * 10 for k in d16}
+    chk(d16b["a"] == 10, "16-dictcomp")
+
+    # ---- 17 break / continue ----
+    var l17 = [1, 2, 3, 4, 5]
+    var sum17 = 0
+    for x in l17:
+        if x == 2:
+            continue
+        if x == 5:
+            break
+        sum17 = sum17 + x
+    chk(sum17 == 8, "17-break-continue")
+
+    # ---- 18 遍历「嵌套 list」的元素（单变量 + 就地索引）----
+    var ps18 = [[1, "a"], [2, "b"]]
+    var acc18 = ""
+    for p in ps18:
+        acc18 = acc18 + str(p[0]) + p[1]
+    chk(acc18 == "1a2b", "18-nested-list")
+
+    print("pass=" + str(18 - fails) + " fail=" + str(fails))
