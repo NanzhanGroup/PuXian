@@ -384,17 +384,28 @@ jobs:
       - name: M159 交叉自举档（x86_64 → aarch64 · musl 静态 · 只对 aarch64 档做）
         if: matrix.arch == 'aarch64'
         run: |
-          set -e
+          set -o pipefail
           export PATH=/opt/muslcc/${{ steps.musl-map.outputs.DIR }}/bin:$PATH
-          ./selfhost/native_bootstrap.sh --target-arch aarch64 --outdir /tmp/nb-a64
+          echo "── 工具链：$(command -v aarch64-linux-musl-gcc || echo '(PATH 上找不到)')"
+          aarch64-linux-musl-gcc --version | head -1 || true
+          if ! ./selfhost/native_bootstrap.sh --target-arch aarch64 --outdir /tmp/nb-a64 2>&1 | tee /tmp/nb-a64.log; then
+            tail -30 /tmp/nb-a64.log | sed 's/^/::error::nb-a64 › /'
+            exit 1
+          fi
+          grep -q "NATIVE-BOOTSTRAP-OK" /tmp/nb-a64.log || { tail -20 /tmp/nb-a64.log | sed 's/^/::error::nb-a64 › /'; exit 1; }
           file /tmp/nb-a64/pxc
-          file -b /tmp/nb-a64/pxc | grep -q "ARM aarch64" || { echo "❌ 产物不是 aarch64"; exit 1; }
-          file -b /tmp/nb-a64/pxc | grep -q "static"      || { echo "❌ 产物不是静态链接"; exit 1; }
+          # 架构与静态性断言用 readelf（比 grep file 文案稳）
+          readelf -h /tmp/nb-a64/pxc | grep -q "AArch64" || { echo "::error::产物不是 aarch64"; readelf -h /tmp/nb-a64/pxc | sed 's/^/::error::readelf › /'; exit 1; }
+          if readelf -d /tmp/nb-a64/pxc 2>/dev/null | grep -q "NEEDED"; then
+            echo "::error::产物是动态链接（含 DT_NEEDED）"; readelf -d /tmp/nb-a64/pxc | sed 's/^/::error::readelf-d › /'; exit 1
+          fi
           echo "── qemu 下真跑自举件（第三方报告 R1002 的现场就在这一步）"
-          qemu-aarch64-static /tmp/nb-a64/pxc --version
+          qemu-aarch64-static /tmp/nb-a64/pxc --version || { echo "::error::qemu 下 --version 失败"; exit 1; }
           mkdir -p /tmp/nb-a64/s && printf 'print("a64-boot-ok")\n' > /tmp/nb-a64/s/h.px
-          qemu-aarch64-static /tmp/nb-a64/pxc build /tmp/nb-a64/s/h.px > /tmp/nb-a64/s/h.c
-          grep -q "a64-boot-ok" /tmp/nb-a64/s/h.c || { echo "❌ 生成的 C 缺字面量"; exit 1; }
+          if ! qemu-aarch64-static /tmp/nb-a64/pxc build /tmp/nb-a64/s/h.px > /tmp/nb-a64/s/h.c 2>/tmp/nb-a64/s/h.err; then
+            tail -20 /tmp/nb-a64/s/h.err | sed 's/^/::error::qemu-pxc › /'; exit 1
+          fi
+          grep -q "a64-boot-ok" /tmp/nb-a64/s/h.c || { echo "::error::生成的 C 缺字面量"; head -5 /tmp/nb-a64/s/h.c | sed 's/^/::error::h.c › /'; exit 1; }
           wc -l /tmp/nb-a64/s/h.c
           echo "✅ M159 交叉自举档：aarch64 静态自举件可用（qemu 实测）"
 
@@ -436,9 +447,12 @@ jobs:
 
       - name: 原生自举（gcc-only）—— 含自证：pxc0 编 compiler.px ↔ golden/compiler.c
         run: |
-          bash selfhost/native_bootstrap.sh --outdir "$RUNNER_TEMP/nb" 2>&1 | tee "$RUNNER_TEMP/nb.log"
-          test -x "$RUNNER_TEMP/nb/pxc"
-          grep -q "NATIVE-BOOTSTRAP-OK" "$RUNNER_TEMP/nb.log"
+          set -o pipefail
+          if ! bash selfhost/native_bootstrap.sh --outdir "$RUNNER_TEMP/nb" 2>&1 | tee "$RUNNER_TEMP/nb.log"; then
+            tail -30 "$RUNNER_TEMP/nb.log" | sed 's/^/::error::nb /'; exit 1
+          fi
+          test -x "$RUNNER_TEMP/nb/pxc" || { echo "::error::缺 $RUNNER_TEMP/nb/pxc"; ls -l "$RUNNER_TEMP/nb" | sed 's/^/::error::ls /'; exit 1; }
+          grep -q "NATIVE-BOOTSTRAP-OK" "$RUNNER_TEMP/nb.log" || { tail -20 "$RUNNER_TEMP/nb.log" | sed 's/^/::error::nb /'; exit 1; }
 
       - name: 现编其余原生工具（pxi / pxl / pxpar）并装成工具链（仅本 run 生效，不入库）
         # 口径：`bootstrap/pxc build <f>` 只把 C 写到 stdout，链接/runtime 缓存由 tools/px 负责
@@ -460,23 +474,36 @@ jobs:
       - name: 裸 px build / px run 冒烟（**零参数**，靠 M159 宿主架构自适应）
         run: |
           set -e
-          mkdir -p "$RUNNER_TEMP/smoke" && cd "$RUNNER_TEMP/smoke"
-          printf 'print("native-aarch64-ok")\\n' > hello.px
+          mkdir -p "$RUNNER_TEMP/smoke"
+          cd "$RUNNER_TEMP/smoke"
+          printf 'print("native-aarch64-ok")\n' > hello.px
           # 仓库根有 .px_modules / stdlib 依赖 → 用仓库内的 tools/px（PX_STDLIB 自发现）
           cd "$GITHUB_WORKSPACE"
           echo "── 计划（应自动 lib-aarch64 + no_quic=1 + **engine 自动落 C 轨**）"
-          tools/px build --print-plan "$RUNNER_TEMP/smoke/hello.px" | tee /tmp/plan.txt
-          grep -q "^plan: engine=c" /tmp/plan.txt || { echo "❌ 计划未自动落 C 轨（aarch64 上 VM 轨不可用）"; exit 1; }
-          grep -q "^plan: no_quic=1" /tmp/plan.txt || { echo "❌ 计划未自动裁 QUIC"; exit 1; }
+          if ! tools/px build --print-plan "$RUNNER_TEMP/smoke/hello.px" > /tmp/plan.txt 2>&1; then
+            sed 's/^/::error::plan /' /tmp/plan.txt; exit 1
+          fi
+          cat /tmp/plan.txt
+          grep -q "^plan: engine=c" /tmp/plan.txt || { echo "::error::计划未自动落 C 轨（aarch64 上 VM 轨不可用）"; sed 's/^/::error::plan /' /tmp/plan.txt; exit 1; }
+          grep -q "^plan: no_quic=1" /tmp/plan.txt || { echo "::error::计划未自动裁 QUIC"; sed 's/^/::error::plan /' /tmp/plan.txt; exit 1; }
           echo "── 裸 build（零参数：自动 C 轨 + lib-aarch64 + no-quic）"
-          tools/px build "$RUNNER_TEMP/smoke/hello.px" 2>&1 | tail -3
+          if ! tools/px build "$RUNNER_TEMP/smoke/hello.px" > /tmp/build.log 2>&1; then
+            tail -25 /tmp/build.log | sed 's/^/::error::build /'; exit 1
+          fi
+          tail -3 /tmp/build.log
           out="$RUNNER_TEMP/smoke/build/hello"
+          test -x "$out" || { echo "::error::缺产物 $out"; ls -lR "$RUNNER_TEMP/smoke" | sed 's/^/::error::ls /'; exit 1; }
           file "$out"
           ldd "$out" 2>&1 | head -3 || true
-          test "$("$out")" = "native-aarch64-ok" && echo "✅ 原生 aarch64 产物运行正确"
+          got="$("$out")"
+          test "$got" = "native-aarch64-ok" || { echo "::error::产物运行输出异常: [$got]"; exit 1; }
           echo "── 解释轨（pxi 原生）"
-          tools/px run "$RUNNER_TEMP/smoke/hello.px"
-
+          if ! tools/px run "$RUNNER_TEMP/smoke/hello.px" > /tmp/run.log 2>&1; then
+            tail -20 /tmp/run.log | sed 's/^/::error::run /'; exit 1
+          fi
+          cat /tmp/run.log
+          grep -q aarch64-ok /tmp/run.log || { tail -20 /tmp/run.log | sed 's/^/::error::run /'; exit 1; }
+          echo "✅ 原生 aarch64：零参数 build + run 全通"
       - name: 宿主机架构自适应门（m159_hostarch）
         env:
           PX_BUILD_ENGINE: c
