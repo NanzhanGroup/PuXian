@@ -181,6 +181,16 @@ run m160_closure bash examples/m160_closure/verify.sh
 #   升格为硬判据）+ 3 道负控（捕获表置空 ⇒ VM 必红 / 快照退化为普通值槽 ⇒ VM 必红 /
 #   filter 捕获表丢弃 ⇒ VM 必红）。
 run m161_genexp bash examples/m161_genexp_capture/verify.sh
+# ── M162（第 48 轮）：sorted 三轨一致 —— 缺陷 166（解释轨比较依据）+ 167（编译轨稳定性）──
+#   背景：解释轨 `i_builtin_sorted` 用 `i_to_str` **渲染串**比较（`sorted([10,9,2])` = [10,2,9]），
+#   编译轨用 `compare_values` 值比较（对）；且编译轨算法是**选择式**（两两交换）⇒ 在
+#   「比较器判相等、值可渲染区分」的元素上**不稳定**（`sorted([1.0,1,0.5])` = [0.5,1,1.0]）。
+#   修法：三轨同一条真相 = **值比较 + 稳定排序** —— 解释轨新增 `i_cmp_values`（对齐
+#   `compare_values_raw` 三态 + `i_eq` 同款环保护）；编译轨 `bi_sorted` 改**相邻冒泡**。
+#   判据：三轨 stdout 逐字节一致（26 + 12 + 4 断言）+ 交叉判据（第三方 PX-DEF-011 复现器）
+#   + 3 道负控（值比较退回渲染串 ⇒ 解释轨必红 / 选择式回归 ⇒ 编译轨稳定性必红 /
+#   list 逐元素退化 ⇒ PX-DEF-011 必红）。
+run m162_sorted bash examples/m162_sorted_order/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

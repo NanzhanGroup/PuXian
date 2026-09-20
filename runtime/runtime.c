@@ -5473,7 +5473,13 @@ static LXValue bi_pow(LXValue* args, int nargs, void* ctx) {
     return px_float(pow(num_val(args[0]), num_val(args[1])));
 }
 
-// sorted(list) -> list（按 compare_values 排序，冒泡）
+// sorted(list) -> list（按 compare_values 排序，**稳定**相邻冒泡）
+// M162（第 48 轮 · 缺陷 167）：原实现是**选择式**（`items[j] < items[i]` 即两两交换），
+//   在「比较器判相等、但值可区分」的元素上**不稳定**：
+//     `sorted([1.0, 1, 0.5])` ⇒ 旧 [0.5, 1, 1.0] / 稳定序应为 [0.5, 1.0, 1]
+//   （1.0 与 1 数值相等 ⇒ compare_values == 0，但渲染不同 ⇒ 顺序可观测）。
+//   改为**相邻冒泡**（仅 `> 0` 才交换）⇒ 稳定；与解释轨 `i_builtin_sorted`
+//   （同批改为稳定 + 值比较）同为稳定排序 ⇒ 同一比较器下输出唯一、三轨逐字节一致。
 static LXValue bi_sorted(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1 || (args[0].type != PX_LIST && args[0].type != PX_TUPLE))
@@ -5487,11 +5493,11 @@ static LXValue bi_sorted(LXValue* args, int nargs, void* ctx) {
         px_list_push(r, (args[0].type == PX_LIST) ? o->as.list.items[i] : o->as.tuple.items[i]);
     LXObject* ro = r.as.obj;
     for (int i = 0; i < ro->as.list.len; i++) {
-        for (int j = i + 1; j < ro->as.list.len; j++) {
-            if (compare_values(ro->as.list.items[j], ro->as.list.items[i]) < 0) {
-                LXValue t = ro->as.list.items[i];
-                ro->as.list.items[i] = ro->as.list.items[j];
-                ro->as.list.items[j] = t;
+        for (int j = 0; j + 1 < ro->as.list.len - i; j++) {
+            if (compare_values(ro->as.list.items[j], ro->as.list.items[j + 1]) > 0) {
+                LXValue t = ro->as.list.items[j];
+                ro->as.list.items[j] = ro->as.list.items[j + 1];
+                ro->as.list.items[j + 1] = t;
             }
         }
     }

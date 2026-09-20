@@ -1,0 +1,99 @@
+# M162① sorted 三轨一致（**值比较** + **稳定排序**）—— 主用例 · 20 组断言
+# 判据：解释轨 / VM 轨 / C 轨 stdout **逐字节一致**，且末行 = pass=N fail=0
+# 背景（缺陷 166 = 解释轨比较依据 / 缺陷 167 = 编译轨稳定性）：
+#   · 解释轨 `i_builtin_sorted` 用 `i_to_str` **渲染串**比较 ⇒ `sorted([10,9,2])` = [10,2,9]（错）
+#   · 编译轨 `bi_sorted` 用 `compare_values` **值比较**（对），但算法是**选择式**（不稳定）
+#   ⇒ 两轨在「数值序」与「同键复合元素」上结论不同
+#     （后者 = 第三方 registry-px 登记的 PX-DEF-011）
+# 语义基准：**按值比较**（runtime `compare_values` 三态）+ **稳定**（等值保持原序）
+var passes = 0
+var fails = 0
+
+def chk(cond, tag):
+    if cond:
+        passes = passes + 1
+    else:
+        fails = fails + 1
+        print("FAIL " + tag)
+
+# ---- 1. 数值序：渲染串比较会把 10 排到 2 之前（缺陷 166 最小面） ----
+chk(str(sorted([10, 9, 2])) == "[2, 9, 10]", "1-int-order")
+
+# ---- 2. 多位整数 ----
+chk(str(sorted([100, 20, 3, 1])) == "[1, 3, 20, 100]", "2-int-multi")
+
+# ---- 3. 负数 ----
+chk(str(sorted([-1, -10, 2])) == "[-10, -1, 2]", "3-negative")
+
+# ---- 4. 混合 int/float（按数值，不按渲染串） ----
+chk(str(sorted([10, 2.5, 9, 2.0])) == "[2.0, 2.5, 9, 10]", "4-mixed-num")
+
+# ---- 5. float 序 ----
+chk(str(sorted([1.5, 0.25, 2.0])) == "[0.25, 1.5, 2.0]", "5-float")
+
+# ---- 6. 字符串（字典序） ----
+chk(str(sorted(["b", "a", "c"])) == "[a, b, c]", "6-str")
+
+# ---- 7. 中文（UTF-8 字节序 = 码点序） ----
+chk(str(sorted(["国", "中", "a"])) == "[a, 中, 国]", "7-utf8")
+
+# ---- 8. PX-DEF-011：同键复合元素（第三方 registry-px 登记） ----
+chk(str(sorted([[1, "a"], [1, "a2"]])) == "[[1, a], [1, a2]]", "8-pxdef011-ab")
+chk(str(sorted([[1, "a2"], [1, "a"]])) == "[[1, a], [1, a2]]", "8b-pxdef011-ba")
+
+# ---- 9. 多键复合 ----
+chk(str(sorted([[2, "b"], [1, "z"], [2, "a"]])) == "[[1, z], [2, a], [2, b]]", "9-multi-key")
+chk(str(sorted([[10, "x"], [9, "y"]])) == "[[9, y], [10, x]]", "9b-multi-key-num")
+
+# ---- 10. 稳定性：等值元素保持原序（1.0 与 1 数值相等、渲染不同 ⇒ 可观测） ----
+chk(str(sorted([1.0, 1, 0.5])) == "[0.5, 1.0, 1]", "10-stable-float-first")
+chk(str(sorted([1, 1.0, 0.5])) == "[0.5, 1, 1.0]", "10b-stable-int-first")
+chk(str(sorted(["b", "a", "a"])) == "[a, a, b]", "10c-stable-str")
+
+# ---- 11. bool（false < true） ----
+chk(str(sorted([true, false])) == "[false, true]", "11-bool")
+
+# ---- 12. tuple 输入 ⇒ 输出为 list ----
+chk(str(sorted((3, 1, 2))) == "[1, 2, 3]", "12-tuple")
+
+# ---- 13. 空 / 单元素 ----
+chk(str(sorted([])) == "[]", "13-empty")
+chk(str(sorted([7])) == "[7]", "13b-single")
+
+# ---- 14. dict 元素 ----
+chk(str(sorted([{"k": 2}, {"k": 1}])) == "[{k: 1}, {k: 2}]", "14-dict")
+
+# ---- 15. result 元素（ok=false < ok=true；载荷比较） ----
+chk(str(sorted([Ok(2), Ok(1)])) == "[Ok(1), Ok(2)]", "15-result")
+
+# ---- 16. 不修改原列表（sorted 返回新列表） ----
+let src = [3, 1, 2]
+let srt = sorted(src)
+chk(str(src) == "[3, 1, 2]" and str(srt) == "[1, 2, 3]", "16-no-mutate")
+
+# ---- 17. 全逆序 20 元素 ----
+var rev = []
+var asc = []
+var i = 20
+while i > 0:
+    rev.append(i)
+    i = i - 1
+var j = 1
+while j <= 20:
+    asc.append(j)
+    j = j + 1
+chk(str(sorted(rev)) == str(asc), "17-reverse-20")
+
+# ---- 18. 已排序输入（回归：不破坏有序） ----
+chk(str(sorted([1, 2, 3, 4, 5])) == "[1, 2, 3, 4, 5]", "18-already-sorted")
+
+# ---- 19. 大量重复值 ----
+chk(str(sorted([3, 3, 1, 1, 2, 2])) == "[1, 1, 2, 2, 3, 3]", "19-dups")
+
+# ---- 20. 嵌套 list（先逐元素、再长度决胜） ----
+chk(str(sorted([[1, 2], [1], [1, 2, 3]])) == "[[1], [1, 2], [1, 2, 3]]", "20-nested-len")
+
+# ---- 21. 跨类型（类型名序：int < string） ----
+chk(str(sorted(["a", 1])) == "[1, a]", "21-cross-type")
+
+print("pass=" + str(passes) + " fail=" + str(fails))

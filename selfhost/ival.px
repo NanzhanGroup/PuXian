@@ -271,6 +271,144 @@ def i_eq_raw(a, b):
     #   原实现 `return false` 会让 range 等类型与编译轨相反（`range == range`：
     #   编译轨 true / 解释器 false）。此处改为按类型名判定，与编译轨一致。
     return ta == tb
+# ---------- 三态值比较（对齐编译轨 runtime `compare_values`） ----------
+# M162（第 48 轮 · 缺陷 166）：**解释轨 sorted 的比较依据与编译轨不同** ——
+#   旧 `i_builtin_sorted` 用 `i_to_str` 渲染串比较，编译轨用 `compare_values` 值比较：
+#     `sorted([10, 9, 2])`         解释轨 [10, 2, 9]（错："10" < "2"）/ 编译轨 [2, 9, 10]
+#     `sorted([[1,"a"],[1,"a2"]])` 解释轨 [[1,a2],[1,a]] / 编译轨 [[1,a],[1,a2]]
+#     （后者 = 第三方 registry-px 登记的 PX-DEF-011）
+#   本函数把 C 侧 `compare_values_raw` 的分支逐条复刻（含默认 `strcmp(px_type_name)`
+#   兜底 ⇒ 结构体等"无专门分支"的类型按类型名判等 = 视为相等），并沿用 i_eq 的
+#   **环保护**策略（已登记对象对再次出现 ⇒ 判 0，与 C 侧"不弹出"的 DeepEqual 语义一致）。
+#   NaN：三态无法表达"不可比"，按 C 侧口径返回确定性非零（2 / 1 / -1，调用方看符号）。
+#   ⚠️ 与 C 侧的唯一已知差异：C 的默认分支比 `px_type_name` 的 **strcmp**（字节序），
+#     本函数比 i_type_name 的字符串（同为字节字典序）—— 两者对同一类型名同序。
+var CMP_S_PATH = []
+var CMP_S_DEPTH = 0
+def cmp_pair_seen(ida, idb):
+    var i = 0
+    while i < len(CMP_S_PATH):
+        if CMP_S_PATH[i][0] == ida and CMP_S_PATH[i][1] == idb:
+            return true
+        i += 1
+    return false
+def i_cmp_values(a, b):
+    CMP_S_DEPTH += 1
+    let r = i_cmp_values_raw(a, b)
+    CMP_S_DEPTH -= 1
+    if CMP_S_DEPTH == 0:
+        CMP_S_PATH = []
+    return r
+def i_result_payload(v):
+    if v.is_ok():
+        return v.ok()
+    return v.err()
+def i_cmp_values_raw(a, b):
+    let ta = i_type_name(a)
+    let tb = i_type_name(b)
+    let na = ta == "int" or ta == "float"
+    let nb = tb == "int" or tb == "float"
+    if ta == "int" and tb == "int":
+        if a < b:
+            return -1
+        if a > b:
+            return 1
+        return 0
+    if na and nb:
+        let x = float(a)
+        let y = float(b)
+        if x != x:
+            if y != y:
+                return 2
+            return 1
+        if y != y:
+            return -1
+        if x < y:
+            return -1
+        if x > y:
+            return 1
+        return 0
+    if ta == "string" and tb == "string":
+        if a < b:
+            return -1
+        if a > b:
+            return 1
+        return 0
+    if ta == "bytes" and tb == "bytes":
+        let ha = bytes_to_hex(a)
+        let hb = bytes_to_hex(b)
+        if ha < hb:
+            return -1
+        if ha > hb:
+            return 1
+        return 0
+    if ta == "bool" and tb == "bool":
+        if a == b:
+            return 0
+        if a:
+            return 1
+        return -1
+    if ta == "null" and tb == "null":
+        return 0
+    if ta == "enum" and tb == "enum":
+        let va = a["variant"]
+        let vb = b["variant"]
+        if va < vb:
+            return -1
+        if va > vb:
+            return 1
+        return 0
+    if ta == "list" or ta == "tuple" or ta == "dict" or ta == "result":
+        let ida = object_id(a)
+        let idb = object_id(b)
+        if ida != 0 and idb != 0:
+            if cmp_pair_seen(ida, idb):
+                return 0
+            CMP_S_PATH.append([ida, idb])
+    if (ta == "list" or ta == "tuple") and (tb == "list" or tb == "tuple"):
+        let la = len(a)
+        let lb = len(b)
+        var m = la
+        if lb < m:
+            m = lb
+        var i = 0
+        while i < m:
+            let c = i_cmp_values(a[i], b[i])
+            if c != 0:
+                return c
+            i += 1
+        if la < lb:
+            return -1
+        if la > lb:
+            return 1
+        return 0
+    if ta == "dict" and tb == "dict":
+        let ka = a.keys()
+        if len(ka) != len(b.keys()):
+            if len(ka) < len(b.keys()):
+                return -1
+            return 1
+        var i = 0
+        while i < len(ka):
+            let k = ka[i]
+            if not b.has(k):
+                return 1
+            let c = i_cmp_values(a[k], b[k])
+            if c != 0:
+                return c
+            i += 1
+        return 0
+    if ta == "result" and tb == "result":
+        if a.is_ok() != b.is_ok():
+            if a.is_ok():
+                return 1
+            return -1
+        return i_cmp_values(i_result_payload(a), i_result_payload(b))
+    if ta < tb:
+        return -1
+    if ta > tb:
+        return 1
+    return 0
 # ---------- 迭代（对齐 iter_values） ----------
 def i_iter(v, pos):
     let t = i_type_name(v)
