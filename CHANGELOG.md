@@ -1,3 +1,44 @@
+## M159 —— aarch64 官方通道（第 45 轮 · qg-issue 87 · 缺口 G1/G2/G4 · 第三方上游照出）
+
+- **背景（两个第三方上游仓库照出的缺口）**：`banshanhanfu/px-openEuler-bootstrap`（openEuler aarch64
+  自举通道）与 `banshanhanfu/registry-px`（第三方 registry 生态库）。前者用**可核验的证据**证明：
+  我方入库 `bootstrap/*` 只有 x86_64 件（`bootstrap/pxc`/`pxi` = x86-64 static、`pxc_vm` = x86-64 dynamic），
+  aarch64 用户**必须自己搓自举链**；且我方 aarch64 档只做「交叉编译 + qemu 跑用例」，
+  **从不问「在 aarch64 上从源码自举能不能成」**。
+- **G1/G4 · 原生与交叉自举（新 `selfhost/native_bootstrap.sh`）**：只用目标机自带 gcc —
+  ① 编全部 runtime 源（`-DPX_NO_QUIC` 时**逐文件剔** `runtime_quic.c`/`runtime_h3*.c`，口径与
+  `tools/px` 的 quic 裁剪一致；少剔一个 ⇒ 链接期 `undefined reference to px_quic_*`）；
+  ② 用**入库基准** `selfhost/golden/compiler.c` 编出 pxc0；③ **自证**：pxc0 编 `compiler.px`
+  与基准**逐字节一致**；④ 交付 `<out>/pxc`，`--install` 落成 `bootstrap/pxc-<arch>`。
+  `--target-arch <arch>` 为交叉档（自动发现 `/opt/<arch>-linux-musl-cross`，产物 `-static`；
+  交叉档跳过自证并**明确说明**由 CI 真机 job 自证）。
+- **G2 · 宿主机架构自适应（`tools/px`）**：未给 `--target` 时按 `uname -m` 取 `lib-<host>` 布局
+  （mbedtls / sqlite3 / zlib），宿主非 x86_64 自动 `--no-quic` 并**明确提示**（逃生舱
+  `PX_HOST_QUIC=1`；`PX_HOST_ARCH` 可覆盖探测）；显式 flag 一律优先；`--target` 交叉语义不变。
+  新增 **`--print-plan`**：打印解析后的构建计划（含 `pxc`/`pxc_sub`/`pxc_run`）后退出 ——
+  宿主架构这类决策**无法在 x86_64 上端到端验证**，做成可断言输出即可在任意宿主把关。
+- **G2 · 跨架构可诊断（`tools/px`）**：编译轨新增**可执行性预检** —— 非本机架构的 `bootstrap/pxc`
+  不再以 `Exec format error` 收场，而是点明「本机架构 ≠ 该二进制架构」+ 给出两条修复命令
+  （`selfhost/native_bootstrap.sh` / `PX_PXC_BIN=…`）；逃生舱 `PX_PXC_BIN` / `PXC_VM_BIN`。
+  宿主非 x86_64 且 VM 版编译器不可执行 ⇒ **默认轨自动落 C 轨**（提示不静默）；
+  `bootstrap/pxc-<本机架构>` 存在且可执行时 C 轨优先用它。
+- **G1 · 发布侧**：Release 新增并列资产 `puxian-bootstrap-aarch64-<tag>.tar.gz`（**原生 arm64
+  runner** 现编 + 自证，含 `bootstrap/`(aarch64 原生件) + `tools/` + `runtime/` + `stdlib/` + 说明）。
+  不塞进主包的原因写明：主包 `bootstrap/*` 受「全件源码链指纹门」（`rebake_bin.sh --check-all`）
+  与发布包可复现性守卫（Issue 56）约束，跨 runner 现编件不进那套记账。
+- **CI**：新增 job **`native-arm64`**（`ubuntu-24.04-arm`，真机）：原生自举 + 自证 → 现编
+  pxi/pxl/pxpar → **裸 `px build`（零参数）** 断言「自动 C 轨 + lib-aarch64 + no-quic」→ 跑
+  `m159_hostarch` 门。`multiarch-cross` 的 aarch64 档追加**交叉自举档**（`--target-arch aarch64`
+  + `file` 断言 + **qemu 下真跑**自举件，R1002 现场即在此步）。
+- **门 `examples/m159_hostarch/verify.sh`（`M159-HOSTARCH-VERIFY-OK`）**：8 层 —— ① x86_64 计划
+  零回归；② aarch64 计划换库布局 + 自动裁 QUIC + 提示可见；③ armv7/riscv64（库缺失则**明确报错
+  且不得静默退化**）；④ 逃生舱 `PX_HOST_QUIC=1`；⑤ 显式 flag 优先；⑥负控：宿主库缺失必须非零
+  退出 + 报错含根因与获取方式；⑦负控：不可执行编译器 ⇒ 非零 + 点明根因 + 给修复命令 + 给逃生舱；
+  ⑧ 计划里编译轨可断言（`plan: pxc` / `pxc_sub` / `pxc_run`）；⑨+ 真机回归：按本机宿主默认档
+  真编译真运行。
+- **附带（生产侧 · 非本仓）**：镜像站 `soft.xiusoft.cn/puxian/releases/` 目录请求 500 已根治
+  （Mahesvara `http.px` 在 `read_file` 前分叉 `is_dir`：301 / index / autoindex，见事实 182）。
+
 ## M158 —— 解释轨函数值 → runtime native 桥（第 40 轮 · qg-issue 87 · 缺陷 114/161 根治）
 
 - **缺陷 114（语言侧 · 解释轨整族不可用）**：解释轨把用户函数包装成 dict（`{"__ufn__": …}` /

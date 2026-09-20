@@ -1633,3 +1633,43 @@ set_timeout(fn (): print("once after 2s"), 2000)
      `rebake --entries=pxi,pxi_vm`，而 `pxi_vm` 的重烘依赖 `selfhost/build/compiler_new`
      —— 恰好被门自己的清理 `rm -rf selfhost/build` 删掉 ⇒ **收尾必红**（正判据全绿 + 负控全判红，
      却整体 FAIL）。教训两条：① 清理要**精准**（删产物，别删目录）；② 门的收尾也要能解释自己为什么红。
+177. **aarch64 自举现在是官方能力（第 45 轮 · M159 · 缺口 G1/G4）**：入库 `bootstrap/*` 从来
+     只有 x86_64 件 ⇒ aarch64 原生上 `px build` 第一步就 `Exec format error`，用户只能自己
+     搓自举链（第三方仓 `banshanhanfu/px-openEuler-bootstrap` 即为此而生）。现两条官方通道：
+     ① `./selfhost/native_bootstrap.sh`（**只需 gcc**：编 runtime → 用入库基准
+     `selfhost/golden/compiler.c` 编出原生 pxc → **自证**：该 pxc 编 `compiler.px` 与基准
+     **逐字节一致**；`--install` 落成 `bootstrap/pxc-<arch>`）；
+     ② CI 新增 **原生 arm64 job**（`native-arm64`）跑同一条链 + 裸 `px build` 冒烟；
+     ③ 发布侧新增并列资产 `puxian-bootstrap-aarch64-<tag>.tar.gz`（arm64 runner 现编，含自证）。
+     交叉档：`native_bootstrap.sh --target-arch aarch64`（本机 x86_64 也可产 aarch64 自举件，
+     自动找 `/opt/aarch64-linux-musl-cross`，产物 **static-pie**；实测
+     `ELF 64-bit LSB pie executable, ARM aarch64, static-pie linked`）。
+178. **跨架构「跑不动」是一条可诊断的报错（第 45 轮 · M159 · 缺口 G2）**：非本机架构的
+     `bootstrap/pxc` 此前以 `Exec format error` 收场（既没为什么也没怎么办）。现在 `px build`
+     先做**可执行性预检**，报错点明「本机架构 ≠ 该二进制架构」并给出**两条修复命令**
+     （`selfhost/native_bootstrap.sh` + `PX_PXC_BIN=…`）。逃生舱：`PX_PXC_BIN`（自备 C 轨件）/
+     `PXC_VM_BIN`（自备 VM 件）/ `PX_BUILD_ENGINE=c`。**裸 `px build` 在 aarch64 上零参数可用**：
+     宿主架构自适应会取 `runtime/mbedtls/lib-aarch64` + `sqlite3-aarch64.o` + `zlib/lib-aarch64`，
+     且未显式给 flag 时自动 `--no-quic`（ngtcp2/openssl-quictls 预编译库只有 x86_64；逃生舱
+     `PX_HOST_QUIC=1`）。`PX_HOST_ARCH` 可覆盖宿主探测（测试用）。
+179. **`px build --print-plan`（第 45 轮 · M159）**：只打印**解析后的构建计划**（`host_arch` /
+     `cc` / `engine` / `target` / `mbedtls_lib` / `sqlite_obj` / `zlib_lib` / `no_quic` / `lto` /
+     `pxc` / `pxc_sub` / `pxc_run`）后退出、不编译 —— 宿主架构自适应这类决策**无法在 x86_64 上
+     端到端验证**（跨架构库装不进本机链接器），做成可断言输出就能在任意宿主上把关。
+     等价 `PX_BUILD_PRINT_PLAN=1`；门 `examples/m159_hostarch/verify.sh`（8 层 + 2 道负控）据此判。
+180. **宿主非 x86_64 ⇒ 默认轨自动落 C 轨（第 45 轮 · M159）**：用户面默认 `engine=vm` 依赖
+     `bootstrap/pxc_vm`（**x86_64 动态件**）⇒ arm/riscv 上起不来。现在按「能否在本机执行」判定
+     并自动切 C 轨，**明确提示不静默**；自备该架构 `pxc_vm` 时设 `PXC_VM_BIN` 保留 VM 轨。
+     另：`bootstrap/pxc-<本机架构>` 若存在且可执行，C 轨优先用它（自举件装上即用）。
+181. **裁 QUIC 要连 H3 四件一起剔（第 45 轮 · M159 实测）**：`-DPX_NO_QUIC` 只守卫 `runtime.c`
+     与 `runtime_zlib.c`；`runtime_quic.c` **没有**守卫（其 `ngtcp2/*.h` 非 x86_64 平台不存在），
+     且 `runtime_h3.c` 依赖 `runtime_quic.c` 的 `px_quic_*` 符号（剔除不全 ⇒ 链接期
+     `undefined reference to px_quic_raw_peer_addr`）。正确口径 = 与 `tools/px` 的 quic 裁剪
+     **逐文件一致**：剔 `runtime_quic.c` + `runtime_h3.c` + `runtime_h3_qpack.c` +
+     `runtime_h3_qpack_dyn.c`，并定义 `-DPX_NO_QUIC`。
+182. **目录当文件读：`read_file(目录)` 的历史坑（第 45 轮 · 镜像 500 根因）**：`read_file` 只判
+     `exists()` ⇒ **目录路径也落进 `read_file`**；在 m151 及更早，取不到长度时把 `-1` 当尺寸 ⇒
+     `xmalloc(2^63)` 失败 ⇒ 协程被隔离、HTTP 层 500（**进程存活** ⇒ "页面崩了没人知道"）。
+     m158 实测该路径已不再崩：`read_file(目录)` 三轨均返回**空串**（`type` = `string`）。
+     ⇒ 写静态文件服务时**仍要显式分叉目录**（`is_dir` → 301/索引/404），别指望报错。
+
