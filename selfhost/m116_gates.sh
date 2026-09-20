@@ -153,6 +153,16 @@ run m157_onnx_exec bash examples/m157_onnx_exec/verify.sh
 #   + 3 道负控（关自动桥接 / 不装调度器 / 调度器忽略函数值 —— 每道必须判红 + 逐字节还原）。
 #   另含已知缺口报告（缺陷 159 VM 轨闭包 upvalue / 160 C 轨嵌套闭包捕获，SKIP 不计失败）。
 run m158_interp_fn bash examples/m158_interp_fn/verify.sh
+# ── M159（第 45 轮）：宿主机架构自适应（第三方仓库照出的缺口 G2）──────────────
+#   背景：aarch64 **原生**上裸 `px build` 此前必失败 —— mbedtls 库路径写死仓库 x86_64
+#   布局（lib），QUIC 静态库（ngtcp2/openssl-quictls）只有 x86_64 预置 ⇒ 用户被迫手写
+#   --cc/--mbedtls-lib/--sqlite-obj/--zlib-lib/--no-quic 一长串（第三方 px-openEuler-bootstrap
+#   正因此自己写了一套自举脚本）。
+#   判据：宿主架构决策可断言（--print-plan + PX_HOST_ARCH 覆盖）——
+#   x86_64 计划零变化 / aarch64·armv7·riscv64 自动换 lib-<arch> 布局并明确提示裁 QUIC /
+#   逃生舱 PX_HOST_QUIC=1 / 显式 flag 优先 / 负控：宿主库缺失必须明确报错且**不得静默退化** /
+#   真机回归：x86_64 仍能真编译真运行。
+run m159_hostarch bash examples/m159_hostarch/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

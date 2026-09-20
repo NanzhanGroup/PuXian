@@ -41,6 +41,11 @@
 #   - M57-S4：交叉编译默认配 --no-quic —— 第三方预编译库（ngtcp2/openssl-quictls）
 #     只有 x86_64 版，aarch64 目标需裁剪 QUIC/H3（runtime 加 -DPX_NO_QUIC 条件编译）；
 #     mbedtls/sqlite 均纯 C，可用目标架构交叉编译（tools/cross_aarch64.sh）。
+#   - M159（R45，缺口 G2）：**宿主机架构自适应** —— 未给 --target 时按 uname -m 取
+#     lib-<host> 库布局，宿主非 x86_64 自动 --no-quic 并明确提示（逃生舱 PX_HOST_QUIC=1）；
+#     环境变量 PX_HOST_ARCH 可覆盖宿主探测（测试/特殊场景）。⇒ 原生 aarch64 上裸
+#     `px build x.px` 直接可用，无需手写 --cc/--mbedtls-lib/--sqlite-obj/--zlib-lib/--no-quic。
+#     `px build --print-plan` 打印解析后的计划（不编译），宿主架构这类决策据此可断言。
 # ============================================================
 set -u
 # M71-S4：argv0 自发现 —— readlink 解析符号链接到真实位置（软链安装
@@ -52,7 +57,9 @@ PXC_HOME="$(cd "$(dirname "$PXC_SELF")/.." && pwd)"
 if [ -z "${PX_STDLIB:-}" ] && [ -d "$PXC_HOME/stdlib" ]; then
     export PX_STDLIB="$PXC_HOME/stdlib"
 fi
-PXC_BIN="$PXC_HOME/bootstrap/pxc"
+# M159（R45）：C 轨编译器路径 —— PX_PXC_BIN 可覆盖（自举出的原生件不在默认位置时用，
+#   例：PX_PXC_BIN=/tmp/px-native-bootstrap/pxc PX_BUILD_ENGINE=c px build x.px）
+PXC_BIN="${PX_PXC_BIN:-$PXC_HOME/bootstrap/pxc}"
 PXI_BIN="$PXC_HOME/bootstrap/pxi"
 PXL_BIN="$PXC_HOME/bootstrap/pxl"     # lexer.px 编译版（px lex 用）
 PXPAR_BIN="$PXC_HOME/bootstrap/pxpar" # parser.px 编译版（px parse 用）
@@ -133,6 +140,13 @@ px $RELEASE_VER
                                                                   缓存键含 lto 位，与默认档互不干扰
                                                  --cc <cc>       指定 C 编译器（交叉用，
                                                                   如 aarch64-linux-musl-gcc）
+                                                 --print-plan     只打印**解析后的构建计划**
+                                                                  （host_arch/cc/engine/target/
+                                                                  mbedtls_lib/sqlite_obj/zlib_lib/
+                                                                  no_quic/lto）后退出，不编译。
+                                                                  等价 PX_BUILD_PRINT_PLAN=1；
+                                                                  M159 起用于断言宿主架构自适应
+                                                                  （配合 PX_HOST_ARCH 覆盖宿主探测）
                                                  --mbedtls-lib   目标架构 mbedtls 库目录
                                                                   （缺省 runtime/mbedtls/lib）
                                                  --sqlite-obj    目标架构 sqlite3 .o 文件
@@ -336,6 +350,67 @@ rt_ensure() {
     echo "$dir"
     return 0
 }
+# ---- M159（R45 · 缺口 G2）：宿主机架构识别 ----
+# 存在理由：aarch64/riscv64 **原生**跑 `px build` 此前会失败 —— mbedtls 库路径写死仓库
+#   x86_64 布局（lib），QUIC 静态库（ngtcp2/openssl-quictls）只有 x86_64 预置 ⇒ 用户必须手写
+#   --cc/--mbedtls-lib/--sqlite-obj/--zlib-lib/--no-quic 一长串（第三方 px-openEuler-bootstrap
+#   就是被这条逼出来自己写自举脚本的）。此处把「宿主是谁」变成工具知道的事实。
+# PX_HOST_ARCH 可显式覆盖（测试/交叉场景用；空值 = 按 uname 探测）。
+host_arch() {
+    if [ -n "${PX_HOST_ARCH:-}" ]; then
+        echo "$PX_HOST_ARCH"
+        return 0
+    fi
+    local m
+    m="$(uname -m 2>/dev/null || echo unknown)"
+    case "$m" in
+        x86_64|amd64)    echo x86_64 ;;
+        aarch64|arm64)   echo aarch64 ;;
+        armv7l|armv6l|arm) echo armv7 ;;
+        riscv64)         echo riscv64 ;;
+        *)               echo "" ;;
+    esac
+}
+
+# ---- M159（R45 · 缺口 G2 续）：**编译轨二进制可执行性预检** ----
+# 存在理由：入库 bootstrap/* 是 x86_64 件 ⇒ aarch64/riscv64 **原生**解压后 `px build`
+#   会以 "Exec format error" 收场，用户既看不到「为什么」也看不到「怎么办」（第三方
+#   px-openEuler-bootstrap 写自举脚本正是被这一步逼的）。此处把"跑不动"变成一条
+#   自带修复命令的诊断。
+cmp_runnable() { "$1" --version >/dev/null 2>&1; }
+bin_arch_hint() {
+    local a=""
+    a="$(file -b "$1" 2>/dev/null | sed -n 's/^ELF \([^,]*\).*/\1/p')"
+    [ -n "$a" ] && echo "$a" || echo "未知"
+}
+# 编译轨解析：打印 "<bin>|<sub>"（engine=c → pxc build；engine=vm → pxc_vm --emit-c）
+resolve_cmp_bin() {
+    local eng="$1"
+    if [ "$eng" = "c" ]; then
+        # M159：本机架构专用件优先（selfhost/native_bootstrap.sh --install 的落点）——
+        #   解压包里 bootstrap/pxc 是 x86_64 件时，aarch64 用户装上本机件即可零参数可用。
+        local ha="" sp=""
+        ha="$(host_arch)"
+        [ -n "$ha" ] && sp="$PXC_HOME/bootstrap/pxc-$ha"
+        if [ -n "$sp" ] && [ -x "$sp" ] && cmp_runnable "$sp"; then echo "$sp|build"; return 0; fi
+        echo "$PXC_BIN|build"; return 0
+    fi
+    if [ -n "${PXC_VM_BIN:-}" ]; then echo "$PXC_VM_BIN|--emit-c"; return 0; fi
+    if [ -x "$PXC_HOME/bootstrap/pxc_vm" ]; then echo "$PXC_HOME/bootstrap/pxc_vm|--emit-c"; return 0; fi
+    echo "$PXC_HOME/selfhost/build/compiler_vm|--emit-c"
+}
+require_runnable() {   # $1=bin $2=用途标签
+    [ -x "$1" ] || { echo "错误: 缺 $2：$1（不存在或不可执行）" >&2; return 1; }
+    cmp_runnable "$1" && return 0
+    echo "错误: $2 无法在本机执行：$1" >&2
+    echo "  本机架构 $(uname -m) ≠ 该二进制架构 $(bin_arch_hint "$1")（入库 bootstrap/* 只带 x86_64 件）" >&2
+    echo "  ⇒ 用本机自带 gcc 自举一套原生编译器（只需 gcc，约 1-3 分钟）：" >&2
+    echo "       ./selfhost/native_bootstrap.sh --outdir /tmp/px-native-bootstrap" >&2
+    echo "       PX_PXC_BIN=/tmp/px-native-bootstrap/pxc PX_BUILD_ENGINE=c px build <file.px>" >&2
+    echo "     （发布包内若带 bootstrap/pxc-$(uname -m)，可直接 PX_PXC_BIN=<包>/bootstrap/pxc-$(uname -m)）" >&2
+    return 1
+}
+
 # ---- M71-S2：--target 高层折叠（对齐 GOOS/GOARCH，交叉 5 flag 折叠为一条命令）----
 # 输出键值行：cc / mbedtls_lib / sqlite_obj / zlib_lib / no_quic。
 # aarch64 仓库预置库；armv7/riscv64 无仓库预置 → 探测 CI/本机 cross_multiarch
@@ -401,9 +476,11 @@ cmd_build() {
         *) echo "警告: 未知 PX_BUILD_ENGINE=$engine（取 c|vm，退默认 vm）" >&2; engine=vm ;;
     esac
     local mods="" cuts=""
-    local cc_set=0 no_quic_set=0
+    local cc_set=0 no_quic_set=0 print_plan=0
+    [ "${PX_BUILD_PRINT_PLAN:-0}" = "1" ] && print_plan=1
     while [ $# -gt 0 ]; do
         case "$1" in
+            --print-plan) print_plan=1; shift ;;
             --no-quic) no_quic=1; no_quic_set=1; shift ;;
             --min) no_quic=1; no_quic_set=1; mods="$mods sqlite ws zip xml aes rsa ed25519 img route zlib h2"; shift ;;
             --full|--max) full=1; shift ;;
@@ -471,7 +548,53 @@ cmd_build() {
             return 1
         fi
     fi
+    # ---- M159（R45 · 缺口 G2）：宿主机架构自适应（未给 --target 时生效）----
+    #   规则：① 未显式 --mbedtls-lib/--sqlite-obj/--zlib-lib ⇒ 取 lib-<host> 布局；
+    #         ② 宿主非 x86_64 ⇒ 自动 --no-quic（QUIC/H3 预编译库仅 x86_64），**明确提示**，
+    #            不静默；逃生舱 PX_HOST_QUIC=1（自备该架构 QUIC 库时用）；
+    #         ③ 显式 flag 一律优先；--target 交叉语义完全不受影响（走上支 target_defaults）。
+    local host_a=""
+    host_a="$(host_arch)"
+    if [ -z "$target" ] && [ -n "$host_a" ] && [ "$host_a" != "x86_64" ]; then
+        local host_mb="$RT_DIR/mbedtls/lib-$host_a"
+        local host_so="$RT_DIR/third_party/sqlite3/sqlite3-$host_a.o"
+        local host_zl="$RT_DIR/third_party/zlib/lib-$host_a"
+        # armv7/riscv64 仓库未预置 → 与 --target 同款约定：探测 /opt/px-multiarch/<arch>/
+        if [ ! -f "$host_mb/libmbedcrypto.a" ] && [ -d "/opt/px-multiarch/$host_a/mbedtls/lib-$host_a" ]; then
+            host_mb="/opt/px-multiarch/$host_a/mbedtls/lib-$host_a"
+            host_so="/opt/px-multiarch/$host_a/sqlite3/sqlite3-$host_a.o"
+            host_zl="/opt/px-multiarch/$host_a/zlib/lib-$host_a"
+        fi
+        if [ "$mbedtls_lib" = "" ]; then
+            if [ ! -f "$host_mb/libmbedcrypto.a" ]; then
+                echo "错误: 宿主机 $host_a 缺预置 mbedtls 静态库 $host_mb/libmbedcrypto.a" >&2
+                echo "  获取方式：tools/cross_aarch64.sh（aarch64）或 tools/cross_multiarch.sh --arch $host_a --outdir /opt/px-multiarch/$host_a" >&2
+                echo "  亦可显式指定：px build --mbedtls-lib <dir> --sqlite-obj <file> --zlib-lib <dir> <file.px>" >&2
+                return 1
+            fi
+            mbedtls_lib="$host_mb"
+        fi
+        [ "$sqlite_obj" = "" ] && [ -f "$host_so" ] && sqlite_obj="$host_so"
+        [ "$zlib_lib" = "" ] && [ -f "$host_zl/libz.a" ] && zlib_lib="$host_zl"
+        if [ "$no_quic_set" = 0 ] && [ "${PX_HOST_QUIC:-0}" != "1" ]; then
+            no_quic=1
+            echo "提示: 宿主机 $host_a —— QUIC/H3 预编译静态库（ngtcp2/openssl-quictls）仅 x86_64 提供" >&2
+            echo "      ⇒ 本次自动 --no-quic（该平台 QUIC/H3 能力不可用；自备库可设 PX_HOST_QUIC=1 保留）" >&2
+        fi
+    fi
     [ "$mbedtls_lib" = "" ] && mbedtls_lib="$RT_DIR/mbedtls/lib"
+    # ---- M159（R45）：**宿主非 x86_64 ⇒ VM 轨自动落 C 轨**（明确提示，不静默）----
+    #   入库 VM 版编译器（bootstrap/pxc_vm）是 x86_64 动态件 ⇒ aarch64/riscv64 原生机上
+    #   用户面默认轨（engine=vm）根本起不来。此处按「能否在本机执行」判定，落到 C 轨；
+    #   自备该架构 pxc_vm 的用户设 PXC_VM_BIN 即保留 VM 轨。
+    if [ "$engine" = "vm" ] && [ -n "$host_a" ] && [ "$host_a" != "x86_64" ] && [ -z "${PXC_VM_BIN:-}" ]; then
+        local _vmb="$PXC_HOME/bootstrap/pxc_vm"
+        if [ ! -x "$_vmb" ] || ! cmp_runnable "$_vmb"; then
+            engine=c
+            echo "提示: 宿主机 $host_a —— 入库 VM 版编译器（bootstrap/pxc_vm）是 x86_64 件，本机不可执行" >&2
+            echo "      ⇒ 本次自动走 C 轨（等价 PX_BUILD_ENGINE=c）；自备该架构 pxc_vm 时设 PXC_VM_BIN 保留 VM 轨" >&2
+        fi
+    fi
     # M61-S0：zlib 外部静态库 —— 显式 --zlib-lib 优先，否则按 cc 架构自动探测
     # M67-S5：多架构扩展（aarch64/armv7/riscv64 → lib-<arch>，缺省 lib 兼容）
     if [ "$zlib_lib" = "" ]; then
@@ -483,6 +606,29 @@ cmd_build() {
         esac
     fi
     [ -f "$zlib_lib/libz.a" ] || { echo "错误: 缺少 zlib 静态库 $zlib_lib/libz.a（先跑 tools/build_zlib.sh）" >&2; return 1; }
+    # M159：--print-plan（或 PX_BUILD_PRINT_PLAN=1）—— 打印"解析后的构建计划"后退出（不编译）。
+    #   存在理由：宿主架构自适应这类决策**无法在 x86_64 上端到端验证**（跨架构库装不进本机
+    #   链接器）⇒ 把决策本身做成可断言输出，配合 PX_HOST_ARCH 覆盖即可在任意宿主上把关。
+    if [ "$print_plan" = 1 ]; then
+        echo "plan: host_arch=$host_a"
+        echo "plan: cc=$cc"
+        echo "plan: engine=$engine"
+        echo "plan: target=${target:-<none>}"
+        echo "plan: mbedtls_lib=$mbedtls_lib"
+        echo "plan: sqlite_obj=$sqlite_obj"
+        echo "plan: zlib_lib=$zlib_lib"
+        echo "plan: no_quic=$no_quic"
+        echo "plan: lto=$lto"
+        echo "plan: file=$file"
+        local _cb="" _cs=""
+        IFS='|' read -r _cb _cs <<< "$(resolve_cmp_bin "$engine")"
+        echo "plan: pxc=$_cb"
+        echo "plan: pxc_sub=$_cs"
+        if [ ! -x "$_cb" ]; then echo "plan: pxc_run=missing"
+        elif cmp_runnable "$_cb"; then echo "plan: pxc_run=ok"
+        else echo "plan: pxc_run=other-arch"; fi
+        return 0
+    fi
     local base parent build_dir
     base="$(basename "$file" .px)"
     parent="$(cd "$(dirname "$file")" && pwd)"
@@ -496,20 +642,16 @@ cmd_build() {
     #    VM 轨（默认 engine=vm）= VM 版编译器 --emit-c：BCModule 字节码镜像 C
     #      （M89-S3-C2 试做 / M91 默认化）→ 链 runtime 含 vm.o → 显式帧 VM 执行
     #    C 轨（--c / PX_BUILD_ENGINE=c 逃生舱）= bootstrap/pxc build（fn_* C 文本）
-    local cmp_bin="$PXC_BIN" cmp_sub="build"
-    if [ "$engine" = "vm" ]; then
-        # VM 版编译器优先级：PXC_VM_BIN 环境变量 > bootstrap/pxc_vm（静态，入库）
-        #   > selfhost/build/compiler_vm（dev 自举缓存，需先跑 bootstrap_prove_bc.sh）
-        if [ -n "${PXC_VM_BIN:-}" ]; then
-            cmp_bin="$PXC_VM_BIN"
-        elif [ -x "$PXC_HOME/bootstrap/pxc_vm" ]; then
-            cmp_bin="$PXC_HOME/bootstrap/pxc_vm"
-        else
-            cmp_bin="$PXC_HOME/selfhost/build/compiler_vm"
+    # M159（R45）：编译轨解析 + **可执行性预检**（跨架构解压即用的核心诊断）
+    local cmp_bin="" cmp_sub=""
+    IFS='|' read -r cmp_bin cmp_sub <<< "$(resolve_cmp_bin "$engine")"
+    require_runnable "$cmp_bin" "编译轨（engine=$engine）" || {
+        if [ "$engine" = "vm" ] && [ -n "$host_a" ] && [ "$host_a" != "x86_64" ]; then
+            echo "  本机非 x86_64 ⇒ VM 轨不可用；加 PX_BUILD_ENGINE=c 走 C 轨（配本机自举件）" >&2
         fi
-        cmp_sub="--emit-c"
-        [ -x "$cmp_bin" ] || { echo "错误: VM 引擎需要 VM 版编译器 $cmp_bin（bootstrap/pxc_vm 或先跑 selfhost/bootstrap_prove_bc.sh 生成；逃生舱 PX_BUILD_ENGINE=c）" >&2; return 1; }
-    fi
+        echo "  逃生舱：PX_BUILD_ENGINE=c（C 轨）/ PXC_VM_BIN（自备 VM 件）/ PX_PXC_BIN（自备 C 轨件）" >&2
+        return 1
+    }
     # M112-S0（Issue 45）：产物 = stdout，诊断 = stderr —— 必须分 fd。
     #   原先 `> "$c_path" 2>/dev/null` 把 stderr 丢掉，而编译器把报错写 stdout
     #   （cg_perr 旧实现用 print）→ 错误文本被当作 C 源码存进 .c。
