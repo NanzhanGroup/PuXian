@@ -91,7 +91,9 @@ echo "== ⑧ 计划可断言编译轨（plan: pxc / pxc_run · **随宿主自适
 # 规则（不依赖宿主是什么）：① 编译轨必须可在本机执行；② 若入库 VM 版编译器在本机不可执行，
 #   计划必须**自动落到 C 轨**并给出提示。x86_64 宿主走 ①（VM 轨可用），非 x86_64 宿主走 ②
 #   （CI 的 native-arm64 真机 job 即走 ②）—— 故判据写成条件分支，而不是钉死 x86_64 的结论。
-PX_HOST_ARCH=aarch64 $PX build --print-plan "$W/h.px" > "$W/p8.txt" 2>"$W/e8.txt"
+# ⚠ 这条必须用**环境默认轨**跑：CI 里本门所在步骤带 PX_BUILD_ENGINE=c（真机档要用 C 轨真编译），
+#   若继承它，则"VM 轨不可执行 ⇒ 自动落 C 轨 + 提示"这条分支永远走不到（首跑真机 aarch64 即栽在此）。
+env -u PX_BUILD_ENGINE PX_HOST_ARCH=aarch64 $PX build --print-plan "$W/h.px" > "$W/p8.txt" 2>"$W/e8.txt"
 grep -q "^plan: pxc=" "$W/p8.txt" && ok "计划含 pxc（编译轨路径）" || bad "计划缺 pxc"
 grep -q "^plan: pxc_run=" "$W/p8.txt" && ok "计划含 pxc_run（可执行性）" || bad "计划缺 pxc_run"
 if grep -q "^plan: pxc_run=ok" "$W/p8.txt"; then
