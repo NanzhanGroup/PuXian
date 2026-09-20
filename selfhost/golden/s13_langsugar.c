@@ -92,7 +92,7 @@ static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     px_srcline(74);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_str("rows: "), px_call(px_get_global("str"), (LXValue[]){_v9}, 1))}, 1));
     px_srcline(75);
-    _v10 = ({ LXValue _d = px_dict(); { LXValue _k = px_str("k"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_list_n((LXValue[]){}, 0)); } _d; });
+    _v10 = ({ LXValue _d = px_dict(); { LXValue _k = px_str("k"); LXValue _v = px_list_n((LXValue[]){}, 0); px_dict_set_checked(_d, _k, _v); } _d; });
     px_srcline(76);
     (void)(px_method(px_index(_v10, px_str("k")), "append", (LXValue[]){px_int(99LL)}, 1));
     px_srcline(77);

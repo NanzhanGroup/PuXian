@@ -191,6 +191,17 @@ run m161_genexp bash examples/m161_genexp_capture/verify.sh
 #   + 3 道负控（值比较退回渲染串 ⇒ 解释轨必红 / 选择式回归 ⇒ 编译轨稳定性必红 /
 #   list 逐元素退化 ⇒ PX-DEF-011 必红）。
 run m162_sorted bash examples/m162_sorted_order/verify.sh
+step "M163 字典键类型严格化（第 49 轮 · 缺陷 168/169/171 —— 构造位置非字符串键）"
+# 背景：字面量 `{1: 11, 2: 22}` 与推导式 `{x: x for x in [1]}` 的非字符串键在 **VM 轨与 C 轨
+#   被静默丢弃**（`len=0`；混合键只丢那一项）= 与 R1008「静默 null」同族的**静默数据丢失**，
+#   且与解释轨（R1002）分叉；推导式上 VM 轨还只是借 `set` 方法词条报同码（同码不同文）；
+#   索引赋值 `d[k]=v` 的解释轨词条与文档/编译轨不一致（缺陷 171）。
+# 修法：三轨同一条真相 = **构造位置非字符串键 ⇒ R1002 `字典键必须是字符串，实际是 <t>`**
+#   （新增 runtime `px_dict_set_checked` · VM 新指令 DICTSET · VM NEWDICT 内联检查 ·
+#    C 轨字面量/推导式发射改走 checked · 解释轨两条路径词条对齐）。
+# 判据：三轨 stdout 逐字节一致（16 + 6 断言）+ **严格性层 8 用例 × 三轨（rc≠0 + R1002 + 统一词条）**
+#   + 3 道负控（VM NEWDICT 恢复跳过 / C checked 恢复静默 / 解释轨推导词条退回旧文案）。
+run m163_dict_key bash examples/m163_dict_key_strict/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

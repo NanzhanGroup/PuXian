@@ -722,7 +722,8 @@ def bc_emit_expr(expr, dst, func):
         bc_emit_comp(func, "push", [expr[1]], expr[3], d, clauses, 0)
         return d
     if ty == "DictComp":
-        # {k: v for ...} → 空 dict 槽 + 循环展开 + rv.set(k,v)（键 str，对齐 NEWDICT）
+        # {k: v for ...} → 空 dict 槽 + 循环展开 + DICTSET(k,v)（M163：非字符串键 ⇒ R1002，
+        #   对齐解释轨推导路径；NEWDICT 侧的字面量严格化见 runtime/vm.c 同名指令）
         let clauses = expr[3]
         var d = dst
         if d < 0:
@@ -1008,7 +1009,11 @@ def bc_emit_comp(func, kind, elems, cond, rv, clauses, ci):
             let vv = bc_tmp(func)
             bc_emit_expr(elems[0], kv, func)
             bc_emit_expr(elems[1], vv, func)
-            bc_emit_methodcall_slot(func, rv, "set", [kv, vv], bc_tmp(func))
+            # M163（第 49 轮 · 缺陷 169）：置键改走 **DICTSET**（= px_dict_set_checked）——
+            #   非字符串键 ⇒ R1002「字典键必须是字符串，实际是 <t>」（与解释轨推导路径同词条）。
+            #   修前是 CALLM `set`：报「方法 set 参数 1 需要 string」（词条不一致，且对推导式
+            #   语义有误导）；顺带省掉一次方法查找 + 一次 CALL。
+            bc_emit_inst(func, "DICTSET", rv, kv, vv)
         else:
             let ev = bc_tmp(func)
             bc_emit_expr(elems[0], ev, func)

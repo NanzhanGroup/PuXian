@@ -1,0 +1,41 @@
+# M163 门 ②：字典键类型严格化 —— 加强面（6 断言 · 复杂键表达式 / 深层结构 / 批量）
+# 关注「不该被新检查误伤」的字符串键形态：函数返回键 / 方法链键 / 拼接键 / 嵌套 /
+#   导入前 dict 批量构造 / 推导式里再套字面量。
+var fails = 0
+
+def chk(cond, tag):
+    if not cond:
+        fails = fails + 1
+        print("FAIL " + tag)
+
+def key_of(i):
+    return "k" + str(i)
+
+def main():
+    # 1 函数返回的键
+    let d1 = {key_of(1): 10, key_of(2): 20}
+    chk(len(d1) == 2 and d1["k2"] == 20, "1-fn-return-key")
+
+    # 2 推导式键 = 函数调用
+    let d2 = {key_of(x): x for x in [1, 2, 3]}
+    chk(len(d2) == 3 and d2["k3"] == 3, "2-comp-fn-key")
+
+    # 3 拼接 / 大小写（方法返回字符串）
+    let s = "ab"
+    let d3 = {s + "_x": 1, s.upper(): 2}
+    chk(len(d3) == 2 and d3["ab_x"] == 1 and d3["AB"] == 2, "3-concat-method-key")
+
+    # 4 深层：dict 里放 list 里放 dict（键全字符串）
+    let d4 = {"a": [{"b": 1}, {"c": 2}]}
+    chk(d4["a"][1]["c"] == 2, "4-deep-structure")
+
+    # 5 推导式里构造嵌套 dict（值侧是字面量）
+    let d5 = {str(x): {"v": x} for x in [1, 2]}
+    chk(len(d5) == 2 and d5["2"]["v"] == 2, "5-comp-value-dict")
+
+    # 6 批量 300 键（走推导式，验证键检查不改变结果）
+    let d6 = {str(i): i for i in range(300)}
+    chk(len(d6) == 300 and d6["299"] == 299, "6-bulk-300")
+
+    print("pass=" + str(6 - fails) + " fail=" + str(fails))
+

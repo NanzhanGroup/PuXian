@@ -305,7 +305,11 @@ def i_assign(target, op, v, env, pos):
             return Ok(null)
         if t == "dict":
             if type(iv) != "string":
-                return Err(i_r1002("字典键必须是字符串", pos))
+                # M163（第 49 轮 · 缺陷 171）：对齐文档口径与编译两轨 ——
+                #   `d[k] = v` 的键类型错误码文案是 **`字典索引键必须是字符串`**
+                #   （docs/DICT_STRICT_MIGRATION.md §1；VM SETIDX / C px_index_set 一直如此，
+                #   修前解释轨独用「字典键必须是字符串」⇒ 三轨同码不同文）
+                return Err(i_r1002("字典索引键必须是字符串", pos))
             var nv = v
             if op != "Assign":
                 var old = null

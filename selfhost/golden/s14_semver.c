@@ -227,7 +227,7 @@ static LXValue fn_sv_parse(LXValue* args, int nargs, void* ctx) {
         }
     }
     px_srcline(90);
-    return ({ LXValue _d = px_dict(); { LXValue _k = px_str("major"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_call(px_get_global("int"), (LXValue[]){px_index(_v21, px_int(0LL))}, 1)); } { LXValue _k = px_str("minor"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_call(px_get_global("int"), (LXValue[]){px_index(_v21, px_int(1LL))}, 1)); } { LXValue _k = px_str("patch"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_call(px_get_global("int"), (LXValue[]){px_index(_v21, px_int(2LL))}, 1)); } { LXValue _k = px_str("pre"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, _v19); } { LXValue _k = px_str("build"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, _v17); } { LXValue _k = px_str("raw"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, _v15); } _d; });
+    return ({ LXValue _d = px_dict(); { LXValue _k = px_str("major"); LXValue _v = px_call(px_get_global("int"), (LXValue[]){px_index(_v21, px_int(0LL))}, 1); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("minor"); LXValue _v = px_call(px_get_global("int"), (LXValue[]){px_index(_v21, px_int(1LL))}, 1); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("patch"); LXValue _v = px_call(px_get_global("int"), (LXValue[]){px_index(_v21, px_int(2LL))}, 1); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("pre"); LXValue _v = _v19; px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("build"); LXValue _v = _v17; px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("raw"); LXValue _v = _v15; px_dict_set_checked(_d, _k, _v); } _d; });
 px_err_28:
     if (px_err_28_proped) return px_err_28_val;
     return px_null();
@@ -399,7 +399,7 @@ static LXValue fn_sv_range_parse(LXValue* args, int nargs, void* ctx) {
     px_srcline(149);
     if (px_is_truthy(({ LXValue _t65 = px_eq(_v53, px_str("")); px_is_truthy(_t65) ? _t65 : px_eq(_v53, px_str("*")); }))) {
         px_srcline(150);
-        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("lo"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_str("0.0.0")); } { LXValue _k = px_str("hi"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_str("999999999.0.0")); } { LXValue _k = px_str("pre"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_str("")); } _d; });
+        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("lo"); LXValue _v = px_str("0.0.0"); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("hi"); LXValue _v = px_str("999999999.0.0"); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("pre"); LXValue _v = px_str(""); px_dict_set_checked(_d, _k, _v); } _d; });
     }
     px_srcline(151);
     _v54 = px_str("");
@@ -419,7 +419,7 @@ static LXValue fn_sv_range_parse(LXValue* args, int nargs, void* ctx) {
     px_srcline(158);
     if (px_is_truthy(({ LXValue _t66 = px_eq(_v53, px_str("")); px_is_truthy(_t66) ? _t66 : px_eq(_v53, px_str("*")); }))) {
         px_srcline(159);
-        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("lo"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_str("0.0.0")); } { LXValue _k = px_str("hi"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_str("999999999.0.0")); } { LXValue _k = px_str("pre"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_str("")); } _d; });
+        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("lo"); LXValue _v = px_str("0.0.0"); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("hi"); LXValue _v = px_str("999999999.0.0"); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("pre"); LXValue _v = px_str(""); px_dict_set_checked(_d, _k, _v); } _d; });
     }
     px_srcline(161);
     _v55 = px_call(px_get_global("split"), (LXValue[]){_v53, px_str(".")}, 2);
@@ -466,22 +466,22 @@ static LXValue fn_sv_range_parse(LXValue* args, int nargs, void* ctx) {
     px_srcline(181);
     if (px_is_truthy(px_lt(_v59, px_int(0LL)))) {
         px_srcline(183);
-        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("lo"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_str("0.0.0")); } { LXValue _k = px_str("hi"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_str("999999999.0.0")); } { LXValue _k = px_str("pre"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_str("")); } _d; });
+        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("lo"); LXValue _v = px_str("0.0.0"); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("hi"); LXValue _v = px_str("999999999.0.0"); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("pre"); LXValue _v = px_str(""); px_dict_set_checked(_d, _k, _v); } _d; });
     }
     px_srcline(185);
     if (px_is_truthy(({ LXValue _t72 = ({ LXValue _t71 = px_eq(_v54, px_str("")); px_is_truthy(_t71) ? px_ge(_v60, px_int(0LL)) : _t71; }); px_is_truthy(_t72) ? px_ge(_v61, px_int(0LL)) : _t72; }))) {
         px_srcline(186);
-        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("lo"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, _v53); } { LXValue _k = px_str("hi"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_add(px_add(px_add(px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")), px_call(px_get_global("str"), (LXValue[]){_v60}, 1)), px_str(".")), px_call(px_get_global("str"), (LXValue[]){px_add(_v61, px_int(1LL))}, 1))); } { LXValue _k = px_str("pre"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_str("")); } _d; });
+        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("lo"); LXValue _v = _v53; px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("hi"); LXValue _v = px_add(px_add(px_add(px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")), px_call(px_get_global("str"), (LXValue[]){_v60}, 1)), px_str(".")), px_call(px_get_global("str"), (LXValue[]){px_add(_v61, px_int(1LL))}, 1)); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("pre"); LXValue _v = px_str(""); px_dict_set_checked(_d, _k, _v); } _d; });
     }
     px_srcline(187);
     if (px_is_truthy(({ LXValue _t73 = px_eq(_v54, px_str("")); px_is_truthy(_t73) ? px_lt(_v60, px_int(0LL)) : _t73; }))) {
         px_srcline(189);
-        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("lo"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".0.0"))); } { LXValue _k = px_str("hi"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_add(px_call(px_get_global("str"), (LXValue[]){px_add(_v59, px_int(1LL))}, 1), px_str(".0.0"))); } { LXValue _k = px_str("pre"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_str("")); } _d; });
+        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("lo"); LXValue _v = px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".0.0")); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("hi"); LXValue _v = px_add(px_call(px_get_global("str"), (LXValue[]){px_add(_v59, px_int(1LL))}, 1), px_str(".0.0")); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("pre"); LXValue _v = px_str(""); px_dict_set_checked(_d, _k, _v); } _d; });
     }
     px_srcline(190);
     if (px_is_truthy(({ LXValue _t74 = px_eq(_v54, px_str("")); px_is_truthy(_t74) ? px_lt(_v61, px_int(0LL)) : _t74; }))) {
         px_srcline(192);
-        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("lo"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_add(px_add(px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")), px_call(px_get_global("str"), (LXValue[]){_v60}, 1)), px_str(".0"))); } { LXValue _k = px_str("hi"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_add(px_add(px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")), px_call(px_get_global("str"), (LXValue[]){px_add(_v60, px_int(1LL))}, 1)), px_str(".0"))); } { LXValue _k = px_str("pre"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_str("")); } _d; });
+        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("lo"); LXValue _v = px_add(px_add(px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")), px_call(px_get_global("str"), (LXValue[]){_v60}, 1)), px_str(".0")); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("hi"); LXValue _v = px_add(px_add(px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")), px_call(px_get_global("str"), (LXValue[]){px_add(_v60, px_int(1LL))}, 1)), px_str(".0")); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("pre"); LXValue _v = px_str(""); px_dict_set_checked(_d, _k, _v); } _d; });
     }
     px_srcline(194);
     if (px_is_truthy(px_eq(_v54, px_str("^")))) {
@@ -509,20 +509,20 @@ static LXValue fn_sv_range_parse(LXValue* args, int nargs, void* ctx) {
              _v63 = px_add(px_str("0.0."), px_call(px_get_global("str"), (LXValue[]){px_add(_v61, px_int(1LL))}, 1));
         }
         px_srcline(207);
-        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("lo"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, _v62); } { LXValue _k = px_str("hi"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, _v63); } { LXValue _k = px_str("pre"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_str("")); } _d; });
+        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("lo"); LXValue _v = _v62; px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("hi"); LXValue _v = _v63; px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("pre"); LXValue _v = px_str(""); px_dict_set_checked(_d, _k, _v); } _d; });
     }
     px_srcline(209);
     if (px_is_truthy(({ LXValue _t75 = px_ge(_v59, px_int(0LL)); px_is_truthy(_t75) ? px_lt(_v60, px_int(0LL)) : _t75; }))) {
         px_srcline(211);
-        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("lo"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".0.0"))); } { LXValue _k = px_str("hi"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_add(px_call(px_get_global("str"), (LXValue[]){px_add(_v59, px_int(1LL))}, 1), px_str(".0.0"))); } { LXValue _k = px_str("pre"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_str("")); } _d; });
+        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("lo"); LXValue _v = px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".0.0")); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("hi"); LXValue _v = px_add(px_call(px_get_global("str"), (LXValue[]){px_add(_v59, px_int(1LL))}, 1), px_str(".0.0")); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("pre"); LXValue _v = px_str(""); px_dict_set_checked(_d, _k, _v); } _d; });
     }
     px_srcline(212);
     if (px_is_truthy(({ LXValue _t77 = ({ LXValue _t76 = px_ge(_v59, px_int(0LL)); px_is_truthy(_t76) ? px_ge(_v60, px_int(0LL)) : _t76; }); px_is_truthy(_t77) ? px_lt(_v61, px_int(0LL)) : _t77; }))) {
         px_srcline(214);
-        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("lo"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_add(px_add(px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")), px_call(px_get_global("str"), (LXValue[]){_v60}, 1)), px_str(".0"))); } { LXValue _k = px_str("hi"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_add(px_add(px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")), px_call(px_get_global("str"), (LXValue[]){px_add(_v60, px_int(1LL))}, 1)), px_str(".0"))); } { LXValue _k = px_str("pre"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_str("")); } _d; });
+        return ({ LXValue _d = px_dict(); { LXValue _k = px_str("lo"); LXValue _v = px_add(px_add(px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")), px_call(px_get_global("str"), (LXValue[]){_v60}, 1)), px_str(".0")); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("hi"); LXValue _v = px_add(px_add(px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")), px_call(px_get_global("str"), (LXValue[]){px_add(_v60, px_int(1LL))}, 1)), px_str(".0")); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("pre"); LXValue _v = px_str(""); px_dict_set_checked(_d, _k, _v); } _d; });
     }
     px_srcline(216);
-    return ({ LXValue _d = px_dict(); { LXValue _k = px_str("lo"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_add(px_add(px_add(px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")), px_call(px_get_global("str"), (LXValue[]){_v60}, 1)), px_str(".")), px_call(px_get_global("str"), (LXValue[]){_v61}, 1))); } { LXValue _k = px_str("hi"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_add(px_add(px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")), px_call(px_get_global("str"), (LXValue[]){px_add(_v60, px_int(1LL))}, 1)), px_str(".0"))); } { LXValue _k = px_str("pre"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_str("")); } _d; });
+    return ({ LXValue _d = px_dict(); { LXValue _k = px_str("lo"); LXValue _v = px_add(px_add(px_add(px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")), px_call(px_get_global("str"), (LXValue[]){_v60}, 1)), px_str(".")), px_call(px_get_global("str"), (LXValue[]){_v61}, 1)); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("hi"); LXValue _v = px_add(px_add(px_add(px_call(px_get_global("str"), (LXValue[]){_v59}, 1), px_str(".")), px_call(px_get_global("str"), (LXValue[]){px_add(_v60, px_int(1LL))}, 1)), px_str(".0")); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("pre"); LXValue _v = px_str(""); px_dict_set_checked(_d, _k, _v); } _d; });
 px_err_64:
     if (px_err_64_proped) return px_err_64_val;
     return px_null();

@@ -11,11 +11,11 @@ static LXValue fn_env_new(LXValue* args, int nargs, void* ctx) {
     LXValue px_err_3_val = px_null();
     int px_err_3_proped = 0;
     px_srcline(19);
-    _v2 = ({ LXValue _d = px_dict(); { LXValue _k = px_str("_"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_int(0LL)); } _d; });
+    _v2 = ({ LXValue _d = px_dict(); { LXValue _k = px_str("_"); LXValue _v = px_int(0LL); px_dict_set_checked(_d, _k, _v); } _d; });
     px_srcline(20);
     (void)(px_method(_v2, "remove", (LXValue[]){px_str("_")}, 1));
     px_srcline(21);
-    return ({ LXValue _d = px_dict(); { LXValue _k = px_str("vars"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, _v2); } { LXValue _k = px_str("parent"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, _v1); } _d; });
+    return ({ LXValue _d = px_dict(); { LXValue _k = px_str("vars"); LXValue _v = _v2; px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("parent"); LXValue _v = _v1; px_dict_set_checked(_d, _k, _v); } _d; });
 px_err_3:
     if (px_err_3_proped) return px_err_3_val;
     return px_null();
@@ -57,13 +57,13 @@ static LXValue fn_env_get(LXValue* args, int nargs, void* ctx) {
         px_srcline(32);
         if (px_is_truthy(px_method(_v12, "has", (LXValue[]){_v10}, 1))) {
             px_srcline(33);
-            return ({ LXValue _d = px_dict(); { LXValue _k = px_str("found"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_bool(true)); } { LXValue _k = px_str("value"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_index(_v12, _v10)); } _d; });
+            return ({ LXValue _d = px_dict(); { LXValue _k = px_str("found"); LXValue _v = px_bool(true); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("value"); LXValue _v = px_index(_v12, _v10); px_dict_set_checked(_d, _k, _v); } _d; });
         }
         px_srcline(34);
          _v11 = px_index(_v11, px_str("parent"));
     }
     px_srcline(35);
-    return ({ LXValue _d = px_dict(); { LXValue _k = px_str("found"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_bool(false)); } { LXValue _k = px_str("value"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_null()); } _d; });
+    return ({ LXValue _d = px_dict(); { LXValue _k = px_str("found"); LXValue _v = px_bool(false); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("value"); LXValue _v = px_null(); px_dict_set_checked(_d, _k, _v); } _d; });
 px_err_13:
     if (px_err_13_proped) return px_err_13_val;
     return px_null();
@@ -165,7 +165,7 @@ static LXValue fn_env_clear(LXValue* args, int nargs, void* ctx) {
     LXValue px_err_35_val = px_null();
     int px_err_35_proped = 0;
     px_srcline(61);
-    _v34 = ({ LXValue _d = px_dict(); { LXValue _k = px_str("_"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_int(0LL)); } _d; });
+    _v34 = ({ LXValue _d = px_dict(); { LXValue _k = px_str("_"); LXValue _v = px_int(0LL); px_dict_set_checked(_d, _k, _v); } _d; });
     px_srcline(62);
     (void)(px_method(_v34, "remove", (LXValue[]){px_str("_")}, 1));
     px_srcline(63);

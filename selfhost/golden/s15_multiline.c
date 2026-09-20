@@ -47,7 +47,7 @@ static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     px_srcline(20);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){_v7}, 1)}, 1));
     px_srcline(22);
-    _v8 = ({ LXValue _d = px_dict(); { LXValue _k = px_str("x"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_int(10LL)); } { LXValue _k = px_str("y"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_int(20LL)); } _d; });
+    _v8 = ({ LXValue _d = px_dict(); { LXValue _k = px_str("x"); LXValue _v = px_int(10LL); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("y"); LXValue _v = px_int(20LL); px_dict_set_checked(_d, _k, _v); } _d; });
     px_srcline(26);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_add(px_index(_v8, px_str("x")), px_index(_v8, px_str("y")))}, 1));
     px_srcline(28);
@@ -69,11 +69,11 @@ static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     px_srcline(56);
     (void)(px_call(px_get_global("print"), (LXValue[]){_v11}, 1));
     px_srcline(58);
-    _v12 = px_call(px_get_global("lookup"), (LXValue[]){({ LXValue _d = px_dict(); { LXValue _k = px_str("k"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_list_n((LXValue[]){px_int(5LL), px_int(6LL)}, 2)); } _d; })}, 1);
+    _v12 = px_call(px_get_global("lookup"), (LXValue[]){({ LXValue _d = px_dict(); { LXValue _k = px_str("k"); LXValue _v = px_list_n((LXValue[]){px_int(5LL), px_int(6LL)}, 2); px_dict_set_checked(_d, _k, _v); } _d; })}, 1);
     px_srcline(64);
     (void)(px_call(px_get_global("print"), (LXValue[]){_v12}, 1));
     px_srcline(66);
-    (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_call(px_get_global("lookup"), (LXValue[]){({ LXValue _d = px_dict(); { LXValue _k = px_str("k"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_list_n((LXValue[]){px_int(7LL), px_int(8LL), px_int(9LL)}, 3)); } _d; })}, 1)}, 1)}, 1));
+    (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){px_call(px_get_global("lookup"), (LXValue[]){({ LXValue _d = px_dict(); { LXValue _k = px_str("k"); LXValue _v = px_list_n((LXValue[]){px_int(7LL), px_int(8LL), px_int(9LL)}, 3); px_dict_set_checked(_d, _k, _v); } _d; })}, 1)}, 1)}, 1));
 px_err_13:
     if (px_err_13_proped) return px_err_13_val;
     return px_null();

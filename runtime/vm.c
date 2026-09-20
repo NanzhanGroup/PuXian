@@ -113,6 +113,7 @@ const char* px_op_name(int op) {
         [PXOP_ENUMVAR] = "ENUMVAR",
         [PXOP_GENFROMLIST] = "GENFROMLIST",
         [PXOP_NARGS] = "NARGS",
+        [PXOP_DICTSET] = "DICTSET",
         [PXOP_CELLGET] = "CELLGET", [PXOP_CELLSET] = "CELLSET",
         [PXOP_CELLNEW] = "CELLNEW", [PXOP_MKCLO] = "MKCLO",
     };
@@ -821,16 +822,27 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             break;
         }
         // NEWDICT：a=dst，b=连续槽基址，c=项数 n（槽 b..b+2n-1 为 k0,v0,k1,v1..）；
-        //   仅字符串键入 dict（对齐 codegen：if (_k.type == PX_STR) px_dict_set）
+        //   M163（缺陷 168）：非字符串键**不再是「跳过」而是 R1002** —— 修前
+        //   `if (slots[k0].type == PX_STR)` 静默丢项（`{1: 2}` ⇒ `{}` = 数据丢失），
+        //   与解释轨分叉。文案与解释轨逐字一致：`字典键必须是字符串，实际是 <t>`。
         case PXOP_NEWDICT: {
             LXValue d = px_dict();
             int n = (int)in.c;
             for (int i = 0; i < n; i++) {
                 int k0 = (int)in.b + 2 * i;
-                if (k0 + 1 < fr->nslots && slots[k0].type == PX_STR)
+                if (k0 + 1 < fr->nslots) {
+                    if (slots[k0].type != PX_STR)
+                        px_error("R1002: 字典键必须是字符串，实际是 %s", px_type_name(slots[k0]));
                     px_dict_set(d, slots[k0].as.obj->as.str.data, slots[k0 + 1]);
+                }
             }
             slots[in.a] = d;
+            break;
+        }
+        // DICTSET（M163 · 缺陷 169）：a=dict 槽，b=key 槽，c=val 槽 —— dict 推导式置键。
+        //   与 C 轨 `px_dict_set_checked` / 解释轨推导路径同一条真相（非字符串键 ⇒ R1002）。
+        case PXOP_DICTSET: {
+            px_dict_set_checked(slots[in.a], slots[in.b], slots[in.c]);
             break;
         }
         // NEWSTRUCT（B2）：a=dst，b=struct 元数据 idx（mod->structs），

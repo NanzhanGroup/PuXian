@@ -116,7 +116,12 @@ typedef struct {
 #define PXOP_CELLSET 59  // a=val 槽 s, b=cell 槽 s2   px_cell_set(slots[b], slots[a])
 #define PXOP_CELLNEW 60  // a=dst s, b=val 槽 s2   slots[a] = px_cell(slots[b])
 #define PXOP_MKCLO   61  // a=dst s, b=funcs 下标, c=捕获 cell 连续槽基址（个数 = 被调 nup）
-#define PXM_MAX      62
+// M163（第 49 轮 · 缺陷 169）：**dict 推导式置键** —— 取代原先的「CALLM set 方法」，
+//   语义 = px_dict_set_checked：非字符串键 ⇒ R1002 `字典键必须是字符串，实际是 <t>`
+//   （解释轨 iexpr 推导路径的词条；修前 VM 走 set 方法报「方法 set 参数 1 需要 string」、
+//   C 轨 `if (_k.type == PX_STR)` **静默丢弃**）。顺带省掉一次方法查找 + 一次 CALL。
+#define PXOP_DICTSET 62  // a=dict 槽, b=key 槽, c=val 槽（结果丢弃；px_dict_set_checked）
+#define PXM_MAX      63
 
 // ==================== 常量子（K 池） ====================
 // 发射器按 kind 生成静态项；LOADK 时物化为 LXValue（str 需 strdup/常驻，

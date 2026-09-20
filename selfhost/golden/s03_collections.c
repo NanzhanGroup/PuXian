@@ -25,7 +25,7 @@ static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     px_srcline(9);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_call(px_get_global("reversed"), (LXValue[]){_v1}, 1)}, 1));
     px_srcline(10);
-    _v2 = ({ LXValue _d = px_dict(); { LXValue _k = px_str("a"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_int(1LL)); } { LXValue _k = px_str("b"); if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, px_int(2LL)); } _d; });
+    _v2 = ({ LXValue _d = px_dict(); { LXValue _k = px_str("a"); LXValue _v = px_int(1LL); px_dict_set_checked(_d, _k, _v); } { LXValue _k = px_str("b"); LXValue _v = px_int(2LL); px_dict_set_checked(_d, _k, _v); } _d; });
     px_srcline(11);
     px_index_set(_v2, px_str("c"), px_int(3LL));
     px_srcline(12);

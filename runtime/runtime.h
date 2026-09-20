@@ -279,6 +279,10 @@ LXValue px_field(LXValue obj, const char* name);
 void px_field_set(LXValue obj, const char* name, LXValue val);
 void px_list_push(LXValue list, LXValue val);
 void px_dict_set(LXValue dict, const char* key, LXValue val);
+// M163（第 49 轮 · 缺陷 168/169）：字典**构造**（字面量 / 推导式）的非字符串键 ——
+//   从编译两轨的「静默丢弃」改为 R1002（解释轨一直如此），文案与解释轨逐字统一：
+//   `字典键必须是字符串，实际是 <类型名>`。
+void px_dict_set_checked(LXValue dict, LXValue k, LXValue v);
 LXValue px_dict_get(LXValue dict, const char* key);
 bool px_dict_has(LXValue dict, const char* key);
 int px_len(LXValue v);

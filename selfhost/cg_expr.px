@@ -191,7 +191,11 @@ def cg_gen_expr(expr):
         while i < len(entries):
             let ke = cg_gen_expr(entries[i][0])
             let ve = cg_gen_expr(entries[i][1])
-            s += "{ LXValue _k = " + ke + "; if (_k.type == PX_STR) px_dict_set(_d, _k.as.obj->as.str.data, " + ve + "); } "
+            # M163（第 49 轮 · 缺陷 168）：非字符串键**不再静默丢弃** —— 走
+            #   `px_dict_set_checked`（非字符串 ⇒ R1002「字典键必须是字符串，实际是 <t>」，与解释轨同词条）。
+            #   保留「先求键、再求值、后置入」的**显式序列**（原 if 写法就是显式序列；
+            #   C 的函数实参求值顺序未定义 ⇒ 不把两式并进一个调用）。
+            s += "{ LXValue _k = " + ke + "; LXValue _v = " + ve + "; px_dict_set_checked(_d, _k, _v); } "
             i += 1
         s += "_d; })"
         return s
@@ -427,7 +431,7 @@ def cg_gen_expr(expr):
         if expr[4] != null:
             cond_c = cg_gen_expr(expr[4])
         cg_comp_restore(r["saved_all"])
-        let put = "{ LXValue _k = " + ke + "; LXValue _v = " + ve + "; if (_k.type == PX_STR) px_dict_set(" + rv + ", _k.as.obj->as.str.data, _v); } "
+        let put = "{ LXValue _k = " + ke + "; LXValue _v = " + ve + "; px_dict_set_checked(" + rv + ", _k, _v); } "
         var body = cg_comp_body(r, cond_c, put)
         return "({ LXValue " + rv + " = px_dict(); LXValue " + r["ivs"][0] + " = " + r["its"][0] + "; " + body + " " + rv + "; })"
     if ty == "Closure":
