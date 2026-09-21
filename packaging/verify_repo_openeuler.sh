@@ -77,12 +77,16 @@ echo "== [verify-oe] 入库件静态性自检（ldd；动态件会在老 glibc �
 bad=0
 for b in /usr/share/puxian/bootstrap/*; do
   [ -f "$b" ] || continue
-  if ldd "$b" 2>&1 | grep -q "not a dynamic executable"; then
-    echo "   ✅ $(basename "$b")：静态"
-  else
-    echo "   ❌ $(basename "$b")：**动态件** —— $(ldd "$b" 2>&1 | head -3 | tr '\n' ' ')"
-    bad=$((bad+1))
-  fi
+  # ⚠️ **不要写成 `ldd … | grep -q …`**：`ldd` 对静态件的退出码是 **1**（"not a dynamic
+  #   executable" 走 stderr），在 `set -o pipefail` 下整条管道非零 ⇒ 会把**静态件误判为动态件**
+  #   （2026-09-21 el7 终验实测：14 件全红，而每行的 ldd 原文恰好是"not a dynamic executable"）。
+  #   ⇒ 先取输出、再判内容（与退出码解耦）。
+  _ldd_out="$(ldd "$b" 2>&1 || true)"
+  case "$_ldd_out" in
+    *"not a dynamic executable"*) echo "   ✅ $(basename "$b")：静态" ;;
+    *) echo "   ❌ $(basename "$b")：**动态件** —— $(printf '%s' "$_ldd_out" | head -3 | tr '\n' ' ')"
+       bad=$((bad+1)) ;;
+  esac
 done
 [ "$bad" = 0 ] || { echo "❌ 有 $bad 个动态件（分发可移植性口径：入库件必须全静态）"; exit 1; }
 
