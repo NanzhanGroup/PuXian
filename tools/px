@@ -283,7 +283,11 @@ rt_cache_compile() {
     #   本预检在编译 runtime 前问一次 `$cc` 有没有这个能力；没有就给出**可执行的替代**
     #   （el7：devtoolset / 指定 CC），而不是让 20 个 .c 依次报同一个头文件缺失。
     #   与「静态 libc 预检」（链接前）同族：**缺件要说清缺什么、怎么补**。
-    if [ "${_PX_C11ATOMIC_OK:-}" != 1 ]; then
+    # 作用面：**只对宿主默认编译器**预检（`--cc`/`--target` 的交叉工具链不预检）——
+    #   本预检服务的是"宿主 gcc 太老"（el7）这类场景；musl/zig 交叉链的 `<stdatomic.h>`
+    #   来自各自工具链、且其自举链已被 CI 的 M159 交叉档覆盖（编译 runtime 全量）。
+    #   缩小作用面 = 降低"预检自己成为交叉路径新变量"的风险（**非**修 bug：无证据表明交叉受影响）。
+    if [ "$cc" = "${PX_CC:-gcc}" ] && [ "${_PX_C11ATOMIC_OK:-}" != 1 ]; then
         local _pc="${TMPDIR:-/tmp}/.px_c11probe.c" _po="${TMPDIR:-/tmp}/.px_c11probe.o"
         printf '#include <stdatomic.h>\nint main(void){_Atomic int x=0;__atomic_store_n(&x,1,__ATOMIC_SEQ_CST);return (int)__atomic_load_n(&x,__ATOMIC_SEQ_CST);}\n' > "$_pc"
         if $cc -c "$_pc" -o "$_po" >/dev/null 2>&1; then
