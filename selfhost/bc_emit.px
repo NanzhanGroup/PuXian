@@ -32,6 +32,10 @@
 # ============================================================
 # ---------- 模块级当前状态（bc_emit_program 设置；helper 引用） ----------
 var g_bcm = null  # 当前 BCModule dict
+# M169（缺陷 181）：**模块绑定名集合**（模块体，含嵌套块；不进 def / 闭包体）——
+#   「帧内赋值式绑定」与「帧内 hoist 预扫描」的判定用它，而不用惰性登记的
+#   `bc_is_global`（后者顺序敏感：任何一次读未知名都会把它变成全局）。
+var g_topnames = []
 # ---------- 空 dict/列表工具（PuXian：{} 是空块=null） ----------
 def bc_new_dict():
     let d = {"_": 0}
@@ -279,6 +283,10 @@ def bc_closure_free(params, body):
 def bc_lambda_hoist(body_expr, out):
     if type(body_expr) == "list" and len(body_expr) > 0 and body_expr[0] == "Block":
         bc_collect_hoist(body_expr[1], out)
+# M169（缺陷 181）：lambda 体的**声明式**绑定集（与 hoist 同口径）
+def bc_lambda_decl(body_expr, out):
+    if type(body_expr) == "list" and len(body_expr) > 0 and body_expr[0] == "Block":
+        bc_collect_decl_vars(body_expr[1], out)
 # M160：本帧**装箱** = 帧内闭包/函数体内 def 的自由变量 ∩ 本帧绑定（参数 ∪ hoist 局部）。
 #   必须在发射任何读/写之前调用（否则先发的读取点按普通值生成、而槽改存 cell ⇒ 语义错）。
 #   ⚠️ 已是 cell 的名字（本帧 upnames —— 外层传进来的同一个 cell）**不得再装箱**：
@@ -351,6 +359,49 @@ def bc_collect_hoist(stmts, out):
             let cn = rust_unescape(st[1])
             if not contains(out, cn):
                 out.append(cn)
+        i += 1
+# M169（缺陷 181）：**声明式**绑定收集（VarDecl / 嵌套 def / for 循环变量 / chan）——
+#   与 bc_collect_hoist（含 Assign 目标）的区别 = 帧内绑定归属：
+#     · 声明式 ⇒ 一律占**帧槽**（遮蔽同名模块全局；实测 m167 门在 VM 轨回归的根因就是
+#       「函数内 `for k, v in xs` 的 k/v 与模块绑定同名 ⇒ 被跳过 ⇒ 不占槽 ⇒ 闭包捕获时
+#       该槽还不是 cell ⇒ 闭包体 CELLGET(裸 int) ⇒ R1002 此类型不支持索引」）
+#     · 赋值式 ⇒ 命中模块绑定则写模块全局（见 bc_lambda_hoist / 函数顶 hoist 的调用点）
+#   递归口径与 bc_collect_hoist 完全一致（if/for/while 体内不新建作用域；止于 def 体之外）。
+def bc_collect_decl_vars(stmts, out):
+    var i = 0
+    while i < len(stmts):
+        let st = stmts[i]
+        let ty = st[0]
+        if ty == "VarDecl":
+            let dn = rust_unescape(st[2])
+            if not contains(out, dn):
+                out.append(dn)
+        elif ty == "FuncDef":
+            let fn2 = rust_unescape(st[1])
+            if not contains(out, fn2):
+                out.append(fn2)
+        elif ty == "ChanDecl":
+            let cn2 = rust_unescape(st[1])
+            if not contains(out, cn2):
+                out.append(cn2)
+        elif ty == "If":
+            let brs = st[1]
+            var bi = 0
+            while bi < len(brs):
+                bc_collect_decl_vars(brs[bi][1], out)
+                bi += 1
+            if st[2] != null:
+                bc_collect_decl_vars(st[2], out)
+        elif ty == "For":
+            let lvs = bc_for_names(st[1])
+            var li = 0
+            while li < len(lvs):
+                if not contains(out, lvs[li]):
+                    out.append(lvs[li])
+                li += 1
+            bc_collect_decl_vars(st[3], out)
+        elif ty == "While":
+            bc_collect_decl_vars(st[2], out)
         i += 1
 # 发 null 常量到 dst 槽（LOADK nullK；K 去重）
 def bc_emit_null(func, dst):
@@ -945,10 +996,21 @@ def bc_emit_push_lambda(param_names, body_expr, upnames):
     #   这一类看不见 ⇒ 漏装箱 ⇒ 内层读到裸值（实测「此类型不支持索引: function」）。
     let lhoist = []
     bc_lambda_hoist(body_expr, lhoist)
+    # M169（缺陷 181）：lambda 体的**声明式**绑定集（同上：声明式一律占槽）
+    let ldecl = []
+    bc_lambda_decl(body_expr, ldecl)
     var lhi = 0
     while lhi < len(lhoist):
         let lnm = lhoist[lhi]
-        if not func["smap"].has(lnm) and not bc_is_global(lnm):
+        # M169（缺陷 181）：判据用**确定性**的模块绑定集（g_topnames）而不是
+        #   `bc_is_global` —— 后者是**惰性登记**的：任何一次「读未知名」都会把它变成
+        #   「全局」（含其它帧里的读）⇒ 结论依赖**发射顺序**。实测（缺陷 184 取证）：
+        #   `let f = fn (): x = 5; return x` + `def g(): return x` ⇒ 因 `g` 先发射把 x
+        #   登记成全局 ⇒ 闭包里的 `x = 5` 变成**全局写**（VM 轨 r2=5；解释轨按帧局部 ⇒
+        #   `未定义变量: 'x'`）。
+        #   ⚠️ 只对**赋值式**绑定跳过；声明式（var/let/for/嵌套 def）一律占槽，否则
+        #   闭包捕获到的是未装箱的槽（m167 门 VM 轨回归根因）。
+        if not func["smap"].has(lnm) and not (not contains(ldecl, lnm) and contains(g_topnames, lnm)):
             bc_slot(func, lnm)
         lhi += 1
     # M160：本帧自己的装箱（本帧里还有闭包/函数体内 def 时，本帧局部也要是 cell）
@@ -1396,8 +1458,9 @@ def bc_emit_stmt_inner(stmt, func):
                     return
                 bc_assign_local_slot(func["smap"][name], op, rhs, func)
                 return
-            if not func["is_top"] and not bc_is_global(name):
+            if not func["is_top"] and not contains(g_topnames, name):
                 # 函数内未声明名 → hoist 预提升为局部（Python 语义，对齐 codegen）
+                #   M169（缺陷 181）：判据用确定性模块绑定集（见 bc_lambda_hoist 处说明）
                 let s = bc_slot(func, name)
                 bc_assign_local_slot(s, op, rhs, func)
                 return
@@ -1521,10 +1584,20 @@ def bc_emit_stmt_inner(stmt, func):
         #   注意 FuncDef 的 stmt[4] 是**语句列表**（Closure 的 expr[3] 是 Block **表达式**）
         #   ⇒ 包一层 Block 复用同一条发射路径。
         let dname = rust_unescape(stmt[1])
+        if func["is_top"]:
+            # M169（缺陷 181）：**模块体（含嵌套块）里的 def = 模块级全局绑定**。
+            #   修前占顶层帧局部槽 ⇒ ①（本帧内可用，但）函数体里引用它 = 「未定义变量」
+            #   （实测 `if true: def f(): 41` + `def g(): return f()+1` ⇒ 解释轨 42、
+            #    VM 轨「未定义变量: f」）；与顶层 `var` 同一条真相 ⇒ 走 SETG。
+            let dt = bc_tmp(func)
+            bc_emit_closure(stmt[2], ["Block", stmt[4]], dt, func)
+            let gd = bc_g_add(g_bcm["globals"], dname)
+            bc_emit_inst(func, "SETG", gd, dt, 0)
+            return
         let ds = bc_slot(func, dname)
-        let dt = bc_tmp(func)
-        bc_emit_closure(stmt[2], ["Block", stmt[4]], dt, func)
-        bc_store_var(func, dname, ds, dt)
+        let dt2 = bc_tmp(func)
+        bc_emit_closure(stmt[2], ["Block", stmt[4]], dt2, func)
+        bc_store_var(func, dname, ds, dt2)
         return
     panic("bc_emit_stmt 未实现: " + str(stmt))
 # ---------- B5：select 语句（顺序 try_recv + else / 无 else 无限重试） ----------
@@ -1703,12 +1776,23 @@ def bc_emit_for(stmt, func):
     let names = bc_for_names(stmt[1])
     let iter = stmt[2]
     let body = stmt[3]
+    # M169（第 54 轮 · 缺陷 181）：**模块体（顶层）循环变量 = 模块级全局** ——
+    #   与顶层 `var` 同一条真相（解释轨顶层是单一 env；VM 轨 VarDecl 的 `is_top`
+    #   分支本就是 SETG）。修前顶层循环变量占**顶层帧局部槽**，实测两处分叉：
+    #     · `for i in [7,8]: 0` 后 `def f(): return i` → VM「未定义变量: i」（解释轨 8）
+    #     · 顶层闭包捕获它时该槽不是 cell ⇒ 闭包读到裸值 ⇒「R1002 此类型不支持索引: int」
+    #       （解释轨按**引用**捕获：20/20）
+    #   元素经临时槽写入全局表（SETG）；**仍按原顺序消费一个槽位**（bc_tmp 取代 bc_slot）
+    #   ⇒ 后续槽编号与改前一致，重定基差异只落在本族的指令上（可判定）。
+    let top = func["is_top"]
     # M167：变量槽**先于**迭代临时槽分配（保证单变量发射与既有 golden 逐字节一致）
     let vss = []
     var ni = 0
     while ni < len(names):
         var vs = -1
-        if func["smap"].has(names[ni]):
+        if top:
+            vs = -1
+        elif func["smap"].has(names[ni]):
             vs = func["smap"][names[ni]]
         else:
             vs = bc_slot(func, names[ni])
@@ -1747,7 +1831,13 @@ def bc_emit_for(stmt, func):
         #   值为字符串时 `px_index("z",0)` 恰好返回 "z" ⇒ **静默碰对**，更难发现）。
         #   未装箱的名字保持**直写**（发射文本与既有 golden 逐字节一致）。
         #   同口径见 bc_emit_default_fill 的「不得直写槽 pi」注释。
-        if bc_cell_has(func, names[0]):
+        if top:
+            # M169（缺陷 181）：模块体 ⇒ 循环变量写**全局表**（元素先入临时槽）
+            let t1 = bc_tmp(func)
+            bc_emit_inst(func, "ITERAT", t1, its, ctr)
+            let g1 = bc_g_add(g_bcm["globals"], names[0])
+            bc_emit_inst(func, "SETG", g1, t1, 0)
+        elif bc_cell_has(func, names[0]):
             let t1 = bc_tmp(func)
             bc_emit_inst(func, "ITERAT", t1, its, ctr)
             bc_store_var(func, names[0], vss[0], t1)
@@ -1763,7 +1853,13 @@ def bc_emit_for(stmt, func):
         while fi < len(names):
             let iv = bc_tmp(func)
             bc_emit_int(func, iv, fi)
-            if bc_cell_has(func, names[fi]):
+            if top:
+                # M169（缺陷 181）：模块体 ⇒ 每个解包变量写**全局表**
+                let ft = bc_tmp(func)
+                bc_emit_inst(func, "INDEX", ft, item, iv)
+                let gf = bc_g_add(g_bcm["globals"], names[fi])
+                bc_emit_inst(func, "SETG", gf, ft, 0)
+            elif bc_cell_has(func, names[fi]):
                 # M167（缺陷 182）：同上 —— 装箱变量走 CELLSET，不直写槽
                 let ft = bc_tmp(func)
                 bc_emit_inst(func, "INDEX", ft, item, iv)
@@ -1843,13 +1939,20 @@ def bc_emit_func_body(f, name):
     # hoist 局部预占（跳过已登记名；A1 不处理嵌套 def/For）
     let hoist = []
     bc_collect_hoist(f[4], hoist)
+    # M169（缺陷 181）：本帧**声明式**绑定集 —— 与「赋值式」区分（见下）
+    let decl_names = []
+    bc_collect_decl_vars(f[4], decl_names)
     var hi = 0
     while hi < len(hoist):
         let nm = hoist[hi]
         if func["smap"].has(nm):
             hi += 1
             continue
-        if bc_is_global(nm):
+        # M169（缺陷 181）：跳过判据改用**确定性**的模块绑定集 g_topnames
+        #   （`bc_is_global` 惰性登记、顺序敏感；见 bc_lambda_hoist 处说明），
+        #   且**只对「赋值式」绑定生效** —— 声明式绑定（var/let/嵌套 def/for 变量）
+        #   一律占帧槽（遮蔽同名模块全局；否则闭包捕获时会拿到未装箱的槽 ⇒ m167 回归）。
+        if not contains(decl_names, nm) and contains(g_topnames, nm):
             hi += 1
             continue
         bc_slot(func, nm)
@@ -1980,6 +2083,13 @@ def bc_emit_program(prog):
             if tgt[0] == "Var":
                 bc_g_add(m["globals"], rust_unescape(tgt[1]))
         i += 1
+    # M169（缺陷 181）：**模块绑定名集合** —— 模块体（含嵌套块）里所有绑定
+    #   （var/let/const、for 循环变量、嵌套 def、chan）都在此表；不进 def / 闭包体
+    #   （`bc_collect_hoist` 天然止于 def 之外 ⇒ 帧内绑定归帧）。
+    #   用途：帧内「赋值式绑定」（`x = …` 无声明）命中模块绑定 ⇒ 写模块全局；
+    #   否则提升为帧局部（与 C 轨 cg_topnames 同源、同一条真相）。
+    g_topnames = []
+    bc_collect_hoist(items, g_topnames)
     # 第二遍：funcs —— impl 方法（"Type.method" 字典序，对齐 cg_generate 先于
     #   顶层 def）+ 顶层 FuncDef（items 序）
     i = 0

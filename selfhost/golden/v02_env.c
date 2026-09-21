@@ -327,13 +327,13 @@ int main(int argc, char** argv) {
     px_srcline(98);
     px_set_global("item_names", px_list_n((LXValue[]){}, 0));
     px_srcline(99);
-    LXValue _t39 = px_get_global("items");
-    int _il2 = (int)px_len(_t39);
-    for (int _t40 = 0; _t40 < _il2; _t40++) {
-        px_iter_ck(_t39, _il2);
-        LXValue _v41 = px_iter_at(_t39, px_int(_t40));
+    LXValue _t52 = px_get_global("items");
+    int _il2 = (int)px_len(_t52);
+    for (int _t53 = 0; _t53 < _il2; _t53++) {
+        px_iter_ck(_t52, _il2);
+        px_set_global("it", px_iter_at(_t52, px_int(_t53)));
         px_srcline(100);
-        (void)(px_method(px_get_global("item_names"), "append", (LXValue[]){px_index(_v41, px_int(0LL))}, 1));
+        (void)(px_method(px_get_global("item_names"), "append", (LXValue[]){px_index(px_get_global("it"), px_int(0LL))}, 1));
     }
     px_srcline(101);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("items 含 x"), px_call(px_get_global("contains"), (LXValue[]){px_get_global("item_names"), px_str("x")}, 2)}, 2));

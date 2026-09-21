@@ -4,18 +4,18 @@
 
 static LXValue fn_closure_1(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    LXValue _v133 = (nargs > 0) ? args[0] : px_null();
-    LXValue px_err_134_val = px_null();
-    int px_err_134_proped = 0;
-    return _v133;
-px_err_134:
-    if (px_err_134_proped) return px_err_134_val;
+    LXValue _v138 = (nargs > 0) ? args[0] : px_null();
+    LXValue px_err_139_val = px_null();
+    int px_err_139_proped = 0;
+    return _v138;
+px_err_139:
+    if (px_err_139_proped) return px_err_139_val;
     return px_null();
 }
 static LXValue fn_closure_2(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    LXValue _v135 = (nargs > 0) ? args[0] : px_null();
-    return ({ LXValue _blk = px_null(); _blk = px_mul(_v135, px_int(2LL)); _blk; });
+    LXValue _v140 = (nargs > 0) ? args[0] : px_null();
+    return ({ LXValue _blk = px_null(); _blk = px_mul(_v140, px_int(2LL)); _blk; });
 }
 
 static LXValue fn_v_type(LXValue* args, int nargs, void* ctx) {
@@ -848,11 +848,11 @@ int main(int argc, char** argv) {
     px_srcline(39);
     px_set_global("f_inf", px_get_global("bigv"));
     px_srcline(40);
-    LXValue _t130 = px_call(px_get_global("range"), (LXValue[]){px_int(40LL)}, 1);
-    int _il9 = (int)px_len(_t130);
-    for (int _t131 = 0; _t131 < _il9; _t131++) {
-        px_iter_ck(_t130, _il9);
-        LXValue _v132 = px_iter_at(_t130, px_int(_t131));
+    LXValue _t134 = px_call(px_get_global("range"), (LXValue[]){px_int(40LL)}, 1);
+    int _il9 = (int)px_len(_t134);
+    for (int _t135 = 0; _t135 < _il9; _t135++) {
+        px_iter_ck(_t134, _il9);
+        px_set_global("i", px_iter_at(_t134, px_int(_t135)));
         px_srcline(41);
         px_set_global("f_inf", px_mul(px_get_global("f_inf"), px_get_global("bigv")));
     }
@@ -1089,21 +1089,21 @@ int main(int argc, char** argv) {
     px_srcline(212);
     (void)(px_call(px_get_global("check"), (LXValue[]){px_str("div by zero int ok（IEEE，不报错）"), px_index(px_get_global("rz"), px_str("ok"))}, 2));
     px_srcline(213);
-    (void)(px_call(px_get_global("check"), (LXValue[]){px_str("div by zero int → inf"), ({ LXValue _t136 = px_index(px_get_global("rz"), px_str("ok")); px_is_truthy(_t136) ? px_eq(px_call(px_get_global("str"), (LXValue[]){px_index(px_get_global("rz"), px_str("v"))}, 1), px_str("inf")) : _t136; })}, 2));
+    (void)(px_call(px_get_global("check"), (LXValue[]){px_str("div by zero int → inf"), ({ LXValue _t144 = px_index(px_get_global("rz"), px_str("ok")); px_is_truthy(_t144) ? px_eq(px_call(px_get_global("str"), (LXValue[]){px_index(px_get_global("rz"), px_str("v"))}, 1), px_str("inf")) : _t144; })}, 2));
     px_srcline(214);
     px_set_global("rzn", px_call(px_get_global("v_arith"), (LXValue[]){px_str("/"), px_neg(px_int(7LL)), px_int(0LL)}, 3));
     px_srcline(215);
-    (void)(px_call(px_get_global("check"), (LXValue[]){px_str("div by zero int 负 → -inf"), ({ LXValue _t137 = px_index(px_get_global("rzn"), px_str("ok")); px_is_truthy(_t137) ? px_eq(px_call(px_get_global("str"), (LXValue[]){px_index(px_get_global("rzn"), px_str("v"))}, 1), px_str("-inf")) : _t137; })}, 2));
+    (void)(px_call(px_get_global("check"), (LXValue[]){px_str("div by zero int 负 → -inf"), ({ LXValue _t146 = px_index(px_get_global("rzn"), px_str("ok")); px_is_truthy(_t146) ? px_eq(px_call(px_get_global("str"), (LXValue[]){px_index(px_get_global("rzn"), px_str("v"))}, 1), px_str("-inf")) : _t146; })}, 2));
     px_srcline(216);
     px_set_global("rzf", px_call(px_get_global("v_arith"), (LXValue[]){px_str("/"), px_float(7), px_float(0)}, 3));
     px_srcline(217);
-    (void)(px_call(px_get_global("check"), (LXValue[]){px_str("div by zero float → inf"), ({ LXValue _t138 = px_index(px_get_global("rzf"), px_str("ok")); px_is_truthy(_t138) ? px_eq(px_call(px_get_global("str"), (LXValue[]){px_index(px_get_global("rzf"), px_str("v"))}, 1), px_str("inf")) : _t138; })}, 2));
+    (void)(px_call(px_get_global("check"), (LXValue[]){px_str("div by zero float → inf"), ({ LXValue _t148 = px_index(px_get_global("rzf"), px_str("ok")); px_is_truthy(_t148) ? px_eq(px_call(px_get_global("str"), (LXValue[]){px_index(px_get_global("rzf"), px_str("v"))}, 1), px_str("inf")) : _t148; })}, 2));
     px_srcline(218);
     px_set_global("rzz", px_call(px_get_global("v_arith"), (LXValue[]){px_str("/"), px_int(0LL), px_int(0LL)}, 3));
     px_srcline(219);
-    (void)(px_call(px_get_global("check"), (LXValue[]){px_str("0/0 → nan"), ({ LXValue _t139 = px_index(px_get_global("rzz"), px_str("ok")); px_is_truthy(_t139) ? px_eq(px_call(px_get_global("str"), (LXValue[]){px_index(px_get_global("rzz"), px_str("v"))}, 1), px_str("nan")) : _t139; })}, 2));
+    (void)(px_call(px_get_global("check"), (LXValue[]){px_str("0/0 → nan"), ({ LXValue _t150 = px_index(px_get_global("rzz"), px_str("ok")); px_is_truthy(_t150) ? px_eq(px_call(px_get_global("str"), (LXValue[]){px_index(px_get_global("rzz"), px_str("v"))}, 1), px_str("nan")) : _t150; })}, 2));
     px_srcline(220);
-    (void)(px_call(px_get_global("check"), (LXValue[]){px_str("0/0 是 NaN（自反为假）"), ({ LXValue _t140 = px_index(px_get_global("rzz"), px_str("ok")); px_is_truthy(_t140) ? px_ne(px_index(px_get_global("rzz"), px_str("v")), px_index(px_get_global("rzz"), px_str("v"))) : _t140; })}, 2));
+    (void)(px_call(px_get_global("check"), (LXValue[]){px_str("0/0 是 NaN（自反为假）"), ({ LXValue _t151 = px_index(px_get_global("rzz"), px_str("ok")); px_is_truthy(_t151) ? px_ne(px_index(px_get_global("rzz"), px_str("v")), px_index(px_get_global("rzz"), px_str("v"))) : _t151; })}, 2));
     px_srcline(221);
     (void)(px_call(px_get_global("check_arith_err"), (LXValue[]){px_str("str*int 不支持"), px_str("*"), px_str("ab"), px_int(3LL)}, 4));
     px_srcline(222);
@@ -1121,11 +1121,11 @@ int main(int argc, char** argv) {
     px_srcline(230);
     px_set_global("r0", px_call(px_get_global("v_arith"), (LXValue[]){px_str("//"), px_int(7LL), px_int(0LL)}, 3));
     px_srcline(231);
-    (void)(px_call(px_get_global("check"), (LXValue[]){px_str("// 除零错误消息"), ({ LXValue _t141 = px_not(px_index(px_get_global("r0"), px_str("ok"))); px_is_truthy(_t141) ? px_eq(px_index(px_get_global("r0"), px_str("err")), px_str("除零错误")) : _t141; })}, 2));
+    (void)(px_call(px_get_global("check"), (LXValue[]){px_str("// 除零错误消息"), ({ LXValue _t153 = px_not(px_index(px_get_global("r0"), px_str("ok"))); px_is_truthy(_t153) ? px_eq(px_index(px_get_global("r0"), px_str("err")), px_str("除零错误")) : _t153; })}, 2));
     px_srcline(232);
     px_set_global("r1", px_call(px_get_global("v_arith"), (LXValue[]){px_str("+"), px_int(1LL), px_str("a")}, 3));
     px_srcline(233);
-    (void)(px_call(px_get_global("check"), (LXValue[]){px_str("+ 不支持消息"), ({ LXValue _t142 = px_not(px_index(px_get_global("r1"), px_str("ok"))); px_is_truthy(_t142) ? px_eq(px_index(px_get_global("r1"), px_str("err")), px_str("+ 不支持: int + string")) : _t142; })}, 2));
+    (void)(px_call(px_get_global("check"), (LXValue[]){px_str("+ 不支持消息"), ({ LXValue _t155 = px_not(px_index(px_get_global("r1"), px_str("ok"))); px_is_truthy(_t155) ? px_eq(px_index(px_get_global("r1"), px_str("err")), px_str("+ 不支持: int + string")) : _t155; })}, 2));
     px_srcline(236);
     (void)(px_call(px_get_global("print"), (LXValue[]){px_str("== v_truthy 真值 ==")}, 1));
     px_srcline(241);

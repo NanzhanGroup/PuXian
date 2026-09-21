@@ -131,6 +131,9 @@ def cg_gen_closure(params, body, dispname):
     let saved_vars = cg_dict_copy(cg_vars)
     let saved_types = cg_dict_copy(cg_var_types)
     let saved_cells = cg_dict_copy(cg_cells)
+    # M169（缺陷 181）：闭包体不是模块体 —— 体里的绑定按帧（函数级）作用域处理
+    let saved_top2 = cg_topbody
+    cg_topbody = false
     cg_vars = cg_new_dict()
     cg_var_types = cg_new_dict()
     cg_cells = cg_new_dict()
@@ -144,6 +147,40 @@ def cg_gen_closure(params, body, dispname):
         let cv2 = cg_new_var(cn)
         cg_cells[cn] = 1
         fdef += "    LXValue " + cv2 + " = px_env_lookup(ctx, \"" + cn + "\");\n"
+    # M169（第 54 轮 · 缺陷 181 同族）：闭包体也是**帧** —— 与函数体同口径，先做
+    #   ① hoist 预扫描（体内局部提升到帧顶，声明处仅赋值）② 装箱预扫描（体内被
+    #   **内层闭包**捕获的局部必须先成为 cell）。VM 轨自 M160 起已有这两步
+    #   （bc_lambda_hoist + bc_box_frame），解释轨（env 链）天然等价；**C 轨此前两者都缺**：
+    #     · `let f = fn (): var s = 0` + `for i in [1,2,3]: s += i` + `return s + i`
+    #       ⇒ error: '_v4' undeclared（解释/VM 轨 = 9）
+    #     · `let f = fn (): var c = 0; let g = fn (): c = c + 1; return [g(), g(), c]`
+    #       ⇒ 内层闭包按**值**捕获 c ⇒ 写丢失（解释/VM 轨 [1, 2, 2]，C 轨 [1, 2, 0]）
+    #   两步都必须在**任何读/写发射之前**完成（M129 纪律：否则先生成的读取点按普通值发射）。
+    let body_free = []
+    cg_scan_closure_caps(body, body_free)
+    let lhoist = []
+    let ldeclonly = []
+    if type(body) == "list" and len(body) > 0 and body[0] == "Block":
+        cg_collect_hoist_vars(body[1], lhoist)
+        cg_collect_decl_vars(body[1], ldeclonly)
+    var ldecls = []
+    var li = 0
+    while li < len(lhoist):
+        let lnm = lhoist[li]
+        # 绑定归属（M169）：声明式 ⇒ 帧局部；赋值式 ⇒ 命中模块绑定则留作全局写
+        if cg_var_of(lnm) == null and not (not contains(ldeclonly, lnm) and contains(cg_topnames, lnm)):
+            let lv = cg_new_var(lnm)
+            if contains(body_free, lnm):
+                cg_cells[lnm] = 1
+            ldecls.append([lv, lnm])
+        li += 1
+    var ldi = 0
+    while ldi < len(ldecls):
+        if cg_cells.has(ldecls[ldi][1]):
+            fdef += "    LXValue " + ldecls[ldi][0] + " = px_cell(px_null());\n"
+        else:
+            fdef += "    LXValue " + ldecls[ldi][0] + " = px_null();\n"
+        ldi += 1
     let b = cg_gen_expr(body)
     fdef += "    return " + b + ";\n"
     fdef += "}\n"
@@ -151,6 +188,7 @@ def cg_gen_closure(params, body, dispname):
     cg_vars = saved_vars
     cg_var_types = saved_types
     cg_cells = saved_cells
+    cg_topbody = saved_top2
     # M129b（缺陷 54）：**无捕获**的闭包沿用 `px_func(..., NULL)` —— 不必建 env、
     #   不必让 ctx 指向自身 env 字段（省一次字段写 + 与既有 golden 形式一致：
     #   仅"确有捕获"的闭包才需要 px_func_env 携带 upvalue cell）。
