@@ -18,7 +18,7 @@
 # `px_ffi_register` + interp.px Mini 名册），**勿手改**；
 # 门 `selfhost/builtin_list_check.sh` 会重跑生成器比对（漂移即红）。
 # >>> BEGIN BUILTIN_NAMES >>>
-const BUILTIN_NAMES = split("Err Ok Some abs aes_decrypt aes_decrypt_bytes aes_decrypt_ecb aes_decrypt_ecb_bytes aes_encrypt aes_encrypt_bytes aes_encrypt_ecb aes_encrypt_ecb_bytes aes_gcm_decrypt aes_gcm_decrypt_bytes aes_gcm_encrypt aes_gcm_encrypt_bytes append_file append_file_opt args assert atan2 base64_decode base64_encode base64_to_bytes basic_auth bit_count bit_length bits_to_float32 bits_to_float64 bool bus_publish bus_subscribe bus_unsubscribe bytes bytes_base64 bytes_concat bytes_find bytes_get bytes_len bytes_set bytes_slice bytes_to_hex bytes_to_int bytes_to_str ceil chan chan_try_recv chmod chr clear_timer close contains cos cron ctx_clear ctx_get ctx_set dict dns_lookup dns_txt e ed25519_keygen ed25519_sign ed25519_verify ends_with env env_set env_unset event_bus exists exit exp f32_at f32_bytes f32_count fcntl fd_wait ffi_call file_size file_stat filter flatten float float32 float32_bits float64_bits flock floor flush fmt_float_dec fsync_file gc gen_next go_errno_string go_float_text gzip_compress gzip_uncompress h3_client_connect h3_client_open_stream h3_client_read_response h3_client_read_response_stream h3_client_send_request h3_client_send_request_stream h3_conn_close h3_conn_peer h3_conn_setup h3_conn_stats h3_frame h3_huff h3_qdec h3_qenc h3_qs_ack_inc h3_qs_ack_sec h3_qs_close h3_qs_de_len h3_qs_dec h3_qs_dec_ingest h3_qs_dec_ric h3_qs_en_len h3_qs_enc h3_qs_enc_ric h3_qs_ins h3_qs_krc h3_qs_open h3_qs_take_enc h3_serve_poll_stream h3_serve_read_request h3_serve_read_request_stream h3_serve_send_response h3_serve_send_response_stream h3_server_listen h3_server_listen_stateless h3_settings_dec h3_settings_enc h3_unhuff hex_to_bytes hex_to_int hmac_sha256 hostname http_conn_alive http_get http_get_stream http_post http_request http_serve http_serve_unix http_stream http_unix i64_at i64_bytes i64_count img_decode img_encode_jpeg img_scale input int int_to_bytes int_to_hex interp_bridge interp_bridge_install ioctl is_dir isatty join json_num_str json_parse json_parse_opt json_path json_path_set json_stringify json_stringify_go len list list_dir log log10 map max md5 md5_bytes mem_write middleware min mkdir mmap munmap mutex now now_ms now_ns now_sec now_us object_id onnx_info onnx_initializer onnx_initializer_names onnx_model_close onnx_model_open onnx_op_names onnx_run open ord os_capture os_errno os_exec os_file_sha256 os_kill os_pid os_popen os_random_hex os_remove_all os_rename os_self_path os_spawn os_spawn_capture os_wait panic pbkdf2_sha256 pi pow print print_err px_exec px_serve quic_0rtt_rejected quic_0rtt_save quic_accept quic_close quic_close_listener quic_conn_handshake_done quic_conn_local quic_conn_path quic_conn_resumed quic_connect quic_connect_0rtt quic_connect_resume quic_extend_max_streams quic_h3_listen quic_listen quic_migrate quic_open_stream quic_open_uni_stream quic_poll quic_recv quic_recv_stream quic_send quic_send_stream quic_session_save quic_set_max_client_streams quic_streams_left random random_int random_seed range rate_limit read read_at read_bytes read_file read_file_opt reduce regex_find regex_find_all regex_match regex_replace regex_search regex_split regex_valid remove replace reversed round route rsa_decrypt rsa_encrypt rsa_gen_key rsa_sign rsa_sign_pkcs1v15_sha256 rsa_verify rsa_verify_pkcs1v15_sha256 rwlock s3_delete s3_get s3_list s3_put sandbox_enter select_try session_del session_destroy session_get session_id session_open session_set set_interval set_timeout sha256 signal sin sleep sleep_us sorted spawn split sqlite_close sqlite_escape sqlite_exec sqlite_last_insert_rowid sqlite_open sqlite_query sqrt sse_close sse_connect sse_connect_ex sse_read sse_read_line sse_send sse_serve sse_start sse_write starts_with str sum tan tcp_accept tcp_close tcp_connect tcp_connect_ex tcp_listen tcp_opt tcp_recv tcp_recv_ex tcp_send tcp_send_ex time_format time_parse tls_close tls_connect tls_recv tls_send tls_server tls_upgrade to_lower to_upper trim truncate_file tty_config tuple type tz_local tz_offset udp_close udp_open udp_recv udp_send udp_serve unique unix_connect vhost write write_at write_bytes write_file write_file_opt ws_broadcast ws_close ws_connect ws_connect_auto ws_heartbeat ws_ping ws_recv ws_send ws_serve xml_build xml_escape xml_parse xml_unescape xxhash zip_pack zip_unpack zlib_compress zlib_crc32 zlib_uncompress", " ")  # noqa
+const BUILTIN_NAMES = split("Err GET Ok POST REQUEST SERVER Some abs aes_decrypt aes_decrypt_bytes aes_decrypt_ecb aes_decrypt_ecb_bytes aes_encrypt aes_encrypt_bytes aes_encrypt_ecb aes_encrypt_ecb_bytes aes_gcm_decrypt aes_gcm_decrypt_bytes aes_gcm_encrypt aes_gcm_encrypt_bytes append_file append_file_opt args assert atan2 base64_decode base64_encode base64_to_bytes basic_auth bit_count bit_length bits_to_float32 bits_to_float64 bool bus_publish bus_subscribe bus_unsubscribe bytes bytes_base64 bytes_concat bytes_find bytes_get bytes_len bytes_set bytes_slice bytes_to_hex bytes_to_int bytes_to_str ceil chan chan_try_recv chmod chr clear_timer close contains cos cron ctx_clear ctx_get ctx_set dict dns_lookup dns_txt e ed25519_keygen ed25519_sign ed25519_verify ends_with env env_set env_unset event_bus exists exit exp f32_at f32_bytes f32_count fcntl fd_wait ffi_call file_size file_stat filter flatten float float32 float32_bits float64_bits flock floor flush fmt_float_dec fsync_file gc gen_next go_errno_string go_float_text gzip_compress gzip_uncompress h3_client_connect h3_client_open_stream h3_client_read_response h3_client_read_response_stream h3_client_send_request h3_client_send_request_stream h3_conn_close h3_conn_peer h3_conn_setup h3_conn_stats h3_frame h3_huff h3_qdec h3_qenc h3_qs_ack_inc h3_qs_ack_sec h3_qs_close h3_qs_de_len h3_qs_dec h3_qs_dec_ingest h3_qs_dec_ric h3_qs_en_len h3_qs_enc h3_qs_enc_ric h3_qs_ins h3_qs_krc h3_qs_open h3_qs_take_enc h3_serve_poll_stream h3_serve_read_request h3_serve_read_request_stream h3_serve_send_response h3_serve_send_response_stream h3_server_listen h3_server_listen_stateless h3_settings_dec h3_settings_enc h3_unhuff hex_to_bytes hex_to_int hmac_sha256 hostname http_conn_alive http_get http_get_stream http_post http_request http_serve http_serve_unix http_stream http_unix i64_at i64_bytes i64_count img_decode img_encode_jpeg img_scale input int int_to_bytes int_to_hex interp_bridge interp_bridge_install ioctl is_dir isatty join json_num_str json_parse json_parse_opt json_path json_path_set json_stringify json_stringify_go len list list_dir log log10 map max md5 md5_bytes mem_write middleware min mkdir mmap munmap mutex now now_ms now_ns now_sec now_us object_id onnx_info onnx_initializer onnx_initializer_names onnx_model_close onnx_model_open onnx_op_names onnx_run open ord os_capture os_errno os_exec os_file_sha256 os_kill os_pid os_popen os_random_hex os_remove_all os_rename os_self_path os_spawn os_spawn_capture os_wait panic pbkdf2_sha256 pi pow print print_err px_exec px_serve quic_0rtt_rejected quic_0rtt_save quic_accept quic_close quic_close_listener quic_conn_handshake_done quic_conn_local quic_conn_path quic_conn_resumed quic_connect quic_connect_0rtt quic_connect_resume quic_extend_max_streams quic_h3_listen quic_listen quic_migrate quic_open_stream quic_open_uni_stream quic_poll quic_recv quic_recv_stream quic_send quic_send_stream quic_session_save quic_set_max_client_streams quic_streams_left random random_int random_seed range rate_limit read read_at read_bytes read_file read_file_opt reduce regex_find regex_find_all regex_match regex_replace regex_search regex_split regex_valid remove replace reversed round route rsa_decrypt rsa_encrypt rsa_gen_key rsa_sign rsa_sign_pkcs1v15_sha256 rsa_verify rsa_verify_pkcs1v15_sha256 rwlock s3_delete s3_get s3_list s3_put sandbox_enter select_try session_del session_destroy session_get session_id session_open session_set set_interval set_timeout sha256 signal sin sleep sleep_us sorted spawn split sqlite_close sqlite_escape sqlite_exec sqlite_last_insert_rowid sqlite_open sqlite_query sqrt sse_close sse_connect sse_connect_ex sse_read sse_read_line sse_send sse_serve sse_start sse_write starts_with str sum tan tcp_accept tcp_close tcp_connect tcp_connect_ex tcp_listen tcp_opt tcp_recv tcp_recv_ex tcp_send tcp_send_ex time_format time_parse tls_close tls_connect tls_recv tls_send tls_server tls_upgrade to_lower to_upper trim truncate_file tty_config tuple type tz_local tz_offset udp_close udp_open udp_recv udp_send udp_serve unique unix_connect vhost write write_at write_bytes write_file write_file_opt ws_broadcast ws_close ws_connect ws_connect_auto ws_heartbeat ws_ping ws_recv ws_send ws_serve xml_build xml_escape xml_parse xml_unescape xxhash zip_pack zip_unpack zlib_compress zlib_crc32 zlib_uncompress", " ")  # noqa
 # <<< END BUILTIN_NAMES <<<
 # ---------- 字符串工具 ----------
 # M167（第 53 轮）：For.var → 名字列表。
@@ -154,18 +154,117 @@ def lc_decl_names(sts):
             out.append(lc_unq(st[1]))
         i += 1
     return out
+# M171（缺陷 116）：作用域模型对齐 spec §17（帧归属规则）。
+#   ctx 由 3 项变 4 项：decl / used / known / **outer**。
+#   outer: name -> 拥有该绑定的**外层帧 ctx**（不是名字集合，是拥有者引用）——
+#   内层帧读写外层名时要把 used 标回拥有者，否则外层帧的 L001 会误报"未使用"。
 def lc_ctx_new(known):
-    return {"decl": lc_dnew(), "used": lc_dnew(), "known": known}
+    let c = {"decl": lc_dnew(), "used": lc_dnew(), "known": known}
+    c["outer"] = lc_dnew()
+    return c
+# 块不是帧（M169：帧内也没有块作用域，块内声明泄漏到帧）—— outer 原样继承。
 def lc_ctx_sub(ctx):
-    return {"decl": lc_dcopy(ctx["decl"]), "used": lc_dcopy(ctx["used"]), "known": ctx["known"]}
+    let c = {"decl": lc_dcopy(ctx["decl"]), "used": lc_dcopy(ctx["used"]), "known": ctx["known"]}
+    c["outer"] = ctx["outer"]
+    return c
 def lc_ctx_merge(par, sub):
     lc_dmerge(par["decl"], sub["decl"])
     lc_dmerge(par["used"], sub["used"])
+# M171：进入新帧（嵌套 def / lambda / impl 方法体）。内层帧可见：
+#   ① 外层帧的已声明名（own = parent）；② 外层帧自己更外层的可见名（近者优先）。
+def lc_ctx_frame(parent, known):
+    let c = lc_ctx_new(known)
+    let outer = c["outer"]
+    let ks = parent["decl"].keys()
+    var i = 0
+    while i < len(ks):
+        outer[ks[i]] = parent
+        i += 1
+    let oks = parent["outer"].keys()
+    var j = 0
+    while j < len(oks):
+        let n = oks[j]
+        if not outer.has(n):
+            outer[n] = parent["outer"][n]
+        j += 1
+    return c
 def lc_declare(ctx, name):
     lc_dset(ctx["decl"], name)
+# 名字在当前作用域链上是否有绑定（本帧 / 外层帧 / 模块级 known）。
+def lc_visible(ctx, name):
+    if lc_dhas(ctx["decl"], name):
+        return true
+    if lc_dhas(ctx["outer"], name):
+        return true
+    if lc_dhas(ctx["known"], name):
+        return true
+    return name == "self"
 def lc_use_var(ctx, name):
     if lc_dhas(ctx["decl"], name):
         lc_dset(ctx["used"], name)
+        return
+    if lc_dhas(ctx["outer"], name):
+        let owner = ctx["outer"][name]
+        lc_dset(owner["used"], name)
+# M171：赋值式绑定（无 var/let 声明）—— 命中可见绑定 ⇒ 写那个绑定；否则就地成为
+#   当前帧（模块体 ⇒ 模块级）的新绑定（spec §17 ④）。故左值裸名**不报 L002**。
+#   实测依据：`def f(): zz = 5; return zz` 三轨均输出 5（不是未定义变量）。
+def lc_bind_assign(ctx, name):
+    lc_use_var(ctx, name)
+    if not lc_visible(ctx, name):
+        lc_declare(ctx, name)
+# ---------- 帧内绑定收集（M171：帧顶 hoist） ----------
+# 编译器为帧内**声明式**绑定在函数顶预分配槽（M169 cg_collect_decl_vars /
+#   bc_collect_decl_vars），故同帧内「先用后声明」与「嵌套 def 互递归」都是合法
+#   程序（实测 q8：互相递归的嵌套 def 三轨都输出 1）。lint 因此必须在检查帧体
+#   之前把帧内声明式绑定收齐，否则会误报 L002。
+# 只沿块结构递归；**不进入** FuncDef / ImplDef / Closure（那是独立帧）。
+# sink 是「名字集合」dict（帧用 ctx["decl"]，模块体用 known）。
+def lc_collect_frame_decls(sts, sink):
+    var i = 0
+    while i < len(sts):
+        let st = sts[i]
+        let ty = st[0]
+        if ty == "VarDecl":
+            lc_dset(sink, lc_unq(st[2]))
+        elif ty == "ChanDecl" or ty == "TypeConst":
+            lc_dset(sink, lc_unq(st[1]))
+        elif ty == "FuncDef":
+            lc_dset(sink, lc_unq(st[1]))
+        elif ty == "Assign":
+            # 赋值式绑定（M171）：模块体/帧里都是绑定（spec §17 ④）
+            let tgt = st[1]
+            if tgt[0] == "Var":
+                lc_dset(sink, lc_unq(tgt[1]))
+        elif ty == "For":
+            let lvns = lc_for_names(st[1])
+            var k = 0
+            while k < len(lvns):
+                lc_dset(sink, lc_unq(lvns[k]))
+                k += 1
+            lc_collect_frame_decls(st[3], sink)
+        elif ty == "While":
+            lc_collect_frame_decls(st[2], sink)
+        elif ty == "If":
+            let branches = st[1]
+            var bi = 0
+            while bi < len(branches):
+                lc_collect_frame_decls(branches[bi][1], sink)
+                bi += 1
+            if st[2] != null:
+                lc_collect_frame_decls(st[2], sink)
+        elif ty == "Select":
+            let arms = st[1]
+            var ai = 0
+            while ai < len(arms):
+                let arm = arms[ai]
+                if arm[0] != null:
+                    lc_dset(sink, lc_unq(arm[0]))
+                lc_collect_frame_decls(arm[2], sink)
+                ai += 1
+            if st[2] != null:
+                lc_collect_frame_decls(st[2], sink)
+        i += 1
 # ---------- 语句位置（对齐 LAYOUT pos 字段） ----------
 def lc_stmt_pos(st):
     let ty = st[0]
@@ -309,7 +408,12 @@ def lc_check_stmt(ctx, st, diags):
         if v != null:
             lc_check_expr(ctx, v, diags)
     elif ty == "Assign":
-        lc_check_expr(ctx, st[1], diags)
+        # M171：左值裸名走「赋值式绑定」判定（命中可见绑定 / 否则就地声明），不报 L002
+        let tgt = st[1]
+        if tgt[0] == "Var":
+            lc_bind_assign(ctx, lc_unq(tgt[1]))
+        else:
+            lc_check_expr(ctx, tgt, diags)
         lc_check_expr(ctx, st[3], diags)
     elif ty == "ExprStmt":
         lc_check_expr(ctx, st[1], diags)
@@ -357,20 +461,22 @@ def lc_check_stmt(ctx, st, diags):
         if v != null:
             lc_check_expr(ctx, v, diags)
     elif ty == "FuncDef":
-        lc_check_nested_func(st, ctx["known"], diags)
-        lc_use_var(ctx, lc_unq(st[1]))
+        # M171：嵌套 def 的名字是**本帧的绑定**（原先从不声明 ⇒ 调用处全被误报 L002）
+        lc_declare(ctx, lc_unq(st[1]))
+        lc_check_nested_func(st, ctx, diags)
     elif ty == "ImplDef":
         let methods = st[3]
         var mi = 0
         while mi < len(methods):
             let m = methods[mi]
-            let sub = lc_ctx_new(ctx["known"])
+            let sub = lc_ctx_frame(ctx, ctx["known"])
             lc_declare(sub, "self")
             let params = m[2]
             var pi = 0
             while pi < len(params):
                 lc_declare(sub, lc_unq(params[pi][1]))
                 pi += 1
+            lc_collect_frame_decls(m[4], sub["decl"])
             lc_check_block(sub, m[4], diags)
             let mpos = lc_stmt_pos(m)
             lc_check_unused(sub, mpos, lc_unq(m[1]), diags)
@@ -404,15 +510,16 @@ def lc_check_stmt(ctx, st, diags):
             let sub = lc_ctx_sub(ctx)
             lc_check_block(sub, eb2, diags)
             lc_ctx_merge(ctx, sub)
-# 嵌套 def：独立上下文（参数 + body + unused + 空体）
-def lc_check_nested_func(st, known, diags):
+# 嵌套 def：新帧（可见外层帧绑定）+ 帧顶声明收集（hoist）+ unused + 空体
+def lc_check_nested_func(st, ctx, diags):
     let name = lc_unq(st[1])
-    let sub = lc_ctx_new(known)
+    let sub = lc_ctx_frame(ctx, ctx["known"])
     let params = st[2]
     var pi = 0
     while pi < len(params):
         lc_declare(sub, lc_unq(params[pi][1]))
         pi += 1
+    lc_collect_frame_decls(st[4], sub["decl"])
     lc_check_block(sub, st[4], diags)
     let fpos = lc_stmt_pos(st)
     lc_check_unused(sub, fpos, name, diags)
@@ -477,7 +584,7 @@ def lc_check_expr(ctx, e, diags):
     elif ty == "Var":
         let name = lc_unq(e[1])
         lc_use_var(ctx, name)
-        if not (lc_dhas(ctx["decl"], name) or lc_dhas(ctx["known"], name) or name == "self"):
+        if not lc_visible(ctx, name):
             lc_error(diags, "L002", e[2], "未定义变量: '" + name + "'")
     elif ty == "Field" or ty == "OptionalField":
         lc_check_expr(ctx, e[1], diags)
@@ -517,29 +624,36 @@ def lc_check_expr(ctx, e, diags):
         lc_check_expr(ctx, e[2], diags)
         lc_check_expr(ctx, e[3], diags)
     elif ty == "ListComp" or ty == "GenExp":
-        lc_check_expr(ctx, e[1], diags)
-        lc_check_comp_iterables(ctx, e[2], diags)
+        # M171：推导式变量必须在**整个推导式**内可见（结果表达式 + 各子句 iterable/cond）。
+        #   原实现只在 cond 的 sub 里声明 ⇒ 结果表达式（如 `[x*2 for x in nums if x>1]`
+        #   的 `x*2`）被误报 L002（实战：examples/fib.px、examples/m30_comp.px）。
         let sub = lc_ctx_sub(ctx)
         lc_decl_comp_vars(sub, e[2])
+        lc_check_expr(sub, e[1], diags)
+        lc_check_comp_iterables(sub, e[2], diags)
         if e[3] != null:
             lc_check_expr(sub, e[3], diags)
         lc_ctx_merge(ctx, sub)
     elif ty == "DictComp":
-        lc_check_expr(ctx, e[1], diags)
-        lc_check_expr(ctx, e[2], diags)
-        lc_check_comp_iterables(ctx, e[3], diags)
         let sub = lc_ctx_sub(ctx)
         lc_decl_comp_vars(sub, e[3])
+        lc_check_expr(sub, e[1], diags)
+        lc_check_expr(sub, e[2], diags)
+        lc_check_comp_iterables(sub, e[3], diags)
         if e[4] != null:
             lc_check_expr(sub, e[4], diags)
         lc_ctx_merge(ctx, sub)
     elif ty == "Closure":
-        let sub = lc_ctx_new(ctx["known"])
+        let sub = lc_ctx_frame(ctx, ctx["known"])
         let params = e[1]
         var i = 0
         while i < len(params):
             lc_declare(sub, lc_unq(params[i][1]))
             i += 1
+        # M171：lambda 体也是帧 ⇒ 帧顶声明 hoist（否则体内「先声明后用」的
+        #   普通写法会被误报 L002 —— 实测 VM/C 轨对同帧先读后声明给 null 而非报错）
+        if e[3][0] == "Block":
+            lc_collect_frame_decls(e[3][1], sub["decl"])
         let caps = e[4]
         var ci = 0
         while ci < len(caps):
@@ -599,19 +713,11 @@ def lc_check_program(items, src, known, diags):
         lc_dset(known, ks[ki])
         ki += 1
     lc_dset(known, "self")
-    # 3) 顶层全局变量名（let/var/const/chan）进 known：函数体可引用全局，
-    #    顶层语句顺序执行互见（避免 L002 对全局引用误报）
-    var i = 0
-    while i < len(items):
-        let st = items[i]
-        let ty = st[0]
-        if ty == "VarDecl":
-            lc_dset(known, lc_unq(st[2]))
-        elif ty == "ChanDecl":
-            lc_dset(known, lc_unq(st[1]))
-        elif ty == "TypeConst":
-            lc_dset(known, lc_unq(st[1]))
-        i += 1
+    # 3) 模块体绑定全量进 known（M171）：模块体（顶层，**含嵌套块**）没有块作用域
+    #    ⇒ 声明式与赋值式绑定都是模块级全局（spec §17 ①）。**必须在检查任何函数体
+    #    之前收齐**，否则「函数在前、绑定在后」会误报 L002。
+    #    （原实现只收顶层 VarDecl/ChanDecl/TypeConst —— 漏赋值式绑定 q7/p7 实测误报。）
+    lc_collect_frame_decls(items, known)
     # 4) 每个顶层函数体（独立 ctx）+ 顶层非定义语句（共享 topctx 顺序执行）
     let topctx = lc_ctx_new(known)
     var j = 0
@@ -626,6 +732,7 @@ def lc_check_program(items, src, known, diags):
             while pi < len(params):
                 lc_declare(ctx, lc_unq(params[pi][1]))
                 pi += 1
+            lc_collect_frame_decls(st[4], ctx["decl"])
             lc_check_block(ctx, st[4], diags)
             let fpos = lc_stmt_pos(st)
             lc_check_unused(ctx, fpos, name, diags)

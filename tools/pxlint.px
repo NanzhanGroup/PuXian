@@ -83,7 +83,41 @@ def lx_mod_candidates(module, base):
     while si2 < len(module):
         p3 += "/" + lc_unq(module[si2])
         si2 += 1
-    return [p3 + ".px", p3 + "/mod.px"]
+    let out3 = [p3 + ".px", p3 + "/mod.px"]
+    let mc = lx_modules_cands(module, base)
+    var mi = 0
+    while mi < len(mc):
+        out3.append(mc[mi])
+        mi += 1
+    return out3
+# M171：`.px_modules` 包布局（spec §8.6 / registry 规范）—— `import semver` 的实际
+#   源文件是 `<base>/.px_modules/semver/semver.px`（或 mod.px），原候选只找
+#   `<base>/semver.px` ⇒ 实测 examples/m69_registry/app/main.px 报 3 条假 L002。
+#   与编译器 module_search_paths（base → .px_modules → 其每个子目录）同口径。
+def lx_modules_cands(module, base):
+    var segs = ""
+    var i = 0
+    while i < len(module):
+        segs += "/" + lc_unq(module[i])
+        i += 1
+    let out = []
+    let root = base + "/.px_modules"
+    out.append(root + segs + ".px")
+    out.append(root + segs + "/mod.px")
+    if exists(root):
+        let entries = list_dir(root)
+        var j = 0
+        while j < len(entries):
+            # list_dir 返回的是**目录项名**（不是全路径）——实测 `.px_modules`
+            # 下返回 collections/semver/yaml ⇒ 必须补 root 前缀，否则候选路径
+            # 相对 cwd 解析、恒不存在（这正是原先 `.px_modules` 漏扫的根因）。
+            var ent = entries[j]
+            if not contains(ent, "/"):
+                ent = root + "/" + ent
+            out.append(ent + segs + ".px")
+            out.append(ent + segs + "/mod.px")
+            j += 1
+    return out
 # 递归扫描模块文件：收集其顶层 FuncDef 名 + 其自身 import（对齐
 # cg_resolve_modules 递归合并语义 → 主程序可见全部级联函数）。
 # visited 防循环；基础路径 = 各文件自身目录。

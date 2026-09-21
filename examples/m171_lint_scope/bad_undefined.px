@@ -1,0 +1,5 @@
+# M171 门 · 真阳性侧：**读**一个从未绑定的名字 —— lint 必须仍然报 L002（不许"改绿就完事"）
+def f(q):
+    let r = q + no_such_thing
+    return r
+print(str(f(1)))

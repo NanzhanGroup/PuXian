@@ -26,6 +26,8 @@
 #   ④ **runtime native ⊆ 名册**：`px_set_global(..., px_native)` 全量必须覆盖
 #     （防生成器口径被收窄后本门「跟着变绿」——判据独立于生成器）。
 #   ⑤ 解析健全性：名册 < 200 名即判 rc=2（正则失配 / 文件缺失不许静默）。
+#   ⑥ 宿主注入全局 ⊆ 名册（M171：`px_dict_set(env, …)` 的 REQUEST/GET/POST/SERVER，
+#     判据独立于生成器 —— 同 ④ 的理由）。
 #
 # 用法：bash selfhost/builtin_list_check.sh
 # ============================================================
@@ -65,13 +67,21 @@ runtime_native_names() {
     grep -h 'px_set_global("' runtime/*.c 2>/dev/null \
         | sed -n 's/.*px_set_global("\([A-Za-z_][A-Za-z0-9_]*\)", *px_native.*/\1/p' | sort -u
 }
+# M171 ⑥：宿主注入全局名（px_serve / px_exec 的 `px_dict_set(env, "NAME", …)`）——
+#   判据**独立于生成器**（与 ④ 同理由：防「生成器口径被收窄后本门跟着变绿」）。
+host_injected_names() {
+    grep -h 'px_dict_set(env, "' runtime/*.c 2>/dev/null \
+        | sed -n 's/.*px_dict_set(env, "\([A-Za-z_][A-Za-z0-9_]*\)".*/\1/p' | sort -u
+}
 
 n_core=$(core_names | wc -l)
 n_int=$(interp_names | wc -l)
 n_rt=$(runtime_native_names | wc -l)
+n_host=$(host_injected_names | wc -l)
 [ "$n_core" -ge 200 ] || { echo "❌ 名册解析异常：$CORE 只解析出 $n_core 个名字（标记块缺失/正则失配？）" >&2; exit 2; }
 [ "$n_int"  -ge 50  ] || { echo "❌ 名册解析异常：interp.px 只解析出 $n_int 个名字（正则失配？）" >&2; exit 2; }
 [ "$n_rt"   -ge 100 ] || { echo "❌ 名册解析异常：runtime/*.c 只解析出 $n_rt 个 native（正则失配？）" >&2; exit 2; }
+[ "$n_host" -ge 4   ] || { echo "❌ 名册解析异常：runtime/*.c 只解析出 $n_host 个宿主注入全局（应为 REQUEST/GET/POST/SERVER 4 个）" >&2; exit 2; }
 
 echo "── 内置名册防漂移门（单一事实源：runtime 注册表）──"
 
@@ -125,6 +135,17 @@ if [ -n "$miss4" ]; then
     bad=$((bad+1))
 else
     echo "    ✅ ④ runtime native ⊆ 内置名册（$n_rt 名全覆盖）"
+fi
+
+# ⑥ 宿主注入全局 ⊆ 名册（M171：`px_dict_set(env, …)` 的 REQUEST/GET/POST/SERVER）——
+#   判据**独立于生成器**（同 ④ 的理由：防「生成器口径被收窄后本门跟着变绿」）。
+miss6=$(comm -23 <(host_injected_names) <(core_names))
+if [ -n "$miss6" ]; then
+    echo "❌ ⑥ runtime/*.c 有 $(printf '%s\n' "$miss6" | wc -l) 个**宿主注入全局**不在内置名册（lint 会误报 L002）："
+    printf '%s\n' "$miss6" | sed 's/^/     /'
+    bad=$((bad+1))
+else
+    echo "    ✅ ⑥ 宿主注入全局 ⊆ 内置名册（$n_host 名全覆盖：REQUEST/GET/POST/SERVER）"
 fi
 
 if [ "$bad" -gt 0 ]; then

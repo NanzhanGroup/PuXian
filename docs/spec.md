@@ -1921,6 +1921,47 @@ C 轨同一输出；VM 轨在 `PX_GC_THRESHOLD=800` 下跑 20000 轮 × 20 行 =
   后症状**时序相关**（5 连跑：1 丢头 / 3 绿 / 1 SIGSEGV）⇒ 若当负控会让门偶发变红。
   191 改由正判据锁症状：`examples/m23c_http_adv.px` 在 `PX_GC_STRESS=1` 下必须
   `HTTP-ADV TESTS PASSED`（修前 core dump，正向复现 2/2）。
+- **缺陷 193（未修 · 已实测）· 同一帧内「先读后声明」三轨分叉**：
+  `def f(): print(x); let x = 42` —— 解释轨报 `R1001 未定义变量`（**响亮**），
+  VM/C 轨给 **`null`**（帧顶 hoist 已分配槽，未初始化槽读作 null）⇒ 三轨对同一份源码
+  给出**不同答案**（一响亮 + 两静默）。**这与 §17.7/§17.8 的取舍同轴：静默给错值 = 最坏一类**。
+  修法方向：hoist 槽带「未初始化」哨兵，读到即报 `R1001`；代价 = 改 VM/C 两轨发射、需重定基。
+  **当前 lint 按「合法」处理**（编译轨确实能跑）—— 193 收口后 lint 需同步收紧（见 §17.10）。
+- **`px lint` 对 selfhost 子模块的 L002（缺陷 116 的残余面）**：单文件检查看不到
+  「宿主提供名」（`i_eval_expr` / `LAYOUT` / `QUIC 内建` 等由 `compiler.px` / `interp.px`
+  import 链合入），M64 起即留档。项目级守护 = `pxlint selfhost/compiler.px`（import 链合并后 0/0）。
+  M171 把仓库总体从 151 文件 3651 条降到 21 文件 801 条，**这 774 条属已知边界、非误报**。
+
+### 17.10 `px lint` 的作用域模型（M171 · 工具侧与语言同一条真相）
+
+**判据来源**：lint 的名字可见性规则**必须是** §17.1–17.8 的语言语义，而不是另定一套。
+M64 的模型（「一个函数体一个干净上下文 + 逐语句顺序」）在 M169 之后**结构性过时**，
+对合法程序报假 `L002` ⇒ 生态代码用新能力就过不了 CI（`stdlib/collections.px` 曾 46 处）。
+
+**四条规则（与语言一一对应）**：
+
+| # | lint 规则 | 对应语言语义 |
+|---|---|---|
+| ① | **ctx 增 `outer`（名字 → 拥有者 ctx）**：进新帧时挂上「外层帧已声明名 + 更外层可见名」；内层读/写外层名 ⇒ 不报 L002，且 `used` **回写拥有者**（否则外层 `L001` 反向误报） | §17.1 帧捕获按引用；§17.4 内层帧可见外层帧 |
+| ② | **帧顶声明 hoist**（`lc_collect_frame_decls`）：进帧先收齐**声明式**绑定（`var/let/const/def/chan`/`for` 变量/赋值式左值，沿块结构递归、**不进入**嵌套帧）；模块体同样收 | 编译器的 `cg_collect_decl_vars` / `bc_collect_decl_vars`（M169） |
+| ③ | **赋值式绑定就地声明**（`lc_bind_assign`）：左值裸名先查可见链，命中 ⇒ 写该绑定并记 used；未命中 ⇒ 就地声明。**左值不报 L002** | §17.6 ④：赋值式命中可见绑定则写它，否则成为本帧新绑定 |
+| ④ | **推导式变量先声明**：`lc_decl_comp_vars` 提前到结果表达式/iterable/cond **之前** | 推导式变量在整个推导式内可见 |
+
+**附带两处口径修正**：
+
+- **导入候选补 `.px_modules`**：`<base>/.px_modules[/<pkg>]/<segs>.px|/mod.px`，
+  与编译器 `module_search_paths`（§8.6）同口径。
+  ⚠️ 实现坑：`list_dir` 返回**目录项名**（非全路径）⇒ 必须补 `root + "/"` 前缀。
+- **名册增第 ④ 源「宿主注入全局」**：`px_serve` / `px_exec` 用
+  `px_dict_set(env, "REQUEST"|"GET"|"POST"|"SERVER", …)` 注入的 Web 语境全局
+  **既不经 `px_set_global` 也不经 `px_ffi_register`** ⇒ 派生名册漏收（`examples/webapp/*.px` 假 L002）。
+  修法：`tools/gen_builtin_list.sh` 按同一口径派生出第 ④ 源；
+  门 `selfhost/builtin_list_check.sh` 相应独立判据（名册 382 → 386）。
+
+**验收**：`examples/m171_lint_scope/`（`M171-VERIFY-OK` · 26 断言）——
+合法侧 5 例「lint 0/0 **且** 三轨 stdout 逐字节一致」+ 真阳性侧 2 例
++ 仓内 8 个真实文件 0 错误 + 负控 3 道（顶层帧顶 hoist / 推导式变量声明 / 外层帧可见链，
+各自独立判红并逐字节还原）。
 
 ---
 

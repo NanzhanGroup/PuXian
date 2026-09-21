@@ -6,6 +6,8 @@
 #   ① runtime/*.c 的 `px_set_global("name", ...)`（`__` 前缀的内部名排除）
 #   ② runtime/*.c 的 `px_ffi_register("name", ...)`
 #   ③ selfhost/interp.px 的 `let names = [...]`（解释器运行期注册的 Mini 子集）
+#   ④ runtime/*.c 的 `px_dict_set(env, "name", ...)`（px_serve/px_exec 注入的
+#      **宿主全局** REQUEST/GET/POST/SERVER；M171 补，原先误报 L002）
 # 产出**排序去重**（LC_ALL=C，逐字节序）的一份名册，写入 tools/lint_core.px
 # 的标记块；pxlint / pxcheck 共同 import 该文件 ⇒ 全仓**只有一份**名册载体。
 #
@@ -43,6 +45,13 @@ grep -h 'px_set_global("' runtime/*.c 2>/dev/null \
     | grep -v '^__' > "$tmp"
 grep -h 'px_ffi_register("' runtime/*.c 2>/dev/null \
     | sed -n 's/.*px_ffi_register("\([A-Za-z_][A-Za-z0-9_]*\)".*/\1/p' >> "$tmp"
+# ④ 宿主注入全局（M171）：px_serve 的 .px 脚本分支 / px_exec 用
+#    `px_dict_set(env, "NAME", ...)` 注入的**全局变量**（REQUEST/GET/POST/SERVER）——
+#    它们在 .px 程序里是合法可见名（runtime 自陈「Web 风格脚本可读全局变量」），
+#    但既不经过 px_set_global 也不经过 px_ffi_register ⇒ 原先 lint 对
+#    `examples/webapp/*.px` 报 3 条假 L002。此处按**同一口径**派生（勿手抄）。
+grep -h 'px_dict_set(env, "' runtime/*.c 2>/dev/null \
+    | sed -n 's/.*px_dict_set(env, "\([A-Za-z_][A-Za-z0-9_]*\)".*/\1/p' >> "$tmp"
 grep -o 'let names = \[[^]]*\]' selfhost/interp.px \
     | grep -o '"[^"]*"' | tr -d '"' >> "$tmp"
 sort -u "$tmp" -o "$tmp"

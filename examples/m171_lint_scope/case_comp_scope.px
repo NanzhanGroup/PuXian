@@ -1,0 +1,11 @@
+# M171 门 · 合法侧 ④：推导式变量在**整个推导式**内可见
+# （结果表达式 / 后续子句 iterable / 末 cond 三处都要可见 —— 修前结果表达式一律误报）
+let nums = [0, 1, 1, 2, 3, 5, 8]
+let doubled = [x * 2 for x in nums if x > 1]
+let pairs = [x * y for x in [1, 2] for y in [10, 20, 30]]
+let m = {str(k): k * k for k in [1, 2, 3]}
+let s = [k + str(v) for k, v in [["a", 1], ["b", 2]]]
+print("doubled=" + str(doubled))
+print("pairs=" + str(pairs))
+print("dict=" + str(m["3"]))
+print("pairs2=" + str(s))
