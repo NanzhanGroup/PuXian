@@ -200,9 +200,15 @@ jobs:
           set -e
           TAG="${GITHUB_REF_NAME}"
           STAGE="$RUNNER_TEMP/pkg/puxian-bootstrap-aarch64-${TAG}"
+          # 上面「现编 11 件」会把中间产物落在 tools/build/ 与仓库根的 .rtcache/
+          #   ⇒ 发布包**不得夹带构建产物**（Issue 56 的同一口径，主包由白名单复制守；
+          #      本包由下面这条硬断言守）。先删，再断言。
+          rm -rf tools/build selfhost/build .rtcache
           mkdir -p "$STAGE"
           cp -a bootstrap tools runtime stdlib "$STAGE"/ 2>/dev/null || true
           rm -f "$STAGE"/bootstrap/pxc_vm "$STAGE"/bootstrap/pxi_vm   # 双保险（见上）
+          [ ! -e "$STAGE/tools/build" ] || { echo "::error::包内夹带 tools/build/（Issue 56 回归）"; exit 1; }
+          [ ! -e "$STAGE/.rtcache" ] || { echo "::error::包内夹带 .rtcache/"; exit 1; }
           [ -f VERSION ] && cp -f VERSION "$STAGE"/VERSION
           printf '%s\n' \
             "# PuXian aarch64 自举件（bootstrap-aarch64 · ${TAG}）" "" \
