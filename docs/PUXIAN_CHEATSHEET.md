@@ -1953,3 +1953,27 @@ set_timeout(fn (): print("once after 2s"), 2000)
      · **保留边界（有意）**：**位置前缀**各轨保留最优信息 —— 解释轨 `错误 [R1001] 行:列:`、
        编译轨 `[函数 行N]:`（runtime 无列号）。要逐字节一致得给 runtime 补列号（全语料重定基）
        或让解释轨丢列号（**减信息**）⇒ 判据只断言「同通道 + 同码 + 同消息体 + rc」，**别按整行对拍**。
+
+200. **HTTP 服务端/客户端的两个「绕行源」已收回 runtime（第 57 轮 · M173 · 晨曦 QA 清单）**：
+     · **`vhost(host, handler)` 分支缺 gzip 判定**（P1-2）：压缩原先只在 ① `px_serve` 原生静态
+       分支、② `.px` 脚本响应分支存在 ⇒ 走 `px_vhost_respond` 的站点（**Mahesvara 全部站点**）
+       文本响应一律明文下发（实测 3408B 页面无 `Content-Encoding`/`Vary`，白耗 3~5× 带宽，
+       CDN 回源同步放大）。⇒ 现在复用**同一套** `px_resp_gzipable` + `px_gzip_compress`；
+       两个「不压」条件：**handler 已自带 `Content-Encoding`**（防双重压缩 ⇒ 客户端只解一层 =
+       乱码）· `204/304` 或空体。
+     · **池连接复用不重设收发超时**（P1-1）：`SO_RCVTIMEO/SO_SNDTIMEO` 原先只在**新建连接**时设
+       ⇒ 先大超时建池、之后小超时**不生效**（反代无法「按路径收紧超时」）。⇒ `HPoolSlot` 记
+       `to_ms`，复用前比对、不一致才重设（TLS 走 `mbedtls_ssl_conf_read_timeout`）。
+     · **判据纪律（值得复用）**：验 gzip **必须看线上字节** —— `http_request` 客户端会自动
+       gunzip（它自己发的 `Accept-Encoding`）⇒ 只看响应头**验不出**真压没压。门用**裸 TCP**
+       （`tcp_connect_ex`/`tcp_send_ex`/`tcp_recv_ex`）+ hex 断言
+       「`\r\n\r\n` 之后紧跟 gzip 魔数 `1f8b`」。
+     · 门：`examples/m173_http_proxy/`（`M173-VERIFY-OK` · 16 断言 · VM+C 双轨 + 负控 2 道）。
+     · ⚠️ **门的 stdout 必须确定性**：门要对双轨 stdout **逐字节对拍** ⇒ 成功路径不许打印
+       时间/计数（第一版把 `2002ms` 打进 PASS 行 ⇒ 双轨必然不同而判红）。诊断细节只放 `FAIL` 行。
+201. **语言级 unix socket I/O 是**阻塞原语**（晨曦 P2-6 · 登记未修）**：
+     `px_native_offload_kind` 白名单含 `tcp_connect/tcp_send/tcp_recv`（走 offload 线程池、
+     协程让出），**不含** `unix_connect` / `read` / `write`。而 handler 跑在协程 worker 上
+     （`PX_CORO_WORKERS = min(CPU, 8)`）⇒ **最坏 8 个并发阻塞型 unix I/O 就能把整站（含静态）堵住**。
+     现状口径：**别在 handler 里直接调用这类原语**；要跑就 `os_spawn_capture` / 独立线程 / 改设计。
+     （本项未修：白名单加 `read/write` 会影响面过宽 —— 它们同时是文件 I/O 原语。）

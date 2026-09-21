@@ -317,6 +317,21 @@ run m171_lint_scope bash examples/m171_lint_scope/verify.sh
 # 诚实边界：**位置前缀**保留各轨最优信息（解释轨行列 / 编译轨函数+行），判据只断言
 #   「同通道 + 同错误码 + 同消息体 + rc」，不按整行对拍。
 run m172_diag_channel bash examples/m172_diag_channel/verify.sh
+# M173（第 57 轮 · 晨曦 QA 清单 P1-2 + P1-1）：**HTTP 反代/静态两件**。
+# P1-2：`vhost(host, handler)` 分支**没有 gzip 判定** —— 压缩只在 ① px_serve 原生静态分支、
+#   ② `.px` 脚本响应分支存在 ⇒ 所有 vhost 站点（Mahesvara 全部站点）文本响应明文下发
+#   （晨曦实测 3408B 页面无 Content-Encoding / 无 Vary，白耗 3~5× 带宽，CDN 回源同步放大）。
+#   修法：在 px_vhost_respond 复用同一套 px_resp_gzipable + px_gzip_compress；
+#   两个不压条件（handler 已自带 Content-Encoding ⇒ 防双重压缩 / 204·304 无体）。
+# P1-1：池连接**复用时不重设** SO_RCVTIMEO/SO_SNDTIMEO（只在新建连接时设）⇒ 先大超时建池、
+#   之后小超时失效（反代无法「按路径收紧超时」）。修法：HPoolSlot 记 to_ms，复用前比对，
+#   不一致才重设（TLS 走 mbedtls_ssl_conf_read_timeout）。
+# 判据（VM+C 双轨；HTTP 服务端示例含 spawn，解释轨不支持 ⇒ 与 m23c/m31 同口径）：
+#   ① 用例 A 双轨（**看线上字节**：裸 TCP + hex 断言「头结束符后紧跟 gzip 魔数 1f8b」，
+#      因为 http_request 客户端会自动 gunzip，只看头验不出真压没压）· 三轨共 12 断言；
+#   ② 用例 B 双轨（大超时建池 → 300ms 复用必须报错且耗时 < 1.5s；再反向放大超时恢复成功）；
+#   ③ 负控 2 道（关 vhost gzip 块 / 关复用重设块 —— 各自独立判红 + sha256 逐字节还原复绿）。
+run m173_http_proxy bash examples/m173_http_proxy/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

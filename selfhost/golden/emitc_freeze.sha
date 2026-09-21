@@ -144,6 +144,8 @@ examples/m171_lint_scope/case_nested_mutual.px src=9fb3d95fb082e681 rc=0 out=c5c
 examples/m172_diag_channel/main_err.px src=91145d7807cd5065 rc=0 out=20114be5b44ab0ffad26bd06c7a43d7a err=e3b0c44298fc1c14
 examples/m172_diag_channel/ok.px src=67e2ec4c88799e1b rc=0 out=06b5a313e2b365c4a90790500d376cc1 err=e3b0c44298fc1c14
 examples/m172_diag_channel/undef.px src=1213c5dca9618339 rc=0 out=0664997a5f385196f030f936b8ee1afa err=e3b0c44298fc1c14
+examples/m173_http_proxy/pool_timeout.px src=dd39ee675816814e rc=0 out=f3d03b42c27289c5c708c648562a004f err=e3b0c44298fc1c14
+examples/m173_http_proxy/vhost_gzip.px src=a710b39badc41c35 rc=0 out=a0201052cfc279014da6ef1ff7da78e0 err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=ca57a90d693278f051ce29d427bb006a err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=864a86fa0f3b5c69d3239ebdb2eac63a err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14
