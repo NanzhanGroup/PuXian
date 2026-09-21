@@ -1,0 +1,19 @@
+# M171 门 · 合法侧 ⑤：模块体（含嵌套块）没有块作用域 —— 块内 let 是模块级全局
+#   spec §17 ①：模块体所有绑定 = 模块级全局 ⇒ 函数体可引用**后面**才出现的绑定。
+def read_late():
+    return LATE + BLOCKED
+
+if true:
+    let BLOCKED = 100
+
+LATE = 42
+print("late=" + str(read_late()))
+
+def deep():
+    var box = {"k": 0}
+    def mid():
+        def inn():
+            return box["k"] + 1
+        return inn()
+    return mid()
+print("deep=" + str(deep()))

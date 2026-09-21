@@ -94,13 +94,14 @@ cd selfhost && ./bootstrap_prove_bc.sh       # BC 轨：golden/compiler.bc.dump�
 
 # 6. 内置名册（M114-S4 建门 → M114 尾**根治为单一事实源**）
 #    名册**不再手抄**：源 = runtime 注册表（`runtime/*.c` 的 `px_set_global(...)` +
-#    `px_ffi_register(...)`，再加 `selfhost/interp.px` 的 Mini 名册），由
+#    `px_ffi_register(...)` + `px_dict_set(env, ...)` 的**宿主注入全局**，
+#    再加 `selfhost/interp.px` 的 Mini 名册），由
 #    `tools/gen_builtin_list.sh` 派生、写入 `tools/lint_core.px` 的标记块
 #    （pxlint / pxcheck 共同 import 该文件 ⇒ 全仓**唯一**载体）。
 #    改过 runtime 注册表或 interp.px 名册后，**先重跑生成器**再提交：
 bash tools/gen_builtin_list.sh          # 写入 lint_core.px（幂等）
 bash tools/gen_builtin_list.sh --check  # 只比不写（CI 用）
-./selfhost/builtin_list_check.sh        # 门：生成器无漂移 + 载体唯一 + interp/native ⊆ 名册
+./selfhost/builtin_list_check.sh        # 门：生成器无漂移 + 载体唯一 + interp/native/宿主注入 ⊆ 名册
 #    为什么（qg-issue 63）：两份手抄副本**双向**漂移 —— 各缺 27 个真实内置
 #    （`print_err` 被 lint 误报 L002），又反向漏收 54 项 runtime 已注册名
 #    （`quic_connect` / `dns_lookup` / `img_encode_jpeg` / `h3_frame` 实测全被误报），
@@ -108,6 +109,13 @@ bash tools/gen_builtin_list.sh --check  # 只比不写（CI 用）
 #    同族第二例（同批修）：lint 递归扫描 import 时只收**函数**名、不收顶层 let/var/const
 #    ⇒ `import "mod.px"` 后引用模块顶层变量，三行全被误报 L002。扫描口径已与
 #    M70-S3（import 导出非 Const 顶层 VarDecl）对齐。
+#    同族第三例（M171）：第 ④ 源 —— `px_serve` 给 `.px` 脚本注入的 Web 语境全局
+#    `REQUEST/GET/POST/SERVER` 走 `px_dict_set(env, …)`，既不经 `px_set_global`
+#    也不经 `px_ffi_register` ⇒ `examples/webapp/*.px` 假 L002。已并入派生口径。
+#    ⚠️ **lint 的作用域模型必须等于语言的作用域模型**（M171 的重大教训）：
+#    改 `selfhost/` 的语义（帧归属 / hoist / 作用域）后，**回来检查 `tools/lint_core.px`
+#    是否还成立** —— 否则「lint 是 CI 门」会把合法的新写法判红（缺陷 116：
+#    全仓 151 个文件 3651 条假 L002）。规则与门见 spec §17.10 与 `examples/m171_lint_scope/`。
 #    改动 pxlint / pxcheck / lint_core 后须重烘那两件（M114 尾新增**按件重烘**）：
 ./selfhost/rebake_bin.sh --entries=pxlint,pxcheck   # 再跑 --check-all 验收
 

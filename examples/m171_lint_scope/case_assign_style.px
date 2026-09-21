@@ -1,0 +1,22 @@
+# M171 门 · 合法侧 ③：赋值式绑定（无 var/let）—— 模块级 + 帧内 + 内层帧写外层
+# 语义依据 spec §17 ④：命中可见绑定 ⇒ 写那个绑定；否则就地成为当前帧的新绑定。
+TOP = 7
+
+def frame_local():
+    acc = []
+    k = 0
+    while k < 3:
+        acc.append(k)
+        k += 1
+    return acc
+
+def write_outer():
+    box = [0]
+    def inner():
+        box = [1]
+    inner()
+    return box
+
+print("module=" + str(TOP + 1))
+print("frame=" + str(frame_local()))
+print("outer=" + str(write_outer()))

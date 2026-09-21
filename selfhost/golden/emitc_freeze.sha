@@ -134,6 +134,13 @@ examples/m170_gc_bridge_root/onnx_root.px src=ab091987a4c2b4b0 rc=0 out=7c76b4a5
 examples/m170_gc_bridge_root/rsa_root.px src=b5d3b90495772de2 rc=0 out=d8ea6e09de0141adf8fea1345beb2013 err=e3b0c44298fc1c14
 examples/m170_gc_bridge_root/sqlite_root.px src=da127102fa58dabf rc=0 out=424cbe5dfcd68605d00121a917ce2a69 err=e3b0c44298fc1c14
 examples/m170_gc_bridge_root/xml_root.px src=96394b67fecec6b9 rc=0 out=60e7b75e918f54c91df734f912df82cb err=e3b0c44298fc1c14
+examples/m171_lint_scope/bad_undefined.px src=29467ece4430f6ca rc=0 out=592a2de164beb3c63ec2a41fa6d423ca err=e3b0c44298fc1c14
+examples/m171_lint_scope/bad_unused.px src=7e9e37d109b3646f rc=0 out=bb33928659ec9e10619e485398731c7a err=e3b0c44298fc1c14
+examples/m171_lint_scope/case_assign_style.px src=07a7c999e4c04256 rc=0 out=6b03f1411c6325f9c12fa232c05c4e93 err=e3b0c44298fc1c14
+examples/m171_lint_scope/case_clo_capture.px src=06c084f515477b42 rc=0 out=e57154d2ca4ffedae7d25f80d731f693 err=e3b0c44298fc1c14
+examples/m171_lint_scope/case_comp_scope.px src=a69a496d046248a2 rc=0 out=7e91fb461a4c4d29aeb754914291606c err=e3b0c44298fc1c14
+examples/m171_lint_scope/case_module_binding.px src=7c1bfda8229a7c84 rc=0 out=50dd8c401b822f959bffe7c9544452ee err=e3b0c44298fc1c14
+examples/m171_lint_scope/case_nested_mutual.px src=9fb3d95fb082e681 rc=0 out=c5c6dec1058dd8d97fe7863c77354200 err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=ca57a90d693278f051ce29d427bb006a err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=864a86fa0f3b5c69d3239ebdb2eac63a err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14

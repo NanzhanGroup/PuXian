@@ -97,7 +97,36 @@ def px_mod_candidates(module, base):
     while si2 < len(module):
         p3 += "/" + lc_unq(module[si2])
         si2 += 1
-    return [p3 + ".px", p3 + "/mod.px"]
+    let out3 = [p3 + ".px", p3 + "/mod.px"]
+    let mc = px_modules_cands(module, base)
+    var mi = 0
+    while mi < len(mc):
+        out3.append(mc[mi])
+        mi += 1
+    return out3
+# M171：`.px_modules` 包布局（spec §8.6 / registry 规范；同 pxlint，勿漂移）
+def px_modules_cands(module, base):
+    var segs = ""
+    var i = 0
+    while i < len(module):
+        segs += "/" + lc_unq(module[i])
+        i += 1
+    let out = []
+    let root = base + "/.px_modules"
+    out.append(root + segs + ".px")
+    out.append(root + segs + "/mod.px")
+    if exists(root):
+        let entries = list_dir(root)
+        var j = 0
+        while j < len(entries):
+            # list_dir 返回目录项名（非全路径）⇒ 补 root 前缀（同 pxlint）
+            var ent = entries[j]
+            if not contains(ent, "/"):
+                ent = root + "/" + ent
+            out.append(ent + segs + ".px")
+            out.append(ent + segs + "/mod.px")
+            j += 1
+    return out
 def px_scan_imports(path, known, visited):
     if visited.has(path):
         return

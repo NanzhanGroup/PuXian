@@ -289,6 +289,19 @@ run m169_toplevel_scope bash examples/m169_toplevel_scope/verify.sh
 #   **时序相关**（去 KEEP 后 5 连跑：1 丢头 / 3 绿 / 1 SIGSEGV）⇒ 按纪律**不设假负控**，
 #   改由 ⑦ 层正判据锁症状（修前 stress 下 core dump，正向复现 2/2）。
 run m170_gc_bridge bash examples/m170_gc_bridge_root/verify.sh
+# M171（第 56 轮 · 台账缺陷 116 + 晨曦 QA 清单）：**lint 作用域模型对齐 spec §17**。
+# 现场：`px lint` 对**合法**程序报大量假 L002 —— 闭包/嵌套 def 捕获外层帧局部、
+#   赋值式绑定（无 var/let）、推导式变量、模块体的嵌套块绑定、嵌套 def 互递归、
+#   上一行/下一行的模块级绑定、`.px_modules` 包布局导入，**六类全误报**
+#   （全仓实测：151 个文件 3651 条 L002 → 21 个文件 801 条；`stdlib/collections.px`
+#   46 → 0、`examples/webapp/*` 全清）。根因 = lint 的作用域模型与 M169 定下的
+#   「帧归属规则」不一致（帧 = 函数/闭包体；帧内声明式绑定帧顶 hoist；赋值式绑定
+#   就地声明；内层帧可见外层帧）。
+# 判据：① 合法侧 5 例（lint 0/0 **且** 三轨 stdout 逐字节一致 —— 只改绿 = 漏判，
+#   只三轨一致 = lint 仍假红，两件事必须同时成立）；② 真阳性侧 2 例（读未绑定名仍报
+#   L002 / 声明未读仍报 L001 —— 防「一律不报也是 0 错」）；③ 仓内 8 个真实文件 0 错误；
+#   ④ 负控 3 道（顶层帧顶 hoist / 推导式变量声明 / 外层帧可见链 —— 各自独立判红）。
+run m171_lint_scope bash examples/m171_lint_scope/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

@@ -1,0 +1,5 @@
+# M171 门 · 真阳性侧：声明了却从未被读 —— lint 必须仍然报 L001
+def f(a):
+    let never_read = a
+    return a + 1
+print(str(f(1)))

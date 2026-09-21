@@ -1,0 +1,14 @@
+# M171 门 · 合法侧 ①：闭包读写外层帧局部（缺陷 116 的最小复现，修前 lint 报 4 E L002 + 1 W L001）
+# 语义依据 spec §17 ②：帧捕获外层帧绑定**按引用**。
+def make():
+    var n = 0
+    var get = fn (): n
+    var bump = fn ():
+        n = n + 1
+        return n
+    return [get, bump]
+
+let p = make()
+print("a=" + str(p[0]()))
+print("b=" + str(p[1]()))
+print("c=" + str(p[0]()))

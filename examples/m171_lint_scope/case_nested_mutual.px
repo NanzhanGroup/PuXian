@@ -1,0 +1,9 @@
+# M171 门 · 合法侧 ②：同帧内嵌套 def 互相递归（后者先被引用）
+# 修前 lint 报 2 E L002（`h` 在 g 里、`g` 在外层）—— 实为合法程序（编译器帧顶 hoist）。
+def f():
+    def g():
+        return h() + 1
+    def h():
+        return 41
+    return g()
+print("mutual=" + str(f()))
