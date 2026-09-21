@@ -1,0 +1,133 @@
+# M169（第 54 轮 · 缺陷 181）· 模块体 / 闭包帧的「绑定归属」统一
+# ------------------------------------------------------------
+# 语义基准 = 解释轨（顶层是单一 env；帧 = 函数级作用域）。判据全用**绝对值断言**
+#   （只打印 pass/fail），便于三轨 stdout 逐字节对拍。
+# 被覆盖的裁定（三轨一条真相）：
+#   ① **模块体（含嵌套块）里的所有绑定都是模块级全局** —— 循环变量、if/while 体内的
+#      `let/var`、嵌套 `def` 一律如此：模块体**没有块作用域**。
+#      修前 C 轨只认「直接顶层 + 名字已在 cg_globals」⇒ 嵌套块内的绑定退化成帧局部，
+#      块外引用 = C `undeclared` 编译失败（实测 `if true: let x = 42` 后 `print(x)`）；
+#      VM 轨顶层循环变量占**帧局部槽** ⇒ 函数看不见它（`未定义变量: i`）。
+#   ② **顶层闭包捕获这些绑定 ⇒ 按引用**（解释轨 env 链语义；20/20 而非 10/20）。
+#   ③ **闭包体（lambda 帧）也是帧**：体内绑定提升到帧顶（声明处仅赋值）、体内被内层
+#      闭包捕获的局部先装箱成 cell —— 与函数体同口径（VM 轨 M160 已有；C 轨此前两者都缺）。
+#   ④ 帧内**声明式**绑定（var/let/const、嵌套 def、for 变量）⇒ 帧局部（遮蔽同名模块
+#      全局）；帧内**赋值式**绑定（`x = …` 无声明）⇒ 命中模块绑定则写模块全局，否则
+#      也是帧局部（解释轨同判；见 err_frame_local.px）。
+var pass = 0
+var fail = 0
+
+def chk(cond, name):
+    if cond:
+        pass = pass + 1
+    else:
+        fail = fail + 1
+        print("FAIL " + name)
+
+# ① 模块体循环变量：循环后仍可引用（保留最后值）
+for p in [1, 2, 3]:
+    0
+chk(p == 3, "1-module-loop-var-after")
+
+# ② 模块体 if 块内声明：块外可引用（模块体无块作用域）
+if true:
+    let x = 42
+chk(x == 42, "2-module-if-block-var")
+
+# ③ 模块体 while 块内声明：块外可引用
+var n = 0
+while n < 2:
+    let y = n * 10
+    n += 1
+chk(y == 10, "3-module-while-block-var")
+
+# ④ 模块体嵌套 for：内外循环变量都可引用
+for i in [1, 2]:
+    for j in [3, 4]:
+        0
+chk(i == 2 and j == 4, "4-module-nested-loop-vars")
+
+# ⑤ 函数引用模块体循环变量（模块级绑定对函数可见）
+def read_i():
+    return i
+chk(read_i() == 2, "5-func-reads-module-loop-var")
+
+# ⑥ 模块体闭包捕获循环变量 ⇒ **按引用**（两个闭包都看最后值）
+var fs = []
+for q in [10, 20]:
+    fs.append(fn (): q)
+chk(fs[0]() == 20 and fs[1]() == 20, "6-module-closure-byref")
+
+# ⑦ 模块体嵌套 def ⇒ 模块级绑定（同模块的函数可调用它）
+if true:
+    def h():
+        return 41
+def g():
+    return h() + 1
+chk(g() == 42, "7-module-nested-def")
+
+# ⑧ 闭包体（lambda 帧）内的 for：循环变量是**帧局部**，循环后可引用
+let lam = fn ():
+    var s = 0
+    for k in [1, 2, 3]:
+        s += k
+    return s + k
+chk(lam() == 9, "8-lambda-frame-loop")
+
+# ⑨ 闭包内闭包捕获外层闭包局部 ⇒ 按引用（共享 cell）
+let outer = fn ():
+    var c = 0
+    let inc = fn ():
+        c = c + 1
+        return c
+    return [inc(), inc(), c]
+let orr = outer()
+chk(orr[0] == 1 and orr[1] == 2 and orr[2] == 2, "9-closure-in-closure-byref")
+
+# ⑩ 帧内**声明**遮蔽模块全局 ⇒ 帧局部；模块全局不变
+var sh = 1
+def shadow_test():
+    if true:
+        var sh = 5
+    return sh
+chk(shadow_test() == 5, "10-frame-decl-shadows-module")
+chk(sh == 1, "10-module-var-untouched")
+
+# ⑪ 帧内**赋值**命中模块绑定 ⇒ 写模块全局
+def bump():
+    sh = 99
+bump()
+chk(sh == 99, "11-frame-assign-writes-module")
+
+# ⑫ 模块体多变量解包循环（M167 回归）：循环变量也是模块级绑定
+for kk, vv in [["a", 1], ["b", 2]]:
+    0
+chk(kk == "b" and vv == 2, "12-module-unpack-loop-vars")
+
+# ⑬ 模块体循环变量与模块体代码是**同一绑定**（可累加）
+var w = 0
+for m in [1, 2]:
+    w += m
+chk(w == 3, "13-module-loop-acc")
+
+# ⑮ 帧内循环变量与**模块绑定同名** ⇒ 仍是帧局部（声明式 ⇒ 占帧槽；被闭包捕获时正确装箱）
+#    —— 这条锁的是「帧内声明式绑定即便与模块绑定同名也必须占槽」这一半规则
+#    （修前 VM 轨按「名字在模块绑定集」直接跳过 ⇒ 不占槽 ⇒ 闭包捕获到未装箱的槽 ⇒
+#      `R1002 此类型不支持索引: int`；m167 门主用例正是这个形态）
+var kk2 = 0
+def shadow_loop():
+    var out = []
+    for kk2 in [1, 2]:
+        out.append(fn (): kk2)
+    return out
+let sl = shadow_loop()
+chk(sl[0]() == 2 and sl[1]() == 2, "15-frame-loop-var-shadows-module")
+chk(kk2 == 0, "15-module-var-untouched")
+
+# ⑯ 帧内赋值未声明名 ⇒ 帧局部（不污染模块全局；严格性侧另有 err 用例）
+def frame_local_value():
+    zz = 7
+    return zz
+chk(frame_local_value() == 7, "16-frame-local-assign-value")
+
+print("pass=" + str(pass) + " fail=" + str(fail))

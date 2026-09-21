@@ -43,7 +43,7 @@ PuXian 采用 **Apache License 2.0** 开源 —— 任何人可自由使用、�
 | ✅ **自举完成（M-B8）** | **PuXian 编译器由 PuXian 自己写成**：`lexer / parser / codegen / interp / bc_emit / 值系统` 核心全部用 `.px` 重写，自举证明 A.c == B.c == B2.c 逐字节一致 |
 | ✅ **Rust 版已退役（M-B9a）** | Rust 源码归档至 `archive/rust-compiler/`（只读），**新工具链 `tools/px` 完全无需 Rust**，基于自举二进制运行 |
 | ✅ **双后端 + 三轨（M91 起）** | 解释轨（`pxi` 树遍历）· **VM 字节码轨（`px build` 默认）** · C 文本轨（`px build --c` 逃生舱）。**同一份源码三轨行为一致**——由 `m116_gates.sh` 全量门 + 每里程碑专属门守住 |
-| ✅ **语义一致性收口（M159–M167）** | 「宿主语言留空 ⇒ 三轨必然分叉」的角落被逐条收成**一条真相**：求值顺序（词法左→右）· 迭代期间容器长度变化 ⇒ `R1003` · 解包严格化 · 字典键严格化 · `sorted` 值比较 + 稳定排序 · 闭包/生成器捕获按值快照。**没有静默的角落**（响亮优于静默） |
+| ✅ **语义一致性收口（M159–M169）** | 「宿主语言留空 ⇒ 三轨必然分叉」的角落被逐条收成**一条真相**：求值顺序（词法左→右）· 迭代期间容器长度变化 ⇒ `R1003` · 解包严格化 · 字典键严格化 · `sorted` 值比较 + 稳定排序 · 闭包/生成器捕获按值快照 · 模块体绑定 = 模块级全局（帧内声明式/赋值式归属分明）。**没有静默的角落**（响亮优于静默） |
 | ✅ **aarch64 官方通道（M159）** | `selfhost/native_bootstrap.sh`（**只需 gcc** 的原生/交叉自举 + 自证）· `tools/px` 宿主架构自适应 · CI 新增 **`native-arm64` 真机 job** · Release 并列资产 `puxian-bootstrap-aarch64-<tag>.tar.gz` |
 | ✅ **工具链全自举** | `px` 的 `build / run / lex / parse / fmt / lint / doc / test / bench / lsp / mcp / refs` 全部由 PuXian 自己实现（spec §12 八工具齐备） |
 | ✅ **CI 已接入** | GitHub Actions：每次提交自动跑回归 + 自举证明（C 轨 + BC 轨）+ 示例编译 + **四架构矩阵**（x86_64 native / aarch64 / armv7 / riscv64） |
@@ -206,7 +206,7 @@ selfhost/native_bootstrap.sh --cc aarch64-linux-musl-gcc --target aarch64
 | 🔌 边缘设备 | fd 原语 `open`/`close`/`ioctl`/`os_errno`（ioctl arg 三形态：int 直传 / bytes·str 就地 in/out buffer，`_IOR` 类内核直接填充同对象）+ fd 数据通道 `read`/`write`（read(2)/write(2) 直通）+ **mmap 活映射** `mmap`/`munmap`/`mem_write`（MAP_SHARED 帧缓冲/共享内存/DMA 直访，GC 自动 munmap，`mem_write` 就地写映射区）+ GPIO/I2C 设备示例 + **aarch64 交叉编译**（`px build --no-quic` 裁剪 + qemu-aarch64 验证与 x86 一致）——Linux 边缘设备层（树莓派/网关/盒子）单静态二进制免环境 |
 | 🚀 应用平台 | **.px 脚本执行机制**（`px_serve` PHP/OpenResty 式应用服务器：Cookie/Session/基础认证 + 服务端 TLS + 优雅关闭、`px_exec` 语言层嵌入 API）+ **.px 进程池**（编译模式预派生 worker 解释器常驻复用，PHP-FPM 风格，**脚本/二进制变更自动滚动重启热更新**）+ 路由表+中间件（method+path 模式 / `:id` 参数 / `*` 通配 / 中间件链）+ cron 调度（6 字段）+ JSON 路径（json_path/json_path_set） |
 | 📚 标准库 | `stdlib/` **13 个公开库**（collections / semver / webroute / yaml / pxml / lunar / gfx / png / edge / cookiejar / html / multipart / smtp；另有 go_json / strings / url / path / time_go / io / jsonx / yamlx 等 **27 个 `.px` 文件**）—— `import std.<name>` 即用，编译/解释双模式一致；API 清单见 [`docs/ECOSYSTEM.md`](docs/ECOSYSTEM.md) 与机器索引 `docs/ecosystem_index.json` |
-| 🧭 语义一致性（M159–M167 收口） | **没有静默的角落**（响亮优于静默）：求值顺序一律**词法左→右**（含函数实参，不随 gcc）· 迭代期间修改被迭代容器 ⇒ `R1003`（进入循环时**长度快照**）· 解包严格（`for a, b in xs` 形状不符 ⇒ `R1002`）· 字典键严格（构造位置非字符串键 ⇒ `R1002`，不再静默丢数据）· `sorted` **值比较 + 稳定排序** · 闭包按引用、生成器捕获按**值快照**。每条规则都配三轨逐字节一致的门 |
+| 🧭 语义一致性（M159–M169 收口） | **没有静默的角落**（响亮优于静默）：求值顺序一律**词法左→右**（含函数实参，不随 gcc）· 迭代期间修改被迭代容器 ⇒ `R1003`（进入循环时**长度快照**）· 解包严格（`for a, b in xs` 形状不符 ⇒ `R1002`）· 字典键严格（构造位置非字符串键 ⇒ `R1002`，不再静默丢数据）· `sorted` **值比较 + 稳定排序** · 闭包按引用、生成器捕获按**值快照** · **模块体绑定 = 模块级全局**（含嵌套块），闭包体与函数体同为「帧」。每条规则都配三轨逐字节一致的门 |
 
 ---
 
@@ -280,7 +280,7 @@ CI 每次提交自动跑 C 轨 + BC 轨证明与**重烘指纹门**（`.github/w
 ├── runtime/                # C 运行时（runtime.c/h + aes/xml/zip/ws/rsa/ed25519/sqlite/route/h2/h3/quic/image/onnx + mbedtls + third_party），native 367 项
 ├── stdlib/                 # 标准库（27 个 .px：13 个公开库 collections/cookiejar/edge/gfx/html/lunar/multipart/png/pxml/semver/smtp/webroute/yaml + L1 工具 strings/path/url/io/time_go/jsonx/…）
 ├── registry/               # 版本化库分发（registry/<name>/<version>/<name>.px，13 库）
-├── examples/               # 130 个示例目录 / 120 个单文件 .px（hello / fib / match / 并发 / 网络 / TLS / SQLite / HTTP3 / 边缘 / 语义门 ...）
+├── examples/               # 131 个示例目录 / 120 个单文件 .px（hello / fib / match / 并发 / 网络 / TLS / SQLite / HTTP3 / 边缘 / 语义门 ...）
 ├── packaging/              # 发行打包（rpm/dnf 仓库 · make_release · tag_guard 漏打 tag 守卫）
 ├── archive/rust-compiler/  # Rust 版编译器源码归档（只读，自举前的实现，git 历史保留）
 ├── docs/                   # 文档（索引 docs/README.md · 规格 spec · AI 速查表 · 生态 · 路线图 ...）
@@ -379,7 +379,7 @@ CI 每次提交自动跑 C 轨 + BC 轨证明与**重烘指纹门**（`.github/w
 | M138–M148 | **Go 保真族**：正则 · `encoding/json` Indent/Compact/HTMLEscape 逐字节复刻 · HTTP 客户端失败成因分类 + IPv6 · 大请求体内存安全 + chunked 收发 · 循环引用值的比较/渲染/JSON · float64 位模式 + NaN 语义 · 定点小数文本 `fmt_float_dec` · `/` 完全 IEEE-754 + Go `%v` 浮点文本 |
 | M149–M158 | **服务化前提族**：TCP「带超时 + 可辨别失败」族 · 摘要/密钥派生 + TLS 客户端族 · `tls_upgrade` · 分配率两刀（字面量池化 · 编译器热路径）+ `join` 字节口径 · 含内嵌 NUL 的字符串 · **零依赖 ONNX**（解析面 → 张量 + 64 算子 + 拓扑执行器）· 解释轨函数值 → runtime native 桥 |
 
-### 语义一致性收口（M159–M167，全部 ✅）
+### 语义一致性收口（M159–M169，全部 ✅）
 
 > 共同病灶：**宿主语言留空、或各家实现各不相同 ⇒ 我们的三轨（解释 / VM / C）必然分叉**。
 > 收口方式不是「跟随某一家」，而是**定一条可预测、可诊断、三轨可同的规则**——这是本项目对「超越」的实际定义：**没有静默的角落**。
@@ -395,14 +395,16 @@ CI 每次提交自动跑 C 轨 + BC 轨证明与**重烘指纹门**（`.github/w
 | M165 | **求值顺序** | 表达式 / 函数实参 / 赋值一律**词法左→右**（C 标准未定义 ⇒ 此前 C 轨随 gcc 右→左；缺陷 178/179）|
 | M166 | 迭代期间修改容器 | 进入循环时**长度快照**；长度变化 ⇒ `R1003 迭代期间被迭代容器长度变化: n0 → n1`（缺陷 176）|
 | M167 | 解包统一 | 语句形式 `for a, b in xs` + `dict.items()`；形状/长度不符 ⇒ `R1002`（缺陷 180/182）|
+| M168 | **分发可移植性** | openEuler 官方支持（`install-rpm.sh` 显式映射表，不再依赖 `$releasever`）· 发布资产**全静态**（`check_bin_portability.sh` 自带负控，对旧包实测判红）· 三条纪律：失败给可执行下一步 / 依赖可判定 / 门红必须读得到原因 |
+| M169 | **模块体 / 帧的「绑定归属」** | 模块体（**含嵌套块**）里的绑定一律模块级全局（模块体无块作用域）· 帧捕获按引用 · **闭包体也是帧**（hoist + 装箱）· 帧内声明式 ⇒ 帧局部、赋值式 ⇒ 命中模块绑定写全局（缺陷 181/183/184）|
 
-> 规则细节与迁移指引见 [docs/spec.md §17](docs/spec.md) 与 [docs/DICT_STRICT_MIGRATION.md](docs/DICT_STRICT_MIGRATION.md)；每条都配了三轨逐字节一致的门 + 负控（`examples/m159_*` … `examples/m167_*`）。
+> 规则细节与迁移指引见 [docs/spec.md §17](docs/spec.md) 与 [docs/DICT_STRICT_MIGRATION.md](docs/DICT_STRICT_MIGRATION.md)；每条都配了三轨逐字节一致的门 + 负控（`examples/m159_*` … `examples/m169_*`）。
 
 ---
 
 ## 示例
 
-`examples/` 目录（**130 个示例目录 / 120 个单文件 `.px`**），快速上手：
+`examples/` 目录（**131 个示例目录 / 120 个单文件 `.px`**），快速上手：
 
 ```bash
 # 解释运行
@@ -476,7 +478,7 @@ CI 每次提交自动跑 C 轨 + BC 轨证明与**重烘指纹门**（`.github/w
 | `multipart` | `multipart/form-data` 编码（表单与文件上传） | `import std.multipart` |
 | `smtp` | 轻量 SMTP 客户端（告警通知 / 事务邮件） | `import std.smtp` |
 
-- **生态总览**：[`docs/ECOSYSTEM.md`](docs/ECOSYSTEM.md) —— 库定位与导出 API / **130 个示例目录（120 个单文件 `.px`）**按能力导航 / 消费路径（import · pxpkg · 拷源码）/ 机器索引防漂移（`tools/gen_ecosystem.px` + `tools/gen_native_table.sh`）。
+- **生态总览**：[`docs/ECOSYSTEM.md`](docs/ECOSYSTEM.md) —— 库定位与导出 API / **131 个示例目录（120 个单文件 `.px`）**按能力导航 / 消费路径（import · pxpkg · 拷源码）/ 机器索引防漂移（`tools/gen_ecosystem.px` + `tools/gen_native_table.sh`）。
 - **AI 速查包**：`docs/PUXIAN_CHEATSHEET.md`（整包喂 AI 即写对 `.px`；含 **native 名册 367 项**单一事实源 `docs/native_index.json` 与三轨差异/统一口径事实表）。
 - **包管理**：`tools/pxpkg`（init/add/install + `px.px.lock` 可复现）；**registry 13 个官方库**随仓库分发（`registry/<name>/<version>/<name>.px`，fetch → import 闭环已打通）。
 

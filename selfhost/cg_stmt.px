@@ -16,8 +16,14 @@ def cg_gen_stmt_inner(stmt, indent):
         var rhs = "px_null()"
         if stmt[4] != null:
             rhs = cg_gen_expr(stmt[4])
-        # 顶层 let 变量（globals 且不在函数内）→ 全局变量
-        if contains(cg_globals, name) and len(cg_err_labels) == 0:
+        # M169（缺陷 181）：**模块体**（顶层，含嵌套块）里的声明 = 模块级全局
+        #   （修前判据是「名字已在 cg_globals 且 cg_err_labels 空」⇒ 只认**直接顶层**的
+        #    声明，嵌套块内的退化成帧局部、块外引用即 C undeclared；实测
+        #    `if true: let x = 42` 后 `print(x)` = error: '_v1' undeclared）
+        if cg_topbody:
+            #   不再分配 `_vN` 帧局部，但**推进同一编号计数器**（cg_uid）⇒ 改后 `_vN`/`_tN`
+            #   编号与改前逐一对齐 ⇒ 重定基差异只落在本族（同 M165/M166/M167 专用计数器之手法）
+            cg_uid()
             return pad + "px_set_global(\"" + name + "\", " + rhs + ");\n"
         var hv = cg_var_of(name)
         if hv == null:
@@ -142,18 +148,14 @@ def cg_gen_stmt_inner(stmt, indent):
             upn = len(names)
         # 逐个变量算「声明/赋值」文本（单变量与原实现逐字节一致）
         var decls = []
+        # M169（缺陷 181）：模块体（含嵌套块）里的循环变量 = **模块级全局**
+        #   （解释轨单一 env ⇒ 天然如此；VM 轨同轮把 `is_top` 的 for 改 SETG）。
+        #   修前占**帧局部槽** ⇒ ① 循环后引用 = C undeclared 编译失败（实测
+        #   `for p in l:` 后 `print(p)` → error: '_v3' undeclared，嵌套块更甚）；
+        #   ② 顶层闭包捕获它时该槽不是 cell ⇒ 按值快照（解释轨是**引用**：20/20 vs 10/20）。
         var vi = 0
         while vi < len(names):
             let nm = names[vi]
-            var vv = cg_var_of(nm)
-            var vp = "LXValue "
-            if vv == null or len(cg_err_labels) == 0:
-                # 顶层代码（无函数顶 hoist，err_labels 空）→ 每次迭代变量独立就地声明；
-                # 或函数内未被预提升 → 就地声明
-                vv = cg_new_var(nm)
-            else:
-                # M62-L5：函数内循环变量已由函数顶预声明（px_null 初始，Python 语义循环后保留最后值），循环内仅赋值
-                vp = ""
             var fv_init = ""
             if multi:
                 # M167：解包字段（item 已由 UNPACKCK 校验过类型与长度）
@@ -162,6 +164,20 @@ def cg_gen_stmt_inner(stmt, indent):
                 # M164（缺陷 170）：迭代元素取 **px_iter_at** —— dict 的「第 i 个键」只属迭代机制；
                 #   用户面 `d[i]` 走 px_index（现严格报 R1002）。修前共用 px_index ⇒ 位置语义外漏。
                 fv_init = "px_iter_at(" + it_var + ", px_int(" + idx_var + "))"
+            if cg_topbody:
+                #   不分配 `_vN` 帧局部，但推进同一编号计数器（cg_uid）⇒ 编号与改前对齐
+                cg_uid()
+                decls.append("px_set_global(\"" + nm + "\", " + fv_init + ");")
+                vi += 1
+                continue
+            var vv = cg_var_of(nm)
+            var vp = "LXValue "
+            if vv == null:
+                # 帧内未被预提升 → 就地声明
+                vv = cg_new_var(nm)
+            else:
+                # M62-L5：函数内循环变量已由函数顶预声明（px_null 初始，Python 语义循环后保留最后值），循环内仅赋值
+                vp = ""
             if vp == "LXValue ":
                 # 就地声明
                 if cg_cells.has(nm):
@@ -211,7 +227,12 @@ def cg_gen_stmt_inner(stmt, indent):
     if ty == "Empty":
         return ""
     if ty == "ChanDecl":
-        let v = cg_new_var(rust_unescape(stmt[1]))
+        # M169（缺陷 181）：模块体里的通道绑定 = 模块级全局（VM 轨 `is_top` 分支同口径）
+        let cn = rust_unescape(stmt[1])
+        if cg_topbody:
+            cg_uid()
+            return pad + "px_set_global(\"" + cn + "\", px_chan_create(0));\n"
+        let v = cg_new_var(cn)
         return pad + "LXValue " + v + " = px_chan_create(0);\n"
     if ty == "Send":
         let c = cg_gen_expr(stmt[1])
@@ -255,6 +276,13 @@ def cg_gen_stmt_inner(stmt, indent):
         # 注意：FuncDef 的 stmt[4] 是**语句列表**（Closure 节点的 expr[3] 是 Block **表达式**）
         #   ⇒ 这里显式包一层 Block，才能复用同一条闭包发射路径（否则体被当表达式生成 ⇒ 空函数）。
         let dfn = cg_gen_closure(stmt[2], ["Block", stmt[4]], dname)
+        if cg_topbody:
+            # M169（缺陷 181）：**模块体里的嵌套 def** = 模块级全局绑定。
+            #   修前 `dcv == null` 直接 `return ""` ⇒ **绑定从未发生**，调用处走
+            #   `px_get_global` ⇒ 运行期「未定义变量: f」（实测 `if true: def f(): 41`
+            #   后 `print(f())`）；解释轨（单一 env）为 41，VM 轨同轮改 SETG。
+            cg_uid()
+            return pad + "px_set_global(\"" + dname + "\", " + dfn + ");\n"
         if dcv != null:
             return pad + cg_store_of(dname, dcv, dfn) + ";\n"
         return ""

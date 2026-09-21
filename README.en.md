@@ -45,7 +45,7 @@ Current version **`px 0.2.0`** (latest milestone tag `v0.2.0-m167`).
 | ✅ **Self-hosting complete (M-B8)** | **The PuXian compiler is written in PuXian itself**: `lexer / parser / codegen / bc_emit / interp / value system` all rewritten in `.px`. The bootstrap proof shows A.c == B.c == B2.c, byte-for-byte identical. |
 | ✅ **Rust version retired (M-B9a)** | Rust sources archived under `archive/rust-compiler/` (read-only). The new toolchain **`tools/px` requires no Rust at all**, running on top of the bootstrap binary. |
 | ✅ **Two backends, three rails (since M91)** | Interpreter rail (`pxi`, tree-walking) · **VM bytecode rail (default for `px build`)** · C-text rail (`px build --c`, escape hatch). **The same source behaves identically on all three rails** — enforced byte-for-byte by the full gate suite (`selfhost/m116_gates.sh` + per-milestone gates). |
-| ✅ **Semantic consistency closure (M159–M167)** | Every corner where "the host language left it open ⇒ our three rails must diverge" has been nailed down to **one truth**: evaluation order (lexical left-to-right) · container length change during iteration ⇒ `R1003` · strict unpacking · strict dict keys · `sorted` by value + stable · closure/generator capture rules. **No silent corners** (loud beats silent). |
+| ✅ **Semantic consistency closure (M159–M169)** | Every corner where "the host language left it open ⇒ our three rails must diverge" has been nailed down to **one truth**: evaluation order (lexical left-to-right) · container length change during iteration ⇒ `R1003` · strict unpacking · strict dict keys · `sorted` by value + stable · closure/generator capture rules. **No silent corners** (loud beats silent). |
 | ✅ **First-class aarch64 (M159)** | `selfhost/native_bootstrap.sh` (self-bootstrap from **gcc only**, with self-proof) · host-arch-aware `tools/px` · new **`native-arm64` real-machine CI job** · release asset `puxian-bootstrap-aarch64-<tag>.tar.gz`. |
 | ✅ **Fully self-hosted toolchain** | `build / run / lex / parse / fmt / lint / doc / test / bench / lsp / mcp / refs` are all implemented in PuXian (spec §12). |
 | ✅ **CI integrated** | GitHub Actions: regression + bootstrap proof (C rail and BC rail) + example builds + **four-arch matrix** (x86_64 native / aarch64 / armv7 / riscv64) on every commit. |
@@ -212,7 +212,7 @@ selfhost/native_bootstrap.sh --cc aarch64-linux-musl-gcc --target aarch64
 | 🔌 Edge device | fd primitives `open`/`close`/`ioctl`/`os_errno` (ioctl arg three forms: int direct / bytes·str in-place in/out buffer, `_IOR` filled in place) + fd data path `read`/`write` (raw read(2)/write(2)) + **mmap live mapping** `mmap`/`munmap`/`mem_write` (MAP_SHARED framebuffer/shmem/DMA direct access, GC auto-munmap, in-place write into the mapping) + GPIO/I2C device examples + **aarch64 cross-compile** (`px build --no-quic` trimming + qemu-aarch64 verification identical to x86) — Linux edge devices (Raspberry Pi/gateway/box) as a single static binary, no runtime env needed |
 | 🚀 Application platform | **`.px` script execution mechanism** (`px_serve`, a PHP/OpenResty-style application server: Cookie/Session/basic auth + server-side TLS + graceful shutdown; `px_exec`, a language-level embedding API) + **`.px` process pool** (build mode pre-forks worker interpreters that stay resident and are reused, PHP-FPM style; **hot-reload with automatic rolling restart on script/binary changes**) + route table & middleware (method+path patterns / `:id` params / `*` wildcards / middleware chains) + cron scheduling (6 fields) + JSON path (json_path / json_path_set). |
 | 📚 Standard library | **13 public libraries** under `stdlib/` (collections / semver / webroute / yaml / pxml / lunar / gfx / png / edge / cookiejar / html / multipart / smtp; plus L1 helper modules such as strings / path / url / io / time_go / jsonx / go_json* / yaml* — **27 `.px` files** in total). `import std.<name>` and go; identical on both rails. API listing in [`docs/ECOSYSTEM.md`](docs/ECOSYSTEM.md) and the machine index `docs/ecosystem_index.json` |
-| 🧭 Semantic consistency (M159–M167) | **No silent corners** (loud beats silent): evaluation order is always **lexical left-to-right** (including call arguments, not gcc's choice) · mutating a container while iterating it ⇒ `R1003` (**length snapshot** on loop entry) · strict unpacking (`for a, b in xs`, shape mismatch ⇒ `R1002`) · strict dict keys (non-string key in a constructor ⇒ `R1002`, no more silent data loss) · `sorted` uses **value comparison + stable sort** · closures capture by reference, generator captures are a **value snapshot**. Every rule ships a gate that pins all three rails byte-for-byte |
+| 🧭 Semantic consistency (M159–M169) | **No silent corners** (loud beats silent): evaluation order is always **lexical left-to-right** (including call arguments, not gcc's choice) · mutating a container while iterating it ⇒ `R1003` (**length snapshot** on loop entry) · strict unpacking (`for a, b in xs`, shape mismatch ⇒ `R1002`) · strict dict keys (non-string key in a constructor ⇒ `R1002`, no more silent data loss) · `sorted` uses **value comparison + stable sort** · closures capture by reference, generator captures are a **value snapshot** · **module-body bindings are module-level globals** (nested blocks included) and a closure body is a frame, just like a function. Every rule ships a gate that pins all three rails byte-for-byte |
 
 ---
 
@@ -284,7 +284,7 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 ├── runtime/                # C runtime (runtime.c/h + aes/xml/zip/ws/rsa/ed25519/sqlite/route/h2/h3/quic/image/onnx + mbedtls + third_party), 367 natives
 ├── stdlib/                 # Standard library (27 .px files: 13 public libs — collections/cookiejar/edge/gfx/html/lunar/multipart/png/pxml/semver/smtp/webroute/yaml — plus L1 helpers strings/path/url/io/time_go/jsonx/…)
 ├── registry/               # Versioned library distribution (registry/<name>/<version>/<name>.px, 13 libs)
-├── examples/               # 130 example directories / 120 single-file .px (hello / fib / match / concurrency / networking / TLS / SQLite / HTTP3 / edge / semantic gates ...)
+├── examples/               # 131 example directories / 120 single-file .px (hello / fib / match / concurrency / networking / TLS / SQLite / HTTP3 / edge / semantic gates ...)
 ├── packaging/              # Distribution packaging (rpm/dnf repos · make_release · tag_guard)
 ├── archive/rust-compiler/  # Rust compiler source archive (read-only; the pre-bootstrap implementation; git history preserved)
 ├── docs/                   # Documentation (index docs/README.md · spec · AI cheatsheet · ecosystem · roadmap ...)
@@ -381,7 +381,7 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 | M138–M148 | **Go-fidelity family**: regex · `encoding/json` Indent/Compact/HTMLEscape byte-for-byte · HTTP client failure-cause classification + IPv6 · large request bodies + chunked I/O · cyclic-value comparison/render/JSON · float64 bit patterns + NaN semantics · fixed-point decimal text + `-0.0` · `/` fully IEEE-754 + Go `%v` float text |
 | M149–M158 | **Service-readiness family**: TCP with timeouts \& distinguishable failures · digest/key-derivation + TLS client family · `tls_upgrade` · two allocation-rate cuts (literal pooling · compiler hot paths) + `join` byte semantics · strings with embedded NUL · **zero-dependency ONNX** (parse layer → tensors + 64 ops + topological executor) · interpreter function values → runtime native bridge |
 
-### Semantic Consistency Closure (M159–M167 — all ✅)
+### Semantic Consistency Closure (M159–M169 — all ✅)
 
 > Shared root cause: **wherever the host language left things open, or implementations differ, our three rails (interpreter / VM / C) were bound to diverge.**
 > The answer is not "follow one of them" but **pick one predictable, diagnosable rule that all three rails can share** — which is what "beyond Go" means here in practice: **no silent corners**.
@@ -397,6 +397,8 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 | M165 | **Evaluation order** | Expressions / call arguments / assignments are uniformly **lexical left-to-right** (C leaves it unspecified ⇒ the C rail used to follow gcc's right-to-left; defects 178/179) |
 | M166 | Mutating a container while iterating | **Length snapshot** on loop entry; a length change ⇒ `R1003 迭代期间被迭代容器长度变化: n0 → n1` (defect 176) |
 | M167 | Unified unpacking | Statement form `for a, b in xs` + `dict.items()`; shape/length mismatch ⇒ `R1002` (defects 180/182) |
+| M168 | **Distribution portability** | openEuler officially supported (`install-rpm.sh` uses an explicit mapping table instead of `$releasever`) · release assets are now **fully static** (`check_bin_portability.sh` ships its own negative controls and red-flags the old package) · three disciplines: failures must name the next command / dependencies must be decidable / a gate you cannot read is not a gate |
+| M169 | **Binding attribution (module body vs frame)** | Every binding in the module body (**including nested blocks**) is a module-level global (no block scope at module level) · frames capture by reference · **a closure body is a frame too** (hoist + boxing) · inside a frame: declarations ⇒ frame-local, assignments ⇒ global write iff the name is a module binding (defects 181/183/184) |
 
 > Details and migration guidance: [docs/spec.md §17](docs/spec.md) and [docs/DICT_STRICT_MIGRATION.md](docs/DICT_STRICT_MIGRATION.md); every rule ships a three-rail byte-identical gate plus negative controls (`examples/m159_*` … `examples/m167_*`).
 
@@ -404,7 +406,7 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 
 ## Examples
 
-The `examples/` directory (**130 example directories / 120 single-file `.px`**) for quick hands-on:
+The `examples/` directory (**131 example directories / 120 single-file `.px`**) for quick hands-on:
 
 ```bash
 # Interpreted run

@@ -50,6 +50,11 @@ var cg_nonnull = {"_": 0}
 var cg_ffi = {"_": 0}
 var cg_const_enums = {"_": 0}  # M44：type X const 简化枚举
 var cg_globals = []
+# M169（第 54 轮 · 缺陷 181）：模块体标志 + 模块绑定名集合
+#   （codegen.px 里也有定义/初始化 —— 模块顶层 `var` 会随 import 合并执行；
+#     主文件再声明一份是本仓既有约定：主文件全局表才是运行时查表目标）
+var cg_topbody = false
+var cg_topnames = []
 var cg_err_labels = []
 var cg_uidc = 0
 var cg_closure_id = 0

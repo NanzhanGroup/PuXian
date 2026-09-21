@@ -47,6 +47,8 @@ var cg_closure_id = 0
 var loaded = {"_": 0}
 # bc_emit.px 模块级状态（import 不注册模块顶层 var → 主文件声明）
 var g_bcm = null
+# M169（缺陷 181）：模块绑定名集合（见 bc_emit.px 的说明）
+var g_topnames = []
 # ---------- 工具 ----------
 def bc_basename(path):
     var i = len(path) - 1

@@ -47,6 +47,25 @@ var cg_nonnull = {"_": 0}
 var cg_ffi = {"_": 0}
 var cg_const_enums = {"_": 0}  # M44：type X const 简化枚举（name → {variant: C表达式}）
 var cg_globals = []
+# M169（第 54 轮 · 缺陷 181）：**是否正在发射模块体（顶层）语句**。
+#   语义裁定（三轨一条真相）：**模块体里的所有绑定都是模块级全局** —— 包括嵌套块
+#   （if/for/while 体内）的 var/let/const、循环变量、以及嵌套 def；模块体**没有块作用域**。
+#     参考 = 解释轨（顶层是单一 env；实测 `if true: let x = 42` 后 `print(x)` ⇒ 42）。
+#     修前 C 轨只用「`len(cg_err_labels) == 0` 且名字已在 cg_globals」判断全局，
+#     于是**嵌套块内**的绑定被就地声明成帧局部、块外引用即 C undeclared 编译失败：
+#       `if true: let x = 42 / print(x)`      → error: '_v1' undeclared
+#       `for p in l:` 后 `print(p)`           → error: '_v3' undeclared
+#       `if true: for q in …` 后 `print(q)`   → 同上（嵌套块更甚）
+#       `let f = fn (): var s=0; for i in …; return s + i` → 闭包帧同样缺 hoist
+#     而 `len(cg_err_labels) == 0` 这个判据在**顶层闭包体内**也成立（cg_gen_closure
+#     不压栈）⇒ 闭包体内的绑定会被误判成全局。故改用**显式标志**：只在 cg_generate
+#     发射模块体语句期间为 true，函数体（cg_gen_func_named）与闭包体（cg_gen_closure）
+#     内一律 false（= 帧）。
+var cg_topbody = false
+# M169（缺陷 181）：**模块绑定名集合**（模块体，含嵌套块；不进 def / 闭包体）。
+#   帧内「赋值式绑定」（`x = …` 无声明）命中此集 ⇒ 写**模块全局**；否则提升为帧局部。
+#   与 VM 轨 `g_topnames`（bc_emit.px）同源、同一条真相。
+var cg_topnames = []
 var cg_err_labels = []
 var cg_uidc = 0
 var cg_closure_id = 0
@@ -605,6 +624,51 @@ def cg_collect_hoist_vars(stmts, out):
         elif ty == "While":
             cg_collect_hoist_vars(st[2], out)
         i += 1
+# ---------- M169（缺陷 181）：**声明式**绑定收集 ----------
+# 与 cg_collect_hoist_vars（含 Assign 目标）的唯一区别 = 「帧内绑定归属」判据：
+#   · **声明式**绑定（VarDecl / 嵌套 def / for 循环变量 / chan）⇒ 一律提升为**帧局部**
+#     （遮蔽同名模块全局）。修前判据是「名字在 cg_globals ⇒ 不提升」，于是
+#     `var g = 1` + `def f(): if true: var g = 5; return g` 在 C 轨**编译失败**
+#     （error: '_v2' undeclared —— 局部被就地声明在 if 块里），而解释/VM 轨都是 5。
+#   · **赋值式**绑定（`x = …`，无声明）⇒ 命中模块绑定则写模块全局（实测 s 例三轨皆 5），
+#     否则提升为帧局部（实测 u 例：`def f(): z = 5` 后 `g()` 读 z ⇒ 三轨皆「未定义变量」）。
+# 递归口径与 cg_collect_hoist_vars 完全一致（if/for/while 体内不新建作用域；止于 def 体之外）。
+def cg_collect_decl_vars(stmts, out):
+    var i = 0
+    while i < len(stmts):
+        let st = stmts[i]
+        let ty = st[0]
+        if ty == "VarDecl":
+            let name = rust_unescape(st[2])
+            if not contains(out, name):
+                out.append(name)
+        elif ty == "FuncDef":
+            let name = rust_unescape(st[1])
+            if not contains(out, name):
+                out.append(name)
+        elif ty == "ChanDecl":
+            let cn = rust_unescape(st[1])
+            if not contains(out, cn):
+                out.append(cn)
+        elif ty == "If":
+            let brs = st[1]
+            var bi = 0
+            while bi < len(brs):
+                cg_collect_decl_vars(brs[bi][1], out)
+                bi += 1
+            if st[2] != null:
+                cg_collect_decl_vars(st[2], out)
+        elif ty == "For":
+            let lvs = cg_for_names(st[1])
+            var li = 0
+            while li < len(lvs):
+                if not contains(out, lvs[li]):
+                    out.append(lvs[li])
+                li += 1
+            cg_collect_decl_vars(st[3], out)
+        elif ty == "While":
+            cg_collect_decl_vars(st[2], out)
+        i += 1
 # ---------- 函数生成 ----------
 def cg_gen_func(f):
     let cname = "fn_" + cg_func_cname(rust_unescape(f[1]))
@@ -619,6 +683,9 @@ def cg_gen_func_named(f, cname):
     let saved_types = cg_dict_copy(cg_var_types)
     let saved_cells = cg_dict_copy(cg_cells)
     let saved_imm = cg_dict_copy(cg_immutables)
+    # M169（缺陷 181）：函数体不是模块体 —— 体里的绑定按**函数级作用域**提升到帧顶
+    let saved_top = cg_topbody
+    cg_topbody = false
     cg_vars = cg_new_dict()
     cg_var_types = cg_new_dict()
     cg_cells = cg_new_dict()
@@ -647,6 +714,10 @@ def cg_gen_func_named(f, cname):
     # Python 语义局部变量；顶层全局名除外）——M62-L5 块作用域对齐（解释器不新建块作用域）
     let hoist_names = []
     cg_collect_hoist_vars(f[4], hoist_names)
+    # M169（缺陷 181）：本帧**声明式**绑定集 —— 声明式绑定一律提升为帧局部
+    #   （遮蔽同名模块全局）；只有「赋值式绑定且命中模块绑定」才留给全局写。
+    let decl_names = []
+    cg_collect_decl_vars(f[4], decl_names)
     var hoist_decls = []
     var ai = 0
     while ai < len(hoist_names):
@@ -654,7 +725,7 @@ def cg_gen_func_named(f, cname):
         if cg_var_of(name) != null:
             ai += 1
             continue
-        if contains(cg_globals, name):
+        if not contains(decl_names, name) and contains(cg_topnames, name):
             ai += 1
             continue
         let v = cg_new_var(name)
@@ -703,6 +774,7 @@ def cg_gen_func_named(f, cname):
     cg_var_types = saved_types
     cg_cells = saved_cells
     cg_immutables = saved_imm
+    cg_topbody = saved_top  # M169（缺陷 181）：还原模块体标志
     return s
 # ---------- generate 主流程 ----------
 def cg_generate(prog):
@@ -725,9 +797,15 @@ def cg_generate(prog):
     cg_seq_uid = 0
     cg_iter_uid = 0
     cg_unpack_uid = 0
+    cg_topbody = false  # M169（缺陷 181）：仅模块体语句发射期间置 true
     cg_collect_types(prog)
     # 收集顶层全局名（函数 + 顶层变量赋值）
     let items = prog[1]
+    # M169（缺陷 181）：**模块绑定名集合** —— 模块体（含嵌套块）里所有绑定
+    #   （var/let/const、for 循环变量、嵌套 def）都算模块级全局；不进 def / 闭包体
+    #   （cg_collect_hoist_vars 天然止于 def 之外 ⇒ 帧内绑定归帧）。
+    cg_topnames = []
+    cg_collect_hoist_vars(items, cg_topnames)
     var i = 0
     while i < len(items):
         let st = items[i]
@@ -818,6 +896,8 @@ def cg_generate(prog):
     # 执行顶层语句（除定义/import 外）
     # M152（缺陷 141）：同上，块表 + 一次 join（顶层语句可能成百上千条）。
     var top_chunks = []
+    # M169（缺陷 181）：以下为**模块体** —— 绑定一律模块级全局（含嵌套块）
+    cg_topbody = true
     var si2 = 0
     while si2 < len(items):
         let st = items[si2]
@@ -825,6 +905,7 @@ def cg_generate(prog):
         if ty != "FuncDef" and ty != "StructDef" and ty != "EnumDef" and ty != "TraitDef" and ty != "ImplDef" and ty != "Import" and ty != "ExternDef":
             top_chunks.push(cg_gen_stmt(st, 1))
         si2 += 1
+    cg_topbody = false
     out += join("", top_chunks)
     # 调用顶层 main()
     var has_main = false

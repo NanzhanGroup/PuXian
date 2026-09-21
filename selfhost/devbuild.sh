@@ -27,15 +27,39 @@ pxlint|tools/pxlint.px|static"
 
 entry_src() { echo "$ENTRIES" | grep "^$1|" | cut -d'|' -f2; }
 
-# 选最新 .rtcache（全 runtime 对象）—— 口径与 rebake_bin.sh 同
+# 选 .rtcache（全 runtime 对象）
+#   M169 修（本地实测踩中）：**按 rt_key 命中优先 + 主机架构过滤**。
+#   修前只按 `runtime.o` 的 mtime 取「最新」——而 M168 起交叉编译缓存（aarch64/armv7/
+#   riscv64）会落进**同一个** `.rtcache/`：最新那份可能是**别的架构**的对象
+#   ⇒ 链接报 `Relocations in generic ELF (EM: 183)` / `file in wrong format`，
+#   错误信息完全指不到根因（本机实测：aarch64 档把 pxc 的 devbuild 全数打死）。
+#   纪律同 M168「门/工具不能依赖环境」：选料必须**可判定**，不能靠「谁最新」。
 CACHE=""; best_m=0
-for d in "$ROOT"/.rtcache/*/; do
-    n=$(basename "$d"); [ ${#n} -eq 16 ] || continue
-    [ -f "$d/runtime.o" ] || continue
-    m=$(stat -c %Y "$d/runtime.o" 2>/dev/null || echo 0)
-    if [ "$m" -gt "$best_m" ]; then best_m=$m; CACHE="${d%/}"; fi
-done
+keyed="$("$ROOT/tools/px" rtcache 2>/dev/null | tail -1)"
+if [ -n "$keyed" ] && [ -d "$keyed" ]; then
+    n=$(ls "$keyed"/*.o 2>/dev/null | wc -l)
+    [ "$n" -ge 15 ] && CACHE="${keyed%/}"
+fi
+if [ -z "$CACHE" ]; then
+    case "$(uname -m)" in
+        x86_64)  WANT="x86-64" ;;
+        aarch64) WANT="ARM aarch64" ;;
+        armv7l)  WANT="ARM," ;;
+        riscv64) WANT="RISC-V" ;;
+        *)       WANT="" ;;
+    esac
+    for d in "$ROOT"/.rtcache/*/; do
+        n=$(basename "$d"); [ ${#n} -eq 16 ] || continue
+        [ -f "$d/runtime.o" ] || continue
+        if [ -n "$WANT" ]; then
+            file -b "$d/runtime.o" 2>/dev/null | grep -qF "$WANT" || continue
+        fi
+        m=$(stat -c %Y "$d/runtime.o" 2>/dev/null || echo 0)
+        if [ "$m" -gt "$best_m" ]; then best_m="$m"; CACHE="${d%/}"; fi
+    done
+fi
 [ -n "$CACHE" ] || { echo "❌ 无可用 .rtcache（先跑 ./tools/px build --full examples/hello.px）" >&2; exit 1; }
+echo "── devbuild 选料：${CACHE#$ROOT/}（$(file -b "$CACHE/runtime.o" 2>/dev/null | cut -d, -f1-2)）"
 objs=""; for f in "$CACHE"/*.o; do objs="$objs $f"; done
 LIBS="$RT/third_party/sqlite3/sqlite3.o
 $RT/mbedtls/lib/libmbedtls.a $RT/mbedtls/lib/libmbedx509.a $RT/mbedtls/lib/libmbedcrypto.a
