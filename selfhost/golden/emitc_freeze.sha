@@ -149,6 +149,11 @@ examples/m173_http_proxy/vhost_gzip.px src=a710b39badc41c35 rc=0 out=a0201052cfc
 examples/m174_dict_get/err_get_badkey.px src=8bbf9422e94238fc rc=0 out=3e0e48498b7fef87102d123159f80ec9 err=e3b0c44298fc1c14
 examples/m174_dict_get/err_missing_key.px src=d3566ae7da9fd4de rc=0 out=a432dda488c39a774da790ef6846d69a err=e3b0c44298fc1c14
 examples/m174_dict_get/get_matrix.px src=a563314329872860 rc=0 out=27fb79715705130b7914efe9873235ca err=e3b0c44298fc1c14
+examples/m175_bytes_stderr/len_bytes.px src=469c78030c6f65bd rc=0 out=471d5aabc238c4f87569c568c0c0c582 err=e3b0c44298fc1c14
+examples/m175_bytes_stderr/popen_badopt.px src=004b0456e49bb9a5 rc=0 out=6a1b7e6200e77111fc540dd77cb73d4f err=e3b0c44298fc1c14
+examples/m175_bytes_stderr/popen_default.px src=0ee65fa043eea79f rc=0 out=69023009bd03eb685e91cd7f5a56d71b err=e3b0c44298fc1c14
+examples/m175_bytes_stderr/popen_null.px src=cce5f62a26649f0e rc=0 out=4c57796a70ea38fb79e3f59afad2aecf err=e3b0c44298fc1c14
+examples/m175_bytes_stderr/popen_pipe.px src=43b58031b6b14f7f rc=0 out=a517c0595f17e100d0051ba9e1b28ffb err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=ca57a90d693278f051ce29d427bb006a err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=864a86fa0f3b5c69d3239ebdb2eac63a err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14

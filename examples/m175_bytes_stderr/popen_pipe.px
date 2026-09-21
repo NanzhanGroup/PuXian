@@ -1,0 +1,25 @@
+# M175 门 · 用例 B2：`{"stderr": "pipe"}` ⇒ 子进程 stderr 被管道接走（不再漏进宿主）
+# 门（shell 侧）断言：宿主 stderr **不得出现** `CHILD-ERR`；本程序内断言能从 stderr_fd 读回。
+var fails = 0
+def chk(cond, what):
+    if cond:
+        print("  PASS " + what)
+    else:
+        print("  FAIL " + what)
+        fails += 1
+
+let opts = json_parse("{}")
+opts.set("stderr", "pipe")
+let r = os_popen("sh", ["-c", "echo OUT; echo CHILD-ERR 1>&2"], opts)
+if r == null:
+    print("FAIL popen=null")
+    exit(1)
+chk(r.has("stderr_fd"), "返回值里有 stderr_fd（新增字段）")
+let out = bytes_to_str(read(r["stdout_fd"], 4096))
+let err = bytes_to_str(read(r["stderr_fd"], 4096))
+os_wait(r["pid"])
+chk(contains(out, "OUT"), "stdout 读回 OUT")
+chk(contains(err, "CHILD-ERR"), "stderr 读回 CHILD-ERR（被接走而不是漏给宿主）")
+print("M175B2-PIPE-OK fails=" + str(fails))
+if fails > 0:
+    exit(1)

@@ -1,0 +1,23 @@
+# M175 门 · 用例 B3：`{"stderr": "null"}` ⇒ 子进程 stderr 接进 /dev/null（不漏宿主、也不占 fd）
+# 门（shell 侧）断言：宿主 stderr 不得出现 `CHILD-ERR`。
+var fails = 0
+def chk(cond, what):
+    if cond:
+        print("  PASS " + what)
+    else:
+        print("  FAIL " + what)
+        fails += 1
+
+let opts = json_parse("{}")
+opts.set("stderr", "null")
+let r = os_popen("sh", ["-c", "echo OUT; echo CHILD-ERR 1>&2"], opts)
+if r == null:
+    print("FAIL popen=null")
+    exit(1)
+chk(r.has("stderr_fd") == false, "null 模式不产生 stderr_fd")
+let out = bytes_to_str(read(r["stdout_fd"], 4096))
+os_wait(r["pid"])
+chk(contains(out, "OUT"), "stdout 仍正常读回 OUT")
+print("M175B3-NULL-OK fails=" + str(fails))
+if fails > 0:
+    exit(1)

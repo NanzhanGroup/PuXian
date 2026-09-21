@@ -1994,3 +1994,25 @@ set_timeout(fn (): print("once after 2s"), 2000)
      · 门：`examples/m174_dict_get/`（`M174-VERIFY-OK` · 39 断言）—— 12 条语义矩阵 × 三轨
        **逐字节一致** + 缺键 `R1008` + `get` 坏键 `R1002`（各三轨同码同文）+ 负控 1 道。
      · 附注：`int_to_hex(n, width)` 的 **width 必填**（缺参数当场 `R1002`，不会生成错字节）。
+
+203. **`len` 的自然单位 + `os_popen` 的 stderr 去向（第 57 轮 · M175 收口台账缺陷 153 / 14）**：
+     · **`len(bytes)` = 字节数**（修前 `len 不支持类型 bytes`，只能用 `bytes_len(b)`）。
+       口径：**每个类型按自己的自然单位** —— `len(str)` = **rune 数**（M155 起含内嵌 NUL）、
+       `len(bytes)` = 字节数、`len(list/dict/tuple)` = 元素数。
+       有意思的是解释轨的 `i_builtin_len` **本来就写了 bytes 分支**（`len(args[0])`），
+       而 `len` 在解释器里最终调到的**正是同一个 runtime 函数** ⇒ 两轨一起撞同一堵墙
+       （「同一份意图写了两处」的又一例）。
+     · **`os_popen(cmd, args[, opts])`**：子进程此前只 dup2 了 0/1，**fd 2 继承宿主** ⇒
+       子进程 stderr 漏进宿主（同族的 `os_capture`/`os_spawn_capture` 一直分离捕获，同族漏一环）。
+       `opts = {"stderr": "inherit"（默认，旧行为逐字节不变）| "pipe" | "null"}`：
+       `pipe` ⇒ 返回值多一个 **`stderr_fd`**；`null` ⇒ `/dev/null`；非法取值 ⇒ **R1002 + 枚举文案**（不静默回落）。
+       解释轨的 .px 桥透传第 3 参，但**取值校验只在 runtime 一处**（桥不复制一份）。
+     · 门：`examples/m175_bytes_stderr/`（`M175-VERIFY-OK` · 46 断言 · 三轨 + 2 道负控）。
+       **反向判据**是关键：不传 opts 时**宿主 stderr 里必须出现 `CHILD-ERR`**
+       —— 证明开关是纯增量、没把旧行为一起改掉。
+204. **解释器的 Mini 子集边界（缺陷 79 重新分类 · 有意不做）**：`px run` 对 `mutex` / `rwlock`
+     报 `interp 不支持 mutex（Mini 子集排除）`。**解释器根本没有并发**（`spawn`/`chan`/`select`
+     全排除）⇒ 无竞争锁在语义上确实是 no-op，**技术上可以做**；但做了之后 `px run` 会对一个
+     含锁的程序一路绿灯，而它连 `spawn` 都跑不了 ⇒ **制造「解释轨验证过了」的错觉**。
+     故当前口径（响亮报错）优于 no-op。**归类：解释器子集边界（有意）**，与 spawn/chan 同列；
+     若将来解释器长出真并发，这条自动变必修。用编译轨（VM/C）跑带锁程序才是正路。

@@ -1,0 +1,23 @@
+# M175 门 · 用例 B1：`os_popen` **不传 opts** ⇒ 子进程 stderr 仍继承宿主（= 旧行为，逐字节不变）
+# 门（shell 侧）断言：宿主进程的 stderr 里**应当出现** `CHILD-ERR` —— 反向判据：
+#   开关必须是**纯增量**，不能改变既有调用者的行为。
+var fails = 0
+def chk(cond, what):
+    if cond:
+        print("  PASS " + what)
+    else:
+        print("  FAIL " + what)
+        fails += 1
+
+let r = os_popen("sh", ["-c", "echo OUT; echo CHILD-ERR 1>&2"])
+if r == null:
+    print("FAIL popen=null")
+    exit(1)
+let out = bytes_to_str(read(r["stdout_fd"], 4096))
+os_wait(r["pid"])
+chk(r.has("stderr_fd") == false, "未开 pipe 时返回值里没有 stderr_fd")
+chk(contains(out, "OUT"), "stdout 读回 OUT")
+# 子进程 stderr **不在**本程序能观测的范围内（它继承的是宿主 stderr）⇒ 由门在 shell 侧断言
+print("M175B1-DEFAULT-OK fails=" + str(fails))
+if fails > 0:
+    exit(1)
