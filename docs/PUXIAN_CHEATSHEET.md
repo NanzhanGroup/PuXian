@@ -1,7 +1,8 @@
 # PuXian 速查包（PUXIAN_CHEATSHEET）
 
 > **给 AI 的一句话**：把本文件 + [`docs/ECOSYSTEM.md`](ECOSYSTEM.md) 整包喂进上下文，即可写出**语法正确、native/库调用正确**的 PuXian（普贤）`.px` 程序。生成后务必用 `tools/px run <f>.px` 验证；编译模式 `tools/px build <f>.px`。
-> 版本基线：M69（2026-09-05）· 双模式（编译 px build / 解释 pxi run）行为一致（M68 起 native 零 extern def 可达）。
+> 版本基线：M69（2026-09-05）· 三轨（解释 `px run` / VM `px build` 默认 / C `px build --c`）行为一致（M68 起 native 零 extern def 可达；M159–M167 起语义收口，见下）。
+> **读前必看（2026-09-21）**：文档总览 [`README.md`](README.md)（docs 索引）· **规范条文** [`spec.md`](spec.md) **§17 语义一致性收口**（求值顺序 / 迭代长度快照 / 解包 / 字典键 / `sorted` / 闭包与生成器捕获）+ **§11.2 错误码真值表**（R1001–R1011）· **迁移指引** [`DICT_STRICT_MIGRATION.md`](DICT_STRICT_MIGRATION.md)。
 > 工具链（M71，2026-09-06）：`px build` 已增量缓存（**二次 build ≈0.4–0.9s**）+ `--target <arch>` 交叉；`px mcp` 含 **build** 工具（AI 一条 MCP 写→验→交付）；安装 `tools/install.sh`（sha256 自动校验 + argv0 自发现，装完任意目录免 PX_STDLIB）。重文本/大文件处理：px build 编译版毫秒级 ≈ grep（ECOSYSTEM_GAPS F4 M71 更正）。
 > M85（2026-09-06）：`px build` 模块裁剪开关集 —— `--no-sqlite`/`--no-ws`/`--no-zip`/`--no-xml`/`--no-aes`/`--no-rsa`/`--no-ed25519`/`--no-route`/`--no-zlib`/`--no-h2` 与 `--no-quic` 正交可任意组合，`--min` 聚合为最小化 profile；产物 9.0M → 2.7M；裁剪态调用缺的 native → 运行时明确报错（R1001，与裁剪编译产物一致）。
 > M86（2026-09-06）：**官方命令名 `px`**（pxc 兼容别名，等价可用）；`px build` **默认按引用集自动最小**（编译期自动收集被引用 native，未引用模块自动去除；hello → ~2.7M / sqlite 用户自动保留 ~3.8M；`--full`/`--max` = 全能力逃生舱 ≈9.0M；显式 `--no-xxx`/`--min` 优先级 > 自动；解析失败自动退全量保编译成功）；`px refs <file>` 输出被引用全局/native 名集合。
