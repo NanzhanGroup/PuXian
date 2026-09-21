@@ -1,0 +1,9 @@
+# M172 门 · 用例 ①：运行期「未定义变量」（R1001）
+# 期望：rc≠0 · **stdout 只有程序输出（`out-1`）** · 诊断在 **stderr** 且含 `R1001` 与 `未定义变量: 'zzz'`
+print("out-1")
+
+def f():
+    return zzz + 1
+
+print(str(f()))
+print("out-2")

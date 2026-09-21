@@ -702,7 +702,7 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
                          cf->name, fr->line, in.b, m ? m->nG : -1);
             }
             int gi_g = px_global_resolve_stable(m->G[in.b]);
-            if (gi_g < 0) px_error("未定义变量: %s", m->G[in.b]);
+            if (gi_g < 0) px_error("R1001: 未定义变量: '%s'", m->G[in.b]);
             slots[in.a] = px_global_at(gi_g);
             break;
         }

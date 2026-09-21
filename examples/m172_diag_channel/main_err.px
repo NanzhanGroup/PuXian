@@ -1,0 +1,4 @@
+# M172 门 · 用例 ②：`main()` 返回 `Err`（程序自报失败）
+# 期望：rc≠0 · stdout **空** · 诊断在 **stderr**（`错误: boom`）
+def main():
+    return Err("boom")

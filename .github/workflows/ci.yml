@@ -319,6 +319,11 @@ jobs:
           # 判据：合法侧 5 例（lint 0/0 **且** 三轨 stdout 逐字节一致）+ 真阳性 2 例
           #   + 仓内 8 个真实文件 0 错误；负控 3 道（本地全门跑，CI --neg-skip）。
           bash examples/m171_lint_scope/verify.sh --neg-skip > /tmp/v_m171.log 2>&1 || { echo "❌ m171_lint_scope verify 失败"; tail -60 /tmp/v_m171.log; exit 1; }
+          # M172（第 56 轮）：运行期诊断的**通道与措辞统一**（缺陷 186）。
+          # 修前：解释轨把 R1001/main→Err 的诊断写 stdout、编译轨写 stderr，且措辞不同。
+          # 判据：R1001 三轨（rc≠0 · stdout 恰为程序输出 · stderr 含 R1001 与同引号消息体）
+          #   + main→Err 三轨 + 正常程序 stderr 0 字节 + 真·合并流顺序；负控 2 道本地全门跑。
+          bash examples/m172_diag_channel/verify.sh --neg-skip > /tmp/v_m172.log 2>&1 || { echo "❌ m172_diag_channel verify 失败"; tail -60 /tmp/v_m172.log; exit 1; }
           # 发射冻结门（M153 建立）：292 个用例的 --emit-c 输出必须逐字节不变。
           bash selfhost/emitc_freeze.sh --check > /tmp/v_emitc_freeze.log 2>&1 || { echo "❌ emitc_freeze 失败"; tail -30 /tmp/v_emitc_freeze.log; exit 1; }
           echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 / m153 / m154 / m155 / m158 / m160 / m161 / m162 / m163 / m164 verify / m170_gc_bridge_root + 发射冻结门（299 件 --emit-c）全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"

@@ -1933,3 +1933,23 @@ set_timeout(fn (): print("once after 2s"), 2000)
        项目级守护 = `pxlint selfhost/compiler.px`）；`px_exec` 注入参数（`examples/webapp/include.px`）
        静态不可知。**新登记缺陷 193**：同一帧「先读后声明」—— 解释轨 `R1001`、VM/C 轨给 **`null`**
        （三轨不同答案）⇒ 修法 = hoist 槽带「未初始化」哨兵，详见 spec §17.9。
+
+199. **运行期诊断的通道与措辞（第 56 轮 · M172 收口缺陷 186）**：
+     修前**三轨四种行为** —— `def f(): return zzz + 1` 解释轨把诊断写 **stdout**
+     （`运行时错误: 错误 [R1001] 2:12: 未定义变量: 'zzz'`），编译轨写 **stderr**
+     （`运行时错误 [f 行2]: 未定义变量: zzz`）；`def main(): return Err("boom")` 解释轨同样写 stdout。
+     ⇒ ① **诊断混进产物通道**（与 Issue 45/51、`engine_parity` 判据 B「失败时 stdout 必须为空」
+     同轴相悖）；② 三轨措辞不同 ⇒ 自动化没法按错误码判，只能猜中文子串。
+     · 修法三点（各一行级）：① `selfhost/interp.px` 三处诊断出口 `print` → **`print_err`**
+       （覆盖**全部**解释轨运行期错误 R1001–R1011）；② `runtime.c` 的 `px_get_global` 与
+       `vm.c` 的 VM `GETG`：`未定义变量: %s` → **`R1001: 未定义变量: '%s'`**（全仓 `px_error`
+       消息本就 413 处带 `R1xxx:` 码，此处补齐多数派口径）；③ `bi_print_err` 先
+       **`fflush(stdout)`** —— 否则 `2>&1` 合并捕获里诊断会跑到程序输出**前面**（因果反了）。
+     · 门：`examples/m172_diag_channel/`（`M172-VERIFY-OK` · 41 断言）—— R1001 三轨
+       （rc≠0 · stdout **恰为程序输出** · stderr 含 `R1001` + `未定义变量: 'zzz'`）·
+       `main()→Err` 三轨（stdout 空）· 正常程序 **stderr 0 字节** ·
+       **真·合并流**（`> f 2>&1` 单次运行）首行必须 `out-1`（拼接式 out+err 测不出交错）·
+       负控 2 道（通道 / 措辞）。
+     · **保留边界（有意）**：**位置前缀**各轨保留最优信息 —— 解释轨 `错误 [R1001] 行:列:`、
+       编译轨 `[函数 行N]:`（runtime 无列号）。要逐字节一致得给 runtime 补列号（全语料重定基）
+       或让解释轨丢列号（**减信息**）⇒ 判据只断言「同通道 + 同码 + 同消息体 + rc」，**别按整行对拍**。
