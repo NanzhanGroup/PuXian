@@ -49,13 +49,20 @@ gpgkey=file:///out/PUXIAN-GPG-KEY.asc
 EOF
 
 echo "== [verify-el7] yum makecache 双验签（-y 免 tty 自动导入公钥）=="
-yum -y makecache 2>&1 | tail -6 || { echo "❌ el7 yum makecache 双验签失败"; exit 1; }
+# ⚠️ **限定到本仓库**：vault.centos.org 时通时不通，若把它的失败算进"验签失败"会掩盖真因
+if ! yum -y --disablerepo='*' --enablerepo=puxian-verify makecache 2>&1 | tail -6; then
+    echo "❌ 步骤失败: yum makecache（双验签）" >&2; exit 1
+fi
 echo "== [verify-el7] 仓库可见性 =="
 # yum 3.4（el7）无 dnf 风格 --repo 选项 → 用 --disablerepo/--enablerepo
 yum -y --disablerepo='*' --enablerepo=puxian-verify list puxian || { echo "❌ yum list 找不到 puxian"; exit 1; }
 
 echo "== [verify-el7] 真实安装 puxian + 运行验证 =="
-yum -y install puxian >/dev/null
+if ! yum -y install puxian >/dev/null 2>&1; then
+    echo "❌ 步骤失败: yum install puxian（依赖解析/下载）" >&2
+    yum -y install puxian 2>&1 | tail -25 >&2
+    exit 1
+fi
 rpm -q puxian
 /usr/bin/pxc --version
 
