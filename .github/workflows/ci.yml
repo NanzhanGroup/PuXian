@@ -503,12 +503,15 @@ jobs:
           ldd --version | head -1
           ls -la bootstrap/ | head -20
 
-      - name: 原生自举（gcc-only）—— 含自证：pxc0 编 compiler.px ↔ golden/compiler.c
+      - name: 原生自举（gcc-only · **--portable**：M168 起默认产物必须全静态）—— 含自证：pxc0 编 compiler.px ↔ golden/compiler.c
         run: |
           set -o pipefail
-          if ! bash selfhost/native_bootstrap.sh --outdir "$RUNNER_TEMP/nb" 2>&1 | tee "$RUNNER_TEMP/nb.log"; then
+          # M168：本 job 与发布侧 aarch64 job 同口径（--portable）—— 发布链的"包内必须
+          #   与 glibc 版本解耦"这件事，在 main 上就要有人守；否则只能等 tag 才发现。
+          if ! bash selfhost/native_bootstrap.sh --portable --outdir "$RUNNER_TEMP/nb" 2>&1 | tee "$RUNNER_TEMP/nb.log"; then
             tail -30 "$RUNNER_TEMP/nb.log" | sed 's/^/::error::nb /'; exit 1
           fi
+          grep -q "static=1" "$RUNNER_TEMP/nb.log" || { echo "::error::原生自举件不是全静态"; grep NATIVE-BOOTSTRAP "$RUNNER_TEMP/nb.log" | sed 's/^/::error::nb /'; exit 1; }
           test -x "$RUNNER_TEMP/nb/pxc" || { echo "::error::缺 $RUNNER_TEMP/nb/pxc"; ls -l "$RUNNER_TEMP/nb" | sed 's/^/::error::ls /'; exit 1; }
           grep -q "NATIVE-BOOTSTRAP-OK" "$RUNNER_TEMP/nb.log" || { tail -20 "$RUNNER_TEMP/nb.log" | sed 's/^/::error::nb /'; exit 1; }
 
@@ -562,6 +565,32 @@ jobs:
           cat /tmp/run.log
           grep -q aarch64-ok /tmp/run.log || { tail -20 /tmp/run.log | sed 's/^/::error::run /'; exit 1; }
           echo "✅ 原生 aarch64：零参数 build + run 全通"
+      - name: M168 发布侧口径门（全部 12 件原生工具 + 二进制可移植性门）
+        # 为什么在这里（而不是只在发布 job）：**发布 job 的日志外部不可读**（API 403），
+        #   而 main 上的 CI 注解可读 ⇒ 「包内必须全静态 + 本架构」这条口径在 main 上守，
+        #   失败信息走 ::error:: 注解，一眼可定位。
+        run: |
+          set -e
+          cp -f "$RUNNER_TEMP/nb/pxc" bootstrap/pxc
+          for e in "pxi|selfhost/interp.px" "pxl|selfhost/lexer.px" "pxpar|selfhost/parser.px" \
+                   "pxfmt|tools/pxfmt.px" "pxbench|tools/pxbench.px" "pxcheck|tools/pxcheck.px" \
+                   "pxdoc|tools/pxdoc.px" "pxlint|tools/pxlint.px" "pxlsp|tools/pxlsp.px" \
+                   "pxmcp|tools/pxmcp.px" "pxtest|tools/pxtest.px"; do
+            n="${e%%|*}"; s="${e#*|}"
+            if ! PX_BUILD_ENGINE=c tools/px build "$s" > "$RUNNER_TEMP/b_$n.log" 2>&1; then
+              echo "::error::$n 原生现编失败"; tail -20 "$RUNNER_TEMP/b_$n.log" | sed "s/^/::error::$n /"; exit 1
+            fi
+          done
+          rm -f bootstrap/pxc_vm bootstrap/pxi_vm
+          if ! bash selfhost/check_bin_portability.sh --self-test > "$RUNNER_TEMP/pst.log" 2>&1; then
+            echo "::error::可移植性门自证失败"; sed 's/^/::error::pst /' "$RUNNER_TEMP/pst.log"; exit 1
+          fi
+          if ! bash selfhost/check_bin_portability.sh --arch aarch64 --require-static bootstrap/* > "$RUNNER_TEMP/pg.log" 2>&1; then
+            echo "::error::可移植性门判红（有件不是 aarch64 全静态）"; sed 's/^/::error::portability /' "$RUNNER_TEMP/pg.log"; exit 1
+          fi
+          cat "$RUNNER_TEMP/pg.log"
+          echo "✅ 12 件原生工具 + bootstrap/pxc 全部：aarch64 + 全静态"
+
       - name: 宿主机架构自适应门（m159_hostarch）
         env:
           PX_BUILD_ENGINE: c
