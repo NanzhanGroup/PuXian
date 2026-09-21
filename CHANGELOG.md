@@ -1,3 +1,168 @@
+## M170 · native 桥的 precise GC 根面收口（第 55 轮 · 用户报障【清歌】· 缺陷 187 + 同族 188/189/190）
+
+> 主题换轨：M160–M169 一直在收「**语言语义**的真空」（三轨对同一份源码各自作答），
+> 本轮是**运行期**的同一种病 —— 「**GC 根面**的真空」：precise GC 声明「不扫整条 C 栈」，
+> 那么 native 桥里只活在 C 局部的对象**由谁保活**？答案必须由每个桥自己给出，
+> 而**没有任何门在看这件事** ⇒ 一条条漏登记就是一颗颗定时炸弹
+> （清歌报的那颗跑了 **1.6 万轮**才炸）。
+
+### 一、报障与复现（原样保留用户的最小复现）
+
+`sqlite_query` 返回的行 dict 在 **GC 第一次回收后**被写坏：列表元素 `type` 变 `unknown`/`int`、
+行 dict 丢键（`R1002`/`R1008`）。本机在 M169 树上复现：
+
+| 条件 | 结果 |
+|---|---|
+| 默认阈值 | `FAIL-TYPE n=16388 i=0 t=unknown`（**3/3 次完全一致**） |
+| `PX_GC_THRESHOLD=1000` | 更早发作（n≈23） |
+| GC 关（`PX_GC_THRESHOLD=1e8 PX_GC_TRIGGER_BYTES=0`） | **15 万轮零破坏** |
+
+⇒ 病灶在**运行期 GC**，不在 `.px` 源码；且「默认阈值要跑 1.6 万轮」正是它长期没被发现的原因。
+
+### 二、根因（一条纪律，两条硬约束）
+
+VM 轨产物默认 **precise GC**：根面 = 全局槽 + VM 帧槽 + TLS 登记根栈，**不扫整条 C 栈**。
+native 桥（`bi_*`）里只活在 **C 局部**的 `LXValue` 必须自己登记（`PX_KEEP`），否则
+「另一次分配触发 GC」时被误回收 ⇒ 返回的容器里是**已释放对象**（写坏 slab 空闲链 ⇒ 之后 SIGSEGV）。
+
+- **约束① 容器创建后必须登记**（漏登记 = use-after-free）。
+- **约束② 登记必须紧跟创建、先于下一次分配** ——
+  `d = px_dict(); hdr = px_dict(); PX_KEEP(d);` 里 `hdr` 那次分配就可能回收 `d`；
+  `LXValue name = px_null(); PX_KEEP(name); name = px_str_len(...);` 里**登记的是 null**（等于没写）。
+
+### 三、本轮同族四处（都是「同一根因的不同面孔」）
+
+| # | 位置 | 现象（stress 下必现） | 修法 |
+|---|---|---|---|
+| **187** | sqlite / xml / onnx / rsa / h3 桥 | 返回容器内含已释放对象 ⇒ 值/类型错乱、SIGSEGV | 容器**紧跟创建**登记（`h3_c_fields_to_lx` / `h3_fields_to_request` / `h3_fields_to_response` / `h3_append_headers` / `h3_make_*_fields` / `h3_read_section` / `h3_send_fields` / `px_qd_enc` / `bi_settings_dec` 等） |
+| **188** | **隔离点 longjmp 落点** | `px_error` 的 longjmp **不展开 C 帧** ⇒ 被跳过的登记成了**野根**（指向已释放对象），之后**每轮 GC 都去标记它**；长跑服务里线性累积 | 新增 `px_root_depth(&marks)` / `px_root_restore(roots, marks)`；**5 个 setjmp 落点全接**（json_opt / thread / spawn / coro / native_call） |
+| **189** | `px_register_builtins` 建表期 | 逐条 `px_set_global(name, px_native(...))` 的两次分配都**不该逐条登记根**，阈值低到在注册期触发 GC 时 ⇒ 刚建的 native 对象被误回收（已是**悬挂引用**） | 建表期**冻结回收**（`g_gc_frozen`），对齐 V8「初始化期不允许堆分配回收」 |
+| **190** | QPACK 静态解码器 | 「值」先创建、后于两次分配才放进 pair ⇒ 内存被重用 ⇒ 读出的**值退化为名字**（`:authority=:authority`、`:path=:path`、`user-agent=user-agent`）；**编码侧完全正确**（线上字节两次运行逐字节相同） | 值/名字**紧跟创建登记**（`PX_KEEP(val)`）+ 十余个早退分支改**深度式登记**统一归还 |
+| **191** | `h_exchange`（`http_request` 响应解析） | 响应头 dict 从创建到 `return` 之间跨**大量分配**（每行 `px_str`、同名头升级 `px_list`、读 body 的 recv 循环），而它此刻只由**调用者的 C 局部**持有 ⇒ 中途被回收：轻则**丢头**（实测 `X-Test`）、重则 `px_dict_set` 写已释放内存 ⇒ **后续 xmalloc 崩溃**（`m23c_http_adv` 在 `PX_GC_STRESS=1` 下 SIGSEGV） | 函数内 `px_root_push`+`PX_KEEP(*out_headers)`、出口 `px_root_pop`（**由 `PX_GC_STRESS` 差分筛抓到**） |
+
+> 190 是「门自己」抓到的：加了 `PX_GC_STRESS=1` 之后，**M47 HTTP/3 回环门**（与 sqlite 无关）
+> 在 stress 下由 PASS 变 FAIL，倒查才落到 QPACK 解码器 —— **这正是把「偶发」变「必现」的价值**。
+
+### 四、新检测器：`PX_GC_STRESS=1`（本轮最可复用的产出）
+
+**每次分配即 GC**（`gc_register` 里 `need = 1`）。把「靠阈值凑巧发作」变成「必然发作」：
+任何漏登记的桥在**第一轮分配**就露出来 ⇒ 可被门/语料**批量筛出**。代价 O(n²)，只用于小语料。
+配套 `PX_GC_DEBUG=1`：隔离点打印 `[px-gc] root 还原 marks=… roots=…`、退出打印根登记栈峰值。
+
+### 五、验证（`examples/m170_gc_bridge_root/` · `M170-VERIFY-OK`）
+
+- **① 三轨一致**：解释轨 / VM 轨（默认）/ C 轨跑用户最小复现 ⇒ 同一条 `pass=4000 fail=0` 且**逐字节一致**；
+- **② 低阈值长跑**：`PX_GC_THRESHOLD=800` × 20000 轮 ⇒ `pass=400000 fail=0`（即报障触发条件）；
+- **③ stress 四桥**：`PX_GC_STRESS=1` × sqlite/xml/onnx/rsa ⇒ 全绿（**主检测器**）；
+- **④ 反例对照**：同一 stress 环境的 **C 轨**（保守 GC）同样绿 ⇒ 差异只在**精确根面**，不是数据问题；
+- **⑤ H3/QPACK codec 值完整性**：静态 6 条 + 动态 3 轮**逐条**一致（`:authority`/`:path`/`user-agent`
+  的值不得退化为名字）；
+- **⑥ 缺陷 188 可观测**：`PX_GC_DEBUG=1` 下每次被隔离的错误各留一条 `root 还原 … roots=N→0`
+  （**只打印不收缩 = 假修**，故断言里要求真的出现 `→0` 收缩）；
+- **⑦ http_request 响应头完整性（缺陷 191）**：仓库自带自包含样例 `m23c_http_adv.px`
+  （自己 spawn 服务端 + 客户端断言）在 `PX_GC_STRESS=1` 下必须 `HTTP-ADV TESTS PASSED`
+  —— 修前 **core dump**（丢头 + 写已释放内存 ⇒ 后续 xmalloc 崩）；顺带按端口占用自动跳过；
+- **⑧ 负控 5 道**（各自独立判红 + sha256 逐字节还原）：A 去 sqlite 的 `PX_KEEP(out)` ⇒ ② 层红
+  （`FAIL-TYPE n=8`）；B xml 登记滞后 ⇒ ③ 层红（**rc=139 = SIGSEGV**）；C 隔离点 restore 换 `if(0)`
+  ⇒ ⑥ 层红（还原记录 0 条）；D 去 QPACK `val` 登记 ⇒ ⑤ 层红（`FAIL-STATIC-MISMATCH i=2
+  got=:authority=:authority want=:authority=localhost:17997`）。
+  ⚠️ **191 刻意不配负控**（纪律：**不设假负控**）：实测去掉 `PX_KEEP(*out_headers)` 后症状是
+  **时序相关**的 —— 同源码连跑 5 次：1 次丢头 `R1008` / 3 次 PASS / 1 次 SIGSEGV ⇒ 这种控制会让门
+  **偶发变红**（假红比不判更糟）。191 由 ⑦ 层**正判据锁症状**（修前该样例在 stress 下 core dump，
+  正向复现 2/2 独立运行）。
+
+> 门自己的两个坑（都当场修掉，写进注释）：① 判据里带 `rc=0` 的负控会**恒判红**（isolate 用例
+> rc 恒为 1 —— 「退出码修正」是设计），假红比不判更危险；② 负控只替**前缀**会留下行尾注释 ⇒
+> C 编译失败 ⇒ 变成「因为编译不过而判红」的假红（读不出真因），必须**整行**替换。
+
+### 六、其余
+
+- **门注册**：`ci.yml`（`--neg-skip`）+ `selfhost/m116_gates.sh`（全门含 4 道负控）。
+- **入库件重烘** ⇒ `PXSRC-` 指纹更新（改 `runtime/runtime.c` 必然改源码链指纹）。
+- **文档**：`docs/spec.md` **§17.10 运行期 GC 根面**（新）+ §17.9 登记；速查表**事实 197**。
+- **顺手修**：`runtime/runtime.h` 导出 `px_root_depth` / `px_root_restore` 并写明
+  「帧式 push/pop 与深度式 depth/restore **不要混用**」的语义边界。
+
+### 七、批量筛：`PX_GC_STRESS` 差分筛（新工具，本轮产出）
+
+`sweep.sh`：对 `examples/*.px` 逐个 **正常跑 vs `PX_GC_STRESS=1` 跑**，判据 = **程序自身输出逐字节一致**
+（正常轨本就非 0 / 超时的样例跳过：服务器、需要端口或外部依赖的）。本轮跑出来的 3 条差异：
+
+| 样例 | 差异 | 判定 |
+|---|---|---|
+| `concurrent_m3.px` | `elapsed=100ms` vs `101ms` | **非缺陷**（输出含计时） |
+| `gc_demo.px` | stress 下超时（rc=124） | **非缺陷**（stress 是 O(n²)，20 万次 GC 操作必然超时） |
+| `m23c_http_adv.px` | stress 下 **core dump** | **真缺陷 191** ⇒ 已修（修后该样例在默认/低阈值/stress 全绿） |
+
+> 诚实边界：sweep 只覆盖「顶层 `examples/*.px`」，且本轮只跑到前 ~20 个样例（长任务被打断）；
+> **不是**「全仓无漏登记」的证明。逐桥人工审计**未做**（见 spec §17.9）。
+
+### 八、未收口（如实登记）
+
+- **缺陷 192（未修 · 已**确定复现**）**：`m23c_http_adv.px` 在 **`PX_GC_STRESS=1 PX_GC_INLINE=1`**
+  （两个**都非默认**的调试开关同时开）下**必**丢响应头 `X-Test`（`R1008 字典没有键 'X-Test'`）。
+  已做 A/B 判定（**同一台机、连续 3 次**）：**A 组（含修复）3/3 红 · B 组（去掉 `h_exchange`
+  的 KEEP）3/3 红** ⇒ **病因不在 `h_exchange`，是另一处漏登记**；而同一二进制在**默认** /
+  `PX_GC_THRESHOLD=50` / `200` / `200+INLINE` / `200+STRESS` 下**全 PASS** ⇒ 影响面限于
+  「inline 回收 + 每次分配即 GC」这个组合。`PX_GC_INLINE` 的文档语义是「还原 B1 前行为
+  （对拍用）」，**非用户面配置**，故未阻塞本轮交付。下一轮候选：从「INLINE 模式下
+  **协程帧槽 / `HttpPend.resp` 回填**的根面」入手（协程 + 帧槽 + 立即回收三者的交互）。
+
+### 九、收尾修订（同轮内发现并修掉的**自伤** —— 由全量门抓回）
+
+**现象**：`selfhost/m116_gates.sh` 全量门里 **`m120_dict_strict` 判红**（`PASS=29 FAIL=2`）：
+用例 7「serve handler 出错 → 500」VM 轨 **SIGSEGV**（`rc=139`）。单跑该门有时绿 ⇒ 初判为偶发。
+
+**定位（四步，链式证据，可复用）**：
+
+| 步 | 手段 | 结果 |
+|---|---|---|
+| ① | **压力复跑**（同用例 ×30） | 修前 **18/30 SIGSEGV**（60%）⇒ 不是偶发，是**必现概率** |
+| ② | **core + gdb** | `#0 px_root_push ← #1 http_handler_done ← #2 coro_worker`；崩在 `mov %esi,(%rax,%rdx,4)`（写 `g_px_root_marks[n]`），且 `n < cap` 分支 ⇒ **下标为负或指针无效** |
+| ③ | **worktree A/B** | `git worktree add --detach <dir> HEAD`（= M169 干净树）同用例 **1/30 且非 SIGSEGV** ⇒ **判定为本轮引入** |
+| ④ | **插桩**（临时打印） | 落点拿到 `marks_depth = -1811936416`（随机负值）⇒ 铁证 |
+| ⑤ | **单点回退**（各 20 次） | 只禁「根栈收缩」⇒ 7 崩 · 只禁「**marks 栈**收缩」⇒ **0 崩** · 都禁 ⇒ 0 崩 ⇒ **元凶 = marks 栈收缩** |
+
+**两处硬伤（都出在缺陷 188 的第一版实现）**：
+
+1. **记录值用了栈局部**：`int rd_marks = 0; int rd_roots = px_root_depth(&rd_marks);` 之后在
+   **longjmp 落点**读取 —— C 标准不保证**非 volatile** 局部在 longjmp 后仍有效
+   （实测拿到负的垃圾值）⇒ `g_px_root_marks_n` 被设成负数 ⇒ 下一次 `px_root_push` 走
+   「`n < cap`」快路径 ⇒ 写 `marks[负数]` ⇒ SIGSEGV。
+2. **归还时收缩了 marks 栈**：`g_px_root_marks` 是**线程级 TLS**，而执行流是**协程级**
+   （M93 帧协程 M:N：同一 worker 线程上多协程交替、协程可在让出后迁移）⇒ 收缩会把
+   「本隔离作用域内让出期间**其它协程** push 的条目」一起弹掉 ⇒ 之后那些协程 pop 弹到
+   错误 mark ⇒ 根面被破坏。
+
+**修法 —— 隔离点专用 API（与「正常出口归一」分离）**：
+
+```c
+static __thread int t_iso_roots = -1;   // 哨兵 -1 = 本线程无记录（跨线程不动作）
+void px_root_iso_mark(void);            // setjmp 之前：把根栈深度记进 TLS（**不用栈局部**）
+void px_root_restore_iso(void);         // longjmp 落点：**只收缩根栈**，不动 marks；同线程才动作
+```
+
+- 5 个隔离点（`json_opt` / `thread` / `spawn` / `coro` / `native_call`）全部改走新 API；
+- **h3 桥的「正常出口归一」保留旧接口** `px_root_depth` / `px_root_restore(roots, marks)` ——
+  那是**同一函数内的正常返回路径**（不经 longjmp、不让出），本就需要同时归还 marks ⇒
+  **两种语义不可混用**（`runtime.h` 已写明用途边界）。
+
+**验证**：
+
+| 项 | 修前 | 修后 |
+|---|---|---|
+| m120 用例 7（×30） | **18/30 SIGSEGV** | **0/30**（同树 M169 基线 1/30 且非 SIGSEGV） |
+| `m120_dict_strict` 门 | `PASS=29 FAIL=2` | **`PASS=31 FAIL=0`** |
+| M170 门 | — | **`M170-VERIFY-OK`**（⑥ 层 5 条归还记录；负控 C 改用新锚点 `px_root_restore_iso` 后**命中 5 处并判红**） |
+
+**教训（已入长期记忆）**：
+- **longjmp 落点不得依赖栈局部** —— 哪怕它「逻辑上没被修改」，C 标准不保证；
+  状态记录一律放 TLS 或显式上下文对象。
+- **线程级 TLS 不得承载执行流级状态**（M93 起执行流是协程）—— 收缩共享栈 = 误伤别人。
+- **门偶发红 = 真问题**：单跑绿、另一次红 ⇒ 必须**压力复跑定量**（本轮 30 次才定量到 60%）。
+- **定位链值得复用**：压力复跑 → core+gdb 现场 → worktree A/B → 插桩拿坏值 → 单点回退定量。
+
+
 ## M169 · 模块体 / 闭包帧的「绑定归属」统一（第 54 轮 · 缺陷 181 + 同族 183/184）
 
 > 主题延续 M160–M167 的**语义一致性主线**：这一轮的病灶同样是「**宿主语言/各家实现留空**」——

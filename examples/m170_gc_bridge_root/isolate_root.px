@@ -1,0 +1,14 @@
+# M170 门 · 缺陷 188：**隔离点 longjmp 必须归还根登记深度**。
+#   形态：协程内 xml_parse 报错 → px_error → longjmp 回隔离点；被跳过的桥局部登记
+#   （xml_parse_element 的 node/attrs）若不还原就成了指向已释放对象的**野根**。
+#   观测（PX_GC_DEBUG=1）：每次隔离应打印恰好一条 `[px-gc] root 还原 …`。
+#   （spawn 只支持「直接函数调用」⇒ 用命名函数，不给匿名体 —— 见 E2011。）
+var n = 0
+def work():
+    var t = xml_parse("<a>")
+    print("应当报错却没报")
+while n < __N__:
+    spawn work()
+    n += 1
+sleep(400)
+print("spawned=" + str(n))

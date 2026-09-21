@@ -43,6 +43,7 @@ PuXian 采用 **Apache License 2.0** 开源 —— 任何人可自由使用、�
 | ✅ **自举完成（M-B8）** | **PuXian 编译器由 PuXian 自己写成**：`lexer / parser / codegen / interp / bc_emit / 值系统` 核心全部用 `.px` 重写，自举证明 A.c == B.c == B2.c 逐字节一致 |
 | ✅ **Rust 版已退役（M-B9a）** | Rust 源码归档至 `archive/rust-compiler/`（只读），**新工具链 `tools/px` 完全无需 Rust**，基于自举二进制运行 |
 | ✅ **双后端 + 三轨（M91 起）** | 解释轨（`pxi` 树遍历）· **VM 字节码轨（`px build` 默认）** · C 文本轨（`px build --c` 逃生舱）。**同一份源码三轨行为一致**——由 `m116_gates.sh` 全量门 + 每里程碑专属门守住 |
+| ✅ **运行期 GC 根面收口（M170）** | precise GC 的「谁保活」真空被收成**两条硬约束**（容器创建后必须登记 · 登记必须紧跟创建、先于下一次分配）+ **多出口/隔离点用深度式登记**（`px_root_depth`/`px_root_restore`）。新检测器 `PX_GC_STRESS=1`（每次分配即 GC）把「偶发」变「必现」——用户报障那颗跑了 **16388 轮**才炸，现在第一轮就露 |
 | ✅ **语义一致性收口（M159–M169）** | 「宿主语言留空 ⇒ 三轨必然分叉」的角落被逐条收成**一条真相**：求值顺序（词法左→右）· 迭代期间容器长度变化 ⇒ `R1003` · 解包严格化 · 字典键严格化 · `sorted` 值比较 + 稳定排序 · 闭包/生成器捕获按值快照 · 模块体绑定 = 模块级全局（帧内声明式/赋值式归属分明）。**没有静默的角落**（响亮优于静默） |
 | ✅ **aarch64 官方通道（M159）** | `selfhost/native_bootstrap.sh`（**只需 gcc** 的原生/交叉自举 + 自证）· `tools/px` 宿主架构自适应 · CI 新增 **`native-arm64` 真机 job** · Release 并列资产 `puxian-bootstrap-aarch64-<tag>.tar.gz` |
 | ✅ **工具链全自举** | `px` 的 `build / run / lex / parse / fmt / lint / doc / test / bench / lsp / mcp / refs` 全部由 PuXian 自己实现（spec §12 八工具齐备） |
@@ -206,6 +207,7 @@ selfhost/native_bootstrap.sh --cc aarch64-linux-musl-gcc --target aarch64
 | 🔌 边缘设备 | fd 原语 `open`/`close`/`ioctl`/`os_errno`（ioctl arg 三形态：int 直传 / bytes·str 就地 in/out buffer，`_IOR` 类内核直接填充同对象）+ fd 数据通道 `read`/`write`（read(2)/write(2) 直通）+ **mmap 活映射** `mmap`/`munmap`/`mem_write`（MAP_SHARED 帧缓冲/共享内存/DMA 直访，GC 自动 munmap，`mem_write` 就地写映射区）+ GPIO/I2C 设备示例 + **aarch64 交叉编译**（`px build --no-quic` 裁剪 + qemu-aarch64 验证与 x86 一致）——Linux 边缘设备层（树莓派/网关/盒子）单静态二进制免环境 |
 | 🚀 应用平台 | **.px 脚本执行机制**（`px_serve` PHP/OpenResty 式应用服务器：Cookie/Session/基础认证 + 服务端 TLS + 优雅关闭、`px_exec` 语言层嵌入 API）+ **.px 进程池**（编译模式预派生 worker 解释器常驻复用，PHP-FPM 风格，**脚本/二进制变更自动滚动重启热更新**）+ 路由表+中间件（method+path 模式 / `:id` 参数 / `*` 通配 / 中间件链）+ cron 调度（6 字段）+ JSON 路径（json_path/json_path_set） |
 | 📚 标准库 | `stdlib/` **13 个公开库**（collections / semver / webroute / yaml / pxml / lunar / gfx / png / edge / cookiejar / html / multipart / smtp；另有 go_json / strings / url / path / time_go / io / jsonx / yamlx 等 **27 个 `.px` 文件**）—— `import std.<name>` 即用，编译/解释双模式一致；API 清单见 [`docs/ECOSYSTEM.md`](docs/ECOSYSTEM.md) 与机器索引 `docs/ecosystem_index.json` |
+| 🧭 运行期 GC（M170 收口） | VM 轨默认 **precise GC**（不扫 C 栈）⇒ 桥里只活在 C 局部的对象**必须**登记，漏登记 = use-after-free（错值 → SIGSEGV）。规则与检测器见 [spec §17.10](docs/spec.md)；对拍门 `examples/m170_gc_bridge_root/`（含 4 道负控） |
 | 🧭 语义一致性（M159–M169 收口） | **没有静默的角落**（响亮优于静默）：求值顺序一律**词法左→右**（含函数实参，不随 gcc）· 迭代期间修改被迭代容器 ⇒ `R1003`（进入循环时**长度快照**）· 解包严格（`for a, b in xs` 形状不符 ⇒ `R1002`）· 字典键严格（构造位置非字符串键 ⇒ `R1002`，不再静默丢数据）· `sorted` **值比较 + 稳定排序** · 闭包按引用、生成器捕获按**值快照** · **模块体绑定 = 模块级全局**（含嵌套块），闭包体与函数体同为「帧」。每条规则都配三轨逐字节一致的门 |
 
 ---

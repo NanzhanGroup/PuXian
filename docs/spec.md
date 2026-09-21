@@ -1813,6 +1813,88 @@ print(lam())
 
 门：`examples/m169_toplevel_scope/`（三轨逐字节一致 15 断言 + 严格性 3 用例 × 三轨 + 4 道负控）。
 
+### 17.10 运行期 GC 根面（M170）
+
+> 前九节收的是**语言语义**（同一份源码在三轨必须同一个答案）；本节收的是**运行期纪律**
+> —— 「谁保活」这件事在三轨里本来就不同（见下），但**不能有第三种答案**：要么登记住，
+> 要么就是 use-after-free。
+
+**三轨的根面（事实，不是约定）**：
+
+| 轨 | GC 策略 | 根面 |
+|---|---|---|
+| 解释轨 | —（无 JS/runtime GC 对象，解释器自己管值） | — |
+| **VM 轨（默认）** | **precise**（`px_gc_set_precise(1)`，**不扫 C 栈**） | 全局槽 + VM 帧槽 + TLS 登记根栈（`px_root_push`/`PX_KEEP`） |
+| C 轨（逃生舱） | conservative（扫整条 C 栈） | 栈扫描（**不需要**手工登记） |
+
+⇒ **只有 VM 轨需要桥自己登记**，所以「三轨一致」这类判据**看不见**这类缺陷：
+C 轨与解释轨天然绿，**红只红在 VM 轨**（默认轨！用户面走的就是它）。
+
+**两条硬约束**（native 桥 / runtime C 代码写 `LXValue` 时必须遵守）：
+
+1. **容器创建后必须登记**：只活在 C 局部的 `LXValue`（列表/字典/字符串/bytes…）在没有别的
+   可达路径时必须 `PX_KEEP`；漏登记 ⇒ 下一次分配触发 GC 时被回收 ⇒ 返回的是**已释放对象**
+   （轻则错值，重则写坏 slab 空闲链 ⇒ SIGSEGV）。
+2. **登记必须紧跟创建、先于下一次分配**：
+   ```c
+   LXValue d = px_dict(); LXValue hdr = px_dict(); PX_KEEP(d); PX_KEEP(hdr);   // ❌ hdr 那次分配可能回收 d
+   LXValue name = px_null(); PX_KEEP(name); name = px_str_len(s, n);           // ❌ 登记的是 null，等于没登记
+   ```
+   正确写法：创建完**立刻**登记，再创建下一个 / 再调用可能分配的函数。
+
+**多出口函数**（循环内十余个早退分支，如 QPACK 解码）用**深度式**登记：
+
+```c
+int rd_marks = 0;
+int rd_roots = px_root_depth(&rd_marks);        // 记录进入深度
+#define BAIL() do { px_root_restore(rd_roots, rd_marks); return px_null(); } while (0)
+...
+px_root_restore(rd_roots, rd_marks);            // 每个出口都归还
+```
+
+⚠️ **不要与帧式 `px_root_push/pop` 混用**：`pop` 弹的是**本帧**（会连带弹掉调用者登记的根
+⇒ 提前回收）。`px_root_restore` 只**收缩**到记录深度，**不建帧**，故多出口函数一律用它。
+
+**隔离点 longjmp（缺陷 188）**：`px_error` 的 longjmp **不展开 C 帧** ⇒ 被跳过的作用域里的登记
+会留在 TLS 根栈里指向**已释放对象**（**野根**：之后每轮 GC 都去标记它；长跑服务里线性累积）。
+⇒ 每个 `setjmp` 隔离点必须在 setjmp **之前**记深度、落点 **`px_root_restore`**（本仓 5 处全接：
+json_opt / thread / spawn / coro / native_call）。
+
+**检测器**：
+- `PX_GC_STRESS=1` —— **每次分配即 GC**。把「靠阈值凑巧发作」（用户报障那颗跑了 **16388 轮**）
+  变成「必然发作」，可对语料**批量扫**漏登记的桥。代价 O(n²)，只用于小语料/门。
+- `PX_GC_DEBUG=1` —— 隔离点打印 `[px-gc] root 还原 marks=… roots=…`、退出打印根登记栈峰值。
+- 回归门：`examples/m170_gc_bridge_root/`（5 层正判据 + 4 道负控；见 `verify.sh` 头部注释）。
+
+**批量用法（差分筛）**：对样例逐个「正常跑 vs `PX_GC_STRESS=1` 跑」，判据 = **程序自身输出逐字节一致**
+（正常轨本就非 0 / 超时的样例跳过）。本轮用它抓到缺陷 191（`http_request` 响应头丢头 + 堆写坏 SIGSEGV）。
+
+**验证过的等价关系**（本轮实测）：`sqlite_query` 的行 dict 完整性 —— 解释轨 / VM 轨（默认）/
+C 轨同一输出；VM 轨在 `PX_GC_THRESHOLD=800` 下跑 20000 轮 × 20 行 = **400000 次断言零破坏**；
+`PX_GC_STRESS=1` 下 sqlite/xml/onnx/rsa 四桥 + H3/QPACK codec 全绿。
+
+**隔离点归还的正确形态（M170 收尾修订 · 由全量门抓回的自伤）**
+
+`px_error` 走 `longjmp` 跳回捕获点，**不展开 C 帧** ⇒ `px_root_push`/`PX_KEEP` 与
+`px_root_pop` 的配对被跳过 ⇒ 那些条目成为**野根**（指向已被正常回收的对象）。归还它们时
+必须满足两条硬约束（都是本轮实测出来的，违反即 SIGSEGV，实测 60% 必现）：
+
+| 约束 | 违反的后果（实测） |
+|---|---|
+| **记录值必须存 TLS，不得用栈局部**（写成 `int rd_marks = 0; int rd_roots = px_root_depth(&rd_marks);` 再在落点读） | longjmp 后读到**垃圾**（实测 `marks_depth = -1811936416`）⇒ 根栈深度被设成负数 ⇒ 下一次 `px_root_push` 写 `marks[负数]` ⇒ 崩 |
+| **不得收缩 marks 栈**（`g_px_root_marks_n`） | 它是**线程级 TLS**，而执行流是**协程级**（M93 帧协程 M:N：同线程多协程交替、协程可迁移）⇒ 弹掉「隔离作用域内让出期间**其它协程** push 的条目」⇒ 那些协程 pop 弹到错误 mark ⇒ 根面被破坏 |
+
+⇒ 接口按用途**分成两套**（`runtime.h` 已写明用途边界，**不可混用**）：
+
+- **隔离点专用**：`px_root_iso_mark()` / `px_root_restore_iso()` —— 记录进 TLS（哨兵 `-1` =
+  本线程无记录即**不动作**）、归还**只收缩根栈**。5 个 `setjmp` 落点（`json_opt` / `thread` /
+  `spawn` / `coro` / `native_call`）全部走它。
+- **同函数正常出口**：`px_root_depth(&m)` / `px_root_restore(roots, m)` —— 同时归还 marks，
+  供 h3 桥十余个早退分支做「出口归一」（同函数内、不让出、不经 longjmp，语义不同）。
+
+量化验收：同一用例连跑 30 次 —— 修前 **18 次 SIGSEGV** → 修后 **0 次**
+（M169 干净树基线 1 次且非 SIGSEGV；`m120_dict_strict` 门 `PASS=29 FAIL=2` → `PASS=31 FAIL=0`）。
+
 ### 17.9 尚未收口（如实登记）
 
 - **诊断通道与措辞**（缺陷 186 · 未修）：运行期「未定义变量」这类错误，解释轨写 **stdout**
@@ -1822,6 +1904,23 @@ print(lam())
 - **多变量解包 `for k, v in xs` 的死代码面**（缺陷 181 邻域 · 已由 M167 收口主体）：
   `bc_emit` / `cg_stmt` 中「多变量分支」的若干历史分支已在 M167 起走同一条真相，剩余未覆盖面
   见 `docs/GAP_ANALYSIS.md`。
+- **桥的根面尚未「逐一审计」**（M170 的诚实边界）：本轮修的是**被 stress 筛出来的**那几处
+  （sqlite/xml/onnx/rsa/h3/qpack 与隔离点）。其余 native 桥**没有逐个人工过一遍** ——
+  判据是「`PX_GC_STRESS=1` 跑得到的语料都绿」，**不是**「已证明全仓无漏登记」。
+  后续若要更强保证：把 `PX_GC_STRESS=1` 铺到全部 `examples/*/verify.sh`（成本见 §17.10 的 O(n²) 说明）。
+- **差分筛只跑到一部分样例**（M170 本轮的诚实边界之二）：`sweep.sh`（正常 vs `PX_GC_STRESS=1`
+  输出逐字节一致）本轮只覆盖顶层 `examples/*.px` 的前 ~20 个（长任务被打断），
+  且按名字跳过了服务器类样例 ⇒ 结论是「**被筛到的都绿**」，不是「全仓都绿」。
+- **缺陷 192（未修 · 已确定复现）**：`m23c_http_adv.px` 在 `PX_GC_STRESS=1 PX_GC_INLINE=1`
+  （两个调试开关同时开、**都非默认**）下**必**丢响应头 `X-Test`（`R1008`）。**A/B 判定**（同机 3 连跑）：
+  A 组（含修复）3/3 红 · B 组（去掉 `h_exchange` 的 KEEP）3/3 红 ⇒ **病因不在 `h_exchange`**，
+  是另一处漏登记。默认 / `PX_GC_THRESHOLD=50|200` / `200+INLINE` / `200+STRESS` 全 PASS
+  ⇒ 影响面限于「inline 回收 + 每次分配即 GC」。下一轮从「INLINE 模式下**协程帧槽** /
+  `HttpPend.resp` 回填的根面」入手。
+- **缺陷 191 不设反向负控**（纪律：**不设假负控**）：去掉 `h_exchange` 的 `PX_KEEP(*out_headers)`
+  后症状**时序相关**（5 连跑：1 丢头 / 3 绿 / 1 SIGSEGV）⇒ 若当负控会让门偶发变红。
+  191 改由正判据锁症状：`examples/m23c_http_adv.px` 在 `PX_GC_STRESS=1` 下必须
+  `HTTP-ADV TESTS PASSED`（修前 core dump，正向复现 2/2）。
 
 ---
 

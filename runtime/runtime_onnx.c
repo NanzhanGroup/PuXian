@@ -116,6 +116,8 @@ static LXValue bi_onnx_model_open(LXValue* args, int nargs, void* ctx) {
     id = onnx_slot_put(m, path);
     if (id == 0) { onnx_model_free(m); return px_err(px_str("onnx: 句柄槽已满（上限 8）")); }
     d = px_dict();
+    px_root_push();   // M170（缺陷 187 同族）：VM 轨 precise GC 不扫 C 栈 ⇒ d 跨下面 8 次
+    PX_KEEP(d);       //   分配必须登记（否则 d 被误回收 ⇒ 返回已释放 dict）
     px_dict_set(d, "ok", px_bool(1));
     px_dict_set(d, "id", px_int(id));
     px_dict_set(d, "ir_version", px_int(m->ir_version));
@@ -124,6 +126,7 @@ static LXValue bi_onnx_model_open(LXValue* args, int nargs, void* ctx) {
     px_dict_set(d, "initializers", px_int(m->n_init));
     px_dict_set(d, "inputs", px_int(m->n_in));
     px_dict_set(d, "outputs", px_int(m->n_out));
+    px_root_pop();
     return d;
 }
 
@@ -158,17 +161,21 @@ static LXValue bi_onnx_initializer(LXValue* args, int nargs, void* ctx) {
     t = onnx_find_init(m, px_val_cstr(args[1]));
     if (!t) return px_err(px_str("onnx: 没有该 initializer"));
     dims = px_list(0);
+    px_root_push();   // M170（缺陷 187 同族）：dims 要先于 d 的分配登记；d 亦登记
+    PX_KEEP(dims);
     {
         int i;
         for (i = 0; i < t->ndim; i++) px_list_push(dims, px_int((int64_t)t->dims[i]));
     }
     d = px_dict();
+    PX_KEEP(d);
     px_dict_set(d, "name", px_str(t->name ? t->name : ""));
     px_dict_set(d, "dtype", px_str(onnx_dtype_name(t->dtype)));
     px_dict_set(d, "dtype_id", px_int(t->dtype));
     px_dict_set(d, "dims", dims);
     px_dict_set(d, "nbytes", px_int((int64_t)t->nbytes));
     px_dict_set(d, "data", t->data ? px_bytes_len(t->data, (int)t->nbytes) : px_bytes_len("", 0));
+    px_root_pop();
     return d;
 }
 
@@ -182,8 +189,11 @@ static LXValue bi_onnx_initializer_names(LXValue* args, int nargs, void* ctx) {
     m = onnx_slot_get((int)args[0].as.i);
     if (!m) return px_err(px_str("onnx: 无效或已关闭的模型 id"));
     lst = px_list(0);
+    px_root_push();   // M170（缺陷 187 同族）：lst 跨循环内 px_str 分配
+    PX_KEEP(lst);
     for (i = 0; i < m->n_init; i++)
         px_list_push(lst, px_str(m->inits[i].name ? m->inits[i].name : ""));
+    px_root_pop();
     return lst;
 }
 
@@ -347,14 +357,24 @@ static LXValue bi_onnx_run(LXValue* args, int nargs, void* ctx) {
         return e;
     }
     out = px_dict();
+    px_root_push();   // M170（缺陷 187 同族）：out/outs/stats/byop 与逐输出 d/dims 全登记
+    PX_KEEP(out);
     px_dict_set(out, "ok", px_bool(1));
     px_dict_set(out, "nodes", px_int(res->nodes_run));
     {
-        LXValue outs = px_dict(), stats = px_dict(), byop = px_dict();
+        LXValue outs = px_dict();
+        PX_KEEP(outs);
+        LXValue stats = px_dict();
+        PX_KEEP(stats);
+        LXValue byop = px_dict();
+        PX_KEEP(byop);
         for (i = 0; i < res->n_out; i++) {
             OnnxT* t = res->outputs[i];
             LXValue d = px_dict();
+            px_root_push();   // 内层作用域：d/dims 每迭代都是新对象
+            PX_KEEP(d);
             LXValue dims = px_list(0);
+            PX_KEEP(dims);
             int j;
             char* js = onnx_shape_json(t);
             for (j = 0; j < t->ndim; j++) px_list_push(dims, px_int(t->dims[j]));
@@ -365,6 +385,7 @@ static LXValue bi_onnx_run(LXValue* args, int nargs, void* ctx) {
             px_dict_set(d, "nbytes", px_int((int64_t)t->nbytes));
             px_dict_set(d, "data", px_bytes_len(t->data, (int)t->nbytes));
             px_dict_set(outs, m->outputs[i].name ? m->outputs[i].name : "", d);
+            px_root_pop();
             free(js);
         }
         for (i = 0; i < res->n_ops; i++)
@@ -375,6 +396,7 @@ static LXValue bi_onnx_run(LXValue* args, int nargs, void* ctx) {
         px_dict_set(out, "outputs", outs);
         px_dict_set(out, "stats", stats);
     }
+    px_root_pop();
     onnx_exec_result_free(res);
     return out;
 }
@@ -384,7 +406,10 @@ static LXValue bi_onnx_op_names(LXValue* args, int nargs, void* ctx) {
     LXValue lst = px_list(0);
     int i;
     (void)args; (void)nargs; (void)ctx;
+    px_root_push();   // M170（缺陷 187 同族）：lst 跨循环内 px_str 分配
+    PX_KEEP(lst);
     for (i = 0; i < onnx_op_count(); i++) px_list_push(lst, px_str(onnx_op_name_at(i)));
+    px_root_pop();
     return lst;
 }
 

@@ -1,0 +1,17 @@
+# M170 门夹具：自建 sqlite 库（不依赖任何生产文件）。
+#   __DB__ = 输出路径；建 events 表 + 20 条 pending 行（与清歌复现器的查询同形）。
+#   打印形态取 **sqlite_query 的行数**（稳定、与实现细节无关）—— 勿直接用聚合查询，
+#   它的返回是 `[{count(*): 20}]`（dict 键就是表达式串），断言会脆。
+var path = "__DB__"
+var db = sqlite_open(path)
+if db == null:
+    print("OPEN-FAIL " + path)
+    exit(1)
+sqlite_exec(db, "DROP TABLE IF EXISTS events")
+sqlite_exec(db, "CREATE TABLE events (id INTEGER PRIMARY KEY, title TEXT, status TEXT)")
+var i = 1
+while i <= 20:
+    sqlite_exec(db, "INSERT INTO events (title, status) VALUES ('task-" + str(i) + "', 'pending')")
+    i += 1
+var rows = sqlite_query(db, "SELECT id, title FROM events WHERE status='pending'")
+print("fixture pending=" + str(len(rows)))

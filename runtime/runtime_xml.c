@@ -212,8 +212,19 @@ static LXValue xml_parse_element(XmlP* p) {
     if (nl == 0) px_error("XML 解析错误：缺少标签名");
     char* name = xml_slice(p->s, ns, nl);
 
+    // M170（缺陷 187 同族 · 清歌报的 GC 破坏存活对象）：VM 轨 precise GC 不扫 C 栈
+    //   ⇒ 本函数（**递归**）里 node/attrs/children 只活在 C 局部，属性循环里每
+    //   `px_str(val)` 都是一次分配 ⇒ 越阈值就误回收 ⇒ 实测 `xml_parse` 在
+    //   PX_GC_STRESS=1 下 **SIGSEGV**。按 M92-S2c 口径登记根。
+    //   ⚠️ 顺序是硬约束：**登记必须紧跟创建、先于下一次分配** —— 若写成
+    //   `node = px_dict(); attrs = px_dict(); PX_KEEP(node);`，则 attrs 那次分配
+    //   就可能回收 node，而 PX_KEEP 还会把**已释放对象**当根登记（比不登记更坏：
+    //   之后每轮 GC 都去标记野指针 ⇒ slab 空闲链被写坏 ⇒ SIGSEGV）。本行顺序即实测修法。
     LXValue node = px_dict();
+    px_root_push();
+    PX_KEEP(node);
     LXValue attrs = px_dict();
+    PX_KEEP(attrs);
     // 属性
     for (;;) {
         xp_eat_ws(p);
@@ -246,11 +257,13 @@ static LXValue xml_parse_element(XmlP* p) {
         px_dict_set(node, "children", px_list(0));
         px_dict_set(node, "text", px_str(""));
         free(name);
+        px_root_pop();   // M170
         return node;
     }
     if (xp_next(p) != '>') { free(name); px_error("XML 解析错误：标签未以 '>' 结束"); }
 
     LXValue children = px_list(0);
+    PX_KEEP(children);   // M170：children 跨递归 xml_parse_element 与 px_str 分配
     XBuf textbuf = {0};
     if (!xml_parse_content(p, name, children, &textbuf)) {
         free(name);
@@ -277,6 +290,7 @@ static LXValue xml_parse_element(XmlP* p) {
     px_dict_set(node, "text", tbuf.data ? px_str(tbuf.data) : px_str(""));
     if (tbuf.data) free(tbuf.data);
     free(name);
+    px_root_pop();   // M170：作用域结束（node 即将交回调用方/已挂在父的 children 上）
     return node;
 }
 

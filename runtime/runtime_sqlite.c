@@ -177,9 +177,20 @@ LXValue bi_sqlite_query(LXValue* args, int nargs, void* ctx) {
     }
     int ncols = sqlite3_column_count(stmt);
     LXValue out = px_list(8);
+    // M170（缺陷 187 · 清歌报的 GC 破坏存活对象）：VM 轨是 **precise GC**（不扫整条 C 栈），
+    //   而本桥的 `out`/`row` 只活在 C 局部里 ⇒ 同行/下一行的分配一旦触发 GC（g_tmp_root
+    //   只护最近一次分配的那个对象），它们就被误回收 ⇒ 返回的 list 里是**已释放的 dict**
+    //   （`type(rows[0])` 变 `unknown`、`r.has("id")` 假、len 乱）。
+    //   修复 = 按 M92-S2c 口径登记根：桥入口 push 作用域，跨分配点的局部各自 PX_KEEP。
+    //   `row` 每迭代一个新对象 ⇒ 每次 keep 都是新快照，用**内层 push/pop** 界定（否则 keep
+    //   栈随行数线性膨胀，GC 扫描退化为 O(行数)）。
+    px_root_push();
+    PX_KEEP(out);
     int rc;
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
         LXValue row = px_dict();
+        px_root_push();
+        PX_KEEP(row);
         for (int i = 0; i < ncols; i++) {
             const char* cname = sqlite3_column_name(stmt, i);
             if (!cname) cname = "";
@@ -205,7 +216,9 @@ LXValue bi_sqlite_query(LXValue* args, int nargs, void* ctx) {
             px_dict_set(row, cname, v);
         }
         px_list_push(out, row);
+        px_root_pop();   // M170：内层作用域（row 已可从 out 到达）
     }
+    px_root_pop();       // M170：外层作用域（out）
     if (rc != SQLITE_DONE) {
         fprintf(stderr, "[sqlite] 查询出错: %s\n", sqlite3_errmsg(db));
         sqlite3_finalize(stmt);

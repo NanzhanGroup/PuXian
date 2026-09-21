@@ -1,0 +1,21 @@
+# M170 门 · 同族：xml_parse（**递归**建 node/attrs/children）在 precise GC 下的根面。
+var doc = "<root a=\"1\" b=\"2\"><c>hello</c><c>world</c><d><e>1</e></d><cd><![CDATA[x<y]]></cd></root>"
+var n = 0
+var pass = 0
+while n < __N__:
+    var t = xml_parse(doc)
+    if t == null:
+        print("NULL n=" + str(n))
+        exit(1)
+    if t.has("children") == false:
+        print("FAIL-KEY n=" + str(n))
+        exit(1)
+    if len(t["children"]) != 4:
+        print("FAIL-CHILDREN n=" + str(n) + " n=" + str(len(t["children"])))
+        exit(1)
+    if t["attrs"]["a"] != "1":
+        print("FAIL-ATTR n=" + str(n))
+        exit(1)
+    pass += 1
+    n += 1
+print("pass=" + str(pass) + " fail=0")

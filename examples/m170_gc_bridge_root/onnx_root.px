@@ -1,0 +1,22 @@
+# M170 门 · 同族：onnx_model_open/info（dict 跨 8 次以上分配）。
+var n = 0
+var pass = 0
+while n < __N__:
+    var m = onnx_model_open("__MODEL__")
+    if m == null:
+        print("NULL n=" + str(n))
+        exit(1)
+    if m.has("ok") == false:
+        print("FAIL-KEY n=" + str(n) + " nkeys=" + str(len(m)))
+        exit(1)
+    if m.has("ir_version") == false:
+        print("FAIL-KEY2 n=" + str(n))
+        exit(1)
+    var info = onnx_info(m["id"])
+    if info == null:
+        print("FAIL-INFO n=" + str(n))
+        exit(1)
+    onnx_model_close(m["id"])
+    pass += 1
+    n += 1
+print("pass=" + str(pass) + " fail=0")

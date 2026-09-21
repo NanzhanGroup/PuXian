@@ -1,0 +1,17 @@
+# M170 门 · 同族：rsa_gen_key（dict 跨 5 次 px_str 分配）
+var n = 0
+var pass = 0
+while n < __N__:
+    var k = rsa_gen_key(1024)
+    if k == null:
+        print("NULL n=" + str(n))
+        exit(1)
+    if k.has("n") == false:
+        print("FAIL-KEY n=" + str(n) + " nkeys=" + str(len(k)))
+        exit(1)
+    if k.has("q") == false:
+        print("FAIL-KEY2 n=" + str(n))
+        exit(1)
+    pass += 1
+    n += 1
+print("pass=" + str(pass) + " fail=0")
