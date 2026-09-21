@@ -117,6 +117,9 @@
 - WASM 多后端：解释器 + C 转译双后端已就绪，加 WASM 后端让 .px 跑浏览器——暂不排期，等生态需求
 - 更多 C 库绑定（`import "c/xxx"` 生态扩展，SDL2/raylib 游戏线等）
 - 明确不做：3D（OpenGL/Vulkan，绑定工程量大）；异常 try/throw（Result + `?` 是唯一错误通道）
+- 明确不做：**为 gcc < 4.9 提供回退、runtime 对 glibc 2.17 的额外兼容**（2026-09-21 最终裁定：
+  `runtime` 的 C11 原子是硬需求 ⇒ **请用户自行升级 gcc ≥ 4.9**，el7 走 SCL `devtoolset-9` 或升级发行版；
+  `tools/px` 的能力预检 + 指引是这条裁定的用户出口，见 `packaging/README.md` / `docs/RELEASE_PROCESS.md`）
 
 ## 四、语言面已知欠账（写编译器/生态代码需规避）
 

@@ -223,8 +223,11 @@
    · 新增 `PX_CC` 覆盖宿主编译器（devtoolset 场景 `PX_CC=/opt/rh/devtoolset-9/root/usr/bin/gcc`）；
    · el7 终验的契约改为「**要么真跑通，要么失败原因必须是已登记且可执行的那条**」，否则判红；
    · 文档（本文件 / `packaging/README` / `docs/RELEASE_PROCESS`）如实写明该限制。
-   ⇒ 「runtime/glibc 2.17 全兼容（含 `explicit_bzero`/`getrandom` 等新符号）」列为**下一轮候选**，
-     完成前 el7 的官方说法是：**仓库/安装/工具链/静态性 OK；`px build` 需 gcc ≥ 4.9**。
+   ⇒ el7 的官方说法：**仓库/安装/工具链/静态性 OK；`px build` 需 gcc ≥ 4.9**。
+   ⇒ **最终裁定（2026-09-21 · 用户指令）**：**请用户自行升级 gcc 到 ≥ 4.9**（el7 装 SCL
+     `devtoolset-9`，或升级发行版）。PuXian **不为 gcc < 4.9 提供回退** —— C11 原子是 `runtime`
+     的硬需求，加兼容层会拖慢并复杂化核心热路径。⇒ 原列的「runtime/glibc 2.17 全兼容」候选
+     **据此撤销**（`docs/ROADMAP.md` §三「明确不做」已登记）。
 
 ## 文档收口 · README（中英）+ docs 全套（2026-09-21 · 文档主线 · **无代码改动**）
 

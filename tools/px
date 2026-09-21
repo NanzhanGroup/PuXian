@@ -297,6 +297,8 @@ rt_cache_compile() {
             rm -f "$_pc" "$_po"
             echo "错误: $cc 不支持 C11 原子（<stdatomic.h>）—— PuXian 的 runtime 需要它" >&2
             echo "      需要 gcc ≥ 4.9（本机：$($cc --version 2>/dev/null | head -1)）" >&2
+            echo "  ⚠ 最终裁定（2026-09-21）：请自行升级 gcc 到 ≥ 4.9 —— PuXian 不为 gcc < 4.9 提供回退" >&2
+            echo "      （C11 原子是 runtime 的硬需求；加兼容层会拖慢并复杂化核心热路径。）" >&2
             echo "  RHEL/CentOS 7（自带 gcc 4.8.5）: sudo yum install -y centos-release-scl" >&2
             echo "      && sudo yum install -y devtoolset-9 && scl enable devtoolset-9 bash" >&2
             echo "      （或 PX_CC=/opt/rh/devtoolset-9/root/usr/bin/gcc $0 build <file.px>）" >&2
