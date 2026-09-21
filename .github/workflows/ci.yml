@@ -433,11 +433,21 @@ jobs:
 
       - name: 交叉编译 + qemu 验证（${{ matrix.arch }}）
         run: |
+          set -o pipefail
           export PATH=/opt/muslcc/${{ steps.musl-map.outputs.DIR }}/bin:$PATH
-          if [ "${{ matrix.arch }}" = "aarch64" ]; then
-            bash examples/m67_aarch64/verify.sh          # 阶段一三用例（aarch64 一等支持）
+          # M168：失败诊断走 ::error:: 注解（本仓 job 日志非管理员不可读）
+          #   —— 2026-09-21 本步首红时**读不到原因**，只能靠"改一处再跑一次"试错。
+          run_all() {
+            if [ "${{ matrix.arch }}" = "aarch64" ]; then
+              bash examples/m67_aarch64/verify.sh          # 阶段一三用例（aarch64 一等支持）
+            fi
+            bash examples/m67_multiarch/verify.sh --arch ${{ matrix.arch }}
+          }
+          if ! run_all 2>&1 | tee "$RUNNER_TEMP/m67.log"; then
+            echo "::error::m67 ${{ matrix.arch }} 交叉/qemu 验证失败"
+            tail -80 "$RUNNER_TEMP/m67.log" | sed 's/^/::error::m67 /'
+            exit 1
           fi
-          bash examples/m67_multiarch/verify.sh --arch ${{ matrix.arch }}
 
       - name: M159 交叉自举档（x86_64 → aarch64 · musl 静态 · 只对 aarch64 档做）
         if: matrix.arch == 'aarch64'
