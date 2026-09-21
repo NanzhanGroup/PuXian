@@ -646,6 +646,22 @@ cmd_build() {
     build_dir="$parent/build"
     mkdir -p "$build_dir"
 
+    # ---- M168：清掉输出目录里的 **runtime 影子副本**（缺陷 151 同源，用户面同一条纪律）----
+    #   症状（本机复现）：`px build tools/pxfmt.px` 报
+    #     warning: implicit declaration of function 'px_dict_get_ci' / 'px_exit_code_final'
+    #   成因：生成 C 里的 `#include "runtime.h"` 搜索顺序是「**包含者所在目录** → -I 列表」，
+    #     而输出目录里若躺着**旧版 px 留下的** runtime.{h,c}（本仓 tools/build/ 就有
+    #     2026-09-05 那一批），它会盖过「按当前源码生成的 -I $cache_dir」⇒ 生成的 C 对着
+    #     **旧头**编译（新增的原型对它不可见）。`selfhost/rebake_bin.sh`（M155/缺陷 151）
+    #     早已有同名清理；此处把同一条纪律搬到用户面，免得用户以为"编译器坏了"。
+    local _sf
+    for _sf in runtime.h runtime.c vm.h vm.c; do
+        if [ -e "$build_dir/$_sf" ]; then
+            rm -f "$build_dir/$_sf"
+            echo "提示: 已清理输出目录里的运行时影子副本 $_sf（旧头会遮蔽 -I 解析 ⇒ 误报 implicit declaration）" >&2
+        fi
+    done
+
     local c_path="$build_dir/$base.c"
     local out_path="$build_dir/$base"
 
