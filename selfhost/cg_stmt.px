@@ -132,29 +132,46 @@ def cg_gen_stmt_inner(stmt, indent):
         let it = cg_gen_expr(stmt[2])
         let it_var = cg_tmp()
         let idx_var = cg_tmp()
-        let fv_name = rust_unescape(stmt[1])
-        var vv = cg_var_of(fv_name)
-        var vp = "LXValue "
-        if vv == null or len(cg_err_labels) == 0:
-            # 顶层代码（无函数顶 hoist，err_labels 空）→ 每次迭代变量独立就地声明；
-            # 或函数内未被预提升 → 就地声明
-            vv = cg_new_var(fv_name)
-        else:
-            # M62-L5：函数内循环变量已由函数顶预声明（px_null 初始，Python 语义循环后保留最后值），循环内仅赋值
-            vp = ""
-        # M164（缺陷 170）：迭代元素取 **px_iter_at** —— dict 的「第 i 个键」只属迭代机制；
-        #   用户面 `d[i]` 走 px_index（现严格报 R1002）。修前共用 px_index ⇒ 位置语义外漏。
-        var fv_init = "px_iter_at(" + it_var + ", px_int(" + idx_var + "))"
-        var fv_line = ""
-        if vp == "LXValue ":
-            # 就地声明
-            if cg_cells.has(fv_name):
-                fv_line = "LXValue " + vv + " = px_cell(" + fv_init + ");"
+        # M167（缺陷 180）：多变量解包 —— For.var 单变量为字符串、多变量为名字列表
+        let names = cg_for_names(stmt[1])
+        let multi = len(names) > 1
+        var item_var = ""
+        var upn = 0
+        if multi:
+            item_var = cg_unpack_tmp()
+            upn = len(names)
+        # 逐个变量算「声明/赋值」文本（单变量与原实现逐字节一致）
+        var decls = []
+        var vi = 0
+        while vi < len(names):
+            let nm = names[vi]
+            var vv = cg_var_of(nm)
+            var vp = "LXValue "
+            if vv == null or len(cg_err_labels) == 0:
+                # 顶层代码（无函数顶 hoist，err_labels 空）→ 每次迭代变量独立就地声明；
+                # 或函数内未被预提升 → 就地声明
+                vv = cg_new_var(nm)
             else:
-                fv_line = "LXValue " + vv + " = " + fv_init + ";"
-        else:
-            # 已声明（可能是 cell）
-            fv_line = cg_store_of(fv_name, vv, fv_init) + ";"
+                # M62-L5：函数内循环变量已由函数顶预声明（px_null 初始，Python 语义循环后保留最后值），循环内仅赋值
+                vp = ""
+            var fv_init = ""
+            if multi:
+                # M167：解包字段（item 已由 UNPACKCK 校验过类型与长度）
+                fv_init = "px_index(" + item_var + ", px_int(" + str(vi) + "))"
+            else:
+                # M164（缺陷 170）：迭代元素取 **px_iter_at** —— dict 的「第 i 个键」只属迭代机制；
+                #   用户面 `d[i]` 走 px_index（现严格报 R1002）。修前共用 px_index ⇒ 位置语义外漏。
+                fv_init = "px_iter_at(" + it_var + ", px_int(" + idx_var + "))"
+            if vp == "LXValue ":
+                # 就地声明
+                if cg_cells.has(nm):
+                    decls.append("LXValue " + vv + " = px_cell(" + fv_init + ");")
+                else:
+                    decls.append("LXValue " + vv + " = " + fv_init + ";")
+            else:
+                # 已声明（可能是 cell）
+                decls.append(cg_store_of(nm, vv, fv_init) + ";")
+            vi += 1
         var s = pad + "LXValue " + it_var + " = " + it + ";\n"
         # M166（缺陷 176）：**进入循环时快照长度** + 循环体开头复核 ⇒ 迭代期间长度变化报 R1003。
         #   长度局部用 `_ilN`（cg_iter_len_tmp，不进 cg_tmp 序列 ⇒ 其余发射文本不变）。
@@ -162,7 +179,19 @@ def cg_gen_stmt_inner(stmt, indent):
         s += pad + "int " + len_var + " = (int)px_len(" + it_var + ");\n"
         s += pad + "for (int " + idx_var + " = 0; " + idx_var + " < " + len_var + "; " + idx_var + "++) {\n"
         s += pad + "    px_iter_ck(" + it_var + ", " + len_var + ");\n"
-        s += pad + "    " + fv_line + "\n"
+        if multi:
+            # M167（缺陷 180）：多变量解包 —— 迭代元素先入 item 临时槽（`_upN`），
+            #   **px_unpack_ck** 校验（list/tuple + 长度恰为 N，否则 R1002 同码同文；
+            #   修前落到逐个 px_index ⇒ 报「R1003 列表索引越界」，长度不足时与解释轨分叉），
+            #   再逐变量 px_index。变量声明顺序与原「先算变量槽、后写循环头」一致。
+            s += pad + "    LXValue " + item_var + " = px_iter_at(" + it_var + ", px_int(" + idx_var + "));\n"
+            s += pad + "    px_unpack_ck(" + item_var + ", " + str(upn) + ");\n"
+            var di = 0
+            while di < len(decls):
+                s += pad + "    " + decls[di] + "\n"
+                di += 1
+        else:
+            s += pad + "    " + decls[0] + "\n"
         let body = stmt[3]
         var bi = 0
         while bi < len(body):

@@ -37,6 +37,11 @@ def cg_comp_collect(clauses):
             bind = "LXValue " + lcvar + " = " + r["itms"][len(r["itms"]) - 1] + "; "
         else:
             var vi = 0
+            # M167（缺陷 180）：多变量解包 —— 先 **px_unpack_ck** 校验（list/tuple + 长度恰为
+            #   变量个数，否则 R1002 同码同文），再逐字段 px_index。修前直接逐个 px_index ⇒
+            #   元素是字符串时报「R1003 字符串索引越界」、长度不足时报「列表索引越界」，
+            #   而解释轨报 R1002 / 长度不足时静默给 null（三轨四种行为）。
+            bind = "px_unpack_ck(" + r["itms"][len(r["itms"]) - 1] + ", " + str(len(cl[1])) + "); "
             while vi < len(cl[1]):
                 let vn = rust_unescape(cl[1][vi])
                 let lcvar = "_cv" + str(cg_uid()) + "_" + str(vi)

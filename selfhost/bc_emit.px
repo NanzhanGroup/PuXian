@@ -338,9 +338,13 @@ def bc_collect_hoist(stmts, out):
             bc_collect_hoist(st[2], out)
         elif ty == "For":
             # B1：for 循环变量（Python 语义：循环后保留最后值）+ 遍历 body
-            let fv = rust_unescape(st[1])
-            if not contains(out, fv):
-                out.append(fv)
+            #   M167：多变量解包 —— 每个名字都要占槽（单变量仍是字符串）
+            let fvs = bc_for_names(st[1])
+            var fi = 0
+            while fi < len(fvs):
+                if not contains(out, fvs[fi]):
+                    out.append(fvs[fi])
+                fi += 1
             bc_collect_hoist(st[3], out)
         elif ty == "ChanDecl":
             # B5：通道声明变量（函数级 hoist，body 引用前预占槽）
@@ -1062,9 +1066,12 @@ def bc_emit_comp(func, kind, elems, cond, rv, clauses, ci):
         # M164（缺陷 170）：迭代元素走 ITERAT（dict 键位置语义仅在迭代可见）
         bc_emit_inst(func, "ITERAT", func["smap"][rust_unescape(vars[0])], its, ctr)
     else:
-        # 多变量解包：迭代元素入 item 槽，再逐字段 INDEX 到各变量槽
+        # 多变量解包：迭代元素入 item 槽，先 UNPACKCK 校验（M167：list/tuple + 长度恰为 N，
+        #   否则 R1002 同码同文；修前落到逐个 INDEX ⇒ R1003 越界，与解释轨分叉），
+        #   再逐字段 INDEX 到各变量槽
         let item = bc_tmp(func)
         bc_emit_inst(func, "ITERAT", item, its, ctr)
+        bc_emit_inst(func, "UNPACKCK", item, len(vars), 0)
         var fi = 0
         while fi < len(vars):
             let iv = bc_tmp(func)
@@ -1681,15 +1688,32 @@ def bc_emit_while(stmt, func):
 #       loop: cond(ctr<n) JMPF end → v=INDEX(its,ctr) → body →
 #       ctr+=1 → JMP loop；break/continue 经 func.loops ctx 回填
 #       （continue 跳 loop-back 处，即增量后重判 cond —— Python for 语义）。
+# M167（第 53 轮）：For.var → 名字列表（去转义）。
+#   单变量在 AST 里是**字符串**（保持既有形状/golden 不变），多变量是**名字列表**。
+def bc_for_names(v):
+    if type(v) == "string":
+        return [rust_unescape(v)]
+    let out = []
+    var i = 0
+    while i < len(v):
+        out.append(rust_unescape(v[i]))
+        i += 1
+    return out
 def bc_emit_for(stmt, func):
-    let vname = rust_unescape(stmt[1])
+    let names = bc_for_names(stmt[1])
     let iter = stmt[2]
     let body = stmt[3]
-    var vs = -1
-    if func["smap"].has(vname):
-        vs = func["smap"][vname]
-    else:
-        vs = bc_slot(func, vname)
+    # M167：变量槽**先于**迭代临时槽分配（保证单变量发射与既有 golden 逐字节一致）
+    let vss = []
+    var ni = 0
+    while ni < len(names):
+        var vs = -1
+        if func["smap"].has(names[ni]):
+            vs = func["smap"][names[ni]]
+        else:
+            vs = bc_slot(func, names[ni])
+        vss.append(vs)
+        ni += 1
     # iterable 求值一次入 its（先求值，len 用其结果）
     let its = bc_tmp(func)
     bc_emit_expr(iter, its, func)
@@ -1716,7 +1740,37 @@ def bc_emit_for(stmt, func):
     bc_emit_inst(func, "ITERLEN", its, nslot, 0)
     # M164（缺陷 170）：迭代走 **ITERAT**（px_iter_at）—— dict 取第 i 个键只属迭代机制，
     #   用户面 `d[i]` 走 INDEX（现严格报 R1002）。修前两者共用 INDEX ⇒ 位置语义外漏。
-    bc_emit_inst(func, "ITERAT", vs, its, ctr)
+    if len(names) == 1:
+        # M167（缺陷 182）：循环变量若是**装箱 cell**（被本帧闭包/函数体内 def 捕获），
+        #   必须走 CELLSET —— 直写槽会把 cell 冲掉，随后闭包构造读到的就不是 cell 而是裸值
+        #   （`px_cell_get(裸值)` 走索引 ⇒ 实测 `R1002 此类型不支持索引: int`；
+        #   值为字符串时 `px_index("z",0)` 恰好返回 "z" ⇒ **静默碰对**，更难发现）。
+        #   未装箱的名字保持**直写**（发射文本与既有 golden 逐字节一致）。
+        #   同口径见 bc_emit_default_fill 的「不得直写槽 pi」注释。
+        if bc_cell_has(func, names[0]):
+            let t1 = bc_tmp(func)
+            bc_emit_inst(func, "ITERAT", t1, its, ctr)
+            bc_store_var(func, names[0], vss[0], t1)
+        else:
+            bc_emit_inst(func, "ITERAT", vss[0], its, ctr)
+    else:
+        # M167（缺陷 180）：多变量解包 —— 迭代元素先入 item 槽，**UNPACKCK** 校验
+        #   （必须是 list/tuple 且长度恰为 N，否则 R1002 同码同文），再逐字段 INDEX。
+        let item = bc_tmp(func)
+        bc_emit_inst(func, "ITERAT", item, its, ctr)
+        bc_emit_inst(func, "UNPACKCK", item, len(names), 0)
+        var fi = 0
+        while fi < len(names):
+            let iv = bc_tmp(func)
+            bc_emit_int(func, iv, fi)
+            if bc_cell_has(func, names[fi]):
+                # M167（缺陷 182）：同上 —— 装箱变量走 CELLSET，不直写槽
+                let ft = bc_tmp(func)
+                bc_emit_inst(func, "INDEX", ft, item, iv)
+                bc_store_var(func, names[fi], vss[fi], ft)
+            else:
+                bc_emit_inst(func, "INDEX", vss[fi], item, iv)
+            fi += 1
     let ctx = bc_new_dict()
     ctx["breaks"] = []
     ctx["conts"] = []

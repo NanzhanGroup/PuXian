@@ -104,7 +104,7 @@ examples/m164_iter_index_split/err_d_int_lit.px src=efe8e748ba7f4870 rc=0 out=4c
 examples/m164_iter_index_split/err_d_int_var.px src=6ba5ae593f0f5dd2 rc=0 out=4d37b5d504a1b962485e33666ccc6f98 err=e3b0c44298fc1c14
 examples/m164_iter_index_split/err_d_neg.px src=cd5e18f5562e3f46 rc=0 out=1980123673e10d6cab689b0f18fd6d68 err=e3b0c44298fc1c14
 examples/m164_iter_index_split/genexp_shadow.px src=a9360c05ec98712e rc=0 out=4efc810a78bb6d22e3efcb75b4e441f6 err=e3b0c44298fc1c14
-examples/m164_iter_index_split/iter_split.px src=e1e5090c2135c6bb rc=0 out=bd7db6c79a29485930b97d8d55e699a6 err=e3b0c44298fc1c14
+examples/m164_iter_index_split/iter_split.px src=e1e5090c2135c6bb rc=0 out=0fbe763ae030d893d0c5495d80f5e35b err=e3b0c44298fc1c14
 examples/m164_iter_index_split/iter_split_edge.px src=4ea9dca1d2cc2c45 rc=0 out=0442695e212bde3d6a8469900b5e7225 err=e3b0c44298fc1c14
 examples/m165_eval_order/eval_order.px src=80e67a2b951bbf31 rc=0 out=992d12cbe485937d6766a5a9b764a370 err=e3b0c44298fc1c14
 examples/m166_iter_mutate/iter_ok.px src=2416813533708d5a rc=0 out=f1f8b846147b10a2025cf5ebe599b8d1 err=e3b0c44298fc1c14
@@ -114,6 +114,15 @@ examples/m166_iter_mutate/mut_dict_del.px src=33e12b4cfcbef133 rc=0 out=d36217b7
 examples/m166_iter_mutate/mut_list_append.px src=c507ee33b5eb2f0c rc=0 out=1b8fdbd2705c7791dc467ef8b814202d err=e3b0c44298fc1c14
 examples/m166_iter_mutate/mut_list_pop.px src=f2b942c5a5cad694 rc=0 out=9e12fb30ef662f2af4364114061be7ca err=e3b0c44298fc1c14
 examples/m166_iter_mutate/mut_nested.px src=4b25b6e770c7cb39 rc=0 out=6c77ce663a838bb628df5b73055adfbc err=e3b0c44298fc1c14
+examples/m167_unpack/err_comp_long.px src=6e2bc5b34f419186 rc=0 out=93e13dff3c844e6e5e274a75b69fc0c4 err=e3b0c44298fc1c14
+examples/m167_unpack/err_comp_notype.px src=5d9add170b8c4735 rc=0 out=493585489758ec6053c1b3613fe7958e err=e3b0c44298fc1c14
+examples/m167_unpack/err_comp_short.px src=ee182b367395ebec rc=0 out=30545bcbbbf01a49f932d7f9a44e5c91 err=e3b0c44298fc1c14
+examples/m167_unpack/err_dict.px src=e68f49998e1593e1 rc=0 out=64dd6ff34c730208e90e43f188122a41 err=e3b0c44298fc1c14
+examples/m167_unpack/err_long.px src=aacb51104ad8aee4 rc=0 out=f8c327f30cdcc4013e41cb60735b7f3b err=e3b0c44298fc1c14
+examples/m167_unpack/err_notype.px src=65df09f36ae9c3b5 rc=0 out=21a68cc4bb2369914b2845de485de432 err=e3b0c44298fc1c14
+examples/m167_unpack/err_short.px src=80d8a350e695ecf4 rc=0 out=ed27c5a8dd45757e93a5b15b9b5b3a71 err=e3b0c44298fc1c14
+examples/m167_unpack/err_three.px src=e39402614affbc1c rc=0 out=544dc3bdce9ab12b06e5743c026fce62 err=e3b0c44298fc1c14
+examples/m167_unpack/unpack_ok.px src=b787c2777b4ba70e rc=0 out=30d4e0de3ed261528f96c22e5f736b93 err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=ca57a90d693278f051ce29d427bb006a err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=864a86fa0f3b5c69d3239ebdb2eac63a err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14
@@ -285,7 +294,7 @@ selfhost/cases/s04_ctrl.px src=940242dabac2b6e0 rc=0 out=a82139bb63415ee7fb25c8c
 selfhost/cases/s05_enum.px src=eebc0b932399a289 rc=0 out=008fd2bd3fec1dfacd366eaaec077760 err=e3b0c44298fc1c14
 selfhost/cases/s06_result.px src=f0420aa4fcc252aa rc=0 out=6ff787166cf03ebbe8855865b09cb497 err=e3b0c44298fc1c14
 selfhost/cases/s07_interp.px src=de5875b378a9bdfb rc=0 out=8cc3da34f01c886e605c76e1db5bc562 err=e3b0c44298fc1c14
-selfhost/cases/s08_comprehensive.px src=69c5e5c9a9552133 rc=0 out=250060d8f0b3824afe686d52304a3b40 err=76bf3f4ca5192da2
+selfhost/cases/s08_comprehensive.px src=69c5e5c9a9552133 rc=0 out=c1839f04bfe1dab5232eda3c9949e55e err=76bf3f4ca5192da2
 selfhost/cases/s09_unicode_edge.px src=d5c89d5282286f65 rc=0 out=0e4a6b0eab8c95c420f6199ca1586aeb err=e3b0c44298fc1c14
 selfhost/cases/s10_nullable.px src=522794f4a7e3a72a rc=0 out=305046eec6e00db5ffd7efbd8caab036 err=e3b0c44298fc1c14
 selfhost/cases/s11_generics.px src=6149d19f2979ec80 rc=0 out=b0a69ee7994301ac85b1011947feff12 err=e3b0c44298fc1c14

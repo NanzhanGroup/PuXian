@@ -1,0 +1,90 @@
+# M167 门 · 合法侧：**多变量解包 for 语句**（`for k, v in xs:`）+ `dict.items()`
+# 用法：pxi / px build（VM 默认轨）/ px build --c 三轨 stdout 应**逐字节一致**（pass=15 fail=0）
+# 语义：`for a, b[, c…] in xs:` = 逐元素**解包**（与推导式 `[k for k, v in xs]` 同一机制与同一条真相）。
+#   元素必须是 list/tuple 且长度恰为变量个数；否则 R1002（见严格性层）。
+var fails = 0
+
+def chk(cond, tag):
+    if not cond:
+        fails = fails + 1
+        print("FAIL " + tag)
+
+# ① list 元素解包
+let pairs = [["a", 1], ["b", 2], ["c", 3]]
+var ks = []
+var vs = []
+for k, v in pairs:
+    ks.append(k)
+    vs.append(v)
+chk(ks == ["a", "b", "c"], "1-list-keys")
+chk(vs == [1, 2, 3], "1-list-vals")
+
+# ② tuple 元素解包
+let tps = [("x", 10), ("y", 20)]
+var ts = []
+for k, v in tps:
+    ts.append(k + str(v))
+chk(ts == ["x10", "y20"], "2-tuple")
+
+# ③ 三个变量
+let tri = [[1, 2, 3], [4, 5, 6]]
+var sm = []
+for a, b, c in tri:
+    sm.append(a + b + c)
+chk(sm == [6, 15], "3-triple")
+
+# ④ dict.items()：Go `for k, v := range m` 的对应写法（插入序）
+let d = {"p": 7, "q": 8}
+var its = []
+for k, v in d.items():
+    its.append(k + "=" + str(v))
+chk(its == ["p=7", "q=8"], "4-items")
+chk(d.items() == [["p", 7], ["q", 8]], "4-items-shape")
+chk(len(d.items()) == len(d.keys()), "4-items-len")
+
+# ⑤ 嵌套解包
+var nest = []
+for k, v in pairs:
+    for k2, v2 in pairs:
+        nest.append(k + k2)
+chk(len(nest) == 9, "5-nest-len")
+chk(nest[4] == "bb", "5-nest-mid")
+
+# ⑥ break / continue
+var bc = []
+for k, v in pairs:
+    if v == 2:
+        continue
+    if v == 3:
+        break
+    bc.append(k)
+chk(bc == ["a"], "6-break-continue")
+
+# ⑦ 函数内：循环变量「循环后保留最后值」（Python 语义，函数顶 hoist ⇒ 三轨一致）
+def last_of(xs):
+    for k, v in xs:
+        0
+    return [k, v]
+chk(last_of(pairs) == ["c", 3], "7-post-loop")
+
+# ⑧ 单变量（回归）
+var single = []
+for p in pairs:
+    single.append(len(p))
+chk(single == [2, 2, 2], "8-single-regress")
+
+# ⑨ 推导式（回归：与语句形式同一条真相）
+chk([k for k, v in pairs] == ["a", "b", "c"], "9-comp-regress")
+chk([v * 2 for k, v in pairs if v > 1] == [4, 6], "9-comp-if-regress")
+
+# ⑩ 函数内闭包捕获解包变量（M129 cell 路径 × 解包；**按引用**：两个闭包都看最后值）
+def mk(xs):
+    var out = []
+    for k, v in xs:
+        out.append(fn (): k + str(v))
+    return out
+let f2 = mk([["a", 1], ["b", 2]])
+chk(f2[0]() == "b2", "10-closure-ref-a")
+chk(f2[1]() == "b2", "10-closure-ref-b")
+
+print("pass=" + str(16 - fails) + " fail=" + str(fails))

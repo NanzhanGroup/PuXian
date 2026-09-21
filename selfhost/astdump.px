@@ -10,6 +10,7 @@
 # ============================================================
 # ---------- 节点布局表：[字段名或 null, 渲染类型] ----------
 # 渲染类型：s=字符串(已格式化) r=原样值 n=节点 o=Option<节点> os=Option<字符串>
+#          vs=字符串或多字符串列表(For.var，M167 多变量解包)
 #          l=节点列表 ls=字符串列表 p=Pos
 #          lt2=元组(节点,节点)列表(Dict entries) lt2b=元组(节点,节点列表)列表(If branches)
 #          lt3=元组(Option<String>,节点,节点列表)列表(Select arms)
@@ -148,6 +149,12 @@ def fmt_float(v):
 def dump_field(v, kind, ind):
     if kind == "s":
         return v
+    if kind == "vs":
+        # M167：For.var —— 单变量存**字符串**（原样输出，cases/*.ast golden 不变），
+        #   多变量解包存**名字列表**（按字符串列表渲染）
+        if type(v) == "string":
+            return v
+        return dump_str_list(v, ind)
     if kind == "r":
         return str(v)
     if kind == "f":

@@ -459,20 +459,43 @@ def i_eval_comp(clauses, ci, sink, list_expr, dict_key, dict_val, cond, env, pos
     return Ok(null)
 # 绑定推导式变量（对齐 bind_comp_vars：单变量直接绑定，多变量解包）
 def i_bind_comp_vars(vars_, item, child, pos):
+    return i_unpack_bind(vars_, item, child, pos)
+# ---------- M167（第 53 轮）：**解包（destructuring）统一** ----------
+# 语义（三轨一条真相）：变量个数 N ≥ 2 时，被解包值**必须是 list/tuple 且长度恰为 N**；
+#   否则 R1002，同码同文（解释轨 / VM 轨 / C 轨）：
+#     · 非 list/tuple          → `R1002 解包需要 list/tuple，实际是 <t>`
+#     · 长度 ≠ N               → `R1002 解包需要 N 个元素，实际是 M`
+# 修前实测（同一份源码**三轨分叉**）：
+#   · `[k for k, v in d]`（元素是字符串键）：解释轨 `R1002 推导式解包需要 list/tuple…`
+#     vs VM/C 轨 `R1003 字符串索引越界: 1`（同码同文都没有）
+#   · `[a for a, b in [[1], [2, 3]]]`（长度不足）：解释轨**静默给 null**、
+#     VM 轨 `列表索引越界: 1 (len=1)`（无 R1003 前缀）、C 轨 `R1003: 列表索引越界: 1 (len=1)`
+# 为什么严格（长度必须相等）而不是「缺的给 null」：① 后者是**静默的错值**（M116/M120
+#   静默 null 族、M163 字典键严格化、M166 长度变化报错，同一哲学：**响亮优于静默**）；
+#   ② 三轨本已三种行为，只能靠「严格」收敛成一条真相；③ 与 Python 的解包
+#   （`ValueError: not enough values to unpack` / `too many values to unpack`）同向。
+def i_unpack_bind(vars_, item, child, pos):
+    if type(vars_) == "string":
+        env_define(child, rust_unescape(vars_), item)
+        return Ok(null)
     if len(vars_) == 1:
         env_define(child, rust_unescape(vars_[0]), item)
         return Ok(null)
     let t = i_type_name(item)
     if t != "list" and t != "tuple":
-        return Err(i_r1002("推导式解包需要 list/tuple，实际是 " + t, pos))
+        return Err(i_r1002("解包需要 list/tuple，实际是 " + t, pos))
+    if len(item) != len(vars_):
+        return Err(i_r1002("解包需要 " + str(len(vars_)) + " 个元素，实际是 " + str(len(item)), pos))
     var i = 0
     while i < len(vars_):
-        var v = null
-        if i < len(item):
-            v = item[i]
-        env_define(child, rust_unescape(vars_[i]), v)
+        env_define(child, rust_unescape(vars_[i]), item[i])
         i += 1
     return Ok(null)
+# For 的变量字段 → 名字列表（M167：单变量是字符串，多变量是名字列表）
+def i_names_of(v):
+    if type(v) == "string":
+        return [v]
+    return v
 # ---------- 模式匹配（对齐 match_pattern） ----------
 # 注意：parser.px 生成的模式节点类型带 Pat 前缀
 #   （PatLiteral/PatBinding/PatWildcard/PatTuple/PatConstructor，

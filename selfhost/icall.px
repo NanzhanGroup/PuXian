@@ -250,6 +250,18 @@ def i_dict_method(d, name, args, pos):
             out.append(d[ks[i]])
             i += 1
         return Ok(out)
+    if name == "items":
+        # M167：[[k, v], …] 插入序**快照**（同 keys()/values()）——
+        #   `for k, v in d.items()` = Go `for k, v := range m` 的对应写法。
+        #   为什么单开方法：dict 直接迭代只产**键**（字符串）⇒ `for k, v in d` 会因
+        #   解包校验响亮报 R1002（不静默），指引用户写 .items()。
+        let out = []
+        let ks = d.keys()
+        var i = 0
+        while i < len(ks):
+            out.append([ks[i], d[ks[i]]])
+            i += 1
+        return Ok(out)
     if name == "has" or name == "contains":
         let r = i_expect_str_arg(args, 0, name, pos)
         if r.is_err():

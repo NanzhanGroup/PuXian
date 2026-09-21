@@ -4062,6 +4062,28 @@ void px_iter_ck(LXValue obj, int n0) {
         px_error("R1003: 迭代期间被迭代容器长度变化: %d → %d", n0, n1);
 }
 
+// ============ M167（第 53 轮 · 缺陷 180）：解包（destructuring）校验 ============
+// 语义（三轨一条真相）：变量个数 N ≥ 2 时，被解包值必须是 **list/tuple 且长度恰为 N**；
+//   否则 R1002，同码同文（解释轨 i_unpack_bind / VM 轨 PXOP_UNPACKCK / C 轨 px_unpack_ck）：
+//     · 非 list/tuple → `R1002 解包需要 list/tuple，实际是 <t>`
+//     · 长度 ≠ N      → `R1002 解包需要 N 个元素，实际是 M`
+// 修前实测（同一份源码**三轨四种行为**）：
+//   · `[k for k, v in d]`（元素是字符串键）：解释轨 `R1002 推导式解包需要 list/tuple…`，
+//     VM/C 轨 `R1003 字符串索引越界: 1`（码与文都不同）
+//   · `[a for a, b in [[1], [2, 3]]]`（长度不足）：解释轨**静默给 null**（错值！），
+//     VM 轨 `列表索引越界: 1 (len=1)`（无 R1003 前缀）、C 轨 `R1003: 列表索引越界: 1 (len=1)`
+// 为什么严格（长度必须相等，不做「缺位给 null」也不做「多的忽略」）：① 缺位给 null 是
+//   **静默的错值**（M116/M120 静默 null 族、M163 键严格化、M166 长度变化报错 —— 同一哲学：
+//   响亮优于静默）；② 三轨本已四种行为，只有「严格」能收敛为一条真相；③ 与 Python 的解包
+//   （`ValueError: not enough values to unpack` / `too many values to unpack`）同向。
+void px_unpack_ck(LXValue item, int n) {
+    if (item.type != PX_LIST && item.type != PX_TUPLE)
+        px_error("R1002: 解包需要 list/tuple，实际是 %s", px_type_name(item));
+    int len = px_len(item);
+    if (len != n)
+        px_error("R1002: 解包需要 %d 个元素，实际是 %d", n, len);
+}
+
 // ==================== M21/M24 切片 a[start:end] / a[start:end:step] ====================
 // start/end/step 为 PX_NULL 表示省略；负索引从尾部算；越界 clamp；step<0 反向，step=0 报错。
 // str 按 UTF-8 字符切（与解释器字符语义一致，中文正常）；list/tuple/bytes 取元素返回新对象。
@@ -4637,6 +4659,28 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
             px_root_push();
             PX_KEEP(r);   // M92 precise：values list 跨 px_list_push 扩容分配
             for (int i = 0; i < o->as.dict.len; i++) px_list_push(r, o->as.dict.vals[i]);
+            px_root_pop();
+            return r;
+        }
+        if (strcmp(name, "items") == 0) {
+            // M167（第 53 轮）：[[k, v], …] **插入序快照**（与 keys()/values() 同口径）——
+            //   `for k, v in d.items()` 即 Go `for k, v := range m` 的对应写法。
+            //   为什么单开方法：dict 直接迭代只产**键**（字符串）⇒ 多变量解包会因
+            //   解包校验（px_unpack_ck）**响亮报 R1002**（不静默），指引用户写 .items()。
+            LXObject* o = obj.as.obj;
+            LXValue r = px_list(0);
+            px_root_push();
+            PX_KEEP(r);   // 外层 list 跨 px_list_push/px_list（内层）分配
+            for (int i = 0; i < o->as.dict.len; i++) {
+                px_root_push();
+                PX_KEEP(r);
+                LXValue pair = px_list(0);
+                PX_KEEP(pair);
+                px_list_push(pair, px_str(o->as.dict.keys[i]));
+                px_list_push(pair, o->as.dict.vals[i]);
+                px_list_push(r, pair);
+                px_root_pop();
+            }
             px_root_pop();
             return r;
         }

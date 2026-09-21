@@ -279,6 +279,12 @@ LXValue px_index(LXValue obj, LXValue idx);
 LXValue px_iter_at(LXValue obj, LXValue idx);
 // M166（第 52 轮 · 缺陷 176）：迭代长度校验 —— 迭代期间长度 ≠ 进入时快照 ⇒ R1003
 void px_iter_ck(LXValue obj, int n0);
+// M167（第 53 轮 · 缺陷 180）：**解包校验** —— 多变量解包（`for a, b in xs` / 推导式
+//   `[k for k, v in xs]`）的被解包值必须是 list/tuple 且长度恰为 N，否则 R1002 同码同文。
+//   修前 VM/C 轨落到逐字段 INDEX ⇒ 元素是字符串时报「R1003 字符串索引越界: 1」、
+//   长度不足时报「列表索引越界: 1 (len=1)」（VM 轨还少 R1003 前缀），而解释轨报
+//   R1002 / 长度不足时**静默给 null** ⇒ 三轨四种行为。
+void px_unpack_ck(LXValue item, int n);
 // M21/M24：切片 a[start:end] / a[start:end:step]（start/end/step 为 null 表示省略；
 // str 按 UTF-8 字符、list/tuple/bytes 取元素；step<0 反向，step=0 报错）
 LXValue px_slice(LXValue obj, LXValue start, LXValue end, LXValue step);
