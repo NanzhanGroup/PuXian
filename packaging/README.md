@@ -155,7 +155,8 @@ dnf/yum 安装校验链：公钥 → repomd.xml 签名（repo_gpgcheck）→ 按
 > 然后 `scl enable devtoolset-9 bash`（或 `PX_CC=/opt/rh/devtoolset-9/root/usr/bin/gcc pxc build x.px`）。
 > `tools/px` 会在编译 runtime 前**预检**该能力并打印上述指引（不再是 `stdatomic.h: No such file`）。
 > el7 终验脚本的判据是「**要么真跑通，要么失败原因必须是已登记且可执行的那条**」，
-> **不是**"失败即放过"。（runtime 对 glibc 2.17 的全兼容列为下一轮候选。）
+> **不是**"失败即放过"。（**最终裁定 2026-09-21**：升级 gcc 是**用户侧动作** —— PuXian 不为
+> gcc < 4.9 提供回退，`runtime` 的 C11 原子是硬需求；el7 请照上条装 SCL，或直接升级发行版。）
 
 用户实测报出两条（都不是"某个功能不好用"，而是**分发链缺了一块却没有任何门看得见**）：
 
