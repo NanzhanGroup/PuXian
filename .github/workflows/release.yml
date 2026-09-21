@@ -598,7 +598,10 @@ jobs:
     name: openEuler 正式签名仓库终验（22.03 / 24.03 · dnf 双验签 + 真编译运行）
     runs-on: ubuntu-latest
     needs: [rpm-build-9]
-    timeout-minutes: 40
+    # M168 实测：本 job 内含**两个容器**各自的「dnf 装 gcc 依赖 + 真编译一个程序」，
+    #   而容器自带源（repo.openeuler.org）在境外 runner 上很慢 —— 40min 会在第二个版本线
+    #   之前就被打断（首跑 22.03 单步就跑了 ~35min）。⇒ 提到 75min，避免"验证没跑完就红"。
+    timeout-minutes: 75
     steps:
       - name: 检查 GPG 签名密钥是否就绪（未配置则跳过）
         id: gpgkey
