@@ -569,12 +569,16 @@ jobs:
       - name: centos:7 容器 yum 双验签 + 安装 puxian（verify_repo_el7.sh）
         if: steps.gpgkey.outputs.ok == 'true'
         run: |
-          set -euo pipefail
-          docker run --rm \
-            -v "$GITHUB_WORKSPACE:/src" \
-            -v /tmp/pxrepo:/out \
-            centos:7 \
-            bash /src/packaging/verify_repo_el7.sh
+          set -o pipefail
+          if ! docker run --rm \
+                 -v "$GITHUB_WORKSPACE:/src" \
+                 -v /tmp/pxrepo:/out \
+                 centos:7 \
+                 bash /src/packaging/verify_repo_el7.sh 2>&1 | tee "$RUNNER_TEMP/el7.log"; then
+            echo "::error::el7 终验失败"
+            tail -60 "$RUNNER_TEMP/el7.log" | sed 's/^/::error::el7 /'
+            exit 1
+          fi
 
       - name: 密钥未配置提示（占位，保持 job 绿）
         if: steps.gpgkey.outputs.ok != 'true'
@@ -624,18 +628,27 @@ jobs:
       - name: openEuler 22.03 LTS（dnf 双验签 → 装 puxian → 真编译运行）
         if: steps.gpgkey.outputs.ok == 'true'
         run: |
-          set -euo pipefail
-          docker run --rm -v "$GITHUB_WORKSPACE:/src" -v /tmp/pxrepo:/out \
-            -e OE_VER=22.03 openeuler/openeuler:22.03-lts \
-            bash /src/packaging/verify_repo_openeuler.sh
+          set -o pipefail
+          # 注解 = 唯一对外可读的失败通道（本仓 job 日志需管理员权限）
+          if ! docker run --rm -v "$GITHUB_WORKSPACE:/src" -v /tmp/pxrepo:/out \
+                 -e OE_VER=22.03 openeuler/openeuler:22.03-lts \
+                 bash /src/packaging/verify_repo_openeuler.sh 2>&1 | tee "$RUNNER_TEMP/oe2203.log"; then
+            echo "::error::openEuler 22.03 终验失败"
+            tail -60 "$RUNNER_TEMP/oe2203.log" | sed 's/^/::error::oe2203 /'
+            exit 1
+          fi
 
       - name: openEuler 24.03 LTS（同上 · 另一条版本线）
         if: steps.gpgkey.outputs.ok == 'true'
         run: |
-          set -euo pipefail
-          docker run --rm -v "$GITHUB_WORKSPACE:/src" -v /tmp/pxrepo:/out \
-            -e OE_VER=24.03 openeuler/openeuler:24.03-lts \
-            bash /src/packaging/verify_repo_openeuler.sh
+          set -o pipefail
+          if ! docker run --rm -v "$GITHUB_WORKSPACE:/src" -v /tmp/pxrepo:/out \
+                 -e OE_VER=24.03 openeuler/openeuler:24.03-lts \
+                 bash /src/packaging/verify_repo_openeuler.sh 2>&1 | tee "$RUNNER_TEMP/oe2403.log"; then
+            echo "::error::openEuler 24.03 终验失败"
+            tail -60 "$RUNNER_TEMP/oe2403.log" | sed 's/^/::error::oe2403 /'
+            exit 1
+          fi
 
       - name: 密钥未配置提示（占位，保持 job 绿）
         if: steps.gpgkey.outputs.ok != 'true'

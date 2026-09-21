@@ -580,6 +580,12 @@ jobs:
             if ! PX_BUILD_ENGINE=c tools/px build "$s" > "$RUNNER_TEMP/b_$n.log" 2>&1; then
               echo "::error::$n 原生现编失败"; tail -20 "$RUNNER_TEMP/b_$n.log" | sed "s/^/::error::$n /"; exit 1
             fi
+            out="$(dirname "$s")/build/$(basename "$s" .px)"
+            [ -x "$out" ] || { echo "::error::$n 缺产物 $out"; exit 1; }
+            # ⚠️ 必须**装回 bootstrap/**：否则门看到的是入库的 x86_64 件（首跑实测即栽此，
+            #    靠 ::error:: 注解读出「❌ bootstrap/pxfmt：架构不符 · 实测 X86-64」）
+            cp -f "$out" "bootstrap/$n"
+            echo "✅ bootstrap/$n $(stat -c %s "bootstrap/$n") 字节"
           done
           rm -f bootstrap/pxc_vm bootstrap/pxi_vm
           if ! bash selfhost/check_bin_portability.sh --self-test > "$RUNNER_TEMP/pst.log" 2>&1; then
