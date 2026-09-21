@@ -31,19 +31,21 @@ Source0:        puxian-%{version}-%{pxtag}-%{pxsha}.tar.gz
 
 # pxc build 需要 C 编译器（gcc 静态链接 .px → ELF）
 Requires:       gcc
-# px build 一律以 -static 链接产物 ⇒ 必须有**静态 libc**（M168 补：历史只写 gcc，
+# px build 一律以 -static 链接产物 ⇒ 需要**静态 libc**（M168 补：历史只写 gcc，
 #   用户装完 `px build` 就栽在 gcc 的 "cannot find -lc" 上）。
-# 各发行版归属不同（M168 实测）：
-#   el7 / el9  → 包名 glibc-static（glibc-devel **不含** libc.a）
-#   openEuler  → **没有 glibc-static 包**；libc.a 由 glibc-devel 提供（随 gcc 自动装上）
-#   ⇒ el7 用硬依赖（yum 3.4 不认弱依赖）；el9/openEuler 用 Recommends（dnf 默认装弱依赖，
-#     缺失时静默跳过 —— openEuler 正是"缺失但已由 glibc-devel 满足"的情形）
-# 统一用**弱依赖**（M168 修正：el7 也改弱依赖）—— 理由：
-#   ① 硬依赖会**阻断安装**：el7 的 vault 源在 CI/国内环境都可能取不到 glibc-static，
-#      而"装不上包"比"px build 缺静态 libc"严重得多；
-#   ② 缺件不再是谜题：tools/px 有静态 libc 预检，直接给出 dnf/apt 的补装命令；
-#   ③ el7 上 px build 本来就需 gcc ≥ 4.9（C11 stdatomic），单纯补 glibc-static 也不够。
+# 各发行版的归属（M168 实测）：el7/el9 → 包名 `glibc-static`（glibc-devel **不含** libc.a）；
+#   openEuler → **没有 glibc-static 包**，libc.a 由 `glibc-devel` 随 gcc 到位。
+# 静态 libc 的**依赖策略**（M168 实测定稿）：
+#   ① el7（rpm 4.11）**不支持弱依赖**（Recommends 是 rpm 4.12 起）⇒ 不能写 Recommends；
+#      也**不写硬依赖**：硬依赖会阻断安装（vault 源取不到 glibc-static 时
+#      `yum install puxian` 直接失败 —— "装不上包"比"px build 缺静态 libc"严重得多），
+#      且 el7 上 `px build` 本来就需 gcc ≥ 4.9（C11 stdatomic），单补 glibc-static 也不够。
+#   ② el9 / openEuler：用 Recommends（dnf 默认装弱依赖；openEuler **没有** glibc-static
+#      包名，libc.a 由 glibc-devel 随 gcc 到位 ⇒ 弱依赖缺失静默跳过，正是我们要的行为）。
+#   ③ 两条路径下"缺件"都不是谜题：tools/px 有**静态 libc 预检**，直接给出补装命令。
+%if "%{?dist}" != ".el7"
 Recommends:     glibc-static
+%endif
 Requires:       bash
 Requires:       tar
 
