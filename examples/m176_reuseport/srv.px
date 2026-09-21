@@ -1,0 +1,14 @@
+# M176 门 · 服务端：`srv.px <port> <reuse:0|1>`
+#   reuse=1 ⇒ px_serve(port, docroot, timeout, {"reuse_port": true})
+# 响应体带上本进程 pid —— 用来观察「新旧进程同时监听时，内核按 4 元组哈希分流」。
+let a = args()
+let port = int(a[1])
+let reuse = a[2]
+# docroot 带 pid：避免多进程写同一份 index.html（否则「谁在服务」看不出来）
+let doc = "/tmp/px_m176_doc_" + str(port) + "_" + str(os_pid())
+mkdir(doc)
+write_file(doc + "/index.html", "PID=" + str(os_pid()) + " REUSE=" + reuse)
+let opts = json_parse("{}")
+if reuse == "1":
+    opts.set("reuse_port", true)
+px_serve(port, doc, 10000, opts)

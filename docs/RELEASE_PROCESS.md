@@ -139,6 +139,41 @@ packaging/tag_guard.sh --grace-min 45   # 刚推上来的提交允许窗口期�
 - [ ] 打完 tag 后：**CI / Release / Tag Guard 三个 run 全绿**，且 Release 资产齐全
       （主包 + `sha256sums.txt` + **aarch64 并列包** + 其 `.sha256`）
 
+## 零停机升级（M176 · SO_REUSEPORT）
+
+> 面向**用 PuXian 跑服务**的人（`px_serve` / `http_serve` 的生产栈）。
+> 门：`examples/m176_reuseport/`（`M176-VERIFY-OK` · 真机时序 + 负控）。
+
+**一句话**：让新旧进程**同时**监听同一端口，再让旧进程优雅排空 —— 监听套接字没有一刻为空。
+
+```px
+# 服务端启动时开一次（之后每次升级都受益）
+px_serve(PORT, DOCROOT, 10000, {"reuse_port": true})
+# http_serve 同键；sse_serve / tcp_listen 没有 opts 参数 ⇒ 用环境变量：
+#   PX_REUSE_PORT=1 ./myserver
+```
+
+升级三步（**顺序不能颠倒**）：
+
+```bash
+# ① 起新进程（同端口；此刻新旧同时在监听，内核按 4 元组哈希分流）
+setsid nohup /path/new/myserver > /var/log/myserver.new.log 2>&1 &
+NEWPID=$!
+# ② 健康门（TCP + 真请求，别只看进程在不在）
+for i in $(seq 1 50); do curl -fsS http://127.0.0.1:$PORT/ >/dev/null && break; sleep 0.1; done
+# ③ 旧进程优雅退出（M27 起：停 accept + 等在途请求完成）
+kill -TERM $OLDPID
+```
+
+⚠️ **两个前提**（不满足就不是零停机）：
+
+1. **内核要求双方都 opt-in** —— 升级链里**旧版也必须带 `reuse_port` 启动**。
+   若旧版没开，新进程 `bind` 会拿到 `EADDRINUSE`（错误文案会带 `Address already in use`）——
+   这时只能退回「重启式升级」（有一个短暂空窗，用 ①②③ 的顺序仍能把空窗压到最小：
+   先探活新进程、再切流量、最后停旧进程）。
+2. **在途请求要能收尾** —— handler 里别用「无上界」的阻塞调用（`SO_RCVTIMEO`/超时要显式设），
+   否则 `kill -TERM` 之后旧进程会一直等在途请求，排空时间不可控。
+
 ## 已知边界
 
 - 发布包不含 `selfhost/` 源码（编译器 PuXian 源码）与 git 仓库——仅供「使用 PuXian 开发应用」；

@@ -356,6 +356,20 @@ run m174_dict_get bash examples/m174_dict_get/verify.sh
 #   反向判据；③ 非法 opts 取值三轨 rc≠0 + R1002 + 枚举文案；④ 负控 2 道（去 px_len 分支 /
 #   去 stderr 开关 —— 各自独立判红 + sha256 逐字节还原复绿）。
 run m175_bytes_stderr bash examples/m175_bytes_stderr/verify.sh
+# M176（第 57 轮 · 晨曦 QA 清单 P1-5）：**零停机换二进制**（SO_REUSEPORT）。
+# 病灶：监听套接字只设 SO_REUSEADDR（TIME_WAIT 可复用），两个进程**无法同时监听同一端口**
+#   ⇒ 每次换二进制必有空窗（晨曦三节点实测 352ms / 75ms / 249ms）。
+# 修法：`opts{"reuse_port": true}`（px_serve / http_serve 有 opts）或 `PX_REUSE_PORT=1`
+#   （全局开关，覆盖 sse_serve / tcp_listen 这类无 opts 的原语）；失败**响亮报错**
+#   （内核不支持就不能假装设上了）。bind 失败文案补 strerror（换二进制最常见的失败是
+#   EADDRINUSE =「对端没开 SO_REUSEPORT」，只说「绑定失败」会让人查错方向）。
+# 升级链：启动新进程（同端口）→ 健康门 → SIGTERM 旧进程（M27 起「停 accept + 等在途请求」）
+#   = 真零停机。⚠️ 内核要求**双方都 opt-in** ⇒ 旧版也必须带此开关启动（门把这条**测出来**）。
+# 判据：① A(reuse=1) 与 B(reuse=1) **并存**；② SIGTERM A 后 B 仍服务；
+#   ③ **700 次高频探测 refused=0 bad=0**（这才是"零停机"的定义）；
+#   ④ 反向语义：C(reuse=0) 在 B 监听期间 **bind 必须失败**（把内核契约变成判据）；
+#   ⑤ 负控（px_sock_set_reuseport 变 no-op ⇒ B 起不来）+ sha256 逐字节还原复绿。
+run m176_reuseport bash examples/m176_reuseport/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们
