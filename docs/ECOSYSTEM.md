@@ -1,8 +1,10 @@
 # PuXian 生态总览（Ecosystem Overview）
 
 > 面向人（开发者/使用者）与 AI（agent/大模型）的 PuXian 生态入口：**有什么库、能干什么、怎么拿来用、怎么写对**。
-> 建立：M69-S1（2026-09-05）· 维护：stdlib 变更须同步本文件与机器索引（见 §5 防漂移）。
-> 配套：`docs/PUXIAN_CHEATSHEET.md`（AI 速查包，M69-S2）· `docs/ECOSYSTEM_GAPS.md`（写库规范与语言缺口评估，M69-S4）。
+> 建立：M69-S1（2026-09-05）· 最近更新：M167（2026-09-21，补严格化规则 §6）。
+> 维护：stdlib 变更须同步本文件与机器索引（见 §5 防漂移）。
+> 配套：`docs/README.md`（**文档索引**）· `docs/PUXIAN_CHEATSHEET.md`（AI 速查包）·
+> `docs/ECOSYSTEM_GAPS.md`（写库规范与语言缺口评估）· `docs/DICT_STRICT_MIGRATION.md`（严格化迁移）。
 
 ---
 
@@ -107,8 +109,9 @@ PuXian 每个里程碑都用普贤自己写示例/工具/应用（dogfooding 自
 
 ## 6. 生态健康速查（写库/用库必读）
 
-- **`{}` 字面量 = `null`**（普贤语言事实）——空 dict 须 `json_parse("{}")` 构造（stdlib 内 `yl_nd`/`px_nd` 即此惯用法）。M69-S1 修复 `collections.group_by` 历史 bug（旧用 `{}` 致返回 null + 不支持 `d[k]=v`）。
-- **dict 操作 API**：写 `.set(k, v)`、查 `.has(k)`、读 `d[k]`；**不存在 `d[k] = v` 赋值**。
-- 纯函数库保持无 IO/无状态，天然双模式一致；依赖 native（加密/IO）的库注意 pxi 侧能力（M68 后零 extern def 即可达，但如 `aes_*` 等语义以编译模式为生产主）。
-- 新库/改库后：`pxc fmt` + `pxc lint` + `pxc doc` + 双模式跑 `pxc run` 与 `pxc build`，并重跑 `gen_ecosystem.px` 同步索引。
-- 语言缺口（模块 var/数组跨行/let 不可变等）与详细写库规范见 `docs/ECOSYSTEM_GAPS.md`。
+- **`{}` 字面量 = `null`**（普贤语言事实）——空 dict 须 `json_parse("{}")` 构造（stdlib 内 `yl_nd`/`px_nd` 即此惯用法）。M69-S1 修复 `collections.group_by` 历史 bug（旧用 `{}` 致返回 null）。**键必须带引号**：`{k: v}` 的 `k` 是**表达式**（`{group:true}` 会把 `group` 当变量求值 ⇒ `R1001`）。
+- **dict 操作 API**：写 `.set(k, v)` 或 **`d["k"] = v`**（M163 起三轨一致，键必须是字符串）；查 `.has(k)`；读 `d["k"]`（缺键 ⇒ **`R1008`**，见 `DICT_STRICT_MIGRATION.md`）；取键序 `d.keys()` / 键值对 `d.items()`。
+- **严格化族**（三轨同一真相，写库请遵守）：构造位置非字符串键 ⇒ `R1002` · `d[非字符串]` ⇒ `R1002` · **迭代期间修改被迭代容器 ⇒ `R1003`**（先快照）· 解包 `for a, b in xs` 形状必须匹配 ⇒ 否则 `R1002` · `sorted` 按值比较且稳定 · 求值顺序恒为**词法左→右**。详见 `docs/spec.md` §17。
+- 纯函数库保持无 IO/无状态，天然三轨一致；依赖 native（加密/IO）的库注意 pxi 侧能力（M68 后零 extern def 即可达，但如 `aes_*` 等语义以编译模式为生产主）。
+- 新库/改库后：`px fmt` + `px lint` + `px doc` + 三轨跑（`px run` 与 `px build` 默认 VM 轨，必要时 `px build --c` 复核），并重跑 `gen_ecosystem.px` 同步索引。
+- 语言缺口（模块 var/数组跨行/let 不可变等）与详细写库规范见 `docs/ECOSYSTEM_GAPS.md`；**已知未收口**（顶层循环变量作用域与捕获，缺陷 181）见 `spec.md` §17.8。

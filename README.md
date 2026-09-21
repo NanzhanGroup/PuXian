@@ -34,14 +34,20 @@ PuXian 采用 **Apache License 2.0** 开源 —— 任何人可自由使用、�
 
 ---
 
-## 🎉 当前状态：编译器已自举
+## 🎉 当前状态：编译器已自举 · 三轨语义一致 · aarch64 官方通道
+
+当前版本 **`px 0.2.0`**（最新里程碑 tag `v0.2.0-m167`）。
 
 | 状态 | 说明 |
 |---|---|
-| ✅ **自举完成（M-B8）** | **PuXian 编译器由 PuXian 自己写成**：`lexer / parser / codegen / interp / 值系统` 五大核心全部用 `.px` 重写，自举证明 A.c == B.c == B2.c 逐字节一致 |
+| ✅ **自举完成（M-B8）** | **PuXian 编译器由 PuXian 自己写成**：`lexer / parser / codegen / interp / bc_emit / 值系统` 核心全部用 `.px` 重写，自举证明 A.c == B.c == B2.c 逐字节一致 |
 | ✅ **Rust 版已退役（M-B9a）** | Rust 源码归档至 `archive/rust-compiler/`（只读），**新工具链 `tools/px` 完全无需 Rust**，基于自举二进制运行 |
-| ✅ **CI 已接入** | GitHub Actions：每次提交自动跑回归 + 自举证明 + 示例编译 |
-| ✅ **dogfood 完成（M-B9b）** | 用 PuXian 写出第一个生产应用（HTTP + SQLite 服务），代码已迁至独立私有仓库维护 |
+| ✅ **双后端 + 三轨（M91 起）** | 解释轨（`pxi` 树遍历）· **VM 字节码轨（`px build` 默认）** · C 文本轨（`px build --c` 逃生舱）。**同一份源码三轨行为一致**——由 `m116_gates.sh` 全量门 + 每里程碑专属门守住 |
+| ✅ **语义一致性收口（M159–M167）** | 「宿主语言留空 ⇒ 三轨必然分叉」的角落被逐条收成**一条真相**：求值顺序（词法左→右）· 迭代期间容器长度变化 ⇒ `R1003` · 解包严格化 · 字典键严格化 · `sorted` 值比较 + 稳定排序 · 闭包/生成器捕获按值快照。**没有静默的角落**（响亮优于静默） |
+| ✅ **aarch64 官方通道（M159）** | `selfhost/native_bootstrap.sh`（**只需 gcc** 的原生/交叉自举 + 自证）· `tools/px` 宿主架构自适应 · CI 新增 **`native-arm64` 真机 job** · Release 并列资产 `puxian-bootstrap-aarch64-<tag>.tar.gz` |
+| ✅ **工具链全自举** | `px` 的 `build / run / lex / parse / fmt / lint / doc / test / bench / lsp / mcp / refs` 全部由 PuXian 自己实现（spec §12 八工具齐备） |
+| ✅ **CI 已接入** | GitHub Actions：每次提交自动跑回归 + 自举证明（C 轨 + BC 轨）+ 示例编译 + **四架构矩阵**（x86_64 native / aarch64 / armv7 / riscv64） |
+| ✅ **dogfood 完成（M-B9b）** | 用 PuXian 写出第一个生产应用（HTTP + SQLite 服务），代码已迁至独立私有仓库维护；镜像站 / 发布链等基础设施亦由 PuXian 服务承载 |
 
 > 现在克隆仓库即可用 `tools/px` 编译/运行 PuXian 程序，**不需要安装 Rust**。
 
@@ -78,7 +84,11 @@ def main():
 |---|---|
 | `px build <file.px>` | 编译为静态二进制（输出 `<目录>/build/<name>`）。**M91 起默认产物 = VM 字节码轨**（compiler_vm --emit-c → BCModule 镜像 → 链 vm.o 跑显式帧 VM；`--c`/`PX_BUILD_ENGINE=c` 逃生舱走旧 C 文本轨 fn_* → gcc，纯计算热点用）。**默认按引用集自动最小**（C/VM 两轨同口径：VM 轨提取 BCModule `s_G` 表 / M86-S2 C 轨提取 px_get_global → map 反推），未引用模块自动去除（hello/纯 CLI → ~2.7M，用 sqlite → 自动保留 ~3.8M）；引用即保留，解析失败自动退全量保编译成功 |
 | `px build --full <file.px>` / `--max` | **全能力编译**（M86-S2 逃生舱）：跳过自动裁剪、runtime 全模块链接 ≈ 9.0M 基线；可与显式 `--no-xxx` 组合（= 显式裁剪其余全能力） |
-| `px build --min <file.px>` | **显式最小化**（M85，优先级同显式 flag）：聚合 `--no-quic` + sqlite/ws/zip/xml/aes/rsa/ed25519/route/zlib/h2 全裁 ≈ 2.7M；`--no-sqlite`/`--no-ws`/`--no-zip`/`--no-xml`/`--no-aes`/`--no-rsa`/`--no-ed25519`/`--no-route`/`--no-zlib`/`--no-h2` 可单独/任意组合（显式 flag > 自动；缺 native 调用 → R1001） |
+| `px build --min <file.px>` | **显式最小化**（M85，优先级同显式 flag）：聚合 `--no-quic` + sqlite/ws/zip/xml/aes/rsa/ed25519/img/route/zlib/h2 全裁 ≈ 2.7M；`--no-sqlite`/`--no-ws`/`--no-zip`/`--no-xml`/`--no-aes`/`--no-rsa`/`--no-ed25519`/`--no-img`/`--no-route`/`--no-zlib`/`--no-h2` 可单独/任意组合（显式 flag > 自动；缺 native 调用 → R1001） |
+| `px build --target <arch>` | **高层交叉开关**（M71-S2）：`x86_64` / `aarch64` / `armv7` / `riscv64`（亦可 `os-arch`），一条命令折叠 `--cc` + 目标 mbedtls/sqlite/zlib 库路径（等价手工五 flag，见下「多架构交叉编译」） |
+| `px build --lto <file.px>` | **LTO 构建档**（M104-S5）：gcc `-flto` 全链编译链接，VM 轨热点改善 |
+| `px build --c <file.px>` | **C 文本轨逃生舱**（显式）：走旧 `fn_*` → gcc 路径（纯计算热点、需要读生成的 C 时用）；默认仍为 VM 字节码轨 |
+| `px build --print-plan <file.px>` | **打印编译计划**（M159）：引擎轨 / 引用裁剪结果 / 链接模块 / CC / 目标架构 —— 跨架构与裁剪问题一眼归因（诊断优先于猜） |
 | `px refs <file.px>` | 输出被引用全局/native 名集合（M86-S1：编译 C 产物提取，import 递归覆盖；`px build` 自动裁剪的引用采集层） |
 | `px run <file.px> [args...]` | 脚本模式执行 |
 | `px lex <file.px>` | 打印 Token 流（调试，走 PuXian lexer） |
@@ -165,13 +175,27 @@ bash examples/m67_multiarch/verify.sh --arch aarch64 # 单档
 > 库用 cross_multiarch.sh 现编（发布包含该脚本）；musl 默认产出 static-pie 属正常形态（qemu 可跑）；
 > qemu-user 下并发 GC 模拟开销大 → 新架构 GC 由 arch 探针 + native 并发 + 真机验证（spec §8.21）。
 
+### 5. aarch64 官方通道：从源码自举（M159）
+
+```bash
+# 只需 gcc —— 不需要预置 bootstrap 二进制（原生目标机，或交叉用 --cc）
+selfhost/native_bootstrap.sh
+selfhost/native_bootstrap.sh --cc aarch64-linux-musl-gcc --target aarch64
+# 自证判据：编出的 pxc 再编 selfhost/compiler.px，与 selfhost/golden/compiler.c 逐字节一致
+```
+
+- `tools/px` **自动识别宿主架构**（选 `lib-<arch>`、非 x86_64 默认落 C 轨、自动 `--no-quic`），
+  `--print-plan` 可打印本次编译计划（引擎轨 / 引用裁剪 / CC / 目标架构）用于归因；
+- CI 新增 **`native-arm64` 真机 job**：真机 aarch64 上自举 + 自证 + 现编 + 冒烟 + 打包；
+- Release 自 M159 起附 **`puxian-bootstrap-aarch64-<tag>.tar.gz`** 并列资产（ARM 机器上免预置工具链）。
+
 ---
 
 ## 特性一览
 
 | 维度 | 能力 |
 |------|------|
-| 🏃 双模式 | 脚本模式（解释执行，秒起）/ 编译模式（生成 C → gcc 静态二进制，接近 C 性能），`run` 与 `build` 产物逐字节一致 |
+| 🏃 三轨运行 | 解释轨（`px run`，秒起）/ **VM 字节码轨（`px build` 默认）** / C 文本轨（`px build --c`，纯计算热点）—— **同一份源码三轨行为一致**，由全量门逐字节守（语义分叉视为 bug，不是「后端差异」） |
 | 🔀 并发 | `spawn` 真并发、`channel` 阻塞通信、`select` 随机就绪 + **并发 GC**（stop-the-world 全量回收，线程安全） |
 | ⏱ 定时器 | `set_timeout` / `set_interval` / `clear_timer`（一次性/周期回调，可变参数透传，回调内并发原语安全） |
 | 🧹 内存 | 编译模式 C 运行时内置保守标记-清除 GC（循环引用可回收，自动触发）+ **slab 分配器**（21 档 size-class 槽位复用）；解释器侧**追踪式 GC** 回收循环引用（list/dict/chan/**闭包 Func↔Env 循环**）+ `gc()` 强制回收 |
@@ -181,7 +205,8 @@ bash examples/m67_multiarch/verify.sh --arch aarch64 # 单档
 | 🔢 语言能力 | 切片语法 `a[i:j]` / `a[i:j:k]`（步长/反转，str 按 UTF-8 字符）、**生成器表达式** `(x for x in xs)`（**惰性**：单层 for 延迟求值 / `gen_next` 逐项 / for-in / `list()` 转换）、位运算 + 二进制数据视图（int_to_hex / bytes_to_hex / bit_count / bit_length）、正则表达式、锁原语（mutex / rwlock）、文件随机读写 + fsync、进程/信号（os_spawn / os_wait / signal）、**Result/Option 错误处理**（`Ok(x)`/`Err(e)`/`Some(x)` 构造，`?` 错误传播——Err/None 立即返回、`!` 强制解包、is_ok/is_err/unwrap 方法，spec 唯一错误通道）、字符串插值 `${expr}`、推导式、可选链 `?.`、空合并 `??`、管道 `\|>` |
 | 🔌 边缘设备 | fd 原语 `open`/`close`/`ioctl`/`os_errno`（ioctl arg 三形态：int 直传 / bytes·str 就地 in/out buffer，`_IOR` 类内核直接填充同对象）+ fd 数据通道 `read`/`write`（read(2)/write(2) 直通）+ **mmap 活映射** `mmap`/`munmap`/`mem_write`（MAP_SHARED 帧缓冲/共享内存/DMA 直访，GC 自动 munmap，`mem_write` 就地写映射区）+ GPIO/I2C 设备示例 + **aarch64 交叉编译**（`px build --no-quic` 裁剪 + qemu-aarch64 验证与 x86 一致）——Linux 边缘设备层（树莓派/网关/盒子）单静态二进制免环境 |
 | 🚀 应用平台 | **.px 脚本执行机制**（`px_serve` PHP/OpenResty 式应用服务器：Cookie/Session/基础认证 + 服务端 TLS + 优雅关闭、`px_exec` 语言层嵌入 API）+ **.px 进程池**（编译模式预派生 worker 解释器常驻复用，PHP-FPM 风格，**脚本/二进制变更自动滚动重启热更新**）+ 路由表+中间件（method+path 模式 / `:id` 参数 / `*` 通配 / 中间件链）+ cron 调度（6 字段）+ JSON 路径（json_path/json_path_set） |
-| 📚 标准库 | `stdlib/collections.px`（sorted/reversed/map/filter/reduce/unique/group_by）+ **共 9 个标准库**：collections / edge（M60 边缘设备）/ gfx / png（M61 2D）/ semver / webroute / **yaml / pxml / lunar（M66 收编，见 spec §10.3）** + 内置注册表白名单（见 MINI_SUBSET §2.5） |
+| 📚 标准库 | `stdlib/` **13 个公开库**（collections / semver / webroute / yaml / pxml / lunar / gfx / png / edge / cookiejar / html / multipart / smtp；另有 go_json / strings / url / path / time_go / io / jsonx / yamlx 等 **27 个 `.px` 文件**）—— `import std.<name>` 即用，编译/解释双模式一致；API 清单见 [`docs/ECOSYSTEM.md`](docs/ECOSYSTEM.md) 与机器索引 `docs/ecosystem_index.json` |
+| 🧭 语义一致性（M159–M167 收口） | **没有静默的角落**（响亮优于静默）：求值顺序一律**词法左→右**（含函数实参，不随 gcc）· 迭代期间修改被迭代容器 ⇒ `R1003`（进入循环时**长度快照**）· 解包严格（`for a, b in xs` 形状不符 ⇒ `R1002`）· 字典键严格（构造位置非字符串键 ⇒ `R1002`，不再静默丢数据）· `sorted` **值比较 + 稳定排序** · 闭包按引用、生成器捕获按**值快照**。每条规则都配三轨逐字节一致的门 |
 
 ---
 
@@ -192,28 +217,37 @@ PuXian 最与众不同的地方：**它的编译器是它自己写的**。2026 �
 ### 自举链路（Bootstrap Chain）
 
 ```
-selfhost/*.px（PuXian 源码）───编译───► bootstrap/pxc（编译器二进制，入库）
+selfhost/*.px（PuXian 源码）───编译───► bootstrap/pxc · pxc_vm（编译器二进制，入库）
                                           │ 编译任何 .px
                                           ▼
-                                     C 源码 + runtime/ ──gcc──► 静态二进制
+                                     C 源码 / 字节码 + runtime/ ──gcc──► 静态二进制
+
+（真机/交叉 aarch64：selfhost/native_bootstrap.sh 用 gcc 现场自举 + 自证，无需预置二进制）
 ```
 
 | 组件 | 说明 |
 |---|---|
-| `bootstrap/pxc` | PuXian 版编译器（静态二进制，由 `selfhost/compiler.px` 编译而来，随仓库提交） |
-| `bootstrap/pxi` | PuXian 版解释器（由 `selfhost/interp.px` 编译而来） |
+| `bootstrap/pxc` / `pxc_vm` | PuXian 版编译器（**C 文本轨** / **VM 字节码轨**二进位），静态 ELF，由 `selfhost/compiler.px` 编译而来，**随仓库提交** |
+| `bootstrap/pxi` / `pxi_vm` | PuXian 版解释器（源码头 / 字节码头） |
 | `bootstrap/pxl` / `pxpar` | PuXian 版 lexer / parser（调试用） |
-| `selfhost/compiler.px` | **编译器源码（PuXian 自己）**：import codegen.px（pxlexer→parser→cg_module→codegen）全链 |
-| `selfhost/golden/compiler.c` | 自举基准（6003 行 C）：引导编译器编译自身的一次性产物 |
-| `selfhost/bootstrap_prove.sh` | 自举证明：`bootstrap/pxc` 编译 `compiler.px` 与基准逐字节 diff |
+| `bootstrap/pxfmt` … `pxmcp` | 工具链自举件（fmt / lint / check / doc / test / bench / lsp / mcp）—— 与上面合计 **14 件入库二进制** |
+| `selfhost/*.px` | **编译器 / 解释器源码（PuXian 自己）**：23 个 `.px`，`compiler.px`（CLI）→ `codegen.px` + `cg_*.px`（AST→C）与 `bc_emit.px`（AST→字节码）+ `interp.px` + `i*.px`（树遍历解释器） |
+| `selfhost/golden/compiler.c` | **C 轨自举基准**（**17,535 行**）：引导编译器编译自身的一次性产物 |
+| `selfhost/golden/compiler.bc.dump` | **BC 轨自举基准**（**37,296 行** 字节码镜像）：VM 轨逐字节对拍 |
+| `selfhost/bootstrap_prove.sh` | C 轨自举证明：`bootstrap/pxc` 编译 `compiler.px` 与基准逐字节 diff |
+| `selfhost/bootstrap_prove_bc.sh` | **BC 轨自举证明**：编译器编译自身 → 字节码镜像与基准逐字节 diff |
+| `selfhost/native_bootstrap.sh` | **aarch64 官方通道（M159）**：只需 gcc 的原生/交叉自举，**含自证**（编出的 pxc 再编 `compiler.px`，与 golden 逐字节一致） |
+| `selfhost/rebake_bin.sh` | 入库件重烘 + **源码链指纹门**（`--check-all` 比对 14 件二进制与**当前源码**的指纹 `PXSRC-…`/`PXRT-…`）——「入库件是否就是当前源码烘出的」有据可查 |
+| `selfhost/m116_gates.sh` | **全量门**（语义门 + 发射冻结 + 重烘三连 + diffcheck 六路）：每个里程碑收尾必跑 |
 
-### 自举证明（经典三步）
+### 自举证明（经典三步 + 双轨自证）
 
 1. 编译器 A（`bootstrap/pxc`）运行 `build compiler.px` → 生成 B.c；
-2. `B.c` 与基准 `golden/compiler.c` **逐字节一致（6002 行 0 差异）** → 自举成立；
-3. 强化闭环：B.c 经 gcc 编成 B 二进制 → B 再编译 compiler.px → B2.c，**A.c == B.c == B2.c 三者完全一致**。
+2. `B.c` 与基准 `golden/compiler.c` **逐字节一致（17,535 行 0 差异）** → C 轨自举成立；
+3. 强化闭环：B.c 经 gcc 编成 B 二进制 → B 再编译 compiler.px → B2.c，**A.c == B.c == B2.c 三者完全一致**；
+4. **BC 轨并列自证**：`bootstrap_prove_bc.sh` 把编译器编译自身得到的**字节码镜像**与 `golden/compiler.bc.dump` 逐字节对拍（37,296 行 0 差异）。
 
-CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
+CI 每次提交自动跑 C 轨 + BC 轨证明与**重烘指纹门**（`.github/workflows/ci.yml`）；真机 aarch64 上由新增的 **`native-arm64` job** 现场跑 `native_bootstrap.sh`（自举 + 自证 + 冒烟 + 打包）。
 
 ### Mini 子集（语言面锁定）
 
@@ -226,25 +260,31 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 ## 目录结构
 
 ```
-├── bootstrap/              # 自举引导二进制（pxc 编译器 / pxi 解释器 / pxl lexer / pxpar parser，静态 ELF）
-├── tools/px               # 用户入口：build / run / lex / parse / --version（bash 包装，零 Rust 依赖）
-├── selfhost/               # 自举工程（核心！）
-│   ├── compiler.px         #   PuXian 版完整编译器 CLI（import codegen.px 全链）
-│   ├── codegen.px + cg_*.px #   codegen 模块（AST → C）
+├── bootstrap/              # 自举引导二进制（14 件静态 ELF：pxc/pxc_vm 编译器 · pxi/pxi_vm 解释器 · pxl/pxpar 调试 · pxfmt/pxlint/pxcheck/pxdoc/pxtest/pxbench/pxlsp/pxmcp 工具链）
+├── tools/px                # 用户入口（bash 包装，零 Rust 依赖）：build / run / lex / parse / fmt / lint / doc / test / bench / lsp / mcp / refs
+├── selfhost/               # 自举工程（核心！）23 个 .px
+│   ├── compiler.px         #   PuXian 版完整编译器 CLI
+│   ├── codegen.px + cg_*.px #   C 文本轨发射（AST → C）
+│   ├── bc_emit.px          #   VM 字节码轨发射（AST → 字节码）
 │   ├── interp.px + i*.px   #   解释器模块（tree-walking）
-│   ├── lexer.px pxlexer.px #   词法分析器
-│   ├── parser.px           #   语法分析器
+│   ├── lexer.px pxlexer.px parser.px  #   词法 / 语法
 │   ├── value.px env.px module.px  # 值系统 / 作用域 / 模块加载
-│   ├── capability.px       #   能力自检（110/110）
-│   ├── cases/ + golden/    #   对拍用例（s01-s09 + v01-v03）与基准产物
-│   ├── cases_bad/          #   错误场景（lex 14 + parse 9）
-│   └── diffcheck.sh / bootstrap_prove.sh  # 对拍框架 / 自举证明
-├── runtime/                # C 运行时（runtime.c/h + aes/xml/zip/ws/rsa/sqlite/route/h2/h3/quic + mbedtls + third_party）
-├── stdlib/                 # 标准库（9 个：collections/edge/gfx/png/semver/webroute/yaml/pxml/lunar）
-├── examples/               # 80+ 个示例（hello / fib / match / 并发 / 网络 / TLS / SQLite / 推导式 ...）
+│   ├── capability.px       #   能力自检
+│   ├── cases/ + golden/    #   对拍用例与基准产物（compiler.c 17,535 行 · compiler.bc.dump 37,296 行）
+│   ├── cases_bad/          #   错误场景
+│   ├── diffcheck.sh · engine_parity.sh · emitc_freeze.sh   # 对拍（六路）/ 三轨对拍 / 发射冻结门
+│   ├── bootstrap_prove.sh · bootstrap_prove_bc.sh          # C 轨 / BC 轨自举证明
+│   ├── native_bootstrap.sh #   gcc-only 原生/交叉自举 + 自证（aarch64 官方通道）
+│   ├── rebake_bin.sh       #   入库件重烘 + 源码链指纹门（--check-all / --check / --check-vm）
+│   └── m116_gates.sh       #   全量门（语义 + 冻结 + 重烘 + diffcheck）
+├── runtime/                # C 运行时（runtime.c/h + aes/xml/zip/ws/rsa/ed25519/sqlite/route/h2/h3/quic/image/onnx + mbedtls + third_party），native 367 项
+├── stdlib/                 # 标准库（27 个 .px：13 个公开库 collections/cookiejar/edge/gfx/html/lunar/multipart/png/pxml/semver/smtp/webroute/yaml + L1 工具 strings/path/url/io/time_go/jsonx/…）
+├── registry/               # 版本化库分发（registry/<name>/<version>/<name>.px，13 库）
+├── examples/               # 130 个示例目录 / 120 个单文件 .px（hello / fib / match / 并发 / 网络 / TLS / SQLite / HTTP3 / 边缘 / 语义门 ...）
+├── packaging/              # 发行打包（rpm/dnf 仓库 · make_release · tag_guard 漏打 tag 守卫）
 ├── archive/rust-compiler/  # Rust 版编译器源码归档（只读，自举前的实现，git 历史保留）
-├── docs/                   # 文档（语言规格 spec / Mini 子集 / 路线图 ROADMAP）
-└── .github/workflows/ci.yml # CI：回归 + 自举证明 + 示例编译
+├── docs/                   # 文档（索引 docs/README.md · 规格 spec · AI 速查表 · 生态 · 路线图 ...）
+└── .github/workflows/      # CI：回归 + 自举证明（C/BC 轨）+ 示例编译 + 四架构矩阵 + 原生 aarch64 自举 + 发布 + Tag Guard
 ```
 
 ---
@@ -253,10 +293,18 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 
 | 文档 | 说明 |
 |---|---|
-| [docs/spec.md](docs/spec.md) | 语言规格说明书（词法 / 语法 / 语义 / 标准库） |
+| [docs/README.md](docs/README.md) | **文档索引**（哪个文档管什么、按角色/场景怎么读、哪些是历史档案） |
+| [docs/spec.md](docs/spec.md) | **语言规格说明书**（词法 / 类型 / 表达式 / 语句 / 并发 / 模块 / 语义一致性 §17 / 错误码 §11 / 工具链 §12） |
+| [docs/PUXIAN_CHEATSHEET.md](docs/PUXIAN_CHEATSHEET.md) | **AI 速查包**（整包喂大模型即可写对 `.px`：易错事实 · native 名册 · 三轨差异与统一口径） |
+| [docs/ECOSYSTEM.md](docs/ECOSYSTEM.md) | 生态总览（13 库定位与导出 API / dogfood 能力导航 / 消费路径 / 机器索引防漂移） |
+| [docs/ECOSYSTEM_GAPS.md](docs/ECOSYSTEM_GAPS.md) | 写库规范 checklist + 语言缺口评估（历史评估留档） |
+| [docs/DICT_STRICT_MIGRATION.md](docs/DICT_STRICT_MIGRATION.md) | 字典/序列**严格化迁移说明**（M163–M167：键严格、迭代快照、解包形状、`items()` 用法） |
 | [docs/MINI_SUBSET.md](docs/MINI_SUBSET.md) | **Mini 子集规范**（自举编译器语言面锁定：支持特性 / 明确排除 / 已知限制） |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | 路线图（已完成里程碑 + 远期方向） |
-| [CHANGELOG.md](CHANGELOG.md) | 变更日志（按里程碑记录重要变更） |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | 路线图（已完成里程碑 + 远期方向 + 语言面欠账） |
+| [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md) | 发布 SOP（tag 驱动全自动发布 / 发布物清单 / 漏打 tag 守卫） |
+| [docs/PXML.md](docs/PXML.md) | PXML 配置语言规范（`std.pxml` 背后的语言） |
+| [docs/GAP_ANALYSIS.md](docs/GAP_ANALYSIS.md) | 能力差距分析（边缘设备 / 2D-3D 两条线的差距清单与排期输入） |
+| [CHANGELOG.md](CHANGELOG.md) | 变更日志（按里程碑记录重要变更，含每轮的缺陷编号与验证证据） |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献指南（构建 / 测试 / 提 PR 规范） |
 | [SECURITY.md](SECURITY.md) | 安全漏洞报告策略 |
 
@@ -319,11 +367,42 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 | M73–M81 | **RPM/dnf·yum 分发闭环**（v0.1.0-m73→m81，见 `packaging/README.md`）：el9 → **el7 全兼容**（centos:7 构建 + el9 代签 + 专用主密钥轮换 334536AC…2A61D264）→ dnf/yum 双验签安装 + gh-pages 在线仓库（/rpm/7、/rpm/9）全链路绿灯 |
 | M82 | **unix socket HTTP 服务端 native `http_serve_unix`**（qg-issue 15，GAP-SRV-1）：ws-approve .px 化 serve 前置缺口——补全 AF_UNIX **服务端**半侧（http_unix/unix_connect M56/M66 是客户端）；L0 runtime 新原生，复用 http_conn_worker 同管道，自动清理残留 sock + chmod 0600 + accept 错误容忍；worker remote 判族兼容（AF_UNIX → `"unix"`）；native 287→288；examples/m82_http_serve_unix verify 8 项全绿（curl --unix-socket 冒烟 + TCP 同 handler 双跑），spec §8.22 |
 
+### 平台化与生态（M83–M158，全部 ✅）
+
+| 里程碑 | 内容 |
+|---|---|
+| M83–M94 | **协程/调度完备性**（帧协程 M:N 内核、阻塞原语让出、抢占、定时器并入调度循环）+ **VM 字节码轨建设**（M89 设计 → **M91 起 `px build` 默认产物 = VM 字节码轨**）|
+| M95–M103 | 服务端/客户端**全链路协程化**（http_serve / sse_serve / route / vhost / middleware / 连接级 IDLE / 客户端网络 IO）+ px_serve 并发 TLS 握手修复 + .px 子进程池协程化 + Issue 29/30 语言层缺口收官 |
+| M104–M111 | 运行时性能与内存路径（LTO 档 · 全局表 O(1) 名解析 · VM 全局名稳定槽位 · 字符串下标摊还 O(1) · slab + 页回收）+ 服务端连接生命周期族（TLS 握手不再拖死端口）+ 响应头「白名单→拒绝名单」+ serve 进程内分配 13.5× 放大根因修复 |
+| M112–M123 | **VM 轨（用户面默认轨）语义/FFI 收口** + 门判退出码 + 入库件重烘进 CI + 内置名册根治为单一事实源 + 服务进程/环境原语补全 + 真实模块 .px 化暴露的静默错/致命错全修 |
+| M125–M137 | runtime **内存安全三连**（分配失败降为请求级失败 · 信号处理器内错误不再带走进程 · 隔离点回卷锁审计）+ **api-server / token-cache 全 PuXian 化**（语言侧缺陷 15–102 全修）|
+| M138–M148 | **Go 保真族**：正则 · `encoding/json` Indent/Compact/HTMLEscape 逐字节复刻 · HTTP 客户端失败成因分类 + IPv6 · 大请求体内存安全 + chunked 收发 · 循环引用值的比较/渲染/JSON · float64 位模式 + NaN 语义 · 定点小数文本 `fmt_float_dec` · `/` 完全 IEEE-754 + Go `%v` 浮点文本 |
+| M149–M158 | **服务化前提族**：TCP「带超时 + 可辨别失败」族 · 摘要/密钥派生 + TLS 客户端族 · `tls_upgrade` · 分配率两刀（字面量池化 · 编译器热路径）+ `join` 字节口径 · 含内嵌 NUL 的字符串 · **零依赖 ONNX**（解析面 → 张量 + 64 算子 + 拓扑执行器）· 解释轨函数值 → runtime native 桥 |
+
+### 语义一致性收口（M159–M167，全部 ✅）
+
+> 共同病灶：**宿主语言留空、或各家实现各不相同 ⇒ 我们的三轨（解释 / VM / C）必然分叉**。
+> 收口方式不是「跟随某一家」，而是**定一条可预测、可诊断、三轨可同的规则**——这是本项目对「超越」的实际定义：**没有静默的角落**。
+
+| 里程碑 | 主题 | 收口后的规则 |
+|---|---|---|
+| M159 | **aarch64 官方通道** | `native_bootstrap.sh`（只需 gcc 的原生/交叉自举 + **自证**）· `tools/px` 宿主架构自适应 · CI `native-arm64` 真机 job · Release 并列资产 |
+| M160 | 词法闭包 / 函数体内 `def` | 闭包捕获**按引用**（cell 共享），三轨一致（缺陷 159/160）|
+| M161 | 生成器捕获（GenExp） | 生成器 lambda 捕获 = **按值快照**（创建时求值）；与闭包「按引用」并存但**规则分明**（缺陷 163/164）|
+| M162 | `sorted` | **值比较 + 稳定排序**（缺陷 166：解释轨曾比渲染串 · 167：编译轨选择式不稳定）|
+| M163 | 字典键严格化 | 构造位置（字面量 / 推导式）非字符串键 ⇒ `R1002`（此前 VM/C 轨**静默丢数据**，缺陷 168/169/171）|
+| M164 | 迭代位置语义与用户索引分离 | `d[int]` 一律 `R1002 字典索引键必须是字符串`；`for k in d` 走独立迭代入口（缺陷 170/174/175）|
+| M165 | **求值顺序** | 表达式 / 函数实参 / 赋值一律**词法左→右**（C 标准未定义 ⇒ 此前 C 轨随 gcc 右→左；缺陷 178/179）|
+| M166 | 迭代期间修改容器 | 进入循环时**长度快照**；长度变化 ⇒ `R1003 迭代期间被迭代容器长度变化: n0 → n1`（缺陷 176）|
+| M167 | 解包统一 | 语句形式 `for a, b in xs` + `dict.items()`；形状/长度不符 ⇒ `R1002`（缺陷 180/182）|
+
+> 规则细节与迁移指引见 [docs/spec.md §17](docs/spec.md) 与 [docs/DICT_STRICT_MIGRATION.md](docs/DICT_STRICT_MIGRATION.md)；每条都配了三轨逐字节一致的门 + 负控（`examples/m159_*` … `examples/m167_*`）。
+
 ---
 
 ## 示例
 
-`examples/` 目录（119 个 `.px` + 子目录工程），快速上手：
+`examples/` 目录（**130 个示例目录 / 120 个单文件 `.px`**），快速上手：
 
 ```bash
 # 解释运行
@@ -372,13 +451,14 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 - `m57_s4_cross_verify.sh` —— **aarch64 交叉编译 + qemu 验证**（arm64 静态产物 2.5MB 设备层 ioctl 与 x86 结果一致）
 - `m57_s5_pxi_smoke.px` —— pxi 重建后 M57 新内置 10 项自检（open/read/ioctl 就地填充/write/mmap 活映射，解释/编译双模式输出一致）
 - `m58_hwmond/` —— **M58 dogfood 真实应用：pxhwmond 硬件健康守护 daemon**（多文件 import 工程：main/collect/shm/serve/notify；verify_s1–s4.sh 各子步自检 + 使用/部署见 `m58_hwmond/README.md`）
+- `m159_hostarch/` … `m167_unpack/` —— **语义一致性门**（宿主架构自适应 · 闭包 · 生成器捕获 · `sorted` 稳定 · 字典键严格 · 迭代位置语义 · 求值顺序 · 迭代期修改 · 解包）：每门 = 三轨逐字节一致 + 负控独立判红（回归时先跑这些）
 - ... 完整列表见 `examples/`
 
 ---
 
 ## 生态（Ecosystem）
 
-- **标准库 9 个**（纯语言 `.px`，`import std.*` 即用，编译/解释双模式一致；API 摘要见下表与总览文档）：
+- **标准库 13 个公开库**（纯语言 `.px`，`import std.*` 即用，编译/解释双模式一致；`stdlib/` 下共 **27 个 `.px` 文件**，含 strings / path / url / io / time_go / jsonx / go_json* / yaml* 等 L1 工具模块）：
 
 | 库 | 定位 | 入口 |
 |---|---|---|
@@ -391,10 +471,14 @@ CI 每次提交自动跑此证明（`.github/workflows/ci.yml`）。
 | `gfx` | 纯语言 2D 画布/图形（Bresenham/字形/贴图） | `import std.gfx` |
 | `png` | 纯语言 PNG 编码器（stored） | `import std.png` |
 | `edge` | 边缘设备：GPIO V2 / I2C / 串口 / PWM（Linux） | `import std.edge` |
+| `cookiejar` | 会话 Cookie 管理（收 Set-Cookie → 按 URL 生成请求头，会话复用） | `import std.cookiejar` |
+| `html` | 简化 HTML5 容错解析器（正文提取 / 简单选择器） | `import std.html` |
+| `multipart` | `multipart/form-data` 编码（表单与文件上传） | `import std.multipart` |
+| `smtp` | 轻量 SMTP 客户端（告警通知 / 事务邮件） | `import std.smtp` |
 
-- **生态总览**：[`docs/ECOSYSTEM.md`](docs/ECOSYSTEM.md) —— 库定位与导出 API / 119 个 dogfood 示例按能力导航 / 消费路径（import · pxpkg · 拷源码）/ 机器索引防漂移（`tools/gen_ecosystem.px`）。
-- **AI 速查包**：`docs/PUXIAN_CHEATSHEET.md`（M69-S2，整包喂 AI 即写对 .px）。
-- **包管理**：`tools/pxpkg`（M45：init/add/install + px.px.lock 可复现）；registry 资产随仓库分发（M69-S3 打通 fetch→import）。
+- **生态总览**：[`docs/ECOSYSTEM.md`](docs/ECOSYSTEM.md) —— 库定位与导出 API / **130 个示例目录（120 个单文件 `.px`）**按能力导航 / 消费路径（import · pxpkg · 拷源码）/ 机器索引防漂移（`tools/gen_ecosystem.px` + `tools/gen_native_table.sh`）。
+- **AI 速查包**：`docs/PUXIAN_CHEATSHEET.md`（整包喂 AI 即写对 `.px`；含 **native 名册 367 项**单一事实源 `docs/native_index.json` 与三轨差异/统一口径事实表）。
+- **包管理**：`tools/pxpkg`（init/add/install + `px.px.lock` 可复现）；**registry 13 个官方库**随仓库分发（`registry/<name>/<version>/<name>.px`，fetch → import 闭环已打通）。
 
 ---
 
