@@ -716,6 +716,16 @@ static LXValue qd_dec_section(qd_sess* s, const uint8_t* p, int len) {
     if (sign) { base = ric - (int64_t)deltab - 1; if (base < 0) return px_null(); }
     else base = ric + (int64_t)deltab;
     LXValue fields = px_list(8);
+    // M170（缺陷 187 同族）：VM 轨 precise GC 不扫 C 栈 ⇒ fields/pair 只活在本帧 C 局部时
+    //   必须登记（实测：M47 H3 回环门在 PX_GC_STRESS=1 下服务端 SIGSEGV，gdb 落点即本文件
+    //   解出的 fields/pair 被误回收 ⇒ slab 空闲链被写坏）。pair 的登记随字段段长度有界，
+    //   出口归一（深度式登记 + 所有出口 restore），避免早退漏归还。
+    int rd_marks = 0;
+    // M170：本函数有十余个早退分支 ⇒ 用「记录进入深度 + 所有出口 restore」代替
+    //   push/pop 手动配对（漏配一次就会在之后弹掉**调用者**的帧 ⇒ 提前回收）。
+    int rd_roots = px_root_depth(&rd_marks);
+#define QDEC_BAIL() do { px_root_restore(rd_roots, rd_marks); return px_null(); } while (0)
+    PX_KEEP(fields);
     while (off < len) {
         uint8_t b0 = p[off];
         int used2 = 0;
@@ -723,19 +733,20 @@ static LXValue qd_dec_section(qd_sess* s, const uint8_t* p, int len) {
             // Indexed Field Line：1 T Index(6+)
             int T = (b0 >> 6) & 1;
             uint64_t idx = qd_pref_dec(p + off, len - off, 6, &used2);
-            if (!used2) return px_null();
+            if (!used2) QDEC_BAIL();
             off += used2;
             LXValue pair = px_list(2);
+            PX_KEEP(pair);
             if (T) {
-                if (idx >= 99) return px_null();
+                if (idx >= 99) QDEC_BAIL();
                 px_list_push(pair, px_str(qp_static_table[idx].name));
                 px_list_push(pair, px_str(qp_static_table[idx].value));
             } else {
                 // 相对 Base：abs = base-1-idx
-                if (idx > (uint64_t)base || (int64_t)idx >= base) return px_null();
+                if (idx > (uint64_t)base || (int64_t)idx >= base) QDEC_BAIL();
                 int64_t abs = base - 1 - (int64_t)idx;
                 qd_entry* e = qd_dyn_at_abs(s->de, s->de_head, s->de_len, s->de_next_abs, (uint64_t)abs);
-                if (!e) return px_null();
+                if (!e) QDEC_BAIL();
                 px_list_push(pair, px_str_len(e->name, e->nlen));
                 px_list_push(pair, px_str_len(e->val, e->vlen));
             }
@@ -743,12 +754,13 @@ static LXValue qd_dec_section(qd_sess* s, const uint8_t* p, int len) {
         } else if ((b0 & 0xF0) == 0x10) {
             // Indexed Field Line with Post-Base Index：0001 Index(4+) → abs = base + idx
             uint64_t idx = qd_pref_dec(p + off, len - off, 4, &used2);
-            if (!used2) return px_null();
+            if (!used2) QDEC_BAIL();
             off += used2;
             int64_t abs = base + (int64_t)idx;
             qd_entry* e = qd_dyn_at_abs(s->de, s->de_head, s->de_len, s->de_next_abs, (uint64_t)abs);
-            if (!e) return px_null();
+            if (!e) QDEC_BAIL();
             LXValue pair = px_list(2);
+            PX_KEEP(pair);
             px_list_push(pair, px_str_len(e->name, e->nlen));
             px_list_push(pair, px_str_len(e->val, e->vlen));
             px_list_push(fields, pair);
@@ -756,24 +768,25 @@ static LXValue qd_dec_section(qd_sess* s, const uint8_t* p, int len) {
             // Literal Field Line with Name Reference：01 N T NameIdx(4+) + value
             int T = (b0 >> 4) & 1;
             uint64_t idx = qd_pref_dec(p + off, len - off, 4, &used2);
-            if (!used2) return px_null();
+            if (!used2) QDEC_BAIL();
             off += used2;
             char* nm = NULL; int nl = 0;
             if (T) {
-                if (idx >= 99) return px_null();
+                if (idx >= 99) QDEC_BAIL();
                 nm = (char*)qp_static_table[idx].name; nl = (int)strlen(nm);
             } else {
-                if ((int64_t)idx >= base) return px_null();
+                if ((int64_t)idx >= base) QDEC_BAIL();
                 int64_t abs = base - 1 - (int64_t)idx;
                 qd_entry* e = qd_dyn_at_abs(s->de, s->de_head, s->de_len, s->de_next_abs, (uint64_t)abs);
-                if (!e) return px_null();
+                if (!e) QDEC_BAIL();
                 nm = e->name; nl = e->nlen;
             }
             char* vv = NULL; int vl = 0;
             int no = qd_str_in(p, len, off, &vv, &vl);
-            if (no < 0) return px_null();
+            if (no < 0) QDEC_BAIL();
             off = no;
             LXValue pair = px_list(2);
+            PX_KEEP(pair);
             px_list_push(pair, px_str_len(nm, nl));
             px_list_push(pair, px_str_len(vv, vl));
             free(vv);
@@ -781,18 +794,19 @@ static LXValue qd_dec_section(qd_sess* s, const uint8_t* p, int len) {
         } else if ((b0 & 0xF8) == 0x00 || (b0 & 0x0F) == 0x00) {
             // Literal Field Line with Post-Base Name Reference：0000 N NameIdx(3+) → abs=base+idx
             // 高 4 位为 0000（0x00-0x0F）
-            if ((b0 & 0xF0) != 0x00) return px_null();
+            if ((b0 & 0xF0) != 0x00) QDEC_BAIL();
             uint64_t idx = qd_pref_dec(p + off, len - off, 3, &used2);
-            if (!used2) return px_null();
+            if (!used2) QDEC_BAIL();
             off += used2;
             int64_t abs = base + (int64_t)idx;
             qd_entry* e = qd_dyn_at_abs(s->de, s->de_head, s->de_len, s->de_next_abs, (uint64_t)abs);
-            if (!e) return px_null();
+            if (!e) QDEC_BAIL();
             char* vv = NULL; int vl = 0;
             int no = qd_str_in(p, len, off, &vv, &vl);
-            if (no < 0) return px_null();
+            if (no < 0) QDEC_BAIL();
             off = no;
             LXValue pair = px_list(2);
+            PX_KEEP(pair);
             px_list_push(pair, px_str_len(e->name, e->nlen));
             px_list_push(pair, px_str_len(vv, vl));
             free(vv);
@@ -801,39 +815,42 @@ static LXValue qd_dec_section(qd_sess* s, const uint8_t* p, int len) {
             // Literal Field Line with Literal Name：001 N H NameLen(3+) + name + value
             int Hn = (b0 >> 3) & 1;
             uint64_t nlen = qd_pref_dec(p + off, len - off, 3, &used2);
-            if (!used2) return px_null();
+            if (!used2) QDEC_BAIL();
             off += used2;
-            if (off + (int)nlen > len) return px_null();
+            if (off + (int)nlen > len) QDEC_BAIL();
             char* nm = NULL; int nl = 0;
             if (Hn) {
                 uint8_t* t = (uint8_t*)malloc((size_t)(nlen * 2 + 16));
-                if (!t) return px_null();
+                if (!t) QDEC_BAIL();
                 int r = qd_huff_dec(p + off, (int)nlen, t, (int)(nlen * 2 + 16));
-                if (r < 0) { free(t); return px_null(); }
+                if (r < 0) { free(t); QDEC_BAIL(); }
                 nm = (char*)malloc((size_t)r + 1);
-                if (!nm) { free(t); return px_null(); }
+                if (!nm) { free(t); QDEC_BAIL(); }
                 memcpy(nm, t, (size_t)r); nm[r] = 0; nl = r;
                 free(t);
             } else {
                 nm = (char*)malloc((size_t)nlen + 1);
-                if (!nm) return px_null();
+                if (!nm) QDEC_BAIL();
                 memcpy(nm, p + off, (size_t)nlen); nm[nlen] = 0; nl = (int)nlen;
             }
             off += (int)nlen;
             char* vv = NULL; int vl = 0;
             int no = qd_str_in(p, len, off, &vv, &vl);
-            if (no < 0) { free(nm); return px_null(); }
+            if (no < 0) { free(nm); QDEC_BAIL(); }
             off = no;
             LXValue pair = px_list(2);
+            PX_KEEP(pair);
             px_list_push(pair, px_str_len(nm, nl));
             px_list_push(pair, px_str_len(vv, vl));
             free(nm); free(vv);
             px_list_push(fields, pair);
         } else {
-            return px_null();
+            QDEC_BAIL();
         }
     }
+    px_root_restore(rd_roots, rd_marks);
     return fields;
+#undef QDEC_BAIL
 }
 
 // h3_qs_dec_ingest(sess, bytes) -> bool
@@ -962,19 +979,24 @@ static LXValue bi_settings_dec(LXValue* args, int nargs, void* ctx) {
     if (off + (int)flen > plen) return px_null();
     int end = off + (int)flen;
     LXValue pairs = px_list(4);
+    int rd_marks = 0;                          // M170（缺陷 187 同族）：pairs/pair 跨 pair 创建
+    int rd_roots = px_root_depth(&rd_marks);   //   循环内有早退分支 ⇒ 深度式登记 + 出口归一
+    PX_KEEP(pairs);
     while (off < end) {
         uint64_t k = 0, v = 0;
         int n1 = qd_varint_dec(p + off, end - off, &k);
-        if (n1 <= 0) return px_null();
+        if (n1 <= 0) { px_root_restore(rd_roots, rd_marks); return px_null(); }
         off += n1;
         int n2 = qd_varint_dec(p + off, end - off, &v);
-        if (n2 <= 0) return px_null();
+        if (n2 <= 0) { px_root_restore(rd_roots, rd_marks); return px_null(); }
         off += n2;
         LXValue pair = px_list(2);
+        PX_KEEP(pair);
         px_list_push(pair, px_int((int64_t)k));
         px_list_push(pair, px_int((int64_t)v));
         px_list_push(pairs, pair);
     }
+    px_root_restore(rd_roots, rd_marks);
     return pairs;
 }
 
@@ -1102,14 +1124,19 @@ int px_qd_enc(int64_t id, char* const* names, char* const* vals,
               int* nls, int* vls, int nf, uint8_t* sect, int scap) {
     if (nf < 0 || nf > 512 || !sect || scap <= 0) return -1;
     LXValue lst = px_list(8);
+    px_root_push();   // M170（缺陷 187 同族）：lst/pair 跨 px_str_len 分配
+    PX_KEEP(lst);
     for (int i = 0; i < nf; i++) {
         LXValue pair = px_list(2);
+        PX_KEEP(pair);
         px_list_push(pair, px_str_len(names[i], nls[i]));
         px_list_push(pair, px_str_len(vals[i], vls[i]));
         px_list_push(lst, pair);
     }
     LXValue a[2]; a[0] = px_int(id); a[1] = lst;
+    PX_KEEP(a[1]);   // 形参副本：bi_qs_enc 内部可能触发 GC
     LXValue r = bi_qs_enc(a, 2, NULL);
+    px_root_pop();
     if (r.type != PX_BYTES && r.type != PX_STR) return -1;
     int n = (int)r.as.obj->as.str.len;
     if (n > scap) return -1;

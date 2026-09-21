@@ -538,6 +538,26 @@ void px_root_push(void);
 void px_root_pop(void);
 void px_root_keep(const LXValue* v);
 #define PX_KEEP(v) px_root_keep(&(v))
+// M170（缺陷 188/187 同族）：登记栈的「记录 / 还原」——两个用途：
+//   ① **隔离点 longjmp 落点**：longjmp 不展开 C 帧，被跳过的登记会变成**野根**
+//      （指向已释放对象）⇒ 落点必须先 px_root_depth 记录、longjmp 后 px_root_restore 收缩。
+//   ② **多出口函数**（如 QPACK 解码：循环内十余个早退分支）：与其在每个出口手动 pop，
+//      不如记录进入深度、所有出口一律 restore —— 语义 = 「本函数登记的根一条不留」，
+//      且**天然不会与调用者的登记混淆**（restore 只收缩、不扩张）。
+//   ⚠️ 与 push/pop 的区别：push/pop 是**帧式**（POP 弹到本帧起点），depth/restore 是
+//      **深度式**（不建帧，只截断）。混用时：本函数**不要**再调 px_root_pop，否则会弹掉
+//      调用者的帧、把别人登记的根一并释放（= 提前回收 ⇒ use-after-free）。
+int  px_root_depth(int* marks_out);
+void px_root_restore(int roots_depth, int marks_depth);
+// M170 收尾修订：**隔离点（setjmp/longjmp）专用**归还 API。
+//   为什么不能复用上面两个（现场实测两条硬约束）：
+//     ① 记录值若放**栈局部**，longjmp 后会读到垃圾（实测 marks_depth=-1811936416）⇒
+//        根栈深度被设成负数 ⇒ 下一次 px_root_push 越界写 ⇒ SIGSEGV；
+//     ② 收缩 **marks 栈**会误伤同一线程上其它协程（M93 帧协程 M:N 交替/迁移）⇒ pop 弹错 mark。
+//   ⇒ 本 API 把记录放 TLS（哨兵 -1 = 本线程无记录即不动作），且**只收缩根栈**。
+void px_root_iso_mark(void);
+void px_root_restore_iso(void);
+
 
 // ==================== M28 P1：路由表 + 中间件（runtime_route.c） ====================
 typedef struct PxHttpOut PxHttpOut;   // M53-S2：HTTP 输出抽象（结构体定义见下方 M27 段）

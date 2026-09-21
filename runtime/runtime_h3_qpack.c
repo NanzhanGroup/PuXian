@@ -288,31 +288,45 @@ LXValue px_h3_qdec(const uint8_t* p, int len) {
     off += used;
     if (ric != 0) return px_null();    // 无动态表：RIC 必须 0（引用动态表不支持）
     LXValue fields = px_list(8);
+    // M170（缺陷 187 同族）：VM 轨 precise GC 不扫 C 栈 ⇒ fields/pair/name 只活在本帧 C
+    //   局部时必须登记（实测：`h3_qenc`+`h3_qdec` 回环在 PX_GC_STRESS=1 下 **SIGSEGV**）。
+    int rd_marks = 0;
+    // M170：本函数有十余个早退分支 ⇒ 用「记录进入深度 + 所有出口 restore」代替
+    //   push/pop 手动配对（漏配一次就会在之后弹掉**调用者**的帧 ⇒ 提前回收）。
+    int rd_roots = px_root_depth(&rd_marks);
+#define QDEC_BAIL() do { px_root_restore(rd_roots, rd_marks); return px_null(); } while (0)
+    PX_KEEP(fields);
     while (off < len) {
         uint8_t b0 = p[off];
         if (b0 & 0x80) {
             // Indexed Field Line：1 T | Index(6+)。T=1 静态；T=0 动态 → null
-            if (!(b0 & 0x40)) return px_null();
+            if (!(b0 & 0x40)) QDEC_BAIL();
             uint64_t idx = qp_pref_dec(p + off, len - off, 6, &used);
-            if (used == 0) return px_null();
+            if (used == 0) QDEC_BAIL();
             off += used;
-            if (idx >= 99) return px_null();
+            if (idx >= 99) QDEC_BAIL();
             LXValue pair = px_list(2);
+            PX_KEEP(pair);
             px_list_push(pair, px_str(qp_static_table[idx].name));
             px_list_push(pair, px_str(qp_static_table[idx].value));
             px_list_push(fields, pair);
         } else if (b0 & 0x40) {
             // Literal Field Line with Name Reference：01 N T | NameIndex(4+) + value
-            if (!(b0 & 0x10)) return px_null();   // T=0 动态 → null
+            if (!(b0 & 0x10)) QDEC_BAIL();   // T=0 动态 → null
             uint64_t idx = qp_pref_dec(p + off, len - off, 4, &used);
-            if (used == 0) return px_null();
+            if (used == 0) QDEC_BAIL();
             off += used;
-            if (idx >= 99) return px_null();
+            if (idx >= 99) QDEC_BAIL();
             LXValue val = px_null();
             int no = qp_dec_value_string(p, len, off, &val);
-            if (no < 0) return px_null();
+            if (no < 0) QDEC_BAIL();
+            PX_KEEP(val);   // M170：**必须紧跟创建** —— 下面 px_list(2) 与 px_str(名字) 都会分配
+                            //   （可能触发 GC），val 此刻还不在任何根上 ⇒ 不登记就被回收，
+                            //   之后那两次分配会**重用它的内存** ⇒ 读出的“值”变成**名字**
+                            //   （实测：`:authority` 的值解出 `:authority`，且只在 stress 下复现）
             off = no;
             LXValue pair = px_list(2);
+            PX_KEEP(pair);
             px_list_push(pair, px_str(qp_static_table[idx].name));
             px_list_push(pair, val);
             px_list_push(fields, pair);
@@ -320,9 +334,9 @@ LXValue px_h3_qdec(const uint8_t* p, int len) {
             // Literal Field Line with Literal Name：001 N H | NameLen(3+) name + value
             int name_h = (b0 >> 3) & 1;
             uint64_t nlen = qp_pref_dec(p + off, len - off, 3, &used);
-            if (used == 0) return px_null();
+            if (used == 0) QDEC_BAIL();
             off += used;
-            if (off + (int)nlen > len) return px_null();
+            if (off + (int)nlen > len) QDEC_BAIL();
             LXValue name = px_null();
             if (!name_h) {
                 name = px_str_len((const char*)(p + off), (int)nlen);
@@ -330,26 +344,32 @@ LXValue px_h3_qdec(const uint8_t* p, int len) {
             } else {
                 size_t tcap = (size_t)(nlen * 2 + 16 < (1 << 20) ? nlen * 2 + 16 : (1 << 20));
                 uint8_t* tmp = (uint8_t*)malloc(tcap);
-                if (!tmp) return px_null();
+                if (!tmp) QDEC_BAIL();
                 int r = qp_huff_dec(p + off, (int)nlen, tmp, (int)tcap);
-                if (r < 0) { free(tmp); return px_null(); }
+                if (r < 0) { free(tmp); QDEC_BAIL(); }
                 name = px_str_len((const char*)tmp, r);
                 free(tmp);
                 off += (int)nlen;
             }
+            PX_KEEP(name);   // M170：**紧跟赋值**（写在赋值前的 KEEP 保护的是 null，等于没登记）——
+                             //   下面 qp_dec_value_string 与 px_list(2) 都会分配，name 会被误回收
             LXValue val = px_null();
             int no = qp_dec_value_string(p, len, off, &val);
-            if (no < 0) return px_null();
+            if (no < 0) QDEC_BAIL();
+            PX_KEEP(val);    // M170：同上一支 —— 值也必须紧跟创建登记
             off = no;
             LXValue pair = px_list(2);
+            PX_KEEP(pair);
             px_list_push(pair, name);
             px_list_push(pair, val);
             px_list_push(fields, pair);
         } else {
-            return px_null();   // 0000/0001 post-base / 其它 → 无动态表不支持
+            QDEC_BAIL();   // 0000/0001 post-base / 其它 → 无动态表不支持
         }
     }
+    px_root_restore(rd_roots, rd_marks);
     return fields;
+#undef QDEC_BAIL
 }
 
 // ==================== 语言层绑定：Huffman 纯 codec（capability/互操作验证用）====================

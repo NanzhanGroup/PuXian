@@ -301,9 +301,22 @@ jobs:
           # `bc_is_global` 顺序敏感）。判据：15 断言三轨 stdout 逐字节一致 + 3 类严格性用例。
           # 负控需重建 dev 件 ⇒ CI 用 --neg-skip，负控在本地全门 selfhost/m116_gates.sh 跑。
           bash examples/m169_toplevel_scope/verify.sh --neg-skip > /tmp/v_m169.log 2>&1 || { echo "❌ m169_toplevel_scope verify 失败"; tail -60 /tmp/v_m169.log; exit 1; }
+          # M170（第 55 轮 · 用户报障【清歌】缺陷 187 + 同族 188/189/190）：**native 桥的
+          # precise GC 根面收口**。病灶：VM 轨产物默认 precise GC（不扫整条 C 栈），桥（bi_*）
+          # 里只活在 C 局部的 LXValue 未登记 PX_KEEP ⇒ 在「另一次分配触发 GC」时被误回收 ⇒
+          # 返回的容器里是**已释放对象**（写坏 slab 空闲链 ⇒ SIGSEGV）。
+          # 实测（M169 树）：`sqlite_query` 行 dict 默认阈值跑到 n=16388 崩（3/3 一致）、
+          # PX_GC_THRESHOLD=1000 ⇒ n≈23；GC 关 ⇒ 15 万轮零破坏 ⇒ 病灶在运行期 GC。
+          # 本轮同族 4 处：① sqlite/xml/onnx/rsa 桥；② longjmp 落点野根（缺陷 188：隔离点
+          # 不归还登记深度 ⇒ 之后每轮 GC 都标记已释放对象）；③ native 建表期回收（缺陷 189）；
+          # ④ QPACK 解码器 `val` 未登记 ⇒ 解出的「值」变成「名字」（缺陷 190，只在 stress 下必现）。
+          # 新检测器：PX_GC_STRESS=1（**每次分配即 GC**）把「靠阈值凑巧发作」变成「必然发作」。
+          # 判据：6 层正判据（三轨一致 / 低阈值长跑 / stress 四桥 / C 轨反例对照 / H3 codec 值完整 /
+          # 隔离点归还记录 / http_request 响应头完整性）+ 4 道负控（本地全门跑）。CI 用 --neg-skip。
+          bash examples/m170_gc_bridge_root/verify.sh --neg-skip > /tmp/v_m170.log 2>&1 || { echo "❌ m170_gc_bridge_root verify 失败"; tail -60 /tmp/v_m170.log; exit 1; }
           # 发射冻结门（M153 建立）：292 个用例的 --emit-c 输出必须逐字节不变。
           bash selfhost/emitc_freeze.sh --check > /tmp/v_emitc_freeze.log 2>&1 || { echo "❌ emitc_freeze 失败"; tail -30 /tmp/v_emitc_freeze.log; exit 1; }
-          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 / m153 / m154 / m155 / m158 / m160 / m161 / m162 / m163 / m164 verify + 发射冻结门（299 件 --emit-c）全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"
+          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 / m153 / m154 / m155 / m158 / m160 / m161 / m162 / m163 / m164 verify / m170_gc_bridge_root + 发射冻结门（299 件 --emit-c）全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"
       - name: LSP / MCP 服务器冒烟（--version + 协议入口存在性）
         run: |
           chmod +x bootstrap/pxlsp bootstrap/pxmcp bootstrap/pxcheck

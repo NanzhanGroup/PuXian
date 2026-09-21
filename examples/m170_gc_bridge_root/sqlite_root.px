@@ -1,0 +1,27 @@
+# M170 门 · 清歌报的缺陷最小复现（原样保留他们的形态）：sqlite_query 返回的**行 dict**
+#   必须是活的 —— GC 一旦误回收，`type(rows[i])` 会变 `unknown`/`int`、`r.has("id")` 变假。
+# 判据：N 轮全部通过 ⇒ 输出 pass=N fail=0。
+var db = sqlite_open("__DB__")
+var N = __N__
+var n = 0
+var pass = 0
+var fail = 0
+while n < N:
+    var rows = sqlite_query(db, "SELECT id, title FROM events WHERE status='pending'")
+    if rows != null:
+        var i = 0
+        while i < len(rows):
+            var t = type(rows[i])
+            if t != "dict":
+                fail += 1
+                print("FAIL-TYPE n=" + str(n) + " i=" + str(i) + " t=" + str(t))
+                exit(1)
+            var r = rows[i]
+            if r.has("id") == false:
+                fail += 1
+                print("FAIL-KEY n=" + str(n) + " i=" + str(i) + " nkeys=" + str(len(r)))
+                exit(1)
+            pass += 1
+            i += 1
+    n += 1
+print("pass=" + str(pass) + " fail=" + str(fail))

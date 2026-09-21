@@ -127,6 +127,13 @@ examples/m169_toplevel_scope/err_frame_local.px src=63594e16718c4e80 rc=0 out=a7
 examples/m169_toplevel_scope/err_lambda_frame_local.px src=aab55a61ad8f0e83 rc=0 out=91ddbd680e682a3e12cceb46aab028d1 err=e3b0c44298fc1c14
 examples/m169_toplevel_scope/err_no_iteration.px src=86c8721ea0dbff9e rc=0 out=76386cfadccada6713fc9aa405619ace err=e3b0c44298fc1c14
 examples/m169_toplevel_scope/toplevel_scope.px src=cc324b0efea70f31 rc=0 out=416cc7f4a7feeadc36850a5dd6ea784c err=e3b0c44298fc1c14
+examples/m170_gc_bridge_root/gen_db.px src=df43a54e7f440601 rc=0 out=95b0582e8e5f72156670d8b1094639cf err=e3b0c44298fc1c14
+examples/m170_gc_bridge_root/h3_codec_root.px src=9da275e59bb44d94 rc=0 out=f2b07a2ab63605703bafba3f4613b8b4 err=e3b0c44298fc1c14
+examples/m170_gc_bridge_root/isolate_root.px src=992007a8ba9a26b5 rc=0 out=60dd953bbdc22b253b910845daf0685d err=e3b0c44298fc1c14
+examples/m170_gc_bridge_root/onnx_root.px src=ab091987a4c2b4b0 rc=0 out=7c76b4a53d11d7f15b73d4aa094a82e6 err=e3b0c44298fc1c14
+examples/m170_gc_bridge_root/rsa_root.px src=b5d3b90495772de2 rc=0 out=d8ea6e09de0141adf8fea1345beb2013 err=e3b0c44298fc1c14
+examples/m170_gc_bridge_root/sqlite_root.px src=da127102fa58dabf rc=0 out=424cbe5dfcd68605d00121a917ce2a69 err=e3b0c44298fc1c14
+examples/m170_gc_bridge_root/xml_root.px src=96394b67fecec6b9 rc=0 out=60e7b75e918f54c91df734f912df82cb err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=ca57a90d693278f051ce29d427bb006a err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=864a86fa0f3b5c69d3239ebdb2eac63a err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14

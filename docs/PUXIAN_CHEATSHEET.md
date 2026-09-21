@@ -1877,3 +1877,28 @@ set_timeout(fn (): print("once after 2s"), 2000)
      · **未收口（缺陷 186）**：运行期「未定义变量」的**通道与措辞**三轨不同 —— 解释轨写 **stdout**
        且 `错误 [R1001] 行:列: 未定义变量: 'x'`；编译轨写 **stderr** 且 `运行时错误 [fn 行N]: 未定义变量: x`。
        语义一致（都响亮报错），**文本不一致**。自动化判据请用 `rc≠0` + 关键字，别按整行文本对拍。
+
+197. **native 桥的 precise GC 根面（第 55 轮 · M170 收口缺陷 187/188/189/190 · 用户报障）**：
+     VM 轨产物默认 **precise GC** —— 根面 = 全局槽 + VM 帧槽 + TLS 登记根栈（`px_root_push`/`PX_KEEP`），
+     **不扫整条 C 栈**。⇒ native 桥（`bi_*`）里**只活在 C 局部**的 `LXValue` 若不登记，就会在
+     「另一次分配触发 GC」时被误回收 ⇒ 返回的容器里是**已释放对象**（写坏 slab 空闲链 ⇒ SIGSEGV）。
+     实测（M169 树，清歌报障）：`sqlite_query` 返回的行 dict 默认阈值跑到 **n=16388** 崩（3/3 一致）、
+     `PX_GC_THRESHOLD=1000` ⇒ n≈23；**GC 关 ⇒ 15 万轮零破坏** ⇒ 病灶在运行期 GC，不在 .px 源码。
+     · **两条硬约束**（缺一即错）：① 容器创建后**必须登记**；② 登记必须**紧跟创建、先于下一次分配**
+       —— 写成 `d = px_dict(); hdr = px_dict(); PX_KEEP(d);` 时 `hdr` 那次分配就可能回收 `d`；
+       写成 `LXValue name = px_null(); PX_KEEP(name); name = px_str_len(...);` 时**登记的是 null、等于没登记**。
+     · **同族四处**（都已收口）：① sqlite/xml/onnx/rsa/h3 桥的容器未登记；
+       ② **longjmp 落点野根**（缺陷 188）：`px_error` 的 longjmp **不展开 C 帧** ⇒ 被跳过的登记
+       留在 TLS 根栈里指向**已释放对象**，之后每轮 GC 都去标记它 ⇒ 新增
+       `px_root_depth(&marks)` / `px_root_restore(roots, marks)`，**5 个 setjmp 落点全接**；
+       ③ native 建表期回收（缺陷 189）：`px_register_builtins` 期间建的 native 对象被误回收；
+       ④ QPACK 解码 `val` 未登记（缺陷 190）⇒ 解出的**值退化成名字**（`:authority=:authority`）。
+     · **新检测器 `PX_GC_STRESS=1`**：**每次分配即 GC** —— 把「靠阈值凑巧发作」变成「必然发作」
+       （代价 O(n²)，只用于小语料/门）。配合 `PX_GC_DEBUG=1` 打印 `root 还原 …` 与退出时
+       `根登记栈峰值 marks=… roots=…`。
+     · 纪律：**多出口函数**用 `px_root_depth`+`px_root_restore`（不建帧，只截断），**不要**在同一函数里
+       混用 `px_root_pop`（会弹掉**调用者**的帧 ⇒ 提前回收）；`PX_KEEP` 位置错了比不写更危险
+       （看起来有登记、其实保护的是 null）。
+     · 门：`examples/m170_gc_bridge_root/`（三轨一致 / 低阈值长跑 400000 断言 / stress 四桥 /
+       C 轨反例对照 / H3 codec 值完整 / 隔离点归还记录 / `m23c_http_adv` 响应头完整性
+       + **5 道负控**各自独立判红）。

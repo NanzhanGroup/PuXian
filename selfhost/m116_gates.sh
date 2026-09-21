@@ -277,6 +277,18 @@ run m167_unpack bash examples/m167_unpack/verify.sh
 #   程序自身输出逐字节一致）；③ 负控 4 道（VM for 退回帧槽 / C for 退回就地声明 /
 #   C 闭包体退回不 hoist 不装箱 / C 帧内 hoist 判据退回旧口径 —— 各自独立判红）。
 run m169_toplevel_scope bash examples/m169_toplevel_scope/verify.sh
+# M170（第 55 轮 · 用户报障【清歌】）：**native 桥的 precise GC 根面收口**（缺陷 187 + 同族 188/189/190）。
+# 现场：`sqlite_query` 返回的行 dict 在 GC 第一次回收后被写坏 —— 默认阈值 n=16388 崩（3/3 一致）、
+#   PX_GC_THRESHOLD=1000 ⇒ n≈23；GC 关 ⇒ 15 万轮零破坏 ⇒ 病灶在运行期 GC（precise 根面漏登记）。
+# 同族四处：① sqlite/xml/onnx/rsa/h3 桥的容器未登记；② longjmp 落点**野根**（隔离点不归还登记
+#   深度）⇒ 新增 px_root_depth/px_root_restore，5 个 setjmp 落点全接；③ native 建表期回收
+#   （g_gc_frozen）；④ QPACK 解码 `val` 未登记 ⇒ 值退化为名字（只在 stress 下必现）。
+# 新检测器 PX_GC_STRESS=1（每次分配即 GC）—— 把「靠阈值凑巧发作」变成「必然发作」。
+# 判据：6 层正判据 + 4 道负控（A 去 sqlite PX_KEEP / B xml 登记滞后 / C restore 换 if(0) /
+#   D 去 QPACK val 登记 —— 各自独立判红 + sha256 逐字节还原）。191 刻意不配负控：实测其症状
+#   **时序相关**（去 KEEP 后 5 连跑：1 丢头 / 3 绿 / 1 SIGSEGV）⇒ 按纪律**不设假负控**，
+#   改由 ⑦ 层正判据锁症状（修前 stress 下 core dump，正向复现 2/2）。
+run m170_gc_bridge bash examples/m170_gc_bridge_root/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

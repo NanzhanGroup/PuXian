@@ -1,0 +1,67 @@
+# M170 门 · 同族第 4 处（缺陷 190）：**QPACK 解码器的“值”必须紧跟创建登记**。
+#   形态（修前实测，只在 PX_GC_STRESS=1 下必现）：
+#     静态 codec（h3_qenc/h3_qdec）对「Literal Field Line with Name Reference」这一支，
+#     解出的 `val` 先创建、后于 `px_list(2)` / `px_str(名字)` 两次分配才被放进 pair
+#     ⇒ 那两次分配**重用了 val 的已回收内存** ⇒ 读出的“值”变成**名字**：
+#        :authority=:authority（应为 localhost:17997）、:path=:path、user-agent=user-agent。
+#     编码侧完全正确（线上字节两次运行逐字节相同）⇒ 是解码侧的根面问题。
+#   判据：静态 + 动态两路的 6 条头**逐条**与输入相同。
+import "c/ngtcp2"
+
+extern def h3_qenc(headers: list) -> bytes
+extern def h3_qdec(data: bytes) -> list
+extern def h3_qs_open(cap: int) -> int
+extern def h3_qs_enc(sess: int, headers: list) -> bytes
+extern def h3_qs_take_enc(sess: int) -> bytes
+extern def h3_qs_dec_ingest(sess: int, enc_stream: bytes) -> bool
+extern def h3_qs_dec(sess: int, section: bytes) -> list
+extern def h3_qs_close(sess: int) -> bool
+
+def blen(data):
+    return len(bytes_to_hex(data)) // 2
+
+def check(tag, got, want, i):
+    if got[0] != want[0] or got[1] != want[1]:
+        print("FAIL-" + tag + "-MISMATCH i=" + str(i) +
+              " got=" + str(got[0]) + "=" + str(got[1]) +
+              " want=" + str(want[0]) + "=" + str(want[1]))
+        exit(1)
+
+# H3 请求头形态（含 :scheme/:authority —— M49 门未覆盖这两条）
+var req = [[":method", "GET"], [":scheme", "https"], [":authority", "localhost:17997"],
+           [":path", "/hello"], ["user-agent", "px-h3"], ["x-test", "1"]]
+
+# ① 静态 codec（无动态表）
+var d = h3_qdec(h3_qenc(req))
+if d == null or len(d) != 6:
+    print("FAIL-STATIC-LEN len=" + str(len(d)))
+    exit(1)
+var i = 0
+while i < 6:
+    check("STATIC", d[i], req[i], i)
+    i += 1
+
+# ② 动态表 codec（编码器流 ingest + 字段段解码）
+var n = 0
+while n < 3:
+    var a = h3_qs_open(4096)
+    var b = h3_qs_open(4096)
+    var sec = h3_qs_enc(a, req)
+    var enc = h3_qs_take_enc(a)
+    if blen(enc) > 0:
+        if h3_qs_dec_ingest(b, enc) == false:
+            print("FAIL-DYN-INGEST n=" + str(n))
+            exit(1)
+    var dd = h3_qs_dec(b, sec)
+    if dd == null or len(dd) != 6:
+        print("FAIL-DYN-LEN n=" + str(n) + " len=" + str(len(dd)))
+        exit(1)
+    var j = 0
+    while j < 6:
+        check("DYN", dd[j], req[j], j)
+        j += 1
+    h3_qs_close(a)
+    h3_qs_close(b)
+    n += 1
+
+print("h3c-done static=6 dyn=3")

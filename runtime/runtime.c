@@ -1200,10 +1200,28 @@ static int g_gc_debug = 0;
 //   （受机器负载影响、不可复现）。计数完全确定（同一源码 + 同一实现 ⇒ 同一数字），
 //   故可做**硬阈值门**。默认关闭 ⇒ 只多一次可预测的分支。
 static int g_alloc_stats = 0;
+// M170（缺陷 187/188）：每次分配即 GC（PX_GC_STRESS=1；native 桥漏登记 PX_KEEP 的筛子）
+static int g_gc_stress = 0;
+// M170（缺陷 189）：**注册期禁回收**开关。`px_register_builtins` 逐条
+//   `px_set_global(name, px_native(name, fn))` —— 每条的 name 串与 native 对象都是
+//   两次分配，而这里**没有**（也不该逐条）登记根 ⇒ 阈值低到会在注册期触发 GC 时，
+//   刚建的 native 对象会被误回收，而它已被塞进全局槽（= 悬挂引用）⇒ 之后每轮 GC 都去
+//   标记已释放对象 ⇒ 堆结构（slab 空闲链）被写坏 ⇒ SIGSEGV。
+//   修法 = 建表期间**冻结回收**（对齐 V8「初始化期不允许堆分配回收」的做法）：注册是
+//   一次性、内存有界的启动动作，冻结的代价只是启动期堆稍大。
+static int g_gc_frozen = 0;
 static long long g_a_by_type[PX_TYPE_MAX];
 static long long g_a_bytes;
 static long long g_a_total;
 static void px_alloc_stats_dump(void);
+// M170（缺陷 187）：根登记栈峰值打印（PX_GC_DEBUG=1 退出时；实现见 px_root_keep 之后）
+static void px_root_peak_dump(void);
+// M170（缺陷 187/188）：根登记栈深度记录/还原 + 峰值查询
+int px_root_depth(int* marks_out);
+void px_root_restore(int roots_depth, int marks_depth);
+static __thread int t_iso_roots;
+void px_root_iso_mark(void);
+void px_root_restore_iso(void);
 
 
 
@@ -1302,6 +1320,9 @@ static __thread int g_px_roots_cap = 0;
 static __thread int* g_px_root_marks = NULL;      // 作用域帧标记栈（px_root_push/pop）
 static __thread int g_px_root_marks_n = 0;
 static __thread int g_px_root_marks_cap = 0;
+// M170（缺陷 187/188）：根登记栈峰值（观测）+ 每分配即 GC（PX_GC_STRESS 的开关见 gc_init_env）
+static __thread int g_px_roots_peak = 0;
+static __thread int g_px_root_marks_peak = 0;
 
 // ---- S3-D-1：VM 跨线程帧根弱符号接口（vm.c 提供强定义；无 VM 链接时空转零影响）----
 // 暂停处理器（运行在目标线程上）经 px_vm_cur_state 读该线程 TLS VM 状态；
@@ -1414,6 +1435,15 @@ static void gc_init_env(void) {
     // ⚠️ 仅限 VM 轨产物——C 轨逃生舱产物 + precise = fn_* C 局部失去保守扫栈根 → 误回收。
     const char* pr = getenv("PX_GC_PRECISE");
     if (pr && pr[0] == '1') g_gc_precise = 1;
+    // M170（缺陷 187）：PX_GC_STRESS=1 —— **每次分配都触发 GC**（debug/门专用）。
+    //   动机：native 桥（bi_*）里跨 GC 点的局部 LXValue 漏登记 PX_KEEP 时，
+    //   默认阈值下要等「恰好在那一步越阈值」才发作 ⇒ 靠运气发现（清歌报的 sqlite_query
+    //   即此类，默认要跑到 1.6 万次循环才炸）。stress 把「偶发」变成「必现」：
+    //   任何漏登记的桥在第一轮分配就露出来 ⇒ 可被门/语料批量筛出。
+    //   代价：每次分配一次全量 GC ⇒ 仅限小语料（勿用于压测/基准）。
+    const char* st = getenv("PX_GC_STRESS");
+    if (st && st[0] == '1') g_gc_stress = 1;
+    if (g_gc_debug) atexit(px_root_peak_dump);   // M170：退出打印根登记栈峰值
     // M88-S1：PX_MAX_THREADS 可配槽上限（夹取 [64, 4096]）；线程表一次性按上限分配。
     // 此后 g_threads/g_thread_cap 恒定，无扩容/指针移动（并发安全见 §594 注释）。
     const char* mt = getenv("PX_MAX_THREADS");
@@ -2470,6 +2500,7 @@ void px_root_push(void) {
         g_px_root_marks_cap = nc;
     }
     g_px_root_marks[g_px_root_marks_n++] = g_px_roots_n;
+    if (g_px_root_marks_n > g_px_root_marks_peak) g_px_root_marks_peak = g_px_root_marks_n;
     gc_unblock_stop(&old);
 }
 
@@ -2496,7 +2527,86 @@ void px_root_keep(const LXValue* v) {
         g_px_roots_cap = nc;
     }
     g_px_roots[g_px_roots_n++] = *v;
+    if (g_px_roots_n > g_px_roots_peak) g_px_roots_peak = g_px_roots_n;
     gc_unblock_stop(&old);
+}
+
+// M170（缺陷 188）：根登记栈的「记录 / 还原」——**隔离点 longjmp 落点专用**。
+// 病灶：`px_root_push`/`PX_KEEP` 与 `px_root_pop` 是**手动配对**（native 桥入口/出口）。
+//   longjmp 会**跳过**中间所有未 pop 的作用域（它不展开 C 帧）⇒ 这些条目留在 TLS 根栈里，
+//   而它们指向的对象**已经被正常 GC 回收**（不再是根）⇒ 之后每一轮 GC 都会去「标记」这些
+//   **野指针**：轻则假保留（内存不降），重则把已归还给 malloc 的内存当 LXObject 解析 ⇒
+//   SIGSEGV。且每个被隔离的错误都会**永久**多留 2~N 条 ⇒ 长跑服务里线性累积。
+// 修法：隔离点 setjmp 之前记录深度，longjmp 落点**还原**（被跳过的登记一律作废 ——
+//   此刻那些 C 帧已不复存在，登记本就该失效）。
+// 语义边界：只**收缩**不扩张（还原深度大于当前值时不动，防止把别人登记的根弹掉）。
+// **用途限定（M170 收尾修订）**：本接口只给「**同一函数内的正常出口归一**」用
+//   （h3 桥的十余个早退分支：进函数记深度、出口统一归还，中间不让出、不经 longjmp）。
+//   隔离点（setjmp/longjmp）落点**必须**改走 px_root_iso_mark / px_root_restore_iso ——
+//   原因见那两个函数的注释（栈局部在 longjmp 后失效 · marks 栈被协程共享）。
+int px_root_depth(int* marks_out) {
+    if (marks_out) *marks_out = g_px_root_marks_n;
+    return g_px_roots_n;
+}
+
+void px_root_restore(int roots_depth, int marks_depth) {
+    int r0 = g_px_roots_n, m0 = g_px_root_marks_n;
+    if (g_px_roots_n > roots_depth) g_px_roots_n = roots_depth;
+    if (g_px_root_marks_n > marks_depth) g_px_root_marks_n = marks_depth;
+    // M170：观测点（PX_GC_DEBUG=1）—— 门据此断言「每次被隔离的错误都归还了登记深度」。
+    //   打印发生在**被隔离线程自己**的日志里 ⇒ 与线程生命周期无关（长跑线程也能看到）。
+    if (g_gc_debug) {
+        char dbg[128];
+        int dn = snprintf(dbg, sizeof(dbg),
+                          "[px-gc] root 还原 marks=%d→%d roots=%d→%d\n",
+                          m0, g_px_root_marks_n, r0, g_px_roots_n);
+        (void)write(2, dbg, (size_t)dn);
+    }
+}
+
+// ---- M170 收尾修订：**隔离点专用**的根登记归还（缺陷 188 的正确形态）----
+// 背景：隔离点 = setjmp/longjmp（px_error 跳回捕获点）。longjmp**不展开 C 帧** ⇒
+//   被跳过的 `px_root_push`/`PX_KEEP` 留在 TLS 根栈里成为**野根**（指向已被正常回收的对象）
+//   ⇒ 之后每轮 GC 都标记它们 ⇒ 假保留 / 把已归还内存当 LXObject 解析 ⇒ SIGSEGV。
+//
+// ⚠️ 现场实测的两条**硬约束**（本函数与 px_root_iso_mark 的形态即由此而来；改前请先读）：
+//   ① **记录值必须存 TLS，不得用栈局部**。原写法「`int rd_marks = 0;
+//      int rd_roots = px_root_depth(&rd_marks);` 再在 longjmp 落点读取」会读到**垃圾**
+//      —— C 标准不保证非 volatile 局部在 longjmp 后有效。实测落点拿到
+//      `marks_depth = -1811936416`（随机负值）⇒ `g_px_root_marks_n` 被设为负数 ⇒
+//      下一次 `px_root_push` 走「n < cap」快路径写 `marks[负数]` ⇒ SIGSEGV（18/30 次）。
+//   ② **不得收缩 marks 栈**（`g_px_root_marks_n`）。marks 栈是**线程级 TLS**，而执行流是
+//      **协程级**（M93 帧协程 M:N：同一 worker 线程上多协程交替、协程可在让出后迁移）。
+//      收缩会把「本隔离作用域内让出期间**其它协程** push 的条目」一起弹掉 ⇒ 之后那些协程
+//      pop 时弹到错误 mark ⇒ 根面被破坏 ⇒ SIGSEGV（实测 7/20 次；只收缩 roots 则 0/20）。
+//   ⇒ 结论：归还**只作用于根栈**（`g_px_roots_n`），marks 栈条目留给原有 push/pop 配对逻辑。
+//   ③ 哨兵 `-1` = 本线程无记录（记录点与落点不同线程 ⇒ 不动作）：宁可不修，也不误伤。
+static __thread int t_iso_roots = -1;
+
+// 隔离点进入（setjmp 之前调用）：记录当前根栈深度。
+void px_root_iso_mark(void) { t_iso_roots = g_px_roots_n; }
+
+// 隔离点落点（longjmp 落点调用）：归还到记录的深度并清哨兵。
+//   只收缩、不扩张；同线程才动作；打印格式与 px_root_restore 一致（门据此断言）。
+void px_root_restore_iso(void) {
+    int r0 = g_px_roots_n, m0 = g_px_root_marks_n;
+    if (t_iso_roots >= 0 && g_px_roots_n > t_iso_roots) g_px_roots_n = t_iso_roots;
+    if (g_gc_debug) {
+        char dbg[128];
+        int dn = snprintf(dbg, sizeof(dbg),
+                          "[px-gc] root 还原 marks=%d→%d roots=%d→%d\n",
+                          m0, g_px_root_marks_n, r0, g_px_roots_n);
+        (void)write(2, dbg, (size_t)dn);
+    }
+    t_iso_roots = -1;
+}
+
+int px_root_peak(void) { return g_px_roots_peak; }
+
+// M170：根登记栈峰值（PX_GC_DEBUG=1 时退出打印）——门据此判定「错误路径不泄漏登记」。
+static void px_root_peak_dump(void) {
+    fprintf(stderr, "[px-gc] 根登记栈峰值 marks=%d roots=%d\n",
+            g_px_root_marks_peak, g_px_roots_peak);
 }
 
 // 注册对象（构造时调用）。est = 估算占用字节（触发字节阈值用，当前主用对象数阈值）。
@@ -2541,6 +2651,8 @@ static void gc_register(LXObject* o, long long est) {
     g_tmp_root = o;  // 保护刚创建对象
     int need = (g_obj_count >= g_gc_threshold) ||
                (g_gc_trigger_bytes && g_alloc_bytes >= g_gc_trigger_bytes);
+    if (g_gc_stress) need = 1;   // M170：每次分配即 GC（debug/门；见 gc_init_env 注释）
+    if (g_gc_frozen) need = 0;   // M170（缺陷 189）：native 建表期禁回收（见 g_gc_frozen 注释）
     int snap_count = g_obj_count;
     int snap_thr = g_gc_threshold;
     int deferrable = (g_active_threads > 0) && !g_gc_force_inline;   // 服务/并发模式：存在请求间安全点（PX_GC_INLINE=1 对拍强制内联）
@@ -9003,11 +9115,13 @@ static LXValue bi_json_parse_opt(LXValue* args, int nargs, void* ctx) {
         return px_err(px_str("json_parse_opt 不支持嵌套调用"));
     g_json_opt_msg[0] = 0;
     g_json_opt_active = 1;
+    px_root_iso_mark();   // M170：记录根栈深度（TLS；**不得**用栈局部，见其注释）
     if (setjmp(g_json_opt_jb) == 0) {
         LXValue r = bi_json_parse(args, nargs, ctx);
         g_json_opt_active = 0;
         return px_ok(r);
     }
+    px_root_restore_iso();   // M170：归还（只收缩根栈；marks 栈协程共享，**不得**动）   // M170：作废被 longjmp 跳过的桥局部登记（野根）
     g_json_opt_active = 0;
     return px_err(px_str(g_json_opt_msg[0] ? g_json_opt_msg : "json 解析失败"));
 }
@@ -9756,6 +9870,11 @@ static LXValue bi_reduce(LXValue* args, int nargs, void* ctx) {
 }
 
 void px_register_builtins(void) {
+    // M170（缺陷 189）：建表期冻结 GC —— 逐条 `px_set_global(name, px_native(...))` 是
+    //   两次分配且没有根登记，阈值低时会在注册途中回收刚建的 native 对象
+    //   （实测形态：PX_GC_STRESS=1 下大模块集程序在**第一条用户语句**就 SIGSEGV，
+    //     gdb 落点是 xml_parse 的 px_dict —— 真正的损坏发生在更早的注册期）。
+    g_gc_frozen = 1;
     px_set_global("print", px_native("print", bi_print));
     px_set_global("flush", px_native("flush", bi_flush));
     px_set_global("print_err", px_native("print_err", bi_print_err));
@@ -10238,6 +10357,7 @@ void px_register_builtins(void) {
     px_set_global("write_bytes", px_native("write_bytes", bi_write_bytes));
     px_set_global("int_to_bytes", px_native("int_to_bytes", bi_int_to_bytes));
     px_set_global("bytes_to_int", px_native("bytes_to_int", bi_bytes_to_int));
+    g_gc_frozen = 0;   // M170（缺陷 189）：建表完成，恢复回收
 }
 
 // gc() → int：强制运行一次垃圾回收（与解释器 gc() 双模式一致）
@@ -11456,12 +11576,14 @@ static int px_sig_isolate_begin(void) {
         t_sig_isolate_errored = 0;
         return 1;
     }
+    px_root_iso_mark();   // M170：记录根栈深度（TLS；**不得**用栈局部，见其注释）
     if (setjmp(g_err_jmp) == 0) {
         g_err_jmp_set = 1;
         t_isolate_kind = 2;
         t_sig_isolate_errored = 0;
         return 1;
     }
+    px_root_restore_iso();   // M170：归还（只收缩根栈；marks 栈协程共享，**不得**动）   // M170：作废被 longjmp 跳过的桥局部登记（野根）
     g_err_jmp_set = 0;              // longjmp 落点（必然执行）
     t_isolate_kind = 0;
     t_sig_isolate_errored = 1;
@@ -12302,6 +12424,7 @@ static void* spawn_thread(void* p) {
     const char* iso_env = getenv("PX_SPAWN_ISOLATE");
     if (iso_env && iso_env[0] == '0') isolate = 0;
     if (isolate) {
+        px_root_iso_mark();   // M170：记录根栈深度（TLS；**不得**用栈局部，见其注释）
         if (setjmp(g_err_jmp) == 0) {
             g_err_jmp_set = 1;
             t_isolate_kind = 1;       // M126：spawn 隔离点 = 请求/协程级
@@ -12309,6 +12432,7 @@ static void* spawn_thread(void* p) {
             g_err_jmp_set = 0;
             t_isolate_kind = 0;
         } else {
+            px_root_restore_iso();   // M170：归还（只收缩根栈；marks 栈协程共享，**不得**动）   // M170：作废被 longjmp 跳过的桥局部登记
             g_err_jmp_set = 0;
             t_isolate_kind = 0;
             px_coro_err_note("px-spawn");
@@ -12359,12 +12483,14 @@ int px_spawn_isolate_begin(void) {
         t_isolate_errored = 0;
         return 1;
     }
+    px_root_iso_mark();   // M170：记录根栈深度（TLS；**不得**用栈局部，见其注释）
     if (setjmp(g_err_jmp) == 0) {
         g_err_jmp_set = 1;
         t_isolate_kind = 1;       // M126：本隔离点为协程/请求级（失败文案据此区分）
         t_isolate_errored = 0;
         return 1;   // 正常路径：错误捕获点已安装，继续执行协程体
     }
+    px_root_restore_iso();   // M170：归还（只收缩根栈；marks 栈协程共享，**不得**动）   // M170：作废被 longjmp 跳过的桥局部登记（野根）
     g_err_jmp_set = 0;
     t_isolate_kind = 0;
     t_isolate_errored = 1;   // longjmp 落点：立即置位（此处必然执行）
@@ -12382,6 +12508,7 @@ void px_spawn_isolate_end(void) {
 //   -O1/-O2 下此类 helper 返回分支可能被优化错判 —— 最小复现证实 → 必须同函数消化）。
 int px_native_call_capture(LXValue fn, LXValue* args, int nargs,
                            LXValue* out, char* errbuf, int errbuf_sz) {
+    px_root_iso_mark();   // M170：记录根栈深度（TLS；**不得**用栈局部，见其注释）
     if (setjmp(g_err_jmp) == 0) {
         g_err_jmp_set = 1;
         t_isolate_kind = 1;          // M126：外包调用隔离点 = 请求/协程级
@@ -12392,6 +12519,7 @@ int px_native_call_capture(LXValue fn, LXValue* args, int nargs,
         if (out) *out = r;
         return 0;
     }
+    px_root_restore_iso();   // M170：归还（只收缩根栈；marks 栈协程共享，**不得**动）   // M170：作废被 longjmp 跳过的桥局部登记（野根）
     g_err_jmp_set = 0;
     t_isolate_kind = 0;
     if (errbuf && errbuf_sz > 0)
@@ -12436,6 +12564,15 @@ void px_gc_thread_enter(void) {
 }
 
 void px_gc_thread_leave(void) {
+    // M170（缺陷 188）：线程退出时打印本线程根登记栈峰值（PX_GC_DEBUG=1）——
+    //   这是「错误路径是否泄漏登记」唯一可观测的口径：被 longjmp 跳过的桥局部登记
+    //   若不还原，会**永久**留在该线程 TLS 里 ⇒ 峰值随被隔离的错误次数线性增长。
+    if (g_gc_debug) {
+        char dbg[128];
+        int dn = snprintf(dbg, sizeof(dbg), "[px-gc] 线程退出 · 根登记栈峰值 marks=%d roots=%d\n",
+                          g_px_root_marks_peak, g_px_roots_peak);
+        (void)write(2, dbg, (size_t)dn);
+    }
     pthread_mutex_lock(&g_gc_mu);
     if (g_active_threads > 0) g_active_threads--;
     gc_unregister_thread(pthread_self());
@@ -14510,6 +14647,13 @@ static int h_exchange(HPoolSlot* slot, const char* req, int rlen,
     if (strncmp(buf, "HTTP/1.0", 8) == 0 && (buf[8] == ' ' || buf[8] == '\r')) resp10 = 1;
     sscanf(buf, "HTTP/%*s %d", &status);
     *out_headers = px_dict();
+    // M170（缺陷 191）：本响应头 dict 从创建到 `return 0` 之间要跨**大量分配** —— 每一行的
+    //   `px_str(v)` / 同名头升级的 `px_list`，以及下面读 body 的 recv 循环 —— 而它此刻只由
+    //   **调用者的 C 局部**持有（VM 轨 precise GC **不扫 C 栈**）⇒ 必须在本函数内登记住，
+    //   否则中途被回收：轻则丢头（实测 `X-Test` 丢）、重则 `px_dict_set` 写进已释放内存
+    //   ⇒ 后续 xmalloc 崩溃（m23c_http_adv 在 PX_GC_STRESS=1 下 SIGSEGV 的根因链之一）。
+    px_root_push();
+    PX_KEEP(*out_headers);
     int chunked = 0, gzip = 0, keep_alive = resp10 ? 0 : 1;
     int content_length = -1;
     char* hline = buf;
@@ -14624,6 +14768,7 @@ static int h_exchange(HPoolSlot* slot, const char* req, int rlen,
     *out_body = body_buf;
     *out_body_len = body_len;
     *out_keep_alive = keep_alive;
+    px_root_pop();   // M170（缺陷 191）：本帧登记到此为止（调用者自会登记它自己的）
     xfree(buf);
     return 0;
 }
