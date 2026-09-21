@@ -148,8 +148,18 @@ if [ "$SELFTEST" = 1 ]; then
         # 负控①：把基线压到 2.17 ⇒ 同一个动态件**必须**判红（版本可判定时按版本，
         #   不可判定时按"未知即红"—— 两条路都必须红）
         sm "负控①：动态件 vs 2.17 基线判红" 1 "$0" -b 2.17 "$W/dyn"
-        # 负控②：架构断言 —— 拿本机件冒充 aarch64 ⇒ 必须判红
-        sm "负控②：架构不符判红" 1 "$0" --arch aarch64 "$W/dyn"
+        # 负控②：架构断言 —— 期望值必须**与件实际架构不同**，否则在"本机架构 == 测试里
+        #   那个架构"的 runner 上会**假绿**（M168 首跑实测：aarch64 runner 上写死 --arch
+        #   aarch64 恰好匹配 ⇒ rc=0 ⇒ 自证红）。改为从**件本身**推出"错的期望"。
+        _wrong_arch="aarch64"
+        case "$(elf_machine "$W/dyn")" in
+            *AArch64*) _wrong_arch=riscv64 ;;
+            *X86-64*)  _wrong_arch=aarch64 ;;
+            *RISC-V*)  _wrong_arch=aarch64 ;;
+            *ARM*)     _wrong_arch=aarch64 ;;
+        esac
+        echo "  （件实际架构 [$(elf_machine "$W/dyn")] ⇒ 负控期望架构取 $_wrong_arch）"
+        sm "负控②：架构不符判红（期望 $_wrong_arch）" 1 "$0" --arch "$_wrong_arch" "$W/dyn"
         # 负控③：--require-static 下动态件必须判红（aarch64 引导包的口径）
         sm "负控②b：--require-static 下动态件判红" 1 "$0" --require-static "$W/dyn"
     else
