@@ -276,6 +276,30 @@ rt_cache_compile() {
     done
     cp "$sqlite_dir/sqlite3.h" "$dir/" 2>/dev/null
     # 预编译 .c（runtime 源 + miniz；sqlite3 走既有预编译 .o/.c 通道不进缓存）
+    # ---- M168：**工具链能力预检**（把"缺能力"变成一句可执行的指引）----
+    #   实锤（2026-09-21 · el7 终验首跑红）：`runtime/runtime.c` 用 `#include <stdatomic.h>`
+    #   + `_Atomic`（C11 原子），而 **gcc 4.9 才支持** —— CentOS 7 自带 **gcc 4.8.5**
+    #   ⇒ 报错是 "stdatomic.h: No such file or directory"，用户看到的是"编译器坏了"。
+    #   本预检在编译 runtime 前问一次 `$cc` 有没有这个能力；没有就给出**可执行的替代**
+    #   （el7：devtoolset / 指定 CC），而不是让 20 个 .c 依次报同一个头文件缺失。
+    #   与「静态 libc 预检」（链接前）同族：**缺件要说清缺什么、怎么补**。
+    if [ "${_PX_C11ATOMIC_OK:-}" != 1 ]; then
+        local _pc="${TMPDIR:-/tmp}/.px_c11probe.c" _po="${TMPDIR:-/tmp}/.px_c11probe.o"
+        printf '#include <stdatomic.h>\nint main(void){_Atomic int x=0;__atomic_store_n(&x,1,__ATOMIC_SEQ_CST);return (int)__atomic_load_n(&x,__ATOMIC_SEQ_CST);}\n' > "$_pc"
+        if $cc -c "$_pc" -o "$_po" >/dev/null 2>&1; then
+            _PX_C11ATOMIC_OK=1
+            rm -f "$_pc" "$_po"
+        else
+            rm -f "$_pc" "$_po"
+            echo "错误: $cc 不支持 C11 原子（<stdatomic.h>）—— PuXian 的 runtime 需要它" >&2
+            echo "      需要 gcc ≥ 4.9（本机：$($cc --version 2>/dev/null | head -1)）" >&2
+            echo "  RHEL/CentOS 7（自带 gcc 4.8.5）: sudo yum install -y centos-release-scl" >&2
+            echo "      && sudo yum install -y devtoolset-9 && scl enable devtoolset-9 bash" >&2
+            echo "      （或 PX_CC=/opt/rh/devtoolset-9/root/usr/bin/gcc $0 build <file.px>）" >&2
+            echo "  Debian/Ubuntu: 自带 gcc 均 ≥ 5，通常不需处理" >&2
+            return 1
+        fi
+    fi
     local common="-O2 -pthread -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DEFAULT_FOREIGN_KEYS=1 \
         -I\"$dir\" -I\"$RT_DIR/third_party/miniz\" -I\"$mbedtls_inc\" \
         -I\"$sqlite_dir\" -I\"$zlib_inc\"$([ "$lto" = 1 ] && echo " -flto")"
@@ -465,7 +489,8 @@ target_defaults() {
 cmd_build() {
     # M91：默认引擎 = vm（VM 字节码轨）。优先级：显式 flag(--c/--vm/--bc，后写胜)
     #   > PX_BUILD_ENGINE env(c|vm) > 默认 vm。--c = C 轨逃生舱（fn_* 文本轨）。
-    local no_quic=0 cc="gcc" mbedtls_lib="" sqlite_obj="" zlib_lib="" target="" full=0
+    # M168：宿主编译器可用 PX_CC 覆盖（el7 的 devtoolset 场景：PX_CC=/opt/rh/devtoolset-9/root/usr/bin/gcc）
+    local no_quic=0 cc="${PX_CC:-gcc}" mbedtls_lib="" sqlite_obj="" zlib_lib="" target="" full=0
     local engine="${PX_BUILD_ENGINE:-vm}"
     # M104-S5：LTO 构建档（--lto / PX_BUILD_LTO=1）—— 跨 TU 内联（D0 实测 C 轨 1.16x）。
     #   默认 0（保持既有构建口径）；开启时 runtime 预编译缓存键含 lto 位，不与默认档混用。
