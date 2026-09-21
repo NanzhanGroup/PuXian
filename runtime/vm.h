@@ -133,7 +133,15 @@ typedef struct {
 //   同一哲学）。与 Python 对 dict 的 `RuntimeError: dictionary changed size during iteration`
 //   同向，只是把 list 也纳入。「遍历时过滤」应写 `let ks = x.keys()` 或新建结果容器。
 #define PXOP_ITERLEN 64  // a=obj 槽, b=期望长度槽（px_iter_ck：≠ ⇒ R1003）
-#define PXM_MAX      65
+// M167（第 53 轮 · 缺陷 180）：**解包校验** —— 多变量解包（`for a, b in xs` / 推导式
+//   `[k for k, v in xs]`）在取字段前校验被解包值：必须是 list/tuple 且长度恰为 N，
+//   否则 R1002（`解包需要 list/tuple，实际是 <t>` / `解包需要 N 个元素，实际是 M`）。
+//   与解释轨 i_unpack_bind、C 轨 px_unpack_ck **同码同文**（三轨一条真相）。
+//   修前没有这一步：VM/C 轨直接逐字段 INDEX ⇒ 元素是字符串时报
+//   「R1003 字符串索引越界: 1」、长度不足时报「列表索引越界: 1 (len=1)」，
+//   而解释轨是 R1002 / 长度不足时静默 null ⇒ 三轨四种行为。
+#define PXOP_UNPACKCK 65  // a=item 槽, b=期望元素个数 N（px_unpack_ck）
+#define PXM_MAX      66
 
 // ==================== 常量子（K 池） ====================
 // 发射器按 kind 生成静态项；LOADK 时物化为 LXValue（str 需 strdup/常驻，

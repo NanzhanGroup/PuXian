@@ -239,11 +239,11 @@ else
     snapshot selfhost/bc_emit.px
     okB=1
     patch_one selfhost/cg_stmt.px \
-'        var fv_init = "px_iter_at(" + it_var + ", px_int(" + idx_var + "))"' \
-'        var fv_init = "px_index(" + it_var + ", px_int(" + idx_var + "))"' || okB=0
+'                fv_init = "px_iter_at(" + it_var + ", px_int(" + idx_var + "))"' \
+'                fv_init = "px_index(" + it_var + ", px_int(" + idx_var + "))"' || okB=0
     patch_one selfhost/bc_emit.px \
-'    bc_emit_inst(func, "ITERAT", vs, its, ctr)' \
-'    bc_emit_inst(func, "INDEX", vs, its, ctr)' || okB=0
+'            bc_emit_inst(func, "ITERAT", vss[0], its, ctr)' \
+'            bc_emit_inst(func, "INDEX", vss[0], its, ctr)' || okB=0
     if [ "$okB" = "1" ]; then
         if bash selfhost/devbuild.sh --vm > "$WORK/negB.build.log" 2>&1; then
             ( export PXC_VM_BIN=/tmp/pxcdev_vm; export PX_PXC_BIN=/tmp/pxcdev

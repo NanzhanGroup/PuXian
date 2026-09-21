@@ -1,0 +1,4 @@
+# 严格性：dict **直接迭代**只产键（字符串）⇒ 解包响亮报 R1002（指引用 d.items()）
+let d = {"a": 1}
+for k, v in d:
+    print(k, v)

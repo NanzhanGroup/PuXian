@@ -26,7 +26,7 @@ let LAYOUT = {
     "Assign": ["Assign", [["target", "n"], ["op", "r"], ["value", "n"], ["pos", "p"]]],
     "ExprStmt": ["ExprStmt", [["expr", "n"], ["pos", "p"]]],
     "If": ["If", [["branches", "lt2b"], ["else_branch", "ol"], ["pos", "p"]]],
-    "For": ["For", [["var", "s"], ["iterable", "n"], ["body", "l"], ["pos", "p"]]],
+    "For": ["For", [["var", "vs"], ["iterable", "n"], ["body", "l"], ["pos", "p"]]],
     "While": ["While", [["cond", "n"], ["body", "l"], ["pos", "p"]]],
     "Return": ["Return", [["value", "o"], ["pos", "p"]]],
     "Break": ["Break", [["pos", "p"]]],
@@ -414,13 +414,24 @@ def parse_for():
     let pos = ppos()
     let hcol = pcol()
     adv()
+    # M167（第 53 轮）：**多变量解包** —— `for a, b[, c…] in xs:`（与推导式同语义：逐元素解包）。
+    #   AST 表示：单变量仍是**字符串**（`cases/*.ast` golden 逐字节不变）；多变量是**名字列表**。
+    #   为什么要这个特性：Go 的 `for k, v := range m` 是最常用迭代形式，而本语言此前
+    #   只有**推导式**支持解包（M30），语句形式 parser 直接 E2001 ⇒ 语句/推导式不对等。
     let lv = expect_ident("循环变量")
+    var varf = qstr(lv)
+    if chk(","):
+        let names = [varf]
+        while chk(","):
+            adv()
+            names.append(qstr(expect_ident("循环变量")))
+        varf = names
     expect("in", "'in'")
     let iterable = parse_expr()
     expect(":", "':'")
     expect("换行", "换行")
     var body = parse_block_ctxt(hcol)
-    return ["For", qstr(lv), iterable, body, pos]
+    return ["For", varf, iterable, body, pos]
 def parse_while():
     let pos = ppos()
     let hcol = pcol()

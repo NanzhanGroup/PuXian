@@ -52,6 +52,7 @@ var cg_uidc = 0
 var cg_closure_id = 0
 var cg_seq_uid = 0  # M165（缺陷 178）：序列化临时变量计数器（见 cg_gen_expr 前的说明）
 var cg_iter_uid = 0  # M166（缺陷 176）：迭代长度快照局部变量计数器（`_ilN`，与 _tN 分开编号）
+var cg_unpack_uid = 0  # M167（缺陷 180）：多变量解包的临时槽计数器（`_upN`，与 _tN 分开编号）
 var loaded = {"_": 0}
 # ---------- 工具 ----------
 # 空 dict 创建（PuXian 限制：{} 是空块=null，非空 dict）
@@ -78,6 +79,21 @@ def cg_iter_len_tmp():
     #   造成与本轮语义无关的大面积 diff；同 cg_seq_uid 的手法）。
     cg_iter_uid = cg_iter_uid + 1
     return "_il" + str(cg_iter_uid)
+def cg_unpack_tmp():
+    # M167（缺陷 180）：多变量解包的 item 临时槽 —— 同样用专用计数器 `_upN`，
+    #   不占 cg_tmp() 的 `_tN` 序号（手法同 cg_iter_len_tmp / cg_seq_uid）。
+    cg_unpack_uid = cg_unpack_uid + 1
+    return "_up" + str(cg_unpack_uid)
+# M167：For.var → 名字列表（去转义；单变量是字符串、多变量是名字列表）
+def cg_for_names(v):
+    if type(v) == "string":
+        return [rust_unescape(v)]
+    let out = []
+    var i = 0
+    while i < len(v):
+        out.append(rust_unescape(v[i]))
+        i += 1
+    return out
 def cg_new_var(name):
     let v = "_v" + str(cg_uid())
     cg_vars[name] = v
@@ -132,7 +148,12 @@ def cg_ast_bound(x, out):
         #   才会因本函数内闭包引用它而被装箱。
         #   （簇内 `var x = ...` 仍由上面的 VarDecl 分支计入 bound。）
         elif h == "For":
-            cg_name_add(out, rust_unescape(x[1]))
+            # M167：多变量解包 —— 名字列表逐个计入绑定（单变量仍是字符串）
+            let fns = cg_for_names(x[1])
+            var fi2 = 0
+            while fi2 < len(fns):
+                cg_name_add(out, fns[fi2])
+                fi2 += 1
         elif h == "Closure":
             for p in x[1]:
                 cg_name_add(out, rust_unescape(p[1]))
@@ -573,9 +594,13 @@ def cg_collect_hoist_vars(stmts, out):
             if st[2] != null:
                 cg_collect_hoist_vars(st[2], out)
         elif ty == "For":
-            let lv = rust_unescape(st[1])
-            if not contains(out, lv):
-                out.append(lv)
+            # M167：多变量解包 —— 每个循环变量都要提升（单变量仍是字符串）
+            let lvs = cg_for_names(st[1])
+            var li = 0
+            while li < len(lvs):
+                if not contains(out, lvs[li]):
+                    out.append(lvs[li])
+                li += 1
             cg_collect_hoist_vars(st[3], out)
         elif ty == "While":
             cg_collect_hoist_vars(st[2], out)
@@ -699,6 +724,7 @@ def cg_generate(prog):
     cg_closure_id = 0
     cg_seq_uid = 0
     cg_iter_uid = 0
+    cg_unpack_uid = 0
     cg_collect_types(prog)
     # 收集顶层全局名（函数 + 顶层变量赋值）
     let items = prog[1]

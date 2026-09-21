@@ -1,0 +1,3 @@
+# 严格性：迭代元素**不是** list/tuple ⇒ R1002 解包需要 list/tuple，实际是 string
+for k, v in ["ab", "cd"]:
+    print(k, v)

@@ -39,12 +39,13 @@ def i_exec_stmt(stmt, env):
         return i_exec_if(stmt, env)
     if ty == "For":
         # ["For", var, iterable, body, pos]
+        #   M167：var 单变量为字符串、多变量为**名字列表**（`for a, b in xs` 解包）
         let ir = i_eval_expr(stmt[2], env)
         if ir.is_err():
             return Err(ir.err())
         let it = ir.unwrap()
         g_loop_depth += 1
-        let r = i_exec_for(rust_unescape(stmt[1]), it, stmt[3], env, stmt[4])
+        let r = i_exec_for(stmt[1], it, stmt[3], env, stmt[4])
         g_loop_depth -= 1
         return r
     if ty == "While":
@@ -147,18 +148,22 @@ def i_iter_ck(v, n0, pos):
     if n1 != n0:
         return Err(i_r1003("迭代期间被迭代容器长度变化: " + str(n0) + " → " + str(n1), pos))
     return Ok(null)
-def i_exec_for(varname, iterable, body, env, pos):
+def i_exec_for(vars_, iterable, body, env, pos):
     let ivr = i_iter(iterable, pos)
     if ivr.is_err():
         return Err(ivr.err())
     let items = ivr.unwrap()
     let itn = len(items)  # M166：长度快照（进入循环时一次）
+    # M167：解包绑定 —— 单变量 = 整个元素；多变量 = 逐元素解包（与推导式同一条真相）
+    let names = i_names_of(vars_)
     var ii = 0
     while ii < itn:
         let ck = i_iter_ck(iterable, itn, pos)
         if ck.is_err():
             return Err(ck.err())
-        env_define(env, varname, items[ii])
+        let ur = i_unpack_bind(names, items[ii], env, pos)
+        if ur.is_err():
+            return Err(ur.err())
         let r = i_exec_block(body, env)
         if r.is_err():
             return Err(r.err())

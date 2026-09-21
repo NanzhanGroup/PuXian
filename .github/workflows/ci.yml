@@ -276,6 +276,14 @@ jobs:
           # 判据：合法侧 18 断言三轨逐字节一致 + 6 类修改用例 × 三轨（rc≠0 + R1003 + 统一词条）。
           # 负控需重建 dev 件 ⇒ CI 用 --neg-skip，负控在本地全门 selfhost/m116_gates.sh 跑。
           bash examples/m166_iter_mutate/verify.sh --neg-skip > /tmp/v_m166.log 2>&1 || { echo "❌ m166_iter_mutate verify 失败"; tail -60 /tmp/v_m166.log; exit 1; }
+          # M167（第 53 轮 · 缺陷 180/182）：**解包统一** —— 语句形式 `for a, b in xs`（与推导式同语义）
+          # + 三轨解包诊断统一（`R1002 解包需要 list/tuple，实际是 <t>` / `解包需要 N 个元素，实际是 M`）
+          # + `dict.items()` + 顺带收口 VM 轨「装箱循环变量直写槽冲掉 cell」（缺陷 182）。
+          # 修前：语句形式 E2001；元素非 list/tuple ⇒ 解释轨 R1002 旧词条 vs VM/C 轨 R1003 越界；
+          # 长度不足 ⇒ 解释轨静默 null / VM 与 C 越界（文案还不一致）；长度超出 ⇒ 三轨静默忽略。
+          # 判据：合法侧 16 断言三轨逐字节一致 + 8 类严格性用例 × 三轨（rc≠0 + R1002 + 统一词条）。
+          # 负控需重建 dev 件 ⇒ CI 用 --neg-skip，负控在本地全门 selfhost/m116_gates.sh 跑。
+          bash examples/m167_unpack/verify.sh --neg-skip > /tmp/v_m167.log 2>&1 || { echo "❌ m167_unpack verify 失败"; tail -60 /tmp/v_m167.log; exit 1; }
           # 发射冻结门（M153 建立）：292 个用例的 --emit-c 输出必须逐字节不变。
           bash selfhost/emitc_freeze.sh --check > /tmp/v_emitc_freeze.log 2>&1 || { echo "❌ emitc_freeze 失败"; tail -30 /tmp/v_emitc_freeze.log; exit 1; }
           echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 / m153 / m154 / m155 / m158 / m160 / m161 / m162 / m163 / m164 verify + 发射冻结门（292 件 --emit-c）全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"
