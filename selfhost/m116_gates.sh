@@ -332,6 +332,16 @@ run m172_diag_channel bash examples/m172_diag_channel/verify.sh
 #   ② 用例 B 双轨（大超时建池 → 300ms 复用必须报错且耗时 < 1.5s；再反向放大超时恢复成功）；
 #   ③ 负控 2 道（关 vhost gzip 块 / 关复用重设块 —— 各自独立判红 + sha256 逐字节还原复绿）。
 run m173_http_proxy bash examples/m173_http_proxy/verify.sh
+# M174（第 57 轮 · 晨曦 QA 清单 P2-7 + 新登记缺陷 194）：**`d.get(k[, default])` 的语义统一**。
+# 定调（文档 + 解释轨既有）：默认值**只覆盖「键不存在」**；键存在但值为 null ⇒ 返回 null
+#   （= Go 两值语义 / Python dict.get）。出处 docs/DICT_STRICT_MIGRATION.md + 速查表。
+# 病灶（缺陷 194）：runtime 侧用 `px_is_null(取出的值) && nargs >= 2` 判存在性 ⇒
+#   「键存在但值为 null + 给了默认值」时 VM/C 轨返回默认值、解释轨返回 null ⇒ 三轨分叉，
+#   且与文档相悖。修法：改用 `px_dict_has` 判存在（一个 if 的事，但是三轨真相的开关）。
+# 判据：① 语义矩阵 12 条三轨逐字节一致（含「键存在 + null + 默认值」定点）；
+#   ② 缺键下标读三轨 rc≠0 + R1008 + 统一词条；③ `get` 非字符串键三轨 rc≠0 + R1002 + 统一词条；
+#   ④ 负控（runtime 改回 null 判定 ⇒ VM 轨必须与解释轨不一致；sha256 逐字节还原复绿）。
+run m174_dict_get bash examples/m174_dict_get/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

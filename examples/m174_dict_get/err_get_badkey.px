@@ -1,0 +1,6 @@
+# M174 门 · 用例 C：`d.get` 的非字符串键 ⇒ R1002（三轨同码；回归 M120 E4）
+# 期望：rc≠0 · stderr 含 `R1002` 与 `方法 get 参数 1 需要 string`
+print("before")
+let d = json_parse("{}")
+print(str(d.get(1, "DEF")))
+print("after")

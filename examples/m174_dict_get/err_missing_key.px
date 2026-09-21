@@ -1,0 +1,7 @@
+# M174 门 · 用例 B：缺键下标读 ⇒ R1008（三轨同码同文；回归 M116 D2）
+# 期望：rc≠0 · stderr 含 `R1008` 与 `字典没有键 'nope'` · stdout 只有本行之前的输出
+print("before")
+let d = json_parse("{}")
+d.set("ok", 1)
+print(str(d["nope"]))
+print("after")
