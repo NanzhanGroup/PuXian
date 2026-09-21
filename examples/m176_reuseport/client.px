@@ -1,0 +1,36 @@
+# M176 门 · 客户端：`client.px <port> <count>` —— 高频打请求，统计「连接被拒 / 非 200」
+#   换二进制的空窗期表现为 **connection refused**（监听套接字在旧进程关闭与新进程 bind 之间空缺）
+#   ⇒ 本客户端就是那根「探测空窗」的针：refused 必须恒为 0。
+let a = args()
+let port = int(a[1])
+let n = int(a[2])
+var refused = 0
+var bad = 0
+var ok = 0
+var i = 0
+while i < n:
+    let c = tcp_connect_ex("127.0.0.1", port)
+    if not c["ok"]:
+        refused += 1
+    else:
+        let fd = c["fd"]
+        tcp_send_ex(fd, "GET /index.html HTTP/1.1\r\nHost: t\r\nConnection: close\r\n\r\n")
+        var raw = bytes("")
+        var k = 0
+        while k < 20:
+            let r = tcp_recv_ex(fd, 4096)
+            if r["n"] > 0:
+                raw = bytes_concat(raw, r["data"])
+            if r["eof"] or not r["ok"]:
+                k = 20
+            k += 1
+        tcp_close(fd)
+        if contains(bytes_to_str(raw), "200 OK"):
+            ok += 1
+        else:
+            bad += 1
+    sleep_us(4000)
+    i += 1
+print("CLIENT ok=" + str(ok) + " refused=" + str(refused) + " bad=" + str(bad))
+if refused > 0 or bad > 0 or ok == 0:
+    exit(1)

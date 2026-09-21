@@ -338,6 +338,35 @@ static LXValue bi_http_get_stream(LXValue* args, int nargs, void* ctx);
 static LXValue bi_http_unix(LXValue* args, int nargs, void* ctx); // M56
 // M17 .px 脚本执行机制（应用平台）
 static LXValue bi_px_exec(LXValue* args, int nargs, void* ctx);
+// ==================== M176（晨曦 P1-5）：SO_REUSEPORT —— 零停机换二进制的最后一公里 ====================
+// 修前只设 SO_REUSEADDR（TIME_WAIT 期可复用），**两个进程无法同时监听同一端口** ⇒ 每次换
+//   二进制必有空窗（晨曦三节点实测 352ms / 75ms / 249ms；Ma 侧只能用「预检→原子替换→重启→
+//   健康门→失败回滚」把风险压到最低，但空窗仍非 0）。
+// SO_REUSEPORT 让新旧进程**同时** bind 同一 port，内核按 4 元组哈希分流 ⇒
+//   启动新进程 → 健康门 → 优雅关闭旧进程（SIGTERM 已在 M27 实现「停 accept + 等在途请求」）
+//   = **真零停机**。
+// ⚠️ 内核要求**双方都 opt-in** ⇒ 升级链里旧版也必须带这个开关启动（故本项要随版本发布；
+//   本门用「一个开、一个不开 ⇒ 后者 bind 失败」把这条语义**测出来**，而不是写在注释里）。
+// 开关：① `opts{"reuse_port": true}`（px_serve / http_serve 有 opts 字典）
+//       ② 环境变量 `PX_REUSE_PORT=1|true|yes`（全局开关 —— 覆盖 sse_serve / tcp_listen
+//          这类没有 opts 参数的原语）。
+static int px_want_reuse_port(LXValue opts) {
+    if (opts.type == PX_DICT) {
+        LXValue rp = px_dict_get(opts, "reuse_port");
+        if (rp.type == PX_BOOL) return rp.as.b ? 1 : 0;
+        if (rp.type == PX_INT) return rp.as.i != 0 ? 1 : 0;
+    }
+    const char* e = getenv("PX_REUSE_PORT");
+    if (e && (strcmp(e, "1") == 0 || strcasecmp(e, "true") == 0 || strcasecmp(e, "yes") == 0)) return 1;
+    return 0;
+}
+// 失败必须**响亮**：用户要的是「零停机」这个保证，内核不支持就不能假装设上了。
+static void px_sock_set_reuseport(int fd, const char* what) {
+    int one = 1;
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one)) != 0)
+        px_error("%s: SO_REUSEPORT 设置失败（内核不支持？）：%s", what, strerror(errno));
+}
+
 static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx);
 // M18 后台定时任务 / 定时器原语
 static LXValue bi_set_timeout(LXValue* args, int nargs, void* ctx);
@@ -12933,6 +12962,8 @@ static LXValue bi_tcp_listen(LXValue* args, int nargs, void* ctx) {
     if (fd < 0) px_error("net: 创建 socket 失败");
     int opt = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    // M176（晨曦 P1-5）：tcp_listen 没有 opts 参数 ⇒ 只看环境变量 PX_REUSE_PORT
+    if (px_want_reuse_port(px_null())) { int rp1 = 1; if (setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &rp1, sizeof(rp1)) != 0) { close(fd); px_error("tcp_listen: SO_REUSEPORT 设置失败：%s", strerror(errno)); } }
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
@@ -18318,6 +18349,8 @@ static LXValue bi_http_serve(LXValue* args, int nargs, void* ctx) {
     if (sfd < 0) px_error("http_serve: socket 创建失败");
     int one = 1;
     setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    // M176（晨曦 P1-5）：零停机换二进制 —— opts{"reuse_port": true} 或 PX_REUSE_PORT=1
+    if (px_want_reuse_port(nargs >= 3 ? args[2] : px_null())) px_sock_set_reuseport(sfd, "http_serve");
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
@@ -19089,6 +19122,8 @@ static LXValue bi_sse_serve(LXValue* args, int nargs, void* ctx) {
     if (sfd < 0) px_error("sse_serve: socket 创建失败");
     int one = 1;
     setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    // M176（晨曦 P1-5）：sse_serve 无 opts 参数 ⇒ 只看 PX_REUSE_PORT
+    if (px_want_reuse_port(px_null())) px_sock_set_reuseport(sfd, "sse_serve");
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
@@ -24009,14 +24044,20 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     if (sfd < 0) px_error("px_serve: socket 创建失败");
     int one = 1;
     setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    // M176（晨曦 P1-5）：零停机换二进制 —— 见 px_want_reuse_port 的说明
+    if (px_want_reuse_port(nargs >= 4 ? args[3] : px_null()))
+        px_sock_set_reuseport(sfd, "px_serve");
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
     addr.sin_port = htons((uint16_t)port);
     if (bind(sfd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        int be = errno;
         close(sfd);
-        px_error("px_serve: 绑定端口 %d 失败", port);
+        // M176：把内核真因带上（换二进制时最常见的失败就是 EADDRINUSE：
+        //   「对端没开 SO_REUSEPORT」—— 只说「绑定失败」会让人查错方向）
+        px_error("px_serve: 绑定端口 %d 失败：%s", port, strerror(be));
     }
     if (listen(sfd, 128) < 0) {
         close(sfd);
