@@ -53,7 +53,7 @@ print(ya["ok"])                                         # true（ya["value"] 为
 
 其余库一行式：`wr_parse_file("get_healthz.px")` → 路由规则 dict；`lr_solar_to_lunar(2026, 9, 5)` → 农历（实测 `{"ok":true,"year":2026,"month":7,"day":24,"leap":false}`）；`pxml_parse("a = 1\nb = \"hi\"\n")["ok"]` → true；`set_px(canvas_create(4,4), 1, 1, 0xFF0000)` 后 `get_px` → 16711680；`png_encode(2, 2, [...])` → 82 字节 PNG；`html_text(html_parse("<p>hi<b>x</b></p>"))` → "hix"；`mp_encode({...}, {...})` → 带随机 boundary 的 bytes body；`smtp_send(...)` 连本地/内网 SMTP 发信。完整 API 文档：`tools/pxc doc stdlib/<name>.px`。
 
-## 3. Dogfood 资产图（examples/ · 119 个 .px）
+## 3. Dogfood 资产图（examples/ · **130 个示例目录 / 120 个单文件 `.px`**）
 
 PuXian 每个里程碑都用普贤自己写示例/工具/应用（dogfooding 自证）。examples/ 是可复用资产库与能力导航：
 

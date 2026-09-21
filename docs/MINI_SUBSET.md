@@ -199,6 +199,11 @@
 
 ## 十二、M-B8 新增：自举证明完成（PuXian 版编译器编译自己，两步 diff 一致）
 
+> ⚠ **本节是 M-B8 时点的历史记录**（当时由 Rust 版引导、B.c 为 6002 行）。**当前（`px 0.2.0`）**：
+> C 轨基准 `selfhost/golden/compiler.c` = **17,535 行**、BC 轨基准 `selfhost/golden/compiler.bc.dump` = **37,296 行**，
+> 证明入口 `selfhost/bootstrap_prove.sh`（C 轨）与 `selfhost/bootstrap_prove_bc.sh`（BC 轨），
+> 入库件一致性由 `selfhost/rebake_bin.sh --check-all`（14 件源码链指纹）守。
+
 - **交付**：`selfhost/compiler.px`（PuXian 版完整编译器 CLI：`import codegen.px` + 主文件声明 25 个全局状态 + `main()`，完整流水线 read→lex→parse→resolve(import)→generate→C 源码输出 stdout）+ `selfhost/bootstrap_prove.sh`（自举证明脚本）。
 - **自举证明（经典三步）**：`./selfhost/bootstrap_prove.sh`
   1. Rust 版 `px build compiler.px` → 编译器 A（`build/compiler`，3.87MB 静态二进制，17s）——同时证明 compiler.px 全链在 Mini 子集内；
