@@ -85,24 +85,48 @@ def i_call_builtin(name, args, pos):
                 return Ok(-args[0])
             return Ok(args[0])
         return Err(i_r1002("abs 参数需要数值", pos))
-    if name == "min":
-        if len(args) != 2:
-            return Err(i_r1002("min 需要两个参数", pos))
-        let c = i_bin_compare("Lt", args[0], args[1], pos)
-        if c.is_err():
-            return Err(c.err())
-        if c.unwrap():
+    if name == "min" or name == "max":
+        # M177：与编译轨统一 —— ① nargs ≥ 1；② **单参数可迭代** ⇒ 取元素最值
+        #   （修前解释轨只收 2 个参数 ⇒ `min([3,1,2])` 直接报错，而编译轨返回**原列表**，
+        #    两轨一个报错一个静默给错值）
+        if len(args) < 1:
+            return Err(i_r1002(name + " 需要至少 1 个参数", pos))
+        let want_gt = name == "max"
+        if len(args) == 1:
+            let t0 = i_type_name(args[0])
+            if t0 == "list" or t0 == "tuple" or t0 == "generator" or t0 == "string":
+                let items0 = i_seq_of(args[0])
+                if len(items0) == 0:
+                    return Err(i_r1002(name + " 需要至少一个元素", pos))
+                var best0 = items0[0]
+                var bi0 = 1
+                while bi0 < len(items0):
+                    var c0 = Err(i_r1002("内部错误", pos))
+                    if want_gt:
+                        c0 = i_bin_compare("Gt", items0[bi0], best0, pos)
+                    else:
+                        c0 = i_bin_compare("Lt", items0[bi0], best0, pos)
+                    if c0.is_err():
+                        return Err(c0.err())
+                    if c0.unwrap():
+                        best0 = items0[bi0]
+                    bi0 += 1
+                return Ok(best0)
             return Ok(args[0])
-        return Ok(args[1])
-    if name == "max":
-        if len(args) != 2:
-            return Err(i_r1002("max 需要两个参数", pos))
-        let c = i_bin_compare("Gt", args[0], args[1], pos)
-        if c.is_err():
-            return Err(c.err())
-        if c.unwrap():
-            return Ok(args[0])
-        return Ok(args[1])
+        var best = args[0]
+        var mi = 1
+        while mi < len(args):
+            var c = Err(i_r1002("内部错误", pos))
+            if want_gt:
+                c = i_bin_compare("Gt", args[mi], best, pos)
+            else:
+                c = i_bin_compare("Lt", args[mi], best, pos)
+            if c.is_err():
+                return Err(c.err())
+            if c.unwrap():
+                best = args[mi]
+            mi += 1
+        return Ok(best)
     if name == "pow":
         if len(args) != 2:
             return Err(i_r1002("pow 需要两个参数", pos))
@@ -233,20 +257,26 @@ def i_call_builtin(name, args, pos):
             return Err(i_r1002("dict 不需要参数", pos))
         return Ok(it_new_dict())
     if name == "unique":
-        # std.collections.unique：去重保持顺序
+        # std.collections.unique：去重保持顺序（M177：可迭代实参统一走 i_seq_of）
+        if len(args) != 1:
+            return Err(i_r1002("unique 需要 1 个参数", pos))
+        let src = i_seq_of(args[0])
         let out = []
         var ui = 0
-        while ui < len(args[0]):
-            if not contains(out, args[0][ui]):
-                out.append(args[0][ui])
+        while ui < len(src):
+            if not contains(out, src[ui]):
+                out.append(src[ui])
             ui += 1
         return Ok(out)
     if name == "flatten":
-        # std.collections.flatten：嵌套列表展平一层
+        # std.collections.flatten：嵌套列表展平一层（M177：可迭代实参统一走 i_seq_of）
+        if len(args) != 1:
+            return Err(i_r1002("flatten 需要 1 个参数", pos))
+        let src2 = i_seq_of(args[0])
         let out = []
         var fi = 0
-        while fi < len(args[0]):
-            let sub = args[0][fi]
+        while fi < len(src2):
+            let sub = i_seq_of(src2[fi])
             var fj = 0
             while fj < len(sub):
                 out.append(sub[fj])
@@ -1207,16 +1237,35 @@ def i_builtin_reversed(args, pos):
         i -= 1
     return Ok(out)
 # ---------- sum（对齐 builtin.rs Sum：从 0 累加） ----------
+# ---------- M177：可迭代实参规范化（解释轨侧） ----------
+# 解释轨里「生成器」是 dict{"__gen__": [...]}（不是运行期的 PX_GEN）⇒ 一旦把它交给
+# **runtime 原生** `list()`，会被当成 dict 迭代出**键**（实测 `sum((x for x in [1,2,3]))`
+# 报 `+ 不支持: int + string` —— 因为拿到的是字符串键名）。
+#   故在解释轨内部一律经本函数取「序列」：生成器看 __gen__，其余按 len/下标通用迭代。
+def i_seq_of(v):
+    let t = i_type_name(v)
+    if t == "generator":
+        return v["__gen__"]
+    if t == "list":
+        return v
+    var out = []
+    var si = 0
+    while si < len(v):
+        out.append(v[si])
+        si += 1
+    return out
 def i_builtin_sum(args, pos):
     if len(args) != 1:
         return Err(i_r1002("sum 需要一个参数", pos))
     let t = i_type_name(args[0])
-    if t != "list" and t != "tuple":
-        return Err(i_r1002("sum 参数需要 list/tuple", pos))
+    # M177：生成器也收（物化）—— 与编译轨统一为「一条迭代语义」
+    if t != "list" and t != "tuple" and t != "generator":
+        return Err(i_r1002("sum 参数需要 list/tuple/生成器，实际是 " + t, pos))
+    let items = i_seq_of(args[0])
     var acc = 0
     var i = 0
-    while i < len(args[0]):
-        let r = i_bin_add(acc, args[0][i], pos)
+    while i < len(items):
+        let r = i_bin_add(acc, items[i], pos)
         if r.is_err():
             return Err(r.err())
         acc = r.unwrap()

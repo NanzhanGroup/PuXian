@@ -5364,9 +5364,59 @@ static LXValue bi_abs(LXValue* args, int nargs, void* ctx) {
     return px_null();
 }
 
+// M177（缺陷 165 的审计发现）：**可迭代实参统一物化**。
+//   修前各内置自定「收什么」—— `sum` 只收 list、`min/max` 单参数**直接返回实参本身**
+//   （传生成器 ⇒ 静默返回生成器对象！）、`join/reversed/contains` 各报各家文案；
+//   而解释轨另一侧又是另一套（收 list/tuple、`min` 干脆只收 2 个参数）。
+//   ⇒ 统一走**一条**迭代语义：`px_len` + `px_iter_at`（与 `for x in xs` 同源）。
+//   返回 1 成功（*out 为 list）；0 = 类型不可迭代（调用方负责响亮报错）。
+//   ⚠️ GC 纪律（M170）：本函数**不自行登记根** —— tuple/str 转换会新建 list，它此后只活在
+//   调用方的 C 局部；调用方必须 `px_root_push(); PX_KEEP(lst);` 一直保到**用完**，
+//   否则中途一次分配触发的 GC 就会把它收走（「登记时机」比「登记与否」更常出错）。
+static int px_as_list(LXValue v, LXValue* out) {
+    if (v.type == PX_LIST) { *out = v; return 1; }
+    if (v.type == PX_GEN) {
+        LXObject* go = v.as.obj;
+        if (go->as.gen.is_lazy) px_gen_materialize(go);
+        *out = go->as.gen.list;
+        return 1;
+    }
+    if (v.type != PX_TUPLE && v.type != PX_STR) return 0;
+    int n = px_len(v);
+    LXValue l = px_list(n > 0 ? n : 1);
+    for (int i = 0; i < n; i++) px_list_push(l, px_iter_at(v, px_int(i)));
+    *out = l;
+    return 1;
+}
+
+// M177：`min`/`max` 的**单参数可迭代**形态 —— 取元素最值（空 ⇒ 响亮，不静默给 null）。
+static LXValue px_minmax_iter(LXValue it, int want_max, const char* what) {
+    LXValue l;
+    px_root_push();
+    if (!px_as_list(it, &l)) { px_root_pop(); px_error("R1002: %s 参数需要 list/tuple/生成器", what); }
+    PX_KEEP(l);
+    if (l.as.obj->as.list.len == 0) { px_root_pop(); px_error("R1002: %s 需要至少一个元素", what); }
+    LXObject* o = l.as.obj;
+    LXValue m = o->as.list.items[0];
+    for (int i = 1; i < o->as.list.len; i++) {
+        LXValue cur = o->as.list.items[i];
+        LXValue c = want_max ? px_gt(cur, m) : px_lt(cur, m);
+        if (c.type == PX_BOOL && c.as.b) m = cur;
+    }
+    px_root_pop();
+    return m;
+}
+
 static LXValue bi_min(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 1) px_error("R1002: min 需要至少 1 个参数");
+    if (nargs == 1) {
+        // M177：单参数若是 list/tuple/生成器/字符串 ⇒ 取元素最值（修前直接返回实参本身！）
+        if (args[0].type == PX_LIST || args[0].type == PX_TUPLE ||
+            args[0].type == PX_GEN || args[0].type == PX_STR)
+            return px_minmax_iter(args[0], 0, "min");
+        return args[0];
+    }
     LXValue m = args[0];
     for (int i = 1; i < nargs; i++) {
         bool mn = args[i].type == PX_INT || args[i].type == PX_FLOAT;
@@ -5383,6 +5433,12 @@ static LXValue bi_min(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_max(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 1) px_error("R1002: max 需要至少 1 个参数");
+    if (nargs == 1) {
+        if (args[0].type == PX_LIST || args[0].type == PX_TUPLE ||
+            args[0].type == PX_GEN || args[0].type == PX_STR)
+            return px_minmax_iter(args[0], 1, "max");
+        return args[0];
+    }
     LXValue m = args[0];
     for (int i = 1; i < nargs; i++) {
         bool mn = args[i].type == PX_INT || args[i].type == PX_FLOAT;
@@ -5399,12 +5455,74 @@ static LXValue bi_max(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_sum(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) px_error("R1002: sum 需要 1 个参数");
-    LXValue v = args[0];
-    if (v.type != PX_LIST) px_error("R1002: sum 需要一个列表");
-    LXObject* o = v.as.obj;
+    // M177：收 list/tuple/生成器（物化）—— 修前只收 list（解释轨收 list/tuple ⇒ 两轨不同）
+    LXValue lst;
+    px_root_push();     // M170：tuple/str→list 的新对象此后只活在 C 局部
+    if (!px_as_list(args[0], &lst)) { px_root_pop(); px_error("R1002: sum 参数需要 list/tuple/生成器，实际是 %s", px_type_name(args[0])); }
+    PX_KEEP(lst);
+    LXObject* o = lst.as.obj;
     LXValue r = px_int(0);
     for (int i = 0; i < o->as.list.len; i++) r = px_add(r, o->as.list.items[i]);
+    px_root_pop();
     return r;
+}
+
+// M177：`dict()` 空字典构造 —— 解释轨一直有（`i_builtin_dict`），**编译轨没有**
+//   （实测 `R1001 未定义变量: 'dict'`）⇒ 用户照解释轨写的代码一上生产就炸。
+//   与 `json_parse("{}")` 等价（`{}` 字面量求值为 null 是另一条已文档化的坑）。
+static LXValue bi_dict_ctor(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 0) px_error("R1002: dict 不需要参数");
+    return px_dict();
+}
+
+// M177：`unique(list)` / `flatten(list)` —— 同样是**解释轨有、编译轨没有**的两个名字
+//   （`selfhost/ibuiltin.px` 里以 .px 实现）。语义照抄解释轨：去重保持顺序 / 展平一层。
+static LXValue bi_unique(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: unique 需要 1 个参数");
+    LXValue lst;
+    px_root_push();
+    if (!px_as_list(args[0], &lst)) { px_root_pop(); px_error("R1002: unique 参数需要 list/tuple/生成器，实际是 %s", px_type_name(args[0])); }
+    PX_KEEP(lst);
+    LXValue out = px_list(0);
+    PX_KEEP(out);
+    LXObject* o = lst.as.obj;
+    for (int i = 0; i < o->as.list.len; i++) {
+        LXValue it = o->as.list.items[i];
+        int dup = 0;
+        LXObject* oo = out.as.obj;
+        for (int j = 0; j < oo->as.list.len; j++) {
+            LXValue e = px_eq(oo->as.list.items[j], it);
+            if (e.type == PX_BOOL && e.as.b) { dup = 1; break; }
+        }
+        if (!dup) px_list_push(out, it);
+    }
+    px_root_pop();
+    return out;
+}
+
+static LXValue bi_flatten(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: flatten 需要 1 个参数");
+    LXValue lst;
+    px_root_push();
+    if (!px_as_list(args[0], &lst)) { px_root_pop(); px_error("R1002: flatten 参数需要 list/tuple/生成器，实际是 %s", px_type_name(args[0])); }
+    PX_KEEP(lst);
+    LXValue out = px_list(0);
+    PX_KEEP(out);
+    LXObject* o = lst.as.obj;
+    for (int i = 0; i < o->as.list.len; i++) {
+        LXValue sub;
+        if (!px_as_list(o->as.list.items[i], &sub)) {
+            px_root_pop();
+            px_error("R1002: flatten 的元素需要可迭代，实际是 %s", px_type_name(o->as.list.items[i]));
+        }
+        LXObject* so = sub.as.obj;
+        for (int j = 0; j < so->as.list.len; j++) px_list_push(out, so->as.list.items[j]);
+    }
+    px_root_pop();
+    return out;
 }
 
 static LXValue bi_sqrt(LXValue* args, int nargs, void* ctx) {
@@ -9947,6 +10065,11 @@ void px_register_builtins(void) {
     px_set_global("min", px_native("min", bi_min));
     px_set_global("max", px_native("max", bi_max));
     px_set_global("sum", px_native("sum", bi_sum));
+    // M177：解释轨一直有、编译轨从来没有的三个名字（`dict` 是构造器，另两个在
+    //   selfhost/ibuiltin.px 里以 .px 实现）——补上 ⇒ 两轨内置集一致。
+    px_set_global("dict", px_native("dict", bi_dict_ctor));
+    px_set_global("unique", px_native("unique", bi_unique));
+    px_set_global("flatten", px_native("flatten", bi_flatten));
     px_set_global("sqrt", px_native("sqrt", bi_sqrt));
     // M59-S1 三角（弧度）+ pi 常量
     px_set_global("sin", px_native("sin", bi_sin));

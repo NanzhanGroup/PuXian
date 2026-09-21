@@ -1,0 +1,34 @@
+# ============================================================
+# M177 门 · 用例 A：两轨内置集一致 + 可迭代实参统一（缺陷 165 的审计发现）
+# ------------------------------------------------------------
+# 审计面（缺陷 165「GenExp 物化路径」的实测外延）：
+#   ① **解释轨有、编译轨没有**的内置：`dict()` / `unique()` / `flatten()`
+#      ⇒ 用户照解释轨写、一上编译轨就 `R1001 未定义变量`（而 lint 名册是**并集**，看不见）。
+#   ② **min/max 单参数 + 生成器**：编译轨**静默返回生成器对象本身**（错值！）。
+#   ③ `sum`：编译轨只收 list（解释轨收 list/tuple）⇒ 同一份源码两轨不同。
+# 修法：runtime 补 `dict/unique/flatten` 三个内置；`min/max` 单参数可迭代取元素最值；
+#   `sum` 收 list/tuple/生成器；三处共用**一条**迭代语义（`px_as_list` = `px_len`+`px_iter_at`，
+#   与 `for x in xs` 同源）。解释轨对称补齐（min/max 变 variadic、sum 收生成器）。
+# 判据：本用例三轨 stdout **逐字节一致**（这就是「统一」的定义）。
+# ============================================================
+print("1 dict=" + type(dict()) + " len=" + str(len(dict())))
+print("2 unique=" + str(unique([3, 1, 3, 2, 1])))
+print("3 flatten=" + str(flatten([[1, 2], [3], []])))
+print("4 sum_list=" + str(sum([1, 2, 3])))
+print("5 sum_tuple=" + str(sum((1, 2, 3))))
+print("6 sum_gen=" + str(sum((x * 2 for x in [1, 2, 3]))))
+print("7 min_list=" + str(min([3, 1, 2])))
+print("8 min_tuple=" + str(min((3, 1, 2))))
+print("9 min_gen=" + str(min((x for x in [3, 1, 2]))))
+print("10 max_list=" + str(max([3, 1, 2])))
+print("11 max_tuple=" + str(max((3, 1, 2))))
+print("12 max_gen=" + str(max((x for x in [3, 1, 2]))))
+print("13 min_multi=" + str(min(3, 7, 5)))
+print("14 max_multi=" + str(max(3, 7, 5)))
+print("15 min_str_single=" + str(min("b")))
+print("16 min_one_scalar=" + str(min(9)))
+print("17 unique_gen=" + str(unique((x % 3 for x in [0, 1, 2, 3, 4]))))
+print("18 flatten_tuple=" + str(flatten(([1], [2, 3]))))
+print("19 min_str_iter=" + str(min(["b", "a", "c"])))
+print("20 max_float=" + str(max([1.5, 2.5, 0.5])))
+print("M177A-BUILTIN-PARITY-OK")

@@ -370,6 +370,20 @@ run m175_bytes_stderr bash examples/m175_bytes_stderr/verify.sh
 #   ④ 反向语义：C(reuse=0) 在 B 监听期间 **bind 必须失败**（把内核契约变成判据）；
 #   ⑤ 负控（px_sock_set_reuseport 变 no-op ⇒ B 起不来）+ sha256 逐字节还原复绿。
 run m176_reuseport bash examples/m176_reuseport/verify.sh
+# M177（第 57 轮 · 缺陷 165 的审计发现）：**内置面统一**。把「GenExp 物化路径」按矩阵展开
+#   （内置 × 实参形态 × 三轨）后跳出来的是一族结构性缺口：
+#   ① **解释轨有、编译轨没有**的内置 `dict()` / `unique()` / `flatten()` ⇒ 照解释轨写、
+#      一上编译轨 `R1001 未定义变量`；而 lint 名册取**并集**、门 ③④ 只看「⊆ 名册」⇒ 全绿到真编译。
+#   ② `min(x)`/`max(x)` 单参数：编译轨**静默返回实参本身**（`min(gen)` 得到生成器对象）；解释轨报「需要两个参数」。
+#   ③ `sum`：编译轨只收 list、解释轨收 list/tuple。
+#   修法：runtime 补三个内置 · `min/max` 单参数可迭代取元素最值 · `sum` 收 list/tuple/生成器；
+#   返回 TRUE 的公共助手 `px_as_list`（= `px_len`+`px_iter_at`，与 for-in 同源）；解释轨对称补齐
+#   （min/max 变 variadic、新增 `i_seq_of` 规范化生成器 —— 解释轨的生成器是 dict{"__gen__"}，
+#    直接交给 runtime `list()` 会迭代出**键名**，实测 `sum(gen)` 报 `+ 不支持: int + string`）。
+#   名册门新增判据 ⑦「解释轨注册名 ⊆ runtime 可达名」—— 把这类差从**无人可测**变成**门能红**。
+# 判据：① 20 条内置面矩阵三轨 stdout 逐字节一致；② 真不支持的类型/空可迭代 ⇒ 三轨同码同文；
+#   ③ 名册门 ⑦ 全绿；④ 负控（min/max 单参数改回直接返回 ⇒ 两轨必须不一致；sha256 还原复绿）。
+run m177_builtin_parity bash examples/m177_builtin_parity/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们
