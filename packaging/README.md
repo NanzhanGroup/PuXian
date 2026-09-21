@@ -148,7 +148,14 @@ dnf/yum 安装校验链：公钥 → repomd.xml 签名（repo_gpgcheck）→ 按
 - [ ] aarch64 仓库（rpm 侧；当前 aarch64 走**官方引导包** `puxian-bootstrap-aarch64-<tag>.tar.gz`）
 - [ ] Fedora（打包链与 EL 不同，未验证）
 
-## M168：openEuler 支持 + 二进制可移植性（2026-09-21 用户报障）
+> ⚠️ **el7 的契约（M168 实测登记，勿当"全绿"）**：仓库/安装/公钥验签/入库件静态性**全部 OK**，
+> 但 **`px build` 需要 gcc ≥ 4.9** —— `runtime/runtime.c` 用 C11 `<stdatomic.h>`，而
+> CentOS 7 自带 **gcc 4.8.5**。el7 用户请用 SCL：
+> `sudo yum install -y centos-release-scl && sudo yum install -y devtoolset-9`，
+> 然后 `scl enable devtoolset-9 bash`（或 `PX_CC=/opt/rh/devtoolset-9/root/usr/bin/gcc pxc build x.px`）。
+> `tools/px` 会在编译 runtime 前**预检**该能力并打印上述指引（不再是 `stdatomic.h: No such file`）。
+> el7 终验脚本的判据是「**要么真跑通，要么失败原因必须是已登记且可执行的那条**」，
+> **不是**"失败即放过"。（runtime 对 glibc 2.17 的全兼容列为下一轮候选。）
 
 用户实测报出两条（都不是"某个功能不好用"，而是**分发链缺了一块却没有任何门看得见**）：
 

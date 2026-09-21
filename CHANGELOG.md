@@ -74,6 +74,43 @@
 - openEuler 别名仓库（gz 元数据）本机生成通过；`selfhost/m116_gates.sh` 全量门 + CI（含新
   job）在提交后复核。
 
+### 续（同日，tag 首跑驱动）：三个"门自己"的问题 + 一个**新登记的发行版限制**
+
+> 首跑 tag `v0.2.0-m168` 时 `bootstrap-arm64` / `rpm-verify-7` / `rpm-verify-openeuler` 三红。
+> 调查中撞到一个**结构性障碍**并顺手补掉：**本仓 job 日志对非管理员不可读**
+> （`GET /actions/jobs/<id>/logs` → 403 "Must have admin rights"，页面也只有 step 名）。
+> ⇒ 失败诊断必须走 `::error::` 注解（公开 check-runs API 可读），本批把自举步、
+> 工具现编步、可移植性门步、以及两个发行版终验步全部接上。
+> **这条教训比三个具体 bug 更值钱：门红了却读不到原因，等于没有门。**
+
+1. **可移植性门自证里的"架构负控"依赖宿主**（aarch64 runner 上假绿）：负控②写死
+   `--arch aarch64`（本意"拿本机件冒充 aarch64"），在 **aarch64 的 runner 上恰好匹配**
+   ⇒ 该负控恒绿 ⇒ 自证判红、发布 job 连锁红。改为**从件本身推**"错的期望架构"
+   （AArch64→riscv64；X86-64/RISC-V/ARM→aarch64），与宿主无关，并打印「件实际架构 / 取的期望」留证。
+   （同族旧账：M114-S4 的 locale 教训 —— **门若依赖环境，它的红/绿就不是事实**。）
+2. **依赖版本提取器不再假定 objdump 存在**：改 `readelf --dyn-syms` 优先（readelf 本就是本门必需）、
+   `objdump -T` 兜底，并打印实际用的是哪个；**取不到版本不再当作"没有依赖"** ——
+   动态件 + 版本不可判定 ⇒ **判红**（M159 记过的"取不到就放行"暗门形态）。
+3. **CI 新步漏装回 `bootstrap/`**（`ci.yml` 的 native-arm64 新步只编不拷贝）⇒ 门看到入库的
+   x86_64 件，注解原文 `❌ bootstrap/pxfmt：架构不符 —— 需要 aarch64，实测 [Advanced Micro Devices X86-64]`。
+   门判得**完全正确**；补上 `cp -f` 并把这行注解原文写进注释防复发。
+4. **openEuler 终验不再依赖 `dnf repoquery`**：它在 `dnf-plugins-core` 里，精简镜像（含 openeuler
+   容器）常无 ⇒ `No such command: repoquery`，**看起来像"仓库不可见"，实则是工具缺件**。
+   改用核心 `dnf list --available`；失败时打印 repo 配置 / repodata 实体 / makecache 复跑三段诊断。
+   （另注：openEuler 别名仓库**确实已随本次发布上线** —— GitHub Pages 上
+   `rpm/openeuler/{22.03,24.03}/x86_64/repodata/repomd.xml(.asc)` 均 200；国内镜像按同步周期跟随。）
+5. **新登记的发行版限制（el7 的 `px build`）**：新加的 el7「真编译」判据立刻照出一件事 ——
+   `runtime/runtime.c` 用 C11 `<stdatomic.h>` + `_Atomic`，而 **gcc 4.9 才支持**；
+   **CentOS 7 自带 gcc 4.8.5** ⇒ el7 上 `px build` 从来就跑不通（旧终验只跑 `pxc --version`，
+   走 C 轨静态件恰好正常 ⇒ **看不见**）。本轮**不静默放过、也不假装已修**：
+   · `tools/px` 新增**工具链能力预检**（编译 runtime 前问一次 `<stdatomic.h>`），缺能力时给出
+     **可执行**的指引（el7：`centos-release-scl` + `devtoolset-9` + `scl enable`）；
+   · 新增 `PX_CC` 覆盖宿主编译器（devtoolset 场景 `PX_CC=/opt/rh/devtoolset-9/root/usr/bin/gcc`）；
+   · el7 终验的契约改为「**要么真跑通，要么失败原因必须是已登记且可执行的那条**」，否则判红；
+   · 文档（本文件 / `packaging/README` / `docs/RELEASE_PROCESS`）如实写明该限制。
+   ⇒ 「runtime/glibc 2.17 全兼容（含 `explicit_bzero`/`getrandom` 等新符号）」列为**下一轮候选**，
+     完成前 el7 的官方说法是：**仓库/安装/工具链/静态性 OK；`px build` 需 gcc ≥ 4.9**。
+
 ## 文档收口 · README（中英）+ docs 全套（2026-09-21 · 文档主线 · **无代码改动**）
 
 > 范围：**仅文档**。不改语言语义、不改 `runtime/` 与 `selfhost/`、不重烘入库件 ⇒ 不触 golden / 冻结门 / 指纹门。

@@ -61,6 +61,16 @@ tag 推送同时触发 `release.yml` 的 rpm 链（**GPG secrets 未配置时各
 > 静态件，恰好正常；而**用户面默认 VM 轨**用的 `bootstrap/pxc_vm` 当时是动态件（需 GLIBC_2.34），
 > 在 el7（glibc 2.17）上一执行就崩 ⇒ 整类缺陷看不见。现在两个终验脚本都真编译 + 运行，
 > 并断言入库件全静态。
+>
+> ⚠ **el7 的已知限制（M168 实测登记）**：`runtime/runtime.c` 需要 C11 `<stdatomic.h>`
+> ⇒ **gcc ≥ 4.9**；CentOS 7 自带 4.8.5 ⇒ `px build` 在 el7 上需 SCL：
+> `yum install -y centos-release-scl devtoolset-9` + `scl enable devtoolset-9 bash`
+> （或 `PX_CC=<devtoolset gcc>`）。`tools/px` 在编译 runtime 前预检并给出该指引；
+> el7 终验的判据是「要么真跑通，要么失败原因必须是**已登记且可执行**的那条」，否则判红。
+>
+> ⚠ **失败诊断必须走 `::error::` 注解**（M168 教训）：本仓 job 日志对非管理员**不可读**
+> （API 403 "Must have admin rights"），页面上也只有 step 名 —— 门红了却读不到原因等于没有门。
+> 所有新加的判据步骤都要把日志尾部 `sed 's/^/::error::…/'` 打出来（公开 check-runs API 可读）。
 
 构建冒烟自检（任一失败即 workflow 失败、不产生 Release）：① `pxc --version` ② hello 编译（静态 ELF）+ 运行
 ③ hello 解释运行 ④ `import std.collections` 编译（stdlib 定位）⑤ 包外目录 + `PX_STDLIB` env 编译。
