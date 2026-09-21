@@ -148,10 +148,13 @@ jobs:
 
       - name: 原生自举 + 自证（--portable：全静态 + pxc0 编 compiler.px ↔ golden/compiler.c）
         run: |
-          set -e
-          bash selfhost/native_bootstrap.sh --portable --outdir "$RUNNER_TEMP/nb" 2>&1 | tee "$RUNNER_TEMP/nb.log"
-          grep -q "NATIVE-BOOTSTRAP-OK" "$RUNNER_TEMP/nb.log"
-          grep -q "static=1" "$RUNNER_TEMP/nb.log" || { echo "::error::自举件不是全静态"; exit 1; }
+          set -o pipefail
+          if ! bash selfhost/native_bootstrap.sh --portable --outdir "$RUNNER_TEMP/nb" 2>&1 | tee "$RUNNER_TEMP/nb.log"; then
+            echo "::error::原生自举失败（--portable）"
+            tail -40 "$RUNNER_TEMP/nb.log" | sed 's/^/::error::nb /'; exit 1
+          fi
+          grep -q "NATIVE-BOOTSTRAP-OK" "$RUNNER_TEMP/nb.log" || { tail -30 "$RUNNER_TEMP/nb.log" | sed 's/^/::error::nb /'; exit 1; }
+          grep -q "static=1" "$RUNNER_TEMP/nb.log" || { echo "::error::自举件不是全静态"; grep NATIVE-BOOTSTRAP "$RUNNER_TEMP/nb.log" | sed 's/^/::error::nb /'; exit 1; }
           test -x "$RUNNER_TEMP/nb/pxc"
 
       - name: 现编全部 12 件原生工具（C 轨；VM 轨两件不随包）
@@ -177,10 +180,19 @@ jobs:
       - name: 可移植性门（全静态 + 架构 aarch64 —— 每一件都过，否则 job 红）
         run: |
           set -e
-          bash selfhost/check_bin_portability.sh --self-test
-          bash selfhost/check_bin_portability.sh --arch aarch64 --require-static bootstrap/* \
-            | tee "$RUNNER_TEMP/portability.log"
-          grep -q "CHECK-PORTABILITY-OK" "$RUNNER_TEMP/portability.log"
+          # ⚠️ 失败诊断必须走 `::error::` 注释：本仓 job 日志**非管理员不可读**
+          #   （API 403），只有注解能在外部看到 —— 首跑红时正是靠这一点定位。
+          if ! bash selfhost/check_bin_portability.sh --self-test > "$RUNNER_TEMP/pst.log" 2>&1; then
+            echo "::error::可移植性门自证失败（--self-test）"
+            sed 's/^/::error::pst /' "$RUNNER_TEMP/pst.log"; exit 1
+          fi
+          cat "$RUNNER_TEMP/pst.log"
+          if ! bash selfhost/check_bin_portability.sh --arch aarch64 --require-static bootstrap/* \
+                 > "$RUNNER_TEMP/portability.log" 2>&1; then
+            echo "::error::可移植性门判红（有件不是 aarch64 全静态）"
+            sed 's/^/::error::portability /' "$RUNNER_TEMP/portability.log"; exit 1
+          fi
+          cat "$RUNNER_TEMP/portability.log"
           echo "✅ 包内 $(ls bootstrap/* | wc -l) 件全部：aarch64 + 全静态（与 glibc 版本解耦）"
 
       - name: 冒烟（**零参数**裸 px build + px run）

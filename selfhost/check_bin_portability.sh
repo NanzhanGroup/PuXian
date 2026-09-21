@@ -42,9 +42,25 @@ while [ $# -gt 0 ]; do
 done
 
 # glibc 版本比较：sort -V 取最大
-max_glibc_of() {   # $1=ELF → 打印最高 GLIBC_x.y（无则空）
-    objdump -T "$1" 2>/dev/null \
-        | grep -o 'GLIBC_[0-9]\+\.[0-9]\+' | sed 's/GLIBC_//' | sort -Vu | tail -1
+# 依赖版本符号的取法（M168 加固）：readelf 是本脚本**本来就是必需**的工具（静态性判定用它），
+#   故优先 `readelf --dyn-syms`；objdump 作兜底（某些精简镜像只有其中之一）。
+#   ⚠️ 两者都取不到时**不当作"没有依赖"**（M159 教训：取不到就放行 = 暗门）——
+#   动态件 + 版本不可判定 ⇒ **判红**（见 check_one）。
+VERS_TOOL=""
+have_vers_tool() {   # 0 = 至少一种可用
+    [ -n "$VERS_TOOL" ] && return 0
+    if readelf --dyn-syms --wide /bin/sh >/dev/null 2>&1; then VERS_TOOL=readelf; return 0; fi
+    if objdump -T /bin/sh >/dev/null 2>&1; then VERS_TOOL=objdump; return 0; fi
+    return 1
+}
+max_glibc_of() {   # $1=ELF → 打印最高 GLIBC_x.y（取不到则空）
+    case "$VERS_TOOL" in
+        readelf) readelf --dyn-syms --wide "$1" 2>/dev/null \
+                   | grep -o 'GLIBC_[0-9]\+\.[0-9]\+' | sed 's/GLIBC_//' | sort -Vu | tail -1 ;;
+        objdump) objdump -T "$1" 2>/dev/null \
+                   | grep -o 'GLIBC_[0-9]\+\.[0-9]\+' | sed 's/GLIBC_//' | sort -Vu | tail -1 ;;
+        *)       printf '' ;;
+    esac
 }
 ver_le() { [ "$1" = "$2" ] && return 0; [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" = "$2" ]; }
 is_elf()  { head -c 4 "$1" 2>/dev/null | od -An -tx1 | tr -d ' \n' | grep -qi '^7f454c46'; }
@@ -83,9 +99,12 @@ check_one() {   # $1=文件 → 0 达标 / 1 判红
         return 1
     fi
     if [ -z "$max" ]; then
-        echo "  ⚠️  $f：动态链接但无 GLIBC 符号（非 glibc 运行库，如 musl）· [$mach]"
+        # M168 加固（发布侧首跑实测）：**取不到版本 ≠ 没有依赖** ⇒ 动态件判红。
+        #   原先此处"提醒后放行"正是 M159 记过的暗门形态（取不到就跳过 ⇒ 门红不了）。
+        echo "  ❌ $f：动态链接但**依赖版本不可判定**（$VERS_TOOL 取不到 GLIBC 符号）· [$mach]"
         readelf -d "$f" | grep NEEDED | sed 's/^/       | /'
-        return 0
+        echo "       ⇒ 判红（不放行「未知」）：请改用全静态件，或在装有 binutils 的机器上复判"
+        return 1
     fi
     if ver_le "$max" "$BASELINE"; then
         echo "  ✅ $f：动态 · 最高 GLIBC_$max ≤ 基线 $BASELINE · [$mach]"
@@ -102,6 +121,7 @@ check_one() {   # $1=文件 → 0 达标 / 1 判红
 # 自证（--self-test）：**含负控** —— 门若对坏件判绿，等于没有门
 # ============================================================
 if [ "$SELFTEST" = 1 ]; then
+    have_vers_tool || true      # 自证前先选定提取器（readelf 优先 / objdump 兜底）
     W="$(mktemp -d /tmp/px-portability.XXXXXX)"; trap 'rm -rf "$W"' EXIT
     printf '#include <stdio.h>\nint main(void){puts("ok");return 0;}\n' > "$W/t.c"
     ok=0; bad=0
@@ -118,8 +138,15 @@ if [ "$SELFTEST" = 1 ]; then
         echo "  ⚠️  本机 gcc 无法 -static（缺 static libc）⇒ 跳过静态正例（**不静默**，CI 需 glibc-static/libc6-dev）"
     fi
     if gcc -O1 -o "$W/dyn" "$W/t.c" 2>/dev/null; then
-        sm "正例：动态件（≤基线）判绿" 0 "$0" -b "$(max_glibc_of "$W/dyn")" "$W/dyn"
-        # 负控①：把基线压到 2.17 ⇒ 同一个动态件**必须**判红
+        if have_vers_tool; then
+            echo "  （依赖版本提取器：$VERS_TOOL）"
+            sm "正例：动态件（≤基线）判绿" 0 "$0" -b "$(max_glibc_of "$W/dyn")" "$W/dyn"
+        else
+            echo "  ⚠️  本机 readelf/objdump 都取不到依赖版本 ⇒ **跳过**正例（动态件）"
+            echo "      （**不静默**：门在缺提取器的机器上只剩「静态/架构/不可判定即红」三条判据）"
+        fi
+        # 负控①：把基线压到 2.17 ⇒ 同一个动态件**必须**判红（版本可判定时按版本，
+        #   不可判定时按"未知即红"—— 两条路都必须红）
         sm "负控①：动态件 vs 2.17 基线判红" 1 "$0" -b 2.17 "$W/dyn"
         # 负控②：架构断言 —— 拿本机件冒充 aarch64 ⇒ 必须判红
         sm "负控②：架构不符判红" 1 "$0" --arch aarch64 "$W/dyn"
@@ -141,6 +168,7 @@ fi
 # 主判据
 # ============================================================
 [ "${#FILES[@]}" -gt 0 ] || { echo "用法：$0 [-b 基线glibc] [--arch 架构] <文件...>；--self-test 自证" >&2; exit 2; }
+have_vers_tool || true      # 提前选定依赖版本提取器（readelf 优先，objdump 兜底）
 echo "== 二进制可移植性门：${#FILES[@]} 个文件 · glibc 基线 $BASELINE ${WANT_ARCH:+· 期望架构 $WANT_ARCH} =="
 bad=0
 for f in "${FILES[@]}"; do
