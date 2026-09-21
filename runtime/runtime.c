@@ -4737,9 +4737,17 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
             if (args[0].type != PX_STR || !args[0].as.obj)
                 px_error("R1002: 方法 get 参数 1 需要 string");
             // M-B1：支持默认值参数（第 2 参数，键不存在时返回）
-            LXValue v = px_dict_get(obj, args[0].as.obj->as.str.data);
-            if (px_is_null(v) && nargs >= 2) return args[1];
-            return v;
+            // M174（缺陷 194）：**必须按「键是否存在」而不是「取出的值是不是 null」判** ——
+            //   修前这里是 `px_is_null(v) && nargs >= 2` ⇒ 「键存在但值为 null」时
+            //   VM/C 轨返回默认值，而解释轨（`i_dict_call` 的 `if d.has(k): return d[k]`）
+            //   返回 null ⇒ 三轨分叉，且**与文档相悖**：`docs/DICT_STRICT_MIGRATION.md`
+            //   与速查表都写「默认值只覆盖『键不存在』」（= Go map / Python dict.get 语义）。
+            const char* gk = args[0].as.obj->as.str.data;
+            if (!px_dict_has(obj, gk)) {
+                if (nargs >= 2) return args[1];
+                return px_null();
+            }
+            return px_dict_get(obj, gk);
         }
         if (strcmp(name, "set") == 0) {
             if (nargs < 2) px_error("R1005: 方法 set 需要 2 个参数");

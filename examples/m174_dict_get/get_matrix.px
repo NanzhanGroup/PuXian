@@ -1,0 +1,38 @@
+# ============================================================
+# M174 门 · 用例 A：`d.get(k[, default])` 的语义矩阵（缺陷 194）
+# ------------------------------------------------------------
+# 定调（文档 + 解释轨既有一致）：
+#   `d.get(k, def)` 的默认值**只覆盖「键不存在」**；**键存在但值为 null ⇒ 返回 null**
+#   （= Go `m[k]` 的两值语义 / Python `dict.get`）。出处：docs/DICT_STRICT_MIGRATION.md
+#   §「d.get」与 docs/PUXIAN_CHEATSHEET.md（「默认值只覆盖『键不存在』」）。
+# 病灶（缺陷 194）：runtime 侧写的是 `px_is_null(v) && nargs >= 2` ⇒ 用**取出的值**判
+#   存在性 ⇒ 「键存在但值为 null」时 VM/C 轨返回默认值、解释轨返回 null ⇒ 三轨分叉。
+# 判据：下面 8 条语义全部三轨逐字节一致（门在 verify.sh 里对 stdout 逐字节对拍）。
+# ============================================================
+let d = json_parse("{}")
+d.set("n", null)
+d.set("z", 0)
+d.set("e", "")
+d.set("f", false)
+d.set("s", "S")
+d.set("l", [])
+
+print("1 exist_null_with_default=" + type(d.get("n", "DEF")) + ":" + str(d.get("n", "DEF")))
+print("2 missing_with_default=" + str(d.get("nope", "DEF")))
+print("3 missing_no_default=" + str(d.get("nope")))
+print("4 zero_value=" + str(d.get("z", "DEF")))
+print("5 empty_str=" + str(d.get("e", "DEF")))
+print("6 false_value=" + str(d.get("f", "DEF")))
+print("7 present_str=" + str(d.get("s", "DEF")))
+print("8 empty_list_len=" + str(len(d.get("l", "DEF"))))
+print("9 has_null_key=" + str(d.has("n")) + " has_missing=" + str(d.has("nope")))
+
+# 下标读：键存在（值为 null）⇒ null；缺键 ⇒ R1008（另有用例）
+print("10 index_null_key=" + str(d["n"]))
+print("11 index_zero=" + str(d["z"]))
+
+# 与「显式守卫」写法等价性：`has + 取` 与 `get(k, def)` 在「键存在但 null」时**不同**
+#   —— 这是刻意的：守卫写法的语义是「有键就用它的值」，get 的默认值语义是「没键才用默认」。
+if d.has("n"):
+    print("12 guard_null_key=" + str(d["n"]))
+print("M174A-GET-MATRIX-OK")
