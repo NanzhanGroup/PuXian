@@ -45,13 +45,19 @@ EOF
 cat /etc/yum.repos.d/puxian-verify.repo
 
 echo "== [verify-oe] dnf makecache 双验签（-y 免 tty 自动导入公钥）=="
-dnf -y makecache 2>&1 | tail -8 || { echo "❌ openEuler dnf makecache 双验签失败"; exit 1; }
+# ⚠️ **限定到本仓库**（--repo=puxian-verify）：不带上容器自带源 —— 否则"镜像源在境外不可达"
+#   会把本仓库的验签结论污染成"验签失败"（实为网络问题）。自带源在本步之后才需要（装 gcc）。
+if ! dnf -y --repo=puxian-verify makecache 2>&1 | tail -8; then
+    echo "❌ 步骤失败: makecache（双验签）—— 见上" >&2
+    dnf -y --repo=puxian-verify makecache 2>&1 | tail -20 >&2
+    exit 1
+fi
 
 echo "== [verify-oe] 仓库可见性 =="
 # ⚠️ 用 `dnf list`（核心功能）而**不用** `dnf repoquery` —— 后者在 dnf-plugins-core 里，
 #   精简镜像（含 openeuler 容器）常常没有 ⇒ 会以 "No such command: repoquery" 收场，
 #   看起来像"仓库不可见"，实则是**工具缺件**（2026-09-21 首跑即栽此）。
-if ! dnf -q -y --repo=puxian-verify list --available puxian 2>&1 | tee /tmp/oe_list.log | grep -q '^puxian'; then
+if ! dnf -q --repo=puxian-verify list --available puxian 2>&1 | tee /tmp/oe_list.log | grep -q '^puxian'; then
     echo "❌ dnf list 看不到 puxian（仓库可见性检查失败）"
     echo "── 诊断：repo 配置 ──"; cat /etc/yum.repos.d/puxian-verify.repo
     echo "── 诊断：repodata 实体 ──"; ls -l "$REPO_DIR/repodata" | head
@@ -60,7 +66,10 @@ if ! dnf -q -y --repo=puxian-verify list --available puxian 2>&1 | tee /tmp/oe_l
 fi
 
 echo "== [verify-oe] 真实安装 puxian（会自动拉 gcc 依赖）=="
-dnf -y install puxian 2>&1 | tail -12
+if ! dnf -y install puxian 2>&1 | tail -12; then
+    echo "❌ 步骤失败: dnf install puxian（依赖解析/下载）" >&2
+    exit 1
+fi
 rpm -q puxian
 /usr/bin/pxc --version
 

@@ -452,8 +452,7 @@ jobs:
             bash examples/m67_multiarch/verify.sh --arch ${{ matrix.arch }}
           }
           if ! run_all 2>&1 | tee "$RUNNER_TEMP/m67.log"; then
-            echo "::error::m67 ${{ matrix.arch }} 交叉/qemu 验证失败"
-            tail -80 "$RUNNER_TEMP/m67.log" | sed 's/^/::error::m67 /'
+            bash packaging/annotate_failure.sh "m67-${{ matrix.arch }}" "$RUNNER_TEMP/m67.log"
             exit 1
           fi
 

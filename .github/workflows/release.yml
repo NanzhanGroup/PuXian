@@ -575,8 +575,7 @@ jobs:
                  -v /tmp/pxrepo:/out \
                  centos:7 \
                  bash /src/packaging/verify_repo_el7.sh 2>&1 | tee "$RUNNER_TEMP/el7.log"; then
-            echo "::error::el7 终验失败"
-            tail -60 "$RUNNER_TEMP/el7.log" | sed 's/^/::error::el7 /'
+            bash "$GITHUB_WORKSPACE/packaging/annotate_failure.sh" el7 "$RUNNER_TEMP/el7.log"
             exit 1
           fi
 
@@ -633,8 +632,7 @@ jobs:
           if ! docker run --rm -v "$GITHUB_WORKSPACE:/src" -v /tmp/pxrepo:/out \
                  -e OE_VER=22.03 openeuler/openeuler:22.03-lts \
                  bash /src/packaging/verify_repo_openeuler.sh 2>&1 | tee "$RUNNER_TEMP/oe2203.log"; then
-            echo "::error::openEuler 22.03 终验失败"
-            tail -60 "$RUNNER_TEMP/oe2203.log" | sed 's/^/::error::oe2203 /'
+            bash "$GITHUB_WORKSPACE/packaging/annotate_failure.sh" oe2203 "$RUNNER_TEMP/oe2203.log"
             exit 1
           fi
 
@@ -645,8 +643,7 @@ jobs:
           if ! docker run --rm -v "$GITHUB_WORKSPACE:/src" -v /tmp/pxrepo:/out \
                  -e OE_VER=24.03 openeuler/openeuler:24.03-lts \
                  bash /src/packaging/verify_repo_openeuler.sh 2>&1 | tee "$RUNNER_TEMP/oe2403.log"; then
-            echo "::error::openEuler 24.03 终验失败"
-            tail -60 "$RUNNER_TEMP/oe2403.log" | sed 's/^/::error::oe2403 /'
+            bash "$GITHUB_WORKSPACE/packaging/annotate_failure.sh" oe2403 "$RUNNER_TEMP/oe2403.log"
             exit 1
           fi
 

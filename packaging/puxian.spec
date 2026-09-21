@@ -38,11 +38,12 @@ Requires:       gcc
 #   openEuler  → **没有 glibc-static 包**；libc.a 由 glibc-devel 提供（随 gcc 自动装上）
 #   ⇒ el7 用硬依赖（yum 3.4 不认弱依赖）；el9/openEuler 用 Recommends（dnf 默认装弱依赖，
 #     缺失时静默跳过 —— openEuler 正是"缺失但已由 glibc-devel 满足"的情形）
-%if "%{?dist}" == ".el7"
-Requires:       glibc-static
-%else
+# 统一用**弱依赖**（M168 修正：el7 也改弱依赖）—— 理由：
+#   ① 硬依赖会**阻断安装**：el7 的 vault 源在 CI/国内环境都可能取不到 glibc-static，
+#      而"装不上包"比"px build 缺静态 libc"严重得多；
+#   ② 缺件不再是谜题：tools/px 有静态 libc 预检，直接给出 dnf/apt 的补装命令；
+#   ③ el7 上 px build 本来就需 gcc ≥ 4.9（C11 stdatomic），单纯补 glibc-static 也不够。
 Recommends:     glibc-static
-%endif
 Requires:       bash
 Requires:       tar
 
