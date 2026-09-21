@@ -4,6 +4,7 @@
 # ------------------------------------------------------------
 # 用途：把 PuXian 的「最新发布」镜像到一个静态站点子目录，供国内用户高速下载：
 #   rpm/{7,9}/x86_64/   签名 RPM 仓库（含 repodata + repomd.xml.asc）
+#   rpm/openeuler/<ver>/x86_64/   openEuler 别名仓库（M168 · 同包同签名，元数据 gz）
 #   install-rpm.sh      安装脚本（与 gh-pages 同源）
 #   index.html          落地页
 #   releases/*.tar.gz   发布 tarball + sha256sums.txt
@@ -200,17 +201,38 @@ GOT="$(grep -F "$TARBALL" "$STAGING/releases/sha256sums.txt" | awk '{print $1}' 
 log "   ✅ tarball sha256 = $SUM（与 sha256sums.txt 一致）"
 
 # ---------- 5. 校验 RPM 仓库（签名 + 元数据） ----------
+# M168：目录集合由「写死 7/9」改为「7/9 + 实际存在的 openeuler/<ver>」——
+#   镜像侧若只认 RHEL 系，新铺的 openEuler 目录会被**静默漏掉**（用户装到 404 元数据）。
 log "④ 校验 rpm 仓库"
-for d in 7 9; do
-  rpmf="$(find "$STAGING/rpm/$d/x86_64" -maxdepth 1 -name '*.rpm' | head -1)"
-  [ -n "$rpmf" ] || die "rpm/$d/x86_64 下没有 .rpm"
+RPM_DIRS="7 9"
+for _d in "$STAGING"/rpm/openeuler/*/x86_64; do
+  [ -d "$_d" ] || continue
+  _v="$(basename "$(dirname "$_d")")"
+  RPM_DIRS="$RPM_DIRS openeuler/$_v"
+done
+log "   目录集合：$RPM_DIRS"
+for d in $RPM_DIRS; do
+  rpmf="$(find "$STAGING/rpm/$d" -maxdepth 1 -name '*.rpm' | head -1)"
+  [ -n "$rpmf" ] || die "rpm/$d 下没有 .rpm"
   rpm --import "$STAGING/rpm/PUXIAN-GPG-KEY.asc" 2>/dev/null || true
   rpm -Kv "$rpmf" >/dev/null 2>&1 || die "$(basename "$rpmf") 签名校验失败"
-  [ -f "$STAGING/rpm/$d/x86_64/repodata/repomd.xml.asc" ] || die "rpm/$d 缺少 repomd.xml.asc"
-  log "   ✅ el$d：$(basename "$rpmf") 验签通过"
+  [ -f "$STAGING/rpm/$d/repodata/repomd.xml.asc" ] || die "rpm/$d 缺少 repomd.xml.asc"
+  log "   ✅ $d：$(basename "$rpmf") 验签通过"
 done
 
 # ---------- 6. 镜像自证文件 ----------
+# M168：rpm_repo 按**实际目录集合**生成（新增 openEuler 后版本对账口径同步）
+RPM_REPO_JSON=""
+for d in $RPM_DIRS; do
+  case "$d" in
+    7)  k=el7 ;;
+    9)  k=el9 ;;
+    openeuler/*) k="openeuler_${d#openeuler/}" ;;
+    *)  k="$d" ;;
+  esac
+  [ -n "$RPM_REPO_JSON" ] && RPM_REPO_JSON="$RPM_REPO_JSON, "
+  RPM_REPO_JSON="$RPM_REPO_JSON\"$k\": \"rpm/$d/\""
+done
 cat > "$STAGING/version.json" <<JSON
 {
   "version": "$TAG",
@@ -220,10 +242,10 @@ cat > "$STAGING/version.json" <<JSON
   "source": "https://github.com/$REPO_SLUG",
   "tarball": "releases/$TARBALL",
   "tarball_sha256": "$SUM",
-  "rpm_repo": { "el7": "rpm/7/x86_64/", "el9": "rpm/9/x86_64/" }
+  "rpm_repo": { $RPM_REPO_JSON }
 }
 JSON
-log "⑤ version.json 就绪"
+log "⑤ version.json 就绪（rpm_repo: $RPM_REPO_JSON）"
 
 if [ "$DRY" = 1 ]; then
   log "🧪 --dry-run：解析与校验全部通过，未写 DEST"

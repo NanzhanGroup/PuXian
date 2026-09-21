@@ -1658,9 +1658,12 @@ set_timeout(fn (): print("once after 2s"), 2000)
      `pxc` / `pxc_sub` / `pxc_run`）后退出、不编译 —— 宿主架构自适应这类决策**无法在 x86_64 上
      端到端验证**（跨架构库装不进本机链接器），做成可断言输出就能在任意宿主上把关。
      等价 `PX_BUILD_PRINT_PLAN=1`；门 `examples/m159_hostarch/verify.sh`（8 层 + 2 道负控）据此判。
-180. **宿主非 x86_64 ⇒ 默认轨自动落 C 轨（第 45 轮 · M159）**：用户面默认 `engine=vm` 依赖
-     `bootstrap/pxc_vm`（**x86_64 动态件**）⇒ arm/riscv 上起不来。现在按「能否在本机执行」判定
-     并自动切 C 轨，**明确提示不静默**；自备该架构 `pxc_vm` 时设 `PXC_VM_BIN` 保留 VM 轨。
+180. **VM 轨可用性按「能否在本机执行」判定（M159 建立 · M168 放宽）**：用户面默认 `engine=vm` 依赖
+     `bootstrap/pxc_vm`。M168 起入库 `pxc_vm` 已**静态化**（14 件全静态），但判据仍保留
+     「**本机执行不了 ⇒ 自动落 C 轨**」并**明确提示原因**（跨架构 / glibc 不够两种都覆盖 ——
+     历史判据只看"架构 ≠ x86_64"，把 el7(glibc 2.17) 整类漏掉）。
+     自备该架构 `pxc_vm` 时设 `PXC_VM_BIN` 保留 VM 轨；要它对失败**响亮报错**设 `PX_STRICT_VM=1`。
+     依赖自检：`selfhost/check_bin_portability.sh <bin>`（全静态 / 最高 GLIBC 与基线比较）。
      另：`bootstrap/pxc-<本机架构>` 若存在且可执行，C 轨优先用它（自举件装上即用）。
 181. **裁 QUIC 要连 H3 四件一起剔（第 45 轮 · M159 实测）**：`-DPX_NO_QUIC` 只守卫 `runtime.c`
      与 `runtime_zlib.c`；`runtime_quic.c` **没有**守卫（其 `ngtcp2/*.h` 非 x86_64 平台不存在），

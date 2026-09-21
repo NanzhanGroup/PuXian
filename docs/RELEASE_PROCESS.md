@@ -24,15 +24,43 @@ git push origin v0.2.0-m167 # 触发 .github/workflows/release.yml
 | Job | 产物 | 说明 |
 |---|---|---|
 | 主包（x86_64） | `puxian-<ver>-m<N>-<sha>.tar.gz` · `sha256sums.txt` | `tools/make_release.sh` 构建（版本自 tag 派生）+ 内置冒烟自检 |
-| **aarch64 自举件（M159）** | `puxian-bootstrap-aarch64-<tag>.tar.gz` + `.sha256` | 在 GitHub **原生 arm64 runner** 上 **gcc-only 从源码自举**（含**自证**：新编 pxc 编 `compiler.px` 与 `golden/compiler.c` 逐字节一致）+ 现编核心工具 + 零参数冒烟 + 打包 |
+| **aarch64 自举件（M159 建立 · M168 静态化）** | `puxian-bootstrap-aarch64-<tag>.tar.gz` + `.sha256` | 在 GitHub **原生 arm64 runner** 上 **gcc-only 从源码自举**（含**自证**：新编 pxc 编 `compiler.px` 与 `golden/compiler.c` 逐字节一致）+ 现编**全部 12 件**原生工具 + **可移植性门**（全静态 + aarch64）+ 零参数冒烟 + 打包 |
 
 > **为什么要有 aarch64 并列资产**：主包里的 `bootstrap/*` 是 x86_64 件，在 aarch64 上直接跑会
 > `Exec format error`。并列包内 `bootstrap/*` 即 aarch64 原生件，解压即可用；也可在任意 aarch64
-> 机器上用 `./selfhost/native_bootstrap.sh --install` 自举整套。
+> 机器上用 `./selfhost/native_bootstrap.sh --portable --install` 自举整套。
+>
+> ⚠ **包内必须全静态（M168 用户报障）**：v0.2.0-m167 及更早的 aarch64 包里 `pxc` 是**动态件**
+> （宿主 ubuntu-24.04 的系统 gcc 默认动态链接）⇒ 带 `GLIBC_2.38` 需求，在 openEuler 22.03
+> （glibc 2.34）上「装上了、跑不起来」。而 runner 自己就是 2.38 ⇒ 自证永远绿。
+> 现在：`--portable` 强制静态 + 包前跑 `selfhost/check_bin_portability.sh --arch aarch64
+> --require-static bootstrap/*`（不是全静态即 job 红）；VM 轨两件（`pxc_vm`/`pxi_vm`，
+> x86_64 专属）**不随包发布**，aarch64 上 `px build` 自动走 C 轨。
 >
 > ⚠ **上传必须显式 `--repo <owner/repo>`**：`gh release upload` 在 cwd 不在 git 仓库内时（runner 用
 > `$RUNNER_TEMP` 打包）无法推断仓库 ⇒ 会失败。已修（M159），历史 tag m159 因此只发布了主包 +
 > sha256sums，并列资产自 **m162 起随包发布**。
+
+## RPM 仓库分发（el7 / el9 / openEuler）
+
+tag 推送同时触发 `release.yml` 的 rpm 链（**GPG secrets 未配置时各 job 自动跳过**，保持绿）：
+
+| Job | 干什么 | 产物 |
+|---|---|---|
+| `rpm-build-7` | centos:7 容器内**无签名**构建 el7 rpm（EOL vault 源修正 + createrepo gzip） | `pxrepo-7` |
+| `rpm-build-9` | rockylinux:9 构建 el9 签名仓库 + **代签 el7** + **入库件可移植性门** + **组 openEuler 别名仓库** | `pxrepo-all` |
+| `rpm-verify-7` | centos:7 + yum 3.4 双验签 → 安装 → **真编译运行** + 入库件静态性 ldd 断言 | — |
+| `rpm-verify-openeuler`（M168） | `openeuler:22.03-lts` / `24.03-lts` 容器：dnf 双验签 → 装包 → **真编译运行** | — |
+| `rpm-publish` | 就绪检查（7/9 + openeuler 别名 + 公钥）→ rsync 推 gh-pages（含站点根 `install-rpm.sh`/`index.html`） | gh-pages |
+
+目录语义（M168 起**显式化**）：`rpm/7/x86_64`、`rpm/9/x86_64`（RHEL 系，repo 文件用
+`$releasever/$basearch`）、`rpm/openeuler/<ver>/x86_64`（openEuler，repo 文件写**字面**目录；
+元数据 gz，兼容各版本 libdnf）。
+
+> ⚠ **为什么必须真跑一次 `px build`**：M168 前 el7 终验只跑 `pxc --version` —— 走的是 C 轨
+> 静态件，恰好正常；而**用户面默认 VM 轨**用的 `bootstrap/pxc_vm` 当时是动态件（需 GLIBC_2.34），
+> 在 el7（glibc 2.17）上一执行就崩 ⇒ 整类缺陷看不见。现在两个终验脚本都真编译 + 运行，
+> 并断言入库件全静态。
 
 构建冒烟自检（任一失败即 workflow 失败、不产生 Release）：① `pxc --version` ② hello 编译（静态 ELF）+ 运行
 ③ hello 解释运行 ④ `import std.collections` 编译（stdlib 定位）⑤ 包外目录 + `PX_STDLIB` env 编译。

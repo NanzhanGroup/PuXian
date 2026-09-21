@@ -12,7 +12,7 @@
 # 入库口径：
 #   bootstrap/pxc     = compiler.px 的 C 镜像   → gcc **-static** + **全 runtime 对象**
 #   bootstrap/pxc_vm  = compiler.px 的字节码镜像 + VM 驱动（**用户面默认轨**：
-#                       `tools/px` → `bootstrap/pxc_vm`）→ 动态链
+#                       `tools/px` → `bootstrap/pxc_vm`）→ **静态链**（M168；见下）
 #
 # 门的判据（两轨各有门，**判据不重叠**；M113-S2 起）：
 #   ① 产物来源（O(1)，两轨共用，**强判据**）：重烘时把**源码链指纹**
@@ -175,11 +175,13 @@ rtfp_gate() {                         # $1=二进制 $2=标签 → 0 一致 / 1 
 #   ⇒ Issue 54 的僵尸回收修复在解释轨不生效（实测 `px run` 仍留 5 个 <defunct>）。
 #
 # 表格式：件名|入口源（相对 $ROOT）|生成轨（c=C 文本 / vm=字节码镜像）|链接（static/dynamic）
-# 口径来源：实测 `ldd bootstrap/*`（13 件静态 + pxc_vm 动态）+ `selfhost/build/interp_vm.c`
-#   的存在（pxi_vm 与 pxc_vm 同为 `--emit-c` 产物，只是历史链接方式不同 —— 按实测保留，
-#   不在本切片统一它，避免顺手改掉用户面件的链接形态）。
+# 口径来源：实测 `ldd bootstrap/*`（M168 起 **14 件全静态**）+ `selfhost/build/interp_vm.c`
+#   的存在（pxi_vm 与 pxc_vm 同为 `--emit-c` 产物，历史链接方式不同 —— M168 统一为静态）。
+#   ⚠️ M168（2026-09-21 用户报障同源）为什么必须统一：pxc_vm 是**用户面默认轨**，它曾是
+#   动态件（要求 GLIBC_2.34）⇒ 在 el7（glibc 2.17）上 `px build` 一执行就崩，而发布链
+#   （el7 job 只 `pxc --version`）看不见。静态化后与其余 13 件同口径：零动态依赖。
 ENTRIES="pxc|selfhost/compiler.px|c|static
-pxc_vm|selfhost/compiler.px|vm|dynamic
+pxc_vm|selfhost/compiler.px|vm|static
 pxi|selfhost/interp.px|c|static
 pxi_vm|selfhost/interp.px|vm|static
 pxl|selfhost/lexer.px|c|static
@@ -311,13 +313,13 @@ link_c_track() {     # $1=compiler_new.c  $2=输出（静态 + 全 runtime）
         echo "❌ 链接失败：$out" >&2; tail -10 /tmp/rebake_link.log >&2; return 1; }
     return 0
 }
-link_vm_track() {    # $1=compiler_vm.c  $2=输出（动态 = 用户面默认轨口径）
+link_vm_track() {    # $1=compiler_vm.c  $2=输出（M168 起 **-static** = 用户面默认轨口径）
     local cfile="$1" out="$2" objs="" f fp=""
     [ "$LINK_FP" = "1" ] && fp="$FP_OBJ"
     gcc -c -O2 -I"$CACHE" -I"$RT" "$cfile" -o /tmp/rebake_vm.o 2>/tmp/rebake_vmcc.log || {
         echo "❌ compiler_vm.c 编译失败" >&2; tail -10 /tmp/rebake_vmcc.log >&2; return 1; }
     for f in "$CACHE"*.o; do objs="$objs $f"; done
-    gcc -O2 -pthread -o "$out" /tmp/rebake_vm.o $objs $fp \
+    gcc -static -O2 -pthread -o "$out" /tmp/rebake_vm.o $objs $fp \
         "$RT/third_party/sqlite3/sqlite3.o" \
         "$RT/mbedtls/lib/libmbedtls.a" "$RT/mbedtls/lib/libmbedx509.a" "$RT/mbedtls/lib/libmbedcrypto.a" \
         "$RT/third_party/ngtcp2/lib/libngtcp2.a" "$RT/third_party/ngtcp2/lib/libngtcp2_crypto_quictls.a" \
@@ -588,7 +590,7 @@ cp -a "$PXC" "/tmp/pxc.bak-$(date +%Y%m%d-%H%M%S)"      # 备份到 /tmp，不�
 LINK_FP=1
 link_c_track "$BUILD/compiler_new.c" "$PXC" || exit 1
 
-echo "── 步骤 3/4：--emit-c 生成字节码镜像 → 链 bootstrap/pxc_vm（动态）"
+echo "── 步骤 3/4：--emit-c 生成字节码镜像 → 链 bootstrap/pxc_vm（静态 · M168）"
 # 发射用「刚链出的 C 轨件」（与 bootstrap_prove_bc.sh 同一链路口径）
 LINK_FP=0
 link_c_track "$BUILD/compiler_new.c" "$BUILD/compiler_new" || exit 1

@@ -583,16 +583,27 @@ cmd_build() {
         fi
     fi
     [ "$mbedtls_lib" = "" ] && mbedtls_lib="$RT_DIR/mbedtls/lib"
-    # ---- M159（R45）：**宿主非 x86_64 ⇒ VM 轨自动落 C 轨**（明确提示，不静默）----
-    #   入库 VM 版编译器（bootstrap/pxc_vm）是 x86_64 动态件 ⇒ aarch64/riscv64 原生机上
-    #   用户面默认轨（engine=vm）根本起不来。此处按「能否在本机执行」判定，落到 C 轨；
-    #   自备该架构 pxc_vm 的用户设 PXC_VM_BIN 即保留 VM 轨。
-    if [ "$engine" = "vm" ] && [ -n "$host_a" ] && [ "$host_a" != "x86_64" ] && [ -z "${PXC_VM_BIN:-}" ]; then
+    # ---- M159（R45）：宿主非 x86_64 ⇒ VM 轨自动落 C 轨（明确提示，不静默）----
+    # ---- M168（分发可移植性收口）：判据由「**架构不符**」放宽为「**本机跑不起来**」----
+    #   实锤（2026-09-21 用户报障同源）：入库 bootstrap/pxc_vm 曾是**动态件**且要求
+    #   GLIBC_2.34 ⇒ 在 el7（glibc 2.17）上 `px build`（用户面默认 VM 轨）一 exec 就崩；
+    #   而旧判据只看「宿主架构 ≠ x86_64」⇒ **x86_64 的 el7 被整类漏掉**（架构对、
+    #   glibc 不够）。现在统一按「能否在本机执行」判定，失败即落 C 轨并说明真实原因；
+    #   要强制失败（例如 CI 断言 VM 轨可用）设 PX_STRICT_VM=1。
+    if [ "$engine" = "vm" ] && [ -z "${PXC_VM_BIN:-}" ]; then
         local _vmb="$PXC_HOME/bootstrap/pxc_vm"
         if [ ! -x "$_vmb" ] || ! cmp_runnable "$_vmb"; then
+            if [ "${PX_STRICT_VM:-0}" = 1 ]; then
+                echo "错误: PX_STRICT_VM=1 要求 VM 轨可用，但 $_vmb 在本机不可执行" >&2
+                echo "  件架构 $(bin_arch_hint "$_vmb") / 本机 $(uname -m)" >&2
+                echo "  依赖自检：selfhost/check_bin_portability.sh $_vmb" >&2
+                return 1
+            fi
             engine=c
-            echo "提示: 宿主机 $host_a —— 入库 VM 版编译器（bootstrap/pxc_vm）是 x86_64 件，本机不可执行" >&2
-            echo "      ⇒ 本次自动走 C 轨（等价 PX_BUILD_ENGINE=c）；自备该架构 pxc_vm 时设 PXC_VM_BIN 保留 VM 轨" >&2
+            echo "提示: 入库 VM 版编译器（bootstrap/pxc_vm）**在本机不可执行** ⇒ 本次自动走 C 轨（= PX_BUILD_ENGINE=c）" >&2
+            echo "      件架构 $(bin_arch_hint "$_vmb") / 本机 $(uname -m)；常见原因：① 跨架构 ② 该件所需 glibc 高于本机" >&2
+            echo "      依赖自检：selfhost/check_bin_portability.sh $_vmb" >&2
+            echo "      自备本机 VM 件时设 PXC_VM_BIN 保留 VM 轨；要它对失败响亮报错设 PX_STRICT_VM=1" >&2
         fi
     fi
     # M61-S0：zlib 外部静态库 —— 显式 --zlib-lib 优先，否则按 cc 架构自动探测
@@ -756,6 +767,26 @@ cmd_build() {
     # relocations" → riscv64 交叉加 -no-pie 传统静态
     local pie_flag=""
     case "$cc" in *riscv64*) pie_flag=" -no-pie" ;; esac
+    # ---- M168：静态 libc 预检（**响亮报因**，不让用户对着 gcc 的 "cannot find -lc" 发呆）----
+    #   `px build` 一律以 -static 链接产物（口径见文件头）⇒ 本机必须有静态 libc：
+    #     RHEL / openEuler → glibc-static · Debian / Ubuntu → libc6-dev
+    #   实锤（2026-09-21 报障同源）：rpm 的 Requires 只写了 gcc，用户装完就栽在这里。
+    #   本次运行只探测一次（结果缓存在 _PX_STATIC_LIBC_OK）。
+    if [ "${_PX_STATIC_LIBC_OK:-}" != 1 ]; then
+        local _probe_c="${TMPDIR:-/tmp}/.px_static_probe.c" _probe_b="${TMPDIR:-/tmp}/.px_static_probe.bin"
+        printf 'int main(void){return 0;}\n' > "$_probe_c"
+        if $cc -static -o "$_probe_b" "$_probe_c" >/dev/null 2>&1; then
+            _PX_STATIC_LIBC_OK=1
+            rm -f "$_probe_c" "$_probe_b"
+        else
+            rm -f "$_probe_c" "$_probe_b"
+            echo "错误: $cc 无法静态链接（缺**静态 libc**）—— PuXian 产物一律 -static" >&2
+            echo "  RHEL / openEuler: sudo dnf install -y glibc-static" >&2
+            echo "  Debian / Ubuntu:  sudo apt-get install -y libc6-dev" >&2
+            echo "  （走 rpm 包安装时：puxian 的 Requires 已含 glibc-static，请确认装全）" >&2
+            return 1
+        fi
+    fi
     cc_cmd="$cc -static -O2 -pthread$pie_flag$lto_flag -o \"$out_path\" \"$build_dir/$base.o\" $objs"
     if ! cut_has "$cuts" sqlite; then
         cc_cmd="$cc_cmd \"$sqlite_src\""

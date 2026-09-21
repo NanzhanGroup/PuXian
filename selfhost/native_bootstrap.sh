@@ -3,7 +3,7 @@
 # selfhost/native_bootstrap.sh —— **只用 gcc 的原生/交叉自举**（M159 / R45 · 缺口 G1+G2+G4）
 # ------------------------------------------------------------
 # 存在理由（第三方仓库照出来的一等缺口）：
-#   入库的 bootstrap/* 全是 **x86_64** 二进制（pxc/pxi/pxl/…，14 件静态 + pxc_vm 动态）。
+#   入库的 bootstrap/* 全是 **x86_64** 二进制（pxc/pxi/pxl/…，M168 起 14 件全静态）。
 #   ⇒ 在 aarch64 / riscv64 / armv7 **原生**上，`tools/px` 连第一步都跑不起来（Exec format
 #     error），用户只能自己从源码搓一套自举链 —— banshanhanfu/px-openEuler-bootstrap
 #     就是为此诞生的第三方仓。
@@ -25,6 +25,9 @@
 #   ./selfhost/native_bootstrap.sh --install                # 装成 bootstrap/pxc-<target>（非本机架构时）
 #                                                           # 本机架构则**拒绝**覆盖入库件（那份由
 #                                                           # selfhost/rebake_bin.sh 重烘，带出厂指纹）
+#   ./selfhost/native_bootstrap.sh --portable               # **发布资产口径**：产物必须全静态
+#                                                           # （M168：默认 auto 也是「尽量静态 +
+#                                                           #   不是静态就判红」；--dynamic 才放行）
 #   CC=aarch64-linux-gnu-gcc ./selfhost/native_bootstrap.sh --target-arch aarch64 --no-quic   # 手工交叉
 # 退出码：0 = 成功（含自证）；非 0 = 失败（打印首个失败日志尾部）
 # ============================================================
@@ -41,6 +44,8 @@ PROVE=1
 TA=""                 # 目标架构（空 = 本机）
 FORCE_NQ=""           # 1 = 强制 --no-quic（--no-quic 显式给定）
 INSTALL=0
+LINK_MODE="auto"      # auto（默认 = **尽可能静态**）/ static（必须静态）/ dynamic（显式接受动态）
+GLIBC_BASE="2.34"     # 可移植性基线（el9 / openEuler 22.03）
 while [ $# -gt 0 ]; do
     case "$1" in
         --outdir) OUTDIR="$2"; shift 2 ;;
@@ -49,6 +54,9 @@ while [ $# -gt 0 ]; do
         --target-arch) TA="$2"; shift 2 ;;
         --no-quic) FORCE_NQ=1; shift ;;
         --install) INSTALL=1; shift ;;
+        --portable) LINK_MODE="static"; shift ;;   # 发布资产口径：必须全静态
+        --static)   LINK_MODE="static"; shift ;;
+        --dynamic)  LINK_MODE="dynamic"; shift ;;  # 显式接受动态件（自用/调试）
         -h|--help) sed -n '2,42p' "$0"; exit 0 ;;
         *) echo "未知参数: $1" >&2; exit 2 ;;
     esac
@@ -115,9 +123,19 @@ case "$TA" in
 esac
 [ -n "$FORCE_NQ" ] && NQ="-DPX_NO_QUIC"
 # 交叉档产物一律静态（musl 默认静态，显式写出避免 glibc 交叉链出动态件）
+# ---- 链接形态：**默认静态**（M168）----
+# 为什么改默认（2026-09-21 用户报障）：本脚本原先只对**交叉档**加 -static，原生档
+#   走系统 gcc 的默认动态链接 ⇒ 官方 aarch64 引导包里的 pxc 带 GLIBC_2.38 需求，
+#   在 openEuler 22.03（glibc 2.34）上「装得上、跑不起来」。而 runner 自己就是 2.38，
+#   **CI 永远绿**。⇒ 现在：默认 auto = 尝试 -static；auto 下若最终不是全静态则**判红**
+#   （不是警告），要让动态件通过必须显式 `--dynamic`（把决定权交回人，且留痕）。
 LINK_EXTRA=""
-[ "$CROSS" = 1 ] && LINK_EXTRA="-static"
+case "$LINK_MODE" in
+    dynamic) LINK_EXTRA="" ;;
+    static|auto) LINK_EXTRA="-static" ;;
+esac
 [ -n "$NQ" ] && say "── 裁剪 QUIC/H3（$TA 无预编译 ngtcp2/openssl-quictls 静态库）"
+say "── 链接形态：$LINK_MODE（${LINK_EXTRA:-动态}）· 可移植性基线 glibc $GLIBC_BASE"
 
 # ---- 步骤 1：runtime 目标文件（**原地编译**：源取自 runtime/，头路径按 include 语义全给）
 say "── 步骤 1/4：编译 runtime（$(ls "$RT"/*.c | wc -l) 个 .c + miniz 3 个）"
@@ -192,7 +210,46 @@ for l in -ldl -lpthread; do
     fi
 done
 say "   链接附加库：${LIBS_EXTRA:-（无）}"
-$CC -O2 -pthread $LINK_EXTRA -o "$OUTDIR/pxc0" "$OUTDIR/compiler_golden.o" "$OUTDIR"/obj/*.o $libs -lm $LIBS_EXTRA > "$CPX_LOG" 2>&1 || { say "❌ 链接 pxc0 失败"; tail_log "$CPX_LOG"; exit 1; }
+_link_pxc0() {   # $1=附加链接 flag（可为空）→ 0 成功
+    # shellcheck disable=SC2086
+    $CC -O2 -pthread $1 -o "$OUTDIR/pxc0" "$OUTDIR/compiler_golden.o" "$OUTDIR"/obj/*.o $libs -lm $LIBS_EXTRA \
+        > "$CPX_LOG" 2>&1
+}
+if ! _link_pxc0 "$LINK_EXTRA"; then
+    if [ "$LINK_MODE" = auto ] && [ -n "$LINK_EXTRA" ]; then
+        say "⚠ 静态链接失败（本工具链可能缺 static libc：debian/ubuntu 装 libc6-dev，RHEL 装 glibc-static）"
+        say "  ⇒ auto 档回退动态链接**再判**：若最终不是全静态，本步会判红（见下）"
+        tail_log "$CPX_LOG"
+        LINK_EXTRA=""
+        _link_pxc0 "" || { say "❌ 链接 pxc0 失败（动态回退也不成）"; tail_log "$CPX_LOG"; exit 1; }
+    else
+        say "❌ 链接 pxc0 失败（$LINK_MODE / ${LINK_EXTRA:-动态}）"; tail_log "$CPX_LOG"; exit 1
+    fi
+fi
+
+# ---- 可移植性门（M168）：把「这枚二进制到底依赖什么」变成**可判定的数字** ----
+#   判据：全静态 ✅；动态件最高 GLIBC > 基线 ❌。auto/static 档判红即**退出**，
+#   不给「警告了但还是发出去」的暗门 —— 这正是第三方撞的那个坑。
+PORT_CHECK="$ROOT/selfhost/check_bin_portability.sh"
+if [ -x "$PORT_CHECK" ] || [ -f "$PORT_CHECK" ]; then
+    _pflags=(--arch "$TA" -b "$GLIBC_BASE")
+    [ "$LINK_MODE" != dynamic ] && _pflags+=(--require-static)
+    if bash "$PORT_CHECK" "${_pflags[@]}" "$OUTDIR/pxc0" | sed 's/^/   /'; then
+        :
+    else
+        if [ "$LINK_MODE" = dynamic ]; then
+            say "   （--dynamic 已显式接受动态件；**不要**把它当发布资产）"
+        else
+            say "❌ 可移植性门判红：产物未达「全静态/≤glibc $GLIBC_BASE」口径。"
+            say "   修法：装 static libc 后重跑（debian/ubuntu: libc6-dev；RHEL: glibc-static），"
+            say "         或换 musl 交叉工具链（--target-arch $TA 会自动找 /opt/$TA-linux-musl-cross）。"
+            say "   仅当**明确自用**、不在意目标机 glibc 时，才用 --dynamic 显式放行。"
+            exit 1
+        fi
+    fi
+else
+    say "⚠ 未找到可移植性门 $PORT_CHECK ⇒ 跳过静态性断言（**不静默**：发布链必须带此门）"
+fi
 say "   ✅ $OUTDIR/pxc0（$(stat -c %s "$OUTDIR/pxc0") 字节）· $(file -b "$OUTDIR/pxc0" 2>/dev/null | cut -c1-60)"
 
 # ---- 步骤 3：自证（pxc0 编译 compiler.px 与基准逐字节一致）—— 仅同架构可跑
@@ -234,4 +291,7 @@ if [ "$INSTALL" = 1 ]; then
         say "     源码链指纹 + 行为对拍）—— 本脚本**不覆盖**它。若要手动顶上：cp $OUTDIR/pxc bootstrap/pxc"
     fi
 fi
-say "NATIVE-BOOTSTRAP-OK host=$HOST_A target=$TA cross=$CROSS no_quic=$([ -n "$NQ" ] && echo 1 || echo 0) static=$([ -n "$LINK_EXTRA" ] && echo 1 || echo 0)"
+_is_static=0
+if ! readelf -d "$OUTDIR/pxc" 2>/dev/null | grep -q NEEDED; then _is_static=1; fi
+_glibc="$(objdump -T "$OUTDIR/pxc" 2>/dev/null | grep -o 'GLIBC_[0-9]\+\.[0-9]\+' | sed 's/GLIBC_//' | sort -Vu | tail -1)"
+say "NATIVE-BOOTSTRAP-OK host=$HOST_A target=$TA cross=$CROSS no_quic=$([ -n "$NQ" ] && echo 1 || echo 0) static=$_is_static link=$LINK_MODE glibc=${_glibc:-none}"
