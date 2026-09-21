@@ -26,6 +26,7 @@
 #   ④ **runtime native ⊆ 名册**：`px_set_global(..., px_native)` 全量必须覆盖
 #     （防生成器口径被收窄后本门「跟着变绿」——判据独立于生成器）。
 #   ⑤ 解析健全性：名册 < 200 名即判 rc=2（正则失配 / 文件缺失不许静默）。
+#   ⑦ 两轨内置集一致（M177）：解释轨注册名 ⊆ runtime 可达名（防「解释轨有、编译轨 R1001」）。
 #   ⑥ 宿主注入全局 ⊆ 名册（M171：`px_dict_set(env, …)` 的 REQUEST/GET/POST/SERVER，
 #     判据独立于生成器 —— 同 ④ 的理由）。
 #
@@ -146,6 +147,22 @@ if [ -n "$miss6" ]; then
     bad=$((bad+1))
 else
     echo "    ✅ ⑥ 宿主注入全局 ⊆ 内置名册（$n_host 名全覆盖：REQUEST/GET/POST/SERVER）"
+fi
+
+# ⑦ 两轨内置集一致（M177 加）：**解释轨有、runtime 没有**的名字 = 用户照解释轨写、
+#   一上编译轨就 `R1001 未定义变量`。判据独立于生成器（生成器取的是**并集**，天生看不见这类差）。
+#   实测盲区（M177 发现）：`dict` / `unique` / `flatten` 三个名字只在解释轨有，
+#   而门 ③④ 都只看「⊆ 名册」⇒ 全绿，直到真去编译才炸。
+interp_only=$(comm -23 <(interp_names) <( { grep -h 'px_set_global("' runtime/*.c 2>/dev/null \
+    | sed -n 's/.*px_set_global("\([A-Za-z_][A-Za-z0-9_]*\)".*/\1/p'; \
+    grep -h 'px_ffi_register("' runtime/*.c 2>/dev/null \
+    | sed -n 's/.*px_ffi_register("\([A-Za-z_][A-Za-z0-9_]*\)".*/\1/p'; } | grep -v '^__' | sort -u))
+if [ -n "$interp_only" ]; then
+    echo "❌ ⑦ 解释轨有、runtime 没有的内置（编译轨会 R1001 未定义变量）："
+    printf '%s\n' "$interp_only" | sed 's/^/     /'
+    bad=$((bad+1))
+else
+    echo "    ✅ ⑦ 两轨内置集一致（解释轨注册名全部在 runtime 里可达）"
 fi
 
 if [ "$bad" -gt 0 ]; then

@@ -156,6 +156,9 @@ examples/m175_bytes_stderr/popen_null.px src=cce5f62a26649f0e rc=0 out=4c57796a7
 examples/m175_bytes_stderr/popen_pipe.px src=43b58031b6b14f7f rc=0 out=a517c0595f17e100d0051ba9e1b28ffb err=e3b0c44298fc1c14
 examples/m176_reuseport/client.px src=d7c5ee367de15660 rc=0 out=940b9e8d472aae49f1ca2af2d2794a6d err=e3b0c44298fc1c14
 examples/m176_reuseport/srv.px src=49585b4fcee06e60 rc=0 out=836524d0093e01cac0a58b2c250bde71 err=e3b0c44298fc1c14
+examples/m177_builtin_parity/err_min_empty.px src=a72412d2f887fb9d rc=0 out=ab4bff7506826cbbd936f704dcd729ce err=e3b0c44298fc1c14
+examples/m177_builtin_parity/err_sum_int.px src=321ec12b2688c39d rc=0 out=73a3d89182c15e7d3e827762252e8bbf err=e3b0c44298fc1c14
+examples/m177_builtin_parity/iter_builtins.px src=a71036c73f4e2eaa rc=0 out=4e827643db64ddf0660b8f2d2374c666 err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=ca57a90d693278f051ce29d427bb006a err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=864a86fa0f3b5c69d3239ebdb2eac63a err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14

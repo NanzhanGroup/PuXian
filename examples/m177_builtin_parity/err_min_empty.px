@@ -1,0 +1,5 @@
+# M177 门 · 用例 C：空可迭代 ⇒ 响亮（不静默给 null）
+# 期望：rc≠0 · stdout 恰为 before · stderr 含 R1002 与 `min 需要至少一个元素`
+print("before")
+print(str(min([])))
+print("after")

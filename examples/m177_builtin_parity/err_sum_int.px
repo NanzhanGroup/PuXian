@@ -1,0 +1,5 @@
+# M177 门 · 用例 B：真正不支持的类型 ⇒ 三轨**同码同文**（R1002 + 统一文案）
+# 期望：rc≠0 · stdout 恰为 before · stderr 含 R1002 与 `sum 参数需要 list/tuple/生成器`
+print("before")
+print(str(sum(5)))
+print("after")
