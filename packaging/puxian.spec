@@ -25,13 +25,24 @@ Name:           puxian
 Version:        %{pxver}
 Release:        1.%{pxtag}%{?dist}
 Summary:        PuXian programming language compiler and toolchain
-
 License:        Apache-2.0
 URL:            https://github.com/NanzhanGroup/PuXian
 Source0:        puxian-%{version}-%{pxtag}-%{pxsha}.tar.gz
 
 # pxc build 需要 C 编译器（gcc 静态链接 .px → ELF）
 Requires:       gcc
+# px build 一律以 -static 链接产物 ⇒ 必须有**静态 libc**（M168 补：历史只写 gcc，
+#   用户装完 `px build` 就栽在 gcc 的 "cannot find -lc" 上）。
+# 各发行版归属不同（M168 实测）：
+#   el7 / el9  → 包名 glibc-static（glibc-devel **不含** libc.a）
+#   openEuler  → **没有 glibc-static 包**；libc.a 由 glibc-devel 提供（随 gcc 自动装上）
+#   ⇒ el7 用硬依赖（yum 3.4 不认弱依赖）；el9/openEuler 用 Recommends（dnf 默认装弱依赖，
+#     缺失时静默跳过 —— openEuler 正是"缺失但已由 glibc-devel 满足"的情形）
+%if "%{?dist}" == ".el7"
+Requires:       glibc-static
+%else
+Recommends:     glibc-static
+%endif
 Requires:       bash
 Requires:       tar
 

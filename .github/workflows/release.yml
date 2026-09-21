@@ -108,8 +108,27 @@ jobs:
   #   --check-all）与发布包可复现性守卫（Issue 56）约束 —— 跨 runner 现编件不进那套记账，
   #   故单独成资产、单独带 sha256。
   # ============================================================
+  # ============================================================
+  # M159（R45 · 缺口 G1）：**aarch64 自举件**做成一等发布资产
+  # M168（2026-09-21 用户报障）：**包内工具链必须与 glibc 版本解耦**
+  # ------------------------------------------------------------
+  # 缺口一（M159，第三方仓库照出来）：入库 bootstrap/* 只有 x86_64 件 ⇒ aarch64 用户
+  #   解压主包后 `px build` 直接 Exec format error，只能自己搓自举链。
+  # 缺口二（M168，用户实测报出）：本 job 原先把 pxc 交给 runner 的**系统 gcc 动态链接**
+  #   （CROSS=0 时 LINK_EXTRA 为空）⇒ 发布包里的 pxc 带 `GLIBC_2.38` 需求，而 openEuler
+  #   22.03 只有 glibc 2.34 ⇒ **装上了、跑不起来**；而 runner 自己就是 2.38，**CI 永远绿**。
+  # 本 job 现在（M168）：
+  #   ① `native_bootstrap.sh --portable` —— 强制 -static，并在脚本内接
+  #      `selfhost/check_bin_portability.sh`（auto 档下不是全静态即判红）；
+  #   ② 现编 **全部** 12 件原生工具（不再只 pxc/pxi/pxl/pxpar —— 否则包里混着
+  #      x86_64 的 pxfmt/pxlint/… 用户一跑就 Exec format error）；
+  #   ③ VM 轨两件（pxc_vm / pxi_vm）**不随包发布**：它们由 x86_64 侧 `--emit-c` 产出，
+  #      且 aarch64 上 `tools/px` 会自动落 C 轨（M159 宿主架构自适应，CI 有断言）；
+  #   ④ 包前跑**可移植性门**（全静态 + 架构 aarch64），任何一件不合规即 job 红；
+  #   ⑤ 仍保留自证：自举出的 pxc 编译 compiler.px 与入库 golden/compiler.c 逐字节一致。
+  # ============================================================
   bootstrap-arm64:
-    name: aarch64 自举件（原生 arm64 runner · gcc-only · 含自证）
+    name: aarch64 自举件（原生 arm64 runner · gcc-only · 全静态 · 含自证）
     needs: [release]
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
@@ -117,32 +136,52 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 环境自述（宿主 / gcc / libc —— 供 R1002 取证）
+      - name: 环境自述（宿主 / gcc / libc / 静态 libc —— 取证用）
         run: |
           uname -m; uname -sr
           gcc --version | head -1
           ldd --version | head -1
+          # 静态链接需要静态 libc：debian/ubuntu 在 libc6-dev 里（默认已装），
+          # 缺了本 job 会红（**不静默降级**为动态件 —— 那正是 M168 要治的病）
+          ls -l /usr/lib/aarch64-linux-gnu/libc.a 2>/dev/null || sudo apt-get install -y libc6-dev
+          ls -l /usr/lib/aarch64-linux-gnu/libc.a
 
-      - name: 原生自举 + 自证（pxc0 编 compiler.px ↔ golden/compiler.c）
+      - name: 原生自举 + 自证（--portable：全静态 + pxc0 编 compiler.px ↔ golden/compiler.c）
         run: |
           set -e
-          bash selfhost/native_bootstrap.sh --outdir "$RUNNER_TEMP/nb" 2>&1 | tee "$RUNNER_TEMP/nb.log"
+          bash selfhost/native_bootstrap.sh --portable --outdir "$RUNNER_TEMP/nb" 2>&1 | tee "$RUNNER_TEMP/nb.log"
           grep -q "NATIVE-BOOTSTRAP-OK" "$RUNNER_TEMP/nb.log"
+          grep -q "static=1" "$RUNNER_TEMP/nb.log" || { echo "::error::自举件不是全静态"; exit 1; }
           test -x "$RUNNER_TEMP/nb/pxc"
 
-      - name: 现编核心工具（pxi / pxl / pxpar · C 轨）
+      - name: 现编全部 12 件原生工具（C 轨；VM 轨两件不随包）
         run: |
           set -e
           cp -f "$RUNNER_TEMP/nb/pxc" bootstrap/pxc
-          for e in "pxi|selfhost/interp.px" "pxl|selfhost/lexer.px" "pxpar|selfhost/parser.px"; do
+          for e in "pxi|selfhost/interp.px" "pxl|selfhost/lexer.px" "pxpar|selfhost/parser.px" \
+                   "pxfmt|tools/pxfmt.px" "pxbench|tools/pxbench.px" "pxcheck|tools/pxcheck.px" \
+                   "pxdoc|tools/pxdoc.px" "pxlint|tools/pxlint.px" "pxlsp|tools/pxlsp.px" \
+                   "pxmcp|tools/pxmcp.px" "pxtest|tools/pxtest.px"; do
             n="${e%%|*}"; s="${e#*|}"
             PX_BUILD_ENGINE=c tools/px build "$s" 2>&1 | tail -1
             out="$(dirname "$s")/build/$(basename "$s" .px)"
-            [ -x "$out" ] || { echo "❌ $n 现编失败（缺产物 $out）"; exit 1; }
+            [ -x "$out" ] || { echo "::error::$n 现编失败（缺产物 $out）"; exit 1; }
             cp -f "$out" "bootstrap/$n"
             echo "✅ bootstrap/$n $(stat -c %s "bootstrap/$n") 字节"
           done
-          file bootstrap/pxc bootstrap/pxi bootstrap/pxl bootstrap/pxpar
+          # VM 轨两件是 x86_64 侧的 --emit-c 产物，aarch64 上不适用 ⇒ 从工作树移除，
+          # 保证「包内每一件都是本架构件」（用户不会拿到 Exec format error 的惊喜）
+          rm -f bootstrap/pxc_vm bootstrap/pxi_vm
+          ls -l bootstrap/
+
+      - name: 可移植性门（全静态 + 架构 aarch64 —— 每一件都过，否则 job 红）
+        run: |
+          set -e
+          bash selfhost/check_bin_portability.sh --self-test
+          bash selfhost/check_bin_portability.sh --arch aarch64 --require-static bootstrap/* \
+            | tee "$RUNNER_TEMP/portability.log"
+          grep -q "CHECK-PORTABILITY-OK" "$RUNNER_TEMP/portability.log"
+          echo "✅ 包内 $(ls bootstrap/* | wc -l) 件全部：aarch64 + 全静态（与 glibc 版本解耦）"
 
       - name: 冒烟（**零参数**裸 px build + px run）
         run: |
@@ -163,23 +202,27 @@ jobs:
           STAGE="$RUNNER_TEMP/pkg/puxian-bootstrap-aarch64-${TAG}"
           mkdir -p "$STAGE"
           cp -a bootstrap tools runtime stdlib "$STAGE"/ 2>/dev/null || true
+          rm -f "$STAGE"/bootstrap/pxc_vm "$STAGE"/bootstrap/pxi_vm   # 双保险（见上）
           [ -f VERSION ] && cp -f VERSION "$STAGE"/VERSION
           printf '%s\n' \
             "# PuXian aarch64 自举件（bootstrap-aarch64 · ${TAG}）" "" \
-            "本包由 GitHub 原生 arm64 runner **从源码现编**（gcc-only，含自证：自举出的 pxc" \
-            "编译 selfhost/compiler.px 与入库 golden/compiler.c 逐字节一致）。" "" \
-            "包内 bootstrap/* 是 **aarch64 原生件**（主发布包里的 bootstrap/* 是 x86_64 件，" \
-            "在 aarch64 上执行会报 Exec format error）。" "" \
+            "本包由 GitHub 原生 arm64 runner **从源码现编**（gcc-only）·**包内 12 件全部为" \
+            "aarch64 原生 **静态** 二进制**（零动态库依赖 ⇒ 不再绑定某个 glibc 版本）。" \
+            "自证：自举出的 pxc 编译 selfhost/compiler.px 与入库 golden/compiler.c 逐字节一致。" "" \
+            "为什么强调「静态」：v0.2.0-m167 及更早的 aarch64 包内 pxc 是动态件（需 GLIBC_2.38），" \
+            "在 openEuler 22.03（glibc 2.34）/ 较老的 Debian 上「装得上、跑不起来」。" \
+            "现在包内每一件都过 selfhost/check_bin_portability.sh（全静态 + 架构 aarch64）。" "" \
             "用法（解压后）：" "" \
             "    export PATH=\$PWD/tools:\$PATH" \
             "    px build hello.px && ./build/hello" \
             "    px run hello.px" "" \
-            "说明：" "" \
-            "- 宿主非 x86_64 时 tools/px 会自动切 C 轨（入库 VM 版编译器 pxc_vm 仅 x86_64），" \
-            "  并自动使用 runtime/*/lib-aarch64 布局 + 裁剪 QUIC/H3（该平台无预编译 ngtcp2/openssl）。" \
-            "- 其余入库工具（pxfmt/pxlint/pxdoc/pxtest/pxbench/pxlsp/pxmcp/pxcheck）可现编：" \
-            "    ./bootstrap/pxc build tools/pxfmt.px   # 产物落 tools/build/pxfmt" \
-            "- 或在任意 aarch64 机器上自举整套：./selfhost/native_bootstrap.sh --install" "" \
+            "说明：" \
+            "- 宿主非 x86_64 时 tools/px 会自动切 C 轨，并自动使用 runtime/*/lib-aarch64 布局" \
+            "  + 裁剪 QUIC/H3（该平台无预编译 ngtcp2/openssl-quictls）。" \
+            "- VM 轨件（bootstrap/pxc_vm、pxi_vm）**不随本包发布**：它们由 x86_64 侧 --emit-c" \
+            "  产出；aarch64 上 `px build` 自动走 C 轨（等价产物，见 README「三轨」说明）。" \
+            "- 其余可现编：./bootstrap/pxc build tools/pxfmt.px   # 产物落 tools/build/pxfmt" \
+            "- 或在任意 aarch64 机器上自举整套：./selfhost/native_bootstrap.sh --portable --install" "" \
             "校验：sha256sum -c puxian-bootstrap-aarch64-${TAG}.tar.gz.sha256" \
             > "$STAGE/README-aarch64.md"
           ( cd "$RUNNER_TEMP/pkg" && tar czf "puxian-bootstrap-aarch64-${TAG}.tar.gz" "puxian-bootstrap-aarch64-${TAG}" )
@@ -219,13 +262,18 @@ jobs:
   #   rpm-build-9  rockylinux:9 容器（真实 el9 语义）→ 构建 el9 签名仓库并代签 el7
   #                （rpm4.16 loopback，规避 el7 rpm4.11/gpg2.0 headless 缺陷）
   #                → 合并 rpm/{7,9} → artifact pxrepo-all
-  #   rpm-verify-7 下载 pxrepo-all → centos:7 + yum3.4 正式签名仓库双验签 + 安装
+  #                + **真编译运行**（M168 补：只跑 --version 看不见动态件的 glibc 问题）
+  #   rpm-verify-openeuler  openEuler 22.03/24.03 容器（M168 新增）：dnf 双验签 + 安装
+  #                + 真编译运行 —— 用户报障的 openEuler 支持自此有真验收
   #   rpm-publish  needs rpm-build-9 → download pxrepo-all → rsync 推送 gh-pages
   # 发布后用户（packaging/install-rpm.sh）：
   #   EL9: sudo bash install-rpm.sh && dnf install puxian
   #   EL7: sudo bash install-rpm.sh && yum install puxian
-  # baseurl: https://soft.xiusoft.cn/puxian/rpm/$releasever/$basearch/   （国内镜像·默认）
-  #          回退 https://nanzhangroup.github.io/PuXian/rpm/$releasever/$basearch/
+  #   openEuler 22.03/24.03: sudo bash install-rpm.sh && dnf install puxian
+  # baseurl: https://soft.xiusoft.cn/puxian/rpm/...   （国内镜像·默认；探测失败回退上游）
+  # 目录语义（M168 起**显式化** —— openEuler 的 $releasever 是 22.03LTS，靠它展开必然 404）：
+  #   rpm/7/x86_64 · rpm/9/x86_64   ← RHEL 系（repo 文件用 $releasever/$basearch）
+  #   rpm/openeuler/<ver>/x86_64    ← openEuler（repo 文件写**字面**目录；元数据 gz）
   # 目录语义：rpm/7/x86_64 与 rpm/9/x86_64（$releasever 展开，EL 系通用）
   # ============================================================
   rpm-build-9:
@@ -252,7 +300,7 @@ jobs:
         if: steps.gpgkey.outputs.ok == 'true'
         run: |
           dnf -y install --setopt=install_weak_deps=False \
-            rpm-build rpm-sign createrepo_c gnupg2 git rsync gcc tar >/dev/null
+            rpm-build rpm-sign createrepo_c gnupg2 git rsync gcc tar binutils >/dev/null
           echo "✅ 工具就绪: $(rpmbuild --version | head -1), $(rpmsign --version | head -1), $(createrepo_c --version | head -1)"
 
       - name: 检出代码（含 tag 历史，build_rpm.sh 依赖 git describe）
@@ -323,6 +371,13 @@ jobs:
           dnf -q -y --repo=puxian-selfcheck repoquery puxian || { echo "❌ repoquery 找不到 puxian"; exit 1; }
           echo "✅ dnf makecache 双验签通过（repomd.xml.asc + 包签名）"
 
+      - name: 入库件可移植性门（M168：全静态 —— pxc_vm 曾是动态件，在 el7 上必崩）
+        if: steps.gpgkey.outputs.ok == 'true'
+        run: |
+          chmod +x selfhost/check_bin_portability.sh
+          bash selfhost/check_bin_portability.sh --self-test
+          bash selfhost/check_bin_portability.sh --arch x86_64 --require-static bootstrap/*
+
       - name: 下载 el7 未签名 RPM 产物（rpm-build-7 构建，供本 job 代签）
         if: steps.gpgkey.outputs.ok == 'true'
         uses: actions/download-artifact@v4
@@ -359,6 +414,35 @@ jobs:
           rpm --import /tmp/pxrepo/PUXIAN-GPG-KEY.asc
           rpm -Kv "$RPK7" | tail -4
           echo "✅ el7 已代签并组仓（/tmp/pxrepo/7/x86_64）"
+
+      - name: 组 openEuler 别名仓库（M168：同包同签名 · 元数据 gz 兼容老 libdnf）
+        if: steps.gpgkey.outputs.ok == 'true'
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
+        run: |
+          set -euo pipefail
+          # 为什么需要别名目录（2026-09-21 用户报障）：
+          #   openEuler 的 $releasever 是 22.03LTS，而仓库树按 RHEL 语义只有 7/9 ⇒
+          #   baseurl 展开必然 404。修法不是「改用户的 releasever」，而是**目录显式化**：
+          #   rpm/openeuler/<ver>/x86_64/ 放**同一批已签名 rpm**（openEuler 22.03 的
+          #   glibc 2.34 == el9 基线，二进制兼容），由 install-rpm.sh 写**字面** baseurl。
+          # 元数据用 gz：createrepo_c 默认 zstd，各版本 libdnf/dnf 支持度不一，gz 是最大公约数。
+          PASSFILE=/tmp/.gpg-pass-oe
+          printf '%s' "$GPG_PASSPHRASE" > "$PASSFILE"; chmod 600 "$PASSFILE"
+          for ver in 22.03 24.03; do
+            d="/tmp/pxrepo/openeuler/$ver/x86_64"
+            mkdir -p "$d"
+            cp /tmp/pxrepo/9/x86_64/puxian-*.rpm "$d/"
+            createrepo_c --compress-type=gz "$d" >/dev/null
+            gpg --batch --yes --pinentry-mode loopback --passphrase-file "$PASSFILE" --armor --detach-sign \
+                -o "$d/repodata/repomd.xml.asc" "$d/repodata/repomd.xml"
+            echo "✅ openEuler $ver 别名仓库就绪：$d"
+            ls "$d"
+          done
+          rm -f "$PASSFILE"
+          echo "== 仓库树 =="
+          find /tmp/pxrepo -maxdepth 3 -type d | sort
 
       - name: 上传 el7+el9 合并仓库产物（pxrepo-all）
         if: steps.gpgkey.outputs.ok == 'true'
@@ -478,6 +562,67 @@ jobs:
         if: steps.gpgkey.outputs.ok != 'true'
         run: echo "⏸ 本次跳过 el7 终验（GPG_PRIVATE_KEY 未配置）"
 
+  # ============================================================
+  # M168：**openEuler 终验** —— 用户报障的另一半
+  # ------------------------------------------------------------
+  # 背景：install-rpm.sh 原先根本不认 openEuler（`❌ 暂支持 RHEL 系 7/9`），仓库树也只有
+  #   rpm/{7,9}（openEuler 的 $releasever = 22.03LTS ⇒ 必然 404）。这类"缺一条分发链"
+  #   在 CI 里**不可见**，因为 CI 只跑 centos:7 / rockylinux:9。
+  # 本 job 在**真 openEuler 容器**里把整条链走完：写 repo → dnf 双验签 makecache →
+  #   安装 puxian → pxc --version → **真编译一个程序并运行**（默认 VM 轨）。
+  # 为什么必须"真编译"：VM 轨编译器（bootstrap/pxc_vm）历史上是动态件，在 glibc 较老的
+  #   发行版上"装得上、跑不起来"；只跑 --version 的验证**永远发现不了**（M168 实测）。
+  # ============================================================
+  rpm-verify-openeuler:
+    name: openEuler 正式签名仓库终验（22.03 / 24.03 · dnf 双验签 + 真编译运行）
+    runs-on: ubuntu-latest
+    needs: [rpm-build-9]
+    timeout-minutes: 40
+    steps:
+      - name: 检查 GPG 签名密钥是否就绪（未配置则跳过）
+        id: gpgkey
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          if [ -n "$GPG_PRIVATE_KEY" ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 检出代码（含 packaging/verify_repo_openeuler.sh）
+        if: steps.gpgkey.outputs.ok == 'true'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 下载 el7+el9+openEuler 合并签名仓库产物
+        if: steps.gpgkey.outputs.ok == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: pxrepo-all
+          path: /tmp/pxrepo
+
+      - name: openEuler 22.03 LTS（dnf 双验签 → 装 puxian → 真编译运行）
+        if: steps.gpgkey.outputs.ok == 'true'
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$GITHUB_WORKSPACE:/src" -v /tmp/pxrepo:/out \
+            -e OE_VER=22.03 openeuler/openeuler:22.03-lts \
+            bash /src/packaging/verify_repo_openeuler.sh
+
+      - name: openEuler 24.03 LTS（同上 · 另一条版本线）
+        if: steps.gpgkey.outputs.ok == 'true'
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$GITHUB_WORKSPACE:/src" -v /tmp/pxrepo:/out \
+            -e OE_VER=24.03 openeuler/openeuler:24.03-lts \
+            bash /src/packaging/verify_repo_openeuler.sh
+
+      - name: 密钥未配置提示（占位，保持 job 绿）
+        if: steps.gpgkey.outputs.ok != 'true'
+        run: echo "⏸ 本次跳过 openEuler 终验（GPG_PRIVATE_KEY 未配置）"
+
   rpm-publish:
     name: 合并发布 el7+el9 rpm 仓库到 GitHub Pages
     needs: [rpm-build-9]
@@ -510,7 +655,7 @@ jobs:
           name: pxrepo-all
           path: /tmp/art/pxrepo-all
 
-      - name: 就绪检查（rpm/{7,9} + 公钥齐全）
+      - name: 就绪检查（rpm/{7,9} + openEuler 别名 + 公钥齐全）
         if: steps.gpgkey.outputs.ok == 'true'
         run: |
           mkdir -p /tmp/pxrepo
@@ -518,9 +663,14 @@ jobs:
           [ -f /tmp/pxrepo/PUXIAN-GPG-KEY.asc ] || { echo "❌ 缺少 PUXIAN-GPG-KEY.asc"; exit 1; }
           [ -d /tmp/pxrepo/7/x86_64 ] || { echo "❌ 缺少 rpm/7/x86_64"; exit 1; }
           [ -d /tmp/pxrepo/9/x86_64 ] || { echo "❌ 缺少 rpm/9/x86_64"; exit 1; }
+          # M168：openEuler 别名仓库必须一起发（否则 install-rpm.sh 认脸成功也取不到元数据）
+          for v in 22.03 24.03; do
+            [ -d "/tmp/pxrepo/openeuler/$v/x86_64" ] || { echo "❌ 缺少 rpm/openeuler/$v/x86_64"; exit 1; }
+            [ -f "/tmp/pxrepo/openeuler/$v/x86_64/repodata/repomd.xml.asc" ] || { echo "❌ openEuler $v 缺 repomd.xml.asc"; exit 1; }
+          done
           echo "== 仓库树 =="
-          find /tmp/pxrepo -maxdepth 2 | sort | head -20
-          echo "✅ el7+el9 两套签名仓库就绪"
+          find /tmp/pxrepo -maxdepth 3 | sort | head -30
+          echo "✅ el7+el9+openEuler 三套签名仓库就绪"
 
       - name: 发布到 gh-pages（rpm/ 树，只保留最新版）
         if: steps.gpgkey.outputs.ok == 'true'
@@ -560,7 +710,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "ℹ️ rpm 仓库无变更（同版本重复发布）"
           else
-            git commit -q -m "rpm: 发布 PuXian ${GITHUB_REF_NAME}（el7/el9 签名仓库）"
+            git commit -q -m "rpm: 发布 PuXian ${GITHUB_REF_NAME}（el7/el9 + openEuler 签名仓库）"
             if git rev-parse --verify -q origin/gh-pages >/dev/null; then
               git push -q origin gh-pages
             else
@@ -568,7 +718,7 @@ jobs:
             fi
             echo "✅ 已推送到 gh-pages/rpm/（${GITHUB_REF_NAME}）"
           fi
-          echo "🌐 仓库地址: 国内 https://soft.xiusoft.cn/puxian/rpm/{7,9}/x86_64/  ｜ 上游 https://nanzhangroup.github.io/${GITHUB_REPOSITORY#*/}/rpm/{7,9}/x86_64/"
+          echo "🌐 仓库地址: 国内 https://soft.xiusoft.cn/puxian/rpm/  ｜ 上游 https://nanzhanggroup.github.io/${GITHUB_REPOSITORY#*/}/rpm/（含 el7 / el9 / openeuler/<ver>）"
 
       - name: 密钥未配置提示（占位，保持 job 绿）
         if: steps.gpgkey.outputs.ok != 'true'

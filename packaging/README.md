@@ -1,20 +1,40 @@
-# PuXian RPM / dnf · yum 分发（M73 el9 / M77 el7）
+# PuXian RPM / dnf · yum 分发（M73 el9 / M77 el7 / M168 openEuler）
 
-让 RHEL 系（Rocky / Alma / CentOS / CentOS Stream / Oracle）用户一行安装：
+让 rpm 系用户一行安装：
 
 ```bash
-dnf install puxian      # EL9
+dnf install puxian      # EL9 · openEuler 22.03/24.03
 yum install puxian      # EL7
 ```
+
+**支持的组合**（M168 起由 `install-rpm.sh` 的**显式映射表**决定，不再靠 `$releasever`）：
+
+| 发行版 | 仓库目录 | repo 文件里的 baseurl | 谁在 CI 真验收 |
+|---|---|---|---|
+| RHEL/Rocky/Alma/CentOS/Oracle/Scientific … el7 | `rpm/7/x86_64/` | `…/$releasever/$basearch/`（展开=7） | `rpm-verify-7`（centos:7 + yum3.4） |
+| 同上 el9 | `rpm/9/x86_64/` | `…/$releasever/$basearch/`（展开=9） | `rpm-build-9`（rockylinux:9 自检） |
+| **openEuler 22.03 / 24.03 LTS** | `rpm/openeuler/<ver>/x86_64/` | `…/openeuler/22.03/x86_64/`（**字面**，不用 `$releasever`） | `rpm-verify-openeuler`（真容器 dnf 安装 + 真编译运行） |
+| EL 系克隆（anolis / opencloudos …） | 同上 el7/el9 | 同上 | 无（脚本会标「**未验证**」，不假装验证过） |
+| el8 / el10 / Fedora / openEuler 20.03 / 非 x86_64 | —— | —— | 无（`install-rpm.sh` **明确不支持**并给出可执行的替代路线） |
+
+> ⚠️ **为什么 openEuler 单独写目录**（2026-09-21 用户报障）：openEuler 的 `$releasever`
+> 是 `22.03LTS`，而仓库树按 RHEL 语义只有 `7/9` ⇒ `baseurl` 展开必然 404；
+> 旧版 `install-rpm.sh` 更是连认脸都没过（`❌ 暂支持 RHEL 系 7/9` 直接退出）。
+> 现在：脚本按发行版写**字面**目录，CI 在 `openeuler/openeuler:22.03-lts` 与 `24.03-lts`
+> 容器里 `dnf` 双验签 → 装包 → **真编译一个程序并运行**（只跑 `--version` 的验证
+> 看不见"装得上、跑不起来"这类缺陷，M168 实测）。
 
 ## 资产
 
 | 文件 | 作用 |
 |---|---|
-| `puxian.spec` | RPM 打包定义（Version 取 %{pxver}，由 build_rpm.sh 按 git tag 派生注入；Release 1.<里程碑>.el<dist>） |
+| `puxian.spec` | RPM 打包定义（Version 取 `%{pxver}`，由 build_rpm.sh 按 git tag 派生注入；Release `1.<里程碑>.el<dist>`；M168 起依赖含**静态 libc**：el7 硬依赖 `glibc-static`、el9/openEuler 用 `Recommends`（dnf 默认装；openEuler 无此包名、libc.a 随 `glibc-devel` 到位）） |
 | `build_rpm.sh` | 全链路（el7/el8/el9 通用）：tarball → rpmbuild → 包签名 → createrepo(_c) → repomd 签名 → 公钥导出；`DIST=7/9` 决定目录与 `.el` 后缀 |
 | `build_rpm_el7.sh` | centos:7 容器内执行：EOL vault 源修正 + gpg2.0(headless) + createrepo(gzip) + yum 3.4 双验签 + 真实安装验证 |
-| `install-rpm.sh` | 用户侧仓库安装脚本（自动探测 dnf/yum 与 el7/el9） |
+| `install-rpm.sh` | 用户侧仓库安装脚本（M168 重写：发行版显式映射 / `--dry-run` / `status` / 替代路线指引） |
+| `selftest_install_rpm.sh` | **install-rpm.sh 的离线矩阵自测**（42 用例：el7/el9/oe22.03/oe24.03/oe20.03/el8/Fedora/Ubuntu/克隆 + aarch64/riscv64 + 反向判据「openEuler 输出里不得出现 `$releasever`」） |
+| `verify_repo_el7.sh` | el7 终验（yum 3.4 双验签 + 安装 + **真编译运行** + 入库件静态性 ldd 断言） |
+| `verify_repo_openeuler.sh` | openEuler 终验（M168 新增；dnf 双验签 + 安装 + 真编译运行 + 静态性断言） |
 | `PUXIAN-GPG-KEY.asc` | 仓库公钥（正式发布时随仓库站点托管，不入库） |
 
 ## 密钥模型（正式密钥已启用）
@@ -40,20 +60,24 @@ GitHub Actions secrets（已配置）：`GPG_PRIVATE_KEY` / `GPG_PASSPHRASE` / `
 ```bash
 curl -fsSL -o install-rpm.sh https://soft.xiusoft.cn/puxian/install-rpm.sh   # 国内镜像（默认）
 #   上游兜底同文件： https://nanzhangroup.github.io/PuXian/install-rpm.sh
-sudo bash install-rpm.sh          # 写入 repo + 导入公钥（自动识别 dnf/yum、el7/el9）
-sudo dnf install puxian           # EL9 一行安装（el7 用 yum install puxian）
-sudo dnf upgrade puxian           # 里程碑升级自动拉新（el7 yum update）
+bash install-rpm.sh status      # 只报「本机是什么 / 会去哪个仓库」（免 root，先看后装）
+sudo bash install-rpm.sh        # 写入 repo + 导入公钥（自动识别 dnf/yum 与发行版）
+sudo dnf install puxian         # EL9 / openEuler 一行安装（el7 用 yum install puxian）
+sudo dnf upgrade puxian         # 里程碑升级自动拉新（el7 yum update）
 ```
 
-脚本也随仓库提供：`packaging/install-rpm.sh`；支持 `install`/`remove` 参数。
+脚本也随仓库提供：`packaging/install-rpm.sh`；支持 `install`/`remove`/`status`、
+`--dry-run`、`--base`、`--os-release`（自测注入）、`--repo-file`、`--arch`。
+
 **仓库双活**（同一发布产物在两处的等价副本，GPG 签名链两处相同、不绑定域名）：
 
 | 仓库 | baseurl | 说明 |
 |---|---|---|
-| 国内镜像（默认） | `https://soft.xiusoft.cn/puxian/rpm/$releasever/$basearch/` | 脚本内置 3s 探测，通过即用 |
-| 上游 GitHub Pages | `https://nanzhangroup.github.io/PuXian/rpm/$releasever/$basearch/` | 探测失败自动回退；亦可 `PUXIAN_RPM_BASE=` 强制指定 |
+| 国内镜像（默认） | `https://soft.xiusoft.cn/puxian/rpm/…` | 脚本内置 3s 探测，通过即用 |
+| 上游 GitHub Pages | `https://nanzhangroup.github.io/PuXian/rpm/…` | 探测失败自动回退；亦可 `PUXIAN_RPM_BASE=` 强制指定 |
 
-（el7 → `rpm/7/x86_64/`，el9 → `rpm/9/x86_64/`；gpgkey 在 `rpm/PUXIAN-GPG-KEY.asc`）。
+（el7 → `rpm/7/x86_64/`，el9 → `rpm/9/x86_64/`，**openEuler → `rpm/openeuler/<ver>/x86_64/`**；
+gpgkey 统一在 `rpm/PUXIAN-GPG-KEY.asc`）。
 国内镜像另托管发布 tarball：`https://soft.xiusoft.cn/puxian/releases/`。
 
 ## 国内镜像站点（soft.xiusoft.cn/puxian）
@@ -119,9 +143,45 @@ dnf/yum 安装校验链：公钥 → repomd.xml 签名（repo_gpgcheck）→ 按
 
 - [x] secrets 正式密钥启用（导入步 + headless 签名验证通过）
 - [x] el7 签名仓库 + yum 真实验证（M77）
-- [ ] el8 目录铺开（release.yml matrix 加 dist=8 即可，结构已支持）
-- [ ] aarch64 仓库（交叉构建或原生 runner）
-- [ ] Fedora / openEuler 目录铺开（$releasever 语义不同，需独立 dist 目录 + 测试）
+- [x] **openEuler 22.03 / 24.03 支持**（M168：认脸 + 别名仓库 + 容器终验）
+- [ ] el8 / el10 目录铺开（release.yml matrix 加 dist=8/10 即可，结构已支持）
+- [ ] aarch64 仓库（rpm 侧；当前 aarch64 走**官方引导包** `puxian-bootstrap-aarch64-<tag>.tar.gz`）
+- [ ] Fedora（打包链与 EL 不同，未验证）
+
+## M168：openEuler 支持 + 二进制可移植性（2026-09-21 用户报障）
+
+用户实测报出两条（都不是"某个功能不好用"，而是**分发链缺了一块却没有任何门看得见**）：
+
+1. **官方脚本不认 openEuler**：`install-rpm.sh` 的放行名单写死 `rhel|rocky|almalinux|centos|ol`
+   且只允许 7/9 版本，其它发行版一律 `❌ 暂支持 RHEL 系 7/9` 退出；仓库目录也只有
+   `7/x86_64`、`9/x86_64`，而 openEuler 的 `$releasever` 是 `22.03LTS` ⇒ 即便放行也必 404。
+   修法 = **显式映射表**（脚本定目录，不把解释权交给 `$releasever`）+ 新增
+   `rpm/openeuler/{22.03,24.03}/x86_64`（**同一批已签名 rpm** —— openEuler 22.03 的
+   glibc 2.34 == el9 ABI 基线；元数据用 **gz**，避免各版本 libdnf 对 zstd 支持不一）
+   + `selftest_install_rpm.sh`（**离线矩阵 42 用例**，含反向判据）+ **真容器终验**
+   `rpm-verify-openeuler`（`openeuler:22.03-lts` / `24.03-lts`：dnf 双验签 → 装包 →
+   **真编译运行**）。不支持组合现在会打印支持矩阵 + **可执行**的替代路线
+   （tarball / aarch64 引导包，URL 从 `version.json` 取，精确到版本号）。
+
+2. **aarch64 官方引导包"装得上、跑不起来"**：包内 `bootstrap/pxc` 是**动态件**（宿主
+   ubuntu-24.04-arm 的系统 gcc 默认动态链接）⇒ 带 `GLIBC_2.38` 需求，而 openEuler 22.03
+   只有 glibc 2.34。根因不在打包，而在**发布链没有人在看"这枚二进制需要什么"**：
+   CI 自证只问"runner 上能不能跑"，而 runner 自己就是 2.38 ⇒ 永远绿。
+   修法 = ① `selfhost/native_bootstrap.sh --portable`（原生档默认也 `-static`，
+   且**不是全静态就判红**）；② 新门 `selfhost/check_bin_portability.sh`
+   （`readelf -d` 判全静态 / `objdump -T` 取最高 `GLIBC_x.y` 与基线比较 / 架构断言 /
+   `--require-static`；**自带 4 道负控的自证**）；③ 发布 job 现编**全部 12 件**原生工具
+   （不再只 4 件 —— 否则包里混着 x86_64 的 pxfmt/pxlint，用户一跑就是 Exec format error）
+   并剔除 VM 轨两件（x86_64 专属）后跑门。
+
+**顺带查出、同一族的第三个坑**：`bootstrap/pxc_vm`（**用户面默认 VM 轨**）也是动态件
+（需 `GLIBC_2.34`）⇒ 在 **el7（glibc 2.17）** 上 `px build` 一执行就崩；而 el7 验证脚本
+当时只跑 `pxc --version`（走 C 轨静态件，恰好正常）⇒ **整类缺陷不可见**。
+修法：`rebake_bin.sh` 把 pxc_vm 的链接口径改为 `static`（**14 件全静态**，`--check-all`
+14/14、`--check-vm` 字节码镜像逐字节一致）+ `tools/px` 把「VM 轨可用性」判据从
+「架构不符」放宽为「**本机执行不了**」（含 glibc 不够；`PX_STRICT_VM=1` 可强制响亮失败）
++ `verify_repo_el7.sh` 补**真编译运行**与 **ldd 静态性断言** + rpm `Requires` 补静态 libc
+（el7 硬依赖 / el9·openEuler 弱依赖，见上表）。
 
 ## M78/M80：el7 支持与 RPM 签名密钥轮换（重要）
 - **架构（M78）**：el7(rpm4.11/gpg2.0) 原生容器内 headless 签名不可靠（无 `--pinentry-mode

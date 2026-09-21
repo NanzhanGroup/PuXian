@@ -58,4 +58,33 @@ echo "== [verify-el7] 真实安装 puxian + 运行验证 =="
 yum -y install puxian >/dev/null
 rpm -q puxian
 /usr/bin/pxc --version
-echo "✅ el7 正式签名仓库 yum 双验签 + 安装运行全部通过"
+
+# ---- M168：入库件必须**全静态**（ldd 判定）----
+# 为什么补这一层：M168 前 bootstrap/pxc_vm（**用户面默认 VM 轨**）是动态件、要求
+#   GLIBC_2.34，而 el7 只有 glibc 2.17 ⇒ 用户 `px build` 一执行就崩；而本脚本当时
+#   只跑 `pxc --version`（走 C 轨件 pxc，恰好是静态的）⇒ **整类缺陷看不见**。
+echo "== [verify-el7] 入库件静态性自检（动态件在 el7 上必崩）=="
+bad=0
+for b in /usr/share/puxian/bootstrap/*; do
+  [ -f "$b" ] || continue
+  if ldd "$b" 2>&1 | grep -q "not a dynamic executable"; then
+    echo "   ✅ $(basename "$b")：静态"
+  else
+    echo "   ❌ $(basename "$b")：**动态件** —— $(ldd "$b" 2>&1 | head -3 | tr '\n' ' ')"
+    bad=$((bad+1))
+  fi
+done
+[ "$bad" = 0 ] || { echo "❌ 有 $bad 个动态件（分发可移植性口径：入库件必须全静态）"; exit 1; }
+
+# ---- M168：真编译 + 真运行（默认 VM 轨）----
+echo "== [verify-el7] 真编译 + 真运行（默认 VM 轨：utils/px → bootstrap/pxc_vm）=="
+mkdir -p /tmp/pxt && cd /tmp/pxt
+printf 'print("el7-pkg-ok")\n' > hello.px
+/usr/bin/pxc build hello.px
+[ -x /tmp/pxt/build/hello ] || { echo "❌ 缺产物 /tmp/pxt/build/hello"; ls -lR /tmp/pxt; exit 1; }
+GOT="$(/tmp/pxt/build/hello)"
+[ "$GOT" = "el7-pkg-ok" ] || { echo "❌ 产物运行输出异常：[$GOT]"; exit 1; }
+echo "   编译产物运行 OK：$GOT"
+/usr/bin/pxc run hello.px | grep -q el7-pkg-ok || { echo "❌ px run 失败"; exit 1; }
+
+echo "✅ el7 正式签名仓库 yum 双验签 + 安装 + 真编译运行全部通过"

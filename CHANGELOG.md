@@ -1,3 +1,79 @@
+## M168 · 分发可移植性收口（2026-09-21 · 用户报障驱动）
+
+> 触发：用户实测报出两条 ——
+> ① 「**PuXian rpm/dnf 官方脚本根本不认 openEuler**」：`install-rpm.sh` 源码写死只放行
+>    `rhel/rocky/almalinux/centos/ol` 的 7/9，其它发行版直接 `❌ 暂支持 RHEL 系 7/9` 退出；
+>    官方 rpm 仓库目录也只有 `7/x86_64`、`9/x86_64`，而 openEuler 的 `$releasever` 是 `22.03LTS`
+>    ⇒ **404 是必然的**。
+> ② 「**即使走官方 aarch64 路线也有坑**」：v0.2.0-m166/m167 的官方引导包里编译器 `pxc` 是
+>    **在 Ubuntu 24.04 上动态编译**的，要求 `GLIBC_2.38`，而 openEuler 22.03 只有 glibc 2.34
+>    ⇒ **装上了也跑不起来**。
+> 定性：两条都不是"某个功能不好用"，而是**分发链缺了一块，且发布侧没有任何门看得见** ——
+> 用户是唯一的检测器。本轮按「把判据做成可执行的数字」的既定纪律收口。
+
+### 一、openEuler 支持（安装链）
+
+- **`packaging/install-rpm.sh` 重写**（判据从"写死白名单"改为**显式映射表**）：
+  - 由**脚本**决定去哪个仓库目录，不再把解释权交给各发行版语义不一的 `$releasever`；
+  - openEuler 22.03 / 24.03 → **字面**目录 `openeuler/<ver>/x86_64`（glibc 2.34/2.38 ≥ el9 ABI 基线）；
+  - RHEL 系 7/9 保留 `$releasever`（既有用户路径零回归，自测有反向判据守）；
+  - **不支持组合不再只报一句"暂支持"**：打印支持矩阵 + **可执行**替代路线
+    （tarball / aarch64 引导包，URL 从站点自证 `version.json` 取，精确到版本号与 sha256）；
+  - 新增 `status`（免 root 先看后装）· `--dry-run` · `--os-release` / `--repo-file`（离线自测）
+    · `PUXIAN_OFFLINE`；el8/el10/Fedora/openEuler 20.03/非 x86_64 明确不支持并**点明原因**
+    （如 openEuler 20.03 的 glibc 2.28 < 基线 = "装得上、跑不起来"，比 404 更难查）。
+- **新增 `packaging/selftest_install_rpm.sh`**：install-rpm.sh 的**离线矩阵自测**，
+  **45 用例全过**（含 3 条负控）。核心判据是**反向的**：
+  「openEuler 的输出里**不得出现** `$releasever`」（否则必然 404）、
+  「不支持组合必须 rc≠0 **且**同时给出替代路线」。负控：把 openEuler 改回不支持 /
+  改回 `$releasever` ⇒ 本门必须能红（门若不能红就不构成证据）。
+- **仓库新增 openEuler 别名目录**（`release.yml` rpm-build-9）：`rpm/openeuler/{22.03,24.03}/x86_64/`
+  放**同一批已签名 rpm**，元数据用 **gz**（`createrepo_c --compress-type=gz`，避免各版本
+  libdnf 对 zstd 支持不一）+ `repomd.xml.asc` 同样签名；`pxrepo_mirror.sh` 的目录集合
+  由"写死 7/9"改为"实际存在的目录"，并同步写进 `version.json` 的 `rpm_repo`（否则镜像侧会**静默漏掉**）。
+- **新增终验 job `rpm-verify-openeuler`**：在 `openeuler/openeuler:22.03-lts` 与 `24.03-lts`
+  真容器里 `dnf` 双验签 → 装包 → **真编译一个程序并运行**
+  （`packaging/verify_repo_openeuler.sh`）。
+
+### 二、二进制可移植性（aarch64 引导包 + el7）
+
+- **根因定位**：`native_bootstrap.sh` 原先只对**交叉档**加 `-static`，原生档走系统 gcc 的默认
+  动态链接 ⇒ 包内 `pxc` 带 `GLIBC_2.38` 需求；而 CI 自证只问"runner 上能不能跑"，
+  runner 自己就是 2.38 ⇒ **永远绿**。
+- **修法（三层）**：
+  1. `native_bootstrap.sh` 新增 `--portable` / `--static` / `--dynamic`，**默认 auto = 尽量静态 +
+     不是全静态就判红**（不设"警告了但还是发出去"的暗门）；
+  2. **新门 `selfhost/check_bin_portability.sh`**：`readelf -d` 判全静态 / `objdump -T` 取最高
+     `GLIBC_x.y` 与基线比较 / `--arch` 架构断言 / `--require-static`；**自带 4 道负控的自证**
+     （`--self-test`）。实测对官方 m167 aarch64 包**判红**（`GLIBC_2.38 > 2.34`）；
+  3. 发布 job：`--portable` + 现编**全部 12 件**原生工具（原先只 4 件 ⇒ 包里混着 x86_64 的
+     `pxfmt/pxlint/…`，用户一跑就是 Exec format error）+ 剔除 VM 轨两件（x86_64 专属）
+     + 包前跑门（全静态 + 架构 aarch64）。
+- **顺带查出、同一族的第三个坑**：`bootstrap/pxc_vm`（**用户面默认 VM 轨**）也是动态件
+  （需 `GLIBC_2.34`）⇒ 在 **el7（glibc 2.17）** 上 `px build` 一执行就崩；而 el7 验证脚本
+  当时只跑 `pxc --version`（走 C 轨静态件，恰好正常）⇒ **整类缺陷不可见**。
+  - `rebake_bin.sh`：pxc_vm 链接口径 `dynamic → static` ⇒ **入库 14 件全静态**；
+    重烘后 `--check-all` **14/14**、`--check-vm` 字节码镜像逐字节一致（37295 行）；
+  - `tools/px`：VM 轨可用性判据由「**架构不符**」放宽为「**本机执行不了**」（含 glibc 不够），
+    并说明真实原因 + 指路 `check_bin_portability.sh`；`PX_STRICT_VM=1` 可强制响亮失败；
+  - `px build` 新增**静态 libc 预检**：缺件时直接给出 `dnf install glibc-static` /
+    `apt-get install libc6-dev`，而不是让用户对着 gcc 的 `cannot find -lc` 发呆；
+  - `puxian.spec` 依赖补静态 libc：el7 **硬依赖** `glibc-static`（yum 3.4 不认弱依赖）、
+    el9/openEuler 用 `Recommends`（实测 openEuler **没有** `glibc-static` 包名，
+    `libc.a` 由 `glibc-devel` 随 gcc 到位 ⇒ 弱依赖缺失静默跳过）；
+  - `verify_repo_el7.sh`：补**入库件静态性 ldd 断言** + **真编译运行**（原先只有 `--version`）。
+
+### 三、验证（本机实跑，非推断）
+
+- `selftest_install_rpm.sh` **45/45**（含 3 负控）；`check_bin_portability.sh --self-test` **7/7**（含 4 负控）。
+- `native_bootstrap.sh --portable` 在 x86_64 上**跑通全流程**（含自证）：
+  `NATIVE-BOOTSTRAP-OK host=x86_64 target=x86_64 static=1 link=static glibc=none`。
+- **本机 rpm 全链**：`build_rpm.sh`（el9）→ `rpm -qpR` 实测 `Requires: bash/gcc/tar` +
+  `Recommends: glibc-static` → 解开载荷 **14 件全静态** → 载荷内 `px build` + 运行输出正确；
+  同一 spec 以 `dist=.el7` 重建 ⇒ 实测 **`Requires: bash/gcc/glibc-static/tar`**（分支正确）。
+- openEuler 别名仓库（gz 元数据）本机生成通过；`selfhost/m116_gates.sh` 全量门 + CI（含新
+  job）在提交后复核。
+
 ## 文档收口 · README（中英）+ docs 全套（2026-09-21 · 文档主线 · **无代码改动**）
 
 > 范围：**仅文档**。不改语言语义、不改 `runtime/` 与 `selfhost/`、不重烘入库件 ⇒ 不触 golden / 冻结门 / 指纹门。

@@ -33,13 +33,18 @@ sudo dnf upgrade puxian           # 里程碑自动升级
 
 <p class="ok">✅ RHEL 7 系（CentOS 7 / Oracle 7）：同上，包管理器自动识别为 <code>yum</code>（<code>yum install puxian</code> / <code>yum update puxian</code>）。</p>
 
+<p class="ok">✅ openEuler 22.03 LTS / 24.03 LTS（M168 新增，x86_64）：同上 <code>dnf install puxian</code>。安装脚本会写入 <b>字面</b>目录 <code>rpm/openeuler/&lt;版本&gt;/x86_64/</code>（不用 <code>$releasever</code> —— openEuler 的它是 <code>22.03LTS</code>，靠它展开必然 404）。</p>
+<p class="muted">先看后装（免 root，会报出本机该去哪个仓库）：<code>bash install-rpm.sh status</code> ／ 只看将写入的内容：<code>bash install-rpm.sh --dry-run</code></p>
+<p class="muted">其它发行版（el8 / Fedora / openEuler 20.03 / 非 x86_64）当前<b>无 rpm 仓库</b>：脚本会打印支持矩阵并给出可执行的替代路线（发布 tarball 或 aarch64 官方引导包）。aarch64 用户请用 <code>puxian-bootstrap-aarch64-&lt;tag&gt;.tar.gz</code>（<b>包内工具链全静态、零 glibc 依赖</b> —— M168 起）。</p>
+
 <h2>两个等价仓库（双活）</h2>
 <p>同一发布产物在两处等价托管；GPG 签名按内容校验、<b>不绑定域名</b>，两处可互换。</p>
 <table>
   <tr><th>仓库</th><th>baseurl</th><th>说明</th></tr>
-  <tr><td>国内镜像（默认）</td><td><code>https://soft.xiusoft.cn/puxian/rpm/$releasever/$basearch/</code></td><td>安装脚本内置 3s 探测，通过即用</td></tr>
-  <tr><td>上游 GitHub Pages</td><td><code>https://nanzhangroup.github.io/PuXian/rpm/$releasever/$basearch/</code></td><td>探测失败自动回退</td></tr>
+  <tr><td>国内镜像（默认）</td><td><code>https://soft.xiusoft.cn/puxian/rpm/…</code></td><td>安装脚本内置 3s 探测，通过即用</td></tr>
+  <tr><td>上游 GitHub Pages</td><td><code>https://nanzhangroup.github.io/PuXian/rpm/…</code></td><td>探测失败自动回退</td></tr>
 </table>
+<p class="muted">目录：el7 → <code>rpm/7/x86_64/</code> · el9 → <code>rpm/9/x86_64/</code> · openEuler → <code>rpm/openeuler/&lt;ver&gt;/x86_64/</code>；gpgkey 统一在 <code>rpm/PUXIAN-GPG-KEY.asc</code>。</p>
 <p class="muted">强制指定：<code>sudo PUXIAN_RPM_BASE=&lt;baseurl&gt; bash install-rpm.sh</code></p>
 
 <h2>发布包（源码 tarball）</h2>
