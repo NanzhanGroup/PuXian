@@ -1,0 +1,25 @@
+# ============================================================
+# M175 门 · 用例 A：`len(bytes)`（缺陷 153）+ 各类型 len 的自然单位
+# ------------------------------------------------------------
+# 定调：**每个类型按自己的自然单位** —— `len(str)` = **rune 数**（M155 起，含内嵌 NUL），
+#   `len(bytes)` = **字节数**。修前 `len(bytes)` 落进 default ⇒ `len 不支持类型 bytes`，
+#   用户只能改写成 `bytes_len(b)`；而解释轨的 `i_builtin_len` **本来就写了 bytes 分支**
+#   （`len(args[0])`），它最终调到的正是同一个 runtime 函数 ⇒ 两轨一起撞同一堵墙。
+# ============================================================
+let b = int_to_bytes(200, 1)          # 单字节 0xC8（非法 UTF-8 起始字节，rune 不可表示）
+let u = "中文abc"                     # 3 个 rune + 3 个 ASCII = 6 rune / 12 字节
+let bb = bytes("中文abc")
+
+print("1 len_bytes_1=" + str(len(b)))
+print("2 bytes_len_1=" + str(bytes_len(b)))
+print("3 len_bytes_multi=" + str(len(b) + len(bb)))
+print("4 len_str_runes=" + str(len(u)))
+print("5 bytes_of_str=" + str(len(bb)))
+print("6 bytes_len_eq_len=" + str(bytes_len(bb) == len(bb)))
+print("7 len_list=" + str(len([1, 2, 3])))
+print("8 len_dict=" + str(len(json_parse("{\"a\":1,\"b\":2}"))))
+print("9 len_tuple=" + str(len((1, 2))))
+print("10 len_empty_bytes=" + str(len(bytes(""))))
+print("11 bytes_slice_len=" + str(len(bytes_slice(bb, 0, 6))))
+print("12 bytes_concat_len=" + str(len(bytes_concat(int_to_bytes(1, 1), int_to_bytes(2, 1)))))
+print("M175A-LEN-BYTES-OK")

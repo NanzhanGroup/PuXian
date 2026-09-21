@@ -1,3 +1,70 @@
+## M175 · 台账两小项收口（第 57 轮 · 缺陷 153 `len(bytes)` + 缺陷 14 `os_popen` 的 stderr 去向）
+
+> 主题：**两条「同族漏了一环」。** M173/M174 收的是「外部 QA 用生产流量发现的缺口」，
+> 本轮这两条是我们自己的台账（缺陷 153 / 14）—— 共同形状是：**同一族里其它成员都做对了，
+> 只有一处漏了**，而这一处恰好没人测。
+
+### 一、缺陷 153：`len(bytes)`（修前 `len 不支持类型 bytes`）
+
+**定调**：**每个类型按自己的自然单位** —— `len(str)` = **rune 数**（M155 起，含内嵌 NUL）、
+`len(bytes)` = **字节数**、`len(list/dict/tuple)` = 元素数。修前 bytes 落进 `px_len` 的
+`default:` 分支，用户只能改写成 `bytes_len(b)`。
+
+**最有意思的一点**：解释轨的 `i_builtin_len` **本来就写了 bytes 分支**
+（`if t == "bytes": return Ok(len(args[0]))`）—— 但 `len(args[0])` 在解释器里最终调到的
+**正是同一个 runtime 函数** ⇒ 两轨一起撞同一堵墙。**「同一份意图写了两处」的又一例**：
+写它的人以为解释轨支持，实际上两处都指向同一个不支持的地方。
+
+**修法**：`px_len` 加一行 `case PX_BYTES: return v.as.obj->as.str.len;`（bytes 与 str 同一
+对象布局，字节数就是 `str.len`）。三轨同时生效（解释轨那半经由 bridge 走的就是它）。
+
+### 二、缺陷 14：`os_popen` 的子进程 stderr 漏进宿主
+
+**现场**：`os_popen` 的子进程只被 `dup2(pin[0],0)` / `dup2(pout[1],1)`，**fd 2 继承宿主**
+⇒ 子进程的 stderr 直接混进宿主进程的 stderr。代码里甚至留着自陈的注脚
+（「同族的 os_capture 是分离的，os_popen 的 stderr 才会漏给宿主」）—— **同族漏一环**。
+
+**修法（纯增量，逐字节不改旧行为）**：第 3 参 `opts`：
+
+| `opts.stderr` | 行为 | 返回值 |
+|---|---|---|
+| 不传 / `"inherit"` | 旧行为（继承宿主 stderr） | 无 `stderr_fd`（与旧版逐字段相同） |
+| `"pipe"` | 新建管道接走子进程 stderr | 多一个 `stderr_fd`（读端） |
+| `"null"` | 接进 `/dev/null`（只关心 stdout 的对话式场景，连 fd 都不占） | 无 `stderr_fd` |
+| 其它取值 | **`R1002` 响亮报错**并列出合法取值 | —（不静默回落到 inherit） |
+
+解释轨的 `.px` 桥（`selfhost/ibuiltin.px`）同步透传第 3 参 —— **取值校验只在 runtime 一处**，
+桥不复制一份（否则又是「同一份事实两处实现」）。
+
+### 三、门 `examples/m175_bytes_stderr/`（`M175-VERIFY-OK` · 46 断言 · 三轨）
+
+- **[1] `len(bytes)` 语义矩阵 12 条**：单字节 / 多字节 / `bytes(str)` / rune vs 字节计数 /
+  list / dict / tuple / 空 bytes / slice / concat —— **三轨 stdout 逐字节一致**。
+- **[2] stderr 去向三态 × 三轨**，其中**反向判据**是关键：
+  B1（不传 opts）断言**宿主 stderr 里必须出现 `CHILD-ERR`**（= 旧行为不许被开关改掉）；
+  B2/B3 断言宿主 stderr **干净**，且 B2 在程序内从 `stderr_fd` 读回 `CHILD-ERR`。
+- **[3] 非法取值**：三轨 `rc≠0` + `R1002` + 枚举文案 + stdout 恰为 `before`。
+- **[4] 负控 2 道**：去 `px_len` 的 `PX_BYTES` 分支 / 去 stderr 开关（`else if (0)`）
+  —— 各自独立判红 + sha256 逐字节还原复绿。CI 用 `--neg-skip`。
+
+### 四、台账里被**重新分类**的一条（不是「修了」，是「判定了」）
+
+**缺陷 79（解释器不支持 `mutex`/`rwlock`）**：本轮**不改**，理由写在这里以便复查 ——
+解释器的 Mini 子集**根本没有并发**（`spawn` / `chan` / `select` 全排除），
+所以「无竞争锁」在语义上确实是 no-op，**技术上可以做**；但做了之后，
+`px run` 会对一个含锁的程序**一路绿灯**，而它连 `spawn` 都跑不了 ⇒ 反而制造
+「解释轨验证过了」的错觉。当前口径（`interp 不支持 mutex（Mini 子集排除）` 响亮报错）
+**优于**一个语义上正确、但会误导验证信心的 no-op。⇒ 归类从「缺陷」改为
+**「解释器子集边界（有意）」**，与 spawn/chan 同列。
+（若将来解释器长出真并发，这条自动变成必修项。）
+
+### 五、重定基与验收
+
+```
+入库件 --rebake-all       14 件全烘（runtime + interp.px 源变）· --check-all 14/14
+发射冻结门                +5 件语料（examples/m175_bytes_stderr/）· 类别 B 为空
+CI 注册                   ci.yml 新步（--neg-skip）· m116_gates.sh 注册（本地跑负控）
+```
 ## M174 · `d.get(k[, default])` 的三轨真相（第 57 轮 · 缺陷 194 + 晨曦 QA 清单 P2-7）
 
 > 主题：**「同一份事实有两个实现」，这次是「判存在性」**。定调文档（`DICT_STRICT_MIGRATION.md`

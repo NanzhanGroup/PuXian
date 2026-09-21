@@ -4600,6 +4600,11 @@ bool px_dict_has(LXValue dict, const char* key) {
 int px_len(LXValue v) {
     switch (v.type) {
         case PX_STR: return px_str_rune_len(v.as.obj); // M106-S2：惰性 rune 计数（原为每次 px_unicode_len_n 全扫）；M83-S1：尊重 str.len（内嵌 NUL 不再截断）
+        // M175（缺陷 153）：`len(bytes)` = **字节数**（与 str 的 rune 数各按自己的自然单位）。
+        //   修前落到 default ⇒ `len 不支持类型 bytes`，用户只能改用 `bytes_len(b)` ——
+        //   而解释轨的 `i_builtin_len` **本来就写了 bytes 分支**（`len(args[0])`），只是那一步
+        //   最终调到的正是本函数 ⇒ 两轨一起撞同一堵墙（「同一份意图、两处实现」的又一例）。
+        case PX_BYTES: return v.as.obj->as.str.len;
         case PX_LIST: return v.as.obj->as.list.len;
         case PX_DICT: return v.as.obj->as.dict.len;
         case PX_TUPLE: return v.as.obj->as.tuple.len;
@@ -11457,13 +11462,34 @@ static LXValue bi_os_capture(LXValue* args, int nargs, void* ctx) {
     return d;
 }
 
-// os_popen(cmd, args) → {pid:int, stdin_fd:int, stdout_fd:int} | null（05 G4 / 06 T2）
+// os_popen(cmd, args[, opts]) → {pid:int, stdin_fd:int, stdout_fd:int[, stderr_fd:int]} | null（05 G4 / 06 T2）
 // 双向管道：向子进程 stdin 注入 + 读回 stdout（对话式进程：chat core / sudo 提权等）。
 // 返回 pid + stdin 写端 fd + stdout 读端 fd；用完 os_wait(pid)/os_kill(pid,...) 回收。
+// M175（缺陷 14）：**stderr 去向开关** —— 修前子进程只被 dup2 了 0/1，**fd 2 继承宿主**
+//   ⇒ 子进程的 stderr 直接漏进宿主进程的 stderr（日志混流、自动化判据被污染）。
+//   同族的 os_capture / os_spawn_capture 一直是**分离捕获**的，只有 os_popen 漏了这一环。
+//   `opts = {"stderr": "inherit"（默认，逐字节保持旧行为）| "pipe" | "null"}`
+//   · "pipe"    ⇒ 新建管道接走子进程 stderr，返回值多一个 `stderr_fd`（读端）
+//   · "null"    ⇒ 接进 /dev/null（只关心 stdout 的对话式场景）
+//   · "inherit" ⇒ 旧行为（不传 opts 时**完全不变**）
 static LXValue bi_os_popen(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2 || args[0].type != PX_STR || args[1].type != PX_LIST)
-        px_error("R1002: os_popen 需要 (cmd, args) 参数");
+    if (nargs < 2 || nargs > 3 || args[0].type != PX_STR || args[1].type != PX_LIST)
+        px_error("R1002: os_popen 需要 (cmd, args[, opts]) 参数");
+    int err_mode = 0;   // 0=inherit（默认）1=pipe 2=null
+    if (nargs == 3) {
+        if (args[2].type != PX_DICT) px_error("R1002: os_popen 的 opts 需要 dict");
+        LXValue ev = px_dict_get(args[2], "stderr");
+        if (ev.type == PX_STR) {
+            const char* em = ev.as.obj->as.str.data;
+            if (strcmp(em, "pipe") == 0) err_mode = 1;
+            else if (strcmp(em, "null") == 0) err_mode = 2;
+            else if (strcmp(em, "inherit") == 0) err_mode = 0;
+            else px_error("R1002: os_popen 的 opts.stderr 需要 \"inherit\"|\"pipe\"|\"null\"，实际是 \"%s\"", em);
+        } else if (ev.type != PX_NULL) {
+            px_error("R1002: os_popen 的 opts.stderr 需要 string");
+        }
+    }
     const char* cmd = args[0].as.obj->as.str.data;
     LXObject* list = args[1].as.obj;
     int argc = list->as.list.len;
@@ -11479,8 +11505,15 @@ static LXValue bi_os_popen(LXValue* args, int nargs, void* ctx) {
         argv[i + 1] = strdup(v.as.obj->as.str.data);
     }
     argv[argc + 1] = NULL;
-    int pin[2], pout[2];
+    int pin[2], pout[2], perr[2];
+    perr[0] = perr[1] = -1;
     if (pipe(pin) != 0 || pipe(pout) != 0) {
+        for (int i = 0; i <= argc; i++) free(argv[i]);
+        free(argv);
+        return px_null();
+    }
+    if (err_mode == 1 && pipe(perr) != 0) {   // M175：stderr 管道（可选）
+        close(pin[0]); close(pin[1]); close(pout[0]); close(pout[1]);
         for (int i = 0; i <= argc; i++) free(argv[i]);
         free(argv);
         return px_null();
@@ -11488,6 +11521,7 @@ static LXValue bi_os_popen(LXValue* args, int nargs, void* ctx) {
     pid_t pid = fork();
     if (pid < 0) {
         close(pin[0]); close(pin[1]); close(pout[0]); close(pout[1]);
+        if (err_mode == 1) { close(perr[0]); close(perr[1]); }
         for (int i = 0; i <= argc; i++) free(argv[i]);
         free(argv);
         return px_null();
@@ -11497,17 +11531,28 @@ static LXValue bi_os_popen(LXValue* args, int nargs, void* ctx) {
         close(pin[1]); close(pout[0]);
         dup2(pin[0], 0); dup2(pout[1], 1);
         close(pin[0]); close(pout[1]);
+        // M175（缺陷 14）：stderr 去向 —— pipe / null / inherit（默认 = 旧行为）
+        if (err_mode == 1) {
+            close(perr[0]);
+            dup2(perr[1], 2);
+            close(perr[1]);
+        } else if (err_mode == 2) {
+            int devnull = open("/dev/null", O_WRONLY);
+            if (devnull >= 0) { dup2(devnull, 2); close(devnull); }
+        }
         execvp(cmd, argv);
         _exit(127);
     }
     setpgid(pid, pid);   // M66 竞态修：父侧同调 setpgid（同上，消除 killpg 的 ESRCH 假失败）
     close(pin[0]); close(pout[1]);
+    if (err_mode == 1) close(perr[1]);
     for (int i = 0; i <= argc; i++) free(argv[i]);
     free(argv);
     LXValue d = px_dict();
     px_dict_set(d, "pid", px_int((int64_t)pid));
     px_dict_set(d, "stdin_fd", px_int((int64_t)pin[1]));
     px_dict_set(d, "stdout_fd", px_int((int64_t)pout[0]));
+    if (err_mode == 1) px_dict_set(d, "stderr_fd", px_int((int64_t)perr[0]));
     return d;
 }
 

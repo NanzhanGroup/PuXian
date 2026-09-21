@@ -1,0 +1,7 @@
+# M175 门 · 用例 B4：opts.stderr 非法取值 ⇒ R1002（响亮，不静默回落）
+# 期望：rc≠0 · stderr 含 R1002 与提示串（含合法取值枚举）
+print("before")
+let opts = json_parse("{}")
+opts.set("stderr", "bogus")
+let r = os_popen("sh", ["-c", "echo x"], opts)
+print("after")

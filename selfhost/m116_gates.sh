@@ -342,6 +342,20 @@ run m173_http_proxy bash examples/m173_http_proxy/verify.sh
 #   ② 缺键下标读三轨 rc≠0 + R1008 + 统一词条；③ `get` 非字符串键三轨 rc≠0 + R1002 + 统一词条；
 #   ④ 负控（runtime 改回 null 判定 ⇒ VM 轨必须与解释轨不一致；sha256 逐字节还原复绿）。
 run m174_dict_get bash examples/m174_dict_get/verify.sh
+# M175（第 57 轮 · 台账小项收口）：**`len(bytes)`（缺陷 153）+ `os_popen` 的 stderr 去向（缺陷 14）**。
+# 153：`len(bytes)` 落进 `px_len` 的 default ⇒ `len 不支持类型 bytes`（只能用 `bytes_len`）；
+#   而解释轨的 `i_builtin_len` **本来就写了 bytes 分支**（`len(args[0])`）—— 那一步调到的正是
+#   同一个 runtime 函数 ⇒「同一份意图、两处实现」的又一例。定调：**每类型按自然单位**
+#   （str = rune 数；bytes = 字节数）。
+# 14：`os_popen` 子进程只 dup2 了 0/1、**fd 2 继承宿主** ⇒ 子进程 stderr 漏进宿主（同族的
+#   os_capture/os_spawn_capture 一直分离捕获）。修法：第 3 参 `opts{"stderr":"inherit"（默认）/pipe/null"}`
+#   —— 纯增量：不传 opts 时逐字节保持旧行为（门用「宿主 stderr 里**应当**出现 CHILD-ERR」反证）；
+#   `pipe` ⇒ 返回值多一个 `stderr_fd`；`null` ⇒ /dev/null。解释轨的 .px 桥同步透传第 3 参
+#   （取值校验只在 runtime 一处，不由桥复制）。
+# 判据：① `len(bytes)` 语义矩阵 12 条 × 三轨逐字节一致；② B1/B2/B3 三轨 + **宿主 stderr 侧**
+#   反向判据；③ 非法 opts 取值三轨 rc≠0 + R1002 + 枚举文案；④ 负控 2 道（去 px_len 分支 /
+#   去 stderr 开关 —— 各自独立判红 + sha256 逐字节还原复绿）。
+run m175_bytes_stderr bash examples/m175_bytes_stderr/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

@@ -437,8 +437,13 @@ def i_call_builtin(name, args, pos):
         return Ok(os_capture(args[0], args[1]))
     if name == "os_popen":
         # M66：双向管道 → {pid, stdin_fd, stdout_fd}
-        if len(args) != 2:
-            return Err(i_r1002("os_popen 需要 (cmd, args) 参数", pos))
+        # M175（缺陷 14）：第 3 参 opts{"stderr":"inherit"|"pipe"|"null"} 透传（解释轨与
+        #   编译轨同口径；不传时行为逐字节不变）。**不要**在这里自己判 opts 取值 —— 取值
+        #   校验与报错文案由 runtime 单点负责（否则就是「同一份事实两处实现」的老病）。
+        if len(args) != 2 and len(args) != 3:
+            return Err(i_r1002("os_popen 需要 (cmd, args[, opts]) 参数", pos))
+        if len(args) == 3:
+            return Ok(os_popen(args[0], args[1], args[2]))
         return Ok(os_popen(args[0], args[1]))
     if name == "unix_connect":
         # M66：AF_UNIX 裸连接 → fd（复用 read/write 收发）
