@@ -7,6 +7,10 @@
 > §十三（M58 dogfood 暴露的语言欠账）、M57/M58 实测产物（examples/m57_*、examples/
 > m58_hwmond/、tools/cross_aarch64.sh、bootstrap/）。
 > 生成：M58 里程碑闭环 + webhook 真发闭环落地之后。
+> **更新（2026-09-21）**：本文档是 **M58 时点**的差距分析 —— 其建议的后续里程碑**已落地**
+> （M59 数学与随机补齐 · M60 `std.edge` 边缘深化 · M61 zlib FFI proof + `std.gfx`/`std.png` 2D 内圈，
+> 另有 M67 多架构、M104–M106 性能主线、M156/M157 ONNX 等）。**现状请以 `ROADMAP.md` §一能力基线
+> 与 `spec.md` 为准**；本文保留原始评估与排期理由供追溯。文档总览见 `docs/README.md`。
 
 ## 一、结论摘要
 

@@ -36,14 +36,20 @@ Without prior written permission, these names may not be used to identify produc
 
 ---
 
-## 🎉 Current Status: The Compiler Is Self-Hosted
+## 🎉 Current Status: Self-Hosted · Semantically Consistent Across Three Rails · First-Class aarch64
+
+Current version **`px 0.2.0`** (latest milestone tag `v0.2.0-m167`).
 
 | Status | Description |
 |---|---|
-| ✅ **Self-hosting complete (M-B8)** | **The PuXian compiler is written in PuXian itself**: the five core components — `lexer / parser / codegen / interp / value system` — have all been rewritten in `.px`. The bootstrap proof shows A.c == B.c == B2.c, byte-for-byte identical. |
+| ✅ **Self-hosting complete (M-B8)** | **The PuXian compiler is written in PuXian itself**: `lexer / parser / codegen / bc_emit / interp / value system` all rewritten in `.px`. The bootstrap proof shows A.c == B.c == B2.c, byte-for-byte identical. |
 | ✅ **Rust version retired (M-B9a)** | Rust sources archived under `archive/rust-compiler/` (read-only). The new toolchain **`tools/px` requires no Rust at all**, running on top of the bootstrap binary. |
-| ✅ **CI integrated** | GitHub Actions: every commit automatically runs regression + bootstrap proof + example compilation |
-| ✅ **Dogfooding done (M-B9b)** | Wrote the first production application in PuXian (HTTP + SQLite service); now maintained in a separate private repository. |
+| ✅ **Two backends, three rails (since M91)** | Interpreter rail (`pxi`, tree-walking) · **VM bytecode rail (default for `px build`)** · C-text rail (`px build --c`, escape hatch). **The same source behaves identically on all three rails** — enforced byte-for-byte by the full gate suite (`selfhost/m116_gates.sh` + per-milestone gates). |
+| ✅ **Semantic consistency closure (M159–M167)** | Every corner where "the host language left it open ⇒ our three rails must diverge" has been nailed down to **one truth**: evaluation order (lexical left-to-right) · container length change during iteration ⇒ `R1003` · strict unpacking · strict dict keys · `sorted` by value + stable · closure/generator capture rules. **No silent corners** (loud beats silent). |
+| ✅ **First-class aarch64 (M159)** | `selfhost/native_bootstrap.sh` (self-bootstrap from **gcc only**, with self-proof) · host-arch-aware `tools/px` · new **`native-arm64` real-machine CI job** · release asset `puxian-bootstrap-aarch64-<tag>.tar.gz`. |
+| ✅ **Fully self-hosted toolchain** | `build / run / lex / parse / fmt / lint / doc / test / bench / lsp / mcp / refs` are all implemented in PuXian (spec §12). |
+| ✅ **CI integrated** | GitHub Actions: regression + bootstrap proof (C rail and BC rail) + example builds + **four-arch matrix** (x86_64 native / aarch64 / armv7 / riscv64) on every commit. |
+| ✅ **Dogfooding done (M-B9b)** | First production application written in PuXian (HTTP + SQLite service), maintained in a separate private repository; infrastructure such as the mirror site and release chain is served by PuXian too. |
 
 > Clone the repo and you can compile/run PuXian programs with `tools/px` right away — **no Rust installation required**.
 
@@ -70,7 +76,7 @@ def main():
 
 ```bash
 ./tools/px run hello.px              # script mode: interpreted, starts instantly
-./tools/px build hello.px            # build mode: emits C → gcc static binary
+./tools/px build hello.px            # build mode: VM bytecode rail by default → static binary (--c for the C-text rail)
 ./hello/build/hello                   # run directly, zero dependencies (output in <dir>/build/)
 ```
 
@@ -78,9 +84,13 @@ def main():
 
 | Command | Description |
 |---|---|
-| `px build <file.px>` | Compile to a static binary (outputs `<dir>/build/<name>`). **Auto-pruned by referenced natives by default (M86-S2)**: unreferenced runtime modules are dropped at compile time (import-recursive; hello/pure CLI → ~2.7M, sqlite users keep it → ~3.8M; on parse failure falls back to full build) |
+| `px build <file.px>` | Compile to a static binary (outputs `<dir>/build/<name>`). **Since M91 the default artifact is the VM bytecode rail** (compiler_vm → BCModule image → linked with vm.o; `--c` / `PX_BUILD_ENGINE=c` is the escape hatch to the classic C-text rail, useful for pure compute hot spots). **Auto-pruned by referenced natives by default (M86-S2)**: unreferenced runtime modules are dropped at compile time (import-recursive; hello/pure CLI → ~2.7M, sqlite users keep it → ~3.8M; on parse failure falls back to full build) |
 | `px build --full <file.px>` / `--max` | Full-capability build (M86-S2 escape hatch): skips auto-pruning, ≈9.0M baseline; combinable with explicit `--no-xxx` |
-| `px build --min <file.px>` | Explicit minimal profile (M85): aggregates `--no-quic` + sqlite/ws/zip/xml/aes/rsa/ed25519/route/zlib/h2 → ≈2.7M; `--no-xxx` flags combine freely (explicit flag > auto; missing native → R1001) |
+| `px build --min <file.px>` | Explicit minimal profile (M85): aggregates `--no-quic` + sqlite/ws/zip/xml/aes/rsa/ed25519/img/route/zlib/h2 → ≈2.7M; `--no-xxx` flags combine freely (explicit flag > auto; missing native → R1001) |
+| `px build --target <arch>` | **High-level cross switch (M71-S2)**: `x86_64` / `aarch64` / `armv7` / `riscv64` (also `os-arch`); folds `--cc` plus target mbedtls/sqlite/zlib paths into one flag |
+| `px build --lto <file.px>` | **LTO build profile (M104-S5)**: full-chain gcc `-flto` |
+| `px build --c <file.px>` | Explicit **C-text rail** (`fn_*` → gcc): for pure-compute hot spots or when you want to read the generated C |
+| `px build --print-plan <file.px>` | **Print the build plan (M159)**: engine rail / reference pruning / linked modules / CC / target arch — diagnose instead of guess |
 | `px refs <file.px>` | Print referenced global/native names (M86-S1: extracted from the compiled C output, import-recursive; the reference collector behind `px build` auto-pruning) |
 | `px run <file.px> [args...]` | Run in script mode |
 | `px lex <file.px>` | Print the token stream (debugging; runs the PuXian lexer) |
@@ -172,13 +182,26 @@ bash examples/m67_multiarch/verify.sh --arch aarch64 # single arch
 > concurrent-GC stress → new-arch GC is verified by arch probe + native concurrency + real device
 > (spec §8.21).
 
+### 5. aarch64 official channel: bootstrap from source (M159)
+
+```bash
+# Needs gcc only — no prebuilt bootstrap binaries required (native target, or --cc for cross)
+selfhost/native_bootstrap.sh
+selfhost/native_bootstrap.sh --cc aarch64-linux-musl-gcc --target aarch64
+# Self-proof: the freshly built pxc compiles selfhost/compiler.px, byte-identical to selfhost/golden/compiler.c
+```
+
+- `tools/px` **detects the host architecture automatically** (picks `lib-<arch>`, defaults to the C rail off x86_64, adds `--no-quic`); `--print-plan` prints the build plan (engine rail / pruning / CC / target) for diagnosis;
+- CI gained a **`native-arm64` real-machine job**: self-bootstrap + self-proof + build + smoke + packaging on real aarch64;
+- Since M159 releases ship a **`puxian-bootstrap-aarch64-<tag>.tar.gz`** companion asset (no preinstalled toolchain needed on the ARM box).
+
 ---
 
 ## Features at a Glance
 
 | Dimension | Capabilities |
 |---|---|
-| 🏃 Dual modes | Script mode (interpreted, instant start) / build mode (emits C → gcc static binary, near-C performance). `run` and `build` output are byte-for-byte identical. |
+| 🏃 Three rails | Interpreter rail (`px run`, instant start) / **VM bytecode rail (default for `px build`)** / C-text rail (`px build --c`, pure-compute hot spots) — **the same source behaves identically on all three**; divergence is treated as a bug, not a "backend difference" |
 | 🔀 Concurrency | `spawn` true concurrency, `channel` blocking communication, `select` random readiness + **concurrent GC** (stop-the-world full collection, thread-safe). |
 | ⏱ Timers | `set_timeout` / `set_interval` / `clear_timer` (one-shot/periodic callbacks, variadic argument pass-through, concurrency primitives are safe inside callbacks). |
 | 🧹 Memory | Build mode: C runtime with a conservative mark-and-sweep GC (cyclic references collectable, auto-triggered) + **slab allocator** (21 size-class slot reuse); interpreter side: **tracing GC** that collects cycles (list/dict/chan/**closure Func↔Env cycles**) + `gc()` forced collection. |
@@ -188,7 +211,8 @@ bash examples/m67_multiarch/verify.sh --arch aarch64 # single arch
 | 🔢 Language | Slice syntax `a[i:j]` / `a[i:j:k]` (stride/reverse, strings sliced by UTF-8 chars), **generator expressions** `(x for x in xs)` (**lazy**: single-level for delayed evaluation / `gen_next` item-by-item / for-in / `list()` conversion), bitwise ops + binary-data views (int_to_hex / bytes_to_hex / bit_count / bit_length), regex, lock primitives (mutex / rwlock), random file I/O + fsync, process/signal (os_spawn / os_wait / signal), **Result/Option error handling** (`Ok(x)`/`Err(e)`/`Some(x)` constructors, `?` error propagation — Err/None returns immediately, `!` forced unwrap, is_ok/is_err/unwrap methods; the single error channel in the spec), string interpolation `${expr}`, comprehensions, optional chaining `?.`, null coalescing `??`, pipeline `\|>`. |
 | 🔌 Edge device | fd primitives `open`/`close`/`ioctl`/`os_errno` (ioctl arg three forms: int direct / bytes·str in-place in/out buffer, `_IOR` filled in place) + fd data path `read`/`write` (raw read(2)/write(2)) + **mmap live mapping** `mmap`/`munmap`/`mem_write` (MAP_SHARED framebuffer/shmem/DMA direct access, GC auto-munmap, in-place write into the mapping) + GPIO/I2C device examples + **aarch64 cross-compile** (`px build --no-quic` trimming + qemu-aarch64 verification identical to x86) — Linux edge devices (Raspberry Pi/gateway/box) as a single static binary, no runtime env needed |
 | 🚀 Application platform | **`.px` script execution mechanism** (`px_serve`, a PHP/OpenResty-style application server: Cookie/Session/basic auth + server-side TLS + graceful shutdown; `px_exec`, a language-level embedding API) + **`.px` process pool** (build mode pre-forks worker interpreters that stay resident and are reused, PHP-FPM style; **hot-reload with automatic rolling restart on script/binary changes**) + route table & middleware (method+path patterns / `:id` params / `*` wildcards / middleware chains) + cron scheduling (6 fields) + JSON path (json_path / json_path_set). |
-| 📚 Standard library | `stdlib/collections.px` (sorted/reversed/map/filter/reduce/unique/group_by) + **9 stdlibs total**: collections / edge (M60 edge devices) / gfx / png (M61 2D) / semver / webroute / **yaml / pxml / lunar (M66, see spec §10.3)** + built-in registration whitelist (see MINI_SUBSET §2.5) |
+| 📚 Standard library | **13 public libraries** under `stdlib/` (collections / semver / webroute / yaml / pxml / lunar / gfx / png / edge / cookiejar / html / multipart / smtp; plus L1 helper modules such as strings / path / url / io / time_go / jsonx / go_json* / yaml* — **27 `.px` files** in total). `import std.<name>` and go; identical on both rails. API listing in [`docs/ECOSYSTEM.md`](docs/ECOSYSTEM.md) and the machine index `docs/ecosystem_index.json` |
+| 🧭 Semantic consistency (M159–M167) | **No silent corners** (loud beats silent): evaluation order is always **lexical left-to-right** (including call arguments, not gcc's choice) · mutating a container while iterating it ⇒ `R1003` (**length snapshot** on loop entry) · strict unpacking (`for a, b in xs`, shape mismatch ⇒ `R1002`) · strict dict keys (non-string key in a constructor ⇒ `R1002`, no more silent data loss) · `sorted` uses **value comparison + stable sort** · closures capture by reference, generator captures are a **value snapshot**. Every rule ships a gate that pins all three rails byte-for-byte |
 
 ---
 
@@ -199,7 +223,7 @@ What makes PuXian most distinctive: **its compiler is written in itself**. A ful
 ### Bootstrap Chain
 
 ```
-selfhost/*.px (PuXian sources) ──compile──► bootstrap/pxc (compiler binary, checked in)
+selfhost/*.px (PuXian sources) ──compile──► bootstrap/pxc · pxc_vm (compiler binaries, checked in)
                                              │ compiles any .px
                                              ▼
                                        C source + runtime/ ──gcc──► static binary
@@ -207,20 +231,27 @@ selfhost/*.px (PuXian sources) ──compile──► bootstrap/pxc (compiler bi
 
 | Component | Description |
 |---|---|
-| `bootstrap/pxc` | The PuXian-written compiler (static binary, built from `selfhost/compiler.px`, committed with the repo) |
-| `bootstrap/pxi` | The PuXian-written interpreter (built from `selfhost/interp.px`) |
+| `bootstrap/pxc` / `pxc_vm` | The PuXian-written compilers (**C-text rail** / **VM bytecode rail**), static ELF, built from `selfhost/compiler.px`, **committed with the repo** |
+| `bootstrap/pxi` / `pxi_vm` | The PuXian-written interpreters (source rail / bytecode rail) |
 | `bootstrap/pxl` / `pxpar` | The PuXian-written lexer / parser (for debugging) |
-| `selfhost/compiler.px` | **Compiler source (written in PuXian itself)**: imports the codegen.px chain (pxlexer → parser → cg_module → codegen) |
-| `selfhost/golden/compiler.c` | Bootstrap golden file (6003 lines of C): the one-shot artifact produced when the bootstrap compiler compiled itself |
-| `selfhost/bootstrap_prove.sh` | Bootstrap proof: `bootstrap/pxc` compiles `compiler.px` and diffs against the golden file byte-for-byte |
+| `bootstrap/pxfmt` … `pxmcp` | Self-hosted toolchain binaries (fmt / lint / check / doc / test / bench / lsp / mcp) — **14 checked-in binaries** in total |
+| `selfhost/*.px` | **Compiler / interpreter sources (written in PuXian itself)**: 23 `.px` files — `compiler.px` (CLI) → `codegen.px` + `cg_*.px` (AST → C) and `bc_emit.px` (AST → bytecode) + `interp.px` + `i*.px` (tree-walking interpreter) |
+| `selfhost/golden/compiler.c` | **C-rail golden** (**17,535 lines** of C): the one-shot artifact produced when the bootstrap compiler compiled itself |
+| `selfhost/golden/compiler.bc.dump` | **BC-rail golden** (**37,296 lines** bytecode image): byte-for-byte replay target for the VM rail |
+| `selfhost/bootstrap_prove.sh` | C-rail bootstrap proof: `bootstrap/pxc` compiles `compiler.px`, diffed byte-for-byte against the golden |
+| `selfhost/bootstrap_prove_bc.sh` | **BC-rail bootstrap proof**: the compiler compiles itself → bytecode image diffed byte-for-byte against the golden |
+| `selfhost/native_bootstrap.sh` | **aarch64 official channel (M159)**: native/cross self-bootstrap needing gcc only, **with self-proof** (the freshly built pxc compiles `compiler.px` again, byte-identical to the golden) |
+| `selfhost/rebake_bin.sh` | Rebake of checked-in binaries + **source-chain fingerprint gate** (`--check-all` compares all 14 binaries against the *current* sources, `PXSRC-…` / `PXRT-…`) |
+| `selfhost/m116_gates.sh` | **Full gate suite** (semantic gates + emission freeze + rebake trio + six-way diffcheck): run at the end of every milestone |
 
-### The Classic Bootstrap Proof
+### The Classic Bootstrap Proof (plus the BC rail)
 
 1. Compiler A (`bootstrap/pxc`) runs `build compiler.px` → produces B.c;
-2. `B.c` is **byte-for-byte identical (6002 lines, 0 differences)** to the golden `golden/compiler.c` → bootstrapping holds;
-3. Hardened loop: B.c is compiled by gcc into binary B → B compiles `compiler.px` again → B2.c, and **A.c == B.c == B2.c are all identical**.
+2. `B.c` is **byte-for-byte identical (17,535 lines, 0 differences)** to the golden `golden/compiler.c` → the C rail bootstraps;
+3. Hardened loop: B.c is compiled by gcc into binary B → B compiles `compiler.px` again → B2.c, and **A.c == B.c == B2.c are all identical**;
+4. **BC rail in parallel**: `bootstrap_prove_bc.sh` diffs the **bytecode image** the compiler produces for itself against `golden/compiler.bc.dump` (37,296 lines, 0 differences).
 
-CI runs this proof automatically on every commit (`.github/workflows/ci.yml`).
+CI runs both proofs plus the **rebake fingerprint gate** on every commit (`.github/workflows/ci.yml`); on real aarch64 hardware the new **`native-arm64` job** runs `native_bootstrap.sh` (self-bootstrap + self-proof + build + smoke + packaging).
 
 ### Mini Subset (Language-Surface Lockdown)
 
@@ -233,25 +264,31 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 ## Directory Layout
 
 ```
-├── bootstrap/              # Bootstrap binaries (pxc compiler / pxi interpreter / pxl lexer / pxpar parser, static ELF)
-├── tools/px               # User entry point: build / run / lex / parse / --version (bash wrapper, zero Rust dependency)
-├── selfhost/               # The bootstrapping project (the core!)
-│   ├── compiler.px         #   Full PuXian-written compiler CLI (imports the full codegen.px chain)
-│   ├── codegen.px + cg_*.px #   codegen modules (AST → C)
+├── bootstrap/              # 14 checked-in static ELF binaries (pxc/pxc_vm compilers · pxi/pxi_vm interpreters · pxl/pxpar debug · pxfmt/pxlint/pxcheck/pxdoc/pxtest/pxbench/pxlsp/pxmcp toolchain)
+├── tools/px               # User entry point (bash wrapper, zero Rust): build / run / lex / parse / fmt / lint / doc / test / bench / lsp / mcp / refs
+├── selfhost/               # The bootstrapping project (the core!) — 23 .px files
+│   ├── compiler.px         #   Full PuXian-written compiler CLI
+│   ├── codegen.px + cg_*.px #   C-text rail emission (AST → C)
+│   ├── bc_emit.px          #   VM bytecode rail emission (AST → bytecode)
 │   ├── interp.px + i*.px   #   interpreter modules (tree-walking)
-│   ├── lexer.px pxlexer.px #   lexer
-│   ├── parser.px           #   parser
+│   ├── lexer.px pxlexer.px parser.px  # lexer / parser
 │   ├── value.px env.px module.px  # value system / scoping / module loading
-│   ├── capability.px       #   capability self-check (110/110)
-│   ├── cases/ + golden/    #   differential test cases (s01-s09 + v01-v03) and golden artifacts
-│   ├── cases_bad/          #   error cases (lex 14 + parse 9)
-│   └── diffcheck.sh / bootstrap_prove.sh  # differential harness / bootstrap proof
-├── runtime/                # C runtime (runtime.c/h + aes/xml/zip/ws/rsa/sqlite/route/h2/h3/quic + mbedtls + third_party)
-├── stdlib/                 # Standard library (9: collections/edge/gfx/png/semver/webroute/yaml/pxml/lunar)
-├── examples/               # 80+ examples (hello / fib / match / concurrency / networking / TLS / SQLite / comprehensions ...)
+│   ├── capability.px       #   capability self-check
+│   ├── cases/ + golden/    #   differential cases and golden artifacts (compiler.c 17,535 lines · compiler.bc.dump 37,296 lines)
+│   ├── cases_bad/          #   error cases
+│   ├── diffcheck.sh · engine_parity.sh · emitc_freeze.sh   # six-way differential / three-rail parity / emission freeze gate
+│   ├── bootstrap_prove.sh · bootstrap_prove_bc.sh          # C-rail / BC-rail bootstrap proofs
+│   ├── native_bootstrap.sh #   gcc-only native/cross self-bootstrap + self-proof (aarch64)
+│   ├── rebake_bin.sh       #   rebake checked-in binaries + source-chain fingerprint gate (--check-all / --check / --check-vm)
+│   └── m116_gates.sh       #   full gate suite (semantics + freeze + rebake + diffcheck)
+├── runtime/                # C runtime (runtime.c/h + aes/xml/zip/ws/rsa/ed25519/sqlite/route/h2/h3/quic/image/onnx + mbedtls + third_party), 367 natives
+├── stdlib/                 # Standard library (27 .px files: 13 public libs — collections/cookiejar/edge/gfx/html/lunar/multipart/png/pxml/semver/smtp/webroute/yaml — plus L1 helpers strings/path/url/io/time_go/jsonx/…)
+├── registry/               # Versioned library distribution (registry/<name>/<version>/<name>.px, 13 libs)
+├── examples/               # 130 example directories / 120 single-file .px (hello / fib / match / concurrency / networking / TLS / SQLite / HTTP3 / edge / semantic gates ...)
+├── packaging/              # Distribution packaging (rpm/dnf repos · make_release · tag_guard)
 ├── archive/rust-compiler/  # Rust compiler source archive (read-only; the pre-bootstrap implementation; git history preserved)
-├── docs/                   # Documentation (spec / Mini subset / ROADMAP)
-└── .github/workflows/ci.yml # CI: regression + bootstrap proof + example compilation
+├── docs/                   # Documentation (index docs/README.md · spec · AI cheatsheet · ecosystem · roadmap ...)
+└── .github/workflows/      # CI: regression + bootstrap proofs (C/BC) + examples + four-arch matrix + native aarch64 bootstrap + release + Tag Guard
 ```
 
 ---
@@ -260,10 +297,18 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 
 | Document | Description |
 |---|---|
-| [docs/spec.md](docs/spec.md) | Language specification (lexical / syntax / semantics / standard library) |
+| [docs/README.md](docs/README.md) | **Documentation index** (which doc covers what, reading paths by role, which files are historical archives) |
+| [docs/spec.md](docs/spec.md) | **Language specification** (lexical / types / expressions / statements / concurrency / modules / **semantic consistency §17** / error codes §11 / toolchain §12) |
+| [docs/PUXIAN_CHEATSHEET.md](docs/PUXIAN_CHEATSHEET.md) | **AI cheatsheet** (feed the whole file to an LLM and it writes correct `.px`: pitfalls · native roster · three-rail differences and unified rules) |
+| [docs/ECOSYSTEM.md](docs/ECOSYSTEM.md) | Ecosystem overview (13 libraries, exported APIs / dogfood capability map / consumption paths / drift-proof machine index) |
+| [docs/ECOSYSTEM_GAPS.md](docs/ECOSYSTEM_GAPS.md) | Library-authoring checklist + language-gap assessments (historical record) |
+| [docs/DICT_STRICT_MIGRATION.md](docs/DICT_STRICT_MIGRATION.md) | **Strictness migration guide** (M163–M167: strict keys, iteration snapshot, unpacking shape, `items()`) |
 | [docs/MINI_SUBSET.md](docs/MINI_SUBSET.md) | **Mini subset spec** (the locked language surface of the self-hosted compiler: supported features / explicitly excluded / known limitations) |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | Roadmap (completed milestones + future directions) |
-| [CHANGELOG.md](CHANGELOG.md) | Changelog (notable changes per milestone) |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Roadmap (completed milestones + future directions + language debt) |
+| [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md) | Release SOP (tag-driven automation / artifacts / missing-tag guard) |
+| [docs/PXML.md](docs/PXML.md) | PXML configuration-language spec (behind `std.pxml`) |
+| [docs/GAP_ANALYSIS.md](docs/GAP_ANALYSIS.md) | Capability gap analysis (edge devices / 2D-3D lines) |
+| [CHANGELOG.md](CHANGELOG.md) | Changelog (notable changes per milestone, with defect numbers and verification evidence) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution guide (build / test / PR guidelines) |
 | [SECURITY.md](SECURITY.md) | Security vulnerability reporting policy |
 
@@ -324,11 +369,42 @@ During bootstrapping the language was locked to the **Mini subset** (`docs/MINI_
 | M71 | **Build-pipeline modernization + AI delivery one-stop** (docs/M71_PLAN.md): `px build` precompiled-runtime `.o` incremental cache (rebuild quic 14.7s→**0.94s** / no-quic 11.6s→**0.41s**) → `px build --target <arch>` high-level cross switch (one command folds 5 flags) → **MCP 9th tool `build`** (write→verify→deliver closed loop) → Release ships `sha256sums.txt` + `tools/install.sh` one-shot install (argv0 self-discovery + PX_STDLIB auto-inject, usable from any cwd) → ECOSYSTEM_GAPS F4 correction (compiled px build is ms-fast on large files ≈ grep) |
 | M72 | **AI debug loop + runtime bytes support** (docs/M72_PLAN.md, qg-issue 9/10/13-R1): `print`/`println` **flush per line** (no more 8KB buffering under pipes/journald; existing .px needs zero changes) + new natives `flush()`/`print_err()` → **compiled-binary runtime errors carry the .px source line** (`运行时错误 [函数 行N]: msg` — one-shot AI locating) → **spawn-coroutine runtime errors are isolated by default** (scene printed + host keeps running; `PX_SPAWN_ISOLATE=0` reverts to exit) → **bytes natives**: `aes_gcm_encrypt_bytes/decrypt_bytes` (no utf8/NUL truncation; byte-compatible with Go crypto/aes-gcm) + `http_request` length-aware body (binary ciphertext uploads byte-exact) → Issue 9/10 archived done, 13-R1 ✅ (R2 ws-backup-px → M73) |
 
+### Platformization \& Ecosystem (M83–M158 — all ✅)
+
+| Milestone | Scope |
+|---|---|
+| M83–M94 | **Coroutine/scheduler completeness** (frame-coroutine M:N kernel, blocking primitives yield, preemption, timers folded into the scheduler loop) + **VM bytecode rail build-out** (M89 design → **since M91 the default `px build` artifact is the VM bytecode rail**) |
+| M95–M103 | **Full-chain coroutine-ization** of server and client paths (http_serve / sse_serve / route / vhost / middleware / connection-level IDLE / client network IO) + px_serve concurrent TLS-handshake fix + .px process-pool coroutine-ization + Issue 29/30 language gaps |
+| M104–M111 | Runtime performance \& memory paths (LTO profile · global-table O(1) name resolution · stable pointer slots for VM globals · amortized O(1) string indexing · slab + page reclamation) + server connection lifecycle family (TLS handshake no longer stalls the port) + response-header deny-list + serve allocation 13.5× blow-up root fix |
+| M112–M123 | **VM rail (the user-facing default) semantics/FFI closure** + gate exit codes + checked-in binary rebake in CI + built-in roster as the single source of truth + service-process/env primitives + all defects surfaced by real-module .px porting |
+| M125–M137 | Runtime **memory-safety trio** (allocation failure demoted to request-level 5xx · errors inside signal handlers no longer kill the process · lock audit on isolated rollback) + **api-server / token-cache fully ported to PuXian** (language defects 15–102 all fixed) |
+| M138–M148 | **Go-fidelity family**: regex · `encoding/json` Indent/Compact/HTMLEscape byte-for-byte · HTTP client failure-cause classification + IPv6 · large request bodies + chunked I/O · cyclic-value comparison/render/JSON · float64 bit patterns + NaN semantics · fixed-point decimal text + `-0.0` · `/` fully IEEE-754 + Go `%v` float text |
+| M149–M158 | **Service-readiness family**: TCP with timeouts \& distinguishable failures · digest/key-derivation + TLS client family · `tls_upgrade` · two allocation-rate cuts (literal pooling · compiler hot paths) + `join` byte semantics · strings with embedded NUL · **zero-dependency ONNX** (parse layer → tensors + 64 ops + topological executor) · interpreter function values → runtime native bridge |
+
+### Semantic Consistency Closure (M159–M167 — all ✅)
+
+> Shared root cause: **wherever the host language left things open, or implementations differ, our three rails (interpreter / VM / C) were bound to diverge.**
+> The answer is not "follow one of them" but **pick one predictable, diagnosable rule that all three rails can share** — which is what "beyond Go" means here in practice: **no silent corners**.
+
+| Milestone | Topic | Rule after closure |
+|---|---|---|
+| M159 | **aarch64 official channel** | `native_bootstrap.sh` (gcc-only self-bootstrap **with self-proof**) · host-arch-aware `tools/px` · `native-arm64` real-machine CI job · release asset |
+| M160 | Lexical closures / `def` inside functions | Closures capture **by reference** (shared cell), identical on all rails (defects 159/160) |
+| M161 | Generator capture (GenExp) | Generator lambda captures are a **value snapshot** (evaluated at creation); distinct from closures but the rules are explicit (defects 163/164) |
+| M162 | `sorted` | **Value comparison + stable sort** (defect 166: interpreter compared rendered strings · 167: select-sort instability on the C rail) |
+| M163 | Strict dict keys | Non-string key in a constructor (literal / comprehension) ⇒ `R1002` (the VM/C rails used to **silently drop data**; defects 168/169/171) |
+| M164 | Iteration position semantics split from user indexing | `d[int]` always ⇒ `R1002 字典索引键必须是字符串`; `for k in d` uses a dedicated iteration entry point (defects 170/174/175) |
+| M165 | **Evaluation order** | Expressions / call arguments / assignments are uniformly **lexical left-to-right** (C leaves it unspecified ⇒ the C rail used to follow gcc's right-to-left; defects 178/179) |
+| M166 | Mutating a container while iterating | **Length snapshot** on loop entry; a length change ⇒ `R1003 迭代期间被迭代容器长度变化: n0 → n1` (defect 176) |
+| M167 | Unified unpacking | Statement form `for a, b in xs` + `dict.items()`; shape/length mismatch ⇒ `R1002` (defects 180/182) |
+
+> Details and migration guidance: [docs/spec.md §17](docs/spec.md) and [docs/DICT_STRICT_MIGRATION.md](docs/DICT_STRICT_MIGRATION.md); every rule ships a three-rail byte-identical gate plus negative controls (`examples/m159_*` … `examples/m167_*`).
+
 ---
 
 ## Examples
 
-The `examples/` directory (80+ examples) for quick hands-on:
+The `examples/` directory (**130 example directories / 120 single-file `.px`**) for quick hands-on:
 
 ```bash
 # Interpreted run
@@ -372,7 +448,17 @@ The `examples/` directory (80+ examples) for quick hands-on:
 - `m57_s4_cross_verify.sh` — **aarch64 cross-compile + qemu verify** (arm64 static binary 2.5MB edge-device ioctl identical to x86)
 - `m57_s5_pxi_smoke.px` — rebuilt pxi exposes the 10 M57 builtins (open/read/ioctl in-place fill/write/mmap live mapping; interpret/compile outputs identical)
 - `m58_hwmond/` — **M58 dogfood real app: pxhwmond hardware health monitor daemon** (multi-file import project: main/collect/shm/serve/notify; verify_s1–s4.sh per-substep self-checks; usage/deploy see `m58_hwmond/README.md`)
+- `m159_hostarch/` … `m167_unpack/` — **semantic-consistency gates** (host-arch adaptation · closures · generator capture · stable `sorted` · strict dict keys · iteration position semantics · evaluation order · mutation during iteration · unpacking): each gate = byte-identical three rails + independently red negative controls
 - ... full list in `examples/`
+
+---
+
+## Ecosystem
+
+- **13 public standard libraries** (pure `.px`, `import std.*`): collections · semver · webroute · yaml · pxml · lunar · gfx · png · edge · cookiejar · html · multipart · smtp（plus L1 helper modules — **27 `.px` files** under `stdlib/`).
+- **Overview**: [`docs/ECOSYSTEM.md`](docs/ECOSYSTEM.md) — library positioning and exported APIs / capability map of examples / consumption paths (import · pxpkg · copy the source) / drift-proof machine indexes (`tools/gen_ecosystem.px`, `tools/gen_native_table.sh`).
+- **AI cheatsheet**: [`docs/PUXIAN_CHEATSHEET.md`](docs/PUXIAN_CHEATSHEET.md) — feed it whole to an LLM; includes the **367-native roster** (`docs/native_index.json`) and the three-rail facts table.
+- **Package management**: `tools/pxpkg` (init / add / install + reproducible `px.px.lock`); **13 official libraries** ship in-repo under `registry/<name>/<version>/<name>.px` (fetch → import loop works end-to-end).
 
 ---
 
