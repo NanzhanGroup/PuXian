@@ -108,7 +108,9 @@ def i_run_program(prog):
             if e.has("__prop__"):
                 let pv = e["__prop__"]
                 if i_type_name(pv) == "result" and pv.is_err():
-                    print("错误: " + i_to_str(pv.err()))
+                    # M172（缺陷 186）：诊断一律走 **stderr**（对齐编译轨 + Issue 45/51 的
+                    #   「诊断不得混进产物通道」）；此前这里是 print（stdout）。
+                    print_err("错误: " + i_to_str(pv.err()))
                     g_exit_code = 1
                 return Ok(null)
             return Err(e)
@@ -122,7 +124,7 @@ def i_run_program(prog):
                 if i_type_name(ov) == "int":
                     g_exit_code = ov
             else:
-                print("错误: " + i_to_str(v.err()))
+                print_err("错误: " + i_to_str(v.err()))
                 g_exit_code = 1
     return Ok(null)
 # ---------- 入口 ----------
@@ -173,6 +175,8 @@ def main():
     let r = i_run_program(prog)
     if r.is_err():
         let e = r.err()
-        print("运行时错误: " + i_err_display(e))
+        # M172（缺陷 186）：运行期诊断统一到 **stderr**（原先 print ⇒ 走 stdout，
+        #   与编译轨的 stderr、以及 Issue 45/51「诊断不得混进产物通道」相悖）。
+        print_err("运行时错误: " + i_err_display(e))
         return 1
     return g_exit_code

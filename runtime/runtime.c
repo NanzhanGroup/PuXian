@@ -4942,7 +4942,7 @@ LXValue px_get_global(const char* name) {    // M55/P0（issue#2）：与 px_set
     }
     gc_unblock_stop(&old);
     pthread_rwlock_unlock(&g_globals_mu);
-    px_error("未定义变量: %s", name);
+    px_error("R1001: 未定义变量: '%s'", name);
     return px_null();
 }
 
@@ -5038,6 +5038,10 @@ static LXValue bi_flush(LXValue* args, int nargs, void* ctx) {
 // stderr（默认无缓冲，天然实时）→ 服务错误/诊断出口统一 stderr 的基础。
 static LXValue bi_print_err(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
+    // M172（缺陷 186）：先刷 stdout —— 诊断走 stderr 后，若 stdout 仍留在缓冲里，
+    //   `2>&1` 合并捕获（门/日志的标准做法）里诊断会**跑到程序输出前面**，与
+    //   「程序先输出、再报错」的因果相反。px_error 早有同样一行，此处补平。
+    fflush(stdout);
     pthread_mutex_lock(&g_print_mu);
     for (int i = 0; i < nargs; i++) {
         if (i) fputc(' ', stderr);

@@ -302,6 +302,21 @@ run m170_gc_bridge bash examples/m170_gc_bridge_root/verify.sh
 #   L002 / 声明未读仍报 L001 —— 防「一律不报也是 0 错」）；③ 仓内 8 个真实文件 0 错误；
 #   ④ 负控 3 道（顶层帧顶 hoist / 推导式变量声明 / 外层帧可见链 —— 各自独立判红）。
 run m171_lint_scope bash examples/m171_lint_scope/verify.sh
+# M172（第 56 轮 · 台账缺陷 186）：**运行期诊断的通道与措辞统一**。
+# 修前实测（三轨四种行为）：`def f(): return zzz + 1` 解释轨把诊断写 **stdout**
+#   （`运行时错误: 错误 [R1001] 2:12: 未定义变量: 'zzz'`）、编译轨写 stderr
+#   （`运行时错误 [f 行2]: 未定义变量: zzz`）；`def main(): return Err("boom")` 解释轨
+#   同样写 stdout。⇒ ① 诊断混进**产物通道**（与 Issue 45/51 及 engine_parity 判据 B
+#   「失败时 stdout 必须为空」同轴相悖）；② 三轨措辞不同 ⇒ 自动化无法按错误码判。
+# 修法：解释轨三处诊断出口改 `print_err`（stderr）· 编译轨 `未定义变量` 两处（runtime.c
+#   px_get_global / vm.c GETG）补 `R1001:` 前缀与引号 · `print_err` 先 `fflush(stdout)`
+#   （否则诊断在 `2>&1` 合并流里会跑到程序输出**前面**）。
+# 判据：① R1001 三轨（rc≠0 · stdout 恰为程序输出 · stderr 含 R1001 与 `未定义变量: 'zzz'`）；
+#   ② main→Err 三轨（rc≠0 · stdout 空 · stderr 含「错误: boom」）；③ 正常程序 stderr 0 字节；
+#   ④ 真·合并流顺序（首行必须 `out-1`）；⑤ 负控 2 道（通道 / 措辞，各自独立判红 + 还原复绿）。
+# 诚实边界：**位置前缀**保留各轨最优信息（解释轨行列 / 编译轨函数+行），判据只断言
+#   「同通道 + 同错误码 + 同消息体 + rc」，不按整行对拍。
+run m172_diag_channel bash examples/m172_diag_channel/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

@@ -1,0 +1,13 @@
+# M172 门 · 用例 ③：正常程序 —— stderr 必须**一个字节都没有**（诊断通道不能反向污染）
+def fib(n):
+    if n <= 1:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+let parts = []
+var i = 0
+while i < 8:
+    parts.append(str(fib(i)))
+    i += 1
+print("fib=" + join(",", parts))
+print("sum=" + str(sum([1, 2, 3, 4])))
