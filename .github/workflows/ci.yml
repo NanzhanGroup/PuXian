@@ -5,6 +5,14 @@ on:
     branches: [main]
   pull_request:
 
+# M168：并发组 + cancel-in-progress —— 连续 push 时，**同一分支只保留最新一次**运行，
+#   旧的在队列里的运行会被取消。背景：2026-09-21 一轮里连推 5 个提交 ⇒ 5 个 CI 串行排队
+#   （每个 ~15min），最想要的"最新提交"要等 1 小时才轮到；而旧提交的结论已无意义。
+#   ⚠️ release.yml **不能**这样（发布中途被取消会留下半成品），故只在 CI 上用。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   regression:
     name: 自举回归（PuXian-only）
