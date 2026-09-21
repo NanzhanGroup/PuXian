@@ -1,0 +1,115 @@
+# ============================================================
+# M173 门 · 用例 A：vhost handler 分支补 gzip（晨曦 P1-2）
+# ------------------------------------------------------------
+# 病灶：压缩判定只存在于 ① px_serve 原生静态分支、② `.px` 脚本响应分支；
+#   经 `vhost(host, handler)` 注册的站点走 px_vhost_respond ⇒ **文本响应一律明文下发**
+#   （晨曦实测 3408B 页面无 Content-Encoding / 无 Vary，白耗 3~5× 带宽，CDN 回源同步放大）。
+# 判据要点：**必须看线上字节** —— `http_request` 客户端会自动 gunzip（它自己发的
+#   Accept-Encoding）⇒ 只看响应头验不出「线上到底压没压」。故本用例走**裸 TCP**，
+#   把原始响应 hex 化后断言「头结束符 \r\n\r\n 之后紧跟 gzip 魔数 1f8b」。
+# ⚠️ stdout 必须**确定性**（门要对双轨 stdout 逐字节对拍）⇒ 成功路径不打印任何
+#   时间/计数；诊断细节只在 FAIL 行里出（chk3 的 det）。
+# ============================================================
+PORT = 18220
+D = "/tmp/px_m173_doc"
+mkdir(D)
+write_file(D + "/index.html", "<html><body>" + join("", ["静态文件正文0123456789ABCDEF" for i in range(80)]) + "</body></html>")
+
+def bigtext():
+    var s = ""
+    var i = 0
+    while i < 60:
+        s += "普贤文本响应载荷0123456789abcdef"
+        i += 1
+    return s
+
+def handler(req):
+    let p = req["path"]
+    if p == "/big":
+        return {"status": 200, "body": bigtext(), "headers": {"Content-Type": "text/plain; charset=utf-8"}}
+    if p == "/small":
+        return {"status": 200, "body": "tiny", "headers": {"Content-Type": "text/plain; charset=utf-8"}}
+    if p == "/selfgz":
+        return {"status": 200, "body": gzip_compress(bigtext()), "headers": {"Content-Type": "text/plain; charset=utf-8", "Content-Encoding": "gzip"}}
+    return {"status": 404, "body": "no"}
+
+vhost("h.test", handler)
+
+def serve():
+    px_serve(PORT, D, 30000)
+spawn serve()
+sleep(400)
+
+def raw_get(host, path, ae):
+    let c = tcp_connect_ex("127.0.0.1", PORT)
+    if not c["ok"]:
+        return bytes("")
+    let fd = c["fd"]
+    var q = "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n"
+    if ae != "":
+        q += "Accept-Encoding: " + ae + "\r\n"
+    q += "\r\n"
+    tcp_send_ex(fd, q)
+    var raw = bytes("")
+    var i = 0
+    while i < 200:
+        let r = tcp_recv_ex(fd, 65536)
+        if r["n"] > 0:
+            raw = bytes_concat(raw, r["data"])
+        if r["eof"] or not r["ok"]:
+            i = 200
+        i += 1
+    tcp_close(fd)
+    return raw
+
+def hx(s):
+    return bytes_to_hex(s)
+
+var fails = 0
+def chk(cond, what):
+    if cond:
+        print("  PASS " + what)
+    else:
+        print("  FAIL " + what)
+        fails = fails + 1
+
+def chk3(cond, what, det):
+    if cond:
+        print("  PASS " + what)
+    else:
+        print("  FAIL " + what + "  [" + det + "]")
+        fails = fails + 1
+
+let MAGIC = "0d0a0d0a1f8b"
+let CE_HEX = hx("Content-Encoding: gzip")
+let ACE_HEX = hx("Vary: Accept-Encoding")
+
+print("[1] vhost handler：Accept-Encoding: gzip + >1KB 文本 ⇒ 线上必须真压缩")
+let h1 = hx(raw_get("h.test", "/big", "gzip"))
+chk(contains(h1, CE_HEX), "线上有 Content-Encoding: gzip")
+chk(contains(h1, ACE_HEX), "线上有 Vary: Accept-Encoding")
+chk(contains(h1, MAGIC), "头结束符后紧跟 gzip 魔数 1f8b（= 体真的被压了）")
+
+print("[2] 不带 Accept-Encoding ⇒ 不压缩")
+let h2 = hx(raw_get("h.test", "/big", ""))
+chk(not contains(h2, CE_HEX), "线上无 Content-Encoding")
+chk(not contains(h2, MAGIC), "体是明文（无 gzip 魔数）")
+
+print("[3] 响应体小于阈值（gzip_min=1024）⇒ 不压缩")
+let h3 = hx(raw_get("h.test", "/small", "gzip"))
+chk(not contains(h3, CE_HEX), "小响应不压")
+
+print("[4] handler 自带 Content-Encoding ⇒ 不重复压（否则客户端只解一层 = 乱码）")
+let h4 = hx(raw_get("h.test", "/selfgz", "gzip"))
+chk(contains(h4, MAGIC), "体是 gzip（handler 自己压的那份）")
+let cnt = len(split(h4, CE_HEX)) - 1
+chk3(cnt == 1, "Content-Encoding 只出现 1 次（2 次 = 双重压缩）", "cnt=" + str(cnt))
+
+print("[5] 既有静态文件分支不回归（未注册的 Host 走 docroot）")
+let h5 = hx(raw_get("static.test", "/index.html", "gzip"))
+chk(contains(h5, hx("HTTP/1.1 200")), "静态 200")
+chk(contains(h5, CE_HEX) and contains(h5, MAGIC), "静态分支仍压缩")
+
+print("M173A-GZIP-OK fails=" + str(fails))
+if fails > 0:
+    exit(1)

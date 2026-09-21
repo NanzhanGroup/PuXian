@@ -1,0 +1,75 @@
+# ============================================================
+# M173 门 · 用例 B：池连接复用按本次调用重设超时（晨曦 P1-1）
+# ------------------------------------------------------------
+# 病灶：`SO_RCVTIMEO/SO_SNDTIMEO` 只在 `if (!from_pool)`（**新建连接**）里设置 ——
+#   先以较大超时建池、之后用小超时发请求时小超时**不生效**（连接上仍是建池时的旧值）。
+#   晨曦实测：反代超时单测「只有换独立端口（= 首次建连、走新池）才验得到 400ms 生效」。
+# 判据：同一 host:port 先大超时建池（/slow 睡 2s），再以 300ms 复用 ⇒ **必须超时报错**，
+#   且耗时远小于服务端 2s（修前：等满 2s 拿到 200）。
+# ⚠️ stdout 必须**确定性**：耗时只在 FAIL 行里出（chk3 的 det），成功路径不打印数字
+#   —— 门要对双轨 stdout 逐字节对拍。
+# ============================================================
+PORT = 18221
+
+def handler(req):
+    let p = req["path"]
+    if p == "/slow":
+        sleep(2000)
+        return {"status": 200, "body": "slow-done"}
+    return {"status": 200, "body": "fast"}
+
+vhost("t.test", handler)
+
+def serve():
+    px_serve(PORT, "/tmp", 30000)
+spawn serve()
+sleep(400)
+
+def get_t(path, tms):
+    let h = json_parse("{}")
+    h.set("Host", "t.test")
+    let o = json_parse("{}")
+    o.set("timeout_ms", tms)
+    o.set("retries", 1)
+    return http_request("http://127.0.0.1:" + str(PORT) + path, "GET", "", h, o)
+
+var fails = 0
+def chk(cond, what):
+    if cond:
+        print("  PASS " + what)
+    else:
+        print("  FAIL " + what)
+        fails = fails + 1
+
+def chk3(cond, what, det):
+    if cond:
+        print("  PASS " + what)
+    else:
+        print("  FAIL " + what + "  [" + det + "]")
+        fails = fails + 1
+
+print("[1] 先以 5000ms 建池：/slow（服务端睡 2s）正常完成，并把连接留进池")
+let t1 = now_ms()
+let ra = get_t("/slow", 5000)
+let d1 = now_ms() - t1
+chk3(type(ra) == "dict", "大超时下返回 dict", "type=" + type(ra))
+chk3(type(ra) == "dict" and ra["status"] == 200 and ra["body"] == "slow-done", "拿到 200 + 内容", "type=" + type(ra))
+chk3(d1 >= 1900 and d1 < 4000, "耗时落在服务端 2s 量级", "d1=" + str(d1))
+
+print("[2] 复用同一 host:port，换成 300ms ⇒ **必须**超时失败（修前会等满 2s 拿 200）")
+let t2 = now_ms()
+let rb = get_t("/slow", 300)
+let d2 = now_ms() - t2
+chk3(type(rb) != "dict", "小超时下不是 dict = 报错（修前是 dict/200）", "type=" + type(rb))
+chk3(d2 < 1500, "耗时远小于 2s（修前 ≈2000ms）", "d2=" + str(d2))
+
+print("[3] 反向：小超时之后放大超时 ⇒ 必须能再成功（超时是**每次调用**的，不是一次性的）")
+let t3 = now_ms()
+let rc3 = get_t("/slow", 5000)
+let d3 = now_ms() - t3
+chk3(type(rc3) == "dict" and rc3["status"] == 200, "放大超时后恢复成功", "type=" + type(rc3))
+chk3(d3 >= 1900, "耗时回到 2s 量级", "d3=" + str(d3))
+
+print("M173B-POOL-TIMEOUT-OK fails=" + str(fails))
+if fails > 0:
+    exit(1)

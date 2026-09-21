@@ -1,3 +1,77 @@
+## M173 · HTTP 反代/静态两件（第 57 轮 · 晨曦 QA 清单 P1-2 + P1-1）
+
+> 主题：**把生态侧的绕行收回 runtime**。晨曦这份 QA 清单里，有三项被 Mahesvara 用
+> `.px` 层补丁绕过去了（自己 gzip、自己 `has()` 再取值、自己写热更脚本）。绕行不是问题 ——
+> **问题是绕行会变成永久现状**：每多一个站点就多一份自压代码，而 runtime 的缺口
+> 没有任何门看得见（这次是**外部 QA 用生产流量发现的**）。本轮收掉其中两项。
+
+### 一、P1-2：`vhost(host, handler)` 分支没有 gzip 判定 ⭐ 本轮主项
+
+**现场**：runtime 的 gzip 判定只存在于两条路径 —— ① `px_serve` 的原生静态文件分支、
+② `.px` 脚本响应分支。经 `vhost(host, handler)` 注册的站点走 `px_vhost_normalize → respond`，
+**该分支从未有压缩判定**。晨曦部署前实测（带 `Accept-Encoding: gzip`）：
+
+```
+wsai.chat/index.html             3408B → 无 Content-Encoding、无 Vary
+soft.wsai.chat/…/install-rpm.sh 14712B → 同上
+ma.xiusoft.cn/index.html         6970B → 同上
+```
+
+⇒ **所有 vhost 站点**（就是 Mahesvara 全部站点）的文本响应明文下发，白耗 3~5× 带宽，
+CDN 回源同步放大。Ma 侧已在 `.px` 层用 `gzip_compress()` 自压（放在 `cache_store_resp`
+**之后**，避免 gzip 变体落缓存），实测 3408 → 1468B、6970 → 3172B。
+
+**修法**：在 `px_vhost_respond` 里复用**同一套**判定（`px_resp_gzipable` + `px_gzip_compress`），
+不再自造第三套；两个「不压」条件显式写出：
+
+| 条件 | 为什么 |
+|---|---|
+| handler 已自带 `Content-Encoding` | 否则**双重压缩** ⇒ 客户端只解一层 ⇒ 乱码（新增 `px_extra_has_content_encoding` 大小写不敏感扫描） |
+| `vst == 204 / 304` 或 `vblen <= 0` | 无体响应不该带 `Content-Encoding` |
+
+⇒ Ma 侧可退回「不自己压」，省一次内存拷贝与一次 `cache_store_resp` 的顺序约束。
+
+### 二、P1-1：池连接复用时不重设收发超时 ⇒ `timeout_ms` 失效
+
+**现场**：`SO_RCVTIMEO/SO_SNDTIMEO` **只在 `if (!from_pool)`（新建连接）里设置** ——
+先以较大超时建池、之后用小超时发请求时，连接上仍是建池时的旧值 ⇒ **小超时形同虚设**。
+晨曦的判据很干净：「只有换独立端口（= 首次建连、走新池）才验得到 400ms 超时生效」。
+影响：反代无法「按路径收紧超时」。
+
+**修法**：`HPoolSlot` 增 `to_ms`（建连时生效的超时），复用前**比对**，不一致才重设
+（省掉热路径上的两次 syscall）；TLS 侧同步改 `mbedtls_ssl_conf_read_timeout`（读超时由
+BIO 超时回调掌握，`conf` 是 ssl 持有的指针 ⇒ 改 conf 即生效）。
+
+### 三、门 `examples/m173_http_proxy/`（`M173-VERIFY-OK` · 16 断言 · VM+C 双轨）
+
+- **用例 A（12 断言）**：压缩生效 · 无 `Accept-Encoding` 不压 · 体小于 `gzip_min` 不压 ·
+  handler 自压不重复压（`Content-Encoding` 恰好出现 1 次）· 既有静态分支不回归。
+  ⚠️ **判据必须看线上字节**：`http_request` 客户端会自动 gunzip（它自己发的 `Accept-Encoding`）
+  ⇒ 只看响应头**验不出**「线上到底压没压」。故用例走**裸 TCP**（`tcp_connect_ex` 一族），
+  把原始响应 hex 化后断言 **`\r\n\r\n` 之后紧跟 gzip 魔数 `1f8b`**。
+- **用例 B（7 断言）**：大超时建池 → 300ms 复用**必须报错**且耗时 < 1.5s（修前 ≈2000ms 拿 200）
+  → 再放大超时恢复成功（证明超时是**每次调用**的属性，不是一次性的）。
+- **负控 2 道**：NC-A 关 vhost gzip 块（`if (0)`）· NC-B 关复用重设块（`else if (0)`）
+  —— 各自独立判红 + **sha256 逐字节还原**后复绿。CI 用 `--neg-skip`。
+- 纪律：**stdout 必须确定性**（门对双轨 stdout 逐字节对拍）⇒ 成功路径不打印任何时间/计数，
+  诊断细节只在 `FAIL` 行里出（`chk3` 的 `det`）。**第一版就是栽在这里**（把 `2002ms` 打进 PASS 行）。
+
+### 四、同批登记（未修，进台账）
+
+- **P2-6 `unix_connect/read/write` 不在 offload 白名单**：Ma 的 handler 跑在协程 worker 上
+  （`PX_CORO_WORKERS = min(CPU, 8)`）⇒ 阻塞型 unix I/O 最坏 8 个并发就能把整站（含静态）堵住。
+  晨曦自陈「该需求已由用户决定放弃」，诉求降级为「**在语言文档里显著标注**」
+  ⇒ 已在 `docs/PUXIAN_CHEATSHEET.md` 事实 200 里写明（任何语言级 unix socket I/O 都属阻塞原语，
+  勿在 handler 直接调用；要 offload 请走 `os_spawn_capture` 或改设计）。
+- **P0-3 HTTP/2 / P1-4 HTTP/3 / P1-5 SO_REUSEPORT** 仍在队列（分别要「给口径」「出构建档」「零停机」）。
+
+### 五、重定基与验收
+
+```
+入库件 --rebake-all        14 件全烘（runtime 源变 ⇒ 指纹全变）
+发射冻结门                 +2 件语料（examples/m173_http_proxy/）· 类别 B 为空
+CI 注册                    ci.yml 新步（--neg-skip）· m116_gates.sh 注册（本地跑负控）
+```
 ## M172 · 运行期诊断的通道与措辞统一（第 56 轮 · 台账缺陷 186）
 
 > 主题：**诊断不是「程序输出」**。M160–M171 一路在收「静默的角落」，本轮收的是另一端：

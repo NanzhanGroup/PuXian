@@ -14085,6 +14085,11 @@ typedef struct {
     int is_tls;
     int fd;
     HttpsSession* tls;
+    // M173（晨曦 P1-1）：建连时生效的 `opts.timeout_ms`。池连接**复用时超时不会自动跟随**
+    //   本次调用的值（此前只在 `if (!from_pool)` 里 setsockopt）⇒ 先以较大超时建池、之后
+    //   用小超时发请求的调用方**超时形同虚设**（反代无法「按路径收紧超时」）。记下来比对，
+    //   不一致才重设（省掉热路径上的两次 syscall）。
+    int to_ms;
 } HPoolSlot;
 static pthread_mutex_t g_hpool_mu = PTHREAD_MUTEX_INITIALIZER;
 static struct { char key[256]; int n; HPoolSlot slots[HTTP_POOL_PER_HOST]; } g_hpool[HTTP_POOL_MAX_HOSTS];
@@ -14930,6 +14935,22 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
             struct timeval tv = { timeout_ms / 1000, (timeout_ms % 1000) * 1000 };
             setsockopt(slot.fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
             setsockopt(slot.fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+            slot.to_ms = timeout_ms;   // M173：记下建连超时，供复用比对（见下方复用分支）
+        } else if (slot.to_ms != timeout_ms) {
+            // M173（晨曦 P1-1）：**复用池连接时按本次调用的 timeout_ms 重设**。
+            //   修前实测：同上游首次以大超时建池，之后小超时不生效（只有换独立端口/新池才验得到）。
+            //   · 明文：直接重设 SO_RCVTIMEO/SO_SNDTIMEO。
+            //   · TLS：读超时由 mbedtls 的 BIO 超时回调（`mbedtls_net_recv_timeout`）掌握，
+            //     它每次读都取 `ssl->conf->read_timeout` ⇒ 改 conf 即生效（`conf` 是 ssl 持有的
+            //     指针，非握手期拷贝）；SO_* 一并重设以覆盖 `send` 侧。
+            struct timeval tv2 = { timeout_ms / 1000, (timeout_ms % 1000) * 1000 };
+            if (slot.is_tls && slot.tls)
+                mbedtls_ssl_conf_read_timeout(&slot.tls->conf, (uint32_t)timeout_ms);
+            if (slot.fd >= 0) {
+                setsockopt(slot.fd, SOL_SOCKET, SO_RCVTIMEO, &tv2, sizeof(tv2));
+                setsockopt(slot.fd, SOL_SOCKET, SO_SNDTIMEO, &tv2, sizeof(tv2));
+            }
+            slot.to_ms = timeout_ms;
         }
         int status = 0, body_len = 0, keep_alive = 1;
         LXValue headers = px_null();
@@ -21767,6 +21788,17 @@ static int px_resp_gzipable(LXValue* headers, const char* ct, int body_len) {
 }
 
 
+// M173（晨曦 P1-2）：已拼好的响应头串里是否已有 `Content-Encoding`（大小写不敏感）。
+//   用途：vhost 分支补 gzip 时**不重复压缩**（handler 自己压过的，再压一层 ⇒ 客户端只解一层 ⇒ 乱码）。
+static int px_extra_has_content_encoding(const char* extra) {
+    if (!extra || !*extra) return 0;
+    static const char k[] = "content-encoding:";
+    for (const char* p = extra; *p; p++) {
+        if (strncasecmp(p, k, sizeof(k) - 1) == 0) return 1;
+    }
+    return 0;
+}
+
 // ==================== M98-S2b：vhost handler 响应（同步/异步段2 共用） ====================
 // vhost handler 返回非 null → vhost_normalize（M57-S7 白名单响应头）+ respond；返回
 // null → 空操作（调用方续 docroot 管道）。vhost 历史语义：无访问日志。
@@ -21849,6 +21881,32 @@ static void px_vhost_respond(PxHttpOut* pout, const char* method, int head_only,
     // 白名单透传——修复 BUG_REPORT：此前仅透传 Content-Type，其余响应头全丢
     px_vhost_normalize(r, &vst, &vct, &vbody, &vblen,
                        extra + extra_off, (int)sizeof(extra) - extra_off);
+    // M173（晨曦 P1-2）：**vhost handler 分支此前没有 gzip 判定** —— 压缩只存在于
+    //   ① px_serve 的原生静态文件分支、② `.px` 脚本响应分支。经 `vhost(host, handler)`
+    //   注册的站点（= Mahesvara 全部站点）走的是本函数 ⇒ 文本响应一律明文下发：
+    //   实测 3408B 页面 → 无 Content-Encoding、无 Vary，白耗 2~3× 带宽（CDN 回源同步放大）。
+    //   判据与另两条路径**同一套**（`px_resp_gzipable` + `px_gzip_compress`），不再自造第三套。
+    //   ⚠️ 两个不压条件：handler 已自带 `Content-Encoding`（用户自压，见上 helper）、
+    //      以及 204/304 无体响应。`Accept-Encoding` 由 px_resp_gzipable 判。
+    if (vst != 204 && vst != 304 && vblen > 0 && !px_extra_has_content_encoding(extra)) {
+        LXValue gh = px_dict_get(req, "headers");
+        if (px_resp_gzipable(&gh, vct, vblen)) {
+            int gzlen = 0;
+            char* gz = px_gzip_compress(vbody ? vbody : "", vblen, &gzlen);
+            if (gz) {
+                int avail = (int)sizeof(extra) - extra_off;
+                int need = snprintf(extra + extra_off, (size_t)(avail > 0 ? avail : 0),
+                                    "Content-Encoding: gzip\r\nVary: Accept-Encoding\r\n");
+                if (need > 0 && need < avail) {
+                    pout->respond(pout, vst, vct, gz, gzlen, head_only, keep_alive, extra);
+                    xfree(gz);
+                    (void)method;
+                    return;
+                }
+                xfree(gz);
+            }
+        }
+    }
     pout->respond(pout, vst, vct, vbody, vblen, head_only, keep_alive, extra);
     (void)method;
 }
