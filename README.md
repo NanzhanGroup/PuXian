@@ -43,6 +43,7 @@ PuXian 采用 **Apache License 2.0** 开源 —— 任何人可自由使用、�
 | ✅ **自举完成（M-B8）** | **PuXian 编译器由 PuXian 自己写成**：`lexer / parser / codegen / interp / bc_emit / 值系统` 核心全部用 `.px` 重写，自举证明 A.c == B.c == B2.c 逐字节一致 |
 | ✅ **Rust 版已退役（M-B9a）** | Rust 源码归档至 `archive/rust-compiler/`（只读），**新工具链 `tools/px` 完全无需 Rust**，基于自举二进制运行 |
 | ✅ **双后端 + 三轨（M91 起）** | 解释轨（`pxi` 树遍历）· **VM 字节码轨（`px build` 默认）** · C 文本轨（`px build --c` 逃生舱）。**同一份源码三轨行为一致**——由 `m116_gates.sh` 全量门 + 每里程碑专属门守住 |
+| ✅ **HTTP/2 口径落地 · HTTP/3 能力自证（M180）** | **H2 不做（长期）**，口径 = [docs/HTTP2_DECISION.md](docs/HTTP2_DECISION.md)：`Upgrade: h2c` **被忽略并按 HTTP/1.1 正常服务**（修前回一个与本站无关的**演示页** ⇒ 静默错内容）· `PRI * HTTP/2.0` 前导 ⇒ **505 + 说明** · ALPN 全线只声明 `http/1.1`（删掉不可达的 ALPN-h2 死代码）· h2 演示帧层收进 `opts{"h2_demo": true}`（默认关）· **H3 = 唯一现代路线**（`opts{"http3": true}` + 自动 `Alt-Svc`，x86_64 默认构建链 ngtcp2；`--no-quic` 时要求 H3 会**响亮报错**）· `PX_BUILD_FEATURES=1 px build …` 打**能力行**（`quic=on/off`，默认静默） |
 | ✅ **运算族一条真相 + 两颗静默坏值拆除（M179）** | 修前 `1.0 * "x"` 在编译轨读 union 的**指针位模式**（UB）⇒ VM 轨 `6.905411902715e-310` / C 轨 `6.95199933934835e-310`（**同机同源码两个垃圾值**）· `1 / "x"` ⇒ `inf` · `1 < "x"` ⇒ **`true`**（按类型名字典序）· `1.5 & 1` ⇒ `1`（截断）· 整数除零**无码**。现在：算术要数值 · 次序比较要**双数值或同类型** · 位运算/索引位置要 int · 越界 `R1003: 索引越界: i (len=n)` · 除零 `R1006`；`sorted`/`min`/`max` 保持**全序内部比较器** |
 | ✅ **可迭代实参只有一条定义（M178）** | `list` / `tuple` / 生成器 / **字符串（按 rune）** —— `join`/`sorted`/`reversed`/`contains` 与 `min`/`max`/`sum`/`unique`/`flatten` 共用同一条迭代语义（`px_as_list` = `px_len` + `px_iter_at`）。顺手修掉一颗**坏值**：`reversed("中文")` 旧实现按**字节**反转 ⇒ 产出**非法 UTF-8**；现在按 rune 反转且返回 str。拒绝文案三轨同形 |
 | ✅ **运行期 GC 根面收口（M170）** | precise GC 的「谁保活」真空被收成**两条硬约束**（容器创建后必须登记 · 登记必须紧跟创建、先于下一次分配）+ **多出口/隔离点用深度式登记**（`px_root_depth`/`px_root_restore`）。新检测器 `PX_GC_STRESS=1`（每次分配即 GC）把「偶发」变「必现」——用户报障那颗跑了 **16388 轮**才炸，现在第一轮就露 |
@@ -305,6 +306,7 @@ CI 每次提交自动跑 C 轨 + BC 轨证明与**重烘指纹门**（`.github/w
 | [docs/ECOSYSTEM.md](docs/ECOSYSTEM.md) | 生态总览（13 库定位与导出 API / dogfood 能力导航 / 消费路径 / 机器索引防漂移） |
 | [docs/ECOSYSTEM_GAPS.md](docs/ECOSYSTEM_GAPS.md) | 写库规范 checklist + 语言缺口评估（历史评估留档） |
 | [docs/DICT_STRICT_MIGRATION.md](docs/DICT_STRICT_MIGRATION.md) | 字典/序列**严格化迁移说明**（M163–M167：键严格、迭代快照、解包形状、`items()` 用法） |
+| [docs/HTTP2_DECISION.md](docs/HTTP2_DECISION.md) | **HTTP/2 与 HTTP/3 的口径**（M180：h2 不做 + 理由 + 迁移动作；H3 = `opts{"http3": true}` · 能力行 `quic=on/off`） |
 | [docs/MINI_SUBSET.md](docs/MINI_SUBSET.md) | **Mini 子集规范**（自举编译器语言面锁定：支持特性 / 明确排除 / 已知限制） |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | 路线图（已完成里程碑 + 远期方向 + 语言面欠账） |
 | [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md) | 发布 SOP（tag 驱动全自动发布 / 发布物清单 / 漏打 tag 守卫） |
@@ -409,6 +411,7 @@ CI 每次提交自动跑 C 轨 + BC 轨证明与**重烘指纹门**（`.github/w
 | M175 | 台账两小项 | `len(bytes)` = **字节数**（`bytes_len` 变为等价别名）· `os_popen` 的 stderr 去向右开（`inherit`/`pipe`/`null`，不传 opts 时逐字节保持旧行为；缺陷 153 / 14）|
 | M176 | **零停机换二进制** | `SO_REUSEPORT`（`opts{"reuse_port": true}` / `PX_REUSE_PORT=1`）· 门实测换二进制期间 700 次探测 `refused=0` · 内核要求**双方 opt-in** ⇒ 旧版也必须带开关启动（晨曦 P1-5）|
 | M177 | **两个引擎的内置面统一** | 解释轨独有的 `dict()` / `unique()` / `flatten()` 补进 runtime · `min`/`max` 单参数可迭代取元素最值（此前编译轨**静默返回生成器对象**）· `px_as_list` = `px_len` + `px_iter_at`（与 `for x in xs` 同源）· 名册门新增判据 ⑦（缺陷 165 的审计发现）|
+| M180 | **HTTP/2 口径落地 · HTTP/3 能力自证** | 口径 = [docs/HTTP2_DECISION.md](docs/HTTP2_DECISION.md)：**h2 不做**（要做就得重写帧循环+流控+管道集成，属架构级；H3 已完整接管道且成本更低）· h2c 升级**被忽略**、按 HTTP/1.1 服务（修前给演示页 = 静默错内容）· h2 前导 ⇒ `505` · ALPN 只声明 `http/1.1` · h2 演示帧层收进 `opts{"h2_demo": true}`（默认关）· H3 = `opts{"http3": true}`（x86_64 默认链 ngtcp2；`--no-quic` 下要求 H3 ⇒ 响亮报错）|
 | M179 | **运算族：一条真相** | 算术要求**数值**（`str * int` 例外 = 重复）· `< <= > >=` 要求**双数值或同类型**（跨型 ⇒ `R1002 无法比较: <ta> vs <tb>`）· 位运算与索引位置要求 **int** · 越界 `R1003: 索引越界: i (len=n)` · 整数除零 `R1006`；`sorted`/`min`/`max` 用**全序内部比较器**（跨型按类型名）。修前 `num_val` 读 union 的指针位模式（UB）⇒ 编译轨**静默坏值**（缺陷 195/196）|
 | M178 | **可迭代实参只有一条定义** | `list` / `tuple` / 生成器 / **字符串（按 rune）**——`join`/`sorted`/`reversed`/`contains` 与 M177 的五个内置同一入口；**`reversed(str)` 修「按字节反转 ⇒ 非法 UTF-8」**（坏值）并统一返回 str；拒绝文案同形；新登记缺陷 195 |
 

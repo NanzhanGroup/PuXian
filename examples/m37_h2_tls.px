@@ -1,4 +1,10 @@
-# M37① HTTP/2 over TLS（ALPN h2）：tls_server 注册后 HTTPS 连接按 ALPN 协商 h2 → 帧处理
+# M37①→M180 HTTP + TLS 的**口径判据**（原「ALPN h2」能力已按口径移除）
+#   历史：M37 断言「客户端声明 ALPN h2 ⇒ 协商到 h2 ⇒ 走 h2 帧循环（演示页）」。
+#   现状（M180 实测复核 + 口径 docs/HTTP2_DECISION.md）：**ALPN 全线只声明 http/1.1**
+#   ⇒ 客户端声明 `h2,http/1.1` 时必须协商到 **http/1.1**；h2 不做，所以也不会再出现
+#   「走到演示帧层」这种与本站无关的内容。
+#   本用例因此**升格为口径判据**：ALPN == http/1.1 · h1.1 请求拿到**真实 docroot 内容** ·
+#   响应里**不得**出现演示页字样。
 PORT = 18175
 D = "/tmp/px_m37_h2"
 mkdir(D)
@@ -16,7 +22,7 @@ def serve():
 spawn serve()
 sleep(800)
 
-# python h2 TLS 客户端：ALPN h2 → preface + SETTINGS + HEADERS(GET) → 校验 h2 响应
+# python TLS 客户端：声明 h2,http/1.1 → 断言协商到 http/1.1 + h1.1 拿到真实内容
 write_file("/tmp/h2_tls_client.py", '''
 import ssl, socket, sys, time
 port = int(sys.argv[1])
@@ -28,30 +34,25 @@ s = socket.create_connection(("127.0.0.1", port), timeout=5)
 t = ctx.wrap_socket(s, server_hostname="localhost")
 alpn = t.selected_alpn_protocol()
 t.settimeout(3)
-# connection preface + SETTINGS + HEADERS(stream 1, GET /hello)
-t.sendall(b"PRI * HTTP/2.0\\r\\n\\r\\nSM\\r\\n\\r\\n")
-t.sendall(b"\\x00\\x00\\x00\\x04\\x00\\x00\\x00\\x00\\x00")
-t.sendall(b"\\x00\\x00\\x0a\\x01\\x05\\x00\\x00\\x00\\x01\\x82\\x86\\x84\\x44\\x05hello")
-time.sleep(0.5)
+t.sendall(b"GET /index.html HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n")
 data = b""
 try:
     while True:
-        chunk = t.recv(4096)
-        if not chunk:
+        c = t.recv(4096)
+        if not c:
             break
-        data += chunk
-        if b"PuXian HTTP/2" in data:
-            break
+        data += c
 except Exception:
     pass
 t.close()
-ok = alpn == "h2" and b"PuXian HTTP/2" in data and b"path=hello" in data
-print("H2_TLS_OK" if ok else "H2_TLS_FAIL alpn=" + str(alpn))
+head = data.split(b"\\r\\n", 1)[0].decode("latin1") if data else ""
+ok = (alpn == "http/1.1") and head.startswith("HTTP/1.1 200") and (b"H2TLS" in data) and (b"PuXian HTTP/2" not in data)
+print("M37_ALPN_H11_OK" if ok else ("M37_ALPN_H11_FAIL alpn=" + str(alpn) + " head=" + head + " data=" + repr(data[:120])))
 ''')
 
 os_spawn("/bin/sh", ["-c", "python3 /tmp/h2_tls_client.py " + str(PORT) + " > /tmp/m37_h2tls_res.txt 2>&1"])
 sleep(1500)
 res = read_file("/tmp/m37_h2tls_res.txt")
-print("h2 tls:", res)
-assert(contains(res, "H2_TLS_OK"), "HTTP/2 over TLS")
-print("M37_H2_TLS_OK")
+print("m37 tls:", res)
+assert(contains(res, "M37_ALPN_H11_OK"), "ALPN 口径（协商 http/1.1 + 真实内容 + 无演示页）")
+print("M37_H2_TLS_STANCE_OK")

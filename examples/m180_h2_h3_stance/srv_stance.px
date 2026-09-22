@@ -1,0 +1,9 @@
+# M180 门用服务器：**默认口径**（不开 h2_demo）
+#   docroot 里放 index.html = "STANCE-DOC-OK"；客户端见 h2_stance_client.py
+#   端口可用 `PX_STANCE_PORT` 覆盖（门会在负控阶段换端口，避免"旧进程还占着"的假绿）。
+var port = 18190
+let pe = env("PX_STANCE_PORT")
+if pe != null:
+    port = int(pe)
+print("SRV-READY")
+px_serve(port, "/tmp/m180_stance_docroot", 5000)

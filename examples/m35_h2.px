@@ -38,7 +38,8 @@ print("H2_CLIENT_OK" if ok else "H2_CLIENT_FAIL")
 ''')
 
 def serve():
-    px_serve(PORT, D, 10000)
+    # M180：h2 **演示帧层**收进显式开关（口径 = docs/HTTP2_DECISION.md：h2 不做）
+    px_serve(PORT, D, 10000, {"h2_demo": true})
 spawn serve()
 sleep(400)
 

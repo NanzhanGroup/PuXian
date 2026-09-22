@@ -187,6 +187,8 @@ examples/m179_arith_diag/err_pow_str.px src=c3d0d6b301767e59 rc=0 out=4ab92bd6ab
 examples/m179_arith_diag/err_str_oob.px src=a4262029e85418bd rc=0 out=1b6b44ead3e8de64030b2366a759e78b err=e3b0c44298fc1c14
 examples/m179_arith_diag/err_sub_str.px src=9b076392005ea31d rc=0 out=c96205dfe6c13d9cafaf44fc23945839 err=e3b0c44298fc1c14
 examples/m179_arith_diag/ok_matrix.px src=0007c8177e03b60d rc=0 out=0038adb0740dcafc404fd8646c0f17e4 err=e3b0c44298fc1c14
+examples/m180_h2_h3_stance/noquic_http3.px src=dc1d8bc9d19e4876 rc=0 out=fb362b2ebc0d13ca4297b6eba8794fdd err=e3b0c44298fc1c14
+examples/m180_h2_h3_stance/srv_stance.px src=f7105dc211f1fa5b rc=0 out=dc585e300ee5444a2e08321ad30a6083 err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=ca57a90d693278f051ce29d427bb006a err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=864a86fa0f3b5c69d3239ebdb2eac63a err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14

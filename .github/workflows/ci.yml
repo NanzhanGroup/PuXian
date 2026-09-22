@@ -348,6 +348,11 @@ jobs:
           #   修前 `1.0 * "x"` 在编译轨读 union 的 as.f（UB）⇒ 两轨两个不同垃圾值、
           #   `1 / "x"` ⇒ inf、`1 < "x"` ⇒ true；现在三轨同码（R1002/R1003/R1006）同消息体。
           bash examples/m179_arith_diag/verify.sh --neg-skip > /tmp/v_m179.log 2>&1 || { echo "❌ m179_arith_diag verify 失败"; tail -60 /tmp/v_m179.log; exit 1; }
+          # M180（第 58 轮 · 晨曦 QA 清单 P0-3/P1-4）：HTTP/2 口径落地 + HTTP/3 能力自证 ——
+          #   h2c 升级被**忽略并按 h1.1 服务真实内容**（修前给固定演示页 = 静默错内容）+
+          #   h2 prior-knowledge 前导 ⇒ 505 + 说明 + `--no-quic` 下 opts.http3 **响亮报错** +
+          #   默认/--no-quic 产物的 ngtcp2 能力自证。口径：docs/HTTP2_DECISION.md。
+          bash examples/m180_h2_h3_stance/verify.sh --neg-skip > /tmp/v_m180.log 2>&1 || { echo "❌ m180_h2_h3_stance verify 失败"; tail -60 /tmp/v_m180.log; exit 1; }
           # 发射冻结门（M153 建立）：292 个用例的 --emit-c 输出必须逐字节不变。
           bash selfhost/emitc_freeze.sh --check > /tmp/v_emitc_freeze.log 2>&1 || { echo "❌ emitc_freeze 失败"; tail -30 /tmp/v_emitc_freeze.log; exit 1; }
           echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 / m153 / m154 / m155 / m158 / m160 / m161 / m162 / m163 / m164 verify / m170_gc_bridge_root + 发射冻结门（299 件 --emit-c）全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"

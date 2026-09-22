@@ -13,6 +13,7 @@
 | [`PUXIAN_CHEATSHEET.md`](PUXIAN_CHEATSHEET.md) | **AI 速查包**（给大模型整包喂）：易错事实表、native 名册、三轨差异与统一口径、逐里程碑「事实 NNN」条目 | 让 AI 写 `.px` 的人；排障时先搜这里 |
 | [`MINI_SUBSET.md`](MINI_SUBSET.md) | **Mini 子集规范**：自举编译器只会正确编译的语言面（支持 / 明确排除 / 已知限制）。写 `selfhost/*.px` 的硬约束 | 改编译器/解释器源码的人 |
 | [`DICT_STRICT_MIGRATION.md`](DICT_STRICT_MIGRATION.md) | **严格化迁移说明**（M163–M167）：字典键、迭代快照、解包形状、`items()` —— 老代码/permission 迁移怎么改 | 存量 `.px` 维护者 |
+| [`HTTP2_DECISION.md`](HTTP2_DECISION.md) | **HTTP/2 与 HTTP/3 的口径**（M180）：**h2 不做**（理由 + 迁移动作 + 重评估触发条件）· H3 = `opts{"http3": true}` + 自动 `Alt-Svc`（x86_64 默认链 ngtcp2；`--no-quic` 下要求 H3 ⇒ 响亮报错）· `px build` 能力行 `quic=on\|off` | 部署/运维；给外部（如 Ma 侧）定文档时**直接引用** |
 | [`ECOSYSTEM.md`](ECOSYSTEM.md) | **生态总览**：13 个公开库的定位与导出 API、示例能力导航、消费路径（import / pxpkg / 拷源码）、机器索引与防漂移 | 写库 / 用库的人 |
 | [`ROADMAP.md`](ROADMAP.md) | 路线图：能力基线、已完成主线、远期方向、语言面欠账 | 想了解进度与方向的人 |
 | [`RELEASE_PROCESS.md`](RELEASE_PROCESS.md) | 发布 SOP：tag 驱动自动发布、发布物清单（含 aarch64 并列资产）、漏打 tag 守卫 | 发版的人 |

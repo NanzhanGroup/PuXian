@@ -858,6 +858,22 @@ cmd_build() {
     local size
     size=$(stat -c %s "$out_path" 2>/dev/null || echo 0)
     echo "编译成功: $out_path （$size 字节）"
+    # M180（晨曦 QA 清单 P1-4）：**能力行**（默认静默，PV_BUILD_FEATURES=1 时才打）——
+    #   判据不该靠 `strings` 猜；但**成功路径不能往 stderr 加噪声**：
+    #   `selfhost/engine_parity.sh` 的判据是「正例：默认轨 stderr 必须为空」
+    #   （M180 实测踩中，见 CHANGELOG M180 的教训条）
+    #   ⇒ 能力行做成**按需**：`PX_BUILD_FEATURES=1 px build …`（走 stderr，stdout 逐字节不变）。
+    #   口径：h2 不做（docs/HTTP2_DECISION.md）；QUIC/H3 需 ngtcp2 静态库（仅 x86_64 预置）。
+    if [ "${PX_BUILD_FEATURES:-0}" = "1" ]; then
+        local _q="on"
+        if [ "$no_quic" = "1" ]; then _q="off"; fi
+        if cut_has "$cuts" quic; then _q="off"; fi
+        echo "  能力: quic=$_q h2=off（口径见 docs/HTTP2_DECISION.md） 宿主=$(uname -m)" >&2
+        if [ "$_q" = "off" ]; then
+            echo "  ⚠️  本产物无 HTTP/3：opts{\"http3\": true} 会**响亮报错**（不会静默不服务）" >&2
+            echo "      需要 H3 请用 x86_64（预置 ngtcp2/openssl-quictls）且不加 --no-quic" >&2
+        fi
+    fi
     return 0
 }
 
