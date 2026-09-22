@@ -43,7 +43,9 @@ def cg_gen_stmt_inner(stmt, indent):
                     if cg_structs.has(cname):
                         cg_var_types[name] = cname
             if cg_cells.has(name):
+                cg_inited_add(name)
                 return pad + "LXValue " + hv + " = px_cell(" + rhs + ");\n"
+            cg_inited_add(name)
             return pad + "LXValue " + hv + " = " + rhs + ";\n"
         # M62-L5：变量已由函数顶预声明（px_null 初始，块作用域不新建），此处仅赋值
         # 类型推断：struct 构造（与就地声明路径一致）
@@ -59,7 +61,10 @@ def cg_gen_stmt_inner(stmt, indent):
             if cname != null:
                 if cg_structs.has(cname):
                     cg_var_types[name] = cname
-        return pad + cg_store_of(name, hv, rhs) + ";\n"
+        let st_out2 = pad + cg_store_of(name, hv, rhs) + ";\n"
+        # M181（缺陷 193）：声明执行完成 ⇒ 其后读它不再需要 px_chk_uninit（初始化单调）
+        cg_inited_add(name)
+        return st_out2
     if ty == "Assign":
         var rhs = cg_gen_expr(stmt[3])
         let tgt = stmt[1]
@@ -82,8 +87,11 @@ def cg_gen_stmt_inner(stmt, indent):
                     return pad + "px_set_global(\"" + name + "\", " + rhs + ");\n"
                 let full = cg_assign_op_global(op, name, rhs)
                 return pad + "px_set_global(\"" + name + "\", " + full + ");\n"
-            let full = cg_assign_op_local(op, cg_load_of(name, v), rhs)
-            return pad + " " + cg_store_of(name, v, full) + ";\n"
+            let full = cg_assign_op_local(op, cg_load_ck(name, v), rhs)
+            let st_out = pad + " " + cg_store_of(name, v, full) + ";\n"
+            # M181（缺陷 193）：赋值式绑定即初始化（复合赋值同样读到过旧值）
+            cg_inited_add(name)
+            return st_out
         if tty == "Field":
             let o = cg_gen_expr(tgt[1])
             let fname = rust_unescape(tgt[2])
@@ -101,8 +109,13 @@ def cg_gen_stmt_inner(stmt, indent):
     if ty == "If":
         var s = ""
         let brs = stmt[1]
+        # M181（缺陷 193）：**初始化数据流** —— 分支可能都不执行某声明 ⇒ 之后只保留
+        #   各分支的**交集**（无 else 时与入口集求交）。方向纪律：多判无害、少判即缺陷。
+        let entry = cg_inited_copy()
+        var acc = null
         var bi = 0
         while bi < len(brs):
+            cg_inited_restore(entry)
             let c = cg_gen_expr(brs[bi][0])
             var kw = "if"
             if bi > 0:
@@ -114,7 +127,12 @@ def cg_gen_stmt_inner(stmt, indent):
                 s += cg_gen_stmt(body[si], indent + 1)
                 si += 1
             s += pad + "}\n"
+            if acc == null:
+                acc = cg_inited_copy()
+            else:
+                acc = cg_inited_intersect(acc, cg_inited_copy())
             bi += 1
+        cg_inited_restore(entry)
         if stmt[2] != null:
             s += pad + "else {\n"
             let eb = stmt[2]
@@ -123,8 +141,14 @@ def cg_gen_stmt_inner(stmt, indent):
                 s += cg_gen_stmt(eb[ei], indent + 1)
                 ei += 1
             s += pad + "}\n"
+            acc = cg_inited_intersect(acc, cg_inited_copy())
+        else:
+            acc = cg_inited_intersect(acc, entry)
+        cg_inited_restore(acc)
         return s
     if ty == "While":
+        # M181（缺陷 193）：循环体可能**一次都不执行** ⇒ 之后回退入口集（保守）
+        let wentry = cg_inited_copy()
         let c = cg_gen_expr(stmt[1])
         var s = pad + "while (px_is_truthy(" + c + ")) {\n"
         let body = stmt[2]
@@ -133,8 +157,12 @@ def cg_gen_stmt_inner(stmt, indent):
             s += cg_gen_stmt(body[bi], indent + 1)
             bi += 1
         s += pad + "}\n"
+        cg_inited_restore(wentry)
         return s
     if ty == "For":
+        # M181（缺陷 193）：入口集快照（iterable 在本状态求值；循环之后回退到它 ——
+        #   可能 0 次迭代 ⇒ 循环变量不算已初始化，与解释轨一致：空迭代后读 ⇒ R1001）
+        let fentry = cg_inited_copy()
         let it = cg_gen_expr(stmt[2])
         let it_var = cg_tmp()
         let idx_var = cg_tmp()
@@ -209,11 +237,18 @@ def cg_gen_stmt_inner(stmt, indent):
         else:
             s += pad + "    " + decls[0] + "\n"
         let body = stmt[3]
+        # M181（缺陷 193）：循环体内**循环变量必已初始化**（循环头就写它；模块体走全局，不入集）
+        if not cg_topbody:
+            var qn = 0
+            while qn < len(names):
+                cg_inited_add(names[qn])
+                qn += 1
         var bi = 0
         while bi < len(body):
             s += cg_gen_stmt(body[bi], indent + 1)
             bi += 1
         s += pad + "}\n"
+        cg_inited_restore(fentry)
         return s
     if ty == "Return":
         if stmt[1] != null:
@@ -233,6 +268,8 @@ def cg_gen_stmt_inner(stmt, indent):
             cg_uid()
             return pad + "px_set_global(\"" + cn + "\", px_chan_create(0));\n"
         let v = cg_new_var(cn)
+        # M181（缺陷 193）：就地声明即初始化
+        cg_inited_add(cn)
         return pad + "LXValue " + v + " = px_chan_create(0);\n"
     if ty == "Send":
         let c = cg_gen_expr(stmt[1])
@@ -284,7 +321,10 @@ def cg_gen_stmt_inner(stmt, indent):
             cg_uid()
             return pad + "px_set_global(\"" + dname + "\", " + dfn + ");\n"
         if dcv != null:
-            return pad + cg_store_of(dname, dcv, dfn) + ";\n"
+            let dfout = pad + cg_store_of(dname, dcv, dfn) + ";\n"
+            # M181（缺陷 193）：帧内 def 执行完成 ⇒ 该名已初始化
+            cg_inited_add(dname)
+            return dfout
         return ""
     # StructDef/EnumDef/TraitDef/ImplDef → 空（顶层在 generate 处理）
     return ""
@@ -372,6 +412,9 @@ def cg_gen_select(arms, else_branch, indent):
         return "select 至少需要一个 case 分支"
     let uid = cg_uid()
     var s = ""
+    # M181（缺陷 193）：select 有**重试环**（goto _sel_retry）⇒ 分支体里的声明可能从未执行
+    #   ⇒ 之后必须回退入口集（保守；少判即漏报，见 cg_inited 的说明）
+    let sentry = cg_inited_copy()
     let saved_vars = cg_dict_copy(cg_vars)
     let saved_types = cg_dict_copy(cg_var_types)
     let saved_cells = cg_dict_copy(cg_cells)
@@ -449,4 +492,5 @@ def cg_gen_select(arms, else_branch, indent):
     cg_vars = saved_vars
     cg_var_types = saved_types
     cg_cells = saved_cells
+    cg_inited_restore(sentry)
     return s

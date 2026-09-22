@@ -20,8 +20,8 @@ px_err_3:
 static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("main");
-    LXValue _v4 = px_null();
-    LXValue _v5 = px_null();
+    LXValue _v4 = px_uninit();
+    LXValue _v5 = px_uninit();
     LXValue px_err_6_val = px_null();
     int px_err_6_proped = 0;
     px_srcline(6);

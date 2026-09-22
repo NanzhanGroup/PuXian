@@ -14,9 +14,15 @@ assert s.count(old1) == 1, s.count(old1)
 s = s.replace(old1, new1)
 
 old2 = """    int sep_len = args[0].as.obj->as.str.len;
-    if (args[1].type != PX_LIST && args[1].type != PX_TUPLE) px_error("R1002: join 第二参数需要 list/tuple");"""
+    // M178：可迭代实参统一（list/tuple/生成器）
+    LXValue xs;
+    px_root_push();
+    if (!px_as_list(args[1], &xs)) { px_root_pop(); px_error("R1002: join 第二参数需要 list/tuple/生成器/字符串，实际是 %s", px_type_name(args[1])); }"""
 new2 = """    int sep_len = (int)strlen(sep);   /* NEGCTL-M154C：旧口径 */
-    if (args[1].type != PX_LIST && args[1].type != PX_TUPLE) px_error("R1002: join 第二参数需要 list/tuple");"""
+    // M178：可迭代实参统一（list/tuple/生成器）
+    LXValue xs;
+    px_root_push();
+    if (!px_as_list(args[1], &xs)) { px_root_pop(); px_error("R1002: join 第二参数需要 list/tuple/生成器/字符串，实际是 %s", px_type_name(args[1])); }"""
 assert s.count(old2) == 1, s.count(old2)
 s = s.replace(old2, new2)
 

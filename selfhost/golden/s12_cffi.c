@@ -6,10 +6,10 @@
 static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("main");
-    LXValue _v1 = px_null();
-    LXValue _v2 = px_null();
-    LXValue _v3 = px_null();
-    LXValue _v4 = px_null();
+    LXValue _v1 = px_uninit();
+    LXValue _v2 = px_uninit();
+    LXValue _v3 = px_uninit();
+    LXValue _v4 = px_uninit();
     LXValue px_err_5_val = px_null();
     int px_err_5_proped = 0;
     px_srcline(13);

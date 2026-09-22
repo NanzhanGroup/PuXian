@@ -13,6 +13,49 @@
 # 并发语句（spawn/send/recv/select/chan）Mini 子集排除 → 报错。
 # ============================================================
 # ---------- 语句分发 ----------
+# M181（第 59 轮 · 缺陷 193）：帧内**声明式**绑定名收集（口径对齐 cg_collect_decl_vars /
+#   bc_collect_decl_vars）；帧入口用 env_mark_unbound 登记「已声明、尚未执行」——
+#   于是 `def f(): print(x); let x = 1` 在解释轨也报 R1001（与编译两轨的哨兵同一条真相）。
+#   只收**声明式**：var/let/const、嵌套 def、chan、for 循环变量（含解包名）。**不收**
+#   赋值式（`x = …`）—— 其归属由 M169 规则定（命中模块绑定 ⇒ 写全局，否则亦为帧局部，
+#   而那种情形下「读在赋值前」在解释轨本就找不到绑定 ⇒ 天然 R1001，无需登记）。
+#   不进入 FuncDef / ImplDef 的体（那是独立帧）。
+def i_push_name(out, n):
+    var i = 0
+    while i < len(out):
+        if out[i] == n:
+            return
+        i += 1
+    out.append(n)
+def i_collect_decl_names(stmts, out):
+    var i = 0
+    while i < len(stmts):
+        let st = stmts[i]
+        let ty = st[0]
+        if ty == "VarDecl":
+            i_push_name(out, rust_unescape(st[2]))
+        elif ty == "FuncDef":
+            i_push_name(out, rust_unescape(st[1]))
+        elif ty == "ChanDecl":
+            i_push_name(out, rust_unescape(st[1]))
+        elif ty == "If":
+            let brs = st[1]
+            var bi = 0
+            while bi < len(brs):
+                i_collect_decl_names(brs[bi][1], out)
+                bi += 1
+            if st[2] != null:
+                i_collect_decl_names(st[2], out)
+        elif ty == "For":
+            let lvs = i_names_of(st[1])
+            var li = 0
+            while li < len(lvs):
+                i_push_name(out, rust_unescape(lvs[li]))
+                li += 1
+            i_collect_decl_names(st[3], out)
+        elif ty == "While":
+            i_collect_decl_names(st[2], out)
+        i += 1
 def i_exec_stmt(stmt, env):
     let ty = stmt[0]
     if ty == "VarDecl":

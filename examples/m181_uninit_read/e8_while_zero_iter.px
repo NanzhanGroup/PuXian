@@ -1,0 +1,7 @@
+def f():
+    var t = 0
+    while t > 100:
+        let u = 1
+        t += 1
+    return u
+print(f())

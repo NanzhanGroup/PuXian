@@ -1,0 +1,47 @@
+# M181 门 [1] 合法侧：**初始化是单调的** —— 声明执行过之后的任何读都合法。
+def closure_after_decl():
+    let g = fn (): x
+    let x = 42
+    return g()
+
+def loop_var_after_nonempty():
+    for i in [1,2,3]:
+        0
+    return i
+
+def from_branch_taken(c):
+    if c:
+        let v = 7
+    else:
+        let v = 8
+    return v
+
+def params_read(p):
+    return p + 1
+
+def nested_capture_declared_first():
+    var c = 0
+    let inc = fn ():
+        c = c + 1
+        return c
+    inc()
+    inc()
+    return c
+
+def comp_and_gen():
+    let xs = [1,2,3]
+    let g = [x * 2 for x in xs]
+    return len(g)
+
+def no_initializer_is_null():
+    var a
+    return a
+
+print("A1 " + str(closure_after_decl()))
+print("A2 " + str(loop_var_after_nonempty()))
+print("A3 " + str(from_branch_taken(true)))
+print("A4 " + str(params_read(41)))
+print("A5 " + str(nested_capture_declared_first()))
+print("A6 " + str(comp_and_gen()))
+print("A7 " + str(no_initializer_is_null()))
+print("M181A-OK")

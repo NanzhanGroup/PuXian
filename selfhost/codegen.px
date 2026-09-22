@@ -66,6 +66,13 @@ var cg_topbody = false
 #   帧内「赋值式绑定」（`x = …` 无声明）命中此集 ⇒ 写**模块全局**；否则提升为帧局部。
 #   与 VM 轨 `g_topnames`（bc_emit.px）同源、同一条真相。
 var cg_topnames = []
+# M181（第 59 轮 · 缺陷 193）：**本发射点「必已执行过其声明」的帧局部名集**（初始化数据流）。
+#   用途：读一个帧局部时，名字在集内 ⇒ 发射文本**一字不变**；不在集内 ⇒ 包一层
+#   `px_chk_uninit(...)`（哨兵 ⇒ R1001 未定义变量，与解释轨同词条）。
+#   纪律（方向的唯一性）：**多判**只是多一条指令，语义无害（真值已初始化则检查必过）；
+#   **少判**就是漏报 = 静默给错值 = 缺陷 193 本身 ⇒ 分支/循环一律取保守（交集 / 回退入口集）。
+#   起点 = 形参（参数永远已初始化，不由本帧声明）。
+var cg_inited = {"_": 0}
 var cg_err_labels = []
 var cg_uidc = 0
 var cg_closure_id = 0
@@ -136,6 +143,30 @@ def cg_store_of(name, cv, val):
     if cg_cells.has(name):
         return "px_cell_set(" + cv + ", " + val + ")"
     return cv + " = " + val
+# ---------- M181（缺陷 193）：初始化数据流（帧局部「必已执行声明」集） ----------
+def cg_inited_new():
+    return cg_new_dict()
+def cg_inited_add(name):
+    cg_inited[name] = 1
+def cg_inited_copy():
+    return cg_dict_copy(cg_inited)
+def cg_inited_restore(d):
+    cg_inited = cg_dict_copy(d)
+# 之后集 = 两分支**交集**（键取自 a，逐个查 b）—— 分支只要有一条没执行过声明，就不能算已初始化
+def cg_inited_intersect(a, b):
+    let out = cg_inited_new()
+    let ks = a.keys()
+    var i = 0
+    while i < len(ks):
+        if b.has(ks[i]):
+            out[ks[i]] = 1
+        i += 1
+    return out
+# 读一个帧局部：**只在无法证明已初始化时**包检查（对齐解释轨：读到未执行声明的槽 ⇒ R1001）
+def cg_load_ck(name, cv):
+    if cg_inited.has(name):
+        return cg_load_of(name, cv)
+    return "px_chk_uninit(" + cg_load_of(name, cv) + ", \"" + name + "\")"
 def cg_name_add(out, n):
     if n != "" and not contains(out, n):
         out.append(n)
@@ -686,6 +717,9 @@ def cg_gen_func_named(f, cname):
     # M169（缺陷 181）：函数体不是模块体 —— 体里的绑定按**函数级作用域**提升到帧顶
     let saved_top = cg_topbody
     cg_topbody = false
+    # M181（缺陷 193）：函数体是新帧 —— 初始化集清空（形参在下面逐个登记）
+    let saved_inited = cg_inited_copy()
+    cg_inited = cg_new_dict()
     cg_vars = cg_new_dict()
     cg_var_types = cg_new_dict()
     cg_cells = cg_new_dict()
@@ -709,6 +743,8 @@ def cg_gen_func_named(f, cname):
         if p[3] != null:
             default_c = cg_gen_expr(p[3])
         param_decls.append([v, pname, "(nargs > " + str(i) + ") ? args[" + str(i) + "] : " + default_c])
+        # M181（缺陷 193）：形参**永远已初始化** ⇒ 入初始化集（读不检查）
+        cg_inited_add(pname)
         i += 1
     # 预扫描：函数体内需提升到函数顶的局部变量（Assign 目标 + VarDecl + For 循环变量，
     # Python 语义局部变量；顶层全局名除外）——M62-L5 块作用域对齐（解释器不新建块作用域）
@@ -745,10 +781,13 @@ def cg_gen_func_named(f, cname):
     di = 0
     while di < len(hoist_decls):
         let hd = hoist_decls[di]
+        # M181（第 59 轮 · 缺陷 193）：hoist 局部槽初值 = **未初始化哨兵**（不再是 px_null()）
+        #   —— 「还未执行声明的槽」与「已声明且值为 null」从此**可区分**：前者读到即
+        #   px_chk_uninit ⇒ R1001 未定义变量（与解释轨同词条）。参数槽不在此列（已初始化）。
         if cg_cells.has(hd[1]):
-            s += "    LXValue " + hd[0] + " = px_cell(px_null());\n"
+            s += "    LXValue " + hd[0] + " = px_cell(px_uninit());\n"
         else:
-            s += "    LXValue " + hd[0] + " = px_null();\n"
+            s += "    LXValue " + hd[0] + " = px_uninit();\n"
         di += 1
     # M39：? 错误传播标签
     let err_tag = "px_err_" + str(cg_uid())
@@ -775,6 +814,7 @@ def cg_gen_func_named(f, cname):
     cg_cells = saved_cells
     cg_immutables = saved_imm
     cg_topbody = saved_top  # M169（缺陷 181）：还原模块体标志
+    cg_inited = saved_inited  # M181（缺陷 193）：还原外层帧的初始化集
     return s
 # ---------- generate 主流程 ----------
 def cg_generate(prog):
@@ -798,6 +838,8 @@ def cg_generate(prog):
     cg_iter_uid = 0
     cg_unpack_uid = 0
     cg_topbody = false  # M169（缺陷 181）：仅模块体语句发射期间置 true
+    # M181（缺陷 193）：初始化集清空（模块体绑定走全局 `px_get_global`，本就不发检查）
+    cg_inited = cg_new_dict()
     cg_collect_types(prog)
     # 收集顶层全局名（函数 + 顶层变量赋值）
     let items = prog[1]

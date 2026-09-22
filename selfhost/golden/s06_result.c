@@ -26,7 +26,7 @@ static LXValue fn_calc(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("calc");
     LXValue _v4 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v5 = px_null();
+    LXValue _v5 = px_uninit();
     LXValue px_err_6_val = px_null();
     int px_err_6_proped = 0;
     px_srcline(8);
@@ -41,9 +41,9 @@ px_err_6:
 static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("main");
-    LXValue _v8 = px_null();
-    LXValue _v9 = px_null();
-    LXValue _v10 = px_null();
+    LXValue _v8 = px_uninit();
+    LXValue _v9 = px_uninit();
+    LXValue _v10 = px_uninit();
     LXValue px_err_11_val = px_null();
     int px_err_11_proped = 0;
     px_srcline(12);

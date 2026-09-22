@@ -1,0 +1,4 @@
+def f():
+    print(x)
+    let x = 42
+f()
