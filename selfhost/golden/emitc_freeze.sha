@@ -199,6 +199,8 @@ examples/m181_uninit_read/e7_shadow_outer_frame.px src=bdebd5af97c7327c rc=0 out
 examples/m181_uninit_read/e8_while_zero_iter.px src=bfb5145656964ba0 rc=0 out=d412a8c1a719ff0a8eda7b0e5b4dda3a err=e3b0c44298fc1c14
 examples/m181_uninit_read/ok_side.px src=29bbe34ace1cc562 rc=0 out=969d7df750b9924877388bbe42cc42f8 err=e3b0c44298fc1c14
 examples/m182_hdr_root/probe.px src=a2b74a1bf326d0c8 rc=0 out=e812be0148d42b822084e846d3690d10 err=e3b0c44298fc1c14
+examples/m183_gc_root_handover/handover.px src=5ccc0be8c44652b6 rc=0 out=54f39051350b4b6dde4e565b3867ceee err=e3b0c44298fc1c14
+examples/m183_gc_root_handover/s3flow.px src=816dca93819ecc65 rc=0 out=c4601a3c7b37ca83d6687c8500e84c4b err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=25f7bb9ac610f0f826c9ed8c4047f24f err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=fc0b79277b06f69862f3101732750439 err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14

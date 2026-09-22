@@ -1867,17 +1867,27 @@ print(lam())
   **M182 定论（修正上面这条推断）**：A/B 那两组都红是因为**它们改的都不是出事的那一处** ——
   真形状在**调用方**：`LXValue d = px_dict(); px_root_push(); PX_KEEP(headers);`（登记**迟到**），
   即「M170 第一条硬约束」没覆盖到的**返回值窗口**（见 §17.10 第 3 条）。修后双开 **3/3 绿**。
-- **缺陷 197（M182 新登记 · 未修 · 已实测间歇复现）**：**进程内** `http_serve` + `http_request`
-  在 `PX_GC_STRESS=1`（单开，勿加 INLINE）下**响应头间歇丢失**（40 轮样例实测 37~40/40 波动；
+- ~~**缺陷 197（M182 新登记 · 未修）**~~ ⇒ **已由 M183 收口**（规范见 §17.10 第 4 条硬约束），
+  保留原文记录修前形态：**进程内** `http_serve` + `http_request` 在 `PX_GC_STRESS=1`
+  （**单开**，勿加 INLINE）下**响应头间歇丢失**（40 轮样例修前实测 **1/6 通过**；
   同结构的服务端被 `curl` 打 40/40 全带该头 ⇒ 差异在「同进程 GC 压力 + 安全点」这一条件）。
-  病因待定（候选：服务端 `resp` 序列化窗口 / 客户端解析在安全点 GC 期间的中间态）。
-- **缺陷 198（M182 新登记 · 未修 · 3/3 确定性复现）**：`examples/m37_s3.px` 与
-  `examples/s3_neterr_result.px` 在 `PX_GC_STRESS=1 PX_GC_INLINE=1` 下 **SIGSEGV**
-  （基线 / 单开 STRESS / 单开 INLINE 均绿）。gdb 现场：`xmalloc` ← `px_dict` ←
-  `http_conn_worker.constprop.0.isra` ← `fserve_worker`（**堆已被写坏** ⇒ 元凶在更早的一次
-  「回收后仍被写」）。分流实验已排除 S3 **客户端**（对 python mock 的全档皆绿）⇒ 指向
-  **服务端 worker 路径**。下一轮从「`http_conn_worker` 中 `resp`/`req` 在
-  `http_send_resp` / 流式分支里的登记」入手。
+  **M183 定论（修正上面这条推断）**：不在服务端、也不在客户端解析 —— 是**根栈「交棒」有缝**：
+  `h_exchange` 末尾 `px_root_pop()` 的出口安全点恰是暂停点，而返回值 `headers` 那一刻
+  既不在被调用方的帧里、也还没进调用方的帧 ⇒ 被回收后其槽**立即被 `px_dict()` 复用**
+  ⇒ `d.as.obj == headers.as.obj` ⇒ `d["headers"] = d`（自引用环）⇒ 读头得「字典没有键」/
+  json 报 `encountered a cycle via dict`。修法 = **收缩延迟**（`g_px_trunc_pending`）。修后 10/10。
+- ~~**缺陷 198（M182 新登记 · 未修 · 3/3 确定性复现）**~~ ⇒ **已由 M183 收口**，
+  保留原文记录修前形态：`examples/m37_s3.px` 与 `examples/s3_neterr_result.px` 在
+  `PX_GC_STRESS=1 PX_GC_INLINE=1` 下 **SIGSEGV**（基线 / 单开 STRESS / 单开 INLINE 均绿）。
+  gdb 现场：`xmalloc` ← `px_dict` ← `http_conn_worker.constprop.0.isra` ← `fserve_worker`
+  （**堆已被写坏** ⇒ 元凶在更早的一次「回收后仍被写」）。M182 的分流推断「指向服务端 worker 路径」
+  **不对**：真凶在**客户端桥** `bi_s3_list`（`LXValue l = px_list(0);` **从未登记**，
+  循环里 `px_str(key)` 每次分配 ⇒ `l` 被回收 ⇒ `px_list_push` 往已释放的 list 写元素）
+  —— 崩溃点与服务端无关，只是「谁先撞上被写坏的 slab 空闲链表」。修后 0/6 绿。
+- ~~**缺陷 199（M183 新登记 · 由新检测器 `PX_GC_UAFDET` 筛出）**~~ ⇒ **已由 M183 同轮收口**：
+  `bi_px_exec` 的 `env` / `srv` 两个 dict 是裸 C 局部（其后 `px_dict()`×4 / `px_str` /
+  `px_call(json_stringify)` 全都分配）⇒ 回收后 `px_dict_set` 写进已成空闲槽的 **keys 数组**
+  （class 64）。实测 `examples/m32_hot_reload` 修前 3/3 UAFDET+core、修后 0/4。
 - **缺陷 191 不设反向负控**（纪律：**不设假负控**）：去掉 `h_exchange` 的 `PX_KEEP(*out_headers)`
   后症状**时序相关**（5 连跑：1 丢头 / 3 绿 / 1 SIGSEGV）⇒ 若当负控会让门偶发变红。
   191 改由正判据锁症状：`examples/m23c_http_adv.px` 在 `PX_GC_STRESS=1` 下必须
@@ -1958,6 +1968,23 @@ C 轨与解释轨天然绿，**红只红在 VM 轨**（默认轨！用户面走�
    单开 STRESS 在多线程程序里会漏检（GC 走安全点）。
    同族（M182 一并收口，各有独立负控）：`json_path_set_at` 的 dict 分支、
    `bi_http_unix`（与 `bi_http_request` 同形）。门：`examples/m182_hdr_root/`。
+4. **根栈的「交棒」不能有缝 —— 收缩必须推迟到调用方接住的那一刻**（M183 · 缺陷 197）——
+   上一条管的是「**接手**容器」的时刻，这条管「**交出去**」的时刻。native 桥的惯用法是
+   `px_root_push(); PX_KEEP(x); …; px_root_pop(); return x;`，而 `px_root_pop()` 的出口
+   （`gc_unblock_stop` → `gc_pause_if_requested`，M110-S2 协作式安全点）**本身就是一个暂停点**：
+   ```c
+   // ❌ 缺陷 197 的真形状（修前）：暂停恰好落在 pop 之后、调用方 PX_KEEP 之前
+   static int h_exchange(…) { px_root_push(); PX_KEEP(*out_headers); … px_root_pop(); return 0; }
+   //                          ↑ 此处被 GC 暂停 ⇒ *out_headers 既不在本帧也不在调用方帧 ⇒ 被回收
+   LXValue headers;  if (h_exchange(…, &headers, …) == 0) { px_root_push(); PX_KEEP(headers); …
+   ```
+   修法**不在调用方、也不在桥里**，而在**根栈本身**：`px_root_pop()` 只记「待收缩深度」
+   （TLS `g_px_trunc_pending`），**物理根条目留到调用方 `PX_KEEP`（= 接住动作）时**才回收，
+   且收缩点由**本帧逻辑基**（`min(物理深度, 待收缩)`）钳制（绝不删本帧自己的根）。
+   ⇒ 暂停窗口内物理根栈是**超集**：只多标、不少标（over-approximate = 安全）；
+   全帧弹出后下一次 `keep` 即收缩到 0 ⇒ 物理栈有界（`PX_GC_DEBUG=1` 的根栈峰值可验）。
+   ⚠️ 与「多出口用 `px_root_restore`」那条**不冲突**（两者都只收缩、都受帧基约束）。
+   门：`examples/m183_gc_root_handover/`（含 197/198/199 三层 + 4 道负控）。
 
 **多出口函数**（循环内十余个早退分支，如 QPACK 解码）用**深度式**登记：
 
@@ -1985,8 +2012,23 @@ json_opt / thread / spawn / coro / native_call）。
   单开 STRESS 会**漏检**「登记迟到」类窗口（实测 m23c：单开绿 / **双开 3/3 红**）。
   单线程程序里单开即内联（这就是 M170 用 sqlite/xml 用例能筛出来的原因）。
 - `PX_GC_DEBUG=1` —— 隔离点打印 `[px-gc] root 还原 marks=… roots=…`、退出打印根登记栈峰值。
+- **`PX_GC_UAFDET=1`**（M183）—— **空闲链表 UAF 检测**。两张直映射账本（槽 → 释放时的链表值 /
+  归属对象类型），`xmalloc` 弹出槽时比对；命中 ⇒ **带槽地址 + 归属类型的响亮报错**
+  （报错文案会直接告诉你是「哪一个类型的对象被回收后又被写」）。把「写坏 slab 空闲链表」
+  从**远距离崩溃**（真凶与崩点相隔很远）变成**当场指名**。M183 的 198/199 都靠它一次点明。
+- **`PX_GC_LIVECHK=1`**（M183）—— **读/写已回收对象**即时响亮（O(1) 存活位，`px_dict_get/set`、
+  `px_list_push`、`px_index`、`px_len` 五个入口）。抓「只读不写」型漏根 —— 这类**不崩溃**，
+  表现为**静默错值**（197 就是：容器被回收后槽被复用 ⇒ 读到垃圾键值 / 自引用环）。
+- **`PX_GC_TRACE=1`**（M183）—— **硬不变量**：回收「仍登记在**本轮**根栈里」的对象 ⇒ 响亮。
+  直接判「根面漏扫」（未暂停线程 / 单线程快路径）。⚠️ 只看**本轮已暂停**线程的快照：
+  非本轮暂停线程的 `ti->roots/root_n` 是上一轮遗留的，拿它判会**假报**。
+- ⚠️ **检测器自身必须验证「不假报」**（M183 教训）：`PX_GC_UAFDET` 第一版按**槽地址**记账，
+  而 slab 会被回收后**地址复用**（`slab_reclaim_empty` → 新 `slab_create` 落在同一地址）
+  ⇒ 「上一世」的记录会假报（特征：`槽内首字` 恰为相邻槽地址）。修法 = 建 slab 时清这些槽的账本
+  + 比对时要求 `freed` 位。**本轮实测因此被带偏 8 个样例**（其中 `m33_route_rate_limit` 已复核为假报）。
 - 回归门：`examples/m170_gc_bridge_root/`（5 层正判据 + 4 道负控；见 `verify.sh` 头部注释）、
-  `examples/m182_hdr_root/`（M182：登记窗口 · 含**本仓第一个 `http_unix` 成功路径**用例）。
+  `examples/m182_hdr_root/`（M182：登记窗口 · 含**本仓第一个 `http_unix` 成功路径**用例）、
+  `examples/m183_gc_root_handover/`（M183：**根栈交棒窗口** + 桥漏登记 197/198/199 · 4 道负控）。
 
 **批量用法（差分筛）**：对样例逐个「正常跑 vs `PX_GC_STRESS=1`（**+`PX_GC_INLINE=1`**）跑」，
 判据 = **程序自身输出逐字节一致**（正常轨本就非 0 / 超时的样例跳过）。用它抓到缺陷 191

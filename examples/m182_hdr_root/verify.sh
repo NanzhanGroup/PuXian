@@ -34,9 +34,18 @@
 #      —— ② 同时是本仓**第一个 `http_unix` 成功路径的门**（此前只有连接失败用例），
 #         对端用 `unix_srv.py`（python3 · UDS 上的极简 HTTP 应答器）。
 #   ③ 负控 3 道（默认跑；`--neg-skip` 跳过）—— 各自独立判红 + sha256 逐字节还原：
-#      A bi_http_request：把登记挪回「响应 dict 之后」⇒ ① 必红（确定性 3/3）
-#      B json_path_set_at（dict 分支）：同法 ⇒ ② 必红
-#      C bi_http_unix：同法 ⇒ ② 必红
+#      A bi_http_request：去掉**结果容器**登记（`PX_KEEP(d)`）⇒ ① 必红（3/3 `R1008 字典没有键 'status'`）
+#      B json_path_set_at（dict 分支）：去掉结果 dict 登记 ⇒ ② 必红（SIGSEGV）
+#      C bi_http_unix：去掉结果 dict 登记 ⇒ ② 必红（`R1008 字典没有键 'status'`）
+#
+#   ⚠️ **M183 之后本门的负控换了形态（如实登记）**：原三道负控模拟的是「**登记迟到**」
+#      （把 `PX_KEEP` 挪到响应 dict 之后）。M183 的**根栈收缩延迟**（见 spec §17.10 第 4 条）
+#      把「返回值在收帧后到调用方 PX_KEEP 之间是裸的」这条缝**整体补掉了** ⇒ 迟到形态
+#      **不再可复现**：本轮实测 3 种形态（① 完全删掉那行 `PX_KEEP(headers)`；② 删掉
+#      `px_root_push(); PX_KEEP(headers);` 整对；③ 退回到 M182 修前的「迟到」原文）
+#      × 各自 3 连跑 **全绿**（判据 = `HTTP-ADV TESTS PASSED`）。
+#      故负控改为**更强形态**：把**结果容器**的登记整个去掉 —— 这条与 M183 无关，
+#      无论根栈怎么收缩都必须判红（实测 A 3/3、B SIGSEGV、C rc=1）⇒ 门保留牙齿。
 # 用法：./examples/m182_hdr_root/verify.sh            （完整门：正判据 + 负控）
 #       ./examples/m182_hdr_root/verify.sh --neg-skip （只跑正判据，CI 用）
 # 退出码：0 = 绿，1 = 红。
@@ -149,63 +158,35 @@ negcase() {   # $1=标题 $2=python 补丁 $3=目标源 $4=tag $5=运行环境 $
     fi
     restore_all
 }
-PATCH_A='import io,sys
-p="runtime/runtime.c"; s=open(p,encoding="utf-8").read()
-new="""            px_root_push();
-            PX_KEEP(headers);   // headers 已离开 h_exchange 的登记帧 ⇒ 必须立刻接住
-            if (keep_alive) hpool_put(key, slot);
-            else { if (slot.tls) https_close(slot.tls); close(slot.fd); }
-            LXValue d = px_dict();
+PATCH_A='p="runtime/runtime.c"; s=open(p,encoding="utf-8").read()
+old="""            LXValue d = px_dict();
             PX_KEEP(d);   // 紧跟创建（中间不得插入任何可能分配的调用）"""
-old="""            if (keep_alive) hpool_put(key, slot);
-            else { if (slot.tls) https_close(slot.tls); close(slot.fd); }
-            LXValue d = px_dict();
-            px_root_push();
-            PX_KEEP(headers);
-            PX_KEEP(d);"""
-assert new in s, "anchor A"
-open(p,"w",encoding="utf-8").write(s.replace(new,old)); print("PATCH-A-OK")'
+new="""            LXValue d = px_dict();"""
+assert old in s, "anchor A2"
+open(p,"w",encoding="utf-8").write(s.replace(old,new,1)); print("PATCH-A-OK")'
 PATCH_B='p="runtime/runtime.c"; s=open(p,encoding="utf-8").read()
-new="""        px_root_push();
-        LXValue d = (base.type == PX_DICT) ? base : px_dict();
-        PX_KEEP(d);   // base（bi_json_path_set 深拷贝临时，仅 C 持有）跨拷贝分配存活
-        LXObject* o = d.as.obj;
-        LXValue r = px_dict();
-        PX_KEEP(r);   // 结果 dict 跨 px_dict_set/json_value_copy 分配"""
-old="""        LXValue d = (base.type == PX_DICT) ? base : px_dict();
-        LXObject* o = d.as.obj;
-        LXValue r = px_dict();
-        px_root_push();
-        PX_KEEP(d);   // base（bi_json_path_set 深拷贝临时，仅 C 持有）跨拷贝分配存活
-        PX_KEEP(r);   // 结果 dict 跨 px_dict_set/json_value_copy 分配"""
-assert new in s, "anchor B"
-open(p,"w",encoding="utf-8").write(s.replace(new,old)); print("PATCH-B-OK")'
+old="""        PX_KEEP(r);   // 结果 dict 跨 px_dict_set/json_value_copy 分配\n"""
+assert old in s, "anchor B2"
+open(p,"w",encoding="utf-8").write(s.replace(old,"",1)); print("PATCH-B-OK")'
 PATCH_C='p="runtime/runtime.c"; s=open(p,encoding="utf-8").read()
-new="""    px_root_push();
-    PX_KEEP(headers);
-    LXValue d = px_dict();
-    PX_KEEP(d);   // 紧跟创建"""
-old="""    LXValue d = px_dict();
-    px_root_push();
-    PX_KEEP(headers);
-    PX_KEEP(d);"""
-assert new in s, "anchor C"
-open(p,"w",encoding="utf-8").write(s.replace(new,old)); print("PATCH-C-OK")'
+old="""    PX_KEEP(d);   // 紧跟创建\n"""
+assert old in s, "anchor C2"
+open(p,"w",encoding="utf-8").write(s.replace(old,"",1)); print("PATCH-C-OK")'
 
 if [ "$NEG_SKIP" = "1" ]; then
     hdr "③ 负控：--neg-skip（CI 用）⇒ 跳过"
 else
     hdr "③ 负控 3 道（各自独立判红 + 源逐字节还原）"
-    negcase "负控 A · bi_http_request 登记迟到（恢复缺陷 192）" "$PATCH_A" \
+    negcase "负控 A · bi_http_request 去掉结果容器登记（PX_KEEP(d)）" "$PATCH_A" \
             "$WORK/m23c_http_adv.px" negA "PX_GC_STRESS=1 PX_GC_INLINE=1" \
             "$WORK/negA.out" "HTTP-ADV TESTS PASSED"
     python3 "$HERE/unix_srv.py" "$SOCK" > "$WORK/uds2.log" 2>&1 &
     UDS2=$!
     for _ in $(seq 1 60); do [ -S "$SOCK" ] && break; sleep 0.1; done
-    negcase "负控 B · json_path_set_at（dict 分支）登记迟到" "$PATCH_B" \
+    negcase "负控 B · json_path_set_at（dict 分支）去掉结果 dict 登记" "$PATCH_B" \
             "$WORK/probe.px" negB "PX_GC_STRESS=1 PX_GC_INLINE=1" \
             "$WORK/negB.out" "^PROBE-JSON bad=0\$"
-    negcase "负控 C · bi_http_unix 登记迟到" "$PATCH_C" \
+    negcase "负控 C · bi_http_unix 去掉结果 dict 登记" "$PATCH_C" \
             "$WORK/probe.px" negC "PX_GC_STRESS=1 PX_GC_INLINE=1" \
             "$WORK/negC.out" "^PROBE-UNIX bad=0\$"
     kill "$UDS2" 2>/dev/null

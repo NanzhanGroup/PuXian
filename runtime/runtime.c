@@ -725,6 +725,120 @@ static int slab_cmp(const void* a, const void* b) {
 //   三者同属一次 mmap ⇒ 建 1 次 / 拆 1 次，且不改变任何对外语义（红线 2/3/5）。
 //   位图是 1 字节/槽的占用标记（原实现即如此），尺寸 ≤ 槽数 ≤ 1024 字节级。
 #define SLAB_HEADER ((sizeof(Slab) + 7) & ~(size_t)7)
+
+// ==================== M183（缺陷 198）：空闲链表 UAF 检测器 ====================
+// 动机：M170/M182 之后仍存在「GC 误回收仍在使用的对象 ⇒ 之后被人写」的 UAF。
+//   这类病灶的**表现极具欺骗性**：被写坏的是 **slab 空闲链表首字**（= 下一个空闲槽地址），
+//   于是真凶与崩溃点相隔很远 —— 实测 m37_s3（STRESS+INLINE）崩在 `px_dict()` 的 xmalloc 里
+//   `if (s->in_use[idx])`（idx 由被污染的首字算出天文数字 ⇒ 越界读），而根因是此前
+//   某个对象「先被 GC 回收、又被写」。默认阈值下只能靠运气撞见。
+// PX_GC_UAFDET=1 把这件事变成**带槽地址与归属类型的响亮报错**，做法两张直映射账本：
+//   · 账本 A（g_uaf_rec）：槽地址 → 「释放时它的首字应当等于的值」（即当时的链表 next）；
+//   · 账本 B（g_uaf_type）：槽地址 → 「释放时归属对象类型」（由 px_obj_free 标记，
+//     含它内部释放的 keys/vals 等原生数组 ⇒ 数组受害时也能看出归属容器类型）；
+//   每次 xmalloc 弹出槽前比对账本 A，并校验槽落在 slab 内（越界=已被写坏）。
+//   两张账本按「槽地址 >> 4」低位直映射；碰撞仅使判据变弱（比对时同时核对槽地址），
+//   **不产生假报**。开销：每次分配两次内存读 + 每 class 一条可预测分支，默认关闭。
+static int g_gc_uafdet = 0;
+static int g_gc_livechk = 0;              // M183：读/写「已回收对象」即时响亮（见 px_uaf_access_check）
+#define UAF_LEDGER_BITS 20
+#define UAF_LEDGER_SIZE ((size_t)1 << UAF_LEDGER_BITS)
+#define UAF_LEDGER_MASK (UAF_LEDGER_SIZE - 1)
+typedef struct { const void* slot; uintptr_t link; unsigned char freed; } UafRec;
+static UafRec* g_uaf_rec = NULL;          // 账本 A：槽 → {释放时链表 next, 是否处于已释放态}
+static unsigned char* g_uaf_type = NULL;  // 账本 B：槽 → 释放时归属对象类型（0 = 未知/无归属）
+static __thread int g_uaf_free_type = 0;  // px_obj_free 作用域内的归属类型（覆盖其内部所有 xfree）
+
+static void uaf_init(void) {   // 用 libc calloc（**不走 slab**，避免与检测路径自递归）
+    if (!g_uaf_rec) g_uaf_rec = (UafRec*)calloc(UAF_LEDGER_SIZE, sizeof(UafRec));
+    if (!g_uaf_type) g_uaf_type = (unsigned char*)calloc(UAF_LEDGER_SIZE, 1);
+}
+static inline size_t uaf_idx(const void* p) { return (((uintptr_t)p) >> 4) & UAF_LEDGER_MASK; }
+
+// 槽是否合法属于该 slab（越界或未按 class_size 对齐 ⇒ 链表首已被写坏）
+static int slab_slot_ok(const Slab* s, const void* p) {
+    uintptr_t b = (uintptr_t)s->base + SLAB_HEADER;
+    uintptr_t e = b + s->slot_count * s->class_size;
+    uintptr_t q = (uintptr_t)p;
+    if (q < b || q >= e) return 0;
+    return (((q - b) % s->class_size) == 0);
+}
+
+static void uaf_rec_free(void* p, uintptr_t link) {   // M183：登记「本槽已释放」
+    if (!g_uaf_rec) return;
+    UafRec* r = &g_uaf_rec[uaf_idx(p)];
+    r->slot = p; r->link = link; r->freed = 1;
+}
+static void uaf_rec_alloc(const void* p) {            // M183：登记「本槽已重新分配」
+    if (!g_uaf_rec) return;
+    UafRec* r = &g_uaf_rec[uaf_idx(p)];
+    r->slot = p; r->freed = 0;
+}
+static void uaf_rec_type(const void* p, int ty) {
+    if (g_uaf_type)
+        g_uaf_type[uaf_idx(p)] = (unsigned char)((ty > 0 && ty < 256) ? ty : 0);
+}
+
+static const char* uaf_type_str(int ty) {
+    if (ty < 0 || ty >= (int)PX_TYPE_MAX) return "未知（原生数组/未记录）";
+    return px_type_name((LXValue){ .type = (LXType)ty });
+}
+
+// M183：**「读写已回收对象」即时响亮**（PX_GC_LIVECHK=1）。
+//   与 UAFDET（空闲链表损坏）互补：UAFDET 抓的是「写坏链表」，而「只读不写」的
+//   漏根表现为**静默错值**（实测缺陷 197：客户端响应头 dict 被回收后其内存被别人复用
+//   ⇒ `r.headers` 仍报 type=dict 但键值全错、json 序列化报 "encountered a cycle"）。
+//   本检查借账本 A 的 O(1) 存活位：对象若已被 sweep 回收且尚未重新分配 ⇒ 当场响亮。
+//   注意：槽被**重新分配**后无法识别（那是真对象）——故它是「筛子」而非证明。
+__attribute__((noinline))
+static void px_uaf_access_check(const void* o, const char* what) {
+    if (!g_gc_livechk || !o || !g_uaf_rec) return;
+    const UafRec* r = &g_uaf_rec[uaf_idx(o)];
+    if (r->slot != o || !r->freed) return;
+    int n = (int)strlen(what);
+    if (n > 96) n = 96;
+    char buf[320];
+    int k = snprintf(buf, sizeof(buf),
+        "\n[PX_GC_LIVECHK] 读到**已回收对象**（%s）：%p\n"
+        "  该槽释放时的归属对象类型 = %d (%s)\n"
+        "  ⇒ GC 误回收仍在使用的对象（漏根）⇒ 读数静默错值 / 写入则崩空闲链表\n",
+        what, o, (int)g_uaf_type[uaf_idx(o)], uaf_type_str((int)g_uaf_type[uaf_idx(o)]));
+    if (k > 0) (void)write(2, buf, (size_t)k);
+    abort();
+}
+#define PX_UAFCHK(o, what) do { if (g_gc_livechk) px_uaf_access_check((const void*)(o), (what)); } while (0)
+
+__attribute__((noinline))
+static void uaf_report(const char* what, int ci, const Slab* s, const void* slot, const void* bad) {
+    char buf[640];
+    int ty = g_uaf_type ? (int)g_uaf_type[uaf_idx(slot)] : -1;
+    int n = snprintf(buf, sizeof(buf),
+        "\n[PX_GC_UAFDET] 空闲链表损坏（%s）\n"
+        "  class[%d] 槽大小=%zu  slab=%p  受害槽=%p  槽内首字=%p\n"
+        "  受害槽「上次被释放」时的归属对象类型 = %d (%s)\n"
+        "  ⇒ 该槽已被释放却又被写入（GC 误回收仍在使用的对象 ⇒ use-after-free 写）\n",
+        what, ci, s->class_size, (void*)s, slot, bad, ty, uaf_type_str(ty));
+    if (n > 0) (void)write(2, buf, (size_t)n);
+    abort();
+}
+
+// M183（缺陷 197）诊断：**回收时对象是否仍登记在某个根栈里**。
+//   这是硬不变量：登记了就该被标记、就不该被回收。命中即证明「根栈没被 GC 看见」——
+//   最可能的两条：① 该线程本轮**未暂停**（根面快照未被扫）；② 收集走了**单线程快路径**
+//   （只标执行者自己的根栈，别的线程一律不扫）。
+//   仅 PX_GC_TRACE=1 时逐对象比对（O(回收数 × 根数)，诊断专用）。
+static int g_gc_trace = 0;
+__attribute__((noinline))
+static void gc_trace_freed_registered(LXObject* o, const char* where, int ti_idx, int root_idx) {
+    char dbg[320];
+    int n = snprintf(dbg, sizeof(dbg),
+        "\n[PX_GC_TRACE] **回收了仍登记在根栈里的对象**！\n"
+        "  obj=%p type=%d  所在根栈=%s(ti=%d, root_idx=%d)\n"
+        "  ⇒ 该根未被 GC 看见（未暂停线程 / 单线程快路径漏扫）。\n",
+        (void*)o, (int)o->type, where, ti_idx, root_idx);
+    if (n > 0) (void)write(2, dbg, (size_t)n);
+}
+
 static Slab* slab_create(size_t class_size, int class_idx) {
     size_t header = SLAB_HEADER;
     size_t pages = (4 * class_size + PX_PAGE - 1) / PX_PAGE;   // 至少 4 槽的页数
@@ -764,6 +878,16 @@ static Slab* slab_create(size_t class_size, int class_idx) {
         head = slot;
     }
     s->free_head = head;
+    // M183：新 slab（可能是**复用刚被回收的地址**）⇒ 清掉这些槽地址在检测账本里的陈旧记录。
+    //   否则「上一世」的记录会与新 slab 的链表首字不符 ⇒ 假报 UAF（首字恰为相邻槽地址即特征）。
+    if ((g_gc_uafdet || g_gc_livechk) && g_uaf_rec) {
+        for (size_t i = 0; i < slots_in_bytes; i++) {
+            const void* slot = slots + i * class_size;
+            size_t ui = uaf_idx(slot);
+            if (g_uaf_rec[ui].slot == slot) { g_uaf_rec[ui].slot = NULL; g_uaf_rec[ui].link = 0; g_uaf_rec[ui].freed = 0; }
+            if (g_uaf_type) g_uaf_type[ui] = 0;
+        }
+    }
     g_slab_heads[class_idx] = s;
     // 插入反查数组（保持按 base 升序）
     if (g_slab_range_count >= g_slab_range_cap) {
@@ -880,10 +1004,20 @@ static void* xmalloc(size_t n) {
     }
     void* slot = s->free_head;
     size_t header = SLAB_HEADER;
+    if (g_gc_uafdet) {   // M183：弹出前先判「该槽是否被释放后又被写」+ 链首是否仍在 slab 内
+        if (!slab_slot_ok(s, slot)) uaf_report("分配时链首非法", ci, s, slot, slot);
+        if (g_uaf_rec) {
+            UafRec* r = &g_uaf_rec[uaf_idx(slot)];
+            if (r->slot == slot && r->freed && r->link != *(uintptr_t*)slot)
+                uaf_report("槽内首字 ≠ 释放时的链表值", ci, s, slot, *(void**)slot);
+        }
+    }
     size_t idx = ((const char*)slot - ((const char*)s->base + header)) / cs;
     if (s->in_use[idx]) { fprintf(stderr, "SLAB BUG: double-alloc slot %zu class %zu\n", idx, cs); abort(); }
     s->in_use[idx] = 1;
     s->free_head = *(void**)slot;
+    if (g_gc_uafdet && s->free_head && !slab_slot_ok(s, s->free_head))
+        uaf_report("弹出后新链首非法", ci, s, slot, s->free_head);
     s->free_count--;
     if (s->free_count == 0) {   // S3b：本 slab 已满 → 摘链首（O(1)），链首换成下一个有空槽的 slab
         g_slab_heads[ci] = s->next;
@@ -892,6 +1026,7 @@ static void* xmalloc(size_t n) {
     }
     pthread_mutex_unlock(&g_slab_mu);
     gc_unblock_stop(&old);
+    if (g_gc_livechk) uaf_rec_alloc(slot);   // M183：该槽重新分配 ⇒ 存活位清零
     memset(slot, 0, cs);   // 清零：gc_mark 等字段依赖零初始化
     return slot;
 }
@@ -934,6 +1069,15 @@ static void xfree(void* p) {
         s->in_use[idx] = 0;
         *(void**)p = s->free_head;
         s->free_head = p;
+        if (g_gc_uafdet) {   // M183：记下「此槽首字应为」+「归属对象类型」
+            uaf_init();
+            uaf_rec_free(p, *(uintptr_t*)p);
+            uaf_rec_type(p, g_uaf_free_type);
+        } else if (g_gc_livechk) {   // PX_GC_LIVECHK：即便未开 UAFDET 也要维护存活位
+            uaf_init();
+            uaf_rec_free(p, *(uintptr_t*)p);
+            uaf_rec_type(p, g_uaf_free_type);
+        }
         int was_full = (s->free_count == 0);
         s->free_count++;
         // M107-S3b：该 slab 由「满」变「有空槽」 → 头插回本 class 的复用链（O(1)）
@@ -1353,6 +1497,9 @@ static __thread int g_px_root_marks_n = 0;
 static __thread int g_px_root_marks_cap = 0;
 // M170（缺陷 187/188）：根登记栈峰值（观测）+ 每分配即 GC（PX_GC_STRESS 的开关见 gc_init_env）
 static __thread int g_px_roots_peak = 0;
+// M183（缺陷 197）：**待收缩的根栈深度**（-1 = 无）。px_root_pop 只记它、不立刻收缩，
+//   把物理回收推迟到调用方 PX_KEEP（= 接住返回值）那一刻 —— 详见 px_root_pop 的 M183 注释。
+static __thread int g_px_trunc_pending = -1;
 static __thread int g_px_root_marks_peak = 0;
 
 // ---- S3-D-1：VM 跨线程帧根弱符号接口（vm.c 提供强定义；无 VM 链接时空转零影响）----
@@ -1474,6 +1621,20 @@ static void gc_init_env(void) {
     //   代价：每次分配一次全量 GC ⇒ 仅限小语料（勿用于压测/基准）。
     const char* st = getenv("PX_GC_STRESS");
     if (st && st[0] == '1') g_gc_stress = 1;
+    // M183（缺陷 198）：PX_GC_UAFDET=1 —— 空闲链表 UAF 检测器（见 xmalloc 上方注释）。
+    //   与 PX_GC_STRESS 搭配使用：stress 让「漏登记局部」必现，UAFDET 让「写坏空闲链表」
+    //   从「远距离崩溃」变成「带槽地址 + 归属类型的响亮报错」。
+    const char* ud = getenv("PX_GC_UAFDET");
+    if (ud && ud[0] == '1') { g_gc_uafdet = 1; uaf_init(); }
+    // M183（缺陷 197）：PX_GC_LIVECHK=1 —— 「读/写已回收对象」即时响亮（见 px_uaf_access_check）。
+    //   与 UAFDET 互补：UAFDET 抓写坏链表（响亮崩溃），LIVECHK 抓**只读**型漏根
+    //   （静默错值：容器被回收后其内存被复用 ⇒ 读到垃圾键值、json 序列化报环）。
+    const char* lc = getenv("PX_GC_LIVECHK");
+    if (lc && lc[0] == '1') { g_gc_livechk = 1; uaf_init(); }
+    // M183（缺陷 197）诊断：PX_GC_TRACE=1 —— 回收「仍登记在根栈里」的对象时响亮
+    //   （硬不变量：登记了就必被标记 ⇒ 若仍被回收，说明该根面未被 GC 看见）。
+    const char* gt = getenv("PX_GC_TRACE");
+    if (gt && gt[0] == '1') g_gc_trace = 1;
     if (g_gc_debug) atexit(px_root_peak_dump);   // M170：退出打印根登记栈峰值
     // M88-S1：PX_MAX_THREADS 可配槽上限（夹取 [64, 4096]）；线程表一次性按上限分配。
     // 此后 g_threads/g_thread_cap 恒定，无扩容/指针移动（并发安全见 §594 注释）。
@@ -1569,6 +1730,8 @@ static bool px_value_is_obj(LXValue v) {
 
 // 释放对象内部子分配 + 对象本体（sweep 阶段调用）
 static void px_obj_free(LXObject* o) {
+    int uaf_prev_ty = g_uaf_free_type;                 // M183：标记「本对象及其内部数组」的归属类型
+    if (g_gc_uafdet) g_uaf_free_type = (int)o->type;
     switch (o->type) {
         case PX_STR: xfree(o->as.str.rune_offs); break;   // M106-S2：连缓存偏移表一起回收
         // M107-S3d：data 已内联在对象分配块内，随下方 xfree(o) 一并释放（不再单独 xfree）
@@ -1622,6 +1785,7 @@ static void px_obj_free(LXObject* o) {
         default: break;
     }
     xfree(o);
+    if (g_gc_uafdet) g_uaf_free_type = uaf_prev_ty;
 }
 
 // 标记单个对象及其可达子对象（显式栈 DFS，避免深链递归栈溢出）
@@ -2252,6 +2416,26 @@ static void gc_mark_pinned(GCHash* set) {
     pthread_mutex_unlock(&g_pinned_mu);
 }
 
+static int g_gc_trace_hits = 0;
+static void gc_trace_check_freed(LXObject* o) {
+    if (!g_gc_trace || !o || g_gc_trace_hits >= 5) return;
+    for (int k = 0; k < g_px_roots_n; k++)
+        if (px_value_is_obj(g_px_roots[k]) && g_px_roots[k].as.obj == o) {
+            g_gc_trace_hits++; gc_trace_freed_registered(o, "执行者自身活动根栈", -1, k); return;
+        }
+    // 只看「**本轮**已暂停线程」的快照：非本轮暂停的线程其 ti->roots/root_n 是**上一轮遗留**的
+    // 快照（数组内容可能早已被合法回收）⇒ 拿它判「漏扫」会假报。
+    for (int t = 0; t < g_thread_cap; t++) {
+        GCThreadInfo* ti = &g_threads[t];
+        if (!ti->in_use || !ti->paused || ti->epoch != g_gc_epoch) continue;
+        if (!ti->roots || ti->root_n <= 0) continue;
+        for (int k = 0; k < ti->root_n; k++)
+            if (px_value_is_obj(ti->roots[k]) && ti->roots[k].as.obj == o) {
+                g_gc_trace_hits++; gc_trace_freed_registered(o, "线程根栈快照（本轮已暂停）", t, k); return;
+            }
+    }
+}
+
 void px_gc_collect(void) {
     // M11 修复④：GC 执行期间屏蔽自己的 SIG_GC_STOP——防止上一轮"延迟信号"
     // 在本轮 GC 执行中投递（handler 会自旋等 epoch，而 epoch 只有本线程能推进
@@ -2410,6 +2594,7 @@ void px_gc_collect(void) {
                 o->gc_mark = 0;
                 g_objs[w++] = o;
             } else {
+                gc_trace_check_freed(o);   // M183 诊断：回收「仍登记在根栈里」的对象 → 响亮
                 px_obj_free(o);
                 freed++;
             }
@@ -2492,6 +2677,7 @@ void px_gc_collect(void) {
             o->gc_mark = 0;
             g_objs[w++] = o;
         } else {
+            gc_trace_check_freed(o);   // M183 诊断：回收「仍登记在根栈里」的对象 → 响亮
             px_obj_free(o);
             freed++;
         }
@@ -2531,7 +2717,12 @@ void px_root_push(void) {
         g_px_root_marks = (int*)xrealloc(g_px_root_marks, sizeof(int) * (size_t)nc);
         g_px_root_marks_cap = nc;
     }
-    g_px_root_marks[g_px_root_marks_n++] = g_px_roots_n;
+    // M183（缺陷 197）：本帧的**逻辑基** = min(当前物理深度, 待收缩深度)。
+    //   此处**刻意不立刻收缩** g_px_roots_n —— 若在本临界区出口的协作式安全点被暂停，
+    //   上一帧的返回值必须仍是根（详见 px_root_pop 的 M183 注释）。
+    int rbase = g_px_roots_n;
+    if (g_px_trunc_pending >= 0 && g_px_trunc_pending < rbase) rbase = g_px_trunc_pending;
+    g_px_root_marks[g_px_root_marks_n++] = rbase;
     if (g_px_root_marks_n > g_px_root_marks_peak) g_px_root_marks_peak = g_px_root_marks_n;
     gc_unblock_stop(&old);
 }
@@ -2542,7 +2733,19 @@ void px_root_pop(void) {
     gc_block_stop(&old);
     if (g_px_root_marks_n <= 0) { gc_unblock_stop(&old); return; }
     int mark = g_px_root_marks[--g_px_root_marks_n];
-    g_px_roots_n = mark;
+    // M183（缺陷 197）：**延迟收缩**（只记待收缩深度，物理根条目留到调用方 PX_KEEP）。
+    //   病灶：native 桥的惯用法是 `px_root_push(); PX_KEEP(x); …; px_root_pop(); return x;`，
+    //   而 pop 的出口（gc_unblock_stop → gc_pause_if_requested）是一个**协作式安全点**
+    //   （M110-S2）。服务模式下由 fserve worker 在 px_gc_poll 触发并发 GC ⇒ 本线程恰在
+    //   pop 处被暂停，而**返回值 x 此刻既不在本帧（刚 pop）也不在调用方帧（尚未 PX_KEEP）**
+    //   ⇒ 只由调用方的 C 局部持有（precise GC 不扫 C 栈）⇒ 被误回收。
+    //   实测（PX_GC_STRESS=1，缺陷 197，5/6 复现）：`bi_http_request` 的 `headers` 被回收、
+    //   其槽随即被 `px_dict()` 复用 ⇒ `d.as.obj == headers.as.obj` ⇒ `d["headers"] = d`
+    //   （自引用环）⇒ 客户端读响应头得到错值（"encountered a cycle via dict"）。
+    //   修法：pop 只记待收缩；收缩改在调用方 `px_root_keep`（= 接住动作）处执行，并由
+    //   **本帧逻辑基**钳制（不会删本帧自己的根）。窗口内物理根栈是「超集」⇒ 只多标不少标
+    //   （over-approximate = 安全）；全帧弹出后下一次 keep 即收缩到 0 ⇒ 物理栈有界。
+    g_px_trunc_pending = mark;
     gc_unblock_stop(&old);
 }
 
@@ -2553,6 +2756,16 @@ void px_root_keep(const LXValue* v) {
     if (!v || !px_value_is_obj(*v)) return;
     sigset_t old;
     gc_block_stop(&old);
+    // M183（缺陷 197）：**此刻才是收缩上一帧登记的正确时机** —— 本 keep 就是调用方
+    //   「接住返回值」的动作；在它之前（含上一帧 pop 处的协作式安全点）物理根条目一律
+    //   保留，返回值因此始终在根面上。收缩点由**本帧逻辑基**钳制，绝不删本帧自己的根。
+    if (g_px_trunc_pending >= 0) {
+        int fbase = g_px_root_marks_n > 0 ? g_px_root_marks[g_px_root_marks_n - 1] : 0;
+        int t = g_px_trunc_pending;
+        if (t < fbase) t = fbase;
+        if (t < g_px_roots_n) g_px_roots_n = t;
+        g_px_trunc_pending = -1;
+    }
     if (g_px_roots_n >= g_px_roots_cap) {
         int nc = g_px_roots_cap ? g_px_roots_cap * 2 : 64;
         g_px_roots = (LXValue*)xrealloc(g_px_roots, sizeof(LXValue) * (size_t)nc);
@@ -2623,6 +2836,7 @@ void px_root_iso_mark(void) { t_iso_roots = g_px_roots_n; }
 void px_root_restore_iso(void) {
     int r0 = g_px_roots_n, m0 = g_px_root_marks_n;
     if (t_iso_roots >= 0 && g_px_roots_n > t_iso_roots) g_px_roots_n = t_iso_roots;
+    g_px_trunc_pending = -1;   // M183：隔离点已直接收缩过 ⇒ 清掉待收缩（防后续意外再收缩）
     if (g_gc_debug) {
         char dbg[128];
         int dn = snprintf(dbg, sizeof(dbg),
@@ -4172,6 +4386,7 @@ static int64_t px_req_int_idx(LXValue v) {
 }
 
 LXValue px_index(LXValue obj, LXValue idx) {
+    if (px_value_is_obj(obj)) PX_UAFCHK(obj.as.obj, "px_index(obj)");   // M183：读已回收对象 → 响亮
     if (obj.type == PX_GEN) {
         // M34：惰性生成器先物化剩余（索引语义需要全量结果）
         if (obj.as.obj->as.gen.is_lazy) px_gen_materialize(obj.as.obj);
@@ -4500,6 +4715,7 @@ static void px_list_push_locked(LXValue list, LXValue val) {
 
 void px_list_push(LXValue list, LXValue val) {
     LXObject* o = list.as.obj;
+    PX_UAFCHK(o, "px_list_push(list)");   // M183：写已回收对象 → 响亮（PX_GC_LIVECHK=1）
     // M11：对象结构修改与 GC 标记/清扫通过 g_gc_mu 互斥（消除数据竞争）。
     // 必须先拿锁再屏蔽信号：等锁期间若屏蔽 SIG_GC_STOP，GC 无法暂停本线程
     // （信号 pending），导致 stop-the-world 空转、GC 降级、栈漏扫描（use-after-free）。
@@ -4584,6 +4800,7 @@ static void px_dict_set_locked(LXValue dict, const char* key, LXValue val) {
 
 void px_dict_set(LXValue dict, const char* key, LXValue val) {
     LXObject* o = dict.as.obj;
+    PX_UAFCHK(o, "px_dict_set(dict)");   // M183：写已回收对象 → 响亮（PX_GC_LIVECHK=1）
     // M11：与 GC 通过 g_gc_mu 互斥（见 px_list_push 注释）。先拿锁再屏蔽信号。
     // M128：键副本与扩容数组都在临界区外备好（两阶段，见本文件 M128 段）——锁内只做指针发布。
     int maxr = m128_retry_max();
@@ -4695,6 +4912,7 @@ void px_dict_set_checked(LXValue dict, LXValue k, LXValue v) {
 
 LXValue px_dict_get(LXValue dict, const char* key) {
     LXObject* o = dict.as.obj;
+    PX_UAFCHK(o, "px_dict_get(dict)");   // M183：读已回收对象 → 响亮（PX_GC_LIVECHK=1）
     for (int i = 0; i < o->as.dict.len; i++) {
         if (strcmp(o->as.dict.keys[i], key) == 0) return o->as.dict.vals[i];
     }
@@ -4710,6 +4928,7 @@ bool px_dict_has(LXValue dict, const char* key) {
 }
 
 int px_len(LXValue v) {
+    if (px_value_is_obj(v)) PX_UAFCHK(v.as.obj, "px_len(obj)");   // M183：读已回收对象 → 响亮
     switch (v.type) {
         case PX_STR: return px_str_rune_len(v.as.obj); // M106-S2：惰性 rune 计数（原为每次 px_unicode_len_n 全扫）；M83-S1：尊重 str.len（内嵌 NUL 不再截断）
         // M175（缺陷 153）：`len(bytes)` = **字节数**（与 str 的 rune 数各按自己的自然单位）。
@@ -15679,6 +15898,15 @@ static LXValue bi_s3_list(LXValue* args, int nargs, void* ctx) {
                         body, 1048576, err, (int)sizeof(err));
     if (st == 0) { free(body); return px_net_err("%s", err[0] ? err : "net: S3 请求失败"); }
     LXValue l = px_list(0);
+    // M183（缺陷 198）：**登记必须在第一次分配之前**。
+    //   修前形状 = `LXValue l = px_list(0);` 之后**从未登记**，而循环里 `px_str(key)` 每次
+    //   都分配 ⇒ VM 轨 precise GC（根面 = 全局槽 + VM 帧槽 + TLS 登记根栈，不扫 C 栈）
+    //   在下一次分配时就地回收 `l` ⇒ `px_list_push` 往**已释放的 list 对象**里写元素
+    //   （受害槽 = 128B 的 list items 数组）⇒ 写坏 slab 空闲链表首字 ⇒ 真凶与崩溃点相隔
+    //   很远（实测崩在 http_conn_worker 的 `px_dict()` 里 `s->in_use[idx]` 越界读）。
+    //   仅 STRESS+INLINE 必现（默认阈值下 GC 落到安全点 ⇒ 靠运气遮住）。
+    px_root_push();
+    PX_KEEP(l);
     if (st == 200) {
         // 提取 <Key>...</Key>
         const char* p = body;
@@ -15696,6 +15924,7 @@ static LXValue bi_s3_list(LXValue* args, int nargs, void* ctx) {
         }
     }
     free(body);
+    px_root_pop();   // M183：与上方 px_root_push 配对（返回值由调用方 VM 槽接管）
     return l;
 }
 
@@ -16477,6 +16706,7 @@ static char* px_url_decode(const char* s) {
 LXValue px_dict_get_ci(LXValue d, const char* key) {
     if (d.type != PX_DICT) return px_null();
     LXObject* o = d.as.obj;
+    PX_UAFCHK(o, "px_dict_get_ci(dict)");   // M183：读已回收对象 → 响亮（PX_GC_LIVECHK=1）
     for (int i = 0; i < o->as.dict.len; i++) {
         if (strcasecmp(o->as.dict.keys[i], key) == 0) return o->as.dict.vals[i];
     }
@@ -24755,11 +24985,20 @@ static LXValue bi_px_exec(LXValue* args, int nargs, void* ctx) {    (void)ctx;
     // REQUEST/GET/POST/SERVER 空值，Web 风格脚本在非 Web 语境下也能安全运行；
     // dict 的键注入为全局变量，可覆盖默认 4 个）
     if (params.type == PX_DICT || params.type == PX_NULL) {
+        // M183（缺陷 199）：`env` / `srv` 是**裸 C 局部** —— 后续 `px_dict()`（内层 4 个）、
+        //   `px_str("0.2.0")`、`px_call(json_stringify)` 都会分配，而 VM 轨 precise GC 的根面
+        //   只有「全局槽 + VM 帧槽 + TLS 登记根栈」（**不扫 C 栈**）⇒ 不登记就被回收。
+        //   实测（PX_GC_STRESS=1 PX_GC_INLINE=1 PX_GC_UAFDET=1，examples/m32_hot_reload）：
+        //   3/3 必现 —— 受害槽 = 被回收 dict 的 **keys 数组**（class 64）被 `px_dict_set` 写入
+        //   ⇒ 写坏 slab 空闲链表首字（与缺陷 198 同族：桥局部漏登记）。
         LXValue env = px_dict();
+        px_root_push();
+        PX_KEEP(env);   // 紧跟创建（中间不得插入任何可能分配的调用）
         px_dict_set(env, "REQUEST", px_dict());
         px_dict_set(env, "GET", px_dict());
         px_dict_set(env, "POST", px_dict());
         LXValue srv = px_dict();
+        PX_KEEP(srv);
         px_dict_set(srv, "px", px_str("0.2.0"));
         px_dict_set(env, "SERVER", srv);
         if (params.type == PX_DICT) {
@@ -24770,6 +25009,7 @@ static LXValue bi_px_exec(LXValue* args, int nargs, void* ctx) {    (void)ctx;
         }
         LXValue j = px_call(px_get_global("json_stringify"), &env, 1);
         if (j.type == PX_STR) env_json = strdup(j.as.obj->as.str.data);
+        px_root_pop();   // M183：与上方 px_root_push 配对
     }
     char* out = NULL;
     int out_len = 0, exit_code = 0;
