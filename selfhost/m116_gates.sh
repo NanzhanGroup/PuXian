@@ -443,6 +443,14 @@ step "M182 门（第 60 轮 · native 桥「登记窗口」· 缺陷 192 + 同�
 # 判据：① m23c 压力档整门通过（修前 R1008 丢 X-Test 3/3）；② 探针（json_path_set 三路 +
 #   本仓**第一个 http_unix 成功路径**用例）基线 vs 压力档逐字节一致；③ 负控 A/B/C 各自独立判红。
 run m182_hdr_root bash examples/m182_hdr_root/verify.sh
+# M183（第 61 轮）：**根栈「交棒窗口」**+ native 桥漏登记（缺陷 197/198/199）。
+#   197 = px_root_pop 的出口协作式安全点恰落在「返回值既不在本帧也不在调用方帧」的缝里
+#         （`bi_http_request` 的 headers 被回收 ⇒ d["headers"]=d 自引用环）；修法 = 延迟收缩。
+#   198/199 = `bi_s3_list` / `bi_px_exec` 的容器局部从未登记（可被新检测器 PX_GC_UAFDET 直指）。
+# 判据：① handover 在 STRESS 下连跑 10 次全绿；② s3flow(STRESS+INLINE+UAFDET) 全绿；
+#   ③b m32_hot_reload 压力档无 UAFDET；④ PX_GC_TRACE 硬不变量无命中；⑤ 根栈峰值有界；
+#   ⑥ 负控 A/B/C/D 各自独立判红。
+run m183_gc_root_handover bash examples/m183_gc_root_handover/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

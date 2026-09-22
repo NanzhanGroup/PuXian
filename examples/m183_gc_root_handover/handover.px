@@ -1,0 +1,32 @@
+# M183 门 ①：根栈「交棒窗口」（缺陷 197）—— 进程内 http_serve + http_request ×40
+#   判据：每次都能取到服务端自定义头 X-M183（丢头 ⇒ 该请求的响应头 dict 被 GC 误回收）
+PORT = 19311
+URL = "http://127.0.0.1:" + str(PORT)
+
+def h(req):
+    return {"status": 200, "body": "b", "headers": {"X-M183": "hdr"}}
+
+def srv():
+    http_serve(PORT, h)
+
+spawn srv()
+sleep(400)
+bad = 0
+for i in range(40):
+    r = http_request(URL + "/p" + str(i), "GET")
+    hh = r.headers
+    xm = false
+    cl = false
+    if hh != null:
+        if hh.has("X-M183"):
+            xm = true
+        if hh.has("Content-Length"):
+            cl = true
+    if xm == false or cl == false:
+        bad = bad + 1
+print("bad=" + str(bad))
+if bad == 0:
+    print("HANDOVER OK")
+else:
+    print("HANDOVER FAIL")
+    exit(1)
