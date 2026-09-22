@@ -408,6 +408,18 @@ run m178_iterable_args bash examples/m178_iterable_args/verify.sh
 # 判据：① 28 行合法侧矩阵三轨逐字节一致；② 20 个错误用例三轨同码同消息体 + stdout 恰为 before；
 #   ③ 负控 3 道（num_val UB 恢复 / 解释轨文案退回 / 跨型比较放行）。
 run m179_arith_diag bash examples/m179_arith_diag/verify.sh
+# M180（第 58 轮 · 晨曦 QA 清单 P0-3/P1-4）：**HTTP/2 口径落地 + HTTP/3 能力自证**。
+#   口径一句话：**h2 不做（长期）；h3 是唯一现代路线且在 x86_64 默认构建里已可用**
+#   （全文 docs/HTTP2_DECISION.md）。修前的真实行为比 QA 报的更糟一档：
+#     · `Upgrade: h2c` ⇒ 进演示帧层 ⇒ **200 + 固定演示页**（无视 docroot/handler）= 静默错内容；
+#     · `PRI * HTTP/2.0` 前导 ⇒ 同上；`--no-quic` + opts.http3 ⇒ **静默忽略**（H3 没开也不报错）。
+#   落地：h2c **忽略升级按 h1.1 服务**（RFC 7230 允许）· 前导 ⇒ **505 + 说明** ·
+#   删掉不可达的 ALPN-h2 死代码（ALPN 全线只声明 http/1.1）· h2 演示帧层收进
+#   `opts{"h2_demo": true}`（默认关）· `--no-quic` 下要求 H3 ⇒ **响亮报错** ·
+#   `px build` 收尾打**能力行**（quic=on/off，走 stderr，stdout 逐字节不变）。
+# 判据：① h2c 升级拿到真实内容且无演示页；② 前导 ⇒ 505；③ --no-quic+http3 ⇒ rc≠0 同文案；
+#   ④ 能力自证（默认构建含 ngtcp2/Alt-Svc，--no-quic 不含 + 能力行 quic=off）；⑤ 负控 1 道。
+run m180_h2_h3_stance bash examples/m180_h2_h3_stance/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

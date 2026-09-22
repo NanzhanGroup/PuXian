@@ -1,0 +1,10 @@
+# M180 门用：**要求 H3**（opts.http3）的程序 —— 两个判据共用
+#   ① 默认构建（不 --no-quic，x86_64）⇒ 产物必须链 ngtcp2（能力自证）
+#   ② `--no-quic` 构建 ⇒ 必须**响亮报错**（修前静默不服务）
+var port = 18191
+let pe = env("PX_STANCE_PORT")
+if pe != null:
+    port = int(pe)
+print("before")
+px_serve(port, "/tmp/m180_stance_docroot", 5000, {"http3": true})
+print("after")

@@ -62,7 +62,13 @@ gen() {
     done
 }
 
-MAP="$(gen | LC_ALL=C sort -u)"
+# ── M180：**显式补充表**（生成器看不到的"条件能力"入口）────────────────────────
+#   `px_serve` 的注册点在 core 区，但它接受 `opts{"http3": true}` ⇒ **引用它就等于
+#   可能要用 QUIC**。生成器按宏块归属推断，看不到这层关系 ⇒ 必须显式声明，
+#   否则「只用 opts.http3 开 H3」的程序会被自动裁剪掉 quic（= M180 修的静默失效）。
+#   加新条目时请同时在 docs/HTTP2_DECISION.md §2.2 记账。
+EXTRA_MAP="px_serve=quic"
+MAP="$( { gen; echo "$EXTRA_MAP"; } | LC_ALL=C sort -u)"
 echo "$MAP"
 
 if [ "${1:-}" = "--update" ]; then

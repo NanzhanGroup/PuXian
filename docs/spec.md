@@ -1374,6 +1374,17 @@ def main(args: list[str]) -> int:
 
 ## 10. 标准库约定
 
+> **HTTP 服务端的能力与口径（M180）**：`px_serve` / `http_serve` 的**生产协议 = HTTP/1.1**；
+> **HTTP/2 不做**（长期）——`Upgrade: h2c` 会被**忽略并按 HTTP/1.1 正常服务**，
+> `PRI * HTTP/2.0` 前导会被 **505 + 说明**拒绝（返一个与站点无关的演示页属"静默错值"，已删）；
+> h2 的演示帧层仅在 `opts{"h2_demo": true}` 下可用（默认关，非生产）。
+> **HTTP/3** 走 `opts{"http3": true}`（或 `{port,cert,key}`），与 HTTP/1.1 **同一条 handler 管道**
+> （vhost/限流/日志/静态/`.px`），并自动下发 `Alt-Svc`；**QUIC 预置静态库仅 x86_64**
+> ⇒ 非 x86_64 构建自动 `--no-quic`，此时若要求 H3 会**响亮报错**（不会静默不服务）。
+> `PX_BUILD_FEATURES=1 px build …` 会在 stderr 打一行能力（`quic=on|off`；**默认静默** ——
+> 成功路径不加噪声，见 engine_parity 的「正例 stderr 必须为空」判据）。口径全文见
+> [`HTTP2_DECISION.md`](HTTP2_DECISION.md)。
+
 ### 10.1 命名
 - 全小写下划线 `snake_case`
 - 缩写不转大写：`std.io`、`std.net.http`

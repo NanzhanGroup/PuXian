@@ -138,6 +138,8 @@ static int g_px_rate_whitelist_n = 0;
 // M33：access log 落盘路径（px_serve opts{access_log}；空 = 仅 stderr）+ Alt-Svc 通告
 char g_px_access_log[1024] = {0};
 char g_px_alt_svc[256] = {0};
+// M180：h2 **演示帧层**开关（opts{"h2_demo": true}；默认关 —— 见 docs/HTTP2_DECISION.md）
+static int g_px_h2_demo = 0;
 // M53-S4：px_serve opts.http3 的 H3（QUIC/UDP）listener id（0 = 未启用；优雅关闭时回收）
 // M57-S4：PX_NO_QUIC 裁剪（边缘设备交叉编译时去掉 QUIC/H3/ngtcp2/openssl 依赖）
 #ifndef PX_NO_QUIC
@@ -23207,20 +23209,12 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
     PxHttpOut out;
     px_http_out_init_conn(&out, conn);
 
-// M85-S1：--no-h2 裁剪（去 runtime_h2.o；http_serve 不再协商 h2c/ALPN-h2，退化为 HTTP/1.1）
-#ifndef PX_NO_H2
-    // M37：TLS ALPN 协商 h2 → 直接 HTTP/2（prior knowledge 帧循环，整连接为 h2）。
-    //   h2 连接请求循环在 px_h2_handle 内（h2 handler 协程化另立里程碑，保持同步）。
-    if (conn->is_tls) {
-        const char* alpn = mbedtls_ssl_get_alpn_protocol((mbedtls_ssl_context*)conn->ssl);
-        if (alpn && strcmp(alpn, "h2") == 0) {
-            px_h2_handle(conn, 0, NULL, 0);
-            px_pxpend_close(fd);   // 释放连接槽（px_conn_close 幂等 + free + inflight--）
-            g_cur_conn = NULL;
-            return px_null();
-        }
-    }
-#endif // PX_NO_H2
+// M180（第 58 轮）：**ALPN 全线只声明 http/1.1**（口径见 docs/HTTP2_DECISION.md）——
+//   此处原有一个「ALPN 协商到 h2 ⇒ 直接进 h2 帧循环」的分支。但 TLS 站点配置的
+//   `alpn_list` 只有 "http/1.1"（见文件上方 `mbedtls_ssl_conf_alpn_protocols` 处）
+//   ⇒ 该分支**不可达**（M180 实测复核：客户端声明 `h2,http/1.1` 时协商结果是
+//   http/1.1，与晨曦 QA 的实测一致）。按口径删除死代码；h2c 演示走
+//   `opts{"h2_demo": true}`（见上）。
 
     // M98-S2a/S2b：续处理 —— route/vhost handler 帧协程完成投回（stage==2）：
     //   kind=0（route）段2 px_route_respond（归一化 + 响应 + 访问日志）；kind=1（vhost）：
@@ -23586,24 +23580,68 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
             }
         }
 
-// M85-S1：--no-h2 裁剪（去 runtime_h2.o；http_serve 不再协商 h2c/ALPN-h2，退化为 HTTP/1.1）
-#ifndef PX_NO_H2
-        // M35：HTTP/2——h2c Upgrade（Upgrade: h2c + HTTP2-Settings）→ 升级为 h2 帧连接；
-        // prior knowledge（请求行 "PRI * HTTP/2.0"）→ 直接 h2。进入帧循环后整连接为 h2。
+// ═══ M180（第 58 轮）：**HTTP/2 明确不做**（口径 = docs/HTTP2_DECISION.md）═══
+// 修前：h2c Upgrade 与 h2 prior-knowledge 一律进 `px_h2_handle`，而那个帧循环**不接
+//   vhost/handler 管道**，只回一个固定演示页（`<h1>PuXian HTTP/2</h1>`）⇒ 客户端拿到
+//   **200 + 与本站无关的内容**（最坏一类：静默给错值；晨曦 QA 清单 P0-3 的病灶之一）。
+// 现在（RFC 7230 允许「忽略 Upgrade」）：
+//   · `Upgrade: h2c` ⇒ **忽略升级，按 HTTP/1.1 正常服务**（请求仍被正确处理，客户端
+//     拿到真实的 docroot/handler 内容；本进程首次遇到时打一行 stderr 说明）；
+//   · h2 **prior-knowledge 前导**（`PRI * HTTP/2.0`）⇒ 无法当 h1.1 解释 ⇒ **505 + 说明**；
+//   · 演示帧层（HPACK/多流）**收进显式开关** `opts{"h2_demo": true}`（默认关；仅供
+//     examples/m35_h2.px、m38_h2_multi.px 这类**能力演示/回归**使用，生产不要开）。
+        // ⚠️ 本块**不在** `#ifndef PX_NO_H2` 里：它的两条行为（忽略 h2c 升级 / 拒绝
+        //   prior-knowledge）都是**纯 HTTP/1.1 行为**，与 runtime_h2.c 是否存在无关
+        //   （只有 `opts.h2_demo` 的演示帧层需要那个模块，见内层 guard）。
         {
-            LXValue upg = px_header_get(&headers, "Upgrade");
-            int is_h2c = upg.type == PX_STR && strcasestr(upg.as.obj->as.str.data, "h2c");
-            int is_pri = strncmp(target, "PRI * HTTP/2.0", 14) == 0;
-            if (is_h2c || is_pri) {
-                // 请求头后缓冲残留（body 后到 len 的字节，可能含 client preface 前几字节）
-                const unsigned char* residual = (const unsigned char*)buf + (header_end + 4) + content_length;
-                int rlen = 0;
-                if (len > (header_end + 4) + content_length) rlen = len - ((header_end + 4) + content_length);
-                px_h2_handle(conn, is_h2c ? 1 : 0, residual, rlen);
+            // M180 修正：修前这里写的是 `strncmp(target, "PRI * HTTP/2.0", 14)`
+            //   —— 而 `target` 是请求行解析**切出来的第二段**（`PRI * HTTP/2.0`
+            //   只剩 `*`）⇒ 该判据**从来不成立**（死代码）：真实发生的是"当成普通
+            //   h1.1 请求 ⇒ method=PRI / target=* ⇒ 404"（= 晨曦 QA 实测的
+            //   "h2c Upgrade / PRI 前导被当普通 HTTP/1.1 处理"）。
+            //   现在按**解析后的方法**判定：`method == "PRI" && target == "*"`
+            //   （`OPTIONS *` 是合法 h1.1，方法名能区分开）。
+            if (strcmp(method, "PRI") == 0 && strcmp(target, "*") == 0) {
+                static const char h2_505[] =
+                    "HTTP/2 未支持（PuXian 口径：不做 h2）。\n"
+                    "请使用 HTTP/1.1，或 HTTP/3（opts{\"http3\": true} + Alt-Svc）。\n"
+                    "见 docs/HTTP2_DECISION.md\n";
+                fprintf(stderr, "[px-serve] 拒绝 HTTP/2 prior-knowledge 前导（h2 未支持；见 docs/HTTP2_DECISION.md）\n");
+                out.respond(&out, 505, "text/plain; charset=utf-8",
+                            h2_505, (int)strlen(h2_505), 0, 0, NULL);
                 goto req_done;
             }
+            LXValue upg = px_header_get(&headers, "Upgrade");
+            int is_h2c = upg.type == PX_STR && strcasestr(upg.as.obj->as.str.data, "h2c");
+            if (is_h2c) {
+#ifndef PX_NO_H2
+                if (g_px_h2_demo) {
+                    // 显式开的演示帧层（默认关）：保留 M35 的 h2c 升级 + 帧循环
+                    const unsigned char* residual = (const unsigned char*)buf + (header_end + 4) + content_length;
+                    int rlen = 0;
+                    if (len > (header_end + 4) + content_length) rlen = len - ((header_end + 4) + content_length);
+                    px_h2_handle(conn, 1, residual, rlen);
+                    goto req_done;
+                }
+#else
+                if (g_px_h2_demo) {
+                    static int h2d_warned = 0;
+                    if (!h2d_warned) {
+                        h2d_warned = 1;
+                        fprintf(stderr, "[px-serve] opts.h2_demo 已设，但本产物以 --no-h2（或按引用集自动裁剪）"
+                                        "编译 ⇒ h2 演示帧层不可用；请求将按 HTTP/1.1 处理\n");
+                    }
+                }
+#endif
+                static int h2c_noted = 0;
+                if (!h2c_noted) {
+                    h2c_noted = 1;
+                    fprintf(stderr, "[px-serve] 忽略 h2c 升级请求：按 HTTP/1.1 服务"
+                                    "（h2 未支持；见 docs/HTTP2_DECISION.md）\n");
+                }
+                // 不升级：继续走下面的公共管道（HTTP/1.1）
+            }
         }
-#endif // PX_NO_H2
         // M53-S2：req 就绪 → 公共请求管道（CORS/限流/vhost/路由/静态/.px；输出经
         // PxHttpOut）。async_ok=1：route VM handler 命中可拆段帧协程执行（M98-S2a）。
         int dret = px_http_dispatch(&out, req, method, path, query,
@@ -24242,6 +24280,15 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
         if (gl.type == PX_INT && gl.as.i >= 1 && gl.as.i <= 9) g_px_gzip_level = (int)gl.as.i;
         LXValue gm = px_dict_get(args[3], "gzip_min_bytes");
         if (gm.type == PX_INT && gm.as.i >= 1) g_px_gzip_min = (int)gm.as.i;
+        // M180：opts.h2_demo —— **显式**启用 h2 演示帧层（默认关；生产不要开）
+        {
+            LXValue h2d = px_dict_get(args[3], "h2_demo");
+            if (h2d.type == PX_BOOL && h2d.as.b) {
+                g_px_h2_demo = 1;
+                fprintf(stderr, "[px-serve] 警告：已启用 h2 演示帧层（opts.h2_demo=true）——"
+                                "它**不接** vhost/handler 管道，仅供能力演示/回归；生产请勿开启\n");
+            }
+        }
 #ifndef PX_NO_QUIC
         // M53-S4：opts.http3 —— bool true（自签证书）或 {port?, cert?, key?}
         LXValue h3o = px_dict_get(args[3], "http3");
@@ -24255,6 +24302,17 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
             if (hc.type == PX_STR) snprintf(h3_cert, sizeof(h3_cert), "%s", hc.as.obj->as.str.data);
             LXValue hk = px_dict_get(h3o, "key");
             if (hk.type == PX_STR) snprintf(h3_key, sizeof(h3_key), "%s", hk.as.obj->as.str.data);
+        }
+#else
+        // M180（晨曦 QA 清单 P1-4）：本二进制以 `--no-quic` 构建（QUIC 静态库只预置 x86_64）
+        //   ⇒ 若调用方**要求** H3，必须**响亮报错**，不能静默不服务（最坏一类：以为开了）。
+        {
+            LXValue h3o2 = px_dict_get(args[3], "http3");
+            int want = (h3o2.type == PX_BOOL && h3o2.as.b) || h3o2.type == PX_DICT;
+            if (want)
+                px_error("R1002: px_serve opts.http3 需要 QUIC 支持，但本二进制以 --no-quic 构建"
+                         "（QUIC 预置静态库仅 x86_64；非 x86_64 宿主可自备库并设 PX_HOST_QUIC=1，"
+                         "或改用 HTTP/1.1 —— 见 docs/HTTP2_DECISION.md §二）");
         }
 #endif
     }
