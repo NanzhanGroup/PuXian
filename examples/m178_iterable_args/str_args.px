@@ -1,0 +1,16 @@
+# M178 门 · 用例 B：**str 作为可迭代实参**的面（与 M177 已定的 min/max/unique/flatten 同一条规则）
+#   为什么单列：M178 之前三轨在这张表上分叉（解释轨 reject vs 编译轨 accept），
+#   而 `reversed(str)` 更狠 —— 编译轨按**字节**反转，`reversed("中文")` 产出**非法 UTF-8**。
+print("1  join_str=" + join("-", "abc"))
+print("2  join_str_cjk=" + join("", "中文"))
+print("3  sorted_str=" + str(sorted("cab")))
+print("4  sorted_str_cjk=" + str(sorted("中b文")))
+print("5  min_str=" + str(min("cba")))
+print("6  max_str=" + str(max("cba")))
+print("7  unique_str=" + str(unique("aab")))
+print("8  flatten_str=" + str(flatten(["ab"])))
+print("9  rev_str_ascii=" + reversed("abc"))
+print("10 rev_str_cjk=" + reversed("中文"))
+print("11 rev_str_emoji=" + reversed("a😀b"))
+print("12 rev_str_nul=" + str(len(reversed("a\u{0}b"))))
+print("M178B-STR-ARGS-OK")

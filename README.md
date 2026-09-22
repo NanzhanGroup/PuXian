@@ -43,6 +43,7 @@ PuXian 采用 **Apache License 2.0** 开源 —— 任何人可自由使用、�
 | ✅ **自举完成（M-B8）** | **PuXian 编译器由 PuXian 自己写成**：`lexer / parser / codegen / interp / bc_emit / 值系统` 核心全部用 `.px` 重写，自举证明 A.c == B.c == B2.c 逐字节一致 |
 | ✅ **Rust 版已退役（M-B9a）** | Rust 源码归档至 `archive/rust-compiler/`（只读），**新工具链 `tools/px` 完全无需 Rust**，基于自举二进制运行 |
 | ✅ **双后端 + 三轨（M91 起）** | 解释轨（`pxi` 树遍历）· **VM 字节码轨（`px build` 默认）** · C 文本轨（`px build --c` 逃生舱）。**同一份源码三轨行为一致**——由 `m116_gates.sh` 全量门 + 每里程碑专属门守住 |
+| ✅ **可迭代实参只有一条定义（M178）** | `list` / `tuple` / 生成器 / **字符串（按 rune）** —— `join`/`sorted`/`reversed`/`contains` 与 `min`/`max`/`sum`/`unique`/`flatten` 共用同一条迭代语义（`px_as_list` = `px_len` + `px_iter_at`）。顺手修掉一颗**坏值**：`reversed("中文")` 旧实现按**字节**反转 ⇒ 产出**非法 UTF-8**；现在按 rune 反转且返回 str。拒绝文案三轨同形 |
 | ✅ **运行期 GC 根面收口（M170）** | precise GC 的「谁保活」真空被收成**两条硬约束**（容器创建后必须登记 · 登记必须紧跟创建、先于下一次分配）+ **多出口/隔离点用深度式登记**（`px_root_depth`/`px_root_restore`）。新检测器 `PX_GC_STRESS=1`（每次分配即 GC）把「偶发」变「必现」——用户报障那颗跑了 **16388 轮**才炸，现在第一轮就露 |
 | ✅ **HTTP 反代/静态两件收口（M173）** | `vhost(host, handler)` 分支补 gzip 判定（此前 vhost 站点文本响应**全明文下发**，白耗 3~5× 带宽）· 池连接**复用前**按本次 `timeout_ms` 重设收发超时（此前小超时形同虚设）—— 两条都是**外部 QA 用生产流量发现**的缺口，来源见 CHANGELOG M173 |
 | ✅ **工具侧同一条真相（M171）** | `px lint` 的作用域模型**改成与语言一致**（帧顶声明 hoist · 赋值式绑定就地声明 · 内层帧可见外层帧 · 推导式变量全式可见 · `.px_modules` 导入 · 宿主注入全局入册）。全仓假 `L002`：**151 文件 3651 条 → 21 文件 801 条**（`stdlib/collections.px` **46 → 0**）—— 此前用新写法就过不了 CI |
@@ -402,6 +403,12 @@ CI 每次提交自动跑 C 轨 + BC 轨证明与**重烘指纹门**（`.github/w
 | M168 | **分发可移植性** | openEuler 官方支持（`install-rpm.sh` 显式映射表，不再依赖 `$releasever`）· 发布资产**全静态**（`check_bin_portability.sh` 自带负控，对旧包实测判红）· 三条纪律：失败给可执行下一步 / 依赖可判定 / 门红必须读得到原因 |
 | M169 | **模块体 / 帧的「绑定归属」** | 模块体（**含嵌套块**）里的绑定一律模块级全局（模块体无块作用域）· 帧捕获按引用 · **闭包体也是帧**（hoist + 装箱）· 帧内声明式 ⇒ 帧局部、赋值式 ⇒ 命中模块绑定写全局（缺陷 181/183/184）|
 | M171 | **lint 作用域模型对齐语言（工具侧同一条真相）** | 帧顶声明 hoist · 赋值式绑定就地声明（左值不报 L002）· 内层帧可见外层帧（`used` 回写拥有者）· 推导式变量全式可见 · 导入候选补 `.px_modules` · 名册增第 ④ 源「宿主注入全局」（缺陷 116）|
+| M172 | 运行期诊断的**通道**统一 | 「未定义变量」族三轨**同通道（stderr）+ 同错误码 + 同消息体**；位置前缀各轨保留最优信息，不按整行对拍（缺陷 186）|
+| M174 | `d.get(k[, default])` 三轨真相 | 默认值**只覆盖「键不存在」**；键存在而值为 `null` ⇒ 返回 `null`（= Go 两值语义 / Python `dict.get`，缺陷 194）|
+| M175 | 台账两小项 | `len(bytes)` = **字节数**（`bytes_len` 变为等价别名）· `os_popen` 的 stderr 去向右开（`inherit`/`pipe`/`null`，不传 opts 时逐字节保持旧行为；缺陷 153 / 14）|
+| M176 | **零停机换二进制** | `SO_REUSEPORT`（`opts{"reuse_port": true}` / `PX_REUSE_PORT=1`）· 门实测换二进制期间 700 次探测 `refused=0` · 内核要求**双方 opt-in** ⇒ 旧版也必须带开关启动（晨曦 P1-5）|
+| M177 | **两个引擎的内置面统一** | 解释轨独有的 `dict()` / `unique()` / `flatten()` 补进 runtime · `min`/`max` 单参数可迭代取元素最值（此前编译轨**静默返回生成器对象**）· `px_as_list` = `px_len` + `px_iter_at`（与 `for x in xs` 同源）· 名册门新增判据 ⑦（缺陷 165 的审计发现）|
+| M178 | **可迭代实参只有一条定义** | `list` / `tuple` / 生成器 / **字符串（按 rune）**——`join`/`sorted`/`reversed`/`contains` 与 M177 的五个内置同一入口；**`reversed(str)` 修「按字节反转 ⇒ 非法 UTF-8」**（坏值）并统一返回 str；拒绝文案同形；新登记缺陷 195 |
 
 > 规则细节与迁移指引见 [docs/spec.md §17](docs/spec.md) 与 [docs/DICT_STRICT_MIGRATION.md](docs/DICT_STRICT_MIGRATION.md)；每条都配了三轨逐字节一致的门 + 负控（`examples/m159_*` … `examples/m169_*`）。
 

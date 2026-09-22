@@ -384,6 +384,20 @@ run m176_reuseport bash examples/m176_reuseport/verify.sh
 # 判据：① 20 条内置面矩阵三轨 stdout 逐字节一致；② 真不支持的类型/空可迭代 ⇒ 三轨同码同文；
 #   ③ 名册门 ⑦ 全绿；④ 负控（min/max 单参数改回直接返回 ⇒ 两轨必须不一致；sha256 还原复绿）。
 run m177_builtin_parity bash examples/m177_builtin_parity/verify.sh
+# M178（第 57 轮）：**可迭代实参统一** —— join / sorted / reversed / contains 的实参面与文案。
+#   修前同一份源码三轨四种行为：
+#   ① `join("-", gen)`：解释轨报**与 join 无关**的「字典索引键必须是字符串」（直接 args[1][i]，
+#      而解释轨的生成器是 dict{"__gen__"}）vs 编译轨 `1-2-3`；
+#   ② `sorted((3,1,2))`/`reversed((1,2,3))`/`contains((1,2,3),2)`：编译轨只收 list，解释轨文案各异；
+#   ③ `reversed("中文")`：解释轨 `[文, 中]`（list of rune）vs 编译轨**按字节反转** ⇒
+#      **非法 UTF-8**（渲染乱码）—— 不只是分叉，是**坏值**；
+#   ④ `join("-","abc")`/`sorted("cab")`：解释轨 reject vs 编译轨 accept（str 经 px_as_list 混进来）。
+#   一条真相：可迭代实参 = list/tuple/生成器/**字符串**（str 按 rune）；`reversed(str)` → str
+#   （rune 级反转）；拒绝文案统一 `<名> 参数需要 list/tuple/生成器/字符串，实际是 <t>`。
+# 判据：① 31 行矩阵（4 形态 × 4 入口）三轨 stdout 逐字节一致；② 12 行 str 面（含 emoji/NUL）一致；
+#   ③ 4 个真不支持类型 ⇒ 三轨 rc≠0 + stdout 恰为 before + R1002 + 同文案；
+#   ④ 登记项（不计失败）缺陷 195；⑤ 负控 3 道（runtime 字节反转 / 解释轨收回 list / join 拒生成器）。
+run m178_iterable_args bash examples/m178_iterable_args/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

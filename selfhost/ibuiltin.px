@@ -165,10 +165,18 @@ def i_call_builtin(name, args, pos):
             return Err(i_r1002("join 需要 (分隔符, 列表) 两个参数", pos))
         if type(args[0]) != "string":
             return Err(i_r1002("join 分隔符需要 string", pos))
+        # M178：可迭代实参统一 + **先判类型** —— 修前直接 `len(args[1])` / `args[1][i]`，
+        #   传生成器（解释轨里是 dict{"__gen__"}）时变成「dict 用整数下标」⇒ 报出一句
+        #   与 join 毫无关系的 `字典索引键必须是字符串`（实测）。
+        #   面 = list/tuple/生成器/**字符串**（str 按 rune；= Python `"-".join("abc")`）
+        let t1 = i_type_name(args[1])
+        if t1 != "list" and t1 != "tuple" and t1 != "generator" and t1 != "string":
+            return Err(i_r1002("join 第二参数需要 list/tuple/生成器/字符串，实际是 " + t1, pos))
+        let seqj = i_seq_of(args[1])
         let parts = []
         var i = 0
-        while i < len(args[1]):
-            parts.append(i_to_str(args[1][i]))
+        while i < len(seqj):
+            parts.append(i_to_str(seqj[i]))
             i += 1
         return Ok(join(args[0], parts))
     if name == "contains":
@@ -184,7 +192,15 @@ def i_call_builtin(name, args, pos):
                     return Ok(true)
                 i += 1
             return Ok(false)
-        return Err(i_r1002("contains 参数类型不支持", pos))
+        if t0 == "tuple" or t0 == "generator":
+            let srcc = i_seq_of(args[0])
+            var ic = 0
+            while ic < len(srcc):
+                if i_eq(srcc[ic], args[1]):
+                    return Ok(true)
+                ic += 1
+            return Ok(false)
+        return Err(i_r1002("contains 不支持类型 " + t0, pos))
     if name == "split":
         if len(args) != 2:
             return Err(i_r1002("split 需要 (字符串, 分隔符) 两个参数", pos))
@@ -1185,12 +1201,14 @@ def i_builtin_sorted(args, pos):
     if len(args) != 1:
         return Err(i_r1002("sorted 需要一个参数", pos))
     let t = i_type_name(args[0])
-    if t != "list" and t != "tuple":
-        return Err(i_r1002("sorted 参数需要 list/tuple", pos))
+    # M178：可迭代实参统一（list/tuple/生成器/字符串）—— 文案与编译轨同形
+    if t != "list" and t != "tuple" and t != "generator" and t != "string":
+        return Err(i_r1002("sorted 参数需要 list/tuple/生成器/字符串，实际是 " + t, pos))
+    let srcs = i_seq_of(args[0])
     let items = []
     var i = 0
-    while i < len(args[0]):
-        items.append(args[0][i])
+    while i < len(srcs):
+        items.append(srcs[i])
         i += 1
     let n = len(items)
     # M162（第 48 轮 · 缺陷 166/167）：**值比较** + **稳定**
@@ -1217,18 +1235,25 @@ def i_builtin_reversed(args, pos):
         return Err(i_r1002("reversed 需要一个参数", pos))
     let t = i_type_name(args[0])
     let items = []
-    if t == "list" or t == "tuple":
+    if t == "list" or t == "tuple" or t == "generator":
+        let srcr = i_seq_of(args[0])
         var i = 0
-        while i < len(args[0]):
-            items.append(args[0][i])
+        while i < len(srcr):
+            items.append(srcr[i])
             i += 1
     elif t == "string":
-        var i = 0
-        while i < len(args[0]):
-            items.append(args[0][i])
-            i += 1
+        # M178：**字符串入参 → 字符串出参**（与编译轨同形）。
+        #   修前解释轨把 rune 收进 list 返回 ⇒ 三轨分叉（`reversed("abc")`：
+        #   解释轨 `[c, b, a]` / 编译轨 `cba`）。编译轨另有「按字节反转」缺陷
+        #   （`reversed("中文")` 产出**非法 UTF-8**，实测 `\xad\x87...`），同批改 **rune 级**。
+        var si = len(args[0]) - 1
+        var s = ""
+        while si >= 0:
+            s = s + args[0][si]
+            si -= 1
+        return Ok(s)
     else:
-        return Err(i_r1002("reversed 参数类型不支持", pos))
+        return Err(i_r1002("reversed 参数需要 list/tuple/生成器/字符串，实际是 " + t, pos))
     let n = len(items)
     let out = []
     var i = n - 1
