@@ -2129,3 +2129,49 @@ set_timeout(fn (): print("once after 2s"), 2000)
        显式 `var x = null`；反过来，**别指望**「读未声明的帧名拿到 null」，那是 `R1001`。
      · 门：`examples/m181_uninit_read/`（`M181-VERIFY-OK` · 合法侧 7 例三轨逐字节一致 + 严格性 8 例
        × 三轨同码同文 + 负控 3 道各自独立判红：VM 去哨兵 / C 轨退 `px_null` / 解释轨不登记）。
+
+210. **native 桥的「登记窗口」：登记作用域必须建立在**该值的第一个跨分配窗口之前**
+     （第 60 轮 · M182 收口缺陷 192 + 同族）**：
+     M170 立了「容器创建后必须登记」，**没管住「登记之前的那段窗口」** —— 尤以
+     **返回值 / `out-param`** 形态为最：值的生命从**被调用方**的登记帧里出来，
+     调用方接手的**那一瞬间是裸的**（`h_exchange` 返回前已经 `px_root_pop()` 自己的帧）。
+
+     ```c
+     // ❌ 修前（缺陷 192）：`d = px_dict()` 那一次分配就可能回收 headers
+     if (h_exchange(&slot, …, &headers, …) == 0) {
+         if (keep_alive) hpool_put(key, slot);
+         LXValue d = px_dict();
+         px_root_push(); PX_KEEP(headers); PX_KEEP(d);   // ← 登记**迟到**
+     }
+     // ✅ 修后：登记作用域先于第一个分配；`PX_KEEP` 紧跟创建
+     if (h_exchange(&slot, …, &headers, …) == 0) {
+         px_root_push(); PX_KEEP(headers);
+         if (keep_alive) hpool_put(key, slot);
+         LXValue d = px_dict(); PX_KEEP(d);
+     }
+     ```
+
+     · **症状**：`R1008 字典没有键 'X-Test'`（响应头**整份**丢，m23c 3/3 必现）——
+       与「字段值变 unknown/int」这类**静默错值**同族（漏登记的对象被回收后再被写 ⇒
+       轻则错值、重则写坏 slab 空闲链 ⇒ 之后的 `xmalloc` SIGSEGV）。
+     · **为什么长期只在调试开关组合下发作**（这条最值得记）：`px_alloc` 里
+       `deferrable = (g_active_threads > 0) && !g_gc_force_inline` —— 多线程服务模式
+       （`spawn`/连接池活跃）**默认把 GC 延迟到安全点**（ISSUE28-B1）；延迟期间窗口自然被
+       「稍后的登记」补上 ⇒ **靠运气遮住**。`PX_GC_INLINE=1` 强制内联回收 ⇒ 窗口必现。
+       实测对照：基线绿 · 单开 `PX_GC_STRESS=1` 绿 · 单开 `PX_GC_INLINE=1` 绿 · **双开 3/3 红**。
+       ⇒ **判据要用「双开」，不要用「单开 STRESS」**（后者在多线程程序里走安全点，会漏检）。
+     · **同族两处（本轮一并收口，各有独立负控）**：
+       `json_path_set_at` 的 dict 分支（`r = px_dict()` 发生在 `d` 被登记之前）；
+       `bi_http_unix`（与 `bi_http_request` 完全同形）。
+     · **改桥代码时的自查清单**：① 只要函数**返回**容器或**经 `out-param` 填充**容器，
+         调用方必须在**第一次分配之前**接住它；② 同一函数里连续建两个容器时，
+         **先建的先登记**；③ 与 `h_exchange` 同形的**多出口**函数用深度式登记
+         （`px_root_iso_mark`/`px_root_restore_iso`，见事实 191/§17.10）。
+     · **门**：`examples/m182_hdr_root/`（`M182-VERIFY-OK` · m23c 压力档整门通过 +
+       探针 json_path_set 三路 + **本仓第一个 `http_unix` 成功路径**用例（对端 python3 UDS 应答器）
+       基线/压力档逐字节一致 + 负控 A/B/C **各自独立判红**）。
+     · **新登记（本轮由三档差分筛筛出，未修 · 下一轮）**：**197** —— 进程内
+       `http_serve` + `http_request` 在 `PX_GC_STRESS=1` 下响应头**间歇**丢失
+       （实测 37/40 ~ 40/40 波动；同程序服务端用 curl 打 40/40 正常 ⇒ 疑在服务端 `resp`
+       序列化或客户端解析的**安全点窗口**）；**198** —— `m37_s3` / `s3_neterr_result` 在
+       **STRESS+INLINE** 下 3/3 SIGSEGV（gdb：`xmalloc` ← `px_dict` ← `http_conn_worker`）。

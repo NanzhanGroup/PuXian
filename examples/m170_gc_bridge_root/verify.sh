@@ -49,9 +49,11 @@
 #      **症状是时序相关的** —— 同源码连跑 5 次：1 次丢头 `R1008`、3 次 PASS、1 次 SIGSEGV
 #      ⇒ 这类控制会让门**偶发变红**（假红比不判更糟）。故 191 只由 ⑦ 层**正判据锁症状**
 #      （修前该样例在 stress 下 core dump；正向复现 2/2 独立运行）。
-#   ⚠️ 另记**缺陷 192（未修 · 已实测确定复现）**：`PX_GC_STRESS=1 PX_GC_INLINE=1`（两个调试
+#   ⚠️ 另记**缺陷 192** —— **已由 M182 收口**（第 60 轮 · 见 `examples/m182_hdr_root/` 与
+#      spec §17.10 第 3 条硬约束）。原文保留：`PX_GC_STRESS=1 PX_GC_INLINE=1`（两个调试
 #      开关同开）下 m23c 必丢头（A 组含 KEEP 3/3 红、B 组去 KEEP 3/3 红 ⇒ **病因不在 h_exchange**）。
-#      默认 / 低阈值 / 单开 stress 全绿 ⇒ 不进本门（进了门就常年红），登记在 CHANGELOG/spec §17.9。
+#      默认 / 低阈值 / 单开 stress 全绿；**M182 定位到真形状 = 调用方的「登记迟到」窗口**
+#      （`LXValue d = px_dict();` 先于 `PX_KEEP(headers)`），修后**双开 3/3 绿**。
 # 用法：./examples/m170_gc_bridge_root/verify.sh            （完整门：正判据 + 负控）
 #       ./examples/m170_gc_bridge_root/verify.sh --neg-skip （只跑正判据，CI 用）
 # 退出码：0 = 绿，1 = 红。

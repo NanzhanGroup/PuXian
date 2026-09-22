@@ -9986,12 +9986,15 @@ static LXValue json_path_set_at(LXValue base, JPathSeg* segs, int n, LXValue new
             return r;
         }
     } else {
-        // dict 字段
+        // dict 字段（M182：登记作用域必须**先于**本分支的第一个分配 —— 修前形状是
+        //   `LXValue d = …px_dict(); LXObject* o = d.as.obj; LXValue r = px_dict(); px_root_push();`
+        //   即 `r` 的那次分配发生在 `d` 被登记之前；而 `d`（= 调用方 `json_value_copy` 的
+        //   深拷贝临时，或本处新建）**只由 C 局部持有** ⇒ precise GC 下就是 use-after-free 窗口。）
+        px_root_push();
         LXValue d = (base.type == PX_DICT) ? base : px_dict();
+        PX_KEEP(d);   // base（bi_json_path_set 深拷贝临时，仅 C 持有）跨拷贝分配存活
         LXObject* o = d.as.obj;
         LXValue r = px_dict();
-        px_root_push();
-        PX_KEEP(d);   // base（bi_json_path_set 深拷贝临时，仅 C 持有）跨拷贝分配存活
         PX_KEEP(r);   // 结果 dict 跨 px_dict_set/json_value_copy 分配
         for (int i = 0; i < o->as.dict.len; i++) {
             px_dict_set(r, o->as.dict.keys[i], json_value_copy(o->as.dict.vals[i]));
@@ -15279,12 +15282,21 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
         char* resp_body = NULL;
         if (h_exchange(&slot, req, rlen, body, body_n, &status, &headers, &resp_body, &body_len, &keep_alive,
                        gzip_decode) == 0) {
+            // M182（缺陷 192）：**登记作用域必须在第一个分配之前建立**。
+            //   修前形状 = `LXValue d = px_dict(); px_root_push(); PX_KEEP(headers);` ——
+            //   `headers` 是 h_exchange 的返回值，而 h_exchange 返回前已 `px_root_pop()`
+            //   自己的帧 ⇒ 从「返回到这里被 KEEP」之间它**只由调用者的 C 局部持有**
+            //   （VM 轨 precise GC 不扫 C 栈）⇒ 期间任何一次分配触发 GC 都可能回收它。
+            //   实测（PX_GC_STRESS=1 PX_GC_INLINE=1）：`px_dict()` 那一次分配就把
+            //   `headers` 收走 ⇒ 响应头整份丢失（m23c 报 `R1008 字典没有键 'X-Test'`，3/3 必现）。
+            //   延迟回收（非 INLINE）= **靠运气遮住**（GC 落到安全点，届时根已登记）—— 这是
+            //   它长期只在调试开关组合下发作、却在默认阈值下**偶发**的根因。
+            px_root_push();
+            PX_KEEP(headers);   // headers 已离开 h_exchange 的登记帧 ⇒ 必须立刻接住
             if (keep_alive) hpool_put(key, slot);
             else { if (slot.tls) https_close(slot.tls); close(slot.fd); }
             LXValue d = px_dict();
-            px_root_push();   // M92-S2c precise：http_request 响应 dict 构造登记
-            PX_KEEP(headers);   // M92-S2c precise：headers（h_exchange 填充 dict）入 d 前跨分配
-            PX_KEEP(d);   // M92-S2c precise：d 裸局部跨 px_dict_set/px_str_len 分配
+            PX_KEEP(d);   // 紧跟创建（中间不得插入任何可能分配的调用）
             px_dict_set(d, "status", px_int(status));
             px_dict_set(d, "headers", headers);
             px_dict_set(d, "body", resp_body ? px_str_len(resp_body, body_len) : px_str(""));
@@ -15443,10 +15455,12 @@ static LXValue bi_http_unix(LXValue* args, int nargs, void* ctx) {
     }
     if (chunk_buf) xfree(chunk_buf);
     close(fd);
+    // M182（缺陷 192 同族）：与 bi_http_request 同修 —— headers 离开 h_exchange 的登记帧后
+    //   必须先接住，再进入构造响应 dict 的分配段。
+    px_root_push();
+    PX_KEEP(headers);
     LXValue d = px_dict();
-    px_root_push();   // M92-S2c precise：http_unix 响应 dict 构造登记
-    PX_KEEP(headers);   // M92-S2c precise：headers（h_exchange 填充 dict）入 d 前跨分配
-    PX_KEEP(d);   // M92-S2c precise：d 裸局部跨 px_dict_set/px_str_len 分配
+    PX_KEEP(d);   // 紧跟创建
     px_dict_set(d, "status", px_int(status));
     px_dict_set(d, "headers", headers);
     px_dict_set(d, "body", resp_body ? px_str_len(resp_body, body_len) : px_str(""));
