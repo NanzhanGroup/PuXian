@@ -437,11 +437,12 @@ def i_as_index(idx, n, pos):
         if i < 0:
             i = i + n
             if i < 0:
-                return Err(i_r1003("索引越界", pos))
+                return Err(i_r1003("索引越界: " + i_to_str(i) + " (len=" + i_to_str(n) + ")", pos))
         if i >= n:
-            return Err(i_r1003("索引越界", pos))
+            return Err(i_r1003("索引越界: " + i_to_str(i) + " (len=" + i_to_str(n) + ")", pos))
         return Ok(i)
-    return Err(i_r1002("索引必须是整数", pos))
+    # M179：与编译轨 px_req_int_idx 同文（修前只说「索引必须是整数」）
+    return Err(i_r1002("索引必须是整数，实际是 " + i_type_name(idx), pos))
 def i_index(v, idx, pos):
     let t = i_type_name(v)
     if t == "list" or t == "tuple":
@@ -451,7 +452,7 @@ def i_index(v, idx, pos):
             return Err(r.err())
         var i = r.unwrap()
         if i >= n:
-            return Err(i_r1003("列表索引越界", pos))
+            return Err(i_r1003("索引越界: " + i_to_str(i) + " (len=" + i_to_str(n) + ")", pos))
         return Ok(v[i])
     if t == "string":
         # M111-S1：不再物化 n 元字符表（原每次 s[i] 为 O(n) ⇒ 循环内 O(n²)）。
@@ -596,15 +597,15 @@ def i_eval_unary(op, v, pos):
             return Ok(-v)
         if t == "float":
             return Ok(-v)
-        return Err(i_r1002("一元负号需要数值", pos))
+        return Err(i_r1002("无法取负: -" + t, pos))
     if op == "Not":
-        if t == "bool":
-            return Ok(not v)
-        return Err(i_r1002("not 需要布尔值", pos))
+        # M179：`not` 走**真值**语义（与编译轨 px_not 一致；`if x:` / `and` / `or` 同源）。
+        #   修前只收 bool ⇒ `not 1` 解释轨报错、编译轨给 false（三轨分叉）。
+        return Ok(not i_truthy(v))
     if op == "BitNot":
         if t == "int":
             return Ok(-v - 1)
-        return Err(i_r1002("按位取反需要整数", pos))
+        return Err(i_r1002("按位取反 需要整数，实际是 " + t, pos))
     return Err(i_r1002("未知一元运算符 " + op, pos))
 # ---------- 二元运算（对齐 eval_binary） ----------
 def i_as_f64(v, pos):
@@ -648,7 +649,54 @@ def i_bin_add(l, r, pos):
             out.append(r[j])
             j += 1
         return Ok(out)
-    return Err(i_r1002("+ 不支持: " + tl + " + " + tr, pos))
+    # M179：文案与编译轨（runtime px_add）同码同文
+    return Err(i_r1002("无法相加: " + tl + " + " + tr, pos))
+# ---------- M179（第 57 轮 · 缺陷 195/196）：运算族的**统一文案** ----------
+# 与编译轨 runtime.c 一一对应（`px_req_num2` / `px_req_int`），三轨同码同文。
+def i_bin_opname(op):
+    if op == "Sub":
+        return "相减"
+    if op == "Mul":
+        return "相乘"
+    if op == "Div":
+        return "相除"
+    if op == "IntDiv":
+        return "整除"
+    if op == "Mod":
+        return "取模"
+    if op == "Pow":
+        return "幂运算"
+    return "运算"
+def i_bin_opsym(op):
+    if op == "Sub":
+        return "-"
+    if op == "Mul":
+        return "*"
+    if op == "Div":
+        return "/"
+    if op == "IntDiv":
+        return "//"
+    if op == "Mod":
+        return "%"
+    if op == "Pow":
+        return "**"
+    return "?"
+def i_bit_opname(op):
+    if op == "BitAnd":
+        return "按位与"
+    if op == "BitOr":
+        return "按位或"
+    if op == "BitXor":
+        return "按位异或"
+    if op == "Shl":
+        return "左移"
+    if op == "Shr":
+        return "右移"
+    if op == "ShrU":
+        return "无符号右移"
+    return "按位运算"
+def i_bit_ops(op):
+    return op == "BitAnd" or op == "BitOr" or op == "BitXor" or op == "Shl" or op == "Shr" or op == "ShrU"
 def i_bin_numeric(op, l, r, pos):
     let tl = i_type_name(l)
     let tr = i_type_name(r)
@@ -686,14 +734,22 @@ def i_bin_numeric(op, l, r, pos):
         if op == "BitXor":
             return Ok(l ^ r)
         return Err(i_r1002("未知运算符 " + op, pos))
-    let ar = i_as_f64(l, pos)
-    if ar.is_err():
-        return Err(ar.err())
-    let br = i_as_f64(r, pos)
-    if br.is_err():
-        return Err(br.err())
-    let a = ar.unwrap()
-    var b = br.unwrap()
+    # M179：`str * int` = 重复（编译轨 px_mul 一直支持；修前解释轨报「需要数值」⇒ 分叉）
+    #   n <= 0 ⇒ 空串（对齐 Python；编译轨同批修了负数下 xmalloc 的尺寸溢出）
+    if tl == "string" and tr == "int":
+        return Ok(l * r)
+    # M179：类型守卫 —— 与编译轨 px_req_num2 同码同文
+    let ln = tl == "int" or tl == "float"
+    let rn = tr == "int" or tr == "float"
+    if not (ln and rn):
+        if i_bit_ops(op):
+            let nmb = i_bit_opname(op)
+            if not ln:
+                return Err(i_r1002(nmb + " 需要整数，实际是 " + tl, pos))
+            return Err(i_r1002(nmb + " 需要整数，实际是 " + tr, pos))
+        return Err(i_r1002("无法" + i_bin_opname(op) + ": " + tl + " " + i_bin_opsym(op) + " " + tr, pos))
+    let a = float(l)
+    var b = float(r)
     if op == "Sub":
         return Ok(a - b)
     if op == "Mul":
@@ -709,6 +765,12 @@ def i_bin_numeric(op, l, r, pos):
         return Ok(a % b)
     if op == "Pow":
         return Ok(a ** b)
+    # M179：位运算要求整数（至少一个 float 走到这里）—— 与编译轨 px_req_int 同文
+    if i_bit_ops(op):
+        let nmb2 = i_bit_opname(op)
+        if tl != "int":
+            return Err(i_r1002(nmb2 + " 需要整数，实际是 " + tl, pos))
+        return Err(i_r1002(nmb2 + " 需要整数，实际是 " + tr, pos))
     return Err(i_r1002("此运算符要求整数操作数", pos))
 # 逻辑右移（对齐 Rust (a as u64).wrapping_shr(b) as i64）
 # 负数补码：算术右移后清除符号扩展的高位
@@ -739,13 +801,18 @@ def i_bin_compare(op, l, r, pos):
             return Ok(a > b)
         if op == "Ge":
             return Ok(a >= b)
-    if tl == "string" and tr == "string":
-        if op == "Lt":
-            return Ok(l < r)
-        if op == "Le":
-            return Ok(l <= r)
-        if op == "Gt":
-            return Ok(l > r)
-        if op == "Ge":
-            return Ok(l >= r)
-    return Err(i_r1002("比较不支持: " + tl + " vs " + tr, pos))
+    # M179：**同类型** ⇒ 走值比较器（与编译轨 compare_values 同源：str/bytes/bool/list/dict/
+    #   enum/… 全覆盖）；**跨型** ⇒ 响亮报错（与编译轨 px_req_cmp 同码同文）。
+    #   修前：str-str 之外一律报「比较不支持」⇒ `[1] < [2]` 解释轨报错、编译轨给 true。
+    if tl != tr:
+        return Err(i_r1002("无法比较: " + tl + " vs " + tr, pos))
+    let c = i_cmp_values(l, r)
+    if op == "Lt":
+        return Ok(c < 0)
+    if op == "Le":
+        return Ok(c <= 0)
+    if op == "Gt":
+        return Ok(c > 0)
+    if op == "Ge":
+        return Ok(c >= 0)
+    return Err(i_r1002("未知比较运算 " + op, pos))

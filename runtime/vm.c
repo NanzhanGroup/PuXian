@@ -907,7 +907,7 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
                 int i = (int)idx.as.i;
                 int len = obj.as.obj->as.list.len;
                 if (i < 0) i += len;
-                if (i < 0 || i >= len) px_error("列表索引越界: %d (len=%d)", i, len);
+                if (i < 0 || i >= len) px_error("R1003: 索引越界: %d (len=%d)", i, len);
                 slots[in.a] = obj.as.obj->as.list.items[i];
             } else slots[in.a] = px_index(obj, idx);
             break;
@@ -920,7 +920,7 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
                 int i = (int)idx.as.i;
                 int len = obj.as.obj->as.list.len;
                 if (i < 0) i += len;
-                if (i < 0 || i >= len) px_error("列表索引越界: %d (len=%d)", i, len);
+                if (i < 0 || i >= len) px_error("R1003: 索引越界: %d (len=%d)", i, len);
                 slots[in.a] = obj.as.obj->as.list.items[i];
             } else slots[in.a] = px_iter_at(obj, idx);
             break;

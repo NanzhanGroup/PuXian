@@ -1,0 +1,6 @@
+let a = 1
+let f = 1.5
+let l = [10, 20]
+let b = "x"
+print("before")
+print(str(~f))
