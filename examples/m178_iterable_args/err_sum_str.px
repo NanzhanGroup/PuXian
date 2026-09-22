@@ -2,6 +2,6 @@
 #   `sum` 收 str（按 rune 迭代）后，成员相加必然类型不符 ⇒ 三轨都响亮报错，
 #   但**措辞不同**：解释轨 `+ 不支持: int + string`（带 R1002）
 #                编译轨 `无法相加: int + string`（无码）
-#   ⇒ 归 M179 统一算术/比较运算的「错误码 + 措辞」。
+#   ⇒ **已由 M179 收口**（统一为 `无法相加: int + string` + 码；见 examples/m179_arith_diag/）。
 print("before")
 print(sum("12"))

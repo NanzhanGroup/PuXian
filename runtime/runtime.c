@@ -3773,6 +3773,22 @@ static int64_t int_val(LXValue v) {
     return 0;
 }
 
+// ═══ M179（第 57 轮 · 缺陷 195/196）：算术族的**类型守卫** + 统一文案 ═══
+// 修前：数值分支直接用 `num_val(a)`，而 num_val 是
+//     `return v.type == PX_INT ? (double)v.as.i : v.as.f;`
+//   ⇒ 非数值实参读的是 union 的 `as.f` —— 对 PX_STR 那是**对象指针的位模式**（UB）：
+//     实测 `1.0 * "x"`：VM 轨 `6.905411902715e-310` / C 轨 `6.95199933934835e-310`
+//     （**同一台机、同一份源码，两个不同的垃圾值**）；`1 / "x"` ⇒ `inf`、
+//     `1.0 + "x"` ⇒ `1.0`、`2 ** "x"` ⇒ `1.0`。
+//   而解释轨一直是响亮的「需要数值」⇒ 三轨分叉 **且** 编译轨静默坏值（最坏一类）。
+// 修法：所有数值分支先判型（INT/FLOAT），文案统一
+//   `R1002: 无法<运算>: <ta> <op> <tb>`（与解释轨 ival.px 同码同文）。
+static inline int px_num_ok(LXValue v) { return v.type == PX_INT || v.type == PX_FLOAT; }
+static void px_req_num2(LXValue a, LXValue b, const char* opname, const char* sym) {
+    if (!px_num_ok(a) || !px_num_ok(b))
+        px_error("R1002: 无法%s: %s %s %s", opname, px_type_name(a), sym, px_type_name(b));
+}
+
 LXValue px_add(LXValue a, LXValue b) {
     if (a.type == PX_STR && b.type == PX_STR) {
         int la = a.as.obj->as.str.len, lb = b.as.obj->as.str.len;
@@ -3785,7 +3801,10 @@ LXValue px_add(LXValue a, LXValue b) {
         return r;
     }
     if (a.type == PX_INT && b.type == PX_INT) return px_int(a.as.i + b.as.i);
-    if (a.type == PX_FLOAT || b.type == PX_FLOAT) return px_float(num_val(a) + num_val(b));
+    if (a.type == PX_FLOAT || b.type == PX_FLOAT) {
+        px_req_num2(a, b, "相加", "+");   // M179：非数值 ⇒ 响亮（修前读 union 的 as.f = UB）
+        return px_float(num_val(a) + num_val(b));
+    }
     if (a.type == PX_LIST && b.type == PX_LIST) {
         LXValue r = px_list(a.as.obj->as.list.len + b.as.obj->as.list.len);
         px_root_push();
@@ -3797,31 +3816,37 @@ LXValue px_add(LXValue a, LXValue b) {
         px_root_pop();
         return r;
     }
-    px_error("无法相加: %s + %s", px_type_name(a), px_type_name(b));
+    px_error("R1002: 无法相加: %s + %s", px_type_name(a), px_type_name(b));
     return px_null();
 }
 
 LXValue px_sub(LXValue a, LXValue b) {
     if (a.type == PX_INT && b.type == PX_INT) return px_int(a.as.i - b.as.i);
-    if (a.type == PX_FLOAT || b.type == PX_FLOAT) return px_float(num_val(a) - num_val(b));
-    px_error("无法相减: %s - %s", px_type_name(a), px_type_name(b));
+    if (a.type == PX_FLOAT || b.type == PX_FLOAT) {
+        px_req_num2(a, b, "相减", "-");
+        return px_float(num_val(a) - num_val(b));
+    }
+    px_error("R1002: 无法相减: %s - %s", px_type_name(a), px_type_name(b));
     return px_null();
 }
 
 LXValue px_mul(LXValue a, LXValue b) {
     if (a.type == PX_INT && b.type == PX_INT) return px_int(a.as.i * b.as.i);
-    if (a.type == PX_FLOAT || b.type == PX_FLOAT) return px_float(num_val(a) * num_val(b));
+    if (a.type == PX_FLOAT || b.type == PX_FLOAT) {
+        px_req_num2(a, b, "相乘", "*");
+        return px_float(num_val(a) * num_val(b));
+    }
     if (a.type == PX_STR && b.type == PX_INT) {
         int n = (int)b.as.i;
         int len = a.as.obj->as.str.len;
-        char* d = xmalloc(len * n + 1);
+        char* d = xmalloc((size_t)len * (size_t)(n > 0 ? n : 0) + 1);
         for (int i = 0; i < n; i++) memcpy(d + i * len, a.as.obj->as.str.data, len);
-        d[len * n] = 0;
-        LXValue r = px_str_len(d, len * n);
+        d[len * (n > 0 ? n : 0)] = 0;
+        LXValue r = px_str_len(d, len * (n > 0 ? n : 0));
         xfree(d);   // ISSUE28-B2 修复：同上，重复串中间缓冲用毕即还
         return r;
     }
-    px_error("无法相乘: %s * %s", px_type_name(a), px_type_name(b));
+    px_error("R1002: 无法相乘: %s * %s", px_type_name(a), px_type_name(b));
     return px_null();
 }
 
@@ -3833,6 +3858,8 @@ LXValue px_div(LXValue a, LXValue b) {
     //   与整数 `%`（px_mod 的整数分支）守护 —— 那两条仍然 px_error。
     //   修前这里对零除数一律 px_error 杀进程 ⇒ Go 侧「÷0 → Inf/NaN」这条路
     //   在语言里**表达不出来**（比值/余弦/成功率/均值都要手写零判断）。
+    // M179：类型守卫 —— 修前 `1 / "x"` 走 num_val 的 UB 读出极小 double ⇒ **inf**（静默坏值）。
+    px_req_num2(a, b, "相除", "/");
     return px_float(num_val(a) / num_val(b));
 }
 
@@ -3843,13 +3870,15 @@ LXValue px_idiv(LXValue a, LXValue b) {
     // M148（缺陷 118）：零除数**仍然** px_error —— 对齐 Go 的整数除零 panic
     //   （`integer divide by zero`）；本语言的浮点除法走 `/`，那里才是 IEEE。
     //   浮点 `//` 在本语言无 Go 对应物，保持 fail-fast（不静默给 Inf/NaN）。
+    // M179：类型守卫（修前非数值落到 int_val 的「期望整数」⇒ 与解释轨措辞不同）
+    px_req_num2(a, b, "整除", "//");
     if (a.type == PX_FLOAT || b.type == PX_FLOAT) {
         double d = num_val(b);
-        if (d == 0.0) px_error("除零错误");
+        if (d == 0.0) px_error("R1006: 除零错误");
         return px_int((int64_t)floor(num_val(a) / d));
     }
     int64_t d = int_val(b);
-    if (d == 0) px_error("除零错误");
+    if (d == 0) px_error("R1006: 除零错误");
     int64_t n = int_val(a);
     int64_t r = n % d;
     if (r < 0) r += (d < 0 ? -d : d);  // 欧几里得余数（非负）
@@ -3861,9 +3890,11 @@ LXValue px_mod(LXValue a, LXValue b) {
     //   `math.Mod(x, 0)` = NaN、`math.Mod(±Inf, y)` = NaN。注意 fmod 的余数取
     //   **被除数**符号（fmod(-5,3) = -2），与下面整数分支的**欧几里得**余数
     //   （-7 % 3 = 2，Rust rem_euclid 语义）**不是一回事**。
+    // M179：类型守卫 + 除零统一为 `R1006: 除零错误`（修前「取模除零错误」）
+    px_req_num2(a, b, "取模", "%");
     if (a.type == PX_FLOAT || b.type == PX_FLOAT) return px_float(fmod(num_val(a), num_val(b)));
     int64_t d = int_val(b);
-    if (d == 0) px_error("取模除零错误");
+    if (d == 0) px_error("R1006: 除零错误");
     // M-B5：对齐 Rust rem_euclid（余数非负）-7%3=2, 7%-3=1, -7%-3=2
     int64_t n = int_val(a);
     int64_t r = n % d;
@@ -3872,6 +3903,8 @@ LXValue px_mod(LXValue a, LXValue b) {
 }
 
 LXValue px_pow(LXValue a, LXValue b) {
+    // M179：类型守卫（修前 `2 ** "x"` ⇒ pow(2, 垃圾) ⇒ `1.0`，静默坏值）
+    px_req_num2(a, b, "幂运算", "**");
     if (a.type == PX_INT && b.type == PX_INT && b.as.i >= 0) {
         int64_t r = 1;
         for (int64_t i = 0; i < b.as.i; i++) r *= a.as.i;
@@ -3883,22 +3916,30 @@ LXValue px_pow(LXValue a, LXValue b) {
 LXValue px_neg(LXValue a) {
     if (a.type == PX_INT) return px_int(-a.as.i);
     if (a.type == PX_FLOAT) return px_float(-a.as.f);
-    px_error("无法取负: -%s", px_type_name(a));
+    px_error("R1002: 无法取负: -%s", px_type_name(a));
     return px_null();
 }
 
+// M179：按位运算的**整数守卫** —— 修前走 `int_val()`，它对 float **静默截断**
+//   （`1.5 & 1` ⇒ `1 & 1` = 1），而解释轨一直报「此运算符要求整数操作数」。
+//   现在两侧同码同文：`R1002: <运算> 需要整数，实际是 <t>`。
+static int64_t px_req_int(LXValue v, const char* what) {
+    if (v.type != PX_INT) px_error("R1002: %s 需要整数，实际是 %s", what, px_type_name(v));
+    return v.as.i;
+}
+
 LXValue px_not(LXValue a) { return px_bool(!px_is_truthy(a)); }
-LXValue px_bitnot(LXValue a) { return px_int(~int_val(a)); }
-LXValue px_bitand(LXValue a, LXValue b) { return px_int(int_val(a) & int_val(b)); }
-LXValue px_bitor(LXValue a, LXValue b) { return px_int(int_val(a) | int_val(b)); }
-LXValue px_bitxor(LXValue a, LXValue b) { return px_int(int_val(a) ^ int_val(b)); }
-LXValue px_shl(LXValue a, LXValue b) { return px_int(int_val(a) << int_val(b)); }
-LXValue px_shr(LXValue a, LXValue b) { return px_int(int_val(a) >> int_val(b)); }
+LXValue px_bitnot(LXValue a) { return px_int(~px_req_int(a, "按位取反")); }
+LXValue px_bitand(LXValue a, LXValue b) { return px_int(px_req_int(a, "按位与") & px_req_int(b, "按位与")); }
+LXValue px_bitor(LXValue a, LXValue b) { return px_int(px_req_int(a, "按位或") | px_req_int(b, "按位或")); }
+LXValue px_bitxor(LXValue a, LXValue b) { return px_int(px_req_int(a, "按位异或") ^ px_req_int(b, "按位异或")); }
+LXValue px_shl(LXValue a, LXValue b) { return px_int(px_req_int(a, "左移") << px_req_int(b, "左移")); }
+LXValue px_shr(LXValue a, LXValue b) { return px_int(px_req_int(a, "右移") >> px_req_int(b, "右移")); }
 LXValue px_ushr(LXValue a, LXValue b) {
     // 无符号（逻辑）右移：按 uint64 解释后右移，再转回 int64。
     // 移位量对 64 取模（与解释器 wrapping_shr 一致；负移位量按无符号取模）。
-    uint64_t v = (uint64_t)int_val(a);
-    uint64_t sh = (uint64_t)int_val(b) & 63u;
+    uint64_t v = (uint64_t)px_req_int(a, "无符号右移");
+    uint64_t sh = (uint64_t)px_req_int(b, "无符号右移") & 63u;
     return px_int((int64_t)(v >> sh));
 }
 
@@ -4058,24 +4099,43 @@ LXValue px_ne(LXValue a, LXValue b) {
     }
     return px_bool(compare_values(a, b) != 0);
 }
+// M179：**次序比较**的类型守卫 —— 只允许「双数值」或「同类型」。
+//   修前 `px_lt/le/gt/ge` 的兜底走 `compare_values`，而它的**默认分支**是
+//     `strcmp(px_type_name(a), px_type_name(b))`（「保证可比性」）
+//   ⇒ `1 < "x"` 在编译轨**静默给 true**（按类型名字典序），而解释轨报
+//   `R1002 比较不支持: int vs string`。
+//   取舍（§17 的「响亮优于静默」）：**用户面的次序比较**要求可比值，
+//   跨型 ⇒ `R1002: 无法比较: <ta> vs <tb>`；而 `sorted`/`min`/`max` 用的
+//   **内部比较器**仍是全序（`compare_values`，跨型按类型名）——
+//   排序需要全序才可能确定，这条在 §17.13 单独写明。
+static void px_req_cmp(LXValue a, LXValue b) {
+    if (px_num_ok(a) && px_num_ok(b)) return;   // int/float 互通
+    if (a.type == b.type) return;               // 同类型（str/bytes/bool/list/dict…）
+    px_error("R1002: 无法比较: %s vs %s", px_type_name(a), px_type_name(b));
+}
+
 LXValue px_lt(LXValue a, LXValue b) {
     if (a.type == PX_INT && b.type == PX_INT) return px_bool(a.as.i < b.as.i);
     if (px_is_num(a) && px_is_num(b)) return px_bool(num_val(a) < num_val(b));
+    px_req_cmp(a, b);
     return px_bool(compare_values(a, b) < 0);
 }
 LXValue px_le(LXValue a, LXValue b) {
     if (a.type == PX_INT && b.type == PX_INT) return px_bool(a.as.i <= b.as.i);
     if (px_is_num(a) && px_is_num(b)) return px_bool(num_val(a) <= num_val(b));
+    px_req_cmp(a, b);
     return px_bool(compare_values(a, b) <= 0);
 }
 LXValue px_gt(LXValue a, LXValue b) {
     if (a.type == PX_INT && b.type == PX_INT) return px_bool(a.as.i > b.as.i);
     if (px_is_num(a) && px_is_num(b)) return px_bool(num_val(a) > num_val(b));
+    px_req_cmp(a, b);
     return px_bool(compare_values(a, b) > 0);
 }
 LXValue px_ge(LXValue a, LXValue b) {
     if (a.type == PX_INT && b.type == PX_INT) return px_bool(a.as.i >= b.as.i);
     if (px_is_num(a) && px_is_num(b)) return px_bool(num_val(a) >= num_val(b));
+    px_req_cmp(a, b);
     return px_bool(compare_values(a, b) >= 0);
 }
 
@@ -4088,6 +4148,14 @@ LXValue px_or(LXValue a, LXValue b) {
 
 // ==================== 容器操作 ====================
 
+// M179：索引位置的**整数守卫** —— 修前 `int_val(idx)` 对 float **静默截断**
+//   （`l[1.9]` ⇒ `l[1]`），而解释轨 `i_as_index` 一直要求 int
+//   （`R1002 索引必须是整数`）⇒ 三轨分叉 + 编译轨静默取错元素。
+static int64_t px_req_int_idx(LXValue v) {
+    if (v.type != PX_INT) px_error("R1002: 索引必须是整数，实际是 %s", px_type_name(v));
+    return v.as.i;
+}
+
 LXValue px_index(LXValue obj, LXValue idx) {
     if (obj.type == PX_GEN) {
         // M34：惰性生成器先物化剩余（索引语义需要全量结果）
@@ -4095,27 +4163,27 @@ LXValue px_index(LXValue obj, LXValue idx) {
         obj = obj.as.obj->as.gen.list;
     }
     if (obj.type == PX_LIST) {
-        int i = (int)int_val(idx);
+        int i = (int)px_req_int_idx(idx);
         int len = obj.as.obj->as.list.len;
         if (i < 0) i += len;
-        if (i < 0 || i >= len) px_error("R1003: 列表索引越界: %d (len=%d)", i, len);
+        if (i < 0 || i >= len) px_error("R1003: 索引越界: %d (len=%d)", i, len);
         return obj.as.obj->as.list.items[i];
     }
     if (obj.type == PX_TUPLE) {
-        int i = (int)int_val(idx);
+        int i = (int)px_req_int_idx(idx);
         int len = obj.as.obj->as.tuple.len;
         if (i < 0) i += len;
-        if (i < 0 || i >= len) px_error("元组索引越界: %d", i);
+        if (i < 0 || i >= len) px_error("R1003: 索引越界: %d (len=%d)", i, len);
         return obj.as.obj->as.tuple.items[i];
     }
     if (obj.type == PX_STR) {
         // M-B2 修复：字符串索引按 UTF-8 字符（与解释器字符语义、px_len 一致；原按字节导致中文错位）
         // M89-S3-C1 补漏（M83-S1 GAP-STR-1-B1）：索引越界须用 str.len 字节边界（strlen 在
         //   内嵌 NUL 处截断 → 含 \u{0} 的串 len()=N 但 s[0] 判越界，自举编译 pxlexer.px 崩）
-        int i = (int)int_val(idx);
+        int i = (int)px_req_int_idx(idx);
         int ulen = px_str_rune_len(obj.as.obj);   // M106-S2：惰性 rune 计数（首次 O(n)，之后摊还 O(1)）
         if (i < 0) i += ulen;
-        if (i < 0 || i >= ulen) px_error("R1003: 字符串索引越界: %d", i);
+        if (i < 0 || i >= ulen) px_error("R1003: 索引越界: %d (len=%d)", i, ulen);
         const unsigned char* base = (const unsigned char*)obj.as.obj->as.str.data;
         const unsigned char* p;
         int* offs = px_str_offs_get(obj.as.obj);  // M106-S2：≥1KB 的串建一次偏移表
@@ -4181,7 +4249,7 @@ LXValue px_iter_at(LXValue obj, LXValue idx) {
         if (i < 0) i += o->as.dict.len;
         if (i >= 0 && i < o->as.dict.len)
             return px_str(o->as.dict.keys[i]);
-        px_error("R1003: 字典索引越界: %d (len=%d)", i, o->as.dict.len);
+        px_error("R1003: 索引越界: %d (len=%d)", i, o->as.dict.len);
     }
     return px_index(obj, idx);
 }
@@ -4338,10 +4406,10 @@ LXValue px_slice(LXValue obj, LXValue start, LXValue end, LXValue step) {
 
 void px_index_set(LXValue obj, LXValue idx, LXValue val) {
     if (obj.type == PX_LIST) {
-        int i = (int)int_val(idx);
+        int i = (int)px_req_int_idx(idx);
         int len = obj.as.obj->as.list.len;
         if (i < 0) i += len;
-        if (i < 0 || i >= len) px_error("R1003: 列表索引越界: %d", i);
+        if (i < 0 || i >= len) px_error("R1003: 索引越界: %d (len=%d)", i, len);
         // M11：与 GC 互斥（见 px_list_push 注释）。注意：必须先拿锁再屏蔽信号——
         // 等锁期间不能屏蔽 SIG_GC_STOP，否则 GC 无法暂停该线程（信号 pending），
         // 导致 stop-the-world 空转/降级/漏扫描。
@@ -5400,8 +5468,12 @@ static LXValue px_minmax_iter(LXValue it, int want_max, const char* what) {
     LXValue m = o->as.list.items[0];
     for (int i = 1; i < o->as.list.len; i++) {
         LXValue cur = o->as.list.items[i];
-        LXValue c = want_max ? px_gt(cur, m) : px_lt(cur, m);
-        if (c.type == PX_BOOL && c.as.b) m = cur;
+        // M179：`min`/`max`/`sorted` 用的是**内部比较器**（全序；跨型按类型名）——
+        //   与解释轨 `i_cmp_values`、C 轨的 `compare_values` 同源。
+        //   修前这里借 `px_lt`/`px_gt`：用户面比较学现在要求「可比值」，
+        //   借道会让 `min([1,"a"])` 变成三轨分叉（解释轨 1 / 编译轨报错）。
+        int c = compare_values(cur, m);
+        if (want_max ? c > 0 : c < 0) m = cur;
     }
     px_root_pop();
     return m;
@@ -5419,13 +5491,9 @@ static LXValue bi_min(LXValue* args, int nargs, void* ctx) {
     }
     LXValue m = args[0];
     for (int i = 1; i < nargs; i++) {
-        bool mn = args[i].type == PX_INT || args[i].type == PX_FLOAT;
-        bool mm = m.type == PX_INT || m.type == PX_FLOAT;
-        if ((mn && mm) || (args[i].type == PX_STR && m.type == PX_STR)) {
-            if (!px_lt(m, args[i]).as.b) m = args[i];   // m >= args[i] → 换
-        } else {
-            px_error("R1002: 比较不支持: %s vs %s", px_type_name(m), px_type_name(args[i]));
-        }
+        // M179：全序内部比较器（同 sorted；修前只收「双数值或双字符串」并报「比较不支持」）
+        int c = compare_values(args[i], m);
+        if (c < 0) m = args[i];   // m > args[i] → 换
     }
     return m;
 }
@@ -5441,13 +5509,8 @@ static LXValue bi_max(LXValue* args, int nargs, void* ctx) {
     }
     LXValue m = args[0];
     for (int i = 1; i < nargs; i++) {
-        bool mn = args[i].type == PX_INT || args[i].type == PX_FLOAT;
-        bool mm = m.type == PX_INT || m.type == PX_FLOAT;
-        if ((mn && mm) || (args[i].type == PX_STR && m.type == PX_STR)) {
-            if (!px_gt(m, args[i]).as.b) m = args[i];   // m <= args[i] → 换
-        } else {
-            px_error("R1002: 比较不支持: %s vs %s", px_type_name(m), px_type_name(args[i]));
-        }
+        int c = compare_values(args[i], m);
+        if (c > 0) m = args[i];   // m < args[i] → 换
     }
     return m;
 }

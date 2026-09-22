@@ -398,6 +398,16 @@ run m177_builtin_parity bash examples/m177_builtin_parity/verify.sh
 #   ③ 4 个真不支持类型 ⇒ 三轨 rc≠0 + stdout 恰为 before + R1002 + 同文案；
 #   ④ 登记项（不计失败）缺陷 195；⑤ 负控 3 道（runtime 字节反转 / 解释轨收回 list / join 拒生成器）。
 run m178_iterable_args bash examples/m178_iterable_args/verify.sh
+# M179（第 57 轮 · 缺陷 195/196）：**运算族收口** —— 码 + 措辞三轨统一 + 静默坏值。
+#   病灶：runtime 数值分支直接用 `num_val()`（对非数值读 union 的 `as.f` = 指针位模式，**UB**）
+#   ⇒ `1.0 * "x"` 两轨两个不同垃圾值（6.905e-310 / 6.952e-310）、`1 / "x"` ⇒ inf、
+#   `2 ** "x"` ⇒ 1.0、`1.0 + "x"` ⇒ 1.0；`1 < "x"` 编译轨静默 true（按类型名字典序）；
+#   位运算/索引位置对 float 静默截断；整数除零无码；索引越界三轨三种文（VM 轨连码都没有）。
+#   一条真相：算术要求数值（`str*int` 例外 = 重复）、次序比较要求「双数值或同类型」、
+#   位运算与索引位置要求 int、整数除零 `R1006`；`sorted`/`min`/`max` 用**全序内部比较器**。
+# 判据：① 28 行合法侧矩阵三轨逐字节一致；② 20 个错误用例三轨同码同消息体 + stdout 恰为 before；
+#   ③ 负控 3 道（num_val UB 恢复 / 解释轨文案退回 / 跨型比较放行）。
+run m179_arith_diag bash examples/m179_arith_diag/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

@@ -1,0 +1,35 @@
+# M179 门 · 合法侧矩阵：三轨 stdout 必须逐字节一致
+#   规则（§17.13）：运算族的**类型守卫**只拒绝"类型不符"，不改变任何合法语义。
+let a = 1
+let b = "x"
+let f = 1.5
+let l = [10, 20]
+print("1  add_int=" + str(a + 2))
+print("2  add_float=" + str(1.0 + 2))
+print("3  add_float2=" + str(a + f))
+print("4  sub=" + str(a - 2) + " " + str(f - 0.5))
+print("5  mul=" + str(a * 3) + " " + str(f * 2))
+print("6  div=" + str(a / 2) + " " + str(f / 2))
+print("7  idiv=" + str(a // 2) + " " + str(7 // 2) + " " + str(-7 // 2))
+print("8  mod=" + str(7 % 3) + " " + str(-7 % 3))
+print("9  pow=" + str(2 ** 10) + " " + str(f ** 2))
+print("10 neg=" + str(-a) + " " + str(-f))
+print("11 strcat=" + "a" + "b")
+print("12 listcat=" + str(l + [3]))
+print("13 strmul=" + "ab" * 3)
+print("14 strmul0=[" + "ab" * 0 + "]")
+print("15 strmuln=[" + "ab" * -1 + "]")
+print("16 lt_int=" + str(a < 2) + " " + str(2 <= 2) + " " + str(3 > 2) + " " + str(3 >= 4))
+print("17 lt_float=" + str(1 < 2.5) + " " + str(2.5 < 1) + " " + str(1.0 <= 1))
+print("18 lt_str=" + str("a" < "b") + " " + str("b" <= "a"))
+print("19 lt_list=" + str([1] < [2]) + " " + str([1, 2] < [1, 3]) + " " + str([1] < [1, 0]))
+print("20 lt_bool=" + str(true < false) + " " + str(false <= false))
+print("21 lt_null=" + str(null < null) + " " + str(null <= null))
+print("22 not=" + str(not a) + " " + str(not null) + " " + str(not 0) + " " + str(not "x"))
+print("23 bit=" + str(1 & 3) + " " + str(1 | 2) + " " + str(5 ^ 1) + " " + str(1 << 3) + " " + str(-8 >> 1) + " " + str(~1))
+print("24 idx=" + str(l[1]) + " " + str(l[-1]))
+print("25 minmix=" + str(min([1, "a"])) + " " + str(max([1, "a"])))
+print("26 sortedmix=" + str(sorted([1, "a", 2])))
+print("27 eq_cross=" + str(a == b) + " " + str(a != b))
+print("28 gen_sum=" + str(sum((x for x in [1, 2, 3]))))
+print("M179A-ARITH-OK")

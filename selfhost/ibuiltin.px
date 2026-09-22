@@ -101,30 +101,28 @@ def i_call_builtin(name, args, pos):
                 var best0 = items0[0]
                 var bi0 = 1
                 while bi0 < len(items0):
-                    var c0 = Err(i_r1002("内部错误", pos))
+                    # M179：全序值比较器（与编译轨 compare_values 同源；跨型按类型名定序）
+                    let c0 = i_cmp_values(items0[bi0], best0)
                     if want_gt:
-                        c0 = i_bin_compare("Gt", items0[bi0], best0, pos)
+                        if c0 > 0:
+                            best0 = items0[bi0]
                     else:
-                        c0 = i_bin_compare("Lt", items0[bi0], best0, pos)
-                    if c0.is_err():
-                        return Err(c0.err())
-                    if c0.unwrap():
-                        best0 = items0[bi0]
+                        if c0 < 0:
+                            best0 = items0[bi0]
                     bi0 += 1
                 return Ok(best0)
             return Ok(args[0])
         var best = args[0]
         var mi = 1
         while mi < len(args):
-            var c = Err(i_r1002("内部错误", pos))
+            # M179：同上 —— 全序值比较器
+            let c = i_cmp_values(args[mi], best)
             if want_gt:
-                c = i_bin_compare("Gt", args[mi], best, pos)
+                if c > 0:
+                    best = args[mi]
             else:
-                c = i_bin_compare("Lt", args[mi], best, pos)
-            if c.is_err():
-                return Err(c.err())
-            if c.unwrap():
-                best = args[mi]
+                if c < 0:
+                    best = args[mi]
             mi += 1
         return Ok(best)
     if name == "pow":
