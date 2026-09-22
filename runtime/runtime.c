@@ -5736,13 +5736,17 @@ static LXValue bi_join(LXValue* args, int nargs, void* ctx) {
     //   旧实现用 strlen ⇒ 内嵌 NUL 处静默截断，于是 join 与 `+` 对同一数据给出**不同**结果
     //   （`["a\u{0}b"]` join 出 "a"，`"a\u{0}b" + ""` 得 4 字节）。
     int sep_len = args[0].as.obj->as.str.len;
-    if (args[1].type != PX_LIST && args[1].type != PX_TUPLE) px_error("R1002: join 第二参数需要 list/tuple");
-    LXObject* o = args[1].as.obj;
-    int n = (args[1].type == PX_LIST) ? o->as.list.len : o->as.tuple.len;
+    // M178：可迭代实参统一（list/tuple/生成器）
+    LXValue xs;
+    px_root_push();
+    if (!px_as_list(args[1], &xs)) { px_root_pop(); px_error("R1002: join 第二参数需要 list/tuple/生成器/字符串，实际是 %s", px_type_name(args[1])); }
+    PX_KEEP(xs);
+    LXObject* o = xs.as.obj;
+    int n = o->as.list.len;
     // 先计算总长
     size_t total = 1;
     for (int i = 0; i < n; i++) {
-        LXValue item = (args[1].type == PX_LIST) ? o->as.list.items[i] : o->as.tuple.items[i];
+        LXValue item = o->as.list.items[i];
         const char* ts; int tl;
         bi_join_item(item, &ts, &tl);
         total += (size_t)tl + (i ? (size_t)sep_len : 0);
@@ -5756,7 +5760,7 @@ static LXValue bi_join(LXValue* args, int nargs, void* ctx) {
     char* wp = out;
     for (int i = 0; i < n; i++) {
         if (i) { memcpy(wp, sep, (size_t)sep_len); wp += sep_len; }
-        LXValue item = (args[1].type == PX_LIST) ? o->as.list.items[i] : o->as.tuple.items[i];
+        LXValue item = o->as.list.items[i];
         const char* ts; int tl;
         bi_join_item(item, &ts, &tl);
         memcpy(wp, ts, (size_t)tl); wp += tl;
@@ -5766,6 +5770,7 @@ static LXValue bi_join(LXValue* args, int nargs, void* ctx) {
     //   ⇒ 拼装缓冲整段泄漏（每次 join 漏一个总长缓冲）。改为按显式长度构造 + 归还。
     LXValue rv = px_str_len(out, (int)(wp - out));
     xfree(out);
+    px_root_pop();   // M178：归还 px_as_list 的根（tuple/生成器 → 新建 list，跨上面全部分配）
     return rv;
 }
 
@@ -5797,6 +5802,21 @@ static LXValue bi_contains(LXValue* args, int nargs, void* ctx) {
             if (px_eq(o->as.list.items[i], args[1]).as.b) return px_bool(true);
         }
         return px_bool(false);
+    }
+    // M178：tuple / 生成器同样按「成员判定」（= Go 的「遍历比较」，Python `in` 同义）
+    if (args[0].type == PX_TUPLE || args[0].type == PX_GEN) {
+        LXValue xs;
+        px_root_push();
+        if (!px_as_list(args[0], &xs)) { px_root_pop(); px_error("R1002: contains 不支持类型 %s", px_type_name(args[0])); }
+        PX_KEEP(xs);
+        LXObject* o = xs.as.obj;
+        int found = 0;
+        for (int i = 0; i < o->as.list.len; i++) {
+            LXValue e = px_eq(o->as.list.items[i], args[1]);
+            if (e.type == PX_BOOL && e.as.b) { found = 1; break; }
+        }
+        px_root_pop();
+        return px_bool(found);
     }
     px_error("R1002: contains 不支持类型 %s", px_type_name(args[0]));
     return px_null();
@@ -5872,15 +5892,18 @@ static LXValue bi_pow(LXValue* args, int nargs, void* ctx) {
 //   （同批改为稳定 + 值比较）同为稳定排序 ⇒ 同一比较器下输出唯一、三轨逐字节一致。
 static LXValue bi_sorted(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1 || (args[0].type != PX_LIST && args[0].type != PX_TUPLE))
-        px_error("R1002: sorted 参数需要 list/tuple");
-    LXObject* o = args[0].as.obj;
-    int ori_len = (args[0].type == PX_LIST) ? o->as.list.len : o->as.tuple.len;
-    LXValue r = px_list(ori_len);
+    if (nargs != 1) px_error("R1002: sorted 需要 1 个参数");
+    // M178：可迭代实参统一（list/tuple/生成器）—— 文案与另三个入口同形
+    LXValue xs;
     px_root_push();
+    if (!px_as_list(args[0], &xs)) { px_root_pop(); px_error("R1002: sorted 参数需要 list/tuple/生成器/字符串，实际是 %s", px_type_name(args[0])); }
+    PX_KEEP(xs);
+    LXObject* o = xs.as.obj;
+    int ori_len = o->as.list.len;
+    LXValue r = px_list(ori_len);
     PX_KEEP(r);   // M92 precise：拷贝 list 跨 px_list_push 扩容分配
     for (int i = 0; i < ori_len; i++)
-        px_list_push(r, (args[0].type == PX_LIST) ? o->as.list.items[i] : o->as.tuple.items[i]);
+        px_list_push(r, o->as.list.items[i]);
     LXObject* ro = r.as.obj;
     for (int i = 0; i < ro->as.list.len; i++) {
         for (int j = 0; j + 1 < ro->as.list.len - i; j++) {
@@ -5898,33 +5921,47 @@ static LXValue bi_sorted(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_reversed(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) px_error("R1002: reversed 需要一个参数");
-    if (args[0].type == PX_LIST) {
-        LXObject* o = args[0].as.obj;
-        LXValue r = px_list(o->as.list.len);
+    // M178：可迭代实参统一（list/tuple/生成器）—— 字符串**另有专属分支**（返回 str，见下）
+    if (args[0].type == PX_LIST || args[0].type == PX_TUPLE || args[0].type == PX_GEN) {
+        LXValue xs;
         px_root_push();
+        if (!px_as_list(args[0], &xs)) { px_root_pop(); px_error("R1002: reversed 参数需要 list/tuple/生成器/字符串，实际是 %s", px_type_name(args[0])); }
+        PX_KEEP(xs);
+        LXObject* o = xs.as.obj;
+        LXValue r = px_list(o->as.list.len);
         PX_KEEP(r);   // M92 precise：累积 list 跨 px_list_push 扩容分配
         for (int i = o->as.list.len - 1; i >= 0; i--) px_list_push(r, o->as.list.items[i]);
         px_root_pop();
         return r;
     }
-    if (args[0].type == PX_TUPLE) {
-        LXObject* o = args[0].as.obj;
-        LXValue r = px_list(o->as.tuple.len);
-        px_root_push();
-        PX_KEEP(r);   // M92 precise：累积 list 跨 px_list_push 扩容分配
-        for (int i = o->as.tuple.len - 1; i >= 0; i--) px_list_push(r, o->as.tuple.items[i]);
-        px_root_pop();
-        return r;
-    }
     if (args[0].type == PX_STR) {
-        const char* s = args[0].as.obj->as.str.data;
-        int len = (int)strlen(s);
-        char* d = xmalloc(len + 1);
-        for (int i = 0; i < len; i++) d[i] = s[len - 1 - i];
-        d[len] = 0;
-        return px_str(d);
+        // M178：**rune 级反转**，返回 str。
+        //   旧实现按**字节**反转（`strlen` + 逐字节倒序）⇒ `reversed("中文")`
+        //   产出**非法 UTF-8**（实测 `\xad\x87\xe4...`，渲染成乱码），内嵌 NUL 处还会截断。
+        //   语言里 str 的长度/索引都是 **rune** 口径（`len("中文")==2`、`"中文"[0]=="中"`）
+        //   ⇒ 反转也必须按 rune（结果与解释轨逐字节一致）。
+        LXObject* so = args[0].as.obj;
+        const char* s = so->as.str.data;
+        int nb = so->as.str.len;
+        int nr = px_unicode_len_n(s, nb);
+        int stack_tab[1025];
+        int* tab = (nr <= 1024) ? stack_tab : (int*)xmalloc(sizeof(int) * (size_t)(nr + 1));
+        int off = 0;
+        for (int i = 0; i < nr; i++) { tab[i] = off; off += px_utf8_step((const unsigned char*)s + off, nb - off); }
+        tab[nr] = off;
+        char* d = xmalloc((size_t)nb + 1);
+        int out = 0;
+        for (int i = nr - 1; i >= 0; i--) {
+            int cl = tab[i + 1] - tab[i];
+            memcpy(d + out, s + tab[i], (size_t)cl);
+            out += cl;
+        }
+        if (tab != stack_tab) xfree(tab);
+        LXValue rv = px_str_len(d, out);
+        xfree(d);
+        return rv;
     }
-    px_error("R1002: reversed 不支持类型 %s", px_type_name(args[0]));
+    px_error("R1002: reversed 参数需要 list/tuple/生成器/字符串，实际是 %s", px_type_name(args[0]));
     return px_null();
 }
 

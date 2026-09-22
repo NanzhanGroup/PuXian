@@ -159,6 +159,13 @@ examples/m176_reuseport/srv.px src=49585b4fcee06e60 rc=0 out=836524d0093e01cac0a
 examples/m177_builtin_parity/err_min_empty.px src=a72412d2f887fb9d rc=0 out=ab4bff7506826cbbd936f704dcd729ce err=e3b0c44298fc1c14
 examples/m177_builtin_parity/err_sum_int.px src=321ec12b2688c39d rc=0 out=73a3d89182c15e7d3e827762252e8bbf err=e3b0c44298fc1c14
 examples/m177_builtin_parity/iter_builtins.px src=a71036c73f4e2eaa rc=0 out=4e827643db64ddf0660b8f2d2374c666 err=e3b0c44298fc1c14
+examples/m178_iterable_args/err_contains_int.px src=5c7a8040b6eb003a rc=0 out=e8955a110c94a5f118547bb4f222c0c9 err=e3b0c44298fc1c14
+examples/m178_iterable_args/err_join_int.px src=d3f7104a84641c54 rc=0 out=401664529bdbe5cecc399f0d2a25bdb3 err=e3b0c44298fc1c14
+examples/m178_iterable_args/err_reversed_int.px src=330ecb22ecc796c8 rc=0 out=5fbdcac940ebadb68c11429119900ca3 err=e3b0c44298fc1c14
+examples/m178_iterable_args/err_sorted_int.px src=9933879490721181 rc=0 out=25c43e425b7a7aa23a7c374621b7ec18 err=e3b0c44298fc1c14
+examples/m178_iterable_args/err_sum_str.px src=41d33fb0d467a63a rc=0 out=cdb7856b4bf56f025df61298d6bdab4d err=e3b0c44298fc1c14
+examples/m178_iterable_args/iter_args.px src=19a0ad45a87f9ea2 rc=0 out=18fcc502ae1f6632e3864610493a02f2 err=e3b0c44298fc1c14
+examples/m178_iterable_args/str_args.px src=f441a4b953064e45 rc=0 out=eca26bd56d172062dee4bc00f6dbf47d err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=ca57a90d693278f051ce29d427bb006a err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=864a86fa0f3b5c69d3239ebdb2eac63a err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14

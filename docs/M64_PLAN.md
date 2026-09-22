@@ -313,7 +313,7 @@ Rust 版全套归档于 `archive/rust-compiler/src/`（只读参考），已于 
 > 上下文 + 逐语句顺序」实现，在 M169 之后**结构性过时** —— 闭包/嵌套 def 捕获、赋值式绑定、
 > 推导式变量、模块体嵌套块绑定、嵌套 def 互递归、`.px_modules` 导入**六类合法写法**全被误报
 > `E L002`（全仓 151 文件 3651 条 → 21 文件 801 条）。规则、修法与门见
-> `docs/spec.md` §17.10 与 `examples/m171_lint_scope/`。下列「留档不修」项中，
+> `docs/spec.md` §17.11 与 `examples/m171_lint_scope/`。下列「留档不修」项中，
 > 凡属「合法可见名知识不全」的，均应视为**缺陷**而非边界。
 - **L001 for-range 计数变量 / 泛型演示参数假阳性**（capability repeat_str 的 i、swap2 的 k）：warning 级，与 Rust lint.rs 对拍待核 → 留档不修
 - **selfhost 子模块单文件 L002**（cg_\*/codegen/astdump 等跨文件互引）= 多文件项目单文件检查局限 → 以 **compiler.px 主入口 lint（import 链合并）作项目级守护**，已入 CI

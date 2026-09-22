@@ -2057,3 +2057,23 @@ set_timeout(fn (): print("once after 2s"), 2000)
        （实测 `sum(gen)` 报 `+ 不支持: int + string`）。解释轨内部一律走 `i_seq_of(v)` 规范化。
      · 门：`examples/m177_builtin_parity/`（`M177-VERIFY-OK` · 29 断言 · 20 条矩阵三轨逐字节一致
        + 真错类型/空可迭代同码同文 + 名册门 ⑦ + 负控 1 道）。
+
+207. **「可迭代实参」只有一条定义（第 57 轮 · M178）**：`list` / `tuple` / 生成器 / **字符串**（按 rune）。
+     · 面（四个入口 + M177 已定的五个内置同一入口 `px_as_list` = `px_len` + `px_iter_at`，与
+       `for x in xs` 同源）：`join(sep, xs)` · `sorted(xs)` · `reversed(xs)` · `contains(c, v)`
+       · `min/max/sum/unique/flatten`。
+     · 返回：`join` ⇒ str；`sorted` ⇒ list；`reversed(str)` ⇒ **str**（rune 级反转，
+       `reversed("中文") == "文中"`）、其余 ⇒ list；`contains` 容器是 str ⇒ **子串**语义。
+     · 拒绝文案统一：`R1002: <名> 参数需要 list/tuple/生成器/字符串，实际是 <t>`。
+     · **修前的两个坑**（都在同一张表里）：
+       ① `join("-", gen)` 解释轨报 **`字典索引键必须是字符串`** —— 与 join 毫无关系。成因：解释轨
+          内生成器是 `dict{"__gen__"}`，而实现直接 `len(args[1])` / `args[1][i]` ⇒ 走成 dict 整数下标。
+       ② **`reversed("中文")` 编译轨产出非法 UTF-8**（旧实现 `strlen` + 逐字节倒序）—— 语言里 str 的
+          长度/索引全是 **rune** 口径（`len("中文")==2`）⇒ 按字节反转是**坏值**，不只是分叉。
+     · ⚠️ **写运行时字符串操作前先问「单位是 rune 还是字节」**：同一份值上两套口径并存 =
+       缺陷 111/142/195 的同族。
+     · 门：`examples/m178_iterable_args/`（`M178-VERIFY-OK` · 73 断言 · 31 行矩阵 + 12 行 str 面
+       含 emoji/内嵌 NUL + 4 个真拒绝类型同码同文 + 负控 3 道）。
+     · **登记未修（缺陷 195）**：算术/比较运算的「码 + 措辞」三轨不同 —— 解释轨
+       `错误 [R1002] …: + 不支持: int + string`（带码）vs 编译轨 `运行时错误 […]: 无法相加: int + string`
+       （无码）。取证 `examples/m178_iterable_args/err_sum_str.px`，归 M179。
