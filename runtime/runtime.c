@@ -1556,6 +1556,7 @@ static const bool g_type_is_obj[PX_TYPE_MAX] = {
     /* PX_RWLOCK */ true,
     /* PX_GEN    */ true,
     /* PX_RESULT */ true,
+    /* PX_UNINIT */ false,   // M181（缺陷 193）：哨兵不是堆对象 ⇒ GC 不追
 };
 _Static_assert(sizeof(g_type_is_obj) / sizeof(g_type_is_obj[0]) == PX_TYPE_MAX,
                "LXType 新增成员未在 g_type_is_obj 表态（缺陷 86 的复发防线）");
@@ -2724,6 +2725,17 @@ int px_gc_contains(LXObject* o) {
 // ==================== 值构造 ====================
 
 LXValue px_null(void) { LXValue v; v.type = PX_NULL; v.as.i = 0; return v; }
+// M181（第 59 轮 · 缺陷 193）：未初始化哨兵 + 读检查。
+//   `px_uninit()` 只构造哨兵（帧入口 hoist 槽初值）；`px_chk_uninit` 在**按需发射的读点**
+//   兜底：哨兵 ⇒ R1001（与 px_get_global 的未定义变量**同一条词条**，spec §17.9/§17.12）。
+//   为什么用哨兵而不是"编译期拒绝"：本仓从 M62-L5/M169 起是 **Python 式函数级作用域**，
+//   `let g = fn (): x` 之后才 `let x = 1`、而调用发生在声明**之后**是**合法**的
+//   （解释轨给 1）⇒ 静态拒绝会误拒合法程序 ⇒ 只能运行期判。
+LXValue px_chk_uninit(LXValue v, const char* name) {
+    if (v.type == PX_UNINIT) px_error("R1001: 未定义变量: '%s'", name);
+    return v;   // 返回原值 ⇒ 可包在任意表达式位置（发射器只需把它套在读点外面）
+}
+LXValue px_uninit(void) { LXValue v; v.type = PX_UNINIT; v.as.i = 0; return v; }
 LXValue px_bool(bool b) { LXValue v; v.type = PX_BOOL; v.as.b = b; return v; }
 LXValue px_int(int64_t i) { LXValue v; v.type = PX_INT; v.as.i = i; return v; }
 LXValue px_float(double f) { LXValue v; v.type = PX_FLOAT; v.as.f = f; return v; }
@@ -2966,6 +2978,7 @@ const char* px_type_name(LXValue v) {
         case PX_RWLOCK: return "rwlock";
         case PX_GEN: return "generator";
         case PX_RESULT: return "result";
+        case PX_UNINIT: return "未初始化";
     }
     return "unknown";
 }

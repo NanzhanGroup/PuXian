@@ -229,7 +229,32 @@ def bc_new_func(name, arity):
     func["upnames"] = []
     func["cell"] = bc_new_dict()
     func["boxed"] = []
+    # M181（第 59 轮 · 缺陷 193）：**本发射点「必已执行过其声明」的帧局部名集**
+    #   （初始化数据流，与 C 轨 cg_inited 同一条真相）。读局部时名字在集内 ⇒ 发射文本
+    #   一字不变；不在集内 ⇒ 追发一条 CHKINIT（哨兵 ⇒ R1001 未定义变量）。
+    #   方向纪律同 C 轨：多判无害、少判即缺陷本身 ⇒ 分支取交集、循环回退入口集。
+    func["inited"] = bc_new_dict()
+    #   帧入口需要发 UNINIT 的 hoist 槽（参数槽不进 —— 参数永远已初始化）
+    func["hoist_slots"] = []
     return func
+# ---------- M181（缺陷 193）：初始化数据流辅助（与 C 轨 cg_inited_* 同一条真相） ----------
+#   方向纪律：**多判**只多一条 CHKINIT（真值已初始化则必过，语义无害）；**少判**即漏报
+#   = 静默给错值 = 缺陷 193 本身 ⇒ 分支取交集、循环回退入口集、帧入口清空（只留形参）。
+def bc_inited_copy(func):
+    return cg_dict_copy(func["inited"])
+def bc_inited_restore(func, d):
+    func["inited"] = cg_dict_copy(d)
+def bc_inited_intersect(a, b):
+    let out = bc_new_dict()
+    let ks = a.keys()
+    var i = 0
+    while i < len(ks):
+        if b.has(ks[i]):
+            out[ks[i]] = 1
+        i += 1
+    return out
+def bc_inited_mark(func, name):
+    func["inited"][name] = 1
 # 变量名 → 槽号（无则分配）
 def bc_slot(func, name):
     if func["smap"].has(name):
@@ -267,6 +292,19 @@ def bc_load_var(func, name, dst):
         bc_emit_inst(func, "MOV", s, t, 0)
         return
     bc_emit_inst(func, "CELLGET", dst, s, 0)
+# M181（第 59 轮 · 缺陷 193）：**按需**读检查 —— 只有「本发射点无法证明该局部已初始化」
+#   才追发 CHKINIT（哨兵 ⇒ R1001 未定义变量: '名'，与解释轨/GETG 同一条词条）。
+#   已可证明 ⇒ 发射文本与改前**逐字节一致**（常规代码零代价、零 diff）。
+def bc_load_ck(func, name, dst):
+    var d = dst
+    if d < 0:
+        # 值不需要（丢弃式读取）：仍要判「未初始化即读」⇒ 借一个临时槽承载检查
+        d = bc_tmp(func)
+    bc_load_var(func, name, d)
+    if not func["inited"].has(name):
+        let n = bc_n_add(g_bcm["n_pool"], name)
+        bc_emit_inst(func, "CHKINIT", d, 0, n)
+    return d
 # 写局部名：值在 vs 槽（boxed → CELLSET；否则 MOV）
 def bc_store_var(func, name, s, vs):
     if bc_cell_has(func, name):
@@ -530,7 +568,8 @@ def bc_emit_expr(expr, dst, func):
         let name = rust_unescape(expr[1])
         if func["smap"].has(name):
             # 局部变量：MOV dst←槽（dst==槽时省）；M160 起装箱者走 CELLGET
-            bc_load_var(func, name, dst)
+            # M181（缺陷 193）：**按需**追一条 CHKINIT（含 dst<0 的丢弃式读取）
+            bc_load_ck(func, name, dst)
             return dst
         # 全局：GETG dst, g
         let g = bc_g_add(g_bcm["globals"], name)
@@ -966,13 +1005,15 @@ def bc_emit_methodcall_slot(func, obj_slot, mname, args, dst):
     return dst
 # 无捕获 lambda（对齐 cg_gen_lambda）：param_names + body 表达式 → PxVMFunc 入
 #   funcs 返回下标（LOADK PXK_FUNC 引用；'<' 名不注册全局）
-def bc_emit_push_lambda(param_names, body_expr, upnames):
+def bc_emit_push_lambda(param_names, body_expr, upnames, outer_inited):
     let name = "<closure" + str(g_bcm["nclosure"]) + ">"
     g_bcm["nclosure"] = g_bcm["nclosure"] + 1
     let func = bc_new_func(name, len(param_names))
     var pi = 0
     while pi < len(param_names):
         func["smap"][param_names[pi]] = pi
+        # M181（缺陷 193）：形参永远已初始化
+        func["inited"][param_names[pi]] = 1
         pi += 1
     # M160：捕获名占槽 nparams+i（由**帧入口**从闭包 env 取 cell 填入），并标记为
     #   cell ⇒ 体内读/写走 CELLGET/CELLSET（按引用捕获）。upnames 顺序即 MKCLO 装槽序。
@@ -982,6 +1023,12 @@ def bc_emit_push_lambda(param_names, body_expr, upnames):
         func["smap"][un] = len(param_names) + ui
         func["upnames"].push(un)
         bc_cell_mark(func, un)
+        # M181（缺陷 193）：捕获名**只在「创建点它的声明已执行」时**才算已初始化 ——
+        #   初始化是单调的 ⇒ 创建点已初始化则调用点必已初始化（合法：先创建闭包、
+        #   后声明、再调用，解释轨给 1）。反之（如"声明前就调用"）**不播种** ⇒
+        #   体内读到的是哨兵 ⇒ CHKINIT ⇒ R1001，与解释轨一致。
+        if outer_inited != null and outer_inited.has(un):
+            func["inited"][un] = 1
         ui += 1
     if func["next_slot"] < len(param_names) + len(upnames):
         func["next_slot"] = len(param_names) + len(upnames)
@@ -1012,7 +1059,13 @@ def bc_emit_push_lambda(param_names, body_expr, upnames):
         #   闭包捕获到的是未装箱的槽（m167 门 VM 轨回归根因）。
         if not func["smap"].has(lnm) and not (not contains(ldecl, lnm) and contains(g_topnames, lnm)):
             bc_slot(func, lnm)
+            func["hoist_slots"].push(func["smap"][lnm])
         lhi += 1
+    # M181（缺陷 193）：lambda 体同样是帧 —— hoist 局部槽入口置哨兵（**先于**装箱）
+    var us2 = 0
+    while us2 < len(func["hoist_slots"]):
+        bc_emit_inst(func, "UNINIT", func["hoist_slots"][us2], 0, 0)
+        us2 += 1
     # M160：本帧自己的装箱（本帧里还有闭包/函数体内 def 时，本帧局部也要是 cell）
     bc_box_frame(func, body_expr)
     let t = bc_tmp(func)
@@ -1037,7 +1090,7 @@ def bc_emit_closure(params, body, dst, func):
         if func["smap"].has(cn):
             caps.append(cn)
         ci += 1
-    let fidx = bc_emit_push_lambda(pnames, body, caps)
+    let fidx = bc_emit_push_lambda(pnames, body, caps, bc_inited_copy(func))
     if len(caps) == 0:
         let k = bc_k_add(g_bcm["k_pool"], "func", fidx, 0.0, "")
         bc_emit_inst(func, "LOADK", dst, k, 0)
@@ -1230,10 +1283,10 @@ def bc_emit_genexp(expr, dst, func):
         var fcaps = []
         if expr[3] != null:
             fcaps = bc_genexp_caps([vn], expr[3], func)
-        let tidx = bc_emit_push_lambda([vn], expr[1], tcaps)
+        let tidx = bc_emit_push_lambda([vn], expr[1], tcaps, bc_inited_copy(func))
         var fidx = -1
         if expr[3] != null:
-            fidx = bc_emit_push_lambda([vn], expr[3], fcaps)
+            fidx = bc_emit_push_lambda([vn], expr[3], fcaps, bc_inited_copy(func))
         let base = bc_tmp(func)
         while func["next_slot"] < base + 2:
             bc_tmp(func)
@@ -1305,7 +1358,12 @@ def bc_match_cond(pattern, t, func):
     panic("bc_match_cond 未知 pattern: " + str(pattern))
 # ---------- B1：赋值目标发射（Assign/复合赋值 目标 ∈ Var/Index/Field） ----------
 # 复合赋值语义：先读目标旧值 → 求值 rhs → 二元运算 → 写回（对齐 cg_assign_op_*）
-def bc_assign_local_slot(s, op, rhs, func):
+# M181（缺陷 193）：值在槽 s、名字 name —— 「本发射点不保证已初始化」才追一条 CHKINIT
+def bc_chk_slot(func, name, s):
+    if not func["inited"].has(name):
+        let n = bc_n_add(g_bcm["n_pool"], name)
+        bc_emit_inst(func, "CHKINIT", s, 0, n)
+def bc_assign_local_slot(s, name, op, rhs, func):
     if op == "Assign":
         # qg-issue 67：**不得**把「目标变量自己的槽」直接当 dst —— Binary 的
         #   「左值直接入 dst（两地址）」、NullCoalesce / And / Or 的「左值先入 dst」
@@ -1319,6 +1377,9 @@ def bc_assign_local_slot(s, op, rhs, func):
         return
     let tr = bc_tmp(func)
     bc_emit_expr(rhs, tr, func)
+    # M181（缺陷 193）：复合赋值也要先判「旧值未初始化即读」（哨兵 ⇒ R1001；修前落进
+    #   px_add 会报一条与根因无关的 R1002「无法相加: 未初始化 + int」，解释轨是 R1001）
+    bc_chk_slot(func, name, s)
     bc_emit_inst(func, bc_binop_op(bc_assign_op_name(op)), s, s, tr)
 def bc_assign_global(name, op, rhs, func):
     let g = bc_g_add(g_bcm["globals"], name)
@@ -1401,13 +1462,20 @@ def bc_emit_stmt_inner(stmt, func):
         # kind=stmt[1](Let/Var/Const) name=stmt[2] ty=stmt[3] init=stmt[4]
         let name = rust_unescape(stmt[2])
         if stmt[4] == null:
-            # 无初值声明：函数内帧槽零=PX_NULL 无需指令；顶层 SETG null
-            # （对齐 codegen rhs=px_null() → px_set_global）
+            # 无初值声明：语义 = 绑定到 null（**必须显式写**）——M181（缺陷 193）起帧槽
+            #   初值是**未初始化哨兵**（不再是 calloc 的 PX_NULL）⇒ 旧注释「函数内帧槽零
+            #   =PX_NULL 无需指令」不再成立：不写这一条，读到的是哨兵 ⇒ 误报 R1001。
             if func["is_top"]:
                 let t = bc_tmp(func)
                 bc_emit_null(func, t)
                 let g = bc_g_add(g_bcm["globals"], name)
                 bc_emit_inst(func, "SETG", g, t, 0)
+                return
+            let s0 = bc_slot(func, name)
+            let t0 = bc_tmp(func)
+            bc_emit_null(func, t0)
+            bc_store_var(func, name, s0, t0)
+            func["inited"][name] = 1
             return
         if func["is_top"]:
             # 顶层（含顶层块内）VarDecl = 全局 SETG（codegen：err_labels 空）
@@ -1423,6 +1491,8 @@ def bc_emit_stmt_inner(stmt, func):
         let t = bc_tmp(func)
         bc_emit_expr(stmt[4], t, func)
         bc_store_var(func, name, s, t)
+        # M181（缺陷 193）：声明执行完成 ⇒ 其后读它不再需要检查（初始化单调）
+        func["inited"][name] = 1
         return
     if ty == "Assign":
         # B1：Assign 目标 ∈ Var/Index/Field；op ∈ Assign/复合/Append
@@ -1448,21 +1518,31 @@ def bc_emit_stmt_inner(stmt, func):
                         let tv = bc_tmp(func)
                         bc_emit_expr(rhs, tv, func)
                         bc_emit_inst(func, "CELLSET", tv, cs, 0)
+                        # M181（缺陷 193）：赋值式绑定即初始化
+                        func["inited"][name] = 1
                         return
                     let tc = bc_tmp(func)
                     bc_emit_inst(func, "CELLGET", tc, cs, 0)
+                    # M181（缺陷 193）：cell 内层同样可能是未初始化哨兵 ⇒ 同样的判据
+                    bc_chk_slot(func, name, tc)
                     let tr = bc_tmp(func)
                     bc_emit_expr(rhs, tr, func)
                     bc_emit_inst(func, bc_binop_op(bc_assign_op_name(op)), tc, tc, tr)
                     bc_emit_inst(func, "CELLSET", tc, cs, 0)
+                    # M181（缺陷 193）：能读到旧值即必已初始化 ⇒ 其后同样算已初始化
+                    func["inited"][name] = 1
                     return
-                bc_assign_local_slot(func["smap"][name], op, rhs, func)
+                bc_assign_local_slot(func["smap"][name], name, op, rhs, func)
+                # M181（缺陷 193）：赋值式绑定即初始化（复合赋值同样读到过旧值）
+                func["inited"][name] = 1
                 return
             if not func["is_top"] and not contains(g_topnames, name):
                 # 函数内未声明名 → hoist 预提升为局部（Python 语义，对齐 codegen）
                 #   M169（缺陷 181）：判据用确定性模块绑定集（见 bc_lambda_hoist 处说明）
                 let s = bc_slot(func, name)
-                bc_assign_local_slot(s, op, rhs, func)
+                bc_assign_local_slot(s, name, op, rhs, func)
+                # M181（缺陷 193）：赋值式绑定即初始化
+                func["inited"][name] = 1
                 return
             # 全局赋值（顶层 Assign / 函数内写全局名）
             bc_assign_global(name, op, rhs, func)
@@ -1598,6 +1678,8 @@ def bc_emit_stmt_inner(stmt, func):
         let dt2 = bc_tmp(func)
         bc_emit_closure(stmt[2], ["Block", stmt[4]], dt2, func)
         bc_store_var(func, dname, ds, dt2)
+        # M181（缺陷 193）：帧内 def 执行完成 ⇒ 该名已初始化（其后读不必检查）
+        func["inited"][dname] = 1
         return
     panic("bc_emit_stmt 未实现: " + str(stmt))
 # ---------- B5：select 语句（顺序 try_recv + else / 无 else 无限重试） ----------
@@ -1610,6 +1692,9 @@ def bc_emit_select(stmt, func):
     let arms = stmt[1]
     let else_b = stmt[2]
     let n = len(arms)
+    # M181（缺陷 193）：无 else 的 select 是**重试环** ⇒ 分支体里的声明可能从未执行
+    #   ⇒ 之后回退入口集（保守；少判即漏报）
+    let sentry = bc_inited_copy(func)
     # 求值各 arm chan 表达式（arm[1] = ch.recv() → obj = arm[1][1][1]）到 chs[i]
     let chs = []
     var ai = 0
@@ -1675,6 +1760,7 @@ def bc_emit_select(stmt, func):
     while pi < len(pend):
         bc_patch_off(func, pend[pi], end)
         pi += 1
+    bc_inited_restore(func, sentry)
 # SRCLINE 追踪（对齐 cg_gen_stmt wrapper；stmt 末位 = pos [line,col]）
 def bc_emit_stmt(stmt, func):
     var line = 0
@@ -1698,16 +1784,25 @@ def bc_emit_if(stmt, func):
     let brs = stmt[1]  # [[cond, body], ...]
     let else_b = stmt[2]
     let n = len(brs)
+    # M181（缺陷 193）：**初始化数据流** —— 若分支/else 的并集里可能没执行过某声明，
+    #   分支之后就不能算「已初始化」⇒ 各分支分别发射后取**交集**（无 else 则与入口集求交）。
+    let entry = bc_inited_copy(func)
+    var acc = null
     var pend_jmp = []  # branch body 尾 JMP end 的占位 idx
     var bi = 0
     while bi < n:
         let cond = brs[bi][0]
         let body = brs[bi][1]
+        bc_inited_restore(func, entry)
         let t = bc_tmp(func)
         bc_emit_expr(cond, t, func)
         let jf = len(func["bc"])
         bc_emit_inst(func, "JMPF", t, 0, 0)
         bc_emit_stmts(body, func)
+        if acc == null:
+            acc = bc_inited_copy(func)
+        else:
+            acc = bc_inited_intersect(acc, bc_inited_copy(func))
         if bi < n - 1 or else_b != null:
             # 还有后续（elif 分支 / else）→ then 尾 JMP（pend 待 patch 到 end）；
             # JMPF 假值落点 = JMP 之后（下一分支 cond / else 起点）
@@ -1719,8 +1814,13 @@ def bc_emit_if(stmt, func):
             # 无后续：假值直接落 body 完 = end
             bc_patch_off(func, jf, len(func["bc"]))
         bi += 1
+    bc_inited_restore(func, entry)
     if else_b != null:
         bc_emit_stmts(else_b, func)
+        acc = bc_inited_intersect(acc, bc_inited_copy(func))
+    else:
+        acc = bc_inited_intersect(acc, entry)
+    bc_inited_restore(func, acc)
     let end = len(func["bc"])
     var ji = 0
     while ji < len(pend_jmp):
@@ -1732,6 +1832,8 @@ def bc_emit_if(stmt, func):
 def bc_emit_while(stmt, func):
     let cond = stmt[1]
     let body = stmt[2]
+    # M181（缺陷 193）：循环体可能**一次都不执行** ⇒ 之后回退入口集（保守，方向无害）
+    let entry = bc_inited_copy(func)
     let loop_start = len(func["bc"])
     let t = bc_tmp(func)
     bc_emit_expr(cond, t, func)
@@ -1743,6 +1845,7 @@ def bc_emit_while(stmt, func):
     func["loops"].push(ctx)
     bc_emit_stmts(body, func)
     func["loops"].pop()
+    bc_inited_restore(func, entry)
     let jb = len(func["bc"])
     bc_emit_inst(func, "JMP", 0, 0, 0)
     let end = len(func["bc"])
@@ -1871,8 +1974,17 @@ def bc_emit_for(stmt, func):
     ctx["breaks"] = []
     ctx["conts"] = []
     func["loops"].push(ctx)
+    # M181（缺陷 193）：循环体内**循环变量必已初始化**（体首就写它）；循环**之后**回退
+    #   入口集（可能 0 次迭代 ⇒ 循环变量不算已初始化，与解释轨一致：空迭代后读 ⇒ R1001）。
+    let entry = bc_inited_copy(func)
+    var qi = 0
+    while qi < len(names):
+        if not top:
+            func["inited"][names[qi]] = 1
+        qi += 1
     bc_emit_stmts(body, func)
     func["loops"].pop()
+    bc_inited_restore(func, entry)
     # ctr += 1 —— continue 目标 = 增量段起点（先执行 ctr+=1 再经 JMP 回 loop
     # 重判，Python for 语义）。修复（M90-S1 附带：原回填到 jb=增量后 JMP 指令
     # 处，body 内 continue 跳过 ADD → ctr 不前进 → 死循环；capability 11 段
@@ -1933,6 +2045,8 @@ def bc_emit_func_body(f, name):
     pi = 0
     while pi < len(params):
         func["smap"][rust_unescape(params[pi][1])] = pi
+        # M181（缺陷 193）：形参**永远已初始化**（由调用方传入）⇒ 入初始化集，读不检查
+        func["inited"][rust_unescape(params[pi][1])] = 1
         pi += 1
     if func["next_slot"] < len(params):
         func["next_slot"] = len(params)
@@ -1956,7 +2070,15 @@ def bc_emit_func_body(f, name):
             hi += 1
             continue
         bc_slot(func, nm)
+        func["hoist_slots"].push(func["smap"][nm])
         hi += 1
+    # M181（第 59 轮 · 缺陷 193）：帧入口把**每个 hoist 局部槽**置为未初始化哨兵
+    #   （参数槽不在列表里 —— 参数永远已初始化）。**必须在 bc_box_frame 之前**：
+    #   装箱走 CELLNEW，它包住的是**当前槽值**，晚于本步就会把 cell 内层留成 null。
+    var us = 0
+    while us < len(func["hoist_slots"]):
+        bc_emit_inst(func, "UNINIT", func["hoist_slots"][us], 0, 0)
+        us += 1
     # M160（缺陷 159）：本帧**装箱集** = 帧内闭包/函数体内 def 的自由变量 ∩ 本帧绑定
     #   （参数 ∪ hoist 局部）。装箱必须在**任何指令发射之前**定下来（与 C 轨同一条纪律：
     #   否则先生成的读取点按普通值生成、而槽改存 cell ⇒ 语义全错）。

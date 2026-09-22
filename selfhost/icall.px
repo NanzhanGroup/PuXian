@@ -42,6 +42,15 @@ def i_call_value(cv, args, pos):
 # ---------- 调用用户函数（对齐 call_function） ----------
 def i_call_function(fd, args, selfv, pos):
     let call_env = env_new(fd["closure"])
+    # M181（缺陷 193）：帧入口先登记**本帧声明式绑定**为「已声明、尚未执行」——
+    #   读到即 R1001（与编译两轨的 hoist 槽哨兵同一条真相）。**必须先于形参定义**
+    #   （形参 env_define 会解除同名登记 ⇒ `def f(x): let x = 1` 这类重声明仍以形参为准）。
+    let decls = []
+    i_collect_decl_names(fd["body"], decls)
+    var di = 0
+    while di < len(decls):
+        env_mark_unbound(call_env, decls[di])
+        di += 1
     if selfv != null:
         env_define(call_env, "self", selfv)
     var idx = 0

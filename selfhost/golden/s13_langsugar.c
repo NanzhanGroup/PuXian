@@ -7,7 +7,7 @@ static LXValue fn_level_tag(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("level_tag");
     LXValue _v1 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2 = px_null();
+    LXValue _v2 = px_uninit();
     LXValue px_err_3_val = px_null();
     int px_err_3_proped = 0;
     px_srcline(9);
@@ -22,14 +22,14 @@ px_err_3:
 static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("main");
-    LXValue _v5 = px_null();
-    LXValue _v6 = px_null();
-    LXValue _v7 = px_null();
-    LXValue _v8 = px_null();
-    LXValue _v9 = px_null();
-    LXValue _v10 = px_null();
-    LXValue _v11 = px_null();
-    LXValue _v12 = px_null();
+    LXValue _v5 = px_uninit();
+    LXValue _v6 = px_uninit();
+    LXValue _v7 = px_uninit();
+    LXValue _v8 = px_uninit();
+    LXValue _v9 = px_uninit();
+    LXValue _v10 = px_uninit();
+    LXValue _v11 = px_uninit();
+    LXValue _v12 = px_uninit();
     LXValue px_err_13_val = px_null();
     int px_err_13_proped = 0;
     px_srcline(31);

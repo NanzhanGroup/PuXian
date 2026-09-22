@@ -1,0 +1,6 @@
+def f():
+    let g = fn (): x
+    let r = g()
+    let x = 1
+    return r
+print(f())

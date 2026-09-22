@@ -1,0 +1,5 @@
+var x = 99
+def f():
+    print(x)
+    let x = 1
+f()

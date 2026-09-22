@@ -1,0 +1,5 @@
+def f(c):
+    if c:
+        let z = 1
+    return z
+print(f(false))

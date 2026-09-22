@@ -37,6 +37,11 @@ typedef enum {
     PX_RWLOCK,  // 读写锁（M13：读多写少）
     PX_GEN,     // 生成器（M32：生成器表达式延迟物化）
     PX_RESULT,  // Result 值（M39：Ok(T) | Err(E)，spec §3.5 错误处理唯一通道）
+    // M181（第 59 轮 · 缺陷 193）：**未初始化哨兵** —— 帧内绑定槽的初值。
+    //   语义（三轨一条真相，参考 = 解释轨）：**读到哨兵 ⇒ R1001 未定义变量: 'x'**
+    //   —— 与「已声明且值为 null」严格区分（修前两者不可分 ⇒ 静默给 null）。
+    //   只在 runtime 出现；解释轨是动态 env，天然无此问题，无需哨兵。
+    PX_UNINIT,
     PX_TYPE_MAX // ← M135（缺陷 86 根治）哨兵：仅用于「类型表尺寸」编译期断言，不是真实类型
 } LXType;
 
@@ -136,6 +141,15 @@ struct LXObject {
 // ==================== 值构造 ====================
 
 LXValue px_null(void);
+// M181（第 59 轮 · 缺陷 193）：**未初始化哨兵** 的构造与检查。
+//   发射器纪律：帧内 hoist 局部槽初值 = px_uninit()（参数槽不用 —— 参数永远已初始化）；
+//   在「编译器无法证明声明必已执行」的读点发 px_chk_uninit(值, "名")。
+//   真值已初始化 ⇒ 检查必过（语义无害，只是多一条指令）。
+LXValue px_uninit(void);
+//   **返回值 = 入参 v** —— 发射器要能把它包在任意表达式位置（`f(px_chk_uninit(_v1,"x"))`），
+//   而不是只能当独立语句。C 的函数实参求值顺序未定义，但本检查无副作用（只可能报错），
+//   顺序无关正确性。
+LXValue px_chk_uninit(LXValue v, const char* name);
 LXValue px_bool(bool b);
 LXValue px_int(int64_t i);
 LXValue px_float(double f);

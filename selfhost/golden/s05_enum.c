@@ -7,7 +7,7 @@ static LXValue fn_desc(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("desc");
     LXValue _v1 = (nargs > 0) ? args[0] : px_null();
-    LXValue _v2 = px_null();
+    LXValue _v2 = px_uninit();
     LXValue px_err_3_val = px_null();
     int px_err_3_proped = 0;
     px_srcline(12);
@@ -22,8 +22,8 @@ px_err_3:
 static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     px_srcfunc("main");
-    LXValue _v5 = px_null();
-    LXValue _v6 = px_null();
+    LXValue _v5 = px_uninit();
+    LXValue _v6 = px_uninit();
     LXValue px_err_7_val = px_null();
     int px_err_7_proped = 0;
     px_srcline(22);

@@ -1,0 +1,8 @@
+def outer():
+    var y = 1
+    def inner():
+        print(y)
+        let y = 9
+        return y
+    return inner()
+print(outer())

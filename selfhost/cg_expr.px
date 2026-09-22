@@ -131,6 +131,11 @@ def cg_gen_closure(params, body, dispname):
     let saved_vars = cg_dict_copy(cg_vars)
     let saved_types = cg_dict_copy(cg_var_types)
     let saved_cells = cg_dict_copy(cg_cells)
+    # M181（缺陷 193）：闭包体是**新帧** —— 初始化集重置为「形参 ∪ 创建点已初始化的捕获名」
+    #   （初始化单调 ⇒ 创建点已初始化则调用点必已初始化；反之不播种 ⇒ 体内读到哨兵即 R1001）
+    let saved_inited2 = cg_inited_copy()
+    let outer_inited2 = cg_inited_copy()
+    cg_inited = cg_new_dict()
     # M169（缺陷 181）：闭包体不是模块体 —— 体里的绑定按帧（函数级）作用域处理
     let saved_top2 = cg_topbody
     cg_topbody = false
@@ -139,13 +144,17 @@ def cg_gen_closure(params, body, dispname):
     cg_cells = cg_new_dict()
     var pi = 0
     while pi < len(params):
-        let v = cg_new_var(rust_unescape(params[pi][1]))
+        let pn2 = rust_unescape(params[pi][1])
+        let v = cg_new_var(pn2)
+        cg_inited_add(pn2)
         fdef += "    LXValue " + v + " = (nargs > " + str(pi) + ") ? args[" + str(pi) + "] : px_null();\n"
         pi += 1
     # 捕获名：闭包体内各绑定一个同名的**新 C 变量**持 cell，并标记为 cell
     for cn in caps:
         let cv2 = cg_new_var(cn)
         cg_cells[cn] = 1
+        if outer_inited2.has(cn):
+            cg_inited_add(cn)
         fdef += "    LXValue " + cv2 + " = px_env_lookup(ctx, \"" + cn + "\");\n"
     # M169（第 54 轮 · 缺陷 181 同族）：闭包体也是**帧** —— 与函数体同口径，先做
     #   ① hoist 预扫描（体内局部提升到帧顶，声明处仅赋值）② 装箱预扫描（体内被
@@ -177,9 +186,9 @@ def cg_gen_closure(params, body, dispname):
     var ldi = 0
     while ldi < len(ldecls):
         if cg_cells.has(ldecls[ldi][1]):
-            fdef += "    LXValue " + ldecls[ldi][0] + " = px_cell(px_null());\n"
+            fdef += "    LXValue " + ldecls[ldi][0] + " = px_cell(px_uninit());\n"
         else:
-            fdef += "    LXValue " + ldecls[ldi][0] + " = px_null();\n"
+            fdef += "    LXValue " + ldecls[ldi][0] + " = px_uninit();\n"
         ldi += 1
     let b = cg_gen_expr(body)
     fdef += "    return " + b + ";\n"
@@ -189,6 +198,7 @@ def cg_gen_closure(params, body, dispname):
     cg_var_types = saved_types
     cg_cells = saved_cells
     cg_topbody = saved_top2
+    cg_inited = saved_inited2
     # M129b（缺陷 54）：**无捕获**的闭包沿用 `px_func(..., NULL)` —— 不必建 env、
     #   不必让 ctx 指向自身 env 字段（省一次字段写 + 与既有 golden 形式一致：
     #   仅"确有捕获"的闭包才需要 px_func_env 携带 upvalue cell）。
@@ -328,7 +338,8 @@ def cg_gen_expr(expr):
         let v = cg_var_of(name)
         if v != null:
             # M129（缺陷 21）：本帧局部若是闭包捕获目标 → 已装箱成 cell，读须解引用
-            return cg_load_of(name, v)
+            # M181（缺陷 193）：**按需**包一层 px_chk_uninit（只在无法证明已初始化时）
+            return cg_load_ck(name, v)
         return "px_get_global(\"" + name + "\")"
     if ty == "Field":
         let obj = expr[1]
@@ -746,17 +757,24 @@ def cg_gen_lambda(params, body):
     let saved_vars = cg_dict_copy(cg_vars)
     let saved_types = cg_dict_copy(cg_var_types)
     let saved_cells = cg_dict_copy(cg_cells)
+    # M181（缺陷 193）：生成器 lambda 同样是**新帧**（形参 ∪ 创建点已初始化的捕获名）
+    let saved_inited3 = cg_inited_copy()
+    let outer_inited3 = cg_inited_copy()
+    cg_inited = cg_new_dict()
     cg_vars = cg_new_dict()
     cg_var_types = cg_new_dict()
     cg_cells = cg_new_dict()
     var pi = 0
     while pi < len(params):
         let v = cg_new_var(params[pi])
+        cg_inited_add(params[pi])
         fdef += "    LXValue " + v + " = (nargs > " + str(pi) + ") ? args[" + str(pi) + "] : px_null();\n"
         pi += 1
     for cn in caps:
         let cv2 = cg_new_var(cn)
         cg_cells[cn] = 1
+        if outer_inited3.has(cn):
+            cg_inited_add(cn)
         fdef += "    LXValue " + cv2 + " = px_env_lookup(ctx, \"" + cn + "\");\n"
     let b = cg_gen_expr(body)
     let err_tag = "px_err_" + str(cg_uid())
@@ -773,6 +791,7 @@ def cg_gen_lambda(params, body):
     cg_vars = saved_vars
     cg_var_types = saved_types
     cg_cells = saved_cells
+    cg_inited = saved_inited3
     # M129b（缺陷 54）：同 cg_closure —— 无捕获的生成器 lambda 用 px_func(..., NULL)。
     if len(caps) > 0:
         return "px_func_env(\"<closure" + str(cid) + ">\", " + fnname + ", " + env_expr + ")"

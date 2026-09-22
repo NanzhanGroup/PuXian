@@ -61,6 +61,10 @@ def i_eval_expr(node, env):
     if ty == "Var":
         let name = rust_unescape(node[1])
         let r = env_get(env, name)
+        # M181（缺陷 193）：帧内「已声明、尚未执行」⇒ 与「查无此名」同一条词条 R1001
+        #   （两句分开写只是为了不改动既有分支的形状；unbound ⇒ found 已为 true）
+        if r["found"] and r.has("unbound"):
+            return Err(i_r1001(name, node[2]))
         if r["found"]:
             return Ok(r["value"])
         return Err(i_r1001(name, node[2]))
