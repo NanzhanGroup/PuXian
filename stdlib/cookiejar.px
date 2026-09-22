@@ -24,6 +24,27 @@
 #   var r2 = http_request(url_api, "GET", null,
 #       {"Cookie": cj_header(jar, url_api)})
 # ============================================================
+# ---- M184：本地「十进制整数串」判定（与语言层严格 `int()` **同口径**）----
+#   为什么需要它：M184 把 `int()`/`float()` 从 C atoi 式**宽容前缀解析**改成**严格解析**
+#   （畸形输入 ⇒ `R1002`）。而本库的 `Max-Age` 值**直接来自 `Set-Cookie` 头**（外部输入）
+#   ⇒ 不加守卫的话，一个 `Max-Age=abc` 就能把服务端打成运行时错误（新攻击面）。
+#   RFC 6265 §5.2.2 的容错口径 = 「非法 Max-Age 视为**无该属性**」⇒ 这里返回 false 即跳过。
+#   ⚠️ 通用能力（内置 `is_int_str` / `is_float_str`）排在 **M185**；本轮先给受影响的库
+#      一个本地守卫，避免把"语言变严格"的代价转嫁给使用者。
+def cj_is_int(s):
+    if len(s) == 0:
+        return false
+    var i = 0
+    if s[0] == "+" or s[0] == "-":
+        i = 1
+    if i >= len(s):
+        return false
+    while i < len(s):
+        let c = s[i]
+        if c < "0" or c > "9":
+            return false
+        i += 1
+    return true
 # ---- 新 jar ----
 def cj_new():
     var jar = json_parse("{}")
@@ -92,9 +113,13 @@ def cj_parse_setcookie(line):
         elif an == "expires":
             c.set("expires", av)
         elif an == "max-age":
-            var mv = int(av)
-            # 换算为到期绝对秒（Max-Age 为相对秒数；到期判断见 cj_clean）
-            c.set("max_age", int(now_ms() / 1000) + mv)
+            # M184：**必须**先判合法性 —— `Max-Age` 是外部输入，而 `int()` 自本轮起严格
+            #   （修前宽容解析 `int("abc")` = 0 ⇒ 静默「立即过期」**错值**；现在会报 R1002
+            #   ⇒ 若直接调用即变成"畸形输入打崩服务端"）。RFC 6265 口径 = 非法则忽略该属性。
+            if cj_is_int(av):
+                var mv = int(av)
+                # 换算为到期绝对秒（Max-Age 为相对秒数；到期判断见 cj_clean）
+                c.set("max_age", int(now_ms() / 1000) + mv)
         i += 1
     # 无 Domain → "*"（任意 host，仅 path 限制）
     if len(c["domain"]) == 0:

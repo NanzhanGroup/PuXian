@@ -490,14 +490,20 @@ print("upper=" + to_upper("px"))
 50. **`fn` 是保留字（缺陷 4 补充）**：`fn` 不能当变量名/循环变量/参数名（`for fn in …` → E2001）。
     另注意 `t`、`s` 这类短名极易**遮蔽**项目里的同名函数（如 i18n 的 `t()`）—— 遮蔽后调用会 500。
 
-51. **`int(str)` 是近似 `strtoll`，不报错（M130，qg-issue 87 缺陷 60）**：
-    `int("e") == 0`、`int("a") == 0`、`int("") == 0`、**`int("12ab") == 12`** ——
-    解析到第一个非数字字符即停，**无数字前缀返回 0 且不报错**。
-    ⚠️ 与 Go `strconv.Atoi`（报错）**不同**；且**不要**用 `int(c) - int("0")` 做字符→数字：
-    十六进制逐位转换的惯用写法 `int(c) - int("a") + 10` 会把 `e/f/d` **一律算成 10**
-    （应 14/15/13）= 静默错值（`stdlib/yaml_lex.px::yl_hexv` 曾因此把 YAML `\uXXXX`/`\xNN`
-    解错，只要含字母 a-f）。**正确姿势 = 查表**：`index_of("0123456789abcdef", to_lower(c))`。
-    （速查包旧文与若干移植注释曾把 `int()` 记为"畸形输入报运行时错误"—— 与实测相反，已更正。）
+51. **`int(str)` / `float(str)` 是「严格」解析（M184 收口 · 第三方 registry-px 的 PX-DEF-002）**：
+    trim（space/\t/\n/\r 四种，与 `trim()` 同集）后必须**整体合法**，否则
+    `R1002 无法将 '<原文>' 转为 int/float`（三轨同码同文；对齐 Python `int()/float()` 与 Go `strconv`）。
+    · `int` 仅十进制 `[+-]?[0-9]+` ⇒ `int("12ab")` / `int("abc")` / `int("")` / `int("1e3")` /
+      `int("0x10")` / `int("1.5")` **全部报错**（修前分别给 12 / 0 / 0或报错 / 1 / 0 / 截断）；
+    · `float` 十进制 + 指数，另有 `inf`/`infinity`/`nan` 白名单（可选符号、大小写不敏感）；
+      `strtod` 会吃的 `0x10` 十六进制浮点被**显式拒绝**（Python 亦拒绝）。
+    ⚠️ 字符→数字**不要**用 `int(c) - int("0")`：十六进制逐位转换的惯用写法
+    `int(c) - int("a") + 10` 在 `c` 非数字时**现在是报错**（修前静默算成 10 ——
+    `stdlib/yaml_lex.px::yl_hexv` 曾因此把 YAML `\uXXXX`/`\xNN` 解错，只要含字母 a-f）。
+    **正确姿势 = 查表**：`index_of("0123456789abcdef", to_lower(c))`。
+    ⚠️ 历史口径（M130 缺陷 60 与缺陷 47 的旧记载本条已合并）：修前**两轨不一致** ——
+    编译轨 `atoll/atof` 宽容前缀（`int("12ab")=12`、`int("abc")=0`），解释轨对空串单独报错；
+    M184 起统一为**响亮拒绝**（静默错值正是"响亮优于静默"要消灭的一类，同 M163/M166/M179）。
 
 52. **文件锁 / 权限 / `open` 原始 flags（M130，缺陷 56/57/58）**：
     - `flock(fd, op)` → `0` 成功 / `-1` + `os_errno()` 失败；
@@ -519,7 +525,7 @@ print("upper=" + to_upper("px"))
 > **M72 诊断（Issue 9/10）**：`print/println` 已**逐行实时**（管道/journald 下不再攒 8KB）；`flush()` 显式刷 stdout/stderr；`print_err(...)` 输出到 **stderr**（渲染同 print）。**编译产物运行时错误带 .px 源位置**：`运行时错误 [函数 行N]: 消息`（pxi 解释器本就带 `错误 [code] 行:列`）。**spawn 协程内运行时错误默认隔离**（打印现场后宿主继续；`PX_SPAWN_ISOLATE=0` 关 → 回退原 exit 语义）。
 
 ### 文件系统
-`read_file(path)` → str · `write_file(path, s[, mode])` · `append_file` · `exists` · `list_dir` · `mkdir(path[, mode])`（M116：mode 作用于**所有新建层级**，缺省 0755，最终仍受 umask 约束 —— `mkdir(dir, 0o700)` 才能表达"放私钥的目录"）· `remove` · `read_at/write_at`（随机）· `file_size` · `fsync_file` · `truncate_file` · `read_bytes/write_bytes`（bytes 读写）
+`read_file(path)` → str · `write_file(path, s[, mode])` · `append_file` · `exists` · `list_dir`（不存在/非目录 ⇒ **终止进程**，响亮）· `list_dir_opt(path)` → `Ok(list) | Err(msg)`（**M184 新增**安全变体 · 第三方 PX-DEF-014；`Err` 文本形如 `fs: 读取目录失败 <path>: No such file or directory (os error 2)`）· `mkdir(path[, mode])` → **bool**（M184：成功**或**已存在且确实是目录 ⇒ `true`；同名**非目录**（普通文件）或任何一层失败 ⇒ `false` —— 修前恒 `null`，`if mkdir(d):` **永远为假**。mode 作用于**所有新建层级**，对齐 Go `os.MkdirAll`）· `remove` · `read_at/write_at`（随机）· `file_size` · `fsync_file` · `truncate_file` · `read_bytes/write_bytes`（bytes 读写）
 
 ### JSON / 编码
 `json_parse(s)` → dict/list/标量 · `json_stringify(v)` → str · `json_path(d, expr)` / `json_path_set` · `base64_encode/decode` · `int_to_hex/hex_to_int` · `bytes_to_hex/hex_to_bytes`
@@ -725,9 +731,11 @@ set_timeout(fn (): print("once after 2s"), 2000)
 53. **`bytes == bytes` 按内容比较，但解释器（`px run`）曾恒 false（缺陷 43）**：解释器 `i_eq` 是
     白名单实现、`bytes` 落到末尾 `return false`；编译轨按 memcmp。已修（两轨一致）。
     历史影响：所有 `px run` 下的自检脚本里 `bytes == bytes` 恒否 —— 静默跳过断言分支。
-54. **字符串→数字转换对畸形输入是「运行时错误」（缺陷 47）**：`int("12ab")` 杀进程（http_serve 下 500），
-    而 Go 的 `strconv.Atoi` 只返回 err。同理 `hex_to_bytes("zz")`。⇒ 先判 `is_hex(s)`，
-    或用 `stdlib/go_strings.px::go_parse_i64(s) → Ok/Err`。
+54. **字符串→数字的畸形输入：M184 起统一为「运行时错误」（缺陷 47 + PX-DEF-002 一并收口）**：
+    `int("12ab")` 报 `R1002`（http_serve 下 500），而 Go 的 `strconv.Atoi` 只返回 err
+    ⇒ 要"不杀进程"的解析用 `stdlib/go_strings.px::go_parse_i64(s) → Ok/Err`。
+    同理 `hex_to_bytes("zz")` 仍报错 ⇒ 先判 `is_hex(s)`。
+    （M184 之前的口径见事实 51 的历史注：当时**编译轨静默给错值、解释轨报错**，两轨分叉。）
 55. **`is_dir(path)`（缺陷 44）**：Go 的 `fi.IsDir()` 等价物。`exists("/tmp")` 对目录返回 **true**
     （与文件不可区分）、`file_size("/tmp")` 返回目录项大小。`read_file_opt(dir)` 虽报 EISDIR，
     但 EACCES 同形 ⇒ 分不出。

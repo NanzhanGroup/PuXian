@@ -1,0 +1,3 @@
+def main():
+    print("before")
+    print(str(float("0x10")))

@@ -1,0 +1,24 @@
+# M184 门 · DEF-005：`mkdir` 返回值语义（null → bool）
+#   判据（三轨输出必须逐字节一致）：
+#     fresh  = true      （新建成功）
+#     exists = true      （已存在且是目录 ⇒ 成功，对齐 Go os.MkdirAll）
+#     nested = true      （递归建 a/b/c + mode 0700）
+#     IF_MKDIR_TRUE      （`if mkdir(d):` 走 then —— 修前**永远为假**）
+#     notdir = false     （同名普通文件 ⇒ EEXIST 但不是目录 ⇒ 失败）
+#     is_dir_n3 = true   （递归层级真的建出来了）
+def main():
+    let root = "/tmp/m184_gate_fs"
+    let d1 = root + "/n1"
+    let r1 = mkdir(d1)
+    print("fresh=" + str(r1) + " type=" + type(r1))
+    let r2 = mkdir(d1)
+    print("exists=" + str(r2))
+    let d3 = root + "/n3/x/y"
+    let r3 = mkdir(d3, 0o700)
+    print("nested=" + str(r3))
+    if mkdir(root + "/n4"):
+        print("IF_MKDIR_TRUE")
+    else:
+        print("IF_MKDIR_FALSE")
+    print("notdir=" + str(mkdir("/etc/passwd")))
+    print("is_dir_n3=" + str(is_dir(d3)))

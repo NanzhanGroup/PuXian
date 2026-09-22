@@ -351,6 +351,11 @@ def i_call_builtin(name, args, pos):
         if len(args) != 1:
             return Err(i_r1002("list_dir 需要一个路径参数", pos))
         return Ok(list_dir(args[0]))
+    if name == "list_dir_opt":
+        # M184（PX-DEF-014）：安全变体 —— 不存在/非目录 ⇒ Err（不再是进程终止）
+        if len(args) != 1:
+            return Err(i_r1002("list_dir_opt 需要一个路径参数", pos))
+        return Ok(list_dir_opt(args[0]))
     if name == "file_size":
         if len(args) != 1:
             return Err(i_r1002("file_size 需要一个路径参数", pos))
@@ -1140,6 +1145,35 @@ def i_builtin_len(args, pos):
         return Ok(len(list(args[0])))
     return Err(i_r1002("len 不支持类型 " + t, pos))
 # ---------- int（对齐 builtin.rs Int） ----------
+# ---------- M184（第三方 PX-DEF-002）：字符串→数值的**严格**校验 ----------
+#   runtime 侧已从 atoll/atof（宽容前缀解析：`int("12ab")`=12、`int("abc")`=0、
+#   `float("1.2.3")`=1.2）改为**整体合法才接受**。解释轨这里做一次**同口径前置校验**，
+#   目的是让报错带 `行:列`（解释轨风格）；**错误码与词条与编译轨逐字一致**
+#   （`R1002 无法将 '<原文>' 转为 int/float`）。两边语义一致性由门
+#   `examples/m184_num_strict/` 的「三轨对拍矩阵」（含边界与拒绝面）守住。
+#   ⚠️ 空白集以 `trim()` 为准（space/\t/\n/\r 四种），与 runtime `px_num_span` 逐字符相等。
+#   ⚠️ 正则里一律用字符类 `[.]` 而非 `\.`（少一层反斜杠转义，少一类口径漂移）。
+def i_str_is_int_literal(t):
+    if len(t) == 0:
+        return false
+    var i = 0
+    if t[0] == "+" or t[0] == "-":
+        i = 1
+    if i >= len(t):
+        return false
+    var k = i
+    while k < len(t):
+        let c = t[k]
+        if c < "0" or c > "9":
+            return false
+        k += 1
+    return true
+def i_str_is_float_literal(t):
+    if len(t) == 0:
+        return false
+    if regex_match("^(?i)[+-]?(inf|infinity|nan)$", t):
+        return true
+    return regex_match("^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$", t)
 def i_builtin_int(args, pos):
     if len(args) != 1:
         return Err(i_r1002("int 需要一个参数", pos))
@@ -1154,10 +1188,9 @@ def i_builtin_int(args, pos):
         return Ok(0)
     if t == "string":
         let s = args[0].trim()
-        if s == "":
+        if not i_str_is_int_literal(s):
             return Err(i_r1002("无法将 '" + args[0] + "' 转为 int", pos))
-        let n = int(s)
-        return Ok(n)
+        return Ok(int(s))
     return Err(i_r1002("int 不支持此类型", pos))
 # ---------- float（对齐 builtin.rs Float） ----------
 def i_builtin_float(args, pos):
@@ -1170,8 +1203,9 @@ def i_builtin_float(args, pos):
         return Ok(args[0])
     if t == "string":
         let s = args[0].trim()
-        let f = float(s)
-        return Ok(f)
+        if not i_str_is_float_literal(s):
+            return Err(i_r1002("无法将 '" + args[0] + "' 转为 float", pos))
+        return Ok(float(s))
     return Err(i_r1002("float 不支持此类型", pos))
 # ---------- range（对齐 builtin.rs Range） ----------
 def i_builtin_range(args, pos):

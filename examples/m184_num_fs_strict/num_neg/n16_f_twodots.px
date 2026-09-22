@@ -1,0 +1,3 @@
+def main():
+    print("before")
+    print(str(float("1.2.3")))

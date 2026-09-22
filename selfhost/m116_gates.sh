@@ -451,6 +451,17 @@ run m182_hdr_root bash examples/m182_hdr_root/verify.sh
 #   ③b m32_hot_reload 压力档无 UAFDET；④ PX_GC_TRACE 硬不变量无命中；⑤ 根栈峰值有界；
 #   ⑥ 负控 A/B/C/D 各自独立判红。
 run m183_gc_root_handover bash examples/m183_gc_root_handover/verify.sh
+# M184（第 62 轮）：**第三方 registry-px 登记的三条缺陷**一次收口（内部编号 200/201/202）。
+#   200（PX-DEF-002）= `int()`/`float()` 是 C atoi 家族「宽容前缀解析」⇒ `int("12ab")`=12、
+#        `int("abc")`=0、`float("1.2.3")`=1.2（**静默错值**），且 `int("")` **三轨分叉**；
+#        修法 = trim（与 `trim()` 逐字符同集）后必须整体合法，否则 `R1002 无法将 '…' 转为 int/float`。
+#   201（PX-DEF-005）= `mkdir()` 恒返回 `null` ⇒ `if mkdir(d):` **永远为假**；修法 = 返回 bool
+#        （成功/已存在且是目录 ⇒ true；同名**非目录** ⇒ false —— 对齐 Go os.MkdirAll）。
+#   202（PX-DEF-014）= `list_dir` 对不存在目录**终止进程**、无安全变体；修法 = 新增 `list_dir_opt`。
+# 判据：① 合法侧 21 断言三轨逐字节一致；② **27 个拒绝用例 × 三轨**（rc≠0 + R1002 + 词条逐字相同）；
+#   ③ mkdir 六条语义断言（含 `IF_MKDIR_TRUE` 直盯"不再永假"）；④ list_dir_opt 五条 + `before` 必打印；
+#   ⑤ 负控 A/B/C（退回 atoll 直通 / 退回 px_null / 删注册行）各自独立判红。
+run m184_num_fs_strict bash examples/m184_num_fs_strict/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

@@ -1,7 +1,7 @@
 {
  "generator": "tools/gen_native_table.sh",
  "source": "runtime/*.c px_set_global(px_native)",
- "count": 370,
+ "count": 371,
  "names": [
   "Err",
   "Ok",
@@ -174,6 +174,7 @@
   "len",
   "list",
   "list_dir",
+  "list_dir_opt",
   "log",
   "log10",
   "map",
