@@ -431,6 +431,18 @@ run m180_h2_h3_stance bash examples/m180_h2_h3_stance/verify.sh
 # 判据：① 合法侧 7 例三轨逐字节一致；② 严格性 8 例 × 三轨同码同消息体（诊断走 stderr）；
 #   ③ 负控 3 道**各自独立判红**（VM 去 UNINIT / C 轨 hoist 退 px_null / 解释轨不登记）。
 run m181_uninit_read bash examples/m181_uninit_read/verify.sh
+step "M182 门（第 60 轮 · native 桥「登记窗口」· 缺陷 192 + 同族）"
+# 主题：M170 立了「容器创建后必须登记」，**没管住「登记之前的那段窗口」** —— 尤以
+#   **返回值 / out-param** 形态为最：值的生命从**被调用方**的登记帧里出来，调用方接手的
+#   那一瞬间是**裸的**（`h_exchange` 返回前已 `px_root_pop()` 自己的帧）。
+#   一条真相（第一条硬约束的补句）：**登记作用域必须建立在该值的第一个「跨分配窗口」之前**。
+# 机制（为什么长期只在调试开关组合下发作）：`px_alloc` 里
+#   `deferrable = (g_active_threads > 0) && !g_gc_force_inline` —— 多线程服务模式默认把 GC
+#   延迟到安全点，期间窗口被「稍后的登记」补上 ⇒ **靠运气遮住**；`PX_GC_INLINE=1` 强制内联
+#   ⇒ 窗口必现。实测对照：基线绿 · 单开 STRESS 绿 · 单开 INLINE 绿 · **双开 3/3 红**。
+# 判据：① m23c 压力档整门通过（修前 R1008 丢 X-Test 3/3）；② 探针（json_path_set 三路 +
+#   本仓**第一个 http_unix 成功路径**用例）基线 vs 压力档逐字节一致；③ 负控 A/B/C 各自独立判红。
+run m182_hdr_root bash examples/m182_hdr_root/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

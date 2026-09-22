@@ -87,6 +87,51 @@ FP_TAG=PXSRC
 FP=""
 PARITY_CNT=0
 
+# ---- M182：**负控残留自检**（重活前必过）----
+# 事故（2026-09-22 · M182 轮）：我用 `kill -9` 掐掉一条正在跑门的 `m116_gates.sh`，
+#   而当时它正处在 `m160_closure` 的**负控 B**（把 `bc_box_frame` 的 `CELLNEW` 发射换成
+#   `let _m160_negB = …`）与 `m166` 的负控（删掉 `ITERLEN` 发射）之间 ——
+#   `kill -9` **不执行 trap** ⇒ 补丁留在了源码里；随后我按流程 `--rebake-all`，
+#   **把被污染源码烘进了 14 件入库二进制**，表现为「m158 的 VM 轨闭包判据红
+#   （`R1002 此类型不支持索引赋值: 未初始化`）」，而 `--check-all` 仍然绿
+#   （它只比对**指纹**，不比对行为）—— 差一步就把坏编译器提交进仓库。
+# ⇒ 判据（凡 `--rebake-all` 前必查）：
+#     ① 未提交改动里**不得**出现 `selfhost/*.px`（负控补丁正落在这些文件）；
+#     ② 源码里**不得**出现负控标记（`_m<N>_neg*` / `NEGCTL` / `__NEG`）。
+#   两条任一命中即拒烘（除非显式 `PX_ALLOW_NEG_RESIDUE=1`，只给"我知道自己在干什么"的场景）。
+check_neg_residue() {
+    [ "${PX_ALLOW_NEG_RESIDUE:-0}" = "1" ] && { echo "⚠️  负控残留自检：已由 PX_ALLOW_NEG_RESIDUE=1 跳过"; return 0; }
+    local bad=0
+    local dirty
+    dirty="$(git -C "$ROOT" status --porcelain -- 'selfhost/*.px' 2>/dev/null || true)"
+    if [ -n "$dirty" ]; then
+        echo "❌ 拒烘：selfhost/*.px 有**未提交改动**（负控补丁的典型迹象）：" >&2
+        echo "$dirty" | sed 's/^/     /' >&2
+        bad=1
+    fi
+    local marks
+    marks="$(grep -rlE '_m[0-9]+_neg|NEGCTL|__NEG' \
+             --include='*.px' --include='*.c' \
+             "$ROOT/selfhost" "$ROOT/runtime" "$ROOT/tools" "$ROOT/stdlib" 2>/dev/null || true)"
+    if [ -n "$marks" ]; then
+        echo "❌ 拒烘：源码里发现**负控残留标记**：" >&2
+        echo "$marks" | sed 's/^/     /' >&2
+        bad=1
+    fi
+    if [ "$bad" = "1" ]; then
+        echo "   ⇒ 处置：`git checkout -- <文件>` 还原后重试；确认无残留再 `--rebake-all`。" >&2
+        echo "     （教训全文见 docs/spec.md §17.10 检测器小节与本脚本头部注释）" >&2
+        return 1
+    fi
+    echo "✅ 负控残留自检通过（selfhost/*.px 无未提交改动 · 无负控标记）"
+    return 0
+}
+case "$MODE" in
+    rebake-all|check-all)
+        check_neg_residue || exit 3 ;;
+esac
+
+
 # ---- 源码链指纹（口径与 bootstrap_prove_bc.sh 的 SRC_CHAIN 对齐）----
 FP_FILES="compiler.px codegen.px parser.px pxlexer.px cg_stmt.px cg_expr.px cg_module.px bc_emit.px"
 FP_FILES="$FP_FILES ../runtime/vm.c ../runtime/vm.h ../runtime/runtime.c ../runtime/runtime.h"

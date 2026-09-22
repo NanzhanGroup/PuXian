@@ -1,0 +1,39 @@
+# M182 探针：native 桥返回值在 precise GC（VM 轨默认，不扫 C 栈）下的**根面窗口**。
+# 覆盖（每一项都对应一处曾被漏登记/登记迟到的位置）：
+#   A. `json_path_set` —— dict 分支（base 是 dict）/ list 分支（越界扩展）/ 新建分支（base 非容器）
+#   B. `http_unix` —— `bi_http_unix` 里 `headers` 离开 h_exchange 登记帧后的窗口
+# 判据：`PROBE-JSON bad=0` 与 `PROBE-UNIX bad=0`，且**压力档与基线逐字节一致**。
+def main():
+    # ---- A. json_path_set ----
+    j = json_parse('{"a":{"b":1,"c":[1,2,3]},"d":[{"e":1},{"e":2}]}')
+    r0 = json_path_set(j, "a.b", 99)
+    bad = 0
+    if r0["a"]["b"] != 99:
+        bad = bad + 1
+    for i in range(200):
+        r2 = json_path_set(j, "a.b", i)
+        if r2["a"]["b"] != i:
+            bad = bad + 1
+        if len(r2["a"]["c"]) != 3:
+            bad = bad + 1
+        if r2["d"][1]["e"] != 2:
+            bad = bad + 1
+        r3 = json_path_set(j, "x.y.z", i)
+        if r3["x"]["y"]["z"] != i:
+            bad = bad + 1
+        r4 = json_path_set(j, "d[5].k", i)
+        if r4["d"][5]["k"] != i:
+            bad = bad + 1
+    print("PROBE-JSON bad=" + str(bad))
+
+    # ---- B. http_unix（UDS 应答器由 verify.sh 起）----
+    ubad = 0
+    for i in range(60):
+        u = http_unix("__SOCK__", "/status", "GET")
+        if u.status != 200:
+            ubad = ubad + 1
+        if u.headers["X-Test"] != "px-uds":
+            ubad = ubad + 1
+        if u.body != "ok":
+            ubad = ubad + 1
+    print("PROBE-UNIX bad=" + str(ubad))

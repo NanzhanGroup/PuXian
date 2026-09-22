@@ -1857,12 +1857,27 @@ print(lam())
 - **差分筛只跑到一部分样例**（M170 本轮的诚实边界之二）：`sweep.sh`（正常 vs `PX_GC_STRESS=1`
   输出逐字节一致）本轮只覆盖顶层 `examples/*.px` 的前 ~20 个（长任务被打断），
   且按名字跳过了服务器类样例 ⇒ 结论是「**被筛到的都绿**」，不是「全仓都绿」。
-- **缺陷 192（未修 · 已确定复现）**：`m23c_http_adv.px` 在 `PX_GC_STRESS=1 PX_GC_INLINE=1`
+- ~~**缺陷 192（未修 · 已确定复现）**~~ ⇒ **已由 M182 收口**（规范见 §17.10 第 3 条硬约束），
+  保留原文记录修前形态：`m23c_http_adv.px` 在 `PX_GC_STRESS=1 PX_GC_INLINE=1`
   （两个调试开关同时开、**都非默认**）下**必**丢响应头 `X-Test`（`R1008`）。**A/B 判定**（同机 3 连跑）：
   A 组（含修复）3/3 红 · B 组（去掉 `h_exchange` 的 KEEP）3/3 红 ⇒ **病因不在 `h_exchange`**，
   是另一处漏登记。默认 / `PX_GC_THRESHOLD=50|200` / `200+INLINE` / `200+STRESS` 全 PASS
   ⇒ 影响面限于「inline 回收 + 每次分配即 GC」。下一轮从「INLINE 模式下**协程帧槽** /
   `HttpPend.resp` 回填的根面」入手。
+  **M182 定论（修正上面这条推断）**：A/B 那两组都红是因为**它们改的都不是出事的那一处** ——
+  真形状在**调用方**：`LXValue d = px_dict(); px_root_push(); PX_KEEP(headers);`（登记**迟到**），
+  即「M170 第一条硬约束」没覆盖到的**返回值窗口**（见 §17.10 第 3 条）。修后双开 **3/3 绿**。
+- **缺陷 197（M182 新登记 · 未修 · 已实测间歇复现）**：**进程内** `http_serve` + `http_request`
+  在 `PX_GC_STRESS=1`（单开，勿加 INLINE）下**响应头间歇丢失**（40 轮样例实测 37~40/40 波动；
+  同结构的服务端被 `curl` 打 40/40 全带该头 ⇒ 差异在「同进程 GC 压力 + 安全点」这一条件）。
+  病因待定（候选：服务端 `resp` 序列化窗口 / 客户端解析在安全点 GC 期间的中间态）。
+- **缺陷 198（M182 新登记 · 未修 · 3/3 确定性复现）**：`examples/m37_s3.px` 与
+  `examples/s3_neterr_result.px` 在 `PX_GC_STRESS=1 PX_GC_INLINE=1` 下 **SIGSEGV**
+  （基线 / 单开 STRESS / 单开 INLINE 均绿）。gdb 现场：`xmalloc` ← `px_dict` ←
+  `http_conn_worker.constprop.0.isra` ← `fserve_worker`（**堆已被写坏** ⇒ 元凶在更早的一次
+  「回收后仍被写」）。分流实验已排除 S3 **客户端**（对 python mock 的全档皆绿）⇒ 指向
+  **服务端 worker 路径**。下一轮从「`http_conn_worker` 中 `resp`/`req` 在
+  `http_send_resp` / 流式分支里的登记」入手。
 - **缺陷 191 不设反向负控**（纪律：**不设假负控**）：去掉 `h_exchange` 的 `PX_KEEP(*out_headers)`
   后症状**时序相关**（5 连跑：1 丢头 / 3 绿 / 1 SIGSEGV）⇒ 若当负控会让门偶发变红。
   191 改由正判据锁症状：`examples/m23c_http_adv.px` 在 `PX_GC_STRESS=1` 下必须
@@ -1906,7 +1921,7 @@ print(lam())
 ⇒ **只有 VM 轨需要桥自己登记**，所以「三轨一致」这类判据**看不见**这类缺陷：
 C 轨与解释轨天然绿，**红只红在 VM 轨**（默认轨！用户面走的就是它）。
 
-**两条硬约束**（native 桥 / runtime C 代码写 `LXValue` 时必须遵守）：
+**三条硬约束**（native 桥 / runtime C 代码写 `LXValue` 时必须遵守）：
 
 1. **容器创建后必须登记**：只活在 C 局部的 `LXValue`（列表/字典/字符串/bytes…）在没有别的
    可达路径时必须 `PX_KEEP`；漏登记 ⇒ 下一次分配触发 GC 时被回收 ⇒ 返回的是**已释放对象**
@@ -1917,6 +1932,32 @@ C 轨与解释轨天然绿，**红只红在 VM 轨**（默认轨！用户面走�
    LXValue name = px_null(); PX_KEEP(name); name = px_str_len(s, n);           // ❌ 登记的是 null，等于没登记
    ```
    正确写法：创建完**立刻**登记，再创建下一个 / 再调用可能分配的函数。
+3. **登记作用域必须建立在该值的第一个「跨分配窗口」之前**（M182 · 缺陷 192）——
+   上一条只管「自己创建的值」，**管不住「从别处接手的值」**：函数**返回**容器、或经
+   `out-param` 填充容器时，值的生命是从**被调用方**的登记帧里出来的（被调用方返回前会
+   `px_root_pop()` 自己的帧），调用方**接手的那一瞬间它是裸的**。
+   ```c
+   // ❌ 缺陷 192：d 的那次分配就可能回收 headers
+   if (h_exchange(&slot, …, &headers, …) == 0) {
+       if (keep_alive) hpool_put(key, slot);
+       LXValue d = px_dict();
+       px_root_push(); PX_KEEP(headers); PX_KEEP(d);      // ← 登记迟到
+   }
+   // ✅ 登记作用域先于第一个分配
+   if (h_exchange(&slot, …, &headers, …) == 0) {
+       px_root_push(); PX_KEEP(headers);
+       if (keep_alive) hpool_put(key, slot);
+       LXValue d = px_dict(); PX_KEEP(d);                 // 紧跟创建
+   }
+   ```
+   **为什么它长期只在调试开关组合下发作**：`px_alloc` 里
+   `deferrable = (g_active_threads > 0) && !g_gc_force_inline` —— 多线程服务模式默认把 GC
+   **延迟到安全点**（ISSUE28-B1），延迟期间窗口恰好被「稍后的登记」补上 ⇒ **靠运气遮住**；
+   `PX_GC_INLINE=1` 强制内联回收 ⇒ 窗口必现（实测：基线绿 / 单开 `PX_GC_STRESS=1` 绿 /
+   单开 `PX_GC_INLINE=1` 绿 / **双开 3/3 红**）。⇒ **筛这类缺陷的判据是「STRESS + INLINE 双开」**，
+   单开 STRESS 在多线程程序里会漏检（GC 走安全点）。
+   同族（M182 一并收口，各有独立负控）：`json_path_set_at` 的 dict 分支、
+   `bi_http_unix`（与 `bi_http_request` 同形）。门：`examples/m182_hdr_root/`。
 
 **多出口函数**（循环内十余个早退分支，如 QPACK 解码）用**深度式**登记：
 
@@ -1939,11 +1980,25 @@ json_opt / thread / spawn / coro / native_call）。
 **检测器**：
 - `PX_GC_STRESS=1` —— **每次分配即 GC**。把「靠阈值凑巧发作」（用户报障那颗跑了 **16388 轮**）
   变成「必然发作」，可对语料**批量扫**漏登记的桥。代价 O(n²)，只用于小语料/门。
+- ⚠️ **`PX_GC_STRESS=1` 必须与 `PX_GC_INLINE=1` 双开才可靠**（M182 实测口径修正）：
+  多线程程序（`spawn`/连接池活跃）里 `px_alloc` 的 `deferrable` 为真 ⇒ **GC 仍被延迟到安全点**，
+  单开 STRESS 会**漏检**「登记迟到」类窗口（实测 m23c：单开绿 / **双开 3/3 红**）。
+  单线程程序里单开即内联（这就是 M170 用 sqlite/xml 用例能筛出来的原因）。
 - `PX_GC_DEBUG=1` —— 隔离点打印 `[px-gc] root 还原 marks=… roots=…`、退出打印根登记栈峰值。
-- 回归门：`examples/m170_gc_bridge_root/`（5 层正判据 + 4 道负控；见 `verify.sh` 头部注释）。
+- 回归门：`examples/m170_gc_bridge_root/`（5 层正判据 + 4 道负控；见 `verify.sh` 头部注释）、
+  `examples/m182_hdr_root/`（M182：登记窗口 · 含**本仓第一个 `http_unix` 成功路径**用例）。
 
-**批量用法（差分筛）**：对样例逐个「正常跑 vs `PX_GC_STRESS=1` 跑」，判据 = **程序自身输出逐字节一致**
-（正常轨本就非 0 / 超时的样例跳过）。本轮用它抓到缺陷 191（`http_request` 响应头丢头 + 堆写坏 SIGSEGV）。
+**批量用法（差分筛）**：对样例逐个「正常跑 vs `PX_GC_STRESS=1`（**+`PX_GC_INLINE=1`**）跑」，
+判据 = **程序自身输出逐字节一致**（正常轨本就非 0 / 超时的样例跳过）。用它抓到缺陷 191
+（`http_request` 响应头丢头 + 堆写坏 SIGSEGV）与 192（登记迟到的返回值窗口）。
+⚠️ **抓输出一律用临时文件重定向，不要用 `$( )` 命令替换**：样例自己留下的后台服务器进程会
+握住管道写端 ⇒ 判据永远等不到 EOF ⇒ **脚本卡死**（M170 那次 sweep 因此卡了 26 小时，
+表面现象是「只覆盖了前 ~20 例」）。另需给每个样例独立进程组并在跑完 `kill` 整组。
+
+**⚠️ 改 `runtime/*.c` 也要重烘入库件**（M182 教训）：14 件入库二进制**静态链接 runtime**
+⇒ 只动 runtime 也会让源码链 / 运行时链指纹变化。不重烘的后果是「行为门全绿、**指纹门红**」
+（实测 `m158_interp_fn` 收尾步）。处置固定：`./selfhost/rebake_bin.sh --rebake-all` ⇒
+`--check-all` / `--check` / `--check-vm` 三闸复核。
 
 **验证过的等价关系**（本轮实测）：`sqlite_query` 的行 dict 完整性 —— 解释轨 / VM 轨（默认）/
 C 轨同一输出；VM 轨在 `PX_GC_THRESHOLD=800` 下跑 20000 轮 × 20 行 = **400000 次断言零破坏**；

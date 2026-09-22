@@ -358,9 +358,17 @@ jobs:
           #   （修前 VM/C 轨静默给 null）；只在「编译器无法证明声明已执行」的读点发检查
           #   （C 轨 px_chk_uninit / VM 轨 PXOP_CHKINIT）；解释轨帧入口登记「已声明未执行」。
           bash examples/m181_uninit_read/verify.sh --neg-skip > /tmp/v_m181.log 2>&1 || { echo "❌ m181_uninit_read verify 失败"; tail -60 /tmp/v_m181.log; exit 1; }
+          # M182（第 60 轮 · 缺陷 192 + 同族）：native 桥「**登记窗口**」收口 ——
+          #   M170 立了「容器创建后必须登记」，没管住「登记之前的那段窗口」，尤以
+          #   **返回值 / out-param** 形态为最（`h_exchange` 返回前已 pop 自己的登记帧 ⇒
+          #   调用方接手的那一瞬间是裸的）。一条补句：**登记作用域必须建立在该值的第一个
+          #   「跨分配窗口」之前**。多线程服务模式默认延迟回收 ⇒ 窗口被"稍后的登记"补上
+          #   （靠运气遮住）；`PX_GC_INLINE=1` 强制内联 ⇒ 必现（基线/单开皆绿、**双开 3/3 红**）。
+          #   本门同时是**本仓第一个 http_unix 成功路径**的门（对端 python3 UDS 应答器）。
+          bash examples/m182_hdr_root/verify.sh --neg-skip > /tmp/v_m182.log 2>&1 || { echo "❌ m182_hdr_root verify 失败"; tail -60 /tmp/v_m182.log; exit 1; }
           # 发射冻结门（M153 建立）：292 个用例的 --emit-c 输出必须逐字节不变。
           bash selfhost/emitc_freeze.sh --check > /tmp/v_emitc_freeze.log 2>&1 || { echo "❌ emitc_freeze 失败"; tail -30 /tmp/v_emitc_freeze.log; exit 1; }
-          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 / m153 / m154 / m155 / m158 / m160 / m161 / m162 / m163 / m164 verify / m170_gc_bridge_root + 发射冻结门（299 件 --emit-c）全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"
+          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 / m153 / m154 / m155 / m158 / m160 / m161 / m162 / m163 / m164 verify / m170_gc_bridge_root / m182_hdr_root + 发射冻结门（299 件 --emit-c）全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"
       - name: LSP / MCP 服务器冒烟（--version + 协议入口存在性）
         run: |
           chmod +x bootstrap/pxlsp bootstrap/pxmcp bootstrap/pxcheck

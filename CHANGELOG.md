@@ -1,3 +1,143 @@
+## M182 · native 桥「登记窗口」收口（第 60 轮 · 缺陷 192 + 同族）
+
+> 主题：M170 立了「**容器创建后必须登记**」，但**没管住「登记之前的那段窗口」** ——
+> 尤以**返回值 / `out-param`** 形态为最：值的生命从**被调用方**的登记帧里出来，
+> 调用方**接手的那一瞬间是裸的**。
+> 一句话：**登记作用域必须建立在该值的第一个「跨分配窗口」之前**（不是「创建之后尽快」）。
+> 规范：[`docs/spec.md`](docs/spec.md) §17.10 第 3 条硬约束。
+
+### 一、缺陷 192（M170 登记未修 · 本轮收口）
+
+**症状**：`examples/m23c_http_adv.px` 在 `PX_GC_STRESS=1 PX_GC_INLINE=1` 下
+`R1008: 字典没有键 'X-Test'`（**响应头整份丢**），3/3 必现。
+
+**根因（gdb/代码定位）**：不在 `h_exchange` 内部（M170 的 A/B 两组都红正是因为
+**改的都不是出事的那一处**），而在**调用方**那段：
+
+```c
+if (h_exchange(&slot, req, rlen, body, body_n, &status, &headers, &resp_body, …) == 0) {
+    if (keep_alive) hpool_put(key, slot);
+    LXValue d = px_dict();                             // ← 这一次分配就可能回收 headers
+    px_root_push(); PX_KEEP(headers); PX_KEEP(d);      // ← 登记「迟到」
+}
+```
+
+`headers` 是 `h_exchange` 的**返回值**，而 `h_exchange` 返回前已 `px_root_pop()` 自己的登记帧
+⇒ 从「返回到被 `PX_KEEP`」之间它**只由调用者的 C 局部持有**，而 VM 轨 precise GC
+**不扫 C 栈** ⇒ 期间任何一次分配（`px_dict()`）都可能把它收走。
+
+### 二、为什么它长期不可见（本轮最值钱的机制解释）
+
+`px_alloc` 里：
+
+```c
+int deferrable = (g_active_threads > 0) && !g_gc_force_inline;
+```
+
+多线程服务模式（`spawn`/连接池活跃）**默认把 GC 延迟到安全点**（ISSUE28-B1）——
+延迟期间窗口恰好被「稍后的登记」补上 ⇒ **靠运气遮住**。`PX_GC_INLINE=1` 强制内联回收
+⇒ 窗口必现。实测对照（同一份源码、同一判据）：
+
+| 档位 | 结果 |
+|---|---|
+| 基线（默认） | 绿 |
+| 单开 `PX_GC_STRESS=1` | 绿（走安全点 ⇒ **漏检**） |
+| 单开 `PX_GC_INLINE=1` | 绿（阈值达不到） |
+| **双开 `STRESS + INLINE`** | **红 3/3** |
+
+⇒ **筛这类缺陷的判据是「双开」**，单开 STRESS 在多线程程序里会漏检。
+
+### 三、同族两处（本轮一并收口）
+
+| 位置 | 形状 | 负控 |
+|---|---|---|
+| `bi_http_request` | `px_dict()` 先于 `PX_KEEP(headers)`（缺陷 192 本体） | A ⇒ ① 红 ✓ |
+| `json_path_set_at`（dict 分支） | `r = px_dict()` 发生在 `d` 被登记之前 | B ⇒ ② 红 ✓ |
+| `bi_http_unix` | 与 `bi_http_request` **完全同形** | C ⇒ ② 红 ✓ |
+
+### 四、检测器升级：三档差分筛（`sweep`）+ 两个坑
+
+- **三档**：基线 ×2（滤非确定性）· `PX_GC_STRESS=1` · **`PX_GC_STRESS=1 PX_GC_INLINE=1`**（新增档）
+  —— 判据「三档输出逐字节一致」。
+- **桥面定向语料**（56 例，不做全量 120 例：STRESS 是 O(n²)，纯语法样例无桥、无信息量）：
+  实测 **参与 30 · 绿 23 · 红 1（`concurrent.px` = 线程打印顺序，非 GC）· SLOW 6 · 跳过 26**。
+- ⚠️ **坑一（卡死 26 分钟）**：用 `$( )` 抓输出时，**样例自己留下的后台服务器进程**握着管道
+  写端 ⇒ 脚本永远读不到 EOF。修法：**一律临时文件重定向 + `< /dev/null`，永不建管道**，
+  并给每个样例独立的进程组（`setsid` + 跑完 `kill` 整组）。M170 那次 sweep「只覆盖前 ~20 例」
+  的真因就是它：**卡了 26 小时**（本轮清掉了那个残留进程）。
+- ⚠️ **坑二（残留进程）**：本轮顺手清掉 3 个孤儿测试服务器（`stream_post` 跑 1h56m、
+  `pxi /tmp/px_m30_server.px`、`px /tmp/px_m27a_server.px` 跑 1天2h，ppid=1）。
+
+### 五、判据与门（`examples/m182_hdr_root/` · `M182-VERIFY-OK`）
+
+- ① `m23c_http_adv` 在 **STRESS+INLINE** 下整门通过（修前 3/3 红）
+- ② 探针 `probe.px`：`json_path_set` 三路（dict / list 越界扩展 / 新建）+
+  **`http_unix` 成功路径**（**本仓第一个**：此前只有连接失败用例，对端 = `unix_srv.py`
+  python3 UDS 应答器）⇒ 基线 vs 压力档**逐字节一致**，`PROBE-JSON bad=0` / `PROBE-UNIX bad=0`
+- ③ **负控 A/B/C 各自独立判红** + 源 **sha256 逐字节还原** ✓
+- ④ 门已注册进 `selfhost/m116_gates.sh` 与 CI（`--neg-skip` 档）
+
+### 六、本轮最严重的一次自伤：负控残留 → 差点把坏编译器 bake 进仓库
+
+**经过**（写给下一个人，别重走）：
+
+1. 我在**后台**跑全量门（`m116_gates.sh`），中途为了省时间**在前台并发**做定位实验
+   —— 这已是 M181 吃过一次亏的并发禁令，本轮又犯。
+2. 为尽快定位 `m158` 的 VM 轨闭包判据红，我 **`kill -9` 掐掉了那条门链**（含正在跑的 `verify.sh`）。
+3. `kill -9` **不执行 trap** ⇒ 那一刻正嵌在 `m160_closure` 的**负控 B**（把 `bc_box_frame`
+   的 `CELLNEW` 发射换成 `let _m160_negB = …`）与 `m166` 的负控（删掉 `ITERLEN` 发射）之间
+   ⇒ **负控补丁留在了 `selfhost/bc_emit.px`**。
+4. 我又基于这份**被污染的源码**跑了 `--rebake-all` ⇒ **14 件入库二进制被烘成「闭包在 VM 轨坏掉」的版本**。
+5. 欺骗性：`--check-all` **仍然绿**（它只比对**指纹**，不比对行为）——只有 `m158` 的行为判据红。
+
+**定位链（可复用）**：
+
+| 步骤 | 手段 | 结论 |
+|---|---|---|
+| ① 是不是我的 runtime 改动？ | A/B：`git checkout runtime/runtime.c` 前后各跑 3 次 | **两组同样红** ⇒ 不是 |
+| ② 是不是缓存污染？ | `.rtcache` 整目录改名后从零编译 | **同样红** ⇒ 不是 |
+| ③ 是不是编译器件？ | `git show HEAD:bootstrap/pxc_vm` 当编译器复现 | 旧件 `pass=5 fail=0` / 新件必红 ⇒ **在器件上** |
+| ④ 差在哪？ | 两件的 `--emit-c` 逐字节 diff | **只差一条**：`make_ticker` `nbc=14(含 CELLNEW)` vs `13` |
+| ⑤ 源码对不对？ | `grep CELLNEW selfhost/bc_emit.px` | 源码里那行**是** `CELLNEW` ⇒ 二进制与源码不符 |
+| ⑥ 未提交改动？ | `git status --short`（**我原先只看了前 20 行，正好漏掉它**） | `M selfhost/bc_emit.px` ⇒ 负控残留 |
+
+**新防线**（`selfhost/rebake_bin.sh`）：`--rebake-all` / `--check-all` 前置**负控残留自检** ——
+① `selfhost/*.px` 不得有未提交改动；② `selfhost/ runtime/ tools/ stdlib/` 下的 `*.px`/`*.c`
+不得出现负控标记（`_m<N>_neg*` / `NEGCTL` / `__NEG`）。命中即 **拒烘（exit 3）** + 处置指引；
+`PX_ALLOW_NEG_RESIDUE=1` 可显式跳过。实测：干净树 ✅ 通过、污染树 ❌ 被拦。
+
+**四条纪律**：① **绝不用 `kill -9` 掐门链**（用 `SIGTERM`，让 trap 还原）；② 强杀后第一件事
+查 `git status --short`（**看全**）；③ `--check-all` 绿 ≠ 二进制与源码**行为**一致；
+④ 同一条链**只单跑**（并发禁令）。
+
+### 七、本轮由差分筛**新筛出**的两条（如实登记 · 下一轮）
+
+- **缺陷 197**：进程内 `http_serve` + `http_request`，`PX_GC_STRESS=1`（**单开**）下响应头
+  **间歇丢失**（40 轮样例 37~40/40 波动）；同结构服务端被 `curl` 打 40/40 正常
+  ⇒ 条件在「同进程 GC 压力 + 安全点」。病因待定。
+- **缺陷 198**：`m37_s3` / `s3_neterr_result` 在 **STRESS+INLINE** 下 **3/3 SIGSEGV**
+  （基线 / 单开皆绿）。gdb：`xmalloc` ← `px_dict` ← `http_conn_worker` ← `fserve_worker`
+  （**堆已被写坏** ⇒ 元凶在更早的一次「回收后仍被写」）。已排除 S3 **客户端**
+  （对 python mock 全档绿）⇒ 指向**服务端 worker 路径**。
+
+### 八、验收
+
+- `examples/m182_hdr_root/verify.sh` ⇒ **M182-VERIFY-OK**（① 正判据 + ② 探针 + ③ 负控 A/B/C 全判红）
+- 三档差分筛（桥面 56 例语料）⇒ 结论见上（唯一「红」为 `concurrent.px` 线程顺序，非 GC）
+- ⚠️ **入库件必须重烘（本轮新教训）**：本轮只改 `runtime/runtime.c`（**没动编译器**），我最初判断
+  「无需重定基」—— **错的**：14 件入库二进制**静态链接 runtime** ⇒ 源码链/运行时链指纹双双变化。
+  实测代价：`m158_interp_fn` 的收尾指纹门先报了 `入库件指纹门未过`（三条负控与正判据全过，
+  纯指纹门红）⇒ `./selfhost/rebake_bin.sh --rebake-all` ⇒ **12 成功 / 0 失败**，随后
+  `--check-all` **14/14 一致**（`PXRT-e0aebcc1343857f3`）· `--check`（55 例 rc/stdout/stderr 逐字节）
+  · `--check-vm`（字节码镜像 **40238 行**）三闸全绿。
+  ⇒ **改 `runtime/*.c` = 改「入库件的输入」**，与改编译器源码同等对待。
+- 发射路径/编译器**未改** ⇒ codegen golden 无漂移（发射冻结门只有「新增语料」一类差异）。
+- 发射冻结门：新语料 `examples/m182_hdr_root/probe.px` 走 `--freeze` 重定基 **383 → 384 件**，
+  复跑 `--check` **384 件逐字节一致**（**类别 B 为空** = 无既有产物漂移）。
+- `m116_gates.sh` 全量门 **88 绿 / 1 红 → 0 红**（唯一那 1 红是「新增语料未冻结」，已重定基；
+  m158/m170/m182 三门含负控全绿）。
+- 第三方 `registry-px`（34 库）**编译轨 34/34** · 解释轨 32/34（并发两库＝解释器设计性）。
+
 ## M181 · 帧内绑定「未初始化即读」三轨统一（第 59 轮 · 缺陷 193）
 
 > 主题：**静默给错值** 的又一个面 —— 帧局部槽的初值原来是 `px_null()`（VM 轨是 calloc 零值），
