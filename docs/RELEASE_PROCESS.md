@@ -1,7 +1,7 @@
 # PuXian 发布流程（Release SOP）
 
 > 仓库治理 · 发布物分发（M62 起 tag 驱动全自动；M159 起含 **aarch64 并列资产**）。
-> 当前版本：**`px 0.2.0`**（最新 tag 例：`v0.2.0-m167`）。
+> 当前版本：**`px 0.2.0`**（最新 tag：`v0.2.0-m180`）。
 
 ## 版本语义
 
@@ -127,6 +127,17 @@ packaging/tag_guard.sh --grace-min 45   # 刚推上来的提交允许窗口期�
 ② 不校验版本段该不该升主版本（人工判断）；③ 只认 `-m<NNN>` 结尾的 tag；
 ④ GitHub 在仓库 **60 天无活动后停用定时工作流**（不告警）⇒ 长期静默时需手动 dispatch。
 
+**历史缺口（如实登记 · 2026-09-22 复核）**：`M171`–`M177` 无 tag（第 56/57 轮被中断、没走发布步），
+`M178`–`M180` 由 `v0.2.0-m180` 一次覆盖 —— 守卫只要求**最高**里程碑有 tag，且**发布包含全部提交**。
+更早的缺口同样存在且从未回填：`M53`–`M65`、`M71`、`M85`、`M90`、`M113`、`M126`–`M136`。
+⇒ 判据是「**最新 tag 即最新版**」。若某个历史里程碑需要**可安装版本**，只能人工逐个补 tag
+（每个 tag = 一次完整 Release，实测 10–19 分钟，且 release.yml 的 `concurrency` 串行化 ⇒ 不可并发）。
+
+**每轮收尾纪律（2026-09-22 补）**：推 `main` 之前先跑一次 `packaging/tag_guard.sh --ref HEAD`；
+红了就当场处置（补 tag，或 `TAG_GUARD_ALLOW_MISSING='<理由>'` 留痕），**不要留给定时任务** ——
+定时任务是兜底，不是流程。定时任务有 `GRACE_MIN=0`，push 触发只有 45 分钟 grace ⇒
+「推 main 后一小时内不打 tag」必然在下一次复查变红。
+
 ## 发布前核对清单
 
 - [ ] `main` 已含待发代码并推送（工作区干净）
@@ -138,6 +149,7 @@ packaging/tag_guard.sh --grace-min 45   # 刚推上来的提交允许窗口期�
 - [ ] 打 tag 前 `git log --oneline <上一tag>..HEAD` 确认入版范围符合预期
 - [ ] 打完 tag 后：**CI / Release / Tag Guard 三个 run 全绿**，且 Release 资产齐全
       （主包 + `sha256sums.txt` + **aarch64 并列包** + 其 `.sha256`）
+- [ ] **轮末复核**：`packaging/tag_guard.sh --ref HEAD` ⇒ `rc=0`（红即按「守卫」节处置，别留给定时任务）
 
 ## 零停机升级（M176 · SO_REUSEPORT）
 
