@@ -1,0 +1,22 @@
+# M184 门 · DEF-014：`list_dir_opt` 安全变体
+#   判据（三轨输出必须逐字节一致）：
+#     missing_is_err = true    （不存在的目录 ⇒ Err，**不再是进程终止**）
+#     missing_repr 含 "Err(fs: 读取目录失败" + "os error"
+#     exist_is_ok = true       （存在的目录 ⇒ Ok）
+#     notdir_is_err = true     （普通文件 ⇒ Err）
+#     same_as_list_dir = true  （list_dir 与 list_dir_opt 对同一目录结果逐元素一致）
+#     before 行必须打印（证明"没被终止"是流程性的，不只是返回值）
+def main():
+    let root = "/tmp/m184_gate_fs"
+    print("before")
+    let r = list_dir_opt(root + "/no_such_dir_xyz")
+    print("missing_is_err=" + str(r.is_err()))
+    print("missing_repr=" + str(r))
+    let r2 = list_dir_opt(root)
+    print("exist_is_ok=" + str(r2.is_ok()))
+    let r3 = list_dir_opt("/etc/passwd")
+    print("notdir_is_err=" + str(r3.is_err()))
+    let r4 = list_dir(root)
+    let r5 = list_dir_opt(root)
+    if r5.is_ok():
+        print("same_as_list_dir=" + str(str(r4) == str(r5.unwrap())))

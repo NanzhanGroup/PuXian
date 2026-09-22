@@ -5490,6 +5490,125 @@ static LXValue bi_str(LXValue* args, int nargs, void* ctx) {
     return r;
 }
 
+// ---------------------------------------------------------------------
+// M184（第三方 registry-px 的 PX-DEF-002）：字符串→数值的**严格**解析。
+//   此前 bi_int 用 `atoll`、bi_float 用 `atof`（C atoi 家族 = **宽容前缀解析**）：
+//     `int("12ab")` = 12 · `int("abc")` = 0 · `int("1e3")` = 1 · `int("0x10")` = 0
+//     · `float("1.2.3")` = 1.2 · `float("x")` = 0.0
+//   ⇒ 全是**静默错值**（外部输入的类型转换会悄悄给出错误数值），与 M163（字典键）、
+//     M166（迭代期修改容器）、M179（运算族）确立的「响亮优于静默」口径冲突；
+//     且 `int("")` 三轨分叉（解释轨已报 R1002，编译轨给 0）。
+//   新语义（对齐 Python `int(str)` / `float(str)` 与 Go `strconv.Atoi/ParseFloat`）：
+//     **trim 首尾 ASCII 空白后必须整体合法**，否则 `R1002 无法将 '<原文>' 转为 int/float`。
+//     · int  ：`[+-]?[0-9]+`（**仅十进制**；不接受 `1e3` / `0x10` / `1.5` / 超 int64 范围）
+//     · float：`[+-]?( digits [. digits?] | . digits ) ( [eE][+-]? digits )?`
+//              外加 IEEE 特殊值白名单 `inf`/`infinity`/`nan`（可选符号、大小写不敏感）
+//              —— `strtod` 会接受 `0x10` 十六进制浮点，这里**显式拒绝**（Python 亦拒绝）。
+//   三轨共用同一 native（解释轨 `i_builtin_int/float` 转发、VM 轨走 native 调用表、
+//   C 轨发射的也是 native 调用）⇒ 一处改、三轨同码同文；解释轨另加**前置校验**
+//   以便报错带 `行:列`（错误码与词条与编译轨逐字一致）。
+static int px_num_span(const char* s, int len, int* b, int* e) {
+    // ⚠️ 空白集必须与 `trim()`（bi_trim：space/\t/\n/\r **四种**）**逐字符相等** ——
+    //   解释轨的前置校验走 `args[0].trim()`，这里若多 trim 了 \f/\v，
+    //   `int("\f12")` 就会解释轨拒绝、编译轨接受（三轨分叉）。口径以既有 trim 为准。
+    int i = 0, j = len;
+    while (i < j && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r')) i++;
+    while (j > i && (s[j - 1] == ' ' || s[j - 1] == '\t' || s[j - 1] == '\n' || s[j - 1] == '\r')) j--;
+    *b = i; *e = j;
+    return j - i;                       // 0 = 全空白 ⇒ 非法
+}
+
+static int px_str_to_i64(const char* s, int len, int64_t* out) {
+    int b = 0, e = 0;
+    if (px_num_span(s, len, &b, &e) <= 0) return 0;
+    int i = b, neg = 0;
+    if (s[i] == '+' || s[i] == '-') { neg = (s[i] == '-'); i++; }
+    int digits = 0;
+    for (int k = i; k < e; k++) {
+        if (s[k] < '0' || s[k] > '9') return 0;   // 含 1e3 / 0x10 / 1.5 / 前尾垃圾
+        digits++;
+    }
+    if (digits == 0) return 0;                    // 只有符号
+    // M184 首版回归修正（**一个用例引发四个对拍门连环红**）：
+    //   首版直接按**原串长度**判（`m > 21 ⇒ 非法`），把 lexer 的 `strip_leading_zeros`
+    //   当场打死 —— 语料 `selfhost/cases/s09_unicode_edge.px` 里就有
+    //   `let b = 00000000000000000000000123`（24 字符，前导零）⇒ `int()` 报错
+    //   ⇒ `diff_lexer` / `diff_parser` / `diff_codegen` / `diff_interp` 四个门连环红。
+    //   口径修正：**先剥离前导零，再判长度与转换** —— Python `int("0000…0123")` = 123，
+    //   前导零在任何进制下都**合法**。门里已补 `int("00000000000000000000000123")` 用例。
+    int z = i;
+    while (z < e - 1 && s[z] == '0') z++;         // 至少保留一位（`"0"` / `"-0"` 合法）
+    int ndig = e - z;
+    if (ndig > 19) return 0;                      // 有效位数超 int64 十进制上限
+    char buf[24];
+    int m = 0;
+    if (neg) buf[m++] = '-';
+    memcpy(buf + m, s + z, (size_t)ndig);
+    buf[m + ndig] = 0;
+    errno = 0;
+    char* end = NULL;
+    long long v = strtoll(buf, &end, 10);
+    if (errno == ERANGE || !end || *end != 0) return 0;   // 溢出 ⇒ 非法
+    *out = (int64_t)v;
+    return 1;
+}
+
+static int px_str_is_ieee_special(const char* s, int len, double* out) {
+    if (len <= 0 || len > 9) return 0;
+    int i = 0, neg = 0;
+    if (s[0] == '+' || s[0] == '-') { neg = (s[0] == '-'); i = 1; }
+    char buf[12];
+    int n = 0;
+    for (int k = i; k < len; k++) {
+        char c = s[k];
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        buf[n++] = c;
+    }
+    buf[n] = 0;
+    if ((n == 3 && memcmp(buf, "inf", 3) == 0) ||
+        (n == 8 && memcmp(buf, "infinity", 8) == 0)) {
+        *out = neg ? -INFINITY : INFINITY;
+        return 1;
+    }
+    if (n == 3 && memcmp(buf, "nan", 3) == 0) { *out = NAN; return 1; }
+    return 0;
+}
+
+static int px_str_to_f64(const char* s, int len, double* out) {
+    int b = 0, e = 0;
+    int n = px_num_span(s, len, &b, &e);
+    if (n <= 0) return 0;
+    if (px_str_is_ieee_special(s + b, n, out)) return 1;
+    int i = b;
+    if (s[i] == '+' || s[i] == '-') i++;
+    int int_digits = 0, frac_digits = 0;
+    while (i < e && s[i] >= '0' && s[i] <= '9') { i++; int_digits++; }
+    if (i < e && s[i] == '.') {
+        i++;
+        while (i < e && s[i] >= '0' && s[i] <= '9') { i++; frac_digits++; }
+    }
+    if (int_digits == 0 && frac_digits == 0) return 0;   // "." / "+." / ""
+    if (i < e && (s[i] == 'e' || s[i] == 'E')) {
+        i++;
+        if (i < e && (s[i] == '+' || s[i] == '-')) i++;
+        int exp_digits = 0;
+        while (i < e && s[i] >= '0' && s[i] <= '9') { i++; exp_digits++; }
+        if (exp_digits == 0) return 0;
+    }
+    if (i != e) return 0;                                // 必须消费到末尾
+    if (n > 1000) return 0;
+    char buf[1024];
+    memcpy(buf, s + b, (size_t)n);
+    buf[n] = 0;
+    errno = 0;
+    char* end = NULL;
+    double v = strtod(buf, &end);
+    if (!end || *end != 0) return 0;
+    // ERANGE 不拒绝：溢出 ⇒ ±inf、下溢 ⇒ 0.0（与 Python float() 同向）
+    *out = v;
+    return 1;
+}
+
 static LXValue bi_int(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) px_error("R1002: int 需要一个参数");
@@ -5497,7 +5616,12 @@ static LXValue bi_int(LXValue* args, int nargs, void* ctx) {
     if (a.type == PX_INT) return a;
     if (a.type == PX_FLOAT) return px_int((int64_t)a.as.f);
     if (a.type == PX_BOOL) return px_int(a.as.b ? 1 : 0);
-    if (a.type == PX_STR) { return px_int(atoll(a.as.obj->as.str.data)); }
+    if (a.type == PX_STR) {
+        int64_t v = 0;
+        if (!px_str_to_i64(a.as.obj->as.str.data, a.as.obj->as.str.len, &v))
+            px_error("R1002: 无法将 '%s' 转为 int", a.as.obj->as.str.data);
+        return px_int(v);
+    }
     px_error("R1002: int 不支持类型 %s", px_type_name(a));
     return px_null();
 }
@@ -5508,7 +5632,12 @@ static LXValue bi_float(LXValue* args, int nargs, void* ctx) {
     LXValue a = args[0];
     if (a.type == PX_FLOAT) return a;
     if (a.type == PX_INT) return px_float((double)a.as.i);
-    if (a.type == PX_STR) return px_float(atof(a.as.obj->as.str.data));
+    if (a.type == PX_STR) {
+        double v = 0;
+        if (!px_str_to_f64(a.as.obj->as.str.data, a.as.obj->as.str.len, &v))
+            px_error("R1002: 无法将 '%s' 转为 float", a.as.obj->as.str.data);
+        return px_float(v);
+    }
     px_error("R1002: float 不支持类型 %s", px_type_name(a));
     return px_null();
 }
@@ -9298,6 +9427,49 @@ static LXValue bi_list_dir(LXValue* args, int nargs, void* ctx) {
     return r;
 }
 
+// M184（第三方 registry-px 的 PX-DEF-014）：`list_dir_opt(path) → Ok(list) | Err(msg)`。
+//   此前只有 `list_dir`，对**不存在的目录 / 非目录**直接 `px_error` **终止进程**
+//   （"fs: 读取目录失败"），与 `json_parse`→`json_parse_opt`、`read_file`→`read_file_opt`
+//   的"安全变体把 Go 的 err 通道显式化"先例不一致 ⇒ 写库时"列目录"的容错流程
+//   无法用 Result 表达（glob / 递归遍历这类库首当其冲）。
+//   `list_dir` 本身**保持**终止语义（响亮优于静默），安全变体是**增量**。
+static LXValue bi_list_dir_opt(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    // 参数错误也走 Err（安全变体的契约：调用方拿到的永远是 Result，不是进程终止）
+    if (nargs != 1 || args[0].type != PX_STR)
+        return px_err(px_str("R1002: list_dir_opt 需要一个路径参数"));
+    const char* path = args[0].as.obj->as.str.data;
+    DIR* d = opendir(path);
+    if (!d) {
+        char msg[512];
+        snprintf(msg, sizeof(msg), "fs: 读取目录失败 %s: %s (os error %d)",
+                 path, strerror(errno), errno);
+        return px_err(px_str(msg));
+    }
+    LXValue r = px_list(0);
+    px_root_push();
+    PX_KEEP(r);   // precise GC：累积 list 跨 px_list_push/px_str 分配（M170/M183 铁律）
+    struct dirent* e;
+    while ((e = readdir(d)) != NULL) {
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+        px_list_push(r, px_str(e->d_name));
+    }
+    closedir(d);
+    // 排序（与 list_dir 同一比较器 ⇒ 两函数对同一目录结果逐元素一致）
+    LXObject* ro = r.as.obj;
+    for (int i = 0; i < ro->as.list.len; i++) {
+        for (int j = i + 1; j < ro->as.list.len; j++) {
+            if (compare_values(ro->as.list.items[j], ro->as.list.items[i]) < 0) {
+                LXValue t = ro->as.list.items[i];
+                ro->as.list.items[i] = ro->as.list.items[j];
+                ro->as.list.items[j] = t;
+            }
+        }
+    }
+    px_root_pop();
+    return px_ok(r);
+}
+
 static LXValue bi_mkdir(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     // M116（qg-issue 71 D6）：新增可选 mode —— `mkdir(path[, mode])`。
@@ -9316,15 +9488,24 @@ static LXValue bi_mkdir(LXValue* args, int nargs, void* ctx) {
     char tmp[1024];
     snprintf(tmp, sizeof(tmp), "%s", path);
     int len = (int)strlen(tmp);
+    // M184（第三方 PX-DEF-005）：返回值从 `null` 改为 **bool**。
+    //   此前恒 `return px_null()` ⇒ `if mkdir(d):` **永远为假**（把"成功"误判成"失败"），
+    //   且逐层 mkdir 的返回值被丢弃 ⇒ "创建失败"完全无声。
+    //   新语义对齐 Go `os.MkdirAll`：**成功（含目标已存在且确实是目录）⇒ true，失败 ⇒ false**。
+    int ok = 1;
     for (int i = 1; i < len; i++) {
         if (tmp[i] == '/') {
             tmp[i] = 0;
-            mkdir(tmp, (mode_t)mode);
+            if (mkdir(tmp, (mode_t)mode) != 0 && errno != EEXIST) ok = 0;
             tmp[i] = '/';
         }
     }
-    mkdir(tmp, (mode_t)mode);
-    return px_null();
+    if (mkdir(tmp, (mode_t)mode) != 0 && errno != EEXIST) ok = 0;
+    // 同名非目录（已存在的普通文件/符号链接等）⇒ EEXIST 但**不是**成功
+    //   （对齐 Go MkdirAll 的 `not a directory` 错误；否则 `mkdir("/etc/passwd")` 会假真）
+    struct stat st;
+    if (ok && (stat(path, &st) != 0 || !S_ISDIR(st.st_mode))) ok = 0;
+    return px_bool(ok);
 }
 
 static LXValue bi_remove(LXValue* args, int nargs, void* ctx) {
@@ -10499,6 +10680,7 @@ void px_register_builtins(void) {
     px_set_global("regex_split", px_native("regex_split", bi_regex_split));
     px_set_global("exists", px_native("exists", bi_exists));
     px_set_global("list_dir", px_native("list_dir", bi_list_dir));
+    px_set_global("list_dir_opt", px_native("list_dir_opt", bi_list_dir_opt));   // M184：安全变体（PX-DEF-014）
     px_set_global("mkdir", px_native("mkdir", bi_mkdir));
     px_set_global("remove", px_native("remove", bi_remove));
     px_set_global("json_parse", px_native("json_parse", bi_json_parse));

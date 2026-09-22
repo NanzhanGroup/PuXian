@@ -1,0 +1,26 @@
+def main():
+    print("i1=" + str(int("12")))
+    print("i2=" + str(int("-5")))
+    print("i3=" + str(int("+7")))
+    print("i4=" + str(int(" 12 ")))
+    print("i5=" + str(int("9223372036854775807")))
+    print("i6=" + str(int("-9223372036854775808")))
+    print("i7=" + str(int("0")))
+    print("i8=" + str(int("007")))
+    # 前导零：**任何长度都必须合法**（Python 亦然）。这条是 M184 首版的真回归 ——
+    #   首版按原串长度判 ⇒ 把 lexer 的 `strip_leading_zeros`（`s09_unicode_edge.px` 的
+    #   `let b = 00000000000000000000000123`）当场打死 ⇒ 四个对拍门连环红。
+    print("i9=" + str(int("00000000000000000000000123")))
+    print("f1=" + str(float("1.5")))
+    print("f2=" + str(float("1e3")))
+    print("f3=" + str(float(".5")))
+    print("f4=" + str(float("5.")))
+    print("f5=" + str(float("-0.25")))
+    print("f6=" + str(float(" 2.5 ")))
+    print("f7=" + str(float("inf")))
+    print("f8=" + str(float("-inf")))
+    print("f9=" + str(float("Infinity")))
+    print("f10=" + str(float("NAN")))
+    print("f11=" + str(float("1E-3")))
+    print("f12=" + str(int(3.9)))
+    print("f13=" + str(float(2)))

@@ -12,7 +12,7 @@ examples/m103_s2c/yaml_stringify_test.px src=24e819d0e5148b40 rc=0 out=08199eeca
 examples/m103_s2d/img_test.px src=42d0202d4338bc99 rc=0 out=bd395905ba632155cdf556c3ceef546c err=e3b0c44298fc1c14
 examples/m108_lock/m108_lock_daemon.px src=b18b1c7d6991f29e rc=0 out=36b75c3c7b086c04cf2af529ff7da0c6 err=e3b0c44298fc1c14
 examples/m108_s0/hs_stall_server.px src=1243168d68cc7f8e rc=0 out=001f9ad649c102fe2f0ecd0f8f9edfb9 err=e3b0c44298fc1c14
-examples/m109_headers_multi/hdr_multi.px src=f3eb0694f4d87d06 rc=0 out=8244f76725a626505c8d87267308ed35 err=e3b0c44298fc1c14
+examples/m109_headers_multi/hdr_multi.px src=f3eb0694f4d87d06 rc=0 out=c6df308c104c853b18092dc642af899e err=e3b0c44298fc1c14
 examples/m109_s0/hdr_pass.px src=b03b6b86c6c45ab8 rc=0 out=f74963a71a82bf1665e0ea981525bf45 err=e3b0c44298fc1c14
 examples/m110_s1/m110_s1.px src=9005365c76e41070 rc=0 out=3a7442004ebfdd2e70d1eba2717176f7 err=e3b0c44298fc1c14
 examples/m110_s2/m110_s2.px src=64128c6365ad1cc1 rc=0 out=2be33d11cbd1cef74201df852db6124e err=e3b0c44298fc1c14
@@ -201,6 +201,9 @@ examples/m181_uninit_read/ok_side.px src=29bbe34ace1cc562 rc=0 out=969d7df750b99
 examples/m182_hdr_root/probe.px src=a2b74a1bf326d0c8 rc=0 out=e812be0148d42b822084e846d3690d10 err=e3b0c44298fc1c14
 examples/m183_gc_root_handover/handover.px src=5ccc0be8c44652b6 rc=0 out=54f39051350b4b6dde4e565b3867ceee err=e3b0c44298fc1c14
 examples/m183_gc_root_handover/s3flow.px src=816dca93819ecc65 rc=0 out=c4601a3c7b37ca83d6687c8500e84c4b err=e3b0c44298fc1c14
+examples/m184_num_fs_strict/listdir_sem.px src=00147d2c30339d69 rc=0 out=8bf79164270dec309e1b51bf9cfb80fc err=e3b0c44298fc1c14
+examples/m184_num_fs_strict/mkdir_sem.px src=e6e0901d452f94ea rc=0 out=7e7e18c2ff6004fb78a043fc2965d896 err=e3b0c44298fc1c14
+examples/m184_num_fs_strict/num_ok.px src=a159da4641621e01 rc=0 out=cd1b8d88e8ef036f7f3beab696430477 err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=25f7bb9ac610f0f826c9ed8c4047f24f err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=fc0b79277b06f69862f3101732750439 err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14
@@ -281,7 +284,7 @@ examples/m83_s1_http_body_nul/serve_daemon.px src=89df3687918162bb rc=0 out=0437
 examples/m83_s2_archive_gaps/s2_verify.px src=d89d093f2cd695fb rc=0 out=302fe595bc687a2547bf53d45ad2114b err=e3b0c44298fc1c14
 examples/m83_s3_ed25519/s3_verify.px src=dc19e9e2e953e786 rc=0 out=7b7eebc1b0b2493d10a9b39cef39ef1f err=e3b0c44298fc1c14
 examples/m83_s4/s4_verify.px src=676a19572c5f8241 rc=0 out=a39b2b32a4f3c973b3c093781d512f46 err=e3b0c44298fc1c14
-examples/m83_s5/libs_test.px src=c3a87733ac8cd527 rc=0 out=4d7f0b024f5885b5465047462a14b444 err=e3b0c44298fc1c14
+examples/m83_s5/libs_test.px src=c3a87733ac8cd527 rc=0 out=eb3f73453e6c807fbdeb156b0f852187 err=e3b0c44298fc1c14
 examples/m83_s5/m83_s5_client.px src=1017f9477bac50de rc=0 out=4b219b1565af649ec44efedd603ca669 err=e3b0c44298fc1c14
 examples/m83_s5/serve_daemon.px src=b948e3b0294db7a4 rc=0 out=adce983ca7520c398ae5f62ff713b03c err=e3b0c44298fc1c14
 examples/m83_s5/smtp_test.px src=2053517885af434e rc=0 out=db08c7b6845273cbcfafff5d0d6f57cd err=e3b0c44298fc1c14

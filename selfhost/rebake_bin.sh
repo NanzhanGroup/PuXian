@@ -105,9 +105,15 @@ check_neg_residue() {
     local dirty
     dirty="$(git -C "$ROOT" status --porcelain -- 'selfhost/*.px' 2>/dev/null || true)"
     if [ -n "$dirty" ]; then
-        echo "❌ 拒烘：selfhost/*.px 有**未提交改动**（负控补丁的典型迹象）：" >&2
+        # M184 修（判据①**降级**：拒烘 → 提示）：
+        #   理由——**正常开发流程就是「改 `selfhost/*.px` → 重烘」**（本轮 M184 改
+        #   `ibuiltin.px` 加严格校验，正是如此）。把"有未提交改动"一律当负控残留，
+        #   会把**正常重烘**整个堵死（实测：M184 首次 `--rebake-all` 被本判据拒掉）。
+        #   而负控残留的**可靠特征**是「源码里出现负控标记」（判据②，保持硬拒）——
+        #   M182 那次真事故的残留正是 `let _m160_negB = …`，判据②本来就能抓到。
+        #   ⇒ 判据①只做**提示**（让人对着 diff 确认一遍），不再拒烘。
+        echo "ℹ️  selfhost/*.px 有未提交改动（请确认是**有意修改**而非负控补丁残留）：" >&2
         echo "$dirty" | sed 's/^/     /' >&2
-        bad=1
     fi
     local marks
     marks="$(grep -rlE '_m[0-9]+_neg|NEGCTL|__NEG' \
@@ -119,7 +125,10 @@ check_neg_residue() {
         bad=1
     fi
     if [ "$bad" = "1" ]; then
-        echo "   ⇒ 处置：`git checkout -- <文件>` 还原后重试；确认无残留再 `--rebake-all`。" >&2
+        # M184 修：原文用**反引号**做 markdown 风格引用 ⇒ bash 命令替换 ⇒ 语法错误
+        #   （`syntax error near unexpected token 'newline'`，且 `--rebake-all` 被当命令执行）。
+        #   凡是会**打印给人看**的字符串，一律单引号/普通引号，不用反引号。
+        echo "   ⇒ 处置：用 git checkout -- <文件> 还原后重试；确认无残留再执行 --rebake-all。" >&2
         echo "     （教训全文见 docs/spec.md §17.10 检测器小节与本脚本头部注释）" >&2
         return 1
     fi
