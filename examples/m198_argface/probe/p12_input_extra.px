@@ -1,0 +1,2 @@
+print("before")
+input("a", "b")

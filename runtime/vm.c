@@ -138,10 +138,14 @@ static LXValue bi_vm_chan(LXValue* a, int n, void* ctx) {
 }
 static LXValue bi_vm_mutex(LXValue* a, int n, void* ctx) {
     (void)a; (void)n; (void)ctx;
+    // M198（缺陷 234）：0 参函数 —— 多余实参响亮。
+    if (n != 0) px_error("R1002: mutex 不需要参数");
     return px_mutex_create();
 }
 static LXValue bi_vm_rwlock(LXValue* a, int n, void* ctx) {
     (void)a; (void)n; (void)ctx;
+    // M198（缺陷 234）：0 参函数 —— 多余实参响亮。
+    if (n != 0) px_error("R1002: rwlock 不需要参数");
     return px_rwlock_create();
 }
 static LXValue bi_vm_spawn(LXValue* a, int n, void* ctx) {
@@ -152,7 +156,7 @@ static LXValue bi_vm_spawn(LXValue* a, int n, void* ctx) {
 }
 static LXValue bi_vm_chan_try_recv(LXValue* a, int n, void* ctx) {
     (void)ctx;
-    if (n < 1 || a[0].type != PX_CHAN) px_error("R1002: chan_try_recv 需要通道参数");
+    if (n != 1 || a[0].type != PX_CHAN) px_error("R1002: chan_try_recv 需要通道参数");
     LXValue out = px_null();
     int r = px_chan_try_recv(a[0], &out);
     return r ? out : px_null();   // 命中返回收到的值；未命中返回 null
@@ -161,7 +165,7 @@ static LXValue bi_vm_chan_try_recv(LXValue* a, int n, void* ctx) {
 //   交由 select 展开（命中返回真值对象；此处语义：返回 PX_BOOL 命中与否 + 值槽）
 static LXValue bi_vm_select_try(LXValue* a, int n, void* ctx) {
     (void)ctx;
-    if (n < 2 || a[0].type != PX_CHAN) px_error("R1002: select_try 需要 (chan, out_slot_ref)");
+    if (n != 2 || a[0].type != PX_CHAN) px_error("R1002: select_try 需要 (chan, out_slot_ref)");
     LXValue out = px_null();
     int r = px_chan_try_recv(a[0], &out);
     // out 以参数传入（占位 LXValue* 引用）：a[1] 为栈上容器值首地址不可改 → 用返回值解

@@ -1,0 +1,3 @@
+# fd_wait 的 timeout_ms 接受小数（修前 `需要 int`）
+let r = fd_wait(0, 1.5)
+print("ok=" + str(type(r)))

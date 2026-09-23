@@ -1,0 +1,14 @@
+p1_quic_close_extra	R1002	quic_close 需要 (conn: int)
+p2_quic_listen_extra	R1002	quic_listen 需要 (port: int)
+p3_quic_poll_extra	R1002	quic_poll 需要 (conn: int, timeout_ms: int)
+p4_quic_accept_extra	R1002	quic_accept 需要 (listener: int, timeout_ms: int)
+p5_h3_qs_open_extra	R1002	h3_qs_open 需要 (max_capacity: int)
+p6_h3_conn_setup_extra	R1002	h3_conn_setup 需要 (conn: int, qpack_cap: int)
+p7_h3_frame_extra	R1002	h3_frame 需要 (type:int, payload)
+p8_now_ms_extra	R1002	now_ms 不需要参数
+p9_args_extra	R1002	args 不需要参数
+p10_sleep_extra	R1002	sleep 需要 1 个参数
+p11_panic_extra	R1002	panic 需要 0-1 个参数
+p12_input_extra	R1002	input 需要 0-1 个参数
+p13_quic_connect_extra	R1002	quic_connect 需要 (ip: str, port: int, alpn: str[, session: str]) 参数
+p14_quic_0rtt_extra	R1002	quic_connect_0rtt 需要 (ip: str, port: int, alpn: str, session0rtt: str) 参数

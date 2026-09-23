@@ -1,0 +1,2 @@
+print("before")
+h3_conn_setup(1, 2, 3)

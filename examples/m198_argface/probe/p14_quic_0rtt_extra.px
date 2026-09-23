@@ -1,0 +1,2 @@
+print("before")
+quic_connect_0rtt("127.0.0.1", 443, "h3", "00", 7)

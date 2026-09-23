@@ -589,6 +589,19 @@ run m196_msg_parity bash examples/m196_msg_parity/verify.sh
 #   判据：静态 [S7] + **动态 [S8]**（193 内置 · 0 参 · 必须 R1002 且文案逐字命中原生 arity 文案 ·
 #   SKIP 24 条每条给理由）+ 8 错例 × 三轨同码同文 + 合法侧 4 例 + 4 道负控。
 run m197_builtin_arity bash examples/m197_builtin_arity/verify.sh
+step "M198 · native 元数上界（[S9] 静态全量 + 14 错例 × 三轨）⇄ 时长族数值化（缺陷 234/235 + 229）"
+#   缺陷 234：**81 个注册 native 没有元数上界**（62 个「固定元数只查下界」+ 19 个 0/0-1 参）
+#     ⇒ `quic_close(1, 2)` 三轨**一致地静默忽略**多余实参（M190 只量「rc 分叉」、M197 只量「0 参」，
+#     两者都看不见这一类）。修法：固定元数补 `nargs != N`；0/0-1 参族补 `nargs != 0` / `> 1`。
+#   缺陷 229：**时长**形参走 `px_arg_int` / `if (type == PX_INT)` —— `set_timeout(fn, 1.5)` 报「ms 需要整数」
+#     （而 M195 已让 `sleep(0.1)` 生效 ⇒ 同族自相矛盾）；`{timeout_ms: 300.0}` / `{"timeout_ms": "300"}`
+#     被**静默忽略** ⇒ 用户以为设了超时，其实**没有**。修法：`px_arg_dur_ns`（定时器转纳秒）+
+#     `px_arg_dur_ms`（ms 向上取整，绝不早于请求）+ `px_opt_dur_ms`（opts 字段「存在即校验」）。
+#   缺陷 235（本轮门自己抓出来的）：解释轨 `os_spawn_capture` / `os_capture` **只透传 2 参**，
+#     而文案自称 `(cmd, args[, opts])` ⇒ 传 opts 的解释轨直接报 arity 错、编译轨却正常（M186 同族）。
+#   判据：[S9] 静态（每个 native 必须声明上界或在**真变长豁免表**，表内每条给理由）+ 14 错例 × 三轨同码同文
+#     + 时长族 5 例 × 三轨 + 4 道负控（2 静态 + 2 动态 C 轨）。
+run m198_argface bash examples/m198_argface/verify.sh
 step "M190 · 上游 registry-px 真实用例回归（53 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。

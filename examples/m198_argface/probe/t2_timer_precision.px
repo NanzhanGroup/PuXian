@@ -1,0 +1,5 @@
+# 整数毫秒的精度不能被"数值化"改坏（区间断言，不写等式 —— 调度有抖动）
+let t0 = now_ms()
+let id = set_timeout(fn() { print("delta=" + str(now_ms() - t0)) }, 25)
+sleep(150)
+clear_timer(id)

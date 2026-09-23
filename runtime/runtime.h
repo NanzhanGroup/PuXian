@@ -405,6 +405,11 @@ const char* px_val_cstr(LXValue v);
 //   三轨一致 ⇒ 用户拿到的是**静默错值**（与 M189 修掉的 `bytes_get(b, 1.5)` 同族）。
 //   统一文案：`R1002: <函数> 的 <参数> 需要<类型>，实际是 <t>`（与 M179/M189 同族）。
 int64_t px_arg_int(LXValue v, const char* fn, const char* pname);
+// M198（§6.8 推广）：**时长**形参 —— 接受 int|float；`px_arg_dur_ms` 向上取整到 ms（绝不早于请求），
+//   `px_opt_dur_ms` 用于 opts 字典字段（存在即校验：数值取用 / null 未提供 / 其它类型 R1002）。
+//   跨 TU 使用（runtime_h3.c / runtime_ws.c …）⇒ 必须非 static + 在此声明。
+int64_t px_arg_dur_ms(LXValue v, const char* fn, const char* pname);
+int64_t px_opt_dur_ms(LXValue opts, const char* key, const char* fn, int* has);
 const char* px_arg_str(LXValue v, const char* fn, const char* pname);
 const char* px_arg_strbytes(LXValue v, const char* fn, const char* pname);
 LXObject* px_arg_dict(LXValue v, const char* fn, const char* pname);

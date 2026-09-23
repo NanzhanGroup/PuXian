@@ -1,0 +1,6 @@
+# set_timeout(fn, 1.5) 的 1.5ms 必须**真生效**（修前：`ms 需要整数` 报错）
+var n = 0
+let id = set_timeout(fn() { n = n + 1 }, 1.5)
+sleep(60)
+clear_timer(id)
+print("fired=" + str(n))

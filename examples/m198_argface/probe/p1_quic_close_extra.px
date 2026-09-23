@@ -1,0 +1,2 @@
+print("before")
+quic_close(1, 2)

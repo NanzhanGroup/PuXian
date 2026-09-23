@@ -1,0 +1,4 @@
+# opts 里的 float 超时修前被**静默忽略**（= 没有超时）；现在必须被采纳
+let t0 = now_ms()
+let r = os_spawn_capture("sh", ["-c", "sleep 3"], {"timeout_ms": 300.0})
+print("fast=" + str((now_ms() - t0) < 2000))
