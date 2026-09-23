@@ -1,0 +1,13 @@
+m1_chmod_arity	R1002	chmod 需要 (path, mode) 参数
+m2_chr_arity	R1002	chr 需要 (码点) 参数
+m3_contains_two	R1002	contains 需要 2 个参数
+m4_flush_arity	R1002	flush 不接受参数
+m5_trim_type	R1002	trim 需要一个字符串参数
+m6_abs_type	R1002	abs 不支持类型 string
+m7_int_type	R1002	int 不支持类型 list
+m8_float_type	R1002	float 不支持类型 dict
+m9_gen_next_type	R1002	gen_next 需要生成器对象
+m10_range_start_float	R1002	range 的 start 需要整数，实际是 float
+m11_atan2_type	R1002	atan2 参数必须是数字，实际是 string
+m12_http_unix_arity	R1002	http_unix 需要 (socket_path, url_path, method[, body[, headers[, opts]]]]) 参数
+m13_gen_next_arity	R1002	gen_next 需要 1 个参数
