@@ -1,0 +1,340 @@
+# ============================================================
+# 普贤生态库：registry/ipaddr —— IP 地址与 CIDR
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python ipaddress / Go net/netip 心智（0.1.0 子集）：
+#   ipv4_parse(s)          → Ok(int 0..2^32-1) | Err
+#   ipv4_to_str(n)         → Ok("a.b.c.d") | Err
+#   ip_valid(s)/ip_is_ipv4(s)/ip_is_ipv6(s) → bool
+#   ipv4_in_cidr(ip, cidr) → bool          "192.168.1.100" in "192.168.1.0/24"
+#   cidr_parse(cidr)       → Ok({addr, prefix}) | Err（IPv4）
+#   cidr_valid(cidr)       → bool（IPv4）
+#   ipv4_cidr_network/broadcast/host_count(cidr) → Ok(...) | Err
+#   ipv6_parse(s)          → Ok([8 个 hextet int]) | Err（支持 :: 压缩）
+#   ipv6_to_str(h)         → Ok(压缩规范串) | Err
+#   ipv6_in_cidr(ip6, cidr6) → bool
+# 说明：
+#   - IPv4 宽严：必须 4 段纯数字、0-255；允许前导零（"01.2.3.4" = 1.2.3.4）
+#   - IPv6 仅小写/大写 hex；支持 "::"（至多一次）；不支持内嵌 IPv4 尾段
+#     （如 "::ffff:192.168.1.1"，0.2.0 考虑）
+#   - IPv6 压缩规则：压缩最长连续零段（长度≥2，取首个最长段）
+# ============================================================
+
+# ---- 通用工具 ----
+def ip_pow2(k):
+    var r = 1
+    var i = 0
+    while i < k:
+        r = r * 2
+        i += 1
+    return r
+
+def ip_find(s, sub):
+    var n = len(s)
+    var m = len(sub)
+    var i = 0
+    while i + m <= n:
+        if s[i:i + m] == sub:
+            return i
+        i += 1
+    return -1
+
+def ip_find_from(s, sub, start):
+    var n = len(s)
+    var st = start
+    if st < 0:
+        st = 0
+    var i = st
+    while i + len(sub) <= n:
+        if s[i:i + len(sub)] == sub:
+            return i
+        i += 1
+    return -1
+
+def ip_is_digit(c):
+    return c >= "0" and c <= "9"
+
+def ip_parse_int(s):
+    if len(s) == 0:
+        return Err("ipaddr: 空数字")
+    var i = 0
+    while i < len(s):
+        if not ip_is_digit(s[i]):
+            return Err("ipaddr: 非法数字: " + s)
+        i += 1
+    return Ok(int(s))
+
+# ---- IPv4 ----
+def ipv4_parse(s):
+    var parts = split(s, ".")
+    if len(parts) != 4:
+        return Err("ipaddr: IPv4 需 4 段: " + s)
+    var v = 0
+    var i = 0
+    while i < 4:
+        var p = parts[i]
+        var pi = ip_parse_int(p)
+        if len(p) == 0 or pi.is_err():
+            return Err("ipaddr: 非法 IPv4: " + s)
+        var n = pi.unwrap()
+        if n > 255:
+            return Err("ipaddr: 超出 0-255: " + s)
+        v = v * 256 + n
+        i += 1
+    return Ok(v)
+
+def ipv4_to_str(n):
+    if n < 0 or n > 4294967295:
+        return Err("ipaddr: 超出 IPv4 范围: " + str(n))
+    var d0 = n % 256
+    var d1 = (n // 256) % 256
+    var d2 = (n // 65536) % 256
+    var d3 = n // 16777216
+    return Ok(str(d3) + "." + str(d2) + "." + str(d1) + "." + str(d0))
+
+def ipv4_cidr_split(cidr):
+    var slash = ip_find(cidr, "/")
+    if slash < 0:
+        return Err("ipaddr: 缺少 /: " + cidr)
+    if slash == 0:
+        return Err("ipaddr: 缺少地址: " + cidr)
+    var addr = ipv4_parse(cidr[0:slash])
+    var pn = ip_parse_int(cidr[slash + 1:len(cidr)])
+    if addr.is_err() or pn.is_err():
+        return Err("ipaddr: 非法 CIDR: " + cidr)
+    var prefix = pn.unwrap()
+    if prefix < 0 or prefix > 32:
+        return Err("ipaddr: 前缀需 0-32: " + cidr)
+    return Ok({"addr": addr.unwrap(), "prefix": prefix})
+
+def cidr_parse(cidr):
+    return ipv4_cidr_split(cidr)
+
+def cidr_valid(cidr):
+    return ipv4_cidr_split(cidr).is_ok()
+
+def ipv4_mask(prefix):
+    if prefix == 0:
+        return 0
+    var hostbits = 32 - prefix
+    return 4294967295 - (ip_pow2(hostbits) - 1)
+
+def ipv4_in_cidr(ip, cidr):
+    var a = ipv4_parse(ip)
+    var c = ipv4_cidr_split(cidr)
+    if a.is_err() or c.is_err():
+        return false
+    var m = ipv4_mask(c.unwrap()["prefix"])
+    return (a.unwrap() & m) == (c.unwrap()["addr"] & m)
+
+def ipv4_cidr_network(cidr):
+    var c = ipv4_cidr_split(cidr)
+    if c.is_err():
+        return Err("ipaddr: 非法 CIDR: " + cidr)
+    var m = ipv4_mask(c.unwrap()["prefix"])
+    return ipv4_to_str(c.unwrap()["addr"] & m)
+
+def ipv4_cidr_broadcast(cidr):
+    var c = ipv4_cidr_split(cidr)
+    if c.is_err():
+        return Err("ipaddr: 非法 CIDR: " + cidr)
+    var hostbits = 32 - c.unwrap()["prefix"]
+    var hostmask = ip_pow2(hostbits) - 1
+    return ipv4_to_str((c.unwrap()["addr"] & (4294967295 - hostmask)) + hostmask)
+
+def ipv4_cidr_host_count(cidr):
+    var c = ipv4_cidr_split(cidr)
+    if c.is_err():
+        return Err("ipaddr: 非法 CIDR: " + cidr)
+    return Ok(ip_pow2(32 - c.unwrap()["prefix"]))
+
+# ---- IPv6 ----
+def ip_hexval(c):
+    if c >= "0" and c <= "9":
+        return int(c)
+    if c >= "a" and c <= "f":
+        return ord(c) - 87
+    return -1
+
+def ip_hex_digit(v):
+    var d = "0123456789abcdef"
+    if v < 0 or v > 15:
+        return "0"
+    return d[v]
+
+def ip_hex(n):
+    if n == 0:
+        return "0"
+    var out = ""
+    var v = n
+    while v > 0:
+        out = ip_hex_digit(v % 16) + out
+        v = v // 16
+    return out
+
+def ip_hex4(n):
+    var h4 = ip_hex(n)
+    while len(h4) < 4:
+        h4 = "0" + h4
+    return h4
+
+def ip_hex_to_int(s):
+    if len(s) == 0 or len(s) > 4:
+        return -1
+    var v = 0
+    var i = 0
+    while i < len(s):
+        var h = ip_hexval(s[i])
+        if h < 0:
+            return -1
+        v = v * 16 + h
+        i += 1
+    return v
+
+def ip_hextets(parts, count_total):
+    var out = []
+    var ok = true
+    var i = 0
+    while i < len(parts):
+        var h = ip_hex_to_int(parts[i])
+        if h < 0:
+            ok = false
+            break
+        out.append(h)
+        i += 1
+    while len(out) < count_total:
+        out.append(0)
+    if not ok:
+        return Err("ipaddr: 非法 IPv6 段")
+    return Ok(out)
+
+def ipv6_parse(s):
+    var t = to_lower(s)
+    var di = ip_find(t, "::")
+    if di >= 0:
+        var di2 = ip_find_from(t, "::", di + 2)
+        if di2 >= 0:
+            return Err("ipaddr: IPv6 至多一个 ::")
+    var left = ""
+    var right = ""
+    var has_compress = di >= 0
+    if has_compress:
+        left = t[0:di]
+        right = t[di + 2:len(t)]
+    else:
+        left = t
+    var lp = []
+    var rp = []
+    if left != "":
+        lp = split(left, ":")
+    if right != "":
+        rp = split(right, ":")
+    var lv = ip_hextets(lp, 0)
+    var rv = ip_hextets(rp, 0)
+    if lv.is_err() or rv.is_err():
+        return Err("ipaddr: 非法 IPv6: " + s)
+    var l = lv.unwrap()
+    var r = rv.unwrap()
+    if has_compress:
+        if len(l) + len(r) >= 8:
+            return Err("ipaddr: :: 前后段数超限: " + s)
+        var zeros = 8 - len(l) - len(r)
+        var out = l
+        var z = 0
+        while z < zeros:
+            out.append(0)
+            z += 1
+        var j = 0
+        while j < len(r):
+            out.append(r[j])
+            j += 1
+        return Ok(out)
+    if len(l) != 8:
+        return Err("ipaddr: IPv6 需 8 段: " + s)
+    return Ok(l)
+
+def ipv6_to_str(h):
+    if len(h) != 8:
+        return Err("ipaddr: 需 8 个 hextet")
+    var best_start = -1
+    var best_len = 0
+    var run_start = -1
+    var run_len = 0
+    var i = 0
+    while i < 8:
+        if h[i] == 0:
+            if run_start < 0:
+                run_start = i
+            run_len += 1
+        else:
+            if run_len >= 2 and run_len > best_len:
+                best_start = run_start
+                best_len = run_len
+            run_start = -1
+            run_len = 0
+        i += 1
+    if run_len >= 2 and run_len > best_len:
+        best_start = run_start
+        best_len = run_len
+    var out = ""
+    if best_start < 0:
+        out = ip_hextets_str(h, 0, 8)
+        return Ok(out)
+    var left = ip_hextets_str(h, 0, best_start)
+    var mid = ip_hextets_str(h, best_start + best_len, 8)
+    if len(left) > 0 and len(mid) > 0:
+        out = left + "::" + mid
+    elif len(left) > 0:
+        out = left + "::"
+    else:
+        out = "::" + mid
+    return Ok(out)
+
+def ip_hextets_str(h, start, end):
+    var out = ""
+    var i = start
+    while i < end:
+        if len(out) > 0:
+            out = out + ":"
+        out = out + ip_hex(h[i])
+        i += 1
+    return out
+
+def ipv6_in_cidr(ip, cidr):
+    var slash = ip_find(cidr, "/")
+    if slash < 0:
+        return false
+    var pn = ip_parse_int(cidr[slash + 1:len(cidr)])
+    if pn.is_err() or slash == 0:
+        return false
+    var prefix = pn.unwrap()
+    if prefix < 0 or prefix > 128:
+        return false
+    var hip = ipv6_parse(ip)
+    var hc = ipv6_parse(cidr[0:slash])
+    if hip.is_err() or hc.is_err():
+        return false
+    var hi = hip.unwrap()
+    var cc = hc.unwrap()
+    var full = prefix // 16
+    var bits = prefix % 16
+    var i = 0
+    while i < full:
+        if hi[i] != cc[i]:
+            return false
+        i += 1
+    if bits > 0 and full < 8:
+        var shift = 16 - bits
+        if hi[full] // ip_pow2(shift) != cc[full] // ip_pow2(shift):
+            return false
+    return true
+
+# ---- 通用 ----
+def ip_is_ipv4(s):
+    return ipv4_parse(s).is_ok()
+
+def ip_is_ipv6(s):
+    return ipv6_parse(s).is_ok()
+
+def ip_valid(s):
+    return ip_is_ipv4(s) or ip_is_ipv6(s)

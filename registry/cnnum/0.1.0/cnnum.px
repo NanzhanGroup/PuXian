@@ -1,0 +1,120 @@
+# ============================================================
+# 普贤生态库：registry/cnnum —— 中文数字转换
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+#   cnnum_parse(s)   → Ok(int) | Err    "一万二千三百四十五" → 12345
+#   cnnum_format(n)  → Ok(str)         12345 → "一万二千三百四十五"
+# 支持范围：0 ~ 99999999（亿内）；"零"用于位间占位。
+# 说明：
+#   - format 采用自然中文读数（无前导"/"后缀）
+#   - parse 容错：严格模式（非法字符 → Err）；数字前允许"一"省略（如 "十二"）
+# ============================================================
+const CN_DIGIT = "零一二三四五六七八九"
+const CN_UNIT = ["千", "百", "十", ""]
+# 单字 → 数字（-1 非法）
+def cn_digit(c):
+    var i = 0
+    while i < 10:
+        if CN_DIGIT[i] == c:
+            return i
+        i += 1
+    return -1
+# 中文 → 整数（支持 亿/万/千/百/十/零）
+def cnnum_parse(s):
+    var total = 0
+    var section = 0
+    var number = 0
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        var d = cn_digit(c)
+        if d >= 0:
+            number = d
+            i += 1
+            continue
+        if c == "零":
+            number = 0
+            i += 1
+            continue
+        if c == "十":
+            if number == 0:
+                number = 1
+            section = section + number * 10
+            number = 0
+            i += 1
+            continue
+        if c == "百":
+            if number == 0:
+                number = 1
+            section = section + number * 100
+            number = 0
+            i += 1
+            continue
+        if c == "千":
+            if number == 0:
+                number = 1
+            section = section + number * 1000
+            number = 0
+            i += 1
+            continue
+        if c == "万":
+            total = total + (section + number) * 10000
+            section = 0
+            number = 0
+            i += 1
+            continue
+        if c == "亿":
+            return Err("cnnum: 超出 0-99999999 范围")
+        return Err("cnnum: 非法字符: " + c)
+    total = total + section + number
+    if total > 99999999:
+        return Err("cnnum: 超出 0-99999999 范围")
+    return Ok(total)
+# 组内数字（<10000）格式化为中文
+def cn_group(n):
+    if n == 0:
+        return "零"
+    var out = ""
+    var uni = [1000, 100, 10, 1]
+    var uk = 0
+    var started = false
+    var pending_zero = false
+    while uk < 4:
+        var base = uni[uk]
+        var d = n // base
+        n = n % base
+        if d > 0:
+            if pending_zero and started:
+                out = out + "零"
+            pending_zero = false
+            if base >= 100:
+                out = out + CN_DIGIT[d]
+                out = out + CN_UNIT[uk]
+            elif base == 10:
+                if d > 1 or started:
+                    out = out + CN_DIGIT[d]
+                out = out + CN_UNIT[uk]
+            else:
+                out = out + CN_DIGIT[d]
+            started = true
+        else:
+            if started:
+                pending_zero = true
+        uk += 1
+    return out
+# 整数 → 中文（0 ~ 99999999）
+def cnnum_format(n):
+    if n < 0 or n > 99999999:
+        return Err("cnnum: 超出 0-99999999 范围")
+    if n == 0:
+        return Ok("零")
+    var wan = n // 10000
+    var rest = n % 10000
+    var out = ""
+    if wan > 0:
+        out = out + cn_group(wan) + "万"
+        if rest > 0 and rest < 1000:
+            out = out + "零"
+    if rest > 0:
+        out = out + cn_group(rest)
+    return Ok(out)

@@ -1,3 +1,70 @@
+## M187 · 第三方 registry-px 库**引入官方 `registry/`** + pxpkg **多文件包**（第 65 轮 · 缺陷 209）
+
+> 主题：把上游 `banshanhanfu/registry-px`（Apache-2.0）的库引入官方 registry（用户指令），
+> 顺带收口两处**规范自相冲突**与一处**竞态缺陷**。
+> 门：`examples/m187_registry_import/`（M187-VERIFY-OK · PASS=16 FAIL=0）。
+
+### 一、引入：**52 包 / 58 文件**，逐字节照搬
+
+- 引入器 **`tools/import_registry_px.sh`**（默认**预演**只列清单；`--apply` 才写盘；同名包内容不同 ⇒ **拒写**要求人工定版本）；
+- 来源与许可登记 **`registry/THIRD_PARTY.md`**（自动生成 + 门复核）：上游仓库 URL · commit `db5f210` ·
+  许可 **Apache-2.0**（与本仓同族）· 每包「入口 sha256（前 16）· 文件数 · 三轨验证口径」；
+- **纪律：不改上游一个字节** ⇒ 上游文件 sha256 可直接与我们对拍（实测 **58/58 逐字节一致**）；
+  许可归属因此不写在包内注释里，而写在登记表（避免"引入即改动"导致来源不可验证）。
+- **未引入 1 包**：`passhash` —— 其 `pass_verify` 用 `int(parts[1])` 直接吃畸形 hash 串，
+  在 M184「严格解析」后语义不再正确 ⇒ **待上游先修**（表内留痕，不在仓库里存在）。
+
+引入清单（52）：编码/校验 `base58 checksum bytes_pack tar xlsx pdf` · 解析/格式
+`csv toml ini dotenv glob jsonpath diff parser template` · 结构/算法
+`big datastruct fractions decimal bisect itertools functools stats rate table textwrap` ·
+Web/文本 `cli log ansi strcase shutil metrics` · 安全/标识
+`jwt uuid ulid secure_random validator idcard cnnum faker` · 系统/资源
+`config retry testkit fsnotify mailparse` · 差异化
+`qrcode pg mysql concurrent_map workerpool`（后四者分别需"编译模式/真实服务端"，已在表内标注）。
+
+### 二、pxpkg **多文件包**（收口一处规范自相冲突）
+
+- 旧 registry 结构只认 `<name>/<ver>/<name>.px` **单文件**；而官方写库规范要求
+  **每文件 < 500 行、超了拆**（qrcode 4 文件 / mysql 3 / xlsx 2）⇒ **规范自己跟分发形态冲突**。
+- M187 起：包目录下的**全部 `.px`** 随包分发；**入口恒 `<name>.px`**（`import <name>` 不变），
+  包内相对 `import "子文件.px"` 原样保留。
+- **digest 兼容**：单文件包 = 入口文件 sha256（与 M45 lock **逐字节兼容**）；
+  多文件包 = 各「文件名:内容」串接后 sha256（旧格式下不存在多文件包 ⇒ **无历史 lock 受影响**）。
+- **`--locked` 覆盖面扩大**：现在查**全部**文件 —— 实测篡改多文件包的**辅助文件**
+  ⇒ 拒绝并报「内容被篡改（sha256 不符）」（修前只查入口文件，辅助文件可被静默替换）。
+- `pxp_install_path` 同步支持**目录**形态（本地包 = 任意多文件）。
+
+### 三、缺陷 **209**：`os_spawn` **不等待** ⇒ 删除/创建竞态
+
+- `pxp_rm_rf` 原实现 `os_spawn("rm", ["-rf", path])` **不等待子进程**；M187 的多文件包复制是
+  「先删旧目录 → mkdir → 写文件」⇒ 后台 `rm` 后到，**把刚写好的目录整棵删掉**
+  （实测：重装后 `.px_modules/qrcode/` **消失**）。
+- 修法：改用**同步**的 `os_remove_all(path)`（递归删文件/目录树、自带防删根）⇒ 顺带也不需要
+  `list_dir` 探类型那套绕行。速查表事实 216 记入"删除后再创建"的纪律。
+
+### 四、门自身的一次**假绿**（本轮最值钱的方法论）
+
+- **编译轨「找不到模块」是警告不是错误**：`import` 一个不存在的包只打
+  `[警告] 找不到模块 'x'（已跳过 → 运行期将报未定义）`，**rc 仍为 0、程序照跑并打印 ok**
+  ⇒ 判据只看 rc/输出**必然假绿**。修法：断言 `! grep 找不到模块 <编译日志>` +
+  「安装件文件数 == registry 侧文件数」。**负控 C（删多文件包辅助文件）正是这样才从"没有牙"变成"判红"的。**
+- 另一处同族：负控判据串写 `! layer1_ok`，经 `$fn` **变量展开**后 bash **不认 `!` 是保留字**
+  （`!: command not found`）⇒ 三道负控全报"判据仍为绿"。修法：`eval "$fn"`。
+- 第三处：抽样清单里误放了 `yaml`（它是 registry 里**原有**的 stdlib 镜像、不在引入清单）
+  ⇒ 门新增前置判据「抽样名必须都在引入清单里」，把这类"测错了对象"变成显式失败。
+
+### 五、验收
+
+- **门**：`m187_registry_import` **PASS=16 FAIL=0**（引入表逐行 sha256/文件数重算对拍 · 52 包
+  pxpkg 装 + `import` 全通 · 抽样 **13 包双轨编译** · 多文件包三轨一致 + `--locked` 篡改检测 ·
+  **负控 A/B/C 各自独立判红** + 被改文件逐字节还原）
+- `examples/m69_registry/verify.sh` **11/11**（原 13 个 stdlib 镜像包**向后兼容**：加多文件支持不改旧行为）
+- 引入内容与上游 **58/58 逐字节一致**；`tools/pxpkg.px` fmt/lint 0/0
+- 登记：`registry/README.md`（结构 / 官方 13 / **第三方 52** / 多文件包 / 引入流程）·
+  `docs/PUXIAN_CHEATSHEET.md` 事实 **216**（`os_spawn` 竞态 + `os_remove_all`）· **217**（多文件包 + 引入器 + "找不到模块"假绿）
+- 未收口（下一轮候选）：`sha1` native（PX-DEF-026）· 字符串方法面 `.find/.strip/.has_prefix`（PX-DEF-025/027）·
+  上游 `passhash` 修好后补引入 · 第三方 34→53 库的**逐包真实用例**纳入 CI（现为抽样双轨 + 全量解释轨 import）
+
 ## M186 · 解释轨 native「透传完整性」收口（第 64 轮 · 缺陷 206/207/208 + 第三方 PX-DEF-018/019/020）
 
 > 主题：第三方 `banshanhanfu/registry-px` 在 09-22/09-23 猛推 —— **库 34 → 53**、

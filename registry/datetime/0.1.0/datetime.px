@@ -1,0 +1,50 @@
+# ============================================================
+# 普贤生态库：registry/datetime —— 时间运算
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go time 包心智（0.1.0 子集）：
+#   dt_now()                 → 本地 "YYYY-MM-DD HH:MM:SS"
+#   dt_now_sec()             → Unix 秒（墙钟）
+#   dt_parse(s, fmt?)        → Unix 秒（fmt 默认 "%Y-%m-%d %H:%M:%S"）
+#   dt_format(sec, fmt?)     → 字符串（UTC，fmt 默认同上）
+#   dt_add(sec, delta_sec)   → sec
+#   dt_diff(a_sec, b_sec)    → a - b 秒
+#   dt_add_days(sec, n)      → sec + n×86400
+#   dt_days_between(a,b)     → 整天数差（b-a 向下取整）
+# 说明：dt_format 底层 time_format 输出 UTC；本地时间直接用 dt_now()。
+#   未考虑夏令时（中国无 DST；跨国场景注意）。
+# ============================================================
+
+const DT_FMT = "%Y-%m-%d %H:%M:%S"
+const DT_DAY = 86400
+
+def dt_now():
+    return now()
+
+def dt_now_sec():
+    return now_sec()
+
+# 解析 → Unix 秒（wall clock）
+def dt_parse(s, fmt=DT_FMT):
+    return time_parse(s, fmt)
+
+# 格式化（UTC）
+def dt_format(sec, fmt=DT_FMT):
+    return time_format(int(sec), fmt)
+
+def dt_add(sec, delta_sec):
+    return sec + delta_sec
+
+def dt_diff(a_sec, b_sec):
+    return a_sec - b_sec
+
+def dt_add_days(sec, n):
+    return sec + n * DT_DAY
+
+# (b - a) 的整天数（向下取整，支持负值）
+def dt_days_between(a_sec, b_sec):
+    var diff = b_sec - a_sec
+    var days = diff // DT_DAY
+    if diff % DT_DAY != 0 and diff < 0:
+        days -= 1
+    return days

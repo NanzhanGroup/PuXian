@@ -1,0 +1,82 @@
+# ============================================================
+# 普贤生态库：registry/mailparse —— 邮件消息解析（RFC 5322 子集）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go net/mail 心智（0.1.0 子集）：
+#   mail_parse(raw)     → Ok({headers, body, from, to, subject, date}) | Err
+#   mail_header(hd, n)  → 值 | null（大小写不敏感）
+# 说明：
+#   - headers 为 dict（键保留原始大小写，值已去首尾空白并解折叠续行）
+#   - body 为空行之后的内容（保留原始）
+#   - 快捷字段 from/to/subject/date 取同名头部第一个
+#   - 0.1.0 不解码 RFC 2047 编码字（=?utf-8?B?...?=）与 MIME 主体
+# ============================================================
+
+# 找第一个冒号
+def mail_find_colon(line):
+    var i = 0
+    while i < len(line):
+        if line[i] == ":":
+            return i
+        i += 1
+    return -1
+
+# 大小写不敏感取头部
+def mail_header(headers, name):
+    var ks = headers.keys()
+    var i = 0
+    while i < len(ks):
+        if to_lower(ks[i]) == to_lower(name):
+            return headers[ks[i]]
+        i += 1
+    return null
+
+# 主解析
+def mail_parse(raw):
+    var headers = {}
+    var body_start = -1
+    var lines = split(raw, "\n")
+    var cur_name = ""
+    var cur_val = ""
+    var i = 0
+    while i < len(lines):
+        var line = lines[i]
+        if ends_with(line, "\r"):
+            line = line[0:len(line) - 1]
+        if len(line) == 0:
+            body_start = i + 1
+            break
+        if (starts_with(line, " ") or starts_with(line, "\t")) and cur_name != "":
+            cur_val = cur_val + " " + trim(line)
+            i += 1
+            continue
+        if cur_name != "":
+            headers.set(cur_name, trim(cur_val))
+        var colon = mail_find_colon(line)
+        if colon < 0:
+            cur_name = ""
+            cur_val = ""
+            i += 1
+            continue
+        cur_name = trim(line[0:colon])
+        cur_val = trim(line[colon + 1:len(line)])
+        i += 1
+    # 收尾最后一个头部
+    if cur_name != "":
+        headers.set(cur_name, trim(cur_val))
+    var body = ""
+    if body_start >= 0:
+        var k = body_start
+        while k < len(lines):
+            body = body + lines[k]
+            if k < len(lines) - 1:
+                body = body + "\n"
+            k += 1
+    return Ok({
+        "headers": headers,
+        "body": body,
+        "from": mail_header(headers, "From"),
+        "to": mail_header(headers, "To"),
+        "subject": mail_header(headers, "Subject"),
+        "date": mail_header(headers, "Date"),
+    })

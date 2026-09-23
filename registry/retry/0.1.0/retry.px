@@ -1,0 +1,74 @@
+# ============================================================
+# 普贤生态库：registry/retry —— 带退避的重试
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go hashicorp/go-retryablehttp 心智（0.1.0 子集）：
+#   retry_call(fn, arg, opts?) → Ok(result) | Err
+#     fn(arg) 须返回 Result；成功（Ok）即返回，失败（Err）按策略重试
+#   opts:
+#     times      最大尝试次数（默认 3）
+#     delay_ms   基础退避毫秒（默认 0）
+#     backoff    "fixed"（每次 delay）| "linear"（delay×attempt）|
+#                "exp"（delay×2^attempt，默认 "exp"）
+# 任务"第几次尝试"通过参数长度约定：调用方在 fn 内可感知失败原因。
+# 全部失败 → Err("retry: 尝试 N 次后失败: <last>")
+# ============================================================
+
+# 默认 opts 合并
+def retry_opts(opts):
+    var times = 3
+    var delay = 0
+    var backoff = "exp"
+    if opts != null:
+        if opts.has("times"):
+            times = opts["times"]
+        if opts.has("delay_ms"):
+            delay = opts["delay_ms"]
+        if opts.has("backoff"):
+            backoff = opts["backoff"]
+    if times < 1:
+        times = 1
+    return {"times": times, "delay_ms": delay, "backoff": backoff}
+
+# 2^n（整数，退避用）
+def retry_pow2(n):
+    var r = 1
+    var i = 0
+    while i < n:
+        r = r * 2
+        i += 1
+    return r
+
+# 计算第 attempt（0 起）次失败后的等待毫秒
+def retry_delay_ms(cfg, attempt):
+    var d = cfg["delay_ms"]
+    var b = cfg["backoff"]
+    if d <= 0:
+        return 0
+    if b == "fixed":
+        return d
+    if b == "linear":
+        return d * (attempt + 1)
+    return d * retry_pow2(attempt)
+
+# Result Err 消息剥壳（无 unwrap_err 原语）
+def retry_err_msg(r):
+    var s = str(r)
+    if starts_with(s, "Err(") and ends_with(s, ")"):
+        return s[4:len(s) - 1]
+    return s
+
+def retry_call(f, arg, opts=null):
+    var cfg = retry_opts(opts)
+    var last = ""
+    var attempt = 0
+    while attempt < cfg["times"]:
+        var r = f(arg)
+        if r.is_ok():
+            return r
+        last = retry_err_msg(r)
+        var w = retry_delay_ms(cfg, attempt)
+        if w > 0:
+            sleep(w)
+        attempt += 1
+    return Err("retry: 尝试 " + str(cfg["times"]) + " 次后失败: " + last)

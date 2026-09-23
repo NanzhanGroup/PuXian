@@ -1,0 +1,64 @@
+# ============================================================
+# 普贤生态库：registry/functools —— 函数式工具（partial/compose/memoize）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python functools 心智（0.1.0 子集）：
+#   fn_partial(f, a1, a2, ...)            → 函数值    部分应用（前置固定参数）
+#   fn_compose(f, g)                      → 函数值    h(x) = f(g(x))
+#   fn_memo(f, cache, x)                  → [新cache, 结果]  记忆化单次调用
+#   fn_memo_make(f, cache)                → [新cache, 函数]  返回记忆化包装函数
+#   fn_negate(pred)                       → 函数值    谓词取反
+# 说明：
+#   - 函数值捕获参数按引用（M160 修复后三轨一致，PX-DEF-001 已移除）
+#   - 记忆化缓存由调用方显式持有（dict），守写库规范顶层无状态；
+#     键比较用 str(x)（与 itertools it_unique 同口径，混合类型注意碰撞）
+#   - 组合为右结合语义：fn_compose(f, g)(x) = f(g(x))
+# ============================================================
+# 部分应用：返回函数，调用时把剩余参数追加到固定参数之后
+def fn_partial(f, a1):
+    var g = fn(x):
+        return f(a1, x)
+    return g
+# 两个参数的偏应用
+def fn_partial2(f, a1, a2):
+    var g = fn(x):
+        return f(a1, a2, x)
+    return g
+# 组合：h(x) = f(g(x))
+def fn_compose(f, g):
+    var h = fn(x):
+        return f(g(x))
+    return h
+# 记忆化单次调用：x 在 cache 中直接返回，否则计算并写入新 cache
+def fn_memo(f, cache, x):
+    var key = str(x)
+    if cache.has(key):
+        return [cache, cache[key]]
+    var r = f(x)
+    var nc = fn_dict_copy(cache)
+    nc.set(key, r)
+    return [nc, r]
+# 返回记忆化包装函数（缓存可由外部持有/重置）
+def fn_memo_make(f, cache):
+    var g = fn(x):
+        var key = str(x)
+        if cache.has(key):
+            return [cache, cache[key]]
+        var r = f(x)
+        cache.set(key, r)
+        return [cache, r]
+    return g
+# 谓词取反
+def fn_negate(pred):
+    var g = fn(x):
+        return not pred(x)
+    return g
+# 内部：dict 复制
+def fn_dict_copy(d):
+    var out = {}
+    var keys = d.keys()
+    var i = 0
+    while i < len(keys):
+        out.set(keys[i], d[keys[i]])
+        i += 1
+    return out

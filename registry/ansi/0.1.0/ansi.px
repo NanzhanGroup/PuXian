@@ -1,0 +1,113 @@
+# ============================================================
+# 普贤生态库：registry/ansi —— ANSI 颜色/样式输出
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Rust colored / anstream 心智（0.1.0 子集）：
+#   an_color(s, fg)   → str   前景色（black/red/green/yellow/blue/magenta/cyan/white
+#                             + bright 前缀 bright_red 等）
+#   an_bg(s, bg)      → str   背景色（同色名）
+#   an_style(s, style)→ str   样式：bold/dim/italic/underline/blink/reverse/strike
+#   an_reset()        → str   "\u{1b}[0m"
+#   an_strip(s)       → str   去除全部 ANSI 转义序列（SGR 及其它 CSI）
+# 说明：
+#   - 转义序列用 \u{1b}[...m 形式（PuXian 不支持 \x / 八进制转义）
+#   - an_strip 按 rune 扫描：遇 ESC 后若接 '[' 则跳到 CSI 终结字节（A-Z/a-z），
+#     否则仅跳过 ESC+1（两字节序列子集）
+#   - 不探测 tty：是否染色由调用方决定（log/cli 增强用）
+# ============================================================
+const AN_ESC = "\u{1b}["
+const AN_RESET = "\u{1b}[0m"
+# 色名 → SGR 码（前景）
+def an_fg_code(name):
+    if name == "black":
+        return 30
+    if name == "red":
+        return 31
+    if name == "green":
+        return 32
+    if name == "yellow":
+        return 33
+    if name == "blue":
+        return 34
+    if name == "magenta":
+        return 35
+    if name == "cyan":
+        return 36
+    if name == "white":
+        return 37
+    if name == "bright_black":
+        return 90
+    if name == "bright_red":
+        return 91
+    if name == "bright_green":
+        return 92
+    if name == "bright_yellow":
+        return 93
+    if name == "bright_blue":
+        return 94
+    if name == "bright_magenta":
+        return 95
+    if name == "bright_cyan":
+        return 96
+    if name == "bright_white":
+        return 97
+    return -1
+# 样式名 → SGR 码
+def an_style_code(name):
+    if name == "bold":
+        return 1
+    if name == "dim":
+        return 2
+    if name == "italic":
+        return 3
+    if name == "underline":
+        return 4
+    if name == "blink":
+        return 5
+    if name == "reverse":
+        return 7
+    if name == "strike":
+        return 9
+    return -1
+def an_color(s, fg):
+    var code = an_fg_code(fg)
+    if code < 0:
+        return s
+    return AN_ESC + str(code) + "m" + s + AN_RESET
+def an_bg(s, bg):
+    var code = an_fg_code(bg)
+    if code < 0:
+        return s
+    return AN_ESC + str(code + 10) + "m" + s + AN_RESET
+def an_style(s, style):
+    var code = an_style_code(style)
+    if code < 0:
+        return s
+    return AN_ESC + str(code) + "m" + s + AN_RESET
+def an_reset():
+    return AN_RESET
+# 判断字符是否为 ASCII 字母（CSI 终结字节）
+def an_is_letter(c):
+    var o = ord(c)
+    return (o >= 65 and o <= 90) or (o >= 97 and o <= 122)
+# 去除 ANSI 转义序列
+def an_strip(s):
+    var out = ""
+    var i = 0
+    var n = len(s)
+    while i < n:
+        var c = s[i]
+        if c == "\u{1b}":
+            if i + 1 < n and s[i + 1] == "[":
+                # CSI：跳到终结字节（A-Z/a-z）
+                i = i + 2
+                while i < n and not an_is_letter(s[i]):
+                    i += 1
+                i = i + 1
+            else:
+                # 两字节序列（ESC X）
+                i = i + 2
+        else:
+            out = out + c
+            i += 1
+    return out

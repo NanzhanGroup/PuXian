@@ -23,10 +23,13 @@ let MODULES_DIR = ".px_modules"
 def pxp_is_url(s):
     return starts_with(s, "http://") or starts_with(s, "https://")
 def pxp_rm_rf(path):
-    # list_dir 对文件报错（PuXian 无法 try-catch）→ 用 os_spawn 调 rm -rf（包管理器场景可接受）
+    # M187：改用**同步**的 `os_remove_all`（缺陷 209）。原实现 `os_spawn("rm", ["-rf", ...])`
+    #   **不等待子进程** ⇒ 与紧随其后的 `mkdir` / 写文件**竞态**：多文件包重装时，
+    #   后台的 `rm -rf` 会把刚写好的 `.px_modules/<pkg>/` 整棵删掉（实测目录消失）。
+    #   `os_remove_all` 同时支持「文件 / 目录树」（自带防删根）⇒ 也不再需要 list_dir 探类型。
     if not exists(path):
         return
-    os_spawn("rm", ["-rf", path])
+    os_remove_all(path)
 # ---- px.toml 解析/序列化（兼容 M9 手写 TOML 风格）----
 def pxp_parse_manifest(src):
     let lines = split(src, "\n")
@@ -89,7 +92,55 @@ def pxp_read_lock(dir):
 def pxp_write_lock(dir, pkg_name, pkg_version, entries):
     let obj = {"format": 1, "package": {"name": pkg_name, "version": pkg_version}, "deps": entries}
     write_file(dir + "/" + LOCK_FILE, json_stringify(obj))
-# ---- 安装单个 registry 依赖（semver 选版本 + 复制 + 哈希）----
+# ---- M187：多文件包支持（registry 规范扩展：`<name>/<ver>/` 下的 .px 随包分发） ----
+#   动机：单文件上限（<500 行/文件）是**官方写库规范**，而 registry 结构原先只认
+#   `<name>.px` 一个文件 ⇒ 官方规范自己跟 registry 分发形态冲突。
+#   约定（M187 起）：包目录里的**全部 `.px`** 随包分发；入口恒为 `<name>.px`
+#   （`.px_modules/<name>/<name>.px` ⇒ `import <name>` 不变；包内相对 import 原样保留）。
+#   digest 兼容：单文件包 = 入口 sha256（与 M45 lock **逐字节兼容**）；
+#   多文件包 = 各「文件名:内容」串接后 sha256（旧格式下不存在多文件包 ⇒ 无历史 lock 受影响）。
+def pxp_pkg_files(pkg_dir, name):
+    let r = list_dir_opt(pkg_dir)
+    if r.is_err():
+        return []
+    let entries = r.unwrap()
+    let rest = []
+    var has_entry = false
+    var i = 0
+    while i < len(entries):
+        let e = entries[i]
+        if ends_with(e, ".px"):
+            if e == name + ".px":
+                has_entry = true
+            else:
+                rest.append(e)
+        i += 1
+    if not has_entry:
+        return []
+    rest = sorted(rest)
+    let out = [name + ".px"]
+    var j = 0
+    while j < len(rest):
+        out.append(rest[j])
+        j += 1
+    return out
+def pxp_digest_pkg(pkg_dir, files):
+    if len(files) == 1:
+        return sha256(read_file(pkg_dir + "/" + files[0]))
+    var acc = ""
+    var i = 0
+    while i < len(files):
+        acc += files[i] + ":" + read_file(pkg_dir + "/" + files[i]) + "\n"
+        i += 1
+    return sha256(acc)
+def pxp_copy_pkg(pkg_dir, files, dst_dir):
+    if exists(dst_dir):
+        pxp_rm_rf(dst_dir)
+    mkdir(dst_dir)
+    var i = 0
+    while i < len(files):
+        write_file(dst_dir + "/" + files[i], read_file(pkg_dir + "/" + files[i]))
+        i += 1
 def pxp_install_registry(name, spec, registry, modules_dir):
     let ver_dir = registry + "/" + name
     if not exists(ver_dir):
@@ -104,26 +155,33 @@ def pxp_install_registry(name, spec, registry, modules_dir):
         i += 1
     let best = sv_best(versions, spec)
     if best == null:
-        print("pxpkg 错误: 找不到满足 " + name + "@" + spec + " 的版本（registry: " + registry + "）")
+        print("pxpkg 错误: 找不到满足 " + name + "@" + spec + " 的版本（registry: " + ver_dir + "）")
         exit(1)
-    let src_file = ver_dir + "/" + best + "/" + name + ".px"
-    if not exists(src_file):
+    let pkg_dir = ver_dir + "/" + best
+    let files = pxp_pkg_files(pkg_dir, name)
+    if len(files) == 0:
         print("pxpkg 错误: registry 包不完整（缺 " + name + "/" + best + "/" + name + ".px）")
         exit(1)
-    let content = read_file(src_file)
-    let digest = sha256(content)
+    let digest = pxp_digest_pkg(pkg_dir, files)
     let dst_dir = modules_dir + "/" + name
-    if not exists(dst_dir):
-        mkdir(dst_dir)
-    write_file(dst_dir + "/" + name + ".px", content)
-    print("  安装 " + name + " " + best + " <- " + ver_dir)
+    pxp_copy_pkg(pkg_dir, files, dst_dir)
+    print("  安装 " + name + " " + best + " <- " + ver_dir + "（" + str(len(files)) + " 个 .px）")
     return {"version": best, "sha256": digest, "source": ver_dir}
-# ---- 安装单个本地路径依赖 ----
+# ---- 安装单个本地路径依赖（文件或目录；目录 = 多文件包）----
 def pxp_install_path(name, path, modules_dir):
+    let dst_dir = modules_dir + "/" + name
+    if is_dir(path):
+        let files = pxp_pkg_files(path, name)
+        if len(files) == 0:
+            print("pxpkg 错误: 本地包目录缺入口 " + path + "/" + name + ".px")
+            exit(1)
+        let digest_dir = pxp_digest_pkg(path, files)
+        pxp_copy_pkg(path, files, dst_dir)
+        print("  安装 " + name + " <- " + path + "（" + str(len(files)) + " 个 .px）")
+        return {"version": "0.0.0", "sha256": digest_dir, "source": path}
     let src_file = path
     let content = read_file(src_file)
     let digest = sha256(content)
-    let dst_dir = modules_dir + "/" + name
     if not exists(dst_dir):
         mkdir(dst_dir)
     write_file(dst_dir + "/" + name + ".px", content)
@@ -190,12 +248,13 @@ def pxp_install(dir, locked):
             if kind == "range" and not sv_satisfies(lock_dep["version"], spec):
                 print("pxpkg 错误: lock 版本 " + lock_dep["version"] + " 不满足 " + name + "=" + spec)
                 exit(1)
-            # sha256 校验已安装内容
-            let installed_file = modules_dir + "/" + name + "/" + name + ".px"
-            if not exists(installed_file):
+            # sha256 校验已安装内容（M187：单文件包=入口哈希、多文件包=全包串接哈希，同一函数）
+            let inst_dir = modules_dir + "/" + name
+            let inst_files = pxp_pkg_files(inst_dir, name)
+            if len(inst_files) == 0:
                 print("pxpkg 错误: " + name + " 未安装（--locked 拒绝）")
                 exit(1)
-            let actual = sha256(read_file(installed_file))
+            let actual = pxp_digest_pkg(inst_dir, inst_files)
             if actual != lock_dep["sha256"]:
                 let em1 = "pxpkg 错误: " + name + " 内容被篡改（sha256 不符，lock=" + lock_dep["sha256"]
                 let em2 = " 实际=" + actual + "）"

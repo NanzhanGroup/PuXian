@@ -1,0 +1,64 @@
+# ============================================================
+# 普贤生态库：registry/rate —— 令牌桶限流
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Rust governor / golang.org/x/time/rate 心智（0.1.0 无状态子集）：
+#   rt_new(capacity, rate)            → dict   新建满桶
+#   rt_allow(bucket, now)             → [新桶, bool]     消耗 1 令牌（不足拒绝）
+#   rt_allow_n(bucket, n, now)        → [新桶, bool]     消耗 n 令牌
+#   rt_tokens(bucket, now)            → [新桶, int]      当前令牌数（先补满到 now）
+# 状态表示：dict {cap:int, rate:int(每秒令牌数), tokens:int, last:int(秒时间戳)}
+# 语义：
+#   - 令牌按 (now - last) * rate 补给，上限 cap（初始满桶，允许突发）
+#   - now 为 Unix 秒（可用 now_sec()）；tokens 以整数记（子集）
+#   - 纯函数：所有操作返回新桶状态，不改传入 dict（写库规范：顶层无状态）
+#   - 并发场景由调用方持有桶状态（chan + mutex 需编译模式，见 PX-DEF-006）
+# ============================================================
+# 新建满桶
+def rt_new(capacity, rate):
+    var b = {}
+    b.set("cap", capacity)
+    b.set("rate", rate)
+    b.set("tokens", capacity)
+    b.set("last", 0)
+    return b
+# 内部：从 dict 复制新桶（纯函数）
+def rt_copy(b):
+    var nb = {}
+    nb.set("cap", b["cap"])
+    nb.set("rate", b["rate"])
+    nb.set("tokens", b["tokens"])
+    nb.set("last", b["last"])
+    return nb
+# 补给到 now（返回 [新桶, 补后令牌数]）
+def rt_refill(b, now):
+    var nb = rt_copy(b)
+    if now < nb["last"]:
+        return [nb, nb["tokens"]]
+    var delta = now - nb["last"]
+    if delta >= 1:
+        var add = delta * nb["rate"]
+        var t = nb["tokens"] + add
+        if t > nb["cap"]:
+            t = nb["cap"]
+        nb["tokens"] = t
+        nb["last"] = now
+    return [nb, nb["tokens"]]
+# 查询当前令牌数（先补给）
+def rt_tokens(b, now):
+    var nb = rt_refill(b, now)[0]
+    return [nb, nb["tokens"]]
+# 消耗 1 令牌
+def rt_allow(b, now):
+    return rt_allow_n(b, 1, now)
+# 消耗 n 令牌（不足拒绝；拒绝时不消费）
+def rt_allow_n(b, n, now):
+    if n <= 0:
+        return [rt_copy(b), true]
+    var rf = rt_refill(b, now)
+    var nb = rf[0]
+    var t = rf[1]
+    if t >= n:
+        nb["tokens"] = t - n
+        return [nb, true]
+    return [nb, false]

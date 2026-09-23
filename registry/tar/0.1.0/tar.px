@@ -1,0 +1,175 @@
+# ============================================================
+# 普贤生态库：registry/tar —— tar 归档（uStar 格式，普通文件）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go archive/tar 心智（0.1.0 子集）：
+#   tar_pack(files)   → Ok(bytes)   # files = [{"name","data"}, ...]
+#   tar_unpack(buf)   → Ok([{name, data}, ...]) | Err
+# 说明：
+#   - uStar 格式：512 字节头部 × N + 数据（512 补齐）+ 512×2 零结束块
+#   - 仅普通文件（typeflag='0'）；name 写入 UTF-8 字节（<100 字节）
+#   - mode=0644 / mtime=0；校验和（chksum）按规范计算并校验
+#   - data 接受 str（UTF-8）；unpack 返回 str
+# ============================================================
+
+# 数字 → 八进制 ASCII 字符串（宽度不足补 0）
+def tar_octal(n, width):
+    var out = ""
+    var v = n
+    if v < 0:
+        v = 0
+    while v > 0:
+        out = str(v % 8) + out
+        v = v // 8
+    while len(out) < width - 1:
+        out = "0" + out
+    out = out + "\0"
+    if len(out) > width:
+        return out[0:width]
+    return out
+
+# 八进制 ASCII → 整数（tar 头部 size/mode 等；可能以空格结尾）
+def tar_octal_parse(s):
+    var v = 0
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        if c >= "0" and c <= "7":
+            v = v * 8 + int(c)
+        elif c == "\0" or c == " ":
+            break
+        else:
+            break
+        i += 1
+    return v
+
+# 子串查找（无 index_of native）
+def tar_str_find(s, sub):
+    if len(sub) == 0:
+        return 0
+    var i = 0
+    while i <= len(s) - len(sub):
+        if s[i:i + len(sub)] == sub:
+            return i
+        i += 1
+    return -1
+
+# 构造 N 字节全 0 buffer（bytes(n) 是字符串化，不能用）
+def tar_zero_buf(n):
+    var b = bytes("")
+    var i = 0
+    while i < n:
+        b = bytes_concat(b, bytes("\0"))
+        i += 1
+    return b
+
+# 字符 → 字节值
+def tar_cbyte(c):
+    return bytes_get(bytes(c), 0)
+
+# 把字符串写进 buffer 的 offset（逐字节；超宽截断）
+def tar_write_str(b, offset, s, width):
+    var i = 0
+    while i < width and i < len(s):
+        b = bytes_set(b, offset + i, tar_cbyte(s[i]))
+        i += 1
+    return b
+
+# 数字字段写入（八进制）
+def tar_write_octal(b, offset, n, width):
+    var s = tar_octal(n, width)
+    var i = 0
+    while i < width and i < len(s):
+        b = bytes_set(b, offset + i, tar_cbyte(s[i]))
+        i += 1
+    return b
+
+# 计算 header 校验和（chksum 字段按 8 空格计）
+def tar_checksum(h):
+    var sum = 0
+    var i = 0
+    while i < 512:
+        var v = bytes_get(h, i)
+        if i >= 148 and i < 156:
+            v = 32
+        sum += v
+        i += 1
+    return sum
+
+# 构造一个文件头（name, size）→ 512 字节
+def tar_header(name, size, typeflag):
+    var h = tar_zero_buf(512)
+    h = tar_write_str(h, 0, name, 100)
+    h = tar_write_octal(h, 100, 420, 8)          # mode 0644
+    h = tar_write_octal(h, 108, 0, 8)            # uid
+    h = tar_write_octal(h, 116, 0, 8)            # gid
+    h = tar_write_octal(h, 124, size, 12)        # size
+    h = tar_write_octal(h, 136, 0, 12)           # mtime
+    h = tar_write_octal(h, 148, 0, 8)            # chksum 占位
+    h = bytes_set(h, 156, bytes_get(bytes(typeflag), 0))
+    h = tar_write_str(h, 257, "ustar", 6)        # magic
+    h = tar_write_str(h, 263, "00", 2)           # version
+    h = tar_write_str(h, 265, "root", 32)
+    h = tar_write_str(h, 297, "root", 32)
+    var cksum = tar_checksum(h)
+    h = tar_write_octal(h, 148, cksum, 8)
+    return h
+
+# 打包：files = [{"name","data"}]
+def tar_pack(files):
+    var out = bytes("")
+    var i = 0
+    while i < len(files):
+        var f = files[i]
+        var data = f["data"]
+        var datab = bytes("")
+        if type(data) == "bytes":
+            datab = data
+        else:
+            datab = bytes(data)
+        var h = tar_header(f["name"], bytes_len(datab), "0")
+        out = bytes_concat(out, h)
+        out = bytes_concat(out, datab)
+        # 数据补齐 512
+        var pad = (512 - bytes_len(datab) % 512) % 512
+        var k = 0
+        while k < pad:
+            out = bytes_concat(out, bytes("\0"))
+            k += 1
+        i += 1
+    # 结束：两个 512 零块
+    out = bytes_concat(out, tar_zero_buf(1024))
+    return Ok(out)
+
+# 解包 → [{name, data}]
+def tar_unpack(buf):
+    var files = []
+    var off = 0
+    var n = bytes_len(buf)
+    while off + 512 <= n:
+        var h = bytes_slice(buf, off, off + 512)
+        # 全零块 = 结束
+        var all_zero = true
+        var z = 0
+        while z < 512:
+            if bytes_get(h, z) != 0:
+                all_zero = false
+            z += 1
+        if all_zero:
+            break
+        # 校验 magic（6 字节含尾随 NUL，比较前截断）
+        var magic = bytes_to_str(bytes_slice(h, 257, 262))
+        if magic != "ustar":
+            return Err("tar: ustar magic 不符")
+        var name = bytes_to_str(bytes_slice(h, 0, 100))
+        var size = tar_octal_parse(bytes_to_str(bytes_slice(h, 124, 136)))
+        var end = tar_str_find(name, "\0")
+        if end >= 0:
+            name = name[0:end]
+        off += 512
+        var data = bytes_slice(buf, off, off + size)
+        off += size
+        var pad = (512 - size % 512) % 512
+        off += pad
+        files.append({"name": name, "data": bytes_to_str(data)})
+    return Ok(files)

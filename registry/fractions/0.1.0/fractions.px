@@ -1,0 +1,156 @@
+# ============================================================
+# 普贤生态库：registry/fractions —— 精确有理数
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python fractions.Fraction 心智（0.1.0 子集）：
+#   frac(n, d)        → Ok([分子, 分母]) | Err      自动约分、分母正则化
+#   frac_from_str(s)  → Ok([分子, 分母]) | Err      解析 "a/b" 或整数串
+#   frac_add/sub/mul/div(a, b) → Ok([分子, 分母]) | Err
+#   frac_neg(a)       → [分子, 分母]（不可失败）
+#   frac_cmp(a, b)    → -1 / 0 / 1
+#   frac_eq(a, b)     → bool
+#   frac_is_zero(a)   → bool
+#   frac_to_float(a)  → float（分子 / 分母）
+#   frac_to_str(a)    → "a/b"，分母为 1 时 "a"
+#   frac_pow(a, k)    → Ok(...) | Err（支持负指数）
+#   frac_gcd(a, b)    → int（最大公约数，同 math.gcd 符号约定）
+# 表示：list [分子, 分母]，始终约分（gcd=1）、分母为正；0 = [0, 1]。
+# 说明：0.1.0 面向 64 位整数范围（约分/交叉相乘可能溢出时请先缩到 big）；
+#   解析为严格模式（非法字符 → Err，不同于 int() 宽容前缀解析 PX-DEF-002）。
+# ============================================================
+
+# ---- 内部工具 ----
+# 严格整数解析（可选 +/- 前缀；非法 → Err）
+def fr_parse_int(s):
+    var t = s
+    var neg = false
+    if len(t) > 0 and t[0] == "-":
+        neg = true
+        t = t[1:len(t)]
+    elif len(t) > 0 and t[0] == "+":
+        t = t[1:len(t)]
+    if len(t) == 0:
+        return Err("fractions: 空整数")
+    var i = 0
+    while i < len(t):
+        if not (t[i] >= "0" and t[i] <= "9"):
+            return Err("fractions: 非法整数: " + s)
+        i += 1
+    var v = int(t)
+    if neg:
+        v = -v
+    return Ok(v)
+
+def fr_find_slash(s):
+    var i = 0
+    var n = len(s)
+    while i < n:
+        if s[i] == "/":
+            return i
+        i += 1
+    return -1
+
+# 归一化：约分 + 分母转正 + 零值统一
+def frac_make(n, d):
+    if d == 0:
+        return Err("fractions: 分母不能为 0")
+    if n == 0:
+        return Ok([0, 1])
+    if d < 0:
+        n = -n
+        d = -d
+    var g = frac_gcd(n, d)
+    return Ok([n // g, d // g])
+
+# ---- 对外 API ----
+# 构造：frac(1, 2) → Ok([1, 2])；frac(2, 4) → Ok([1, 2])；frac(1, -2) → Ok([-1, 2])
+def frac(n, d):
+    return frac_make(n, d)
+
+def frac_from_str(s):
+    var slash = fr_find_slash(s)
+    if slash < 0:
+        var v = fr_parse_int(s)
+        if v.is_err():
+            return Err("fractions: " + str(v))
+        return frac_make(v.unwrap(), 1)
+    if slash == 0 or slash == len(s) - 1:
+        return Err("fractions: 非法分数: " + s)
+    var n = fr_parse_int(s[0:slash])
+    var d = fr_parse_int(s[slash + 1:len(s)])
+    if n.is_err() or d.is_err():
+        return Err("fractions: 非法分数: " + s)
+    return frac_make(n.unwrap(), d.unwrap())
+
+def frac_add(a, b):
+    return frac_make(a[0] * b[1] + b[0] * a[1], a[1] * b[1])
+
+def frac_sub(a, b):
+    return frac_make(a[0] * b[1] - b[0] * a[1], a[1] * b[1])
+
+def frac_mul(a, b):
+    return frac_make(a[0] * b[0], a[1] * b[1])
+
+def frac_div(a, b):
+    if b[0] == 0:
+        return Err("fractions: 除以零")
+    return frac_make(a[0] * b[1], a[1] * b[0])
+
+def frac_neg(a):
+    return [-a[0], a[1]]
+
+def frac_cmp(a, b):
+    var l = a[0] * b[1]
+    var r = b[0] * a[1]
+    if l < r:
+        return -1
+    if l > r:
+        return 1
+    return 0
+
+def frac_eq(a, b):
+    return a[0] == b[0] and a[1] == b[1]
+
+def frac_is_zero(a):
+    return a[0] == 0
+
+def frac_to_float(a):
+    return a[0] / a[1]
+
+def frac_to_str(a):
+    if a[1] == 1:
+        return str(a[0])
+    return str(a[0]) + "/" + str(a[1])
+
+def frac_pow(a, k):
+    if k == 0:
+        return Ok([1, 1])
+    var neg = k < 0
+    var e = k
+    if neg:
+        e = -e
+    var pn = 1
+    var pd = 1
+    var i = 0
+    while i < e:
+        pn = pn * a[0]
+        pd = pd * a[1]
+        i += 1
+    if neg and pn == 0:
+        return Err("fractions: 0 的负次幂")
+    if neg:
+        return frac_make(pd, pn)
+    return frac_make(pn, pd)
+
+def frac_gcd(a, b):
+    var x = a
+    if x < 0:
+        x = -x
+    var y = b
+    if y < 0:
+        y = -y
+    while y != 0:
+        var t = x % y
+        x = y
+        y = t
+    return x

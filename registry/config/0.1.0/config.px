@@ -1,0 +1,115 @@
+import std.yaml
+# ============================================================
+# 普贤生态库：registry/config —— 配置合并与读取
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go viper 心智（0.1.0 子集）：
+#   cfg_from_yaml(s, defaults?) → Ok(dict) | Err   # 解析 YAML，可与默认值合并
+#   cfg_merge(base, overlay)    → dict             # 递归合并（overlay 覆盖 base）
+#   cfg_get(d, "a.b.c", default) → 值               # 点路径读取
+#   cfg_set(d, "a.b.c", v)                          # 点路径写入（原地改 dict）
+#   cfg_apply_env(d, "APP")     → dict             # 环境变量 APP_<KEY> 覆盖
+# 说明：env 值均为字符串；cfg_apply_env 对 "true/false"、"整数"、"浮点"
+#   做自动类型转换。
+# ============================================================
+
+# 深度合并：overlay 的 dict 键递归合并，非 dict 值直接覆盖。
+def cfg_merge(base, overlay):
+    var out = {}
+    var bk = base.keys()
+    var i = 0
+    while i < len(bk):
+        out.set(bk[i], base[bk[i]])
+        i += 1
+    var ok = overlay.keys()
+    var j = 0
+    while j < len(ok):
+        var k = ok[j]
+        var ov = overlay[k]
+        if type(ov) == "dict" and out.has(k) and type(out[k]) == "dict":
+            out.set(k, cfg_merge(out[k], ov))
+        else:
+            out.set(k, ov)
+        j += 1
+    return out
+
+# 解析 YAML 文本 → Ok(dict) | Err（底层 std.yaml；非 dict 顶层返回 Err）
+def cfg_from_yaml(s, defaults=null):
+    var r = yaml_parse(s)
+    if not r["ok"]:
+        return Err("config: YAML 解析失败: " + str(r["error"]))
+    var v = r["value"]
+    if type(v) != "dict":
+        return Err("config: YAML 顶层必须是映射")
+    if defaults != null:
+        return Ok(cfg_merge(defaults, v))
+    return Ok(v)
+
+# 按点路径读取：cfg_get(d, "a.b.c", 默认值)
+def cfg_get(d, path, default=null):
+    var parts = split(path, ".")
+    var cur = d
+    var i = 0
+    while i < len(parts):
+        var k = parts[i]
+        if type(cur) == "dict" and cur.has(k):
+            cur = cur[k]
+        else:
+            return default
+        i += 1
+    return cur
+
+# 按点路径写入（原地修改 d；中间 dict 不存在则创建）
+def cfg_set(d, path, v):
+    var parts = split(path, ".")
+    var cur = d
+    var i = 0
+    while i < len(parts) - 1:
+        var k = parts[i]
+        if not cur.has(k) or type(cur[k]) != "dict":
+            cur.set(k, {})
+        cur = cur[k]
+        i += 1
+    cur.set(parts[len(parts) - 1], v)
+
+# 环境变量字符串 → 自动类型
+def cfg_cast_env(s):
+    if s == "true":
+        return true
+    if s == "false":
+        return false
+    # 整数
+    if s != "" and s[0] >= "0" and s[0] <= "9" or (starts_with(s, "-") and len(s) > 1):
+        var all_num = true
+        var i = 0
+        while i < len(s):
+            var c = s[i]
+            if not ((c >= "0" and c <= "9") or c == "-" or c == "."):
+                all_num = false
+            i += 1
+        if all_num:
+            if contains(s, "."):
+                return float(s)
+            return int(s)
+    return s
+
+# 用环境变量 <prefix>_<KEY> 覆盖 dict 顶层键（KEY 大写、- 转 _）。
+# 例如 prefix=APP：环境变量 APP_PORT 覆盖 d["port"]。
+def cfg_apply_env(d, prefix):
+    var out = {}
+    var keys = d.keys()
+    var i = 0
+    while i < len(keys):
+        out.set(keys[i], d[keys[i]])
+        i += 1
+    var ek = out.keys()
+    var j = 0
+    while j < len(ek):
+        var k = ek[j]
+        var envname = prefix + "_" + to_upper(k)
+        envname = replace(envname, "-", "_")
+        var ev = env(envname)
+        if ev != null:
+            out.set(k, cfg_cast_env(ev))
+        j += 1
+    return out

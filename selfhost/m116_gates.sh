@@ -485,6 +485,18 @@ run m185_bytes_face bash examples/m185_bytes_face/verify.sh
 #     ② 拒绝侧 4 例 × 三轨 rc≠0 + 词条逐字相同（且解释轨不得泄漏 R1003）；
 #     ③ 负控 A/B/C（解释轨三处退回旧形态；解释轨改动 ⇒ dev 解释器）各自独立判红 + 源逐字节还原。
 run m186_native_passthrough bash examples/m186_native_passthrough/verify.sh
+# ---- M187 门（第 65 轮）· 第三方 registry-px 库**引入官方 registry/** + pxpkg **多文件包** ----
+#   ① 引入：上游（Apache-2.0）52 包 / 58 文件**逐字节照搬**进 `registry/`；来源与许可登记在
+#      `registry/THIRD_PARTY.md`（不改包内一个字节）—— 判据 = 表里每行 sha256/文件数**重算对拍**；
+#   ② pxpkg 多文件包：registry 规范原先只认 `<name>.px`，而官方写库规范要求 <500 行/文件、
+#      超了拆（qrcode 4 / mysql 3 / xlsx 2）⇒ 从 M187 起包目录下全部 `.px` 随包分发，
+#      digest 单文件包保持兼容（= 入口 sha256），多文件包 = 各「文件名:内容」串接 sha256；
+#   判据：① 引入表逐行 sha256/文件数对拍（漂移 0）· ② 52 包 pxpkg 装+`import` 全通（解释轨）
+#   · ③ 抽样 13 包**双轨编译**（含全部多文件包；且**编译日志不得出现「找不到模块」**——
+#   编译轨缺模块是「警告 + 跳过」、rc 仍 0 ⇒ 只看 rc 会假绿）· ④ 多文件包三轨一致 +
+#   `--locked` 能查出**辅助文件**被篡改（修前只查入口）；
+#   负控 A/B/C（篡改包入口 / 篡改登记表 / 删多文件包辅助文件）各自独立判红 + 源逐字节还原。
+run m187_registry_import bash examples/m187_registry_import/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

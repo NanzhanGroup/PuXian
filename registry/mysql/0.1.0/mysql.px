@@ -1,0 +1,325 @@
+# ============================================================
+# 普贤生态库：registry/mysql —— MySQL 客户端驱动
+# ------------------------------------------------------------
+# 纯 .px 实现 MySQL client/server protocol（0.1.0 子集）：
+#   mysql_connect(host, port, user, password[, dbname][, opts]) → Ok(conn dict) | Err
+#   mysql_query(conn, sql)     → Ok(query result dict) | Err
+#   mysql_close(conn)          → Ok(true) | Err
+# 对齐 Go go-sql-driver/mysql 心智（0.1.0 只做文本协议简单查询）：
+#   - 握手：HandshakeV10 → HandshakeResponse41（CLIENT_PROTOCOL_41 +
+#     CLIENT_SECURE_CONNECTION + CLIENT_CONNECT_WITH_DB + CLIENT_PLUGIN_AUTH）
+#   - 认证：mysql_native_password（SHA1(SHA1(pw)) 对拍）与 caching_sha2_password
+#     （fast auth；full auth 需 TLS/RSA，0.1.0 未含 → Err 提示）
+#   - 查询：COM_QUERY (0x03) → OK / ERR / 结果集（列定义 + 行，文本协议）
+#   - 结果形态：{ columns: [{name}], rows: [[值...]] }；NULL → null
+# 依赖 runtime native：tcp_connect_ex / tcp_send_ex / tcp_recv_ex /
+#   sha256 / bytes 族 / int_to_bytes / bytes_to_int / base64_encode
+# 语言缺陷规避与说明：
+#   - **无 sha1 native**（登记 PX-DEF-026）→ 库内自实现 SHA1（纯 .px，NIST FIPS 180-4）
+#   - bytes_to_int endian 参数解释轨失效（PX-DEF-019）→ 只用默认大端
+#   - 字符串方法面窄（PX-DEF-025 同族）→ 自备 my_index_of / my_prefix
+# ============================================================
+
+# ---- 内部：SHA1（语言无 sha1 native，纯 .px 实现 FIPS 180-4）----
+import "sha1.px"
+
+import "proto.px"
+
+# ---- 内部：连接与握手 ----
+# 返回 Ok(conn dict{fd, host, port, user, dbname, seq}) | Err
+def mysql_connect(host, port, user, password, dbname, opts):
+    var timeout_ms = 5000
+    if type(opts) == "dict" and opts.has("timeout_ms"):
+        timeout_ms = opts["timeout_ms"]
+    var c = tcp_connect_ex(host, port, {"timeout_ms": timeout_ms})
+    if not c["ok"]:
+        return Err("mysql: connect " + host + ":" + str(port) + " failed: " + c["err"])
+    var fd = c["fd"]
+    # 等待 HandshakeV10
+    var pkt = my_read_packet(fd)
+    if pkt[3] != "":
+        tcp_close(fd)
+        return Err("mysql: handshake recv: " + pkt[3])
+    var hs = pkt[0]
+    var seq = pkt[1]
+    # protocol version（第 1 字节）应为 10
+    var proto = bytes_get(hs, 0)
+    if proto != 10:
+        tcp_close(fd)
+        return Err("mysql: unsupported protocol " + str(proto))
+    # server version: 以 0 结尾（auth-plugin-data-part-1 前的 \0）；兼容 5.x/8.x
+    var soff = 1
+    var ver = my_cstr_at(hs, soff)
+    soff = ver[1] + 1
+    # connection id (4)
+    soff += 4
+    # auth-plugin-data-part-1 (8)
+    var nonce1 = bytes_slice(hs, soff, soff + 8)
+    soff += 8
+    soff += 1  # filler
+    # capability flags lower 2
+    var cap_low = my_u16_of(hs, soff)
+    soff += 2
+    soff += 1  # charset
+    soff += 2  # status
+    var cap_high = my_u16_of(hs, soff)
+    soff += 2
+    var cap = cap_low | (cap_high << 16)
+    var auth_len = 0
+    if cap & 0x00080000 != 0:
+        auth_len = bytes_get(hs, soff)
+        soff += 1
+    else:
+        soff += 1
+    soff += 10  # reserved
+    var nonce2 = bytes("")
+    # auth-plugin-data-part-2 的存在条件是 CLIENT_SECURE_CONNECTION（非 CONNECT_WITH_DB）
+    if cap & 0x00008000 != 0:
+        var rest = bytes_slice(hs, soff, bytes_len(hs))
+        var i = 0
+        while i < 12 and i < bytes_len(rest) and bytes_get(rest, i) != 0:
+            nonce2 = bytes_concat(nonce2, hex_to_bytes(my_byte_hex(bytes_get(rest, i))))
+            i += 1
+    var nonce = bytes_concat(nonce1, nonce2)
+    # plugin name（若 CLIENT_PLUGIN_AUTH）
+    var plugin = "mysql_native_password"
+    if cap & 0x00080000 != 0:
+        # 顺序：reserved 后 = 12 字节 auth-plugin-data-part-2 + \0 + plugin-name
+        var pi = soff
+        # 跳过 nonce2 终止的 \0（读 nonce2 时已确认 12 字节或 \0 提前结束）
+        var jump = 12
+        if bytes_len(hs) > soff + 12 and bytes_get(hs, soff + 12) == 0:
+            jump = 13
+        var pstart = soff + jump
+        pi = pstart
+        while pi < bytes_len(hs) and bytes_get(hs, pi) != 0:
+            pi += 1
+        if pi < bytes_len(hs) and pi > pstart:
+            plugin = bytes_to_str(bytes_slice(hs, pstart, pi))
+    # 构造 HandshakeResponse41
+    var cap41 = 0x00000200 | 0x00008000 | 0x00000800 | 0x00080000 | 0x00002000 | 0x00000001
+    # CLIENT_PROTOCOL_41 | SECURE_CONNECTION | CONNECT_WITH_DB | PLUGIN_AUTH | TRANSACTIONS
+    var payload = bytes("")
+    # capability flags (4)
+    payload = bytes_concat(payload, my_u32(cap41))
+    # max packet size (4)
+    payload = bytes_concat(payload, my_u32(16777216))
+    # charset: utf8mb4 = 45; 连接用 utf8mb4_general_ci (45)
+    payload = bytes_concat(payload, bytes(chr(45)))
+    # reserved: 23 个 0x00
+    var rz = 0
+    while rz < 23:
+        payload = bytes_concat(payload, bytes(hex_to_bytes("00")))
+        rz += 1
+    # username + \0
+    payload = bytes_concat(payload, bytes(user + chr(0)))
+    # auth response: lenenc 长度 + token
+    var tok = my_auth_token(plugin, password, nonce)
+    if tok[1] != "":
+        tcp_close(fd)
+        return Err(tok[1])
+    var token = tok[0]
+    payload = bytes_concat(payload, bytes(chr(bytes_len(token))))
+    payload = bytes_concat(payload, token)
+    if cap41 & 0x00000800 != 0:
+        payload = bytes_concat(payload, bytes(dbname + chr(0)))
+    payload = bytes_concat(payload, bytes(plugin + chr(0)))
+    var seq2 = seq + 1
+    var r = my_send_packet(fd, seq2, payload)
+    if r.is_err():
+        tcp_close(fd)
+        return Err("mysql: handshake response send: " + str(r.unwrap()))
+    # 认证结果
+    var ap = my_read_packet(fd)
+    if ap[3] != "":
+        tcp_close(fd)
+        return Err("mysql: auth recv: " + ap[3])
+    var authp = ap[0]
+    var aseq = ap[1]
+    var first = bytes_get(authp, 0)
+    if first == 0:
+        # OK —— 认证完成；确保数据库已选择（服务器可能不支持握手时 CONNECT_WITH_DB）
+        return mysql_finish_connect(fd, aseq, host, port, user, dbname, plugin)
+    if first == 255:
+        tcp_close(fd)
+        return Err(my_err_message(authp))
+    if first == 254:
+        # AuthSwitchRequest: 插件名 + nonce；按新插件重算 token 并回发
+        var soff2 = 1
+        var plug = my_cstr_at(authp, soff2)
+        var new_plugin = plug[0]
+        # AuthSwitchRequest 的 nonce 是 20 字节（含尾部 \0 终止符时截断）
+        var nl = bytes_len(authp) - plug[1]
+        if nl > 20:
+            nl = 20
+        var new_nonce = bytes_slice(authp, plug[1], plug[1] + nl)
+        var nz = bytes_len(new_nonce)
+        if nz > 0 and bytes_get(new_nonce, nz - 1) == 0:
+            new_nonce = bytes_slice(new_nonce, 0, nz - 1)
+        var tok2 = my_auth_token(new_plugin, password, new_nonce)
+        if tok2[1] != "":
+            tcp_close(fd)
+            return Err(tok2[1])
+        var rs = my_send_packet(fd, aseq + 1, tok2[0])
+        if rs.is_err():
+            tcp_close(fd)
+            return Err("mysql: auth switch send: " + str(rs.unwrap()))
+        # 继续读认证结果（AuthSwitch 后的响应：OK / ERR / AuthMoreData）
+        var ap2 = my_read_packet(fd)
+        if ap2[3] != "":
+            tcp_close(fd)
+            return Err("mysql: auth switch recv: " + ap2[3])
+        var sp = ap2[0]
+        var sfirst = bytes_get(sp, 0)
+        if sfirst == 0:
+            return mysql_finish_connect(fd, ap2[1], host, port, user, dbname, new_plugin)
+        if sfirst == 255:
+            tcp_close(fd)
+            return Err(my_err_message(sp))
+        if sfirst == 2:
+            var b2 = bytes_get(sp, 1)
+            if b2 == 3:
+                return mysql_finish_connect(fd, ap2[1], host, port, user, dbname, new_plugin)
+            if b2 == 4:
+                tcp_close(fd)
+                return Err("mysql: caching_sha2 full auth required (TLS unsupported in 0.1.0)")
+        tcp_close(fd)
+        return Err("mysql: auth switch unexpected response " + str(sfirst))
+    if first == 2:
+        # AuthMoreData (caching_sha2 fast auth success/fail)
+        var b1 = bytes_get(authp, 1)
+        if b1 == 3:
+            # fast auth 成功
+            return mysql_finish_connect(fd, aseq, host, port, user, dbname, plugin)
+        if b1 == 4:
+            tcp_close(fd)
+            return Err("mysql: caching_sha2 full auth required (TLS unsupported in 0.1.0)")
+        tcp_close(fd)
+        return Err("mysql: auth more data unexpected")
+    tcp_close(fd)
+    return Err("mysql: unexpected auth response " + str(first))
+
+# 读 C 字符串（\0 结尾）→ [str, 终止后的偏移]
+def my_cstr_at(b, off):
+    var i = off
+    while i < bytes_len(b):
+        if bytes_get(b, i) == 0:
+            return [bytes_to_str(bytes_slice(b, off, i)), i + 1]
+        i += 1
+    return [bytes_to_str(bytes_slice(b, off, bytes_len(b))), bytes_len(b)]
+
+# ---- 内部：查询 ----
+# COM_QUERY 后：OK / ERR / 结果集（列数 → 列定义* → EOF → 行* → EOF）
+def mysql_read_result(fd):
+    var pkt = my_read_packet(fd)
+    if pkt[3] != "":
+        return Err("mysql: result recv: " + pkt[3])
+    var payload = pkt[0]
+    var first = bytes_get(payload, 0)
+    if first == 0:
+        var ok = my_ok_result(payload)
+        return Ok({"columns": [], "rows": [], "affected": ok["affected"],
+                   "last_id": ok["last_id"], "status": ok["status"]})
+    if first == 255:
+        return Err(my_err_message(payload))
+    if first == 251:
+        return Err("mysql: local infile unsupported")
+    # 否则是列数（lenenc-int）
+    var colcnt = my_lenenc_int(payload, 0)
+    if colcnt[2] != "":
+        return Err("mysql: column count: " + colcnt[2])
+    var ncols = colcnt[0]
+    var columns = []
+    var ci = 0
+    while ci < ncols:
+        var cp = my_read_packet(fd)
+        if cp[3] != "":
+            return Err("mysql: column def recv: " + cp[3])
+        # 列定义：catalog/schema/table/org_table/name/org_name 各 lenenc-str
+        var defp = cp[0]
+        var off = 0
+        var v = my_lenenc_str(defp, off)
+        off = v[1]
+        v = my_lenenc_str(defp, off)
+        off = v[1]
+        v = my_lenenc_str(defp, off)
+        off = v[1]
+        v = my_lenenc_str(defp, off)
+        off = v[1]
+        var name = my_lenenc_str(defp, off)[0]
+        columns.append({"name": name})
+        ci += 1
+    # 列定义后的 EOF
+    var ep = my_read_packet(fd)
+    if ep[3] != "":
+        return Err("mysql: col eof recv: " + ep[3])
+    # 行
+    var rows = []
+    while true:
+        var rp = my_read_packet(fd)
+        if rp[3] != "":
+            return Err("mysql: row recv: " + rp[3])
+        var rpay = rp[0]
+        var rfirst = bytes_get(rpay, 0)
+        if my_is_eof(rpay):
+            break
+        if rfirst == 255:
+            return Err(my_err_message(rpay))
+        # 行：每个字段 lenenc-str 或 NULL
+        var off2 = 0
+        var row = []
+        var fi = 0
+        while fi < ncols:
+            var r = my_lenenc_str(rpay, off2)
+            if r[2] != "":
+                return Err("mysql: row field: " + r[2])
+            if r[0] == null:
+                row.append(null)
+            else:
+                row.append(r[0])
+            off2 = r[1]
+            fi += 1
+        rows.append(row)
+    return Ok({"columns": columns, "rows": rows, "affected": 0, "last_id": 0, "status": 0})
+
+# 认证成功后收口：发送 USE dbname（若提供），保证数据库已选择
+def mysql_finish_connect(fd, aseq, host, port, user, dbname, plugin):
+    if dbname != "":
+        var payload = bytes_concat(bytes(chr(3)), bytes("USE " + dbname))
+        var r = my_send_packet(fd, 0, payload)
+        if r.is_err():
+            tcp_close(fd)
+            return Err("mysql: USE send: " + str(r.unwrap()))
+        var ur = my_read_packet(fd)
+        if ur[3] != "":
+            tcp_close(fd)
+            return Err("mysql: USE recv: " + ur[3])
+        var up = ur[0]
+        var ufirst = bytes_get(up, 0)
+        if ufirst == 255:
+            tcp_close(fd)
+            return Err(my_err_message(up))
+        if ufirst != 0:
+            tcp_close(fd)
+            return Err("mysql: USE unexpected response " + str(ufirst))
+    return Ok({"fd": fd, "seq": aseq, "host": host, "port": port,
+               "user": user, "dbname": dbname, "plugin": plugin})
+
+def mysql_query(conn, sql):
+    var payload = bytes_concat(bytes(chr(3)), bytes(sql))
+    # MySQL 协议：每个新命令序列号从 0 开始（不回接上次会话 seq）
+    var r = my_send_packet(conn["fd"], 0, payload)
+    if r.is_err():
+        return Err("mysql: query send: " + str(r.unwrap()))
+    return mysql_read_result(conn["fd"])
+
+# ---- 公开 API：关闭 ----
+def mysql_close(conn):
+    # COM_QUIT (0x01)
+    # COM_QUIT 尽力而为，忽略发送错误
+    var rq = my_send_packet(conn["fd"], 0, bytes(chr(1)))
+    if rq.is_err():
+        tcp_close(conn["fd"])
+        return Ok(true)
+    tcp_close(conn["fd"])
+    return Ok(true)

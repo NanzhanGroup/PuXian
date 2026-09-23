@@ -1,0 +1,110 @@
+# ============================================================
+# 普贤生态库：registry/faker —— 假数据生成（演示/测试夹具）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态；fa_uuid 除外，依赖 os_random_hex），
+# 编译（px build）与解释（px run）双模式一致。
+# 对齐 Python Faker 心智（0.1.0 中文子集）：
+#   确定性 API：每个函数吃入种子 int，返回 [新种子, 值]；
+#   fa_rand(seed) / fa_range(seed, lo, hi) / fa_digits(seed, n)
+#   fa_name(seed)    → [新种子, "姓 名"]
+#   fa_surname(seed) / fa_given(seed)
+#   fa_phone(seed)   → [新种子, "1xx-xxxx-xxxx"]（第二位 3-9）
+#   fa_email(seed)   → [新种子, "name@example.com"]
+#   fa_sentence(seed, n) → [新种子, n 个词组成的句子]
+#   随机 API（不可复现，仅格式确定）：
+#   fa_uuid()        → v4 UUID 串（os_random_hex）
+#   fa_uuid_from(hex16) → v4 UUID 串（给定 16 字节 hex，测试用）
+# 说明：
+#   - PRNG 用 splitmix64 风格（64 位乘加 + 2^64 回绕，两模式一致）
+#   - 词表较小（写库规范 <500 行）；性别不区分；域名固定 example.com
+# ============================================================
+# ---- PRNG（splitmix64 风格；i64 乘法/加法按 2^64 回绕） ----
+def fa_rand(seed):
+    var z = seed + 0x9E3779B97F4A7C15
+    var m1 = z ^ (z >> 30)
+    z = m1 * 0xBF58476D1CE4E5B9
+    var m2 = z ^ (z >> 27)
+    z = m2 * 0x94D049BB133111EB
+    z = z ^ (z >> 31)
+    return [z, z]
+# [lo, hi) 区间随机
+def fa_range(seed, lo, hi):
+    var r = fa_rand(seed)
+    if hi <= lo:
+        return [r[0], lo]
+    var span = hi - lo
+    var v = r[1] % span
+    if v < 0:
+        v = v + span
+    return [r[0], lo + v]
+# n 位数字串
+def fa_digits(seed, n):
+    var s = seed
+    var out = ""
+    var i = 0
+    while i < n:
+        var r = fa_range(s, 0, 10)
+        s = r[0]
+        out = out + chr(48 + r[1])
+        i += 1
+    return [s, out]
+# ---- 词表 ----
+const FA_SURNAMES = ["王", "李", "张", "刘", "陈", "杨", "赵", "黄",
+    "周", "吴", "徐", "孙"]
+const FA_GIVENS = ["伟", "芳", "娜", "敏", "静", "磊", "军", "洋", "勇", "艳",
+    "杰", "涛", "明", "超", "秀英", "霞", "平", "刚"]
+const FA_WORDS = ["普贤", "生态", "库", "服务", "接口", "系统", "测试", "数据",
+    "配置", "任务", "队列", "缓存", "网关", "日志", "监控",
+    "告警", "认证", "会话"]
+# ---- 人名 ----
+def fa_surname(seed):
+    var r = fa_range(seed, 0, 12)
+    return [r[0], FA_SURNAMES[r[1]]]
+def fa_given(seed):
+    var r = fa_range(seed, 0, 18)
+    return [r[0], FA_GIVENS[r[1]]]
+def fa_name(seed):
+    var rs = fa_surname(seed)
+    var rg = fa_given(rs[0])
+    return [rg[0], rs[1] + " " + rg[1]]
+# ---- 手机号 / 邮箱 ----
+# 1xx-xxxx-xxxx（第二位 3-9）
+def fa_phone(seed):
+    var p = fa_range(seed, 3, 10)
+    var d0 = fa_digits(p[0], 1)
+    var out = "1" + chr(48 + p[1]) + d0[1]
+    var d1 = fa_digits(d0[0], 4)
+    var d2 = fa_digits(d1[0], 4)
+    return [d2[0], out + "-" + d1[1] + "-" + d2[1]]
+def fa_email(seed):
+    var rn = fa_range(seed, 0, 12)
+    var name = FA_SURNAMES[rn[1]]
+    var rg = fa_range(rn[0], 0, 18)
+    name = name + FA_GIVENS[rg[1]]
+    var d = fa_digits(rg[0], 2)
+    return [d[0], name + d[1] + "@example.com"]
+# ---- 句子（占位文本） ----
+def fa_sentence(seed, n):
+    var s = seed
+    var out = ""
+    var i = 0
+    while i < n:
+        var r = fa_range(s, 0, 18)
+        s = r[0]
+        if i > 0:
+            out = out + " "
+        out = out + FA_WORDS[r[1]]
+        i += 1
+    return [s, out]
+# ---- UUID v4 ----
+def fa_uuid():
+    var h = os_random_hex(16)
+    return fa_uuid_from(h)
+# 给定 16 字节 hex（32 字符）构造 v4：hex 第 13 位（下标 12）设版本 4，
+# 第 17 位（下标 16）设变体 8/9/a/b（这里统一置 8），再插入 4 个横线。
+def fa_uuid_from(hex16):
+    if len(hex16) != 32:
+        return ""
+    var v = hex16[0:12] + "4" + hex16[13:32]
+    var vb = v[0:16] + "8" + v[17:32]
+    return vb[0:8] + "-" + vb[8:12] + "-" + vb[12:16] + "-" + vb[16:20] + "-" + vb[20:32]

@@ -1,0 +1,83 @@
+# ============================================================
+# 普贤生态库：registry/log —— 分级日志
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go log 默认格式 + log/slog 级别心智（0.1.0 子集）：
+#   var lg = log_new("app", {"level": "info"})   # level: debug|info|warn|error
+#   log_info(lg, "msg") / log_debug / log_warn / log_error
+#   log_info(lg, "msg", {"k": v})                # 结构化字段
+#   log_set(lg, "debug")                         # 返回新 logger（不可变风格）
+#   log_enabled(lg, "warn")                      # 级别过滤查询
+# 输出（对齐 Go log 默认 flags）：
+#   2026-09-20 12:30:00 [INFO] app: msg k=v
+# 说明：库不持有全局状态（写库规范）；级别随 logger dict 显式传递。
+#   log_emit 返回字符串（不打印），供测试/定制输出复用。
+# ============================================================
+
+# 创建 logger：{name, level}。opts 可选 {"level": "info"|"debug"|...}
+def log_new(name, opts=null):
+    var level = "info"
+    if opts != null and opts.has("level"):
+        level = opts["level"]
+    return {"name": name, "level": level}
+
+# 级别排序值：debug < info < warn < error
+def log_level_value(level):
+    if level == "debug":
+        return 0
+    if level == "info":
+        return 1
+    if level == "warn":
+        return 2
+    if level == "error":
+        return 3
+    return 1
+
+# 该级别是否会被 logger 输出
+def log_enabled(lg, level):
+    return log_level_value(level) >= log_level_value(lg["level"])
+
+# 返回级别已调整的新 logger（原 logger 不变）
+def log_set(lg, level):
+    return {"name": lg["name"], "level": level}
+
+# 构造日志行（不被过滤时）。fields 为 dict。
+def log_emit(lg, level, msg, fields=null):
+    if not log_enabled(lg, level):
+        return ""
+    var tag = "INFO"
+    if level == "debug":
+        tag = "DEBUG"
+    elif level == "warn":
+        tag = "WARN"
+    elif level == "error":
+        tag = "ERROR"
+    var line = now() + " [" + tag + "] " + lg["name"] + ": " + msg
+    if fields != null:
+        var keys = fields.keys()
+        var i = 0
+        while i < len(keys):
+            line = line + " " + keys[i] + "=" + str(fields[keys[i]])
+            i += 1
+    return line
+
+# ---- 四个级别入口 ----
+def log_debug(lg, msg, fields=null):
+    var line = log_emit(lg, "debug", msg, fields)
+    if line != "":
+        print(line)
+
+def log_info(lg, msg, fields=null):
+    var line = log_emit(lg, "info", msg, fields)
+    if line != "":
+        print(line)
+
+def log_warn(lg, msg, fields=null):
+    var line = log_emit(lg, "warn", msg, fields)
+    if line != "":
+        print(line)
+
+def log_error(lg, msg, fields=null):
+    var line = log_emit(lg, "error", msg, fields)
+    if line != "":
+        print(line)

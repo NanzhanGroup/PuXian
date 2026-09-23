@@ -1,0 +1,112 @@
+# ============================================================
+# 普贤生态库：registry/metrics —— Prometheus 指标（文本格式）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go prometheus/client_golang 心智（0.1.0 子集）：
+#   var reg = m_registry()
+#   m_counter(reg, "http_requests_total", "HTTP requests")
+#   m_inc(reg, "http_requests_total", 1, {"path": "/api"})
+#   m_gauge(reg, "temp_c", "temperature")
+#   m_set(reg, "temp_c", 36.5)
+#   print(m_render(reg))
+# 输出：Prometheus 文本格式（# HELP / # TYPE / 样本行）。
+# 说明：
+#   - 指标注册表由调用方持有（写库规范：无全局状态）
+#   - labels 为 dict{str:str}；渲染时键排序（确定性）
+#   - 0.1.0 支持 counter/gauge + label；不含 histogram/histogram_quantile
+# ============================================================
+
+def m_registry():
+    return {}
+
+# 注册 counter
+def m_counter(reg, name, help):
+    reg.set(name, {"type": "counter", "help": help, "entries": {}})
+
+# 注册 gauge
+def m_gauge(reg, name, help):
+    reg.set(name, {"type": "gauge", "help": help, "entries": {}})
+
+# labels 序列化为稳定键 "k=v,k2=v2"（键排序）；无 labels → ""
+def m_label_key(labels):
+    if labels == null:
+        return ""
+    var ks = labels.keys()
+    var sorted_ks = sorted(ks)
+    var out = ""
+    var i = 0
+    while i < len(sorted_ks):
+        if i > 0:
+            out = out + ","
+        out = out + sorted_ks[i] + "=" + m_label_escape(str(labels[sorted_ks[i]]))
+        i += 1
+    return out
+
+# 标签值转义：\ 和 " 
+def m_label_escape(v):
+    var out = ""
+    var i = 0
+    while i < len(v):
+        var c = v[i]
+        if c == "\\":
+            out = out + "\\\\"
+        elif c == "\"":
+            out = out + "\\\""
+        elif c == "\n":
+            out = out + "\\n"
+        else:
+            out = out + c
+        i += 1
+    return out
+
+def m_inc(reg, name, value=1, labels=null):
+    if not reg.has(name):
+        return Err("metrics: 未注册指标 " + name)
+    var metric = reg[name]
+    var lk = m_label_key(labels)
+    var cur = metric["entries"].get(lk, 0)
+    metric["entries"].set(lk, cur + m_num(value))
+    return Ok(null)
+
+def m_set(reg, name, value, labels=null):
+    if not reg.has(name):
+        return Err("metrics: 未注册指标 " + name)
+    var metric = reg[name]
+    var lk = m_label_key(labels)
+    metric["entries"].set(lk, m_num(value))
+    return Ok(null)
+
+def m_num(v):
+    if type(v) == "int":
+        return v + 0.0
+    return v
+
+# 渲染 Prometheus 文本
+def m_render(reg):
+    var out = ""
+    var names = reg.keys()
+    var ni = 0
+    while ni < len(names):
+        var name = names[ni]
+        var metric = reg[name]
+        out = out + "# HELP " + name + " " + metric["help"] + "\n"
+        out = out + "# TYPE " + name + " " + metric["type"] + "\n"
+        var entries = metric["entries"]
+        var lks = entries.keys()
+        var si = 0
+        while si < len(lks):
+            var lk = lks[si]
+            if lk == "":
+                out = out + name + " " + m_float(entries[lk]) + "\n"
+            else:
+                out = out + name + "{" + lk + "} " + m_float(entries[lk]) + "\n"
+            si += 1
+        ni += 1
+    return out
+
+# 浮点渲染：整数显示 .0（与 Prometheus 惯例一致）
+def m_float(v):
+    var s = str(v)
+    if not contains(s, "."):
+        s = s + ".0"
+    return s

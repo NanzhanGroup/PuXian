@@ -1,0 +1,80 @@
+# ============================================================
+# 普贤生态库：registry/idcard —— 身份证校验（GB 11643-1999）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+#   idcard_validate(id) → Ok({province, birth, gender}) | Err(msg)
+# 规则（18 位）：
+#   6 位地区码（首位非 0） + 8 位生日（YYYYMMDD，闰年校验）
+#   + 3 位顺序码（可辨识性别：第 17 位奇男偶女） + 1 位校验码
+#   校验码加权因子 [7,9,10,5,8,4,2,1,6,3,7,9,10,5,8,4,2] 模 11 映射 10X98765432
+# 0.1.0 不做：15 位旧号、地区码枚举表（仅校验首位非 0）
+# ============================================================
+
+const IDC_W = [7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2]
+const IDC_C = "10X98765432"
+
+# 闰年
+def idc_leap(y):
+    if y % 400 == 0:
+        return true
+    if y % 100 == 0:
+        return false
+    return y % 4 == 0
+
+# 日期合法（YYYYMMDD）
+def idc_valid_date(s):
+    if len(s) != 8:
+        return false
+    var i = 0
+    while i < 8:
+        if s[i] < "0" or s[i] > "9":
+            return false
+        i += 1
+    var y = int(s[0:4])
+    var m = int(s[4:6])
+    var d = int(s[6:8])
+    if m < 1 or m > 12:
+        return false
+    var dim = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    if m == 2 and idc_leap(y):
+        dim[1] = 29
+    return d >= 1 and d <= dim[m - 1]
+
+# 18 位校验：计算校验码字符
+def idc_checksum(id17):
+    var sum = 0
+    var i = 0
+    while i < 17:
+        var digit = int(id17[i])
+        sum = sum + digit * IDC_W[i]
+        i += 1
+    return IDC_C[sum % 11]
+
+def idcard_validate(id):
+    var t = to_upper(id)
+    if len(t) != 18:
+        return Err("idcard: 长度须 18 位")
+    var i = 0
+    while i < 17:
+        if t[i] < "0" or t[i] > "9":
+            return Err("idcard: 前 17 位须数字")
+        i += 1
+    var last = t[17]
+    if not ((last >= "0" and last <= "9") or last == "X"):
+        return Err("idcard: 校验位须数字或 X")
+    if t[0] == "0":
+        return Err("idcard: 地区码首位非 0")
+    var birthday = t[6:14]
+    if not idc_valid_date(birthday):
+        return Err("idcard: 生日无效")
+    var expect = idc_checksum(t[0:17])
+    if t[17] != expect:
+        return Err("idcard: 校验码不符（期望 " + expect + "）")
+    var gender = "male"
+    if int(t[16]) % 2 == 0:
+        gender = "female"
+    return Ok({
+        "province": t[0:2],
+        "birth": t[6:14],
+        "gender": gender,
+    })

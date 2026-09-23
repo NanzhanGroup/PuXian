@@ -1,0 +1,87 @@
+# ============================================================
+# 普贤生态库：registry/diff —— 行级 diff（LCS）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python difflib 心智（0.1.0 子集，小规模行级 LCS）：
+#   df_lines(a, b)   → [str]   行级 diff：前缀 " "（共有）/"-"（仅 a）/"+"（仅 b）
+#   df_ratio(a, b)   → float   相似度 2*LCS/(len_a+len_b)（0..1）
+#   df_split(s)      → [str]   按 "\n" 切行
+# 说明：
+#   - LCS 用 DP 表（O(n*m) 空间）；适合小规模文本（配置/日志/短文本）
+#   - 行比较为整串字节相等；行内字符级 diff（SequenceMatcher opcodes）留给 0.2.0
+#   - b 中的新增行在 a 的对应位置之后按序出现（与 difflib.unified 同序直觉）
+# ============================================================
+def df_split(s):
+    var lines = s.split("\n")
+    var out = []
+    var i = 0
+    while i < len(lines) - 1:
+        out.append(lines[i])
+        i += 1
+    if len(lines) > 0 and lines[len(lines) - 1] != "":
+        out.append(lines[len(lines) - 1])
+    return out
+# 内部：LCS 长度表（n+1 行 × m+1 列）
+def df_lcs_table(a, b):
+    var n = len(a)
+    var m = len(b)
+    var dp = []
+    var i = 0
+    while i <= n:
+        var row = []
+        var j = 0
+        while j <= m:
+            row.append(0)
+            j += 1
+        dp.append(row)
+        i += 1
+    i = n - 1
+    while i >= 0:
+        var j = m - 1
+        while j >= 0:
+            if a[i] == b[j]:
+                dp[i][j] = dp[i + 1][j + 1] + 1
+            elif dp[i + 1][j] >= dp[i][j + 1]:
+                dp[i][j] = dp[i + 1][j]
+            else:
+                dp[i][j] = dp[i][j + 1]
+            j -= 1
+        i -= 1
+    return dp
+# 回溯生成 diff 行
+def df_backtrack(a, b, dp):
+    var out = []
+    var i = 0
+    var j = 0
+    while i < len(a) and j < len(b):
+        if a[i] == b[j]:
+            out.append(" " + a[i])
+            i += 1
+            j += 1
+        elif dp[i + 1][j] >= dp[i][j + 1]:
+            out.append("-" + a[i])
+            i += 1
+        else:
+            out.append("+" + b[j])
+            j += 1
+    while i < len(a):
+        out.append("-" + a[i])
+        i += 1
+    while j < len(b):
+        out.append("+" + b[j])
+        j += 1
+    return out
+def df_lines(a, b):
+    var la = df_split(a)
+    var lb = df_split(b)
+    var dp = df_lcs_table(la, lb)
+    return df_backtrack(la, lb, dp)
+def df_ratio(a, b):
+    var la = df_split(a)
+    var lb = df_split(b)
+    var dp = df_lcs_table(la, lb)
+    var lcs = dp[0][0]
+    var total = len(la) + len(lb)
+    if total == 0:
+        return 1.0
+    return (2.0 * lcs) / total

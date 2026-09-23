@@ -1,0 +1,116 @@
+# ============================================================
+# 普贤生态库：registry/jsonpath —— JSON 路径取值
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python jsonpath-ng / jmespath 心智（0.1.0 子集）：
+#   jp_get(data, path) → Ok(值) | Err   按路径取数
+#   jp_has(data, path) → bool           路径是否存在
+# 路径语法（子集）：
+#   a.b.c        字典键逐级
+#   a[0].c       list 下标
+#   a[*]         list 全部元素（[*] 处收集其后路径的解析结果）
+# 说明：
+#   - 键名含 "." 或 "[" 的路径不支持（0.1.0 子集）
+#   - 找不到键/越界 → Err（不做静默 null；dict 用 .has() 守卫，规避 PX-DEF-007）
+# ============================================================
+# 内部：路径 → 段列表（如 "a.b[0].c" → ["a","b[0]","c"]）
+def jp_tokenize(path):
+    var segs = []
+    var cur = ""
+    var i = 0
+    var n = len(path)
+    while i < n:
+        var c = path[i]
+        if c == ".":
+            if len(cur) > 0:
+                segs.append(cur)
+                cur = ""
+        else:
+            cur = cur + c
+        i += 1
+    if len(cur) > 0:
+        segs.append(cur)
+    return segs
+# 内部：解析一个段 "b[0]" → [键名 "b", [下标 0]]
+# 返回 [key, idx]（key 为 "" 表示纯下标段，如 "[0]" 开头）
+def jp_seg_parts(seg):
+    var key = ""
+    var idx = -1
+    var i = 0
+    var n = len(seg)
+    while i < n:
+        var c = seg[i]
+        if c == "[":
+            # 找匹配 ]
+            var close = -1
+            var k = i + 1
+            while k < n:
+                if seg[k] == "]":
+                    close = k
+                    break
+                k += 1
+            if close < 0:
+                return null
+            var inner = seg[i + 1:close]
+            if inner == "*":
+                idx = -2  # 通配
+            else:
+                var v = jp_parse_int(inner)
+                if v < 0:
+                    return null
+                idx = v
+            i = close + 1
+        else:
+            key = key + c
+            i += 1
+    return [key, idx]
+# 内部：严格解析非负整数
+def jp_parse_int(s):
+    if len(s) == 0:
+        return -1
+    var i = 0
+    while i < len(s):
+        if not (s[i] >= "0" and s[i] <= "9"):
+            return -1
+        i += 1
+    return int(s)
+# 内部：递归解析（segs 从 si 起）
+# 一段可同时含键与下标（如 "b[0]"）：先按键下行，再按下标下行；通配 [*] 收集。
+def jp_resolve(data, segs, si):
+    if si >= len(segs):
+        return [true, data]
+    var parts = jp_seg_parts(segs[si])
+    if parts == null:
+        return [false, "jsonpath: 非法段: " + segs[si]]
+    var key = parts[0]
+    var idx = parts[1]
+    if len(key) > 0:
+        if type(data) != "dict" or not data.has(key):
+            return [false, "jsonpath: 无键: " + key]
+        data = data[key]
+    if idx == -2:
+        if type(data) != "list":
+            return [false, "jsonpath: 通配需 list"]
+        var out = []
+        var i = 0
+        while i < len(data):
+            var r = jp_resolve(data[i], segs, si + 1)
+            if r[0]:
+                out.append(r[1])
+            i += 1
+        return [true, out]
+    if idx >= 0:
+        if type(data) != "list" or idx >= len(data):
+            return [false, "jsonpath: 下标越界或非 list: " + str(idx)]
+        data = data[idx]
+    return jp_resolve(data, segs, si + 1)
+# ---- 公开 API ----
+def jp_get(data, path):
+    var segs = jp_tokenize(path)
+    var r = jp_resolve(data, segs, 0)
+    if r[0]:
+        return Ok(r[1])
+    return Err(r[1])
+def jp_has(data, path):
+    var r = jp_get(data, path)
+    return r.is_ok()

@@ -1,0 +1,168 @@
+# ============================================================
+# 普贤生态库：registry/ulid —— 可排序唯一 ID（Crockford Base32）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Rust ulid crate / 官方 ULID spec（0.1.0 子集）：
+#   ul_new()                          → str   26 字符（48bit 毫秒时间戳 + 80bit 随机）
+#   ul_new_at(ms, rand_hex)           → str   指定毫秒时间戳与 80bit 随机 hex（测试用；
+#                                             rand_hex 空串 → os_random_hex(10)）
+#   ul_ts(ul)                         → Ok(int) | Err   解析出毫秒时间戳
+#   ul_decode(ul)                     → Ok({ts, rand}) | Err   分解（rand 为小写 hex）
+#   ul_valid(s)                       → bool   长度 26 + 全部在 Crockford 字母表
+# 说明：
+#   - 字母表 Crockford：0123456789ABCDEFGHJKMNPQRSTVWXYZ（不含 I/L/O/U）
+#   - 编码：前 10 字符 = 48bit 时间戳（首字符仅 3bit 有效 ≤ 7），后 16 字符 = 80bit 随机
+#   - 随机部分拆 2×40bit 编码（40bit 以内 int 不溢出）
+# ============================================================
+const UL_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+# 内部：字符 → 值（非法 → -1）
+def ul_val(c):
+    var i = 0
+    while i < 32:
+        if UL_ALPHABET[i] == c:
+            return i
+        i += 1
+    return -1
+# 内部：40bit 整数 → 8 个 Crockford 字符
+def ul_encode40(v):
+    var out = ""
+    var shift = 35
+    while shift >= 0:
+        var d = (v >> shift) & 31
+        out = out + UL_ALPHABET[d]
+        shift = shift - 5
+    return out
+# 内部：hex 串 → 40bit 整数（10 个 hex 字符）
+def ul_hex40(h):
+    var v = 0
+    var i = 0
+    while i < 10:
+        var c = h[i]
+        var d = 0
+        if c >= "0" and c <= "9":
+            d = ord(c) - 48
+        elif c >= "a" and c <= "f":
+            d = ord(c) - 87
+        elif c >= "A" and c <= "F":
+            d = ord(c) - 55
+        else:
+            d = 0
+        v = v * 16 + d
+        i += 1
+    return v
+# 内部：hex 串 → 小写 hex（校验后）
+def ul_hex_valid(h):
+    if len(h) != 20:
+        return false
+    var i = 0
+    while i < 20:
+        var c = h[i]
+        var ok = (c >= "0" and c <= "9") or (c >= "a" and c <= "f") or (c >= "A" and c <= "F")
+        if not ok:
+            return false
+        i += 1
+    return true
+# 内部：hex 串 → 小写
+def ul_hex_lower(h):
+    var out = ""
+    var i = 0
+    while i < 20:
+        var c = h[i]
+        if c >= "A" and c <= "F":
+            c = chr(ord(c) + 32)
+        out = out + c
+        i += 1
+    return out
+# 内部：时间戳（48bit）→ 10 字符（首字符 3bit）
+def ul_encode_ts(ts):
+    var out = ""
+    var c0 = (ts >> 45) & 7
+    out = out + UL_ALPHABET[c0]
+    var shift = 40
+    while shift >= 0:
+        var d = (ts >> shift) & 31
+        out = out + UL_ALPHABET[d]
+        shift = shift - 5
+    return out
+# 内部：10 字符 → 48bit 时间戳（非法字符或首字符 > 7 → -1）
+def ul_decode_ts(ts10):
+    var c0 = ul_val(ts10[0])
+    if c0 < 0 or c0 > 7:
+        return -1
+    var v = c0
+    var i = 1
+    while i < 10:
+        var d = ul_val(ts10[i])
+        if d < 0:
+            return -1
+        v = v << 5 | d
+        i += 1
+    return v
+# ---- 生成 ----
+def ul_new_at(ms, rand_hex):
+    var h = rand_hex
+    if len(h) == 0:
+        h = os_random_hex(10)
+    if not ul_hex_valid(h):
+        return ""
+    h = ul_hex_lower(h)
+    var hi = ul_hex40(h[0:10])
+    var lo = ul_hex40(h[10:20])
+    var ts = ul_encode_ts(ms)
+    return ts + ul_encode40(hi) + ul_encode40(lo)
+def ul_new():
+    return ul_new_at(now_ms(), "")
+# ---- 解析 ----
+def ul_ts(ul):
+    if not ul_valid(ul):
+        return Err("ulid: 非法 ULID")
+    var t = ul_decode_ts(ul[0:10])
+    if t < 0:
+        return Err("ulid: 时间戳部分非法")
+    return Ok(t)
+def ul_decode(ul):
+    if not ul_valid(ul):
+        return Err("ulid: 非法 ULID")
+    var t = ul_decode_ts(ul[0:10])
+    if t < 0:
+        return Err("ulid: 时间戳部分非法")
+    # 随机部分：16 字符 → 2×40bit → 20 hex
+    var r1 = ul_decode40(ul[10:18])
+    var r2 = ul_decode40(ul[18:26])
+    var hex = ul_hex_of40(r1) + ul_hex_of40(r2)
+    var d = {}
+    d.set("ts", t)
+    d.set("rand", hex)
+    return Ok(d)
+# 内部：8 字符 → 40bit
+def ul_decode40(s8):
+    var v = 0
+    var i = 0
+    while i < 8:
+        var d = ul_val(s8[i])
+        if d < 0:
+            return -1
+        v = v << 5 | d
+        i += 1
+    return v
+# 内部：40bit → 10 hex 字符（小写）
+def ul_hex_of40(v):
+    var out = ""
+    var shift = 36
+    while shift >= 0:
+        var d = (v >> shift) & 15
+        if d < 10:
+            out = out + chr(48 + d)
+        else:
+            out = out + chr(87 + d)
+        shift = shift - 4
+    return out
+def ul_valid(s):
+    if len(s) != 26:
+        return false
+    var i = 0
+    while i < 26:
+        if ul_val(s[i]) < 0:
+            return false
+        i += 1
+    return true

@@ -1,0 +1,174 @@
+# ============================================================
+# 普贤生态库：registry/glob —— 通配匹配与目录列举
+# ------------------------------------------------------------
+# 纯函数库（glob_match 无 IO；glob_list 读目录），编译与解释双模式一致。
+# 对齐 Python glob/fnmatch、Go path/filepath.Match 心智（0.1.0 子集）：
+#   glob_match(pattern, name) → bool     单段通配匹配
+#   glob_list(dir, pattern)   → Ok([全路径...]) | Err   列举 + 过滤（排序）
+#   glob_has_magic(s)         → bool     是否含通配元字符
+# 支持：
+#   *        任意个字符（不跨 "/"）
+#   ?        单个字符（不跨 "/"）
+#   [...]    字符类：a-z 区间、[^...]/[!...] 取反、] 作首字符、- 首/尾字面量
+# 说明：
+#   - 与 Go filepath.Match 一致，* 和 ? 不匹配 "/"（目录/文件名分段匹配）
+#   - 反斜杠转义不支持（0.2.0 考虑）
+#   - glob_list 仅列一层（非递归）；递归需要 "**" 语义，超出 0.1.0
+# ============================================================
+
+# ---- 字符类 ----
+# 解析 [..] 内 content（不含 [ 和 ]）→ {negate, ranges}
+def gl_parse_class(core):
+    var negate = false
+    var st = 0
+    if len(core) > 0 and (core[0] == "^" or core[0] == "!"):
+        negate = true
+        st = 1
+    var items = []
+    var i = st
+    while i < len(core):
+        var c = core[i]
+        if i + 2 < len(core) and core[i + 1] == "-" and core[i + 2] != "]":
+            # 区间 a-z
+            items.append({"kind": "range", "lo": core[i], "hi": core[i + 2]})
+            i += 3
+            continue
+        if c != "]" or i == st:
+            items.append({"kind": "char", "c": c})
+        i += 1
+    return {"negate": negate, "items": items}
+
+def gl_class_match(core, c):
+    var cls = gl_parse_class(core)
+    var hit = false
+    var i = 0
+    while i < len(cls["items"]):
+        var it = cls["items"][i]
+        if it["kind"] == "char":
+            if it["c"] == c:
+                hit = true
+                break
+        else:
+            if c >= it["lo"] and c <= it["hi"]:
+                hit = true
+                break
+        i += 1
+    if cls["negate"]:
+        return not hit
+    return hit
+
+# ---- 匹配 ----
+def glob_has_magic(s):
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        if c == "*" or c == "?" or c == "[":
+            return true
+        i += 1
+    return false
+
+# 找 [..] 的结束位置（从 start 后）；找不到返回 -1
+def gl_class_end(p, start):
+    var i = start + 1
+    var n = len(p)
+    if i < n and (p[i] == "^" or p[i] == "!" or p[i] == "]"):
+        i += 1
+    while i < n:
+        if p[i] == "]":
+            return i
+        i += 1
+    return -1
+
+def glob_match(p, s):
+    return gl_match(p, 0, s, 0)
+
+def gl_match(p, pi, s, si):
+    while pi < len(p):
+        var pc = p[pi]
+        if pc == "*":
+            while pi < len(p) and p[pi] == "*":
+                pi += 1
+            var i = si
+            while true:
+                if gl_match(p, pi, s, i):
+                    return true
+                if i >= len(s):
+                    return false
+                if s[i] == "/":
+                    return false
+                i += 1
+        elif pc == "?":
+            if si >= len(s) or s[si] == "/":
+                return false
+            pi += 1
+            si += 1
+        elif pc == "[":
+            var end = gl_class_end(p, pi)
+            if end < 0:
+                if si >= len(s) or s[si] != "[":
+                    return false
+                pi += 1
+                si += 1
+            else:
+                if si >= len(s) or s[si] == "/":
+                    return false
+                var core = p[pi + 1:end]
+                if not gl_class_match(core, s[si]):
+                    return false
+                pi = end + 1
+                si += 1
+        else:
+            if si >= len(s) or s[si] != pc:
+                return false
+            pi += 1
+            si += 1
+    return si >= len(s)
+
+# ---- 列举 ----
+def gl_index(s, sub):
+    var i = 0
+    while i + len(sub) <= len(s):
+        if s[i:i + len(sub)] == sub:
+            return i
+        i += 1
+    return -1
+
+# 在 dir 中列出一层条目名匹配 pattern 的全路径
+def gl_list_entries(dir, pattern):
+    var st = file_stat(dir)
+    if type(st) != "dict" or not st["is_dir"]:
+        return []
+    var names = list_dir(dir)
+    var sorted_names = sorted(names)
+    var out = []
+    var i = 0
+    while i < len(sorted_names):
+        if glob_match(pattern, sorted_names[i]):
+            out.append(dir + "/" + sorted_names[i])
+        i += 1
+    return out
+
+# 递归下钻：pattern 含 "/" 时逐段进入子目录（Python glob 语义）
+def gl_walk(dir, pattern):
+    var slash = gl_index(pattern, "/")
+    if slash < 0:
+        return gl_list_entries(dir, pattern)
+    var head = pattern[0:slash]
+    var rest = pattern[slash + 1:len(pattern)]
+    var subpaths = gl_list_entries(dir, head)
+    var out = []
+    var i = 0
+    while i < len(subpaths):
+        var subs = gl_walk(subpaths[i], rest)
+        var j = 0
+        while j < len(subs):
+            out.append(subs[j])
+            j += 1
+        i += 1
+    return out
+
+def glob_list(dir, pattern):
+    var st = file_stat(dir)
+    if type(st) != "dict" or not st["is_dir"]:
+        return Err("glob: 无法列举目录: " + dir)
+    return Ok(gl_walk(dir, pattern))

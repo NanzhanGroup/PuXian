@@ -1,0 +1,148 @@
+# ============================================================
+# 普贤生态库：registry/strcase —— 命名风格转换
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Rust heck / convert_case、Go iancoleman/strcase、Python inflection 心智：
+#   str_snake(s)           → "FooBar"  → "foo_bar"
+#   str_kebab(s)           → "FooBar"  → "foo-bar"
+#   str_camel(s)           → "foo_bar" → "fooBar"
+#   str_pascal(s)          → "foo_bar" → "FooBar"
+#   str_screaming_snake(s) → "FooBar"  → "FOO_BAR"
+#   str_title_words(s)     → "foo_bar" → "Foo Bar"
+#   str_words(s)           → 分词结果 list（供自定义风格）
+# 分词规则（heck 风格）：
+#   - 分隔符（空格 / - / _ / . / / / \\\\ / 制表换行回车）断开
+#   - lower/digit → upper 处断开（camelCase → camel + Case）
+#   - 连续大写后接小写时，在最后一个大写前断开（HTTPServer → HTTP + Server）
+#   - 数字并入相邻单词（sha256 → sha256）
+# 说明：面向 ASCII 标识符；非 ASCII 字符按原字符并入当前词（不按字节切割）。
+#   大小写判定依赖 to_upper/to_lower（native 无 ord，见语言缺陷 PX-DEF-013）。
+# ============================================================
+
+# ---- 字符分类 ----
+def sc_is_upper(c):
+    return to_upper(c) == c and to_lower(c) != c
+
+def sc_is_lower(c):
+    return to_lower(c) == c and to_upper(c) != c
+
+def sc_is_digit(c):
+    var i = 0
+    while i < 10:
+        if "0123456789"[i] == c:
+            return true
+        i += 1
+    return false
+
+def sc_is_space(c):
+    var b = bytes_get(bytes(c), 0)
+    return b == 32 or b == 9 or b == 10 or b == 13
+
+def sc_is_sep(c):
+    if sc_is_space(c):
+        return true
+    return c == "-" or c == "_" or c == "." or c == "/" or c == "\\"
+
+# ---- 分词 ----
+# 输入字符串 → 单词 list（保留原始大小写；空串 / 全分隔符 → []）
+def str_words(s):
+    var words = []
+    var cur = ""
+    var prev = 0
+    var i = 0
+    var n = len(s)
+    while i < n:
+        var c = s[i]
+        if sc_is_sep(c):
+            if len(cur) > 0:
+                words.append(cur)
+                cur = ""
+            prev = 0
+            i += 1
+            continue
+        if sc_is_upper(c):
+            if prev == 1:
+                if len(cur) > 0:
+                    words.append(cur)
+                cur = c
+            else:
+                var next_lower = (i + 1 < n) and sc_is_lower(s[i + 1])
+                if prev == 2 and next_lower and len(cur) > 0:
+                    words.append(cur)
+                    cur = c
+                else:
+                    cur = cur + c
+            prev = 2
+            i += 1
+            continue
+        cur = cur + c
+        prev = 1
+        i += 1
+    if len(cur) > 0:
+        words.append(cur)
+    return words
+
+# ---- 拼接 ----
+# words + 分隔符 + 大小写模式（"upper" / "lower" / "keep"）
+def sc_join(words, sep, mode):
+    var out = ""
+    var i = 0
+    while i < len(words):
+        if i > 0:
+            out = out + sep
+        var w = words[i]
+        if mode == "upper":
+            out = out + to_upper(w)
+        elif mode == "lower":
+            out = out + to_lower(w)
+        else:
+            out = out + w
+        i += 1
+    return out
+
+# words → 驼峰拼接（pascal=true 首词也大写）
+def sc_camel_join(words, pascal):
+    var out = ""
+    var i = 0
+    while i < len(words):
+        var w = words[i]
+        if len(w) > 0:
+            if i == 0 and not pascal:
+                out = out + to_lower(w)
+            else:
+                out = out + to_upper(w[0])
+                if len(w) > 1:
+                    out = out + to_lower(w[1:len(w)])
+        i += 1
+    return out
+
+# ---- 对外 API ----
+def str_snake(s):
+    return sc_join(str_words(s), "_", "lower")
+
+def str_kebab(s):
+    return sc_join(str_words(s), "-", "lower")
+
+def str_screaming_snake(s):
+    return sc_join(str_words(s), "_", "upper")
+
+def str_camel(s):
+    return sc_camel_join(str_words(s), false)
+
+def str_pascal(s):
+    return sc_camel_join(str_words(s), true)
+
+def str_title_words(s):
+    var wl = str_words(s)
+    var out = ""
+    var i = 0
+    while i < len(wl):
+        if i > 0:
+            out = out + " "
+        var w = wl[i]
+        if len(w) > 0:
+            out = out + to_upper(w[0])
+            if len(w) > 1:
+                out = out + to_lower(w[1:len(w)])
+        i += 1
+    return out

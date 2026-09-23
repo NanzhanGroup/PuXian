@@ -1,0 +1,59 @@
+# ============================================================
+# 普贤生态库：registry/bisect —— 有序序列二分查找/插入
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python bisect 心智（0.1.0 子集，基于 list）：
+#   bi_left(a, x)          → int   x 应插入的最左位置（与 a 中已存在的 x 相邻前）
+#   bi_right(a, x)         → int   x 应插入的最右位置
+#   bi_insort_left(a, x)   → list  返回插入 x 后的新列表（不修改入参）
+#   bi_insort_right(a, x)  → list  返回插入 x 后的新列表
+# 说明：
+#   - a 须为已排序升序列表；元素与 x 须同类型（数值或字符串同类型比较）
+#   - 纯函数：insort 系列返回新列表，原列表不变（写库规范：无副作用）
+# ============================================================
+# 二分：左边界（第一个 >= x 的下标）
+def bi_left(a, x):
+    var lo = 0
+    var hi = len(a)
+    while lo < hi:
+        var mid = (lo + hi) // 2
+        if a[mid] < x:
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo
+# 二分：右边界（第一个 > x 的下标）
+def bi_right(a, x):
+    var lo = 0
+    var hi = len(a)
+    while lo < hi:
+        var mid = (lo + hi) // 2
+        if x < a[mid]:
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo
+# 内部：从 list 拷贝一份
+def bi_copy(a):
+    var out = []
+    var i = 0
+    while i < len(a):
+        out.append(a[i])
+        i += 1
+    return out
+# 在 idx 处插入 x（idx 由 bi_left/bi_right 给出）
+def bi_insert_at(a, x, idx):
+    var out = []
+    var i = 0
+    while i < len(a):
+        if i == idx:
+            out.append(x)
+        out.append(a[i])
+        i += 1
+    if idx >= len(a):
+        out.append(x)
+    return out
+def bi_insort_left(a, x):
+    return bi_insert_at(a, x, bi_left(a, x))
+def bi_insort_right(a, x):
+    return bi_insert_at(a, x, bi_right(a, x))

@@ -1,0 +1,100 @@
+# ============================================================
+# 普贤生态库：registry/jwt —— JSON Web Token（JWS HS256）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go golang-jwt/jwt 心智（HS256 子集，RFC 7519 / RFC 7515）：
+#   jwt_encode(payload, secret)      → Ok("h.p.s") | Err(msg)
+#   jwt_decode(token, secret)        → Ok({header, payload}) | Err(msg)（校验签名+exp/nbf）
+#   jwt_decode_at(token, secret, now)→ 同上，now = Unix 秒（可测试）
+# 说明：
+#   - 序列化用 json_stringify_go（排序键）→ 与 Go encoding/json 行为一致
+#   - 签名 = HMAC-SHA256(secret, base64url(header) + "." + base64url(payload))
+#   - base64url = 标准 base64 去 padding，+ → -，/ → _
+#   - 0.1.0 仅支持 HS256：runtime 只有 sha256/hmac_sha256 native，
+#     HS384/HS512 待 SHA-512 native 加入后再扩展（算法表已预留）。
+# ============================================================
+
+# ---- base64url（RFC 4648 §5）----
+
+# base64url 编码（无 padding）
+def jwt_b64url_encode(s):
+    var b = base64_encode(s)
+    b = replace(b, "+", "-")
+    b = replace(b, "/", "_")
+    b = replace(b, "=", "")
+    return b
+
+# base64url 解码 → Ok(str) | Err(msg)
+def jwt_b64url_decode(s):
+    var t = replace(s, "-", "+")
+    t = replace(t, "_", "/")
+    var pad = len(t) % 4
+    if pad == 2:
+        t = t + "=="
+    elif pad == 3:
+        t = t + "="
+    elif pad == 1:
+        return Err("jwt: 无效的 base64url")
+    return Ok(base64_decode(t))
+
+# ---- 签名（HS256）----
+
+# HMAC-SHA256 原始字节 → base64url（bytes_base64 已是 base64，只做替换）
+def jwt_hmac_b64url(secret, msg):
+    var hex = hmac_sha256(secret, msg)
+    var b64 = bytes_base64(hex_to_bytes(hex))
+    b64 = replace(b64, "+", "-")
+    b64 = replace(b64, "/", "_")
+    b64 = replace(b64, "=", "")
+    return b64
+
+# ---- 公开 API ----
+
+# 编码：payload 为 dict，生成 JWT（HS256 签名）。
+# alg 参数预留（0.1.0 仅支持 "HS256"）。
+def jwt_encode(payload, secret, alg="HS256"):
+    if alg != "HS256":
+        return Err("jwt: 不支持的算法: " + alg)
+    var header = {"alg": "HS256", "typ": "JWT"}
+    var h = jwt_b64url_encode(json_stringify_go(header))
+    var p = jwt_b64url_encode(json_stringify_go(payload))
+    var sig = jwt_hmac_b64url(secret, h + "." + p)
+    return Ok(h + "." + p + "." + sig)
+
+# 解码 + 验签 + 时间校验（exp/nbf），now 用当前 Unix 秒。
+def jwt_decode(token, secret):
+    return jwt_decode_at(token, secret, now_sec())
+
+# 解码，now 由调用方给定（Unix 秒）——便于测试与"可重放"场景。
+def jwt_decode_at(token, secret, now):
+    var parts = split(token, ".")
+    if len(parts) != 3:
+        return Err("jwt: token 必须为 3 段（h.p.s）")
+    var r_h = jwt_b64url_decode(parts[0])
+    if r_h.is_err():
+        return Err("jwt: header base64url 解码失败")
+    var r_p = jwt_b64url_decode(parts[1])
+    if r_p.is_err():
+        return Err("jwt: payload base64url 解码失败")
+    var r_hj = json_parse_opt(r_h.unwrap())
+    if r_hj.is_err():
+        return Err("jwt: header JSON 解析失败")
+    var r_pj = json_parse_opt(r_p.unwrap())
+    if r_pj.is_err():
+        return Err("jwt: payload JSON 解析失败")
+    var hdr = r_hj.unwrap()
+    if hdr["alg"] != "HS256":
+        return Err("jwt: 不支持的算法: " + str(hdr["alg"]))
+    var expect = jwt_hmac_b64url(secret, parts[0] + "." + parts[1])
+    if parts[2] != expect:
+        return Err("jwt: 签名验证失败")
+    var pl = r_pj.unwrap()
+    if pl.has("exp"):
+        var exp = int(pl["exp"])
+        if exp <= now:
+            return Err("jwt: token 已过期")
+    if pl.has("nbf"):
+        var nbf = int(pl["nbf"])
+        if nbf > now:
+            return Err("jwt: token 尚未生效")
+    return Ok({"header": hdr, "payload": pl})

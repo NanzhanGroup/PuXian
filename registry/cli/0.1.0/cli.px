@@ -1,0 +1,210 @@
+# ============================================================
+# 普贤生态库：registry/cli —— 命令行参数解析
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go flag 包 + cobra 子集心智（0.1.0 子集）：
+#   cli_parse(args, spec) → Ok({opts, args}) | Err
+#     args  = 命令行参数列表（不含程序名；px 下用 args()[1:]）
+#     spec  = {"long": {"short": "x", "type": "str|int|float|bool", "default": v}}
+# 支持语法（对齐 flag 心智）：
+#   --name value · --name=value · -n value · -nvalue · -n=value
+#   bool 选项：--verbose / -v（无需值）；也可 --verbose=true|false
+#   -- 之后全部视为位置参数；未知选项 / 缺值 / 类型错误 → Err
+# 返回 {opts: 已合并默认值的 dict, args: 位置参数 list}
+# ============================================================
+
+# 按短名查找 spec 键
+def cli_find_by_short(spec, short):
+    var keys = spec.keys()
+    var i = 0
+    while i < len(keys):
+        var k = keys[i]
+        var cfg = spec[k]
+        if cfg.has("short") and cfg["short"] == short:
+            return k
+        i += 1
+    return null
+
+# Result Err 消息剥壳（PuXian Result 无 unwrap_err 原语）
+def cli_err_msg(r):
+    var s = str(r)
+    if starts_with(s, "Err(") and ends_with(s, ")"):
+        return s[4:len(s) - 1]
+    return s
+
+# bool 值解析："true"/"false"/"1"/"0" → Ok(bool) | Err
+def cli_parse_bool(s):
+    if s == "true" or s == "1":
+        return Ok(true)
+    if s == "false" or s == "0":
+        return Ok(false)
+    return Err("cli: 无效布尔值: " + s)
+
+# 严格整数串（可选负号）
+def cli_is_int_str(s):
+    var t = s
+    if starts_with(t, "-"):
+        t = t[1:len(t)]
+    if len(t) == 0:
+        return false
+    var i = 0
+    while i < len(t):
+        if t[i] < "0" or t[i] > "9":
+            return false
+        i += 1
+    return true
+
+# 严格浮点串（可选负号、至多一个小数点；0.1.0 不支持科学计数法）
+def cli_is_float_str(s):
+    var t = s
+    if starts_with(t, "-"):
+        t = t[1:len(t)]
+    if len(t) == 0:
+        return false
+    var dots = 0
+    var i = 0
+    while i < len(t):
+        if t[i] == ".":
+            dots += 1
+            if dots > 1:
+                return false
+        elif t[i] < "0" or t[i] > "9":
+            return false
+        i += 1
+    return true
+
+# 按类型转换字符串值 → Ok(v) | Err
+def cli_cast(v, t):
+    if t == "str" or t == "":
+        return Ok(v)
+    if t == "int":
+        if not cli_is_int_str(v):
+            return Err("cli: 无效整数: " + v)
+        return Ok(int(v))
+    if t == "float":
+        if not cli_is_float_str(v):
+            return Err("cli: 无效浮点数: " + v)
+        return Ok(float(v))
+    if t == "bool":
+        return cli_parse_bool(v)
+    return Err("cli: 未知类型: " + t)
+
+# 解析参数。spec 见文件头。
+def cli_parse(args, spec):
+    var opts = {}
+    var keys = spec.keys()
+    var i = 0
+    # 初始化默认值（按 spec 类型转换）
+    while i < len(keys):
+        var k = keys[i]
+        var cfg = spec[k]
+        var t = cfg["type"]
+        if t == null:
+            t = "str"
+        if cfg.has("default"):
+            var cv = cli_cast(str(cfg["default"]), t)
+            if cv.is_err():
+                return Err("cli: 默认值错误 " + k + ": " + str(cv))
+            opts.set(k, cv.unwrap())
+        else:
+            if t == "bool":
+                opts.set(k, false)
+            else:
+                opts.set(k, null)
+        i += 1
+    var pos = []
+    var j = 0
+    var after_dd = false
+    while j < len(args):
+        var a = args[j]
+        if after_dd:
+            pos.append(a)
+            j += 1
+            continue
+        if a == "--":
+            after_dd = true
+            j += 1
+            continue
+        if starts_with(a, "--"):
+            var body = a[2:len(a)]
+            var name = body
+            var has_eq = contains(body, "=")
+            var inline = ""
+            if has_eq:
+                var eq = -1
+                var e = 0
+                while e < len(body):
+                    if body[e] == "=":
+                        eq = e
+                    e += 1
+                name = body[0:eq]
+                inline = body[eq + 1:len(body)]
+            if not spec.has(name):
+                return Err("cli: 未知选项 --" + name)
+            var cfg = spec[name]
+            var t = cfg["type"]
+            if t == null:
+                t = "str"
+            if t == "bool":
+                if has_eq:
+                    var bv = cli_parse_bool(inline)
+                    if bv.is_err():
+                        return Err(cli_err_msg(bv))
+                    opts.set(name, bv.unwrap())
+                else:
+                    opts.set(name, true)
+            else:
+                var val = inline
+                if not has_eq:
+                    j += 1
+                    if j >= len(args):
+                        return Err("cli: 选项 --" + name + " 缺少值")
+                    val = args[j]
+                var cv = cli_cast(val, t)
+                if cv.is_err():
+                    return Err("cli: 选项 --" + name + ": " + str(cv))
+                opts.set(name, cv.unwrap())
+            j += 1
+            continue
+        if starts_with(a, "-") and len(a) > 1:
+            var body = a[1:len(a)]
+            var short = body[0:1]
+            var name = cli_find_by_short(spec, short)
+            if name == null:
+                return Err("cli: 未知选项 -" + short)
+            var cfg = spec[name]
+            var t = cfg["type"]
+            if t == null:
+                t = "str"
+            var rest = body[1:len(body)]
+            if t == "bool":
+                if starts_with(rest, "="):
+                    var bv = cli_parse_bool(rest[1:len(rest)])
+                    if bv.is_err():
+                        return Err(cli_err_msg(bv))
+                    opts.set(name, bv.unwrap())
+                else:
+                    opts.set(name, true)
+            else:
+                var val = ""
+                var has_val = false
+                if starts_with(rest, "="):
+                    val = rest[1:len(rest)]
+                    has_val = true
+                elif len(rest) > 0:
+                    val = rest
+                    has_val = true
+                else:
+                    j += 1
+                    if j >= len(args):
+                        return Err("cli: 选项 -" + short + " 缺少值")
+                    val = args[j]
+                var cv = cli_cast(val, t)
+                if cv.is_err():
+                    return Err("cli: 选项 -" + short + ": " + str(cv))
+                opts.set(name, cv.unwrap())
+            j += 1
+            continue
+        pos.append(a)
+        j += 1
+    return Ok({"opts": opts, "args": pos})
