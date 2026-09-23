@@ -1,4 +1,4 @@
-ok1_read_at	don
+ok1_read_at	bcd
 ok2_open_mode	true
 ok3_int_to_hex	ff
 ok4_time_format	1970-01-01

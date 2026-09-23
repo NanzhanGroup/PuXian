@@ -1,1 +1,2 @@
-print(read_at("/etc/hostname", 0, 3))
+write_file("/tmp/m194_ok1.txt", "abcdef")
+print(read_at("/tmp/m194_ok1.txt", 1, 3))

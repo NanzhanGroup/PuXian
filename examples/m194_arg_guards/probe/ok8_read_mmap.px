@@ -1,4 +1,4 @@
-let fd = open("/etc/hostname", "r")
-let n = read(fd, 4)
-print(n)
+write_file("/tmp/m194_ok8.txt", "abcdefgh")
+let fd = open("/tmp/m194_ok8.txt", "r")
+print(read(fd, 4))
 close(fd)
