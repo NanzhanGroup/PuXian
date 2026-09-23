@@ -1,0 +1,3 @@
+var s = "ab"
+print("before")
+s.upper(9)

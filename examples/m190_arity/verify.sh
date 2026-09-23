@@ -146,10 +146,12 @@ declare -A PAT=(
   [n25_hostname_arg]='hostname 不需要参数'
 )
 declare -A CODE=(
-  [n1_str_upper_arg]=R1002 [n2_str_lower_arg]=R1002 [n3_str_trim_arg]=R1002 [n4_str_len_arg]=R1002
-  [n5_str_contains_2]=R1002 [n6_str_replace_3]=R1002 [n7_str_starts_2]=R1002 [n8_str_split_2]=R1002
-  [n9_list_append_2]=R1005 [n10_list_push_2]=R1005 [n11_list_pop_1]=R1005 [n12_list_len_arg]=R1002
-  [n13_list_reverse_arg]=R1005 [n14_list_sort_arg]=R1005 [n15_tuple_len_arg]=R1002
+  # M191（第 69 轮）口径统一：**方法调用的实参个数**一律 R1005（此前字符串方法 / list.len / tuple.len
+  #   是 R1002 —— 解释轨与 native 两侧同批改为 R1005，见 docs/ERROR_CODES.md §2.3）。
+  [n1_str_upper_arg]=R1005 [n2_str_lower_arg]=R1005 [n3_str_trim_arg]=R1005 [n4_str_len_arg]=R1005
+  [n5_str_contains_2]=R1005 [n6_str_replace_3]=R1005 [n7_str_starts_2]=R1005 [n8_str_split_2]=R1005
+  [n9_list_append_2]=R1005 [n10_list_push_2]=R1005 [n11_list_pop_1]=R1005 [n12_list_len_arg]=R1005
+  [n13_list_reverse_arg]=R1005 [n14_list_sort_arg]=R1005 [n15_tuple_len_arg]=R1005
   [n16_dict_set_1]=R1005 [n17_dict_set_3]=R1005 [n18_ok_0]=R1002 [n19_ok_2]=R1002
   [n20_unwrap_arg]=R1005 [n21_assert_3]=R1002 [n22_index_miss]=R1003 [n23_index_2]=R1005
   [n24_now_arg]=R1002 [n25_hostname_arg]=R1002

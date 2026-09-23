@@ -424,9 +424,17 @@ jobs:
           #   三条硬判据：① 用例逐字节照搬（MANIFEST.sha256）② 引用面完整（缺模块只警告不报错 ⇒ 必须前置查）
           #   ③ 与 EXPECTED.tsv **对拍**（期望值是登记的数据，不是"跑出来是什么"；缺登记 ⇒ MISMATCH）。
           bash selfhost/run_upstream_tests.sh --json /tmp/upstream_tests.json > /tmp/v_upstream_tests.log 2>&1 || { echo "❌ 上游 registry-px 用例回归失败"; tail -40 /tmp/v_upstream_tests.log; exit 1; }
+          # M191（第 69 轮）· 诊断面「三族口径 + 码的单一真相」（docs/ERROR_CODES.md 为权威口径）：
+          #   ① native 侧 42 处**语言层**错误补齐 R 码（`切片步长 0`⇒R1006、`此类型不支持切片`⇒R1002…），
+          #      域前缀族登记为**闭集**；② `assert` 失败解释轨此前错标 R1003（越界）⇒ 两侧统一 R2001，
+          #      `panic(msg)` 补码；③ 定档「**方法**调用个数 ⇒ R1005 / **函数·内置** ⇒ R1002」并两侧对齐，
+          #      拆开 3 处「个数+类型」混写守卫；④ 未收口文件（aes/zip/quic/xml…）立**棘轮基线**（只许减少）。
+          #   判据：静态四查（带码/域前缀 · 个数分码 · 混写拆分 · 棘轮）+ 11 探针 × 三轨同码同文；
+          #   负控 5 道（4 静态 + 1 动态）在本地全门 m116 跑（此处 --neg-skip）。
+          bash examples/m191_error_codes/verify.sh --neg-skip > /tmp/v_m191.log 2>&1 || { echo "❌ m191_error_codes verify 失败"; tail -60 /tmp/v_m191.log; exit 1; }
           # 发射冻结门（M153 建立）：395 个用例的 --emit-c 输出必须逐字节不变（M188 由 393 起订正 —— 本轮只新增语料、类别 B 为空）。
           bash selfhost/emitc_freeze.sh --check > /tmp/v_emitc_freeze.log 2>&1 || { echo "❌ emitc_freeze 失败"; tail -30 /tmp/v_emitc_freeze.log; exit 1; }
-          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 / m153 / m154 / m155 / m158 / m160 / m161 / m162 / m163 / m164 verify / m170_gc_bridge_root / m182_hdr_root / m183_gc_root_handover / m184_num_fs_strict / m185_bytes_face / m186_native_passthrough / m187_registry_import / m188_std_face / m189_bytes_bounds / m190_arity + 上游 registry-px 用例回归（53 用例 × 双轨 · EXPECTED.tsv 对拍） + 发射冻结门（395 件 --emit-c）全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"
+          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 / m153 / m154 / m155 / m158 / m160 / m161 / m162 / m163 / m164 verify / m170_gc_bridge_root / m182_hdr_root / m183_gc_root_handover / m184_num_fs_strict / m185_bytes_face / m186_native_passthrough / m187_registry_import / m188_std_face / m189_bytes_bounds / m190_arity / m191_error_codes + 上游 registry-px 用例回归（53 用例 × 双轨 · EXPECTED.tsv 对拍） + 发射冻结门（395 件 --emit-c）全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"
       # M188 补：这一步（工具自测）在 run 382/383 上红了，而 **job 日志非管理员不可读**
       #   （实测 /actions/jobs/<id>/logs → HTTP 403）⇒ 注解是唯一对外通道。
       #   本步把各门的 /tmp/v_*.log 关键行合成**一条** ::error:: 注解（换行编码 %0A）。

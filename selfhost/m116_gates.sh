@@ -11,6 +11,32 @@ if grep -l 'NEGCTL' runtime/*.c >/dev/null 2>&1; then
     echo "❌ 负控残留：$(grep -l 'NEGCTL' runtime/*.c | tr '\n' ' ') 仍含 NEGCTL 标记（上一轮门被中断？先还原再跑）"
     exit 1
 fi
+# ── M191（第 69 轮 · **实锤事故**）：并发门 + 脏树 —— 两道前置判据 ──
+#   事故形状（我自己踩的）：上一轮把 `m116_gates.sh` 放后台跑，之后**改了源码**；门内各门为了
+#   打负控桩会 snapshot/restore `runtime/runtime.c` 与 `selfhost/*.px`，于是在**它自己的旧快照**
+#   上把我新写的内容**原样盖回** —— 表现是"刚写的补丁凭空消失"，而门日志全绿。
+#   更险的是 `.rtcache/<key>/` 存的是**当时**的源文件副本 ⇒「改了源码却编出旧行为」，
+#   探针/普查得到的结论**全都是错的**（M191 因此白跑一轮：native 明明改了，跑出来还是旧文案）。
+#   ⇒ 硬判据：① 同一时刻只允许一个 m116 全门（PID 锁）；
+#             ② 进门时 selfhost/ runtime/ tools/ 必须干净（`--allow-dirty` 才放行）；
+#             ③ 出门再查一次 —— 脏了就**响亮**判红（不许"门改过源码"静默通过）。
+LOCK=/tmp/.m116_gates.lock
+if [ -f "$LOCK" ] && kill -0 "$(cat "$LOCK" 2>/dev/null)" 2>/dev/null; then
+    echo "❌ 已有 m116 全门在跑（PID $(cat "$LOCK")）—— 并发跑会互相踩掉负控还原，拒绝启动"
+    exit 1
+fi
+echo $$ > "$LOCK"
+ALLOW_DIRTY=0
+[ "${1:-}" = "--allow-dirty" ] && ALLOW_DIRTY=1
+DIRTY0="$(git status --porcelain -- selfhost runtime tools 2>/dev/null)"
+if [ -n "$DIRTY0" ] && [ "$ALLOW_DIRTY" = 0 ]; then
+    echo "❌ 工作树不干净（selfhost/ runtime/ tools/ 有未提交改动）"
+    echo "$DIRTY0" | sed 's/^/     /'
+    echo "   ⇒ 门内负控的 snapshot/restore 会**盖掉**这些改动：先提交/stash，或用 --allow-dirty 明确接受风险"
+    rm -f "$LOCK"; exit 1
+fi
+trap 'rm -f "$LOCK"' EXIT
+
 step() { echo ""; echo "══ $* ══"; }
 run() {  # $1=名 $2..=命令
     local name="$1"; shift
@@ -520,6 +546,9 @@ step "M190（第 68 轮）：方法族参数面三轨同一真相（内部缺陷
 #   改 icall.px、C（native list.index 退回缺失）/D（native list.reverse 退回缺失）改 runtime.c，
 #   各自独立判红 + 源逐字节还原。
 run m190_arity bash examples/m190_arity/verify.sh
+# M191（第 69 轮）：诊断面「三族口径 + 码的单一真相」—— 静态（带码/域前缀 · 个数分码 · 混写拆分 ·
+#   未收口棘轮）＋ 动态（11 探针 × 三轨同码同文）＋ 5 道负控。
+run m191_error_codes bash examples/m191_error_codes/verify.sh
 step "M190 · 上游 registry-px 真实用例回归（53 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。
@@ -550,6 +579,14 @@ step "示例编译"
 run ex_fib ./tools/pxc build examples/fib.px
 run ex_match ./tools/pxc build examples/match.px
 run ex_struct ./tools/pxc build examples/struct.px
+
+DIRTY1="$(git status --porcelain -- selfhost runtime tools 2>/dev/null)"
+if [ "$DIRTY1" != "$DIRTY0" ]; then
+    echo ""
+    echo "⚠️ 门有副作用：selfhost//runtime//tools/ 的工作树状态与进门时不同（负控还原不彻底？）"
+    diff <(echo "$DIRTY0") <(echo "$DIRTY1") | sed 's/^/     /' || true
+    FAIL=$((FAIL+1))
+fi
 
 echo ""
 echo "══ 汇总：失败 $FAIL 项 ══"
