@@ -408,6 +408,30 @@ jobs:
           # 发射冻结门（M153 建立）：395 个用例的 --emit-c 输出必须逐字节不变（M188 由 393 起订正 —— 本轮只新增语料、类别 B 为空）。
           bash selfhost/emitc_freeze.sh --check > /tmp/v_emitc_freeze.log 2>&1 || { echo "❌ emitc_freeze 失败"; tail -30 /tmp/v_emitc_freeze.log; exit 1; }
           echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 / m153 / m154 / m155 / m158 / m160 / m161 / m162 / m163 / m164 verify / m170_gc_bridge_root / m182_hdr_root / m183_gc_root_handover / m184_num_fs_strict / m185_bytes_face / m186_native_passthrough / m187_registry_import / m188_std_face + 发射冻结门（395 件 --emit-c）全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"
+      # M188 补：这一步（工具自测）在 run 382/383 上红了，而 **job 日志非管理员不可读**
+      #   （实测 /actions/jobs/<id>/logs → HTTP 403）⇒ 注解是唯一对外通道。
+      #   本步把各门的 /tmp/v_*.log 关键行合成**一条** ::error:: 注解（换行编码 %0A）。
+      - name: 失败诊断注解（工具自测 —— job 日志 403，此注解是唯一可读通道）
+        if: failure()
+        run: |
+          python3 - <<'PY'
+          import glob, os, urllib.parse
+          parts = []
+          for f in sorted(glob.glob('/tmp/v_*.log')):
+              try:
+                  txt = open(f, encoding='utf-8', errors='replace').read()
+              except Exception as e:
+                  parts.append('=== %s === (读取失败: %s)' % (f, e))
+                  continue
+              bad = [l for l in txt.splitlines()
+                     if ('❌' in l or 'FAIL' in l or 'VERIFY-FAILED' in l
+                         or 'error' in l.lower() or 'Traceback' in l)]
+              if bad:
+                  parts.append('=== %s ===\n%s' % (os.path.basename(f), '\n'.join(bad[-25:])))
+          msg = ('\n'.join(parts) if parts else '无 /tmp/v_*.log 含失败行（失败可能发生在本步之前）')
+          msg = msg[:5500]
+          print('::error::' + urllib.parse.quote(msg, safe=''))
+          PY
       - name: LSP / MCP 服务器冒烟（--version + 协议入口存在性）
         run: |
           chmod +x bootstrap/pxlsp bootstrap/pxmcp bootstrap/pxcheck
