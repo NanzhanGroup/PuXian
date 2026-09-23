@@ -1,0 +1,8 @@
+e1_aes_first_type	R1002	期望字符串，实际是 int
+e2_aes_arity	R1002	aes_encrypt 需要 3 个参数: (data, key, iv)
+e3_aes_keylen	R1002	AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 4
+e4_aes_iv_empty	R1002	GCM 模式 IV 不能为空
+e7_rsa_bits	R1002	rsa_gen_key 的 bits 必须在 512..4096
+e8_ed25519_arity	R1002	ed25519_keygen 不需要参数
+e9_zip_arity	R1002	zip_pack 需要 2 个参数: (files, out_path)
+e10_zip_shape	R1002	zip_pack 第一个参数须为 dict{路径→内容}

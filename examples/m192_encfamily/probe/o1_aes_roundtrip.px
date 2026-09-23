@@ -1,0 +1,2 @@
+var c = aes_encrypt("hello", "0123456789abcdef", "0123456789abcdef")
+print(aes_decrypt(c, "0123456789abcdef", "0123456789abcdef"))

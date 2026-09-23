@@ -54,7 +54,7 @@ static const char* e_bytes(LXValue v, int* len) {
         *len = v.as.obj->as.str.len;
         return v.as.obj->as.str.data;
     }
-    px_error("期望字符串或 bytes，实际是 %s", px_type_name(v));
+    px_error("R1002: 期望字符串或 bytes，实际是 %s", px_type_name(v));
     return NULL;
 }
 
@@ -248,7 +248,7 @@ static int e_parse_pub(const char* s, int slen, unsigned char* pk) {
 // ed25519_sign(priv, msg) → sig_hex(128) | null（RFC8032 确定性签名）
 LXValue bi_ed25519_sign(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2) px_error("ed25519_sign 需要 2 个参数: (priv, msg)");
+    if (nargs != 2) px_error("R1002: ed25519_sign 需要 2 个参数: (priv, msg)");
     int plen = 0, mlen = 0;
     const char* priv = e_bytes(args[0], &plen);
     const char* msg = e_bytes(args[1], &mlen);
@@ -269,7 +269,7 @@ LXValue bi_ed25519_sign(LXValue* args, int nargs, void* ctx) {
 // ed25519_verify(pub, msg, sig) → bool
 LXValue bi_ed25519_verify(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 3) px_error("ed25519_verify 需要 3 个参数: (pub, msg, sig)");
+    if (nargs != 3) px_error("R1002: ed25519_verify 需要 3 个参数: (pub, msg, sig)");
     int plen = 0, mlen = 0, slen = 0;
     const char* pub = e_bytes(args[0], &plen);
     const char* msg = e_bytes(args[1], &mlen);
@@ -352,7 +352,7 @@ static char* e_pem(const char* label, const unsigned char* der, int len) {
 // ed25519_keygen() → dict {pk_hex, sk_hex, pk_pem, sk_pem} | null（熵源失败）
 LXValue bi_ed25519_keygen(LXValue* args, int nargs, void* ctx) {
     (void)args; (void)ctx;
-    if (nargs != 0) px_error("ed25519_keygen 不需要参数");
+    if (nargs != 0) px_error("R1002: ed25519_keygen 不需要参数");
     unsigned char pk[32], sk[64];
     randombytes(sk, 32);                              // 32B seed
     if (crypto_sign_seed_keypair(pk, sk) != 0) return px_null();

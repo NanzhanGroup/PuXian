@@ -40,11 +40,11 @@ static unsigned rd_u32(const unsigned char* d, int o) {
 
 // 取字符串字节与长度
 static const char* zstr(LXValue v) {
-    if (v.type != PX_STR) px_error("期望字符串，实际是 %s", px_type_name(v));
+    if (v.type != PX_STR) px_error("R1002: 期望字符串，实际是 %s", px_type_name(v));
     return v.as.obj->as.str.data;
 }
 static int zstrlen(LXValue v) {
-    if (v.type != PX_STR) px_error("期望字符串，实际是 %s", px_type_name(v));
+    if (v.type != PX_STR) px_error("R1002: 期望字符串，实际是 %s", px_type_name(v));
     return v.as.obj->as.str.len;
 }
 
@@ -78,8 +78,8 @@ static int z_raw_inflate(const unsigned char* in, int inlen, unsigned char* out,
 // zip_pack(files, out_path) → bool
 LXValue bi_zip_pack(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2) px_error("zip_pack 需要 2 个参数: (files, out_path)");
-    if (args[0].type != PX_DICT) px_error("zip_pack 第一个参数须为 dict{路径→内容}");
+    if (nargs != 2) px_error("R1002: zip_pack 需要 2 个参数: (files, out_path)");
+    if (args[0].type != PX_DICT) px_error("R1002: zip_pack 第一个参数须为 dict{路径→内容}");
     const char* out_path = zstr(args[1]);
     LXObject* d = args[0].as.obj;
     ZBuf out = {0};
@@ -363,14 +363,14 @@ static void z_mkdirs(const char* path) {
 //   zipcrypto（PKWARE 传统）与 WinZip AES-128/192/256（AE-1/AE-2，PBKDF2-HMAC-SHA1 + AES-CTR）。
 LXValue bi_zip_unpack(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 2 || nargs > 3) px_error("zip_unpack 需要 2-3 个参数: (zip_path, out_dir[, password])");
+    if (nargs < 2 || nargs > 3) px_error("R1002: zip_unpack 需要 2-3 个参数: (zip_path, out_dir[, password])");
     const char* zip_path = zstr(args[0]);
     const char* out_dir = zstr(args[1]);
     const char* password = NULL;
     int pwlen = 0;
     if (nargs == 3) {
         if (args[2].type != PX_STR && args[2].type != PX_NULL)
-            px_error("zip_unpack 的 password 需要字符串或 null");
+            px_error("R1002: zip_unpack 的 password 需要字符串或 null");
         if (args[2].type == PX_STR) {
             password = args[2].as.obj->as.str.data;
             pwlen = args[2].as.obj->as.str.len;

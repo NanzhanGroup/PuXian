@@ -86,10 +86,10 @@
 | **E1 文件 / I/O** | `io:` `fs:` | `io: 打开文件失败 /tmp/x: ...`、`fs: 读取目录失败 ...` |
 | **E2 网络 / 传输** | `net:` `tcp_listen:` `udp_open:` `udp_serve:` `udp_send:` `tls_connect:` `tls_upgrade:` `tls_server:` `tls_server(...):` | `net: 监听端口 8080 失败` |
 | **E3 HTTP / SSE / 站点** | `http_serve:` `http_serve_unix:` `sse_serve:` `px_serve:` `vhost:` | `px_serve: 绑定端口 80 失败：Permission denied` |
-| **E4 数据 / 解析** | `json:` `regex:` | `json: 期望对象键`、`regex: ...` |
-| **E5 资源 / 上限** | `spawn:` `定时器` `定时器:` `cron:` `cron …` `bus_subscribe:` `bus_publish:` `ctx_set:` `事件总线数量超出上限` `虚拟主机数量超出上限` `SNI 证书数量超出上限` `全局表溢出` `句柄表已满` `创建线程失败` `并发线程数超出上限` | `spawn: 并发线程数超出上限 64` |
+| **E4 数据 / 解析** | `json:` `regex:` `zip ` | `json: 期望对象键`、`regex: ...` |
+| **E5 资源 / 上限** | `spawn:` `定时器` `定时器:` `cron:` `cron …` `bus_subscribe:` `bus_publish:` `ctx_set:` `事件总线数量超出上限` `虚拟主机数量超出上限` `SNI 证书数量超出上限` `全局表溢出` `句柄表已满` `创建线程失败` `并发线程数超出上限` `内存不足` | `spawn: 并发线程数超出上限 64` |
 | **E6 进程 / 策略** | `os_exec …` `沙箱：` `%s: SO_REUSEPORT …` | `沙箱：函数 os_exec 已被禁用` |
-| **E7 后端算法（几乎不可达）** | `md5 …` `sha1 …` `sha256 …` `pbkdf2_sha256 …` 计算失败 | `sha256 计算失败`（mbedTLS 返回非 0） |
+| **E7 后端算法（几乎不可达）** | `md5 …` `sha1 …` `sha256 …` `pbkdf2_sha256 …` `aes …` 计算失败 | `sha256 计算失败`（mbedTLS 返回非 0） |
 
 **允许文本里带 `strerror` / errno 细节** —— 那是本族存在的意义（"为什么打不开"只有 OS 知道）。
 **不允许**的是：语言层错误借域前缀逃避带码（例如"参数类型不对"写成 `io: ...`）。
@@ -110,21 +110,18 @@
 ## 5 已知差异（诚实登记）与后续候选
 
 1. **未收口清单（棘轮基线 · M191）** —— `runtime/runtime.c` 与 `runtime/runtime_onnx.c` **已全额收口
-   （语言层无码站点 = 0）**；其余 16 个模块文件是**历史欠账**，`examples/m191_error_codes/` 会打印基线、
+   （语言层无码站点 = 0）**；其余 11 个模块文件是**历史欠账**（M192 已收口 `aes` / `zip` / `rsa` / `zlib` / `ed25519` 五件，合计 121 站点），`examples/m191_error_codes/` 会打印基线、
    **只许减少不许增加**（新增无码站点即判门红）。分批收口的顺序（按站点数）：
 
    | 文件 | 未收口站点 | 文件 | 未收口站点 |
    |---|---|---|---|
-   | `runtime_aes.c` | 68 | `runtime_zlib.c` | 7 |
-   | `runtime_zip.c` | 31 | `runtime_image.c` | 7 |
-   | `runtime_quic.c` | 28 | `runtime_ed25519.c` | 4 |
+   | `runtime_image.c` | 7 | `runtime_quic.c` | 28 |
    | `vm.c` | 25 | `runtime_ffi.c` | 3 |
    | `runtime_xml.c` | 23 | `runtime_h3_qpack.c` | 2 |
    | `runtime_h3.c` | 18 | `runtime_h3_qpack_dyn.c` | 2 |
    | `runtime_ws.c` | 16 | `coro.c` | 1 |
-   | `runtime_rsa.c` | 11 | | |
-   | `runtime_sqlite.c` | 9 | **合计** | **264** |
-   | `runtime_route.c` | 9 | | |
+   | `runtime_sqlite.c` | 9 | `runtime_route.c` | 9 |
+   | **合计** | **143** | | |
 
 2. **渲染框架不同（设计如此，不是缺陷）**
    - 解释轨（`px run` / `bootstrap/pxi`）由**解释器自己**抛的错误：`运行时错误: 错误 [R1002] 行:列: 消息`（带用户行列）。

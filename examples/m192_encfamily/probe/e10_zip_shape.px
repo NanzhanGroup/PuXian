@@ -1,0 +1,2 @@
+print("before")
+print(zip_pack(["a"], "/tmp/m192_x.zip"))

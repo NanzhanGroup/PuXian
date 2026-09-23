@@ -19,7 +19,8 @@ DOMAIN = [
     r"定时器", r"事件总线数量超出上限", r"虚拟主机数量超出上限", r"SNI 证书数量超出上限",
     r"全局表溢出", r"句柄表已满", r"创建线程失败", r"并发线程数超出上限",
     r"os_exec", r"沙箱：", r"%s: SO_REUSEPORT",
-    r"md5 ", r"sha1 ", r"sha256 ", r"pbkdf2_sha256 ",
+    r"md5 ", r"sha1 ", r"sha256 ", r"pbkdf2_sha256 ", r"aes ",
+    r"zip ", r"内存不足",
 ]
 DOMAIN_RE = re.compile("^(" + "|".join(DOMAIN) + ")")
 
@@ -29,11 +30,11 @@ METHODISH = re.compile(r"^(方法 |list\.index|pop |is_ok|is_err|unwrap|unwrap_e
 
 # ── 未收口基线（**棘轮**）：这些文件里"尚无 R 码的语言层站点"是历史欠账，本轮不一次性收口
 #    （见 docs/ERROR_CODES.md §5），但**不许变多** —— 多了即判红。
-#    核心文件 `runtime/runtime.c` 与 `runtime/runtime_onnx.c` **已全额收口（基线 0）**。
+#    核心文件 `runtime/runtime.c` 与 `runtime/runtime_onnx.c` **已全额收口（基线 0）**；
+#    M192 起 **加密/压缩/归档族五件（aes / zip / rsa / zlib / ed25519）也已全额收口** ——
+#    其条目已从下表**删除**：删除即等价于基线 0，再往这些文件加无码站点会立即判门红。
 UNCODED_BASELINE = {
     "runtime/coro.c": 1,
-    "runtime/runtime_aes.c": 68,
-    "runtime/runtime_ed25519.c": 4,
     "runtime/runtime_ffi.c": 3,
     "runtime/runtime_h3.c": 18,
     "runtime/runtime_h3_qpack.c": 2,
@@ -41,12 +42,9 @@ UNCODED_BASELINE = {
     "runtime/runtime_image.c": 7,
     "runtime/runtime_quic.c": 28,
     "runtime/runtime_route.c": 9,
-    "runtime/runtime_rsa.c": 11,
     "runtime/runtime_sqlite.c": 9,
     "runtime/runtime_ws.c": 16,
     "runtime/runtime_xml.c": 23,
-    "runtime/runtime_zip.c": 31,
-    "runtime/runtime_zlib.c": 7,
     "runtime/vm.c": 25,
 }
 

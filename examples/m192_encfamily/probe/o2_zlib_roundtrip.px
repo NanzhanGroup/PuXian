@@ -1,0 +1,1 @@
+print(len(zlib_uncompress(zlib_compress("roundtrip-ok", 6))))

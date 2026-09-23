@@ -1,0 +1,2 @@
+print("before")
+print(zlib_crc32(1))

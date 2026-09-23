@@ -25,12 +25,12 @@
 // str/bytes 通用取数据指针 + 长度（union 复用 str 的 data/len）
 static const char* z_buf(LXValue v) {
     if (v.type != PX_STR && v.type != PX_BYTES)
-        px_error("zlib: 参数需要 str/bytes");
+        px_error("R1002: 参数需要 str/bytes");
     return v.as.obj->as.str.data;
 }
 static int z_buflen(LXValue v) {
     if (v.type != PX_STR && v.type != PX_BYTES)
-        px_error("zlib: 参数需要 str/bytes");
+        px_error("R1002: 参数需要 str/bytes");
     return v.as.obj->as.str.len;
 }
 
@@ -38,7 +38,7 @@ static int z_buflen(LXValue v) {
 //   crc32(0L, data, len) 的 0L 为初始值（语言侧恒用 0 起始）
 static LXValue bi_zlib_crc32(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) px_error("zlib_crc32 需要 1 个参数 (data)");
+    if (nargs != 1) px_error("R1002: zlib_crc32 需要 1 个参数 (data)");
     const char* d = z_buf(args[0]);
     int n = z_buflen(args[0]);
     uLong c = crc32(0L, (const Bytef*)d, (uInt)n);
@@ -50,12 +50,12 @@ static LXValue bi_zlib_crc32(LXValue* args, int nargs, void* ctx) {
 //   语言侧无需预分配 —— C 内 compressBound 定容、压缩后按实际长度建 bytes 返回。
 static LXValue bi_zlib_compress(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2) px_error("zlib_compress 需要 2 个参数 (data, level)");
-    if (args[1].type != PX_INT) px_error("zlib_compress 的 level 需要 int");
+    if (nargs != 2) px_error("R1002: zlib_compress 需要 2 个参数 (data, level)");
+    if (args[1].type != PX_INT) px_error("R1002: zlib_compress 的 level 需要 int");
     const char* src = z_buf(args[0]);
     int slen = z_buflen(args[0]);
     int level = (int)args[1].as.i;
-    if (level < 0 || level > 9) px_error("zlib_compress 的 level 需在 0..9");
+    if (level < 0 || level > 9) px_error("R1002: zlib_compress 的 level 需在 0..9");
     uLongf cap = compressBound((uLong)(slen > 0 ? (size_t)slen : 1));
     Bytef* out = (Bytef*)malloc(cap);
     if (!out) return px_null();
@@ -72,7 +72,7 @@ static LXValue bi_zlib_compress(LXValue* args, int nargs, void* ctx) {
 //   非法/截断 deflate 流返回 null（不杀进程）。
 static LXValue bi_zlib_uncompress(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) px_error("zlib_uncompress 需要 1 个参数 (data)");
+    if (nargs != 1) px_error("R1002: zlib_uncompress 需要 1 个参数 (data)");
     const char* src = z_buf(args[0]);
     int slen = z_buflen(args[0]);
     z_stream zs;

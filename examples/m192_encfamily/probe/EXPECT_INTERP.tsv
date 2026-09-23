@@ -1,0 +1,2 @@
+e5_zlib_level	R1002	zlib_compress 的 level 需在 0..9
+e6_zlib_type	R1002	参数需要 str/bytes
