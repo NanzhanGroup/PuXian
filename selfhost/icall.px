@@ -193,7 +193,7 @@ def i_str_method(s, name, args, pos):
     # 实现不复制：find → 宿主 native str_index_of（rune 轴）；其余三个 → 既有语言级方法。
     if name == "find":
         if len(args) != 1:
-            return Err(i_r1002("方法 find 参数 1 需要 string", pos))
+            return Err(i_r1005("方法 find 需要 1 个参数", pos))
         let r = i_expect_str_arg(args, 0, "find", pos)
         if r.is_err():
             return Err(r.err())
@@ -204,14 +204,14 @@ def i_str_method(s, name, args, pos):
         return Ok(s.trim())
     if name == "has_prefix":
         if len(args) != 1:
-            return Err(i_r1002("方法 has_prefix 参数 1 需要 string", pos))
+            return Err(i_r1005("方法 has_prefix 需要 1 个参数", pos))
         let r = i_expect_str_arg(args, 0, "has_prefix", pos)
         if r.is_err():
             return Err(r.err())
         return Ok(s.starts_with(r.unwrap()))
     if name == "has_suffix":
         if len(args) != 1:
-            return Err(i_r1002("方法 has_suffix 参数 1 需要 string", pos))
+            return Err(i_r1005("方法 has_suffix 需要 1 个参数", pos))
         let r = i_expect_str_arg(args, 0, "has_suffix", pos)
         if r.is_err():
             return Err(r.err())

@@ -147,7 +147,9 @@ echo "=== [3] 拒绝侧 5 例 × 三轨：rc≠0 + 词条逐字相同"
 declare -A PAT=(
   [find_arg]='方法 find 参数 1 需要 string'
   [strip_arg]='方法 strip 不接受参数'
-  [has_prefix_arg]='方法 has_prefix 参数 1 需要 string'
+  # M191（第 69 轮）口径变更：**缺参**是「实参个数」错 ⇒ 文案改为「需要 1 个参数」并带 R1005
+  #   （此前解释轨把个数错复用了类型文案「参数 1 需要 string」，与 native 拆开后不一致）。
+  [has_prefix_arg]='方法 has_prefix 需要 1 个参数'
   [sha1_arg]='sha1 需要一个参数'
   [byte_range]='byte 取值范围 0\.\.255，实际是 300'
 )

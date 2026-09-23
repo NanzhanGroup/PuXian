@@ -288,7 +288,11 @@ rt_cache_compile() {
     #   来自各自工具链、且其自举链已被 CI 的 M159 交叉档覆盖（编译 runtime 全量）。
     #   缩小作用面 = 降低"预检自己成为交叉路径新变量"的风险（**非**修 bug：无证据表明交叉受影响）。
     if [ "$cc" = "${PX_CC:-gcc}" ] && [ "${_PX_C11ATOMIC_OK:-}" != 1 ]; then
-        local _pc="${TMPDIR:-/tmp}/.px_c11probe.c" _po="${TMPDIR:-/tmp}/.px_c11probe.o"
+        # M191（缺陷 215）：探针文件名必须**唯一** —— 固定名会让两个并发 `px build` 互删探针，
+        #   其中一个报「不支持 C11 原子 / 缺静态 libc」而**构建失败**（实测：并发跑门时假红）。
+        local _pc _po
+        _pc="$(mktemp --suffix=.c "${TMPDIR:-/tmp}/.px_c11probe.XXXXXX")" || { echo "错误: mktemp 失败" >&2; return 1; }
+        _po="${_pc%.c}.o"
         printf '#include <stdatomic.h>\nint main(void){_Atomic int x=0;__atomic_store_n(&x,1,__ATOMIC_SEQ_CST);return (int)__atomic_load_n(&x,__ATOMIC_SEQ_CST);}\n' > "$_pc"
         if $cc -c "$_pc" -o "$_po" >/dev/null 2>&1; then
             _PX_C11ATOMIC_OK=1
@@ -820,7 +824,10 @@ cmd_build() {
     #   实锤（2026-09-21 报障同源）：rpm 的 Requires 只写了 gcc，用户装完就栽在这里。
     #   本次运行只探测一次（结果缓存在 _PX_STATIC_LIBC_OK）。
     if [ "${_PX_STATIC_LIBC_OK:-}" != 1 ]; then
-        local _probe_c="${TMPDIR:-/tmp}/.px_static_probe.c" _probe_b="${TMPDIR:-/tmp}/.px_static_probe.bin"
+        # M191（缺陷 215）：同上 —— 固定名 ⇒ 并发构建互相踩，实测「缺静态 libc」假报。
+        local _probe_c _probe_b
+        _probe_c="$(mktemp --suffix=.c "${TMPDIR:-/tmp}/.px_static_probe.XXXXXX")" || { echo "错误: mktemp 失败" >&2; return 1; }
+        _probe_b="${_probe_c%.c}.bin"
         printf 'int main(void){return 0;}\n' > "$_probe_c"
         if $cc -static -o "$_probe_b" "$_probe_c" >/dev/null 2>&1; then
             _PX_STATIC_LIBC_OK=1
