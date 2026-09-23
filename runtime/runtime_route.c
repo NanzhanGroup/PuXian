@@ -84,18 +84,18 @@ static void route_parse_pattern(const char* pattern, PxRouteSeg* segs, int* nseg
 // opts（M33）：{rate_limit:{max,window_sec}} → 该路由按来源 IP 独立限流（超限 429）
 LXValue bi_route(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 3 && nargs != 4) px_error("route 需要 (method, pattern, handler[, opts]) 参数");
-    if (args[0].type != PX_STR || args[1].type != PX_STR) px_error("route 的 method/pattern 需要字符串");
-    if (args[2].type != PX_FUNC) px_error("route 的 handler 必须是函数");
+    if (nargs != 3 && nargs != 4) px_error("R1002: route 需要 (method, pattern, handler[, opts]) 参数");
+    if (args[0].type != PX_STR || args[1].type != PX_STR) px_error("R1002: route 的 method/pattern 需要字符串");
+    if (args[2].type != PX_FUNC) px_error("R1002: route 的 handler 必须是函数");
     char err[256] = {0};
     PxRouteSeg segs[32];
     int nsegs = 0;
     route_parse_pattern(args[1].as.obj->as.str.data, segs, &nsegs, err, sizeof(err));
-    if (err[0]) px_error("%s", err);
+    if (err[0]) px_error("R1002: %s", err);
     // M33.1：解析 opts{rate_limit:{max,window_sec}}
     long long rate_max = 0, rate_window = 0;
     if (nargs == 4) {
-        if (args[3].type != PX_DICT) px_error("route 的第 4 参数 opts 需要 dict");
+        if (args[3].type != PX_DICT) px_error("R1002: route 的第 4 参数 opts 需要 dict");
         LXValue rl = px_dict_get(args[3], "rate_limit");
         if (rl.type == PX_DICT) {
             LXValue m = px_dict_get(rl, "max");
@@ -145,8 +145,8 @@ LXValue bi_route(LXValue* args, int nargs, void* ctx) {
 // middleware(fn) → bool
 LXValue bi_middleware(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) px_error("middleware 需要 (fn) 参数");
-    if (args[0].type != PX_FUNC) px_error("middleware 的参数必须是函数");
+    if (nargs != 1) px_error("R1002: middleware 需要 (fn) 参数");
+    if (args[0].type != PX_FUNC) px_error("R1002: middleware 的参数必须是函数");
     pthread_mutex_lock(&g_route_mu);
     if (g_mw_count >= MAX_MIDDLEWARES) {
         pthread_mutex_unlock(&g_route_mu);

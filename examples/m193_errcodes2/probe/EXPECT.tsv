@@ -1,0 +1,9 @@
+e2_ffi_call	R1002	ffi_call 需要 (name, args_list) 参数
+e2_h3_qenc	R1002	h3_qenc 需要 (headers: list)
+e2_img_decode	R1002	期望字符串或 bytes，实际是 int
+e2_quic_listen	R1002	quic_listen 需要 (port: int)
+e2_route_type	R1002	route 的 method/pattern 需要字符串
+e2_sqlite_open	R1002	sqlite_open 的 path 需要字符串
+e2_xml_parse_type	R1002	xml_parse 期望字符串
+e2_ws_send_conn	R1002	ws_send 的 conn 需要整数，实际是 string
+e2_ws_send_type	R1002	ws_send 的 data 需要字符串，实际是 int

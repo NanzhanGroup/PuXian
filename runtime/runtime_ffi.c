@@ -128,9 +128,9 @@ LXValue bi_interp_bridge_install(LXValue* args, int nargs, void* ctx) {
 
 LXValue bi_ffi_call(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2) px_error("ffi_call 需要 (name, args_list) 参数");
-    if (args[0].type != PX_STR) px_error("ffi_call 的 name 需要字符串");
-    if (args[1].type != PX_LIST) px_error("ffi_call 的 args 需要列表");
+    if (nargs != 2) px_error("R1002: ffi_call 需要 (name, args_list) 参数");
+    if (args[0].type != PX_STR) px_error("R1002: ffi_call 的 name 需要字符串");
+    if (args[1].type != PX_LIST) px_error("R1002: ffi_call 的 args 需要列表");
     const char* name = args[0].as.obj->as.str.data;
     LXObject*   lst  = args[1].as.obj;
     int         i;

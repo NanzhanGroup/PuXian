@@ -428,9 +428,9 @@ static long long g_ws_hb_timeout = 60000;
 LXValue bi_ws_serve(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     // M36：ws_serve(port, handler[, opts{heartbeat:{interval_ms,timeout_ms}}])
-    if (nargs < 2 || nargs > 3 || args[0].type != PX_INT) px_error("ws_serve 需要 (port, handler[, opts]) 参数");
+    if (nargs < 2 || nargs > 3 || args[0].type != PX_INT) px_error("R1002: ws_serve 需要 (port, handler[, opts]) 参数");
     LXValue handler = args[1];
-    if (handler.type != PX_FUNC && handler.type != PX_NATIVE) px_error("ws_serve 的 handler 必须是函数");
+    if (handler.type != PX_FUNC && handler.type != PX_NATIVE) px_error("R1002: ws_serve 的 handler 必须是函数");
     px_set_global("__ws_handler", handler);
     // M36：心跳配置
     g_ws_hb_interval = 0;
@@ -676,7 +676,7 @@ LXValue bi_ws_connect(LXValue* args, int nargs, void* ctx) {
         return px_int(conn);
     }
     if (nargs != 3 || args[0].type != PX_STR || args[1].type != PX_INT || args[2].type != PX_STR)
-        px_error("ws_connect 需要 (url) 或 (host, port, path) 参数");
+        px_error("R1002: ws_connect 需要 (url) 或 (host, port, path) 参数");
     host = args[0].as.obj->as.str.data;
     port = (int)args[1].as.i;
     path = args[2].as.obj->as.str.data;
@@ -720,7 +720,11 @@ LXValue bi_ws_connect(LXValue* args, int nargs, void* ctx) {
 // ws_send(conn, data) → bool
 LXValue bi_ws_send(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2 || args[0].type != PX_INT) px_error("ws_send 需要 (conn, data) 参数");
+    if (nargs != 2) px_error("R1002: ws_send 需要 (conn, data) 参数");
+    if (args[0].type != PX_INT) px_error("R1002: ws_send 的 conn 需要整数，实际是 %s", px_type_name(args[0]));
+    // M193（缺陷 221 · 守卫不完整）：data 此前**完全不检查** ⇒ `ws_send(c, 2)` 会把 int 经
+    //   val_cstr 串化成 "2" 静默发出（静默错值）。文本帧语义 = 字符串，故显式收口。
+    if (args[1].type != PX_STR) px_error("R1002: ws_send 的 data 需要字符串，实际是 %s", px_type_name(args[1]));
     int64_t conn = args[0].as.i;
     int is_client = 0;
     PxConn* c = ws_get_conn(conn, &is_client);
@@ -747,11 +751,11 @@ LXValue bi_ws_send(LXValue* args, int nargs, void* ctx) {
 LXValue bi_ws_connect_auto(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 2 || args[0].type != PX_STR || args[1].type != PX_INT)
-        px_error("ws_connect_auto 需要 (url, reconnect_ms) 参数");
+        px_error("R1002: ws_connect_auto 需要 (url, reconnect_ms) 参数");
     const char* url = args[0].as.obj->as.str.data;
     long long ms = args[1].as.i;
-    if (ms <= 0) px_error("ws_connect_auto 的 reconnect_ms 需要正整数");
-    if (strncmp(url, "wss://", 6) == 0) px_error("ws_connect_auto 暂支持 ws://（明文重连）");
+    if (ms <= 0) px_error("R1002: ws_connect_auto 的 reconnect_ms 需要正整数");
+    if (strncmp(url, "wss://", 6) == 0) px_error("R1002: ws_connect_auto 暂支持 ws://（明文重连）");
     if (strncmp(url, "ws://", 5) != 0) return px_null();
     const char* rest = url + 5;
     const char* slash = strchr(rest, '/');
@@ -804,7 +808,7 @@ LXValue bi_ws_connect_auto(LXValue* args, int nargs, void* ctx) {
 // 只广播服务端连接（client=0）：避免回环（客户端连接也广播会把帧发回自身对端）
 LXValue bi_ws_broadcast(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) px_error("ws_broadcast 需要 (data) 参数");
+    if (nargs != 1) px_error("R1002: ws_broadcast 需要 (data) 参数");
     const char* data = px_val_cstr(args[0]);
     size_t dlen = strlen(data);
     int ok = 0;
@@ -891,10 +895,10 @@ static int ws_auto_reconnect(int64_t conn, PxConn** cpp) {
 LXValue bi_ws_recv(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 1 || nargs > 2 || args[0].type != PX_INT)
-        px_error("ws_recv 需要 (conn) 或 (conn, timeout_ms) 参数");
+        px_error("R1002: ws_recv 需要 (conn) 或 (conn, timeout_ms) 参数");
     int timeout_ms = -1;
     if (nargs == 2) {
-        if (args[1].type != PX_INT) px_error("ws_recv 的 timeout_ms 必须是整数");
+        if (args[1].type != PX_INT) px_error("R1002: ws_recv 的 timeout_ms 必须是整数");
         timeout_ms = (int)args[1].as.i;
     }
     int64_t conn = args[0].as.i;
@@ -1004,7 +1008,7 @@ LXValue bi_ws_recv(LXValue* args, int nargs, void* ctx) {
 // ws_close(conn) → bool（发 close 帧 + shutdown 唤醒阻塞 recv）
 LXValue bi_ws_close(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1 || args[0].type != PX_INT) px_error("ws_close 需要 (conn) 参数");
+    if (nargs != 1 || args[0].type != PX_INT) px_error("R1002: ws_close 需要 (conn) 参数");
     int64_t conn = args[0].as.i;
     int is_client = 0;
     PxConn* c = ws_get_conn(conn, &is_client);
@@ -1027,7 +1031,7 @@ LXValue bi_ws_close(LXValue* args, int nargs, void* ctx) {
 // ws_ping(conn) → bool（发送 ping 帧；心跳保活，对端应回 pong）
 LXValue bi_ws_ping(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1 || args[0].type != PX_INT) px_error("ws_ping 需要 (conn) 参数");
+    if (nargs != 1 || args[0].type != PX_INT) px_error("R1002: ws_ping 需要 (conn) 参数");
     int64_t conn = args[0].as.i;
     int is_client = 0;
     PxConn* c = ws_get_conn(conn, &is_client);
@@ -1113,7 +1117,7 @@ static void* ws_heartbeat_thread(void* arg) {
 LXValue bi_ws_heartbeat(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 3 || args[0].type != PX_INT)
-        px_error("ws_heartbeat 需要 (conn, interval_ms, timeout_ms) 参数");
+        px_error("R1002: ws_heartbeat 需要 (conn, interval_ms, timeout_ms) 参数");
     int64_t conn = args[0].as.i;
     long long interval = (args[1].type == PX_INT) ? args[1].as.i : 10000;
     long long timeout = (args[2].type == PX_INT) ? args[2].as.i : 60000;

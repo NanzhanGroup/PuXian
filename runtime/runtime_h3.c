@@ -542,7 +542,7 @@ static LXValue h3_c_fields_to_lx(char** names, char** vals, int* nls, int* vls, 
 // h3_qenc(headers: list of [name,value]) -> bytes
 static LXValue bi_h3_qenc(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_LIST) px_error("h3_qenc 需要 (headers: list)");
+    if (nargs < 1 || args[0].type != PX_LIST) px_error("R1002: h3_qenc 需要 (headers: list)");
     LXObject* lst = args[0].as.obj;
     uint8_t* out = (uint8_t*)malloc(H3_BUF_MAX);
     if (!out) return px_null();
@@ -557,7 +557,7 @@ static LXValue bi_h3_qenc(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_h3_qdec(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 1 || (args[0].type != PX_STR && args[0].type != PX_BYTES))
-        px_error("h3_qdec 需要 (data: bytes)");
+        px_error("R1002: h3_qdec 需要 (data: bytes)");
     LXObject* o = args[0].as.obj;
     return px_h3_qdec((const uint8_t*)o->as.str.data, o->as.str.len);
 }
@@ -565,13 +565,13 @@ static LXValue bi_h3_qdec(LXValue* args, int nargs, void* ctx) {
 // h3_frame(type:int, payload:bytes) -> bytes
 static LXValue bi_h3_frame(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 2 || args[0].type != PX_INT) px_error("h3_frame 需要 (type:int, payload)");
+    if (nargs < 2 || args[0].type != PX_INT) px_error("R1002: h3_frame 需要 (type:int, payload)");
     int type = (int)args[0].as.i;
     const uint8_t* pl = NULL; int plen = 0;
     if (args[1].type == PX_STR || args[1].type == PX_BYTES) {
         pl = (const uint8_t*)args[1].as.obj->as.str.data;
         plen = args[1].as.obj->as.str.len;
-    } else if (args[1].type != PX_NULL) px_error("h3_frame 的 payload 需要 str/bytes");
+    } else if (args[1].type != PX_NULL) px_error("R1002: h3_frame 的 payload 需要 str/bytes");
     uint8_t* out = (uint8_t*)malloc(H3_BUF_MAX + 16);
     if (!out) return px_null();
     int n = h3_build_frame(out, type, pl, plen);
@@ -872,7 +872,7 @@ static bool h3_conn_setup_c(int64_t conn, int64_t cap) {
 static LXValue bi_h3_conn_setup(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 2 || args[0].type != PX_INT || args[1].type != PX_INT)
-        px_error("h3_conn_setup 需要 (conn: int, qpack_cap: int)");
+        px_error("R1002: h3_conn_setup 需要 (conn: int, qpack_cap: int)");
     int64_t conn = args[0].as.i;
     int64_t cap = args[1].as.i;
     return px_bool(h3_conn_setup_c(conn, cap));
@@ -936,7 +936,7 @@ static LXValue bi_h3_conn_stats(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_h3_serve_poll_stream(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 2 || args[0].type != PX_INT || args[1].type != PX_INT)
-        px_error("h3_serve_poll_stream 需要 (conn, timeout_ms)");
+        px_error("R1002: h3_serve_poll_stream 需要 (conn, timeout_ms)");
     int64_t conn = args[0].as.i;
     int64_t timeout = args[1].as.i;
     int64_t sid = h3_poll_requests(conn, timeout);
@@ -947,7 +947,7 @@ static LXValue bi_h3_serve_poll_stream(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_h3_serve_read_request_stream(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 3 || args[0].type != PX_INT || args[1].type != PX_INT || args[2].type != PX_INT)
-        px_error("h3_serve_read_request_stream 需要 (conn, sid, timeout_ms)");
+        px_error("R1002: h3_serve_read_request_stream 需要 (conn, sid, timeout_ms)");
     int64_t conn = args[0].as.i;
     int64_t sid = args[1].as.i;
     int64_t timeout = args[2].as.i;
@@ -964,7 +964,7 @@ static LXValue bi_h3_serve_read_request_stream(LXValue* args, int nargs, void* c
 static LXValue bi_h3_serve_send_response_stream(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 5 || args[0].type != PX_INT || args[1].type != PX_INT || args[2].type != PX_INT)
-        px_error("h3_serve_send_response_stream 需要 (conn, sid, status:int, headers:list, body)");
+        px_error("R1002: h3_serve_send_response_stream 需要 (conn, sid, status:int, headers:list, body)");
     int64_t conn = args[0].as.i;
     int64_t sid = args[1].as.i;
     int status = (int)args[2].as.i;
@@ -978,7 +978,7 @@ static LXValue bi_h3_serve_send_response_stream(LXValue* args, int nargs, void* 
 // h3_client_open_stream(conn) -> int：open 一条新请求双向流
 static LXValue bi_h3_client_open_stream(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) px_error("h3_client_open_stream 需要 (conn)");
+    if (nargs < 1 || args[0].type != PX_INT) px_error("R1002: h3_client_open_stream 需要 (conn)");
     int64_t conn = args[0].as.i;
     int64_t sid = px_quic_raw_open_stream(conn);
     return px_int(sid);
@@ -988,7 +988,7 @@ static LXValue bi_h3_client_open_stream(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_h3_client_send_request_stream(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 8 || args[0].type != PX_INT || args[1].type != PX_INT)
-        px_error("h3_client_send_request_stream 需要 (conn, sid, method, scheme, authority, path, headers, body)");
+        px_error("R1002: h3_client_send_request_stream 需要 (conn, sid, method, scheme, authority, path, headers, body)");
     int64_t conn = args[0].as.i;
     int64_t sid = args[1].as.i;
     if (args[2].type != PX_STR || args[3].type != PX_STR || args[4].type != PX_STR || args[5].type != PX_STR)
@@ -1006,7 +1006,7 @@ static LXValue bi_h3_client_send_request_stream(LXValue* args, int nargs, void* 
 static LXValue bi_h3_client_read_response_stream(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 3 || args[0].type != PX_INT || args[1].type != PX_INT || args[2].type != PX_INT)
-        px_error("h3_client_read_response_stream 需要 (conn, sid, timeout_ms)");
+        px_error("R1002: h3_client_read_response_stream 需要 (conn, sid, timeout_ms)");
     int64_t conn = args[0].as.i;
     int64_t sid = args[1].as.i;
     int64_t timeout = args[2].as.i;
@@ -1023,7 +1023,7 @@ static LXValue bi_h3_client_read_response_stream(LXValue* args, int nargs, void*
 // h3_serve_read_request(conn, timeout_ms) -> dict|null
 static LXValue bi_h3_serve_read_request(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 2 || args[0].type != PX_INT) px_error("h3_serve_read_request 需要 (conn, timeout_ms)");
+    if (nargs < 2 || args[0].type != PX_INT) px_error("R1002: h3_serve_read_request 需要 (conn, timeout_ms)");
     int64_t conn = args[0].as.i;
     int64_t timeout = args[1].as.i;
     // 默认流：先等一条 peer 流出现（poll），再从该流读完整请求
@@ -1043,7 +1043,7 @@ static LXValue bi_h3_serve_read_request(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_h3_serve_send_response(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 4 || args[0].type != PX_INT || args[1].type != PX_INT)
-        px_error("h3_serve_send_response 需要 (conn, status:int, headers:list, body)");
+        px_error("R1002: h3_serve_send_response 需要 (conn, status:int, headers:list, body)");
     int64_t conn = args[0].as.i;
     int status = (int)args[1].as.i;
     int64_t sid = (conn > 0 && conn <= H3_MAX_CONN) ? g_last_sid[conn - 1] : -1;
@@ -1058,7 +1058,7 @@ static LXValue bi_h3_serve_send_response(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_h3_client_connect(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 3 || args[0].type != PX_STR || args[1].type != PX_INT || args[2].type != PX_STR)
-        px_error("h3_client_connect 需要 (ip:str, port:int, alpn:str)");
+        px_error("R1002: h3_client_connect 需要 (ip:str, port:int, alpn:str)");
     const char* ip = args[0].as.obj->as.str.data;
     int port = (int)args[1].as.i;
     const char* alpn = args[2].as.obj->as.str.data;
@@ -1070,7 +1070,7 @@ static LXValue bi_h3_client_connect(LXValue* args, int nargs, void* ctx) {
 // h3_client_send_request(conn, method, scheme, authority, path, headers, body) -> bool
 static LXValue bi_h3_client_send_request(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 7 || args[0].type != PX_INT) px_error("h3_client_send_request 需要 (conn, method, scheme, authority, path, headers, body)");
+    if (nargs < 7 || args[0].type != PX_INT) px_error("R1002: h3_client_send_request 需要 (conn, method, scheme, authority, path, headers, body)");
     int64_t conn = args[0].as.i;
     if (args[1].type != PX_STR || args[2].type != PX_STR || args[3].type != PX_STR || args[4].type != PX_STR)
         return px_bool(false);
@@ -1088,7 +1088,7 @@ static LXValue bi_h3_client_send_request(LXValue* args, int nargs, void* ctx) {
 // h3_client_read_response(conn, timeout_ms) -> dict|null
 static LXValue bi_h3_client_read_response(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 2 || args[0].type != PX_INT) px_error("h3_client_read_response 需要 (conn, timeout_ms)");
+    if (nargs < 2 || args[0].type != PX_INT) px_error("R1002: h3_client_read_response 需要 (conn, timeout_ms)");
     int64_t conn = args[0].as.i;
     int64_t timeout = args[1].as.i;
     int64_t sid = (conn > 0 && conn <= H3_MAX_CONN) ? g_last_sid[conn - 1] : -1;
@@ -1367,7 +1367,7 @@ int64_t px_h3_server_listen_stateless(int port, const char* cert, const char* ke
 // h3_server_listen_stateless(port:int[, cert:str, key:str]) -> int
 static LXValue bi_h3_server_listen_stateless(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) px_error("h3_server_listen_stateless 需要 (port: int[, cert: str, key: str])");
+    if (nargs < 1 || args[0].type != PX_INT) px_error("R1002: h3_server_listen_stateless 需要 (port: int[, cert: str, key: str])");
     int port = (int)args[0].as.i;
     const char* cert = "";
     const char* key = "";
@@ -1390,7 +1390,7 @@ int64_t px_h3_server_listen_pipe(int port, const char* cert, const char* key) {
 // vhost/路由/限流/静态/.px 管道（与 HTTP/1.1 px_serve 同一逻辑）。→ listener id | -1
 static LXValue bi_h3_server_listen(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) px_error("h3_server_listen 需要 (port: int[, cert: str, key: str])");
+    if (nargs < 1 || args[0].type != PX_INT) px_error("R1002: h3_server_listen 需要 (port: int[, cert: str, key: str])");
     int port = (int)args[0].as.i;
     const char* cert = "";
     const char* key = "";

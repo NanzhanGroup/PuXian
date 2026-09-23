@@ -550,6 +550,12 @@ run m190_arity bash examples/m190_arity/verify.sh
 #   未收口棘轮）＋ 动态（11 探针 × 三轨同码同文）＋ 5 道负控。
 run m191_error_codes bash examples/m191_error_codes/verify.sh
 run m192_encfamily bash examples/m192_encfamily/verify.sh
+# M193（第 71 轮）：「错误码面」棘轮欠账**第二批**（143 站点 ⇒ 未收口清单**清零**）；
+#   顺带修缺陷 220（runtime_xml.c 的错误消息 use-after-free ⇒ 元素名成堆垃圾）与
+#   221（ws_send 只检查 conn 不检查 data ⇒ int 静默串化成字符串发出）。
+#   判据：静态五查（带码/域前缀 · 个数分码 · 混写拆分 · 未收口棘轮 · 转发豁免）+ 12 文件「无码 0」
+#   + 9 错例 × 三轨同码同文 + 域前缀侧（XML 解析错误**不带码**）+ 合法侧 + 3 道负控。
+run m193_errcodes2 bash examples/m193_errcodes2/verify.sh
 step "M190 · 上游 registry-px 真实用例回归（53 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。
