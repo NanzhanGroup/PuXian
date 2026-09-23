@@ -1,0 +1,1 @@
+print(bytes_len(read_bytes("/etc/hostname")) > 0)

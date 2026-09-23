@@ -564,6 +564,15 @@ run m193_errcodes2 bash examples/m193_errcodes2/verify.sh
 #   判据：静态 [S5]（140 个多形参守卫、缺检查 0）+ 12 错例 × 三轨同码同文 + 合法侧 8 例
 #   + 4 道负控（A/B 静态去检查 · C 动态静默 · D 动态改码；C/D 只判 C 轨 —— 解释/VM 跑预编译件）。
 run m194_arg_guards bash examples/m194_arg_guards/verify.sh
+# M195（第 73 轮）：参数守卫**第二批** —— 把 M194 的判据从「消息形如 `需要 (...)` 且形参 ≥2」
+#   推广到**全部 397 个 native 函数**，抓到三类漏网：① 单形参 INT 静默截断（`range(3.5)`、
+#   `sleep(1.5)`、`chr(65.9)`、onnx 族 `(int)args[0].as.i` 读位模式）；② 元数上界缺失
+#   （h3/quic listen 族 `nargs < 1` ⇒ 多余实参/缺 key 静默）；③ `read_bytes(路径)` /
+#   `ws_broadcast(data)` 的路径/数据语义走了宽容接口。另修 226：解释轨 `range` 守卫
+#   **报错参数错位**（`range(0,1.5)` 报「实际是 int」）且与 native 同码不同文。
+#   判据：静态 [S6]（397 函数 / 未豁免缺检查 0 / 豁免 24/24 · 表⇔源码一致 + 理由非空 + 棘轮）
+#   + 15 错例 × 三轨同码同文 + 合法侧 9 例 + 4 道负控（3 静态 1 动态）。
+run m195_arg_guards2 bash examples/m195_arg_guards2/verify.sh
 step "M190 · 上游 registry-px 真实用例回归（53 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。

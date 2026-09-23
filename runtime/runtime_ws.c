@@ -812,7 +812,8 @@ LXValue bi_ws_connect_auto(LXValue* args, int nargs, void* ctx) {
 LXValue bi_ws_broadcast(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) px_error("R1002: ws_broadcast 需要 (data) 参数");
-    const char* data = px_val_cstr(args[0]);
+    // M195（缺陷 225）：与 M193 修过的 `ws_send` 的 data 同口径（同为**发送体**语义）
+    const char* data = px_arg_str(args[0], "ws_broadcast", "data");
     size_t dlen = strlen(data);
     int ok = 0;
     pthread_mutex_lock(&g_ws_mu);

@@ -5653,9 +5653,11 @@ static LXValue bi_len(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_range(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     int64_t start = 0, end = 0, step = 1;
-    if (nargs == 1) { end = int_val(args[0]); }
-    else if (nargs == 2) { start = int_val(args[0]); end = int_val(args[1]); }
-    else if (nargs == 3) { start = int_val(args[0]); end = int_val(args[1]); step = int_val(args[2]); }
+    // M195（缺陷 224 · M194 同族）：`int_val` 对 float **静默截断** ⇒ `range(3.5)` 修前
+    //   等于 `range(3)`（三轨一致，用户无从察觉）。M194 只覆盖了「形参 ≥2」的站点。
+    if (nargs == 1) { end = px_arg_int(args[0], "range", "end"); }
+    else if (nargs == 2) { start = px_arg_int(args[0], "range", "start"); end = px_arg_int(args[1], "range", "end"); }
+    else if (nargs == 3) { start = px_arg_int(args[0], "range", "start"); end = px_arg_int(args[1], "range", "end"); step = px_arg_int(args[2], "range", "step"); }
     else px_error("R1002: range 需要 1-3 个参数");
     if (step == 0) px_error("R1006: range step 不能为 0");
     LXValue r = px_list(0);
@@ -5931,7 +5933,7 @@ static LXValue bi_panic(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_sleep(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 1) px_error("R1002: sleep 需要 1 个参数");
-    int64_t ms = int_val(args[0]);
+    int64_t ms = px_arg_int(args[0], "sleep", "ms");
     // M88-S2（qg-issue 27）：EINTR 自动续睡——并发 GC（M11 stop-the-world）向所有已注册
     // 线程发 SIG_GC_STOP 实时信号，nanosleep 被信号打断返回 EINTR（nanosleep 不在
     // SA_RESTART 自动重启清单）。若不续睡，主线程 sleep(长) 会在首轮 GC 后提前返回 →
@@ -6010,7 +6012,7 @@ static LXValue bi_ord(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_chr(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) px_error("R1002: chr 需要 (码点) 参数");
-    int64_t cp = int_val(args[0]);
+    int64_t cp = px_arg_int(args[0], "chr", "码点");
     char buf[8];
     int n = 0;
     if (cp < 0 || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
@@ -7019,7 +7021,8 @@ static LXValue bi_open(LXValue* args, int nargs, void* ctx) {
     if (nargs >= 2 && args[1].type == PX_INT) {
         int rflags = (int)args[1].as.i;
         int perm = 0644;
-        if (nargs >= 3) perm = (int)int_val(args[2]);
+        // M195（缺陷 224 同族）：perm 也是 INT 语义，修前 `open(p, 2, 1.5)` 静默截断
+        if (nargs >= 3) perm = (int)px_arg_int(args[2], "open", "perm");
         int rfd = open(path, rflags, (mode_t)perm);
         if (rfd < 0) return px_int(-1);   // os_errno() 查询具体原因
         return px_int((int64_t)rfd);
@@ -7202,7 +7205,7 @@ static LXValue bi_mem_write(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_sleep_us(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) px_error("R1002: sleep_us 需要 1 个参数（微秒）");
-    int64_t us = int_val(args[0]);
+    int64_t us = px_arg_int(args[0], "sleep_us", "us");
     if (us <= 0) return px_null();
     struct timespec ts;
     ts.tv_sec = us / 1000000L;
@@ -7527,7 +7530,7 @@ static const int GO_ERRNO_STR_N = (int)(sizeof(GO_ERRNO_STR) / sizeof(GO_ERRNO_S
 static LXValue bi_go_errno_string(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) px_error("R1002: go_errno_string 需要 (errno) 参数");
-    int n = (int)int_val(args[0]);
+    int n = (int)px_arg_int(args[0], "go_errno_string", "errno");
     if (n >= 0 && n < GO_ERRNO_STR_N && GO_ERRNO_STR[n][0] != '\0') return px_str(GO_ERRNO_STR[n]);
     char buf[32];
     snprintf(buf, sizeof(buf), "errno %d", n);
@@ -7805,7 +7808,7 @@ static LXValue bi_hex_to_bytes(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_bit_count(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) px_error("R1002: bit_count 需要一个参数");
-    uint64_t v = (uint64_t)int_val(args[0]);
+    uint64_t v = (uint64_t)px_arg_int(args[0], "bit_count", "n");
     int c = 0;
     while (v) { v &= v - 1; c++; }
     return px_int(c);
@@ -7815,7 +7818,7 @@ static LXValue bi_bit_count(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_bit_length(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) px_error("R1002: bit_length 需要一个参数");
-    int64_t n = int_val(args[0]);
+    int64_t n = px_arg_int(args[0], "bit_length", "n");
     if (n <= 0) return px_int(0);
     int bits = 0;
     uint64_t v = (uint64_t)n;
@@ -11766,7 +11769,7 @@ static LXValue bi_float32_bits(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_bits_to_float32(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) px_error("R1002: bits_to_float32 需要一个参数");
-    uint32_t u = (uint32_t)((uint64_t)int_val(args[0]) & 0xFFFFFFFFu);
+    uint32_t u = (uint32_t)((uint64_t)px_arg_int(args[0], "bits_to_float32", "bits") & 0xFFFFFFFFu);
     float f;
     memcpy(&f, &u, 4);
     return px_float((double)f);
@@ -11803,7 +11806,7 @@ static LXValue bi_float64_bits(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_bits_to_float64(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) px_error("R1002: bits_to_float64 需要一个参数");
-    uint64_t u = (uint64_t)int_val(args[0]);
+    uint64_t u = (uint64_t)px_arg_int(args[0], "bits_to_float64", "bits");
     double d;
     memcpy(&d, &u, 8);
     return px_float(d);
@@ -13047,7 +13050,9 @@ static LXValue bi_bytes_find(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_read_bytes(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) px_error("R1002: read_bytes 需要一个路径参数");
-    const char* p = px_val_cstr(args[0]);
+    // M195（缺陷 225）：这是**路径**语义（不是"任意值可串化"的文本语义）——
+    //   修前 `read_bytes(12345)` 会去开一个叫 "12345" 的文件（看似成功实则无意义）。
+    const char* p = px_arg_str(args[0], "read_bytes", "路径");
     FILE* f = fopen(p, "rb");
     if (!f) px_error("io: 读取文件失败 %s", p);
     fseek(f, 0, SEEK_END);
@@ -14007,7 +14012,7 @@ static LXValue bi_set_interval(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_clear_timer(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) px_error("R1002: clear_timer 需要 1 个参数");
-    int64_t id = int_val(args[0]);
+    int64_t id = px_arg_int(args[0], "clear_timer", "id");
     pthread_mutex_lock(&g_timer_mu);
     for (int i = 0; i < MAX_TIMERS; i++) {
         if (g_timers[i].id == id && g_timers[i].active) {

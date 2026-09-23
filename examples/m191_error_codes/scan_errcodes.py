@@ -261,6 +261,150 @@ def check_arg_guards(path):
     return nguard, nbad
 
 
+# ══════════════════════════════════════════════════════════════════════
+# 判据 ⑦（M195 · 第 73 轮 · 缺陷 224/225）：**全部** native 函数的参数守卫
+#   [S5] 只覆盖「消息形如 `需要 (...)` 且形参 ≥2」的站点；本判据覆盖**所有**
+#   `LXValue fn(LXValue* args, int nargs, void* ctx)`（含单形参、含消息不列形参的形态）。
+#   只统计**宽松接口**（不查就静默错值 / UB）：
+#     INT  int_val(          —— float 静默截断
+#     NUM  num_val(          —— 读 union 的 as.f
+#     STR  val_cstr( / px_val_cstr(        —— int/容器静默串化
+#     OBJ  .as.obj->as.* / .as.i           —— 读 union 其它字段 = UB
+#   校验型接口（`px_req_*` / `px_arg_*` / `px_val_is_*` / `math_num` / `px_len` / `px_index`）
+#   算「已检查」——它们本身就会响亮报错。
+#   ⚠️ **豁免表**：每条必须给理由，并由三条判据强制：
+#     ① 表内每条的函数必须在源码里**找得到**（防「代码改名了表没改」）；
+#     ② 豁免**总数不得多于**登记数（棘轮）；③ 理由字段非空。
+ARG_GUARD2_EXEMPT = {
+    # ── A. **文本语义**：参数本身就是"一段文本"，任意值 ⇒ 其 str() 形态是语言约定 ──
+    #    （M129 已定：`val_cstr(null)` = "null" 而非 "0.0"，与 `str(null)` 一致）
+    ("runtime/runtime.c", "bi_md5"): "文本语义：哈希的输入文本（任意值可串化是语言约定，§6.5）",
+    ("runtime/runtime.c", "bi_sha256"): "文本语义：哈希的输入文本",
+    ("runtime/runtime.c", "bi_sha1"): "文本语义：哈希的输入文本",
+    ("runtime/runtime.c", "bi_xxhash"): "文本语义：哈希的输入文本",
+    ("runtime/runtime.c", "bi_base64_encode"): "文本语义：编码的输入文本",
+    ("runtime/runtime.c", "bi_base64_decode"): "文本语义：解码的输入文本",
+    ("runtime/runtime.c", "bi_base64_to_bytes"): "文本语义：解码的输入文本",
+    ("runtime/runtime.c", "bi_hex_to_int"): "文本语义：解析的输入文本",
+    ("runtime/runtime.c", "bi_hex_to_bytes"): "文本语义：解析的输入文本",
+    ("runtime/runtime.c", "bi_ord"): "文本语义：取首字符码点",
+    ("runtime/runtime.c", "bi_regex_valid"): "文本语义：正则表达式文本",
+    ("runtime/runtime.c", "bi_regex_match"): "文本语义：正则 pattern/text 均为文本",
+    ("runtime/runtime.c", "bi_regex_search"): "文本语义：正则 pattern/text 均为文本",
+    ("runtime/runtime.c", "bi_regex_find"): "文本语义：正则 pattern/text 均为文本",
+    ("runtime/runtime.c", "bi_regex_find_all"): "文本语义：正则 pattern/text 均为文本",
+    ("runtime/runtime.c", "bi_regex_replace"): "文本语义：正则 pattern/text/repl 均为文本",
+    ("runtime/runtime.c", "bi_regex_split"): "文本语义：正则 pattern/text 均为文本",
+    ("runtime/runtime.c", "bi_dns_lookup"): "文本语义：域名文本",
+    ("runtime/runtime.c", "bi_dns_txt"): "文本语义：域名文本",
+    # ── B. **非用户入口**：由 runtime 内部以确定的 int 调用，用户拿不到它们的名字 ──
+    ("runtime/runtime.c", "http_conn_worker"): "内部 worker（非用户面 builtin；调用方是 runtime 自身）",
+    ("runtime/runtime.c", "sse_conn_worker"): "内部 worker（非用户面 builtin）",
+    ("runtime/runtime.c", "px_conn_worker"): "内部 worker（非用户面 builtin）",
+    ("runtime/runtime_ws.c", "ws_conn_worker"): "内部 worker（非用户面 builtin）",
+    # ── C. **静态 helper**（不是用户面 builtin；唯一调用方已校验该实参） ──
+    ("runtime/runtime.c", "sse_cli_prepare"):
+        "静态 helper：唯一两个调用方 bi_sse_connect / bi_sse_connect_ex 均已校验 args[0].type == PX_STR",
+}
+ARG_GUARD2_TOTAL = 24          # 棘轮：豁免总数不得多于此数
+
+_SILENT = {
+    "INT": [r"int_val\("],
+    "NUM": [r"num_val\("],
+    "STR": [r"val_cstr\(", r"px_val_cstr\("],
+    "OBJ": [r"\.as\.obj->as\.str\.data", r"\.as\.obj->as\.list", r"\.as\.obj->as\.dict",
+            r"\.as\.obj->as\.gen", r"\.as\.obj->as\.func", r"\.as\.i\b"],
+}
+_SAFE = [r"px_val_is_\w+\(\s*args\[(\d+)\]", r"px_req_\w+\(\s*args\[(\d+)\]",
+         r"px_arg_\w+\(\s*args\[(\d+)\]", r"math_num\(\s*args\[(\d+)\]",
+         r"px_len\(\s*args\[(\d+)\]", r"px_index\(\s*args\[(\d+)\]"]
+_NATFN = re.compile(r"^(?:static\s+)?(?:LXValue|int|void|bool|const char\*)\s+(\w+)\s*"
+                    r"\(LXValue\*\s*args\s*,\s*int\s*nargs")
+
+
+def _nat_bodies(path):
+    lines = open(os.path.join(ROOT, path), encoding="utf-8").read().split("\n")
+    out, i = [], 0
+    while i < len(lines):
+        m = _NATFN.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        depth = 0; seen = False; j = i
+        for j in range(i, len(lines)):
+            depth += lines[j].count("{") - lines[j].count("}")
+            if "{" in lines[j]:
+                seen = True
+            if seen and depth <= 0:
+                break
+        out.append((m.group(1), i + 1, lines[i:j + 1]))
+        i = j + 1
+    return out
+
+
+def check_arg_guards2(path):
+    """→ (扫描的 native 函数数, 未豁免的缺检查站点数)"""
+    nfn = nbad = 0
+    for name, ln, body in _nat_bodies(path):
+        nfn += 1
+        blob = "\n".join(body)
+        ck = set(int(x.group(1)) for x in re.finditer(r"args\[(\d+)\]\.type\s*[!=]=", blob))
+        for pat in _SAFE:
+            for x in re.finditer(pat, blob):
+                ck.add(int(x.group(1)))
+        bad = []
+        for i in range(0, 10):
+            if i in ck:
+                continue
+            u = set()
+            for kind, pats in _SILENT.items():
+                for pp in pats:
+                    if re.search(r"args\[%d\]" % i + pp, blob) or \
+                       re.search(pp[:-2] + r"\(\s*args\[%d\]" % i, blob):
+                        u.add(kind)
+                        break
+            if u:
+                bad.append((i, "/".join(sorted(u))))
+        if not bad:
+            continue
+        why = ARG_GUARD2_EXEMPT.get((path, name))
+        if why:
+            continue                     # 已登记豁免（表内理由由下面单独查）
+        nbad += 1
+        fails.append("%s:%d %s 的实参 %s 被按类型使用却没有类型检查"
+                     "（§6；确属设计请登记 ARG_GUARD2_EXEMPT 并给理由）"
+                     % (path, ln, name, " ".join("[%d]%s" % (i, u) for i, u in bad)))
+    return nfn, nbad
+
+
+# ── 豁免表 ⇔ 源码一致 + 理由非空 + 总数棘轮 ──
+_ex_all = {}
+for _f in sorted(f for f in os.listdir(os.path.join(ROOT, "runtime")) if f.endswith(".c")):
+    _ex_all["runtime/" + _f] = set(n for n, _l, _b in _nat_bodies("runtime/" + _f))
+_ok_ex = 0
+for (_f, _fn), _why in ARG_GUARD2_EXEMPT.items():
+    if not _why.strip():
+        fails.append("ARG_GUARD2_EXEMPT 的 %s:%s 缺理由" % (_f, _fn))
+    if _fn not in _ex_all.get(_f, set()):
+        fails.append("ARG_GUARD2_EXEMPT 的 %s:%s 在源码里**找不到**（改名了？表没跟着改？）" % (_f, _fn))
+    else:
+        _ok_ex += 1
+if _ok_ex > ARG_GUARD2_TOTAL:
+    fails.append("ARG_GUARD2_EXEMPT 条目变多：%d > 登记数 %d" % (_ok_ex, ARG_GUARD2_TOTAL))
+
+print("── [S6] 全部 native 函数参数守卫 + 豁免表（M195）──")
+_n1 = _n2 = 0
+for f in sorted(x for x in os.listdir(os.path.join(ROOT, "runtime")) if x.endswith(".c")):
+    a, b = check_arg_guards2("runtime/" + f)
+    _n1 += a
+    _n2 += b
+    if b:
+        print("   %-30s native 函数 %-4d 未豁免缺检查 %-3d ❌" % (f, a, b))
+print("── [S6] native 函数合计 %d · 未豁免缺检查 **%d** · 豁免 %d/%d ──"
+      % (_n1, _n2, _ok_ex, ARG_GUARD2_TOTAL))
+if _n1 == 0:
+    fails.append("[S6] 判据未生效：native 函数 0 个（扫描器/源码形态变了？）")
+
 print("── [S5] native 参数类型守卫完备性（M194 §6）──")
 _g = _b = 0
 for f in CFILES:

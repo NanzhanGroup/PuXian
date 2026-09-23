@@ -107,7 +107,16 @@
    撤销一处混写拆分 —— 任一条都必须让对应判据由绿转红。
 4. **判据 ⑥（M194 新增）· 参数类型守卫完备性**：对每个 `px_error("R1002: <fn> 需要 (<a>, <b>…)")`
    站点，其**函数体**里每个被使用的形参位置都必须有 `args[i].type` 检查（口径见 §6）。
-   实测基线：**140 个多形参守卫 · 缺检查 0**。
+   实测基线（M195 后）：**137 个多形参守卫 · 缺检查 0**
+   （140 → 137 的原因：h3/quic listen 族的元数消息改成「需要 (port) 或 (port, cert, key) 参数」，
+   扫描器只取第一个 `)` 之前的形参 ⇒ 这几处不再计入「多形参」；站点本身仍在，由 [S6] 全文覆盖）。
+5. **判据 ⑦（M195 新增）· 全部 native 函数的参数守卫 + 豁免表**：口径同 §6，但覆盖
+   **全部 397 个** `LXValue fn(LXValue* args, int nargs, …)`（含单形参、含消息不列形参的形态）；
+   只统计**宽松接口**（`int_val` / `num_val` / `val_cstr` / `px_val_cstr` / `.as.obj->as.*` / `.as.i`），
+   校验型接口（`px_req_*` / `px_arg_*` / `px_val_is_*` / `math_num` / `px_len` / `px_index`）算已检查。
+   实测基线：**397 个函数 · 未豁免缺检查 0 · 豁免 24/24**。
+   豁免表 `ARG_GUARD2_EXEMPT` 三条强制：① 表内每条的函数须在源码里**找得到**（防改名后漂移）；
+   ② 豁免**总数棘轮**；③ 理由字段非空。
 
 ---
 
@@ -210,3 +219,39 @@ LXObject*  px_arg_dict(LXValue v, const char* fn, const char* pname);
 M190 的普查只覆盖「三轨 **rc 分叉**」，这一类是三轨**一致**的宽容 ⇒ 当时未收。
 修法方向：与 M190 同口径补上界（`nargs == 1 || nargs == 3`），代价 = 需先普查标准库/registry
 的调用面是否有人靠"多传一个"工作。
+
+### 6.5 「文本语义」与「数据语义」的分界（M195 · 缺陷 225）
+
+`val_cstr` 的宽容（任意值 ⇒ 其 `str()` 形态）**只在「参数本身就是一段文本」时才是设计语义**：
+
+| 类别 | 处置 | 例 |
+|---|---|---|
+| ✅ **文本语义**（豁免，登记 §6.5 表） | 参数是一段**文本**：哈希/编码/正则/域名/字符处理的输入。用户写 `str(x)` 也一样，宽容不改变"这是文本"的性质 | `sha256(x)` · `base64_encode(x)` · `regex_match(p,t)` · `xxhash(x)` · `ord(x)` · `dns_lookup(name)` · `hex_to_bytes(s)` |
+| ❌ **数据语义**（必须检查） | 参数是**路径 / 名字 / 键 / 协议字段 / 发送体**：错误的类型意味着**去操作一个不该操作的对象**，宽容会把错误**藏起来** | `open(path)` · `read_bytes(路径)` · `write_bytes(路径)` · `tls_connect(host)` · `http_request(url, method)` · `http_unix(socket_path,…)` · `s3_*(endpoint, bucket, key, …)` · `ws_send(conn, data)` · `ws_broadcast(data)` · `int_to_bytes(…, endian)` |
+
+判据落地：**豁免表可执行**（表内每条须在源码里找得到 + 理由非空 + 总数棘轮），
+其余一律按 §6 硬判据（新增站点立即判红）。
+
+**另一类豁免**：**非用户入口** —— `http_conn_worker` / `sse_conn_worker` / `px_conn_worker` /
+`ws_conn_worker`（由 runtime 自身以确定的 int 调用，用户拿不到它们的名字）；
+**静态 helper** —— `sse_cli_prepare`（唯一两个调用方 `bi_sse_connect` / `bi_sse_connect_ex`
+均已校验 `args[0].type == PX_STR`）。
+
+### 6.6 M195 收口清单（缺陷 223/224/225/226）
+
+| 编号 | 形状 | 处置 | 处数 |
+|---|---|---|---|
+| **224** | **单形参** INT 静默截断（M194 只覆盖「形参 ≥2」） | 补 `px_arg_int` | 15 函数 / 16 位置：`range`(3) · `sleep` · `sleep_us` · `chr` · `go_errno_string` · `bit_count` · `bit_length` · `bits_to_float32` · `bits_to_float64` · `clear_timer` · `open`(perm) · onnx 5（`onnx_info`/`onnx_initializer`/`onnx_initializer_names`/`onnx_model_close`/`onnx_run` —— 修前是 `(int)args[0].as.i`，对 float 读的是**位模式**） |
+| **223** | **元数上界缺失**：守卫是 `nargs < 1` | 改 `nargs != 1 && nargs != 3` + 点名 port 的类型 | 3：`h3_server_listen` · `h3_server_listen_stateless` · `quic_h3_listen` |
+| **225** | **路径/数据语义**走宽容接口 | 补检查 | 2：`read_bytes`(路径) · `ws_broadcast`(data) |
+| **226** | 解释轨 `range` 守卫**报错参数错位** + 与 native **同码不同文** | 两侧同文，点名出错参数 | 1：`range(0, 1.5)` 修前报「期望整数，实际是 **int**」（取的是 `args[0]` 的类型，而错的是 `end`）⇒ 用户按消息去改第一个参数，改了也没用 |
+
+### 6.7 仍未收口（登记 → 缺陷 227）
+
+**「同码文案」的三轨单一真相**：`runtime/*.c` 与 `selfhost/*.px` 里**两边都有的**报错文案共
+**181 个函数名**，其中 **92 个全文不一致**（例：`chr 需要 (码点)` vs `chr 需要 (码点) 参数`；
+`abs 参数需要数值` vs `abs 不支持类型 %s`；`chmod 需要 (path, mode)` vs `… 参数`）。
+M194/M195 只统一了**自己动过的那几处**；剩下的是同类欠账，规模足够单独一轮。
+**本轮已备好静态判据的雏形**：把两边的 `px_error("R…: <msg>")` / `i_r####("<msg>")`
+按「首 token（函数名）」配对，直接产出「全文不一致」清单（本轮用它量出了 92 这个数）。
+⇒ M196 主项：分批对齐（**只判全文，不判渲染框架** —— 位置框架差异是设计，见 §5.2）。

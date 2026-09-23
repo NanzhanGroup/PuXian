@@ -1,0 +1,9 @@
+g1_range_ok	3
+g2_sleep_zero	null
+g3_chr_ok	A
+g4_bit_count_ok	8
+g5_ord_ok	65
+g6_open_mode	true
+g7_read_bytes_ok	true
+g8_sha256_text	64
+g9_h3_one_arg	true

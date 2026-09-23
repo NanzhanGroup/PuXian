@@ -33,7 +33,16 @@ jobs:
   tag-guard:
     name: 最高里程碑必须有 v*-m<NNN> 发布 tag
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # M195（第 73 轮 · 实测事故）：原为 5 分钟 —— run 35894349208（M194 · 1dce657）
+    #   在 17:15:29 起跑、17:20:32 被判 **cancelled**，正好 5 分钟 ⇒ 是 **timeout-minutes
+    #   被超**（GitHub 超时是把 job 判 cancelled，不是 failure ⇒ 看上去像"被取消"，
+    #   很容易误读成排队互踩）。根因：`fetch-depth: 0`（必须 0，否则没有 tag 与历史，
+    #   守卫会判 rc=2）+ 本仓历史里带着每轮重烘的 bootstrap 二进制（单件 6–10MB，
+    #   14 件/轮）⇒ **全量克隆**越来越慢，5 分钟已到边缘。
+    #   ⇒ 放宽到 20 分钟（守卫本身 O(1)，几乎全部时间花在 clone 上）。
+    #   **纪律（同族）：门的"红"必须能读出真因** —— 超时不是"守卫判红"，
+    #   别把它记成"里程碑缺 tag"。
+    timeout-minutes: 20
     steps:
       - name: 检出代码（含全部 tag 与历史）
         uses: actions/checkout@v4
