@@ -409,9 +409,24 @@ jobs:
           #   索引必须是 int（呼应 b[i]，修前 bytes_get 走 int_val 会静默截断 float）、
           #   函数面 ⇔ 索引面全范围等价、拒绝侧 6 例三轨同码同文同正文；负控 A/B/C/D 在本地全门 m116 跑。
           bash examples/m189_bytes_bounds/verify.sh --neg-skip > /tmp/v_m189.log 2>&1 || { echo "❌ m189_bytes_bounds verify 失败"; tail -60 /tmp/v_m189.log; exit 1; }
+          # M190（第 68 轮）：**方法族参数面**三轨同一真相（内部缺陷 213-a…213-l）。
+          #   病根：每个方法/构造器的「实参个数」在解释轨与 native 侧各写一遍，且**多数只查下限**
+          #     ⇒ `l.pop(1)`/`d.set("b")`/`Ok(1).unwrap(2)`/`l.append(1,2)`/`s.upper(9)` 等
+          #     解释轨**静默忽略多余实参**（`d.set("b")` 更会写入 `b: null` —— 数据污染），
+          #     而编译轨响亮；`l.index`/`l.reverse`/`l.sort`/`t.len` 反了 —— 解释轨有、编译轨 R1007。
+          #   另一条同族：解释轨 `list.sort` 用**渲染串**比较（`[10,9,2]` → `[10,2,9]`，
+          #     与 M162 修掉的 `sorted` 旧 bug 同源）⇒ 改值比较。
+          #   判据：合法侧三轨逐字节一致（30 行定点）+ 拒绝侧 23 例 × 三轨 rc≠0 + 同 R 码 + 正文逐字相同；
+          #   负控 A/B/E（改 icall.px）/C/D（改 runtime.c）在本地全门 m116 跑。
+          bash examples/m190_arity/verify.sh --neg-skip > /tmp/v_m190.log 2>&1 || { echo "❌ m190_arity verify 失败"; tail -60 /tmp/v_m190.log; exit 1; }
+          # M190 · 上游真实用例回归（上文 M187/M189 把 registry-px 53 库引入 registry/，
+          #   这里跑**上游 tests/*.px 全部 53 个用例**，闭合「照搬 ⇒ 可用」）。
+          #   三条硬判据：① 用例逐字节照搬（MANIFEST.sha256）② 引用面完整（缺模块只警告不报错 ⇒ 必须前置查）
+          #   ③ 与 EXPECTED.tsv **对拍**（期望值是登记的数据，不是"跑出来是什么"；缺登记 ⇒ MISMATCH）。
+          bash selfhost/run_upstream_tests.sh --json /tmp/upstream_tests.json > /tmp/v_upstream_tests.log 2>&1 || { echo "❌ 上游 registry-px 用例回归失败"; tail -40 /tmp/v_upstream_tests.log; exit 1; }
           # 发射冻结门（M153 建立）：395 个用例的 --emit-c 输出必须逐字节不变（M188 由 393 起订正 —— 本轮只新增语料、类别 B 为空）。
           bash selfhost/emitc_freeze.sh --check > /tmp/v_emitc_freeze.log 2>&1 || { echo "❌ emitc_freeze 失败"; tail -30 /tmp/v_emitc_freeze.log; exit 1; }
-          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 / m153 / m154 / m155 / m158 / m160 / m161 / m162 / m163 / m164 verify / m170_gc_bridge_root / m182_hdr_root / m183_gc_root_handover / m184_num_fs_strict / m185_bytes_face / m186_native_passthrough / m187_registry_import / m188_std_face / m189_bytes_bounds + 发射冻结门（395 件 --emit-c）全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"
+          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 / m153 / m154 / m155 / m158 / m160 / m161 / m162 / m163 / m164 verify / m170_gc_bridge_root / m182_hdr_root / m183_gc_root_handover / m184_num_fs_strict / m185_bytes_face / m186_native_passthrough / m187_registry_import / m188_std_face / m189_bytes_bounds / m190_arity + 上游 registry-px 用例回归（53 用例 × 双轨 · EXPECTED.tsv 对拍） + 发射冻结门（395 件 --emit-c）全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"
       # M188 补：这一步（工具自测）在 run 382/383 上红了，而 **job 日志非管理员不可读**
       #   （实测 /actions/jobs/<id>/logs → HTTP 403）⇒ 注解是唯一对外通道。
       #   本步把各门的 /tmp/v_*.log 关键行合成**一条** ::error:: 注解（换行编码 %0A）。

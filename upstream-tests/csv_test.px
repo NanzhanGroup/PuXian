@@ -1,0 +1,53 @@
+# csv.px 测试：双模式一致 + 与 Python csv 模块对拍
+import "../registry/csv/0.1.0/csv.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 与 Python csv 对拍的 golden ----
+    var r = csv_parse("a,b,c\n1,2,3")
+    expect(r.is_ok() and r.unwrap() == [["a", "b", "c"], ["1", "2", "3"]], "basic: " + str(r))
+    r = csv_parse('"a,b",c\nx,"y,z"')
+    expect(r.is_ok() and r.unwrap() == [["a,b", "c"], ["x", "y,z"]],
+        "quoted_comma: " + str(r))
+    r = csv_parse('"he said ""hi""",x')
+    expect(r.is_ok() and r.unwrap() == [["he said \"hi\"", "x"]], "escaped_quote: " + str(r))
+    r = csv_parse('"line1\nline2",x')
+    expect(r.is_ok() and r.unwrap() == [["line1\nline2", "x"]], "quoted_newline: " + str(r))
+    r = csv_parse("a,,c\n,,,")
+    expect(r.is_ok() and r.unwrap() == [["a", "", "c"], ["", "", "", ""]],
+        "empty_fields: " + str(r))
+    r = csv_parse("abc")
+    expect(r.is_ok() and r.unwrap() == [["abc"]], "single: " + str(r))
+    r = csv_parse("a,b\r\n1,2\r\n")
+    expect(r.is_ok() and r.unwrap() == [["a", "b"], ["1", "2"]], "crlf: " + str(r))
+    r = csv_parse("a,b\n1,2\n")
+    expect(r.is_ok() and r.unwrap() == [["a", "b"], ["1", "2"]], "trailing_newline: " + str(r))
+    r = csv_parse('"""x"""')
+    expect(r.is_ok() and r.unwrap() == [["\"x\""]], "double_quote_alone: " + str(r))
+    # ---- 边界 ----
+    r = csv_parse("")
+    expect(r.is_ok() and r.unwrap() == [], "空输入应 []: " + str(r))
+    r = csv_parse("a,b\n\n1,2")
+    expect(r.is_ok() and r.unwrap() == [["a", "b"], ["1", "2"]], "中间空行: " + str(r))
+    r = csv_parse("a,\"unclosed")
+    expect(r.is_err(), "未闭合引号应 Err: " + str(r))
+    # 宽松：非引用字段里的引号按普通字符
+    r = csv_parse("ab\"c,x")
+    expect(r.is_ok() and r.unwrap() == [["ab\"c", "x"]], "非引用引号宽松: " + str(r))
+    # ---- serialize ----
+    var s = csv_serialize([["a,b", "say \"hi\"", "line\nbreak", "plain"]])
+    expect(s.unwrap() == "\"a,b\",\"say \"\"hi\"\"\",\"line\nbreak\",plain\n",
+        "serialize 复杂: " + str(s))
+    s = csv_serialize([["a", "b"], ["1", "2"]])
+    expect(s.unwrap() == "a,b\n1,2\n", "serialize 简单: " + str(s))
+    # ---- roundtrip：serialize(parse(x)) 幂等 ----
+    var src = "name,age,note\n\"Zhang, San\",30,\"say \"\"hi\"\"\"\n\"Li\",,multi\nline"
+    var pr = csv_parse(src)
+    expect(pr.is_ok(), "roundtrip parse: " + str(pr))
+    var ps = csv_serialize(pr.unwrap())
+    expect(ps.is_ok(), "roundtrip serialize: " + str(ps))
+    var pr2 = csv_parse(ps.unwrap())
+    expect(pr2.is_ok() and pr2.unwrap() == pr.unwrap(), "roundtrip 幂等: " + str(pr2))
+    print("csv: PASS")

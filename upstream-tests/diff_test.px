@@ -1,0 +1,46 @@
+# diff.px 测试：双模式一致
+import "../registry/diff/0.1.0/diff.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def lines_eq(a, b):
+    if len(a) != len(b):
+        return false
+    var i = 0
+    while i < len(a):
+        if a[i] != b[i]:
+            return false
+        i += 1
+    return true
+def main():
+    # 基本替换
+    var d1 = df_lines("a\nb\nc", "a\nx\nc")
+    expect(lines_eq(d1, [" a", "-b", "+x", " c"]), "replace b→x")
+    # 末尾新增
+    var d2 = df_lines("a\nb", "a\nb\nc")
+    expect(lines_eq(d2, [" a", " b", "+c"]), "append c")
+    # 开头删除
+    var d3 = df_lines("a\nb\nc", "b\nc")
+    expect(lines_eq(d3, ["-a", " b", " c"]), "drop head")
+    # 空
+    var d4 = df_lines("", "")
+    expect(len(d4) == 0, "empty diff")
+    var d5 = df_lines("", "a")
+    expect(lines_eq(d5, ["+a"]), "insert into empty")
+    var d6 = df_lines("a", "")
+    expect(lines_eq(d6, ["-a"]), "delete all")
+    # 相同
+    var d7 = df_lines("x\ny", "x\ny")
+    expect(lines_eq(d7, [" x", " y"]), "identical")
+    # ratio
+    expect(df_ratio("a\nb\nc", "a\nb\nc") == 1.0, "ratio identical")
+    expect(df_ratio("a", "b") == 0.0, "ratio disjoint")
+    var r = df_ratio("a\nb\nc", "a\nx\nc")
+    # LCS=2, total=6 → 4/6
+    expect(r > 0.66 and r < 0.67, "ratio partial")
+    expect(df_ratio("", "") == 1.0, "ratio empty")
+    # 中文行
+    var d8 = df_lines("你好\n世界", "你好\n普贤")
+    expect(lines_eq(d8, [" 你好", "-世界", "+普贤"]), "chinese diff")
+    print("diff: PASS")

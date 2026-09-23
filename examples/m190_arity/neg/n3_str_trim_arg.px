@@ -1,0 +1,4 @@
+# M190 门 · 拒绝侧：n3_str_trim_arg（运行期必须响亮，三轨同码同文）
+def main():
+    print("before")
+    print(" ab ".trim(9))

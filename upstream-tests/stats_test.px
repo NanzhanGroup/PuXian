@@ -1,0 +1,37 @@
+# stats.px 测试：双模式一致（参考 gonum/stat 子集）
+import "../registry/stats/0.1.0/stats.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def approx(a, b):
+    var d = a - b
+    if d < 0:
+        d = -d
+    return d < 0.0001
+def main():
+    var nums = [2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0]
+    expect(stats_count(nums) == 8, "count")
+    expect(stats_sum(nums) == 40.0, "sum: " + str(stats_sum(nums)))
+    expect(stats_min(nums).unwrap() == 2.0, "min")
+    expect(stats_max(nums).unwrap() == 9.0, "max")
+    var mean = stats_mean(nums).unwrap()
+    expect(approx(mean, 5.0), "mean=5: " + str(mean))
+    var med = stats_median(nums).unwrap()
+    expect(approx(med, 4.5), "median=4.5: " + str(med))
+    var var_s = stats_var(nums).unwrap()
+    expect(approx(var_s, 4.5714285714), "样本方差: " + str(var_s))
+    var var_p = stats_var(nums, false).unwrap()
+    expect(approx(var_p, 4.0), "总体方差: " + str(var_p))
+    var sd = stats_stddev(nums).unwrap()
+    expect(approx(sd, sqrt(4.5714285714)), "stddev")
+    # 奇数长度
+    var m2 = stats_median([3, 1, 2]).unwrap()
+    expect(approx(m2, 2.0), "奇中位数: " + str(m2))
+    # 空输入 Err
+    expect(stats_min([]).is_err(), "空 min Err")
+    expect(stats_mean([]).is_err(), "空 mean Err")
+    expect(stats_median([]).is_err(), "空 median Err")
+    expect(stats_var([]).is_err(), "空 var Err")
+    expect(stats_var([1.0]).is_err(), "单元素样本方差 Err")
+    print("stats: PASS")

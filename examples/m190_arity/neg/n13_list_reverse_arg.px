@@ -1,0 +1,6 @@
+# M190 门 · 拒绝侧：n13_list_reverse_arg（运行期必须响亮，三轨同码同文）
+def main():
+    print("before")
+    var l = [1]
+    l.reverse(9)
+    print(l)

@@ -1,0 +1,41 @@
+# ulid.px 测试：双模式一致
+import "../registry/ulid/0.1.0/ulid.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # 全零
+    var u0 = ul_new_at(0, "00000000000000000000")
+    expect(len(u0) == 26, "len 26")
+    expect(u0 == "00000000000000000000000000", "all zero")
+    # 确定性构造 + 往返
+    var ms = 1790104551469
+    var h = "0123456789abcdef0123"
+    var u1 = ul_new_at(ms, h)
+    expect(len(u1) == 26, "u1 len 26")
+    expect(ul_valid(u1), "u1 valid")
+    expect(ul_ts(u1).unwrap() == ms, "ts roundtrip")
+    var dec = ul_decode(u1).unwrap()
+    expect(dec["ts"] == ms, "decode ts")
+    expect(dec["rand"] == "0123456789abcdef0123", "decode rand")
+    # 时间戳编码首字符约束（小时间戳首字符 0）
+    var us = ul_new_at(1, "00000000000000000000")
+    expect(us[0:1] == "0", "small ts char0")
+    expect(ul_ts(us).unwrap() == 1, "small ts roundtrip")
+    # 随机 ULID
+    var u2 = ul_new()
+    expect(ul_valid(u2) and len(u2) == 26, "random valid")
+    var u3 = ul_new()
+    expect(u2 != u3, "random differs")
+    # 已知合法样例（官方 README 样例）
+    expect(ul_valid("01ARZ3NDEKTSV4RRFFQ69G5FAV"), "known sample valid")
+    # 非法
+    expect(ul_valid("short") == false, "invalid short")
+    expect(ul_valid("01ARZ3NDEKTSV4RRFFQ69G5FAI") == false, "invalid char I")
+    expect(ul_valid("01ARZ3NDEKTSV4RRFFQ69G5FAVA") == false, "invalid len 27")
+    expect(ul_ts("short").is_err(), "ts err on invalid")
+    expect(ul_decode("short").is_err(), "decode err on invalid")
+    var e = ul_ts("01ARZ3NDEKTSV4RRFFQ69G5FAV")
+    expect(e.is_ok(), "ts ok on known sample")
+    print("ulid: PASS")

@@ -1,0 +1,5 @@
+# M190 门 · 拒绝侧：n12_list_len_arg（运行期必须响亮，三轨同码同文）
+def main():
+    print("before")
+    var l = [1]
+    print(l.len(9))

@@ -1,0 +1,6 @@
+# M190 门 · 拒绝侧：n10_list_push_2（运行期必须响亮，三轨同码同文）
+def main():
+    print("before")
+    var l = [1]
+    l.push(2, 3)
+    print(l)

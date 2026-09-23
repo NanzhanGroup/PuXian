@@ -5088,18 +5088,60 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
     // 字符串方法
     if (obj.type == PX_STR) {
         if (strcmp(name, "upper") == 0 || strcmp(name, "to_upper") == 0) {
+            // M190（缺陷 213-i）：修前不查实参 ⇒ `s.upper(9)` 由转发的 `bi_to_upper` 报
+            //   「to_upper 需要一个字符串参数」（**内置名**），解释轨则**静默忽略** ⇒ 三轨分叉。
+            if (nargs != 0) px_error("R1002: 方法 upper 不接受参数");
             return call_with_self("to_upper", obj, args, nargs);
         }
         if (strcmp(name, "lower") == 0 || strcmp(name, "to_lower") == 0) {
+            if (nargs != 0) px_error("R1002: 方法 lower 不接受参数");
             return call_with_self("to_lower", obj, args, nargs);
         }
-        if (strcmp(name, "len") == 0) return px_int(px_len(obj));
-        if (strcmp(name, "trim") == 0) return call_with_self("trim", obj, args, nargs);
-        if (strcmp(name, "split") == 0) return call_with_self("split", obj, args, nargs);
-        if (strcmp(name, "contains") == 0) return call_with_self("contains", obj, args, nargs);
-        if (strcmp(name, "replace") == 0) return call_with_self("replace", obj, args, nargs);
-        if (strcmp(name, "starts_with") == 0) return call_with_self("starts_with", obj, args, nargs);
-        if (strcmp(name, "ends_with") == 0) return call_with_self("ends_with", obj, args, nargs);
+        // M190（缺陷 213-i）：本区的每个方法都要**精确**校验实参个数 ——
+        //   修前 `len`/`split` 是「直接转发」，`trim`/`contains`/`replace`/`starts_with`/
+        //   `ends_with` 转发到同名内置（那里报的是**内置名**文案），而解释轨一律**静默忽略**
+        //   多余实参 ⇒ 同一操作三轨两种答案。现在两侧逐字同文（「方法 X …」）。
+        if (strcmp(name, "len") == 0) {
+            if (nargs != 0) px_error("R1002: 方法 len 不接受参数");
+            return px_int(px_len(obj));
+        }
+        if (strcmp(name, "trim") == 0) {
+            if (nargs != 0) px_error("R1002: 方法 trim 不接受参数");
+            return call_with_self("trim", obj, args, nargs);
+        }
+        if (strcmp(name, "split") == 0) {
+            // 0 参 = 按**单个空格**切分（与内置 `split(s)` 的默认分隔符同）；1 参 = 指定分隔符。
+            if (nargs > 1) px_error("R1002: 方法 split 需要 0-1 个参数");
+            if (nargs >= 1 && (args[0].type != PX_STR || !args[0].as.obj))
+                px_error("R1002: 方法 split 参数 1 需要 string");
+            return call_with_self("split", obj, args, nargs);
+        }
+        if (strcmp(name, "contains") == 0) {
+            if (nargs != 1) px_error("R1002: 方法 contains 需要 1 个参数");
+            if (args[0].type != PX_STR || !args[0].as.obj)
+                px_error("R1002: 方法 contains 参数 1 需要 string");
+            return call_with_self("contains", obj, args, nargs);
+        }
+        if (strcmp(name, "replace") == 0) {
+            if (nargs != 2) px_error("R1002: 方法 replace 需要 2 个参数");
+            if (args[0].type != PX_STR || !args[0].as.obj)
+                px_error("R1002: 方法 replace 参数 1 需要 string");
+            if (args[1].type != PX_STR || !args[1].as.obj)
+                px_error("R1002: 方法 replace 参数 2 需要 string");
+            return call_with_self("replace", obj, args, nargs);
+        }
+        if (strcmp(name, "starts_with") == 0) {
+            if (nargs != 1) px_error("R1002: 方法 starts_with 需要 1 个参数");
+            if (args[0].type != PX_STR || !args[0].as.obj)
+                px_error("R1002: 方法 starts_with 参数 1 需要 string");
+            return call_with_self("starts_with", obj, args, nargs);
+        }
+        if (strcmp(name, "ends_with") == 0) {
+            if (nargs != 1) px_error("R1002: 方法 ends_with 需要 1 个参数");
+            if (args[0].type != PX_STR || !args[0].as.obj)
+                px_error("R1002: 方法 ends_with 参数 1 需要 string");
+            return call_with_self("ends_with", obj, args, nargs);
+        }
         // M188-STR-FACE（PX-DEF-025/027）：方法面四别名。
         // 校验在**方法层**做（报调用者写的方法名）—— 与解释轨 `i_str_method` **逐字同文**；
         // 实现仍只有一份（find → px_str_index_of_runes；其余三个 → 既有 native 直通）。
@@ -5123,12 +5165,19 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
     }
     if (obj.type == PX_LIST) {
         if (strcmp(name, "append") == 0) {
-            if (nargs != 1) px_error("append 需要 1 个参数");
+            // M190（缺陷 213-h）：文案统一为「方法 X …」（两侧逐字同文，便于门判据）。
+            if (nargs != 1) px_error("R1005: 方法 append 需要 1 个参数");
             px_list_push(obj, args[0]);
             return px_null();
         }
-        if (strcmp(name, "len") == 0) return px_int(px_len(obj));
-        if (strcmp(name, "push") == 0) { px_list_push(obj, args[0]); return px_null(); }
+        if (strcmp(name, "len") == 0) {
+            if (nargs != 0) px_error("R1002: 方法 len 不接受参数");
+            return px_int(px_len(obj));
+        }
+        if (strcmp(name, "push") == 0) {
+            if (nargs != 1) px_error("R1005: 方法 push 需要 1 个参数");
+            px_list_push(obj, args[0]); return px_null();
+        }
         if (strcmp(name, "contains") == 0) {
             if (nargs < 1) px_error("contains 需要 1 个参数");
             LXObject* o = obj.as.obj;
@@ -5140,11 +5189,52 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
         if (strcmp(name, "join") == 0) return call_with_self("join", args[0], &obj, 1);
         // M-B2：C 端 list.pop 缺失（自举 lexer 缩进栈用），与解释器一致
         if (strcmp(name, "pop") == 0) {
-            if (nargs != 0) px_error("pop 不接受参数");
+            if (nargs != 0) px_error("R1005: pop 不接受参数");
             LXObject* o = obj.as.obj;
-            if (o->as.list.len == 0) px_error("pop 空列表");
+            if (o->as.list.len == 0) px_error("R1003: pop 空列表");
             o->as.list.len--;
             return o->as.list.items[o->as.list.len];
+        }
+        // M190（缺陷 213-g）：`list.index(x)` —— **解释轨一直有**（`i_list_method` 的 index 分支，
+        //   未找到报 R1003），而编译两轨从未实现 ⇒ `l.index(20)` 解释轨返回下标、VM/C 轨
+        //   响亮「R1007 类型 list 没有方法 'index'」。**补齐编译侧**（删能力是退步）。
+        //   语义与解释轨逐项对齐：按 `px_eq` 找首个相等元素，未找到 ⇒ R1003。
+        if (strcmp(name, "index") == 0) {
+            if (nargs != 1) px_error("R1005: list.index 需要 1 个参数");
+            LXObject* o = obj.as.obj;
+            for (int i = 0; i < o->as.list.len; i++) {
+                if (px_eq(o->as.list.items[i], args[0]).as.b) return px_int(i);
+            }
+            px_error("R1003: list.index 未找到元素");
+        }
+        // M190（缺陷 213-j）：`list.reverse()` / `list.sort()` —— **解释轨一直有**
+        //   （`i_list_method`，原地反转 / 冒泡升序），编译两轨从未实现 ⇒ `l.reverse()` 在
+        //   VM/C 轨响亮「R1007 类型 list 没有方法 'reverse'」。**补齐编译侧**（删能力是退步）。
+        //   ⚠️ 排序口径必须与解释轨逐项一致：**相邻冒泡 + 仅 `>` 交换**（稳定），比较用 `px_gt`
+        //   （M162 已把 `sorted` 统一为「值比较 + 稳定排序」）。
+        if (strcmp(name, "reverse") == 0) {
+            if (nargs != 0) px_error("R1005: 方法 reverse 不接受参数");
+            LXObject* o = obj.as.obj;
+            for (int i = 0; i < o->as.list.len / 2; i++) {
+                LXValue t = o->as.list.items[i];
+                o->as.list.items[i] = o->as.list.items[o->as.list.len - 1 - i];
+                o->as.list.items[o->as.list.len - 1 - i] = t;
+            }
+            return px_null();
+        }
+        if (strcmp(name, "sort") == 0) {
+            if (nargs != 0) px_error("R1005: 方法 sort 不接受参数");
+            LXObject* o = obj.as.obj;
+            for (int i = 0; i < o->as.list.len; i++) {
+                for (int j = 0; j + 1 < o->as.list.len - i; j++) {
+                    if (px_gt(o->as.list.items[j], o->as.list.items[j + 1]).as.b) {
+                        LXValue t = o->as.list.items[j];
+                        o->as.list.items[j] = o->as.list.items[j + 1];
+                        o->as.list.items[j + 1] = t;
+                    }
+                }
+            }
+            return px_null();
         }
     }
     if (obj.type == PX_DICT) {
@@ -5168,7 +5258,9 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
             return px_dict_get(obj, gk);
         }
         if (strcmp(name, "set") == 0) {
-            if (nargs < 2) px_error("R1005: 方法 set 需要 2 个参数");
+            // M190（缺陷 213-b）：修前只有下限 ⇒ `d.set("a", 1, 2)` 静默忽略第 3 个实参，
+            //   而解释轨已收紧为「恰 2」（缺参 ⇒ 数据污染，多参 ⇒ 静默丢弃）⇒ 两侧同形。
+            if (nargs != 2) px_error("R1005: 方法 set 需要 2 个参数");
             if (args[0].type != PX_STR || !args[0].as.obj)
                 px_error("R1002: 方法 set 参数 1 需要 string");
             px_dict_set(obj, args[0].as.obj->as.str.data, args[1]);
@@ -5245,29 +5337,37 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
             return v;
         }
     }
+    // M190（缺陷 213-k）：`tuple.len()` —— 解释轨 `i_call_method` 的 tuple 分支有，
+    //   编译两轨无 ⇒ `t.len()` 在 VM/C 轨响亮「R1007 类型 tuple 没有方法 'len'」。补齐。
+    if (obj.type == PX_TUPLE) {
+        if (strcmp(name, "len") == 0) {
+            if (nargs != 0) px_error("R1002: 方法 len 不接受参数");
+            return px_int(px_len(obj));
+        }
+    }
     // M39：Result 方法（is_ok / is_err / unwrap / ok / err）
     if (obj.type == PX_RESULT) {
         if (strcmp(name, "is_ok") == 0) {
-            if (nargs != 0) px_error("is_ok 不接受参数");
+            if (nargs != 0) px_error("R1005: is_ok 不接受参数");
             return px_bool(obj.as.obj->as.result.ok);
         }
         if (strcmp(name, "is_err") == 0) {
-            if (nargs != 0) px_error("is_err 不接受参数");
+            if (nargs != 0) px_error("R1005: is_err 不接受参数");
             return px_bool(!obj.as.obj->as.result.ok);
         }
         if (strcmp(name, "unwrap") == 0) {
-            if (nargs != 0) px_error("unwrap 不接受参数");
+            if (nargs != 0) px_error("R1005: unwrap 不接受参数");
             if (obj.as.obj->as.result.ok) return obj.as.obj->as.result.value;
-            px_error("unwrap 失败: Err(%s)", px_to_string(obj.as.obj->as.result.value));
+            px_error("R1004: unwrap 失败: Err(%s)", px_to_string(obj.as.obj->as.result.value));
         }
         if (strcmp(name, "unwrap_err") == 0) {
             // M185（第 63 轮 · 第三方 PX-DEF-003）：`unwrap` 的**对偶** —— 断言必为 Err
             //   并取出错误值；Ok 上调用 ⇒ 响亮报错（不静默返回 null）。
             //   修前只有 `ok()/err()`（它们对「另一侧」返回 null，是**查询**语义，不是断言），
             //   写库的人要找的是「断言 + 取值」这一个动作（Rust 的 `unwrap_err`）。
-            if (nargs != 0) px_error("unwrap_err 不接受参数");
+            if (nargs != 0) px_error("R1005: unwrap_err 不接受参数");
             if (!obj.as.obj->as.result.ok) return obj.as.obj->as.result.value;
-            px_error("unwrap_err 失败: Ok(%s)", px_to_string(obj.as.obj->as.result.value));
+            px_error("R1004: unwrap_err 失败: Ok(%s)", px_to_string(obj.as.obj->as.result.value));
         }
         if (strcmp(name, "ok") == 0) {
             // Ok(v) → Some(v)=v；Err(_) → null
@@ -5775,7 +5875,9 @@ static LXValue bi_bool(LXValue* args, int nargs, void* ctx) {
 
 static LXValue bi_assert(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1) px_error("R1002: assert 需要 1-2 个参数");
+    // M190（缺陷 213-f）：修前只查下限（`nargs < 1`）⇒ `assert(c, "m", 多余)` 编译轨**静默忽略**
+    //   第 3 个以后，而解释轨 `1-2` 响亮。统一为**恰 1-2**。
+    if (nargs < 1 || nargs > 2) px_error("R1002: assert 需要 1-2 个参数");
     if (!px_is_truthy(args[0])) {
         if (nargs >= 2 && args[1].type == PX_STR) px_error("断言失败: %s", args[1].as.obj->as.str.data);
         else px_error("断言失败");
@@ -7123,7 +7225,10 @@ int px_native_offload_kind(LXValue fn) {
 }
 
 static LXValue bi_now_us(LXValue* args, int nargs, void* ctx) {
-    (void)args; (void)nargs; (void)ctx;
+    // M190（缺陷 213-m）：本函数是 **0 参**内置，修前**完全不查实参** ⇒ 传多余实参时
+    //   编译轨静默忽略、解释轨响亮「now_us 不需要参数」⇒ 三轨分叉（同 213-a…213-l 一族）。
+    if (nargs != 0) px_error("R1002: now_us 不需要参数");
+    (void)args; (void)ctx;
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return px_int((int64_t)ts.tv_sec * 1000000L + ts.tv_nsec / 1000L);
@@ -10702,7 +10807,10 @@ static LXValue bi_json_path_set(LXValue* args, int nargs, void* ctx) {
 // ---- std.time ----
 
 static LXValue bi_now(LXValue* args, int nargs, void* ctx) {
-    (void)args; (void)nargs; (void)ctx;
+    // M190（缺陷 213-m）：本函数是 **0 参**内置，修前**完全不查实参** ⇒ 传多余实参时
+    //   编译轨静默忽略、解释轨响亮「now 不需要参数」⇒ 三轨分叉（同 213-a…213-l 一族）。
+    if (nargs != 0) px_error("R1002: now 不需要参数");
+    (void)args; (void)ctx;
     time_t t = time(NULL);
     struct tm tmv;
     localtime_r(&t, &tmv);
@@ -11505,7 +11613,10 @@ static LXValue bi_env_unset(LXValue* args, int nargs, void* ctx) {
 // os_self_path() → str | null（当前可执行文件绝对路径；Linux 走 /proc/self/exe）
 //   重新 exec 自身（守护化 / 自升级）必需 —— 此前语言层拿不到「我是谁」。
 static LXValue bi_os_self_path(LXValue* args, int nargs, void* ctx) {
-    (void)args; (void)nargs; (void)ctx;
+    // M190（缺陷 213-m）：本函数是 **0 参**内置，修前**完全不查实参** ⇒ 传多余实参时
+    //   编译轨静默忽略、解释轨响亮「os_self_path 不需要参数」⇒ 三轨分叉（同 213-a…213-l 一族）。
+    if (nargs != 0) px_error("R1002: os_self_path 不需要参数");
+    (void)args; (void)ctx;
     char buf[4096];
     ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
     if (n <= 0) return px_null();
@@ -11518,7 +11629,10 @@ static LXValue bi_os_self_path(LXValue* args, int nargs, void* ctx) {
 //   用 os.Hostname()，而 native 表里**没有任何主机名原语**（此前只能外挂 `hostname` 命令
 //   或读 /proc/sys/kernel/hostname —— 后者是 Linux 私有路径，且语言层无法表达「本机身份」）。
 static LXValue bi_hostname(LXValue* args, int nargs, void* ctx) {
-    (void)args; (void)nargs; (void)ctx;
+    // M190（缺陷 213-m）：本函数是 **0 参**内置，修前**完全不查实参** ⇒ 传多余实参时
+    //   编译轨静默忽略、解释轨响亮「hostname 不需要参数」⇒ 三轨分叉（同 213-a…213-l 一族）。
+    if (nargs != 0) px_error("R1002: hostname 不需要参数");
+    (void)args; (void)ctx;
     char buf[256];
     if (gethostname(buf, sizeof(buf) - 1) != 0) return px_str("");
     buf[sizeof(buf) - 1] = '\0';
@@ -11534,7 +11648,10 @@ static LXValue bi_isatty(LXValue* args, int nargs, void* ctx) {
 
 // now_sec() → int（Unix 秒，UTC 基准；与 time_format/time_parse/tz_offset 同一时间轴）
 static LXValue bi_now_sec(LXValue* args, int nargs, void* ctx) {
-    (void)args; (void)nargs; (void)ctx;
+    // M190（缺陷 213-m）：本函数是 **0 参**内置，修前**完全不查实参** ⇒ 传多余实参时
+    //   编译轨静默忽略、解释轨响亮「now_sec 不需要参数」⇒ 三轨分叉（同 213-a…213-l 一族）。
+    if (nargs != 0) px_error("R1002: now_sec 不需要参数");
+    (void)args; (void)ctx;
     return px_int((int64_t)time(NULL));
 }
 
@@ -11545,7 +11662,10 @@ static LXValue bi_now_sec(LXValue* args, int nargs, void* ctx) {
 //   now_sec() 只到秒 ⇒ 纳秒时间戳在语言里**没有来源**，只能拿单调钟冒充（值完全不同）。
 //   用 CLOCK_REALTIME 的 tv_sec*1e9 + tv_nsec（与 bi_now_ms 同源，同一时刻必然一致）。
 static LXValue bi_now_ns(LXValue* args, int nargs, void* ctx) {
-    (void)args; (void)nargs; (void)ctx;
+    // M190（缺陷 213-m）：本函数是 **0 参**内置，修前**完全不查实参** ⇒ 传多余实参时
+    //   编译轨静默忽略、解释轨响亮「now_ns 不需要参数」⇒ 三轨分叉（同 213-a…213-l 一族）。
+    if (nargs != 0) px_error("R1002: now_ns 不需要参数");
+    (void)args; (void)ctx;
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     return px_int((int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec);
@@ -11558,7 +11678,10 @@ static LXValue bi_now_ns(LXValue* args, int nargs, void* ctx) {
 //   配套：time_format/time_parse 的 tz 参数现接受 "LOCAL"/"local"。
 static int64_t px_local_off(void);
 static LXValue bi_tz_local(LXValue* args, int nargs, void* ctx) {
-    (void)args; (void)nargs; (void)ctx;
+    // M190（缺陷 213-m）：本函数是 **0 参**内置，修前**完全不查实参** ⇒ 传多余实参时
+    //   编译轨静默忽略、解释轨响亮「tz_local 不需要参数」⇒ 三轨分叉（同 213-a…213-l 一族）。
+    if (nargs != 0) px_error("R1002: tz_local 不需要参数");
+    (void)args; (void)ctx;
     return px_int((int64_t)px_local_off());
 }
 

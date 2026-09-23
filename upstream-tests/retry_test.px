@@ -1,0 +1,46 @@
+# retry.px 测试：双模式一致（参考 hashicorp/go-retryablehttp）
+import "../registry/retry/0.1.0/retry.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+# 任务：arg = 包含允许次数的 {max_fail}；模拟前 max_fail 次失败，之后成功
+# 用模块级 var？不——纯函数：通过 arg["fail_left"] 不可变不行，用全局计数违背规范。
+# 简化：arg["until"] = 第几次开始成功（1 起）；用持久化 dict 计数——测试内直接可断。
+def flaky(x):
+    # x = {"count": dict, "until": int}，count 是用户持有的可变 dict
+    var c = x["count"]
+    var n = c["n"]
+    c.set("n", n + 1)
+    if n + 1 < x["until"]:
+        return Err("boom " + str(n + 1))
+    return Ok("ok-" + str(n + 1))
+def always_fail(x):
+    return Err("always:arg=" + str(x))
+def main():
+    # 第 1 次成功
+    var c1 = {"n": 0}
+    var r = retry_call(flaky, {"count": c1, "until": 1}, {"times": 3})
+    expect(r.is_ok() and r.unwrap() == "ok-1", "一次成功: " + str(r))
+    # 前 2 次失败，第 3 次成功（times=5）
+    var c2 = {"n": 0}
+    var r2 = retry_call(flaky, {"count": c2, "until": 3},
+        {"times": 5, "delay_ms": 1, "backoff": "fixed"})
+    expect(r2.is_ok() and r2.unwrap() == "ok-3", "重试后成功: " + str(r2))
+    # 超过 times 仍失败 → Err 携带最后错误
+    var c3 = {"n": 0}
+    var r3 = retry_call(flaky, {"count": c3, "until": 99}, {"times": 3, "delay_ms": 1})
+    expect(r3.is_err(), "耗尽应 Err")
+    var m = str(r3)
+    expect(contains(m, "boom 3"), "最后一次错误: " + m)
+    # always 失败
+    var r4 = retry_call(always_fail, 0, {"times": 2})
+    expect(r4.is_err() and contains(str(r4), "always"), "always 失败: " + str(r4))
+    # 默认 opts（times=3, backoff=exp, delay=0）
+    var c5 = {"n": 0}
+    var r5 = retry_call(flaky, {"count": c5, "until": 2})
+    expect(r5.is_ok() and r5.unwrap() == "ok-2", "默认 opts: " + str(r5))
+    # times 最少 1
+    var r6 = retry_call(always_fail, 0, {"times": 0})
+    expect(r6.is_err(), "times=0 也尝试 1 次 Err")
+    print("retry: PASS")

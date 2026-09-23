@@ -1,0 +1,47 @@
+# base58.px 测试：双模式一致（Base58 / Base58Check，Python 实现对拍）
+# 说明：PuXian 字符串字面量不支持 \xNN，零字节/二进制字节用 chr(n) 构造。
+import "../registry/base58/0.1.0/base58.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+def main():
+    var NUL = chr(0)
+    # 编码（Python 对拍）
+    expect(base58_encode("") == "", "enc 空串")
+    expect(base58_encode(NUL) == "1", "enc 单零字节")
+    expect(base58_encode(NUL + NUL) == "11", "enc 双零字节")
+    expect(base58_encode("abc") == "ZiCa", "enc abc")
+    expect(base58_encode("hello world") == "StV1DL6CwTryKyV", "enc hello world")
+    expect(base58_encode(NUL + "abc") == "1ZiCa", "enc 前导零")
+    expect(base58_encode("a" + NUL + "b") == "Zak1", "enc 中间零字节")
+    # 解码
+    expect(base58_decode("ZiCa").unwrap() == "abc", "dec ZiCa")
+    expect(base58_decode("StV1DL6CwTryKyV").unwrap() == "hello world", "dec hello")
+    expect(base58_decode("1").unwrap() == NUL, "dec 1 → 零字节")
+    expect(base58_decode("1abc").unwrap() == bytes_to_str(hex_to_bytes("0001b97b")), "dec 1abc")
+    expect(base58_decode("").unwrap() == "", "dec 空串")
+    expect(base58_decode("0OIl").is_err(), "dec 非法字符 Err")
+    # 回环
+    var inputs = ["", "x", "hello", NUL, NUL + NUL, NUL + "abc", "a" + NUL + "b", NUL + chr(1) + chr(2) + chr(3) + chr(4) + chr(5)]
+    var idx = 0
+    while idx < len(inputs):
+        var s = inputs[idx]
+        var r = base58_decode(base58_encode(s))
+        expect(r.is_ok() and r.unwrap() == s, "回环 " + str(idx))
+        idx += 1
+    # Base58Check
+    expect(base58check_encode("hello") == "2L5B5yqsVG8Vt", "check enc hello")
+    expect(base58check_encode(NUL + NUL + "hi") == "11tzdypBnL", "check enc 前导零")
+    var cd = base58check_decode("2L5B5yqsVG8Vt")
+    expect(cd.is_ok() and cd.unwrap() == "hello", "check dec hello")
+    var cd2 = base58check_decode("11tzdypBnL")
+    expect(cd2.is_ok() and cd2.unwrap() == NUL + NUL + "hi", "check dec 前导零")
+    # 篡改 → 校验失败
+    expect(base58check_decode("2L5B5yqsVG8Vu").is_err(), "check 篡改 Err")
+    expect(base58check_decode("StV1DL6CwTryKyV").is_err(), "check 普通 base58 校验失败 Err")
+    expect(base58check_decode("1").is_err(), "check 过短 Err")
+    expect(base58check_decode("0OIl").is_err(), "check 非法字符 Err")
+    print("base58: PASS")

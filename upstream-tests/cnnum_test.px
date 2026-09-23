@@ -1,0 +1,41 @@
+# cnnum.px 测试：双模式一致（中文数字 ↔ 整数）
+import "../registry/cnnum/0.1.0/cnnum.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var cases = [
+        ["零", 0],
+        ["一", 1],
+        ["十", 10],
+        ["十二", 12],
+        ["二十", 20],
+        ["二十三", 23],
+        ["一百", 100],
+        ["一百零一", 101],
+        ["一百一十", 110],
+        ["三百四十五", 345],
+        ["一千零五", 1005],
+        ["一千二百三十四", 1234],
+        ["一万", 10000],
+        ["一万零一", 10001],
+        ["一万零一百", 10100],
+        ["一万一千", 11000],
+        ["一万二千三百四十五", 12345],
+        ["九千九百九十九万九千九百九十九", 99999999],
+    ]
+    var i = 0
+    while i < len(cases):
+        var c = cases[i]
+        expect(cnnum_parse(c[0]).unwrap() == c[1], "parse " + c[0] + " 应 " + str(c[1])
+            +" 得 " + str(cnnum_parse(c[0])))
+        expect(cnnum_format(c[1]).unwrap() == c[0], "format " + str(c[1]) + " 应 " + c[0]
+            +" 得 " + str(cnnum_format(c[1])))
+        i += 1
+    # 非法输入
+    expect(cnnum_parse("abc").is_err(), "非法字符 Err")
+    expect(cnnum_parse("一万亿").is_err(), "超范围 Err")
+    expect(cnnum_format(100000000).is_err(), "format 超范围 Err")
+    expect(cnnum_format(-1).is_err(), "负 Err")
+    print("cnnum: PASS")

@@ -1,0 +1,40 @@
+# template.px 测试：双模式一致（参考 Go text/template 子集）
+import "../registry/template/0.1.0/template.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var data = {"name": "px", "user": {"id": 7, "email": "a@b.c"},
+        "items": ["a", "b", "c"], "show": true, "hide": false, "empty": []}
+    # 变量与点路径
+    expect(tmpl_render("Hello, {{name}}!", data).unwrap() == "Hello, px!", "变量")
+    expect(tmpl_render("id={{user.id}} e={{user.email}}", data).unwrap() == "id=7 e=a@b.c", "点路径")
+    expect(tmpl_render("v={{missing}}", data).unwrap() == "v=", "未定义 → 空串")
+    # if / else
+    expect(tmpl_render("{{if show}}yes{{end}}", data).unwrap() == "yes", "if 真")
+    expect(tmpl_render("{{if hide}}yes{{end}}", data).unwrap() == "", "if 假")
+    expect(tmpl_render("{{if hide}}yes{{else}}no{{end}}", data).unwrap()
+        == "no", "if else")
+    expect(tmpl_render("{{if missing}}yes{{else}}no{{end}}", data).unwrap()
+        == "no", "if 未定义 → else")
+    expect(tmpl_render("{{if empty}}yes{{else}}no{{end}}", data).unwrap()
+        == "no", "if 空 list → else")
+    # if 块内变量
+    expect(tmpl_render("{{if show}}{{name}}{{end}}", data).unwrap() == "px", "if 块内变量")
+    # each
+    expect(tmpl_render("{{each items as x}}[{{x}}]{{end}}", data).unwrap() == "[a][b][c]", "each")
+    expect(tmpl_render("{{each empty as x}}{{x}}{{end}}", data).unwrap() == "", "each 空 list")
+    # each 嵌套 if
+    expect(tmpl_render("{{each items as x}}{{if show}}<{{x}}>{{end}}{{end}}", data).unwrap()
+        == "<a><b><c>", "each + if 嵌套")
+    # 原文保留（无标签）
+    expect(tmpl_render("plain text\nline2", data).unwrap() == "plain text\nline2", "原文")
+    # 错误
+    expect(tmpl_render("{{if show}}x", data).is_err(), "缺 end 应 Err")
+    expect(tmpl_render("{{end}}", data).is_err(), "多余 end 应 Err")
+    expect(tmpl_render("{{else}}", data).is_err(), "多余 else 应 Err")
+    expect(tmpl_render("{{if show}}x{{else}}y{{else}}z{{end}}", data).is_err(), "双 else 应 Err")
+    expect(tmpl_render("{{each items as x}}x", data).is_err(), "each 缺 end 应 Err")
+    expect(tmpl_render("{{each items}}x{{end}}", data).is_err(), "each 缺 as 应 Err")
+    print("template: PASS")

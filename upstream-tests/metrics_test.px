@@ -1,0 +1,34 @@
+# metrics.px 测试：双模式一致（参考 prometheus/client_golang）
+import "../registry/metrics/0.1.0/metrics.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var reg = m_registry()
+    m_counter(reg, "http_requests_total", "HTTP requests")
+    m_gauge(reg, "temp_c", "temperature")
+    # counter 自增
+    m_inc(reg, "http_requests_total")
+    m_inc(reg, "http_requests_total")
+    m_inc(reg, "http_requests_total", 3)
+    m_inc(reg, "http_requests_total", 1, {"path": "/api"})
+    m_inc(reg, "http_requests_total", 1, {"path": "/api"})
+    # gauge set
+    m_set(reg, "temp_c", 36.5)
+    m_set(reg, "temp_c", 37.2, {"zone": "a"})
+    # 渲染
+    var out = m_render(reg)
+    expect(contains(out, "# HELP http_requests_total HTTP requests"), "HELP")
+    expect(contains(out, "# TYPE http_requests_total counter"), "TYPE")
+    expect(contains(out, "http_requests_total 5.0"), "无 label 值 5: " + out)
+    expect(contains(out, "http_requests_total{path=/api} 2.0"), "label 值 2: " + out)
+    expect(contains(out, "temp_c 36.5"), "gauge 36.5")
+    expect(contains(out, "temp_c{zone=a} 37.2"), "gauge label")
+    # 未注册指标 → Err
+    expect(m_inc(reg, "unknown").is_err(), "未注册 Err")
+    expect(m_set(reg, "unknown", 1).is_err(), "未注册 set Err")
+    # label 排序确定性（多次渲染一致）
+    var out2 = m_render(reg)
+    expect(out == out2, "渲染确定性")
+    print("metrics: PASS")

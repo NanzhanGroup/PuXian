@@ -1,0 +1,35 @@
+# secure_random.px 测试：双模式一致（参考 Go crypto/rand）
+import "../registry/secure_random/0.1.0/secure_random.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # hex
+    var h1 = sr_hex(8).unwrap()
+    var h2 = sr_hex(8).unwrap()
+    expect(len(h1) == 16, "hex 长度 16: " + h1)
+    expect(h1 != h2, "两次不同")
+    # bytes
+    var b = sr_bytes(16).unwrap()
+    expect(bytes_len(b) == 16, "bytes 长度 16")
+    # token（base64url 无 padding）
+    var t = sr_token(16).unwrap()
+    var t2 = sr_token(16).unwrap()
+    expect(t != t2, "token 不同")
+    expect(len(t) >= 20 and len(t) <= 24,
+        "token 长度 16 字节: " + t)
+    expect(not contains(t, "+") and not contains(t, "/")
+        and not contains(t, "="), "base64url 字符集: " + t)
+    # sr_int：范围内
+    var i = 0
+    var distinct = {}
+    while i < 100:
+        var v = sr_int(100).unwrap()
+        expect(v >= 0 and v < 100, "范围")
+        distinct.set(str(v), true)
+        i += 1
+    expect(len(distinct.keys()) >= 2, "抽样有多个不同值")
+    expect(sr_int(0).is_err(), "max<=0 Err")
+    expect(sr_int(-5).is_err(), "max 负 Err")
+    print("secure_random: PASS")

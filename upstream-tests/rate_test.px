@@ -1,0 +1,56 @@
+# rate.px 测试：双模式一致
+import "../registry/rate/0.1.0/rate.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # 初始满桶
+    var b = rt_new(3, 1)
+    expect(b["tokens"] == 3, "new full")
+    # 查询不消耗
+    var q = rt_tokens(b, 0)
+    expect(q[1] == 3, "tokens 3 at t0")
+    # 消耗
+    var a1 = rt_allow(q[0], 0)
+    expect(a1[1] == true, "allow 1")
+    expect(rt_tokens(a1[0], 0)[1] == 2, "tokens 2 after allow")
+    # 再消耗到空
+    var a2 = rt_allow(a1[0], 0)
+    expect(a2[1] == true, "allow 2")
+    var a3 = rt_allow(a2[0], 0)
+    expect(a3[1] == true, "allow 3")
+    var a4 = rt_allow(a3[0], 0)
+    expect(a4[1] == false, "deny 4th")
+    expect(rt_tokens(a4[0], 0)[1] == 0, "tokens 0")
+    # 时间推进补给（rate=1/s）
+    var f1 = rt_allow_n(a4[0], 1, 10)
+    expect(f1[1] == true, "refilled at t10")
+    expect(rt_tokens(f1[0], 10)[1] == 2, "refill leftover 2 (cap 3, consume 1)")
+    # 上限封顶（capacity=3，闲置再久也只到 3）
+    var g = rt_new(3, 5)
+    var gt = rt_tokens(g, 1000)[0]
+    expect(gt["tokens"] == 3, "cap at 3")
+    # 多令牌消耗
+    var h = rt_new(5, 1)
+    var h1 = rt_allow_n(h, 4, 0)
+    expect(h1[1] == true, "allow 4 of 5")
+    expect(rt_tokens(h1[0], 0)[1] == 1, "left 1")
+    var h2 = rt_allow_n(h1[0], 2, 0)
+    expect(h2[1] == false, "deny n=2 when 1")
+    expect(rt_tokens(h2[0], 0)[1] == 1, "no consume on deny")
+    # n<=0 恒放行
+    var i = rt_allow_n(rt_new(0, 1), 0, 5)
+    expect(i[1] == true, "n=0 allow")
+    # 纯函数：原桶不被修改
+    var j = rt_new(2, 1)
+    rt_allow(j, 0)
+    expect(j["tokens"] == 2, "pure no mutate")
+    # 时间倒退（时钟回调）不补给：令牌不增加，但已有令牌仍可消费
+    var k = rt_tokens(rt_new(2, 1), 100)[0]
+    expect(k["tokens"] == 2, "clock back tokens stay 2")
+    var k2 = rt_tokens(k, 50)
+    expect(k2[1] == 2, "clock back no extra refill")
+    var k3 = rt_allow(k, 50)
+    expect(k3[1] == true, "clock back existing token allow")
+    print("rate: PASS")

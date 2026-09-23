@@ -1,0 +1,78 @@
+# pg.px 测试：真实 PostgreSQL 13 连接（md5 认证 + 简单查询）
+import "../registry/pg/0.1.0/pg.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # 连接（md5 认证）
+    var conn = pg_connect("127.0.0.1", 5432, "postgres", "px_test_pass_123",
+        "pxtest", {"timeout_ms": 5000})
+    if conn.is_err():
+        print("FAIL: connect: " + str(conn))
+        exit(1)
+    var c = conn.unwrap()
+    print("connect ok, fd=" + str(c["fd"]))
+    # 基本查询
+    var q = pg_query(c, "SELECT id, name, age FROM users ORDER BY id")
+    if q.is_err():
+        print("FAIL: query: " + str(q))
+        exit(1)
+    var res = q.unwrap()
+    expect(len(res["columns"]) == 3, "3 columns, got " + str(len(res["columns"])))
+    expect(res["columns"][0]["name"] == "id", "col0 name id")
+    expect(len(res["rows"]) == 2, "2 rows, got " + str(len(res["rows"])))
+    expect(res["rows"][0][1] == "alice", "row0 name alice")
+    expect(res["rows"][1][1] == "bob", "row1 name bob")
+    # count 聚合
+    var q2 = pg_query(c, "SELECT count(*) AS n FROM users")
+    var res2 = q2.unwrap()
+    expect(res2["columns"][0]["name"] == "n", "agg col name")
+    expect(res2["rows"][0][0] == "2", "count=2, got " + str(res2["rows"][0][0]))
+    # 各类型：null / bytea / numeric / bool / timestamptz / float
+    var q3 = pg_query(c, "SELECT id, name, age, score, active, data, created FROM users WHERE id=1")
+    if q3.is_err():
+        print("FAIL: type query: " + str(q3))
+        exit(1)
+    var r3 = q3.unwrap().rows[0]
+    expect(r3[0] == "1", "id text")
+    expect(r3[2] == "30", "age text")
+    expect(r3[3] == "99.50", "numeric text, got " + str(r3[3]))
+    expect(r3[4] == "t", "bool text, got " + str(r3[4]))
+    expect(r3[5] == "\\x48656c6c6f", "bytea hex, got " + str(r3[5]))
+    expect(len(r3[6]) > 0, "created text")
+    # null 值
+    var q4 = pg_query(c, "SELECT name, data FROM users WHERE id=2")
+    var r4 = q4.unwrap().rows[0]
+    expect(r4[0] == "bob", "row2 name")
+    expect(r4[1] == null, "row2 data NULL")
+    # DDL / 事务控制类命令（CommandComplete）
+    var q5 = pg_query(c, "BEGIN")
+    if q5.is_err():
+        print("FAIL: begin: " + str(q5.unwrap_err()))
+        exit(1)
+    var q6 = pg_query(c, "ROLLBACK")
+    expect(not q6.is_err(), "rollback ok")
+    # 错误路径：非法 SQL → Err（不应崩溃）
+    var q7 = pg_query(c, "SELECT * FROM no_such_table_xyz")
+    expect(q7.is_err(), "bad sql returns Err")
+    if q7.is_err():
+        print("  (expected) err=" + str(q7))
+    # 多语句注意：简单查询一条消息只允许一条；错误后需再查询可恢复
+    var q8 = pg_query(c, "SELECT 1 AS one")
+    var r8 = q8.unwrap()
+    expect(r8["rows"][0][0] == "1", "recover query ok")
+    # SCRAM-SHA-256 认证路径（PG 13 默认）
+    var conn2 = pg_connect("127.0.0.1", 5432, "px_scram", "scram_secret_789",
+        "pxtest", {"timeout_ms": 5000})
+    if conn2.is_err():
+        print("FAIL: scram connect: " + str(conn2))
+        exit(1)
+    var c2 = conn2.unwrap()
+    var q9 = pg_query(c2, "SELECT current_user AS u")
+    var r9 = q9.unwrap()
+    expect(r9["rows"][0][0] == "px_scram", "scram user")
+    pg_close(c2)
+    pg_close(c)
+    print("pg_test: PASS")
+    return Ok(0)

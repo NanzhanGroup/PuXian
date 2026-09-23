@@ -114,6 +114,9 @@ def i_call_method(rcv, name, args, pos):
         return Err(i_r1007("类型 " + tn + " 没有方法 '" + name + "'", pos))
     if t == "tuple":
         if name == "len":
+            # M190（缺陷 213-k）：补参数校验（native 侧本轮同步补齐 tuple.len）。
+            if len(args) != 0:
+                return Err(i_r1002("方法 len 不接受参数", pos))
             return Ok(len(rcv))
         return Err(i_r1007("类型 tuple 没有方法 '" + name + "'", pos))
     return Err(i_r1007("类型 " + t + " 没有方法 '" + name + "'", pos))
@@ -124,25 +127,47 @@ def i_expect_str_arg(args, idx, mname, pos):
     return Err(i_r1002("方法 " + mname + " 参数 " + str(idx + 1) + " 需要 string", pos))
 # ---- string 方法（对齐 call_str_method） ----
 def i_str_method(s, name, args, pos):
+    # M190（缺陷 213-i）：本区四个方法修前**完全不查实参**⇒ `s.upper(9)` 解释轨静默
+    #   忽略、编译轨响亮 ⇒ 三轨分叉。现在与 native `px_method` **逐字同文**。
     if name == "upper":
+        if len(args) != 0:
+            return Err(i_r1002("方法 upper 不接受参数", pos))
         return Ok(s.upper())
     if name == "lower":
+        if len(args) != 0:
+            return Err(i_r1002("方法 lower 不接受参数", pos))
         return Ok(s.lower())
     if name == "trim":
+        if len(args) != 0:
+            return Err(i_r1002("方法 trim 不接受参数", pos))
         return Ok(s.trim())
     if name == "len":
+        if len(args) != 0:
+            return Err(i_r1002("方法 len 不接受参数", pos))
         return Ok(len(s))
+    # M190（缺陷 213-i）：修前这几个方法**只校验第 1 个实参的类型**、不查个数 ⇒
+    #   `s.contains("a","b")` / `s.replace("a","b","c")` 解释轨静默忽略多余实参，
+    #   而 native 侧精确 `nargs != N` 响亮。现在两侧逐字同文。
     if name == "split":
+        if len(args) > 1:
+            return Err(i_r1002("方法 split 需要 0-1 个参数", pos))
+        if len(args) == 0:
+            # 0 参 = 按**单个空格**切分（与内置 `split(s)` 的默认分隔符同）
+            return Ok(s.split(" "))
         let r = i_expect_str_arg(args, 0, "split", pos)
         if r.is_err():
             return Err(r.err())
         return Ok(s.split(r.unwrap()))
     if name == "contains":
+        if len(args) != 1:
+            return Err(i_r1002("方法 contains 需要 1 个参数", pos))
         let r = i_expect_str_arg(args, 0, "contains", pos)
         if r.is_err():
             return Err(r.err())
         return Ok(s.contains(r.unwrap()))
     if name == "replace":
+        if len(args) != 2:
+            return Err(i_r1002("方法 replace 需要 2 个参数", pos))
         let r0 = i_expect_str_arg(args, 0, "replace", pos)
         if r0.is_err():
             return Err(r0.err())
@@ -151,11 +176,15 @@ def i_str_method(s, name, args, pos):
             return Err(r1.err())
         return Ok(s.replace(r0.unwrap(), r1.unwrap()))
     if name == "starts_with":
+        if len(args) != 1:
+            return Err(i_r1002("方法 starts_with 需要 1 个参数", pos))
         let r = i_expect_str_arg(args, 0, "starts_with", pos)
         if r.is_err():
             return Err(r.err())
         return Ok(s.starts_with(r.unwrap()))
     if name == "ends_with":
+        if len(args) != 1:
+            return Err(i_r1002("方法 ends_with 需要 1 个参数", pos))
         let r = i_expect_str_arg(args, 0, "ends_with", pos)
         if r.is_err():
             return Err(r.err())
@@ -191,17 +220,27 @@ def i_str_method(s, name, args, pos):
 # ---- list 方法（对齐 call_list_method） ----
 def i_list_method(l, name, args, pos):
     if name == "len":
+        if len(args) != 0:
+            return Err(i_r1002("方法 len 不接受参数", pos))
         return Ok(len(l))
     if name == "append" or name == "push":
-        if len(args) == 0:
-            return Err(i_r1005("list.append 需要一个参数", pos))
+        # M190（缺陷 213-h）：修前只查下限（`len(args) == 0`）⇒ `l.append(1, 2)` 解释轨
+        #   **静默丢弃第 2 个实参**（rc=0），而 native 侧是精确的 `nargs != 1` ⇒ 三轨分叉。
+        if len(args) != 1:
+            return Err(i_r1005("方法 " + name + " 需要 1 个参数", pos))
         l.append(args[0])
         return Ok(null)
     if name == "pop":
+        # M190（缺陷 213-a）：修前**忽略实参个数** ⇒ `l.pop(1)` 解释轨静默删掉一个元素
+        #   （rc=0），而 VM/C 轨响亮「pop 不接受参数」⇒ 三轨分叉（静默数据丢失）。
+        if len(args) != 0:
+            return Err(i_r1005("pop 不接受参数", pos))
         if len(l) == 0:
             return Err(i_r1003("pop 空列表", pos))
         return Ok(l.pop())
     if name == "join":
+        if len(args) != 1:
+            return Err(i_r1002("方法 join 需要 1 个参数", pos))
         let r = i_expect_str_arg(args, 0, "join", pos)
         if r.is_err():
             return Err(r.err())
@@ -213,8 +252,8 @@ def i_list_method(l, name, args, pos):
             i += 1
         return Ok(join(sep, parts))
     if name == "contains":
-        if len(args) == 0:
-            return Err(i_r1005("list.contains 需要一个参数", pos))
+        if len(args) != 1:
+            return Err(i_r1002("方法 contains 需要 1 个参数", pos))
         var i = 0
         while i < len(l):
             if i_eq(l[i], args[0]):
@@ -222,6 +261,9 @@ def i_list_method(l, name, args, pos):
             i += 1
         return Ok(false)
     if name == "reverse":
+        # M190（缺陷 213-j）：补参数校验（native 侧同文案）。
+        if len(args) != 0:
+            return Err(i_r1005("方法 reverse 不接受参数", pos))
         let n = len(l)
         var i = 0
         while i < n // 2:
@@ -231,12 +273,17 @@ def i_list_method(l, name, args, pos):
             i += 1
         return Ok(null)
     if name == "sort":
+        # M190（缺陷 213-j）：补参数校验；并修**比较口径** —— 修前用 `i_to_str`（渲染串）
+        #   比较，正是 M162 在 `sorted` 上修掉的那个 bug（`sort([10,9,2])` = `[10,2,9]`）；
+        #   改用 `i_cmp_values`（对齐 `compare_values` 三态），交换条件保持 `> 0`（稳定）。
+        if len(args) != 0:
+            return Err(i_r1005("方法 sort 不接受参数", pos))
         let n = len(l)
         var i = 0
         while i < n:
             var j = 0
             while j < n - 1 - i:
-                if i_to_str(l[j]) > i_to_str(l[j + 1]):
+                if i_cmp_values(l[j], l[j + 1]) > 0:
                     let tmp = l[j]
                     l[j] = l[j + 1]
                     l[j + 1] = tmp
@@ -244,8 +291,10 @@ def i_list_method(l, name, args, pos):
             i += 1
         return Ok(null)
     if name == "index":
-        if len(args) == 0:
-            return Err(i_r1005("list.index 需要一个参数", pos))
+        # M190（缺陷 213-g）：与 native 侧 `list.index`（本轮补齐）同形 —— 恰 1 个参数。
+        #   修前只查下限 ⇒ `l.index(1, 2)` 解释轨静默忽略第 2 个实参。
+        if len(args) != 1:
+            return Err(i_r1005("list.index 需要 1 个参数", pos))
         var i = 0
         while i < len(l):
             if i_eq(l[i], args[0]):
@@ -268,12 +317,14 @@ def i_dict_method(d, name, args, pos):
             return Ok(args[1])
         return Ok(null)
     if name == "set" or name == "put":
+        # M190（缺陷 213-b）：修前**缺参时把值当 null 写入** ⇒ `d.set("b")` 解释轨
+        #   静默插入 `b: null`（rc=0，**数据污染**），而 VM/C 轨响亮「方法 set 需要 2 个参数」。
+        if len(args) != 2:
+            return Err(i_r1005("方法 set 需要 2 个参数", pos))
         let r = i_expect_str_arg(args, 0, "set", pos)
         if r.is_err():
             return Err(r.err())
-        var v = null
-        if len(args) > 1:
-            v = args[1]
+        var v = args[1]
         d[r.unwrap()] = v
         return Ok(null)
     if name == "keys":
@@ -325,6 +376,10 @@ def i_result_method(r, name, args, pos):
             return Err(i_r1005("is_err 不接受参数", pos))
         return Ok(r.is_err())
     if name == "unwrap":
+        # M190（缺陷 213-c）：修前**忽略实参** ⇒ `Ok(1).unwrap(2)` 解释轨 rc=0 返回 1，
+        #   而 VM/C 轨响亮「unwrap 不接受参数」。（`unwrap_err` 早就有同款检查，`unwrap` 漏了。）
+        if len(args) != 0:
+            return Err(i_r1005("unwrap 不接受参数", pos))
         if r.is_err():
             return Err(i_r1004("unwrap 失败: Err(" + i_to_str(r.err()) + ")", pos))
         return Ok(r.unwrap())

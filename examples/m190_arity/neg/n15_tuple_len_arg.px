@@ -1,0 +1,5 @@
+# M190 门 · 拒绝侧：n15_tuple_len_arg（运行期必须响亮，三轨同码同文）
+def main():
+    print("before")
+    var t = (1, 2)
+    print(t.len(9))

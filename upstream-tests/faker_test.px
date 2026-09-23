@@ -1,0 +1,76 @@
+# faker.px 测试：双模式一致
+import "../registry/faker/0.1.0/faker.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def contains(s, sub):
+    var n = len(s)
+    var m = len(sub)
+    if m == 0:
+        return true
+    var i = 0
+    while i + m <= n:
+        var j = 0
+        var hit = true
+        while j < m:
+            if s[i + j] != sub[j]:
+                hit = false
+                break
+            j += 1
+        if hit:
+            return true
+        i += 1
+    return false
+def is_digits(s):
+    var i = 0
+    while i < len(s):
+        if not (s[i] >= "0" and s[i] <= "9"):
+            return false
+        i += 1
+    return true
+def main():
+    # PRNG 确定性：同种子同值
+    var r1 = fa_rand(42)
+    var r2 = fa_rand(42)
+    expect(r1[1] == r2[1], "rand deterministic")
+    var r3 = fa_rand(43)
+    expect(r1[1] != r3[1], "rand differs by seed")
+    # range / digits
+    var rng = fa_range(7, 10, 20)
+    expect(rng[1] >= 10 and rng[1] < 20, "range in bounds")
+    var dg = fa_digits(7, 6)
+    expect(len(dg[1]) == 6 and is_digits(dg[1]), "digits 6")
+    # 姓名：含词表字符
+    var nm = fa_name(99)
+    expect(len(nm[1]) >= 3, "name length")
+    # 手机号格式
+    var ph = fa_phone(123)
+    expect(len(ph[1]) == 13, "phone len (含横线)")
+    expect(ph[1][0:1] == "1", "phone starts 1")
+    expect(ph[1][3:4] == "-", "phone first dash")
+    expect(ph[1][8:9] == "-", "phone second dash")
+    var digits = ph[1][4:8] + ph[1][9:13]
+    expect(is_digits(digits), "phone digits")
+    # 邮箱格式
+    var em = fa_email(5)
+    expect(contains(em[1], "@"), "email contains @")
+    expect(contains(em[1], "example.com"), "email domain")
+    # 句子
+    var sent = fa_sentence(3, 4)
+    var words = sent[1].split(" ")
+    expect(len(words) == 4, "sentence 4 words")
+    expect(contains(sent[1], " "), "sentence has spaces")
+    # 确定性驱动（种子链可复现）
+    var a1 = fa_digits(1, 8)
+    var a2 = fa_digits(1, 8)
+    expect(a1[1] == a2[1], "digits chain deterministic")
+    # UUID
+    var u = fa_uuid()
+    expect(len(u) == 36, "uuid len 36")
+    expect(u[14:15] == "4", "uuid v4")
+    expect(u[19:20] == "8", "uuid variant 8")
+    var uf = fa_uuid_from("00000000000000000000000000000000")
+    expect(uf == "00000000-0000-4000-8000-000000000000", "uuid_from fixed")
+    expect(fa_uuid_from("short") == "", "uuid_from invalid")
+    print("faker: PASS")

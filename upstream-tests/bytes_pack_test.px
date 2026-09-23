@@ -1,0 +1,70 @@
+# bytes_pack.px 测试：双模式一致
+import "../registry/bytes_pack/0.1.0/bytes_pack.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def hex_eq(a, b):
+    return bytes_to_hex(a) == b
+def main():
+    # pack 基本
+    var p1 = bp_pack(">IH", [0x12345678, 0xABCD]).unwrap()
+    expect(hex_eq(p1, "12345678abcd"), "pack >IH")
+    var p2 = bp_pack("<I", [0x12345678]).unwrap()
+    expect(hex_eq(p2, "78563412"), "pack <I")
+    var p3 = bp_pack("4B", [1, 2, 3, 4]).unwrap()
+    expect(hex_eq(p3, "01020304"), "pack 4B")
+    var p4 = bp_pack("B", [0]).unwrap()
+    expect(hex_eq(p4, "00"), "pack B 0")
+    # signed
+    var p5 = bp_pack("b", [-128]).unwrap()
+    expect(hex_eq(p5, "80"), "pack b -128")
+    var p6 = bp_pack("h", [-5]).unwrap()
+    expect(hex_eq(p6, "fffb"), "pack h -5 big")
+    var p7 = bp_pack("<h", [-5]).unwrap()
+    expect(hex_eq(p7, "fbff"), "pack <h -5 little")
+    var p8 = bp_pack("q", [-2]).unwrap()
+    expect(hex_eq(p8, "fffffffffffffffe"), "pack q -2")
+    var p9 = bp_pack("Q", [9223372036854775807]).unwrap()
+    expect(hex_eq(p9, "7fffffffffffffff"), "pack Q max")
+    # 复合端序 + 重复
+    var p10 = bp_pack(">2H b", [0x0102, 0x0304, 7]).unwrap()
+    expect(hex_eq(p10, "0102030407"), "pack mixed")
+    # unpack roundtrip
+    var u1 = bp_unpack(">IH", p1).unwrap()
+    expect(u1[0] == 0x12345678 and u1[1] == 0xABCD, "unpack >IH")
+    var u2 = bp_unpack("<I", p2).unwrap()
+    expect(u2[0] == 0x12345678, "unpack <I")
+    var u3 = bp_unpack("4B", p3).unwrap()
+    expect(len(u3) == 4 and u3[0] == 1 and u3[3] == 4, "unpack 4B")
+    var u4 = bp_unpack("b", p5).unwrap()
+    expect(u4[0] == -128, "unpack b -128")
+    var u5 = bp_unpack("<h", p7).unwrap()
+    expect(u5[0] == -5, "unpack <h -5")
+    var u6 = bp_unpack("q", p8).unwrap()
+    expect(u6[0] == -2, "unpack q -2")
+    var u7 = bp_unpack("Q", p9).unwrap()
+    expect(u7[0] == 9223372036854775807, "unpack Q max")
+    # unpack_from 偏移
+    var data = bp_pack(">BBB i", [1, 2, 3, -100]).unwrap()
+    var r = bp_unpack_from(">i", data, 3).unwrap()
+    expect(r[0] == 7 and r[1][0] == -100, "unpack_from offset")
+    # i32 signed 通过符号扩展
+    var ps = bp_pack("i", [-100]).unwrap()
+    expect(hex_eq(ps, "ffffff9c"), "pack i -100")
+    expect(bp_unpack("i", ps).unwrap()[0] == -100, "unpack i -100")
+    # size
+    expect(bp_size(">IH").unwrap() == 6, "size >IH")
+    expect(bp_size("<4B").unwrap() == 4, "size 4B")
+    expect(bp_size("q").unwrap() == 8, "size q")
+    # 错误路径
+    expect(bp_pack("B", [256]).is_err(), "range err u8 256")
+    expect(bp_pack("b", [128]).is_err(), "range err i8 128")
+    expect(bp_pack("B", [-1]).is_err(), "range err u8 -1")
+    expect(bp_pack("X", [1]).is_err(), "bad fmt")
+    expect(bp_pack("B", []).is_err(), "arg short")
+    expect(bp_pack("B", [1, 2]).is_err(), "arg long")
+    expect(bp_unpack("B", bytes("")).is_err(), "unpack short")
+    expect(bp_unpack("B", bp_pack(">H", [258]).unwrap()).is_err(), "unpack unconsumed")
+    expect(bp_pack("q", [1, 2]).is_err(), "q arg long")
+    print("bytes_pack: PASS")

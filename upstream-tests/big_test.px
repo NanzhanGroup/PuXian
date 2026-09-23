@@ -1,0 +1,46 @@
+# big.px 测试：双模式一致 + 与 Python int 对拍（大数无溢出）
+import "../registry/big/0.1.0/big.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var A = "123456789012345678901234567890"
+    var B = "98765432109876543210"
+    # 与 Python golden 对拍
+    expect(big_add(A, B).unwrap() == "123456789111111111011111111100", "add golden")
+    expect(big_sub(A, B).unwrap() == "123456788913580246791358024680", "sub golden")
+    expect(big_mul(A, B).unwrap()
+        == "12193263113702179522496570642237463801111263526900", "mul golden")
+    expect(big_divmod(A, B).unwrap()["q"] == "1249999988", "div q golden")
+    expect(big_divmod(A, B).unwrap()["r"] == "60185185207253086410", "div r golden")
+    # 简单运算
+    expect(big_add("1", "2").unwrap() == "3", "1+2")
+    expect(big_sub("10", "4").unwrap() == "6", "10-4")
+    expect(big_sub("4", "10").unwrap() == "-6", "4-10")
+    expect(big_mul("-7", "6").unwrap() == "-42", "-7*6")
+    expect(big_mul("-7", "-6").unwrap() == "42", "-7*-6")
+    # divmod Go 语义（截断向零，r 符号同被除数）
+    var dm = big_divmod("-17", "5").unwrap()
+    expect(dm["q"] == "-3" and dm["r"] == "-2", "Go 截断除法 -17/5: q=" + dm["q"] + " r=" + dm["r"])
+    var dm2 = big_divmod("17", "-5").unwrap()
+    expect(dm2["q"] == "-3" and dm2["r"] == "2", "17/-5")
+    expect(big_divmod("10", "0").is_err(), "除零 Err")
+    # cmp
+    expect(big_cmp("10", "9") == 1, "10>9")
+    expect(big_cmp("-10", "9") == -1, "-10<9")
+    expect(big_cmp("-10", "-9") == -1, "-10<-9")
+    expect(big_cmp("123", "123") == 0, "相等")
+    # abs/neg/is_zero
+    expect(big_abs("-42").unwrap() == "42", "abs")
+    expect(big_neg("42").unwrap() == "-42", "neg")
+    expect(big_neg("-42").unwrap() == "42", "neg neg")
+    expect(big_is_zero("0") and not big_is_zero("-0") or big_is_zero("-0"), "zero 语义")
+    # pow / gcd
+    expect(big_pow("7", 15).unwrap() == "4747561509943", "7^15 golden")
+    expect(big_gcd("1234567890", "987654321").unwrap() == "9", "gcd golden")
+    expect(big_gcd("0", "5").unwrap() == "5", "gcd(0,5)")
+    # 非法输入
+    expect(big_add("1a", "2").is_err(), "非法字符 Err")
+    expect(big_add("", "2").is_err(), "空 Err")
+    print("big: PASS")

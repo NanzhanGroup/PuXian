@@ -1,0 +1,52 @@
+# shutil.px 测试：双模式一致
+import "../registry/shutil/0.1.0/shutil.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var base = "/tmp/shutil_registry_test"
+    # 清理旧目录
+    if sh_file_exists(base):
+        sh_remove_tree(base)
+    # mkdirs
+    expect(sh_mkdirs(base + "/a/b/c").is_ok(), "mkdirs nested")
+    expect(sh_is_dir(base + "/a/b/c"), "is_dir nested")
+    expect(sh_is_dir(base + "/a/b"), "is_dir parent")
+    expect(sh_mkdirs(base + "/a/b/c").is_ok(), "mkdirs idempotent")
+    # 文本读写
+    expect(sh_write_text(base + "/a/f1.txt", "hello").is_ok(), "write")
+    expect(sh_read_text(base + "/a/f1.txt").unwrap() == "hello", "read back")
+    expect(sh_append_text(base + "/a/f1.txt", " world").is_ok(), "append")
+    expect(sh_read_text(base + "/a/f1.txt").unwrap() == "hello world", "read after append")
+    expect(sh_file_exists(base + "/a/f1.txt"), "exists")
+    expect(sh_file_exists(base + "/nope") == false, "not exists")
+    # copy
+    expect(sh_copy(base + "/a/f1.txt", base + "/a/f2.txt").is_ok(), "copy")
+    expect(sh_read_text(base + "/a/f2.txt").unwrap() == "hello world", "copy content")
+    # move
+    expect(sh_move(base + "/a/f2.txt", base + "/a/f3.txt").is_ok(), "move")
+    expect(sh_file_exists(base + "/a/f2.txt") == false, "move removed src")
+    expect(sh_read_text(base + "/a/f3.txt").unwrap() == "hello world", "move dst content")
+    # list
+    var files = sh_list_files(base + "/a").unwrap()
+    expect(len(files) == 2, "list_files 2")
+    var dirs = sh_list_dir(base + "/a").unwrap()
+    expect(len(dirs) == 3, "list_dir 3 (b, f1, f3)")
+    # remove file
+    expect(sh_remove_file(base + "/a/f1.txt").is_ok(), "remove file")
+    expect(sh_file_exists(base + "/a/f1.txt") == false, "file gone")
+    expect(sh_remove_file(base + "/a/f1.txt").is_err(), "remove missing → Err")
+    # remove tree
+    expect(sh_remove_tree(base).is_ok(), "remove tree")
+    expect(sh_file_exists(base) == false, "tree gone")
+    # 错误路径
+    expect(sh_list_dir("/tmp/no_such_dir_xyz123").is_err(), "list_dir missing → Err")
+    expect(sh_read_text("/tmp/no_such_file_xyz123").is_err(), "read missing → Err")
+    expect(sh_write_text("/badparent_xyz/out.txt", "x").is_err(), "write bad parent → Err")
+    expect(sh_copy("/tmp/no_such_src_xyz", "/tmp/x").is_err(), "copy missing src → Err")
+    # join
+    expect(sh_join("a", "b") == "a/b", "join")
+    expect(sh_join("a/", "b") == "a/b", "join trailing slash")
+    expect(sh_join("", "b") == "b", "join empty")
+    print("shutil: PASS")

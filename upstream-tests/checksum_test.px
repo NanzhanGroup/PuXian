@@ -1,0 +1,30 @@
+# checksum.px 测试：双模式一致（CRC32 / Adler32，Python zlib 对拍）
+import "../registry/checksum/0.1.0/checksum.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+def main():
+    # zlib.crc32 对拍
+    expect(crc32("") == 0, "crc32 空串")
+    expect(crc32("a") == 3904355907, "crc32 a")
+    expect(crc32("123456789") == 3421780262, "crc32 1-9 标准校验串")
+    expect(crc32("hello world") == 222957957, "crc32 hello world")
+    expect(crc32("PuXian") == 321718192, "crc32 PuXian")
+    expect(crc32("你好") == 1352841281, "crc32 UTF-8")
+    expect(crc32("The quick brown fox jumps over the lazy dog") == 1095738169, "crc32 pangram")
+    # crc32_hex
+    expect(crc32_hex("123456789") == "cbf43926", "crc32_hex 1-9")
+    expect(crc32_hex("") == "00000000", "crc32_hex 空串")
+    expect(crc32_hex("a") == "e8b7be43", "crc32_hex a")
+    # zlib.adler32 对拍
+    expect(adler32("") == 1, "adler32 空串")
+    expect(adler32("a") == 6422626, "adler32 a")
+    expect(adler32("123456789") == 152961502, "adler32 1-9")
+    expect(adler32("hello world") == 436929629, "adler32 hello world")
+    expect(adler32("PuXian") == 133825110, "adler32 PuXian")
+    expect(adler32("你好") == 272958601, "adler32 UTF-8")
+    expect(adler32("The quick brown fox jumps over the lazy dog") == 1541148634, "adler32 pangram")
+    print("checksum: PASS")

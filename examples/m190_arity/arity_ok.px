@@ -1,0 +1,50 @@
+# ============================================================
+# m190_arity / arity_ok.px —— **合法侧**：方法族参数面在「正确实参个数」下的行为
+# 要求：三轨 rc=0 且 stdout **逐字节一致**（每行 A<n>= 值）。
+# 覆盖本轮统一签名后的**全部合法形态**（list/dict/str/result/tuple + 两个内置）。
+# ============================================================
+def main():
+    # ---- list ----
+    var l = [3, 1, 2]
+    l.append(4)
+    l.push(5)
+    print("A1= " + str(l))
+    print("A2= " + str(l.pop()))
+    print("A3= " + str(l.index(1)))
+    print("A4= " + str(l.contains(3)))
+    print("A5= " + str(l.len()))
+    l.reverse()
+    print("A6= " + str(l))
+    l.sort()
+    print("A7= " + str(l))
+    print("A8= " + str(l.join(",")))
+    # ---- dict ----
+    var d = {"a": 1}
+    d.set("b", 2)
+    print("A9= " + str(d.get("b")))
+    print("A10= " + str(d.get("zz")))
+    print("A11= " + str(d.get("zz", 9)))
+    print("A12= " + str(d.len()))
+    print("A13= " + str(d.keys()))
+    # ---- str ----
+    print("A14= " + "ab".upper())
+    print("A15= " + "AB".lower())
+    print("A16= " + " ab ".trim() + "|")
+    print("A17= " + str("ab".len()))
+    print("A18= " + str("a,b".split(",")))
+    print("A19= " + str("a b  c".split()))
+    print("A20= " + str("abc".contains("b")))
+    print("A21= " + "abc".replace("b", "X"))
+    print("A22= " + str("abc".starts_with("a")))
+    print("A23= " + str("abc".ends_with("c")))
+    # ---- result ----
+    print("A24= " + str(Ok(1).is_ok()))
+    print("A25= " + str(Ok(1).unwrap()))
+    print("A26= " + str(Err("e").unwrap_err()))
+    # ---- tuple ----
+    var t = (1, 2, 3)
+    print("A27= " + str(t.len()))
+    # ---- 内置（M190 同批）----
+    print("A28= " + str(split("a,b")))
+    print("A29= " + str(split("a b  c")))
+    print("A30= " + str(assert(true)))

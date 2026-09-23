@@ -1,0 +1,6 @@
+# M190 门 · 拒绝侧：n11_list_pop_1（运行期必须响亮，三轨同码同文）
+def main():
+    print("before")
+    var l = [1, 2]
+    l.pop(1)
+    print(l)

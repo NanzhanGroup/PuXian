@@ -1,0 +1,57 @@
+# jwt.px 测试：双模式一致（px run / px build）
+# 含与 Python(hashlib/hmac, OpenSSL) 生成的 golden token 交叉验证。
+import "../registry/jwt/0.1.0/jwt.px"
+# ---- 独立黄金向量（Python 生成，Go 风格排序键）----
+const GOLDEN = ("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE1MTYyMzkwMjIsI"
+    +"m5hbWUiOiJKb2huIERvZSIsInN1YiI6IjEyMzQ1Njc4OTAifQ.fdOPQ05ZfRhkST2-rIW"
+    +"gUpbqUsVhkkNVNcuG7Ki0s-8")
+const GOLDEN_EXP = ("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE1MTYyNDI2MjI"
+    +"sInN1YiI6ImV4cC10ZXN0In0.k60ithqaafOxlSzyHI222gyvdR0rb6P_T8TqXQlFXWM")
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # 1. 验证 golden token 可由本库解码（签名算法与 OpenSSL 一致）
+    var r = jwt_decode(GOLDEN, "your-256-bit-secret")
+    expect(r.is_ok(), "golden 应解码成功：" + str(r))
+    var d = r.unwrap()
+    expect(d["payload"]["sub"] == "1234567890", "golden sub 字段")
+    expect(d["payload"]["name"] == "John Doe", "golden name 字段")
+    expect(d["payload"]["iat"] == 1516239022, "golden iat 字段")
+    expect(d["header"]["alg"] == "HS256", "golden alg 字段")
+    # 2. 自编码自解码 roundtrip
+    var r2 = jwt_encode({"sub": "u1", "role": "admin"}, "secret")
+    expect(r2.is_ok(), "encode 应 Ok")
+    var tok = r2.unwrap()
+    var parts = split(tok, ".")
+    expect(len(parts) == 3, "token 应为 3 段")
+    var r3 = jwt_decode(tok, "secret")
+    expect(r3.is_ok(), "roundtrip decode 应 Ok：" + str(r3))
+    expect(r3.unwrap()["payload"]["sub"] == "u1", "roundtrip sub")
+    expect(r3.unwrap()["payload"]["role"] == "admin", "roundtrip role")
+    # 3. 错误密钥 → 签名失败
+    expect(jwt_decode(tok, "wrong-secret").is_err(), "错误密钥应 Err")
+    # 4. 篡改 payload 段 → 签名失败
+    var parts2 = split(tok, ".")
+    var tampered = parts2[0] + ".eyJzdWIiOiJoYWNrZWQifQ." + parts2[2]
+    expect(jwt_decode(tampered, "secret").is_err(), "篡改 payload 应 Err")
+    # 5. 篡改签名段 → 失败
+    var parts3 = split(tok, ".")
+    var badsig = parts3[0] + "." + parts3[1] + ".AAAA"
+    expect(jwt_decode(badsig, "secret").is_err(), "篡改签名应 Err")
+    # 6. 段数错误
+    expect(jwt_decode("a.b", "secret").is_err(), "两段应 Err")
+    expect(jwt_decode("a.b.c.d", "secret").is_err(), "四段应 Err")
+    # 7. exp：未过期可解；过期 Err（用 jwt_decode_at 固定 now）
+    var r_exp = jwt_decode_at(GOLDEN_EXP, "secret", 1516242621)
+    expect(r_exp.is_ok(), "exp 前 1 秒应 Ok：" + str(r_exp))
+    expect(jwt_decode_at(GOLDEN_EXP, "secret", 1516242622).is_err(), "到点应过期（Go 语义）")
+    expect(jwt_decode_at(GOLDEN_EXP, "secret", 1516242622 + 1).is_err(), "过期后应 Err")
+    # nbf：未生效 Err，生效后 Ok
+    var r_nbf = jwt_encode({"nbf": 2000000000, "sub": "n"}, "secret")
+    expect(jwt_decode_at(r_nbf.unwrap(), "secret", 1999999999).is_err(), "nbf 未生效应 Err")
+    expect(jwt_decode_at(r_nbf.unwrap(), "secret", 2000000001).is_ok(), "nbf 生效应 Ok")
+    # 8. 不支持算法：encode 拒绝 alg != HS256
+    expect(jwt_encode({"a": 1}, "s", "HS384").is_err(), "HS384 应 Err（暂不支持）")
+    print("jwt: PASS")

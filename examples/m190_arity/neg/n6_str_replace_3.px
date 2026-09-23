@@ -1,0 +1,4 @@
+# M190 门 · 拒绝侧：n6_str_replace_3（运行期必须响亮，三轨同码同文）
+def main():
+    print("before")
+    print("ab".replace("a", "b", "c"))

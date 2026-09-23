@@ -1,0 +1,37 @@
+# mailparse.px 测试：双模式一致（参考 Go net/mail）
+import "../registry/mailparse/0.1.0/mailparse.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var raw = ("From: Alice <alice@example.com>\r\nTo: Bob <bob@example.com>\r\n"
+        +"Subject: Hello\r\nX-Custom: v1\r\n continuation\r\n"
+        +"Date: Mon, 20 Sep 2026 10:00:00 +0800\r\n\r\nHi Bob,\nthis is a test.\n")
+    var r = mail_parse(raw)
+    expect(r.is_ok(), "parsing ok: " + str(r)[0:80])
+    var m = r.unwrap()
+    # 头部
+    expect(m["from"] == "Alice <alice@example.com>", "from: " + str(m["from"]))
+    expect(m["to"] == "Bob <bob@example.com>", "to")
+    expect(m["subject"] == "Hello", "subject")
+    expect(contains(m["date"], "2026"), "date")
+    # 续行折叠
+    expect(m["headers"]["X-Custom"] == "v1 continuation", "折叠头: " + str(m["headers"]["X-Custom"]))
+    # 大小写不敏感
+    expect(mail_header(m["headers"], "subject") == "Hello", "大小写不敏感 subject")
+    expect(mail_header(m["headers"], "FROM") == "Alice <alice@example.com>", "大小写不敏感 FROM")
+    expect(mail_header(m["headers"], "Missing",) == null, "缺头部 null")
+    # body
+    expect(m["body"] == "Hi Bob,\nthis is a test.\n", "body 保留 CRLF 头/LF 体" + str(m["body"]))
+    # 无 body（无空行）
+    var r2 = mail_parse("Subject: no body\nFrom: x@y.z\n")
+    expect(r2.is_ok() and r2.unwrap()["body"] == "", "无 body 空串")
+    # 空输入 → 空 headers
+    var r3 = mail_parse("")
+    expect(r3.is_ok() and len(r3.unwrap()["headers"].keys()) == 0, "空输入")
+    # 坏行（无冒号）忽略
+    var r4 = mail_parse("not a header line\nSubject: ok\n")
+    expect(r4.is_ok(), "坏行忽略")
+    expect(r4.unwrap()["subject"] == "ok", "坏行后 subject: " + str(r4))
+    print("mailparse: PASS")

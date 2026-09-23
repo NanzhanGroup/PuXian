@@ -1,0 +1,50 @@
+# jsonpath.px 测试：双模式一致
+import "../registry/jsonpath/0.1.0/jsonpath.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def lst_eq(a, b):
+    if len(a) != len(b):
+        return false
+    var i = 0
+    while i < len(a):
+        if str(a[i]) != str(b[i]):
+            return false
+        i += 1
+    return true
+def main():
+    var data = json_parse("{\"a\": {\"b\": [10, 20, {\"c\": \"x\"}]}, " +
+        "\"list\": [{\"k\": 1}, {\"k\": 2}]}")
+    # 基本下行
+    expect(jp_get(data, "a").unwrap()["b"] != null, "get a")
+    var b = jp_get(data, "a.b").unwrap()
+    expect(type(b) == "list" and len(b) == 3, "get a.b list")
+    expect(jp_get(data, "a.b[0]").unwrap() == 10, "get a.b[0]")
+    expect(jp_get(data, "a.b[2].c").unwrap() == "x", "get nested c")
+    # 通配
+    var star = jp_get(data, "a.b[*]").unwrap()
+    expect(type(star) == "list" and len(star) == 3,
+        "wildcard list")
+    expect(star[0] == 10 and star[2]["c"] == "x",
+        "wildcard elements")
+    var ks = jp_get(data, "list[*].k").unwrap()
+    expect(lst_eq(ks, [1, 2]), "wildcard map .k")
+    var rootstar = jp_get([1, 2, 3], "[*]").unwrap()
+    expect(lst_eq(rootstar, [1, 2, 3]), "root wildcard")
+    expect(jp_get([1, 2, 3], "[1]").unwrap() == 2, "root index")
+    # has
+    expect(jp_has(data, "a.b[1]"), "has index")
+    expect(jp_has(data, "a.b[9]") == false, "has missing index")
+    expect(jp_has(data, "a.x") == false, "has missing key")
+    expect(jp_has(data, "a.b[2].c"), "has nested")
+    # 错误
+    var e1 = jp_get(data, "a.b[9]")
+    expect(e1.is_err(), "index OOB → Err")
+    var e2 = jp_get(data, "no.such")
+    expect(e2.is_err(), "missing key → Err")
+    var e3 = jp_get(data, "a.b[0].zz")
+    expect(e3.is_err(), "member of scalar → Err")
+    var e4 = jp_get(data, "a.b[x]")
+    expect(e4.is_err(), "bad index → Err")
+    print("jsonpath: PASS")

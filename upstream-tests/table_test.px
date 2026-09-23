@@ -1,0 +1,34 @@
+# table.px 测试：双模式一致
+import "../registry/table/0.1.0/table.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var headers = ["name", "age"]
+    var rows = [["alice", 30], ["bob", 4]]
+    # utf8 默认（列宽按最长单元格：name/alice → 5）
+    var t = tb_render(headers, rows, null)
+    expect(t == "+-------+-----+\n| name  | age |\n" +
+        "+-------+-----+\n| alice | 30  |\n" +
+        "| bob   | 4   |\n+-------+-----+", "utf8 render")
+    # ascii
+    var ta = tb_render(headers, rows, {"border": "ascii"})
+    expect(ta == "+-------+-----+\n| name  | age |\n" +
+        "+-------+-----+\n| alice | 30  |\n" +
+        "| bob   | 4   |\n+-------+-----+", "ascii same")
+    # right align
+    var tr = tb_render(["a", "b"], [["x", "yy"], ["longer", "z"]], {"align": "right"})
+    expect(tr == "+--------+----+\n|      a |  b |\n" +
+        "+--------+----+\n|      x | yy |\n" +
+        "| longer |  z |\n+--------+----+", "right align")
+    # center align
+    var tc = tb_render(["a"], [["x"], ["abcd"]], {"align": "center"})
+    expect(tc == "+------+\n|  a   |\n+------+\n|  x   |\n| abcd |\n+------+", "center align")
+    # padding 0
+    var tp = tb_render(["a"], [["b"]], {"padding": 0})
+    expect(tp == "+-+\n|a|\n+-+\n|b|\n+-+", "padding 0")
+    # 数字单元格转 str
+    var tn = tb_render(["n"], [[123]], null)
+    expect(tn == "+-----+\n| n   |\n+-----+\n| 123 |\n+-----+", "numeric cell")
+    print("table: PASS")

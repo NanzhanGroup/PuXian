@@ -1,0 +1,60 @@
+# glob.px 测试：双模式一致（通配匹配与目录列举）
+import "../registry/glob/0.1.0/glob.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+def main():
+    # 基础通配
+    expect(glob_match("*.log", "a.log"), "*.log 匹配 a.log")
+    expect(glob_match("*.log", "a.txt") == false, "*.log 不匹配 a.txt")
+    expect(glob_match("a?c", "abc"), "a?c 匹配 abc")
+    expect(glob_match("a?c", "ac") == false, "a?c 不匹配 ac")
+    expect(glob_match("a?c", "abbc") == false, "a?c 不匹配 abbc")
+    expect(glob_match("a*c", "ac"), "a*c 匹配 ac")
+    expect(glob_match("a*c", "aXXc"), "a*c 匹配 aXXc")
+    expect(glob_match("*", "anything"), "* 匹配 anything")
+    expect(glob_match("*", ""), "* 匹配空串")
+    expect(glob_match("", ""), "空 pattern 匹配空串")
+    expect(glob_match("", "a") == false, "空 pattern 不匹配 a")
+    # 路径分隔（* ? 不跨 /）
+    expect(glob_match("*.log", "sub/a.log") == false, "* 不跨 /")
+    expect(glob_match("a?c", "a/c") == false, "? 不跨 /")
+    expect(glob_match("a/*.log", "a/x.log"), "a/*.log 匹配 a/x.log")
+    expect(glob_match("a/*.log", "a/b/x.log") == false, "a/*.log 不匹配嵌套")
+    # 字符类
+    expect(glob_match("file[0-9].txt", "file5.txt"), "[0-9] 匹配 5")
+    expect(glob_match("file[0-9].txt", "filex.txt") == false, "[0-9] 不匹配 x")
+    expect(glob_match("file[!0-9].txt", "filea.txt"), "[!0-9] 取反匹配 a")
+    expect(glob_match("file[!0-9].txt", "file5.txt") == false, "[!0-9] 不匹配 5")
+    expect(glob_match("file[^0-9].txt", "filea.txt"), "[^0-9] 匹配 a")
+    expect(glob_match("[abc].txt", "b.txt"), "[abc] 匹配 b")
+    expect(glob_match("[abc].txt", "d.txt") == false, "[abc] 不匹配 d")
+    expect(glob_match("[a-cx-z].txt", "y.txt"), "[a-cx-z] 多区间")
+    expect(glob_match("[]a].txt", "].txt"), "[]a] 匹配 ]")
+    expect(glob_match("[a-].txt", "-.txt"), "[a-] 匹配 -")
+    expect(glob_match("file[0-9].txt", "file[0-9].txt") == false, "类不匹配字面量")
+    # 类缺失闭合 → 字面 [
+    expect(glob_match("a[b", "a[b"), "未闭合 [ 按字面")
+    # 元字符检测
+    expect(glob_has_magic("*.log"), "has_magic true")
+    expect(glob_has_magic("plain") == false, "has_magic false")
+    # glob_list
+    var r = glob_list("/tmp/globd", "*.log")
+    expect(r.is_ok(), "glob_list ok")
+    if r.is_ok():
+        var fs = r.unwrap()
+        expect(len(fs) == 1 and fs[0] == "/tmp/globd/a.log", "glob_list *.log 结果")
+    var r2 = glob_list("/tmp/globd", "*.txt")
+    expect(r2.is_ok() and len(r2.unwrap()) == 1 and r2.unwrap()[0] == "/tmp/globd/b.txt", "glob_list *.txt")
+    var r3 = glob_list("/tmp/globd", "*")
+    expect(r3.is_ok() and len(r3.unwrap()) == 3, "glob_list * 全列（排序）")
+    var r4 = glob_list("/tmp/globd", "sub/*")
+    expect(r4.is_ok() and len(r4.unwrap()) == 1 and r4.unwrap()[0] == "/tmp/globd/sub/c.log", "glob_list 子目录")
+    var r5 = glob_list("/tmp/globd", "*.nomatch")
+    expect(r5.is_ok() and len(r5.unwrap()) == 0, "glob_list 无匹配 → []")
+    var r6 = glob_list("/tmp/no_such_dir_xyz", "*")
+    expect(r6.is_err(), "glob_list 缺目录 Err")
+    print("glob: PASS")

@@ -1,0 +1,29 @@
+# datetime.px 测试：双模式一致（参考 Go time 子集）
+import "../registry/datetime/0.1.0/datetime.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var sec = dt_parse("2026-09-20 12:00:00")
+    expect(sec == 1789905600, "parse 已知秒: " + str(sec))
+    expect(dt_format(sec) == "2026-09-20 12:00:00", "format UTC 一致往返: " + dt_format(sec))
+    # 运算
+    expect(dt_add(sec, 3600) == sec + 3600, "add 秒")
+    expect(dt_diff(sec + 60, sec) == 60, "diff")
+    expect(dt_add_days(sec, 1) == sec + 86400, "add days")
+    expect(dt_add_days(sec, -1) == sec - 86400, "sub days")
+    # 天数差
+    expect(dt_days_between(sec, sec + 86400) == 1, "1 天")
+    expect(dt_days_between(sec, sec + 86400 * 3) == 3, "3 天")
+    expect(dt_days_between(sec, sec - 86400) == -1, "负 1 天")
+    expect(dt_days_between(sec, sec + 3600) == 0, "不足 1 天取 0")
+    # now 系列
+    var n = dt_now_sec()
+    expect(abs(dt_now_sec() - n) < 5, "now_sec 近实时")
+    var ns = dt_now()
+    expect(len(ns) == 19, "now 长度 19: " + ns)
+    # 自定义 fmt
+    var s2 = dt_parse("2026/09/20", "%Y/%m/%d")
+    expect(s2 > 0, "自定义格式 parse: " + str(s2))
+    print("datetime: PASS")

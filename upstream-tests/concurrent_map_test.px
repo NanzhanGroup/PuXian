@@ -1,0 +1,62 @@
+# concurrent_map.px 测试：⚠️ 编译模式（并发需 px build）
+import "../registry/concurrent_map/0.1.0/concurrent_map.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+# 并发写 worker：key "k<id>" 写 n 次
+def worker(m, id, n, ch):
+    var i = 0
+    while i < n:
+        cm_set(m, "k" + str(id), i)
+        i += 1
+    ch.send (id)
+# 并发读 worker
+def reader(m, ch):
+    var i = 0
+    while i < 100:
+        var v = cm_get(m, "k1", -1)
+        if v < -1 or v > 199:
+            print("FAIL: 并发读值越界 " + str(v))
+            exit(1)
+        i += 1
+    ch.send (1)
+def main():
+    var m = cm_new()
+    expect(cm_len(m) == 0, "初始空")
+    expect(cm_get(m, "x", "d") == "d", "缺省值")
+    # 基本读写
+    cm_set(m, "a", 1)
+    expect(cm_get(m, "a") == 1, "get a")
+    expect(cm_has(m, "a"), "has a")
+    expect(not cm_has(m, "z"), "not has z")
+    cm_delete(m, "a")
+    expect(not cm_has(m, "a"), "delete a")
+    # 并发写 8 个 worker × 200 次（锁保护，无丢失更新）
+    var ch = chan [int](8)
+    var id = 0
+    while id < 8:
+        spawn worker(m, id, 200, ch)
+        id += 1
+    var got = 0
+    while got < 8:
+        ch.recv ()
+        got += 1
+    expect(cm_len(m) == 8, "并发后 8 键: " + str(cm_len(m)))
+    var ks = cm_keys(m)
+    expect(len(ks) == 8, "keys 8")
+    var j = 0
+    while j < len(ks):
+        expect(cm_has(m, ks[j]), "键存在 " + ks[j])
+        j += 1
+    # 并发读（不崩溃、值合法）
+    var ch2 = chan [int](4)
+    var rid = 0
+    while rid < 4:
+        spawn reader(m, ch2)
+        rid += 1
+    var g2 = 0
+    while g2 < 4:
+        ch2.recv ()
+        g2 += 1
+    print("concurrent_map: PASS")

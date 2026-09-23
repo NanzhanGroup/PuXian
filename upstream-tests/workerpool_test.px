@@ -1,0 +1,50 @@
+# workerpool.px 测试：⚠️ 编译模式（并发需要 px build）
+import "../registry/workerpool/0.1.0/workerpool.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def dbl(x):
+    return x * 2
+def slow_dbl(x):
+    sleep(30)
+    return x * 2
+def main():
+    var pool = wp_new(3)
+    # 基础：同步运行一批
+    var fns = []
+    var args = []
+    var i = 0
+    while i < 8:
+        fns.append(dbl)
+        args.append(i)
+        i += 1
+    var r = wp_run(pool, fns, args)
+    expect(r.is_ok(), "wp_run 应 Ok")
+    var sr = wp_sorted(r.unwrap()["results"])
+    expect(len(sr) == 8, "结果数 8")
+    i = 0
+    while i < 8:
+        expect(sr[i] == i * 2, "结果[" + str(i) + "] 应 " + str(i * 2) + " 得 " + str(sr[i]))
+        i += 1
+    print("基础任务 8 个: PASS")
+    # 慢任务并发性：3 个 worker，4 个任务各 sleep 30ms，串行需 ~120ms，
+    # 并行 ~60ms（两轮）。验证不串行：总耗时显著小于 4*30ms。
+    var fns2 = [slow_dbl, slow_dbl, slow_dbl, slow_dbl]
+    var args2 = [1, 2, 3, 4]
+    var t0 = now_ms()
+    var r2 = wp_run(pool, fns2, args2)
+    var el = now_ms() - t0
+    expect(r2.is_ok(), "慢任务 wp_run 应 Ok")
+    var sr2 = wp_sorted(r2.unwrap()["results"])
+    expect(sr2 == [2, 4, 6, 8], "慢任务结果: " + str(sr2))
+    print("慢任务耗时 " + str(el) + "ms（4×30ms 串行=120ms，并行应 <120ms）")
+    expect(el < 110, "并发应快于串行（el=" + str(el) + "ms）")
+    # 空任务
+    var r3 = wp_run(pool, [], [])
+    expect(r3.is_ok() and len(r3.unwrap()["results"]) == 0, "空任务应 Ok")
+    # 参数长度不一致 → Err
+    expect(wp_run(pool, [dbl], [1, 2]).is_err(), "长度不一致 Err")
+    # 优雅关闭后不再崩溃（进程正常退出）
+    wp_close(pool)
+    print("workerpool: PASS")

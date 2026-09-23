@@ -1,0 +1,55 @@
+# ini.px 测试：双模式一致
+import "../registry/ini/0.1.0/ini.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var text = "# 注释\n" +
+        "; 分号注释\n\n" +
+        "top_key = top_value\n" +
+        "[server]\n" +
+        "host = 127.0.0.1\n" +
+        "port : 8080\n" +
+        "name = 中文节点\n" +
+        "[db]\n" +
+        "user=admin\n" +
+        "pass=secret#not-comment\n"
+    var cfg = ini_parse(text).unwrap()
+    expect(type(cfg) == "dict", "cfg is dict")
+    # 无节键值在 "" 节
+    expect(ini_get(cfg, "", "top_key").unwrap() == "top_value", "top_key")
+    expect(ini_has(cfg, "", "top_key"), "has top_key")
+    expect(ini_has(cfg, "", "nope") == false, "not has nope")
+    # server 节
+    expect(ini_get(cfg, "server", "host").unwrap() == "127.0.0.1", "server.host")
+    expect(ini_get(cfg, "server", "port").unwrap() == "8080", "server.port (冒号分隔)")
+    expect(ini_get(cfg, "server", "name").unwrap() == "中文节点", "中文值不被截断")
+    # db 节
+    expect(ini_get(cfg, "db", "user").unwrap() == "admin", "db.user")
+    expect(ini_get(cfg, "db", "pass").unwrap() == "secret#not-comment", "值内 # 保留")
+    # 错误路径
+    var e1 = ini_get(cfg, "nope", "x")
+    expect(e1.is_err(), "节不存在 → Err")
+    var e2 = ini_get(cfg, "db", "nope")
+    expect(e2.is_err(), "键不存在 → Err")
+    # sections / keys
+    var secs = ini_sections(cfg)
+    expect(len(secs) == 2, "sections count 2")
+    expect(secs[0] == "server" or secs[1] == "server", "has server")
+    expect(secs[0] == "db" or secs[1] == "db", "has db")
+    var keys = ini_keys(cfg, "server").unwrap()
+    expect(len(keys) == 3, "server keys 3")
+    var ke = ini_keys(cfg, "nope")
+    expect(ke.is_err(), "keys 节不存在 → Err")
+    # 缩进容忍
+    var text2 = "   [a]   \n   k = v   \n"
+    var cfg2 = ini_parse(text2).unwrap()
+    expect(ini_get(cfg2, "a", "k").unwrap() == "v", "缩进裁剪")
+    # 错误：缺分隔符
+    var e3 = ini_parse("badline\n")
+    expect(e3.is_err(), "缺分隔符 → Err")
+    # 错误：节行缺 ]
+    var e4 = ini_parse("[oops\n")
+    expect(e4.is_err(), "节行缺 ] → Err")
+    print("ini: PASS")

@@ -1,0 +1,63 @@
+# pdf.px 测试：双模式一致
+import "../registry/pdf/0.1.0/pdf.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def contains(s, sub):
+    var i = 0
+    while i + len(sub) <= len(s):
+        var j = 0
+        var hit = true
+        while j < len(sub):
+            if s[i + j] != sub[j]:
+                hit = false
+                break
+            j += 1
+        if hit:
+            return true
+        i += 1
+    return false
+def main():
+    var doc = pd_new()
+    doc = pd_add_page(doc, 595, 842)
+    doc = pd_add_text(doc, 0, 72, 720, "Hello, PuXian")
+    doc = pd_add_text(doc, 0, 72, 700, "Line (2) with \\ backslash")
+    var pdf = pd_bytes(doc).unwrap()
+    # 头尾结构
+    expect(contains(pdf, "%PDF-1.4"), "header")
+    expect(contains(pdf, "%%EOF"), "eof")
+    expect(contains(pdf, "startxref"), "startxref")
+    expect(contains(pdf, "xref"), "xref")
+    # 对象
+    expect(contains(pdf, "<< /Type /Catalog /Pages 2 0 R >>"), "catalog")
+    expect(contains(pdf, "/Count 1"), "page count 1")
+    expect(contains(pdf, "/MediaBox [0 0 595 842]"), "mediabox")
+    expect(contains(pdf, "/BaseFont /Helvetica"), "font")
+    expect(contains(pdf, "/Kids [4 0 R]"), "kids")
+    # 内容流与转义
+    expect(contains(pdf, "(Hello, PuXian) Tj"), "text")
+    expect(contains(pdf, "(Line \\(2\\) with \\\\ backslash) Tj"), "escaped text")
+    expect(contains(pdf, "stream\nBT /F1 12 Tf"), "stream begin")
+    expect(contains(pdf, "ET\nendstream"), "stream end")
+    # 多页
+    var doc2 = pd_new()
+    doc2 = pd_add_page(doc2, 595, 842)
+    doc2 = pd_add_text(doc2, 0, 10, 10, "p1")
+    doc2 = pd_add_page(doc2, 200, 200)
+    doc2 = pd_add_text(doc2, 1, 5, 5, "p2")
+    var pdf2 = pd_bytes(doc2).unwrap()
+    expect(contains(pdf2, "/Count 2"), "two pages")
+    expect(contains(pdf2, "/Kids [4 0 R 6 0 R]"), "kids two")
+    expect(contains(pdf2, "/MediaBox [0 0 200 200]"), "page2 box")
+    expect(contains(pdf2, "(p2) Tj"), "page2 text")
+    # 空文档 → Err
+    var doc3 = pd_new()
+    expect(pd_bytes(doc3).is_err(), "no pages err")
+    # 转义特殊字符
+    var doc4 = pd_new()
+    doc4 = pd_add_page(doc4, 100, 100)
+    doc4 = pd_add_text(doc4, 0, 1, 1, "a(b)c\\d")
+    var pdf4 = pd_bytes(doc4).unwrap()
+    expect(contains(pdf4, "(a\\(b\\)c\\\\d) Tj"), "escape all")
+    print("pdf: PASS")

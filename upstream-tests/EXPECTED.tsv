@@ -1,0 +1,59 @@
+# 上游 registry-px 真实用例的期望值（M190 建立）
+# 来源：github.com/banshanhanfu/registry-px @ db5f210（tests/*.px，逐字节照搬 · MANIFEST.sha256 对拍）
+# 字段：<测试名>\t<build 期望>\t<interp 期望>\t<理由>
+# 取值：PASS / SKIP。**SKIP 必须写理由**（环境不具备 / 设计性不支持 / 性能性）。
+# 纪律：本文件是**登记的数据**，不是"跑一遍把结果抄下来"——改这里等于改判据，
+#   必须在 CHANGELOG 里写清楚"为什么这条不该 PASS"。缺登记 ⇒ 回归器报 MISMATCH（防新用例默默不跑）。
+ansi_test	PASS	PASS	-
+base58_test	PASS	PASS	-
+big_test	PASS	PASS	-
+bisect_test	PASS	PASS	-
+bytes_pack_test	PASS	PASS	-
+checksum_test	PASS	PASS	-
+cli_test	PASS	PASS	-
+cnnum_test	PASS	PASS	-
+concurrent_map_test	PASS	SKIP	interp 设计性不支持 mutex（Mini 子集排除 · R1002 16:33）
+config_test	PASS	PASS	-
+csv_test	PASS	PASS	-
+datastruct_test	PASS	PASS	-
+datetime_test	PASS	PASS	-
+decimal_test	PASS	PASS	-
+diff_test	PASS	PASS	-
+dotenv_test	PASS	PASS	-
+faker_test	PASS	PASS	-
+fractions_test	PASS	PASS	-
+fsnotify_test	PASS	PASS	-
+functools_test	PASS	PASS	-
+glob_test	PASS	PASS	-
+idcard_test	PASS	PASS	-
+ini_test	PASS	PASS	-
+ipaddr_test	PASS	PASS	-
+itertools_test	PASS	PASS	-
+jsonpath_test	PASS	PASS	-
+jwt_test	PASS	PASS	-
+log_test	PASS	PASS	-
+mailparse_test	PASS	PASS	-
+metrics_test	PASS	PASS	-
+mysql_test	SKIP	SKIP	需真实 MySQL 服务端 127.0.0.1:3306（本机与 CI 均无；--run-skipped 可跑）
+parser_test	PASS	PASS	-
+passhash_test	PASS	PASS	-
+pdf_test	PASS	PASS	-
+pg_test	SKIP	SKIP	需真实 PostgreSQL 服务端 127.0.0.1:5432（本机与 CI 均无；--run-skipped 可跑）
+qrcode_test	PASS	SKIP	解释器轨 >180s（纯 px 矩阵运算 · 性能性；编译轨 PASS）
+rate_test	PASS	PASS	-
+retry_test	PASS	PASS	-
+secure_random_test	PASS	PASS	-
+shutil_test	PASS	PASS	-
+stats_test	PASS	PASS	-
+strcase_test	PASS	PASS	-
+table_test	PASS	PASS	-
+tar_test	PASS	PASS	-
+template_test	PASS	PASS	-
+testkit_test	PASS	PASS	-
+textwrap_test	PASS	PASS	-
+toml_test	PASS	PASS	-
+ulid_test	PASS	PASS	-
+uuid_test	PASS	PASS	-
+validator_test	PASS	PASS	-
+workerpool_test	PASS	SKIP	interp 设计性不支持通道（Mini 子集排除 · R1002 18:13）
+xlsx_test	PASS	PASS	-

@@ -1,0 +1,58 @@
+# toml.px 测试：双模式一致（参考 BurntSushi/toml 子集）
+import "../registry/toml/0.1.0/toml.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var doc = '''title = "TOML example"
+port = 8080
+ratio = 1.5
+debug = true
+off = false
+tags = ["a", "b", "c"]
+nums = [1, 2, 3]
+empty_arr = []
+blank = ""
+[server]
+host = "127.0.0.1"
+name = 'raw string'
+[server.tls]
+enabled = true
+cert = "/certs/x.pem"
+[server.tls.chain]
+depth = 3
+'''
+    var r = toml_parse(doc)
+    expect(r.is_ok(), "基本解析应 Ok: " + str(r)[0:80])
+    var d = r.unwrap()
+    expect(d["title"] == "TOML example", "字符串")
+    expect(d["port"] == 8080, "整数")
+    expect(d["ratio"] == 1.5, "浮点")
+    expect(d["debug"] == true and d["off"] == false, "布尔")
+    expect(d["tags"] == ["a", "b", "c"], "字符串数组")
+    expect(d["nums"] == [1, 2, 3], "整数数组")
+    expect(d["empty_arr"] == [], "空数组")
+    expect(d["blank"] == "", "空字符串")
+    expect(d["server"]["host"] == "127.0.0.1", "表 server.host")
+    expect(d["server"]["name"] == "raw string", "裸字符串")
+    expect(d["server"]["tls"]["enabled"] == true, "嵌套表 tls.enabled")
+    expect(d["server"]["tls"]["chain"]["depth"] == 3, "三级嵌套")
+    # 表行内续 + 注释
+    var r2 = toml_parse("a = 1  # 注释\n# 整行注释\nb = 2\n")
+    expect(r2.is_ok() and r2.unwrap()["b"] == 2, "注释处理: " + str(r2)[0:60])
+    # 多行数组
+    var r3 = toml_parse("arr = [\n  1,\n  2,\n  3\n]\n")
+    expect(r3.is_ok() and r3.unwrap()["arr"] == [1, 2, 3], "多行数组: " + str(r3)[0:60])
+    # 转义
+    var r4 = toml_parse('msg = "a\\"b\\n c"\n')
+    expect(r4.is_ok() and r4.unwrap()["msg"] == "a\"b\n c", "转义: " + str(r4)[0:60])
+    # 空输入 → 空 dict
+    var r5 = toml_parse("# only comment\n\n")
+    expect(r5.is_ok() and len(r5.unwrap().keys()) == 0, "空输入: " + str(r5))
+    # 错误
+    expect(toml_parse("a\n").is_err(), "无 = 应 Err")
+    expect(toml_parse("a = [1, 2\n").is_err(), "数组未闭合应 Err")
+    expect(toml_parse("a = 'unclosed\n").is_err(), "字符串未闭合应 Err")
+    expect(toml_parse("[]\n").is_err(), "空表名应 Err")
+    print("toml: PASS")

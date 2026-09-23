@@ -1,0 +1,49 @@
+# testkit.px 测试：双模式一致（推荐用法：断言结果收集后统一检查）
+import "../registry/testkit/0.1.0/testkit.px"
+def main():
+    # 断言结果收集（避免闭包捕获外层变量——m155 C 轨限制）
+    var rs = []
+    # ---- 成功路径 ----
+    rs.append(tk_true(true))
+    rs.append(tk_false(false))
+    rs.append(tk_equal(1, 1))
+    rs.append(tk_equal("a", "a"))
+    rs.append(tk_equal([1, 2], [1, 2]))
+    rs.append(tk_not_equal(1, 2))
+    rs.append(tk_contains("hello world", "world"))
+    rs.append(tk_not_contains("hello", "xyz"))
+    rs.append(tk_approx(0.1 + 0.2, 0.3, 0.0001))
+    rs.append(tk_is_ok(Ok(1)))
+    rs.append(tk_is_err(Err("e")))
+    rs.append(tk_type([], "list"))
+    rs.append(tk_type(1, "int"))
+    rs.append(tk_len("abc", 3))
+    rs.append(tk_len([1, 2, 3], 3))
+    # ---- 失败路径（应全部 Err）----
+    rs.append(tk_true(false))
+    rs.append(tk_equal(1, 2))
+    rs.append(tk_contains("hello", "xyz"))
+    rs.append(tk_approx(1.0, 2.0, 0.1))
+    rs.append(tk_is_ok(Err("e")))
+    rs.append(tk_type(1, "str"))
+    rs.append(tk_len("ab", 3))
+    # ---- 临时目录 ----
+    var r = tk_tempdir("tk-test")
+    rs.append(tk_is_ok(r))
+    if r.is_ok():
+        var d = r.unwrap()
+        rs.append(tk_true(is_dir(d), "tempdir 存在"))
+        print("  tempdir => " + d)
+    # 统一检查
+    var total = len(rs)
+    var failed = 0
+    var i = 0
+    while i < total:
+        if rs[i].is_err():
+            failed += 1
+            print("  " + str(rs[i]))
+        i += 1
+    var ok = tk_summary("testkit_test", total, failed)
+    if ok:
+        exit(1)
+    print("testkit: PASS（成功/失败路径均符合预期）")

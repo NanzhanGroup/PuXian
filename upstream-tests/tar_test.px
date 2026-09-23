@@ -1,0 +1,33 @@
+# tar.px 测试：双模式一致（参考 archive/tar；含 Python tarfile 互操作 golden）
+import "../registry/tar/0.1.0/tar.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # pack → unpack roundtrip
+    var r = tar_pack([
+        {"name": "a.txt", "data": "hello"},
+        {"name": "dir/b.txt", "data": "world!!"},
+        {"name": "c.txt", "data": ""},
+    ])
+    expect(r.is_ok(), "pack Ok")
+    var buf = r.unwrap()
+    var u = tar_unpack(buf)
+    expect(u.is_ok(), "unpack Ok: " + str(u)[0:60])
+    var files = u.unwrap()
+    expect(len(files) == 3, "3 个文件")
+    expect(files[0]["name"] == "a.txt" and files[0]["data"] == "hello", "a.txt 内容")
+    expect(files[1]["name"] == "dir/b.txt" and files[1]["data"] == "world!!", "b.txt 内容")
+    expect(files[2]["name"] == "c.txt" and files[2]["data"] == "", "空文件")
+    # 大文件（>512，测试补齐）——字符串乘法双模式不一致（PX-DEF-004），用循环
+    var big = ""
+    var bi = 0
+    while bi < 1000:
+        big = big + "x"
+        bi += 1
+    var r2 = tar_pack([{"name": "big.bin", "data": big}])
+    expect(r2.is_ok(), "大文件 pack Ok")
+    var u2 = tar_unpack(r2.unwrap())
+    expect(u2.is_ok() and u2.unwrap()[0]["data"] == big, "大文件 roundtrip")
+    print("tar: PASS")

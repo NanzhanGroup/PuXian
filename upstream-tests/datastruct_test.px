@@ -1,0 +1,56 @@
+# datastruct.px 测试：双模式一致（参考 container/heap + list）
+import "../registry/datastruct/0.1.0/datastruct.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ---- 最小堆 ----
+    var h = ds_heap_new()
+    ds_heap_push(h, 3, "c")
+    ds_heap_push(h, 1, "a")
+    ds_heap_push(h, 2, "b")
+    ds_heap_push(h, 1, "a2")
+    expect(ds_heap_size(h) == 4, "堆大小 4")
+    var p1 = ds_heap_pop(h).unwrap()
+    var p2 = ds_heap_pop(h).unwrap()
+    # 两个 priority=1 的元素先出（双模式同键顺序不一致，见 PX-DEF-011，故不依赖顺序）
+    expect((p1 == "a" or p1 == "a2") and (p2 == "a" or p2 == "a2") and p1 != p2,
+        "prio=1 元素集合正确: " + p1 + "," + p2)
+    expect(ds_heap_pop(h).unwrap() == "b", "pop b")
+    expect(ds_heap_pop(h).unwrap() == "c", "pop c")
+    expect(ds_heap_pop(h).is_err(), "空堆 pop Err")
+    expect(ds_heap_peek(h).is_err(), "空堆 peek Err")
+    # ---- LRU ----
+    var l = ds_lru_new(3)
+    ds_lru_set(l, "a", 1)
+    ds_lru_set(l, "b", 2)
+    ds_lru_set(l, "c", 3)
+    expect(ds_lru_len(l) == 3, "lru 3 项")
+    expect(ds_lru_get(l, "a", null) == 1, "get a")
+    # 访问 a 后，b 最久未用 → set d 淘汰 b
+    ds_lru_set(l, "d", 4)
+    expect(ds_lru_has(l, "b") == false, "淘汰 b")
+    expect(ds_lru_has(l, "a") == true, "a 存活")
+    expect(ds_lru_get(l, "missing", "x") == "x", "缺省值")
+    # 更新已有键不增长
+    ds_lru_set(l, "a", 99)
+    expect(ds_lru_len(l) == 3 and ds_lru_get(l, "a", null) == 99, "刷新 a")
+    # ---- 队列 ----
+    var q = ds_queue_new()
+    expect(ds_queue_pop(q).is_err(), "空队列 pop Err")
+    ds_queue_push(q, 10)
+    ds_queue_push(q, 20)
+    expect(ds_queue_peek(q).unwrap() == 10, "队列 peek")
+    expect(ds_queue_len(q) == 2, "队列 len")
+    expect(ds_queue_pop(q).unwrap() == 10, "FIFO 10")
+    expect(ds_queue_pop(q).unwrap() == 20, "FIFO 20")
+    # ---- 栈 ----
+    var s = ds_stack_new()
+    ds_stack_push(s, "x")
+    ds_stack_push(s, "y")
+    expect(ds_stack_peek(s).unwrap() == "y", "栈 peek")
+    expect(ds_stack_pop(s).unwrap() == "y", "LIFO y")
+    expect(ds_stack_pop(s).unwrap() == "x", "LIFO x")
+    expect(ds_stack_pop(s).is_err(), "空栈 pop Err")
+    print("datastruct: PASS")
