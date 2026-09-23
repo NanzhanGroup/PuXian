@@ -1,0 +1,34 @@
+# uuid.px 测试：双模式一致（px run / px build）
+import "../registry/uuid/0.1.0/uuid.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # v4 格式与版本/variant
+    var u = uuid_v4()
+    print("v4 => " + u)
+    expect(len(u) == 36, "v4 长度应为 36")
+    expect(u[8] == "-" and u[13] == "-" and u[18] == "-" and u[23] == "-", "连字符位置")
+    expect(u[14] == "4", "version 应为 4，实际 " + u[14])
+    expect(contains("89ab", u[19]), "variant 应为 8/9/a/b，实际 " + u[19])
+    expect(uuid_valid(u), "生成值应通过 valid")
+    # 随机性：两次不同
+    var u2 = uuid_v4()
+    expect(u != u2, "两次生成应不同")
+    # parse 标准格式
+    var r1 = uuid_parse(u)
+    expect(r1.is_ok(), "parse 标准格式应 Ok")
+    var h = r1.unwrap()
+    expect(len(h) == 32, "parse 结果应为 32hex")
+    expect(uuid_format(h) == u, "format(parse(u)) 应还原")
+    # parse 无连字符 / 带花括号
+    expect(uuid_parse(h).is_ok(), "parse 32hex 应 Ok")
+    expect(uuid_parse("{" + u + "}").is_ok(), "parse 花括号应 Ok")
+    expect(uuid_parse("{" + u + " }").is_err(), "parse 花括号带空格应 Err")
+    # parse 非法输入
+    expect(uuid_parse("not-a-uuid").is_err(), "parse 非法应 Err")
+    expect(uuid_parse("12345678-1234-1234-1234-1234567890").is_err(), "parse 段长度错应 Err")
+    expect(uuid_parse("gggggggg-1234-1234-1234-1234567890ab").is_err(), "parse 非 hex 应 Err")
+    expect(uuid_valid("zzz") == false, "valid 非法应为 false")
+    print("uuid: PASS")

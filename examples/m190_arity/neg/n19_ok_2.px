@@ -1,0 +1,4 @@
+# M190 门 · 拒绝侧：n19_ok_2（运行期必须响亮，三轨同码同文）
+def main():
+    print("before")
+    print(Ok(1, 2))

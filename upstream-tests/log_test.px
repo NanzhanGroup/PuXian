@@ -1,0 +1,48 @@
+# log.px 测试：双模式一致（参考 Go log/slog 心智）
+import "../registry/log/0.1.0/log.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # 创建与默认级别
+    var lg = log_new("app")
+    expect(lg["level"] == "info", "默认级别 info")
+    var dlg = log_new("app", {"level": "debug"})
+    expect(dlg["level"] == "debug", "显式级别 debug")
+    # 级别过滤
+    expect(log_enabled(lg, "info"), "info logger 允许 info")
+    expect(log_enabled(lg, "warn"), "info logger 允许 warn")
+    expect(log_enabled(lg, "error"), "info logger 允许 error")
+    expect(not log_enabled(lg, "debug"), "info logger 不允许 debug")
+    expect(log_enabled(dlg, "debug"), "debug logger 允许 debug")
+    expect(not log_enabled(log_set(lg, "error"), "warn"), "error logger 不允许 warn")
+    # log_emit 输出格式（含时间戳、级别、name）
+    var line = log_emit(lg, "info", "hello")
+    expect(contains(line, " [INFO] app: hello"), "info 行格式: " + line)
+    expect(len(line) >= 19, "时间戳存在: " + line)
+    # 过滤后 log_emit 返回空串
+    expect(log_emit(lg, "debug", "x") == "", "过滤后空串")
+    # warn/error 级别标签
+    expect(contains(log_emit(lg, "warn", "w"), " [WARN] app: w"), "warn 行")
+    expect(contains(log_emit(lg, "error", "e"), " [ERROR] app: e"), "error 行")
+    expect(contains(log_emit(dlg, "debug", "d"), " [DEBUG] app: d"), "debug 行")
+    # 结构化字段
+    var fl = log_emit(lg, "info", "req", {"status": 200, "path": "/x"})
+    expect(contains(fl, "status=200"), "字段 status: " + fl)
+    expect(contains(fl, "path=/x"), "字段 path: " + fl)
+    expect(contains(fl, "req status="), "msg 与字段衔接: " + fl)
+    # 无字段时不追加
+    var plain = log_emit(lg, "info", "no fields")
+    expect(not contains(plain, "="), "无字段不加 kv: " + plain)
+    # logger 切换级别（不可变风格）
+    var elg = log_set(lg, "error")
+    expect(elg["level"] == "error", "log_set 返回新 logger")
+    expect(lg["level"] == "info", "原 logger 不变")
+    expect(log_emit(elg, "warn", "x") == "", "error logger 过滤 warn")
+    # log_* 入口不崩溃（实际打印行，肉眼可查）
+    log_debug(dlg, "debug msg")
+    log_info(lg, "info msg")
+    log_warn(lg, "warn msg", {"retry": 3})
+    log_error(lg, "error msg")
+    print("log: PASS")

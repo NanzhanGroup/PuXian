@@ -1,0 +1,65 @@
+# cli.px 测试：双模式一致（参考 Go flag 心智）
+import "../registry/cli/0.1.0/cli.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var spec = {
+        "verbose": {"short": "v", "type": "bool", "default": false},
+        "port": {"short": "p", "type": "int", "default": 8080},
+        "name": {"short": "n", "type": "str", "default": "world"},
+        "ratio": {"type": "float", "default": 0.5},
+    }
+    # 默认值
+    var r = cli_parse([], spec)
+    expect(r.is_ok(), "空 args 应 Ok: " + str(r))
+    var o = r.unwrap()["opts"]
+    expect(o["verbose"] == false, "默认 verbose")
+    expect(o["port"] == 8080, "默认 port")
+    expect(o["name"] == "world", "默认 name")
+    expect(abs(o["ratio"] - 0.5) < 0.0001, "默认 ratio")
+    # 长选项 --key value / --key=value
+    r = cli_parse(["--port", "9000", "--name=px"], spec)
+    expect(r.is_ok(), "长选项应 Ok: " + str(r))
+    expect(r.unwrap()["opts"]["port"] == 9000, "--port 9000")
+    expect(r.unwrap()["opts"]["name"] == "px", "--name=px")
+    # bool 长选项
+    r = cli_parse(["--verbose"], spec)
+    expect(r.is_ok() and r.unwrap()["opts"]["verbose"] == true, "--verbose")
+    r = cli_parse(["--verbose=false"], spec)
+    expect(r.is_ok() and r.unwrap()["opts"]["verbose"] == false, "--verbose=false")
+    # 短选项 -n value / -nvalue / -n=value / -v
+    r = cli_parse(["-n", "px", "-v", "-p", "7000"], spec)
+    expect(r.is_ok(), "短选项应 Ok: " + str(r))
+    expect(r.unwrap()["opts"]["name"] == "px", "-n px")
+    expect(r.unwrap()["opts"]["verbose"] == true, "-v")
+    expect(r.unwrap()["opts"]["port"] == 7000, "-p 7000")
+    r = cli_parse(["-nfoo"], spec)
+    expect(r.is_ok() and r.unwrap()["opts"]["name"] == "foo", "-nfoo")
+    expect(cli_parse(["-ppx2"], spec).is_err(), "-ppx2 int 类型错误 Err")
+    r = cli_parse(["-n=bar"], spec)
+    expect(r.is_ok() and r.unwrap()["opts"]["name"] == "bar", "-n=bar")
+    # float
+    r = cli_parse(["--ratio", "0.25"], spec)
+    expect(r.is_ok() and abs(r.unwrap()["opts"]["ratio"] - 0.25) < 0.0001, "--ratio 0.25")
+    # 位置参数与 --
+    r = cli_parse(["a", "b", "--", "--port", "1"], spec)
+    expect(r.is_ok(), "位置参数应 Ok: " + str(r))
+    var res = r.unwrap()
+    expect(res["args"] == ["a", "b", "--port", "1"], "-- 后全部位置: " + str(res["args"]))
+    expect(res["opts"]["port"] == 8080, "-- 后 --port 不再解析")
+    r = cli_parse(["input.txt", "-v"], spec)
+    expect(r.unwrap()["args"] == ["input.txt"], "位置参数混选项")
+    # 错误场景
+    expect(cli_parse(["--unknown"], spec).is_err(), "未知长选项 Err")
+    expect(cli_parse(["-z"], spec).is_err(), "未知短选项 Err")
+    expect(cli_parse(["--port"], spec).is_err(), "缺值 Err")
+    expect(cli_parse(["--port", "abc"], spec).is_err(), "int 类型错误 Err")
+    expect(cli_parse(["--verbose=maybe"], spec).is_err(), "bool 类型错误 Err")
+    expect(cli_parse(["-p"], spec).is_err(), "短缺值 Err")
+    # 结合 args() 的典型用法
+    r = cli_parse(["--port", "8443", "serve"], spec)
+    expect(r.unwrap()["opts"]["port"] == 8443, "典型用法 port")
+    expect(r.unwrap()["args"] == ["serve"], "典型用法 position")
+    print("cli: PASS")

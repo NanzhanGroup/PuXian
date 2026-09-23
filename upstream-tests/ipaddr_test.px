@@ -1,0 +1,90 @@
+# ipaddr.px 测试：双模式一致（IP 地址与 CIDR）
+import "../registry/ipaddr/0.1.0/ipaddr.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+def eq(name, got, want):
+    expect(got == want, name + " 应 " + want + " 得 " + got)
+
+def main():
+    # IPv4 解析（192.168.1.1 = 0xC0A80101 = 3232235777）
+    expect(ipv4_parse("192.168.1.1").unwrap() == 3232235777, "ipv4_parse 192.168.1.1")
+    expect(ipv4_parse("0.0.0.0").unwrap() == 0, "ipv4_parse 0")
+    expect(ipv4_parse("255.255.255.255").unwrap() == 4294967295, "ipv4_parse max")
+    expect(ipv4_parse("01.2.3.4").unwrap() == 16909060, "ipv4_parse 前导零 01.2.3.4")
+    expect(ipv4_parse("1.2.3").is_err(), "ipv4 3 段 Err")
+    expect(ipv4_parse("1.2.3.4.5").is_err(), "ipv4 5 段 Err")
+    expect(ipv4_parse("256.1.1.1").is_err(), "ipv4 256 Err")
+    expect(ipv4_parse("a.b.c.d").is_err(), "ipv4 字母 Err")
+    expect(ipv4_parse("1..2.3").is_err(), "ipv4 空段 Err")
+    expect(ipv4_parse("").is_err(), "ipv4 空串 Err")
+    # IPv4 输出
+    eq("to_str", ipv4_to_str(3232235777).unwrap(), "192.168.1.1")
+    eq("to_str 0", ipv4_to_str(0).unwrap(), "0.0.0.0")
+    eq("to_str max", ipv4_to_str(4294967295).unwrap(), "255.255.255.255")
+    expect(ipv4_to_str(-1).is_err(), "to_str 负 Err")
+    expect(ipv4_to_str(4294967296).is_err(), "to_str 超范围 Err")
+    # cidr 解析
+    var c = cidr_parse("192.168.1.0/24").unwrap()
+    expect(c["addr"] == 3232235776 and c["prefix"] == 24, "cidr_parse 192.168.1.0/24")
+    expect(cidr_valid("10.0.0.0/8"), "cidr_valid /8")
+    expect(not cidr_valid("192.168.1.0/33"), "cidr_valid /33 为假")
+    expect(cidr_parse("192.168.1.0/33").is_err(), "cidr /33 Err")
+    expect(cidr_parse("192.168.1.0").is_err(), "cidr 无斜杠 Err")
+    expect(cidr_parse("192.168.1.0/").is_err(), "cidr 空前缀 Err")
+    # IPv4 CIDR 运算
+    eq("network", ipv4_cidr_network("192.168.1.128/24").unwrap(), "192.168.1.0")
+    eq("network /8", ipv4_cidr_network("10.5.5.5/8").unwrap(), "10.0.0.0")
+    eq("broadcast", ipv4_cidr_broadcast("192.168.1.128/24").unwrap(), "192.168.1.255")
+    eq("broadcast /0", ipv4_cidr_broadcast("1.2.3.4/0").unwrap(), "255.255.255.255")
+    eq("network /32", ipv4_cidr_network("1.2.3.4/32").unwrap(), "1.2.3.4")
+    expect(ipv4_cidr_host_count("192.168.1.0/24").unwrap() == 256, "host_count /24 = 256")
+    expect(ipv4_cidr_host_count("192.168.1.5/32").unwrap() == 1, "host_count /32 = 1")
+    expect(ipv4_cidr_host_count("0.0.0.0/0").unwrap() == 4294967296, "host_count /0 = 2^32")
+    # in_cidr
+    expect(ipv4_in_cidr("192.168.1.100", "192.168.1.0/24"), "in 192.168.1.100/24")
+    expect(ipv4_in_cidr("192.168.1.255", "192.168.1.0/24"), "in 广播地址")
+    expect(not ipv4_in_cidr("192.168.2.1", "192.168.1.0/24"), "not in 192.168.2.1")
+    expect(ipv4_in_cidr("10.1.2.3", "10.0.0.0/8"), "in /8")
+    expect(not ipv4_in_cidr("11.1.2.3", "10.0.0.0/8"), "not in /8")
+    expect(ipv4_in_cidr("1.2.3.4", "1.2.3.4/32"), "in /32")
+    expect(not ipv4_in_cidr("1.2.3.5", "1.2.3.4/32"), "not in /32")
+    expect(not ipv4_in_cidr("bad", "1.2.3.0/24"), "in 非法输入 false")
+    # IPv6 解析
+    var z = ipv6_parse("::").unwrap()
+    expect(len(z) == 8 and z[7] == 0, "ipv6 ::")
+    var one = ipv6_parse("::1").unwrap()
+    expect(one[7] == 1, "ipv6 ::1")
+    var fe = ipv6_parse("fe80::1").unwrap()
+    expect(fe[0] == 65152 and fe[7] == 1, "ipv6 fe80::1")
+    var full = ipv6_parse("2001:db8:0:1:0:0:0:1").unwrap()
+    expect(full[0] == 8193 and full[1] == 3512 and full[7] == 1, "ipv6 全展开")
+    expect(ipv6_parse("2001:DB8::1").unwrap()[0] == 8193, "ipv6 大写")
+    expect(ipv6_parse("1::2::3").is_err(), "ipv6 双 :: Err")
+    expect(ipv6_parse("12345::").is_err(), "ipv6 超长段 Err")
+    expect(ipv6_parse("gg::").is_err(), "ipv6 非 hex Err")
+    expect(ipv6_parse("1:2:3:4:5:6:7").is_err(), "ipv6 7 段无 :: Err")
+    # IPv6 输出
+    eq("v6 str ::1", ipv6_to_str([0, 0, 0, 0, 0, 0, 0, 1]).unwrap(), "::1")
+    eq("v6 str fe80", ipv6_to_str([65152, 0, 0, 0, 0, 0, 0, 1]).unwrap(), "fe80::1")
+    eq("v6 str 全", ipv6_to_str([8193, 3512, 0, 1, 0, 0, 0, 1]).unwrap(), "2001:db8:0:1::1")
+    eq("v6 str 无压缩", ipv6_to_str([1, 2, 3, 4, 5, 6, 7, 8]).unwrap(), "1:2:3:4:5:6:7:8")
+    expect(ipv6_to_str([1, 2, 3]).is_err(), "v6 to_str 长度错 Err")
+    # IPv6 in_cidr
+    expect(ipv6_in_cidr("fe80::1", "fe80::/10"), "v6 in fe80::/10")
+    expect(ipv6_in_cidr("fe80::abcd", "fe80::/64"), "v6 in fe80::/64")
+    expect(not ipv6_in_cidr("fe81::1", "fe80::/64"), "v6 not in fe80::/64")
+    expect(ipv6_in_cidr("2001:db8::1", "2001:db8::/32"), "v6 in db8::/32")
+    expect(not ipv6_in_cidr("2001:db9::1", "2001:db8::/32"), "v6 not in db9")
+    expect(ipv6_in_cidr("::1", "::/0"), "v6 in ::/0")
+    expect(not ipv6_in_cidr("bad", "fe80::/10"), "v6 in 非法 false")
+    # 通用
+    expect(ip_valid("192.168.1.1"), "valid v4")
+    expect(ip_valid("fe80::1"), "valid v6")
+    expect(not ip_valid("nope"), "not valid")
+    expect(ip_is_ipv4("192.168.1.1") and not ip_is_ipv6("192.168.1.1"), "is_ipv4")
+    expect(ip_is_ipv6("fe80::1") and not ip_is_ipv4("fe80::1"), "is_ipv6")
+    print("ipaddr: PASS")

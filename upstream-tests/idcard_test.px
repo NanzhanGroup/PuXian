@@ -1,0 +1,34 @@
+# idcard.px 测试：双模式一致（GB 11643-1999；golden 由 Python 生成）
+import "../registry/idcard/0.1.0/idcard.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # Python golden：合法号码（校验码正确）
+    var ok_id = "110101199001011237"
+    var r = idcard_validate(ok_id)
+    expect(r.is_ok(), "合法号 Ok: " + str(r))
+    var info = r.unwrap()
+    expect(info["province"] == "11", "地区 11")
+    expect(info["birth"] == "19900101", "生日")
+    expect(info["gender"] == "male", "性别 male（第17位=3 奇）")
+    # 女性：第17位偶
+    var r2 = idcard_validate("440300200010014567")
+    expect(r2.is_ok() and r2.unwrap()["gender"] == "female", "女性: " + str(r2)[0:50])
+    # 校验码错误
+    expect(idcard_validate("110101199001011236").is_err(), "校验码错 Err")
+    # 末位改 X 但期望 7 → Err
+    expect(idcard_validate("11010119900101123X").is_err(), "错误 X Err")
+    # 长度/字符
+    expect(idcard_validate("110101").is_err(), "短号 Err")
+    expect(idcard_validate("11010119900101123A").is_err(), "字母校验位（非X）Err")
+    expect(idcard_validate("010101199001011237").is_err(), "地区首位0 Err")
+    # 非法生日（2月30日 / 闰年2月29 OK）
+    expect(idcard_validate("110101199002301237").is_err(), "2月30日 Err")
+    var lr = idcard_valid_date_probe("20000229")
+    expect(lr, "2000 闰年 2/29 合法")
+    expect(not idcard_valid_date_probe("19000229"), "1900 非闰年 2/29 非法")
+    print("idcard: PASS")
+def idcard_valid_date_probe(s):
+    return idc_valid_date(s)

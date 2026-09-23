@@ -1,0 +1,32 @@
+# fsnotify.px 测试：双模式一致（参考 fsnotify 轮询实现）
+import "../registry/fsnotify/0.1.0/fsnotify.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var dir = "/tmp/fsn-test-" + os_random_hex(4)
+    mkdir(dir)
+    write_file(dir + "/a.txt", "v1")
+    write_file(dir + "/b.txt", "x")
+    var snap1 = fs_snapshot(dir)
+    expect(snap1.is_ok(), "快照1 Ok")
+    var s1 = snap1.unwrap()
+    expect(s1.has("a.txt") and s1.has("b.txt"), "包含两文件: " + str(s1.keys()))
+    # 无变化
+    var d0 = fs_diff(s1, fs_snapshot(dir).unwrap())
+    expect(not fs_has_change(d0), "无变化: " + str(d0))
+    # 修改 a.txt + 新增 c.txt + 删除 b.txt
+    sleep(1100)
+    write_file(dir + "/a.txt", "v2-longer-content")
+    write_file(dir + "/c.txt", "new")
+    remove(dir + "/b.txt")
+    var snap2 = fs_snapshot(dir).unwrap()
+    var d = fs_diff(s1, snap2)
+    expect(contains(str(d["modified"]), "a.txt"), "modified a: " + str(d))
+    expect(contains(str(d["added"]), "c.txt"), "added c: " + str(d))
+    expect(contains(str(d["removed"]), "b.txt"), "removed b: " + str(d))
+    expect(fs_has_change(d), "有变化")
+    # 目录不存在
+    expect(fs_snapshot("/no/such/dir").is_err(), "坏目录 Err")
+    print("fsnotify: PASS")

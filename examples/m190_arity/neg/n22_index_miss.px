@@ -1,0 +1,5 @@
+# M190 门 · 拒绝侧：n22_index_miss（运行期必须响亮，三轨同码同文）
+def main():
+    print("before")
+    var l = [10, 20]
+    print(l.index(99))

@@ -1,0 +1,53 @@
+# bisect.px 测试：双模式一致
+import "../registry/bisect/0.1.0/bisect.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def lst_str(a):
+    var out = "["
+    var i = 0
+    while i < len(a):
+        if i > 0:
+            out = out + ","
+        out = out + str(a[i])
+        i += 1
+    return out + "]"
+def main():
+    var a = [1, 3, 5, 7, 9]
+    # left / right
+    expect(bi_left(a, 3) == 1, "left 3")
+    expect(bi_left(a, 4) == 2, "left 4")
+    expect(bi_left(a, 0) == 0, "left 0")
+    expect(bi_left(a, 10) == 5, "left 10")
+    expect(bi_right(a, 7) == 4, "right 7")
+    expect(bi_right(a, 0) == 0, "right 0")
+    expect(bi_right(a, 10) == 5, "right 10")
+    expect(bi_left(a, 5) == 2, "left existing")
+    expect(bi_right(a, 5) == 3, "right existing")
+    # duplicates
+    expect(bi_left([1, 1, 1], 1) == 0, "left dup 1")
+    expect(bi_right([1, 1, 1], 1) == 3, "right dup 1")
+    expect(bi_left([1, 2, 2, 2, 3], 2) == 1, "left dup range")
+    expect(bi_right([1, 2, 2, 2, 3], 2) == 4, "right dup range")
+    # empty
+    expect(bi_left([], 5) == 0, "left empty")
+    expect(bi_right([], 5) == 0, "right empty")
+    # strings (同类型比较)
+    var sa = ["apple", "banana", "cherry"]
+    expect(bi_left(sa, "banana") == 1, "left str")
+    expect(bi_right(sa, "avocado") == 1, "right str avocado")
+    # insort
+    var b = bi_insort_left(a, 6)
+    expect(len(b) == 6 and b[2] == 5 and b[3] == 6 and b[4] == 7, "insort_left 6")
+    var c = bi_insort_right([1, 1, 1], 1)
+    expect(len(c) == 4 and c[0] == 1 and c[1] == 1 and c[2] == 1 and c[3] == 1, "insort_right dup")
+    var d = bi_insort_left([], 5)
+    expect(len(d) == 1 and d[0] == 5, "insort_left empty")
+    var e = bi_insort_right(a, 0)
+    expect(len(e) == 6 and e[0] == 0 and e[1] == 1, "insort_right 0 head")
+    var f = bi_insort_left(a, 10)
+    expect(len(f) == 6 and f[4] == 9 and f[5] == 10, "insort_left 10 tail")
+    # 原列表未被修改（纯函数）
+    expect(len(a) == 5 and a[0] == 1, "origin unchanged")
+    print("bisect: PASS")

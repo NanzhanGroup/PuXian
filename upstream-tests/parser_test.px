@@ -1,0 +1,108 @@
+# parser.px 测试：双模式一致
+import "../registry/parser/0.1.0/parser.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def d2i(c):
+    return int(c)
+def is_digit(c):
+    return c >= "0" and c <= "9"
+def unsp(x):
+    return x
+def main():
+    # 基本原语
+    var r0 = p_char("a")("abc", 0)
+    expect(r0.is_ok() and r0.unwrap()[0] == 1 and r0.unwrap()[1] == "a", "char")
+    expect(p_char("z")("abc", 0).is_err(), "char mismatch")
+    var r1 = p_str("ab")("abc", 0)
+    expect(r1.is_ok() and r1.unwrap()[0] == 2, "str")
+    expect(p_str("ab")("axc", 0).is_err(), "str mismatch")
+    expect(p_str("abc")("ab", 0).is_err(), "str short")
+    expect(p_any("a", 0).is_ok(), "any")
+    expect(p_any("", 0).is_err(), "any at end")
+    expect(p_digit("5x", 0).unwrap()[1] == "5", "digit")
+    expect(p_digit("x", 0).is_err(), "digit fail")
+    expect(p_letter("a1", 0).is_ok(), "letter")
+    expect(p_letter("1", 0).is_err(), "letter fail")
+    expect(p_alnum("a", 0).is_ok() and p_alnum("1", 0).is_ok(), "alnum")
+    expect(p_space(" x", 0).is_ok(), "space")
+    expect(p_space("x", 0).is_err(), "space fail")
+    # take_while
+    var tw = p_take_while(is_digit)
+    var rtw = tw("123ab", 0)
+    expect(rtw.is_ok() and rtw.unwrap()[1] == "123", "take_while digits")
+    expect(tw("ab", 0).is_err(), "take_while none")
+    # end
+    expect(p_end("a", 1).is_ok(), "end ok")
+    expect(p_end("a", 0).is_err(), "end fail")
+    # seq
+    var sq = p_seq([p_char("a"), p_char("b")])
+    var rsq = sq("abx", 0)
+    expect(rsq.is_ok() and rsq.unwrap()[0] == 2, "seq pos")
+    expect(rsq.unwrap()[1][0] == "a" and rsq.unwrap()[1][1] == "b", "seq vals")
+    expect(sq("ax", 0).is_err(), "seq fail")
+    # alt
+    var al = p_alt([p_str("true"), p_str("false")])
+    expect(al("falseX", 0).unwrap()[1] == "false", "alt second")
+    expect(al("trueX", 0).unwrap()[1] == "true", "alt first")
+    var al2 = al("maybe", 0)
+    expect(al2.is_err(), "alt fail")
+    # many / many1
+    var mn = p_many(p_char(","))
+    expect(len(mn(",,,x", 0).unwrap()[1]) == 3, "many 3")
+    expect(len(p_many(p_char(","))("x", 0).unwrap()[1]) == 0, "many 0")
+    var m1 = p_many1(p_digit)
+    expect(m1("12ab", 0).unwrap()[0] == 2, "many1 pos")
+    expect(len(m1("12ab", 0).unwrap()[1]) == 2, "many1 count")
+    expect(p_many1(p_digit)("ab", 0).is_err(), "many1 fail")
+    # opt
+    var op = p_opt(p_char("x"))
+    expect(op("a", 0).unwrap()[1] == null, "opt miss null")
+    expect(op("xa", 0).unwrap()[0] == 1, "opt hit")
+    # map
+    var mp = p_map(p_digit, d2i)
+    expect(mp("7x", 0).unwrap()[1] == 7, "map to int")
+    # between
+    var bt = p_between(p_char("("), p_digit, p_char(")"))
+    expect(bt("(5)", 0).unwrap()[0] == 3 and bt("(5)", 0).unwrap()[1] == "5", "between")
+    expect(bt("(5", 0).is_err(), "between fail")
+    # sep_by
+    var sp = p_sep_by1(p_digit, p_char(","))
+    expect(sp("1,2,3x", 0).unwrap()[0] == 5, "sep_by1 pos")
+    expect(len(sp("1,2,3x", 0).unwrap()[1]) == 3, "sep_by1 count")
+    expect(sp("x", 0).is_err(), "sep_by1 fail")
+    var sp0 = p_sep_by(p_digit, p_char(","))
+    expect(len(sp0("", 0).unwrap()[1]) == 0, "sep_by empty")
+    # ws + seq 组合
+    var expr = p_seq([p_digit, p_ws, p_char("+"), p_ws, p_digit])
+    var rexpr = expr("1 + 2", 0).unwrap()
+    expect(rexpr[0] == 5, "ws expr pos")
+    expect(rexpr[1][0] == "1" and rexpr[1][2] == "+" and rexpr[1][4] == "2", "ws expr vals")
+    # ident / int
+    expect(p_ident("abc_123 ", 0).unwrap()[1] == "abc_123", "ident")
+    expect(p_ident("_x", 0).unwrap()[1] == "_x", "ident underscore")
+    expect(p_ident("1a", 0).is_err(), "ident no lead digit")
+    expect(p_int("123", 0).unwrap()[1] == 123, "int")
+    expect(p_int("-42", 0).unwrap()[1] == -42, "int neg")
+    expect(p_int("+7", 0).unwrap()[1] == 7, "int plus")
+    expect(p_int("12x", 0).unwrap()[0] == 2, "int stop")
+    expect(p_int("x", 0).is_err(), "int fail")
+    # 错误带位置
+    var e = p_str("hello")("hi", 0)
+    expect(contains_err(str(e), "位置 0"), "err has pos")
+    print("parser: PASS")
+def contains_err(s, sub):
+    var i = 0
+    while i + len(sub) <= len(s):
+        var j = 0
+        var hit = true
+        while j < len(sub):
+            if s[i + j] != sub[j]:
+                hit = false
+                break
+            j += 1
+        if hit:
+            return true
+        i += 1
+    return false

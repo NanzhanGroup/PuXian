@@ -1,0 +1,47 @@
+# config.px 测试：双模式一致（参考 Go viper）
+import "../registry/config/0.1.0/config.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # cfg_merge：非 dict 覆盖 + dict 递归
+    var m = cfg_merge({"a": 1, "n": {"x": 1, "y": 2}}, {"b": 2, "n": {"y": 3}})
+    expect(m["a"] == 1 and m["b"] == 2, "merge 基础: " + str(m))
+    expect(m["n"]["x"] == 1 and m["n"]["y"] == 3, "merge 递归覆盖: " + str(m["n"]))
+    # cfg_from_yaml
+    var r = cfg_from_yaml("server:\n  port: 8080\nname: px\n")
+    expect(r.is_ok(), "yaml 应 Ok: " + str(r))
+    var d = r.unwrap()
+    expect(d["name"] == "px", "yaml name")
+    expect(d["server"]["port"] == 8080, "yaml server.port")
+    # yaml + defaults 合并
+    var r2 = cfg_from_yaml("name: px", {"name": "default", "debug": false})
+    expect(r2.is_ok(), "defaults 应 Ok")
+    expect(r2.unwrap()["name"] == "px", "yaml 覆盖 default")
+    expect(r2.unwrap()["debug"] == false, "default 保留")
+    # 非法 yaml
+    expect(cfg_from_yaml("a:\n b: 1\n  c: 2").is_err(), "缩进错误 yaml 应 Err")
+    expect(cfg_from_yaml("- just\n- list\n").is_err(), "yaml 顶层 list 应 Err")
+    # cfg_get 点路径
+    expect(cfg_get(d, "name") == "px", "get name")
+    expect(cfg_get(d, "server.port") == 8080, "get server.port")
+    expect(cfg_get(d, "server.host", "localhost") == "localhost", "get 缺省值")
+    expect(cfg_get(d, "a.b.c", null) == null, "get 深缺省 null")
+    # cfg_set 点路径（原地）
+    cfg_set(d, "server.port", 9090)
+    expect(d["server"]["port"] == 9090, "set server.port")
+    cfg_set(d, "new.deep.key", 42)
+    expect(d["new"]["deep"]["key"] == 42, "set 创建中间 dict")
+    # cfg_apply_env：APP_<KEY> 覆盖
+    var base = {"port": 8080, "debug": false, "ratio": 0.5, "name": "px"}
+    env_set("APP_PORT", "9090")
+    env_set("APP_DEBUG", "true")
+    env_set("APP_RATIO", "0.25")
+    env_set("APP_NAME", "prod")
+    var e = cfg_apply_env(base, "APP")
+    expect(e["port"] == 9090, "env 覆盖 int: " + str(e["port"]))
+    expect(e["debug"] == true, "env 覆盖 bool: " + str(e["debug"]))
+    expect(e["ratio"] == 0.25, "env 覆盖 float: " + str(e["ratio"]))
+    expect(e["name"] == "prod", "env 覆盖 str")
+    print("config: PASS")

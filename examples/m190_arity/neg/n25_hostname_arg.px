@@ -1,0 +1,4 @@
+# M190 门 · 拒绝侧：n25_hostname_arg（运行期必须响亮，三轨同码同文）
+def main():
+    print("before")
+    hostname(1, 2, 3)

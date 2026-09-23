@@ -1,0 +1,6 @@
+# M190 门 · 拒绝侧：n16_dict_set_1（运行期必须响亮，三轨同码同文）
+def main():
+    print("before")
+    var d = {"a": 1}
+    d.set("b")
+    print(d)

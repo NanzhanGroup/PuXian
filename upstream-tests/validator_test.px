@@ -1,0 +1,52 @@
+# validator.px 测试：双模式一致（参考 go-playground/validator）
+import "../registry/validator/0.1.0/validator.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # 单值
+    expect(val_required("x") and not val_required("") and not val_required(null), "required")
+    expect(val_required([1]) and not val_required([]), "required list")
+    expect(val_email("a@b.com") and not val_email("not-email"), "email")
+    expect(val_min("abc", 3) and not val_min("ab", 3), "min str")
+    expect(val_min(5, 3) and not val_min(2, 3), "min int")
+    expect(val_max([1, 2], 2) and not val_max([1, 2, 3], 2), "max list")
+    expect(val_int_range(5, 1, 10) and not val_int_range(11, 1, 10), "int_range")
+    # val_validate 全过 → Ok
+    var data = {"name": "px", "email": "a@b.com", "age": 30, "role": "admin", "tags": ["x"]}
+    var rules = {
+        "name": "required|min=2|max=20",
+        "email": "required|email",
+        "age": "int_range=18,65",
+        "role": "in=admin,user",
+        "tags": "required|max=3",
+    }
+    var r = val_validate(data, rules)
+    expect(r.is_ok(), "全过应 Ok: " + str(r))
+    # 失败：多条错误累积
+    var bad = {"name": "", "email": "bad", "age": 10, "role": "root"}
+    var r2 = val_validate(bad, rules)
+    expect(r2.is_err(), "坏数据应 Err")
+    var msg = str(r2)
+    expect(contains(msg, "name"), "含 name 错误: " + msg)
+    expect(contains(msg, "email"), "含 email 错误: " + msg)
+    expect(contains(msg, "age"), "含 age 错误: " + msg)
+    expect(contains(msg, "role"), "含 role 错误: " + msg)
+    # 缺字段 = null → required 失败
+    var r3 = val_validate({"name": "ok"}, rules)
+    expect(r3.is_err(), "缺字段应 Err")
+    # length 区间
+    var rules4 = {"name": "length=3,6", "tags": "length=1,2"}
+    var data4 = {"name": "abcd", "email": "a@b.c", "age": 30, "role": "user", "tags": ["1"]}
+    var r4 = val_validate(data4, rules4)
+    expect(r4.is_ok(), "length 通过")
+    var r5 = val_validate({"name": "ab", "tags": ["1", "2", "3"]}, rules4)
+    expect(r5.is_err(), "length 失败")
+    # 未知规则 → 失败
+    var r6 = val_validate({"name": "x"}, {"name": "unknown_rule"})
+    expect(r6.is_err(), "未知规则 Err")
+    # rules 值用 list 形式
+    var r7 = val_validate({"name": "ok"}, {"name": ["required", "min=2"]})
+    expect(r7.is_ok(), "list 规则")
+    print("validator: PASS")

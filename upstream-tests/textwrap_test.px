@@ -1,0 +1,36 @@
+# textwrap.px 测试：双模式一致
+import "../registry/textwrap/0.1.0/textwrap.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # wrap 基础
+    var ws = tw_wrap("the quick brown fox jumps over the lazy dog", 10)
+    expect(len(ws) == 5, "wrap 10 → 5 行")
+    expect(ws[0] == "the quick", "line0")
+    expect(ws[1] == "brown fox", "line1")
+    expect(ws[2] == "jumps over", "line2")
+    expect(ws[3] == "the lazy", "line3")
+    expect(ws[4] == "dog", "line4")
+    # 单词长于 width 不拆（0.1.0 子集：整词换行）
+    var ws2 = tw_wrap("a verylongword b", 5)
+    expect(ws2[0] == "a", "short line")
+    expect(ws2[1] == "verylongword", "long word alone")
+    expect(ws2[2] == "b", "last")
+    # 空串
+    var ws3 = tw_wrap("", 10)
+    expect(len(ws3) == 1 and ws3[0] == "", "wrap empty")
+    # 多行保留空行
+    var ws4 = tw_wrap("ab cd\n\nef gh", 10)
+    expect(len(ws4) == 3 and ws4[1] == "", "multi-line blank kept")
+    # fill
+    var filled = tw_fill("a b c d e", 3)
+    expect(filled == "a b\nc d\ne", "fill 3")
+    # dedent
+    expect(tw_dedent("  hello\n    world") == "hello\n  world", "dedent basic")
+    expect(tw_dedent("\n    a\n  b") == "\n  a\nb", "dedent with blank+less")
+    expect(tw_dedent("no-indent") == "no-indent", "dedent none")
+    # indent
+    expect(tw_indent("a\n\nb", ">>") == ">>a\n\n>>b", "indent skips blank")
+    print("textwrap: PASS")

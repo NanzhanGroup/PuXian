@@ -211,9 +211,17 @@ def i_call_builtin(name, args, pos):
             return Ok(false)
         return Err(i_r1002("contains 不支持类型 " + t0, pos))
     if name == "split":
-        if len(args) != 2:
-            return Err(i_r1002("split 需要 (字符串, 分隔符) 两个参数", pos))
-        if type(args[0]) != "string" or type(args[1]) != "string":
+        # M190（缺陷 213-e）：修前**只收恰 2 个参数**，而 C 层 `bi_split` 收 **1-2** ——
+        #   1 参时默认分隔符是 **单个空格**（`sep = " "`，实测 `split("a b  c") == [a, b, , c]`，
+        #   与 `.split(" ")` 同），不是「按空白」。⇒ `split("a b")` 解释轨响亮、VM/C 轨可用。
+        #   统一为 **1-2**（放行 C 轨已有能力，删能力是退步）。文案对齐 C 层。
+        if len(args) < 1 or len(args) > 2:
+            return Err(i_r1002("split 需要 1-2 个参数（字符串, [分隔符]）", pos))
+        if type(args[0]) != "string":
+            return Err(i_r1002("split 参数需要 string", pos))
+        if len(args) == 1:
+            return Ok(args[0].split(" "))
+        if type(args[1]) != "string":
             return Err(i_r1002("split 参数需要 string", pos))
         return Ok(args[0].split(args[1]))
     if name == "trim":
@@ -767,16 +775,18 @@ def i_call_builtin(name, args, pos):
             return Err(i_r1002("base64_decode 需要一个参数", pos))
         return Ok(base64_decode(args[0]))
     if name == "Ok":
-        if len(args) == 0:
-            return Ok(Ok(null))
+        # M190（缺陷 213-d）：修前 0 参给 `Ok(null)`、**多参只取第一个**（静默丢弃其余）
+        #   ⇒ 三轨分叉（VM/C 轨 `nargs != 1` 一律响亮）。统一为**恰 1 个参数**。
+        if len(args) != 1:
+            return Err(i_r1002("Ok 需要 1 个参数", pos))
         return Ok(Ok(args[0]))
     if name == "Err":
-        if len(args) == 0:
-            return Ok(Err(null))
+        if len(args) != 1:
+            return Err(i_r1002("Err 需要 1 个参数", pos))
         return Ok(Err(args[0]))
     if name == "Some":
-        if len(args) == 0:
-            return Ok(null)
+        if len(args) != 1:
+            return Err(i_r1002("Some 需要 1 个参数", pos))
         return Ok(args[0])
     # ---- M57 边缘设备层（直接转发 runtime C builtin；可选参数按实参个数透传） ----
     if name == "open":

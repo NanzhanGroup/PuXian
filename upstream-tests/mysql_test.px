@@ -1,0 +1,75 @@
+# mysql.px 测试：真实 MariaDB 10.5 连接（native_password + 文本协议查询）
+import "../registry/mysql/0.1.0/mysql.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # 连接（root 无密码，db=pxtest）
+    var conn = mysql_connect("127.0.0.1", 3306, "pxtest", "px_secret_456", "pxtest", {"timeout_ms": 5000})
+    if conn.is_err():
+        print("FAIL: connect: " + str(conn))
+        exit(1)
+    var c = conn.unwrap()
+    print("connect ok, fd=" + str(c["fd"]) + " plugin=" + str(c["plugin"]))
+    # 基本查询
+    var q = mysql_query(c, "SELECT id, name, age FROM users ORDER BY id")
+    if q.is_err():
+        print("FAIL: query: " + str(q))
+        exit(1)
+    var res = q.unwrap()
+    expect(len(res["columns"]) == 3, "3 columns, got " + str(len(res["columns"])))
+    expect(res["columns"][0]["name"] == "id", "col0 name id")
+    expect(len(res["rows"]) == 2, "2 rows, got " + str(len(res["rows"])))
+    expect(res["rows"][0][1] == "alice", "row0 name alice")
+    expect(res["rows"][1][1] == "bob", "row1 name bob")
+    # count 聚合
+    var q2 = mysql_query(c, "SELECT count(*) AS n FROM users")
+    var res2 = q2.unwrap()
+    expect(res2["columns"][0]["name"] == "n", "agg col name")
+    expect(res2["rows"][0][0] == "2", "count=2, got " + str(res2["rows"][0][0]))
+    # 各类型 + NULL
+    var q3 = mysql_query(c, "SELECT id, name, age, score, active, data, created FROM users WHERE id=1")
+    if q3.is_err():
+        print("FAIL: type query: " + str(q3))
+        exit(1)
+    var r3 = q3.unwrap().rows[0]
+    expect(r3[0] == "1", "id text")
+    expect(r3[3] == "99.50", "decimal text, got " + str(r3[3]))
+    expect(r3[4] == "1", "bool text, got " + str(r3[4]))
+    expect(r3[5] == "Hello", "blob text, got " + str(r3[5]))
+    expect(len(r3[6]) > 0, "created text")
+    var q4 = mysql_query(c, "SELECT name, data FROM users WHERE id=2")
+    var r4 = q4.unwrap().rows[0]
+    expect(r4[0] == "bob", "row2 name")
+    expect(r4[1] == null, "row2 data NULL")
+    # DDL（OK 包，无列）
+    var q5 = mysql_query(c, "CREATE TEMPORARY TABLE t1 (x INT)")
+    if q5.is_err():
+        print("FAIL: create: " + str(q5))
+        exit(1)
+    var res5 = q5.unwrap()
+    expect(len(res5["rows"]) == 0, "ddl no rows")
+    # 写操作（OK 包 affected_rows）
+    var q6 = mysql_query(c, "INSERT INTO t1 VALUES (1), (2)")
+    if q6.is_err():
+        print("FAIL: insert: " + str(q6))
+        exit(1)
+    var res6 = q6.unwrap()
+    expect(res6["affected"] == 2, "affected=2, got " + str(res6["affected"]))
+    var q7 = mysql_query(c, "SELECT * FROM t1 ORDER BY x")
+    var res7 = q7.unwrap()
+    expect(res7["rows"][0][0] == "1", "t1 row0")
+    expect(res7["rows"][1][0] == "2", "t1 row1")
+    # 错误路径：非法 SQL → Err（不崩溃）
+    var q8 = mysql_query(c, "SELECT * FROM no_such_table_xyz")
+    expect(q8.is_err(), "bad sql returns Err")
+    if q8.is_err():
+        print("  (expected) err=" + str(q8))
+    # 错误后可恢复
+    var q9 = mysql_query(c, "SELECT 1 AS one")
+    var r9 = q9.unwrap()
+    expect(r9["rows"][0][0] == "1", "recover query ok")
+    mysql_close(c)
+    print("mysql_test: PASS")
+    return Ok(0)

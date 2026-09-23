@@ -1,0 +1,5 @@
+# M190 门 · 拒绝侧：n21_assert_3（运行期必须响亮，三轨同码同文）
+def main():
+    print("before")
+    assert(true, "m", 3)
+    print("x")

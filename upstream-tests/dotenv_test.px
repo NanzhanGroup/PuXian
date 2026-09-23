@@ -1,0 +1,57 @@
+# dotenv.px 测试：双模式一致（.env 解析）
+import "../registry/dotenv/0.1.0/dotenv.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+def main():
+    var d = dotenv_parse("A=1\nB=hello world\n# comment\n\nC=\"x y\"\nD='lit'\n")
+    expect(d.has("A") and d["A"] == "1", "A=1")
+    expect(d.has("B") and d["B"] == "hello world", "B=hello world")
+    expect(not d.has("comment"), "注释行跳过")
+    expect(d.has("C") and d["C"] == "x y", "C 双引号")
+    expect(d.has("D") and d["D"] == "lit", "D 单引号")
+    # export 前缀
+    var e = dotenv_parse("export DB_HOST=localhost\nEXPORT PORT=5432\n")
+    expect(e.has("DB_HOST") and e["DB_HOST"] == "localhost", "export 前缀")
+    expect(e.has("PORT") and e["PORT"] == "5432", "EXPORT 大写")
+    # 行内注释 / 空格
+    var f = dotenv_parse("A=1 # inline\nB  = 2\n")
+    expect(f["A"] == "1", "行内注释截断")
+    expect(f["B"] == "2", "等号两侧空格")
+    # 引号内 # 不算注释；单引号不转义
+    var g = dotenv_parse("A=\"a # b\"\nB='c # d'\n")
+    expect(g["A"] == "a # b", "双引号内 # 保留")
+    expect(g["B"] == "c # d", "单引号内 # 保留")
+    # 转义
+    var h = dotenv_parse("A=\"line1\\nline2\"\nB=\"tab\\there\"\nC=\"q1\\\"q2\"\nD=\"bs\\\\x\"\n")
+    expect(h["A"] == "line1\nline2", "\\n 转义")
+    expect(h["B"] == "tab\there", "\\t 转义")
+    expect(h["C"] == "q1\"q2", "\\\" 转义")
+    expect(h["D"] == "bs\\x", "\\\\ 转义")
+    # 非法行跳过
+    var k = dotenv_parse("1BAD=x\n=noval\nnoequal\nA=1\n")
+    expect(not k.has("1BAD"), "数字开头 key 跳过")
+    expect(not k.has(""), "无 key 跳过")
+    expect(not k.has("noequal"), "无等号跳过")
+    expect(k.has("A") and k["A"] == "1", "正常行保留")
+    # 空值 / 全空
+    var m = dotenv_parse("EMPTY=\nSP=  \n")
+    expect(m.has("EMPTY") and m["EMPTY"] == "", "空值")
+    expect(m.has("SP") and m["SP"] == "", "全空白值")
+    expect(len(dotenv_parse("")) == 0, "空串 → {}")
+    expect(len(dotenv_parse("# only\n\n")) == 0, "全注释 → {}")
+    # 首键优先（重复键保留首个）
+    var n = dotenv_parse("X=1\nX=2\n")
+    expect(n["X"] == "1", "重复键首值")
+    # load（读文件）
+    var ok = dotenv_load("/tmp/dotenv_sample.env")
+    expect(ok.is_ok(), "dotenv_load 正常文件")
+    if ok.is_ok():
+        expect(ok.unwrap()["USER"] == "test", "load USER")
+        expect(ok.unwrap()["QUOTED"] == "a b", "load QUOTED")
+    var w = dotenv_load("/tmp/no_such_dotenv.env")
+    expect(w.is_err(), "dotenv_load 缺文件 Err")
+    print("dotenv: PASS")

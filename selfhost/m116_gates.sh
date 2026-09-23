@@ -512,6 +512,18 @@ step "M189（第 67 轮）：bytes 边界族（bytes_get / bytes_set / b[i]）�
 #   负控 A（bytes_get 越界退回 null）/B（bytes_set 文案退回旧文）/D（索引校验退回 int_val）改 runtime.c、
 #   C（删 ibuiltin.px 的 bytes_get 前置校验，用当前源码重编解释器）各自独立判红 + 源逐字节还原。
 run m189_bytes_bounds bash examples/m189_bytes_bounds/verify.sh
+step "M190（第 68 轮）：方法族参数面三轨同一真相（内部缺陷 213-a…213-l）"
+#   判据：① 合法侧 arity_ok.px 三轨逐字节一致（30 行定点：list/dict/str/result/tuple + 内置 split）；
+#   ② 拒绝侧 23 例 × 三轨：rc≠0 + **同一 R 码** + **正文逐字相同** + 三轨都指到用户行；
+#   ③ 「before」守卫（证明是运行期校验，不是编译期拒绝）；
+#   负控 A（解释轨 pop 退回忽略实参）/B（解释轨 str.upper 退回不查实参）/E（解释轨 sort 退回渲染串比较）
+#   改 icall.px、C（native list.index 退回缺失）/D（native list.reverse 退回缺失）改 runtime.c，
+#   各自独立判红 + 源逐字节还原。
+run m190_arity bash examples/m190_arity/verify.sh
+step "M190 · 上游 registry-px 真实用例回归（53 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
+#   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
+#   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。
+run upstream_tests bash selfhost/run_upstream_tests.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

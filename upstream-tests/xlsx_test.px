@@ -1,0 +1,76 @@
+# xlsx.px 测试：纯 parts 双模式一致；xsx_write 需编译轨（zip native 仅编译轨，PX-DEF-021）
+import "../registry/xlsx/0.1.0/xlsx.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def contains(s, sub):
+    var i = 0
+    while i + len(sub) <= len(s):
+        var j = 0
+        var hit = true
+        while j < len(sub):
+            if s[i + j] != sub[j]:
+                hit = false
+                break
+            j += 1
+        if hit:
+            return true
+        i += 1
+    return false
+def main():
+    # 列字母
+    expect(xsx_col_letter(0) == "A", "col A")
+    expect(xsx_col_letter(25) == "Z", "col Z")
+    expect(xsx_col_letter(26) == "AA", "col AA")
+    expect(xsx_col_letter(27) == "AB", "col AB")
+    expect(xsx_col_letter(51) == "AZ", "col AZ")
+    expect(xsx_col_letter(701) == "ZZ", "col ZZ")
+    # parts 结构
+    var doc = xsx_new()
+    doc = xsx_add(doc, "Sheet1", [["Name", "Age"], ["Alice", 30], ["Bob", 4]])
+    doc = xsx_add(doc, "Sheet2", [["k", "v"], ["count", 7]])
+    var parts = xsx_parts(doc)
+    expect(parts.has("[Content_Types].xml"), "has content types")
+    expect(parts.has("_rels/.rels"), "has root rels")
+    expect(parts.has("xl/workbook.xml"), "has workbook")
+    expect(parts.has("xl/_rels/workbook.xml.rels"), "has workbook rels")
+    expect(parts.has("xl/styles.xml"), "has styles")
+    expect(parts.has("xl/worksheets/sheet1.xml"), "has sheet1")
+    expect(parts.has("xl/worksheets/sheet2.xml"), "has sheet2")
+    # 内容
+    var ct = parts["[Content_Types].xml"]
+    expect(contains(ct, "sheet1.xml"), "ct sheet1")
+    expect(contains(ct, "sheet2.xml"), "ct sheet2")
+    var wb = parts["xl/workbook.xml"]
+    expect(contains(wb, "Sheet1"), "wb sheet1 name")
+    expect(contains(wb, "Sheet2"), "wb sheet2 name")
+    var rels = parts["xl/_rels/workbook.xml.rels"]
+    expect(contains(rels, "worksheets/sheet1.xml"), "rels sheet1")
+    expect(contains(rels, "styles.xml"), "rels styles")
+    var s1 = parts["xl/worksheets/sheet1.xml"]
+    expect(contains(s1, "<row r=\"1\">"), "sheet1 row1")
+    expect(contains(s1, "t=\"inlineStr\"><is><t>Name</t></is></c>"), "sheet1 inline header")
+    expect(contains(s1, "<c r=\"A2\" t=\"inlineStr\"><is><t>Alice</t></is></c>"), "sheet1 A2 alice")
+    expect(contains(s1, "<c r=\"B3\"><v>4</v></c>"), "sheet1 B3 number")
+    expect(contains(s1, "<c r=\"A2\""), "sheet1 A2 ref")
+    # XML 转义
+    var doc2 = xsx_new()
+    doc2 = xsx_add(doc2, "S", [["a<b&c>\"d\"", "ok"]])
+    var p2 = xsx_parts(doc2)
+    expect(contains(p2["xl/worksheets/sheet1.xml"], "a&lt;b&amp;c&gt;&quot;d&quot;"), "xml escape")
+    # 空单元格
+    var doc3 = xsx_new()
+    doc3 = xsx_add(doc3, "S", [[null, "x"], [1, null]])
+    var p3 = xsx_parts(doc3)
+    expect(not contains(p3["xl/worksheets/sheet1.xml"], "<c r=\"A1\">"), "null cell skipped at A1")
+    expect(not contains(p3["xl/worksheets/sheet1.xml"], "<c r=\"B2\">"), "null cell skipped at B2")
+    # 写出（zip_pack 需编译轨）
+    var path = "/tmp/xlsx_registry_test.xlsx"
+    var w = xsx_write(doc2, path)
+    expect(w.is_ok(), "write xlsx")
+    var n = zip_unpack(path, "/tmp/xlsx_registry_test_out")
+    expect(n == 6, "unpack 6 parts")
+    var back = read_file_opt("/tmp/xlsx_registry_test_out/xl/workbook.xml")
+    expect(back.is_ok() and contains(back.unwrap(), "S"), "readback workbook")
+    print("xlsx: PASS")

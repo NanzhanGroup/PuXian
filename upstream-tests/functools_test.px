@@ -1,0 +1,52 @@
+# functools.px 测试：双模式一致
+import "../registry/functools/0.1.0/functools.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def add(x, y):
+    return x + y
+def add3(x, y, z):
+    return x + y + z
+def double(x):
+    return x * 2
+def inc(x):
+    return x + 1
+def square(x):
+    return x * x
+def is_even(x):
+    return x % 2 == 0
+def main():
+    # partial
+    var p1 = fn_partial(add, 10)
+    expect(p1(5) == 15, "partial add 10")
+    expect(p1(0) == 10, "partial add 10 + 0")
+    var p2 = fn_partial2(add3, 1, 2)
+    expect(p2(3) == 6, "partial2 add3")
+    expect(p2(10) == 13, "partial2 add3 10")
+    # compose: h(x) = f(g(x)) = double(inc(x))
+    var h = fn_compose(double, inc)
+    expect(h(3) == 8, "compose double(inc(3)) = 8")
+    expect(h(0) == 2, "compose 0")
+    # memo：首次计算，二次命中缓存
+    var c1 = {}
+    var r1 = fn_memo(square, c1, 4)
+    expect(r1[1] == 16, "memo value")
+    expect(r1[0].has("4"), "memo cached key")
+    expect(r1[0]["4"] == 16, "memo cached value")
+    var r2 = fn_memo(square, r1[0], 4)
+    expect(r2[1] == 16 and len(r2[0].keys()) == 1, "memo hit no new key")
+    var r3 = fn_memo(square, r2[0], 5)
+    expect(r3[1] == 25 and len(r3[0].keys()) == 2, "memo second key")
+    # memo_make：包装函数 + 外部缓存
+    var cm = {}
+    var gm = fn_memo_make(square, cm)
+    var m1 = gm(3)
+    expect(m1[1] == 9, "memo_make value")
+    var m2 = gm(3)
+    expect(m2[1] == 9 and len(cm.keys()) == 1, "memo_make hit")
+    # negate
+    var odd = fn_negate(is_even)
+    expect(odd(3) == true, "negate odd 3")
+    expect(odd(4) == false, "negate even 4")
+    print("functools: PASS")

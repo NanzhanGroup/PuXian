@@ -405,7 +405,8 @@ static LXValue bi_onnx_run(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_onnx_op_names(LXValue* args, int nargs, void* ctx) {
     LXValue lst = px_list(0);
     int i;
-    (void)args; (void)nargs; (void)ctx;
+    if (nargs != 0) px_error("R1002: onnx_op_names 需要 0 个参数");
+    (void)args; (void)ctx;
     px_root_push();   // M170（缺陷 187 同族）：lst 跨循环内 px_str 分配
     PX_KEEP(lst);
     for (i = 0; i < onnx_op_count(); i++) px_list_push(lst, px_str(onnx_op_name_at(i)));

@@ -1,0 +1,4 @@
+# M190 门 · 拒绝侧：n8_str_split_2（运行期必须响亮，三轨同码同文）
+def main():
+    print("before")
+    print("a,b".split(",", ";"))

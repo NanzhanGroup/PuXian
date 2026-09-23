@@ -1,0 +1,50 @@
+# strcase.px 测试：双模式一致（命名风格转换）
+import "../registry/strcase/0.1.0/strcase.px"
+
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+
+def eq(name, got, want):
+    expect(got == want, name + " 应 '" + want + "' 得 '" + got + "'")
+
+def main():
+    # snake_case
+    eq("snake camel", str_snake("fooBar"), "foo_bar")
+    eq("snake pascal", str_snake("FooBar"), "foo_bar")
+    eq("snake HTTP", str_snake("HTTPServer"), "http_server")
+    eq("snake XML", str_snake("XMLHttpRequest"), "xml_http_request")
+    eq("snake space", str_snake("hello world"), "hello_world")
+    eq("snake kebab-in", str_snake("hello-world"), "hello_world")
+    eq("snake dot", str_snake("hello.world"), "hello_world")
+    eq("snake already", str_snake("foo_bar"), "foo_bar")
+    eq("snake upper-in", str_snake("FOO_BAR"), "foo_bar")
+    eq("snake leading", str_snake("  hello  WORLD  "), "hello_world")
+    eq("snake empty", str_snake(""), "")
+    eq("snake seps", str_snake("___"), "")
+    eq("snake digits", str_snake("sha256"), "sha256")
+    eq("snake digit-bound", str_snake("foo2bar"), "foo2bar")
+    # kebab-case
+    eq("kebab camel", str_kebab("fooBar"), "foo-bar")
+    eq("kebab xml", str_kebab("XMLHttpRequest"), "xml-http-request")
+    # SCREAMING_SNAKE
+    eq("scream", str_screaming_snake("fooBar"), "FOO_BAR")
+    eq("scream xml", str_screaming_snake("XMLHttpRequest"), "XML_HTTP_REQUEST")
+    # camelCase
+    eq("camel snake", str_camel("hello_world"), "helloWorld")
+    eq("camel pascal-in", str_camel("HelloWorld"), "helloWorld")
+    eq("camel one", str_camel("foo"), "foo")
+    # PascalCase
+    eq("pascal snake", str_pascal("hello_world"), "HelloWorld")
+    eq("pascal kebab", str_pascal("foo-bar-baz"), "FooBarBaz")
+    eq("pascal empty", str_pascal(""), "")
+    # Title
+    eq("title", str_title_words("hello_world"), "Hello World")
+    eq("title http", str_title_words("HTTPServer"), "Http Server")
+    # 分词
+    var w = str_words("XMLHttpRequest")
+    expect(len(w) == 3, "words 应 3 得 " + str(len(w)))
+    expect(w[0] == "XML" and w[1] == "Http" and w[2] == "Request", "words 内容错误: " + str(w))
+    expect(len(str_words("")) == 0, "空串 words 应 0")
+    print("strcase: PASS")

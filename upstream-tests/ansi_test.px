@@ -1,0 +1,33 @@
+# ansi.px 测试：双模式一致
+import "../registry/ansi/0.1.0/ansi.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var red = an_color("hi", "red")
+    expect(red == "\u{1b}[31mhi\u{1b}[0m", "red fg")
+    var bg = an_bg("x", "blue")
+    expect(bg == "\u{1b}[44mx\u{1b}[0m", "blue bg (34+10=44)")
+    var bold = an_style("b", "bold")
+    expect(bold == "\u{1b}[1mb\u{1b}[0m", "bold")
+    var bright = an_color("y", "bright_green")
+    expect(bright == "\u{1b}[92my\u{1b}[0m", "bright green fg")
+    var unknown = an_color("z", "pink")
+    expect(unknown == "z", "unknown fg passthrough")
+    var ubg = an_bg("z", "pink")
+    expect(ubg == "z", "unknown bg passthrough")
+    var ust = an_style("z", "wavy")
+    expect(ust == "z", "unknown style passthrough")
+    expect(an_reset() == "\u{1b}[0m", "reset")
+    # strip
+    expect(an_strip(red) == "hi", "strip red")
+    expect(an_strip(bright + " plain") == "y plain", "strip bright")
+    expect(an_strip("no esc") == "no esc", "strip none")
+    expect(an_strip("\u{1b}[2Jclear") == "clear", "strip CSI 2J")
+    expect(an_strip("\u{1b}Mrev") == "rev", "strip 2-byte ESC M")
+    expect(an_strip("a\u{1b}[1;31mb\u{1b}[0mc") == "abc", "strip multi-param")
+    # 中文内容不破坏
+    var cn = an_color("你好", "cyan")
+    expect(an_strip(cn) == "你好", "strip chinese")
+    print("ansi: PASS")
