@@ -1,0 +1,8 @@
+p1_os_spawn_arity	R1002	os_spawn 需要 (cmd, args[, group|opts]) 参数
+p2_os_kill_arity	R1002	os_kill 需要 (pid, sig[, group]) 参数
+p3_os_exec_arity	R1002	os_exec 需要 (cmd, args?) 参数，cmd 为字符串
+p4_sqrt_arity	R1002	sqrt 需要一个参数
+p5_sin_arity	R1002	sin 需要 1 个参数（弧度）
+p6_cos_arity	R1002	cos 需要 1 个参数（弧度）
+p7_tan_arity	R1002	tan 需要 1 个参数（弧度）
+p8_log_arity	R1002	log 需要 1 个参数（自然对数 ln）
