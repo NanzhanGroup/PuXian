@@ -226,7 +226,7 @@ PY
 import sys
 p=sys.argv[1]; s=open(p,encoding='utf-8').read()
 a='''        if len(args) != 0:
-            return Err(i_r1002("方法 upper 不接受参数", pos))
+            return Err(i_r1005("方法 upper 不接受参数", pos))
         return Ok(s.upper())'''
 assert s.count(a)==1
 open(p,'w',encoding='utf-8').write(s.replace(a,'        # M190-NC：负控 B 打桩（退回不查实参）\n        return Ok(s.upper())',1))
