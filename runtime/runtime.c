@@ -4259,6 +4259,30 @@ static long long px_arg_dur_ns(LXValue v, const char* fn, const char* pname, dou
     return (long long)(d * unit_ns);
 }
 
+// M198（第 76 轮 · §6.8 推广）：**毫秒粒度**的时长形参 —— 接受 int|float，**向上取整到 ms**。
+//   为什么向上取整：底层是 ms 粒度的系统调用（poll/select/套接字超时字段），向上取整保证
+//   「**绝不早于**用户请求的时长」——宁可晚一丁点，不可提前放弃等待。
+//   只接受数值：非数值一律响亮（不再静默忽略 —— 静默忽略会让「设了超时」变成「没有超时」）。
+int64_t px_arg_dur_ms(LXValue v, const char* fn, const char* pname) {
+    long long ns = px_arg_dur_ns(v, fn, pname, 1000000.0);
+    if (ns <= 0) return 0;
+    return (int64_t)((ns + 999999) / 1000000);
+}
+
+// opts 字典里的时长字段（timeout_ms / read_timeout_ms / …）：
+//   缺失 / null ⇒ has=0（未提供，§6.3）；数值 ⇒ 取用（向上取整到 ms）；其它类型 ⇒ R1002 点名。
+//   修前形态是 `if (tv.type == PX_INT) timeout_ms = tv.as.i;` —— **非 int 一律静默忽略**，
+//   于是 `{timeout_ms: 1e3}`（JSON 科学计数 ⇒ float）会悄悄变成「没有超时」。
+int64_t px_opt_dur_ms(LXValue opts, const char* key, const char* fn, int* has) {
+    LXValue v = px_dict_get(opts, key);
+    if (v.type == PX_NULL) { if (has) *has = 0; return 0; }
+    if (v.type != PX_INT && v.type != PX_FLOAT) {
+        px_error("R1002: %s 的 opts.%s 需要数值（int/float），实际是 %s", fn, key, px_type_name(v));
+    }
+    if (has) *has = 1;
+    return px_arg_dur_ms(v, fn, key);
+}
+
 LXValue px_not(LXValue a) { return px_bool(!px_is_truthy(a)); }
 LXValue px_bitnot(LXValue a) { return px_int(~px_req_int(a, "按位取反")); }
 LXValue px_bitand(LXValue a, LXValue b) { return px_int(px_req_int(a, "按位与") & px_req_int(b, "按位与")); }
@@ -5946,6 +5970,8 @@ static LXValue bi_assert(LXValue* args, int nargs, void* ctx) {
 
 static LXValue bi_panic(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
+    // M198（缺陷 234）：panic([msg]) 是 0-1 参 —— 多余实参响亮。
+    if (nargs > 1) px_error("R1002: panic 需要 0-1 个参数");
     if (nargs >= 1 && args[0].type == PX_STR) px_error("R2001: %s", args[0].as.obj->as.str.data);
     px_error("R2001: panic");
     return px_null();
@@ -5953,7 +5979,7 @@ static LXValue bi_panic(LXValue* args, int nargs, void* ctx) {
 
 static LXValue bi_sleep(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1) px_error("R1002: sleep 需要 1 个参数");
+    if (nargs != 1) px_error("R1002: sleep 需要 1 个参数");
     // M195：**时长**参数 —— 接受 int|float，小数部分**真正生效**（纳秒精度）
     long long ns = px_arg_dur_ns(args[0], "sleep", "ms", 1000000.0);
     // M88-S2（qg-issue 27）：EINTR 自动续睡——并发 GC（M11 stop-the-world）向所有已注册
@@ -6065,6 +6091,8 @@ static LXValue bi_trim(LXValue* args, int nargs, void* ctx) {
 
 static LXValue bi_now_ms(LXValue* args, int nargs, void* ctx) {
     (void)args; (void)nargs; (void)ctx;
+    // M198（缺陷 234）：0 参函数 —— 多余实参**响亮**（修前静默忽略）。
+    if (nargs != 0) px_error("R1002: now_ms 不需要参数");
     // M36 修复：C 端 now_ms 用 CLOCK_REALTIME（Unix 毫秒），与解释器 SystemTime 一致
     // （原用 CLOCK_MONOTONIC 导致双模式时间基准不一致：now_ms()/1000 无法算日期）
     struct timespec ts;
@@ -6376,6 +6404,8 @@ static LXValue bi_random_seed(LXValue* args, int nargs, void* ctx) {
 
 static LXValue bi_input(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
+    // M198（缺陷 234）：input([prompt]) 是 0-1 参 —— 多余实参响亮。
+    if (nargs > 1) px_error("R1002: input 需要 0-1 个参数");
     if (nargs >= 1 && args[0].type == PX_STR) {
         fwrite(args[0].as.obj->as.str.data, 1, args[0].as.obj->as.str.len, stdout);
         fflush(stdout);
@@ -7606,9 +7636,11 @@ static LXValue bi_tty_config(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_fd_wait(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 2) px_error("R1002: fd_wait 需要 (fds, timeout_ms) 参数");
-    if (args[1].type != PX_INT) px_error("R1002: fd_wait 的 timeout_ms 需要 int");
-    int64_t tmo = args[1].as.i;
-    if (tmo < 0) px_error("R1002: fd_wait 的 timeout_ms 需要 >= 0");
+    // M198（§6.8 推广）：timeout_ms 是**时长** ⇒ 接受 int|float（向上取整到 ms，绝不早于请求）；
+    //   非数值响亮（修前非 int 一律 `需要 int`，把 `fd_wait([0], 0.5)` 这类直接挡在门外）。
+    if (args[1].type == PX_FLOAT && args[1].as.f < 0) px_error("R1002: fd_wait 的 timeout_ms 需要 >= 0");
+    if (args[1].type == PX_INT && args[1].as.i < 0) px_error("R1002: fd_wait 的 timeout_ms 需要 >= 0");
+    int64_t tmo = px_arg_dur_ms(args[1], "fd_wait", "timeout_ms");
     if (tmo > 2147483647L) tmo = 2147483647L;   // poll 超时 int 上限保护
     int fds[64];
     int n = 0;
@@ -10909,6 +10941,8 @@ void px_args_init(int argc, char** argv) {
 
 static LXValue bi_args(LXValue* args, int nargs, void* ctx) {
     (void)args; (void)nargs; (void)ctx;
+    // M198（缺陷 234）：0 参函数 —— 多余实参**响亮**（修前静默忽略）。
+    if (nargs != 0) px_error("R1002: args 不需要参数");
     LXValue l = px_list(0);
     px_root_push();
     PX_KEEP(l);   // M92 precise：累积 list 跨 px_list_push/px_str 分配
@@ -12163,8 +12197,10 @@ static void px_spawn_opts_parse(LXValue opts, PxSpawnOpts* o, int default_group)
     LXValue gv = px_dict_get(opts, "group");
     if (gv.type == PX_BOOL) o->group = gv.as.b ? 1 : 0;
     else if (gv.type == PX_INT) o->group = gv.as.i != 0;
-    LXValue tv = px_dict_get(opts, "timeout_ms");
-    if (tv.type == PX_INT) o->timeout_ms = (int)tv.as.i;
+    // M198（§6.8 推广）：opts 时长字段「存在即校验」——数值取用，其它类型响亮，不再静默忽略。
+    int has_tmo = 0;
+    int64_t tmo_ms = px_opt_dur_ms(opts, "timeout_ms", "os_spawn_capture", &has_tmo);
+    if (has_tmo) o->timeout_ms = (int)tmo_ms;
     o->env_dict = px_dict_get(opts, "env");
 }
 
@@ -13866,16 +13902,17 @@ static int64_t g_next_timer_id = 0;
 typedef struct {
     int64_t id;
     int periodic;    // 1=interval，0=timeout
-    int64_t ms;
+    int64_t ns;      // M198（缺陷 229）：纳秒（时长形参数值化后小数真正生效）
     LXValue fn;      // 回调函数值
     LXValue* args;   // 调用参数（堆；线程栈上做副本保证 GC 可达）
     int nargs;
 } TimerJob;
 
-static void timer_sleep_ms(int64_t ms) {
+// M198（缺陷 229）：定时器睡眠改**纳秒**粒度 —— `set_timeout(f, 1.5)` 的 1.5ms 真正生效。
+static void timer_sleep_ns(long long ns) {
     struct timespec req, rem;
-    req.tv_sec = ms / 1000;
-    req.tv_nsec = (ms % 1000) * 1000000L;
+    req.tv_sec = (time_t)(ns / 1000000000LL);
+    req.tv_nsec = (long)(ns % 1000000000LL);
     while (req.tv_sec > 0 || req.tv_nsec > 0) {
         if (nanosleep(&req, &rem) == 0) break;
         req = rem;   // EINTR（含 GC 暂停信号）→ 继续睡剩余时间
@@ -13930,7 +13967,7 @@ static void* timer_thread(void* p) {
     int periodic = job->periodic;
 
     do {
-        timer_sleep_ms(job->ms);
+        timer_sleep_ns(job->ns);
         if (!timer_still_active(id)) break;   // 取消检查（每次 tick 前）
         LXValue r = px_call(fn, args_stack, nargs);
         (void)r;
@@ -13949,7 +13986,7 @@ static void* timer_thread(void* p) {
 }
 
 // 创建定时器：periodic=1 周期 / 0 一次性；返回定时器 id
-static int64_t px_timer_create(int periodic, LXValue fn, LXValue* args, int nargs, int64_t ms) {
+static int64_t px_timer_create(int periodic, LXValue fn, LXValue* args, int nargs, int64_t ns) {
     pthread_mutex_lock(&g_timer_mu);
     int slot = -1;
     for (int i = 0; i < MAX_TIMERS; i++) if (g_timers[i].id == 0) { slot = i; break; }
@@ -13984,7 +14021,7 @@ static int64_t px_timer_create(int periodic, LXValue fn, LXValue* args, int narg
     TimerJob* job = xmalloc(sizeof(TimerJob));
     job->id = id;
     job->periodic = periodic;
-    job->ms = ms;
+    job->ns = ns;
     job->fn = fn;
     job->nargs = nargs;
     job->args = xmalloc(sizeof(LXValue) * (nargs > 0 ? nargs : 1));
@@ -14015,9 +14052,12 @@ static LXValue bi_set_timeout(LXValue* args, int nargs, void* ctx) {
     if (nargs < 2) px_error("R1002: set_timeout 需要 (fn, ms[, ...args]) 参数");
     if (args[0].type != PX_FUNC && args[0].type != PX_NATIVE)
         px_error("R1002: set_timeout: 第一个参数必须是函数");
-    int64_t ms = px_arg_int(args[1], "set_timeout", "ms");
-    if (ms < 0) px_error("R1006: set_timeout: 间隔不能为负数");
-    int64_t id = px_timer_create(0, args[0], args + 2, nargs - 2, ms);
+    // M198（缺陷 229）：ms 是**时长** ⇒ 接受 int|float（§6.8），转纳秒交定时器；负数仍响亮。
+    double dv = (args[1].type == PX_FLOAT) ? args[1].as.f
+              : (args[1].type == PX_INT ? (double)args[1].as.i : 0.0);
+    if (dv < 0) px_error("R1006: set_timeout: 间隔不能为负数");
+    long long ns = px_arg_dur_ns(args[1], "set_timeout", "ms", 1000000.0);
+    int64_t id = px_timer_create(0, args[0], args + 2, nargs - 2, ns);
     return px_int(id);
 }
 
@@ -14026,9 +14066,12 @@ static LXValue bi_set_interval(LXValue* args, int nargs, void* ctx) {
     if (nargs < 2) px_error("R1002: set_interval 需要 (fn, ms[, ...args]) 参数");
     if (args[0].type != PX_FUNC && args[0].type != PX_NATIVE)
         px_error("R1002: set_interval: 第一个参数必须是函数");
-    int64_t ms = px_arg_int(args[1], "set_interval", "ms");
-    if (ms < 0) px_error("R1006: set_interval: 间隔不能为负数");
-    int64_t id = px_timer_create(1, args[0], args + 2, nargs - 2, ms);
+    // M198（缺陷 229）：同 set_timeout —— 时长接受 int|float，纳秒交定时器。
+    double dv = (args[1].type == PX_FLOAT) ? args[1].as.f
+              : (args[1].type == PX_INT ? (double)args[1].as.i : 0.0);
+    if (dv < 0) px_error("R1006: set_interval: 间隔不能为负数");
+    long long ns = px_arg_dur_ns(args[1], "set_interval", "ms", 1000000.0);
+    int64_t id = px_timer_create(1, args[0], args + 2, nargs - 2, ns);
     return px_int(id);
 }
 
@@ -14979,12 +15022,14 @@ static LXValue bi_tls_connect(LXValue* args, int nargs, void* ctx) {
     if (nargs == 3) {
         if (args[2].type != PX_DICT)
             px_error("R1002: tls_connect 的 opts 需要 dict{timeout_ms,verify,servername,read_timeout_ms}");
-        LXValue tv = px_dict_get(args[2], "timeout_ms");
-        if (tv.type == PX_INT) timeout_ms = tv.as.i;
+        int has_tmo = 0;
+        int64_t tmo_ms = px_opt_dur_ms(args[2], "timeout_ms", "tls_connect", &has_tmo);
+        if (has_tmo) timeout_ms = tmo_ms;
         LXValue vv = px_dict_get(args[2], "verify");
         if (vv.type == PX_BOOL) verify = vv.as.b ? 1 : 0;
-        LXValue rt = px_dict_get(args[2], "read_timeout_ms");
-        if (rt.type == PX_INT) read_timeout_ms = rt.as.i;
+        int has_rt = 0;
+        int64_t rt_ms = px_opt_dur_ms(args[2], "read_timeout_ms", "tls_connect", &has_rt);
+        if (has_rt) read_timeout_ms = rt_ms;
         LXValue sv = px_dict_get(args[2], "servername");
         if (sv.type == PX_STR) {
             const char* p = sv.as.obj->as.str.data;
@@ -15042,8 +15087,9 @@ static LXValue bi_tls_upgrade(LXValue* args, int nargs, void* ctx) {
             px_error("R1002: tls_upgrade 的 opts 需要 dict{verify,servername,host,read_timeout_ms}");
         LXValue vv = px_dict_get(args[1], "verify");
         if (vv.type == PX_BOOL) verify = vv.as.b ? 1 : 0;
-        LXValue rt = px_dict_get(args[1], "read_timeout_ms");
-        if (rt.type == PX_INT) read_timeout_ms = rt.as.i;
+        int has_rt = 0;
+        int64_t rt_ms = px_opt_dur_ms(args[1], "read_timeout_ms", "tls_upgrade", &has_rt);
+        if (has_rt) read_timeout_ms = rt_ms;
         LXValue sv = px_dict_get(args[1], "servername");
         if (sv.type == PX_STR && sv.as.obj->as.str.data)
             snprintf(servername, sizeof(servername), "%s", sv.as.obj->as.str.data);
@@ -15609,8 +15655,9 @@ static LXValue bi_tcp_connect_ex(LXValue* args, int nargs, void* ctx) {
     int nodelay = 1;
     if (nargs == 3) {
         if (args[2].type != PX_DICT) px_error("R1002: tcp_connect_ex 的 opts 需要 dict{timeout_ms,nodelay}");
-        LXValue tv = px_dict_get(args[2], "timeout_ms");
-        if (tv.type == PX_INT) timeout_ms = tv.as.i;
+        int has_tmo = 0;
+        int64_t tmo_ms = px_opt_dur_ms(args[2], "timeout_ms", "tcp_connect_ex", &has_tmo);
+        if (has_tmo) timeout_ms = tmo_ms;
         LXValue nv = px_dict_get(args[2], "nodelay");
         if (nv.type == PX_BOOL) nodelay = nv.as.b ? 1 : 0;
     }
@@ -15675,16 +15722,18 @@ static LXValue bi_tcp_opt(LXValue* args, int nargs, void* ctx) {
         int on = v.as.b ? 1 : 0;
         if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof(on)) != 0) { ok = 0; er = errno; }
     }
-    v = px_dict_get(args[1], "read_timeout_ms");
-    if (v.type == PX_INT) {
+    int opt_rt_has = 0;
+    int64_t opt_rt_ms = px_opt_dur_ms(args[1], "read_timeout_ms", "tcp_opt", &opt_rt_has);
+    if (opt_rt_has && opt_rt_ms > 0) {
         struct timeval tv;
-        px_ms_to_timeval(v.as.i, &tv);
+        px_ms_to_timeval(opt_rt_ms, &tv);
         if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) != 0) { ok = 0; er = errno; }
     }
-    v = px_dict_get(args[1], "write_timeout_ms");
-    if (v.type == PX_INT) {
+    int opt_wt_has = 0;
+    int64_t opt_wt_ms = px_opt_dur_ms(args[1], "write_timeout_ms", "tcp_opt", &opt_wt_has);
+    if (opt_wt_has && opt_wt_ms > 0) {
         struct timeval tv;
-        px_ms_to_timeval(v.as.i, &tv);
+        px_ms_to_timeval(opt_wt_ms, &tv);
         if (setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) != 0) { ok = 0; er = errno; }
     }
     int nodelay_v = -1, keepalive_v = -1;
@@ -16046,8 +16095,9 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
     if (nargs >= 5 && args[4].type == PX_DICT) {
         LXValue rv = px_dict_get(args[4], "retries");
         if (rv.type == PX_INT && rv.as.i >= 0) retries = (int)rv.as.i + 1;
-        LXValue tv = px_dict_get(args[4], "timeout_ms");
-        if (tv.type == PX_INT && tv.as.i > 0) timeout_ms = (int)tv.as.i;
+        int has_tmo = 0;
+        int64_t tmo_ms = px_opt_dur_ms(args[4], "timeout_ms", "http_request", &has_tmo);
+        if (has_tmo && tmo_ms > 0) timeout_ms = (int)tmo_ms;
         LXValue pv = px_dict_get(args[4], "proxy");
         if (pv.type == PX_STR) snprintf(proxy, sizeof(proxy), "%s", pv.as.obj->as.str.data);
         LXValue gv = px_dict_get(args[4], "decode_gzip");
@@ -16778,8 +16828,9 @@ static LXValue bi_http_get_stream(LXValue* args, int nargs, void* ctx) {
     if (nargs >= 5 && args[4].type == PX_DICT) {
         LXValue rv = px_dict_get(args[4], "retries");
         if (rv.type == PX_INT && rv.as.i >= 0) retries = (int)rv.as.i + 1;
-        LXValue tv = px_dict_get(args[4], "timeout_ms");
-        if (tv.type == PX_INT && tv.as.i > 0) timeout_ms = (int)tv.as.i;
+        int has_tmo = 0;
+        int64_t tmo_ms = px_opt_dur_ms(args[4], "timeout_ms", "http_get_stream", &has_tmo);
+        if (has_tmo && tmo_ms > 0) timeout_ms = (int)tmo_ms;
         LXValue pv = px_dict_get(args[4], "proxy");
         if (pv.type == PX_STR) snprintf(proxy, sizeof(proxy), "%s", pv.as.obj->as.str.data);
         LXValue gv = px_dict_get(args[4], "decode_gzip");
@@ -18128,6 +18179,8 @@ static int px_http_conn_alive_fd(int fd) {
 //   "能力不可用"，建议只在确认 fd 有效时才据此提前收尾；见文档「语义」一节）。
 static LXValue bi_http_conn_alive(LXValue* args, int nargs, void* ctx) {
     (void)args; (void)nargs; (void)ctx;
+    // M198（缺陷 234）：0 参函数 —— 多余实参**响亮**（修前静默忽略）。
+    if (nargs != 0) px_error("R1002: http_conn_alive 不需要参数");
     if (!px_coro_srv_fd_get) return px_int(0);
     int fd = px_coro_srv_fd_get();
     if (fd < 0) return px_int(0);
@@ -21221,8 +21274,9 @@ static int sse_cli_prepare(LXValue* args, int nargs, const char** out_url, long 
             }
             LXValue rq = px_dict_get(args[1], "require_ct");
             if (rq.type == PX_BOOL) opt_require_ct = rq.as.i ? 1 : 0;
-            LXValue tm = px_dict_get(args[1], "timeout_ms");
-            if (tm.type == PX_INT) opt_timeout_ms = (int)tm.as.i;
+            int has_tmo = 0;
+            int64_t tmo_ms = px_opt_dur_ms(args[1], "timeout_ms", "sse_connect", &has_tmo);
+            if (has_tmo) opt_timeout_ms = (int)tmo_ms;
             opt_headers = px_dict_get(args[1], "headers");
         } else {
             px_error("R1002: sse_connect 第 2 参需要 reconnect_ms(int) 或 opts dict{reconnect_ms,sock,method,body,headers,content_type,require_ct,timeout_ms}");
@@ -22763,6 +22817,8 @@ static LXValue px_cur_session_data(void) {
 
 static LXValue bi_session_id(LXValue* args, int nargs, void* ctx) {
     (void)args; (void)nargs; (void)ctx;
+    // M198（缺陷 234）：0 参函数 —— 多余实参**响亮**（修前静默忽略）。
+    if (nargs != 0) px_error("R1002: session_id 不需要参数");
     if (g_cur_sid_set && *g_cur_sid) return px_str(g_cur_sid);
     return px_null();
 }
@@ -22812,6 +22868,8 @@ static LXValue bi_session_del(LXValue* args, int nargs, void* ctx) {
 
 static LXValue bi_session_destroy(LXValue* args, int nargs, void* ctx) {
     (void)args; (void)nargs; (void)ctx;
+    // M198（缺陷 234）：0 参函数 —— 多余实参**响亮**（修前静默忽略）。
+    if (nargs != 0) px_error("R1002: session_destroy 不需要参数");
     if (!g_cur_sid_set) return px_bool(false);
     char path[1024];
     px_session_path(path, sizeof(path), g_cur_sid);

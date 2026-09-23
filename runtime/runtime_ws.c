@@ -441,10 +441,11 @@ LXValue bi_ws_serve(LXValue* args, int nargs, void* ctx) {
     if (nargs >= 3 && args[2].type == PX_DICT) {
         LXValue hb = px_dict_get(args[2], "heartbeat");
         if (hb.type == PX_DICT) {
-            LXValue iv = px_dict_get(hb, "interval_ms");
-            if (iv.type == PX_INT && iv.as.i > 0) g_ws_hb_interval = iv.as.i;
-            LXValue to = px_dict_get(hb, "timeout_ms");
-            if (to.type == PX_INT && to.as.i > 0) g_ws_hb_timeout = to.as.i;
+            int hb_i_has = 0, hb_t_has = 0;
+            int64_t hb_i = px_opt_dur_ms(hb, "interval_ms", "ws_serve(heartbeat)", &hb_i_has);
+            if (hb_i_has && hb_i > 0) g_ws_hb_interval = hb_i;
+            int64_t hb_t = px_opt_dur_ms(hb, "timeout_ms", "ws_serve(heartbeat)", &hb_t_has);
+            if (hb_t_has && hb_t > 0) g_ws_hb_timeout = hb_t;
         }
     }
     int port = (int)args[0].as.i;

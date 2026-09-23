@@ -1,0 +1,2 @@
+print("before")
+panic("m", 2)

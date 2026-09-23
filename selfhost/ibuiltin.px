@@ -470,9 +470,11 @@ def i_call_builtin(name, args, pos):
         return Ok(os_spawn(args[0], args[1]))
     if name == "os_spawn_capture":
         # M65：子进程输出捕获（LSP 诊断器 / MCP run/test/bench 编排，双模式对齐）
-        if len(args) != 2:
+        if len(args) < 2 or len(args) > 3:
             return Err(i_r1002("os_spawn_capture 需要 (cmd, args[, opts]) 参数", pos))
-        return Ok(os_spawn_capture(args[0], args[1]))
+        if len(args) == 2:
+            return Ok(os_spawn_capture(args[0], args[1]))
+        return Ok(os_spawn_capture(args[0], args[1], args[2]))
     if name == "ffi_call":
         # M42：FFI C 桥 —— ffi_call(name, args_list) 调 runtime 注册的 C 绑定
         return i_builtin_ffi_call(args, pos)
@@ -516,9 +518,11 @@ def i_call_builtin(name, args, pos):
         return Ok(os_file_sha256(args[0]))
     if name == "os_capture":
         # M66：子进程 stdout/stderr 分离捕获 → {rc, stdout, stderr}
-        if len(args) != 2:
+        if len(args) < 2 or len(args) > 3:
             return Err(i_r1002("os_capture 需要 (cmd, args[, opts]) 参数", pos))
-        return Ok(os_capture(args[0], args[1]))
+        if len(args) == 2:
+            return Ok(os_capture(args[0], args[1]))
+        return Ok(os_capture(args[0], args[1], args[2]))
     if name == "os_popen":
         # M66：双向管道 → {pid, stdin_fd, stdout_fd}
         # M175（缺陷 14）：第 3 参 opts{"stderr":"inherit"|"pipe"|"null"} 透传（解释轨与
@@ -646,6 +650,9 @@ def i_call_builtin(name, args, pos):
             return Err(i_r1002("tz_local 不需要参数", pos))
         return Ok(tz_local())
     if name == "args":
+        # M198（缺陷 234）：args() 是 **0 参** —— 与 native 侧同文（修前两轨都静默忽略多余实参）。
+        if len(args) != 0:
+            return Err(i_r1002("args 不需要参数", pos))
         # M115：被解释程序实参 —— 规范化后与**编译产物**同形（argv[0]=程序，其后用户实参）。
         #   修复前解释轨根本没注册 `args`（`px run` 下报 R1001 未定义变量），
         #   而编译产物可用；且两轨形状不同（详见 interp.px main() 注释）。

@@ -1,0 +1,6 @@
+# 整数毫秒路径不受影响 + 取消语义不变
+var n = 0
+let id = set_timeout(fn() { n = n + 1 }, 30)
+clear_timer(id)
+sleep(120)
+print("cancelled=" + str(n == 0))

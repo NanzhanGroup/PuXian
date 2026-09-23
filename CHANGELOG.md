@@ -1,3 +1,94 @@
+## M198 · native **元数上界** ⇄ **时长族数值化**（第 76 轮 · 缺陷 234 + 235 + 229）
+
+> **主问题**：M190 量的是「三轨 **rc 分叉**」（缺陷 213 族），M197 量的是「**0 参** ⇄ arity 文案」
+> （缺陷 232/233）。两者都**看不见三轨一致**的宽容：`quic_close(1, 2)` 三个轨都**静默忽略**
+> 多余实参。同族第二条落在**时长**上：`set_timeout(fn, 1.5)` 报「ms 需要整数」——
+> 而 M195 已经让 `sleep(0.1)` **真生效**（同一族自相矛盾）；`{timeout_ms: 300.0}` /
+> `{"timeout_ms": "300"}` 被**静默忽略** ⇒ 用户以为设了超时，其实**没有超时**。
+
+### 一 先量后改（普查）
+
+| 量 | 数 |
+|---|---|
+| 注册 native（`px_set_global(… px_native(…))`） | **386** |
+| **无元数上界** | **81** = 62（固定元数只查下界）+ 19（0 / 0-1 参） |
+| 有逐参类型守卫的函数 | 263 |
+
+⚠️ **普查器自身两处缺陷**（都已修，值得记）：
+① v1 把**局部变量** `int n` 的 `n < 0` 当成元数检查 ⇒ 「无上界」少报 12 个；
+② v1 只认 `args[k]`，漏掉 `vm.c` 的 `a[k]` 写法 ⇒ 同一处少报。
+（v2 用**形参名本身**过滤 + 同时认 `args|a` ⇒ 69 → 81。）
+
+### 二 缺陷 234 · 元数上界（62 + 19 处）
+
+| 族 | 修前 | 修法 | 处数 |
+|---|---|---|---|
+| 固定元数只查下界（`quic_*` 46 · `h3_*`/`h3_qs_*` 14 · `sleep` · `chan_try_recv` · `select_try`） | `nargs < N` ⇒ 多余实参静默丢弃 | `nargs != N`（**文案逐字不动**） | **62** |
+| 0 参（`now_ms`/`args`/`session_id`/`session_destroy`/`http_conn_alive`/`mutex`/`rwlock`） | 无检查 ⇒ 静默忽略 | 新增 `nargs != 0` + `R1002: <name> 不需要参数` | 7 |
+| 0-1 参（`input` / `panic`） | 无检查 | 新增 `nargs > 1` + `R1002: … 需要 0-1 个参数` | 2 |
+| 3/4 参（`quic_connect` / `quic_connect_0rtt`） | `nargs >= 4 ? 4 : 3` ⇒ 第 5 个起丢弃 | 显式 `nargs != 3 && nargs != 4` / `!= 4` | 2 |
+
+**真变长豁免表（`examples/m198_argface/sweep_upper.py` 的 `VARIADIC`，每条给理由）**：
+`print` · `print_err` · `min` · `max` · `range`（1-3 参，`nargs == k` 是**行为分叉**而非边界）·
+`bytes_concat` · `set_timeout` / `set_interval`（≥2 参 + **尾参透传给回调**）· `quic_connect`(3/4) ·
+`quic_connect_0rtt`(4) · `input`(0-1) · `panic`(0-1)。
+**表内名字必须真的注册过**（表与代码漂移即判红 —— 负控 B 就守这条）。
+
+### 三 缺陷 229 · 时长族数值化（§6.8 推广）
+
+| 形状 | 修前 | 修后 |
+|---|---|---|
+| `set_timeout(fn, 1.5)` / `set_interval` | `R1002: set_timeout 的 ms 需要整数，实际是 float` | **1.5ms 真生效**（定时器改**纳秒**：`px_timer_create(… ns)` + `timer_sleep_ns`） |
+| `{timeout_ms: 300.0}`（JSON 科学计数/算式 ⇒ float） | **静默忽略** ⇒ 等于**没有超时** | 被采纳（`px_opt_dur_ms`，**向上取整到 ms**） |
+| `{"timeout_ms": "300"}` | 静默忽略 | **响亮** `R1002: … 的 opts.timeout_ms 需要数值（int/float），实际是 string` |
+| `fd_wait(fds, 1.5)` | `R1002: fd_wait 的 timeout_ms 需要 int` | 接受小数（向上取整） |
+| `h3_serve_read_request` / `h3_client_read_response` 的 `timeout_ms` | `px_arg_int` | `px_arg_dur_ms` |
+
+**新增 helper（`runtime.h` 跨 TU 声明）**：`px_arg_dur_ns`（已有，M195）· `px_arg_dur_ms`
+（ms 粒度 + 向上取整：**绝不早于**请求的时长）· `px_opt_dur_ms`（opts 字段**存在即校验**：
+数值取用 / `null` = 未提供 / 其它类型 `R1002` 点名）。落地站点：spawn opts · `tls_connect` ×2 ·
+`tls_upgrade` · `tcp_connect_ex` · `tcp_opt` ×2 · `http_request` · `http_get_stream` ·
+`sse_connect` · `ws_serve(heartbeat)` ×2 = **12 处**。
+
+### 四 缺陷 235 · 门自己抓出来的（M186 同族）
+
+门 [3] 的 t3 用例在**解释轨**红了：`os_spawn_capture 需要 (cmd, args[, opts]) 参数`——
+而它的**文案自称支持 opts**、native 也支持（`nargs < 2 || nargs > 3`），
+`selfhost/ibuiltin.px` 的分支却**只透传 2 参** ⇒ 传 opts 时**解释轨报错、编译轨正常**。
+⇒ 修 `os_spawn_capture` / `os_capture` 两个分支（`< 2 or > 3` + 逐档透传，**文案不动**）。
+⚠️ 顺带做了「文案自称可选参」的普查：**9 个**候选里 **7 个是假阳性**（它们用
+`len(args) != a and len(args) != b` + 逐档透传，本来就是对的）⇒ **普查器第三次骗我**，
+纪律见 §七。
+
+### 五 判据 [S9]（`examples/m198_argface/`）
+
+- **静态**：`sweep_upper.py` 全量扫 `runtime/*.c` —— 未声明 0 · 表漂移 0 · 解析不到 0；
+  另有「显式声明上界 ≥ 300」的**下限**判据（不写等式：新增 native 自然增长）。
+- **动态**：14 个错例 × **三轨**（解释/VM/C）—— `rc≠0` + **同码** + **同文** + 已进运行期（`before`）。
+- **时长族**：5 例 × 三轨（小数真生效 · 整数精度不变 · opts float 被采纳 · `fd_wait` 小数 · 取消语义不变）。
+- **负控 4 道各自独立判红**：A 静态（`quic_close` 退回下界）· B 静态（豁免表删 `set_timeout`
+  ⇒ 未声明）· C 动态 C 轨（删 `now_ms` 守卫）· D 动态 C 轨（`set_timeout` 退回只收整数）。
+
+### 六 验收
+
+```
+门 M198          M198-VERIFY-OK · 通过 35 · 失败 0（含 4 道负控）
+入库件           --rebake-all 12/12 + pxc/pxc_vm · --check-all **14/14 与当前源码一致**
+                 （PXRT-131f1b45337915ee · pxi/pxi_vm 因缺陷 235 二次重烘 PXSRC-a50616f0c6ec3cef）
+fmt              selfhost/*.px + tools/*.px 格式不符 0 个
+m116 全量门      见下（本轮注册 `m198_argface`）
+```
+
+### 七 教训（三条，都写进纪律）
+
+1. **门里的 `$?` 不可靠** —— `chk "…" "[ \$? = 0 ] && …"` 在 `eval` 上下文取到的是**别的命令**的退出码；
+   必须像 M197 的 [2] 那样**显式 `rc=$?`**。（本轮 [1] 因此假红一次。）
+2. **普查器会撒谎（第三次）** —— 「文案自称可选参」≠「未透传」：`!= a and != b` + 逐档透传是**正确写法**，
+   只看 `!= K` 会把它算成缺陷。判据必须**同时看是否有逐档透传**。
+3. **机械改写要逐条看落盘结果** —— 生成器把 `lo` 档特例写成了「嵌进错误分支」（`os_spawn_capture`
+   第一版就是坏的：`return Ok(...)` 挂在 `if len(args) < 2…` 里，`len(args)==2` 时会**掉进错误分支**）。
+   只看「已落盘 N 处」会漏 ⇒ 必须 `sed -n` 打印修复后的源。
+
 ## M197 · **全内置 0 参探针** ⇄ 原生 arity 文案（第 75 轮 · 缺陷 232 + 233）
 
 > **主问题（M196 判据 [S7] 的盲区）**：[S7] 是**静态**对拍「解释轨的字面量」⇄「原生的字面量/模板」。

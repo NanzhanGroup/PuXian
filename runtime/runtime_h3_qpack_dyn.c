@@ -248,7 +248,7 @@ static int qd_collect_fields(LXValue headers, qd_field* f, int maxf) {
 // ==================== h3_qs_open / close ====================
 static LXValue bi_qs_open(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) px_error("R1002: h3_qs_open 需要 (max_capacity: int)");
+    if (nargs != 1 || args[0].type != PX_INT) px_error("R1002: h3_qs_open 需要 (max_capacity: int)");
     int64_t cap = args[0].as.i;
     if (cap < 0) cap = 0;
     if (cap > QD_CAP_MAX) cap = QD_CAP_MAX;
@@ -266,7 +266,7 @@ static LXValue bi_qs_open(LXValue* args, int nargs, void* ctx) {
 }
 static LXValue bi_qs_close(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) return px_bool(false);
+    if (nargs != 1 || args[0].type != PX_INT) return px_bool(false);
     qd_sess* s = qd_get(args[0].as.i);
     if (!s) return px_bool(false);
     qd_tab_free(s->en, &s->en_head, &s->en_len);
@@ -322,7 +322,7 @@ static qd_entry* qd_dyn_at_abs(qd_entry* t, int head, int len, uint64_t next_abs
 // h3_qs_enc(sess, headers) -> bytes
 static LXValue bi_qs_enc(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 2 || args[0].type != PX_INT) px_error("R1002: h3_qs_enc 需要 (sess, headers: list)");
+    if (nargs != 2 || args[0].type != PX_INT) px_error("R1002: h3_qs_enc 需要 (sess, headers: list)");
     qd_sess* s = qd_get(args[0].as.i);
     if (!s) return px_null();
     qd_field f[512];
@@ -506,7 +506,7 @@ static LXValue bi_qs_enc(LXValue* args, int nargs, void* ctx) {
 // h3_qs_take_enc(sess) -> bytes（取走并清空）
 static LXValue bi_qs_take_enc(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) return px_null();
+    if (nargs != 1 || args[0].type != PX_INT) return px_null();
     qd_sess* s = qd_get(args[0].as.i);
     if (!s) return px_null();
     if (s->eout_len == 0) return px_bytes_len("", 0);
@@ -856,7 +856,7 @@ static LXValue qd_dec_section(qd_sess* s, const uint8_t* p, int len) {
 // h3_qs_dec_ingest(sess, bytes) -> bool
 static LXValue bi_qs_dec_ingest(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 2 || args[0].type != PX_INT) return px_bool(false);
+    if (nargs != 2 || args[0].type != PX_INT) return px_bool(false);
     qd_sess* s = qd_get(args[0].as.i);
     if (!s) return px_bool(false);
     if (args[1].type != PX_STR && args[1].type != PX_BYTES) return px_bool(false);
@@ -868,7 +868,7 @@ static LXValue bi_qs_dec_ingest(LXValue* args, int nargs, void* ctx) {
 // h3_qs_dec(sess, section) -> list|null
 static LXValue bi_qs_dec(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 2 || args[0].type != PX_INT) return px_null();
+    if (nargs != 2 || args[0].type != PX_INT) return px_null();
     qd_sess* s = qd_get(args[0].as.i);
     if (!s) return px_null();
     if (args[1].type != PX_STR && args[1].type != PX_BYTES) return px_null();
@@ -929,7 +929,7 @@ static int qd_varint_dec(const uint8_t* p, int maxlen, uint64_t* out) {
 // h3_settings_enc(pairs:list of [k:int,v:int]) -> bytes（完整 SETTINGS 帧 type=0x04）
 static LXValue bi_settings_enc(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || (args[0].type != PX_LIST && args[0].type != PX_TUPLE)) return px_null();
+    if (nargs != 1 || (args[0].type != PX_LIST && args[0].type != PX_TUPLE)) return px_null();
     LXObject* lst = args[0].as.obj;
     uint8_t payload[1024]; int plen = 0;
     for (int i = 0; i < lst->as.list.len; i++) {
@@ -963,7 +963,7 @@ static LXValue bi_settings_enc(LXValue* args, int nargs, void* ctx) {
 // h3_settings_dec(frame) -> list of [k,v] | null
 static LXValue bi_settings_dec(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || (args[0].type != PX_STR && args[0].type != PX_BYTES)) return px_null();
+    if (nargs != 1 || (args[0].type != PX_STR && args[0].type != PX_BYTES)) return px_null();
     const uint8_t* p = (const uint8_t*)args[0].as.obj->as.str.data;
     int plen = args[0].as.obj->as.str.len;
     int off = 0;
@@ -1004,28 +1004,28 @@ static LXValue bi_settings_dec(LXValue* args, int nargs, void* ctx) {
 // h3_qs_krc(sess) -> int：本端编码器 Known Received Count
 static LXValue bi_qs_krc(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) return px_int(-1);
+    if (nargs != 1 || args[0].type != PX_INT) return px_int(-1);
     qd_sess* s = qd_get(args[0].as.i);
     return s ? px_int((int64_t)s->en_krc) : px_int(-1);
 }
 // h3_qs_enc_ric(sess) -> int：最近一次编码字段段 RIC
 static LXValue bi_qs_enc_ric(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) return px_int(-1);
+    if (nargs != 1 || args[0].type != PX_INT) return px_int(-1);
     qd_sess* s = qd_get(args[0].as.i);
     return s ? px_int((int64_t)s->en_last_ric) : px_int(-1);
 }
 // h3_qs_dec_ric(sess) -> int：最近一次成功解码字段段 RIC
 static LXValue bi_qs_dec_ric(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) return px_int(-1);
+    if (nargs != 1 || args[0].type != PX_INT) return px_int(-1);
     qd_sess* s = qd_get(args[0].as.i);
     return s ? px_int((int64_t)s->dec_ric) : px_int(-1);
 }
 // h3_qs_ack_sec(sess, ric) -> bool：处理 Section Ack（推进 KRC，RFC 9204 §4.4.1）
 static LXValue bi_qs_ack_sec(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 2 || args[0].type != PX_INT || args[1].type != PX_INT) return px_bool(false);
+    if (nargs != 2 || args[0].type != PX_INT || args[1].type != PX_INT) return px_bool(false);
     qd_sess* s = qd_get(args[0].as.i);
     if (!s || args[1].as.i < 0) return px_bool(false);
     if ((uint64_t)args[1].as.i > s->en_krc) s->en_krc = (uint64_t)args[1].as.i;
@@ -1034,7 +1034,7 @@ static LXValue bi_qs_ack_sec(LXValue* args, int nargs, void* ctx) {
 // h3_qs_ack_inc(sess, inc) -> bool：处理 Insert Count Increment（KRC += inc，RFC 9204 §4.4.3）
 static LXValue bi_qs_ack_inc(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 2 || args[0].type != PX_INT || args[1].type != PX_INT) return px_bool(false);
+    if (nargs != 2 || args[0].type != PX_INT || args[1].type != PX_INT) return px_bool(false);
     qd_sess* s = qd_get(args[0].as.i);
     if (!s || args[1].as.i < 0) return px_bool(false);
     s->en_krc += (uint64_t)args[1].as.i;
@@ -1044,21 +1044,21 @@ static LXValue bi_qs_ack_inc(LXValue* args, int nargs, void* ctx) {
 // h3_qs_en_len(sess) -> int：本端编码表条目
 static LXValue bi_qs_en_len(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) return px_int(-1);
+    if (nargs != 1 || args[0].type != PX_INT) return px_int(-1);
     qd_sess* s = qd_get(args[0].as.i);
     return s ? px_int(s->en_len) : px_int(-1);
 }
 // h3_qs_de_len(sess) -> int：对端镜像表条目
 static LXValue bi_qs_de_len(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) return px_int(-1);
+    if (nargs != 1 || args[0].type != PX_INT) return px_int(-1);
     qd_sess* s = qd_get(args[0].as.i);
     return s ? px_int(s->de_len) : px_int(-1);
 }
 // h3_qs_ins(sess) -> int：已 ingest 插入计数
 static LXValue bi_qs_ins(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) return px_int(-1);
+    if (nargs != 1 || args[0].type != PX_INT) return px_int(-1);
     qd_sess* s = qd_get(args[0].as.i);
     return s ? px_int((int64_t)s->de_ins) : px_int(-1);
 }
