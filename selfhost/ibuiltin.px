@@ -64,6 +64,17 @@ def i_call_builtin(name, args, pos):
         return i_builtin_int(args, pos)
     if name == "float":
         return i_builtin_float(args, pos)
+    # M185（第 63 轮）：严格解析判定器（第三方 PX-DEF-002 的配套）——
+    #   判据与 int()/float() **同一谓词**（转发宿主 native，同一份 px_str_to_i64/f64），
+    #   非 string ⇒ false（不报错；与编译轨同文同语义）。
+    if name == "is_int_str" or name == "is_float_str":
+        if len(args) != 1:
+            return Err(i_r1002(name + " 需要一个参数", pos))
+        if i_type_name(args[0]) != "string":
+            return Ok(false)
+        if name == "is_int_str":
+            return Ok(is_int_str(args[0]))
+        return Ok(is_float_str(args[0]))
     if name == "range":
         return i_builtin_range(args, pos)
     if name == "sorted":
@@ -1153,27 +1164,14 @@ def i_builtin_len(args, pos):
 #   `examples/m184_num_strict/` 的「三轨对拍矩阵」（含边界与拒绝面）守住。
 #   ⚠️ 空白集以 `trim()` 为准（space/\t/\n/\r 四种），与 runtime `px_num_span` 逐字符相等。
 #   ⚠️ 正则里一律用字符类 `[.]` 而非 `\.`（少一层反斜杠转义，少一类口径漂移）。
-def i_str_is_int_literal(t):
-    if len(t) == 0:
-        return false
-    var i = 0
-    if t[0] == "+" or t[0] == "-":
-        i = 1
-    if i >= len(t):
-        return false
-    var k = i
-    while k < len(t):
-        let c = t[k]
-        if c < "0" or c > "9":
-            return false
-        k += 1
-    return true
-def i_str_is_float_literal(t):
-    if len(t) == 0:
-        return false
-    if regex_match("^(?i)[+-]?(inf|infinity|nan)$", t):
-        return true
-    return regex_match("^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$", t)
+# M185（缺陷 204）：**删掉本文件里 `i_str_is_int_literal` / `i_str_is_float_literal`
+#   这两个与原生谓词「同规则的第二份实现」**。
+#   它们是 M184 严格化之前的存在物：原生 `px_str_to_i64`/`px_str_to_f64` 负责**转换**，
+#   解释轨为了报错带 `行:列` 又用 PuXian（+正则）把**同一条规则**写了一遍。
+#   两处实现同一规则 = 结构性分叉隐患（M184 想根除的正是这类"两个地方各写一份解析"），
+#   实测两者当时的接受集**恰好**一致（未爆），但只要任一侧动一下就分叉。
+#   现在统一走原生判定器 `is_int_str`/`is_float_str`（判定与转换同源）
+#   ⇒ `is_int_str(s) ⇔ int(s) 成功` 这条等式由**构造**保证，不再靠"两边都写对"。
 def i_builtin_int(args, pos):
     if len(args) != 1:
         return Err(i_r1002("int 需要一个参数", pos))
@@ -1188,7 +1186,7 @@ def i_builtin_int(args, pos):
         return Ok(0)
     if t == "string":
         let s = args[0].trim()
-        if not i_str_is_int_literal(s):
+        if not is_int_str(s):  # M185：与 int() 同一谓词（原生）
             return Err(i_r1002("无法将 '" + args[0] + "' 转为 int", pos))
         return Ok(int(s))
     return Err(i_r1002("int 不支持此类型", pos))
@@ -1203,7 +1201,7 @@ def i_builtin_float(args, pos):
         return Ok(args[0])
     if t == "string":
         let s = args[0].trim()
-        if not i_str_is_float_literal(s):
+        if not is_float_str(s):  # M185：与 float() 同一谓词（原生）
             return Err(i_r1002("无法将 '" + args[0] + "' 转为 float", pos))
         return Ok(float(s))
     return Err(i_r1002("float 不支持此类型", pos))

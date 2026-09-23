@@ -1,0 +1,5 @@
+def main():
+    let r = json_parse_opt("{\"a\":1}")
+    print("before")
+    print(r.unwrap_err())
+    print("after")

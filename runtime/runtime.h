@@ -401,7 +401,8 @@ const char* px_val_cstr(LXValue v);
 // ==================== 输出 ====================
 
 void px_print_value(LXValue v, bool newline);
-char* px_to_string(LXValue v);  // 返回静态缓冲（每次调用覆盖）
+char* px_to_string(LXValue v);  // 返回**运行时自有**的线程局部缓冲（每次调用覆盖；调用方**不得** xfree）
+const char* px_tostr_n(LXValue v, int* out_len);  // M185：同上，并给出**字节长**（含内嵌 NUL 不截断）
 int px_unicode_len(const char* s);
 
 // ==================== 并发原语（M4.2） ====================

@@ -517,7 +517,7 @@ print("upper=" + to_upper("px"))
       字符串形态（`r/w/a/rw/w+`）表达不了"有则开、无则建、不截断"（`w+` 带 `O_TRUNC`），
       也表达不了 `O_EXCL`。字符串形态**行为零变化**。
       ⚠️ 第三参只在第二参是 int 时可用。
-## 2. native 内置速查（352 全量见 `docs/native_index.json`，本表为常用）
+## 2. native 内置速查（373 全量见 `docs/native_index.json`，本表为常用）
 
 ### 核心 / 值
 `print` `len` `range` `type` `str` `int` `float` `bool` `assert` `input` `exit` `sleep` `abs` `sqrt` `min` `max` `pow` `sorted` `reversed` `sum` `map` `filter` `reduce` `contains` `env`（⚠️ **变量不存在返回 `null`**，不是 `""` —— `str(null)` 会得到 `"null"`，取值请先判 null） `args()`（**调用式**：`px run s.px a b` 与编译产物同形 `[程序, a, b]`——M115 修；见 §1.1 事实清单）
@@ -762,9 +762,13 @@ set_timeout(fn (): print("once after 2s"), 2000)
     `if n == 2: return "x"` 会被解析器拒（`E2001 期望 换行，实际得到 return`）——
     `:` 后**必须换行 + 缩进块**。同一函数里混写（有的单行有的多行）时，报错位置会落在
     **入口文件**的某个无关行号上（本例报 `main.px:100`，真凶在 `token_cache.px`），**看行号会误导**。
-64. **`index_of`/`last_index_of` 是「字节」下标，而 `s[i:j]` 是「rune」切片（第 10 轮实测）**：
-    这是缺陷 45 的**组合陷阱** —— 串里只要有中文，`s[last_index_of(s,"(") : ...]` 取到的是错位片段
-    （不报错、静默取错值）。要定位/切分含多字节字符的串，**一律用 `split`**（rune 安全）。
+64. **`index_of`/`last_index_of` 是「rune」下标 —— 与 `len` / `s[i]` / `s[i:j]` **全程同轴**
+    （第 10 轮记为"字节下标"，**第 63 轮 M185 复测更正**）**：
+    实测 `index_of("中文ab","b") == 3`、`index_of("中x","x") == 1`、`last_index_of("中中中","中") == 2`
+    （`stdlib/strings.px` 的实现是 `len(s)` + `s[i:i+m]`，两处都是 rune 轴 ⇒ 自洽）。
+    ⇒ 所以 `s[index_of(s,"(") : len(s)]` 这类写法**是安全的**（旧版这条说它会错位，已不成立）。
+    需要 **Go 的字节下标**时用 `stdlib/go_strings.px`：`go_index` / `go_slice` / `go_prefix` / `go_truncate`
+    `byte_len`（缺陷 45 一族 —— `len("中文ab") == 4` vs Go 的 8）。
 65. **`http_stream(path, cb)` 只在 GET 上接管（第 10 轮实测）**：runtime 的分流条件是
     `if (strcmp(method, "GET") == 0)` 才查流式路由表 ⇒ **POST 的 SSE 端点无法走流式接管**
     （Go 的 `handleStream` 正是 POST）。POST 只能走普通 handler 一次性返回，**失去逐块 flush**。
@@ -2183,3 +2187,65 @@ set_timeout(fn (): print("once after 2s"), 2000)
        （实测 37/40 ~ 40/40 波动；同程序服务端用 curl 打 40/40 正常 ⇒ 疑在服务端 `resp`
        序列化或客户端解析的**安全点窗口**）；**198** —— `m37_s3` / `s3_neterr_result` 在
        **STRESS+INLINE** 下 3/3 SIGSEGV（gdb：`xmalloc` ← `px_dict` ← `http_conn_worker`）。
+
+211. **`bytes` 的「索引 / 切片 / 迭代」三面统一为字节语义（第 63 轮 · M185 收口缺陷 203）**：
+     修前**三轨四种行为** —— `b[a:b]` 解释轨 `R1002 此类型不支持切片`（VM/C 可用）；
+     `b[i]` **三轨都缺**；`for x in b` 解释轨 `此类型不可迭代`、VM/C `此类型不支持索引: bytes`
+     （而本节事实 22/35 早就写着 `b[i]` 可用 ⇒ **文档与实现不符**，照文档写第一行就崩）。
+     现在（对齐 Python `bytes` / Go `[]byte`）：
+
+     | 写法 | 结果 |
+     |---|---|
+     | `len(b)` | 字节数 |
+     | `b[i]` | **int 字节值**（0..255）；`b[-1]` 从尾；越界 `R1003 索引越界: i (len=n)` |
+     | `b[a:b]` | **bytes**（按字节；支持负边界 / 步长 / `b[::-1]`） |
+     | `for x in b` | 逐**字节值** int（中文 `bytes("你好")` 迭代出 6 个字节，**不是** 2 个字符） |
+
+     ⇒ **二进制处理（base58 / 校验和 / tar / 二进制协议）现在可以直接 `b[i]` / `b[a:b]` / 遍历**，
+     不必再 `bytes_get(b, i)` 逐字节手搓。`bytes_get`/`bytes_slice` 仍在（等价）。
+
+212. **`is_int_str(s)` / `is_float_str(s)`：严格解析的**判定器**，与 `int()`/`float()` **同一条谓词**
+     （第 63 轮 · M185 · 第三方 PX-DEF-002 的配套）**：
+     M184 把 `int()/float()` 收紧成"整体合法"之后，**任何容错解析都必须先判断** —— 这两个就是那个判断。
+
+     ```px
+     if is_int_str(s):  var n = int(s)      # ✅ 判定为真 ⇒ 转换必定成功，且值一致
+     if is_float_str(s): var f = float(s)
+     ```
+
+     · 判据**与转换同源**（同一份 `px_str_to_i64`/`px_str_to_f64`）⇒ 两处不会漂移；
+       `int` 只认十进制 `[+-]?[0-9]+`（前导零合法、须在 int64 内）；`float` 另认指数与
+       `inf/infinity/nan`（可选符号、大小写不敏感），`0x10` 十六进制浮点**拒绝**。
+     · **非 string 一律 `false`（不报错）** —— 这是谓词（回答"这串文本能严格解析吗"），
+       且它的使用场景恰恰是**类型未知的外部数据**（`env()` 可能返回 null、json 里可能是 number）；
+       `false` 是**拒绝**方向（安全侧）。想要响亮版先自己判 `type(v) == "string"`。
+     · 三条边界（实测）：`is_int_str("00000000000000000000000123")` = **true**（前导零合法）；
+       `is_int_str("9223372036854775808")` = false（超 int64）；`is_int_str(" 12 ")` = true（两端空白被 trim，
+       空白集与 `trim()` 逐字符相同：space/`\t`/`\n`/`\r`）。
+
+213. **`Result` 的方法族与分工（第 63 轮 · M185 补 `unwrap_err` · 第三方 PX-DEF-003）**：
+
+     | 方法 | Err(e) | Ok(v) |
+     |---|---|---|
+     | `is_err()` / `is_ok()` | true / false | false / true |
+     | `unwrap()` | **响亮报错**（`R1004`） | v |
+     | **`unwrap_err()`** | **e** | **响亮报错**（`R1004 unwrap_err 失败: Ok(…)`） |
+     | `err()` | e | `null` |
+     | `ok()` | `null` | v |
+
+     ⇒ **"断言 + 取值"用 `unwrap`/`unwrap_err`；"查询（可能没有）"用 `ok()/err()`**。
+     此前只有查询族（另一侧给 `null`）⇒ 写库的人拿到 `null` 分不清"Err 的值就是 null"还是"这是 Ok"，
+     于是各自写剥壳 helper（`str(Err(...))` 再截字符串）—— 现在不必了。
+
+214. **`px_to_string` 的契约：返回值是**运行时自有**的缓冲，调用方**不得 `xfree`**，且**下次调用即失效**
+     （第 63 轮 · M185 收口缺陷 205）**：
+     · 只对**非字符串**实参生效（str 返回其 data、int/float 用数字缓冲）；
+     · **容器（list/tuple/dict/result/枚举/bytes…）与 `str()` / `print` 同一渲染器**
+       ⇒ `join(",", [[1,2],[3,4]])` = `"[1, 2],[3, 4]"`、`join("-", [{"a":1}])` = `"{a: 1}"`、
+       `join(",", [bytes("ab")])` = `"<bytes 2>"`；
+     · 修前它是**四重病灶**：容器一律给 `"<object>"`（静默错值 + 与解释轨分叉）、
+       每次调用把值**打印到 stdout**、每次调用 `tmpfile()` **漏一个 fd**、
+       调用方 `xfree` 到**字符串字面量**（UB）。
+     ⇒ 自建 C 侧代码写 `px_to_string(v)` 时：**取到即用**（拷贝/拼接/printf），
+       要跨调用持有就自己拷进线程局部缓冲（`px_vhost_normalize` / `route_normalize` 就是这么做的）。
+     ⇒ 排查提示：**"fd 只涨不跌"** 或 **"程序输出里多出几段本该没打印的容器"** ⇒ 先看 `px_to_string` 调用点。

@@ -1,0 +1,32 @@
+def main():
+    let ic = ["12", "-12", "+12", "0", "-0", "007", "abc", "12ab", "", " ", "1e3", "0x10",
+              "1.5", "00000000000000000000000123", "9223372036854775807",
+              "9223372036854775808", "-9223372036854775808", "1 2", "12 ", " 12", "1_000"]
+    var i = 0
+    while i < len(ic):
+        print("I", i, ic[i], is_int_str(ic[i]))
+        i += 1
+    let fc = ["1.5", "-1.5", "+1.5", "1e3", "1E3", "1e-3", "1.2.3", "abc", "", " ", "inf",
+              "-inf", "Inf", "NaN", "infinity", "+INFINITY", "0x10", ".5", "5.", "+.5", ".", "+", "1e", "1e+"]
+    var j = 0
+    while j < len(fc):
+        print("F", j, fc[j], is_float_str(fc[j]))
+        j += 1
+    print("N1=", is_int_str(12))
+    print("N2=", is_int_str(null))
+    print("N3=", is_float_str(1.5))
+    print("N4=", is_int_str(bytes("12")))
+    print("N5=", is_int_str(true))
+    print("N6=", is_float_str([1]))
+    print("E1=", is_int_str("42") and int("42") == 42)
+    print("E2=", is_int_str("0000123") and int("0000123") == 123)
+    print("E3=", is_int_str("-0") and int("-0") == 0)
+    print("E4=", is_float_str("1e3") and float("1e3") == 1000.0)
+    print("E5=", is_float_str(".5") and float(".5") == 0.5)
+    print("E6=", is_int_str(" 12 ") and int(" 12 ") == 12)
+    # unwrap_err：Err 上取值（正侧）
+    let r = json_parse_opt("{bad")
+    print("U1=", r.is_err())
+    print("U2=", len(str(r.unwrap_err())) > 0)
+    let r2 = json_parse_opt("{\"a\":1}")
+    print("U3=", r2.is_ok(), r2.err() == null)

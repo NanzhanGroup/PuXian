@@ -8,7 +8,11 @@
 ## 五处重复实现 = 语言级缺口，按「发现即修、不绕过」收进 stdlib 统一提供。
 ##
 ## 语义对齐 Go `strings.Index` / `strings.LastIndex`（空 needle → 0 / len(s)）。
-## 下标为**字节序**下标（与 `s[a:b]` 切片同轴）。
+## 下标为**字符（rune）序**下标 —— 与 `len(s)` / `s[i]` / `s[a:b]` 切片**同轴**
+## （M185 复测更正：旧注释写"字节序下标（与切片同轴）"，两处都错 —— 切片早已是 rune 轴，
+##   而本文件的 `index_of`/`last_index_of` 也是 rune 轴；实测 `index_of("中文ab","b") == 3`、
+##   `index_of("中x","x") == 1`）。
+## 需要 Go 那种**字节**下标时用 `stdlib/go_strings.px` 的 `go_index` / `go_slice`（缺陷 45 一族）。
 ## index_of(s, sub) → sub 在 s 中**首次**出现的下标；不存在返回 -1；sub 为空串返回 0。
 def index_of(s, sub):
     var n = len(s)

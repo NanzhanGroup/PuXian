@@ -416,6 +416,17 @@ def i_iter(v, pos):
         return Ok(v)
     if t == "tuple":
         return Ok(list(v))
+    if t == "bytes":
+        # M185（第 63 轮 · 缺陷 203）：bytes **迭代** ⇒ 逐字节 int（0..255），
+        #   对齐 Python `for b in bytes` / Go `for _, b := range []byte`。
+        #   修前解释轨 `R1002 此类型不可迭代`、VM/C 轨 `R1002 此类型不支持索引: bytes`
+        #   ⇒ 三轨都缺且**词条还不同**（同一份源码三种行为）。
+        var bout = []
+        var bi = 0
+        while bi < len(v):
+            bout.append(bytes_get(v, bi))
+            bi += 1
+        return Ok(bout)
     if t == "string":
         var out = []
         var i = 0
@@ -464,6 +475,15 @@ def i_index(v, idx, pos):
             return Err(r.err())
         var i = r.unwrap()
         return Ok(v[i])
+    if t == "bytes":
+        # M185（第 63 轮 · 缺陷 203）：bytes 整数索引 ⇒ int 字节值（0..255），
+        #   对齐 Python `bytes[i]` / Go `[]byte[i]`；负索引由 i_as_index 归一，
+        #   越界 R1003 同码同文（与 list/string 一致）。修前落到末尾 `R1002 此类型不支持索引`。
+        let bn = len(v)
+        let br = i_as_index(idx, bn, pos)
+        if br.is_err():
+            return Err(br.err())
+        return Ok(bytes_get(v, br.unwrap()))
     if t == "dict":
         if type(idx) != "string":
             return Err(i_r1002("字典索引键必须是字符串", pos))
@@ -555,6 +575,23 @@ def i_slice_indices(start, end, step, n):
     return {"ok": true, "idxs": idxs, "err": ""}
 def i_slice(v, start, end, step, pos):
     let t = i_type_name(v)
+    if t == "bytes":
+        # M185（第 63 轮 · 缺陷 203）：bytes 切片 ⇒ **bytes**（按字节），与 VM/C 轨
+        #   （`px_slice` 的 kind==3 分支）逐字节一致；下标语义复用 `i_slice_indices`
+        #   （与 list/tuple/string 同一条路径 ⇒ 负边界/步长/clamp 不会自成一套）。
+        #   修前解释轨 `R1002 此类型不支持切片`，而编译两轨可用 ⇒ 三轨分叉。
+        #   实现：逐字节取 int → 2 位十六进制 → `hex_to_bytes` 一次成型
+        #   （避开 `bytes_concat` 的 O(n²)；`join` 走 M154 的线性口径）。
+        let br = i_slice_indices(start, end, step, len(v))
+        if not br["ok"]:
+            return Err(i_r1002(br["err"], pos))
+        let bidxs = br["idxs"]
+        var bparts = []
+        var bii = 0
+        while bii < len(bidxs):
+            bparts.append(int_to_hex(bytes_get(v, bidxs[bii]), 2))
+            bii += 1
+        return Ok(hex_to_bytes(join("", bparts)))
     if t == "string":
         # M111-S2：不再物化 n 元字符表；输出侧改「按索引取字符 → join 一次成串」，
         # 同时消除 `out += …` 的二次方拼接。等价性：取到的字符序列与索引表逐项相同。

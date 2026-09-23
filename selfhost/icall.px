@@ -301,6 +301,15 @@ def i_result_method(r, name, args, pos):
         if r.is_err():
             return Err(i_r1004("unwrap 失败: Err(" + i_to_str(r.err()) + ")", pos))
         return Ok(r.unwrap())
+    if name == "unwrap_err":
+        # M185（第 63 轮 · 第三方 PX-DEF-003）：`unwrap` 的**对偶** —— 断言必为 Err 并取值；
+        #   Ok 上调用 ⇒ 响亮 R1004（不静默返回 null）。`ok()/err()` 是**查询**语义（另一侧给 null），
+        #   写库要的是「断言 + 取值」这一个动作。
+        if len(args) != 0:
+            return Err(i_r1005("unwrap_err 不接受参数", pos))
+        if r.is_ok():
+            return Err(i_r1004("unwrap_err 失败: Ok(" + i_to_str(i_result_payload(r)) + ")", pos))
+        return Ok(r.err())
     if name == "ok":
         if r.is_ok():
             return Ok(r.ok())

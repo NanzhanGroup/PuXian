@@ -462,6 +462,20 @@ run m183_gc_root_handover bash examples/m183_gc_root_handover/verify.sh
 #   ③ mkdir 六条语义断言（含 `IF_MKDIR_TRUE` 直盯"不再永假"）；④ list_dir_opt 五条 + `before` 必打印；
 #   ⑤ 负控 A/B/C（退回 atoll 直通 / 退回 px_null / 删注册行）各自独立判红。
 run m184_num_fs_strict bash examples/m184_num_fs_strict/verify.sh
+# M185（第 63 轮）：**`bytes` 三面统一 + 严格解析判定器 + Result 对偶 + `px_to_string` 收口**。
+#   203 = `bytes` 的索引/切片/迭代三面**三轨四种行为**（切片：解释轨缺；索引：三轨都缺；
+#        迭代：解释轨"不可迭代" / VM·C "不支持索引"）—— 而速查表事实 22/35 却写着 `b[i]` 可用
+#        （文档与实现不符）。统一为字节语义：`b[i]`→int(0..255) · `b[a:b]`→bytes · `for x in b`→逐字节 int。
+#   204 = 解释轨 `i_str_is_int_literal`/`i_str_is_float_literal` 是**原生谓词的翻版**
+#        （同一规则两处实现）⇒ 删掉，改调 `is_int_str`/`is_float_str`。
+#   205 = `px_to_string` **四重病灶**：容器恒 `"<object>"`（静默错值 + 三轨分叉）、
+#        每次调用把值打到 **stdout**、每次调用 `tmpfile()` **漏一个 fd**、调用方 `xfree` 到字面量（UB）。
+#       修法 = 容器走 `px_fmt_value_n`（与 `str()`/`print` 同一渲染器）+ 线程局部单槽。
+# 判据：① bytes 三面 25 行三轨逐字节一致；② 判定器 60 行（含 E1..E6 判定↔转换等价性）；
+#   ③ 渲染收口（容器渲染 + **fd 增量=0** + stdout 行数恰为 12）；④ 拒绝侧 4 例 × 三轨同码同文；
+#   ⑤ 负控 A/B/C/D（runtime 去 bytes 索引 / 退回 "<object>" / 判定器恒真 / 解释轨去 bytes 迭代）
+#      各自独立判红 + 源逐字节还原。
+run m185_bytes_face bash examples/m185_bytes_face/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们
