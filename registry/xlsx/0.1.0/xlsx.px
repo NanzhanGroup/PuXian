@@ -1,0 +1,68 @@
+# ============================================================
+# 普贤生态库：registry/xlsx —— 最小 .xlsx 写器
+# ------------------------------------------------------------
+# 纯函数库（构建 parts 无 IO；写出时调 zip_pack），编译轨验证
+# （解释轨缺 zip native，见 PX-DEF-021；类似 workerpool 仅编译 PASS）。
+# 对齐 Python openpyxl / Rust rust_xlsxwriter 心智（0.1.0 最小写器子集）：
+#   xsx_new()                      → dict       新建文档（无工作表）
+#   xsx_add(doc, name, rows)       → dict       追加工作表（返回新 doc）
+#     rows   = [[cell, ...], ...]（首行可作为表头）
+#     cell   = str（inlineStr）| int/float（数字）| null（空单元格）
+#   xsx_write(doc, path)           → Ok | Err   写出 .xlsx（zip_pack）
+#   xsx_parts(doc)                 → dict       内部 parts（测试/调试用）
+#   xsx_col_letter(idx)            → str        0-based 列号 → "A"/"Z"/"AA"...
+# 结构：Content_Types + rels + workbook + 每个 worksheet + 最小 styles；
+#   字符串用 inlineStr（免 sharedStrings），数字用 <v>。
+# ============================================================
+import "xlsx_xml.px"
+# 新建文档
+def xsx_new():
+    var d = {}
+    d.set("sheets", [])
+    return d
+# 追加工作表：name 区分大小写，rows 为 list of list
+def xsx_add(doc, name, rows):
+    var nd = {}
+    var sheets = doc["sheets"]
+    var nsh = []
+    var i = 0
+    while i < len(sheets):
+        nsh.append(sheets[i])
+        i += 1
+    var sh = {}
+    sh.set("name", name)
+    sh.set("rows", rows)
+    nsh.append(sh)
+    nd.set("sheets", nsh)
+    return nd
+# 列字母：0→A, 25→Z, 26→AA, 27→AB ...
+def xsx_col_letter(idx):
+    var out = ""
+    var n = idx + 1
+    while n > 0:
+        var rem = (n - 1) % 26
+        out = chr(65 + rem) + out
+        n = (n - 1) // 26
+    return out
+# 生成全部 parts（dict 路径→内容）
+def xsx_parts(doc):
+    var sheets = doc["sheets"]
+    var parts = {}
+    parts.set("[Content_Types].xml", xp_content_types(sheets))
+    parts.set("_rels/.rels", xp_root_rels())
+    parts.set("xl/workbook.xml", xp_workbook(sheets))
+    parts.set("xl/_rels/workbook.xml.rels", xp_workbook_rels(sheets))
+    parts.set("xl/styles.xml", xp_styles())
+    var i = 0
+    while i < len(sheets):
+        var p = "xl/worksheets/sheet" + str(i + 1) + ".xml"
+        parts.set(p, xp_worksheet(sheets[i]["rows"]))
+        i += 1
+    return parts
+# 写出 .xlsx（zip_pack 需编译轨）
+def xsx_write(doc, path):
+    var parts = xsx_parts(doc)
+    var ok = zip_pack(parts, path)
+    if not ok:
+        return Err("xlsx: zip 写出失败 " + path)
+    return Ok(0)

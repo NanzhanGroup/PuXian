@@ -1,0 +1,92 @@
+# ============================================================
+# 普贤生态库：registry/uuid —— 通用唯一标识符（UUID v4）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go google/uuid + 标准库 uuid.Parse 心智：
+#   uuid_v4()            → "123e4567-e89b-4122-a456-426614174000"（标准 36 字符）
+#   uuid_parse(s)        → Ok("123e4567…" 32hex) | Err(msg)（对齐 uuid.Parse）
+#   uuid_valid(s)        → true / false
+#   uuid_format(hex32)   → 标准 36 字符（对齐 uuid.UUID.String()）
+# 依赖：os_random_hex（M66 原生）—— 无需新 native，纯语言实现。
+# ============================================================
+const UUID_HEX = "0123456789abcdef"
+# ---- 内部工具 ----
+# 十六进制字符 → 数值（0-15），非法返回 -1
+def uuid_hexval(c):
+    var i = 0
+    while i < 16:
+        if UUID_HEX[i] == c:
+            return i
+        i += 1
+    return -1
+# 数值（0-15）→ 十六进制字符；越界回退 "0"
+def uuid_hexchar(n):
+    if n < 0 or n > 15:
+        return "0"
+    return UUID_HEX[n]
+# 字符串是否 32 位全 hex
+def uuid_is_hex32(h):
+    if len(h) != 32:
+        return false
+    var i = 0
+    while i < 32:
+        if uuid_hexval(h[i]) < 0:
+            return false
+        i += 1
+    return true
+# ---- 公开 API ----
+# 生成 UUID v4（RFC 4122）：随机 128 bit，第 13 位 = 版本 4，
+# 第 17 位 = variant 10xx（8/9/a/b）。
+def uuid_v4():
+    var h = os_random_hex(16)
+    var hi = ""
+    var i = 0
+    while i < 32:
+        var c = h[i]
+        if i == 12:
+            c = "4"
+        if i == 16:
+            var v = uuid_hexval(c)
+            c = uuid_hexchar(8 + (v % 4))
+        hi = hi + c
+        i += 1
+    return uuid_format(hi)
+# 32 位 hex → 标准 36 字符；非法输入返回 ""
+def uuid_format(hex32):
+    if not uuid_is_hex32(hex32):
+        return ""
+    return (hex32[0:8] + "-" + hex32[8:12] + "-" + hex32[12:16]
+        +"-" + hex32[16:20] + "-" + hex32[20:32])
+# 解析 UUID 字符串 → Ok(32hex) | Err(msg)。
+# 接受：标准 8-4-4-4-12、带 { } 包裹、或 32 位无连字符形式。
+def uuid_parse(s):
+    var t = s
+    if starts_with(t, "{"):
+        t = t[1:len(t) - 1]
+    if ends_with(t, "}"):
+        t = t[0:len(t) - 1]
+    var hexs = ""
+    if contains(t, "-"):
+        var parts = split(t, "-")
+        if len(parts) != 5:
+            return Err("uuid: 连字符段数必须为 5")
+        var lens = [8, 4, 4, 4, 12]
+        var j = 0
+        while j < 5:
+            if len(parts[j]) != lens[j]:
+                return Err("uuid: 段长度不正确")
+            hexs = hexs + parts[j]
+            j += 1
+    else:
+        hexs = t
+    if len(hexs) != 32:
+        return Err("uuid: 无效长度")
+    if not uuid_is_hex32(hexs):
+        return Err("uuid: 非 hex 字符")
+    return Ok(hexs)
+# 校验 UUID 字符串是否合法（对齐 Go uuid.Parse 的 err == nil）
+def uuid_valid(s):
+    var r = uuid_parse(s)
+    if r.is_err():
+        return false
+    return true

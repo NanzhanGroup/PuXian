@@ -1,0 +1,141 @@
+# ============================================================
+# 普贤生态库：registry/datastruct —— 常用数据结构
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对照 Go container/heap、container/list 心智（0.1.0）：
+#   最小堆：ds_heap_new/push(prio,v)/pop/peek/size
+#   LRU：   ds_lru_new/get/set/has/len（容量淘汰，MRU 在后）
+#   队列：  ds_queue_new/push/pop/peek/len
+#   栈：    ds_stack_new/push/pop/peek/len
+# 实现说明：
+#   - 堆用数组 + 每次 push 后排序实现（O(n log n)，0.1.0 简单正确；
+#     大数据量请换理想二叉堆）
+#   - 无 list 删除原语，LRU/队列入队出队用切片重建（元素少时开销可忽略）
+# ============================================================
+
+# ---- 最小堆 ----
+
+def ds_heap_new():
+    return {"items": []}
+
+# 插入（prio 越小越先出；同 priority 按插入序稳定——0.1.0 不保证）
+def ds_heap_push(h, prio, v):
+    var items = h["items"]
+    items.append([prio, v])
+    h.set("items", sorted(items))
+
+def ds_heap_pop(h):
+    var items = h["items"]
+    if len(items) == 0:
+        return Err("datastruct: 空堆")
+    var top = items[0]
+    h.set("items", items[1:len(items)])
+    return Ok(top[1])
+
+def ds_heap_peek(h):
+    var items = h["items"]
+    if len(items) == 0:
+        return Err("datastruct: 空堆")
+    return Ok(items[0][1])
+
+def ds_heap_size(h):
+    return len(h["items"])
+
+# ---- LRU 缓存 ----
+
+def ds_lru_new(cap):
+    return {"cap": cap, "map": {}, "order": []}
+
+# 命中 → 移到 MRU（末尾），返回值
+def ds_lru_get(cache, k, default=null):
+    if cache["map"].has(k):
+        ds_lru_touch(cache, k)
+        return cache["map"][k]
+    return default
+
+def ds_lru_has(cache, k):
+    return cache["map"].has(k)
+
+def ds_lru_len(cache):
+    return len(cache["map"].keys())
+
+# 内部：把 k 移到 order 末尾
+def ds_lru_touch(cache, k):
+    var order = []
+    var i = 0
+    while i < len(cache["order"]):
+        if cache["order"][i] != k:
+            order.append(cache["order"][i])
+        i += 1
+    order.append(k)
+    cache.set("order", order)
+
+# set：存在则刷新并 touch；新键且满 → 淘汰最久未用（头部）
+def ds_lru_set(cache, k, v):
+    if cache["map"].has(k):
+        cache["map"].set(k, v)
+        ds_lru_touch(cache, k)
+        return
+    if len(cache["order"]) >= cache["cap"]:
+        var old = cache["order"][0]
+        var nm = {}
+        var keys = cache["map"].keys()
+        var j = 0
+        while j < len(keys):
+            if keys[j] != old:
+                nm.set(keys[j], cache["map"][keys[j]])
+            j += 1
+        cache.set("map", nm)
+        cache.set("order", cache["order"][1:len(cache["order"])])
+    cache["map"].set(k, v)
+    cache["order"].append(k)
+
+# ---- 队列（FIFO）----
+
+def ds_queue_new():
+    return {"items": []}
+
+def ds_queue_push(q, v):
+    q["items"].append(v)
+
+def ds_queue_pop(q):
+    var items = q["items"]
+    if len(items) == 0:
+        return Err("datastruct: 空队列")
+    var v = items[0]
+    q.set("items", items[1:len(items)])
+    return Ok(v)
+
+def ds_queue_peek(q):
+    var items = q["items"]
+    if len(items) == 0:
+        return Err("datastruct: 空队列")
+    return Ok(items[0])
+
+def ds_queue_len(q):
+    return len(q["items"])
+
+# ---- 栈（LIFO）----
+
+def ds_stack_new():
+    return {"items": []}
+
+def ds_stack_push(s, v):
+    s["items"].append(v)
+
+def ds_stack_pop(s):
+    var items = s["items"]
+    if len(items) == 0:
+        return Err("datastruct: 空栈")
+    var v = items[len(items) - 1]
+    s.set("items", items[0:len(items) - 1])
+    return Ok(v)
+
+def ds_stack_peek(s):
+    var items = s["items"]
+    if len(items) == 0:
+        return Err("datastruct: 空栈")
+    return Ok(items[len(items) - 1])
+
+def ds_stack_len(s):
+    return len(s["items"])

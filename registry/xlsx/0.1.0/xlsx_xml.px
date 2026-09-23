@@ -1,0 +1,132 @@
+# ============================================================
+# 普贤生态库：registry/xlsx —— XML parts 生成（内部模块）
+# ------------------------------------------------------------
+# 被 xlsx.px import；函数 xp_* 供 xlsx.px 与测试使用。
+# 生成最小合法 OpenXML Spreadsheet 包的各 XML part。
+# ============================================================
+# XML 转义（& < > 与引号）
+def xp_esc(s):
+    var out = ""
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        if c == "&":
+            out = out + "&amp;"
+        elif c == "<":
+            out = out + "&lt;"
+        elif c == ">":
+            out = out + "&gt;"
+        elif c == "\"":
+            out = out + "&quot;"
+        else:
+            out = out + c
+        i += 1
+    return out
+# 单元格类型判定
+def xp_is_num(c):
+    return type(c) == "int" or type(c) == "float"
+# 单元格 → <c ...>...</c>
+def xp_cell(cell, col, row):
+    var ref = xsx_col_letter_ns(col) + str(row + 1)
+    if cell == null:
+        return ""
+    if xp_is_num(cell):
+        return "<c r=\"" + ref + "\"><v>" + str(cell) + "</v></c>"
+    if type(cell) == "bool":
+        var bv = "0"
+        if cell:
+            bv = "1"
+        return "<c r=\"" + ref + "\" t=\"b\"><v>" + bv + "</v></c>"
+    # 字符串 inlineStr
+    return "<c r=\"" + ref + "\" t=\"inlineStr\"><is><t>" + xp_esc(str(cell)) + "</t></is></c>"
+# 列字母（命名空间避让 xlsx.px 的 xsx_col_letter）
+def xsx_col_letter_ns(idx):
+    var out = ""
+    var n = idx + 1
+    while n > 0:
+        var rem = (n - 1) % 26
+        out = chr(65 + rem) + out
+        n = (n - 1) // 26
+    return out
+# worksheet part
+def xp_worksheet(rows):
+    var body = ""
+    var r = 0
+    while r < len(rows):
+        var row = rows[r]
+        var cells = ""
+        var c = 0
+        while c < len(row):
+            cells = cells + xp_cell(row[c], c, r)
+            c += 1
+        body = body + "<row r=\"" + str(r + 1) + "\">" + cells + "</row>"
+        r += 1
+    return "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n" +
+        "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">" +
+        "<sheetData>" + body + "</sheetData></worksheet>"
+# [Content_Types].xml（每 sheet 一个 Override）
+def xp_content_types(sheets):
+    var overrides = ""
+    var i = 0
+    while i < len(sheets):
+        var p = "/xl/worksheets/sheet" + str(i + 1) + ".xml"
+        overrides = overrides + "<Override PartName=\"" + p +
+            "\" ContentType=\"application/vnd.openxmlformats-" +
+                "officedocument.spreadsheetml.worksheet+xml\"/>"
+        i += 1
+    return "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n" +
+        "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">" +
+        "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-" +
+        "package.relationships+xml\"/>" +
+        "<Default Extension=\"xml\" ContentType=\"application/xml\"/>" +
+        "<Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-" +
+        "officedocument.spreadsheetml.sheet.main+xml\"/>" +
+        "<Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-" +
+        "officedocument.spreadsheetml.styles+xml\"/>" +
+        overrides + "</Types>"
+# _rels/.rels
+def xp_root_rels():
+    return "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n" +
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">" +
+        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/" +
+            "officeDocument/2006/relationships/officeDocument\" " +
+        "Target=\"xl/workbook.xml\"/></Relationships>"
+# xl/workbook.xml
+def xp_workbook(sheets):
+    var body = ""
+    var i = 0
+    while i < len(sheets):
+        body = body + "<sheet name=\"" + xp_esc(sheets[i]["name"]) + "\" sheetId=\"" + str(i + 1) +
+            "\" r:id=\"rId" + str(i + 1) + "\"/>"
+        i += 1
+    return "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n" +
+        "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" " +
+        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">" +
+        "<sheets>" + body + "</sheets></workbook>"
+# xl/_rels/workbook.xml.rels
+def xp_workbook_rels(sheets):
+    var body = ""
+    var i = 0
+    while i < len(sheets):
+        body = body + "<Relationship Id=\"rId" + str(i + 1) +
+            "\" Type=\"http://schemas.openxmlformats.org/" +
+                "officeDocument/2006/relationships/worksheet\" " +
+            "Target=\"worksheets/sheet" + str(i + 1) + ".xml\"/>"
+        i += 1
+    var last = str(len(sheets) + 1)
+    body = body + "<Relationship Id=\"rId" + last +
+        "\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" " +
+        "Target=\"styles.xml\"/>"
+    return "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n" +
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">" +
+        body + "</Relationships>"
+# xl/styles.xml（最小默认样式）
+def xp_styles():
+    return "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n" +
+        "<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">" +
+        "<fonts count=\"1\"><font><sz val=\"11\"/><name val=\"Calibri\"/></font></fonts>" +
+        "<fills count=\"1\"><fill><patternFill patternType=\"none\"/></fill></fills>" +
+        "<borders count=\"1\"><border/></borders>" +
+        "<cellStyleXfs count=\"1\"><xf/></cellStyleXfs>" +
+        "<cellXfs count=\"1\"><xf/></cellXfs>" +
+        "</styleSheet>"

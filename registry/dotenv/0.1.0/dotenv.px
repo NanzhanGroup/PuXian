@@ -1,0 +1,156 @@
+# ============================================================
+# 普贤生态库：registry/dotenv —— .env 配置解析
+# ------------------------------------------------------------
+# 纯函数库（无 IO 于 dotenv_parse；dotenv_load 读文件），编译与解释双模式一致。
+# 对齐 Python python-dotenv / Go joho/godotenv 心智（0.1.0 子集）：
+#   dotenv_parse(s) → dict       纯解析，永不失败；非法行跳过
+#   dotenv_load(path) → Ok(dict) | Err   读文件 + 解析
+# 支持：
+#   KEY=value / KEY = "quoted" / 'single' / export KEY=value
+#   # 注释行；行内注释（未加引号的值中 " #" 起截断）
+#   "..." 内转义 \n \t \r \\ \"
+# 规则：
+#   - 值一律为字符串（对齐 python-dotenv）
+#   - key 限 [A-Za-z0-9_]，不以数字开头；非法 key 的行跳过
+#   - 未闭合双引号：余下全作字面量（宽松）
+# 说明：不提供 setenv/覆盖系统环境（native 无 setenv 语义），
+#   由调用方决定合并策略（如 env 优先 → .env 兜底）。
+# ============================================================
+
+def de_is_key_char(c):
+    return (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or (c >= "0" and c <= "9") or c == "_"
+
+# 行 → {key, value} | null（跳过该行）
+def de_parse_line(line):
+    var t = line
+    var n = len(t)
+    var st = 0
+    while st < n:
+        var ch = t[st]
+        if ch == " " or ch == "\t" or ch == "\r":
+            st += 1
+        else:
+            break
+    if st >= n:
+        return null
+    if t[st] == "#":
+        return null
+    var p = st
+    if t[p] == "e" or t[p] == "E":
+        if t[p:p + 6] == "export" or t[p:p + 6] == "EXPORT":
+            var after = p + 6
+            if after >= n or t[after] == " " or t[after] == "\t":
+                while after < n and (t[after] == " " or t[after] == "\t"):
+                    after += 1
+                p = after
+    # 找 =
+    var eq = -1
+    var i = p
+    while i < n:
+        if t[i] == "=":
+            eq = i
+            break
+        i += 1
+    if eq < 0:
+        return null
+    var key = t[p:eq]
+    # key 去尾部空白
+    var ke = len(key)
+    while ke > 0 and (key[ke - 1] == " " or key[ke - 1] == "\t"):
+        ke -= 1
+    key = key[0:ke]
+    if len(key) == 0:
+        return null
+    if de_is_key_char(key[0]) and not (key[0] >= "0" and key[0] <= "9"):
+        var k2 = ""
+        var valid = true
+        var k = 0
+        while k < len(key):
+            if not de_is_key_char(key[k]):
+                valid = false
+                break
+            k2 = k2 + key[k]
+            k += 1
+        if valid and k2 == key:
+            var val = t[eq + 1:len(t)]
+            var vs = 0
+            while vs < len(val) and (val[vs] == " " or val[vs] == "\t" or val[vs] == "\r"):
+                vs += 1
+            val = val[vs:len(val)]
+            var ve = len(val)
+            while ve > 0 and (val[ve - 1] == " " or val[ve - 1] == "\t" or val[ve - 1] == "\r"):
+                ve -= 1
+            val = val[0:ve]
+            if len(val) > 0 and val[0] == "\"":
+                val = de_unquote_double(val)
+            elif len(val) > 0 and val[0] == "'":
+                val = de_unquote_single(val)
+            else:
+                val = de_strip_inline_comment(val)
+            return {"key": key, "value": val}
+    return null
+
+def de_strip_inline_comment(v):
+    var i = 0
+    while i < len(v):
+        if v[i] == "#" and i > 0 and (v[i - 1] == " " or v[i - 1] == "\t"):
+            var cut = v[0:i]
+            var e = len(cut)
+            while e > 0 and (cut[e - 1] == " " or cut[e - 1] == "\t"):
+                e -= 1
+            return cut[0:e]
+        i += 1
+    return v
+
+def de_unquote_single(v):
+    if len(v) >= 2 and v[len(v) - 1] == "'":
+        return v[1:len(v) - 1]
+    return v[1:len(v)]
+
+def de_unquote_double(v):
+    var body = v
+    var end = len(body)
+    if end >= 2 and body[end - 1] == "\"":
+        body = body[0:end - 1]
+    body = body[1:len(body)]
+    var out = ""
+    var i = 0
+    while i < len(body):
+        var c = body[i]
+        if c == "\\" and i + 1 < len(body):
+            var nx = body[i + 1]
+            if nx == "n":
+                out = out + "\n"
+            elif nx == "t":
+                out = out + "\t"
+            elif nx == "r":
+                out = out + "\r"
+            elif nx == "\\":
+                out = out + "\\"
+            elif nx == "\"":
+                out = out + "\""
+            else:
+                out = out + nx
+            i += 2
+        else:
+            out = out + c
+            i += 1
+    return out
+
+def dotenv_parse(s):
+    var out = {}
+    var lines = split(s, "\n")
+    var i = 0
+    while i < len(lines):
+        var rec = de_parse_line(lines[i])
+        if rec != null:
+            if not out.has(rec["key"]):
+                out.set(rec["key"], rec["value"])
+        i += 1
+    return out
+
+def dotenv_load(path):
+    var r = read_file_opt(path)
+    if r.is_err():
+        return Err("dotenv: 读取失败: " + path)
+    return Ok(dotenv_parse(r.unwrap()))

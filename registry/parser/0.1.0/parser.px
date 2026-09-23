@@ -1,0 +1,297 @@
+# ============================================================
+# 普贤生态库：registry/parser —— 解析器组合子
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Rust nom / Python parsimonious 心智（0.1.0 子集）：
+#   约定：解析器 = 函数 (input, pos) → Ok([新pos, 值]) | Err(错误信息)
+#   基本原语：
+#     p_char(c) / p_str(s) / p_any / p_digit / p_letter / p_alnum
+#     p_space / p_take_while(pred) / p_end
+#   组合子：
+#     p_seq(parsers)      → [值...]（全部成功）
+#     p_alt(parsers)      → 首个成功分支的值
+#     p_many(p) / p_many1(p) → [值...]（零次/一次以上）
+#     p_opt(p)            → 值 或 null（不失败）
+#     p_map(p, f)         → 转换结果
+#     p_between(open, inner, close)
+#     p_sep_by(p, sep) / p_sep_by1(p, sep)
+#     p_ws                → 跳过空白（永不失败）
+#     p_int               → 有符号整数
+# 说明：
+#   - 错误信息带位置（"位置 N: ..."），alt 只保存最后分支的错误
+#   - 解析器以函数值传递（闭包捕获按引用，M160 修复后三轨一致）
+# ============================================================
+# ---- 内部 ----
+# 错误信息
+def p_errmsg(pos, msg):
+    return "位置 " + str(pos) + ": " + msg
+# 空白判定
+def ps_is_ws(c):
+    return c == " " or c == "\t" or c == "\n" or c == "\r"
+# 取第 i 个字符（rune）
+def p_char_at(input, pos):
+    if pos < len(input):
+        return input[pos]
+    return ""
+# ---- 基本原语 ----
+# 任意单字符
+def p_any(input, pos):
+    if pos >= len(input):
+        return Err(p_errmsg(pos, "期望任意字符，输入已结束"))
+    return Ok([pos + 1, input[pos]])
+# 匹配指定字符
+def p_char(c):
+    var g = fn(input, pos):
+        if pos >= len(input):
+            return Err(p_errmsg(pos, "期望字符 '" + c + "'，输入已结束"))
+        if input[pos] == c:
+            return Ok([pos + 1, c])
+        return Err(p_errmsg(pos, "期望字符 '" + c + "'，实际 '" + input[pos] + "'"))
+    return g
+# 匹配字符串
+def p_str(s):
+    var g = fn(input, pos):
+        if pos + len(s) > len(input):
+            return Err(p_errmsg(pos, "期望 '" + s + "'，输入不足"))
+        var i = 0
+        while i < len(s):
+            if input[pos + i] != s[i]:
+                return Err(p_errmsg(pos, "期望 '" + s + "'，实际不匹配"))
+            i += 1
+        return Ok([pos + len(s), s])
+    return g
+# 数字字符
+def p_digit(input, pos):
+    if pos >= len(input):
+        return Err(p_errmsg(pos, "期望数字，输入已结束"))
+    var c = input[pos]
+    if c >= "0" and c <= "9":
+        return Ok([pos + 1, c])
+    return Err(p_errmsg(pos, "期望数字，实际 '" + c + "'"))
+# ASCII 字母
+def p_letter(input, pos):
+    if pos >= len(input):
+        return Err(p_errmsg(pos, "期望字母，输入已结束"))
+    var c = input[pos]
+    var o = ord(c)
+    if (o >= 65 and o <= 90) or (o >= 97 and o <= 122):
+        return Ok([pos + 1, c])
+    return Err(p_errmsg(pos, "期望字母，实际 '" + c + "'"))
+# ASCII 字母或数字
+def p_alnum(input, pos):
+    if pos >= len(input):
+        return Err(p_errmsg(pos, "期望字母数字，输入已结束"))
+    var c = input[pos]
+    var o = ord(c)
+    if (o >= 48 and o <= 57) or (o >= 65 and o <= 90) or (o >= 97 and o <= 122):
+        return Ok([pos + 1, c])
+    return Err(p_errmsg(pos, "期望字母数字，实际 '" + c + "'"))
+# 空白字符（空格/制表/换行）
+def p_space(input, pos):
+    if pos >= len(input):
+        return Err(p_errmsg(pos, "期望空白，输入已结束"))
+    var c = input[pos]
+    if ps_is_ws(c):
+        return Ok([pos + 1, c])
+    return Err(p_errmsg(pos, "期望空白，实际 '" + c + "'"))
+# 满足谓词的连续片段（≥1 字符）
+def p_take_while(pred):
+    var g = fn(input, pos):
+        var i = pos
+        while i < len(input) and pred(input[i]):
+            i += 1
+        if i == pos:
+            return Err(p_errmsg(pos, "期望满足谓词的字符"))
+        return Ok([i, input[pos:i]])
+    return g
+# 输入结束
+def p_end(input, pos):
+    if pos == len(input):
+        return Ok([pos, null])
+    return Err(p_errmsg(pos, "期望输入结束，剩余 '" + input[pos] + "'..."))
+# ---- 组合子 ----
+# 序列：全都成功
+def p_seq(parsers):
+    var g = fn(input, pos):
+        var cur = pos
+        var vals = []
+        var i = 0
+        while i < len(parsers):
+            var r = parsers[i](input, cur)
+            if r.is_err():
+                return r
+            var rr = r.unwrap()
+            cur = rr[0]
+            vals.append(rr[1])
+            i += 1
+        return Ok([cur, vals])
+    return g
+# 选择：首个成功分支
+def p_alt(parsers):
+    var g = fn(input, pos):
+        var last = ""
+        var i = 0
+        while i < len(parsers):
+            var r = parsers[i](input, pos)
+            if r.is_ok():
+                return r
+            # PX-DEF-003：Result 无 unwrap_err，用 str(Err(...)) 剥壳取信息
+            last = str(r)
+            i += 1
+        return Err(last)
+    return g
+# 零次以上
+def p_many(p):
+    var g = fn(input, pos):
+        var cur = pos
+        var vals = []
+        while true:
+            var r = p(input, cur)
+            if r.is_err():
+                break
+            var rr = r.unwrap()
+            cur = rr[0]
+            vals.append(rr[1])
+        return Ok([cur, vals])
+    return g
+# 一次以上
+def p_many1(p):
+    var g = fn(input, pos):
+        var first = p(input, pos)
+        if first.is_err():
+            return first
+        var rr = first.unwrap()
+        var cur = rr[0]
+        var vals = [rr[1]]
+        while true:
+            var r = p(input, cur)
+            if r.is_err():
+                break
+            var rr2 = r.unwrap()
+            cur = rr2[0]
+            vals.append(rr2[1])
+        return Ok([cur, vals])
+    return g
+# 可选（不失败；未命中返回 null）
+def p_opt(p):
+    var g = fn(input, pos):
+        var r = p(input, pos)
+        if r.is_err():
+            return Ok([pos, null])
+        return r
+    return g
+# 映射结果
+def p_map(p, f):
+    var g = fn(input, pos):
+        var r = p(input, pos)
+        if r.is_err():
+            return r
+        var rr = r.unwrap()
+        return Ok([rr[0], f(rr[1])])
+    return g
+# open ... inner ... close
+def p_between(openp, inner, closep):
+    var g = fn(input, pos):
+        var r1 = openp(input, pos)
+        if r1.is_err():
+            return r1
+        var p1 = r1.unwrap()[0]
+        var r2 = inner(input, p1)
+        if r2.is_err():
+            return r2
+        var p2 = r2.unwrap()[0]
+        var r3 = closep(input, p2)
+        if r3.is_err():
+            return r3
+        return Ok([r3.unwrap()[0], r2.unwrap()[1]])
+    return g
+# 分隔列表（零次以上）
+def p_sep_by(p, sep):
+    var g = fn(input, pos):
+        var vals = []
+        var cur = pos
+        var r0 = p(input, cur)
+        if r0.is_err():
+            return Ok([cur, vals])
+        var rr0 = r0.unwrap()
+        cur = rr0[0]
+        vals.append(rr0[1])
+        while true:
+            var rs = sep(input, cur)
+            if rs.is_err():
+                break
+            var ps = rs.unwrap()[0]
+            var rp = p(input, ps)
+            if rp.is_err():
+                break
+            var rrp = rp.unwrap()
+            cur = rrp[0]
+            vals.append(rrp[1])
+        return Ok([cur, vals])
+    return g
+# 分隔列表（一次以上）
+def p_sep_by1(p, sep):
+    var g = fn(input, pos):
+        var r0 = p(input, pos)
+        if r0.is_err():
+            return r0
+        var rr0 = r0.unwrap()
+        var cur = rr0[0]
+        var vals = [rr0[1]]
+        while true:
+            var rs = sep(input, cur)
+            if rs.is_err():
+                break
+            var ps = rs.unwrap()[0]
+            var rp = p(input, ps)
+            if rp.is_err():
+                break
+            var rrp = rp.unwrap()
+            cur = rrp[0]
+            vals.append(rrp[1])
+        return Ok([cur, vals])
+    return g
+# 跳过空白（永不失败）
+def p_ws(input, pos):
+    var i = pos
+    while i < len(input) and ps_is_ws(input[i]):
+        i += 1
+    return Ok([i, null])
+# ---- 常用组合件 ----
+# 标识符：[a-zA-Z_][a-zA-Z0-9_]*
+def p_ident(input, pos):
+    var r1 = p_alt([p_letter, p_char("_")])(input, pos)
+    if r1.is_err():
+        return r1
+    var rr1 = r1.unwrap()
+    var rest = p_take_while(ps_is_alnum_under)
+    var r2 = rest(input, rr1[0])
+    var cur = rr1[0]
+    var s = rr1[1]
+    if r2.is_ok():
+        cur = r2.unwrap()[0]
+        s = s + r2.unwrap()[1]
+    return Ok([cur, s])
+# 谓词：字母数字或下划线
+def ps_is_alnum_under(c):
+    var o = ord(c)
+    return ((o >= 48 and o <= 57) or
+        (o >= 65 and o <= 90) or
+        (o >= 97 and o <= 122) or c == "_")
+# 有符号整数
+def p_int(input, pos):
+    var cur = pos
+    var neg = false
+    if cur < len(input) and (input[cur] == "-" or input[cur] == "+"):
+        if input[cur] == "-":
+            neg = true
+        cur = cur + 1
+    var start = cur
+    while cur < len(input) and input[cur] >= "0" and input[cur] <= "9":
+        cur += 1
+    if cur == start:
+        return Err(p_errmsg(pos, "期望整数"))
+    var v = int(input[start:cur])
+    if neg:
+        v = -v
+    return Ok([cur, v])

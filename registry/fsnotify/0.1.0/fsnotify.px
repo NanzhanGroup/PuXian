@@ -1,0 +1,69 @@
+# ============================================================
+# 普贤生态库：registry/fsnotify —— 文件变更监听（轮询快照）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go fsnotify 心智（0.1.0 轮询实现，无 inotify 依赖）：
+#   var snap = fs_snapshot("/var/log")       # 取快照
+#   sleep(1000)
+#   var diff = fs_diff(snap, fs_snapshot("/var/log"))
+#   或循环轮询：diff 非空 → 处理
+# API：
+#   fs_snapshot(dir)      → Ok({name: {mtime, size, is_dir}}) | Err（单层，非递归）
+#   fs_diff(before, after) → Ok({added, modified, removed})（按 name 对比）
+#       modified = 存在且 mtime 或 size 变化；空目录变更 = is_dir 变化
+# 说明：
+#   - 相比 inotify 事件流，轮询快照延迟 = 轮询周期，适合配置热加载/目录监控
+#   - 0.1.0 只扫描单层目录（不递归子目录）
+# ============================================================
+
+# 单层目录快照：{name: {mtime, size, is_dir}}
+def fs_snapshot(dir):
+    if not is_dir(dir):
+        return Err("fsnotify: 不是目录: " + dir)
+    var entries = list_dir(dir)
+    var out = {}
+    var i = 0
+    while i < len(entries):
+        var name = entries[i]
+        var full = dir + "/" + name
+        if is_dir(full):
+            out.set(name, {"mtime": 0, "size": 0, "is_dir": true})
+        else:
+            var st = file_stat(full)
+            var mtime = 0
+            var size = 0
+            if type(st) == "dict":
+                mtime = st["mtime"]
+                size = st["size"]
+            out.set(name, {"mtime": mtime, "size": size, "is_dir": false})
+        i += 1
+    return Ok(out)
+
+# diff：added / modified / removed（均为 name 列表）
+def fs_diff(before, after):
+    var added = []
+    var modified = []
+    var removed = []
+    var ak = after.keys()
+    var i = 0
+    while i < len(ak):
+        var k = ak[i]
+        if before.has(k):
+            var a = after[k]
+            var b = before[k]
+            if a["mtime"] != b["mtime"] or a["size"] != b["size"] or a["is_dir"] != b["is_dir"]:
+                modified.append(k)
+        else:
+            added.append(k)
+        i += 1
+    var bk = before.keys()
+    var j = 0
+    while j < len(bk):
+        if not after.has(bk[j]):
+            removed.append(bk[j])
+        j += 1
+    return {"added": added, "modified": modified, "removed": removed}
+
+# 便捷判断：diff 是否有任何变化
+def fs_has_change(diff):
+    return len(diff["added"]) > 0 or len(diff["modified"]) > 0 or len(diff["removed"]) > 0

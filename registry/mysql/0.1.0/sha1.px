@@ -1,0 +1,95 @@
+# ============================================================
+# 普贤生态库：registry/mysql —— SHA1 自实现（辅助文件）
+# ------------------------------------------------------------
+# 语言无 sha1 native（登记 PX-DEF-026）→ 纯 .px 实现 NIST FIPS 180-4。
+# 供 mysql.px 的 mysql_native_password 认证使用；双模式一致。
+# ============================================================
+
+def my_rotl(x, n):
+    return ((x << n) | (x >> (32 - n))) & 4294967295
+
+def my_sha1(msg):
+    # 字节 → 大端 32 位字列表
+    var ml = bytes_len(msg)
+    var bits = ml * 8
+    # padding: 0x80 + zeros + 64-bit big endian length
+    var pad = bytes_concat(msg, hex_to_bytes("80"))
+    while (bytes_len(pad) % 64) != 56:
+        pad = bytes_concat(pad, hex_to_bytes("00"))
+    var lenb = bytes("")
+    var i = 7
+    while i >= 0:
+        lenb = bytes_concat(lenb, hex_to_bytes(my_byte_hex((bits >> (i * 8)) & 255)))
+        i -= 1
+    pad = bytes_concat(pad, lenb)
+    var h0 = 1732584193
+    var h1 = 4023233417
+    var h2 = 2562383102
+    var h3 = 271733878
+    var h4 = 3285377520
+    var off = 0
+    while off < bytes_len(pad):
+        var w = []
+        var j = 0
+        while j < 16:
+            var b0 = bytes_get(pad, off + j * 4)
+            var b1 = bytes_get(pad, off + j * 4 + 1)
+            var b2 = bytes_get(pad, off + j * 4 + 2)
+            var b3 = bytes_get(pad, off + j * 4 + 3)
+            w.append(((b0 << 24) | (b1 << 16) | (b2 << 8) | b3) & 4294967295)
+            j += 1
+        j = 16
+        while j < 80:
+            var v = w[j - 3] ^ w[j - 8] ^ w[j - 14] ^ w[j - 16]
+            w.append(my_rotl(v, 1))
+            j += 1
+        var a = h0
+        var b = h1
+        var c = h2
+        var d = h3
+        var e = h4
+        j = 0
+        while j < 80:
+            var f = 0
+            var k = 0
+            if j < 20:
+                f = (b & c) | ((4294967295 - b) & d)
+                k = 1518500249
+            elif j < 40:
+                f = b ^ c ^ d
+                k = 1859775393
+            elif j < 60:
+                f = (b & c) | (b & d) | (c & d)
+                k = 2400959708
+            else:
+                f = b ^ c ^ d
+                k = 3395469782
+            var tmp = (my_rotl(a, 5) + f + e + k + w[j]) & 4294967295
+            e = d
+            d = c
+            c = my_rotl(b, 30)
+            b = a
+            a = tmp
+            j += 1
+        h0 = (h0 + a) & 4294967295
+        h1 = (h1 + b) & 4294967295
+        h2 = (h2 + c) & 4294967295
+        h3 = (h3 + d) & 4294967295
+        h4 = (h4 + e) & 4294967295
+        off += 64
+    var out = bytes("")
+    var words = [h0, h1, h2, h3, h4]
+    var wi = 0
+    while wi < 5:
+        var x = words[wi]
+        var bi = 3
+        while bi >= 0:
+            out = bytes_concat(out, hex_to_bytes(my_byte_hex((x >> (bi * 8)) & 255)))
+            bi -= 1
+        wi += 1
+    return out
+
+def my_byte_hex(x):
+    var digits = "0123456789abcdef"
+    return digits[x // 16] + digits[x % 16]
+

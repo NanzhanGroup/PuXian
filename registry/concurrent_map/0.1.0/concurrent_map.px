@@ -1,0 +1,60 @@
+# ============================================================
+# 普贤生态库：registry/concurrent_map —— 并发安全映射
+# ------------------------------------------------------------
+# ⚠️ 含并发（mutex）—— 必须编译模式运行（px build）；
+#    解释器 px run 是 Mini 子集，无并发原语。
+# 对齐 Go sync.Map 心智（0.1.0，显式锁实现）：
+#   var m = cm_new()                    # 创建（mutex + dict）
+#   cm_set(m, k, v) / cm_get(m, k, 默认) / cm_has / cm_delete / cm_len / cm_keys
+# 说明：
+#   - dict 键限定 str（底层 dict 限制）；锁保护整表（读写互斥，非分段锁）
+#   - cm_get 返回 Ok(v) | Err(键不存在)——或传默认值
+# ============================================================
+
+# 创建并发 map
+def cm_new():
+    return {"m": {}, "mu": mutex()}
+
+def cm_set(m, k, v):
+    m["mu"].lock()
+    m["m"].set(k, v)
+    m["mu"].unlock()
+
+def cm_get(m, k, default=null):
+    m["mu"].lock()
+    var v = default
+    if m["m"].has(k):
+        v = m["m"][k]
+    m["mu"].unlock()
+    return v
+
+def cm_has(m, k):
+    m["mu"].lock()
+    var r = m["m"].has(k)
+    m["mu"].unlock()
+    return r
+
+# 删除键（重建 dict；无原语删键）
+def cm_delete(m, k):
+    m["mu"].lock()
+    var nm = {}
+    var keys = m["m"].keys()
+    var i = 0
+    while i < len(keys):
+        if keys[i] != k:
+            nm.set(keys[i], m["m"][keys[i]])
+        i += 1
+    m.set("m", nm)
+    m["mu"].unlock()
+
+def cm_len(m):
+    m["mu"].lock()
+    var n = len(m["m"].keys())
+    m["mu"].unlock()
+    return n
+
+def cm_keys(m):
+    m["mu"].lock()
+    var ks = m["m"].keys()
+    m["mu"].unlock()
+    return ks

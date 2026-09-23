@@ -1,0 +1,119 @@
+# ============================================================
+# 普贤生态库：registry/table —— ASCII/UTF-8 对齐表格渲染
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Rust comfy-table / Python tabulate 心智（0.1.0 子集）：
+#   tb_render(headers, rows, opts) → str
+#   参数：
+#     headers : [str]          表头
+#     rows    : [[str|数值...]] 数据行（单元格自动 str()）
+#     opts    : dict           可选：
+#                border  : "utf8"（默认）| "ascii"
+#                align   : "left"（默认）| "right" | "center"
+#                padding : int（默认 1，单元格两侧空格数）
+# 说明：列宽按 rune 宽度计（len，中文每字 1；与 textwrap 同口径的排版子集，
+#   精确 CJK 双宽留给 0.2.0）。
+# ============================================================
+# 内部：单元格转字符串
+def tb_cell_str(v):
+    if type(v) == "str":
+        return v
+    return str(v)
+# 计算每列最大宽度（含 padding）
+def tb_widths(headers, rows, pad):
+    var ncol = len(headers)
+    var w = []
+    var i = 0
+    while i < ncol:
+        w.append(len(headers[i]))
+        i += 1
+    var r = 0
+    while r < len(rows):
+        var row = rows[r]
+        var c = 0
+        while c < ncol and c < len(row):
+            var l = len(tb_cell_str(row[c]))
+            if l > w[c]:
+                w[c] = l
+            c += 1
+        r += 1
+    var j = 0
+    while j < ncol:
+        w[j] = w[j] + pad * 2
+        j += 1
+    return w
+# 单元格按对齐渲染（content 宽 = 列宽 - padding*2）
+def tb_pad_cell(s, width, align):
+    var w = len(s)
+    var left = 0
+    var right = width - w
+    if align == "right":
+        left = right
+        right = 0
+    elif align == "center":
+        left = right // 2
+        right = width - w - left
+    var out = ""
+    var k = 0
+    while k < left:
+        out = out + " "
+        k += 1
+    out = out + s
+    var m = 0
+    while m < right:
+        out = out + " "
+        m += 1
+    return out
+# 内部：单行渲染（| pad a pad | pad b pad |）
+def tb_render_row(row, w, align, pad):
+    var ncol = len(w)
+    var out = "|"
+    var c = 0
+    while c < ncol:
+        var cell = ""
+        if c < len(row):
+            cell = tb_cell_str(row[c])
+        var content = tb_pad_cell(cell, w[c] - pad * 2, align)
+        var padl = ""
+        var k = 0
+        while k < pad:
+            padl = padl + " "
+            k += 1
+        out = out + padl + content + padl + "|"
+        c += 1
+    return out
+# 渲染
+def tb_render(headers, rows, opts):
+    var border = "utf8"
+    var align = "left"
+    var pad = 1
+    if opts != null:
+        if opts.has("border"):
+            border = opts["border"]
+        if opts.has("align"):
+            align = opts["align"]
+        if opts.has("padding"):
+            pad = int(opts["padding"])
+    var ncol = len(headers)
+    var w = tb_widths(headers, rows, pad)
+    # 边框线
+    var line = "+"
+    var i = 0
+    while i < ncol:
+        var k = 0
+        while k < w[i]:
+            line = line + "-"
+            k += 1
+        line = line + "+"
+        i += 1
+    var out = line + "\n"
+    # 表头
+    out = out + tb_render_row(headers, w, align, pad) + "\n"
+    out = out + line + "\n"
+    # 数据行
+    var r = 0
+    while r < len(rows):
+        out = out + tb_render_row(rows[r], w, align, pad) + "\n"
+        r += 1
+    out = out + line
+    return out

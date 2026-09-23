@@ -1,0 +1,120 @@
+# ============================================================
+# 普贤生态库：registry/ini —— INI 配置解析
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python configparser 心智（0.1.0 子集）：
+#   ini_parse(s)           → Ok(dict) | Err   解析文本 → {节: {key: value}}
+#   ini_get(cfg, sec, key) → Ok(str) | Err    取值
+#   ini_has(cfg, sec, key) → bool             是否存在键
+#   ini_sections(cfg)      → [str]            节名列表（不含空节 ""）
+#   ini_keys(cfg, sec)     → Ok([str]) | Err  某节的全部键
+# 支持：
+#   - 节：[sec]（允许前后空白；节名不含方括号）
+#   - 键值：k = v / k : v / k=v（首个分隔符切开，值去除首尾空白）
+#   - 注释：# 或 ; 开头整行；空行跳过；值内不解析行内注释（0.1.0 子集）
+#   - 无节键值归入 "" 节（configparser DEFAULT 心智）
+# 说明：文本操作按字节安全（值可含中文/任意字节）；节名大小写敏感。
+#   实现利用 PuXian 字符串切片按字节（PX-DEF-015 语义），扫描也用字节，
+#   两者对齐后中文内容不会断坏。
+# ============================================================
+# ---- 内部工具 ----
+# 字节级首尾去空白（空格 0x20 / 制表 0x09）；返回字节偏移裁剪后的子串
+def in_trim(s):
+    var b = bytes(s)
+    var st = 0
+    var en = bytes_len(b)
+    while st < en and (bytes_get(b, st) == 32 or bytes_get(b, st) == 9):
+        st += 1
+    while en > st and (bytes_get(b, en - 1) == 32 or bytes_get(b, en - 1) == 9):
+        en -= 1
+    if st == 0 and en == bytes_len(b):
+        return s
+    return s[st:en]
+# 首个分隔符（= 0x3D 或 : 0x3A）的字节偏移；无分隔符返回 -1
+def in_first_sep(lb, blen):
+    var i = 0
+    while i < blen:
+        var c = bytes_get(lb, i)
+        if c == 61 or c == 58:
+            return i
+        i += 1
+    return -1
+# ---- 解析 ----
+def ini_parse(s):
+    var cfg = {}
+    cfg.set("", {})
+    var sec = ""
+    var lines = s.split("\n")
+    var i = 0
+    while i < len(lines):
+        var sline = lines[i]
+        var lb = bytes(sline)
+        var st = 0
+        var en = bytes_len(lb)
+        while st < en and (bytes_get(lb, st) == 32 or bytes_get(lb, st) == 9):
+            st += 1
+        while en > st and (bytes_get(lb, en - 1) == 32 or bytes_get(lb, en - 1) == 9):
+            en -= 1
+        if en <= st:
+            i += 1
+            continue
+        var first = bytes_get(lb, st)
+        if first == 35 or first == 59:
+            # # 或 ; 注释
+            i += 1
+            continue
+        if first == 91:
+            # [sec]
+            var close = -1
+            var k = st + 1
+            while k < en:
+                if bytes_get(lb, k) == 93:
+                    close = k
+                    break
+                k += 1
+            if close < 0:
+                return Err("ini: 节行缺少 ]: " + sline[st:en])
+            sec = in_trim(sline[st + 1:close])
+            if not cfg.has(sec):
+                cfg.set(sec, {})
+        else:
+            var sepi = in_first_sep(lb, en)
+            if sepi < 0 or sepi <= st:
+                return Err("ini: 键值行缺少分隔符: " + sline[st:en])
+            var key = in_trim(sline[st:sepi])
+            var val = in_trim(sline[sepi + 1:en])
+            var sd = cfg[sec]
+            sd.set(key, val)
+        i += 1
+    return Ok(cfg)
+# ---- 读取 ----
+def ini_get(cfg, sec, key):
+    if not cfg.has(sec):
+        return Err("ini: 节不存在: " + sec)
+    var sd = cfg[sec]
+    if not sd.has(key):
+        return Err("ini: 键不存在: " + sec + "." + key)
+    return Ok(sd[key])
+def ini_has(cfg, sec, key):
+    if not cfg.has(sec):
+        return false
+    return cfg[sec].has(key)
+def ini_sections(cfg):
+    var out = []
+    var keys = cfg.keys()
+    var i = 0
+    while i < len(keys):
+        if keys[i] != "":
+            out.append(keys[i])
+        i += 1
+    return out
+def ini_keys(cfg, sec):
+    if not cfg.has(sec):
+        return Err("ini: 节不存在: " + sec)
+    var out = []
+    var keys = cfg[sec].keys()
+    var i = 0
+    while i < len(keys):
+        out.append(keys[i])
+        i += 1
+    return Ok(out)

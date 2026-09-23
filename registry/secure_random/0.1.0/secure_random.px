@@ -1,0 +1,40 @@
+# ============================================================
+# 普贤生态库：registry/secure_random —— 密码学安全随机
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go crypto/rand 心智（0.1.0）：
+#   sr_hex(n_bytes)  → Ok(hex str)        # 2n 个 hex 字符
+#   sr_bytes(n)      → Ok(bytes)
+#   sr_token(n)      → Ok(base64url)      # n 字节 → 无 padding base64url
+#   sr_int(max)      → Ok(0..max-1)
+# 底层：os_random_hex（runtime 原生，假定 /dev/urandom 或等价安全源）。
+# 注意：sr_int 用 8 字节取模实现，存在（极小的）模偏差；
+#   严格均匀需要拒绝采样，0.1.0 未实现（安全敏感如抽奖/密钥编排请自行拒绝采样）。
+# ============================================================
+
+# n 字节 → hex 文本（2n 字符）
+def sr_hex(n):
+    return Ok(os_random_hex(n))
+
+# n 字节 → bytes
+def sr_bytes(n):
+    return Ok(hex_to_bytes(os_random_hex(n)))
+
+# n 字节 → base64url（无 padding，JWT 兼容）
+def sr_token(n):
+    var hex = os_random_hex(n)
+    var b64 = bytes_base64(hex_to_bytes(hex))
+    b64 = replace(b64, "+", "-")
+    b64 = replace(b64, "/", "_")
+    b64 = replace(b64, "=", "")
+    return Ok(b64)
+
+# 0..max-1 的随机整数（模偏差见文件头）
+def sr_int(max):
+    if max <= 0:
+        return Err("secure_random: max 须 > 0")
+    var hex = os_random_hex(8)
+    var v = bytes_to_int(hex_to_bytes(hex))
+    if v < 0:
+        v = -v
+    return Ok(v % max)

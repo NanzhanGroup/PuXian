@@ -1,0 +1,173 @@
+# ============================================================
+# 普贤生态库：registry/template —— 轻量模板渲染
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go text/template 子集心智（0.1.0 子集）：
+#   tmpl_render(tpl, data) → Ok(str) | Err
+# 语法：
+#   {{key}} / {{a.b.c}}        变量替换（点路径）
+#   {{if key}} ... {{end}}     条件（key 为真/存在时渲染；支持 {{else}}）
+#   {{each list as x}} ... {{end}}  循环（x 为当前项绑定）
+#   未定义变量 → 空串（对齐模板宽容）；语法错误 → Err
+# 说明：代码无外部依赖；{{...}} 内外文本原样保留。
+# ============================================================
+
+# 子串查找（无 index_of native）：返回起始下标或 -1
+def tmpl_find(s, sub, from_idx):
+    if len(sub) == 0:
+        return from_idx
+    var i = from_idx
+    while i <= len(s) - len(sub):
+        if s[i:i + len(sub)] == sub:
+            return i
+        i += 1
+    return -1
+
+# trim 前后空白（native trim 两侧；此函数按需保留）
+def tmpl_trim(s):
+    return trim(s)
+
+# 从 start 找匹配的 {{end}}，返回其结束位置（含 }}），遇到嵌套 if/each 深度+1。
+# 找不到 → -1。
+def tmpl_find_end(tpl, start):
+    var depth = 0
+    var i = start
+    while i < len(tpl):
+        var o = tmpl_find(tpl, "{{", i)
+        if o < 0:
+            return -1
+        var c = tmpl_find(tpl, "}}", o + 2)
+        if c < 0:
+            return -1
+        var tag = trim(tpl[o + 2:c])
+        if starts_with(tag, "if ") or starts_with(tag, "each "):
+            depth += 1
+        elif tag == "end":
+            if depth == 0:
+                return o
+            depth -= 1
+        i = c + 2
+    return -1
+
+# 点路径取值：data dict 中 "a.b.c"
+def tmpl_lookup(data, path):
+    var parts = split(path, ".")
+    var cur = data
+    var i = 0
+    while i < len(parts):
+        if type(cur) == "dict" and cur.has(parts[i]):
+            cur = cur[parts[i]]
+        else:
+            return null
+        i += 1
+    return cur
+
+# 渲染文本（data 为当前作用域 dict）。
+def tmpl_render_data(tpl, data):
+    var out = ""
+    var i = 0
+    var n = len(tpl)
+    while i < n:
+        var o = tmpl_find(tpl, "{{", i)
+        if o < 0:
+            out = out + tpl[i:n]
+            i = n
+            continue
+        out = out + tpl[i:o]
+        var c = tmpl_find(tpl, "}}", o + 2)
+        if c < 0:
+            return Err("template: 缺少 }}")
+        var tag = trim(tpl[o + 2:c])
+        var after = c + 2
+        if starts_with(tag, "if "):
+            var cond_path = trim(tag[3:len(tag)])
+            var cond_val = tmpl_lookup(data, cond_path)
+            var e = tmpl_find_end(tpl, after)
+            if e < 0:
+                return Err("template: if 缺少 end")
+            var block = tpl[after:e]
+            # 分离 else 块（查找块内顶层 {{else}}——简化：无嵌套 else 处理，0.1.0 支持一层 else）
+            var else_i = tmpl_find(block, "{{else}}", 0)
+            var if_part = block
+            var else_part = ""
+            if else_i >= 0:
+                if_part = block[0:else_i]
+                else_part = block[else_i + 8:len(block)]
+                if contains(else_part, "{{else}}"):
+                    return Err("template: 多个 else")
+            var truthy = tmpl_truthy(cond_val)
+            if truthy:
+                var rr = tmpl_render_data(if_part, data)
+                if rr.is_err():
+                    return rr
+                out = out + rr.unwrap()
+            else:
+                var rr2 = tmpl_render_data(else_part, data)
+                if rr2.is_err():
+                    return rr2
+                out = out + rr2.unwrap()
+            var ec = tmpl_find(tpl, "}}", e + 2)
+            if ec < 0:
+                return Err("template: if end 缺少 }}")
+            i = ec + 2
+            continue
+        if starts_with(tag, "each "):
+            var spec = trim(tag[5:len(tag)])
+            var as_i = tmpl_find(spec, " as ", 0)
+            if as_i < 0:
+                return Err("template: each 需 ' as ' 语法")
+            var list_path = trim(spec[0:as_i])
+            var item_name = trim(spec[as_i + 4:len(spec)])
+            var lst = tmpl_lookup(data, list_path)
+            var e2 = tmpl_find_end(tpl, after)
+            if e2 < 0:
+                return Err("template: each 缺少 end")
+            var body = tpl[after:e2]
+            var k = 0
+            if type(lst) == "list":
+                while k < len(lst):
+                    var scope = {}
+                    var sks = data.keys()
+                    var si = 0
+                    while si < len(sks):
+                        scope.set(sks[si], data[sks[si]])
+                        si += 1
+                    scope.set(item_name, lst[k])
+                    var rr3 = tmpl_render_data(body, scope)
+                    if rr3.is_err():
+                        return rr3
+                    out = out + rr3.unwrap()
+                    k += 1
+            var ec2 = tmpl_find(tpl, "}}", e2 + 2)
+            if ec2 < 0:
+                return Err("template: each end 缺少 }}")
+            i = ec2 + 2
+            continue
+        if tag == "end":
+            return Err("template: 多余的 end")
+        if tag == "else":
+            return Err("template: 多余的 else")
+        # 变量替换（空标签 = 空）
+        var v = tmpl_lookup(data, tag)
+        if v != null:
+            out = out + str(v)
+        i = after
+    return Ok(out)
+
+# 真值判断（对齐模板语义：null/false/空串/空 list/空 dict 为假）
+def tmpl_truthy(v):
+    if v == null:
+        return false
+    if type(v) == "bool":
+        return v
+    if type(v) == "str":
+        return len(v) > 0
+    if type(v) == "list":
+        return len(v) > 0
+    if type(v) == "dict":
+        return len(v.keys()) > 0
+    return true
+
+# 公开入口
+def tmpl_render(tpl, data):
+    return tmpl_render_data(tpl, data)

@@ -1,0 +1,70 @@
+# ============================================================
+# 普贤生态库：registry/checksum —— CRC32 / Adler32 校验和
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go hash/crc32 + hash/adler32、Python zlib.crc32 / zlib.adler32 心智：
+#   crc32(s)     → int    IEEE CRC-32（与 zlib.crc32 一致；对拍通过）
+#   crc32_hex(s) → str    8 位小写十六进制
+#   adler32(s)   → int    Adler-32（与 zlib.adler32 一致；对拍通过）
+# 实现：
+#   - CRC32 反射表（多项式 0xEDB88320）在模块顶层 const 构造一次，后续查表
+#   - 按 UTF-8 字节流计算（bytes(s) + bytes_len/bytes_get 逐字节；
+#     注意 len()/s[i] 按 rune、切片按字节，见语言缺陷 PX-DEF-015）
+# 说明：CRC32 是校验用（非加密），与 crypto 无关；碰撞/恶意构造场景勿用于防伪。
+# ============================================================
+
+def ck_crc_table_make():
+    var table = []
+    var i = 0
+    while i < 256:
+        var c = i
+        var k = 0
+        while k < 8:
+            if c % 2 == 1:
+                c = (c // 2) ^ 3988292384
+            else:
+                c = c // 2
+            k += 1
+        table.append(c)
+        i += 1
+    return table
+
+const CRC32_TABLE = ck_crc_table_make()
+
+def ck_hex_digit(v):
+    var d = "0123456789abcdef"
+    if v < 0 or v > 15:
+        return "0"
+    return d[v]
+
+def crc32(s):
+    var crc = 4294967295
+    var raw = bytes(s)
+    var i = 0
+    while i < bytes_len(raw):
+        var b = bytes_get(raw, i)
+        crc = (crc // 256) ^ CRC32_TABLE[(crc % 256) ^ b]
+        i += 1
+    return crc ^ 4294967295
+
+def crc32_hex(s):
+    var v = crc32(s)
+    var out = ""
+    var k = 0
+    while k < 8:
+        out = ck_hex_digit(v % 16) + out
+        v = v // 16
+        k += 1
+    return out
+
+def adler32(s):
+    var a = 1
+    var b = 0
+    var raw = bytes(s)
+    var i = 0
+    while i < bytes_len(raw):
+        var byte = bytes_get(raw, i)
+        a = (a + byte) % 65521
+        b = (b + a) % 65521
+        i += 1
+    return b * 65536 + a

@@ -1,0 +1,84 @@
+# ============================================================
+# 普贤生态库：registry/stats —— 描述统计
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go gonum/stat 子集心智（0.1.0）：
+#   stats_min/max/sum/count/mean/median/var/stddev
+# 说明：
+#   - nums 为 list[number]；空列表：min/max/mean/median/var → Err
+#   - var 默认样本方差（n-1 分母）；stats_var(nums, false) → 总体方差（n）
+#   - median 偶数长度取中间两数平均
+# ============================================================
+
+def stats_count(nums):
+    return len(nums)
+
+def stats_sum(nums):
+    var s = 0
+    var i = 0
+    while i < len(nums):
+        s = s + nums[i]
+        i += 1
+    return s
+
+def stats_min(nums):
+    if len(nums) == 0:
+        return Err("stats: 空列表")
+    var m = nums[0]
+    var i = 1
+    while i < len(nums):
+        if nums[i] < m:
+            m = nums[i]
+        i += 1
+    return Ok(m)
+
+def stats_max(nums):
+    if len(nums) == 0:
+        return Err("stats: 空列表")
+    var m = nums[0]
+    var i = 1
+    while i < len(nums):
+        if nums[i] > m:
+            m = nums[i]
+        i += 1
+    return Ok(m)
+
+def stats_mean(nums):
+    if len(nums) == 0:
+        return Err("stats: 空列表")
+    return Ok(stats_sum(nums) / len(nums))
+
+# 中位数（n 排序；偶数取中间两数平均）
+def stats_median(nums):
+    var n = len(nums)
+    if n == 0:
+        return Err("stats: 空列表")
+    var s = sorted(nums)
+    if n % 2 == 1:
+        return Ok(s[n // 2])
+    return Ok((s[n // 2 - 1] + s[n // 2]) / 2)
+
+# 方差：sample=true（默认）用 n-1；否则总体 n
+def stats_var(nums, sample=true):
+    var n = len(nums)
+    if n == 0:
+        return Err("stats: 空列表")
+    if sample and n < 2:
+        return Err("stats: 样本方差至少 2 个元素")
+    var mean = stats_sum(nums) / n
+    var ss = 0.0
+    var i = 0
+    while i < n:
+        var d = nums[i] - mean
+        ss = ss + d * d
+        i += 1
+    var denom = n
+    if sample:
+        denom = n - 1
+    return Ok(ss / denom)
+
+def stats_stddev(nums, sample=true):
+    var r = stats_var(nums, sample)
+    if r.is_err():
+        return r
+    return Ok(sqrt(r.unwrap()))

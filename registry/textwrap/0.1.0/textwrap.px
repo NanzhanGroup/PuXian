@@ -1,0 +1,109 @@
+# ============================================================
+# 普贤生态库：registry/textwrap —— 文本排版（换行/缩进/去缩进）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python textwrap 心智（0.1.0 子集）：
+#   tw_wrap(s, width)   → [str]   按词断行（默认词间单空格，空行保留）
+#   tw_fill(s, width)   → str     wrap 后用 "\n" 连接
+#   tw_dedent(s)        → str     去除所有行的公共前导空白
+#   tw_indent(s, prefix)→ str     给非空行加前缀
+# 说明：
+#   - width 按 rune 计数（len(s)，中文每字算 1；实际显示宽度约 2 为排版子集）
+#   - 断行只按空格（" "）分词；制表/连续空格折叠为单空格（0.1.0 子集）
+# ============================================================
+# 内部：按 " " 分词
+def tw_split_words(s):
+    var out = []
+    var cur = ""
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        if c == " ":
+            if len(cur) > 0:
+                out.append(cur)
+                cur = ""
+        else:
+            cur = cur + c
+        i += 1
+    if len(cur) > 0:
+        out.append(cur)
+    return out
+def tw_wrap(s, width):
+    var out = []
+    var lines = s.split("\n")
+    var i = 0
+    while i < len(lines):
+        var line = lines[i]
+        if len(line) == 0:
+            out.append("")
+        else:
+            var words = tw_split_words(line)
+            var cur = ""
+            var j = 0
+            while j < len(words):
+                var w = words[j]
+                if len(cur) == 0:
+                    cur = w
+                elif len(cur) + 1 + len(w) <= width:
+                    cur = cur + " " + w
+                else:
+                    out.append(cur)
+                    cur = w
+                j += 1
+            out.append(cur)
+        i += 1
+    return out
+def tw_fill(s, width):
+    var lines = tw_wrap(s, width)
+    var out = ""
+    var i = 0
+    while i < len(lines):
+        if i > 0:
+            out = out + "\n"
+        out = out + lines[i]
+        i += 1
+    return out
+# 公共前导空白：取所有非空行的最小前导空白数
+def tw_dedent(s):
+    var lines = s.split("\n")
+    var min_ind = -1
+    var i = 0
+    while i < len(lines):
+        var line = lines[i]
+        if len(line) == 0:
+            i += 1
+            continue
+        var ind = 0
+        while ind < len(line) and (line[ind] == " " or line[ind] == "\t"):
+            ind += 1
+        if min_ind < 0 or ind < min_ind:
+            min_ind = ind
+        i += 1
+    if min_ind <= 0:
+        return s
+    var out = ""
+    var j = 0
+    while j < len(lines):
+        var line = lines[j]
+        if j > 0:
+            out = out + "\n"
+        if len(line) >= min_ind:
+            out = out + line[min_ind:len(line)]
+        else:
+            out = out + line
+        j += 1
+    return out
+# 给非空行加前缀（空行不加）
+def tw_indent(s, prefix):
+    var lines = s.split("\n")
+    var out = ""
+    var i = 0
+    while i < len(lines):
+        if i > 0:
+            out = out + "\n"
+        if len(lines[i]) > 0:
+            out = out + prefix + lines[i]
+        else:
+            out = out + lines[i]
+        i += 1
+    return out

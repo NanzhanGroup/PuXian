@@ -1,0 +1,81 @@
+# ============================================================
+# 普贤生态库：registry/workerpool —— 协程任务池
+# ------------------------------------------------------------
+# ⚠️ 含并发（spawn/chan）—— 必须编译模式运行（px build）；
+#    解释器 px run 是 Mini 子集，无并发（会报"interp 不支持通道"）。
+# 对齐 Go errgroup + workerpool 心智（0.1.0 子集）：
+#   var pool = wp_new(4)                    # 启动 4 个 worker
+#   var r = wp_run(pool, fns, args)         # 同步提交并等待全部完成
+#       fns  = [fn (x): ...]  args = [...]   # 任务函数 + 参数
+#       r.unwrap()["results"] → [{"id", "res"}, ...]（完成序，按 id 复原）
+#   wp_close(pool)                          # 优雅停止所有 worker
+# 并发模型：共享任务队列 chan + N 个 spawn worker；结果经结果通道收集。
+#   任务函数为普通函数值（fn (arg) -> result），调用方保证类型一致。
+# ============================================================
+
+# 创建任务池并启动 size 个 worker → pool dict
+def wp_new(size):
+    var q = chan[dict](size * 4)
+    var rc = chan[dict](size * 4)
+    var pool = {"q": q, "rc": rc, "size": size}
+    var i = 0
+    while i < size:
+        spawn wp_worker(pool)
+        i += 1
+    return pool
+
+# worker 主循环：收任务执行 → 回结果；收到 stop 哨兵退出
+def wp_worker(pool):
+    while true:
+        var task = pool["q"].recv()
+        if task.has("stop") and task["stop"]:
+            return
+        var res = task["f"](task["arg"])
+        pool["rc"].send({"id": task["id"], "res": res})
+
+# 同步提交一批任务（fns 与 args 等长），等待全部完成。
+# 返回 Ok({results})；results 按完成序，含 {"id", "res"}。
+def wp_run(pool, fns, args):
+    if len(fns) != len(args):
+        return Err("workerpool: fns 与 args 长度不一致")
+    var n = len(fns)
+    var i = 0
+    while i < n:
+        pool["q"].send({"f": fns[i], "arg": args[i], "id": i})
+        i += 1
+    var results = []
+    var j = 0
+    while j < n:
+        var r = pool["rc"].recv()
+        results.append(r)
+        j += 1
+    return Ok({"results": results})
+
+# 结果按 id 升序排列（正确实现）
+def wp_sorted(results):
+    var out = []
+    var n = len(results)
+    var used = []
+    var t = 0
+    while t < n:
+        used.append(false)
+        t += 1
+    while len(out) < n:
+        var best = -1
+        var bi = -1
+        var m = 0
+        while m < n:
+            if not used[m] and (best < 0 or results[m]["id"] < best):
+                best = results[m]["id"]
+                bi = m
+            m += 1
+        out.append(results[bi]["res"])
+        used[bi] = true
+    return out
+
+# 优雅停止：给每个 worker 发 stop 哨兵（已提交任务会先完成）
+def wp_close(pool):
+    var i = 0
+    while i < pool["size"]:
+        pool["q"].send({"stop": true})
+        i += 1

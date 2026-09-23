@@ -1,0 +1,443 @@
+# ============================================================
+# 普贤生态库：registry/decimal —— 任意精度十进制数
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go shopspring/decimal 心智（0.1.0 子集）：
+#   dec_add(a, b) / dec_sub(a, b) / dec_mul(a, b) / dec_div(a, b, places)
+#   dec_cmp(a, b) -> -1 | 0 | 1
+#   dec_round(a, places, mode?)   mode: half_up(默认) / half_even / down / up
+#   dec_abs(a) / dec_neg(a) / dec_is_zero(a)
+# 内部表示：{sign, digits, scale}，value = sign * digits × 10^-scale
+#   全字符串竖式算法，无浮点参与 → 金额/精度场景安全。
+#   0.1.0 不支持科学计数法输入；结果总保持最简形式（去前导/尾随零）。
+# ============================================================
+
+# ---- 内部：解析与规范化 ----
+
+def dec_is_digit(c):
+    if c >= "0" and c <= "9":
+        return true
+    return false
+
+# 字符串 → {sign, digits, scale} | Err
+def dec_parse(s):
+    var t = s
+    var sign = 1
+    if starts_with(t, "-"):
+        sign = -1
+        t = t[1:len(t)]
+    elif starts_with(t, "+"):
+        t = t[1:len(t)]
+    if len(t) == 0:
+        return Err("decimal: 空数字")
+    var ip = ""
+    var fp = ""
+    if contains(t, "."):
+        var parts = split(t, ".")
+        if len(parts) != 2:
+            return Err("decimal: 多个小数点")
+        ip = parts[0]
+        fp = parts[1]
+    else:
+        ip = t
+    if len(ip) == 0 and len(fp) == 0:
+        return Err("decimal: 无效数字")
+    var i = 0
+    while i < len(ip):
+        if not dec_is_digit(ip[i]):
+            return Err("decimal: 非法字符")
+        i += 1
+    i = 0
+    while i < len(fp):
+        if not dec_is_digit(fp[i]):
+            return Err("decimal: 非法字符")
+        i += 1
+    var digits = ip + fp
+    var scale = len(fp)
+    # 简化：去前导零 + 尾随零调整 scale
+    var st = 0
+    while st < len(digits) - 1 and digits[st] == "0":
+        st += 1
+    digits = digits[st:len(digits)]
+    while scale > 0 and len(digits) > 1 and digits[len(digits) - 1] == "0":
+        digits = digits[0:len(digits) - 1]
+        scale -= 1
+    if len(digits) == 0:
+        digits = "0"
+        scale = 0
+    return Ok({"sign": sign, "digits": digits, "scale": scale})
+
+# 字符串重复（PuXian 无 "s" * n 语法）
+def dec_repeat(s, n):
+    var out = ""
+    var i = 0
+    while i < n:
+        out = out + s
+        i += 1
+    return out
+
+# Result Err 消息剥壳（PuXian Result 无 unwrap_err 原语）
+def dec_err_msg(r):
+    var s = str(r)
+    if starts_with(s, "Err(") and ends_with(s, ")"):
+        return s[4:len(s) - 1]
+    return s
+
+# {sign,digits,scale} → 规范字符串
+def dec_norm(d):
+    var sign = d["sign"]
+    var digits = d["digits"]
+    var scale = d["scale"]
+    while scale > 0 and digits[len(digits) - 1] == "0":
+        digits = digits[0:len(digits) - 1]
+        scale -= 1
+    if len(digits) == 0:
+        digits = "0"
+        scale = 0
+    var s = ""
+    if scale == 0:
+        s = digits
+    elif len(digits) <= scale:
+        s = "0." + (dec_repeat("0", scale - len(digits))) + digits
+    else:
+        s = digits[0:len(digits) - scale] + "." + digits[len(digits) - scale:len(digits)]
+    if sign < 0 and not dec_is_zero_str(s):
+        return "-" + s
+    return s
+
+def dec_is_zero_str(s):
+    var i = 0
+    while i < len(s):
+        if s[i] != "0" and s[i] != "." and s[i] != "-":
+            return false
+        i += 1
+    return true
+
+# 整数数字串加法（a,b 均非负纯数字）
+def dec_add_str(a, b):
+    var i = len(a) - 1
+    var j = len(b) - 1
+    var carry = 0
+    var out = ""
+    while i >= 0 or j >= 0 or carry > 0:
+        var da = 0
+        if i >= 0:
+            da = int(a[i])
+            i -= 1
+        var db = 0
+        if j >= 0:
+            db = int(b[j])
+            j -= 1
+        var sum = da + db + carry
+        carry = sum // 10
+        out = str(sum % 10) + out
+    var st = 0
+    while st < len(out) - 1 and out[st] == "0":
+        st += 1
+    return out[st:len(out)]
+
+# 整数数字串减法（a >= b，a,b 非负纯数字）→ 非负结果
+def dec_sub_str(a, b):
+    var i = len(a) - 1
+    var j = len(b) - 1
+    var borrow = 0
+    var out = ""
+    while i >= 0:
+        var da = int(a[i])
+        i -= 1
+        var db = 0
+        if j >= 0:
+            db = int(b[j])
+            j -= 1
+        var v = da - db - borrow
+        if v < 0:
+            v += 10
+            borrow = 1
+        else:
+            borrow = 0
+        out = str(v) + out
+    # 去前导零（保留一位）
+    var st = 0
+    while st < len(out) - 1 and out[st] == "0":
+        st += 1
+    return out[st:len(out)]
+
+# 绝对值比较：a > b → 1, 相等 → 0, a < b → -1（非负纯数字）
+def dec_cmp_abs(a, b):
+    var x = a
+    while len(x) > 1 and x[0] == "0":
+        x = x[1:len(x)]
+    var y = b
+    while len(y) > 1 and y[0] == "0":
+        y = y[1:len(y)]
+    if len(x) != len(y):
+        if len(x) > len(y):
+            return 1
+        return -1
+    if x == y:
+        return 0
+    var i = 0
+    while i < len(x):
+        if x[i] > y[i]:
+            return 1
+        if x[i] < y[i]:
+            return -1
+        i += 1
+    return 0
+# 一位数乘法：数字串 × digit(0-9) → 数字串
+def dec_mul_digit(a, d):
+    if d == 0:
+        return "0"
+    var carry = 0
+    var out = ""
+    var i = len(a) - 1
+    while i >= 0:
+        var v = int(a[i]) * d + carry
+        carry = v // 10
+        out = str(v % 10) + out
+        i -= 1
+    if carry > 0:
+        out = str(carry) + out
+    return out
+
+# 整数乘法：数字串 × 数字串
+def dec_mul_str(a, b):
+    var out = "0"
+    var i = len(b) - 1
+    var shift = 0
+    while i >= 0:
+        var part = dec_mul_digit(a, int(b[i]))
+        if part != "0":
+            part = part + (dec_repeat("0", shift))
+            out = dec_add_str(out, part)
+        shift += 1
+        i -= 1
+    return out
+
+# 长除法取商与余数（A >= 0 整数除法 B > 0）
+def dec_divmod(A, B):
+    var q = ""
+    var r = "0"
+    var i = 0
+    while i < len(A):
+        r = dec_add_str(r + "0", A[i:i + 1])
+        # 找最大 d 使 d*B <= rv
+        var d = 0
+        while d < 10:
+            var t = dec_mul_digit(B, d + 1)
+            if dec_cmp_abs(t, r) > 0:
+                break
+            d += 1
+        q = q + str(d)
+        var sub = dec_mul_digit(B, d)
+        r = dec_sub_str(r, sub)
+        i += 1
+    var st = 0
+    while st < len(q) - 1 and q[st] == "0":
+        st += 1
+    return {"q": q[st:len(q)], "r": r}
+
+# 对齐 scale：把 a 的 digits 放大到 scale 位小数（左补零）
+# 返回放大后的整数数字串（abs 语义）
+def dec_align_int(digits, scale, target_scale):
+    return digits + (dec_repeat("0", target_scale - scale))
+
+# ---- 公开 API ----
+
+def dec_add(a, b):
+    var ra = dec_parse(a)
+    if ra.is_err():
+        return Err(dec_err_msg(ra))
+    var rb = dec_parse(b)
+    if rb.is_err():
+        return Err(dec_err_msg(rb))
+    var da = ra.unwrap()
+    var db = rb.unwrap()
+    var S = max(da["scale"], db["scale"])
+    var ai = dec_align_int(da["digits"], da["scale"], S)
+    var bi = dec_align_int(db["digits"], db["scale"], S)
+    var sa = da["sign"]
+    var sb = db["sign"]
+    var res = {}
+    if sa == sb:
+        res = {"sign": sa, "digits": dec_add_str(ai, bi), "scale": S}
+    else:
+        var c = dec_cmp_abs(ai, bi)
+        if c == 0:
+            res = {"sign": 1, "digits": "0", "scale": 0}
+        elif c > 0:
+            res = {"sign": sa, "digits": dec_sub_str(ai, bi), "scale": S}
+        else:
+            res = {"sign": sb, "digits": dec_sub_str(bi, ai), "scale": S}
+    return Ok(dec_norm(res))
+
+def dec_sub(a, b):
+    if starts_with(b, "-"):
+        return dec_add(a, b[1:len(b)])
+    return dec_add(a, "-" + b)
+
+def dec_mul(a, b):
+    var ra = dec_parse(a)
+    if ra.is_err():
+        return Err(dec_err_msg(ra))
+    var rb = dec_parse(b)
+    if rb.is_err():
+        return Err(dec_err_msg(rb))
+    var da = ra.unwrap()
+    var db = rb.unwrap()
+    var digits = dec_mul_str(da["digits"], db["digits"])
+    var scale = da["scale"] + db["scale"]
+    var sign = da["sign"] * db["sign"]
+    return Ok(dec_norm({"sign": sign, "digits": digits, "scale": scale}))
+
+# 除法：四舍五入到 places 位小数（half even 用 dec_round 再切）
+def dec_div(a, b, places):
+    var ra = dec_parse(a)
+    if ra.is_err():
+        return Err(dec_err_msg(ra))
+    var rb = dec_parse(b)
+    if rb.is_err():
+        return Err(dec_err_msg(rb))
+    var da = ra.unwrap()
+    var db = rb.unwrap()
+    if db["digits"] == "0":
+        return Err("decimal: 除零")
+    var S = max(da["scale"], db["scale"])
+    var A = dec_align_int(da["digits"], da["scale"], S)
+    var B = dec_align_int(db["digits"], db["scale"], S)
+    var sign = da["sign"] * db["sign"]
+    var dm = dec_divmod(A, B)
+    var qi = dm["q"]
+    var rem = dm["r"]
+    var frac = ""
+    var k = 0
+    while k < places + 1:
+        rem = rem + "0"
+        var d = 0
+        while d < 10:
+            var t = dec_mul_digit(B, d + 1)
+            if dec_cmp_abs(t, rem) > 0:
+                break
+            d += 1
+        frac = frac + str(d)
+        var sub = dec_mul_digit(B, d)
+        rem = dec_sub_str(rem, sub)
+        k += 1
+    # places+1 位已生成：前 places 位保留，末位用于进位（half-up）
+    if len(frac) > places and frac[places] >= "5":
+        frac = frac[0:places]
+        qi = dec_add_str(qi + frac, "1")
+        frac = ""
+    else:
+        frac = frac[0:places]
+    var digits = qi + frac
+    var scale = places
+    return Ok(dec_norm({"sign": sign, "digits": digits, "scale": scale}))
+
+# 比较：a < b → -1, 相等 → 0, a > b → 1
+def dec_cmp(a, b):
+    var ra = dec_parse(a)
+    if ra.is_err():
+        return Err(dec_err_msg(ra))
+    var rb = dec_parse(b)
+    if rb.is_err():
+        return Err(dec_err_msg(rb))
+    var da = ra.unwrap()
+    var db = rb.unwrap()
+    var za = da["digits"] == "0"
+    var zb = db["digits"] == "0"
+    if za and zb:
+        return 0
+    if za:
+        if db["sign"] > 0:
+            return -1
+        return 1
+    if zb:
+        if da["sign"] > 0:
+            return 1
+        return -1
+    if da["sign"] != db["sign"]:
+        if da["sign"] > 0:
+            return 1
+        return -1
+    var S = max(da["scale"], db["scale"])
+    var ai = dec_align_int(da["digits"], da["scale"], S)
+    var bi = dec_align_int(db["digits"], db["scale"], S)
+    var c = dec_cmp_abs(ai, bi)
+    if da["sign"] > 0:
+        return c
+    return -c
+
+# 绝对值
+def dec_abs(a):
+    var r = dec_parse(a)
+    if r.is_err():
+        return Err(dec_err_msg(r))
+    var d = r.unwrap()
+    return Ok(dec_norm({"sign": 1, "digits": d["digits"], "scale": d["scale"]}))
+
+# 取负
+def dec_neg(a):
+    var r = dec_parse(a)
+    if r.is_err():
+        return Err(dec_err_msg(r))
+    var d = r.unwrap()
+    return Ok(dec_norm({"sign": -d["sign"], "digits": d["digits"], "scale": d["scale"]}))
+
+def dec_is_zero(a):
+    var r = dec_parse(a)
+    if r.is_err():
+        return false
+    var d = r.unwrap()
+    return d["digits"] == "0"
+
+# 四舍五入到 places 位小数。
+# mode: half_up(>=5 进位) / half_even(银行家) / down(截断) / up(远离零)
+def dec_round(a, places, mode="half_up"):
+    var r = dec_parse(a)
+    if r.is_err():
+        return Err(dec_err_msg(r))
+    var d = r.unwrap()
+    if places < 0:
+        return Err("decimal: places 不能为负")
+    if d["scale"] <= places:
+        return Ok(dec_norm(d))
+    var total = len(d["digits"])
+    var keep = total - (d["scale"] - places)
+    if keep <= 0:
+        return Ok("0")
+    var head = d["digits"][0:keep]
+    var tail = d["digits"][keep:len(d["digits"])]
+    var up = false
+    var t0 = tail[0]
+    var tail_rest_nonzero = false
+    var ti = 1
+    while ti < len(tail):
+        if tail[ti] != "0":
+            tail_rest_nonzero = true
+        ti += 1
+    if mode == "down":
+        up = false
+    elif mode == "up":
+        if not dec_is_zero_str(tail):
+            up = true
+    elif mode == "half_even":
+        if t0 > "5":
+            up = true
+        elif t0 == "5":
+            if tail_rest_nonzero:
+                up = true
+            else:
+                var last = int(head[len(head) - 1])
+                if last % 2 == 1:
+                    up = true
+    else:
+        if t0 >= "5":
+            up = true
+    if up:
+        head = dec_add_str(head, "1")
+        if len(head) > keep:
+            keep = len(head)
+    # 重组
+    var nd = {"sign": d["sign"], "digits": head, "scale": places}
+    return Ok(dec_norm(nd))

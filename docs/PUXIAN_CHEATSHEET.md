@@ -2261,3 +2261,18 @@ set_timeout(fn (): print("once after 2s"), 2000)
      · **写库纪律**：二进制协议解析/打包时**端序与符号位一律显式写全**（别依赖默认值），
        这样跨实现（Python `int.from_bytes` / Go `binary.BigEndian`）对拍才可靠；
        `bytes_get` 越界返回 `null`（PX-DEF-029）⇒ 解析前先 `off >= bytes_len(b)` 守卫。
+
+216. **`os_spawn` **不等待**子进程 ⇒ 不要用它做「删除后再创建」（第 65 轮 · M187 收口缺陷 209）**：
+     · 实测：`os_spawn("rm", ["-rf", p])` 紧跟 `mkdir(p)` + 写文件 ⇒ 后台 `rm` 后到，
+       **把刚写好的目录整棵删掉**（`.px_modules/<pkg>/` 消失；重装多文件包时必现）。
+     · 正确姿势：**删除用同步的 `os_remove_all(p)`**（递归删文件/目录树、自带防删根）；
+       要真正等待外部命令就 `os_spawn` + `os_wait(pid)`，或用 `os_capture`/`os_exec`（同步）。
+     · 同族：`pxpkg` 的 `--locked` 现已覆盖**多文件包的全部文件**（digest = 各「文件名:内容」串接 sha256）。
+217. **registry 多文件包（M187 起）**：`registry/<name>/<ver>/` 下的**全部 `.px`** 随包分发，
+     入口恒 `<name>.px`（`import <name>` 不变），包内相对 `import "子文件.px"` 原样保留 ——
+     所以「每文件 <500 行、超了拆」的写库规范与 registry 分发不再冲突（qrcode 4 / mysql 3 / xlsx 2）。
+     · 用 `tools/import_registry_px.sh` 引第三方包：**逐字节照搬** + 来源/许可登记在 `registry/THIRD_PARTY.md`
+       （不在包内改注释 ⇒ 上游 sha256 可直接对拍）。
+     · ⚠️ **编译轨「找不到模块」是警告不是错误**：`import 缺的包` 只打
+       `[警告] 找不到模块 'x'（已跳过 → 运行期将报未定义）`，**rc 仍为 0、程序照跑** ⇒
+       判据只看 rc/输出会**假绿**（本仓 M187 门就踩过）；要断言 `! grep 找不到模块 <编译日志>`。

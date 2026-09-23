@@ -1,0 +1,168 @@
+# ============================================================
+# 普贤生态库：registry/pdf —— 最小 PDF 写器（文本）
+# ------------------------------------------------------------
+# 纯函数库（构建无 IO；写出为字符串），编译（px build）与解释（px run）双模式一致。
+# 对齐 Rust printpdf / Python reportlab 心智（0.1.0 文本子集）：
+#   pd_new()                        → dict      新建文档
+#   pd_add_page(doc, w, h)          → dict      追加页面（默认 A4 595x842 点）
+#   pd_add_text(doc, page_idx, x, y, s) → dict  页面追加文本行（左下原点；y 自底向上）
+#   pd_set_font(doc, pdf_font_name) → dict      设置正文 BaseFont（默认 Helvetica）
+#   pd_bytes(doc)                   → Ok(str) | Err   生成完整 PDF 文本
+#   pd_save(doc, path)              → Ok | Err   写出
+# 说明：
+#   - PDF 1.4 不带压缩（/Filter 无，阅读器普遍支持）、Helvetica 内置字体
+#   - 文本须为 ASCII/Latin-1（Type1 内置字体 WinAnsi 编码；中文渲染超出 0.1.0）
+#   - 文本括号/反斜杠自动转义；坐标单位 = PDF 点（1/72 英寸）
+# ============================================================
+# 新建文档
+def pd_new():
+    var d = {}
+    d.set("pages", [])
+    d.set("font", "Helvetica")
+    return d
+# 追加页面（默认 A4）
+def pd_add_page(doc, w, h):
+    var nd = {}
+    var pages = doc["pages"]
+    var np = []
+    var i = 0
+    while i < len(pages):
+        np.append(pages[i])
+        i += 1
+    var pg = {}
+    pg.set("w", w)
+    pg.set("h", h)
+    pg.set("lines", [])
+    np.append(pg)
+    nd.set("pages", np)
+    nd.set("font", doc["font"])
+    return nd
+# 页面追加文本行
+def pd_add_text(doc, page_idx, x, y, s):
+    var nd = {}
+    var pages = doc["pages"]
+    var np = []
+    var i = 0
+    while i < len(pages):
+        np.append(pages[i])
+        i += 1
+    var pg = np[page_idx]
+    var lines = pg["lines"]
+    var nl = []
+    var j = 0
+    while j < len(lines):
+        nl.append(lines[j])
+        j += 1
+    nl.append([x, y, s, 12])
+    var npg = {}
+    npg.set("w", pg["w"])
+    npg.set("h", pg["h"])
+    npg.set("lines", nl)
+    np[page_idx] = npg
+    nd.set("pages", np)
+    nd.set("font", doc["font"])
+    return nd
+# 设置正文 BaseFont（如 "Helvetica-Bold"）
+def pd_set_font(doc, font):
+    var nd = {}
+    var pages = doc["pages"]
+    var np = []
+    var i = 0
+    while i < len(pages):
+        np.append(pages[i])
+        i += 1
+    nd.set("pages", np)
+    nd.set("font", font)
+    return nd
+# 文本转义（\ 与括号）
+def pd_escape(s):
+    var out = ""
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        if c == "\\" or c == "(" or c == ")":
+            out = out + "\\" + c
+        else:
+            out = out + c
+        i += 1
+    return out
+# 内容流（BT/ET）
+def pd_content_stream(pg):
+    var body = ""
+    var i = 0
+    while i < len(pg["lines"]):
+        var ln = pg["lines"][i]
+        body = body + "BT /F1 12 Tf " + str(ln[0]) + " " + str(ln[1]) +
+            " Td (" + pd_escape(ln[2]) + ") Tj ET\n"
+        i += 1
+    return body
+# 10 位零填充数字
+def pd_xref_off(v):
+    var s = str(v)
+    while len(s) < 10:
+        s = "0" + s
+    return s
+# 生成完整 PDF 文本
+def pd_bytes(doc):
+    var pages = doc["pages"]
+    if len(pages) == 0:
+        return Err("pdf: 无页面")
+    var out = "%PDF-1.4\n"
+    var offsets = [0]
+    var font = doc["font"]
+    var n = len(pages)
+    var objcount = 3 + 2 * n
+    # 1: Catalog
+    offsets.append(len(out))
+    out = out + "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n"
+    # 2: Pages
+    offsets.append(len(out))
+    var kids = "["
+    var i = 0
+    while i < n:
+        if i > 0:
+            kids = kids + " "
+        kids = kids + str(4 + 2 * i) + " 0 R"
+        i += 1
+    kids = kids + "]"
+    out = out + "2 0 obj\n<< /Type /Pages /Kids " + kids + " /Count " + str(n) + " >>\nendobj\n"
+    # 3: Font
+    offsets.append(len(out))
+    out = out + "3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /" + font + " >>\nendobj\n"
+    # 每页：Page + Content
+    var pi = 0
+    while pi < n:
+        var pg = pages[pi]
+        var page_num = 4 + 2 * pi
+        var content_num = 5 + 2 * pi
+        # Page 对象
+        offsets.append(len(out))
+        out = out + str(page_num) + " 0 obj\n" +
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " +
+            str(pg["w"]) + " " + str(pg["h"]) +
+            "] /Resources << /Font << /F1 3 0 R >> >> " +
+            "/Contents " + str(content_num) + " 0 R >>\nendobj\n"
+        # Content 对象（stream 长度按字节计）
+        var stream = pd_content_stream(pg)
+        var slen = bytes_len(bytes(stream))
+        offsets.append(len(out))
+        out = out + str(content_num) + " 0 obj\n<< /Length " + str(slen) + " >>\nstream\n" +
+            stream + "endstream\nendobj\n"
+        pi += 1
+    # xref
+    var xref_off = len(out)
+    out = out + "xref\n0 " + str(objcount + 1) + "\n"
+    out = out + "0000000000 65535 f \n"
+    var k = 1
+    while k <= objcount:
+        out = out + pd_xref_off(offsets[k]) + " 00000 n \n"
+        k += 1
+    out = out + "trailer\n<< /Size " + str(objcount + 1) + " /Root 1 0 R >>\nstartxref\n" +
+        str(xref_off) + "\n%%EOF\n"
+    return Ok(out)
+# 写出
+def pd_save(doc, path):
+    var r = pd_bytes(doc)
+    if r.is_err():
+        return r
+    return write_file_opt(path, r.unwrap())

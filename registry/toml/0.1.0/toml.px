@@ -1,0 +1,296 @@
+# ============================================================
+# 普贤生态库：registry/toml —— TOML 配置解析（子集）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go BurntSushi/toml 心智（0.1.0 子集）：
+#   toml_parse(s) → Ok(dict) | Err
+# 支持：
+#   key = value               基础键值
+#   "str" / 'str' / [1,2,3] / 1.5 / true / false / 整数
+#   # 注释（行末）
+#   [section] / [section.sub] 表嵌套（点路径）
+#   多行数组（方括号内换行）
+# 0.1.0 不支持：[[数组表]]、日期时间、多行字符串、十六进制/科学计数法数字。
+# 表格顺序：键按出现顺序；子表挂 parent 下。
+# ============================================================
+
+# Result Err 消息剥壳（无 unwrap_err 原语）
+def toml_err_msg(r):
+    var s = str(r)
+    if starts_with(s, "Err(") and ends_with(s, ")"):
+        return s[4:len(s) - 1]
+    return s
+
+# ---- 行级解析 ----
+
+# trim + 去行注释（# 在非引号字符串外）
+def toml_strip_comment(line):
+    var in_s = false
+    var in_d = false
+    var esc = false
+    var i = 0
+    while i < len(line):
+        var c = line[i]
+        if esc:
+            esc = false
+        elif c == "\\" and (in_s or in_d):
+            esc = true
+        elif c == "\"" and not in_d:
+            in_s = not in_s
+        elif c == "'" and not in_s:
+            in_d = not in_d
+        elif c == "#" and not in_s and not in_d:
+            return trim(line[0:i])
+        i += 1
+    return trim(line)
+
+# 找第一个未引用的 '=' 下标
+def toml_find_eq(line):
+    var in_s = false
+    var in_d = false
+    var esc = false
+    var i = 0
+    while i < len(line):
+        var c = line[i]
+        if esc:
+            esc = false
+        elif c == "\\" and (in_s or in_d):
+            esc = true
+        elif c == "\"" and not in_d:
+            in_s = not in_s
+        elif c == "'" and not in_s:
+            in_d = not in_d
+        elif c == "=" and not in_s and not in_d:
+            return i
+        i += 1
+    return -1
+
+# 数组合并解析（含跨行）：从 start 位置后的内容开始收集，直到匹配 ']'
+# 返回 {value, end}；end 是 ']' 后一位
+def toml_parse_value(txt, start):
+    var v = txt[start:len(txt)]
+    v = trim(v)
+    if starts_with(v, "["):
+        var items = []
+        var i = 1
+        var depth = 1
+        var cur = ""
+        var in_s = false
+        var in_d = false
+        var esc = false
+        while i < len(v):
+            var c = v[i]
+            if esc:
+                cur = cur + c
+                esc = false
+            elif c == "\\" and (in_s or in_d):
+                cur = cur + c
+                esc = true
+            elif c == "\"" and not in_d:
+                in_s = not in_s
+                cur = cur + c
+            elif c == "'" and not in_s:
+                in_d = not in_d
+                cur = cur + c
+            elif in_s or in_d:
+                cur = cur + c
+            elif c == "[":
+                depth += 1
+                cur = cur + c
+            elif c == "]":
+                depth -= 1
+                if depth == 0:
+                    var item = trim(cur)
+                    if len(item) > 0:
+                        var ri = toml_scalar(item)
+                        if ri.is_err():
+                            return Err("toml: 数组元素解析失败: " + item)
+                        items.append(ri.unwrap())
+                    cur = ""
+                    break
+                cur = cur + c
+            elif c == ",":
+                var item = trim(cur)
+                if len(item) > 0:
+                    var ri2 = toml_scalar(item)
+                    if ri2.is_err():
+                        return Err("toml: 数组元素解析失败: " + item)
+                    items.append(ri2.unwrap())
+                cur = ""
+            else:
+                cur = cur + c
+            i += 1
+        if depth != 0:
+            return Err("toml: 数组未闭合")
+        return Ok({"value": items, "end": i + 1})
+    # 标量
+    var rs = toml_scalar(v)
+    if rs.is_err():
+        return Err(toml_err_msg(rs))
+    return Ok({"value": rs.unwrap(), "end": len(v)})
+
+# 标量解析（单个值，无数组容器）
+def toml_scalar(v):
+    var t = trim(v)
+    if t == "":
+        return Err("toml: 空值")
+    if starts_with(t, "\"") and ends_with(t, "\"") and len(t) >= 2:
+        return Ok(toml_unescape(t[1:len(t) - 1]))
+    if starts_with(t, "'") and ends_with(t, "'") and len(t) >= 2:
+        return Ok(t[1:len(t) - 1])
+    if t == "true":
+        return Ok(true)
+    if t == "false":
+        return Ok(false)
+    if toml_is_int(t):
+        return Ok(int(t))
+    if toml_is_float(t):
+        return Ok(float(t))
+    return Err("toml: 无法解析值: " + v)
+
+# 整数判断（可选 -/+，纯数字）
+def toml_is_int(s):
+    if len(s) == 0:
+        return false
+    var i = 0
+    if s[0] == "-" or s[0] == "+":
+        i = 1
+    if i >= len(s):
+        return false
+    while i < len(s):
+        if s[i] < "0" or s[i] > "9":
+            return false
+        i += 1
+    return true
+
+def toml_is_float(s):
+    if len(s) == 0:
+        return false
+    var i = 0
+    if s[0] == "-" or s[0] == "+":
+        i = 1
+    var dots = 0
+    while i < len(s):
+        if s[i] == ".":
+            dots += 1
+        elif s[i] < "0" or s[i] > "9":
+            return false
+        i += 1
+    return dots == 1
+
+# 反转义：\" \\ \n \t
+def toml_unescape(s):
+    var out = ""
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        if c == "\\" and i + 1 < len(s):
+            var n = s[i + 1]
+            if n == "n":
+                out = out + "\n"
+            elif n == "t":
+                out = out + "\t"
+            elif n == "\"":
+                out = out + "\""
+            elif n == "\\":
+                out = out + "\\"
+            else:
+                out = out + n
+            i += 2
+        else:
+            out = out + c
+            i += 1
+    return out
+
+# 设置嵌套路径（a.b.c）→ 创建中间 dict
+def toml_set_path(root, path, value):
+    var parts = split(path, ".")
+    var cur = root
+    var i = 0
+    while i < len(parts) - 1:
+        var k = parts[i]
+        if not cur.has(k) or type(cur[k]) != "dict":
+            cur.set(k, {})
+        cur = cur[k]
+        i += 1
+    cur.set(parts[len(parts) - 1], value)
+
+
+# 统计非引号上下文的方括号净数量（[ +1, ] -1）
+def toml_bracket_balance(line):
+    var bal = 0
+    var in_s = false
+    var in_d = false
+    var esc = false
+    var i = 0
+    while i < len(line):
+        var c = line[i]
+        if esc:
+            esc = false
+        elif c == "\\" and (in_s or in_d):
+            esc = true
+        elif c == "\"" and not in_d:
+            in_s = not in_s
+        elif c == "'" and not in_s:
+            in_d = not in_d
+        elif not in_s and not in_d:
+            if c == "[":
+                bal += 1
+            elif c == "]":
+                bal -= 1
+        i += 1
+    return bal
+
+# ---- 主入口 ----
+
+def toml_parse(s):
+    var root = {}
+    var cur_table = root
+    var cur_path = ""
+    var lines = split(s, "\n")
+    var i = 0
+    while i < len(lines):
+        var line = toml_strip_comment(lines[i])
+        if line == "":
+            i += 1
+            continue
+        # 表头
+        if starts_with(line, "[") and ends_with(line, "]"):
+            var name = trim(line[1:len(line) - 1])
+            if name == "":
+                return Err("toml: 空表名")
+            cur_path = name
+            toml_set_path(root, name, {})
+            cur_table = root
+            var parts = split(name, ".")
+            var j = 0
+            while j < len(parts):
+                cur_table = cur_table[parts[j]]
+                j += 1
+            # 跨行数组续读：值行可能以 [ 开头未闭合（当前不支持 [ 开头的键值跨行，留给标量后的数组）
+            i += 1
+            continue
+        # 键值
+        var eq = toml_find_eq(line)
+        if eq < 0:
+            return Err("toml: 无 = 的行: " + line)
+        var key = trim(line[0:eq])
+        var rest = line[eq + 1:len(line)]
+        var bal = toml_bracket_balance(rest)
+        while bal > 0 and i + 1 < len(lines):
+            i += 1
+            rest = rest + "\n" + lines[i]
+            bal = bal + toml_bracket_balance(lines[i])
+        if bal > 0:
+            return Err("toml: 数组未闭合: " + key)
+        # 处理键为引号形式（"a.b"）
+        var pv = toml_parse_value(rest, 0)
+        if pv.is_err():
+            return Err("toml: " + key + ": " + toml_err_msg(pv))
+        var pvv = pv.unwrap()
+        var path = key
+        if cur_path != "":
+            path = cur_path + "." + key
+        toml_set_path(root, path, pvv["value"])
+        i += 1
+    return Ok(root)

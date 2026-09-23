@@ -1,0 +1,103 @@
+# ============================================================
+# 普贤生态库：registry/testkit —— 断言与测试辅助
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go testify 子集 + testing 心智（0.1.0 子集）：
+#   所有断言返回 Ok(null) | Err(msg)，不直接终止进程（对齐 testing 的
+#   失败继续语义）；调用方累加失败数，最后 tk_summary 汇总。
+#   var failed = 0, total = 0
+#   var r = tk_equal(1, 2, "1==2")
+#   total += 1
+#   if r.is_err(): failed += 1; print(r)
+#   tk_summary("my_test", total, failed)
+# API：tk_true/false/equal/not_equal/contains/not_contains/approx/
+#      is_ok/is_err/type/len/fail/tempdir/summary
+# ============================================================
+
+# 附加用户消息
+def tk_suffix(msg):
+    if msg == null:
+        return ""
+    return "（" + msg + "）"
+
+# 直接失败
+def tk_fail(msg):
+    return Err(msg)
+
+def tk_true(cond, msg=null):
+    if cond:
+        return Ok(null)
+    return Err("期望 true，实际 false" + tk_suffix(msg))
+
+def tk_false(cond, msg=null):
+    if not cond:
+        return Ok(null)
+    return Err("期望 false，实际 true" + tk_suffix(msg))
+
+def tk_equal(a, b, msg=null):
+    if a == b:
+        return Ok(null)
+    return Err("期望 " + str(b) + "，实际 " + str(a) + tk_suffix(msg))
+
+def tk_not_equal(a, b, msg=null):
+    if a != b:
+        return Ok(null)
+    return Err("期望 != " + str(b) + "，实际相等" + tk_suffix(msg))
+
+def tk_contains(haystack, needle, msg=null):
+    if contains(haystack, needle):
+        return Ok(null)
+    return Err("期望包含 \"" + needle + "\"，实际 \"" + str(haystack) + "\"" + tk_suffix(msg))
+
+def tk_not_contains(haystack, needle, msg=null):
+    if not contains(haystack, needle):
+        return Ok(null)
+    return Err("期望不包含 \"" + needle + "\"，实际包含" + tk_suffix(msg))
+
+# 浮点近似（真实误差 <= tol）
+def tk_approx(actual, expected, tol, msg=null):
+    var d = actual - expected
+    if d < 0:
+        d = -d
+    if d <= tol:
+        return Ok(null)
+    return Err("期望 ≈ " + str(expected) + "（tol " + str(tol) + "），实际 " + str(actual) + tk_suffix(msg))
+
+# Result 断言（is_ok/is_err 存在性由调用方保证传入 Result）
+def tk_is_ok(r, msg=null):
+    if r.is_ok():
+        return Ok(null)
+    return Err("期望 Ok，实际 " + str(r) + tk_suffix(msg))
+
+def tk_is_err(r, msg=null):
+    if r.is_err():
+        return Ok(null)
+    return Err("期望 Err，实际 " + str(r) + tk_suffix(msg))
+
+# 类型断言
+def tk_type(v, t, msg=null):
+    if type(v) == t:
+        return Ok(null)
+    return Err("期望类型 " + t + "，实际 " + type(v) + tk_suffix(msg))
+
+# 长度断言（list/str/bytes 等 len 可用对象）
+def tk_len(v, n, msg=null):
+    if len(v) == n:
+        return Ok(null)
+    return Err("期望长度 " + str(n) + "，实际 " + str(len(v)) + tk_suffix(msg))
+
+# 创建临时目录（/tmp/<prefix>-<随机hex>）→ Ok(path) | Err
+def tk_tempdir(prefix="tk"):
+    var dir = "/tmp/" + prefix + "-" + os_random_hex(6)
+    mkdir(dir)
+    if is_dir(dir):
+        return Ok(dir)
+    return Err("testkit: 创建临时目录失败: " + dir)
+
+# 汇总打印：全部通过 → PASS，否则 FAIL（返回是否通过）
+def tk_summary(name, total, failed):
+    if failed == 0:
+        print("PASS: " + name + "（" + str(total) + " 断言）")
+        return true
+    print("FAIL: " + name + "（" + str(failed) + "/" + str(total) + " 失败）")
+    return false

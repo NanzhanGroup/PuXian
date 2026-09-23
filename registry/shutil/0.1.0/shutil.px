@@ -1,0 +1,125 @@
+# ============================================================
+# 普贤生态库：registry/shutil —— 文件/目录操作（子集）
+# ------------------------------------------------------------
+# 纯函数库（有 IO，但无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python shutil 心智（0.1.0 子集）：
+#   sh_file_exists(path) → bool                是否存在
+#   sh_is_dir(path)      → bool                是否目录
+#   sh_read_text(path)   → Ok(str) | Err       读文本
+#   sh_write_text(path, s) → Ok | Err          写文本（覆盖）
+#   sh_append_text(path, s) → Ok | Err         追加文本
+#   sh_copy(src, dst)    → Ok | Err            复制文件
+#   sh_move(src, dst)    → Ok | Err            移动/重命名（rename 失败回退复制+删）
+#   sh_remove_file(path) → Ok | Err            删除文件（不存在 → Err）
+#   sh_remove_tree(path) → Ok | Err            递归删除目录树
+#   sh_mkdirs(path)      → Ok | Err            递归建目录（mkdir -p）
+#   sh_list_dir(path)    → Ok([名称...]) | Err 列目录（先 file_stat 守卫，
+#                                                规避 PX-DEF-014：list_dir 对
+#                                                缺失目录直接终止进程）
+#   sh_list_files(path)  → Ok([名称...]) | Err 仅列普通文件
+#   sh_join(a, b)        → str                 路径拼接（处理尾部 "/"）
+# 说明：失败一律 Err 不终止进程（用 *_opt 变体与显式守卫）。
+# ============================================================
+# 路径拼接：a 尾部 "/" 去重
+def sh_join(a, b):
+    if len(a) == 0:
+        return b
+    if a[len(a) - 1] == "/":
+        return a + b
+    return a + "/" + b
+def sh_file_exists(path):
+    return file_stat(path) != null
+def sh_is_dir(path):
+    var st = file_stat(path)
+    if type(st) != "dict":
+        return false
+    return st["is_dir"]
+# ---- 文本读写 ----
+def sh_read_text(path):
+    var r = read_file_opt(path)
+    if r.is_err():
+        return Err("shutil: 读取失败 " + path)
+    return Ok(r.unwrap())
+def sh_write_text(path, s):
+    var r = write_file_opt(path, s)
+    if r.is_err():
+        return Err("shutil: 写入失败 " + path)
+    return Ok(0)
+def sh_append_text(path, s):
+    var r = append_file_opt(path, s)
+    if r.is_err():
+        return Err("shutil: 追加失败 " + path)
+    return Ok(0)
+# ---- 文件 ----
+def sh_copy(src, dst):
+    var r = read_file_opt(src)
+    if r.is_err():
+        return Err("shutil: 复制源读取失败 " + src)
+    return sh_write_text(dst, r.unwrap())
+def sh_move(src, dst):
+    var ok = os_rename(src, dst)
+    if ok:
+        return Ok(0)
+    # 跨设备等 rename 失败 → 复制 + 删源
+    var c = sh_copy(src, dst)
+    if c.is_err():
+        return c
+    return sh_remove_file(src)
+def sh_remove_file(path):
+    if not sh_file_exists(path):
+        return Err("shutil: 文件不存在 " + path)
+    var r = remove(path)
+    return Ok(r)
+def sh_remove_tree(path):
+    if not sh_file_exists(path):
+        return Err("shutil: 路径不存在 " + path)
+    var ok = os_remove_all(path)
+    if not ok:
+        return Err("shutil: 删除目录失败 " + path)
+    return Ok(0)
+# ---- 目录 ----
+# mkdir -p：逐级创建（已存在目录跳过；已存在文件 → Err）
+def sh_mkdirs(path):
+    var parts = path.split("/")
+    var cur = ""
+    var i = 0
+    while i < len(parts):
+        var seg = parts[i]
+        if len(seg) == 0:
+            if cur == "" and i == 0:
+                cur = "/"
+            i += 1
+            continue
+        if cur == "" or cur == "/":
+            cur = cur + seg
+        else:
+            cur = cur + "/" + seg
+        var st = file_stat(cur)
+        if type(st) == "dict":
+            if not st["is_dir"]:
+                return Err("shutil: 中间路径是文件 " + cur)
+            i += 1
+            continue
+        mkdir(cur)
+        i += 1
+    return Ok(0)
+# 列目录（existent 守卫）
+def sh_list_dir(path):
+    if not sh_file_exists(path):
+        return Err("shutil: 目录不存在 " + path)
+    if not sh_is_dir(path):
+        return Err("shutil: 非目录 " + path)
+    var names = list_dir(path)
+    return Ok(names)
+def sh_list_files(path):
+    var r = sh_list_dir(path)
+    if r.is_err():
+        return r
+    var out = []
+    var names = r.unwrap()
+    var i = 0
+    while i < len(names):
+        if not sh_is_dir(sh_join(path, names[i])):
+            out.append(names[i])
+        i += 1
+    return Ok(out)

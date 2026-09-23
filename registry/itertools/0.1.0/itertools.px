@@ -1,0 +1,255 @@
+# ============================================================
+# 普贤生态库：registry/itertools —— 集合组合子
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python itertools / Rust itertools 心智（0.1.0 子集，结果全部物化为 list）：
+#   it_product(lists)                 → [[...]]    笛卡尔积
+#   it_permutations(arr, k)           → [[...]]    排列（有序）
+#   it_combinations(arr, k)           → [[...]]    组合（无序）
+#   it_chain(arrays)                  → [...]     展平
+#   it_enumerate(arr)                 → [[idx, item], ...]
+#   it_unique(arr)                    → [...]     去重保序
+#   it_take(arr, n)                   → Ok([...]) | Err   前 n 个
+#   it_drop(arr, n)                   → Ok([...]) | Err   跳过 n 个
+#   it_take_while(arr, pred)          → [...]     满足谓词的前缀（pred 返回 bool）
+#   it_repeat(x, n)                   → Ok([...]) | Err   x 重复 n 次
+#   it_count(start, step, n)          → Ok([...]) | Err   等差序列 n 项
+#   it_cycle(arr, n)                  → Ok([...]) | Err   循环取前 n 个
+#   it_chunk(arr, n)                  → Ok([...]) | Err   分块（末块可短）
+#   it_window(arr, n)                 → Ok([...]) | Err   滑动窗口
+#   it_zip_longest(a, b, fill)        → [[...]]    按长者对齐
+# 说明：所有结果即时返回 list（PuXian 无惰性生成器语义）；n < 0 一律 Err。
+# ============================================================
+
+# ---- 内部工具 ----
+def it_append_copy(lst, x):
+    var out = []
+    var i = 0
+    while i < len(lst):
+        out.append(lst[i])
+        i += 1
+    out.append(x)
+    return out
+
+def it_dict_copy(d):
+    var out = {}
+    var keys = d.keys()
+    var i = 0
+    while i < len(keys):
+        out.set(keys[i], d[keys[i]])
+        i += 1
+    return out
+
+def it_check_n(n):
+    if n < 0:
+        return Err("itertools: n 不能为负: " + str(n))
+    return Ok(n)
+
+# ---- 组合 ----
+def it_product(lists):
+    var out = []
+    if len(lists) == 0:
+        out.append([])
+        return out
+    it_product_rec(lists, 0, [], out)
+    return out
+
+def it_product_rec(lists, idx, cur, out):
+    if idx >= len(lists):
+        out.append(cur)
+        return
+    var arr = lists[idx]
+    var i = 0
+    while i < len(arr):
+        it_product_rec(lists, idx + 1, it_append_copy(cur, arr[i]), out)
+        i += 1
+
+def it_permutations(arr, k):
+    var out = []
+    it_perm_rec(arr, 0, k, [], {}, out)
+    return out
+
+def it_perm_rec(arr, depth, k, cur, used, out):
+    if depth == k:
+        out.append(cur)
+        return
+    var i = 0
+    while i < len(arr):
+        var key = str(i)
+        if not used.has(key) or not used[key]:
+            var u = it_dict_copy(used)
+            u.set(key, true)
+            it_perm_rec(arr, depth + 1, k, it_append_copy(cur, arr[i]), u, out)
+        i += 1
+
+def it_combinations(arr, k):
+    var out = []
+    it_comb_rec(arr, 0, k, [], out)
+    return out
+
+def it_comb_rec(arr, start, k, cur, out):
+    if len(cur) == k:
+        out.append(cur)
+        return
+    var i = start
+    while i < len(arr):
+        it_comb_rec(arr, i + 1, k, it_append_copy(cur, arr[i]), out)
+        i += 1
+
+# ---- 基础变换 ----
+def it_chain(arrays):
+    var out = []
+    var i = 0
+    while i < len(arrays):
+        var arr = arrays[i]
+        var j = 0
+        while j < len(arr):
+            out.append(arr[j])
+            j += 1
+        i += 1
+    return out
+
+def it_enumerate(arr):
+    var out = []
+    var i = 0
+    while i < len(arr):
+        out.append([i, arr[i]])
+        i += 1
+    return out
+
+def it_unique(arr):
+    var out = []
+    var seen = {}
+    var i = 0
+    while i < len(arr):
+        var item = arr[i]
+        var key = str(item)
+        if not seen.has(key) or not seen[key]:
+            seen.set(key, true)
+            out.append(item)
+        i += 1
+    return out
+
+def it_take_while(arr, pred):
+    var out = []
+    var i = 0
+    while i < len(arr):
+        if pred(arr[i]):
+            out.append(arr[i])
+        else:
+            break
+        i += 1
+    return out
+
+# ---- 序列（返回 Result） ----
+def it_take(arr, n):
+    var c = it_check_n(n)
+    if c.is_err():
+        return Err("itertools: n 不能为负: " + str(n))
+    var out = []
+    var i = 0
+    while i < n and i < len(arr):
+        out.append(arr[i])
+        i += 1
+    return Ok(out)
+
+def it_drop(arr, n):
+    var c = it_check_n(n)
+    if c.is_err():
+        return Err("itertools: n 不能为负: " + str(n))
+    var out = []
+    var i = n
+    while i < len(arr):
+        out.append(arr[i])
+        i += 1
+    return Ok(out)
+
+def it_repeat(x, n):
+    var c = it_check_n(n)
+    if c.is_err():
+        return Err("itertools: n 不能为负: " + str(n))
+    var out = []
+    var i = 0
+    while i < n:
+        out.append(x)
+        i += 1
+    return Ok(out)
+
+def it_count(start, step, n):
+    var c = it_check_n(n)
+    if c.is_err():
+        return Err("itertools: n 不能为负: " + str(n))
+    var out = []
+    var v = start
+    var i = 0
+    while i < n:
+        out.append(v)
+        v = v + step
+        i += 1
+    return Ok(out)
+
+def it_cycle(arr, n):
+    var c = it_check_n(n)
+    if c.is_err():
+        return Err("itertools: n 不能为负: " + str(n))
+    if len(arr) == 0:
+        return Ok([])
+    var out = []
+    var i = 0
+    while i < n:
+        out.append(arr[i % len(arr)])
+        i += 1
+    return Ok(out)
+
+def it_chunk(arr, n):
+    var c = it_check_n(n)
+    if c.is_err():
+        return Err("itertools: n 不能为负: " + str(n))
+    if n == 0:
+        return Err("itertools: n 不能为 0")
+    var out = []
+    var i = 0
+    while i < len(arr):
+        var part = []
+        var j = 0
+        while j < n and i + j < len(arr):
+            part.append(arr[i + j])
+            j += 1
+        out.append(part)
+        i = i + n
+    return Ok(out)
+
+def it_window(arr, n):
+    var c = it_check_n(n)
+    if c.is_err():
+        return Err("itertools: n 不能为负: " + str(n))
+    if n == 0:
+        return Err("itertools: n 不能为 0")
+    var out = []
+    var i = 0
+    while i + n <= len(arr):
+        var part = []
+        var j = 0
+        while j < n:
+            part.append(arr[i + j])
+            j += 1
+        out.append(part)
+        i += 1
+    return Ok(out)
+
+def it_zip_longest(a, b, fill):
+    var out = []
+    var m = len(a)
+    if len(b) > m:
+        m = len(b)
+    var i = 0
+    while i < m:
+        var x = fill
+        var y = fill
+        if i < len(a):
+            x = a[i]
+        if i < len(b):
+            y = b[i]
+        out.append([x, y])
+        i += 1
+    return out

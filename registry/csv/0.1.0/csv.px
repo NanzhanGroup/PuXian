@@ -1,0 +1,118 @@
+# ============================================================
+# 普贤生态库：registry/csv —— RFC 4180 CSV 解析与序列化
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go encoding/csv 心智（0.1.0 子集）：
+#   csv_parse(s)        → Ok(rows) | Err(msg)   rows = [[str,...],...]
+#   csv_serialize(rows) → Ok(str)  | Err
+# 规则（RFC 4180）：
+#   - 字段逗号分隔；字段可被双引号包裹；引号内 `""` 转义为 `"`
+#   - 引号内允许逗号与换行（LF/CRLF）
+#   - 行尾 LF 或 CRLF；宽松处理独立 CR（不产生字段内容）
+#   - 非引用字段中出现的引号按普通字符处理（宽松；Go 会报错）
+#   - 0.1.0 仅支持逗号分隔符（opts 预留）
+# ============================================================
+
+# 解析 CSV 文本 → Ok(list[list[str]])。空输入 → Ok([])。
+def csv_parse(s):
+    var rows = []
+    var row = []
+    var field = ""
+    var i = 0
+    var n = len(s)
+    var in_quotes = false
+    var field_started = false
+    while i < n:
+        var c = s[i]
+        if in_quotes:
+            if c == "\"":
+                if i + 1 < n and s[i + 1] == "\"":
+                    field = field + "\""
+                    i += 2
+                    continue
+                in_quotes = false
+                i += 1
+                continue
+            field = field + c
+            i += 1
+            continue
+        if c == "\"":
+            if len(field) == 0:
+                in_quotes = true
+                field_started = true
+            else:
+                field = field + c
+            i += 1
+            continue
+        if c == ",":
+            row.append(field)
+            field = ""
+            field_started = false
+            i += 1
+            continue
+        if c == "\n":
+            if field_started or len(field) > 0 or len(row) > 0:
+                row.append(field)
+                rows.append(row)
+            row = []
+            field = ""
+            field_started = false
+            i += 1
+            continue
+        if c == "\r":
+            i += 1
+            continue
+        field = field + c
+        field_started = true
+        i += 1
+    if in_quotes:
+        return Err("csv: 未闭合的引号")
+    # 收尾：剩余字段/行
+    if len(field) > 0 or field_started or len(row) > 0:
+        row.append(field)
+        rows.append(row)
+    return Ok(rows)
+
+# 字段是否需要引号包裹（含逗号/引号/换行）
+def csv_needs_quote(f):
+    if contains(f, ","):
+        return true
+    if contains(f, "\""):
+        return true
+    if contains(f, "\n"):
+        return true
+    if contains(f, "\r"):
+        return true
+    return false
+
+# 引号转义（" → ""）
+def csv_escape_quotes(f):
+    var out = ""
+    var i = 0
+    while i < len(f):
+        if f[i] == "\"":
+            out = out + "\"\""
+        else:
+            out = out + f[i]
+        i += 1
+    return out
+
+# 序列化 rows → CSV 文本（每行以 \n 结尾）。
+def csv_serialize(rows):
+    var out = ""
+    var r = 0
+    while r < len(rows):
+        var line = ""
+        var c = 0
+        while c < len(rows[r]):
+            if c > 0:
+                line = line + ","
+            var f = rows[r][c]
+            if csv_needs_quote(f):
+                line = line + "\"" + csv_escape_quotes(f) + "\""
+            else:
+                line = line + f
+            c += 1
+        out = out + line + "\n"
+        r += 1
+    return Ok(out)

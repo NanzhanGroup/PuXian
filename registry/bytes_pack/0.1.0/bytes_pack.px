@@ -1,0 +1,241 @@
+# ============================================================
+# 普贤生态库：registry/bytes_pack —— 二进制 pack/unpack
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python struct / Rust byteorder 心智（0.1.0 整数子集）：
+#   bp_size(fmt)               → Ok(int) | Err   格式固定长度（字节数）
+#   bp_pack(fmt, args)         → Ok(bytes) | Err 按格式打包
+#   bp_unpack(fmt, data)       → Ok([值...]) | Err  自偏移 0 解包（须恰好消费完）
+#   bp_unpack_from(fmt, data, off) → Ok([新偏移, [值...]]) | Err  从 off 解包
+# 格式：
+#   字节序前缀（可省略，默认 ">" 大端/网络序）：
+#     <  小端   >  大端   =  当大端（标准尺寸+大端，0.1.0 与 > 同义）
+#   类型符：
+#     B u8 / b i8 / H u16 / h i16 / I u32 / i i32 / L u32 / l i32 / Q u64 / q i64
+#   重复前缀：如 "4B" = 4 个 u8；无前缀 = 1 个
+# 已知限制：
+#   - Q 仅保证 0..2^63-1 可表示范围（PuXian int 为 i64；超出自动回绕为负，调用方注意）
+#   - 不支持 float / 对齐填充（待 native 支持后 0.2.0 加）
+# 实现说明：
+#   - 全部数值转换自实现（补码 + 算术右移），不调用 int_to_bytes/bytes_to_int：
+#     规避 PX-DEF-019（bytes_to_int endian 解释轨失效）与
+#     PX-DEF-020（int_to_bytes signed+负值 解释轨返回 null）两类双模式不一致
+#   - 范围/长度/格式错误一律 Err（不静默截断）
+# ============================================================
+# ---- 内部：格式解析 ----
+# 解析一个类型符 + 重复数 → [size, signed, count, 剩余串索引]；失败返回 null
+def bp_parse_unit(fmt, i):
+    var count = 0
+    var started = false
+    while i < len(fmt) and fmt[i] >= "0" and fmt[i] <= "9":
+        count = count * 10 + (ord(fmt[i]) - 48)
+        started = true
+        i += 1
+    if not started:
+        count = 1
+    if i >= len(fmt):
+        return null
+    var c = fmt[i]
+    var size = 0
+    var signed = false
+    if c == "B":
+        size = 1
+    elif c == "b":
+        size = 1
+        signed = true
+    elif c == "H":
+        size = 2
+    elif c == "h":
+        size = 2
+        signed = true
+    elif c == "I" or c == "L":
+        size = 4
+    elif c == "i" or c == "l":
+        size = 4
+        signed = true
+    elif c == "Q":
+        size = 8
+    elif c == "q":
+        size = 8
+        signed = true
+    else:
+        return null
+    return [size, signed, count, i + 1]
+# 字节序前缀 → ["little"/"big", 内容起点]
+def bp_parse_endian(fmt):
+    if len(fmt) == 0:
+        return ["big", 0]
+    var c = fmt[0]
+    if c == "<":
+        return ["little", 1]
+    if c == ">":
+        return ["big", 1]
+    if c == "=":
+        return ["big", 1]
+    return ["big", 0]
+# 解析整段格式 → [endian, [[size, signed, count], ...]]；失败 null
+def bp_parse(fmt):
+    var pe = bp_parse_endian(fmt)
+    var endian = pe[0]
+    var i = pe[1]
+    var units = []
+    while i < len(fmt):
+        if fmt[i] == " " or fmt[i] == "\t":
+            i += 1
+            continue
+        var u = bp_parse_unit(fmt, i)
+        if u == null:
+            return null
+        units.append([u[0], u[1], u[2]])
+        i = u[3]
+    return [endian, units]
+# ---- 内部：数值 <-> 字节（自实现，双模式确定） ----
+# 2^bits（bits<=60 保证不溢出；64 位场景单独处理）
+def bp_pow2(bits):
+    var v = 1
+    var k = 0
+    while k < bits:
+        v = v * 2
+        k += 1
+    return v
+# 值范围校验（size==8 特殊：i64 全范围合法；u64 仅非负可表示范围）
+def bp_check_range(n, size, signed):
+    if size == 8:
+        if signed:
+            return true
+        return n >= 0
+    var bits = 8 * size
+    if signed:
+        var half = bp_pow2(bits - 1)
+        return n >= -half and n < half
+    var maxv = bp_pow2(bits)
+    return n >= 0 and n < maxv
+# int → 无符号表示（负数补码；8 字节场景利用 i64 回绕）
+def bp_as_uint(n, size):
+    if n >= 0:
+        return n
+    if size == 8:
+        return n
+    return n + bp_pow2(8 * size)
+# 无符号值 → 大端 bytes（负数依赖算术右移的符号位填充）
+def bp_uint_to_bytes_be(v, size):
+    var hexs = ""
+    var shift = 8 * (size - 1)
+    while shift >= 0:
+        var d = (v >> shift) & 255
+        hexs = hexs + "0123456789abcdef"[d // 16] + "0123456789abcdef"[d % 16]
+        shift = shift - 8
+    return hex_to_bytes(hexs)
+# 小端 ↔ 大端：反转字节（bytes_set 为函数式返回新值）
+def bp_reverse(b):
+    var n = bytes_len(b)
+    var out = b
+    var i = 0
+    while i < n // 2:
+        var t = bytes_get(b, i)
+        out = bytes_set(out, i, bytes_get(b, n - 1 - i))
+        out = bytes_set(out, n - 1 - i, t)
+        i += 1
+    return out
+# 大端 bytes → 有符号 i64（64 位回绕即补码；<=4 字节由 bp_sign_extend 扩展）
+def bp_bytes_to_int(b, size, signed):
+    var v = 0
+    var i = 0
+    while i < bytes_len(b):
+        v = v * 256 + bytes_get(b, i)
+        i += 1
+    if signed and size < 8:
+        v = bp_sign_extend(v, size)
+    return v
+# 符号扩展：无符号 → signed（size<8）
+def bp_sign_extend(v, size):
+    var bits = 8 * size
+    var half = bp_pow2(bits - 1)
+    if v >= half:
+        v = v - bp_pow2(bits)
+    return v
+# ---- 打包 ----
+def bp_pack(fmt, args):
+    var pf = bp_parse(fmt)
+    if pf == null:
+        return Err("bytes_pack: 非法格式: " + fmt)
+    var endian = pf[0]
+    var units = pf[1]
+    var ai = 0
+    var out = ""
+    var ui = 0
+    while ui < len(units):
+        var size = units[ui][0]
+        var signed = units[ui][1]
+        var count = units[ui][2]
+        var j = 0
+        while j < count:
+            if ai >= len(args):
+                return Err("bytes_pack: 参数不足")
+            var n = args[ai]
+            if type(n) != "int":
+                return Err("bytes_pack: 值须为 int: " + str(n))
+            if not bp_check_range(n, size, signed):
+                return Err("bytes_pack: 越界: " + str(n) + " 于 " + fmt)
+            var u = bp_as_uint(n, size)
+            var b = bp_uint_to_bytes_be(u, size)
+            if endian == "little":
+                b = bp_reverse(b)
+            out = out + bytes_to_str(b)
+            ai += 1
+            j += 1
+        ui += 1
+    if ai != len(args):
+        return Err("bytes_pack: 参数过多")
+    return Ok(bytes(out))
+# ---- 解包 ----
+# 从 data 解一个值（off 起 size 字节）
+def bp_unpack_unit(data, off, size, signed, endian):
+    var sl = bytes_slice(data, off, off + size)
+    if bytes_len(sl) != size:
+        return null
+    if endian == "little":
+        sl = bp_reverse(sl)
+    return bp_bytes_to_int(sl, size, signed)
+def bp_unpack_from(fmt, data, off):
+    var pf = bp_parse(fmt)
+    if pf == null:
+        return Err("bytes_pack: 非法格式: " + fmt)
+    var endian = pf[0]
+    var units = pf[1]
+    var o = off
+    var vals = []
+    var ui = 0
+    while ui < len(units):
+        var size = units[ui][0]
+        var signed = units[ui][1]
+        var count = units[ui][2]
+        var j = 0
+        while j < count:
+            var v = bp_unpack_unit(data, o, size, signed, endian)
+            if v == null:
+                return Err("bytes_pack: 数据长度不足（偏移 " + str(o) + "）")
+            vals.append(v)
+            o = o + size
+            j += 1
+        ui += 1
+    return Ok([o, vals])
+def bp_unpack(fmt, data):
+    var r = bp_unpack_from(fmt, data, 0)
+    if r.is_err():
+        return r
+    var rr = r.unwrap()
+    if rr[0] != bytes_len(data):
+        return Err("bytes_pack: 数据未被完全消费（剩余 " + str(bytes_len(data) - rr[0]) + " 字节）")
+    return Ok(rr[1])
+def bp_size(fmt):
+    var pf = bp_parse(fmt)
+    if pf == null:
+        return Err("bytes_pack: 非法格式: " + fmt)
+    var units = pf[1]
+    var total = 0
+    var i = 0
+    while i < len(units):
+        total = total + units[i][0] * units[i][2]
+        i += 1
+    return Ok(total)

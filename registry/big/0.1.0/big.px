@@ -1,0 +1,298 @@
+# ============================================================
+# 普贤生态库：registry/big —— 任意精度大整数
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go math/big.Int 心智（0.1.0，字符串十进制）：
+#   big_add(a,b)/big_sub(big_sub)/big_mul/big_divmod/big_cmp
+#   big_abs/big_neg/big_pow/big_gcd/big_is_zero
+# 说明：
+#   - 全部字符串竖式算法（dec_add_str 等），无浮点、无 64 位溢出
+#   - 输入接受可选 +/- 前缀的十进制串；0.1.0 不支持十六进制/科学计数法
+#   - divmod 返回 {q, r}，r 符号同被除数（对齐 Go 截断除法语义）
+# ============================================================
+
+# ---- 数字串工具 ----
+
+def big_is_digit(c):
+    return c >= "0" and c <= "9"
+
+# 解析 → {sign: -1|1, digits: 纯数字}
+def big_parse(s):
+    var sign = 1
+    var t = s
+    if starts_with(t, "-"):
+        sign = -1
+        t = t[1:len(t)]
+    elif starts_with(t, "+"):
+        t = t[1:len(t)]
+    if len(t) == 0:
+        return Err("big: 空数字")
+    var i = 0
+    while i < len(t):
+        if not big_is_digit(t[i]):
+            return Err("big: 非法字符: " + t)
+        i += 1
+    var st = 0
+    while st < len(t) - 1 and t[st] == "0":
+        st += 1
+    var digits = t[st:len(t)]
+    if digits == "":
+        digits = "0"
+    if digits == "0":
+        sign = 1
+    return Ok({"sign": sign, "digits": digits})
+
+def big_norm(sign, digits):
+    var st = 0
+    while st < len(digits) - 1 and digits[st] == "0":
+        st += 1
+    digits = digits[st:len(digits)]
+    if digits == "":
+        digits = "0"
+    var out = digits
+    if sign < 0 and digits != "0":
+        out = "-" + digits
+    return out
+
+# 整数加（abs，非负）
+def big_add_abs(a, b):
+    var i = len(a) - 1
+    var j = len(b) - 1
+    var carry = 0
+    var out = ""
+    while i >= 0 or j >= 0 or carry > 0:
+        var da = 0
+        if i >= 0:
+            da = int(a[i])
+            i -= 1
+        var db = 0
+        if j >= 0:
+            db = int(b[j])
+            j -= 1
+        var sum = da + db + carry
+        carry = sum // 10
+        out = str(sum % 10) + out
+    return big_norm(1, out)
+
+# 整数减（abs，a>=b）
+def big_sub_abs(a, b):
+    var i = len(a) - 1
+    var j = len(b) - 1
+    var borrow = 0
+    var out = ""
+    while i >= 0:
+        var da = int(a[i])
+        i -= 1
+        var db = 0
+        if j >= 0:
+            db = int(b[j])
+            j -= 1
+        var v = da - db - borrow
+        if v < 0:
+            v += 10
+            borrow = 1
+        else:
+            borrow = 0
+        out = str(v) + out
+    return big_norm(1, out)
+
+# abs 比较
+def big_cmp_abs(a, b):
+    if len(a) != len(b):
+        if len(a) > len(b):
+            return 1
+        return -1
+    if a == b:
+        return 0
+    var i = 0
+    while i < len(a):
+        if a[i] > b[i]:
+            return 1
+        if a[i] < b[i]:
+            return -1
+        i += 1
+    return 0
+
+# 一位乘
+def big_mul_digit(a, d):
+    if d == 0:
+        return "0"
+    var carry = 0
+    var out = ""
+    var i = len(a) - 1
+    while i >= 0:
+        var v = int(a[i]) * d + carry
+        carry = v // 10
+        out = str(v % 10) + out
+        i -= 1
+    if carry > 0:
+        out = str(carry) + out
+    return out
+
+# 竖式乘
+def big_mul_abs(a, b):
+    var out = "0"
+    var i = len(b) - 1
+    var shift = 0
+    while i >= 0:
+        var part = big_mul_digit(a, int(b[i]))
+        if part != "0":
+            var k = 0
+            while k < shift:
+                part = part + "0"
+                k += 1
+            out = big_add_abs(out, part)
+        shift += 1
+        i -= 1
+    return out
+
+# 整除与余数（abs，B>0）
+def big_divmod_abs(A, B):
+    var q = ""
+    var r = "0"
+    var i = 0
+    while i < len(A):
+        r = big_add_abs(r + "0", A[i:i + 1])
+        var d = 0
+        while d < 10:
+            if big_cmp_abs(big_mul_digit(B, d + 1), r) > 0:
+                break
+            d += 1
+        q = q + str(d)
+        r = big_sub_abs(r, big_mul_digit(B, d))
+        i += 1
+    return {"q": big_norm(1, q), "r": big_norm(1, r)}
+
+# ---- 公开 API ----
+
+def big_add(a, b):
+    var ra = big_parse(a)
+    if ra.is_err():
+        return Err(big_err(ra))
+    var rb = big_parse(b)
+    if rb.is_err():
+        return Err(big_err(rb))
+    var da = ra.unwrap()
+    var db = rb.unwrap()
+    if da["sign"] == db["sign"]:
+        return Ok(big_norm(da["sign"], big_add_abs(da["digits"], db["digits"])))
+    var c = big_cmp_abs(da["digits"], db["digits"])
+    if c == 0:
+        return Ok("0")
+    if c > 0:
+        return Ok(big_norm(da["sign"], big_sub_abs(da["digits"], db["digits"])))
+    return Ok(big_norm(db["sign"], big_sub_abs(db["digits"], da["digits"])))
+
+def big_sub(a, b):
+    if starts_with(b, "-"):
+        return big_add(a, b[1:len(b)])
+    return big_add(a, "-" + b)
+
+def big_mul(a, b):
+    var ra = big_parse(a)
+    if ra.is_err():
+        return Err(big_err(ra))
+    var rb = big_parse(b)
+    if rb.is_err():
+        return Err(big_err(rb))
+    var da = ra.unwrap()
+    var db = rb.unwrap()
+    return Ok(big_norm(da["sign"] * db["sign"], big_mul_abs(da["digits"], db["digits"])))
+
+def big_cmp(a, b):
+    var ra = big_parse(a)
+    if ra.is_err():
+        return Err(big_err(ra))
+    var rb = big_parse(b)
+    if rb.is_err():
+        return Err(big_err(rb))
+    var da = ra.unwrap()
+    var db = rb.unwrap()
+    if da["digits"] == "0" and db["digits"] == "0":
+        return 0
+    if da["sign"] != db["sign"]:
+        if da["sign"] > 0:
+            return 1
+        return -1
+    var c = big_cmp_abs(da["digits"], db["digits"])
+    if da["sign"] > 0:
+        return c
+    return -c
+
+def big_abs(a):
+    var r = big_parse(a)
+    if r.is_err():
+        return Err(big_err(r))
+    return Ok(big_norm(1, r.unwrap()["digits"]))
+
+def big_neg(a):
+    var r = big_parse(a)
+    if r.is_err():
+        return Err(big_err(r))
+    var d = r.unwrap()
+    return Ok(big_norm(-d["sign"], d["digits"]))
+
+def big_is_zero(a):
+    var r = big_parse(a)
+    if r.is_err():
+        return false
+    return r.unwrap()["digits"] == "0"
+
+# 整除与余数：divmod → {q, r}；r 符号同被除数
+def big_divmod(a, b):
+    var ra = big_parse(a)
+    if ra.is_err():
+        return Err(big_err(ra))
+    var rb = big_parse(b)
+    if rb.is_err():
+        return Err(big_err(rb))
+    var da = ra.unwrap()
+    var db = rb.unwrap()
+    if db["digits"] == "0":
+        return Err("big: 除零")
+    var dm = big_divmod_abs(da["digits"], db["digits"])
+    var qsign = da["sign"] * db["sign"]
+    var q = big_norm(qsign, dm["q"])
+    if dm["r"] == "0":
+        return Ok({"q": q, "r": "0"})
+    var r = big_norm(da["sign"], dm["r"])
+    return Ok({"q": q, "r": r})
+
+# 非负整数次幂（n>=0）
+def big_pow(a, n):
+    var r = big_parse(a)
+    if r.is_err():
+        return Err(big_err(r))
+    if n < 0:
+        return Err("big: 次幂需 >= 0")
+    var base = big_norm(1, r.unwrap()["digits"])
+    var res = "1"
+    var i = 0
+    while i < n:
+        var mr = big_mul(res, base)
+        if mr.is_err():
+            return mr
+        res = mr.unwrap()
+        i += 1
+    return Ok(res)
+
+# 最大公约数（非负，欧几里得；输入可带符号）
+def big_gcd(a, b):
+    var ra = big_abs(a)
+    var rb = big_abs(b)
+    if ra.is_err():
+        return Err(big_err(ra))
+    var x = ra.unwrap()
+    var y = rb.unwrap()
+    while y != "0":
+        var dm = big_divmod(x, y)
+        x = y
+        y = dm.unwrap()["r"]
+    return Ok(x)
+
+# Result Err 消息剥壳
+def big_err(r):
+    var s = str(r)
+    if starts_with(s, "Err(") and ends_with(s, ")"):
+        return s[4:len(s) - 1]
+    return s
