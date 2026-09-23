@@ -29,7 +29,7 @@ def i_call_builtin(name, args, pos):
     if name == "flush":
         # M72-S1（Issue 9）：flush() —— 显式刷 stdout/stderr（宿主 runtime native）
         if len(args) != 0:
-            return Err(i_r1002("flush 不需要参数", pos))
+            return Err(i_r1002("flush 不接受参数", pos))
         flush()
         return Ok(null)
     if name == "print_err":
@@ -95,7 +95,7 @@ def i_call_builtin(name, args, pos):
             if args[0] < 0.0:
                 return Ok(-args[0])
             return Ok(args[0])
-        return Err(i_r1002("abs 参数需要数值", pos))
+        return Err(i_r1002("abs 不支持类型 " + i_type_name(args[0]), pos))
     if name == "min" or name == "max":
         # M177：与编译轨统一 —— ① nargs ≥ 1；② **单参数可迭代** ⇒ 取元素最值
         #   （修前解释轨只收 2 个参数 ⇒ `min([3,1,2])` 直接报错，而编译轨返回**原列表**，
@@ -138,7 +138,7 @@ def i_call_builtin(name, args, pos):
         return Ok(best)
     if name == "pow":
         if len(args) != 2:
-            return Err(i_r1002("pow 需要两个参数", pos))
+            return Err(i_r1002("pow 需要 2 个参数", pos))
         let p0 = i_type_name(args[0])
         let p1 = i_type_name(args[1])
         if (p0 != "int" and p0 != "float"):
@@ -190,7 +190,7 @@ def i_call_builtin(name, args, pos):
         return Ok(join(args[0], parts))
     if name == "contains":
         if len(args) != 2:
-            return Err(i_r1002("contains 需要两个参数", pos))
+            return Err(i_r1002("contains 需要 2 个参数", pos))
         let t0 = i_type_name(args[0])
         if t0 == "string":
             return Ok(contains(args[0], args[1]))
@@ -226,25 +226,25 @@ def i_call_builtin(name, args, pos):
         return Ok(args[0].split(args[1]))
     if name == "trim":
         if len(args) != 1:
-            return Err(i_r1002("trim 需要一个参数", pos))
+            return Err(i_r1002("trim 需要一个字符串参数", pos))
         if type(args[0]) != "string":
-            return Err(i_r1002("trim 参数需要 string", pos))
+            return Err(i_r1002("trim 需要一个字符串参数", pos))
         return Ok(args[0].trim())
     if name == "to_upper":
         if len(args) != 1:
-            return Err(i_r1002("to_upper 需要一个参数", pos))
+            return Err(i_r1002("to_upper 需要一个字符串参数", pos))
         if type(args[0]) != "string":
             return Err(i_r1002("to_upper 需要一个字符串参数", pos))
         return Ok(args[0].upper())
     if name == "to_lower":
         if len(args) != 1:
-            return Err(i_r1002("to_lower 需要一个参数", pos))
+            return Err(i_r1002("to_lower 需要一个字符串参数", pos))
         if type(args[0]) != "string":
             return Err(i_r1002("to_lower 需要一个字符串参数", pos))
         return Ok(args[0].lower())
     if name == "replace":
         if len(args) != 3:
-            return Err(i_r1002("replace 需要 3 个参数", pos))
+            return Err(i_r1002("replace 需要 3 个字符串参数", pos))
         return Ok(args[0].replace(args[1], args[2]))
     if name == "starts_with":
         if len(args) != 2:
@@ -260,9 +260,14 @@ def i_call_builtin(name, args, pos):
         return Ok(args[0].ends_with(args[1]))
     if name == "gen_next":
         # M41.2 补：解释器生成器 gen_next（对齐 C 层 bi_gen_next 逐项取值语义）
-        let g = args[0]
+        # M196（缺陷 230）：**arity 检查必须在取 args[0] 之前** —— 修前先 `let g = args[0]`，
+        #   于是 `gen_next()`（0 参）撞的是 `R1003 索引越界: 0 (len=0)`，
+        #   而原生侧（三轨共用）给的是 `R1002: gen_next 需要生成器对象` ⇒ 同操作两码两文。
         if len(args) != 1:
-            return Err(i_r1002("gen_next 需要一个生成器参数", pos))
+            # M196：**arity 与类型分开**（原生侧两条不同：`gen_next 需要 1 个参数` /
+            #   `gen_next 需要生成器对象`）—— 修前解释轨只有一条，arity 也报"需要生成器对象"。
+            return Err(i_r1002("gen_next 需要 1 个参数", pos))
+        let g = args[0]
         if i_type_name(g) != "generator":
             return Err(i_r1002("gen_next 需要生成器对象", pos))
         let items = g["__gen__"]
@@ -273,14 +278,14 @@ def i_call_builtin(name, args, pos):
         return Ok(null)
     if name == "list":
         if len(args) != 1:
-            return Err(i_r1002("list 需要一个参数", pos))
+            return Err(i_r1002("list 需要 1 个参数", pos))
         let t = i_type_name(args[0])
         if t == "generator":
             return Ok(args[0]["__gen__"])
         return Ok(list(args[0]))
     if name == "tuple":
         if len(args) != 1:
-            return Err(i_r1002("tuple 需要一个参数", pos))
+            return Err(i_r1002("tuple 需要 1 个参数", pos))
         let t = i_type_name(args[0])
         if t == "list" or t == "tuple":
             return Ok(tuple(args[0]))
@@ -362,7 +367,7 @@ def i_call_builtin(name, args, pos):
         # M116（qg-issue 71 D6）：mode 透传（同 write_file/append_file 缺陷类：
         #   手写转发层漏列尾参 = 解释器轨静默丢弃，而解释器不校验实参个数）
         if len(args) < 1 or len(args) > 2:
-            return Err(i_r1002("mkdir 需要 (路径[, mode])", pos))
+            return Err(i_r1002("mkdir 需要 (path[, mode]) 参数", pos))
         if len(args) == 2:
             return Ok(mkdir(args[0], args[1]))
         return Ok(mkdir(args[0]))
@@ -414,7 +419,7 @@ def i_call_builtin(name, args, pos):
     if name == "json_parse_opt":
         # M129（qg-issue 87 缺陷 38）：Result 版 JSON 解析（对齐 Go json.Unmarshal 的 err 通道）
         if len(args) != 1:
-            return Err(i_r1002("json_parse_opt 需要一个字符串参数", pos))
+            return Err(i_r1002("json_parse_opt 需要一个参数", pos))
         return Ok(json_parse_opt(args[0]))
     if name == "json_parse":
         if len(args) != 1:
@@ -461,7 +466,7 @@ def i_call_builtin(name, args, pos):
     if name == "os_spawn_capture":
         # M65：子进程输出捕获（LSP 诊断器 / MCP run/test/bench 编排，双模式对齐）
         if len(args) != 2:
-            return Err(i_r1002("os_spawn_capture 需要 (cmd, args) 参数", pos))
+            return Err(i_r1002("os_spawn_capture 需要 (cmd, args[, opts]) 参数", pos))
         return Ok(os_spawn_capture(args[0], args[1]))
     if name == "ffi_call":
         # M42：FFI C 桥 —— ffi_call(name, args_list) 调 runtime 注册的 C 绑定
@@ -501,7 +506,7 @@ def i_call_builtin(name, args, pos):
     if name == "os_capture":
         # M66：子进程 stdout/stderr 分离捕获 → {rc, stdout, stderr}
         if len(args) != 2:
-            return Err(i_r1002("os_capture 需要 (cmd, args) 参数", pos))
+            return Err(i_r1002("os_capture 需要 (cmd, args[, opts]) 参数", pos))
         return Ok(os_capture(args[0], args[1]))
     if name == "os_popen":
         # M66：双向管道 → {pid, stdin_fd, stdout_fd}
@@ -796,7 +801,7 @@ def i_call_builtin(name, args, pos):
         #    在 PID 锁处直接 `R1002: open 需要 (path[, mode])` 起不来。
         #    两轨必须同形：这里放行第三个参数（perm），继续透传宿主 native。
         if len(args) < 1 or len(args) > 3:
-            return Err(i_r1002("open 需要 (path[, mode]) 或 (path, flags[, perm])", pos))
+            return Err(i_r1002("open 需要 (path[, mode]) 或 (path, flags[, perm]) 参数", pos))
         if len(args) == 3:
             return Ok(open(args[0], args[1], args[2]))
         if len(args) == 2:
@@ -805,12 +810,12 @@ def i_call_builtin(name, args, pos):
     if name == "close":
         # close(fd) → bool
         if len(args) != 1:
-            return Err(i_r1002("close 需要一个 fd 参数", pos))
+            return Err(i_r1002("close 需要 (fd) 参数", pos))
         return Ok(close(args[0]))
     if name == "ioctl":
         # ioctl(fd, request[, arg]) → int（arg: 缺省→NULL / int 直传 / bytes 就地）
         if len(args) < 2 or len(args) > 3:
-            return Err(i_r1002("ioctl 需要 (fd, request[, arg])", pos))
+            return Err(i_r1002("ioctl 需要 (fd, request[, arg]) 参数", pos))
         if len(args) == 3:
             return Ok(ioctl(args[0], args[1], args[2]))
         return Ok(ioctl(args[0], args[1]))
@@ -822,35 +827,35 @@ def i_call_builtin(name, args, pos):
     if name == "read":
         # read(fd, maxlen) → bytes
         if len(args) != 2:
-            return Err(i_r1002("read 需要 (fd, maxlen)", pos))
+            return Err(i_r1002("read 需要 (fd, maxlen) 参数", pos))
         return Ok(read(args[0], args[1]))
     if name == "write":
         # write(fd, data) → int
         if len(args) != 2:
-            return Err(i_r1002("write 需要 (fd, data)", pos))
+            return Err(i_r1002("write 需要 (fd, data) 参数", pos))
         return Ok(write(args[0], args[1]))
     if name == "mmap":
         # mmap(fd, length[, offset]) → bytes
         if len(args) < 2 or len(args) > 3:
-            return Err(i_r1002("mmap 需要 (fd, length[, offset])", pos))
+            return Err(i_r1002("mmap 需要 (fd, length[, offset]) 参数", pos))
         if len(args) == 3:
             return Ok(mmap(args[0], args[1], args[2]))
         return Ok(mmap(args[0], args[1]))
     if name == "munmap":
         # munmap(bytes) → bool（显式解除映射）
         if len(args) != 1:
-            return Err(i_r1002("munmap 需要一个 mmap bytes 参数", pos))
+            return Err(i_r1002("munmap 需要 (bytes) 参数", pos))
         return Ok(munmap(args[0]))
     if name == "mem_write":
         # mem_write(mmap_bytes, offset, data) → int（就地写映射区）
         if len(args) != 3:
-            return Err(i_r1002("mem_write 需要 (mmap_bytes, offset, data)", pos))
+            return Err(i_r1002("mem_write 需要 (mmap_bytes, offset, data) 参数", pos))
         return Ok(mem_write(args[0], args[1], args[2]))
     if name == "http_unix":
         # M56：http_unix(sock_path, url_path, method[, body[, headers]]) → dict
         # M133（第 13 轮）：第 6 参 opts = {"timeout_ms": N} 一并透传（总时限，覆盖连接+收发）。
         if len(args) < 3 or len(args) > 6:
-            return Err(i_r1002("http_unix 需要 (sock_path, url_path, method[, body[, headers[, opts]]])", pos))
+            return Err(i_r1002("http_unix 需要 (socket_path, url_path, method[, body[, headers[, opts]]]]) 参数", pos))
         if len(args) == 3:
             return Ok(http_unix(args[0], args[1], args[2]))
         if len(args) == 4:
@@ -923,19 +928,19 @@ def i_call_builtin(name, args, pos):
     if name == "fcntl":
         # fcntl(fd, cmd[, arg]) → int（标准 fcntl；失败 -1 + os_errno）
         if len(args) < 2 or len(args) > 3:
-            return Err(i_r1002("fcntl 需要 (fd, cmd[, arg])", pos))
+            return Err(i_r1002("fcntl 需要 (fd, cmd[, arg]) 参数", pos))
         if len(args) == 3:
             return Ok(fcntl(args[0], args[1], args[2]))
         return Ok(fcntl(args[0], args[1]))
     if name == "flock":
         # flock(fd, op) → int（BSD 文件锁；成功 0，失败 -1 + os_errno）
         if len(args) != 2:
-            return Err(i_r1002("flock 需要 (fd, op)", pos))
+            return Err(i_r1002("flock 需要 (fd, op) 参数", pos))
         return Ok(flock(args[0], args[1]))
     if name == "regex_valid":
         # regex_valid(pattern) → bool（M133：只编译不匹配；非法返回 false **不杀进程**）
         if len(args) != 1:
-            return Err(i_r1002("regex_valid 需要 (pattern)", pos))
+            return Err(i_r1002("regex_valid 需要 (pattern) 参数", pos))
         return Ok(regex_valid(args[0]))
     if name == "ord":
         # ord(s) → int（M133：首字符码点；空串 0；非法 UTF-8 → 0xFFFD）
@@ -945,12 +950,12 @@ def i_call_builtin(name, args, pos):
     if name == "chr":
         # chr(n) → str（M133：码点 → UTF-8；非法码点 → U+FFFD）
         if len(args) != 1:
-            return Err(i_r1002("chr 需要 (码点)", pos))
+            return Err(i_r1002("chr 需要 (码点) 参数", pos))
         return Ok(chr(args[0]))
     if name == "chmod":
         # chmod(path, mode) → bool（Go os.Chmod 等价物；失败 false + os_errno）
         if len(args) != 2:
-            return Err(i_r1002("chmod 需要 (path, mode)", pos))
+            return Err(i_r1002("chmod 需要 (path, mode) 参数", pos))
         return Ok(chmod(args[0], args[1]))
     if name == "file_stat":
         # file_stat(path) → dict | null（M133：Go os.Stat 的等价物；失败 null 不杀进程）
@@ -962,23 +967,23 @@ def i_call_builtin(name, args, pos):
         # go_errno_string(errno) → str（M133：**Go** syscall.Errno.Error() 的文案；
         #   对齐 Go *PathError.Error() 的文案段。不用 libc strerror —— 大小写/实现均不同）
         if len(args) != 1:
-            return Err(i_r1002("go_errno_string 需要 (errno)", pos))
+            return Err(i_r1002("go_errno_string 需要 (errno) 参数", pos))
         return Ok(go_errno_string(args[0]))
     if name == "tty_config":
         # tty_config(fd, baud, raw) → bool（串口 termios 波特率/raw）
         if len(args) != 3:
-            return Err(i_r1002("tty_config 需要 (fd, baud, raw)", pos))
+            return Err(i_r1002("tty_config 需要 (fd, baud, raw) 参数", pos))
         return Ok(tty_config(args[0], args[1], args[2]))
     if name == "fd_wait":
         # fd_wait(fds, timeout_ms) → list<就绪 fd>（空=超时）| int -1（poll 错误）
         if len(args) != 2:
-            return Err(i_r1002("fd_wait 需要 (fds, timeout_ms)", pos))
+            return Err(i_r1002("fd_wait 需要 (fds, timeout_ms) 参数", pos))
         return Ok(fd_wait(args[0], args[1]))
     if name == "tcp_connect_ex":
         # tcp_connect_ex(host, port[, opts]) → dict{ok,fd,addr,stage,errno,err}
         #   （M149：带超时 + 失败不杀进程；opts={"timeout_ms":int,"nodelay":bool}）
         if len(args) != 2 and len(args) != 3:
-            return Err(i_r1002("tcp_connect_ex 需要 (host, port[, opts])", pos))
+            return Err(i_r1002("tcp_connect_ex 需要 (host, port[, opts]) 参数", pos))
         if len(args) == 3:
             return Ok(tcp_connect_ex(args[0], args[1], args[2]))
         return Ok(tcp_connect_ex(args[0], args[1]))
@@ -986,34 +991,34 @@ def i_call_builtin(name, args, pos):
         # tcp_opt(fd, opts) → dict{ok,nodelay,keepalive,read_timeout_ms,write_timeout_ms,errno,err}
         #   （改完回读生效值 ⇒ 超时配置可编程验证）
         if len(args) != 2:
-            return Err(i_r1002("tcp_opt 需要 (fd, opts)", pos))
+            return Err(i_r1002("tcp_opt 需要 (fd, opts) 参数", pos))
         return Ok(tcp_opt(args[0], args[1]))
     if name == "tcp_recv_ex":
         # tcp_recv_ex(fd, maxlen) → dict{ok,data,n,eof,timeout,errno,err}
         #   （**EOF / 超时 / 出错可分辨** —— 旧 tcp_recv 三者都返回 ""）
         if len(args) != 2:
-            return Err(i_r1002("tcp_recv_ex 需要 (fd, maxlen)", pos))
+            return Err(i_r1002("tcp_recv_ex 需要 (fd, maxlen) 参数", pos))
         return Ok(tcp_recv_ex(args[0], args[1]))
     if name == "tcp_send_ex":
         # tcp_send_ex(fd, data) → dict{ok,n,timeout,errno,err}（失败时 n=已写出字节数）
         if len(args) != 2:
-            return Err(i_r1002("tcp_send_ex 需要 (fd, data)", pos))
+            return Err(i_r1002("tcp_send_ex 需要 (fd, data) 参数", pos))
         return Ok(tcp_send_ex(args[0], args[1]))
     # ═══ M150（第 32 轮）：摘要 / 密钥派生 + TLS 客户端族 ═══
     if name == "md5":
         # md5(data) → 32 字符小写 hex
         if len(args) != 1:
-            return Err(i_r1002("md5 需要 (data)", pos))
+            return Err(i_r1002("md5 需要一个参数 (data)", pos))
         return Ok(md5(args[0]))
     if name == "md5_bytes":
         # md5_bytes(data) → 16 字节
         if len(args) != 1:
-            return Err(i_r1002("md5_bytes 需要 (data)", pos))
+            return Err(i_r1002("md5_bytes 需要一个参数 (data)", pos))
         return Ok(md5_bytes(args[0]))
     if name == "pbkdf2_sha256":
         # pbkdf2_sha256(password, salt, iterations, dklen) → bytes
         if len(args) != 4:
-            return Err(i_r1002("pbkdf2_sha256 需要 (password, salt, iterations, dklen)", pos))
+            return Err(i_r1002("pbkdf2_sha256 需要 (password, salt, iterations, dklen) 参数", pos))
         return Ok(pbkdf2_sha256(args[0], args[1], args[2], args[3]))
     # ═══ M188（第 66 轮 · PX-DEF-026/012/016/017/025）：SHA1 族 + 安全替代 + 定位 ═══
     # ⚠ 经验（M186 · 缺陷 206/207/208）：转发必须**全量透传 + 参数个数前置校验** ——
@@ -1051,31 +1056,31 @@ def i_call_builtin(name, args, pos):
     if name == "tls_connect":
         # tls_connect(host, port[, opts]) → dict{ok,id,fd,peer,version,version_num,cipher,cipher_id,verify,stage,errno,err}
         if len(args) != 2 and len(args) != 3:
-            return Err(i_r1002("tls_connect 需要 (host, port[, opts])", pos))
+            return Err(i_r1002("tls_connect 需要 (host, port[, opts]) 参数", pos))
         if len(args) == 3:
             return Ok(tls_connect(args[0], args[1], args[2]))
         return Ok(tls_connect(args[0], args[1]))
     if name == "tls_send":
         # tls_send(id, data) → dict{ok,n,err}
         if len(args) != 2:
-            return Err(i_r1002("tls_send 需要 (id, data)", pos))
+            return Err(i_r1002("tls_send 需要 (id, data) 参数", pos))
         return Ok(tls_send(args[0], args[1]))
     if name == "tls_recv":
         # tls_recv(id, maxlen) → dict{ok,data,n,eof,timeout,err}
         if len(args) != 2:
-            return Err(i_r1002("tls_recv 需要 (id, maxlen)", pos))
+            return Err(i_r1002("tls_recv 需要 (id, maxlen) 参数", pos))
         return Ok(tls_recv(args[0], args[1]))
     if name == "tls_close":
         # tls_close(id) → bool（幂等）
         if len(args) != 1:
-            return Err(i_r1002("tls_close 需要 (id)", pos))
+            return Err(i_r1002("tls_close 需要 (id) 参数", pos))
         return Ok(tls_close(args[0]))
     if name == "tls_upgrade":
         # tls_upgrade(fd[, opts]) → dict{ok,id,fd,peer,version,version_num,cipher,cipher_id,verify,stage,errno,err}
         # M151-S1：在已连接 fd 上升级 TLS（PostgreSQL SSLRequest 协商必需）。
         #   成功 ⇒ 句柄表接管 fd；失败 ⇒ fd 仍归调用方。
         if len(args) != 1 and len(args) != 2:
-            return Err(i_r1002("tls_upgrade 需要 (fd[, opts])", pos))
+            return Err(i_r1002("tls_upgrade 需要 (fd[, opts]) 参数", pos))
         if len(args) == 2:
             return Ok(tls_upgrade(args[0], args[1]))
         return Ok(tls_upgrade(args[0]))
@@ -1192,7 +1197,7 @@ def i_math_random_seed(args, pos):
     if len(args) != 1:
         return Err(i_r1002("random_seed 需要 1 个整数参数（种子）", pos))
     if i_type_name(args[0]) != "int":
-        return Err(i_r1002("random_seed 的种子需要 int", pos))
+        return Err(i_r1002("random_seed 需要 1 个整数参数（种子）", pos))
     random_seed(args[0])
     return Ok(null)
 # M42：FFI 调用（extern def 走 C 桥）
@@ -1259,7 +1264,7 @@ def i_builtin_int(args, pos):
         if not is_int_str(s):  # M185：与 int() 同一谓词（原生）
             return Err(i_r1002("无法将 '" + args[0] + "' 转为 int", pos))
         return Ok(int(s))
-    return Err(i_r1002("int 不支持此类型", pos))
+    return Err(i_r1002("int 不支持类型 " + i_type_name(args[0]), pos))
 # ---------- float（对齐 builtin.rs Float） ----------
 def i_builtin_float(args, pos):
     if len(args) != 1:
@@ -1274,7 +1279,7 @@ def i_builtin_float(args, pos):
         if not is_float_str(s):  # M185：与 float() 同一谓词（原生）
             return Err(i_r1002("无法将 '" + args[0] + "' 转为 float", pos))
         return Ok(float(s))
-    return Err(i_r1002("float 不支持此类型", pos))
+    return Err(i_r1002("float 不支持类型 " + i_type_name(args[0]), pos))
 # ---------- range（对齐 builtin.rs Range） ----------
 def i_builtin_range(args, pos):
     var start = 0
@@ -1308,7 +1313,7 @@ def i_builtin_range(args, pos):
 # ---------- sorted（对齐 builtin.rs Sorted：按 to_string 排序） ----------
 def i_builtin_sorted(args, pos):
     if len(args) != 1:
-        return Err(i_r1002("sorted 需要一个参数", pos))
+        return Err(i_r1002("sorted 需要 1 个参数", pos))
     let t = i_type_name(args[0])
     # M178：可迭代实参统一（list/tuple/生成器/字符串）—— 文案与编译轨同形
     if t != "list" and t != "tuple" and t != "generator" and t != "string":
@@ -1390,7 +1395,7 @@ def i_seq_of(v):
     return out
 def i_builtin_sum(args, pos):
     if len(args) != 1:
-        return Err(i_r1002("sum 需要一个参数", pos))
+        return Err(i_r1002("sum 需要 1 个参数", pos))
     let t = i_type_name(args[0])
     # M177：生成器也收（物化）—— 与编译轨统一为「一条迭代语义」
     if t != "list" and t != "tuple" and t != "generator":
@@ -1408,7 +1413,7 @@ def i_builtin_sum(args, pos):
 # ---------- map（对齐 builtin Map：f(x) 收集） ----------
 def i_builtin_map(args, pos):
     if len(args) != 2:
-        return Err(i_r1002("map 需要 (列表, 函数) 两个参数", pos))
+        return Err(i_r1002("map 需要 (list, fn)", pos))
     let out = []
     var i = 0
     while i < len(args[0]):
@@ -1421,7 +1426,7 @@ def i_builtin_map(args, pos):
 # ---------- filter（对齐 builtin Filter：f(x) 真值保留） ----------
 def i_builtin_filter(args, pos):
     if len(args) != 2:
-        return Err(i_r1002("filter 需要 (列表, 函数) 两个参数", pos))
+        return Err(i_r1002("filter 需要 (list, fn)", pos))
     let out = []
     var i = 0
     while i < len(args[0]):
@@ -1435,7 +1440,7 @@ def i_builtin_filter(args, pos):
 # ---------- reduce（对齐 builtin Reduce：二元折叠） ----------
 def i_builtin_reduce(args, pos):
     if len(args) < 2 or len(args) > 3:
-        return Err(i_r1002("reduce 需要 (列表, 函数, [初始值])", pos))
+        return Err(i_r1002("reduce 需要 (list, fn, [init])", pos))
     let lst = args[0]
     if len(lst) == 0:
         return Ok(null)
