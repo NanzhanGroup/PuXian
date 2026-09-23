@@ -497,6 +497,14 @@ run m186_native_passthrough bash examples/m186_native_passthrough/verify.sh
 #   `--locked` 能查出**辅助文件**被篡改（修前只查入口）；
 #   负控 A/B/C（篡改包入口 / 篡改登记表 / 删多文件包辅助文件）各自独立判红 + 源逐字节还原。
 run m187_registry_import bash examples/m187_registry_import/verify.sh
+step "M188（第 66 轮）：SHA1 族 + 三件安全替代 + 字符串方法面四别名（第三方 PX-DEF-026/016/012/017/025/027）"
+#   判据：① NIST 向量（sha1/sha256_bytes）+ `byte`/`chr` 的 rune/字节双轴对照 + 三个安全替代的长度定点，
+#   三轨输出**逐字节一致**；② 方法面四别名 —— rune 轴定点（`"中文abc".find("abc")`=2，字节轴给 6）+
+#   方法面⇔函数面等价性（E1..E4）+ 与 stdlib `index_of` 同轴（X1..X4）；
+#   ③ 拒绝侧 5 例 ×三轨：rc≠0 且**词条逐字相同**；
+#   负控 A（删 find 路由）/B（sha1_bytes 返 16 字节）/C（rune 轴退化为字节轴）改 runtime.c、
+#   D（删 icall.px 的 strip 分支，用当前源码重编解释器）各自独立判红 + 源逐字节还原。
+run m188_std_face bash examples/m188_std_face/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

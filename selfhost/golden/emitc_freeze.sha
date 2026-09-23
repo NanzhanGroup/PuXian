@@ -208,6 +208,8 @@ examples/m185_bytes_face/bytes_face.px src=6d0f9600dba34673 rc=0 out=ca39aaadbc4
 examples/m185_bytes_face/pred_sem.px src=3a1e6948ee8fcbc8 rc=0 out=7022273b25814d9afcfeaec79d6af534 err=e3b0c44298fc1c14
 examples/m185_bytes_face/render_sem.px src=32d3c3706c73298d rc=0 out=9bf3670d64a7590d8dfd91a39161fcc1 err=e3b0c44298fc1c14
 examples/m186_native_passthrough/conv_parity.px src=7240034a614011b8 rc=0 out=397cbde7e88ae1f9f71dd3b0dd248f5b err=e3b0c44298fc1c14
+examples/m188_std_face/sha1_family.px src=35344b36863345bc rc=0 out=7f4b4ced92a42c59fd329fce599eacc4 err=e3b0c44298fc1c14
+examples/m188_std_face/str_face.px src=2f76a4267f3b5106 rc=0 out=523b6de438e4bef0af4a63140c48f683 err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=25f7bb9ac610f0f826c9ed8c4047f24f err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=fc0b79277b06f69862f3101732750439 err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14

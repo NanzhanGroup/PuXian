@@ -1,0 +1,4 @@
+# M188 拒绝侧：strip() 不接受参数
+print("before")
+print("  ab  ".strip(1))
+print("after")

@@ -1,3 +1,75 @@
+## M188 · SHA1 族 + 三件「安全替代」+ 字符串方法面四别名（第 66 轮 · 第三方 PX-DEF-026/016/012/017/025/027）
+
+> 主题：继续按用户指令收口第三方 `banshanhanfu/registry-px` 登记的缺陷 —— 本轮六条**全部**先在
+> 三轨上复现（判定表见 `docs/PX_DEF_TRIAGE.md` §五），再按「严重（静默错值/缺失）→ 高频（方法面）」
+> 排序收口。**没有一条是猜测**：每条都附修前实测输出。
+> 门：`examples/m188_std_face/`（M188-VERIFY-OK · PASS=48 FAIL=0 · 4 道负控各自独立判红）。
+
+### 一、六条缺陷（修前实测 → 修后）
+
+| 对方号 | 主题 | 修前实测（三轨） | 修后 |
+|---|---|---|---|
+| **PX-DEF-026** | **没有 `sha1`** | `R1001 未定义变量: 'sha1'`（一致缺口，非分叉） | 新增 `sha1` / `sha1_bytes`，族口径与 sha256/md5 逐条对齐 |
+| **PX-DEF-016** | `sha256` 只给 hex ⇒ **双哈希陷阱** | `sha256(sha256("abc"))` = `d7914fe5…`（对 **hex 文本**求哈希） | 新增 `sha256_bytes`；"哈希的哈希"= `sha256_bytes(sha256_bytes(x))` |
+| **PX-DEF-012** | `bytes(10)` 是 `"10"` 的 **2 字节** | `bytes_len(bytes(10))` = 2（`3130`） | 新增 `bytes_zeros(n)`（n 个 `0x00`，上限 64MiB） |
+| **PX-DEF-017** | `chr(185)` 给 UTF-8 的 **2 字节** | `bytes_to_hex(bytes(chr(185)))` = `c2b9` | 新增 `byte(n)`（n∈0..255 ⇒ 原样单字节；越界响亮 R1002） |
+| **PX-DEF-025** | 无 `.find()` | `R1007 类型 string 没有方法 'find'` | 新增 `.find(sub)`（**rune 轴**，与 `index_of` 同值） |
+| **PX-DEF-027** | 无 `.strip()` / `.has_prefix()` / `.has_suffix()` | 同上（三条都是 `R1007`） | 三个别名，直通既有 `trim`/`starts_with`/`ends_with` |
+
+⇒ 后三条（012/016/017）本质是**命名/构造器缺口**：现有的名字都"能到"，但**语义与直觉不符**
+且没有显式替代 ⇒ 库作者只能靠注释提醒（对方 README 里就是这么做的）。
+
+### 二、实现：**方法面只加路由，不复制实现**
+
+- 四别名的实现只有一份：`.find` → `str_index_of(s, sub)`（本轮新增 native，rune 轴）·
+  `.strip` → `trim` · `.has_prefix` → `starts_with` · `.has_suffix` → `ends_with`
+  ⇒ 方法面与函数面**不可能漂移**（对比 M185 教训：同一规则两处实现是结构性隐患）。
+- 参数校验放**方法层**（报调用者写的方法名），与解释轨 `i_str_method` **逐字同文**：
+  `.find(123)` ⇒ `R1002 方法 find 参数 1 需要 string`（裸路由会让用户看到 native 的名字 `str_index_of`）。
+- `str_index_of` 的 rune 轴判定与 stdlib `strings.index_of` **同口径**：只在 rune 边界比较，
+  且要求"同样 rune 数的子串字节相等" ⇒ 畸形 UTF-8 上也不会出现"字节匹配但 rune 不匹配"的分歧。
+- 解释轨侧：`ibuiltin.px` 六个转发**全量透传 + 参数个数预检**（M186 立的规矩）；
+  `interp.px` 名册同步 +6（389 → **395**）；`docs/native_index.json` 373 → **379**（均由生成器派生）。
+
+### 三、门与负控
+
+- 层① `sha1_family.px`（18 行）：**NIST 向量**（`sha1("abc")`/`sha1("")`/`sha1("quick brown fox")`/
+  `sha256_bytes("abc")`）+ `byte` 与 `chr` 的**双轴对照**（1 rune vs 2 字节）+ 三个安全替代的长度定点。
+- 层② `str_face.px`（28 行）：① rune 轴定点（`F2`/`E5` = **2**，字节轴会给 6）
+  ② 方法面 ⇔ 函数面等价性（`E1..E4`）③ 方法面 ⇔ stdlib `index_of` 同轴（`X1..X4`）。
+- 层③ `neg/*.px`（5 用例 ×三轨）：rc≠0 + **词条逐字相同**（位置前缀允许不同 —— 缺陷 186）。
+- 负控 4 道（各自独立判红、源逐字节还原）：A 删 `find` 路由 ⇒ 回 `R1007` ·
+  B `sha1_bytes` 返 16 字节 ⇒ 长度定点红 · C `px_str_index_of_runes` 退化为**字节轴** ⇒ `F2` 由 2 变 6 ·
+  D 删 `icall.px` 的 `strip` 分支（用当前源码重编解释器跑）⇒ `R1007`。
+
+### 四、验收
+
+```
+门 M188               M188-VERIFY-OK · PASS=48 FAIL=0（4 层 + 4 负控）
+入库件 14/14          --rebake-all → --check-all / --check（55 例）/ --check-vm 全绿
+                     （源码链 PXSRC-3e0d41cf9fcc9702 · rt_key PXRT-ee74c8c232e2eb39）
+生成物                tools/lint_core.px 名册 389→395 · docs/native_index.json 373→379
+三轨探针（先于重烘）   sha1 族/方法面/拒绝侧 三轨输出逐字节一致（VM · C · 解释器 dev 各一次）
+m116 全量门           唯一失败项 = 发射冻结门（**只新增 2 件语料**：m188 的 sha1_family/str_face；
+                     类别 B 为空 ⇒ 无回归嫌疑）⇒ --freeze 重定基 **393 → 395 件**，--check 复核绿
+第三方 registry-px     53 库（HEAD db5f210 · 53 个测试文件）：编译轨 **50/53** · 解释轨 **47/53**
+                     （失败 6 条全为已知：pg/mysql 需真实服务端 · passhash = M184 已登记后果 ·
+                      concurrent_map/workerpool = 解释器设计性不支持并发）
+                     ⇒ 与 M186 普查（50/53 · 47/53）**逐条一致** ⇒ 无生态回归
+```
+
+### 五、诚实记录（本轮三处自伤/教训）
+
+1. **`write_file` 的相对路径基准不是仓库**：我用相对路径写门用例 ⇒ 文件落到了
+   **`/data/app/ws/examples/`**（生产目录！）。当轮发现并搬回仓库、删除生产目录下的新建目录
+   （`examples/` 原本不存在 ⇒ 未覆盖任何生产文件）。**纪律：给仓库写文件一律用绝对路径。**
+2. **先调用后定义**：`px_str_index_of_runes` 定义在文件后段而方法表（前段）先用到 ⇒ gcc 报
+   `static declaration follows non-static declaration`（**探针先于重烘**抓到的 —— 省下一轮重烘）。
+   修法：与既有前向声明同区补一条 `static` 声明。
+3. **自己的门用例写错过一次**：`bytes_len(chr(185))` —— `bytes_len` 只收 `bytes`（三轨同一处实现，
+   所以是**一致拒绝**而非分叉），必须显式 `bytes(...)` 过桥。这正是"两个模型泾渭分明"的证据，
+   已写进速查表事实 218。
+
 ## M187 · 第三方 registry-px 库**引入官方 `registry/`** + pxpkg **多文件包**（第 65 轮 · 缺陷 209）
 
 > 主题：把上游 `banshanhanfu/registry-px`（Apache-2.0）的库引入官方 registry（用户指令），

@@ -53,6 +53,7 @@
 #include "mbedtls/x509_crt.h"
 #include "mbedtls/error.h"
 #include "mbedtls/sha256.h"
+#include "mbedtls/sha1.h"      // M188（PX-DEF-026）：SHA1（MySQL native_password 应答 / 通用摘要）
 #include "mbedtls/md5.h"      // M150：MD5（PostgreSQL md5 认证 / 通用摘要）
 #include "mbedtls/pkcs5.h"    // M150：PBKDF2-HMAC-SHA256（SCRAM-SHA-256 的 Hi）
 
@@ -411,6 +412,8 @@ static LXValue bi_os_spawn_capture(LXValue* args, int nargs, void* ctx);
 static LXValue bi_os_wait(LXValue* args, int nargs, void* ctx);
 static LXValue bi_os_kill(LXValue* args, int nargs, void* ctx);
 static LXValue bi_os_capture(LXValue* args, int nargs, void* ctx); // M66
+// M188-FWD：字符串方法面 `.find` 的 rune 轴定位（定义在文件后段，方法表先用到）
+static int px_str_index_of_runes(LXObject* so, LXObject* uo);
 static LXValue bi_os_popen(LXValue* args, int nargs, void* ctx);   // M66
 // M115：服务进程/环境原语（env_set/env_unset/os_self_path/isatty/now_sec）
 static LXValue bi_env_set(LXValue* args, int nargs, void* ctx);
@@ -5097,6 +5100,26 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
         if (strcmp(name, "replace") == 0) return call_with_self("replace", obj, args, nargs);
         if (strcmp(name, "starts_with") == 0) return call_with_self("starts_with", obj, args, nargs);
         if (strcmp(name, "ends_with") == 0) return call_with_self("ends_with", obj, args, nargs);
+        // M188-STR-FACE（PX-DEF-025/027）：方法面四别名。
+        // 校验在**方法层**做（报调用者写的方法名）—— 与解释轨 `i_str_method` **逐字同文**；
+        // 实现仍只有一份（find → px_str_index_of_runes；其余三个 → 既有 native 直通）。
+        // ⚠ 既有名字（trim/starts_with/ends_with）的分支一字不动，避免改动既有文案。
+        if (strcmp(name, "find") == 0) {
+            if (nargs != 1 || args[0].type != PX_STR) px_error("R1002: 方法 find 参数 1 需要 string");
+            return px_int(px_str_index_of_runes(obj.as.obj, args[0].as.obj));
+        }
+        if (strcmp(name, "strip") == 0) {
+            if (nargs != 0) px_error("R1002: 方法 strip 不接受参数");
+            return call_with_self("trim", obj, args, nargs);
+        }
+        if (strcmp(name, "has_prefix") == 0) {
+            if (nargs != 1 || args[0].type != PX_STR) px_error("R1002: 方法 has_prefix 参数 1 需要 string");
+            return call_with_self("starts_with", obj, args, nargs);
+        }
+        if (strcmp(name, "has_suffix") == 0) {
+            if (nargs != 1 || args[0].type != PX_STR) px_error("R1002: 方法 has_suffix 参数 1 需要 string");
+            return call_with_self("ends_with", obj, args, nargs);
+        }
     }
     if (obj.type == PX_LIST) {
         if (strcmp(name, "append") == 0) {
@@ -7725,6 +7748,128 @@ static LXValue bi_md5_bytes(LXValue* args, int nargs, void* ctx) {
     if (mbedtls_md5(d, (size_t)n, digest) != 0) px_error("md5 计算失败");
     return px_bytes_len(digest, 16);
 }
+
+
+// ═══ M188（第 66 轮）：SHA1 族 + 三件「安全替代」（PX-DEF-012/016/017/026）═══
+// 动机（第三方 registry-px 逐条登记，均在三轨上复现）：
+//   · PX-DEF-026：**没有 sha1** ⇒ MySQL `mysql_native_password`（T2 驱动实测必需）在语言里
+//     只能用纯 .px 手搓 SHA1（对方 8 库测试里的做法）。族口径与 sha256/md5 **逐条对齐**：
+//       sha1(data)       → 40 字符**小写 hex**
+//       sha1_bytes(data) → 20 **字节**（要文本用 bytes_to_hex）
+//     data 收 str|bytes|数值（二进制安全、可含 NUL；数值自动字符串化，同 bytes()/sha256）。
+//   · PX-DEF-016：`sha256` 只给 hex ⇒ 想再哈希一次必须 hex_to_bytes 往返（**双哈希陷阱**：
+//     直接 sha256(sha256(x)) 得到的是对 **hex 文本** 的哈希）。补 `sha256_bytes` 收口。
+//   · PX-DEF-012：`bytes(10)` 是字符串 "10" 的 **2 字节**，不是 10 个字节 ⇒ 补 `bytes_zeros(n)`。
+//   · PX-DEF-017：`chr(185)` 给的是 UTF-8 编码后的 **2 字节** `c2b9` ⇒ 补 `byte(n)`（原样单字节）。
+// 以上五件均为**纯新增**（不改任何现有语义）⇒ 三轨只需「注册 + 转发」两步。
+static LXValue bi_sha1(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: sha1 需要一个参数");
+    const char* data = bdata(args[0]);
+    int len = blen(args[0]);
+    unsigned char digest[20];
+    if (mbedtls_sha1((const unsigned char*)data, (size_t)len, digest) != 0)
+        px_error("sha1 计算失败");
+    char hex[41];
+    bytes_to_hex(digest, 20, hex);
+    return px_str(hex);
+}
+
+static LXValue bi_sha1_bytes(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: sha1_bytes 需要一个参数 (data)");
+    const unsigned char* d = (const unsigned char*)bdata(args[0]);
+    int n = blen(args[0]);
+    unsigned char digest[20];
+    if (mbedtls_sha1(d, (size_t)n, digest) != 0) px_error("sha1 计算失败");
+    return px_bytes_len(digest, 20);
+}
+
+static LXValue bi_sha256_bytes(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: sha256_bytes 需要一个参数 (data)");
+    const unsigned char* d = (const unsigned char*)bdata(args[0]);
+    int n = blen(args[0]);
+    unsigned char digest[32];
+    if (mbedtls_sha256(d, (size_t)n, digest, 0) != 0) px_error("sha256 计算失败");
+    return px_bytes_len(digest, 32);
+}
+
+static LXValue bi_bytes_zeros(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_INT)
+        px_error("R1002: bytes_zeros 需要一个 int 参数");
+    int64_t n = args[0].as.i;
+    if (n < 0) n = 0;
+    if (n > 64LL * 1024 * 1024) px_error("R1002: bytes_zeros 长度过大 (上限 64MiB)");
+    unsigned char* buf = (unsigned char*)xmalloc((size_t)n + 1);
+    for (int64_t i = 0; i < n; i++) buf[i] = 0;
+    LXValue r = px_bytes_len(buf, (int)n);
+    xfree(buf);
+    return r;
+}
+
+static LXValue bi_byte(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_INT)
+        px_error("R1002: byte 需要一个 int 参数");
+    int64_t n = args[0].as.i;
+    if (n < 0 || n > 255)
+        px_error("R1002: byte 取值范围 0..255，实际是 %lld", (long long)n);
+    unsigned char b = (unsigned char)n;
+    return px_bytes_len(&b, 1);
+}
+
+
+// ═══ M188-STR-FACE：字符串方法面收口（第三方 PX-DEF-025/027）═══
+// 对方实测：`"abc".find("b")` / `"  x ".strip()` / `"ab".has_prefix("a")` 全部
+//   `R1007 类型 string 没有方法 'find'` ⇒ 方法面比函数面窄一大截（函数式 trim/starts_with/
+//   ends_with 都有，定位只有 stdlib `strings.index_of`）。方法面是**最常用的调用形态**
+//   （Go 的 `strings.Index` + `s.Strip`/`s.HasPrefix` 习惯），缺它只能 `import std.strings`。
+// 口径（**与既有函数面逐条对齐，不发明新语义**）：
+//   · `s.find(sub)`      → sub 首次出现的 **rune** 下标；不存在 `-1`；空 sub → `0`
+//                          （= stdlib `strings.index_of`；`len`/`s[i]`/切片同轴）
+//   · `s.strip()`        → 与 `trim(s)` 完全同实现（只加路由，不复制代码）
+//   · `s.has_prefix(p)`  → 与 `starts_with(s, p)` 同实现
+//   · `s.has_suffix(p)`  → 与 `ends_with(s, p)` 同实现
+// ⇒ 四别名均**只有一份实现**（三条直通既有 native，`find` 落到下面的 str_index_of）。
+// 逐 rune 定位（与 stdlib `index_of` 的 `s[i:i+m] == sub` **同判定**）：只在 rune 边界比较，
+//   且要求「同样 rune 数的子串字节相等」 ⇒ 畸形 UTF-8 上也不会出现「字节匹配但 rune 不匹配」的分歧。
+static int px_str_index_of_runes(LXObject* so, LXObject* uo) {
+    int ul = px_unicode_len_n(uo->as.str.data, uo->as.str.len);
+    if (ul == 0) return 0;
+    int sl = px_unicode_len_n(so->as.str.data, so->as.str.len);
+    if (ul > sl) return -1;
+    const unsigned char* s = (const unsigned char*)so->as.str.data;
+    const unsigned char* u = (const unsigned char*)uo->as.str.data;
+    int slen = so->as.str.len, ublen = uo->as.str.len;
+    int lim = sl - ul;
+    int sbi = 0;
+    for (int i = 0; i <= lim; i++) {
+        int p = sbi, w = 0;
+        for (int k = 0; k < ul; k++) {
+            if (p >= slen) { w = -1; break; }
+            p += px_utf8_step(s + p, slen - p);
+            w = p - sbi;
+        }
+        if (w < 0) return -1;
+        if (w == ublen && memcmp(s + sbi, u, (size_t)w) == 0) return i;
+        if (sbi >= slen) return -1;
+        sbi += px_utf8_step(s + sbi, slen - sbi);
+    }
+    return -1;
+}
+
+// str_index_of(s, sub) → int（rune 下标 / -1 / 空 sub → 0）
+static LXValue bi_str_index_of(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) px_error("R1002: str_index_of 需要 (s, sub) 参数");
+    if (args[0].type != PX_STR || args[1].type != PX_STR)
+        px_error("R1002: str_index_of 需要两个字符串参数");
+    return px_int(px_str_index_of_runes(args[0].as.obj, args[1].as.obj));
+}
+
+// ═══ M188 结束（M188-SHA1-FAMILY）═══
 
 static LXValue bi_pbkdf2_sha256(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
@@ -10773,6 +10918,13 @@ void px_register_builtins(void) {
     px_set_global("fd_wait", px_native("fd_wait", bi_fd_wait));
     // M14 P1：crypto 哈希
     px_set_global("sha256", px_native("sha256", bi_sha256));
+    // M188（PX-DEF-026/016/012/017）：SHA1 族 + 三件安全替代
+    px_set_global("sha1", px_native("sha1", bi_sha1));
+    px_set_global("sha1_bytes", px_native("sha1_bytes", bi_sha1_bytes));
+    px_set_global("sha256_bytes", px_native("sha256_bytes", bi_sha256_bytes));
+    px_set_global("bytes_zeros", px_native("bytes_zeros", bi_bytes_zeros));
+    px_set_global("byte", px_native("byte", bi_byte));
+    px_set_global("str_index_of", px_native("str_index_of", bi_str_index_of));   // M188：方法面 .find 的同一实现
     px_set_global("hmac_sha256", px_native("hmac_sha256", bi_hmac_sha256));  // M84-S2 (Issue 21 GAP-HMAC-1)
     px_set_global("dns_lookup", px_native("dns_lookup", bi_dns_lookup));     // M84-S3 (Issue 22 GAP-DNS-1)
     px_set_global("dns_txt", px_native("dns_txt", bi_dns_txt));              // M103-S2a (Issue 29 GAP-DNS-TXT-1)
