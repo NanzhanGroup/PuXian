@@ -12694,11 +12694,22 @@ static LXValue bi_bytes_get(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 2) px_error("R1002: bytes_get 需要 (bytes, index) 参数");
     if (args[0].type != PX_BYTES) px_error("R1002: bytes_get 需要 bytes，实际是 %s", px_type_name(args[0]));
-    int64_t i = int_val(args[1]);
+    // M189（第 67 轮 · 缺陷 211 = 第三方 PX-DEF-029）：**越界不再返回 null**。
+    //   修前 `bytes_get(b, 5)` → null，而**同一个操作**的另两个入口都响亮：
+    //   `b[5]`（M185 统一后）与 `bytes_set(b, 5, v)` 均为 `R1003 索引越界: i (len=n)`，
+    //   `list[i]` / `str[i]` 亦然 ⇒ 同一语义两套答案。更糟的是 null 会**流到下游**变成
+    //   「无法比较 null 与 int」这类**指不到越界点**的晦涩错误（二进制协议解析器首当其冲，
+    //   对方 mysql/pg 驱动各自手写 `off >= bytes_len(b)` 守卫即是此痛的证据）。
+    //   ⇒ 统一为 R1003（"响亮优于静默"，与 M163/M166/M184/M185 一贯口径）。
+    // M189：索引校验走 `px_req_int_idx`（= `b[i]` / `list[i]` / `str[i]` 的同一入口），
+    //   修前用 `int_val` ⇒ 两条**同族分叉**：① `bytes_get(b,"x")` 报「期望整数，实际是 string」
+    //   而 `b["x"]` 报「索引必须是整数，实际是 string」（同族两套文案）；
+    //   ② `int_val` 对 float **静默截断** ⇒ `bytes_get(b,1.5)` 返回 b[1]，而 `b[1.5]` 响亮报错。
+    int64_t i = px_req_int_idx(args[1]);
     int len = args[0].as.obj->as.str.len;
     int64_t idx = i;
     if (idx < 0) idx += len;
-    if (idx < 0 || idx >= len) return px_null();
+    if (idx < 0 || idx >= len) px_error("R1003: 索引越界: %d (len=%d)", (int)idx, len);
     return px_int((unsigned char)args[0].as.obj->as.str.data[idx]);
 }
 
@@ -12707,13 +12718,13 @@ static LXValue bi_bytes_set(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 3) px_error("R1002: bytes_set 需要 (bytes, index, value) 参数");
     if (args[0].type != PX_BYTES) px_error("R1002: bytes_set 需要 bytes，实际是 %s", px_type_name(args[0]));
-    int64_t i = int_val(args[1]);
+    int64_t i = px_req_int_idx(args[1]);
     int64_t v = int_val(args[2]);
     if (v < 0 || v > 255) px_error("R1002: bytes_set 的值必须在 0..255");
     int len = args[0].as.obj->as.str.len;
     int64_t idx = i;
     if (idx < 0) idx += len;
-    if (idx < 0 || idx >= len) px_error("R1003: bytes_set 下标越界");
+    if (idx < 0 || idx >= len) px_error("R1003: 索引越界: %d (len=%d)", (int)idx, len);
     const char* src = args[0].as.obj->as.str.data;
     char* d = xmalloc((size_t)len + 1);
     memcpy(d, src, (size_t)len);

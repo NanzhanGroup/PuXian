@@ -1,0 +1,4 @@
+# M189 负判据④：类型错 ⇒ R1002（不是 R1003）
+print("before")
+print(bytes_get(123, 0))
+print("after")

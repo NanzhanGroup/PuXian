@@ -2307,3 +2307,41 @@ set_timeout(fn (): print("once after 2s"), 2000)
        也与 stdlib `strings.index_of` **同值**（门里有 X1..X4 等价性定点）。
      · 参数错**同码同文**（三轨逐字相同）：`.find(123)` / `.find()` ⇒ `R1002 方法 find 参数 1 需要 string`；
        `.strip(1)` ⇒ `R1002 方法 strip 不接受参数`。
+220. **bytes 的「越界 / 索引类型」在三轨**同一入口同一答案**（第 67 轮 · M189 收口缺陷 211/212 · 第三方 PX-DEF-029）**：
+     · **越界一律 `R1003: 索引越界: i (len=n)`**（负索引先归一，报的是归一后的下标）——
+       `bytes_get(b,i)` / `bytes_set(b,i,v)` / `b[i]` / `list[i]` / `str[i]` **五处同码同文**。
+       修前 `bytes_get` 是**唯一**越界给 `null` 的入口：`bytes_get(b,5) < 251` 只会报
+       「无法比较 null 与 int」，**指不到越界点**（二进制协议解析器首当其冲）。
+     · **索引必须是 int**：`bytes_get(b,"x")` / `bytes_get(b,1.5)` ⇒ `R1002 索引必须是整数，实际是 <t>`。
+       修前 `bytes_get` 走 `int_val` ⇒ 文案是「期望整数…」（与索引面不同）+ **float 被静默截断**
+       （`bytes_get(b,1.5)` 返回 `b[1]`）。
+     · ⇒ **"想越界不报错"要自己守卫**：`if i >= 0 and i < bytes_len(b): ...`（库代码的惯用写法，三轨均可用）；
+       `bytes_set` 越界文案也一并统一（修前是第三套文案「bytes_set 下标越界」）。
+     · **`bytes_slice` / `b[a:b]` 是唯一保留"宽松"的一面**（负边界/越界一律 **clamp**，`start>end` ⇒ 空）——
+       这是有意语义，别和索引面搞混。
+221. **`bytes_to_int` 的有/无符号由第 3 个形参决定（第 67 轮 · M189 复核第三方 PX-DEF-030）**：
+     · `bytes_to_int(b)` → **无符号**：`"ffffffff"` ⇒ `4294967295`；
+     · `bytes_to_int(b, "big", true)` → **有符号**（补码）：`"ffffffff"` ⇒ `-1`、`"fffb"` ⇒ `-5`；
+     · 长度 0 或 >8 ⇒ `null`（不变）；endian 只认 `big|little|be|le`。
+     ⇒ **二进制协议里判 NULL / 负长度，必须显式传 `signed=true`**，不要用 `> 2147483647` 绕
+       （对方 pg 驱动当初就是这么绕的 —— 那是文档缺口，不是语言缺口）。
+222. **`is_int_str(s)` / `is_float_str(s)` ⇔ `int(s)` / `float(s)` 是否抛错**（第 63 轮 M185 立 · M189 用于库迁移）：
+     · 三者共用**同一份解析器**（`is_int_str(s)` 为真 ⇔ `int(s)` 不回错）⇒ 由**构造**保证不漂移。
+     · 迁移范式（M184 严格化之后第三方/我方库的通用改法）：把 `var n = int(parts[1])`
+       前面加 `if not is_int_str(parts[1]): return false`（`registry/passhash` 就是这么补的，
+       见 `tools/patches/registry-px/passhash.patch`）。
+223. **`Err`/`Ok` 的 `str()` 形态是"再套一层"**（第 67 轮 · M189 复核第三方 PX-DEF-023）：
+     `str(Err("a: " + str(Err("b"))))` = `Err(a: Err(b))` —— 这是**展示形态**（每次 `Err(x)`
+     的 `str` 都加壳），三轨一致、非缺陷；要扁平化就在**最外层**捕获后只 `str(err)` 一次。
+224. **列表/字典的「切片与赋值」是浅的，没有 `deepcopy`（第 67 轮 · M189 复核第三方 PX-DEF-022）**：
+     `a[0:2]` 是**浅拷贝**（内层元素仍共享）、`var b = a` 是**纯引用**（改 `b` 即改 `a`）——
+     与 Python/Go 同。要深拷贝就手写逐元素循环（`registry/qrcode` 里的 `copy_m` 即此法）。
+     字典同理：`for k in d` 取键快照，`d.items()` 取 `[[k,v],…]`（后者才可解包）。
+225. **不支持 C 风格 `for (;;)`（第 67 轮 · M189 复核第三方 PX-DEF-028）**：
+     `for (;;) { ... }` ⇒ `E1001 非法字符: ';'`（三轨同文）。无限循环写 `while true:` + `break`。
+226. **registry 第三方包的「本地补丁」通道（第 67 轮 · M189 立）**：
+     · 包**默认逐字节照搬**上游；例外只能来自 `tools/patches/registry-px/<name>.patch`
+       （unified diff，路径相对包目录 ⇒ `patch -p0`），由 `tools/import_registry_px.sh` 在
+       **暂存区**应用后才写盘 ⇒ `registry/THIRD_PARTY.md` 的「补丁」列 + sha（记**打过补丁后**的内容）
+       仍能做「表 ⇔ 磁盘」防漂移对拍。
+     · 现有唯一一处：`passhash.patch`（`+2` 行守卫，因 M184 严格 `int()`）；上游发版后**删文件即归零**。

@@ -1,0 +1,5 @@
+# M189 负判据⑥：索引为 float（修前 int_val 静默截断 ⇒ 返回 b[1]）
+var b = hex_to_bytes("aabb")
+print("before")
+print(bytes_get(b, 1.5))
+print("after")

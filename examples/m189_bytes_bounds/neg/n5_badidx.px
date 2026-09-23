@@ -1,0 +1,5 @@
+# M189 负判据⑤：索引非整数（与 b[i] 同文）
+var b = hex_to_bytes("aabb")
+print("before")
+print(bytes_get(b, "x"))
+print("after")

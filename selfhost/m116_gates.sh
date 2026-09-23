@@ -505,6 +505,13 @@ step "M188（第 66 轮）：SHA1 族 + 三件安全替代 + 字符串方法面�
 #   负控 A（删 find 路由）/B（sha1_bytes 返 16 字节）/C（rune 轴退化为字节轴）改 runtime.c、
 #   D（删 icall.px 的 strip 分支，用当前源码重编解释器）各自独立判红 + 源逐字节还原。
 run m188_std_face bash examples/m188_std_face/verify.sh
+step "M189（第 67 轮）：bytes 边界族（bytes_get / bytes_set / b[i]）三轨同一真相（第三方 PX-DEF-029）"
+#   判据：① 正判据三轨逐字节一致，含 A8/A9 = **函数面 ⇔ 索引面全范围等价**（正/负索引逐项对拍）；
+#   ② 定点 13 条（取值 / bytes_set 函数式 / 守卫模式 / 切片 clamp）；
+#   ③ 拒绝侧 6 例 × 三轨：rc≠0 + 同一 R10xx 码 + **正文逐字相同** + 三轨都指到用户行（号）；
+#   负控 A（bytes_get 越界退回 null）/B（bytes_set 文案退回旧文）/D（索引校验退回 int_val）改 runtime.c、
+#   C（删 ibuiltin.px 的 bytes_get 前置校验，用当前源码重编解释器）各自独立判红 + 源逐字节还原。
+run m189_bytes_bounds bash examples/m189_bytes_bounds/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们
