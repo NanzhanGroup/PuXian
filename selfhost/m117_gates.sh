@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # M116 全门本地复跑（= CI regression + toolchain 关键步）
 set -uo pipefail
-cd /data/code/puxian
+cd "$(cd "$(dirname "$0")/.." && pwd)"   # M188-STDLIB：相对自身，不再硬编码
 export LC_ALL=C LANG=C
 FAIL=0
 

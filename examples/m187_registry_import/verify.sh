@@ -49,6 +49,9 @@ chk() { if ( eval "$2" ); then echo "  PASS $1"; pass=$((pass+1)); else echo "  
 
 [ -f "$PROV" ] || { echo "❌ 前置自查失败：缺 registry/THIRD_PARTY.md（先跑 tools/import_registry_px.sh --apply）" >&2; exit 2; }
 grep -q 'M187' tools/import_registry_px.sh || { echo "❌ 前置自查失败：引入器缺 M187 标记" >&2; exit 2; }
+# M188-STDLIB：本门**必须**开严格模块 —— 否则「stdlib 没找到」只打警告 + 跳过，
+#   编译错误被降级成运行期未定义符号，门的 rc 判据会**假绿**（CI 上正是这样被蒙住的）。
+export PX_STRICT_MODULE=1
 grep -q 'pxp_digest_pkg' tools/pxpkg.px || { echo "❌ 前置自查失败：pxpkg 缺多文件包支持（M187）" >&2; exit 2; }
 
 # ── 表解析：包 / 版本 / 文件数 / 入口 sha 前 16 ──

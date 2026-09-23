@@ -67,7 +67,13 @@ def px_stdlib_dir():
     let e = env("PX_STDLIB")
     if e != null and e != "" and exists(e):
         return e
-    let cands = ["stdlib", "./stdlib", "../stdlib", "../../stdlib", "/data/code/puxian/stdlib"]
+    # M188-STDLIB（缺陷 210）：删硬编码开发机路径（同 pxlint）
+    let sp = os_self_path()
+    if sp != null and len(sp) > 0:
+        let self_std = px_dirname(sp) + "/../stdlib"
+        if exists(self_std):
+            return self_std
+    let cands = ["stdlib", "./stdlib", "../stdlib", "../../stdlib"]
     var i = 0
     while i < len(cands):
         let c = cands[i]
