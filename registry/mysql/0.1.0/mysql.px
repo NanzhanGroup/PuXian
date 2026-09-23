@@ -4,7 +4,11 @@
 # 纯 .px 实现 MySQL client/server protocol（0.1.0 子集）：
 #   mysql_connect(host, port, user, password[, dbname][, opts]) → Ok(conn dict) | Err
 #   mysql_query(conn, sql)     → Ok(query result dict) | Err
+#   mysql_query_params(conn, sql, params) → Ok(query result dict) | Err（预处理语句，防注入）
+#   mysql_stmt_prepare / mysql_stmt_execute / mysql_stmt_close → 显式语句生命周期
 #   mysql_close(conn)          → Ok(true) | Err
+# 文本协议（mysql_query）结果一律 string；二进制协议（mysql_query_params）按列类型
+# 返回 typed 值（int / float / string / null），decimal/日期为 string。
 # 对齐 Go go-sql-driver/mysql 心智（0.1.0 只做文本协议简单查询）：
 #   - 握手：HandshakeV10 → HandshakeResponse41（CLIENT_PROTOCOL_41 +
 #     CLIENT_SECURE_CONNECTION + CLIENT_CONNECT_WITH_DB + CLIENT_PLUGIN_AUTH）
@@ -14,16 +18,14 @@
 #   - 结果形态：{ columns: [{name}], rows: [[值...]] }；NULL → null
 # 依赖 runtime native：tcp_connect_ex / tcp_send_ex / tcp_recv_ex /
 #   sha256 / bytes 族 / int_to_bytes / bytes_to_int / base64_encode
-# 语言缺陷规避与说明：
-#   - **无 sha1 native**（登记 PX-DEF-026）→ 库内自实现 SHA1（纯 .px，NIST FIPS 180-4）
-#   - bytes_to_int endian 参数解释轨失效（PX-DEF-019）→ 只用默认大端
-#   - 字符串方法面窄（PX-DEF-025 同族）→ 自备 my_index_of / my_prefix
+# 语言能力说明（m197）：
+#   - PX-DEF-026/025/016 已修：sha1_bytes / sha256_bytes / byte / .find 均为原生（M188），
+#     认证 token 直接调用原生 SHA1/SHA256，不再自实现
+#   - bytes_to_int endian 参数自 M186 起三轨可靠
 # ============================================================
 
-# ---- 内部：SHA1（语言无 sha1 native，纯 .px 实现 FIPS 180-4）----
-import "sha1.px"
-
 import "proto.px"
+import "stmt.px"
 
 # ---- 内部：连接与握手 ----
 # 返回 Ok(conn dict{fd, host, port, user, dbname, seq}) | Err
@@ -78,7 +80,7 @@ def mysql_connect(host, port, user, password, dbname, opts):
         var rest = bytes_slice(hs, soff, bytes_len(hs))
         var i = 0
         while i < 12 and i < bytes_len(rest) and bytes_get(rest, i) != 0:
-            nonce2 = bytes_concat(nonce2, hex_to_bytes(my_byte_hex(bytes_get(rest, i))))
+            nonce2 = bytes_concat(nonce2, byte(bytes_get(rest, i)))
             i += 1
     var nonce = bytes_concat(nonce1, nonce2)
     # plugin name（若 CLIENT_PLUGIN_AUTH）
@@ -312,6 +314,32 @@ def mysql_query(conn, sql):
     if r.is_err():
         return Err("mysql: query send: " + str(r.unwrap()))
     return mysql_read_result(conn["fd"])
+
+# ---- 公开 API：预处理语句（参数化查询）----
+def mysql_stmt_prepare(conn, sql):
+    return my_stmt_prepare(conn["fd"], sql)
+
+def mysql_stmt_execute(conn, stmt, params):
+    if len(params) != stmt["nparams"]:
+        return Err("mysql: param count mismatch, need " + str(stmt["nparams"]) + " got " + str(len(params)))
+    return my_stmt_execute(conn["fd"], stmt, params)
+
+def mysql_stmt_close(conn, stmt):
+    return my_stmt_close(conn["fd"], stmt)
+
+# 一步式参数化查询：prepare → execute → close（无论成败都关闭 statement）
+def mysql_query_params(conn, sql, params):
+    var prep = my_stmt_prepare(conn["fd"], sql)
+    if prep.is_err():
+        return Err(prep.err())
+    var stmt = prep.unwrap()
+    if len(params) != stmt["nparams"]:
+        return Err("mysql: param count mismatch, need " + str(stmt["nparams"]) + " got " + str(len(params)))
+    var ex = my_stmt_execute(conn["fd"], stmt, params)
+    var cl = my_stmt_close(conn["fd"], stmt)
+    if ex.is_err():
+        return Err(ex.err())
+    return ex
 
 # ---- 公开 API：关闭 ----
 def mysql_close(conn):

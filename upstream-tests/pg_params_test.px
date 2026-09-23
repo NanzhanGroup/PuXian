@@ -1,0 +1,52 @@
+# pg_params_test.px 测试：扩展查询协议（参数化查询，防注入）
+import "../registry/pg/0.1.0/pg.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var conn = pg_connect("127.0.0.1", 5432, "postgres", "px_test_pass_123",
+        "pxtest", {"timeout_ms": 5000})
+    if conn.is_err():
+        print("FAIL: connect: " + str(conn))
+        exit(1)
+    var c = conn.unwrap()
+    print("connect ok")
+    # 1) int + float 参数
+    var q = pg_query_params(c, "SELECT id, name FROM users WHERE id = $1 AND score > $2 ORDER BY id", [1, 50.0])
+    if q.is_err():
+        print("FAIL: params query: " + str(q))
+        exit(1)
+    var res = q.unwrap()
+    expect(len(res["rows"]) == 1, "params rows=1, got " + str(len(res["rows"])))
+    expect(res["rows"][0][1] == "alice", "params name alice")
+    # 2) 字符串参数 + 注入尝试 → 0 行
+    var q2 = pg_query_params(c, "SELECT id FROM users WHERE name = $1", ["' OR '1'='1"])
+    var res2 = q2.unwrap()
+    expect(len(res2["rows"]) == 0, "injection blocked, got " + str(len(res2["rows"])))
+    # 3) NULL 参数（$1::int IS NULL 分支）
+    var q3 = pg_query_params(c, "SELECT count(*) AS n FROM users WHERE ($1::int IS NULL OR id = $1)", [null])
+    var res3 = q3.unwrap()
+    expect(res3["rows"][0][0] == "2", "null param count=2, got " + str(res3["rows"][0][0]))
+    var q3b = pg_query_params(c, "SELECT count(*) AS n FROM users WHERE ($1::int IS NULL OR id = $1)", [1])
+    var res3b = q3b.unwrap()
+    expect(res3b["rows"][0][0] == "1", "int param count=1, got " + str(res3b["rows"][0][0]))
+    # 4) bool 参数
+    var q4 = pg_query_params(c, "SELECT count(*) AS n FROM users WHERE active = $1", [true])
+    var res4 = q4.unwrap()
+    expect(res4["rows"][0][0] == "1", "bool true count=1, got " + str(res4["rows"][0][0]))
+    # 5) 错误路径：类型不匹配 → Err，不崩溃
+    var q5 = pg_query_params(c, "SELECT id FROM users WHERE id = $1", ["abc"])
+    expect(q5.is_err(), "type mismatch returns Err")
+    if q5.is_err():
+        print("  (expected) err=" + str(q5))
+    # 6) 错误后可恢复
+    var q6 = pg_query_params(c, "SELECT 2 + 3 AS s", [])
+    var res6 = q6.unwrap()
+    expect(res6["rows"][0][0] == "5", "recover query ok")
+    # 7) 不存在的表 → Err
+    var q7 = pg_query_params(c, "SELECT * FROM no_such_table_xyz", [])
+    expect(q7.is_err(), "bad table returns Err")
+    pg_close(c)
+    print("pg_params_test: PASS")
+    return Ok(0)

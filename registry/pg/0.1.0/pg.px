@@ -3,9 +3,10 @@
 # ------------------------------------------------------------
 # 纯 .px 实现 PostgreSQL v3 wire protocol 客户端（0.1.0 子集）：
 #   pg_connect(host, port, user, password, dbname[, opts]) → Ok(conn dict) | Err
-#   pg_query(conn, sql)        → Ok(query result dict) | Err
+#   pg_query(conn, sql)        → Ok(query result dict) | Err（简单查询协议 Q）
+#   pg_query_params(conn, sql, params) → Ok(query result dict) | Err（扩展查询协议，防注入）
 #   pg_close(conn)             → Ok(true) | Err
-# 对齐 Go lib/pq / database/sql 心智（0.1.0 只做简单查询）：
+# 对齐 Go lib/pq / database/sql 心智（0.1.0 文本格式参数/结果）：
 #   - 连接：StartupMessage（v3.0）→ 认证（md5 / SCRAM-SHA-256 /
 #     cleartext / trust）→ ReadyForQuery
 #   - 查询：Q（Simple Query）→ RowDescription + DataRow* → CommandComplete
@@ -16,10 +17,9 @@
 # 依赖 runtime native：tcp_connect_ex / tcp_send_ex / tcp_recv_ex /
 #   tls_upgrade / md5 / hmac_sha256 / pbkdf2_sha256 / sha256 /
 #   base64_encode / bytes 族 / int_to_bytes / bytes_to_int
-# 语言缺陷规避：
-#   - bytes_to_int endian 参数解释轨失效（PX-DEF-019）→ 只用默认大端
-#   - int_to_bytes signed+负值解释轨 null（PX-DEF-020）→ 只编码非负长度
-#   - 字符串方法面窄（PX-DEF-025 同族）→ 自备 pg_index_of / pg_prefix
+# 语言能力说明（m197）：
+#   - PX-DEF-019/020 已修（M186）：bytes_to_int 的 endian/signed 三轨可靠，NULL 长度用 signed 判负
+#   - PX-DEF-025 已修（M188）：.find / starts_with 均为原生
 # ============================================================
 # ---- 内部：字节/字符串小工具（不依赖 std import，库自包含）----
 def pg_u32(v):
@@ -28,23 +28,8 @@ def pg_u16(v):
     return int_to_bytes(v, 2, "big", false)
 def pg_u32_of(b, off):
     return bytes_to_int(bytes_slice(b, off, off + 4))
-# index_of（自实现：方法面窄，PX-DEF-025 同族）
-def pg_index_of(s, sub):
-    var i = 0
-    while i + len(sub) <= len(s):
-        var j = 0
-        var matched = true
-        while j < len(sub):
-            if s[i + j] != sub[j]:
-                matched = false
-                break
-            j += 1
-        if matched:
-            return i
-        i += 1
-    return -1
 def pg_prefix(s, pre):
-    return pg_index_of(s, pre) == 0
+    return s.starts_with(pre)
 # ---- 内部：TCP 读满 n 字节（循环 recv）----
 # 返回 [bytes, err_str]；err_str 空表示成功
 def pg_recv_n(fd, n):
@@ -104,17 +89,13 @@ def pg_auth_md5(user, password, salt_bytes):
     var inner = md5(password + user)
     var salted = inner + bytes_to_str(salt_bytes)
     return "md5" + md5(salted)
-# 单字节 → 两位小写 hex
-def pg_byte_hex(x):
-    var digits = "0123456789abcdef"
-    return digits[x // 16] + digits[x % 16]
-# XOR 两段 32 字节 → bytes
+# XOR 两段 32 字节 → bytes（byte() 为 M188 原生：int → 单字节）
 def pg_xor32(a, b):
     var out = bytes("")
     var i = 0
     while i < 32:
         var x = bytes_get(a, i) ^ bytes_get(b, i)
-        out = bytes_concat(out, hex_to_bytes(pg_byte_hex(x)))
+        out = bytes_concat(out, byte(x))
         i += 1
     return out
 # 解析 SCRAM server-first-message 的 attrs（r=,s=,i=）
@@ -214,7 +195,7 @@ def pg_authenticate(fd, user, password):
             elif code == 10:
                 # SASL —— 可选 SCRAM-SHA-256
                 var bodies = bytes_to_str(bytes_slice(m[1], 4, bytes_len(m[1])))
-                if pg_index_of(bodies, "SCRAM-SHA-256") < 0:
+                if bodies.find("SCRAM-SHA-256") < 0:
                     return Err("pg: server SASL mechanisms unsupported: " + bodies)
                 var sr = pg_auth_scram(fd, user, password)
                 if sr.is_err():
@@ -320,6 +301,9 @@ def pg_read_query_result(fd):
         var m = pg_read_msg(fd)
         if m[2] != "":
             return Err("pg: query recv: " + m[2])
+        if m[0] == "1" or m[0] == "2":
+            # ParseComplete / BindComplete（扩展查询协议）
+            continue
         if m[0] == "T":
             # RowDescription
             columns = []
@@ -341,10 +325,10 @@ def pg_read_query_result(fd):
             var row = []
             var fi = 0
             while fi < nf:
-                var flen = pg_u32_of(m[1], off2)
+                var flen = bytes_to_int(bytes_slice(m[1], off2, off2 + 4), "big", true)
                 off2 += 4
-                if flen > 2147483647:
-                    # 负长度 = NULL（bytes_to_int 无符号，-1 → 4294967295）
+                if flen < 0:
+                    # 负长度 = NULL（M186 起 signed=true 三轨可靠）
                     row.append(null)
                 else:
                     var cell = bytes_slice(m[1], off2, off2 + flen)
@@ -378,6 +362,74 @@ def pg_read_query_result(fd):
             return Err("pg: unexpected query message type " + m[0])
 def pg_u16_of(b, off):
     return bytes_to_int(bytes_slice(b, off, off + 2))
+
+# ---- 内部：扩展查询协议（参数化查询）----
+# 文本格式编码单个参数 → [int32 长度前缀 + 值 bytes]；null → 长度 -1
+def pg_param_text(v):
+    if v == null:
+        return int_to_bytes(-1, 4, "big", true)
+    var txt = ""
+    if type(v) == "bool":
+        if v:
+            txt = "t"
+        else:
+            txt = "f"
+    elif type(v) == "int" or type(v) == "float" or type(v) == "string":
+        txt = str(v)
+    else:
+        return bytes("")  # 不支持的类型留空，由调用方报错
+    var raw = bytes(txt)
+    return bytes_concat(int_to_bytes(bytes_len(raw), 4, "big", true), raw)
+
+# Bind 消息 body：末命名 portal/stmt + 全文本格式 + 各参数
+def pg_bind_body(params):
+    var body = bytes(chr(0) + chr(0))      # portal "" + statement ""
+    body = bytes_concat(body, pg_u16(0))   # 参数格式码：0 个（全文本）
+    var n = len(params)
+    body = bytes_concat(body, pg_u16(n))
+    var i = 0
+    while i < n:
+        var v = params[i]
+        if type(v) == "int" or type(v) == "float" or type(v) == "string" or type(v) == "bool" or v == null:
+            body = bytes_concat(body, pg_param_text(v))
+        else:
+            return [bytes(""), "pg: unsupported param type " + str(type(v)) + " at " + str(i)]
+        i += 1
+    body = bytes_concat(body, pg_u16(0))   # 结果格式码：0 个（全文本）
+    return [body, ""]
+
+# pg_query_params(conn, sql, params) → Ok(result) | Err
+# 走扩展查询协议：Parse(未命名) → Bind(未命名 portal) → Describe(portal) →
+# Execute(maxrows=0) → Sync；结果形态与 pg_query 相同。
+# params 支持 string/int/float/bool/null；bytes 未支持（文本格式无二进制通道）。
+def pg_query_params(conn, sql, params):
+    var fd = conn["fd"]
+    # Parse
+    var parse_body = bytes_concat(bytes(chr(0) + sql + chr(0)), pg_u16(0))
+    var r = pg_send_msg(fd, "P", parse_body)
+    if r.is_err():
+        return Err("pg: parse send: " + str(r.unwrap()))
+    # Bind
+    var bb = pg_bind_body(params)
+    if bb[1] != "":
+        return Err(bb[1])
+    var r2 = pg_send_msg(fd, "B", bb[0])
+    if r2.is_err():
+        return Err("pg: bind send: " + str(r2.unwrap()))
+    # Describe(portal)
+    var r3 = pg_send_msg(fd, "D", bytes("P" + chr(0)))
+    if r3.is_err():
+        return Err("pg: describe send: " + str(r3.unwrap()))
+    # Execute
+    var r4 = pg_send_msg(fd, "E", bytes_concat(bytes(chr(0)), pg_u32(0)))
+    if r4.is_err():
+        return Err("pg: execute send: " + str(r4.unwrap()))
+    # Sync（错误也吞到 ReadyForQuery，连接可复用）
+    var r5 = pg_send_msg(fd, "S", bytes(""))
+    if r5.is_err():
+        return Err("pg: sync send: " + str(r5.unwrap()))
+    return pg_read_query_result(fd)
+
 # ---- 公开 API：查询 ----
 def pg_query(conn, sql):
     var body = bytes(sql + chr(0))

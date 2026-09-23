@@ -3,8 +3,15 @@
 # tools/import_registry_px.sh —— 把第三方 registry-px 的库引入官方 registry/
 # ------------------------------------------------------------
 # 用法：
-#   tools/import_registry_px.sh --src <registry-px 检出目录> [--exclude a,b] [--apply]
+#   tools/import_registry_px.sh --src <registry-px 检出目录> [--exclude a,b] [--apply] [--update]
 # 默认（不带 --apply）为**预演**：只列出会写入什么、逐件 sha256，不动任何文件。
+#
+# M198 补：`--update`（**就地更新**）—— 上游在**同一个版本目录**里改了内容时的唯一正规通道
+#   （实测 2026-09-23：上游 db5f210 → 7da3397e 就是「同版本就地改」：mysql 删 sha1.px 加 stmt.px、
+#   pg/cli/passhash 各改若干行）。默认行为仍是**冲突即拒**（人工决定），显式 `--update` 才写：
+#     · 内容不同的文件 ⇒ 覆盖（表里状态记「**就地更新**」）；
+#     · **上游已删除**的文件 ⇒ 从本地包目录删除（多文件包：M187 起包内全部 .px 随包分发）；
+#     · **上游新增**的文件 ⇒ 补入（并把「本地缺文件」也算作"需更新"，不再静默算作一致）。
 #
 # 纪律（M187 立）：
 #   ① **逐字节照搬**（不改上游文件一个字节）⇒ 上游 sha256 可直接与我们的对拍；
@@ -26,11 +33,13 @@ set -uo pipefail
 SRC=""
 EXCLUDE=""
 APPLY=0
+UPDATE=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --src) SRC="${2:-}"; shift 2 ;;
         --exclude) EXCLUDE="${2:-}"; shift 2 ;;
         --apply) APPLY=1; shift ;;
+        --update) UPDATE=1; shift ;;
         *) echo "未知参数：$1" >&2; exit 2 ;;
     esac
 done
@@ -45,7 +54,7 @@ UPSTREAM_URL="$(git -C "$SRC" config --get remote.origin.url 2>/dev/null || echo
 TMPL=/tmp/m187_import.$$
 mkdir -p "$TMPL"
 PROV="$TMPL/THIRD_PARTY.md"
-NEW=0; SKIP=0; CONFLICT=0; PATCHED=0
+NEW=0; SKIP=0; CONFLICT=0; PATCHED=0; UPD=0; REMOVED=0
 
 cat > "$PROV" <<EOF
 # 官方 registry · 第三方包来源与许可（自动生成，勿手改）
@@ -101,10 +110,13 @@ for libdir in "$SRC_REG"/*/; do
         fi
         dst="$ROOT/registry/$name/$ver"
         conflict=0
+        missing=""
         if [ -d "$dst" ]; then
             for f in "${files[@]}"; do
+                if [ ! -f "$dst/$f" ]; then conflict=1; missing="$missing $f"; fi
                 if [ -f "$dst/$f" ] && ! cmp -s "$stage/$f" "$dst/$f"; then conflict=1; fi
             done
+            [ -n "$missing" ] && echo "  [注意] $name/$ver 本地缺文件（上游有）：$missing" 
             if [ "$conflict" = 1 ] && [ -n "$patch_name" ]; then
                 # 已有目录内容不同：若差异正好等于「上游 + 本补丁」则不算冲突
                 same=1
@@ -112,12 +124,28 @@ for libdir in "$SRC_REG"/*/; do
                 [ "$same" = 1 ] && conflict=0
             fi
         fi
-        if [ "$conflict" = 1 ]; then
-            echo "  [冲突] $name/$ver 已存在且内容不同 —— 需人工定版本号（拒写）" >&2
+        do_update=0
+        if [ "$conflict" = 1 ] && [ "$UPDATE" = 1 ]; then
+            do_update=1
+        elif [ "$conflict" = 1 ]; then
+            echo "  [冲突] $name/$ver 已存在且内容不同 —— 需人工定版本号（拒写；要就地更新用 --update）" >&2
             CONFLICT=$((CONFLICT+1)); continue
         fi
         if [ -d "$dst" ]; then
-            SKIP=$((SKIP+1)); state="已存在（内容一致）"
+            if [ "$do_update" = 1 ]; then
+                UPD=$((UPD+1)); state="**就地更新**（上游同版本目录变更）"
+                for oldf in $(cd "$dst" && ls *.px 2>/dev/null); do
+                    keep=0
+                    for f in "${files[@]}"; do [ "$f" = "$oldf" ] && keep=1; done
+                    if [ "$keep" = 0 ]; then
+                        echo "  [删除] $name/$ver/$oldf（上游已移除）"
+                        [ "$APPLY" = 1 ] && rm -f "$dst/$oldf"
+                        REMOVED=$((REMOVED+1))
+                    fi
+                done
+            else
+                SKIP=$((SKIP+1)); state="已存在（内容一致）"
+            fi
         else
             NEW=$((NEW+1)); state="新引入"
         fi
@@ -134,7 +162,7 @@ for libdir in "$SRC_REG"/*/; do
 done
 
 echo "── 源：$UPSTREAM_URL @ $UPSTREAM_REV"
-echo "── 新引入 $NEW 件 · 已存在 $SKIP 件 · 冲突/拒收 $CONFLICT 件 · 其中带本地补丁 $PATCHED 件"
+echo "── 新引入 $NEW 件 · 已存在 $SKIP 件 · **就地更新 $UPD 件**（上游已删 $REMOVED 个文件）· 冲突/拒收 $CONFLICT 件 · 其中带本地补丁 $PATCHED 件"
 if [ "$APPLY" = 1 ]; then
     cp -f "$PROV" "$ROOT/registry/THIRD_PARTY.md"
     echo "── 已写入 registry/THIRD_PARTY.md（来源与许可表）"

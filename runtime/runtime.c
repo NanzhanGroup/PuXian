@@ -15724,14 +15724,15 @@ static LXValue bi_tcp_opt(LXValue* args, int nargs, void* ctx) {
     }
     int opt_rt_has = 0;
     int64_t opt_rt_ms = px_opt_dur_ms(args[1], "read_timeout_ms", "tcp_opt", &opt_rt_has);
-    if (opt_rt_has && opt_rt_ms > 0) {
+    // M198 修正：这里**不能**用 `> 0` —— `0` 是「清零超时」的合法取值（M149 门 D9 实测）。
+    if (opt_rt_has) {
         struct timeval tv;
         px_ms_to_timeval(opt_rt_ms, &tv);
         if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) != 0) { ok = 0; er = errno; }
     }
     int opt_wt_has = 0;
     int64_t opt_wt_ms = px_opt_dur_ms(args[1], "write_timeout_ms", "tcp_opt", &opt_wt_has);
-    if (opt_wt_has && opt_wt_ms > 0) {
+    if (opt_wt_has) {
         struct timeval tv;
         px_ms_to_timeval(opt_wt_ms, &tv);
         if (setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) != 0) { ok = 0; er = errno; }

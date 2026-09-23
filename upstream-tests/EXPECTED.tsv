@@ -1,5 +1,5 @@
 # 上游 registry-px 真实用例的期望值（M190 建立）
-# 来源：github.com/banshanhanfu/registry-px @ db5f210（tests/*.px，逐字节照搬 · MANIFEST.sha256 对拍）
+# 来源：github.com/banshanhanfu/registry-px @ 7da3397e（tests/*.px，逐字节照搬 · MANIFEST.sha256 对拍）
 # 字段：<测试名>\t<build 期望>\t<interp 期望>\t<理由>
 # 取值：PASS / SKIP。**SKIP 必须写理由**（环境不具备 / 设计性不支持 / 性能性）。
 # 纪律：本文件是**登记的数据**，不是"跑一遍把结果抄下来"——改这里等于改判据，
@@ -39,6 +39,8 @@ parser_test	PASS	PASS	-
 passhash_test	PASS	PASS	-
 pdf_test	PASS	PASS	-
 pg_test	SKIP	SKIP	需真实 PostgreSQL 服务端 127.0.0.1:5432（本机与 CI 均无；--run-skipped 可跑）
+mysql_params_test	SKIP	SKIP	需真实 MySQL 服务端 127.0.0.1:3306（上游 7da3397e 新增 · 预处理语句/参数化查询/二进制结果集；--run-skipped 可跑）
+pg_params_test	SKIP	SKIP	需真实 PostgreSQL 服务端 127.0.0.1:5432（上游 7da3397e 新增 · 扩展查询协议参数化查询）
 qrcode_test	PASS	SKIP	解释器轨 >180s（纯 px 矩阵运算 · 性能性；编译轨 PASS）
 rate_test	PASS	PASS	-
 retry_test	PASS	PASS	-

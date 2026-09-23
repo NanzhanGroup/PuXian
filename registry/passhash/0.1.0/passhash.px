@@ -33,6 +33,7 @@ def pass_verify(pw, stored):
         return false
     if parts[0] != "pbkdf2":
         return false
+    # M184 起 int() 严格解析（PX-DEF-002 修复）：先守卫再转换，畸形迭代次数 → false
     if not is_int_str(parts[1]):
         return false
     var iters = int(parts[1])

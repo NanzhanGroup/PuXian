@@ -4,8 +4,9 @@
 # ------------------------------------------------------------
 # 两条主线：
 #  ① **引入**：把上游 `banshanhanfu/registry-px`（Apache-2.0）的库**逐字节照搬**进官方
-#     `registry/`（**53 包** / 59 文件；`passhash` 于 **M189** 补齐 —— 因 M184 严格 `int()`
-#     需要一行守卫，故以**本地补丁**形式引入，见 `tools/patches/registry-px/passhash.patch`）。
+#     `registry/`（**53 包**；`passhash` 于 **M189** 补齐 —— 因 M184 严格 `int()` 需要一行守卫，
+#     当时以**本地补丁**形式引入；**M198 起补丁已撤销**：上游 `7da3397e` 自己加了
+#     `is_int_str` 守卫（同一修法），故包内容回到**逐字节照搬**，补丁通道**保留但不使用**）。
 #     来源与许可**不改包内注释**，登记在 `registry/THIRD_PARTY.md`（自动生成 + 本门复核）。
 #  ② **pxpkg 多文件包**：registry 规范原先只认 `<name>.px` 一个文件，而官方写库规范
 #     要求**每文件 <500 行、超了拆**（qrcode 4 文件 / mysql 3 / xlsx 2）⇒ 规范自己跟分发形态冲突。
@@ -79,10 +80,13 @@ for i in $(seq 0 $((N-1))); do
     [ "$actual_sha" = "$sh" ] || { echo "    入口 sha 不符 $p/$v：表=$sh 实际=$actual_sha"; bad=$((bad+1)); }
 done
 chk "[1] $N 包的 sha256/文件数 全部与登记表一致（漂移 0）" "[ $bad = 0 ]"
-# M189：passhash 已补齐引入（此前因 M184 严格 int() 而暂缓），带**本地补丁**且表里写明。
-chk "[1] passhash 已引入且写明本地补丁（M189）" "grep -qE '^\\| *passhash *\\|.*补丁：' \"$PROV\""
-chk "[1] 补丁文件在位（tools/patches/registry-px/passhash.patch）" "[ -f tools/patches/registry-px/passhash.patch ]"
-chk "[1] 除 passhash 外**补丁列全空**（纪律①：逐字节照搬）" "[ \"\$(grep -cE '\\|  \\|\$' \"$PROV\")\" = \"$((N-1))\" ]"
+# M189：passhash 已补齐引入（此前因 M184 严格 int() 而暂缓）。
+# M198：上游 `7da3397e` **自修**（`is_int_str` 守卫，与我们的补丁同法）⇒ **撤销本地补丁**，
+#   包内容回到逐字节照搬；补丁**通道**保留（M189 能力，用于"上游未修但我方语言面收紧"的场景）。
+chk "[1] passhash 已引入（M189）" "grep -qE '^\\| *passhash *\\|' \"$PROV\""
+chk "[1] 上游已自修 ⇒ 本地补丁**已撤销**（passhash.patch 不存在）" "[ ! -f tools/patches/registry-px/passhash.patch ]"
+chk "[1] 补丁**通道**仍保留（引入器 = M187+M189 补丁逻辑）" "grep -q 'M187' tools/import_registry_px.sh && grep -q 'PATCHDIR=' tools/import_registry_px.sh"
+chk "[1] **全部**包的补丁列为空（纪律①：逐字节照搬 —— M198 起无例外）" "[ \"\$(grep -cE '\\|  \\|\$' \"$PROV\")\" = \"$N\" ]"
 chk "[1] 多文件包已入库（qrcode=4 · mysql=3 · xlsx=2）" "[ \"\$(ls $REG/qrcode/0.1.0/*.px | wc -l)\" = 4 ] && [ \"\$(ls $REG/mysql/0.1.0/*.px | wc -l)\" = 3 ] && [ \"\$(ls $REG/xlsx/0.1.0/*.px | wc -l)\" = 2 ]"
 
 echo "=== [2] 全量：每包 pxpkg 装 + import 解释轨跑通（$N 包）"

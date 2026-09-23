@@ -5,7 +5,6 @@
 # 由 mysql.px import；本文件无公开 API。
 # 语言缺陷规避：同 mysql.px 头部说明。
 # ============================================================
-import "sha1.px"
 
 # ---- 内部：字节/字符串小工具 ----
 # MySQL wire protocol：数字一律小端。
@@ -16,7 +15,7 @@ def my_u32(v):
 def my_u16(v):
     return int_to_bytes(v, 2, "little", false)
 
-# 解码：bytes_to_int 的 endian 参数解释轨失效（PX-DEF-019）→ 自实现小端读取
+# 解码：小端读取（bytes_to_int 的 endian 自 M186 起三轨可靠，此处手写保持自明）
 def my_u32_of(b, off):
     var v = 0
     var i = 3
@@ -32,21 +31,6 @@ def my_u16_of(b, off):
 
 def my_u8_of(b, off):
     return bytes_get(b, off)
-
-def my_index_of(s, sub):
-    var i = 0
-    while i + len(sub) <= len(s):
-        var j = 0
-        var ok = true
-        while j < len(sub):
-            if s[i + j] != sub[j]:
-                ok = false
-                break
-            j += 1
-        if ok:
-            return i
-        i += 1
-    return -1
 
 # ---- 内部：TCP 读满 n 字节 ----
 def my_recv_n(fd, n):
@@ -71,9 +55,9 @@ def my_packet_len(b):
 
 def my_build_packet(seq, payload):
     var n = bytes_len(payload)
-    var head = bytes(hex_to_bytes(my_byte_hex(n & 255)))
-    head = bytes_concat(head, hex_to_bytes(my_byte_hex((n >> 8) & 255)))
-    head = bytes_concat(head, hex_to_bytes(my_byte_hex((n >> 16) & 255)))
+    var head = byte(n & 255)
+    head = bytes_concat(head, byte((n >> 8) & 255))
+    head = bytes_concat(head, byte((n >> 16) & 255))
     head = bytes_concat(head, bytes(chr(seq)))
     return bytes_concat(head, payload)
 
@@ -166,24 +150,24 @@ def my_ok_result(payload):
 # mysql_native_password: token = SHA1(pw) XOR SHA1(nonce + SHA1(SHA1(pw)))
 def my_native_token(password, nonce):
     var pw = bytes(password)
-    var sha1_pw = my_sha1(pw)
-    var sha1_sha1 = my_sha1(sha1_pw)
+    var sha1_pw = sha1_bytes(pw)
+    var sha1_sha1 = sha1_bytes(sha1_pw)
     var inner = bytes_concat(nonce, sha1_sha1)
-    var sha1_inner = my_sha1(inner)
+    var sha1_inner = sha1_bytes(inner)
     var out = bytes("")
     var i = 0
     while i < 20:
         var x = bytes_get(sha1_pw, i) ^ bytes_get(sha1_inner, i)
-        out = bytes_concat(out, hex_to_bytes(my_byte_hex(x)))
+        out = bytes_concat(out, byte(x))
         i += 1
     return out
 
 # 查询是否 caching_sha2（fast auth 可用 SHA256；full auth 需要 TLS/RSA → Err）
 def my_is_caching_sha2(plugin):
-    return my_index_of(plugin, "caching_sha2_password") >= 0
+    return plugin.find("caching_sha2_password") >= 0
 
 def my_is_native(plugin):
-    return my_index_of(plugin, "mysql_native_password") >= 0
+    return plugin.find("mysql_native_password") >= 0
 
 # 按插件计算认证 token（native / caching_sha2 fast auth）；不支持的插件返回 null
 def my_auth_token(plugin, password, nonce):
@@ -193,15 +177,15 @@ def my_auth_token(plugin, password, nonce):
     if my_is_caching_sha2(plugin):
         # fast auth：SHA256(SHA256(pw)) XOR SHA256(nonce + SHA256(SHA256(pw)))
         var pw = bytes(password)
-        var s1 = hex_to_bytes(sha256(bytes_to_str(pw)))
-        var s2 = hex_to_bytes(sha256(bytes_to_str(s1)))
+        var s1 = sha256_bytes(pw)
+        var s2 = sha256_bytes(s1)
         var inner = bytes_concat(nonce, s2)
-        var si = hex_to_bytes(sha256(bytes_to_str(inner)))
+        var si = sha256_bytes(inner)
         var out = bytes("")
         var i = 0
         while i < 32:
             var x = bytes_get(s1, i) ^ bytes_get(si, i)
-            out = bytes_concat(out, hex_to_bytes(my_byte_hex(x)))
+            out = bytes_concat(out, byte(x))
             i += 1
         return [out, ""]
     if my_is_native(plugin):

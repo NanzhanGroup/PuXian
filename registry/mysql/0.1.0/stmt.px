@@ -1,0 +1,334 @@
+# ============================================================
+# 普贤生态库：registry/mysql —— 预处理语句 / 二进制协议（辅助文件）
+# ------------------------------------------------------------
+# COM_STMT_PREPARE / COM_STMT_EXECUTE / COM_STMT_CLOSE + 二进制结果集解析。
+# 由 mysql.px import；本文件无公开 API（公开 API 在 mysql.px）。
+# 二进制结果集返回 typed 值（int / float / string / null），与文本协议
+# （一律 string）不同 —— 二进制行按列类型码解码。
+# 依赖 runtime native：float64_bits / bits_to_float64 / bits_to_float32 /
+#   bytes_to_int("little", signed) / byte / bytes_set 等。
+# ============================================================
+import "proto.px"
+
+# 列定义解析 → {name, type, flags}（flags 位 0x20 = UNSIGNED）
+# 布局：catalog/schema/table/org_table/name/org_name 六个 lenenc-str + lenenc-int
+# 固定段长度 + charset(2) + column_length(4) + type(1) + flags(2) + decimals(1) + filler(2)
+def my_stmt_column(b):
+    var off = 0
+    var name = ""
+    var i = 0
+    while i < 6:
+        var v = my_lenenc_str(b, off)
+        if v[2] != "":
+            return [null, "column def parse: " + v[2]]
+        if v[0] == null:
+            return [null, "column def null field"]
+        if i == 4:
+            name = v[0]
+        off = v[1]
+        i += 1
+    var fl = my_lenenc_int(b, off)
+    if fl[2] != "":
+        return [null, "column def fixed len: " + fl[2]]
+    off = fl[1] + 2 + 4
+    var typ = bytes_get(b, off)
+    off += 1
+    var flags = my_u16_of(b, off)
+    return [{"name": name, "type": typ, "flags": flags}, ""]
+
+# lenenc-int 编码
+def my_lenenc_int_bytes(n):
+    if n < 251:
+        return byte(n)
+    if n < 65536:
+        return bytes_concat(byte(252), my_u16(n))
+    if n < 16777216:
+        var b3 = bytes_concat(my_u16(n), byte((n >> 16) & 255))
+        return bytes_concat(byte(253), b3)
+    return bytes_concat(byte(254), int_to_bytes(n, 8, "little", false))
+
+# 编码单个执行参数 → [2 字节类型头(type+unsigned), value bytes, err]
+# null 返回 NULL 类型头、无 value；NULL 位由调用方置 bitmap
+def my_stmt_param(v):
+    if v == null:
+        return [bytes_concat(byte(6), byte(0)), bytes(""), ""]
+    if type(v) == "int":
+        return [bytes_concat(byte(8), byte(0)), int_to_bytes(v, 8, "little", true), ""]
+    if type(v) == "bool":
+        var b2 = byte(0)
+        if v:
+            b2 = byte(1)
+        return [bytes_concat(byte(1), byte(0)), b2, ""]
+    if type(v) == "float":
+        var bits = float64_bits(v)
+        return [bytes_concat(byte(5), byte(0)), int_to_bytes(bits, 8, "little", false), ""]
+    if type(v) == "string":
+        return [bytes_concat(byte(253), byte(0)), bytes_concat(my_lenenc_int_bytes(bytes_len(bytes(v))), bytes(v)), ""]
+    if type(v) == "bytes":
+        return [bytes_concat(byte(252), byte(0)), bytes_concat(my_lenenc_int_bytes(bytes_len(v)), v), ""]
+    return [bytes(""), bytes(""), "unsupported param type " + str(type(v))]
+
+# COM_STMT_PREPARE → Ok({id, ncols, nparams}) | Err
+def my_stmt_prepare(fd, sql):
+    var payload = bytes_concat(bytes(chr(22)), bytes(sql))
+    var r = my_send_packet(fd, 0, payload)
+    if r.is_err():
+        return Err("mysql: stmt prepare send: " + str(r.unwrap()))
+    var pkt = my_read_packet(fd)
+    if pkt[3] != "":
+        return Err("mysql: stmt prepare recv: " + pkt[3])
+    var b = pkt[0]
+    var first = bytes_get(b, 0)
+    if first == 255:
+        return Err(my_err_message(b))
+    if first != 0:
+        return Err("mysql: stmt prepare unexpected header " + str(first))
+    var stmt_id = my_u32_of(b, 1)
+    var ncols = my_u16_of(b, 5)
+    var nparams = my_u16_of(b, 7)
+    # 参数定义包 + EOF
+    var k = 0
+    while k < nparams:
+        var dp = my_read_packet(fd)
+        if dp[3] != "":
+            return Err("mysql: stmt param def recv: " + dp[3])
+        k += 1
+    if nparams > 0:
+        var e1 = my_read_packet(fd)
+        if e1[3] != "":
+            return Err("mysql: stmt param def eof recv: " + e1[3])
+    # 列定义包 + EOF
+    var j = 0
+    while j < ncols:
+        var dp2 = my_read_packet(fd)
+        if dp2[3] != "":
+            return Err("mysql: stmt col def recv: " + dp2[3])
+        j += 1
+    if ncols > 0:
+        var e2 = my_read_packet(fd)
+        if e2[3] != "":
+            return Err("mysql: stmt col def eof recv: " + e2[3])
+    return Ok({"id": stmt_id, "ncols": ncols, "nparams": nparams})
+
+# COM_STMT_EXECUTE → Ok(result) | Err
+# result: { columns: [{name,type,flags}], rows: [[typed 值...]], affected, last_id, status }
+def my_stmt_execute(fd, stmt, params):
+    var n = len(params)
+    var payload = bytes_concat(bytes(chr(23)), bytes(""))       # COM_STMT_EXECUTE = 0x17
+    payload = bytes_concat(payload, my_u32(stmt["id"]))
+    payload = bytes_concat(payload, byte(0))                    # flags = CURSOR_TYPE_NO_CURSOR
+    payload = bytes_concat(payload, my_u32(1))                  # iteration_count = 1
+    var bm = bytes("")
+    var types = bytes("")
+    var vals = bytes("")
+    if n > 0:
+        var nbytes = (n + 7) // 8
+        var bi = 0
+        while bi < nbytes:
+            bm = bytes_concat(bm, byte(0))
+            bi += 1
+        var pi = 0
+        while pi < n:
+            var v = params[pi]
+            var enc = my_stmt_param(v)
+            if enc[2] != "":
+                return Err("mysql: stmt param " + str(pi) + ": " + enc[2])
+            # 协议：先全部类型头（type+unsigned），再全部值
+            types = bytes_concat(types, enc[0])
+            vals = bytes_concat(vals, enc[1])
+            if v == null:
+                var bytei = pi // 8
+                var cur = bytes_get(bm, bytei)
+                bm = bytes_set(bm, bytei, cur | (1 << (pi % 8)))
+            pi += 1
+        payload = bytes_concat(payload, bm)
+        payload = bytes_concat(payload, byte(1))                # new_params_bound_flag = 1
+        payload = bytes_concat(payload, types)
+        payload = bytes_concat(payload, vals)
+    var r = my_send_packet(fd, 0, payload)
+    if r.is_err():
+        return Err("mysql: stmt execute send: " + str(r.unwrap()))
+    var pkt = my_read_packet(fd)
+    if pkt[3] != "":
+        return Err("mysql: stmt execute recv: " + pkt[3])
+    var b = pkt[0]
+    var first = bytes_get(b, 0)
+    if first == 0:
+        var ok = my_ok_result(b)
+        return Ok({"columns": [], "rows": [], "affected": ok["affected"],
+                   "last_id": ok["last_id"], "status": ok["status"]})
+    if first == 255:
+        return Err(my_err_message(b))
+    # 结果集：列数 → 列定义（带类型）→ EOF → 二进制行 → EOF
+    var colcnt = my_lenenc_int(b, 0)
+    if colcnt[2] != "":
+        return Err("mysql: stmt column count: " + colcnt[2])
+    var ncols = colcnt[0]
+    var columns = []
+    var ci = 0
+    while ci < ncols:
+        var cp = my_read_packet(fd)
+        if cp[3] != "":
+            return Err("mysql: stmt col def recv: " + cp[3])
+        var col = my_stmt_column(cp[0])
+        if col[1] != "":
+            return Err("mysql: stmt col def parse: " + col[1])
+        columns.append(col[0])
+        ci += 1
+    var ep = my_read_packet(fd)
+    if ep[3] != "":
+        return Err("mysql: stmt col eof recv: " + ep[3])
+    var rows = []
+    while true:
+        var rp = my_read_packet(fd)
+        if rp[3] != "":
+            return Err("mysql: stmt row recv: " + rp[3])
+        if my_is_eof(rp[0]):
+            break
+        if bytes_get(rp[0], 0) != 0:
+            return Err("mysql: stmt binary row bad header")
+        var row = my_stmt_row(rp[0], columns)
+        if row[1] != "":
+            return Err("mysql: stmt row parse: " + row[1])
+        rows.append(row[0])
+    return Ok({"columns": columns, "rows": rows, "affected": 0, "last_id": 0, "status": 0})
+
+# 解析一行二进制结果（header 0x00 + NULL bitmap + 各列 typed 值）
+def my_stmt_row(b, columns):
+    var n = len(columns)
+    var bm_len = (n + 7 + 2) // 8
+    var off = 1
+    var bm = bytes_slice(b, off, off + bm_len)
+    off += bm_len
+    var row = []
+    var i = 0
+    while i < n:
+        var bytei = (i + 2) // 8
+        var biti = (i + 2) % 8
+        if (bytes_get(bm, bytei) & (1 << biti)) != 0:
+            row.append(null)
+        else:
+            var col = columns[i]
+            var parsed = my_stmt_value(b, off, col["type"], (col["flags"] & 0x20) != 0)
+            if parsed[2] != "":
+                return [row, parsed[2]]
+            row.append(parsed[0])
+            off = parsed[1]
+        i += 1
+    return [row, ""]
+
+# 64 位无符号（32 位高低字）→ 十进制字符串。
+# 语言 int 是 64 位有符号（PX-DEF-031：bytes_to_int 8 字节无符号超界静默 wrap），
+# 因此 BIGINT UNSIGNED 解码走这里，不依赖 int 表示。
+def my_u64_dec(hi, lo):
+    var digits = ""
+    var h = hi
+    var l = lo
+    while h > 0 or l > 0:
+        var qh = h // 10
+        var rem = h % 10
+        var v = rem * 4294967296 + l
+        var ql = v // 10
+        var d = v % 10
+        digits = str(d) + digits
+        h = qh
+        l = ql
+    if digits == "":
+        return "0"
+    return digits
+
+# 按列类型码解码一个值（二进制协议）
+def my_stmt_value(b, off, typ, unsigned):
+    if typ == 1:
+        var v1 = bytes_get(b, off)
+        if not unsigned and v1 >= 128:
+            v1 = v1 - 256
+        return [v1, off + 1, ""]
+    if typ == 2 or typ == 13:
+        return [bytes_to_int(bytes_slice(b, off, off + 2), "little", not unsigned), off + 2, ""]
+    if typ == 3 or typ == 9:
+        return [bytes_to_int(bytes_slice(b, off, off + 4), "little", not unsigned), off + 4, ""]
+    if typ == 8:
+        var raw = bytes_slice(b, off, off + 8)
+        var iv = bytes_to_int(raw, "little", not unsigned)
+        if unsigned and iv < 0:
+            # PX-DEF-031：8 字节无符号 >2^63-1 会被静默 wrap 为负 → 用 32 位高低字做十进制回退
+            var hi = my_u32_of(raw, 4)
+            var lo = my_u32_of(raw, 0)
+            return [my_u64_dec(hi, lo), off + 8, ""]
+        return [iv, off + 8, ""]
+    if typ == 4:
+        var u32 = bytes_to_int(bytes_slice(b, off, off + 4), "little", false)
+        return [bits_to_float32(u32), off + 4, ""]
+    if typ == 5:
+        var u64 = bytes_to_int(bytes_slice(b, off, off + 8), "little", false)
+        return [bits_to_float64(u64), off + 8, ""]
+    if typ == 7 or typ == 12 or typ == 10:
+        var lb = bytes_get(b, off)
+        off += 1
+        var txt = my_stmt_datetime(b, off, lb)
+        off += lb
+        return [txt, off, ""]
+    if typ == 11:
+        var lb2 = bytes_get(b, off)
+        off += 1
+        var ttxt = my_stmt_time(b, off, lb2)
+        off += lb2
+        return [ttxt, off, ""]
+    if typ == 16:
+        var l = my_lenenc_int(b, off)
+        if l[2] != "":
+            return [null, off, l[2]]
+        return [bytes_to_hex(bytes_slice(b, l[1], l[1] + l[0])), l[1] + l[0], ""]
+    # 其余（decimal/varchar/string/blob/json/enum/set/geometry）：lenenc-str
+    var s = my_lenenc_str(b, off)
+    if s[2] != "":
+        return [null, off, s[2]]
+    if s[0] == null:
+        return [null, s[1], ""]
+    return [s[0], s[1], ""]
+
+# DATE/DATETIME/TIMESTAMP 二进制值 → "YYYY-MM-DD[ HH:MM:SS[.ffffff]]"
+def my_stmt_datetime(b, off, ln):
+    if ln == 0:
+        return "0000-00-00"
+    var year = my_u16_of(b, off)
+    var month = bytes_get(b, off + 2)
+    var day = bytes_get(b, off + 3)
+    var s = str(year) + "-" + my_zero2(month) + "-" + my_zero2(day)
+    if ln >= 7:
+        var hh = bytes_get(b, off + 4)
+        var mi = bytes_get(b, off + 5)
+        var ss = bytes_get(b, off + 6)
+        s = s + " " + my_zero2(hh) + ":" + my_zero2(mi) + ":" + my_zero2(ss)
+    if ln >= 11:
+        var us = my_u32_of(b, off + 7)
+        s = s + "." + str(us)
+    return s
+
+# TIME 二进制值 → "[+-]H:MM:SS"（天数并入小时）
+def my_stmt_time(b, off, ln):
+    if ln == 0:
+        return "00:00:00"
+    var neg = bytes_get(b, off)
+    var days = my_u32_of(b, off + 1)
+    var hh = bytes_get(b, off + 5)
+    var mi = bytes_get(b, off + 6)
+    var ss = bytes_get(b, off + 7)
+    var sign = ""
+    if neg != 0:
+        sign = "-"
+    return sign + my_zero2(days * 24 + hh) + ":" + my_zero2(mi) + ":" + my_zero2(ss)
+
+def my_zero2(n):
+    if n < 10:
+        return "0" + str(n)
+    return str(n)
+
+# COM_STMT_CLOSE（无响应，尽力而为）
+def my_stmt_close(fd, stmt):
+    var payload = bytes_concat(bytes(chr(25)), my_u32(stmt["id"]))
+    var r = my_send_packet(fd, 0, payload)
+    if r.is_err():
+        return Err("mysql: stmt close send: " + str(r.unwrap()))
+    return Ok(true)

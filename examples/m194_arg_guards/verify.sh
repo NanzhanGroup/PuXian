@@ -53,7 +53,7 @@ for pat in 'int64_t px_arg_int(LXValue v, const char* fn, const char* pname)' \
            'px_arg_str(args[0], "write_bytes", "路径")' \
            'px_arg_str(args[1], "http_request", "method")' \
            'px_arg_str(args[0], "tls_connect", "host")' \
-           'px_arg_int(args[1], "h3_serve_read_request", "timeout_ms")' \
+           'px_arg_dur_ms(args[1], "h3_serve_read_request", "timeout_ms")' \
            'px_arg_str(args[2], "int_to_bytes", "endian")' \
            'http_request 的 body 需要字符串或 bytes' \
            'px_serve 的 opts 需要字典' \
@@ -112,7 +112,8 @@ chk "[1] 判据 ⑥ 真跑过（日志有 [S5] 段）" "grep -q '\[S5\] native �
 #   「需要 (port) 或 (port, cert, key) 参数」（同时表达 1 参/3 参两种合法形态）——
 #   扫描器只取第一个 `)` 之前的形参 ⇒ 这些站点不再计入「多形参守卫」。
 #   站点本身仍在（由 [S6] 全文覆盖），只是**计数口径**变了 ⇒ 判据跟着更新，不是放宽。
-chk "[1] 多形参守卫合计 137、缺类型检查 0" "grep -q '多形参守卫合计 137 · 缺类型检查 \*\*0\*\*' '$W/static.log'"
+chk "[1] 多形参守卫合计 ≥137（**不写等式** —— 新增 native/守卫自然增长；M197 纪律）、缺类型检查 0" \
+    "grep -q '多形参守卫合计 .* · 缺类型检查 \*\*0\*\*' '$W/static.log' && grep -oE '多形参守卫合计 [0-9]+' '$W/static.log' | awk '{exit !(\$2 >= 137)}'"
 chk "[1] 无任何文件残留「缺检查」非零" "! grep -qE '缺检查 [1-9]' '$W/static.log'"
 
 echo "=== [2] 动态判据：12 个错例 × 三轨（同码 + 同文）==="
