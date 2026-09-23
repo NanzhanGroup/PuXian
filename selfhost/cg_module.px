@@ -63,12 +63,24 @@ def cg_norm_path(p):
     if out == "":
         return "."
     return out[1:len(out)]
-# stdlib 目录定位：PX_STDLIB env → 候选路径（开发/安装布局）
+# stdlib 目录定位：PX_STDLIB env → **编译器的自身路径** → 候选路径（开发/安装布局）
+# M188-STDLIB（缺陷 210）：**删掉硬编码的开发机路径** `/data/code/puxian/stdlib` ——
+#   它排在候选**第一位**，开发机上永远命中 ⇒ 后续相对候选**从未被验证**；
+#   而换一台机器（CI/用户机）或换个 cwd（如 /tmp/app）就一律落空 ⇒ `import std.*`
+#   被降级成「警告 + 跳过」（PX_STRICT_MODULE 未设时非致命）⇒ **运行期未定义符号**。
+#   实测（CI）：`pxpkg add <pkg>` 对全部 52 包失败（`R1001 未定义变量: 'sv_index_of'`）。
+#   现在：① PX_STDLIB ② **编译器可执行文件的 `../stdlib`**（与 cwd 无关，最稳）
+#   ③ 相对 cwd 的候选（开发布局，最常用的是「仓库根」）。
 def cg_stdlib_dir():
     let e = env("PX_STDLIB")
     if e != null and exists(e):
         return e
-    let cands = ["/data/code/puxian/stdlib", "../stdlib", "stdlib", "./stdlib", "../../stdlib"]
+    let sp = os_self_path()
+    if sp != null and len(sp) > 0:
+        let self_std = cg_norm_path(cg_dirname(sp) + "/../stdlib")
+        if exists(self_std):
+            return self_std
+    let cands = ["../stdlib", "stdlib", "./stdlib", "../../stdlib"]
     var i = 0
     while i < len(cands):
         let c = cands[i]

@@ -29,7 +29,12 @@ done
 
 run_px() {
     local pxc=""
+    # M188-STDLIB（缺陷 210）：**显式给 PX_STDLIB 兜底** —— 包管理器会在任意 cwd
+    #   （项目目录、/tmp 等）被调用，而 stdlib 只相对「工具自身」存在。不兜底时
+    #   pxi 的 stdlib 定位依赖 cwd 上溯 ⇒ 仓库外必失败，且只打「警告 + 跳过」
+    #   ⇒ 运行期 R1001 未定义（CI 实测：add/install 对 52 包全失败）。
     PXPKG_DIR="$DIR" PXPKG_CMD="$1" PXPKG_ARG1="${2:-}" PXPKG_ARG2="${3:-}" \
+        PX_STDLIB="${PX_STDLIB:-$PKG_HOME/stdlib}" \
         "$PKG_HOME/bootstrap/pxi" run "$PKG_HOME/tools/pxpkg.px"
 }
 

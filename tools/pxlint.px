@@ -52,7 +52,13 @@ def lx_stdlib_dir():
     let e = env("PX_STDLIB")
     if e != null and exists(e):
         return e
-    let cands = ["stdlib", "./stdlib", "../stdlib", "../../stdlib", "/data/code/puxian/stdlib"]
+    # M188-STDLIB（缺陷 210）：删硬编码开发机路径，改为「可执行文件自身路径的 ../stdlib」
+    let sp = os_self_path()
+    if sp != null and len(sp) > 0:
+        let self_std = lx_dirname(sp) + "/../stdlib"
+        if exists(self_std):
+            return self_std
+    let cands = ["stdlib", "./stdlib", "../stdlib", "../../stdlib"]
     var i = 0
     while i < len(cands):
         let c = cands[i]

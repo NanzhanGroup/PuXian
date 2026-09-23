@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # linkit.sh <file.c> <out> [static|dynamic] —— 用最新 .rtcache 链接 PuXian C 产物
 set -u
-ROOT=/data/code/puxian
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"   # M188-STDLIB：去掉硬编码仓库路径
 export LC_ALL=C LANG=C
 RT="$ROOT/runtime"
 CF="$1"; OUT="$2"; MODE="${3:-static}"
