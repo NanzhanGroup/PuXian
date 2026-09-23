@@ -99,8 +99,19 @@ for i in $(seq 0 $((N-1))); do
 done
 [ -n "$addfail" ] && echo "❌ pxpkg add 失败 $(( $(echo $addfail | wc -w) )) 包：$addfail"
 [ -n "$addfail" ] && { echo "  --- 首个失败包的 add 输出 ---"; tail -15 "$W/add_$(echo $addfail | awk '{print $1}').log"; }
-if ! "$ROOT/tools/pxpkg" install > "$W/install.log" 2>&1; then echo "❌ pxpkg install 失败"; fi
+# M193-DIAG：CI（run for 1a8b28c）上本步 `pxpkg install` 中断于第 22 个包（functools），
+#   而本地全量门同一步**绿** ⇒ 环境相关（CI runner 资源/时序）。当时注解只拿到
+#   stdout 尾巴，看不到 rc 与 stderr ⇒ 这里把 **rc / stderr / 装了几个** 全部无条件打出
+#   （job 日志非管理员 403 不可读，注解是唯一通道 ⇒ 诊断必须"少而准"且**每次**都在）。
+irc=0
+"$ROOT/tools/pxpkg" install > "$W/install.log" 2>"$W/install.err" || irc=$?
+if [ "$irc" != 0 ]; then
+    echo "❌ pxpkg install 失败（rc=$irc）"
+    echo "  --- install stderr 尾部 15 行 ---"; tail -15 "$W/install.err"
+fi
 echo "  --- install 输出尾部 20 行 ---"; tail -20 "$W/install.log"
+echo "  --- install 进度：已打印「安装」行 $(grep -c '安装 ' "$W/install.log" 2>/dev/null) / 期望 $N；rc=$irc ---"
+[ -s "$W/install.err" ] && { echo "  --- install stderr 非空（尾 5 行） ---"; tail -5 "$W/install.err"; }
 echo "  --- .px_modules 实测 ---"; ls .px_modules 2>&1 | head -8; echo "  (目录数=$(ls .px_modules 2>/dev/null | wc -l))"
 echo "  --- px.toml 依赖段 ---"; grep -c '=' px.toml 2>/dev/null
 n_inst="$(ls .px_modules 2>/dev/null | wc -l)"
