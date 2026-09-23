@@ -105,6 +105,7 @@ done
 #   （job 日志非管理员 403 不可读，注解是唯一通道 ⇒ 诊断必须"少而准"且**每次**都在）。
 irc=0
 "$ROOT/tools/pxpkg" install > "$W/install.log" 2>"$W/install.err" || irc=$?
+{
 if [ "$irc" != 0 ]; then
     echo "❌ pxpkg install 失败（rc=$irc）"
     echo "  --- install stderr 尾部 15 行 ---"; tail -15 "$W/install.err"
@@ -114,6 +115,9 @@ echo "  --- install 进度：已打印「安装」行 $(grep -c '安装 ' "$W/in
 [ -s "$W/install.err" ] && { echo "  --- install stderr 非空（尾 5 行） ---"; tail -5 "$W/install.err"; }
 echo "  --- .px_modules 实测 ---"; ls .px_modules 2>&1 | head -8; echo "  (目录数=$(ls .px_modules 2>/dev/null | wc -l))"
 echo "  --- px.toml 依赖段 ---"; grep -c '=' px.toml 2>/dev/null
+} 2>&1 | tee "$W/diag.txt"
+# M195：上面这段诊断此前只进 **stdout**（= CI 的 job 日志，非管理员 403 读不到）⇒ 红的时候
+#   拿到注解也看不见 rc/stderr。现在**同时落 $W/diag.txt**，ci.yml 的注解步会把它收进注解。
 n_inst="$(ls .px_modules 2>/dev/null | wc -l)"
 chk "[2] pxpkg 一次装齐 $N 包（.px_modules 目录数 = $N）" "[ \"$n_inst\" = \"$N\" ]"
 n_entry=0

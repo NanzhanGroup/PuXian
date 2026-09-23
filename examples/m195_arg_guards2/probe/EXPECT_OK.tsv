@@ -7,3 +7,4 @@ g6_open_mode	true
 g7_read_bytes_ok	true
 g8_sha256_text	64
 g9_h3_one_arg	true
+g10_sleep_frac	true

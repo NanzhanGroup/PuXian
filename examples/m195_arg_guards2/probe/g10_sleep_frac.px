@@ -1,0 +1,10 @@
+let t0 = now_us()
+sleep(0.5)
+let dt1 = now_us() - t0
+print(dt1 >= 300)
+let t1 = now_us()
+sleep(1.5)
+print(now_us() - t1 >= 1000)
+print(sleep(0))
+print(sleep_us(0.5) != null)
+print(sleep_us(1500) != null)

@@ -3,8 +3,8 @@ f2_h3_2args	R1002	h3_server_listen 需要 (port) 或 (port, cert, key) 参数
 f3_range_end_float	R1002	range 的 end 需要整数，实际是 float
 f4_range_step_float	R1002	range 的 step 需要整数，实际是 float
 f5_range_float	R1002	range 的 end 需要整数，实际是 float
-f6_sleep_float	R1002	sleep 的 ms 需要整数，实际是 float
-f7_sleep_us_str	R1002	sleep_us 的 us 需要整数，实际是 string
+f6_sleep_str	R1002	sleep 的 ms 需要数值（int/float），实际是 string
+f7_sleep_us_str	R1002	sleep_us 的 us 需要数值（int/float），实际是 string
 f8_chr_float	R1002	chr 的 码点 需要整数，实际是 float
 f9_bit_count_float	R1002	bit_count 的 n 需要整数，实际是 float
 f10_bits32_float	R1002	bits_to_float32 的 bits 需要整数，实际是 float

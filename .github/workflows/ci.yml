@@ -512,7 +512,12 @@ jobs:
           parts.append('=== ① CI 现场复现 ===\n' + '\n'.join(out))
 
           # ② m187 门日志：**不过滤关键词**，取尾部 45 行（上一轮过滤把「首个失败包的 add 输出」丢了）
-          for f in sorted(glob.glob('/tmp/m187_gate*/install.log')) + sorted(glob.glob('/tmp/m187_gate*/*.log')):
+          #    M195：加入 `diag.txt`（门把 rc/stderr/进度 同时落盘 —— 此前只进 stdout，注解读不到）
+          #    与 `install.err`（stderr 全文）。
+          for f in (sorted(glob.glob('/tmp/m187_gate*/diag.txt'))
+                    + sorted(glob.glob('/tmp/m187_gate*/install.err'))
+                    + sorted(glob.glob('/tmp/m187_gate*/install.log'))
+                    + sorted(glob.glob('/tmp/m187_gate*/*.log'))):
               try:
                   txt = open(f, encoding='utf-8', errors='replace').read().strip()
               except Exception:
@@ -531,7 +536,15 @@ jobs:
               if bad:
                   parts.append('=== ③ %s ===\n%s' % (os.path.basename(f), '\n'.join(bad[-12:])))
 
-          msg = '\n'.join(parts)[:5800]
+          # ── M195：顺序与上限都改了 ──
+          #   ① 旧版把「现场复现」放**最前**、把「各门日志的关键行」放**最后**，并截到 5800 字符
+          #      ⇒ 2026-09-23 的 run 35894349130（M194）里，真正指出失败的 ③ 被**截掉**，
+          #      只留了 ① 的"复现成功"（全是 rc=0）⇒ 白跑一轮。
+          #   ② 真因：**注解 message 上限是 64KB**（GitHub 文档），而"每个 step 的注解**条数**"
+          #      才有 ~10 条的限制 —— 这两件事此前被混为一谈，于是把**长度**也砍了。
+          #   ③ 现在：**失败门的关键行放最前** · 现场复现放最后 · 上限提到 60000。
+          parts.sort(key=lambda p: 0 if p.startswith('=== ③') else (1 if p.startswith('=== ②') else 2))
+          msg = '\n'.join(parts)[:60000]
           print('::error::' + urllib.parse.quote(msg, safe=''))
           PY
       - name: LSP / MCP 服务器冒烟（--version + 协议入口存在性）

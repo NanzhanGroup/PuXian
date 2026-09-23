@@ -4238,6 +4238,27 @@ LXObject* px_arg_dict(LXValue v, const char* fn, const char* pname) {
     return v.as.obj;
 }
 
+// ═══ M195（第 73 轮 · M194 同族的**方向修正**）：**时长**参数的守卫 ═══
+//   `sleep` / `sleep_us` 的形参是「一段时长」—— float **不是"错的类型"**，而是**更精确的时长**：
+//   `sleep(0.1)` 的自然语义就是「睡 0.1 毫秒」。而修前走 `int_val` **静默截断成 0**
+//   （等于**不睡**；速查表甚至专门写了这条警告）—— 这是「静默错值」，但正确的修法
+//   不是"报错"，而是**让小数部分真正生效**（Python `time.sleep(0.5)` / Go
+//   `time.Sleep(500*time.Microsecond)` 同向）。
+//   ⇒ 本函数接受 **int|float**，返回**纳秒**；只有非数值才响亮报错。
+//   ⚠️ 首次实现（同轮）走的是 `px_arg_int`（要求 int）—— 全量门当场抓出 2 处生态破坏
+//   （`examples/m83_s6/serve_sse_daemon.px` 与 `m120` 门的内嵌程序都写了 `sleep(0.1)`/`sleep(1.5)`）。
+static long long px_arg_dur_ns(LXValue v, const char* fn, const char* pname, double unit_ns) {
+    double d;
+    if (v.type == PX_INT) d = (double)v.as.i;
+    else if (v.type == PX_FLOAT) d = v.as.f;
+    else {
+        px_error("R1002: %s 的 %s 需要数值（int/float），实际是 %s", fn, pname, px_type_name(v));
+        return 0;
+    }
+    if (!(d > 0)) return 0;                 // 负值/NaN ⇒ 不睡（与 `us <= 0 直接返回` 同向）
+    return (long long)(d * unit_ns);
+}
+
 LXValue px_not(LXValue a) { return px_bool(!px_is_truthy(a)); }
 LXValue px_bitnot(LXValue a) { return px_int(~px_req_int(a, "按位取反")); }
 LXValue px_bitand(LXValue a, LXValue b) { return px_int(px_req_int(a, "按位与") & px_req_int(b, "按位与")); }
@@ -5933,16 +5954,17 @@ static LXValue bi_panic(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_sleep(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 1) px_error("R1002: sleep 需要 1 个参数");
-    int64_t ms = px_arg_int(args[0], "sleep", "ms");
+    // M195：**时长**参数 —— 接受 int|float，小数部分**真正生效**（纳秒精度）
+    long long ns = px_arg_dur_ns(args[0], "sleep", "ms", 1000000.0);
     // M88-S2（qg-issue 27）：EINTR 自动续睡——并发 GC（M11 stop-the-world）向所有已注册
     // 线程发 SIG_GC_STOP 实时信号，nanosleep 被信号打断返回 EINTR（nanosleep 不在
     // SA_RESTART 自动重启清单）。若不续睡，主线程 sleep(长) 会在首轮 GC 后提前返回 →
     // main 结束 → 进程静默退出（高并发压测"服务进程悄然消失"根因）。timer_sleep_ms/
     // sleep_us 均已按此模式续睡，此处对齐。
     struct timespec ts;
-    ts.tv_sec = ms / 1000;
-    ts.tv_nsec = (ms % 1000) * 1000000L;
-    while (nanosleep(&ts, &ts) == -1 && errno == EINTR) {}
+    ts.tv_sec = ns / 1000000000LL;
+    ts.tv_nsec = ns % 1000000000LL;
+    if (ns > 0) { while (nanosleep(&ts, &ts) == -1 && errno == EINTR) {} }
     return px_null();
 }
 
@@ -7205,11 +7227,12 @@ static LXValue bi_mem_write(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_sleep_us(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) px_error("R1002: sleep_us 需要 1 个参数（微秒）");
-    int64_t us = px_arg_int(args[0], "sleep_us", "us");
-    if (us <= 0) return px_null();
+    // M195：同 sleep —— 时长参数接受 int|float，小数部分真正生效
+    long long ns = px_arg_dur_ns(args[0], "sleep_us", "us", 1000.0);
+    if (ns <= 0) return px_null();
     struct timespec ts;
-    ts.tv_sec = us / 1000000L;
-    ts.tv_nsec = (us % 1000000L) * 1000L;
+    ts.tv_sec = ns / 1000000000LL;
+    ts.tv_nsec = ns % 1000000000LL;
     while (nanosleep(&ts, &ts) == -1 && errno == EINTR) {}
     return px_null();
 }
