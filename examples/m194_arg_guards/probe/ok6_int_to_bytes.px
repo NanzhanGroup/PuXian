@@ -1,0 +1,2 @@
+let b = int_to_bytes(1, 2, "big")
+print(bytes_to_int(b, "big"))

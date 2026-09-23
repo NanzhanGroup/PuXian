@@ -1,0 +1,2 @@
+print("before")
+print(read_at("/etc/hostname", 1.5, 3))

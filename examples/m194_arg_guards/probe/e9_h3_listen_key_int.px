@@ -1,0 +1,2 @@
+print("before")
+print(h3_server_listen(39002, "c", 7))

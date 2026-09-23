@@ -1,0 +1,1 @@
+print(http_unix("/tmp/nonexistent.sock", "/", "GET", null, null, null))

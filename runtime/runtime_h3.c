@@ -1025,7 +1025,7 @@ static LXValue bi_h3_serve_read_request(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 2 || args[0].type != PX_INT) px_error("R1002: h3_serve_read_request 需要 (conn, timeout_ms)");
     int64_t conn = args[0].as.i;
-    int64_t timeout = args[1].as.i;
+    int64_t timeout = px_arg_int(args[1], "h3_serve_read_request", "timeout_ms");
     // 默认流：先等一条 peer 流出现（poll），再从该流读完整请求
     int64_t sid = px_quic_raw_first_stream(conn);
     if (sid < 0) sid = px_quic_raw_poll(conn, (int)timeout);
@@ -1090,7 +1090,7 @@ static LXValue bi_h3_client_read_response(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 2 || args[0].type != PX_INT) px_error("R1002: h3_client_read_response 需要 (conn, timeout_ms)");
     int64_t conn = args[0].as.i;
-    int64_t timeout = args[1].as.i;
+    int64_t timeout = px_arg_int(args[1], "h3_client_read_response", "timeout_ms");
     int64_t sid = (conn > 0 && conn <= H3_MAX_CONN) ? g_last_sid[conn - 1] : -1;
     if (sid < 0) return px_null();
     LXValue fields; uint8_t* bd = NULL; int blen = 0;
@@ -1371,6 +1371,11 @@ static LXValue bi_h3_server_listen_stateless(LXValue* args, int nargs, void* ctx
     int port = (int)args[0].as.i;
     const char* cert = "";
     const char* key = "";
+    // M194：可选的 cert/key **存在即校验**（`null` = 未提供）
+    if (nargs >= 2 && args[1].type != PX_NULL && args[1].type != PX_STR)
+        px_error("R1002: h3_server_listen_stateless 的 cert 需要字符串，实际是 %s", px_type_name(args[1]));
+    if (nargs >= 3 && args[2].type != PX_NULL && args[2].type != PX_STR)
+        px_error("R1002: h3_server_listen_stateless 的 key 需要字符串，实际是 %s", px_type_name(args[2]));
     if (nargs >= 3 && args[1].type == PX_STR && args[2].type == PX_STR) {
         cert = args[1].as.obj->as.str.data;
         key = args[2].as.obj->as.str.data;
@@ -1394,6 +1399,11 @@ static LXValue bi_h3_server_listen(LXValue* args, int nargs, void* ctx) {
     int port = (int)args[0].as.i;
     const char* cert = "";
     const char* key = "";
+    // M194：可选的 cert/key **存在即校验**（`null` = 未提供）
+    if (nargs >= 2 && args[1].type != PX_NULL && args[1].type != PX_STR)
+        px_error("R1002: h3_server_listen 的 cert 需要字符串，实际是 %s", px_type_name(args[1]));
+    if (nargs >= 3 && args[2].type != PX_NULL && args[2].type != PX_STR)
+        px_error("R1002: h3_server_listen 的 key 需要字符串，实际是 %s", px_type_name(args[2]));
     if (nargs >= 3 && args[1].type == PX_STR && args[2].type == PX_STR) {
         cert = args[1].as.obj->as.str.data;
         key = args[2].as.obj->as.str.data;

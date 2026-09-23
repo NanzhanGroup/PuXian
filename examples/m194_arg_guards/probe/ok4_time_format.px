@@ -1,0 +1,1 @@
+print(time_format(0, "%Y-%m-%d"))

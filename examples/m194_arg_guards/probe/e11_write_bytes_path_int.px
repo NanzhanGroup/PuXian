@@ -1,0 +1,2 @@
+print("before")
+print(write_bytes(123, bytes_zeros(2)))
