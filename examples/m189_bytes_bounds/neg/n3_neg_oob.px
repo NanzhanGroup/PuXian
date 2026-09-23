@@ -1,0 +1,5 @@
+# M189 负判据③：负索引越界（归一后报 -7）
+var b = hex_to_bytes("aabb")
+print("before")
+print(bytes_get(b, -9))
+print("after")

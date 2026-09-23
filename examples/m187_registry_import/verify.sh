@@ -4,7 +4,8 @@
 # ------------------------------------------------------------
 # 两条主线：
 #  ① **引入**：把上游 `banshanhanfu/registry-px`（Apache-2.0）的库**逐字节照搬**进官方
-#     `registry/`（52 包 / 58 文件；`passhash` 明确**未引入**，理由见 THIRD_PARTY.md）。
+#     `registry/`（**53 包** / 59 文件；`passhash` 于 **M189** 补齐 —— 因 M184 严格 `int()`
+#     需要一行守卫，故以**本地补丁**形式引入，见 `tools/patches/registry-px/passhash.patch`）。
 #     来源与许可**不改包内注释**，登记在 `registry/THIRD_PARTY.md`（自动生成 + 本门复核）。
 #  ② **pxpkg 多文件包**：registry 规范原先只认 `<name>.px` 一个文件，而官方写库规范
 #     要求**每文件 <500 行、超了拆**（qrcode 4 文件 / mysql 3 / xlsx 2）⇒ 规范自己跟分发形态冲突。
@@ -14,7 +15,7 @@
 #
 # 判据（四层正判据 + 三道负控）：
 #  ① `registry/THIRD_PARTY.md` 的表**逐行重算 sha256 / 文件数**与磁盘对拍（防漂移）；
-#  ② **每个**引入包：`pxpkg add` → `install` → `import <pkg>` 解释轨跑通（52 包全量）；
+#  ② **每个**引入包：`pxpkg add` → `install` → `import <pkg>` 解释轨跑通（53 包全量）；
 #  ③ 抽样（含**全部多文件包** + 二进制/解析族）**双轨编译**跑通（VM + C）；
 #  ④ 多文件包语义：两文件包三轨跑通 + `--locked` 能查到**辅助文件**被篡改（修前只查入口）。
 # 负控（各自独立判红；源逐字节还原）：
@@ -78,7 +79,10 @@ for i in $(seq 0 $((N-1))); do
     [ "$actual_sha" = "$sh" ] || { echo "    入口 sha 不符 $p/$v：表=$sh 实际=$actual_sha"; bad=$((bad+1)); }
 done
 chk "[1] $N 包的 sha256/文件数 全部与登记表一致（漂移 0）" "[ $bad = 0 ]"
-chk "[1] 表里**不得**出现未引入的 passhash" "! grep -qE '^\| *passhash *\|' \"$PROV\""
+# M189：passhash 已补齐引入（此前因 M184 严格 int() 而暂缓），带**本地补丁**且表里写明。
+chk "[1] passhash 已引入且写明本地补丁（M189）" "grep -qE '^\\| *passhash *\\|.*补丁：' \"$PROV\""
+chk "[1] 补丁文件在位（tools/patches/registry-px/passhash.patch）" "[ -f tools/patches/registry-px/passhash.patch ]"
+chk "[1] 除 passhash 外**补丁列全空**（纪律①：逐字节照搬）" "[ \"\$(grep -cE '\\|  \\|\$' \"$PROV\")\" = \"$((N-1))\" ]"
 chk "[1] 多文件包已入库（qrcode=4 · mysql=3 · xlsx=2）" "[ \"\$(ls $REG/qrcode/0.1.0/*.px | wc -l)\" = 4 ] && [ \"\$(ls $REG/mysql/0.1.0/*.px | wc -l)\" = 3 ] && [ \"\$(ls $REG/xlsx/0.1.0/*.px | wc -l)\" = 2 ]"
 
 echo "=== [2] 全量：每包 pxpkg 装 + import 解释轨跑通（$N 包）"

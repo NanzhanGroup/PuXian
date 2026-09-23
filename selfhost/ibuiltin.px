@@ -684,15 +684,29 @@ def i_call_builtin(name, args, pos):
             return Err(i_r1002("bytes_len 需要一个参数", pos))
         return Ok(bytes_len(args[0]))
     if name == "bytes_get":
-        # bytes_get(b, i) → int|null（负索引支持）
+        # bytes_get(b, i) → int（负索引支持）
+        # M189（第 67 轮 · 缺陷 211）：**越界改 R1003**（修前返回 null —— 与 b[i] / bytes_set /
+        #   list[i] 三入口不一致，且 null 流到下游只报「无法比较」而指不到越界点）。
+        #   这里做前置校验只为**带上 行:列**（与 M184 的 int() 严格化同款做法）。
         if len(args) != 2:
             return Err(i_r1002("bytes_get 需要 (bytes, index) 参数", pos))
-        return Ok(bytes_get(args[0], args[1]))
+        if type(args[0]) != "bytes":
+            return Err(i_r1002("bytes_get 需要 bytes，实际是 " + i_type_name(args[0]), pos))
+        let bgr = i_as_index(args[1], bytes_len(args[0]), pos)
+        if bgr.is_err():
+            return Err(bgr.err())
+        return Ok(bytes_get(args[0], bgr.unwrap()))
     if name == "bytes_set":
         # bytes_set(b, i, v) → bytes（函数式：返回新 bytes，v ∈ 0..255）
+        # M189：越界词条与 bytes_get / b[i] 统一（修前是「bytes_set 下标越界」，同族两套文案）。
         if len(args) != 3:
             return Err(i_r1002("bytes_set 需要 (bytes, index, value) 参数", pos))
-        return Ok(bytes_set(args[0], args[1], args[2]))
+        if type(args[0]) != "bytes":
+            return Err(i_r1002("bytes_set 需要 bytes，实际是 " + i_type_name(args[0]), pos))
+        let bsr = i_as_index(args[1], bytes_len(args[0]), pos)
+        if bsr.is_err():
+            return Err(bsr.err())
+        return Ok(bytes_set(args[0], bsr.unwrap(), args[2]))
     if name == "bytes_slice":
         # bytes_slice(b[, start[, end]]) → bytes（start/end 可 null/int，负索引/越界 clamp）
         if len(args) == 1:

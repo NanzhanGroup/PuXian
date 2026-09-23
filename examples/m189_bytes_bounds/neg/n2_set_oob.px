@@ -1,0 +1,5 @@
+# M189 负判据②：bytes_set 越界（词条与 bytes_get / b[i] 统一）
+var b = hex_to_bytes("0011ff")
+print("before")
+print(bytes_to_hex(bytes_set(b, 3, 7)))
+print("after")

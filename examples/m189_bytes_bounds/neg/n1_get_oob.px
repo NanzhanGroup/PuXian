@@ -1,0 +1,5 @@
+# M189 负判据①：bytes_get 越界（修前静默给 null）
+var b = hex_to_bytes("0011ff")
+print("before")
+print(bytes_get(b, 3))
+print("after")

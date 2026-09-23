@@ -1,0 +1,37 @@
+# M189 正判据：bytes 边界族（bytes_get / bytes_set / b[i]）三轨一致
+var b = hex_to_bytes("0011ff")
+print("A1=", bytes_get(b, 0))
+print("A2=", bytes_get(b, 2))
+print("A3=", bytes_get(b, -1))
+print("A4=", bytes_get(b, -3))
+print("A5=", b[0])
+print("A6=", b[2])
+print("A7=", b[-1])
+# 族一致性：函数面 ⇔ 索引面（正索引全范围）
+var ok = true
+var i = 0
+while i < bytes_len(b):
+    if bytes_get(b, i) != b[i]:
+        ok = false
+    i = i + 1
+print("A8=", ok)
+# 族一致性：函数面 ⇔ 索引面（负索引全范围）
+var okn = true
+var j = 1
+while j <= bytes_len(b):
+    if bytes_get(b, -j) != b[-j]:
+        okn = false
+    j = j + 1
+print("A9=", okn)
+# bytes_set 函数式语义（原对象不变）
+print("A10=", bytes_to_hex(bytes_set(b, 1, 127)))
+print("A11=", bytes_to_hex(bytes_set(b, -1, 0)))
+print("A12=", bytes_to_hex(b))
+# 守卫模式（第三方库惯用写法）仍可用
+var k = 9
+print("A13=", k < bytes_len(b))
+print("A14=", k >= 0 and k < bytes_len(b))
+# 切片 clamp 语义未变（与 b[a:b] 同轴）
+print("A15=", bytes_to_hex(bytes_slice(b, 0, 99)))
+print("A16=", bytes_to_hex(bytes_slice(b, -99, 2)))
+print("A17=", bytes_len(b))

@@ -1,0 +1,42 @@
+# ============================================================
+# 普贤生态库：registry/passhash —— 密码哈希（PBKDF2-HMAC-SHA256）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go bcrypt/golang.org/x/crypto/pbkdf2 心智（0.1.0）：
+#   pass_hash(pw, salt?, iters?) → Ok("pbkdf2$iters$salt_hex$hash_hex")
+#   pass_verify(pw, stored)      → bool
+# 存储格式（自解释，便于轮换参数）：
+#   pbkdf2$<迭代次数>$<salt hex>$<hash hex>
+# 安全考虑：
+#   - 默认 10,000 次迭代（低端设备可接受；生产建议 100k+，可调）
+#   - salt 默认 os_random_hex(16)（32 hex = 128 bit）
+#   - 底层 pbkdf2_sha256 为 runtime 原生（原始字节）
+#   - 0.1.0 不做恒定时间比较（str == 短路），敏感场景建议自行实现
+# ============================================================
+
+const PH_DK_LEN = 32
+const PH_DEFAULT_ITERS = 10000
+
+# 哈希：password → 存储串
+# salt 参数为 hex 文本（32 hex = 16 字节）；传 native 时按字节盐（对齐标准 PBKDF2）
+def pass_hash(pw, salt=null, iters=PH_DEFAULT_ITERS):
+    var s = salt
+    if s == null:
+        s = os_random_hex(16)
+    var dk = pbkdf2_sha256(pw, hex_to_bytes(s), iters, PH_DK_LEN)
+    return Ok("pbkdf2$" + str(iters) + "$" + s + "$" + bytes_to_hex(dk))
+
+# 校验：password 与存储串是否匹配
+def pass_verify(pw, stored):
+    var parts = split(stored, "$")
+    if len(parts) != 4:
+        return false
+    if parts[0] != "pbkdf2":
+        return false
+    if not is_int_str(parts[1]):
+        return false
+    var iters = int(parts[1])
+    var salt = parts[2]
+    var want = parts[3]
+    var dk = pbkdf2_sha256(pw, hex_to_bytes(salt), iters, PH_DK_LEN)
+    return bytes_to_hex(dk) == want
