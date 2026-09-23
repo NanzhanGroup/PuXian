@@ -584,7 +584,7 @@ def i_slice(v, start, end, step, pos):
         #   （避开 `bytes_concat` 的 O(n²)；`join` 走 M154 的线性口径）。
         let br = i_slice_indices(start, end, step, len(v))
         if not br["ok"]:
-            return Err(i_r1002(br["err"], pos))
+            return Err(i_r1006(br["err"], pos))
         let bidxs = br["idxs"]
         var bparts = []
         var bii = 0
@@ -597,7 +597,7 @@ def i_slice(v, start, end, step, pos):
         # 同时消除 `out += …` 的二次方拼接。等价性：取到的字符序列与索引表逐项相同。
         let r = i_slice_indices(start, end, step, len(v))
         if not r["ok"]:
-            return Err(i_r1002(r["err"], pos))
+            return Err(i_r1006(r["err"], pos))
         let idxs = r["idxs"]
         let parts = []
         var ii = 0
@@ -608,7 +608,7 @@ def i_slice(v, start, end, step, pos):
     if t == "list":
         let r = i_slice_indices(start, end, step, len(v))
         if not r["ok"]:
-            return Err(i_r1002(r["err"], pos))
+            return Err(i_r1006(r["err"], pos))
         var out = []
         var ii = 0
         while ii < len(r["idxs"]):
@@ -618,14 +618,14 @@ def i_slice(v, start, end, step, pos):
     if t == "tuple":
         let r = i_slice_indices(start, end, step, len(v))
         if not r["ok"]:
-            return Err(i_r1002(r["err"], pos))
+            return Err(i_r1006(r["err"], pos))
         var out = []
         var ii = 0
         while ii < len(r["idxs"]):
             out.append(v[r["idxs"][ii]])
             ii += 1
         return Ok(tuple(out))
-    return Err(i_r1002("此类型不支持切片", pos))
+    return Err(i_r1002("此类型不支持切片: " + t, pos))
 # ---------- 一元运算（对齐 eval_unary） ----------
 def i_eval_unary(op, v, pos):
     let t = i_type_name(v)

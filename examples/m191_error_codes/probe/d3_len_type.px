@@ -1,0 +1,4 @@
+def f():
+    return 0
+print("before")
+print(len(f))

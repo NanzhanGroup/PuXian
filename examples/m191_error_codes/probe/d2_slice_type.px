@@ -1,0 +1,3 @@
+var x = 1.5
+print("before")
+print(x[0:1])

@@ -1,0 +1,2 @@
+print("before")
+print(int_to_bytes(1, 2, "middle"))

@@ -3296,7 +3296,7 @@ static void px_gen_materialize(LXObject* o) {
 }
 
 LXValue px_gen_next(LXValue g) {
-    if (g.type != PX_GEN) px_error("gen_next 需要生成器对象");
+    if (g.type != PX_GEN) px_error("R1002: gen_next 需要生成器对象");
     LXObject* o = g.as.obj;
     if (o->as.gen.is_lazy) {
         for (;;) {
@@ -4612,14 +4612,14 @@ LXValue px_slice(LXValue obj, LXValue start, LXValue end, LXValue step) {
     int e_missing = end.type == PX_NULL;
     int k_missing = step.type == PX_NULL;
     int64_t k_in = k_missing ? 1 : int_val(step);
-    if (k_in == 0) px_error("切片步长不能为 0");
+    if (k_in == 0) px_error("R1006: 切片步长不能为 0");
 
     int len, kind = 0; // 0=list 1=tuple 2=str 3=bytes
     if (obj.type == PX_LIST) { kind = 0; len = obj.as.obj->as.list.len; }
     else if (obj.type == PX_TUPLE) { kind = 1; len = obj.as.obj->as.tuple.len; }
     else if (obj.type == PX_STR) { kind = 2; len = px_str_rune_len(obj.as.obj); }   // M106-S2：惰性缓存
     else if (obj.type == PX_BYTES) { kind = 3; len = obj.as.obj->as.str.len; }
-    else { px_error("无法切片: %s", px_type_name(obj)); return px_null(); }
+    else { px_error("R1002: 此类型不支持切片: %s", px_type_name(obj)); return px_null(); }
 
     int64_t s = s_missing ? (k_in < 0 ? len - 1 : 0) : px_slice_adjust(int_val(start), len, k_in);
     int64_t e = e_missing ? (k_in < 0 ? -1 : len) : px_slice_adjust(int_val(end), len, k_in);
@@ -5005,7 +5005,7 @@ int px_len(LXValue v) {
             // M34：惰性生成器先物化剩余（len 需要全量）
             if (v.as.obj->as.gen.is_lazy) px_gen_materialize(v.as.obj);
             return v.as.obj->as.gen.list.as.obj->as.list.len;
-        default: px_error("len 不支持类型 %s", px_type_name(v)); return 0;
+        default: px_error("R1002: len 不支持类型 %s", px_type_name(v)); return 0;
     }
 }
 
@@ -5043,7 +5043,7 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
     // 通道方法
     if (obj.type == PX_CHAN) {
         if (strcmp(name, "send") == 0) {
-            if (nargs != 1) px_error("send 需要 1 个参数");
+            if (nargs != 1) px_error("R1005: 方法 send 需要 1 个参数");
             return px_chan_send(obj, args[0]);
         }
         if (strcmp(name, "recv") == 0) return px_chan_recv(obj);
@@ -5055,7 +5055,7 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
         if (strcmp(name, "unlock") == 0) return px_mutex_unlock(obj);
         if (strcmp(name, "try_lock") == 0) return px_mutex_try_lock(obj);
         if (strcmp(name, "with") == 0) {
-            if (nargs != 1) px_error("mutex.with 需要 1 个函数参数");
+            if (nargs != 1) px_error("R1005: mutex.with 需要 1 个参数");
             px_mutex_lock(obj);
             LXValue r = px_call(args[0], NULL, 0);
             px_mutex_unlock(obj);
@@ -5071,14 +5071,14 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
         if (strcmp(name, "try_rlock") == 0) return px_rwlock_try_rlock(obj);
         if (strcmp(name, "try_wlock") == 0) return px_rwlock_try_wlock(obj);
         if (strcmp(name, "with_read") == 0) {
-            if (nargs != 1) px_error("rwlock.with_read 需要 1 个函数参数");
+            if (nargs != 1) px_error("R1005: rwlock.with_read 需要 1 个参数");
             px_rwlock_rlock(obj);
             LXValue r = px_call(args[0], NULL, 0);
             px_rwlock_runlock(obj);
             return r;
         }
         if (strcmp(name, "with_write") == 0) {
-            if (nargs != 1) px_error("rwlock.with_write 需要 1 个函数参数");
+            if (nargs != 1) px_error("R1005: rwlock.with_write 需要 1 个参数");
             px_rwlock_wlock(obj);
             LXValue r = px_call(args[0], NULL, 0);
             px_rwlock_wunlock(obj);
@@ -5090,11 +5090,11 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
         if (strcmp(name, "upper") == 0 || strcmp(name, "to_upper") == 0) {
             // M190（缺陷 213-i）：修前不查实参 ⇒ `s.upper(9)` 由转发的 `bi_to_upper` 报
             //   「to_upper 需要一个字符串参数」（**内置名**），解释轨则**静默忽略** ⇒ 三轨分叉。
-            if (nargs != 0) px_error("R1002: 方法 upper 不接受参数");
+            if (nargs != 0) px_error("R1005: 方法 upper 不接受参数");
             return call_with_self("to_upper", obj, args, nargs);
         }
         if (strcmp(name, "lower") == 0 || strcmp(name, "to_lower") == 0) {
-            if (nargs != 0) px_error("R1002: 方法 lower 不接受参数");
+            if (nargs != 0) px_error("R1005: 方法 lower 不接受参数");
             return call_with_self("to_lower", obj, args, nargs);
         }
         // M190（缺陷 213-i）：本区的每个方法都要**精确**校验实参个数 ——
@@ -5102,28 +5102,28 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
         //   `ends_with` 转发到同名内置（那里报的是**内置名**文案），而解释轨一律**静默忽略**
         //   多余实参 ⇒ 同一操作三轨两种答案。现在两侧逐字同文（「方法 X …」）。
         if (strcmp(name, "len") == 0) {
-            if (nargs != 0) px_error("R1002: 方法 len 不接受参数");
+            if (nargs != 0) px_error("R1005: 方法 len 不接受参数");
             return px_int(px_len(obj));
         }
         if (strcmp(name, "trim") == 0) {
-            if (nargs != 0) px_error("R1002: 方法 trim 不接受参数");
+            if (nargs != 0) px_error("R1005: 方法 trim 不接受参数");
             return call_with_self("trim", obj, args, nargs);
         }
         if (strcmp(name, "split") == 0) {
             // 0 参 = 按**单个空格**切分（与内置 `split(s)` 的默认分隔符同）；1 参 = 指定分隔符。
-            if (nargs > 1) px_error("R1002: 方法 split 需要 0-1 个参数");
+            if (nargs > 1) px_error("R1005: 方法 split 需要 0-1 个参数");
             if (nargs >= 1 && (args[0].type != PX_STR || !args[0].as.obj))
                 px_error("R1002: 方法 split 参数 1 需要 string");
             return call_with_self("split", obj, args, nargs);
         }
         if (strcmp(name, "contains") == 0) {
-            if (nargs != 1) px_error("R1002: 方法 contains 需要 1 个参数");
+            if (nargs != 1) px_error("R1005: 方法 contains 需要 1 个参数");
             if (args[0].type != PX_STR || !args[0].as.obj)
                 px_error("R1002: 方法 contains 参数 1 需要 string");
             return call_with_self("contains", obj, args, nargs);
         }
         if (strcmp(name, "replace") == 0) {
-            if (nargs != 2) px_error("R1002: 方法 replace 需要 2 个参数");
+            if (nargs != 2) px_error("R1005: 方法 replace 需要 2 个参数");
             if (args[0].type != PX_STR || !args[0].as.obj)
                 px_error("R1002: 方法 replace 参数 1 需要 string");
             if (args[1].type != PX_STR || !args[1].as.obj)
@@ -5131,13 +5131,13 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
             return call_with_self("replace", obj, args, nargs);
         }
         if (strcmp(name, "starts_with") == 0) {
-            if (nargs != 1) px_error("R1002: 方法 starts_with 需要 1 个参数");
+            if (nargs != 1) px_error("R1005: 方法 starts_with 需要 1 个参数");
             if (args[0].type != PX_STR || !args[0].as.obj)
                 px_error("R1002: 方法 starts_with 参数 1 需要 string");
             return call_with_self("starts_with", obj, args, nargs);
         }
         if (strcmp(name, "ends_with") == 0) {
-            if (nargs != 1) px_error("R1002: 方法 ends_with 需要 1 个参数");
+            if (nargs != 1) px_error("R1005: 方法 ends_with 需要 1 个参数");
             if (args[0].type != PX_STR || !args[0].as.obj)
                 px_error("R1002: 方法 ends_with 参数 1 需要 string");
             return call_with_self("ends_with", obj, args, nargs);
@@ -5147,19 +5147,22 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
         // 实现仍只有一份（find → px_str_index_of_runes；其余三个 → 既有 native 直通）。
         // ⚠ 既有名字（trim/starts_with/ends_with）的分支一字不动，避免改动既有文案。
         if (strcmp(name, "find") == 0) {
-            if (nargs != 1 || args[0].type != PX_STR) px_error("R1002: 方法 find 参数 1 需要 string");
+            if (nargs != 1) px_error("R1005: 方法 find 需要 1 个参数");
+            if (args[0].type != PX_STR) px_error("R1002: 方法 find 参数 1 需要 string");
             return px_int(px_str_index_of_runes(obj.as.obj, args[0].as.obj));
         }
         if (strcmp(name, "strip") == 0) {
-            if (nargs != 0) px_error("R1002: 方法 strip 不接受参数");
+            if (nargs != 0) px_error("R1005: 方法 strip 不接受参数");
             return call_with_self("trim", obj, args, nargs);
         }
         if (strcmp(name, "has_prefix") == 0) {
-            if (nargs != 1 || args[0].type != PX_STR) px_error("R1002: 方法 has_prefix 参数 1 需要 string");
+            if (nargs != 1) px_error("R1005: 方法 has_prefix 需要 1 个参数");
+            if (args[0].type != PX_STR) px_error("R1002: 方法 has_prefix 参数 1 需要 string");
             return call_with_self("starts_with", obj, args, nargs);
         }
         if (strcmp(name, "has_suffix") == 0) {
-            if (nargs != 1 || args[0].type != PX_STR) px_error("R1002: 方法 has_suffix 参数 1 需要 string");
+            if (nargs != 1) px_error("R1005: 方法 has_suffix 需要 1 个参数");
+            if (args[0].type != PX_STR) px_error("R1002: 方法 has_suffix 参数 1 需要 string");
             return call_with_self("ends_with", obj, args, nargs);
         }
     }
@@ -5171,7 +5174,7 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
             return px_null();
         }
         if (strcmp(name, "len") == 0) {
-            if (nargs != 0) px_error("R1002: 方法 len 不接受参数");
+            if (nargs != 0) px_error("R1005: 方法 len 不接受参数");
             return px_int(px_len(obj));
         }
         if (strcmp(name, "push") == 0) {
@@ -5179,7 +5182,7 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
             px_list_push(obj, args[0]); return px_null();
         }
         if (strcmp(name, "contains") == 0) {
-            if (nargs < 1) px_error("contains 需要 1 个参数");
+            if (nargs < 1) px_error("R1005: 方法 contains 需要 1 个参数");
             LXObject* o = obj.as.obj;
             for (int i = 0; i < o->as.list.len; i++) {
                 if (px_eq(o->as.list.items[i], args[0]).as.b) return px_bool(true);
@@ -5341,7 +5344,7 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
     //   编译两轨无 ⇒ `t.len()` 在 VM/C 轨响亮「R1007 类型 tuple 没有方法 'len'」。补齐。
     if (obj.type == PX_TUPLE) {
         if (strcmp(name, "len") == 0) {
-            if (nargs != 0) px_error("R1002: 方法 len 不接受参数");
+            if (nargs != 0) px_error("R1005: 方法 len 不接受参数");
             return px_int(px_len(obj));
         }
     }
@@ -5621,7 +5624,7 @@ static LXValue bi_range(LXValue* args, int nargs, void* ctx) {
     else if (nargs == 2) { start = int_val(args[0]); end = int_val(args[1]); }
     else if (nargs == 3) { start = int_val(args[0]); end = int_val(args[1]); step = int_val(args[2]); }
     else px_error("R1002: range 需要 1-3 个参数");
-    if (step == 0) px_error("R1002: range step 不能为 0");
+    if (step == 0) px_error("R1006: range step 不能为 0");
     LXValue r = px_list(0);
     px_root_push();
     PX_KEEP(r);   // M92 precise：累积 list 跨 px_list_push 扩容分配
@@ -5879,16 +5882,16 @@ static LXValue bi_assert(LXValue* args, int nargs, void* ctx) {
     //   第 3 个以后，而解释轨 `1-2` 响亮。统一为**恰 1-2**。
     if (nargs < 1 || nargs > 2) px_error("R1002: assert 需要 1-2 个参数");
     if (!px_is_truthy(args[0])) {
-        if (nargs >= 2 && args[1].type == PX_STR) px_error("断言失败: %s", args[1].as.obj->as.str.data);
-        else px_error("断言失败");
+        if (nargs >= 2 && args[1].type == PX_STR) px_error("R2001: 断言失败: %s", args[1].as.obj->as.str.data);
+        else px_error("R2001: 断言失败");
     }
     return px_null();
 }
 
 static LXValue bi_panic(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs >= 1 && args[0].type == PX_STR) px_error("%s", args[0].as.obj->as.str.data);
-    px_error("panic");
+    if (nargs >= 1 && args[0].type == PX_STR) px_error("R2001: %s", args[0].as.obj->as.str.data);
+    px_error("R2001: panic");
     return px_null();
 }
 
@@ -6297,7 +6300,8 @@ static LXValue bi_random(LXValue* args, int nargs, void* ctx) {
 
 static LXValue bi_random_int(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1 || args[0].type != PX_INT) px_error("R1002: random_int 需要 1 个参数 n（正整数），返回 [0,n) 的整数");
+    if (nargs != 1) px_error("R1002: random_int 需要 1 个参数 n（正整数）");
+    if (args[0].type != PX_INT) px_error("R1002: random_int 的 n 需要 int");
     int64_t n = args[0].as.i;
     if (n <= 0) px_error("R1002: random_int 的 n 必须 > 0，实际是 %lld", (long long)n);
     return px_int((int64_t)(splitmix64_next() % (uint64_t)n));
@@ -6337,7 +6341,8 @@ static LXValue bi_exit(LXValue* args, int nargs, void* ctx) {
 // split(s, sep) -> [str]；sep 为空按空白切分
 static LXValue bi_split(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || nargs > 2 || args[0].type != PX_STR) px_error("R1002: split 需要 1-2 个参数（字符串, [分隔符]）");
+    if (nargs < 1 || nargs > 2) px_error("R1002: split 需要 1-2 个参数（字符串, [分隔符]）");
+    if (args[0].type != PX_STR) px_error("R1002: split 参数需要 string");
     const char* s = args[0].as.obj->as.str.data;
     const char* sep = (nargs >= 2 && args[1].type == PX_STR) ? args[1].as.obj->as.str.data : " ";
     int sep_len = (int)strlen(sep);
@@ -6384,7 +6389,8 @@ static inline void bi_join_item(LXValue item, const char** pp, int* lp) {
 // join(sep, list) -> str
 static LXValue bi_join(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2 || args[0].type != PX_STR) px_error("R1002: join 需要 2 个参数（分隔符, 列表）");
+    if (nargs != 2) px_error("R1002: join 需要 2 个参数（分隔符, 列表）");
+    if (args[0].type != PX_STR) px_error("R1002: join 分隔符需要 string");
     const char* sep = args[0].as.obj->as.str.data;
     // M154（第 36 轮 · 缺陷 149）：分隔符与项一律按**显式字节长**拼接 —— 与 `+`
     //   （px_add 的 PX_STR/PX_STR 分支同样按 str.len）及 Go `strings.Join` 口径一致。
@@ -6861,7 +6867,7 @@ static LXValue bi_read_at(LXValue* args, int nargs, void* ctx) {
     const char* path = args[0].as.obj->as.str.data;
     int64_t offset = int_val(args[1]);
     int length = (int)int_val(args[2]);
-    if (length < 0) px_error("read_at 长度不能为负");
+    if (length < 0) px_error("R1006: read_at 长度不能为负");
     if (length == 0) return px_str("");
     int fd = open(path, O_RDONLY);
     if (fd < 0) px_error("io: 打开文件失败 %s: %s", path, strerror(errno));
@@ -7548,7 +7554,7 @@ static LXValue bi_fd_wait(LXValue* args, int nargs, void* ctx) {
         fds[n++] = (int)args[0].as.i;
     } else if (args[0].type == PX_LIST) {
         LXObject* o = args[0].as.obj;
-        if (o->as.list.len > 64) px_error("fd_wait 一次最多监听 64 个 fd");
+        if (o->as.list.len > 64) px_error("R1002: fd_wait 一次最多监听 64 个 fd");
         for (int i = 0; i < o->as.list.len; i++) {
             if (o->as.list.items[i].type != PX_INT) px_error("R1002: fd_wait 的 fds 列表元素需要 int");
             fds[n++] = (int)o->as.list.items[i].as.i;
@@ -10776,7 +10782,7 @@ static LXValue bi_json_path(LXValue* args, int nargs, void* ctx) {
     if (args[1].type != PX_STR) px_error("R1002: json_path 的 path 需要字符串");
     JPathSeg segs[64];
     int n = json_path_parse(args[1].as.obj->as.str.data, segs, 64);
-    if (n < 0) { json_path_segs_free(segs, 0); px_error("json_path: 非法路径"); }
+    if (n < 0) { json_path_segs_free(segs, 0); px_error("R1002: json_path: 非法路径"); }
     LXValue r = json_path_walk(v, segs, n);
     json_path_segs_free(segs, n);
     return r;
@@ -10793,7 +10799,7 @@ static LXValue bi_json_path_set(LXValue* args, int nargs, void* ctx) {
     if (args[1].type != PX_STR) px_error("R1002: json_path_set 的 path 需要字符串");
     JPathSeg segs[64];
     int n = json_path_parse(args[1].as.obj->as.str.data, segs, 64);
-    if (n < 0) { json_path_segs_free(segs, 0); px_error("json_path_set: 非法路径"); }
+    if (n < 0) { json_path_segs_free(segs, 0); px_error("R1002: json_path_set: 非法路径"); }
     LXValue r;
     if (n == 0) {
         r = json_value_copy(args[2]);
@@ -11597,7 +11603,7 @@ static LXValue bi_env_set(LXValue* args, int nargs, void* ctx) {
         px_error("R1002: env_set 需要 (name, value) 两个字符串参数");
     const char* name = args[0].as.obj->as.str.data;
     if (name[0] == '\0' || strchr(name, '=') != NULL)
-        px_error("env_set 的 name 不能为空且不能含 '='");
+        px_error("R1002: env_set 的 name 不能为空且不能含 '='");
     return px_bool(setenv(name, args[1].as.obj->as.str.data, 1) == 0);
 }
 
@@ -11606,7 +11612,7 @@ static LXValue bi_env_unset(LXValue* args, int nargs, void* ctx) {
     if (nargs != 1 || args[0].type != PX_STR) px_error("R1002: env_unset 需要一个变量名");
     const char* name = args[0].as.obj->as.str.data;
     if (name[0] == '\0' || strchr(name, '=') != NULL)
-        px_error("env_unset 的 name 不能为空且不能含 '='");
+        px_error("R1002: env_unset 的 name 不能为空且不能含 '='");
     return px_bool(unsetenv(name) == 0);
 }
 
@@ -12336,7 +12342,7 @@ static LXValue bi_os_random_hex(LXValue* args, int nargs, void* ctx) {
         px_error("R1002: os_random_hex 需要 (nbytes) 参数");
     int64_t n64 = args[0].as.i;
     if (n64 <= 0 || n64 > 1024)
-        px_error("os_random_hex nbytes 需在 1..1024");
+        px_error("R1006: os_random_hex nbytes 需在 1..1024");
     int n = (int)n64;
     FILE* f = fopen("/dev/urandom", "rb");
     if (!f) return px_null();
@@ -12469,7 +12475,7 @@ static LXValue bi_unix_connect(LXValue* args, int nargs, void* ctx) {
         px_error("R1002: unix_connect 需要 (socket_path) 参数");
     const char* path = args[0].as.obj->as.str.data;
     if (strlen(path) >= sizeof(((struct sockaddr_un*)0)->sun_path))
-        px_error("unix_connect: socket 路径过长");
+        px_error("R1002: unix_connect: socket 路径过长");
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) return px_int(-1);
     struct sockaddr_un addr;
@@ -13052,11 +13058,11 @@ static LXValue bi_int_to_bytes(LXValue* args, int nargs, void* ctx) {
         const char* e = val_cstr(args[2]);
         if (!strcasecmp(e, "little") || !strcasecmp(e, "le")) big = 0;
         else if (!strcasecmp(e, "big") || !strcasecmp(e, "be")) big = 1;
-        else px_error("int_to_bytes 的 endian 需为 big/little");
+        else px_error("R1002: int_to_bytes 的 endian 需为 big/little");
     }
     int signed_ = 0;
     if (nargs >= 4) {
-        if (args[3].type != PX_BOOL) px_error("int_to_bytes 的 signed 需为 bool");
+        if (args[3].type != PX_BOOL) px_error("R1002: int_to_bytes 的 signed 需为 bool");
         signed_ = args[3].as.b ? 1 : 0;
     }
     if (size < 1 || size > 8) px_error("R1002: int_to_bytes 的 size 必须在 1..8");
@@ -13097,11 +13103,11 @@ static LXValue bi_bytes_to_int(LXValue* args, int nargs, void* ctx) {
         const char* e = val_cstr(args[1]);
         if (!strcasecmp(e, "little") || !strcasecmp(e, "le")) big = 0;
         else if (!strcasecmp(e, "big") || !strcasecmp(e, "be")) big = 1;
-        else px_error("bytes_to_int 的 endian 需为 big/little");
+        else px_error("R1002: bytes_to_int 的 endian 需为 big/little");
     }
     int signed_ = 0;
     if (nargs >= 3) {
-        if (args[2].type != PX_BOOL) px_error("bytes_to_int 的 signed 需为 bool");
+        if (args[2].type != PX_BOOL) px_error("R1002: bytes_to_int 的 signed 需为 bool");
         signed_ = args[2].as.b ? 1 : 0;
     }
     if (len < 1 || len > 8) return px_null();
@@ -13148,7 +13154,7 @@ bool px_is_rwlock(LXValue v) { return v.type == PX_RWLOCK; }
 // rwlock 写优先：writer_waiting > 0 时阻塞新读者，防止读饿死写
 
 static LXObject* px_mutex_obj(LXValue m, const char* op) {
-    if (m.type != PX_MUTEX) px_error("%s: 目标不是互斥锁（%s）", op, px_type_name(m));
+    if (m.type != PX_MUTEX) px_error("R1002: %s: 目标不是互斥锁（%s）", op, px_type_name(m));
     return m.as.obj;
 }
 
@@ -13222,7 +13228,7 @@ LXValue px_mutex_unlock(LXValue m) {
 }
 
 static LXObject* px_rwlock_obj(LXValue m, const char* op) {
-    if (m.type != PX_RWLOCK) px_error("%s: 目标不是读写锁（%s）", op, px_type_name(m));
+    if (m.type != PX_RWLOCK) px_error("R1002: %s: 目标不是读写锁（%s）", op, px_type_name(m));
     px_dbg_rwlock_check(m.as.obj, op);   // M135：悬垂锁抓拍（同缺陷 86）
     return m.as.obj;
 }
@@ -13351,7 +13357,7 @@ static int chan_has_recver(const LXObject* o) {
 }
 
 LXValue px_chan_send(LXValue ch, LXValue val) {
-    if (ch.type != PX_CHAN) px_error("send: 目标不是通道（%s）", px_type_name(ch));
+    if (ch.type != PX_CHAN) px_error("R1002: send: 目标不是通道（%s）", px_type_name(ch));
     LXObject* o = ch.as.obj;
     struct PxCoro* w = NULL;
     pthread_mutex_lock(&o->as.chan.mu);
@@ -13398,7 +13404,7 @@ LXValue px_chan_send(LXValue ch, LXValue val) {
 }
 
 LXValue px_chan_recv(LXValue ch) {
-    if (ch.type != PX_CHAN) px_error("recv: 目标不是通道（%s）", px_type_name(ch));
+    if (ch.type != PX_CHAN) px_error("R1002: recv: 目标不是通道（%s）", px_type_name(ch));
     LXObject* o = ch.as.obj;
     struct PxCoro* w = NULL;
     pthread_mutex_lock(&o->as.chan.mu);
@@ -13432,7 +13438,7 @@ LXValue px_chan_recv(LXValue ch) {
 }
 
 bool px_chan_try_recv(LXValue ch, LXValue* out) {
-    if (ch.type != PX_CHAN) px_error("recv: 目标不是通道（%s）", px_type_name(ch));
+    if (ch.type != PX_CHAN) px_error("R1002: recv: 目标不是通道（%s）", px_type_name(ch));
     LXObject* o = ch.as.obj;
     bool ok = false;
     struct PxCoro* w = NULL;
@@ -13458,7 +13464,7 @@ bool px_chan_try_recv(LXValue ch, LXValue* out) {
 // M93-S3：非阻塞发送（select/协程 try 用）。成功 = 值已入缓冲/直接交付接收者。
 //   closed → false（调用方须走阻塞版 px_chan_send 报 R1011，不得登记等待）。
 bool px_chan_try_send(LXValue ch, LXValue val) {
-    if (ch.type != PX_CHAN) px_error("send: 目标不是通道（%s）", px_type_name(ch));
+    if (ch.type != PX_CHAN) px_error("R1002: send: 目标不是通道（%s）", px_type_name(ch));
     LXObject* o = ch.as.obj;
     bool ok = false;
     struct PxCoro* w = NULL;
@@ -13494,7 +13500,7 @@ bool px_chan_try_send(LXValue ch, LXValue val) {
 }
 
 void px_chan_close(LXValue ch) {
-    if (ch.type != PX_CHAN) px_error("close: 目标不是通道（%s）", px_type_name(ch));
+    if (ch.type != PX_CHAN) px_error("R1002: close: 目标不是通道（%s）", px_type_name(ch));
     LXObject* o = ch.as.obj;
     struct PxCoro* w1 = NULL;
     struct PxCoro* w2 = NULL;
@@ -13770,7 +13776,7 @@ void px_spawn_name(const char* fname, LXValue* args, int nargs) {
     } else if (fn.type == PX_NATIVE) {
         px_spawn_ctx(fn.as.obj->as.native.fn, NULL, args, nargs);
     } else {
-        px_error("spawn: 未找到函数 %s", fname);
+        px_error("R1002: spawn: 未找到函数 %s", fname);
     }
 }
 
@@ -13943,7 +13949,7 @@ static LXValue bi_set_timeout(LXValue* args, int nargs, void* ctx) {
     if (args[0].type != PX_FUNC && args[0].type != PX_NATIVE)
         px_error("R1002: set_timeout: 第一个参数必须是函数");
     int64_t ms = int_val(args[1]);
-    if (ms < 0) px_error("set_timeout: 间隔不能为负数");
+    if (ms < 0) px_error("R1006: set_timeout: 间隔不能为负数");
     int64_t id = px_timer_create(0, args[0], args + 2, nargs - 2, ms);
     return px_int(id);
 }
@@ -13954,7 +13960,7 @@ static LXValue bi_set_interval(LXValue* args, int nargs, void* ctx) {
     if (args[0].type != PX_FUNC && args[0].type != PX_NATIVE)
         px_error("R1002: set_interval: 第一个参数必须是函数");
     int64_t ms = int_val(args[1]);
-    if (ms < 0) px_error("set_interval: 间隔不能为负数");
+    if (ms < 0) px_error("R1006: set_interval: 间隔不能为负数");
     int64_t id = px_timer_create(1, args[0], args + 2, nargs - 2, ms);
     return px_int(id);
 }
@@ -14145,7 +14151,7 @@ static LXValue bi_udp_open(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs > 1) px_error("R1002: udp_open 需要 (port) 参数");
     int port = (nargs == 1 && args[0].type == PX_INT) ? (int)args[0].as.i : 0;
-    if (port < 0 || port > 65535) px_error("udp_open 端口范围 0-65535");
+    if (port < 0 || port > 65535) px_error("R1006: udp_open 端口范围 0-65535");
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) px_error("udp_open: 创建 socket 失败");
     struct sockaddr_in addr;
@@ -14344,7 +14350,7 @@ static LXValue bi_bus_subscribe(LXValue* args, int nargs, void* ctx) {
     }
     pthread_mutex_lock(&g_bus_mu);
     PxBus* b = bus_find(args[0].as.i);
-    if (!b) { pthread_mutex_unlock(&g_bus_mu); px_error("bus_subscribe: 无效 bus id"); }
+    if (!b) { pthread_mutex_unlock(&g_bus_mu); px_error("R1002: bus_subscribe: 无效 bus id"); }
     PxBusTopic* t = bus_topic_find_or_new(b, args[1].as.obj->as.str.data);
     if (!t || t->nfns >= PX_BUS_SUB_MAX) {
         pthread_mutex_unlock(&g_bus_mu);
@@ -14365,7 +14371,7 @@ static LXValue bi_bus_publish(LXValue* args, int nargs, void* ctx) {
     int n = 0;
     pthread_mutex_lock(&g_bus_mu);
     PxBus* b = bus_find(args[0].as.i);
-    if (!b) { pthread_mutex_unlock(&g_bus_mu); px_error("bus_publish: 无效 bus id"); }
+    if (!b) { pthread_mutex_unlock(&g_bus_mu); px_error("R1002: bus_publish: 无效 bus id"); }
     for (int i = 0; i < b->ntopics; i++) {
         if (b->topics[i].active && strcmp(b->topics[i].topic, args[1].as.obj->as.str.data) == 0) {
             for (int j = 0; j < b->topics[i].nfns && n < PX_BUS_SUB_MAX; j++) fns[n++] = b->topics[i].fns[j];
@@ -19417,7 +19423,7 @@ static LXValue bi_http_serve(LXValue* args, int nargs, void* ctx) {
             addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         } else if (inet_pton(AF_INET, bind_host, &addr.sin_addr) != 1) {
             close(sfd);
-            px_error("http_serve: 非法 host: %s（IPv4 或 localhost）", bind_host);
+            px_error("R1002: http_serve: 非法 host: %s（IPv4 或 localhost）", bind_host);
         }
     }
     addr.sin_port = htons((uint16_t)port);
@@ -19449,9 +19455,9 @@ static LXValue bi_http_serve_unix(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 2 || args[0].type != PX_STR) px_error("R1002: http_serve_unix 需要 (sock_path, handler) 参数");
     const char* sock_path = args[0].as.obj->as.str.data;
-    if (sock_path[0] == '\0') px_error("http_serve_unix: sock_path 不能为空");
+    if (sock_path[0] == '\0') px_error("R1002: http_serve_unix: sock_path 不能为空");
     if (strlen(sock_path) >= sizeof(((struct sockaddr_un*)0)->sun_path))
-        px_error("http_serve_unix: socket 路径过长（> %d）", (int)sizeof(((struct sockaddr_un*)0)->sun_path) - 1);
+        px_error("R1002: http_serve_unix: socket 路径过长（> %d）", (int)sizeof(((struct sockaddr_un*)0)->sun_path) - 1);
     LXValue handler = args[1];
     if (handler.type != PX_FUNC && handler.type != PX_NATIVE) px_error("R1002: http_serve_unix 的 handler 必须是函数");
     // handler 存入全局表（GC 扫描根），连接线程经全局表取回（与 http_serve 同槽 __http_handler）
@@ -24584,7 +24590,7 @@ static LXValue bi_vhost(LXValue* args, int nargs, void* ctx) {
     if (nargs != 2) px_error("R1002: vhost 需要 (host, docroot|handler) 参数");
     if (args[0].type != PX_STR) px_error("R1002: vhost 的 host 需要字符串");
     const char* host = args[0].as.obj->as.str.data;
-    if (!*host) px_error("vhost: host 不能为空");
+    if (!*host) px_error("R1002: vhost: host 不能为空");
     // 小写 host
     char hbuf[128];
     snprintf(hbuf, sizeof(hbuf), "%s", host);
@@ -25687,8 +25693,8 @@ static const char* PX_MONTHS_F[] = {"January","February","March","April","May","
 // time_format(ts, fmt[, tz]) → str
 LXValue bi_time_format(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 2 || nargs > 3) px_error("time_format 需要 (ts, fmt[, tz]) 参数");
-    if (args[0].type != PX_INT || args[1].type != PX_STR) px_error("time_format 参数类型错误");
+    if (nargs < 2 || nargs > 3) px_error("R1002: time_format 需要 (ts, fmt[, tz]) 参数");
+    if (args[0].type != PX_INT || args[1].type != PX_STR) px_error("R1002: time_format 参数类型错误");
     int64_t off = 0;
     if (nargs == 3 && args[2].type == PX_STR) off = px_tz_off(args[2].as.obj->as.str.data);
     int64_t y, mo, d, h, mi, s, wd;
@@ -25763,8 +25769,8 @@ static int px_read_int(const char* b, int len, int* idx, int max, int64_t* v) {
 // time_parse(str, fmt[, tz]) → int|null
 LXValue bi_time_parse(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 2 || nargs > 3) px_error("time_parse 需要 (str, fmt[, tz]) 参数");
-    if (args[0].type != PX_STR || args[1].type != PX_STR) px_error("time_parse 参数类型错误");
+    if (nargs < 2 || nargs > 3) px_error("R1002: time_parse 需要 (str, fmt[, tz]) 参数");
+    if (args[0].type != PX_STR || args[1].type != PX_STR) px_error("R1002: time_parse 参数类型错误");
     int64_t off = 0;
     if (nargs == 3 && args[2].type == PX_STR) off = px_tz_off(args[2].as.obj->as.str.data);
     const char* s = args[0].as.obj->as.str.data;
@@ -25835,7 +25841,7 @@ LXValue bi_time_parse(LXValue* args, int nargs, void* ctx) {
 // tz_offset(tz) → int|null
 LXValue bi_tz_offset(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1 || args[0].type != PX_STR) px_error("tz_offset 需要 (tz) 参数");
+    if (nargs != 1 || args[0].type != PX_STR) px_error("R1002: tz_offset 需要 (tz) 参数");
     const char* tz = args[0].as.obj->as.str.data;
     // 非法时区 → null（与解释器一致）；合法返回偏移
     if (strcasecmp(tz, "utc") == 0 || strcmp(tz, "Z") == 0) return px_int(0);
@@ -26046,8 +26052,8 @@ static void* cron_thread(void* p) {
 // cron(expr, fn, ...args) → int
 LXValue bi_cron(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 2) px_error("cron 需要 (expr, fn[, ...args]) 参数");
-    if (args[0].type != PX_STR || args[1].type != PX_FUNC) px_error("cron 参数类型错误");
+    if (nargs < 2) px_error("R1002: cron 需要 (expr, fn[, ...args]) 参数");
+    if (args[0].type != PX_STR || args[1].type != PX_FUNC) px_error("R1002: cron 参数类型错误");
     pthread_mutex_lock(&g_cron_mu);
     int slot = -1;
     for (int i = 0; i < MAX_CRON; i++) if (!g_crons[i].active) { slot = i; break; }
@@ -26086,7 +26092,7 @@ LXValue bi_cron(LXValue* args, int nargs, void* ctx) {
             if (g_timers[i].id == id) { g_timers[i].active = 0; g_timers[i].id = 0; break; }
         }
         pthread_mutex_unlock(&g_timer_mu);
-        px_error("cron 表达式非法: %s", args[0].as.obj->as.str.data);
+        px_error("R1002: cron 表达式非法: %s", args[0].as.obj->as.str.data);
     }
 
     // GC 槽位预留（同 px_timer_create）

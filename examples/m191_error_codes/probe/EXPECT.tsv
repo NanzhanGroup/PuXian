@@ -1,0 +1,11 @@
+d1_slice_step0	R1006	切片步长不能为 0
+d2_slice_type	R1002	此类型不支持切片: float
+d3_len_type	R1002	len 不支持类型 function
+d4_str_upper_arity	R1005	方法 upper 不接受参数
+d5_assert	R2001	断言失败
+d6_assert_msg	R2001	断言失败: boom
+d7_panic	R2001	boom
+d8_range_step0	R1006	range step 不能为 0
+d9_i2b_endian	R1002	int_to_bytes 的 endian 需为 big/little
+d10_join_arity	R1002	join 需要 2 个参数（分隔符, 列表）
+d11_split_type	R1002	split 参数需要 string

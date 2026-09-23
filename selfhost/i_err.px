@@ -25,6 +25,8 @@ def i_r1006(msg, pos):
     return i_err("R1006", msg, pos)
 def i_r1007(msg, pos):
     return i_err("R1007", msg, pos)
+def i_r2001(msg, pos):
+    return i_err("R2001", msg, pos)
 def i_r1008(msg, pos):
     return i_err("R1008", msg, pos)
 def i_r1011(msg, pos):

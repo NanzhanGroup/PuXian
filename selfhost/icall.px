@@ -116,7 +116,7 @@ def i_call_method(rcv, name, args, pos):
         if name == "len":
             # M190（缺陷 213-k）：补参数校验（native 侧本轮同步补齐 tuple.len）。
             if len(args) != 0:
-                return Err(i_r1002("方法 len 不接受参数", pos))
+                return Err(i_r1005("方法 len 不接受参数", pos))
             return Ok(len(rcv))
         return Err(i_r1007("类型 tuple 没有方法 '" + name + "'", pos))
     return Err(i_r1007("类型 " + t + " 没有方法 '" + name + "'", pos))
@@ -131,26 +131,26 @@ def i_str_method(s, name, args, pos):
     #   忽略、编译轨响亮 ⇒ 三轨分叉。现在与 native `px_method` **逐字同文**。
     if name == "upper":
         if len(args) != 0:
-            return Err(i_r1002("方法 upper 不接受参数", pos))
+            return Err(i_r1005("方法 upper 不接受参数", pos))
         return Ok(s.upper())
     if name == "lower":
         if len(args) != 0:
-            return Err(i_r1002("方法 lower 不接受参数", pos))
+            return Err(i_r1005("方法 lower 不接受参数", pos))
         return Ok(s.lower())
     if name == "trim":
         if len(args) != 0:
-            return Err(i_r1002("方法 trim 不接受参数", pos))
+            return Err(i_r1005("方法 trim 不接受参数", pos))
         return Ok(s.trim())
     if name == "len":
         if len(args) != 0:
-            return Err(i_r1002("方法 len 不接受参数", pos))
+            return Err(i_r1005("方法 len 不接受参数", pos))
         return Ok(len(s))
     # M190（缺陷 213-i）：修前这几个方法**只校验第 1 个实参的类型**、不查个数 ⇒
     #   `s.contains("a","b")` / `s.replace("a","b","c")` 解释轨静默忽略多余实参，
     #   而 native 侧精确 `nargs != N` 响亮。现在两侧逐字同文。
     if name == "split":
         if len(args) > 1:
-            return Err(i_r1002("方法 split 需要 0-1 个参数", pos))
+            return Err(i_r1005("方法 split 需要 0-1 个参数", pos))
         if len(args) == 0:
             # 0 参 = 按**单个空格**切分（与内置 `split(s)` 的默认分隔符同）
             return Ok(s.split(" "))
@@ -160,14 +160,14 @@ def i_str_method(s, name, args, pos):
         return Ok(s.split(r.unwrap()))
     if name == "contains":
         if len(args) != 1:
-            return Err(i_r1002("方法 contains 需要 1 个参数", pos))
+            return Err(i_r1005("方法 contains 需要 1 个参数", pos))
         let r = i_expect_str_arg(args, 0, "contains", pos)
         if r.is_err():
             return Err(r.err())
         return Ok(s.contains(r.unwrap()))
     if name == "replace":
         if len(args) != 2:
-            return Err(i_r1002("方法 replace 需要 2 个参数", pos))
+            return Err(i_r1005("方法 replace 需要 2 个参数", pos))
         let r0 = i_expect_str_arg(args, 0, "replace", pos)
         if r0.is_err():
             return Err(r0.err())
@@ -177,14 +177,14 @@ def i_str_method(s, name, args, pos):
         return Ok(s.replace(r0.unwrap(), r1.unwrap()))
     if name == "starts_with":
         if len(args) != 1:
-            return Err(i_r1002("方法 starts_with 需要 1 个参数", pos))
+            return Err(i_r1005("方法 starts_with 需要 1 个参数", pos))
         let r = i_expect_str_arg(args, 0, "starts_with", pos)
         if r.is_err():
             return Err(r.err())
         return Ok(s.starts_with(r.unwrap()))
     if name == "ends_with":
         if len(args) != 1:
-            return Err(i_r1002("方法 ends_with 需要 1 个参数", pos))
+            return Err(i_r1005("方法 ends_with 需要 1 个参数", pos))
         let r = i_expect_str_arg(args, 0, "ends_with", pos)
         if r.is_err():
             return Err(r.err())
@@ -200,7 +200,7 @@ def i_str_method(s, name, args, pos):
         return Ok(str_index_of(s, r.unwrap()))
     if name == "strip":
         if len(args) != 0:
-            return Err(i_r1002("方法 strip 不接受参数", pos))
+            return Err(i_r1005("方法 strip 不接受参数", pos))
         return Ok(s.trim())
     if name == "has_prefix":
         if len(args) != 1:
@@ -221,7 +221,7 @@ def i_str_method(s, name, args, pos):
 def i_list_method(l, name, args, pos):
     if name == "len":
         if len(args) != 0:
-            return Err(i_r1002("方法 len 不接受参数", pos))
+            return Err(i_r1005("方法 len 不接受参数", pos))
         return Ok(len(l))
     if name == "append" or name == "push":
         # M190（缺陷 213-h）：修前只查下限（`len(args) == 0`）⇒ `l.append(1, 2)` 解释轨
@@ -240,7 +240,7 @@ def i_list_method(l, name, args, pos):
         return Ok(l.pop())
     if name == "join":
         if len(args) != 1:
-            return Err(i_r1002("方法 join 需要 1 个参数", pos))
+            return Err(i_r1005("方法 join 需要 1 个参数", pos))
         let r = i_expect_str_arg(args, 0, "join", pos)
         if r.is_err():
             return Err(r.err())
@@ -253,7 +253,7 @@ def i_list_method(l, name, args, pos):
         return Ok(join(sep, parts))
     if name == "contains":
         if len(args) != 1:
-            return Err(i_r1002("方法 contains 需要 1 个参数", pos))
+            return Err(i_r1005("方法 contains 需要 1 个参数", pos))
         var i = 0
         while i < len(l):
             if i_eq(l[i], args[0]):
