@@ -1,0 +1,4 @@
+# M188 拒绝侧：sha1() 缺参（native 参数个数预检）
+print("before")
+print(sha1())
+print("after")

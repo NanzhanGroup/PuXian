@@ -1,0 +1,4 @@
+# M188 拒绝侧：方法 find 的实参不是 string（三轨须同码同文）
+print("before")
+print("ab".find(123))
+print("after")

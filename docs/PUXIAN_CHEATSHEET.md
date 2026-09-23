@@ -2276,3 +2276,34 @@ set_timeout(fn (): print("once after 2s"), 2000)
      · ⚠️ **编译轨「找不到模块」是警告不是错误**：`import 缺的包` 只打
        `[警告] 找不到模块 'x'（已跳过 → 运行期将报未定义）`，**rc 仍为 0、程序照跑** ⇒
        判据只看 rc/输出会**假绿**（本仓 M187 门就踩过）；要断言 `! grep 找不到模块 <编译日志>`。
+
+218. **SHA1 族 + 三件「安全替代」（第 66 轮 · M188 收口第三方 PX-DEF-026/016/012/017）**：
+     · `sha1(data)` → 40 字符**小写 hex** · `sha1_bytes(data)` → **20 字节**
+       （族口径与 `sha256`/`md5` 逐条对齐：收 str|bytes|数值、二进制安全可含 NUL；数值自动字符串化）。
+       用途 = MySQL `mysql_native_password` 应答 `SHA1(pw) XOR SHA1(salt ‖ SHA1(SHA1(pw)))`；
+       对拍锚点：`sha1("abc")` = `a9993e364706816aba3e25717850c26c9cd0d89d`（NIST 向量）、
+       `sha1("")` = `da39a3ee5e6b4b0d3255bfef95601890afd80709`。
+     · `sha256_bytes(data)` → **32 字节**：`sha256` 只给 hex，想再哈希一次就得 hex↔bytes 往返，
+       而 `sha256(sha256(x))` 实际是对 **hex 文本**求哈希（**双哈希陷阱**：给 `d7914fe5…` 而正确是 `9595c9df…`）
+       ⇒ **"哈希的哈希"一律用 `sha256_bytes(sha256_bytes(x))`**。
+     · `bytes_zeros(n)` → n 个 `0x00` 字节：⚠️ `bytes(10)` 是**字符串 "10" 的 2 字节**（hex `3130`），
+       **不是** 10 个零字节 —— 要"n 个零字节"必须 `bytes_zeros(n)`（上限 64MiB，负值收敛为 0）。
+     · `byte(n)` → **单字节** bytes，n ∈ 0..255：⚠️ `chr(185)` 给的是 UTF-8 编码后的 **2 字节** `c2b9`
+       （`len(chr(185))` = 1 是 rune 数）；要"原始字节 0xB9"用 `byte(185)`，越界 ⇒
+       `R1002: byte 取值范围 0..255，实际是 300`。
+       ⇒ 两个模型泾渭分明：`str` 走 **rune** 轴、`bytes` 走**字节**轴（M185 立，M188 补上显式构造器）。
+     · 三轨一致：native 注册在 runtime 一处，解释轨经 `ibuiltin.px` **全量透传 + 参数个数预检**
+       （M186 立的规矩：少传一个实参就是静默错值）。
+
+219. **字符串方法面四别名（第 66 轮 · M188 收口第三方 PX-DEF-025/027）**：
+     · `s.find(sub)` · `s.strip()` · `s.has_prefix(p)` · `s.has_suffix(p)`
+       —— 此前这四个**全部** `R1007 类型 string 没有方法 'find'`（函数面 `trim`/`starts_with`/`ends_with`
+       与库面 `std.strings.index_of` 都在，缺的只是**最常用的调用形态**，Go 习惯 `strings.Index`/`s.HasPrefix`）。
+     · **只加路由、不复制实现**：`.find` → `str_index_of(s, sub)`（本轮新增 native）· `.strip` → `trim` ·
+       `.has_prefix` → `starts_with` · `.has_suffix` → `ends_with`
+       ⇒ 方法面与函数面**不可能漂移**（同一份代码）；`str_index_of` 亦可直接当函数用。
+     · `find` 返回 **rune 下标**：`"中文abc".find("abc")` = **2**（字节轴会给 6）、不存在 ⇒ `-1`、
+       空子串 ⇒ `0`、首次出现优先；与 `len(s)` / `s[i]` / `s[a:b]` **同轴**，
+       也与 stdlib `strings.index_of` **同值**（门里有 X1..X4 等价性定点）。
+     · 参数错**同码同文**（三轨逐字相同）：`.find(123)` / `.find()` ⇒ `R1002 方法 find 参数 1 需要 string`；
+       `.strip(1)` ⇒ `R1002 方法 strip 不接受参数`。

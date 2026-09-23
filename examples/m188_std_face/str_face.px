@@ -1,0 +1,44 @@
+# ============================================================
+# M188 门 · 层②：字符串方法面四别名（第三方 PX-DEF-025/027）
+# ------------------------------------------------------------
+# 判据：三轨 rc=0 且 stdout 逐字节一致；定点分三类 ——
+#   ① 值语义（F1..F18）：`find` 是 **rune 轴**（`"中文abc".find("abc")` = **2** —— 中/文 各占 1 个
+#      rune，字节轴会得到 6；本门用 F2 与 E5 把这个轴钉死），
+#      不存在给 -1、空子串给 0、首次出现优先（F8/F9）；
+#   ② 与函数面**等价性**（E1..E6）：方法面 ⇔ `str_index_of` ⇔ `trim`/`starts_with`/`ends_with`
+#      —— 四个别名都只有一份实现，这四条是"没有第二条实现"的机械证明；
+#   ③ 与 **stdlib `strings.index_of`** 的同轴性（X1..X4）：即第三方登记的"函数面替代"，
+#      与新增方法面在 rune 轴上必须给同一个数（避免"方法一套、库一套"）。
+# ⚠ `find` 与 `index_of` 同为 **rune** 下标：`len(s)` / `s[i]` / `s[a:b]` 全在同一轴上
+#   （M185 已把 `bytes` 与 `str` 的两个模型分开：str 走 rune，bytes 走字节）。
+# ============================================================
+import std.strings
+
+print("F1=", "hello world".find("world"))
+print("F2=", "中文abc".find("abc"))
+print("F3=", "中文abc".find("中"))
+print("F4=", "中文abc".find("z"))
+print("F5=", "ab".find(""))
+print("F6=", "".find(""))
+print("F7=", "".find("a"))
+print("F8=", "aaa".find("aa"))
+print("F9=", "xaaa".find("aa"))
+print("F10=", "  x  ".strip())
+print("F11=", "\t\n y \r\n".strip())
+print("F12=", "   ".strip())
+print("F13=", "".strip())
+print("F14=", "abcdef".has_prefix("abc"))
+print("F15=", "abcdef".has_prefix("z"))
+print("F16=", "abcdef".has_suffix("def"))
+print("F17=", "abcdef".has_suffix("z"))
+print("F18=", "abcdef".has_prefix("abcdefg"))
+print("E1=", "中文abc".find("abc") == str_index_of("中文abc", "abc"))
+print("E2=", "  x  ".strip() == trim("  x  "))
+print("E3=", "abcdef".has_prefix("abc") == starts_with("abcdef", "abc"))
+print("E4=", "abcdef".has_suffix("def") == ends_with("abcdef", "def"))
+print("E5=", "中文abc".find("abc") == 2)
+print("E6=", str_index_of("中文abc", "abc") == 2)
+print("X1=", "中文abc".find("abc") == index_of("中文abc", "abc"))
+print("X2=", "中文abc".find("z") == index_of("中文abc", "z"))
+print("X3=", "aaa".find("aa") == index_of("aaa", "aa"))
+print("X4=", "".find("") == index_of("", ""))

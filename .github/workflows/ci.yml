@@ -399,9 +399,15 @@ jobs:
           #   不得出现「找不到模块」**——编译轨缺模块只警告、rc 仍 0）· 多文件包三轨一致 +
           #   `--locked` 查辅助文件篡改；负控 A/B/C 在本地全门 m116 跑。
           bash examples/m187_registry_import/verify.sh --neg-skip > /tmp/v_m187.log 2>&1 || { echo "❌ m187_registry_import verify 失败"; tail -60 /tmp/v_m187.log; exit 1; }
-          # 发射冻结门（M153 建立）：386 个用例的 --emit-c 输出必须逐字节不变（M183 由 384 起订正）。
+          # M188（第 66 轮）：SHA1 族（`sha1`/`sha1_bytes`）+ 三件「安全替代」
+          #   （`sha256_bytes` 破双哈希陷阱 / `bytes_zeros` / `byte`）+ 字符串方法面四别名
+          #   （`.find`/`.strip`/`.has_prefix`/`.has_suffix` —— **只加路由不复制实现**）。
+          #   判据：NIST 向量 + rune/字节双轴对照 + 方法面⇔函数面⇔stdlib 等价性（三轨逐字节一致）+
+          #   拒绝侧三轨同码同文；负控 A/B/C/D 在本地全门 m116 跑。
+          bash examples/m188_std_face/verify.sh --neg-skip > /tmp/v_m188.log 2>&1 || { echo "❌ m188_std_face verify 失败"; tail -60 /tmp/v_m188.log; exit 1; }
+          # 发射冻结门（M153 建立）：395 个用例的 --emit-c 输出必须逐字节不变（M188 由 393 起订正 —— 本轮只新增语料、类别 B 为空）。
           bash selfhost/emitc_freeze.sh --check > /tmp/v_emitc_freeze.log 2>&1 || { echo "❌ emitc_freeze 失败"; tail -30 /tmp/v_emitc_freeze.log; exit 1; }
-          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 / m153 / m154 / m155 / m158 / m160 / m161 / m162 / m163 / m164 verify / m170_gc_bridge_root / m182_hdr_root / m183_gc_root_handover / m184_num_fs_strict / m185_bytes_face / m186_native_passthrough / m187_registry_import + 发射冻结门（393 件 --emit-c）全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"
+          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 / m153 / m154 / m155 / m158 / m160 / m161 / m162 / m163 / m164 verify / m170_gc_bridge_root / m182_hdr_root / m183_gc_root_handover / m184_num_fs_strict / m185_bytes_face / m186_native_passthrough / m187_registry_import / m188_std_face + 发射冻结门（395 件 --emit-c）全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"
       - name: LSP / MCP 服务器冒烟（--version + 协议入口存在性）
         run: |
           chmod +x bootstrap/pxlsp bootstrap/pxmcp bootstrap/pxcheck

@@ -991,6 +991,39 @@ def i_call_builtin(name, args, pos):
         if len(args) != 4:
             return Err(i_r1002("pbkdf2_sha256 需要 (password, salt, iterations, dklen)", pos))
         return Ok(pbkdf2_sha256(args[0], args[1], args[2], args[3]))
+    # ═══ M188（第 66 轮 · PX-DEF-026/012/016/017/025）：SHA1 族 + 安全替代 + 定位 ═══
+    # ⚠ 经验（M186 · 缺陷 206/207/208）：转发必须**全量透传 + 参数个数前置校验** ——
+    #   少传一个实参就是静默错值，漏查个数就是同码不同文。以下五件均为**单参**，逐一校验。
+    if name == "sha1":
+        # sha1(data) → 40 字符小写 hex（MySQL native_password 应答的组成）
+        if len(args) != 1:
+            return Err(i_r1002("sha1 需要一个参数", pos))
+        return Ok(sha1(args[0]))
+    if name == "sha1_bytes":
+        # sha1_bytes(data) → 20 字节
+        if len(args) != 1:
+            return Err(i_r1002("sha1_bytes 需要一个参数 (data)", pos))
+        return Ok(sha1_bytes(args[0]))
+    if name == "sha256_bytes":
+        # sha256_bytes(data) → 32 字节（PX-DEF-016 的安全替代：免 hex↔bytes 往返 + 双哈希陷阱）
+        if len(args) != 1:
+            return Err(i_r1002("sha256_bytes 需要一个参数 (data)", pos))
+        return Ok(sha256_bytes(args[0]))
+    if name == "bytes_zeros":
+        # bytes_zeros(n) → n 个 0x00 字节（PX-DEF-012：`bytes(10)` 是 "10" 的 2 字节）
+        if len(args) != 1:
+            return Err(i_r1002("bytes_zeros 需要一个 int 参数", pos))
+        return Ok(bytes_zeros(args[0]))
+    if name == "byte":
+        # byte(n) → 单字节 bytes，n ∈ 0..255（PX-DEF-017：`chr(185)` 给的是 UTF-8 的 2 字节）
+        if len(args) != 1:
+            return Err(i_r1002("byte 需要一个 int 参数", pos))
+        return Ok(byte(args[0]))
+    if name == "str_index_of":
+        # str_index_of(s, sub) → rune 下标 / -1 / 空 sub → 0（方法面 `.find` 的同一实现）
+        if len(args) != 2:
+            return Err(i_r1002("str_index_of 需要 (s, sub) 参数", pos))
+        return Ok(str_index_of(args[0], args[1]))
     if name == "tls_connect":
         # tls_connect(host, port[, opts]) → dict{ok,id,fd,peer,version,version_num,cipher,cipher_id,verify,stage,errno,err}
         if len(args) != 2 and len(args) != 3:

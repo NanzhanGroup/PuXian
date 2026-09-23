@@ -1,0 +1,35 @@
+# ============================================================
+# M188 门 · 层①：SHA1 族 + 三件「安全替代」（第三方 PX-DEF-026/016/012/017）
+# ------------------------------------------------------------
+# 判据：三轨 rc=0 且 stdout 逐字节一致；下列定点（S1..S18）是**已知向量**，不是自证。
+#   · S1 = SHA1("abc") 的 NIST 向量 a9993e36…
+#   · S3 = SHA1(quick brown fox) = 2fd4e1c6…
+#   · S6 = SHA256("abc") 的 NIST 向量 ba7816bf…
+#   · S4/S5 = sha1_bytes 给 **20 字节**（不是 hex 文本的 40）
+#   · S13 = `byte(185)` = 单字节 b9
+#   · S14/S15/S16 = `chr(185)` 的两个坐标：`len()` = **1**（rune 轴），
+#     `bytes_len(bytes(chr(185)))` = **2** / `c2b9`（字节轴）
+#     ⇒ 正是 PX-DEF-017 登记的那个差（补 byte() 就是为了这个"原始字节"用法）。
+#     ⚠ `bytes_len` 只收 bytes（三轨都由 runtime `bi_bytes_len` 一处判）⇒ 必须显式 `bytes(...)` 过桥，
+#       这本身也是"两个模型泾渭分明"的证据（M185 立的轴）。
+#   · S8/S9/S10 = bytes_zeros(n) 给 n 个 0x00（PX-DEF-012：`bytes(10)` 是 "10" 的 2 字节）
+#   · S17 = MySQL `mysql_native_password` 应答里那两步 SHA1 的形状（可 `sha1(sha1(x))`）
+# ============================================================
+print("S1=", sha1("abc"))
+print("S2=", sha1(""))
+print("S3=", sha1("The quick brown fox jumps over the lazy dog"))
+print("S4=", bytes_to_hex(sha1_bytes("abc")))
+print("S5=", bytes_len(sha1_bytes("abc")))
+print("S6=", bytes_to_hex(sha256_bytes("abc")))
+print("S7=", bytes_len(sha256_bytes("abc")))
+print("S8=", bytes_to_hex(bytes_zeros(4)))
+print("S9=", bytes_len(bytes_zeros(0)))
+print("S10=", bytes_len(bytes_zeros(1024)))
+print("S11=", bytes_to_hex(byte(255)))
+print("S12=", bytes_to_hex(byte(0)))
+print("S13=", bytes_to_hex(byte(185)))
+print("S14=", len(chr(185)))
+print("S15=", bytes_len(bytes(chr(185))))
+print("S16=", bytes_to_hex(bytes(chr(185))))
+print("S17=", sha1(sha1("pw")))
+print("S18=", sha1("abc") == bytes_to_hex(sha1_bytes("abc")))

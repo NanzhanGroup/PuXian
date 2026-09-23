@@ -1,0 +1,4 @@
+# M188 拒绝侧：byte(n) 的取值域是 0..255（PX-DEF-017 的"原始字节"语义）
+print("before")
+print(bytes_to_hex(byte(300)))
+print("after")

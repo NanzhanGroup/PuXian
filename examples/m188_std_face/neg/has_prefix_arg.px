@@ -1,0 +1,4 @@
+# M188 拒绝侧：has_prefix() 缺参（要求 1 个 string）
+print("before")
+print("ab".has_prefix())
+print("after")
