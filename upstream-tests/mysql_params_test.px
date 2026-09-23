@@ -1,0 +1,89 @@
+# mysql_params_test.px 测试：预处理语句 / 参数化查询 / 二进制结果集
+import "../registry/mysql/0.1.0/mysql.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var conn = mysql_connect("127.0.0.1", 3306, "pxtest", "px_secret_456",
+        "pxtest", {"timeout_ms": 5000})
+    if conn.is_err():
+        print("FAIL: connect: " + str(conn))
+        exit(1)
+    var c = conn.unwrap()
+    print("connect ok")
+    # 1) int 参数 + 二进制 typed 结果
+    var q = mysql_query_params(c, "SELECT id, name, age, active, score, data, created FROM users WHERE id = ?", [1])
+    if q.is_err():
+        print("FAIL: params query: " + str(q))
+        exit(1)
+    var res = q.unwrap()
+    expect(len(res["rows"]) == 1, "rows=1, got " + str(len(res["rows"])))
+    var r = res["rows"][0]
+    expect(r[0] == 1 and type(r[0]) == "int", "id int 1, got " + str(r[0]) + " type " + str(type(r[0])))
+    expect(r[1] == "alice", "name alice, got " + str(r[1]))
+    expect(r[2] == 30 and type(r[2]) == "int", "age int 30")
+    expect(r[3] == 1 and type(r[3]) == "int", "active tinyint int 1")
+    expect(r[4] == "99.50" and type(r[4]) == "string", "decimal string 99.50, got " + str(r[4]))
+    expect(r[5] == "Hello", "blob Hello, got " + str(r[5]))
+    expect(len(r[6]) > 0 and r[6].find("-") >= 0, "datetime string, got " + str(r[6]))
+    # 2) 注入尝试 → 0 行
+    var q2 = mysql_query_params(c, "SELECT id FROM users WHERE name = ?", ["' OR '1'='1"])
+    var res2 = q2.unwrap()
+    expect(len(res2["rows"]) == 0, "injection blocked, got " + str(len(res2["rows"])))
+    # 3) NULL 参数 / NULL 结果 / count 聚合(int)
+    var q3 = mysql_query_params(c, "SELECT count(*) AS n FROM users WHERE (? IS NULL OR data = ?)", [null, null])
+    var res3 = q3.unwrap()
+    expect(res3["rows"][0][0] == 2 and type(res3["rows"][0][0]) == "int",
+        "null param count=2 int, got " + str(res3["rows"][0][0]))
+    var q3b = mysql_query_params(c, "SELECT count(*) AS n FROM users WHERE (? IS NULL OR data = ?)", ["Hello", "Hello"])
+    var res3b = q3b.unwrap()
+    expect(res3b["rows"][0][0] == 1, "string param count=1, got " + str(res3b["rows"][0][0]))
+    var q3c = mysql_query_params(c, "SELECT data FROM users WHERE id = ?", [2])
+    var res3c = q3c.unwrap()
+    expect(res3c["rows"][0][0] == null, "binary NULL result")
+    # 4) float 参数
+    var q4 = mysql_query_params(c, "SELECT name FROM users WHERE score > ?", [50.0])
+    var res4 = q4.unwrap()
+    expect(res4["rows"][0][0] == "alice", "float param alice")
+    # 5) bool 参数
+    var q5 = mysql_query_params(c, "SELECT count(*) AS n FROM users WHERE active = ?", [true])
+    var res5 = q5.unwrap()
+    expect(res5["rows"][0][0] == 1, "bool param count=1")
+    # 6) bytes 参数（BLOB 类型）
+    var q6 = mysql_query_params(c, "SELECT count(*) AS n FROM users WHERE data = ?", [bytes("Hello")])
+    var res6 = q6.unwrap()
+    expect(res6["rows"][0][0] == 1, "bytes param count=1")
+    # 7) DML 走 prepare：INSERT（OK 包 affected_rows）
+    var q7 = mysql_query_params(c, "CREATE TEMPORARY TABLE t1 (x INT)", [])
+    var res7 = q7.unwrap()
+    expect(len(res7["rows"]) == 0, "ddl no rows")
+    var q8 = mysql_query_params(c, "INSERT INTO t1 VALUES (?)", [7])
+    var res8 = q8.unwrap()
+    expect(res8["affected"] == 1, "affected=1, got " + str(res8["affected"]))
+    var q9 = mysql_query_params(c, "SELECT x FROM t1", [])
+    var res9 = q9.unwrap()
+    expect(res9["rows"][0][0] == 7 and type(res9["rows"][0][0]) == "int", "t1 x=7 int")
+    # 8) BIGINT UNSIGNED 超 2^63-1（PX-DEF-031 回退：无符号 8 字节 → 十进制字符串）
+    var qb = mysql_query_params(c, "SELECT CAST('18446744073709551615' AS UNSIGNED) AS u", [])
+    if qb.is_err():
+        print("FAIL: bigint unsigned query: " + str(qb))
+        exit(1)
+    var rb = qb.unwrap()
+    expect(rb["rows"][0][0] == "18446744073709551615", "u64 max, got " + str(rb["rows"][0][0]))
+    var qb2 = mysql_query_params(c, "SELECT CAST('9223372036854775808' AS UNSIGNED) AS u2", [])
+    var rb2 = qb2.unwrap()
+    expect(rb2["rows"][0][0] == "9223372036854775808", "2^63, got " + str(rb2["rows"][0][0]))
+    # 9) 错误路径：坏表 → Err；参数个数不匹配 → Err；错误后可恢复
+    var q10 = mysql_query_params(c, "SELECT * FROM no_such_table_xyz", [])
+    expect(q10.is_err(), "bad table returns Err")
+    if q10.is_err():
+        print("  (expected) err=" + str(q10))
+    var q11 = mysql_query_params(c, "SELECT id FROM users WHERE id = ?", [])
+    expect(q11.is_err(), "param count mismatch Err")
+    var q12 = mysql_query_params(c, "SELECT 1 + 1 AS s", [])
+    var res12 = q12.unwrap()
+    expect(res12["rows"][0][0] == 2, "recover query ok")
+    mysql_close(c)
+    print("mysql_params_test: PASS")
+    return Ok(0)

@@ -40,19 +40,9 @@ def cli_parse_bool(s):
         return Ok(false)
     return Err("cli: 无效布尔值: " + s)
 
-# 严格整数串（可选负号）
+# 严格整数串（可选负号）—— M185 起语言提供原生 is_int_str（与严格 int() 同口径），直接收敛
 def cli_is_int_str(s):
-    var t = s
-    if starts_with(t, "-"):
-        t = t[1:len(t)]
-    if len(t) == 0:
-        return false
-    var i = 0
-    while i < len(t):
-        if t[i] < "0" or t[i] > "9":
-            return false
-        i += 1
-    return true
+    return is_int_str(s)
 
 # 严格浮点串（可选负号、至多一个小数点；0.1.0 不支持科学计数法）
 def cli_is_float_str(s):
