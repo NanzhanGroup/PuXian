@@ -416,53 +416,64 @@ jobs:
         run: |
           python3 - <<'PY'
           import glob, os, subprocess, urllib.parse
+          ws = os.environ.get('GITHUB_WORKSPACE', os.getcwd())
           parts = []
 
-          # ① 各门 /tmp/v_*.log 的关键行
-          for f in sorted(glob.glob('/tmp/v_*.log')):
-              try:
-                  txt = open(f, encoding='utf-8', errors='replace').read()
-              except Exception as e:
-                  parts.append('=== %s === (读取失败: %s)' % (f, e)); continue
-              bad = [l for l in txt.splitlines()
-                     if ('❌' in l or 'FAIL' in l or 'VERIFY-FAILED' in l or 'Traceback' in l)]
-              if bad:
-                  parts.append('=== %s ===\n%s' % (os.path.basename(f), '\n'.join(bad[-20:])))
+          # ① 现场复现**放最前**（上一轮放末尾被长度截掉，白跑一轮）：环境自检 + pxpkg 三命令
+          env = dict(os.environ)
+          env['PX_REGISTRY'] = os.path.join(ws, 'registry')
+          env['LC_ALL'] = 'C'
+          rep = '/tmp/pkgrepro'
+          subprocess.run(['rm', '-rf', rep])
+          os.makedirs(rep, exist_ok=True)
+          px = os.path.join(ws, 'tools', 'pxpkg')
+          pxpkgpx = os.path.join(ws, 'tools', 'pxpkg.px')
+          pxi = os.path.join(ws, 'bootstrap', 'pxi')
 
-          # ② 门的工作目录日志（m187 门把 pxpkg install 的输出写在 /tmp/m187_gate/install.log）
+          def run(cmd, cwd=rep, e=env, t=300):
+              try:
+                  p = subprocess.run(cmd, cwd=cwd, env=e, capture_output=True, text=True, timeout=t)
+                  return 'rc=%d\n%s' % (p.returncode, (p.stdout + p.stderr)[-900:])
+              except Exception as ex:
+                  return '异常: %s' % ex
+
+          out = []
+          out.append('which pxpkg=%s exists=%s' % (px, os.path.exists(px)))
+          out.append('pxpkg.px exists=%s  pxi exists=%s' % (os.path.exists(pxpkgpx), os.path.exists(pxi)))
+          out.append('PX_REGISTRY=%s' % env['PX_REGISTRY'])
+          out.append('ls registry 前 5:\n' + run(['ls', os.path.join(ws, 'registry')], cwd=ws))
+          out.append('ls registry/base58/0.1.0:\n' + run(['ls', '-la', os.path.join(ws, 'registry', 'base58', '0.1.0')], cwd=ws))
+          out.append('init:\n' + run([px, 'init', '--name', 'repro']))
+          out.append('px.toml:\n' + run(['cat', 'px.toml']))
+          out.append('add base58@0.1.0:\n' + run([px, 'add', 'base58@0.1.0']))
+          out.append('px.toml after add:\n' + run(['cat', 'px.toml']))
+          out.append('install:\n' + run([px, 'install']))
+          out.append('ls -la .px_modules:\n' + run(['ls', '-la', '.px_modules']))
+          out.append('直接跑 pxpkg.px（绕开包装脚本）:\n'
+                     + run([pxi, 'run', pxpkgpx], e=dict(env, PXPKG_DIR='.', PXPKG_CMD='list', PXPKG_ARG1='', PXPKG_ARG2='')))
+          parts.append('=== ① CI 现场复现 ===\n' + '\n'.join(out))
+
+          # ② m187 门日志：**不过滤关键词**，取尾部 45 行（上一轮过滤把「首个失败包的 add 输出」丢了）
           for f in sorted(glob.glob('/tmp/m187_gate*/install.log')) + sorted(glob.glob('/tmp/m187_gate*/*.log')):
               try:
                   txt = open(f, encoding='utf-8', errors='replace').read().strip()
               except Exception:
                   continue
               if txt:
-                  parts.append('=== 门内日志 %s ===\n%s' % (f, txt[-1500:]))
+                  parts.append('=== ② 门内日志 %s（尾 45 行）===\n%s' % (f, '\n'.join(txt.splitlines()[-45:])))
 
-          # ③ CI 环境里的 pxpkg 最小复现（输出直接进注解）
-          ws = os.environ.get('GITHUB_WORKSPACE', os.getcwd())
-          rep = '/tmp/pkgrepro'
-          subprocess.run(['rm', '-rf', rep])
-          os.makedirs(rep, exist_ok=True)
-          env = dict(os.environ)
-          env['PX_REGISTRY'] = os.path.join(ws, 'registry')
-          env['LC_ALL'] = 'C'
-          px = os.path.join(ws, 'tools', 'pxpkg')
-
-          def run(cmd):
+          # ③ 各门 /tmp/v_*.log 的关键行（放最后）
+          for f in sorted(glob.glob('/tmp/v_*.log')):
               try:
-                  p = subprocess.run(cmd, cwd=rep, env=env, capture_output=True, text=True, timeout=300)
-                  return 'rc=%d\n%s' % (p.returncode, (p.stdout + p.stderr)[-1200:])
-              except Exception as e:
-                  return '异常: %s' % e
+                  txt = open(f, encoding='utf-8', errors='replace').read()
+              except Exception:
+                  continue
+              bad = [l for l in txt.splitlines()
+                     if ('❌' in l or 'FAIL' in l or 'VERIFY-FAILED' in l or 'Traceback' in l)]
+              if bad:
+                  parts.append('=== ③ %s ===\n%s' % (os.path.basename(f), '\n'.join(bad[-12:])))
 
-          out = ['init:\n' + run([px, 'init', '--name', 'repro']),
-                 'add base58@0.1.0:\n' + run([px, 'add', 'base58@0.1.0']),
-                 'install:\n' + run([px, 'install']),
-                 'ls -la .px_modules:\n' + run(['ls', '-la', '.px_modules']),
-                 'ls -la $GITHUB_WORKSPACE/registry/base58:\n' + run(['ls', '-la', os.path.join(ws, 'registry', 'base58')])]
-          parts.append('=== pxpkg 最小复现（CI 环境） ===\n' + '\n'.join(out))
-
-          msg = '\n'.join(parts)[:5500]
+          msg = '\n'.join(parts)[:5800]
           print('::error::' + urllib.parse.quote(msg, safe=''))
           PY
       - name: LSP / MCP 服务器冒烟（--version + 协议入口存在性）
