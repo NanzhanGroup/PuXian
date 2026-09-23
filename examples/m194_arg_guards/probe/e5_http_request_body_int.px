@@ -1,0 +1,2 @@
+print("before")
+print(http_request("http://127.0.0.1:1/", "GET", 123))

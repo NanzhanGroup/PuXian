@@ -556,6 +556,14 @@ run m192_encfamily bash examples/m192_encfamily/verify.sh
 #   判据：静态五查（带码/域前缀 · 个数分码 · 混写拆分 · 未收口棘轮 · 转发豁免）+ 12 文件「无码 0」
 #   + 9 错例 × 三轨同码同文 + 域前缀侧（XML 解析错误**不带码**）+ 合法侧 + 3 道负控。
 run m193_errcodes2 bash examples/m193_errcodes2/verify.sh
+# M194（第 72 轮）：native **参数类型守卫完备性**（缺陷 222）—— `R1002` 只保证"错了会说"，
+#   不保证"错了一定会被说"：26 个「形参 ≥2、只查了个数或只查首参」的站点，其余实参直接进
+#   `int_val()`（float 静默截断；`.as.i` 更是把 float 的位模式当整数读）或 `val_cstr()`
+#   （int/容器静默串化 ⇒ `s3_get(1,2,3,4,5)` 变成对 endpoint "1" 的请求）。
+#   三轨**一致** ⇒ M190 的「rc 分叉」普查看不见它。口径 = docs/ERROR_CODES.md §6。
+#   判据：静态 [S5]（140 个多形参守卫、缺检查 0）+ 12 错例 × 三轨同码同文 + 合法侧 8 例
+#   + 4 道负控（A/B 静态去检查 · C 动态静默 · D 动态改码；C/D 只判 C 轨 —— 解释/VM 跑预编译件）。
+run m194_arg_guards bash examples/m194_arg_guards/verify.sh
 step "M190 · 上游 registry-px 真实用例回归（53 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。

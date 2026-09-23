@@ -397,6 +397,17 @@ LXValue bi_rsa_sign_pkcs1v15_sha256(LXValue* args, int nargs, void* ctx);
 LXValue bi_rsa_verify_pkcs1v15_sha256(LXValue* args, int nargs, void* ctx);
 LXValue ws_conn_worker(LXValue* args, int nargs, void* ctx);
 const char* px_val_cstr(LXValue v);
+// ═══ M194（第 72 轮 · 缺陷 222）：native 参数的**类型守卫**统一入口 ═══
+//   修前多处「形参 ≥2、只查了个数或只查首参」，其余实参直接进 `int_val()` / `val_cstr()`：
+//     · `int_val` 对 float **静默截断** ⇒ `read_at(p, 1.5, 3)` == `read_at(p, 1, 3)`；
+//       更糟的是 `args[i].as.i`（h3 族）—— float 的**位模式**被当整数读（0x3FF8… ⇒ 4609434218613702656）；
+//     · `val_cstr` 对 int/容器 **静默串化** ⇒ `s3_get(1,2,3,4,5)` 变成对 endpoint "1" 的请求。
+//   三轨一致 ⇒ 用户拿到的是**静默错值**（与 M189 修掉的 `bytes_get(b, 1.5)` 同族）。
+//   统一文案：`R1002: <函数> 的 <参数> 需要<类型>，实际是 <t>`（与 M179/M189 同族）。
+int64_t px_arg_int(LXValue v, const char* fn, const char* pname);
+const char* px_arg_str(LXValue v, const char* fn, const char* pname);
+const char* px_arg_strbytes(LXValue v, const char* fn, const char* pname);
+LXObject* px_arg_dict(LXValue v, const char* fn, const char* pname);
 
 // ==================== 输出 ====================
 

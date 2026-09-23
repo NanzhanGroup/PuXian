@@ -105,6 +105,9 @@
 2. **动态判据**：30 个探针 × **三轨**（解释 / VM / C）实跑，判 `rc≠0` + **同一 R 码** + **同一正文**。
 3. **负控**（各自独立判红）：去掉一个 R 码 / 把某个域前缀改名 / 把方法个数码改回 R1002 /
    撤销一处混写拆分 —— 任一条都必须让对应判据由绿转红。
+4. **判据 ⑥（M194 新增）· 参数类型守卫完备性**：对每个 `px_error("R1002: <fn> 需要 (<a>, <b>…)")`
+   站点，其**函数体**里每个被使用的形参位置都必须有 `args[i].type` 检查（口径见 §6）。
+   实测基线：**140 个多形参守卫 · 缺检查 0**。
 
 ---
 
@@ -144,3 +147,66 @@
 3. **解释轨的 Mini 子集边界**：`mutex` / `rwlock` / `chan` 等并发原语在解释轨**不支持**
    （`R1002: interp 不支持通道（Mini 子集排除）`）—— 有意不做，非缺陷。
 4. **后续候选（未做，已在 §2.3 说明代价）**：把所有"实参个数"统一为单码。
+
+---
+
+## 6 native 参数**类型守卫**口径（M194 建立 · 缺陷 222）
+
+> **主问题**：`R1002` 只保证"错了会说"，**不保证"错了一定会被说"**。M191–M193 把
+> "出错站点是否带码"收口到 0 残留，但**守卫本身可能不存在** —— 26 个站点"形参 ≥2、
+> 却只查了个数或只查了首参"，其余实参直接进 `int_val()` / `val_cstr()` / `.as.i`：
+> 三轨**一致地**给出**静默错值**（不是分叉，是共享缺陷，用户无从察觉）。
+
+### 6.1 判据 —— 按「实参被怎么用」决定是否必须检查
+
+| 用途 | 判定 | 不检查的后果（修前实测） |
+|---|---|---|
+| **容器**（`.as.obj->as.{list,dict}` / `px_list_*` / `px_dict_*` / `px_bytes_*` / `px_index` / `px_len`） | ✅ **必须** | 读 union 的其它字段 ⇒ **UB / 段错误** |
+| **整数**（`int_val()` / `.as.i`） | ✅ **必须** | ① `int_val` 对 float **静默截断**：`read_at(p, 1.5, 3)` == `read_at(p, 1, 3)`；② **`.as.i` 更糟** —— 把 float 的**位模式**当整数读（`1.5` ⇒ `0x3FF8000000000000` = 4609434218613702656，h3 族直接当 poll 超时用） |
+| **数值**（`num_val()` / `math_num()`） | ✅ **必须** | 同 M179（读 union 的 `as.f`） |
+| **字符串**（`val_cstr()` / `.as.obj->as.str.data`） | ✅ **必须** | **静默串化**：`s3_get(1,2,3,4,5)` ⇒ 对 endpoint `"1"`、bucket `"2"`… 的请求；`s3_put` 的 `data` 更是把 `<object>`/`null` 当正文上传 |
+| **仅用于错误消息**（`px_type_name(args[i])`） | ❌ 豁免 | —— |
+| **输出/串化汇**（`px_to_string`，如 `write_file` 的 `content`） | ❌ 豁免（**设计如此**：任意类型都是合法语义） | —— |
+| **`[可选]` 形参** | ⚠️ **「存在即校验」** | 见 §6.3 |
+
+**统一文案**（与 M179 的 `px_req_int` / M189 的 `px_req_int_idx` 同族）：
+
+```
+R1002: <函数> 的 <参数> 需要<类型>，实际是 <t>
+```
+
+实现入口（`runtime/runtime.h`，非 static ⇒ 各模块可见）：
+
+```c
+int64_t    px_arg_int(LXValue v, const char* fn, const char* pname);
+const char* px_arg_str(LXValue v, const char* fn, const char* pname);
+const char* px_arg_strbytes(LXValue v, const char* fn, const char* pname);
+LXObject*  px_arg_dict(LXValue v, const char* fn, const char* pname);
+```
+
+### 6.2 M194 收口清单（26 个站点 · 46 个实参位置）
+
+| 批 | 形状 | 站点 |
+|---|---|---|
+| **A · INT 静默截断**（14） | `int_val` / `.as.i` 未检查 | `read_at`(偏移,长度) · `write_at`(偏移) · `truncate_file`(大小) · `read`(maxlen) · `mmap`(length) · `mem_write`(offset) · `chmod`(mode) · `tty_config`(baud) · `int_to_hex`(n,width) · `bytes_set`(value) · `set_timeout`(ms) · `set_interval`(ms) · `h3_serve_read_request`(timeout_ms) · `h3_client_read_response`(timeout_ms) |
+| **B · STR 静默串化**（12 + s3 21 个位置） | `val_cstr` 未检查 | `open`(path) · `write_bytes`(路径) · `tls_connect`(host) · `http_request`(url,method) · `http_unix`(socket_path,url_path,method) · `s3_put`(6) · `s3_get`(5) · `s3_delete`(5) · `s3_list`(5) · `http_get_stream`(url) · `int_to_bytes`(endian) · `bytes_to_int`(endian) |
+| **C · 可选实参静默忽略**（9 函数） | `if (nargs >= N && args[N-1].type == PX_X)` 无 else | `http_request`(body,headers,opts) · `http_unix`(body,headers,opts) · `px_serve`(timeout_ms,opts) · `ws_serve`(opts) · `time_format`/`time_parse`(tz) · `h3_server_listen`/`_stateless`/`quic_h3_listen`(cert,key) · `open`(mode/flags) |
+| **D · 消息不指名参数**（2） | `R1002: <fn> 参数类型错误` / `需要 int` / `需要 string` | `time_format` · `time_parse`（+ 顺手统一 `read`/`mmap`/`chmod`/`tls_connect` 的同族旧文案为 `需要整数/字符串，实际是 <t>`） |
+
+### 6.3 可选实参：「**存在即校验**，`null` = 未提供」
+
+- 形参写成 `[x]` / `x?` 时，**用户可以不传**；但**传了就得是那个类型**。
+- 修前 `http_request(u, "GET", 123)` **静默丢掉** body、`px_serve(9000, ".", opts)` **静默丢掉** opts
+  —— 与 M190 的 213-b（`d.set("b")` 写入 `null`）同族：「写了参数却什么都没发生」。
+- **`null` 保持「未提供」语义**（既有合法写法 `http_request(u, "POST", null, {...})` 逐字节不变）
+  ⇒ 判据是 `type != PX_NULL && type != PX_X` 才报错。
+- 顺带修掉一类**误导性消息**：`int_to_bytes(1, 2, 0)` 修前报
+  「endian 需为 big/little」（像**取值**错，其实是**类型**错）⇒ 现在先判类型、再判取值。
+
+### 6.4 仍未收口（登记 → 缺陷 223）
+
+**元数上界**：`h3_server_listen` / `h3_server_listen_stateless` / `quic_h3_listen` 的守卫是
+`nargs < 1`（**无上界**）⇒ `h3_server_listen(9000, "c", "k", "多余的")` 被静默接受。
+M190 的普查只覆盖「三轨 **rc 分叉**」，这一类是三轨**一致**的宽容 ⇒ 当时未收。
+修法方向：与 M190 同口径补上界（`nargs == 1 || nargs == 3`），代价 = 需先普查标准库/registry
+的调用面是否有人靠"多传一个"工作。

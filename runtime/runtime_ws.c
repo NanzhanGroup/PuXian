@@ -435,6 +435,9 @@ LXValue bi_ws_serve(LXValue* args, int nargs, void* ctx) {
     // M36：心跳配置
     g_ws_hb_interval = 0;
     g_ws_hb_timeout = 60000;
+    // M194：可选实参存在即校验（`null` = 未提供）
+    if (nargs >= 3 && args[2].type != PX_NULL && args[2].type != PX_DICT)
+        px_error("R1002: ws_serve 的 opts 需要字典，实际是 %s", px_type_name(args[2]));
     if (nargs >= 3 && args[2].type == PX_DICT) {
         LXValue hb = px_dict_get(args[2], "heartbeat");
         if (hb.type == PX_DICT) {

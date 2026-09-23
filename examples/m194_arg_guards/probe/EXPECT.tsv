@@ -1,0 +1,12 @@
+e1_read_at_float	R1002	read_at 的 偏移 需要整数，实际是 float
+e2_int_to_hex_float	R1002	int_to_hex 的 n 需要整数，实际是 float
+e3_bytes_set_float	R1002	bytes_set 的 value 需要整数，实际是 float
+e4_s3_get_int	R1002	s3_get 的 endpoint 需要字符串，实际是 int
+e5_http_request_body_int	R1002	http_request 的 body 需要字符串或 bytes，实际是 int
+e6_open_path_int	R1002	open 的 path 需要字符串，实际是 int
+e7_time_format_float	R1002	time_format 的 ts 需要整数，实际是 float
+e8_ws_serve_opts_int	R1002	ws_serve 的 opts 需要字典，实际是 int
+e9_h3_listen_key_int	R1002	h3_server_listen 的 key 需要字符串，实际是 int
+e10_int_to_bytes_endian_int	R1002	int_to_bytes 的 endian 需要字符串，实际是 int
+e11_write_bytes_path_int	R1002	write_bytes 的 路径 需要字符串，实际是 int
+e12_tls_connect_host_int	R1002	tls_connect 的 host 需要字符串，实际是 int

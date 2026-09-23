@@ -157,6 +157,122 @@ print("── [S3] 个数/类型混写守卫 ──")
 for f in CFILES:
     check_mixed("runtime/" + f)
 
+# ══════════════════════════════════════════════════════════════════════
+# 判据 ⑥（M194 · 第 72 轮 · 缺陷 222）：native 参数**类型守卫完备性**
+#   口径见 docs/ERROR_CODES.md §6。对每个 `px_error("R1002: <fn> 需要 (<a>, <b>…)")`
+#   站点：函数体里每个**被使用**的形参位置都必须有 `args[i].type` 检查。
+#   用途分类（**危害递增**）：
+#     CONT —— 当容器用（`.as.obj->as.{list,dict}` / `px_list_*` / `px_dict_*` / `px_bytes_*`
+#             / `px_index` / `px_len`）：未检查 ⇒ 读 union 的其它字段 = **UB / 段错误**
+#     INT  —— 当整数用（`int_val()` / `.as.i`）：未检查 ⇒ **float 静默截断**（M189 同族）、
+#             `.as.i` 更是把 float 的**位模式**当整数读
+#     NUM  —— 当数值用（`num_val()` / `math_num()`）
+#     STR  —— 当字符串用（`val_cstr()` / `.as.obj->as.str.data`）：未检查 ⇒ **静默串化**
+#             （`s3_get(1,2,3,4,5)` 变成对 endpoint "1" 的请求）
+#   ⚠️ **豁免**（不判红）：只被 `px_type_name(args[i])` 使用的实参（仅用于错误消息自身）；
+#      以及**可选实参**（形参写成 `[x]` 或 `x?`）—— 其"存在即校验"由 §6 的可选实参口径判，
+#      这里只判**必填**形参。`write_file(path, content)` 的 content 走 `px_to_string`（任意
+#      类型都是设计语义），因其在函数体里有 `args[1].type == PX_STR` 的**正向**分支 ⇒ 计为已检查。
+ARG_GUARD_HINT = "（§6：当容器/整数/字符串使用的实参必须显式检查类型）"
+_GUARD = re.compile(r'px_error\(\s*"(R\d{4})?:?\s*([A-Za-z_][A-Za-z0-9_]*)\s*需要\s*\(([^)]*)\)')
+_USE = {
+    "CONT": [r"\.as\.obj->as\.list", r"\.as\.obj->as\.dict", r"\.as\.obj->as\.str\.len",
+             r"px_list_len\(", r"px_list_get\(", r"px_list_push\(", r"px_list_set\(",
+             r"px_dict_len\(", r"px_dict_get\(", r"px_dict_set\(", r"px_dict_has\(",
+             r"px_bytes_len\(", r"px_bytes_data\(", r"px_bytes_get\(",
+             r"px_index\(", r"px_len\(", r"px_iter_"],
+    "INT": [r"int_val\(", r"\.as\.i\b", r"px_req_int"],
+    "NUM": [r"num_val\(", r"math_num\("],
+    "STR": [r"val_cstr\(", r"px_val_cstr\(", r"\.as\.obj->as\.str\.data"],
+}
+
+
+def _func_body(lines, line_no):
+    """从 line_no 向上找函数头、向下花括号配平 ⇒ 函数体行列表"""
+    i = line_no - 1
+    while i > 0:
+        t = lines[i].rstrip()
+        if t.endswith("{") and ("(" in t or t == "{"):
+            break
+        i -= 1
+    depth = 0
+    seen = False
+    for j in range(i, len(lines)):
+        depth += lines[j].count("{") - lines[j].count("}")
+        if "{" in lines[j]:
+            seen = True
+        if seen and depth <= 0:
+            return lines[i:j + 1]
+    return lines[i:]
+
+
+def _params(sig):
+    out = []
+    for raw in sig.split(","):
+        p = raw.strip()
+        if not p:
+            continue
+        opt = p.startswith("[")
+        p = p.replace("[", "").replace("]", "")
+        if p.endswith("?"):
+            opt = True
+            p = p[:-1]
+        p = p.strip()
+        for alt in p.split("|"):
+            alt = alt.strip()
+            if alt:
+                out.append((alt, opt))
+    return out
+
+
+def check_arg_guards(path):
+    lines = open(os.path.join(ROOT, path), encoding="utf-8").read().split("\n")
+    nguard = nbad = 0
+    for ln, line in enumerate(lines, 1):
+        st = line.lstrip()
+        if st.startswith("//") or st.startswith("*") or st.startswith("/*"):
+            continue
+        m = _GUARD.search(line)
+        if not m:
+            continue
+        ps = _params(m.group(3))
+        if len(ps) < 2:          # 单形参站点不适用本判据（首参本来就会被检查）
+            continue
+        nguard += 1
+        body = _func_body(lines, ln)
+        blob = "\n".join(body)
+        ck = set(int(x.group(1)) for x in re.finditer(r"args\[(\d+)\]\.type\s*[!=]=", blob))
+        ck |= set(int(x.group(2)) for x in re.finditer(r"px_val_is_\w+\(\s*args\[(\d+)\]", blob))
+        for i, (nm, opt) in enumerate(ps):
+            if opt or i in ck:
+                continue
+            u = set()
+            for kind, pats in _USE.items():
+                for p in pats:
+                    if re.search(r"args\[%d\]" % i + p, blob) or \
+                       re.search(p[:-2] + r"\(\s*args\[%d\]" % i, blob):
+                        u.add(kind)
+                        break
+            if not u:
+                continue          # 未被使用（或仅 px_type_name）⇒ 无需检查
+            nbad += 1
+            fails.append("%s:%d %s 的第 %d 个形参「%s」被当 %s 使用却**没有类型检查** %s"
+                         % (path, ln, m.group(2), i + 1, nm, "/".join(sorted(u)), ARG_GUARD_HINT))
+    return nguard, nbad
+
+
+print("── [S5] native 参数类型守卫完备性（M194 §6）──")
+_g = _b = 0
+for f in CFILES:
+    a, b = check_arg_guards("runtime/" + f)
+    _g += a
+    _b += b
+    if a:
+        print("   %-30s 多形参守卫 %-4d 缺检查 %-3d %s" % (f, a, b, "✅" if b == 0 else "❌"))
+if _g == 0:
+    fails.append("[S5] 判据未生效：多形参守卫 0 处（扫描器/源码形态变了？）")
+print("── [S5] 多形参守卫合计 %d · 缺类型检查 **%d** ──" % (_g, _b))
+
 print("")
 if notes:
     print("ℹ️ 未收口清单（**棘轮**：只许减少、不许增加；见 docs/ERROR_CODES.md §5）")
@@ -172,4 +288,4 @@ if fails:
         print("   -", f)
     open("/tmp/m191_scan_fails.txt", "w", encoding="utf-8").write("\n".join(fails))
     sys.exit(1)
-print("✅ 静态判据通过（带码/域前缀 · 个数分码 · 混写拆分 · 未收口棘轮 · 转发豁免 五查）")
+print("✅ 静态判据通过（带码/域前缀 · 个数分码 · 混写拆分 · 未收口棘轮 · 转发豁免 · **参数守卫完备性** 六查）")

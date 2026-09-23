@@ -1,0 +1,4 @@
+let fd = open("/etc/hostname", "r")
+let n = read(fd, 4)
+print(n)
+close(fd)

@@ -868,6 +868,11 @@ static LXValue bi_quic_h3_listen(LXValue* args, int nargs, void* ctx) {
     int port = (int)args[0].as.i;
     const char* cert = "";
     const char* key = "";
+    // M194：可选的 cert/key **存在即校验**（`null` = 未提供）
+    if (nargs >= 2 && args[1].type != PX_NULL && args[1].type != PX_STR)
+        px_error("R1002: quic_h3_listen 的 cert 需要字符串，实际是 %s", px_type_name(args[1]));
+    if (nargs >= 3 && args[2].type != PX_NULL && args[2].type != PX_STR)
+        px_error("R1002: quic_h3_listen 的 key 需要字符串，实际是 %s", px_type_name(args[2]));
     if (nargs >= 3 && args[1].type == PX_STR && args[2].type == PX_STR) {
         cert = args[1].as.obj->as.str.data;
         key = args[2].as.obj->as.str.data;

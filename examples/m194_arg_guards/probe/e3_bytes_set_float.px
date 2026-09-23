@@ -1,0 +1,4 @@
+print("before")
+let b = bytes_zeros(4)
+bytes_set(b, 0, 3.9)
+print(str(b))

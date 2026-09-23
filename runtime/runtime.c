@@ -4205,6 +4205,39 @@ static int64_t px_req_int(LXValue v, const char* what) {
     return v.as.i;
 }
 
+// ═══ M194（第 72 轮 · 缺陷 222）：native 参数的**类型守卫**统一入口 ═══
+//   修前 26 个「形参 ≥2、只查了个数 / 只查了首参」的站点，其余实参直接进 `int_val()` 或
+//   `val_cstr()`：
+//     · `int_val` 对 float **静默截断** ⇒ `read_at(p, 1.5, 3)` == `read_at(p, 1, 3)`（实测三轨一致）；
+//       更糟的是 `args[i].as.i`（h3 族）—— float 的**位模式**被当整数读
+//       （`1.5` ⇒ `0x3FF8000000000000` ⇒ 4609434218613702656，直接当 poll 超时用 = UB 级）；
+//     · `val_cstr` 对 int/容器 **静默串化** ⇒ `s3_get(1,2,3,4,5)` 变成对 endpoint "1" 的请求。
+//   统一文案：`R1002: <函数> 的 <参数> 需要<类型>，实际是 <t>`（与 M179 的 px_req_int / M189 的
+//   px_req_int_idx 同族）。⚠️ **可选实参**的判断在调用侧做（`null` = 未提供，保持既有宽容）。
+int64_t px_arg_int(LXValue v, const char* fn, const char* pname) {
+    if (v.type != PX_INT)
+        px_error("R1002: %s 的 %s 需要整数，实际是 %s", fn, pname, px_type_name(v));
+    return v.as.i;
+}
+
+const char* px_arg_str(LXValue v, const char* fn, const char* pname) {
+    if (v.type != PX_STR)
+        px_error("R1002: %s 的 %s 需要字符串，实际是 %s", fn, pname, px_type_name(v));
+    return v.as.obj->as.str.data;
+}
+
+const char* px_arg_strbytes(LXValue v, const char* fn, const char* pname) {
+    if (v.type != PX_STR && v.type != PX_BYTES)
+        px_error("R1002: %s 的 %s 需要字符串或 bytes，实际是 %s", fn, pname, px_type_name(v));
+    return v.as.obj->as.str.data;
+}
+
+LXObject* px_arg_dict(LXValue v, const char* fn, const char* pname) {
+    if (v.type != PX_DICT)
+        px_error("R1002: %s 的 %s 需要字典，实际是 %s", fn, pname, px_type_name(v));
+    return v.as.obj;
+}
+
 LXValue px_not(LXValue a) { return px_bool(!px_is_truthy(a)); }
 LXValue px_bitnot(LXValue a) { return px_int(~px_req_int(a, "按位取反")); }
 LXValue px_bitand(LXValue a, LXValue b) { return px_int(px_req_int(a, "按位与") & px_req_int(b, "按位与")); }
@@ -6865,8 +6898,8 @@ static LXValue bi_read_at(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 3 || args[0].type != PX_STR) px_error("R1002: read_at 需要 (路径, 偏移, 长度)");
     const char* path = args[0].as.obj->as.str.data;
-    int64_t offset = int_val(args[1]);
-    int length = (int)int_val(args[2]);
+    int64_t offset = px_arg_int(args[1], "read_at", "偏移");
+    int length = (int)px_arg_int(args[2], "read_at", "长度");
     if (length < 0) px_error("R1006: read_at 长度不能为负");
     if (length == 0) return px_str("");
     int fd = open(path, O_RDONLY);
@@ -6886,7 +6919,7 @@ static LXValue bi_write_at(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 3 || args[0].type != PX_STR) px_error("R1002: write_at 需要 (路径, 偏移, 内容)");
     const char* path = args[0].as.obj->as.str.data;
-    int64_t offset = int_val(args[1]);
+    int64_t offset = px_arg_int(args[1], "write_at", "偏移");
     const char* content;
     int clen;
     if (args[2].type == PX_STR) { content = args[2].as.obj->as.str.data; clen = args[2].as.obj->as.str.len; }
@@ -6928,7 +6961,7 @@ static LXValue bi_truncate_file(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 2 || args[0].type != PX_STR) px_error("R1002: truncate_file 需要 (路径, 大小)");
     const char* path = args[0].as.obj->as.str.data;
-    int64_t size = int_val(args[1]);
+    int64_t size = px_arg_int(args[1], "truncate_file", "大小");
     if (truncate(path, (off_t)size) != 0) px_error("io: 截断文件失败 %s: %s", path, strerror(errno));
     return px_null();
 }
@@ -6979,7 +7012,10 @@ static LXValue bi_open(LXValue* args, int nargs, void* ctx) {
     //   「有则开、无则建、**不截断**」（PID/锁文件/追加式 fd 的常态），也表达不了 O_EXCL。
     //   字符串形态**逐字节零变化**（下方原分支不动），仅当第二参是 int 时走原始 flags。
     if (nargs < 1 || nargs > 3) px_error("R1002: open 需要 (path[, mode]) 或 (path, flags[, perm]) 参数");
-    const char* path = val_cstr(args[0]);
+    // M194：path 必须显式是字符串（修前 `open(12345)` 会静默变成 `open("12345")`）
+    if (nargs >= 2 && args[1].type != PX_INT && args[1].type != PX_STR && args[1].type != PX_NULL)
+        px_error("R1002: open 的 mode/flags 需要字符串或整数，实际是 %s", px_type_name(args[1]));
+    const char* path = px_arg_str(args[0], "open", "path");
     if (nargs >= 2 && args[1].type == PX_INT) {
         int rflags = (int)args[1].as.i;
         int perm = 0644;
@@ -7060,8 +7096,8 @@ static LXValue bi_os_errno(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_read(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 2) px_error("R1002: read 需要 (fd, maxlen) 参数");
-    if (args[0].type != PX_INT) px_error("R1002: read 的 fd 需要 int");
-    int64_t maxlen = int_val(args[1]);
+    if (args[0].type != PX_INT) px_error("R1002: read 的 fd 需要整数，实际是 %s", px_type_name(args[0]));
+    int64_t maxlen = px_arg_int(args[1], "read", "maxlen");
     if (maxlen <= 0 || maxlen > (int64_t)INT_MAX - 1) px_error("R1002: read 的 maxlen 需要 1..INT_MAX-1");
     int fd = (int)args[0].as.i;
     char* buf = xmalloc((size_t)maxlen + 1);
@@ -7095,8 +7131,8 @@ static LXValue bi_write(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_mmap(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 2 || nargs > 3) px_error("R1002: mmap 需要 (fd, length[, offset]) 参数");
-    if (args[0].type != PX_INT) px_error("R1002: mmap 的 fd 需要 int");
-    int64_t l = int_val(args[1]);
+    if (args[0].type != PX_INT) px_error("R1002: mmap 的 fd 需要整数，实际是 %s", px_type_name(args[0]));
+    int64_t l = px_arg_int(args[1], "mmap", "length");
     if (l <= 0 || l >= (int64_t)INT_MAX) px_error("R1002: mmap 的 length 需要 1..INT_MAX-1");
     off_t off = 0;
     if (nargs >= 3) {
@@ -7142,7 +7178,7 @@ static LXValue bi_mem_write(LXValue* args, int nargs, void* ctx) {
     if (!dst->is_mmap || !dst->as.str.data)
         px_error("R1002: mem_write 的目标需要未解除的 mmap 映射视图（仅 mmap 返回的 bytes 可就地写；普通 bytes 用 bytes_set COW）");
     int dlen = dst->as.str.len;
-    int64_t offv = int_val(args[1]);
+    int64_t offv = px_arg_int(args[1], "mem_write", "offset");
     if (offv < 0 || offv >= dlen) px_error("R1003: mem_write 的 offset 越界（len=%d offset=%lld）", dlen, (long long)offv);
     LXValue src = args[2];
     if (src.type != PX_BYTES && src.type != PX_STR) px_error("R1002: mem_write 的 data 需要 bytes/str");
@@ -7291,8 +7327,8 @@ static LXValue bi_flock(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_chmod(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 2) px_error("R1002: chmod 需要 (path, mode) 参数");
-    if (args[0].type != PX_STR) px_error("R1002: chmod 的 path 需要 string");
-    int mode = (int)int_val(args[1]);
+    if (args[0].type != PX_STR) px_error("R1002: chmod 的 path 需要字符串，实际是 %s", px_type_name(args[0]));
+    int mode = (int)px_arg_int(args[1], "chmod", "mode");
     if (chmod(args[0].as.obj->as.str.data, (mode_t)mode) != 0) return px_bool(0);
     return px_bool(1);
 }
@@ -7515,7 +7551,7 @@ static LXValue bi_tty_config(LXValue* args, int nargs, void* ctx) {
     if (nargs != 3) px_error("R1002: tty_config 需要 (fd, baud, raw) 参数");
     if (args[0].type != PX_INT) px_error("R1002: tty_config 的 fd 需要 int");
     int fd = (int)args[0].as.i;
-    int64_t baud = int_val(args[1]);
+    int64_t baud = px_arg_int(args[1], "tty_config", "baud");
     if (args[2].type != PX_BOOL) px_error("R1002: tty_config 的 raw 需要 bool");
     int raw = args[2].as.b ? 1 : 0;
     struct termios tio;
@@ -7683,8 +7719,8 @@ static LXValue bi_base64_decode(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_int_to_hex(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 2) px_error("R1002: int_to_hex 需要 (n, width) 参数");
-    int64_t n = int_val(args[0]);
-    int64_t w = int_val(args[1]);
+    int64_t n = px_arg_int(args[0], "int_to_hex", "n");
+    int64_t w = px_arg_int(args[1], "int_to_hex", "width");
     if (w < 1 || w > 16) px_error("R1002: int_to_hex 的 width 必须在 1..16");
     uint64_t mask = (w >= 16) ? ~0ULL : ((1ULL << (4 * (int)w)) - 1);
     uint64_t v = (uint64_t)n & mask;
@@ -12848,7 +12884,7 @@ static LXValue bi_bytes_set(LXValue* args, int nargs, void* ctx) {
     if (nargs != 3) px_error("R1002: bytes_set 需要 (bytes, index, value) 参数");
     if (args[0].type != PX_BYTES) px_error("R1002: bytes_set 需要 bytes，实际是 %s", px_type_name(args[0]));
     int64_t i = px_req_int_idx(args[1]);
-    int64_t v = int_val(args[2]);
+    int64_t v = px_arg_int(args[2], "bytes_set", "value");
     if (v < 0 || v > 255) px_error("R1002: bytes_set 的值必须在 0..255");
     int len = args[0].as.obj->as.str.len;
     int64_t idx = i;
@@ -13031,7 +13067,7 @@ static LXValue bi_read_bytes(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_write_bytes(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 2) px_error("R1002: write_bytes 需要 (路径, bytes) 参数");
-    const char* p = px_val_cstr(args[0]);
+    const char* p = px_arg_str(args[0], "write_bytes", "路径");
     const char* d = bdata(args[1]);
     int len = blen(args[1]);
     FILE* f = fopen(p, "wb");
@@ -13055,7 +13091,9 @@ static LXValue bi_int_to_bytes(LXValue* args, int nargs, void* ctx) {
     int size = (int)args[1].as.i;
     int big = 1;
     if (nargs >= 3) {
-        const char* e = val_cstr(args[2]);
+        // M194：先判**类型**再判取值 —— 修前 `int_to_bytes(1, 2, 0)` 走 `val_cstr(0)`="0"
+        //    ⇒ 报「endian 需为 big/little」（像是取值错，其实是类型错）
+        const char* e = px_arg_str(args[2], "int_to_bytes", "endian");
         if (!strcasecmp(e, "little") || !strcasecmp(e, "le")) big = 0;
         else if (!strcasecmp(e, "big") || !strcasecmp(e, "be")) big = 1;
         else px_error("R1002: int_to_bytes 的 endian 需为 big/little");
@@ -13100,7 +13138,8 @@ static LXValue bi_bytes_to_int(LXValue* args, int nargs, void* ctx) {
     const unsigned char* data = (const unsigned char*)args[0].as.obj->as.str.data;
     int big = 1;
     if (nargs >= 2) {
-        const char* e = val_cstr(args[1]);
+        // M194：先判类型再判取值（同 int_to_bytes）
+        const char* e = px_arg_str(args[1], "bytes_to_int", "endian");
         if (!strcasecmp(e, "little") || !strcasecmp(e, "le")) big = 0;
         else if (!strcasecmp(e, "big") || !strcasecmp(e, "be")) big = 1;
         else px_error("R1002: bytes_to_int 的 endian 需为 big/little");
@@ -13948,7 +13987,7 @@ static LXValue bi_set_timeout(LXValue* args, int nargs, void* ctx) {
     if (nargs < 2) px_error("R1002: set_timeout 需要 (fn, ms[, ...args]) 参数");
     if (args[0].type != PX_FUNC && args[0].type != PX_NATIVE)
         px_error("R1002: set_timeout: 第一个参数必须是函数");
-    int64_t ms = int_val(args[1]);
+    int64_t ms = px_arg_int(args[1], "set_timeout", "ms");
     if (ms < 0) px_error("R1006: set_timeout: 间隔不能为负数");
     int64_t id = px_timer_create(0, args[0], args + 2, nargs - 2, ms);
     return px_int(id);
@@ -13959,7 +13998,7 @@ static LXValue bi_set_interval(LXValue* args, int nargs, void* ctx) {
     if (nargs < 2) px_error("R1002: set_interval 需要 (fn, ms[, ...args]) 参数");
     if (args[0].type != PX_FUNC && args[0].type != PX_NATIVE)
         px_error("R1002: set_interval: 第一个参数必须是函数");
-    int64_t ms = int_val(args[1]);
+    int64_t ms = px_arg_int(args[1], "set_interval", "ms");
     if (ms < 0) px_error("R1006: set_interval: 间隔不能为负数");
     int64_t id = px_timer_create(1, args[0], args + 2, nargs - 2, ms);
     return px_int(id);
@@ -14900,8 +14939,9 @@ fail:
 static LXValue bi_tls_connect(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 2 || nargs > 3) px_error("R1002: tls_connect 需要 (host, port[, opts]) 参数");
-    const char* host = val_cstr(args[0]);
-    if (args[1].type != PX_INT) px_error("R1002: tls_connect 的 port 需要 int");
+    const char* host = px_arg_str(args[0], "tls_connect", "host");
+    if (args[1].type != PX_INT)
+        px_error("R1002: tls_connect 的 port 需要整数，实际是 %s", px_type_name(args[1]));
     int port = (int)args[1].as.i;
     int64_t timeout_ms = 0;
     int verify = 0;
@@ -15926,12 +15966,22 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     // M37：http_request(url, method[, body[, headers[, opts{retries,timeout_ms,proxy}]]])
     if (nargs < 2 || nargs > 5) px_error("R1002: http_request 需要 (url, method[, body[, headers[, opts]]]) 参数");
-    const char* url = val_cstr(args[0]);
-    const char* method = val_cstr(args[1]);
+    const char* url = px_arg_str(args[0], "http_request", "url");
+    const char* method = px_arg_str(args[1], "http_request", "method");
     // M72-S4（Issue 13 GAP-BIN-2）：body 收 str|bytes，长度感知（bytes 含 \0 不截断）
     // body_n = 请求体字节长（区别于下方响应体长 body_len 变量）
+    // M194：**可选实参存在即校验** —— 修前 `http_request(u, "GET", 123)` 静默**丢掉** body、
+    //   `http_request(u, "GET", null, "X: 1")` 静默丢掉 headers（M190 的 213-b 同族：写了参数
+    //   却什么都没发生）。`null` 仍表示「未提供」⇒ 保持既有宽容（`http_request(u,"GET",null,…)`
+    //   是既有合法写法）。
     const char* body = NULL;
     int body_n = 0;
+    if (nargs >= 3 && args[2].type != PX_NULL && args[2].type != PX_STR && args[2].type != PX_BYTES)
+        px_error("R1002: http_request 的 body 需要字符串或 bytes，实际是 %s", px_type_name(args[2]));
+    if (nargs >= 4 && args[3].type != PX_NULL && args[3].type != PX_DICT)
+        px_error("R1002: http_request 的 headers 需要字典，实际是 %s", px_type_name(args[3]));
+    if (nargs >= 5 && args[4].type != PX_NULL && args[4].type != PX_DICT)
+        px_error("R1002: http_request 的 opts 需要字典，实际是 %s", px_type_name(args[4]));
     if (nargs >= 3 && (args[2].type == PX_STR || args[2].type == PX_BYTES)) {
         body = args[2].as.obj->as.str.data;
         body_n = args[2].as.obj->as.str.len;
@@ -16164,9 +16214,16 @@ static int px_unix_connect_timeout(const char* sock_path, int timeout_ms) {
 static LXValue bi_http_unix(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 3 || nargs > 6) px_error("R1002: http_unix 需要 (socket_path, url_path, method[, body[, headers[, opts]]]]) 参数");
-    const char* sock_path = val_cstr(args[0]);
-    const char* url_path = val_cstr(args[1]);
-    const char* method = val_cstr(args[2]);
+    const char* sock_path = px_arg_str(args[0], "http_unix", "socket_path");
+    const char* url_path = px_arg_str(args[1], "http_unix", "url_path");
+    const char* method = px_arg_str(args[2], "http_unix", "method");
+    // M194：可选实参存在即校验（`null` = 未提供）
+    if (nargs >= 4 && args[3].type != PX_NULL && args[3].type != PX_STR && args[3].type != PX_BYTES)
+        px_error("R1002: http_unix 的 body 需要字符串或 bytes，实际是 %s", px_type_name(args[3]));
+    if (nargs >= 5 && args[4].type != PX_NULL && args[4].type != PX_DICT)
+        px_error("R1002: http_unix 的 headers 需要字典，实际是 %s", px_type_name(args[4]));
+    if (nargs >= 6 && args[5].type != PX_NULL && args[5].type != PX_DICT)
+        px_error("R1002: http_unix 的 opts 需要字典，实际是 %s", px_type_name(args[5]));
     const char* body = NULL;
     if (nargs >= 4 && args[3].type == PX_STR) body = args[3].as.obj->as.str.data;
     char extra_headers[4096] = {0};
@@ -16432,10 +16489,18 @@ static int px_s3_exec(const char* endpoint, const char* method, const char* buck
 static LXValue bi_s3_put(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 6) px_error("R1002: s3_put 需要 (endpoint, bucket, key, data, ak, sk) 参数");
+    // M194：修前 6 个实参**全部**走 `val_cstr` ⇒ `s3_put(1,2,3,4,5,6)` 静默串化成对 endpoint
+    //   "1"、bucket "2"… 的请求（`data` 尤其危险：非字符串的 body 会被串化成 "<object>"/"null" 上传）
+    const char* s3_endpoint = px_arg_str(args[0], "s3_put", "endpoint");
+    const char* s3_bucket = px_arg_str(args[1], "s3_put", "bucket");
+    const char* s3_key = px_arg_str(args[2], "s3_put", "key");
+    const char* s3_data = px_arg_str(args[3], "s3_put", "data");
+    const char* s3_ak = px_arg_str(args[4], "s3_put", "ak");
+    const char* s3_sk = px_arg_str(args[5], "s3_put", "sk");
     char out[8] = {0};
     char err[256] = {0};
-    int st = px_s3_exec(val_cstr(args[0]), "PUT", val_cstr(args[1]), val_cstr(args[2]),
-                        "", val_cstr(args[3]), val_cstr(args[4]), val_cstr(args[5]),
+    int st = px_s3_exec(s3_endpoint, "PUT", s3_bucket, s3_key,
+                        "", s3_data, s3_ak, s3_sk,
                         out, sizeof(out), err, (int)sizeof(err));
     if (st == 0) return px_net_err("%s", err[0] ? err : "net: S3 请求失败");
     return px_bool(st == 200 || st == 204);
@@ -16444,10 +16509,15 @@ static LXValue bi_s3_put(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_s3_get(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 5) px_error("R1002: s3_get 需要 (endpoint, bucket, key, ak, sk) 参数");
+    const char* s3_endpoint = px_arg_str(args[0], "s3_get", "endpoint");
+    const char* s3_bucket = px_arg_str(args[1], "s3_get", "bucket");
+    const char* s3_key = px_arg_str(args[2], "s3_get", "key");
+    const char* s3_ak = px_arg_str(args[3], "s3_get", "ak");
+    const char* s3_sk = px_arg_str(args[4], "s3_get", "sk");
     char* body = malloc(1048576);
     char err[256] = {0};
-    int st = px_s3_exec(val_cstr(args[0]), "GET", val_cstr(args[1]), val_cstr(args[2]),
-                        "", "", val_cstr(args[3]), val_cstr(args[4]),
+    int st = px_s3_exec(s3_endpoint, "GET", s3_bucket, s3_key,
+                        "", "", s3_ak, s3_sk,
                         body, 1048576, err, (int)sizeof(err));
     if (st == 0) { free(body); return px_net_err("%s", err[0] ? err : "net: S3 请求失败"); }
     LXValue r = (st == 200) ? px_str(body) : px_null();
@@ -16458,10 +16528,15 @@ static LXValue bi_s3_get(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_s3_delete(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 5) px_error("R1002: s3_delete 需要 (endpoint, bucket, key, ak, sk) 参数");
+    const char* s3_endpoint = px_arg_str(args[0], "s3_delete", "endpoint");
+    const char* s3_bucket = px_arg_str(args[1], "s3_delete", "bucket");
+    const char* s3_key = px_arg_str(args[2], "s3_delete", "key");
+    const char* s3_ak = px_arg_str(args[3], "s3_delete", "ak");
+    const char* s3_sk = px_arg_str(args[4], "s3_delete", "sk");
     char out[8] = {0};
     char err[256] = {0};
-    int st = px_s3_exec(val_cstr(args[0]), "DELETE", val_cstr(args[1]), val_cstr(args[2]),
-                        "", "", val_cstr(args[3]), val_cstr(args[4]),
+    int st = px_s3_exec(s3_endpoint, "DELETE", s3_bucket, s3_key,
+                        "", "", s3_ak, s3_sk,
                         out, sizeof(out), err, (int)sizeof(err));
     if (st == 0) return px_net_err("%s", err[0] ? err : "net: S3 请求失败");
     return px_bool(st == 204 || st == 200 || st == 404);
@@ -16470,12 +16545,17 @@ static LXValue bi_s3_delete(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_s3_list(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 5) px_error("R1002: s3_list 需要 (endpoint, bucket, prefix, ak, sk) 参数");
+    const char* s3_endpoint = px_arg_str(args[0], "s3_list", "endpoint");
+    const char* s3_bucket = px_arg_str(args[1], "s3_list", "bucket");
+    const char* s3_prefix = px_arg_str(args[2], "s3_list", "prefix");
+    const char* s3_ak = px_arg_str(args[3], "s3_list", "ak");
+    const char* s3_sk = px_arg_str(args[4], "s3_list", "sk");
     char query[512];
-    snprintf(query, sizeof(query), "list-type=2&prefix=%s", val_cstr(args[2]));
+    snprintf(query, sizeof(query), "list-type=2&prefix=%s", s3_prefix);
     char* body = malloc(1048576);
     char err[256] = {0};
-    int st = px_s3_exec(val_cstr(args[0]), "GET", val_cstr(args[1]), "",
-                        query, "", val_cstr(args[3]), val_cstr(args[4]),
+    int st = px_s3_exec(s3_endpoint, "GET", s3_bucket, "",
+                        query, "", s3_ak, s3_sk,
                         body, 1048576, err, (int)sizeof(err));
     if (st == 0) { free(body); return px_net_err("%s", err[0] ? err : "net: S3 请求失败"); }
     LXValue l = px_list(0);
@@ -16658,7 +16738,7 @@ static int gz_stream_feed(GzStream* g, const unsigned char* in, int inlen) {
 static LXValue bi_http_get_stream(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 2) px_error("R1002: http_get_stream 需要 (url, chunk_handler) 参数");
-    const char* url = val_cstr(args[0]);
+    const char* url = px_arg_str(args[0], "http_get_stream", "url");
     LXValue handler = args[1];
     if (handler.type != PX_FUNC && handler.type != PX_NATIVE) px_error("R1002: http_get_stream 的 chunk_handler 必须是函数");
     // M37：opts{retries, timeout_ms, proxy}
@@ -25049,7 +25129,12 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     if (stat(docroot, &st) != 0 || !S_ISDIR(st.st_mode)) {
         px_error("px_serve: docroot 不是有效目录: %s", docroot);
     }
+    // M194：可选实参存在即校验（修前 `px_serve(9000, ".", opts)` 静默把 opts 丢掉）
     int timeout_ms = 10000;
+    if (nargs >= 3 && args[2].type != PX_NULL && args[2].type != PX_INT)
+        px_error("R1002: px_serve 的 timeout_ms 需要整数，实际是 %s", px_type_name(args[2]));
+    if (nargs >= 4 && args[3].type != PX_NULL && args[3].type != PX_DICT)
+        px_error("R1002: px_serve 的 opts 需要字典，实际是 %s", px_type_name(args[3]));
     if (nargs >= 3 && args[2].type == PX_INT) timeout_ms = (int)args[2].as.i;
     if (timeout_ms < 1) timeout_ms = 1;
     int port = (int)args[0].as.i;
@@ -25694,7 +25779,13 @@ static const char* PX_MONTHS_F[] = {"January","February","March","April","May","
 LXValue bi_time_format(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 2 || nargs > 3) px_error("R1002: time_format 需要 (ts, fmt[, tz]) 参数");
-    if (args[0].type != PX_INT || args[1].type != PX_STR) px_error("R1002: time_format 参数类型错误");
+    // M194：修前 `R1002: time_format 参数类型错误` —— **不说是哪个参数、也不说是实际什么类型**
+    if (args[0].type != PX_INT)
+        px_error("R1002: time_format 的 ts 需要整数，实际是 %s", px_type_name(args[0]));
+    if (args[1].type != PX_STR)
+        px_error("R1002: time_format 的 fmt 需要字符串，实际是 %s", px_type_name(args[1]));
+    if (nargs == 3 && args[2].type != PX_NULL && args[2].type != PX_STR)
+        px_error("R1002: time_format 的 tz 需要字符串，实际是 %s", px_type_name(args[2]));
     int64_t off = 0;
     if (nargs == 3 && args[2].type == PX_STR) off = px_tz_off(args[2].as.obj->as.str.data);
     int64_t y, mo, d, h, mi, s, wd;
@@ -25770,7 +25861,13 @@ static int px_read_int(const char* b, int len, int* idx, int max, int64_t* v) {
 LXValue bi_time_parse(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 2 || nargs > 3) px_error("R1002: time_parse 需要 (str, fmt[, tz]) 参数");
-    if (args[0].type != PX_STR || args[1].type != PX_STR) px_error("R1002: time_parse 参数类型错误");
+    // M194：同 time_format（修前消息不指名参数）
+    if (args[0].type != PX_STR)
+        px_error("R1002: time_parse 的 str 需要字符串，实际是 %s", px_type_name(args[0]));
+    if (args[1].type != PX_STR)
+        px_error("R1002: time_parse 的 fmt 需要字符串，实际是 %s", px_type_name(args[1]));
+    if (nargs == 3 && args[2].type != PX_NULL && args[2].type != PX_STR)
+        px_error("R1002: time_parse 的 tz 需要字符串，实际是 %s", px_type_name(args[2]));
     int64_t off = 0;
     if (nargs == 3 && args[2].type == PX_STR) off = px_tz_off(args[2].as.obj->as.str.data);
     const char* s = args[0].as.obj->as.str.data;

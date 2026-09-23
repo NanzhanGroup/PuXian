@@ -1,0 +1,3 @@
+let fd = open("/etc/hostname", "r")
+print(fd)
+print(close(fd))

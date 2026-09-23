@@ -1,3 +1,100 @@
+## M194 · native 参数**类型守卫完备性**（第 72 轮 · 缺陷 222 · 26 站点）
+
+> **主问题**：`R1002` 只保证"**错了会说**"，**不保证"错了一定会被说"**。M191–M193 把
+> 「出错站点是否带 R 码」收口到 **0 残留**（棘轮表清空、硬判据），但**守卫本身可能根本不存在**
+> —— 全仓普查出 **26 个站点「形参 ≥2、却只查了个数或只查了首参」**，其余实参直接进
+> `int_val()` / `val_cstr()` / `.as.i`：
+> · `int_val` 对 float **静默截断** ⇒ `read_at("/etc/hostname", 1.5, 3)` == `read_at(…, 1, 3)`
+>   （实测三轨一致地打印 `ong`）；
+> · `.as.i`（h3 族）更糟 —— 直接把 float 的**位模式**当整数读（`1.5` ⇒ `0x3FF8000000000000`
+>   = 4609434218613702656，拿去当 `poll` 超时）；
+> · `val_cstr` 对 int/容器 **静默串化** ⇒ `s3_get(1,2,3,4,5)` 变成对 endpoint `"1"`、
+>   bucket `"2"`… 的请求；`s3_put` 的 `data` 更是把 `<object>`/`null` 当正文**上传**。
+>
+> ⚠️ **为什么 M190 的普查没抓到**：M190 的判据是「**三轨 rc 是否一致**」（708 探针）——
+> 而这一族是**三轨一致**的静默错值（共用同一份 C native）⇒ **rc 完全相同**，
+> 从"分叉"视角**根本看不见**。这与 M189 修掉的 `bytes_get(b, 1.5)` 同族，
+> 危害等级是「静默错值」（最难查的一类，不崩不报）。
+
+### 一 判据（写进 `docs/ERROR_CODES.md` **§6**，新增）
+
+**按「实参被怎么用」决定是否必须显式检查**：
+
+| 用途 | 判定 | 不检查的后果 |
+|---|---|---|
+| **容器**（`.as.obj->as.{list,dict}` / `px_list_*` / `px_dict_*` / `px_bytes_*` / `px_index` / `px_len`） | ✅ **必须** | 读 union 的其它字段 ⇒ **UB / 段错误** |
+| **整数**（`int_val()` / `.as.i`） | ✅ **必须** | 静默截断 / 读位模式 |
+| **数值**（`num_val()` / `math_num()`） | ✅ **必须** | 同 M179（读 union 的 `as.f`） |
+| **字符串**（`val_cstr()` / `.as.obj->as.str.data`） | ✅ **必须** | **静默串化**（送进 I/O、哈希、网络、上传体） |
+| 仅用于错误消息（`px_type_name(args[i])`） | ❌ 豁免 | —— |
+| 输出/串化汇（`px_to_string`，如 `write_file` 的 `content`） | ❌ 豁免（**设计如此**） | —— |
+| `[可选]` 形参 | ⚠️ **「存在即校验」**（见 §6.3） | `http_request(u,"GET",123)` **静默丢掉** body |
+
+**统一文案**（与 M179 的 `px_req_int` / M189 的 `px_req_int_idx` 同族）：
+
+```
+R1002: <函数> 的 <参数> 需要<类型>，实际是 <t>
+```
+
+**实现入口**（`runtime/runtime.h`，非 static ⇒ 各模块可见）——
+`px_arg_int` / `px_arg_str` / `px_arg_strbytes` / `px_arg_dict`。
+
+### 二 收口清单（26 站点 · 46 个实参位置；11 个文件）
+
+| 批 | 形状 | 站点 |
+|---|---|---|
+| **A · INT 静默截断**（14） | `int_val` / `.as.i` 未检查 | `read_at`(偏移,长度) · `write_at`(偏移) · `truncate_file`(大小) · `read`(maxlen) · `mmap`(length) · `mem_write`(offset) · `chmod`(mode) · `tty_config`(baud) · `int_to_hex`(n,width) · `bytes_set`(value) · `set_timeout`(ms) · `set_interval`(ms) · `h3_serve_read_request`(timeout_ms) · `h3_client_read_response`(timeout_ms) |
+| **B · STR 静默串化**（12 站点 / 33 个位置） | `val_cstr` 未检查 | `open`(path) · `write_bytes`(路径) · `tls_connect`(host) · `http_request`(url,method) · `http_unix`(socket_path,url_path,method) · `s3_put`(6) · `s3_get`(5) · `s3_delete`(5) · `s3_list`(5) · `http_get_stream`(url) · `int_to_bytes`(endian) · `bytes_to_int`(endian) |
+| **C · 可选实参静默忽略**（9 函数） | `if (nargs >= N && args[N-1].type == PX_X)` **无 else 报错** | `http_request`(body,headers,opts) · `http_unix`(body,headers,opts) · `px_serve`(timeout_ms,opts) · `ws_serve`(opts) · `time_format`/`time_parse`(tz) · `h3_server_listen`/`h3_server_listen_stateless`/`quic_h3_listen`(cert,key) · `open`(mode/flags) |
+| **D · 消息不指名参数**（2） | `R1002: <fn> 参数类型错误` / `需要 int` / `需要 string` | `time_format` · `time_parse`（+ 顺手把 `read`/`mmap`/`chmod`/`tls_connect` 的同族旧文案统一为 `需要整数/字符串，实际是 <t>`） |
+
+**§6.3 可选实参口径**：形参写成 `[x]` / `x?` ⇒ **传了就得是那个类型**，但 **`null` 仍表示
+「未提供」**（既有合法写法 `http_request(u, "POST", null, {...})` 逐字节不变）。
+顺带修掉一类**误导性消息**：`int_to_bytes(1, 2, 0)` 修前报「endian 需为 big/little」
+（像**取值**错，其实是**类型**错）⇒ 现在**先判类型、再判取值**。
+
+### 三 判据（新增门 `examples/m194_arg_guards/`）
+
+- **[1] 静态**：扫描器新增判据 ⑥「参数类型守卫完备性」（`scan_errcodes.py` 的 `[S5]` 段）——
+  **140 个多形参守卫 · 缺类型检查 0**。用途分类（CONT/INT/NUM/STR）**逐实参**判定，
+  豁免仅两类（`px_type_name` 专用 / `px_to_string` 汇）。
+  ⇒ 此后任何新增站点**立即判门红**（硬判据，不是棘轮）。
+- **[2] 动态**：12 个错例 × **三轨**（解释 / VM / C）—— 判 `rc≠0` + **同码 R1002** + **同文**
+  + 已进运行期（`before` 必须已打印，防"编译期报错冒充运行期判据"）。
+- **[2b] 合法侧**：8 例 rc=0（含 `null` = 未提供的既有写法、`open` 的字符串 mode、
+  `int_to_bytes`/`bytes_to_int` 往返）—— 证明收口**没把正常路径改坏**。
+- **[3] 负控 4 道**（各自独立判红、源逐字节还原）：**A/B 静态**（去掉一处 INT / STR 检查 ⇒ `[S5]` 判红）·
+  **C 动态**（`px_arg_int` 退回 `int_val` 的**截断**语义 ⇒ e1 静默 `ong`、rc=0 ⇒ 同码判据失效）·
+  **D 动态**（`R1002`→`R1007` ⇒ 仍然响亮但码不符）。
+  ⚠️ **C/D 只判 C 轨**：解释/VM 跑的是**预编译入库件**（`bootstrap/pxi`），改 `runtime.c` 必须
+  **重烘**才生效（M193 教训）—— 门不重烘，故只用 C 轨当判据（它的 runtime 是现编的）。
+
+### 四 ⚠️ 本轮最值钱的一条：**负控「没有牙」的一个新形态**
+
+3C 第一版写成「把 `px_arg_int` 改成 `return v.as.i;`（不检查）」—— 门**如实判红**（负控未通过）。
+实测真因：`v.as.i` 对 float 是**位模式** ⇒ 偏移变成天文数字 ⇒ `pread` 失败 ⇒ 报
+`io: 随机读失败`（**仍然响亮**）⇒ 这个负控**根本复刻不了"静默"**。
+⇒ 修法：负控必须复刻**旧的 `int_val` 语义**（`if (PX_FLOAT) return (int64_t)v.as.f;`）才是
+真正的静默复发。
+**教训**：**负控要复刻的是"旧行为"，不是"去掉新代码"** —— 二者在类型转换语义上并不等价。
+
+### 五 仍未收口（登记 → 缺陷 223）
+
+**元数上界**：`h3_server_listen` / `h3_server_listen_stateless` / `quic_h3_listen` 的守卫是
+`nargs < 1`（**无上界**）⇒ `h3_server_listen(9000, "c", "k", "多余的")` 被静默接受。
+M190 的普查只覆盖「三轨 **rc 分叉**」，这一类是三轨**一致**的宽容 ⇒ 当时未收。
+修法方向：与 M190 同口径补上界（`nargs == 1 || nargs == 3`），代价 = 需先普查标准库/registry
+的调用面是否有人靠"多传一个"工作。
+
+### 六 验收
+
+```
+门 M194          M194-VERIFY-OK（40 项 · 含负控 44 项：3A/3B/3C/3D 各自独立判红）
+入库件           --rebake-all 12/12 + pxc/pxc_vm · --check-all 14/14（PXRT-3b9c1e567e01b379）
+静态判据         [S5] 140 个多形参守卫 · 缺检查 0 · 六查全绿
+三轨             interp / VM / C 全部 12 例同码同文 · 合法侧 8 例 × 3 轨 rc=0
+```
+
 ## M193 · 「错误码面」棘轮欠账**第二批**全量收口（第 71 轮 · 143 站点 ⇒ 未收口清单清零）
 
 > **主问题**：M191 立了「错误该不该带码」的判据并把核心文件收口，M192 收口了加密/压缩/归档族
