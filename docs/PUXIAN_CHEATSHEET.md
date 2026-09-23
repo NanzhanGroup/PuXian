@@ -2249,3 +2249,15 @@ set_timeout(fn (): print("once after 2s"), 2000)
      ⇒ 自建 C 侧代码写 `px_to_string(v)` 时：**取到即用**（拷贝/拼接/printf），
        要跨调用持有就自己拷进线程局部缓冲（`px_vhost_normalize` / `route_normalize` 就是这么做的）。
      ⇒ 排查提示：**"fd 只涨不跌"** 或 **"程序输出里多出几段本该没打印的容器"** ⇒ 先看 `px_to_string` 调用点。
+
+215. **`int_to_bytes` / `bytes_to_int` 的完整签名在**三轨一致**（第 64 轮 · M186 收口缺陷 206/207/208 · 第三方 PX-DEF-018/019/020）**：
+     · 签名：`int_to_bytes(n, size[, endian[, signed]])`（2-4 参）· `bytes_to_int(b[, endian[, signed]])`（1-3 参）；
+       `endian` ∈ `"big"`/`"be"`/`"little"`/`"le"`（默认 `"big"`）；`size` ∈ 1..8；
+     · `signed=true` ⇒ 按**补码**解释/编码（`bytes_to_int(hex("ffff"),"big",true)` = `-1`；
+       `int_to_bytes(-5,2,"big",true)` = `fffb`）；**域外一律返回 `null`**（不报错）；
+     · **修前**解释轨转发时**只透传前 1~3 个实参** ⇒ 三轨分叉：
+       `bytes_to_int(hex("0102"),"little")` 解释轨 **258**（静默按大端）· `int_to_bytes(-5,2,"big",true)` 解释轨 **`302e30`（"0.0"）** ·
+       `int_to_bytes(1)` 解释轨 **`R1003 索引越界`**（编译轨是 `R1002` 参数错）—— 现已**同码同文**；
+     · **写库纪律**：二进制协议解析/打包时**端序与符号位一律显式写全**（别依赖默认值），
+       这样跨实现（Python `int.from_bytes` / Go `binary.BigEndian`）对拍才可靠；
+       `bytes_get` 越界返回 `null`（PX-DEF-029）⇒ 解析前先 `off >= bytes_len(b)` 守卫。

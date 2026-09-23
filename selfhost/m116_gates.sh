@@ -476,6 +476,15 @@ run m184_num_fs_strict bash examples/m184_num_fs_strict/verify.sh
 #   ⑤ 负控 A/B/C/D（runtime 去 bytes 索引 / 退回 "<object>" / 判定器恒真 / 解释轨去 bytes 迭代）
 #      各自独立判红 + 源逐字节还原。
 run m185_bytes_face bash examples/m185_bytes_face/verify.sh
+# ---- M186 门（第 64 轮）· 解释轨 native「透传完整性」（第三方 PX-DEF-018/019/020）----
+#   病根：解释器转发 C 层 native 时**只透传前 1~3 个实参**，而 C 层签名更长 ⇒
+#     019 `bytes_to_int(b,"little")` 解释轨静默按大端（258 vs 编译轨 513）；
+#     020 `int_to_bytes(-5,2,"big",true)` 的 `signed` 被丢（解释轨 "0.0" vs 编译轨 fffb）；
+#     018 实参不足时 `args[1]` 越界 ⇒ 晦涩 R1003（编译轨 R1002 参数错）。
+#   判据：① 41 行值语义三轨逐字节一致（endian × signed × 越界 × 往返 × 相邻族护栏）；
+#     ② 拒绝侧 4 例 × 三轨 rc≠0 + 词条逐字相同（且解释轨不得泄漏 R1003）；
+#     ③ 负控 A/B/C（解释轨三处退回旧形态；解释轨改动 ⇒ dev 解释器）各自独立判红 + 源逐字节还原。
+run m186_native_passthrough bash examples/m186_native_passthrough/verify.sh
 step "CI 其余独占门（m118/m119/m120/m122 + 发布侧守卫自测 —— 第 18 轮补进来）"
 # 现场（第 18 轮提交前预检）：ci.yml 里还有这几步**本地门从来没有** ——
 #   而其中两条**实际已经是红的**（m119 的一句负控、m122 的一个正控），只因它们

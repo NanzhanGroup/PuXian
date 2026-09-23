@@ -1,3 +1,79 @@
+## M186 · 解释轨 native「透传完整性」收口（第 64 轮 · 缺陷 206/207/208 + 第三方 PX-DEF-018/019/020）
+
+> 主题：第三方 `banshanhanfu/registry-px` 在 09-22/09-23 猛推 —— **库 34 → 53**、
+> 缺陷登记 **017 → 030**。本轮先**把全部 53 库的测试在本机三轨跑一遍**（普查表见
+> [`docs/PX_DEF_TRIAGE.md`](docs/PX_DEF_TRIAGE.md) §4.1），再从新登记里挑**最重的一族**收口：
+> 三条缺陷其实是**同一个根因**的三种表现。
+> 门：`examples/m186_native_passthrough/`。
+
+### 一、根因：解释器转发 native 时**只透传前 1~3 个实参**
+
+`selfhost/ibuiltin.px` 是解释器的内置分发层 —— 它把调用**转发**给 C 层 native（两者同在一个二进制里）。
+转发处按"够用的最少实参"写：`int_to_bytes` **最多透传 3 个**（C 层签名 4 个）、
+`bytes_to_int` **只透传第 1 个**（C 层签名 3 个）⇒ 三种后果：
+
+| 内部号 | 对方号 | 调用（修前实测） | 解释轨 | VM / C 轨 |
+|---|---|---|---|---|
+| **206** | PX-DEF-019 | `bytes_to_int(hex("0102"), "little")` | **258**（静默按大端） | **513** |
+| **207** | PX-DEF-020 | `int_to_bytes(-5, 2, "big", true)` | **`302e30`（"0.0"）** | **`fffb`**（补码） |
+| **208** | PX-DEF-018 | `int_to_bytes(1)`（缺参） | **`R1003: 索引越界: 1 (len=1)`** | **`R1002: int_to_bytes 需要 (n, size[, endian[, signed]]) 参数`** |
+| — | — | `bytes_to_int(b, "big", false, 1)`（多余实参） | **静默忽略** | **`R1002` 参数错** |
+
+前两条属**静默错值**（二进制解析/打包库最怕：端序反了、负数补码丢了，程序照跑、结果错）——
+`registry/base58`、`registry/tar`、`registry/bytes_pack` 全在这一族上工作，第三方只能自己绕行；
+第三条属**同码不同文**（把参数错误报成索引越界 ⇒ 排障跑偏）。
+
+### 二、修法
+
+`selfhost/ibuiltin.px` 两处一律**全量透传 + 参数个数前置校验**：
+
+```px
+    if name == "int_to_bytes":
+        if len(args) < 2 or len(args) > 4:
+            return Err(i_r1002("int_to_bytes 需要 (n, size[, endian[, signed]]) 参数", pos))
+        if len(args) == 2:
+            return Ok(int_to_bytes(args[0], args[1]))
+        if len(args) == 3:
+            return Ok(int_to_bytes(args[0], args[1], args[2]))
+        return Ok(int_to_bytes(args[0], args[1], args[2], args[3]))
+    if name == "bytes_to_int":
+        if len(args) < 1 or len(args) > 3:
+            return Err(i_r1002("bytes_to_int 需要 (bytes[, endian[, signed]]) 参数", pos))
+        if len(args) == 1:
+            return Ok(bytes_to_int(args[0]))
+        if len(args) == 2:
+            return Ok(bytes_to_int(args[0], args[1]))
+        return Ok(bytes_to_int(args[0], args[1], args[2]))
+```
+
+判据是**同码同文**：解释轨的参数错走 `i_r1002`，与 C 层 `px_error` 的**码与词条逐字一致**
+（位置前缀仍允许不同 —— 缺陷 186 家族，见 §四）。
+
+### 三、验收
+
+- **门** `examples/m186_native_passthrough/`：**33 行**值语义 × 三轨 `rc=0` + stdout **逐字节一致**
+  （端序 × 符号 × 域外 null × 往返 × 相邻族护栏 6 组），关键定点钉死
+  （`A2/A4=513` 小端 · `B1=-1` · `B3=-128` · `C1=fffb` · `C2=fbff` · `C5=ff` · `C7=fffffffffffffffe` ·
+  `E1/E2=-1234` 往返 · `D1..D4=null`）；
+- **拒绝侧 4 例** × 三轨 `rc≠0` + 词条**逐字相同**，且解释轨**不得泄漏 `R1003`**；
+- **负控 A/B/C**（`bytes_to_int` 退回只透传 `args[0]` / `int_to_bytes` 退回最多 3 参 / 参数下限退回 `< 1`）
+  **各自独立判红** —— 解释轨改动 ⇒ 负控用 **dev 解释器**（`selfhost/build/interp`，与安装件隔离），
+  跑完**源逐字节还原**；负控标记用 `_m186_negA/B/C` ⇒ 命中 `rebake_bin.sh` 的**负控残留自检**。
+- **第三方 53 库普查**（m185 入库件）：编译轨（VM）**50/53** · 解释轨 **47/53**；
+  失败逐条定性：并发 2 库（设计性）· DB 2 库 + passhash（需真实服务端 / M184 已登记后果）· qrcode（解释器性能）
+  ⇒ **无一是本轮引入的回退**。
+- **复测否定** `PX-DEF-021`：`zip_pack`/`zip_unpack` 解释轨**可用**，两参调用端到端三轨逐字节一致
+  （对方基线 m182 时确有问题，其后已通；且对方用的是一参形态，实际签名 2 参）。
+
+### 四、顺带
+
+- `docs/PX_DEF_TRIAGE.md` 新增 **§四**：`PX-DEF-018…030` 逐条判定 ——
+  **真缺陷 3**（本轮修）· **不复现 1**（021）· **设计如此 4**（022/023/024/028）·
+  **文档缺口 3**（008/029/030 一类）· **真缺口 3**（025/026/027 ⇒ 候选 M187/M188）；
+- 内部缺陷编号推进到 **208**；
+- 未收口（下一轮候选）：**026 `sha1` native**（对侧已用纯 .px 自证，非阻塞）·
+  **025/027 字符串方法面**（`.find`/`.strip`/`.has_prefix`）· 库引入（`registry-px` 53 库 → 官方 `registry/`）。
+
 ## M185 · `bytes` 三面统一 + 严格解析判定器 + `unwrap_err` + `px_to_string` 四重病灶（第 63 轮 · 缺陷 203/204/205 + 第三方 PX-DEF-003/015）
 
 > 主题：本轮从第三方 `banshanhanfu/registry-px` 的登记表（`PX-DEF-001…017`，我方逐条三轨复测见

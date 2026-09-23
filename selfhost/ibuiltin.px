@@ -649,14 +649,27 @@ def i_call_builtin(name, args, pos):
             return Err(i_r1002("int_to_hex 需要 (n, width) 参数", pos))
         return Ok(int_to_hex(args[0], args[1]))
     if name == "int_to_bytes":
-        # C 层 int_to_bytes(n, size[, endian[, signed]])：2-4 参，按实参数量透传
-        if len(args) >= 3:
+        # C 层 int_to_bytes(n, size[, endian[, signed]])：2-4 参，**全量透传**。
+        # M186 修 PX-DEF-018/020：修前只透传到第 3 参 ⇒ ① 缺参时 `args[1]` 越界，报晦涩的
+        #   `R1003: 索引越界: 1 (len=1)`（编译轨给 R1002 参数错）；② `signed` 被静默丢弃 ⇒
+        #   负值补码编码与编译轨分叉（实测 -5 → 解释轨 "0.0" vs 编译轨 fffb）。
+        if len(args) < 2 or len(args) > 4:
+            return Err(i_r1002("int_to_bytes 需要 (n, size[, endian[, signed]]) 参数", pos))
+        if len(args) == 2:
+            return Ok(int_to_bytes(args[0], args[1]))
+        if len(args) == 3:
             return Ok(int_to_bytes(args[0], args[1], args[2]))
-        return Ok(int_to_bytes(args[0], args[1]))
+        return Ok(int_to_bytes(args[0], args[1], args[2], args[3]))
     if name == "bytes_to_int":
+        # M186 修 PX-DEF-019：修前只透传第 1 参 ⇒ endian/signed 被**静默忽略**
+        #   （`bytes_to_int(0102, "little")` 解释轨返回大端 258，编译轨返回小端 513）。
         if len(args) < 1 or len(args) > 3:
             return Err(i_r1002("bytes_to_int 需要 (bytes[, endian[, signed]]) 参数", pos))
-        return Ok(bytes_to_int(args[0]))
+        if len(args) == 1:
+            return Ok(bytes_to_int(args[0]))
+        if len(args) == 2:
+            return Ok(bytes_to_int(args[0], args[1]))
+        return Ok(bytes_to_int(args[0], args[1], args[2]))
     # ---- M62-L7：bytes 族白名单补齐（pxi 双模式对齐编译模式；C runtime 已注册，pxi 直调） ----
     # 语义：参数个数/类型错误由 C 层 px_error 终止（编程契约，与编译模式一致——与
     # read_file 等 io 可恢复错误走 Err 不同，bytes 族参数错属编程契约）。

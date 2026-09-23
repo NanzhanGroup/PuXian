@@ -1,0 +1,6 @@
+# M186 拒绝侧 1：int_to_bytes 缺参（PX-DEF-018）
+# 修前：解释轨 `R1003: 索引越界: 1 (len=1)`（args[1] 越界）vs 编译轨 R1002 参数错
+def main():
+    print("before")
+    print(str(int_to_bytes(1)))
+    print("after")

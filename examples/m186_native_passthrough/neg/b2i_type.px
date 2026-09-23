@@ -1,0 +1,5 @@
+# M186 拒绝侧 4：bytes_to_int 参数类型错（非 bytes）
+def main():
+    print("before")
+    print(str(bytes_to_int("01")))
+    print("after")
