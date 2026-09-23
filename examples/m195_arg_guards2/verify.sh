@@ -14,6 +14,12 @@
 #        ⇒ `read_bytes(12345)` 会去开一个叫 "12345" 的文件（看似成功实则无意义）。
 #   另修 **缺陷 226**：解释轨 `range` 的守卫**报错参数错位**（`range(0,1.5)` 报「实际是 int」
 #   —— 取的是 args[0] 的类型）且与 native **同码不同文** ⇒ 两侧统一为点名出错参数。
+# ⚠️⚠️ **一处分歧轮内的方向修正（值得记住）**：`sleep`/`sleep_us` 起初也按「补 px_arg_int」处理
+#   ⇒ 全量门当场判红 **2 项**（m118 与 m120 的内嵌程序都写了 `sleep(0.1)`/`sleep(1.5)`）。
+#   判定：**时长的 float 不是"错的类型"，而是"更精确的时长"** —— 正确的是让小数**真正生效**
+#   （Python `time.sleep(0.5)` 同向），而不是报错。⇒ 新增 `px_arg_dur_ns`（接受 int|float，
+#   返回纳秒），顺带干掉速查表里那条「`sleep(0.5)` 等于不睡」的老警告（静默错值）。
+#   教训：**收紧类型口径前，先跑全量门看生态用法** —— 这条 3 分钟内就抓到 2 处。
 # 判据：
 #   [1] 静态：`scan_errcodes.py` 新增判据 ⑦（`[S6]`）—— 覆盖**全部 native 函数**，
 #       397 个函数 · 未豁免缺检查 **0** · 豁免 24/24（表内每条须在源码里找得到 + 理由非空 +
@@ -50,8 +56,8 @@ trap 'restore_all' EXIT
 
 # ── 前置不变量：本轮改动必须在位 ──
 for pat in 'px_arg_int(args[0], "range", "end")' \
-           'px_arg_int(args[0], "sleep", "ms")' \
-           'px_arg_int(args[0], "sleep_us", "us")' \
+           'px_arg_dur_ns(args[0], "sleep", "ms", 1000000.0)' \
+           'px_arg_dur_ns(args[0], "sleep_us", "us", 1000.0)' \
            'px_arg_int(args[0], "chr", "码点")' \
            'px_arg_int(args[0], "bit_count", "n")' \
            'px_arg_int(args[0], "bit_length", "n")' \
