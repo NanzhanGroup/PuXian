@@ -1367,7 +1367,13 @@ int64_t px_h3_server_listen_stateless(int port, const char* cert, const char* ke
 // h3_server_listen_stateless(port:int[, cert:str, key:str]) -> int
 static LXValue bi_h3_server_listen_stateless(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) px_error("R1002: h3_server_listen_stateless 需要 (port: int[, cert: str, key: str])");
+    // M195（缺陷 223）：修前是 `nargs < 1`（**无上界**）——
+    //   `h3_server_listen_stateless(9000, "c", "k", 多余的)` 被静默接受；`(9000, "c")`（缺 key）也会静默
+    //   把 cert 丢掉。M190 的普查只覆盖「三轨 rc **分叉**」，这一类是三轨一致的宽容。
+    if (nargs != 1 && nargs != 3)
+        px_error("R1002: h3_server_listen_stateless 需要 (port) 或 (port, cert, key) 参数");
+    if (args[0].type != PX_INT)
+        px_error("R1002: h3_server_listen_stateless 的 port 需要整数，实际是 %s", px_type_name(args[0]));
     int port = (int)args[0].as.i;
     const char* cert = "";
     const char* key = "";
@@ -1395,7 +1401,13 @@ int64_t px_h3_server_listen_pipe(int port, const char* cert, const char* key) {
 // vhost/路由/限流/静态/.px 管道（与 HTTP/1.1 px_serve 同一逻辑）。→ listener id | -1
 static LXValue bi_h3_server_listen(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) px_error("R1002: h3_server_listen 需要 (port: int[, cert: str, key: str])");
+    // M195（缺陷 223）：修前是 `nargs < 1`（**无上界**）——
+    //   `h3_server_listen(9000, "c", "k", 多余的)` 被静默接受；`(9000, "c")`（缺 key）也会静默
+    //   把 cert 丢掉。M190 的普查只覆盖「三轨 rc **分叉**」，这一类是三轨一致的宽容。
+    if (nargs != 1 && nargs != 3)
+        px_error("R1002: h3_server_listen 需要 (port) 或 (port, cert, key) 参数");
+    if (args[0].type != PX_INT)
+        px_error("R1002: h3_server_listen 的 port 需要整数，实际是 %s", px_type_name(args[0]));
     int port = (int)args[0].as.i;
     const char* cert = "";
     const char* key = "";

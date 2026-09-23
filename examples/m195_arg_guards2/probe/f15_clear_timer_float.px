@@ -1,0 +1,2 @@
+print("before")
+print(clear_timer(1.5))

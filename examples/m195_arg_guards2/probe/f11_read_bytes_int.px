@@ -1,0 +1,2 @@
+print("before")
+print(read_bytes(12345))

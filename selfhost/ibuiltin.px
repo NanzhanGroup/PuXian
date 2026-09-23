@@ -1291,8 +1291,17 @@ def i_builtin_range(args, pos):
         step = args[2]
     else:
         return Err(i_r1002("range 需要 1-3 个参数", pos))
-    if type(start) != "int" or type(end) != "int" or type(step) != "int":
-        return Err(i_r1002("期望整数，实际是 " + i_type_name(args[0]), pos))
+    # M195（第 73 轮 · 缺陷 226）：修前**报错参数错位** —— `range(0, 1.5)` 报的是
+    #   「期望整数，实际是 int」（取的是 args[0] 的类型，而错的其实是 end）⇒ 用户按消息
+    #   去改第一个参数，改了也没用。且文案与 native 不一致（native 侧是
+    #   `range 的 end 需要整数，实际是 float`）⇒ **同码不同文**。现在两侧同码同文，
+    #   且点名**出错的那个参数**。
+    if type(start) != "int":
+        return Err(i_r1002("range 的 start 需要整数，实际是 " + i_type_name(start), pos))
+    if type(end) != "int":
+        return Err(i_r1002("range 的 end 需要整数，实际是 " + i_type_name(end), pos))
+    if type(step) != "int":
+        return Err(i_r1002("range 的 step 需要整数，实际是 " + i_type_name(step), pos))
     if step == 0:
         return Err(i_r1006("range step 不能为 0", pos))
     return Ok(range(start, end, step))

@@ -136,7 +136,8 @@ static LXValue bi_onnx_info(LXValue* args, int nargs, void* ctx) {
     char* j;
     (void)ctx;
     if (nargs != 1) px_error("R1002: onnx_info 需要 1 个参数 (id)");
-    m = onnx_slot_get((int)args[0].as.i);
+    // M195：`(int)args[0].as.i` 对 float 读的是**位模式**（1.5 ⇒ 天文数字）⇒ 显式判 int
+    m = onnx_slot_get((int)px_arg_int(args[0], "onnx_info", "id"));
     if (!m) return px_err(px_str("onnx: 无效或已关闭的模型 id"));
     j = onnx_model_info_json(m);
     if (!j) return px_err(px_str("onnx: 结构渲染失败（内存不足）"));
@@ -155,7 +156,7 @@ static LXValue bi_onnx_initializer(LXValue* args, int nargs, void* ctx) {
     LXValue dims;
     (void)ctx;
     if (nargs != 2) px_error("R1002: onnx_initializer 需要 2 个参数 (id, name)");
-    m = onnx_slot_get((int)args[0].as.i);
+    m = onnx_slot_get((int)px_arg_int(args[0], "onnx_initializer", "id"));
     if (!m) return px_err(px_str("onnx: 无效或已关闭的模型 id"));
     if (args[1].type != PX_STR) return px_err(px_str("onnx: 名字必须是字符串"));
     t = onnx_find_init(m, px_val_cstr(args[1]));
@@ -186,7 +187,7 @@ static LXValue bi_onnx_initializer_names(LXValue* args, int nargs, void* ctx) {
     int i;
     (void)ctx;
     if (nargs != 1) px_error("R1002: onnx_initializer_names 需要 1 个参数 (id)");
-    m = onnx_slot_get((int)args[0].as.i);
+    m = onnx_slot_get((int)px_arg_int(args[0], "onnx_initializer_names", "id"));
     if (!m) return px_err(px_str("onnx: 无效或已关闭的模型 id"));
     lst = px_list(0);
     px_root_push();   // M170（缺陷 187 同族）：lst 跨循环内 px_str 分配
@@ -203,7 +204,7 @@ static LXValue bi_onnx_model_close(LXValue* args, int nargs, void* ctx) {
     char* path = NULL;
     (void)ctx;
     if (nargs != 1) px_error("R1002: onnx_model_close 需要 1 个参数 (id)");
-    if (!onnx_slot_take((int)args[0].as.i, &m, &path)) return px_bool(0);
+    if (!onnx_slot_take((int)px_arg_int(args[0], "onnx_model_close", "id"), &m, &path)) return px_bool(0);
     free(path);
     onnx_model_free(m);
     return px_bool(1);
@@ -327,7 +328,7 @@ static LXValue bi_onnx_run(LXValue* args, int nargs, void* ctx) {
     LXValue out;
     (void)ctx;
     if (nargs != 2) px_error("R1002: onnx_run 需要 2 个参数 (id, feeds)");
-    m = onnx_slot_get((int)args[0].as.i);
+    m = onnx_slot_get((int)px_arg_int(args[0], "onnx_run", "id"));
     if (!m) return px_err(px_str("onnx: 无效或已关闭的模型 id"));
     if (args[1].type != PX_DICT) return px_err(px_str("onnx: feeds 必须是字典"));
     {

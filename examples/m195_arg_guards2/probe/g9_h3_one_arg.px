@@ -1,0 +1,2 @@
+let l = h3_server_listen(0)
+print(l != null)
