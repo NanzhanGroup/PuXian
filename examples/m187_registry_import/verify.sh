@@ -81,13 +81,21 @@ chk "[1] 多文件包已入库（qrcode=4 · mysql=3 · xlsx=2）" "[ \"\$(ls $R
 echo "=== [2] 全量：每包 pxpkg 装 + import 解释轨跑通（$N 包）"
 APP="$W/app"; mkdir -p "$APP"; cd "$APP"
 export PX_REGISTRY="$REG"
-"$ROOT/tools/pxpkg" init --name m187app > /dev/null 2>&1
-okc=0; errlist=""
+# M188-DIAG：这三步的输出原来被吞掉 / 只打 5 行 ⇒ CI 上根因不可见（job 日志 403、
+#   注解只能看到"目录数=0"）。现在**无条件**把关键输出打进 stdout（含 ❌/FAIL 便于注解抓取）。
+"$ROOT/tools/pxpkg" init --name m187app > "$W/init.log" 2>&1 || { echo "❌ pxpkg init 失败（rc=$?）"; tail -10 "$W/init.log"; }
+echo "  --- init：px.toml 前 5 行 ---"; head -5 px.toml 2>&1
+okc=0; errlist=""; addfail=""
 for i in $(seq 0 $((N-1))); do
     p="${PKGS[$i]}"
-    "$ROOT/tools/pxpkg" add "$p@0.1.0" > /dev/null 2>&1
+    if ! "$ROOT/tools/pxpkg" add "$p@0.1.0" > "$W/add_$p.log" 2>&1; then addfail="$addfail $p"; fi
 done
-"$ROOT/tools/pxpkg" install > "$W/install.log" 2>&1 || { echo "    pxpkg install 失败"; tail -5 "$W/install.log"; }
+[ -n "$addfail" ] && echo "❌ pxpkg add 失败 $(( $(echo $addfail | wc -w) )) 包：$addfail"
+[ -n "$addfail" ] && { echo "  --- 首个失败包的 add 输出 ---"; tail -15 "$W/add_$(echo $addfail | awk '{print $1}').log"; }
+if ! "$ROOT/tools/pxpkg" install > "$W/install.log" 2>&1; then echo "❌ pxpkg install 失败"; fi
+echo "  --- install 输出尾部 20 行 ---"; tail -20 "$W/install.log"
+echo "  --- .px_modules 实测 ---"; ls .px_modules 2>&1 | head -8; echo "  (目录数=$(ls .px_modules 2>/dev/null | wc -l))"
+echo "  --- px.toml 依赖段 ---"; grep -c '=' px.toml 2>/dev/null
 n_inst="$(ls .px_modules 2>/dev/null | wc -l)"
 chk "[2] pxpkg 一次装齐 $N 包（.px_modules 目录数 = $N）" "[ \"$n_inst\" = \"$N\" ]"
 n_entry=0
