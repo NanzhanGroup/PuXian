@@ -1,0 +1,2 @@
+print("before")
+print(xml_parse(1))

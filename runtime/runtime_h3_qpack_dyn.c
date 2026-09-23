@@ -248,7 +248,7 @@ static int qd_collect_fields(LXValue headers, qd_field* f, int maxf) {
 // ==================== h3_qs_open / close ====================
 static LXValue bi_qs_open(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) px_error("h3_qs_open 需要 (max_capacity: int)");
+    if (nargs < 1 || args[0].type != PX_INT) px_error("R1002: h3_qs_open 需要 (max_capacity: int)");
     int64_t cap = args[0].as.i;
     if (cap < 0) cap = 0;
     if (cap > QD_CAP_MAX) cap = QD_CAP_MAX;
@@ -322,7 +322,7 @@ static qd_entry* qd_dyn_at_abs(qd_entry* t, int head, int len, uint64_t next_abs
 // h3_qs_enc(sess, headers) -> bytes
 static LXValue bi_qs_enc(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 2 || args[0].type != PX_INT) px_error("h3_qs_enc 需要 (sess, headers: list)");
+    if (nargs < 2 || args[0].type != PX_INT) px_error("R1002: h3_qs_enc 需要 (sess, headers: list)");
     qd_sess* s = qd_get(args[0].as.i);
     if (!s) return px_null();
     qd_field f[512];

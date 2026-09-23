@@ -1,0 +1,4 @@
+def h():
+    return "ok"
+print("before")
+print(route(1, "/x", h))

@@ -1,0 +1,2 @@
+print("before")
+print(sqlite_open(1))

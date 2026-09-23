@@ -43,14 +43,14 @@ static const unsigned char* img_bytes(LXValue v, int* len) {
         *len = v.as.obj->as.str.len;
         return (const unsigned char*)v.as.obj->as.str.data;
     }
-    px_error("期望字符串或 bytes，实际是 %s", px_type_name(v));
+    px_error("R1002: 期望字符串或 bytes，实际是 %s", px_type_name(v));
     return NULL;
 }
 
 // img_decode(data) → {w,h,pixels:bytes RGBA} | Err
 LXValue bi_img_decode(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) px_error("img_decode 需要 1 个参数: (data)");
+    if (nargs != 1) px_error("R1002: img_decode 需要 1 个参数: (data)");
     int dlen = 0;
     const unsigned char* data = img_bytes(args[0], &dlen);
     if (!data || dlen <= 0) return px_err(px_str("img: 空输入"));
@@ -132,12 +132,12 @@ static void img_nearest(const unsigned char* src, int sw, int sh,
 // img_scale(pixels RGBA, w, h, nw, nh) → bytes RGBA | Err
 LXValue bi_img_scale(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 5 && nargs != 6) px_error("img_scale 需要 (pixels, w, h, nw, nh[, opts]) 参数");
+    if (nargs != 5 && nargs != 6) px_error("R1002: img_scale 需要 (pixels, w, h, nw, nh[, opts]) 参数");
     // M129（缺陷 39）：可选 opts {"filter": "nearest"|"bilinear"}
     //   缺省 "bilinear"（保持既有行为逐字节不变）；"nearest" = Go 手写缩放的等价物。
     int use_nearest = 0;
     if (nargs == 6) {
-        if (args[5].type != PX_DICT) px_error("img_scale 的 opts 需要 dict");
+        if (args[5].type != PX_DICT) px_error("R1002: img_scale 的 opts 需要 dict");
         LXObject* od = args[5].as.obj;
         for (int i = 0; i < od->as.dict.len; i++) {
             const char* k = od->as.dict.keys[i];
@@ -153,7 +153,7 @@ LXValue bi_img_scale(LXValue* args, int nargs, void* ctx) {
     int64_t w = args[1].as.i, h = args[2].as.i, nw = args[3].as.i, nh = args[4].as.i;
     if (args[1].type != PX_INT || args[2].type != PX_INT ||
         args[3].type != PX_INT || args[4].type != PX_INT)
-        px_error("img_scale 的 w/h/nw/nh 需要 int");
+        px_error("R1002: img_scale 的 w/h/nw/nh 需要 int");
     if (w <= 0 || h <= 0 || nw <= 0 || nh <= 0 || nw > 100000 || nh > 100000)
         return px_err(px_str("img: 非法尺寸"));
     if (!pix || plen < w * h * 4) return px_err(px_str("img: pixels 长度不足 w*h*4"));
@@ -187,12 +187,12 @@ static void jpg_write_fn(void* ctx, void* data, int size) {
 // img_encode_jpeg(w, h, pixels RGBA, q) → bytes(JPEG) | Err
 LXValue bi_img_encode_jpeg(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 4) px_error("img_encode_jpeg 需要 4 个参数: (w, h, pixels, q)");
+    if (nargs != 4) px_error("R1002: img_encode_jpeg 需要 4 个参数: (w, h, pixels, q)");
     int plen = 0;
     const unsigned char* pix = img_bytes(args[2], &plen);
     int64_t w = args[0].as.i, h = args[1].as.i, q = args[3].as.i;
     if (args[0].type != PX_INT || args[1].type != PX_INT || args[3].type != PX_INT)
-        px_error("img_encode_jpeg 的 w/h/q 需要 int");
+        px_error("R1002: img_encode_jpeg 的 w/h/q 需要 int");
     if (w <= 0 || h <= 0 || (int64_t)w * h > 100000000LL)
         return px_err(px_str("img: 非法尺寸"));
     if (!pix || plen < w * h * 4) return px_err(px_str("img: pixels 长度不足 w*h*4"));

@@ -864,7 +864,7 @@ static void quic_srv_close_listener(int64_t lid) {
 // 语言 API：quic_h3_listen(port:int, cert:str, key:str) → listener id
 static LXValue bi_quic_h3_listen(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) px_error("quic_h3_listen 需要 (port: int[, cert: str, key: str])");
+    if (nargs < 1 || args[0].type != PX_INT) px_error("R1002: quic_h3_listen 需要 (port: int[, cert: str, key: str])");
     int port = (int)args[0].as.i;
     const char* cert = "";
     const char* key = "";
@@ -1054,7 +1054,7 @@ static quic_listener* quic_get_listener(int64_t id) {
 
 static LXValue bi_quic_listen(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) px_error("quic_listen 需要 (port: int)");
+    if (nargs < 1 || args[0].type != PX_INT) px_error("R1002: quic_listen 需要 (port: int)");
     int port = (int)args[0].as.i;
     if (!g_quic_init) {
         ngtcp2_crypto_quictls_init();
@@ -1109,7 +1109,7 @@ static quic_conn* quic_get_conn(int64_t id) {
 static LXValue bi_quic_accept(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 2 || args[0].type != PX_INT || args[1].type != PX_INT)
-        px_error("quic_accept 需要 (listener: int, timeout_ms: int)");
+        px_error("R1002: quic_accept 需要 (listener: int, timeout_ms: int)");
     quic_listener* ql = quic_get_listener(args[0].as.i);
     if (!ql) return px_int(-1);
     int timeout_ms = (int)args[1].as.i;
@@ -1232,7 +1232,7 @@ static int quic_unhex(const char* in, size_t len, unsigned char* out);
 // M54-S1：TLS1.3 会话恢复 —— impl 共用主体；sess_hex 非空 → SSL_set_session 恢复
 static LXValue quic_conn_connect_impl(LXValue* args, int nargs, const char* sess_hex) {
     if (nargs < 3 || args[0].type != PX_STR || args[1].type != PX_INT || args[2].type != PX_STR)
-        px_error("quic_connect 需要 (ip: str, port: int, alpn: str)");
+        px_error("R1002: quic_connect 需要 (ip: str, port: int, alpn: str)");
     const char* ip = args[0].as.obj->as.str.data;
     int port = (int)args[1].as.i;
     const char* alpn = args[2].as.obj->as.str.data;
@@ -1403,7 +1403,7 @@ static LXValue bi_quic_connect_resume(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 4 || args[0].type != PX_STR || args[1].type != PX_INT ||
         args[2].type != PX_STR || args[3].type != PX_STR)
-        px_error("quic_connect_resume 需要 (ip: str, port: int, alpn: str, session: str)");
+        px_error("R1002: quic_connect_resume 需要 (ip: str, port: int, alpn: str, session: str)");
     return quic_conn_connect_impl(args, 4, args[3].as.obj->as.str.data);
 }
 
@@ -1412,7 +1412,7 @@ static LXValue bi_quic_connect_resume(LXValue* args, int nargs, void* ctx) {
 // 保证返回的 session 可用于后续恢复。
 static LXValue bi_quic_session_save(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) px_error("quic_session_save 需要 (conn: int)");
+    if (nargs < 1 || args[0].type != PX_INT) px_error("R1002: quic_session_save 需要 (conn: int)");
     quic_conn* qc = quic_get_conn(args[0].as.i);
     if (!qc || !qc->ssl) return px_str("");
     int waited = 0;
@@ -1441,7 +1441,7 @@ static LXValue bi_quic_session_save(LXValue* args, int nargs, void* ctx) {
 // quic_conn_resumed(conn) -> bool：本连接是否为会话恢复（1-RTT）握手
 static LXValue bi_quic_conn_resumed(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) px_error("quic_conn_resumed 需要 (conn: int)");
+    if (nargs < 1 || args[0].type != PX_INT) px_error("R1002: quic_conn_resumed 需要 (conn: int)");
     quic_conn* qc = quic_get_conn(args[0].as.i);
     if (!qc || !qc->ssl) return px_bool(false);
     return px_bool(SSL_session_reused(qc->ssl) == 1);
@@ -1468,7 +1468,7 @@ static LXValue bi_quic_conn_resumed(LXValue* args, int nargs, void* ctx) {
 static LXValue quic_conn_connect_0rtt_impl(LXValue* args, int nargs) {
     if (nargs < 4 || args[0].type != PX_STR || args[1].type != PX_INT ||
         args[2].type != PX_STR || args[3].type != PX_STR)
-        px_error("quic_connect_0rtt 需要 (ip: str, port: int, alpn: str, session0rtt: str)");
+        px_error("R1002: quic_connect_0rtt 需要 (ip: str, port: int, alpn: str, session0rtt: str)");
     const char* ip = args[0].as.obj->as.str.data;
     int port = (int)args[1].as.i;
     const char* alpn = args[2].as.obj->as.str.data;
@@ -1650,7 +1650,7 @@ static LXValue quic_conn_connect_0rtt_impl(LXValue* args, int nargs) {
 // transport params（握手完成且 0-RTT 可用时 encode；失败仅输出 session 段）。
 static LXValue bi_quic_0rtt_save(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) px_error("quic_0rtt_save 需要 (conn: int)");
+    if (nargs < 1 || args[0].type != PX_INT) px_error("R1002: quic_0rtt_save 需要 (conn: int)");
     quic_conn* qc = quic_get_conn(args[0].as.i);
     if (!qc || !qc->ssl) return px_str("");
     int waited = 0;
@@ -1700,7 +1700,7 @@ static LXValue bi_quic_connect_0rtt(LXValue* args, int nargs, void* ctx) {
 // quic_0rtt_rejected(conn) -> bool：本连接 early data 被服务端拒绝
 static LXValue bi_quic_0rtt_rejected(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) px_error("quic_0rtt_rejected 需要 (conn: int)");
+    if (nargs < 1 || args[0].type != PX_INT) px_error("R1002: quic_0rtt_rejected 需要 (conn: int)");
     quic_conn* qc = quic_get_conn(args[0].as.i);
     if (!qc || !qc->ssl) return px_bool(false);
     return px_bool(qc->early_rejected ? true : false);
@@ -1709,7 +1709,7 @@ static LXValue bi_quic_0rtt_rejected(LXValue* args, int nargs, void* ctx) {
 // quic_conn_handshake_done(conn) -> bool：握手是否已完成
 static LXValue bi_quic_conn_handshake_done(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) px_error("quic_conn_handshake_done 需要 (conn: int)");
+    if (nargs < 1 || args[0].type != PX_INT) px_error("R1002: quic_conn_handshake_done 需要 (conn: int)");
     quic_conn* qc = quic_get_conn(args[0].as.i);
     if (!qc || !qc->conn) return px_bool(false);
     return px_bool(qc->handshake_done ? true : false);
@@ -1734,7 +1734,7 @@ static LXValue bi_quic_conn_handshake_done(LXValue* args, int nargs, void* ctx) 
 static LXValue bi_quic_migrate(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 3 || args[0].type != PX_INT || args[1].type != PX_STR || args[2].type != PX_INT)
-        px_error("quic_migrate 需要 (conn: int, local_ip: str, local_port: int)");
+        px_error("R1002: quic_migrate 需要 (conn: int, local_ip: str, local_port: int)");
     int64_t conn = args[0].as.i;
     const char* lip = args[1].as.obj->as.str.data;
     int lport = (int)args[2].as.i;
@@ -1797,7 +1797,7 @@ static void quic_addr_to_str(const struct sockaddr_storage* sa, char* out, size_
 // quic_conn_path(conn) -> str：当前对端地址
 static LXValue bi_quic_conn_path(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) px_error("quic_conn_path 需要 (conn: int)");
+    if (nargs < 1 || args[0].type != PX_INT) px_error("R1002: quic_conn_path 需要 (conn: int)");
     quic_conn* qc = quic_get_conn(args[0].as.i);
     if (!qc) return px_str("");
     char buf[128];
@@ -1808,7 +1808,7 @@ static LXValue bi_quic_conn_path(LXValue* args, int nargs, void* ctx) {
 // quic_conn_local(conn) -> str：当前本地地址（client 迁移后源端口变化）
 static LXValue bi_quic_conn_local(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) px_error("quic_conn_local 需要 (conn: int)");
+    if (nargs < 1 || args[0].type != PX_INT) px_error("R1002: quic_conn_local 需要 (conn: int)");
     quic_conn* qc = quic_get_conn(args[0].as.i);
     if (!qc) return px_str("");
     char buf[128];
@@ -1830,7 +1830,7 @@ static LXValue bi_quic_conn_local(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_quic_set_max_client_streams(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 2 || args[0].type != PX_INT || args[1].type != PX_INT)
-        px_error("quic_set_max_client_streams 需要 (listener: int, n_bidi: int)");
+        px_error("R1002: quic_set_max_client_streams 需要 (listener: int, n_bidi: int)");
     quic_listener* ql = quic_get_listener(args[0].as.i);
     if (!ql) return px_bool(false);
     ql->max_client_bidi = (int)args[1].as.i;
@@ -1840,7 +1840,7 @@ static LXValue bi_quic_set_max_client_streams(LXValue* args, int nargs, void* ct
 static LXValue bi_quic_extend_max_streams(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 2 || args[0].type != PX_INT || args[1].type != PX_INT)
-        px_error("quic_extend_max_streams 需要 (listener: int, add_bidi: int)");
+        px_error("R1002: quic_extend_max_streams 需要 (listener: int, add_bidi: int)");
     int64_t lid = args[0].as.i;
     int add = (int)args[1].as.i;
     quic_listener* ql = quic_get_listener(lid);
@@ -1860,7 +1860,7 @@ static LXValue bi_quic_extend_max_streams(LXValue* args, int nargs, void* ctx) {
 
 static LXValue bi_quic_streams_left(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) px_error("quic_streams_left 需要 (conn: int)");
+    if (nargs < 1 || args[0].type != PX_INT) px_error("R1002: quic_streams_left 需要 (conn: int)");
     quic_conn* qc = quic_get_conn(args[0].as.i);
     if (!qc || !qc->conn) return px_int(-1);
     return px_int((int)ngtcp2_conn_get_streams_bidi_left2(qc->conn));
@@ -1937,7 +1937,7 @@ static int64_t quic_read_stream_bytes(quic_conn* qc, int64_t sid,
 // ---------- quic_open_stream（新 M50：本地 open 一条新双向流）----------
 static LXValue bi_quic_open_stream(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) px_error("quic_open_stream 需要 (conn: int)");
+    if (nargs < 1 || args[0].type != PX_INT) px_error("R1002: quic_open_stream 需要 (conn: int)");
     quic_conn* qc = quic_get_conn(args[0].as.i);
     if (!qc || !qc->conn) return px_int(-1);
     int64_t sid = -1;
@@ -1952,7 +1952,7 @@ static LXValue bi_quic_open_stream(LXValue* args, int nargs, void* ctx) {
 // 由 ngtcp2 按序分配，首条 uni 即控制流，符合 RFC 9114 §6.2.1）。
 static LXValue bi_quic_open_uni_stream(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) px_error("quic_open_uni_stream 需要 (conn: int)");
+    if (nargs < 1 || args[0].type != PX_INT) px_error("R1002: quic_open_uni_stream 需要 (conn: int)");
     quic_conn* qc = quic_get_conn(args[0].as.i);
     if (!qc || !qc->conn) return px_int(-1);
     int64_t sid = -1;
@@ -1966,7 +1966,7 @@ static LXValue bi_quic_open_uni_stream(LXValue* args, int nargs, void* ctx) {
 // ---------- quic_send（旧：写默认流，单流兼容）----------
 static LXValue bi_quic_send(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 2 || args[0].type != PX_INT) px_error("quic_send 需要 (conn: int, data: str)");
+    if (nargs < 2 || args[0].type != PX_INT) px_error("R1002: quic_send 需要 (conn: int, data: str)");
     quic_conn* qc = quic_get_conn(args[0].as.i);
     if (!qc || !qc->conn) return px_int(-1);
     int64_t sid = quic_default_stream(qc);
@@ -1976,7 +1976,7 @@ static LXValue bi_quic_send(LXValue* args, int nargs, void* ctx) {
     if (args[1].type == PX_STR || args[1].type == PX_BYTES) {
         data = (const uint8_t*)args[1].as.obj->as.str.data;
         len = (size_t)args[1].as.obj->as.str.len;
-    } else { px_error("quic_send 的 data 需要 str"); return px_int(-1); }
+    } else { px_error("R1002: quic_send 的 data 需要 str"); return px_int(-1); }
     return px_int(quic_write_stream_bytes(qc, sid, data, len));
 }
 
@@ -1984,7 +1984,7 @@ static LXValue bi_quic_send(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_quic_send_stream(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 3 || args[0].type != PX_INT || args[1].type != PX_INT)
-        px_error("quic_send_stream 需要 (conn: int, sid: int, data: str)");
+        px_error("R1002: quic_send_stream 需要 (conn: int, sid: int, data: str)");
     quic_conn* qc = quic_get_conn(args[0].as.i);
     if (!qc || !qc->conn) return px_int(-1);
     int64_t sid = args[1].as.i;
@@ -1993,7 +1993,7 @@ static LXValue bi_quic_send_stream(LXValue* args, int nargs, void* ctx) {
     if (args[2].type == PX_STR || args[2].type == PX_BYTES) {
         data = (const uint8_t*)args[2].as.obj->as.str.data;
         len = (size_t)args[2].as.obj->as.str.len;
-    } else { px_error("quic_send_stream 的 data 需要 str"); return px_int(-1); }
+    } else { px_error("R1002: quic_send_stream 的 data 需要 str"); return px_int(-1); }
     return px_int(quic_write_stream_bytes(qc, sid, data, len));
 }
 
@@ -2001,7 +2001,7 @@ static LXValue bi_quic_send_stream(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_quic_poll(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 2 || args[0].type != PX_INT || args[1].type != PX_INT)
-        px_error("quic_poll 需要 (conn: int, timeout_ms: int)");
+        px_error("R1002: quic_poll 需要 (conn: int, timeout_ms: int)");
     quic_conn* qc = quic_get_conn(args[0].as.i);
     if (!qc || !qc->conn) return px_int(-1);
     int timeout_ms = (int)args[1].as.i;
@@ -2017,7 +2017,7 @@ static LXValue bi_quic_poll(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_quic_recv(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 2 || args[0].type != PX_INT || args[1].type != PX_INT)
-        px_error("quic_recv 需要 (conn: int, maxlen: int)");
+        px_error("R1002: quic_recv 需要 (conn: int, maxlen: int)");
     quic_conn* qc = quic_get_conn(args[0].as.i);
     if (!qc || !qc->conn) return px_str("");
     int maxlen = (int)args[1].as.i;
@@ -2044,7 +2044,7 @@ static LXValue bi_quic_recv_stream(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 4 || args[0].type != PX_INT || args[1].type != PX_INT ||
         args[2].type != PX_INT || args[3].type != PX_INT)
-        px_error("quic_recv_stream 需要 (conn: int, sid: int, maxlen: int, timeout_ms: int)");
+        px_error("R1002: quic_recv_stream 需要 (conn: int, sid: int, maxlen: int, timeout_ms: int)");
     quic_conn* qc = quic_get_conn(args[0].as.i);
     if (!qc || !qc->conn) return px_str("");
     int64_t sid = args[1].as.i;
@@ -2060,7 +2060,7 @@ static LXValue bi_quic_recv_stream(LXValue* args, int nargs, void* ctx) {
 // ---------- quic_close ----------
 static LXValue bi_quic_close(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) px_error("quic_close 需要 (conn: int)");
+    if (nargs < 1 || args[0].type != PX_INT) px_error("R1002: quic_close 需要 (conn: int)");
     quic_conn* qc = quic_get_conn(args[0].as.i);
     if (!qc) return px_bool(false);
     if (qc->ssl) { SSL_free(qc->ssl); qc->ssl = NULL; }
@@ -2074,7 +2074,7 @@ static LXValue bi_quic_close(LXValue* args, int nargs, void* ctx) {
 
 static LXValue bi_quic_close_listener(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 1 || args[0].type != PX_INT) px_error("quic_close_listener 需要 (listener: int)");
+    if (nargs < 1 || args[0].type != PX_INT) px_error("R1002: quic_close_listener 需要 (listener: int)");
     int64_t lid = args[0].as.i;
     quic_listener* ql = quic_get_listener(lid);
     if (!ql) return px_bool(false);

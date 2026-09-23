@@ -377,7 +377,7 @@ LXValue px_h3_qdec(const uint8_t* p, int len) {
 LXValue bi_h3_huff(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 1 || (args[0].type != PX_STR && args[0].type != PX_BYTES))
-        px_error("h3_huff 需要 (s: str|bytes)");
+        px_error("R1002: h3_huff 需要 (s: str|bytes)");
     const char* s = args[0].as.obj->as.str.data;
     int slen = args[0].as.obj->as.str.len;
     int cap = slen * 4 + 16;
@@ -396,7 +396,7 @@ LXValue bi_h3_huff(LXValue* args, int nargs, void* ctx) {
 LXValue bi_h3_unhuff(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 1 || (args[0].type != PX_STR && args[0].type != PX_BYTES))
-        px_error("h3_unhuff 需要 (data: bytes)");
+        px_error("R1002: h3_unhuff 需要 (data: bytes)");
     const uint8_t* p = (const uint8_t*)args[0].as.obj->as.str.data;
     int plen = args[0].as.obj->as.str.len;
     int cap = plen * 2 + 16;

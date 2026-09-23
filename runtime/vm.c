@@ -146,13 +146,13 @@ static LXValue bi_vm_rwlock(LXValue* a, int n, void* ctx) {
 }
 static LXValue bi_vm_spawn(LXValue* a, int n, void* ctx) {
     (void)ctx;
-    if (n < 1 || a[0].type != PX_STR) px_error("spawn 需要函数名（首个参数为 str）");
+    if (n < 1 || a[0].type != PX_STR) px_error("R1002: spawn 需要函数名（首个参数为 str）");
     px_spawn_name(a[0].as.obj->as.str.data, n > 1 ? &a[1] : NULL, n - 1);
     return px_null();
 }
 static LXValue bi_vm_chan_try_recv(LXValue* a, int n, void* ctx) {
     (void)ctx;
-    if (n < 1 || a[0].type != PX_CHAN) px_error("chan_try_recv 需要通道参数");
+    if (n < 1 || a[0].type != PX_CHAN) px_error("R1002: chan_try_recv 需要通道参数");
     LXValue out = px_null();
     int r = px_chan_try_recv(a[0], &out);
     return r ? out : px_null();   // 命中返回收到的值；未命中返回 null
@@ -161,7 +161,7 @@ static LXValue bi_vm_chan_try_recv(LXValue* a, int n, void* ctx) {
 //   交由 select 展开（命中返回真值对象；此处语义：返回 PX_BOOL 命中与否 + 值槽）
 static LXValue bi_vm_select_try(LXValue* a, int n, void* ctx) {
     (void)ctx;
-    if (n < 2 || a[0].type != PX_CHAN) px_error("select_try 需要 (chan, out_slot_ref)");
+    if (n < 2 || a[0].type != PX_CHAN) px_error("R1002: select_try 需要 (chan, out_slot_ref)");
     LXValue out = px_null();
     int r = px_chan_try_recv(a[0], &out);
     // out 以参数传入（占位 LXValue* 引用）：a[1] 为栈上容器值首地址不可改 → 用返回值解
@@ -316,7 +316,7 @@ static LXValue vm_loadk(const PxK* k, const PxBCModule* mod) {
             const PxVMFunc* cf = &mod->funcs[(int)k->i];
             return px_func(cf->name, px_vm_entry, (void*)cf);
         }
-        px_error("VM: LOADK FUNC 函数下标越界 k->i=%lld (nfuncs=%d)", k->i, mod ? mod->nfuncs : -1);
+        px_error("R9001: VM: LOADK FUNC 函数下标越界 k->i=%lld (nfuncs=%d)", k->i, mod ? mod->nfuncs : -1);
         break;
     case PXK_NULL:
     default:        return px_null();
@@ -617,7 +617,7 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
                 PxVMFunc* cf2 = (PxVMFunc*)fnv.as.obj->as.func.ctx;
                 if (argc < cf2->arity) {      // 参数不足（默认参数 S3-B 补）
                     free(abuf);
-                    px_error("VM %s:%d CALL %s 参数不足: 需 %d 给 %d",
+                    px_error("R1005: VM %s:%d CALL %s 参数不足: 需 %d 给 %d",
                              fr->f->name, fr->line, cf2->name, cf2->arity, argc);
                     break;
                 }
@@ -630,12 +630,12 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
                 const PxVMFunc* cf2 = vm_closure_func(cenv);
                 if (!cf2) {
                     free(abuf);
-                    px_error("VM %s:%d CALL 闭包对象缺少所属函数", fr->f->name, fr->line);
+                    px_error("R9001: VM %s:%d CALL 闭包对象缺少所属函数", fr->f->name, fr->line);
                     break;
                 }
                 if (argc < cf2->arity) {
                     free(abuf);
-                    px_error("VM %s:%d CALL %s 参数不足: 需 %d 给 %d",
+                    px_error("R1005: VM %s:%d CALL %s 参数不足: 需 %d 给 %d",
                              fr->f->name, fr->line, cf2->name, cf2->arity, argc);
                     break;
                 }
@@ -675,7 +675,7 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             const PxBCModule* m = cf->mod;
             int fidx = (int)in.b;
             if (!m || fidx < 0 || fidx >= m->nfuncs) {
-                px_error("VM %s:%d MKCLO 函数下标越界 %d (nfuncs=%d)",
+                px_error("R9001: VM %s:%d MKCLO 函数下标越界 %d (nfuncs=%d)",
                          cf->name, fr->line, fidx, m ? m->nfuncs : -1);
                 break;
             }
@@ -699,7 +699,7 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             //   未定义仍报同一文案、取值同在 g_globals_mu 读锁内拷贝）。
             const PxBCModule* m = cf->mod;
             if (!m || in.b >= (uint16_t)m->nG) {
-                px_error("VM %s:%d GETG 全局越界 g=%d (nG=%d)",
+                px_error("R9001: VM %s:%d GETG 全局越界 g=%d (nG=%d)",
                          cf->name, fr->line, in.b, m ? m->nG : -1);
             }
             int gi_g = px_global_resolve_stable(m->G[in.b]);
@@ -711,7 +711,7 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             // A1：v1 经 px_set_global；a=G idx，b=src 槽
             const PxBCModule* m = cf->mod;
             if (!m || in.a >= (uint16_t)m->nG) {
-                px_error("VM %s:%d SETG 全局越界 g=%d (nG=%d)",
+                px_error("R9001: VM %s:%d SETG 全局越界 g=%d (nG=%d)",
                          cf->name, fr->line, in.a, m ? m->nG : -1);
             }
             px_set_global(m->G[in.a], slots[in.b]);
@@ -720,7 +720,7 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
         case PXOP_LOADK: {
             const PxBCModule* m = cf->mod;
             if (!m || in.b >= (uint16_t)m->nK) {
-                px_error("VM %s: LOADK 常量越界 k=%d (nK=%d)",
+                px_error("R9001: VM %s: LOADK 常量越界 k=%d (nK=%d)",
                          cf->name, in.b, m ? m->nK : -1);
             }
             slots[in.a] = vm_loadk(&m->K[in.b], m);
@@ -854,11 +854,11 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
         case PXOP_NEWSTRUCT: {
             const PxBCModule* mm = cf->mod;
             if (!mm || in.b >= (uint16_t)mm->nstructs)
-                px_error("VM %s:%d NEWSTRUCT 元数据越界 st=%d (n=%d)",
+                px_error("R9001: VM %s:%d NEWSTRUCT 元数据越界 st=%d (n=%d)",
                          cf->name, fr->line, in.b, mm ? mm->nstructs : -1);
             const PxStructDef* sd = &mm->structs[in.b];
             if (sd->nfields < 0 || (int)in.c + sd->nfields > fr->nslots)
-                px_error("VM %s:%d NEWSTRUCT 槽越界 base=%d nf=%d", cf->name, fr->line, in.c, sd->nfields);
+                px_error("R9001: VM %s:%d NEWSTRUCT 槽越界 base=%d nf=%d", cf->name, fr->line, in.c, sd->nfields);
             int nf = sd->nfields;
             LXValue* vals = nf > 0 ? (LXValue*)malloc((size_t)nf * sizeof(LXValue)) : NULL;
             char** fns = nf > 0 ? (char**)malloc((size_t)nf * sizeof(char*)) : NULL;
@@ -871,7 +871,7 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
         case PXOP_NEWENUM: {
             const PxBCModule* mm = cf->mod;
             if (!mm || in.b >= (uint16_t)mm->nN || in.c >= (uint16_t)mm->nN)
-                px_error("VM %s:%d NEWENUM 名字越界 b=%d c=%d (nN=%d)",
+                px_error("R9001: VM %s:%d NEWENUM 名字越界 b=%d c=%d (nN=%d)",
                          cf->name, fr->line, in.b, in.c, mm ? mm->nN : -1);
             slots[in.a] = px_enum(mm->N[in.b], mm->N[in.c]);
             break;
@@ -938,7 +938,7 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
         case PXOP_CHKINIT:   // a=值槽, c=N 名字 idx（M181 缺陷 193：哨兵 ⇒ R1001 未定义变量）
             if (cf->mod && in.c < cf->mod->nN)
                 px_chk_uninit(slots[in.a], cf->mod->N[in.c]);
-            else px_error("VM %s:%d CHKINIT 名字越界 n=%d", cf->name, fr->line, in.c);
+            else px_error("R9001: VM %s:%d CHKINIT 名字越界 n=%d", cf->name, fr->line, in.c);
             break;
         case PXOP_SETIDX:    // a=val 槽，b=obj，c=idx（赋值表达式结果=val）
             px_index_set(slots[in.b], slots[in.c], slots[in.a]);
@@ -947,25 +947,25 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             if ((int)in.c + 2 < fr->nslots)
                 slots[in.a] = px_slice(slots[in.b], slots[in.c],
                                            slots[in.c + 1], slots[in.c + 2]);
-            else px_error("VM %s:%d SLICE 槽越界 base=%d", cf->name, fr->line, in.c);
+            else px_error("R9001: VM %s:%d SLICE 槽越界 base=%d", cf->name, fr->line, in.c);
             break;
         case PXOP_GETF:      // a=dst，b=obj，c=N 名字 idx（px_field）
             if (cf->mod && in.c < cf->mod->nN)
                 slots[in.a] = px_field(slots[in.b], cf->mod->N[in.c]);
-            else px_error("VM %s:%d GETF 名字越界 n=%d", cf->name, fr->line, in.c);
+            else px_error("R9001: VM %s:%d GETF 名字越界 n=%d", cf->name, fr->line, in.c);
             break;
         case PXOP_GETF_OPT: { // OptionalField：obj null→null，否则 px_field
             LXValue o = slots[in.b];
             if (cf->mod && in.c < cf->mod->nN)
                 slots[in.a] = px_is_null(o) ? px_null()
                                                 : px_field(o, cf->mod->N[in.c]);
-            else px_error("VM %s:%d GETF_OPT 名字越界 n=%d", cf->name, fr->line, in.c);
+            else px_error("R9001: VM %s:%d GETF_OPT 名字越界 n=%d", cf->name, fr->line, in.c);
             break;
         }
         case PXOP_SETF:      // a=val 槽，b=obj，c=N 名字 idx（px_field_set）
             if (cf->mod && in.c < cf->mod->nN)
                 px_field_set(slots[in.b], cf->mod->N[in.c], slots[in.a]);
-            else px_error("VM %s:%d SETF 名字越界 n=%d", cf->name, fr->line, in.c);
+            else px_error("R9001: VM %s:%d SETF 名字越界 n=%d", cf->name, fr->line, in.c);
             break;
         // CALLM：方法调用桥（px_method obj.name(args..)，obj=槽 b，方法名=N[c]，
         //   fl=argc，实参=槽 b+1..b+argc；返回写槽 a）——px_method 语义=现 C 桥
@@ -996,7 +996,7 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             LXValue r = px_null();
             if (cf->mod && in.c < cf->mod->nN)
                 r = px_method(ov, cf->mod->N[in.c], abuf, argc);
-            else px_error("VM %s:%d CALLM 名字越界 n=%d", cf->name, fr->line, in.c);
+            else px_error("R9001: VM %s:%d CALLM 名字越界 n=%d", cf->name, fr->line, in.c);
             free(abuf);
             if (in.a < fr->nslots) slots[in.a] = r;
             break;
@@ -1029,10 +1029,10 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             LXValue v = slots[in.a];
             if (px_is_result(v)) {
                 if (!px_result_ok(v))
-                    px_error("force unwrap Err: %s", px_to_string(px_result_unwrap(v)));
+                    px_error("R1004: force unwrap Err: %s", px_to_string(px_result_unwrap(v)));
                 v = px_result_unwrap(v);
             }
-            if (px_is_null(v)) px_error("force unwrap null");
+            if (px_is_null(v)) px_error("R1004: force unwrap null");
             slots[in.a] = v;
             break;
         }
@@ -1047,7 +1047,7 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             break;
         default:
             // A1 起逐批实现；错误现场含函数名/行号/op 名，对齐 px_error 语义
-            px_error("VM %s:%d 指令未实现: %s (op=%d)",
+            px_error("R9001: VM %s:%d 指令未实现: %s (op=%d)",
                      cf->name, fr->line, px_op_name(in.op), in.op);
             break;
         }
@@ -1109,7 +1109,7 @@ LXValue px_vm_closure_entry(LXValue* args, int nargs, void* ctx) {
     LXValue env = ctx ? *(LXValue*)ctx : px_null();
     const PxVMFunc* f = vm_closure_func(env);
     if (!f) {
-        px_error("VM: 闭包对象缺少所属函数（env 无 %s）", PX_VM_CLO_KEY);
+        px_error("R9001: VM: 闭包对象缺少所属函数（env 无 %s）", PX_VM_CLO_KEY);
         return px_null();
     }
     PxVmState* st = px_vm_state();
@@ -1124,7 +1124,7 @@ LXValue px_vm_closure_entry(LXValue* args, int nargs, void* ctx) {
 LXValue px_vm_run_module(PxVmState* st, const PxBCModule* m) {
     if (!m) return px_null();
     if (m->top_idx < 0 || m->top_idx >= m->nfuncs) {
-        px_error("VM 模块 %s 无 Top 函数", m->name ? m->name : "?");
+        px_error("R9001: VM 模块 %s 无 Top 函数", m->name ? m->name : "?");
         return px_null();
     }
     // B5：VM 并发/原语构造 native（chan/mutex/rwlock/spawn/chan_try_recv/select_try）

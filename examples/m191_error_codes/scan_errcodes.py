@@ -21,6 +21,10 @@ DOMAIN = [
     r"os_exec", r"沙箱：", r"%s: SO_REUSEPORT",
     r"md5 ", r"sha1 ", r"sha256 ", r"pbkdf2_sha256 ", r"aes ",
     r"zip ", r"内存不足",
+    # ── M193 新增（棘轮欠账第二批：网络族 / VM / 数据族）──
+    r"ws_serve:",              # §3 E2 网络/传输：ws_serve 的 socket 创建/绑定/listen 失败
+    r"XML 解析错误",            # §3 E4 数据/解析：与 json: 同族（XML 解析失败的 13 个站点）
+    r"路由数量超出上限", "中间件数量超出上限",   # §3 E5 资源/上限
 ]
 DOMAIN_RE = re.compile("^(" + "|".join(DOMAIN) + ")")
 
@@ -34,18 +38,26 @@ METHODISH = re.compile(r"^(方法 |list\.index|pop |is_ok|is_err|unwrap|unwrap_e
 #    M192 起 **加密/压缩/归档族五件（aes / zip / rsa / zlib / ed25519）也已全额收口** ——
 #    其条目已从下表**删除**：删除即等价于基线 0，再往这些文件加无码站点会立即判门红。
 UNCODED_BASELINE = {
-    "runtime/coro.c": 1,
-    "runtime/runtime_ffi.c": 3,
-    "runtime/runtime_h3.c": 18,
-    "runtime/runtime_h3_qpack.c": 2,
-    "runtime/runtime_h3_qpack_dyn.c": 2,
-    "runtime/runtime_image.c": 7,
-    "runtime/runtime_quic.c": 28,
-    "runtime/runtime_route.c": 9,
-    "runtime/runtime_sqlite.c": 9,
-    "runtime/runtime_ws.c": 16,
-    "runtime/runtime_xml.c": 23,
-    "runtime/vm.c": 25,
+    # ── M193（第 71 轮）：棘轮欠账**第二批**全部收口 ⇒ 表清空 ──
+    #    收口范围（143 站点 / 12 文件）：
+    #      quic 28 · h3 18 · ws 16 · route 9 · sqlite 9 · xml 23 · image 7 · ffi 3 ·
+    #      vm 25 · coro 1 · h3_qpack 2 · h3_qpack_dyn 2
+    #    分类（§1 判据）：
+    #      ① 语言层 ⇒ 补码（R1002 实参类型/形状 102 · R1005 缺形参 2 · R1004 unwrap 失败 2）
+    #      ② VM 内部一致性（字节码/元数据越界，不该被用户触发）⇒ **R9001**（18 处，§2.1）
+    #      ③ 库·环境族 ⇒ 只登记域前缀不改文本（18 处）：
+    #         `ws_serve:`（3）· `XML 解析错误`（13）· `路由/中间件数量超出上限`（2）
+    #      ④ 转发点豁免（1 处，见 FORWARD_EXEMPT）
+    #    ⇒ **表为空即等价于「全仓无未收口站点」**：此后任何新增无码站点立即判门红。
+}
+
+# ── 转发点豁免（M193）：**每条必须给理由**，形态必须是 `px_error("%s"` ──
+#    判据：① 表内每条都要在源码里找到且形态匹配（防"代码变了表没变"）；
+#          ② 豁免总数**不得多于**登记数（棘轮）；③ 理由字段非空。
+FORWARD_EXEMPT = {
+    "runtime/coro.c": {
+        804: "透传 px_native_call_capture 的 errbuf —— 上游 native 的错误消息已带 R 码或域前缀",
+    },
 }
 
 fails = []
@@ -58,6 +70,11 @@ def check_sites(path, kind):
     n = code = dom = 0
     uncoded = []
     for ln, line in enumerate(src, 1):
+        # M193：**跳过纯注释行** —— 注释里提到 `px_error("…")` 会被当成站点（假阳性：
+        #   本轮 220 修复的说明注释就触发了）。判据 = 去掉前导空白后以 `//` 或 `*` 开头。
+        st = line.lstrip()
+        if st.startswith("//") or st.startswith("*") or st.startswith("/*"):
+            continue
         it = (re.finditer(r'px_error\(\s*"((?:[^"\\]|\\.)*)"', line) if kind == "c"
               else re.finditer(r'i_r(10[0-9][0-9])\(\s*"((?:[^"\\]|\\.)*)"', line))
         for m in it:
@@ -73,6 +90,8 @@ def check_sites(path, kind):
             elif DOMAIN_RE.match(msg):
                 dom += 1
             else:
+                if ln in FORWARD_EXEMPT.get(path, {}):
+                    continue          # 转发点豁免（表内已给理由；另有专门判据查表⇔源码一致）
                 uncoded.append((ln, msg))
                 continue
             body = re.sub(r"^R\d{4}: ", "", msg)
@@ -111,6 +130,22 @@ def check_mixed(path):
         print("   %-30s 混写守卫 %d" % (path, bad))
 
 
+# ── 判据 ⑤：转发点豁免表 ⇔ 源码一致（防"代码被改动而表没跟着改"）──
+EXEMPT_TOTAL = 0
+for path, table in FORWARD_EXEMPT.items():
+    src = open(os.path.join(ROOT, path), encoding="utf-8").read().split("\n")
+    for ln, why in table.items():
+        if not why.strip():
+            fails.append("%s:%d 豁免条目缺理由" % (path, ln))
+        if ln > len(src) or not re.search(r'px_error\(\s*"%s"', src[ln - 1]):
+            fails.append("%s:%d 豁免条目在源码里找不到（或形态不是 px_error\"%s\"）" % (path, ln))
+        EXEMPT_TOTAL += 1
+    print("   %-30s 转发豁免 %d 处" % (path, len(table)))
+print("── [S4] 转发豁免合计 %d（棘轮：不得多于登记数 1）──" % EXEMPT_TOTAL)
+if EXEMPT_TOTAL > 1:
+    fails.append("转发豁免条目变多：%d > 登记数 1" % EXEMPT_TOTAL)
+
+
 CFILES = sorted(f for f in os.listdir(os.path.join(ROOT, "runtime")) if f.endswith(".c"))
 print("── [S1/S2] native 站点：带码 or 域前缀闭集（+ 个数分码）──")
 for f in CFILES:
@@ -137,4 +172,4 @@ if fails:
         print("   -", f)
     open("/tmp/m191_scan_fails.txt", "w", encoding="utf-8").write("\n".join(fails))
     sys.exit(1)
-print("✅ 静态判据通过（带码/域前缀 · 个数分码 · 混写拆分 · 未收口棘轮 四查）")
+print("✅ 静态判据通过（带码/域前缀 · 个数分码 · 混写拆分 · 未收口棘轮 · 转发豁免 五查）")

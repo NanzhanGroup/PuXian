@@ -266,9 +266,14 @@ static LXValue xml_parse_element(XmlP* p) {
     PX_KEEP(children);   // M170：children 跨递归 xml_parse_element 与 px_str 分配
     XBuf textbuf = {0};
     if (!xml_parse_content(p, name, children, &textbuf)) {
+        // M193（缺陷 220 · use-after-free）：修前顺序是「先 free(name)，再用 %s 引 name 抛错」
+        //   ⇒ 消息里的名字指向**已释放**的堆 ⇒ 实测输出乱码（`元素 <q(> 未闭合…` 等）。
+        //   抛出函数不返回，故必须「**先**把名字拷进局部缓冲 → 再 free → 再抛」。
+        char nambuf[160];
+        snprintf(nambuf, sizeof(nambuf), "%.140s", name);
         free(name);
         if (textbuf.data) free(textbuf.data);
-        px_error("XML 解析错误：元素 <%s> 未闭合或结束标签不匹配", name);
+        px_error("XML 解析错误：元素 <%s> 未闭合或结束标签不匹配", nambuf);
     }
     if (textbuf.len > 0) {
         char* dec = xml_decode_entities(textbuf.data, textbuf.len);
@@ -297,8 +302,8 @@ static LXValue xml_parse_element(XmlP* p) {
 // xml_parse(xml) → dict 或报错
 LXValue bi_xml_parse(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) px_error("xml_parse 需要 1 个参数");
-    if (args[0].type != PX_STR) px_error("xml_parse 期望字符串");
+    if (nargs != 1) px_error("R1002: xml_parse 需要 1 个参数");
+    if (args[0].type != PX_STR) px_error("R1002: xml_parse 期望字符串");
     XmlP p = { args[0].as.obj->as.str.data, args[0].as.obj->as.str.len, 0 };
     if (!xml_skip_misc(&p)) px_error("XML 解析错误：注释/处理指令未闭合");
     if (xp_peek(&p) != '<') px_error("XML 解析错误：缺少根元素");
@@ -310,8 +315,8 @@ LXValue bi_xml_parse(LXValue* args, int nargs, void* ctx) {
 // xml_escape(text) → str
 LXValue bi_xml_escape(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) px_error("xml_escape 需要 1 个参数");
-    if (args[0].type != PX_STR) px_error("xml_escape 期望字符串");
+    if (nargs != 1) px_error("R1002: xml_escape 需要 1 个参数");
+    if (args[0].type != PX_STR) px_error("R1002: xml_escape 期望字符串");
     const char* s = args[0].as.obj->as.str.data;
     int len = args[0].as.obj->as.str.len;
     XBuf out = {0};
@@ -334,8 +339,8 @@ LXValue bi_xml_escape(LXValue* args, int nargs, void* ctx) {
 // xml_unescape(text) → str
 LXValue bi_xml_unescape(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) px_error("xml_unescape 需要 1 个参数");
-    if (args[0].type != PX_STR) px_error("xml_unescape 期望字符串");
+    if (nargs != 1) px_error("R1002: xml_unescape 需要 1 个参数");
+    if (args[0].type != PX_STR) px_error("R1002: xml_unescape 期望字符串");
     const char* s = args[0].as.obj->as.str.data;
     int len = args[0].as.obj->as.str.len;
     char* dec = xml_decode_entities(s, len);
@@ -362,11 +367,11 @@ static LXValue xml_build_node(LXValue node) {
         return bi_xml_escape(&node, 1, NULL);
     }
     if (node.type != PX_DICT) {
-        px_error("xml_build: 节点必须是 dict 或 str，实际是 %s", px_type_name(node));
+        px_error("R1002: xml_build: 节点必须是 dict 或 str，实际是 %s", px_type_name(node));
         return px_null();
     }
     LXValue name_v = px_dict_get(node, "name");
-    if (name_v.type != PX_STR) px_error("xml_build: 节点 dict 缺少字符串 name");
+    if (name_v.type != PX_STR) px_error("R1002: xml_build: 节点 dict 缺少字符串 name");
     const char* name = name_v.as.obj->as.str.data;
 
     // 属性（键排序）
@@ -393,7 +398,7 @@ static LXValue xml_build_node(LXValue node) {
             else if (v.type == PX_INT) { snprintf(numbuf, sizeof(numbuf), "%lld", (long long)v.as.i); vs = numbuf; }
             else if (v.type == PX_BOOL) { vs = v.as.b ? "true" : "false"; }
             else if (v.type == PX_NULL) { vs = ""; }
-            else { px_error("xml_build: 属性 %s 值必须是字符串/int/bool/null，实际是 %s",
+            else { px_error("R1002: xml_build: 属性 %s 值必须是字符串/int/bool/null，实际是 %s",
                             ao->as.dict.keys[id], px_type_name(v)); }
             LXValue sv = px_str(vs);
             LXValue escv = bi_xml_escape(&sv, 1, NULL);
@@ -446,6 +451,6 @@ static LXValue xml_build_node(LXValue node) {
 // xml_build(node) → str
 LXValue bi_xml_build(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) px_error("xml_build 需要 1 个参数");
+    if (nargs != 1) px_error("R1002: xml_build 需要 1 个参数");
     return xml_build_node(args[0]);
 }

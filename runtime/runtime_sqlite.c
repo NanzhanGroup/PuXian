@@ -50,8 +50,8 @@ static int sqlite_alloc_db(sqlite3* db) {
 // sqlite_open(path) → int|null
 LXValue bi_sqlite_open(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) px_error("sqlite_open 需要 (path) 参数");
-    if (args[0].type != PX_STR) px_error("sqlite_open 的 path 需要字符串");
+    if (nargs != 1) px_error("R1002: sqlite_open 需要 (path) 参数");
+    if (args[0].type != PX_STR) px_error("R1002: sqlite_open 的 path 需要字符串");
     sqlite3* db = NULL;
     if (sqlite3_open(args[0].as.obj->as.str.data, &db) != SQLITE_OK) {
         if (db) { eprintf_hint: sqlite3_close(db); }
@@ -67,8 +67,8 @@ static int sqlite_bind_params(sqlite3_stmt* stmt, LXValue params);
 // sqlite_exec(db, sql[, params]) → int 受影响行数 | null
 LXValue bi_sqlite_exec(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 2 || nargs > 3) px_error("sqlite_exec 需要 (db, sql[, params]) 参数");
-    if (args[0].type != PX_INT || args[1].type != PX_STR) px_error("sqlite_exec 参数类型错误");
+    if (nargs < 2 || nargs > 3) px_error("R1002: sqlite_exec 需要 (db, sql[, params]) 参数");
+    if (args[0].type != PX_INT || args[1].type != PX_STR) px_error("R1002: sqlite_exec 参数类型错误");
     sqlite3* db = sqlite_get_db(args[0].as.i);
     if (!db) { fprintf(stderr, "[sqlite] 无效句柄 %lld\n", (long long)args[0].as.i); return px_null(); }
     if (nargs == 2) {
@@ -160,8 +160,8 @@ static int sqlite_bind_params(sqlite3_stmt* stmt, LXValue params) {
 // sqlite_query(db, sql[, params]) → list[dict]|null
 LXValue bi_sqlite_query(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs < 2 || nargs > 3) px_error("sqlite_query 需要 (db, sql[, params]) 参数");
-    if (args[0].type != PX_INT || args[1].type != PX_STR) px_error("sqlite_query 参数类型错误");
+    if (nargs < 2 || nargs > 3) px_error("R1002: sqlite_query 需要 (db, sql[, params]) 参数");
+    if (args[0].type != PX_INT || args[1].type != PX_STR) px_error("R1002: sqlite_query 参数类型错误");
     sqlite3* db = sqlite_get_db(args[0].as.i);
     if (!db) { fprintf(stderr, "[sqlite] 无效句柄 %lld\n", (long long)args[0].as.i); return px_null(); }
     LXValue params = (nargs == 3) ? args[2] : px_null();
@@ -231,7 +231,7 @@ LXValue bi_sqlite_query(LXValue* args, int nargs, void* ctx) {
 // sqlite_close(db) → bool
 LXValue bi_sqlite_close(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1 || args[0].type != PX_INT) px_error("sqlite_close 需要 (db) 参数");
+    if (nargs != 1 || args[0].type != PX_INT) px_error("R1002: sqlite_close 需要 (db) 参数");
     sqlite3* db = NULL;
     pthread_mutex_lock(&g_sqlite_mu);
     if (args[0].as.i > 0 && args[0].as.i <= MAX_SQLITE_DBS && g_sqlite_dbs[args[0].as.i - 1]) {
@@ -246,7 +246,7 @@ LXValue bi_sqlite_close(LXValue* args, int nargs, void* ctx) {
 // sqlite_escape(s) → str
 LXValue bi_sqlite_escape(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1 || args[0].type != PX_STR) px_error("sqlite_escape 需要 (s) 参数");
+    if (nargs != 1 || args[0].type != PX_STR) px_error("R1002: sqlite_escape 需要 (s) 参数");
     const char* s = args[0].as.obj->as.str.data;
     int n = 0;
     for (const char* p = s; *p; p++) if (*p == '\'') n++;
@@ -265,7 +265,7 @@ LXValue bi_sqlite_escape(LXValue* args, int nargs, void* ctx) {
 // sqlite_last_insert_rowid(db) → int
 LXValue bi_sqlite_last_insert_rowid(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1 || args[0].type != PX_INT) px_error("sqlite_last_insert_rowid 需要 (db) 参数");
+    if (nargs != 1 || args[0].type != PX_INT) px_error("R1002: sqlite_last_insert_rowid 需要 (db) 参数");
     sqlite3* db = sqlite_get_db(args[0].as.i);
     return px_int(db ? (int64_t)sqlite3_last_insert_rowid(db) : -1);
 }
