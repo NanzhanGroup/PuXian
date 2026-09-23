@@ -1,0 +1,2 @@
+print("before")
+print(aes_gcm_encrypt("data", "0123456789abcdef", ""))

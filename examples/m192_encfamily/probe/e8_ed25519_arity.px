@@ -1,0 +1,2 @@
+print("before")
+print(ed25519_keygen(1))

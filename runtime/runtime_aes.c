@@ -11,11 +11,11 @@
 
 // 取字符串字节与长度
 static const char* vstr(LXValue v) {
-    if (v.type != PX_STR) px_error("期望字符串，实际是 %s", px_type_name(v));
+    if (v.type != PX_STR) px_error("R1002: 期望字符串，实际是 %s", px_type_name(v));
     return v.as.obj->as.str.data;
 }
 static int vstrlen(LXValue v) {
-    if (v.type != PX_STR) px_error("期望字符串，实际是 %s", px_type_name(v));
+    if (v.type != PX_STR) px_error("R1002: 期望字符串，实际是 %s", px_type_name(v));
     return v.as.obj->as.str.len;
 }
 
@@ -77,12 +77,12 @@ static int aes_is_utf8(const unsigned char* s, int len) {
 // aes_encrypt(data, key, iv) → hex（AES-CBC-PKCS7）
 LXValue bi_aes_encrypt(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 3) px_error("aes_encrypt 需要 3 个参数: (data, key, iv)");
+    if (nargs != 3) px_error("R1002: aes_encrypt 需要 3 个参数: (data, key, iv)");
     const char* data = vstr(args[0]); int dlen = vstrlen(args[0]);
     const char* key = vstr(args[1]); int klen = vstrlen(args[1]);
     const char* iv = vstr(args[2]); int ivlen = vstrlen(args[2]);
-    if (klen != 16 && klen != 24 && klen != 32) px_error("AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
-    if (ivlen != 16) px_error("CBC 模式 IV 必须 16 字节，实际 %d", ivlen);
+    if (klen != 16 && klen != 24 && klen != 32) px_error("R1002: AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
+    if (ivlen != 16) px_error("R1002: CBC 模式 IV 必须 16 字节，实际 %d", ivlen);
     int pad = 16 - (dlen % 16);
     int buflen = dlen + pad;
     unsigned char* buf = (unsigned char*)malloc(buflen);
@@ -95,12 +95,12 @@ LXValue bi_aes_encrypt(LXValue* args, int nargs, void* ctx) {
     mbedtls_aes_init(&aes);
     if (mbedtls_aes_setkey_enc(&aes, (const unsigned char*)key, klen * 8) != 0) {
         mbedtls_aes_free(&aes); free(buf); free(out);
-        px_error("AES 密钥设置失败");
+        px_error("aes 密钥设置失败");
     }
     int rc = mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_ENCRYPT, buflen, ivcopy, buf, out);
     mbedtls_aes_free(&aes);
     free(buf);
-    if (rc != 0) { free(out); px_error("AES 加密失败"); }
+    if (rc != 0) { free(out); px_error("aes 加密失败"); }
     char* hex = (char*)malloc(buflen * 2 + 1);
     aes_hex(out, buflen, hex);
     LXValue r = px_str(hex);
@@ -111,12 +111,12 @@ LXValue bi_aes_encrypt(LXValue* args, int nargs, void* ctx) {
 // aes_decrypt(hex, key, iv) → str 或 null
 LXValue bi_aes_decrypt(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 3) px_error("aes_decrypt 需要 3 个参数: (hex, key, iv)");
+    if (nargs != 3) px_error("R1002: aes_decrypt 需要 3 个参数: (hex, key, iv)");
     const char* hs = vstr(args[0]); int hlen = vstrlen(args[0]);
     const char* key = vstr(args[1]); int klen = vstrlen(args[1]);
     const char* iv = vstr(args[2]); int ivlen = vstrlen(args[2]);
-    if (klen != 16 && klen != 24 && klen != 32) px_error("AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
-    if (ivlen != 16) px_error("CBC 模式 IV 必须 16 字节，实际 %d", ivlen);
+    if (klen != 16 && klen != 24 && klen != 32) px_error("R1002: AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
+    if (ivlen != 16) px_error("R1002: CBC 模式 IV 必须 16 字节，实际 %d", ivlen);
     unsigned char* ct = (unsigned char*)malloc(hlen / 2 + 1);
     int ctlen = aes_unhex(hs, hlen, ct);
     if (ctlen < 0 || ctlen == 0 || ctlen % 16 != 0) { free(ct); return px_null(); }
@@ -127,12 +127,12 @@ LXValue bi_aes_decrypt(LXValue* args, int nargs, void* ctx) {
     mbedtls_aes_init(&aes);
     if (mbedtls_aes_setkey_dec(&aes, (const unsigned char*)key, klen * 8) != 0) {
         mbedtls_aes_free(&aes); free(ct); free(out);
-        px_error("AES 密钥设置失败");
+        px_error("aes 密钥设置失败");
     }
     int rc = mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_DECRYPT, ctlen, ivcopy, ct, out);
     mbedtls_aes_free(&aes);
     free(ct);
-    if (rc != 0) { free(out); px_error("AES 解密失败"); }
+    if (rc != 0) { free(out); px_error("aes 解密失败"); }
     // PKCS7 校验
     int pad = out[ctlen - 1];
     if (pad == 0 || pad > 16) { free(out); return px_null(); }
@@ -149,25 +149,25 @@ LXValue bi_aes_decrypt(LXValue* args, int nargs, void* ctx) {
 // aes_gcm_encrypt(data, key, iv) → hex（密文 + 16 字节 tag）
 LXValue bi_aes_gcm_encrypt(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 3) px_error("aes_gcm_encrypt 需要 3 个参数: (data, key, iv)");
+    if (nargs != 3) px_error("R1002: aes_gcm_encrypt 需要 3 个参数: (data, key, iv)");
     const char* data = vstr(args[0]); int dlen = vstrlen(args[0]);
     const char* key = vstr(args[1]); int klen = vstrlen(args[1]);
     const char* iv = vstr(args[2]); int ivlen = vstrlen(args[2]);
-    if (klen != 16 && klen != 24 && klen != 32) px_error("AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
-    if (ivlen <= 0) px_error("GCM 模式 IV 不能为空");
+    if (klen != 16 && klen != 24 && klen != 32) px_error("R1002: AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
+    if (ivlen <= 0) px_error("R1002: GCM 模式 IV 不能为空");
     unsigned char* ct = (unsigned char*)malloc(dlen + 1);
     unsigned char tag[16];
     mbedtls_gcm_context gcm;
     mbedtls_gcm_init(&gcm);
     if (mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, (const unsigned char*)key, klen * 8) != 0) {
         mbedtls_gcm_free(&gcm); free(ct);
-        px_error("AES 密钥设置失败");
+        px_error("aes 密钥设置失败");
     }
     int rc = mbedtls_gcm_crypt_and_tag(&gcm, MBEDTLS_GCM_ENCRYPT, dlen,
                                        (const unsigned char*)iv, ivlen, NULL, 0,
                                        (const unsigned char*)data, ct, 16, tag);
     mbedtls_gcm_free(&gcm);
-    if (rc != 0) { free(ct); px_error("AES GCM 加密失败"); }
+    if (rc != 0) { free(ct); px_error("aes GCM 加密失败"); }
     char* hex = (char*)malloc((dlen + 16) * 2 + 1);
     aes_hex(ct, dlen, hex);
     aes_hex(tag, 16, hex + dlen * 2);
@@ -179,12 +179,12 @@ LXValue bi_aes_gcm_encrypt(LXValue* args, int nargs, void* ctx) {
 // aes_gcm_decrypt(hex, key, iv) → str 或 null（tag 校验失败 → null）
 LXValue bi_aes_gcm_decrypt(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 3) px_error("aes_gcm_decrypt 需要 3 个参数: (hex, key, iv)");
+    if (nargs != 3) px_error("R1002: aes_gcm_decrypt 需要 3 个参数: (hex, key, iv)");
     const char* hs = vstr(args[0]); int hlen = vstrlen(args[0]);
     const char* key = vstr(args[1]); int klen = vstrlen(args[1]);
     const char* iv = vstr(args[2]); int ivlen = vstrlen(args[2]);
-    if (klen != 16 && klen != 24 && klen != 32) px_error("AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
-    if (ivlen <= 0) px_error("GCM 模式 IV 不能为空");
+    if (klen != 16 && klen != 24 && klen != 32) px_error("R1002: AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
+    if (ivlen <= 0) px_error("R1002: GCM 模式 IV 不能为空");
     unsigned char* all = (unsigned char*)malloc(hlen / 2 + 1);
     int alllen = aes_unhex(hs, hlen, all);
     if (alllen < 17) { free(all); return px_null(); }
@@ -194,7 +194,7 @@ LXValue bi_aes_gcm_decrypt(LXValue* args, int nargs, void* ctx) {
     mbedtls_gcm_init(&gcm);
     if (mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, (const unsigned char*)key, klen * 8) != 0) {
         mbedtls_gcm_free(&gcm); free(all); free(out);
-        px_error("AES 密钥设置失败");
+        px_error("aes 密钥设置失败");
     }
     // mbedtls 3.x：auth_decrypt 签名为 (ctx, len, iv, iv_len, add, add_len, tag, tag_len, input, output)
     int rc = mbedtls_gcm_auth_decrypt(&gcm, ctlen,
@@ -215,7 +215,7 @@ static const char* vbytes(LXValue v, int* len) {
         *len = v.as.obj->as.str.len;
         return v.as.obj->as.str.data;
     }
-    px_error("期望字符串或 bytes，实际是 %s", px_type_name(v));
+    px_error("R1002: 期望字符串或 bytes，实际是 %s", px_type_name(v));
     return NULL;
 }
 
@@ -224,13 +224,13 @@ static const char* vbytes(LXValue v, int* len) {
 // crypto/aes-gcm 标准（C||T 拼接、12 字节 nonce、32 字节 key）字节兼容。
 LXValue bi_aes_gcm_encrypt_bytes(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 3) px_error("aes_gcm_encrypt_bytes 需要 3 个参数: (data, key, iv)");
+    if (nargs != 3) px_error("R1002: aes_gcm_encrypt_bytes 需要 3 个参数: (data, key, iv)");
     int dlen = 0, klen = 0, ivlen = 0;
     const char* data = vbytes(args[0], &dlen);
     const char* key = vbytes(args[1], &klen);
     const char* iv = vbytes(args[2], &ivlen);
-    if (klen != 16 && klen != 24 && klen != 32) px_error("AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
-    if (ivlen <= 0) px_error("GCM 模式 IV 不能为空");
+    if (klen != 16 && klen != 24 && klen != 32) px_error("R1002: AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
+    if (ivlen <= 0) px_error("R1002: GCM 模式 IV 不能为空");
     unsigned char* ct = (unsigned char*)malloc(dlen + 16);
     if (!ct) px_error("内存不足");
     unsigned char tag[16];
@@ -238,13 +238,13 @@ LXValue bi_aes_gcm_encrypt_bytes(LXValue* args, int nargs, void* ctx) {
     mbedtls_gcm_init(&gcm);
     if (mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, (const unsigned char*)key, klen * 8) != 0) {
         mbedtls_gcm_free(&gcm); free(ct);
-        px_error("AES 密钥设置失败");
+        px_error("aes 密钥设置失败");
     }
     int rc = mbedtls_gcm_crypt_and_tag(&gcm, MBEDTLS_GCM_ENCRYPT, (size_t)dlen,
                                        (const unsigned char*)iv, (size_t)ivlen, NULL, 0,
                                        (const unsigned char*)data, ct, 16, tag);
     mbedtls_gcm_free(&gcm);
-    if (rc != 0) { free(ct); px_error("AES GCM 加密失败"); }
+    if (rc != 0) { free(ct); px_error("aes GCM 加密失败"); }
     // 输出 = 密文 || tag(16) 原始字节
     unsigned char* out = (unsigned char*)malloc(dlen + 16);
     if (!out) { free(ct); px_error("内存不足"); }
@@ -260,13 +260,13 @@ LXValue bi_aes_gcm_encrypt_bytes(LXValue* args, int nargs, void* ctx) {
 // aes_is_utf8 校验致非 UTF-8 永远返 null 的根因修复）。
 LXValue bi_aes_gcm_decrypt_bytes(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 3) px_error("aes_gcm_decrypt_bytes 需要 3 个参数: (ct, key, iv)");
+    if (nargs != 3) px_error("R1002: aes_gcm_decrypt_bytes 需要 3 个参数: (ct, key, iv)");
     int ctlen = 0, klen = 0, ivlen = 0;
     const char* ct = vbytes(args[0], &ctlen);
     const char* key = vbytes(args[1], &klen);
     const char* iv = vbytes(args[2], &ivlen);
-    if (klen != 16 && klen != 24 && klen != 32) px_error("AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
-    if (ivlen <= 0) px_error("GCM 模式 IV 不能为空");
+    if (klen != 16 && klen != 24 && klen != 32) px_error("R1002: AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
+    if (ivlen <= 0) px_error("R1002: GCM 模式 IV 不能为空");
     if (ctlen < 17) return px_null();  // 至少 1 字节密文 + 16 字节 tag
     int n = ctlen - 16;
     unsigned char* out = (unsigned char*)malloc(n > 0 ? n : 1);
@@ -275,7 +275,7 @@ LXValue bi_aes_gcm_decrypt_bytes(LXValue* args, int nargs, void* ctx) {
     mbedtls_gcm_init(&gcm);
     if (mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, (const unsigned char*)key, klen * 8) != 0) {
         mbedtls_gcm_free(&gcm); free(out);
-        px_error("AES 密钥设置失败");
+        px_error("aes 密钥设置失败");
     }
     int rc = mbedtls_gcm_auth_decrypt(&gcm, (size_t)n,
                                       (const unsigned char*)iv, (size_t)ivlen, NULL, 0,
@@ -291,13 +291,13 @@ LXValue bi_aes_gcm_decrypt_bytes(LXValue* args, int nargs, void* ctx) {
 // M72-S4：CBC 同坑（utf8 限制）顺带修复，防后续再踩。
 LXValue bi_aes_encrypt_bytes(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 3) px_error("aes_encrypt_bytes 需要 3 个参数: (data, key, iv)");
+    if (nargs != 3) px_error("R1002: aes_encrypt_bytes 需要 3 个参数: (data, key, iv)");
     int dlen = 0, klen = 0, ivlen = 0;
     const char* data = vbytes(args[0], &dlen);
     const char* key = vbytes(args[1], &klen);
     const char* iv = vbytes(args[2], &ivlen);
-    if (klen != 16 && klen != 24 && klen != 32) px_error("AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
-    if (ivlen != 16) px_error("CBC 模式 IV 必须 16 字节，实际 %d", ivlen);
+    if (klen != 16 && klen != 24 && klen != 32) px_error("R1002: AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
+    if (ivlen != 16) px_error("R1002: CBC 模式 IV 必须 16 字节，实际 %d", ivlen);
     int pad = 16 - (dlen % 16);
     int buflen = dlen + pad;
     unsigned char* buf = (unsigned char*)malloc(buflen);
@@ -311,12 +311,12 @@ LXValue bi_aes_encrypt_bytes(LXValue* args, int nargs, void* ctx) {
     mbedtls_aes_init(&aes);
     if (mbedtls_aes_setkey_enc(&aes, (const unsigned char*)key, klen * 8) != 0) {
         mbedtls_aes_free(&aes); free(buf); free(out);
-        px_error("AES 密钥设置失败");
+        px_error("aes 密钥设置失败");
     }
     int rc = mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_ENCRYPT, (size_t)buflen, ivcopy, buf, out);
     mbedtls_aes_free(&aes);
     free(buf);
-    if (rc != 0) { free(out); px_error("AES 加密失败"); }
+    if (rc != 0) { free(out); px_error("aes 加密失败"); }
     LXValue r = px_bytes_len(out, buflen);
     free(out);
     return r;
@@ -325,13 +325,13 @@ LXValue bi_aes_encrypt_bytes(LXValue* args, int nargs, void* ctx) {
 // aes_decrypt_bytes(ct_bytes, key, iv) → bytes | null（PKCS7 padding 非法 → null）
 LXValue bi_aes_decrypt_bytes(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 3) px_error("aes_decrypt_bytes 需要 3 个参数: (ct, key, iv)");
+    if (nargs != 3) px_error("R1002: aes_decrypt_bytes 需要 3 个参数: (ct, key, iv)");
     int ctlen = 0, klen = 0, ivlen = 0;
     const char* ct = vbytes(args[0], &ctlen);
     const char* key = vbytes(args[1], &klen);
     const char* iv = vbytes(args[2], &ivlen);
-    if (klen != 16 && klen != 24 && klen != 32) px_error("AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
-    if (ivlen != 16) px_error("CBC 模式 IV 必须 16 字节，实际 %d", ivlen);
+    if (klen != 16 && klen != 24 && klen != 32) px_error("R1002: AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
+    if (ivlen != 16) px_error("R1002: CBC 模式 IV 必须 16 字节，实际 %d", ivlen);
     if (ctlen == 0 || ctlen % 16 != 0) return px_null();
     unsigned char* out = (unsigned char*)malloc(ctlen);
     if (!out) px_error("内存不足");
@@ -341,12 +341,12 @@ LXValue bi_aes_decrypt_bytes(LXValue* args, int nargs, void* ctx) {
     mbedtls_aes_init(&aes);
     if (mbedtls_aes_setkey_dec(&aes, (const unsigned char*)key, klen * 8) != 0) {
         mbedtls_aes_free(&aes); free(out);
-        px_error("AES 密钥设置失败");
+        px_error("aes 密钥设置失败");
     }
     int rc = mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_DECRYPT, (size_t)ctlen, ivcopy,
                                    (const unsigned char*)ct, out);
     mbedtls_aes_free(&aes);
-    if (rc != 0) { free(out); px_error("AES 解密失败"); }
+    if (rc != 0) { free(out); px_error("aes 解密失败"); }
     // PKCS7 校验
     int pad = out[ctlen - 1];
     if (pad == 0 || pad > 16) { free(out); return px_null(); }
@@ -381,11 +381,11 @@ static int aes_ecb_crypt(mbedtls_aes_context* aes, int mode,
 // aes_encrypt_ecb(data, key) → hex（AES-ECB-PKCS7）
 LXValue bi_aes_encrypt_ecb(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2) px_error("aes_encrypt_ecb 需要 2 个参数: (data, key)");
+    if (nargs != 2) px_error("R1002: aes_encrypt_ecb 需要 2 个参数: (data, key)");
     int dlen = 0, klen = 0;
     const char* data = vbytes(args[0], &dlen);
     const char* key = vbytes(args[1], &klen);
-    if (klen != 16 && klen != 24 && klen != 32) px_error("AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
+    if (klen != 16 && klen != 24 && klen != 32) px_error("R1002: AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
     int pad = 16 - (dlen % 16);
     int buflen = dlen + pad;
     unsigned char* buf = (unsigned char*)malloc((size_t)buflen);
@@ -397,12 +397,12 @@ LXValue bi_aes_encrypt_ecb(LXValue* args, int nargs, void* ctx) {
     mbedtls_aes_init(&aes);
     if (mbedtls_aes_setkey_enc(&aes, (const unsigned char*)key, klen * 8) != 0) {
         mbedtls_aes_free(&aes); free(buf); free(out);
-        px_error("AES 密钥设置失败");
+        px_error("aes 密钥设置失败");
     }
     int rc = aes_ecb_crypt(&aes, MBEDTLS_AES_ENCRYPT, buf, out, buflen);
     mbedtls_aes_free(&aes);
     free(buf);
-    if (rc != 0) { free(out); px_error("AES 加密失败"); }
+    if (rc != 0) { free(out); px_error("aes 加密失败"); }
     char* hex = (char*)malloc((size_t)buflen * 2 + 1);
     if (!hex) { free(out); px_error("内存不足"); }
     aes_hex(out, buflen, hex);
@@ -414,11 +414,11 @@ LXValue bi_aes_encrypt_ecb(LXValue* args, int nargs, void* ctx) {
 // aes_decrypt_ecb(hex, key) → str 或 null
 LXValue bi_aes_decrypt_ecb(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2) px_error("aes_decrypt_ecb 需要 2 个参数: (hex, key)");
+    if (nargs != 2) px_error("R1002: aes_decrypt_ecb 需要 2 个参数: (hex, key)");
     const char* hs = vstr(args[0]); int hlen = vstrlen(args[0]);
     int klen = 0;
     const char* key = vbytes(args[1], &klen);
-    if (klen != 16 && klen != 24 && klen != 32) px_error("AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
+    if (klen != 16 && klen != 24 && klen != 32) px_error("R1002: AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
     unsigned char* ct = (unsigned char*)malloc((size_t)hlen / 2 + 1);
     if (!ct) px_error("内存不足");
     int ctlen = aes_unhex(hs, hlen, ct);
@@ -429,12 +429,12 @@ LXValue bi_aes_decrypt_ecb(LXValue* args, int nargs, void* ctx) {
     mbedtls_aes_init(&aes);
     if (mbedtls_aes_setkey_dec(&aes, (const unsigned char*)key, klen * 8) != 0) {
         mbedtls_aes_free(&aes); free(ct); free(out);
-        px_error("AES 密钥设置失败");
+        px_error("aes 密钥设置失败");
     }
     int rc = aes_ecb_crypt(&aes, MBEDTLS_AES_DECRYPT, ct, out, ctlen);
     mbedtls_aes_free(&aes);
     free(ct);
-    if (rc != 0) { free(out); px_error("AES 解密失败"); }
+    if (rc != 0) { free(out); px_error("aes 解密失败"); }
     // PKCS7 校验
     int pad = out[ctlen - 1];
     if (pad == 0 || pad > 16) { free(out); return px_null(); }
@@ -451,11 +451,11 @@ LXValue bi_aes_decrypt_ecb(LXValue* args, int nargs, void* ctx) {
 // aes_encrypt_ecb_bytes(data, key) → bytes（密文原始字节）
 LXValue bi_aes_encrypt_ecb_bytes(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2) px_error("aes_encrypt_ecb_bytes 需要 2 个参数: (data, key)");
+    if (nargs != 2) px_error("R1002: aes_encrypt_ecb_bytes 需要 2 个参数: (data, key)");
     int dlen = 0, klen = 0;
     const char* data = vbytes(args[0], &dlen);
     const char* key = vbytes(args[1], &klen);
-    if (klen != 16 && klen != 24 && klen != 32) px_error("AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
+    if (klen != 16 && klen != 24 && klen != 32) px_error("R1002: AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
     int pad = 16 - (dlen % 16);
     int buflen = dlen + pad;
     unsigned char* buf = (unsigned char*)malloc((size_t)buflen);
@@ -467,12 +467,12 @@ LXValue bi_aes_encrypt_ecb_bytes(LXValue* args, int nargs, void* ctx) {
     mbedtls_aes_init(&aes);
     if (mbedtls_aes_setkey_enc(&aes, (const unsigned char*)key, klen * 8) != 0) {
         mbedtls_aes_free(&aes); free(buf); free(out);
-        px_error("AES 密钥设置失败");
+        px_error("aes 密钥设置失败");
     }
     int rc = aes_ecb_crypt(&aes, MBEDTLS_AES_ENCRYPT, buf, out, buflen);
     mbedtls_aes_free(&aes);
     free(buf);
-    if (rc != 0) { free(out); px_error("AES 加密失败"); }
+    if (rc != 0) { free(out); px_error("aes 加密失败"); }
     LXValue r = px_bytes_len(out, buflen);
     free(out);
     return r;
@@ -481,11 +481,11 @@ LXValue bi_aes_encrypt_ecb_bytes(LXValue* args, int nargs, void* ctx) {
 // aes_decrypt_ecb_bytes(ct_bytes, key) → bytes | null（PKCS7 非法 → null；无 utf8 校验）
 LXValue bi_aes_decrypt_ecb_bytes(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2) px_error("aes_decrypt_ecb_bytes 需要 2 个参数: (ct, key)");
+    if (nargs != 2) px_error("R1002: aes_decrypt_ecb_bytes 需要 2 个参数: (ct, key)");
     int ctlen = 0, klen = 0;
     const char* ct = vbytes(args[0], &ctlen);
     const char* key = vbytes(args[1], &klen);
-    if (klen != 16 && klen != 24 && klen != 32) px_error("AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
+    if (klen != 16 && klen != 24 && klen != 32) px_error("R1002: AES 密钥长度须为 16/24/32 字节（128/192/256 位），实际 %d", klen);
     if (ctlen == 0 || ctlen % 16 != 0) return px_null();
     unsigned char* out = (unsigned char*)malloc((size_t)ctlen);
     if (!out) px_error("内存不足");
@@ -493,11 +493,11 @@ LXValue bi_aes_decrypt_ecb_bytes(LXValue* args, int nargs, void* ctx) {
     mbedtls_aes_init(&aes);
     if (mbedtls_aes_setkey_dec(&aes, (const unsigned char*)key, klen * 8) != 0) {
         mbedtls_aes_free(&aes); free(out);
-        px_error("AES 密钥设置失败");
+        px_error("aes 密钥设置失败");
     }
     int rc = aes_ecb_crypt(&aes, MBEDTLS_AES_DECRYPT, (const unsigned char*)ct, out, ctlen);
     mbedtls_aes_free(&aes);
-    if (rc != 0) { free(out); px_error("AES 解密失败"); }
+    if (rc != 0) { free(out); px_error("aes 解密失败"); }
     // PKCS7 校验
     int pad = out[ctlen - 1];
     if (pad == 0 || pad > 16) { free(out); return px_null(); }

@@ -1,0 +1,2 @@
+print("before")
+print(zlib_compress("abc", 99))

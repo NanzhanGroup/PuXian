@@ -37,11 +37,11 @@ static int px_rng(void* p, unsigned char* out, size_t len) {
 
 // 取字符串字节与长度（static 独立于 runtime_aes.c 的同名辅助）
 static const char* rsa_str(LXValue v) {
-    if (v.type != PX_STR) px_error("期望字符串，实际是 %s", px_type_name(v));
+    if (v.type != PX_STR) px_error("R1002: 期望字符串，实际是 %s", px_type_name(v));
     return v.as.obj->as.str.data;
 }
 static int rsa_strlen(LXValue v) {
-    if (v.type != PX_STR) px_error("期望字符串，实际是 %s", px_type_name(v));
+    if (v.type != PX_STR) px_error("R1002: 期望字符串，实际是 %s", px_type_name(v));
     return v.as.obj->as.str.len;
 }
 
@@ -110,9 +110,9 @@ static void rsa_free_mpis(mbedtls_mpi* N, mbedtls_mpi* P, mbedtls_mpi* Q, mbedtl
 // ---- rsa_gen_key(bits) → dict{n,e,d,p,q} ----
 LXValue bi_rsa_gen_key(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1 || args[0].type != PX_INT) px_error("rsa_gen_key 需要 (bits) 参数");
+    if (nargs != 1 || args[0].type != PX_INT) px_error("R1002: rsa_gen_key 需要 (bits) 参数");
     int bits = (int)args[0].as.i;
-    if (bits < 512 || bits > 4096) px_error("rsa_gen_key 的 bits 必须在 512..4096");
+    if (bits < 512 || bits > 4096) px_error("R1002: rsa_gen_key 的 bits 必须在 512..4096");
     mbedtls_rsa_context rsa;
     mbedtls_rsa_init(&rsa);
     if (mbedtls_rsa_gen_key(&rsa, px_rng, NULL, (unsigned int)bits, 65537) != 0) {
@@ -186,7 +186,7 @@ static int rsa_priv_ctx(mbedtls_rsa_context* rsa, const char* n_hex, const char*
 // ---- rsa_encrypt(data, n, e) → hex 密文 | null ----
 LXValue bi_rsa_encrypt(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 3) px_error("rsa_encrypt 需要 (data, n_hex, e_hex) 参数");
+    if (nargs != 3) px_error("R1002: rsa_encrypt 需要 (data, n_hex, e_hex) 参数");
     const char* data = rsa_str(args[0]);
     int dlen = rsa_strlen(args[0]);
     const char* n_hex = rsa_str(args[1]);
@@ -211,7 +211,7 @@ LXValue bi_rsa_encrypt(LXValue* args, int nargs, void* ctx) {
 // ---- rsa_decrypt(ct_hex, n, d) → 明文 | null ----
 LXValue bi_rsa_decrypt(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 3) px_error("rsa_decrypt 需要 (ct_hex, n_hex, d_hex) 参数");
+    if (nargs != 3) px_error("R1002: rsa_decrypt 需要 (ct_hex, n_hex, d_hex) 参数");
     const char* ct_hex = rsa_str(args[0]);
     int ctlen = rsa_strlen(args[0]);
     const char* n_hex = rsa_str(args[1]);
@@ -239,7 +239,7 @@ LXValue bi_rsa_decrypt(LXValue* args, int nargs, void* ctx) {
 // ---- rsa_sign(data, n, d) → hex 签名 | null ----
 LXValue bi_rsa_sign(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 3) px_error("rsa_sign 需要 (data, n_hex, d_hex) 参数");
+    if (nargs != 3) px_error("R1002: rsa_sign 需要 (data, n_hex, d_hex) 参数");
     const char* data = rsa_str(args[0]);
     int dlen = rsa_strlen(args[0]);
     const char* n_hex = rsa_str(args[1]);
@@ -264,7 +264,7 @@ LXValue bi_rsa_sign(LXValue* args, int nargs, void* ctx) {
 // ---- rsa_verify(data, sig_hex, n, e) → bool ----
 LXValue bi_rsa_verify(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 4) px_error("rsa_verify 需要 (data, sig_hex, n_hex, e_hex) 参数");
+    if (nargs != 4) px_error("R1002: rsa_verify 需要 (data, sig_hex, n_hex, e_hex) 参数");
     const char* data = rsa_str(args[0]);
     int dlen = rsa_strlen(args[0]);
     const char* sig_hex = rsa_str(args[1]);
@@ -294,7 +294,7 @@ static const char* rsa_msg(LXValue v, int* len) {
         *len = v.as.obj->as.str.len;
         return v.as.obj->as.str.data;
     }
-    px_error("期望字符串或 bytes，实际是 %s", px_type_name(v));
+    px_error("R1002: 期望字符串或 bytes，实际是 %s", px_type_name(v));
     return NULL;
 }
 
@@ -314,7 +314,7 @@ static char* rsa_pem_copy(const char* pem, int len) {
 //   输出: 标准 PKCS#1 v1.5-SHA256（DigestInfo 由 mbedtls 自动封装，与 Go rsa.SignPKCS1v15(crypto.SHA256) 互通）
 LXValue bi_rsa_sign_pkcs1v15_sha256(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 2) px_error("rsa_sign_pkcs1v15_sha256 需要 2 个参数: (pem_priv, msg)");
+    if (nargs != 2) px_error("R1002: rsa_sign_pkcs1v15_sha256 需要 2 个参数: (pem_priv, msg)");
     const char* pem = rsa_str(args[0]);
     int pemlen = rsa_strlen(args[0]);
     int mlen = 0;
@@ -351,7 +351,7 @@ LXValue bi_rsa_sign_pkcs1v15_sha256(LXValue* args, int nargs, void* ctx) {
 //   pem_pub: PEM 公钥文本（BEGIN RSA PUBLIC KEY=PKCS1 / BEGIN PUBLIC KEY=SPKI，pk_parse_public_key 自动识别）
 LXValue bi_rsa_verify_pkcs1v15_sha256(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 3) px_error("rsa_verify_pkcs1v15_sha256 需要 3 个参数: (pem_pub, msg, sig_hex)");
+    if (nargs != 3) px_error("R1002: rsa_verify_pkcs1v15_sha256 需要 3 个参数: (pem_pub, msg, sig_hex)");
     const char* pem = rsa_str(args[0]);
     int pemlen = rsa_strlen(args[0]);
     int mlen = 0;

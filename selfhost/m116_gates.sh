@@ -549,6 +549,7 @@ run m190_arity bash examples/m190_arity/verify.sh
 # M191（第 69 轮）：诊断面「三族口径 + 码的单一真相」—— 静态（带码/域前缀 · 个数分码 · 混写拆分 ·
 #   未收口棘轮）＋ 动态（11 探针 × 三轨同码同文）＋ 5 道负控。
 run m191_error_codes bash examples/m191_error_codes/verify.sh
+run m192_encfamily bash examples/m192_encfamily/verify.sh
 step "M190 · 上游 registry-px 真实用例回归（53 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。
