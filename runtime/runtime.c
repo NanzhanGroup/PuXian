@@ -3974,18 +3974,63 @@ void px_print_value(LXValue v, bool newline) {
     if (newline) fputc('\n', stdout);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// M185（第 63 轮 · 缺陷 205）：`px_to_string` / `px_tostr_n` —— 「值 → 文本」的**唯一**出口
+// ---------------------------------------------------------------------------
+// 修前实测四重病灶（都在**错误路径/边界类型**上，所以长期没被发现）：
+//   ① **容器一律返回硬编码字面量 `"<object>"`**（list/tuple/dict/result/枚举/bytes 全中）
+//      ⇒ `join(",", [[1,2],[3,4]])` 得到 `"<object>,<object>"`（**静默错值**），
+//        而解释轨的 `join` 走自己的 `i_to_str` 得到 `"[1, 2],[3, 4]"` ⇒ **三轨分叉**。
+//        同一条路还喂着 `write_file`/`append`/`env` 构造/HTTP 体/`unwrap` 消息 —— 五处全中。
+//   ② 那段代码每次都 `tmpfile()` 打开一个临时文件却**从不 fclose** ⇒ **fd 泄漏**
+//      （`join` 每项每遍各一次 ⇒ 两个元素的 join 漏 **4** 个 fd；长跑服务迟早 EMFILE）。
+//   ③ 它调用 `px_print_value(v, false)` —— 而 `px_print_value` 写的是 **stdout**
+//      （**不是**那个 tmpfile！）⇒ **未经请求的 stdout 副作用**：上例往程序输出里插了 4 段容器
+//      文本，在 HTTP handler 里就是往响应体里塞垃圾。
+//   ④ 另一处调用方 `px_vhost_normalize` 对返回值 `xfree(s)` —— 返回值可能是
+//      **字符串字面量**（`"<object>"` / `"null"`）⇒ `free()` 非法指针 = UB（glibc 直接 abort）。
+// 修法（三轨一条真相）：
+//   · 容器走 `px_fmt_value_n` —— **与 `str()` / `print` 同一个渲染器**（含环保护、字节精确），
+//     于是 `join`/`write_file`/`env`/HTTP 体/错误消息与解释轨的 `i_to_str` 逐字节一致；
+//   · 结果放**线程局部单槽**（换用即释放前一份）⇒ 无 fd、无 stdout 副作用、无泄漏；
+//   · 缓存容量单调增长，只在**变大**时重新分配 ⇒ 稳态零分配（热路径友好）。
+// ⚠️ 单槽契约（与 runtime.h 的既有注释一致）：**返回值在下一次 `px_tostr_n`/`px_to_string`
+//   调用时失效**。所有调用点都是「取到即用」（拼接/拷贝/printf）；需要跨调用持有的调用方
+//   必须自己拷贝（`px_vhost_normalize` / `route_normalize` 已各自备了 TLS 缓冲）。
+// ⚠️ 线程局部而非执行流局部：缓冲是**线程级**资源（不是协程状态），M93 帧协程迁移不改变
+//   语义 —— 拿到指针后只用它指向的**堆**内存，返回值返回前不再触碰槽位本身。
+// ═══════════════════════════════════════════════════════════════════════════
+static __thread char* g_tostr_buf = NULL;
+static __thread int   g_tostr_cap = 0;
+
+const char* px_tostr_n(LXValue v, int* out_len) {
+    if (v.type == PX_INT || v.type == PX_FLOAT) {
+        const char* s = (const char*)fmt_num(v);
+        *out_len = (int)strlen(s);
+        return s;
+    }
+    if (v.type == PX_BOOL) { *out_len = v.as.b ? 4 : 5; return v.as.b ? "true" : "false"; }
+    if (v.type == PX_NULL) { *out_len = 4; return "null"; }
+    if (v.type == PX_STR)  { *out_len = v.as.obj->as.str.len; return v.as.obj->as.str.data; }
+    // 其余类型（list/tuple/dict/result/enum/struct/bytes/generator/range…）：
+    //   与 `str()` / `print` 同一渲染器（`<bytes N>`、`[1, 2]`、`{a: 1}` …）
+    int n = 0;
+    char* s = px_fmt_value_n(v, &n);
+    if (n + 1 > g_tostr_cap) {
+        xfree(g_tostr_buf);
+        g_tostr_buf = (char*)xmalloc((size_t)n + 1);
+        g_tostr_cap = n + 1;
+    }
+    memcpy(g_tostr_buf, s, (size_t)n);
+    g_tostr_buf[n] = 0;
+    xfree(s);
+    *out_len = n;
+    return g_tostr_buf;
+}
+
 char* px_to_string(LXValue v) {
-    static char* buf = NULL;
-    static int cap = 0;
-    // 简化：针对 int/float 直接用 num_buf，字符串用转义缓冲
-    if (v.type == PX_INT || v.type == PX_FLOAT) return (char*)fmt_num(v);
-    if (v.type == PX_BOOL) return v.as.b ? (char*)"true" : (char*)"false";
-    if (v.type == PX_NULL) return (char*)"null";
-    if (v.type == PX_STR) return (char*)v.as.obj->as.str.data;
-    // 其他类型：写临时文件流
-    FILE* tmp = tmpfile();
-    if (tmp) { px_print_value(v, false); fflush(tmp); }
-    return (char*)"<object>";
+    int n = 0;
+    return (char*)px_tostr_n(v, &n);
 }
 
 // ==================== 运算 ====================
@@ -4437,6 +4482,20 @@ LXValue px_index(LXValue obj, LXValue idx) {
         //   截断成空串，与 compare_values 的 memcmp+len 字节安全语义不一致）
         if (clen == 1) return px_char1((unsigned char)buf[0]);   // M153：ASCII 单字符串表
         return px_rune_pool(buf, clen);                          // M154：多字节 rune 短串池（2..4 字节）
+    }
+    if (obj.type == PX_BYTES) {
+        // M185（第 63 轮 · 缺陷 203）：**bytes 整数索引 ⇒ int 字节值（0..255）**
+        //   对齐 Python `bytes[i]` / Go `[]byte[i]`（唯一的自然选择：bytes 的「元素」就是字节）。
+        //   负索引从尾、越界 `R1003 索引越界: i (len=n)` —— 与 list/str **同码同文**。
+        //   修前实测（三轨四种行为）：切片 = 解释轨缺（VM/C 有）；索引 = **三轨都缺**
+        //   （`R1002 此类型不支持索引: bytes`）；迭代 = 三轨都缺（VM/C 走本函数、解释轨自行报
+        //   `R1002 此类型不可迭代`）。而速查表事实 22/35 却宣称 `b[i]` 可用 ⇒ **文档与实现不符**
+        //   （写二进制库的人照文档写，第一行就崩）。
+        int i = (int)px_req_int_idx(idx);
+        int blen = obj.as.obj->as.str.len;
+        if (i < 0) i += blen;
+        if (i < 0 || i >= blen) px_error("R1003: 索引越界: %d (len=%d)", i, blen);
+        return px_int((int64_t)(unsigned char)obj.as.obj->as.str.data[i]);
     }
     if (obj.type == PX_DICT) {
         if (idx.type == PX_STR) {
@@ -5178,6 +5237,15 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
             if (obj.as.obj->as.result.ok) return obj.as.obj->as.result.value;
             px_error("unwrap 失败: Err(%s)", px_to_string(obj.as.obj->as.result.value));
         }
+        if (strcmp(name, "unwrap_err") == 0) {
+            // M185（第 63 轮 · 第三方 PX-DEF-003）：`unwrap` 的**对偶** —— 断言必为 Err
+            //   并取出错误值；Ok 上调用 ⇒ 响亮报错（不静默返回 null）。
+            //   修前只有 `ok()/err()`（它们对「另一侧」返回 null，是**查询**语义，不是断言），
+            //   写库的人要找的是「断言 + 取值」这一个动作（Rust 的 `unwrap_err`）。
+            if (nargs != 0) px_error("unwrap_err 不接受参数");
+            if (!obj.as.obj->as.result.ok) return obj.as.obj->as.result.value;
+            px_error("unwrap_err 失败: Ok(%s)", px_to_string(obj.as.obj->as.result.value));
+        }
         if (strcmp(name, "ok") == 0) {
             // Ok(v) → Some(v)=v；Err(_) → null
             return obj.as.obj->as.result.ok ? obj.as.obj->as.result.value : px_null();
@@ -5640,6 +5708,40 @@ static LXValue bi_float(LXValue* args, int nargs, void* ctx) {
     }
     px_error("R1002: float 不支持类型 %s", px_type_name(a));
     return px_null();
+}
+
+// ============ M185（第 63 轮）：严格解析的**判定器**（`is_int_str` / `is_float_str`）============
+// 由来：M184 把 `int()`/`float()` 收紧为「整体合法」（第三方 PX-DEF-002）之后，
+//   **任何想容错解析外部输入的地方都必须先判断**，而语言层没有判定器 ⇒
+//   第三方 `registry-px/cli` 自己写了 `cli_is_int_str`/`cli_is_float_str`、
+//   我方 `stdlib/cookiejar.px`（Max-Age 容错）也写了一遍 ⇒ 各写各的、口径还会漂。
+// 语义（**与 `int()`/`float()` 同一个谓词**，不是"看起来像"）：
+//   · `is_int_str(s)`   ⇔ `int(s)`  成功（十进制、可选符号、前导零合法、须在 int64 内）
+//   · `is_float_str(s)` ⇔ `float(s)` 成功（十进制 + 指数 + `inf/infinity/nan` 白名单）
+//   实现 = 直接复用 `px_str_to_i64` / `px_str_to_f64` ⇒ **判定与转换不可能漂移**
+//   （这正是 M184 想避免的那类缺陷：两个地方各写一遍解析规则，早晚分叉）。
+// 非 string 入参 ⇒ **false**（不报错）。为什么选 false 而不是响亮报错：
+//   ① 这是**谓词**（`is_*` — 全函数应返回 bool，与 `type()`/`contains()` 的查询语义同族）；
+//   ② 它存在的场景恰恰是「外部数据的类型未知」（`env()` 返回 null、json 里可能是 number）
+//      —— 响亮报错会让它在唯一需要的场合不可用；
+//   ③ false 是**拒绝**方向（安全侧），不是 M184 那种"静默给错值"。
+//   ⇒ 速查表已显式写明「非 string 一律 false」，并要求：判定为真再调 `int()`/`float()`。
+static LXValue bi_is_int_str(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: is_int_str 需要一个参数");
+    LXValue a = args[0];
+    if (a.type != PX_STR) return px_bool(0);
+    int64_t v = 0;
+    return px_bool(px_str_to_i64(a.as.obj->as.str.data, a.as.obj->as.str.len, &v) ? 1 : 0);
+}
+
+static LXValue bi_is_float_str(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: is_float_str 需要一个参数");
+    LXValue a = args[0];
+    if (a.type != PX_STR) return px_bool(0);
+    double v = 0;
+    return px_bool(px_str_to_f64(a.as.obj->as.str.data, a.as.obj->as.str.len, &v) ? 1 : 0);
 }
 
 static LXValue bi_bool(LXValue* args, int nargs, void* ctx) {
@@ -6144,12 +6246,14 @@ static LXValue bi_split(LXValue* args, int nargs, void* ctx) {
     return r;
 }
 
-// M154：join 取项字节 —— PX_STR 用 (data, str.len)（**字节精确**，含内嵌 NUL）；其它类型走
-//   px_to_string（数字/布尔/null 的文本表示无内嵌 NUL ⇒ strlen 与显式长等价）。
+// M154：join 取项字节 —— PX_STR 用 (data, str.len)（**字节精确**，含内嵌 NUL）。
+// M185（缺陷 205）：其它类型改走 `px_tostr_n`（同一渲染器 + **同时给出字节长**）——
+//   修前走 `px_to_string` + `strlen`：① 容器被渲染成硬编码 `"<object>"`
+//   （`join(",", [[1,2],[3,4]])` = `"<object>,<object>"`，解释轨 = `"[1, 2],[3, 4]"` ⇒ 三轨分叉）；
+//   ② 每次调用还把值打到 stdout 并漏一个 fd。改后两条同时消失，且容器里的内嵌 NUL
+//   不再被 `strlen` 截断（与 `+` 的口径一致）。
 static inline void bi_join_item(LXValue item, const char** pp, int* lp) {
-    if (item.type == PX_STR) { *pp = item.as.obj->as.str.data; *lp = item.as.obj->as.str.len; return; }
-    const char* ts = px_to_string(item);
-    *pp = ts; *lp = (int)strlen(ts);
+    *pp = px_tostr_n(item, lp);
 }
 
 // join(sep, list) -> str
@@ -10571,6 +10675,9 @@ void px_register_builtins(void) {
     px_set_global("str", px_native("str", bi_str));
     px_set_global("int", px_native("int", bi_int));
     px_set_global("float", px_native("float", bi_float));
+    // M185（第 63 轮）：严格解析的判定器（与 int()/float() 同一谓词；第三方 PX-DEF-002 的配套）
+    px_set_global("is_int_str", px_native("is_int_str", bi_is_int_str));
+    px_set_global("is_float_str", px_native("is_float_str", bi_is_float_str));
     px_set_global("bool", px_native("bool", bi_bool));
     px_set_global("assert", px_native("assert", bi_assert));
     px_set_global("panic", px_native("panic", bi_panic));
@@ -24470,10 +24577,12 @@ static void px_vhost_normalize(LXValue v, int* status, const char** ct, const ch
                 (void)px_hdr_append(h, extra, 0, extra_sz, 1, NULL);
         }
     } else {
-        char* s = px_to_string(v);
+        // M185（缺陷 205 · ④）：**删掉 `xfree(s)`** —— `px_to_string` 的返回值（按 runtime.h
+        //   的既有契约）是**运行时自有的静态/线程局部缓冲**，可能是**字符串字面量**
+        //   （`"<object>"`/`"null"`）⇒ 对它 `free()` 是非法指针 = UB（glibc 直接 abort）。
+        //   这里本来就是「拷贝进本函数自己的 TLS 缓冲再交出」的写法，所有权从未转移。
         static __thread char vh_buf[4096];
-        snprintf(vh_buf, sizeof(vh_buf), "%s", s ? s : "");
-        if (s) xfree(s);
+        snprintf(vh_buf, sizeof(vh_buf), "%s", px_to_string(v));
         *body = vh_buf;
         *body_len = (int)strlen(vh_buf);
     }

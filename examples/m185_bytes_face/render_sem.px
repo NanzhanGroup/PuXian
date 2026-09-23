@@ -1,0 +1,22 @@
+def fd_count():
+    return len(list_dir("/proc/self/fd"))
+
+def main():
+    print("A0 fdok=", fd_count() > 0)
+    print("A1 join=", join(",", [[1, 2], [3, 4]]))
+    print("A2 join=", join("-", [{"a": 1}, {"b": 2}]))
+    print("A3 join=", join("|", [1, 2.5, true, null]))
+    print("A4 join=", join(",", [bytes("ab"), "x"]))
+    print("B1 strlist=", str([1, 2]))
+    print("B2 strdict=", str({"a": 1}))
+    print("B3 strbytes=", str(bytes("ab")))
+    print("B4 strres=", str(Ok(1)))
+    let f0 = fd_count()
+    var s = ""
+    var i = 0
+    while i < 200:
+        s = join(",", [[1, 2], [3, 4]])
+        i += 1
+    print("C1 len=", len(s))
+    print("C2 fddelta=", fd_count() - f0)
+    print("D1 end")

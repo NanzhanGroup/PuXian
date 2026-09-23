@@ -1,3 +1,117 @@
+## M185 · `bytes` 三面统一 + 严格解析判定器 + `unwrap_err` + `px_to_string` 四重病灶（第 63 轮 · 缺陷 203/204/205 + 第三方 PX-DEF-003/015）
+
+> 主题：本轮从第三方 `banshanhanfu/registry-px` 的登记表（`PX-DEF-001…017`，我方逐条三轨复测见
+> [`docs/PX_DEF_TRIAGE.md`](docs/PX_DEF_TRIAGE.md)）里挑最重的一族收口，实施过程中**又照出一条更值钱的**。
+> 四组是同一家族：**同一语义在多处各写一遍 ⇒ 静默错值 / 三轨分叉 / 资源泄漏**。
+> 门：`examples/m185_bytes_face/`。
+
+### 一、缺陷 203：`bytes` 的「索引 / 切片 / 迭代」三面，三轨四种行为
+
+| 写法（修前实测） | 解释轨 | VM 轨 | C 轨 |
+|---|---|---|---|
+| `len(b)` | 字节数 ✓ | ✓ | ✓ |
+| `b[a:b]` 切片 | **`R1002 此类型不支持切片`** | 按字节 ✓ | 按字节 ✓ |
+| `b[i]` 索引 | **`R1002 此类型不支持索引`** | ✗ 同左 | ✗ 同左 |
+| `for x in b` 迭代 | **`R1002 此类型不可迭代`** | `R1002 此类型不支持索引: bytes` | 同 VM |
+
+⇒ **四类行为、三种词条**；而速查表事实 22/35 早就写着 `b[i]` 可用 —— **文档与实现不符**，
+写二进制库的人照文档写、第一行就崩（34 个第三方库里 base58/checksum/tar 全在处理二进制）。
+
+**统一语义**（对齐 Python `bytes` / Go `[]byte` —— 唯一自然选择：bytes 的元素就是字节）：
+
+| 面 | 语义 |
+|---|---|
+| `len(b)` | 字节数 |
+| `b[i]` | **int 字节值**（0..255）；负索引从尾；越界 `R1003 索引越界: i (len=n)` |
+| `b[a:b]` | **bytes**（按字节；支持负边界 / 步长 / 反向） |
+| `for x in b` | 逐**字节值** int |
+
+**实现**：
+- `runtime/runtime.c::px_index` 新增 `PX_BYTES` 分支（`px_slice` 本就支持 bytes ⇒ 切片自动可用；
+  VM 轨 `PXOP_ITERAT` → `px_iter_at` → 落回 `px_index` ⇒ **迭代同时修好**）。
+- 解释轨 `selfhost/ival.px` 的 `i_index` / `i_slice` / `i_iter` 各补 bytes 分支；
+  切片复用 `i_slice_indices`（与 list/tuple/string **同一条下标路径** ⇒ 负边界/步长/clamp 不会自成一套）。
+
+### 二、`is_int_str(s)` / `is_float_str(s)` —— 以及**缺陷 204**（同一规则两处实现）
+
+M184 把 `int()/float()` 收紧为"整体合法"之后，**任何容错解析都必须先判断**，而语言层没有判定器
+⇒ 第三方 `cli` 库自写 `cli_is_int_str`、我方 `stdlib/cookiejar.px`（`Max-Age` 容错）也写了一遍。
+
+新增两个内置，语义 = **与 `int()`/`float()` 同一个谓词**（直接转发 `px_str_to_i64`/`px_str_to_f64`
+⇒ 判定与转换**不可能漂移**）。非 string ⇒ `false`（谓词语义；false 是**拒绝**方向，
+不是 M184 那种"静默给错值"）。门第 ② 层用 `E1..E6` 六条等价性定点钉死这条等式。
+
+**缺陷 204**（本轮复审时发现）：解释轨 `selfhost/ibuiltin.px` 里有一对**同规则的第二份实现**
+（`i_str_is_int_literal` 手写扫描 / `i_str_is_float_literal` 正则）—— 那是 M184 之前为"报错带 `行:列`"
+写的。**两处实现同一规则 = 结构性分叉隐患**（实测两者当时接受集**恰好**一致，未爆）。
+本轮**删掉这两份**，改调原生判定器 ⇒ `is_int_str(s) ⇔ int(s) 成功` 由**构造**保证。
+
+### 三、`unwrap_err()`（第三方 PX-DEF-003）
+
+`unwrap` 的**对偶**：断言必为 Err 并取出错误值；Ok 上调用 ⇒ 响亮 `R1004`（不静默返回 null）。
+`ok()/err()` 保留为**查询**语义（另一侧给 null）。三轨同做（`px_call_method` + `i_result_method`）。
+
+> 顺带：写 `unwrap_err` 消息时发现 `Ok({a: 1})` 在 VM/C 轨渲染成 `Ok(<object>)`、
+> 解释轨是 `Ok({a: 1})` ⇒ 分叉。顺着这条线挖出了 §四。
+
+### 四、缺陷 205：`px_to_string` 的四重病灶（**本轮最值钱的一颗**）
+
+`px_to_string` 是"值 → 文本"的出口（`join` 项、`write_file`/`append` 内容、`env` 构造、
+HTTP 体、`unwrap`/`unwrap_err` 消息…）。修前它是 8 行函数，**四重病**：
+
+| # | 病灶 | 实测 |
+|---|---|---|
+| ① | 容器**一律**返回硬编码字面量 `"<object>"` | `join(",", [[1,2],[3,4]])` = `"<object>,<object>"`（**静默错值**）· 解释轨 = `"[1, 2],[3, 4]"` ⇒ **三轨分叉** |
+| ② | 每次调用把值**打印到 stdout** | 上例一次 join 触发 **4** 次打印 ⇒ 程序输出里被塞进 `[1, 2][3, 4][1, 2][3, 4]`（HTTP handler 里就是往响应体塞垃圾） |
+| ③ | 每次调用 `tmpfile()` **从不 `fclose`** | 两元素 join 一次漏 **4** 个 fd ⇒ 长跑服务迟早 EMFILE |
+| ④ | 调用方 `xfree(px_to_string(...))` | 返回值可能是**字符串字面量**（`"<object>"`/`"null"`）⇒ `free()` 非法指针 = UB（glibc 直接 abort） |
+
+**根因**：②③ 出自一段"想用临时文件流渲染"的**死代码**（`tmpfile()` 建了却没人往里写 ——
+`px_print_value` 写的是 **stdout**）；① 是那段代码的兜底 `return (char*)"<object>";`；
+④ 是调用方误以为返回的是自有堆内存（`runtime.h` 的注释**一直**写着"返回静态缓冲（每次调用覆盖）"）。
+这条路径**只在容器/错误消息上走**，所以主流程测试全绿 —— 典型的"边界类型上的长期潜伏"。
+
+**修法**：单一渲染器 —— 容器走 `px_fmt_value_n`（**与 `str()`/`print` 同一实现**，含环保护、字节精确），
+结果放**线程局部单槽**（换用即释放前一份；容量只增不减 ⇒ 稳态零分配）；删 tmpfile、删非法 `xfree`；
+`route_normalize`（body 要活到发送前）另备 TLS 缓冲；`bi_join_item` 同时拿到**字节长**
+（顺带修掉"容器内含内嵌 NUL 被 `strlen` 截断"）。
+
+### 五、门与验收（全部实测，数字取本轮终态）
+
+- **门** `examples/m185_bytes_face/`：`M185-VERIFY-OK` —— **PASS=43 / FAIL=0**
+  （四层正判据：bytes 三面 25 行 · 判定器 60 行含 6 条等价性 · 渲染收口含 **fd 增量=0** 与
+  **stdout 行数恰为 12** · 拒绝侧 4 例 × 三轨同码同文）+ **四道负控各自独立判红**、源逐字节还原。
+- **入库件**：`--rebake-all` 12/12 + pxc/pxc_vm · `--check-all` **14/14**（源码链 + runtime 链指纹一致）。
+- **对拍/门**：`--check`（55 例）· `--check-vm`（字节码镜像）· `diffcheck`（lexer/parser/errors/codegen/value/interp
+  **六路**）· `engine_parity` · `interp_builtin_parity` · `zombie_reap` —— 全绿。
+- **发射冻结门**：**392 件**逐字节一致。本轮出现**类别 B 15 件**（源码未变而产物变），
+  逐条核对结论：**差异 100% 是 `PXOP_SRCLINE` 位移**（非 SRCLINE 差异 **0 行**），
+  成因 = `stdlib/strings.px` 头部注释 +4 行 ⇒ 15 个 import 它的语料行号整体后移（**纯机械**）⇒ 重定基。
+- **生成物**：`docs/native_index.json` 371 → **373**（含 `is_int_str`/`is_float_str`）·
+  内置名册 `tools/lint_core.px` **389 名**（`gen_builtin_list.sh` + 门双守；未同步会让
+  `interp_builtin_list` / `eco_index` / `m177_builtin_parity` **三个门同时红** —— 本轮实测）。
+- **`m116_gates.sh` 全量门**：**失败 0 项**（含本轮新注册的 m185 门，负控在本地全跑）。
+- **第三方 `registry-px`（HEAD `75dada3` · 34 库）**：编译轨（build+run）**33/34** · 解释轨 **31/34**。
+  唯一实质失败 = `passhash`（`R1002 无法将 'abc' 转为 int`）—— **M184 严格化的已登记后果**
+  （其 `pass_verify` 直接 `int(parts[1])` 吃外部可构造的 hash 串），非本轮回归；
+  `concurrent_map` / `workerpool` = 解释器设计性不支持并发。
+
+### 六、诚实记录
+
+1. **门自己的负控写反了**：`neg()` 的两个分支在初版里颠倒 ⇒ 把"负控没有牙"报成 PASS。
+   实测抓到（NC-D 明明已判红却报 FAIL）后按"**0 = 判据已判红**"统一约定重写，并加注释留证。
+   ⇒ 教训与 M185 门的同类：**门的负控自身也会骗人，必须用"打桩后源确实变了 + 判据由绿转红"两条同时要求**。
+2. **`pxfmt` 不可省**：`selfhost/ibuiltin.px` 改完必须 `pxfmt -w` 再重烘（否则 CI 的 fmt 门判红，
+   且源码变 ⇒ 重烘的指纹又变，白跑一轮）。
+3. 判定器"非 string ⇒ false"是**有意的宽松**（谓词全函数 + 它的使用场景就是类型未知的外部数据），
+   已在速查表显式写明；若想要响亮版请先判 `type(v) == "string"`。
+
+### 七、下一轮候选
+
+`Result`/`Option` 方法的**文案族**审计（本轮只顺带修了 `unwrap*` 的渲染）· 逐桥根面人工审计 ·
+`PX_GC_STRESS=1` 铺到全部 `examples/*/verify.sh` · **把 `registry-px` 的库按"三轨独立验证 + 依赖缺陷已修"
+两道闸逐批纳入官方 `registry/`**（第一批候选：`glob`（依赖 M184 的 `list_dir_opt`）与 `base58`）。
+
 ## M184 · 数值解析严格化 + `mkdir` 返回 bool + `list_dir_opt`（第 62 轮 · 缺陷 200/201/202）
 
 > 主题：本轮收口的是**第三方 `banshanhanfu/registry-px` 登记的三条缺陷**

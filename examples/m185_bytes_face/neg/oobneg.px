@@ -1,0 +1,5 @@
+def main():
+    var b = bytes("ab")
+    print("before")
+    print(b[-5])
+    print("after")

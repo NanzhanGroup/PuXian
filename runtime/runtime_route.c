@@ -292,9 +292,17 @@ static void route_normalize(LXValue v, RouteResp* r) {
             break;
         }
         default: {
-            char* s = px_to_string(v);
-            r->body = s;
-            r->body_len = (int)strlen(s);
+            // M185（缺陷 205）：`px_to_string` 是**线程局部单槽**（每次调用覆盖），
+            //   而 RouteResp.body 要活到"发送前" ⇒ 必须先拷进本模块自己的 TLS 缓冲
+            //   （与 px_vhost_normalize 的 vh_buf 同款）。修前存的是字面量 "<object>"，
+            //   指针恰好永生，反而掩盖了这一问题。
+            static __thread char rt_buf[4096];
+            const char* s = px_tostr_n(v, &r->body_len);
+            int n = r->body_len < (int)sizeof(rt_buf) - 1 ? r->body_len : (int)sizeof(rt_buf) - 1;
+            memcpy(rt_buf, s, (size_t)n);
+            rt_buf[n] = 0;
+            r->body = rt_buf;
+            r->body_len = n;
             break;
         }
     }
