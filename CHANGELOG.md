@@ -60,6 +60,28 @@
 ⇒ **纪律（新增）：`git push origin main <tag>` 用**同一条命令**推**（或**先推 tag 再推 main**）。
 这样 main 的 push 事件发生时 tag 已经在位，与 grace 窗口无关。
 
+### 四-bis ⚠️ CI 抓回：**门自己依赖了环境**（M194 门的 `ok1_read_at`）
+
+M196 推上去后 CI 红，注解（M195 修好的那条通道）一眼给出真因：
+
+```
+=== ③ v_m194.log ===
+  FAIL [2b] ok1_read_at (interp)：rc=0 且输出含「don」
+  FAIL [2b] ok1_read_at (vm)：rc=0 且输出含「don」
+  FAIL [2b] ok1_read_at (c)：rc=0 且输出含「don」
+M194-VERIFY-FAIL
+```
+
+`ok1_read_at.px` 是 `read_at("/etc/hostname", 0, 3)`，而期望值写成 **`don`** ——
+**本机 hostname 是 `dongyue`**（"don" 恰好是它的前三字节）。CI runner 的 `/etc/hostname`
+是容器 id ⇒ 断言必红。**这是「门依赖环境」的第 N 例**（前有"cwd 必须在仓库内"、"5 分钟克隆"）。
+
+修法：**不要在断言里用宿主环境的内容** —— 门自己造 fixture：
+`write_file("/tmp/m194_ok1.txt", "abcdef")` 然后 `read_at(…, 1, 3)` ⇒ 期望 **`bcd`**（与环境无关）。
+顺带把 `ok8_read_mmap` 也改成自造 fixture（原来 `read(fd, 4)` 的内容取决于宿主文件长度）。
+
+> 教训（重申）：**门若依赖环境，它给出的红/绿就不是事实。**
+
 ### 五 验收
 
 ```
