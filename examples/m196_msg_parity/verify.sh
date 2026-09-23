@@ -108,7 +108,9 @@ judge_case() {
 echo "=== [1] 静态判据：文案对拍 [S7]（§6.7）==="
 s7() { python3 "$ROOT/examples/m196_msg_parity/scan_msgs.py" --root "$ROOT" > "$W/s7.log" 2>&1; }
 s7; rc=$?
-chk "[1] [S7] 全绿（可比 180 · 不一致 0）" "[ \$rc = 0 ] && grep -q '可比函数 180 · 当前不一致 0' '$W/s7.log'"
+# ⚠️ M197（第 75 轮）订正：**不要对「可比函数」的绝对数写等式** —— 它随「解释轨新增文案」自然增长
+#   （M196 时 180 ⇒ M197 补了 3 条 os_* arity 文案后是 183）。判据改成「**下限** + 不一致 0」。
+chk "[1] [S7] 全绿（可比 ≥180 · 不一致 0）" "[ \$rc = 0 ] && grep -q '当前不一致 0' '$W/s7.log' && grep -oE '可比函数 [0-9]+' '$W/s7.log' | awk '{exit !(\$2 >= 180)}'"
 chk "[1] 基线已清空 ⇒ 硬判据（任何新增立即判红）" "grep -q '基线函数 0 · 新增 0/0' '$W/s7.log'"
 chk "[1] FMT_OK 两条带理由（range / atan2）且真跑过" "grep -q 'FMT_OK' '$ROOT/examples/m196_msg_parity/scan_msgs.py' && grep -c 'why' '$ROOT/examples/m196_msg_parity/scan_msgs.py' | grep -q '^2$'"
 

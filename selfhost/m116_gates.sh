@@ -581,6 +581,14 @@ run m195_arg_guards2 bash examples/m195_arg_guards2/verify.sh
 #   判据：静态 [S7]（可比 180 · **不一致 0** · 基线已清空 ⇒ 硬判据）+ 13 错例 × 三轨同码同文
 #   + 合法侧 4 例 + 4 道负控（3 静态 · 1 动态）。
 run m196_msg_parity bash examples/m196_msg_parity/verify.sh
+# M197（第 75 轮）：**全内置 0 参探针** ⇄ 原生 arity 文案（缺陷 232 + 233）—— M196 的 [S7] 是
+#   **静态**对拍，看不见「用**变量**拼出来的文案」（`cname + " 需要 1 个参数"` 的字面量 head 是变量）。
+#   本轮把 193 个内置全跑 0 参，抓到两组：① arity 文案 5 条（sqrt/sin/cos/tan/log 缺「（弧度）」/
+#   「（自然对数 ln）」等说明）；② **守卫顺序** 3 处（os_spawn/os_kill/os_exec 修前**没有 arity 守卫**、
+#   直接索引 args[0]，0 参撞 `R1003 索引越界` —— 与 M196 的 gen_next 同族）。
+#   判据：静态 [S7] + **动态 [S8]**（193 内置 · 0 参 · 必须 R1002 且文案逐字命中原生 arity 文案 ·
+#   SKIP 24 条每条给理由）+ 8 错例 × 三轨同码同文 + 合法侧 4 例 + 4 道负控。
+run m197_builtin_arity bash examples/m197_builtin_arity/verify.sh
 step "M190 · 上游 registry-px 真实用例回归（53 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。

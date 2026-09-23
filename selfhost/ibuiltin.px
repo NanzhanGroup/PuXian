@@ -460,6 +460,11 @@ def i_call_builtin(name, args, pos):
         # M114 尾修（qg-issue 69）：第 3 参 group **必须透传**。
         #   此前静默丢弃 ⇒ 解释器内 os_spawn(cmd, argv, true) 不成进程组，
         #   随后 os_kill(pid, sig, true) / kill(-pgid) 语义失效（与 C 轨不一致）。
+        # M197（缺陷 232）：修前**没有 arity 守卫** —— `os_spawn()` 直接索引 args[1]
+        #   ⇒ 撞 `R1003 索引越界`（解释轨自己的越界错），而原生给 `R1002: os_spawn 需要
+        #   (cmd, args[, group|opts]) 参数` ⇒ **同操作两码两文**。守卫**必须在取实参之前**。
+        if len(args) < 2 or len(args) > 3:
+            return Err(i_r1002("os_spawn 需要 (cmd, args[, group|opts]) 参数", pos))
         if len(args) == 3:
             return Ok(os_spawn(args[0], args[1], args[2]))
         return Ok(os_spawn(args[0], args[1]))
@@ -477,13 +482,19 @@ def i_call_builtin(name, args, pos):
         return Ok(os_wait(args[0]))
     if name == "os_kill":
         # M66：支持 (pid, sig[, group])；pxi 传宿主同名函数（解释器自身是编译产物，宿主已注册）
-        if len(args) >= 2 and len(args) <= 3:
-            if len(args) == 2:
-                return Ok(os_kill(args[0], args[1]))
-            return Ok(os_kill(args[0], args[1], args[2]))
-        return Ok(os_kill(args[0]))
+        # M197（缺陷 232）：修前 1 参/0 参都落到 `os_kill(args[0])` —— 0 参撞 `R1003 索引越界`，
+        #   而原生给 `R1002: os_kill 需要 (pid, sig[, group]) 参数`。
+        if len(args) < 2 or len(args) > 3:
+            return Err(i_r1002("os_kill 需要 (pid, sig[, group]) 参数", pos))
+        if len(args) == 2:
+            return Ok(os_kill(args[0], args[1]))
+        return Ok(os_kill(args[0], args[1], args[2]))
     if name == "os_exec":
         # M66：进程替换（launcher 语义；解释器内执行将替换解释器自身，语义与编译模式一致）
+        # M197（缺陷 232）：修前无 arity 守卫 ⇒ 0 参撞 `R1003 索引越界`
+        #   （原生给 `R1002: os_exec 需要 (cmd, args?) 参数，cmd 为字符串`）。
+        if len(args) < 1 or len(args) > 2:
+            return Err(i_r1002("os_exec 需要 (cmd, args?) 参数，cmd 为字符串", pos))
         if len(args) == 1:
             return Ok(os_exec(args[0]))
         return Ok(os_exec(args[0], args[1]))
@@ -1146,9 +1157,19 @@ def i_call_builtin(name, args, pos):
 # ---- M59-S4 数学直调 helper（双模式对齐） ----
 # 解释器参数错误返回 Err（不终止进程，区别于编译模式 px_error 终止）；
 # 参数合法后直调同名 runtime C builtin（pxi 宿主已注册全部 M59 数学内置）。
+def i_math_arity_msg(cname):
+    # M197（缺陷 233）：原生侧这几条 arity 文案**带说明**（弧度 / 自然对数），
+    #   解释轨修前统一写 `X 需要 1 个参数` ⇒ 0 参调用时**三轨两文**。
+    if cname == "sin" or cname == "cos" or cname == "tan":
+        return cname + " 需要 1 个参数（弧度）"
+    if cname == "log":
+        return "log 需要 1 个参数（自然对数 ln）"
+    if cname == "sqrt":
+        return "sqrt 需要一个参数"
+    return cname + " 需要 1 个参数"
 def i_math_unary(cname, args, pos):
     if len(args) != 1:
-        return Err(i_r1002(cname + " 需要 1 个参数", pos))
+        return Err(i_r1002(i_math_arity_msg(cname), pos))
     let t = i_type_name(args[0])
     if t != "int" and t != "float":
         return Err(i_r1002(cname + " 参数必须是数字，实际是 " + t, pos))
