@@ -1,0 +1,6 @@
+# M186 拒绝侧 3：bytes_to_int 实参过多（4 个；签名上限 3）
+# 修前解释轨分支只在 len(args) < 1 or > 3 时报错，但**只透传 args[0]** ⇒ 多余实参被静默忽略（不报错）
+def main():
+    print("before")
+    print(str(bytes_to_int(hex_to_bytes("0102"), "big", false, 1)))
+    print("after")

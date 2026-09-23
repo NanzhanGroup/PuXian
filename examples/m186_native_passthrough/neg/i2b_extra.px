@@ -1,0 +1,5 @@
+# M186 拒绝侧 2：int_to_bytes 实参过多（5 个；签名上限 4）
+def main():
+    print("before")
+    print(str(int_to_bytes(1, 2, "big", true, 9)))
+    print("after")

@@ -1,0 +1,63 @@
+# ============================================================
+# M186 门 · 解释轨 native「透传完整性」—— bytes_pack 族（PX-DEF-018/019/020）
+# ------------------------------------------------------------
+# 病灶：解释器 `selfhost/ibuiltin.px` 转发 C 层 native 时**只透传前 1~3 个实参**，
+#       而 C 层签名是：
+#         int_to_bytes(n, size[, endian[, signed]])   2-4 参
+#         bytes_to_int(bytes[, endian[, signed]])      1-3 参
+#       ⇒ ① `signed` 被**静默丢弃** ⇒ 负值补码编码与编译轨分叉（实测 -5 → 解释轨 "0.0" vs 编译轨 fffb）
+#          ② `endian` 被**静默丢弃** ⇒ `bytes_to_int(0102, "little")` 解释轨 258 / 编译轨 513
+#          ③ 实参不足时 `args[1]` **越界** ⇒ 报晦涩的 `R1003: 索引越界`（编译轨是 R1002 参数错）
+#       三处都属"静默错值 / 同码不同文"族（与 M116/M120/M163/M184 同一纪律：响亮优于静默）。
+# 判据：本文件在三轨上 rc=0 且 stdout **逐字节一致**（值语义），并在门里钉死关键定点。
+# ============================================================
+
+def p(tag, v):
+    print(tag + " = " + str(v))
+
+
+def main():
+    # ---- ① bytes_to_int：endian 面（PX-DEF-019）----
+    p("A1", bytes_to_int(hex_to_bytes("0102"), "big"))
+    p("A2", bytes_to_int(hex_to_bytes("0102"), "little"))
+    p("A3", bytes_to_int(hex_to_bytes("0102"), "be"))
+    p("A4", bytes_to_int(hex_to_bytes("0102"), "le"))
+    p("A5", bytes_to_int(hex_to_bytes("0102")))
+
+    # ---- ② bytes_to_int：signed 面 ----
+    p("B1", bytes_to_int(hex_to_bytes("ffff"), "big", true))
+    p("B2", bytes_to_int(hex_to_bytes("ffff"), "big", false))
+    p("B3", bytes_to_int(hex_to_bytes("80"), "big", true))
+    p("B4", bytes_to_int(hex_to_bytes("80"), "big", false))
+    p("B5", bytes_to_int(hex_to_bytes("fffe"), "big", true))
+
+    # ---- ③ int_to_bytes：signed / endian 面（PX-DEF-020）----
+    p("C1", bytes_to_hex(int_to_bytes(-5, 2, "big", true)))
+    p("C2", bytes_to_hex(int_to_bytes(-5, 2, "little", true)))
+    p("C3", bytes_to_hex(int_to_bytes(258, 2, "little")))
+    p("C4", bytes_to_hex(int_to_bytes(258, 2)))
+    p("C5", bytes_to_hex(int_to_bytes(-1, 1, "big", true)))
+    p("C6", bytes_to_hex(int_to_bytes(255, 1)))
+    p("C7", bytes_to_hex(int_to_bytes(-2, 8, "big", true)))
+
+    # ---- ④ 越界 / 域外：一律 null（三轨同）----
+    p("D1", int_to_bytes(300, 1))
+    p("D2", int_to_bytes(-1, 2))
+    p("D3", int_to_bytes(128, 1, "big", true))
+    p("D4", bytes_to_int(hex_to_bytes("aabbccddeeff00112233")))
+    p("D5", bytes_to_int(hex_to_bytes("00")))
+
+    # ---- ⑤ 往返定点（端序 × 符号 组合）----
+    p("E1", bytes_to_int(int_to_bytes(-1234, 4, "little", true), "little", true))
+    p("E2", bytes_to_int(int_to_bytes(-1234, 4, "big", true), "big", true))
+    p("E3", bytes_to_int(int_to_bytes(4660, 4, "little"), "little"))
+    p("E4", bytes_to_hex(int_to_bytes(0, 1)))
+    p("E5", bytes_to_hex(int_to_bytes(-32768, 2, "big", true)))
+
+    # ---- ⑥ 相邻族回归护栏（本轮不动，防顺手改坏）----
+    p("F1", int_to_hex(255, 4))
+    p("F2", hex_to_int("ff"))
+    p("F3", bytes_to_hex(bytes_slice(hex_to_bytes("00112233"), 1, 3)))
+    p("F4", bytes_find(hex_to_bytes("00112233"), hex_to_bytes("22")))
+    p("F5", bytes_to_int(bytes(0x0102)))
+    p("F6", bytes_len(int_to_bytes(7, 3)))
