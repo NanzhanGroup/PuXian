@@ -192,8 +192,10 @@ if [ "$NEG" = 1 ]; then
         python3 - <<'PY'
 p = 'runtime/runtime.c'
 s = open(p, encoding='utf-8').read()
+# M191：锚点更新 —— 该守卫已按 §2.3 拆成「个数(R1005) + 类型(R1002)」两条
 a = '''        if (strcmp(name, "find") == 0) {
-            if (nargs != 1 || args[0].type != PX_STR) px_error("R1002: 方法 find 参数 1 需要 string");
+            if (nargs != 1) px_error("R1005: 方法 find 需要 1 个参数");
+            if (args[0].type != PX_STR) px_error("R1002: 方法 find 参数 1 需要 string");
             return px_int(px_str_index_of_runes(obj.as.obj, args[0].as.obj));
         }
 '''
@@ -230,7 +232,7 @@ p = 'selfhost/icall.px'
 s = open(p, encoding='utf-8').read()
 a = '''    if name == "strip":
         if len(args) != 0:
-            return Err(i_r1002("方法 strip 不接受参数", pos))
+            return Err(i_r1005("方法 strip 不接受参数", pos))
         return Ok(s.trim())
 '''
 assert s.count(a) == 1, 'D anchor'
