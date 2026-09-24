@@ -661,6 +661,14 @@ step "M204 · 复合赋值在 Index / Field 目标上的三轨同一真相（第
 #   [4] 负控 5 道（Index/Field 退回旧形态 · 顺序违规 · 重复求值 · 解释轨 246 退回；
 #   前四道**必须重编 C 轨编译器**后用 PX_PXC_BIN 注入 —— 改动只在 C 轨可见）。
 run m204_assign_op bash examples/m204_assign_op/verify.sh
+
+step "M205 · CLI 诊断通道统一（缺陷 186 的 tools 面 · 缺陷 247）"
+#   口径 docs/ERROR_CODES.md §7：**诊断**（错误/警告/参数错提示/参数错时的用法）⇒ stderr；
+#   **产品**（成功路径结果 / 结构化 JSON / --help 文本）⇒ stdout；失败路径 rc≠0。
+#   [1] 静态 [S12]：A 失败路径 print=0 · B usage 分流 8 · C stderr 出口闭集 · D shell 侧 · E 反向判据
+#   [2] 动态 28 例（8 CLI × err/help/ok）· [3] 解释轨面（pxpkg / routegen / print_err 探针）
+#   [4] 负控 3 道（A 静态退回 print · B 参数错用法退回 stdout + 现场重编 · C pxpkg bash 侧退回）
+run m205_cli_channels bash examples/m205_cli_channels/verify.sh
 step "M190 · 上游 registry-px 真实用例回归（53 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。

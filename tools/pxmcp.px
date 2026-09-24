@@ -390,10 +390,16 @@ def mcp_serve():
                 if jr_method_of(m) == "exit" and jr_classify(m) == "notification":
                     done = true
     return 0
-def usage():
-    print("pxmcp —— PuXian MCP 服务器（自举，M65-S4）")
-    print("用法: pxmcp [--version]")
-    print("  服务器入口：stdio 即 MCP transport（pxc mcp 直通执行）")
+# M205（缺陷 186 tools 面）：CLI 诊断走 stderr —— usage 按场景分流（--help→stdout；参数错→stderr）
+def cli_out(s, to_err):
+    if to_err:
+        mcp_err(s)
+    else:
+        print(s)
+def usage(to_err):
+    cli_out("pxmcp —— PuXian MCP 服务器（自举，M65-S4）", to_err)
+    cli_out("用法: pxmcp [--version]", to_err)
+    cli_out("  服务器入口：stdio 即 MCP transport（pxc mcp 直通执行）", to_err)
 def main():
     let as_ = args()
     var i = 1
@@ -403,11 +409,11 @@ def main():
             print("pxmcp " + PXMC_VER + " (普贤 PuXian mcp · " + PXMC_MS + ")")
             exit(0)
         elif a == "--help" or a == "-h":
-            usage()
+            usage(false)
             exit(0)
         elif starts_with(a, "-"):
             mcp_err("pxmcp: 未知选项 '" + a + "'")
-            usage()
+            usage(true)
             exit(1)
         i += 1
     exit(mcp_serve())

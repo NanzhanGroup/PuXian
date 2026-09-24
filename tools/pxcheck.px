@@ -294,11 +294,17 @@ def px_run(file, base_root):
     if errs > 0:
         exit(1)
     exit(0)
-def usage():
-    print("pxcheck —— PuXian 独立诊断器（LSP 子进程，M65-S2）")
-    print("用法: pxcheck <file.px> [--base <dir>] [--semantic] [--version]")
-    print("  --semantic  并入编译期语义诊断（E3002/E3003/E3004…；位置一律 1/1，见文件头）")
-    print("输出: parse 成功 → stdout JSON 诊断数组；parse 失败 → 文本错误行")
+# M205（缺陷 186 tools 面）：CLI 诊断走 stderr —— usage 按场景分流（--help→stdout；参数错→stderr）
+def cli_out(s, to_err):
+    if to_err:
+        px_err(s)
+    else:
+        print(s)
+def usage(to_err):
+    cli_out("pxcheck —— PuXian 独立诊断器（LSP 子进程，M65-S2）", to_err)
+    cli_out("用法: pxcheck <file.px> [--base <dir>] [--semantic] [--version]", to_err)
+    cli_out("  --semantic  并入编译期语义诊断（E3002/E3003/E3004…；位置一律 1/1，见文件头）", to_err)
+    cli_out("输出: parse 成功 → stdout JSON 诊断数组；parse 失败 → 文本错误行", to_err)
 def main():
     let as_ = args()
     # 编译版 args() 首元素 = 程序自身路径，用户参数自 i=1 起
@@ -313,7 +319,7 @@ def main():
             print("pxcheck 0.1.0 (普贤 PuXian diagnostics · M65-S2)")
             exit(0)
         elif a == "--help" or a == "-h":
-            usage()
+            usage(false)
             exit(0)
         elif a == "--base":
             if i + 1 < len(as_):
@@ -326,7 +332,7 @@ def main():
             g_semantic = 1
         elif starts_with(a, "-"):
             px_err("pxcheck: 未知选项 '" + a + "'")
-            usage()
+            usage(true)
             exit(2)
         elif file == "":
             file = a

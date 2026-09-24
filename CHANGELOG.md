@@ -1,3 +1,77 @@
+## M205 · CLI 工具的**诊断通道**统一（缺陷 186 的 tools 面收尾 + 同轮照出的 **247**）（第 84 轮）
+
+> 主项 = **工具链**的通道口径：M172 只统一了**语言运行期**的诊断出口（解释轨三处改 `print_err`），
+> 而 `tools/*.px` 的失败诊断仍写 **stdout** —— 偏偏壳层 `tools/px`（bash）**早已**是 `>&2` + 非零退出
+> ⇒ 同一套 CLI 里两种口径。后果：`cmd 2>/dev/null` 会把失败诊断一起吞掉、`cmd >out 2>err` 的 `err`
+> 是**空的** ⇒ 脚本/CI **读不到真因**（M193 与 M195 两次红的注解都栽在这上面）。
+> 副项 = 同轮由门的探针照出的 **247**：三件 CLI 的**参数索引从 0 起**（含 `argv[0]`）。
+
+### 一 缺陷 186（tools 面）· 41 个诊断站点 + 8 处 usage 分流
+
+**判据（§7.1）= 通道看消费方**：**诊断**（错误 / 警告 / 参数错提示 / **参数错时的用法**）⇒ **stderr**；
+**产品**（成功路径结果、结构化 JSON、`--help`/`--version` 文本、`--check` 报告、`N 错误, M 警告` 汇总）⇒ **stdout**；
+失败路径 **rc≠0**。
+
+| 文件 | 处置 | 处数 |
+|---|---|---|
+| `pxpkg.px` | `pxpkg 错误: …` ×20 · `pxpkg: 缺少 PXPKG_CMD` · `pxpkg: 未知命令` · `--locked` 篡改 | 23 |
+| `pxbench.px` | 无法读取文件 / 未找到函数 / 预热失败（警告）/ 第 N 轮运行错误 / 3 处选项错 + usage 分流 | 6 + usage |
+| `pxtest.px` | 无法读取文件 / 未知选项 / 2 处 `[错误]`（写临时文件、启动解释器）+ usage 分流 | 4 + usage |
+| `pxdoc.px` | 无法读取文件 / `--output 需要路径` / 未知选项 + usage 分流 | 3 + usage |
+| `pxfmt.px` | 无法读取文件 + usage 分流 + **新增「未知选项」分支**（修前**静默忽略** `--bogus`） | 1 + usage |
+| `pxlint.px` | 无法读取文件 / 未知选项 + usage 分流 | 2 + usage |
+| `pxcheck.px` `pxlsp.px` `pxmcp.px` | usage 分流（诊断本就走 `px_err`/`lsp_err`/`mcp_err`） | 3 × usage |
+| `routegen.px` | 缺 `PX_APP_DIR` 的用法提示 | 1 |
+| **`tools/pxpkg`（bash 侧）** | `help\|--help\|-h\|*` **拆开**：`*` 独立分支 ⇒ `>&2` + `exit 2` | 1 |
+
+**用法分流**做法（每件一个 8 行 helper，单一真相）：
+```px
+def cli_out(s, to_err):
+    if to_err:
+        print_err(s)
+    else:
+        print(s)
+def usage(to_err):
+    cli_out("用法: pxfmt <file.px> [-w|--write] [--check] [--diff] [--version]", to_err)
+```
+`--help` ⇒ `usage(false)`（stdout + rc=0）· 参数错 ⇒ `usage(true)`（stderr + rc≠0）。
+
+### 二 缺陷 247（同轮照出 · 由「不传参」这种退化形态探到）
+
+编译件 `args()` = `[argv[0], …]`（**含**自身路径）。`pxcheck`/`pxlsp`/`pxmcp`/`pxtest`/`pxbench`
+**早已** `var i = 1`；**`pxfmt`/`pxlint`/`pxdoc` 漏网**（`var i = 0`）⇒ 用户**不传参数**时把
+`argv[0]` 当输入文件读 ⇒ 读**自己的可执行文件**：
+
+```
+$ ./bootstrap/pxfmt                    # 修前
+错误: 1:2: 词法错误 E1001: 非法字符: '\u{7f}'      rc=1
+$ ./bootstrap/pxfmt                    # 修后
+pxfmt —— PuXian 代码格式化器（自举，M64a）
+用法: pxfmt <file.px> [-w|--write] [--check] [--diff] [--version]   → stderr, rc=2
+```
+（带参数时**侥幸正确** —— `argv[0]` 先被当 `file`，随后被真参数覆盖 ⇒ 长期没被发现。）
+
+### 三 判据化
+
+- **静态 [S12]**（`examples/m205_cli_channels/scan_cli_channels.py`）五条：A 失败路径 `print` 站点 = 0 ·
+  B 8 个 `usage` 均带 `to_err` 真分流 · C stderr 出口闭集 + **规模下限 60**（锚点自证）·
+  D 壳层 `*)` 走 stderr + 非零 · **E 反向判据**：产品行仍在 stdout（19 处，防"一刀切"）。
+- **门** `examples/m205_cli_channels/`：**54 通过 / 0 失败** —— [0] 前置自证（8 件 + 8 个锚点字符串）·
+  [1] 静态 · [2] 动态 **28 例**（8 CLI × err/help/ok）· [3] 解释轨面（`pxpkg` bash+px · `routegen` · `print_err` 探针）·
+  [4] **负控 3 道**（A 静态退回 `print(` ⇒ 判红并指名站点 · B `usage(true)`→`usage(false)` + **现场重编** ⇒ 判红 ·
+  C `tools/pxpkg` 的 `*)` 退回 ⇒ 未知命令 `rc=0`+stdout ⇒ 判红）+ **还原判据**（与门开头快照 `cmp`）。
+- 入库件重烘：`--entries=pxfmt,pxlint,pxdoc` 3/3 → `--check-all` **14/14**。
+- 相关门回归：m45_pkgdemo 13/0 · m64_fmt ✅ · m64_lint 18/0 · m64_doc 18/0 · m64_test 12/0 · m64_bench 8/0。
+
+### 四 纪律（本轮）
+
+1. **`bootstrap/pxc` ≠ `tools/pxc`**：前者是**编译器本体**（CLI 不同、`build` 不落 `tools/build/`），
+   后者是**用户入口 wrapper**（`px build` → `<dir>/build/<name>`）。门里现场编译必须用 `tools/pxc`。
+2. **解释轨不能给 `.px` 传 CLI 参数**：`pxi run x.px a b` 把 `a b` 当**额外脚本文件** ⇒ 设计门用例时
+   要么用编译件、要么走**环境变量**传参（`pxpkg` / `routegen` 的既有做法）。
+3. **"只在某一种参数形态下错"的缺陷，要用退化形态去探** —— 247 就是"不传参"才露出来的。
+
+
 ## M204 · **复合赋值**在 `Index` / `Field` 目标上的三轨同一真相（缺陷 245 + 同轮照出的 246）（第 83 轮）
 
 > 主项 = **C 轨静默错值**：复合赋值在 `Index` / `Field` 目标上**把运算符丢了** —— 等价于直接赋值。

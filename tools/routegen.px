@@ -121,6 +121,6 @@ def rg_generate(app_dir):
 def main():
     let app_dir = env("PX_APP_DIR")
     if app_dir == null or app_dir == "":
-        print("用法: PX_APP_DIR=<app_dir> pxi run tools/routegen.px（或 tools/routegen <app_dir>）")
+        print_err("用法: PX_APP_DIR=<app_dir> pxi run tools/routegen.px（或 tools/routegen <app_dir>）")
         exit(1)
     rg_generate(app_dir)

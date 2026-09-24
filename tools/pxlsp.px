@@ -440,10 +440,16 @@ def lsp_serve():
                 if jr_method_of(m) == "exit" and jr_classify(m) == "notification":
                     done = true
     return 0
-def usage():
-    print("pxlsp —— PuXian LSP 服务器（自举，M65-S3）")
-    print("用法: pxlsp [--version]")
-    print("  服务器入口：stdio 即 LSP transport（pxc lsp 直通执行）")
+# M205（缺陷 186 tools 面）：CLI 诊断走 stderr —— usage 按场景分流（--help→stdout；参数错→stderr）
+def cli_out(s, to_err):
+    if to_err:
+        lsp_err(s)
+    else:
+        print(s)
+def usage(to_err):
+    cli_out("pxlsp —— PuXian LSP 服务器（自举，M65-S3）", to_err)
+    cli_out("用法: pxlsp [--version]", to_err)
+    cli_out("  服务器入口：stdio 即 LSP transport（pxc lsp 直通执行）", to_err)
 def main():
     let as_ = args()
     var i = 1
@@ -453,11 +459,11 @@ def main():
             print("pxlsp " + PXLSP_VER + " (普贤 PuXian lsp · " + PXLSP_MS + ")")
             exit(0)
         elif a == "--help" or a == "-h":
-            usage()
+            usage(false)
             exit(0)
         elif starts_with(a, "-"):
             lsp_err("pxlsp: 未知选项 '" + a + "'")
-            usage()
+            usage(true)
             exit(1)
         i += 1
     exit(lsp_serve())

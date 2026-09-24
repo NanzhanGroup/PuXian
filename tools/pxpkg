@@ -57,7 +57,7 @@ case "$CMD" in
         run_px remove "$1" ;;
     --version|-v)
         echo "pxpkg 0.1.0 (普贤 PuXian · M45 registry 版本化)" ;;
-    help|--help|-h|*)
+    help|--help|-h)
         cat <<'EOF'
 pxpkg —— PuXian 包管理器（M45）
 
@@ -77,5 +77,11 @@ pxpkg —— PuXian 包管理器（M45）
   PX_REGISTRY=/path/registry pxpkg install
   PX_REGISTRY=/path/registry pxpkg install --locked
 EOF
+        ;;
+    *)
+        # M205（缺陷 186 tools 面）：未知命令是**失败路径** —— 诊断走 stderr、rc≠0
+        #   （--help/-h/无参 仍走 stdout + rc=0，见上分支；与 tools/px 的 `*)` 同口径）
+        echo "pxpkg: 未知命令 '$CMD'（用法见 pxpkg --help）" >&2
+        exit 2
         ;;
 esac
