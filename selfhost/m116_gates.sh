@@ -647,6 +647,20 @@ step "M203 · 「此类型不支持X / 不可迭代」族的三轨同码同文�
 #   D 迭代入口文案退回「借 len」（**VM 与 C 两轨都必须读到** = 两条发射路径真接了）+
 #   E 对 int 放行（响亮退回静默））。
 run m203_iter_index_msg bash examples/m203_iter_index_msg/verify.sh
+step "M204 · 复合赋值在 Index / Field 目标上的三轨同一真相（第 83 轮 · 缺陷 245/246）"
+#   缺陷 245（**C 轨静默错值**）：cg_stmt.px 在 Index / Field 目标上**无条件**发射
+#     `px_index_set(o, i, rhs)` / `px_field_set(o, "f", rhs)` ⇒ `op`（+=/-=…）被**静默丢弃**。
+#     实测：`m[0] += 10` ⇒ C 轨 `[10,2,3]`（解释/VM `[11,2,3]`）· `p.x += 10` ⇒ `10` vs `11`；
+#     而 `l[0] = l[0] + 100` 三轨都对 ⇒ **只坏在「复合」这一条路**。
+#     修法：目标对象/键**先落 `_sN` 临时**（各求值**恰一次**），旧值 = px_index/px_field，
+#     新值 = <op>(旧值, rhs)；顺序守 M165（词法左→右：目标对象 → 键 → 右值）。
+#   缺陷 246（同轮照出）：复合赋值到**不存在的成员**时解释轨拿 null 硬算 ⇒
+#     `R1002 无法相加: null + int` vs 编译两轨 `R1008`；统一为 **R1008**（与「读」一致）。
+#   判据：[1] 静态 6 项 · [2] 正例 2 组 × 三轨逐字节一致（13 种运算符 × list/dict/struct ·
+#   嵌套 · **求值次数与顺序**）· [3] 拒绝侧 3 例 × 三轨同码同文 ·
+#   [4] 负控 5 道（Index/Field 退回旧形态 · 顺序违规 · 重复求值 · 解释轨 246 退回；
+#   前四道**必须重编 C 轨编译器**后用 PX_PXC_BIN 注入 —— 改动只在 C 轨可见）。
+run m204_assign_op bash examples/m204_assign_op/verify.sh
 step "M190 · 上游 registry-px 真实用例回归（53 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。

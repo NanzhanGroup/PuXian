@@ -1,0 +1,40 @@
+# M204 探针 · 正例②：**求值次数与顺序**（M165 的词法左→右：目标对象 → 键 → 右值）
+#   复合赋值里目标对象/键**必须各求值恰一次**（否则带副作用的表达式会被重复求值）。
+let log = []
+let L = [1, 2]
+
+def getL():
+    log.append("o")
+    return L
+
+def idx():
+    log.append("k")
+    return 0
+
+def rhs():
+    log.append("v")
+    return 10
+
+def main():
+    getL()[idx()] += rhs()
+    print("a01=" + str(L))
+    print("a02=" + str(log))
+    # Field 形态：对象求值恰一次
+    let log2 = []
+    let S = {"f": 1}
+
+    def getS():
+        log2.append("o")
+        return S
+    # dict 的字段/键赋值用 [] ；Field 形态用 struct
+    getS()["f"] += 5
+    print("a03=" + str(S))
+    print("a04=" + str(log2))
+    # 显式展开的对照（原表达式里 getL() 会被调用两次）
+    let log3 = []
+
+    def getL3():
+        log3.append("o")
+        return L
+    getL3()[0] = getL3()[0] + 1
+    print("a05=" + str(log3))

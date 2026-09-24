@@ -343,13 +343,16 @@ def i_assign(target, op, value_expr, env, pos):
             return Err(i_r1007("赋值目标不是可写对象", pos))
         var nv = v
         if op != "Assign":
+            # M204（缺陷 246）：同上 —— 缺失成员 ⇒ 与「读」一致地报 R1008（不再拿 null 硬算）
             var old = null
             if t == "struct":
-                if ov["__fields__"].has(fname):
-                    old = ov["__fields__"][fname]
+                if not ov["__fields__"].has(fname):
+                    return Err(i_r1008("结构体没有字段 '" + fname + "'", pos))
+                old = ov["__fields__"][fname]
             else:
-                if ov.has(fname):
-                    old = ov[fname]
+                if not ov.has(fname):
+                    return Err(i_r1008("字典没有键 '" + fname + "'", pos))
+                old = ov[fname]
             let ar = i_apply_assign_op(op, old, v, pos)
             if ar.is_err():
                 return Err(ar.err())
@@ -395,9 +398,13 @@ def i_assign(target, op, value_expr, env, pos):
                 return Err(i_r1002("字典索引键必须是字符串", pos))
             var nv = v
             if op != "Assign":
-                var old = null
-                if ov.has(iv):
-                    old = ov[iv]
+                # M204（缺陷 246）：**缺键上的复合赋值**与编译两轨同码同文 ——
+                #   修前把缺键当 `null` 再硬算 ⇒ 解释轨 `R1002 无法相加: null + int`，
+                #   而 VM/C 轨 `R1008 字典没有键 'k'`（与 `d["k"]` **读**一致；
+                #   Python 的 `d["k"] += 1` 亦为 KeyError）⇒ 统一为 R1008。
+                if not ov.has(iv):
+                    return Err(i_r1008("字典没有键 '" + iv + "'", pos))
+                let old = ov[iv]
                 let rr = i_apply_assign_op(op, old, v, pos)
                 if rr.is_err():
                     return Err(rr.err())

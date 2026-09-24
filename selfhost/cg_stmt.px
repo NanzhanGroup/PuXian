@@ -95,11 +95,26 @@ def cg_gen_stmt_inner(stmt, indent):
         if tty == "Field":
             let o = cg_gen_expr(tgt[1])
             let fname = rust_unescape(tgt[2])
+            if op != "Assign":
+                # M204（缺陷 245）：复合赋值**必须用上 op** —— 修前这里**无条件**发射
+                #   `px_field_set(o, "f", rhs)`，`op` 被**静默丢弃**（`p.x += 10` 实测 = 赋值 10）。
+                #   目标对象先落 `_sN`（求值**恰一次**），旧值 = px_field(_sN, "f")，
+                #   新值 = <op>(旧值, rhs)；顺序守 M165（目标对象 → 右值）。
+                let to = cg_seq_new()
+                let full = cg_assign_op_local(op, "px_field(" + to + ", \"" + fname + "\")", rhs)
+                return pad + "({ LXValue " + to + " = " + o + "; px_field_set(" + to + ", \"" + fname + "\", " + full + "); });\n"
             let sj = cg_seq_join([tgt[1], stmt[3]], [o, rhs])  # M165（缺陷 178）
             return pad + cg_seq_wrap(sj[0], "px_field_set(" + sj[1][0] + ", \"" + fname + "\", " + sj[1][1] + ")") + ";\n"
         if tty == "Index":
             let o = cg_gen_expr(tgt[1])
             let i = cg_gen_expr(tgt[2])
+            if op != "Assign":
+                # M204（缺陷 245）：同上（`m[0] += 10` 修前实测 = 赋值 10 ⇒ 静默错值）。
+                #   对象与键各落 `_sN`（各求值**恰一次**），顺序守 M165（目标对象 → 键 → 右值）。
+                let to = cg_seq_new()
+                let ti = cg_seq_new()
+                let full = cg_assign_op_local(op, "px_index(" + to + ", " + ti + ")", rhs)
+                return pad + "({ LXValue " + to + " = " + o + "; LXValue " + ti + " = " + i + "; px_index_set(" + to + ", " + ti + ", " + full + "); });\n"
             let sj = cg_seq_join([tgt[1], tgt[2], stmt[3]], [o, i, rhs])  # M165（缺陷 178）
             return pad + cg_seq_wrap(sj[0], "px_index_set(" + sj[1][0] + ", " + sj[1][1] + ", " + sj[1][2] + ")") + ";\n"
         return "不支持的赋值目标"

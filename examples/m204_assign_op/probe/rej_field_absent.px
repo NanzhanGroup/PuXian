@@ -1,0 +1,7 @@
+# M204 拒绝侧③：struct 上不存在的字段
+print("before")
+struct P:
+    x: int
+
+let p = P(1)
+p.z += 1

@@ -265,6 +265,11 @@ def cg_seq_operands(srcs, imps):
 #   列表外（`px_call(c, (LXValue[]){...}, n)` 的 c、`px_method(o, 名, {...}, n)` 的 o），
 #   这类站点必须按下标取名字；只有「整个实参表都在 names 里」的站点才 join。
 #   ⚠️ nodes 与 parts 必须**一一对应**。
+# M204：序列化临时变量**发号器**（`_sN`）。用专用计数器而**不占** `cg_tmp()` 的 `_tN` 序号
+#   —— 否则每次序列化都会顶掉后续编号，造成与本次语义无关的大面积 diff（M165 的纪律）。
+def cg_seq_new():
+    cg_seq_uid = cg_seq_uid + 1
+    return "_s" + str(cg_seq_uid)
 def cg_seq_join(nodes, parts):
     let imps = []
     var i = 0
