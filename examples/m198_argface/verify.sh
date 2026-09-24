@@ -76,7 +76,12 @@ run3() {
     rm -rf "$d/build"
     PX_BUILD_ENGINE=c timeout 260 ./tools/px build "$d/$b.px" > "$W/$b.c.build.log" 2>&1
     if [ -x "$d/build/$b" ]; then ( cd "$d" && timeout 60 "$d/build/$b" ) > "$W/$b.c.out" 2>&1; echo $? > "$W/$b.c.rc"
-    else echo 999 > "$W/$b.c.rc"; tail -3 "$W/$b.c.build.log" > "$W/$b.c.out"; fi
+    else
+        echo 999 > "$W/$b.c.rc"; tail -3 "$W/$b.c.build.log" > "$W/$b.c.out"
+        # M201：**构建失败**（rc=999）必须在门输出里看得见 —— 否则判据只报"行为不符"，
+        #   让人去查行为面（本轮全量门里 t3 就是这么假红过一次：真因是 C 轨构建没产出）。
+        echo "   ⚠️ [$b] C 轨构建失败（rc=999）—— 构建日志尾："; tail -3 "$W/$b.c.build.log" | sed 's/^/      | /'
+    fi
     rm -rf "$d/build"
 }
 run1c() {
