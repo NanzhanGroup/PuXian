@@ -125,8 +125,17 @@ static_ok() { python3 "$ROOT/examples/m191_error_codes/scan_errcodes.py" --root 
 static_ok; rc=$?
 chk "[1] 扫描器全绿（含 [S6]）" "[ \$rc = 0 ]"
 chk "[1] [S6] 真跑过" "grep -q '\[S6\] 全部 native 函数参数守卫' '$W/static.log'"
-chk "[1] native 函数 397 · 未豁免缺检查 0 · 豁免 24/24" \
-    "grep -q 'native 函数合计 397 · 未豁免缺检查 \*\*0\*\* · 豁免 24/24' '$W/static.log'"
+# M201：计数判据改成**下限**（M197 纪律：新增 native 不该让门红 —— 新增 native 时门不该为"计数变了"而红）。
+#   同时把 [S6] 行的**实际值**打出来并**拆成两个变量**再判 —— 免得在 chk 的 eval 串里跟
+#   `**` / `$` 的转义打架（首版就是这么假红过一次：`awk '{exit !($1 >= 397)}'` 被 eval 打回
+#   `backslash not last character on line`，而报出的却是"计数不符"，**指不到真因**）。
+S6_LINE="$(grep -E '\[S6\] native 函数合计' "$W/static.log" | head -1)"
+N_NAT="$(printf '%s' "$S6_LINE" | grep -oE '合计 [0-9]+' | grep -oE '[0-9]+' | head -1)"
+N_WAIV="$(printf '%s' "$S6_LINE" | grep -oE '豁免 [0-9]+/[0-9]+' | head -1)"
+N_ZERO="$(printf '%s' "$S6_LINE" | grep -c '未豁免缺检查 \*\*0\*\*')"
+echo "   [S6] native 函数合计 = ${N_NAT:-空} · 未豁免缺检查为 0 的行数 = ${N_ZERO:-0} · ${N_WAIV:-无豁免字段}"
+chk "[1] native 函数 ≥397（**下限** · M201 实测 399）· 未豁免缺检查 0 · 豁免 24/24" \
+    "[ ${N_NAT:-0} -ge 397 ] && [ '${N_WAIV}' = '豁免 24/24' ] && [ ${N_ZERO:-0} -ge 1 ]"
 chk "[1] [S5] 仍绿（多形参守卫 **≥137** · 缺检查 0）" \
     "grep -q '多形参守卫合计 .* · 缺类型检查 \*\*0\*\*' '$W/static.log' && grep -oE '多形参守卫合计 [0-9]+' '$W/static.log' | awk '{exit !(\$2 >= 137)}'"
 
