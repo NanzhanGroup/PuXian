@@ -64,7 +64,14 @@ VM 轨产物默认 **precise GC**（`px_gc_set_precise(1)`；根面 = 全局槽 
   · ④ UDP 面（20 往返 × 两档）· ⑤ **负控 3 道各自独立判红 + 源逐字节还原**。
 - 已挂进 `selfhost/m116_gates.sh` 与 `.github/workflows/ci.yml`（CI 用 `--neg-skip`）。
 
-### 五 纪律（本轮新增）
+### 五 发射冻结门重定基（**类别 B 为空**）
+
+`emitc_freeze` **397 → 399 文件**：新增的 2 件是**本门的语料**（`examples/m206_gcroot/probe_rt.px` /
+`probe_udp.px`）—— 门的输出明确报「**类别 B 为空（无回归嫌疑）** ⇒ 确认改动有意后 `--freeze`」。
+本轮**没有**任何既有产物的发射漂移（改动全在 `runtime/*.c` 的根登记，不涉及发射器）。
+复核：`emitc_freeze.sh --check` ⇒ `✅ 399 个文件的 --emit-c 输出与基准逐字节一致`。
+
+### 六 纪律（本轮新增）
 
 1. **扫描器「找不到」先怀疑扫描器**：`px_bytes_len` 不在分配名单里 ⇒ 漏了 `udp_recv`；
    `px_dict_set`/`px_list_push` 被当成「持有实参的构造器」⇒ 例外把**容器本身**当被持有者 ⇒ 又是漏报。
