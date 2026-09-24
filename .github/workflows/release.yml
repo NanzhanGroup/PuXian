@@ -90,32 +90,47 @@ jobs:
             cat /tmp/commits.txt
             echo '```'
           } > /tmp/notes.md
-          # M206：**幂等**创建/更新 —— 同一个 tag 被**重定基**（force-push 到修复提交）时，
-          #   旧实现 `gh release create` 会因「release 已存在」直接失败（实测 Release #133 红，
-          #   注解只有 "exit code 1" ⇒ 指不到真因）。现在：存在 ⇒ 改 notes + 覆盖上传，
-          #   并清理**与当前 tag 提交不符**的陈旧 tarball 资产，保证「资产 ⇄ tag 指向的提交」一致。
+          # M206：**幂等**创建/更新。三种形态都要走通：
+          #   ① 正常（无 release）        ⇒ create
+          #   ② 已发布（同 tag 重定基）    ⇒ edit(notes) + upload --clobber + 清理陈旧 tarball
+          #   ③ **草稿**（tag 被删/重推时 GitHub 会把 release 转草稿；`gh release view` 看不到草稿）
+          #      ⇒ 走 ②，最后 `--draft=false` 正式发布
+          # 为什么必须做：旧实现直接 `gh release create`，命中 ②/③ 时必然失败，
+          #   而注解只有 `exit code 1` ⇒ **指不到真因**（Release #133 实测）。
+          REL_OK=0
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "ℹ️ Release $TAG 已存在 ⇒ 幂等更新（notes + 资产覆盖 + 陈旧 tarball 清理）"
-            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "PuXian ${TAG}" --notes-file /tmp/notes.md
-            gh release upload "$TAG" "$PKG" "$SHA256SUMS" --clobber --repo "$GITHUB_REPOSITORY"
-            gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' \
-              | while IFS= read -r name; do
-                  [ -n "$name" ] || continue
-                  case "$name" in
-                    "$PKG_NAME"|sha256sums.txt) ;;
-                    puxian-bootstrap-aarch64-*) ;;
-                    *.tar.gz|*.tar.gz.sha256)
-                      echo "🧹 清理陈旧资产（与当前 tag 提交不符）: $name"
-                      gh release delete-asset "$TAG" "$name" -y --repo "$GITHUB_REPOSITORY" || true ;;
-                  esac
-                done
-            echo "✅ GitHub Release 已更新: ${TAG}（tarball=$PKG_NAME + sha256sums.txt）"
+            echo "ℹ️ Release $TAG 已存在 ⇒ 幂等更新（notes + 资产覆盖）"
+            if gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "PuXian ${TAG}" --notes-file /tmp/notes.md; then
+              REL_OK=1
+            fi
           else
-            gh release create "$TAG" "$PKG" "$SHA256SUMS" \
-              --title "PuXian ${TAG}" \
-              --notes-file /tmp/notes.md
-            echo "✅ GitHub Release 已创建: ${TAG}（tarball + sha256sums.txt）"
+            if gh release create "$TAG" "$PKG" "$SHA256SUMS" \
+                 --title "PuXian ${TAG}" --notes-file /tmp/notes.md 2>/tmp/rel_create.err; then
+              echo "✅ GitHub Release 已创建: ${TAG}（tarball + sha256sums.txt）"
+              REL_OK=1
+            else
+              sed 's/^/::warning::gh release create 失败（转入已有/draft 更新路径）: /' /tmp/rel_create.err || true
+            fi
           fi
+          if [ "$REL_OK" != 1 ]; then
+            # ③ 路径：release 已存在但 `gh release view` 看不到（草稿），或上面 edit 失败
+            gh release upload "$TAG" "$PKG" "$SHA256SUMS" --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false \
+              --title "PuXian ${TAG}" --notes-file /tmp/notes.md
+            echo "✅ GitHub Release 已更新并发布（含草稿转正）: ${TAG}（tarball=$PKG_NAME）"
+          fi
+          # 清理与**当前 tag 提交**不符的陈旧 tarball 资产（重定基会留下旧 commit 前缀的包）
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' 2>/dev/null \
+            | while IFS= read -r name; do
+                [ -n "$name" ] || continue
+                case "$name" in
+                  "$PKG_NAME"|sha256sums.txt) ;;
+                  puxian-bootstrap-aarch64-*) ;;
+                  *.tar.gz|*.tar.gz.sha256)
+                    echo "🧹 清理陈旧资产（与当前 tag 提交不符）: $name"
+                    gh release delete-asset "$TAG" "$name" -y --repo "$GITHUB_REPOSITORY" || true ;;
+                esac
+              done
 
   # ============================================================
   # M159（R45 · 缺口 G1）：**aarch64 自举件**做成一等发布资产
