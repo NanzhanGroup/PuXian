@@ -18,6 +18,11 @@ ap.add_argument('--out', default='/tmp/m199sweep')
 ap.add_argument('--sweep', default='/tmp/m199sweep/sweep.json')
 a = ap.parse_args()
 os.chdir(a.root)
+# M199 收尾（CI #404 红因）：默认值曾是开发机的 /tmp 残留路径 ⇒ 在 CI 上**静默生成 0 条探针**，
+#   下游 [2][3][4] 全红而真因被埋在"探针生成失败"里。⇒ 取不到就**响亮退出**（宁可红在门口）。
+if not os.path.exists(a.sweep):
+    sys.exit('❌ 找不到 --sweep 指定的 sweep.json：%s\n   （请先跑 sweep_argtype.py --out <同目录>，'
+             'verify.sh 已按同一 $SW 传递）' % a.sweep)
 
 G = json.load(open(a.sweep))['guards']
 POISON = '{}'

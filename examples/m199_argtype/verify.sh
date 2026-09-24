@@ -63,7 +63,7 @@ pre 'px_error("R1002: quic_connect 的 session 需要字符串，实际是 %s", 
 pre 'type(args[0]) != "string" or type(args[1]) != "string" or type(args[2]) != "string"' selfhost/ibuiltin.px
 
 sweep_static() { python3 "$HERE/sweep_argtype.py" --root "$ROOT" --out "$SW" > "$W/sweep.log" 2>&1; }
-gen_probes()   { python3 "$HERE/gen_probes.py" --root "$ROOT" --out "$SW" > "$W/gen.log" 2>&1; }
+gen_probes()   { python3 "$HERE/gen_probes.py" --root "$ROOT" --out "$SW" --sweep "$SW/sweep.json" > "$W/gen.log" 2>&1; }
 build_drv()    {  # $1=both|c
     rm -rf "$SW/a_vm" "$SW/a_c"; mkdir -p "$SW/a_vm" "$SW/a_c"
     cp -f "$SW/drv.px" "$SW/a_vm/drv.px"; cp -f "$SW/drv.px" "$SW/a_c/drv.px"
