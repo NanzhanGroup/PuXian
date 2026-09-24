@@ -90,7 +90,19 @@ check_file() {   # $1=文件路径 $2=显示名 $3=容器(空|。a 成员)
 }
 check_ar() {   # $1=.a 路径 $2=显示名 → 逐成员判
     local a="$1" name="$2" tmp d
-    tmp="$(mktemp -d)"; ( cd "$tmp" && ar x "$a" 2>/dev/null ) || { rm -rf "$tmp"; NINFO=$((NINFO+1)); return 0; }
+    # M200 收尾（实测踩到）：**先把路径绝对化**再 cd 进临时目录 ——
+    #   首版直接用相对路径 + `cd "$tmp"` ⇒ `ar x` 找不到文件 ⇒ 落到"提取失败"分支 ⇒
+    #   把整包 **4 个静态库**都静默记成 INFO（自证里用的是**绝对** fixture 路径 ⇒ 当时没露）。
+    #   ⇒ 这正是"只在我这种用法下绿"，与 M188/M196/M199 同族。
+    case "$a" in
+        /*) ;;
+        *) a="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")" ;;
+    esac
+    tmp="$(mktemp -d)"
+    if ! ( cd "$tmp" && ar x "$a" 2>/dev/null ); then
+        # 判定不了就**响亮**（R53 ②：发布资产的依赖必须可判定；不许静默放行）
+        rm -rf "$tmp"; echo "  ❌ [无法判定] $name —— 静态库提取失败（ar x 出错），成员架构未知"; BAD=$((BAD+1)); return 1
+    fi
     NAR=$((NAR+1))
     for d in "$tmp"/*; do
         [ -f "$d" ] || continue
