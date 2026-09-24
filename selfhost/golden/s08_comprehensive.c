@@ -46,7 +46,7 @@ static LXValue fn_each(LXValue* args, int nargs, void* ctx) {
     int px_err_5_proped = 0;
     px_srcline(10);
     LXValue _t6 = _v2;
-    int _il1 = (int)px_len(_t6);
+    int _il1 = px_iter_prepare(_t6);
     for (int _t7 = 0; _t7 < _il1; _t7++) {
         px_iter_ck(_t6, _il1);
         _v4 = px_iter_at(_t6, px_int(_t7));
@@ -70,7 +70,7 @@ static LXValue fn_unique(LXValue* args, int nargs, void* ctx) {
      _v9 = px_list_n((LXValue[]){}, 0);
     px_srcline(15);
     LXValue _t12 = _v8;
-    int _il2 = (int)px_len(_t12);
+    int _il2 = px_iter_prepare(_t12);
     for (int _t13 = 0; _t13 < _il2; _t13++) {
         px_iter_ck(_t12, _il2);
         _v10 = px_iter_at(_t12, px_int(_t13));
@@ -100,7 +100,7 @@ static LXValue fn_flatten(LXValue* args, int nargs, void* ctx) {
      _v15 = px_list_n((LXValue[]){}, 0);
     px_srcline(22);
     LXValue _t19 = _v14;
-    int _il3 = (int)px_len(_t19);
+    int _il3 = px_iter_prepare(_t19);
     for (int _t20 = 0; _t20 < _il3; _t20++) {
         px_iter_ck(_t19, _il3);
         _v16 = px_iter_at(_t19, px_int(_t20));
@@ -108,7 +108,7 @@ static LXValue fn_flatten(LXValue* args, int nargs, void* ctx) {
         if (px_is_truthy(px_eq(px_call(px_get_global("type"), (LXValue[]){_v16}, 1), px_str("list")))) {
             px_srcline(24);
             LXValue _t21 = _v16;
-            int _il4 = (int)px_len(_t21);
+            int _il4 = px_iter_prepare(_t21);
             for (int _t22 = 0; _t22 < _il4; _t22++) {
                 px_iter_ck(_t21, _il4);
                 _v17 = px_iter_at(_t21, px_int(_t22));
@@ -144,7 +144,7 @@ static LXValue fn_zip_lists(LXValue* args, int nargs, void* ctx) {
      _v26 = ({ LXValue _s1 = px_call(px_get_global("len"), (LXValue[]){_v23}, 1); LXValue _s2 = px_call(px_get_global("len"), (LXValue[]){_v24}, 1); px_call(px_get_global("min"), (LXValue[]){_s1, _s2}, 2); });
     px_srcline(33);
     LXValue _t29 = px_call(px_get_global("range"), (LXValue[]){_v26}, 1);
-    int _il5 = (int)px_len(_t29);
+    int _il5 = px_iter_prepare(_t29);
     for (int _t30 = 0; _t30 < _il5; _t30++) {
         px_iter_ck(_t29, _il5);
         _v27 = px_iter_at(_t29, px_int(_t30));
@@ -213,7 +213,7 @@ static LXValue fn_group_by(LXValue* args, int nargs, void* ctx) {
      _v41 = px_call(px_get_global("json_parse"), (LXValue[]){px_str("{}")}, 1);
     px_srcline(53);
     LXValue _t46 = _v39;
-    int _il6 = (int)px_len(_t46);
+    int _il6 = px_iter_prepare(_t46);
     for (int _t47 = 0; _t47 < _il6; _t47++) {
         px_iter_ck(_t46, _il6);
         _v42 = px_iter_at(_t46, px_int(_t47));
@@ -255,7 +255,7 @@ static LXValue fn_sort_by(LXValue* args, int nargs, void* ctx) {
      _v50 = px_list_n((LXValue[]){}, 0);
     px_srcline(65);
     LXValue _t55 = _v48;
-    int _il7 = (int)px_len(_t55);
+    int _il7 = px_iter_prepare(_t55);
     for (int _t56 = 0; _t56 < _il7; _t56++) {
         px_iter_ck(_t55, _il7);
         _v51 = px_iter_at(_t55, px_int(_t56));
@@ -268,7 +268,7 @@ static LXValue fn_sort_by(LXValue* args, int nargs, void* ctx) {
      _v52 = px_list_n((LXValue[]){}, 0);
     px_srcline(69);
     LXValue _t57 = _v50;
-    int _il8 = (int)px_len(_t57);
+    int _il8 = px_iter_prepare(_t57);
     for (int _t58 = 0; _t58 < _il8; _t58++) {
         px_iter_ck(_t57, _il8);
         _v53 = px_iter_at(_t57, px_int(_t58));
@@ -325,11 +325,11 @@ static LXValue fn_process(LXValue* args, int nargs, void* ctx) {
     LXValue px_err_74_val = px_null();
     int px_err_74_proped = 0;
     px_srcline(31);
-    _v65 = ({ LXValue _t75 = px_list(0); LXValue _t76 = _v64; for (int _il9 = (int)px_len(_t76), _t78=0; _t78<_il9; _t78++) { px_iter_ck(_t76, _il9); LXValue _t77 = px_iter_at(_t76, px_int(_t78)); LXValue _cv79 = _t77; if (px_is_truthy(px_gt(px_chk_uninit(_cv79, "x"), px_int(0LL)))) { px_list_push(_t75, px_mul(px_chk_uninit(_cv79, "x"), px_int(2LL))); }  }  _t75; });
+    _v65 = ({ LXValue _t75 = px_list(0); LXValue _t76 = _v64; for (int _il9 = px_iter_prepare(_t76), _t78=0; _t78<_il9; _t78++) { px_iter_ck(_t76, _il9); LXValue _t77 = px_iter_at(_t76, px_int(_t78)); LXValue _cv79 = _t77; if (px_is_truthy(px_gt(px_chk_uninit(_cv79, "x"), px_int(0LL)))) { px_list_push(_t75, px_mul(px_chk_uninit(_cv79, "x"), px_int(2LL))); }  }  _t75; });
     px_srcline(32);
-    _v66 = ({ LXValue _t80 = px_list(0); LXValue _t81 = px_call(px_get_global("range"), (LXValue[]){px_int(10LL)}, 1); for (int _il10 = (int)px_len(_t81), _t83=0; _t83<_il10; _t83++) { px_iter_ck(_t81, _il10); LXValue _t82 = px_iter_at(_t81, px_int(_t83)); LXValue _cv84 = _t82; if (px_is_truthy(({ LXValue _t85 = px_eq(px_mod(px_chk_uninit(_cv84, "x"), px_int(2LL)), px_int(1LL)); px_is_truthy(_t85) ? px_ne(px_chk_uninit(_cv84, "x"), px_int(5LL)) : _t85; }))) { px_list_push(_t80, px_chk_uninit(_cv84, "x")); }  }  _t80; });
+    _v66 = ({ LXValue _t80 = px_list(0); LXValue _t81 = px_call(px_get_global("range"), (LXValue[]){px_int(10LL)}, 1); for (int _il10 = px_iter_prepare(_t81), _t83=0; _t83<_il10; _t83++) { px_iter_ck(_t81, _il10); LXValue _t82 = px_iter_at(_t81, px_int(_t83)); LXValue _cv84 = _t82; if (px_is_truthy(({ LXValue _t85 = px_eq(px_mod(px_chk_uninit(_cv84, "x"), px_int(2LL)), px_int(1LL)); px_is_truthy(_t85) ? px_ne(px_chk_uninit(_cv84, "x"), px_int(5LL)) : _t85; }))) { px_list_push(_t80, px_chk_uninit(_cv84, "x")); }  }  _t80; });
     px_srcline(33);
-    _v67 = ({ LXValue _t86 = px_dict(); LXValue _t87 = px_method(_v64, "items", (LXValue[]){}, 0); for (int _il11 = (int)px_len(_t87), _t89=0; _t89<_il11; _t89++) { px_iter_ck(_t87, _il11); LXValue _t88 = px_iter_at(_t87, px_int(_t89)); px_unpack_ck(_t88, 2); LXValue _cv90_0 = px_index(_t88, px_int(0)); LXValue _cv91_1 = px_index(_t88, px_int(1)); { LXValue _k = px_call(px_get_global("str"), (LXValue[]){px_chk_uninit(_cv90_0, "k")}, 1); LXValue _v = px_chk_uninit(_cv90_0, "k"); px_dict_set_checked(_t86, _k, _v); }  }  _t86; });
+    _v67 = ({ LXValue _t86 = px_dict(); LXValue _t87 = px_method(_v64, "items", (LXValue[]){}, 0); for (int _il11 = px_iter_prepare(_t87), _t89=0; _t89<_il11; _t89++) { px_iter_ck(_t87, _il11); LXValue _t88 = px_iter_at(_t87, px_int(_t89)); px_unpack_ck(_t88, 2); LXValue _cv90_0 = px_index(_t88, px_int(0)); LXValue _cv91_1 = px_index(_t88, px_int(1)); { LXValue _k = px_call(px_get_global("str"), (LXValue[]){px_chk_uninit(_cv90_0, "k")}, 1); LXValue _v = px_chk_uninit(_cv90_0, "k"); px_dict_set_checked(_t86, _k, _v); }  }  _t86; });
     px_srcline(34);
     _v68 = px_index(_v64, px_int(0LL));
     px_srcline(35);

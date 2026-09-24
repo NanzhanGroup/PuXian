@@ -20,7 +20,8 @@ grep -h 'px_set_global("' \
   runtime/runtime_h3_qpack_dyn.c runtime/runtime_ws.c \
   runtime/runtime_onnx.c \
   | sed -n 's/.*px_set_global("\([A-Za-z_][A-Za-z0-9_]*\)", px_native.*/\1/p' \
-  | LC_ALL=C sort -u > "$names_file"   # LC_ALL=C 固定字节序排序：sort 输出不受 runner locale 影响（否则 en_US.UTF-8 与 C locale 排序不同 → CI 防漂移假红）
+  | grep -v '^__' \
+  | LC_ALL=C sort -u > "$names_file"   # `__` 前缀 = **内部名**（如 `__iter_len`）⇒ 不进公开索引（与 gen_builtin_list.sh 同约定）   # LC_ALL=C 固定字节序排序：sort 输出不受 runner locale 影响（否则 en_US.UTF-8 与 C locale 排序不同 → CI 防漂移假红）
 
 python3 - "$names_file" <<'PY'
 import json, sys

@@ -5092,6 +5092,38 @@ int px_len(LXValue v) {
     }
 }
 
+// ═══ M203（缺陷 243-b）：`for x in <非可迭代>` 的**单一真相** ═══
+// 病：解释轨 `R1002 此类型不可迭代`（无类型），而 VM / C 轨把「长度」交给 `px_len`
+//   ⇒ 报 `R1002: len 不支持类型 int` —— 消息里的 `len` 是用户**从未写过的**东西，
+//   既指不到真因，又与解释轨**同码不同文**（三轨两答案）。
+// 修法：迭代前一律走本入口（同一个函数被三轨共用）——可迭代 ⇒ 返回长度；
+//   否则 `R1002: 此类型不可迭代: <t>`。
+//   可迭代集 = `px_iter_at` 支持的那一族（str / bytes / list / dict / tuple / 生成器）。
+//   VM 轨通过**内部全局** `__iter_len`（`__` 前缀 = 不进公开 native 名册/索引）调用同一函数；
+//   C 轨直接发射 `px_iter_prepare(...)`。
+int px_iter_prepare(LXValue v) {
+    switch (v.type) {
+        case PX_STR:
+        case PX_BYTES:
+        case PX_LIST:
+        case PX_DICT:
+        case PX_TUPLE:
+        case PX_GEN:
+            return px_len(v);
+        default:
+            px_error("R1002: 此类型不可迭代: %s", px_type_name(v));
+            return 0;
+    }
+}
+
+// `__iter_len(x)` —— `px_iter_prepare` 的 native 壳（VM 轨的迭代长度取用；见上）
+static LXValue bi_iter_len(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: iter_len 需要一个参数");
+    return px_int(px_iter_prepare(args[0]));
+}
+
+
 // ==================== 调用 ====================
 
 LXValue px_call(LXValue fn, LXValue* args, int nargs) {
@@ -11311,6 +11343,8 @@ void px_register_builtins(void) {
     px_set_global("Err", px_native("Err", bi_err));
     px_set_global("Some", px_native("Some", bi_some));
     px_set_global("len", px_native("len", bi_len));
+    // M203（缺陷 243-b）：迭代前的统一入口（`__` 前缀 = 内部名，不进公开名册/索引）
+    px_set_global("__iter_len", px_native("__iter_len", bi_iter_len));
     px_set_global("range", px_native("range", bi_range));
     px_set_global("type", px_native("type", bi_type));
     px_set_global("object_id", px_native("object_id", bi_object_id));

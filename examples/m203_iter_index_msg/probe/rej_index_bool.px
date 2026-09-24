@@ -1,0 +1,3 @@
+# M203 拒绝侧⑥：不可索引（bool）
+print("before")
+print(true[0])

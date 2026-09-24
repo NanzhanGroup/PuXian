@@ -1,0 +1,32 @@
+# M203 探针 · 正例②：函数内 / 嵌套闭包里的迭代与索引（发射路径的另一组形态）
+def sum_list(xs):
+    var s = 0
+    for x in xs:
+        s += x
+    return s
+
+def outer(xs):
+    let f = fn ():
+        var t = 0
+        for x in xs:
+            t += x
+        return t
+    return f()
+
+def main():
+    print("f01=" + str(sum_list([1, 2, 3])))
+    print("f02=" + str(outer([4, 5])))
+    print("f03=" + str([x + 1 for x in [1, 2]]))
+    let g = (x for x in [1, 2, 3])
+    print("f04=" + str(list(g)))
+    # 空迭代（0 次）
+    var n = 0
+    for x in []:
+        n += 1
+    print("f05=" + str(n))
+    # 嵌套迭代
+    var out = []
+    for a in [1, 2]:
+        for b in ["x", "y"]:
+            out.append(str(a) + b)
+    print("f06=" + str(out))

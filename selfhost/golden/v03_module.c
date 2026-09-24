@@ -25,7 +25,7 @@ static LXValue fn_module_search_paths(LXValue* args, int nargs, void* ctx) {
         _v4 = px_call(px_get_global("list_dir"), (LXValue[]){_v3}, 1);
         px_srcline(25);
         LXValue _t7 = _v4;
-        int _il1 = (int)px_len(_t7);
+        int _il1 = px_iter_prepare(_t7);
         for (int _t8 = 0; _t8 < _il1; _t8++) {
             px_iter_ck(_t7, _il1);
             _v5 = px_iter_at(_t7, px_int(_t8));
@@ -67,7 +67,7 @@ static LXValue fn_module_candidates(LXValue* args, int nargs, void* ctx) {
         _v13 = _v11;
         px_srcline(40);
         LXValue _t19 = px_call(px_get_global("range"), (LXValue[]){px_int(1LL), px_call(px_get_global("len"), (LXValue[]){_v9}, 1)}, 2);
-        int _il2 = (int)px_len(_t19);
+        int _il2 = px_iter_prepare(_t19);
         for (int _t20 = 0; _t20 < _il2; _t20++) {
             px_iter_ck(_t19, _il2);
             _v14 = px_iter_at(_t19, px_int(_t20));
@@ -85,7 +85,7 @@ static LXValue fn_module_candidates(LXValue* args, int nargs, void* ctx) {
     _v13 = _v10;
     px_srcline(48);
     LXValue _t21 = _v9;
-    int _il3 = (int)px_len(_t21);
+    int _il3 = px_iter_prepare(_t21);
     for (int _t22 = 0; _t22 < _il3; _t22++) {
         px_iter_ck(_t21, _il3);
         _v15 = px_iter_at(_t21, px_int(_t22));
@@ -117,7 +117,7 @@ static LXValue fn_module_find(LXValue* args, int nargs, void* ctx) {
     _v26 = px_call(px_get_global("module_candidates"), (LXValue[]){_v23, _v24, _v25}, 3);
     px_srcline(56);
     LXValue _t29 = _v26;
-    int _il4 = (int)px_len(_t29);
+    int _il4 = px_iter_prepare(_t29);
     for (int _t30 = 0; _t30 < _il4; _t30++) {
         px_iter_ck(_t29, _il4);
         _v27 = px_iter_at(_t29, px_int(_t30));
@@ -234,7 +234,7 @@ static LXValue fn_loader_load(LXValue* args, int nargs, void* ctx) {
     else {
         px_srcline(103);
         LXValue _t51 = px_index(_v43, px_str("search_paths"));
-        int _il5 = (int)px_len(_t51);
+        int _il5 = px_iter_prepare(_t51);
         for (int _t52 = 0; _t52 < _il5; _t52++) {
             px_iter_ck(_t51, _il5);
             _v49 = px_iter_at(_t51, px_int(_t52));

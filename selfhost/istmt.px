@@ -404,7 +404,8 @@ def i_assign(target, op, value_expr, env, pos):
                 nv = rr.unwrap()
             ov[iv] = nv
             return Ok(null)
-        return Err(i_r1002("索引赋值目标不支持", pos))
+        # M203（缺陷 243-c）：**整个词条**与编译轨不同（编译轨 = 此类型不支持索引赋值: <t>）
+        return Err(i_r1002("此类型不支持索引赋值: " + t, pos))
     return Err(i_r1002("非法赋值目标", pos))
 # ---------- 复合赋值运算符 → 二元运算符（对齐 apply_assign_op） ----------
 def i_apply_assign_op(op, old, new, pos):

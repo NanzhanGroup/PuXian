@@ -1,0 +1,4 @@
+# M203 拒绝侧③：不可迭代（bool）
+print("before")
+for x in true:
+    print(x)

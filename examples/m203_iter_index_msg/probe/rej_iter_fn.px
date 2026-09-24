@@ -1,0 +1,4 @@
+# M203 拒绝侧②：不可迭代（函数值）
+print("before")
+for x in print:
+    print(x)

@@ -1,0 +1,4 @@
+# M203 拒绝侧①：不可迭代（int）——编译两轨修前借 len ⇒「len 不支持类型 int」（指不到真因）
+print("before")
+for x in 1:
+    print(x)

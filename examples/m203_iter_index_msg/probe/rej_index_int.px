@@ -1,0 +1,3 @@
+# M203 拒绝侧④：不可索引（int）
+print("before")
+print(1[0])
