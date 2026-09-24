@@ -14764,12 +14764,18 @@ static LXValue bi_udp_recv(LXValue* args, int nargs, void* ctx) {
         return px_null();
     }
     LXValue r = px_dict();
+    // M206（缺陷 258 · **由本门的 UDP 压力档实测抓到**）：r 是裸 C 局部，而紧接着的
+    //   `px_bytes_len(buf, n)` 就是一次分配 ⇒ 压力档下 r 被回收、随后 px_dict_set 写进
+    //   已释放的 dict（实测 LIVECHK 响亮 + SIGABRT/core）。默认阈值下表现为静默错值。
+    px_root_push();
+    PX_KEEP(r);
     px_dict_set(r, "data", px_bytes_len(buf, n));
     char ip[64] = {0};
     inet_ntop(AF_INET, &src.sin_addr, ip, sizeof(ip));
     px_dict_set(r, "ip", px_str(ip));
     px_dict_set(r, "port", px_int(ntohs(src.sin_port)));
     xfree(buf);
+    px_root_pop();
     return r;
 }
 
@@ -14808,10 +14814,14 @@ static LXValue bi_udp_serve(LXValue* args, int nargs, void* ctx) {
         char ip[64];
         inet_ntop(AF_INET, &src.sin_addr, ip, sizeof(ip));
         LXValue hargs[3];
-        hargs[0] = px_str(ip);
+        // M206（缺陷 248）：hargs[0]/hargs[2]/r 是**裸 C 局部**，而 hargs[2] 的创建与
+        //   px_to_string(r) 都是分配 ⇒ precise GC 下此前的对象会被误回收
+        //   （实测形态：udp_serve 的 handler 收到已回收的 ip 串 / 响应体写崩空闲链表）。
+        px_root_push();
+        hargs[0] = px_str(ip); PX_KEEP(hargs[0]);
         hargs[1] = px_int(ntohs(src.sin_port));
-        hargs[2] = px_str_len(buf, n);
-        LXValue r = px_call(handler, hargs, 3);
+        hargs[2] = px_str_len(buf, n); PX_KEEP(hargs[2]);
+        LXValue r = px_call(handler, hargs, 3); PX_KEEP(r);
         if (r.type != PX_NULL) {
             const char* resp;
             int rlen;
@@ -14824,6 +14834,7 @@ static LXValue bi_udp_serve(LXValue* args, int nargs, void* ctx) {
             }
             (void)sendto(fd, resp, (size_t)rlen, 0, (struct sockaddr*)&src, sizeof(src));
         }
+        px_root_pop();   // M206：一对 pop（下一轮 recvfrom 前收缩）
     }
     return px_null(); // 不可达
 }
@@ -14924,9 +14935,13 @@ static LXValue bi_bus_publish(LXValue* args, int nargs, void* ctx) {
     }
     pthread_mutex_unlock(&g_bus_mu);
     LXValue call_args[2];
-    call_args[0] = px_str(args[1].as.obj->as.str.data);
+    // M206（缺陷 255）：call_args[0] 是裸 C 局部；首个订阅者回调里的分配就会回收它
+    //   ⇒ 第二个订阅者收到已回收的 topic 串。
+    px_root_push();
+    call_args[0] = px_str(args[1].as.obj->as.str.data); PX_KEEP(call_args[0]);
     call_args[1] = args[2];
     for (int i = 0; i < n; i++) (void)px_call(fns[i], call_args, 2);
+    px_root_pop();
     return px_int(n);
 }
 
@@ -17367,8 +17382,10 @@ static LXValue bi_http_get_stream(LXValue* args, int nargs, void* ctx) {
     // 输出缓冲满 64KB → 回调 handler
 #define STREAM_FLUSH() do { \
         if (olen > 0) { \
-            LXValue arg = px_str_len(obuf, olen); \
+            px_root_push(); /* M206（缺陷 257）：arg 跨 px_call 的分配 */ \
+            LXValue arg = px_str_len(obuf, olen); PX_KEEP(arg); \
             LXValue rv = px_call(handler, &arg, 1); \
+            px_root_pop(); \
             if (rv.type == PX_BOOL && !rv.as.b) { complete = false; } \
             olen = 0; \
         } \
@@ -17408,8 +17425,11 @@ static LXValue bi_http_get_stream(LXValue* args, int nargs, void* ctx) {
                         STREAM_FEED_GZ(pending + cstart, bl);
                         if (!complete) goto stream_done;
                     } else {
-                        LXValue arg = px_str_len(pending + cstart, bl);
+                        // M206（缺陷 257 同族）：arg 跨 px_call 的分配。
+                        px_root_push();
+                        LXValue arg = px_str_len(pending + cstart, bl); PX_KEEP(arg);
                         LXValue rv = px_call(handler, &arg, 1);
+                        px_root_pop();
                         if (rv.type == PX_BOOL && !rv.as.b) { complete = false; goto stream_done; }
                     }
                     int rest = pending_len - (cstart + csize + 2);
@@ -17435,8 +17455,11 @@ static LXValue bi_http_get_stream(LXValue* args, int nargs, void* ctx) {
             if (gz_active) {
                 STREAM_FEED_GZ(pending + off, bl);
             } else {
-                LXValue arg = px_str_len(pending + off, bl);
+                // M206（缺陷 257 同族）
+                px_root_push();
+                LXValue arg = px_str_len(pending + off, bl); PX_KEEP(arg);
                 LXValue rv = px_call(handler, &arg, 1);
+                px_root_pop();
                 if (rv.type == PX_BOOL && !rv.as.b) { complete = false; break; }
             }
             off += bl;
@@ -17453,8 +17476,11 @@ static LXValue bi_http_get_stream(LXValue* args, int nargs, void* ctx) {
             if (gz_active) {
                 STREAM_FEED_GZ(tmp, n);
             } else {
-                LXValue arg = px_str_len(tmp, n);
+                // M206（缺陷 257 同族）
+                px_root_push();
+                LXValue arg = px_str_len(tmp, n); PX_KEEP(arg);
                 LXValue rv = px_call(handler, &arg, 1);
+                px_root_pop();
                 if (rv.type == PX_BOOL && !rv.as.b) { complete = false; break; }
             }
         }
@@ -17924,15 +17950,21 @@ static char* px_mime_attr(const char* line, const char* key) {
 
 // multipart/form-data 解析：设置 req["form"]（普通字段）与 req["files"]（filename -> 内容）
 static void px_parse_multipart(LXValue req, const char* body, int body_len, const char* boundary) {
-    LXValue form = px_dict();
-    LXValue files = px_dict();
+    // M206（缺陷 249）：四个 dict 都是**裸 C 局部**，循环里 px_str_len/px_bytes_len 每次分配
+    //   ⇒ precise GC 下 form/files/file_fields/file_bytes 会被误回收
+    //   （实测：`PX_GC_STRESS=1 PX_GC_INLINE=1 PX_GC_LIVECHK=1` 的 multipart POST 当场响亮 +
+    //     默认阈值下 40 次 POST 内即出现 `R1008 字典没有键 'a'` —— 生产上传路径活性缺陷）。
+    //   ⚠️ 顺序：push 在**第一次创建之前**，KEEP 紧跟创建（写在创建前的 KEEP 保护的是 null）。
+    px_root_push();
+    LXValue form = px_dict();       PX_KEEP(form);
+    LXValue files = px_dict();      PX_KEEP(files);
     // M129（qg-issue 87 缺陷 10）：**补出「字段名」这一维**。
     //   `files` 以**文件名**为键（历史语义，不改），于是 Go 的 `r.FormFile("avatar")`
     //   （按**字段名**取件）在语言里没有等价物：多文件且字段名不同时无法区分，
     //   客户端把文件放进别的字段名时 Go 会 400 而本实现会照收（宽容度不同）。
     //   新增 `file_fields`：文件名 → 字段名（仅带 filename 的段）。**纯增量键**，
     //   既有 `files`/`form` 语义与字节序完全不变，老代码不受影响。
-    LXValue file_fields = px_dict();
+    LXValue file_fields = px_dict(); PX_KEEP(file_fields);
     // M129（qg-issue 87 缺陷 50）：**二进制安全的上传内容** —— filename → bytes。
     //   背景：`files` 的值是 **str**（px_str_len），而 str 底层以 NUL 结尾、多处操作走
     //   strlen ⇒ **首个 \x00 处静默截断**。实测：上传 8 字节 PNG 魔数 + NUL 开头的负载，
@@ -17941,7 +17973,7 @@ static void px_parse_multipart(LXValue req, const char* body, int body_len, cons
     //   任何二进制附件在移植后**必被截断**且**无任何报错**。
     //   修法：并行提供 `file_bytes`（filename → bytes，二进制安全）；`files` 保持原样
     //   以免破坏既有调用方（examples / ws-center 共 7 处），新代码一律用 `file_bytes`。
-    LXValue file_bytes = px_dict();
+    LXValue file_bytes = px_dict();  PX_KEEP(file_bytes);
     char delim[512];
     snprintf(delim, sizeof(delim), "--%s", boundary);
     int dlen = (int)strlen(delim);
@@ -18003,6 +18035,7 @@ static void px_parse_multipart(LXValue req, const char* body, int body_len, cons
     px_dict_set(req, "files", files);
     px_dict_set(req, "file_fields", file_fields);
     px_dict_set(req, "file_bytes", file_bytes);
+    px_root_pop();   // M206：全部已挂进 req（req 由调用方登记）⇒ 可收缩
 }
 
 static const char* px_http_status_reason(int code) {
@@ -22491,7 +22524,10 @@ static int px_run_px_child(const char* path, const char* env_json, int dump_resp
 
 // urlencoded → dict（GET 查询串 / POST 表单共用）
 static LXValue px_parse_urlenc(const char* body) {
-    LXValue d = px_dict();
+    // M206（缺陷 250）：d 是裸 C 局部，循环里每次 `px_str(v)` 都分配 ⇒ 被误回收后
+    //   `px_dict_set(d, k, …)` 写进已释放的 dict（LIVECHK 实测响亮点正是 px_dict_set(dict)）。
+    px_root_push();
+    LXValue d = px_dict(); PX_KEEP(d);
     char* copy = xmalloc(strlen(body) + 1);
     strcpy(copy, body);
     char* save = NULL;
@@ -22512,6 +22548,7 @@ static LXValue px_parse_urlenc(const char* body) {
         pair = strtok_r(NULL, "&", &save);
     }
     xfree(copy);
+    px_root_pop();
     return d;
 }
 
@@ -23055,8 +23092,10 @@ static void px_sigstop_handler(int sig) {
 
 // 解析 Cookie 头 "a=1; b=2" → dict；返回 px_dict
 static LXValue px_parse_cookie(const char* header) {
-    LXValue d = px_dict();
-    if (!header) return d;
+    // M206（缺陷 250 同族）：d 跨循环里的 `px_str(vbuf)` 分配。
+    px_root_push();
+    LXValue d = px_dict(); PX_KEEP(d);
+    if (!header) { px_root_pop(); return d; }
     const char* p = header;
     while (*p) {
         while (*p == ' ' || *p == ';') p++;
@@ -23076,6 +23115,7 @@ static LXValue px_parse_cookie(const char* header) {
         px_dict_set(d, k, px_str(vbuf));
         p = semi ? semi + 1 : v + strlen(v);
     }
+    px_root_pop();
     return d;
 }
 
@@ -23127,9 +23167,15 @@ static LXValue px_session_read(const char* sid) {
     px_session_path(path, sizeof(path), sid);
     char* data = NULL; int len = 0;
     if (!px_read_whole_file(path, &data, &len)) return px_null();
-    LXValue v = px_str_len(data, len);
+    // M206（缺陷 254 · **实测抓到的**）：v 是裸 C 局部，`px_call(json_parse, &v, 1)` 期间
+    //   被调方内部大量分配 ⇒ 压力档下 v 被回收 ⇒ 实测报 `json: 对象解析失败`
+    //   （session 文件明明写对了）。修法：调用方登记。
+    px_root_push();
+    LXValue v = px_str_len(data, len); PX_KEEP(v);
     xfree(data);
     LXValue j = px_call(px_get_global("json_parse"), &v, 1);
+    PX_KEEP(j);
+    px_root_pop();
     if (j.type != PX_DICT) return px_null();
     return j;
 }
@@ -23224,8 +23270,11 @@ static LXValue bi_session_open(LXValue* args, int nargs, void* ctx) {
         if (px_session_valid(&sess, now)) {
             // 续期 + 复用
             LXValue exp = px_int(now + PX_SESSION_TTL);
+            px_root_push();   // M206：sess 是 px_session_read 返回的裸局部，跨 px_session_write 分配
+            PX_KEEP(sess);
             px_dict_set(sess, "exp", exp);
             px_session_write(sid, &sess);
+            px_root_pop();
             strncpy(g_cur_sid, sid, sizeof(g_cur_sid) - 1);
             g_cur_sid_set = 1;
             return px_str(sid);
@@ -23233,11 +23282,14 @@ static LXValue bi_session_open(LXValue* args, int nargs, void* ctx) {
     }
     char nid[256];
     px_new_session_id(nid, sizeof(nid));
-    LXValue data = px_dict();
-    LXValue sess = px_dict();
+    // M206（缺陷 251）：data/sess 两个裸 C 局部 —— `sess = px_dict()` 那次分配就可能回收 data。
+    px_root_push();
+    LXValue data = px_dict(); PX_KEEP(data);
+    LXValue sess = px_dict(); PX_KEEP(sess);
     px_dict_set(sess, "data", data);
     px_dict_set(sess, "exp", px_int(now + PX_SESSION_TTL));
     px_session_write(nid, &sess);
+    px_root_pop();
     snprintf(g_session_cookie, sizeof(g_session_cookie),
              "%s=%s; Path=/; HttpOnly", PX_SESSION_NAME, nid);
     g_session_cookie_set = 1;
@@ -23275,17 +23327,23 @@ static LXValue bi_session_set(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 2 || args[0].type != PX_STR) px_error("R1002: session_set 需要 (key, value) 参数");
     if (!g_cur_sid_set) return px_bool(false);
+    // M206（缺陷 251 同族）：sess/data 都是裸 C 局部；`px_dict_set(sess,"data",px_dict())`
+    //   的内层 px_dict() 就会回收外层 sess（实测 LIVECHK 响亮）。
+    px_root_push();
     LXValue sess = px_session_read(g_cur_sid);
     long long now = (long long)time(NULL);
     if (!px_session_valid(&sess, now)) {
-        sess = px_dict();
-        px_dict_set(sess, "data", px_dict());
+        sess = px_dict(); PX_KEEP(sess);
+        LXValue d0 = px_dict(); PX_KEEP(d0);
+        px_dict_set(sess, "data", d0);
         px_dict_set(sess, "exp", px_int(now + PX_SESSION_TTL));
     }
     LXValue data = px_dict_get(sess, "data");
     if (data.type != PX_DICT) { data = px_dict(); px_dict_set(sess, "data", data); }
+    PX_KEEP(sess); PX_KEEP(data);
     px_dict_set(data, args[0].as.obj->as.str.data, args[1]);
     px_session_write(g_cur_sid, &sess);
+    px_root_pop();
     return px_bool(true);
 }
 
@@ -23335,8 +23393,12 @@ static LXValue bi_basic_auth(LXValue* args, int nargs, void* ctx) {
         const char* h = hdr.as.obj->as.str.data;
         if (strncasecmp(h, "Basic ", 6) == 0) {
             // base64 解码 user:pass
-            LXValue b64 = px_str(h + 6);
+            // M206（缺陷 256）：b64 跨 px_call 的分配（base64_decode 会分配结果串）。
+            px_root_push();
+            LXValue b64 = px_str(h + 6); PX_KEEP(b64);
             LXValue decoded = px_call(px_get_global("base64_decode"), &b64, 1);
+            PX_KEEP(decoded);
+            px_root_pop();
             if (decoded.type == PX_STR) {
                 char expect[512];
                 snprintf(expect, sizeof(expect), "%s:%s",

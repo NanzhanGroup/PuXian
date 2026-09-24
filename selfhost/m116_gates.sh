@@ -669,6 +669,7 @@ step "M205 · CLI 诊断通道统一（缺陷 186 的 tools 面 · 缺陷 247）
 #   [2] 动态 28 例（8 CLI × err/help/ok）· [3] 解释轨面（pxpkg / routegen / print_err 探针）
 #   [4] 负控 3 道（A 静态退回 print · B 参数错用法退回 stdout + 现场重编 · C pxpkg bash 侧退回）
 run m205_cli_channels bash examples/m205_cli_channels/verify.sh
+run m206_gcroot bash examples/m206_gcroot/verify.sh
 step "M190 · 上游 registry-px 真实用例回归（53 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。

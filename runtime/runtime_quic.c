@@ -930,11 +930,14 @@ static LXValue bi_quic_h3_listen(LXValue* args, int nargs, void* ctx) {
 // ============================================================
 // raw：启动 h3 server listener（语言 bi_quic_h3_listen 的 raw 封装）
 int64_t px_quic_raw_h3_listen(int port, const char* cert, const char* key) {
+    // M206（缺陷 252）：`a[2] = px_str(key)` 那次分配会回收刚建的 `a[1]`（裸 C 数组槽）。
+    px_root_push();
     LXValue a[3];
     a[0] = px_int(port);
-    a[1] = px_str(cert ? cert : "");
-    a[2] = px_str(key ? key : "");
+    a[1] = px_str(cert ? cert : ""); PX_KEEP(a[1]);
+    a[2] = px_str(key ? key : "");   PX_KEEP(a[2]);
     LXValue r = bi_quic_h3_listen(a, 3, NULL);
+    px_root_pop();
     return r.type == PX_INT ? r.as.i : -1;
 }
 
@@ -2129,9 +2132,14 @@ int64_t px_quic_raw_accept(int64_t listener, int timeout_ms) {
 }
 
 int64_t px_quic_raw_connect(const char* ip, int port, const char* alpn) {
+    // M206（缺陷 252 同族）：a[0] 跨 `a[2] = px_str(alpn)` 的分配。
+    px_root_push();
     LXValue a[3];
-    a[0] = px_str(ip); a[1] = px_int(port); a[2] = px_str(alpn);
+    a[0] = px_str(ip); PX_KEEP(a[0]);
+    a[1] = px_int(port);
+    a[2] = px_str(alpn); PX_KEEP(a[2]);
     LXValue r = bi_quic_connect(a, 3, NULL);
+    px_root_pop();
     return r.type == PX_INT ? r.as.i : -1;
 }
 

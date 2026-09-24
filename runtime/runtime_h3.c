@@ -1141,10 +1141,15 @@ static void h3_extra_to_headers(LXValue hdrlist, const char* extra) {
                 if (!(strcasecmp(k, "Connection") == 0 ||
                       strcasecmp(k, "Alt-Svc") == 0 ||
                       strcasecmp(k, "Transfer-Encoding") == 0)) {
+                    // M206（缺陷 253）：pair 是裸 C 局部，两次 px_str 分配 ⇒ 列表被误回收
+                    //   （写入已释放 list 的元素数组 ⇒ 写坏 slab 空闲链表）。
                     LXValue pair = px_list(2);
+                    px_root_push();
+                    PX_KEEP(pair);
                     px_list_push(pair, px_str(k));
                     px_list_push(pair, px_str(v));
                     px_list_push(hdrlist, pair);
+                    px_root_pop();
                 }
             }
         }

@@ -1,3 +1,79 @@
+## M206 · native 桥 **GC 根面漏登记**（缺陷 248–258 · 20 处）：静态审计器 + 压力差分 + 收口（第 85 轮）
+
+> 主项 = **「保证强度」欠账的第一项**。M170 / M182 / M183 共修了 9 处「GC 误回收仍在使用的对象」，
+> 但它们**全部是「被压力筛筛出来的」** —— 没有一次是「静态扫全仓找齐」。本轮补这一层：
+> 新写静态审计器 `selfhost/gcroot_audit.py`，把「创建 → 未登记 → 再分配」这个**形状**全仓找齐，
+> 再用 `PX_GC_STRESS=1 PX_GC_INLINE=1 PX_GC_LIVECHK=1` 的**差分筛**在真实路径上取证。
+> 结果：**20 处真站点**（11 个缺陷编号），其中 **3 处是动态筛抓出来的**（静态扫描器先漏了：
+> `bi_udp_recv` 的 `px_bytes_len` 不在分配名单里、`px_call` 被错当成「持有实参的构造器」）。
+> 副项 = 把审计器做成**带自证的判据**（4 锚点 + 规模下限 + 已判定基线），挂进 m116 全量门与 CI。
+
+### 一 为什么这是「语言缺陷」而不是「内部实现」
+
+VM 轨产物默认 **precise GC**（`px_gc_set_precise(1)`；根面 = 全局槽 + VM 帧槽 + TLS 登记根栈，
+**不扫 C 栈**），而 `px build` 在 x86_64 上 **默认 engine=vm** ⇒ native 桥里**只活在 C 局部**的
+`LXValue` 不登记就会被回收。实测形态（**默认阈值**下就会发作）：
+
+| 路径 | 修前实测 |
+|---|---|
+| HTTP multipart 上传 | 40 次 POST 内即 `R1008 字典没有键 'a'`（form 被误回收） |
+| `udp_serve` 的 handler | 收到已回收的 ip 串 / 响应体写坏空闲链表 |
+| `udp_recv` | 返回的 dict 被回收 ⇒ **LIVECHK 响亮 + SIGABRT/core** |
+| `session_open`/`set`/`read` | 压力档下 `json: 对象解析失败`（session 文件本身写对了） |
+| `bus_publish` / `basic_auth` / `http_get_stream` | 值传给 `px_call` 期间被回收 |
+
+### 二 判据（写进 `docs/GC_ROOTS.md`）
+
+> **① 创建后必须登记；② 登记必须紧跟创建、先于下一次分配。**
+
+形式化：若「未登记的活值集合」非空时又发生一次分配 ⇒ 该值可能被回收。
+两条例外（**都不构成缺陷**）：
+- 受害值**作为触发调用的实参**且该调用是**会持有实参的构造器**（`px_ok(v)` / `px_list_n(items,n)` /
+  `px_tuple(...)`）⇒ 新对象持有它 ⇒ 从 `g_tmp_root`=新对象 出发可达；
+  ⚠️ **`px_call`/`px_method` 不算**（被调方不保证持有 —— `px_session_read` 就是这样漏的）。
+- 受害值**可由另一个已登记对象到达**（如生成器元素：`o->as.gen.list...items[k]`）或**在触发点已死**
+  （分支末尾 `return`/`continue`、互斥 `switch`/`if` 分支）—— 这 8 条进**已判定基线**（`BASELINE.tsv`），
+  门要求「候选 ⇄ 基线」逐条对齐，基线里**不得**出现「真」。
+
+### 三 收口 20 处（11 个编号）
+
+| 编号 | 站点 | 形状 |
+|---|---|---|
+| **248** | `bi_udp_serve` | `hargs[0] = px_str(ip)` 跨 `hargs[2] = px_str_len(buf,n)`；`r` 跨 `px_to_string(r)` |
+| **249** | `px_parse_multipart` | `form`/`files`/`file_fields`/`file_bytes` 四个裸 dict 互跨分配 |
+| **250** | `px_parse_urlenc` · `px_parse_cookie` | `d` 跨循环里每次 `px_str(v)` |
+| **251** | `bi_session_open` · `bi_session_set` | `data`/`sess` 互跨；`px_dict_set(sess,"data",px_dict())` 内层分配回收外层 |
+| **252** | `px_quic_raw_h3_listen` · `px_quic_raw_connect` | `a[0]`/`a[1]` 跨后续 `px_str` |
+| **253** | `h3_extra_to_headers` | `pair`（list）跨两次 `px_str` |
+| **254** | `px_session_read` | `v` 跨 `px_call(json_parse, &v, 1)`（**实测**：`json: 对象解析失败`） |
+| **255** | `bi_bus_publish` | `call_args[0]` 跨首个订阅者回调里的分配 ⇒ 第二个订阅者收到已回收 topic |
+| **256** | `bi_basic_auth` | `b64` 跨 `px_call(base64_decode, &b64, 1)` |
+| **257** | `bi_http_get_stream`（4 处） | `arg` 跨 `px_call(handler, &arg, 1)` |
+| **258** | `bi_udp_recv` | `r` 跨 `px_bytes_len(buf,n)`（**由本门 UDP 压力档抓到**） |
+
+修法统一 = `px_root_push()` 作用域 + **创建即 `PX_KEEP`**（写在创建前的 KEEP 保护的是 null，等于没登记）。
+
+### 四 新增工具与判据
+
+- **`selfhost/gcroot_audit.py`**（静态审计器，~330 行）：
+  去注释/字符串 → 切函数 → 切语句 → 维护「未登记活值集合」→ 每次分配检查集合是否非空。
+  例外规则见 §二。自带 **`--self-test`**（4 锚点：2 必中 2 必不中 —— 初版 `miss1` 被自身的
+  「分支不死值」规则判红，遂把锚点改成**规范安全形态**：`PX_KEEP` 紧跟创建）。
+- **`examples/m206_gcroot/`**：`verify.sh`（**9 通过 / 0 失败**）+ 两个探针 + `BASELINE.tsv`。
+  层 ① 自证 · ② 候选 ⇄ 基线 + 规模下限（函数 ≥ 1400 / 登记站点 ≥ 170）· ③ HTTP 面（40 请求 × 两档）
+  · ④ UDP 面（20 往返 × 两档）· ⑤ **负控 3 道各自独立判红 + 源逐字节还原**。
+- 已挂进 `selfhost/m116_gates.sh` 与 `.github/workflows/ci.yml`（CI 用 `--neg-skip`）。
+
+### 五 纪律（本轮新增）
+
+1. **扫描器「找不到」先怀疑扫描器**：`px_bytes_len` 不在分配名单里 ⇒ 漏了 `udp_recv`；
+   `px_dict_set`/`px_list_push` 被当成「持有实参的构造器」⇒ 例外把**容器本身**当被持有者 ⇒ 又是漏报。
+2. **静态判据必须配「动态取证」**：本轮 3 处（`session_read`/`udp_recv`/`http_get_stream`）是
+   压力档先红、再回头补静态规则；反过来静态候选也要用探针证伪（7 条假阳）。
+3. **负控要挑「探针真的走到」的站点**：撤 `px_parse_urlenc` 的 KEEP 后 probe_rt 仍全绿
+   —— 因为 `http_serve` 走的是**内联** urlencoded 解析 ⇒ 该族只能由**静态判据**覆盖（门头已如实登记）。
+4. `sleep(200)` 这类长等待要用**后台 + 轮询**（工具循环层 120s 上限会连子进程一起终止）。
+
 ## M205 · CLI 工具的**诊断通道**统一（缺陷 186 的 tools 面收尾 + 同轮照出的 **247**）（第 84 轮）
 
 > 主项 = **工具链**的通道口径：M172 只统一了**语言运行期**的诊断出口（解释轨三处改 `print_err`），
