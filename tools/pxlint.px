@@ -175,7 +175,7 @@ def lx_collect_import_names(items, known, file):
 def lx_run(file, jmode, strict):
     if not exists(file):
         let emsg = "pxlint: 无法读取文件 '" + file + "'"
-        print(emsg)
+        print_err(emsg)
         exit(1)
     let src = read_file(file)
     p_toks = lex_tokens(src)
@@ -234,15 +234,22 @@ def lx_run(file, jmode, strict):
     if strict and warns > 0:
         exit(1)
     exit(0)
-def usage():
-    print("pxlint —— PuXian 静态检查器（自举，M64b）")
-    print("用法: pxlint <file.px> [--json] [--strict] [--version|-v] [-h]")
+# M205（缺陷 186 tools 面）：CLI 诊断走 stderr —— usage 按场景分流（--help→stdout；参数错→stderr）
+def cli_out(s, to_err):
+    if to_err:
+        print_err(s)
+    else:
+        print(s)
+def usage(to_err):
+    cli_out("pxlint —— PuXian 静态检查器（自举，M64b）", to_err)
+    cli_out("用法: pxlint <file.px> [--json] [--strict] [--version|-v] [-h]", to_err)
 def main():
     let as_ = args()
     var file = ""
     var jmode = false
     var strict = false
-    var i = 0
+    # 注：编译版 args() 首元素 = 程序自身路径（argv[0]），从 i=1 起解析用户参数
+    var i = 1
     while i < len(as_):
         let a = as_[i]
         if a == "--json":
@@ -253,16 +260,16 @@ def main():
             print("pxlint 0.1.0 (普贤 PuXian lint · M64b 自举)")
             exit(0)
         elif a == "--help" or a == "-h":
-            usage()
+            usage(false)
             exit(0)
         elif starts_with(a, "-"):
-            print("pxlint: 未知选项 '" + a + "'")
-            usage()
+            print_err("pxlint: 未知选项 '" + a + "'")
+            usage(true)
             exit(1)
         else:
             file = a
         i += 1
     if file == "":
-        usage()
+        usage(true)
         exit(1)
     lx_run(file, jmode, strict)

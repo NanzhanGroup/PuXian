@@ -23,10 +23,16 @@ def pb_dirname(path):
             return path[0:i]
         i -= 1
     return "."
-def pb_usage():
-    print("pxbench —— PuXian 基准测试工具（自举，M64-S5）")
-    print("用法: pxbench <file.px> <func> [--count N] [--repeat R] [--version]")
-    print("  对顶层 def func 构造 N 次循环调用（子进程 pxi），重复 R 轮报告耗时")
+# M205（缺陷 186 tools 面）：CLI 诊断走 stderr —— usage 按场景分流（--help→stdout；参数错→stderr）
+def cli_out(s, to_err):
+    if to_err:
+        print_err(s)
+    else:
+        print(s)
+def pb_usage(to_err):
+    cli_out("pxbench —— PuXian 基准测试工具（自举，M64-S5）", to_err)
+    cli_out("用法: pxbench <file.px> <func> [--count N] [--repeat R] [--version]", to_err)
+    cli_out("  对顶层 def func 构造 N 次循环调用（子进程 pxi），重复 R 轮报告耗时", to_err)
 # 构造基准程序文本（定义块 + count 次调用 func）
 def pb_build_src(blocks, func, count):
     var out = pp_blocks_text(blocks)
@@ -67,7 +73,7 @@ def pb_strip_main(blocks):
     return kept
 def pb_run(file, func, count, repeat):
     if not exists(file):
-        print("错误: 无法读取文件 " + file)
+        print_err("错误: 无法读取文件 " + file)
         return 2
     var src = read_file(file)
     var got = pp_collect(src)
@@ -81,7 +87,7 @@ def pb_run(file, func, count, repeat):
             found = true
         di += 1
     if not found:
-        print("错误: 未找到函数 '" + func + "'")
+        print_err("错误: 未找到函数 '" + func + "'")
         return 1
     blocks = pb_strip_main(blocks)
     var pxi_path = env("PX_PXI")
@@ -93,13 +99,13 @@ def pb_run(file, func, count, repeat):
     # 预热一轮（忽略结果，可能在等 IO 或首次加载）
     let warm = pb_run_round(pxi_path, blocks, func, count, base_dir, 0)
     if warm < 0:
-        print("警告: 预热运行失败（rc=" + str(warm) + "），继续计时")
+        print_err("警告: 预热运行失败（rc=" + str(warm) + "），继续计时")
     var rounds = []
     var r = 1
     while r <= repeat:
         let us = pb_run_round(pxi_path, blocks, func, count, base_dir, r)
         if us < 0:
-            print("第 " + str(r) + " 轮运行错误（rc=" + str(us) + "）")
+            print_err("第 " + str(r) + " 轮运行错误（rc=" + str(us) + "）")
             return 1
         let secs = float(us) / 1000000.0
         let avg_ms = float(us) / 1000.0 / float(count)
@@ -141,25 +147,25 @@ def main():
             print("pxbench 0.1.0 (普贤 PuXian bench · M64-S5 自举)")
             exit(0)
         elif a == "--help" or a == "-h":
-            pb_usage()
+            pb_usage(false)
             exit(0)
         elif a == "--count":
             if i + 1 < len(as_):
                 count = int(as_[i + 1])
                 i += 1
             else:
-                print("pxbench: --count 需要数值")
+                print_err("pxbench: --count 需要数值")
                 exit(2)
         elif a == "--repeat":
             if i + 1 < len(as_):
                 repeat = int(as_[i + 1])
                 i += 1
             else:
-                print("pxbench: --repeat 需要数值")
+                print_err("pxbench: --repeat 需要数值")
                 exit(2)
         elif starts_with(a, "-") and a != "-":
-            print("pxbench: 未知选项 '" + a + "'")
-            pb_usage()
+            print_err("pxbench: 未知选项 '" + a + "'")
+            pb_usage(true)
             exit(2)
         elif file == "":
             file = a
@@ -167,6 +173,6 @@ def main():
             func = a
         i += 1
     if file == "" or func == "":
-        pb_usage()
+        pb_usage(true)
         exit(2)
     exit(pb_run(file, func, count, repeat))

@@ -144,7 +144,7 @@ def pxp_copy_pkg(pkg_dir, files, dst_dir):
 def pxp_install_registry(name, spec, registry, modules_dir):
     let ver_dir = registry + "/" + name
     if not exists(ver_dir):
-        print("pxpkg 错误: registry 无包 " + name + "（" + ver_dir + "）")
+        print_err("pxpkg 错误: registry 无包 " + name + "（" + ver_dir + "）")
         exit(1)
     let entries = list_dir(ver_dir)
     let versions = []
@@ -155,12 +155,12 @@ def pxp_install_registry(name, spec, registry, modules_dir):
         i += 1
     let best = sv_best(versions, spec)
     if best == null:
-        print("pxpkg 错误: 找不到满足 " + name + "@" + spec + " 的版本（registry: " + ver_dir + "）")
+        print_err("pxpkg 错误: 找不到满足 " + name + "@" + spec + " 的版本（registry: " + ver_dir + "）")
         exit(1)
     let pkg_dir = ver_dir + "/" + best
     let files = pxp_pkg_files(pkg_dir, name)
     if len(files) == 0:
-        print("pxpkg 错误: registry 包不完整（缺 " + name + "/" + best + "/" + name + ".px）")
+        print_err("pxpkg 错误: registry 包不完整（缺 " + name + "/" + best + "/" + name + ".px）")
         exit(1)
     let digest = pxp_digest_pkg(pkg_dir, files)
     let dst_dir = modules_dir + "/" + name
@@ -173,7 +173,7 @@ def pxp_install_path(name, path, modules_dir):
     if is_dir(path):
         let files = pxp_pkg_files(path, name)
         if len(files) == 0:
-            print("pxpkg 错误: 本地包目录缺入口 " + path + "/" + name + ".px")
+            print_err("pxpkg 错误: 本地包目录缺入口 " + path + "/" + name + ".px")
             exit(1)
         let digest_dir = pxp_digest_pkg(path, files)
         pxp_copy_pkg(path, files, dst_dir)
@@ -198,7 +198,7 @@ def pxp_install_url(name, url, modules_dir):
     let content = http_get(base)
     let digest = sha256(content)
     if expect != "" and digest != to_lower(expect):
-        print("pxpkg 错误: " + name + " sha256 校验失败（期望 " + expect + " 实际 " + digest + "）")
+        print_err("pxpkg 错误: " + name + " sha256 校验失败（期望 " + expect + " 实际 " + digest + "）")
         exit(1)
     let dst_dir = modules_dir + "/" + name
     if not exists(dst_dir):
@@ -217,7 +217,7 @@ def pxp_dep_kind(spec):
 def pxp_install(dir, locked):
     let m = pxp_read_manifest(dir)
     if m == null:
-        print("pxpkg 错误: 未找到 " + PKG_FILE + "，请先运行 pxpkg init")
+        print_err("pxpkg 错误: 未找到 " + PKG_FILE + "，请先运行 pxpkg init")
         exit(1)
     let pkg_name = m["name"]
     let pkg_version = m["version"]
@@ -233,32 +233,32 @@ def pxp_install(dir, locked):
     let lock = pxp_read_lock(dir)
     if locked:
         if lock == null:
-            print("pxpkg 错误: --locked 需要 " + LOCK_FILE + "（请先运行 pxpkg install）")
+            print_err("pxpkg 错误: --locked 需要 " + LOCK_FILE + "（请先运行 pxpkg install）")
             exit(1)
         var i = 0
         while i < len(names):
             let name = names[i]
             let spec = deps[name]
             if not lock["deps"].has(name):
-                print("pxpkg 错误: " + LOCK_FILE + " 缺少依赖 " + name)
+                print_err("pxpkg 错误: " + LOCK_FILE + " 缺少依赖 " + name)
                 exit(1)
             let lock_dep = lock["deps"][name]
             # 版本满足 spec（semver 范围依赖才校验）
             let kind = pxp_dep_kind(spec)
             if kind == "range" and not sv_satisfies(lock_dep["version"], spec):
-                print("pxpkg 错误: lock 版本 " + lock_dep["version"] + " 不满足 " + name + "=" + spec)
+                print_err("pxpkg 错误: lock 版本 " + lock_dep["version"] + " 不满足 " + name + "=" + spec)
                 exit(1)
             # sha256 校验已安装内容（M187：单文件包=入口哈希、多文件包=全包串接哈希，同一函数）
             let inst_dir = modules_dir + "/" + name
             let inst_files = pxp_pkg_files(inst_dir, name)
             if len(inst_files) == 0:
-                print("pxpkg 错误: " + name + " 未安装（--locked 拒绝）")
+                print_err("pxpkg 错误: " + name + " 未安装（--locked 拒绝）")
                 exit(1)
             let actual = pxp_digest_pkg(inst_dir, inst_files)
             if actual != lock_dep["sha256"]:
                 let em1 = "pxpkg 错误: " + name + " 内容被篡改（sha256 不符，lock=" + lock_dep["sha256"]
                 let em2 = " 实际=" + actual + "）"
-                print(em1 + em2)
+                print_err(em1 + em2)
                 exit(1)
             print("  [locked] " + name + " " + lock_dep["version"] + " 校验通过")
             i += 1
@@ -273,7 +273,7 @@ def pxp_install(dir, locked):
         let kind = pxp_dep_kind(spec)
         if kind == "range":
             if registry == null:
-                print("pxpkg 错误: 依赖 " + name + "=" + spec + " 需要 PX_REGISTRY 环境变量")
+                print_err("pxpkg 错误: 依赖 " + name + "=" + spec + " 需要 PX_REGISTRY 环境变量")
                 exit(1)
             entries[name] = pxp_install_registry(name, spec, registry, modules_dir)
         elif kind == "path":
@@ -287,7 +287,7 @@ def pxp_install(dir, locked):
 def pxp_add(dir, spec, alias):
     let m = pxp_read_manifest(dir)
     if m == null:
-        print("pxpkg 错误: 未找到 " + PKG_FILE + "，请先运行 pxpkg init")
+        print_err("pxpkg 错误: 未找到 " + PKG_FILE + "，请先运行 pxpkg init")
         exit(1)
     var name = ""
     var value = spec
@@ -300,12 +300,12 @@ def pxp_add(dir, spec, alias):
     else:
         name = spec
     if name == "":
-        print("pxpkg 错误: 依赖名不能为空")
+        print_err("pxpkg 错误: 依赖名不能为空")
         exit(1)
     # 校验 value：URL / 本地路径 / semver 范围
     let kind = pxp_dep_kind(value)
     if kind == "range" and sv_range_parse(value) == null:
-        print("pxpkg 错误: 非法依赖值 '" + value + "'（须为 URL/路径/semver 范围）")
+        print_err("pxpkg 错误: 非法依赖值 '" + value + "'（须为 URL/路径/semver 范围）")
         exit(1)
     let deps = m["deps"]
     let names = m["names"]
@@ -318,11 +318,11 @@ def pxp_add(dir, spec, alias):
 def pxp_remove(dir, name):
     let m = pxp_read_manifest(dir)
     if m == null:
-        print("pxpkg 错误: 未找到 " + PKG_FILE)
+        print_err("pxpkg 错误: 未找到 " + PKG_FILE)
         exit(1)
     let deps = m["deps"]
     if not deps.has(name):
-        print("pxpkg 错误: 依赖 " + name + " 不存在")
+        print_err("pxpkg 错误: 依赖 " + name + " 不存在")
         exit(1)
     let names = []
     let keys = m["names"]
@@ -343,7 +343,7 @@ def pxp_remove(dir, name):
 def pxp_list(dir):
     let m = pxp_read_manifest(dir)
     if m == null:
-        print("pxpkg 错误: 未找到 " + PKG_FILE)
+        print_err("pxpkg 错误: 未找到 " + PKG_FILE)
         exit(1)
     print("包名: " + m["name"] + "  版本: " + m["version"])
     let lock = pxp_read_lock(dir)
@@ -369,7 +369,7 @@ def pxp_list(dir):
 def pxp_init(dir, name):
     let path = dir + "/" + PKG_FILE
     if exists(path):
-        print("pxpkg 错误: " + PKG_FILE + " 已存在，跳过初始化")
+        print_err("pxpkg 错误: " + PKG_FILE + " 已存在，跳过初始化")
         exit(1)
     var pkg_name = name
     if pkg_name == "":
@@ -383,7 +383,7 @@ def main():
         dir = "."
     let cmd = env("PXPKG_CMD")
     if cmd == null or cmd == "":
-        print("pxpkg: 缺少 PXPKG_CMD 环境变量")
+        print_err("pxpkg: 缺少 PXPKG_CMD 环境变量")
         exit(1)
     var a1 = env("PXPKG_ARG1")
     var a2 = env("PXPKG_ARG2")
@@ -395,7 +395,7 @@ def main():
         pxp_init(dir, a1)
     elif cmd == "add":
         if a1 == "":
-            print("pxpkg 错误: add 需要 <spec>（如 mylib@^1.2.0）")
+            print_err("pxpkg 错误: add 需要 <spec>（如 mylib@^1.2.0）")
             exit(1)
         pxp_add(dir, a1, a2)
     elif cmd == "install":
@@ -404,10 +404,10 @@ def main():
         pxp_list(dir)
     elif cmd == "remove":
         if a1 == "":
-            print("pxpkg 错误: remove 需要 <name>")
+            print_err("pxpkg 错误: remove 需要 <name>")
             exit(1)
         pxp_remove(dir, a1)
     else:
-        print("pxpkg: 未知命令 " + cmd)
+        print_err("pxpkg: 未知命令 " + cmd)
         exit(1)
 # 入口：pxi 约定顶层 def main() 自动调用一次（勿再显式调用，否则执行两遍）

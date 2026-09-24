@@ -29,14 +29,14 @@ def pt_run_one(pxi_path, blocks, name, base_dir, tmp_seq):
     var src = pt_build_src(blocks, name + "()")
     var werr = write_file(tmp_path, src)
     if werr != null:
-        print("      [错误] 写临时文件失败: " + str(werr))
+        print_err("      [错误] 写临时文件失败: " + str(werr))
         return [-2, 0]
     let t0 = now_us()
     var pid = os_spawn(pxi_path, [tmp_path])
     var rc = -1
     if pid == null:
         rc = -2
-        print("      [错误] 无法启动解释器 '" + pxi_path + "'（设 PX_PXI 指向 bootstrap/pxi）")
+        print_err("      [错误] 无法启动解释器 '" + pxi_path + "'（设 PX_PXI 指向 bootstrap/pxi）")
     else:
         rc = os_wait(pid)
     let us = now_us() - t0
@@ -44,15 +44,21 @@ def pt_run_one(pxi_path, blocks, name, base_dir, tmp_seq):
     return [rc, us]
 # ---------- 主流程 ----------
 # usage 文本
-def pt_usage():
-    print("pxtest —— PuXian 测试运行器（自举，M64-S5）")
-    print("用法: pxtest <file.px> [filter] [--list] [--version]")
-    print("  约定：顶层 def test_xxx() 无参函数 = 测试用例；逐用例独立运行")
-    print("  filter：仅运行名字含该子串的测试；--list 只列出不运行")
+# M205（缺陷 186 tools 面）：CLI 诊断走 stderr —— usage 按场景分流（--help→stdout；参数错→stderr）
+def cli_out(s, to_err):
+    if to_err:
+        print_err(s)
+    else:
+        print(s)
+def pt_usage(to_err):
+    cli_out("pxtest —— PuXian 测试运行器（自举，M64-S5）", to_err)
+    cli_out("用法: pxtest <file.px> [filter] [--list] [--version]", to_err)
+    cli_out("  约定：顶层 def test_xxx() 无参函数 = 测试用例；逐用例独立运行", to_err)
+    cli_out("  filter：仅运行名字含该子串的测试；--list 只列出不运行", to_err)
 # 参数解析在 main
 def pt_run(file, filt, list_only):
     if not exists(file):
-        print("错误: 无法读取文件 " + file)
+        print_err("错误: 无法读取文件 " + file)
         return 2
     var src = read_file(file)
     var got = pp_collect(src)
@@ -156,13 +162,13 @@ def main():
             print("pxtest 0.1.0 (普贤 PuXian test · M64-S5 自举)")
             exit(0)
         elif a == "--help" or a == "-h":
-            pt_usage()
+            pt_usage(false)
             exit(0)
         elif a == "--list":
             list_only = true
         elif starts_with(a, "-"):
-            print("pxtest: 未知选项 '" + a + "'")
-            pt_usage()
+            print_err("pxtest: 未知选项 '" + a + "'")
+            pt_usage(true)
             exit(2)
         elif file == "":
             file = a
@@ -170,6 +176,6 @@ def main():
             filt = a
         i += 1
     if file == "":
-        pt_usage()
+        pt_usage(true)
         exit(2)
     exit(pt_run(file, filt, list_only))

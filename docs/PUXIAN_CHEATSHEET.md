@@ -2475,3 +2475,29 @@ set_timeout(fn (): print("once after 2s"), 2000)
        Python 的 `d["k"] += 1` 亦为 KeyError）。
      · 门：`examples/m204_assign_op/`（正例 2 组 × 三轨逐字节一致 · 拒绝侧 3 例 ·
        负控 5 道：Index/Field 退回旧形态 · 顺序违规 · 重复求值 · 解释轨 246 退回）。
+234. **CLI 工具的**通道口径**（第 84 轮 · M205 收口缺陷 186 的 tools 面 + 缺陷 247）**：
+     · **判据（通道 = 消费方）**：**诊断**（错误 / 警告 / 参数错提示 / **参数错时的用法**）⇒ **stderr**；
+       **产品**（成功路径结果、结构化 JSON、`--help`/`--version` 文本、`--check` 报告、
+       `pxlint` 的 `N 错误, M 警告` 汇总、`pxpkg` 的 `安装 x <- …`）⇒ **stdout**；失败路径 **rc≠0**。
+       为什么「`--help` 的用法」与「参数错的用法」分道：前者是**显式请求的产品**（要能 `pxfmt --help | less`、
+       被补全/文档生成消费 ⇒ stdout + rc=0）；后者是**失败诊断**（必须能 `cmd 2>err` 单独取走 ——
+       CI 才能在红的当场读到真因，M193 / M195 两次红的注解都栽在这上面）。
+     · 收口面：`tools/*.px` 10 个 CLI 的 **41 个诊断站点** + **8 处 usage 分流**
+       （每件 8 行 helper：`cli_out(s, to_err)` + `usage(to_err)`；`--help` ⇒ `usage(false)`、
+       参数错 ⇒ `usage(true)`）；壳层 `tools/pxpkg` 的 `*)` 未知命令拆成独立分支（`>&2` + `exit 2`）。
+       ⇒ 口径**一直在**（`tools/px` 早就是 `>&2`），只是 `.px` 侧没跟上 —— M172 当时只统一了**语言运行期**。
+       `pxfmt` 顺带**新增「未知选项」分支**（修前 `--bogus` 被**静默忽略**）。
+     · **缺陷 247（同轮由门的探针照出）**：编译件 `args()` = `[argv[0], …]`（**含**自身路径）。
+       `pxcheck`/`pxlsp`/`pxmcp`/`pxtest`/`pxbench` **早已** `var i = 1`，而
+       **`pxfmt`/`pxlint`/`pxdoc`** 是 `var i = 0` ⇒ **不传参**时读**自己的可执行文件**：
+       修前 `./bootstrap/pxfmt` ⇒ `错误: 1:2: 词法错误 E1001: 非法字符: '\u{7f}'`（rc=1）；
+       修后 ⇒ 用法（stderr）+ `rc=2`。带参数时**侥幸正确**（`argv[0]` 先被当 `file`，随后被真参数覆盖）
+       ⇒ 长期没被发现。⇒ **凡"只在某一种参数形态下错"的缺陷，要用「不传参」这种退化形态去探。**
+     · **`bootstrap/pxc` ≠ `tools/pxc`**：前者是**编译器本体**（`build` **不落** `tools/build/`），
+       后者是**用户入口 wrapper**（`px build` → `<dir>/build/<name>`）。门里现场编译必须用后者。
+     · **解释轨不能给 `.px` 传 CLI 参数**：`pxi run x.px a b` 会把 `a b` 当**额外脚本文件**
+       （实测 `运行时错误 [it_dirname 行158]: io: 读取文件失败 B`）⇒ 门要用编译件，或走**环境变量**传参
+       （`pxpkg` / `routegen` 的既有做法）。
+     · 门：`examples/m205_cli_channels/`（**54 通过 / 0 失败**）—— 静态 [S12] 五条（含**反向判据** E：
+       产品行仍在 stdout）+ 动态 **28 例**（8 CLI × err/help/ok）+ 解释轨面 + **负控 3 道**（含现场重编那道）。
+

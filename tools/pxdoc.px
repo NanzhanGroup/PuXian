@@ -167,42 +167,49 @@ def pd_basename(path):
             return path[i + 1:]
         i -= 1
     return path
-def pd_usage():
-    print("pxdoc —— PuXian 文档生成器（自举，M64-S5）")
-    print("用法: pxdoc <file.px> [--output out.md] [--version]")
-    print("  从 `##` 文档注释（紧跟顶层定义）生成 Markdown；默认输出到 stdout")
+# M205（缺陷 186 tools 面）：CLI 诊断走 stderr —— usage 按场景分流（--help→stdout；参数错→stderr）
+def cli_out(s, to_err):
+    if to_err:
+        print_err(s)
+    else:
+        print(s)
+def pd_usage(to_err):
+    cli_out("pxdoc —— PuXian 文档生成器（自举，M64-S5）", to_err)
+    cli_out("用法: pxdoc <file.px> [--output out.md] [--version]", to_err)
+    cli_out("  从 `##` 文档注释（紧跟顶层定义）生成 Markdown；默认输出到 stdout", to_err)
 def main():
     let as_ = args()
     var file = ""
     var out_path = ""
-    var i = 0
+    # 注：编译版 args() 首元素 = 程序自身路径（argv[0]），从 i=1 起解析用户参数
+    var i = 1
     while i < len(as_):
         let a = as_[i]
         if a == "--version" or a == "-v":
             print("pxdoc 0.1.0 (普贤 PuXian doc · M64-S5 自举)")
             exit(0)
         elif a == "--help" or a == "-h":
-            pd_usage()
+            pd_usage(false)
             exit(0)
         elif a == "--output" or a == "-o":
             if i + 1 < len(as_):
                 out_path = as_[i + 1]
                 i += 1
             else:
-                print("pxdoc: --output 需要路径")
+                print_err("pxdoc: --output 需要路径")
                 exit(2)
         elif starts_with(a, "-"):
-            print("pxdoc: 未知选项 '" + a + "'")
-            pd_usage()
+            print_err("pxdoc: 未知选项 '" + a + "'")
+            pd_usage(true)
             exit(2)
         else:
             file = a
         i += 1
     if file == "":
-        pd_usage()
+        pd_usage(true)
         exit(2)
     if not exists(file):
-        print("错误: 无法读取文件 " + file)
+        print_err("错误: 无法读取文件 " + file)
         exit(2)
     var src = read_file(file)
     var md = pd_gen(src, pd_basename(file))
