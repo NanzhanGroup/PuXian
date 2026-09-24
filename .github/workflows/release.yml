@@ -256,6 +256,11 @@ jobs:
           test "$("$RUNNER_TEMP/psmoke/build/h")" = "pruned-ok" \
             || { echo "::error::裁剪后包内构建产物运行输出异常"; exit 1; }
           echo "✅ 架构卫生：包内仅 aarch64 构建输入，且**包内**零参数 build + 运行通过"
+          # ⚠️ 上面那次「包内 build」**会合法地**在 $STAGE 里生成 `.rtcache/`（工具链的 runtime 缓存
+          #    就落在工具根）—— 但发布包**不得夹带**它（下一行的硬断言会当场判红：M199 Release #124
+          #    aarch64 job 正是红在这里，注解 `包内夹带 .rtcache/` 一眼读出真因）。
+          #    ⇒ 自证跑完立刻清掉（顺序：先自证、后清、再断言）。
+          rm -rf "$STAGE/.rtcache" "$STAGE/tools/build" "$STAGE/selfhost/build"
           [ ! -e "$STAGE/tools/build" ] || { echo "::error::包内夹带 tools/build/（Issue 56 回归）"; exit 1; }
           [ ! -e "$STAGE/.rtcache" ] || { echo "::error::包内夹带 .rtcache/"; exit 1; }
           [ -f VERSION ] && cp -f VERSION "$STAGE"/VERSION
