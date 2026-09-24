@@ -71,7 +71,15 @@ VM 轨产物默认 **precise GC**（`px_gc_set_precise(1)`；根面 = 全局槽 
 本轮**没有**任何既有产物的发射漂移（改动全在 `runtime/*.c` 的根登记，不涉及发射器）。
 复核：`emitc_freeze.sh --check` ⇒ `✅ 399 个文件的 --emit-c 输出与基准逐字节一致`。
 
-### 六 纪律（本轮新增）
+### 六 发布链：`gh release create` 改为**幂等**（同轮实测踩到）
+
+tag 被**重定基**（force-push 到修复提交）时，`release.yml` 的 `gh release create` 因「release 已存在」
+直接失败 —— **注解只有 `exit code 1`，指不到真因**（Release #133 红）。已改为：
+`gh release view` 存在 ⇒ `gh release edit`（notes）+ `gh release upload --clobber` +
+清理名字与当前 tag 提交不符的陈旧 `*.tar.gz` 资产；不存在 ⇒ 原 `create` 路径。
+⇒ 纪律：**发布步骤必须幂等**（同名 tag 重定基是合法运维动作，不该让整条发布链变红）。
+
+### 七 纪律（本轮新增）
 
 1. **扫描器「找不到」先怀疑扫描器**：`px_bytes_len` 不在分配名单里 ⇒ 漏了 `udp_recv`；
    `px_dict_set`/`px_list_push` 被当成「持有实参的构造器」⇒ 例外把**容器本身**当被持有者 ⇒ 又是漏报。
