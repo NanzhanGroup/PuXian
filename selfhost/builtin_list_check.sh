@@ -64,9 +64,19 @@ interp_names() {
         | grep -o '"[^"]*"' | tr -d '"' | sort -u
 }
 # runtime native 名：与 gen_builtin_list.sh / gen_native_table.sh 同源口径。
+#   ⚠️ M203：`__` 前缀 = **内部名**（不进公开名册/索引 —— 见 gen_builtin_list.sh 头注 ①
+#     与 gen_native_table.sh 的过滤）⇒ 这里**排除**；但排除面受**棘轮**约束（见 INTERNAL_NATIVE_MAX）：
+#     ④/⑥ 之所以"独立于生成器"，是为了防「生成器口径被悄悄收窄」。单纯加 `grep -v '^__'`
+#     会把那层保护削掉 ⇒ 改成「**显式列出 + 数量上限**」：内部名变多即判红。
 runtime_native_names() {
     grep -h 'px_set_global("' runtime/*.c 2>/dev/null \
-        | sed -n 's/.*px_set_global("\([A-Za-z_][A-Za-z0-9_]*\)", *px_native.*/\1/p' | sort -u
+        | sed -n 's/.*px_set_global("\([A-Za-z_][A-Za-z0-9_]*\)", *px_native.*/\1/p' | grep -v '^__' | sort -u
+}
+# 内部 native 名（`__` 前缀）——单独列出 + 限数（棘轮：M203 引入第 1 个 __iter_len）
+INTERNAL_NATIVE_MAX=1
+internal_native_names() {
+    grep -h 'px_set_global("__' runtime/*.c 2>/dev/null \
+        | sed -n 's/.*px_set_global("\(__[A-Za-z_][A-Za-z0-9_]*\)", *px_native.*/\1/p' | sort -u
 }
 # M171 ⑥：宿主注入全局名（px_serve / px_exec 的 `px_dict_set(env, "NAME", …)`）——
 #   判据**独立于生成器**（与 ④ 同理由：防「生成器口径被收窄后本门跟着变绿」）。
@@ -128,6 +138,15 @@ else
     echo "    ✅ ③ interp.px 名册 ⊆ 内置名册（$n_int 名全覆盖）"
 fi
 
+# ④-0 内部名棘轮（M203）：`__` 前缀的内部 native 不进公开名册，但数量**受限**
+n_intnat=$(internal_native_names | wc -l)
+if [ "$n_intnat" -gt "$INTERNAL_NATIVE_MAX" ]; then
+    echo "❌ ④-0 内部 native 名（__ 前缀）$n_intnat 个 > 上限 $INTERNAL_NATIVE_MAX —— 新增内部名须同步调高上限并写明理由："
+    internal_native_names | sed 's/^/     /'
+    bad=$((bad+1))
+else
+    echo "    ✅ ④-0 内部 native 名（__ 前缀，不进公开名册）$n_intnat / $INTERNAL_NATIVE_MAX：$(internal_native_names | tr '\n' ' ')"
+fi
 # ④ runtime native ⊆ 名册
 miss4=$(comm -23 <(runtime_native_names) <(core_names))
 if [ -n "$miss4" ]; then
