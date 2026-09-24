@@ -1,3 +1,80 @@
+## M200 · 上游 registry-px **全量再引入**（53 → 86 库）+ 缺陷 240：`extern def`（C-FFI）名字的全局发布（第 78 轮）
+
+> **主问题**：用户指令里有一条长期任务 ——「**根据 registry-px 仓库的更新，把其中的库引入 PuXian 官方库**」。
+> 本轮上游从 `7da3397e` 走到 `1a7d844`（**33 个新库** + **8 个就地更新**），执行全量再引入；
+> 而正是"把官方库跑起来"这件事，照出了**一个此前无人看见的真缺陷**：
+> **官方 `registry/zlib` 在编译产物里完全不可用**（`R1001 未定义变量: 'zlib_compress'`）。
+
+### 一 引入结果（`tools/import_registry_px.sh --src … --update --apply`）
+
+| 项 | M198 时 | **M200** |
+|---|---|---|
+| 上游库（`registry/`） | 53 | **86** = 53 + **33 新** + **8 就地更新** |
+| `registry/` 总数 | 53 | **99** = **86**（上游）+ **13 本仓自建**（edge/gfx/lunar/pxml/semver/yaml/multipart/cookiejar/html/png/webroute/smtp/collections） |
+| 就地更新（同版本改内容，走 `--update`） | — | base58 · bytes_pack · checksum · datetime · fractions · ini · parser · strcase |
+| `upstream-tests/` 用例 | 55 | **88**（+33，逐字节照搬 · `MANIFEST.sha256` 88 行） |
+| `EXPECTED.tsv` 登记 | 61 行 | **88 条**（新增 **31 PASS + 2 SKIP**） |
+| **双轨回归实测** | 99 通过 / 0 失败 / 11 跳过 | **161 通过 / 0 失败 / 15 跳过 · 期望值缺失 0** |
+| M187 引入门（86 包全量 `pxpkg add`→`install`→`import`） | 53 包 | **PASS=19 · FAIL=0**（含 3 道负控） |
+
+新增的 **2 条 SKIP 各有独立理由**（写进 `EXPECTED.tsv`，不是"跑不过就跳过"）：
+`mqtt_test` 需真实 MQTT broker `127.0.0.1:1883` · `redis_test` 需真实 Redis `127.0.0.1:6379`（与 mysql/pg 同族）。
+`walk_test` 需 `/tmp/wk_src`（7 项固定目录树）⇒ 按 dotenv/glob 的**先例补进
+`selfhost/run_upstream_tests.sh` 的 fixture 段** —— 不补就会把"环境缺 fixture"误报成"上游库缺陷"。
+
+### 二 缺陷 240 · `extern def`（C-FFI 桥）名字在**编译轨**从未发布成全局
+
+**形状**：`extern def` 声明的名字（官方 `registry/zlib` 的 `import "c/zlib"` +
+`extern def zlib_compress/uncompress/crc32`）：
+
+| 轨 | 机制 | 实测 `print(zlib_crc32(bytes("abc")))` |
+|---|---|---|
+| **解释轨** | 有运行期兜底：`selfhost/iexpr.px` 遇未知名/FFI 名 → `i_builtin_ffi_call` → C 侧 `ffi_call` 的**双表**（ffi 注册表 → 全局 native 表） | **`891568578`** ✅ |
+| **编译轨** | 把该名字编译成 **GETG**（extern def 名即全局名），而运行期**从未**发布它 | **`R1001 未定义变量: 'zlib_compress'`** ❌ |
+
+- **默认档与 `--full` 档皆然** ⇒ 与「按引用集自动裁剪」无关，是**发布缺失**；
+- 量化：`px_ffi_register` 共 **92** 个名字，其中 **89** 个同时也走 `px_set_global`，
+  **仅 3 个只活在 FFI 表**：`zlib_crc32` / `zlib_compress` / `zlib_uncompress` —— **这 3 个正是缺陷面**
+  （所以刚好只有 `zlib` 这一个官方包受影响，症状"专挑一个包"极难归因）。
+- **第三方登记的方向是反的**：他们把这条记成 PX-DEF-035「编译轨可用；**解释轨** FFI 未注册」——
+  实测**完全相反**（解释轨可用、编译轨不可用）。这会**误导其用户"别用编译轨"**，而实际是"必须用编译轨"。
+
+**修法**：`runtime/runtime_ffi.c` 新增 `px_ffi_publish_globals()` —— 在 `px_register_builtins` 的
+**建表窗口末尾**（`g_gc_frozen = 1` 期间，见 M170 缺陷 189 的 GC 冻结语义）把**整表**逐条
+`px_set_global(name, px_native(name, fn))`。⇒ 三轨同一条真相，官方 `zlib` 在编译产物里可直接用。
+
+### 三 门（`examples/m200_ffi_globals/`）· 通过 9 · 失败 0
+
+| 层 | 内容 |
+|---|---|
+| **[S11] 静态** | FFI 注册名 ≥ 80（实测 **92**）· 发布函数**定义存在且遍历整表**（`i < g_ffi_n`）· 发布调用点**唯一**且在 `px_register_builtins` 内、`g_gc_frozen = 0` **之前** · 打印「FFI-only 名」清单（本轮 = 3 个 zlib） |
+| **动态** | 3 条**确定性**探针（不依赖环境）× **三轨**输出逐字节一致：`zlib_crc32`（891568578）· `bytes_to_hex`/`hex_to_bytes` 往返 · `float32_bits`/`bits_to_float32`（1069547520 / 1.5） |
+| **负控 3 道各自独立判红** | A 删发布调用 ⇒ 静态红 **且** 编译轨 `R1001`；B **只跳过 zlib 名** ⇒ 仅 f01 红而静态仍绿（证明**动态面有独立牙**）；C 发布循环改成 `i < 0` ⇒ 静态红 |
+| **上游联动** | `upstream-tests/zlib_test`（官方包真实用例）双轨由 FAIL → **PASS**（由 m116 全量门里的上游回归守） |
+
+### 四 发布链收尾（M199 的两处"门/链自身"缺陷 · tag `v0.2.0-m199s1`）
+
+1. **M199 门的 `--sweep` 默认值指向开发机 `/tmp` 残留** ⇒ CI #404 红（CI 上文件不存在 ⇒
+   **静默生成 0 条探针** ⇒ [2][3][4] 全红，真因被埋在"探针生成失败"里）。修法：缺文件即**响亮退出**
+   + verify.sh 显式传参；验证 = `rm -rf /tmp/m199sweep /tmp/m199_gate` 后复跑（14/0）。
+2. **aarch64 发布链的排序 bug**：M199 新增的「从裁剪后的包内再跑零参数 build」自证**会合法生成**
+   `$STAGE/.rtcache/`（工具链缓存落在工具根）⇒ 紧随其后的 Issue 56 断言判红（Release #124）。
+   修法：自证 → **清理** → 断言。同一条注解通道同时证实：**架构卫生门与包内自证都通过了**
+   （无 `::error::pkg-arch` / `::error::psmoke`）⇒ 缺陷 239 的新判据已实际生效。
+
+> ⚠️ **纪律（本仓第 N 次同族）**：**门的任何默认路径都不得指向开发机的临时目录**；
+> **在打包目录里跑任何工具，先问它往哪儿写** —— 自证类步骤要么产物落包外，要么跑完即清。
+> （同族前科：M188 的 `cg_stdlib_dir()` 硬编码 `/data/code/puxian`、M196 门的 `ok1_read_at` 依赖宿主 hostname。）
+
+### 五 验收数字
+
+```
+门 m200_ffi_globals        M200-VERIFY-OK · 通过 9 · 失败 0（含 3 道负控各自独立判红）
+门 m187_registry_import    86 包全量 pxpkg add/install/import ⇒ PASS=19 FAIL=0（含 3 道负控）
+上游用例回归（双轨）        88 用例 ⇒ 161 通过 · **0 失败** · 15 跳过 · 期望值缺失 0
+门 m199_argtype（清干净后） M199-VERIFY-OK · 14/0（--neg-skip）；含负控完整版本机全量门 19/0
+入库件                     --rebake-all 12/12 + pxc/pxc_vm · --check-all 14/14
+```
 ## M199 · [S10]「同一操作 × **每一个位置** × **错类型**」的三轨单一真相（第 77 轮 · 缺陷 237 + 238 + 239）
 
 > **主问题**：M190 量「实参**个数**」· M194/M195 量「**单个**实参的类型守卫」· M197 量「0 参 ⇄

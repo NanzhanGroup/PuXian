@@ -1,0 +1,60 @@
+# ============================================================
+# 普贤生态库：registry/dist —— 随机分布采样
+# ------------------------------------------------------------
+# 纯函数库（无状态；底层用原生 random() [0,1) 均匀浮点），双模式一致。
+# 对齐 Go math/rand / Python random / Rust rand_distr 心智（0.1.0）：
+#   di_uniform(a, b)      → float
+#   di_normal(mean, sd)   → float（Box-Muller）
+#   di_exponential(rate)  → float（-ln(1-u)/rate，rate>0）
+#   di_bernoulli(p)       → int（0/1，概率 p）
+#   di_poisson(lambda)    → int（Knuth，λ≥0）
+#   di_randint(a, b)      → int（闭区间均匀）
+# 说明：0.1.0 不做密码学用途（安全随机用 secure_random + 拒绝采样）。
+# ============================================================
+
+# 保证 (0,1] 避免 ln(0)
+def di_unit():
+    var u = random()
+    if u == 0.0:
+        u = 0.0000000001
+    return u
+
+def di_uniform(a, b):
+    return a + (b - a) * random()
+
+def di_randint(a, b):
+    var span = b - a + 1
+    var n = int(random() * float(span))
+    return a + n
+
+def di_normal(mean, sd):
+    if sd < 0.0:
+        return Err("dist: sd 须 >= 0")
+    var u1 = di_unit()
+    var u2 = random()
+    var z = sqrt(-2.0 * log(u1)) * cos(2.0 * 3.141592653589793 * u2)
+    return Ok(mean + sd * z)
+
+def di_exponential(rate):
+    if rate <= 0.0:
+        return Err("dist: rate 须 > 0")
+    return Ok(0.0 - log(di_unit()) / rate)
+
+def di_bernoulli(p):
+    if p < 0.0 or p > 1.0:
+        return Err("dist: p 须在 0..1")
+    if random() < p:
+        return Ok(1)
+    return Ok(0)
+
+def di_poisson(lambda_v):
+    if lambda_v < 0.0:
+        return Err("dist: lambda 须 >= 0")
+    var l = exp(0.0 - lambda_v)
+    var k = 0
+    var prod = 1.0
+    while true:
+        prod = prod * di_unit()
+        if prod <= l:
+            return Ok(k)
+        k = k + 1

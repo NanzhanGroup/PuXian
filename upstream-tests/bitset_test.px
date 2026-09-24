@@ -1,0 +1,39 @@
+# bitset.px 测试：位向量（双模式一致）
+import "../registry/bitset/0.1.0/bitset.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var b = bs_new(16).unwrap()
+    expect(bs_count(b) == 0, "初始 0")
+    expect(bytes_len(b["d"]) == 2, "16 位 = 2 字节")
+    # 置位
+    bs_set(b, 0)
+    bs_set(b, 7)
+    bs_set(b, 8)
+    bs_set(b, 15)
+    expect(bs_test(b, 0).unwrap() and bs_test(b, 7).unwrap(), "bit 0/7 true")
+    expect(bs_test(b, 8).unwrap() and bs_test(b, 15).unwrap(), "bit 8/15 true")
+    expect(bs_test(b, 3).unwrap() == false, "bit 3 false")
+    expect(bs_count(b) == 4, "count=4, got " + str(bs_count(b)))
+    expect(bs_to_list(b) == [0, 7, 8, 15], "to_list, got " + str(bs_to_list(b)))
+    # 字节内容：0x81 0x81（LSB 优先）
+    expect(bytes_get(b["d"], 0) == 129 and bytes_get(b["d"], 1) == 129, "字节内容 0x81")
+    # 清除 / 翻转
+    bs_clear(b, 7)
+    expect(bs_test(b, 7).unwrap() == false, "clear 7")
+    expect(bs_count(b) == 3, "count=3 after clear")
+    bs_flip(b, 0)
+    expect(bs_test(b, 0).unwrap() == false, "flip 0 → false")
+    expect(bs_to_list(b) == [8, 15], "list after ops, got " + str(bs_to_list(b)))
+    # 越界
+    expect(bs_set(b, 16).is_err(), "set 越界 Err")
+    expect(bs_set(b, -1).is_err(), "set 负 Err")
+    expect(bs_test(b, 99).is_err(), "test 越界 Err")
+    expect(bs_new(-1).is_err(), "new 负 Err")
+    # 边界位（0 位）
+    var z = bs_new(0).unwrap()
+    expect(bs_count(z) == 0 and bytes_len(z["d"]) == 0, "0 位空")
+    print("bitset: PASS")
+    return Ok(0)

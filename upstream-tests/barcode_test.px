@@ -1,0 +1,38 @@
+# barcode.px 测试：EAN-13（python-barcode 对拍，双模式一致）
+import "../registry/barcode/0.1.0/barcode.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # 校验位（python-barcode 对拍：400638133393 → 1；690123456789 计算）
+    expect(bc_ean13_check("400638133393").unwrap() == 1, "校验位 400638133393→1")
+    expect(bc_ean13_check("690123456789").unwrap() == 2, "校验位 690123456789→2, got " + str(bc_ean13_check("690123456789").unwrap()))
+    expect(bc_ean13_check("").is_err(), "长度 Err")
+    expect(bc_ean13_check("12345678901a").is_err(), "非数字 Err")
+    # 生成
+    var r = bc_ean13("400638133393").unwrap()
+    expect(r["code"] == "4006381333931", "完整码")
+    expect(len(r["pattern"]) == 95, "95 模块")
+    expect(r["pattern"][0:3] == "101", "起始防护")
+    expect(r["pattern"][45:50] == "01010", "中间防护")
+    expect(r["pattern"][92:95] == "101", "结束防护")
+    expect(len(r["ascii"]) == 95, "ascii 长度")
+    # 结构：左 6 位 = 6×7 = 42，右 6 位 = 42；分段数校验
+    var left = r["pattern"][3:45]
+    var right = r["pattern"][50:92]
+    expect(len(left) == 42 and len(right) == 42, "左右区 42")
+    # 第一个数字 4 → 奇偶表 L G L G L G；(左区每 7 位一组是 L/G 之一)
+    expect(left[0:7] == "0001101", "左段0 L[0]=0001101, got " + left[0:7])
+    # 首位数 4 → 奇偶表 LGLGLG；段1 = 第 2 位数字 0 用 G 表 → G[0]=0100111
+    expect(left[7:14] == "0100111", "左段1 G[0]=0100111, got " + left[7:14])
+    expect(left[14:21] == "0101111", "左段2 L[6]=0101111, got " + left[14:21])
+    # 右区 digit = code[7..12] = 3,3,3,9,3,1 → R[3]=1000010 ... R[1]=1100110
+    expect(right[0:7] == "1000010", "右段0 R[3]=1000010, got " + right[0:7])
+    expect(right[35:42] == "1100110", "右段5 R[1]=1100110, got " + right[35:42])
+    # 全 0 边界
+    var z = bc_ean13("000000000000").unwrap()
+    expect(z["code"] == "0000000000000", "全 0 校验位 0")
+    expect(z["pattern"][45:50] == "01010", "全 0 中间防护")
+    print("barcode: PASS")
+    return Ok(0)

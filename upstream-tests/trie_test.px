@@ -1,0 +1,53 @@
+# trie.px 测试：字典树 / 前缀匹配（双模式一致）
+import "../registry/trie/0.1.0/trie.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def sorted_strs(l):
+    return sorted(l)
+def main():
+    var t = tr_new()
+    tr_insert(t, "cat")
+    tr_insert(t, "car")
+    tr_insert(t, "cart")
+    tr_insert(t, "dog")
+    expect(tr_len(t) == 4, "len=4")
+    expect(tr_search(t, "cat") and tr_search(t, "cart") and tr_search(t, "dog"), "精确匹配")
+    expect(tr_search(t, "ca") == false, "前缀不是词")
+    expect(tr_search(t, "cats") == false, "超长不是词")
+    expect(tr_search(t, "") == false, "空串未插入")
+    expect(tr_starts_with(t, "ca"), "starts_with ca")
+    expect(tr_starts_with(t, "car") and tr_starts_with(t, "cart"), "starts_with car/cart")
+    expect(tr_starts_with(t, "cax") == false, "starts_with cax false")
+    expect(tr_starts_with(t, "") == true, "starts_with 空串 true")
+    # keys_with_prefix
+    var l1 = sorted_strs(tr_keys_with_prefix(t, "ca"))
+    expect(l1 == ["car", "cart", "cat"], "prefix ca -> [car cart cat], got " + str(l1))
+    var l2 = tr_keys_with_prefix(t, "do")
+    expect(l2 == ["dog"], "prefix do -> [dog]")
+    expect(tr_keys_with_prefix(t, "zz") == [], "前缀不存在 -> []")
+    expect(sorted_strs(tr_keys_with_prefix(t, "")) == sorted_strs(tr_to_list(t)), "空前缀 = 全部")
+    # to_list 全量
+    var all = sorted_strs(tr_to_list(t))
+    expect(all == ["car", "cart", "cat", "dog"], "to_list 全部")
+    # 空树
+    var e = tr_new()
+    expect(tr_len(e) == 0 and tr_search(e, "a") == false and tr_starts_with(e, "a") == false, "空树")
+    expect(tr_keys_with_prefix(e, "") == [], "空树前缀 []")
+    # 中文（rune 索引）
+    var c = tr_new()
+    tr_insert(c, "中文")
+    tr_insert(c, "中国")
+    tr_insert(c, "中")
+    expect(tr_search(c, "中文") and tr_search(c, "中国") and tr_search(c, "中"), "中文精确")
+    expect(tr_search(c, "中国人") == false, "中文超长 false")
+    expect(tr_starts_with(c, "中"), "中文 starts_with 中")
+    var cl = sorted_strs(tr_keys_with_prefix(c, "中"))
+    expect(cl == ["中", "中国", "中文"], "中文 prefix 中")
+    # 链式
+    var t2 = tr_new()
+    tr_insert(tr_insert(t2, "ab"), "abc")
+    expect(tr_search(t2, "ab") and tr_search(t2, "abc"), "链式")
+    print("trie: PASS")
+    return Ok(0)

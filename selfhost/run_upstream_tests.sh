@@ -162,6 +162,14 @@ if [ "$FIXTURES" = 1 ]; then
     : > /tmp/globd/a.log
     : > /tmp/globd/b.txt
     : > /tmp/globd/sub/c.log
+    # M200：walk 用例的 fixture（上游 `walk_test.px` 断言的**正是这 7 项**：
+    #   root + a.txt + b.log + sub + sub/c.txt + sub/deep + sub/deep/d.txt）
+    rm -rf /tmp/wk_src
+    mkdir -p /tmp/wk_src/sub/deep
+    : > /tmp/wk_src/a.txt
+    : > /tmp/wk_src/b.log
+    : > /tmp/wk_src/sub/c.txt
+    : > /tmp/wk_src/sub/deep/d.txt
     rm -rf /tmp/shutil_registry_test
 fi
 : > "${JSON:-/dev/null}"

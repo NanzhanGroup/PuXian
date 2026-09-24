@@ -1,0 +1,48 @@
+# ============================================================
+# 普贤生态库：registry/progress —— 进度条渲染
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态；不直接改终端，返回可打印字符串），双模式一致。
+# 对齐 Python tqdm / Rust indicatif 心智（0.1.0）：
+#   pg_bar(done, total, width=40, opts={}) → Ok(str) | Err
+# opts: {fill(默认"#"), empty(默认"-"), show_pct(默认 true), show_count(默认 false)}
+# 输出形如 "[#####-----] 50%"；done 夹取 0..total；total<=0 Err。
+# ============================================================
+
+def pg_bar(done, total, width=40, opts={}):
+    if total <= 0:
+        return Err("progress: total 须 > 0")
+    if width <= 0:
+        return Err("progress: width 须 > 0")
+    var d = done
+    if d < 0:
+        d = 0
+    if d > total:
+        d = total
+    var fill = "#"
+    var empty = "-"
+    var show_pct = true
+    var show_count = false
+    if opts.has("fill"):
+        fill = opts["fill"]
+    if opts.has("empty"):
+        empty = opts["empty"]
+    if opts.has("show_pct"):
+        show_pct = opts["show_pct"]
+    if opts.has("show_count"):
+        show_count = opts["show_count"]
+    var n = int(float(d) / float(total) * float(width) + 0.5)
+    var inner = ""
+    var i = 0
+    while i < width:
+        if i < n:
+            inner = inner + fill
+        else:
+            inner = inner + empty
+        i += 1
+    var out = "[" + inner + "]"
+    if show_count:
+        out = out + " " + str(d) + "/" + str(total)
+    elif show_pct:
+        var pct = int(float(d) / float(total) * 100.0)
+        out = out + " " + str(pct) + "%"
+    return Ok(out)

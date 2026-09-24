@@ -1,0 +1,59 @@
+# ============================================================
+# 普贤生态库：registry/dirs —— 系统/XDG 目录探测
+# ------------------------------------------------------------
+# 纯函数库（无状态；读取进程环境变量），编译（px build）与解释（px run）双模式一致。
+# 对齐 Rust dirs / Python appdirs 心智（0.1.0）：
+#   dr_home()    → 用户主目录（$HOME，无则 "/root"）
+#   dr_config()  → $XDG_CONFIG_HOME 或 ~/.config
+#   dr_data()    → $XDG_DATA_HOME 或 ~/.local/share
+#   dr_cache()   → $XDG_CACHE_HOME 或 ~/.cache
+#   dr_temp()    → $TMPDIR 或 /tmp
+#   dr_pjoin(parts) → 路径拼接（"/"）
+# ============================================================
+
+def dr_env(s):
+    # env 缺失返回 null → 走默认
+    return env(s)
+
+def dr_home():
+    var h = env("HOME")
+    if h == null or h == "":
+        return "/root"
+    return h
+
+def dr_config():
+    var x = env("XDG_CONFIG_HOME")
+    if x != null and x != "":
+        return x
+    return dr_pjoin([dr_home(), ".config"])
+
+def dr_data():
+    var x = env("XDG_DATA_HOME")
+    if x != null and x != "":
+        return x
+    return dr_pjoin([dr_home(), ".local", "share"])
+
+def dr_cache():
+    var x = env("XDG_CACHE_HOME")
+    if x != null and x != "":
+        return x
+    return dr_pjoin([dr_home(), ".cache"])
+
+def dr_temp():
+    var t = env("TMPDIR")
+    if t != null and t != "":
+        return t
+    return "/tmp"
+
+# 路径拼接：忽略空段；不处理重复分隔符（0.1.0 子集）
+def dr_pjoin(parts):
+    var out = ""
+    var i = 0
+    while i < len(parts):
+        var p = parts[i]
+        if p != "":
+            if out != "":
+                out = out + "/"
+            out = out + p
+        i += 1
+    return out

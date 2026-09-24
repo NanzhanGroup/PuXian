@@ -316,3 +316,42 @@ M184 的严格 `int()` 使 `pass_verify` 在**畸形存储串**上从「静默 0
 | **186** | **诊断通道/措辞三轨不同**（解释轨 `错误 [R1003] <行>:<列>: msg` 写 **stdout**；编译轨 `运行时错误 [<fn> 行N]: R1003: msg` 写 **stderr**） | 影响面大（改解释器错误出口 + 编译轨前缀），且**门已经在按"提取正文比对"绕行** ⇒ 需单独一轮 |
 | — | 逐包**真实用例**纳入 CI（现在只做 import 冒烟） | 依赖上游 `tests/` 的 fixture（`dotenv`/`glob` 需 `/tmp` 预置文件） |
 | — | `Result`/`Option` 方法**文案族**审计 | 低危，可在 186 那轮一并扫 |
+
+---
+
+## 八、M200（第 78 轮）：上游**全量再引入**（53 → 86 库）+ PX-DEF-035 的方向更正
+
+### 8.1 引入结果（上游 `1a7d844`）
+
+| 项 | M198 时 | M200 |
+|---|---|---|
+| 上游库 | 53 | **86**（**33 新库** + **8 就地更新**：base58/bytes_pack/checksum/datetime/fractions/ini/parser/strcase） |
+| `upstream-tests/` 用例 | 55 | **88**（+33，逐字节照搬 · `MANIFEST.sha256` 对拍） |
+| `EXPECTED.tsv` 登记 | 61 行 | **88 条**（新增 33：**31 PASS** + **2 SKIP**） |
+| 双轨回归实测 | 99 通过 / 0 失败 / 11 跳过 | **161 通过 / 0 失败 / 15 跳过** |
+| `registry/` 总数 | 53（全为上游） | **99** = 86（上游）+ **13 本仓自建**（edge/gfx/lunar/pxml/semver/yaml/multipart/cookiejar/html/png/webroute/smtp/collections） |
+
+新增的 2 条 SKIP **各有独立理由**（登记进 `EXPECTED.tsv`，非"跑不过就跳过"）：
+`mqtt_test` 需真实 MQTT broker `127.0.0.1:1883` · `redis_test` 需真实 Redis `127.0.0.1:6379`（与 mysql/pg 同族）。
+另：`walk_test` 需 `/tmp/wk_src` fixture（7 项目录树）⇒ 已按 dotenv/glob 的先例**补进
+`selfhost/run_upstream_tests.sh` 的 fixture 段**（不补就是"库缺陷"误报到上游头上）。
+
+### 8.2 **PX-DEF-035 方向更正**（本轮实测）
+
+| 对方登记 | 实测（M200） |
+|---|---|
+| `zlib.px`：「**编译轨可用**；解释轨 pxi FFI 表未注册 → 返回 Err，见 PX-DEF-035」 | **方向相反**：**解释轨可用**（`print(zlib_crc32(bytes("abc")))` → `891568578`），**编译轨 `R1001 未定义变量: 'zlib_compress'`** |
+
+根因（内部 **缺陷 240**）：`extern def`（C-FFI 桥）的名字在**解释轨**有运行期兜底
+（`selfhost/iexpr.px` 遇未知名/FFI 名 → `i_builtin_ffi_call` → C 侧 `ffi_call` 的**双表**），
+而**编译轨**把它编译成 **GETG**（extern def 名即全局名），运行期**从未**发布 ⇒ 表里没有 ⇒ R1001。
+实证：`px build` 默认档与 `px build --full` **皆然** ⇒ 与"按引用集自动裁剪"无关，是**发布缺失**；
+`px_ffi_register` 的 **92** 个名字里，**89** 个同时也走 `px_set_global`，**仅 3 个只靠 FFI 表**
+（`zlib_crc32` / `zlib_compress` / `zlib_uncompress`）—— **这 3 个正是缺陷面**。
+
+修法：`px_ffi_publish_globals()`（`runtime/runtime_ffi.c`）在 `px_register_builtins` 的**建表窗口末尾**
+（`g_gc_frozen = 1` 期间，见 M170 缺陷 189）把整表逐条 `px_set_global(name, px_native(name, fn))`。
+⇒ 三轨同一条真相；官方 `registry/zlib` 在编译产物里**可直接用**（`upstream-tests/zlib_test` 双轨转 PASS）。
+
+**判定**：PX-DEF-035 **是真缺陷（内部 240）并被修复**；对方对**方向**的判断有误
+（这会误导其用户"别用编译轨"，而实际是"必须用编译轨"）。

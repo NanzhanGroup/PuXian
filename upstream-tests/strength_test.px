@@ -1,0 +1,28 @@
+# strength.px 测试：密码强度（启发式，双模式一致）
+import "../registry/strength/0.1.0/strength.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # 弱词表 / 全同 → 0
+    expect(st_score("123456").unwrap() == 0, "123456=0")
+    expect(st_score("password").unwrap() == 0, "password=0")
+    expect(st_score("aaaaaaaa").unwrap() == 0, "全同=0")
+    # 长度 + 类
+    expect(st_score("abc12345").unwrap() == 1, "8 位两类 =1, got " + str(st_score("abc12345").unwrap()))
+    expect(st_score("Abcd1234!").unwrap() == 3, "9 位四类 =3, got " + str(st_score("Abcd1234!").unwrap()))
+    expect(st_score("Abcd1234!xyz").unwrap() == 4, "12 位四类 =4, got " + str(st_score("Abcd1234!xyz").unwrap()))
+    # 空密码
+    expect(st_score("").is_err(), "空 Err")
+    # 熵（abcdef = 6×log2(26) ≈ 28.2）
+    var e = st_entropy("abcdef").unwrap()
+    expect(e > 27.0 and e < 30.0, "abcdef 熵≈28.2, got " + str(e))
+    var e2 = st_entropy("Abcd1234!xyz").unwrap()
+    expect(e2 > 60.0, "强密码熵>60, got " + str(e2))
+    # 标签
+    expect(st_strength("123456").unwrap() == "弱", "弱标签")
+    expect(st_strength("Abcd1234!").unwrap() == "中", "中标签")
+    expect(st_strength("Abcd1234!xyzQ").unwrap() == "强", "强标签, got " + st_strength("Abcd1234!xyzQ").unwrap())
+    print("strength: PASS")
+    return Ok(0)

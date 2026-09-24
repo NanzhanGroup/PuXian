@@ -1,0 +1,29 @@
+# human.px 测试：人类可读格式化（双模式一致）
+import "../registry/human/0.1.0/human.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # 文件大小（1024 进制）
+    expect(hm_filesize(0) == "0B", "0B")
+    expect(hm_filesize(828) == "828B", "828B")
+    expect(hm_filesize(1024) == "1KB", "1KB")
+    expect(hm_filesize(1536) == "1.5KB", "1.5KB")
+    expect(hm_filesize(1024 * 100) == "100KB", "100KB")
+    expect(hm_filesize(1048576) == "1MB", "1MB")
+    expect(hm_filesize(1000000000) == "954MB", "954MB, got " + hm_filesize(1000000000))
+    expect(hm_filesize(1099511627776) == "1TB", "1TB, got " + hm_filesize(1099511627776))
+    expect(hm_filesize(9.5 * 1024 * 1024 * 1024) == "9.5GB", "9.5GB, got " + hm_filesize(9.5 * 1024 * 1024 * 1024))
+    expect(hm_filesize(10.5 * 1024 * 1024 * 1024) == "11GB", "10.5GB 取整 11GB")
+    # 数字缩写（1000 进制）
+    expect(hm_number(999) == "999", "999")
+    expect(hm_number(1500) == "1.5k", "1.5k")
+    expect(hm_number(1234567) == "1.2M", "1.2M, got " + hm_number(1234567))
+    expect(hm_number(1000000000) == "1B", "1B")
+    expect(hm_number(2500) == "2.5k", "2.5k")
+    expect(hm_number(9999500) == "10M", "10M, got " + hm_number(9999500))
+    expect(hm_number(-2500) == "-2.5k", "-2.5k")
+    expect(hm_number(1234, "B/s") == "1.2kB/s", "带后缀 1.2kB/s, got " + hm_number(1234, "B/s"))
+    print("human: PASS")
+    return Ok(0)

@@ -1,0 +1,32 @@
+# edist.px 测试：编辑距离 / Hamming / 相似度（双模式一致）
+import "../registry/edist/0.1.0/edist.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # Levenshtein 经典向量
+    expect(ed_levenshtein("kitten", "sitting") == 3, "kitten/sitting=3")
+    expect(ed_levenshtein("", "abc") == 3, "空串=3")
+    expect(ed_levenshtein("abc", "") == 3, "空串反向=3")
+    expect(ed_levenshtein("", "") == 0, "双空=0")
+    expect(ed_levenshtein("abc", "abc") == 0, "相同=0")
+    expect(ed_levenshtein("a", "b") == 1, "a/b=1")
+    expect(ed_levenshtein("abc", "abd") == 1, "abc/abd=1")
+    expect(ed_levenshtein("abcd", "bc") == 2, "abcd/bc=2")
+    # 中文按 rune
+    expect(ed_levenshtein("你好", "你们好") == 1, "中文 你好/你们好=1")
+    expect(ed_levenshtein("中文", "中文a") == 1, "中文+字符=1")
+    # Hamming
+    expect(ed_hamming("karolin", "kathrin").unwrap() == 3, "hamming karolin/kathrin=3")
+    expect(ed_hamming("kitten", "kitten").unwrap() == 0, "hamming 相同=0")
+    expect(ed_hamming("kitten", "sitting").is_err(), "hamming 等长 Err")
+    # 相似度
+    expect(ed_ratio("abc", "abc") == 1.0, "ratio 相同=1.0")
+    expect(ed_ratio("", "") == 1.0, "ratio 双空=1.0")
+    var r = ed_ratio("ab", "cd")
+    expect(r == 0.0, "ratio ab/cd=0.0，got " + str(r))
+    var r2 = ed_ratio("kitten", "sitting")
+    expect(r2 > 0.5 and r2 < 0.7, "ratio kitten/sitting≈0.57，got " + str(r2))
+    print("edist: PASS")
+    return Ok(0)

@@ -1,0 +1,4 @@
+extern def float32_bits(x) -> int
+extern def bits_to_float32(b) -> float
+print(float32_bits(1.5))
+print(bits_to_float32(1069547520))

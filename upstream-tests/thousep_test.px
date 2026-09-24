@@ -1,0 +1,36 @@
+# thousep.px 测试：千分位 / 序数（双模式一致）
+import "../registry/thousep/0.1.0/thousep.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # 千分位 int
+    expect(th_thousands(1234567) == "1,234,567", "1234567")
+    expect(th_thousands(-1234567) == "-1,234,567", "-1234567")
+    expect(th_thousands(0) == "0", "0")
+    expect(th_thousands(1000000) == "1,000,000", "1000000")
+    expect(th_thousands(999) == "999", "999 不加逗号")
+    expect(th_thousands(12) == "12", "12")
+    expect(th_thousands(-1) == "-1", "-1")
+    # 千分位 字符串（含小数 / 大数 / 符号）
+    expect(th_thousands_str("1234567.891").unwrap() == "1,234,567.891", "带小数")
+    expect(th_thousands_str("-9876543.5").unwrap() == "-9,876,543.5", "负带小数")
+    expect(th_thousands_str("+123456").unwrap() == "123,456", "正号")
+    expect(th_thousands_str("0.0001").unwrap() == "0.0001", "0.0001")
+    expect(th_thousands_str(".5").unwrap() == "0.5", ".5 → 0.5")
+    expect(th_thousands_str("12345678901234567890123").unwrap() == "12,345,678,901,234,567,890,123",
+        "超长串不走 int 转换")
+    expect(th_thousands_str("abc").is_err(), "非法串 Err")
+    expect(th_thousands_str("12a3").is_err(), "中间非法 Err")
+    expect(th_thousands_str("1.2.3").is_err(), "双小数点 Err")
+    # 序数
+    expect(th_ordinal(1) == "1st" and th_ordinal(2) == "2nd" and th_ordinal(3) == "3rd", "1st/2nd/3rd")
+    expect(th_ordinal(4) == "4th" and th_ordinal(10) == "10th", "4th/10th")
+    expect(th_ordinal(11) == "11th" and th_ordinal(12) == "12th" and th_ordinal(13) == "13th", "11-13th")
+    expect(th_ordinal(21) == "21st" and th_ordinal(22) == "22nd" and th_ordinal(23) == "23rd", "21-23")
+    expect(th_ordinal(101) == "101st" and th_ordinal(111) == "111th", "101st/111th")
+    expect(th_ordinal(0) == "0th", "0th")
+    expect(th_ordinal(-3) == "-3rd", "-3rd")
+    print("thousep: PASS")
+    return Ok(0)

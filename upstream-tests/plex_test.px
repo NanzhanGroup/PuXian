@@ -1,0 +1,44 @@
+# plex.px 测试：复数运算（Python complex 对拍值，双模式一致）
+import "../registry/plex/0.1.0/plex.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def close(a, b, eps=1e-9):
+    var d = a - b
+    if d < 0:
+        d = 0 - d
+    return d < eps
+def main():
+    var a = cx_new(1, 2)
+    var b = cx_new(3, -4)
+    # 四则
+    var s = cx_add(a, b)
+    expect(cx_eq(s, cx_new(4, -2)), "add (4,-2), got " + cx_str(s))
+    var d = cx_sub(cx_new(5, 6), cx_new(3, 4))
+    expect(cx_eq(d, cx_new(2, 2)), "sub (2,2)")
+    var m = cx_mul(a, b)
+    expect(cx_eq(m, cx_new(11, 2)), "mul (11,2), got " + cx_str(m))
+    var q = cx_div(a, cx_new(1, -1)).unwrap()
+    expect(close(q["re"], -0.5) and close(q["im"], 1.5), "div (-0.5,1.5), got " + cx_str(q))
+    expect(cx_div(a, cx_new(0, 0)).is_err(), "除零 Err")
+    # conj / neg / eq
+    expect(cx_eq(cx_conj(a), cx_new(1, -2)), "conj")
+    expect(cx_eq(cx_neg(cx_new(1, -2)), cx_new(-1, 2)), "neg")
+    expect(cx_eq(a, cx_new(1, 2)) and not cx_eq(a, b), "eq")
+    # abs
+    expect(close(cx_abs(cx_new(3, 4)), 5.0), "abs(3+4i)=5")
+    # parse
+    expect(cx_eq(cx_parse("1+2i").unwrap(), cx_new(1, 2)), "parse 1+2i")
+    expect(cx_eq(cx_parse("-3").unwrap(), cx_new(-3, 0)), "parse -3")
+    expect(cx_eq(cx_parse("2i").unwrap(), cx_new(0, 2)), "parse 2i")
+    expect(cx_eq(cx_parse("1-2i").unwrap(), cx_new(1, -2)), "parse 1-2i")
+    expect(cx_eq(cx_parse("1.5+0.5i").unwrap(), cx_new(1.5, 0.5)), "parse 1.5+0.5i")
+    expect(cx_eq(cx_parse(" 3 + 4i ").unwrap(), cx_new(3, 4)), "parse 空白")
+    expect(cx_parse("abc").is_err(), "parse 非法 Err")
+    # str roundtrip
+    var c3 = cx_new(1, 2)
+    expect(cx_str(c3) == "1+2i", "str 1+2i")
+    expect(cx_parse(cx_str(cx_new(1, -2))).unwrap()["im"] == -2, "str 往返")
+    print("plex: PASS")
+    return Ok(0)

@@ -59,3 +59,36 @@ uuid_test	PASS	PASS	-
 validator_test	PASS	PASS	-
 workerpool_test	PASS	SKIP	interp 设计性不支持通道（Mini 子集排除 · R1002 18:13）
 xlsx_test	PASS	PASS	-
+barcode_test	PASS	PASS	-
+bitset_test	PASS	PASS	-
+bloom_test	PASS	PASS	-
+cache_test	PASS	PASS	-
+counter_test	PASS	PASS	-
+dirs_test	PASS	PASS	-
+dist_test	PASS	PASS	-
+edist_test	PASS	PASS	-
+graph_test	PASS	PASS	-
+htmlparse_test	PASS	PASS	-
+human_test	PASS	PASS	-
+inflect_test	PASS	PASS	-
+interval_test	PASS	PASS	-
+money_test	PASS	PASS	-
+msgpack_test	PASS	PASS	-
+nanoid_test	PASS	PASS	-
+natsort_test	PASS	PASS	-
+num2words_test	PASS	PASS	-
+percent_test	PASS	PASS	-
+plex_test	PASS	PASS	-
+progress_test	PASS	PASS	-
+properties_test	PASS	PASS	-
+set_test	PASS	PASS	-
+slug_test	PASS	PASS	-
+strength_test	PASS	PASS	-
+thousep_test	PASS	PASS	-
+totp_test	PASS	PASS	-
+trie_test	PASS	PASS	-
+units_test	PASS	PASS	-
+walk_test	PASS	PASS	-
+zlib_test	PASS	PASS	-
+mqtt_test	SKIP	SKIP	需真实 MQTT broker 127.0.0.1:1883（本机与 CI 均无；--run-skipped 可跑）
+redis_test	SKIP	SKIP	需真实 Redis 服务端 127.0.0.1:6379（本机与 CI 均无；--run-skipped 可跑）

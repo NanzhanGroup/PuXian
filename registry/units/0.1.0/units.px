@@ -1,0 +1,104 @@
+# ============================================================
+# 普贤生态库：registry/units —— 常用单位换算
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python pint / Rust uom 心智（0.1.0 子集）：
+#   un_convert(value, from, to) → Ok(float) | Err
+# 类别（base 因子）：长度 m（km/cm/mm/in/ft/yd/mi）、质量 kg（g/mg/t/lb/oz）、
+#   时间 s（min/h/day/week/ms）、数据量 B（KB/MB/GB/TB，1024 进制）；
+#   温度 C/F/K 独立公式；跨类/未知单位 Err。
+# 单位名大小写不敏感。
+# ============================================================
+
+def un_clean(u):
+    return to_lower(u)
+
+# → [类别, 相对 base 因子]；未知 → [null, 0]
+def un_info(u):
+    var t = un_clean(u)
+    if t == "m":
+        return ["length", 1.0]
+    if t == "km":
+        return ["length", 1000.0]
+    if t == "cm":
+        return ["length", 0.01]
+    if t == "mm":
+        return ["length", 0.001]
+    if t == "in":
+        return ["length", 0.0254]
+    if t == "ft":
+        return ["length", 0.3048]
+    if t == "yd":
+        return ["length", 0.9144]
+    if t == "mi":
+        return ["length", 1609.344]
+    if t == "kg":
+        return ["mass", 1.0]
+    if t == "g":
+        return ["mass", 0.001]
+    if t == "mg":
+        return ["mass", 0.000001]
+    if t == "t":
+        return ["mass", 1000.0]
+    if t == "lb":
+        return ["mass", 0.45359237]
+    if t == "oz":
+        return ["mass", 0.028349523125]
+    if t == "s":
+        return ["time", 1.0]
+    if t == "ms":
+        return ["time", 0.001]
+    if t == "min":
+        return ["time", 60.0]
+    if t == "h":
+        return ["time", 3600.0]
+    if t == "day":
+        return ["time", 86400.0]
+    if t == "week":
+        return ["time", 604800.0]
+    if t == "b":
+        return ["data", 1.0]
+    if t == "kb":
+        return ["data", 1024.0]
+    if t == "mb":
+        return ["data", 1048576.0]
+    if t == "gb":
+        return ["data", 1073741824.0]
+    if t == "tb":
+        return ["data", 1099511627776.0]
+    return [null, 0.0]
+
+def un_is_temp(u):
+    var t = un_clean(u)
+    return t == "c" or t == "f" or t == "k"
+
+def un_to_c(v, u):
+    var t = un_clean(u)
+    if t == "c":
+        return v
+    if t == "k":
+        return v - 273.15
+    return (v - 32.0) * 5.0 / 9.0
+
+def un_from_c(c, u):
+    var t = un_clean(u)
+    if t == "c":
+        return c
+    if t == "k":
+        return c + 273.15
+    return c * 9.0 / 5.0 + 32.0
+
+def un_convert(value, frm, to):
+    if un_is_temp(frm) or un_is_temp(to):
+        if not un_is_temp(frm) or not un_is_temp(to):
+            return Err("units: 温度只能与温度互转")
+        return Ok(un_from_c(un_to_c(value, frm), to))
+    var fi = un_info(frm)
+    var ti = un_info(to)
+    if fi[0] == null:
+        return Err("units: 未知单位 " + frm)
+    if ti[0] == null:
+        return Err("units: 未知单位 " + to)
+    if fi[0] != ti[0]:
+        return Err("units: 跨类换算 " + fi[0] + " -> " + ti[0])
+    return Ok(value * fi[1] / ti[1])

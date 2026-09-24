@@ -1,0 +1,41 @@
+# htmlparse.px 测试：HTML 解析（子集，双模式一致）
+import "../registry/htmlparse/0.1.0/htmlparse.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var html = '<div class="box" id="m1">hello <a href="/x">link</a><!-- c --><br/><p>para 中文</p></div>'
+    var r = hp_parse(html).unwrap()
+    # find
+    var divs = hp_find(r, "div")
+    expect(len(divs) == 1, "find div=1, got " + str(len(divs)))
+    var div = divs[0]
+    expect(hp_attr(div, "class") == "box" and hp_attr(div, "id") == "m1", "div attrs")
+    var as_ = hp_find(r, "a")
+    expect(len(as_) == 1 and hp_attr(as_[0], "href") == "/x", "find a href")
+    var ps = hp_find(r, "p")
+    expect(len(ps) == 1 and hp_text(ps[0]) == "para 中文", "p text")
+    # 大小写不敏感 find
+    var divsUp = hp_find(r, "DIV")
+    expect(len(divsUp) == 1, "find DIV 大小写")
+    # void 不嵌套
+    var brs = hp_find(r, "br")
+    expect(len(brs) == 1, "br 列出")
+    var div_children = div["children"]
+    # “hello ” 文本 + a + br + p = 4 项
+    expect(len(div_children) == 4, "div children=4, got " + str(len(div_children)))
+    # text 聚合
+    expect(hp_text(div) == "hello linkpara 中文", "div text, got " + hp_text(div))
+    # 属性缺省 null
+    expect(hp_attr(div, "nope") == null, "缺省属性 null")
+    # 布尔属性（无值）
+    var html2 = '<input type="text" disabled name=raw>'
+    var r2 = hp_parse(html2).unwrap()
+    var inp = hp_find(r2, "input")[0]
+    expect(hp_attr(inp, "disabled") == "" and hp_attr(inp, "name") == "raw", "布尔/无引号属性")
+    # 无根内容：纯文本
+    var r3 = hp_parse("just text").unwrap()
+    expect(hp_text(r3) == "just text", "纯文本")
+    print("htmlparse: PASS")
+    return Ok(0)

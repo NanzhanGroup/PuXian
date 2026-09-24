@@ -1,0 +1,65 @@
+# ============================================================
+# 普贤生态库：registry/edist —— 字符串距离 / 相似度
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python Levenshtein / jellyfish、Go enescakir/levenshtein 心智（0.1.0）：
+#   ed_levenshtein(a, b) → int    编辑距离（插入/删除/替换各 1，DP 两行滚动）
+#   ed_ratio(a, b)       → float  相似度 = 1 - dist / max(len)
+#   ed_hamming(a, b)     → Ok(int) | Err  等长逐位差异数
+# 距离按 rune（M185 起 len/s[i] 为 rune），中文按字符计。
+# ============================================================
+
+# Levenshtein 距离（rune 级；空串边界正确处理）
+def ed_levenshtein(a, b):
+    var la = len(a)
+    var lb = len(b)
+    var prev = []
+    var i = 0
+    while i <= lb:
+        prev.append(i)
+        i += 1
+    var j = 1
+    while j <= la:
+        var cur = [j]
+        var k = 1
+        while k <= lb:
+            var cost = 0
+            if a[j - 1] != b[k - 1]:
+                cost = 1
+            var m1 = prev[k] + 1
+            var m2 = cur[k - 1] + 1
+            var m3 = prev[k - 1] + cost
+            var mn = m1
+            if m2 < mn:
+                mn = m2
+            if m3 < mn:
+                mn = m3
+            cur.append(mn)
+            k += 1
+        prev = cur
+        j += 1
+    return prev[lb]
+
+# 相似度：1 - dist/max(len)；两者皆空记 1.0
+def ed_ratio(a, b):
+    var la = len(a)
+    var lb = len(b)
+    if la == 0 and lb == 0:
+        return 1.0
+    var d = ed_levenshtein(a, b)
+    var mx = la
+    if lb > mx:
+        mx = lb
+    return 1.0 - float(d) / float(mx)
+
+# Hamming：等长逐位差异数；长度不等 Err
+def ed_hamming(a, b):
+    if len(a) != len(b):
+        return Err("edist: hamming 需要等长: " + str(len(a)) + " != " + str(len(b)))
+    var d = 0
+    var i = 0
+    while i < len(a):
+        if a[i] != b[i]:
+            d += 1
+        i += 1
+    return Ok(d)

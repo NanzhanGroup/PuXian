@@ -1,0 +1,4 @@
+extern def bytes_to_hex(data) -> str
+extern def hex_to_bytes(s) -> bytes
+print(bytes_to_hex(bytes("AB")))
+print(bytes_len(hex_to_bytes("4142")))

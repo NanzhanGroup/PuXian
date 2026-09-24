@@ -1,0 +1,52 @@
+# ============================================================
+# 普贤生态库：registry/walk —— 递归目录遍历
+# ------------------------------------------------------------
+# 纯函数库（文件系统 IO，无全局状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go filepath.Walk / Python os.walk / Rust walkdir 心智（0.1.0）：
+#   wk_walk(root, max_depth=-1) → Ok([{path, is_dir, size}]) | Err
+# 每个目录内按名字排序（确定性）；首项为 root 本身。
+# max_depth：-1 不限；0 只 root；1 一层……（相对 root 深度）。
+# 依赖：list_dir_opt（M184 安全变体）/ file_stat。
+# ============================================================
+
+# path 拼接（去 root 尾部 /）
+def wk_join(root, name):
+    var r = root
+    while len(r) > 0 and r[len(r) - 1] == "/":
+        r = r[0:len(r) - 1]
+    return r + "/" + name
+
+def wk_walk(root, max_depth=-1):
+    var out = []
+    var r = wk_walk_rec(root, 0, max_depth)
+    if r[1] != "":
+        return Err("walk: " + r[1])
+    return Ok(r[0])
+
+# → [entries, err]
+def wk_walk_rec(dir, depth, max_depth):
+    var out = []
+    if max_depth >= 0 and depth > max_depth:
+        return [out, ""]
+    var st = file_stat(dir)
+    if st == null:
+        return [out, "stat 失败: " + dir]
+    out.append({"path": dir, "is_dir": st["is_dir"], "size": st["size"]})
+    if not st["is_dir"]:
+        return [out, ""]
+    var l = list_dir_opt(dir)
+    if l.is_err():
+        return [out, "list_dir 失败 " + dir + ": " + str(l.err())]
+    var names = sorted(l.unwrap())
+    var i = 0
+    while i < len(names):
+        var child = wk_join(dir, names[i])
+        var sub = wk_walk_rec(child, depth + 1, max_depth)
+        if sub[1] != "":
+            return [out, sub[1]]
+        var k = 0
+        while k < len(sub[0]):
+            out.append(sub[0][k])
+            k += 1
+        i += 1
+    return [out, ""]

@@ -180,6 +180,8 @@ LXValue px_native(const char* name, LXFuncPtr fn);
 
 // M42：FFI 注册表（runtime_ffi.c）—— 显式 C 库 import 的 C 桥
 void    px_ffi_register(const char* name, LXFuncPtr fn);
+// M200（缺陷 240）：把 FFI 表发布成全局 native（编译轨的 extern def 名走 GETG，必须有全局）
+void    px_ffi_publish_globals(void);
 bool    px_ffi_has(const char* name);
 bool    px_global_native(const char* name, LXValue* out);   // M68：非致命全局 native 查询（ffi_call 双表兜底）
 LXValue bi_ffi_call(LXValue* args, int nargs, void* ctx);   // ffi_call(name, args_list)

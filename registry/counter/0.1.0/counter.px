@@ -1,0 +1,88 @@
+# ============================================================
+# 普贤生态库：registry/counter —— 计数（collections.Counter 心智）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态，计数状态以 dict 显式传递），双模式一致。
+# 对齐 Python collections.Counter / Go 计数 map 心智（0.1.0）：
+#   ct_count(l)           → dict     从 list 计数（元素 → 次数）
+#   ct_add(c, v, n=1)     → c        增量（默认 +1，可链式）
+#   ct_get(c, v)          → int      次数（无则 0）
+#   ct_total(c)           → int      总次数
+#   ct_len(c)             → int      不同元素的个数
+#   ct_most_common(c)     → [[key, count]...]  按次数降序
+#   ct_merge(a, b)        → dict     合并（次数相加）
+# 元素类型：string（dict 键限定 str，见 docs/语言缺陷.md 写库限制）。
+# ============================================================
+
+def ct_count(l):
+    var c = {}
+    var i = 0
+    while i < len(l):
+        var v = l[i]
+        if type(v) == "string":
+            if c.has(v):
+                c.set(v, c[v] + 1)
+            else:
+                c.set(v, 1)
+        i += 1
+    return c
+
+def ct_add(c, v, n=1):
+    if n < 0:
+        return Err("counter: n 须 >= 0")
+    var cur = 0
+    if c.has(v):
+        cur = c[v]
+    c.set(v, cur + n)
+    return c
+
+def ct_get(c, v):
+    if c.has(v):
+        return c[v]
+    return 0
+
+def ct_total(c):
+    var ks = c.keys()
+    var sum = 0
+    var i = 0
+    while i < len(ks):
+        sum = sum + c[ks[i]]
+        i += 1
+    return sum
+
+def ct_len(c):
+    return len(c)
+
+# 按次数降序；同次数顺序不保证（0.1.0 用天然排序反转）
+def ct_most_common(c):
+    var items = []
+    var ks = c.keys()
+    var i = 0
+    while i < len(ks):
+        items.append([c[ks[i]], ks[i]])
+        i += 1
+    var s = sorted(items)
+    s.reverse()
+    var out = []
+    var j = 0
+    while j < len(s):
+        out.append([s[j][1], s[j][0]])
+        j += 1
+    return out
+
+def ct_merge(a, b):
+    var r = {}
+    var ks = a.keys()
+    var i = 0
+    while i < len(ks):
+        r.set(ks[i], a[ks[i]])
+        i += 1
+    var kb = b.keys()
+    var j = 0
+    while j < len(kb):
+        var k = kb[j]
+        var cur = 0
+        if r.has(k):
+            cur = r[k]
+        r.set(k, cur + b[k])
+        j += 1
+    return r

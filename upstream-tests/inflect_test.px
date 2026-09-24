@@ -1,0 +1,38 @@
+# inflect.px 测试：英文复数化（双模式一致）
+import "../registry/inflect/0.1.0/inflect.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # 基础 +s
+    expect(if_plural("cat").unwrap() == "cats", "cat")
+    expect(if_plural("book").unwrap() == "books", "book")
+    # +es
+    expect(if_plural("box").unwrap() == "boxes", "box")
+    expect(if_plural("church").unwrap() == "churches", "church")
+    expect(if_plural("bus").unwrap() == "buses", "bus")
+    # y 规则
+    expect(if_plural("city").unwrap() == "cities", "city")
+    expect(if_plural("boy").unwrap() == "boys", "boy")
+    # f/fe
+    expect(if_plural("wolf").unwrap() == "wolves", "wolf")
+    expect(if_plural("knife").unwrap() == "knives", "knife")
+    # 不规则
+    expect(if_plural("man").unwrap() == "men", "man")
+    expect(if_plural("child").unwrap() == "children", "child")
+    expect(if_plural("sheep").unwrap() == "sheep", "sheep")
+    expect(if_plural("person").unwrap() == "people", "person")
+    # singular 反向
+    expect(if_singular("cats").unwrap() == "cat", "s→")
+    expect(if_singular("cities").unwrap() == "city", "ies→y")
+    expect(if_singular("boxes").unwrap() == "box", "es→")
+    expect(if_singular("men").unwrap() == "man", "men→man")
+    expect(if_singular("wolves").unwrap() == "wolf", "ves→f")
+    # 带数量
+    expect(if_count(1, "apple") == "1 apple", "1 apple")
+    expect(if_count(3, "apple") == "3 apples", "3 apples")
+    expect(if_count(1, "box") == "1 box", "1 box")
+    expect(if_count(2, "box") == "2 boxes", "2 boxes")
+    print("inflect: PASS")
+    return Ok(0)

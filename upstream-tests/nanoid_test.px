@@ -1,0 +1,31 @@
+# nanoid.px 测试：NanoID（双模式一致）
+import "../registry/nanoid/0.1.0/nanoid.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var n = nd_generate().unwrap()
+    expect(len(n) == 21, "默认 21 位，got " + str(len(n)))
+    expect(nd_valid(n), "默认 ID 合法")
+    var n10 = nd_generate(10).unwrap()
+    expect(len(n10) == 10 and nd_valid(n10), "10 位")
+    # 唯一性（64^21 空间，取样 100 不重复）
+    var seen = {}
+    var i = 0
+    while i < 100:
+        var id = nd_generate().unwrap()
+        expect(not seen.has(id), "重复 ID: " + id)
+        seen.set(id, true)
+        i += 1
+    # 字母表
+    expect(len(nd_alphabet()) == 64, "字母表 64")
+    expect(nd_valid("-_0aZ9"), "合法字符")
+    expect(nd_valid("a b") == false, "含空格非法")
+    expect(nd_valid("中文") == false, "中文非法")
+    expect(nd_valid("") == true, "空串合法（0 字符）")
+    # 错误
+    expect(nd_generate(0).is_err(), "长度 0 Err")
+    expect(nd_generate(-3).is_err(), "负长度 Err")
+    print("nanoid: PASS")
+    return Ok(0)

@@ -1,0 +1,49 @@
+# mqtt.px 测试：真实 mosquitto broker（MQTT 3.1.1，双模式一致）
+import "../registry/mqtt/0.1.0/mqtt.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # 双连接：A 订阅、B 发布（mosquitto 不回环本客户端消息）
+    var a = mqtt_connect("127.0.0.1", 1883, "px_client_a")
+    if a.is_err():
+        print("FAIL: connect A: " + str(a))
+        exit(1)
+    var ca = a.unwrap()
+    var b = mqtt_connect("127.0.0.1", 1883, "px_client_b")
+    if b.is_err():
+        print("FAIL: connect B: " + str(b))
+        exit(1)
+    var cb = b.unwrap()
+    print("connect ok")
+    # 订阅
+    var sub = mqtt_subscribe(ca, "px/test", 0)
+    if sub.is_err():
+        print("FAIL: subscribe: " + str(sub))
+        exit(1)
+    # 发布 → 对端读取
+    expect(mqtt_publish(cb, "px/test", "hello mqtt 普贤", 0).is_ok(), "publish ok")
+    var msg = mqtt_read(ca)
+    if msg.is_err():
+        print("FAIL: read: " + str(msg))
+        exit(1)
+    var m = msg.unwrap()
+    expect(m["topic"] == "px/test", "topic, got " + m["topic"])
+    expect(m["payload"] == "hello mqtt 普贤", "payload roundtrip, got " + m["payload"])
+    # 再发一条（中文 payload 多字节）
+    expect(mqtt_publish(cb, "px/test", "第二条 中文消息", 0).is_ok(), "publish 2 ok")
+    var m2 = mqtt_read(ca).unwrap()
+    expect(m2["payload"] == "第二条 中文消息", "第二条 payload")
+    # ping（两端）
+    expect(mqtt_ping(ca).is_ok() and mqtt_ping(cb).is_ok(), "ping ok")
+    # 通配订阅：+/#
+    expect(mqtt_subscribe(ca, "px/+", 0).is_ok(), "subscribe px/+ ok")
+    expect(mqtt_publish(cb, "px/other", "wildcard", 0).is_ok(), "publish wildcard ok")
+    var m3 = mqtt_read(ca).unwrap()
+    expect(m3["topic"] == "px/other" and m3["payload"] == "wildcard", "wildcard 收到")
+    # 关闭
+    mqtt_close(cb)
+    mqtt_close(ca)
+    print("mqtt: PASS")
+    return Ok(0)

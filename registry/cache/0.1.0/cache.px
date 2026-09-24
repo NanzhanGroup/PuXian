@@ -1,0 +1,87 @@
+# ============================================================
+# 普贤生态库：registry/cache —— TTL / LRU 缓存
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态，缓存状态以 dict 显式传递），双模式一致。
+# 对齐 Go groupcache / Rust lru、Python cachetools 心智（0.1.0）：
+#   ca_new(max_entries=100) → dict
+#   ca_set(cache, key, val, ttl_sec=0, now=null) → cache   # ttl 0 = 不过期
+#   ca_get(cache, key, now=null) → Ok(v) | Err            # 缺失/过期 Err
+#   ca_has / ca_len / ca_delete
+# 淘汰：LRU（MRU 在 order 尾部）；超限驱逐队首。过期惰性清理。
+# 时间：now 显式传入（默认 now_sec()），测试可控、库本身无 IO。
+# ============================================================
+
+def ca_new(max_entries=100):
+    return {"max_entries": max_entries, "items": {}, "order": []}
+
+def ca_now(now):
+    if now == null:
+        return now_sec()
+    return now
+
+# order 中删除 key → 新 list
+def ca_drop(order, key):
+    var out = []
+    var i = 0
+    while i < len(order):
+        if order[i] != key:
+            out.append(order[i])
+        i += 1
+    return out
+
+# 惰性清理过期条目
+def ca_clean(cache, now):
+    var keys = cache["items"].keys()
+    var i = 0
+    while i < len(keys):
+        var k = keys[i]
+        var e = cache["items"][k]
+        if e["exp"] > 0 and e["exp"] <= now:
+            cache["items"].remove(k)
+            cache.set("order", ca_drop(cache["order"], k))
+        i += 1
+
+# 触达：移到 MRU；超限驱逐 LRU
+def ca_touch(cache, k):
+    cache.set("order", ca_drop(cache["order"], k))
+    cache["order"].append(k)
+    while len(cache["order"]) > cache["max_entries"]:
+        var old = cache["order"][0]
+        cache.set("order", cache["order"][1:len(cache["order"])])
+        cache["items"].remove(old)
+
+def ca_set(cache, key, val, ttl_sec=0, now=null):
+    var n = ca_now(now)
+    var exp = 0
+    if ttl_sec > 0:
+        exp = n + ttl_sec
+    cache["items"].set(key, {"v": val, "exp": exp})
+    ca_touch(cache, key)
+    return cache
+
+def ca_get(cache, key, now=null):
+    var n = ca_now(now)
+    ca_clean(cache, n)
+    if not cache["items"].has(key):
+        return Err("cache: 无键 " + key)
+    var e = cache["items"][key]
+    if e["exp"] > 0 and e["exp"] <= n:
+        cache["items"].remove(key)
+        cache.set("order", ca_drop(cache["order"], key))
+        return Err("cache: 过期 " + key)
+    ca_touch(cache, key)
+    return Ok(e["v"])
+
+def ca_has(cache, key, now=null):
+    return ca_get(cache, key, now).is_ok()
+
+def ca_len(cache, now=null):
+    ca_clean(cache, ca_now(now))
+    return len(cache["items"])
+
+def ca_delete(cache, key):
+    if cache["items"].has(key):
+        cache["items"].remove(key)
+        cache.set("order", ca_drop(cache["order"], key))
+        return true
+    return false

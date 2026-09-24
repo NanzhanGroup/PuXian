@@ -391,3 +391,31 @@ aarch64 引导包里**夹带 x86-64 / Windows 的构建输入**（`sqlite3.o`、
 ⇒ 新增 `selfhost/check_pkg_arch.sh`：**逐文件 + 逐归档成员**判架构（COFF 一律判红；非 ELF 记 INFO），
 `--self-test` 自带 5 条自证（3 负控，fixture **取自仓库** ⇒ 判据与环境无关）。
 实测（模拟包）：裁剪前 **判红 1266** → 按 release.yml 口径裁剪后 **判红 0**（129 件全 AArch64）。
+
+---
+
+## 6.11 `extern def`（C-FFI 桥）名字的**全局发布**（M200 建立 · 缺陷 240）
+
+**规则**：`px_ffi_register(name, fn)` 登记的**每一个**名字，都必须在建表期被发布成**全局 native**
+（`px_set_global(name, px_native(name, fn))`）—— 因为：
+
+| 轨 | 解析路径 | 不发布的后果 |
+|---|---|---|
+| 解释轨 | `selfhost/iexpr.px` 遇未知名/FFI 名 → `i_builtin_ffi_call` → C 侧 `ffi_call` 的**双表**（ffi 注册表 → 全局 native 表） | 仍可用（兜底） |
+| **编译轨（VM/C）** | 把 `extern def f(...)` 编译成 **GETG "f"** —— GETG **只查全局表** | `R1001 未定义变量: 'f'` |
+
+**实现**：`px_ffi_publish_globals()`（`runtime/runtime_ffi.c`），在 `px_register_builtins()` 的
+**建表窗口末尾**（`g_gc_frozen = 1` 期间，见 M170 缺陷 189）**遍历整表**逐条发布；调用点必须
+**唯一**且位于 `g_gc_frozen = 0` 之前（窗口外发布的对象可能被 GC 误回收）。
+
+**量化（M200 实测）**：`px_ffi_register` 名字 **92** 个 · 其中也走 `px_set_global` 的 **89** 个 ·
+**仅 3 个只活在 FFI 表** = `zlib_crc32` / `zlib_compress` / `zlib_uncompress`
+（⇒ 当时只有官方 `registry/zlib` 受影响，症状"专挑一个包"极难归因）。
+第三方把这条记作 **PX-DEF-035**，但**方向记反了**（见 `docs/PX_DEF_TRIAGE.md` §8.2）。
+
+**判据 [S11]**（`examples/m200_ffi_globals/sweep_ffi.py`）：注册名 ≥ 80（下限，防扫描器失效）·
+发布函数定义存在且**遍历整表** · 发布调用点**唯一**且在 `px_register_builtins` 内、窗口之前 ·
+打印 FFI-only 名清单（供人核）。
+⚠️ 扫描器**取注册名要用"只去注释、保留字面量"的剥离器** —— 首版用连字面量一起抹的剥离器，
+`px_ffi_register("zlib_crc32"` 变成 `px_ffi_register(""` ⇒ 名字数扫成 **0**，被"下限"判据当场抓住。
+

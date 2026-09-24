@@ -1,0 +1,325 @@
+# ============================================================
+# 普贤生态库：registry/msgpack —— MessagePack 编解码
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 msgpack-lite / msgpack-python 心智（0.1.0）：
+#   mp_pack(v)   → Ok(bytes) | Err
+#   mp_unpack(b) → Ok(v) | Err
+# 支持：null / bool / int（fix/8/16/32/64 有符号与无符号最小编码）/
+#   float（编码为 float64）/ string（fixstr/str8/str16/str32）/
+#   bytes（bin8/16/32）/ list（fixarray/array16/array32）/
+#   dict（fixmap/map16/map32，键须 string）。
+# 对拍 msgpack-python（msgpack.packb 逐字节一致）。
+# 实现注意：协议头字节一律用 byte(n) 构造单字节（bytes(chr(n)) 对 n>=128
+#   走 UTF-8 成 2 字节，PX-DEF-017 老坑）。
+# ============================================================
+
+# ---- 打包 ----
+def mp_pack(v):
+    var r = mp_pack_at(v)
+    if r[1] != "":
+        return Err("msgpack: " + r[1])
+    return Ok(r[0])
+
+# → [bytes, err]
+def mp_pack_at(v):
+    if v == null:
+        return [byte(192), ""]
+    if type(v) == "bool":
+        if v:
+            return [byte(195), ""]
+        return [byte(194), ""]
+    if type(v) == "int":
+        return mp_pack_int(v)
+    if type(v) == "float":
+        var bits = float64_bits(v)
+        return [bytes_concat(byte(203), int_to_bytes(bits, 8, "big", true)), ""]
+    if type(v) == "string":
+        return mp_pack_str(v)
+    if type(v) == "bytes":
+        return mp_pack_bin(v)
+    if type(v) == "list":
+        return mp_pack_arr(v)
+    if type(v) == "dict":
+        return mp_pack_map(v)
+    return [bytes(""), "不支持的类型 " + str(type(v))]
+
+def mp_pack_int(v):
+    if v >= 0 and v <= 127:
+        return [byte(v), ""]
+    if v >= -32 and v < 0:
+        return [byte(256 + v), ""]
+    if v >= 0 and v <= 255:
+        return [bytes_concat(byte(204), byte(v)), ""]
+    if v >= -128 and v < 0:
+        return [bytes_concat(byte(208), byte(256 + v)), ""]
+    if v >= 0 and v <= 65535:
+        return [bytes_concat(byte(205), int_to_bytes(v, 2, "big", false)), ""]
+    if v >= -32768 and v < 0:
+        return [bytes_concat(byte(209), int_to_bytes(v, 2, "big", true)), ""]
+    if v >= 0 and v <= 4294967295:
+        return [bytes_concat(byte(206), int_to_bytes(v, 4, "big", false)), ""]
+    if v >= -2147483648 and v < 0:
+        return [bytes_concat(byte(210), int_to_bytes(v, 4, "big", true)), ""]
+    if v >= 0:
+        return [bytes_concat(byte(207), int_to_bytes(v, 8, "big", false)), ""]
+    return [bytes_concat(byte(211), int_to_bytes(v, 8, "big", true)), ""]
+
+def mp_pack_str(s):
+    var raw = bytes(s)
+    var n = bytes_len(raw)
+    if n <= 31:
+        return [bytes_concat(byte(160 + n), raw), ""]
+    if n <= 255:
+        return [bytes_concat(byte(217), byte(n), raw), ""]
+    if n <= 65535:
+        return [bytes_concat(byte(218), int_to_bytes(n, 2, "big", false), raw), ""]
+    return [bytes_concat(byte(219), int_to_bytes(n, 4, "big", false), raw), ""]
+
+def mp_pack_bin(b):
+    var n = bytes_len(b)
+    if n <= 255:
+        return [bytes_concat(byte(196), byte(n), b), ""]
+    if n <= 65535:
+        return [bytes_concat(byte(197), int_to_bytes(n, 2, "big", false), b), ""]
+    return [bytes_concat(byte(198), int_to_bytes(n, 4, "big", false), b), ""]
+
+def mp_pack_arr(v):
+    var n = len(v)
+    var head = bytes("")
+    if n <= 15:
+        head = byte(144 + n)
+    elif n <= 65535:
+        head = bytes_concat(byte(220), int_to_bytes(n, 2, "big", false))
+    else:
+        head = bytes_concat(byte(221), int_to_bytes(n, 4, "big", false))
+    var out = head
+    var i = 0
+    while i < n:
+        var e = mp_pack_at(v[i])
+        if e[1] != "":
+            return e
+        out = bytes_concat(out, e[0])
+        i += 1
+    return [out, ""]
+
+def mp_pack_map(d):
+    var ks = d.keys()
+    var n = len(ks)
+    var head = bytes("")
+    if n <= 15:
+        head = byte(128 + n)
+    elif n <= 65535:
+        head = bytes_concat(byte(222), int_to_bytes(n, 2, "big", false))
+    else:
+        head = bytes_concat(byte(223), int_to_bytes(n, 4, "big", false))
+    var out = head
+    var i = 0
+    while i < n:
+        var k = ks[i]
+        var ke = mp_pack_str(k)
+        var ve = mp_pack_at(d[k])
+        if ve[1] != "":
+            return ve
+        out = bytes_concat(out, ke[0])
+        out = bytes_concat(out, ve[0])
+        i += 1
+    return [out, ""]
+
+# ---- 解包 ----
+def mp_unpack(b):
+    var r = mp_unpack_at(b, 0)
+    if r[2] != "":
+        return Err("msgpack: " + r[2])
+    return Ok(r[0])
+
+# 取 n 字节（越界 Err 化，避免原生切片崩）
+def mp_take(b, off, n, tag):
+    if off < 0 or off + n > bytes_len(b):
+        return [bytes(""), tag + " 数据不足"]
+    return [bytes_slice(b, off, off + n), ""]
+
+# → [value, newoff, err]
+def mp_unpack_at(b, off):
+    var total = bytes_len(b)
+    if off >= total:
+        return [null, off, "数据不足"]
+    var first = bytes_get(b, off)
+    if first <= 127:
+        return [first, off + 1, ""]
+    if first >= 224:
+        return [first - 256, off + 1, ""]
+    if first == 192:
+        return [null, off + 1, ""]
+    if first == 194:
+        return [false, off + 1, ""]
+    if first == 195:
+        return [true, off + 1, ""]
+    if first == 202:
+        var a1 = mp_take(b, off + 1, 4, "f32")
+        if a1[1] != "":
+            return [null, off, a1[1]]
+        return [bits_to_float32(bytes_to_int(a1[0], "big", false)), off + 5, ""]
+    if first == 203:
+        var a2 = mp_take(b, off + 1, 8, "f64")
+        if a2[1] != "":
+            return [null, off, a2[1]]
+        return [bits_to_float64(bytes_to_int(a2[0], "big", false)), off + 9, ""]
+    if first == 204:
+        var a3 = mp_take(b, off + 1, 1, "u8")
+        if a3[1] != "":
+            return [null, off, a3[1]]
+        return [bytes_get(a3[0], 0), off + 2, ""]
+    if first == 205:
+        var a4 = mp_take(b, off + 1, 2, "u16")
+        if a4[1] != "":
+            return [null, off, a4[1]]
+        return [bytes_to_int(a4[0], "big", false), off + 3, ""]
+    if first == 206:
+        var a5 = mp_take(b, off + 1, 4, "u32")
+        if a5[1] != "":
+            return [null, off, a5[1]]
+        return [bytes_to_int(a5[0], "big", false), off + 5, ""]
+    if first == 207:
+        var a6 = mp_take(b, off + 1, 8, "u64")
+        if a6[1] != "":
+            return [null, off, a6[1]]
+        return [bytes_to_int(a6[0], "big", false), off + 9, ""]
+    if first == 208:
+        var a7 = mp_take(b, off + 1, 1, "i8")
+        if a7[1] != "":
+            return [null, off, a7[1]]
+        var i8 = bytes_get(a7[0], 0)
+        if i8 >= 128:
+            i8 = i8 - 256
+        return [i8, off + 2, ""]
+    if first == 209:
+        var a8 = mp_take(b, off + 1, 2, "i16")
+        if a8[1] != "":
+            return [null, off, a8[1]]
+        return [bytes_to_int(a8[0], "big", true), off + 3, ""]
+    if first == 210:
+        var a9 = mp_take(b, off + 1, 4, "i32")
+        if a9[1] != "":
+            return [null, off, a9[1]]
+        return [bytes_to_int(a9[0], "big", true), off + 5, ""]
+    if first == 211:
+        var a10 = mp_take(b, off + 1, 8, "i64")
+        if a10[1] != "":
+            return [null, off, a10[1]]
+        return [bytes_to_int(a10[0], "big", true), off + 9, ""]
+    if first >= 160 and first <= 191:
+        var n1 = first - 160
+        var a11 = mp_take(b, off + 1, n1, "fixstr")
+        if a11[1] != "":
+            return [null, off, a11[1]]
+        return [bytes_to_str(a11[0]), off + 1 + n1, ""]
+    if first == 217:
+        var a12 = mp_take(b, off + 1, 1, "str8")
+        if a12[1] != "":
+            return [null, off, a12[1]]
+        var n2 = bytes_get(a12[0], 0)
+        return mp_str_take(b, off + 2, n2)
+    if first == 218:
+        var a13 = mp_take(b, off + 1, 2, "str16")
+        if a13[1] != "":
+            return [null, off, a13[1]]
+        var n3 = bytes_to_int(a13[0], "big", false)
+        return mp_str_take(b, off + 3, n3)
+    if first == 219:
+        var a14 = mp_take(b, off + 1, 4, "str32")
+        if a14[1] != "":
+            return [null, off, a14[1]]
+        var n4 = bytes_to_int(a14[0], "big", false)
+        return mp_str_take(b, off + 5, n4)
+    if first == 196:
+        var a15 = mp_take(b, off + 1, 1, "bin8")
+        if a15[1] != "":
+            return [null, off, a15[1]]
+        var m1 = bytes_get(a15[0], 0)
+        return mp_bin_take(b, off + 2, m1)
+    if first == 197:
+        var a16 = mp_take(b, off + 1, 2, "bin16")
+        if a16[1] != "":
+            return [null, off, a16[1]]
+        var m2 = bytes_to_int(a16[0], "big", false)
+        return mp_bin_take(b, off + 3, m2)
+    if first == 198:
+        var a17 = mp_take(b, off + 1, 4, "bin32")
+        if a17[1] != "":
+            return [null, off, a17[1]]
+        var m3 = bytes_to_int(a17[0], "big", false)
+        return mp_bin_take(b, off + 5, m3)
+    if first >= 144 and first <= 159:
+        return mp_arr_n(b, off + 1, first - 144)
+    if first == 220:
+        var a18 = mp_take(b, off + 1, 2, "array16")
+        if a18[1] != "":
+            return [null, off, a18[1]]
+        return mp_arr_n(b, off + 3, bytes_to_int(a18[0], "big", false))
+    if first == 221:
+        var a19 = mp_take(b, off + 1, 4, "array32")
+        if a19[1] != "":
+            return [null, off, a19[1]]
+        return mp_arr_n(b, off + 5, bytes_to_int(a19[0], "big", false))
+    if first >= 128 and first <= 143:
+        return mp_map_n(b, off + 1, first - 128)
+    if first == 222:
+        var a20 = mp_take(b, off + 1, 2, "map16")
+        if a20[1] != "":
+            return [null, off, a20[1]]
+        return mp_map_n(b, off + 3, bytes_to_int(a20[0], "big", false))
+    if first == 223:
+        var a21 = mp_take(b, off + 1, 4, "map32")
+        if a21[1] != "":
+            return [null, off, a21[1]]
+        return mp_map_n(b, off + 5, bytes_to_int(a21[0], "big", false))
+    return [null, off, "未知标记 " + str(first)]
+
+# 定长 str 体（长度已读）
+def mp_str_take(b, off, n):
+    var a = mp_take(b, off, n, "str")
+    if a[1] != "":
+        return [null, off, a[1]]
+    return [bytes_to_str(a[0]), off + n, ""]
+
+# 定长 bin 体（长度已读）
+def mp_bin_take(b, off, n):
+    var a = mp_take(b, off, n, "bin")
+    if a[1] != "":
+        return [null, off, a[1]]
+    return [a[0], off + n, ""]
+
+# 解 n 个数组元素
+def mp_arr_n(b, off, n):
+    var arr = []
+    var o = off
+    var i = 0
+    while i < n:
+        var e = mp_unpack_at(b, o)
+        if e[2] != "":
+            return e
+        arr.append(e[0])
+        o = e[1]
+        i += 1
+    return [arr, o, ""]
+
+# 解 n 对 key/value
+def mp_map_n(b, off, n):
+    var d = {}
+    var o = off
+    var i = 0
+    while i < n:
+        var ke = mp_unpack_at(b, o)
+        if ke[2] != "":
+            return ke
+        if type(ke[0]) != "string":
+            return [null, o, "map 键非 string"]
+        o = ke[1]
+        var ve = mp_unpack_at(b, o)
+        if ve[2] != "":
+            return ve
+        d.set(ke[0], ve[0])
+        o = ve[1]
+        i += 1
+    return [d, o, ""]

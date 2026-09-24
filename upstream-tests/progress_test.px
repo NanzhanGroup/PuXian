@@ -1,0 +1,26 @@
+# progress.px 测试：进度条渲染（双模式一致）
+import "../registry/progress/0.1.0/progress.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    expect(pg_bar(0, 100, 10).unwrap() == "[----------] 0%", "0%")
+    expect(pg_bar(50, 100, 10).unwrap() == "[#####-----] 50%", "50%")
+    expect(pg_bar(100, 100, 10).unwrap() == "[##########] 100%", "100%")
+    expect(pg_bar(1, 2, 5).unwrap() == "[###--] 50%", "5 宽 50%（2.5 → 3）")
+    # 夹取
+    expect(pg_bar(150, 100, 10).unwrap() == "[##########] 100%", "done>total 夹取")
+    expect(pg_bar(-3, 100, 10).unwrap() == "[----------] 0%", "done<0 夹取")
+    # 选项
+    var o1 = pg_bar(1, 2, 5, {"fill": "=", "empty": ".", "show_pct": false}).unwrap()
+    expect(o1 == "[===..]", "自定义 fill/empty 无 pct, got " + o1)
+    var o2 = pg_bar(3, 10, 10, {"show_count": true}).unwrap()
+    expect(o2 == "[###-------] 3/10", "show_count, got " + o2)
+    # 窄宽度
+    expect(pg_bar(50, 100, 1).unwrap() == "[#] 50%", "宽 1")
+    # 错误
+    expect(pg_bar(1, 0).is_err(), "total 0 Err")
+    expect(pg_bar(1, 100, 0).is_err(), "width 0 Err")
+    print("progress: PASS")
+    return Ok(0)

@@ -1,0 +1,35 @@
+# interval.px 测试：闭区间（双模式一致）
+import "../registry/interval/0.1.0/interval.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var a = iv_new(1, 5).unwrap()
+    var b = iv_new(4, 8).unwrap()
+    var c = iv_new(10, 20).unwrap()
+    # 交集 / 重叠
+    expect(iv_overlap(a, b), "a/b 重叠")
+    expect(not iv_overlap(a, c), "a/c 不重叠")
+    expect(not iv_overlap(b, c), "b/c 不重叠")
+    var ix = iv_intersect(a, b).unwrap()
+    expect(ix["lo"] == 4 and ix["hi"] == 5, "交集 [4,5], got " + str(ix))
+    expect(iv_intersect(a, c).is_err(), "无交集 Err")
+    # 包含
+    expect(iv_contains(a, 1) and iv_contains(a, 5) and iv_contains(a, 3), "端点 + 内部")
+    expect(not iv_contains(a, 6) and not iv_contains(a, 0), "外部")
+    expect(iv_contains_iv(a, iv_new(2, 4).unwrap()), "a 含子区间")
+    expect(not iv_contains_iv(a, b), "a 不含 b")
+    # 合并
+    var m = iv_merge([iv_new(1, 2).unwrap(), iv_new(5, 7).unwrap(), iv_new(3, 4).unwrap()]).unwrap()
+    expect(len(m) == 3, "互不重叠 3 段，got " + str(len(m)))
+    var m1 = iv_merge([iv_new(1, 4).unwrap(), iv_new(2, 3).unwrap(), iv_new(6, 9).unwrap(), iv_new(8, 10).unwrap()]).unwrap()
+    expect(len(m1) == 2 and m1[0]["lo"] == 1 and m1[0]["hi"] == 4 and m1[1]["lo"] == 6 and m1[1]["hi"] == 10,
+        "重叠合并 [1,4]+[6,10]，got " + str(m1))
+    var m2 = iv_merge([iv_new(1, 3).unwrap(), iv_new(2, 6).unwrap(), iv_new(5, 10).unwrap()]).unwrap()
+    expect(len(m2) == 1 and m2[0]["lo"] == 1 and m2[0]["hi"] == 10, "全合并 [1,10]")
+    expect(iv_merge([]).unwrap() == [], "空列表")
+    # 参数校验
+    expect(iv_new(5, 1).is_err(), "lo>hi Err")
+    print("interval: PASS")
+    return Ok(0)

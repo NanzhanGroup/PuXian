@@ -1,0 +1,44 @@
+# ============================================================
+# 普贤生态库：registry/zlib —— zlib 压缩（RFC 1950）
+# ------------------------------------------------------------
+# 纯函数封装（无 IO、无状态），调用官方 C-FFI（M42 extern def）：
+#   zl_compress(data, level=6) → Ok(bytes) | Err
+#   zl_uncompress(data)        → Ok(bytes) | Err
+#   zl_crc32(data)             → Ok(int)  （IEEE CRC-32，同 zlib.crc32）
+# 底层：import "c/zlib" → extern def zlib_compress/uncompress/crc32
+#   （编译轨可用；解释轨 pxi FFI 表未注册 zlib → 返回 Err，登记 PX-DEF-035）
+# level 0..9（0 不压缩 / 6 默认）；level 由本库先校验，避免原生 px_error 杀进程。
+# 数据面无状态：压缩率/时长由官方 C 实现承担，纯 .px 不做二次压缩。
+# ============================================================
+import "c/zlib"
+extern def zlib_crc32(data) -> int
+extern def zlib_compress(data, level) -> bytes
+extern def zlib_uncompress(data) -> bytes
+
+# 解释轨 FFI 未注册 → Err；编译轨返回 bytes
+def zl_compress(data, level=6):
+    if level < 0 or level > 9:
+        return Err("zlib: level 须在 0..9，got " + str(level))
+    var r = zlib_compress(data, level)
+    if type(r) == "bytes":
+        return Ok(r)
+    if type(r) == "result" and r.is_err():
+        return Err(r.err())
+    return Err("zlib: 压缩失败")
+
+# 解压：编译轨失败返回 null → Err；解释轨 FFI 未注册 → Err
+def zl_uncompress(data):
+    var r = zlib_uncompress(data)
+    if type(r) == "bytes":
+        return Ok(r)
+    if type(r) == "result" and r.is_err():
+        return Err(r.err())
+    return Err("zlib: 解压失败（可能非 zlib 流）")
+
+def zl_crc32(data):
+    var r = zlib_crc32(data)
+    if type(r) == "int":
+        return Ok(r)
+    if type(r) == "result" and r.is_err():
+        return Err(r.err())
+    return Err("zlib: crc32 失败")

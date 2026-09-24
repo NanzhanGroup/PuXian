@@ -1,0 +1,47 @@
+# set.px 测试：集合运算（双模式一致）
+import "../registry/set/0.1.0/set.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # 基本增删查
+    var s = st_new()
+    st_add(s, "a")
+    st_add(s, "b")
+    st_add(s, "a")
+    expect(st_len(s) == 2, "len=2, got " + str(st_len(s)))
+    expect(st_has(s, "a") and st_has(s, "b"), "has a/b")
+    st_discard(s, "a")
+    expect(not st_has(s, "a") and st_has(s, "b"), "discard a")
+    st_discard(s, "nope")
+    expect(st_len(s) == 1, "discard 不存在保持 len=1")
+    # 非 string 元素
+    expect(st_has(s, 1) == false, "int 元素 has=false")
+    # from_list 去重 / to_list
+    var t = st_from_list(["x", "y", "x", "z"])
+    expect(st_len(t) == 3, "from_list 去重 len=3")
+    var tl = st_to_list(t)
+    expect(len(tl) == 3, "to_list len=3")
+    # 集合运算
+    var a = st_from_list(["1", "2", "3"])
+    var b = st_from_list(["2", "3", "4"])
+    var u = st_union(a, b)
+    expect(st_len(u) == 4 and st_has(u, "1") and st_has(u, "4"), "union 4")
+    var it = st_intersection(a, b)
+    expect(st_len(it) == 2 and st_has(it, "2") and st_has(it, "3"), "intersection 2")
+    var df = st_difference(a, b)
+    expect(st_len(df) == 1 and st_has(df, "1"), "difference {1}")
+    var df2 = st_difference(b, a)
+    expect(st_len(df2) == 1 and st_has(df2, "4"), "difference {4}")
+    # subset
+    expect(st_subset(it, a), "subset it ⊆ a")
+    expect(not st_subset(a, it), "a 不 ⊆ it")
+    expect(st_subset(st_new(), a), "空集 ⊆ a")
+    expect(st_subset(a, a), "a ⊆ a")
+    # 链式 add
+    var c = st_new()
+    st_add(st_add(c, "p"), "q")
+    expect(st_has(c, "p") and st_has(c, "q"), "链式 add")
+    print("set: PASS")
+    return Ok(0)

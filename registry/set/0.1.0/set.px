@@ -1,0 +1,105 @@
+# ============================================================
+# 普贤生态库：registry/set —— 集合
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态，集合状态以 dict 显式传递），双模式一致。
+# 对齐 Python set / Rust HashSet / Go map[string]struct{} 心智（0.1.0）：
+#   st_new()              → dict     空集合
+#   st_add(s, v)          → s        插入（幂等，可链式）
+#   st_discard(s, v)      → s        删除（不存在也 ok）
+#   st_has(s, v)          → bool     是否存在（非 string 一律 false）
+#   st_len(s)             → int
+#   st_to_list(s)         → [str]
+#   st_from_list(l)       → dict     去重建集合
+#   st_union(a, b)        → dict
+#   st_intersection(a, b) → dict
+#   st_difference(a, b)   → dict     a - b
+#   st_subset(a, b)       → bool     a ⊆ b
+# 元素类型：string（dict 键限定 str，见 docs/语言缺陷.md 写库限制；
+#   int/bool/float 元素请自行转 str，或等官方泛型/任意键支持）。
+# ============================================================
+
+def st_new():
+    return {}
+
+# 插入（幂等）；非 string 由 dict 键约束响亮报错
+def st_add(s, v):
+    s.set(v, true)
+    return s
+
+def st_discard(s, v):
+    if type(v) != "string":
+        return s
+    if s.has(v):
+        s.remove(v)
+    return s
+
+def st_has(s, v):
+    if type(v) != "string":
+        return false
+    return s.has(v)
+
+def st_len(s):
+    return len(s)
+
+def st_to_list(s):
+    return s.keys()
+
+def st_from_list(l):
+    var s = {}
+    var i = 0
+    while i < len(l):
+        var v = l[i]
+        if type(v) == "string":
+            s.set(v, true)
+        i += 1
+    return s
+
+# 复制一个集合（dict 浅拷贝：键为 string 值恒 true，逐键重建即深）
+def st_clone(s):
+    var r = {}
+    var ks = s.keys()
+    var i = 0
+    while i < len(ks):
+        r.set(ks[i], true)
+        i += 1
+    return r
+
+def st_union(a, b):
+    var r = st_clone(a)
+    var ks = b.keys()
+    var i = 0
+    while i < len(ks):
+        r.set(ks[i], true)
+        i += 1
+    return r
+
+def st_intersection(a, b):
+    var r = {}
+    var ks = a.keys()
+    var i = 0
+    while i < len(ks):
+        var k = ks[i]
+        if b.has(k):
+            r.set(k, true)
+        i += 1
+    return r
+
+def st_difference(a, b):
+    var r = {}
+    var ks = a.keys()
+    var i = 0
+    while i < len(ks):
+        var k = ks[i]
+        if not b.has(k):
+            r.set(k, true)
+        i += 1
+    return r
+
+def st_subset(a, b):
+    var ks = a.keys()
+    var i = 0
+    while i < len(ks):
+        if not b.has(ks[i]):
+            return false
+        i += 1
+    return true

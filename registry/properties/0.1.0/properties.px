@@ -1,0 +1,129 @@
+# ============================================================
+# 普贤生态库：registry/properties —— Java .properties 解析
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Java java.util.Properties / Go gopkg.in/ini.v1（properties 面）心智（0.1.0）：
+#   pr_parse(s) → Ok(dict) | Err   解析属性文本
+#   pr_get(cfg, k) → Ok(str) | Err 取值（缺失 Err，响亮）
+#   pr_has(cfg, k) → bool
+#   pr_keys(cfg)  → [str]
+# 支持：
+#   - 分隔符 `=` / `:` / 空白；键两侧与值首尾去空白
+#   - 注释 `#` / `!` 开头整行；空行跳过
+#   - 行续行（行尾单个反斜杠 + 下前行首空白去净）
+#   - 值转义：\n \t \r \\ \: \= \ 空格；\uXXXX（Unicode）
+# ============================================================
+
+# 去首尾空白（空格/制表）
+def pr_trim(s):
+    var st = 0
+    var en = len(s)
+    while st < en and (s[st] == " " or s[st] == "\t"):
+        st += 1
+    while en > st and (s[en - 1] == " " or s[en - 1] == "\t"):
+        en -= 1
+    return s[st:en]
+
+# 值转义
+def pr_hexval(c):
+    if c >= "0" and c <= "9":
+        return ord(c) - 48
+    if c >= "a" and c <= "f":
+        return ord(c) - 87
+    if c >= "A" and c <= "F":
+        return ord(c) - 55
+    return -1
+
+def pr_unescape(s):
+    var out = ""
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        if c == "\\" and i + 1 < len(s):
+            var n = s[i + 1]
+            if n == "n":
+                out = out + "\n"
+                i = i + 2
+                continue
+            if n == "t":
+                out = out + "\t"
+                i = i + 2
+                continue
+            if n == "r":
+                out = out + "\r"
+                i = i + 2
+                continue
+            if n == "u" and i + 5 < len(s):
+                var h1 = pr_hexval(s[i + 2])
+                var h2 = pr_hexval(s[i + 3])
+                var h3 = pr_hexval(s[i + 4])
+                var h4 = pr_hexval(s[i + 5])
+                if h1 >= 0 and h2 >= 0 and h3 >= 0 and h4 >= 0:
+                    var cp = h1 * 4096 + h2 * 256 + h3 * 16 + h4
+                    out = out + chr(cp)
+                    i = i + 6
+                    continue
+            # 其它（\\ \: \= \ 空格）→ 原字符
+            out = out + n
+            i = i + 2
+            continue
+        out = out + c
+        i += 1
+    return out
+
+# 一行 → [key, value]（分隔符 `=` / `:` / 空白）
+def pr_split(ln):
+    var i = 0
+    while i < len(ln):
+        var c = ln[i]
+        if c == "\\":
+            i = i + 2
+            continue
+        if c == "=" or c == ":":
+            var key = pr_trim(ln[0:i])
+            var val = pr_trim(ln[i + 1:len(ln)])
+            return [key, val]
+        if c == " " or c == "\t":
+            var key2 = pr_trim(ln[0:i])
+            var rest = pr_trim(ln[i:len(ln)])
+            if len(rest) > 0 and (rest[0] == "=" or rest[0] == ":"):
+                rest = pr_trim(rest[1:len(rest)])
+            return [key2, rest]
+        i += 1
+    return [pr_trim(ln), ""]
+
+def pr_parse(s):
+    var raw = split(s, "\n")
+    var cfg = {}
+    var i = 0
+    while i < len(raw):
+        var ln = raw[i]
+        # 行续行：行尾单反斜杠
+        while len(ln) > 0 and ln[len(ln) - 1] == "\\" and not (len(ln) >= 2 and ln[len(ln) - 2] == "\\"):
+            if i + 1 < len(raw):
+                i = i + 1
+                ln = ln[0:len(ln) - 1] + pr_trim(raw[i])
+            else:
+                break
+        var t = pr_trim(ln)
+        if len(t) == 0:
+            i += 1
+            continue
+        if t[0] == "#" or t[0] == "!":
+            i += 1
+            continue
+        var kv = pr_split(t)
+        cfg.set(kv[0], pr_unescape(kv[1]))
+        i += 1
+    return Ok(cfg)
+
+def pr_get(cfg, k):
+    if cfg.has(k):
+        return Ok(cfg[k])
+    return Err("properties: 无键 " + k)
+
+def pr_has(cfg, k):
+    return cfg.has(k)
+
+def pr_keys(cfg):
+    return cfg.keys()

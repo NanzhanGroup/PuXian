@@ -1,0 +1,25 @@
+# num2words.px 测试：英文数字转单词（双模式一致）
+import "../registry/num2words/0.1.0/num2words.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    expect(nw_convert(0).unwrap() == "zero", "zero")
+    expect(nw_convert(1).unwrap() == "one", "one")
+    expect(nw_convert(13).unwrap() == "thirteen", "thirteen")
+    expect(nw_convert(20).unwrap() == "twenty", "twenty")
+    expect(nw_convert(42).unwrap() == "forty-two", "forty-two")
+    expect(nw_convert(100).unwrap() == "one hundred", "one hundred")
+    expect(nw_convert(115).unwrap() == "one hundred and fifteen", "one hundred and fifteen")
+    expect(nw_convert(1000).unwrap() == "one thousand", "one thousand")
+    expect(nw_convert(1105).unwrap() == "one thousand one hundred and five", "1105")
+    expect(nw_convert(1234567).unwrap() == "one million two hundred and thirty-four thousand five hundred and sixty-seven",
+        "1234567: " + nw_convert(1234567).unwrap())
+    expect(nw_convert(1000000000).unwrap() == "one billion", "one billion")
+    expect(nw_convert(999).unwrap() == "nine hundred and ninety-nine", "999")
+    expect(nw_convert(-42).unwrap() == "minus forty-two", "minus forty-two")
+    expect(nw_convert(0 - 0) == nw_convert(0), "0 == -0")
+    expect(nw_convert("42").is_err(), "非 int Err")
+    print("num2words: PASS")
+    return Ok(0)
