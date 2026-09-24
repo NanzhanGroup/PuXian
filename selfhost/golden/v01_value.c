@@ -51,7 +51,7 @@ static LXValue fn_v_str(LXValue* args, int nargs, void* ctx) {
         _v5 = px_list_n((LXValue[]){}, 0);
         px_srcline(34);
         LXValue _t11 = _v3;
-        int _il1 = (int)px_len(_t11);
+        int _il1 = px_iter_prepare(_t11);
         for (int _t12 = 0; _t12 < _il1; _t12++) {
             px_iter_ck(_t11, _il1);
             _v6 = px_iter_at(_t11, px_int(_t12));
@@ -66,7 +66,7 @@ static LXValue fn_v_str(LXValue* args, int nargs, void* ctx) {
         _v5 = px_list_n((LXValue[]){}, 0);
         px_srcline(39);
         LXValue _t13 = _v3;
-        int _il2 = (int)px_len(_t13);
+        int _il2 = px_iter_prepare(_t13);
         for (int _t14 = 0; _t14 < _il2; _t14++) {
             px_iter_ck(_t13, _il2);
             _v6 = px_iter_at(_t13, px_int(_t14));
@@ -83,7 +83,7 @@ static LXValue fn_v_str(LXValue* args, int nargs, void* ctx) {
         _v7 = px_method(_v3, "keys", (LXValue[]){}, 0);
         px_srcline(45);
         LXValue _t15 = _v7;
-        int _il3 = (int)px_len(_t15);
+        int _il3 = px_iter_prepare(_t15);
         for (int _t16 = 0; _t16 < _il3; _t16++) {
             px_iter_ck(_t15, _il3);
             _v8 = px_iter_at(_t15, px_int(_t16));
@@ -164,7 +164,7 @@ static LXValue fn_v_eq(LXValue* args, int nargs, void* ctx) {
         }
         px_srcline(73);
         LXValue _t33 = px_call(px_get_global("range"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){_v17}, 1)}, 1);
-        int _il4 = (int)px_len(_t33);
+        int _il4 = px_iter_prepare(_t33);
         for (int _t34 = 0; _t34 < _il4; _t34++) {
             px_iter_ck(_t33, _il4);
             _v21 = px_iter_at(_t33, px_int(_t34));
@@ -186,7 +186,7 @@ static LXValue fn_v_eq(LXValue* args, int nargs, void* ctx) {
         }
         px_srcline(80);
         LXValue _t36 = px_call(px_get_global("range"), (LXValue[]){px_call(px_get_global("len"), (LXValue[]){_v17}, 1)}, 1);
-        int _il5 = (int)px_len(_t36);
+        int _il5 = px_iter_prepare(_t36);
         for (int _t37 = 0; _t37 < _il5; _t37++) {
             px_iter_ck(_t36, _il5);
             _v21 = px_iter_at(_t36, px_int(_t37));
@@ -210,7 +210,7 @@ static LXValue fn_v_eq(LXValue* args, int nargs, void* ctx) {
         }
         px_srcline(88);
         LXValue _t39 = _v22;
-        int _il6 = (int)px_len(_t39);
+        int _il6 = px_iter_prepare(_t39);
         for (int _t40 = 0; _t40 < _il6; _t40++) {
             px_iter_ck(_t39, _il6);
             _v23 = px_iter_at(_t39, px_int(_t40));
@@ -365,7 +365,7 @@ static LXValue fn_v_arith(LXValue* args, int nargs, void* ctx) {
             _v58 = px_list_n((LXValue[]){}, 0);
             px_srcline(146);
             LXValue _t67 = _v54;
-            int _il7 = (int)px_len(_t67);
+            int _il7 = px_iter_prepare(_t67);
             for (int _t68 = 0; _t68 < _il7; _t68++) {
                 px_iter_ck(_t67, _il7);
                 _v59 = px_iter_at(_t67, px_int(_t68));
@@ -374,7 +374,7 @@ static LXValue fn_v_arith(LXValue* args, int nargs, void* ctx) {
             }
             px_srcline(148);
             LXValue _t69 = _v55;
-            int _il8 = (int)px_len(_t69);
+            int _il8 = px_iter_prepare(_t69);
             for (int _t70 = 0; _t70 < _il8; _t70++) {
                 px_iter_ck(_t69, _il8);
                 _v59 = px_iter_at(_t69, px_int(_t70));
@@ -981,7 +981,7 @@ int main(int argc, char** argv) {
     px_set_global("f_inf", px_get_global("bigv"));
     px_srcline(40);
     LXValue _t147 = px_call(px_get_global("range"), (LXValue[]){px_int(40LL)}, 1);
-    int _il9 = (int)px_len(_t147);
+    int _il9 = px_iter_prepare(_t147);
     for (int _t148 = 0; _t148 < _il9; _t148++) {
         px_iter_ck(_t147, _il9);
         px_set_global("i", px_iter_at(_t147, px_int(_t148)));

@@ -1,0 +1,54 @@
+# M203 探针 · 正例①：迭代 / 索引 / 索引赋值在**合法**输入上的三轨一致性（零回归面）
+def p(tag, v):
+    print(tag + "=" + str(v))
+
+def main():
+    # ---- 迭代：list / tuple / str / bytes / dict / 生成器 / range ----
+    var acc = ""
+    for x in [1, 2, 3]:
+        acc = acc + str(x)
+    p("i01", acc)
+    acc = ""
+    for x in (4, 5):
+        acc = acc + str(x)
+    p("i02", acc)
+    acc = ""
+    for x in "中文":
+        acc = acc + x
+    p("i03", acc)
+    acc = ""
+    for b in bytes("AB"):
+        acc = acc + str(b) + ","
+    p("i04", acc)
+    acc = ""
+    for k in {"b": 2, "a": 1}:
+        acc = acc + k
+    p("i05", acc)
+    acc = ""
+    for x in (i * 2 for i in [1, 2]):
+        acc = acc + str(x)
+    p("i06", acc)
+    acc = ""
+    for x in range(3):
+        acc = acc + str(x)
+    p("i07", acc)
+    # 推导式（C 轨另一条发射点）
+    p("i08", [x for x in [1, 2, 3]])
+    p("i09", {k: 1 for k in ["a", "b"]})
+    p("i10", [c for c in "ab"])
+    # ---- 索引：list / tuple / str / bytes / dict ----
+    p("x01", [1, 2, 3][1])
+    p("x02", (7, 8)[0])
+    p("x03", "abc"[2])
+    p("x04", bytes("A")[0])
+    p("x05", {"k": 9}["k"])
+    # ---- 索引赋值：list / dict ----
+    let l = [1, 2, 3]
+    l[1] = 5
+    p("a01", l)
+    let d = {"k": 1}
+    d["k"] = 2
+    p("a02", d)
+    # ⚠️ 刻意**不**在这里放复合赋值 `m[0] += 10`：C 轨在它上面有**独立**缺陷
+    #   （缺陷 245 · 复合赋值运算符被静默丢弃：`m[0] += 10` 实测 ⇒ `[10,2,3]`）
+    #   ⇒ 归 M204 专项（本门只判「迭代 / 索引 / 索引赋值」的词条与三轨一致）。

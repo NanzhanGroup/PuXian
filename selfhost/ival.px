@@ -440,7 +440,8 @@ def i_iter(v, pos):
         return Ok(v.keys())
     if t == "generator":
         return Ok(v["__gen__"])
-    return Err(i_r1002("此类型不可迭代", pos))
+    # M203（缺陷 243-b）：带**实际类型**；编译轨不再借 `len`（见 px_iter_prepare）
+    return Err(i_r1002("此类型不可迭代: " + t, pos))
 # ---------- 索引 ----------
 def i_as_index(idx, n, pos):
     if type(idx) == "int":
@@ -490,7 +491,8 @@ def i_index(v, idx, pos):
         if v.has(idx):
             return Ok(v[idx])
         return Err(i_r1008("字典没有键 '" + idx + "'", pos))
-    return Err(i_r1002("此类型不支持索引", pos))
+    # M203（缺陷 243-a）：带**实际类型**（编译轨 px_index 一直如此）⇒ 三轨同文
+    return Err(i_r1002("此类型不支持索引: " + t, pos))
 # ---------- 字段访问（对齐 eval_field） ----------
 def i_field(v, name, pos):
     let t = i_type_name(v)

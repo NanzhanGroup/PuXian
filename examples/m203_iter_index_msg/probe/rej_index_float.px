@@ -1,0 +1,3 @@
+# M203 拒绝侧⑤：不可索引（float）
+print("before")
+print(1.5[0])

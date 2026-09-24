@@ -1164,7 +1164,7 @@ def bc_emit_comp(func, kind, elems, cond, rv, clauses, ci):
     let nslot = bc_tmp(func)
     while func["next_slot"] < fnl + 2:
         bc_tmp(func)
-    let gl = bc_g_add(g_bcm["globals"], "len")
+    let gl = bc_g_add(g_bcm["globals"], "__iter_len")   # M203（缺陷 243-b）：迭代长度走统一入口（不再借 len → 「len 不支持类型 int」指不到真因）
     bc_emit_inst(func, "GETG", fnl, gl, 0)
     bc_emit_inst(func, "MOV", fnl + 1, its, 0)
     bc_emit_inst(func, "CALL", nslot, fnl, 1)
@@ -1909,7 +1909,7 @@ def bc_emit_for(stmt, func):
     let nslot = bc_tmp(func)
     while func["next_slot"] < fnl + 2:
         bc_tmp(func)
-    let gl = bc_g_add(g_bcm["globals"], "len")
+    let gl = bc_g_add(g_bcm["globals"], "__iter_len")   # M203（缺陷 243-b）：迭代长度走统一入口（不再借 len → 「len 不支持类型 int」指不到真因）
     bc_emit_inst(func, "GETG", fnl, gl, 0)
     bc_emit_inst(func, "MOV", fnl + 1, its, 0)
     bc_emit_inst(func, "CALL", nslot, fnl, 1)

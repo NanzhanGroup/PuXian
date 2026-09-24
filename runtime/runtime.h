@@ -316,6 +316,10 @@ void px_dict_set_checked(LXValue dict, LXValue k, LXValue v);
 LXValue px_dict_get(LXValue dict, const char* key);
 bool px_dict_has(LXValue dict, const char* key);
 int px_len(LXValue v);
+// M203（缺陷 243-b）：迭代前的**统一入口** —— 可迭代 ⇒ 长度；否则
+//   `R1002 此类型不可迭代: <t>`（修前编译两轨借 px_len ⇒ 报 `len 不支持类型 int`，
+//   消息指向用户**从未写过的** `len`）。
+int px_iter_prepare(LXValue v);
 // 大小写不敏感取 dict 键（HTTP 头等场景；未找到返回 px_null）——M28 起公共
 LXValue px_dict_get_ci(LXValue d, const char* key);
 

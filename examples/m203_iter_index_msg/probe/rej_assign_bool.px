@@ -1,0 +1,4 @@
+# M203 拒绝侧⑧：索引赋值目标不可赋值（bool）
+print("before")
+let x = true
+x[0] = 5
