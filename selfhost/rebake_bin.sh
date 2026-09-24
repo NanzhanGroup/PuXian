@@ -135,10 +135,37 @@ check_neg_residue() {
     echo "✅ 负控残留自检通过（selfhost/*.px 无未提交改动 · 无负控标记）"
     return 0
 }
+# ---- M201：**烘前/烘后源码快照**（防"烘到一半源码被改"）----
+# 事故（2026-09-24 · M201 轮）：我用 kill 掐掉正在跑的 `m116_gates.sh`，但**它的子门进程
+#   继续存活**，仍在 runtime/runtime.c 上**打/撤负控补丁**（`NEGCTL-149A/B`）。我随后
+#   `git checkout --` 确认干净、再 `--rebake-all` —— 烘的过程中那个子门**又打了一次补丁**
+#   ⇒ `tools/px build --full` 为"被污染的 runtime 源"建了缓存并**被链进 14 件产物**：
+#   内嵌 `PXRT-9810c781935197be` ≠ 当前源码 rt_key `ee66e8aa346f02af`（`--check-all` 才抓到）。
+# 判据（与"负控残留自检"正交：那个查的是**烘前**状态，这个查的是**烘期间有没有人动过**）：
+#   烘前把 runtime/*.c/h + selfhost/*.px 的内容哈希存一份，**烘完再算一次**；不一致即判红
+#   （并列出差异文件），要求人查"是不是还有子门在跑"（`ps aux | grep verify.sh`）。
+#   为什么值得：`--check-all` 只比**指纹**、不比行为 —— 这次是靠 `PXRT` 失配才发现，
+#   差一步就把"被污染源码烘出的引擎"提交进仓库。
+SRC_SNAP_FILES() {
+    printf '%s\n' "$ROOT"/runtime/*.c "$ROOT"/runtime/*.h "$ROOT"/selfhost/*.px 2>/dev/null
+}
+src_snapshot() {   # 打印"路径<TAB>sha256"清单（排序稳定）
+    local f
+    for f in $(SRC_SNAP_FILES); do
+        [ -f "$f" ] || continue
+        printf '%s\t%s\n' "${f#$ROOT/}" "$(sha256sum "$f" | cut -c1-16)"
+    done
+}
+
 case "$MODE" in
     rebake-all|check-all)
         check_neg_residue || exit 3 ;;
 esac
+
+SNAP_BEFORE=""
+if [ "$MODE" = "rebake-all" ]; then
+    SNAP_BEFORE="$(src_snapshot)"
+fi
 
 
 # ---- 源码链指纹（口径与 bootstrap_prove_bc.sh 的 SRC_CHAIN 对齐）----
@@ -685,4 +712,19 @@ if [ "$MODE" = "rebake-all" ]; then
         echo "   （失败件保持原样、不影响已成功件；逐件日志见 /tmp/rebake_<件名>.*）"
     fi
     echo "   ⇒ 验收：./selfhost/rebake_bin.sh --check-all"
+fi
+
+# ---- M201：烘后源码快照比对（"烘到一半有人动源码" ⇒ 判红）----
+if [ "$MODE" = "rebake-all" ] && [ -n "$SNAP_BEFORE" ]; then
+    SNAP_AFTER="$(src_snapshot)"
+    if [ "$SNAP_BEFORE" != "$SNAP_AFTER" ]; then
+        echo ""
+        echo "❌ 烘期间**源码发生了变化** —— 本次产物不可信（不得提交/发版）："
+        diff <(printf '%s\n' "$SNAP_BEFORE") <(printf '%s\n' "$SNAP_AFTER") | sed 's/^/     /'
+        echo "   ⇒ 常见原因：**上一次门运行的子进程还活着**（kill 顶层不杀子门）——"
+        echo "      `ps aux | grep -E 'verify.sh|m116_gates'` 确认清空，再 git status 看残留，然后重烘。"
+        exit 4
+    fi
+    echo ""
+    echo "✅ 烘期间源码未变（烘前/烘后快照一致 · $(printf '%s\n' "$SNAP_BEFORE" | wc -l) 个文件）"
 fi
