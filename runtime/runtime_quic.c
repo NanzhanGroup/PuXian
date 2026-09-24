@@ -1410,6 +1410,10 @@ static LXValue bi_quic_connect(LXValue* args, int nargs, void* ctx) {
     //   修前 `nargs >= 4 ? 4 : 3` 会把**第 5 个起**的实参静默丢掉。
     if (nargs != 3 && nargs != 4)
         px_error("R1002: quic_connect 需要 (ip: str, port: int, alpn: str[, session: str]) 参数");
+    // M199（缺陷 237）：非 str 的 session 此前静默当 NULL（= 静默放弃会话恢复）。
+    //   null 仍表示「不恢复」（可选实参约定），只有**别**的类型才响亮。
+    if (nargs >= 4 && args[3].type != PX_STR && args[3].type != PX_NULL)
+        px_error("R1002: quic_connect 的 session 需要字符串，实际是 %s", px_type_name(args[3]));
     return quic_conn_connect_impl(args, nargs >= 4 ? 4 : 3, nargs >= 4 && args[3].type == PX_STR
                                   ? args[3].as.obj->as.str.data : NULL);
 }
