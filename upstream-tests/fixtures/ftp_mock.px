@@ -1,0 +1,179 @@
+# ============================================================
+# upstream-tests/fixtures/ftp_mock.px —— FTP 服务端 fixture（**本仓自建**，非上游文件）
+# ------------------------------------------------------------
+# 为什么需要它：上游 `tests/ftp_test.px` 头注释写「真实 pyftpdlib 服务」，但上游仓库**不带服务端**
+#   （当时用 Python 的 pyftpdlib 手搭，未入库）⇒ 本仓用普贤自己写一个 RFC 959 子集服务端，
+#   不引入 python3/pyftpdlib 之类的新依赖。
+#
+# 契约（严格按 `tests/ftp_test.px` 的断言）：
+#   220 问候；USER px → 331；PASS secret → 230（其它 → 530，用于「错误口令」用例）；
+#   PWD → 257 "/"；TYPE I → 200；PASV → 227（数据口固定 **2122**）；
+#   LIST → 150 + 数据行（含 hello.txt）+ 226；RETR → 150 + 内容 + 226；
+#   CWD sub / CWD / → 250；STOR → 150 + 收数据 + 226（**可再 RETR 读回**，故用进程内文件表）；
+#   QUIT → 221。
+#   ⚠️ 用例会在**主连接仍开着**时再开一条连接（错误口令用例）⇒ 每条控制连接一个 `spawn`，
+#      否则第二条连接要等第一条 QUIT 才被 accept（用例会死等）。
+#
+# 用法：./ftp_mock            （控制 127.0.0.1:2121 · 数据 127.0.0.1:2122）
+# ============================================================
+
+var FF_CTL = 2121
+var FF_DAT = 2122
+var FF_LFD = tcp_listen(FF_CTL)
+# 2122 = 8 * 256 + 74 ⇒ PASV 回复里的 (h1,h2,h3,h4,p1,p2) = (127,0,0,1,8,74)
+var FF_DFD = tcp_listen(FF_DAT)
+print("ftpmock: control " + str(FF_CTL) + " · data " + str(FF_DAT))
+
+# 进程内文件表（路径 → 内容）；STOR 后可 RETR 读回
+var FF_FILES = {
+    "/hello.txt": "hello from ftp 普贤\n",
+    "/sub/nested.txt": "nested\n"
+}
+var FF_UPLOADED = {}
+
+def ff_read_line(fd):
+    var buf = bytes("")
+    while true:
+        var r = tcp_recv_ex(fd, 1)
+        if not r["ok"] or r["eof"]:
+            return ["", true]
+        var d = r["data"]
+        if type(d) == "string":
+            d = bytes(d)
+        buf = bytes_concat(buf, d)
+        var bl = bytes_len(buf)
+        if bl > 0 and bytes_get(buf, bl - 1) == 10:
+            var end = bl - 1
+            if end >= 1 and bytes_get(buf, end - 1) == 13:
+                end = end - 1
+            return [bytes_to_str(bytes_slice(buf, 0, end)), false]
+        if bl > 8192:
+            return [bytes_to_str(buf), false]
+
+def ff_send(fd, s):
+    tcp_send_ex(fd, bytes(s + "\r\n"))
+
+# 读数据连接直到对端关闭
+def ff_drain(dfd):
+    var buf = bytes("")
+    while true:
+        var r = tcp_recv_ex(dfd, 65536)
+        if not r["ok"] or r["eof"]:
+            break
+        var d = r["data"]
+        if type(d) == "string":
+            d = bytes(d)
+        buf = bytes_concat(buf, d)
+    return buf
+
+def ff_join(cwd, name):
+    if name.starts_with("/"):
+        return name
+    if cwd == "/":
+        return "/" + name
+    return cwd + "/" + name
+
+# 路径是否为 cwd 的**直接子项** → [是否, 显示名]
+def ff_child(p, cwd):
+    if cwd == "/":
+        if not p.starts_with("/"):
+            return [false, ""]
+        var rest = p[1:len(p)]
+        if rest.find("/") >= 0:
+            return [false, ""]
+        return [true, rest]
+    if not p.starts_with(cwd + "/"):
+        return [false, ""]
+    var rest2 = p[len(cwd) + 1:len(p)]
+    if rest2.find("/") >= 0:
+        return [false, ""]
+    return [true, rest2]
+
+def ff_listing(cwd):
+    var out = []
+    var ks = FF_FILES.keys()
+    var i = 0
+    while i < len(ks):
+        var ch = ff_child(ks[i], cwd)
+        if ch[0]:
+            out.append("-rw-r--r-- 1 px px " + str(len(FF_FILES[ks[i]])) + " Jan  1 00:00 " + ch[1])
+        i += 1
+    return out
+
+def ff_handle(cfd):
+    ff_send(cfd, "220 PuXian FTP fixture ready")
+    var cwd = "/"
+    var authed = false
+    while true:
+        var l = ff_read_line(cfd)
+        if l[1]:
+            break
+        var line = l[0]
+        var sp = line.find(" ")
+        var cmd = line
+        var arg = ""
+        if sp > 0:
+            cmd = line[0:sp]
+            arg = line[sp + 1:len(line)]
+        if cmd == "USER":
+            ff_send(cfd, "331 need password")
+        elif cmd == "PASS":
+            if arg == "secret":
+                authed = true
+                ff_send(cfd, "230 logged in")
+            else:
+                ff_send(cfd, "530 Login incorrect")
+        elif cmd == "PWD":
+            ff_send(cfd, "257 \"" + cwd + "\"")
+        elif cmd == "TYPE":
+            ff_send(cfd, "200 Type set")
+        elif cmd == "CWD":
+            if arg == "/":
+                cwd = "/"
+                ff_send(cfd, "250 CWD ok")
+            elif arg == "sub":
+                cwd = "/sub"
+                ff_send(cfd, "250 CWD ok")
+            else:
+                ff_send(cfd, "550 no such directory")
+        elif cmd == "PASV":
+            ff_send(cfd, "227 Entering Passive Mode (127,0,0,1,8,74)")
+        elif cmd == "LIST":
+            ff_send(cfd, "150 Here comes the directory listing")
+            var dfd = tcp_accept(FF_DFD)
+            var lines = ff_listing(cwd)
+            var i = 0
+            while i < len(lines):
+                tcp_send_ex(dfd, bytes(lines[i] + "\r\n"))
+                i += 1
+            tcp_close(dfd)
+            ff_send(cfd, "226 Directory send OK")
+        elif cmd == "RETR":
+            var rp = ff_join(cwd, arg)
+            if FF_FILES.has(rp):
+                ff_send(cfd, "150 Opening data connection")
+                var dfd2 = tcp_accept(FF_DFD)
+                tcp_send_ex(dfd2, bytes(FF_FILES[rp]))
+                tcp_close(dfd2)
+                ff_send(cfd, "226 Transfer complete")
+            else:
+                ff_send(cfd, "550 no such file")
+        elif cmd == "STOR":
+            var sp2 = ff_join(cwd, arg)
+            ff_send(cfd, "150 ready to receive")
+            var dfd3 = tcp_accept(FF_DFD)
+            var got = ff_drain(dfd3)
+            tcp_close(dfd3)
+            FF_FILES.set(sp2, bytes_to_str(got))
+            FF_UPLOADED.set(sp2, true)
+            ff_send(cfd, "226 Transfer complete")
+        elif cmd == "QUIT":
+            ff_send(cfd, "221 bye")
+            break
+        else:
+            ff_send(cfd, "502 not implemented")
+    tcp_close(cfd)
+
+while true:
+    var conn = tcp_accept(FF_LFD)
+    spawn ff_handle(conn)

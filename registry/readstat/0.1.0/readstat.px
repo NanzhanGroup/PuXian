@@ -1,0 +1,98 @@
+# ============================================================
+# 普贤生态库：registry/readstat —— 文本可读性测度
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python textstat / Go readability 心智（0.1.0）：
+#   rs_counts(s)      → {words, sentences, syllables}（音节按元音组近似）
+#   rs_flesch(s)      → Ok(float) | Err  Flesch Reading Ease
+#   rs_flesch_kincaid(s) → Ok(float) | Err  Grade level
+#   rs_grade(s)       → Ok(str)   "小学/初中/高中/大学/专业"（按 FK 档位）
+# 音节近似：元音（aeiouy）连续组计数，每组 ≥1；句子按 .!? 计（无则 1）。
+# 散点说明：值是启发式估计，文本语义/专名会偏差；用于相对对比而非绝对标准。
+# ============================================================
+
+def rs_words(s):
+    var out = []
+    var cur = ""
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        if c == " " or c == "\n" or c == "\t":
+            if cur != "":
+                out.append(cur)
+                cur = ""
+        else:
+            cur = cur + c
+        i += 1
+    if cur != "":
+        out.append(cur)
+    return out
+
+def rs_sentences(s):
+    var n = 0
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        if c == "." or c == "!" or c == "?":
+            n = n + 1
+        i += 1
+    if n == 0:
+        n = 1
+    return n
+
+def rs_vowel_groups(w):
+    var n = 0
+    var in_v = false
+    var i = 0
+    while i < len(w):
+        var c = to_lower(w[i])
+        var isv = c == "a" or c == "e" or c == "i" or c == "o" or c == "u" or c == "y"
+        if isv and not in_v:
+            n = n + 1
+            in_v = true
+        elif not isv:
+            in_v = false
+        i += 1
+    if n == 0:
+        n = 1
+    return n
+
+def rs_counts(s):
+    var ws = rs_words(s)
+    var syl = 0
+    var i = 0
+    while i < len(ws):
+        syl = syl + rs_vowel_groups(ws[i])
+        i += 1
+    return {"words": len(ws), "sentences": rs_sentences(s), "syllables": syl}
+
+def rs_flesch(s):
+    var c = rs_counts(s)
+    if c["words"] == 0:
+        return Err("readstat: 空文本")
+    var wps = float(c["words"]) / float(c["sentences"])
+    var spw = float(c["syllables"]) / float(c["words"])
+    return Ok(206.835 - 1.015 * wps - 84.6 * spw)
+
+def rs_flesch_kincaid(s):
+    var c = rs_counts(s)
+    if c["words"] == 0:
+        return Err("readstat: 空文本")
+    var wps = float(c["words"]) / float(c["sentences"])
+    var spw = float(c["syllables"]) / float(c["words"])
+    return Ok(0.39 * wps + 11.8 * spw - 15.59)
+
+def rs_grade(s):
+    var r = rs_flesch_kincaid(s)
+    if r.is_err():
+        return r
+    var g = r.unwrap()
+    if g < 4:
+        return Ok("小学")
+    if g < 8:
+        return Ok("初中")
+    if g < 11:
+        return Ok("高中")
+    if g < 16:
+        return Ok("大学")
+    return Ok("专业")

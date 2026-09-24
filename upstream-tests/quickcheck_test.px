@@ -1,0 +1,33 @@
+# quickcheck.px 测试：属性测试（双模式一致）
+import "../registry/quickcheck/0.1.0/quickcheck.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # int → str → int 往返（恒成立属性）
+    var p1 = fn(x):
+        return int(str(x)) == x
+    var r1 = qc_forall(qc_int(-100000, 100000), p1, 200)
+    expect(r1.is_ok() and r1.unwrap() == 200, "int 往返 200 次过, got " + str(r1))
+    # 列表长度在界内（gen 在界内 → 恒成立）
+    var p2 = fn(l):
+        return len(l) >= 0 and len(l) <= 5
+    var r2 = qc_forall(qc_list(qc_int(0, 9), 5), p2, 100)
+    expect(r2.is_ok(), "list 界内 100 次过")
+    # 字符串长度在界内
+    var p3 = fn(s):
+        return len(s) <= 10
+    var r3 = qc_forall(qc_str(10), p3, 100)
+    expect(r3.is_ok(), "str 界内 100 次过")
+    # 反例 → Err
+    var p4 = fn(x):
+        return x < 0
+    var r4 = qc_forall(qc_int(-5, 5), p4, 100)
+    expect(r4.is_err(), "必现反例 Err")
+    if r4.is_err():
+        print("  (expected) err=" + str(r4))
+    # 参数错误
+    expect(qc_forall(qc_int(0, 1), p1, 0).is_err(), "n=0 Err")
+    print("quickcheck: PASS")
+    return Ok(0)

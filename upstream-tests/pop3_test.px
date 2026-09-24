@@ -1,0 +1,41 @@
+# pop3.px 测试：真实自定义 POP3 服务（双模式一致）
+import "../registry/pop3/0.1.0/pop3.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def contains(s, sub):
+    return s.find(sub) >= 0
+def main():
+    var c = po_connect("127.0.0.1", 2110)
+    if c.is_err():
+        print("FAIL: connect: " + str(c))
+        exit(1)
+    var conn = c.unwrap()
+    # 登录（服务端 PASS ok 通过）
+    var lg = po_login(conn, "u", "ok")
+    if lg.is_err():
+        print("FAIL: login: " + str(lg))
+        exit(1)
+    # STAT
+    var st = po_stat(conn).unwrap()
+    expect(st["count"] == 2 and st["size"] == 100, "STAT 2/100, got " + str(st))
+    # LIST
+    var ls = po_list(conn).unwrap()
+    expect(len(ls) == 2 and ls[0]["num"] == 1 and ls[0]["size"] == 40, "LIST, got " + str(ls))
+    # RETR 1（含中文 + 点填充还原）
+    var m1 = po_retr(conn, 1).unwrap()
+    expect(contains(m1, "message one 普贤"), "RETR 1 内容")
+    expect(contains(m1, "Subject: one"), "RETR 1 头")
+    var m2 = po_retr(conn, 2).unwrap()
+    expect(contains(m2, "message two"), "RETR 2 内容")
+    # RETR 不存在 → Err
+    expect(po_retr(conn, 99).is_err(), "RETR 99 Err")
+    # QUIT
+    expect(po_quit(conn).is_ok(), "QUIT")
+    # 错误登录
+    var c2 = po_connect("127.0.0.1", 2110).unwrap()
+    expect(po_login(c2, "u", "badpass").is_err(), "错误口令 Err")
+    po_quit(c2)
+    print("pop3: PASS")
+    return Ok(0)

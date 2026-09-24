@@ -1,0 +1,147 @@
+# ============================================================
+# upstream-tests/fixtures/oauth2_mock.px —— OAuth2 令牌端点 fixture（**本仓自建**，非上游文件）
+# ------------------------------------------------------------
+# 为什么需要它：上游 `tests/oauth2_test.px` 打 `http://127.0.0.1:19090/token`，
+#   但上游仓库**不带任何服务端/fixture 脚本**（只有 Python 手搭的临时服务）。
+#   本仓纪律 = **不引入新依赖**（不用 python3/netcat）⇒ 用普贤自己写 mock 端点。
+#
+# 契约（严格按 `tests/oauth2_test.px` 的断言）：
+#   POST /token（application/x-www-form-urlencoded）
+#     · client_secret=WRONG            → 400 {"error":"invalid_client"}
+#     · grant_type=client_credentials  → 200 {"access_token":"mock_access_token_12345",
+#                                              "token_type":"Bearer","expires_in":3600,"scope":"read"}
+#     · grant_type=password            → 200 {"access_token":"mock_access_token_12345_pw", …}
+#   其它路径 → 404；非 POST → 405。
+#   200 响应带 Content-Length + Connection: close（客户端 http_request 按此收尾）。
+#
+# 用法：./oauth2_mock            （监听 127.0.0.1 的 19090）
+# ============================================================
+
+var OF_PORT = 19090
+var OF_LFD = tcp_listen(OF_PORT)
+print("oafix: listening " + str(OF_PORT))
+
+# ---- 底层读写 ----
+def of_recv_n(fd, n):
+    var buf = bytes("")
+    while bytes_len(buf) < n:
+        var r = tcp_recv_ex(fd, n - bytes_len(buf))
+        if not r["ok"]:
+            return buf
+        if r["eof"] or r["timeout"]:
+            return buf
+        var d = r["data"]
+        if type(d) == "string":
+            d = bytes(d)
+        buf = bytes_concat(buf, d)
+    return buf
+
+def of_read_headers(fd):
+    var buf = bytes("")
+    while true:
+        var r = tcp_recv_ex(fd, 1)
+        if not r["ok"] or r["eof"]:
+            break
+        var d = r["data"]
+        if type(d) == "string":
+            d = bytes(d)
+        buf = bytes_concat(buf, d)
+        if bytes_len(buf) >= 4 and bytes_to_str(bytes_slice(buf, bytes_len(buf) - 4, bytes_len(buf))) == "\r\n\r\n":
+            break
+    return bytes_to_str(buf)
+
+def of_header(hdrs, name):
+    var lines = split(hdrs, "\r\n")
+    var lname = to_lower(name)
+    var i = 0
+    while i < len(lines):
+        var ln = lines[i]
+        var p = ln.find(":")
+        if p > 0 and to_lower(trim(ln[0:p])) == lname:
+            return trim(ln[p + 1:len(ln)])
+        i += 1
+    return ""
+
+def of_form_get(body, key):
+    var parts = split(body, "&")
+    var i = 0
+    while i < len(parts):
+        var kv = split(parts[i], "=")
+        if len(kv) >= 2 and kv[0] == key:
+            return of_urldec(kv[1])
+        i += 1
+    return ""
+
+def of_hexval(c):
+    var v = "0123456789abcdef".find(to_lower(c))
+    if v < 0:
+        return -1
+    return v
+
+def of_urldec(s):
+    var out = ""
+    var i = 0
+    while i < len(s):
+        if s[i] == "%" and i + 3 <= len(s):
+            var hi = of_hexval(s[i + 1])
+            var lo = of_hexval(s[i + 2])
+            if hi < 0 or lo < 0:
+                return out
+            out = out + chr(hi * 16 + lo)
+            i += 3
+        else:
+            out = out + s[i]
+            i += 1
+    return out
+
+def of_respond(fd, code, body):
+    var reason = "OK"
+    if code == 400:
+        reason = "Bad Request"
+    elif code == 404:
+        reason = "Not Found"
+    elif code == 405:
+        reason = "Method Not Allowed"
+    var msg = "HTTP/1.1 " + str(code) + " " + reason + "\r\n" +
+              "Content-Type: application/json\r\n" +
+              "Content-Length: " + str(bytes_len(bytes(body))) + "\r\n" +
+              "Connection: close\r\n\r\n" + body
+    tcp_send_ex(fd, bytes(msg))
+
+# ---- 单个请求 ----
+def of_handle(cfd):
+    var hdrs = of_read_headers(cfd)
+    if len(hdrs) == 0:
+        tcp_close(cfd)
+        return
+    var line0 = split(hdrs, "\r\n")[0]
+    var hp = split(line0, " ")
+    var method = hp[0]
+    var path = hp[1]
+    var clen = 0
+    var cl = of_header(hdrs, "Content-Length")
+    if cl != "":
+        clen = int(cl)
+    var body = ""
+    if clen > 0:
+        body = bytes_to_str(of_recv_n(cfd, clen))
+    if path != "/token":
+        of_respond(cfd, 404, "{\"error\":\"not_found\"}")
+    elif method != "POST":
+        of_respond(cfd, 405, "{\"error\":\"method_not_allowed\"}")
+    else:
+        var gt = of_form_get(body, "grant_type")
+        var cs = of_form_get(body, "client_secret")
+        if cs == "WRONG":
+            of_respond(cfd, 400, "{\"error\":\"invalid_client\"}")
+        elif gt == "client_credentials":
+            of_respond(cfd, 200, "{\"access_token\":\"mock_access_token_12345\",\"token_type\":\"Bearer\",\"expires_in\":3600,\"scope\":\"read\"}")
+        elif gt == "password":
+            of_respond(cfd, 200, "{\"access_token\":\"mock_access_token_12345_pw\",\"token_type\":\"Bearer\",\"expires_in\":3600,\"scope\":\"read\"}")
+        else:
+            of_respond(cfd, 400, "{\"error\":\"unsupported_grant_type\"}")
+    tcp_close(cfd)
+
+while true:
+    var cfd = tcp_accept(OF_LFD)
+    of_handle(cfd)

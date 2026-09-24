@@ -44,7 +44,9 @@ def main():
     p("D1", int_to_bytes(300, 1))
     p("D2", int_to_bytes(-1, 2))
     p("D3", int_to_bytes(128, 1, "big", true))
-    p("D4", bytes_to_int(hex_to_bytes("aabbccddeeff00112233")))
+    # M201：`bytes_to_int` 的**长度越界**（>8）从"静默 null"改为**响亮 R1003** ⇒
+    #   该用例**不能再放在正例里**（会中止整个程序），已移到拒绝侧 `neg/b2i_len.px`。
+    #   要读更宽的整数用 `bytes_to_dec`（1..16 字节，精确十进制）。
     p("D5", bytes_to_int(hex_to_bytes("00")))
 
     # ---- ⑤ 往返定点（端序 × 符号 组合）----

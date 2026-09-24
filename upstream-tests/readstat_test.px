@@ -1,0 +1,34 @@
+# readstat.px 测试：可读性测度（双模式一致）
+import "../registry/readstat/0.1.0/readstat.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def close(a, b, eps):
+    var d = a - b
+    if d < 0:
+        d = 0 - d
+    return d < eps
+def main():
+    var t1 = "The quick brown fox jumps over the lazy dog."
+    var c = rs_counts(t1)
+    expect(c["words"] == 9 and c["sentences"] == 1, "9 词 1 句, got " + str(c))
+    # Flesch ≈ 103，FK ≈ 1.0（松散区间，音节近似）
+    var f1 = rs_flesch(t1).unwrap()
+    expect(f1 > 80.0 and f1 < 110.0, "flesch 简单句高分, got " + str(f1))
+    var k1 = rs_flesch_kincaid(t1).unwrap()
+    expect(k1 > -2.0 and k1 < 5.0, "flesch-kincaid 低年级, got " + str(k1))
+    expect(rs_grade(t1).unwrap() == "小学", "简单句年级=小学")
+    # 复杂长文分数显著更低
+    var t2 = "Notwithstanding the aforementioned interdisciplinary ramifications, the implementation of the aforementioned architectural paradigm has precipitated a substantial augmentation of systemic efficacy."
+    var f2 = rs_flesch(t2).unwrap()
+    expect(f2 < f1, "复杂文分数更低, got " + str(f2))
+    var g2 = rs_grade(t2).unwrap()
+    expect(g2 == "专业", "复杂文年级=专业")
+    # 中文（音节近似无意义，但不应崩）
+    var cc = rs_counts("你好 世界")
+    expect(cc["words"] == 2, "中文分词按空白")
+    # 空文本
+    expect(rs_flesch("").is_err(), "空文本 Err")
+    print("readstat: PASS")
+    return Ok(0)

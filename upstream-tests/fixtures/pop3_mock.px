@@ -1,0 +1,96 @@
+# ============================================================
+# upstream-tests/fixtures/pop3_mock.px —— POP3 服务端 fixture（**本仓自建**，非上游文件）
+# ------------------------------------------------------------
+# 为什么需要它：上游 `tests/pop3_test.px` 打 `127.0.0.1:2110`，注释自称「真实自定义 POP3 服务」，
+#   但上游仓库**不带服务端**（当时是手搭的临时进程，未入库）⇒ 本仓用普贤自己写一个，
+#   不引入 python3/netcat 之类的新依赖。
+#
+# 契约（严格按 `tests/pop3_test.px` 的断言）：
+#   问候 `+OK …`；USER/PASS（密码必须 `ok`，否则 -ERR）；STAT → `+OK 2 100`；
+#   LIST → 2 行（`1 40` / `2 60`）；RETR 1 → 含 `Subject: one` 与 `message one 普贤`（含中文）；
+#   RETR 2 → 含 `message two`；RETR 99 → `-ERR`；QUIT → `+OK`。
+#   报文内**刻意含一行以 `.` 开头**（线上打点填充为 `..`）⇒ 客户端还原逻辑被真实覆盖。
+#
+# 用法：./pop3_mock            （监听 127.0.0.1 的 2110）
+# ============================================================
+
+var PF_PORT = 2110
+var PF_LFD = tcp_listen(PF_PORT)
+print("popfix: listening " + str(PF_PORT))
+
+def pf_read_line(fd):
+    var buf = bytes("")
+    while true:
+        var r = tcp_recv_ex(fd, 1)
+        if not r["ok"] or r["eof"]:
+            return ["", true]
+        var d = r["data"]
+        if type(d) == "string":
+            d = bytes(d)
+        buf = bytes_concat(buf, d)
+        var bl = bytes_len(buf)
+        if bl > 0 and bytes_get(buf, bl - 1) == 10:
+            var end = bl - 1
+            if end >= 1 and bytes_get(buf, end - 1) == 13:
+                end = end - 1
+            return [bytes_to_str(bytes_slice(buf, 0, end)), false]
+        if bl > 8192:
+            return [bytes_to_str(buf), false]
+
+def pf_send(fd, s):
+    tcp_send_ex(fd, bytes(s + "\r\n"))
+
+def pf_send_dot(fd, lines):
+    var i = 0
+    while i < len(lines):
+        pf_send(fd, lines[i])
+        i += 1
+    pf_send(fd, ".")
+
+# 报文（wire 形态：点填充**已**打上 ⇒ 与被测客户端的还原逻辑配对）
+var PF_MSG = {
+    "1": ["Subject: one", "From: a@example.com", "X-Note: 中文", "..dot-stuffed line", "", "message one 普贤"],
+    "2": ["Subject: two", "From: b@example.com", "", "message two"]
+}
+var PF_SIZE = {"1": 40, "2": 60}
+
+def pf_handle(cfd):
+    pf_send(cfd, "+OK PuXian POP3 fixture ready")
+    while true:
+        var l = pf_read_line(cfd)
+        if l[1]:
+            break
+        var line = l[0]
+        var parts = split(line, " ")
+        var cmd = parts[0]
+        var arg = ""
+        if len(parts) >= 2:
+            arg = parts[1]
+        if cmd == "USER":
+            pf_send(cfd, "+OK user accepted")
+        elif cmd == "PASS":
+            if arg == "ok":
+                pf_send(cfd, "+OK mailbox locked and ready")
+            else:
+                pf_send(cfd, "-ERR invalid credentials")
+        elif cmd == "STAT":
+            pf_send(cfd, "+OK 2 100")
+        elif cmd == "LIST":
+            pf_send(cfd, "+OK 2 messages (100 octets)")
+            pf_send_dot(cfd, ["1 " + str(PF_SIZE["1"]), "2 " + str(PF_SIZE["2"])])
+        elif cmd == "RETR":
+            if PF_MSG.has(arg):
+                pf_send(cfd, "+OK " + str(PF_SIZE[arg]) + " octets")
+                pf_send_dot(cfd, PF_MSG[arg])
+            else:
+                pf_send(cfd, "-ERR no such message")
+        elif cmd == "QUIT":
+            pf_send(cfd, "+OK bye")
+            break
+        else:
+            pf_send(cfd, "-ERR unknown command")
+    tcp_close(cfd)
+
+while true:
+    var cfd = tcp_accept(PF_LFD)
+    pf_handle(cfd)

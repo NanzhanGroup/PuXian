@@ -325,7 +325,7 @@ print("upper=" + to_upper("px"))
 5. **`let` 不可变**（重新赋值报错），要改的用 `var`。
 6. **顶层 `var`/`let` = 全局状态槽（M70-S3）**：主程序与 import 模块的顶层 var/let 声明均可跨函数访问/读写（var 可写、let 只读报 E3002；import 方启动时初始化一次，同名冲突用户值优先）；写**纯函数库**仍建议显式传参（确定性优先）。
 7. **import 无副作用**（不执行模块顶层函数调用/裸赋值等语句）；仅模块顶层 var/let/const **声明**随合并导出并初始化一次（M70-S3，模块级状态槽的必要初始化，非任意副作用）。
-8. **编译模式全功能**（native **367** 全部可调，名册见 `docs/native_index.json`；`--no-xxx` 裁剪后不可达的 native ⇒ `R1001`）；**解释模式（pxi）M68 后同样零 extern def 可达全部 native**——但极端底层（ffi/指针）语义以编译产物为准。
+8. **编译模式全功能**（native **381** 全部可调，名册见 `docs/native_index.json`；`--no-xxx` 裁剪后不可达的 native ⇒ `R1001`）；**解释模式（pxi）M68 后同样零 extern def 可达全部 native**——但极端底层（ffi/指针）语义以编译产物为准。
 9. **stdlib 内参数名不用 `fn`**（`fn` 是匿名函数关键字），用 `f` 等。
 10. 注释/字符串里长行可加 `# noqa` 供 `px lint` 跳过。
 11. **pxi（解释器）为 Mini 子集：不支持 `spawn`/`chan` 等并发关键字** → 并发/服务端（http_serve/ws_serve 等常驻回调）程序用 `px build`；纯计算与客户端脚本 pxi/编译双模式皆可。
@@ -517,7 +517,7 @@ print("upper=" + to_upper("px"))
       字符串形态（`r/w/a/rw/w+`）表达不了"有则开、无则建、不截断"（`w+` 带 `O_TRUNC`），
       也表达不了 `O_EXCL`。字符串形态**行为零变化**。
       ⚠️ 第三参只在第二参是 int 时可用。
-## 2. native 内置速查（373 全量见 `docs/native_index.json`，本表为常用）
+## 2. native 内置速查（**381** 全量见 `docs/native_index.json`，本表为常用）
 
 ### 核心 / 值
 `print` `len` `range` `type` `str` `int` `float` `bool` `assert` `input` `exit` `sleep` `abs` `sqrt` `min` `max` `pow` `sorted` `reversed` `sum` `map` `filter` `reduce` `contains` `env`（⚠️ **变量不存在返回 `null`**，不是 `""` —— `str(null)` 会得到 `"null"`，取值请先判 null） `args()`（**调用式**：`px run s.px a b` 与编译产物同形 `[程序, a, b]`——M115 修；见 §1.1 事实清单）
@@ -531,7 +531,7 @@ print("upper=" + to_upper("px"))
 `json_parse(s)` → dict/list/标量 · `json_stringify(v)` → str · `json_path(d, expr)` / `json_path_set` · `base64_encode/decode` · `int_to_hex/hex_to_int` · `bytes_to_hex/hex_to_bytes`
 
 ### bytes 二进制
-`bytes(s)`（⚠️ **`str(bytes)` 得到的是占位符 `"<bytes N>"`，不是内容**，也不报错 —— bytes→str 必须用 `bytes_to_str(b)`；`len(bytes)` 不支持，用 `bytes_len(b)`）`bytes_len` `bytes_get/set` `bytes_slice` `bytes_concat` `bytes_to_str` `int_to_bytes` `bytes_to_int` `bytes_base64` `bytes_find` · `bit_count` `bit_length`
+`bytes(s)`（⚠️ **`str(bytes)` 得到的是占位符 `"<bytes N>"`，不是内容**，也不报错 —— bytes→str 必须用 `bytes_to_str(b)`；`len(bytes)` 不支持，用 `bytes_len(b)`）`bytes_len` `bytes_get/set` `bytes_slice` `bytes_concat` `bytes_to_str` `int_to_bytes` `bytes_to_int` `bytes_to_dec`（**精确十进制，≤16 字节**，见事实 227）`bytes_base64` `bytes_find` · `bit_count` `bit_length`
 
 ### 时间 / 定时 / 调度
 `now()`（**本地时间字符串** `YYYY-MM-DD HH:MM:SS`）`now_ms()` `now_us()` `now_sec()`（M115：Unix 秒，配 `time_format`）**`now_ns()`**（M141：**墙钟** Unix **纳秒** = `sec*1e9+nsec`；⚠️ `now_ms`/`now_us` 是 **CLOCK_MONOTONIC**（自 boot 起算），**`now_ns` 才是墙钟** —— 移植 Go 的 `time.Now().UnixNano()` / `Format("...000000000")` 必须用它，拿 `now_us()*1000` 冒充得到的是完全不同的值与数量级）**`sleep(ms)`**（⚠️ M128 实测更正：参数是**毫秒**不是秒！runtime `bi_sleep` 按 ms 换算；`sleep(1)`=1ms、`sleep(1500)`=1500ms。移植 Go `time.Sleep(30*time.Second)` 若写成 `sleep(30)` 会少睡 1000 倍。**M195 起接受小数**：`sleep(0.5)` = **真的睡 0.5 毫秒**（纳秒精度；修前走 `int_val` 截断成 0 = 不睡））`sleep_us`（微秒） `time_format(t, fmt)` `time_parse` `tz_offset` · `set_timeout(f, ms, ...)` `set_interval` `clear_timer` · `cron("分 时 日 月 周", f)`（6 字段）
@@ -712,7 +712,7 @@ set_timeout(fn (): print("once after 2s"), 2000)
 
 ## 5. 防漂移与源
 
-- **native 清单**（345，单一事实源 = runtime 注册表）：`bash tools/gen_native_table.sh` → `docs/native_index.json`；CI 重跑 diff 防漂移。**本表计数必须 == count**（现 345）。
+- **native 清单**（**381**，单一事实源 = runtime 注册表）：`bash tools/gen_native_table.sh` → `docs/native_index.json`；CI 重跑 diff 防漂移。**本表计数必须 == count**（现 **381** · 由 `bash tools/gen_native_table.sh` 生成后核对）。
 - **stdlib 索引**：`tools/px run tools/gen_ecosystem.px` → `docs/ecosystem_index.json`。
 - 规范：`docs/spec.md`（§8 模块/import、§9 双模式、§12 AI 协议）· `docs/MINI_SUBSET.md`（子集边界）· 缺口与写库规范：`docs/ECOSYSTEM_GAPS.md`。
 
@@ -2254,7 +2254,8 @@ set_timeout(fn (): print("once after 2s"), 2000)
      · 签名：`int_to_bytes(n, size[, endian[, signed]])`（2-4 参）· `bytes_to_int(b[, endian[, signed]])`（1-3 参）；
        `endian` ∈ `"big"`/`"be"`/`"little"`/`"le"`（默认 `"big"`）；`size` ∈ 1..8；
      · `signed=true` ⇒ 按**补码**解释/编码（`bytes_to_int(hex("ffff"),"big",true)` = `-1`；
-       `int_to_bytes(-5,2,"big",true)` = `fffb`）；**域外一律返回 `null`**（不报错）；
+       `int_to_bytes(-5,2,"big",true)` = `fffb`）；**长度越界 `R1003`**（第 80 轮 · M201 起，
+       见事实 221）；
      · **修前**解释轨转发时**只透传前 1~3 个实参** ⇒ 三轨分叉：
        `bytes_to_int(hex("0102"),"little")` 解释轨 **258**（静默按大端）· `int_to_bytes(-5,2,"big",true)` 解释轨 **`302e30`（"0.0"）** ·
        `int_to_bytes(1)` 解释轨 **`R1003 索引越界`**（编译轨是 `R1002` 参数错）—— 现已**同码同文**；
@@ -2322,7 +2323,9 @@ set_timeout(fn (): print("once after 2s"), 2000)
 221. **`bytes_to_int` 的有/无符号由第 3 个形参决定（第 67 轮 · M189 复核第三方 PX-DEF-030）**：
      · `bytes_to_int(b)` → **无符号**：`"ffffffff"` ⇒ `4294967295`；
      · `bytes_to_int(b, "big", true)` → **有符号**（补码）：`"ffffffff"` ⇒ `-1`、`"fffb"` ⇒ `-5`；
-     · 长度 0 或 >8 ⇒ `null`（不变）；endian 只认 `big|little|be|le`。
+     · 长度 0 或 >8 ⇒ **`R1003`**（第 80 轮 · M201 收口：修前是**静默 `null`**，与 M199 修掉的
+       `bytes_get` 越界同族 —— null 流到下游只报"无法比较 null 与 int"，指不到越界点）；
+       消息会指明"更宽的整数用 `bytes_to_dec`"；endian 只认 `big|little|be|le`。
      ⇒ **二进制协议里判 NULL / 负长度，必须显式传 `signed=true`**，不要用 `> 2147483647` 绕
        （对方 pg 驱动当初就是这么绕的 —— 那是文档缺口，不是语言缺口）。
 222. **`is_int_str(s)` / `is_float_str(s)` ⇔ `int(s)` / `float(s)` 是否抛错**（第 63 轮 M185 立 · M189 用于库迁移）：
@@ -2345,3 +2348,29 @@ set_timeout(fn (): print("once after 2s"), 2000)
        **暂存区**应用后才写盘 ⇒ `registry/THIRD_PARTY.md` 的「补丁」列 + sha（记**打过补丁后**的内容）
        仍能做「表 ⇔ 磁盘」防漂移对拍。
      · 现有唯一一处：`passhash.patch`（`+2` 行守卫，因 M184 严格 `int()`）；上游发版后**删文件即归零**。
+227. **`bytes_to_dec` —— 任意宽度（≤16 字节）的**精确十进制**；`bytes_to_int` 的 8 字节 unsigned 回绕是**设计**（第 80 轮 · M201 收口第三方 PX-DEF-031）**：
+     · `bytes_to_dec(b[, endian[, signed]]) → str`：整段字节走**十进制长除法**（不经 double，
+       无精度损失），宽度 1..16（u64/u128），`signed=true` 时按补码取负（输出带 `-`）。
+       实测：`bytes_to_dec(hex("ffffffffffffffff"), "big", false)` = `"18446744073709551615"`；
+       `…("0000000000000080","little",false)` = `"9223372036854775808"`（= 2^63）；
+       16 字节全 `ff` = `"340282366920938463463374607431768211455"`（= 2^128-1）。
+     · **为什么不是改 `bytes_to_int`**：语言 `int` 是 64 位**有符号**，8 字节 unsigned > 2^63-1
+       装不下 ⇒ `bytes_to_int` 按**二进制补码回绕**（`f…f` 8 字节 ⇒ `-1`）。这是
+       **Go `int64(uint64)` / Java `getLong()` / C 强制转换的同款语义**，而且是"读原始位模式"
+       （float64 位型 / 消息字段）的**唯一可用形态** —— 实测官方 `msgpack`（float64 位型、
+       uint64）、`mysql`（DOUBLE 列）都依赖它，**改成报错会打破这两个库**。
+       ⇒ 精确值一律用 `bytes_to_dec`（第三方原先手写"32 位高低字长除法 `my_u64_dec`"可以退休）。
+     · 越界（`bytes_to_int` 超过 8 字节 / `bytes_to_dec` 超过 16 字节）⇒ **`R1003`**（响亮，非 null）。
+228. **`native_symbols()` —— 本构建「能力面」可查询**（第 80 轮 · M201 收口缺陷 241 = 第三方 PX-DEF-035）**：
+     · `native_symbols() → [str]`：返回**本构建里可作为全局调用的 native 名**（排序去重）。
+       用途：判定"这个构建/这个包有没有某能力"，而不是靠 `strings` 猜或靠一次调用去撞错误。
+     · 为什么必须有：**解释器件的构建口径**曾用「按引用集自动裁剪」现编 ⇒ 解释器是**泛化分派**
+       （native 名运行期按字符串查表），裁剪器"看不见"这些名字 ⇒ 把 zlib / sqlite / xml / aes /
+       rsa / ed25519 / zip / ws **整族**从 `bootstrap/pxi` 裁掉（实测已发布 aarch64 包：
+       `pxc` 有 19 个 `zlib_*` 名字，`pxi` **0 个**）⇒ 官方 `registry/zlib` 在解释轨不可用。
+     · 现口径（唯一一处 = `selfhost/build_native_tools.sh`）：**泛化分派件必须 `--full`**，
+       其余件按引用集自动裁剪（那是特性）；门 `examples/m201_interp_ffi/verify.sh` 守这条：
+       期望集**从源码派生**（`px_set_global(…, px_native(` + `px_ffi_register(`），
+       被测件必须**逐个包含**，且 QUIC/H3 族按 `--print-plan` 的 `no_quic` 动态剔除。
+     · 注意：`native_symbols()` 是**只读诊断**面；缺名字 ⇒ 那个 native 在本构建**不可达**
+       （`--no-xxx` 裁剪后同理，⇒ `R1001`）。

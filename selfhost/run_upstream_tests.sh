@@ -148,7 +148,18 @@ else
     mkdir -p "$WORK"; CLEANUP=0
 fi
 [ "$KEEP" = 1 ] && CLEANUP=0
-cleanup() { [ "$CLEANUP" = 1 ] && rm -rf "$WORK"; return 0; }
+NET_PIDS=()
+cleanup() {
+    for p in "${NET_PIDS[@]:-}"; do
+        [ -n "$p" ] || continue
+        kill "$p" 2>/dev/null
+        # ⚠️ **不要**写 `kill -- "-$p"`：脚本里后台作业与脚本**同进程组** ⇒ 那是**杀自己**。
+        sleep 0.2
+        kill -9 "$p" 2>/dev/null
+    done
+    [ "$CLEANUP" = 1 ] && rm -rf "$WORK"
+    return 0
+}
 trap cleanup EXIT
 mkdir -p "$WORK/tests"
 cp -p "$TESTS_DIR"/*.px "$WORK/tests/" 2>/dev/null || true
@@ -171,6 +182,36 @@ if [ "$FIXTURES" = 1 ]; then
     : > /tmp/wk_src/sub/c.txt
     : > /tmp/wk_src/sub/deep/d.txt
     rm -rf /tmp/shutil_registry_test
+
+    # ---- 网络 fixture（M201）：三个 mock 服务端（**普贤自建**，见 upstream-tests/fixtures/README.md）
+    #   上游 ftp/pop3/oauth2 三个用例要求外部服务端（上游当时用 pyftpdlib / 手搭进程，未入库）。
+    #   本仓纪律 = **不引入新依赖**（不依赖 python3/pyftpdlib）⇒ 用普贤自己写 mock 服务端：
+    #     oauth2_mock 19090 · pop3_mock 2110 · ftp_mock 2121(控制)/2122(数据)
+    #   ⚠️ 只编**编译轨**（服务端是基础设施；且 spawn 并发仅编译轨支持 —— ftp 用例会并发开两条控制连接）。
+    #   ⚠️ 在 $WORK 里编译（不在仓库树里生成 build/ —— 保持 git 干净、也不进 MANIFEST 判据）。
+    if [ -d "$TESTS_DIR/fixtures" ]; then
+        mkdir -p "$WORK/fixtures"
+        cp -p "$TESTS_DIR"/fixtures/*.px "$WORK/fixtures/" 2>/dev/null || true
+        NET_OK=0
+        for s in oauth2_mock pop3_mock ftp_mock; do
+            [ -f "$WORK/fixtures/$s.px" ] || continue
+            if ! ( cd "$WORK/fixtures" && "$PX" build "$s.px" ) >"$WORK/fixtures/$s.build.log" 2>&1; then
+                echo "  ⚠ 网络 fixture $s 编译失败（依赖它的用例会失败）：$(tail -2 "$WORK/fixtures/$s.build.log" | tr '\n' ' ')"
+                continue
+            fi
+            # ⚠️ 必须 `exec`：否则 `$!` 是**子 shell** 的 pid，cleanup 杀掉它而**服务端进程存活**
+            #   （首版就踩了 —— 收尾后 2110/2121/19090 仍被占，下一轮 fixture 起不来）。
+            ( cd "$WORK/fixtures" && exec "./build/$s" ) >"$WORK/fixtures/$s.log" 2>&1 &
+            NET_PIDS+=($!)
+            # 等它自报监听（最多 5s）；失败只警告 —— 判据交给用例本身（连接失败=FAIL，不静默）
+            for _ in $(seq 1 50); do
+                grep -q "listening" "$WORK/fixtures/$s.log" 2>/dev/null && break
+                sleep 0.1
+            done
+            NET_OK=$((NET_OK + 1))
+        done
+        [ "$NET_OK" != 0 ] && echo "── 网络 fixture：$NET_OK 个 mock 服务端已起（oauth2 19090 · pop3 2110 · ftp 2121/2122）"
+    fi
 fi
 : > "${JSON:-/dev/null}"
 

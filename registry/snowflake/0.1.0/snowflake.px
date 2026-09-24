@@ -1,0 +1,44 @@
+# ============================================================
+# 普贤生态库：registry/snowflake —— Snowflake ID
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态，状态以 dict 显式传递；时间源显式传入），双模式一致。
+# 对齐 Twitter snowflake / Go bwmarrin/snowflake 心智（0.1.0）：
+#   sf_new(machine_id[, opts]) → Ok(state) | Err   machine 0..1023（10 位）
+#   sf_next(state[, now_ms])  → Ok(int id) | Err   41 位毫秒 + 10 位机器 + 12 位序列
+#   sf_parse(id[, opts])      → {ms, machine, seq}（epoch 还原）
+# opts: {epoch_ms(默认 1288834974657 = Twitter 2010-11-04)}
+# 同毫秒 seq 自增；越毫秒复位；seq 溢出 → Err（响亮）。窗口 69 年。
+# ============================================================
+
+def sf_new(machine_id, opts={}):
+    if machine_id < 0 or machine_id > 1023:
+        return Err("snowflake: machine_id 须在 0..1023")
+    var epoch = 1288834974657
+    if opts.has("epoch_ms"):
+        epoch = opts["epoch_ms"]
+    return Ok({"machine": machine_id, "seq": 0, "last_ms": -1, "epoch_ms": epoch})
+
+def sf_next(state, now_ms=null):
+    var t = now_ms
+    if t == null:
+        t = now_ms()
+    var ms = t - state["epoch_ms"]
+    if ms < 0 or ms > 2199023255551:
+        return Err("snowflake: 时间窗越界（41 位）")
+    if ms == state["last_ms"]:
+        state.set("seq", state["seq"] + 1)
+        if state["seq"] > 4095:
+            return Err("snowflake: 同毫秒序列溢出")
+    else:
+        state.set("seq", 0)
+        state.set("last_ms", ms)
+    return Ok((ms << 22) | (state["machine"] << 12) | state["seq"])
+
+def sf_parse(id, opts={}):
+    var epoch = 1288834974657
+    if opts.has("epoch_ms"):
+        epoch = opts["epoch_ms"]
+    var seq = id & 4095
+    var machine = (id >> 12) & 1023
+    var ms = (id >> 22) + epoch
+    return {"ms": ms, "machine": machine, "seq": seq}

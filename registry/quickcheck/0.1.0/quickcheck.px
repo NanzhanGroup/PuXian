@@ -1,0 +1,49 @@
+# ============================================================
+# 普贤生态库：registry/quickcheck —— 属性测试
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态；随机源 = 原生 random()），编译/解释双模式一致。
+# 对齐 Rust proptest / quickcheck、Python hypothesis 心智（0.1.0 最小面）：
+#   qc_forall(gen, prop, n) → Ok(n) | Err   随机跑 n 次；prop 为 false 即反例 Err
+#   qc_int(lo, hi)          → fn() → int    随机整数生成器
+#   qc_list(gen, maxlen)    → fn() → list   随机长度列表生成器
+#   qc_str(maxlen)          → fn() → str    随机小写字母串
+# 0.1.0 无收缩（shrinking）、无 seed 复现。
+# ============================================================
+
+def qc_forall(gen, prop, n):
+    if n <= 0:
+        return Err("quickcheck: n 须 > 0")
+    var i = 0
+    while i < n:
+        var x = gen()
+        if not prop(x):
+            return Err("quickcheck: 反例（第 " + str(i + 1) + " 次）: " + str(x))
+        i += 1
+    return Ok(n)
+
+def qc_int(lo, hi):
+    return fn():
+        var span = hi - lo + 1
+        return lo + int(random() * float(span))
+
+def qc_list(gen, maxlen):
+    return fn():
+        var n = int(random() * float(maxlen + 1))
+        var l = []
+        var i = 0
+        while i < n:
+            l.append(gen())
+            i += 1
+        return l
+
+def qc_str(maxlen):
+    return fn():
+        var n = int(random() * float(maxlen + 1))
+        var out = ""
+        var letters = "abcdefghijklmnopqrstuvwxyz"
+        var i = 0
+        while i < n:
+            var idx = int(random() * 26.0)
+            out = out + letters[idx]
+            i += 1
+        return out

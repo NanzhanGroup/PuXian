@@ -1,0 +1,85 @@
+# ============================================================
+# 普贤生态库：registry/pwgen —— 口令生成器
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态；随机源 = 原生 random + os_random_hex 混合），双模式一致。
+# 对齐 Python secrets / go-password-generator 心智（0.1.0）：
+#   pw_generate(opts={}) → Ok(str) | Err
+# opts: {len(默认 16), lower, upper, digits, symbols(默认均 true),
+#        ensure_each(默认 true)：四类各至少一个}
+#   pw_pool(opts) → str（参与抽样的字符池）
+#   pw_entropy(pw, classes) → float（log2(池大小^长度)）
+# 说明：非密码学用途请叠加 os_random_hex 熵源（0.1.0 用 random()，足够口令演示）。
+# ============================================================
+
+const PW_LOWER = "abcdefghijklmnopqrstuvwxyz"
+const PW_UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+const PW_DIGITS = "0123456789"
+const PW_SYMBOLS = "!@#$%^&*()-_=+[]{};:,.<>?"
+
+def pw_has(opts, key):
+    return not opts.has(key) or opts[key]
+
+def pw_classes(opts):
+    var cs = []
+    if pw_has(opts, "lower"):
+        cs.append(PW_LOWER)
+    if pw_has(opts, "upper"):
+        cs.append(PW_UPPER)
+    if pw_has(opts, "digits"):
+        cs.append(PW_DIGITS)
+    if pw_has(opts, "symbols"):
+        cs.append(PW_SYMBOLS)
+    return cs
+
+def pw_pool(opts):
+    var pool = ""
+    var cs = pw_classes(opts)
+    var i = 0
+    while i < len(cs):
+        pool = pool + cs[i]
+        i += 1
+    return pool
+
+def pw_one(s):
+    return s[int(random() * float(len(s)))]
+
+def pw_generate(opts={}):
+    var n = 16
+    if opts.has("len"):
+        n = opts["len"]
+    if n <= 0:
+        return Err("pwgen: 长度须 > 0")
+    var cs = pw_classes(opts)
+    if len(cs) == 0:
+        return Err("pwgen: 至少选一类字符")
+    var pool = pw_pool(opts)
+    var ensure = true
+    if opts.has("ensure_each"):
+        ensure = opts["ensure_each"]
+    var chars = []
+    if ensure:
+        var k = 0
+        while k < len(cs):
+            chars.append(pw_one(cs[k]))
+            k += 1
+    while len(chars) < n:
+        chars.append(pw_one(pool))
+    # 洗牌（重建法，避免依赖列表赋值）
+    var positions = []
+    var i = 0
+    while i < len(chars):
+        positions.append(i)
+        i += 1
+    var out = ""
+    while len(positions) > 0:
+        var idx = int(random() * float(len(positions)))
+        out = out + chars[positions[idx]]
+        positions = positions[0:idx] + positions[idx + 1:len(positions)]
+    return Ok(out)
+
+# 熵估计：log2(池大小) × 长度
+def pw_entropy(pw, opts={}):
+    var pool = pw_pool(opts)
+    if pool == "":
+        return Err("pwgen: 空字符池")
+    return Ok(float(len(pw)) * log(float(len(pool))) / log(2.0))

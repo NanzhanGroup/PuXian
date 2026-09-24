@@ -1,0 +1,7 @@
+# M201 探针：**真调用** FFI 族代表（名字存在 ≠ 可调用）—— 三轨逐字节一致
+def main():
+    print("crc=" + str(zlib_crc32(bytes("abc"))))
+    var z = zlib_compress(bytes("hello 普贤"), 6)
+    print("back=" + bytes_to_str(zlib_uncompress(z)))
+    print("hex=" + bytes_to_hex(hex_to_bytes("a1b2")))
+    return 0

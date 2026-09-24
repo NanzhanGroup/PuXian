@@ -1,0 +1,33 @@
+# captcha.px 测试：数字验证码（双模式一致）
+import "../registry/captcha/0.1.0/captcha.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var c = cp_generate(4, {}).unwrap()
+    expect(cp_valid(c["answer"]), "答案纯数字")
+    expect(len(c["answer"]) == 4, "长度 4")
+    # image 结构：5 行；每行长度 = 4 字符×(3+1) - 1 = 15
+    var lines = split(c["image"], "\n")
+    expect(len(lines) == 5, "5 行, got " + str(len(lines)))
+    expect(len(lines[0]) == 15, "行宽 15, got " + str(len(lines[0])))
+    # 字体形状：每行应含 | 或 _（7 段字形非全空）
+    expect(lines[0].find("_") >= 0, "顶行含 _")
+    # verify
+    expect(cp_verify(c["answer"], c["answer"]), "正确猜测 true")
+    expect(cp_verify(c["answer"], "0000") == false or c["answer"] != "0000", "错误猜测 false（除非巧合）")
+    expect(cp_verify("1234", "1234"), "字面答案")
+    # noise 不破坏结构
+    var n = cp_generate(4, {"noise": true}).unwrap()
+    var nlines = split(n["image"], "\n")
+    expect(len(nlines) == 5, "noise 仍 5 行")
+    expect(cp_valid(n["answer"]), "noise 答案仍数字")
+    # 参数
+    expect(cp_generate(0).is_err(), "len=0 Err")
+    expect(cp_generate(11).is_err(), "len=11 Err")
+    expect(cp_valid("12a") == false, "含字母非法")
+    expect(cp_valid("") == false, "空串非法")
+    expect(cp_valid("123456"), "6 位合法")
+    print("captcha: PASS")
+    return Ok(0)

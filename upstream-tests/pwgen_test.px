@@ -1,0 +1,42 @@
+# pwgen.px 测试：口令生成（双模式一致）
+import "../registry/pwgen/0.1.0/pwgen.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def has_class(s, charset):
+    var i = 0
+    while i < len(s):
+        var j = 0
+        while j < len(charset):
+            if s[i] == charset[j]:
+                return true
+            j += 1
+        i += 1
+    return false
+def main():
+    # 默认：16 位，四类各至少一个
+    var p = pw_generate({}).unwrap()
+    expect(len(p) == 16, "len 16")
+    expect(has_class(p, PW_LOWER), "含小写")
+    expect(has_class(p, PW_UPPER), "含大写")
+    expect(has_class(p, PW_DIGITS), "含数字")
+    expect(has_class(p, PW_SYMBOLS), "含符号")
+    # 长度 + 单类
+    var d = pw_generate({"len": 8, "upper": false, "digits": false, "symbols": false}).unwrap()
+    expect(len(d) == 8 and has_class(d, PW_LOWER) and not has_class(d, PW_UPPER), "仅小写 8 位")
+    var dd = pw_generate({"len": 6, "lower": false, "upper": false, "symbols": false}).unwrap()
+    expect(len(dd) == 6 and has_class(dd, PW_DIGITS), "仅数字")
+    # ensure_each=false 可能缺类（不报错）
+    var ne = pw_generate({"len": 20, "ensure_each": false}).unwrap()
+    expect(len(ne) == 20, "ensure=false 生成")
+    # 熵
+    var e = pw_entropy("aA1!" , {}).unwrap()
+    expect(e > 20.0 and e < 40.0, "4 位四类池熵 ≈ 25.2, got " + str(e))
+    var e2 = pw_entropy("aaaaaaaa", {"upper": false, "digits": false, "symbols": false}).unwrap()
+    expect(e2 > 30.0 and e2 < 40.0, "8 位小写熵 ≈ 37.6, got " + str(e2))
+    # 错误
+    expect(pw_generate({"len": 0}).is_err(), "len 0 Err")
+    expect(pw_generate({"lower": false, "upper": false, "digits": false, "symbols": false}).is_err(), "空类 Err")
+    print("pwgen: PASS")
+    return Ok(0)

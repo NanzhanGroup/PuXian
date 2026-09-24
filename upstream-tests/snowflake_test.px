@@ -1,0 +1,50 @@
+# snowflake.px 测试：Snowflake ID（显式时间戳，双模式一致）
+import "../registry/snowflake/0.1.0/snowflake.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var epoch = 1288834974657
+    var s = sf_new(1).unwrap()
+    # 基准时刻 → ms=0, seq=0 → id = 0 + (1<<12) + 0 = 4096
+    var id0 = sf_next(s, epoch).unwrap()
+    expect(id0 == 4096, "id0=4096, got " + str(id0))
+    # 同毫秒 → seq+1
+    var id1 = sf_next(s, epoch).unwrap()
+    expect(id1 == 4097, "id1=4097, got " + str(id1))
+    # 下一毫秒 → seq 复位
+    var id2 = sf_next(s, epoch + 1).unwrap()
+    expect(id2 == (1 << 22) | (1 << 12), "id2 跨毫秒复位, got " + str(id2))
+    # 不同机器互不干扰
+    var m2 = sf_new(512).unwrap()
+    var i3 = sf_next(m2, epoch).unwrap()
+    expect((i3 >> 12) & 1023 == 512, "机器位")
+    # parse 还原
+    var p = sf_parse(id2)
+    expect(p["ms"] == epoch + 1 and p["machine"] == 1 and p["seq"] == 0, "parse 还原")
+    # 唯一性 + 递增（500 个不同 ms）
+    var s3 = sf_new(7).unwrap()
+    var prev = 0
+    var i = 0
+    while i < 500:
+        var idv = sf_next(s3, epoch + i).unwrap()
+        expect(idv > prev, "递增, i=" + str(i))
+        prev = idv
+        i += 1
+    # 序列溢出 → Err（同毫秒 4096+ 个）
+    var t = sf_new(0).unwrap()
+    var over = false
+    var k = 0
+    while k < 4097:
+        var r = sf_next(t, epoch)
+        if r.is_err():
+            over = true
+            break
+        k += 1
+    expect(over, "同毫秒溢出 Err")
+    # 参数
+    expect(sf_new(1024).is_err(), "machine 1024 Err")
+    expect(sf_new(-1).is_err(), "machine 负 Err")
+    print("snowflake: PASS")
+    return Ok(0)

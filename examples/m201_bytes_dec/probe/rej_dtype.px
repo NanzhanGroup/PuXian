@@ -1,0 +1,3 @@
+# M201 拒绝侧：bytes_to_dec 首参类型
+print("before")
+print(bytes_to_dec("abc"))

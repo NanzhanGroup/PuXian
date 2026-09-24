@@ -1,0 +1,33 @@
+# oauth2.px 测试：令牌获取（本地 mock 端点，双模式一致）
+import "../registry/oauth2/0.1.0/oauth2.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var url = "http://127.0.0.1:19090/token"
+    # client_credentials 成功
+    var r = oa_token_cc(url, "cid", "csecret")
+    if r.is_err():
+        print("FAIL: cc: " + str(r))
+        exit(1)
+    var tok = r.unwrap()
+    expect(tok["access_token"] == "mock_access_token_12345", "access_token, got " + str(tok["access_token"]))
+    expect(tok["token_type"] == "Bearer" and tok["expires_in"] == 3600, "token_type/expires_in")
+    expect(tok["scope"] == "read", "scope")
+    # 密码模式成功
+    var r2 = oa_token_password(url, "cid", "csecret", "u", "p")
+    if r2.is_err():
+        print("FAIL: pw: " + str(r2))
+        exit(1)
+    expect(r2.unwrap()["access_token"] == "mock_access_token_12345_pw", "password token")
+    # 错误凭据 → Err（带 error 字段）
+    var bad = oa_token_cc(url, "cid", "WRONG")
+    expect(bad.is_err(), "错误凭据 Err")
+    if bad.is_err():
+        print("  (expected) err=" + str(bad))
+    # 不可达端点 → Err
+    var net = oa_token_cc("http://127.0.0.1:19099/token", "cid", "csecret")
+    expect(net.is_err(), "不可达 Err")
+    print("oauth2: PASS")
+    return Ok(0)

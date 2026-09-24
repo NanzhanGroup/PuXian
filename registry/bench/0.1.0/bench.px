@@ -1,0 +1,27 @@
+# ============================================================
+# 普贤生态库：registry/bench —— 微基准计时
+# ------------------------------------------------------------
+# 纯函数库（IO：now_ns 计时，无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Rust criterion / Python-timeit 心智（0.1.0 最小面）：
+#   bn_time(f, n) → Ok({total_ns, ns_per_op, ops_per_sec}) | Err
+# n <= 0 → Err；时间源 = now_ns（墙钟纳秒，非 CPU 时间）。解释轨性能远低于
+# 编译轨属预期（PX-DEF-024 同族），bench 主要用于编译轨产物对比。
+# ============================================================
+
+def bn_time(f, n):
+    if n <= 0:
+        return Err("bench: n 须 > 0")
+    var t0 = now_ns()
+    var i = 0
+    while i < n:
+        f()
+        i += 1
+    var t1 = now_ns()
+    var total = t1 - t0
+    if total < 0:
+        total = 0
+    var per = total // n
+    var ops = 0.0
+    if total > 0:
+        ops = float(n) * 1000000000.0 / float(total)
+    return Ok({"total_ns": total, "ns_per_op": per, "ops_per_sec": ops})

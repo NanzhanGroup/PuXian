@@ -1,0 +1,29 @@
+# luhn.px 测试：Luhn 校验（Python stdnum 对拍，双模式一致）
+import "../registry/luhn/0.1.0/luhn.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # ISO 名片示例（Python 对拍）
+    expect(luhn_check("7992739871").unwrap() == 3, "7992739871 → 3")
+    expect(luhn_append("7992739871").unwrap() == "79927398713", "append")
+    expect(luhn_valid("79927398713"), "79927398713 合法")
+    expect(luhn_valid("79927398710") == false, "换校验位非法")
+    expect(luhn_valid("7992739871") == false, "短串非法")
+    # 已知卡号（账号面，非真实有效卡用途）
+    expect(luhn_valid("4111111111111111"), "visa 测试号合法")
+    expect(luhn_valid("5500000000000004"), "mc 测试号合法")
+    expect(luhn_valid("378282246310005"), "amex 测试号合法")
+    expect(luhn_valid("6011111111111117"), "discover 测试号合法")
+    # 生成器：合法 + 前缀
+    var v = luhn_card("visa").unwrap()
+    expect(luhn_valid(v) and v[0] == "4" and len(v) == 16, "visa 生成合法")
+    var a = luhn_card("amex").unwrap()
+    expect(luhn_valid(a) and len(a) == 15, "amex 生成合法")
+    expect(luhn_card("nope").is_err(), "未知卡种 Err")
+    # 非法输入
+    expect(luhn_check("12a").is_err(), "含字母 Err")
+    expect(luhn_check("").is_err(), "空串 Err")
+    print("luhn: PASS")
+    return Ok(0)

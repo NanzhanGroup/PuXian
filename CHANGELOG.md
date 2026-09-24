@@ -1,3 +1,101 @@
+## M201 · 上游 registry-px **再引入**（86 → 98 库）+ 缺陷 241：**解释器件的「能力面」**（第 80 轮）
+
+> **两条线并行**：① 用户点名的长期任务「**根据 registry-px 的更新，把库引入官方库**」——
+> 上游 `1a7d844` → `70e8123`（**12 个新库**，无就地更新）；② 由"把新库真跑起来"照出并**真修**
+> 的缺陷 **241** —— 它同时是**我上一轮判错的第三方登记**：**PX-DEF-035 的方向，对方是对的**。
+
+### 一 引入结果（`tools/import_registry_px.sh --src … --update --apply`）
+
+| 项 | M200 时 | **M201** |
+|---|---|---|
+| 上游库（`registry/`） | 86 | **98** = 86 + **12 新**（就地更新 **0**） |
+| `registry/` 总数 | 99 | **111** = **98**（上游）+ **13 本仓自建** |
+| `upstream-tests/` 用例 | 88 | **100**（+12，逐字节照搬 · `MANIFEST.sha256` 100 行） |
+| `EXPECTED.tsv` 登记 | 88 条 | **100 条**（先登记"应当 PASS"的期望，**再**实测 —— 不按实测反填） |
+| **双轨回归实测** | 161 / 0 / 15 | **185 通过 / 0 失败 / 15 跳过 · 缺失 0** |
+
+新库名单：`bench` `captcha` **`ftp`** `luhn` `markdown` **`oauth2`** **`pop3`** `punycode` `pwgen`
+`quickcheck` `readstat` `snowflake`。
+
+**本轮最实的一块：三条新用例要外部服务端，我们没有"跳过"了事。**
+`ftp_test` / `pop3_test` / `oauth2_test` 依赖真实服务端（上游当时用 pyftpdlib / 手搭进程，
+**未入库**）。只判 SKIP 就等于"引了库但没验"。按本仓长期纪律（**不引入新依赖**：不依赖
+python3/pyftpdlib/netcat），改用**普贤自己写**的 mock 服务端 —— `upstream-tests/fixtures/`
+（`tcp_listen/accept/recv/send` + `spawn` 并发），由 `run_upstream_tests.sh` **自动编译→启动→
+等端口→收尾 kill**：
+
+| 用例 | fixture 覆盖的契约 |
+|---|---|
+| `pop3_mock.px`（2110） | `+OK` 问候 · `PASS ok`/错口令 · `STAT 2 100` · `LIST` 两行 · `RETR 1`（**含中文 + 点填充还原**）· `RETR 99` → `-ERR` · `QUIT` |
+| `ftp_mock.px`（2121 控制 / 2122 数据） | `220/331/230/530` · `PWD` · `TYPE I` · **PASV + 数据通道** · `LIST`/`RETR`/`STOR`（**STOR 后 RETR 读回**）· `CWD` 子目录 · **主连接未关时并发第二条连接**（故必须 `spawn`） |
+| `oauth2_mock.px`（19090） | `POST /token`：`client_credentials` / `password` 两种 grant · `client_secret=WRONG` → 400 `invalid_client` · 404/405 分支 |
+
+⇒ 这三条从"应当 SKIP"变成**真 PASS**（100 用例 × 双轨全部有据可依）。
+
+### 二 缺陷 241（= PX-DEF-035 复现）：发布包里的**解释器件缺整族能力**
+
+**先更正我自己的错误判定**（M200 我写"第三方方向记反了"，依据是**仓库内 x86_64 入库件**）：
+
+| | 实测 |
+|---|---|
+| M200 我的复核对象 | 仓库内 `bootstrap/pxi`（x86_64，由 `devbuild.sh`/`rebake_bin.sh` 链**全量** runtime 对象）⇒ 能力齐全 ⇒ 我误以为全仓库都这样 |
+| **M201 复核对象** | **已发布**的 m197 / m200 **aarch64** 引导包（下载解包逐件） |
+| 实测结果 | `bootstrap/pxc` 有 **19** 个 `zlib_*` 名字；`bootstrap/pxi` **0 个** —— 且族级差异不止 zlib：**aes / rsa / ed25519 / sqlite / xml / zip / ws 整族都缺** |
+
+**根因**：发布链用 `tools/px build selfhost/interp.px`（**按引用集自动裁剪**）现编解释器；
+解释器是**泛化分派**（native 名运行期按字符串查表）⇒ 裁剪器"看不见"这些名字 ⇒ 整族被裁掉。
+仓库内 x86_64 件不受影响 ⇒ 缺陷**只在发布链**、**只在非 x86_64 包**上显形，
+而 CI 只问"能不能跑 hello"⇒ **一直绿**。
+
+**修（三件）**：
+
+1. **`native_symbols()` 原语**（新增 native）：返回本构建里**可作为全局调用的 native 名**（排序去重）
+   —— 把"这个构建有没有某能力"从**靠猜**变成**可查询的事实**（也正是对方登记里点名要的
+   "FFI 可用符号清单查询原语"）。数据源 = `px_set_global` 中值为 native 的登记（只存指针，
+   指向全局表已 `xstrdup` 的名字 ⇒ 可在"写锁 + GC 冻结"窗口内安全登记）。
+2. **构建口径收敛到一处**：新增 `selfhost/build_native_tools.sh`（原先 `ci.yml` 与 `release.yml`
+   **各写一遍** 12 件循环 = 漂移温床）；口径 = **泛化分派件必须 `--full`**（目前只有 `pxi`），
+   其余件按引用集自动裁剪（那是特性）。两个工作流都改为调用它，并在装件**之后**跑能力面门。
+3. **新门 `examples/m201_interp_ffi/`**：期望集**从源码派生**（`px_set_global(…, px_native(` ∪
+   `px_ffi_register(`）→ 按本架构能力过滤（`--print-plan` 的 `no_quic` ⇒ `quic_*`/`h3_*` **合法缺席**）
+   → 自证（规模下限 + **14 个家族代表逐个在场**，防判据锚点静默失效）→ 被测件**实跑自报**
+   并**逐条指名缺失** → **动态真调用**（zlib 往返 + hex 往返，解释轨 ⇄ 编译轨逐字节一致）。
+   负控 4 道：**A** 真被裁过的产物（`--no-zlib`）⇒ 判红且指名 `zlib_compress`；**B** 空输出探针
+   ⇒ 必红（防"空集 ⊇ 任意集"假绿）；**C/D** 自调用（抬下限 / 抽锚点）⇒ 必红。
+   已挂进 `native-arm64` job 与发布链（失败走 `::error::` 注解 —— job 日志外部不可读）。
+
+### 三 缺陷 242（= PX-DEF-031 同族）：`bytes_to_int` 的**双模型** + 新增 `bytes_to_dec`
+
+判定 = **一半设计、一半真缺口**（`docs/ERROR_CODES.md` §6.12）：
+
+- **8 字节 unsigned > 2^63-1 的"回绕"（`f…f` ⇒ `-1`）保留** —— 语言只有 int64，
+  回绕 = Go `int64(uint64)` / Java `getLong()` / C 强制转换的**同款语义**，且是"读**原始位模式**"
+  （float64 位型 / 消息字段）的**唯一可用形态**：实测官方 `msgpack`（float64 位型 + uint64）、
+  `mysql`（DOUBLE 列）都依赖它 ⇒ **改成报错会打破这两个库**（这是本轮做决定前先普查的结论）；
+- **真缺口 ⇒ 新增 `bytes_to_dec(b[, endian[, signed]]) → str`**：1..16 字节**精确十进制**
+  （整段字节长除法，**不经 double**），`signed=true` 补码取负。对方手写的
+  "32 位高低字长除法 `my_u64_dec`"可以退休；
+- **顺手收口同族的"静默 null"**：`bytes_to_int` 长度越界（<1 或 >8）修前**静默返回 `null`**
+  —— 与 M199 修掉的 `bytes_get` 越界 null 同族（null 流到下游只报"无法比较 null 与 int"，
+  **指不到越界点**）⇒ 改 **`R1003`**，并在消息里指明"更宽的整数用 `bytes_to_dec`"。
+
+**门 `examples/m201_bytes_dec/`**：正例 **23 项 × 三轨逐字节一致**（期望值由 **bignum 独立算得**，
+不是"跑一遍抄下来"：2^64-1 / 2^63 / 2^128-1 / 补码 -(2^63) / -129 / 两序对照）+
+拒绝侧 **4 例 × 三轨**（rc≠0 + **同码** + **同文案** + 前置标记）+ 负控 3 道各自独立判红
+（**A** 删注册 ⇒ 三轨 R1001 · **B** 长度守卫改回 `null` ⇒ **仅**越界例红（正例仍绿 = 独立牙）·
+**C** 宽度上限 16→8 ⇒ 正例红且**失败原因读得到**）。
+
+### 四 其余同步更新
+
+- `docs/ERROR_CODES.md` **§6.12**（`bytes_to_int` 双模型 + `bytes_to_dec`）· **§6.13**
+  （能力面可查询 + 解释器件全能力）；
+- `docs/PX_DEF_TRIAGE.md` **§九**：本轮引入表 + **§9.2 更正 M200 的错误判定** + PX-DEF-031 判定
+  + **§9.4 待办 → M202**（PX-DEF-032 `base32` / 033 `hmac_sha1` / 034 `sorted` 无 key）；
+- `docs/PUXIAN_CHEATSHEET.md`：事实 **227**（`bytes_to_dec` + 回绕语义）· **228**（`native_symbols()`
+  + 解释器件全能力口径）；事实 215/221 里"域外返回 null"改为 `R1003`；native 计数 379 → **381**；
+- `registry/THIRD_PARTY.md` 重新生成（98 行 + 三条网络库标注"本仓自建 mock fixture"）；
+  `examples/m187_registry_import/verify.sh` 的注释计数同步（86 → 98）。
+
 ## M200 · 上游 registry-px **全量再引入**（53 → 86 库）+ 缺陷 240：`extern def`（C-FFI）名字的全局发布（第 78 轮）
 
 > **主问题**：用户指令里有一条长期任务 ——「**根据 registry-px 仓库的更新，把其中的库引入 PuXian 官方库**」。
