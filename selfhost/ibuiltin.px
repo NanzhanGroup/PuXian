@@ -1363,12 +1363,18 @@ def i_builtin_range(args, pos):
     return Ok(range(start, end, step))
 # ---------- sorted（对齐 builtin.rs Sorted：按 to_string 排序） ----------
 def i_builtin_sorted(args, pos):
-    if len(args) != 1:
-        return Err(i_r1002("sorted 需要 1 个参数", pos))
+    # M202（第 81 轮 · 第三方 PX-DEF-034）：可选第 2 参 = key 函数（与编译轨原生 `bi_sorted` 同口径）
+    if len(args) != 1 and len(args) != 2:
+        return Err(i_r1002("sorted 需要 (list[, key_fn]) 参数", pos))
     let t = i_type_name(args[0])
     # M178：可迭代实参统一（list/tuple/生成器/字符串）—— 文案与编译轨同形
     if t != "list" and t != "tuple" and t != "generator" and t != "string":
         return Err(i_r1002("sorted 参数需要 list/tuple/生成器/字符串，实际是 " + t, pos))
+    let has_key = len(args) == 2
+    if has_key:
+        let kt = i_type_name(args[1])
+        if kt != "function" and kt != "native":
+            return Err(i_r1002("sorted 的第 2 个参数需要函数，实际是 " + kt, pos))
     let srcs = i_seq_of(args[0])
     let items = []
     var i = 0
@@ -1376,6 +1382,21 @@ def i_builtin_sorted(args, pos):
         items.append(srcs[i])
         i += 1
     let n = len(items)
+    # 键序列：无 key ⇒ 键即元素；有 key ⇒ 按**原序**求**恰一次**（与编译轨同款，副作用可观测）
+    let keys = []
+    if has_key:
+        var ki = 0
+        while ki < n:
+            let kr = i_call_value(args[1], [items[ki]], pos)
+            if kr.is_err():
+                return Err(kr.err())
+            keys.append(kr.unwrap())
+            ki += 1
+    else:
+        var kj = 0
+        while kj < n:
+            keys.append(items[kj])
+            kj += 1
     # M162（第 48 轮 · 缺陷 166/167）：**值比较** + **稳定**
     #   旧实现用 `i_to_str` 渲染串比较 ⇒ 与编译轨（runtime `compare_values`）不一致：
     #     `sorted([10, 9, 2])` 解释轨 [10, 2, 9] / 编译轨 [2, 9, 10]；
@@ -1383,17 +1404,29 @@ def i_builtin_sorted(args, pos):
     #     （后者 = 第三方 registry-px 登记的 PX-DEF-011）
     #   改用 `i_cmp_values`（对齐 compare_values 三态）；交换条件 `> 0`
     #   （等值不换 ⇒ **稳定**，与编译轨新算法同为稳定排序 ⇒ 同比较器下输出唯一）。
+    # M202：比较对象改为**键**（`keys[idx]`），输出仍取**原值**（`items[idx]`）；
+    #   下标放 list 里（与编译轨的 int 数组同构，排序算法逐行对应）。
+    let idx = []
+    var si = 0
+    while si < n:
+        idx.append(si)
+        si += 1
     var ii = 0
     while ii < n:
         var j = 0
         while j < n - 1 - ii:
-            if i_cmp_values(items[j], items[j + 1]) > 0:
-                let tmp = items[j]
-                items[j] = items[j + 1]
-                items[j + 1] = tmp
+            if i_cmp_values(keys[idx[j]], keys[idx[j + 1]]) > 0:
+                let tmp = idx[j]
+                idx[j] = idx[j + 1]
+                idx[j + 1] = tmp
             j += 1
         ii += 1
-    return Ok(items)
+    let out = []
+    var oi = 0
+    while oi < n:
+        out.append(items[idx[oi]])
+        oi += 1
+    return Ok(out)
 # ---------- reversed（对齐 builtin.rs Reversed） ----------
 def i_builtin_reversed(args, pos):
     if len(args) != 1:

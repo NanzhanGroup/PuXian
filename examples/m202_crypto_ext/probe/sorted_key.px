@@ -1,0 +1,35 @@
+# M202 探针 · 正例④：sorted(xs, key_fn) —— 取键语义（次数/顺序）+ 常见用法
+# 三轨必须逐字节一致；**取键恰一次/元素、按原始顺序**（副作用可观测）。
+let log = []
+
+def k_rev(x):
+    log.append(x)
+    return 0 - x
+
+def main():
+    # 取键次数与顺序（原序），且只取一次
+    print("k01=" + str(sorted([3, 1, 2], k_rev)))
+    print("k02=" + str(len(log)) + "/" + str(log))
+    # 逆序（数值）
+    print("k03=" + str(sorted([3, 1, 2], fn (x): 0 - x)))
+    # 恒等键 ≡ 无键（零回归）
+    print("k04=" + str(sorted([3, 1, 2], fn (x): x)))
+    # 字符串：按长度再按值
+    print("k05=" + str(sorted(["bbb", "a", "cc"], fn (s): [len(s), s])))
+    # 自然序（natsort 心智：键 = 数字部分）
+    print("k06=" + str(sorted(["x10", "x2", "x1"], fn (s): len(s))))
+    # 键为字符串 ↔ sorted 的值序（字节序）
+    print("k07=" + str(sorted([30, 4, 200], fn (x): str(x))))
+    # 传入的可以是具名函数 / 匿名函数 / 内置（native 值）
+    print("k08=" + str(sorted([[2, "b"], [1, "a"]], fn (p): p[0])))
+    print("k09=" + str(sorted(["bb", "a", "ccc"], len)))
+    # 空表 / 单元素
+    print("k10=" + str(sorted([], fn (x): x)) + " " + str(sorted([7], fn (x): x)))
+    # 不改原值（返回新 list）
+    let src = [3, 1, 2]
+    let out = sorted(src, fn (x): 0 - x)
+    print("k11=" + str(src) + "/" + str(out))
+    # 迭代实参统一：tuple / 生成器 / 字符串
+    print("k12=" + str(sorted((1, 2, 3), fn (x): 0 - x)))
+    print("k13=" + str(sorted((x * 2 for x in [1, 2, 3]), fn (x): 0 - x)))
+    print("k14=" + str(sorted("cba", fn (c): c)))

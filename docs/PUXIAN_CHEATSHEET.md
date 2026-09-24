@@ -325,7 +325,7 @@ print("upper=" + to_upper("px"))
 5. **`let` 不可变**（重新赋值报错），要改的用 `var`。
 6. **顶层 `var`/`let` = 全局状态槽（M70-S3）**：主程序与 import 模块的顶层 var/let 声明均可跨函数访问/读写（var 可写、let 只读报 E3002；import 方启动时初始化一次，同名冲突用户值优先）；写**纯函数库**仍建议显式传参（确定性优先）。
 7. **import 无副作用**（不执行模块顶层函数调用/裸赋值等语句）；仅模块顶层 var/let/const **声明**随合并导出并初始化一次（M70-S3，模块级状态槽的必要初始化，非任意副作用）。
-8. **编译模式全功能**（native **381** 全部可调，名册见 `docs/native_index.json`；`--no-xxx` 裁剪后不可达的 native ⇒ `R1001`）；**解释模式（pxi）M68 后同样零 extern def 可达全部 native**——但极端底层（ffi/指针）语义以编译产物为准。
+8. **编译模式全功能**（native **387** 全部可调，名册见 `docs/native_index.json`；`--no-xxx` 裁剪后不可达的 native ⇒ `R1001`）；**解释模式（pxi）M68 后同样零 extern def 可达全部 native**——但极端底层（ffi/指针）语义以编译产物为准。
 9. **stdlib 内参数名不用 `fn`**（`fn` 是匿名函数关键字），用 `f` 等。
 10. 注释/字符串里长行可加 `# noqa` 供 `px lint` 跳过。
 11. **pxi（解释器）为 Mini 子集：不支持 `spawn`/`chan` 等并发关键字** → 并发/服务端（http_serve/ws_serve 等常驻回调）程序用 `px build`；纯计算与客户端脚本 pxi/编译双模式皆可。
@@ -517,7 +517,7 @@ print("upper=" + to_upper("px"))
       字符串形态（`r/w/a/rw/w+`）表达不了"有则开、无则建、不截断"（`w+` 带 `O_TRUNC`），
       也表达不了 `O_EXCL`。字符串形态**行为零变化**。
       ⚠️ 第三参只在第二参是 int 时可用。
-## 2. native 内置速查（**381** 全量见 `docs/native_index.json`，本表为常用）
+## 2. native 内置速查（**387** 全量见 `docs/native_index.json`，本表为常用）
 
 ### 核心 / 值
 `print` `len` `range` `type` `str` `int` `float` `bool` `assert` `input` `exit` `sleep` `abs` `sqrt` `min` `max` `pow` `sorted` `reversed` `sum` `map` `filter` `reduce` `contains` `env`（⚠️ **变量不存在返回 `null`**，不是 `""` —— `str(null)` 会得到 `"null"`，取值请先判 null） `args()`（**调用式**：`px run s.px a b` 与编译产物同形 `[程序, a, b]`——M115 修；见 §1.1 事实清单）
@@ -712,7 +712,7 @@ set_timeout(fn (): print("once after 2s"), 2000)
 
 ## 5. 防漂移与源
 
-- **native 清单**（**381**，单一事实源 = runtime 注册表）：`bash tools/gen_native_table.sh` → `docs/native_index.json`；CI 重跑 diff 防漂移。**本表计数必须 == count**（现 **381** · 由 `bash tools/gen_native_table.sh` 生成后核对）。
+- **native 清单**（**387**，单一事实源 = runtime 注册表）：`bash tools/gen_native_table.sh` → `docs/native_index.json`；CI 重跑 diff 防漂移。**本表计数必须 == count**（现 **387** · 由 `bash tools/gen_native_table.sh` 生成后核对）。
 - **stdlib 索引**：`tools/px run tools/gen_ecosystem.px` → `docs/ecosystem_index.json`。
 - 规范：`docs/spec.md`（§8 模块/import、§9 双模式、§12 AI 协议）· `docs/MINI_SUBSET.md`（子集边界）· 缺口与写库规范：`docs/ECOSYSTEM_GAPS.md`。
 
@@ -2374,3 +2374,48 @@ set_timeout(fn (): print("once after 2s"), 2000)
        被测件必须**逐个包含**，且 QUIC/H3 族按 `--print-plan` 的 `no_quic` 动态剔除。
      · 注意：`native_symbols()` 是**只读诊断**面；缺名字 ⇒ 那个 native 在本构建**不可达**
        （`--no-xxx` 裁剪后同理，⇒ `R1001`）。
+
+229. **`base32_encode` / `base32_decode` / `bytes_base32` / `base32_to_bytes`（第 81 轮 · M202 收口第三方 PX-DEF-032）**：
+     · RFC 4648 §6 **标准表**（`A-Z2-7`）+ `=` 填充 —— OTP 秘钥的**标准文本格式**
+       （Google Authenticator / RFC 4226 §3.1 的 `secret`）；此前只有 base64 族 ⇒ 官方
+       `registry/totp` 只能**纯 .px 自实现**解码（`o_b32_decode`：to_upper + 5bit 累积）。
+     · 口径与 base64 族**逐项对齐**：`base32_encode(data) → str`（非字符串自动字符串化）；
+       `base32_decode(s) → str|null`（**非法 → null，不抛错**，同 `base64_decode`）；
+       `bytes_base32(b) → str`（字节安全）；`base32_to_bytes(s) → bytes|null`（严格）。
+     · ⚠️ **同一个陷阱**：`base32_decode` 回的是 **str**，而载荷可能是任意字节（含 NUL /
+       非法 UTF-8）⇒ **要二进制一律用 `base32_to_bytes`**。（同事实 218 的 base64 一族。）
+     · 解码**宽松面**（RFC 4648 §3.3/§3.4 允许的实现自由度，逐条写明、不再静默）：
+       **大小写不敏感**（`jbswy3dp` = `JBSWY3DP`）· **填充可省略**（OTP 秘钥普遍无填充）
+       · **忽略 ASCII 空白**（`JBSW Y3DP`）；其余一律 → `null`：非表内字符 · 填充后还有数据字符
+       · 数据长度 %8 ∉ {0,2,4,5,7} · 填充个数 ≠ 8-(n%8)。
+     · 实测（三轨逐字节一致）：`base32_encode("abc")` = `MFRGG===`（RFC 向量的 `abc`）·
+       `"ab"` = `MFRA====` · `"a"` = `ME======` · `"abcd"` = `MFRGGZA=` · `"abcde"` = `MFRGGZDF`；
+       0..12 字节**全长度往返**逐字节还原。
+     · 门：`examples/m202_crypto_ext/`。
+230. **`hmac_sha1` / `hmac_sha1_bytes`（第 81 轮 · M202 收口第三方 PX-DEF-033）**：
+     · RFC 4226（HOTP）/ RFC 6238（TOTP）的**默认算法**就是 HMAC-SHA1；此前语言只有
+       `hmac_sha256` ⇒ 官方 `registry/totp` 只能用 `sha1_bytes` **纯 .px 手工拼**
+       （64 字节块 + ipad/opad + 两次 sha1）。
+     · 口径与 `hmac_sha256` / `sha1` 族**逐项对齐**：`hmac_sha1(key, msg) → 40 字符小写 hex`；
+       `hmac_sha1_bytes(key, msg) → 20 字节`（要文本用 `bytes_to_hex`）。
+       key/msg 收 `str|bytes`（**二进制安全**可含 NUL；数值自动字符串化，同 `bytes()`）。
+     · 实测（三轨逐字节一致）：`hmac_sha1("key", "The quick brown fox jumps over the lazy dog")`
+       = `de7c9b85b8b78aa6bc8a7a36f70a90701c9db4d9`；RFC 2202 向量
+       （key = 20×`0b`，data = `"Hi There"`）= `b617318655057264e28bc0b6fb378c8ef146be00`；
+       空 key/空 msg 亦与 mbedtls 一致。
+     · 门：`examples/m202_crypto_ext/`。
+231. **`sorted(xs[, key_fn])` —— 可选 key 函数（第 81 轮 · M202 收口第三方 PX-DEF-034）**：
+     · 语义 = Python `sorted(xs, key=f)` 的心智：**取键、按键比较、按原值输出**
+       （此前只能靠 `[键, 下标, 原值]` 包装绕行 —— 官方 `registry/natsort` 即此法）。
+     · **取键恰一次/元素、按原始顺序**（副作用可观测：`log.append(x)` 得到 `[3,1,2]` 原序）；
+       比较仍用 `compare_values`（**值比较**）⇒ M162 的「值比较 + 稳定排序」**不变**；
+       键相等时**保持原序** ⇒ 同一 key 下输出唯一（三轨逐字节一致）。
+     · **未提供 key 时逐字节等价于旧行为**（键 = 元素自身 ⇒ 零回归）。
+     · **不提供 comparator（自定义比较器）—— 这是设计决定**：语言的全序由 `compare_values`
+       唯一确定，引入任意 int 比较器会让「稳定排序」失去可判定性（同一输入可有不同输出），
+       与 M162 立的「同一比较器下输出唯一」直接冲突。要逆序写 `fn(x): 0 - x`（数值）
+       或把键包成 `[-k, x]`（通用）。
+     · 错误面（三轨同码同文）：`sorted()` ⇒ `R1002: sorted 需要 (list[, key_fn]) 参数`；
+       `sorted(xs, 5)` ⇒ `R1002: sorted 的第 2 个参数需要函数，实际是 int`；
+       `sorted(5, f)` ⇒ `R1002: sorted 参数需要 list/tuple/生成器/字符串，实际是 int`。
+     · 门：`examples/m202_crypto_ext/`。

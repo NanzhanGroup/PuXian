@@ -1,0 +1,18 @@
+# M202 探针 · 正例①：base32 编码（RFC 4648 §10 全部 7 条向量）
+# 三轨（解释 / VM / C）输出必须逐字节一致。
+def p(tag, v):
+    print(tag + "=" + str(v))
+
+def main():
+    p("e01", base32_encode(""))
+    p("e02", base32_encode("f"))
+    p("e03", base32_encode("fo"))
+    p("e04", base32_encode("foo"))
+    p("e05", base32_encode("foob"))
+    p("e06", base32_encode("fooba"))
+    p("e07", base32_encode("foobar"))
+    # 非字符串自动字符串化（与 base64_encode 同款）
+    p("e08", base32_encode(123))
+    p("e09", base32_encode(bytes("abc")))
+    # bytes_base32 ≡ base32_encode（字节安全别名）
+    p("e10", bytes_base32(hex_to_bytes("00ff10")))

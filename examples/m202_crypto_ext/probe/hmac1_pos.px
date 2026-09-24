@@ -1,0 +1,35 @@
+# M202 探针 · 正例③：hmac_sha1 / hmac_sha1_bytes（RFC 2202 §3 全部 7 条向量）
+# ⚠️ key/data 的字节长度由生成器**程序化**给出（上一版手抄成 116 字节 ⇒ 与 RFC 不符）。
+def p(tag, v):
+    print(tag + "=" + str(v))
+
+def main():
+    # ---- RFC 2202 test_case 1..7（逐字节照搬；key/data 长度见生成器）----
+    p("h01", hmac_sha1(hex_to_bytes("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"), "Hi There"))                       # key 20B / data 8B
+    p("h02", hmac_sha1("Jefe", "what do ya want for nothing?"))              # key 4B / data 28B
+    p("h03", hmac_sha1(hex_to_bytes("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), hex_to_bytes("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")))
+    p("h04", hmac_sha1(hex_to_bytes("0102030405060708090a0b0c0d0e0f10111213141516171819"), hex_to_bytes("cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd")))
+    p("h05", hmac_sha1(hex_to_bytes("0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c"), "Test With Truncation"))
+    p("h06", hmac_sha1(hex_to_bytes("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), "Test Using Larger Than Block-Size Key - Hash Key First"))
+    p("h07", hmac_sha1(hex_to_bytes("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), "Test Using Larger Than Block-Size Key and Larger Than One Block-Size Data"))
+    # ---- _bytes 形态（20 字节）+ hex 形态同源 ----
+    p("h08", bytes_to_hex(hmac_sha1_bytes("key", "The quick brown fox jumps over the lazy dog")))
+    p("h09", hmac_sha1("key", "The quick brown fox jumps over the lazy dog"))
+    # ---- 二进制安全：key/msg 含 NUL ----
+    p("h10", hmac_sha1(hex_to_bytes("0001ff"), bytes_concat(bytes("a"), byte(0))))
+    # ---- 宽度：_bytes = 20，hex = 40 ----
+    p("h11", bytes_len(hmac_sha1_bytes("k", "m")))
+    p("h12", len(hmac_sha1("k", "m")))
+    # ---- 缺陷 244 面：**非字符串实参**必须与字符串形态同值（修前 key 被 msg 顶掉）----
+    p("n01", hmac_sha1(123, 456))
+    p("n02", hmac_sha1("123", "456"))
+    p("n03", hmac_sha256(123, 456))
+    p("n04", hmac_sha256("123", "456"))
+    p("n05", bytes_to_hex(pbkdf2_sha256(123, 456, 1, 8)))
+    p("n06", bytes_to_hex(pbkdf2_sha256("123", "456", 1, 8)))
+    p("n07", regex_match(123, 456))
+    p("n08", regex_match("123", "456"))
+    p("n09", regex_search(12, 123))
+    p("n10", regex_search("12", "123"))
+    p("n11", regex_find(12, 123))
+    p("n12", regex_find("12", "123"))

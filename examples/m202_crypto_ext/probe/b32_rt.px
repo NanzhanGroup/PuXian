@@ -1,0 +1,40 @@
+# M202 探针 · 正例②：base32 解码（RFC 4648 §10 向量 + 宽松面 + 0..12 字节往返）
+def p(tag, v):
+    print(tag + "=" + str(v))
+
+def rt(n):
+    # n 字节确定性载荷 → 编码 → 解码 → hex 对照
+    var raw = bytes("")
+    var i = 0
+    while i < n:
+        raw = bytes_concat(raw, byte((i * 7 + 1) % 256))
+        i += 1
+    let enc = base32_encode(raw)
+    let back = base32_to_bytes(enc)
+    return bytes_to_hex(back) + "/" + enc
+
+def main():
+    p("d01", base32_decode("MY======"))
+    p("d02", base32_decode("MZXQ===="))
+    p("d03", base32_decode("MZXW6==="))
+    p("d04", base32_decode("MZXW6YQ="))
+    p("d05", base32_decode("MZXW6YTB"))
+    p("d06", base32_decode("MZXW6YTBOI======"))
+    p("d07", base32_decode(""))
+    # 宽松面：无填充 / 小写 / 含空白（OTP 秘钥的三种常见书写）
+    p("d08", base32_decode("MZXW6"))
+    p("d09", base32_decode("mzxw6ytboi"))
+    p("d10", base32_decode("MZXW 6YTB OI======"))
+    # 非法 → null（同 base64_decode：不抛错）
+    p("d11", base32_decode("bad!"))
+    p("d12", base32_decode("MZXW6YTB1"))       # 数据长度 %8 == 1（非法）
+    p("d13", base32_decode("MZXW6Y=Q"))        # 填充后还有数据字符
+    p("d14", base32_decode("MZXW6YTB="))      # 数据长度已整组（rem 0）却带填充 ⇒ 非法
+    # 二进制安全：base32_to_bytes 保留 NUL / 非 UTF-8 字节
+    p("d15", bytes_to_hex(base32_to_bytes("AAAQE===")))
+    p("d16", bytes_to_hex(base32_to_bytes(bytes_base32(hex_to_bytes("00ff00")))))
+    # 0..12 字节全长度往返（编码 → 解码 → 逐字节还原）
+    var n = 0
+    while n <= 12:
+        p("r" + str(n), rt(n))
+        n += 1

@@ -56,6 +56,7 @@
 #include "mbedtls/sha1.h"      // M188（PX-DEF-026）：SHA1（MySQL native_password 应答 / 通用摘要）
 #include "mbedtls/md5.h"      // M150：MD5（PostgreSQL md5 认证 / 通用摘要）
 #include "mbedtls/pkcs5.h"    // M150：PBKDF2-HMAC-SHA256（SCRAM-SHA-256 的 Hi）
+#include "mbedtls/md.h"       // M202：HMAC-SHA1（RFC 4226/6238 的默认算法；与 runtime_zip 同一原语）
 
 // ==================== M127（qg-issue 84）：回卷的锁安全审计 ====================
 // 病灶与做法见 runtime/locktrack.h 头部说明。此处 = 存储（TLS，跨 TU 共享）+ 宏接管本 TU 的锁调用。
@@ -6673,30 +6674,70 @@ static LXValue bi_pow(LXValue* args, int nargs, void* ctx) {
 //   （1.0 与 1 数值相等 ⇒ compare_values == 0，但渲染不同 ⇒ 顺序可观测）。
 //   改为**相邻冒泡**（仅 `> 0` 才交换）⇒ 稳定；与解释轨 `i_builtin_sorted`
 //   （同批改为稳定 + 值比较）同为稳定排序 ⇒ 同一比较器下输出唯一、三轨逐字节一致。
+// sorted(list[, key_fn]) → list（按 compare_values 排序，**稳定**相邻冒泡）
+// M162（第 48 轮 · 缺陷 167）：原实现是**选择式**（`items[j] < items[i]` 即两两交换），
+//   在「比较器判相等、但值可区分」的元素上**不稳定**：
+//     `sorted([1.0, 1, 0.5])` ⇒ 旧 [0.5, 1, 1.0] / 稳定序应为 [0.5, 1.0, 1]
+//   （1.0 与 1 数值相等 ⇒ compare_values == 0，但渲染不同 ⇒ 顺序可观测）。
+//   改为**相邻冒泡**（仅 `> 0` 才交换）⇒ 稳定；与解释轨 `i_builtin_sorted`
+//   （同批改为稳定 + 值比较）同为稳定排序 ⇒ 同一比较器下输出唯一、三轨逐字节一致。
+// M202（第 81 轮 · 第三方 PX-DEF-034）：新增**可选第 2 参 key 函数** —— 取键、按键比较、
+//   按原值输出（= Python `sorted(xs, key=f)` 的心智）。此前只能靠 `[键, 下标, 原值]` 包装
+//   绕行（官方 `registry/natsort` 即此法）。
+//   · **取键恰一次/元素、按原始顺序**（副作用可观测；与解释轨同款）
+//   · 比较仍用 `compare_values`（**值比较**）⇒ M162 的「值比较 + 稳定排序」**不变**；
+//     键相等时**保持原序** ⇒ 同一 key 下输出唯一（三轨逐字节一致）
+//   · **未提供 key 时逐字节等价于旧行为**（键 = 元素自身 ⇒ 零回归）
+//   · **明确不提供 comparator（自定义比较器）**：语言的全序由 `compare_values` 唯一确定，
+//     引入任意 int 比较器会让「稳定排序」失去可判定性（同一输入可有不同输出）——
+//     与 M162 立的「同一比较器下输出唯一」直接冲突。要逆序写 `fn(x): 0 - x`（数值）
+//     或把键包成 `[-k, x]`（通用）。
 static LXValue bi_sorted(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
-    if (nargs != 1) px_error("R1002: sorted 需要 1 个参数");
+    if (nargs != 1 && nargs != 2) px_error("R1002: sorted 需要 (list[, key_fn]) 参数");
+    LXValue keyfn = px_null();
+    int has_key = 0;
+    if (nargs == 2) {
+        if (args[1].type != PX_FUNC && args[1].type != PX_NATIVE)
+            px_error("R1002: sorted 的第 2 个参数需要函数，实际是 %s", px_type_name(args[1]));
+        keyfn = args[1];
+        has_key = 1;
+    }
     // M178：可迭代实参统一（list/tuple/生成器）—— 文案与另三个入口同形
     LXValue xs;
     px_root_push();
     if (!px_as_list(args[0], &xs)) { px_root_pop(); px_error("R1002: sorted 参数需要 list/tuple/生成器/字符串，实际是 %s", px_type_name(args[0])); }
     PX_KEEP(xs);
     LXObject* o = xs.as.obj;
-    int ori_len = o->as.list.len;
-    LXValue r = px_list(ori_len);
-    PX_KEEP(r);   // M92 precise：拷贝 list 跨 px_list_push 扩容分配
-    for (int i = 0; i < ori_len; i++)
-        px_list_push(r, o->as.list.items[i]);
-    LXObject* ro = r.as.obj;
-    for (int i = 0; i < ro->as.list.len; i++) {
-        for (int j = 0; j + 1 < ro->as.list.len - i; j++) {
-            if (compare_values(ro->as.list.items[j], ro->as.list.items[j + 1]) > 0) {
-                LXValue t = ro->as.list.items[j];
-                ro->as.list.items[j] = ro->as.list.items[j + 1];
-                ro->as.list.items[j + 1] = t;
+    int n = o->as.list.len;
+    // 键序列：无 key ⇒ 键即元素（与旧行为同构）；有 key ⇒ 按**原序**求**恰一次**
+    LXValue ks = px_list(n);
+    PX_KEEP(ks);
+    for (int i = 0; i < n; i++) {
+        LXValue e = o->as.list.items[i];
+        if (!has_key) { px_list_push(ks, e); continue; }
+        LXValue kv = px_call(keyfn, &e, 1);
+        PX_KEEP(kv);       // M170 纪律：回调返回的新对象须跨 px_list_push 的扩容分配存活
+        px_list_push(ks, kv);
+        px_root_pop();
+    }
+    LXObject* ko = ks.as.obj;
+    // 索引排序：int 下标**不进 GC** ⇒ 无需登记；稳定在**键**上（仅 `> 0` 交换）
+    int* idx = (n > 0) ? (int*)xmalloc(sizeof(int) * (size_t)n) : NULL;
+    for (int i = 0; i < n; i++) idx[i] = i;
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j + 1 < n - i; j++) {
+            if (compare_values(ko->as.list.items[idx[j]], ko->as.list.items[idx[j + 1]]) > 0) {
+                int t = idx[j];
+                idx[j] = idx[j + 1];
+                idx[j + 1] = t;
             }
         }
     }
+    LXValue r = px_list(n);
+    PX_KEEP(r);
+    for (int i = 0; i < n; i++) px_list_push(r, o->as.list.items[idx[i]]);
+    if (idx) xfree(idx);
     px_root_pop();
     return r;
 }
@@ -7058,6 +7099,29 @@ static LXValue bi_truncate_file(LXValue* args, int nargs, void* ctx) {
 // ==================== M14 P1：crypto 哈希（签名校验 / 缓存 key / 数据指纹） ====================
 
 // 取任意值的字符串表示（与解释器 to_string 一致：str 原样，其余 str(v)）
+// ═══ M202（第 81 轮 · 缺陷 244）：非字符串实参的渲染缓冲 = **每线程 + 轮转环** ═══
+// 病（真踩）：`val_cstr` / `bdata` 对**非 str/bytes** 实参走**同一处** `static char tmp[64]`
+//   ⇒ 同一函数里对**两个不同实参**各取一次指针时，前一个会被后一次调用**就地覆盖**：
+//     实测 `hmac_sha256(123, 456)` == `hmac(b"456", b"456")`（key 被 msg 顶掉）、
+//     同族的 `hmac_sha1` / `pbkdf2_sha256` / `regex_match(123, 456)` 全部同病 ——
+//     **安全原语 + 密钥派生 + 正则匹配上静默算错**（不崩、不报错，最难查的一类）。
+//   叠加第二层：它是**进程级** static，而运行期是多线程（worker / 连接线程 / 定时器线程）
+//   ⇒ 两个线程同时取非字符串实参也会互踩（同一根因的另一面）。
+// 修法：**每线程 8 槽轮转环** —— 连续 8 次「不同实参」的取值互不覆盖（实际用点最多 3 处：
+//   `regex_replace` 的 pat/text/repl），且 `str`/`bytes` 实参**仍直接返回对象自身缓冲**
+//   （不占槽 ⇒ 行为、内存占用、发射文本都不变）。
+// 纪律：**取值后不要假设同一个指针跨两次调用仍有效**（这是本缺陷的根因）；
+//   要在两次取值之间长期持有，请自己 `xmalloc` 拷一份。
+#define PX_TMPRING 8
+#define PX_TMPSZ   64
+static __thread char g_tmp_ring[PX_TMPRING][PX_TMPSZ];
+static __thread unsigned g_tmp_ring_i = 0;
+static char* px_tmp_slot(void) {
+    char* p = g_tmp_ring[g_tmp_ring_i];
+    g_tmp_ring_i = (g_tmp_ring_i + 1) % PX_TMPRING;
+    return p;
+}
+
 static const char* val_cstr(LXValue v) {
     if (v.type == PX_STR) return v.as.obj->as.str.data;
     // M129（Issue 87 缺陷 35）：null 必须字符串化为 "null"，与 `str(null)` 一致。
@@ -7066,8 +7130,9 @@ static const char* val_cstr(LXValue v) {
     //   **静默给出错误结果**（不是崩溃，最难查）。`str()` 走的是另一条路，故此前
     //   二者行为不一致（str(null)=="null" 而 sha256(null) 按 "0.0" 算）。
     if (v.type == PX_NULL) return "null";
-    static char tmp[64];
-    snprintf(tmp, sizeof(tmp), "%s", fmt_num(v));
+    // M202（缺陷 244）：**每线程轮转环**，不再用一处共享 static（见 px_tmp_slot 注释）
+    char* tmp = px_tmp_slot();
+    snprintf(tmp, PX_TMPSZ, "%s", fmt_num(v));
     return tmp;
 }
 
@@ -7807,6 +7872,151 @@ static LXValue bi_base64_decode(LXValue* args, int nargs, void* ctx) {
     return r;
 }
 
+// ==================== M202 base32（RFC 4648 §6 标准表，带 padding） ====================
+// 动机（第三方 PX-DEF-032）：OTP 秘钥的**标准文本格式**就是 base32（Google Authenticator /
+//   RFC 4226 §3.1 的 `secret` 字段），而语言此前只有 base64 族 ⇒ 官方 `registry/totp`
+//   只能**纯 .px 自实现**解码（`o_b32_decode`：to_upper + 5bit 累积），既慢、也无法与
+//   C 轨共享同一份实现。
+// 口径与 base64 族**逐项对齐**（不发明新约定）：
+//   base32_encode(data)  → str（RFC 4648 标准表 A-Z2-7，带 '=' 填充；非字符串自动字符串化）
+//   base32_decode(s)     → str 或 null（非法 → null，**不抛错**；同 `base64_decode`）
+//   bytes_base32(b)      → str（**字节安全**编码；同 `bytes_base64`）
+//   base32_to_bytes(s)   → bytes 或 null（严格解码；同 `base64_to_bytes`）
+//   ⚠️ 与 base64 族同一个陷阱：`base32_decode` 返回的是 **str**，而解出来的载荷可能是
+//      任意字节（含 NUL / 非法 UTF-8）⇒ **要二进制请用 `base32_to_bytes`**。
+// 解码的宽松面（RFC 4648 §3.3/§3.4 留给实现的自由度，逐条写明，**不再静默**）：
+//   · **大小写不敏感**：`jbswy3dp` = `JBSWY3DP`（标准表定义即大写，小写是常见书写习惯；
+//     同 Python `b32decode(..., casefold=True)`）
+//   · **填充可省略**：OTP 秘钥普遍以无填充形态发放（`JBSWY3DPEHPK3PXP`）
+//   · **忽略 ASCII 空白**（空格/制表/换行/回车）：秘钥常被分组书写（`JBSW Y3DP`）
+//   · 其余一律非法 → `null`：非表内字符 · 填充后还有数据字符 · 数据长度 %8 ∉ {0,2,4,5,7}
+//     · 填充个数 ≠ 8-(n%8)
+//   （**不做**填充位必须为 0 的规范检查 —— Go `base32` / Python `b32decode` 亦不查，
+//     与 base64 族同口径。）
+static const char B32_TBL[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+static int b32_val(char c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a';      // 大小写不敏感（见上）
+    if (c >= '2' && c <= '7') return 26 + (c - '2');
+    return -1;
+}
+
+// 编码核心（`base32_encode` 与 `bytes_base32` 共用一份实现）
+static LXValue b32_encode_core(LXValue a) {
+    const char* data = bdata(a);
+    int len = blen(a);
+    int olen = ((len + 4) / 5) * 8;
+    char* out = xmalloc((size_t)olen + 1);
+    int oi = 0, i = 0;
+    while (i + 5 <= len) {
+        unsigned long long v =
+            ((unsigned long long)(unsigned char)data[i]     << 32) |
+            ((unsigned long long)(unsigned char)data[i + 1] << 24) |
+            ((unsigned long long)(unsigned char)data[i + 2] << 16) |
+            ((unsigned long long)(unsigned char)data[i + 3] <<  8) |
+             (unsigned long long)(unsigned char)data[i + 4];
+        for (int k = 0; k < 8; k++) out[oi++] = B32_TBL[(v >> (35 - 5 * k)) & 31];
+        i += 5;
+    }
+    int rem = len - i;
+    if (rem > 0) {
+        unsigned long long v =
+            ((unsigned long long)(unsigned char)data[i]     << 32) |
+            ((rem > 1) ? ((unsigned long long)(unsigned char)data[i + 1] << 24) : 0ULL) |
+            ((rem > 2) ? ((unsigned long long)(unsigned char)data[i + 2] << 16) : 0ULL) |
+            ((rem > 3) ? ((unsigned long long)(unsigned char)data[i + 3] <<  8) : 0ULL);
+        int nchars = (rem == 1) ? 2 : (rem == 2) ? 4 : (rem == 3) ? 5 : 7;
+        for (int k = 0; k < 8; k++)
+            out[oi++] = (k < nchars) ? B32_TBL[(v >> (35 - 5 * k)) & 31] : '=';
+    }
+    out[oi] = 0;
+    LXValue r = px_str_len(out, oi);
+    xfree(out);
+    return r;
+}
+
+// base32_encode(data) → str（RFC 4648 标准，带 padding）
+static LXValue bi_base32_encode(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: base32_encode 需要一个参数");
+    return b32_encode_core(args[0]);
+}
+
+// bytes_base32(b) → str（字节安全编码；语义同 base32_encode，单独一名以对齐 base64 族）
+static LXValue bi_bytes_base32(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: bytes_base32 需要一个参数");
+    return b32_encode_core(args[0]);
+}
+
+// 解码核心：成功返回 0（*out/*olen 交调用方 xfree），非法返回 -1
+static int b32_decode_alloc(const char* s, char** out, int* olen) {
+    size_t n0 = strlen(s);
+    char* clean = xmalloc(n0 + 1);
+    size_t m = 0;
+    for (size_t i = 0; i < n0; i++) {
+        char c = s[i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;   // 忽略 ASCII 空白
+        clean[m++] = c;
+    }
+    clean[m] = 0;
+    size_t nd = 0, pad = 0;
+    int seen_pad = 0;
+    for (size_t i = 0; i < m; i++) {
+        if (clean[i] == '=') { seen_pad = 1; pad++; continue; }
+        if (seen_pad) { xfree(clean); return -1; }        // 填充之后还有数据字符
+        nd++;
+    }
+    size_t rem = nd % 8;
+    if (rem != 0 && rem != 2 && rem != 4 && rem != 5 && rem != 7) { xfree(clean); return -1; }
+    if (pad > 0 && (rem == 0 || (size_t)(8 - rem) != pad)) { xfree(clean); return -1; }
+    char* o = xmalloc(nd * 5 / 8 + 1);
+    int oi = 0;
+    unsigned acc = 0;
+    int nbits = 0;
+    for (size_t i = 0; i < m; i++) {
+        if (clean[i] == '=') break;
+        int v = b32_val(clean[i]);
+        if (v < 0) { xfree(clean); xfree(o); return -1; }
+        acc = (acc << 5) | (unsigned)v;
+        nbits += 5;
+        if (nbits >= 8) {
+            nbits -= 8;
+            o[oi++] = (char)((acc >> nbits) & 0xFF);
+            acc &= (1u << nbits) - 1;      // 只留 nbits 位有效位（否则高位垃圾会污染后续输出）
+        }
+    }
+    xfree(clean);
+    *out = o;
+    *olen = oi;
+    return 0;
+}
+
+// base32_decode(s) → str 或 null（非法输入返回 null，不抛错）
+static LXValue bi_base32_decode(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: base32_decode 需要一个参数");
+    char* out = NULL;
+    int olen = 0;
+    if (b32_decode_alloc(val_cstr(args[0]), &out, &olen) != 0) return px_null();
+    LXValue r = px_str_len(out, olen);
+    xfree(out);
+    return r;
+}
+
+// base32_to_bytes(s) → bytes 或 null（严格解码：非法 → null）
+static LXValue bi_base32_to_bytes(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1) px_error("R1002: base32_to_bytes 需要一个参数");
+    char* out = NULL;
+    int olen = 0;
+    if (b32_decode_alloc(val_cstr(args[0]), &out, &olen) != 0) return px_null();
+    LXValue r = px_bytes_len(out, olen);
+    xfree(out);
+    return r;
+}
+
 // ==================== M22 P1：位运算 / 二进制数据视图 ====================
 // int_to_hex(n, width) → str（固定宽度小写 hex，负数按补码取低 4*width 位）
 static LXValue bi_int_to_hex(LXValue* args, int nargs, void* ctx) {
@@ -7949,6 +8159,48 @@ static LXValue bi_hmac_sha256(LXValue* args, int nargs, void* ctx) {
     char hex[65];
     bytes_to_hex(digest, 32, hex);
     return px_str(hex);
+}
+
+
+// hmac_sha1(key, msg) → 40 字符小写 hex（HMAC-SHA1）
+// hmac_sha1_bytes(key, msg) → 20 字节
+// M202（第三方 PX-DEF-033）：RFC 4226（HOTP）/ RFC 6238（TOTP）的**默认**算法就是
+//   HMAC-SHA1，而语言此前只有 `hmac_sha256` ⇒ 官方 `registry/totp` 只能用 `sha1_bytes`
+//   **纯 .px 手工拼**（`o_hmac_sha1`：64 字节块 + ipad/opad + 两次 sha1），既慢又与编译轨
+//   无法共享同一份实现。
+// 口径与 `hmac_sha256` / `md5` 族**逐项对齐**：
+//   · key/msg 收 str|bytes，**二进制安全**可含 NUL（数值自动字符串化，同 `bytes()`）
+//   · hex 版本返回 **40 字符小写 hex**；_bytes 版本返回 **20 字节**（要文本用 bytes_to_hex）
+//   底层取 mbedtls 的 `mbedtls_md_hmac(MBEDTLS_MD_SHA1, …)`（与 RFC 2202 测试向量逐字节一致，
+//   与 runtime_zip.c 的 WinZip-AES 校验同一原语）。
+static LXValue bi_hmac_sha1(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) px_error("R1002: hmac_sha1 需要 (key, msg) 参数");
+    const unsigned char* kd = (const unsigned char*)bdata(args[0]);
+    int kl = blen(args[0]);
+    const unsigned char* md = (const unsigned char*)bdata(args[1]);
+    int ml = blen(args[1]);
+    unsigned char digest[20];
+    if (mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA1),
+                        kd, (size_t)kl, md, (size_t)ml, digest) != 0)
+        px_error("hmac_sha1 计算失败");
+    char hex[41];
+    bytes_to_hex(digest, 20, hex);
+    return px_str(hex);
+}
+
+static LXValue bi_hmac_sha1_bytes(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2) px_error("R1002: hmac_sha1_bytes 需要 (key, msg) 参数");
+    const unsigned char* kd = (const unsigned char*)bdata(args[0]);
+    int kl = blen(args[0]);
+    const unsigned char* md = (const unsigned char*)bdata(args[1]);
+    int ml = blen(args[1]);
+    unsigned char digest[20];
+    if (mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA1),
+                        kd, (size_t)kl, md, (size_t)ml, digest) != 0)
+        px_error("hmac_sha1_bytes 计算失败");
+    return px_bytes_len(digest, 20);
 }
 
 // ═══ M150（第 32 轮）：摘要 / 密钥派生族（md5 / md5_bytes / pbkdf2_sha256）═══
@@ -11171,6 +11423,8 @@ void px_register_builtins(void) {
     px_set_global("byte", px_native("byte", bi_byte));
     px_set_global("str_index_of", px_native("str_index_of", bi_str_index_of));   // M188：方法面 .find 的同一实现
     px_set_global("hmac_sha256", px_native("hmac_sha256", bi_hmac_sha256));  // M84-S2 (Issue 21 GAP-HMAC-1)
+    px_set_global("hmac_sha1", px_native("hmac_sha1", bi_hmac_sha1));                 // M202 (PX-DEF-033)
+    px_set_global("hmac_sha1_bytes", px_native("hmac_sha1_bytes", bi_hmac_sha1_bytes)); // M202 (PX-DEF-033)
     px_set_global("dns_lookup", px_native("dns_lookup", bi_dns_lookup));     // M84-S3 (Issue 22 GAP-DNS-1)
     px_set_global("dns_txt", px_native("dns_txt", bi_dns_txt));              // M103-S2a (Issue 29 GAP-DNS-TXT-1)
     px_set_global("xxhash", px_native("xxhash", bi_xxhash));
@@ -11315,6 +11569,11 @@ void px_register_builtins(void) {
     // M21 P1：base64 编解码
     px_set_global("base64_encode", px_native("base64_encode", bi_base64_encode));
     px_set_global("base64_decode", px_native("base64_decode", bi_base64_decode));
+    // M202（第三方 PX-DEF-032）：base32（RFC 4648 §6）—— OTP 秘钥的标准文本格式
+    px_set_global("base32_encode", px_native("base32_encode", bi_base32_encode));
+    px_set_global("base32_decode", px_native("base32_decode", bi_base32_decode));
+    px_set_global("base32_to_bytes", px_native("base32_to_bytes", bi_base32_to_bytes));
+    px_set_global("bytes_base32", px_native("bytes_base32", bi_bytes_base32));
     // M21 P1：SSE 服务端（LLM 流式推送 / 实时通知）
     px_set_global("sse_serve", px_native("sse_serve", bi_sse_serve));
     px_set_global("sse_send", px_native("sse_send", bi_sse_send));
@@ -12933,8 +13192,9 @@ static LXValue bi_signal(LXValue* args, int nargs, void* ctx) {
 // 数值自动字符串化——与解释器 bytes_of 的 to_string 语义一致）
 static const char* bdata(LXValue v) {
     if (v.type == PX_STR || v.type == PX_BYTES) return v.as.obj->as.str.data;
-    static char tmp[64];
-    snprintf(tmp, sizeof(tmp), "%s", fmt_num(v));
+    // M202（缺陷 244）：**每线程轮转环**（同 val_cstr；见 px_tmp_slot 注释）
+    char* tmp = px_tmp_slot();
+    snprintf(tmp, PX_TMPSZ, "%s", fmt_num(v));
     return tmp;
 }
 static int blen(LXValue v) {
