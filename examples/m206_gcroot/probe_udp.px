@@ -1,0 +1,38 @@
+# M206 探针（UDP 面）：udp_serve 的 handler 实参数组（hargs）+ 响应体
+PORT = 19339
+
+
+def h(ip, port, data):
+    return "echo:" + data
+
+
+spawn udp_serve(PORT, h)
+sleep(300)
+bad = 0
+shown = false
+for i in range(20):
+    s = udp_open()
+    udp_send(s, "127.0.0.1", PORT, "M206UDP-" + str(i))
+    r = udp_recv(s, 65536)
+    want = "echo:M206UDP-" + str(i)
+    ok = true
+    if r == null:
+        ok = false
+    else:
+        if r.has("data") == false:
+            ok = false
+        else:
+            if r["data"] != bytes(want):
+                ok = false
+    if ok == false:
+        bad = bad + 1
+        if shown == false:
+            print("  首错: got=" + str(r) + " want=" + want)
+            shown = true
+    udp_close(s)
+print("UDP bad=" + str(bad) + " / 20")
+if bad == 0:
+    print("PROBE_UDP OK")
+else:
+    print("PROBE_UDP FAIL")
+    exit(1)

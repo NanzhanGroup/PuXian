@@ -1,0 +1,88 @@
+# M206 探针（运行时面）：HTTP 请求解析（urlencoded / multipart）+ session
+#   判据：40 次请求全部 OK；在 PX_GC_STRESS=1 PX_GC_INLINE=1 PX_GC_LIVECHK=1 下
+#         既不得出现 LIVECHK 报错、也不得崩（修前：LIVECHK 响亮 + SIGABRT）。
+# 让 bi_session_* 能工作：它们读的是**模块级全局** REQUEST（M169：模块级绑定即全局）
+REQUEST = {"cookie": {"pxsid": ""}}
+PORT = 19337
+URL = "http://127.0.0.1:" + str(PORT)
+CRLF = "\r\n"
+B = "M206BOUND"
+P1 = "Content-Disposition: form-data; name=\"f1\""
+P2 = "Content-Disposition: form-data; name=\"avatar\"; filename=\"a.bin\""
+MP = "--" + B + CRLF + P1 + CRLF + CRLF + "v1" + CRLF + "--" + B + CRLF + P2 + CRLF + CRLF + "BINDATA-42" + CRLF + "--" + B + "--" + CRLF
+
+
+def chk_form(req, why, tag, key, want):
+    f = req["form"]
+    if f == null:
+        return why + tag + "NULL "
+    if f.has(key) == false:
+        return why + tag + "no-" + key + " "
+    if f[key] != want:
+        return why + tag + "bad-" + key + " "
+    return why
+
+
+def h(req):
+    why = ""
+    if req["path"] == "/mp":
+        why = chk_form(req, why, "MPFORM-", "f1", "v1")
+        if req.has("file_bytes"):
+            fb = req["file_bytes"]
+            if fb != null:
+                if fb.has("a.bin"):
+                    if len(fb["a.bin"]) != 10:
+                        why = why + "MPFILE-len "
+                    if str(fb["a.bin"]) != "<bytes 10>":
+                        why = why + "MPFILE-render:" + str(fb["a.bin"]) + " "
+                else:
+                    why = why + "MPFILE-no-key "
+            else:
+                why = why + "MPFILE-NULL "
+        else:
+            why = why + "MPFILE-absent "
+    # session（bi_session_open / bi_session_set / bi_session_get：三个裸 C 局部族）
+    sid = session_open()
+    if sid == null:
+        why = why + "SESSION-OPEN "
+    else:
+        session_set("k", "v")
+        if session_get("k") != "v":
+            why = why + "SESSION-GET "
+    if req["path"] != "/mp":
+        if req["query"] != "q1=v1":
+            why = why + "QUERY "
+        why = chk_form(req, why, "FORM-", "a", "1")
+    if why == "":
+        return {"status": 200, "body": "OK"}
+    return {"status": 200, "body": "BAD:" + why}
+
+
+def srv():
+    http_serve(PORT, h)
+
+
+spawn srv()
+sleep(500)
+bad = 0
+shown = false
+for i in range(20):
+    r = http_request(URL + "/p?q1=v1", "POST", "a=1&b=2", {"Cookie": "sess=abc; theme=dark", "Content-Type": "application/x-www-form-urlencoded"})
+    if r["body"] != "OK":
+        bad = bad + 1
+        if shown == false:
+            print("  首错(urlenc): " + str(r["body"]))
+            shown = true
+for i in range(20):
+    r = http_request(URL + "/mp", "POST", MP, {"Cookie": "sess=abc; theme=dark", "Content-Type": "multipart/form-data; boundary=" + B})
+    if r["body"] != "OK":
+        bad = bad + 1
+        if shown == false:
+            print("  首错(multipart): " + str(r["body"]))
+            shown = true
+print("HTTP bad=" + str(bad) + " / 40")
+if bad == 0:
+    print("PROBE_RT OK")
+else:
+    print("PROBE_RT FAIL")
+    exit(1)

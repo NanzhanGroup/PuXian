@@ -1,0 +1,12 @@
+# M206 GC 根面静态审计 —— **已判定基线**（候选 ⇄ 判定 一一对齐；门由此判「有无新增」）
+# 列：file<TAB>func<TAB>trigger<TAB>victim<TAB>判定<TAB>理由
+# 规则：判定只允许「假阳」；出现「真」= 有未修的漏登记 ⇒ 门必红。
+#       （12 + 7 + 1 = 20 处**真**站点已在 M206 修复，故本表不含任何「真」。）
+runtime/runtime.c	px_gen_materialize	px_call(	keep	假阳	受害者 keep 在该分支其后即 continue/return（死值）；触发点是循环**下一轮**的分配，与它无关
+runtime/runtime.c	px_gen_next	px_call(	keep	假阳	同族：分支末尾直接 return，keep 已死
+runtime/runtime.c	bi_http_get_stream	px_str_len(	rv	假阳	rv 在紧随其后的 if 之后即死；触发点是**下一轮**迭代的 px_str_len（arg 侧已按缺陷 257 登记）
+runtime/runtime.c	bi_http_get_stream	px_str_len(	rv	假阳	同族（chunk 分支）
+runtime/runtime.c	bi_http_get_stream	px_str_len(	rv	假阳	同族（content-length 分支）
+runtime/runtime_h3_qpack.c	qp_dec_value_string	px_str_len(	outv	假阳	两支互斥且第一支 `return` ⇒ 不存在跨分配存活；且调用方在返回后立即 PX_KEEP(val)
+runtime/runtime_h3_qpack.c	px_h3_qdec	px_str_len(	name	假阳	name 在 if/else 互斥分支里各自赋值，PX_KEEP(name) 紧跟其后的语句
+runtime/runtime_sqlite.c	bi_sqlite_query	px_bytes_len(	v	假阳	switch 的 TEXT/BLOB 分支互斥（各自赋 v 后即 px_list_push 消费）；跨轮同名变量非同一活值

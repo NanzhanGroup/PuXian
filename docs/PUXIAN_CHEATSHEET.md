@@ -2501,3 +2501,30 @@ set_timeout(fn (): print("once after 2s"), 2000)
      · 门：`examples/m205_cli_channels/`（**54 通过 / 0 失败**）—— 静态 [S12] 五条（含**反向判据** E：
        产品行仍在 stdout）+ 动态 **28 例**（8 CLI × err/help/ok）+ 解释轨面 + **负控 3 道**（含现场重编那道）。
 
+#### M206（第 85 轮）：**GC 根面**漏登记 —— 静态审计器 + 压力差分 + 20 处收口（缺陷 248–258）
+
+     · 判据（`docs/GC_ROOTS.md` 为准）：**① 创建后必须登记；② 登记必须紧跟创建、先于下一次分配**。
+       形式化：**「未登记的活值集合」非空时又发生一次分配 ⇒ 该值可能被回收**。
+       为什么这是**语言面**缺陷：VM 轨产物默认 precise GC（`px_gc_set_precise(1)`；根面 = 全局槽 +
+       VM 帧槽 + TLS 登记根栈，**不扫 C 栈**），而 `px build` 在 x86_64 上**默认 engine=vm**
+       ⇒ native 桥里只活在 C 局的 `LXValue` 不登记就会被回收 —— **默认档就会发作**。
+       实测：HTTP multipart 40 次 POST 内 `R1008 字典没有键 'a'`；`udp_recv` 返回 dict 被回收
+       ⇒ `PX_GC_LIVECHK` 响亮 + SIGABRT/core；session 压力档 `json: 对象解析失败`。
+     · **两条例外（不是缺陷）**：① 受害值**作为会持有实参的构造器的实参**（`px_ok(v)` / `px_list_n(items,n)` /
+       `px_tuple` / `px_struct` / `px_cell` …—— `gc_register` 先把新对象放进 `g_tmp_root` 才触发 GC
+       ⇒ 从新对象出发可达）。⚠️ **`px_call`/`px_method` 不算**（被调方不保证持有 —— 缺陷 254 就这么漏的）。
+       ② 受害值**可由另一已登记对象到达**或**在触发点已死**（分支 `return`/`continue`、互斥 `if`/`switch`、
+       跨轮同名变量）—— 这一类进 `examples/m206_gcroot/BASELINE.tsv`（**只登记假阳**）。
+     · 写法：`px_root_push(); X = <构造>(); PX_KEEP(X); …; px_root_pop();`
+       ⚠️ **`PX_KEEP(x)` 写在 `x` 创建之前 = 保护 null = 等于没登记**（M170 踩过）。
+     · 工具：`python3 selfhost/gcroot_audit.py [--self-test] [--json] [--show-victims]`
+       （去注释/字符串 → 切函数 → 切语句 → 维护未登记活值集合 → 每次分配检查）。
+     · 检测器配方：`PX_GC_STRESS=1 PX_GC_INLINE=1 PX_GC_LIVECHK=1 <bin>`（响亮+core）；
+       `… PX_GC_UAFDET=1`（写坏空闲链表）。**`PX_GC_INLINE=1` 不可省** —— 服务模式默认把 GC
+       延迟到安全点，只开 `PX_GC_STRESS` 时大量分配并不会立即回收（实测 collect 次数差一个量级）。
+     · 门：`examples/m206_gcroot/`（**9 通过 / 0 失败**）—— ① 自证 4 锚点 · ② 候选 ⇄ 基线 +
+       规模下限 · ③ HTTP 面 40 请求 × 两档 · ④ UDP 面 20 往返 × 两档 · ⑤ 负控 3 道（各判红 + 源还原）。
+     · **扫描器自身的两个坑（都是漏报）**：`px_bytes_len` 没进分配名单 ⇒ 漏掉 `bi_udp_recv`；
+       `px_dict_set`/`px_list_push` 被当成「持有实参的构造器」⇒ 例外把**容器本身**当被持有者 ⇒ 又漏。
+       ⇒ 静态判据必须配**动态取证**（本轮 3 处是压力档先红、再回头补静态规则）。
+
