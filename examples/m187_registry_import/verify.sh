@@ -4,7 +4,9 @@
 # ------------------------------------------------------------
 # 两条主线：
 #  ① **引入**：把上游 `banshanhanfu/registry-px`（Apache-2.0）的库**逐字节照搬**进官方
-#     `registry/`（**86 包**来自上游 registry-px —— M200 由 53 涨到 86：33 新库 + 8 就地更新；
+#     `registry/`（**98 包**来自上游 registry-px —— M201 由 86 涨到 98：**12 新库**（bench/
+#     captcha/ftp/luhn/markdown/oauth2/pop3/punycode/pwgen/quickcheck/readstat/snowflake）；
+#     M200 曾由 53 涨到 86：33 新库 + 8 就地更新；
 #      另有 **13 个本仓自建包**（edge/gfx/lunar/pxml/semver/yaml…）不在上游表内；
 #      `passhash` 于 **M189** 补齐 —— 因 M184 严格 `int()` 需要一行守卫，
 #     当时以**本地补丁**形式引入；**M198 起补丁已撤销**：上游 `7da3397e` 自己加了
@@ -18,7 +20,7 @@
 #
 # 判据（四层正判据 + 三道负控）：
 #  ① `registry/THIRD_PARTY.md` 的表**逐行重算 sha256 / 文件数**与磁盘对拍（防漂移）；
-#  ② **每个**引入包：`pxpkg add` → `install` → `import <pkg>` 解释轨跑通（86 包全量）；
+#  ② **每个**引入包：`pxpkg add` → `install` → `import <pkg>` 解释轨跑通（**98 包全量** —— 判据是"表里每一包都装得上"，不写死数字）；
 #  ③ 抽样（含**全部多文件包** + 二进制/解析族）**双轨编译**跑通（VM + C）；
 #  ④ 多文件包语义：两文件包三轨跑通 + `--locked` 能查到**辅助文件**被篡改（修前只查入口）。
 # 负控（各自独立判红；源逐字节还原）：

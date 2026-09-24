@@ -1,0 +1,23 @@
+# bench.px 测试：微基准（双模式一致）
+import "../registry/bench/0.1.0/bench.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def work():
+    var s = 0
+    var k = 0
+    while k < 1000:
+        s = s + k
+        k += 1
+    return s
+def main():
+    var r = bn_time(work, 500).unwrap()
+    expect(r["total_ns"] > 0, "total_ns > 0, got " + str(r["total_ns"]))
+    expect(r["ns_per_op"] >= 0, "ns_per_op >= 0")
+    expect(r["ops_per_sec"] > 0, "ops_per_sec > 0, got " + str(r["ops_per_sec"]))
+    var r2 = bn_time(work, 1)
+    expect(r2.is_ok() and r2.unwrap()["total_ns"] >= 0, "n=1 ok")
+    expect(bn_time(work, 0).is_err(), "n=0 Err")
+    print("bench: PASS")
+    return Ok(0)

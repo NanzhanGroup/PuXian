@@ -562,6 +562,10 @@ static LXValue bi_fd_wait(LXValue* args, int nargs, void* ctx);
 // M30 P1：字节序可控整数↔bytes（pxdb 存储基石）
 static LXValue bi_int_to_bytes(LXValue* args, int nargs, void* ctx);
 static LXValue bi_bytes_to_int(LXValue* args, int nargs, void* ctx);
+// M201（PX-DEF-031）：任意宽度（≤16 字节）的**精确十进制**读取（int 装不下 u64 ⇒ 给字符串）
+static LXValue bi_bytes_to_dec(LXValue* args, int nargs, void* ctx);
+// M201（PX-DEF-035）：本构建「可作为全局调用的 native 名」清单（能力面可查询，不再靠猜）
+static LXValue bi_native_symbols(LXValue* args, int nargs, void* ctx);
 
 // M23b 字节辅助（字符串/字节串统一 data+len；供 base64/hex 等前置函数使用）
 static const char* bdata(LXValue v);
@@ -5588,6 +5592,26 @@ bool px_global_native(const char* name, LXValue* out) {
     return false;
 }
 
+// M201（PX-DEF-035 的对策）· native 名字登记表
+// ------------------------------------------------------------
+// 为什么需要它：官方**解释器**是**泛化分派**（native 名在运行期按字符串查全局表），
+//   而发布链用 `tools/px build`（**按引用集自动裁剪**）现编 pxi ⇒ 裁剪器看不清这些名字，
+//   曾把**整族模块**从解释器里裁掉（实测已发布 aarch64 包：`bootstrap/pxc` 有 19 个
+//   `zlib_*` 名字，`bootstrap/pxi` **0 个**；aes/rsa/ed25519/sqlite/xml/zip/ws 同病）。
+//   在此之前"能力面在不在"只能靠 `strings` **猜**；本表让它成为可查询的**事实**：
+//   `native_symbols()` 返回本构建里可作为全局调用的 native 名（排序去重）。
+// 生命周期：只存**指针**，指向 `px_set_global` 已 `xstrdup` 的名字（常驻）——不额外分配，
+//   因此可在「全局表写锁 + GC 冻结」窗口内安全登记（M170 缺陷 189 的建表期约束）。
+#define NATIVE_REG_CAP 8192
+static const char* g_nat_names[NATIVE_REG_CAP];
+static int g_nat_names_n = 0;
+static int g_nat_names_trunc = 0;   // 溢出标志（本函数不报错：登记是**诊断面**，不该让建表失败）
+static void native_reg_record(const char* name) {
+    if (!name) return;
+    if (g_nat_names_n >= NATIVE_REG_CAP) { g_nat_names_trunc = 1; return; }
+    g_nat_names[g_nat_names_n++] = name;
+}
+
 void px_set_global(const char* name, LXValue v) {
     // M55/P0（issue#2）：写全局表全程持 g_globals_mu（含 g_len++ 与 key/val 槽位
     // 写入），与 px_get_global 读、GC 根扫描互斥；g_len 在锁内更新保证原子可见。
@@ -5614,6 +5638,8 @@ void px_set_global(const char* name, LXValue v) {
     g_vals[g_len] = v;
     g_hash_put(hv, g_len);
     g_len++;
+    // M201：登记「可作为全局调用的 native 名」（数据源 = native_symbols()）
+    if (v.type == PX_NATIVE) native_reg_record(g_keys[g_len - 1]);
     gc_unblock_stop(&old);
     pthread_rwlock_unlock(&g_globals_mu);
 }
@@ -11523,6 +11549,8 @@ void px_register_builtins(void) {
     px_set_global("write_bytes", px_native("write_bytes", bi_write_bytes));
     px_set_global("int_to_bytes", px_native("int_to_bytes", bi_int_to_bytes));
     px_set_global("bytes_to_int", px_native("bytes_to_int", bi_bytes_to_int));
+    px_set_global("bytes_to_dec", px_native("bytes_to_dec", bi_bytes_to_dec));
+    px_set_global("native_symbols", px_native("native_symbols", bi_native_symbols));
     // M200（缺陷 240）：extern def（C-FFI 桥）名的**全局发布** —— 编译轨的 `extern def f(...)`
     //   编译成 GETG（解释轨另有 `iexpr.px` 的 ffi 双表兜底）⇒ 不发布则官方 `registry/zlib`
     //   在 `px build` 产物里 `R1001 未定义变量: 'zlib_compress'`（默认与 --full 皆然）。
@@ -13206,7 +13234,13 @@ static LXValue bi_int_to_bytes(LXValue* args, int nargs, void* ctx) {
     return px_bytes_len(buf, size);
 }
 
-// bytes_to_int(b[, endian[, signed]]) → int|null（长度 1..8；非法长度返回 null）
+// bytes_to_int(b[, endian[, signed]]) → int（长度 1..8；**越界响亮** R1003 —— M201 收口）
+// M201（PX-DEF-031 同族）：修前 `len < 1 || len > 8` **静默返回 null**（与 M199 修掉的
+//   `bytes_get` 越界 null 同族：null 会流到下游，报的是"无法比较 null 与 int"，
+//   **指不到越界点**）。现改 `R1003`（越界与长度），并在消息里指明更宽的整数走 `bytes_to_dec`。
+// ⚠️ 8 字节 **unsigned** 且最高位为 1（值 > 2^63-1）**不报错**：语言 int 是 64 位有符号，
+//   此时按二进制补码回绕（= Go `int64(uint64)` / Java `getLong()` / C 强制转换的**同款语义**，
+//   也是"读原始位模式"（float64 位型）的唯一可用形态）。要**精确十进制**用 `bytes_to_dec`。
 static LXValue bi_bytes_to_int(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 1 || nargs > 3) px_error("R1002: bytes_to_int 需要 (bytes[, endian[, signed]]) 参数");
@@ -13226,7 +13260,9 @@ static LXValue bi_bytes_to_int(LXValue* args, int nargs, void* ctx) {
         if (args[2].type != PX_BOOL) px_error("R1002: bytes_to_int 的 signed 需为 bool");
         signed_ = args[2].as.b ? 1 : 0;
     }
-    if (len < 1 || len > 8) return px_null();
+    // M201：长度越界 ⇒ 响亮（修前静默 null）
+    if (len < 1 || len > 8)
+        px_error("R1003: bytes_to_int 需要 1..8 字节，实际是 %d（更宽的整数用 bytes_to_dec）", len);
     uint64_t v = 0;
     if (big) {
         for (int i = 0; i < len; i++) v = (v << 8) | data[i];
@@ -13241,6 +13277,94 @@ static LXValue bi_bytes_to_int(LXValue* args, int nargs, void* ctx) {
         }
     }
     return px_int((int64_t)v);
+}
+
+// bytes_to_dec(b[, endian[, signed]]) → str（十进制**字符串**，长度 1..16）
+// M201（PX-DEF-031）：第三方用「32 位高低字长除法」手写 `my_u64_dec` 才拿到 u64 的精确十进制
+//   （BIGINT UNSIGNED / u64 报文字段），因为 `bytes_to_int` 只能给 int64（>2^63-1 回绕）。
+//   本函数把这条路变成**一等公民**：整段字节按十进制长除法（不经过 double，无精度损失），
+//   宽度上限 16 字节（128 位，覆盖 u64/u128），`signed=true` 时按补码取负（输出带 `-`）。
+static LXValue bi_bytes_to_dec(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs < 1 || nargs > 3) px_error("R1002: bytes_to_dec 需要 (bytes[, endian[, signed]]) 参数");
+    if (args[0].type != PX_BYTES) px_error("R1002: bytes_to_dec 需要 bytes，实际是 %s", px_type_name(args[0]));
+    int len = args[0].as.obj->as.str.len;
+    const unsigned char* data = (const unsigned char*)args[0].as.obj->as.str.data;
+    int big = 1;
+    if (nargs >= 2) {
+        const char* e = px_arg_str(args[1], "bytes_to_dec", "endian");
+        if (!strcasecmp(e, "little") || !strcasecmp(e, "le")) big = 0;
+        else if (!strcasecmp(e, "big") || !strcasecmp(e, "be")) big = 1;
+        else px_error("R1002: bytes_to_dec 的 endian 需为 big/little");
+    }
+    int signed_ = 0;
+    if (nargs >= 3) {
+        if (args[2].type != PX_BOOL) px_error("R1002: bytes_to_dec 的 signed 需为 bool");
+        signed_ = args[2].as.b ? 1 : 0;
+    }
+    if (len < 1 || len > 16) px_error("R1003: bytes_to_dec 需要 1..16 字节，实际是 %d", len);
+    unsigned char b[16];
+    for (int i = 0; i < len; i++) b[i] = big ? data[i] : data[len - 1 - i];   // 归一为大端
+    int neg = 0;
+    if (signed_ && (b[0] & 0x80)) {   // 补码取负 → 十进制量值
+        neg = 1;
+        int carry = 1;
+        for (int i = len - 1; i >= 0; i--) {
+            int t = ((~b[i]) & 0xFF) + carry;
+            b[i] = (unsigned char)(t & 0xFF);
+            carry = t >> 8;
+        }
+    }
+    char digits[48];
+    int dn = 0;
+    int more = 1;
+    while (more) {   // 长除法：每轮除 10 取余（最多 16*log10(256)+1 ≈ 39 位）
+        int rem = 0;
+        more = 0;
+        for (int i = 0; i < len; i++) {
+            int cur = rem * 256 + b[i];
+            b[i] = (unsigned char)(cur / 10);
+            rem = cur % 10;
+            if (b[i]) more = 1;
+        }
+        if (dn < (int)sizeof(digits) - 1) digits[dn++] = (char)('0' + rem);
+    }
+    char out[56];
+    int oi = 0;
+    if (neg) out[oi++] = '-';
+    for (int i = dn - 1; i >= 0; i--) out[oi++] = digits[i];
+    out[oi] = 0;
+    return px_str(out);
+}
+
+// native_symbols() → [str]（本构建里可作为全局调用的 native 名，已排序去重）
+// M201（PX-DEF-035 · 第三方请求的"能力查询原语"）：让**用户与门**都能判定
+//   「这个构建有没有某能力」，而不是靠 `strings` 猜或靠一次调用去撞错误。
+//   实测来源：官方 aarch64 引导包的 `pxi` 缺整族模块（zlib/sqlite/xml/aes…），
+//   而在本原语之前，这个事实**没有任何一句话**能直接问出来。
+static LXValue bi_native_symbols(LXValue* args, int nargs, void* ctx) {
+    (void)ctx; (void)args;
+    if (nargs != 0) px_error("R1002: native_symbols 不接受参数");
+    LXValue r = px_list(0);
+    px_root_push();
+    PX_KEEP(r);   // M92 precise：跨 px_list_push / px_str 分配
+    // 名称表可能含重复（同名被先设成 native、后被别的值覆盖的情况）⇒ 排序后相邻去重
+    int n = g_nat_names_n;
+    const char** tmp = (const char**)xmalloc(sizeof(char*) * (size_t)(n ? n : 1));
+    for (int i = 0; i < n; i++) tmp[i] = g_nat_names[i];
+    for (int i = 1; i < n; i++) {   // 插入排序：n ≈ 500，且只在显式调用时跑
+        const char* k = tmp[i];
+        int j = i - 1;
+        while (j >= 0 && strcmp(tmp[j], k) > 0) { tmp[j + 1] = tmp[j]; j--; }
+        tmp[j + 1] = k;
+    }
+    for (int i = 0; i < n; i++) {
+        if (i > 0 && strcmp(tmp[i - 1], tmp[i]) == 0) continue;
+        px_list_push(r, px_str(tmp[i]));
+    }
+    xfree(tmp);   // ⚠️ 必须 xfree：xmalloc 返回的是「跳过大小头」的指针（free() ⇒ invalid pointer，实测崩过）
+    px_root_pop();
+    return r;
 }
 
 // ==================== 并发原语（M4.2） ====================

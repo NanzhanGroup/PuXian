@@ -1,0 +1,29 @@
+# markdown.px 测试：Markdown → 纯文本渲染（双模式一致）
+import "../registry/markdown/0.1.0/markdown.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def contains(s, sub):
+    return s.find(sub) >= 0
+def main():
+    var src = "# 一级标题\n\n## 二级\n\n正文有 **加粗** 和 `code` 与 [链接](https://example.com)\n\n- 项目一\n- 项目二\n\n1. 第一\n2. 第二\n\n> 引用行\n\n```python\nprint(1)\n```\n"
+    var r = md_render(src).unwrap()
+    expect(contains(r, "一级标题"), "标题输出, got " + r)
+    expect(contains(r, "正文有 加粗 和 code 与 链接 (https://example.com)"), "行内处理")
+    expect(contains(r, "- 项目一"), "无序列表")
+    expect(contains(r, "- 第一"), "有序列表转 -")
+    expect(contains(r, "> 引用行"), "引用")
+    expect(contains(r, "print(1)"), "代码块保留")
+    # 链路收集
+    var links = md_extract_links(src)
+    expect(links == ["https://example.com"], "提取链接, got " + str(links))
+    # 行内单测
+    expect(md_inline("a **b** c") == "a b c", "剥加粗")
+    expect(md_inline("a `b` c") == "a b c", "剥代码")
+    expect(md_inline("a *b* c") == "a b c", "剥斜体")
+    expect(md_inline("[x](http://u)") == "x (http://u)", "链路转文本")
+    # 空输入
+    expect(md_render("").unwrap() == "", "空输入")
+    print("markdown: PASS")
+    return Ok(0)

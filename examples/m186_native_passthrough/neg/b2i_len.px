@@ -1,0 +1,8 @@
+# M186 拒绝侧 4（M201 补）：bytes_to_int **长度越界**（10 字节 > 8）
+# 修前：三轨一致地**静默返回 null**（与 M199 修掉的 bytes_get 越界 null 同族：
+#   null 流到下游只报"无法比较 null 与 int"，指不到越界点）。
+# M201 起：响亮 `R1003`，并指明更宽的整数用 `bytes_to_dec`。
+def main():
+    print("before")
+    print(str(bytes_to_int(hex_to_bytes("aabbccddeeff00112233"))))
+    print("after")

@@ -191,7 +191,7 @@
 
 | # | 限制 | 现象 | 规避 |
 |---|---|---|---|
-| 1 | 并发语句（spawn/send/recv/select/chan/mutex/rwlock）interp 不支持 | 报"interp 不支持 X（Mini 子集排除）" | Mini 子集不含并发；自举源码不用 |
+| 1 | 并发语句（spawn/send/recv/select/chan/mutex/rwlock）interp 不支持 | 报"interp 不支持 X（Mini 子集排除）" | Mini 子集不含并发；自举源码不用。**native 面**（M201 起逐一列名，供 `examples/m201_interp_ffi/` 的"设计性豁免"表对拍）：`spawn` `chan` `chan_try_recv` `select_try` `mutex` `rwlock` —— 这 6 个是**唯一**允许在解释器件里缺席的 native |
 | 2 | 内置函数运行时失败（read_file 权限错等）在 interp 内终止（PuXian 无异常捕获） | 错误不可被用户代码 `?` 传播 | read_file 预检查 exists()；对拍用例不含失败路径 |
 | 3 | 编译模式 `str(float)` 用 `%g`（6 位有效数字） | `--interp --build` 对拍 v01 的 float** 精度差异 | 同 §十.2；对拍跳过 v01 build |
 | 4 | 用户 dict 含保留键（`__struct__` 等 `__` 前缀）会被误判为包装值 | 类型/渲染按包装值处理 | 用户 dict 键避免 `__` 前缀 |

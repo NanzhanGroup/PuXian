@@ -490,9 +490,11 @@ jobs:
           #   曾完全不可用（解释轨有 ffi 双表兜底、编译轨 GETG 却无人发布）。判据 [S11] 静态
           #   + 3 条确定性探针 × 三轨 + 负控 3 道（本地全门 m116 跑）。
           bash examples/m200_ffi_globals/verify.sh --neg-skip > /tmp/v_m200.log 2>&1 || { echo "❌ m200_ffi_globals verify 失败"; tail -60 /tmp/v_m200.log; exit 1; }
+          bash examples/m201_bytes_dec/verify.sh --neg-skip > /tmp/v_m201d.log 2>&1 || { echo "❌ m201_bytes_dec verify 失败"; tail -60 /tmp/v_m201d.log; exit 1; }
+          bash examples/m201_interp_ffi/verify.sh --neg-skip > /tmp/v_m201f.log 2>&1 || { echo "❌ m201_interp_ffi verify 失败"; tail -60 /tmp/v_m201f.log; exit 1; }
           # 发射冻结门（M153 建立）：395 个用例的 --emit-c 输出必须逐字节不变（M188 由 393 起订正 —— 本轮只新增语料、类别 B 为空）。
           bash selfhost/emitc_freeze.sh --check > /tmp/v_emitc_freeze.log 2>&1 || { echo "❌ emitc_freeze 失败"; tail -30 /tmp/v_emitc_freeze.log; exit 1; }
-          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 / m153 / m154 / m155 / m158 / m160 / m161 / m162 / m163 / m164 verify / m170_gc_bridge_root / m182_hdr_root / m183_gc_root_handover / m184_num_fs_strict / m185_bytes_face / m186_native_passthrough / m187_registry_import / m188_std_face / m189_bytes_bounds / m190_arity / m191_error_codes / m192_encfamily / m193_errcodes2 / m194_arg_guards / m195_arg_guards2 / m196_msg_parity / m197_builtin_arity / m198_argface / m199_argtype / m200_ffi_globals + 上游 registry-px 用例回归（88 用例 × 双轨 · EXPECTED.tsv 对拍） + 发射冻结门（395 件 --emit-c）全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"
+          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 / m153 / m154 / m155 / m158 / m160 / m161 / m162 / m163 / m164 verify / m170_gc_bridge_root / m182_hdr_root / m183_gc_root_handover / m184_num_fs_strict / m185_bytes_face / m186_native_passthrough / m187_registry_import / m188_std_face / m189_bytes_bounds / m190_arity / m191_error_codes / m192_encfamily / m193_errcodes2 / m194_arg_guards / m195_arg_guards2 / m196_msg_parity / m197_builtin_arity / m198_argface / m199_argtype / m200_ffi_globals / m201_bytes_dec / m201_interp_ffi + 上游 registry-px 用例回归（**100 用例 × 双轨** · EXPECTED.tsv 对拍） + 发射冻结门（395 件 --emit-c）全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"
       # M188 补：这一步（工具自测）在 run 382/383 上红了，而 **job 日志非管理员不可读**
       #   （实测 /actions/jobs/<id>/logs → HTTP 403）⇒ 注解是唯一对外通道。
       #   本步把各门的 /tmp/v_*.log 关键行合成**一条** ::error:: 注解（换行编码 %0A）。
@@ -818,17 +820,14 @@ jobs:
         # 口径：`bootstrap/pxc build <f>` 只把 C 写到 stdout，链接/runtime 缓存由 tools/px 负责
         #   ⇒ 先把**原生 pxc** 顶上 bootstrap/pxc，再用 tools/px 的 **C 轨**（--c）现编其余件。
         #   VM 轨（用户面默认）需要入库 pxc_vm（x86_64），本 job 不用它，故全程 PX_BUILD_ENGINE=c。
+        # M201：**件清单与 flag 只有一处**（`selfhost/build_native_tools.sh`）—— 原先本 job 与
+        #   release.yml 各写一遍 12 件循环，而漂移的代价已实测（解释器件被自动裁剪 ⇒ 缺陷 241）。
         run: |
           set -e
           cp -f "$RUNNER_TEMP/nb/pxc" bootstrap/pxc
-          for e in "pxi|selfhost/interp.px" "pxl|selfhost/lexer.px" "pxpar|selfhost/parser.px"; do
-            n="${e%%|*}"; s="${e#*|}"
-            PX_BUILD_ENGINE=c tools/px build "$s" 2>&1 | tail -1
-            out="$(dirname "$s")/build/$(basename "$s" .px)"
-            [ -x "$out" ] || { echo "❌ $n 现编失败（缺产物 $out）"; exit 1; }
-            cp -f "$out" "bootstrap/$n"
-            echo "✅ bootstrap/$n（原生 aarch64 现编，$(stat -c %s "bootstrap/$n") 字节）"
-          done
+          if ! bash selfhost/build_native_tools.sh --dir bootstrap --no-check 2>&1 | tee "$RUNNER_TEMP/bnt.log"; then
+            echo "::error::原生工具现编失败"; grep -E '❌' "$RUNNER_TEMP/bnt.log" | sed 's/^/::error::bnt /'; exit 1
+          fi
           file bootstrap/pxc bootstrap/pxi bootstrap/pxl bootstrap/pxpar | sed 's/^/   /'
 
       - name: 裸 px build / px run 冒烟（**零参数**，靠 M159 宿主架构自适应）
@@ -864,29 +863,14 @@ jobs:
           cat /tmp/run.log
           grep -q aarch64-ok /tmp/run.log || { tail -20 /tmp/run.log | sed 's/^/::error::run /'; exit 1; }
           echo "✅ 原生 aarch64：零参数 build + run 全通"
-      - name: M168 发布侧口径门（全部 12 件原生工具 + 二进制可移植性门）
+      - name: M168 发布侧口径门（12 件原生工具 + 二进制可移植性门 + M201 解释器能力面门）
         # 为什么在这里（而不是只在发布 job）：**发布 job 的日志外部不可读**（API 403），
         #   而 main 上的 CI 注解可读 ⇒ 「包内必须全静态 + 本架构」这条口径在 main 上守，
         #   失败信息走 ::error:: 注解，一眼可定位。
+        # M201：件清单/flag 已收敛到 `selfhost/build_native_tools.sh`（上一步已装好），
+        #   本步**只做判据**，不重复构建。
         run: |
           set -e
-          cp -f "$RUNNER_TEMP/nb/pxc" bootstrap/pxc
-          for e in "pxi|selfhost/interp.px" "pxl|selfhost/lexer.px" "pxpar|selfhost/parser.px" \
-                   "pxfmt|tools/pxfmt.px" "pxbench|tools/pxbench.px" "pxcheck|tools/pxcheck.px" \
-                   "pxdoc|tools/pxdoc.px" "pxlint|tools/pxlint.px" "pxlsp|tools/pxlsp.px" \
-                   "pxmcp|tools/pxmcp.px" "pxtest|tools/pxtest.px"; do
-            n="${e%%|*}"; s="${e#*|}"
-            if ! PX_BUILD_ENGINE=c tools/px build "$s" > "$RUNNER_TEMP/b_$n.log" 2>&1; then
-              echo "::error::$n 原生现编失败"; tail -20 "$RUNNER_TEMP/b_$n.log" | sed "s/^/::error::$n /"; exit 1
-            fi
-            out="$(dirname "$s")/build/$(basename "$s" .px)"
-            [ -x "$out" ] || { echo "::error::$n 缺产物 $out"; exit 1; }
-            # ⚠️ 必须**装回 bootstrap/**：否则门看到的是入库的 x86_64 件（首跑实测即栽此，
-            #    靠 ::error:: 注解读出「❌ bootstrap/pxfmt：架构不符 · 实测 X86-64」）
-            cp -f "$out" "bootstrap/$n"
-            echo "✅ bootstrap/$n $(stat -c %s "bootstrap/$n") 字节"
-          done
-          rm -f bootstrap/pxc_vm bootstrap/pxi_vm
           if ! bash selfhost/check_bin_portability.sh --self-test > "$RUNNER_TEMP/pst.log" 2>&1; then
             echo "::error::可移植性门自证失败"; sed 's/^/::error::pst /' "$RUNNER_TEMP/pst.log"; exit 1
           fi
@@ -894,7 +878,13 @@ jobs:
             echo "::error::可移植性门判红（有件不是 aarch64 全静态）"; sed 's/^/::error::portability /' "$RUNNER_TEMP/pg.log"; exit 1
           fi
           cat "$RUNNER_TEMP/pg.log"
-          echo "✅ 12 件原生工具 + bootstrap/pxc 全部：aarch64 + 全静态"
+          echo "── M201 解释器能力面门（PX-DEF-035：解释器件必须全能力）"
+          if ! bash examples/m201_interp_ffi/verify.sh --interp "$PWD/bootstrap/pxi" > "$RUNNER_TEMP/ffi.log" 2>&1; then
+            echo "::error::解释器能力面门判红（族缺失 ⇒ 官方库在解释轨不可用）"
+            sed 's/^/::error::ffi /' "$RUNNER_TEMP/ffi.log"; exit 1
+          fi
+          tail -8 "$RUNNER_TEMP/ffi.log"
+          echo "✅ 12 件原生工具 + bootstrap/pxc 全部：aarch64 + 全静态 · 解释器能力面全"
 
       - name: 宿主机架构自适应门（m159_hostarch）
         env:

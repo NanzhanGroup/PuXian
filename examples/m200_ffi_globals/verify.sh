@@ -60,7 +60,11 @@ pre 'px_ffi_publish_globals();' runtime/runtime.c
 
 sweep_static() { python3 "$HERE/sweep_ffi.py" --root "$ROOT" > "$W/s11.log" 2>&1; }
 build3() {   # $1=probe 名 → 产出 $W/<n>.{interp,vm,c}.out 与 .rc
-    local n="$1" d="$W/b_$n"
+    # ⚠️ 必须分两行（M201 顺手修）：`local n="$1" d="$W/b_$n"` 里 d 取到的是**外层** n
+    #   —— bash 5.1 + set -u：外层无 n ⇒ "n: unbound variable"。本门原先靠循环留下的
+    #   全局 n "恰好"没炸（本文件下方就是 `for n in …; do build3 "$n"`）⇒ 纯属巧合。
+    local n="$1"
+    local d="$W/b_$n"
     rm -rf "$d"; mkdir -p "$d"; cp -f "$HERE/probe/$n.px" "$d/"
     ( cd "$d" && timeout 60 "$ROOT/bootstrap/pxi" "$n.px" ) > "$W/$n.interp.out" 2>&1; echo $? > "$W/$n.interp.rc"
     ( cd "$d" && timeout 600 "$ROOT/tools/px" build "$n.px" ) > "$W/$n.vm.build" 2>&1

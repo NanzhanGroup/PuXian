@@ -1,0 +1,149 @@
+# ============================================================
+# 普贤生态库：registry/markdown —— Markdown → 纯文本渲染
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go goldmark / Python markdown 心智（0.1.0 纯文本面）：
+#   md_render(src)         → Ok(str) | Err  渲染子集
+#   md_extract_links(src)  → [str]           收集 [t](url)
+#   md_inline(s)           → str             行内标记剥离（链路/粗斜体/代码）
+# 支持：# 标题（大写输出）、段落、- / 1. 列表、> 引用、``` 代码块（缩进 4）、
+#   **加粗**、*斜体*、`代码`、[文本](链接)。
+# ============================================================
+
+def md_trim(s):
+    var st = 0
+    var en = len(s)
+    while st < en and (s[st] == " " or s[st] == "\t"):
+        st += 1
+    while en > st and (s[en - 1] == " " or s[en - 1] == "\t"):
+        en -= 1
+    return s[st:en]
+
+def md_find_from(s, sub, start):
+    var i = start
+    while i + len(sub) <= len(s):
+        var j = 0
+        var ok = true
+        while j < len(sub):
+            if s[i + j] != sub[j]:
+                ok = false
+                break
+            j += 1
+        if ok:
+            return i
+        i += 1
+    return -1
+
+def md_upcase(s):
+    return to_upper(s)
+
+def md_ordered(t):
+    if len(t) < 2:
+        return false
+    var i = 0
+    var digits = 0
+    while i < len(t) and t[i] >= "0" and t[i] <= "9":
+        digits += 1
+        i += 1
+    return digits > 0 and i < len(t) and t[i] == "."
+
+# 行内处理：链路 → "文本 (url)"；剥 ** / * / `
+def md_inline(s):
+    var t = s
+    var guard = 0
+    while guard < 50:
+        var lb = t.find("[")
+        var rb = md_find_from(t, "](", lb + 1)
+        if lb >= 0 and rb > lb:
+            var end = md_find_from(t, ")", rb + 2)
+            if end < 0:
+                break
+            var text = t[lb + 1:rb]
+            var url = t[rb + 2:end]
+            t = t[0:lb] + text + " (" + url + ")" + t[end + 1:len(t)]
+        else:
+            break
+        guard += 1
+    var t2 = ""
+    var i = 0
+    var in_code = false
+    while i < len(t):
+        var c = t[i]
+        if c == "`":
+            in_code = not in_code
+            i += 1
+            continue
+        if c == "*":
+            if i + 1 < len(t) and t[i + 1] == "*":
+                i += 2
+            else:
+                i += 1
+            continue
+        t2 = t2 + c
+        i += 1
+    return t2
+
+def md_render(src):
+    var lines = split(src, "\n")
+    var out = ""
+    var in_code = false
+    var i = 0
+    while i < len(lines):
+        var ln = lines[i]
+        var t = md_trim(ln)
+        if t == "":
+            # 空行跳过（0.1.0 纯文本渲染不保留段落空行）
+            i += 1
+            continue
+        if in_code:
+            if t.starts_with("```"):
+                in_code = false
+                out = out + "\n"
+                i += 1
+                continue
+            out = out + "    " + ln + "\n"
+            i += 1
+            continue
+        if t.starts_with("```"):
+            in_code = true
+            out = out + "\n"
+            i += 1
+            continue
+        var hai = 0
+        while hai < len(t) and t[hai] == "#":
+            hai += 1
+        if hai >= 1 and hai <= 6 and (hai == len(t) or t[hai] == " "):
+            out = out + md_upcase(md_inline(md_trim(t[hai:len(t)]))) + "\n"
+            i += 1
+            continue
+        if t.starts_with("> "):
+            out = out + "> " + md_inline(t[2:len(t)]) + "\n"
+            i += 1
+            continue
+        if t.starts_with("- ") or t.starts_with("* "):
+            out = out + "- " + md_inline(md_trim(t[1:len(t)])) + "\n"
+            i += 1
+            continue
+        if md_ordered(t):
+            var sp = t.find(". ")
+            if sp > 0:
+                out = out + "- " + md_inline(md_trim(t[sp + 2:len(t)])) + "\n"
+                i += 1
+                continue
+        out = out + md_inline(ln) + "\n"
+        i += 1
+    return Ok(out)
+
+def md_extract_links(src):
+    var out = []
+    var i = 0
+    while i < len(src):
+        var rb = md_find_from(src, "](", i)
+        if rb < 0:
+            break
+        var end = md_find_from(src, ")", rb + 2)
+        if end < 0:
+            break
+        out.append(src[rb + 2:end])
+        i = end + 1
+    return out

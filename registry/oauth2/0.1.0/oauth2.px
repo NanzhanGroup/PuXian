@@ -1,0 +1,88 @@
+# ============================================================
+# 普贤生态库：registry/oauth2 —— OAuth 2.0 令牌获取
+# ------------------------------------------------------------
+# 纯函数库（网络 IO：native http_request），编译（px build）与解释（px run）双模式一致。
+# 对齐 RFC 6749 / Go golang.org/x/oauth2 / Python requests-oauthlib 心智（0.1.0）：
+#   oa_token_cc(url, client_id, client_secret[, scope])       → Ok(token dict) | Err
+#       client_credentials 模式（§4.4，服务端间调用常用）
+#   oa_token_password(url, client_id, client_secret, user, pw[, scope]) → Ok(token dict) | Err
+#       password 模式（§4.3）
+# token dict = {access_token, token_type, expires_in, ...}（透传 JSON）；
+#   非 2xx / 响应缺 access_token → Err（error 字段带出）。
+# 请求体 application/x-www-form-urlencoded（含 percent 编码，自实现）。
+# 0.1.0 不含刷新、PKCE、authorization-code 全流程。
+# ============================================================
+
+# ---- 内部：urlencoded ----
+def oa_pct(s):
+    var out = ""
+    var b = bytes(s)
+    var i = 0
+    while i < bytes_len(b):
+        var v = bytes_get(b, i)
+        if (v >= 97 and v <= 122) or (v >= 65 and v <= 90) or (v >= 48 and v <= 57) or v == 45 or v == 95 or v == 46 or v == 126:
+            out = out + chr(v)
+        else:
+            var digits = "0123456789ABCDEF"
+            out = out + "%" + digits[v // 16] + digits[v % 16]
+        i += 1
+    return out
+
+def oa_form(params):
+    var out = ""
+    var ks = params.keys()
+    var i = 0
+    while i < len(ks):
+        if i > 0:
+            out = out + "&"
+        out = out + oa_pct(ks[i]) + "=" + oa_pct(str(params[ks[i]]))
+        i += 1
+    return out
+
+# ---- 内部：POST 表单 ----
+def oa_post(url, form):
+    var r = http_request(url, "POST", oa_form(form),
+        {"Content-Type": "application/x-www-form-urlencoded"})
+    # http_request 失败时返回 Result（Err）→ 归一化为 600 状态
+    if type(r) == "result":
+        if r.is_err():
+            return {"status": 600, "body": "", "error": r.err()}
+        return r.unwrap()
+    return r
+
+# ---- 令牌 ----
+# json_parse_opt 返回 Result：统一解包为 dict/null
+def oa_json(body):
+    var r0 = json_parse_opt(body)
+    if type(r0) == "result":
+        if r0.is_ok():
+            return r0.unwrap()
+        return null
+    return r0
+
+def oa_parse_token(r, url):
+    var j = oa_json(r["body"])
+    if r["status"] >= 600:
+        return Err("oauth2: 网络错误: " + str(r["error"]))
+    if r["status"] >= 400:
+        if type(j) == "dict" and j.has("error"):
+            return Err("oauth2: " + str(j["error"]) + " (HTTP " + str(r["status"]) + ")")
+        return Err("oauth2: HTTP " + str(r["status"]))
+    if type(j) != "dict" or not j.has("access_token"):
+        return Err("oauth2: 响应缺少 access_token（" + url + "）")
+    return Ok(j)
+
+def oa_token_cc(url, client_id, client_secret, scope=""):
+    var form = {"grant_type": "client_credentials",
+                "client_id": client_id, "client_secret": client_secret}
+    if scope != "":
+        form.set("scope", scope)
+    return oa_parse_token(oa_post(url, form), url)
+
+def oa_token_password(url, client_id, client_secret, username, password, scope=""):
+    var form = {"grant_type": "password",
+                "client_id": client_id, "client_secret": client_secret,
+                "username": username, "password": password}
+    if scope != "":
+        form.set("scope", scope)
+    return oa_parse_token(oa_post(url, form), url)

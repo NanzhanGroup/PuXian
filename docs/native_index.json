@@ -1,7 +1,7 @@
 {
  "generator": "tools/gen_native_table.sh",
  "source": "runtime/*.c px_set_global(px_native)",
- "count": 379,
+ "count": 381,
  "names": [
   "Err",
   "Ok",
@@ -45,6 +45,7 @@
   "bytes_len",
   "bytes_set",
   "bytes_slice",
+  "bytes_to_dec",
   "bytes_to_hex",
   "bytes_to_int",
   "bytes_to_str",
@@ -191,6 +192,7 @@
   "mkdir",
   "mmap",
   "munmap",
+  "native_symbols",
   "now",
   "now_ms",
   "now_ns",

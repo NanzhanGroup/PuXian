@@ -1,0 +1,93 @@
+# ============================================================
+# 普贤生态库：registry/captcha —— 数字验证码（ASCII 渲染）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态；随机源 = 原生 random），编译/解释双模式一致。
+# 对齐 Python captcha / Go dchest/captcha 心智（0.1.0 数字面）：
+#   cp_generate(len=4, opts={}) → Ok({answer, image}) | Err
+#       answer：len 位随机数字；image：5 行 ASCII 渲染（3×5 七段字体）
+#       opts: {noise: bool(默认 false，' ' 替换为 '.' 加噪), font?}
+#   cp_verify(answer, guess) → bool（精确匹配）
+#   cp_valid(s) → bool（是否纯数字且 1..10 位）
+# 3×5 字体（经典七段）：0-9 各 3 列 5 行；字间以空格分隔。
+# ============================================================
+
+# 每个数字 → 5 行（前 3 行主字形 + 2 行空白下沿，保证 5 行对齐）
+def cp_glyph(d):
+    if d == 0:
+        return [" _ ", "| |", "|_|", "   ", "   "]
+    if d == 1:
+        return ["   ", "  |", "  |", "   ", "   "]
+    if d == 2:
+        return [" _ ", " _|", "|_ ", "   ", "   "]
+    if d == 3:
+        return [" _ ", " _|", " _|", "   ", "   "]
+    if d == 4:
+        return ["   ", "|_|", "  |", "   ", "   "]
+    if d == 5:
+        return [" _ ", "|_ ", " _|", "   ", "   "]
+    if d == 6:
+        return [" _ ", "|_ ", "|_|", "   ", "   "]
+    if d == 7:
+        return [" _ ", "  |", "  |", "   ", "   "]
+    if d == 8:
+        return [" _ ", "|_|", "|_|", "   ", "   "]
+    return [" _ ", "|_|", " _|", "   ", "   "]
+
+def cp_digit(c):
+    return c >= "0" and c <= "9"
+
+def cp_generate(len_v=4, opts={}):
+    if len_v < 1 or len_v > 10:
+        return Err("captcha: 长度须在 1..10")
+    var noise = false
+    if opts.has("noise"):
+        noise = opts["noise"]
+    var answer = ""
+    var i = 0
+    while i < len_v:
+        var d = 48 + int(random() * 10.0)
+        answer = answer + chr(d)
+        i += 1
+    var rows = ["", "", "", "", ""]
+    var j = 0
+    while j < len_v:
+        var g = cp_glyph(ord(answer[j]) - 48)
+        var r2 = 0
+        while r2 < 5:
+            if j > 0:
+                rows[r2] = rows[r2] + " "
+            rows[r2] = rows[r2] + g[r2]
+            r2 += 1
+        j += 1
+    var img = ""
+    var r3 = 0
+    while r3 < 5:
+        var row = rows[r3]
+        if noise:
+            var out2 = ""
+            var k = 0
+            while k < len(row):
+                if row[k] == " " and random() < 0.2:
+                    out2 = out2 + "."
+                else:
+                    out2 = out2 + row[k]
+                k += 1
+            row = out2
+        img = img + row
+        if r3 < 4:
+            img = img + "\n"
+        r3 += 1
+    return Ok({"answer": answer, "image": img})
+
+def cp_verify(answer, guess):
+    return answer == guess
+
+def cp_valid(s):
+    if len(s) < 1 or len(s) > 10:
+        return false
+    var i = 0
+    while i < len(s):
+        if not cp_digit(s[i]):
+            return false
+        i += 1
+    return true

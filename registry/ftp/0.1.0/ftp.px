@@ -1,0 +1,230 @@
+# ============================================================
+# 普贤生态库：registry/ftp —— FTP 客户端（RFC 959 子集）
+# ------------------------------------------------------------
+# 纯 .px 实现（TCP + 控制/数据双连接），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go jlaffaye/ftp / Python ftplib 心智（0.1.0 子集）：
+#   ft_connect(host[, port=21][, opts]) → Ok(conn) | Err   读 220 问候
+#   ft_login(conn, user, password)      → Ok(conn) | Err   USER→3xx / PASS→2xx
+#   ft_cmd(conn, cmd, ok_codes)         → Ok([code, msg]) | Err
+#   ft_pwd / ft_cwd / ft_quit
+#   ft_list(conn[, path])               → Ok([str])（PASV + LIST）
+#   ft_retr(conn, path)                 → Ok(str)
+#   ft_stor(conn, path, data)           → Ok(true)
+# 说明：被动模式（PASV）；控制行 \r\n/\n 兼容；1xx 续行读到终码。
+# ============================================================
+
+# ---- 内部：控制通道读写 ----
+def ft_recv_n(fd, n):
+    var buf = bytes("")
+    while bytes_len(buf) < n:
+        var r = tcp_recv_ex(fd, n - bytes_len(buf))
+        if not r["ok"]:
+            return [buf, r["err"]]
+        if r["eof"]:
+            return [buf, "unexpected EOF"]
+        if r["timeout"]:
+            return [buf, "read timeout"]
+        var d = r["data"]
+        if type(d) == "string":
+            d = bytes(d)
+        buf = bytes_concat(buf, d)
+    return [buf, ""]
+
+def ft_read_line(fd):
+    var buf = bytes("")
+    while true:
+        var r = tcp_recv_ex(fd, 1)
+        if not r["ok"]:
+            return [buf, r["err"]]
+        if r["eof"]:
+            return [buf, ""]
+        var d = r["data"]
+        if type(d) == "string":
+            d = bytes(d)
+        buf = bytes_concat(buf, d)
+        var bl = bytes_len(buf)
+        if bl > 0 and bytes_get(buf, bl - 1) == 10:
+            var end = bl
+            if end >= 2 and bytes_get(buf, bl - 2) == 13:
+                end = bl - 2
+            else:
+                end = bl - 1
+            return [bytes_slice(buf, 0, end), ""]
+        if bl > 4096:
+            return [buf, "line too long"]
+
+# 发送命令
+def ft_send(fd, cmd):
+    var r = tcp_send_ex(fd, bytes(cmd + "\r\n"))
+    return r["ok"]
+
+# 读一个回复（跳过 1xx 续行）→ [code, msg]
+def ft_read_reply(fd):
+    while true:
+        var l = ft_read_line(fd)
+        if l[1] != "":
+            return [0, l[1]]
+        var t = bytes_to_str(l[0])
+        if len(t) >= 3:
+            var code = int(t[0:3])
+            # 不自动跳 1xx：150 是 LIST/RETR 读数据通道的信号
+            return [code, t]
+        return [0, "异常响应: " + t]
+
+def ft_expect(fd, cmd, oks):
+    var r = ft_send(fd, cmd)
+    if not r:
+        return Err("ftp: 发送失败: " + cmd)
+    var rep = ft_read_reply(fd)
+    if rep[0] == 0:
+        return Err("ftp: 读取回复: " + rep[1])
+    var i = 0
+    while i < len(oks):
+        if rep[0] == oks[i]:
+            return Ok([rep[0], rep[1]])
+        i += 1
+    return Err("ftp: " + cmd + " → " + str(rep[0]) + " " + rep[1])
+
+# ---- 公开 API ----
+def ft_connect(host, port=21, opts={}):
+    var timeout_ms = 5000
+    if opts.has("timeout_ms"):
+        timeout_ms = opts["timeout_ms"]
+    var c = tcp_connect_ex(host, port, {"timeout_ms": timeout_ms})
+    if not c["ok"]:
+        return Err("ftp: connect " + host + ":" + str(port) + " failed: " + c["err"])
+    var fd = c["fd"]
+    var rep = ft_read_reply(fd)
+    if rep[0] != 220:
+        tcp_close(fd)
+        return Err("ftp: 问候异常: " + str(rep[0]) + " " + rep[1])
+    return Ok({"fd": fd, "host": host, "port": port})
+
+def ft_login(conn, user, password):
+    var ru = ft_expect(conn["fd"], "USER " + user, [230, 331])
+    if ru.is_err():
+        return ru
+    if ru.unwrap()[0] == 331:
+        var rp = ft_expect(conn["fd"], "PASS " + password, [230, 202])
+        if rp.is_err():
+            return rp
+    return Ok(conn)
+
+def ft_cmd(conn, cmd, ok_codes):
+    return ft_expect(conn["fd"], cmd, ok_codes)
+
+def ft_pwd(conn):
+    var r = ft_expect(conn["fd"], "PWD", [257])
+    if r.is_err():
+        return r
+    return Ok(r.unwrap()[1])
+
+def ft_cwd(conn, path):
+    return ft_expect(conn["fd"], "CWD " + path, [250])
+
+def ft_quit(conn):
+    var r = ft_expect(conn["fd"], "QUIT", [221, 200])
+    tcp_close(conn["fd"])
+    return Ok(true)
+
+# ---- 内部：PASV 数据连接 ----
+# 227 Entering Passive Mode (h1,h2,h3,h4,p1,p2) → [fd, err]
+def ft_pasv_open(conn):
+    var r = ft_expect(conn["fd"], "PASV", [227])
+    if r.is_err():
+        return [0, r.err()]
+    var msg = r.unwrap()[1]
+    var lp = msg.find("(")
+    var rp2 = msg.find(")")
+    if lp < 0 or rp2 < 0:
+        # 兼容无括号格式：取最后 6 个非数字外字段
+        return [0, "PASV 解析失败: " + msg]
+    var nums = msg[lp + 1:rp2]
+    var parts = split(nums, ",")
+    if len(parts) != 6:
+        return [0, "PASV 字段数异常: " + nums]
+    var h = parts[0] + "." + parts[1] + "." + parts[2] + "." + parts[3]
+    var port = int(parts[4]) * 256 + int(parts[5])
+    var dc = tcp_connect_ex(h, port, {"timeout_ms": 5000})
+    if not dc["ok"]:
+        return [0, "数据连接失败: " + dc["err"]]
+    return [dc["fd"], ""]
+
+def ft_list(conn, path=""):
+    var pd = ft_pasv_open(conn)
+    if pd[1] != "":
+        return Err(pd[1])
+    var dfd = pd[0]
+    var cmd = "LIST"
+    if path != "":
+        cmd = cmd + " " + path
+    var r150 = ft_expect(conn["fd"], cmd, [125, 150])
+    if r150.is_err():
+        tcp_close(dfd)
+        return Err(r150.err())
+    var data = bytes("")
+    while true:
+        var rr = tcp_recv_ex(dfd, 65536)
+        if rr["eof"] or not rr["ok"]:
+            break
+        var d = rr["data"]
+        if type(d) == "string":
+            d = bytes(d)
+        data = bytes_concat(data, d)
+    tcp_close(dfd)
+    ft_read_reply(conn["fd"])
+    var lines = split(bytes_to_str(data), "\n")
+    var out = []
+    var i = 0
+    while i < len(lines):
+        if ft_trim(lines[i]) != "":
+            out.append(ft_trim(lines[i]))
+        i += 1
+    return Ok(out)
+
+def ft_retr(conn, path):
+    var pd = ft_pasv_open(conn)
+    if pd[1] != "":
+        return Err(pd[1])
+    var dfd = pd[0]
+    var r150 = ft_expect(conn["fd"], "RETR " + path, [125, 150])
+    if r150.is_err():
+        tcp_close(dfd)
+        return Err(r150.err())
+    var data = bytes("")
+    while true:
+        var rr = tcp_recv_ex(dfd, 65536)
+        if rr["eof"] or not rr["ok"]:
+            break
+        var d = rr["data"]
+        if type(d) == "string":
+            d = bytes(d)
+        data = bytes_concat(data, d)
+    tcp_close(dfd)
+    ft_read_reply(conn["fd"])
+    return Ok(bytes_to_str(data))
+
+def ft_stor(conn, path, data):
+    var pd = ft_pasv_open(conn)
+    if pd[1] != "":
+        return Err(pd[1])
+    var dfd = pd[0]
+    var r150 = ft_expect(conn["fd"], "STOR " + path, [125, 150])
+    if r150.is_err():
+        tcp_close(dfd)
+        return Err(r150.err())
+    var sr = tcp_send_ex(dfd, bytes(data))
+    tcp_close(dfd)
+    var rep = ft_read_reply(conn["fd"])
+    if rep[0] == 0 or (rep[0] != 226 and rep[0] != 250):
+        return Err("ftp: STOR 完成码异常: " + str(rep[0]) + " " + rep[1])
+    return Ok(sr["ok"])
+
+def ft_trim(s):
+    var st = 0
+    var en = len(s)
+    while st < en and (s[st] == " " or s[st] == "\r" or s[st] == "\t"):
+        st += 1
+    while en > st and (s[en - 1] == " " or s[en - 1] == "\r" or s[en - 1] == "\t"):
+        en -= 1
+    return s[st:en]

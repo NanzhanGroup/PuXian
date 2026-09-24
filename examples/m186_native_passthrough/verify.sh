@@ -83,7 +83,7 @@ echo "=== [1] 透传值语义（endian × signed）：三轨 rc=0 + stdout 逐�
 run3 "$HERE/conv_parity.px" conv
 chk "[1] 三轨 rc=0" "tri_rc0 conv"
 chk "[1] 三轨 stdout 逐字节一致" "tri_same conv"
-chk "[1] 行数=33" "[ \"\$(wc -l < $W/conv.interp.out)\" = 33 ]"
+chk "[1] 行数=32（M201 移走越界用例 D4 ⇒ 33-1）" "[ \"\$(wc -l < $W/conv.interp.out)\" = 32 ]"
 chk "[1] 定点 A2=513（小端，修前解释轨 258）" "has conv.interp.out '^A2 = 513$'"
 chk "[1] 定点 A4=513（le 别名）" "has conv.interp.out '^A4 = 513$'"
 chk "[1] 定点 A1=258（大端默认）" "has conv.interp.out '^A1 = 258$'"
@@ -97,7 +97,9 @@ chk "[1] 定点 C3=0201（小端 258）" "has conv.interp.out '^C3 = 0201$'"
 chk "[1] 定点 C5=ff（-1 单字节）" "has conv.interp.out '^C5 = ff$'"
 chk "[1] 定点 C7=fffffffffffffffe（-2 八字节）" "has conv.interp.out '^C7 = fffffffffffffffe$'"
 chk "[1] 定点 D1..D3=null（域外）" "[ \"\$(grep -cE '^D[123] = null$' $W/conv.interp.out)\" = 3 ]"
-chk "[1] 定点 D4=null（长度>8）" "has conv.interp.out '^D4 = null$'"
+# M201：`bytes_to_int` 长度越界从"静默 null"改为 `R1003` ⇒ 正例探针里**不得**再有越界调用
+#   （有的话整个程序会中止、后面的定点全没了）—— 该用例已移到 [2] 拒绝侧的 `b2i_len`
+chk "[1] 正例探针不含越界调用（>8 字节已改判 [2]）" "! grep -qE '^D4 = ' $W/conv.interp.out && grep -q '^D5 = 0$' $W/conv.interp.out"
 chk "[1] 定点 E1/E2=-1234（往返）" "[ \"\$(grep -cE '^E[12] = -1234$' $W/conv.interp.out)\" = 2 ]"
 chk "[1] 定点 E5=8000（-32768）" "has conv.interp.out '^E5 = 8000$'"
 chk "[1] 相邻族护栏 F1..F6 齐" "[ \"\$(grep -cE '^F[1-6] = ' $W/conv.interp.out)\" = 6 ]"
@@ -108,8 +110,9 @@ declare -A PAT=(
   [i2b_extra]='int_to_bytes 需要 \(n, size\[, endian\[, signed\]\]\) 参数'
   [b2i_extra]='bytes_to_int 需要 \(bytes\[, endian\[, signed\]\]\) 参数'
   [b2i_type]='bytes_to_int 需要 bytes，实际是 string'
+  [b2i_len]='R1003: bytes_to_int 需要 1\.\.8 字节，实际是 10（更宽的整数用 bytes_to_dec）'
 )
-for c in i2b_missing i2b_extra b2i_extra b2i_type; do
+for c in i2b_missing i2b_extra b2i_extra b2i_type b2i_len; do
     run3 "$HERE/neg/$c.px" "n_$c"
     ok=1
     for t in interp vm c; do
@@ -124,6 +127,7 @@ for c in i2b_missing i2b_extra b2i_extra b2i_type; do
     chk "[2] $c：三轨 rc≠0 + 词条一致「$e1」" "[ $ok = 1 ]"
 done
 chk "[2] 拒绝侧不得出现 R1003（索引越界泄漏）" "! grep -q 'R1003' \"$W/n_i2b_missing.interp.out\""
+# ⚠️ 只查 i2b_missing：`b2i_len`（M201 新增）**本来就该**是 R1003（长度越界）
 
 echo
 if [ "$NEG" = 1 ]; then

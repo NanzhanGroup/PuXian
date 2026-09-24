@@ -158,24 +158,29 @@ jobs:
           test -x "$RUNNER_TEMP/nb/pxc"
 
       - name: 现编全部 12 件原生工具（C 轨；VM 轨两件不随包）
+        # M201：件清单与 **flag**（解释器件 `--full`）只有一处 —— `selfhost/build_native_tools.sh`。
+        #   原先本步与 ci.yml 各写一遍循环，而漂移的代价已实测：发布链的**自动裁剪**把
+        #   zlib/sqlite/xml/aes/rsa/ed25519/zip/ws **整族**从 `bootstrap/pxi` 裁掉
+        #   （已发布 aarch64 包实测：pxc 有 19 个 zlib_* 名字，pxi 0 个）⇒ 官方 zlib 包
+        #   在解释轨完全不可用（= 第三方 PX-DEF-035）。
         run: |
           set -e
           cp -f "$RUNNER_TEMP/nb/pxc" bootstrap/pxc
-          for e in "pxi|selfhost/interp.px" "pxl|selfhost/lexer.px" "pxpar|selfhost/parser.px" \
-                   "pxfmt|tools/pxfmt.px" "pxbench|tools/pxbench.px" "pxcheck|tools/pxcheck.px" \
-                   "pxdoc|tools/pxdoc.px" "pxlint|tools/pxlint.px" "pxlsp|tools/pxlsp.px" \
-                   "pxmcp|tools/pxmcp.px" "pxtest|tools/pxtest.px"; do
-            n="${e%%|*}"; s="${e#*|}"
-            PX_BUILD_ENGINE=c tools/px build "$s" 2>&1 | tail -1
-            out="$(dirname "$s")/build/$(basename "$s" .px)"
-            [ -x "$out" ] || { echo "::error::$n 现编失败（缺产物 $out）"; exit 1; }
-            cp -f "$out" "bootstrap/$n"
-            echo "✅ bootstrap/$n $(stat -c %s "bootstrap/$n") 字节"
-          done
-          # VM 轨两件是 x86_64 侧的 --emit-c 产物，aarch64 上不适用 ⇒ 从工作树移除，
-          # 保证「包内每一件都是本架构件」（用户不会拿到 Exec format error 的惊喜）
-          rm -f bootstrap/pxc_vm bootstrap/pxi_vm
+          if ! bash selfhost/build_native_tools.sh --dir bootstrap --no-check 2>&1 | tee "$RUNNER_TEMP/bnt.log"; then
+            echo "::error::原生工具现编失败"; grep -E '❌' "$RUNNER_TEMP/bnt.log" | sed 's/^/::error::bnt /'; exit 1
+          fi
           ls -l bootstrap/
+
+      - name: M201 解释器能力面门（PX-DEF-035：解释器件必须**全能力**）
+        # 判据 = `native_symbols()`（本构建可作为全局调用的 native 名）必须**包含**源码里
+        #   注册的整个期望集；负控用一个**真被裁过**的产物（--no-zlib）证明判据有牙。
+        run: |
+          set -e
+          if ! bash examples/m201_interp_ffi/verify.sh --interp "$PWD/bootstrap/pxi" > "$RUNNER_TEMP/ffi.log" 2>&1; then
+            echo "::error::解释器能力面门判红（族缺失 ⇒ 官方库在解释轨不可用）"
+            sed 's/^/::error::ffi /' "$RUNNER_TEMP/ffi.log"; exit 1
+          fi
+          tail -12 "$RUNNER_TEMP/ffi.log"
 
       - name: 可移植性门（全静态 + 架构 aarch64 —— 每一件都过，否则 job 红）
         run: |

@@ -1,5 +1,5 @@
 # 上游 registry-px 真实用例的期望值（M190 建立）
-# 来源：github.com/banshanhanfu/registry-px @ 7da3397e（tests/*.px，逐字节照搬 · MANIFEST.sha256 对拍）
+# 来源：github.com/banshanhanfu/registry-px @ 70e8123（tests/*.px，逐字节照搬 · MANIFEST.sha256 对拍）
 # 字段：<测试名>\t<build 期望>\t<interp 期望>\t<理由>
 # 取值：PASS / SKIP。**SKIP 必须写理由**（环境不具备 / 设计性不支持 / 性能性）。
 # 纪律：本文件是**登记的数据**，不是"跑一遍把结果抄下来"——改这里等于改判据，
@@ -92,3 +92,16 @@ walk_test	PASS	PASS	-
 zlib_test	PASS	PASS	-
 mqtt_test	SKIP	SKIP	需真实 MQTT broker 127.0.0.1:1883（本机与 CI 均无；--run-skipped 可跑）
 redis_test	SKIP	SKIP	需真实 Redis 服务端 127.0.0.1:6379（本机与 CI 均无；--run-skipped 可跑）
+# —— 上游 70e8123 新增 12 用例（M201 引入；先登记「应当 PASS」的期望，再实测 —— 不按实测结果反填）——
+bench_test	PASS	PASS	-
+captcha_test	PASS	PASS	-
+ftp_test	PASS	PASS	-
+luhn_test	PASS	PASS	-
+markdown_test	PASS	PASS	-
+oauth2_test	PASS	PASS	-
+pop3_test	PASS	PASS	-
+punycode_test	PASS	PASS	-
+pwgen_test	PASS	PASS	-
+quickcheck_test	PASS	PASS	-
+readstat_test	PASS	PASS	-
+snowflake_test	PASS	PASS	-

@@ -355,3 +355,64 @@ M184 的严格 `int()` 使 `pass_verify` 在**畸形存储串**上从「静默 0
 
 **判定**：PX-DEF-035 **是真缺陷（内部 240）并被修复**；对方对**方向**的判断有误
 （这会误导其用户"别用编译轨"，而实际是"必须用编译轨"）。
+
+---
+
+## 九、M201（第 80 轮）：上游 86 → 98 库 + **PX-DEF-035 的更正与真修** + PX-DEF-031 收口
+
+### 9.1 引入（上游 `1a7d844` → `70e8123`）
+
+| 项 | M200 | **M201** |
+|---|---|---|
+| 上游包 | 86 | **98**（**12 新**：bench · captcha · ftp · luhn · markdown · oauth2 · pop3 · punycode · pwgen · quickcheck · readstat · snowflake；就地更新 0） |
+| `registry/` 总数 | 99 | **111**（98 上游 + 13 本仓自建） |
+| 上游用例 | 88 | **100**（12 新，逐字节照搬 + `MANIFEST.sha256` 对拍） |
+| **双轨回归** | 161 / 0 / 15 | **185 通过 · 0 失败 · 15 跳过 · 期望值缺失 0** |
+
+**本轮最实的一块**：新库里的 `ftp` / `pop3` / `oauth2` 三条用例要求**外部服务端**
+（上游当时用 pyftpdlib / 手搭进程，**未入库**）—— 只判 SKIP 就等于"引了库但没验"。
+本仓按既有纪律（**不引入新依赖**）改用**普贤自己写**的 mock 服务端（`upstream-tests/fixtures/`，
+`tcp_listen/accept/recv/send` + `spawn`），由 `run_upstream_tests.sh` 自动编译/启动/收尾
+⇒ 这三条从"应当 SKIP"变成**真 PASS**（含 POP3 点填充还原、FTP PASV 数据通道 + STOR/RETR 往返、
+OAuth2 两种 grant 的错误分支）。
+
+### 9.2 **PX-DEF-035：我上一轮的判定错了，这里更正**
+
+| | 结论 |
+|---|---|
+| M200 我写的 | 「第三方**方向记反了**：编译轨不能用、解释轨可用」 |
+| **M201 实测**（下载**已发布**的 m197/m200 **aarch64** 包解包逐件复核） | 对方**方向是对的** —— 在那个包里 `bootstrap/pxi`（解释器）**缺整族**：`pxc` 有 19 个 `zlib_*` 名字，`pxi` **0** 个；**aes / rsa / ed25519 / sqlite / xml / zip / ws 同病** |
+| 为什么我上次会错 | 我复核的是**仓库内 x86_64 入库件**（由 `devbuild.sh`/`rebake_bin.sh` 链**全量** runtime 对象 ⇒ 能力齐全）。缺陷**只在发布链**、**只在非 x86_64 包**上显形 —— 我只看了本机，没看**已发布的包** |
+
+**根因**：发布链用 `tools/px build selfhost/interp.px`（**按引用集自动裁剪**）现编解释器；
+解释器是**泛化分派**（native 名运行期按字符串查表）⇒ 裁剪器看不见这些名字 ⇒ 整族被裁掉。
+CI 只问"能不能跑 hello"⇒ 一直绿。
+
+**真修（缺陷 241）**：
+1. 新增 `native_symbols()` 原语（`docs/ERROR_CODES.md` §6.13）—— 把"这个构建有没有某能力"
+   变成**可查询的事实**，也正是对方登记里点名要的"FFI 可用符号清单查询原语"；
+2. **构建口径收敛到一处**：`selfhost/build_native_tools.sh`（原先 `ci.yml` 与 `release.yml`
+   各写一遍 12 件循环 = 漂移温床），其中**泛化分派件 `pxi` 强制 `--full`**；
+3. 新门 `examples/m201_interp_ffi/`：期望集**从源码派生**、被测件**实跑自报**、缺名逐条指名，
+   并挂进 `native-arm64` job 与发布链（装好件**之后**跑，失败走 `::error::` 注解）。
+   ≥ 副作用：aarch64 包里的 `pxi` 体积会变大（换来"官方库在解释轨可用"）。
+
+### 9.3 PX-DEF-031（`bytes_to_int` 8 字节 unsigned 静默 wrap）
+
+判定 = **一半设计 + 一半真缺口**（详见 `docs/ERROR_CODES.md` §6.12）：
+
+- **回绕保留**（`f…f` 8 字节 ⇒ `-1`）：语言只有 int64，回绕 = Go/Java/C 的同款转换语义，
+  且是"读原始位模式"（float64 位型）的**唯一可用形态** —— 实测官方 `msgpack`/`mysql` 都依赖它，
+  **改成报错会打破这两个库**；
+- **真缺口 ⇒ 新增 `bytes_to_dec(b[, endian[, signed]]) → str`**：1..16 字节**精确十进制**
+  （长除法，不经 double），`signed` 时补码取负。对方手写的 `my_u64_dec` 可以退休。
+- 顺手收口**同族的"静默 null"**：`bytes_to_int` 长度越界（<1 或 >8）修前返回 `null` ⇒ 现在
+  **`R1003`** 并指明"更宽的整数用 `bytes_to_dec`"（与 M199 的 `bytes_get` 越界同族）。
+
+### 9.4 待办（→ **M202**，按严重/紧急排序）
+
+| 编号 | 形状 | 影响 | 计划 |
+|---|---|---|---|
+| **PX-DEF-032** | **无 `base32` native**（RFC 4648；OTP 秘钥标准格式，Google Authenticator 互通必需） | 官方 `registry/totp` 只能纯 .px 自实现 | 补 `base32_encode/decode`（三轨 + 门） |
+| **PX-DEF-033** | **无 `hmac_sha1`**（HMAC 族只有 sha256；RFC 4226/6238 默认是 HMAC-SHA1） | 同上，TOTP/HOTP 标准实现受限 | 补 `hmac_sha1` / `hmac_sha1_bytes`（对齐 `hmac_sha256` 口径） |
+| **PX-DEF-034** | **`sorted` 只接受 1 个参数**（无 key/comparator） | 自然排序等只能靠 `[键,下标,原值]` 包装绕行（`natsort` 即此法） | 评估 `sorted_keyed(l, key_fn)`（native 回调用 `px_call`，可行）；**注意** M162 已定"值比较 + 稳定排序"，扩展不得破坏该语义 |

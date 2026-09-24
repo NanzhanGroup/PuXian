@@ -1,0 +1,37 @@
+# M201 探针 · 正例：bytes_to_dec（**精确十进制**）与 bytes_to_int（int64 视图）的对照
+# 三轨（解释 / VM / C）输出必须逐字节一致。
+def p(tag, v):
+    print(tag + "=" + str(v))
+
+def main():
+    # ---- 1..8 字节：两种视图在"能表示"的范围内必须同值 ----
+    p("d01", bytes_to_dec(hex_to_bytes("ff"), "big"))
+    p("d02", bytes_to_dec(hex_to_bytes("ff"), "little"))
+    p("d03", bytes_to_dec(hex_to_bytes("0102"), "big"))
+    p("d04", bytes_to_dec(hex_to_bytes("0102"), "little"))
+    p("d05", bytes_to_dec(hex_to_bytes("00")))
+    p("d06", bytes_to_dec(hex_to_bytes("000000"), "big"))
+    p("d07", bytes_to_dec(hex_to_bytes("0123456789abcdef"), "big", false))
+    p("d08", bytes_to_dec(hex_to_bytes("0123456789abcdef"), "little", false))
+    # ---- 8 字节 unsigned 全范围（int64 装不下的正是 PX-DEF-031 的病）----
+    p("d09", bytes_to_dec(hex_to_bytes("ffffffffffffffff"), "big", false))
+    p("d10", bytes_to_dec(hex_to_bytes("0000000000000080"), "little", false))
+    p("d11", bytes_to_dec(hex_to_bytes("ffffffffffffff7f"), "little", false))
+    # ---- signed=true：补码解释（负数带 -）----
+    p("d12", bytes_to_dec(hex_to_bytes("ffffffffffffffff"), "big", true))
+    p("d13", bytes_to_dec(hex_to_bytes("0000000000000080"), "little", true))
+    p("d14", bytes_to_dec(hex_to_bytes("ffffffffffffff7f"), "big", true))
+    p("d15", bytes_to_dec(hex_to_bytes("ff"), "big", true))
+    # ---- 宽度到 16 字节（u128）----
+    p("d16", bytes_to_dec(hex_to_bytes("ffffffffffffffffffffffffffffffff"), "big", false))
+    p("d17", bytes_to_dec(hex_to_bytes("ffffffffffffffffffffffffffffffff"), "big", true))
+    p("d18", bytes_to_dec(hex_to_bytes("00000000000000000000000000000001"), "big", false))
+    # ---- int64 视图（bytes_to_int）：>2^63-1 按二进制补码**回绕**（= Go/Java/C 转换语义）
+    #      为什么保留回绕而不是报错：读 float64 位型 / 原始位模式只能走这条路（见 ERROR_CODES §6.12）
+    p("i01", bytes_to_int(hex_to_bytes("ffffffffffffffff"), "big", false))
+    p("i02", bytes_to_int(hex_to_bytes("0000000000000080"), "little", false))
+    p("i03", bytes_to_int(hex_to_bytes("0102"), "little"))
+    # ---- 两者在同值域内一致（= 把 int 结果转字符串与 dec 结果逐字相同）----
+    p("x01", str(bytes_to_int(hex_to_bytes("0123456789abcdef"), "big", false)) == bytes_to_dec(hex_to_bytes("0123456789abcdef"), "big", false))
+    p("x02", str(bytes_to_int(hex_to_bytes("ff"), "big")) == bytes_to_dec(hex_to_bytes("ff"), "big"))
+    return 0

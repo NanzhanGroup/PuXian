@@ -1,0 +1,66 @@
+# ftp.px 测试：真实 pyftpdlib 服务（PASV + LIST/RETR/STOR，双模式一致）
+import "../registry/ftp/0.1.0/ftp.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def in_list(l, v):
+    var i = 0
+    while i < len(l):
+        if l[i] == v:
+            return true
+        i += 1
+    return false
+def main():
+    var c = ft_connect("127.0.0.1", 2121)
+    if c.is_err():
+        print("FAIL: connect: " + str(c))
+        exit(1)
+    var conn = c.unwrap()
+    # 登录
+    var lg = ft_login(conn, "px", "secret")
+    if lg.is_err():
+        print("FAIL: login: " + str(lg))
+        exit(1)
+    expect(ft_pwd(conn).unwrap().find("/") >= 0, "pwd 为根目录, got " + str(ft_pwd(conn).unwrap()))
+    # 二进制模式：避免 ASCII 模式服务端 LF→CRLF 转换
+    expect(ft_cmd(conn, "TYPE I", [200]).is_ok(), "TYPE I")
+    # LIST
+    var ls = ft_list(conn)
+    if ls.is_err():
+        print("FAIL: list: " + str(ls))
+        exit(1)
+    var listing = ls.unwrap()
+    var has_hello = false
+    var i = 0
+    while i < len(listing):
+        if listing[i].find("hello.txt") >= 0:
+            has_hello = true
+        i += 1
+    expect(has_hello, "LIST 含 hello.txt, got " + str(listing))
+    # RETR
+    var got = ft_retr(conn, "hello.txt")
+    if got.is_err():
+        print("FAIL: retr: " + str(got))
+        exit(1)
+    expect(got.unwrap() == "hello from ftp 普贤\n", "RETR 内容, got " + str(got.unwrap()))
+    # CWD + RETR 子目录
+    expect(ft_cwd(conn, "sub").is_ok(), "CWD sub")
+    var got2 = ft_retr(conn, "nested.txt").unwrap()
+    expect(got2 == "nested\n", "子目录 RETR")
+    # STOR 上传
+    expect(ft_cwd(conn, "/").is_ok(), "回到根")
+    var st = ft_stor(conn, "upload.txt", "uploaded 数据 普贤\n")
+    if st.is_err():
+        print("FAIL: stor: " + str(st))
+        exit(1)
+    var got3 = ft_retr(conn, "upload.txt").unwrap()
+    expect(got3 == "uploaded 数据 普贤\n", "STOR+RETR 往返")
+    # 错误路径：错误密码 → Err
+    var c2 = ft_connect("127.0.0.1", 2121).unwrap()
+    var lg2 = ft_login(c2, "px", "wrongpass")
+    expect(lg2.is_err(), "错误口令 Err")
+    ft_quit(c2)
+    expect(ft_quit(conn).is_ok(), "QUIT")
+    print("ftp: PASS")
+    return Ok(0)

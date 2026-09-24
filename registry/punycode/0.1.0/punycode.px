@@ -1,0 +1,236 @@
+# ============================================================
+# 普贤生态库：registry/punycode —— Punycode / IDNA 域名编码
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 RFC 3492（Punycode）/ Python idna 心智（0.1.0）：
+#   pc_encode(label) → Ok(str)      纯 Punycode（不含 xn-- 前缀）
+#   pc_decode(puny)  → Ok(str) | Err
+#   pd_encode(host)  → Ok(str)      完整域名转 ASCII（xn-- 前缀，小写）
+#   pd_decode(host)  → Ok(str) | Err 还原 Unicode 域名
+# 常量：base36 / tmin=1 / tmax=26 / skew=38 / damp=700 / bias0=72 / n0=128。
+# 对拍 python idna：'中文' → 'xn--fiq228c'；'bücher' → 'xn--bcher-kva'。
+# ============================================================
+
+const PC_BASE = 36
+const PC_TMIN = 1
+const PC_TMAX = 26
+const PC_SKEW = 38
+const PC_DAMP = 700
+const PC_INITIAL_BIAS = 72
+const PC_INITIAL_N = 128
+
+# 0..35 → a-z / 0-9
+def pc_digit(v):
+    if v < 26:
+        return chr(97 + v)
+    return chr(48 + v - 26)
+
+def pc_dec_digit(c):
+    if c >= "a" and c <= "z":
+        return ord(c) - 97
+    if c >= "A" and c <= "Z":
+        return ord(c) - 65
+    if c >= "0" and c <= "9":
+        return ord(c) - 48 + 26
+    return -1
+
+def pc_adapt(delta, numpoints, firsttime):
+    var d = delta
+    if firsttime:
+        d = d // PC_DAMP
+    else:
+        d = d // 2
+    d = d + d // numpoints
+    var k = 0
+    while d > ((PC_BASE - PC_TMIN) * PC_TMAX) // 2:
+        d = d // (PC_BASE - PC_TMIN)
+        k = k + PC_BASE
+    return k + ((PC_BASE - PC_TMIN + 1) * d) // (d + PC_SKEW)
+
+def pc_threshold(k, bias):
+    if k <= bias:
+        return PC_TMIN
+    if k >= bias + PC_TMAX:
+        return PC_TMAX
+    return k - bias
+
+# 基本字符（a-z 0-9 -）
+def pc_is_basic(c):
+    var o = ord(c)
+    return (o >= 97 and o <= 122) or (o >= 48 and o <= 57) or o == 45
+
+# 标签转码点列表
+def pc_cps(s):
+    var out = []
+    var i = 0
+    while i < len(s):
+        out.append(ord(s[i]))
+        i += 1
+    return out
+
+# 编码：返回纯 Punycode（不含 xn--）
+def pc_encode(label):
+    var cps = pc_cps(label)
+    var total = len(cps)
+    var out = ""
+    var i = 0
+    while i < total:
+        var c = chr(cps[i])
+        if pc_is_basic(c):
+            out = out + c
+        i += 1
+    var b = len(out)
+    var h = b
+    if b == total:
+        return Ok(out)
+    if b > 0:
+        out = out + "-"
+    var n = PC_INITIAL_N
+    var delta = 0
+    var bias = PC_INITIAL_BIAS
+    while h < total:
+        var m = 2147483647
+        var j = 0
+        while j < total:
+            if cps[j] >= n and cps[j] < m:
+                m = cps[j]
+            j += 1
+        delta = delta + (m - n) * (h + 1)
+        n = m
+        var k2 = 0
+        while k2 < total:
+            if cps[k2] < n:
+                delta = delta + 1
+            if cps[k2] == n:
+                var q = delta
+                var k = PC_BASE
+                while true:
+                    var t = pc_threshold(k, bias)
+                    if q < t:
+                        break
+                    out = out + pc_digit(t + (q - t) % (PC_BASE - t))
+                    q = (q - t) // (PC_BASE - t)
+                    k = k + PC_BASE
+                out = out + pc_digit(q)
+                bias = pc_adapt(delta, h + 1, h == b)
+                delta = 0
+                h = h + 1
+            k2 += 1
+        delta = delta + 1
+        n = n + 1
+    return Ok(out)
+
+# CPython 解码算法的逐字移植（已验证对照：fiq228c→中文 / bcher-kva→bücher 等）
+def pd_t(j, bias):
+    var res = PC_BASE * (j + 1) - bias
+    if res < 1:
+        return 1
+    if res > PC_TMAX:
+        return PC_TMAX
+    return res
+
+def pd_adapt(delta, first, numchars):
+    var d = delta
+    if first:
+        d = d // PC_DAMP
+    else:
+        d = d // 2
+    d = d + d // numchars
+    var divisions = 0
+    while d > 455:
+        d = d // (PC_BASE - PC_TMIN)
+        divisions = divisions + PC_BASE
+    return divisions + (PC_BASE * d // (d + PC_SKEW))
+
+# 广义整数解码（broadcast：每位数都加 digit*w，digit<t 才停；大小写不敏感）
+def pd_gnumber(ext, extpos, bias):
+    var result = 0
+    var w = 1
+    var j = 0
+    while true:
+        if extpos >= len(ext):
+            return [extpos, -1]
+        var digit = pc_dec_digit(ext[extpos])
+        extpos = extpos + 1
+        if digit < 0:
+            return [extpos, -1]
+        var t = pd_t(j, bias)
+        result = result + digit * w
+        if digit < t:
+            return [extpos, result]
+        w = w * (PC_BASE - t)
+        j = j + 1
+
+# 解码：纯 Punycode → Unicode 标签
+def pc_decode(puny):
+    var n = PC_INITIAL_N
+    var bias = PC_INITIAL_BIAS
+    var base = ""
+    var extended = puny
+    var last = -1
+    var li = len(puny) - 1
+    while li >= 0:
+        if puny[li] == "-":
+            last = li
+            break
+        li -= 1
+    if last >= 0:
+        base = puny[0:last]
+        extended = puny[last + 1:len(puny)]
+    var char = PC_INITIAL_N
+    var pos = -1
+    var extpos = 0
+    while extpos < len(extended):
+        var start_ext = extpos
+        var nr = pd_gnumber(extended, extpos, bias)
+        var delta = nr[1]
+        extpos = nr[0]
+        if delta < 0:
+            return Err("punycode: 非法/不完整输入")
+        pos = pos + delta + 1
+        char = char + pos // (len(base) + 1)
+        pos = pos % (len(base) + 1)
+        base = base[0:pos] + chr(char) + base[pos:len(base)]
+        bias = pd_adapt(delta, start_ext == 0, len(base))
+    return Ok(base)
+
+# ---- 完整域名 ----
+def pd_encode(host):
+    var h = to_lower(host)
+    var parts = split(h, ".")
+    var out = ""
+    var i = 0
+    while i < len(parts):
+        var p = parts[i]
+        var ascii_ok = true
+        var j = 0
+        while j < len(p):
+            if ord(p[j]) >= 128:
+                ascii_ok = false
+            j += 1
+        if out != "":
+            out = out + "."
+        if ascii_ok:
+            out = out + p
+        else:
+            out = out + "xn--" + pc_encode(p).unwrap()
+        i += 1
+    return Ok(out)
+
+def pd_decode(host):
+    var parts = split(host, ".")
+    var out = ""
+    var i = 0
+    while i < len(parts):
+        var p = parts[i]
+        if out != "":
+            out = out + "."
+        if p.starts_with("xn--"):
+            var r = pc_decode(p[4:len(p)])
+            if r.is_err():
+                return r
+            out = out + r.unwrap()
+        else:
+            out = out + p
+        i += 1
+    return Ok(out)

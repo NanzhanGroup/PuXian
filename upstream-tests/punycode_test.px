@@ -1,0 +1,37 @@
+# punycode.px 测试：Punycode/IDNA（Python idna 对拍，双模式一致）
+import "../registry/punycode/0.1.0/punycode.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # 纯 Punycode（Python idna 对拍）
+    expect(pc_encode("中文").unwrap() == "fiq228c", "中文 → fiq228c, got " + pc_encode("中文").unwrap())
+    expect(pc_encode("bücher").unwrap() == "bcher-kva", "bücher → bcher-kva, got " + pc_encode("bücher").unwrap())
+    expect(pc_encode("mañana").unwrap() == "maana-pta", "mañana → maana-pta")
+    expect(pc_encode("中国").unwrap() == "fiqs8s", "中国 → fiqs8s")
+    expect(pc_encode("abc").unwrap() == "abc", "纯 ASCII 无前缀")
+    # 解码
+    expect(pc_decode("fiq228c").unwrap() == "中文", "decode fiq228c")
+    expect(pc_decode("bcher-kva").unwrap() == "bücher", "decode bcher-kva")
+    expect(pc_decode("maana-pta").unwrap() == "mañana", "decode maana-pta")
+    expect(pc_decode("fiqs8s").unwrap() == "中国", "decode fiqs8s")
+    expect(pc_decode("abc-").unwrap() == "abc", "decode 基本串带尾分隔符（CPython 一致）")
+    # 完整域名
+    expect(pd_encode("中文.com").unwrap() == "xn--fiq228c.com", "域名 encode")
+    expect(pd_encode("bücher.de").unwrap() == "xn--bcher-kva.de", "域名 encode bücher")
+    expect(pd_encode("example.com").unwrap() == "example.com", "纯 ASCII 域名")
+    expect(pd_decode("xn--fiq228c.com").unwrap() == "中文.com", "域名 decode")
+    expect(pd_decode("xn--bcher-kva.de").unwrap() == "bücher.de", "域名 decode bücher")
+    expect(pd_decode("example.com").unwrap() == "example.com", "域名 decode ascii")
+    # 往返
+    var hosts = ["中国.test", "münchen.de", "日本語.jp", "example.org"]
+    var k = 0
+    while k < len(hosts):
+        var enc = pd_encode(hosts[k]).unwrap()
+        expect(pd_decode(enc).unwrap() == hosts[k], "往返 " + hosts[k] + " (" + enc + ")")
+        k += 1
+    # 非法
+    expect(pc_decode("x!y").is_err(), "非法 punycode Err")
+    print("punycode: PASS")
+    return Ok(0)

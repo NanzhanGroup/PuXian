@@ -1,0 +1,82 @@
+# ============================================================
+# 普贤生态库：registry/luhn —— Luhn 校验位算法
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python stdnum / Go go-validator 心智（0.1.0）：
+#   luhn_check(s)  → Ok(int) | Err    计算校验位（s 为不含校验位的数字串）
+#   luhn_append(s) → Ok(str) | Err    数字串 + 校验位
+#   luhn_valid(s)  → bool             完整数字串（含校验位）是否合法
+#   luhn_card(name) → Ok(str) | Err   常见卡号生成（测试用）：vs/amex/mc/discover
+# 算法：从右往左隔位×2，>9 减 9；校验位 = (10 - sum%10)%10。
+# 对拍 Python：'7992739871' → 校验位 3（ISO 名片示例）。
+# ============================================================
+
+def luhn_is_digit(c):
+    return c >= "0" and c <= "9"
+
+# 数字串 → 校验和
+def luhn_sum(s):
+    var total = 0
+    var double = true
+    var i = len(s) - 1
+    while i >= 0:
+        var v = ord(s[i]) - 48
+        if double:
+            v = v * 2
+            if v > 9:
+                v = v - 9
+        total = total + v
+        double = not double
+        i -= 1
+    return total
+
+def luhn_check(s):
+    if len(s) == 0:
+        return Err("luhn: 空串")
+    var i = 0
+    while i < len(s):
+        if not luhn_is_digit(s[i]):
+            return Err("luhn: 非法数字: " + s)
+        i += 1
+    return Ok((10 - (luhn_sum(s) % 10)) % 10)
+
+def luhn_append(s):
+    var c = luhn_check(s)
+    if c.is_err():
+        return Err(c.err())
+    return Ok(s + str(c.unwrap()))
+
+def luhn_valid(s):
+    if len(s) < 2:
+        return false
+    var i = 0
+    while i < len(s):
+        if not luhn_is_digit(s[i]):
+            return false
+        i += 1
+    # 校验位本身不加倍：sum(去掉校验位) + 校验位 ≡ 0 (mod 10)
+    var body = s[0:len(s) - 1]
+    var last = ord(s[len(s) - 1]) - 48
+    return (luhn_sum(body) + last) % 10 == 0
+
+# 测试用卡号生成（prefix + 随机补位 + 校验位）
+def luhn_card(name):
+    var prefixes = []
+    if name == "visa":
+        prefixes = ["4"]
+    elif name == "mastercard":
+        prefixes = ["51", "52", "53", "54", "55"]
+    elif name == "amex":
+        prefixes = ["34", "37"]
+    elif name == "discover":
+        prefixes = ["6011", "65"]
+    else:
+        return Err("luhn: 未知卡种 " + name)
+    var total_len = 16
+    if name == "amex":
+        total_len = 15
+    var p = prefixes[int(random() * float(len(prefixes)))]
+    var s = p
+    while len(s) < total_len - 1:
+        s = s + str(int(random() * 10.0))
+    return luhn_append(s)

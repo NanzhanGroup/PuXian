@@ -1,0 +1,7 @@
+# M201 探针：打印本构建「可作为全局调用的 native 名」（一行一名；native 侧已排序去重）
+# 用途：解释器件的能力面判据（PX-DEF-035）—— 不再靠 `strings` 猜。
+var ns = native_symbols()
+var i = 0
+while i < len(ns):
+    print(ns[i])
+    i += 1
