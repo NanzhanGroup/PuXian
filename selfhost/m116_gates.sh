@@ -622,6 +622,18 @@ step "M200 · extern def（C-FFI 桥）名字的**全局发布**（缺陷 240 �
 run m200_ffi_globals bash examples/m200_ffi_globals/verify.sh
 run m201_bytes_dec bash examples/m201_bytes_dec/verify.sh
 run m201_interp_ffi bash examples/m201_interp_ffi/verify.sh
+step "M202 · 加密/排序扩展面 + 非字符串实参渲染别名（第 81 轮 · 缺陷 244）"
+#   三条第三方登记（三轨**一致地缺**）：PX-DEF-032 无 base32 native（OTP 秘钥的标准文本
+#   格式 · RFC 4648 §6）⇒ 官方 registry/totp 只能纯 .px 自实现；PX-DEF-033 无 hmac_sha1
+#   （RFC 4226/6238 的**默认算法**）⇒ 只能手工拼 64 字节块 + ipad/opad；PX-DEF-034
+#   `sorted` 无 key ⇒ 自然排序只能靠 `[键, 下标, 原值]` 绕行（registry/natsort 即此法）。
+#   本轮由 [2] 的探针**现场照出来**缺陷 244：`bdata`/`val_cstr` 对非 str/bytes 实参共用
+#   一处 `static char tmp[64]` ⇒ `hmac_sha256(123, 456)` 实测 == `hmac(456, 456)`
+#   （key 被 msg 顶掉），hmac_sha1 / pbkdf2_sha256 / regex_* 全中 = **安全原语静默错值**；
+#   叠加它还是**进程级** static（多线程并发取值互踩）⇒ 改**每线程 8 槽轮转环**。
+#   判据：[1] 静态 8 项 · [2] 正例 5 组 × 三轨逐字节一致（RFC 向量 + 非串实参同值）·
+#   [3] 拒绝侧 6 例 × 三轨同码同文 · [4] 负控 5 道（含**重编 dev 解释器**那道）。
+run m202_crypto_ext bash examples/m202_crypto_ext/verify.sh
 step "M190 · 上游 registry-px 真实用例回归（53 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。

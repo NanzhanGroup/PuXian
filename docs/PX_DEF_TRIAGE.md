@@ -416,3 +416,76 @@ CI 只问"能不能跑 hello"⇒ 一直绿。
 | **PX-DEF-032** | **无 `base32` native**（RFC 4648；OTP 秘钥标准格式，Google Authenticator 互通必需） | 官方 `registry/totp` 只能纯 .px 自实现 | 补 `base32_encode/decode`（三轨 + 门） |
 | **PX-DEF-033** | **无 `hmac_sha1`**（HMAC 族只有 sha256；RFC 4226/6238 默认是 HMAC-SHA1） | 同上，TOTP/HOTP 标准实现受限 | 补 `hmac_sha1` / `hmac_sha1_bytes`（对齐 `hmac_sha256` 口径） |
 | **PX-DEF-034** | **`sorted` 只接受 1 个参数**（无 key/comparator） | 自然排序等只能靠 `[键,下标,原值]` 包装绕行（`natsort` 即此法） | 评估 `sorted_keyed(l, key_fn)`（native 回调用 `px_call`，可行）；**注意** M162 已定"值比较 + 稳定排序"，扩展不得破坏该语义 |
+
+## 十、M202（第 81 轮）：PX-DEF-032 / 033 / 034 三条一并收口 + **缺陷 244**（本轮新抓）
+
+### 10.1 三条登记（都是「三轨**一致地缺**」——不是分叉，是**能力缺口**）
+
+| 编号 | 形状 | 影响 | 处置 |
+|---|---|---|---|
+| **PX-DEF-032** | 无 base32 native（RFC 4648 §6） | OTP 秘钥的**标准文本格式**就是 base32（Google Authenticator / RFC 4226 §3.1 的 `secret`）⇒ 官方 `registry/totp` 只能**纯 .px 自实现**解码（`o_b32_decode`：`to_upper` + 5bit 累积），既慢又无法与 C 轨共享 | ✅ 补 `base32_encode` / `base32_decode` / `bytes_base32` / `base32_to_bytes`（口径与 base64 族**逐项对齐**；宽松面逐条写明） |
+| **PX-DEF-033** | 无 `hmac_sha1`（HMAC 族只有 sha256） | RFC 4226（HOTP）/ RFC 6238（TOTP）的**默认算法**就是 HMAC-SHA1 ⇒ totp 只能用 `sha1_bytes` **手工拼** 64 字节块 + ipad/opad | ✅ 补 `hmac_sha1`（40 hex）/ `hmac_sha1_bytes`（20 字节），底层 mbedtls `mbedtls_md_hmac(SHA1)`。验收 = **RFC 2202 §3 全 7 条向量** |
+| **PX-DEF-034** | `sorted` 只收 1 个参数（无 key） | 自然排序等只能靠 `[键, 下标, 原值]` 包装绕行（官方 `registry/natsort` 即此法） | ✅ 补 `sorted(xs[, key_fn])`。**明确不做 comparator**：语言全序由 `compare_values` 唯一确定，任意 int 比较器会让「稳定排序」失去可判定性（与 M162 立的「同一比较器下输出唯一」直接冲突） |
+
+**三条的统一口径**（写进 `docs/PUXIAN_CHEATSHEET.md` 事实 229/230/231）：
+
+- base32 与 base64 族**同一个陷阱**：`base32_decode` 回的是 **str**，而载荷可能是任意字节
+  （含 NUL / 非法 UTF-8）⇒ **要二进制一律用 `base32_to_bytes`**。
+- 解码**宽松面**（RFC 4648 §3.3/§3.4 留给实现的自由度，逐条写明、不再静默）：
+  **大小写不敏感** · **填充可省略**（OTP 秘钥普遍无填充）· **忽略 ASCII 空白**；
+  其余一律 → `null`（非表内字符 / 填充后还有数据字符 / 数据长度 %8 ∉ {0,2,4,5,7} / 填充个数 ≠ 8-(n%8)）。
+- `sorted(xs, key_fn)`：**取键恰一次/元素、按原始顺序**（副作用可观测）；比较仍走 `compare_values`
+  ⇒ M162 的「值比较 + 稳定排序」**不变**；键相等保持原序；**未提供 key 时逐字节等价于旧行为**。
+
+### 10.2 **缺陷 244（本轮由 [2] 的探针现场照出来 · 高严重度 · 静默错值）**
+
+**形状**：`bdata()` / `val_cstr()` 对**非 str/bytes** 实参的渲染走**同一处** `static char tmp[64]`
+⇒ 同一函数里对**两个不同实参**各取一次指针时，前一个会被后一次调用**就地覆盖**：
+
+```
+实测：hmac_sha256(123, 456)  ==  hmac(b"456", b"456")     ← key 被 msg 顶掉
+      regex_match(123, 456)  ==  regex_match("456", "456") ← 模式被文本顶掉
+      pbkdf2_sha256(123, 456, 1, 8) == pbkdf2(b"456", b"456", …)  ← 密钥派生的 salt 被顶掉
+```
+
+⇒ **安全原语 + 密钥派生 + 正则匹配上静默算错**（不崩、不报错，最难查的一类）。
+**叠加第二层**：它是**进程级** static，而运行期是多线程（worker / 连接线程 / 定时器线程）
+⇒ 两个线程同时取非字符串实参也会互踩（同一根因的另一面）。
+
+**扫描面**（`runtime/*.c` 静态器）：命中「多实参指针绑定」的函数 **10 个** ——
+`bi_hmac_sha256` · `bi_hmac_sha1` · `bi_hmac_sha1_bytes` · `bi_pbkdf2_sha256` ·
+`bi_regex_find` · `bi_regex_match` · `bi_regex_search` · `bi_regex_find_all` ·
+`bi_regex_replace` · `bi_regex_split`。
+
+**修法**：**每线程 8 槽轮转环**（`px_tmp_slot()`）—— 连续 8 次「不同实参」的取值互不覆盖
+（实际用点最多 3 处：`regex_replace` 的 pat/text/repl），且 `str`/`bytes` 实参**仍直接返回
+对象自身缓冲**（不占槽 ⇒ 行为、内存占用、发射文本都不变）。
+纪律写进代码注释：**取值后不要假设同一个指针跨两次调用仍有效**。
+
+**本轮为什么现在才发现**：这一族只在**两个实参都不是字符串**时才发作 ——
+现实里 `hmac_sha256(key_hex, body)` 几乎总是字符串，所以它藏了很久；
+本轮为 `sorted` 写的探针里带了「非字符串实参必须与字符串形态同值」这一条，
+把 `hmac_sha1(123, 456)` 印出来才暴露。
+
+### 10.3 验收（硬数据）
+
+```
+门 examples/m202_crypto_ext/    M202-CRYPTO-EXT-VERIFY-OK · **通过 31 · 失败 0**
+  [1] 静态 9 项 · [2] 正例 5 组 × 三轨逐字节一致（RFC 向量 + 非串实参同值）
+  [3] 拒绝侧 6 例 × 三轨同码同文 · [4] 负控 5 道（A 原生忽略 key / B **重编 dev 解释器**后
+      忽略 key / C 去掉解码合法性校验 / D 稳定性 `>= 0` / E `bdata` 退回共享 static）
+入库件      重烘 12/12 成功 · `--check-all` 14/14（PXRT-f71f52ed3cf158c8）
+对拍        `--check`（55 例 rc/stdout/stderr）· `--check-vm`（40280 行字节码镜像）全绿
+发射冻结门  397 件 `--emit-c` 逐字节一致（**零 codegen 漂移** —— 本轮只动 runtime + 解释轨）
+上游回归    100 用例 × 双轨（见 §10.4）
+```
+
+### 10.4 上游库的「语言面规避」可以退休了
+
+`registry/totp`（上游包，**逐字节照搬、不改**）顶部写着：
+
+> 语言面规避（登记 PX-DEF-032/033）：无 base32 native → 自实现 RFC 4648 解码；
+> 无 hmac_sha1 native（只有 hmac_sha256）→ 用 sha1_bytes 纯 .px 拼 HMAC
+
+本轮之后这两条规避**都不再必要**（原生已有一等公民）。该文件属上游包（`MANIFEST.sha256`
+逐字节对拍）⇒ 本仓**不改**，等上游自行改用原生；本仓只在此登记「已具备 + 可用」。

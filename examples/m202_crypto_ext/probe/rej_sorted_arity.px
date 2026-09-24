@@ -1,0 +1,3 @@
+# M202 拒绝侧①：sorted 0 参 ⇒ 与原生同码同文（[S8] 判据的同一文案）
+print("before")
+print(sorted())
