@@ -1,0 +1,15 @@
+# M199 [S10-a] 三元兜底登记表（runtime/*.c 里的 `(args[P].type == T) ? A : <默认>` 站点）
+# ------------------------------------------------------------
+# 判据：源码里**每一个**三元兜底站点都必须在此登记；表里每条也必须在源码中存在（漂移判红）。
+# 判定（verdict）：
+#   guard —— 该形态**不是静默兜底**：同一位置的相邻分支/后续调用必**响亮**（下面逐条说明在哪）
+#   allow —— 有意兜底（必须写明理由；本轮**没有** allow 条目）
+# 列：文件 \t 归一化表达式（扫描器输出、去行号以免漂移） \t 判定 \t 理由
+# ------------------------------------------------------------
+runtime.c	args[1].type == PX_BOOL) op = args[1].as.b ? 1 : 0	guard	flock：同一 if/else-if 链的**末支** `else px_error("flock 的 op 需要 int/bool，实际是 %s")`（静默不可能）
+runtime.c	args[1].type == PX_FLOAT) ? args[1].as.f : (args[1].type == PX_INT ? (double	guard	set_timeout：该三元只算中间量 dv，紧随其后的 `px_arg_dur_ns(args[1],…)` 才是真守卫（非数值 ⇒ R1002；负 ⇒ R1006）
+runtime.c	args[1].type == PX_INT ? (double)args[1].as.i : 0.0)	guard	同上一行（set_timeout / set_interval 各一处，表达式同形）
+runtime.c	args[2].type == PX_BOOL) arg = args[2].as.b ? 1 : 0	guard	fcntl：if INT / else-if BOOL / **else px_error**（"fcntl 的 arg 需要 int/bool，实际是 %s"）
+runtime.c	args[2].type == PX_BOOL) group = args[2].as.b ? 1 : 0	guard	os_spawn / os_kill：末支均 px_error（"os_spawn 第 3 参需要 bool 或 opts dict{…}" / "os_kill 的 group 需要 bool"）
+runtime.c	args[2].type == PX_STR) ? args[2].as.obj->as.str.data : NULL	guard	tls_server：兜底**已由显式守卫包住**（缺陷 237 本分支修复：`if (nargs == 3 && args[2].type != PX_STR && args[2].type != PX_NULL) px_error(...)`；null 仍表示"不启用 SNI"）
+runtime_quic.c	args[3].type == PX_STR ? args[3].as.obj->as.str.data : N	guard	quic_connect：兜底**已由显式守卫包住**（缺陷 237 本分支修复：非 str/null 的 session 响亮；null 仍表示"不恢复会话"）

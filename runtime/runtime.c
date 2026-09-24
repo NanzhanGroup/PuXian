@@ -6420,7 +6420,10 @@ static LXValue bi_input(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_exit(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs > 1) px_error("R1002: exit 需要 0-1 个参数");
-    int code = (nargs >= 1 && args[0].type == PX_INT) ? (int)args[0].as.i : 0;
+    // M199（缺陷 237）：非 int 的退出码此前**静默当 0**（`exit({})` 三轨都"成功退出 0"）
+    if (nargs >= 1 && args[0].type != PX_INT)
+        px_error("R1002: exit 的 code 需要整数，实际是 %s", px_type_name(args[0]));
+    int code = (nargs >= 1) ? (int)args[0].as.i : 0;
     exit(code);
     return px_null();
 }
@@ -6430,8 +6433,14 @@ static LXValue bi_split(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs < 1 || nargs > 2) px_error("R1002: split 需要 1-2 个参数（字符串, [分隔符]）");
     if (args[0].type != PX_STR) px_error("R1002: split 参数需要 string");
+    // M199（缺陷 237 · [S10]「声明 ⇄ 生效」）：**三元兜底**是这一族最典型的缺口 ——
+    //   旧写法 `(nargs >= 2 && args[1].type == PX_STR) ? … : " "` 把「第 2 参**不是字符串**」
+    //   与「第 2 参**缺省**」混为一谈 ⇒ `split("s", {})` 编译轨**静默**按单空格切（返回 `[s]`），
+    //   而解释轨有独立守卫（`split 参数需要 string`，M190 加）⇒ **三轨分叉**。
+    //   实测（M199 自动探针 split__p1）：解释轨 rc=1 R1002 / VM·C 轨 rc=0 输出 `[s]`。
+    if (nargs >= 2 && args[1].type != PX_STR) px_error("R1002: split 参数需要 string");
     const char* s = args[0].as.obj->as.str.data;
-    const char* sep = (nargs >= 2 && args[1].type == PX_STR) ? args[1].as.obj->as.str.data : " ";
+    const char* sep = (nargs >= 2) ? args[1].as.obj->as.str.data : " ";
     int sep_len = (int)strlen(sep);
     LXValue r = px_list(0);
     px_root_push();
@@ -14260,7 +14269,10 @@ static LXValue bi_ctx_clear(LXValue* args, int nargs, void* ctx) {
 static LXValue bi_udp_open(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs > 1) px_error("R1002: udp_open 需要 (port) 参数");
-    int port = (nargs == 1 && args[0].type == PX_INT) ? (int)args[0].as.i : 0;
+    // M199（缺陷 237）：非 int 的 port 此前静默当 0（= 系统随机分配）⇒ `udp_open("x")` 静默绑定
+    if (nargs == 1 && args[0].type != PX_INT)
+        px_error("R1002: udp_open 的 port 需要整数，实际是 %s", px_type_name(args[0]));
+    int port = (nargs == 1) ? (int)args[0].as.i : 0;
     if (port < 0 || port > 65535) px_error("R1006: udp_open 端口范围 0-65535");
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) px_error("udp_open: 创建 socket 失败");
@@ -22528,6 +22540,11 @@ static LXValue bi_tls_server(LXValue* args, int nargs, void* ctx) {
     }
     const char* cert = args[0].as.obj->as.str.data;
     const char* key = args[1].as.obj->as.str.data;
+    // M199（缺陷 237 · 同族第二处）：`hostname` 此前也是**三元兜底** —— 传非字符串时静默当 NULL
+    //   （= 静默不启用 SNI），与 `split(s, {})` / `quic_connect(..., {})` 同一形状。
+    //   null 仍表示「不启用 SNI」（可选实参约定），只有别的类型才响亮。
+    if (nargs == 3 && args[2].type != PX_STR && args[2].type != PX_NULL)
+        px_error("R1002: tls_server 的 hostname 需要字符串，实际是 %s", px_type_name(args[2]));
     const char* hostname = (nargs == 3 && args[2].type == PX_STR)
         ? args[2].as.obj->as.str.data : NULL;
     pthread_mutex_lock(&g_srv_tls_mu);

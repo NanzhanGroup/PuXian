@@ -1,0 +1,12 @@
+# 合法调用回归（M199 [4]）：被本轮改动触及的操作，正常路径必须**三轨逐字节一致**
+# 列：<标签>@@<单行源码>
+ok1_split_sep@@print(split("a,b", ","))
+ok2_split_default@@print(split("a b"))
+ok3_split_empty@@print(len(split("", ",")))
+ok4_replace@@print(replace("aXb", "X", "Y"))
+ok5_replace_empty_old@@print(replace("abc", "", "-"))
+ok6_bytes_get@@print(bytes_get(bytes("ABC"), 1))
+ok7_bytes_slice@@print(bytes_len(bytes_slice(bytes("abcd"), 1, 3)))
+ok8_bit_count@@print(bit_count(255))
+ok9_int_to_bytes@@print(bytes_len(int_to_bytes(1, 4)))
+ok10_tls_skip@@print("tls-server-needs-pem-文件故不在此列（tls_server 的合法面由 m33 门守）")

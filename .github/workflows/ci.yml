@@ -482,9 +482,13 @@ jobs:
           #   ⇄ **时长族数值化**（`set_timeout(fn, 1.5)` 真生效 · `{timeout_ms: 300.0}` 被采纳
           #   · `{"timeout_ms": "300"}` 响亮）· 时长族 5 例 × 三轨 · 4 道负控（本地全门跑）。
           bash examples/m198_argface/verify.sh --neg-skip > /tmp/v_m198.log 2>&1 || { echo "❌ m198_argface verify 失败"; tail -60 /tmp/v_m198.log; exit 1; }
+          # M199（缺陷 237/238/239）：[S10]「同一操作 × 每一位置 × 错类型」—— 静态逐参守卫声明全量
+          #   + 三元兜底登记表 + **自动生成探针 × 三轨**（合成单一驱动器，两次编译覆盖全量）
+          #   + 合法侧 LEGAL.tsv + 6 条显式词条；负控 4 道在本地全门 m116 跑。
+          bash examples/m199_argtype/verify.sh --neg-skip > /tmp/v_m199.log 2>&1 || { echo "❌ m199_argtype verify 失败"; tail -60 /tmp/v_m199.log; exit 1; }
           # 发射冻结门（M153 建立）：395 个用例的 --emit-c 输出必须逐字节不变（M188 由 393 起订正 —— 本轮只新增语料、类别 B 为空）。
           bash selfhost/emitc_freeze.sh --check > /tmp/v_emitc_freeze.log 2>&1 || { echo "❌ emitc_freeze 失败"; tail -30 /tmp/v_emitc_freeze.log; exit 1; }
-          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 / m153 / m154 / m155 / m158 / m160 / m161 / m162 / m163 / m164 verify / m170_gc_bridge_root / m182_hdr_root / m183_gc_root_handover / m184_num_fs_strict / m185_bytes_face / m186_native_passthrough / m187_registry_import / m188_std_face / m189_bytes_bounds / m190_arity / m191_error_codes / m192_encfamily / m193_errcodes2 / m194_arg_guards / m195_arg_guards2 / m196_msg_parity / m197_builtin_arity / m198_argface + 上游 registry-px 用例回归（53 用例 × 双轨 · EXPECTED.tsv 对拍） + 发射冻结门（395 件 --emit-c）全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"
+          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 / m153 / m154 / m155 / m158 / m160 / m161 / m162 / m163 / m164 verify / m170_gc_bridge_root / m182_hdr_root / m183_gc_root_handover / m184_num_fs_strict / m185_bytes_face / m186_native_passthrough / m187_registry_import / m188_std_face / m189_bytes_bounds / m190_arity / m191_error_codes / m192_encfamily / m193_errcodes2 / m194_arg_guards / m195_arg_guards2 / m196_msg_parity / m197_builtin_arity / m198_argface / m199_argtype + 上游 registry-px 用例回归（53 用例 × 双轨 · EXPECTED.tsv 对拍） + 发射冻结门（395 件 --emit-c）全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"
       # M188 补：这一步（工具自测）在 run 382/383 上红了，而 **job 日志非管理员不可读**
       #   （实测 /actions/jobs/<id>/logs → HTTP 403）⇒ 注解是唯一对外通道。
       #   本步把各门的 /tmp/v_*.log 关键行合成**一条** ::error:: 注解（换行编码 %0A）。
@@ -589,10 +593,13 @@ jobs:
         #   （x86_64 动态件，el7 glibc 2.17 上 `px build` 必崩）。而发布链此前**没有任何一步**在
         #   看「这枚二进制到底需要什么」⇒ 本门把它变成可判定的数字。
         run: |
-          chmod +x selfhost/check_bin_portability.sh
+          chmod +x selfhost/check_bin_portability.sh selfhost/check_pkg_arch.sh
           bash selfhost/check_bin_portability.sh --self-test
           bash selfhost/check_bin_portability.sh --arch x86_64 --require-static bootstrap/*
           echo "✅ 入库件 14 件全部：x86_64 + 全静态（零动态库依赖）"
+          # M199（缺陷 239）：**发布包架构卫生门**自证 —— 包内不得夹带异架构/跨平台**构建输入**
+          #   （fixture 取自仓库：x86-64 .o / aarch64 .o / COFF .o / 两架构 .a ⇒ 判据与环境无关）
+          bash selfhost/check_pkg_arch.sh --self-test
       - name: M67 x86_64 native 档（m67_multiarch：hello/http/sqlite + gc_stress/gc_single GC 压力）
         run: |
           bash examples/m67_multiarch/verify.sh --arch x86_64 >/dev/null

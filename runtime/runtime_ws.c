@@ -1124,8 +1124,15 @@ LXValue bi_ws_heartbeat(LXValue* args, int nargs, void* ctx) {
     if (nargs != 3 || args[0].type != PX_INT)
         px_error("R1002: ws_heartbeat 需要 (conn, interval_ms, timeout_ms) 参数");
     int64_t conn = args[0].as.i;
-    long long interval = (args[1].type == PX_INT) ? args[1].as.i : 10000;
-    long long timeout = (args[2].type == PX_INT) ? args[2].as.i : 60000;
+    // M199（缺陷 237）：非 int 的间隔/超时此前**静默取默认值**（10000 / 60000）——
+    //   用户以为设了心跳参数，实际拿到的是默认值（与 M198 的 opts.timeout_ms 静默忽略同族）。
+    //   注意：**0 / 负数仍走下面的默认值分支**（那是文档化的「用默认」写法），只有类型错才响亮。
+    if (args[1].type != PX_INT)
+        px_error("R1002: ws_heartbeat 的 interval_ms 需要整数，实际是 %s", px_type_name(args[1]));
+    if (args[2].type != PX_INT)
+        px_error("R1002: ws_heartbeat 的 timeout_ms 需要整数，实际是 %s", px_type_name(args[2]));
+    long long interval = args[1].as.i;
+    long long timeout = args[2].as.i;
     if (interval <= 0) interval = 10000;
     if (timeout <= 0) timeout = 60000;
     pthread_mutex_lock(&g_ws_mu);

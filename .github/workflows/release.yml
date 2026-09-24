@@ -219,6 +219,43 @@ jobs:
           mkdir -p "$STAGE"
           cp -a bootstrap tools runtime stdlib "$STAGE"/ 2>/dev/null || true
           rm -f "$STAGE"/bootstrap/pxc_vm "$STAGE"/bootstrap/pxi_vm   # 双保险（见上）
+          # ============================================================
+          # M199（缺陷 239）：**架构卫生** —— 包内不得夹带**异架构/跨平台构建输入**
+          #   实测（v0.2.0-m191 及更早的 aarch64 包）：包内带着 x86-64 的
+          #     runtime/third_party/sqlite3/sqlite3.o、sqlite3-windows.o（COFF）、
+          #     runtime/mbedtls/lib/*.a、runtime/third_party/zlib/lib/*.a、
+          #     runtime/third_party/{openssl,ngtcp2}/lib/*.a
+          #   ⇒ ① 白送体积；② **错架构陷阱**：aarch64 用户按 README 的路径家族显式
+          #      `--sqlite-obj runtime/third_party/sqlite3/sqlite3.o` 会拿到
+          #      `file in wrong format`（错误信息**指不到根因**）。
+          #   本包是**单架构**（aarch64）包 ⇒ 只保留 aarch64 的构建输入（`-aarch64` 目录/文件）。
+          #   ⚠️ openssl/ngtcp2 的 x86-64 静态库在本包内**本就不可用**（aarch64 上 QUIC/H3 已裁剪，
+          #      见 README-aarch64.md）⇒ 一并删除，不留"看起来能用"的陷阱。
+          # ============================================================
+          rm -f "$STAGE"/runtime/third_party/sqlite3/sqlite3.o \
+                "$STAGE"/runtime/third_party/sqlite3/sqlite3-windows.o
+          rm -rf "$STAGE"/runtime/third_party/openssl/lib "$STAGE"/runtime/third_party/ngtcp2/lib
+          rm -rf "$STAGE"/runtime/mbedtls/lib "$STAGE"/runtime/mbedtls/lib-windows
+          rm -rf "$STAGE"/runtime/third_party/zlib/lib "$STAGE"/runtime/third_party/zlib/lib-windows
+          if ! bash selfhost/check_pkg_arch.sh --self-test > "$RUNNER_TEMP/pst_arch.log" 2>&1; then
+            echo "::error::架构卫生门自证失败"; sed 's/^/::error::arch-selftest /' "$RUNNER_TEMP/pst_arch.log"; exit 1
+          fi
+          if ! bash selfhost/check_pkg_arch.sh --arch aarch64 "$STAGE" > "$RUNNER_TEMP/pkg_arch.log" 2>&1; then
+            echo "::error::包内夹带异架构/跨平台构建输入（架构卫生门判红）"
+            grep -E '❌|统计' "$RUNNER_TEMP/pkg_arch.log" | sed 's/^/::error::pkg-arch /'; exit 1
+          fi
+          grep -E '── 统计' "$RUNNER_TEMP/pkg_arch.log"
+          # 裁掉异架构输入之后，**从包内**再跑一次零参数 build（证明没裁掉 aarch64 必需项）
+          mkdir -p "$RUNNER_TEMP/psmoke"
+          printf 'print("pruned-ok")\n' > "$RUNNER_TEMP/psmoke/h.px"
+          if ! ( cd "$STAGE" && PATH="$STAGE/tools:$PATH" timeout 600 tools/px build "$RUNNER_TEMP/psmoke/h.px" ) \
+                 > "$RUNNER_TEMP/psmoke.log" 2>&1; then
+            echo "::error::裁剪后**包内** build 失败（可能裁掉了 aarch64 必需项）"
+            tail -8 "$RUNNER_TEMP/psmoke.log" | sed 's/^/::error::psmoke /'; exit 1
+          fi
+          test "$("$RUNNER_TEMP/psmoke/build/h")" = "pruned-ok" \
+            || { echo "::error::裁剪后包内构建产物运行输出异常"; exit 1; }
+          echo "✅ 架构卫生：包内仅 aarch64 构建输入，且**包内**零参数 build + 运行通过"
           [ ! -e "$STAGE/tools/build" ] || { echo "::error::包内夹带 tools/build/（Issue 56 回归）"; exit 1; }
           [ ! -e "$STAGE/.rtcache" ] || { echo "::error::包内夹带 .rtcache/"; exit 1; }
           [ -f VERSION ] && cp -f VERSION "$STAGE"/VERSION

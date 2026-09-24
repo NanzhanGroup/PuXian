@@ -243,7 +243,15 @@ def i_call_builtin(name, args, pos):
             return Err(i_r1002("to_lower 需要一个字符串参数", pos))
         return Ok(args[0].lower())
     if name == "replace":
+        # M199（缺陷 238 · [S10]「同操作三轨同一条真相」）：
+        #   旧写法只查**个数**，随后经 `args[0].replace(...)` **方法面**执行 ⇒ 位置错时
+        #   拿到的是方法面的词条（`方法 replace 参数 1 需要 string` / `R1007 类型 dict 没有方法 'replace'`），
+        #   而编译轨是**函数面**（`R1002: replace 需要 3 个字符串参数`）⇒ 同一调用两套码两套词条。
+        #   实测（M199 自动探针 replace__p0/p1/p2）：解释轨 R1007 ↔ VM·C 轨 R1002。
+        #   现改为**先按函数面口径守卫**（与 C 层 `bi_replace` 同码同文），再执行。
         if len(args) != 3:
+            return Err(i_r1002("replace 需要 3 个字符串参数", pos))
+        if type(args[0]) != "string" or type(args[1]) != "string" or type(args[2]) != "string":
             return Err(i_r1002("replace 需要 3 个字符串参数", pos))
         return Ok(args[0].replace(args[1], args[2]))
     if name == "starts_with":
