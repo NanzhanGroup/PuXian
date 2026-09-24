@@ -164,28 +164,32 @@ run_neg() {              # $1=标签 $2=轨(interp|vm|c) $3=文件 $4=旧 $5=新
 
 if [ $NEG_SKIP -eq 0 ]; then
     run_neg A interp selfhost/ibuiltin.px \
-        'if i_cmp_values(items[j], items[j + 1]) > 0:' \
-        'if i_to_str(items[j]) > i_to_str(items[j + 1]):' \
+        'if i_cmp_values(keys[idx[j]], keys[idx[j + 1]]) > 0:' \
+        'if i_to_str(keys[idx[j]]) > i_to_str(keys[idx[j + 1]]):' \
         "值比较退回渲染串比较（恢复缺陷 166）" "$CASE" "pass=26 fail=0"
     run_neg C interp selfhost/ival.px \
         '            let c = i_cmp_values(a[i], b[i])' \
         '            let c = 0' \
         "list 逐元素比较退化为只比长度（PX-DEF-011 面）" "$DEF011" "pass=4 fail=0"
     run_neg B vm runtime/runtime.c \
-        '        for (int j = 0; j + 1 < ro->as.list.len - i; j++) {
-            if (compare_values(ro->as.list.items[j], ro->as.list.items[j + 1]) > 0) {
-                LXValue t = ro->as.list.items[j];
-                ro->as.list.items[j] = ro->as.list.items[j + 1];
-                ro->as.list.items[j + 1] = t;
+        '    for (int i = 0; i < n; i++) {
+        for (int j = 0; j + 1 < n - i; j++) {
+            if (compare_values(ko->as.list.items[idx[j]], ko->as.list.items[idx[j + 1]]) > 0) {
+                int t = idx[j];
+                idx[j] = idx[j + 1];
+                idx[j + 1] = t;
             }
-        }' \
-        '        for (int j = i + 1; j < ro->as.list.len; j++) {
-            if (compare_values(ro->as.list.items[j], ro->as.list.items[i]) < 0) {
-                LXValue t = ro->as.list.items[i];
-                ro->as.list.items[i] = ro->as.list.items[j];
-                ro->as.list.items[j] = t;
+        }
+    }' \
+        '    for (int i = 0; i < n; i++) {
+        for (int j = i + 1; j < n; j++) {
+            if (compare_values(ko->as.list.items[idx[j]], ko->as.list.items[idx[i]]) < 0) {
+                int t = idx[i];
+                idx[i] = idx[j];
+                idx[j] = t;
             }
-        }' \
+        }
+    }' \
         "相邻冒泡退回选择式（恢复缺陷 167：不稳定）" "$CASE" "pass=26 fail=0"
 fi
 

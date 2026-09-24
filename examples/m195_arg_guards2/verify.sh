@@ -22,7 +22,7 @@
 #   教训：**收紧类型口径前，先跑全量门看生态用法** —— 这条 3 分钟内就抓到 2 处。
 # 判据：
 #   [1] 静态：`scan_errcodes.py` 新增判据 ⑦（`[S6]`）—— 覆盖**全部 native 函数**，
-#       397 个函数 · 未豁免缺检查 **0** · 豁免 24/24（表内每条须在源码里找得到 + 理由非空 +
+#       397 个函数 · 未豁免缺检查 **0** · 豁免数（表内每条须在源码里找得到 + 理由非空 +
 #       总数棘轮）；[S5] 仍绿。
 #   [2] 动态：15 个错例 × 三轨（解释 / VM / C）—— rc≠0 + **同码 R1002** + **同文**
 #   [2b] 合法侧：9 例 rc=0（含 `h3_server_listen(0)` 的**单参形态**、`sha256(1)` 的文本语义）
@@ -134,8 +134,12 @@ N_NAT="$(printf '%s' "$S6_LINE" | grep -oE '合计 [0-9]+' | grep -oE '[0-9]+' |
 N_WAIV="$(printf '%s' "$S6_LINE" | grep -oE '豁免 [0-9]+/[0-9]+' | head -1)"
 N_ZERO="$(printf '%s' "$S6_LINE" | grep -c '未豁免缺检查 \*\*0\*\*')"
 echo "   [S6] native 函数合计 = ${N_NAT:-空} · 未豁免缺检查为 0 的行数 = ${N_ZERO:-0} · ${N_WAIV:-无豁免字段}"
-chk "[1] native 函数 ≥397（**下限** · M201 实测 399）· 未豁免缺检查 0 · 豁免 24/24" \
-    "[ ${N_NAT:-0} -ge 397 ] && [ '${N_WAIV}' = '豁免 24/24' ] && [ ${N_ZERO:-0} -ge 1 ]"
+#   ⚠️ M202 修：原判据把豁免数写成**等式** `豁免 24/24` ⇒ 本轮 +2 条（base32 解码族）即假红。
+#     M197 纪律「计数只做下限」在这里同样适用：改成「**分子 == 分母**（表与源码一致）
+#     且 分子 ≥ 24（规模不缩水）」——新增**有理由、走棘轮**的豁免不该让门红。
+WAIV_OK="$(printf '%s' "${N_WAIV:-豁免 0/0}" | awk -F'[ /]' '{exit !($2 == $3 && $2 >= 24)}' && echo yes || echo no)"
+chk "[1] native 函数 ≥397（**下限** · M201 实测 399）· 未豁免缺检查 0 · 豁免数=分子/分母且 ≥24" \
+    "[ ${N_NAT:-0} -ge 397 ] && [ \"$WAIV_OK\" = yes ] && [ ${N_ZERO:-0} -ge 1 ]"
 chk "[1] [S5] 仍绿（多形参守卫 **≥137** · 缺检查 0）" \
     "grep -q '多形参守卫合计 .* · 缺类型检查 \*\*0\*\*' '$W/static.log' && grep -oE '多形参守卫合计 [0-9]+' '$W/static.log' | awk '{exit !(\$2 >= 137)}'"
 
@@ -174,9 +178,12 @@ if [ "$NEG" = 1 ]; then
 
     # C 静态：豁免总数棘轮（把上限调小）
     restore_all; snapshot
-    sed -i 's|^ARG_GUARD2_TOTAL = 24|ARG_GUARD2_TOTAL = 23|' examples/m191_error_codes/scan_errcodes.py
+    #   ⚠️ M202 修：原 sed 锚点是 `ARG_GUARD2_TOTAL = 24`（硬编码旧值）⇒ 数值一改**打桩失效**、
+    #     门报「棘轮未判红」却指不到真因。改成**版本无关**：把上限压到 1（表里只要有 ≥1 条就红）。
+    sed -i -E 's|^ARG_GUARD2_TOTAL = [0-9]+|ARG_GUARD2_TOTAL = 1|' examples/m191_error_codes/scan_errcodes.py
+    grep -q '^ARG_GUARD2_TOTAL = 1' examples/m191_error_codes/scan_errcodes.py || { echo "  FAIL [3C] 打桩失败（锚点未命中）"; fail=$((fail+1)); }
     static_ok
-    chk "[3C] 豁免上限调到 23 ⇒ 棘轮判红" "[ \$? != 0 ] && grep -q 'ARG_GUARD2_EXEMPT 条目变多' '$W/static.log'"
+    chk "[3C] 豁免上限压到 1 ⇒ 棘轮判红" "[ \$? != 0 ] && grep -q 'ARG_GUARD2_EXEMPT 条目变多' '$W/static.log'"
 
     # D 动态：元数上界退回 `nargs < 1`（仅 C 轨）
     restore_all; snapshot

@@ -20,6 +20,8 @@ DOMAIN = [
     r"全局表溢出", r"句柄表已满", r"创建线程失败", r"并发线程数超出上限",
     r"os_exec", r"沙箱：", r"%s: SO_REUSEPORT",
     r"md5 ", r"sha1 ", r"sha256 ", r"pbkdf2_sha256 ", r"aes ",
+    # M202：BASE32/HMAC-SHA1 族（与上一条同族 —— 后端算法失败的域前缀）
+    r"hmac_sha1 ", r"hmac_sha1_bytes ",
     r"zip ", r"内存不足",
     # ── M193 新增（棘轮欠账第二批：网络族 / VM / 数据族）──
     r"ws_serve:",              # §3 E2 网络/传输：ws_serve 的 socket 创建/绑定/listen 失败
@@ -285,6 +287,10 @@ ARG_GUARD2_EXEMPT = {
     ("runtime/runtime.c", "bi_base64_encode"): "文本语义：编码的输入文本",
     ("runtime/runtime.c", "bi_base64_decode"): "文本语义：解码的输入文本",
     ("runtime/runtime.c", "bi_base64_to_bytes"): "文本语义：解码的输入文本",
+    # M202（第 81 轮）：base32 与 base64 族**同款"文本语义"**（编码用 bdata 故不入表，
+    #   解码两件用 val_cstr ⇒ 会被 [S6] 扫到）—— 口径见 ERROR_CODES §6.8/§6.10。
+    ("runtime/runtime.c", "bi_base32_decode"): "文本语义：解码的输入文本（M202 · 非法 → null，非抛错）",
+    ("runtime/runtime.c", "bi_base32_to_bytes"): "文本语义：解码的输入文本（M202 · 同 base64_to_bytes）",
     ("runtime/runtime.c", "bi_hex_to_int"): "文本语义：解析的输入文本",
     ("runtime/runtime.c", "bi_hex_to_bytes"): "文本语义：解析的输入文本",
     ("runtime/runtime.c", "bi_ord"): "文本语义：取首字符码点",
@@ -306,7 +312,7 @@ ARG_GUARD2_EXEMPT = {
     ("runtime/runtime.c", "sse_cli_prepare"):
         "静态 helper：唯一两个调用方 bi_sse_connect / bi_sse_connect_ex 均已校验 args[0].type == PX_STR",
 }
-ARG_GUARD2_TOTAL = 24          # 棘轮：豁免总数不得多于此数
+ARG_GUARD2_TOTAL = 26          # 棘轮：豁免总数不得多于此数（M202：+base32 解码两件）
 
 _SILENT = {
     "INT": [r"int_val\("],
