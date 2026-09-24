@@ -1,4 +1,7 @@
-# opts 里的 float 超时修前被**静默忽略**（= 没有超时）；现在必须被采纳
+# opts 里的 float 超时修前被**静默忽略**（= 没有超时）；现在必须被采纳。
+# 判据取宽余量（10s 睡眠 + 5s 上限）：CI 与本地都能过，但"忽略超时"必然 ≥10s ⇒ 仍然判红。
+# 直接 exec `sleep`（不经 `/bin/sh`）：把 shell 的 fork/exec 差异排除在判据之外。
 let t0 = now_ms()
-let r = os_spawn_capture("sh", ["-c", "sleep 3"], {"timeout_ms": 300.0})
-print("fast=" + str((now_ms() - t0) < 2000))
+let r = os_spawn_capture("sleep", ["10"], {"timeout_ms": 500.0})
+let el = now_ms() - t0
+print("elapsed=" + str(el) + " fast=" + str(el < 5000))
