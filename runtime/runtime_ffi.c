@@ -27,6 +27,32 @@ static FFISym g_ffi_syms[MAX_FFI_SYMS];
 static int    g_ffi_n = 0;
 
 // 注册 C 绑定到 FFI 表（px_register_builtins 或绑定文件初始化时调用）
+// ============================================================
+// M200（缺陷 240）：把 FFI 表里的名字**发布成全局 native**
+// ------------------------------------------------------------
+// 为什么需要（这是官方 registry 的 `zlib` 包在**编译轨**完全不可用的根因）：
+//   `extern def` 声明的名字（`import "c/zlib"` + `extern def zlib_compress(...)`）在
+//   **解释轨**有运行期兜底 —— `selfhost/iexpr.px` 遇到未知名/FFI 名会调
+//   `i_builtin_ffi_call` → C 侧 `ffi_call` 的**双表**（ffi 注册表 → 全局 native 表）；
+//   而**编译轨**把这个名字编译成 **GETG**（extern def 名即全局名）⇒ GETG 只查全局表 ⇒
+//   `R1001 未定义变量: 'zlib_compress'`。
+//   实证（M200）：
+//     · 解释轨：`print(zlib_crc32(bytes("abc")))` → `891568578` ✅
+//     · 编译轨：同一条 → `运行时错误 [zl_compress 行22]: R1001: 未定义变量: 'zlib_compress'`
+//       （默认档与 `--full` 档**皆然** ⇒ 与「按引用集自动裁剪」无关，是**发布缺失**）
+//   后果：官方 `registry/zlib` 在 `px build` 产物里不可用（第三方把它记成 PX-DEF-035，
+//   且方向记反了：他们以为"编译轨可用、解释轨未注册"）。
+//   ⇒ 三轨同一条真相：注册完成后把每个 FFI 名发布成全局 native。
+// ⚠️ 调用时机：必须在**全部** `px_ffi_register` 之后（当前唯一调用点 = `px_register_builtins` 末尾，
+//   且仍在 `g_gc_frozen = 1` 的建表窗口内 ⇒ 不会被 GC 误回收，见 M170 缺陷 189）。
+// ============================================================
+void px_ffi_publish_globals(void) {
+    int i;
+    for (i = 0; i < g_ffi_n; i++) {
+        px_set_global(g_ffi_syms[i].name, px_native(g_ffi_syms[i].name, g_ffi_syms[i].fn));
+    }
+}
+
 void px_ffi_register(const char* name, LXFuncPtr fn) {
     if (g_ffi_n >= MAX_FFI_SYMS) {
         fprintf(stderr, "[ffi] 注册表已满（%d），忽略 %s\n", MAX_FFI_SYMS, name);

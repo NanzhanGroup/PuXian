@@ -1,0 +1,59 @@
+# msgpack.px 测试：MessagePack 编解码（Python msgpack 对拍，双模式一致）
+import "../registry/msgpack/0.1.0/msgpack.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # 标量 hex（Python msgpack.packb 对拍）
+    expect(bytes_to_hex(mp_pack(null).unwrap()) == "c0", "null=c0")
+    expect(bytes_to_hex(mp_pack(true).unwrap()) == "c3", "true=c3")
+    expect(bytes_to_hex(mp_pack(false).unwrap()) == "c2", "false=c2")
+    expect(bytes_to_hex(mp_pack(127).unwrap()) == "7f", "127 fixint")
+    expect(bytes_to_hex(mp_pack(128).unwrap()) == "cc80", "128 u8")
+    expect(bytes_to_hex(mp_pack(-1).unwrap()) == "ff", "-1 fixneg")
+    expect(bytes_to_hex(mp_pack(-33).unwrap()) == "d0df", "-33 i8")
+    expect(bytes_to_hex(mp_pack(65535).unwrap()) == "cdffff", "65535 u16")
+    expect(bytes_to_hex(mp_pack(-32769).unwrap()) == "d2ffff7fff", "-32769 i32")
+    expect(bytes_to_hex(mp_pack(65536).unwrap()) == "ce00010000", "65536 u32")
+    expect(bytes_to_hex(mp_pack(1.5).unwrap()) == "cb3ff8000000000000", "1.5 f64")
+    expect(bytes_to_hex(mp_pack("a").unwrap()) == "a161", "a fixstr")
+    expect(bytes_to_hex(mp_pack("hello").unwrap()) == "a568656c6c6f", "hello fixstr")
+    expect(bytes_to_hex(mp_pack([1, 2, 3]).unwrap()) == "93010203", "[1,2,3]")
+    expect(bytes_to_hex(mp_pack({"a": 1}).unwrap()) == "81a16101", "{a:1} map")
+    # 中文 str（UTF-8 字节数）
+    expect(bytes_to_hex(mp_pack("中文").unwrap()) == "a6e4b8ade69687", "中文 fixstr")
+    # bytes bin
+    expect(bytes_to_hex(mp_pack(bytes(hex_to_bytes("0102ff"))).unwrap()) == "c4030102ff", "bytes bin8")
+    # 解包
+    expect(mp_unpack(bytes(hex_to_bytes("c0"))).unwrap() == null, "unpack null")
+    expect(mp_unpack(bytes(hex_to_bytes("c3"))).unwrap() == true, "unpack true")
+    expect(mp_unpack(bytes(hex_to_bytes("7f"))).unwrap() == 127, "unpack 127")
+    expect(mp_unpack(bytes(hex_to_bytes("ff"))).unwrap() == -1, "unpack -1")
+    expect(mp_unpack(bytes(hex_to_bytes("cdffff"))).unwrap() == 65535, "unpack u16")
+    expect(mp_unpack(bytes(hex_to_bytes("cb3ff8000000000000"))).unwrap() == 1.5, "unpack f64")
+    expect(mp_unpack(bytes(hex_to_bytes("a568656c6c6f"))).unwrap() == "hello", "unpack str")
+    expect(mp_unpack(bytes(hex_to_bytes("93010203"))).unwrap() == [1, 2, 3], "unpack array")
+    var m = mp_unpack(bytes(hex_to_bytes("81a16101"))).unwrap()
+    expect(type(m) == "dict" and m["a"] == 1, "unpack map")
+    var b = mp_unpack(bytes(hex_to_bytes("c4030102ff"))).unwrap()
+    expect(type(b) == "bytes" and bytes_to_hex(b) == "0102ff", "unpack bin")
+    # 往返（嵌套）
+    var nested = {"name": "px", "n": 42, "pi": 3.14159, "ok": true, "nil": null,
+                  "list": [1, "two", false], "sub": {"x": [1.5, "中"]}}
+    var packed = mp_pack(nested).unwrap()
+    var back = mp_unpack(packed).unwrap()
+    expect(back["name"] == "px" and back["n"] == 42 and back["ok"] == true, "嵌套回读标量")
+    expect(back["nil"] == null, "null 回读")
+    expect(back["list"][1] == "two" and back["list"][2] == false, "list 回读")
+    expect(back["sub"]["x"][1] == "中" and close_v(back["sub"]["x"][0], 1.5), "嵌套回读")
+    # 非法数据
+    expect(mp_unpack(bytes(hex_to_bytes("ff"))).is_err() == false, "-1 合法")
+    expect(mp_unpack(bytes(hex_to_bytes("c5"))).is_err(), "不完整 bin Err")
+    print("msgpack: PASS")
+    return Ok(0)
+def close_v(a, b):
+    var d = a - b
+    if d < 0:
+        d = 0 - d
+    return d < 1e-9

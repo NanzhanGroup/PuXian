@@ -1,0 +1,43 @@
+# totp.px 测试：RFC 4226 HOTP / RFC 6238 TOTP 官方向量 + base32 路径
+import "../registry/totp/0.1.0/totp.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var key = bytes("12345678901234567890")
+    # RFC 4226 附录 D：HOTP 6 位向量（counter 0..9）
+    var expect_codes = ["755224", "287082", "359152", "969429", "338314",
+                        "254676", "287922", "162583", "399871", "520489"]
+    var i = 0
+    while i < 10:
+        expect(otp_hotp_raw(key, i, 6).unwrap() == expect_codes[i], "hotp [" + str(i) + "]=" + expect_codes[i])
+        i += 1
+    # base32 路径与 raw 一致（"12345678901234567890" 的 RFC 4648 base32）
+    var b32 = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+    var low32 = "gezdgnbvgy3tqojqgezdgnbvgy3tqojq"
+    i = 0
+    while i < 5:
+        expect(otp_hotp(b32, i, 6).unwrap() == expect_codes[i], "hotp b32 [" + str(i) + "]")
+        expect(otp_hotp(low32, i, 6).unwrap() == expect_codes[i], "hotp b32 小写 [" + str(i) + "]")
+        i += 1
+    # RFC 6238 附录 B：TOTP 8 位向量（SHA1，step=30）
+    var tv = [[59, "94287082"], [1111111109, "07081804"], [1111111111, "14050471"],
+              [1234567890, "89005924"], [2000000000, "69279037"], [20000000000, "65353130"]]
+    var j = 0
+    while j < len(tv):
+        expect(otp_totp(b32, 8, tv[j][0]).unwrap() == tv[j][1], "totp T=" + str(tv[j][0]))
+        j += 1
+    # 自定义 step：step=30 与默认一致
+    expect(otp_totp_step(b32, 8, 1234567890, 30).unwrap() == "89005924", "totp step=30")
+    # verify：±window 内应通过；错误码不通过
+    expect(otp_verify(b32, "89005924", 8, 1234567890, 1), "verify ok")
+    expect(otp_verify(b32, "89005924", 8, 1234567890 - 20, 1), "verify 漂移 20s ok")
+    expect(otp_verify(b32, "00000000", 8, 1234567890, 1) == false, "verify 错误码 false")
+    expect(otp_verify(b32, "89005924", 8, 1234567890, 0), "verify window=0 ok")
+    # 错误路径
+    expect(otp_b32_decode("!").is_err(), "b32 非法字符 Err")
+    expect(otp_hotp_raw(key, 0, 5).is_err(), "digits 越界 Err")
+    expect(otp_hotp(b32, -1, 6).is_err(), "counter 负 Err")
+    print("totp: PASS")
+    return Ok(0)

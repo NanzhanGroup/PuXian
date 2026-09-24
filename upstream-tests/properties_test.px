@@ -1,0 +1,26 @@
+# properties.px 测试：Java .properties 解析（双模式一致）
+import "../registry/properties/0.1.0/properties.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var s = "a=1\nb = hello world\nc: value\nd with space = x\n! cc1\n# cc2\ne=multi\\\n  line\nf=t\\nx\ng=\\u4e2d\\u6587\n"
+    var cfg = pr_parse(s).unwrap()
+    expect(pr_get(cfg, "a").unwrap() == "1", "a=1")
+    expect(pr_get(cfg, "b").unwrap() == "hello world", "b=hello world")
+    expect(pr_get(cfg, "c").unwrap() == "value", "c: value")
+    expect(pr_get(cfg, "d").unwrap() == "with space = x", "空白分隔键 d，值含空格")
+    expect(pr_has(cfg, "cc1") == false and pr_has(cfg, "cc2") == false, "注释跳过")
+    expect(pr_get(cfg, "e").unwrap() == "multiline", "行续行, got " + pr_get(cfg, "e").unwrap())
+    expect(pr_get(cfg, "f").unwrap() == "t\nx", "\\n 转义")
+    expect(pr_get(cfg, "g").unwrap() == "中文", "\\uXXXX 转义, got " + pr_get(cfg, "g").unwrap())
+    expect(len(pr_keys(cfg)) == 7, "keys 数=7, got " + str(len(pr_keys(cfg))))
+    # 缺失键 Err
+    expect(pr_get(cfg, "nope").is_err(), "缺失键 Err")
+    # 空 / 无分隔符行
+    var s2 = "onlykey\n"
+    var cfg2 = pr_parse(s2).unwrap()
+    expect(pr_get(cfg2, "onlykey").unwrap() == "", "无分隔符空值")
+    print("properties: PASS")
+    return Ok(0)

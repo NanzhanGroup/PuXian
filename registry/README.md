@@ -47,7 +47,8 @@ registry/<name>/<version>/<分包>.px          # 可选：多文件包（M187 �
   在 M184「严格解析」后语义不再正确，**待上游先修**（登记在 `THIRD_PARTY.md`）。
 - 验证：`bash examples/m187_registry_import/verify.sh`（引入表逐行 sha256 对拍 + 52 包装/import +
   抽样双轨编译 + 多文件包语义 + 负控 A/B/C）。
-- 引入清单的三轨普查口径（M186 · 53 库）：编译轨 **50/53** · 解释轨 **47/53**，失败逐条定性见
+- 引入清单的三轨普查口径（**M186 · 53 库**，历史值）：编译轨 **50/53** · 解释轨 **47/53**，失败逐条定性见
+  （M200 起清单为 **86 库**：`upstream-tests/` 的 88 用例 × 双轨实测 **161 PASS / 0 FAIL / 15 SKIP**，见 `selfhost/run_upstream_tests.sh`）
   `docs/PX_DEF_TRIAGE.md` §4.1。
 
 ## 用法

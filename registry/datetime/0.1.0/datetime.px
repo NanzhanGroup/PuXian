@@ -11,6 +11,11 @@
 #   dt_diff(a_sec, b_sec)    → a - b 秒
 #   dt_add_days(sec, n)      → sec + n×86400
 #   dt_days_between(a,b)     → 整天数差（b-a 向下取整）
+# 加固（2026-09-24）：
+#   dt_weekday(y, m, d)      → 0..6（周一=0，Zeller 同余，纯算术）
+#   dt_iso_format(sec)       → "YYYY-MM-DDTHH:MM:SSZ"（UTC）
+#   dt_iso_parse(s)          → Ok(Unix 秒) | Err（ISO8601：Z / ±HH:MM / ±HHMM / 纯日期 / 小数秒）
+#   dt_humane(now_sec, then_sec) → "3 分钟前 / 2 小时后 / 刚刚"（中文相对时间）
 # 说明：dt_format 底层 time_format 输出 UTC；本地时间直接用 dt_now()。
 #   未考虑夏令时（中国无 DST；跨国场景注意）。
 # ============================================================
@@ -48,3 +53,95 @@ def dt_days_between(a_sec, b_sec):
     if diff % DT_DAY != 0 and diff < 0:
         days -= 1
     return days
+# ---- 加固：工作日 / ISO8601 / 相对时间 ----
+# 周一=0 的工作日（Zeller 同余，公历）
+def dt_weekday(y, m, d):
+    var yy = y
+    var mm = m
+    if mm < 3:
+        mm = mm + 12
+        yy = yy - 1
+    var k = yy % 100
+    var j = yy // 100
+    var h = (d + 13 * (mm + 1) // 5 + k + k // 4 + j // 4 + 5 * j) % 7
+    # h: 0=周六 1=周日 2=周一 ... 6=周五；转向周一=0
+    return (h + 5) % 7
+
+# ISO8601 → Unix 秒（输入视为 UTC，时区后缀换算）
+# 支持：2026-09-24T06:22:23Z / +08:00 / +0800 / 纯日期 / 小数秒
+def dt_iso_parse(s):
+    var t = s
+    var off_sec = 0
+    var tidx = t.find("T")
+    if tidx < 0:
+        t = t + " 00:00:00"
+    else:
+        var pos = -1
+        var sig = 0
+        var pi = tidx + 1
+        while pi < len(t):
+            var c = t[pi]
+            if c == "+" or c == "-":
+                pos = pi
+                if c == "+":
+                    sig = 1
+                else:
+                    sig = -1
+            pi += 1
+        if pos > 0:
+            var zs = t[pos + 1:len(t)]
+            var zh = 0
+            var zm = 0
+            var colon = zs.find(":")
+            if colon >= 0:
+                zh = int(zs[0:colon])
+                zm = int(zs[colon + 1:len(zs)])
+            else:
+                if len(zs) >= 2:
+                    zh = int(zs[0:2])
+                if len(zs) >= 4:
+                    zm = int(zs[2:4])
+            off_sec = sig * (zh * 3600 + zm * 60)
+            t = t[0:pos]
+        var dot = t.find(".")
+        if dot > tidx:
+            t = t[0:dot]
+        t = t[0:tidx] + " " + t[tidx + 1:len(t)]
+    var sec = time_parse(t, "%Y-%m-%d %H:%M:%S")
+    if sec == null:
+        return Err("datetime: 无法解析 ISO 时间: " + s)
+    return Ok(sec - off_sec)
+
+# Unix 秒 → ISO8601（UTC，Z 后缀）
+def dt_iso_format(sec):
+    return time_format(int(sec), "%Y-%m-%dT%H:%M:%SZ")
+
+# 相对时间（中文）：then 相对 now；60 秒内为"刚刚"
+def dt_humane(now_sec, then_sec):
+    var d = now_sec - then_sec
+    var ab = d
+    if ab < 0:
+        ab = 0 - ab
+    if ab < 60:
+        return "刚刚"
+    var n = 0
+    var unit = ""
+    var suffix = "前"
+    if d < 0:
+        suffix = "后"
+    if ab < 3600:
+        n = ab // 60
+        unit = "分钟"
+    elif ab < 86400:
+        n = ab // 3600
+        unit = "小时"
+    elif ab < 2592000:
+        n = ab // 86400
+        unit = "天"
+    elif ab < 31536000:
+        n = ab // 2592000
+        unit = "个月"
+    else:
+        n = ab // 31536000
+        unit = "年"
+    return str(n) + unit + suffix

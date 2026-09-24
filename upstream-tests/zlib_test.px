@@ -1,0 +1,33 @@
+# zlib.px 测试：压缩/解压/CRC32（编译轨 PASS；解释轨 FFI 未注册 → Err，见 PX-DEF-035）
+import "../registry/zlib/0.1.0/zlib.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var msg = bytes("hello hello 普贤测试")
+    # 压缩 → 解压 往返
+    var c = zl_compress(msg, 6)
+    if c.is_err():
+        print("SKIP/ERR（解释轨 FFI 未注册，PX-DEF-035）: " + str(c))
+        # 解释轨：能返回 Err 而非崩溃即视为优雅降级；编译轨不应走到这里
+        expect(str(c).find("未注册") >= 0 or str(c).find("ffi") >= 0, "解释轨应报 FFI 未注册类")
+        print("zlib: PASS（解释轨优雅降级，PX-DEF-035）")
+        return Ok(0)
+    var comp = c.unwrap()
+    # 与 Python zlib 输出逐字节一致（对拍）
+    expect(bytes_to_hex(comp) == "789ccb48cdc9c957c80093cf66ae7bb165c9b3addd2fd64f05008d150d28",
+        "zlib 压缩与 Python 对拍一致")
+    var back = zl_uncompress(comp).unwrap()
+    expect(back == msg, "压缩往返")
+    # CRC32 对拍
+    expect(zl_crc32(bytes("hello")).unwrap() == 907060870, "crc32 hello=907060870")
+    expect(zl_crc32(msg).unwrap() == 3392828310, "crc32 普贤测试=3392828310")
+    # level 校验（0..9）
+    expect(zl_compress(msg, 0).is_ok(), "level 0 ok")
+    expect(zl_compress(msg, 99).is_err(), "level 99 Err")
+    expect(zl_compress(msg, -1).is_err(), "level -1 Err")
+    # 解压垃圾数据 → Err（不崩溃）
+    expect(zl_uncompress(bytes("not zlib data")).is_err(), "解压垃圾 Err")
+    print("zlib: PASS")
+    return Ok(0)

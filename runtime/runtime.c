@@ -11523,6 +11523,10 @@ void px_register_builtins(void) {
     px_set_global("write_bytes", px_native("write_bytes", bi_write_bytes));
     px_set_global("int_to_bytes", px_native("int_to_bytes", bi_int_to_bytes));
     px_set_global("bytes_to_int", px_native("bytes_to_int", bi_bytes_to_int));
+    // M200（缺陷 240）：extern def（C-FFI 桥）名的**全局发布** —— 编译轨的 `extern def f(...)`
+    //   编译成 GETG（解释轨另有 `iexpr.px` 的 ffi 双表兜底）⇒ 不发布则官方 `registry/zlib`
+    //   在 `px build` 产物里 `R1001 未定义变量: 'zlib_compress'`（默认与 --full 皆然）。
+    px_ffi_publish_globals();
     g_gc_frozen = 0;   // M170（缺陷 189）：建表完成，恢复回收
 }
 

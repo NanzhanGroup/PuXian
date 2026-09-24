@@ -1,0 +1,180 @@
+# ============================================================
+# 普贤生态库：registry/htmlparse —— HTML 解析（子集）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go golang.org/x/net/html / Python html.parser 心智（0.1.0 容错子集）：
+#   hp_parse(s)     → Ok(root dict) | Err
+# 元素 = {tag, attrs: dict, children: [元素|文本], parent};
+#   root.tag = "#root"。注释跳过；void 标签（br/img/input/…）不嵌套；
+#   属性支持 name="v" / name='v' / name（布尔，值为 ""）。
+#   hp_find(el, tag) → [元素]（DFS，大小写不敏感）
+#   hp_text(el)      → str（递归拼接文本）
+#   hp_attr(el, name) → string | null（缺省 null）
+# 说明：非严格容错（未闭合标签按栈顶弹出处理；不校验证实/实体解码）。
+# ============================================================
+
+const HP_VOID = ["br", "img", "input", "hr", "meta", "link", "area",
+                 "base", "col", "embed", "source", "track", "wbr"]
+
+def hp_trim(s):
+    var st = 0
+    var en = len(s)
+    while st < en and (s[st] == " " or s[st] == "\t" or s[st] == "\n"):
+        st += 1
+    while en > st and (s[en - 1] == " " or s[en - 1] == "\t" or s[en - 1] == "\n"):
+        en -= 1
+    return s[st:en]
+
+# 从 start 找子串（find 无起始偏移参数，手写）
+def hp_find_from(s, sub, start):
+    var i = start
+    while i + len(sub) <= len(s):
+        var j = 0
+        var ok = true
+        while j < len(sub):
+            if s[i + j] != sub[j]:
+                ok = false
+                break
+            j += 1
+        if ok:
+            return i
+        i += 1
+    return -1
+
+def hp_is_space(c):
+    return c == " " or c == "\t" or c == "\n"
+
+# 解析标签名 + 属性 → [name, attrs]
+def hp_tag(raw):
+    var t = hp_trim(raw)
+    var i = 0
+    while i < len(t) and not hp_is_space(t[i]):
+        i += 1
+    var name = to_lower(t[0:i])
+    var attrs = {}
+    var k = i
+    while k < len(t):
+        while k < len(t) and hp_is_space(t[k]):
+            k += 1
+        if k >= len(t):
+            break
+        var as_ = k
+        while k < len(t) and t[k] != "=" and not hp_is_space(t[k]):
+            k += 1
+        var an = to_lower(t[as_:k])
+        if an == "":
+            k += 1
+            continue
+        while k < len(t) and hp_is_space(t[k]):
+            k += 1
+        var av = ""
+        if k < len(t) and t[k] == "=":
+            k += 1
+            while k < len(t) and hp_is_space(t[k]):
+                k += 1
+            if k < len(t) and (t[k] == "\"" or t[k] == "'"):
+                var q = t[k]
+                k += 1
+                var vs = k
+                while k < len(t) and t[k] != q:
+                    k += 1
+                av = t[vs:k]
+                if k < len(t):
+                    k += 1
+            else:
+                var vs2 = k
+                while k < len(t) and not hp_is_space(t[k]) and t[k] != ">":
+                    k += 1
+                av = t[vs2:k]
+        attrs.set(an, av)
+    return [name, attrs]
+
+def hp_void(tag):
+    var i = 0
+    while i < len(HP_VOID):
+        if tag == HP_VOID[i]:
+            return true
+        i += 1
+    return false
+
+def hp_parse(s):
+    var root = {"tag": "#root", "attrs": {}, "children": [], "parent": null}
+    var stack = [root]
+    var i = 0
+    var n = len(s)
+    while i < n:
+        if s[i] == "<":
+            if i + 3 < n and s[i + 1] == "!" and s[i + 2] == "-" and s[i + 3] == "-":
+                var cm = hp_find_from(s, "-->", i + 4)
+                if cm < 0:
+                    break
+                i = cm + 3
+                continue
+            if i + 1 < n and s[i + 1] == "/":
+                var gt = hp_find_from(s, ">", i)
+                if gt < 0:
+                    break
+                var nm = hp_trim(s[i + 2:gt])
+                while len(stack) > 1 and stack[len(stack) - 1]["tag"] != nm:
+                    stack = stack[0:len(stack) - 1]
+                if len(stack) > 1:
+                    stack = stack[0:len(stack) - 1]
+                i = gt + 1
+                continue
+            var gt2 = hp_find_from(s, ">", i)
+            if gt2 < 0:
+                break
+            var rawtag = s[i + 1:gt2]
+            var selfclose = false
+            if rawtag.has_suffix("/"):
+                selfclose = true
+                rawtag = rawtag[0:len(rawtag) - 1]
+            var pr = hp_tag(rawtag)
+            var el = {"tag": pr[0], "attrs": pr[1], "children": [], "parent": stack[len(stack) - 1]}
+            stack[len(stack) - 1]["children"].append(el)
+            if not selfclose and not hp_void(pr[0]):
+                stack.append(el)
+            i = gt2 + 1
+        else:
+            var lt = hp_find_from(s, "<", i)
+            var endp = n
+            if lt >= 0:
+                endp = lt
+            var txt = s[i:endp]
+            if hp_trim(txt) != "":
+                stack[len(stack) - 1]["children"].append(txt)
+            i = endp
+    return Ok(root)
+
+def hp_find(el, tag):
+    var out = []
+    hp_find_rec(el, to_lower(tag), out)
+    return out
+
+def hp_find_rec(el, tag, out):
+    if el["tag"] == tag:
+        out.append(el)
+    var kids = el["children"]
+    var i = 0
+    while i < len(kids):
+        if type(kids[i]) == "dict":
+            hp_find_rec(kids[i], tag, out)
+        i += 1
+
+def hp_text(el):
+    var out = ""
+    var kids = el["children"]
+    var i = 0
+    while i < len(kids):
+        var k = kids[i]
+        if type(k) == "string":
+            out = out + k
+        else:
+            out = out + hp_text(k)
+        i += 1
+    return out
+
+def hp_attr(el, name):
+    if el["attrs"].has(name):
+        return el["attrs"][name]
+    return null

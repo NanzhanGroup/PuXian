@@ -1,0 +1,73 @@
+# ============================================================
+# 普贤生态库：registry/natsort —— 自然排序
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python natsort / Go honnef.co/go/natsort 心智（0.1.0）：
+#   na_key(s)       → str   自然排序键（数字段补零 + 文本段小写）
+#   na_compare(a,b) → int   -1/0/1
+#   na_sorted(l)    → [str] 自然排序结果（稳定）
+# 实现：
+#   - 数字段转为整数后补零到 20 位（i64 最长 19 位），使 "a2" < "a10"；
+#   - 文本段转小写（大小写不敏感）；
+#   - sorted 无 key/comparator（登记 PX-DEF-034），用 [键, 原值] 成对包装后
+#     走原生 sorted 的复合比较（M162 起稳定），再取回原值。
+# 复杂度 O(n log n)；键比较为字符串字典序。
+# ============================================================
+
+def na_is_digit(c):
+    return c >= "0" and c <= "9"
+
+# 数字段文本 → int（跳过前导零，"02"→2；全零→0）
+def na_parse_int(s):
+    var k = 0
+    while k < len(s) and s[k] == "0":
+        k += 1
+    var clean = s[k:len(s)]
+    if clean == "":
+        clean = "0"
+    return int(clean)
+
+def na_key(s):
+    var out = ""
+    var i = 0
+    var n = len(s)
+    while i < n:
+        if na_is_digit(s[i]):
+            var start = i
+            while i < n and na_is_digit(s[i]):
+                i += 1
+            var num = na_parse_int(s[start:i])
+            var pad = str(num)
+            while len(pad) < 20:
+                pad = "0" + pad
+            out = out + pad
+        else:
+            var start = i
+            while i < n and not na_is_digit(s[i]):
+                i += 1
+            out = out + to_lower(s[start:i])
+    return out
+
+def na_compare(a, b):
+    var ka = na_key(a)
+    var kb = na_key(b)
+    if ka < kb:
+        return -1
+    if ka > kb:
+        return 1
+    return 0
+
+def na_sorted(l):
+    var pairs = []
+    var i = 0
+    while i < len(l):
+        # [键, 原始下标, 原值]：平键按原位置稳定（而非按原值字典序）
+        pairs.append([na_key(l[i]), i, l[i]])
+        i += 1
+    var sp = sorted(pairs)
+    var out = []
+    var j = 0
+    while j < len(sp):
+        out.append(sp[j][2])
+        j += 1
+    return out

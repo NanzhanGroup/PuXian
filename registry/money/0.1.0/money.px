@@ -1,0 +1,85 @@
+# ============================================================
+# 普贤生态库：registry/money —— 金额格式化 / 解析
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go shopspring/decimal、Python money / babel 心智（0.1.0）：
+#   mn_format(amount, currency="CNY") → Ok(str)
+#   mn_parse(s, currency="CNY")       → Ok(float) | Err
+#   mn_symbol(currency) / mn_decimals(currency)
+# 货币：CNY ¥ / USD $ / EUR € / GBP £ / JPY ¥（0 位小数，其余 2 位）。
+# 格式化用整数分（cents = round(amount*100)）避免浮点尾数；
+# 千分位为自实现字符串分组，不经 int 转换（任意长度安全）。
+# ============================================================
+
+def mn_symbol(currency):
+    var c = currency
+    if c == "CNY":
+        return "¥"
+    if c == "USD":
+        return "$"
+    if c == "EUR":
+        return "€"
+    if c == "GBP":
+        return "£"
+    if c == "JPY":
+        return "¥"
+    return c
+
+def mn_decimals(currency):
+    if currency == "JPY":
+        return 0
+    return 2
+
+# 数字串 → 千分位
+def mn_digits(s):
+    var out = ""
+    var cnt = 0
+    var i = len(s) - 1
+    while i >= 0:
+        out = s[i] + out
+        cnt += 1
+        if cnt % 3 == 0 and i > 0:
+            out = "," + out
+        i -= 1
+    return out
+
+def mn_format(amount, currency="CNY"):
+    var dec = mn_decimals(currency)
+    var neg = false
+    var v = amount
+    if v < 0:
+        neg = true
+        v = 0 - v
+    var out = ""
+    if dec == 2:
+        var cents = int(v * 100.0 + 0.5)
+        var ip = cents // 100
+        var fp = cents % 100
+        var frac = str(fp)
+        if fp < 10:
+            frac = "0" + frac
+        out = mn_digits(str(ip)) + "." + frac
+    else:
+        out = mn_digits(str(int(v + 0.5)))
+    if neg:
+        return Ok("-" + mn_symbol(currency) + out)
+    return Ok(mn_symbol(currency) + out)
+
+# 解析：去掉符号/千分位/空白 → float
+def mn_parse(s, currency="CNY"):
+    var t = ""
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        if c == "," or c == " " or c == "¥" or c == "$" or c == "€" or c == "£":
+            i += 1
+            continue
+        t = t + c
+        i += 1
+    if len(t) == 0:
+        return Err("money: 空串")
+    if is_int_str(t):
+        return Ok(float(int(t)))
+    if is_float_str(t):
+        return Ok(float(t))
+    return Err("money: 非法金额: " + s)

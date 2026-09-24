@@ -1,0 +1,88 @@
+# ============================================================
+# 普贤生态库：registry/inflect —— 英文词形变化（复数化）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Rust inflector / Python inflection 心智（0.1.0）：
+#   if_plural(s)  → Ok(str) | Err   单数 → 复数
+#   if_singular(s) → Ok(str) | Err  复数 → 单数（常用规则子集）
+#   if_count(n, s) → str            带数量："1 apple" / "3 apples"
+# 规则（0.1.0 子集）：
+#   - 不规则词表：man/men, child/children, foot/feet, tooth/teeth,
+#     goose/geese, mouse/mice, person/people, ox/oxen, sheep/sheep…
+#   - s/x/z/ch/sh 结尾 → +es（box→boxes, church→churches, bus→buses）
+#   - 辅音+y → ies（city→cities）；元音+y → +s（boy→boys）
+#   - 常见 f/fe 结尾 → ves（wolf→wolves, knife→knives）
+#   - 其余 → +s
+# ============================================================
+
+const IF_IRREG_PL = [
+    "man men", "woman women", "child children", "foot feet", "tooth teeth",
+    "goose geese", "mouse mice", "person people", "ox oxen", "sheep sheep",
+    "fish fish", "deer deer", "series series", "species species"
+]
+const IF_IRREG_SG = [
+    "men man", "women woman", "children child", "feet foot", "teeth tooth",
+    "geese goose", "mice mouse", "people person", "oxen ox", "sheep sheep",
+    "fish fish", "deer deer"
+]
+# 常见 f/fe → ves
+const IF_F_VES = [
+    "wolf wolves", "knife knives", "wife wives", "life lives", "leaf leaves",
+    "shelf shelves", "loaf loaves", "half halves", "thief thieves"
+]
+# 元音字母
+def if_is_vowel(c):
+    return c == "a" or c == "e" or c == "i" or c == "o" or c == "u" or c == "y"
+
+def if_plural(s):
+    if len(s) == 0:
+        return Ok("")
+    var i = 0
+    while i < len(IF_IRREG_PL):
+        var kv = split(IF_IRREG_PL[i], " ")
+        if s == kv[0]:
+            return Ok(kv[1])
+        i += 1
+    var last = s[len(s) - 1]
+    var last2 = ""
+    if len(s) >= 2:
+        last2 = s[len(s) - 2]
+    if last == "s" or last == "x" or last == "z" or (last == "h" and (last2 == "c" or last2 == "s")):
+        return Ok(s + "es")
+    if last == "y" and not if_is_vowel(last2):
+        return Ok(s[0:len(s) - 1] + "ies")
+    var j = 0
+    while j < len(IF_F_VES):
+        var kv2 = split(IF_F_VES[j], " ")
+        if s == kv2[0]:
+            return Ok(kv2[1])
+        j += 1
+    if s.has_suffix("fe"):
+        return Ok(s[0:len(s) - 2] + "ves")
+    if last == "f" and len(s) > 1:
+        return Ok(s[0:len(s) - 1] + "ves")
+    return Ok(s + "s")
+
+def if_singular(s):
+    if len(s) == 0:
+        return Ok("")
+    var i = 0
+    while i < len(IF_IRREG_SG):
+        var kv = split(IF_IRREG_SG[i], " ")
+        if s == kv[0]:
+            return Ok(kv[1])
+        i += 1
+    if s.has_suffix("ies") and len(s) > 3:
+        return Ok(s[0:len(s) - 3] + "y")
+    if s.has_suffix("ves") and len(s) > 3:
+        return Ok(s[0:len(s) - 3] + "f")
+    if s.has_suffix("es") and len(s) > 2:
+        return Ok(s[0:len(s) - 2])
+    if s.has_suffix("s") and len(s) > 1:
+        return Ok(s[0:len(s) - 1])
+    return Ok(s)
+
+def if_count(n, s):
+    if n == 1:
+        return "1 " + s
+    return str(n) + " " + if_plural(s).unwrap()

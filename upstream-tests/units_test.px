@@ -1,0 +1,41 @@
+# units.px 测试：单位换算（Python pint 校准值，双模式一致）
+import "../registry/units/0.1.0/units.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def close(a, b, eps=1e-6):
+    var d = a - b
+    if d < 0:
+        d = 0 - d
+    return d < eps
+def main():
+    # 长度
+    expect(close(un_convert(1, "km", "m").unwrap(), 1000.0), "1 km = 1000 m")
+    expect(close(un_convert(2.54, "cm", "in").unwrap(), 1.0), "2.54 cm = 1 in")
+    expect(close(un_convert(1, "mi", "m").unwrap(), 1609.344), "1 mi = 1609.344 m")
+    expect(close(un_convert(1, "ft", "cm").unwrap(), 30.48), "1 ft = 30.48 cm")
+    # 质量
+    expect(close(un_convert(1, "kg", "lb").unwrap(), 2.2046226218, 1e-5), "1 kg ≈ 2.2046 lb")
+    expect(close(un_convert(16, "oz", "lb").unwrap(), 1.0), "16 oz = 1 lb")
+    # 时间
+    expect(un_convert(1, "h", "s").unwrap() == 3600.0, "1 h = 3600 s")
+    expect(un_convert(1, "week", "s").unwrap() == 604800.0, "1 week = 604800 s")
+    expect(un_convert(1500, "ms", "s").unwrap() == 1.5, "1500 ms = 1.5 s")
+    # 数据量（1024）
+    expect(un_convert(1, "MB", "B").unwrap() == 1048576.0, "1 MB = 1048576 B")
+    expect(un_convert(2, "GB", "MB").unwrap() == 2048.0, "2 GB = 2048 MB")
+    # 温度
+    expect(close(un_convert(100, "C", "F").unwrap(), 212.0), "100C=212F")
+    expect(close(un_convert(0, "C", "F").unwrap(), 32.0), "0C=32F")
+    expect(close(un_convert(0, "C", "K").unwrap(), 273.15), "0C=273.15K")
+    expect(close(un_convert(32, "F", "C").unwrap(), 0.0, 1e-9), "32F=0C")
+    expect(close(un_convert(300, "K", "C").unwrap(), 26.85, 1e-9), "300K=26.85C")
+    # 大小写
+    expect(close(un_convert(1, "KM", "m").unwrap(), 1000.0), "大写 KM")
+    # 错误
+    expect(un_convert(1, "m", "s").is_err(), "跨类 Err")
+    expect(un_convert(1, "furlong", "m").is_err(), "未知单位 Err")
+    expect(un_convert(1, "m", "C").is_err(), "温度跨类 Err")
+    print("units: PASS")
+    return Ok(0)

@@ -1,0 +1,90 @@
+# ============================================================
+# 普贤生态库：registry/thousep —— 数字千分位 / 序数格式
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python num2words / Go humanize、Rust num-format 心智（0.1.0）：
+#   th_thousands(n)       → str   int → "1,234,567"（负号保留）
+#   th_thousands_str(s)   → Ok(str) | Err  数字字符串（可带小数）千分位
+#   th_ordinal(n)         → str   "1st" / "2nd" / "3rd" / "11th" / "21st"
+# 实现：纯字符串逆序三分处理，整数部分不经过 int() 转换（任意长度安全）。
+# ============================================================
+
+# 纯数字串 → 千分位（逆序每 3 位插逗号）
+def th_digit_thousands(s):
+    var out = ""
+    var cnt = 0
+    var i = len(s) - 1
+    while i >= 0:
+        out = s[i] + out
+        cnt += 1
+        if cnt % 3 == 0 and i > 0:
+            out = "," + out
+        i -= 1
+    return out
+
+def th_thousands(n):
+    var neg = false
+    var v = n
+    if v < 0:
+        neg = true
+        v = -v
+    var out = th_digit_thousands(str(v))
+    if neg:
+        out = "-" + out
+    return out
+
+# 数字字符串（可选 +/- 前缀、可选小数部分）→ 千分位
+def th_thousands_str(s):
+    var t = s
+    var neg = ""
+    if t.starts_with("-"):
+        neg = "-"
+        t = t[1:len(t)]
+    elif t.starts_with("+"):
+        t = t[1:len(t)]
+    var dot = t.find(".")
+    var ip = t
+    var fp = ""
+    var has_dot = false
+    if dot >= 0:
+        has_dot = true
+        ip = t[0:dot]
+        fp = t[dot + 1:len(t)]
+    if len(ip) == 0:
+        ip = "0"
+    var i = 0
+    while i < len(ip):
+        if ip[i] < "0" or ip[i] > "9":
+            return Err("thousep: 非法数字串: " + s)
+        i += 1
+    var j = 0
+    while j < len(fp):
+        if fp[j] < "0" or fp[j] > "9":
+            return Err("thousep: 非法数字串: " + s)
+        j += 1
+    if has_dot:
+        return Ok(neg + th_digit_thousands(ip) + "." + fp)
+    return Ok(neg + th_digit_thousands(ip))
+
+# 序数：11-13 th；个位 1/2/3 为 st/nd/rd
+def th_ordinal(n):
+    var v = n
+    var neg = false
+    if v < 0:
+        neg = true
+        v = -v
+    var s = str(v)
+    var last2 = v % 100
+    var last1 = v % 10
+    var suffix = "th"
+    if last2 >= 11 and last2 <= 13:
+        suffix = "th"
+    elif last1 == 1:
+        suffix = "st"
+    elif last1 == 2:
+        suffix = "nd"
+    elif last1 == 3:
+        suffix = "rd"
+    if neg:
+        s = "-" + s
+    return s + suffix

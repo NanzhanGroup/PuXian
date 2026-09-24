@@ -1,0 +1,35 @@
+# ============================================================
+# 普贤生态库：registry/nanoid —— NanoID（URL 友好随机 ID）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go jaevor/go-nanoid / Python pynanoid 心智（0.1.0）：
+#   nd_generate(n=21) → Ok(str) | Err   默认 21 位 URL 安全 ID
+#   nd_alphabet()     → str             默认字母表（64 字符）
+#   nd_valid(s)       → bool            是否全由字母表构成
+# 字母表 64 字符（- _ 0-9 a-z A-Z）；os_random_hex 逐字节 → b % 64，
+#   因 256 % 64 == 0，索引**无取模偏差**（无需拒绝采样）。
+# ============================================================
+
+const ND_ALPHA = "-_0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+def nd_alphabet():
+    return ND_ALPHA
+
+def nd_generate(n=21):
+    if n <= 0:
+        return Err("nanoid: 长度须 > 0")
+    var raw = hex_to_bytes(os_random_hex(n))
+    var out = ""
+    var i = 0
+    while i < n:
+        out = out + ND_ALPHA[bytes_get(raw, i) % 64]
+        i += 1
+    return Ok(out)
+
+def nd_valid(s):
+    var i = 0
+    while i < len(s):
+        if ND_ALPHA.find(s[i]) < 0:
+            return false
+        i += 1
+    return true

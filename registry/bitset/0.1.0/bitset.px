@@ -1,0 +1,75 @@
+# ============================================================
+# 普贤生态库：registry/bitset —— 位向量 / 位集合
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态，位集状态以 {"n": 位数, "d": bytes} 显式传递），
+# 编译（px build）与解释（px run）双模式一致。
+# 对齐 Go math/bits / bitset、Rust bitvec 心智（0.1.0）：
+#   bs_new(nbits)   → Ok({n, d}) | Err   新建 nbits 位（全 0）
+#   bs_set(b, i)    → Ok(b) | Err        置 1（越界 Err）
+#   bs_clear(b, i)  → Ok(b) | Err        置 0
+#   bs_flip(b, i)   → Ok(b) | Err        翻转
+#   bs_test(b, i)   → Ok(bool) | Err
+#   bs_count(b)     → int                置 1 位数（popcount，原生 bit_count）
+#   bs_to_list(b)   → [int]              置 1 的下标列表
+# 位序：位 i → 字节 i//8 的第 i%8 位（LSB 优先）。
+# ============================================================
+
+def bs_new(nbits):
+    if nbits < 0:
+        return Err("bitset: 位数须 >= 0")
+    var size = (nbits + 7) // 8
+    var d = bytes("")
+    var k = 0
+    while k < size:
+        d = bytes_concat(d, byte(0))
+        k += 1
+    return Ok({"n": nbits, "d": d})
+
+def bs_test(b, i):
+    if i < 0 or i >= b["n"]:
+        return Err("bitset: 位越界 " + str(i) + " (n=" + str(b["n"]) + ")")
+    var mask = 1 << (i % 8)
+    return Ok((bytes_get(b["d"], i // 8) & mask) != 0)
+
+def bs_set(b, i):
+    var t = bs_test(b, i)
+    if t.is_err():
+        return Err(t.err())
+    var v = bytes_get(b["d"], i // 8) | (1 << (i % 8))
+    b.set("d", bytes_set(b["d"], i // 8, v))
+    return Ok(b)
+
+def bs_clear(b, i):
+    var t = bs_test(b, i)
+    if t.is_err():
+        return Err(t.err())
+    var mask = 255 ^ (1 << (i % 8))
+    var v = bytes_get(b["d"], i // 8) & mask
+    b.set("d", bytes_set(b["d"], i // 8, v))
+    return Ok(b)
+
+def bs_flip(b, i):
+    var t = bs_test(b, i)
+    if t.is_err():
+        return Err(t.err())
+    var v = bytes_get(b["d"], i // 8) ^ (1 << (i % 8))
+    b.set("d", bytes_set(b["d"], i // 8, v))
+    return Ok(b)
+
+def bs_count(b):
+    var total = 0
+    var size = (b["n"] + 7) // 8
+    var i = 0
+    while i < size:
+        total = total + bit_count(bytes_get(b["d"], i))
+        i += 1
+    return total
+
+def bs_to_list(b):
+    var out = []
+    var i = 0
+    while i < b["n"]:
+        if bs_test(b, i).unwrap():
+            out.append(i)
+        i += 1
+    return out

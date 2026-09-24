@@ -1,0 +1,2 @@
+extern def zlib_crc32(data) -> int
+print(zlib_crc32(bytes("abc")))

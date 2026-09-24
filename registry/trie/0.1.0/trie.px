@@ -1,0 +1,86 @@
+# ============================================================
+# 普贤生态库：registry/trie —— 字典树 / 前缀匹配
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态，树状态以嵌套 dict 显式传递），双模式一致。
+# 对齐 Python marisa-trie / Go rsc.io 心智（0.1.0）：
+#   tr_new()                  → dict   空树根
+#   tr_insert(t, s)           → t      插入一个词（可链式）
+#   tr_search(t, s)           → bool   精确匹配
+#   tr_starts_with(t, prefix) → bool   是否存在以 prefix 开头的词
+#   tr_keys_with_prefix(t, prefix) → [str]  所有以 prefix 开头的词（未排序）
+#   tr_to_list(t)             → [str]  全部词
+#   tr_len(t)                 → int    词数
+# 结构：嵌套 dict；子节点键 = 单字符（rune），词尾用元数据键 "end" 标记
+#   （子键恒为单字符，多字符 "end" 不会冲突）。
+# 索引按 rune（M185 起 s[i] 为 rune），中文等多字节词可直接用。
+# ============================================================
+
+def tr_new():
+    return {}
+
+def tr_insert(t, s):
+    var node = t
+    var i = 0
+    while i < len(s):
+        var ch = s[i]
+        if not node.has(ch):
+            node.set(ch, {})
+        node = node[ch]
+        i += 1
+    node.set("end", true)
+    return t
+
+def tr_search(t, s):
+    var node = t
+    var i = 0
+    while i < len(s):
+        var ch = s[i]
+        if not node.has(ch):
+            return false
+        node = node[ch]
+        i += 1
+    return node.has("end")
+
+def tr_starts_with(t, prefix):
+    var node = t
+    var i = 0
+    while i < len(prefix):
+        var ch = prefix[i]
+        if not node.has(ch):
+            return false
+        node = node[ch]
+        i += 1
+    return true
+
+# DFS 收集 node 子树下所有完整词（path = 已拼前缀）
+def tr_collect(node, path, out):
+    if node.has("end"):
+        out.append(path)
+    var ks = node.keys()
+    var i = 0
+    while i < len(ks):
+        var k = ks[i]
+        if k != "end":
+            tr_collect(node[k], path + k, out)
+        i += 1
+
+def tr_to_list(t):
+    var out = []
+    tr_collect(t, "", out)
+    return out
+
+def tr_keys_with_prefix(t, prefix):
+    var node = t
+    var i = 0
+    while i < len(prefix):
+        var ch = prefix[i]
+        if not node.has(ch):
+            return []
+        node = node[ch]
+        i += 1
+    var out = []
+    tr_collect(node, prefix, out)
+    return out
+
+def tr_len(t):
+    return len(tr_to_list(t))

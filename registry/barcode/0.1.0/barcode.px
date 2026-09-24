@@ -1,0 +1,78 @@
+# ============================================================
+# 普贤生态库：registry/barcode —— EAN-13 条形码生成
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 python-barcode / Go boombuler/barcode 心智（0.1.0）：
+#   bc_ean13_check(d12) → Ok(int) | Err      校验位（MOD-10，奇数位×1 偶数位×3）
+#   bc_ean13(d12)       → Ok({code, pattern, ascii}) | Err
+#     code: 13 位完整码；pattern: 95 位 '0/1' 模块串（认识起始/中/结束防护）；
+#     ascii: 单行渲染（"█" 与空格）。
+# 结构：起始 101 + 左 6 位（首位数决定 L/G 奇偶表）+ 中 01010 + 右 6 位 R +
+#   结束 101。校验位对拍 python-barcode（400638133393 → 1）。
+# ============================================================
+
+# EAN-13 编码表（模块 0/1 串）
+def bc_tables():
+    var L = ["0001101", "0011001", "0010011", "0111101", "0100011",
+             "0110001", "0101111", "0111011", "0110111", "0001011"]
+    var G = ["0100111", "0110011", "0011011", "0100001", "0011101",
+             "0111001", "0000101", "0010001", "0001001", "0010111"]
+    var R = ["1110010", "1100110", "1101100", "1000010", "1011100",
+             "1001110", "1010000", "1000100", "1001000", "1110100"]
+    var P = ["LLLLLL", "LLGLGG", "LLGGLG", "LLGGGL", "LGLLGG",
+             "LGGLLG", "LGGGLL", "LGLGLG", "LGLGGL", "LGGLGL"]
+    return [L, G, R, P]
+
+def bc_is_digit(c):
+    return c >= "0" and c <= "9"
+
+# 前 12 位 → 校验位
+def bc_ean13_check(d12):
+    if len(d12) != 12:
+        return Err("barcode: 需要 12 位数字，got " + str(len(d12)))
+    var sum = 0
+    var i = 0
+    while i < 12:
+        if not bc_is_digit(d12[i]):
+            return Err("barcode: 非法数字: " + d12)
+        var v = ord(d12[i]) - 48
+        if i % 2 == 0:
+            sum = sum + v
+        else:
+            sum = sum + v * 3
+        i += 1
+    return Ok((10 - (sum % 10)) % 10)
+
+def bc_ean13(d12):
+    var ck = bc_ean13_check(d12)
+    if ck.is_err():
+        return Err(ck.err())
+    var code = d12 + str(ck.unwrap())
+    var tbl = bc_tables()
+    var pat = "101"
+    var first = ord(code[0]) - 48
+    var parity = tbl[3][first]
+    var i = 1
+    while i <= 6:
+        var dg = ord(code[i]) - 48
+        if parity[i - 1] == "G":
+            pat = pat + tbl[1][dg]
+        else:
+            pat = pat + tbl[0][dg]
+        i += 1
+    pat = pat + "01010"
+    var k = 7
+    while k <= 12:
+        var dg2 = ord(code[k]) - 48
+        pat = pat + tbl[2][dg2]
+        k += 1
+    pat = pat + "101"
+    var ascii = ""
+    var j = 0
+    while j < 95:
+        if pat[j] == "1":
+            ascii = ascii + "█"
+        else:
+            ascii = ascii + " "
+        j += 1
+    return Ok({"code": code, "pattern": pat, "ascii": ascii})

@@ -1,0 +1,30 @@
+# slug.px 测试：slug 生成（双模式一致）
+import "../registry/slug/0.1.0/slug.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    expect(sl_slug("Hello World") == "hello-world", "Hello World")
+    expect(sl_slug("  Hello,  World!  ") == "hello-world", "首尾空格+标点折叠")
+    expect(sl_slug("Hello--World") == "hello-world", "多连字符折叠")
+    expect(sl_slug("a-b-") == "a-b", "尾连字符去除")
+    expect(sl_slug("-a-b") == "a-b", "首连字符去除")
+    # 非 ASCII：é 折叠（无转写表）
+    expect(sl_slug("Café") == "caf", "Café -> caf（é 丢弃）")
+    expect(sl_slug_ascii("Café") == "caf", "Café ascii -> caf")
+    # 中文默认保留
+    expect(sl_slug("你好世界") == "你好世界", "纯中文保留")
+    expect(sl_slug("Hello 世界") == "hello-世界", "中英混合")
+    expect(sl_slug("今天天气 真好") == "今天天气-真好", "中文空格折叠")
+    # 中文 ascii 版全丢弃
+    expect(sl_slug_ascii("你好") == "", "ascii 中文全丢")
+    # 数字
+    expect(sl_slug("Version 2 Update") == "version-2-update", "数字保留")
+    # 空串
+    expect(sl_slug("") == "", "空串")
+    expect(sl_slug("!!!") == "", "纯分隔")
+    # 大小写
+    expect(sl_slug("ABC") == "abc", "大写转小写")
+    print("slug: PASS")
+    return Ok(0)

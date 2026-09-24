@@ -1,0 +1,28 @@
+# percent.px 测试：URL 百分号编码（Python urllib.parse 对拍，双模式一致）
+import "../registry/percent/0.1.0/percent.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # unreserved 保留
+    expect(percent_encode("abcXYZ012-_.~").unwrap() == "abcXYZ012-_.~", "unreserved")
+    # 空格/中文/特殊字符 → %XX（Python quote(s, safe='') 对拍）
+    expect(percent_encode("hello 普贤").unwrap() == "hello%20%E6%99%AE%E8%B4%A4", "中文对拍")
+    expect(percent_encode("a/b?c&d=1").unwrap() == "a%2Fb%3Fc%26d%3D1", "保留字符对拍")
+    expect(percent_encode("").unwrap() == "", "空串")
+    # safe 参数
+    expect(percent_encode("a/b", "/").unwrap() == "a/b", "safe=/")
+    expect(percent_encode("a b", "/").unwrap() == "a%20b", "safe 不含空格")
+    # 解码
+    expect(percent_decode("hello%20%E6%99%AE%E8%B4%A4").unwrap() == "hello 普贤", "解码头尾")
+    expect(percent_decode("a%2Fb%3Fc").unwrap() == "a/b?c", "解码保留字符")
+    expect(percent_decode("abc").unwrap() == "abc", "解码无转义")
+    expect(percent_decode("%41").unwrap() == "A", "解码 %41")
+    expect(percent_decode("%zz").is_err(), "非法 hex Err")
+    expect(percent_decode("%2").is_err(), "截断转义 Err")
+    # 往返
+    var msg = "a b 中/文?x=1"
+    expect(percent_decode(percent_encode(msg).unwrap()).unwrap() == msg, "往返")
+    print("percent: PASS")
+    return Ok(0)

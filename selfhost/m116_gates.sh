@@ -612,6 +612,14 @@ step "M199 · [S10]「同一操作 × 每一位置 × 错类型」三轨单一�
 #   • 合法侧 LEGAL.tsv（正常调用三轨 rc=0 且 stdout 一致）+ 6 条显式词条 + 4 道负控
 #     （2 动态：编译轨退回三元兜底 / 解释轨删守卫后**重烘 pxi**；2 静态：登记表增删）。
 run m199_argtype bash examples/m199_argtype/verify.sh
+step "M200 · extern def（C-FFI 桥）名字的**全局发布**（缺陷 240 —— 官方 zlib 包在编译轨完全不可用）"
+#   • 由来：`extern def f(...)` 在**解释轨**有 ffi 双表兜底（iexpr.px → i_builtin_ffi_call），
+#     而**编译轨**把它编译成 **GETG**（extern def 名即全局名）⇒ 运行期从未发布 ⇒
+#     `R1001 未定义变量: 'zlib_compress'`（官方 registry/zlib 的核心操作）。实证：默认档与
+#     `--full` 档**皆然** ⇒ 与"按引用集自动裁剪"无关，是**发布缺失**。
+#   • 判据 [S11]：静态（FFI 注册名 ≥80 · 发布点唯一 · 遍历整表 · 在建表窗口内）
+#     + 动态（3 条**确定性**探针 × 三轨输出逐字节一致）+ 负控 3 道（删调用 / 跳过 zlib 名 / 循环不遍历）。
+run m200_ffi_globals bash examples/m200_ffi_globals/verify.sh
 step "M190 · 上游 registry-px 真实用例回归（53 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。

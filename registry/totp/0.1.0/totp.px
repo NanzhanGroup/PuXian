@@ -1,0 +1,140 @@
+# ============================================================
+# 普贤生态库：registry/totp —— HOTP / TOTP 一次性口令
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 RFC 4226（HOTP）/ RFC 6238（TOTP），Go pquerna/otp、Python pyotp 心智（0.1.0）：
+#   otp_hotp(secret_b32, counter, digits)   → Ok(code str)    # 基于计数
+#   otp_hotp_raw(key, counter, digits)      → Ok(code str)    # key 为原始字节（RFC 测试向量用）
+#   otp_totp(secret_b32, digits, now_sec)   → Ok(code str)    # 30 秒步长
+#   otp_totp_step(secret_b32, digits, now_sec, step) → Ok(code str)
+#   otp_verify(secret_b32, code, digits, now_sec, window) → bool  # ±window 个步长
+#   otp_b32_decode(s)                       → Ok(bytes) | Err # RFC 4648 base32 解码（公开供复用）
+# 算法：HMAC-SHA1（RFC 4226 默认；动态截断 → 10^digits 取模 → 补零）。
+# 语言面规避（登记 PX-DEF-032/033）：
+#   - 无 base32 native → 自实现 RFC 4648 解码（to_upper + 5bit 累积）
+#   - 无 hmac_sha1 native（只有 hmac_sha256）→ 用 sha1_bytes 纯 .px 拼 HMAC
+# 时间源：调用方传 now_sec（可用原生 now_sec()）。
+# ============================================================
+
+# ---- 内部：base32（RFC 4648 解码，无 native，见登记）----
+# 单字符 → 5bit 值；非法返回 -1
+def o_b32_digit(c):
+    if c >= "A" and c <= "Z":
+        return ord(c) - 65
+    if c >= "2" and c <= "7":
+        return 26 + ord(c) - 50
+    return -1
+
+# RFC 4648 base32 解码（忽略 = 填充；大小写不敏感）；返回 [bytes, err]
+def o_b32_decode(s):
+    var acc = 0
+    var nbits = 0
+    var out = bytes("")
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        if c == "=":
+            break
+        var u = to_upper(c)
+        var d = o_b32_digit(u)
+        if d < 0:
+            return [bytes(""), "base32 非法字符: " + c]
+        acc = (acc << 5) | d
+        nbits += 5
+        if nbits >= 8:
+            nbits -= 8
+            out = bytes_concat(out, byte((acc >> nbits) & 255))
+        i += 1
+    return [out, ""]
+
+# ---- 内部：HMAC-SHA1（无 hmac_sha1 native：sha1_bytes 纯 .px 拼，见登记）----
+def o_hmac_sha1(key, msg):
+    var block = 64
+    var k = key
+    if bytes_len(k) > block:
+        k = sha1_bytes(k)
+    while bytes_len(k) < block:
+        k = bytes_concat(k, byte(0))
+    var ipad = bytes("")
+    var opad = bytes("")
+    var i = 0
+    while i < block:
+        var kb = bytes_get(k, i)
+        ipad = bytes_concat(ipad, byte(kb ^ 54))
+        opad = bytes_concat(opad, byte(kb ^ 92))
+        i += 1
+    var inner = sha1_bytes(bytes_concat(ipad, msg))
+    return sha1_bytes(bytes_concat(opad, inner))
+
+# ---- 内部：HOTP 核心 ----
+# counter → 8 字节大端
+def o_counter_bytes(counter):
+    var b = bytes("")
+    var i = 7
+    while i >= 0:
+        b = bytes_concat(b, byte((counter >> (i * 8)) & 255))
+        i -= 1
+    return b
+
+# 动态截断 → digits 位补零字符串
+def o_dynamic_truncate(hs, digits):
+    var off = bytes_get(hs, bytes_len(hs) - 1) & 15
+    var b0 = bytes_get(hs, off) & 127
+    var b1 = bytes_get(hs, off + 1)
+    var b2 = bytes_get(hs, off + 2)
+    var b3 = bytes_get(hs, off + 3)
+    var bin = (b0 << 24) | (b1 << 16) | (b2 << 8) | b3
+    var mod = 1
+    var k = 0
+    while k < digits:
+        mod = mod * 10
+        k += 1
+    var cs = str(bin % mod)
+    while len(cs) < digits:
+        cs = "0" + cs
+    return cs
+
+def o_hotp_code(key, counter, digits):
+    var hs = o_hmac_sha1(key, o_counter_bytes(counter))
+    return o_dynamic_truncate(hs, digits)
+
+# ---- 公开 API ----
+def otp_b32_decode(s):
+    var r = o_b32_decode(s)
+    if r[1] != "":
+        return Err("totp: " + r[1])
+    return Ok(r[0])
+
+def otp_hotp_raw(key, counter, digits):
+    if digits < 6 or digits > 10:
+        return Err("totp: digits 须在 6..10")
+    if counter < 0:
+        return Err("totp: counter 须 >= 0")
+    return Ok(o_hotp_code(key, counter, digits))
+
+def otp_hotp(secret_b32, counter, digits):
+    var k = o_b32_decode(secret_b32)
+    if k[1] != "":
+        return Err("totp: " + k[1])
+    return otp_hotp_raw(k[0], counter, digits)
+
+def otp_totp_step(secret_b32, digits, now_sec, step):
+    if step <= 0:
+        return Err("totp: step 须 > 0")
+    var counter = now_sec // step
+    return otp_hotp(secret_b32, counter, digits)
+
+def otp_totp(secret_b32, digits, now_sec):
+    return otp_totp_step(secret_b32, digits, now_sec, 30)
+
+# 校验：±window 个步长内任一 counter 匹配即 true（防时钟漂移）
+def otp_verify(secret_b32, code, digits, now_sec, window):
+    var step = 30
+    var base = now_sec // step
+    var w = -window
+    while w <= window:
+        var c = otp_totp(secret_b32, digits, (base + w) * step)
+        if c.is_ok() and c.unwrap() == code:
+            return true
+        w += 1
+    return false

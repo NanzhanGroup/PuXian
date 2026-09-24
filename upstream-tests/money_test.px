@@ -1,0 +1,31 @@
+# money.px 测试：金额格式 / 解析（双模式一致）
+import "../registry/money/0.1.0/money.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # 格式化
+    expect(mn_format(1234.5, "CNY").unwrap() == "¥1,234.50", "CNY 1234.5")
+    expect(mn_format(1000000, "USD").unwrap() == "$1,000,000.00", "USD 1000000")
+    expect(mn_format(10000, "JPY").unwrap() == "¥10,000", "JPY 无小数")
+    expect(mn_format(0.3, "CNY").unwrap() == "¥0.30", "0.3 无尾数")
+    expect(mn_format(0.1 + 0.2, "CNY").unwrap() == "¥0.30", "0.1+0.2 取整")
+    expect(mn_format(-42.5, "USD").unwrap() == "-$42.50", "负数")
+    expect(mn_format(999.99, "CNY").unwrap() == "¥999.99", "999.99")
+    expect(mn_format(12345678901.23, "USD").unwrap() == "$12,345,678,901.23", "大额")
+    # 解析
+    expect(mn_parse("¥1,234.50").unwrap() == 1234.5, "parse ¥1,234.50")
+    expect(mn_parse("$1,000,000.00").unwrap() == 1000000.0, "parse $1,000,000.00")
+    expect(mn_parse("10,000").unwrap() == 10000.0, "parse 10,000")
+    expect(mn_parse("1234").unwrap() == 1234.0, "parse 整数")
+    expect(mn_parse("abc").is_err(), "parse 非法 Err")
+    expect(mn_parse("").is_err(), "parse 空 Err")
+    # 往返
+    var amt = 987654.32
+    expect(mn_parse(mn_format(amt, "USD").unwrap()).unwrap() == amt, "USD 往返")
+    # 符号
+    expect(mn_symbol("EUR") == "€" and mn_symbol("GBP") == "£", "符号")
+    expect(mn_decimals("JPY") == 0 and mn_decimals("CNY") == 2, "小数位")
+    print("money: PASS")
+    return Ok(0)

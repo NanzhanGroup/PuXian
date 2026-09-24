@@ -1,0 +1,73 @@
+# ============================================================
+# 普贤生态库：registry/num2words —— 英文数字转单词
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python num2words / Go numwords 心智（0.1.0 英文整数面）：
+#   nw_convert(n) → Ok(str) | Err  整数（±999,999,999,999）→ 英文单词
+# 规则：
+#   - 0 → "zero"；负 → "minus X"
+#   - 21-99 连字符（forty-two）；百位后接 "and"（one hundred and five）
+#   - 千/百万/十亿分组（one thousand / one million / one billion）
+# ============================================================
+
+def nw_ones(t):
+    var ones = ["zero", "one", "two", "three", "four", "five", "six", "seven",
+                "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen",
+                "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"]
+    return ones[t]
+
+def nw_tens(t):
+    var tens = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy",
+                "eighty", "ninety"]
+    return tens[t]
+
+# 0..99
+def nw_two(n):
+    if n < 20:
+        return nw_ones(n)
+    var t = n // 10
+    var o = n % 10
+    var s = nw_tens(t)
+    if o > 0:
+        s = s + "-" + nw_ones(o)
+    return s
+
+# 0..999
+def nw_three(n):
+    if n < 100:
+        return nw_two(n)
+    var h = n // 100
+    var r = n % 100
+    var s = nw_ones(h) + " hundred"
+    if r > 0:
+        s = s + " and " + nw_two(r)
+    return s
+
+# n >= 0
+def nw_abs(n):
+    if n == 0:
+        return "zero"
+    var groups = [[1000000000, "billion"], [1000000, "million"], [1000, "thousand"]]
+    var out = ""
+    var v = n
+    var i = 0
+    while i < len(groups):
+        var gv = v // groups[i][0]
+        if gv > 0:
+            if out != "":
+                out = out + " "
+            out = out + nw_three(gv) + " " + groups[i][1]
+            v = v % groups[i][0]
+        i += 1
+    if v > 0:
+        if out != "":
+            out = out + " "
+        out = out + nw_three(v)
+    return out
+
+def nw_convert(n):
+    if type(n) != "int":
+        return Err("num2words: 需要 int，got " + str(type(n)))
+    if n < 0:
+        return Ok("minus " + nw_abs(0 - n))
+    return Ok(nw_abs(n))

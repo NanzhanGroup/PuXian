@@ -1,0 +1,29 @@
+# dirs.px 测试：XDG 目录探测（双模式一致）
+import "../registry/dirs/0.1.0/dirs.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var home = dr_home()
+    expect(len(home) > 0 and home[0] == "/", "home 是绝对路径: " + home)
+    # 默认 XDG
+    expect(dr_config() == home + "/.config", "config 默认")
+    expect(dr_data() == home + "/.local/share", "data 默认")
+    expect(dr_cache() == home + "/.cache", "cache 默认")
+    expect(dr_temp() == "/tmp" or dr_temp() == env("TMPDIR"), "temp 默认或 TMPDIR")
+    # 环境变量覆盖
+    env_set("XDG_CACHE_HOME", "/tmp/xdg_cache_test")
+    expect(dr_cache() == "/tmp/xdg_cache_test", "XDG_CACHE_HOME 覆盖")
+    env_set("XDG_CONFIG_HOME", "/tmp/xdg_conf")
+    expect(dr_config() == "/tmp/xdg_conf", "XDG_CONFIG_HOME 覆盖")
+    # 路径拼接
+    expect(dr_pjoin(["a", "b", "c"]) == "a/b/c", "拼接")
+    expect(dr_pjoin(["a", "", "c"]) == "a/c", "空段忽略")
+    expect(dr_pjoin([]) == "", "空列表")
+    # 复位环境（避免污染后续）
+    env_set("XDG_CACHE_HOME", "")
+    env_set("XDG_CONFIG_HOME", "")
+    expect(dr_cache() == home + "/.cache", "复位后默认")
+    print("dirs: PASS")
+    return Ok(0)

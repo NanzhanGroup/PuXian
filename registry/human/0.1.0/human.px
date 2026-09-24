@@ -1,0 +1,62 @@
+# ============================================================
+# 普贤生态库：registry/human —— 人类可读格式化
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go dustin/go-humanize / Python humanize 心智（0.1.0）：
+#   hm_filesize(n)    → "B/KB/MB/GB/TB/PB"（1024 进制；<10 时一位小数，否则整数）
+#   hm_number(n, suffix="") → "k/M/B/T/P"（1000 进制；同上规则，可带单位后缀）
+# 格式化规则（自定，对齐常见 CLI 简写，单位无空格）：
+#   1024 → "1KB"；1536 → "1.5KB"；828 → "828B"；1_000_000 → "1M"
+# 实现：float 除法 + int 数学四舍五入（避免 float 序列化尾数噪声）。
+# ============================================================
+
+# float → 一位小数（若小数位为 0 显示整数；处理进位）
+def hm_fmt1(x):
+    var whole = int(x)
+    var frac = int((x - float(whole)) * 10.0 + 0.5)
+    if frac >= 10:
+        whole = whole + 1
+        frac = frac - 10
+    if frac == 0:
+        return str(whole)
+    return str(whole) + "." + str(frac)
+
+def hm_filesize(n):
+    var units = ["B", "KB", "MB", "GB", "TB", "PB"]
+    var v = float(n)
+    var ui = 0
+    while v >= 1024.0 and ui < len(units) - 1:
+        v = v / 1024.0
+        ui = ui + 1
+    if ui == 0:
+        return str(n) + units[0]
+    if v < 10.0:
+        return hm_fmt1(v) + units[ui]
+    return str(int(v + 0.5)) + units[ui]
+
+def hm_number(n, suffix=""):
+    var neg = false
+    var v = float(n)
+    if v < 0.0:
+        neg = true
+        v = 0.0 - v
+    var units = ["", "k", "M", "B", "T", "P"]
+    var ui = 0
+    while v >= 1000.0 and ui < len(units) - 1:
+        v = v / 1000.0
+        ui = ui + 1
+    var out = ""
+    if ui == 0:
+        if neg:
+            out = str(-int(v))
+        else:
+            out = str(int(v))
+    elif v < 10.0:
+        out = hm_fmt1(v)
+        if neg:
+            out = "-" + out
+    else:
+        out = str(int(v + 0.5))
+        if neg:
+            out = "-" + out
+    return out + units[ui] + suffix

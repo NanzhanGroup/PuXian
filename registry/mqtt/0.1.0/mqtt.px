@@ -1,0 +1,188 @@
+# ============================================================
+# 普贤生态库：registry/mqtt —— MQTT 3.1.1 客户端
+# ------------------------------------------------------------
+# 纯 .px 实现 MQTT 3.1.1（OASIS），双模式一致。
+# 对齐 Go eclipse/paho.mqtt.golang、Python paho-mqtt 心智（0.1.0 子集）：
+#   mqtt_connect(host, port, client_id[, opts]) → Ok(conn dict) | Err
+#   mqtt_publish(conn, topic, payload, qos=0)  → Ok(true) | Err（QoS 0）
+#   mqtt_subscribe(conn, topic, qos=0)         → Ok(true) | Err
+#   mqtt_ping(conn)                            → Ok(true) | Err
+#   mqtt_read(conn)                            → Ok({topic, payload}) | Err
+#   mqtt_close(conn)                           → Ok(true) | Err
+# 说明：
+#   - 仅 QoS 0 发布 / 订阅（ACK 族 PUBACK/SUBACK 已解析，但 0.1.0 不重发）
+#   - 无 TLS、无遗嘱/username/password（keepalive 由调用方 ping）
+#   - UTF-8 串一律 2 字节大端长度前缀（字节数，非 rune 数）
+# 依赖 runtime native：tcp_connect_ex / tcp_send_ex / tcp_recv_ex / int_to_bytes
+#   / bytes_to_int（little/big signed 均可用，M186）
+# ============================================================
+
+# ---- 内部：TCP 读 n 字节 ----
+def mq_recv_n(fd, n):
+    var buf = bytes("")
+    while bytes_len(buf) < n:
+        var want = n - bytes_len(buf)
+        if want > 65536:
+            want = 65536
+        var r = tcp_recv_ex(fd, want)
+        if not r["ok"]:
+            return [buf, r["err"]]
+        if r["eof"]:
+            return [buf, "unexpected EOF"]
+        if r["timeout"]:
+            return [buf, "read timeout"]
+        var d = r["data"]
+        if type(d) == "string":
+            d = bytes(d)
+        buf = bytes_concat(buf, d)
+    return [buf, ""]
+
+# ---- 内部：MQTT UTF-8 串（2 字节大端字节数长度前缀）----
+def mq_utf8(s):
+    return bytes_concat(int_to_bytes(bytes_len(bytes(s)), 2, "big", false), bytes(s))
+
+# ---- 内部：剩余长度 varint ----
+def mq_rem(n):
+    var out = bytes("")
+    var v = n
+    while true:
+        var b = v % 128
+        v = v // 128
+        if v > 0:
+            out = bytes_concat(out, byte(b | 128))
+        else:
+            out = bytes_concat(out, byte(b))
+            break
+    return out
+
+# 读完整 MQTT 包 → [type4bits, body, err]
+def mq_read_packet(fd):
+    var h = mq_recv_n(fd, 1)
+    if h[1] != "":
+        return [0, bytes(""), h[1]]
+    var fh = bytes_get(h[0], 0)
+    var mult = 1
+    var rl = 0
+    var done = false
+    while not done:
+        var b = mq_recv_n(fd, 1)
+        if b[1] != "":
+            return [0, bytes(""), b[1]]
+        var v = bytes_get(b[0], 0)
+        rl = rl + (v & 127) * mult
+        if (v & 128) == 0:
+            done = true
+        else:
+            mult = mult * 128
+    var body = mq_recv_n(fd, rl)
+    if body[1] != "":
+        return [0, bytes(""), body[1]]
+    return [fh >> 4, body[0], ""]
+
+# 发一个包（type4bits<<4 | flags + 剩余长度 varint + body）
+def mq_send_packet(fd, typ, flags, body):
+    var fh = (typ << 4) | flags
+    var pkt = bytes_concat(byte(fh), mq_rem(bytes_len(body)))
+    pkt = bytes_concat(pkt, body)
+    var r = tcp_send_ex(fd, pkt)
+    if not r["ok"]:
+        return Err("mqtt: send failed: " + r["err"])
+    return Ok(true)
+
+# ---- 公开 API ----
+# opts: { keepalive: int(默认 60) }
+def mqtt_connect(host, port, client_id, opts={}):
+    var keep = 60
+    if opts.has("keepalive"):
+        keep = opts["keepalive"]
+    var timeout_ms = 5000
+    if opts.has("timeout_ms"):
+        timeout_ms = opts["timeout_ms"]
+    var c = tcp_connect_ex(host, port, {"timeout_ms": timeout_ms})
+    if not c["ok"]:
+        return Err("mqtt: connect " + host + ":" + str(port) + " failed: " + c["err"])
+    var fd = c["fd"]
+    var payload = bytes("")
+    payload = bytes_concat(payload, mq_utf8("MQTT"))   # 协议名
+    payload = bytes_concat(payload, byte(4))           # level 3.1.1
+    payload = bytes_concat(payload, byte(2))           # flags: clean session
+    payload = bytes_concat(payload, int_to_bytes(keep, 2, "big", false))
+    payload = bytes_concat(payload, mq_utf8(client_id))
+    var r = mq_send_packet(fd, 1, 0, payload)
+    if r.is_err():
+        tcp_close(fd)
+        return Err(r.err())
+    var pkt = mq_read_packet(fd)
+    if pkt[2] != "":
+        tcp_close(fd)
+        return Err("mqtt: CONNACK recv: " + pkt[2])
+    if pkt[0] != 2:
+        tcp_close(fd)
+        return Err("mqtt: 期望 CONNACK，got type " + str(pkt[0]))
+    var code = bytes_get(pkt[1], 1)
+    if code != 0:
+        tcp_close(fd)
+        return Err("mqtt: CONNACK 拒绝，返回码 " + str(code))
+    return Ok({"fd": fd, "host": host, "port": port, "keepalive": keep})
+
+# QoS 0 发布
+def mqtt_publish(conn, topic, payload, qos=0):
+    if qos != 0:
+        return Err("mqtt: 0.1.0 仅支持 QoS 0")
+    var body = bytes_concat(mq_utf8(topic), bytes(payload))
+    return mq_send_packet(conn["fd"], 3, 0, body)
+
+# 订阅（QoS 0）→ 等 SUBACK 返回码
+def mqtt_subscribe(conn, topic, qos=0):
+    if qos != 0:
+        return Err("mqtt: 0.1.0 仅支持 QoS 0")
+    var body = bytes_concat(int_to_bytes(1, 2, "big", false), mq_utf8(topic))
+    body = bytes_concat(body, byte(0))
+    var r = mq_send_packet(conn["fd"], 8, 2, body)
+    if r.is_err():
+        return r
+    var pkt = mq_read_packet(conn["fd"])
+    if pkt[2] != "":
+        return Err("mqtt: SUBACK recv: " + pkt[2])
+    if pkt[0] != 9:
+        return Err("mqtt: 期望 SUBACK，got type " + str(pkt[0]))
+    var code2 = bytes_get(pkt[1], 2)
+    if code2 > 2:
+        return Err("mqtt: 订阅被拒，返回码 " + str(code2))
+    return Ok(true)
+
+def mqtt_ping(conn):
+    var r = mq_send_packet(conn["fd"], 12, 0, bytes(""))
+    if r.is_err():
+        return r
+    var pkt = mq_read_packet(conn["fd"])
+    if pkt[2] != "":
+        return Err("mqtt: PINGRESP recv: " + pkt[2])
+    if pkt[0] != 13:
+        return Err("mqtt: 期望 PINGRESP，got type " + str(pkt[0]))
+    return Ok(true)
+
+# 读下一条发布消息（跳过 PINGRESP/PUBACK 等非 PUBLISH 包）
+def mqtt_read(conn):
+    while true:
+        var pkt = mq_read_packet(conn["fd"])
+        if pkt[2] != "":
+            return Err("mqtt: read: " + pkt[2])
+        if pkt[0] == 3:
+            var body = pkt[1]
+            var tl = bytes_to_int(bytes_slice(body, 0, 2), "big", false)
+            var topic = bytes_to_str(bytes_slice(body, 2, 2 + tl))
+            var payload = bytes_to_str(bytes_slice(body, 2 + tl, bytes_len(body)))
+            return Ok({"topic": topic, "payload": payload})
+        # PINGRESP(13) / PUBACK(4) 等：忽略继续读
+        if pkt[0] == 13 or pkt[0] == 4:
+            continue
+        return Err("mqtt: 意外包类型 " + str(pkt[0]))
+
+def mqtt_close(conn):
+    var r = mq_send_packet(conn["fd"], 14, 0, bytes(""))
+    if r.is_err():
+        tcp_close(conn["fd"])
+        return Ok(true)
+    tcp_close(conn["fd"])
+    return Ok(true)

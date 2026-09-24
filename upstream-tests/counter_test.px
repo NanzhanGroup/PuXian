@@ -1,0 +1,41 @@
+# counter.px 测试：计数（双模式一致）
+import "../registry/counter/0.1.0/counter.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var c = ct_count(["a", "b", "a", "c", "b", "a"])
+    expect(ct_get(c, "a") == 3 and ct_get(c, "b") == 2 and ct_get(c, "c") == 1, "基础计数")
+    expect(ct_get(c, "x") == 0, "缺省 0")
+    expect(ct_total(c) == 6, "total=6, got " + str(ct_total(c)))
+    expect(ct_len(c) == 3, "distinct=3")
+    # add（默认 +1 / 指定 n）
+    ct_add(c, "a")
+    expect(ct_get(c, "a") == 4, "add 默认 +1")
+    ct_add(c, "z", 3)
+    expect(ct_get(c, "z") == 3, "add n=3")
+    expect(ct_total(c) == 10, "total=10 after add")
+    # most_common 降序（a:4, z:3, b:2, c:1）
+    var mc = ct_most_common(c)
+    expect(mc[0] == ["a", 4], "mc[0]=a:4, got " + str(mc[0]))
+    expect(mc[1] == ["z", 3], "mc[1]=z:3, got " + str(mc[1]))
+    expect(mc[2] == ["b", 2], "mc[2]=b:2, got " + str(mc[2]))
+    # 空计数
+    expect(ct_most_common({}) == [], "空计数 most_common []")
+    expect(ct_total({}) == 0, "空计数 total 0")
+    # merge
+    var d = ct_count(["a", "x"])
+    var m = ct_merge(c, d)
+    expect(ct_get(m, "a") == 5, "merge a=4+1=5")
+    expect(ct_get(m, "x") == 1, "merge x=1")
+    expect(ct_get(m, "z") == 3, "merge z 保留")
+    # 链式 add
+    var e = {}
+    ct_add(ct_add(e, "k"), "j")
+    expect(ct_get(e, "k") == 1 and ct_get(e, "j") == 1, "链式 add")
+    # 非 string 元素跳过
+    var f = ct_count(["a", 1, true, "b"])
+    expect(ct_len(f) == 2 and ct_get(f, "a") == 1 and ct_get(f, "b") == 1, "非 string 跳过")
+    print("counter: PASS")
+    return Ok(0)

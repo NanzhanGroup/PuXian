@@ -1,0 +1,57 @@
+# graph.px 测试：图算法（双模式一致）
+import "../registry/graph/0.1.0/graph.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def in_list(l, v):
+    var i = 0
+    while i < len(l):
+        if l[i] == v:
+            return true
+        i += 1
+    return false
+def main():
+    var g = gr_new()
+    # a-b(1) a-c(4) b-c(2) b-d(5) c-d(1)
+    gr_add_edge(g, "a", "b", 1)
+    gr_add_edge(g, "a", "c", 4)
+    gr_add_edge(g, "b", "c", 2)
+    gr_add_edge(g, "b", "d", 5)
+    gr_add_edge(g, "c", "d", 1)
+    expect(gr_has(g, "a") and gr_has(g, "d") and not gr_has(g, "z"), "节点存在性")
+    expect(gr_nodes(g) == ["a", "b", "c", "d"], "节点列表")
+    var nb = gr_neighbors(g, "a").unwrap()
+    expect(nb == ["b", "c"], "a 邻接")
+    # BFS：a → b,c → d
+    var bfs = gr_bfs(g, "a").unwrap()
+    expect(bfs[0] == "a" and len(bfs) == 4 and in_list(bfs, "b") and in_list(bfs, "c") and in_list(bfs, "d"), "bfs 覆盖")
+    # DFS
+    var dfs = gr_dfs(g, "a").unwrap()
+    expect(dfs[0] == "a" and len(dfs) == 4, "dfs 覆盖")
+    # 最短路：a-b-c-d = 1+2+1 = 4
+    var p = gr_shortest_path(g, "a", "d").unwrap()
+    expect(p == ["a", "b", "c", "d"], "最短路, got " + str(p))
+    expect(gr_shortest_path(g, "a", "a").unwrap() == ["a"], "自身路径")
+    # 拓扑：DAG
+    var dag = gr_new()
+    gr_add_edge(dag, "a", "b")
+    gr_add_edge(dag, "a", "c")
+    gr_add_edge(dag, "b", "d")
+    gr_add_edge(dag, "c", "d")
+    var tp = gr_topo(dag).unwrap()
+    expect(len(tp) == 4 and tp[0] == "a" and in_list(tp, "b") and in_list(tp, "c") and tp[3] == "d",
+        "拓扑次序, got " + str(tp))
+    # 环 → Err
+    var cyc = gr_new()
+    gr_add_edge(cyc, "a", "b")
+    gr_add_edge(cyc, "b", "c")
+    gr_add_edge(cyc, "c", "a")
+    expect(gr_topo(cyc).is_err(), "环拓扑 Err")
+    expect(gr_shortest_path(cyc, "a", "c").unwrap() == ["a", "b", "c"], "环内最短路")
+    # 不可达 → Err
+    var disc = gr_new()
+    gr_add_edge(disc, "a", "b")
+    expect(gr_shortest_path(disc, "a", "z").is_err() or gr_neighbors(disc, "z").is_err(), "未知/不可达 Err")
+    print("graph: PASS")
+    return Ok(0)

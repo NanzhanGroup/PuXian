@@ -1,0 +1,55 @@
+# ============================================================
+# 普贤生态库：registry/bloom —— 布隆过滤器
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态，过滤器状态以 {"n","k","d"} 显式传递），
+# 编译（px build）与解释（px run）双模式一致。
+# 对齐 Go willf/bloom / Python pybloom_live 心智（0.1.0）：
+#   bloom_new(nbits, k)      → Ok(bf) | Err    k 个哈希位（1..8）
+#   bloom_add(bf, item)      → Ok(bf) | Err    插入（幂等）
+#   bloom_may_contain(bf, item) → Ok(bool) | Err  可能包含（有假阳性，无假阴性）
+# 哈希：item → sha256_bytes（32 字节）→ 每 4 字节一个 u32 位位置（k<=8 个）。
+# 0.1.0 无删除（标准布隆不支持）、无缩放。
+# ============================================================
+
+def bl_positions(bf, item):
+    var h = sha256_bytes(bytes(item))
+    var pos = []
+    var j = 0
+    while j < bf["k"]:
+        var idx = bytes_to_int(bytes_slice(h, j * 4, j * 4 + 4), "big", false)
+        pos.append(idx % bf["n"])
+        j += 1
+    return pos
+
+def bloom_new(nbits, k):
+    if nbits <= 0:
+        return Err("bloom: nbits 须 > 0")
+    if k <= 0 or k > 8:
+        return Err("bloom: k 须在 1..8")
+    var size = (nbits + 7) // 8
+    var d = bytes("")
+    var i = 0
+    while i < size:
+        d = bytes_concat(d, byte(0))
+        i += 1
+    return Ok({"n": nbits, "k": k, "d": d})
+
+def bloom_add(bf, item):
+    var pos = bl_positions(bf, item)
+    var i = 0
+    while i < len(pos):
+        var p = pos[i]
+        var v = bytes_get(bf["d"], p // 8) | (1 << (p % 8))
+        bf.set("d", bytes_set(bf["d"], p // 8, v))
+        i += 1
+    return Ok(bf)
+
+def bloom_may_contain(bf, item):
+    var pos = bl_positions(bf, item)
+    var i = 0
+    while i < len(pos):
+        var p = pos[i]
+        if (bytes_get(bf["d"], p // 8) & (1 << (p % 8))) == 0:
+            return Ok(false)
+        i += 1
+    return Ok(true)

@@ -1,0 +1,109 @@
+# ============================================================
+# 普贤生态库：registry/plex —— 复数
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go complex / Python complex / Rust num-complex 心智（0.1.0）：
+#   复数表示为 {"re": r, "im": i} dict。
+#   cx_new(re, im) → dict
+#   cx_add / cx_sub / cx_mul / cx_div / cx_conj / cx_neg / cx_eq
+#   cx_abs(a)      → float（模）
+#   cx_parse(s)    → Ok(dict) | Err   "1+2i" / "-3" / "2i" / "1.5-0.5i"
+#   cx_str(a)      → str
+# 除法：((ac+bd) + (bc-ad)i) / (c²+d²)；除零 Err。
+# ============================================================
+
+def cx_new(re, im):
+    return {"re": re, "im": im}
+
+def cx_re(a):
+    return a["re"]
+
+def cx_im(a):
+    return a["im"]
+
+def cx_add(a, b):
+    return {"re": a["re"] + b["re"], "im": a["im"] + b["im"]}
+
+def cx_sub(a, b):
+    return {"re": a["re"] - b["re"], "im": a["im"] - b["im"]}
+
+def cx_mul(a, b):
+    return {"re": a["re"] * b["re"] - a["im"] * b["im"],
+            "im": a["re"] * b["im"] + a["im"] * b["re"]}
+
+def cx_div(a, b):
+    var d = b["re"] * b["re"] + b["im"] * b["im"]
+    if d == 0:
+        return Err("plex: 除零")
+    var re = (a["re"] * b["re"] + a["im"] * b["im"]) / d
+    var im = (a["im"] * b["re"] - a["re"] * b["im"]) / d
+    return Ok({"re": re, "im": im})
+
+def cx_conj(a):
+    return {"re": a["re"], "im": 0 - a["im"]}
+
+def cx_neg(a):
+    return {"re": 0 - a["re"], "im": 0 - a["im"]}
+
+def cx_eq(a, b):
+    return a["re"] == b["re"] and a["im"] == b["im"]
+
+def cx_abs(a):
+    return sqrt(a["re"] * a["re"] + a["im"] * a["im"])
+
+# ---- 内部：解析 ----
+# "1.5" / "-2" / "+3" / "" → float；非法返回 null
+def cx_num(s):
+    if s == "":
+        return 0.0
+    if is_int_str(s):
+        return float(int(s))
+    if is_float_str(s):
+        return float(s)
+    return null
+
+def cx_parse(s):
+    var t = ""
+    var i = 0
+    while i < len(s):
+        if s[i] != " ":
+            t = t + s[i]
+        i += 1
+    var has_i = false
+    var body = t
+    if len(t) > 0 and (t[len(t) - 1] == "i" or t[len(t) - 1] == "I"):
+        has_i = true
+        body = t[0:len(t) - 1]
+    if body == "":
+        body = "0"
+    var re = 0
+    var im = 0
+    if has_i:
+        # 虚数部分找第二个 +/-（body 形如 "1+2" / "-3" / "2"）
+        var pos = -1
+        var si = 1
+        while si < len(body):
+            if body[si] == "+" or body[si] == "-":
+                pos = si
+            si += 1
+        if pos < 0:
+            im = cx_num(body)
+            if im == null:
+                return Err("plex: 非法虚数: " + s)
+        else:
+            re = cx_num(body[0:pos])
+            im = cx_num(body[pos:len(body)])
+            if re == null or im == null:
+                return Err("plex: 非法复数: " + s)
+    else:
+        re = cx_num(body)
+        if re == null:
+            return Err("plex: 非法实数: " + s)
+    return Ok({"re": re, "im": im})
+
+def cx_str(a):
+    var r = str(a["re"])
+    var im = a["im"]
+    if im >= 0:
+        return r + "+" + str(im) + "i"
+    return r + str(im) + "i"

@@ -1,0 +1,62 @@
+# ============================================================
+# 普贤生态库：registry/interval —— 闭区间
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python portion / interval、Go interval 心智（0.1.0）：
+#   区间 = {"lo": 数, "hi": 数}，闭区间 [lo, hi]。
+#   iv_new(lo, hi)  → Ok(iv) | Err（lo>hi Err）
+#   iv_overlap(a, b) → bool            是否有交集
+#   iv_contains(a, x) → bool / iv_contains_iv(a, b) → bool
+#   iv_intersect(a, b) → Ok(iv) | Err  无交集 Err
+#   iv_merge(l)     → Ok([iv])          合并重叠/相邻区间列表
+# ============================================================
+
+def iv_new(lo, hi):
+    if lo > hi:
+        return Err("interval: lo>hi: " + str(lo) + " > " + str(hi))
+    return Ok({"lo": lo, "hi": hi})
+
+# 闭区间端点都 > 对方端点则不重叠
+def iv_overlap(a, b):
+    return not (a["hi"] < b["lo"] or b["hi"] < a["lo"])
+
+def iv_contains(a, x):
+    return x >= a["lo"] and x <= a["hi"]
+
+def iv_contains_iv(a, b):
+    return a["lo"] <= b["lo"] and a["hi"] >= b["hi"]
+
+def iv_intersect(a, b):
+    if not iv_overlap(a, b):
+        return Err("interval: 无交集")
+    var lo = a["lo"]
+    var hi = a["hi"]
+    if b["lo"] > lo:
+        lo = b["lo"]
+    if b["hi"] < hi:
+        hi = b["hi"]
+    return Ok({"lo": lo, "hi": hi})
+
+# 合并重叠区间列表（[lo,hi] 对排序后扫描；仅合并真正重叠，闭区间相邻不合并）
+def iv_merge(l):
+    if len(l) == 0:
+        return Ok([])
+    var pairs = []
+    var i = 0
+    while i < len(l):
+        pairs.append([l[i]["lo"], l[i]["hi"]])
+        i += 1
+    var s = sorted(pairs)
+    var out = [{"lo": s[0][0], "hi": s[0][1]}]
+    var k = 1
+    while k < len(s):
+        var cur = out[len(out) - 1]
+        var lo2 = s[k][0]
+        var hi2 = s[k][1]
+        if cur["hi"] >= lo2:
+            if hi2 > cur["hi"]:
+                cur.set("hi", hi2)
+        else:
+            out.append({"lo": lo2, "hi": hi2})
+        k += 1
+    return Ok(out)

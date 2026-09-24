@@ -1,0 +1,84 @@
+# dist.px 测试：随机分布采样（统计宽松断言，双模式一致）
+import "../registry/dist/0.1.0/dist.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def close(a, b, eps):
+    var d = a - b
+    if d < 0:
+        d = 0 - d
+    return d < eps
+def avg(l):
+    var sum = 0.0
+    var i = 0
+    while i < len(l):
+        sum = sum + l[i]
+        i += 1
+    return sum / float(len(l))
+def mean_int(l):
+    var sum = 0
+    var i = 0
+    while i < len(l):
+        sum = sum + l[i]
+        i += 1
+    return float(sum) / float(len(l))
+def main():
+    # uniform：1000 个样本均值 ≈ 中点，且都在区间内
+    var us = []
+    var i = 0
+    while i < 1000:
+        var v = di_uniform(2.0, 6.0)
+        expect(v >= 2.0 and v <= 6.0, "uniform 越界")
+        us.append(v)
+        i += 1
+    expect(close(avg(us), 4.0, 0.3), "uniform 均值≈4, got " + str(avg(us)))
+    # randint：区间内
+    var rs = []
+    var j = 0
+    while j < 500:
+        var r = di_randint(5, 15)
+        expect(r >= 5 and r <= 15, "randint 越界")
+        rs.append(r)
+        j += 1
+    expect(close(mean_int(rs), 10.0, 1.2), "randint 均值≈10, got " + str(mean_int(rs)))
+    # bernoulli：p=0.3 频率
+    var ones = 0
+    var k2 = 0
+    while k2 < 2000:
+        ones = ones + di_bernoulli(0.3).unwrap()
+        k2 += 1
+    var freq = float(ones) / 2000.0
+    expect(close(freq, 0.3, 0.05), "bernoulli 频率≈0.3, got " + str(freq))
+    # normal：均值
+    var ns = []
+    var k3 = 0
+    while k3 < 2000:
+        ns.append(di_normal(10.0, 2.0).unwrap())
+        k3 += 1
+    expect(close(avg(ns), 10.0, 0.2), "normal 均值≈10, got " + str(avg(ns)))
+    # exponential：正值 + 均值≈1/rate
+    var es = []
+    var k4 = 0
+    while k4 < 2000:
+        var ev = di_exponential(0.5).unwrap()
+        expect(ev >= 0.0, "exponential 负值")
+        es.append(ev)
+        k4 += 1
+    expect(close(avg(es), 2.0, 0.3), "exponential 均值≈2, got " + str(avg(es)))
+    # poisson：非负整数 + 均值≈λ
+    var ps = []
+    var k5 = 0
+    while k5 < 2000:
+        var pv = di_poisson(5.0).unwrap()
+        expect(pv >= 0 and type(pv) == "int", "poisson 非负 int")
+        ps.append(pv)
+        k5 += 1
+    expect(close(mean_int(ps), 5.0, 0.4), "poisson 均值≈5, got " + str(mean_int(ps)))
+    # 参数错误
+    expect(di_normal(0.0, -1.0).is_err(), "normal sd<0 Err")
+    expect(di_exponential(0).is_err(), "exponential rate<=0 Err")
+    expect(di_bernoulli(1.5).is_err(), "bernoulli p>1 Err")
+    expect(di_poisson(-1.0).is_err(), "poisson λ<0 Err")
+    print("dist: PASS")
+    return Ok(0)

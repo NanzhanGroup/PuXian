@@ -1,0 +1,59 @@
+# redis.px 测试：真实 Redis 连接（RESP 协议，双模式一致）
+import "../registry/redis/0.1.0/redis.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var conn = redis_connect("127.0.0.1", 6379)
+    if conn.is_err():
+        print("FAIL: connect: " + str(conn))
+        exit(1)
+    var c = conn.unwrap()
+    print("connect ok")
+    # ping
+    expect(redis_ping(c).unwrap() == "PONG", "ping PONG")
+    # set/get roundtrip + null
+    expect(redis_set(c, "px_test_k", "hello 普贤").unwrap() == true, "set ok")
+    expect(redis_get(c, "px_test_k").unwrap() == "hello 普贤", "get roundtrip")
+    expect(redis_get(c, "px_no_such_key_xyz").unwrap() == null, "get 缺失 null")
+    # 覆盖写 + 二进制安全
+    expect(redis_set(c, "px_test_k", "v2").unwrap() == true, "覆盖写")
+    expect(redis_get(c, "px_test_k").unwrap() == "v2", "覆盖读")
+    # incr（整数回复）
+    redis_del(c, ["px_counter"])
+    expect(redis_incr(c, "px_counter").unwrap() == 1, "incr 1")
+    expect(redis_incr(c, "px_counter").unwrap() == 2, "incr 2")
+    # del 计数
+    expect(redis_del(c, ["px_test_k"]).unwrap() == 1, "del 存在=1")
+    expect(redis_del(c, ["px_test_k"]).unwrap() == 0, "del 缺失=0")
+    # ttl
+    expect(redis_set(c, "px_ttl_k", "x").unwrap() == true, "set ttl k")
+    expect(redis_ttl(c, "px_ttl_k").unwrap() == -1, "无过期 ttl=-1")
+    redis_cmd(c, ["EXPIRE", "px_ttl_k", "100"])
+    var t = redis_ttl(c, "px_ttl_k").unwrap()
+    expect(t > 0 and t <= 100, "expire 后 ttl 在 (0,100]，got " + str(t))
+    expect(redis_ttl(c, "px_no_key_xyz").unwrap() == -2, "缺失 ttl=-2")
+    # 数组回复 + null 元素（mget）
+    redis_set(c, "px_a", "1")
+    var m = redis_cmd(c, ["MGET", "px_a", "px_no_key_xyz"]).unwrap()
+    expect(type(m) == "list" and len(m) == 2 and m[0] == "1" and m[1] == null,
+        "mget 数组 + null 元素，got " + str(m))
+    # 错误回复 → Err（不崩溃）
+    redis_set(c, "px_str_k", "not-a-number")
+    var bad = redis_incr(c, "px_str_k")
+    expect(bad.is_err(), "incr 字符串 Err")
+    if bad.is_err():
+        print("  (expected) err=" + str(bad))
+    # 非法命令 → Err 后可恢复
+    var bad2 = redis_cmd(c, ["NOSUCHCMD"])
+    expect(bad2.is_err(), "未知命令 Err")
+    var ok2 = redis_ping(c)
+    expect(ok2.is_ok() and ok2.unwrap() == "PONG", "错误后恢复 ping")
+    # select 数据库
+    expect(redis_select(c, 2).unwrap() == true, "select 2")
+    expect(redis_ping(c).unwrap() == "PONG", "select 后 ping")
+    redis_del(c, ["px_a", "px_ttl_k", "px_str_k", "px_counter"])
+    redis_close(c)
+    print("redis: PASS")
+    return Ok(0)

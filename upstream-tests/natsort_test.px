@@ -1,0 +1,33 @@
+# natsort.px 测试：自然排序（双模式一致）
+import "../registry/natsort/0.1.0/natsort.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # 数字段自然序（字母序会错：a10 < a2）
+    expect(na_sorted(["a2", "a10", "a1", "a20"]) == ["a1", "a2", "a10", "a20"],
+        "a1<a2<a10<a20, got " + str(na_sorted(["a2", "a10", "a1", "a20"])))
+    # img 经典向量
+    expect(na_sorted(["img3", "img12", "img1", "img2"]) == ["img1", "img2", "img3", "img12"],
+        "img1<img2<img3<img12")
+    # 前导零与数值等价（"02" 与 "2" 同键，稳定保持原序）
+    var with_zero = na_sorted(["b2", "b02", "b1"])
+    expect(with_zero == ["b1", "b2", "b02"], "前导零稳定, got " + str(with_zero))
+    # 混合文本 + 数字 + 分隔符
+    expect(na_sorted(["item-2", "item-10", "item-1"]) == ["item-1", "item-2", "item-10"],
+        "item-1<item-2<item-10")
+    # 大小写不敏感（键小写）；同键稳定
+    expect(na_sorted(["B", "a", "C"]) == ["a", "B", "C"], "大小写不敏感稳定, got " + str(na_sorted(["B", "a", "C"])))
+    # 纯数字
+    expect(na_sorted(["10", "9", "100", "1"]) == ["1", "9", "10", "100"], "纯数字自然序")
+    # 中文（rune 级，无数字段时退化为字典序；数字段仍自然）
+    expect(na_sorted(["章10", "章2", "章1"]) == ["章1", "章2", "章10"], "中文数字段自然序")
+    # 空列表
+    expect(na_sorted([]) == [], "空列表")
+    # 单元素
+    expect(na_sorted(["only"]) == ["only"], "单元素")
+    # compare
+    expect(na_compare("a2", "a10") == -1 and na_compare("a10", "a2") == 1 and na_compare("a2", "a2") == 0, "compare")
+    print("natsort: PASS")
+    return Ok(0)

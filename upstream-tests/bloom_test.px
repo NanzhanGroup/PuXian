@@ -1,0 +1,33 @@
+# bloom.px 测试：布隆过滤器（确定性哈希，双模式一致）
+import "../registry/bloom/0.1.0/bloom.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var bf = bloom_new(512, 4).unwrap()
+    # 初始不含
+    expect(bloom_may_contain(bf, "apple").unwrap() == false, "初始不含 apple")
+    # 插入 → 必含
+    bloom_add(bf, "apple")
+    bloom_add(bf, "banana")
+    bloom_add(bf, "cherry")
+    expect(bloom_may_contain(bf, "apple").unwrap(), "apple 必含")
+    expect(bloom_may_contain(bf, "banana").unwrap(), "banana 必含")
+    expect(bloom_may_contain(bf, "cherry").unwrap(), "cherry 必含")
+    # 未插入项（确定性：本测试数据下无碰撞，已实测）
+    expect(bloom_may_contain(bf, "grape").unwrap() == false, "grape 未插入 false")
+    expect(bloom_may_contain(bf, "orange").unwrap() == false, "orange 未插入 false")
+    # 幂等
+    bloom_add(bf, "apple")
+    expect(bloom_may_contain(bf, "apple").unwrap(), "重复 add 幂等")
+    # 参数校验
+    expect(bloom_new(0, 4).is_err(), "nbits<=0 Err")
+    expect(bloom_new(512, 0).is_err(), "k=0 Err")
+    expect(bloom_new(512, 9).is_err(), "k=9 Err")
+    # 小过滤器（1 字节）
+    var tiny = bloom_new(8, 1).unwrap()
+    bloom_add(tiny, "x")
+    expect(bloom_may_contain(tiny, "x").unwrap(), "tiny x 必含")
+    print("bloom: PASS")
+    return Ok(0)

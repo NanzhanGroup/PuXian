@@ -135,8 +135,8 @@ def p_alt(parsers):
             var r = parsers[i](input, pos)
             if r.is_ok():
                 return r
-            # PX-DEF-003：Result 无 unwrap_err，用 str(Err(...)) 剥壳取信息
-            last = str(r)
+            # M185 起 Result 有 unwrap_err()：Err 侧直接取错误值（不再 str(Err(...)) 剥壳）
+            last = r.unwrap_err()
             i += 1
         return Err(last)
     return g

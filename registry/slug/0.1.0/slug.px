@@ -1,0 +1,49 @@
+# ============================================================
+# 普贤生态库：registry/slug —— slug / URL 友好标识
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python python-slugify / Go gosimple/slug / Rust slug 心智（0.1.0）：
+#   sl_slug(s)        → str   默认：ASCII 字母数字小写 + 中文 CJK 保留，
+#                             其余分隔字符折叠为单个 "-"（首尾去除）
+#   sl_slug_ascii(s)  → str   严格 ASCII：非 ASCII 一律折叠为 "-"
+# 说明：
+#   - 未做拉丁变音转写（á→a 需要 unicode 表，无 native 见登记 PX-DEF-015 一族），
+#     非 ASCII 默认策略 = 保留 CJK / 丢弃其它
+#   - 复数与停用词不做处理（0.1.0 子集）
+# ============================================================
+
+def sl_is_ascii_alnum(c):
+    return (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or (c >= "0" and c <= "9")
+
+# CJK 统一表意文字 0x4E00..0x9FFF（含扩展 A 部分常用面）
+def sl_is_cjk(c):
+    return ord(c) >= 19968 and ord(c) <= 40959
+
+# 内部：核心折叠逻辑（keep_cjk 控制是否保留中文）
+def sl_build(s, keep_cjk):
+    var out = ""
+    var prev_dash = false
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        var lc = to_lower(c)
+        if sl_is_ascii_alnum(lc):
+            out = out + lc
+            prev_dash = false
+        elif keep_cjk and sl_is_cjk(c):
+            out = out + c
+            prev_dash = false
+        else:
+            if len(out) > 0 and not prev_dash:
+                out = out + "-"
+                prev_dash = true
+        i += 1
+    while len(out) > 0 and out[len(out) - 1] == "-":
+        out = out[0:len(out) - 1]
+    return out
+
+def sl_slug(s):
+    return sl_build(s, true)
+
+def sl_slug_ascii(s):
+    return sl_build(s, false)

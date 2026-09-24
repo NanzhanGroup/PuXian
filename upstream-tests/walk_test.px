@@ -1,0 +1,48 @@
+# walk.px 测试：递归目录遍历（需预置 fixture，双模式一致）
+import "../registry/walk/0.1.0/walk.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def has_path(entries, p):
+    var i = 0
+    while i < len(entries):
+        if entries[i]["path"] == p:
+            return true
+        i += 1
+    return false
+def main():
+    var root = "/tmp/wk_src"
+    var w = wk_walk(root)
+    if w.is_err():
+        print("FAIL: walk: " + str(w))
+        exit(1)
+    var es = w.unwrap()
+    # 7 项：root + a.txt + b.log + sub + sub/c.txt + sub/deep + sub/deep/d.txt
+    expect(len(es) == 7, "共 7 项, got " + str(len(es)))
+    expect(es[0]["path"] == root and es[0]["is_dir"] == true, "首项 root 目录")
+    expect(has_path(es, root + "/a.txt"), "a.txt")
+    expect(has_path(es, root + "/b.log"), "b.log")
+    expect(has_path(es, root + "/sub/c.txt"), "sub/c.txt")
+    expect(has_path(es, root + "/sub/deep/d.txt"), "deep/d.txt")
+    # is_dir 标记
+    expect(has_path(es, root + "/sub") and has_path(es, root + "/sub/deep"), "sub 目录列出")
+    var i = 0
+    var subdir = true
+    while i < len(es):
+        if es[i]["path"] == root + "/sub/deep" and not es[i]["is_dir"]:
+            subdir = false
+        i += 1
+    expect(subdir, "deep is_dir")
+    # 超长 root 尾斜杠
+    var w2 = wk_walk(root + "/").unwrap()
+    expect(len(w2) == 7, "尾斜杠仍 7 项")
+    # max_depth
+    var w1 = wk_walk(root, 1).unwrap()
+    expect(len(w1) == 4, "depth=1 → 4 项（root+a+b+sub），got " + str(len(w1)))
+    var w0 = wk_walk(root, 0).unwrap()
+    expect(len(w0) == 1, "depth=0 → 仅 root")
+    # 不存在目录 → Err
+    expect(wk_walk("/tmp/no_such_dir_xyz").is_err(), "不存在目录 Err")
+    print("walk: PASS")
+    return Ok(0)

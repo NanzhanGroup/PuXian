@@ -1,0 +1,68 @@
+# ============================================================
+# 普贤生态库：registry/percent —— URL 百分号编码（RFC 3986）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python urllib.parse.quote / Go url.QueryEscape 心智（0.1.0）：
+#   percent_encode(s, safe="") → Ok(str) | Err   按 UTF-8 字节 %XX 编码
+#   percent_decode(s)          → Ok(str) | Err   %XX → UTF-8；非法转义 Err
+# 保留字符：RFC 3986 unreserved（A-Z a-z 0-9 - _ . ~）+ 调用方 safe 集；
+#   其余（含中文、空格、/ ? & = 等）一律 %XX 大写。
+# ============================================================
+
+def pc_is_alnum(c):
+    return (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or (c >= "0" and c <= "9")
+
+def pc_is_unreserved(c):
+    if pc_is_alnum(c):
+        return true
+    return c == "-" or c == "_" or c == "." or c == "~"
+
+# 单字节 → 两位大写 hex
+def pc_hex2(n):
+    var digits = "0123456789ABCDEF"
+    return digits[n // 16] + digits[n % 16]
+
+def percent_encode(s, safe=""):
+    var out = ""
+    var b = bytes(s)
+    var i = 0
+    while i < bytes_len(b):
+        var v = bytes_get(b, i)
+        if v < 128:
+            var ch = chr(v)
+            if pc_is_unreserved(ch) or safe.find(ch) >= 0:
+                out = out + ch
+                i += 1
+                continue
+        out = out + "%" + pc_hex2(v)
+        i += 1
+    return Ok(out)
+
+# 十六进制字符 → 值；非法返回 -1
+def pc_hexval(c):
+    if c >= "0" and c <= "9":
+        return ord(c) - 48
+    if c >= "a" and c <= "f":
+        return ord(c) - 87
+    if c >= "A" and c <= "F":
+        return ord(c) - 55
+    return -1
+
+def percent_decode(s):
+    var raw = bytes("")
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        if c == "%":
+            if i + 2 >= len(s):
+                return Err("percent: 转义不完整: " + s)
+            var h1 = pc_hexval(s[i + 1])
+            var h2 = pc_hexval(s[i + 2])
+            if h1 < 0 or h2 < 0:
+                return Err("percent: 非法十六进制: " + s)
+            raw = bytes_concat(raw, byte(h1 * 16 + h2))
+            i = i + 3
+        else:
+            raw = bytes_concat(raw, bytes(c))
+            i += 1
+    return Ok(bytes_to_str(raw))
