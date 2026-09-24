@@ -12,3 +12,4 @@ p11_panic_extra	R1002	panic 需要 0-1 个参数
 p12_input_extra	R1002	input 需要 0-1 个参数
 p13_quic_connect_extra	R1002	quic_connect 需要 (ip: str, port: int, alpn: str[, session: str]) 参数
 p14_quic_0rtt_extra	R1002	quic_connect_0rtt 需要 (ip: str, port: int, alpn: str, session0rtt: str) 参数
+p15_spawn_timeout_str	R1002	os_spawn_capture 的 opts.timeout_ms 需要数值（int/float），实际是 string

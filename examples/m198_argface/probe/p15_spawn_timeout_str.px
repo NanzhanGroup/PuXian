@@ -1,0 +1,2 @@
+print("before")
+os_spawn_capture("true", [], {"timeout_ms": "300"})

@@ -121,7 +121,7 @@ for t in interp vm c; do
         "[ \"\$(cat '$W/t1_timer_float_fires.$t.rc')\" = 0 ] && grep -q 'fired=1' '$W/t1_timer_float_fires.$t.out'"
     chk "[3] t2 整数毫秒精度保持（$t）：delta ∈ [20,120]" \
         "[ \"\$(cat '$W/t2_timer_precision.$t.rc')\" = 0 ] && awk -F= '/^delta=/{exit !(\$2>=20 && \$2<=120)}' '$W/t2_timer_precision.$t.out'"
-    chk "[3] t3 opts 的 **float** 超时被采纳（$t）：fast=true" \
+    chk "[3] t3 opts 的 **float** 超时被采纳（$t）：fast=true（判据自证：打印 elapsed）" \
         "[ \"\$(cat '$W/t3_opts_float_timeout.$t.rc')\" = 0 ] && grep -q 'fast=true' '$W/t3_opts_float_timeout.$t.out'"
     chk "[3] t4 fd_wait 接受小数（$t）：ok=list" \
         "[ \"\$(cat '$W/t4_fdwait_float.$t.rc')\" = 0 ] && grep -q 'ok=list' '$W/t4_fdwait_float.$t.out'"
