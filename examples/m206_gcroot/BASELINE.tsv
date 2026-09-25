@@ -1,23 +1,33 @@
 # M206 GC 根面静态审计 —— **已判定基线**（候选 ⇄ 判定 一一对齐；门由此判「有无新增」）
 # 列：file<TAB>func<TAB>trigger<TAB>victim<TAB>判定<TAB>理由
 # 规则：判定只允许「假阳」；出现「真」= 有未修的漏登记 ⇒ 门必红。
-#       （12 + 7 + 1 = 20 处**真**站点已在 M206 修复；M207 又修 6 个编号 / 10 处：
-#        259 bi_os_capture · 260 h_exchange「首次升级为 list」· 261 px_http_dispatch ×4 ·
-#        262 vm_run_loop MKCLO · 263 px_as_list（tuple/str 支）· 264 px_gen_{lazy,from_list}
-#        —— 故本表仍**不含任何「真」**。）
-# ⚠️ M207 扫描器修复（同族三处判据缺口，都由「实跑」照出来）：
-#   ① `split_functions` 必须支持**跨行签名** —— 原单行正则让 `h_exchange` 这类函数
-#      **整体不在审计面上**（函数数 1456 → 1587）；
-#   ② `px_dict_set`/`px_list_push` 不是「消费接收者」，把它们当消费会**整族漏报**
-#      「先建容器、再往里放东西」（漏掉 bi_os_capture）；
-#   ③ `px_iter_at`（字符串取值会新建串对象）与 `px_func_env`（先注册后填字段 ⇒
-#      注册点那次 GC 看不到实参）必须归到「分配」与「不豁免」两侧。
-#   ④ BASELINE.tsv 的规模锚点已随之上调（函数 ≥1500 · 登记站点 ≥200）。
-runtime/runtime.c	px_gen_materialize	px_call(	keep	假阳	受害者 keep 在该分支其后即 continue/return（死值）；触发点是循环**下一轮**的分配，与它无关
-runtime/runtime.c	px_gen_next	px_call(	keep	假阳	同族：分支末尾直接 return，keep 已死
-runtime/runtime.c	bi_http_get_stream	px_str_len(	rv	假阳	rv 在紧随其后的 if 之后即死；触发点是**下一轮**迭代的 px_str_len（arg 侧已按缺陷 257 登记）
-runtime/runtime.c	bi_http_get_stream	px_str_len(	rv	假阳	同族（chunk 分支）
-runtime/runtime.c	bi_http_get_stream	px_str_len(	rv	假阳	同族（content-length 分支）
-runtime/runtime_h3_qpack.c	qp_dec_value_string	px_str_len(	outv	假阳	两支互斥且第一支 `return` ⇒ 不存在跨分配存活；且调用方在返回后立即 PX_KEEP(val)
-runtime/runtime_h3_qpack.c	px_h3_qdec	px_str_len(	name	假阳	name 在 if/else 互斥分支里各自赋值，PX_KEEP(name) 紧跟其后的语句
-runtime/runtime_sqlite.c	bi_sqlite_query	px_bytes_len(	v	假阳	switch 的 TEXT/BLOB 分支互斥（各自赋 v 后即 px_list_push 消费）；跨轮同名变量非同一活值
+#
+# ⚠️ M209（第 88 轮）**本表已收敛为 0 条**：M206 那 8 条「人工判定」已**下沉为判据**
+#   （见 §② 档案区），故扫描器不再报出它们 ⇒ 「候选 ⇄ 基线」两空集，门仍逐条对齐。
+#   ⇒ 现在本表是**安全网**（防「判据改松了、新缺陷被漏掉」）：任何**新增候选**都必须进表，
+#     且判据只允许「假阳」；出现「真」即未修缺陷。
+#   口径文件：`docs/GC_ROOTS.md` §9 · 判定依据由 `examples/m209_gcroot_rules/verify.sh` 的
+#     层 ⑤「判据回放」与 `--self-test` 的 16 锚点共同把守（含 3 条**反向判据**）。
+#
+# ── §① 当前在册候选（必须与扫描结果**逐条**一致；M209 起为空） ──────────────────────
+#
+# 列（在册区 · 非注释行）：file<TAB>func<TAB>trigger<TAB>victim<TAB>判定<TAB>理由
+#
+# ── §② 档案区：M206 的 8 条人工判定 → M209 已下沉为**判据**（仅存档，扫描器不再报） ──
+#  为什么留档：① 它们是「判据成形」的史料（哪条形状曾被人工判过）；② 后人若怀疑
+#  M209 的排除规则在放水，可拿这 8 条去 `examples/m209_gcroot_rules/` 对拍。
+#  排除规则的**反向判据**（改判之后工具仍然命中）在 `--self-test` 的 hit6b/hit7/hit8。
+# ARCHIVE	runtime/runtime.c	px_gen_materialize	px_call(	keep	排除规则=作用域	受害者 keep 声明在 `if (filter.type == PX_FUNC) {` 块内，该块在触发点（下一轮迭代的 px_call）之前闭合 ⇒ 出作用域 ⇒ 读不到
+# ARCHIVE	runtime/runtime.c	px_gen_next	px_call(	keep	排除规则=作用域	同族（分支末尾 return，声明块闭合）
+# ARCHIVE	runtime/runtime.c	bi_http_get_stream	px_str_len(	rv	排除规则=作用域（宏体）	`rv` 声明在 `#define STREAM_FLUSH()` 的 `do{…if(…){…}…}` 内；宏体的块在 `} while (0)` 出栈 ⇒ 其后函数各分支的触发点看不到它。⚠️ 判据必须按**块身份**而非括号深度（宏体在源码里浅、调用点深）
+# ARCHIVE	runtime/runtime.c	bi_http_get_stream	px_str_len(	rv	排除规则=作用域（宏体）	同族（chunked 分支）
+# ARCHIVE	runtime/runtime.c	bi_http_get_stream	px_str_len(	rv	排除规则=作用域（宏体）	同族（content-length 分支）
+# ARCHIVE	runtime/runtime_h3_qpack.c	qp_dec_value_string	px_str_len(	outv	排除规则=deref 交棒	`*outv = px_str_len(…)` 把值交给调用方（与 `return` 同口径）；调用方 `px_h3_qdec` 在返回后**紧跟** `PX_KEEP(val)`（:359）
+# ARCHIVE	runtime/runtime_h3_qpack.c	px_h3_qdec	px_str_len(	name	排除规则=覆盖 + 作用域	`name` 在 if/else 兄弟支各赋一次；触发点正在写同名直接局部且右值未读旧值 ⇒ 旧值已死
+# ARCHIVE	runtime/runtime_sqlite.c	bi_sqlite_query	px_bytes_len(	v	排除规则=覆盖	`v` 在 switch 的 TEXT/BLOB 两 case 各赋一次（兄弟块）；触发点在写 v 本身 ⇒ 旧值已死
+# ARCHIVE	runtime/runtime.c	px_cell	px_list_push(	l	排除规则=触发点集合	`l = px_list(1)` 后立刻 push（cap=1 不扩容）⇒ 旧规则把 push 当触发点属**错位**（缺陷 279）；l 是最近登记对象 ⇒ 受 g_tmp_root 保护
+# ARCHIVE	runtime/runtime.c	px_gen_materialize	px_list_push(	l/r	排除规则=触发点集合	同族（`r = px_call(...)` 是最近登记对象）
+# ARCHIVE	runtime/runtime.c	bi_map / bi_filter	px_list_push(	res	排除规则=触发点集合	同族。**真实风险在容器 `r`（下一轮 px_call 的分配）而非 `res`** —— 已由 `px_root_push_keep(r)` 处理，且审计器在 :11434 处能报出（判据回放 2 实测）
+# ARCHIVE	runtime/runtime.c	bi_os_popen / bi_session_set / bi_session_del / px_http_dispatch_h3	px_dict_set(	d/data/nd/headers	排除规则=触发点集合	同族（`d = px_dict()` 是最近登记对象）
+# ARCHIVE	runtime/runtime_h3.c	bi_h3_conn_peer / bi_h3_conn_stats	px_dict_set(	d	排除规则=触发点集合	同族
+# ARCHIVE	runtime/runtime_image.c	bi_img_decode	px_dict_set(	pix	排除规则=触发点集合	同族（且 `d` 已 `px_root_push_keep`）

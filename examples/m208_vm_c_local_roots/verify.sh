@@ -26,9 +26,14 @@
 #       `px_root_push(); PX_KEEP(x);`（两次 gc_unblock_stop，中间即窗口）
 #       改为**原子** `px_root_push_keep(x)`（一个临界区）；本门断言「相邻两段式 = 0」。
 #   S14 **隐式分配**（`px_dict_set`/`px_list_push`…）计入审计器的分配点（`--grow`）。
+#   ⚠️ **M209 更正（缺陷 279）**：该规则的**前提已被证伪** —— `px_dict_set`/`px_list_push`
+#      只走裸分配（`m128_alloc`/`m128_strdup`），而 full GC 的唯一触发点是 `gc_register`
+#      ⇒ 它们**不是触发点**；且那一刻 `g_tmp_root` 仍指向受害者（= 最近登记对象）⇒ 安全。
+#      `--grow` 自此只做**旧规则对照**（复现 11 条），默认档由 M209 的新规则集把关
+#      （见 `examples/m209_gcroot_rules/` 与 `docs/GC_ROOTS.md` §9）。
 #
 # 层：
-#  ① 静态：审计器自证 10/10 + `--grow` 下 runtime/vm.c **候选 0**（缺陷 268 收口）
+#  ① 静态：审计器自证 16/16 + `--grow`（旧规则对照）下 runtime/vm.c **候选 0**（缺陷 268 收口）
 #  ② 静态：S13 不变量 —— **全仓** `runtime/*.c`（+ runtime/vm.c）不得出现两段式
 #     `px_root_push();` + `PX_KEEP(x);`（含**行尾带注释**与**宏续行**两种形态）；
 #     判据由 `selfhost/s13_check.py` 提供（自带 6 条自证，含「注释容忍」负例）。
@@ -43,9 +48,11 @@
 #     A 恢复 `g_tmp_root = NULL;`（并发路径）⇒ ④ 压力档必红（缺陷 269 复现）
 #     B 撤 `PXOP_NEWDICT` 的 `px_root_push_keep(d)` ⇒ ④ 压力档必红（缺陷 268 复现）
 #     C 撤 `px_list_n` 的注册 ⇒ ④ 压力档必红（缺陷 268 同族）
-#  覆盖边界（如实）：`--grow` 规则另照出 **18 处既有站点**（缺陷 271 族，见
-#     docs/GC_ROOTS.md §8）—— 本轮**只登记不修**，故本门对全仓 `--grow` 候选数
-#     **不做断言**（只打印记录），仅对 `runtime/vm.c` 断言 0。
+#  覆盖边界（如实）：`--grow` 旧规则另照出 **18 处既有站点**（缺陷 271 族，见
+#     docs/GC_ROOTS.md §8）—— 本轮 M208 **只登记不修**。
+#     ⚠️ **M209 已全部收口**（缺陷 279–282）：18 处里 11 条由「触发点仅构造器」消除、
+#     8 条由「覆盖/作用域/deref」三条排除规则消除 ⇒ **新规则集下全仓候选 0**；
+#     本门对 `--grow` 候选数仍**不做断言**（只打印对照），全仓 0 的断言在 M209 门里。
 # ============================================================
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -110,9 +117,9 @@ run_track() {
     return 0
 }
 
-step "① 静态：审计器自证 + --grow 下 vm.c 候选 0"
+step "① 静态：审计器自证 + --grow（旧规则对照）下 vm.c 候选 0"
 if python3 selfhost/gcroot_audit.py --self-test > "$W/selftest.log" 2>&1; then
-    grep -q 'self-test: 10 通过 / 0 失败' "$W/selftest.log" && ok "自证 10/10（6 必中 + 4 必不中）" \
+    grep -q 'self-test: 16 通过 / 0 失败' "$W/selftest.log" && ok "自证 16/16（M209：8 必中 + 8 必不中）" \
         || { bad "自证结论行不符"; tail -6 "$W/selftest.log" | sed 's/^/      /'; }
 else
     bad "自证脚本失败"; tail -6 "$W/selftest.log" | sed 's/^/      /'
@@ -122,13 +129,14 @@ grep -q '候选 0' "$W/vmgrow.log" && ok "runtime/vm.c（--grow）候选 0 —�
     || { bad "runtime/vm.c 仍有候选"; sed 's/^/      /' "$W/vmgrow.log"; }
 python3 selfhost/gcroot_audit.py --grow > "$W/growall.log" 2>&1
 GROWN=$(grep -o '候选 [0-9]*' "$W/growall.log" | head -1 | awk '{print $2}')
-echo "  ℹ️ 全仓 --grow 候选 = ${GROWN:-?}（缺陷 271 族 · 本轮只登记不修 · 见 docs/GC_ROOTS.md §8）"
+echo "  ℹ️ 全仓 --grow（**旧规则对照**）候选 = ${GROWN:-?} —— M209 起该规则仅作对照；"
+echo "     新规则集（触发点仅构造器 + 覆盖/作用域/deref 三排除）下全仓候选 0，断言在 M209 门。"
 sed -n '3,24p' "$W/growall.log" | sed 's/^/      /'
 python3 selfhost/gcroot_audit.py > "$W/legacy.log" 2>&1
 grep -o '候选 [0-9]*' "$W/legacy.log" | head -1 | sed 's/^/  ℹ️ 默认（legacy）全仓 /'
 
 step "② 静态：S13 —— 「构造与登记之间不得有安全点」"
-# M209 更正：改用 selfhost/s13_check.py（**注释容忍 + 续行合并 + 全仓 runtime/*.c**）。
+# M208s1 更正：改用 selfhost/s13_check.py（**注释容忍 + 续行合并 + 全仓 runtime/*.c**）。
 #   M208 首版判据是整行正则且只扫 3 个文件 ⇒ 「行尾带注释」族整族漏判 ⇒ 假绿（实测还有 30 处）。
 python3 selfhost/s13_check.py > "$W/s13.log" 2>&1
 S13RC=$?

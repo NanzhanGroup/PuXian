@@ -672,6 +672,16 @@ run m205_cli_channels bash examples/m205_cli_channels/verify.sh
 run m206_gcroot bash examples/m206_gcroot/verify.sh
 run m207_gcstress bash examples/m207_gcstress/verify.sh
 run m208_vm_c_local_roots bash examples/m208_vm_c_local_roots/verify.sh
+step "M209 · GC 根面审计器「触发点」更正 + 三条排除规则（缺陷 279–282）"
+#   [1] 自证 16/16（8 必中 + 8 必不中，含 hit6b/hit7/hit8 三条**反向判据**）
+#   [2] 新规则全仓候选 0（两次一致）+ 规模锚点（函数 ≥1500 · 登记 ≥200）
+#   [3] 旧规则对照 --grow = 11 且**全部**带「隐式分配·旧规则」标记（防对照被清空）
+#   [4] 三条排除规则 + 触发点集合 + g_tmp_root 置位的**源码在位**断言
+#   [5] **判据回放**：把 2 处已修站点原样退回 ⇒ 审计器必须命中（证明没引入漏报）
+#   [6] 动态：probe_rules 正常档 ×2 + 压力档（STRESS+INLINE+LIVECHK+UAFDET）逐字节一致
+#   [7] 负控 3 道：撤 bi_map 的 keep ⇒ 压力档必红 · 旧规则设默认 ⇒ 候选 11 必红 ·
+#       撤作用域排除 ⇒ 候选 5 必红（各自独立 + 源逐字节还原）
+run m209_gcroot_rules bash examples/m209_gcroot_rules/verify.sh
 step "M190 · 上游 registry-px 真实用例回归（53 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。
