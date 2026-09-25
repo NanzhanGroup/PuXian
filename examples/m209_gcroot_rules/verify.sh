@@ -130,18 +130,23 @@ fi
 head -1 "$W/new1.log" | sed 's/^/  ℹ️ /'
 if grep -q '候选 0' "$W/new1.log"; then
     ok "全仓候选 0（**手抄触发点集合**下：缺陷 279–282 收口）"
-elif grep -q '候选 3' "$W/new1.log"; then
-    # M212（第 91 轮）：默认触发点集合已改为**源码派生**（手抄 27 → 派生 518）
-    #   ⇒ 手抄集合漏掉的那 300+ 个分配入口现在会触发判定 ⇒ 照出 3 条候选，
-    #   全部经判定为假阳（逐条理由在 examples/m206_gcroot/BASELINE.tsv §①），
-    #   其中 1 条（h3_send_fields 的 body_val）**直接照出**真漏登记（缺陷 291，已修）。
-    ok "全仓候选 3（**源码派生触发点集合**下；3 条全判假阳，见 m206 BASELINE §①）"
+elif grep -q '候选 4' "$W/new1.log"; then
+    # M212（第 91 轮）：默认触发点集合已改为**源码派生**（手抄 27 → 派生 524）
+    #   ⇒ 手抄集合漏掉的那 300+ 个分配入口现在会触发判定，照出候选；其中 1 条
+    #   （h3_send_fields 的 body_val）**直接照出**真漏登记（缺陷 291，已修）。
+    # M213（第 92 轮 · 缺陷 293–298）：本数从 3 → **4** ——
+    #   消掉 3 条（`bi_session_del` 对称化=缺陷 293；`h3_out_send`/`h3_srv_*` 三条
+    #   由新判据 **F1**「被调方登记了实参」覆盖=缺陷 297），新增 1 条
+    #   （`px_route_try_dispatch ← px_rate_limit_try( · handler`：缺陷 298 把 `params`
+    #   从受害面移除后只剩 `handler`）。4 条**全判假阳**，逐条理由在
+    #   `examples/m206_gcroot/BASELINE.tsv` §①。
+    ok "全仓候选 4（**源码派生触发点集合**下；4 条全判假阳，见 m206 BASELINE §①）"
     grep -q '源码派生' "$W/new1.err" \
         || bad "未在 stderr 打印「源码派生」诊断行 ⇒ 可能退回手抄集合"
 elif grep -q '候选 0' "$W/new1.log"; then
     bad "报告「候选 0」但 --trigger-set 应为 derived ⇒ 触发点集合派生失效"
 else
-    bad "候选数既不是 0 也不是 3"; sed -n '2,14p' "$W/new1.log" | sed 's/^/      /'
+    bad "候选数既不是 0 也不是 4"; sed -n '2,14p' "$W/new1.log" | sed 's/^/      /'
 fi
 # ⚠️ M212：诊断行**已移到 stderr**（`--json` 的 stdout 必须是纯 JSON），
 #   规模锚点从 stdout 里的「扫描 …」行取（不要用 `sed -n 1p`）。

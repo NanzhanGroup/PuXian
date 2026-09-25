@@ -70,8 +70,100 @@ def set_trigger_sets(triggers, producers):
     PRODUCER_NAMES = sorted(set(producers))
     ALLOC_RX = re.compile(r'\b(' + '|'.join(TRIGGER_NAMES) + r')\s*\(')
     PRODUCER_RX = re.compile(r'\b(' + '|'.join(PRODUCER_NAMES) + r')\s*\(')
+
+# ---- M213（第 92 轮 · 缺陷 294）：**出口参数式构造函数**（OUT-PRODUCER）----
+#   形状：`static int px_as_list(LXValue v, LXValue* out)` —— 返回 int/bool，
+#   但通过 `LXValue* out` **输出一个新对象**（tuple / 生成器 ⇒ 新建 list）。
+#   ⇒ 调用点 `px_as_list(args[1], &xs)` 之后，`xs` 是**未登记的活值**；而审计器此前
+#     只认「赋值给 lvalue 的 PRODUCER」⇒ 这类出口**看不见** ⇒ **整族漏报**。
+#   实测（M213 侦察）：撤掉 `bi_join` 的 `PX_KEEP(xs)` 后审计器**报不出** —— 而
+#     M207 缺陷 263 正是这条路上的真缺陷，当时是**动态压力筛**抓的，不是静态判据。
+#   ⚠️ 与 PRODUCER 的分工：PRODUCER 管「返回 LXValue 的函数」；本表管「经指针输出的」。
+#     两者**互斥**（`px_as_list` 返回 int ⇒ 不在 PRODUCER 里，`find_assign` 看不到它）。
+OUT_PRODUCER_NAMES = []
+OUT_MAP = {}                                  # {函数名: {形参名: 是否 LXValue* 输出参数}}
+OUT_RX = re.compile(r'(?!)')                  # 空集合 ⇒ 永不匹配（派生注入后重建）
+
+
+def set_out_producers(m):
+    """M213：注入源码派生的 OUT-PRODUCER 表（**保持签名顺序** ⇒ 调用点按位置配对）。"""
+    global OUT_PRODUCER_NAMES, OUT_MAP, OUT_RX
+    OUT_MAP = {k: dict(v) for k, v in m.items()}
+    OUT_PRODUCER_NAMES = sorted(OUT_MAP)
+    if OUT_PRODUCER_NAMES:
+        OUT_RX = re.compile(r'\b(' + '|'.join(OUT_PRODUCER_NAMES) + r')\s*\(')
+    else:
+        OUT_RX = re.compile(r'(?!)')
+
+
+def split_args(seg):
+    """从**调用名 `(` 之后**的文本取顶层实参列表。
+
+    `seg` 例（= `text[m.end():]`，而 `m` 的正则**已含 `(`**）：
+      `args[1], &xs)) { px_root_pop(); …` ⇒ `['args[1]', ' &xs']`
+      `)`（无实参）                        ⇒ `[]`
+    括号不配对 ⇒ `[]`。
+
+    ⚠️ 首版把 `seg` 当成「**以 `(` 开头**」的文本处理（先 `seg.find('(')` 再取平衡括号）
+      —— 而调用方传的正是 `(` **之后**的文本 ⇒ 实参里没有额外的 `(` 时就 `find` 落空
+      ⇒ 恒返回 `[]` ⇒ **OUT-PRODUCER 规则整条静默失效**。
+      （实测：self-test 新增锚点 **hit9 / hit10 双双判红**抓回 —— 这就是「反向判据」
+        的价值：判据自己失效时必须有人喊。）
+    """
+    depth, end = 0, -1
+    for i, ch in enumerate(seg):
+        if ch == '(':
+            depth += 1
+        elif ch == ')':
+            if depth == 0:
+                end = i
+                break
+            depth -= 1
+    if end < 0:
+        return []
+    parts, cur, d = [], [], 0
+    for ch in seg[:end]:
+        if ch in '([{':
+            d += 1
+        elif ch in ')]}':
+            d -= 1
+        if ch == ',' and d == 0:
+            parts.append(''.join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    if ''.join(cur).strip():
+        parts.append(''.join(cur))
+    return parts
+
 GROW_ON = False   # M208 遗留名（勿用）：M209 起改叫 LEGACY_GROW —— 见下
 LEGACY_GROW = False   # M209：仅用于**复现旧规则**（把 push/dict_set 当触发点 ⇒ 19 候选）。
+
+# M213（缺陷 297）**F1「被调方登记了实参」**（跨函数持有者，M212 §10.6 缺口①）：
+#   调用点的活值作为实参传进被调方，而被调方**入口**就 `PX_KEEP(形参)`
+#   （且先于其第一个触发点）⇒ 进入被调方后在任何分配之前即被登记 ⇒ 调用点无风险。
+CALLEE_KEEPS = {}
+CALLEE_KEEP_ON = True
+
+
+def set_callee_keeps(m):
+    global CALLEE_KEEPS
+    CALLEE_KEEPS = dict(m or {})
+
+
+def _arg_kept_by_callee(callee, victim, cargs):
+    """调用点的 `victim` 是否落在被调方**入口已登记**的形参位置上（**按位置配对**）。"""
+    if not CALLEE_KEEP_ON:
+        return False
+    info = CALLEE_KEEPS.get(callee)
+    if not info:
+        return False
+    ps = info.get('params') or []
+    kept = info.get('kept') or []
+    for i, a in enumerate(cargs):
+        if a.strip() == victim and i < len(ps) and ps[i] in kept:
+            return True
+    return False
 # ---- M208（缺陷 270）：**隐式分配**原语 ----
 #   `px_dict_set` / `px_list_push` 自身会分配（键副本 `m128_strdup`、条目数组 `xrealloc` 扩容）
 #   ⇒ 它们是**分配点**，必须计入「此后未登记活值可能被回收」。
@@ -377,6 +469,7 @@ def audit_text(code: str, relpath: str):
                         findings.append({
                             'file': relpath, 'line': abs_line, 'func': fname,
                             'trigger': g.group(0) + ' [隐式分配·旧规则]',
+                            'trigger_kind': 'legacy',
                             'victims': [{'name': k, 'line': v[0]}
                                         for k, v in sorted(live.items(), key=lambda kv: kv[1][0])],
                         })
@@ -439,10 +532,20 @@ def audit_text(code: str, relpath: str):
                     vs = [{'name': k, 'line': v[0]}
                           for k, v in sorted(live.items(), key=lambda kv: kv[1][0])
                           if k != overwrite]
+                    # M213（缺陷 297）F1：被调方入口已登记该实参 ⇒ 调用点不构成风险
+                    if vs:
+                        _cal = m.group(0).strip().rstrip('(').strip()
+                        _cargs = split_args(text[m.end():])
+                        _drop = [v for v in vs
+                                 if _arg_kept_by_callee(_cal, v['name'], _cargs)]
+                        if _drop:
+                            stats['callee_keep'] = stats.get('callee_keep', 0) + len(_drop)
+                            vs = [v for v in vs if v not in _drop]
                     if vs:
                         findings.append({
                             'file': relpath, 'line': abs_line, 'func': fname,
                             'trigger': m.group(0),
+                            'trigger_kind': _trigger_kind(m.group(0)),
                             'victims': vs,
                         })
                     live = {}
@@ -472,17 +575,58 @@ def audit_text(code: str, relpath: str):
                     lm = LVALUE_TAIL_RX.search(lhs_raw)
                     if lm:
                         live.pop(lm.group(1).strip(), None)
+            # ④c M213（缺陷 294）：**出口参数式构造函数** —— `f(…, &out)`
+            #   把**新对象**写进 `out`（例：`px_as_list(args[1], &xs)` 的 tuple/生成器支
+            #   会 `px_list(n)` 新建 list）⇒ `out` 是未登记的活值，必须记进 live。
+            #   这类调用的返回类型是 int/bool ⇒ 上面 `find_assign` 的 PRODUCER 分支
+            #   看不到它（这正是「整族漏报」的机制）。
+            #   ⚠️ **按位置配对**：只有形参类型是 `LXValue*` 的那个实参才是对象输出。
+            #     `h_exchange(pool, req, rlen, &slot, &status, …)` 里 `slot` 是
+            #     `HPoolSlot**` ⇒ 不是 GC 对象。首版把所有 `&x` 都记 ⇒ 8 条假阳（实测）。
+            if OUT_RX.search(text):
+                for _om in OUT_RX.finditer(text):
+                    _fn = _om.group(1)
+                    _pm = OUT_MAP.get(_fn) or {}
+                    _names = list(_pm)
+                    for _i, _part in enumerate(split_args(text[_om.end():])):
+                        if _i >= len(_names):
+                            break
+                        if not _pm.get(_names[_i]):
+                            continue
+                        _m2 = re.match(r'\s*&\s*([A-Za-z_][A-Za-z0-9_]*)', _part)
+                        if _m2 and not ROOTED_LHS_RX.match(_m2.group(1)):
+                            _on = _m2.group(1)
+                            live[_on] = (abs_line, decl_block.get(_on, stack[-1]))
             # ④b 消费：受害值作为赋值右值被存进别处（`slots[dst] = r;` / `x->f = v;`）
             lhs_raw2, rhs2 = find_assign(text)
             if lhs_raw2 is not None and rhs2 is not None and live:
                 if not (PRODUCER_RX.search(rhs2) and call_tail_is_empty(rhs2, None)):
                     lm2 = LVALUE_TAIL_RX.search(lhs_raw2)
                     lhsname = lm2.group(1).strip() if lm2 else ''
+                    # ⚠️ M213（缺陷 294-b · **判据实测抓到的第二处漏报**）：
+                    #   **成员取址式别名不是「消费」**。`LXObject* o = xs.as.obj;`
+                    #   只是**读** xs 的内部指针（`o` 指向 xs 的那个对象）——xs 若被回收，
+                    #   `o` 立刻悬垂 ⇒ xs **必须继续活着**。把它当消费 ⇒
+                    #   「先物化（`px_as_list(…, &xs)`）、再取对象指针、再用」这一族
+                    #   **整族漏报**（实测：`bi_join` 的 `LXObject* o = xs.as.obj;` ⇒
+                    #   撤掉 `PX_KEEP(xs)` 后审计器**报不出**；而 M207 缺陷 263 正在此处）。
+                    #   处置：rhs 是「纯成员链」（`n.f` / `n->f` / `n.f.g`）⇒ 记**别名**
+                    #   （lhs 也进 live ⇒ 两者都盯着），不弹原值。
+                    #   ⚠️ 尾部必须容许 `;` —— `find_assign` 返回的 rhs **含语句尾分号**
+                    #     （实测：`xs.as.obj;` 在首版正则下 fullmatch=False ⇒ 整条规则
+                    #      静默失效 ⇒ `bi_join` 仍报不出；由 fixture D/E/F 三分位定位）。
+                    alias_only = bool(re.fullmatch(
+                        r'\s*&?\s*[A-Za-z_][A-Za-z0-9_]*'
+                        r'(?:\s*(?:\.|->)\s*[A-Za-z_][A-Za-z0-9_]*)+'
+                        r'(?:\s*\[[^\]]*\])?\s*;?\s*', rhs2))
                     for k in list(live.keys()):
                         base = re.split(r'[\[.\-]', k)[0]
                         if base and lhsname != k and re.search(
                                 r'\b' + re.escape(base) + r'\b', rhs2):
-                            live.pop(k, None)
+                            if alias_only and lhsname:
+                                live[lhsname] = live[k]
+                            else:
+                                live.pop(k, None)
             # ⑤ 消费：值被交给别的调用 ⇒ 假定接管
             if live:
                 for m in CONSUME_RX.finditer(text):
@@ -655,6 +799,49 @@ static int demo_deref_ok(const char* t, int l, LXValue* outv) {
 }
 '''
 
+# ==================== M213 新增锚点（缺陷 294） ====================
+# hit9（**正向** · OUT-PRODUCER）：`px_as_list(args[1], &xs)` 把**新对象**写进 `xs`
+#   （tuple/生成器支 ⇒ `px_list(n)`）⇒ `xs` 是未登记的活值，后续真触发点必须报出它。
+#   ⚠️ 若 OUT-PRODUCER 规则失效 ⇒ `xs` 不入 live ⇒ 本锚点**判红**（锚点自己有牙）。
+FIX_HIT9 = '''
+static int demo_out_producer(LXValue* args, int nargs, void* ctx) {
+    LXValue xs;
+    px_root_push();
+    if (!px_as_list(args[1], &xs)) { px_root_pop(); return 0; }
+    char* out = xmalloc(8);
+    LXValue rv = px_str_len(out, 8);
+    xfree(out);
+    px_root_pop();
+    return 0;
+}
+'''
+# hit10（**反向判据** · 成员取址别名**不是**消费）：`LXObject* o = xs.as.obj;` 只读指针
+#   ⇒ `xs` **必须继续活着**（否则 o 悬垂）。若把该赋值当「消费」⇒ 漏报 ⇒ 本锚点判红。
+#   形状取自 `bi_join`（M207 缺陷 263 的现场）。
+FIX_HIT10 = '''
+static int demo_alias_alive(LXValue* args, int nargs, void* ctx) {
+    LXValue xs;
+    px_root_push();
+    if (!px_as_list(args[1], &xs)) { px_root_pop(); return 0; }
+    LXObject* o = xs.as.obj;
+    int n = o->as.list.len;
+    LXValue rv = px_str_len("x", n);
+    px_root_pop();
+    return 0;
+}
+'''
+# miss9（**反向判据** · 按位置配对）：OUT-PRODUCER 里**非 `LXValue*`** 的实参位
+#   （`&cnt` 对应 `int* cnt`）**不是** GC 对象 ⇒ 不得记进 live ⇒ 不中。
+#   若不做位置配对（把所有 `&x` 都记）⇒ 这里会把 `cnt` 记成活值 ⇒ 误报出的受害者
+#   与真缺陷无关（首版实测 8 条假阳，如 `h_exchange(…, &slot, &status, …)`）。
+FIX_MISS9 = '''
+static int demo_pos_match(HPoolSlot* slot, int* cnt) {
+    mix2(slot, cnt);
+    LXValue rv = px_str_len("x", 1);
+    return 0;
+}
+'''
+
 # M208 反向锚点：同形状但用**原子** `px_root_push_keep(lst)` ⇒ 不中
 FIX_MISS4 = '''
 static int demo_grow_ok(HPool* pool, int n, char* out) {
@@ -688,14 +875,24 @@ def self_test():
     #   8 必中 + 8 必不中 = 16 锚点；其中 hit6b/hit7/hit8 是**反向判据**（证明排除规则没把
     #   工具改瞎），miss5 是 M208 那条 hit6 的**改判**（缺陷 279 的预期翻转）。
     import tempfile
+    # ---- M213：自证时必须**手工注入** OUT-PRODUCER 表 ----
+    #   理由：真实表是从 `runtime/*.c` 派生的，而自证跑的是内嵌 fixture
+    #   ⇒ 不注入则 `px_as_list` 不被识别 ⇒ hit9/hit10 的**正向面**无从检验。
+    set_out_producers({
+        'px_as_list': {'v': False, 'out': True},
+        # 位置配对的反例：两个形参都**不是** `LXValue*` ⇒ 不得记任何活值
+        'mix2': {'slot': False, 'cnt': False},
+    })
     cases = [('hit1', FIX_HIT1, True), ('hit2', FIX_HIT2, True),
              ('hit3', FIX_HIT3, True), ('hit4', FIX_HIT4, True),
              ('hit5', FIX_HIT5, True), ('hit6b', FIX_HIT6B, True),
              ('hit7', FIX_HIT7, True), ('hit8', FIX_HIT8, True),
+             ('hit9', FIX_HIT9, True), ('hit10', FIX_HIT10, True),
              ('miss1', FIX_MISS1, False), ('miss2', FIX_MISS2, False),
              ('miss3', FIX_MISS3, False), ('miss4', FIX_MISS4, False),
              ('miss5', FIX_HIT6, False), ('miss6', FIX_MISS6, False),
-             ('miss7', FIX_MISS7, False), ('miss8', FIX_MISS8, False)]
+             ('miss7', FIX_MISS7, False), ('miss8', FIX_MISS8, False),
+             ('miss9', FIX_MISS9, False)]
     ok = fail = 0
     with tempfile.TemporaryDirectory() as td:
         for name, body, expect_hit in cases:
@@ -711,6 +908,21 @@ def self_test():
                      '命中' if got else '不中', len(f), '✅' if good else '❌'))
     print('self-test: %d 通过 / %d 失败' % (ok, fail))
     return 0 if fail == 0 else 1
+
+
+# M213（缺陷 295）**分诊**：精确档闭包（`--indirect tight` 的 reach）。
+#   触发点若**不在**此集合 ⇒ 它是「保守兜底」（过近似）引入的 ⇒ 候选大概率是噪音，
+#   但**不能据此判假阳**（漏报比假阳危险）—— 它只是给人工判定一个**优先级**。
+REACH_TIGHT = None
+
+
+def _trigger_kind(txt):
+    """候选的触发点来源：precise（精确三规则）/ conservative（保守兜底）/ n/a。"""
+    name = (txt or '').strip().rstrip('(').strip()
+    name = name.split()[0] if name else name
+    if REACH_TIGHT is None:
+        return 'n/a'
+    return 'precise' if name in REACH_TIGHT else 'conservative'
 
 
 def main():
@@ -732,6 +944,15 @@ def main():
                          '⇒ 空集 ⊇ 任意集 ⇒ 假绿）')
     ap.add_argument('--min-funcs', type=int, default=1,
                     help='下限锚点：函数数少于该值即判红（防扫描器静默失效）')
+    ap.add_argument('--no-callee-keep', action='store_true',
+                    help='M213（缺陷 297）：关闭 F1「被调方登记了实参」规则（A/B 与负控用）')
+    ap.add_argument('--indirect', choices=['loose', 'tight'], default='loose',
+                    help='M213（缺陷 295）：间接调用判据档位。loose（默认）= 精确三规则'
+                         ' + 任何 `(*x` 形状（**有意的过近似**）；tight = 仅精确三规则'
+                         '（**只用于分诊/A-B**，会丢失显式 GC 族覆盖 ⇒ 不作默认）')
+    ap.add_argument('--no-out', action='store_true',
+                    help='M213：**关闭 OUT-PRODUCER 规则**（出口参数式构造函数 ⇒ 活值入列）。'
+                         '默认开启；本开关仅用于 A/B 与留证（复现 M212 的漏报面）。')
     args = ap.parse_args()
     if args.self_test:
         return self_test()
@@ -744,7 +965,9 @@ def main():
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         try:
             import gcroot_derive
-            _t, _p, _st = gcroot_derive.derive_sets(root)
+            _t, _p, _st, _ex = gcroot_derive.derive_all(root, args.indirect)
+            global REACH_TIGHT
+            REACH_TIGHT = _ex['reach_tight']
         except Exception as e:                    # noqa: BLE001
             # ⚠️ **不静默回退**（M199/M200 纪律：判定不了必须响亮）——
             #   悄悄退回手抄集合 = 把「漏报」伪装成「全绿」。
@@ -757,11 +980,34 @@ def main():
                              % (len(_t), args.min_triggers))
             return 3
         set_trigger_sets(_t, _p)
+        # ---- M213（缺陷 294）：OUT-PRODUCER（出口参数式构造函数）----
+        #   规模锚点：派生为空 ⇒ **拒绝放行**（空集会让「出口式活值」全部漏报 = 假绿）。
+        # ---- M213（缺陷 297）：F1 表（被调方入口登记了哪些形参）----
+        _ck = gcroot_derive.derive_callee_keeps(root, _t)
+        if not args.no_callee_keep:
+            set_callee_keeps(_ck)
+        else:
+            set_callee_keeps({})
+        sys.stderr.write('# F1 表（被调方入口已登记形参）= %d 条%s\n'
+                         % (len(_ck), '［--no-callee-keep ⇒ 规则关闭·A/B 用］'
+                            if args.no_callee_keep else ''))
+        _op = gcroot_derive.derive_out_producers(root)
+        if len(_op) < 1:
+            sys.stderr.write('gcroot_audit: OUT-PRODUCER 派生为空 ⇒ 拒绝放行'
+                             '（空集 = 出口式活值全部漏报 ⇒ 把「漏报」伪装成「全绿」）\n')
+            return 3
+        if not args.no_out:
+            set_out_producers(_op)
+        sys.stderr.write('# OUT-PRODUCER=%d（出口参数式构造函数）%s\n'
+                         % (len(_op), '［--no-out ⇒ 规则关闭·A/B 用］' if args.no_out else ''))
         # ⚠️ 走 **stderr**（M205 §7.1「通道 = 消费方」）：`--json` 的 stdout 必须
         #   是**纯 JSON**（`examples/m206_gcroot/verify.sh` 直接 `json.load` 它）
         #   ⇒ 诊断行混进 stdout 会让门**解析失败**（本轮实测踩过）。
-        sys.stderr.write('# 触发点集合：**源码派生** TRIGGER=%d PRODUCER=%d（手抄集合 %d）\n'
-                         % (len(_t), len(_p), len(_ALLOC_NAMES)))
+        _cons_only = len([n for n in _t if n not in (_ex['reach_tight'] or set())])
+        sys.stderr.write('# 触发点集合：**源码派生** TRIGGER=%d PRODUCER=%d（手抄集合 %d）'
+                         '｜间接调用档=**%s**｜其中「保守兜底」独有 = %d\n'
+                         % (len(_t), len(_p), len(_ALLOC_NAMES),
+                            args.indirect, _cons_only))
     files = args.files
     if not files:
         rtdir = os.path.join(root, 'runtime')
@@ -780,14 +1026,18 @@ def main():
         return 0
 
     print('扫描 %d 文件 · 函数 %d · 分配站点 %d · 登记站点 %d · **候选 %d**'
-          % (len(files), tot['funcs'], tot['allocs'], tot['keeps'], len(allf)))
+          ' · F1 豁免 %d'
+          % (len(files), tot['funcs'], tot['allocs'], tot['keeps'], len(allf),
+             tot.get('callee_keep', 0)))
     by_file = {}
     for f in allf:
         by_file.setdefault(f['file'], []).append(f)
     for fn in sorted(by_file, key=lambda k: -len(by_file[k])):
         print('\n%s  (%d)' % (fn, len(by_file[fn])))
         for f in by_file[fn]:
-            line = '  %5d %-30s ← %s' % (f['line'], f['func'], f['trigger'])
+            line = '  %5d %-30s ← %s%s' % (
+                f['line'], f['func'], f['trigger'],
+                '  ［保守兜底·过近似］' if f.get('trigger_kind') == 'conservative' else '')
             if args.show_victims:
                 line += '   受害者: ' + ', '.join(
                     '%s@%d' % (v['name'], v['line']) for v in f['victims'])
