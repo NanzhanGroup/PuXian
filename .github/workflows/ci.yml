@@ -172,6 +172,12 @@ jobs:
             ./bootstrap/pxlint "$f" >/dev/null || { echo "❌ lint 失败: $f"; exit 1; }
           done
           echo "✅ lint 全绿（compiler 主入口 0 错 + tools 16 文件 0/0）"
+      - name: 门路径卫生（不许写死开发机绝对路径 · M213 缺陷 300）
+        # ⚠️ 为什么单列一步：这类缺陷**本机必绿**（写死的路径在本机存在），
+        #   连「干净导出到 /tmp 复现」都抓不到 ⇒ 只有 CI 或静态守卫能抓。
+        run: |
+          bash selfhost/check_gate_paths.sh --self-test
+          bash selfhost/check_gate_paths.sh
       - name: 内置名册防漂移（单一事实源：runtime 注册表 → lint_core.px 生成块）
         run: |
           bash selfhost/builtin_list_check.sh

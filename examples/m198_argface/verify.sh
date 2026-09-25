@@ -158,9 +158,12 @@ if [ "$NEG" = 1 ]; then
 
     # D 动态：set_timeout 退回 px_arg_int ⇒ t1 判红
     restore_all; snapshot
-    python3 - <<'PY'
+    # ⚠️ M213s5（缺陷 300 同族）：原来是写死的 `/data/code/puxian/runtime/runtime.c`
+    #   —— 本机绿、CI 红（CI 用 `--neg-skip` 才一直没露）。⇒ 走 `$PWD`（脚本已 cd 到仓库根）。
+    python3 - "$PWD/runtime/runtime.c" <<'PY'
 import re
-p = "/data/code/puxian/runtime/runtime.c"
+import sys
+p = sys.argv[1]
 s = open(p, encoding="utf-8").read()
 old = 'long long ns = px_arg_dur_ns(args[1], "set_timeout", "ms", 1000000.0);'
 assert old in s
