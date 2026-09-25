@@ -673,7 +673,7 @@ run m206_gcroot bash examples/m206_gcroot/verify.sh
 run m207_gcstress bash examples/m207_gcstress/verify.sh
 run m208_vm_c_local_roots bash examples/m208_vm_c_local_roots/verify.sh
 step "M209 · GC 根面审计器「触发点」更正 + 三条排除规则（缺陷 279–282）"
-#   [1] 自证 16/16（8 必中 + 8 必不中，含 hit6b/hit7/hit8 三条**反向判据**）
+#   [1] 自证 19/19（10 必中 + 9 必不中，含 hit6b/hit7/hit8/hit9/hit10 五条**反向判据**）
 #   [2] 新规则全仓候选 0（两次一致）+ 规模锚点（函数 ≥1500 · 登记 ≥200）
 #   [3] 旧规则对照 --grow = 11 且**全部**带「隐式分配·旧规则」标记（防对照被清空）
 #   [4] 三条排除规则 + 触发点集合 + g_tmp_root 置位的**源码在位**断言

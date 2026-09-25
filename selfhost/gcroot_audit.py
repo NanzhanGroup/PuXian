@@ -26,7 +26,7 @@
 #
 # 用法：
 #   python3 selfhost/gcroot_audit.py [--files f1 f2 ...] [--json] [--show-victims]
-#   python3 selfhost/gcroot_audit.py --self-test        # 自证（16 锚点 = 8 必中 + 8 必不中）
+#   python3 selfhost/gcroot_audit.py --self-test        # 自证（19 锚点 = 10 必中 + 9 必不中）
 #   python3 selfhost/gcroot_audit.py --grow             # **旧规则对照**（复现 M208 的 11 条）
 # ============================================================
 import argparse
@@ -872,7 +872,7 @@ static LXValue bi_demo_capture(const char* cmd, int n) {
 
 def self_test():
     # M209：自证覆盖**新规则**（默认档 = 触发点仅构造器 + 覆盖/作用域/deref 三条排除）。
-    #   8 必中 + 8 必不中 = 16 锚点；其中 hit6b/hit7/hit8 是**反向判据**（证明排除规则没把
+    #   10 必中 + 9 必不中 = 19 锚点；其中 hit6b/hit7/hit8/hit9/hit10 是**反向判据**（证明排除规则没把
     #   工具改瞎），miss5 是 M208 那条 hit6 的**改判**（缺陷 279 的预期翻转）。
     import tempfile
     # ---- M213：自证时必须**手工注入** OUT-PRODUCER 表 ----
