@@ -692,6 +692,16 @@ step "M210 · 保留字作「形参名」漏拦截收口（缺陷 283 · 形参�
 #   [6] 负控 3 道：A 退回共用放行路径 · B 形参面改传 true · C 去掉 self 例外
 #       （各自独立判红；每道**强制重建** devbuild 并断言新鲜度 —— 防「跑的还是旧件」假绿）
 run m210_param_kw bash examples/m210_param_kw/verify.sh
+step "M211 · GC STW 信号打断 recv ⇒ 误判对端关闭（缺陷 265 收口 · 284–287）"
+#   [1] 静态：明文分支 EINTR 重试 · TLS WANT_* 重试 · px_conn_write EINTR 重试 ·
+#       gc_stop_handler errno 保存/恢复 + **反向断言**（明文分支不得再是裸 return recv(...)）
+#   [2] 编译探针（./tools/px build，默认 VM 轨 = precise GC —— 本缺陷正是它的病灶）
+#   [3] 正常档 8 连裸 TCP ⇒ 每条 total=3335
+#   [4] **压力档（PX_GC_STRESS=1 PX_GC_INLINE=1 双开）**：同上 —— 修前 8 条**全 0**
+#   [5] 两档 total 序列一致
+#   [6] 负控 3 道：A 明文退回裸 recv ⇒ 压力档必红 · B 撤回 TLS 重试 ⇒ 静态必红 ·
+#       C 判据自伤（A 补丁在位 + M211_THRESH=-1 ⇒ 同一故障不再判红）
+run m211_conn_read_eintr bash examples/m211_conn_read_eintr/verify.sh
 step "M190 · 上游 registry-px 真实用例回归（112 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。

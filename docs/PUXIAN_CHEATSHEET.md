@@ -2589,3 +2589,21 @@ set_timeout(fn (): print("once after 2s"), 2000)
      · **`self` 例外**：方法接收者形参就叫 `self`（`impl P:` 里 `def area(self) -> int:`）。
      · 软名字 `type` 仍可作形参名（`extern def h3_frame(type: int, payload)`）。
      · 守卫：`examples/m210_param_kw/`（26 通过 / 0 失败）—— 含**全仓 264 件普查 HIT=0**。
+
+236. **GC 的 STW 信号会打断阻塞中的 `recv` —— 「EINTR」不是「对端关闭」（第 90 轮 · M211 收口缺陷 265）**：
+     · 症状：`px_serve` 起的服务端，在 `PX_GC_STRESS=1 PX_GC_INLINE=1` **双开**档下，
+       **px 自带裸 TCP 客户端**（`tcp_connect_ex`/`tcp_send_ex`/`tcp_recv_ex`）**立即 EOF**、
+       服务端不响应（无 `[px-access]`）；而同进程内**外部 `curl`** 正常、`http_request` 正常
+       ⇒ 病灶在「**同进程**」= `px_conn_read`（**`px_serve` 的读路径**，不是 `px_recv_wait`）。
+     · 机制：并发 GC 的 STW 给各线程发 `SIG_GC_STOP` **打断阻塞中的 `recv`** ⇒ 返回 `-1/EINTR`；
+       老代码 `return recv(...)` **不重试** ⇒ 调用方 `if (n <= 0) break;` 判「客户端关闭 / 空闲超时」
+       ⇒ **未进 handler 即关连接**（客户端只见空响应 / FIN）。
+     · 触发条件：**两个开关同开**（`STRESS` + `INLINE`）—— **单开任一均不发作**（与缺陷 192 同族）。
+     · 修（`runtime/runtime.c`）：明文 `EINTR` 重试 · TLS `WANT_READ/WANT_WRITE` 重试 ·
+       `px_conn_write` 的 `EINTR` 不再当写失败 · `gc_stop_handler` 保存/恢复 `errno`
+       （最后一条 **A/B 实测非本缺陷根因**，是独立小缺陷）。
+     · 守卫：`examples/m211_conn_read_eintr/`（**38 通过 / 0 失败** · 负控 3 道）。
+     · **写服务端 / 客户端代码时的纪律**：**任何阻塞系统调用返回 `EINTR` 都必须重试**
+       —— 本仓是「协作式 GC + 信号 STW」的运行时，「**信号随时会来**」是常态，不是异常。
+     · 同族判别：`px_recv_wait` 早已 `for(;;)` + `EINTR continue`（那条路径一直是对的）
+       ⇒ **同一个运行时里两套读路径、只有一套写了重试**，这正是它长期没被发现的原因。

@@ -1937,33 +1937,38 @@ static void gc_scan_stack(GCHash* set) {
 // 信号处理器：暂停当前线程直到 GC 完成
 static void gc_stop_handler(int sig, siginfo_t* si, void* ctx) {
     (void)sig; (void)si;
+    // M211（缺陷 285）：**信号处理器必须保持 errno 不变**（POSIX）。
+    //   病灶：处理器内的任何调用（futex/pthread_self/...) 若改写 errno，则被本信号打断的
+    //   系统调用（recv/accept/poll…）返回 EINTR 后，调用方的 `errno == EINTR` 判断失效
+    //   ⇒ px_recv_wait 误判为真错误 ⇒ px_evc_close（缺陷 265：双开关下服务端无响应即关连接）。
+    int saved_errno = errno;
     // M105-S3：软屏蔽临界区 → 延迟暂停。临界区不被打断（不保存 ucontext / 不上报 paused），
     // 交 executor 的重发循环稍后重试；临界区退出（g_gc_crit=0）后下一次重发即正常暂停。
-    if (g_gc_crit) { __sync_fetch_and_add(&g_gc_deferred, 1); return; }
+    if (g_gc_crit) { __sync_fetch_and_add(&g_gc_deferred, 1); goto d265_done; }
     pthread_t me = pthread_self();
     // M11 修复⑤：若我是当前 GC 执行者（正在跑 px_gc_collect），忽略暂停信号——
     // 否则延迟信号在本轮 GC 执行中投递，handler 自旋等 epoch，而 epoch 只有
     // 本线程自己能推进 → 死锁（依赖 5 秒兜底才恢复，每轮 GC 卡 5 秒）。
-    if (g_gc_executor && pthread_equal(g_gc_executor, me)) return;
-    if (!g_threads) return;  // 表尚未分配（理论不会：信号仅 GC 进行中发出，GC 前必已 init）
+    if (g_gc_executor && pthread_equal(g_gc_executor, me)) goto d265_done;
+    if (!g_threads) goto d265_done;  // 表尚未分配（理论不会：信号仅 GC 进行中发出，GC 前必已 init）
     GCThreadInfo* ti = NULL;
     for (int i = 0; i < g_thread_cap; i++) {
         if (g_threads[i].in_use && pthread_equal(g_threads[i].tid, me)) { ti = &g_threads[i]; break; }
     }
-    if (!ti) return;  // 理论不会：未注册线程收到暂停信号
+    if (!ti) goto d265_done;  // 理论不会：未注册线程收到暂停信号
     // 关键：区分"有效暂停请求"与"过期堆积信号"。
     // 若当前没有 GC 在进行（g_gc_stop_in_progress==0），说明这是上一轮排队、
     // 延迟到现在才处理的信号——直接忽略返回，避免 my_epoch 捕获当前 epoch 后
     // 自旋等待一个永远不会到来的"本轮结束"（死锁）。
     if (!g_gc_stop_in_progress) {
         if (g_gc_debug) { char dbg[96]; int dn = snprintf(dbg, sizeof(dbg), "[stop-expired] tid=%lx\n", (unsigned long)me); (void)write(2, dbg, (size_t)dn); }
-        return;
+        goto d265_done;
     }
     // M22 修复：堆积实时信号重入保护——若本线程已在本轮暂停（首次信号已保存用户态上下文
     // 并自旋），后续堆积信号（gc_block_stop 阻塞期间 GC 重发累积）直接忽略返回，
     // 禁止重入覆盖 ti->uc（否则寄存器扫描拿到的是信号处理器自旋状态 → 丢用户态寄存器
     // → 活跃对象漏标被误回收 → use-after-free，即并发 GC 偶发崩溃根因）。
-    if (ti->paused && ti->epoch == g_gc_epoch) return;
+    if (ti->paused && ti->epoch == g_gc_epoch) goto d265_done;
     if (g_gc_debug) {
         char dbg[128];
         int dn = snprintf(dbg, sizeof(dbg), "[stop] tid=%lx\n", (unsigned long)me);
@@ -2001,6 +2006,8 @@ static void gc_stop_handler(int sig, siginfo_t* si, void* ctx) {
     ti->paused = 0;
     __sync_fetch_and_add(&g_paused_count, -1);
     px_futex_wake(&g_paused_count);   // M124：通知 executor「本线程已恢复」（resume-wait 阻塞字）
+d265_done:
+    errno = saved_errno;
 }
 
 // M105-S3：fork 后子进程继承父线程 TLS → 复位软屏蔽层栈（防「父进程恰在软屏蔽临界区
@@ -23059,7 +23066,23 @@ int px_conn_init(PxConn* c, int fd) {
 // 读：TLS 带缓冲（SSL_read 一次多读；已缓冲数据先出）
 ssize_t px_conn_read(PxConn* c, void* buf, size_t n) {
     if (c->closed) return -1;
-    if (!c->is_tls) return recv(c->fd, buf, n, 0);
+    if (!c->is_tls) {
+        // M211（缺陷 265）：**信号打断必须重试，绝不能当成"对端关闭"**。
+        //   病灶链：并发 GC 的 STW 会给各线程发 SIG_GC_STOP（`gc_stop_handler`）打断
+        //   阻塞中的 recv ⇒ recv 返回 -1/EINTR；本函数原实现直接返回该 -1 ⇒ 调用方
+        //   `px_conn_worker`「读请求头」处 `if (n <= 0) break;` 判定为
+        //   「客户端关闭 / 空闲超时」⇒ **未经过 handler 即关连接**（客户端只见
+        //   空响应/FIN）。压力档下（`PX_GC_STRESS=1 PX_GC_INLINE=1`：每次分配即
+        //   inline full GC ⇒ 信号高频）**100% 复现**；默认档 GC 延迟到安全点，故
+        //   长期未被发现（M207 起被压力筛标为缺陷 265）。
+        //   修法：EINTR 无限重试（SO_RCVTIMEO 的 15s 空闲语义不受影响 —— 超时仍返回
+        //   -1/EAGAIN）。同族：`px_recv_wait` 早已如此（其 for(;;) + EINTR continue）。
+        for (;;) {
+            ssize_t r = recv(c->fd, buf, n, 0);
+            if (r < 0 && errno == EINTR) continue;
+            return r;
+        }
+    }
     if (c->roff < c->rlen) {
         size_t avail = (size_t)(c->rlen - c->roff);
         size_t take = avail < n ? avail : n;
@@ -23068,7 +23091,12 @@ ssize_t px_conn_read(PxConn* c, void* buf, size_t n) {
         return (ssize_t)take;
     }
     c->rlen = 0; c->roff = 0;
-    int ret = mbedtls_ssl_read((mbedtls_ssl_context*)c->ssl, c->rbuf, (size_t)sizeof(c->rbuf));
+    int ret;
+    for (;;) {   // M211（缺陷 265 同族）：WANT_READ/WANT_WRITE 非错误 —— 必须重试
+        ret = mbedtls_ssl_read((mbedtls_ssl_context*)c->ssl, c->rbuf, (size_t)sizeof(c->rbuf));
+        if (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE) continue;
+        break;
+    }
     if (ret <= 0) return ret; // 0=EOF, <0=错误
     c->rlen = ret;
     size_t take = (size_t)ret < n ? (size_t)ret : n;
@@ -23085,6 +23113,8 @@ ssize_t px_conn_write(PxConn* c, const void* buf, size_t n) {
         size_t sent = 0;
         while (sent < n) {
             ssize_t k = send(c->fd, (const char*)buf + sent, n - sent, MSG_NOSIGNAL);
+            // M211（缺陷 265 同族）：EINTR（被 GC 暂停信号打断）不得当作写失败
+            if (k < 0 && errno == EINTR) continue;
             if (k <= 0) return sent > 0 ? (ssize_t)sent : -1;
             sent += (size_t)k;
         }

@@ -1,0 +1,67 @@
+# ============================================================
+# M211 门 · 动态探针：**GC 压力下裸 TCP 客户端必须拿到完整响应**
+# ------------------------------------------------------------
+# 病灶（缺陷 265 的根因 · 编号 284）：`px_conn_read` 明文分支 `return recv(...)`
+#   **不重试 EINTR**。并发 GC 的 STW 会给各线程发 SIG_GC_STOP 打断阻塞中的 recv
+#   ⇒ 返回 -1/EINTR ⇒ 调用方 `px_conn_worker` 判 `n <= 0` = 「客户端关闭 / 空闲超时」
+#   ⇒ **未进 handler 即关连接** ⇒ 客户端只看到 FIN（total = 0）。
+#
+# 触发条件：`PX_GC_STRESS=1 PX_GC_INLINE=1`（**两个开关同开** —— 与缺陷 192 同族）：
+#   每次分配即 inline full GC ⇒ 信号高频 ⇒ 必现；默认档 GC 延迟到安全点 ⇒ 不发作
+#   （这正是它自 M207 起长期只在压力筛里显形的原因）。
+#
+# ⚠️ stdout 必须**确定性**（门对两档逐字节对拍）⇒ handler 内**不打印**任何东西；
+#   诊断细节只由门层在 FAIL 行里给出。
+# ============================================================
+PORT = 18310
+D = "/tmp/px_m211_gate_doc"
+mkdir(D)
+
+var body = ""
+var i = 0
+while i < 80:
+    body += "普贤文本响应载荷0123456789abcdef"
+    i += 1
+write_file(D + "/index.html", "<html><body>" + body + "</body></html>")
+
+def handler(req):
+    return {"status": 200, "body": body, "headers": {"Content-Type": "text/plain; charset=utf-8"}}
+
+vhost("h.test", handler)
+
+def serve():
+    px_serve(PORT, D, 30000)
+
+spawn serve()
+sleep(700)
+
+REQ = "GET /index.html HTTP/1.1\r\nHost: h.test\r\nConnection: close\r\n\r\n"
+
+def raw(tag):
+    let c = tcp_connect_ex("127.0.0.1", PORT)
+    let fd = c["fd"]
+    if fd < 0:
+        print(tag + "=-1")
+        return
+    tcp_send_ex(fd, REQ)
+    var total = 0
+    var it = 0
+    while it < 60:
+        let r = tcp_recv_ex(fd, 65536)
+        if r["n"] > 0:
+            total += r["n"]
+        if r["eof"] or not r["ok"]:
+            it = 1000
+        it += 1
+    print(tag + "=" + str(total))
+    tcp_close(fd)
+
+raw("R1")
+raw("R2")
+raw("R3")
+raw("R4")
+raw("R5")
+raw("R6")
+raw("R7")
+raw("R8")
+print("M211-PROBE-DONE")
