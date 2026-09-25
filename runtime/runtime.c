@@ -23531,8 +23531,17 @@ static LXValue bi_session_del(LXValue* args, int nargs, void* ctx) {
     if (nargs != 1 || args[0].type != PX_STR) px_error("R1002: session_del 需要 (key) 参数");
     LXValue data = px_cur_session_data();
     if (data.type != PX_DICT) return px_bool(false);
+    // M213（缺陷 293）：与 `bi_session_set` **对称化**。修前本函数全程无登记，
+    //   仅靠 M183「根栈延迟收缩」的副作用兜住（`sess` 由 `px_session_read` 的 TLS
+    //   条目持有、条目要到**下一次 KEEP** 才物理回收）⇒ **隐性耦合**：
+    //   一旦别处改动收缩时机，`px_dict()`/`px_session_write` 这两处触发点即可回收
+    //   `sess`（而 `px_session_write` 内部就是 `px_call(json_stringify, &sess)`）。
+    //   本条在 `px_root_push()` 之后**无提前 return** ⇒ push/pop 平衡。
+    px_root_push();
     LXValue sess = px_session_read(g_cur_sid);
+    PX_KEEP(sess);
     LXValue nd = px_dict();
+    PX_KEEP(nd);
     LXObject* o = data.as.obj;
     for (int i = 0; i < o->as.dict.len; i++) {
         if (strcmp(o->as.dict.keys[i], args[0].as.obj->as.str.data) != 0)
@@ -23540,6 +23549,7 @@ static LXValue bi_session_del(LXValue* args, int nargs, void* ctx) {
     }
     px_dict_set(sess, "data", nd);
     px_session_write(g_cur_sid, &sess);
+    px_root_pop();
     return px_bool(true);
 }
 

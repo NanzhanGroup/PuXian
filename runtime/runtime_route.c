@@ -379,7 +379,14 @@ int px_route_try_dispatch(PxHttpOut* out, LXValue req, const char* method, int h
     const char* route_pattern = NULL;
     if (!route_match(method, path_v.as.obj->as.str.data, &handler, &params,
                      &rate_max, &rate_window, &route_pattern)) return 0;
-
+    // M213（缺陷 298）：`params` 的登记**紧跟 `route_match`**（窗口前移）。
+    //   修前登记点在限流块**之后** ⇒ 中间隔着 429 短路分支里的 `route_send` /
+    //   `px_access_log`（**都会分配 ⇒ 触发 GC**），而 `params` 此刻只由 C 局部持有。
+    //   当前无实际风险（该分支随即 `return 1`、不再读 `params`），但那是**脆弱性质**
+    //   ⇒ 属 M182 缺陷 192「登记窗口」同族，按同口径收口。
+    //   ⚠️ `handler` **无需登记**：`route_match` 里 `*handler_out = g_routes[i].handler`
+    //     ⇒ 经**全局 `g_routes`** 可达 ⇒ 本就是 GC 根。
+    px_root_push_keep(params);
     // M33.1：per-route 限流——匹配路由后按 "路由|IP" 计数（各路由独立桶），超限 429
     if (rate_max > 0 && rate_window > 0) {
         char ipbuf[64];
@@ -402,6 +409,7 @@ int px_route_try_dispatch(PxHttpOut* out, LXValue req, const char* method, int h
             px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
                     (long long)time(NULL), ipbuf, method,
                     path_v.as.obj->as.str.data, 429, 21, req_id);
+            px_root_pop();   // M213（缺陷 298）：与入口前移的登记配对
             return 1;
         }
     }
@@ -412,7 +420,7 @@ int px_route_try_dispatch(PxHttpOut* out, LXValue req, const char* method, int h
     LXValue mws[MAX_MIDDLEWARES];
     if (mw_count > 0) memcpy(mws, g_middlewares, sizeof(LXValue) * (size_t)mw_count);
     pthread_mutex_unlock(&g_route_mu);
-    px_root_push_keep(params);   // M92-S2c precise：route_match 传出 params（跨中间件/handler px_call）
+    // （M92-S2c 的 `px_root_push_keep(params)` 已由 M213 缺陷 298 **前移**到 route_match 之后）
     // M100：middleware 链协程化 —— 链非空且每段 middleware 与 handler 均为 VM 函数
     //   （fn==px_vm_entry，可帧协程让出）且 async_ok → 链状态机 defer
     //   （px_pxserve_mw_defer：登记 kind=2 + 链快照入 GC 根 + spawn 首段；done 回调逐段

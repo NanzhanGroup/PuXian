@@ -85,9 +85,11 @@ MIN_FUNCS=1500
 MIN_KEEPS=200
 BASE="$HERE/BASELINE.tsv"
 
-step "① 静态：扫描器自证（8 锚点）"
+step "① 静态：扫描器自证（19 锚点）"
 if python3 selfhost/gcroot_audit.py --self-test > "$W/selftest.log" 2>&1; then
-    grep -q 'self-test: 16 通过 / 0 失败' "$W/selftest.log" && ok "自证 16/16（8 必中 + 8 必不中；M209 增 hit6b/hit7/hit8 与 miss5–miss8，miss3 改判回「不中」）" \
+    # ⚠️ M213（第 92 轮）：锚点数 **16 → 19**（新增 hit9/hit10/miss9 —— 出口参数式
+    #   构造器（缺陷 294-a）与「成员取址别名不是消费」（缺陷 294-b）的正/反向判据）。
+    grep -q 'self-test: 19 通过 / 0 失败' "$W/selftest.log" && ok "自证 19/19（10 必中 + 9 必不中；M213 增 hit9/hit10/miss9）" \
         || { bad "自证结论行不符"; tail -8 "$W/selftest.log" | sed 's/^/      /'; }
 else
     bad "自证脚本失败"; tail -6 "$W/selftest.log" | sed 's/^/      /'

@@ -11,24 +11,41 @@
 #
 # ── §① 当前在册候选（必须与扫描结果**逐条**一致） ──────────────────────────────
 #
-# ⚠️ M212（第 91 轮 · 缺陷 288）**本表从 0 条 → 3 条**：审计器的「触发点」集合
-#   **改为源码派生**（`selfhost/gcroot_derive.py`；手抄 27 个 → 派生 **518** 个）
-#   ⇒ 此前被手抄集合**漏掉**的分配入口（`px_call` 族 / `px_session_read` /
-#     `h3_send_fields` / `bi_*` 整族 …）现在都会触发判定 ⇒ 照出 3 条候选。
-#   3 条**全部经判定为假阳**（逐条理由见下），其中 1 条**直接照出一处真漏登记**
-#   （缺陷 291 = `h3_send_fields` 的 `body_val`，已修）—— 这正是「漏报比假阳危险」的
-#   实证：手抄集合下它是**不可见**的。
+# ⚠️ M212（第 91 轮 · 缺陷 288 · 历史）**本表曾从 0 条 → 3 条**：触发点集合改为
+#   **源码派生**（`selfhost/gcroot_derive.py`；手抄 27 → 派生 524）⇒ 此前被手抄集合
+#   **漏掉**的分配入口（`px_call` 族 / `px_session_read` / `h3_send_fields` / `bi_*` 整族 …）
+#   现在都会触发判定。3 条**全部判定为假阳**，其中 1 条**直接照出一处真漏登记**
+#   （缺陷 291 = `h3_send_fields` 的 `body_val`，已修）—— 「漏报比假阳危险」的实证。
+#
+# ⚠️ M213（第 92 轮 · 缺陷 293–298）**本表 3 条 → 4 条**，且**两条旧条目被消掉**：
+#   · **消掉** `bi_session_del ← px_session_write( · nd`：缺陷 293 已把该函数与
+#     `bi_session_set` **对称化**（入口 `px_root_push()` + 逐个 `PX_KEEP` + 出口
+#     `px_root_pop()`）⇒ 不再是候选（此前靠 M183「根栈延迟收缩」的副作用兜住 = 隐性耦合）。
+#   · **消掉** `h3_out_send ← h3_send_fields( · bv` 与 `h3_srv_{pipe,stateless}_cb ←
+#     h3_fields_to_request( · fields`：M213 缺陷 297 新增 **F1「被调方登记了实参」**判据
+#     （按**位置**把实参配对到形参，要求被调方**入口**即 `PX_KEEP(形参)` **且先于其第一个
+#     触发点**）⇒ 这三条由判据覆盖，不再需要人工判定（M212 §10.6 缺口① 已收口）。
+#   · **新增** `px_route_try_dispatch ← px_rate_limit_try( · handler`：缺陷 298 把 `params`
+#     的登记**前移**（紧跟 `route_match`）后，同一候选点的受害面从 `handler, params`
+#     收窄到只剩 `handler`（见下判定）。
 #
 # 列（在册区 · 非注释行）：file<TAB>func<TAB>trigger<TAB>victim<TAB>判定<TAB>理由
-runtime/runtime.c	bi_session_del	px_session_write(	nd	假阳	M212 动态取证：`probe_rt.px` 补 session_del 覆盖后，压力档（STRESS+INLINE+LIVECHK+UAFDET）**8 轮 × 40 请求全绿**（bad=0 · 无检测器标记）。机制：`nd` 经 `sess` 可达，而 `sess` 由 `px_session_read` 的 TLS 登记条目持有（M183 **延迟收缩**：条目到**下一次 KEEP** 才物理回收，而 `bi_session_del` 全程无 KEEP）⇒ 不会被回收。⚠️ 这是**隐性耦合**（靠延迟收缩的副作用兜住），与 `bi_session_set` 显式 `PX_KEEP(sess/data)` 不对称 ⇒ 下一轮宜做「被调方实参登记」判据或对称化
-runtime/runtime_h3.c	h3_out_send	h3_send_fields(	bv	假阳	报告点是**调用点**，真漏洞点在**被调方内部**：M212 缺陷 291 已修 —— `h3_send_fields` 入口 `PX_KEEP(body_val)`（与 M170 的 `PX_KEEP(fields)` 同帧、同一分配窗口）⇒ 实参在**任何分配之前**即被登记 ⇒ 调用点的 `bv` 安全。⚠️ 本行同时登记一个**跨函数判据缺口**：审计器看不见「被调方登记了实参」⇒ 列为下一轮候选
+runtime/runtime.c	bi_http_unix	px_net_err(	headers	假阳	**提前 return**：`px_net_err(` 位于 `h_exchange(...) != 0` 的**错误分支末**，该分支置 `errno`→`xfree`→`close`→**立即 `return`** ⇒ 触发点之后**不再读** `headers`（`px_net_err` 内部 `px_str(buf)` 是唯一分配，它回收的 `headers` 此时已死）⇒ 无悬垂读
+runtime/runtime.c	px_http_dispatch	px_pxserve_defer(	vhandler	假阳	**全局表持有**：`vhandler` 由 `px_vhost_resolve(..., &vhandler, ...)` 输出，而handler 存在**文件级全局** `g_vhosts[]`（`PxVhost.handler`，源码注释明写「px_set_global 保护防 GC 回收」）⇒ 对象**本就是 GC 根**，登记与否无关
+runtime/runtime_route.c	px_route_try_dispatch	px_rate_limit_try(	handler	假阳	① **触发点是过近似**（`trigger_kind=conservative`：`px_rate_limit_try` 体内只有裸 `xmalloc`/`snprintf`，**无任何 `gc_register` 级调用** —— 因 `while (*pp)`/`sizeof(*b)` 被宽松档收为间接调用，见缺陷 295）；② 即便按精确档换到真触发点（`route_send`/`px_pxserve_defer`），`handler` 仍**恒安全** —— 它来自**全局** `g_routes[i].handler` ⇒ 本就是 GC 根。⚠️ 同处的 `params` 已由**缺陷 298**（登记前移 + 429 分支补 `px_root_pop()`）从受害面移除
 runtime/runtime_xml.c	xml_build_node	bi_xml_escape(	sv	假阳	`bi_xml_escape` 体内**唯一**分配点是 `:333 px_str(out.data)`，它晚于 `:319-320` 对 `args[0]` 的读取与 `:322-332` 对 `s` 的**全部消费**（循环里 `xbuf_push` 走裸 `realloc`，不 `gc_register`）⇒ 到达触发点时 `sv` 已死（**后置存活**判据）
 #
 # ── §② 档案区：M206 的 8 条人工判定 → M209 已下沉为**判据**（仅存档，扫描器不再报） ──
 #  为什么留档：① 它们是「判据成形」的史料（哪条形状曾被人工判过）；② 后人若怀疑
 #  M209 的排除规则在放水，可拿这 8 条去 `examples/m209_gcroot_rules/` 对拍。
 #  排除规则的**反向判据**（改判之后工具仍然命中）在 `--self-test` 的 hit6b/hit7/hit8。
-# ARCHIVE	runtime/runtime.c	px_gen_materialize	px_call(	keep	排除规则=作用域	受害者 keep 声明在 `if (filter.type == PX_FUNC) {` 块内，该块在触发点（下一轮迭代的 px_call）之前闭合 ⇒ 出作用域 ⇒ 读不到
+# ── M213（第 92 轮 · 缺陷 293/297）消掉的两条（仅存档） ──
+# ARCHIVE	runtime/runtime.c	bi_session_del	px_session_write(	nd	**已修**（缺陷 293）：`bi_session_del` 与 `bi_session_set` **对称化** —— 入口 `px_root_push()`、`sess`/`nd` 创建后立即 `PX_KEEP`、出口 `px_root_pop()`。此前**全程无登记**，仅靠 M183 根栈**延迟收缩**的副作用（条目要到下一次 KEEP 才物理回收）兜住 ⇒ 隐性耦合，一旦别处改动收缩时机即变悬垂读
+# ARCHIVE	runtime/runtime_h3.c	h3_out_send	h3_send_fields(	bv	**判据化**（缺陷 297 · F1）：被调方 `h3_send_fields` **入口**即 `PX_KEEP(body_val)`（且先于其第一个触发点）⇒ 按位置配对后豁免
+# ARCHIVE	runtime/runtime_h3.c	h3_srv_pipe_cb	h3_fields_to_request(	fields	**判据化**（缺陷 297 · F1）：同族（`h3_fields_to_request` 入口 `px_root_push_keep(fields)`）
+# ARCHIVE	runtime/runtime_h3.c	h3_srv_stateless_cb	h3_fields_to_request(	fields	**判据化**（缺陷 297 · F1）：同族
+# ARCHIVE	runtime/runtime_route.c	px_route_try_dispatch	px_rate_limit_try(	params	**已修**（缺陷 298）：`params` 登记**前移**到 `route_match` 之后（原登记点在限流块之后，中间隔着 429 短路分支里的 `route_send`/`px_access_log`（都会分配）⇒ 靠「该分支不再读 params」这一脆弱性质兜住）
+# ARCHIVE	受害者 keep 声明在 `if (filter.type == PX_FUNC) {` 块内，该块在触发点（下一轮迭代的 px_call）之前闭合 ⇒ 出作用域 ⇒ 读不到
 # ARCHIVE	runtime/runtime.c	px_gen_next	px_call(	keep	排除规则=作用域	同族（分支末尾 return，声明块闭合）
 # ARCHIVE	runtime/runtime.c	bi_http_get_stream	px_str_len(	rv	排除规则=作用域（宏体）	`rv` 声明在 `#define STREAM_FLUSH()` 的 `do{…if(…){…}…}` 内；宏体的块在 `} while (0)` 出栈 ⇒ 其后函数各分支的触发点看不到它。⚠️ 判据必须按**块身份**而非括号深度（宏体在源码里浅、调用点深）
 # ARCHIVE	runtime/runtime.c	bi_http_get_stream	px_str_len(	rv	排除规则=作用域（宏体）	同族（chunked 分支）

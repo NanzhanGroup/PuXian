@@ -51,10 +51,12 @@ open(p, 'w', encoding='utf-8').write(s.replace(old, new))
 PY
 }
 
-step "① 派生器自证（gcroot_derive.py · 10 锚点）"
+# ⚠️ M213（第 92 轮）：锚点数 **10 → 19**（新增：显式 GC 入口族 ⑪/⑭、间接调用分层
+#   双向 ⑫/⑮、F1 正/反 ⑯/⑰、真实树 F1 ⑱/⑲）。判据变了⇒本门必须跟着改。
+step "① 派生器自证（gcroot_derive.py · 19 锚点）"
 if python3 selfhost/gcroot_derive.py --self-test > "$W/derive.log" 2>&1; then
-    grep -q 'self-test: 10 通过 / 0 失败' "$W/derive.log" \
-        && ok "派生器自证 10/10（含「间接调用（函数指针）⇒ 触发点」这条真实形态锚点）" \
+    grep -q 'self-test: 19 通过 / 0 失败' "$W/derive.log" \
+        && ok "派生器自证 19/19（含间接调用**分层**双向、显式 GC 族、F1 正/反）" \
         || { bad "自证结论行不符"; tail -14 "$W/derive.log" | sed 's/^/      /'; }
 else
     bad "派生器自证失败"; tail -14 "$W/derive.log" | sed 's/^/      /'
@@ -87,19 +89,20 @@ else
     bad "派生集合性质不符"; sed -n '2,8p' "$W/props.log" | sed 's/^/      /'
 fi
 
-step "③ A/B：手抄集合（legacy）候选 0 ⇄ 派生集合候选 3"
+step "③ A/B：手抄集合（legacy）候选 0 ⇄ 派生集合候选 4"
 python3 selfhost/gcroot_audit.py --trigger-set legacy --json > "$W/leg.json" 2> "$W/leg.err" || bad "legacy 扫描失败"
 python3 selfhost/gcroot_audit.py --json > "$W/der.json" 2> "$W/der.err" || bad "派生扫描失败"
 LEGN=$(python3 -c "import json;print(len(json.load(open('$W/leg.json'))['findings']))" 2>/dev/null)
 DERN=$(python3 -c "import json;print(len(json.load(open('$W/der.json'))['findings']))" 2>/dev/null)
 [ "${LEGN:-x}" = 0 ] && ok "手抄集合候选 0（= M209 报出的「全仓候选 0」—— 现在知道那是**漏报**）" \
                      || bad "legacy 候选 ${LEGN:-?}（期望 0，手抄集合行为应保持原样）"
-[ "${DERN:-x}" = 3 ] && ok "派生集合候选 3（手抄漏掉的 300+ 入口现在会触发判定）" \
-                     || bad "derived 候选 ${DERN:-?}（期望 3）"
+# ⚠️ M213：3 → 4（缺陷 293 消 1 / 缺陷 297 F1 消 3 / 缺陷 298 新增 1 ⇒ 4）。
+[ "${DERN:-x}" = 4 ] && ok "派生集合候选 4（手抄漏掉的 300+ 入口现在会触发判定）" \
+                     || bad "derived 候选 ${DERN:-?}（期望 4）"
 grep -q '源码派生' "$W/der.err" && ok "stderr 打印「源码派生」诊断行（缺它=悄悄退回手抄集合）" \
                                  || bad "未打印派生诊断行"
 
-step "④ 3 条候选 ⇄ m206 BASELINE §① 逐条一致（判据不放水）"
+step "④ 4 条候选 ⇄ m206 BASELINE §① 逐条一致（判据不放水）"
 python3 - "$W/der.json" examples/m206_gcroot/BASELINE.tsv <<'PY' > "$W/align.log" 2>&1
 import json, sys
 from collections import Counter
@@ -171,13 +174,14 @@ else
 fi
 
 step "⑥ 覆盖边界（如实登记）"
-echo '  ℹ️ 本门覆盖：**静态**（触发点/生产者派生 + 3 条候选的判定对齐）'
+echo '  ℹ️ 本门覆盖：**静态**（触发点/生产者派生 + 4 条候选的判定对齐）'
 echo '  ℹ️ 动态取证已做：session_del（probe_rt.px 8 轮 × 40 请求压力档全绿）'
 echo '  ℹ️ **未**动态覆盖：H3 族（h3_send_fields 的 body_val 修复只能靠静态判据 + 源码顺序；'
 echo '     单机缺 QUIC listener 夹具）'
-echo '  ℹ️ 已知判据缺口（下一轮候选）：① **跨函数**的「被调方登记了实参」看不见 ⇒'
-echo '     h3_out_send ← h3_send_fields( 只能在调用点报（已在 BASELINE 注明）；'
-echo '     ② 「后置存活」（受害者读点在触发点之后）尚未判据化 ⇒ xml_build_node 需人工判定。'
+echo '  ℹ️ 判据缺口（M212 登记 → **M213 收口**）：① **跨函数**的「被调方登记了实参」'
+echo '     ⇒ M213 缺陷 297 已判据化（**F1**，按位置配对 + 要求登记先于被调方第一个触发点）'
+echo '     ⇒ h3_out_send / h3_srv_* 三条已从 BASELINE 移出（见 examples/m213_gcroot_precision/）；'
+echo '     ② 「后置存活」（受害者读点在触发点之后）**仍未**判据化 ⇒ xml_build_node 需人工判定。'
 
 echo
 echo "M212 门：通过 $PASS · 失败 $FAIL"

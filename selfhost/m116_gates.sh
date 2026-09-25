@@ -704,9 +704,16 @@ step "M211 · GC STW 信号打断 recv ⇒ 误判对端关闭（缺陷 265 收�
 run m211_conn_read_eintr bash examples/m211_conn_read_eintr/verify.sh
 step "M212 · 审计器触发点集合**源码派生**（缺陷 288/289/290/291）"
 #   手抄名单（27 个构造器）漏掉 300+ 个分配入口（`px_call` 族 / `px_session_read` /
-#   `h3_send_fields` / `bi_*` 整族）⇒ 「候选 0」是假的。本门：派生器自证 10 锚点 +
-#   集合性质 + A/B（legacy 0 ⇄ derived 3）+ 与 m206 BASELINE 逐条对齐 + 负控 3 道。
+#   `h3_send_fields` / `bi_*` 整族）⇒ 「候选 0」是假的。本门：派生器自证 19 锚点 +
+#   集合性质 + A/B（legacy 0 ⇄ derived 4）+ 与 m206 BASELINE 逐条对齐 + 负控 3 道。
 run m212_gcroot_derive bash examples/m212_gcroot_derive/verify.sh
+step "M213 · GC 根面审计器「判据诚实度 + 覆盖面」（缺陷 293–298）"
+#   两面：**覆盖面**（漏报）—— 出口参数式构造器 / 成员取址别名 / **显式 GC 入口族**
+#   （`px_gc_collect`·`px_gc_poll`·`bi_gc`，**不经过** `gc_register` ⇒ 派生集合看不见）；
+#   **诚实度** —— 间接调用判据实现成「括号后跟星号」的**语法形状**（99 假种子 / 闭包虚增
+#   169 函数 / 产出候选 #3）⇒ 分层（precise/conservative）+ 分诊 + 默认留**过近似**档。
+#   另含 F1「被调方登记了实参」判据（消 3 条候选）+ 缺陷 298 的 push/pop 平衡静态判据。
+run m213_gcroot_precision bash examples/m213_gcroot_precision/verify.sh
 step "M190 · 上游 registry-px 真实用例回归（112 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。
