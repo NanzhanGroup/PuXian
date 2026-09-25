@@ -47,6 +47,11 @@ run() {  # $1=名 $2..=命令
     fi
 }
 
+step "门路径卫生（不许写死开发机绝对路径 —— M213 缺陷 300）"
+#   2026-09-26 实锤：`m213_gcroot_precision` 的 ⑦ 层把 `/data/code/puxian/...` 写进 python
+#   ⇒ 本机全绿、**CI 红**（CI 仓库在 /home/runner/work/... 下）。⚠️ 「干净导出复现」抓不到
+#   这类缺陷：写死的路径在**本机依然存在**。⇒ 只能靠静态守卫 + CI。门自带 3 条自证。
+run check_gate_paths bash selfhost/check_gate_paths.sh
 step "全件源码链门"
 run check_all ./selfhost/rebake_bin.sh --check-all
 step "C 轨重烘门"

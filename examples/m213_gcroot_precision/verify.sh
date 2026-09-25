@@ -110,11 +110,13 @@ if grep -q '^PASS$' "$W/triage.log"; then ok "$(head -1 "$W/triage.log")（分�
 else bad "分诊不符"; sed -n '2,6p' "$W/triage.log" | sed 's/^/      /'; fi
 
 step "④ 覆盖面：显式 GC 族（缺陷 296）在 **loose 与 tight 两档都在** TRIGGER"
-python3 - "$W/loose.json" "$W/tight.json" <<'PY' > "$W/gcseed.log" 2>&1
+# ⚠️ M213s5（缺陷 300）：**不许写死开发机绝对路径** —— `$ROOT` 由脚本位置推导后传入
+#   （写死会让本机全绿、CI 红：CI 的仓库在 /home/runner/work/... 下）。
+python3 - "$W/loose.json" "$W/tight.json" "$ROOT" <<'PY' > "$W/gcseed.log" 2>&1
 import sys
-sys.path.insert(0, '/data/code/puxian/selfhost')
+ROOT = sys.argv[3]
+sys.path.insert(0, ROOT + '/selfhost')
 import gcroot_derive as d
-ROOT = '/data/code/puxian'
 lt = d.derive_sets(ROOT, 'loose')[0]
 tt = d.derive_sets(ROOT, 'tight')[0]
 errs = []
@@ -172,7 +174,7 @@ if grep -q '^PASS$' "$W/align.log"; then ok "$(head -1 "$W/align.log")"
 else bad "候选/基线不符"; sed -n '2,8p' "$W/align.log" | sed 's/^/      /'; fi
 
 step "⑦ push/pop 平衡（缺陷 298 登记前移后 · 静态）"
-python3 - <<'PY' > "$W/balance.log" 2>&1
+python3 - "$ROOT" <<'PY' > "$W/balance.log" 2>&1
 import importlib.util
 import re
 import sys
@@ -180,10 +182,11 @@ import sys
 # ⚠️ 必须用**仓库自己的函数扫描器**取函数体（按花括号深度切、且已剥注释/字面量）：
 #   首版手写「从签名后的第一个 { 数到深度归零」——**注释/字符串里的花括号**会破坏计数，
 #   实测把两个函数体连在一起（push 数成 2、return 数成 8）⇒ 判据自己先错。
-spec = importlib.util.spec_from_file_location('d', '/data/code/puxian/selfhost/gcroot_derive.py')
+_ROOT = sys.argv[1]
+spec = importlib.util.spec_from_file_location('d', _ROOT + '/selfhost/gcroot_derive.py')
 d = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(d)
-funcs = d._scan('/data/code/puxian')[0]
+funcs = d._scan(_ROOT)[0]
 body = funcs['px_route_try_dispatch'][3]
 errs = []
 push = len(re.findall(r'px_root_push_keep\(params\)', body))
@@ -232,15 +235,16 @@ else
     restore_all
     if patch_one "$DER" "(gc_register|px_gc_collect|px_gc_poll)" "(gc_register|zzz_none_a|zzz_none_b)" B \
        && patch_one "$DER" "_EXPLICIT_GC = ('px_gc_collect', 'px_gc_poll')" "_EXPLICIT_GC = ()" B2; then
-        N=$(python3 - "$DER" <<'PY'
+        N=$(python3 - "$DER" "$ROOT" <<'PY'
 import sys, importlib.util
 spec = importlib.util.spec_from_file_location('d', sys.argv[1])
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+_ROOT = sys.argv[2]
 # ⚠️ 必须看 **tight** 档：显式 GC 族在 loose 档**另有**宽松兜底那条路
 #    （`px_gc_collect` 体内有 `sizeof(*x)` 形状）—— 这正是缺陷 296 的叙事：
 #    「这一族**只**靠宽松兜底偶然覆盖 ⇒ 一旦收紧就整族漏报」。
 #    所以「堵掉显式入口 ⇒ 它们应掉出」只能在 tight 档观察。
-t = m.derive_sets('/data/code/puxian', 'tight')[0]
+t = m.derive_sets(_ROOT, 'tight')[0]
 print(len([n for n in ('px_gc_collect', 'px_gc_poll', 'bi_gc') if n in t]))
 PY
 )
