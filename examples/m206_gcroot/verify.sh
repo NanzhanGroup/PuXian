@@ -10,9 +10,14 @@
 #   VM 帧槽 + TLS 登记根栈，**不扫 C 栈**）。
 #
 # 层：
-#  ① 静态：`selfhost/gcroot_audit.py` 自证（4 锚点：2 必中 / 2 必不中）
+#  ① 静态：`selfhost/gcroot_audit.py` 自证（M209 起 **16 锚点**：8 必中 / 8 必不中，
+#     含 hit6b/hit7/hit8 三条**反向判据** —— 证明排除规则没把工具改瞎）
 #  ② 静态：全仓扫描**候选 ⇄ 已判定基线**（`BASELINE.tsv`）逐条对齐；
-#     基线里**不得**存在「真」判定（= 未修的真缺陷）；规模下限（函数 ≥ 1400、登记站点 ≥ 170）
+#     基线里**不得**存在「真」判定（= 未修的真缺陷）；规模下限（函数 ≥ 1500、登记站点 ≥ 200）
+#     ⚠️ M209（第 88 轮）：本表**已收敛为 0 条** —— M206 那 8 条「人工判定」已**下沉为判据**
+#        （触发点仅构造器 / 覆盖 / 作用域 / deref 交棒；见 `docs/GC_ROOTS.md` §9 与
+#        `examples/m209_gcroot_rules/`），故「候选 ⇄ 基线」现在是**两空集**对齐；
+#        本表自此是**安全网**（任何新增候选都必须进表）。
 #  ③ 动态·HTTP 面：probe_rt.px（20 次 urlencoded + 20 次 multipart POST，含 session 族）
 #     —— 基线档与**压力档**（PX_GC_STRESS=1 PX_GC_INLINE=1 PX_GC_LIVECHK=1）都必须 40/40 OK，
 #     且压力档**不得**出现 `PX_GC_LIVECHK`（修前：响亮 + SIGABRT/core）
@@ -82,7 +87,7 @@ BASE="$HERE/BASELINE.tsv"
 
 step "① 静态：扫描器自证（8 锚点）"
 if python3 selfhost/gcroot_audit.py --self-test > "$W/selftest.log" 2>&1; then
-    grep -q 'self-test: 10 通过 / 0 失败' "$W/selftest.log" && ok "自证 10/10（6 必中 + 4 必不中；M208 增 hit6/miss4 并改判 miss3）" \
+    grep -q 'self-test: 16 通过 / 0 失败' "$W/selftest.log" && ok "自证 16/16（8 必中 + 8 必不中；M209 增 hit6b/hit7/hit8 与 miss5–miss8，miss3 改判回「不中」）" \
         || { bad "自证结论行不符"; tail -8 "$W/selftest.log" | sed 's/^/      /'; }
 else
     bad "自证脚本失败"; tail -6 "$W/selftest.log" | sed 's/^/      /'

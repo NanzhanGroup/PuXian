@@ -35,7 +35,8 @@ _ALLOC_NAMES = [
     'px_call', 'px_method', 'px_vm_call',
 ]
 ALLOC_RX = re.compile(r'\b(' + '|'.join(_ALLOC_NAMES) + r')\s*\(')
-GROW_ON = False   # M208：隐式分配规则开关（--grow 置位）
+GROW_ON = False   # M208 遗留名（勿用）：M209 起改叫 LEGACY_GROW —— 见下
+LEGACY_GROW = False   # M209：仅用于**复现旧规则**（把 push/dict_set 当触发点 ⇒ 19 候选）。
 # ---- M208（缺陷 270）：**隐式分配**原语 ----
 #   `px_dict_set` / `px_list_push` 自身会分配（键副本 `m128_strdup`、条目数组 `xrealloc` 扩容）
 #   ⇒ 它们是**分配点**，必须计入「此后未登记活值可能被回收」。
@@ -77,6 +78,10 @@ RETURN_RX = re.compile(r'^\s*return\b\s*([A-Za-z_][A-Za-z0-9_\[\]\.\->]*)?')
 HOLD_RX = re.compile(
     r'\b(px_ok|px_err|px_some|px_tuple|px_dict_set|px_list_push|'
     r'px_struct|px_enum|px_cell|px_chan_send|px_global_set|px_set_global)\s*\(')
+# 声明语句（M209 · 作用域排除要用**声明块的身份**，不是深度）：
+#   `LXValue v;` / `LXValue v = …;` / `const LXValue v = …;` / `LXValue a[3];`
+DECL_RX = re.compile(r'^\s*(?:const\s+)?(LXValue|LXObject|PxVMFunc)\s*\*?\s*'
+                     r'([A-Za-z_][A-Za-z0-9_]*)')
 # lvalue 尾巴：`LXValue l` → `l`；`a[0]` → `a[0]`；`s->v` → `s->v`
 LVALUE_TAIL_RX = re.compile(
     r'([A-Za-z_][A-Za-z0-9_]*(?:\s*(?:\[[^\]]*\]|\.\s*[A-Za-z_]\w*|->\s*[A-Za-z_]\w*))*)\s*$')
@@ -255,15 +260,46 @@ def call_tail_is_empty(rhs: str, alloc_match) -> bool:
     return txt[end + 1:].strip() == ''
 
 
+def brace_depth_map(code: str):
+    """⚠️ M209：已被 `audit_text` 内的**逐语句**深度计数取代（行级计数无法识别
+    「声明与闭合brace同一行」的块，实测漏掉 miss7 那族）。保留仅为留证/对照，勿用。"""
+    before, after, d = [], [], 0
+    for ln in code.split('\n'):
+        before.append(d)
+        d += ln.count('{') - ln.count('}')
+        after.append(d)
+    return before, after
+
+
 def audit_text(code: str, relpath: str):
     findings = []
     stats = {'funcs': 0, 'allocs': 0, 'keeps': 0}
     for fname, fline, body in split_functions(code):
         stats['funcs'] += 1
-        live = {}  # lvalue -> 创建行号
+        live = {}        # lvalue -> (创建行号, **声明块 id**)
+        decl_block = {}  # 基名 -> 声明块 id（`LXValue x` 语句所在块）
+        stack = [0]      # 打开的块栈（id；0 = 函数体根）
+        nxt = 1
         for rel, stmt in split_statements(body):
             abs_line = fline + rel
             text = stmt.strip()
+            # M209（缺陷 281）· **作用域排除**：块栈按**身份**推进（每语句至多一个 `{`/`}`，
+            #   见 `split_statements` 的实现 —— 它总在分隔符处切）。
+            #   ⚠️ 为什么必须是「块身份」而不是「括号深度」：宏体（`#define STREAM_FLUSH()`
+            #   的 `do { … } while (0)`）在**源码里**位于较浅的深度，而其**调用点**在更深的
+            #   分支里 ⇒ 「深度变小」永远不成立，宏体局部（`rv`）会被误当成活值（实测）。
+            #   块身份则精确：宏体的块在 `} while (0)` 处出栈 ⇒ 其局部随之出局。
+            if text:
+                last = text[-1]
+                if last == '{':
+                    stack.append(nxt); nxt += 1
+                elif last == '}' and len(stack) > 1:
+                    stack.pop()
+            dm = DECL_RX.match(text)
+            if dm:
+                decl_block[dm.group(2)] = stack[-1]
+            # 剪枝放在**任何 continue 之前**（否则会被跳过）
+            live = {k: v for k, v in live.items() if v[1] in stack}
             if not text:
                 continue
             # ① 登记（先处理：登记紧跟创建）
@@ -276,22 +312,44 @@ def audit_text(code: str, relpath: str):
             if rm and rm.group(1):
                 live.pop(rm.group(1).rstrip(';'), None)
             # ③ 分配（按文本顺序：每一次分配都可能回收此前所有未登记活值）
-            #    M208（缺陷 270）：隐式分配（px_dict_set/px_list_push 的键副本与扩容）一并计入，
-            #    且**不适用**「持有实参」豁免 —— 容器本身不因此成为 GC 根。
-            #    ⚠️ 该规则 **默认关闭**（`--grow` 开启）：它会一次性照出 18 处既有站点
-            #    （缺陷 271 族，见 docs/GC_ROOTS.md §8），需按轮次收口；
-            #    默认关闭可让 m206 门保持其原有契约（不因新增判据而假红）。
-            if GROW_ON:
+            #    ⚠️ M209 更正（缺陷 279）：**`px_dict_set` / `px_list_push` 不是触发点。**
+            #      M208（缺陷 270）把它们当「隐式分配」计入，依据是「键副本 `m128_strdup` /
+            #      条目数组 `m128_alloc` 会分配内存」——**分配内存 ≠ 触发 GC**：
+            #      full GC 的**唯一**触发点是 `gc_register`（runtime.c:3048 `g_alloc_bytes += est;`
+            #      → :3051 判阈值 → `px_gc_collect()` 或 `g_gc_pending = 1`，并在 :3049 置
+            #      `g_tmp_root = o` 保护刚建对象）。这两个函数只走 slab/mmap 裸分配
+            #      （`m128_alloc` / `m128_strdup` → `xmalloc`/`xrealloc`）⇒ **不会触发 GC**。
+            #      它们内部确有安全点（`gc_unblock_stop` → `gc_pause_if_requested`，
+            #      仅当**另一个线程的 GC 已在跑**时才暂停本线程），但那一刻被保护的面 = 本线程
+            #      `ti→tmp_root`（快照自 `g_tmp_root` = **本线程最近登记的对象**，runtime.c:1973/2635）;
+            #      而本审计器报告的每个候选，受害者**恰是「创建后的第一个触发点」**上的对象
+            #      ⇒ 若该触发点是 push/dict_set，受害者就是最近登记对象 ⇒ 被 tmp_root 护住 ⇒ 安全。
+            #      ⇒ 真判据：**触发点 = 构造器**（会 `gc_register` 的入口 = `_ALLOC_NAMES`）。
+            #      `--grow` 保留为**旧规则对照**（复现 M208 的 19 候选，见 docs/GC_ROOTS.md §9）。
+            if LEGACY_GROW:
                 for g in GROW_RX.finditer(text):
                     stats['allocs'] += 1
                     if live:
                         findings.append({
                             'file': relpath, 'line': abs_line, 'func': fname,
-                            'trigger': g.group(0) + ' [隐式分配]',
-                            'victims': [{'name': k, 'line': v}
-                                        for k, v in sorted(live.items(), key=lambda kv: kv[1])],
+                            'trigger': g.group(0) + ' [隐式分配·旧规则]',
+                            'victims': [{'name': k, 'line': v[0]}
+                                        for k, v in sorted(live.items(), key=lambda kv: kv[1][0])],
                         })
                         live = {}
+            # M209（缺陷 280）：触发点语句**正在写同名直接局部** ⇒ 该名字的旧值此刻被覆盖
+            #   （旧值随即死亡）⇒ 不计为受害者。判据要求「同名且**未**在右值里出现」
+            #   —— 右值若读了旧值（`v = f(v)`），旧值在求值期间仍活，不能排除。
+            #   实测形态（0.2.0-m208s1 全仓 8 条已判定基线里的 2 条）：
+            #     `runtime_h3_qpack.c:350 name = px_str_len(...)`（兄弟支在 :342 赋过 name）
+            #     `runtime_sqlite.c:209 v = px_bytes_len(...)`（兄弟 case 在 :203 赋过 v）
+            _lhs_o, _rhs_o = find_assign(text)
+            overwrite = None
+            if _lhs_o is not None and _rhs_o is not None:
+                _lhs_s = _lhs_o.strip()
+                if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', _lhs_s) and not re.search(
+                        r'\b' + re.escape(_lhs_s) + r'\b', _rhs_o):
+                    overwrite = _lhs_s
             for m in ALLOC_RX.finditer(text):
                 stats['allocs'] += 1
                 if live:
@@ -314,20 +372,45 @@ def audit_text(code: str, relpath: str):
                     if held:
                         live = {k: v for k, v in live.items() if k in held}
                         continue
-                    findings.append({
-                        'file': relpath, 'line': abs_line, 'func': fname,
-                        'trigger': m.group(0),
-                        'victims': [{'name': k, 'line': v}
-                                    for k, v in sorted(live.items(), key=lambda kv: kv[1])],
-                    })
+                    # M209（缺陷 280/281）：把 M206 的**人工判定**下沉为**判据**。
+                    #   ① 覆盖排除（overwrite）：见上一步。
+                    #   ② 作用域排除（out_of_scope）：受害者的**声明块**在触发点之前已闭合 ⇒
+                    #      它根本不可能在触发点被读到 ⇒ 不计。这一条同时正确地处理两族：
+                    #      · 名字在**兄弟块**里被复用（`name`/`v`）；· **宏体**里的局部 vs
+                    #        宏的**调用点**（`STREAM_FLUSH` 的 `rv` 声明在宏体的 if 块里，
+                    #        触发点在函数后段的另一处 `px_str_len`）。
+                    #      M206 的 BASELINE.tsv 里有 5 条正是这两族（人工理由写着「死值」
+                    #      「互斥分支」「触发点是下一轮迭代」）。
+                    #   实测：加上这两条后，全仓候选 8 → 0（旧规则的 19 → 0）。
+                    vs = [{'name': k, 'line': v[0]}
+                          for k, v in sorted(live.items(), key=lambda kv: kv[1][0])
+                          if k != overwrite]
+                    if vs:
+                        findings.append({
+                            'file': relpath, 'line': abs_line, 'func': fname,
+                            'trigger': m.group(0),
+                            'victims': vs,
+                        })
                     live = {}
             # ④ 把本次分配的结果记进活集合
             lhs_raw, rhs = find_assign(text)
             if lhs_raw is not None and rhs is not None:
                 if ALLOC_RX.search(rhs) and call_tail_is_empty(rhs, None):
                     lm = LVALUE_TAIL_RX.search(lhs_raw)
-                    if lm and not ROOTED_LHS_RX.match(lm.group(1).strip()):
-                        live[lm.group(1).strip()] = abs_line
+                    # M209（缺陷 282）：**写通过指针**（`*outv = px_str_len(...)`）是**交棒出帧**
+                    #   —— 值交给调用方保管（与 `return` 同口径）。实例：
+                    #   `runtime_h3_qpack.c:262 qp_dec_value_string` 的 `*outv = px_str_len(...)`，
+                    #   调用方 `px_h3_qdec` 在返回后**紧跟** `PX_KEEP(val)`（:359）。
+                    #   不排除它会把「outv」当成 C 局部受害者，进而在**兄弟支**的 :272 报假阳
+                    #   （M206 基线里那条「两支互斥且第一支 return」）。
+                    if lm and not ROOTED_LHS_RX.match(lm.group(1).strip()) \
+                            and not lhs_raw.strip().startswith('*'):
+                        key = lm.group(1).strip()
+                        base = re.split(r'[\[.\-]', key)[0]
+                        # 作用域 = **声明**所在块（不是赋值语句所在块）—— 赋给外层已声明
+                        #   变量（`v = px_str_len(…)` 在 switch 的 case 块里，而 `LXValue v;`
+                        #   在外层）时，用赋值处的块会误剪 ⇒ **漏报**（违反审计器的本分）。
+                        live[key] = (abs_line, decl_block.get(base, stack[-1]))
                 elif not ALLOC_RX.search(rhs):
                     # 覆盖（RHS 本身不是分配）⇒ 旧值失效
                     lm = LVALUE_TAIL_RX.search(lhs_raw)
@@ -440,9 +523,12 @@ static int demo_multiline_ok(HPool* pool, int n,
 }
 '''
 
-# M208（缺陷 270）新增锚点：**`px_list_push` / `px_dict_set` 是隐式分配点** ⇒
-#   `LXValue lst = px_list(4); px_list_push(lst, nv);` 里的 **lst** 未登记 ⇒ 命中
-#   （上一条 FIX_MISS3 因此从「不中」改判「命中」—— 它原本只盯着 nv，漏了 lst）。
+# M208（缺陷 270）曾新增锚点 hit6：**`px_list_push` 是隐式分配点** ⇒
+#   `LXValue lst = px_list(4); px_list_push(lst, nv);` 里的 **lst** 未登记 ⇒ 命中。
+# ⚠️ M209（缺陷 279）**改判**：该前提被证伪（push/dict_set 无 `gc_register` ⇒ 不触发 GC；
+#   且那一刻 `g_tmp_root` 仍指向 lst ⇒ 被护住）。⇒ 同一份 fixture 现在**必须不中**
+#   （锚点名从 hit6 变 **miss5**，见下），同时用 hit6b 证明「插一次真构造器仍然命中」——
+#   这样「改判」就没有把工具改瞎。
 FIX_HIT6 = '''
 static int demo_grow_victim(HPool* pool, int n, char* out) {
     LXValue nv = px_str(out);
@@ -450,6 +536,65 @@ static int demo_grow_victim(HPool* pool, int n, char* out) {
     LXValue lst = px_list(4);
     px_list_push(lst, nv);
     px_root_pop();
+    return 0;
+}
+'''
+
+# ==================== M209 新增锚点（缺陷 279/280/281/282） ====================
+# hit6b（规则 1 的**反向**判据）：同形状，但在 push 之后**插一次真构造器** ⇒
+#   `g_tmp_root` 移开、lst 未登记 ⇒ 必**中**。若这条不中，说明规则 1 把工具改瞎了。
+FIX_HIT6B = '''
+static int demo_grow_then_ctor(HPool* pool, int n, char* out) {
+    LXValue nv = px_str(out);
+    px_root_push_keep(nv);
+    LXValue lst = px_list(4);
+    px_list_push(lst, nv);
+    LXValue m = px_str("y");
+    px_root_pop();
+    return 0;
+}
+'''
+# hit7（规则 3 的反向判据）：受害者声明在**函数体**（作用域覆盖到函数尾）⇒ 必**中**。
+FIX_HIT7 = '''
+static int demo_scope_hit(HPool* pool, int n, char* out) {
+    LXValue nv = px_str(out);
+    if (n > 0) { }
+    LXValue m = px_str("y");
+    return 0;
+}
+'''
+# hit8（规则 2 的反向判据）：右值**读了**旧值（`v = …v…`）⇒ 覆盖排除**不得**生效 ⇒ 必**中**。
+FIX_HIT8 = '''
+static int demo_overwrite_read(HPool* pool, int n, char* out) {
+    LXValue v = px_str(out);
+    v = px_str_concat(v, px_str("y"));
+    return 0;
+}
+'''
+# miss6（规则 2 · 覆盖排除）：`v = px_bytes_len(…)` 的旧值 v 此刻被覆盖且右值未读它 ⇒ 不中。
+#   形状取自 runtime_sqlite.c:203/209（switch 两 case 各赋 v）。
+FIX_MISS6 = '''
+static int demo_overwrite_ok(sqlite3_stmt* stmt, int i) {
+    LXValue v;
+    v = px_str_len("a", 1);
+    v = px_bytes_len("b", 1);
+    return 0;
+}
+'''
+# miss7（规则 3 · 作用域排除）：受害者在**兄弟块**里，声明块在触发点前即闭合 ⇒ 不中。
+FIX_MISS7 = '''
+static int demo_scope_ok(HPool* pool, int n, char* out) {
+    { LXValue v = px_str(out); }
+    LXValue m = px_str("y");
+    return 0;
+}
+'''
+# miss8（规则 4 · deref 交棒）：`*outv = px_str_len(…)` 是交棒出帧 ⇒ 不计 C 局部活值 ⇒ 不中。
+#   形状取自 runtime_h3_qpack.c:262（调用方 :359 紧跟 PX_KEEP(val)）。
+FIX_MISS8 = '''
+static int demo_deref_ok(const char* t, int l, LXValue* outv) {
+    *outv = px_str_len(t, l);
+    LXValue m = px_str_len(t, 1);
     return 0;
 }
 '''
@@ -483,14 +628,18 @@ static LXValue bi_demo_capture(const char* cmd, int n) {
 
 
 def self_test():
-    global GROW_ON
-    GROW_ON = True   # M208：自证覆盖**全部**规则（含隐式分配规则 hit6/miss3/miss4）
+    # M209：自证覆盖**新规则**（默认档 = 触发点仅构造器 + 覆盖/作用域/deref 三条排除）。
+    #   8 必中 + 8 必不中 = 16 锚点；其中 hit6b/hit7/hit8 是**反向判据**（证明排除规则没把
+    #   工具改瞎），miss5 是 M208 那条 hit6 的**改判**（缺陷 279 的预期翻转）。
     import tempfile
     cases = [('hit1', FIX_HIT1, True), ('hit2', FIX_HIT2, True),
              ('hit3', FIX_HIT3, True), ('hit4', FIX_HIT4, True),
-             ('hit5', FIX_HIT5, True), ('hit6', FIX_HIT6, True),
+             ('hit5', FIX_HIT5, True), ('hit6b', FIX_HIT6B, True),
+             ('hit7', FIX_HIT7, True), ('hit8', FIX_HIT8, True),
              ('miss1', FIX_MISS1, False), ('miss2', FIX_MISS2, False),
-             ('miss3', FIX_MISS3, True), ('miss4', FIX_MISS4, False)]
+             ('miss3', FIX_MISS3, False), ('miss4', FIX_MISS4, False),
+             ('miss5', FIX_HIT6, False), ('miss6', FIX_MISS6, False),
+             ('miss7', FIX_MISS7, False), ('miss8', FIX_MISS8, False)]
     ok = fail = 0
     with tempfile.TemporaryDirectory() as td:
         for name, body, expect_hit in cases:
@@ -515,7 +664,9 @@ def main():
     ap.add_argument('--show-victims', action='store_true')
     ap.add_argument('--self-test', action='store_true')
     ap.add_argument('--grow', action='store_true',
-                    help='M208：把 px_dict_set/px_list_push 计入分配点（照出缺陷 271 族；默认关）')
+                    help='M209：**旧规则对照** —— 把 px_dict_set/px_list_push 当触发点'
+                         '（复现 M208 的 19 候选）。该前提已被证伪（缺陷 279），'
+                         '仅用于 A/B 与留证，默认关闭。')
     ap.add_argument('--min-funcs', type=int, default=1,
                     help='下限锚点：函数数少于该值即判红（防扫描器静默失效）')
     args = ap.parse_args()
@@ -523,8 +674,8 @@ def main():
         return self_test()
 
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    global GROW_ON
-    GROW_ON = bool(args.grow)
+    global LEGACY_GROW
+    LEGACY_GROW = bool(args.grow)
     files = args.files
     if not files:
         rtdir = os.path.join(root, 'runtime')

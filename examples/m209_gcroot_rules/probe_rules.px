@@ -1,0 +1,57 @@
+# ============================================================
+# M209 探针（第 88 轮）：把「被 M208 判为触发点」的那些站点里**可复现的子集**
+#   拉进 GC 压力档，用**实测**（而不是读代码猜）证明它们的「受害者」是安全的。
+# ------------------------------------------------------------
+# 覆盖的站点（对应 `--grow` 旧规则照出的 11 条）：
+#   · `bi_map`      = runtime.c:11435/11436 —— `res = px_call(fn,…); px_list_push(r, res)`
+#   · `bi_filter`   = runtime.c:11451/11452 —— 同族
+#   · `px_gen_materialize` / `px_gen_next` = runtime.c:3459/3460/3474/3477 —— 生成器物化/取项
+#   · `px_cell`     = runtime.c:3240/3241 —— 闭包捕获的外层局部（装箱 cell）
+#   · `bi_os_popen` = runtime.c:13203/13204 —— `d = px_dict(); px_dict_set(d, "pid", …)`
+#
+# ⚠️ 为什么回调**必须真的分配**：这条探针是用来「压」出漏根的最小复现器 ——
+#   若回调只返回整数（`px_int` 是立即数、不 `gc_register`），循环里**根本不会有 GC**，
+#   于是「撤掉登记」也照样绿 ⇒ 探针没牙（实测踩过：首版 `inc(x) = x + 1` 时，
+#   负控 A「撤 bi_map 的 px_root_push_keep(r)」仍是 rc=0）。回调里一律构造字符串。
+#
+# 判据（门第 ④ 层）：正常档 ×2 与压力档
+#   （`PX_GC_STRESS=1 PX_GC_INLINE=1 PX_GC_LIVECHK=1 PX_GC_UAFDET=1`）
+#   **逐字节一致**，rc=0，且压力档无 LIVECHK/UAFDET 标记。
+# ============================================================
+
+def tag(x):
+    return "t" + str(x)          # 每次调用分配一个串 ⇒ px_call 内部触发 gc_register
+
+def even_tagged(x):
+    var s = "e" + str(x)         # 同族：先分配
+    return len(s) % 2 == 0
+
+# 闭包捕获外层局部（`acc`/`n` ⇒ 装箱 cell ⇒ px_cell），且闭包体也分配
+def make_adder(n):
+    var acc = 0
+    return fn (k):
+        acc = acc + len("a" + str(k)) * n
+        return acc
+
+var s = 0
+for i in range(120):
+    var a = map([i, i + 1, i + 2], tag)          # bi_map
+    var b = filter(a, even_tagged)               # bi_filter
+    var t = 0
+    for v in (len(x) * 2 for x in b):            # 生成器：px_gen_materialize / px_gen_next
+        t = t + v
+    s = s + t + len(a) + len(b)
+
+var f = make_adder(3)
+for j in range(120):
+    s = s + f(j)                                 # 闭包调用（px_cell）
+
+# os_popen：单次调用（避免 fd/僵尸累积），取结果形状后关管道 + 回收子进程
+var r = os_popen("sh", ["-c", "printf 7"])
+if r != null:
+    s = s + len(r) + r["pid"] * 0
+    close(r["stdin_fd"])
+    close(r["stdout_fd"])
+    os_wait(r["pid"])
+
+print("M209-PROBE-OK s=" + str(s))
