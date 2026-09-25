@@ -221,8 +221,7 @@ static LXValue xml_parse_element(XmlP* p) {
     //   就可能回收 node，而 PX_KEEP 还会把**已释放对象**当根登记（比不登记更坏：
     //   之后每轮 GC 都去标记野指针 ⇒ slab 空闲链被写坏 ⇒ SIGSEGV）。本行顺序即实测修法。
     LXValue node = px_dict();
-    px_root_push();
-    PX_KEEP(node);
+    px_root_push_keep(node);
     LXValue attrs = px_dict();
     PX_KEEP(attrs);
     // 属性

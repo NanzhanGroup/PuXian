@@ -179,8 +179,8 @@ else
     step "⑤ 负控（每道独立：先还原 → 再打补丁 → 判红 → 再还原）"
     # A：撤 bi_udp_recv 的 KEEP(r) —— UDP 面（实测：撤掉后压力档必红）
     restore_all
-    patch_one runtime/runtime.c "    px_root_push_keep(r);   // M92 precise：结果 dict 跨 px_dict_set/px_list_push/px_str_len 分配
-    px_dict_set(r, \"data\", px_bytes_len(buf, n));" "    px_dict_set(r, \"data\", px_bytes_len(buf, n));" A || bad "负控 A 打补丁失败"
+    patch_one runtime/runtime.c '    px_root_push_keep(r);
+    px_dict_set(r, "data", px_bytes_len(buf, n));' '    px_dict_set(r, "data", px_bytes_len(buf, n));' A || bad "负控 A 打补丁失败"
     if BIN_N="$(build_probe "$HERE/probe_udp.px" na)"; then
         if env PX_GC_STRESS=1 PX_GC_INLINE=1 PX_GC_LIVECHK=1 timeout 300 "$BIN_N" > "$W/na.out" 2>&1 \
            && grep -q 'PROBE_UDP OK' "$W/na.out" && ! grep -q 'PX_GC_LIVECHK' "$W/na.out"; then

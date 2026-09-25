@@ -121,8 +121,7 @@ static LXValue px_interp_bridge_entry(LXValue* args, int nargs, void* ctx) {
     LXValue callargs[2];
     callargs[0] = fnvalue;
     callargs[1] = lst;
-    px_root_push();
-    PX_KEEP(callargs[0]);
+    px_root_push_keep(callargs[0]);
     PX_KEEP(callargs[1]);
     for (int i = 0; i < nargs; i++) {
         PX_KEEP(args[i]);

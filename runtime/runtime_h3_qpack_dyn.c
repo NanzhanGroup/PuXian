@@ -1124,8 +1124,7 @@ int px_qd_enc(int64_t id, char* const* names, char* const* vals,
               int* nls, int* vls, int nf, uint8_t* sect, int scap) {
     if (nf < 0 || nf > 512 || !sect || scap <= 0) return -1;
     LXValue lst = px_list(8);
-    px_root_push();   // M170（缺陷 187 同族）：lst/pair 跨 px_str_len 分配
-    PX_KEEP(lst);
+    px_root_push_keep(lst);
     for (int i = 0; i < nf; i++) {
         LXValue pair = px_list(2);
         PX_KEEP(pair);

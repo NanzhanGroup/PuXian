@@ -62,8 +62,7 @@ LXValue bi_img_decode(LXValue* args, int nargs, void* ctx) {
         return px_err(px_str("img: 图片过大"));
     }
     LXValue d = px_dict();
-    px_root_push();
-    PX_KEEP(d);
+    px_root_push_keep(d);
     px_dict_set(d, "w", px_int(w));
     px_dict_set(d, "h", px_int(h));
     LXValue pix = px_bytes_len(px, w * h * 4);

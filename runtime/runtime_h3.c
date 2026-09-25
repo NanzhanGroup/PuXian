@@ -520,12 +520,10 @@ static LXValue h3_c_fields_to_lx(char** names, char** vals, int* nls, int* vls, 
     LXValue fields = px_list(8);
     // M170（缺陷 187 同族）：VM 轨 precise GC 不扫 C 栈 ⇒ fields/pair 只活在本帧的 C 局部
     //   时必须登记（实测：M47 H3 回环门在 PX_GC_STRESS=1 下 **服务端 SIGSEGV**）。
-    px_root_push();
-    PX_KEEP(fields);
+    px_root_push_keep(fields);
     for (int i = 0; i < nf; i++) {
         LXValue pair = px_list(2);
-        px_root_push();          // 内层：pair 每迭代都是新对象
-        PX_KEEP(pair);
+        px_root_push_keep(pair);
         px_list_push(pair, px_str_len(names[i] ? names[i] : "", nls[i]));
         px_list_push(pair, px_str_len(vals[i] ? vals[i] : "", vls[i]));
         px_list_push(fields, pair);
@@ -605,8 +603,7 @@ static void h3_append_headers(LXValue fields, LXValue headers_val) {
         for (int _i = 0; _i < _nl; _i++) lname[_i] = (char)tolower((unsigned char)_n[_i]);
         lname[_nl] = 0;
         LXValue pair = px_list(2);
-        px_root_push();              // M170：pair 跨两次 px_str 分配
-        PX_KEEP(pair);
+        px_root_push_keep(pair);
         px_list_push(pair, px_str(lname));
         px_list_push(pair, kv[1]);
         px_list_push(fields, pair);
@@ -733,8 +730,7 @@ static int h3_read_section(int64_t conn, int64_t sid, int64_t timeout_ms,
 // 请求字段 → dict（含 sid）
 static LXValue h3_fields_to_request(LXValue fields, int64_t sid,
                                     const uint8_t* bd, int blen) {
-    px_root_push();          // M170（缺陷 187 同族）：本帧的 C 局部全部要登记
-    PX_KEEP(fields);         //   形参副本同样是 C 局部（precise GC 不扫 C 栈）—— 漏登记即
+    px_root_push_keep(fields);   //   形参副本同样是 C 局部（precise GC 不扫 C 栈）—— 漏登记即
                              //   在下面 px_dict()/px_str() 触发 GC 时被回收，fo 成野指针
     LXValue d = px_dict();
     PX_KEEP(d);              //   ⚠️ 登记必须**紧跟创建、先于下一次分配** —— 写成
@@ -774,8 +770,7 @@ static LXValue h3_fields_to_request(LXValue fields, int64_t sid,
 // 响应字段 → dict（含 sid）
 static LXValue h3_fields_to_response(LXValue fields, int64_t sid,
                                      const uint8_t* bd, int blen) {
-    px_root_push();          // M170（缺陷 187 同族）：本帧的 C 局部全部要登记
-    PX_KEEP(fields);         //   形参副本同样是 C 局部（precise GC 不扫 C 栈）
+    px_root_push_keep(fields);   //   形参副本同样是 C 局部（precise GC 不扫 C 栈）
     LXValue d = px_dict();
     PX_KEEP(d);              //   ⚠️ 登记必须**紧跟创建、先于下一次分配**
     LXValue hdr = px_dict();
@@ -808,8 +803,7 @@ static LXValue h3_fields_to_response(LXValue fields, int64_t sid,
 // 响应字段组装：[:status, n] + headers
 static LXValue h3_make_response_fields(int status, LXValue headers_val) {
     LXValue fields = px_list(8);
-    px_root_push();          // M170：fields/pair0 跨 px_str 与 h3_append_headers
-    PX_KEEP(fields);
+    px_root_push_keep(fields);
     char sb[16]; snprintf(sb, sizeof(sb), "%d", status);
     LXValue pair0 = px_list(2);
     PX_KEEP(pair0);
@@ -826,8 +820,7 @@ static LXValue h3_make_request_fields(const char* method, const char* scheme,
                                       const char* auth, const char* path,
                                       LXValue headers_val) {
     LXValue fields = px_list(8);
-    px_root_push();          // M170（缺陷 187 同族）：fields 与 p0..p3 全登记（计数有界，4 条）
-    PX_KEEP(fields);
+    px_root_push_keep(fields);
     LXValue p0 = px_list(2); PX_KEEP(p0); px_list_push(p0, px_str(H3_METHOD)); px_list_push(p0, px_str(method)); px_list_push(fields, p0);
     LXValue p1 = px_list(2); PX_KEEP(p1); px_list_push(p1, px_str(H3_SCHEME)); px_list_push(p1, px_str(scheme)); px_list_push(fields, p1);
     LXValue p2 = px_list(2); PX_KEEP(p2); px_list_push(p2, px_str(H3_AUTH)); px_list_push(p2, px_str(auth)); px_list_push(fields, p2);
@@ -1144,8 +1137,7 @@ static void h3_extra_to_headers(LXValue hdrlist, const char* extra) {
                     // M206（缺陷 253）：pair 是裸 C 局部，两次 px_str 分配 ⇒ 列表被误回收
                     //   （写入已释放 list 的元素数组 ⇒ 写坏 slab 空闲链表）。
                     LXValue pair = px_list(2);
-                    px_root_push();
-                    PX_KEEP(pair);
+                    px_root_push_keep(pair);
                     px_list_push(pair, px_str(k));
                     px_list_push(pair, px_str(v));
                     px_list_push(hdrlist, pair);
@@ -1172,8 +1164,7 @@ typedef struct {
 static LXValue h3_out_make_fields(int status, const char* ct, long long body_len,
                                   int head_only, const char* extra) {
     LXValue hdr = px_list(16);
-    px_root_push();   // M170（缺陷 187 同族）：hdr 跨 p 的创建与 px_str 分配
-    PX_KEEP(hdr);
+    px_root_push_keep(hdr);
     if (ct && *ct) {
         LXValue p = px_list(2); PX_KEEP(p);
         px_list_push(p, px_str("content-type")); px_list_push(p, px_str(ct)); px_list_push(hdr, p);
@@ -1353,8 +1344,7 @@ static void h3_srv_stateless_cb(int64_t conn, void* ud) {
         // 0-RTT 子集响应：固定 200 text/plain（验证重点是 0-RTT 提前到达 + 静态表
         // 请求/响应编解码双端一致；不接公共管道，避免依赖路由表与动态表会话）
         LXValue hdrs = px_list(2);
-        px_root_push();      // M170（缺陷 187 同族）：hdrs 跨 px_str 与 h3_make_response_fields
-        PX_KEEP(hdrs);
+        px_root_push_keep(hdrs);
         px_list_push(hdrs, px_str("content-type: text/plain"));
         LXValue rf = h3_make_response_fields(200, hdrs);
         PX_KEEP(rf);   // M170：rf 也要登记（下面 px_str 实参可能触发 GC）

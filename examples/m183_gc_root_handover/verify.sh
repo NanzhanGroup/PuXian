@@ -44,6 +44,14 @@
 #     B `bi_s3_list` 去掉 push/KEEP/pop         ⇒ ② 必红（恢复缺陷 198）
 #     C `px_root_keep` 去掉「待收缩应用」        ⇒ ④ 必红（根栈无界增长）
 #     D `bi_px_exec` 去掉 env/srv 登记           ⇒ ③b 必红（恢复缺陷 199，UAFDET 3/3）
+#     ⚠️ M209 修（M208 的改动打到本门，第 9 次同族）：
+#        · C 的锚点**不唯一**（同一段「待收缩应用」M208 后在 push_keep 里也有一份内联）
+#          ⇒ 首版 `replace(…,1)` 只删**一处** ⇒ 泄漏消失不复现 ⇒ 负控**失去牙**。
+#          修法 = 正则匹配 **全部 2 处**并断言「恰好 2 处」。
+#        · D 的锚点把 `px_root_push_keep(env);` 换成 `LXValue env = px_dict();`
+#          ⇒ 与上一行**重声明** ⇒ **编译失败** ⇒ chk_199 因构建失败而返回 1 ⇒
+#          「判红」了，但**判红原因不是本缺陷**（假绿）。修法 = 正确删除该行 + 三处
+#          锚点各加**唯一性断言**；并给 negcase 加「构建失败 ⇒ 不算判红」的守卫。
 #
 # ③b 缺陷 199（同族第三处 · 由本门的 UAFDET 筛出）：`bi_px_exec` 里 `env` / `srv` 两个
 #   dict 裸 C 局部，后续 `px_dict()`×4 / `px_str` / `px_call(json_stringify)` 都会分配
@@ -66,6 +74,7 @@ NEG_SKIP=0
 SRC_RT="runtime/runtime.c"
 WORK="$(mktemp -d /tmp/m183.XXXXXX)"
 fail=0
+BUILD_FAIL=0   # M209：负控「判红」若因**构建失败**而来，不算判红（等于没验证）
 note() { echo "   $*"; }
 bad()  { echo "❌ $*"; fail=1; }
 hdr()  { echo "── $*"; }
@@ -90,7 +99,9 @@ build() {
     d="$WORK/b$tag"
     rm -rf "$d"; mkdir -p "$d"
     cp "$src" "$d/"
+    BUILD_FAIL=0
     if ! timeout 900 ./tools/px build "$d/$(basename "$src")" > "$WORK/$tag.build.log" 2>&1; then
+        BUILD_FAIL=1
         tail -4 "$WORK/$tag.build.log" | sed 's/^/      /'
         return 1
     fi
@@ -222,35 +233,32 @@ s=s.replace(n1,o1,1).replace(n2,o2,1)
 open(p,"w",encoding="utf-8").write(s); print("PATCH-B-OK")'
 
 PATCH_C='p="runtime/runtime.c"; s=open(p,encoding="utf-8").read()
-new="""    if (g_px_trunc_pending >= 0) {
-        int fbase = g_px_root_marks_n > 0 ? g_px_root_marks[g_px_root_marks_n - 1] : 0;
-        int t = g_px_trunc_pending;
-        if (t < fbase) t = fbase;
-        if (t < g_px_roots_n) g_px_roots_n = t;
-        g_px_trunc_pending = -1;
-    }
-"""
-assert new in s, "anchor C"
-open(p,"w",encoding="utf-8").write(s.replace(new,"",1)); print("PATCH-C-OK")'
+import re
+pat=re.compile(r"^[ \t]*if \(g_px_trunc_pending >= 0\) \{\n(?:[ \t]*int fbase[^\n]*\n)(?:[ \t]*int t = g_px_trunc_pending;\n)(?:[ \t]*if \(t < fbase\)[^\n]*\n)(?:[ \t]*if \(t < g_px_roots_n\)[^\n]*\n)(?:[ \t]*g_px_trunc_pending = -1;\n)[ \t]*\}\n", re.M)
+n=len(pat.findall(s))
+assert n==2, "anchor C 出现 %d 次（应 2 处：px_root_push_keep 内联 + px_root_keep 本体）" % n
+open(p,"w",encoding="utf-8").write(pat.sub("", s)); print("PATCH-C-OK (2 处)")'
 
 PATCH_D='p="runtime/runtime.c"; s=open(p,encoding="utf-8").read()
-n1="""        px_root_push_keep(env);"""
-o1="""        LXValue env = px_dict();"""
-n2="""        LXValue srv = px_dict();
-        PX_KEEP(srv);"""
+n1="""        LXValue env = px_dict();\n        px_root_push_keep(env);   // 紧跟创建（中间不得插入任何可能分配的调用）\n"""
+o1="""        LXValue env = px_dict();\n"""
+n2="""        LXValue srv = px_dict();\n        PX_KEEP(srv);"""
 o2="""        LXValue srv = px_dict();"""
 n3="""        px_root_pop();   // M183：与上方 px_root_push 配对\n"""
-o3=""""""
-assert n1 in s and n2 in s and n3 in s, "anchor D"
-s=s.replace(n1,o1,1).replace(n2,o2,1).replace(n3,o3,1)
+assert s.count(n1)==1, "anchor D1 唯一性（实际 %d）" % s.count(n1)
+assert s.count(n2)==1, "anchor D2 唯一性（实际 %d）" % s.count(n2)
+assert s.count(n3)==1, "anchor D3 唯一性（实际 %d）" % s.count(n3)
+s=s.replace(n1,o1,1).replace(n2,o2,1).replace(n3,"",1)
 open(p,"w",encoding="utf-8").write(s); print("PATCH-D-OK")'
 
 negcase() {   # $1=标题 $2=python 补丁 $3=应判红的判定函数
     local title="$1" patch="$2" fn="$3"
-    restore_all; snapshot
+    restore_all; snapshot; BUILD_FAIL=0
     if ! python3 -c "$patch"; then bad "$title：补丁锚点未命中"; restore_all; return; fi
     if "$fn"; then
         bad "$title ⇒ **未判红**（负控失效：该处并非本门覆盖的根因）"
+    elif [ "$BUILD_FAIL" = "1" ]; then
+        bad "$title ⇒ **构建失败**（判红原因不是本缺陷 ⇒ 负控无效，等于没验证）"
     else
         note "$title ⇒ 判红 ✓"
     fi
