@@ -117,7 +117,7 @@
 
 ⇒ **没有一条是「不知道该怎么解释」的**。
 
-### 七 未定性（→ M208 主项）
+### 七 未定性（→ **下一轮**主项）
 
 **缺陷 265（pre-existing · 已 A/B 证明非本轮引入）**：`px_serve` + **px 自带裸 TCP 客户端**
 （`tcp_connect_ex`/`tcp_send_ex`/`tcp_recv_ex`）在 `PX_GC_STRESS=1` 下 ⇒ 客户端**立即 EOF**、
