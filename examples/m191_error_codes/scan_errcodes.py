@@ -56,11 +56,19 @@ UNCODED_BASELINE = {
 # ── 转发点豁免（M193）：**每条必须给理由**，形态必须是 `px_error("%s"` ──
 #    判据：① 表内每条都要在源码里找到且形态匹配（防"代码变了表没变"）；
 #          ② 豁免总数**不得多于**登记数（棘轮）；③ 理由字段非空。
+#  ⚠️ M208s1（缺陷 272）：锚点由「**行号**」改为「**内容正则 + 唯一性**」。
+#     起因：M208 给 `runtime/coro.c` 加了 32 行 ⇒ 被豁免的 `px_error("%s", errmsg)` 从 804
+#     下移到 836 ⇒ 行号锚点失效，而**报错那一行自己还有格式化 bug**（3 个占位符 2 个实参）
+#     ⇒ 扫描器 TypeError 崩掉、门只报「静态判据全绿 FAIL」（指不到真因）。
+#     纪律（M161 起第 9 次同族）：**锚点必须按内容唯一匹配，不许按行号**；
+#     且「锚点找不到」与「锚点不唯一」都要**响亮指名**。
 FORWARD_EXEMPT = {
-    "runtime/coro.c": {
-        804: "透传 px_native_call_capture 的 errbuf —— 上游 native 的错误消息已带 R 码或域前缀",
-    },
+    "runtime/coro.c": [
+        {"pat": r'px_error\(\s*"%s"\s*,\s*errmsg\)',
+         "why": "透传 px_native_call_capture 的 errbuf —— 上游 native 的错误消息已带 R 码或域前缀"},
+    ],
 }
+EXEMPT_LINES = {}   # path → set(行号)；由「判据 ⑤」按内容锚定后填充，供 check_sites 查询
 
 fails = []
 notes = []
@@ -92,7 +100,7 @@ def check_sites(path, kind):
             elif DOMAIN_RE.match(msg):
                 dom += 1
             else:
-                if ln in FORWARD_EXEMPT.get(path, {}):
+                if ln in EXEMPT_LINES.get(path, ()):
                     continue          # 转发点豁免（表内已给理由；另有专门判据查表⇔源码一致）
                 uncoded.append((ln, msg))
                 continue
@@ -134,15 +142,26 @@ def check_mixed(path):
 
 # ── 判据 ⑤：转发点豁免表 ⇔ 源码一致（防"代码被改动而表没跟着改"）──
 EXEMPT_TOTAL = 0
-for path, table in FORWARD_EXEMPT.items():
+for path, items in FORWARD_EXEMPT.items():
     src = open(os.path.join(ROOT, path), encoding="utf-8").read().split("\n")
-    for ln, why in table.items():
-        if not why.strip():
-            fails.append("%s:%d 豁免条目缺理由" % (path, ln))
-        if ln > len(src) or not re.search(r'px_error\(\s*"%s"', src[ln - 1]):
-            fails.append("%s:%d 豁免条目在源码里找不到（或形态不是 px_error\"%s\"）" % (path, ln))
+    hits_all = []
+    for it in items:
+        if not it.get("why", "").strip():
+            fails.append("%s 豁免条目缺理由（pat=%s）" % (path, it.get("pat")))
+        hits = [ln for ln, line in enumerate(src, 1)
+                if not line.lstrip().startswith(("//", "*", "/*"))
+                and re.search(it["pat"], line)]
+        if len(hits) == 0:
+            fails.append("%s 豁免锚点**找不到**（pat=%s）—— 代码变了表没跟着改？（M208s1 教训）"
+                         % (path, it["pat"]))
+        elif len(hits) > 1:
+            fails.append("%s 豁免锚点**不唯一**（%d 处：%s）—— 锚点必须唯一（M161 教训）"
+                         % (path, len(hits), hits[:5]))
+        else:
+            print("   %-30s 转发豁免 1 处（内容锚定 @ 行 %d）" % (path, hits[0]))
+        hits_all += hits
         EXEMPT_TOTAL += 1
-    print("   %-30s 转发豁免 %d 处" % (path, len(table)))
+    EXEMPT_LINES[path] = set(hits_all)
 print("── [S4] 转发豁免合计 %d（棘轮：不得多于登记数 1）──" % EXEMPT_TOTAL)
 if EXEMPT_TOTAL > 1:
     fails.append("转发豁免条目变多：%d > 登记数 1" % EXEMPT_TOTAL)
