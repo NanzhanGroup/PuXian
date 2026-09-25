@@ -178,8 +178,7 @@ restore_all; snapshot
 # ============================================================
 step "⑤ 负控 B：撤 px_as_list 的 PX_KEEP ⇒ probe_gen 必红（缺陷 263 复现）"
 patch_one runtime/runtime.c \
-    '    px_root_push();
-    PX_KEEP(l);
+    '    px_root_push_keep(l);
     for (int i = 0; i < n; i++) px_list_push(l, px_iter_at(v, px_int(i)));
     px_root_pop();' \
     '    for (int i = 0; i < n; i++) px_list_push(l, px_iter_at(v, px_int(i)));' \

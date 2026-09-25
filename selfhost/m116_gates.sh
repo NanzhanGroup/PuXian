@@ -671,6 +671,7 @@ step "M205 · CLI 诊断通道统一（缺陷 186 的 tools 面 · 缺陷 247）
 run m205_cli_channels bash examples/m205_cli_channels/verify.sh
 run m206_gcroot bash examples/m206_gcroot/verify.sh
 run m207_gcstress bash examples/m207_gcstress/verify.sh
+run m208_vm_c_local_roots bash examples/m208_vm_c_local_roots/verify.sh
 step "M190 · 上游 registry-px 真实用例回归（53 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。

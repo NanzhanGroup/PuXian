@@ -258,14 +258,12 @@ PY
 import sys
 p=sys.argv[1]; s=open(p).read()
 old="""    LXValue node = px_dict();
-    px_root_push();
-    PX_KEEP(node);
+    px_root_push_keep(node);
     LXValue attrs = px_dict();
     PX_KEEP(attrs);"""
 new="""    LXValue node = px_dict();
     LXValue attrs = px_dict();   /* NEG-B: 登记滞后 */
-    px_root_push();
-    PX_KEEP(node);
+    px_root_push_keep(node);
     PX_KEEP(attrs);"""
 assert old in s, "NEG-B 锚点未命中"
 open(p,'w').write(s.replace(old,new,1))

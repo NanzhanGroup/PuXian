@@ -1,0 +1,12 @@
+# M208 探针：单线程 VM 轨「字面量构造 × 压力 GC」最小复现
+# 目的：隔离「解释循环内 C 局部构造容器」漏根（缺陷 268）——无协程/无线程，走单线程 GC 快路径。
+def f(i):
+    var d = {"a": i, "b": i + 1, "c": "x" + str(i)}
+    var l = [i, i + 1, "y" + str(i)]
+    var m = {"k1": "v" + str(i), "k2": [i, i * 2], "k3": {"z": i}}
+    return d["a"] + l[1] + len(str(m["k1"])) + m["k2"][1] + m["k3"]["z"]
+
+var s = 0
+for i in range(1500):
+    s = s + f(i)
+print("SUM=" + str(s))

@@ -564,6 +564,8 @@ void px_gc_collect(void);
 void px_gc_poll(void);
 // 返回 GC 次数；live 输出当前存活对象数，total 输出累计回收对象数
 int px_gc_stats(int* live, int* total);
+// M208 诊断辅助：槽值是否为堆对象（g_type_is_obj 表在 runtime.c 私有；供 coro.c/vm.c 诊断用）
+int px_dbg_val_is_obj(LXValue v);
 // M92 精确 GC（退役整栈保守扫描）：precise/conservative 双模式 + native 桥根登记。
 //   px_gc_set_precise(1) = precise（VM 轨产物 main 调用；根=全局槽+VM 帧槽+TLS 登记根栈，
 //     跳过整 C 栈保守扫描）；0 = conservative（默认；C 轨逃生舱产物，保持旧行为）。
@@ -574,6 +576,10 @@ void px_gc_set_precise(int precise);
 void px_root_push(void);
 void px_root_pop(void);
 void px_root_keep(const LXValue* v);
+// M208（缺陷 269）：**原子**「开作用域 + 登记」—— 构造与登记之间不得有安全点（见 runtime.c 注释）。
+//   惯用法 `px_root_push(); PX_KEEP(x);` 有「并发 GC 恰好在本线程两语句之间暂停」的未登记窗口，
+//   并发档（多协程/多线程）+ 高 GC 频率下必现 use-after-free。**新代码一律用本函数。**
+void px_root_push_keep(LXValue v);
 #define PX_KEEP(v) px_root_keep(&(v))
 // M170（缺陷 188/187 同族）：登记栈的「记录 / 还原」——两个用途：
 //   ① **隔离点 longjmp 落点**：longjmp 不展开 C 帧，被跳过的登记会变成**野根**
