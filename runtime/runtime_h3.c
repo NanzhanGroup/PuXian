@@ -630,6 +630,15 @@ static bool h3_send_fields(int64_t conn, int64_t sid, LXValue fields, LXValue bo
     int rd_marks = 0;
     int rd_roots = px_root_depth(&rd_marks);
     PX_KEEP(fields);
+    // M212（缺陷 291 · **M170 缺陷 187 同族的漏网实参**）：`body_val` 的数据指针 `bd`
+    //   在本帧**跨分配**存活 —— 下面 `h3_fields_to_c` / `px_qd_enc` / `px_h3_qenc` /
+    //   `h3_build_frame` 都会分配（⇒ 可能触发 GC），而 DATA 帧
+    //   （`h3_build_frame(f, H3_FRAME_DATA, bd, blen)`）用的正是这个 `bd`。
+    //   ⇒ `body_val` 被回收后 `bd` 悬垂（读已释放内存 / 发出错数据）。
+    //   出口多（含两处 free 后 return false）⇒ 复用已有的深度式登记 + 各出口 restore。
+    //   `PX_KEEP` 对非对象（null/int/…）是 no-op（`px_root_push_keep` 里 `px_value_is_obj` 守门）。
+    //   ⚠️ 本处由 M212 的**源码派生触发点**审计照出（`h3_out_send ← h3_send_fields(` 受害者 `bv`）。
+    PX_KEEP(body_val);
     uint8_t* q = (uint8_t*)malloc(H3_BUF_MAX);
     uint8_t* f = (uint8_t*)malloc(H3_BUF_MAX + 16);
     if (!q || !f) { free(q); free(f); px_root_restore(rd_roots, rd_marks); return false; }

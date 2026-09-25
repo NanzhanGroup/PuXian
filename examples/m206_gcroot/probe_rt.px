@@ -49,6 +49,13 @@ def h(req):
         session_set("k", "v")
         if session_get("k") != "v":
             why = why + "SESSION-GET "
+        # M212（第 91 轮）：补 session_del —— M209 §9.4 登记为**唯一未被动态覆盖**的站点。
+        #   判据：删掉刚建的键后必须取回 null（`bi_session_del` 若漏登记 `nd`，压力档下
+        #   会读到已回收 dict ⇒ 键残留/值错乱）。实测 8 轮 × 40 请求压力档全绿。
+        session_set("d", "x")
+        session_del("d")
+        if session_get("d") != null:
+            why = why + "SESSION-DEL "
     if req["path"] != "/mp":
         if req["query"] != "q1=v1":
             why = why + "QUERY "

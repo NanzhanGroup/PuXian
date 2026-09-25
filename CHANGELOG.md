@@ -1,3 +1,55 @@
+## M212 · **审计器的「触发点」必须源码派生**（缺陷 288/289/290/291）（第 91 轮）
+
+> 主题：M209 把判据定成「**触发点 = 调用链上会 `gc_register` 的入口**」，但审计器里那份名单
+> 一直是 M206 **手抄**的 27 个构造器，**从没跟着判据改** ⇒ 手抄集合漏掉 `px_call` 族 /
+> `px_session_read` / `h3_send_fields` / `px_s3_exec` / `bi_*` 整族 —— **全仓「候选 0」是假的**。
+> 一句话：**判据改了，名单没改；「0」是漏报不是干净。**
+
+### 一 数字（都是实测）
+
+| 项 | 值 |
+|---|---|
+| 手抄 `_ALLOC_NAMES` | **32**（含 5 个非构造器语义项） |
+| 源码派生 **TRIGGER**（`gc_register` 传递闭包） | **518**（直接 **17** + **间接** 102 + 传递） |
+| 其中 **PRODUCER**（返回类型 `LXValue`） | **316** |
+| 全仓候选 | 手抄集合 **0** ⇄ 派生集合 **3** |
+
+### 二 四个编号
+
+| # | 形状 | 处置 |
+|---|---|---|
+| **288** | 手抄触发点集合漏 300+ 个分配入口 ⇒ **漏报**（比假阳危险） | 新 `selfhost/gcroot_derive.py`（源码派生 · 自证 **10 锚点**）；审计器默认 `--trigger-set derived`，`legacy` 仅留证；**派生失败拒绝静默回退**（rc=3） |
+| **289** | 「谁调了 `gc_register`」闭包**看不见间接调用** —— `px_call` 的体是 `fn.as.obj->as.func.fn(...)`（被调方是形参）⇒ 派生集合从 518 掉到 329、候选从 3 掉到 **2**（把真漏报藏起来） | 判据补「被调方是形参 / `(*p)(…)` ⇒ 触发点」（真实树里 102 个） |
+| **290** | `o->as.gen.list = px_list(0);` … `gc_register(o, …)` 被判成候选 —— 而注册点 `o` 进 `g_tmp_root` ⇒ 其**字段可达**（**正是 M207 缺陷 264 的修复形态**） | 判据：登记动作（`gc_register`/`PX_KEEP`/`px_root_push_keep`）的被登记名 ⇒ 其字段豁免（负控 C：撤掉 ⇒ 候选 3→4） |
+| **291** ⭐ | **真漏登记**：`h3_send_fields` 的 `body_val` —— M170 为 `fields` 加了 `PX_KEEP`，却漏了**同一窗口的第二个实参**，而它的数据指针 `bd` 正是 DATA 帧的依据 | 入口 `PX_KEEP(body_val)`（复用已有 `px_root_depth`/`px_root_restore` 出口归一） |
+
+### 三 3 条候选的判定（全部假阳，逐条留证）
+
+1. `bi_session_del ← px_session_write(` 受害者 `nd` —— **动态取证**：`probe_rt.px` 补 `session_del`
+   后压力档 **8 轮 × 40 请求全绿**；机制 = `sess` 由 `px_session_read` 的 TLS 条目持有（M183
+   延迟收缩 + `bi_session_del` 全程无 KEEP）⇒ 属**隐性耦合**（下一轮宜对称化）。
+2. `h3_out_send ← h3_send_fields(` 受害者 `bv` —— 报告点在**调用点**，真漏洞点在**被调方内部**
+   （已由缺陷 291 修复）⇒ 顺带登记一个**跨函数判据缺口**。
+3. `xml_build_node ← bi_xml_escape(` 受害者 `sv` —— 被调方唯一分配点晚于对 `s` 的**全部消费**
+   ⇒ 到达触发点时已死（**后置存活**判据，尚未判据化）。
+
+### 四 副项：压力筛的「慢语料」出口（缺陷 292 定性）
+
+`m88_s3/s1b_gc_stress`（200 线程 × 300 分配）在 `STRESS+INLINE` 下**每次分配都触发一轮全 STW GC**
+⇒ 实测 **wall 274550ms · rc=0 · stdout 与正常档逐字节一致 · stderr 空 · RSS 平稳 ~7MB**
+⇒ 结论 **O(n²) 正常，非缺陷**（默认 60s 上限必记 STIMEOUT，那是判据的时间上限问题）。
+新增 `examples/m207_gcstress/SLOW.tsv` + `gcstress_sweep.sh --slow FILE`：
+**「输出确定且正确、只是慢」⇒ 给足时间继续判**，与 `--known`（输出本身不确定 ⇒ 排除在判定之外）分工明确。
+
+### 五 验收
+
+- 门 `examples/m212_gcroot_derive/`：**9 通过 / 0 失败**（派生器自证 10/10 · 集合性质 ·
+  A/B legacy 0 ⇄ derived 3 · 与 m206 BASELINE 逐条对齐 · **负控 3 道各自独立判红**）
+- `examples/m206_gcroot/` 门 **6/0**（BASELINE §① 0 → 3 条，各带理由）·
+  `examples/m209_gcroot_rules/` 门 **21/0**（② 判据随派生集合改写 · ③ 对照须显式 `--trigger-set legacy`）
+- 入库件重烘 12/12 · 全量门 m116 见本文件「当前版本」行 · 发布物独立复核见报告
+- 已挂 `selfhost/m116_gates.sh` 与 `.github/workflows/ci.yml`（CI 用 `--neg-skip`）
+
 ## M211 · **GC STW 信号打断 recv ⇒ 误判对端关闭**（缺陷 265 收口 · 编号 284–287）（第 90 轮）
 
 > 主题：M207 压力筛标出的「`px_serve` + px 自带裸 TCP 客户端在 `PX_GC_STRESS=1` 下客户端只见
