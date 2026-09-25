@@ -109,7 +109,14 @@ negctl_patch() { # negctl_patch <描述> <python 补丁文件>
   local desc="$1" py="$2"
   cp "$RT" /tmp/m154_rt_before.c
   if ! python3 "$py" "$RT"; then
-    say "  ⚠️ $desc：锚点失配（补丁未生效）"; cp /tmp/m154_rt_before.c "$RT"; return 1
+    # M209：锚点失配**必须算失败** —— 修前只打 ⚠️ 就 return 1，而三处调用点都写的是
+    #   `if negctl_patch ...; then`（失配即整道负控被跳过）⇒ 门仍然报 VERIFY-OK。
+    #   实测（M209）：负控 C 的锚点自 `bi_join_item` 重构后**早已失配**，这道负控
+    #   长期没跑过而没人知道（= 缺陷 275 同族：负控的「静默跳过」）。
+    say "  ❌ $desc：补丁锚点失配（负控未真正执行 ⇒ 记失败）"
+    cp /tmp/m154_rt_before.c "$RT"
+    FAIL=$((FAIL+1))
+    return 1
   fi
   return 0
 }
