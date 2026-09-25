@@ -39,8 +39,9 @@ IC=selfhost/icall.px
 IB=selfhost/ibuiltin.px
 pass=0; fail=0
 chk() { if ( eval "$2" ); then echo "  PASS $1"; pass=$((pass+1)); else echo "  FAIL $1"; fail=$((fail+1)); fi; }
-snapshot() { cp -f "$RT" "$BACK/rt"; cp -f "$IC" "$BACK/ic"; cp -f "$IB" "$BACK/ib"; }
-restore_all() { [ -f "$BACK/rt" ] && cp -f "$BACK/rt" "$RT"; [ -f "$BACK/ic" ] && cp -f "$BACK/ic" "$IC"; [ -f "$BACK/ib" ] && cp -f "$BACK/ib" "$IB"; }
+CO=runtime/coro.c   # M208s1：负控 F/G 要打 coro.c（豁免锚点）的靶 ⇒ 一并纳入快照/还原
+snapshot() { cp -f "$RT" "$BACK/rt"; cp -f "$IC" "$BACK/ic"; cp -f "$IB" "$BACK/ib"; cp -f "$CO" "$BACK/co"; }
+restore_all() { [ -f "$BACK/rt" ] && cp -f "$BACK/rt" "$RT"; [ -f "$BACK/ic" ] && cp -f "$BACK/ic" "$IC"; [ -f "$BACK/ib" ] && cp -f "$BACK/ib" "$IB"; [ -f "$BACK/co" ] && cp -f "$BACK/co" "$CO"; }
 # ⚠️ 纪律（M190 教训）：每道负控前 **先 restore 再 snapshot**，保证打桩从**干净起点**开始；
 #   trap 里也 restore，中途被杀也能还原。
 snapshot
@@ -131,6 +132,14 @@ if [ "$NEG" = 1 ]; then
     else
         echo "  PASS 负控 E：动态判据已判红（VM 轨词条不含 R1006）"; pass=$((pass+1))
     fi
+    restore_all
+    # 负控 F/G（M208s1）：豁免锚点 ⇒ **内容唯一**匹配（行号锚点已被本轮证伪）
+    #   F：令锚点不唯一（复制一行）—— 锚点必须唯一（M161 教训，这是第 9 次同族）
+    nc_static "F 豁免锚点不唯一（复制一行）" "static_ok" \
+        "sed -i 's|\\( *\\)px_error(\"%s\", errmsg);|\\1px_error(\"%s\", errmsg);\\n\\1px_error(\"%s\", errmsg);|' '$CO'"
+    #   G：令锚点找不到（改形态）—— 「找不到」必须响亮（不许静默放过）
+    nc_static "G 豁免锚点找不到（改形态）" "static_ok" \
+        "sed -i 's|px_error(\"%s\", errmsg);|px_error(\"%s %d\", errmsg, 0);|' '$CO'"
     restore_all
 fi
 

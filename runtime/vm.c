@@ -30,6 +30,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>      // M208s1（缺陷 273）：write(2,…) 诊断 —— 缺它会在 clang/musl 交叉档
+                         //   报「implicit function declaration」（gcc 宿主侥幸通过 ⇒ m67 三档全红）
 
 // M94-S2：抢占预算检查（coro.c 提供）。非 VM 轨产物（无 coro.o/vm.o 链的逃生舱）
 //   → weak 空转不抢占；VM 轨 vm.o 与 coro.o 同链 → 生效。

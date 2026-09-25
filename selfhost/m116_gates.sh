@@ -694,6 +694,11 @@ run pkg_install_rpm bash packaging/selftest_install_rpm.sh
 # M168：**二进制可移植性门** —— 入库件必须全静态（动态件在老 glibc 上"装得上跑不起来"）
 run portability_selftest bash selfhost/check_bin_portability.sh --self-test
 run portability_shipped bash selfhost/check_bin_portability.sh --arch x86_64 --require-static bootstrap/*
+# M208s1（缺陷 273）：**交叉档可编译性**本地门 —— `runtime/vm.c` 少了 `<unistd.h>`，
+#   宿主 gcc 侥幸通过而三档交叉 cc（clang/musl）一律 `undeclared function 'write'` ⇒ CI m67 三 job 全红。
+#   判据：三档各自独立（有工具链+库 ⇒ 必须编译成功且产物架构正确；缺 ⇒ 记 SKIP 并打印原因；
+#   全档 SKIP ⇒ 门整体 SKIP 并指明权威覆盖在 ci.yml 的 m67）。含 `--self-test` 三条自证。
+run cross_ports bash selfhost/check_cross_ports.sh
 step "发射冻结门（M153 建立）：253+ 个用例的 --emit-c 输出必须逐字节不变"
 # 为什么：`--check`/`prove` 只看 **compiler.px 自己**的产物；"改了 runtime/发射路径却顺手
 #   动摇了别的程序的发射结果"这类回归此前没有任何门看得见（第 34 轮起靠临时脚本手查）。
