@@ -80,9 +80,11 @@ PX_GC_STRESS=1 PX_GC_INLINE=1 PX_GC_UAFDET=1 <二进制>   # 症状 = 写坏空�
 
 `examples/m206_gcroot/`（M206 建）：
 
-- **层 ①** `gcroot_audit.py --self-test`：4 锚点（2 必中 / 2 必不中）。
+- **层 ①** `gcroot_audit.py --self-test`：**8 锚点**（5 必中 / 3 必不中；M207 起多了
+  「跨行签名」「`px_func_env` 不担豁免」「`px_list_n` 不担豁免」「跨行签名 + 已登记」四条 ——
+  前三条正是 M207 三个判据缺口的**独立**自证）。
 - **层 ②** 全仓扫描 **候选 ⇄ `BASELINE.tsv`** 逐条对齐（多重集比较）+ 规模下限
-  （函数 ≥ 1400、登记站点 ≥ 170）。基线里出现「真」判定 ⇒ **门必红**（= 有未修的漏登记）。
+  （函数 ≥ **1500**、登记站点 ≥ **200**；M207 起上调 —— 扫描面随判据修复变大）。基线里出现「真」判定 ⇒ **门必红**（= 有未修的漏登记）。
   `BASELINE.tsv` 每行 = `file / func / trigger / victim / 判定 / 理由`；**只登记假阳**。
 - **层 ③④** 动态：HTTP 面（20 urlencoded + 20 multipart POST，含 session 族）与 UDP 面
   （20 次往返）在**基线档与压力档都必须全绿**，且压力档**不得**出现 `PX_GC_LIVECHK`。
@@ -99,6 +101,78 @@ PX_GC_STRESS=1 PX_GC_INLINE=1 PX_GC_UAFDET=1 <二进制>   # 症状 = 写坏空�
 | M182 | 192 + 同族 | `h_exchange` 的「登记迟到」 |
 | M183 | 197–199 | 根栈**交棒窗口**（`px_root_pop` 出口是暂停点）· `bi_s3_list` · `bi_px_exec` |
 | **M206** | **248–258** | **20 处**：udp_serve / multipart ×4 / urlenc · cookie / session_open · set / quic raw ×2 / h3-extra / session_read / bus_publish / basic_auth / http_get_stream ×4 / udp_recv |
+| **M207** | **259–264** | **10 处**：`bi_os_capture`（容器）· `h_exchange`「同名头首次升级为 list」· `px_http_dispatch` ×4（.px 脚本分派）· `vm_run_loop` MKCLO 的 `env` · `px_as_list`（tuple/str 支）· `px_gen_from_list` / `px_gen_lazy`（**未 `gc_register`**）|
 
-**仍未做**：逐桥**人工**审计（M206 做的是「静态形状扫描 + 动态压力取证」，覆盖的是**能扫出来的形状**）；
-`PX_GC_STRESS` 尚未铺到全部 `examples/*/verify.sh`（O(n²)，需按语料分批）。
+### 6.1 M207：判据自身的三个缺口（都由「实跑」照出来）
+
+| # | 缺口 | 后果 | 修法 |
+|---|---|---|---|
+| ① | `split_functions` 用**单行**正则匹配 `name(...) {` | **跨行签名**的函数**整体不在审计面上** —— 实测漏掉 `h_exchange`（缺陷 260 所在） | 累积签名行直到「括号闭合后的 `{`」；遇顶层 `;` 判为原型并丢弃（函数数 1456 → **1587**）|
+| ② | `CONSUME_RX` 把 `px_dict_set`/`px_list_push` 当「消费」 | 「**先建容器、再往里放东西**」这一族**整族漏报**（漏掉 `bi_os_capture`） | 从「消费」里摘出（它们持有**值**，但**不登记接收者**）|
+| ③ | `px_func_env` 被当作**安全持有者**（担豁免） | MKCLO 的 `env` 被漏报（缺陷 262） | 从 `HOLD_RX` 摘出 —— 它**先 `gc_register` 再填 env 字段**，注册点那次 GC 看不到实参 |
+| ④ | `_ALLOC_NAMES` 缺 `px_iter_at` | **字符串取值会新建串对象**，是一条分配路径（缺陷 263） | 补进分配名单 |
+| ⑤ | `px_list_n` 曾被当作**安全持有者**（担豁免）| `spawn_capture` 的输出串被回收（缺陷 266）| 从 `HOLD_RX` 摘出 —— 它内部先 `px_list(n)`（**注册 + 可能触发 GC**）再逐项入列 ⇒ 注册点看不到 items |
+
+⇒ **判据定稿**：`HOLD_RX` 里只保留**核对过源码顺序**为「先填字段、后 `gc_register`」的构造器
+（`px_ok`/`px_err`/`px_some`/`px_tuple`/`px_struct`/`px_cell`）与「写进**已注册**容器/入根」的调用
+（`px_dict_set`/`px_list_push`/`px_chan_send`/`px_global_set`/`px_set_global`）。
+
+### 6.2 M207 的「家族」观察
+
+- **「构造器 vs 持有者」**：`px_dict_set`/`px_list_push` **不是**登记点；
+  `px_func_env` 的「先注册后填字段」使**豁免规则失效** ⇒ 判据必须按**逐个构造器**成立，
+  不能按「看起来会持有」推断。
+- **「未注册的 GC 对象」**：`px_gen_lazy`/`px_gen_from_list` 用裸 `xmalloc` 建 `LXObject`
+  却**不 `gc_register`** ⇒ 标记阶段工作表（= `g_objs` 中 `gc_mark` 的项）**永远不处理它**
+  ⇒ 其全部子对象（物化 list / seq / transform / filter 闭包）**不被标记** ⇒ 被 sweep 回收。
+  这是**与「漏登记 C 局部」不同的一类**：不是「根没指到」，而是「对象不在表里」。
+
+**仍未做**：逐桥**人工**审计（M206/M207 做的是「静态形状扫描 + 动态压力取证」，覆盖的是
+**能扫出来的形状**）；`PX_GC_STRESS` 尚未铺到全部 `examples/*/verify.sh`（本轮把「跑法」做成
+常设工具 `gcstress_sweep.sh`，但**未逐个改动 143 个 verify.sh** —— 见 §7）。
+
+## 7 常设压力筛（M207）
+
+`selfhost/gcstress_sweep.sh` —— 把「一次性人工筛」变成 **可重复 · 可分批 · 可复现** 的能力。
+
+### 7.1 判据（两档差分 · 三跑）
+
+- **正常档跑两次**，两遍 stdout 必须逐字节一致；不一致 ⇒ `NONDET`（程序自身不确定，**如实登记**）；
+- **压力档**（`PX_GC_STRESS=1 PX_GC_INLINE=1 [+ PX_GC_LIVECHK=1]`）与正常档比：
+  stdout 逐字节一致 · rc 一致 · stderr 无检测器标记 · 未被信号杀死；
+- **确认步（M207 新增）**：`FAIL_OUT` 时压力档**再跑一遍**，两遍自身不一致 ⇒ 降级 `NONDET`
+  —— 挡掉「正常档两遍侥幸一致、压力档把计时放大」的程序（实测 `examples/m117_realworld_defects`
+  打印「用时 701ms（阈值 700ms）」⇒ 假红）。
+
+⚠️ `PX_GC_INLINE=1` **不可省**：服务/`spawn` 模式下 GC 被延迟到安全点（实测 collect 次数差一个
+量级：32 vs 288）⇒ 缺陷不显形。`--no-inline` 只用于**判据自证**。
+
+### 7.2 分类（`--out` 的 TSV，第二列 = tag）
+
+| tag | 含义 |
+|---|---|
+| `PASS` | 两档一致 ✅ |
+| `FAIL_OUT` / `FAIL_RC` / `FAIL_SIG` / `FAIL_DIAG` | **真信号**（stdout 差异 / rc 差异 / 被信号杀死 / 检测器响亮）|
+| `STIMEOUT` | 正常档 OK、压力档超时（O(n²)，需**人工定性**）|
+| `NONDET` | 正常档（或压力档确认步）自身不一致 ⇒ **不在本筛管辖区** |
+| `SKIP_NORM` | 正常档就不通（常驻服务 / 需要参数 / 需要 fixture / 负样例），原因随行走 |
+| `BUILDFAIL` | 构建失败 |
+
+### 7.3 用法
+
+```bash
+selfhost/gcstress_sweep.sh --list                       # 候选清单（排序 ⇒ 可复现）
+selfhost/gcstress_sweep.sh --batch 2/3 --out /tmp/s.tsv # 分批（各批并集 == 全量）
+selfhost/gcstress_sweep.sh --only 'examples/m207*/*.px' --t-stress 60
+selfhost/gcstress_sweep.sh --no-inline                  # 判据自证专用
+```
+
+退出码：出现 `FAIL_*` ⇒ 1；只有 `STIMEOUT` ⇒ 0；全绿 ⇒ 0。
+
+### 7.4 门
+
+`examples/m207_gcstress/`（6 层）：① 工具自证（`--help` 通道 · 未知选项 rc=2 · 候选规模下限 ·
+**分批完备性**（3 批并集 == 全量，逐字节）· `--only` · 退出码语义）· ② 精选语料两档全绿 ·
+③ **正判据**（`--env PX_M207_PERTURB=1` 故意造差异 ⇒ 必须判 `FAIL_OUT`）· ④⑤ 负控 A/B
+（撤 `px_gen_lazy` 的 `gc_register` / 撤 `px_as_list` 的 `PX_KEEP` ⇒ 必红）·
+⑥ 负控 C（判据自伤：比对改恒真 ⇒ ③ 不再红）· ⑦ 覆盖边界登记。

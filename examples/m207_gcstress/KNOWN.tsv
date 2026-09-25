@@ -1,0 +1,10 @@
+# M207 GC 压力筛 —— **已判定豁免**（跑得通、但**输出本身不确定**的语料）
+# 列：相对路径<TAB>理由
+# 规则：① 只登记「输出含**实测计时值**」或「输出含**并发到达顺序**」这类语料；
+#       ② 每条必须给理由；③ 规模 ≤ 8（`examples/m207_gcstress/verify.sh` 里断言）；
+#       ④ **必须人工实跑定性**之后才能登记（不许因为「看着像」就豁免）——
+#          它只是把**已经做完的判定**记下来，不是「跳过疑似项」的捷径；
+#       ⑤ **真缺陷不得进本表**（例：m93_s3/coro_gc_block、m88_s3/s1b_gc_stress
+#          压力档 LIVECHK 响亮 ⇒ 是缺陷 267，必须留在 FAIL 里被看见）。
+examples/m117_realworld_defects/m117_defects.px	该用例打印**实测用时**（`用时 701ms（阈值 700ms）`）。实跑定性：正常档 ×2 = 701ms / 压力档 ×2 = 702ms —— 两档都在阈值 ±2ms 内、且各自稳定 ⇒ 差异来自**计时精度**而非缺陷（阈值本身生效，语义正确）。命令：`for i in 1 2; do ./build/m117_defects 2>/dev/null | sed -n 5p; done`（正常）· 同命令前置 `PX_GC_STRESS=1 PX_GC_INLINE=1`（压力）。
+examples/m89_s3d/vm_spawn_smoke.px	该用例两个 `spawn` worker 各自 `ch.send(acc+id)`，两条结果行的**到达顺序**不确定。实跑定性：仅开 `PX_GC_STRESS=1` 连跑 2 次即得到**两种不同顺序**（`sum1/sum2` 互换）⇒ 与 GC 无关，而是并发顺序（`total` 始终 999003）。命令：`for i in 1 2; do PX_GC_STRESS=1 ./build/vm_spawn_smoke; echo --; done`。

@@ -214,6 +214,8 @@ examples/m189_bytes_bounds/bounds_ok.px src=271e187e6675db01 rc=0 out=217e2d6d20
 examples/m190_arity/arity_ok.px src=cedbdc626d9354b1 rc=0 out=bc57e2409fb54a00b69593a4c6efb998 err=e3b0c44298fc1c14
 examples/m206_gcroot/probe_rt.px src=b8ebb08d7bfebf89 rc=0 out=1f35a781bfcf6328385916d9602cde4c err=e3b0c44298fc1c14
 examples/m206_gcroot/probe_udp.px src=72e6b3fe937bc81c rc=0 out=1f46f83b7ae8a1969f69c3c05b30dfa8 err=e3b0c44298fc1c14
+examples/m207_gcstress/probe_env.px src=3a2906b1502485e7 rc=0 out=201e4aed4cbeed51a5e47a3eb5581643 err=e3b0c44298fc1c14
+examples/m207_gcstress/probe_gen.px src=f2b24ddee09bc0bc rc=0 out=3a6db28ac60210926792eb98263f54a1 err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=25f7bb9ac610f0f826c9ed8c4047f24f err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=fc0b79277b06f69862f3101732750439 err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14

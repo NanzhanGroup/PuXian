@@ -2528,3 +2528,52 @@ set_timeout(fn (): print("once after 2s"), 2000)
        `px_dict_set`/`px_list_push` 被当成「持有实参的构造器」⇒ 例外把**容器本身**当被持有者 ⇒ 又漏。
        ⇒ 静态判据必须配**动态取证**（本轮 3 处是压力档先红、再回头补静态规则）。
 
+
+#### M207（第 86 轮）：**GC 压力筛常态化** + 判据五缺口 + 7 个编号 / 11 处收口（缺陷 259–264 · 266）
+
+     · 主题 = **「保证强度」欠账的第二项**：M170/M182/M183/M206 修的 29 处**全部**是「被某一次
+       人工压力筛筛出来的」，「还剩多少」此前无法回答 ⇒ 把**跑法**做成常设工具
+       `selfhost/gcstress_sweep.sh`（可重复 · 可分批 · 可复现 · 可判据化）。
+     · 用法：`--list`（排序 ⇒ 可复现）· `--batch K/N`（各批并集 == 全量，门里逐字节验证）·
+       `--only GLOB` · `--out FILE`（TSV）· `--known FILE`（已判定豁免表）·
+       `--keep-side` · `--no-inline`（仅判据自证）。出现 `FAIL_*` ⇒ rc=1。
+     · 判据（两档差分 · **2+2 跑**）：正常档跑**两遍**须逐字节一致（否则 `NONDET`）；
+       压力档 `PX_GC_STRESS=1 PX_GC_INLINE=1 [+ PX_GC_LIVECHK=1]` 与正常档比 stdout/rc，
+       且不得出现检测器标记、不得被信号杀死。`FAIL_OUT` 时**确认步**：压力档再跑一遍，
+       两遍自身不一致 ⇒ 降级 `NONDET`（挡「正常档两遍侥幸一致、压力档把计时放大」的假红）；
+       剩余**确定性计时类**进 `KNOWN.tsv`（**人工实跑定性**后登记 · 规模 ≤8 · 每条带理由 ⇒ `SKIP_KNOWN`）。
+     · 分类：`PASS` / `FAIL_OUT·FAIL_RC·FAIL_SIG·FAIL_DIAG`（真信号）/ `STIMEOUT`（人工定性）/
+       `NONDET` / `SKIP_NORM`（正常档就不通）/ `SKIP_KNOWN` / `BUILDFAIL`。
+     · **工程护栏（都是「全量筛跑起来才暴露的」）**：① **`timeout` 必须带 `-k <宽限>`** ——
+       目标忽略 SIGTERM（如 `px_serve` 的优雅关闭）时裸 `timeout` **一直等** ⇒ 整轮**永久卡住**
+       （实测 `s2c_pxserve` 卡 3 分钟、进程都杀不掉）；② **运行副作用清理** —— 语料在自己目录里跑，
+       程序写出的文件会落在仓库里（`m155` 写 `.bin`、`m170` 写 SQLite 库 `__DB__`，都不在
+       .gitignore）⇒ 跑前记清单、跑完清掉**新增项**（`build` 除外）。
+     · **判据自身的五个缺口（全由「实跑」照出来 —— 纪律：判据的「找不到」先怀疑判据）**：
+       ① `split_functions` 原来用**单行**正则匹配 `name(...) {` ⇒ **跨行签名**的函数**整体不在审计面上**
+          （实测漏掉 `h_exchange`，缺陷 260 所在）⇒ 累积签名行到「括号闭合后的 `{`」，
+          遇顶层 `;` 判原型丢弃（**函数数 1456 → 1587**）。
+       ② `px_dict_set`/`px_list_push` 曾被当「消费」⇒ 它们持有值但**不登记接收者** ⇒
+          「先建容器、再往里放东西」整族漏报（漏掉 `bi_os_capture`）。
+       ③ `px_func_env` 曾被当**安全持有者** ⇒ 它**先 `gc_register` 再填 env 字段** ⇒ MKCLO 的 env 漏报。
+       ④ `px_iter_at`（**字符串取值会新建串对象**）必须算分配（缺陷 263）。
+       ⑤ `px_list_n` 曾被当**安全持有者** ⇒ 它内部**先 `px_list(n)`（注册 + 可能触发 GC）再逐项入列**
+          ⇒ 注册点看不到 items（缺陷 266）。⇒ **`HOLD_RX` 只保留核对过源码顺序的构造器**。
+     · **另一类**：`px_gen_lazy`/`px_gen_from_list` 用裸 `xmalloc` 建 `LXObject` 却**不 `gc_register`**
+       ⇒ 标记工作表（= `g_objs` 里 `gc_mark` 的项）**永远不处理它** ⇒ 物化 list / seq / transform /
+       filter 闭包**全不被标记** ⇒ 被回收。**与「漏登记 C 局部」不同**：不是「根没指到」，
+       而是「对象不在表里」。
+     · 本轮收口（7 编号 / 11 处）：`bi_os_capture`（容器）· `h_exchange` 同名头首次升级为 list ·
+       `px_http_dispatch` ×4（.px 脚本分派）· `vm_run_loop` MKCLO 的 `env` · `px_as_list`（tuple/str 支）·
+       `px_gen_{lazy,from_list}` · `bi_os_spawn_capture`（`px_list_n` 之前未登记）。
+       静默形态：`r["stdout"]` 读到**键名串**（`int("stdout")` 报 R1002）· 同名头聚合出 `[r1, rr]`
+       （rr = body）· 闭包丢捕获 `R9001 … 闭包对象缺少所属函数` · `spawn_capture` 丢输出串。
+     · **未定性（→ 下一轮）**：`px_serve` + **px 裸 TCP 客户端**（`tcp_connect_ex`/`tcp_send_ex`/
+       `tcp_recv_ex`）在压力档下**立即 EOF**、服务端不响应；同进程内**外部 curl** 正常（服务端健康）·
+       `http_request` 正常；`git worktree` 取 **HEAD 运行时**同探针**同样失败** ⇒ **非本轮引入**。
+     · 门：`examples/m207_gcstress/`（**14 通过 / 0 失败**）—— ① 工具自证（`--help` 通道 · 未知选项 rc=2 ·
+       候选规模下限 · **分批完备性** · `--only` · **`--known` 生效** · **`KNOWN.tsv` 形态**）·
+       ② 精选语料两档全绿 · ③ **正判据**（`--env PX_M207_PERTURB=1` 造差异 ⇒ 必须判 `FAIL_OUT`）·
+       ④⑤ 负控 A/B（撤 `px_gen_lazy` 的 `gc_register` / 撤 `px_as_list` 的 `PX_KEEP` ⇒ 必红）·
+       ⑥ 负控 C（判据自伤：比对改恒真 ⇒ ③ 不再红）· ⑦ 覆盖边界登记。
+       `examples/m206_gcroot/` 同步：自证 **4 → 8 锚点** · 规模下限 **函数 ≥1500 / 登记站点 ≥200**。

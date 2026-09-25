@@ -3214,6 +3214,14 @@ LXValue px_gen_from_list(LXValue list) {
     o->as.gen.list = list;
     o->as.gen.cursor = 0;
     o->as.gen.is_lazy = 0;
+    // M207（缺陷 264 · **由 GC 压力筛实测抓到**）：**必须 gc_register** —— 标记阶段的
+    //   工作表 = 「g_objs 里 gc_mark 为 1 的项」；未注册的 gen **永远不被处理** ⇒
+    //   它持有的 list / seq / transform / filter（及其闭包 cell）**不会被子对象递归标记**
+    //   ⇒ 生成器在使用期间发生一次 GC，其物化 list 就被 sweep 回收 ⇒ 悬垂。
+    //   实测：`join("", (c for c in "中文"))`（字符串源每取一项就分配一次）在
+    //   `PX_GC_STRESS=1` 下 `[PX_GC_LIVECHK] 读到已回收对象（px_list_push(list)）` + SIGABRT；
+    //   列表源（`(x for x in [1,2,3])`）不分配 ⇒ 默认/压力档都看不出来。
+    gc_register(o, sizeof(LXObject));
     LXValue v;
     v.type = PX_GEN;
     v.as.obj = o;
@@ -3231,6 +3239,9 @@ LXValue px_gen_lazy(LXValue seq, LXValue transform, LXValue filter) {
     o->as.gen.seq = seq;
     o->as.gen.transform = transform;
     o->as.gen.filter = filter;
+    // M207（缺陷 264）：同 px_gen_from_list —— 字段填齐**之后**注册（注册点若发生 GC，
+    //   对象已在 g_objs 且进 g_tmp_root ⇒ 其全部字段可被子对象递归标记）。
+    gc_register(o, sizeof(LXObject));
     LXValue v;
     v.type = PX_GEN;
     v.as.obj = o;
@@ -6189,7 +6200,16 @@ static int px_as_list(LXValue v, LXValue* out) {
     if (v.type != PX_TUPLE && v.type != PX_STR) return 0;
     int n = px_len(v);
     LXValue l = px_list(n > 0 ? n : 1);
+    // M207（缺陷 263 · **由 GC 压力筛实测抓到**）：`l` 是裸 C 局部，而 `px_iter_at` 在
+    //   **字符串**上取值会**新建串对象**（一条分配路径）⇒ 压力档下 l 被回收，随后的
+    //   `px_list_push(l, …)` 就是对已释放 list 写入
+    //   （实测 examples/m178_iterable_args/iter_args.px：`[PX_GC_LIVECHK] 读到已回收对象
+    //    （px_list_push(list)）` + SIGABRT → 定位到第 4 条用例 `join("-", "abc")`）。
+    //   ⇒ tuple/str 形态（list/gen 形态不新建容器，不受影响）必须先登记新容器。
+    px_root_push();
+    PX_KEEP(l);
     for (int i = 0; i < n; i++) px_list_push(l, px_iter_at(v, px_int(i)));
+    px_root_pop();
     *out = l;
     return 1;
 }
@@ -12720,9 +12740,19 @@ static LXValue bi_os_spawn_capture(LXValue* args, int nargs, void* ctx) {
     if (r != 0) return px_null();
     LXValue res[2];
     res[0] = px_int((int64_t)rc);
+    // M207（缺陷 266 · **由 GC 压力筛实测抓到**）：`res[1]` 是裸 C 数组元素，而紧接着的
+    //   `px_list_n(res, 2)` 内部是 **`px_list(n)`（先 gc_register ⇒ 可能触发 GC）再逐项入列**
+    //   ⇒ 注册点那次 GC **看不到 res[1]**（这正是 `px_list_n` **不能**算「持有实参的构造器」的原因，
+    //   见 `selfhost/gcroot_audit.py` 的 HOLD_RX 判据）⇒ 输出串被回收。
+    //   实测 `examples/m65_lsp/spawncap_selftest.px`：压力档 2 项红
+    //   （`echo 输出含 hello world` / `sh stdout+stderr 合并`），默认档全绿。
+    px_root_push();
     res[1] = px_str_len(bo, no);
+    PX_KEEP(res[1]);
     xfree(bo);
-    return px_list_n(res, 2);
+    LXValue l = px_list_n(res, 2);
+    px_root_pop();
+    return l;
 }
 
 // os_exec(cmd, args?) → 进程替换（execvp）：成功不返回，当前进程被目标程序替换；
@@ -12945,11 +12975,20 @@ static LXValue bi_os_capture(LXValue* args, int nargs, void* ctx) {
     px_argv_free(argv, argc);
     if (r != 0) return px_null();
     LXValue d = px_dict();
+    // M207（缺陷 259）：`d` 是**裸 C 局部**，而紧接着的 `px_str_len(bo, no)` 就是一次分配
+    //   ⇒ 压力档下 d 被回收、随后 `px_dict_set` 写进**已释放的 dict**
+    //   （实测：`PX_GC_LIVECHK=1` 响亮 `读到已回收对象（px_dict_set(dict)）` + SIGABRT/core；
+    //    默认阈值下表现为**静默错值** —— `r["stdout"]` 读到键名串，`int("stdout")` 报
+    //    `R1002 无法将 'stdout' 转为 int`，实测 m116 / m130 两个门当场红）。
+    //   ⇒ 修法同缺陷 258：`px_root_push()` 作用域 + **创建即 PX_KEEP**。
+    px_root_push();
+    PX_KEEP(d);
     px_dict_set(d, "rc", px_int((int64_t)rc));
     px_dict_set(d, "stdout", px_str_len(bo, no));
     px_dict_set(d, "stderr", px_str_len(be, ne));
     xfree(bo);
     xfree(be);
+    px_root_pop();
     return d;
 }
 
@@ -16400,10 +16439,19 @@ static int h_exchange(HPoolSlot* slot, const char* req, int rlen,
                     snprintf(kstore, sizeof(kstore), "%s", oh->as.dict.keys[found]);
                     LXValue cur = oh->as.dict.vals[found];
                     LXValue nv = px_str(v);
+                    // M207（缺陷 260 · **由 GC 压力筛实测抓到**）：`nv` 是裸 C 局部，而
+                    //   「首次升级为 list」这一支里的 `px_list(4)` 就是一次分配
+                    //   ⇒ 压力档下 nv 被回收、`px_list_push(lst, nv)` 存进**悬垂指针**
+                    //   ⇒ 该槽随后被同一次请求的 **body 串**复用。
+                    //   实测（examples/m109_headers_multi）：服务端原始响应（curl 外部视角）
+                    //   为 `X-Multi: r1` + `X-Multi: r2`，而 px 客户端聚合出 `[r1, rr]`
+                    //   （rr = body）⇒「值退化为别的值」，默认阈值下**静默错值**。
+                    PX_KEEP(nv);
                     if (cur.type == PX_LIST) {
                         px_list_push(cur, nv);
                     } else {
                         LXValue lst = px_list(4);
+                        PX_KEEP(lst);
                         px_list_push(lst, cur);
                         px_list_push(lst, nv);
                         px_dict_set(*out_headers, kstore, lst);
@@ -23919,16 +23967,26 @@ static int px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
     int is_px = strstr(fpath, ".px") != NULL && strcmp(fpath + strlen(fpath) - 3, ".px") == 0;
 
     if (is_px) {
+        // M207（缺陷 261）：本块里 get/post/server/env/jv/resp 全是**裸 C 局部**，而块内
+        //   跨了**十余次分配**（px_dict / px_str / px_call(json_stringify/json_parse) /
+        //   px_hdr_append / px_gzip_compress）⇒ 压力档下逐个被回收
+        //   （实测：`PX_GC_LIVECHK=1` 响亮 `读到已回收对象（px_dict_get(dict)）`；
+        //    默认档下更隐蔽 —— 脚本拿到的 GET/POST 变空、resp.body 悬垂后响应体错乱）。
+        //   ⇒ 块内统一登记；本块**无 return**（内部只有 goto script_done，故一对 push/pop 足够）。
+        px_root_push();
         // ---- .px 脚本执行：fork + exec `px run`，PX_INIT_GLOBALS 传递请求上下文 ----
         LXValue get = px_parse_urlenc(query);
+        PX_KEEP(get);
         LXValue post = px_dict_get(req, "form");
-        if (post.type != PX_DICT) post = px_dict();
+        if (post.type != PX_DICT) { post = px_dict(); PX_KEEP(post); }
         LXValue server = px_dict();
+        PX_KEEP(server);
         px_dict_set(server, "port", px_int(port));
         px_dict_set(server, "docroot", px_str(docroot));
         px_dict_set(server, "script", px_str(fpath));
         px_dict_set(server, "px", px_str("0.2.0"));
         LXValue env = px_dict();
+        PX_KEEP(env);   // M207（缺陷 261）
         px_dict_set(env, "REQUEST", req);
         px_dict_set(env, "GET", get);
         px_dict_set(env, "POST", post);
@@ -23963,7 +24021,10 @@ static int px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
                 while (blen > 0 && (body[blen - 1] == '\n' || body[blen - 1] == '\r')) blen--;
                 char* jstr = marker + 16;
                 LXValue jv = px_str(jstr);
+                PX_KEEP(jv);    // M207（缺陷 261）：跨 px_call(json_parse) 的分配
                 LXValue resp = px_call(px_get_global("json_parse"), &jv, 1);
+                PX_KEEP(resp);  // M207（缺陷 261）：resp（含其 headers 子 dict 与 body 串）跨
+                                //   px_hdr_append / px_gzip_compress 的分配
                 if (resp.type == PX_DICT) {
                     LXValue stv = px_dict_get(resp, "status");
                     if (stv.type == PX_INT) status = (int)stv.as.i;
@@ -24011,6 +24072,7 @@ static int px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
         // M29c：结构化访问日志（M33：落盘 + 轮转；格式同解释器：时间 remote method path status bytes ms req=id）
         px_access_log("[px-access] %lld %s %s %s %d %d 0ms req=%s\n",
                 (long long)time(NULL), log_remote, method, path, 200, 0, req_id);
+        px_root_pop();   // M207（缺陷 261）：与块首 px_root_push() 成对
     } else {
         // ---- 静态文件：ETag / Last-Modified / 304 / Range + 流式（M29b） ----
         struct stat fst;

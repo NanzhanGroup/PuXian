@@ -31,6 +31,7 @@ _ALLOC_NAMES = [
     'px_err', 'px_some', 'px_cell', 'px_func', 'px_func_env', 'px_chan_create',
     'px_mutex_create', 'px_rwlock_create', 'px_gen_from_list', 'px_gen_lazy',
     'px_chk_uninit', 'px_env_lookup', 'px_slice', 'px_enum_variant', 'px_gen_next',
+    'px_iter_at',      # M207（缺陷 263）：**按字符串取值会新建串对象** ⇒ 是一条分配路径
     'px_call', 'px_method', 'px_vm_call',
 ]
 ALLOC_RX = re.compile(r'\b(' + '|'.join(_ALLOC_NAMES) + r')\s*\(')
@@ -43,17 +44,29 @@ SAFE_RX = re.compile(
 KEEP_RX = re.compile(r'\bPX_KEEP\s*\(\s*([A-Za-z_][A-Za-z0-9_\[\]\.\->]*)')
 KEEP2_RX = re.compile(r'\bpx_root_keep\s*\(\s*&\s*([A-Za-z_][A-Za-z0-9_\[\]\.\->]*)')
 # ---- 「消费」：把值交给别的调用（假定被调方接管/复制/存进已登记容器） ----
+# ⚠️ M207（缺陷 259）：`px_dict_set(d, k, v)` / `px_list_push(l, v)` **不在此列** ——
+#   它们把这个值**存进** `d`/`l`，但**不登记 `d`/`l` 本身**（接收者不是"被交出去"了）。
+#   把它们当消费会让「先建容器、再往里放东西」这一族**整族漏报**（实测漏掉 `bi_os_capture`）。
+#   它们仍留在 HOLD_RX（持有**实参值** ⇒ 值从 g_tmp_root=新对象 出发可达）。
 CONSUME_RX = re.compile(
     r'\b(bi_[A-Za-z0-9_]+|px_[A-Za-z0-9_]*raw[A-Za-z0-9_]*|px_call\w*|px_method|'
-    r'px_invoke\w*|px_serve_\w+|px_dict_set|px_list_push|px_global_set|'
+    r'px_invoke\w*|px_serve_\w+|px_global_set|'
     r'px_set_global|px_return|px_free|px_pin_obj|px_root_keep)\s*\(')
 # 已是 GC 根的 lvalue（写进它们 = 已登记，不必再 PX_KEEP）
 ROOTED_LHS_RX = re.compile(r'^(slots\s*\[|fr\s*->\s*slots\s*\[|st\s*->\s*frames|g_[A-Za-z0-9_]*$)')
 RETURN_RX = re.compile(r'^\s*return\b\s*([A-Za-z_][A-Za-z0-9_\[\]\.\->]*)?')
 # 「会持有实参」的构造器（新对象存下旧值 ⇒ 旧值可达）
+# ⚠️ **判据（M207 定稿）：只有「先填字段、后 `gc_register`」的构造器才算持有者。**
+#   · 排除 `px_func_env`（缺陷 262）：先 `gc_register` 再赋 env。
+#   · 排除 `px_list_n`（缺陷 266）：它是 `px_list(n)`（**先注册 + 可能触发 GC**）
+#     再 `px_list_push` 逐项入列 ⇒ 注册点那次 GC **看不到 items**。
+#   · 仍在表内的都核对过源码顺序：`px_ok`/`px_err`/`px_some`（先赋 value 再注册）·
+#     `px_tuple`/`px_struct`（先拷 items/fvals 再注册）· `px_cell`（先赋再注册）·
+#     `px_dict_set`/`px_list_push`（写进**已注册**容器 ⇒ 可达）·
+#     `px_chan_send`/`px_global_set`/`px_set_global`（入根）。
 HOLD_RX = re.compile(
-    r'\b(px_ok|px_err|px_some|px_tuple|px_list_n|px_dict_set|px_list_push|'
-    r'px_struct|px_enum|px_cell|px_func_env|px_chan_send|px_global_set|px_set_global)\s*\(')
+    r'\b(px_ok|px_err|px_some|px_tuple|px_dict_set|px_list_push|'
+    r'px_struct|px_enum|px_cell|px_chan_send|px_global_set|px_set_global)\s*\(')
 # lvalue 尾巴：`LXValue l` → `l`；`a[0]` → `a[0]`；`s->v` → `s->v`
 LVALUE_TAIL_RX = re.compile(
     r'([A-Za-z_][A-Za-z0-9_]*(?:\s*(?:\[[^\]]*\]|\.\s*[A-Za-z_]\w*|->\s*[A-Za-z_]\w*))*)\s*$')
@@ -107,26 +120,62 @@ def strip_comments_strings(src: str) -> str:
     return ''.join(out)
 
 
+_CTRL_WORDS = {'if', 'for', 'while', 'switch', 'else', 'do', 'return', 'sizeof',
+               'case', 'goto', 'break', 'continue'}
+_SIG_START_RX = re.compile(
+    r'[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*[ \t\*]+)+([A-Za-z_][A-Za-z0-9_]*)[ \t]*\(')
+
+
 def split_functions(code: str):
-    """按顶层花括号切出函数体。返回 [(name, start_lineno, body_lines)]。"""
+    """按顶层花括号切出**函数定义**体。返回 [(name, start_lineno, body_lines)]。
+
+    ⚠️ M207：**必须支持跨行签名**。原实现用单行正则
+      `name(...) {` 匹配 ⇒ 签名跨行的函数**整个体被跳过、完全不在审计面上**
+      （实测漏掉 `h_exchange`（缺陷 260 所在）——它的签名有 4 行）。
+      ⇒ 改为：从行首标识符起，向下累积签名行直到「括号闭合后出现的 `{`」；
+        中途遇到顶层 `;` 即判定为**原型/调用/声明**并丢弃。
+    """
     lines = code.split('\n')
-    funcs, depth, cur_start, cur_name, buf = [], 0, None, '', []
-    for ln, line in enumerate(lines, 1):
-        if depth == 0 and cur_start is None:
-            m = re.search(r'([A-Za-z_][A-Za-z0-9_]*)\s*\([^;{]*\)\s*\{', line)
-            if m and not re.match(r'\s*(if|for|while|switch|else|do)\b', line):
-                cur_name, cur_start, buf = m.group(1), ln, [line]
-                depth = line.count('{') - line.count('}')
-                if depth <= 0:
-                    funcs.append((cur_name, cur_start, buf))
-                    cur_start, buf = None, []
-                continue
-        if cur_start is not None:
-            buf.append(line)
-            depth += line.count('{') - line.count('}')
-            if depth <= 0:
-                funcs.append((cur_name, cur_start, buf))
-                cur_start, buf = None, []
+    n = len(lines)
+    funcs = []
+    i = 0
+    while i < n:
+        m = _SIG_START_RX.match(lines[i])
+        if not m or m.group(1) in _CTRL_WORDS:
+            i += 1
+            continue
+        name = m.group(1)
+        depth = 0
+        sig_end = None
+        dead = False
+        j = i
+        while j < n and (j - i) <= 16:            # 签名不超过 16 行
+            for ch in lines[j]:
+                if ch == '(':
+                    depth += 1
+                elif ch == ')':
+                    depth -= 1
+                elif ch == '{' and depth <= 0:
+                    sig_end = j
+                    break
+                elif ch == ';' and depth <= 0:
+                    dead = True
+                    break
+            if sig_end is not None or dead:
+                break
+            j += 1
+        if sig_end is None or dead:
+            i += 1
+            continue
+        body, bdepth, k = [], 0, sig_end
+        while k < n:
+            body.append(lines[k])
+            bdepth += lines[k].count('{') - lines[k].count('}')
+            if bdepth <= 0:
+                break
+            k += 1
+        funcs.append((name, i + 1, body))
+        i = k + 1
     return funcs
 
 
@@ -326,10 +375,66 @@ static LXValue bi_ok_list(int n) {
 '''
 
 
+# M207 新增锚点①：**跨行签名**（证明 split_functions 的修复真的生效 ——
+#   原单行正则下这个函数**整体不在审计面上**，实得「不中」⇒ 锚点必红）
+FIX_HIT3 = '''
+static int demo_multiline(HPool* pool, int n,
+                          char* out) {
+    LXValue cur = px_dict_get(pool->h, "k");
+    LXValue nv = px_str(out);
+    if (cur.type == PX_LIST) { px_list_push(cur, nv); }
+    else {
+        LXValue lst = px_list(4);
+        px_list_push(lst, cur);
+        px_list_push(lst, nv);
+    }
+    return 0;
+}
+'''
+# M207 新增锚点②：**px_func_env 不再担豁免**（缺陷 262 的形状 —— MKCLO 的 env）
+FIX_HIT4 = '''
+static int demo_funcenv(VM* m, int fidx, LXValue* slots, int nslots) {
+    const PxVMFunc* nf = &m->funcs[fidx];
+    LXValue env = px_dict();
+    px_dict_set(env, "k", px_int(1));
+    slots[0] = px_func_env(nf->name, NULL, env);
+    return 0;
+}
+'''
+# M207 新增锚点③：跨行签名 + **已登记** ⇒ 必须不中（防「见到跨行签名就乱报」）
+FIX_MISS3 = '''
+static int demo_multiline_ok(HPool* pool, int n,
+                             char* out) {
+    LXValue nv = px_str(out);
+    px_root_push(); PX_KEEP(nv);
+    LXValue lst = px_list(4);
+    px_list_push(lst, nv);
+    px_root_pop();
+    return 0;
+}
+'''
+
+
+# M207 新增锚点④：**`px_list_n` 不是「持有实参的构造器」**（缺陷 266 的形状）——
+#   它内部先 `px_list(n)`（注册 + 可能触发 GC）再逐项入列 ⇒ 注册点看不到 items。
+FIX_HIT5 = '''
+static LXValue bi_demo_capture(const char* cmd, int n) {
+    LXValue res[2];
+    res[0] = px_int((int64_t)n);
+    res[1] = px_str_len(cmd, 3);
+    xfree(buf);
+    return px_list_n(res, 2);
+}
+'''
+
+
 def self_test():
     import tempfile
     cases = [('hit1', FIX_HIT1, True), ('hit2', FIX_HIT2, True),
-             ('miss1', FIX_MISS1, False), ('miss2', FIX_MISS2, False)]
+             ('hit3', FIX_HIT3, True), ('hit4', FIX_HIT4, True),
+             ('hit5', FIX_HIT5, True),
+             ('miss1', FIX_MISS1, False), ('miss2', FIX_MISS2, False),
+             ('miss3', FIX_MISS3, False)]
     ok = fail = 0
     with tempfile.TemporaryDirectory() as td:
         for name, body, expect_hit in cases:
