@@ -31,7 +31,7 @@
 #         ⇒ 不计 C 局部活值（`runtime_h3_qpack.c:262`，调用方 :359 紧跟 `PX_KEEP`）。
 #
 # 层的设计（每层都能独立判红）：
-#   ① 审计器自证 **16/16**（8 必中 + 8 必不中；含 3 条**反向判据**）
+#   ① 审计器自证 **19/19**（10 必中 + 9 必不中；含 5 条**反向判据**）
 #   ② 新规则全仓候选 **0**（且两次运行结果一致）
 #   ③ 旧规则对照（`--grow`）候选 **11**，且**全部**带「旧规则」标记（防对照被悄悄清空）
 #   ④ 三条排除规则 + 触发点集合的**源码在位**断言（防判据被静默删除）
@@ -109,10 +109,10 @@ run_track() {    # $1=bin $2=档(norm|stress) $3=期望正则
 MIN_FUNCS=1500
 MIN_KEEPS=200
 
-step "① 静态：审计器自证（16 锚点 = 8 必中 + 8 必不中）"
+step "① 静态：审计器自证（19 锚点 = 10 必中 + 9 必不中）"
 if python3 selfhost/gcroot_audit.py --self-test > "$W/selftest.log" 2>&1; then
-    grep -q 'self-test: 16 通过 / 0 失败' "$W/selftest.log" \
-        && ok "自证 16/16（hit1–8 含 hit6b/hit7/hit8 三条反向判据 · miss1–8 含 miss5 改判）" \
+    grep -q 'self-test: 19 通过 / 0 失败' "$W/selftest.log" \
+        && ok "自证 19/19（hit1–10 含 hit6b/hit7/hit8/hit9/hit10 · miss1–9 含 miss5 改判）" \
         || { bad "自证结论行不符"; tail -20 "$W/selftest.log" | sed 's/^/      /'; }
 else
     bad "自证脚本失败"; tail -8 "$W/selftest.log" | sed 's/^/      /'

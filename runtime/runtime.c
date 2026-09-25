@@ -4636,8 +4636,7 @@ LXValue px_ne(LXValue a, LXValue b) {
 //   **内部比较器**仍是全序（`compare_values`，跨型按类型名）——
 //   排序需要全序才可能确定，这条在 §17.13 单独写明。
 static void px_req_cmp(LXValue a, LXValue b) {
-    if (px_num_ok(a) && px_num_ok(b)) return;   // int/float 互通
-    if (a.type == b.type) return;               // 同类型（str/bytes/bool/list/dict…）
+    (void)a; (void)b; return;   // NC-C：恢复「按类型名给确定性顺序」
     px_error("R1002: 无法比较: %s vs %s", px_type_name(a), px_type_name(b));
 }
 
