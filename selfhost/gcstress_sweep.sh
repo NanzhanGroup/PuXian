@@ -32,7 +32,7 @@
 # 用法：
 #   selfhost/gcstress_sweep.sh [--list] [--batch K/N] [--out FILE] [--only GLOB]
 #                              [--fails-only] [--quiet] [--no-det] [--no-inline]
-#                              [--keep-side] [--known FILE]
+#                              [--keep-side] [--known FILE] [--slow FILE]
 #                              [--t-norm S] [--t-stress S] [--t-build S] [--env "A=1 B=2"]
 # 退出码：出现 FAIL_* ⇒ 1；有 STIMEOUT 但无 FAIL_* ⇒ 0；全绿 ⇒ 0
 #
@@ -67,6 +67,15 @@ KEEP_SIDE=0
 #   语料从判定里摘出去（记 `SKIP_KNOWN`，理由随行）。⚠️ **不是「跳过疑似项」的捷径** ——
 #   只在实跑定性之后登记（见 examples/m207_gcstress/KNOWN.tsv 的规则）。
 KNOWN=""
+# ---- M212（第 91 轮）：**已实测「压力档 O(n²) 很慢但通过」**的语料表 ----
+#   格式：`路径<TAB>压力档所需秒数<TAB>理由`（理由必须写实测数字与判据）。
+#   ⚠️ 与 `--known` 的区别：`--known` 是「**输出本身不确定** ⇒ 排除在判定之外」；
+#   本表是「**输出确定且正确，只是慢** ⇒ 给足时间**继续判**」—— 覆盖面**不丢**。
+#   为什么需要：`m88_s3/s1b_gc_stress`（200 线程 × 300 分配）在
+#   `PX_GC_STRESS=1 PX_GC_INLINE=1` 下每次分配都触发一轮全 STW GC ⇒ 实测 **274.5s**
+#   （rc=0 · 输出与正常档**逐字节一致** · RSS 平稳 ~7MB）⇒ 默认 60s 上限必记 STIMEOUT，
+#   那是**判据的时间上限**问题，不是缺陷。
+SLOW=""
 EXTRA_ENV=""
 WORK="${PX_SWEEP_WORK:-}"
 
@@ -82,6 +91,7 @@ while [ $# -gt 0 ]; do
         --no-inline)  NO_INLINE=1 ;;
         --keep-side)  KEEP_SIDE=1 ;;
         --known)      KNOWN="$2"; shift ;;
+        --slow)       SLOW="$2"; shift ;;
         --env)        EXTRA_ENV="$2"; shift ;;
         --t-norm)     T_NORM="$2"; shift ;;
         --t-stress)   T_STRESS="$2"; shift ;;
@@ -124,6 +134,12 @@ emit() {   # $1=tag $2=src $3=detail
     printf '%s\t%s\t%s\n' "$1" "$2" "$3"
 }
 
+# M212：查 `--slow` 表 ⇒ 打印该语料的压力档秒数（无则空）
+slow_secs() {
+    [ -n "$SLOW" ] && [ -f "$SLOW" ] || return 0
+    awk -F'\t' -v k="$1" '$0 !~ /^#/ && $1 == k { print $2; exit }' "$SLOW"
+}
+
 DIAG_RE='PX_GC_LIVECHK|PX_GC_UAFDET|PX_GC_TRACE|空闲链表损坏|已回收对象|core dumped'
 SIG_RE='Segmentation|Aborted|Bus error'
 
@@ -134,6 +150,10 @@ run_one_raw() {
     name="$(basename "$src" .px)"
     bin="./build/$name"
     blog="$WORK/build.$name.log"
+    # M212：压力档上限可按 `--slow` 表逐语料覆盖（默认仍 $T_STRESS）
+    local TS="$T_STRESS"; local SNOTE=""
+    local _ss; _ss="$(slow_secs "$src")"
+    if [ -n "${_ss:-}" ]; then TS="$_ss"; SNOTE="已实测慢语料（--slow 表：${_ss}s）"; fi
 
     rm -f "$dir/build/$name"
     if ! ( cd "$dir" && timeout -k "$T_KILL" "$T_BUILD" "$ROOT/tools/px" build "$(basename "$src")" ) >"$blog" 2>&1; then
@@ -157,9 +177,9 @@ run_one_raw() {
     # ---- 压力档 ----
     # shellcheck disable=SC2086
     ( cd "$dir" && env PX_GC_STRESS=1 $INLINE_ENV $DET_ENV $EXTRA_ENV \
-        timeout -k "$T_KILL" "$T_STRESS" "$bin" </dev/null ) >"$WORK/s.out" 2>"$WORK/s.err"; local rs=$?
+        timeout -k "$T_KILL" "$TS" "$bin" </dev/null ) >"$WORK/s.out" 2>"$WORK/s.err"; local rs=$?
     if [ "$rs" -eq 124 ]; then
-        emit STIMEOUT "$src" "压力档超时 ${T_STRESS}s"
+        emit STIMEOUT "$src" "压力档超时 ${TS}s"
         return
     fi
     if [ "$rs" -ge 128 ]; then
@@ -181,7 +201,7 @@ run_one_raw() {
         #   打印「用时 701ms（阈值 700ms）」⇒ 假红）。判据从「两跑」升级为「2+2 跑」。
         # shellcheck disable=SC2086
         ( cd "$dir" && env PX_GC_STRESS=1 $INLINE_ENV $DET_ENV $EXTRA_ENV \
-            timeout -k "$T_KILL" "$T_STRESS" "$bin" </dev/null ) >"$WORK/s2.out" 2>"$WORK/s2.err"
+            timeout -k "$T_KILL" "$TS" "$bin" </dev/null ) >"$WORK/s2.out" 2>"$WORK/s2.err"
         if ! cmp -s "$WORK/s.out" "$WORK/s2.out"; then
             emit NONDET "$src" "压力档自身两遍不一致（计时类）"
             return
@@ -191,7 +211,7 @@ run_one_raw() {
         emit FAIL_OUT "$src" "${d:0:150}"
         return
     fi
-    emit PASS "$src" ""
+    emit PASS "$src" "$SNOTE"
 }
 
 # ---- M207：运行副作用护栏 --------------------------------------------------

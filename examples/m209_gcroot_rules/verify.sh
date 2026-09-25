@@ -120,7 +120,7 @@ fi
 
 step "② 静态：新规则全仓候选 = 0（两次一致）"
 for i in 1 2; do
-    python3 selfhost/gcroot_audit.py --show-victims > "$W/new$i.log" 2>&1 || bad "扫描器执行失败"
+    python3 selfhost/gcroot_audit.py --show-victims > "$W/new$i.log" 2> "$W/new$i.err" || bad "扫描器执行失败"
 done
 if diff -q "$W/new1.log" "$W/new2.log" >/dev/null 2>&1; then
     ok "两次运行结果一致（确定性）"
@@ -129,11 +129,23 @@ else
 fi
 head -1 "$W/new1.log" | sed 's/^/  ℹ️ /'
 if grep -q '候选 0' "$W/new1.log"; then
-    ok "全仓候选 0（缺陷 279–282 收口：11 条由「触发点仅构造器」消除 + 8 条由三条排除规则消除）"
+    ok "全仓候选 0（**手抄触发点集合**下：缺陷 279–282 收口）"
+elif grep -q '候选 3' "$W/new1.log"; then
+    # M212（第 91 轮）：默认触发点集合已改为**源码派生**（手抄 27 → 派生 518）
+    #   ⇒ 手抄集合漏掉的那 300+ 个分配入口现在会触发判定 ⇒ 照出 3 条候选，
+    #   全部经判定为假阳（逐条理由在 examples/m206_gcroot/BASELINE.tsv §①），
+    #   其中 1 条（h3_send_fields 的 body_val）**直接照出**真漏登记（缺陷 291，已修）。
+    ok "全仓候选 3（**源码派生触发点集合**下；3 条全判假阳，见 m206 BASELINE §①）"
+    grep -q '源码派生' "$W/new1.err" \
+        || bad "未在 stderr 打印「源码派生」诊断行 ⇒ 可能退回手抄集合"
+elif grep -q '候选 0' "$W/new1.log"; then
+    bad "报告「候选 0」但 --trigger-set 应为 derived ⇒ 触发点集合派生失效"
 else
-    bad "仍有候选"; sed -n '2,14p' "$W/new1.log" | sed 's/^/      /'
+    bad "候选数既不是 0 也不是 3"; sed -n '2,14p' "$W/new1.log" | sed 's/^/      /'
 fi
-NSTAT=$(sed -n '1p' "$W/new1.log")
+# ⚠️ M212：诊断行**已移到 stderr**（`--json` 的 stdout 必须是纯 JSON），
+#   规模锚点从 stdout 里的「扫描 …」行取（不要用 `sed -n 1p`）。
+NSTAT=$(grep '扫描 ' "$W/new1.log" | head -1)
 echo "$NSTAT" | grep -qE "函数 1593|函数 15[0-9][0-9]" || true
 FUNCS=$(echo "$NSTAT" | grep -o '函数 [0-9]*' | awk '{print $2}')
 KEEPS=$(echo "$NSTAT" | grep -o '登记站点 [0-9]*' | awk '{print $2}')
@@ -148,8 +160,11 @@ else
     bad "规模锚点失败：登记站点 ${KEEPS:-?} < $MIN_KEEPS"
 fi
 
-step "③ 静态：旧规则对照（--grow）候选 = 11 且全部带「旧规则」标记"
-python3 selfhost/gcroot_audit.py --grow --json > "$W/grow.json" 2>&1 || bad "对照扫描失败"
+step "③ 静态：旧规则对照（--trigger-set legacy --grow）候选 = 11 且全部带「旧规则」标记"
+# ⚠️ M212：对照**必须显式指定 legacy 触发点集合**——否则会跑成「派生触发点 + 旧规则」
+#   的混合体（实测出 13 条、其中 2 条无标记），对照就不可复现了。
+#   「旧规则对照」的语义 = **M208 的整套规则**（手抄触发点集合 + push/dict_set 当触发点）。
+python3 selfhost/gcroot_audit.py --trigger-set legacy --grow --json > "$W/grow.json" 2> "$W/grow.err" || bad "对照扫描失败"
 python3 - "$W/grow.json" <<'PY' > "$W/grow.chk" 2>&1
 import json, sys
 d = json.load(open(sys.argv[1], encoding='utf-8'))

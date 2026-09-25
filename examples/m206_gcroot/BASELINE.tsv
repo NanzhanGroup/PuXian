@@ -9,9 +9,20 @@
 #   口径文件：`docs/GC_ROOTS.md` §9 · 判定依据由 `examples/m209_gcroot_rules/verify.sh` 的
 #     层 ⑤「判据回放」与 `--self-test` 的 16 锚点共同把守（含 3 条**反向判据**）。
 #
-# ── §① 当前在册候选（必须与扫描结果**逐条**一致；M209 起为空） ──────────────────────
+# ── §① 当前在册候选（必须与扫描结果**逐条**一致） ──────────────────────────────
+#
+# ⚠️ M212（第 91 轮 · 缺陷 288）**本表从 0 条 → 3 条**：审计器的「触发点」集合
+#   **改为源码派生**（`selfhost/gcroot_derive.py`；手抄 27 个 → 派生 **518** 个）
+#   ⇒ 此前被手抄集合**漏掉**的分配入口（`px_call` 族 / `px_session_read` /
+#     `h3_send_fields` / `bi_*` 整族 …）现在都会触发判定 ⇒ 照出 3 条候选。
+#   3 条**全部经判定为假阳**（逐条理由见下），其中 1 条**直接照出一处真漏登记**
+#   （缺陷 291 = `h3_send_fields` 的 `body_val`，已修）—— 这正是「漏报比假阳危险」的
+#   实证：手抄集合下它是**不可见**的。
 #
 # 列（在册区 · 非注释行）：file<TAB>func<TAB>trigger<TAB>victim<TAB>判定<TAB>理由
+runtime/runtime.c	bi_session_del	px_session_write(	nd	假阳	M212 动态取证：`probe_rt.px` 补 session_del 覆盖后，压力档（STRESS+INLINE+LIVECHK+UAFDET）**8 轮 × 40 请求全绿**（bad=0 · 无检测器标记）。机制：`nd` 经 `sess` 可达，而 `sess` 由 `px_session_read` 的 TLS 登记条目持有（M183 **延迟收缩**：条目到**下一次 KEEP** 才物理回收，而 `bi_session_del` 全程无 KEEP）⇒ 不会被回收。⚠️ 这是**隐性耦合**（靠延迟收缩的副作用兜住），与 `bi_session_set` 显式 `PX_KEEP(sess/data)` 不对称 ⇒ 下一轮宜做「被调方实参登记」判据或对称化
+runtime/runtime_h3.c	h3_out_send	h3_send_fields(	bv	假阳	报告点是**调用点**，真漏洞点在**被调方内部**：M212 缺陷 291 已修 —— `h3_send_fields` 入口 `PX_KEEP(body_val)`（与 M170 的 `PX_KEEP(fields)` 同帧、同一分配窗口）⇒ 实参在**任何分配之前**即被登记 ⇒ 调用点的 `bv` 安全。⚠️ 本行同时登记一个**跨函数判据缺口**：审计器看不见「被调方登记了实参」⇒ 列为下一轮候选
+runtime/runtime_xml.c	xml_build_node	bi_xml_escape(	sv	假阳	`bi_xml_escape` 体内**唯一**分配点是 `:333 px_str(out.data)`，它晚于 `:319-320` 对 `args[0]` 的读取与 `:322-332` 对 `s` 的**全部消费**（循环里 `xbuf_push` 走裸 `realloc`，不 `gc_register`）⇒ 到达触发点时 `sv` 已死（**后置存活**判据）
 #
 # ── §② 档案区：M206 的 8 条人工判定 → M209 已下沉为**判据**（仅存档，扫描器不再报） ──
 #  为什么留档：① 它们是「判据成形」的史料（哪条形状曾被人工判过）；② 后人若怀疑

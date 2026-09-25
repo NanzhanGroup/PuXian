@@ -45,7 +45,31 @@ _ALLOC_NAMES = [
     'px_iter_at',      # M207（缺陷 263）：**按字符串取值会新建串对象** ⇒ 是一条分配路径
     'px_call', 'px_method', 'px_vm_call',
 ]
-ALLOC_RX = re.compile(r'\b(' + '|'.join(_ALLOC_NAMES) + r')\s*\(')
+# ---- M212（第 91 轮 · 缺陷 288）：**触发点必须源码派生** ----
+#   上面 `_ALLOC_NAMES` 是 M206 手抄的一份构造器名单（27 个）。M209 已把判据定成
+#   「触发点 = 调用链上会 `gc_register` 的入口」⇒ 名单**必须从源码派生**。
+#   实测：源码派生的闭包 = **329** 个，手抄只覆盖 27 ⇒ 手抄集合**漏掉 300+ 个分配入口**
+#   （例：`px_call` 之外的 `px_session_read` / `px_s3_exec` / `h3_send_fields` /
+#     `bi_*` 整族）⇒ 这正是「M209 遗留：漏报比假阳危险」的量化答案。
+#   ⇒ 现在：`TRIGGER_NAMES`（会发生分配）与 `PRODUCER_NAMES`（结果确实是新 LXValue）
+#     由 `selfhost/gcroot_derive.py` 在 `main()` 里派生后注入；`_ALLOC_NAMES` 降为
+#     **手抄集合的原样留证**（`--trigger-set legacy` 时才用，用于 A/B 与留证）。
+#   ⚠️ 为什么两者必须分开：`px_s3_exec` 返回 `int`、`px_parse_multipart` 返回 `void`
+#     —— 它们**会分配**（是 TRIGGER），但**结果不是对象**；若当 PRODUCER，
+#     ④「把结果记进活集合」会把 `int st` 记成「未登记的 GC 受害者」⇒ 4 条假阳（实测）。
+TRIGGER_NAMES = list(_ALLOC_NAMES)
+PRODUCER_NAMES = list(_ALLOC_NAMES)
+ALLOC_RX = re.compile(r'\b(' + '|'.join(TRIGGER_NAMES) + r')\s*\(')
+PRODUCER_RX = re.compile(r'\b(' + '|'.join(PRODUCER_NAMES) + r')\s*\(')
+
+
+def set_trigger_sets(triggers, producers):
+    """M212：注入源码派生的触发点/生产者集合（重建两个正则）。"""
+    global TRIGGER_NAMES, PRODUCER_NAMES, ALLOC_RX, PRODUCER_RX
+    TRIGGER_NAMES = sorted(set(triggers))
+    PRODUCER_NAMES = sorted(set(producers))
+    ALLOC_RX = re.compile(r'\b(' + '|'.join(TRIGGER_NAMES) + r')\s*\(')
+    PRODUCER_RX = re.compile(r'\b(' + '|'.join(PRODUCER_NAMES) + r')\s*\(')
 GROW_ON = False   # M208 遗留名（勿用）：M209 起改叫 LEGACY_GROW —— 见下
 LEGACY_GROW = False   # M209：仅用于**复现旧规则**（把 push/dict_set 当触发点 ⇒ 19 候选）。
 # ---- M208（缺陷 270）：**隐式分配**原语 ----
@@ -96,6 +120,15 @@ DECL_RX = re.compile(r'^\s*(?:const\s+)?(LXValue|LXObject|PxVMFunc)\s*\*?\s*'
 # lvalue 尾巴：`LXValue l` → `l`；`a[0]` → `a[0]`；`s->v` → `s->v`
 LVALUE_TAIL_RX = re.compile(
     r'([A-Za-z_][A-Za-z0-9_]*(?:\s*(?:\[[^\]]*\]|\.\s*[A-Za-z_]\w*|->\s*[A-Za-z_]\w*))*)\s*$')
+# ---- M212（缺陷 290）：**登记动作**本身 ⇒ 被登记对象成为 GC 根 ----
+#   形态：`o->as.gen.list = px_list(0);` … `gc_register(o, sizeof(LXObject));`
+#   在 `gc_register` 那一刻，`o` 进 `g_tmp_root` 且进 `g_objs`（runtime.c:3049 → :3051）
+#   ⇒ 标记阶段扫 `o` 的全部字段 ⇒ `o->…` 里的子对象**可达** ⇒ 不会被回收。
+#   ⇒ 判据：触发点是登记动作、且受害者的**基名**就是被登记的那个名字 ⇒ 豁免。
+#   （实测：不加这条会把 `px_gen_lazy`/`px_gen_from_list` 判成候选 —— 而 M207 缺陷 264
+#     的修复**正是**「字段填齐之后再注册」这个形态。）
+_REGISTER_RX = re.compile(
+    r'\b(gc_register|PX_KEEP|px_root_keep|px_root_push_keep)\s*\(')
 
 
 def strip_comments_strings(src: str) -> str:
@@ -380,6 +413,16 @@ def audit_text(code: str, relpath: str):
                         held = [k for k in live if _held(k)]
                     else:
                         held = []
+                    # M212（缺陷 290）：见 `_REGISTER_RX` 处的说明 —— 登记动作把被登记
+                    #   对象变成根 ⇒ 它的字段/元素从此可达 ⇒ 一并豁免。
+                    _rm = _REGISTER_RX.match(m.group(0))
+                    if _rm:
+                        _m3 = re.match(r'\s*&?\s*([A-Za-z_][A-Za-z0-9_]*)',
+                                       text[m.end():])
+                        if _m3:
+                            _rn = _m3.group(1)
+                            held += [k for k in live
+                                     if re.split(r'[\[.\-]', k)[0] == _rn]
                     if held:
                         live = {k: v for k, v in live.items() if k in held}
                         continue
@@ -406,7 +449,9 @@ def audit_text(code: str, relpath: str):
             # ④ 把本次分配的结果记进活集合
             lhs_raw, rhs = find_assign(text)
             if lhs_raw is not None and rhs is not None:
-                if ALLOC_RX.search(rhs) and call_tail_is_empty(rhs, None):
+                # M212：记「活值」只认 **PRODUCER**（结果确实是新对象）——
+                #   TRIGGER 里那 40+ 个返回 int/void 的函数不能把 `int st` 记成活值。
+                if PRODUCER_RX.search(rhs) and call_tail_is_empty(rhs, None):
                     lm = LVALUE_TAIL_RX.search(lhs_raw)
                     # M209（缺陷 282）：**写通过指针**（`*outv = px_str_len(...)`）是**交棒出帧**
                     #   —— 值交给调用方保管（与 `return` 同口径）。实例：
@@ -422,7 +467,7 @@ def audit_text(code: str, relpath: str):
                         #   变量（`v = px_str_len(…)` 在 switch 的 case 块里，而 `LXValue v;`
                         #   在外层）时，用赋值处的块会误剪 ⇒ **漏报**（违反审计器的本分）。
                         live[key] = (abs_line, decl_block.get(base, stack[-1]))
-                elif not ALLOC_RX.search(rhs):
+                elif not PRODUCER_RX.search(rhs):
                     # 覆盖（RHS 本身不是分配）⇒ 旧值失效
                     lm = LVALUE_TAIL_RX.search(lhs_raw)
                     if lm:
@@ -430,7 +475,7 @@ def audit_text(code: str, relpath: str):
             # ④b 消费：受害值作为赋值右值被存进别处（`slots[dst] = r;` / `x->f = v;`）
             lhs_raw2, rhs2 = find_assign(text)
             if lhs_raw2 is not None and rhs2 is not None and live:
-                if not (ALLOC_RX.search(rhs2) and call_tail_is_empty(rhs2, None)):
+                if not (PRODUCER_RX.search(rhs2) and call_tail_is_empty(rhs2, None)):
                     lm2 = LVALUE_TAIL_RX.search(lhs_raw2)
                     lhsname = lm2.group(1).strip() if lm2 else ''
                     for k in list(live.keys()):
@@ -678,6 +723,13 @@ def main():
                     help='M209：**旧规则对照** —— 把 px_dict_set/px_list_push 当触发点'
                          '（复现 M208 的 19 候选）。该前提已被证伪（缺陷 279），'
                          '仅用于 A/B 与留证，默认关闭。')
+    ap.add_argument('--trigger-set', choices=['derived', 'legacy'], default='derived',
+                    help='M212：触发点集合来源。derived=从 runtime/*.c 源码派生'
+                         '（调用链可达 gc_register 的函数）；legacy=M206 的手抄构造器名单'
+                         '（**已知漏 300+ 个分配入口**，仅用于 A/B 与留证）。默认 derived。')
+    ap.add_argument('--min-triggers', type=int, default=250,
+                    help='M212 规模锚点：派生触发点数少于该值即判红（防派生静默失效'
+                         '⇒ 空集 ⊇ 任意集 ⇒ 假绿）')
     ap.add_argument('--min-funcs', type=int, default=1,
                     help='下限锚点：函数数少于该值即判红（防扫描器静默失效）')
     args = ap.parse_args()
@@ -687,6 +739,29 @@ def main():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     global LEGACY_GROW
     LEGACY_GROW = bool(args.grow)
+    # ---- M212：注入**源码派生**的触发点/生产者集合 ----
+    if args.trigger_set == 'derived':
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        try:
+            import gcroot_derive
+            _t, _p, _st = gcroot_derive.derive_sets(root)
+        except Exception as e:                    # noqa: BLE001
+            # ⚠️ **不静默回退**（M199/M200 纪律：判定不了必须响亮）——
+            #   悄悄退回手抄集合 = 把「漏报」伪装成「全绿」。
+            sys.stderr.write('gcroot_audit: 派生触发点失败（%s）⇒ 拒绝回退到'
+                             '手抄集合（那会把漏报伪装成全绿）\n' % e)
+            return 3
+        if len(_t) < args.min_triggers or not (_p <= _t):
+            sys.stderr.write('gcroot_audit: 派生集合异常（TRIGGER=%d < 下限 %d 或 '
+                             'PRODUCER ⊄ TRIGGER）⇒ 拒绝放行\n'
+                             % (len(_t), args.min_triggers))
+            return 3
+        set_trigger_sets(_t, _p)
+        # ⚠️ 走 **stderr**（M205 §7.1「通道 = 消费方」）：`--json` 的 stdout 必须
+        #   是**纯 JSON**（`examples/m206_gcroot/verify.sh` 直接 `json.load` 它）
+        #   ⇒ 诊断行混进 stdout 会让门**解析失败**（本轮实测踩过）。
+        sys.stderr.write('# 触发点集合：**源码派生** TRIGGER=%d PRODUCER=%d（手抄集合 %d）\n'
+                         % (len(_t), len(_p), len(_ALLOC_NAMES)))
     files = args.files
     if not files:
         rtdir = os.path.join(root, 'runtime')
