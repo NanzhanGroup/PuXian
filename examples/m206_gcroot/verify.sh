@@ -76,14 +76,14 @@ build_probe() {
     echo "$d/build/$(basename "${src%.px}")"
 }
 
-MIN_FUNCS=1400
-MIN_KEEPS=170
+MIN_FUNCS=1500
+MIN_KEEPS=200
 BASE="$HERE/BASELINE.tsv"
 
-step "① 静态：扫描器自证（4 锚点）"
+step "① 静态：扫描器自证（8 锚点）"
 if python3 selfhost/gcroot_audit.py --self-test > "$W/selftest.log" 2>&1; then
-    grep -q 'self-test: 4 通过 / 0 失败' "$W/selftest.log" && ok "自证 4/4（2 必中 + 2 必不中）" \
-        || { bad "自证结论行不符"; tail -6 "$W/selftest.log" | sed 's/^/      /'; }
+    grep -q 'self-test: 8 通过 / 0 失败' "$W/selftest.log" && ok "自证 8/8（5 必中 + 3 必不中）" \
+        || { bad "自证结论行不符"; tail -8 "$W/selftest.log" | sed 's/^/      /'; }
 else
     bad "自证脚本失败"; tail -6 "$W/selftest.log" | sed 's/^/      /'
 fi

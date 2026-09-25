@@ -1,0 +1,38 @@
+# ============================================================
+# M207 压力筛探针 · **生成器 / 可迭代实参 / 闭包环境**
+# ------------------------------------------------------------
+# 为什么它能抓到东西（三条本轮的缺陷都在这一小段路上）：
+#   · 生成器对象由 `px_gen_lazy` / `px_gen_from_list` 建 —— 修前**不 gc_register**
+#     ⇒ 标记阶段永远不会处理它 ⇒ 它持有的物化 list 不被标记 ⇒ 被 sweep 回收（缺陷 264）。
+#     ⚠️ **列表源看不出来**（每取一项不分配 ⇒ GC 不跑）；**字符串源**每取一项
+#     `px_iter_at` 都新建串对象 ⇒ GC 必跑 ⇒ 才显形。
+#   · `px_as_list` 的 tuple/str 支先建 list、再在循环里分配 ⇒ list 被回收（缺陷 263）。
+#   · 闭包环境 dict 不登记 ⇒ MKCLO 后丢捕获（缺陷 262）。
+# 判据：正常档与压力档 stdout **逐字节一致**（由 cxstress_sweep 判定）。
+# ============================================================
+print("1 join_gen_list=" + join("-", (x for x in [1, 2, 3])))
+print("2 join_gen_str=" + join("", (c for c in "中文")))
+print("3 join_str=" + join("-", "abc"))
+print("4 join_tuple=" + join("-", (1, 2, 3)))
+print("5 sorted_gen_str=" + str(sorted((c for c in "cab"))))
+print("6 sorted_str=" + str(sorted("cab")))
+print("7 sorted_tuple=" + str(sorted((3, 1, 2))))
+print("8 reversed_str=" + reversed("abc"))
+print("9 reversed_cjk=" + reversed("中文"))
+print("10 contains_str=" + str(contains("abc", "b")))
+print("11 contains_tuple=" + str(contains((1, 2, 3), 2)))
+print("12 rev_list=" + str(reversed([1, 2, 3])))
+print("13 gen_filter=" + join(",", (x for x in [1, 2, 3, 4] if x % 2 == 0)))
+
+
+def mk(n):
+    return fn(x):
+        return x + n
+
+
+let f = mk(10)
+let g = fn(y):
+    return y * 2
+print("14 closure=" + str(f(5)) + "," + str(g(5)))
+print("15 nested_gen=" + str(sorted((c for c in reversed("xyz")))))
+print("M207-PROBE-GEN-OK")

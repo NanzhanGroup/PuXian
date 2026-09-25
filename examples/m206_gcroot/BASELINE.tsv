@@ -1,7 +1,18 @@
 # M206 GC 根面静态审计 —— **已判定基线**（候选 ⇄ 判定 一一对齐；门由此判「有无新增」）
 # 列：file<TAB>func<TAB>trigger<TAB>victim<TAB>判定<TAB>理由
 # 规则：判定只允许「假阳」；出现「真」= 有未修的漏登记 ⇒ 门必红。
-#       （12 + 7 + 1 = 20 处**真**站点已在 M206 修复，故本表不含任何「真」。）
+#       （12 + 7 + 1 = 20 处**真**站点已在 M206 修复；M207 又修 6 个编号 / 10 处：
+#        259 bi_os_capture · 260 h_exchange「首次升级为 list」· 261 px_http_dispatch ×4 ·
+#        262 vm_run_loop MKCLO · 263 px_as_list（tuple/str 支）· 264 px_gen_{lazy,from_list}
+#        —— 故本表仍**不含任何「真」**。）
+# ⚠️ M207 扫描器修复（同族三处判据缺口，都由「实跑」照出来）：
+#   ① `split_functions` 必须支持**跨行签名** —— 原单行正则让 `h_exchange` 这类函数
+#      **整体不在审计面上**（函数数 1456 → 1587）；
+#   ② `px_dict_set`/`px_list_push` 不是「消费接收者」，把它们当消费会**整族漏报**
+#      「先建容器、再往里放东西」（漏掉 bi_os_capture）；
+#   ③ `px_iter_at`（字符串取值会新建串对象）与 `px_func_env`（先注册后填字段 ⇒
+#      注册点那次 GC 看不到实参）必须归到「分配」与「不豁免」两侧。
+#   ④ BASELINE.tsv 的规模锚点已随之上调（函数 ≥1500 · 登记站点 ≥200）。
 runtime/runtime.c	px_gen_materialize	px_call(	keep	假阳	受害者 keep 在该分支其后即 continue/return（死值）；触发点是循环**下一轮**的分配，与它无关
 runtime/runtime.c	px_gen_next	px_call(	keep	假阳	同族：分支末尾直接 return，keep 已死
 runtime/runtime.c	bi_http_get_stream	px_str_len(	rv	假阳	rv 在紧随其后的 if 之后即死；触发点是**下一轮**迭代的 px_str_len（arg 侧已按缺陷 257 登记）

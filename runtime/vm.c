@@ -685,6 +685,15 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             }
             const PxVMFunc* nf = &m->funcs[fidx];
             LXValue env = px_dict();
+            // M207（缺陷 262 · **由 GC 压力筛实测抓到**）：`env` 是裸 C 局部，而循环里的
+            //   `px_dict_set(env, …)` 会 `m128_strdup` 键副本 —— **那是一条分配路径**
+            //   ⇒ 压力档下 env 被回收，随后的 px_dict_get(env,…) 读已释放 dict
+            //   （实测：`PX_GC_LIVECHK=1` 响亮 `读到已回收对象（px_dict_get(dict)）` + SIGABRT；
+            //    默认档下表现为静默错值 —— 闭包丢捕获 ⇒
+            //    `R9001: VM f1:31 CALL 闭包对象缺少所属函数`）。
+            //   ⇒ 修法同缺陷 258/259：创建即 PX_KEEP，作用域结束再 pop。
+            px_root_push();
+            PX_KEEP(env);
             for (int i = 0; i < nf->nup; i++) {          // 捕获 cell 按 callee 的 upnames 序
                 int src = (int)in.c + i;
                 LXValue cell = (src >= 0 && src < fr->nslots) ? slots[src] : px_null();
@@ -692,6 +701,7 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             }
             px_dict_set(env, PX_VM_CLO_KEY, px_int((int64_t)(intptr_t)nf));
             if (in.a < fr->nslots) slots[in.a] = px_func_env(nf->name, px_vm_closure_entry, env);
+            px_root_pop();
             break;
         }
         case PXOP_MOV:
