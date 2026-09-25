@@ -692,8 +692,7 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             //    默认档下表现为静默错值 —— 闭包丢捕获 ⇒
             //    `R9001: VM f1:31 CALL 闭包对象缺少所属函数`）。
             //   ⇒ 修法同缺陷 258/259：创建即 PX_KEEP，作用域结束再 pop。
-            px_root_push();
-            PX_KEEP(env);
+            px_root_push_keep(env);
             for (int i = 0; i < nf->nup; i++) {          // 捕获 cell 按 callee 的 upnames 序
                 int src = (int)in.c + i;
                 LXValue cell = (src >= 0 && src < fr->nslots) ? slots[src] : px_null();
@@ -845,6 +844,16 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
         //   与解释轨分叉。文案与解释轨逐字一致：`字典键必须是字符串，实际是 <t>`。
         case PXOP_NEWDICT: {
             LXValue d = px_dict();
+            // M208（缺陷 268 · **由 M207 的 GC 压力筛语料实跑定位**）：`d` 只活在 C 局部，
+            //   而循环里的 `px_dict_set(d, …)` 会 `m128_strdup` 键副本 + 扩容 `xrealloc`
+            //   —— **那是一条分配路径**（M207 的静态审计器当时没把它算作分配，见缺陷 269）
+            //   ⇒ INLINE 档下 `d` 在第二次 `px_dict_set` 前就被回收，随后对它写入
+            //   （实测 examples/m88_s3/s1b_gc_stress：`[PX_GC_LIVECHK] 读到已回收对象
+            //    （px_dict_set(dict)）` + SIGABRT；**默认档下是静默错值**）。
+            //   修法同缺陷 262：**创建即 PX_KEEP**，落了槽再出作用域。
+            //   注：不能图省事「先 `slots[in.a] = d` 再循环」—— in.a 与 k/v 槽
+            //   （b..b+2n-1）**可能别名**，提前落槽会冲掉键/值。
+            px_root_push_keep(d);
             int n = (int)in.c;
             for (int i = 0; i < n; i++) {
                 int k0 = (int)in.b + 2 * i;
@@ -855,6 +864,7 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
                 }
             }
             slots[in.a] = d;
+            px_root_pop();
             break;
         }
         // DICTSET（M163 · 缺陷 169）：a=dict 槽，b=key 槽，c=val 槽 —— dict 推导式置键。
@@ -1183,6 +1193,49 @@ void px_vm_gc_mark_state(void* vst) {
             px_gc_mark_slots(&fr->unlock_obj, 1);                // 持锁对象保活（帧弹前）
         if (fr->env.type != PX_NULL)                             // M160：闭包帧 env 保活
             px_gc_mark_slots(&fr->env, 1);                       //   （闭包对象可能已不可达）
+    }
+}
+
+// M208 诊断（缺陷 267 定位）：打印「仍指向 obj 的帧槽」（帧号/槽号/函数/pc/当前指令）。
+//   runtime.c 的 px_uaf_access_check 命中时调用（runtime.c 不包含 vm.h，故实现在此）。
+void px_vm_dbg_scan_refs(const char* tag, void* vst, const void* obj) {
+    PxVmState* st = (PxVmState*)vst;
+    if (!st || st->nframes <= 0) return;
+    for (int i = 0; i < st->nframes; i++) {
+        PxFrame* fr = &st->frames[i];
+        if (!fr->slots) continue;
+        for (int k = 0; k < fr->nslots; k++) {
+            if (!px_dbg_val_is_obj(fr->slots[k]) || fr->slots[k].as.obj != (LXObject*)obj) continue;
+            const char* opn = "?";
+            int pc = fr->pc;
+            if (fr->f && fr->f->bc && pc >= 0 && pc < fr->f->nbc) opn = px_op_name(fr->f->bc[pc].op);
+            char b[400];
+            int n = snprintf(b, sizeof(b),
+                "[PX_GC_DBG]  ← %s 帧[%d/%d] 槽[%d] fn=%s pc=%d 指令=%s\n",
+                tag, i, st->nframes, k, fr->f && fr->f->name ? fr->f->name : "?", pc, opn);
+            if (n > 0) (void)write(2, b, (size_t)n);
+        }
+    }
+}
+
+// M208 诊断：打印「执行者当前帧」的函数名 / pc / 最近若干条指令（定位出错指令）
+void px_vm_dbg_dump_exec(void) {
+    PxVmState* st = g_vm_state;
+    if (!st || st->nframes <= 0) { (void)write(2, "[PX_GC_DBG] 无执行帧\n", 22); return; }
+    PxFrame* fr = &st->frames[st->nframes - 1];
+    const PxVMFunc* f = fr->f;
+    char b[256];
+    int n = snprintf(b, sizeof(b), "[PX_GC_DBG] 执行帧 fn=%s pc=%d line=%d nframes=%d nslots=%d\n",
+                     f && f->name ? f->name : "?", fr->pc, fr->line, st->nframes, fr->nslots);
+    if (n > 0) (void)write(2, b, (size_t)n);
+    if (!f || !f->bc) return;
+    int cur = fr->pc - 1;   // 取指时已 pc+1 ⇒ 当前指令 = pc-1
+    for (int i = cur - 6; i <= cur + 1; i++) {
+        if (i < 0 || i >= f->nbc) continue;
+        const PxInst ins = f->bc[i];
+        n = snprintf(b, sizeof(b), "[PX_GC_DBG]   %s%d op=%s a=%d b=%d c=%d fl=%d\n",
+                     i == cur ? ">>" : "  ", i, px_op_name(ins.op), ins.a, ins.b, ins.c, ins.fl);
+        if (n > 0) (void)write(2, b, (size_t)n);
     }
 }
 

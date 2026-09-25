@@ -1,3 +1,59 @@
+## M208 · **VM 解释循环内的「构造 → 登记」窗口**（缺陷 268 / 269 / 270）（第 87 轮）
+
+> 主项 = M207 记账为「缺陷 267 家族（帧槽根面）」的三个 FAIL 语料的**真根因**。三件诊断
+> （LIVECHK 引用溯源 + 执行帧指令 dump + 原子登记自检）把病灶从「帧槽」翻到
+> **「对象已在堆上、却不在任何根面」的窗口**上：**回收出口自己把这段窗口的唯一保护清掉了**。
+>
+> **这条前提正是 M170/182/183/206/207 全部 `PX_KEEP` 修复的共同依赖。**
+>
+> 交付：`runtime/{runtime.c,vm.c,coro.c}` + 原子原语 `px_root_push_keep`（全仓改写 55 处）
+> + 审计器**隐式分配**规则（`--grow`）+ 门 `examples/m208_vm_c_local_roots/`（6 层 · 3 负控）。
+
+### 一 三个编号
+
+| 编号 | 形状 | 修法 |
+|---|---|---|
+| **268** | `PXOP_NEWDICT` / `px_list_n`：新建容器只在 **C 局部**，而紧接着的 `px_dict_set`/`px_list_push` **本身会分配**（键副本 `m128_strdup` · 条目 `xrealloc` 扩容） ⇒ 容器在落槽/登记前被回收 | 创建即登记（`px_root_push_keep`） |
+| **269** ⭐ | **`px_gc_collect` 出口把 `g_tmp_root = NULL`** —— 而它是「构造 → 调用方接住」窗口的**唯一**保护；这条路上恰有 M110-S2 **协作式安全点**（`gc_unblock_stop → gc_pause_if_requested`）⇒ 本线程**主动**停在「对象在堆上但不在任何根面」⇒ 被并发另一轮 GC 收走。`PX_GC_STRESS=1 PX_GC_INLINE=1` 下 **100% 复现**，且**只在并发路径**（单线程探针全绿） | 出口**不清** `g_tmp_root`（语义 = 本线程最近登记的对象 · 构造窗口未结束；每轮必标记 ⇒ 不可能被回收；代价 = 每线程多保活 1 个对象） |
+| **270** | 静态审计器**没把 `px_dict_set`/`px_list_push` 算作分配点** ⇒ 「先建容器、再往里放东西」一族**整族静默漏报** | 新增**隐式分配**规则（`GROW_RX` + `--grow`）；`px_root_push_keep` 计入登记站点 |
+
+### 二 判据（S13 / S14）
+
+- **S13 构造与登记之间不得存在安全点**：两段式 `px_root_push(); PX_KEEP(x);` 是**两次**
+  `gc_unblock_stop`（中间即窗口）⇒ 改用**原子** `px_root_push_keep(x)`（一个临界区）。
+  **全仓改写 55 处**（runtime.c 53 · vm.c 2），门断言「相邻两段式 = 0」。
+- **S14 隐式分配计入分配点**（`--grow`；默认关以保持 m206 门的既有契约）。
+
+### 三 门 `examples/m208_vm_c_local_roots/`（6 层）
+
+① 审计器自证 **10/10**（+ hit6/miss4 两锚点，miss3 因新规则**改判**）+ `--grow` 下
+`runtime/vm.c` **候选 0** · ② S13 不变量（相邻两段式 0 · 原语在位 · **自检在位**） ·
+③ S14 守卫（`px_gc_collect` **两条**路径都不得清 `g_tmp_root`）· ④ `probe_lit`（单线程）/
+`probe_coro`（8 协程）两档 · ⑤ `m93_s3/coro_gc_block` 压力档回归（修前必红） ·
+⑥ 负控 3 道（恢复 `g_tmp_root = NULL;` / 撤 `PXOP_NEWDICT` 登记 / 撤 `px_list_n` 登记
+⇒ 各自独立判红 + 源逐字节还原）。
+
+### 四 实测（修前 → 修后 · 压力档 `PX_GC_STRESS=1 PX_GC_INLINE=1 PX_GC_LIVECHK=1`）
+
+| 语料 | 修前 | 修后 |
+|---|---|---|
+| `examples/m208…/probe_coro.px`（新） | 3/3 `LIVECHK 读到已回收对象` + SIGABRT | **5/5 PASS**（`total=926480` 逐字一致） |
+| `examples/m93_s3/coro_gc_block.px` | 3/3 FAIL（LIVECHK / `R1003 迭代长度 25 → 26` / core） | **3/3 PASS** |
+| `examples/m88_s3/s1b_gc_stress.px` | 2/2 ABORT | 未再崩（**耗时 > 120s ⇒ 归 STIMEOUT**，非缺陷） |
+
+### 五 连带的「旧门被改动打到」（4 处，全部按纪律修）
+
+- `m206_gcroot` 负控 A/C 锚点 · `m170_gc_bridge_root` 负控 B 锚点 ·
+  `m183_gc_root_handover` PATCH_B/PATCH_D 锚点 · `m207_gcstress` 负控 B 锚点
+  —— 都含 `px_root_push(); + PX_KEEP(x);` 两段式原文，改写后逐条同步为 `px_root_push_keep`。
+- `m206_gcroot` 自证期望 `8 通过` → **`10 通过`**（新增 2 锚点）。
+
+### 六 未收口（→ 下一轮）
+
+**缺陷 271 族**（`--grow` 新照出的 **18 处**既有站点 + 1 处假阳）：逐条清单与受害者见
+`docs/GC_ROOTS.md` §8.5。本轮**只登记不修**；M208 门对全仓 `--grow` 候选**只记录不断言**，
+`m206` 门继续走默认规则集（`BASELINE.tsv` 无需改动）。
+
 ## M207 · **GC 压力筛常态化**（判据五缺口 + 缺陷 259–264 · 266）（第 86 轮）
 
 > 主项 = **「保证强度」欠账的第二项**。M170 / M182 / M183 / M206 修的 **29 处**「GC 误回收仍在

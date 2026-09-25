@@ -209,8 +209,7 @@ assert new in s, "anchor A"
 open(p,"w",encoding="utf-8").write(s.replace(new,old,1)); print("PATCH-A-OK")'
 
 PATCH_B='p="runtime/runtime.c"; s=open(p,encoding="utf-8").read()
-n1="""    px_root_push();
-    PX_KEEP(l);
+n1="""    px_root_push_keep(l);
     if (st == 200) {"""
 o1="""    if (st == 200) {"""
 n2="""    free(body);
@@ -235,9 +234,7 @@ assert new in s, "anchor C"
 open(p,"w",encoding="utf-8").write(s.replace(new,"",1)); print("PATCH-C-OK")'
 
 PATCH_D='p="runtime/runtime.c"; s=open(p,encoding="utf-8").read()
-n1="""        LXValue env = px_dict();
-        px_root_push();
-        PX_KEEP(env);"""
+n1="""        px_root_push_keep(env);"""
 o1="""        LXValue env = px_dict();"""
 n2="""        LXValue srv = px_dict();
         PX_KEEP(srv);"""

@@ -176,3 +176,78 @@ selfhost/gcstress_sweep.sh --no-inline                  # 判据自证专用
 ③ **正判据**（`--env PX_M207_PERTURB=1` 故意造差异 ⇒ 必须判 `FAIL_OUT`）· ④⑤ 负控 A/B
 （撤 `px_gen_lazy` 的 `gc_register` / 撤 `px_as_list` 的 `PX_KEEP` ⇒ 必红）·
 ⑥ 负控 C（判据自伤：比对改恒真 ⇒ ③ 不再红）· ⑦ 覆盖边界登记。
+
+---
+
+## 8 M208：VM 解释循环内的「构造 → 登记」窗口（缺陷 268 / 269 / 270）
+
+### 8.1 背景
+
+M207 的全量压力筛把 3 个语料判 `FAIL`（`m88_s3/s1b_gc_stress` · `m93_s3/coro_gc_block` ·
+`m96_s3`），当时记账为「**缺陷 267 家族**（帧协程/挂起协程/多线程的帧槽根面）」。M208 用
+**三件诊断**把它定位到真病灶（**不是帧槽根面**）：
+
+| 诊断 | 作用 | 加在哪 |
+|---|---|---|
+| `PX_GC_LIVECHK` 命中时的**引用溯源** | 扫「执行者 TLS 登记根栈 + 全部存活协程帧槽 + 已暂停线程 vm_state 快照」，回答**谁还指着它** | `runtime.c: px_dbg_obj_refs` |
+| **执行帧指令 dump** | 打印当前帧函数/pc/最近 8 条指令（`>>` 标当前） | `runtime.c/vm.c: px_vm_dbg_dump_exec` |
+| `px_root_push_keep` **自检** | 登记那一刻对象**已经**是回收态 ⇒ 响亮「登记时该对象已被回收」 | `runtime.c` |
+
+### 8.2 定论（实测链）
+
+1. 溯源说：对象**无任何帧槽指向**、却在**执行者自己的 TLS 登记根栈里** ⇒ 槽/帧不是问题。
+2. 执行帧 dump 说：正在执行 `NEWLIST` / `NEWDICT`（`allocer`/`worker`）⇒ **站点在解释循环里**。
+3. 自检说：**登记那一刻它已经被回收** ⇒ 病灶在「**构造 → 登记**」这段窗口内。
+4. `PX_CORO_WORKERS=1` + 单线程探针全绿、多线程/多协程必红 ⇒ 与**并发路径**强相关。
+5. 机制闭合：`px_gc_collect` 出口把 `g_tmp_root = NULL`，而 `g_tmp_root` 正是这段窗口的
+   **唯一**保护；这条路上又恰有一个 **M110-S2 协作式安全点**（`gc_unblock_stop →
+   gc_pause_if_requested`）⇒ 本线程**主动**停在「对象已在堆上、却不在任何根面」，
+   被并发的另一轮 GC 收走。**100% 复现**（`PX_GC_STRESS=1 PX_GC_INLINE=1`）。
+
+**⇒ 这条前提被打破，正是 M170/182/183/206/207 所有 `PX_KEEP` 修复的共同依赖。**
+
+### 8.3 三个编号与修法
+
+| 编号 | 形状 | 修法 |
+|---|---|---|
+| **268** | `PXOP_NEWDICT` / `px_list_n` 的新建容器只在 **C 局部**，而 `px_dict_set`/`px_list_push` **本身会分配**（键副本 `m128_strdup`、条目 `xrealloc` 扩容） | 创建即登记（`px_root_push_keep`） |
+| **269** | **回收出口清 `g_tmp_root`** ⇒ 「构造 → 调用方接住」窗口无保护（窗口内恰有安全点） | 出口**不清** `g_tmp_root`（语义 = 「本线程最近登记的对象 · 构造窗口未结束」；每轮必标记 ⇒ 不可能被回收；代价 = 每线程多保活 1 个对象） |
+| **270** | 静态审计器**没把 `px_dict_set`/`px_list_push` 算作分配点** ⇒ 「先建容器、再往里放东西」一族**整族静默漏报** | 新增 `GROW_RX`（**隐式分配**）+ `--grow` 开关；`px_root_push_keep` 计入登记 |
+
+### 8.4 判据（S13 / S14 · 新增）
+
+- **S13**：**构造与登记之间不得存在安全点**。惯用法从两段式
+  `px_root_push(); PX_KEEP(x);`（两次 `gc_unblock_stop` ⇒ 中间即窗口）
+  改为**原子** `px_root_push_keep(x)`（一个临界区）。全仓已改写 **55 处**（runtime.c 53 / vm.c 2）。
+- **S14**：**隐式分配**（`px_dict_set` / `px_list_push` / `*_locked`）计入审计器的分配点，
+  且**不适用**「持有实参」豁免（容器本身不因此成为 GC 根）。
+
+### 8.5 ⚠️ 未收口：缺陷 271 族（`--grow` 新照出的 18 处）
+
+`--grow` 打开后全仓候选 **19**（默认 legacy 仍为 **8** —— 与 `m206/BASELINE.tsv` 一一对齐，
+`runtime/vm.c` 为 **0**）。逐条判定后登记为**缺陷 271 族（下一轮收口）**：
+
+| 文件 | 站点（行号·函数） | 受害者 |
+|---|---|---|
+| runtime.c | 3459/3460 `px_gen_materialize` · 3477 `px_gen_next` | `r = px_call(...)` 的返回值 |
+| runtime.c | 11436 `bi_map` · 11452 `bi_filter` | 回调返回值 |
+| runtime.c | 13204 `bi_os_popen` · 23493 `bi_session_set` · 23510 `bi_session_del` | 结果 dict |
+| runtime.c | 24336 `px_http_dispatch_h3` | 结果 dict |
+| runtime.c | 17587/17617/17638 `bi_http_get_stream` | 分段串 |
+| runtime.h3.c | 899 `bi_h3_conn_peer` · 915 `bi_h3_conn_stats` | 结果 dict |
+| runtime.h3_qpack.c | 272 `qp_dec_value_string` · 350 `px_h3_qdec` | 解码值 |
+| runtime.image.c | 70 `bi_img_decode` | 结果 dict |
+| runtime.sqlite.c | 211 `bi_sqlite_query` | 行数组 |
+| runtime.c | 3241 `px_cell`（**假阳**：`px_list(1)` + 单次 push ⇒ 不可能扩容） | `l` |
+
+**判据边界（如实）**：本轮 M208 门只对 `runtime/vm.c`（`--grow`）断言 **0**，
+对全仓 `--grow` 候选**只记录不断言**；`m206` 门继续走默认（legacy）规则集，
+故它的 `BASELINE.tsv` 无需改动。
+
+### 8.6 门
+
+`examples/m208_vm_c_local_roots/`（6 层）：① 审计器自证 10/10 + `--grow` 下 `vm.c` 候选 0 ·
+② S13 不变量（相邻两段式 = 0 · 原语在位 · 自检在位）· ③ S14 守卫（两条回收路径都不清
+`g_tmp_root`）· ④ `probe_lit`（单线程）/`probe_coro`（8 协程）两档 · ⑤ `m93_s3/coro_gc_block`
+压力档回归（修前必红）· ⑥ 负控 3 道（恢复 `g_tmp_root = NULL;` / 撤 NEWDICT 登记 /
+撤 `px_list_n` 登记 ⇒ 各自独立判红 + 源逐字节还原）。

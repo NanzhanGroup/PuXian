@@ -35,13 +35,23 @@ _ALLOC_NAMES = [
     'px_call', 'px_method', 'px_vm_call',
 ]
 ALLOC_RX = re.compile(r'\b(' + '|'.join(_ALLOC_NAMES) + r')\s*\(')
+GROW_ON = False   # M208：隐式分配规则开关（--grow 置位）
+# ---- M208（缺陷 270）：**隐式分配**原语 ----
+#   `px_dict_set` / `px_list_push` 自身会分配（键副本 `m128_strdup`、条目数组 `xrealloc` 扩容）
+#   ⇒ 它们是**分配点**，必须计入「此后未登记活值可能被回收」。
+#   为什么单独一张表：它们**不持有**受害者（容器本身不因这次调用成为 GC 根）⇒ 不能走
+#   HOLD_RX 的「实参豁免」。M207 把它们放进 HOLD_RX 是为了豁免「把值放进已登记容器」，
+#   但那恰好让「先建容器、再往里放东西」这一族（缺陷 268 = PXOP_NEWDICT）静默漏报。
+#   实测：加上本表后 `PXOP_NEWDICT`（`LXValue d = px_dict(); … px_dict_set(d,…)`）当场被抓。
+GROW_RX = re.compile(r'\b(px_dict_set|px_dict_set_checked|px_dict_set_locked|'
+                     r'px_list_push|px_list_push_locked)\s*\(')
 # ---- 明确**不分配**（立即数 / 常量池 / 纯读） ----
 SAFE_RX = re.compile(
     r'\b(px_null|px_uninit|px_bool|px_int|px_float|px_str_const|px_str_const_n|'
     r'px_empty_str_get|px_dict_get|px_dict_get_ci|px_dict_len|px_len|px_type|'
     r'px_get_global|px_global_at|px_dict_keys|px_is_)\w*\s*\(')
 # ---- 登记 / 交棒 ----
-KEEP_RX = re.compile(r'\bPX_KEEP\s*\(\s*([A-Za-z_][A-Za-z0-9_\[\]\.\->]*)')
+KEEP_RX = re.compile(r'\b(?:PX_KEEP|px_root_push_keep)\s*\(\s*([A-Za-z_][A-Za-z0-9_\[\]\.\->]*)')
 KEEP2_RX = re.compile(r'\bpx_root_keep\s*\(\s*&\s*([A-Za-z_][A-Za-z0-9_\[\]\.\->]*)')
 # ---- 「消费」：把值交给别的调用（假定被调方接管/复制/存进已登记容器） ----
 # ⚠️ M207（缺陷 259）：`px_dict_set(d, k, v)` / `px_list_push(l, v)` **不在此列** ——
@@ -266,6 +276,22 @@ def audit_text(code: str, relpath: str):
             if rm and rm.group(1):
                 live.pop(rm.group(1).rstrip(';'), None)
             # ③ 分配（按文本顺序：每一次分配都可能回收此前所有未登记活值）
+            #    M208（缺陷 270）：隐式分配（px_dict_set/px_list_push 的键副本与扩容）一并计入，
+            #    且**不适用**「持有实参」豁免 —— 容器本身不因此成为 GC 根。
+            #    ⚠️ 该规则 **默认关闭**（`--grow` 开启）：它会一次性照出 18 处既有站点
+            #    （缺陷 271 族，见 docs/GC_ROOTS.md §8），需按轮次收口；
+            #    默认关闭可让 m206 门保持其原有契约（不因新增判据而假红）。
+            if GROW_ON:
+                for g in GROW_RX.finditer(text):
+                    stats['allocs'] += 1
+                    if live:
+                        findings.append({
+                            'file': relpath, 'line': abs_line, 'func': fname,
+                            'trigger': g.group(0) + ' [隐式分配]',
+                            'victims': [{'name': k, 'line': v}
+                                        for k, v in sorted(live.items(), key=lambda kv: kv[1])],
+                        })
+                        live = {}
             for m in ALLOC_RX.finditer(text):
                 stats['allocs'] += 1
                 if live:
@@ -414,6 +440,34 @@ static int demo_multiline_ok(HPool* pool, int n,
 }
 '''
 
+# M208（缺陷 270）新增锚点：**`px_list_push` / `px_dict_set` 是隐式分配点** ⇒
+#   `LXValue lst = px_list(4); px_list_push(lst, nv);` 里的 **lst** 未登记 ⇒ 命中
+#   （上一条 FIX_MISS3 因此从「不中」改判「命中」—— 它原本只盯着 nv，漏了 lst）。
+FIX_HIT6 = '''
+static int demo_grow_victim(HPool* pool, int n, char* out) {
+    LXValue nv = px_str(out);
+    px_root_push_keep(nv);
+    LXValue lst = px_list(4);
+    px_list_push(lst, nv);
+    px_root_pop();
+    return 0;
+}
+'''
+
+# M208 反向锚点：同形状但用**原子** `px_root_push_keep(lst)` ⇒ 不中
+FIX_MISS4 = '''
+static int demo_grow_ok(HPool* pool, int n, char* out) {
+    LXValue nv = px_str(out);
+    px_root_push_keep(nv);
+    LXValue lst = px_list(4);
+    px_root_push_keep(lst);
+    px_list_push(lst, nv);
+    px_root_pop();
+    px_root_pop();
+    return 0;
+}
+'''
+
 
 # M207 新增锚点④：**`px_list_n` 不是「持有实参的构造器」**（缺陷 266 的形状）——
 #   它内部先 `px_list(n)`（注册 + 可能触发 GC）再逐项入列 ⇒ 注册点看不到 items。
@@ -429,12 +483,14 @@ static LXValue bi_demo_capture(const char* cmd, int n) {
 
 
 def self_test():
+    global GROW_ON
+    GROW_ON = True   # M208：自证覆盖**全部**规则（含隐式分配规则 hit6/miss3/miss4）
     import tempfile
     cases = [('hit1', FIX_HIT1, True), ('hit2', FIX_HIT2, True),
              ('hit3', FIX_HIT3, True), ('hit4', FIX_HIT4, True),
-             ('hit5', FIX_HIT5, True),
+             ('hit5', FIX_HIT5, True), ('hit6', FIX_HIT6, True),
              ('miss1', FIX_MISS1, False), ('miss2', FIX_MISS2, False),
-             ('miss3', FIX_MISS3, False)]
+             ('miss3', FIX_MISS3, True), ('miss4', FIX_MISS4, False)]
     ok = fail = 0
     with tempfile.TemporaryDirectory() as td:
         for name, body, expect_hit in cases:
@@ -458,6 +514,8 @@ def main():
     ap.add_argument('--json', action='store_true')
     ap.add_argument('--show-victims', action='store_true')
     ap.add_argument('--self-test', action='store_true')
+    ap.add_argument('--grow', action='store_true',
+                    help='M208：把 px_dict_set/px_list_push 计入分配点（照出缺陷 271 族；默认关）')
     ap.add_argument('--min-funcs', type=int, default=1,
                     help='下限锚点：函数数少于该值即判红（防扫描器静默失效）')
     args = ap.parse_args()
@@ -465,6 +523,8 @@ def main():
         return self_test()
 
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    global GROW_ON
+    GROW_ON = bool(args.grow)
     files = args.files
     if not files:
         rtdir = os.path.join(root, 'runtime')

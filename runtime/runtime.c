@@ -798,11 +798,15 @@ static const char* uaf_type_str(int ty) {
 //   ⇒ `r.headers` 仍报 type=dict 但键值全错、json 序列化报 "encountered a cycle"）。
 //   本检查借账本 A 的 O(1) 存活位：对象若已被 sweep 回收且尚未重新分配 ⇒ 当场响亮。
 //   注意：槽被**重新分配**后无法识别（那是真对象）——故它是「筛子」而非证明。
+// M208 诊断（缺陷 267 定位）：已回收对象的**引用溯源** —— 前向声明（定义在 GC 全局区之后）
+static void px_dbg_obj_refs(const void* obj);
+
 __attribute__((noinline))
 static void px_uaf_access_check(const void* o, const char* what) {
     if (!g_gc_livechk || !o || !g_uaf_rec) return;
     const UafRec* r = &g_uaf_rec[uaf_idx(o)];
     if (r->slot != o || !r->freed) return;
+    px_dbg_obj_refs(o);   // M208 诊断：先把「谁还指着它」打出来，再 abort
     int n = (int)strlen(what);
     if (n > 96) n = 96;
     char buf[320];
@@ -1736,6 +1740,10 @@ static bool px_value_is_obj(LXValue v) {
     return g_type_is_obj[t];
 }
 
+// M208 诊断辅助：g_type_is_obj 表在本文件私有（static）⇒ 给 coro.c/vm.c 的诊断代码
+//   一个导出谓词（仅诊断路径使用，不进热路径）。
+int px_dbg_val_is_obj(LXValue v) { return px_value_is_obj(v) ? 1 : 0; }
+
 // 释放对象内部子分配 + 对象本体（sweep 阶段调用）
 static void px_obj_free(LXObject* o) {
     int uaf_prev_ty = g_uaf_free_type;                 // M183：标记「本对象及其内部数组」的归属类型
@@ -2444,6 +2452,79 @@ static void gc_trace_check_freed(LXObject* o) {
     }
 }
 
+// ==================== M208 诊断（缺陷 267 定位）：已回收对象的引用溯源 ====================
+// 用途：PX_GC_LIVECHK 命中时（abort 前）回答一个问题 —— **「谁还指着它」**：
+//   ① 执行者自身 VM 帧槽（px_vm_gc_mark 应覆盖）；
+//   ② 全部存活协程的帧槽（px_coro_gc_mark_roots 应覆盖，经 coro.c 回调打印）；
+//   ③ 本轮已暂停线程的 vm_state 快照（根4 应覆盖）。
+//   判据：若**有**帧槽仍指向它 ⇒ 该帧未被标记（根面漏扫）；若**无**任何帧槽指向它
+//   ⇒ 它只活在某个 C 局部 / abuf / 桥内临时变量里（漏 PX_KEEP）。
+extern void px_coro_dbg_refs(const void* obj) __attribute__((weak));   // coro.c 提供
+// 帧槽扫描实现在 vm.c（PxVmState/PxFrame 只在那里可见；runtime.c 不包含 vm.h）
+extern void px_vm_dbg_scan_refs(const char* tag, void* vst, const void* obj);
+extern void px_vm_dbg_dump_exec(void);
+
+static void px_dbg_obj_refs(const void* obj) {
+    char b[192];
+    int n = snprintf(b, sizeof(b), "\n[PX_GC_DBG] 引用溯源 obj=%p（执行者 tid=%lx）precise=%d roots_n=%d\n",
+                     obj, (unsigned long)pthread_self(), g_gc_precise, g_px_roots_n);
+    if (n > 0) (void)write(2, b, (size_t)n);
+    {
+        const LXObject* oo = (const LXObject*)obj;
+        const char* inobjs = "不在 g_objs（已被 sweep 回收）";
+        int idxg = -1;
+        for (int i = 0; i < g_obj_count; i++) if (g_objs[i] == oo) { inobjs = "**在 g_objs（未被回收！）**"; idxg = i; break; }
+        n = snprintf(b, sizeof(b), "[PX_GC_DBG] 对象现状 type=%d(%s) g_obj_count=%d idx=%d %s\n",
+                     (int)oo->type, px_type_name((LXValue){ .type = oo->type }), g_obj_count, idxg, inobjs);
+        if (n > 0) (void)write(2, b, (size_t)n);
+    }
+    for (int k = 0; k < g_px_roots_n; k++) {
+        if (px_value_is_obj(g_px_roots[k]) && g_px_roots[k].as.obj == (LXObject*)obj) {
+            n = snprintf(b, sizeof(b), "[PX_GC_DBG]  ← **仍在执行者 TLS 登记根栈** idx=%d\n", k);
+            if (n > 0) (void)write(2, b, (size_t)n);
+        }
+    }
+    {
+#if defined(__GLIBC__)
+        void* fr[32];
+        int nf = backtrace(fr, 32);
+        (void)write(2, "[PX_GC_DBG] 调用栈:\n", 24);
+        backtrace_symbols_fd(fr, nf, 2);
+#endif
+    }
+    if (px_vm_cur_state) px_vm_dbg_scan_refs("执行者自身", px_vm_cur_state(), obj);
+    if (px_vm_dbg_dump_exec) px_vm_dbg_dump_exec();
+    for (int t = 0; t < g_thread_cap; t++) {
+        GCThreadInfo* ti = &g_threads[t];
+        if (!ti->in_use || !ti->vm_state) continue;
+        char tag[64];
+        snprintf(tag, sizeof(tag), "线程槽%d(%s)", t,
+                 ti->paused && ti->epoch == g_gc_epoch ? "本轮已暂停" : "未暂停");
+        px_vm_dbg_scan_refs(tag, ti->vm_state, obj);
+    }
+    if (px_coro_dbg_refs) px_coro_dbg_refs(obj);
+    {
+        pthread_t me = pthread_self();
+        int found = -1;
+        n = snprintf(b, sizeof(b), "[PX_GC_DBG] active_threads=%d epoch=%d 本线程槽=", g_active_threads, g_gc_epoch);
+        if (n > 0) (void)write(2, b, (size_t)n);
+        for (int t = 0; t < g_thread_cap; t++)
+            if (g_threads[t].in_use && pthread_equal(g_threads[t].tid, me)) { found = t; break; }
+        n = snprintf(b, sizeof(b), "%d\n", found);
+        if (n > 0) (void)write(2, b, (size_t)n);
+        for (int t = 0; t < g_thread_cap; t++) {
+            GCThreadInfo* ti = &g_threads[t];
+            if (!ti->in_use) continue;
+            n = snprintf(b, sizeof(b),
+                "[PX_GC_DBG]   槽%d tid=%lx paused=%d epoch=%d root_n=%d roots_ok=%d vm=%d\n",
+                t, (unsigned long)ti->tid, ti->paused, ti->epoch, ti->root_n,
+                ti->roots == g_px_roots, ti->vm_state != NULL);
+            if (n > 0) (void)write(2, b, (size_t)n);
+        }
+    }
+    (void)write(2, "[PX_GC_DBG] 溯源结束（无输出 = 无任何帧槽指向它）\n", 46);
+}
+
 void px_gc_collect(void) {
     // M11 修复④：GC 执行期间屏蔽自己的 SIG_GC_STOP——防止上一轮"延迟信号"
     // 在本轮 GC 执行中投递（handler 会自旋等 epoch，而 epoch 只有本线程能推进
@@ -2612,7 +2693,7 @@ void px_gc_collect(void) {
         g_alloc_bytes = 0;
         g_gc_freed += freed;
         g_gc_runs++;
-        g_tmp_root = NULL;
+        // M208（缺陷 269）：**不得清 g_tmp_root** —— 见 px_gc_collect 出口注释。
         if (g_obj_count >= g_gc_threshold) g_gc_threshold = g_obj_count * 2;
         gc_debug("collect #%d(并发): 标记 %lld/%d 回收 %d 存活 %d 线程 %d 耗时%lldms", g_gc_runs, g_gc_marked, g_obj_count + freed, freed, g_obj_count, g_paused_count, gc_mono_ms() - t0);
         if (g_gc_debug) (void)write(2, "[mk] after-collect\n", 19);
@@ -2695,7 +2776,17 @@ void px_gc_collect(void) {
     g_alloc_bytes = 0;
     g_gc_freed += freed;
     g_gc_runs++;
-    g_tmp_root = NULL;
+    // M208（缺陷 269）：**不得清 g_tmp_root** ——
+    //   病灶：`gc_register` 在触发回收**之前**置 `g_tmp_root = 刚建对象`（保护构造窗口），
+    //   而回收出口把 `g_tmp_root = NULL`；于是「构造 → 调用方登记（PX_KEEP）」之间的
+    //   **任何并发 GC 轮次**都看不到该对象 —— 而这条路上恰有一个 M110-S2 的**协作式安全点**
+    //   （`gc_unblock_stop` → `gc_pause_if_requested`）⇒ 本线程会**主动**停在那里，
+    //   快照里 `tmp_root` 已是 NULL、TLS 根栈里还没有它 ⇒ 新对象被本轮回收
+    //   （实测 examples/m208_vm_c_local_roots/probe_coro.px：100% 复现，
+    //    `PX_GC_LIVECHK=1` 响亮 + `px_root_push_keep` 自检「**登记时该对象已被回收**」）。
+    //   修法：**让 `g_tmp_root` 一直指向「本线程最近登记的对象」** —— 语义即
+    //   「构造窗口未结束（调用方尚未接住）」；因为每轮都会标记它，所以它**不可能**被回收，
+    //   代价是每线程最多多保活 1 个对象（有界、且是上一刻刚建的对象）。
     if (g_obj_count >= g_gc_threshold) g_gc_threshold = g_obj_count * 2;
     gc_debug("collect #%d: 标记 %lld/%d 回收 %d 存活 %d 跳过 %d 耗时%lldms", g_gc_runs, g_gc_marked, g_obj_count + freed, freed, g_obj_count, g_gc_skips, gc_mono_ms() - t0);
     gc_hash_free(&set);
@@ -2732,6 +2823,59 @@ void px_root_push(void) {
     if (g_px_trunc_pending >= 0 && g_px_trunc_pending < rbase) rbase = g_px_trunc_pending;
     g_px_root_marks[g_px_root_marks_n++] = rbase;
     if (g_px_root_marks_n > g_px_root_marks_peak) g_px_root_marks_peak = g_px_root_marks_n;
+    gc_unblock_stop(&old);
+}
+
+// M208（缺陷 269）：**原子**「开作用域 + 登记」 —— 两件事在**同一个临界区**内完成。
+//   病灶（病灶形状由缺陷 268 的探针实测反推，见 examples/m208_vm_c_local_roots/probe_coro.px）：
+//   惯用法 `px_root_push(); PX_KEEP(x);` 是**两次** `gc_unblock_stop`，而它是 M110-S2 的
+//   **协作式安全点**（gc_pause_if_requested）⇒ 若并发 GC 正在暂停本线程，本线程会**恰好**
+//   停在`px_root_push` 出口 —— 此刻快照（ti->roots/root_n）里**还没有 x**，
+//   而 `gc_register` 那次回收已把 `g_tmp_root` 清成 NULL（g_gc_stress 下**每次分配都回收**
+//   ⇒ 必然已清）⇒ x 只被一个 C 局部持有 ⇒ **被本轮回收**；恢复后 PX_KEEP 压进去的已是
+//   死指针 ⇒ 后续写入 = use-after-free。
+//   ⇒ 判据：**构造与登记之间不得存在任何安全点**。本函数即该判据的可复用实现。
+void px_root_push_keep(LXValue v) {
+    sigset_t old;
+    gc_block_stop(&old);
+    // ① 开作用域（内联 px_root_push 的主体：只记 marks，不收缩 —— 见 M183 延迟收缩）
+    if (g_px_root_marks_n >= g_px_root_marks_cap) {
+        int nc = g_px_root_marks_cap ? g_px_root_marks_cap * 2 : 16;
+        g_px_root_marks = (int*)xrealloc(g_px_root_marks, sizeof(int) * (size_t)nc);
+        g_px_root_marks_cap = nc;
+    }
+    int rbase = g_px_roots_n;
+    if (g_px_trunc_pending >= 0 && g_px_trunc_pending < rbase) rbase = g_px_trunc_pending;
+    g_px_root_marks[g_px_root_marks_n++] = rbase;
+    if (g_px_root_marks_n > g_px_root_marks_peak) g_px_root_marks_peak = g_px_root_marks_n;
+    // ② 登记该值（内联 px_root_keep 的主体：先应用待收缩，再压入）
+    if (px_value_is_obj(v)) {
+        if (g_gc_livechk && g_uaf_rec && v.as.obj) {   // M208 诊断：窗口判定
+            const UafRec* rr = &g_uaf_rec[uaf_idx(v.as.obj)];
+            if (rr->slot == (const void*)v.as.obj && rr->freed) {
+                char bb[192];
+                int nn = snprintf(bb, sizeof(bb),
+                    "[PX_GC_DBG] **登记时该对象已被回收** %p ⇒ 病灶在「构造 → 登记」窗口内\n",
+                    (void*)v.as.obj);
+                if (nn > 0) (void)write(2, bb, (size_t)nn);
+            }
+        }
+        if (g_px_trunc_pending >= 0) {
+            int fbase = g_px_root_marks_n > 0 ? g_px_root_marks[g_px_root_marks_n - 1] : 0;
+            int t = g_px_trunc_pending;
+            if (t < fbase) t = fbase;
+            if (t < g_px_roots_n) g_px_roots_n = t;
+            g_px_trunc_pending = -1;
+        }
+        if (g_px_roots_n >= g_px_roots_cap) {
+            int nc = g_px_roots_cap ? g_px_roots_cap * 2 : 64;
+            g_px_roots = (LXValue*)xrealloc(g_px_roots, sizeof(LXValue) * (size_t)nc);
+            g_px_roots_cap = nc;
+        }
+        g_px_roots[g_px_roots_n++] = v;
+        if (g_px_roots_n > g_px_roots_peak) g_px_roots_peak = g_px_roots_n;
+    }
+    // ③ 出口仍是协作式安全点 —— 但此刻 v **已在根栈里**（这就是与两段式的全部差别）
     gc_unblock_stop(&old);
 }
 
@@ -3044,7 +3188,13 @@ LXValue px_list(int cap) {
 
 LXValue px_list_n(LXValue* items, int n) {
     LXValue v = px_list(n);
+    // M208（缺陷 268 同族）：`v` 只活在 C 局部；`px_list(n)` 的 cap 恰为 n 时逐项 push
+    //   不扩容 ⇒ 现无分配，但这是「靠 n 与 cap 耦合」的巧合 —— 显式登记后该耦合不承重。
+    //   （M207 已把 px_list_n 从「安全持有者」名单剔除，其**调用方**须自行 PX_KEEP 结果；
+    //    本处补的是它**自身**的根面。）
+    px_root_push_keep(v);
     for (int i = 0; i < n; i++) px_list_push(v, items[i]);
+    px_root_pop();
     return v;
 }
 
@@ -4100,8 +4250,7 @@ LXValue px_add(LXValue a, LXValue b) {
     }
     if (a.type == PX_LIST && b.type == PX_LIST) {
         LXValue r = px_list(a.as.obj->as.list.len + b.as.obj->as.list.len);
-        px_root_push();
-        PX_KEEP(r);   // M92 precise：拼接 list 跨 px_list_push 扩容分配
+        px_root_push_keep(r);   // M92 precise：拼接 list 跨 px_list_push 扩容分配
         LXObject* ro = r.as.obj; LXObject* ao = a.as.obj; LXObject* bo = b.as.obj;
         for (int i = 0; i < ao->as.list.len; i++) px_list_push(r, ao->as.list.items[i]);
         for (int i = 0; i < bo->as.list.len; i++) px_list_push(r, bo->as.list.items[i]);
@@ -4725,8 +4874,7 @@ LXValue px_slice(LXValue obj, LXValue start, LXValue end, LXValue step) {
 
     if (kind == 0) { // list
         LXValue r = px_list(n);
-        px_root_push();
-        PX_KEEP(r);   // M92 precise：切片 list 跨 px_list_push 扩容分配
+        px_root_push_keep(r);   // M92 precise：切片 list 跨 px_list_push 扩容分配
         if (k_in > 0) { for (int64_t i = s; i < e; i += k_in) px_list_push(r, obj.as.obj->as.list.items[(int)i]); }
         else { for (int64_t i = s; i > e; i += k_in) px_list_push(r, obj.as.obj->as.list.items[(int)i]); }
         px_root_pop();
@@ -5406,8 +5554,7 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
         if (strcmp(name, "keys") == 0) {
             LXObject* o = obj.as.obj;
             LXValue r = px_list(0);
-            px_root_push();
-            PX_KEEP(r);   // M92 precise：keys list 跨 px_list_push/px_str 分配
+            px_root_push_keep(r);   // M92 precise：keys list 跨 px_list_push/px_str 分配
             for (int i = 0; i < o->as.dict.len; i++) px_list_push(r, px_str(o->as.dict.keys[i]));
             px_root_pop();
             return r;
@@ -5415,8 +5562,7 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
         if (strcmp(name, "values") == 0) {
             LXObject* o = obj.as.obj;
             LXValue r = px_list(0);
-            px_root_push();
-            PX_KEEP(r);   // M92 precise：values list 跨 px_list_push 扩容分配
+            px_root_push_keep(r);   // M92 precise：values list 跨 px_list_push 扩容分配
             for (int i = 0; i < o->as.dict.len; i++) px_list_push(r, o->as.dict.vals[i]);
             px_root_pop();
             return r;
@@ -5428,11 +5574,9 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
             //   解包校验（px_unpack_ck）**响亮报 R1002**（不静默），指引用户写 .items()。
             LXObject* o = obj.as.obj;
             LXValue r = px_list(0);
-            px_root_push();
-            PX_KEEP(r);   // 外层 list 跨 px_list_push/px_list（内层）分配
+            px_root_push_keep(r);   // 外层 list 跨 px_list_push/px_list（内层）分配
             for (int i = 0; i < o->as.dict.len; i++) {
-                px_root_push();
-                PX_KEEP(r);
+                px_root_push_keep(r);
                 LXValue pair = px_list(0);
                 PX_KEEP(pair);
                 px_list_push(pair, px_str(o->as.dict.keys[i]));
@@ -5776,8 +5920,7 @@ static LXValue bi_range(LXValue* args, int nargs, void* ctx) {
     else px_error("R1002: range 需要 1-3 个参数");
     if (step == 0) px_error("R1006: range step 不能为 0");
     LXValue r = px_list(0);
-    px_root_push();
-    PX_KEEP(r);   // M92 precise：累积 list 跨 px_list_push 扩容分配
+    px_root_push_keep(r);   // M92 precise：累积 list 跨 px_list_push 扩容分配
     if (step > 0) for (int64_t i = start; i < end; i += step) px_list_push(r, px_int(i));
     else for (int64_t i = start; i > end; i += step) px_list_push(r, px_int(i));
     px_root_pop();
@@ -6206,8 +6349,7 @@ static int px_as_list(LXValue v, LXValue* out) {
     //   （实测 examples/m178_iterable_args/iter_args.px：`[PX_GC_LIVECHK] 读到已回收对象
     //    （px_list_push(list)）` + SIGABRT → 定位到第 4 条用例 `join("-", "abc")`）。
     //   ⇒ tuple/str 形态（list/gen 形态不新建容器，不受影响）必须先登记新容器。
-    px_root_push();
-    PX_KEEP(l);
+    px_root_push_keep(l);
     for (int i = 0; i < n; i++) px_list_push(l, px_iter_at(v, px_int(i)));
     px_root_pop();
     *out = l;
@@ -6522,8 +6664,7 @@ static LXValue bi_split(LXValue* args, int nargs, void* ctx) {
     const char* sep = (nargs >= 2) ? args[1].as.obj->as.str.data : " ";
     int sep_len = (int)strlen(sep);
     LXValue r = px_list(0);
-    px_root_push();
-    PX_KEEP(r);   // M92 precise：累积 list 跨 px_list_push/px_str_len 分配
+    px_root_push_keep(r);   // M92 precise：累积 list 跨 px_list_push/px_str_len 分配
     if (sep_len == 0) {
         // 按空白切分
         const char* p = s;
@@ -7568,8 +7709,7 @@ static LXValue bi_file_stat(LXValue* args, int nargs, void* ctx) {
     struct stat st;
     if (stat(args[0].as.obj->as.str.data, &st) != 0) return px_null();
     LXValue d = px_dict();
-    px_root_push();
-    PX_KEEP(d);   // 结果 dict 跨 px_dict_set/px_str_len 内部分配
+    px_root_push_keep(d);   // 结果 dict 跨 px_dict_set/px_str_len 内部分配
     px_dict_set(d, "size", px_int((int64_t)st.st_size));
     px_dict_set(d, "mtime", px_int((int64_t)st.st_mtime));
     px_dict_set(d, "mtime_ns", px_int((int64_t)st.st_mtim.tv_sec * 1000000000LL + (int64_t)st.st_mtim.tv_nsec));
@@ -7816,8 +7956,7 @@ static LXValue bi_fd_wait(LXValue* args, int nargs, void* ctx) {
     if (rc < 0) return px_int(-1);   // os_errno() 查（如 EINVAL）
     LXValue r = px_list(0);
     if (rc == 0) return r;           // 超时 → 空 list（与就绪返回类型统一，非错误）
-    px_root_push();
-    PX_KEEP(r);   // M92 precise：就绪 list 跨 px_list_push 扩容分配
+    px_root_push_keep(r);   // M92 precise：就绪 list 跨 px_list_push 扩容分配
     for (int i = 0; i < n; i++) {
         if (pfds[i].revents != 0) px_list_push(r, px_int(pfds[i].fd));
     }
@@ -8460,8 +8599,7 @@ static LXValue bi_dns_lookup(LXValue* args, int nargs, void* ctx) {
         return px_err(px_str(msg));
     }
     LXValue list = px_list(0);
-    px_root_push();
-    PX_KEEP(list);   // M92 precise：累积 list 跨 px_list_push/px_str 分配
+    px_root_push_keep(list);   // M92 precise：累积 list 跨 px_list_push/px_str 分配
     char ip[INET6_ADDRSTRLEN];
     for (struct addrinfo* p = res; p; p = p->ai_next) {
         const void* src = NULL;
@@ -8704,8 +8842,7 @@ static LXValue bi_dns_txt(LXValue* args, int nargs, void* ctx) {
         off += rdlen;
     }
     LXValue list = px_list(0);
-    px_root_push();
-    PX_KEEP(list);
+    px_root_push_keep(list);
     if (!bad) {
         for (int i = 0; i < nt; i++) px_list_push(list, px_str(txts[i]));
     }
@@ -10079,8 +10216,7 @@ static LXValue bi_regex_search(LXValue* args, int nargs, void* ctx) {
     rp_free(root);
     if (!found) return px_null();
     LXValue d = px_dict();
-    px_root_push();
-    PX_KEEP(d);    // M92 precise：结果 dict 跨 px_dict_set/px_list_push/px_str_len 分配
+    px_root_push_keep(d);   // M92 precise：结果 dict 跨 px_dict_set/px_list_push/px_str_len 分配
     px_dict_set(d, "match", px_str_len(text + s, e - s));
     px_dict_set(d, "start", px_int(s));
     px_dict_set(d, "end", px_int(e));
@@ -10110,8 +10246,7 @@ static LXValue bi_regex_find_all(LXValue* args, int nargs, void* ctx) {
     RNode* root = rcompile(pat, err, sizeof(err));
     if (!root) px_error("regex: %s", err);
     LXValue r = px_list(0);
-    px_root_push();
-    PX_KEEP(r);   // M92 precise：累积 list 跨 px_list_push/px_str_len 分配
+    px_root_push_keep(r);   // M92 precise：累积 list 跨 px_list_push/px_str_len 分配
     // M138：迭代规则照 Go `allMatches`（Rust find_iter 同）——
     //   非空匹配：下一个搜索位置 = 匹配尾部；空匹配：位置 +1，**且若其起点恰为前一次匹配的尾部
     //   则丢弃该空匹配**。旧实现无此丢弃 ⇒ `a*` 在 "baab" 上多产出一个 [3,3]（Go: [[0,0],[1,3],[4,4]]）。
@@ -10164,8 +10299,7 @@ static LXValue bi_regex_split(LXValue* args, int nargs, void* ctx) {
     RNode* root = rcompile(pat, err, sizeof(err));
     if (!root) px_error("regex: %s", err);
     LXValue r = px_list(0);
-    px_root_push();
-    PX_KEEP(r);   // M92 precise：r_split 内部 px_list_push 分配
+    px_root_push_keep(r);   // M92 precise：r_split 内部 px_list_push 分配
     r_split(root, (const unsigned char*)text, tlen, r);
     rp_free(root);
     px_root_pop();
@@ -10197,8 +10331,7 @@ static LXValue bi_list_dir(LXValue* args, int nargs, void* ctx) {
     DIR* d = opendir(path);
     if (!d) px_error("fs: 读取目录失败 %s", path);
     LXValue r = px_list(0);
-    px_root_push();
-    PX_KEEP(r);   // M92 precise：累积 list 跨 px_list_push/px_str 分配
+    px_root_push_keep(r);   // M92 precise：累积 list 跨 px_list_push/px_str 分配
     struct dirent* e;
     while ((e = readdir(d)) != NULL) {
         if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
@@ -10240,8 +10373,7 @@ static LXValue bi_list_dir_opt(LXValue* args, int nargs, void* ctx) {
         return px_err(px_str(msg));
     }
     LXValue r = px_list(0);
-    px_root_push();
-    PX_KEEP(r);   // precise GC：累积 list 跨 px_list_push/px_str 分配（M170/M183 铁律）
+    px_root_push_keep(r);   // precise GC：累积 list 跨 px_list_push/px_str 分配（M170/M183 铁律）
     struct dirent* e;
     while ((e = readdir(d)) != NULL) {
         if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
@@ -10375,8 +10507,7 @@ static LXValue json_parse_value(JsonCtx* j) {
     if (*j->p == '{') {
         j->p++;
         LXValue d = px_dict();
-        px_root_push();
-        PX_KEEP(d);   // M92 precise：递归解析结果 dict 跨 px_dict_set/json_parse_value 分配
+        px_root_push_keep(d);   // M92 precise：递归解析结果 dict 跨 px_dict_set/json_parse_value 分配
         json_ws(j);
         if (*j->p == '}') { j->p++; px_root_pop(); return d; }
         while (1) {
@@ -10401,8 +10532,7 @@ static LXValue json_parse_value(JsonCtx* j) {
     if (*j->p == '[') {
         j->p++;
         LXValue a = px_list(0);
-        px_root_push();
-        PX_KEEP(a);   // M92 precise：递归解析结果 list 跨 px_list_push/json_parse_value 分配
+        px_root_push_keep(a);   // M92 precise：递归解析结果 list 跨 px_list_push/json_parse_value 分配
         json_ws(j);
         if (*j->p == ']') { j->p++; px_root_pop(); return a; }
         while (1) {
@@ -11085,8 +11215,7 @@ static LXValue json_value_copy(LXValue v) {
             return v;
         case PX_LIST: {
             LXValue r = px_list(0);
-            px_root_push();
-            PX_KEEP(r);   // M92 precise：深拷贝 list 跨递归 json_value_copy/px_list_push 分配
+            px_root_push_keep(r);   // M92 precise：深拷贝 list 跨递归 json_value_copy/px_list_push 分配
             LXObject* o = v.as.obj;
             for (int i = 0; i < o->as.list.len; i++) px_list_push(r, json_value_copy(o->as.list.items[i]));
             px_root_pop();
@@ -11107,8 +11236,7 @@ static LXValue json_value_copy(LXValue v) {
         }
         case PX_DICT: {
             LXValue r = px_dict();
-            px_root_push();
-            PX_KEEP(r);   // M92 precise：深拷贝 dict 跨递归 json_value_copy/px_dict_set 分配
+            px_root_push_keep(r);   // M92 precise：深拷贝 dict 跨递归 json_value_copy/px_dict_set 分配
             LXObject* o = v.as.obj;
             for (int i = 0; i < o->as.dict.len; i++) {
                 px_dict_set(r, o->as.dict.keys[i], json_value_copy(o->as.dict.vals[i]));
@@ -11138,8 +11266,7 @@ static LXValue json_path_set_at(LXValue base, JPathSeg* segs, int n, LXValue new
         // 深拷贝现有元素（M92 precise：items 收集数组 + 结果 list 仅 C 局部持有，
         // 跨 json_value_copy/px_list_push 分配须登记）
         LXValue* items = xmalloc(sizeof(LXValue) * (size_t)(len > 0 ? len : 1));
-        px_root_push();
-        PX_KEEP(lst);   // base（bi_json_path_set 深拷贝临时，仅 C 持有）跨拷贝分配存活
+        px_root_push_keep(lst);   // base（bi_json_path_set 深拷贝临时，仅 C 持有）跨拷贝分配存活
         for (int i = 0; i < len; i++) {
             items[i] = json_value_copy(o->as.list.items[i]);
             PX_KEEP(items[i]);   // 收集数组仅 C 持有，跨后续递归/分配
@@ -11283,8 +11410,7 @@ static LXValue bi_args(LXValue* args, int nargs, void* ctx) {
     // M198（缺陷 234）：0 参函数 —— 多余实参**响亮**（修前静默忽略）。
     if (nargs != 0) px_error("R1002: args 不需要参数");
     LXValue l = px_list(0);
-    px_root_push();
-    PX_KEEP(l);   // M92 precise：累积 list 跨 px_list_push/px_str 分配
+    px_root_push_keep(l);   // M92 precise：累积 list 跨 px_list_push/px_str 分配
     for (int i = 0; i < g_px_argc; i++) {
         px_list_push(l, px_str(g_px_argv[i]));
     }
@@ -11303,8 +11429,7 @@ static LXValue bi_map(LXValue* args, int nargs, void* ctx) {
     LXObject* o = args[0].as.obj;
     LXValue fn = args[1];
     LXValue r = px_list(0);
-    px_root_push();
-    PX_KEEP(r);          // 累积结果 list：px_list_push 扩容分配/回调期间需存活
+    px_root_push_keep(r);   // 累积结果 list：px_list_push 扩容分配/回调期间需存活
     for (int i = 0; i < o->as.list.len; i++) {
         LXValue item = o->as.list.items[i];
         LXValue res = px_call(fn, &item, 1);
@@ -11320,8 +11445,7 @@ static LXValue bi_filter(LXValue* args, int nargs, void* ctx) {
     LXObject* o = args[0].as.obj;
     LXValue fn = args[1];
     LXValue r = px_list(0);
-    px_root_push();
-    PX_KEEP(r);
+    px_root_push_keep(r);
     for (int i = 0; i < o->as.list.len; i++) {
         LXValue item = o->as.list.items[i];
         LXValue res = px_call(fn, &item, 1);
@@ -11340,8 +11464,7 @@ static LXValue bi_reduce(LXValue* args, int nargs, void* ctx) {
     for (int i = 0; i < o->as.list.len; i++) {
         LXValue item = o->as.list.items[i];
         LXValue pair[2] = { acc, item };
-        px_root_push();
-        PX_KEEP(acc);    // 累积值跨 px_call 回调存活（回调内 GC 会回收仅栈持有的对象）
+        px_root_push_keep(acc);   // 累积值跨 px_call 回调存活（回调内 GC 会回收仅栈持有的对象）
         LXValue nacc = px_call(fn, pair, 2);
         px_root_pop();
         acc = nacc;
@@ -12981,8 +13104,7 @@ static LXValue bi_os_capture(LXValue* args, int nargs, void* ctx) {
     //    默认阈值下表现为**静默错值** —— `r["stdout"]` 读到键名串，`int("stdout")` 报
     //    `R1002 无法将 'stdout' 转为 int`，实测 m116 / m130 两个门当场红）。
     //   ⇒ 修法同缺陷 258：`px_root_push()` 作用域 + **创建即 PX_KEEP**。
-    px_root_push();
-    PX_KEEP(d);
+    px_root_push_keep(d);
     px_dict_set(d, "rc", px_int((int64_t)rc));
     px_dict_set(d, "stdout", px_str_len(bo, no));
     px_dict_set(d, "stderr", px_str_len(be, ne));
@@ -13679,8 +13801,7 @@ static LXValue bi_native_symbols(LXValue* args, int nargs, void* ctx) {
     (void)ctx; (void)args;
     if (nargs != 0) px_error("R1002: native_symbols 不接受参数");
     LXValue r = px_list(0);
-    px_root_push();
-    PX_KEEP(r);   // M92 precise：跨 px_list_push / px_str 分配
+    px_root_push_keep(r);   // M92 precise：跨 px_list_push / px_str 分配
     // 名称表可能含重复（同名被先设成 native、后被别的值覆盖的情况）⇒ 排序后相邻去重
     int n = g_nat_names_n;
     const char** tmp = (const char**)xmalloc(sizeof(char*) * (size_t)(n ? n : 1));
@@ -14806,8 +14927,7 @@ static LXValue bi_udp_recv(LXValue* args, int nargs, void* ctx) {
     // M206（缺陷 258 · **由本门的 UDP 压力档实测抓到**）：r 是裸 C 局部，而紧接着的
     //   `px_bytes_len(buf, n)` 就是一次分配 ⇒ 压力档下 r 被回收、随后 px_dict_set 写进
     //   已释放的 dict（实测 LIVECHK 响亮 + SIGABRT/core）。默认阈值下表现为静默错值。
-    px_root_push();
-    PX_KEEP(r);
+    px_root_push_keep(r);
     px_dict_set(r, "data", px_bytes_len(buf, n));
     char ip[64] = {0};
     inet_ntop(AF_INET, &src.sin_addr, ip, sizeof(ip));
@@ -15443,8 +15563,7 @@ static LXValue px_tls_result_dict(HttpsSession* s, int id, int verify, int stage
         }
     }
     LXValue d = px_dict();
-    px_root_push();
-    PX_KEEP(d);
+    px_root_push_keep(d);
     px_dict_set(d, "ok", px_bool(s != NULL));
     px_dict_set(d, "id", px_int(id));
     px_dict_set(d, "fd", px_int(s ? s->net.fd : -1));
@@ -15637,8 +15756,7 @@ static LXValue bi_tls_send(LXValue* args, int nargs, void* ctx) {
     if (nargs != 2) px_error("R1002: tls_send 需要 (id, data) 参数");
     if (args[0].type != PX_INT) px_error("R1002: tls_send 的 id 需要 int");
     LXValue d = px_dict();
-    px_root_push();
-    PX_KEEP(d);
+    px_root_push_keep(d);
     px_dict_set(d, "ok", px_bool(0));
     px_dict_set(d, "n", px_int(0));
     px_dict_set(d, "err", px_str(""));
@@ -15679,8 +15797,7 @@ static LXValue bi_tls_recv(LXValue* args, int nargs, void* ctx) {
     if (maxlen < 1) maxlen = 1;
     if (maxlen > (1 << 20)) maxlen = 1 << 20;
     LXValue d = px_dict();
-    px_root_push();
-    PX_KEEP(d);
+    px_root_push_keep(d);
     px_dict_set(d, "ok", px_bool(0));
     px_dict_set(d, "data", px_bytes_len(NULL, 0));
     px_dict_set(d, "n", px_int(0));
@@ -16180,8 +16297,7 @@ static LXValue bi_tcp_connect_ex(LXValue* args, int nargs, void* ctx) {
     }
     if (fd < 0) px_net_conn_fail(ebuf, (int)sizeof(ebuf), host, port, stage, er, addr);
     LXValue d = px_dict();
-    px_root_push();
-    PX_KEEP(d);
+    px_root_push_keep(d);
     px_dict_set(d, "ok", px_bool(fd >= 0));
     px_dict_set(d, "fd", px_int(fd >= 0 ? fd : -1));
     px_dict_set(d, "addr", px_str(addr));
@@ -16240,8 +16356,7 @@ static LXValue bi_tcp_opt(LXValue* args, int nargs, void* ctx) {
     char ebuf[128];
     px_go_errno_into(ebuf, (int)sizeof(ebuf), er);
     LXValue d = px_dict();
-    px_root_push();
-    PX_KEEP(d);
+    px_root_push_keep(d);
     px_dict_set(d, "ok", px_bool(ok != 0));
     px_dict_set(d, "nodelay", px_bool(nodelay_v == 1));
     px_dict_set(d, "keepalive", px_bool(keepalive_v == 1));
@@ -16278,8 +16393,7 @@ static LXValue bi_tcp_recv_ex(LXValue* args, int nargs, void* ctx) {
     if (!ok) px_go_errno_into(ebuf, (int)sizeof(ebuf), er);
     else ebuf[0] = 0;
     LXValue d = px_dict();
-    px_root_push();
-    PX_KEEP(d);
+    px_root_push_keep(d);
     px_dict_set(d, "ok", px_bool(ok != 0));
     px_dict_set(d, "data", n > 0 ? px_str_len(buf, n) : px_str(""));
     px_dict_set(d, "n", px_int(n > 0 ? n : 0));
@@ -16321,8 +16435,7 @@ static LXValue bi_tcp_send_ex(LXValue* args, int nargs, void* ctx) {
     if (!ok) px_go_errno_into(ebuf, (int)sizeof(ebuf), er);
     else ebuf[0] = 0;
     LXValue d = px_dict();
-    px_root_push();
-    PX_KEEP(d);
+    px_root_push_keep(d);
     px_dict_set(d, "ok", px_bool(ok != 0));
     px_dict_set(d, "n", px_int(sent));
     px_dict_set(d, "timeout", px_bool(tmo != 0));
@@ -16392,8 +16505,7 @@ static int h_exchange(HPoolSlot* slot, const char* req, int rlen,
     //   **调用者的 C 局部**持有（VM 轨 precise GC **不扫 C 栈**）⇒ 必须在本函数内登记住，
     //   否则中途被回收：轻则丢头（实测 `X-Test` 丢）、重则 `px_dict_set` 写进已释放内存
     //   ⇒ 后续 xmalloc 崩溃（m23c_http_adv 在 PX_GC_STRESS=1 下 SIGSEGV 的根因链之一）。
-    px_root_push();
-    PX_KEEP(*out_headers);
+    px_root_push_keep(*out_headers);
     int chunked = 0, gzip = 0, keep_alive = resp10 ? 0 : 1;
     int content_length = -1;
     char* hline = buf;
@@ -16717,8 +16829,7 @@ static LXValue bi_http_request(LXValue* args, int nargs, void* ctx) {
             //   `headers` 收走 ⇒ 响应头整份丢失（m23c 报 `R1008 字典没有键 'X-Test'`，3/3 必现）。
             //   延迟回收（非 INLINE）= **靠运气遮住**（GC 落到安全点，届时根已登记）—— 这是
             //   它长期只在调试开关组合下发作、却在默认阈值下**偶发**的根因。
-            px_root_push();
-            PX_KEEP(headers);   // headers 已离开 h_exchange 的登记帧 ⇒ 必须立刻接住
+            px_root_push_keep(headers);   // headers 已离开 h_exchange 的登记帧 ⇒ 必须立刻接住
             if (keep_alive) hpool_put(key, slot);
             else { if (slot.tls) https_close(slot.tls); close(slot.fd); }
             LXValue d = px_dict();
@@ -16890,8 +17001,7 @@ static LXValue bi_http_unix(LXValue* args, int nargs, void* ctx) {
     close(fd);
     // M182（缺陷 192 同族）：与 bi_http_request 同修 —— headers 离开 h_exchange 的登记帧后
     //   必须先接住，再进入构造响应 dict 的分配段。
-    px_root_push();
-    PX_KEEP(headers);
+    px_root_push_keep(headers);
     LXValue d = px_dict();
     PX_KEEP(d);   // 紧跟创建
     px_dict_set(d, "status", px_int(status));
@@ -17142,8 +17252,7 @@ static LXValue bi_s3_list(LXValue* args, int nargs, void* ctx) {
     //   （受害槽 = 128B 的 list items 数组）⇒ 写坏 slab 空闲链表首字 ⇒ 真凶与崩溃点相隔
     //   很远（实测崩在 http_conn_worker 的 `px_dict()` 里 `s->in_use[idx]` 越界读）。
     //   仅 STRESS+INLINE 必现（默认阈值下 GC 落到安全点 ⇒ 靠运气遮住）。
-    px_root_push();
-    PX_KEEP(l);
+    px_root_push_keep(l);
     if (st == 200) {
         // 提取 <Key>...</Key>
         const char* p = body;
@@ -18938,8 +19047,7 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
             LXValue fr = px_null(), fs = px_null();
             int fh = 0, fc = 0;
             if (http_pend_take(fd, &fr, &fs, &fh, &fc)) {
-                px_root_push();
-                PX_KEEP(fr); PX_KEEP(fs);
+                px_root_push_keep(fr);   PX_KEEP(fs);
                 int act = http_send_resp(fd, fr, fs, fh, fc, px_conn_pend_len(fd) > 0);
                 px_root_pop();
                 if (act == 0 || act == 1) return px_null();   // close / 已交还 IDLE
@@ -19660,8 +19768,7 @@ static void http_pend_gc_mark(void) {
 static void http_handler_done(void* ud, LXValue ret) {
     int fd = (int)(intptr_t)ud;
     if (fd < 0) return;
-    px_root_push();
-    PX_KEEP(ret);
+    px_root_push_keep(ret);
     // M116（qg-issue 71 D7）：http_serve 的 handler 出错同样不得静默 —— 此前错误协程的
     //   ret 是 vm.ret_val 初值 PX_NULL，http_send_resp 收到 null ⇒ **200 + 空 body**
     //   （比 px_serve 轨的 204 更隐蔽：客户端以为拿到一个正常但空白的响应）。
@@ -20586,8 +20693,7 @@ static char* sse_frame_c(LXValue data) {
 static void sse_handler_done(void* ud, LXValue ret) {
     int fd = (int)(intptr_t)ud;
     if (fd < 0) return;
-    px_root_push();
-    PX_KEEP(ret);   // precise 窗口保护（SSE handler 返回值语义无接收方 → 随即丢弃）
+    px_root_push_keep(ret);   // precise 窗口保护（SSE handler 返回值语义无接收方 → 随即丢弃）
     int push = 0;
     pthread_mutex_lock(&g_sse_mu);
     sse_tab_ensure();
@@ -21235,8 +21341,7 @@ static LXValue stream_takeover_conn(int fd, LXValue req, int route_idx) {
     if (fn.type == PX_FUNC || fn.type == PX_NATIVE) {
         ret = px_call(fn, &req, 1);
     }
-    px_root_push();
-    PX_KEEP(ret);
+    px_root_push_keep(ret);
     int started = 0, chunked = 0;
     pthread_mutex_lock(&g_sse_mu);
     {
@@ -21912,8 +22017,7 @@ static LXValue bi_sse_connect_ex(LXValue* args, int nargs, void* ctx) {
     int slot = sse_cli_prepare(args, nargs, &url, &reconnect_ms, 0);
     if (slot < 0) {
         LXValue d0 = px_dict();
-        px_root_push();
-        PX_KEEP(d0);
+        px_root_push_keep(d0);
         px_dict_set(d0, "ok", px_bool(0));
         px_dict_set(d0, "conn", px_null());
         px_dict_set(d0, "stage", px_int(7));   // 7 = 槽位耗尽
@@ -21927,8 +22031,7 @@ static LXValue bi_sse_connect_ex(LXValue* args, int nargs, void* ctx) {
     }
     int rc = sse_cli_connect_slot(slot, url, reconnect_ms, NULL);
     LXValue d = px_dict();
-    px_root_push();
-    PX_KEEP(d);   // M92 precise：跨 sse_cli_fail_fill / px_int 分配
+    px_root_push_keep(d);   // M92 precise：跨 sse_cli_fail_fill / px_int 分配
     if (rc != 0) {
         sse_cli_fail_fill(d, slot);
         sse_cli_release_slot(slot);
@@ -24540,8 +24643,7 @@ LXValue px_serve_error_resp(int kind) {
 static void px_serve_route_done(void* ud, LXValue ret) {
     int fd = (int)(intptr_t)ud;
     if (fd < 0) return;
-    px_root_push();
-    PX_KEEP(ret);
+    px_root_push_keep(ret);
     // M116（qg-issue 71 D7）：见上 —— 出错协程不得以 null（204）冒充成功
     if (px_coro_errored()) { ret = px_serve_error_resp(0); px_coro_err_consume(); }
     int push = 0;
@@ -24624,8 +24726,7 @@ int px_pxserve_defer(PxHttpOut* out, LXValue req, LXValue handler, LXValue* harg
 static void px_serve_mw_done(void* ud, LXValue ret) {
     int fd = (int)(intptr_t)ud;
     if (fd < 0) return;
-    px_root_push();
-    PX_KEEP(ret);
+    px_root_push_keep(ret);
     // M116（qg-issue 71 D7）：middleware 出错 → 500 短路（此前 ret=null 被当成
     //   "本段放行" ⇒ 链继续往下走：错误被静默吞掉、下游 handler 照常执行）
     if (px_coro_errored()) { ret = px_serve_error_resp(3); px_coro_err_consume(); }
@@ -25701,8 +25802,7 @@ static LXValue bi_list(LXValue* args, int nargs, void* ctx) {
         const char* s = v.as.obj->as.str.data;
         int n = v.as.obj->as.str.len;
         LXValue l = px_list(0);
-        px_root_push();
-        PX_KEEP(l);   // M92 precise：字符 list 跨 px_list_push/px_str_len 分配
+        px_root_push_keep(l);   // M92 precise：字符 list 跨 px_list_push/px_str_len 分配
         int i = 0;
         while (i < n) {
             int cl = 1;
@@ -25720,8 +25820,7 @@ static LXValue bi_list(LXValue* args, int nargs, void* ctx) {
     }
     if (v.type == PX_DICT) {
         LXValue l = px_list(0);
-        px_root_push();
-        PX_KEEP(l);   // M92 precise：keys list 跨 px_list_push/px_str 分配
+        px_root_push_keep(l);   // M92 precise：keys list 跨 px_list_push/px_str 分配
         LXObject* o = v.as.obj;
         for (int i = 0; i < o->as.dict.len; i++) px_list_push(l, px_str(o->as.dict.keys[i]));
         px_root_pop();
@@ -26310,8 +26409,7 @@ static LXValue bi_px_exec(LXValue* args, int nargs, void* ctx) {    (void)ctx;
         //   3/3 必现 —— 受害槽 = 被回收 dict 的 **keys 数组**（class 64）被 `px_dict_set` 写入
         //   ⇒ 写坏 slab 空闲链表首字（与缺陷 198 同族：桥局部漏登记）。
         LXValue env = px_dict();
-        px_root_push();
-        PX_KEEP(env);   // 紧跟创建（中间不得插入任何可能分配的调用）
+        px_root_push_keep(env);   // 紧跟创建（中间不得插入任何可能分配的调用）
         px_dict_set(env, "REQUEST", px_dict());
         px_dict_set(env, "GET", px_dict());
         px_dict_set(env, "POST", px_dict());

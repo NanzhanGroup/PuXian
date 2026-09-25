@@ -1,0 +1,24 @@
+# M208 探针：协程 × 字面量构造 × 压力 GC（缺陷 268 最小复现器）
+# 每条协程在循环里构造 dict/list 字面量（解释循环内 C 局部构造），并发 GC 下应零误回收。
+def worker(w, done):
+    var acc = 0
+    for i in range(240):
+        var d = {"a": i, "b": i + 1, "c": "x" + str(i)}
+        var l = [i, i + 1, "y" + str(i)]
+        var m = {"k1": "v" + str(i), "k2": [i, i * 2]}
+        acc = acc + d["a"] + l[1] + len(str(m["k1"])) + m["k2"][1]
+    done.send(acc)
+
+let N = 8
+let done = chan[int](N)
+for w in range(N):
+    spawn worker(w, done)
+var total = 0
+for i in range(N):
+    total = total + done.recv()
+var expect = 0
+for w in range(N):
+    for i in range(240):
+        expect = expect + i + (i + 1) + (1 + len(str(i))) + (i * 2)
+assert(total == expect, "M208 probe: literal construction roots intact")
+print("M208-PROBE-OK total=" + str(total))

@@ -601,6 +601,38 @@ int px_coro_preempt_check(void) {
 // 引用 UAF）；运行中协程 vm 帧槽已由所属 worker 的 ti->vm_state 覆盖标（重复无害）。
 // BLOCKED 协程帧栈保留在堆（让出点），经 px_vm_gc_mark_state 精确标记 —— 挂起
 // 协程无 C 栈 = 纯帧槽根（M92 精确 GC 直接受益）。
+// M208 诊断（缺陷 267 定位）：存活协程帧槽里谁还指着 obj（runtime.c 的 px_uaf_access_check 调）
+void px_coro_dbg_refs(const void* obj) {
+    sigset_t old;
+    px_gc_block_stop_sig(&old);
+    pthread_mutex_lock(&g_coro_mu);
+    for (PxCoro* c = g_all; c; c = c->all_next) {
+        for (int i = 0; i < c->vm.nframes; i++) {
+            PxFrame* fr = &c->vm.frames[i];
+            if (!fr->slots) continue;
+            for (int k = 0; k < fr->nslots; k++) {
+                if (!px_dbg_val_is_obj(fr->slots[k]) || fr->slots[k].as.obj != (LXObject*)obj) continue;
+                char b[400];
+                int n = snprintf(b, sizeof(b),
+                    "[PX_GC_DBG]  ← 协程 #%d(state=%d) 帧[%d/%d] 槽[%d] fn=%s pc=%d line=%d\n",
+                    c->id, c->state, i, c->vm.nframes, k,
+                    fr->f && fr->f->name ? fr->f->name : "?", fr->pc, fr->line);
+                if (n > 0) (void)write(2, b, (size_t)n);
+            }
+        }
+        if (c->args) {
+            for (int k = 0; k < c->nargs; k++) {
+                if (!px_dbg_val_is_obj(c->args[k]) || c->args[k].as.obj != (LXObject*)obj) continue;
+                char b[200];
+                int n = snprintf(b, sizeof(b), "[PX_GC_DBG]  ← 协程 #%d args[%d]\n", c->id, k);
+                if (n > 0) (void)write(2, b, (size_t)n);
+            }
+        }
+    }
+    pthread_mutex_unlock(&g_coro_mu);
+    px_gc_unblock_stop_sig(&old);
+}
+
 void px_coro_gc_mark_roots(void) {
     sigset_t old;
     px_gc_block_stop_sig(&old);

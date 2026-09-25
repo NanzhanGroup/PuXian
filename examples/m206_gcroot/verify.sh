@@ -82,7 +82,7 @@ BASE="$HERE/BASELINE.tsv"
 
 step "① 静态：扫描器自证（8 锚点）"
 if python3 selfhost/gcroot_audit.py --self-test > "$W/selftest.log" 2>&1; then
-    grep -q 'self-test: 8 通过 / 0 失败' "$W/selftest.log" && ok "自证 8/8（5 必中 + 3 必不中）" \
+    grep -q 'self-test: 10 通过 / 0 失败' "$W/selftest.log" && ok "自证 10/10（6 必中 + 4 必不中；M208 增 hit6/miss4 并改判 miss3）" \
         || { bad "自证结论行不符"; tail -8 "$W/selftest.log" | sed 's/^/      /'; }
 else
     bad "自证脚本失败"; tail -6 "$W/selftest.log" | sed 's/^/      /'
@@ -179,10 +179,8 @@ else
     step "⑤ 负控（每道独立：先还原 → 再打补丁 → 判红 → 再还原）"
     # A：撤 bi_udp_recv 的 KEEP(r) —— UDP 面（实测：撤掉后压力档必红）
     restore_all
-    patch_one runtime/runtime.c "    px_root_push();
-    PX_KEEP(r);
-    px_dict_set(r, \"data\", px_bytes_len(buf, n));" "    px_root_push();
-    px_dict_set(r, \"data\", px_bytes_len(buf, n));" A || bad "负控 A 打补丁失败"
+    patch_one runtime/runtime.c "    px_root_push_keep(r);   // M92 precise：结果 dict 跨 px_dict_set/px_list_push/px_str_len 分配
+    px_dict_set(r, \"data\", px_bytes_len(buf, n));" "    px_dict_set(r, \"data\", px_bytes_len(buf, n));" A || bad "负控 A 打补丁失败"
     if BIN_N="$(build_probe "$HERE/probe_udp.px" na)"; then
         if env PX_GC_STRESS=1 PX_GC_INLINE=1 PX_GC_LIVECHK=1 timeout 300 "$BIN_N" > "$W/na.out" 2>&1 \
            && grep -q 'PROBE_UDP OK' "$W/na.out" && ! grep -q 'PX_GC_LIVECHK' "$W/na.out"; then
@@ -213,7 +211,7 @@ else
     cmp -s runtime/runtime.c "$SNAP/runtime/runtime.c" || bad "负控 B 后源未还原"
 
     # C：撤 h3_extra_to_headers 的 KEEP(pair) —— 静态判据
-    patch_one runtime/runtime_h3.c "                    PX_KEEP(pair);
+    patch_one runtime/runtime_h3.c "                    px_root_push_keep(pair);
 " "" C || bad "负控 C 打补丁失败"
     if python3 selfhost/gcroot_audit.py --json > "$W/negc.json" 2>/dev/null; then
         if python3 -c "
