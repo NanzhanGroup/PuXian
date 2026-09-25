@@ -29,8 +29,12 @@
 #
 # 层：
 #  ① 静态：审计器自证 10/10 + `--grow` 下 runtime/vm.c **候选 0**（缺陷 268 收口）
-#  ② 静态：S13 不变量 —— runtime/*.c + runtime/vm.c 里**相邻** `px_root_push();`+`PX_KEEP(`
-#     出现 0 次；且 `px_root_push_keep` 的实现在位（含 LIVECHK 自检）
+#  ② 静态：S13 不变量 —— **全仓** `runtime/*.c`（+ runtime/vm.c）不得出现两段式
+#     `px_root_push();` + `PX_KEEP(x);`（含**行尾带注释**与**宏续行**两种形态）；
+#     判据由 `selfhost/s13_check.py` 提供（自带 6 条自证，含「注释容忍」负例）。
+#     ⚠️ M209 更正：M208 首版的判据是**整行正则**且只扫 3 个文件 ⇒ 行尾注释族**整族漏判**
+#        （实测报「0」时全仓还有 30 处）⇒ 这是**假绿**，已换成下面的检查器。
+#     且 `px_root_push_keep` 的实现在位（含 LIVECHK 自检）
 #  ③ 静态：`g_tmp_root` 在 px_gc_collect **两条路径**都不得置 NULL（缺陷 269 的守卫）
 #  ④ 动态：probe_lit（单线程）/ probe_coro（8 协程）两档 —— 正常档与
 #     压力档（PX_GC_STRESS=1 PX_GC_INLINE=1 PX_GC_LIVECHK=1）都必须通过且结果一致
@@ -124,17 +128,24 @@ python3 selfhost/gcroot_audit.py > "$W/legacy.log" 2>&1
 grep -o '候选 [0-9]*' "$W/legacy.log" | head -1 | sed 's/^/  ℹ️ 默认（legacy）全仓 /'
 
 step "② 静态：S13 —— 「构造与登记之间不得有安全点」"
-NPAIR=$(grep -c -A1 -E '^[[:space:]]*px_root_push\(\);' runtime/runtime.c runtime/vm.c 2>/dev/null | awk -F: '{s+=$2} END{print s+0}')
-ADJ=$(python3 - <<'PY'
-import re
-n = 0
-for p in ('runtime/runtime.c', 'runtime/vm.c', 'runtime/coro.c'):
-    s = open(p, encoding='utf-8').read()
-    n += len(re.findall(r'px_root_push\(\);[ \t]*\n[ \t]*PX_KEEP\(', s))
-print(n)
-PY
-)
-[ "$ADJ" = 0 ] && ok "相邻两段式 px_root_push()+PX_KEEP( = 0" || bad "仍有 $ADJ 处相邻两段式（应用 px_root_push_keep）"
+# M209 更正：改用 selfhost/s13_check.py（**注释容忍 + 续行合并 + 全仓 runtime/*.c**）。
+#   M208 首版判据是整行正则且只扫 3 个文件 ⇒ 「行尾带注释」族整族漏判 ⇒ 假绿（实测还有 30 处）。
+python3 selfhost/s13_check.py > "$W/s13.log" 2>&1
+S13RC=$?
+if [ "$S13RC" = 0 ] && python3 selfhost/s13_check.py --self-test >/dev/null 2>&1; then
+    ok "$(tail -1 "$W/s13.log" | sed 's/^ *//')"
+else
+    bad "S13 违例（见下）"
+    grep '❌' "$W/s13.log" | head -8 | sed 's/^/      /'
+fi
+# 判据自证：把「行尾带注释」的形态注入临时文件 ⇒ 检查器**必须**判红（防判据再次失牙）
+S13PROBE="$W/s13_probe.c"
+printf 'void f(void) {\n    px_root_push();   // probe\n    PX_KEEP(x);\n}\n' > "$S13PROBE"
+if python3 selfhost/s13_check.py --files "$S13PROBE" >/dev/null 2>&1; then
+    bad "S13 判据失牙：行尾注释形态未被判红"
+else
+    ok "S13 判据自证：行尾注释形态必判红 ✓"
+fi
 grep -q 'void px_root_push_keep(LXValue v)' runtime/runtime.c && ok "原子原语 px_root_push_keep 实现在位" || bad "px_root_push_keep 未实现"
 grep -q '登记时该对象已被回收' runtime/runtime.c && ok "px_root_push_keep 带 LIVECHK 自检（登记即死 ⇒ 响亮）" || bad "缺自检"
 grep -q '若 (g_gc_livechk' runtime/runtime.c 2>/dev/null || true

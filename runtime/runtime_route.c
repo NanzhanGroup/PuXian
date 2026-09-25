@@ -194,8 +194,7 @@ static int route_match(const char* method, const char* path, LXValue* handler_ou
         if (!g_routes[i].active) continue;
         if (strcmp(g_routes[i].method, "*") != 0 && strcmp(g_routes[i].method, mup) != 0) continue;
         LXValue params = px_dict();
-        px_root_push();   // M92-S2c precise：route_match 单次匹配登记作用域
-        PX_KEEP(params);   // M92-S2c precise：route 匹配 params 裸局部跨 px_dict_set/px_str
+        px_root_push_keep(params);   // M92-S2c precise：route 匹配 params 裸局部跨 px_dict_set/px_str
         int ok = 1;
         int pi = 0;
         for (int s = 0; s < g_routes[i].nsegs; s++) {
@@ -413,8 +412,7 @@ int px_route_try_dispatch(PxHttpOut* out, LXValue req, const char* method, int h
     LXValue mws[MAX_MIDDLEWARES];
     if (mw_count > 0) memcpy(mws, g_middlewares, sizeof(LXValue) * (size_t)mw_count);
     pthread_mutex_unlock(&g_route_mu);
-    px_root_push();   // M92-S2c precise：px_route_try_dispatch 登记作用域
-    PX_KEEP(params);   // M92-S2c precise：route_match 传出 params（跨中间件/handler px_call）
+    px_root_push_keep(params);   // M92-S2c precise：route_match 传出 params（跨中间件/handler px_call）
     // M100：middleware 链协程化 —— 链非空且每段 middleware 与 handler 均为 VM 函数
     //   （fn==px_vm_entry，可帧协程让出）且 async_ok → 链状态机 defer
     //   （px_pxserve_mw_defer：登记 kind=2 + 链快照入 GC 根 + spawn 首段；done 回调逐段

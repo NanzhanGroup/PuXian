@@ -235,17 +235,26 @@ fi
 if [ "$NEG_SKIP" = "1" ]; then
     echo "（--neg-skip：跳过负控）"
 else
-    hdr "⑦ 负控 A：注释 sqlite 的 PX_KEEP(out) ⇒ ② 层必红"
+    hdr "⑦ 负控 A：撤 sqlite 的 out 登记 + 令 g_tmp_root 离开 out ⇒ ② 层必红"
+    # ⚠️ M209 两处修（M208 的改动打到本门）：
+    #   ① 锚点随「S13 全仓收口」从 `PX_KEEP(out);` 变为 `px_root_push_keep(out);`
+    #      （否则 replace 命中 0 次 = **静默 no-op** ⇒ 负控变成「什么都没改」⇒ 假红）。
+    #      现在断言**唯一性**，命中数 != 1 即响亮失败。
+    #   ② 形态换成「撤登记 + pad」：缺陷 269 的修复（回收出口不清 g_tmp_root）会**吸收**
+    #      单纯的「撤登记」（out 就是最近登记的对象 ⇒ g_tmp_root 一直指着它）
+    #      ⇒ 单纯撤登记已**不可判红**（M183/M208 同款教训：新修复吸收旧负控）。
     restore_all; snapshot
     python3 - "$SRC_SQLITE" <<'PY'
 import sys
 p=sys.argv[1]; s=open(p).read()
-s=s.replace("    PX_KEEP(out);\n","    /* PX_KEEP(out); NEG-A */\n",1)
-open(p,'w').write(s)
+old="    px_root_push_keep(out);\n"
+new='    px_str("negctl-pad");   /* NEG-A：撤登记 + 令 g_tmp_root 离开 out */\n'
+assert s.count(old) == 1, "NEG-A 锚点唯一性（实际 %d 次）" % s.count(old)
+open(p,'w').write(s.replace(old,new,1))
 PY
     rc=$(run_vm t_sqlite_long "PX_GC_THRESHOLD=800")
     if [ "$rc" = "0" ] && grep -q '^pass=400000 fail=0$' "$WORK/t_sqlite_long.vm.out"; then
-        bad "负控 A 未判红（去掉 PX_KEEP(out) 仍全绿）"
+        bad "负控 A 未判红（撤 out 登记 + pad 后仍全绿 ⇒ 判据没牙）"
     else
         note "负控 A 判红：rc=$rc · $(grep -m1 -E 'FAIL-(TYPE|KEY)' "$WORK/t_sqlite_long.vm.out" || echo '(无 FAIL 行)')"
     fi

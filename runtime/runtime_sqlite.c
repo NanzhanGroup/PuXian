@@ -184,13 +184,11 @@ LXValue bi_sqlite_query(LXValue* args, int nargs, void* ctx) {
     //   修复 = 按 M92-S2c 口径登记根：桥入口 push 作用域，跨分配点的局部各自 PX_KEEP。
     //   `row` 每迭代一个新对象 ⇒ 每次 keep 都是新快照，用**内层 push/pop** 界定（否则 keep
     //   栈随行数线性膨胀，GC 扫描退化为 O(行数)）。
-    px_root_push();
-    PX_KEEP(out);
+    px_root_push_keep(out);
     int rc;
     while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
         LXValue row = px_dict();
-        px_root_push();
-        PX_KEEP(row);
+        px_root_push_keep(row);
         for (int i = 0; i < ncols; i++) {
             const char* cname = sqlite3_column_name(stmt, i);
             if (!cname) cname = "";

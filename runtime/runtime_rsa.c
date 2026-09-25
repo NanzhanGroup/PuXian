@@ -135,8 +135,7 @@ LXValue bi_rsa_gen_key(LXValue* args, int nargs, void* ctx) {
     char* hq = rsa_mpi_to_hex(&Q);
     rsa_free_mpis(&N, &P, &Q, &D, &E);
     LXValue d = px_dict();
-    px_root_push();   // M170（缺陷 187 同族）：VM 轨 precise GC 不扫 C 栈 ⇒ d 跨下面 5 次
-    PX_KEEP(d);       //   px_str 分配必须登记（实测：不登记 ⇒ PX_GC_STRESS=1 下 SIGSEGV）
+    px_root_push_keep(d);   //   px_str 分配必须登记（实测：不登记 ⇒ PX_GC_STRESS=1 下 SIGSEGV）
     px_dict_set(d, "n", px_str(hn ? hn : "0"));
     px_dict_set(d, "e", px_str(he ? he : "0"));
     px_dict_set(d, "d", px_str(hd ? hd : "0"));

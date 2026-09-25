@@ -377,8 +377,7 @@ LXValue bi_ed25519_keygen(LXValue* args, int nargs, void* ctx) {
         return px_null();
     }
     LXValue d = px_dict();
-    px_root_push();
-    PX_KEEP(d);                                      // M92 precise：dict 跨 px_str 分配
+    px_root_push_keep(d);   // M92 precise：dict 跨 px_str 分配
     px_dict_set(d, "pk_hex", px_str(pk_hex));
     px_dict_set(d, "sk_hex", px_str(sk_hex));
     px_dict_set(d, "pk_pem", px_str(spki_pem));

@@ -17539,8 +17539,8 @@ static LXValue bi_http_get_stream(LXValue* args, int nargs, void* ctx) {
     // 输出缓冲满 64KB → 回调 handler
 #define STREAM_FLUSH() do { \
         if (olen > 0) { \
-            px_root_push(); /* M206（缺陷 257）：arg 跨 px_call 的分配 */ \
-            LXValue arg = px_str_len(obuf, olen); PX_KEEP(arg); \
+            LXValue arg = px_str_len(obuf, olen); \
+            px_root_push_keep(arg); /* M206（缺陷 257）：arg 跨 px_call 的分配 */ \
             LXValue rv = px_call(handler, &arg, 1); \
             px_root_pop(); \
             if (rv.type == PX_BOOL && !rv.as.b) { complete = false; } \
@@ -21391,8 +21391,7 @@ static LXValue stream_takeover_conn(int fd, LXValue req, int route_idx) {
 // 解析 SSE 事件文本（field: value 行）为 dict
 static LXValue sse_parse_event_c(const char* text, int len) {
     LXValue d = px_dict();
-    px_root_push();   // M92-S2c precise：sse_parse_event_c 累积 dict 登记
-    PX_KEEP(d);   // M92-S2c precise：d 裸局部跨 px_dict_set/px_str 分配
+    px_root_push_keep(d);   // M92-S2c precise：d 裸局部跨 px_dict_set/px_str 分配
     px_dict_set(d, "event", px_str("message"));
     char* data_buf = xmalloc(len + 1);
     int data_len = 0;
@@ -23421,8 +23420,7 @@ static LXValue bi_session_open(LXValue* args, int nargs, void* ctx) {
         if (px_session_valid(&sess, now)) {
             // 续期 + 复用
             LXValue exp = px_int(now + PX_SESSION_TTL);
-            px_root_push();   // M206：sess 是 px_session_read 返回的裸局部，跨 px_session_write 分配
-            PX_KEEP(sess);
+            px_root_push_keep(sess);
             px_dict_set(sess, "exp", exp);
             px_session_write(sid, &sess);
             px_root_pop();
@@ -23984,8 +23982,7 @@ static int px_http_dispatch(PxHttpOut* pout, LXValue req, const char* method,
                         return 1;   // 已拆段：调用方（px_conn_worker）释放 worker，不发送响应
                 }
                 LXValue r = px_call(vhandler, &req, 1);
-                px_root_push();   // M92-S2c precise：vhost handler 登记作用域
-                PX_KEEP(r);   // M92-S2c precise：vhost handler 返回值（normalize/respond 期间使用）
+                px_root_push_keep(r);   // M92-S2c precise：vhost handler 返回值（normalize/respond 期间使用）
                 if (r.type != PX_NULL) {
                     px_vhost_respond(pout, method, strcmp(method, "HEAD") == 0,
                                      client_keep_alive, req_id, req, r);
@@ -24910,8 +24907,7 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
             LXValue qv = px_dict_get(sreq, "query");
             if (qv.type == PX_STR) squery = qv.as.obj->as.str.data;
         }
-        px_root_push();   // M92-S2c precise：续处理段2 登记作用域（sreq/sresp 取自挂起表）
-        PX_KEEP(sreq);
+        px_root_push_keep(sreq);
         PX_KEEP(sresp);
         if (skind == 1) {
             // vhost 段2
