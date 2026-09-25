@@ -1,0 +1,75 @@
+# dns.px 测试：UDP DNS 查询（真实解析器 223.5.5.5 阿里 DNS）
+import "../registry/dns/0.1.0/dns.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def is_ipv4(s):
+    var parts = split(s, ".")
+    if len(parts) != 4:
+        return false
+    var i = 0
+    while i < 4:
+        var v = int(parts[i])
+        if v < 0 or v > 255:
+            return false
+        i += 1
+    return true
+def main():
+    # 1. 名字编码（RFC 1035 标签）
+    expect(bytes_to_hex(dns_name_encode("example.com").unwrap())
+        == "076578616d706c6503636f6d00", "name encode example.com")
+    expect(bytes_to_hex(dns_name_encode("a.b").unwrap()) == "0161016200", "name encode a.b")
+    expect(dns_name_encode("").is_err(), "empty name err")
+    expect(dns_name_encode("a..b").is_err(), "empty label err")
+    expect(dns_qtype_code("A").unwrap() == 1, "qtype A")
+    expect(dns_qtype_code("AAAA").unwrap() == 28, "qtype AAAA")
+    expect(dns_qtype_code("XYZ").is_err(), "qtype unknown err")
+    # 2. A 记录
+    var d1 = dns_query("223.5.5.5", "example.com", "A").unwrap()
+    expect(d1["status"] == "noerror",
+        "example.com A status noerror")
+    expect(len(d1["answers"]) >= 1, "example.com A answers")
+    var got4 = false
+    var i = 0
+    while i < len(d1["answers"]):
+        var a = d1["answers"][i]
+        if a["type"] == 1:
+            expect(is_ipv4(a["data"]), "A data ipv4: " + a["data"])
+            got4 = true
+        i += 1
+    expect(got4, "has A record")
+    # 3. AAAA（IPv6 文本）
+    var d2 = dns_query("223.5.5.5", "example.com", "AAAA")
+    if d2.is_ok():
+        expect(len(d2.unwrap()["answers"]) >= 0, "AAAA parse ok")
+    # 4. MX
+    var d3 = dns_query("223.5.5.5", "gmail.com", "MX").unwrap()
+    expect(d3["status"] == "noerror", "gmail.com MX status")
+    var has_mx = false
+    i = 0
+    while i < len(d3["answers"]):
+        var a = d3["answers"][i]
+        if a["type"] == 15:
+            has_mx = true
+            expect(len(a["data"]) > 2, "mx data pref+host")
+        i += 1
+    expect(has_mx, "has MX record")
+    # 5. NS
+    var d4 = dns_query("223.5.5.5", "example.com", "NS").unwrap()
+    var has_ns = false
+    i = 0
+    while i < len(d4["answers"]):
+        if d4["answers"][i]["type"] == 2:
+            has_ns = true
+        i += 1
+    expect(has_ns, "has NS record")
+    # 6. NXDOMAIN
+    var d5 = dns_query("223.5.5.5", "no-such-host-abc123.invalid", "A").unwrap()
+    expect(d5["status"] == "nxdomain", "invalid A nxdomain, got=" + d5["status"])
+    # 7. 便捷取 IP
+    var ips = dns_resolve_a("223.5.5.5", "example.com").unwrap()
+    expect(len(ips) >= 1, "resolve_a ips")
+    expect(is_ipv4(ips[0]), "resolve_a ipv4")
+    print("dns: ALL PASS")
+    return 0

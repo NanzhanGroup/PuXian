@@ -1,0 +1,38 @@
+# richmd.px 测试：Markdown → ANSI 富文本 + 剥 ANSI
+import "../registry/richmd/0.1.0/richmd.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var md = ("# 标题\n\n## 二级\n\n段落 with **粗体** and `代码`\n\n"
+        +"- 甲\n- 乙\n\n> 引用一行\n\n```\ncode line 1\n```\n\n"
+        +"1. 第一\n2. 第二\n\n---\n")
+    var r = mdr_render(md).unwrap()
+    # 应包含 ANSI 序列
+    expect(r.contains("\u{1b}[1m"), "bold esc")
+    expect(r.contains("标题"), "h1 text")
+    expect(r.contains("粗体"), "bold text")
+    expect(r.contains("• "), "bullet")
+    expect(r.contains("▌ "), "quote")
+    expect(r.contains("code line 1"), "fence code")
+    expect(r.contains("第一"), "ordered 1")
+    # 纯文本还原（剥 ANSI 后应包含原文内容、不含 ANSI 码）
+    var plain = mdr_strip(r).unwrap()
+    expect(not plain.contains("\u{1b}["), "no esc left")
+    expect(plain.contains("标题"), "plain title")
+    expect(plain.contains("段落 with 粗体 and 代码"), "plain paragraph")
+    expect(plain.contains("甲"), "plain list")
+    expect(plain.contains("code line 1"), "plain code")
+    # 行内链接
+    var r2 = mdr_render("看 [文档](http://x.com) 吧").unwrap()
+    expect(r2.contains("文档"), "link text")
+    expect(r2.contains("http://x.com"), "link url")
+    # 分隔线
+    var r3 = mdr_render("---").unwrap()
+    expect(mdr_strip(r3).unwrap().contains("─"), "hr")
+    # 未闭合标记不崩，原样透传
+    var r4 = mdr_render("**未闭合").unwrap()
+    expect(r4.contains("未闭合"), "unclosed passthrough")
+    print("richmd: ALL PASS")
+    return 0

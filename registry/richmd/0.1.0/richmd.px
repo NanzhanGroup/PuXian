@@ -1,0 +1,228 @@
+# ============================================================
+# 普贤生态库：registry/richmd —— Markdown 富文本（ANSI）渲染
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对照 Python rich / rust glamour 心智（0.1.0）：
+#   mdr_render(src) → Ok(str)   # Markdown → ANSI 富文本串（标题/列表/引用/代码块/行内样式/链接）
+#   mdr_strip(s)    → Ok(str)   # 剥掉 ANSI 转义 → 纯文本
+# 支持的块：ATX 标题(#~######) · 无序/有序列表 · 引用(>) · 分隔线(---)
+#          围栏代码块(```/~~~) · 段落
+# 行内：**粗体** *斜体* `行内代码` ~~删除线~~ [文本](链接)
+# 说明：
+#   - 单文件自包含（pxpkg 单 .px 分发），不依赖 sibling 库。
+#   - 输出 xterm-256 常用色号；mdr_strip 可还原纯文本（清屏/落档用）。
+#   - 未闭合行内标记按原文透传（不 panic）。
+# ============================================================
+const MDR_ESC = "\u{1b}["
+def o_sgr(codes):
+    return MDR_ESC + codes + "m"
+def o_reset():
+    return MDR_ESC + "0m"
+def o_bold(s):
+    return o_sgr("1") + s + o_reset()
+def o_ital(s):
+    return o_sgr("3") + s + o_reset()
+def o_under(s):
+    return o_sgr("4") + s + o_reset()
+def o_strike(s):
+    return o_sgr("9") + s + o_reset()
+def o_fg(s, code):
+    return o_sgr("38;5;" + str(code)) + s + o_reset()
+def o_bg(s, code):
+    return o_sgr("48;5;" + str(code)) + s + o_reset()
+
+# find 从 start 起的子串（.find() 方法只支持整串搜索）
+def o_find(s, sub, start):
+    var i = start
+    while i <= len(s) - len(sub):
+        if s[i:len(s)].has_prefix(sub):
+            return i
+        i += 1
+    return -1
+
+# ---- 行内解析 ----
+# 在非代码段内查找下一个标记；返回 [样式名, 位置]
+def o_next_marker(s, start):
+    var i = start
+    while i < len(s):
+        var c = s[i]
+        if c == "*" or c == "`" or c == "~" or c == "[":
+            if c == "*":
+                if i + 1 < len(s) and s[i + 1] == "*":
+                    return ["**", i]
+                return ["*", i]
+            if c == "`":
+                return ["`", i]
+            if c == "~":
+                if i + 1 < len(s) and s[i + 1] == "~":
+                    return ["~~", i]
+            if c == "[":
+                return ["[", i]
+        i += 1
+    return ["", -1]
+# 行内富文本；返回富文本串
+def mdr_inline(s):
+    var out = ""
+    var i = 0
+    while i < len(s):
+        var mk = o_next_marker(s, i)
+        if mk[1] < 0:
+            out = out + s[i:len(s)]
+            break
+        out = out + s[i:mk[1]]
+        var kind = mk[0]
+        var j = mk[1]
+        if kind == "`":
+            var end = o_find(s, "`", j + 1)
+            if end < 0:
+                out = out + s[j:len(s)]
+                break
+            var code = s[j + 1:end]
+            out = out + o_bg(o_fg(code, 35), 236)
+            i = end + 1
+        elif kind == "**":
+            var end = o_find(s, "**", j + 2)
+            if end < 0:
+                out = out + s[j:len(s)]
+                break
+            out = out + o_bold(mdr_inline(s[j + 2:end]))
+            i = end + 2
+        elif kind == "*":
+            var end = o_find(s, "*", j + 1)
+            if end < 0:
+                out = out + s[j:len(s)]
+                break
+            out = out + o_ital(s[j + 1:end])
+            i = end + 1
+        elif kind == "~~":
+            var end = o_find(s, "~~", j + 2)
+            if end < 0:
+                out = out + s[j:len(s)]
+                break
+            out = out + o_strike(s[j + 2:end])
+            i = end + 2
+        elif kind == "[":
+            var closer = o_find(s, "](", j)
+            if closer < 0:
+                out = out + s[j:len(s)]
+                break
+            var endparen = o_find(s, ")", closer + 2)
+            if endparen < 0:
+                out = out + s[j:len(s)]
+                break
+            var text = s[j + 1:closer]
+            var url = s[closer + 2:endparen]
+            out = out + o_under(o_fg(text, 36)) + " " + o_fg("(" + url + ")", 244)
+            i = endparen + 1
+    return out
+# ---- 块解析 ----
+def mdr_render(src):
+    var lines = split(src, "\n")
+    var out = ""
+    var in_code = false
+    var code_fence = ""
+    var i = 0
+    while i < len(lines):
+        var ln = lines[i]
+        if in_code:
+            if ln.strip() == code_fence:
+                in_code = false
+                out = out + "\n"
+            else:
+                out = out + o_fg(ln, 252) + "\n"
+            i += 1
+            continue
+        var trim = ln.strip()
+        if len(trim) >= 3 and trim.has_prefix("```"):
+            in_code = true
+            code_fence = "```"
+            out = out + "\n"
+            i += 1
+            continue
+        if len(trim) >= 3 and trim.has_prefix("~~~"):
+            in_code = true
+            code_fence = "~~~"
+            out = out + "\n"
+            i += 1
+            continue
+        var empty = trim == ""
+        if empty:
+            out = out + "\n"
+            i += 1
+            continue
+        # ATX 标题
+        var h = 0
+        if trim[0] == "#":
+            while h < len(trim) and trim[h] == "#":
+                h += 1
+            if h <= 6 and (h == len(trim) or trim[h] == " "):
+                var body = trim[h:len(trim)].strip()
+                var color = 208
+                if h == 2:
+                    color = 214
+                elif h == 3:
+                    color = 220
+                elif h >= 4:
+                    color = 244
+                out = out + o_under(o_bold(o_fg(body, color))) + "\n"
+                i += 1
+                continue
+        # 分隔线
+        var dash = true
+        var k = 0
+        while k < len(trim):
+            if trim[k] != "-":
+                dash = false
+            k += 1
+        if dash and len(trim) >= 3:
+            out = out + o_fg("───", 240) + "\n"
+            i += 1
+            continue
+        # 引用
+        if trim.has_prefix(">"):
+            var body = trim[1:len(trim)].strip()
+            out = out + o_fg("▌ ", 244) + o_ital(mdr_inline(body)) + "\n"
+            i += 1
+            continue
+        # 无序列表
+        var bullet = ""
+        if trim.has_prefix("- ") or trim.has_prefix("* "):
+            bullet = "• "
+            var body = trim[2:len(trim)]
+            out = out + o_fg(bullet, 245) + mdr_inline(body) + "\n"
+            i += 1
+            continue
+        # 有序列表 1. 2.
+        var num = 0
+        var tmp = ""
+        if trim[0] >= "0" and trim[0] <= "9":
+            var p = 0
+            while p < len(trim) and trim[p] >= "0" and trim[p] <= "9":
+                tmp = tmp + trim[p]
+                p += 1
+            if p + 1 < len(trim) and trim[p] == "." and trim[p + 1] == " ":
+                out = out + o_fg(tmp + ". ", 245) + mdr_inline(trim[p + 2:len(trim)]) + "\n"
+                i += 1
+                continue
+        # 段落
+        out = out + mdr_inline(ln) + "\n"
+        i += 1
+    return Ok(out)
+# 剥 ANSI 转义 → 纯文本
+def mdr_strip(s):
+    var out = ""
+    var i = 0
+    var n = len(s)
+    while i < n:
+        if s[i] == "\u{1b}" and i + 1 < n and s[i + 1] == "[":
+            var j = i + 2
+            while j < n and s[j] != "m":
+                j += 1
+            if j < n:
+                i = j + 1
+            else:
+                i = n
+        else:
+            out = out + s[i]
+            i += 1
+    return Ok(out)

@@ -2577,3 +2577,15 @@ set_timeout(fn (): print("once after 2s"), 2000)
        ④⑤ 负控 A/B（撤 `px_gen_lazy` 的 `gc_register` / 撤 `px_as_list` 的 `PX_KEEP` ⇒ 必红）·
        ⑥ 负控 C（判据自伤：比对改恒真 ⇒ ③ 不再红）· ⑦ 覆盖边界登记。
        `examples/m206_gcroot/` 同步：自证 **4 → 8 锚点** · 规模下限 **函数 ≥1500 / 登记站点 ≥200**。
+
+235. **保留字不能作「形参名」（第 89 轮 · M210 收口缺陷 283）**：
+     · `def f(fn)` / `def f(x, fn)` / `def f(x, y, fn)` ⇒ `E2001: 期望参数名，实际得到 fn`
+       （**三轨同码同文**）。修前**静默通过** —— 而 `var fn = 1` / `for fn in xs` 早已 `E2001`
+       （事实 14/32/50/62）⇒ 同一个名字**四个声明位置里三个拦、一个放行**（与 M199 的 [S10] 同族）；
+       更糟的是 `fn` 一被**使用**就报「期望 '('」，错误信息指不到**声明处**的真因。
+     · **成员名面保持宽松**（这是有意语义，别搞混）：`ch.send(x)` / `ch.recv()` / `s.type` 的**成员名**
+       就是关键字 —— chan 的内建方法名与关键字同名。两条路径的宽松度本就不同
+       （`expect_name(what, allow_kw)`：形参面 `false`、成员名面 `true`）。
+     · **`self` 例外**：方法接收者形参就叫 `self`（`impl P:` 里 `def area(self) -> int:`）。
+     · 软名字 `type` 仍可作形参名（`extern def h3_frame(type: int, payload)`）。
+     · 守卫：`examples/m210_param_kw/`（26 通过 / 0 失败）—— 含**全仓 264 件普查 HIT=0**。

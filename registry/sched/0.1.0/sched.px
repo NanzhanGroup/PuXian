@@ -1,0 +1,71 @@
+# ============================================================
+# 普贤生态库：registry/sched —— 轻量任务调度器（时间片轮询）
+# ------------------------------------------------------------
+# 纯逻辑 + 显式时钟（调用方传 now_ms），编译/解释双模式一致（0.1.0）。
+# 对照 Python schedule / Go robfig/cron 心智的 interval 子集：
+#   sched_new()                            → dict        新建调度器
+#   sched_add(sched, name, interval_ms, fn) → dict       注册周期任务（返回新/原调度器）
+#   sched_run(sched, total_ms)             → dict       运行 total_ms；返回带 counts 的调度器
+#   sched_counts(sched)                    → dict       {任务名: 触发次数}
+# 设计说明：
+#   - 不用 spawn/set_interval（解释轨不支持并发，PX-DEF-006）：主线程时间片轮询，
+#     保证双轨行为一致且可测（本轮原意是 native cron 包装，但独立调度循环更贴合纯 .px 库）。
+#   - fn() 无参；副作用由调用方闭包完成（闭包按引用捕获，M160）。
+#   - 触发次数 ≈ floor(total/interval) ±1；相邻周期用 next 基准累计，避免漂移。
+#   - cron 表达式解析不在 0.1.0（服务端场景可用原生 cron + px_serve）。
+# ============================================================
+def sched_new():
+    var s = {}
+    s.set("tasks", [])
+    s.set("counts", {})
+    return s
+# 注册周期任务；返回新调度器 dict（不改入参）
+def sched_add(sched, name, interval_ms, cb):
+    var old = sched["tasks"]
+    var nt = []
+    var i = 0
+    while i < len(old):
+        nt.append(old[i])
+        i += 1
+    var t = {}
+    t.set("name", name)
+    t.set("interval", interval_ms)
+    t.set("cb", cb)
+    nt.append(t)
+    var ns = {}
+    ns.set("tasks", nt)
+    ns.set("counts", sched["counts"])
+    return ns
+def sched_counts(sched):
+    return sched["counts"]
+# 运行 total_ms；逐任务判断是否到点；到点执行 fn() 并计数
+def sched_run(sched, total_ms):
+    var tasks = sched["tasks"]
+    var counts = {}
+    var nexts = {}
+    var start = now_ms()
+    var i = 0
+    while i < len(tasks):
+        counts.set(tasks[i]["name"], 0)
+        nexts.set(tasks[i]["name"], start)
+        i += 1
+    var runs = 0
+    while true:
+        var now = now_ms()
+        if now - start >= total_ms:
+            break
+        var j = 0
+        while j < len(tasks):
+            var nm = tasks[j]["name"]
+            if now >= nexts[nm]:
+                var f = tasks[j]["cb"]
+                f()
+                counts.set(nm, counts[nm] + 1)
+                nexts.set(nm, nexts[nm] + tasks[j]["interval"])
+            j += 1
+        sleep(1)
+        runs += 1
+        if runs > 1000000:
+            break
+    sched.set("counts", counts)
+    return sched

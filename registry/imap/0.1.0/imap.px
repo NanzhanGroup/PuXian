@@ -1,0 +1,162 @@
+# ============================================================
+# 普贤生态库：registry/imap —— 轻量 IMAP4rev1 客户端
+# ------------------------------------------------------------
+# 编译（px build）与解释（px run）双模式一致（0.1.0；未认证直连）。
+# 对照 Go go-imap / Python imaplib 心智：
+#   imap_connect(host, port[, timeout_ms]) → Ok(conn) | Err
+#   imap_login(conn, user, pass)           → Ok(true) | Err
+#   imap_list(conn)                        → Ok([mailbox...])
+#   imap_select(conn, mailbox)             → Ok({exists, recent})
+#   imap_fetch(conn, seq, items)           → Ok([body...])  # literal 解析
+#   imap_logout(conn)                      → Ok(null)
+# 协议：tag = "A<序号>"，行尾 CRLF；响应逐行读，FETCH literal {N} 读 N 字节；
+#   终止行 tag OK/NO/BAD 判定成败。
+# 说明：0.1.0 为 stateless 直连；IDLE/搜索/UID/SSL 后续版本（镜像 pop3 定位）。
+# ============================================================
+def o_rd_u8b(b, off):
+    # tcp_recv_ex 的 data 是 str（字节保真），用 ord 取值
+    return ord(b[off])
+# 读一行（含 \n）；返回 [bytes, err]
+def o_read_line(fd):
+    var buf = bytes("")
+    while true:
+        var r = tcp_recv_ex(fd, 1)
+        if not r["ok"]:
+            return [buf, r["err"]]
+        if r["eof"]:
+            return [buf, "unexpected EOF"]
+        if r["timeout"]:
+            return [buf, "read timeout"]
+        var ch = r["data"]
+        buf = bytes_concat(buf, ch)
+        if o_rd_u8b(ch, 0) == 10:
+            return [buf, ""]
+# 发送一行命令
+def o_send_line(conn, line):
+    var r = tcp_send_ex(conn["fd"], bytes(line + "\r\n"))
+    if not r["ok"]:
+        return Err("imap: 发送失败 " + str(r["err"]))
+    return Ok(null)
+def o_tag():
+    return "A" + str(now_ms() % 100000)
+def imap_connect(host, port, timeout_ms):
+    var tm = timeout_ms
+    var c = tcp_connect_ex(host, port, {"timeout_ms": tm})
+    if not c["ok"]:
+        return Err("imap: 连接失败 " + host + ":" + str(port) + " " + str(c["err"]))
+    # 读欢迎行
+    var w = o_read_line(c["fd"])
+    if w[1] != "":
+        return Err("imap: 欢迎行失败 " + w[1])
+    return Ok({"fd": c["fd"]})
+# 通用命令：收集 untagged 行直到 tag 终止行；返回 {ok, tag, lines}
+def o_cmd(conn, line):
+    var tag = o_tag()
+    var e = o_send_line(conn, tag + " " + line)
+    if e.is_err():
+        return e
+    var lines = []
+    while true:
+        var l = o_read_line(conn["fd"])
+        if l[1] != "":
+            return Err("imap: 读响应失败 " + l[1])
+        var s = l[0]
+        lines <- s
+        var txt = bytes_to_str(s).strip()
+        if txt.has_prefix(tag + " "):
+            if txt.find("OK") >= 0:
+                return Ok({"ok": true, "lines": lines})
+            return Err("imap: " + txt)
+        if len(lines) > 1000:
+            return Err("imap: 响应过长")
+def imap_login(conn, user, pass):
+    var r = o_cmd(conn, "LOGIN " + user + " " + pass)
+    if r.is_err():
+        return r
+    return Ok(true)
+def imap_list(conn):
+    var r = o_cmd(conn, "LIST \"\" \"*\"")
+    if r.is_err():
+        return r
+    var out = []
+    var lines = r.unwrap()["lines"]
+    var i = 0
+    while i < len(lines):
+        var t = bytes_to_str(lines[i]).strip()
+        if t.has_prefix("* LIST"):
+            var sp = split(t, " ")
+            if len(sp) >= 4:
+                var m = sp[len(sp) - 1]
+                if len(m) >= 2 and m[0] == "\"" and m[len(m) - 1] == "\"":
+                    m = m[1:len(m) - 1]
+                out <- m
+        i += 1
+    return Ok(out)
+def imap_select(conn, mailbox):
+    var r = o_cmd(conn, "SELECT " + mailbox)
+    if r.is_err():
+        return r
+    var res = {"exists": 0, "recent": 0}
+    var lines = r.unwrap()["lines"]
+    var i = 0
+    while i < len(lines):
+        var t = bytes_to_str(lines[i]).strip()
+        var parts = split(t, " ")
+        if len(parts) >= 3 and parts[0] == "*" and parts[2] == "EXISTS":
+            res.set("exists", int(parts[1]))
+        if len(parts) >= 3 and parts[0] == "*" and parts[2] == "RECENT":
+            res.set("recent", int(parts[1]))
+        i += 1
+    return Ok(res)
+# FETCH：处理 literal；返回消息体列表
+def imap_fetch(conn, seq, items):
+    var tag = o_tag()
+    var e = o_send_line(conn, tag + " FETCH " + seq + " " + items)
+    if e.is_err():
+        return e
+    var out = []
+    while true:
+        var l = o_read_line(conn["fd"])
+        if l[1] != "":
+            return Err("imap: 读响应失败 " + l[1])
+        var txt = bytes_to_str(l[0]).strip()
+        if txt.has_prefix(tag + " "):
+            if txt.find("OK") >= 0:
+                return Ok(out)
+            return Err("imap: " + txt)
+        # literal：行内 "{N}" 出现 → 读 N 字节 + CRLF
+        var lb = l[0]
+        var lit = o_literal_len(lb)
+        if lit >= 0:
+            var body = bytes("")
+            var need = lit + 2
+            while bytes_len(body) < need:
+                var want = need - bytes_len(body)
+                if want > 65536:
+                    want = 65536
+                var rr = tcp_recv_ex(conn["fd"], want)
+                if not rr["ok"]:
+                    return Err("imap: literal 读失败 " + rr["err"])
+                body = bytes_concat(body, rr["data"])
+            var content = bytes_slice(body, 0, lit)
+            out <- bytes_to_str(content)
+    return Ok(out)
+# 找行内 "{N}"；返回 N 或 -1
+def o_literal_len(line):
+    var s = bytes_to_str(line)
+    var i = 0
+    while i < len(s):
+        if s[i] == "{":
+            var j = i + 1
+            var num = ""
+            while j < len(s) and s[j] >= "0" and s[j] <= "9":
+                num = num + s[j]
+                j += 1
+            if j < len(s) and s[j] == "}":
+                return int(num)
+        i += 1
+    return -1
+def imap_logout(conn):
+    o_cmd(conn, "LOGOUT")
+    tcp_close(conn["fd"])
+    return Ok(null)

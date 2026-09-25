@@ -1,0 +1,136 @@
+# ============================================================
+# 普贤生态库：registry/statx —— 统计增强（描述统计 + 相关系数 + 线性回归）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对照 Go gonum/stat、Python statistics/scipy.stats 子集（0.1.0）：
+#   st_mean(xs)                → Ok(float) | Err   # 算术平均；空列表 Err
+#   st_median(xs)              → Ok(float) | Err   # 中位数（排序后）
+#   st_variance(xs, sample)    → Ok(float) | Err   # 总体/样本方差
+#   st_stddev(xs, sample)      → Ok(float) | Err   # 标准差
+#   st_quantile(xs, q)         → Ok(float) | Err   # 分位数（Python 线性法）
+#   st_pearson(xs, ys)         → Ok(float) | Err   # Pearson 相关系数 r
+#   st_linreg(xs, ys)          → Ok([slope, intercept, r2]) | Err
+#   st_range(xs)               → Ok(float) | Err   # max - min
+# 说明：
+#   - 入参均为 list[数字]；空/长度不足/除以零 → Err（不 panic）。
+#   - sorted 走原生 compare_values（稳定），分位数同 Python statistics 线性插值。
+#   - 数值一律 float 运算；int→float 用 `1.0 * x` 现值（float() 是字符串严格解析）。
+# ============================================================
+
+# 算术平均
+def st_mean(xs):
+    if len(xs) == 0:
+        return Err("statx: 列表为空")
+    var s = 0.0
+    var i = 0
+    while i < len(xs):
+        s = s + 1.0 * xs[i]
+        i += 1
+    return Ok(s / len(xs))
+
+# 中位数
+def st_median(xs):
+    if len(xs) == 0:
+        return Err("statx: 列表为空")
+    var n = len(xs)
+    var a = sorted(xs)
+    if n % 2 == 1:
+        return Ok(1.0 * a[n // 2])
+    return Ok((1.0 * a[n // 2 - 1] + 1.0 * a[n // 2]) / 2.0)
+
+# 样本（sample=true）/ 总体方差
+def st_variance(xs, sample):
+    if len(xs) == 0:
+        return Err("statx: 列表为空")
+    if sample and len(xs) < 2:
+        return Err("statx: 样本方差至少 2 个值")
+    var m = st_mean(xs)!
+    var s = 0.0
+    var i = 0
+    while i < len(xs):
+        var d = 1.0 * xs[i] - m
+        s = s + d * d
+        i += 1
+    if sample:
+        return Ok(s / (len(xs) - 1))
+    return Ok(s / len(xs))
+
+# 标准差
+def st_stddev(xs, sample):
+    var v = st_variance(xs, sample)?
+    return Ok(sqrt(v))
+
+# 分位数（Python statistics 同款线性法：h=(n-1)*q 线性插值）
+def st_quantile(xs, q):
+    if len(xs) == 0:
+        return Err("statx: 列表为空")
+    if q < 0.0 or q > 1.0:
+        return Err("statx: 分位数 q 须在 [0,1]")
+    var n = len(xs)
+    if n == 1:
+        return Ok(1.0 * xs[0])
+    var a = sorted(xs)
+    var h = (n - 1) * q
+    var lo = int(h)
+    var hi = int(ceil(h))
+    if hi > n - 1:
+        hi = n - 1
+    var xlo = 1.0 * a[lo]
+    var xhi = 1.0 * a[hi]
+    return Ok(xlo + (h - 1.0 * lo) * (xhi - xlo))
+
+# Pearson 相关系数 r；常数序列 → Err（方差为 0）
+def st_pearson(xs, ys):
+    if len(xs) != len(ys):
+        return Err("statx: 两序列长度不一致")
+    var n = len(xs)
+    if n < 2:
+        return Err("statx: 至少 2 个样本")
+    var mx = st_mean(xs)!
+    var my = st_mean(ys)!
+    var sxx = 0.0
+    var syy = 0.0
+    var sxy = 0.0
+    var i = 0
+    while i < n:
+        var dx = 1.0 * xs[i] - mx
+        var dy = 1.0 * ys[i] - my
+        sxx = sxx + dx * dx
+        syy = syy + dy * dy
+        sxy = sxy + dx * dy
+        i += 1
+    var den = sqrt(sxx * syy)
+    if den == 0.0:
+        return Err("statx: 序列方差为 0（常数序列）")
+    return Ok(sxy / den)
+
+# 线性回归 y = slope*x + intercept；返回 [slope, intercept, r2]
+def st_linreg(xs, ys):
+    var n = len(xs)
+    if len(xs) != len(ys):
+        return Err("statx: 两序列长度不一致")
+    if n < 2:
+        return Err("statx: 至少 2 个样本")
+    var mx = st_mean(xs)!
+    var my = st_mean(ys)!
+    var sxx = 0.0
+    var sxy = 0.0
+    var i = 0
+    while i < n:
+        var dx = 1.0 * xs[i] - mx
+        var dy = 1.0 * ys[i] - my
+        sxx = sxx + dx * dx
+        sxy = sxy + dx * dy
+        i += 1
+    if sxx == 0.0:
+        return Err("statx: 自变量方差为 0")
+    var slope = sxy / sxx
+    var intercept = my - slope * mx
+    var r = st_pearson(xs, ys)!
+    return Ok([slope, intercept, r * r])
+
+# max - min
+def st_range(xs):
+    if len(xs) == 0:
+        return Err("statx: 列表为空")
+    return Ok(1.0 * max(xs) - 1.0 * min(xs))
