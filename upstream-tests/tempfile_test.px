@@ -1,0 +1,26 @@
+# tempfile.px 测试：临时目录/文件 + 写读 + 清理
+import "../registry/tempfile/0.1.0/tempfile.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var d = tf_tempdir("tftest_").unwrap()
+    expect(d.has_prefix("/tmp/"), "tempdir under /tmp")
+    var p1 = tf_tempname("tf_").unwrap()
+    expect(p1 != tf_tempname("tf_").unwrap(), "names unique")
+    var f = d + "/a.txt"
+    expect(tf_write(f, "hello 普贤").is_ok(), "write ok")
+    expect(tf_read(f).unwrap() == "hello 普贤", "read back")
+    expect(tf_remove_file(f).is_ok(), "remove file ok")
+    expect(tf_remove_dir(d).is_ok(), "remove dir ok")
+    # bytes 内容往返
+    var d2 = tf_tempdir(null).unwrap()
+    var f2 = d2 + "/b.bin"
+    tf_write(f2, bytes_to_str(hex_to_bytes("0102ff")))
+    var back = tf_read(f2).unwrap()
+    expect(bytes_to_hex(bytes(back)) == "0102ff", "binary roundtrip")
+    tf_remove_file(f2)
+    tf_remove_dir(d2)
+    print("tempfile: ALL PASS")
+    return 0

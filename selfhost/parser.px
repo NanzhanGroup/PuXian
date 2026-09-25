@@ -168,12 +168,19 @@ def is_name_kind(k):
             return true
         i += 1
     return false
-def expect_name(what):
+def expect_name(what, allow_kw):
     if pk() == "标识符":
         let v = pv()
         adv()
         return v
-    if is_name_kind(pk()):
+    # M210（缺陷 283）：**形参面与成员名面的宽松度本就不同**，此前共用同一条放行路径：
+    #   · 成员名面**必须**宽松 —— `ch.send(x)` / `ch.recv()` / `s.type` 的成员名就是关键字
+    #     （chan 的内建方法名与关键字同名：见 cases_bc/bc11、bc12、registry/workerpool）；
+    #   · 形参面则应收紧 —— `def f(x, fn)` 此前静默通过，而 `var fn` / `for fn in` 早已 E2001
+    #     ⇒「同一名字在不同位置行为不同」（与 M199 的 [S10]「同一操作 × 每一个位置」同族）；
+    #     且 `fn` 一旦被**使用**就报「期望 '('」⇒ 错误信息指不到**声明处**的真因。
+    #   `self` 例外：方法接收者形参就叫 `self`（selfhost/capability.px、cases_bc/bc8）。
+    if is_name_kind(pk()) and (allow_kw or pk() == "self"):
         let v = pk()
         adv()
         return v
@@ -755,7 +762,7 @@ def parse_params():
     if not chk(")"):
         while true:
             let pos = ppos()
-            let name = expect_name("参数名")
+            let name = expect_name("参数名", false)
             var ty = null
             if chk(":"):
                 adv()
@@ -981,12 +988,12 @@ def parse_postfix():
         elif k == ".":
             let pos = ppos()
             adv()
-            let name = expect_name("成员名")
+            let name = expect_name("成员名", true)
             expr = ["Field", expr, qstr(name), pos]
         elif k == "?.":
             let pos = ppos()
             adv()
-            let name = expect_name("成员名")
+            let name = expect_name("成员名", true)
             expr = ["OptionalField", expr, qstr(name), pos]
         elif k == "!":
             let pos = ppos()
@@ -1364,7 +1371,7 @@ def parse_pattern():
             # M44：`case LogLevel.Info:` → PatLiteral(Field)（按绑定值匹配）
             let fpos = ppos()
             adv()
-            let mname = expect_name("成员名")
+            let mname = expect_name("成员名", true)
             return ["PatLiteral", ["Field", ["Var", qstr(name), fpos], qstr(mname), fpos]]
         if chk("("):
             adv()

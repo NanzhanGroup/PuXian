@@ -1,0 +1,26 @@
+# sched.px 测试：时间片轮询调度（双轨一致的间隔任务 + 计数）
+import "../registry/sched/0.1.0/sched.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var events = []
+    def tick_a():
+        events <- "a"
+    def tick_b():
+        events <- "b"
+    var s = sched_new()
+    s = sched_add(s, "fast", 40, tick_a)
+    s = sched_add(s, "slow", 100, tick_b)
+    s = sched_run(s, 260)
+    var c = sched_counts(s)
+    # 期望：fast ~6 次（260/40±1），slow ~2 次（260/100±1）
+    expect(c["fast"] >= 5 and c["fast"] <= 7, "fast count=" + str(c["fast"]))
+    expect(c["slow"] >= 1 and c["slow"] <= 4, "slow count=" + str(c["slow"]))
+    expect(len(events) == c["fast"] + c["slow"], "events match counts")
+    # 空任务
+    var s2 = sched_run(sched_new(), 5)
+    expect(len(sched_counts(s2).keys()) == 0, "empty scheduler")
+    print("sched: ALL PASS")
+    return 0

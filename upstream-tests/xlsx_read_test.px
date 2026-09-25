@@ -1,0 +1,45 @@
+# xlsx 读取扩展测试：xsx_read / xsx_read_sheet（共享字符串/行内串/数值/bool/空位/写读往返）
+import "../registry/xlsx/0.1.0/xlsx.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def feq(a, b):
+    return abs(a - b) < 1e-9
+const XLSX_MIN_HEX = (
+    "504b03041400000008006a28395d4148554986000000a400000014000000786c2f73686172656453" +
+    "7472696e67732e786d6cb3b1afc8cd51284b2d2acecccfb35532d43350b2b7b3292e2e51008ae715" +
+    "db2a6594941458e9eb172767a4e62616ebe517a4e60165d2f28b72134b80dca274fde282a2d4c494" +
+    "e28cd4d492dc1c7d23030333fddcc4cc3c25a03199763625764f27f43e5fbec146bfc4ce461f2402" +
+    "117d3675c3cbf67e74d117dd3b9fcd9b8310d507bac40e00504b03041400000008006a28395d940e" +
+    "d9e1d20000008801000018000000786c2f776f726b7368656574732f7368656574312e786d6c7d90" +
+    "416ec2301045af12f90099c4115d20c788961b700237186211db913d0adc808bb0e8be676acfc110" +
+    "90092cd879de9f79638d581c6d970d3a44e35dcdcabc600b290e3eec63ab356694ba58b316b19f03" +
+    "c4a6d556c5dcf7da51b2f5c12aa432ec20f641abcd38643be045f1015619c7a418d94aa19222f843" +
+    "16680bd1e6fa58962cc39a45aa07590818a480e69e7d4eb33265408e24e249c427cdfc45c4475a3d" +
+    "d3afdbc4f73b7d95f4d5d86c5c679c5e63206ea21428ffcea7ffdf1f01489357f2d057b7afe4b317" +
+    "354cce01e9cef202504b010214031400000008006a28395d4148554986000000a400000014000000" +
+    "0000000000000000800100000000786c2f736861726564537472696e67732e786d6c504b01021403" +
+    "1400000008006a28395d940ed9e1d2000000880100001800000000000000000000008001b8000000" +
+    "786c2f776f726b7368656574732f7368656574312e786d6c504b0506000000000200020088000000" +
+    "c00100000000"
+)
+def main():
+    var f = "/tmp/px_min_shared.xlsx"
+    write_file(f, bytes_to_str(hex_to_bytes(XLSX_MIN_HEX)))
+    var rows = xsx_read(f).unwrap()
+    expect(len(rows) == 3, "rows count, got " + str(len(rows)))
+    expect(rows[0][0] == "名称" and rows[0][1] == "数量", "header row")
+    expect(rows[1][0] == "苹果" and rows[1][1] == 3 and rows[1][2] == true, "data numeric/bool")
+    expect(rows[2][0] == "备注" and rows[2][1] == null and feq(rows[2][2], 2.5), "inline+gap+float")
+    var rows2 = xsx_read_sheet(f, 1).unwrap()
+    expect(len(rows2) == 3, "read_sheet rows")
+    var doc = xsx_new()
+    doc = xsx_add(doc, "S1", [["名称", "数量"], ["苹果", 3], ["香蕉", 7.5]])
+    expect(xsx_write(doc, "/tmp/px_rt.xlsx").is_ok(), "write ok")
+    var back = xsx_read("/tmp/px_rt.xlsx").unwrap()
+    expect(back[0][0] == "名称" and back[0][1] == "数量", "rt header")
+    expect(back[1][0] == "苹果" and back[1][1] == 3, "rt row1")
+    expect(back[2][0] == "香蕉" and feq(back[2][1], 7.5), "rt row2 float")
+    print("xlsx_read: ALL PASS")
+    return 0

@@ -1,0 +1,50 @@
+# ============================================================
+# 普贤生态库：registry/tempfile —— 临时文件/目录
+# ------------------------------------------------------------
+# 编译（px build）与解释（px run）双模式一致（0.1.0；无 os_getenv 原生）。
+# 对照 Python tempfile / Go ioutil.TempFile 心智：
+#   tf_tempdir(prefix?)        → Ok(str)   在 /tmp 建唯一临时目录
+#   tf_tempname(prefix?)       → Ok(str)   唯一临时文件路径（不建文件）
+#   tf_write(path, content)    → Ok        写文件（str 或 bytes 内容）
+#   tf_read(path)              → Ok(str)   读文件（read_file 原样）
+#   tf_remove_file(path)       → Ok        删除单个文件
+#   tf_remove_dir(dir)         → Ok        删除空目录
+# 说明：
+#   - 命名基于 now_ms（同一毫秒冲突概率可忽略；prefix 可自定义）。
+#   - 无删除目录树原语（remove 非空目录会响亮报错），tf_remove_dir 仅用于空目录；
+#     用完临时目录建议先 tf_remove_file 各文件再 tf_remove_dir。
+# ============================================================
+def o_seq():
+    # now_ms + random 双料降碰撞概率（无全局状态，遵守写库规范）
+    return str(now_ms() % 1000000000) + "_" + str(random() % 1000000)
+# 唯一临时目录（自动 mkdir）
+def tf_tempdir(prefix):
+    var p = prefix
+    if p == null or p == "":
+        p = "px_tmp_"
+    var d = "/tmp/" + p + o_seq()
+    mkdir(d)
+    return Ok(d)
+# 唯一临时文件路径（不创建；由 tf_write 创建）
+def tf_tempname(prefix):
+    var p = prefix
+    if p == null or p == "":
+        p = "px_tmpf_"
+    return Ok("/tmp/" + p + o_seq())
+def tf_write(path, content):
+    var w = write_file(path, content)
+    if w == null:
+        return Ok(null)
+    return Ok(null)
+def tf_read(path):
+    return Ok(read_file(path))
+def tf_remove_file(path):
+    var r = remove(path)
+    if r == null:
+        return Ok(null)
+    return Ok(null)
+def tf_remove_dir(dir):
+    var r = remove(dir)
+    if r == null:
+        return Ok(null)
+    return Ok(null)

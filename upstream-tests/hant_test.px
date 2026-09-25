@@ -1,0 +1,23 @@
+# hant.px 测试：简繁转换（保守子集）
+import "../registry/hant/0.1.0/hant.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    expect(hant_s2t("中华人民共和国").unwrap() == "中華人民共和國", "s2t basic")
+    expect(hant_s2t("学习过程").unwrap() == "學習過程", "s2t study")
+    expect(hant_s2t("时代变化").unwrap() == "時代變化", "s2t era")
+    expect(hant_s2t("国家").unwrap() == "國家", "s2t country")
+    expect(hant_s2t("ascii 123").unwrap() == "ascii 123", "s2t ascii passthrough")
+    expect(hant_s2t("面食").unwrap() == "面食", "s2t blacklist 面 unchanged")
+    expect(hant_s2t("").unwrap() == "", "s2t empty")
+    expect(hant_t2s("中華人民共和國").unwrap() == "中华人民共和国", "t2s basic")
+    expect(hant_t2s("學習過程").unwrap() == "学习过程", "t2s study")
+    expect(hant_t2s("時代變化").unwrap() == "时代变化", "t2s era")
+    expect(hant_t2s("國家").unwrap() == "国家", "t2s country")
+    expect(hant_t2s("未知字").unwrap() == "未知字", "t2s unknown passthrough")
+    # 往返
+    expect(hant_t2s(hant_s2t("学习过程").unwrap()).unwrap() == "学习过程", "roundtrip")
+    print("hant: ALL PASS")
+    return 0

@@ -1,5 +1,5 @@
 # 上游 registry-px 真实用例的期望值（M190 建立）
-# 来源：github.com/banshanhanfu/registry-px @ 70e8123（tests/*.px，逐字节照搬 · MANIFEST.sha256 对拍）
+# 来源：github.com/banshanhanfu/registry-px @ d4ae476（tests/*.px，逐字节照搬 · MANIFEST.sha256 对拍）
 # 字段：<测试名>\t<build 期望>\t<interp 期望>\t<理由>
 # 取值：PASS / SKIP。**SKIP 必须写理由**（环境不具备 / 设计性不支持 / 性能性）。
 # 纪律：本文件是**登记的数据**，不是"跑一遍把结果抄下来"——改这里等于改判据，
@@ -105,3 +105,16 @@ pwgen_test	PASS	PASS	-
 quickcheck_test	PASS	PASS	-
 readstat_test	PASS	PASS	-
 snowflake_test	PASS	PASS	-
+# —— 上游 d4ae476 新增 12 用例（M210 引入；先登记「应当 PASS」的期望，再实测 —— 不按实测结果反填）——
+bson_test	PASS	PASS	上游 d4ae476 新增（BSON 编解码 · Python bson 官方向量逐字节对拍）
+cnnum_amount_test	PASS	PASS	上游 d4ae476 新增（人民币金额大写 · cnnum 0.1.0 就地更新）
+dns_test	SKIP	SKIP	需外网 UDP 解析器 223.5.5.5:53（GitHub runner 无 UDP 出网；自建 DNS mock + lo 别名列为下一轮）
+hant_test	PASS	PASS	上游 d4ae476 新增（简繁保守单字子集 · 双向可逆 + 语境过滤）
+imap_test	PASS	PASS	上游 d4ae476 新增；本仓自建 IMAP4rev1 mock（fixtures/imap_mock.px · 127.0.0.1:1143）
+mongodb_test	SKIP	SKIP	需真实 mongod 7.0 127.0.0.1:27017（本机与 CI 均无；--run-skipped 可跑）
+richmd_test	PASS	PASS	上游 d4ae476 新增（Markdown→ANSI 渲染 · mdr_strip 还原）
+sched_test	PASS	PASS	上游 d4ae476 新增（时间片轮询调度器）
+statx_test	PASS	PASS	上游 d4ae476 新增（描述统计/分位数/相关系数/线性回归）
+targz_test	PASS	PASS	上游 d4ae476 新增（uStar tar.gz 联合流 · Python tarfile 互通）
+tempfile_test	PASS	PASS	上游 d4ae476 新增（临时目录/文件/清理）
+xlsx_read_test	PASS	PASS	上游 d4ae476 新增；fixture 内联（XLSX_MIN_HEX 自造 /tmp/px_min_shared.xlsx）无外部依赖

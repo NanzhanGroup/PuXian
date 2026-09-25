@@ -72,14 +72,16 @@ cat > "$PROV" <<EOF
 |---|---|---|---|---|---|---|
 EOF
 
-prov_note() {   # 三轨验证列（口径 = **M201** 的上游用例回归：100 用例 × 双轨 —— 随普查更新）
+prov_note() {   # 三轨验证列（口径 = **M210** 的上游用例回归：112 用例 × 双轨 —— 随普查更新）
     case "$1" in
         concurrent_map|workerpool) echo "编译轨 PASS · 解释轨**设计性**不支持并发（PX-DEF-006）" ;;
         qrcode) echo "编译轨 PASS · 解释轨**超时**（PX-DEF-024 性能：单码 8 掩码罚分 ≈36s）" ;;
         pg|mysql) echo "文件完整 · 测试需**真实服务端**（PG13 / MariaDB）" ;;
-        ftp|pop3|oauth2) echo "**双轨 PASS**（M201：本仓自建 mock 服务端 fixture，见 upstream-tests/fixtures/）" ;;
+        mongodb) echo "文件完整 · 测试需**真实 mongod**（127.0.0.1:27017）" ;;
+        dns) echo "**双轨 SKIP** · 用例要求外网 UDP 解析器 223.5.5.5:53" ;;
+        ftp|pop3|oauth2|imap) echo "**双轨 PASS**（本仓自建 mock 服务端，见 upstream-tests/fixtures/）" ;;
         passhash) echo "**双轨 PASS**（M189：打本地补丁后 \`passhash_test\` 通过；M198 起补丁已撤销）" ;;
-        *) echo "**双轨 PASS**（M201 上游用例回归 · 100 用例 × 双轨 · 185 PASS / 0 FAIL / 15 SKIP）" ;;
+        *) echo "**双轨 PASS**（M210 上游用例回归 · 112 用例 × 双轨 · 205 PASS / 0 FAIL / 19 SKIP）" ;;
     esac
 }
 

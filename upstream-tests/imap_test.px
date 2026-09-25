@@ -1,0 +1,21 @@
+# imap.px 测试：本地 IMAP mock（127.0.0.1:1143）
+import "../registry/imap/0.1.0/imap.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var conn = imap_connect("127.0.0.1", 1143, 3000).unwrap()
+    expect(imap_login(conn, "u", "p").unwrap() == true, "login")
+    var mboxes = imap_list(conn).unwrap()
+    expect(mboxes.contains("INBOX"), "list INBOX")
+    expect(mboxes.contains("Sent") and mboxes.contains("Trash"), "list Sent/Trash")
+    var sel = imap_select(conn, "INBOX").unwrap()
+    expect(sel["exists"] == 2, "select exists 2")
+    var bodies = imap_fetch(conn, "1", "BODY[]").unwrap()
+    expect(len(bodies) == 1, "fetch 1 body")
+    expect(bodies[0].find("Subject: hello") >= 0, "subject")
+    expect(bodies[0].find("普贤") >= 0, "utf8 body")
+    imap_logout(conn)
+    print("imap: ALL PASS")
+    return 0

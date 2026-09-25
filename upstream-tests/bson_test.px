@@ -1,0 +1,60 @@
+# bson.px 测试：Python bson 官方向量 + 编码逐字节对拍 + 往返 + 错误分支
+import "../registry/bson/0.1.0/bson.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def feq(a, b):
+    return abs(a - b) < 1e-9
+def main():
+    # 1. Python bson 向量解码
+    var d1 = bson_decode(hex_to_bytes("0c0000001061000100000000")).unwrap()
+    expect(type(d1) == "dict" and d1["a"] == 1, "v int32")
+    var d2 = bson_decode(hex_to_bytes("0f0000000273000300000068690000")).unwrap()
+    expect(d2["s"] == "hi", "v str")
+    var d3 = bson_decode(hex_to_bytes("080000000a6e0000")).unwrap()
+    expect(d3.has("n") and d3["n"] == null, "v null")
+    var d4 = bson_decode(hex_to_bytes("090000000862000100")).unwrap()
+    expect(d4["b"] == true, "v bool")
+    var d5 = bson_decode(hex_to_bytes("100000000166001f85eb51b81e094000")).unwrap()
+    expect(feq(d5["f"], 3.14), "v double")
+    var d6 = bson_decode(hex_to_bytes("2400000004617272001a000000"
+        +"1030000100000010310002000000103200030000000000")).unwrap()
+    expect(type(d6["arr"]) == "list" and d6["arr"][0] == 1 and d6["arr"][2] == 3, "v array")
+    var d7 = bson_decode(hex_to_bytes("16000000036f000e0000000278000200000079000000")).unwrap()
+    expect(type(d7["o"]) == "dict" and d7["o"]["x"] == "y", "v nested")
+    var d8 = bson_decode(hex_to_bytes("120000001262696700000000000001000000")).unwrap()
+    expect(d8["big"] == 1099511627776, "v int64")
+    var d9 = bson_decode(hex_to_bytes("14000000027a680007000000e699aee8b4a40000")).unwrap()
+    expect(d9["zh"] == "普贤", "v utf8")
+    var db = bson_decode(hex_to_bytes("1300000005646174610003000000000102ff00")).unwrap()
+    expect(bytes_to_hex(db["data"]) == "0102ff", "v binary")
+    # 2. 编码与 Python bson 逐字节一致
+    expect(bytes_to_hex(bson_encode({"a": 1}).unwrap()) == "0c0000001061000100000000", "e int32")
+    expect(bytes_to_hex(bson_encode({"s": "hi"}).unwrap())
+        == "0f0000000273000300000068690000", "e str")
+    expect(bytes_to_hex(bson_encode({"n": null}).unwrap()) == "080000000a6e0000", "e null")
+    expect(bytes_to_hex(bson_encode({"b": true}).unwrap()) == "090000000862000100", "e bool")
+    expect(bytes_to_hex(bson_encode({"zh": "普贤"}).unwrap())
+        == "14000000027a680007000000e699aee8b4a40000", "e utf8")
+    # 数组内层长度与 Python 一致
+    expect(bytes_to_hex(bson_encode({"arr": [1, 2, 3]}).unwrap()) ==
+        "2400000004617272001a0000001030000100000010310002000000103200030000000000", "e array")
+    # 3. 往返（大 int64 / float / 中文 / bytes / 嵌套 / bool / null）
+    var doc = {"i64": 1099511627776, "pi": 3.14159, "txt": "普贤 hello",
+        "flag": true, "nil": null, "data": bytes("xyz")}
+    var enc = bson_encode(doc).unwrap()
+    var dec = bson_decode(enc).unwrap()
+    expect(dec["i64"] == 1099511627776, "rt i64")
+    expect(feq(dec["pi"], 3.14159), "rt pi")
+    expect(dec["txt"] == "普贤 hello", "rt txt")
+    expect(dec["flag"] == true, "rt flag")
+    expect(dec["nil"] == null, "rt null")
+    expect(bytes_to_str(dec["data"]) == "xyz", "rt bytes")
+    # 数组根
+    # 4. 错误分支
+    expect(bson_decode(bytes("x")).is_err(), "too short err")
+    expect(bson_decode(hex_to_bytes("090000007f75000000")).is_err(), "unknown type err")
+    expect(bson_decode(hex_to_bytes("0c00000010610001000000")).is_err(), "bad len err")
+    print("bson: ALL PASS")
+    return 0

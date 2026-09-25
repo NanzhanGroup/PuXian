@@ -1,0 +1,46 @@
+# statx.px 测试：描述统计 / 分位数 / 相关系数 / 线性回归（与 Python statistics 对拍）
+import "../registry/statx/0.1.0/statx.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def feq(a, b):
+    return abs(a - b) < 1e-9
+def main():
+    # 算术平均 / 中位数
+    expect(feq(st_mean([1, 2, 3, 4, 5]).unwrap(), 3.0), "mean")
+    expect(feq(st_median([1, 2, 3, 4, 5]).unwrap(), 3.0), "median odd")
+    expect(feq(st_median([1, 2, 3, 4]).unwrap(), 2.5), "median even")
+    expect(st_mean([]).is_err(), "mean empty err")
+    expect(st_median([]).is_err(), "median empty err")
+    # 方差 / 标准差
+    expect(feq(st_variance([1, 2, 3, 4, 5], false).unwrap(), 2.0), "var pop")
+    expect(feq(st_variance([1, 2, 3, 4, 5], true).unwrap(), 2.5), "var sample")
+    expect(feq(st_stddev([1, 2, 3, 4, 5], true).unwrap(), 1.5811388300841898), "stddev sample")
+    expect(st_variance([7], true).is_err(), "var sample len1 err")
+    # 分位数（Python 线性法）
+    expect(feq(st_quantile([1, 2, 3, 4, 5], 0.25).unwrap(), 2.0), "q25")
+    expect(feq(st_quantile([1, 2, 3, 4, 5], 0.5).unwrap(), 3.0), "q50")
+    expect(feq(st_quantile([1, 2, 3, 4, 5], 0.9).unwrap(), 4.6), "q90")
+    expect(feq(st_quantile([10, 20, 30, 40], 0.5).unwrap(), 25.0), "q50 even")
+    expect(st_quantile([1, 2, 3], 1.5).is_err(), "quantile q out of range")
+    # Pearson 相关系数
+    expect(feq(st_pearson([1, 2, 3], [2, 4, 6]).unwrap(), 1.0), "pearson +1")
+    expect(feq(st_pearson([1, 2, 3], [3, 2, 1]).unwrap(), -1.0), "pearson -1")
+    expect(st_pearson([1, 2, 3], [1, 2]).is_err(), "pearson len mismatch")
+    expect(st_pearson([5, 5, 5], [1, 2, 3]).is_err(), "pearson const zero")
+    # 线性回归 y = slope*x + intercept
+    var lr1 = st_linreg([1, 2, 3, 4], [3, 5, 7, 9]).unwrap()
+    expect(feq(lr1[0], 2.0), "linreg slope")
+    expect(feq(lr1[1], 1.0), "linreg intercept")
+    expect(feq(lr1[2], 1.0), "linreg r2")
+    var lr2 = st_linreg([1.0, 2.0, 3.0, 4.0], [2.5, 3.7, 8.1, 9.2]).unwrap()
+    # Python: slope≈2.31, intercept≈-0.43, r2≈0.947（对拍见验证脚本）
+    expect(feq(lr2[0], 2.45), "linreg slope2")
+    expect(feq(lr2[1], -0.25), "linreg intercept2")
+    expect(abs(lr2[2] - 0.93416854719477094) < 1e-9, "linreg r2 2")
+    # Range
+    expect(feq(st_range([3, 1, 4, 1, 5]).unwrap(), 4.0), "range")
+    expect(st_range([]).is_err(), "range empty err")
+    print("statx: ALL PASS")
+    return 0

@@ -1,0 +1,89 @@
+# ============================================================
+# upstream-tests/fixtures/imap_mock.px —— IMAP4rev1 服务端 fixture（**本仓自建**，非上游文件）
+# ------------------------------------------------------------
+# 为什么需要它：上游 `tests/imap_test.px` 打 `127.0.0.1:1143`，注释自称「本地 IMAP mock」，
+#   但上游仓库**不带服务端**（当时是手工起的临时进程，未入库）⇒ 本仓用普贤自己写一个，
+#   不引入 python3 / netcat 之类的新依赖（同 ftp / pop3 / oauth2 先例）。
+#
+# 契约（严格按 `tests/imap_test.px` 的断言）：
+#   欢迎 `* OK`；LOGIN → `<tag> OK`；LIST → INBOX / Sent / Trash 三个邮箱；
+#   SELECT INBOX → `* 2 EXISTS` + `* 0 RECENT`；FETCH 1 BODY[] → literal `{N}` 消息体，
+#   含 `Subject: hello` 与 `普贤`（UTF-8 多字节）；LOGOUT → `<tag> OK`。
+#   ⚠️ tag 必须**回显请求里的**（客户端 tag = "A" + now_ms()%100000，位数可变 ⇒ 不能硬编码）。
+#   ⚠️ literal 长度必须按**字节**算（`bytes_len`）—— `len("…普贤")` 是 rune 数（PX-DEF-015），
+#      按 rune 数发长度会让客户端多读/少读。
+#
+# 用法：./imapfix            （监听 127.0.0.1 的 1143）
+# ============================================================
+
+var IM_PORT = 1143
+var IM_LFD = tcp_listen(IM_PORT)
+print("imapfix: listening " + str(IM_PORT))
+
+def im_read_line(fd):
+    var buf = bytes("")
+    while true:
+        var r = tcp_recv_ex(fd, 1)
+        if not r["ok"] or r["eof"]:
+            return ["", true]
+        var d = r["data"]
+        if type(d) == "string":
+            d = bytes(d)
+        buf = bytes_concat(buf, d)
+        var bl = bytes_len(buf)
+        if bl > 0 and bytes_get(buf, bl - 1) == 10:
+            var end = bl - 1
+            if end >= 1 and bytes_get(buf, end - 1) == 13:
+                end = end - 1
+            return [bytes_to_str(bytes_slice(buf, 0, end)), false]
+        if bl > 8192:
+            return [bytes_to_str(buf), false]
+
+def im_send(fd, s):
+    tcp_send_ex(fd, bytes(s + "\r\n"))
+
+# 消息体（含 UTF-8 中文 ⇒ 长度按字节，见文件头注）
+var IM_BODY = "Subject: hello\r\nFrom: a@example.com\r\n\r\nmessage one 普贤"
+
+def im_handle(fd):
+    im_send(fd, "* OK [CAPABILITY IMAP4rev1] PuXian IMAP fixture ready")
+    while true:
+        var l = im_read_line(fd)
+        if l[1]:
+            break
+        var parts = split(l[0], " ")
+        if len(parts) < 2:
+            im_send(fd, "* BAD malformed")
+            continue
+        var tag = parts[0]
+        var cmd = parts[1]
+        if cmd == "LOGIN":
+            im_send(fd, tag + " OK LOGIN completed")
+        elif cmd == "LIST":
+            # flags 留空：客户端只取**最后一个** token 并去引号（imap.px `imap_list`）
+            im_send(fd, "* LIST () \"/\" \"INBOX\"")
+            im_send(fd, "* LIST () \"/\" \"Sent\"")
+            im_send(fd, "* LIST () \"/\" \"Trash\"")
+            im_send(fd, tag + " OK LIST completed")
+        elif cmd == "SELECT":
+            im_send(fd, "* 2 EXISTS")
+            im_send(fd, "* 0 RECENT")
+            im_send(fd, tag + " OK [READ-WRITE] SELECT completed")
+        elif cmd == "FETCH":
+            # literal：`* 1 FETCH (BODY[] {N}` + CRLF，随后是 N 字节 + CRLF + `)` + 结束行
+            var bb = bytes(IM_BODY)
+            im_send(fd, "* 1 FETCH (BODY[] {" + str(bytes_len(bb)) + "}")
+            tcp_send_ex(fd, bb)
+            tcp_send_ex(fd, bytes("\r\n)\r\n"))
+            im_send(fd, tag + " OK FETCH completed")
+        elif cmd == "LOGOUT":
+            im_send(fd, "* BYE logging out")
+            im_send(fd, tag + " OK LOGOUT completed")
+            break
+        else:
+            im_send(fd, tag + " BAD unsupported")
+    tcp_close(fd)
+
+while true:
+    var cfd = tcp_accept(IM_LFD)
+    im_handle(cfd)

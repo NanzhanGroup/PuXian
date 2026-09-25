@@ -2,13 +2,14 @@
 
 ## 为什么有这个目录
 
-上游 `registry-px` 的三个用例要求**外部服务端**才能跑：
+上游 `registry-px` 的**四个**用例要求**外部服务端**才能跑：
 
 | 用例 | 期望的服务端 | 上游的做法 |
 |---|---|---|
 | `tests/ftp_test.px` | FTP（2121 控制 / PASV 数据口） | 头注释写「真实 pyftpdlib 服务」——用 Python 临时手搭，**未入库** |
 | `tests/pop3_test.px` | POP3（2110） | 注释写「真实自定义 POP3 服务」——同上，**未入库** |
 | `tests/oauth2_test.px` | OAuth2 令牌端点（19090，HTTP POST） | 注释写「本地 mock 端点」——同上，**未入库** |
+| `tests/imap_test.px` | IMAP4rev1（1143） | 注释写「本地 IMAP mock」——同上，**未入库**（M210 引入该库时发现） |
 
 ⇒ 引入这三库时，只有两条路：**SKIP（登记理由）**或**自建 fixture**。
 本仓选后者，并且**不用 Python / pyftpdlib / netcat** —— 本仓的长期纪律是**不引入新依赖**，
@@ -21,6 +22,8 @@
 | `oauth2_mock.px` | 19090 | `POST /token`：`client_secret=WRONG` → 400 `{"error":"invalid_client"}`；`grant_type=client_credentials` → 200 `access_token=mock_access_token_12345` / `expires_in=3600` / `scope=read`；`grant_type=password` → `mock_access_token_12345_pw` |
 | `pop3_mock.px` | 2110 | 问候 `+OK`；`PASS ok` 通过、其它 `-ERR`；`STAT` → `2 100`；`LIST` → `1 40` / `2 60`；`RETR 1` 含 `Subject: one` + `message one 普贤`（**含中文 + 点填充行**）；`RETR 2` 含 `message two`；`RETR 99` → `-ERR`；`QUIT` → `+OK` |
 | `ftp_mock.px` | 2121（控制）· 2122（数据） | `220` 问候；`USER px` → 331；`PASS secret` → 230（其它 530）；`PWD` → 257；`TYPE I` → 200；`PASV` → 227（数据口 **2122** = `(127,0,0,1,8,74)`）；`LIST`/`RETR`/`STOR` → 150 + 数据 + 226；`CWD sub`/`CWD /` → 250；`QUIT` → 221 |
+
+| `imap_mock.px` | 1143 | 欢迎 `* OK`；`LOGIN` → `<tag> OK`；`LIST` → INBOX / Sent / Trash；`SELECT INBOX` → `* 2 EXISTS` + `* 0 RECENT`；`FETCH 1 BODY[]` → literal `{N}`，体含 `Subject: hello` + `普贤`（UTF-8）；`LOGOUT` → `<tag> OK`。⚠️ **tag 必须回显请求里的**（客户端 tag = `"A" + now_ms()%100000`，位数可变）；⚠️ literal 长度按**字节**算（`len()` 是 rune 数 —— PX-DEF-015） |
 
 ## 运行方式
 

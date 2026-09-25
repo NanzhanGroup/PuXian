@@ -1,0 +1,202 @@
+# ============================================================
+# 普贤生态库：registry/bson —— BSON 编解码（基础类型子集）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 MongoDB BSON 规范 / Python bson 心智（0.1.0）：
+#   bson_encode(doc) → Ok(bytes) | Err   # dict→document；list→array（可嵌套）
+#   bson_decode(data) → Ok(value) | Err  # 须恰好消费整段（含 4 字节长度 + 终止 0x00）
+# 支持类型：
+#   0x01 double · 0x02 string（长度=字节数）· 0x03 doc · 0x04 array ·
+#   0x05 binary（subtype 0；其他 subtype 解码为 {subtype,data}）·
+#   0x07 ObjectId（编: 24 位 hex/12 字节；解: hex 串）· 0x08 bool · 0x09 datetime(int64 ms) ·
+#   0x0A null · 0x10 int32 · 0x12 int64（int 编码按范围自动选 32/64）
+# 说明：
+#   - 未知类型字节在解码时报 Err（响亮，不静默跳过）。
+#   - 文档长度/字符串长度一律按 **字节数**（str 的 len() 是码点数，须 bytes_len）。
+#   - 与 Python bson 双向互操作：编码字节逐段对齐（见测试）。
+# ============================================================
+# ---- 内部：小端读写 ----
+def o_le32(v):
+    return int_to_bytes(v, 4, "little", true)
+def o_le64(v):
+    return int_to_bytes(v, 8, "little", true)
+def o_rd_i32(b, off):
+    return bytes_to_int(bytes_slice(b, off, off + 4), "little", true)
+def o_rd_i64(b, off):
+    return bytes_to_int(bytes_slice(b, off, off + 8), "little", true)
+def o_rd_u8(b, off):
+    return bytes_to_int(bytes_slice(b, off, off + 1), "little", false)
+# 读 cstring（\x00 结尾）→ Ok([str, 结束偏移])
+def o_read_cstr(b, off):
+    var i = off
+    while i < bytes_len(b):
+        if o_rd_u8(b, i) == 0:
+            return Ok([bytes_to_str(bytes_slice(b, off, i)), i + 1])
+        i += 1
+    return Err("bson: cstring 未找到终止符")
+# 编码文档/数组（含 4 字节长度头 + 尾部 0x00）
+def o_enc_doc(d):
+    var body = bytes("")
+    if type(d) == "dict":
+        var keys = d.keys()
+        var i = 0
+        while i < len(keys):
+            var k = keys[i]
+            var e = o_enc_elem(k, d[k])
+            if e.is_err():
+                return e
+            body = bytes_concat(body, e.unwrap())
+            i += 1
+    elif type(d) == "list":
+        var j = 0
+        while j < len(d):
+            var e = o_enc_elem(str(j), d[j])
+            if e.is_err():
+                return e
+            body = bytes_concat(body, e.unwrap())
+            j += 1
+    else:
+        return Err("bson: 根须为 dict 或 list")
+    return Ok(bytes_concat(o_le32(bytes_len(body) + 4 + 1), body, byte(0)))
+# 编码单个元素 → Ok(类型字节 + 名字 + \x00 + 载荷)
+def o_enc_elem(name, v):
+    var t = type(v)
+    var tb = 0
+    var payload = bytes("")
+    if t == "int":
+        if v >= -2147483648 and v <= 2147483647:
+            tb = 0x10
+            payload = o_le32(v)
+        else:
+            tb = 0x12
+            payload = o_le64(v)
+    elif t == "float":
+        tb = 0x01
+        payload = o_le64(float64_bits(v))
+    elif t == "string":
+        var raw = bytes(v)
+        tb = 0x02
+        payload = bytes_concat(o_le32(bytes_len(raw) + 1), raw, byte(0))
+    elif t == "bool":
+        tb = 0x08
+        if v:
+            payload = byte(1)
+        else:
+            payload = byte(0)
+    elif t == "null":
+        tb = 0x0A
+    elif t == "dict":
+        tb = 0x03
+        var ed = o_enc_doc(v)
+        if ed.is_err():
+            return ed
+        payload = ed.unwrap()
+    elif t == "list":
+        tb = 0x04
+        var ea = o_enc_doc(v)
+        if ea.is_err():
+            return ea
+        payload = ea.unwrap()
+    elif t == "bytes":
+        tb = 0x05
+        payload = bytes_concat(o_le32(bytes_len(v)), byte(0), v)
+    else:
+        return Err("bson: 不支持的类型 " + t)
+    return Ok(bytes_concat(byte(tb), bytes(name), byte(0), payload))
+# 元素列表 → dict 或 array
+def o_build(items, is_array):
+    if is_array:
+        var arr = []
+        var i = 0
+        while i < len(items):
+            arr <- items[i][1]
+            i += 1
+        return arr
+    var d = {}
+    var j = 0
+    while j < len(items):
+        d.set(items[j][0], items[j][1])
+        j += 1
+    return d
+# 解码文档/数组（off 指向 4 字节长度头）→ Ok([value, 结束偏移])
+def o_dec_doc(b, off, is_array):
+    var total = o_rd_i32(b, off)
+    if total < 5:
+        return Err("bson: 文档长度非法: " + str(total))
+    var end = off + total
+    if end > bytes_len(b):
+        return Err("bson: 文档长度越界")
+    var pos = off + 4
+    var items = []
+    while pos < end - 1:
+        var ty = o_rd_u8(b, pos)
+        if ty == 0:
+            return Err("bson: 提前遇到终止符")
+        var nm = o_read_cstr(b, pos + 1)
+        if nm.is_err():
+            return nm
+        var name = nm.unwrap()[0]
+        pos = nm.unwrap()[1]
+        var val = o_dec_value(b, pos, ty)
+        if val.is_err():
+            return val
+        var vv = val.unwrap()[0]
+        pos = val.unwrap()[1]
+        items <- [name, vv]
+    var term = o_rd_u8(b, end - 1)
+    if term != 0:
+        return Err("bson: 文档缺少终止 0x00")
+    return Ok([o_build(items, is_array), end])
+# 解码值 → Ok([value, 下一偏移])
+def o_dec_value(b, off, ty):
+    if ty == 0x01:
+        return Ok([bits_to_float64(o_rd_i64(b, off)), off + 8])
+    if ty == 0x02:
+        var ln = o_rd_i32(b, off)
+        return Ok([bytes_to_str(bytes_slice(b, off + 4, off + 4 + ln - 1)), off + 4 + ln])
+    if ty == 0x03:
+        var d3 = o_dec_doc(b, off, false)
+        if d3.is_err():
+            return d3
+        return Ok([d3.unwrap()[0], d3.unwrap()[1]])
+    if ty == 0x04:
+        var d4 = o_dec_doc(b, off, true)
+        if d4.is_err():
+            return d4
+        return Ok([d4.unwrap()[0], d4.unwrap()[1]])
+    if ty == 0x05:
+        var ln2 = o_rd_i32(b, off)
+        var sub = o_rd_u8(b, off + 4)
+        var data = bytes_slice(b, off + 5, off + 5 + ln2)
+        if sub == 0:
+            return Ok([data, off + 5 + ln2])
+        return Ok([{"subtype": sub, "data": data}, off + 5 + ln2])
+    if ty == 0x07:
+        return Ok([bytes_to_hex(bytes_slice(b, off, off + 12)), off + 12])
+    if ty == 0x08:
+        return Ok([o_rd_u8(b, off) == 1, off + 1])
+    if ty == 0x09:
+        return Ok([o_rd_i64(b, off), off + 8])
+    if ty == 0x0A:
+        return Ok([null, off])
+    if ty == 0x10:
+        return Ok([o_rd_i32(b, off), off + 4])
+    if ty == 0x12:
+        return Ok([o_rd_i64(b, off), off + 8])
+    return Err("bson: 不支持的类型字节 0x" + int_to_hex(ty, 2))
+# 公开：编码（根须为 dict）
+def bson_encode(doc):
+    if type(doc) != "dict":
+        return Err("bson: 根须为 dict（数组请置于文档字段内）")
+    return o_enc_doc(doc)
+# 公开：解码（根恒为 document；整段消费）
+def bson_decode(data):
+    if bytes_len(data) < 5:
+        return Err("bson: 数据过短")
+    var r = o_dec_doc(data, 0, false)
+    if r.is_err():
+        return r
+    var pair = r.unwrap()
+    if pair[1] != bytes_len(data):
+        return Err("bson: 数据未消费完")
+    return Ok(pair[0])

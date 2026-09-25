@@ -1,0 +1,152 @@
+# ============================================================
+# 普贤生态库：registry/targz —— tar.gz 联合流（uStar 子集）
+# ------------------------------------------------------------
+# 编译（px build）与解释（px run）双模式一致（0.1.0）。
+# 对照 Go archive/tar + compress/gzip / Python tarfile 心智：
+#   tz_tar(files_dict)        → Ok(bytes)   # dict{路径→内容(str/bytes)} → uStar tar 字节
+#   tz_gzip(data)             → Ok(bytes)   # gzip_compress 封装
+#   tz_gunzip(data)           → Ok(bytes)   # gzip_uncompress 封装
+#   tz_pack(files_dict)       → Ok(bytes)   # tar → gzip 一步
+#   tz_unpack_tar(data)       → Ok({路径→内容(str)})  # 解析 uStar（含 512 双零尾块）
+# 说明：
+#   - 头格式 uStar：100 名 + 8 模式 + 8 uid + 8 gid + 12 八进制大小 + 12 mtime +
+#     8 校验和 + 1 类型(0=文件) + 100 link + 6 magic("ustar\0") + 2 ver + 32 uname +
+#     32 gname + 8 devmajor + 8 devminor + 155 prefix；数据按 512 补齐，尾二块零。
+#   - 校验和 = 头部字节和（chksum 按 8 空格占位），写 6 位八进制 + NUL + 空格。
+#   - 解析容忍大小字段尾部 NUL/空格；不支持 symlink/目录（0.1.0 子集）。
+#   - 与 Python tarfile 双向互通（测试对拍）。
+# ============================================================
+# int → 8 进制零填充字符串（width 位）
+def o_oct_n(n, width):
+    var digits = "01234567"
+    var s = ""
+    var v = n
+    if v <= 0:
+        s = "0"
+    while v > 0:
+        s = digits[v % 8] + s
+        v = v // 8
+    while len(s) < width:
+        s = "0" + s
+    return s
+def o_zero(n):
+    var b = bytes("")
+    var i = 0
+    while i < n:
+        b = bytes_concat(b, byte(0))
+        i += 1
+    return b
+def o_hdr(name, size):
+    var nm = bytes(name)
+    if bytes_len(nm) > 100:
+        return Err("targz: 文件名超 100 字节")
+    var h = bytes_concat(
+        nm, o_zero(100 - bytes_len(nm)),
+        bytes("0000644\0"),
+        bytes("0000000\0"),
+        bytes("0000000\0"),
+        bytes(o_oct_n(size, 11) + "\0"),
+        bytes("00000000000\0"),
+        bytes("        "),
+        bytes("0"),
+        o_zero(100),
+        bytes("ustar\0"),
+        bytes("00"),
+        o_zero(32),
+        o_zero(32),
+        bytes("0000000\0"),
+        bytes("0000000\0"),
+        o_zero(155),
+        o_zero(12))
+    # 校验和（chksum 域按 8 空格计）
+    var sum = 0
+    var i = 0
+    while i < bytes_len(h):
+        sum = sum + o_u8b(h, i)
+        i += 1
+    var check = bytes(o_oct_n(sum, 6) + "\0 ")
+    var head = bytes_slice(h, 0, 148)
+    var tail = bytes_slice(h, 156, bytes_len(h))
+    return Ok(bytes_concat(head, check, tail))
+def o_u8b(b, off):
+    return bytes_to_int(bytes_slice(b, off, off + 1), "big", false)
+# dict{路径→内容} → tar 字节
+def tz_tar(files):
+    var out = bytes("")
+    var ks = files.keys()
+    var i = 0
+    while i < len(ks):
+        var name = ks[i]
+        var content = files[name]
+        var raw = bytes(content)
+        var size = bytes_len(raw)
+        var h = o_hdr(name, size)
+        if h.is_err():
+            return h
+        out = bytes_concat(out, h.unwrap(), raw)
+        var pad = size % 512
+        if pad != 0:
+            out = bytes_concat(out, o_zero(512 - pad))
+        i += 1
+    return Ok(bytes_concat(out, o_zero(1024)))
+# gzip 封装
+def tz_gzip(data):
+    return Ok(gzip_compress(data))
+def tz_gunzip(data):
+    return Ok(gzip_uncompress(data))
+# tar → gzip 一步
+def tz_pack(files):
+    var t = tz_tar(files)
+    if t.is_err():
+        return t
+    return Ok(gzip_compress(t.unwrap()))
+# 读八进制字段（NUL/空格 终止）
+def o_parse_oct(b, off, width):
+    var s = ""
+    var i = 0
+    while i < width:
+        var c = o_u8b(b, off + i)
+        if c == 0 or c == 32:
+            break
+        s = s + chr(c)
+        i += 1
+    if s == "":
+        return 0
+    var v = 0
+    i = 0
+    while i < len(s):
+        var d = ord(s[i]) - 48
+        if d < 0 or d > 7:
+            return 0
+        v = v * 8 + d
+        i += 1
+    return v
+# tar 字节 → {路径→内容(str)}（容忍数据尾填充与尾零块）
+def tz_unpack_tar(data):
+    var out = {}
+    var off = 0
+    var n = bytes_len(data)
+    while off + 512 <= n:
+        var first = o_u8b(data, off)
+        if first == 0:
+            break
+        var typeflag = o_u8b(data, off + 156)
+        var name = bytes_to_str(bytes_slice(data, off, o_str_end(data, off, 100)))
+        if typeflag == 0 or typeflag == 48:
+            var size = o_parse_oct(data, off + 124, 12)
+            var body = bytes_slice(data, off + 512, off + 512 + size)
+            out.set(name, bytes_to_str(body))
+            off = off + 512 + size
+            var pad = size % 512
+            if pad != 0:
+                off = off + (512 - pad)
+        else:
+            return Err("targz: 不支持类型 " + str(typeflag))
+    return Ok(out)
+def o_str_end(b, off, width):
+    var i = 0
+    while i < width:
+        if o_u8b(b, off + i) == 0:
+            return off + i
+        i += 1
+    return off + width

@@ -118,3 +118,129 @@ def cnnum_format(n):
     if rest > 0:
         out = out + cn_group(rest)
     return Ok(out)
+# ============================================================
+# 金额大写扩展（人民币）：cn_amount_str —— 财务/汇票大写
+# ------------------------------------------------------------
+# cn_amount_str("1234.56") → Ok("壹仟贰佰叁拾肆元伍角陆分") | Err
+#   - 支持 0 ~ 9999999999999 元（万亿级）；负号前缀；最多两位小数。
+#   - 零位规则：整数组间零补位；角=0 分>0 → "X元零Y分"；分=0 → 尾加"整"。
+#   - 0 → "零元整"；0.05 → "伍分"；3.10 → "叁元壹角整"。
+# ============================================================
+const CN_BIG = "零壹贰叁肆伍陆柒捌玖"
+# int 数字 0..9 → 大写字符
+def cn_big_digit(d):
+    return CN_BIG[d]
+# 小写中文数字串（cn_group 输出 0..9999）→ 大写
+def cn_big_text(s):
+    var out = ""
+    var i = 0
+    if len(s) > 0 and s[0] == "十":
+        out = "壹拾"
+        i = 1
+    while i < len(s):
+        var c = s[i]
+        if c == "十":
+            out = out + "拾"
+        elif c == "百":
+            out = out + "佰"
+        elif c == "千":
+            out = out + "仟"
+        else:
+            var dv = cn_digit(c)
+            if dv >= 1 and dv <= 9:
+                out = out + cn_big_digit(dv)
+            else:
+                out = out + c
+        i += 1
+    return out
+# 4 位一组（0..9999）→ 大写（复用 cn_group 中文小写再转大写）
+def cn_big_group(n):
+    if n == 0:
+        return ""
+    return cn_big_text(cn_group(n))
+# 金额字符串 → 大写（0~9999999999999 元；两位小数；支持负号）
+def cn_amount_str(s):
+    var neg = false
+    var t = s
+    if len(t) > 0 and t[0] == "-":
+        neg = true
+        t = t[1:len(t)]
+    var parts = split(t, ".")
+    if len(parts) > 2:
+        return Err("cnnum: 非法金额（多个小数点）")
+    var yi = 0
+    var int_txt = parts[0]
+    if int_txt == "":
+        int_txt = "0"
+    var ki = 0
+    while ki < len(int_txt):
+        var oc = ord(int_txt[ki])
+        if oc < 48 or oc > 57:
+            return Err("cnnum: 非法数字字符: " + int_txt[ki])
+        ki += 1
+    yi = int(int_txt)
+    if yi > 9999999999999:
+        return Err("cnnum: 超出万亿级范围")
+    var jiao = 0
+    var fen = 0
+    if len(parts) > 1:
+        var frac = parts[1]
+        if len(frac) > 2:
+            return Err("cnnum: 小数最多两位")
+        var jf = 0
+        while jf < len(frac):
+            var fc = ord(frac[jf])
+            if fc < 48 or fc > 57:
+                return Err("cnnum: 非法小数位: " + frac[jf])
+            jf += 1
+        if len(frac) >= 1:
+            jiao = int(frac[0])
+        if len(frac) >= 2:
+            fen = int(frac[1])
+    var g3 = yi // 1000000000000
+    var g2 = (yi // 100000000) % 10000
+    var g1 = (yi // 10000) % 10000
+    var g0 = yi % 10000
+    var gs = [g3, g2, g1, g0]
+    var us = ["万亿", "亿", "万", ""]
+    var out = ""
+    var prev_zero = false
+    var any_nonzero = false
+    var k = 0
+    while k < 4:
+        var g = gs[k]
+        if g > 0:
+            if prev_zero and any_nonzero:
+                out = out + "零"
+            out = out + cn_big_group(g) + us[k]
+            any_nonzero = true
+            prev_zero = false
+        else:
+            if any_nonzero:
+                prev_zero = true
+        k += 1
+    var head = ""
+    if any_nonzero:
+        head = out + "元"
+    else:
+        head = ""
+    var tail = ""
+    if jiao == 0 and fen == 0:
+        if any_nonzero:
+            tail = "整"
+        else:
+            if neg:
+                return Ok("负零元整")
+            return Ok("零元整")
+    elif fen == 0:
+        tail = cn_big_digit(jiao) + "角整"
+    else:
+        if jiao == 0 and any_nonzero:
+            tail = "零"
+        if jiao > 0:
+            tail = tail + cn_big_digit(jiao) + "角"
+        tail = tail + cn_big_digit(fen) + "分"
+    var res = head + tail
+    if neg:
+        res = "负" + res
+    return Ok(res)

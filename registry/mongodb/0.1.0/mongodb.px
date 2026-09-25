@@ -1,0 +1,306 @@
+# ============================================================
+# 普贤生态库：registry/mongodb —— 轻量 MongoDB 客户端（OP_MSG 协议）
+# ------------------------------------------------------------
+# 编译（px build）与解释（px run）双模式一致；0.1.0 未认证直连子集。
+# 对照 go-mongo-driver / pymongo 心智：
+#   mg_connect(host, port[, timeout_ms]) → Ok(conn dict) | Err
+#   mg_close(conn)                       → Ok | Err
+#   mg_hello(conn)                       → Ok(dict)   # {hello:1} 握手
+#   mg_ping(conn)                        → Ok(bool)
+#   mg_insert(conn, db, coll, doc)       → Ok(dict)   # 返回服务器结果
+#   mg_find(conn, db, coll[, filter[, limit]]) → Ok([doc...])  # 自动 getMore 翻页
+#   mg_count(conn, db, coll[, filter])   → Ok(int)
+#   mg_bson_encode(doc) / mg_bson_decode(data)  → 内置 BSON 子集（自包含）
+# 说明：
+#   - 协议 = wire OP_MSG(2013)：flags=0、kind=0x00 + BSON 命令文档；回复同构。
+#   - self-contained（pxpkg 单 .px 分发）：内部自带 BSON 编解码子集
+#     （编码 int/double/string/bool/null/doc/array/bytes；解码加 binary/oid/datetime），
+#     与 registry/bson 库内容等价但独立维护。
+#   - 命令文档一律 `operationTime` 等字段透传；服务器 errmsg/ok!=1 → Err。
+#   - 依赖 native：tcp_connect_ex / tcp_send_ex / tcp_recv_ex / tcp_close（M149 可辨错族）。
+#   - 未实现认证/压缩；如需 auth 先连后发 {authenticate:1,...}（后续版本）。
+# ============================================================
+# ---- 内部：小端 BSON 子集 ----
+def o_mg_le32(v):
+    return int_to_bytes(v, 4, "little", true)
+def o_mg_le64(v):
+    return int_to_bytes(v, 8, "little", true)
+def o_mg_r32(b, off):
+    return bytes_to_int(bytes_slice(b, off, off + 4), "little", true)
+def o_mg_r64(b, off):
+    return bytes_to_int(bytes_slice(b, off, off + 8), "little", true)
+def o_mg_u8(b, off):
+    return bytes_to_int(bytes_slice(b, off, off + 1), "little", false)
+def o_mg_cstr(b, off):
+    var i = off
+    while i < bytes_len(b):
+        if o_mg_u8(b, i) == 0:
+            return Ok([bytes_to_str(bytes_slice(b, off, i)), i + 1])
+        i += 1
+    return Err("mg: cstring 未终止")
+def o_mg_enc_doc(d):
+    var body = bytes("")
+    if type(d) == "dict":
+        var ks = d.keys()
+        var i = 0
+        while i < len(ks):
+            var e = o_mg_enc_elem(ks[i], d[ks[i]])
+            if e.is_err():
+                return e
+            body = bytes_concat(body, e.unwrap())
+            i += 1
+    elif type(d) == "list":
+        var j = 0
+        while j < len(d):
+            var e = o_mg_enc_elem(str(j), d[j])
+            if e.is_err():
+                return e
+            body = bytes_concat(body, e.unwrap())
+            j += 1
+    else:
+        return Err("mg: 根须 dict/list")
+    return Ok(bytes_concat(o_mg_le32(bytes_len(body) + 4 + 1), body, byte(0)))
+def o_mg_enc_elem(name, v):
+    var t = type(v)
+    var tb = 0
+    var pl = bytes("")
+    if t == "int":
+        if v >= -2147483648 and v <= 2147483647:
+            tb = 0x10
+            pl = o_mg_le32(v)
+        else:
+            tb = 0x12
+            pl = o_mg_le64(v)
+    elif t == "float":
+        tb = 0x01
+        pl = o_mg_le64(float64_bits(v))
+    elif t == "string":
+        var raw = bytes(v)
+        tb = 0x02
+        pl = bytes_concat(o_mg_le32(bytes_len(raw) + 1), raw, byte(0))
+    elif t == "bool":
+        tb = 0x08
+        if v:
+            pl = byte(1)
+        else:
+            pl = byte(0)
+    elif t == "null":
+        tb = 0x0A
+    elif t == "dict":
+        tb = 0x03
+        var ed = o_mg_enc_doc(v)
+        if ed.is_err():
+            return ed
+        pl = ed.unwrap()
+    elif t == "list":
+        tb = 0x04
+        var ea = o_mg_enc_doc(v)
+        if ea.is_err():
+            return ea
+        pl = ea.unwrap()
+    elif t == "bytes":
+        tb = 0x05
+        pl = bytes_concat(o_mg_le32(bytes_len(v)), byte(0), v)
+    else:
+        return Err("mg: 不支持类型 " + t)
+    return Ok(bytes_concat(byte(tb), bytes(name), byte(0), pl))
+def o_mg_build(items, is_arr):
+    if is_arr:
+        var a = []
+        var i1 = 0
+        while i1 < len(items):
+            a <- items[i1][1]
+            i1 += 1
+        return a
+    var dd = {}
+    var i2 = 0
+    while i2 < len(items):
+        dd.set(items[i2][0], items[i2][1])
+        i2 += 1
+    return dd
+def o_mg_dec_doc(b, off, is_arr):
+    var total = o_mg_r32(b, off)
+    if total < 5:
+        return Err("mg: doc 长度非法")
+    var end = off + total
+    if end > bytes_len(b):
+        return Err("mg: doc 越界")
+    var pos = off + 4
+    var items = []
+    while pos < end - 1:
+        var ty = o_mg_u8(b, pos)
+        if ty == 0:
+            return Err("mg: 提前结束")
+        var nm = o_mg_cstr(b, pos + 1)
+        if nm.is_err():
+            return nm
+        var name = nm.unwrap()[0]
+        pos = nm.unwrap()[1]
+        var vv = o_mg_dec_val(b, pos, ty)
+        if vv.is_err():
+            return vv
+        var val = vv.unwrap()[0]
+        pos = vv.unwrap()[1]
+        items <- [name, val]
+    return Ok([o_mg_build(items, is_arr), end])
+def o_mg_dec_val(b, off, ty):
+    if ty == 0x01:
+        return Ok([bits_to_float64(o_mg_r64(b, off)), off + 8])
+    if ty == 0x02:
+        var ln = o_mg_r32(b, off)
+        return Ok([bytes_to_str(bytes_slice(b, off + 4, off + 4 + ln - 1)), off + 4 + ln])
+    if ty == 0x03:
+        var r3 = o_mg_dec_doc(b, off, false)
+        if r3.is_err():
+            return r3
+        return Ok([r3.unwrap()[0], r3.unwrap()[1]])
+    if ty == 0x04:
+        var r4 = o_mg_dec_doc(b, off, true)
+        if r4.is_err():
+            return r4
+        return Ok([r4.unwrap()[0], r4.unwrap()[1]])
+    if ty == 0x05:
+        var ln2 = o_mg_r32(b, off)
+        var data = bytes_slice(b, off + 5, off + 5 + ln2)
+        return Ok([data, off + 5 + ln2])
+    if ty == 0x07:
+        return Ok([bytes_to_hex(bytes_slice(b, off, off + 12)), off + 12])
+    if ty == 0x08:
+        return Ok([o_mg_u8(b, off) == 1, off + 1])
+    if ty == 0x09:
+        return Ok([o_mg_r64(b, off), off + 8])
+    if ty == 0x0A:
+        return Ok([null, off])
+    if ty == 0x10:
+        return Ok([o_mg_r32(b, off), off + 4])
+    if ty == 0x12:
+        return Ok([o_mg_r64(b, off), off + 8])
+    return Err("mg: 类型字节 0x" + int_to_hex(ty, 2))
+# 公开 BSON 子集（兼容 bson 库心智）
+def mg_bson_encode(doc):
+    if type(doc) != "dict":
+        return Err("mg: 根须 dict")
+    return o_mg_enc_doc(doc)
+def mg_bson_decode(data):
+    if bytes_len(data) < 5:
+        return Err("mg: 数据过短")
+    var r = o_mg_dec_doc(data, 0, false)
+    if r.is_err():
+        return r
+    var pr = r.unwrap()
+    if pr[1] != bytes_len(data):
+        return Err("mg: 数据未消费完")
+    return Ok(pr[0])
+# ---- 内部：OP_MSG 收发 ----
+def o_recv_exact(fd, n):
+    var buf = bytes("")
+    while bytes_len(buf) < n:
+        var want = n - bytes_len(buf)
+        if want > 65536:
+            want = 65536
+        var r = tcp_recv_ex(fd, want)
+        if not r["ok"]:
+            return [buf, r["err"]]
+        if r["eof"]:
+            return [buf, "unexpected EOF"]
+        if r["timeout"]:
+            return [buf, "read timeout"]
+        buf = bytes_concat(buf, r["data"])
+    return [buf, ""]
+# 发送 OP_MSG 命令；返回 Ok(回复文档) | Err
+def o_cmd(conn, cmd):
+    if not cmd.has("$db"):
+        cmd.set("$db", "admin")
+    var body = o_mg_enc_doc(cmd)?
+    var ls = bytes_len(body)
+    var header = bytes_concat(o_mg_le32(16 + 4 + 1 + ls), o_mg_le32(now_ms() % 2147483647), o_mg_le32(0), o_mg_le32(2013))
+    var flags = o_mg_le32(0)
+    var pkt = bytes_concat(header, flags, byte(0), body)
+    var fd = conn["fd"]
+    var s = tcp_send_ex(fd, pkt)
+    if not s["ok"]:
+        return Err("mg: 发送失败 " + str(s["err"]))
+    var h = o_recv_exact(fd, 16)
+    if h[1] != "":
+        return Err("mg: 读头失败 " + h[1])
+    var mlen = o_mg_r32(h[0], 0)
+    if mlen < 16 or mlen > 16 * 1024 * 1024:
+        return Err("mg: 消息长度非法 " + str(mlen))
+    var rem = o_recv_exact(fd, mlen - 16)
+    if rem[1] != "":
+        return Err("mg: 读体失败 " + rem[1])
+    var payload = rem[0]
+    if bytes_len(payload) < 5:
+        return Err("mg: 载荷过短")
+    # flags(4) + kind(1) + doc
+    var kind = o_mg_u8(payload, 4)
+    if kind != 0:
+        return Err("mg: 不支持 section kind " + str(kind))
+    var docbytes = bytes_slice(payload, 5, bytes_len(payload))
+    var r = o_mg_dec_doc(docbytes, 0, false)
+    if r.is_err():
+        return r
+    var doc = r.unwrap()[0]
+    var okv = doc.get("ok")
+    if okv == null or okv != 1.0:
+        var em = "?"
+        if doc.has("errmsg"):
+            em = doc["errmsg"]
+        return Err("mg: 服务器错误 ok=" + str(okv) + " errmsg=" + em)
+    return Ok(doc)
+# ---- 公共 API ----
+def mg_connect(host, port, timeout_ms):
+    var tm = timeout_ms
+    var c = tcp_connect_ex(host, port, {"timeout_ms": tm})
+    if not c["ok"]:
+        return Err("mg: 连接失败 " + host + ":" + str(port) + " " + str(c["err"]))
+    return Ok({"fd": c["fd"]})
+def mg_close(conn):
+    tcp_close(conn["fd"])
+    return Ok(null)
+def mg_hello(conn):
+    return o_cmd(conn, {"hello": 1})
+def mg_ping(conn):
+    var r = o_cmd(conn, {"ping": 1})
+    if r.is_err():
+        return r
+    return Ok(true)
+def mg_insert(conn, db, coll, doc):
+    return o_cmd(conn, {"insert": coll, "documents": [doc], "ordered": true, "$db": db})
+def mg_find(conn, db, coll, filter, limit):
+    var flt = filter
+    if flt == null:
+        flt = {}
+    var cmd = {"find": coll, "filter": flt, "$db": db}
+    if limit != null and limit > 0:
+        cmd.set("limit", limit)
+    var first = o_cmd(conn, cmd)?
+    if not first.has("cursor"):
+        return Ok([])
+    var cur = first["cursor"]
+    var out = []
+    var batch = cur["firstBatch"]
+    var i = 0
+    while i < len(batch):
+        out <- batch[i]
+        i += 1
+    var curid = cur["id"]
+    var pages = 0
+    while curid != 0 and pages < 10:
+        var gm = o_cmd(conn, {"getMore": curid, "collection": coll, "$db": db})?
+        if not gm.has("cursor"):
+            break
+        var nb = gm["cursor"]["firstBatch"]
+        var j = 0
+        while j < len(nb):
+            out <- nb[j]
+            j += 1
+        curid = gm["cursor"]["id"]
+        pages += 1
+    return Ok(out)
+def mg_count(conn, db, coll, filter):
+    var flt = filter
+    if flt == null:
+        flt = {}
+    var r = o_cmd(conn, {"count": coll, "query": flt, "$db": db})?
+    return Ok(r["n"])

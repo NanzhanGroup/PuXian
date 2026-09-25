@@ -682,7 +682,17 @@ step "M209 · GC 根面审计器「触发点」更正 + 三条排除规则（缺
 #   [7] 负控 3 道：撤 bi_map 的 keep ⇒ 压力档必红 · 旧规则设默认 ⇒ 候选 11 必红 ·
 #       撤作用域排除 ⇒ 候选 5 必红（各自独立 + 源逐字节还原）
 run m209_gcroot_rules bash examples/m209_gcroot_rules/verify.sh
-step "M190 · 上游 registry-px 真实用例回归（53 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
+step "M210 · 保留字作「形参名」漏拦截收口（缺陷 283 · 形参面 / 成员名面分离）"
+#   [1] 静态：expect_name(what, allow_kw) + 形参面 false（×1）/ 成员名面 true（×3）+ 反向断言
+#   [2] 拒绝侧：def f(fn) / def f(x, fn) / def f(x, y, fn) ⇒ 三轨 rc≠0 + E2001 + 词条**逐字相同**
+#   [3] 放行侧：普通形参 / extern def …(type: int, …)（软名字）/ 匿名函数 / impl 方法 self
+#   [4] 真实文件不被误伤：capability.px（self）· registry/workerpool（成员名 send/recv）· bc8
+#   [4b] bc11/bc12（字节码轨专用）⇒ 三轨均不得出「期望成员名」E2001（成员名面保持宽松）
+#   [5] 全仓普查 264 件 ⇒ HIT = 0（无副作用的最强判据）
+#   [6] 负控 3 道：A 退回共用放行路径 · B 形参面改传 true · C 去掉 self 例外
+#       （各自独立判红；每道**强制重建** devbuild 并断言新鲜度 —— 防「跑的还是旧件」假绿）
+run m210_param_kw bash examples/m210_param_kw/verify.sh
+step "M190 · 上游 registry-px 真实用例回归（112 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。
 run upstream_tests bash selfhost/run_upstream_tests.sh

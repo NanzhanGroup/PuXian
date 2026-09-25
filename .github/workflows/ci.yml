@@ -525,9 +525,21 @@ jobs:
           bash examples/m209_gcroot_rules/verify.sh --neg-skip > /tmp/v_m209.log 2>&1 || { echo "❌ m209_gcroot_rules verify 失败"; grep -E '^(  FAIL|===|  ✅|  ❌)' /tmp/v_m209.log | tail -30; sed -n '/^  FAIL/,$p' /tmp/v_m209.log | head -20; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^(  ✅|  ❌|===)' /tmp/v_m209.log | tail -30
           echo "✅ m209_gcroot_rules verify（自证 16/16 + 新规则候选 0 + 旧规则对照 11 + 判据回放 + 两档动态）PASS"
+          # M210（缺陷 283）：保留字作**形参名**漏拦截 —— `expect_name` 是形参名/成员名两条路径
+          #   共用的取名字入口，其「放行整张 is_name_kind 列表」的后门让形参面也宽松：
+          #   `def f(x, fn)` 静默通过，而 `var fn` / `for fn in` 早已 E2001
+          #   ⇒「同一名字在不同位置行为不同」（与 M199 的 [S10] 同族）。
+          #   修法：`expect_name(what, allow_kw)` —— 形参面 false、成员名面 true（`ch.send`/`ch.recv`
+          #   的成员名就是关键字）、`self` 例外（方法接收者）。
+          #   本门含：静态 5 · 拒绝侧 三轨×3 · 放行侧 4 · 真实文件 3+2 · **全仓普查 264 件 HIT=0** ·
+          #   负控 3 道（退回共用放行路径 / 形参面传 true / 去 self 例外）。
+          echo "── M210（保留字形参名漏拦截 · 缺陷 283）──"
+          bash examples/m210_param_kw/verify.sh --neg-skip > /tmp/v_m210.log 2>&1 || { echo "❌ m210_param_kw verify 失败"; grep -E '^(  FAIL|===|  PASS|  OK)' /tmp/v_m210.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^(  PASS|  FAIL|══)' /tmp/v_m210.log | tail -32
+          echo "✅ m210_param_kw verify（静态+拒绝侧三轨+放行侧+真实文件+全仓普查 HIT=0）PASS"
           # 发射冻结门（M153 建立）：395 个用例的 --emit-c 输出必须逐字节不变（M188 由 393 起订正 —— 本轮只新增语料、类别 B 为空）。
           bash selfhost/emitc_freeze.sh --check > /tmp/v_emitc_freeze.log 2>&1 || { echo "❌ emitc_freeze 失败"; tail -30 /tmp/v_emitc_freeze.log; exit 1; }
-          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 / m153 / m154 / m155 / m158 / m160 / m161 / m162 / m163 / m164 verify / m170_gc_bridge_root / m182_hdr_root / m183_gc_root_handover / m184_num_fs_strict / m185_bytes_face / m186_native_passthrough / m187_registry_import / m188_std_face / m189_bytes_bounds / m190_arity / m191_error_codes / m192_encfamily / m193_errcodes2 / m194_arg_guards / m195_arg_guards2 / m196_msg_parity / m197_builtin_arity / m198_argface / m199_argtype / m200_ffi_globals / m201_bytes_dec / m201_interp_ffi / m202_crypto_ext / m203_iter_index_msg / m204_assign_op / m205_cli_channels / m206_gcroot / m207_gcstress / m208_vm_c_local_roots / m209_gcroot_rules + 上游 registry-px 用例回归（**100 用例 × 双轨** · EXPECTED.tsv 对拍） + 发射冻结门（395 件 --emit-c）全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"
+          echo "✅ m64_fmt / m64_lint / m65_lsp / m65_mcp / m66_yaml / m66_pxml / m66_lunar / m71_mcp_build / m82_http_serve_unix / m116_builtin_semantics / m117_realworld_defects / m118_realworld_defects / m119_multiline_expr / m120_dict_strict / m122_builtin_args / m130–m134 / m137 / m138 / m139 / m140 / m141 / m142 / m143 / m144 / m145 / m146 / m147 / m148 / m149 / m150 / m151 / m153 / m154 / m155 / m158 / m160 / m161 / m162 / m163 / m164 verify / m170_gc_bridge_root / m182_hdr_root / m183_gc_root_handover / m184_num_fs_strict / m185_bytes_face / m186_native_passthrough / m187_registry_import / m188_std_face / m189_bytes_bounds / m190_arity / m191_error_codes / m192_encfamily / m193_errcodes2 / m194_arg_guards / m195_arg_guards2 / m196_msg_parity / m197_builtin_arity / m198_argface / m199_argtype / m200_ffi_globals / m201_bytes_dec / m201_interp_ffi / m202_crypto_ext / m203_iter_index_msg / m204_assign_op / m205_cli_channels / m206_gcroot / m207_gcstress / m208_vm_c_local_roots / m209_gcroot_rules / m210_param_kw + 上游 registry-px 用例回归（**112 用例 × 双轨** · EXPECTED.tsv 对拍） + 发射冻结门（395 件 --emit-c）全 PASS（m136 需 Go，在 selfhost/m116_gates.sh 本地全门里）"
       # M188 补：这一步（工具自测）在 run 382/383 上红了，而 **job 日志非管理员不可读**
       #   （实测 /actions/jobs/<id>/logs → HTTP 403）⇒ 注解是唯一对外通道。
       #   本步把各门的 /tmp/v_*.log 关键行合成**一条** ::error:: 注解（换行编码 %0A）。

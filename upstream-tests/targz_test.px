@@ -1,0 +1,24 @@
+# targz.px 测试：uStar tar.gz 与 Python tarfile 互通 + 自往返
+import "../registry/targz/0.1.0/targz.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # 1. 自往返：tar → unpack
+    var f = {"a.txt": "hello 普贤", "dir/b.bin": bytes_to_str(hex_to_bytes("0102ff0a"))}
+    var t = tz_tar(f).unwrap()
+    var u = tz_unpack_tar(t).unwrap()
+    expect(u["a.txt"] == "hello 普贤", "rt a.txt")
+    expect(bytes_to_hex(bytes(u["dir/b.bin"])) == "0102ff0a", "rt binary")
+    # 2. 一步 pack → gunzip → unpack（gzip 流链路）
+    var tg = tz_pack(f).unwrap()
+    var raw = tz_gunzip(tg).unwrap()
+    var u2 = tz_unpack_tar(raw).unwrap()
+    expect(u2["a.txt"] == "hello 普贤", "tgz rt")
+    # 3. 空 tar
+    var t0 = tz_tar({}).unwrap()
+    expect(bytes_len(t0) == 1024, "empty tar 1024 bytes")
+    expect(len(tz_unpack_tar(t0).unwrap().keys()) == 0, "empty unpack")
+    print("targz: ALL PASS")
+    return 0

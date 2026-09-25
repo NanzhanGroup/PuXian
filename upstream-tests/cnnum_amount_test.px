@@ -1,0 +1,26 @@
+# cnnum 金额大写扩展测试
+import "../registry/cnnum/0.1.0/cnnum.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    expect(cn_amount_str("0").unwrap() == "零元整", "zero")
+    expect(cn_amount_str("0.05").unwrap() == "伍分", "fen only")
+    expect(cn_amount_str("3.05").unwrap() == "叁元零伍分", "zero jiao")
+    expect(cn_amount_str("3.10").unwrap() == "叁元壹角整", "jiao zheng")
+    expect(cn_amount_str("5.00").unwrap() == "伍元整", "yuan zheng")
+    expect(cn_amount_str("12.34").unwrap() == "壹拾贰元叁角肆分", "basic")
+    expect(cn_amount_str("1005").unwrap() == "壹仟零伍元整", "zero in group")
+    expect(cn_amount_str("10000000").unwrap() == "壹仟万元整", "wan only")
+    expect(cn_amount_str("100000000").unwrap() == "壹亿元整", "yi")
+    expect(cn_amount_str("1234567.89").unwrap() == "壹佰贰拾叁万肆仟伍佰陆拾柒元捌角玖分", "multi group")
+    expect(cn_amount_str("100000123").unwrap() == "壹亿零壹佰贰拾叁元整", "zero gap")
+    expect(cn_amount_str("1234567890123").unwrap() == "壹万亿贰仟叁佰肆拾伍亿陆仟柒佰捌拾玖万壹佰贰拾叁元整", "trillion")
+    expect(cn_amount_str("-5.20").unwrap() == "负伍元贰角整", "negative")
+    expect(cn_amount_str("abc").is_err(), "bad int err")
+    expect(cn_amount_str("1.234").is_err(), "too many frac err")
+    expect(cn_amount_str("1.2.3").is_err(), "multi dot err")
+    expect(cn_amount_str("99999999999999").is_err(), "over range err")
+    print("cnnum_amount: ALL PASS")
+    return 0

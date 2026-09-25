@@ -1,0 +1,49 @@
+# mongodb.px 测试：真实本地 mongod（127.0.0.1:27017）OP_MSG 协议验证
+import "../registry/mongodb/0.1.0/mongodb.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def feq(a, b):
+    return abs(a - b) < 1e-9
+def main():
+    var conn = mg_connect("127.0.0.1", 27017, 3000).unwrap()
+    var coll = "people" + str(now_ms())
+    # 1. 握手 / ping
+    var h = mg_hello(conn).unwrap()
+    expect(h["ok"] == 1.0, "hello ok")
+    expect(mg_ping(conn).unwrap() == true, "ping")
+    # 2. 插入（含嵌套/数组/中文）
+    var r = mg_insert(conn, "testdb", coll,
+        {"name": "Alice", "age": 30, "score": 92.5, "active": true,
+            "tags": ["a", "b"], "meta": {"city": "BeiJing", "zh": "普贤"}}).unwrap()
+    expect(r["n"] == 1, "insert n")
+    mg_insert(conn, "testdb", coll, {"name": "Bob", "age": 25})
+    # 3. 查询
+    var docs = mg_find(conn, "testdb", coll, {"name": "Alice"}, null).unwrap()
+    expect(len(docs) == 1, "find alice count")
+    expect(docs[0]["name"] == "Alice" and docs[0]["age"] == 30, "find name/age")
+    expect(feq(docs[0]["score"], 92.5), "find score")
+    expect(docs[0]["active"] == true, "find bool")
+    expect(type(docs[0]["tags"]) == "list" and docs[0]["tags"][1] == "b", "find arr")
+    expect(docs[0]["meta"]["zh"] == "普贤", "find nested zh")
+    # 4. count / filter
+    expect(mg_count(conn, "testdb", coll, null).unwrap() == 2, "count all")
+    expect(mg_count(conn, "testdb", coll, {"name": "Bob"}).unwrap() == 1, "count filter")
+    # 5. limit
+    var lim = mg_find(conn, "testdb", coll, {}, 1).unwrap()
+    expect(len(lim) == 1, "find limit 1")
+    # 6. BSON 子集往返
+    var doc = {"i64": 1099511627776, "f": 1.5, "s": "普贤", "b": true,
+        "n": null, "arr": [1, 2], "o": {"x": "y"}, "bin": bytes("ab")}
+    var enc = mg_bson_encode(doc).unwrap()
+    var dec = mg_bson_decode(enc).unwrap()
+    expect(dec["i64"] == 1099511627776, "bson i64")
+    expect(feq(dec["f"], 1.5) and dec["s"] == "普贤" and dec["b"] == true, "bson types")
+    expect(dec["n"] == null, "bson null")
+    expect(type(dec["arr"]) == "list" and dec["arr"][1] == 2, "bson arr")
+    expect(dec["o"]["x"] == "y", "bson nested")
+    expect(bytes_to_str(dec["bin"]) == "ab", "bson bin")
+    mg_close(conn)
+    print("mongodb: ALL PASS")
+    return 0
