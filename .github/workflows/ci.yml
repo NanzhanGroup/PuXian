@@ -631,14 +631,45 @@ jobs:
               if txt:
                   parts.append('=== ② 门内日志 %s（尾 45 行）===\n%s' % (f, '\n'.join(txt.splitlines()[-45:])))
 
+          # ★ M213s4（缺陷 299）：**先点名可疑门**。
+          #   旧版的 ③ 只按 ASCII 关键词过滤（`❌ / FAIL / Traceback`）⇒ ① 中文判据
+          #   （`失败 N`）整族看不见；② 大量「负控判红」的 **PASS** 行把注解挤满
+          #   ⇒ 真凶那条被截掉（本轮实测：③ 块止于 `v_m189`，而失败的入口在其之后）。
+          #   新判据 = 「**该日志里有没有"成功判据"**」——没有 + 最近修改者排最前。
+          #   判据 = **末行裁决**：末行含成功标记、且不含失败字眼 ⇒ 绿；否则**可疑**。
+          #   本机用 97 份真实日志实测：全绿场景下 **0 误报**（比"全日志找关键词"稳得多，
+          #   因为不再被中间的负控 PASS 行干扰）。
+          import re as _re
+          OK_LAST = _re.compile(r'(✅|VERIFY-OK|VERIFY:|ALL-OK|FAIL=0|失败 0|/0F|0F/'
+                                r'|fail=0|\bpass=|done|PASS|通过|一致|EXPECTED)')
+          BAD_LAST = _re.compile(r'(FAIL=[1-9]|[1-9]\s*失败|fail=[1-9]|FAILED|❌)')
+          sus = []
+          for f in glob.glob('/tmp/v_*.log'):
+              try:
+                  t = open(f, encoding='utf-8', errors='replace').read()
+              except Exception:
+                  continue
+              lines = [l for l in t.splitlines() if l.strip()]
+              if not lines:
+                  sus.append((os.path.getmtime(f), os.path.basename(f), t)); continue
+              last = lines[-1]
+              if not (OK_LAST.search(last) and not BAD_LAST.search(last)):
+                  sus.append((os.path.getmtime(f), os.path.basename(f), t))
+          sus.sort(key=lambda x: -x[0])          # 最近修改在前
+          for _mt, _bn, _tx in sus[:3]:
+              parts.append('=== ★ 可疑门（末行无成功判据 · 最近修改）%s ===\n%s'
+                           % (_bn, '\n'.join(_tx.splitlines()[-30:])))
+
           # ③ 各门 /tmp/v_*.log 的关键行（放最后）
           for f in sorted(glob.glob('/tmp/v_*.log')):
               try:
                   txt = open(f, encoding='utf-8', errors='replace').read()
               except Exception:
                   continue
+              # M213s4：补中文失败判据（旧版只有 ASCII ⇒ `失败 N` 整族看不见）
               bad = [l for l in txt.splitlines()
-                     if ('❌' in l or 'FAIL' in l or 'VERIFY-FAILED' in l or 'Traceback' in l)]
+                     if ('❌' in l or 'FAIL' in l or 'VERIFY-FAILED' in l
+                         or 'Traceback' in l or '失败 ' in l or 'MISMATCH' in l)]
               if bad:
                   parts.append('=== ③ %s ===\n%s' % (os.path.basename(f), '\n'.join(bad[-12:])))
 
@@ -649,7 +680,8 @@ jobs:
           #   ② 真因：**注解 message 上限是 64KB**（GitHub 文档），而"每个 step 的注解**条数**"
           #      才有 ~10 条的限制 —— 这两件事此前被混为一谈，于是把**长度**也砍了。
           #   ③ 现在：**失败门的关键行放最前** · 现场复现放最后 · 上限提到 60000。
-          parts.sort(key=lambda p: 0 if p.startswith('=== ③') else (1 if p.startswith('=== ②') else 2))
+          parts.sort(key=lambda p: 0 if p.startswith('=== ★') else (
+              1 if p.startswith('=== ③') else (2 if p.startswith('=== ②') else 3)))
           msg = '\n'.join(parts)[:60000]
           print('::error::' + urllib.parse.quote(msg, safe=''))
           PY
