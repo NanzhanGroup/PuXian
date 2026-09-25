@@ -7,10 +7,13 @@ p = sys.argv[1]
 s = open(p, encoding="utf-8").read()
 
 old1 = """static inline void bi_join_item(LXValue item, const char** pp, int* lp) {
-    if (item.type == PX_STR) { *pp = item.as.obj->as.str.data; *lp = item.as.obj->as.str.len; return; }"""
+    *pp = px_tostr_n(item, lp);
+}"""
 new1 = """static inline void bi_join_item(LXValue item, const char** pp, int* lp) {
-    if (item.type == PX_STR) { *pp = item.as.obj->as.str.data; *lp = (int)strlen(item.as.obj->as.str.data); return; }   /* NEGCTL-M154C */"""
-assert s.count(old1) == 1, s.count(old1)
+    *pp = px_tostr_n(item, lp);
+    *lp = (int)strlen(*pp);   /* NEGCTL-M154C：join 项退回 strlen 口径（缺陷 149 旧行为） */
+}"""
+assert s.count(old1) == 1, "old1 命中 %d 次（应 1）" % s.count(old1)
 s = s.replace(old1, new1)
 
 old2 = """    int sep_len = args[0].as.obj->as.str.len;
