@@ -1,0 +1,87 @@
+# ⚠️ 本文件由 gen_cases.py 生成（单一事实源）—— 手改会被第 1 层的漂移检测判红
+# M216 驱动器：按 args()[1] 分派（一次编译覆盖全量用例）
+a = args()
+sel = ""
+if len(a) >= 2:
+    sel = a[1]
+
+def run_case(sel):
+    if sel == "ok_int_1e18":
+        print(int(1e18))
+        return 0
+    if sel == "ok_int_neg1e18":
+        print(int(-1e18))
+        return 0
+    if sel == "ok_int_trunc":
+        print(int(2.9), int(-2.9), int(0.5), int(-0.5))
+        return 0
+    if sel == "ok_int_min_double":
+        print(int(-9223372036854775808.0))
+        return 0
+    if sel == "ok_int_max_double":
+        print(int(9223372036854774784.0))
+        return 0
+    if sel == "ok_idiv_float":
+        print(7.5 // 2, -7.5 // 2, 0.5 // 1)
+        return 0
+    if sel == "ok_slice_int":
+        l = [1, 2, 3, 4, 5]
+        print(l[1:3], l[-2:], l[0:2])
+        return 0
+    if sel == "ok_bslice_int":
+        print(len(bytes_slice(bytes("abcdef"), 1, 3)))
+        return 0
+    if sel == "ok_int_str":
+        print(int("123"), int("-45"))
+        return 0
+    if sel == "rej_int_1e30":
+        print(int(1e30))
+        return 0
+    if sel == "rej_int_neg1e30":
+        print(int(-1e30))
+        return 0
+    if sel == "rej_int_2p63":
+        print(int(9223372036854775808.0))
+        return 0
+    if sel == "rej_int_rt_max":
+        x = 9223372036854775807
+        print(int(float(x)))
+        return 0
+    if sel == "rej_int_nan":
+        z = 0.0
+        print(int(z / z))
+        return 0
+    if sel == "rej_int_inf":
+        z = 0.0
+        o = 1.0
+        print(int(o / z))
+        return 0
+    if sel == "rej_int_ninf":
+        z = 0.0
+        print(int((0.0 - 1.0) / z))
+        return 0
+    if sel == "rej_idiv_over":
+        print(1e30 // 1.0)
+        return 0
+    if sel == "rej_idiv_nover":
+        print(-1e30 // 1.0)
+        return 0
+    if sel == "rej_slice_hi":
+        l = [1, 2, 3]
+        print(l[0:1e30])
+        return 0
+    if sel == "rej_slice_lo":
+        l = [1, 2, 3]
+        print(l[1e30:2])
+        return 0
+    if sel == "rej_slice_step":
+        l = [1, 2, 3]
+        print(l[0:2:1.5])
+        return 0
+    if sel == "rej_bslice":
+        print(len(bytes_slice(bytes("abcdef"), 1e30, 2)))
+        return 0
+    print("NO-SUCH-CASE: " + sel)
+    return 2
+
+exit(run_case(sel))

@@ -1,0 +1,22 @@
+ok_int_1e18	ok	1000000000000000000
+ok_int_neg1e18	ok	-1000000000000000000
+ok_int_trunc	ok	2 -2 0 0
+ok_int_min_double	ok	-9223372036854775808
+ok_int_max_double	ok	9223372036854774784
+ok_idiv_float	ok	3 -4 0
+ok_slice_int	ok	[2, 3] [4, 5] [1, 2]
+ok_bslice_int	ok	2
+ok_int_str	ok	123 -45
+rej_int_1e30	rej	R1003|
+rej_int_neg1e30	rej	R1003|
+rej_int_2p63	rej	R1003|
+rej_int_rt_max	rej	R1003|
+rej_int_nan	rej	R1003|
+rej_int_inf	rej	R1003|
+rej_int_ninf	rej	R1003|
+rej_idiv_over	rej	R1003|
+rej_idiv_nover	rej	R1003|
+rej_slice_hi	rej	R1002|切片索引必须是整数，实际是 float
+rej_slice_lo	rej	R1002|切片索引必须是整数，实际是 float
+rej_slice_step	rej	R1002|切片索引必须是整数，实际是 float
+rej_bslice	rej	R1002|切片索引必须是整数，实际是 float

@@ -735,6 +735,18 @@ run m214_audit_exempt bash examples/m214_audit_exempt/verify.sh
 #   ⇒ 判据 = 三轨彼此一致 **且** 与 truth/ 的独立真值一致（Python 定义式 + Python 量级域互校，
 #     Go 是第三份意见 —— CI 无 Go，本地全门用 M215_REQUIRE_GO=1 强制三份齐）。
 run m215_int_truth env M215_REQUIRE_GO=1 bash examples/m215_int_truth/verify.sh
+step "M216 · 浮点→int 转换族（缺陷 308）：平台相关 UB + 三轨分叉"
+#   病灶：`(int64_t)f` 在 f 越界/非有限时是 C11 6.3.1.4p1 的**未定义行为** ——
+#     x86_64 `cvttsd2si` 给 INT64_MIN（不定值哨兵）、aarch64 `fcvtzs` **饱和**
+#     ⇒ 同一份源码两个架构打印不同的数（都静默）。
+#   三轨分叉面：切片界 —— 解释轨把 float 直接参与整数比较（`l[0:1e30]` ⇒ 整表），
+#     编译两轨走 `int_val` 的 `(int64_t)1e30` = INT64_MIN ⇒ `l[0:1e30]` 给 `[]`、
+#     `l[1e30:2]` 给 `[1,2]`（实测修前）。
+#   修法：`px_f2i` 唯一入口（越界/非有限 ⇒ R1003）· 切片界与**索引位**同口径（只收 int
+#     ⇒ R1002）· `int_val` 不再静默截断 float。
+#   ⇒ 判据 = 22 例（合法 9 拒绝 13）× 三轨逐字节一致 **且** 合法侧与 Python 独立真值一致；
+#     第 ③ 层另做**指令级平台举证**（两架构 objdump：旧形态 cvttsd2si⇄fcvtzs、新形态两侧都有守卫）。
+run m216_float_to_int bash examples/m216_float_to_int/verify.sh
 step "M190 · 上游 registry-px 真实用例回归（128 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。

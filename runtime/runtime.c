@@ -4216,9 +4216,36 @@ static double math_num(LXValue v, const char* fn);  // M122：数值内建类型
 static double num_val(LXValue v) {
     return v.type == PX_INT ? (double)v.as.i : v.as.f;
 }
+// ═══ M216（第 95 轮 · 缺陷 308）：浮点→int 的**唯一**转换入口 ═══
+//   修前全仓各自写 `(int64_t)f`（`int()` 内建 / `px_idiv` 浮点支 / 本文件的 `int_val` / …）：
+//     C11 6.3.1.4p1 —— 「整数部分无法由目标类型表示 ⇒ **未定义行为**」。
+//     实测 x86_64 的 `cvttsd2si` 给 **INT64_MIN**（"不定值"哨兵）、aarch64 的 `fcvtzs`
+//     **饱和**给 INT64_MAX ⇒ 同一份源码在两个架构上打印**不同的数**（且都是静默的）。
+//     （Go 的 `int64(f)` 同样是 implementation-dependent —— 不该照抄这条。）
+//   语义（与同族的 `px_str_to_i64`「str→int 溢出即非法 ⇒ 响亮」**同向**）：
+//     非有限（NaN/±Inf）或落在 `[INT64_MIN, 2^63)` 之外 ⇒ **R1003 响亮**；
+//     绝不静默给一个"看起来像数"的值（INT64_MIN 尤其像"负无穷"而不像"超界"）。
+//   `what`：出错消息里的操作名（NULL ⇒ 用「转换」）。
+int64_t px_f2i(double f, const char* what) {
+    const char* op = what ? what : "转换";
+    if (isnan(f))
+        px_error("R1003: %s 得到 NaN，无法转为 int", op);
+    if (isinf(f))
+        px_error("R1003: %s 得到 %s，无法转为 int", op, f > 0 ? "inf" : "-inf");
+    // 2^63 与 −2^63 在 double 里都可**精确表示** ⇒ [−2^63, 2^63) 是唯一良定义区间
+    //   （这也是「上界不是 2^63−1」的原因：`9223372036854775807.0` 本身就是 2^63。）
+    if (f >= 9223372036854775808.0 || f < -9223372036854775808.0)
+        px_error("R1003: %s 超出 int64 范围: %s", op, fmt_num(px_float(f)));
+    return (int64_t)f;
+}
+
 static int64_t int_val(LXValue v) {
     if (v.type == PX_INT) return v.as.i;
-    if (v.type == PX_FLOAT) return (int64_t)v.as.f;
+    // M216（缺陷 308）：修前这里是 `if (v.type == PX_FLOAT) return (int64_t)v.as.f;` ——
+    //   静默截断 **且** UB。M179/M194 收紧的是 native **参数位**（改走 px_arg_int），
+    //   本函数是**内部**入口（切片界 / bytes_slice 界），此前从未被收紧 ⇒ 留着这条口子
+    //   等于"参数位严格、内部位宽松"，同一现象（float 静默变整数）会从内部重现。
+    //   现改为响亮；调用方仍应给**精确**消息（切片界走 px_req_slice_idx），这里是安全网。
     px_error("R1002: 期望整数，实际是 %s", px_type_name(v));
     return 0;
 }
@@ -4324,7 +4351,9 @@ LXValue px_idiv(LXValue a, LXValue b) {
     if (a.type == PX_FLOAT || b.type == PX_FLOAT) {
         double d = num_val(b);
         if (d == 0.0) px_error("R1006: 除零错误");
-        return px_int((int64_t)floor(num_val(a) / d));
+        // M216（缺陷 308）：`1e30 // 1.0` 修前静默给 INT64_MIN（= `(int64_t)1e30` 的 UB）
+        //   ⇒ 改走 px_f2i（越界/非有限 ⇒ R1003 响亮）。
+        return px_int(px_f2i(floor(num_val(a) / d), "整除"));
     }
     int64_t d = int_val(b);
     if (d == 0) px_error("R1006: 除零错误");
@@ -4840,6 +4869,19 @@ void px_unpack_ck(LXValue item, int n) {
 // start/end/step 为 PX_NULL 表示省略；负索引从尾部算；越界 clamp；step<0 反向，step=0 报错。
 // str 按 UTF-8 字符切（与解释器字符语义一致，中文正常）；list/tuple/bytes 取元素返回新对象。
 
+// M216（第 95 轮 · 缺陷 308）：切片界的**整数守卫** —— 与**索引位**同口径（M179 的
+//   `px_req_int_idx` / M189）：只收 int，float 响亮。
+//   修前 `px_slice` 对界走 `int_val()`，而 float 在那里被 `(int64_t)` 静默转换 ⇒
+//   `l[0:1e30]` 的 e = `px_slice_adjust(INT64_MIN, …)` = **0** ⇒ `[]`；而解释轨把 float
+//   界直接参与整数比较 ⇒ 整表。实测三轨分叉：`l[0:1e30]` 解释 `[1,2,3,4,5]` vs VM/C `[]`，
+//   `l[1e30:2]` 解释 `[]` vs VM/C `[1,2]` —— 分叉的**根**就是这处无守卫的 float→int。
+//   收紧后三轨同码同文（与索引位同一句话，只是前缀写明"切片"）。
+static int64_t px_req_slice_idx(LXValue v) {
+    if (v.type != PX_INT)
+        px_error("R1002: 切片索引必须是整数，实际是 %s", px_type_name(v));
+    return v.as.i;
+}
+
 // M24：切片边界调整（Python slice_adjust 语义，与解释器 Rust adjust 逐字节一致）
 // v<0 先 +len；再按步长方向 clamp：step>0 → [0,len]，step<0 → [-1,len-1]
 static int64_t px_slice_adjust(int64_t v, int len, int64_t step) {
@@ -4862,7 +4904,8 @@ LXValue px_slice(LXValue obj, LXValue start, LXValue end, LXValue step) {
     int s_missing = start.type == PX_NULL;
     int e_missing = end.type == PX_NULL;
     int k_missing = step.type == PX_NULL;
-    int64_t k_in = k_missing ? 1 : int_val(step);
+    // M216（缺陷 308）：切片界与索引位同口径 —— float 响亮（px_req_slice_idx）
+    int64_t k_in = k_missing ? 1 : px_req_slice_idx(step);
     if (k_in == 0) px_error("R1006: 切片步长不能为 0");
 
     int len, kind = 0; // 0=list 1=tuple 2=str 3=bytes
@@ -4872,8 +4915,8 @@ LXValue px_slice(LXValue obj, LXValue start, LXValue end, LXValue step) {
     else if (obj.type == PX_BYTES) { kind = 3; len = obj.as.obj->as.str.len; }
     else { px_error("R1002: 此类型不支持切片: %s", px_type_name(obj)); return px_null(); }
 
-    int64_t s = s_missing ? (k_in < 0 ? len - 1 : 0) : px_slice_adjust(int_val(start), len, k_in);
-    int64_t e = e_missing ? (k_in < 0 ? -1 : len) : px_slice_adjust(int_val(end), len, k_in);
+    int64_t s = s_missing ? (k_in < 0 ? len - 1 : 0) : px_slice_adjust(px_req_slice_idx(start), len, k_in);
+    int64_t e = e_missing ? (k_in < 0 ? -1 : len) : px_slice_adjust(px_req_slice_idx(end), len, k_in);
 
     // 元素个数
     int n = 0;
@@ -6109,7 +6152,7 @@ static LXValue bi_int(LXValue* args, int nargs, void* ctx) {
     if (nargs != 1) px_error("R1002: int 需要一个参数");
     LXValue a = args[0];
     if (a.type == PX_INT) return a;
-    if (a.type == PX_FLOAT) return px_int((int64_t)a.as.f);
+    if (a.type == PX_FLOAT) return px_int(px_f2i(a.as.f, "int()"));
     if (a.type == PX_BOOL) return px_int(a.as.b ? 1 : 0);
     if (a.type == PX_STR) {
         int64_t v = 0;
@@ -13475,10 +13518,11 @@ static LXValue bi_bytes_slice(LXValue* args, int nargs, void* ctx) {
     int64_t a, b, sa, sb;
     bool has_s, has_e;
     if (nargs >= 2 && args[1].type != PX_NULL) {
-        sa = int_val(args[1]); has_s = true;
+        // M216（缺陷 308）：同 px_slice —— 界只收 int（修前 int_val 静默转 float）
+        sa = px_req_slice_idx(args[1]); has_s = true;
     } else { sa = 0; has_s = false; }
     if (nargs >= 3 && args[2].type != PX_NULL) {
-        sb = int_val(args[2]); has_e = true;
+        sb = px_req_slice_idx(args[2]); has_e = true;
     } else { sb = len; has_e = false; }
     a = has_s ? (sa < 0 ? (sa + len > 0 ? sa + len : 0) : (sa < len ? sa : len)) : 0;
     b = has_e ? (sb < 0 ? (sb + len > 0 ? sb + len : 0) : (sb < len ? sb : len)) : len;
