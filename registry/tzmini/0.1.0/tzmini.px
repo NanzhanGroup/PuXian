@@ -1,0 +1,160 @@
+# ============================================================
+# 普贤生态库：registry/tzmini —— 时区最小集（常见都市偏移 + DST 规则）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态、自含公历算法），编译（px build）与解释（px run）双模式一致。
+# 对应缺口表「时区数据库/IANA tz」的最小可实现面：
+#   tz_zones()                       → ["UTC", "Asia/Shanghai", ...]（18 个常见都市）
+#   tz_offset(zone, utc_sec)         → Ok(偏移分钟) | Err（DST 自动按规则判定）
+#   tz_convert(zone, utc_sec)        → Ok({local_sec, offset_min}) | Err
+#   tz_format(zone, utc_sec, fmt)    → Ok(本地时间字符串) | Err（strftime 布局）
+#   tz_utc_offset(zone)              → Ok(标准偏移分钟) | Err
+# DST 规则三类（缩写）：
+#   none 固定偏移；eu 最后周日 3月→最后周日 10月（+1h，欧洲）；
+#   us 第2周日 3月→第1周日 11月（+1h）；au 第1周日 10月→第1周日 4月（+1h，南半球跨年）
+# 日期算法自含（Hinnant civil 双向），仅公历正数域。
+# ============================================================
+# ---- 公历算法 ----
+def tz_days_from_civil(y, m, d):
+    var yy = y
+    if m <= 2:
+        yy -= 1
+    var era = yy // 400
+    var yoe = yy - era * 400
+    var mp = m
+    if m > 2:
+        mp = m - 3
+    else:
+        mp = m + 9
+    var doy = (153 * mp + 2) // 5 + d - 1
+    var doe = yoe * 365 + yoe // 4 - yoe // 100 + doy
+    return era * 146097 + doe - 719468
+def tz_is_leap(y):
+    return (y % 4 == 0 and y % 100 != 0) or y % 400 == 0
+def tz_days_in_month(y, m):
+    if m == 2:
+        if tz_is_leap(y):
+            return 29
+        return 28
+    if m == 4 or m == 6 or m == 9 or m == 11:
+        return 30
+    return 31
+def tz_weekday(y, m, d):
+    return (tz_days_from_civil(y, m, d) + 4) % 7
+# 第 n 个某星期（1=第1个……；n=0 表示最后一个）
+def tz_nth_wd(y, m, wd, n):
+    var dim = tz_days_in_month(y, m)
+    var first = tz_weekday(y, m, 1)
+    if n > 0:
+        var add = (wd - first + 7) % 7
+        return 1 + add + (n - 1) * 7
+    var last = (first + dim - 1) % 7
+    var sub = (last - wd + 7) % 7
+    return dim - sub
+# 规则日期 → unix 秒（UTC，按 00:00 UTC 判定）
+def tz_rule_sec(y, m, d):
+    return (tz_days_from_civil(y, m, d) - tz_days_from_civil(1970, 1, 1)) * 86400
+# ---- 时区表 ----
+# {名称: {base: 标准偏移分钟, dst: 规则}}
+def tz_zones():
+    return Ok([
+        "UTC", "Asia/Shanghai", "Asia/Hong_Kong", "Asia/Singapore", "Asia/Tokyo",
+        "Asia/Seoul", "Asia/Kolkata", "Asia/Dubai",
+        "Europe/London", "Europe/Paris", "Europe/Berlin",
+        "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
+        "Australia/Sydney", "Australia/Melbourne", "Pacific/Auckland"
+    ])
+def tz_table():
+    return {
+        "UTC": {"base": 0, "dst": "none"},
+        "Asia/Shanghai": {"base": 480, "dst": "none"},
+        "Asia/Hong_Kong": {"base": 480, "dst": "none"},
+        "Asia/Singapore": {"base": 480, "dst": "none"},
+        "Asia/Tokyo": {"base": 540, "dst": "none"},
+        "Asia/Seoul": {"base": 540, "dst": "none"},
+        "Asia/Kolkata": {"base": 330, "dst": "none"},
+        "Asia/Dubai": {"base": 240, "dst": "none"},
+        "Europe/London": {"base": 0, "dst": "eu"},
+        "Europe/Paris": {"base": 60, "dst": "eu"},
+        "Europe/Berlin": {"base": 60, "dst": "eu"},
+        "America/New_York": {"base": -300, "dst": "us"},
+        "America/Chicago": {"base": -360, "dst": "us"},
+        "America/Denver": {"base": -420, "dst": "us"},
+        "America/Los_Angeles": {"base": -480, "dst": "us"},
+        "Australia/Sydney": {"base": 600, "dst": "au"},
+        "Australia/Melbourne": {"base": 600, "dst": "au"},
+        "Pacific/Auckland": {"base": 720, "dst": "au"}
+    }
+# ---- DST 判定 ----
+def tz_dst_active(rule, y, sec):
+    if rule == "none":
+        return false
+    if rule == "eu":
+        var s = tz_rule_sec(y, 3, tz_nth_wd(y, 3, 0, 0))  # 最后周日 3 月
+        var e = tz_rule_sec(y, 10, tz_nth_wd(y, 10, 0, 0))  # 最后周日 10 月
+        return sec >= s and sec < e
+    if rule == "us":
+        var s = tz_rule_sec(y, 3, tz_nth_wd(y, 3, 0, 2))  # 第 2 周日 3 月
+        var e = tz_rule_sec(y, 11, tz_nth_wd(y, 11, 0, 1))  # 第 1 周日 11 月
+        return sec >= s and sec < e
+    if rule == "au":
+        # 夏令时段跨年：去年10月→今年4月（覆盖1-4月）或 今年10月→次年4月
+        var sp = tz_rule_sec(y - 1, 10, tz_nth_wd(y - 1, 10, 0, 1))
+        var ec = tz_rule_sec(y, 4, tz_nth_wd(y, 4, 0, 1))
+        if sec >= sp and sec < ec:
+            return true
+        var sc = tz_rule_sec(y, 10, tz_nth_wd(y, 10, 0, 1))
+        var en = tz_rule_sec(y + 1, 4, tz_nth_wd(y + 1, 4, 0, 1))
+        if sec >= sc and sec < en:
+            return true
+        return false
+    return false
+# 年份与日期分解（civil_from_days）
+def tz_civil(sec):
+    var days = sec // 86400
+    var z = days + 719468
+    var era = z // 146097
+    var doe = z - era * 146097
+    var yoe = (doe - doe // 1460 + doe // 36524 - doe // 146096) // 365
+    var y = yoe + era * 400
+    var doy = doe - (365 * yoe + yoe // 4 - yoe // 100)
+    var mp = (5 * doy + 2) // 153
+    var d = doy - (153 * mp + 2) // 5 + 1
+    var m = mp
+    if mp < 10:
+        m = mp + 3
+    else:
+        m = mp - 9
+    if m <= 2:
+        y = y + 1
+    return [y, m, d]
+# ---- 对外 API ----
+# 标准偏移（分钟）
+def tz_utc_offset(zone):
+    var t = tz_table()
+    if not t.has(zone):
+        return Err("tzmini: 未知时区: " + zone)
+    return Ok(t[zone]["base"])
+# 某时刻偏移（分钟，含 DST）
+def tz_offset(zone, utc_sec):
+    var t = tz_table()
+    if not t.has(zone):
+        return Err("tzmini: 未知时区: " + zone)
+    var base = t[zone]["base"]
+    if t[zone]["dst"] != "none":
+        var c = tz_civil(utc_sec)
+        var act = tz_dst_active(t[zone]["dst"], c[0], utc_sec)
+        if act:
+            return Ok(base + 60)
+    return Ok(base)
+# 转换：UTC 秒 → 本地秒 + 偏移
+def tz_convert(zone, utc_sec):
+    var o = tz_offset(zone, utc_sec)
+    if o.is_err():
+        return Err(str(o.err()))
+    return Ok({"local_sec": utc_sec + o.unwrap() * 60, "offset_min": o.unwrap()})
+# 本地时间字符串（strftime 布局）
+def tz_format(zone, utc_sec, fmt):
+    var c = tz_convert(zone, utc_sec)
+    if c.is_err():
+        return Err(str(c.err()))
+    return Ok(time_format(c.unwrap()["local_sec"], fmt))

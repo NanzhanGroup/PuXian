@@ -1,0 +1,39 @@
+# tzmini.px 测试：时区最小集（固定偏移对照 zoneinfo，双模式一致）
+import "../registry/tzmini/0.1.0/tzmini.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # 固定偏移区（无 DST）
+    expect(tz_offset("Asia/Shanghai", 0).unwrap() == 480, "Shanghai +8")
+    expect(tz_offset("Asia/Tokyo", 0).unwrap() == 540, "Tokyo +9")
+    expect(tz_offset("Asia/Kolkata", 0).unwrap() == 330, "Kolkata +5:30")
+    expect(tz_offset("UTC", 1000000).unwrap() == 0, "UTC 0")
+    # 欧洲 DST（冬/夏）—— 基准来自 zoneinfo
+    expect(tz_offset("Europe/London", 1700000000).unwrap() == 0, "London 2023-11 冬 GMT 0")
+    expect(tz_offset("Europe/London", 1750000000).unwrap() == 60, "London 2025-06 夏 BST +1")
+    expect(tz_offset("Europe/Paris", 1750000000).unwrap() == 120, "Paris 2025-06 CEST +2")
+    # 美国 DST（3/10 前 EST，3/21 EDT）—— 基准来自 zoneinfo
+    expect(tz_offset("America/New_York", 1710000000).unwrap() == -300, "NY 2024-03-09 EST -5")
+    expect(tz_offset("America/New_York", 1711000000).unwrap() == -240, "NY 2024-03-21 EDT -4")
+    # 南半球 DST（悉尼 3 月仍夏令时，1 月冬）
+    expect(tz_offset("Australia/Sydney", 1710000000).unwrap() == 660, "Sydney 2024-03-10 AEDT +11")
+    expect(tz_offset("Australia/Sydney", 1735689600).unwrap() == 660, "Sydney 2025-01-01 AEDT +11")
+    expect(tz_offset("Australia/Sydney", 1719792000).unwrap() == 600, "Sydney 2024-07-01 AEST +10")
+    # 转换与格式化
+    var c1 = tz_convert("Asia/Shanghai", 0).unwrap()
+    expect(c1["local_sec"] == 28800 and c1["offset_min"] == 480, "Shanghai 0 → 28800")
+    var f1 = tz_format("Asia/Shanghai", 0, "%Y-%m-%d %H:%M:%S").unwrap()
+    expect(f1 == "1970-01-01 08:00:00", "Shanghai 0 → 1970-01-01 08:00:00, got " + f1)
+    var f2 = tz_format("America/New_York", 1711000000, "%Y-%m-%d %H:%M").unwrap()
+    expect(f2 == "2024-03-21 01:46", "NY 2024-03-21 05:46 UTC → 01:46, got " + f2)
+    # 列表与错误路径
+    var zs = tz_zones().unwrap()
+    expect(len(zs) == 18, "18 时区, got " + str(len(zs)))
+    expect(contains(str(zs), "Asia/Shanghai"), "含上海")
+    expect(tz_offset("Mars/Olympus", 0).is_err(), "未知时区 Err")
+    expect(tz_utc_offset("Asia/Tokyo").unwrap() == 540, "标准偏移 Tokyo")
+    expect(tz_utc_offset("America/New_York").unwrap() == -300, "标准偏移 NY")
+    print("tzmini: PASS")
+    return Ok(0)

@@ -1,0 +1,46 @@
+# bcrypt.px 测试：$2a$ 哈希与校验（对拍 python bcrypt 基准向量）
+# ⚠️ 性能：bcrypt 刻意慢（2^cost 轮）；解释轨极慢 → 验收以编译轨为准（PX-DEF-024 同族）
+import "../registry/bcrypt/0.1.0/bcrypt.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # 基准向量（python bcrypt 预计算）
+    var cost4 = bc_hash("password", 4, "abcdefghijklmnopqrstuu")
+    expect(cost4.is_ok(), "hash4 Ok, got " + str(cost4))
+    expect(cost4.unwrap() == "$2a$04$abcdefghijklmnopqrstuughE8Ev8uGFaUgY2cNEySvxngrb/Jzdm",
+        "cost4 向量: " + str(cost4))
+    # 知名盐的 cost4 向量（社区广泛引用的测试盐 N9qo8uLO...）
+    var kn4 = bc_hash("password", 4, "N9qo8uLOickgx2ZMRZoMye")
+    expect(kn4.is_ok(), "known4 Ok")
+    expect(kn4.unwrap() == "$2a$04$N9qo8uLOickgx2ZMRZoMyeSuVmV5MQilj2yZi38Fq2CCnx12jZvOG",
+        "cost4 知名向量: " + str(kn4))
+    # cost10 深验证（编译轨 <5s）
+    var cost10 = bc_hash("password", 10, "abcdefghijklmnopqrstuu")
+    expect(cost10.is_ok(), "hash10 Ok")
+    expect(cost10.unwrap() == "$2a$10$abcdefghijklmnopqrstuu5Lo0g67CiD3M4RpN1BmBb4Crp5w7dbK",
+        "cost10 向量: " + str(cost10))
+    # 校验（正 + 负 + $2b 前缀）
+    var ok1 = bc_verify("password", "$2a$10$abcdefghijklmnopqrstuu5Lo0g67CiD3M4RpN1BmBb4Crp5w7dbK")
+    expect(ok1.is_ok() and ok1.unwrap() == true, "verify 正确密码 true, got " + str(ok1))
+    var bad = bc_verify("wrongpass", "$2a$10$abcdefghijklmnopqrstuu5Lo0g67CiD3M4RpN1BmBb4Crp5w7dbK")
+    expect(bad.is_ok() and bad.unwrap() == false, "verify 错误密码 false")
+    var ok2 = bc_verify("password", "$2b$10$abcdefghijklmnopqrstuu5Lo0g67CiD3M4RpN1BmBb4Crp5w7dbK")
+    expect(ok2.is_ok() and ok2.unwrap() == true, "$2b$ 前缀校验 true, got " + str(ok2))
+    # 盐编解码往返（规范 ./ 字母表）
+    var salt16 = bc64_decode("abcdefghijklmnopqrstuu")
+    expect(bytes_len(salt16) == 16, "盐 16 字节, got " + str(bytes_len(salt16)))
+    expect(bc64_encode(salt16) == "abcdefghijklmnopqrstuu", "盐往返")
+    # 错误路径
+    expect(bc_hash("password", 2, "abcdefghijklmnopqrstuu").is_err(), "cost<4 Err")
+    expect(bc_hash("password", 10, "short").is_err(), "盐长度 Err")
+    var longpw = ""
+    var i = 0
+    while i < 80:
+        longpw = longpw + "x"
+        i += 1
+    expect(bc_hash(longpw, 4, "abcdefghijklmnopqrstuu").is_err(), "超长密码 Err")
+    expect(bc_verify("password", "not-a-hash").is_err(), "格式非法 Err")
+    print("bcrypt: PASS")
+    return Ok(0)

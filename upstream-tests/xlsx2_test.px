@@ -1,0 +1,61 @@
+# xlsx 0.2.0 测试：命名样式 + 公式单元格（写→读往返 + XML 校验，双模式一致）
+import "../registry/xlsx/0.2.0/xlsx.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var doc = xsx_new()
+    doc = xsx_style(doc, "bold", {"bold": true})
+    doc = xsx_style(doc, "red", {"color": "FF0000", "fill": "FFFF00",
+        "align": "center", "valign": "top"})
+    var rows = []
+    rows.append(["Name", "Score", "Note"])
+    rows.append([{"v": "Alice", "style": "bold"}, 90, "ok"])
+    rows.append([{"v": "Bob", "style": "bold"}, 85, {"v": "sum", "style": "red"}])
+    rows.append([{"f": "SUM(B2:B3)", "v": 175, "style": "bold"}, null, null])
+    doc = xsx_add(doc, "S", rows)
+    var path = "/tmp/xlsx2-" + os_random_hex(4) + ".xlsx"
+    var w = xsx_write(doc, path)
+    expect(w.is_ok(), "write Ok, got " + str(w))
+    # 读回
+    var r = xsx_read(path).unwrap()
+    expect(len(r) == 4, "行数 4，got " + str(len(r)))
+    expect(r[0][0] == "Name" and r[0][1] == "Score" and r[0][2] == "Note", "表头")
+    expect(r[1][0] == "Alice" and r[1][1] == 90 and r[1][2] == "ok", "row1")
+    expect(r[2][0] == "Bob" and r[2][1] == 85 and r[2][2] == "sum", "row2")
+    var fc = r[3][0]
+    expect(type(fc) == "dict" and fc["f"] == "SUM(B2:B3)" and fc["v"] == 175,
+        "公式单元格读回 {" + str(fc) + "}")
+    expect(len(r[3]) == 1, "公式行宽度 1（尾格 null 不写不读），got " + str(len(r[3])))
+    # 原始 XML 校验：样式 s 索引与公式节点
+    var outdir = "/tmp/xlsx2chk-" + str(now_ms() % 1000000)
+    mkdir(outdir)
+    var ur = zip_unpack(path, outdir)
+    expect(ur >= 0, "解压 Ok")
+    var sheet = read_file(outdir + "/xl/worksheets/sheet1.xml")
+    expect(contains(sheet, "<f>SUM(B2:B3)</f>"), "公式节点: " + sheet)
+    expect(contains(sheet, "s=\"1\""), "bold 样式 s=1")
+    expect(contains(sheet, "s=\"2\""), "red 样式 s=2")
+    expect(contains(sheet, "t=\"inlineStr\""), "字符串 inlineStr")
+    var styles = read_file(outdir + "/xl/styles.xml")
+    expect(contains(styles, "<b/>"), "bold 加粗字体")
+    expect(contains(styles, "FFFF0000"), "红色字体 rgb")
+    expect(contains(styles, "FFFF00"), "黄色填充")
+    expect(contains(styles, "horizontal=\"center\""), "水平居中")
+    expect(contains(styles, "vertical=\"top\""), "垂直居顶")
+    # 清理（逐文件删净后再删目录）
+    remove(path)
+    remove(outdir + "/[Content_Types].xml")
+    remove(outdir + "/_rels/.rels")
+    remove(outdir + "/xl/workbook.xml")
+    remove(outdir + "/xl/styles.xml")
+    remove(outdir + "/xl/_rels/workbook.xml.rels")
+    remove(outdir + "/xl/worksheets/sheet1.xml")
+    remove(outdir + "/xl/worksheets")
+    remove(outdir + "/xl/_rels")
+    remove(outdir + "/xl")
+    remove(outdir + "/_rels")
+    remove(outdir)
+    print("xlsx 0.2.0: PASS")
+    return Ok(0)

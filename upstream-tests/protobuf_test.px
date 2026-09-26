@@ -1,0 +1,74 @@
+# protobuf.px 测试：wire format 动态编解码（双模式一致）
+import "../registry/protobuf/0.1.0/protobuf.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var schema = {
+        "1": {"type": "int32"},
+        "2": {"type": "string"},
+        "3": {"type": "bool"},
+        "4": {"type": "bytes"},
+        "5": {"type": "sint32"},
+        "6": {"type": "fixed32"},
+        "7": {"type": "double"},
+        "8": {"type": "message", "fields": {"1": {"type": "string"}}},
+        "9": {"type": "uint32"},
+        "10": {"type": "fixed64"}
+    }
+    var obj = {
+        "1": -2,
+        "2": "hello",
+        "3": true,
+        "4": bytes("ab"),
+        "5": -150,
+        "6": 300,
+        "7": 1.5,
+        "8": {"1": "nested"},
+        "9": 300,
+        "10": 1234567890123
+    }
+    var enc = pb_encode(schema, obj)
+    expect(enc.is_ok(), "encode Ok, got " + str(enc))
+    var data = enc.unwrap()
+    var hexs = bytes_to_hex(data)
+    # 已知字节向量（手算 LEB128）
+    expect(contains(hexs, "120568656c6c6f"), "field2 string 向量")
+    expect(contains(hexs, "22" + "02" + "6162"), "field4 bytes 向量")
+    expect(contains(hexs, "28ab02"), "field5 sint32 -150 向量")
+    expect(contains(hexs, "352c010000"), "field6 fixed32 300 向量")
+    expect(contains(hexs, "39000000000000f83f"), "field7 double 1.5 向量")
+    expect(contains(hexs, "42080a066e6573746564"), "field8 nested 向量")
+    expect(contains(hexs, "48ac02"), "field9 uint32 300 向量")
+    # 解码往返
+    var dec = pb_decode(schema, data)
+    expect(dec.is_ok(), "decode Ok, got " + str(dec))
+    var d = dec.unwrap()
+    expect(d["1"] == -2, "int32 -2")
+    expect(d["2"] == "hello", "string hello")
+    expect(d["3"] == true, "bool true")
+    expect(bytes_to_hex(d["4"]) == "6162", "bytes ab")
+    expect(d["5"] == -150, "sint32 -150")
+    expect(d["6"] == 300, "fixed32 300")
+    expect(d["7"] == 1.5, "double 1.5")
+    expect(d["8"]["1"] == "nested", "nested")
+    expect(d["9"] == 300, "uint32 300")
+    expect(d["10"] == 1234567890123, "fixed64")
+    # 未知字段跳过：尾部追加 field 99 varint（key=99*8+0=792 → varint 98 06；值 1）
+    var extra2 = bytes_concat(data, hex_to_bytes("980601"))
+    var dec3 = pb_decode(schema, extra2)
+    expect(dec3.is_ok(), "未知字段跳过 Ok, got " + str(dec3))
+    expect(dec3.unwrap()["1"] == -2, "未知字段跳过不破坏已知")
+    # sint64 大负值往返 + 正 sint
+    var s2 = {"1": {"type": "sint64"}}
+    var e2 = pb_encode(s2, {"1": 0 - 9223372036854775800}).unwrap()
+    var d2 = pb_decode(s2, e2).unwrap()
+    expect(d2["1"] == 0 - 9223372036854775800, "sint64 min 往返")
+    var e3 = pb_encode(s2, {"1": 42}).unwrap()
+    expect(pb_decode(s2, e3).unwrap()["1"] == 42, "sint64 42")
+    # 截断输入
+    expect(pb_decode(schema, hex_to_bytes("0a")).is_err(), "长度域截断 → Err")
+    expect(pb_decode(schema, hex_to_bytes("1205")).is_err(), "string 截断 → Err")
+    print("protobuf: PASS")
+    return Ok(0)

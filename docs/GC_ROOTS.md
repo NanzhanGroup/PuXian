@@ -499,3 +499,97 @@ memset(b, 0, sizeof(*b));  ← sizeof 的类型操作数
 | `examples/m209_gcroot_rules/` | 接受「候选 4」 |
 | `selfhost/gcroot_derive.py` | 新增 `--indirect loose\|tight` · `--callee-keeps` · `derive_all` · `derive_callee_keeps` |
 | `selfhost/gcroot_audit.py` | 新增 `--indirect` · `--no-callee-keep` · 候选 `trigger_kind` · F1 过滤 |
+
+---
+
+## 12 · M214（第 93 轮）：把 4 条**人工判定**下沉为三条**窄条件豁免**（缺陷 302 / 303 / 304）
+
+### 12.1 起点：候选 4 条，全靠人判
+
+M213 收尾时审计器的全仓候选是 **4** 条，每一条的「假阳」理由都**只写在代码注释里**：
+
+| # | 站点 | 受害者 | 人判理由 |
+|---|---|---|---|
+| 1 | `bi_http_unix` ← `px_net_err(` | `headers@17001` | 错误支里 `return px_net_err(…)` ⇒ **提前返回不可达** |
+| 2 | `px_http_dispatch` ← `px_pxserve_defer(` | `vhandler@24007` | 由 `px_vhost_resolve` 的**出参**交回，写出是 `g_vhosts[i].handler` ⇒ **全局根** |
+| 3 | `px_route_try_dispatch` ← `px_rate_limit_try(` | `handler@379` | 由 `route_match` 的**出参**交回，写出是 `g_routes[i].handler` ⇒ **全局根** |
+| 4 | `xml_build_node` ← `bi_xml_escape(` | `sv@402` | `bi_xml_escape` 的**唯一**分配点（`px_str(out.data)`）晚于全部 `args[0]` 读 |
+
+⇒ 目标：让「候选 0」**可复算**，不再依赖人工。
+
+### 12.2 ⚠️ 本轮最贵的一课：判据必须「窄」，否则会吃掉真形状
+
+**首版 R-A 写成「触发点之后本函数内再无任何读」（后置死值）** —— 听起来最自然，
+**结果一口吃掉 6 条既有锚点**：`hit5`（`return px_list_n(res, 2)`）· `hit6b`（`g_tmp_root`
+移开、`lst` 未登记）· `hit7` · `hit8` · `hit9` · `hit10`。
+
+那些 fixture 的受害者**恰恰「之后不再被读」**，但它们是**真实的形状** ——
+本审计器的本分是 **规则合规**（「创建后必须登记」），只接受
+「**语义上确定不会再读 / 本就是 GC 根**」这一类豁免。
+
+⇒ 三条规则全部收紧为「**加一条可验证的条件才豁免**」，并各配一条**反向判据**：
+
+| 规则 | 豁免条件（必须成立） | 反向判据（必须仍命中） |
+|---|---|---|
+| **R-A** 提前返回不可达 | 触发点**就是** `return <表达式>` 里的那个分配，**且该表达式不含受害者** | `hit11`：`return` 表达式**含** `v` ⇒ 必中 |
+| **R-B** 全局根可达 | 受害者由**出参**交回，而该出参在被调方体内的写出**全部**是「全局表元素 **或** 非对象立即数」 | `hit12`：出参写出是 `*out_handler = px_dict();` ⇒ 必中 |
+| **R-C** `&victim` + 被调方先读参后分配 | 调用点传的是 **`&victim`**，且被调方**全部形参读都在它的首次触发点之前** | `hit13`：被调方**未**标此性质 ⇒ 必中 |
+
+### 12.3 三处实现细节（都是实测照出来的假阴性）
+
+1. **`noreturn` 必须从声明派生**（`__attribute__((noreturn))`，实测只有 `px_error`）。
+   不跳过它时，`bi_xml_escape` 的「首次触发点」变成开头那句 `px_error(…)` 参数校验
+   ⇒ `max(形参读) < first` **恒不成立** ⇒ R-C **零豁免**（假阴性）。
+2. **函数体扫描必须从 `{` 之后开始**：`gcroot_derive.scan_functions` 返回的 `body`
+   **含签名**，而函数**自身**常是触发点 ⇒ 从头搜会**自命中**（`first ≈ 0`）
+   ⇒ R-C 又一次整条静默失效（M213 在 F1 上踩过同一个坑）。
+3. **「全部写出都是全局根」太严**：`px_vhost_resolve` 开头有
+   `if (out_handler) *out_handler = px_null();` ⇒ 首版判 False ⇒ R-B 零豁免。
+   放宽为「全局根 **或** 非对象立即数」后仍然健全（调用方变量里只可能是
+   「全局根对象」或「非对象」）。
+
+另修一处**判据与显示不一致**：`main()` 的统计合并原先只并 `funcs/allocs/keeps`
+⇒ 新规则的豁免计数**恒显示 0**（豁免明明发生了）。
+
+### 12.4 判据回放（precision replay）—— 本轮最强的精确性证据
+
+撤销 `px_route_try_dispatch` 的 `px_root_push_keep(params)`（`m116` 的既定形态）
+⇒ 审计器必须报出 **`params@379`**，而**同一个调用**上的 **`handler@379` 仍被 R-B 豁免**。
+
+> 同一条语句、同一个调用、两个出参 —— 一个（`handler_out`，全局表元素）豁免，
+> 一个（`params_out`，`*params_out = params;` 本地构造）报出。
+> ⇒ R-B 的**按形参逐一判定**真的在起作用，而不是「凡出参就放过」。
+
+### 12.5 A/B（每条规则**独立**有牙）
+
+| 开关 | 候选数 |
+|---|---|
+| （默认） | **0** |
+| `--no-postdead`（关 R-A） | 1（`bi_http_unix` / `headers`） |
+| `--no-globalout`（关 R-B） | 2（`vhandler` + `handler`） |
+| `--no-argread`（关 R-C） | 1（`xml_build_node` / `sv`） |
+| 三个全关 | **4**（= M213 的人工判定面） |
+
+### 12.6 门与自证
+
+| 项 | 内容 |
+|---|---|
+| `examples/m214_audit_exempt/` | 6 层：自证 **25/25**（19 旧 + 6 新）· 候选 0 且三类豁免**逐个非零**（1/2/1）· A/B 1/2/1/4 · **判据回放** · **负控 3 道**（NC-A 三规则全关 ⇒ 候选 4 · NC-B `glob` 恒真 ⇒ 回放不再报 `params` · NC-C 放宽 R-A ⇒ 自证判红）· 覆盖边界 |
+| 负控锚点教训 | **必须落在「生效处」**：`POST_DEAD_ON` / `ARG_READ_FIRST_ON` 在 `main()` 里被 `not args.no_xxx` **重新赋值** ⇒ 只改模块默认值**只关掉一条**（首版实测候选 2 而非 4）。同 M209 的 `LEGACY_GROW` 老坑。 |
+| 门的自伤教训 | 判据必须与**快照** `cmp`，**不能拿 `git diff` 比 HEAD** —— 工作树本来就是**未提交**状态（本轮改了 `gcroot_audit.py`）⇒ 比 HEAD 恒判「未还原」。 |
+| 自证锚点 | 19 → **25**（`hit11`/`miss10`/`hit12`/`miss11`/`hit13`/`miss12`） |
+
+### 12.7 覆盖边界（**未判据化**，如实登记）
+
+- 「保守兜底·过近似」触发点（`trigger_kind=conservative`）仍参与候选；
+- 跨函数「被调方登记了实参」只覆盖**直接调用**（F1 表按位置配对）；
+- R-C 依赖「被调方在其**首次触发点**之前读完形参」这一**文本序**判据
+  （只覆盖到被扫到的源码面）；
+- `noreturn` 集合目前由 `__attribute__((noreturn))` 派生（实测只有 `px_error`）。
+
+### 12.8 本轮 D 面：上游 `registry-px` 再引入 + PX-DEF-038/039 复核
+
+见 `docs/PX_DEF_TRIAGE.md` §十四 与 CHANGELOG（M214）。
+要点：上游 **108 → 124 库**（16 新引入）· 上游用例 **112 → 128** · 双轨
+**233 通过 / 0 失败 / 23 跳过**；PX-DEF-038/039 **三轨逐字节一致且文档已明示** ⇒ 非缺陷；
+但复核过程照出**缺陷 301**（`//` / `%` 的负债数语义与 `spec.md` 的「同 Python」不符）。

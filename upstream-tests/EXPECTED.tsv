@@ -1,11 +1,13 @@
 # 上游 registry-px 真实用例的期望值（M190 建立）
-# 来源：github.com/banshanhanfu/registry-px @ d4ae476（tests/*.px，逐字节照搬 · MANIFEST.sha256 对拍）
+# 来源：github.com/banshanhanfu/registry-px @ 8b2e9ef（tests/*.px 共 128 个，逐字节照搬 · MANIFEST.sha256 对拍）
 # 字段：<测试名>\t<build 期望>\t<interp 期望>\t<理由>
 # 取值：PASS / SKIP。**SKIP 必须写理由**（环境不具备 / 设计性不支持 / 性能性）。
 # 纪律：本文件是**登记的数据**，不是"跑一遍把结果抄下来"——改这里等于改判据，
 #   必须在 CHANGELOG 里写清楚"为什么这条不该 PASS"。缺登记 ⇒ 回归器报 MISMATCH（防新用例默默不跑）。
+actor_test	PASS	SKIP	interp 设计性不支持 spawn/chan（Mini 子集排除）
 ansi_test	PASS	PASS	-
 base58_test	PASS	PASS	-
+bcrypt_test	PASS	SKIP	解释器轨 >>180s（bcrypt 刻意慢 · 2^cost 轮；上游文件头自注「解释轨极慢 → 验收以编译轨为准（PX-DEF-024 同族）」· 性能性 · 与 qrcode_test 同款处置）
 big_test	PASS	PASS	-
 bisect_test	PASS	PASS	-
 bytes_pack_test	PASS	PASS	-
@@ -22,9 +24,11 @@ diff_test	PASS	PASS	-
 dotenv_test	PASS	PASS	-
 faker_test	PASS	PASS	-
 fractions_test	PASS	PASS	-
+fsnotify2_test	PASS	PASS	-
 fsnotify_test	PASS	PASS	-
 functools_test	PASS	PASS	-
 glob_test	PASS	PASS	-
+holidays_test	PASS	PASS	-
 idcard_test	PASS	PASS	-
 ini_test	PASS	PASS	-
 ipaddr_test	PASS	PASS	-
@@ -32,32 +36,44 @@ itertools_test	PASS	PASS	-
 jsonpath_test	PASS	PASS	-
 jwt_test	PASS	PASS	-
 log_test	PASS	PASS	-
+lz4_test	PASS	PASS	-
 mailparse_test	PASS	PASS	-
 metrics_test	PASS	PASS	-
+mock_test	PASS	SKIP	interp 设计性不支持 spawn（桩服务器需并发）
 mysql_test	SKIP	SKIP	需真实 MySQL 服务端 127.0.0.1:3306（本机与 CI 均无；--run-skipped 可跑）
+netprobe_test	PASS	PASS	-
 parser_test	PASS	PASS	-
 passhash_test	PASS	PASS	-
 pdf_test	PASS	PASS	-
 pg_test	SKIP	SKIP	需真实 PostgreSQL 服务端 127.0.0.1:5432（本机与 CI 均无；--run-skipped 可跑）
 mysql_params_test	SKIP	SKIP	需真实 MySQL 服务端 127.0.0.1:3306（上游 7da3397e 新增 · 预处理语句/参数化查询/二进制结果集；--run-skipped 可跑）
 pg_params_test	SKIP	SKIP	需真实 PostgreSQL 服务端 127.0.0.1:5432（上游 7da3397e 新增 · 扩展查询协议参数化查询）
+pinyin_test	PASS	PASS	-
+protobuf_test	PASS	PASS	-
 qrcode_test	PASS	SKIP	解释器轨 >180s（纯 px 矩阵运算 · 性能性；编译轨 PASS）
 rate_test	PASS	PASS	-
 retry_test	PASS	PASS	-
 secure_random_test	PASS	PASS	-
+seg_test	PASS	PASS	-
+semaphore_test	PASS	SKIP	interp 设计性不支持 mutex/chan/spawn（Mini 子集排除）
 shutil_test	PASS	PASS	-
+sqlparse_test	PASS	PASS	-
 stats_test	PASS	PASS	-
 strcase_test	PASS	PASS	-
 table_test	PASS	PASS	-
 tar_test	PASS	PASS	-
+tdtest_test	PASS	PASS	-
 template_test	PASS	PASS	-
 testkit_test	PASS	PASS	-
 textwrap_test	PASS	PASS	-
 toml_test	PASS	PASS	-
+tzmini_test	PASS	PASS	-
 ulid_test	PASS	PASS	-
 uuid_test	PASS	PASS	-
 validator_test	PASS	PASS	-
 workerpool_test	PASS	SKIP	interp 设计性不支持通道（Mini 子集排除 · R1002 18:13）
+x509_test	PASS	PASS	-
+xlsx2_test	PASS	PASS	-
 xlsx_test	PASS	PASS	-
 barcode_test	PASS	PASS	-
 bitset_test	PASS	PASS	-

@@ -1,0 +1,51 @@
+# seg.px 测试：中文分词（正向最大匹配，双模式一致）
+import "../registry/seg/0.1.0/seg.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def arr_eq(a, b):
+    if len(a) != len(b):
+        return false
+    var i = 0
+    while i < len(a):
+        if a[i] != b[i]:
+            return false
+        i += 1
+    return true
+def main():
+    # 基本分词
+    var t1 = sg_tokenize("我爱中国")
+    expect(arr_eq(t1, ["我", "爱", "中国"]), "我爱中国 → " + str(t1))
+    var t2 = sg_tokenize("我们学习语文")
+    expect(arr_eq(t2, ["我们", "学习", "语文"]), "我们学习语文 → " + str(t2))
+    var t3 = sg_tokenize("中国人民")
+    expect(arr_eq(t3, ["中国", "人民"]), "中国人民 → " + str(t3))
+    var t4 = sg_tokenize("今天天气很好")
+    expect(arr_eq(t4, ["今天", "天气", "很好"]), "今天天气很好 → " + str(t4))
+    var t5 = sg_tokenize("大模型技术")
+    expect(arr_eq(t5, ["大模型", "技术"]), "大模型技术（内置词典含大模型）→ " + str(t5))
+    # 注入自定义词
+    var t6 = sg_tokenize("人工智能", ["人工智能"])
+    expect(arr_eq(t6, ["人工智能"]), "注入人工智能 → " + str(t6))
+    # 混合 ASCII 连续串
+    var t7 = sg_tokenize("abc中国")
+    expect(arr_eq(t7, ["abc", "中国"]), "abc中国 → " + str(t7))
+    var t8 = sg_tokenize("你好world!")
+    expect(arr_eq(t8, ["你", "好", "world", "!"]), "你好world! → " + str(t8))
+    # 空串/单字
+    var t9 = sg_tokenize("")
+    expect(len(t9) == 0, "空串")
+    var t10 = sg_tokenize("好")
+    expect(arr_eq(t10, ["好"]), "单字 → " + str(t10))
+    # max_len 受控
+    var t11 = sg_tokenize_max("中国人民", 2)
+    expect(arr_eq(t11, ["中国", "人民"]), "max2 中国人民 → " + str(t11))
+    # 词典构造
+    var d = sg_build(["a", "b"])
+    expect(d.has("a") and d.has("b") and not d.has("c"), "sg_build")
+    # FMM 优先长词（两词均在词典）
+    var t12 = sg_tokenize("技术平台")
+    expect(arr_eq(t12, ["技术", "平台"]), "技术平台 → " + str(t12))
+    print("seg: PASS")
+    return Ok(0)

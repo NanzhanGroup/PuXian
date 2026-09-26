@@ -1,0 +1,103 @@
+# ============================================================
+# 普贤生态库：registry/pinyin —— 中文拼音（常用字子集）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python pypinyin / Rust pinyin 心智（0.1.0 字级子集）：
+#   py_lookup("中")       → Ok("zhong") | Err（未收录字符）
+#   py_convert("中国")    → "zhong guo"（字级，逐字转拼音，空格分隔）
+#   py_convert_list("你好") → Ok([{ch, py}, ...])
+# 约定：
+#   - 无音调小写拼音；多音字取最常用读书音（如 的→de、长系多音字不收）
+#   - 字级转换，0.1.0 不做分词（"中国"→"zhong guo" 而非 "zhongguo"）
+#   - 未收录汉字/非汉字字符原样保留（"abc中"→"abc zhong"）
+# 词表：常用字子集（无生僻字），供 slug/id/拼音首字母等轻量场景。
+# ============================================================
+# 词表数据："字:拼音" 逗号分隔；每行一组，便于阅读与增补
+const PY_DATA = "一:yi,二:er,三:san,四:si,五:wu,六:liu," +
+    "七:qi,八:ba,九:jiu,十:shi,百:bai,千:qian," +
+    "万:wan,亿:yi,人:ren,口:kou,手:shou,足:zu," +
+    "目:mu,耳:er,心:xin,头:tou,身:shen,脸:lian," +
+    "大:da,小:xiao,中:zhong,外:wai,上:shang,下:xia," +
+    "左:zuo,右:you,前:qian,后:hou,里:li,内:nei," +
+    "东:dong,西:xi,南:nan,北:bei,天:tian,地:di," +
+    "日:ri,月:yue,星:xing,云:yun,雨:yu,雪:xue," +
+    "风:feng,雷:lei,电:dian,光:guang,火:huo,水:shui," +
+    "土:tu,木:mu,金:jin,山:shan,河:he,海:hai," +
+    "江:jiang,湖:hu,石:shi,田:tian,春:chun,夏:xia," +
+    "秋:qiu,冬:dong,年:nian,时:shi,分:fen,秒:miao," +
+    "早:zao,晚:wan,今:jin,明:ming,昨:zuo,国:guo," +
+    "家:jia,民:min,华:hua,学:xue,校:xiao,生:sheng," +
+    "师:shi,书:shu,文:wen,字:zi,语:yu,言:yan," +
+    "说:shuo,话:hua,读:du,写:xie,听:ting,看:kan," +
+    "见:jian,走:zou,跑:pao,飞:fei,来:lai,去:qu," +
+    "回:hui,到:dao,出:chu,入:ru,进:jin,开:kai," +
+    "关:guan,门:men,窗:chuang,桌:zhuo,椅:yi,床:chuang," +
+    "房:fang,屋:wu,路:lu,桥:qiao,车:che,船:chuan," +
+    "机:ji,灯:deng,笔:bi,纸:zhi,包:bao,红:hong," +
+    "黄:huang,蓝:lan,绿:lv,白:bai,黑:hei,灰:hui," +
+    "紫:zi,粉:fen,好:hao,坏:huai,新:xin,旧:jiu," +
+    "多:duo,少:shao,快:kuai,慢:man,高:gao,低:di," +
+    "短:duan,吃:chi,喝:he,饭:fan,茶:cha,酒:jiu," +
+    "米:mi,面:mian,菜:cai,肉:rou,鱼:yu,鸡:ji," +
+    "鸭:ya,牛:niu,羊:yang,马:ma,猪:zhu,狗:gou," +
+    "猫:mao,鸟:niao,爸:ba,妈:ma,哥:ge,弟:di," +
+    "姐:jie,妹:mei,儿:er,男:nan,女:nv,老:lao," +
+    "青:qing,岁:sui,我:wo,你:ni,他:ta,她:ta," +
+    "它:ta,们:men,这:zhe,那:na,谁:shei,么:me," +
+    "很:hen,都:dou,也:ye,还:hai,又:you,再:zai," +
+    "就:jiu,才:cai,只:zhi,和:he,与:yu,及:ji," +
+    "或:huo,但:dan,同:tong,而:er,会:hui,能:neng," +
+    "要:yao,想:xiang,觉:jue,知:zhi,道:dao,懂:dong," +
+    "记:ji,忘:wang,爱:ai,恨:hen,喜:xi,怒:nu," +
+    "哀:ai,工:gong,作:zuo,农:nong,商:shang,医:yi," +
+    "药:yao,钱:qian,元:yuan,角:jiao,表:biao,钟:zhong," +
+    "世:shi,界:jie"
+def py_dict():
+    var out = {}
+    var parts = PY_DATA.split(",")
+    var i = 0
+    while i < len(parts):
+        var kv = parts[i].split(":")
+        if len(kv) == 2 and len(kv[0]) > 0:
+            out.set(kv[0], kv[1])
+        i += 1
+    return out
+# 单字查拼音 → Ok(pinyin) | Err（未收录）
+def py_lookup(ch):
+    var d = py_dict()
+    if d.has(ch):
+        return Ok(d[ch])
+    return Err("pinyin: 未收录字符: " + ch)
+# 字符串逐字转拼音；已知字 → 拼音（与前字间隔空格），未知/非汉字 → 原样
+def py_convert(s):
+    var d = py_dict()
+    var out = ""
+    var known = false
+    var i = 0
+    while i < len(s):
+        var ch = s[i]
+        if d.has(ch):
+            if len(out) > 0 and (known or out[len(out) - 1] != " "):
+                out += " "
+            out += d[ch]
+            known = true
+        else:
+            if len(out) > 0 and known:
+                out += " "
+            out += ch
+            known = false
+        i += 1
+    return out
+# 结构化转换 → Ok([{ch, py}])；未知字 py 为空串
+def py_convert_list(s):
+    var d = py_dict()
+    var out = []
+    var i = 0
+    while i < len(s):
+        var ch = s[i]
+        var item = {"ch": ch, "py": ""}
+        if d.has(ch):
+            item["py"] = d[ch]
+        out.append(item)
+        i += 1
+    return Ok(out)

@@ -1,0 +1,192 @@
+# ============================================================
+# 普贤生态库：registry/mock —— HTTP 桩服务器 / 测试请求客户端
+# ------------------------------------------------------------
+# ⚠️ 含并发（spawn）—— 服务器需编译模式运行（px build）；
+#    解释器 px run 是 Mini 子集，无并发原语（PX-DEF-006）。
+# 对齐 Go httptest + net/http 心智（0.1.0）：
+#   var routes = [mk_route("GET", "/hello", 200, "hi")]
+#   var log = []
+#   mk_start_server(19080, routes, log, 10)
+#   var r = mk_request(19080, "GET", "/hello")
+#   r.unwrap()["status"] == 200, ["body"] == "hi"
+# API：
+#   mk_route(method, path, status, body[, ctype]) → 路由 dict
+#   mk_start_server(port, routes, reqlog, max_conns) → 启动桩服务器（spawn）
+#   mk_request(port, method, path[, body]) → Ok({status, status_text, headers, body})
+#   mk_parse_response(resp_text) → Ok(dict) | Err（客户端响应解析）
+#   mk_status_text(code) → 状态短语
+#   时间桩（注入式）：mk_clock(secs) / mk_clock_next(clock)
+# 行为：
+#   - 路由按 method+path 精确匹配；路径存在但方法不符 → 405；否则 404
+#   - Content-Length 按 UTF-8 字节数计算（中文 body 正确）
+#   - reqlog 为 list 引用，服务器每收一个请求 append {method, path, headers, body}
+#   - 服务器处理满 max_conns 个连接后退出（spawn 协程自然结束）
+#   说明：监听地址由 native tcp_listen 决定（任意地址）；测试请指向 127.0.0.1
+# ============================================================
+# ---- 路由与状态 ----
+# 构造路由：method/path 精确匹配
+def mk_route(method, path, status, body, ctype = "text/plain"):
+    return {"method": method, "path": path, "status": status,
+        "body": body, "ctype": ctype}
+# 状态码 → 状态短语
+def mk_status_text(code):
+    if code == 200:
+        return "OK"
+    if code == 201:
+        return "Created"
+    if code == 204:
+        return "No Content"
+    if code == 301:
+        return "Moved Permanently"
+    if code == 302:
+        return "Found"
+    if code == 400:
+        return "Bad Request"
+    if code == 401:
+        return "Unauthorized"
+    if code == 403:
+        return "Forbidden"
+    if code == 404:
+        return "Not Found"
+    if code == 405:
+        return "Method Not Allowed"
+    if code == 418:
+        return "I'm a teapot"
+    if code == 500:
+        return "Internal Server Error"
+    return "Unknown"
+# ---- 服务端 ----
+# 解析原始 HTTP 请求 → {method, path, headers, body}
+def mk_parse_req(raw):
+    var req = {"method": "", "path": "", "headers": {}, "body": ""}
+    var parts = raw.split("\r\n")
+    if len(parts) >= 1:
+        var line = parts[0].split(" ")
+        if len(line) >= 2:
+            req["method"] = line[0]
+            req["path"] = line[1]
+    var i = 1
+    while i < len(parts):
+        var l = parts[i]
+        if l == "":
+            break
+        var colon = -1
+        var j = 0
+        while j < len(l):
+            if l[j] == ":":
+                colon = j
+                j = len(l)
+            j += 1
+        if colon > 0:
+            var k = l[0:colon]
+            var v = l[colon + 1:len(l)]
+            if len(v) > 0 and v[0] == " ":
+                v = v[1:len(v)]
+            req["headers"].set(k, v)
+        i += 1
+    if i < len(parts) and parts[i] == "":
+        i += 1
+    var body = ""
+    if i < len(parts):
+        body = parts[i]
+        i += 1
+    while i < len(parts):
+        body = body + "\r\n" + parts[i]
+        i += 1
+    req["body"] = body
+    return req
+# 组装 HTTP 响应文本
+def mk_build_resp(status, body, ctype):
+    var head = "HTTP/1.1 " + str(status) + " " + mk_status_text(status) + "\r\n"
+    head = head + "Content-Type: " + ctype + "\r\n"
+    head = head + "Content-Length: " + str(len(bytes(body))) + "\r\n"
+    head = head + "Connection: close\r\n\r\n"
+    return head + body
+# 请求 → 响应文本（按路由表匹配；405/404 兜底）
+def mk_route_resp(req, routes):
+    var i = 0
+    var path_hit = -1
+    while i < len(routes):
+        if routes[i]["path"] == req["path"]:
+            path_hit = i
+            i = len(routes)
+        i += 1
+    if path_hit >= 0:
+        if routes[path_hit]["method"] == req["method"]:
+            var rt = routes[path_hit]
+            return mk_build_resp(rt["status"], rt["body"], rt["ctype"])
+        return mk_build_resp(405, "method not allowed", "text/plain")
+    return mk_build_resp(404, "not found", "text/plain")
+# 服务器循环：accept → 读请求 → 记日志 → 回响应；处理满 max_conns 后退出
+def mk_server_loop(port, routes, reqlog, max_conns):
+    var lfd = tcp_listen(port)
+    var n = 0
+    while n < max_conns:
+        var cfd = tcp_accept(lfd)
+        var data = tcp_recv(cfd, 65536)
+        var req = mk_parse_req(data)
+        reqlog.append(req)
+        var resp = mk_route_resp(req, routes)
+        tcp_send(cfd, resp)
+        tcp_close(cfd)
+        n += 1
+    tcp_close(lfd)
+    return true
+# 启动桩服务器（spawn 协程）→ Ok({port, routes})
+def mk_start_server(port, routes, reqlog, max_conns = 100):
+    spawn mk_server_loop(port, routes, reqlog, max_conns)
+    return Ok({"port": port, "routes": len(routes)})
+# ---- 客户端 ----
+# 解析 HTTP 响应文本 → Ok({status, status_text, headers, body}) | Err
+def mk_parse_response(resp):
+    var out = {"status": 0, "status_text": "", "headers": {}, "body": ""}
+    var head = resp
+    var body = ""
+    var parts = resp.split("\r\n\r\n")
+    if len(parts) >= 2:
+        head = parts[0]
+        body = parts[1]
+    var lines = head.split("\r\n")
+    if len(lines) < 1:
+        return Err("mock: 空响应")
+    var sl = lines[0].split(" ")
+    if len(sl) < 2:
+        return Err("mock: 状态行格式非法: " + lines[0])
+    var code = int(sl[1])
+    out["status"] = code
+    if len(sl) >= 3:
+        out["status_text"] = sl[2]
+    var i = 1
+    while i < len(lines):
+        var l = lines[i]
+        var colon = -1
+        var j = 0
+        while j < len(l):
+            if l[j] == ":":
+                colon = j
+                j = len(l)
+            j += 1
+        if colon > 0:
+            out["headers"].set(l[0:colon], l[colon + 1:len(l)])
+        i += 1
+    out["body"] = body
+    return Ok(out)
+# 发一个 HTTP 请求（127.0.0.1）→ Ok({status, status_text, headers, body}) | Err
+def mk_request(port, method, path, body = ""):
+    var fd = tcp_connect("127.0.0.1", port)
+    var req = method + " " + path + " HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+    req = req + "Content-Length: " + str(len(bytes(body))) + "\r\n\r\n" + body
+    tcp_send(fd, req)
+    var resp = tcp_recv(fd, 65536)
+    tcp_close(fd)
+    return mk_parse_response(resp)
+# ---- 时间桩（注入式假时钟）----
+# 时间 native（now/now_ms）只读，无法冻结全局；纯函数测试用显式传参模式。
+def mk_clock(secs):
+    return {"secs": secs, "i": 0}
+def mk_clock_next(clk):
+    var s = clk["secs"][len(clk["secs"]) - 1]
+    if clk["i"] < len(clk["secs"]):
+        s = clk["secs"][clk["i"]]
+    clk["i"] += 1
+    return s

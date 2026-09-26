@@ -89,20 +89,23 @@ else
     bad "派生集合性质不符"; sed -n '2,8p' "$W/props.log" | sed 's/^/      /'
 fi
 
-step "③ A/B：手抄集合（legacy）候选 0 ⇄ 派生集合候选 4"
+step "③ A/B：手抄集合（legacy）候选 0 ⇄ 派生集合候选 0（M214 三条豁免判据化后）"
 python3 selfhost/gcroot_audit.py --trigger-set legacy --json > "$W/leg.json" 2> "$W/leg.err" || bad "legacy 扫描失败"
 python3 selfhost/gcroot_audit.py --json > "$W/der.json" 2> "$W/der.err" || bad "派生扫描失败"
 LEGN=$(python3 -c "import json;print(len(json.load(open('$W/leg.json'))['findings']))" 2>/dev/null)
 DERN=$(python3 -c "import json;print(len(json.load(open('$W/der.json'))['findings']))" 2>/dev/null)
 [ "${LEGN:-x}" = 0 ] && ok "手抄集合候选 0（= M209 报出的「全仓候选 0」—— 现在知道那是**漏报**）" \
                      || bad "legacy 候选 ${LEGN:-?}（期望 0，手抄集合行为应保持原样）"
-# ⚠️ M213：3 → 4（缺陷 293 消 1 / 缺陷 297 F1 消 3 / 缺陷 298 新增 1 ⇒ 4）。
-[ "${DERN:-x}" = 4 ] && ok "派生集合候选 4（手抄漏掉的 300+ 入口现在会触发判定）" \
-                     || bad "derived 候选 ${DERN:-?}（期望 4）"
+# ⚠️ M214（缺陷 302/303/304）：**4 → 0** —— 三条窄条件豁免（R-A/R-B/R-C）把
+#   M213 剩下的 4 条人工判定全部下沉为判据（逐条理由见 m206 BASELINE.tsv 的 M214 档案区）。
+#   ⇒ 本门在此**只**证明「手抄 ⇄ 派生」两集合都不再报候选；豁免的**有牙与不越界**
+#     由 `examples/m214_audit_exempt/` 的自证/判据回放/负控 3 道把守。
+[ "${DERN:-x}" = 0 ] && ok "派生集合候选 0（M214 三条豁免判据化；手抄集合漏报面仍由 A/B 证明）" \
+                     || bad "derived 候选 ${DERN:-?}（期望 0）"
 grep -q '源码派生' "$W/der.err" && ok "stderr 打印「源码派生」诊断行（缺它=悄悄退回手抄集合）" \
                                  || bad "未打印派生诊断行"
 
-step "④ 4 条候选 ⇄ m206 BASELINE §① 逐条一致（判据不放水）"
+step "④ 0 条候选 ⇄ m206 BASELINE §① 逐条一致（判据不放水）"
 python3 - "$W/der.json" examples/m206_gcroot/BASELINE.tsv <<'PY' > "$W/align.log" 2>&1
 import json, sys
 from collections import Counter
@@ -159,7 +162,10 @@ else
     cmp -s "$AUD" "$SNAP/$AUD" || bad "负控 B 后审计器未还原"
     # C：缺陷 290 判据有牙 —— 关掉「登记动作 ⇒ 被登记对象的字段豁免」
     if patch_one "$AUD" "_rm = _REGISTER_RX.match(m.group(0))" "_rm = None" NC; then
-        python3 "$AUD" --json > "$W/negc.json" 2>/dev/null
+        # ⚠️ M214：必须**关掉三条窄条件豁免**再数 —— 否则本负控测的「缺陷 290 判据」
+        #   会被 R-A/R-B/R-C 部分吸收（实测只冒出 1 条）⇒ 负控会假红。
+        #   A/B 正交性：豁免与「缺陷 290 判据」是两件事，隔离后各自独立可测。
+        python3 "$AUD" --json --no-postdead --no-globalout --no-argread > "$W/negc.json" 2>/dev/null
         N=$(python3 -c "import json;print(len(json.load(open('$W/negc.json'))['findings']))" 2>/dev/null)
         if [ "${N:-0}" -ge 4 ]; then
             ok "负控 C 判红：撤缺陷 290 判据 ⇒ 候选 $N（≥4，px_gen_lazy 族重新冒出来）"
@@ -174,14 +180,15 @@ else
 fi
 
 step "⑥ 覆盖边界（如实登记）"
-echo '  ℹ️ 本门覆盖：**静态**（触发点/生产者派生 + 4 条候选的判定对齐）'
+echo '  ℹ️ 本门覆盖：**静态**（触发点/生产者派生 + 候选⇄基线逐条对齐；M214 起两空集）'
 echo '  ℹ️ 动态取证已做：session_del（probe_rt.px 8 轮 × 40 请求压力档全绿）'
 echo '  ℹ️ **未**动态覆盖：H3 族（h3_send_fields 的 body_val 修复只能靠静态判据 + 源码顺序；'
 echo '     单机缺 QUIC listener 夹具）'
 echo '  ℹ️ 判据缺口（M212 登记 → **M213 收口**）：① **跨函数**的「被调方登记了实参」'
 echo '     ⇒ M213 缺陷 297 已判据化（**F1**，按位置配对 + 要求登记先于被调方第一个触发点）'
 echo '     ⇒ h3_out_send / h3_srv_* 三条已从 BASELINE 移出（见 examples/m213_gcroot_precision/）；'
-echo '     ② 「后置存活」（受害者读点在触发点之后）**仍未**判据化 ⇒ xml_build_node 需人工判定。'
+echo '     ② 「后置存活」（受害者读点在触发点之后）⇒ **M214 起由 R-C 判据化**（`&victim` +'
+echo '        被调方先读参后分配）；xml_build_node 已从 BASELINE 移出（见 m214_audit_exempt/）。'
 
 echo
 echo "M212 门：通过 $PASS · 失败 $FAIL"

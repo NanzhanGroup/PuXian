@@ -1,0 +1,166 @@
+# ============================================================
+# 普贤生态库：registry/fsnotify —— 文件变更监听（轮询快照）· 0.2.0
+# ------------------------------------------------------------
+# ⚠️ 0.2.0 = 0.1.0 超集：保留 fs_snapshot/fs_diff/fs_has_change 全部 API，
+#    新增递归快照 + 事件序列 + 过滤（对照缺口表「文件/目录监控增强」）。
+# 纯函数库（无 IO、无状态、无并发），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go fsnotify 心智（轮询实现，无 inotify 依赖）：
+#   var snap = fsn_snapshot_rec("/var/log")    # 递归快照（相对路径）
+#   var d = fs_diff(snap, fsn_snapshot_rec("/var/log"))
+#   fsn_events(d)                              # → [{path, kind}]
+#   fsn_filter(d, [".txt", ".log"])            # 事件过滤（按扩展名）
+#   fsn_exclude(d, ["/cache/"])                # 排除含子串的路径
+# 说明：
+#   - 相对路径用 "/" 分隔（sub/file.txt）；mtime 取 file_stat（目录 mtime=0）
+#   - max_depth：-1 不限；0 只第一层；1 两层……相对根
+# ============================================================
+# 递归目录快照：{相对路径: {mtime, size, is_dir}}；目录本身不收录
+def fsn_snapshot_rec(dir, max_depth = -1):
+    if not is_dir(dir):
+        return Err("fsnotify: 不是目录: " + dir)
+    var out = {}
+    var r = fsn_rec(dir, "", 0, max_depth, out)
+    if r != "":
+        return Err("fsnotify: " + r)
+    return Ok(out)
+# 递归单步 → 错误串（空 = 成功）; 写 out
+def fsn_rec(dir, rel, depth, max_depth, out):
+    if max_depth >= 0 and depth > max_depth:
+        return ""
+    var entries = list_dir(dir)
+    if type(entries) != "list":
+        return "list_dir 失败: " + dir
+    var names = sorted(entries)
+    var i = 0
+    while i < len(names):
+        var name = names[i]
+        var full = dir + "/" + name
+        var key = rel
+        if len(rel) > 0:
+            key = rel + "/" + name
+        else:
+            key = name
+        if is_dir(full):
+            out.set(key, {"mtime": 0, "size": 0, "is_dir": true})
+            var sub = fsn_rec(full, key, depth + 1, max_depth, out)
+            if sub != "":
+                return sub
+        else:
+            var st = file_stat(full)
+            var mtime = 0
+            var size = 0
+            if type(st) == "dict":
+                mtime = st["mtime"]
+                size = st["size"]
+            out.set(key, {"mtime": mtime, "size": size, "is_dir": false})
+        i += 1
+    return ""
+# ---- 0.1.0 兼容 API ----
+# 单层目录快照：{name: {mtime, size, is_dir}}
+def fs_snapshot(dir):
+    if not is_dir(dir):
+        return Err("fsnotify: 不是目录: " + dir)
+    var entries = list_dir(dir)
+    var out = {}
+    var i = 0
+    while i < len(entries):
+        var name = entries[i]
+        var full = dir + "/" + name
+        if is_dir(full):
+            out.set(name, {"mtime": 0, "size": 0, "is_dir": true})
+        else:
+            var st = file_stat(full)
+            var mtime = 0
+            var size = 0
+            if type(st) == "dict":
+                mtime = st["mtime"]
+                size = st["size"]
+            out.set(name, {"mtime": mtime, "size": size, "is_dir": false})
+        i += 1
+    return Ok(out)
+# diff：added / modified / removed（均为路径列表）
+def fs_diff(before, after):
+    var added = []
+    var modified = []
+    var removed = []
+    var ak = after.keys()
+    var i = 0
+    while i < len(ak):
+        var k = ak[i]
+        if before.has(k):
+            var a = after[k]
+            var b = before[k]
+            if a["mtime"] != b["mtime"] or a["size"] != b["size"] or a["is_dir"] != b["is_dir"]:
+                modified.append(k)
+        else:
+            added.append(k)
+        i += 1
+    var bk = before.keys()
+    var j = 0
+    while j < len(bk):
+        if not after.has(bk[j]):
+            removed.append(bk[j])
+        j += 1
+    return {"added": added, "modified": modified, "removed": removed}
+# 便捷判断：diff 是否有任何变化
+def fs_has_change(diff):
+    return len(diff["added"]) > 0 or len(diff["modified"]) > 0 or len(diff["removed"]) > 0
+# ---- 0.2.0 新增：事件序列与过滤 ----
+# diff → 事件列表 [{path, kind}]（added → modified → removed 顺序）
+def fsn_events(diff):
+    var out = []
+    var i = 0
+    while i < len(diff["added"]):
+        out.append({"path": diff["added"][i], "kind": "added"})
+        i += 1
+    i = 0
+    while i < len(diff["modified"]):
+        out.append({"path": diff["modified"][i], "kind": "modified"})
+        i += 1
+    i = 0
+    while i < len(diff["removed"]):
+        out.append({"path": diff["removed"][i], "kind": "removed"})
+        i += 1
+    return out
+# 按扩展名过滤：只保留路径以 exts 任一结尾的事件 → 新 diff
+def fsn_filter(diff, exts):
+    var nd = {"added": [], "modified": [], "removed": []}
+    var ks = ["added", "modified", "removed"]
+    var k = 0
+    while k < len(ks):
+        var list = diff[ks[k]]
+        var i = 0
+        while i < len(list):
+            var p = list[i]
+            var m = 0
+            var hit = false
+            while m < len(exts):
+                if contains(p, exts[m]):
+                    hit = true
+                m += 1
+            if hit:
+                nd[ks[k]].append(p)
+            i += 1
+        k += 1
+    return nd
+# 排除：去掉路径含任一子串的事件 → 新 diff
+def fsn_exclude(diff, subs):
+    var nd = {"added": [], "modified": [], "removed": []}
+    var ks = ["added", "modified", "removed"]
+    var k = 0
+    while k < len(ks):
+        var list = diff[ks[k]]
+        var i = 0
+        while i < len(list):
+            var p = list[i]
+            var m = 0
+            var skip = false
+            while m < len(subs):
+                if contains(p, subs[m]):
+                    skip = true
+                m += 1
+            if not skip:
+                nd[ks[k]].append(p)
+            i += 1
+        k += 1
+    return nd

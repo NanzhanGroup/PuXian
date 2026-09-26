@@ -1,0 +1,56 @@
+# ============================================================
+# 普贤生态库：registry/actor —— Actor 消息模式封装
+# ------------------------------------------------------------
+# ⚠️ 含并发（spawn/chan）—— 必须编译模式运行（px build）；
+#    解释器 px run 是 Mini 子集，无并发原语（PX-DEF-006）。
+# 对齐 Akka / Erlang 心智（0.1.0 子集，单邮箱顺序处理）：
+#   var a = ac_new({"inc": fn(state, body): state["n"] = state["n"] + body; return state["n"],
+#                   "get": fn(state, body): return state["n"]},
+#                  {"n": 0})
+#   ac_call(a, "inc", 5)   → Ok(5)     # 发消息并等待应答
+#   ac_send(a, "inc", 3)   → Ok(true)  # 只发不等（fire-and-forget）
+#   ac_stop(a)                         # 优雅停止（处理完已排队消息）
+# 约定：
+#   - 处理函数签名 fn(state, body) -> result；可原地修改 state（dict 引用语义）
+#   - 邮箱 FIFO：同一 actor 的消息按发送序串行处理，天然免锁
+#   - 未注册消息名 → ac_call 返回 Err；ac_send 静默成功（不阻塞）
+#   停止：向邮箱投递 __stop 哨兵；已排队消息会先于哨兵处理完
+# ============================================================
+# actor 主循环：收消息 → 按名分派 → 可选回执
+def ac_loop(actor):
+    var handlers = actor["h"]
+    while true:
+        var m = actor["mailbox"].recv ()
+        if m.has("__stop") and m["__stop"]:
+            return
+        var name = m["name"]
+        var ok = true
+        var res = null
+        if handlers.has(name):
+            res = handlers[name](actor["state"], m["body"])
+        else:
+            ok = false
+            res = "actor: 未注册处理函数: " + name
+        if m.has("reply"):
+            m["reply"].send ({"ok": ok, "res": res})
+# 创建 actor：handlers = {名: fn(state, body)}, init = 初始状态 dict
+def ac_new(handlers, init):
+    var actor = {"mailbox": chan [dict](64), "h": handlers, "state": init}
+    spawn ac_loop(actor)
+    return actor
+# 只发不等（fire-and-forget）→ Ok(true)
+def ac_send(actor, name, body):
+    actor["mailbox"].send ({"name": name, "body": body})
+    return Ok(true)
+# 发消息并等待应答 → Ok(result) | Err（未注册消息名）
+def ac_call(actor, name, body):
+    var reply = chan [dict](1)
+    actor["mailbox"].send ({"name": name, "body": body, "reply": reply})
+    var r = reply.recv ()
+    if r["ok"]:
+        return Ok(r["res"])
+    return Err(r["res"])
+# 优雅停止：投递 stop 哨兵（已排队消息先处理完）→ Ok(true)
+def ac_stop(actor):
+    actor["mailbox"].send ({"__stop": true})
+    return Ok(true)

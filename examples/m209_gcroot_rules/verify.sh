@@ -31,7 +31,7 @@
 #         ⇒ 不计 C 局部活值（`runtime_h3_qpack.c:262`，调用方 :359 紧跟 `PX_KEEP`）。
 #
 # 层的设计（每层都能独立判红）：
-#   ① 审计器自证 **19/19**（10 必中 + 9 必不中；含 5 条**反向判据**）
+#   ① 审计器自证 **25/25**（13 必中 + 12 必不中；含 8 条**反向判据**）
 #   ② 新规则全仓候选 **0**（且两次运行结果一致）
 #   ③ 旧规则对照（`--grow`）候选 **10**（M213 起：原 11 条里 `bi_session_del` 一条
 #      已由**缺陷 293** 修掉 —— 该函数补齐登记后不再是候选），且**全部**带「旧规则」
@@ -111,10 +111,10 @@ run_track() {    # $1=bin $2=档(norm|stress) $3=期望正则
 MIN_FUNCS=1500
 MIN_KEEPS=200
 
-step "① 静态：审计器自证（19 锚点 = 10 必中 + 9 必不中）"
+step "① 静态：审计器自证（25 锚点 = 13 必中 + 12 必不中）"
 if python3 selfhost/gcroot_audit.py --self-test > "$W/selftest.log" 2>&1; then
-    grep -q 'self-test: 19 通过 / 0 失败' "$W/selftest.log" \
-        && ok "自证 19/19（hit1–10 含 hit6b/hit7/hit8/hit9/hit10 · miss1–9 含 miss5 改判）" \
+    grep -q 'self-test: 25 通过 / 0 失败' "$W/selftest.log" \
+        && ok "自证 25/25（命中含 hit6b/hit7/hit8/hit9/hit10/hit11/hit12/hit13 · 不中含 miss5 改判）" \
         || { bad "自证结论行不符"; tail -20 "$W/selftest.log" | sed 's/^/      /'; }
 else
     bad "自证脚本失败"; tail -8 "$W/selftest.log" | sed 's/^/      /'
@@ -131,7 +131,12 @@ else
 fi
 head -1 "$W/new1.log" | sed 's/^/  ℹ️ /'
 if grep -q '候选 0' "$W/new1.log"; then
-    ok "全仓候选 0（**手抄触发点集合**下：缺陷 279–282 收口）"
+    # M214（第 93 轮 · 缺陷 302/303/304）：三条**窄条件豁免**（R-A 提前返回不可达 ·
+    #   R-B 全局根可达 · R-C &victim + 被调方先读参后分配）把 M213 剩下的 4 条
+    #   「人工判定」全部下沉为判据 ⇒ **候选 4 → 0**（不再需要人工判假阳）。
+    ok "全仓候选 0（源码派生触发点集合 + R-A/R-B/R-C 三条豁免；4 条人工判定已判据化）"
+    grep -q '源码派生' "$W/new1.err" \
+        || bad "未在 stderr 打印「源码派生」诊断行 ⇒ 可能退回手抄集合"
 elif grep -q '候选 4' "$W/new1.log"; then
     # M212（第 91 轮）：默认触发点集合已改为**源码派生**（手抄 27 → 派生 524）
     #   ⇒ 手抄集合漏掉的那 300+ 个分配入口现在会触发判定，照出候选；其中 1 条

@@ -13,7 +13,7 @@
 #
 # 层：
 #   ① 派生器自证 19/19（含间接调用**分层**双向、显式 GC 族、F1 正/反）
-#   ② 审计器自证 19/19
+#   ② 审计器自证 25/25（M214 增 6 条：hit11/miss10/hit12/miss11/hit13/miss12）
 #   ③ **分诊**：`trigger_kind` 能把「保守兜底」与「精确」分开（且 tight 档确实少掉它）
 #   ④ **覆盖面**：显式 GC 族在 **loose 与 tight 两档都在** TRIGGER（= 「不能收紧」的实证）
 #   ⑤ **F1 有牙**：默认候选 4 ⇄ `--no-callee-keep` 候选 7（差 = 被 F1 豁免的 3 条）
@@ -68,10 +68,10 @@ else
     bad "派生器自证失败"; tail -12 "$W/derive.log" | sed 's/^/      /'
 fi
 
-step "② 审计器自证（gcroot_audit.py · 19 锚点）"
+step "② 审计器自证（gcroot_audit.py · 25 锚点）"
 if python3 selfhost/gcroot_audit.py --self-test > "$W/selftest.log" 2>&1; then
-    grep -q 'self-test: 19 通过 / 0 失败' "$W/selftest.log" \
-        && ok "审计器自证 19/19（含 hit9/hit10/miss9：出口参数式构造器 + 成员取址别名）" \
+    grep -q 'self-test: 25 通过 / 0 失败' "$W/selftest.log" \
+        && ok "审计器自证 25/25（+M214 六条：hit11/miss10/hit12/miss11/hit13/miss12）" \
         || { bad "自证结论行不符"; tail -8 "$W/selftest.log" | sed 's/^/      /'; }
 else
     bad "审计器自证失败"; tail -8 "$W/selftest.log" | sed 's/^/      /'
@@ -80,7 +80,14 @@ fi
 step "③ 分诊：trigger_kind 把「保守兜底」与「精确」分开 + tight 档确实少掉它"
 python3 selfhost/gcroot_audit.py --json > "$W/loose.json" 2> "$W/loose.err" || bad "loose 扫描失败"
 python3 selfhost/gcroot_audit.py --json --indirect tight > "$W/tight.json" 2>/dev/null || bad "tight 扫描失败"
-python3 - "$W/loose.json" "$W/tight.json" <<'PY' > "$W/triage.log" 2>&1
+# ⚠️ M214：分诊是**关于触发点来源**（precise/conservative）的性质，与三条豁免**正交**；
+#   而默认档现在是 **0 候选**（4 条已判据化）⇒ 「conservative 候选在场」无从观察。
+#   ⇒ 分诊层另取一份 **三豁免关闭** 的扫描（= M213 当时的候选面），判据本身不变；
+#     ⑤/⑥ 仍用**默认档**（候选 0）。两档并存是有意的：豁免与分诊各自独立可测。
+NOEX="--no-postdead --no-globalout --no-argread"
+python3 selfhost/gcroot_audit.py --json $NOEX > "$W/tri_loose.json" 2>/dev/null || bad "分诊档扫描失败"
+python3 selfhost/gcroot_audit.py --json --indirect tight $NOEX > "$W/tri_tight.json" 2>/dev/null || bad "分诊档 tight 扫描失败"
+python3 - "$W/tri_loose.json" "$W/tri_tight.json" <<'PY' > "$W/triage.log" 2>&1
 import json, sys
 lo = json.load(open(sys.argv[1], encoding='utf-8'))['findings']
 ti = json.load(open(sys.argv[2], encoding='utf-8'))['findings']
@@ -134,17 +141,17 @@ PY
 if grep -q '^PASS$' "$W/gcseed.log"; then ok "$(head -1 "$W/gcseed.log")"
 else bad "显式 GC 族覆盖面不符"; sed -n '2,6p' "$W/gcseed.log" | sed 's/^/      /'; fi
 
-step "⑤ F1 有牙（A/B）：默认候选 4 ⇄ --no-callee-keep 候选 7"
+step "⑤ F1 有牙（A/B）：默认候选 0 ⇄ --no-callee-keep 候选 3"
 python3 selfhost/gcroot_audit.py --json --no-callee-keep > "$W/nof1.json" 2> "$W/nof1.err" || bad "F1 关闭扫描失败"
 N_ON=$(count_cand "$W/loose.json"); N_OFF=$(count_cand "$W/nof1.json")
-[ "${N_ON:-x}" = 4 ] && ok "默认（F1 开）候选 4" || bad "默认候选 ${N_ON:-?}（期望 4）"
-[ "${N_OFF:-x}" = 7 ] && ok "F1 关 ⇒ 候选 7（多出 3 条 = 被 F1 豁免的 h3_send_fields/h3_fields_to_request×2）" \
-                      || bad "F1 关候选 ${N_OFF:-?}（期望 7）—— 规则无牙"
+[ "${N_ON:-x}" = 0 ] && ok "默认（F1 开）候选 0" || bad "默认候选 ${N_ON:-?}（期望 0）"
+[ "${N_OFF:-x}" = 3 ] && ok "F1 关 ⇒ 候选 3（= 被 F1 豁免的 h3_send_fields/h3_fields_to_request×2）" \
+                      || bad "F1 关候选 ${N_OFF:-?}（期望 3）—— 规则无牙"
 grep -q 'F1 表（被调方入口已登记形参）= 7 条' "$W/loose.err" \
     && ok "stderr 打印 F1 表规模（7 条；缺它=规则静默失效）" \
     || bad "未打印 F1 表规模诊断行"
 
-step "⑥ 候选 4 ⇄ m206 BASELINE §① 逐条一致（判据不放水）"
+step "⑥ 候选 0 ⇄ m206 BASELINE §① 逐条一致（判据不放水）"
 python3 - "$W/loose.json" examples/m206_gcroot/BASELINE.tsv <<'PY' > "$W/align.log" 2>&1
 import json, sys
 from collections import Counter
@@ -267,7 +274,9 @@ PY
     LXValue nd = px_dict();
     PX_KEEP(nd);" "    LXValue sess = px_session_read(g_cur_sid);
     LXValue nd = px_dict();" C; then
-        python3 "$AUD" --json > "$W/negC.json" 2>/dev/null
+        # ⚠️ M214：同 ③ —— 关掉三条窄条件豁免再数，否则「缺陷 293 的修复」这条负控
+        #   会被 R-A/R-B/R-C 部分吸收（实测候选 1 < 期望 5）⇒ 假红。
+        python3 "$AUD" --json --no-postdead --no-globalout --no-argread > "$W/negC.json" 2>/dev/null
         NC=$(count_cand "$W/negC.json")
         if [ "${NC:-0}" -ge 5 ] && grep -q 'bi_session_del' "$W/negC.json"; then
             ok "负控 C 判红：撤 bi_session_del 的登记 ⇒ 候选 ${NC}（≥5，session_del 重新冒出来）"
@@ -286,8 +295,10 @@ echo '  ℹ️ 本门覆盖：**静态**（派生两面 · 分诊 · 覆盖面 �
 echo '  ℹ️ 动态覆盖**不重复**：HTTP/session 面在 `examples/m206_gcroot/`（两档 40 请求）；'
 echo '     route 面（缺陷 298 改的就是它）在 `examples/m173_http_proxy/`（M211 起压力档 PASS）'
 echo '     —— 二者都在 `selfhost/m116_gates.sh` 全量门里跑。'
-echo '  ℹ️ **未**判据化（下一轮候选）：① 「全局表持有」（`g_routes[i].handler` / `g_vhosts[].handler`）'
-echo '     ⇒ 候选 #2/#3 仍需人工判定；② 「后置存活」（受害者读点在触发点之后）⇒ 候选 #1/#4。'
+echo '  ℹ️ 判据缺口（M213 登记 → **M214 收口**）：① 「全局表持有」⇒ **R-B（全局根可达）**；'
+echo '     ② 「后置存活 / 提前返回」⇒ **R-A**；③ 「实参已读完才分配」⇒ **R-C** ——'
+echo '     三条都下沉为判据（见 `examples/m214_audit_exempt/`），全仓候选 4 → **0**。'
+echo '     仍未判据化：「保守兜底·过近似」触发点仍参与候选 · F1 只覆盖直接调用 · R-C 依赖文本序。'
 echo '  ℹ️ 间接调用档位默认 `loose`（**有意过近似**，宁多收）：实测收紧会让 160 个函数离开'
 echo '     TRIGGER，其中含显式 GC 族 ⇒ **会新造漏报**，故只作分诊用。'
 

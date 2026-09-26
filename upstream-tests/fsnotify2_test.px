@@ -1,0 +1,63 @@
+# fsnotify 0.2.0 测试：递归快照 + 事件序列 + 过滤（双模式一致）
+import "../registry/fsnotify/0.2.0/fsnotify.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    var dir = "/tmp/fsn2-" + os_random_hex(4)
+    mkdir(dir)
+    mkdir(dir + "/a")
+    mkdir(dir + "/b")
+    write_file(dir + "/a/x.txt", "v1")
+    write_file(dir + "/a/y.log", "log1")
+    write_file(dir + "/b/z.txt", "v1")
+    # 递归快照：收录子目录内文件（相对路径）
+    var snap1 = fsn_snapshot_rec(dir)
+    expect(snap1.is_ok(), "递归快照 Ok")
+    var s1 = snap1.unwrap()
+    expect(s1.has("a/x.txt") and s1.has("a/y.log") and s1.has("b/z.txt"),
+        "递归应含 a/x.txt a/y.log b/z.txt: " + str(s1.keys()))
+    expect(s1.has("a") and s1.has("b"), "应含子目录项")
+    # 0.1.0 兼容：单层快照只有 a、b
+    var s01 = fs_snapshot(dir).unwrap()
+    expect(s01.has("a") and s01.has("b") and not s01.has("a/x.txt"), "单层快照兼容")
+    # 修改 a/x.txt（加长 → size 变）、新增 b/new.txt、删除 b/z.txt
+    sleep(1100)
+    write_file(dir + "/a/x.txt", "v2-longer-content")
+    write_file(dir + "/a/y.log", "log2")
+    write_file(dir + "/b/new.txt", "new")
+    remove(dir + "/b/z.txt")
+    var snap2 = fsn_snapshot_rec(dir).unwrap()
+    var d = fs_diff(s1, snap2)
+    expect(contains(str(d["modified"]), "a/x.txt"), "modified a/x.txt: " + str(d))
+    expect(contains(str(d["modified"]), "a/y.log"), "modified a/y.log: " + str(d))
+    expect(contains(str(d["added"]), "b/new.txt"), "added b/new.txt: " + str(d))
+    expect(contains(str(d["removed"]), "b/z.txt"), "removed b/z.txt: " + str(d))
+    expect(fs_has_change(d), "有变化")
+    # 事件序列
+    var ev = fsn_events(d)
+    expect(len(ev) == 4, "事件数 4，got " + str(len(ev)))
+    expect(ev[0]["kind"] == "added" and ev[0]["path"] == "b/new.txt", "事件1 added")
+    expect(ev[1]["kind"] == "modified", "事件2 modified")
+    # 过滤：只留 .txt（排掉 a/y.log）
+    var ft = fsn_filter(d, [".txt"])
+    expect(not contains(str(ft["modified"]), "y.log"), "过滤后不含 y.log")
+    expect(contains(str(ft["modified"]), "x.txt"), "过滤后仍含 x.txt")
+    expect(contains(str(ft["added"]), "new.txt"), "过滤后 added new.txt")
+    # 排除：去掉含 "b/" 的路径（只剩 a/* 的 modified）
+    var fe = fsn_exclude(d, ["b/"])
+    expect(len(fe["added"]) == 0 and len(fe["removed"]) == 0, "排除后 b/* 不应出现")
+    expect(contains(str(fe["modified"]), "x.txt"), "仍含 a/x.txt")
+    expect(contains(str(fe["modified"]), "y.log"), "排除 b/ 不应影响 a/y.log: " + str(fe))
+    # 错误路径
+    expect(fsn_snapshot_rec(dir + "/no-such").is_err(), "不存在目录 → Err")
+    # 清理
+    remove(dir + "/a/x.txt")
+    remove(dir + "/a/y.log")
+    remove(dir + "/b/new.txt")
+    remove(dir + "/a")
+    remove(dir + "/b")
+    remove(dir)
+    print("fsnotify 0.2.0: PASS")
+    return Ok(0)

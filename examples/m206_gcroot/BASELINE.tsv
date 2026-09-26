@@ -3,6 +3,12 @@
 # 规则：判定只允许「假阳」；出现「真」= 有未修的漏登记 ⇒ 门必红。
 #
 # ⚠️ M209（第 88 轮）**本表已收敛为 0 条**：M206 那 8 条「人工判定」已**下沉为判据**
+# ── M214（第 93 轮 · 缺陷 302/303/304）**判据化**掉的 4 条（仅存档） ──
+# ARCHIVE	runtime/runtime.c	bi_http_unix	px_net_err(	headers	假阳	**提前 return**：`px_net_err(` 位于 `h_exchange(...) != 0` 的**错误分支末**，该分支置 `errno`→`xfree`→`close`→**立即 `return`** ⇒ 触发点之后**不再读** `headers`（`px_net_err` 内部 `px_str(buf)` 是唯一分配，它回收的 `headers` 此时已死）⇒ 无悬垂读
+# ARCHIVE	runtime/runtime.c	px_http_dispatch	px_pxserve_defer(	vhandler	假阳	**全局表持有**：`vhandler` 由 `px_vhost_resolve(..., &vhandler, ...)` 输出，而handler 存在**文件级全局** `g_vhosts[]`（`PxVhost.handler`，源码注释明写「px_set_global 保护防 GC 回收」）⇒ 对象**本就是 GC 根**，登记与否无关
+# ARCHIVE	runtime/runtime_route.c	px_route_try_dispatch	px_rate_limit_try(	handler	假阳	① **触发点是过近似**（`trigger_kind=conservative`：`px_rate_limit_try` 体内只有裸 `xmalloc`/`snprintf`，**无任何 `gc_register` 级调用** —— 因 `while (*pp)`/`sizeof(*b)` 被宽松档收为间接调用，见缺陷 295）；② 即便按精确档换到真触发点（`route_send`/`px_pxserve_defer`），`handler` 仍**恒安全** —— 它来自**全局** `g_routes[i].handler` ⇒ 本就是 GC 根。⚠️ 同处的 `params` 已由**缺陷 298**（登记前移 + 429 分支补 `px_root_pop()`）从受害面移除
+# ARCHIVE	runtime/runtime_xml.c	xml_build_node	bi_xml_escape(	sv	假阳	`bi_xml_escape` 体内**唯一**分配点是 `:333 px_str(out.data)`，它晚于 `:319-320` 对 `args[0]` 的读取与 `:322-332` 对 `s` 的**全部消费**（循环里 `xbuf_push` 走裸 `realloc`，不 `gc_register`）⇒ 到达触发点时 `sv` 已死（**后置存活**判据）
+#
 #   （见 §② 档案区），故扫描器不再报出它们 ⇒ 「候选 ⇄ 基线」两空集，门仍逐条对齐。
 #   ⇒ 现在本表是**安全网**（防「判据改松了、新缺陷被漏掉」）：任何**新增候选**都必须进表，
 #     且判据只允许「假阳」；出现「真」即未修缺陷。
@@ -10,6 +16,17 @@
 #     层 ⑤「判据回放」与 `--self-test` 的 16 锚点共同把守（含 3 条**反向判据**）。
 #
 # ── §① 当前在册候选（必须与扫描结果**逐条**一致） ──────────────────────────────
+#
+# ⚠️ M214（第 93 轮 · 缺陷 302/303/304）**本表 4 条 → 0 条**：§① 那 4 条「人工判定」已
+#   **全部下沉为判据**（三条**窄条件豁免**，各配一条反向判据）：
+#   · **R-A 提前返回不可达**（缺陷 302）⇒ 消 `bi_http_unix ← px_net_err( · headers`；
+#   · **R-B 全局根可达**（缺陷 303）⇒ 消 `px_http_dispatch ← px_pxserve_defer( · vhandler`
+#     与 `px_route_try_dispatch ← px_rate_limit_try( · handler`（出参写出全是全局表元素）；
+#   · **R-C `&victim` + 被调方先读参后分配**（缺陷 304）⇒ 消 `xml_build_node ← bi_xml_escape( · sv`。
+#   ⇒ 扫描器不再报出它们 ⇒ 「候选 ⇄ 基线」两空集，门仍逐条对齐；本表继续作**安全网**。
+#   ⚠️ 三条规则的**精确性**由 `examples/m214_audit_exempt/` 的「判据回放」把守：
+#     撤 `px_route_try_dispatch` 的 `PX_KEEP(params)` ⇒ 必须报出 `params@379`，
+#     而**同一个调用**上的 `handler@379`（全局根）仍被豁免 —— 同语句、两个出参、一豁免一报出。
 #
 # ⚠️ M212（第 91 轮 · 缺陷 288 · 历史）**本表曾从 0 条 → 3 条**：触发点集合改为
 #   **源码派生**（`selfhost/gcroot_derive.py`；手抄 27 → 派生 524）⇒ 此前被手抄集合
@@ -30,10 +47,6 @@
 #     收窄到只剩 `handler`（见下判定）。
 #
 # 列（在册区 · 非注释行）：file<TAB>func<TAB>trigger<TAB>victim<TAB>判定<TAB>理由
-runtime/runtime.c	bi_http_unix	px_net_err(	headers	假阳	**提前 return**：`px_net_err(` 位于 `h_exchange(...) != 0` 的**错误分支末**，该分支置 `errno`→`xfree`→`close`→**立即 `return`** ⇒ 触发点之后**不再读** `headers`（`px_net_err` 内部 `px_str(buf)` 是唯一分配，它回收的 `headers` 此时已死）⇒ 无悬垂读
-runtime/runtime.c	px_http_dispatch	px_pxserve_defer(	vhandler	假阳	**全局表持有**：`vhandler` 由 `px_vhost_resolve(..., &vhandler, ...)` 输出，而handler 存在**文件级全局** `g_vhosts[]`（`PxVhost.handler`，源码注释明写「px_set_global 保护防 GC 回收」）⇒ 对象**本就是 GC 根**，登记与否无关
-runtime/runtime_route.c	px_route_try_dispatch	px_rate_limit_try(	handler	假阳	① **触发点是过近似**（`trigger_kind=conservative`：`px_rate_limit_try` 体内只有裸 `xmalloc`/`snprintf`，**无任何 `gc_register` 级调用** —— 因 `while (*pp)`/`sizeof(*b)` 被宽松档收为间接调用，见缺陷 295）；② 即便按精确档换到真触发点（`route_send`/`px_pxserve_defer`），`handler` 仍**恒安全** —— 它来自**全局** `g_routes[i].handler` ⇒ 本就是 GC 根。⚠️ 同处的 `params` 已由**缺陷 298**（登记前移 + 429 分支补 `px_root_pop()`）从受害面移除
-runtime/runtime_xml.c	xml_build_node	bi_xml_escape(	sv	假阳	`bi_xml_escape` 体内**唯一**分配点是 `:333 px_str(out.data)`，它晚于 `:319-320` 对 `args[0]` 的读取与 `:322-332` 对 `s` 的**全部消费**（循环里 `xbuf_push` 走裸 `realloc`，不 `gc_register`）⇒ 到达触发点时 `sv` 已死（**后置存活**判据）
 #
 # ── §② 档案区：M206 的 8 条人工判定 → M209 已下沉为**判据**（仅存档，扫描器不再报） ──
 #  为什么留档：① 它们是「判据成形」的史料（哪条形状曾被人工判过）；② 后人若怀疑

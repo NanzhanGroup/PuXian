@@ -1,0 +1,138 @@
+# ============================================================
+# 普贤生态库：registry/lz4 —— LZ4 block 格式压缩（纯 .px 实现）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态、无并发），编译（px build）与解释（px run）双模式一致。
+# 对应缺口表「zstd/lz4/brotli/bzip2/xz 压缩族」中 lz4 项：
+#   lz_compress(data)   → Ok(bytes)   LZ4 block 压缩（贪心匹配 + 4 字节哈希）
+#   lz_decompress(data) → Ok(bytes) | Err   LZ4 block 解压（兼容任意合法 block）
+# 说明：
+#   - block 格式（无 size 头），与 Python lz4.block（store_size=False）互通
+#   - 解压兼容任何合法 LZ4 block（python lz4.block.compress 输出已验证）
+#   - 编码：4 字节哈希表贪心最长匹配；遵守「末尾≥5 字面量」约定；小输入/解释轨性能有限
+#   - 输入/输出均为 bytes；对比用 bytes_to_hex
+# ============================================================
+# 4 字节 → 哈希键（小端 int）
+def lz_key(data, i):
+    return bytes_get(data, i) + bytes_get(data, i + 1) * 256 +
+        bytes_get(data, i + 2) * 65536 + bytes_get(data, i + 3) * 16777216
+# 单字节 bytes
+def lz_byte(v):
+    return int_to_bytes(v, 1, "little", false)
+# 匹配长度：data[a...] 与 data[b...] 最大共同前缀
+def lz_match_len(data, a, b, n):
+    var ml = 0
+    while b + ml < n and bytes_get(data, a + ml) == bytes_get(data, b + ml):
+        ml += 1
+    return ml
+# 追加一个完整序列：token + lit 扩展 + 字面量 [+ offset + match 扩展]
+# ls..pos 为字面量区间；has_match 时附加 (offset, mlen)
+def lz_flush(out, data, ls, pos, offset, mlen, has_match):
+    var litlen = pos - ls
+    var t = 0
+    if litlen >= 15:
+        t = t + 240
+    else:
+        t = t + litlen * 16
+    if has_match:
+        var mbase = mlen - 4
+        if mbase >= 15:
+            t = t + 15
+        else:
+            t = t + mbase
+    out = bytes_concat(out, lz_byte(t))
+    var rem = litlen - 15
+    while rem >= 255:
+        out = bytes_concat(out, lz_byte(255))
+        rem = rem - 255
+    if litlen >= 15:
+        out = bytes_concat(out, lz_byte(rem))
+    if litlen > 0:
+        out = bytes_concat(out, bytes_slice(data, ls, pos))
+    if has_match:
+        out = bytes_concat(out, int_to_bytes(offset, 2, "little", false))
+        var rem2 = mlen - 4 - 15
+        while rem2 >= 255:
+            out = bytes_concat(out, lz_byte(255))
+            rem2 = rem2 - 255
+        if mlen - 4 >= 15:
+            out = bytes_concat(out, lz_byte(rem2))
+    return out
+# 压缩：4 字节哈希表贪心最长匹配
+def lz_compress(data):
+    var n = bytes_len(data)
+    var out = bytes("")
+    var pos = 0
+    var ls = 0
+    var tab = {}
+    while pos + 4 <= n:
+        var key = str(lz_key(data, pos))
+        var cand = -1
+        if tab.has(key):
+            cand = tab[key]
+        tab.set(key, pos)
+        var dist = 0
+        var mlen = 0
+        if cand >= 0 and pos - cand <= 65535:
+            dist = pos - cand
+            mlen = lz_match_len(data, cand, pos, n)
+        if mlen >= 4:
+            # LZ4 block 约定：末尾至少 5 字节必须为字面量（python-lz4 强制）
+            if pos + mlen + 5 > n:
+                mlen = n - 5 - pos
+            if mlen >= 4:
+                out = lz_flush(out, data, ls, pos, dist, mlen, true)
+                pos = pos + mlen
+                ls = pos
+            else:
+                pos = pos + 1
+        else:
+            pos = pos + 1
+    out = lz_flush(out, data, ls, n, 0, 0, false)
+    return Ok(out)
+# 解压
+def lz_decompress(data):
+    var n = bytes_len(data)
+    var out = bytes("")
+    var ip = 0
+    while ip < n:
+        var token = bytes_get(data, ip)
+        ip = ip + 1
+        var litlen = token // 16
+        if litlen == 15:
+            while true:
+                if ip >= n:
+                    return Err("lz4: 字面量长度扩展越界")
+                var b = bytes_get(data, ip)
+                ip = ip + 1
+                litlen = litlen + b
+                if b != 255:
+                    break
+        if ip + litlen > n:
+            return Err("lz4: 字面量越界")
+        if litlen > 0:
+            out = bytes_concat(out, bytes_slice(data, ip, ip + litlen))
+            ip = ip + litlen
+        if ip >= n:
+            break
+        if ip + 2 > n:
+            return Err("lz4: 匹配缺 offset")
+        var off = bytes_get(data, ip) + bytes_get(data, ip + 1) * 256
+        ip = ip + 2
+        if off == 0 or off > bytes_len(out):
+            return Err("lz4: 非法 offset " + str(off))
+        var mlen = token % 16 + 4
+        if token % 16 == 15:
+            while true:
+                if ip >= n:
+                    return Err("lz4: 匹配长度扩展越界")
+                var b2 = bytes_get(data, ip)
+                ip = ip + 1
+                mlen = mlen + b2
+                if b2 != 255:
+                    break
+        var src = bytes_len(out) - off
+        var k = 0
+        while k < mlen:
+            out = bytes_concat(out, bytes_slice(out, src + k, src + k + 1))
+            k = k + 1
+    return Ok(out)

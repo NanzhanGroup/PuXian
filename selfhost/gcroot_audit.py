@@ -23,10 +23,17 @@
 #      · 作用域：受害者的**声明块**在触发点之前已闭合 ⇒ 读不到（按**块身份**，不按括号深度）；
 #      · deref 交棒：`*outv = …` 交给调用方（与 `return` 同口径）。
 #   反向判据（防「改判 = 把工具改瞎」）：self-test 里的 hit6b / hit7 / hit8 三条。
+#   三条 M214 豁免（缺陷 302/303/304，把 4 条人工判定下沉为判据；**都是「加条件才豁免」**）：
+#      · R-A 提前返回不可达：触发点**就是** `return <表达式>`、且表达式不含受害者；
+#      · R-B 全局根可达：受害者由出参交回、该出参的写出**全部**来自全局表元素；
+#      · R-C `&victim` + 被调方「全部形参读在首次触发点之前」。
+#      ⚠️ 首版 R-A 写成「触发点之后再无读」（后置死值）⇒ 一口吃掉 6 条既有锚点
+#        （hit5/hit6b/hit7/hit8/hit9/hit10，它们正是**真形状**）⇒ 当场收紧。
+#        反向判据 = hit11 / hit12 / hit13。
 #
 # 用法：
 #   python3 selfhost/gcroot_audit.py [--files f1 f2 ...] [--json] [--show-victims]
-#   python3 selfhost/gcroot_audit.py --self-test        # 自证（19 锚点 = 10 必中 + 9 必不中）
+#   python3 selfhost/gcroot_audit.py --self-test        # 自证（25 锚点 = 13 必中 + 12 必不中）
 #   python3 selfhost/gcroot_audit.py --grow             # **旧规则对照**（复现 M208 的 11 条）
 # ============================================================
 import argparse
@@ -222,6 +229,70 @@ LVALUE_TAIL_RX = re.compile(
 _REGISTER_RX = re.compile(
     r'\b(gc_register|PX_KEEP|px_root_keep|px_root_push_keep)\s*\(')
 
+# ============================================================
+# M214（第 93 轮 · 缺陷 302/303/304）：三条**窄而健全**的豁免规则
+#   目的：把 M213 收尾时剩下的 4 条候选（当时全靠人工判定「假阳」）下沉为**判据**。
+#   ⚠️ 三条规则都是「**加一条必须成立的条件才豁免**」——绝不放开到「凡不危及都豁免」：
+#     本轮实测反例：把 R-A 写成「触发点之后本函数内再无读」（后置死值）⇒ 一口吃掉
+#     **6 条既有锚点**（hit5/hit6b/hit7/hit8/hit9/hit10），而那些 fixture 正是**真形状**。
+#     本审计器的本分是**规则合规**（创建后必须登记），只接受「**语义上确定不会再读**」
+#     这一类豁免。**反向判据**（hit11/hit12）守的就是这条线。
+#
+#   · R-A「提前返回不可达」（缺陷 302）
+#       触发点**就是** `return <表达式>;` 里的那个分配，且该表达式**不含受害者**
+#       ⇒ 之后不可能再读它（函数立即退出）。实证：`bi_http_unix` 的错误支
+#       （`if (h_exchange(…) != 0) { …; return px_net_err(…); }` 里的 `headers`）。
+#       ⚠️ 反向：`return px_list_n(res, 2);` 的表达式**含** `res` ⇒ **不豁免**（hit5）。
+#
+#   · R-B「全局根可达」（缺陷 303）
+#       受害者是由**出参**交回来的，而该出参在**被调方体内**的写出**全部**是全局表元素
+#       （`*out_handler = g_vhosts[i].handler` / `*handler_out = g_routes[i].handler`）
+#       ⇒ 它本就是 GC 根（全局槽是根面之一）。
+#       ⚠️ **按形参逐一判定**：`route_match` 里 `handler_out`（全局）与 `params_out`
+#         （`*params_out = params;` 本地构造）**并存** —— 这构成 R-B 的天然精确性检验
+#         （handler 豁免 / params 不豁免）。反向判据 = hit12。
+#
+#   · R-C「`&victim` 实参 + 被调方先读参后分配」（缺陷 304）
+#       调用点把 `&victim` 交给一个被调方，而该被调方的**全部形参读**都发生在它的
+#       **首次触发点之前** ⇒ 实参字节已被读完/拷走，之后再触发 GC 不会伤到调用点。
+#       实证：`xml_build_node` 的 `sv`（`bi_xml_escape` 的**唯一**分配点 `px_str(out.data)`
+#       在所有 `args[0]` 读之后）。
+#       ⚠️ **触发条件必须是 `&victim`**：传裸值（`f(v)`）时被调方可能把 `v` 存下来
+#         ⇒ 本判据不作保证（这正是 hit8 `px_str_concat(v, …)` 与 hit11 不被豁免的原因）。
+# ============================================================
+POST_DEAD_ON = True      # R-A（名保留：`--no-postdead`）
+GLOBAL_OUT_ON = True     # R-B
+ARG_READ_FIRST_ON = True  # R-C
+# 全局根表达式：`g_xxx` / `g_xxx[i]` / `g_xxx[i].field` / `g_xxx->f[0]`（可多级）
+GLOBAL_EXPR_RX = re.compile(
+    r'^\s*(?:&\s*)?g_[A-Za-z_][A-Za-z0-9_]*'
+    r'(?:\s*\[[^\]]*\])*'
+    r'(?:\s*(?:\.|->)\s*[A-Za-z_][A-Za-z0-9_]*(?:\s*\[[^\]]*\])*)*'
+    r'\s*$')
+# 写出「安全表达式」的第二种形态：**非对象立即数**（`px_null()` / `px_int(…)` /
+#   `px_bool(…)` / `NULL` / `0`）—— 它们不引入**未登记的堆对象** ⇒ 与全局根同效。
+#   ⚠️ 实测（本轮）：`px_vhost_resolve` 开头有 `if (out_handler) *out_handler = px_null();`
+#      ⇒ 首版「**全部**写出必须是全局根」把它判 False ⇒ R-B 零豁免（假阴性）。
+#      条件放宽为「全局根 **或** 非对象立即数」后仍然**健全**：
+#      调用方变量里最终只可能是「全局根对象」或「非对象」—— 都不会是未登记的堆对象。
+SAFE_WRITE_RX = re.compile(
+    r'^\s*(?:px_null|px_int|px_bool|px_float|px_uninit)\s*\(|'
+    r'^\s*(?:NULL|0)\s*$')
+GLOBAL_OUT_MAP = {}      # {callee: {形参名: 是否全局根}}（**保持签名顺序**）
+ARG_READ_FIRST = {}      # {callee: True} —— 全部形参读都在首次触发点之前
+
+
+def set_global_out(m):
+    """M214 · R-B：注入「全局根出参」表。"""
+    global GLOBAL_OUT_MAP
+    GLOBAL_OUT_MAP = {k: dict(v) for k, v in m.items()}
+
+
+def set_arg_read_first(m):
+    """M214 · R-C：注入「先读参后分配」表。"""
+    global ARG_READ_FIRST
+    ARG_READ_FIRST = dict(m)
+
 
 def strip_comments_strings(src: str) -> str:
     """去掉注释与字符串/字符字面量的**内容**，保留换行与位置（行号一一对应）。"""
@@ -407,6 +478,125 @@ def brace_depth_map(code: str):
     return before, after
 
 
+def _load_derive():
+    """惰性导入 `gcroot_derive`（复用它的**跨行签名 + 平衡括号**扫描器）。"""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import gcroot_derive
+    return gcroot_derive
+
+
+def _ordered_params(sig):
+    """从签名里按**顺序**取形参名（每段最后一个标识符）。
+
+    ⚠️ 首版自己写「找第一个 `(`」在 `px_vhost_resolve` 上给出 `['out_root',
+      'out_root_sz','default_root']`（**漏了 `out_handler`**）⇒ R-B 零豁免。
+      这里复刻 `gcroot_derive.param_names` 的**平衡括号**取法（那是被 5 轮锚点
+      钉过的实现），但**保序**（R-B 需要 `实参序号 ↔ 形参名` 的配对）。
+    """
+    i = sig.find('(')
+    if i < 0:
+        return []
+    depth, j = 0, -1
+    for k in range(i, len(sig)):
+        if sig[k] == '(':
+            depth += 1
+        elif sig[k] == ')':
+            depth -= 1
+            if depth == 0:
+                j = k
+                break
+    if j <= i:
+        return []
+    names = []
+    for part in split_args(sig[i + 1:j] + ')'):
+        m = re.search(r'([A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^\]]*\])?\s*$', part.strip())
+        if m and m.group(1) != 'void':
+            names.append(m.group(1))
+    return names
+
+
+# ---- M214 · R-C 的前置：**不返回**的被调方（`__attribute__((noreturn))`）----
+#   `px_error` 声明为 noreturn（其 longjmp 路径也**不会**回到调用方继续执行）
+#   ⇒ 它内部的分配**不可能**让调用方的实参「先被回收、再被读」。
+NORETURN_NAMES = set()
+NORETURN_RX = re.compile(
+    r'\b([A-Za-z_][A-Za-z0-9_]*)\s*\([^;)]*\)\s*__attribute__\s*\(\s*\(\s*noreturn')
+
+
+def derive_noreturn(codes):
+    """M214：从源码/头文件的**声明**里派生 `noreturn` 函数名集合（不手抄）。"""
+    out = set()
+    for code in codes:
+        for m in NORETURN_RX.finditer(code):
+            out.add(m.group(1))
+    return out
+
+
+def derive_global_out(codes):
+    """M214 · R-B：{callee: {形参: 是否「写出**全部**是安全表达式」}}（保持签名顺序）。
+
+    安全表达式 = **全局根**（`g_xxx[i].field`）**或非对象立即数**（`px_null()` /
+      `px_int(…)` / `NULL` / `0`）—— 后者不引入未登记的堆对象，与全局根同效。
+    ⚠️ 只要有一处写出是「可能新建对象」的表达式 ⇒ 该形参判 False（保守）。
+    """
+    D = _load_derive()
+    out = {}
+    for code in codes:
+        for fname, _ln, sig, body in D.scan_functions(code):
+            names = _ordered_params(sig)
+            if not names:
+                continue
+            flags = {}
+            for p in names:
+                rx = re.compile(r'\*\s*' + re.escape(p) + r'\s*=([^;]*);')
+                writes = [m.group(1) for m in rx.finditer(body)]
+                if writes and all(GLOBAL_EXPR_RX.match(w) or SAFE_WRITE_RX.match(w)
+                                  for w in writes):
+                    flags[p] = True
+            if flags:
+                out[fname] = {p: flags.get(p, False) for p in names}
+    return out
+
+
+def derive_arg_read_first(codes, noreturn=None):
+    """M214 · R-C：{callee: True} —— **全部形参读**都在**首次触发点之前**。
+
+    即：实参的字节先被读完（/拷进别处），之后才发生第一次可能触发 GC 的分配
+    ⇒ 调用点把 `&victim` 交给它是安全的。
+    ⚠️ `noreturn` 被调方（`px_error`）**跳过**：它们的分配不会回到本帧继续用形参
+      （本轮实测：不跳过时 `bi_xml_escape` 的首次触发点是开头那句 `px_error(…)`
+       校验 ⇒ `max(形参读) < first` 恒不成立 ⇒ 零豁免 = 假阴性）。
+    """
+    D = _load_derive()
+    nr = set(noreturn or ())
+    out = {}
+    for code in codes:
+        for fname, _ln, sig, body in D.scan_functions(code):
+            names = _ordered_params(sig)
+            if not names:
+                continue
+            # ⚠️ M213 的老坑（本轮又踩）：`scan_functions` 的 `body` **含签名**，
+            #   而函数**自身**常是触发点 ⇒ 从头搜会**自命中**（`first` ≈ 0）
+            #   ⇒ `max(形参读) < first` 恒不成立 ⇒ R-C 整条**静默失效**（实测只剩 1 条）。
+            #   ⇒ 一律从**开括号之后**开始搜。
+            _bs = body.find('{')
+            _scan_from = _bs + 1 if _bs >= 0 else 0
+            first = None
+            for m in ALLOC_RX.finditer(body, _scan_from):
+                if m.group(1) in nr:
+                    continue
+                first = m.start()
+                break
+            if first is None:
+                continue
+            reads = [m.start() for p in names
+                     for m in re.finditer(r'\b' + re.escape(p) + r'\b', body)]
+            reads += [m.start() for m in re.finditer(r'\bargs\s*\[', body)]
+            if reads and max(reads) < first:
+                out[fname] = True
+    return out
+
+
 def audit_text(code: str, relpath: str):
     findings = []
     stats = {'funcs': 0, 'allocs': 0, 'keeps': 0}
@@ -416,7 +606,8 @@ def audit_text(code: str, relpath: str):
         decl_block = {}  # 基名 -> 声明块 id（`LXValue x` 语句所在块）
         stack = [0]      # 打开的块栈（id；0 = 函数体根）
         nxt = 1
-        for rel, stmt in split_statements(body):
+        _stmts = list(split_statements(body))
+        for _si, (rel, stmt) in enumerate(_stmts):
             abs_line = fline + rel
             text = stmt.strip()
             # M209（缺陷 281）· **作用域排除**：块栈按**身份**推进（每语句至多一个 `{`/`}`，
@@ -529,7 +720,8 @@ def audit_text(code: str, relpath: str):
                     #      M206 的 BASELINE.tsv 里有 5 条正是这两族（人工理由写着「死值」
                     #      「互斥分支」「触发点是下一轮迭代」）。
                     #   实测：加上这两条后，全仓候选 8 → 0（旧规则的 19 → 0）。
-                    vs = [{'name': k, 'line': v[0]}
+                    vs = [{'name': k, 'line': v[0],
+                           'glob': (len(v) > 2 and bool(v[2]))}
                           for k, v in sorted(live.items(), key=lambda kv: kv[1][0])
                           if k != overwrite]
                     # M213（缺陷 297）F1：被调方入口已登记该实参 ⇒ 调用点不构成风险
@@ -541,6 +733,42 @@ def audit_text(code: str, relpath: str):
                         if _drop:
                             stats['callee_keep'] = stats.get('callee_keep', 0) + len(_drop)
                             vs = [v for v in vs if v not in _drop]
+                    # ------------------------------------------------------------
+                    # M214（缺陷 302/303/304）：三条**窄而健全**的豁免
+                    # ------------------------------------------------------------
+                    _cal = m.group(0).strip().rstrip('(').strip()
+                    _cargs = split_args(text[m.end():])
+                    # R-C（缺陷 304）：`&victim` 实参 + 被调方「先读参后分配」
+                    if vs and ARG_READ_FIRST_ON and ARG_READ_FIRST.get(_cal):
+                        _amp = set()
+                        for _p in _cargs:
+                            _mm = re.match(r'\s*&\s*([A-Za-z_][A-Za-z0-9_]*)', _p)
+                            if _mm:
+                                _amp.add(_mm.group(1))
+                        if _amp:
+                            _rc = [v for v in vs
+                                   if re.split(r'[\[.\-]', v['name'])[0] in _amp]
+                            if _rc:
+                                stats['argread'] = stats.get('argread', 0) + len(_rc)
+                                vs = [v for v in vs if v not in _rc]
+                    # R-B（缺陷 303）：全局根可达（出参写出全部来自全局表元素）
+                    if vs and GLOBAL_OUT_ON:
+                        _g = [v for v in vs if v.get('glob')]
+                        if _g:
+                            stats['global_out'] = stats.get('global_out', 0) + len(_g)
+                            vs = [v for v in vs if v not in _g]
+                    # R-A（缺陷 302）：触发点**就是** return 的表达式、且表达式不含受害者
+                    if vs and POST_DEAD_ON and re.match(r'^return\b', text):
+                        _rexpr = text[len('return'):]
+                        _dead = []
+                        for _v in vs:
+                            _vn = re.split(r'[\[.\-]', _v['name'])[0]
+                            if _vn and not re.search(
+                                    r'\b' + re.escape(_vn) + r'\b', _rexpr):
+                                _dead.append(_v)
+                        if _dead:
+                            stats['post_dead'] = stats.get('post_dead', 0) + len(_dead)
+                            vs = [v for v in vs if v not in _dead]
                     if vs:
                         findings.append({
                             'file': relpath, 'line': abs_line, 'func': fname,
@@ -569,7 +797,7 @@ def audit_text(code: str, relpath: str):
                         # 作用域 = **声明**所在块（不是赋值语句所在块）—— 赋给外层已声明
                         #   变量（`v = px_str_len(…)` 在 switch 的 case 块里，而 `LXValue v;`
                         #   在外层）时，用赋值处的块会误剪 ⇒ **漏报**（违反审计器的本分）。
-                        live[key] = (abs_line, decl_block.get(base, stack[-1]))
+                        live[key] = (abs_line, decl_block.get(base, stack[-1]), False)
                 elif not PRODUCER_RX.search(rhs):
                     # 覆盖（RHS 本身不是分配）⇒ 旧值失效
                     lm = LVALUE_TAIL_RX.search(lhs_raw)
@@ -596,7 +824,10 @@ def audit_text(code: str, relpath: str):
                         _m2 = re.match(r'\s*&\s*([A-Za-z_][A-Za-z0-9_]*)', _part)
                         if _m2 and not ROOTED_LHS_RX.match(_m2.group(1)):
                             _on = _m2.group(1)
-                            live[_on] = (abs_line, decl_block.get(_on, stack[-1]))
+                            # M214 · R-B：该出参的写出**全部**来自全局根 ⇒ 记 glob
+                            _gm = GLOBAL_OUT_MAP.get(_fn) or {}
+                            _glob = bool(_gm.get(_names[_i]))
+                            live[_on] = (abs_line, decl_block.get(_on, stack[-1]), _glob)
             # ④b 消费：受害值作为赋值右值被存进别处（`slots[dst] = r;` / `x->f = v;`）
             lhs_raw2, rhs2 = find_assign(text)
             if lhs_raw2 is not None and rhs2 is not None and live:
@@ -870,6 +1101,89 @@ static LXValue bi_demo_capture(const char* cmd, int n) {
 '''
 
 
+# ==================== M214 新增锚点（缺陷 302/303/304） ====================
+# hit11（R-A 反向）：`return <表达式>` 里的表达式**含**受害者 ⇒ 不得豁免 ⇒ 必中。
+#   若这条不中，说明 R-A 把「真形状」也吃掉了（M207 缺陷 263 的形状：`xs` 之后还要用）。
+FIX_HIT11 = """
+static int f(void) {
+    LXValue v = px_str("a");
+    return (int)px_str_len(v.as.obj->as.str.data);
+}
+"""
+
+# miss10（R-A 正向）：触发点就是 return 的表达式、且表达式**不含**受害者 ⇒ 不中。
+#   真实形态：`bi_http_unix` 的错误支 `return px_net_err("…", e);`（受害者 `headers`）。
+FIX_MISS10 = """
+static int f(int e) {
+    LXValue headers = px_null();
+    if (e) {
+        return (int)px_str_len("boom");
+    }
+    return 0;
+}
+"""
+
+# hit12（R-B 反向）：出参写出是**本地构造**（`*out_handler = px_dict();`）
+#   ⇒ 不是全局根 ⇒ R-B 不得豁免 ⇒ 必中。
+#   （与 miss11 成对：同形参名、同位置，只差写出表达式 —— 这条构成 R-B 的**精确性**检验。）
+FIX_HIT12 = """
+static void px_out_local(int n, LXValue* out_handler) {
+    if (n) *out_handler = px_dict();
+}
+static int g(void) {
+    LXValue vh;
+    int has = 0;
+    px_out_local(1, &vh);
+    LXValue d = px_dict();
+    PX_KEEP(d);
+    px_dict_set(d, "v", vh);
+    return has;
+}
+"""
+
+# miss11（R-B 正向）：`*out_handler = g_vhosts[0].handler;` ⇒ 全局根 ⇒ 不中。
+#   ⚠️ `vh` 在触发点**之后仍被读**（`px_dict_set(d, "v", vh);`）⇒ R-A/R-C **都不会**帮忙
+#     ⇒ 本锚点**单独**检验 R-B（刻意的隔离设计）。
+FIX_MISS11 = """
+static void px_vhost_resolve(const char* h, const char* d, char* or_, int sz,
+                             LXValue* out_handler, int* has) {
+    *out_handler = g_vhosts[0].handler;
+    *has = 1;
+}
+static int g(void) {
+    LXValue vh;
+    int has = 0;
+    char root[64];
+    px_vhost_resolve("h", ".", root, 64, &vh, &has);
+    LXValue d = px_dict();
+    PX_KEEP(d);
+    px_dict_set(d, "v", vh);
+    return has;
+}
+"""
+
+# hit13（R-C 反向）：`&sv` 交给一个**未**标「先读参后分配」的被调方 ⇒ 必中。
+FIX_HIT13 = """
+static int demo_rc_bad(LXValue* args, int nargs, void* ctx) {
+    LXValue sv = px_str("a");
+    LXValue ev = px_str_n(&sv, 1);
+    return 0;
+}
+"""
+
+# miss12（R-C 正向）：`&sv` 交给 `bi_xml_escape`（已标「全部形参读在首次触发点之前」）
+#   ⇒ 实参字节已读完 ⇒ 不中。真实形态：`xml_build_node` 的 `sv`。
+#   ⚠️ 触发条件必须是 **`&victim`**：传裸值（`f(v)`）时被调方可能存下来 ⇒ 不豁免
+#     （这就是 hit8 `px_str_concat(v, …)` 与 hit11 不被豁免的原因）。
+FIX_MISS12 = """
+static int demo_rc_ok(LXValue* args, int nargs, void* ctx) {
+    LXValue sv = px_str("a");
+    LXValue ev = bi_xml_escape(&sv, 1, NULL);
+    return 0;
+}
+"""
+
+
 def self_test():
     # M209：自证覆盖**新规则**（默认档 = 触发点仅构造器 + 覆盖/作用域/deref 三条排除）。
     #   10 必中 + 9 必不中 = 19 锚点；其中 hit6b/hit7/hit8/hit9/hit10 是**反向判据**（证明排除规则没把
@@ -882,7 +1196,21 @@ def self_test():
         'px_as_list': {'v': False, 'out': True},
         # 位置配对的反例：两个形参都**不是** `LXValue*` ⇒ 不得记任何活值
         'mix2': {'slot': False, 'cnt': False},
+        # M214 · R-B 锚点用：`out_handler` 是出参，`has` 不是
+        'px_vhost_resolve': {'h': False, 'd': False, 'or_': False, 'sz': False,
+                             'out_handler': True, 'has': False},
+        'px_out_local': {'n': False, 'out_handler': True},
     })
+    # M214 · R-B 表（自证内嵌 fixture 用；真实档由 main() 从源码派生）
+    set_global_out({
+        'px_vhost_resolve': {'h': False, 'd': False, 'or_': False, 'sz': False,
+                             'out_handler': True, 'has': False},
+        'px_out_local': {'n': False, 'out_handler': False},
+    })
+    # M214 · R-C 锚点：需要一个「是触发点 + 被标为先读参后分配」的被调方
+    set_trigger_sets(list(_ALLOC_NAMES) + ['bi_xml_escape', 'px_str_n'],
+                     list(_ALLOC_NAMES) + ['bi_xml_escape', 'px_str_n'])
+    set_arg_read_first({'bi_xml_escape': True})
     cases = [('hit1', FIX_HIT1, True), ('hit2', FIX_HIT2, True),
              ('hit3', FIX_HIT3, True), ('hit4', FIX_HIT4, True),
              ('hit5', FIX_HIT5, True), ('hit6b', FIX_HIT6B, True),
@@ -892,7 +1220,14 @@ def self_test():
              ('miss3', FIX_MISS3, False), ('miss4', FIX_MISS4, False),
              ('miss5', FIX_HIT6, False), ('miss6', FIX_MISS6, False),
              ('miss7', FIX_MISS7, False), ('miss8', FIX_MISS8, False),
-             ('miss9', FIX_MISS9, False)]
+             ('miss9', FIX_MISS9, False),
+             # ---- M214（缺陷 302/303/304）：三条豁免 + 四条反向判据 ----
+             ('hit11', FIX_HIT11, True),      # R-A 反向：return 表达式**含**受害者 ⇒ 必中
+             ('miss10', FIX_MISS10, False),   # R-A 正向：return 表达式不含 ⇒ 不中
+             ('hit12', FIX_HIT12, True),      # R-B 反向：出参写出是本地构造 ⇒ 必中
+             ('miss11', FIX_MISS11, False),   # R-B 正向：出参写出来自全局表 ⇒ 不中
+             ('hit13', FIX_HIT13, True),      # R-C 反向：被调方**未**标先读参 ⇒ 必中
+             ('miss12', FIX_MISS12, False)]   # R-C 正向：被调方已标先读参 ⇒ 不中
     ok = fail = 0
     with tempfile.TemporaryDirectory() as td:
         for name, body, expect_hit in cases:
@@ -953,6 +1288,13 @@ def main():
     ap.add_argument('--no-out', action='store_true',
                     help='M213：**关闭 OUT-PRODUCER 规则**（出口参数式构造函数 ⇒ 活值入列）。'
                          '默认开启；本开关仅用于 A/B 与留证（复现 M212 的漏报面）。')
+    ap.add_argument('--no-postdead', action='store_true',
+                    help='M214（缺陷 302）：关闭 R-A「提前返回不可达」豁免（A/B 与负控用）。')
+    ap.add_argument('--no-globalout', action='store_true',
+                    help='M214（缺陷 303）：关闭 R-B「全局根可达」豁免（A/B 与负控用）。')
+    ap.add_argument('--no-argread', action='store_true',
+                    help='M214（缺陷 304）：关闭 R-C「&实参 + 被调方先读参后分配」豁免'
+                         '（A/B 与负控用）。')
     args = ap.parse_args()
     if args.self_test:
         return self_test()
@@ -1014,11 +1356,47 @@ def main():
         files = sorted(os.path.join(rtdir, f) for f in os.listdir(rtdir)
                        if f.endswith('.c'))
 
+    # M214：R-B / R-C 两张表都从**被扫描的源码**派生（不接受手抄名单）
+    global POST_DEAD_ON, ARG_READ_FIRST_ON
+    _codes = [open(p, encoding='utf-8', errors='replace').read() for p in files]
+    # R-C 的前置：`noreturn` 集合要连**头文件**一起扫（声明在 runtime.h）
+    _hdr = []
+    _rtdir = os.path.join(root, 'runtime')
+    if os.path.isdir(_rtdir):
+        _hdr = [open(os.path.join(_rtdir, f), encoding='utf-8', errors='replace').read()
+                for f in sorted(os.listdir(_rtdir)) if f.endswith('.h')]
+    global NORETURN_NAMES
+    NORETURN_NAMES = derive_noreturn(_codes + _hdr)
+    sys.stderr.write('# R-C 前置：noreturn 被调方 = %s\n'
+                     % (', '.join(sorted(NORETURN_NAMES)) or '（无）'))
+    if not args.no_globalout:
+        _go = derive_global_out(_codes)
+        set_global_out(_go)
+        sys.stderr.write('# R-B 全局根出参表 = %d 个函数\n' % len(_go))
+    else:
+        set_global_out({})
+        sys.stderr.write('# R-B 全局根出参表 = 0［--no-globalout ⇒ 关闭·A/B 用］\n')
+    if not args.no_argread:
+        _ar = derive_arg_read_first(_codes, NORETURN_NAMES)
+        set_arg_read_first(_ar)
+        sys.stderr.write('# R-C 先读参后分配表 = %d 个函数\n' % len(_ar))
+    else:
+        set_arg_read_first({})
+        sys.stderr.write('# R-C 先读参后分配表 = 0［--no-argread ⇒ 关闭·A/B 用］\n')
+    POST_DEAD_ON = not args.no_postdead
+    ARG_READ_FIRST_ON = not args.no_argread
+    if args.no_postdead:
+        sys.stderr.write('# R-A 提前返回不可达 = 关闭［A/B 用］\n')
+
     allf, tot = [], {'funcs': 0, 'allocs': 0, 'keeps': 0}
     for p in files:
         f, st = audit_file(p)
-        for k in ('funcs', 'allocs', 'keeps'):
-            tot[k] += st[k]
+        # ⚠️ M214：合并**全部**计数键 —— 原先只并 funcs/allocs/keeps
+        #   ⇒ `callee_keep` / `global_out` / `argread` / `post_dead` 的汇总**恒为 0**
+        #     （豁免明明发生了、报表却写着 0 ⇒ 判据与显示不一致）。
+        for k, v in st.items():
+            if isinstance(v, int):
+                tot[k] = tot.get(k, 0) + v
         allf.extend(f)
 
     if args.json:
@@ -1026,9 +1404,10 @@ def main():
         return 0
 
     print('扫描 %d 文件 · 函数 %d · 分配站点 %d · 登记站点 %d · **候选 %d**'
-          ' · F1 豁免 %d'
+          ' · F1 豁免 %d · R-C 豁免 %d · R-B 豁免 %d · R-A 豁免 %d'
           % (len(files), tot['funcs'], tot['allocs'], tot['keeps'], len(allf),
-             tot.get('callee_keep', 0)))
+             tot.get('callee_keep', 0), tot.get('argread', 0),
+             tot.get('global_out', 0), tot.get('post_dead', 0)))
     by_file = {}
     for f in allf:
         by_file.setdefault(f['file'], []).append(f)

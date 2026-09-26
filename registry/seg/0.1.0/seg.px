@@ -1,0 +1,141 @@
+# ============================================================
+# 普贤生态库：registry/seg —— 中文分词（正向最大匹配子集）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python jieba / Go gojieba 心智（0.1.0 词典子集）：
+#   sg_tokenize("我爱中国")          → ["我", "爱", "中国"]
+#   sg_tokenize("我们学习语文")       → ["我们", "学习", "语文"]
+#   sg_tokenize(s, ["大模型"])        → 可注入自定义词（合并到内置词典）
+#   sg_build(words)                  → dict（构造临时词典）
+# 实现：正向最大匹配（FMM）；默认最长 4 字；ASCII/数字连续串为单个 token；
+#   非中文（标点/中文未知字）单字成词。
+# 词典：内置常见二字/三字词子集（数据表可扩展）。
+# ============================================================
+# 内置词典（常用词子集；逗号分隔）
+const SG_WORDS = "中国,人民,我们,你们,他们,自己," +
+    "这个,那个,什么,时候,因为,所以," +
+    "但是,如果,工作,学习,电脑,手机," +
+    "北京,上海,广州,深圳,天津,学校," +
+    "老师,学生,朋友,家人,时间,今天," +
+    "明天,昨天,现在,已经,可以,没有," +
+    "知道,觉得,需要,应该,可能,还是," +
+    "或者,一起,东西,事情,天气,很好," +
+    "大家,问题,方法,地方,公司,技术," +
+    "数据,系统,网络,服务,平台,模型," +
+    "智能,开发,代码,项目,功能,支持," +
+    "更新,应用,用户,信息,文件,目录," +
+    "路径,测试,运行,编译,解释,语言," +
+    "编程,程序,机器,学习,深度,自然," +
+    "处理,大模型,语文,数学,英语,市民," +
+    "大陆,建设"
+#
+#
+#
+# 构建词典 → {"词": true}
+def sg_build(words):
+    var d = {}
+    var i = 0
+    while i < len(words):
+        d.set(words[i], true)
+        i += 1
+    return d
+# 内置词典（每次现建，纯函数无状态）
+def sg_dict():
+    return sg_build(SG_WORDS.split(","))
+# 是否中文字符（CJK 统一表意文字基本区）
+def sg_han(c):
+    var o = ord(c)
+    return o >= 0x4E00 and o <= 0x9FFF
+# 是否 ASCII 字母/数字（可连续成 token）
+def sg_alnum(c):
+    var o = ord(c)
+    return (o >= 48 and o <= 57) or (o >= 65 and o <= 90) or (o >= 97 and o <= 122)
+# 最大匹配分词：s + 额外词典（可选）→ token 列表
+def sg_tokenize(s, extra_words = []):
+    var d = sg_dict()
+    var i = 0
+    while i < len(extra_words):
+        d.set(extra_words[i], true)
+        i += 1
+    var out = []
+    var n = len(s)
+    var i0 = 0
+    while i0 < n:
+        var c = s[i0]
+        if not sg_han(c):
+            # ASCII/数字连续串合并为一个 token；其它单字符
+            if sg_alnum(c):
+                var run = c
+                var j = i0 + 1
+                while j < n and sg_alnum(s[j]):
+                    run = run + s[j]
+                    j += 1
+                out.append(run)
+                i0 = j
+            else:
+                out.append(c)
+                i0 += 1
+            continue
+        # 中文：FMM，最长 4 字
+        var got = ""
+        var ml = 4
+        var k = 0
+        while k < ml:
+            var end = i0 + (ml - k)
+            if end > n:
+                end = n
+            var w = s[i0:end]
+            if d.has(w):
+                got = w
+                k = ml
+            k += 1
+        if got != "":
+            out.append(got)
+            i0 = i0 + len(got)
+        else:
+            out.append(c)
+            i0 += 1
+    return out
+# FMM 长度受控版（max_len 可调）
+def sg_tokenize_max(s, max_len, extra_words = []):
+    var d = sg_dict()
+    var i = 0
+    while i < len(extra_words):
+        d.set(extra_words[i], true)
+        i += 1
+    var out = []
+    var n = len(s)
+    var i0 = 0
+    while i0 < n:
+        var c = s[i0]
+        if not sg_han(c):
+            if sg_alnum(c):
+                var run = c
+                var j = i0 + 1
+                while j < n and sg_alnum(s[j]):
+                    run = run + s[j]
+                    j += 1
+                out.append(run)
+                i0 = j
+            else:
+                out.append(c)
+                i0 += 1
+            continue
+        var got = ""
+        var m = 0
+        while m < max_len:
+            var end = i0 + (max_len - m)
+            if end > n:
+                end = n
+            var w = s[i0:end]
+            if d.has(w):
+                got = w
+                m = max_len
+            m += 1
+        if got != "":
+            out.append(got)
+            i0 = i0 + len(got)
+        else:
+            out.append(c)
+            i0 += 1
+    return out

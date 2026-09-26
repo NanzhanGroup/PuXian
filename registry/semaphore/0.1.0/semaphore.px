@@ -1,0 +1,52 @@
+# ============================================================
+# 普贤生态库：registry/semaphore —— 信号量（计数限流）
+# ------------------------------------------------------------
+# ⚠️ 含并发（mutex）—— 必须编译模式运行（px build）；
+#    解释器 px run 是 Mini 子集，无并发原语（PX-DEF-006）。
+# 对齐 Go x/sync/semaphore + Python threading.Semaphore 心智（0.1.0）：
+#   var sem = sp_new(2)               # 2 个许可
+#   sp_acquire(sem)                   # 阻塞直到有许可
+#   sp_try_acquire(sem) → Ok(true|false)（非阻塞尝试）
+#   sp_release(sem)                   # 归还许可（多归还 → Err）
+#   sp_available(sem)                 # 当前可用许可数
+# 实现：mutex 保护计数器 + 自旋等待（sleep 1ms）；无 native 条件变量。
+# ============================================================
+# 创建信号量 → 计数 dict
+def sp_new(n):
+    if n < 0:
+        return Err("semaphore: 许可数不能为负: " + str(n))
+    return Ok({"n": n, "used": 0, "mu": mutex()})
+# 阻塞式获取许可 → Ok(true)；许可耗尽时自旋等待
+def sp_acquire(sem):
+    while true:
+        sem["mu"].lock()
+        if sem["used"] < sem["n"]:
+            sem["used"] += 1
+            sem["mu"].unlock()
+            return Ok(true)
+        sem["mu"].unlock()
+        sleep(1)
+# 非阻塞尝试获取 → Ok(true) | Ok(false)
+def sp_try_acquire(sem):
+    sem["mu"].lock()
+    if sem["used"] < sem["n"]:
+        sem["used"] += 1
+        sem["mu"].unlock()
+        return Ok(true)
+    sem["mu"].unlock()
+    return Ok(false)
+# 归还许可 → Ok(true)；多归还（used=0）→ Err
+def sp_release(sem):
+    sem["mu"].lock()
+    if sem["used"] > 0:
+        sem["used"] -= 1
+        sem["mu"].unlock()
+        return Ok(true)
+    sem["mu"].unlock()
+    return Err("semaphore: 归还超过已获取（used=0）")
+# 当前可用许可数
+def sp_available(sem):
+    sem["mu"].lock()
+    var a = sem["n"] - sem["used"]
+    sem["mu"].unlock()
+    return a

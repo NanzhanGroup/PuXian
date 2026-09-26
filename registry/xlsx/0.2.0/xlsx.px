@@ -1,0 +1,266 @@
+# ============================================================
+# 普贤生态库：registry/xlsx —— 最小 .xlsx 写器 + 读器 · 0.2.0
+# ------------------------------------------------------------
+# ⚠️ 0.2.0 = 0.1.0 超集：保留全部 API，新增 命名样式 + 公式单元格。
+# 纯函数库（构建 parts 无 IO；写出时调 zip_pack），双模式验证
+# （zip 族 M201 已修复：m204 解释轨 zip_pack/zip_unpack 可用）。
+# 对齐 Python openpyxl / Rust rust_xlsxwriter 心智：
+#   xsx_new()                      → dict       新建文档（无工作表）
+#   xsx_style(doc, name, opts)     → dict       注册命名样式（返回新 doc）
+#     opts     = {"bold": true, "italic": true, "underline": true,
+#                 "color": "FF0000", "fill": "FFFF00", "size": 14,
+#                 "align": "left|center|right", "valign": "top|center|bottom"}
+#   xsx_add(doc, name, rows)       → dict       追加工作表（返回新 doc）
+#     cell     = str（inlineStr）| int/float（数字）| bool | null（空单元格）
+#              | {"v": 值, "style": "样式名"}             （带样式）
+#              | {"f": "SUM(A1:A2)", "v": 175, "style": "bold"}（公式单元格）
+#   xsx_write(doc, path)           → Ok | Err   写出 .xlsx（zip_pack）
+#   xsx_read(path) / xsx_read_sheet(path, idx) → Ok(rows)
+#     公式单元格读回 → {"f": 公式, "v": 缓存值}
+# 结构：Content_Types + rels + workbook + 每个 worksheet + 动态 styles
+#   （fonts/fills/cellXfs 按命名样式生成，单元格 s="xf 索引"）。
+# ============================================================
+import "xlsx_xml.px"
+# 新建文档
+def xsx_new():
+    var d = {}
+    d.set("sheets", [])
+    d.set("styles", {})
+    return d
+# 注册命名样式：opts 如上；名称唯一（重复注册覆盖）
+def xsx_style(doc, name, opts):
+    var nd = {}
+    var sheets = doc["sheets"]
+    var nsh = []
+    var i = 0
+    while i < len(sheets):
+        nsh.append(sheets[i])
+        i += 1
+    nd.set("sheets", nsh)
+    var st = {}
+    var old = doc["styles"]
+    var ks = old.keys()
+    var k = 0
+    while k < len(ks):
+        st.set(ks[k], old[ks[k]])
+        k += 1
+    st.set(name, opts)
+    nd.set("styles", st)
+    return nd
+# 追加工作表：name 区分大小写，rows 为 list of list
+def xsx_add(doc, name, rows):
+    var nd = {}
+    var sheets = doc["sheets"]
+    var nsh = []
+    var i = 0
+    while i < len(sheets):
+        nsh.append(sheets[i])
+        i += 1
+    var sh = {}
+    sh.set("name", name)
+    sh.set("rows", rows)
+    nsh.append(sh)
+    nd.set("sheets", nsh)
+    # 保留样式
+    var st = {}
+    var old = doc["styles"]
+    var ks = old.keys()
+    var k = 0
+    while k < len(ks):
+        st.set(ks[k], old[ks[k]])
+        k += 1
+    nd.set("styles", st)
+    return nd
+# 列字母：0→A, 25→Z, 26→AA, 27→AB ...
+def xsx_col_letter(idx):
+    var out = ""
+    var n = idx + 1
+    while n > 0:
+        var rem = (n - 1) % 26
+        out = chr(65 + rem) + out
+        n = (n - 1) // 26
+    return out
+# 生成全部 parts（dict 路径→内容）
+def xsx_parts(doc):
+    var sheets = doc["sheets"]
+    var plan = xp_styles_plan(doc["styles"])
+    var parts = {}
+    parts.set("[Content_Types].xml", xp_content_types(sheets))
+    parts.set("_rels/.rels", xp_root_rels())
+    parts.set("xl/workbook.xml", xp_workbook(sheets))
+    parts.set("xl/_rels/workbook.xml.rels", xp_workbook_rels(sheets))
+    parts.set("xl/styles.xml", plan["xml"])
+    var i = 0
+    while i < len(sheets):
+        var p = "xl/worksheets/sheet" + str(i + 1) + ".xml"
+        parts.set(p, xp_worksheet(sheets[i]["rows"], plan["idx"]))
+        i += 1
+    return parts
+# 写出 .xlsx（zip_pack 需编译轨）
+def xsx_write(doc, path):
+    var parts = xsx_parts(doc)
+    var ok = zip_pack(parts, path)
+    if not ok:
+        return Err("xlsx: zip 写出失败 " + path)
+    return Ok(0)
+# ============================================================
+# 读取（0.2.0）：公式单元格读回 {"f": 公式, "v": 缓存值}
+# ============================================================
+def o_col_letters(ref):
+    var out = ""
+    var i = 0
+    while i < len(ref) and ref[i] >= "A" and ref[i] <= "Z":
+        out = out + ref[i]
+        i += 1
+    return out
+def o_col_idx(letter):
+    var idx = 0
+    var i = 0
+    while i < len(letter):
+        idx = idx * 26 + (ord(letter[i]) - 64)
+        i += 1
+    return idx - 1
+def o_el_child(el, name):
+    var cs = el["children"]
+    var i = 0
+    while i < len(cs):
+        if type(cs[i]) == "dict" and cs[i]["name"] == name:
+            return cs[i]
+        i += 1
+    return null
+def o_el_text(el):
+    if el == null:
+        return ""
+    var t = el["text"]
+    if t == null:
+        return ""
+    return t
+def o_has_file(dir, name):
+    var items = list_dir(dir)
+    var i = 0
+    while i < len(items):
+        if items[i] == name:
+            return true
+        i += 1
+    return false
+# sharedStrings.xml → [str,...]（<si><t> 或富文本 <si><r><t>）
+def o_parse_shared(xml):
+    var root = xml_parse(xml)
+    var out = []
+    var cs = root["children"]
+    var i = 0
+    while i < len(cs):
+        var it = cs[i]
+        if type(it) == "dict" and it["name"] == "si":
+            var tel = o_el_child(it, "t")
+            var txt = ""
+            if tel != null:
+                txt = o_el_text(tel)
+            else:
+                txt = o_el_text(it)
+                if txt == "" and o_el_child(it, "r") != null:
+                    var j = 0
+                    var rc = it["children"]
+                    while j < len(rc):
+                        if type(rc[j]) == "dict" and rc[j]["name"] == "r":
+                            txt = txt + o_el_text(o_el_child(rc[j], "t"))
+                        j += 1
+            out <- txt
+        i += 1
+    return out
+def o_has_dot(v):
+    var i = 0
+    while i < len(v):
+        if v[i] == "." or v[i] == "e" or v[i] == "E":
+            return true
+        i += 1
+    return false
+# 单元格值解析（不含公式判断）
+def o_cell_val_parse(c, shared):
+    var t = null
+    if c["attrs"].has("t"):
+        t = c["attrs"]["t"]
+    var v = o_el_text(o_el_child(c, "v"))
+    if t == null or t == "n":
+        if v == "":
+            return null
+        if o_has_dot(v):
+            return float(v)
+        return int(v)
+    if t == "s":
+        var idx = int(v)
+        if idx >= 0 and idx < len(shared):
+            return shared[idx]
+        return ""
+    if t == "inlineStr":
+        var isel = o_el_child(c, "is")
+        if isel == null:
+            return ""
+        var tel = o_el_child(isel, "t")
+        if tel == null:
+            return ""
+        return o_el_text(tel)
+    if t == "b":
+        return v == "1"
+    return v
+# 单元格值（公式 → {"f", "v"}）
+def o_cell_val(c, shared):
+    var f = o_el_child(c, "f")
+    if f != null:
+        return {"f": o_el_text(f), "v": o_cell_val_parse(c, shared)}
+    return o_cell_val_parse(c, shared)
+# 工作表 XML → [[cell,...],...]
+def o_parse_sheet(xml, shared):
+    var root = xml_parse(xml)
+    var sd = o_el_child(root, "sheetData")
+    var rows = []
+    if sd == null:
+        return rows
+    var rcs = sd["children"]
+    var i = 0
+    while i < len(rcs):
+        var r = rcs[i]
+        if type(r) == "dict" and r["name"] == "row":
+            var vals = {}
+            var maxc = -1
+            var cs = r["children"]
+            var j = 0
+            while j < len(cs):
+                var c = cs[j]
+                if type(c) == "dict" and c["name"] == "c":
+                    var ref = "A1"
+                    if c["attrs"].has("r"):
+                        ref = c["attrs"]["r"]
+                    var col = o_col_idx(o_col_letters(ref))
+                    vals.set(str(col), o_cell_val(c, shared))
+                    if col > maxc:
+                        maxc = col
+                j += 1
+            var row = []
+            var k = 0
+            while k <= maxc:
+                if vals.has(str(k)):
+                    row <- vals[str(k)]
+                else:
+                    row <- null
+                k += 1
+            rows <- row
+        i += 1
+    return rows
+# 读取第 idx 个工作表（1 起）
+def xsx_read_sheet(path, idx):
+    var outdir = "/tmp/xsx_" + str(idx) + "_" + str(now_ms() % 1000000)
+    mkdir(outdir)
+    var ur = zip_unpack(path, outdir)
+    if ur < 0:
+        return Err("xlsx: zip 解压失败 " + path)
+    var xld = outdir + "/xl"
+    var shared = []
+    if o_has_file(xld, "sharedStrings.xml"):
+        shared = o_parse_shared(read_file(xld + "/sharedStrings.xml"))
+    var sheetp = xld + "/worksheets/sheet" + str(idx) + ".xml"
+    var rows = o_parse_sheet(read_file(sheetp), shared)
+    return Ok(rows)
+# 读取第一个工作表
+def xsx_read(path):
+    return xsx_read_sheet(path, 1)

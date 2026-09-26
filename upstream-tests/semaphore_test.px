@@ -1,0 +1,54 @@
+# semaphore.px 测试：⚠️ 编译模式（mutex 并发需要 px build）
+import "../registry/semaphore/0.1.0/semaphore.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def task(sem, st, done):
+    var ok = sp_acquire(sem)
+    st["mu"].lock()
+    st["cur"] += 1
+    if st["cur"] > st["peak"]:
+        st["peak"] = st["cur"]
+    st["mu"].unlock()
+    sleep(20)
+    st["mu"].lock()
+    st["cur"] -= 1
+    st["mu"].unlock()
+    sp_release(sem)
+    done.send (true)
+    return ok
+def main():
+    # 基础：try/available/release 语义
+    var sem = sp_new(2)
+    expect(sem.is_ok(), "sp_new Ok")
+    var s = sem.unwrap()
+    expect(sp_available(s) == 2, "初始可用 2")
+    expect(sp_try_acquire(s).unwrap(), "第 1 个 try 成功")
+    expect(sp_try_acquire(s).unwrap(), "第 2 个 try 成功")
+    expect(not sp_try_acquire(s).unwrap(), "第 3 个应失败（2 许可耗尽）")
+    expect(sp_available(s) == 0, "可用 0")
+    expect(sp_release(s).is_ok(), "release 成功")
+    expect(sp_available(s) == 1, "可用恢复 1")
+    expect(sp_try_acquire(s).unwrap(), "再取成功")
+    expect(sp_release(s).is_ok(), "释放")
+    expect(sp_release(s).is_ok(), "再释放")
+    expect(sp_release(s).is_err(), "多归还应 Err")
+    expect(sp_new(-1).is_err(), "负数许可应 Err")
+    # 并发上限：4 任务竞争 2 许可，持有时 sleep 20ms
+    var sem2 = sp_new(2).unwrap()
+    var st = {"cur": 0, "peak": 0, "mu": mutex()}
+    var done = chan [bool](4)
+    var i = 0
+    while i < 4:
+        spawn task(sem2, st, done)
+        i += 1
+    i = 0
+    while i < 4:
+        done.recv ()
+        i += 1
+    expect(st["peak"] == 2, "并发峰值应恰为 2（两轮并行），got " + str(st["peak"]))
+    expect(st["cur"] == 0, "结束后在途应为 0，got " + str(st["cur"]))
+    expect(sp_available(sem2) == 2, "结束后可用恢复 2")
+    print("semaphore: PASS")
+    return Ok(0)

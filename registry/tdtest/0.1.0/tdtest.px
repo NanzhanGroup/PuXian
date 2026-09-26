@@ -1,0 +1,61 @@
+# ============================================================
+# 普贤生态库：registry/tdtest —— 表驱动测试增强
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态、无并发），编译（px build）与解释（px run）双模式一致。
+# 对齐 Go testing 表驱动 + testify 心智（0.1.0，testkit 之上补充）：
+#   var cases = [
+#     {"name": "add1", "fn": f, "args": 1, "want": 2},
+#     {"name": "wide", "fn": g, "args": "x", "check": fn(r): contains(r, "a")}
+#   ]
+#   var r = td_run(cases)      # Ok({pass, fail, total, failures})
+# 约定：
+#   - fn 为单参函数 fn(arg) -> 实际值（动态多参非语言原生，单参覆盖常见场景）
+#   - 断言二选一：want（相等）或 check（谓词 fn(actual) -> bool）
+#   - 失败项收集 {name, got, want, err}，不 print、不 exit（由调用方决定呈现）
+# ============================================================
+# 单条案例执行 → "pass" | {fail: got/want/err}
+def td_one(c):
+    var name = "case"
+    if c.has("name"):
+        name = c["name"]
+    var got = c["fn"](c["args"])
+    if c.has("check"):
+        var ok = c["check"](got)
+        if ok:
+            return "pass"
+        return {"name": name, "got": got, "err": "check 谓词为 false"}
+    var want = null
+    var has_want = false
+    if c.has("want"):
+        want = c["want"]
+        has_want = true
+    if has_want and got == want:
+        return "pass"
+    if has_want:
+        return {"name": name, "got": got, "want": want}
+    return {"name": name, "err": "案例缺 want/check"}
+# 运行整张表 → Ok({pass, fail, total, failures})
+def td_run(cases):
+    var passed = 0
+    var failed = 0
+    var failures = []
+    var i = 0
+    while i < len(cases):
+        var r = td_one(cases[i])
+        if type(r) == "string" and r == "pass":
+            passed += 1
+        else:
+            failed += 1
+            var f = r
+            var name = "case"
+            if type(cases[i]) == "dict" and cases[i].has("name"):
+                name = cases[i]["name"]
+            if type(f) == "dict":
+                if not f.has("name"):
+                    f.set("name", name)
+                failures.append(f)
+            else:
+                failures.append({"name": name, "err": str(f)})
+        i += 1
+    return Ok({"pass": passed, "fail": failed,
+        "total": len(cases), "failures": failures})
