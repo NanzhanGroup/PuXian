@@ -1,0 +1,47 @@
+# actor.px 测试：⚠️ 编译模式（spawn/chan 并发需要 px build）
+import "../registry/actor/0.1.0/actor.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+# 计数器 actor 处理函数（顶层 def，作为函数值传给 ac_new）
+def cnt_inc(state, body):
+    state["n"] = state["n"] + body
+    return state["n"]
+def cnt_set(state, body):
+    state["n"] = body
+    return "ok"
+def cnt_get(state, _body):
+    return state["n"]
+def main():
+    var handlers = {"inc": cnt_inc, "set": cnt_set, "get": cnt_get}
+    var a = ac_new(handlers, {"n": 0})
+    # ac_call：发消息并等应答（顺序性）
+    var r1 = ac_call(a, "inc", 5)
+    expect(r1.is_ok() and r1.unwrap() == 5, "inc 5 → 5, got " + str(r1))
+    var r2 = ac_call(a, "inc", 7)
+    expect(r2.is_ok() and r2.unwrap() == 12, "inc 7 → 12, got " + str(r2))
+    var r3 = ac_call(a, "get", 0)
+    expect(r3.is_ok() and r3.unwrap() == 12, "get → 12")
+    # ac_send：fire-and-forget（邮箱 FIFO，先于后续 call 处理）
+    expect(ac_send(a, "set", 100).is_ok(), "send set 100")
+    var r4 = ac_call(a, "get", 0)
+    expect(r4.is_ok() and r4.unwrap() == 100, "send 后 get → 100, got " + str(r4))
+    # set 返回 "ok"
+    var r5 = ac_call(a, "set", 1)
+    expect(r5.is_ok() and r5.unwrap() == "ok", "set 返回 ok")
+    # 未注册消息 → ac_call Err
+    var r6 = ac_call(a, "missing", 1)
+    expect(r6.is_err(), "未注册消息名 → Err")
+    expect(contains(str(r6), "未注册"), "Err 信息含未注册")
+    # 状态引用共享：处理函数原地改 state，get 可见
+    var r7 = ac_call(a, "get", 0)
+    expect(r7.is_ok() and r7.unwrap() == 1, "get → 1")
+    # 优雅停止
+    expect(ac_stop(a).is_ok(), "stop Ok")
+    # 多个 actor 隔离
+    var b = ac_new({"inc": cnt_inc, "get": cnt_get}, {"n": 0})
+    expect(ac_call(b, "inc", 42).unwrap() == 42, "actor b 独立状态")
+    ac_stop(b)
+    print("actor: PASS")
+    return Ok(0)

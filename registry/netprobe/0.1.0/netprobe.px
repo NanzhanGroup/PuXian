@@ -1,0 +1,57 @@
+# ============================================================
+# 普贤生态库：registry/netprobe —— TCP 端口探测 / banner 读取
+# ------------------------------------------------------------
+# 纯函数库（网络客户端，无并发原语），编译（px build）与解释（px run）双模式一致。
+# 对应缺口表「网络探测（ping/端口）」的最小可实现面（ICMP 需 raw socket → 仅 TCP 探测）：
+#   np_check(host, port[, timeout_ms]) → Ok({open, err})
+#   np_banner(host, port[, timeout_ms, maxlen]) → Ok({banner}) | Err
+#   np_scan(host, ports[, timeout_ms]) → Ok([{port, open, err}])
+#   np_ports(start, end) → Ok([port, ...])
+# 实现：tcp_connect_ex（安全变体，永不杀进程）+ tcp_opt 读超时 + tcp_recv_ex。
+#   连接失败/拒绝返回 open=false（Err 仅留给参数错误）。
+# ============================================================
+# 探测单端口 → Ok({open: true|false, err?})
+def np_check(host, port, timeout_ms = 800):
+    var c = tcp_connect_ex(host, port, {"timeout_ms": timeout_ms})
+    if c["ok"]:
+        tcp_close(c["fd"])
+        return Ok({"open": true})
+    var d = {"open": false}
+    d.set("err", c["err"])
+    return Ok(d)
+# 读取 banner（连接后首包；读超时视为无 banner）→ Ok({banner}) | Err
+def np_banner(host, port, timeout_ms = 800, maxlen = 256):
+    var c = tcp_connect_ex(host, port, {"timeout_ms": timeout_ms})
+    if not c["ok"]:
+        return Err("netprobe: 连接失败 " + host + ":" + str(port) + " " + c["err"])
+    tcp_opt(c["fd"], {"read_timeout_ms": timeout_ms})
+    var r = tcp_recv_ex(c["fd"], maxlen)
+    tcp_close(c["fd"])
+    if r["ok"] and r["n"] > 0:
+        return Ok({"banner": bytes_to_str(r["data"])})
+    if r["timeout"]:
+        return Ok({"banner": ""})
+    return Err("netprobe: 读取失败 " + str(r["err"]))
+# 批量扫描端口 → Ok([{port, open, err?}, ...])
+def np_scan(host, ports, timeout_ms = 300):
+    var out = []
+    var i = 0
+    while i < len(ports):
+        var p = ports[i]
+        var r = np_check(host, p, timeout_ms)
+        if r.is_err():
+            out.append({"port": p, "open": false, "err": str(r.err())})
+        else:
+            var d = r.unwrap()
+            d.set("port", p)
+            out.append(d)
+        i += 1
+    return Ok(out)
+# 生成端口区间 [start, end]（闭区间）→ Ok([...])
+def np_ports(start, end):
+    var out = []
+    var i = start
+    while i <= end:
+        out.append(i)
+        i += 1
+    return Ok(out)

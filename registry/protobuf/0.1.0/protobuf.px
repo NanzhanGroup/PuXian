@@ -1,0 +1,295 @@
+# ============================================================
+# 普贤生态库：registry/protobuf —— Protocol Buffers wire format 动态编解码
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对应缺口表「Protocol Buffers」的最小可实现面（wire format，免 .proto 编译）：
+#   schema = {"1": {"type": "int32"}, "2": {"type": "string"},
+#             "8": {"type": "message", "fields": {...}}}
+#   pb_encode(schema, {"1": 150, "2": "hello", ...}) → Ok(bytes)
+#   pb_decode(schema, data) → Ok(dict)
+# 支持类型与 wire 映射：
+#   varint 族：int32/int64/uint32/uint64/bool/enum（补码 64 位，负→10 字节）
+#   sint32/sint64（zigzag）；fixed32/sfixed32/float（4B）；fixed64/sfixed64/double（8B）
+#   长度域：string/bytes/message（嵌套递归）
+# 说明：
+#   - 未知字段跳过（解码不报错）；对象缺字段 → 不编码
+#   - int 为 64 位有符号：uint64 > 2^63-1 无法表示，文档注明
+#   - 字段号与类型经 schema 约束，无 .proto 编译面
+# ============================================================
+# 单字节 bytes
+def pb_byte(v):
+    return int_to_bytes(v, 1, "little", false)
+# ---- varint ----
+def pb_enc_varint(v):
+    var uv = v
+    if v < 0:
+        # 负 int → 64 位补码 varint：低 63 位 9 组（每组 |0x80）+ 符号位
+        var out = bytes("")
+        var i = 0
+        while i < 9:
+            var b8 = (v >> (7 * i)) & 255
+            out = bytes_concat(out, pb_byte(b8 | 128))
+            i += 1
+        return bytes_concat(out, pb_byte((v >> 63) & 1))
+    var out2 = bytes("")
+    var x = uv
+    while x >= 128:
+        out2 = bytes_concat(out2, pb_byte((x % 128) | 128))
+        x = x // 128
+    out2 = bytes_concat(out2, pb_byte(x))
+    return out2
+# 解码 varint → Ok([value, new_ip]) | Err
+def pb_dec_varint(data, ip):
+    var out = 0
+    var shift = 0
+    while true:
+        if ip >= bytes_len(data):
+            return Err("protobuf: varint 截断")
+        var b = bytes_get(data, ip)
+        ip += 1
+        var low = b % 128
+        var add = low
+        if shift > 0:
+            add = low * (1 << shift)
+        out = out + add
+        if b < 128:
+            return Ok([out, ip])
+        shift += 7
+        if shift > 70:
+            return Err("protobuf: varint 过长")
+# ---- zigzag（位运算，支持 64 位全范围） ----
+def pb_zigzag(v):
+    return (v << 1) ^ (v >> 63)
+def pb_zigzag32(v):
+    return (v << 1) ^ (v >> 31)
+def pb_unzigzag(z):
+    # (z >> 1) ^ -(z & 1)；z 为 u64 位型（可能负）；无符号右移半值用 2^63 模环绕补正
+    var half = z >> 1
+    if z < 0:
+        half = half + (1 << 63)
+    if z % 2 == 1:
+        return 0 - half - 1
+    return half
+# ---- wire ----
+# wire type per 类型名
+def pb_wire(type):
+    if type == "varint":
+        return 0
+    if type == "int32":
+        return 0
+    if type == "int64":
+        return 0
+    if type == "uint32":
+        return 0
+    if type == "uint64":
+        return 0
+    if type == "bool":
+        return 0
+    if type == "enum":
+        return 0
+    if type == "sint32":
+        return 0
+    if type == "sint64":
+        return 0
+    if type == "double":
+        return 1
+    if type == "fixed64":
+        return 1
+    if type == "sfixed64":
+        return 1
+    if type == "float":
+        return 5
+    if type == "fixed32":
+        return 5
+    if type == "sfixed32":
+        return 5
+    if type == "string":
+        return 2
+    if type == "bytes":
+        return 2
+    if type == "message":
+        return 2
+    return 0
+def pb_key(fno, wire):
+    return fno * 8 + wire
+# ---- 编码 ----
+# 按类型把值编码为 body（不含 key）→ [bytes, errstr]
+def pb_enc_value(type, v, sub_schema):
+    var wire = pb_wire(type)
+    if wire == 0:
+        if type == "sint32":
+            return [pb_enc_varint(pb_zigzag32(v)), ""]
+        if type == "sint64":
+            return [pb_enc_varint(pb_zigzag(v)), ""]
+        if type == "bool":
+            if v:
+                return [pb_enc_varint(1), ""]
+            return [pb_enc_varint(0), ""]
+        return [pb_enc_varint(v), ""]
+    if wire == 1:
+        if type == "double":
+            return [int_to_bytes(float64_bits(v), 8, "little", false), ""]
+        if type == "fixed64" or type == "sfixed64":
+            return [int_to_bytes(v, 8, "little", false), ""]
+        return [int_to_bytes(v, 8, "little", false), ""]
+    if wire == 5:
+        if type == "float":
+            return [int_to_bytes(float32_bits(v), 4, "little", false), ""]
+        return [int_to_bytes(v, 4, "little", false), ""]
+    if type == "message":
+        var sub = pb_encode(sub_schema, v)
+        if sub.is_err():
+            return [bytes(""), str(sub.err())]
+        var body = sub.unwrap()
+        return [bytes_concat(pb_enc_varint(bytes_len(body)), body), ""]
+    var data = v
+    if type == "string":
+        data = bytes(v)
+    return [bytes_concat(pb_enc_varint(bytes_len(data)), data), ""]
+# 编码整个对象 → Ok(bytes) | Err
+def pb_encode(schema, obj):
+    var out = bytes("")
+    var keys = obj.keys()
+    var i = 0
+    while i < len(keys):
+        var fno = keys[i]
+        if schema.has(fno):
+            var f = schema[fno]
+            var fnum = int(fno)
+            var sub = {}
+            var v = obj[fno]
+            if f.has("fields"):
+                sub = f["fields"]
+            var body = pb_enc_value(f["type"], v, sub)
+            if body[1] != "":
+                return Err("protobuf: 字段 " + fno + " 编码失败: " + body[1])
+            out = bytes_concat(out, pb_enc_varint(pb_key(fnum, pb_wire(f["type"]))))
+            out = bytes_concat(out, body[0])
+        i += 1
+    return Ok(out)
+# ---- 解码 ----
+# 按 wire 跳过未知字段 → Ok(new_ip) | Err
+def pb_skip(data, ip, wire):
+    var n = bytes_len(data)
+    if wire == 0:
+        var r = pb_dec_varint(data, ip)
+        if r.is_err():
+            return Err(str(r.err()))
+        return Ok(r.unwrap()[1])
+    if wire == 1:
+        if ip + 8 > n:
+            return Err("protobuf: 固定64 越界")
+        return Ok(ip + 8)
+    if wire == 2:
+        var r = pb_dec_varint(data, ip)
+        if r.is_err():
+            return Err(str(r.err()))
+        var len_ = r.unwrap()[0]
+        var p2 = r.unwrap()[1]
+        if p2 + len_ > n:
+            return Err("protobuf: 长度域越界")
+        return Ok(p2 + len_)
+    if wire == 5:
+        if ip + 4 > n:
+            return Err("protobuf: 固定32 越界")
+        return Ok(ip + 4)
+    return Err("protobuf: 不支持 wire " + str(wire))
+# 按类型解码 body（data 已在 len 域内；len_ 用于边界）→ Ok(value)
+def pb_dec_value(type, data, ip, len_):
+    if pb_wire(type) == 0:
+        var r = pb_dec_varint(data, ip)
+        if r.is_err():
+            return Err(str(r.err()))
+        var u = r.unwrap()[0]
+        if type == "sint32" or type == "sint64":
+            return Ok(pb_unzigzag(u))
+        if type == "bool":
+            return Ok(u != 0)
+        return Ok(u)
+    if pb_wire(type) == 1:
+        if ip + 8 > ip + len_:
+            return Err("protobuf: fixed64 越界")
+        if type == "double":
+            return Ok(bits_to_float64(bytes_to_int(bytes_slice(data, ip, ip + 8), "little", false)))
+        return Ok(bytes_to_int(bytes_slice(data, ip, ip + 8), "little", false))
+    if pb_wire(type) == 5:
+        if ip + 4 > ip + len_:
+            return Err("protobuf: fixed32 越界")
+        if type == "float":
+            return Ok(bits_to_float32(bytes_to_int(bytes_slice(data, ip, ip + 4), "little", false)))
+        return Ok(bytes_to_int(bytes_slice(data, ip, ip + 4), "little", false))
+    if ip + len_ > bytes_len(data):
+        return Err("protobuf: 长度域越界")
+    if type == "message":
+        return Ok(bytes_slice(data, ip, ip + len_))
+    var raw = bytes_slice(data, ip, ip + len_)
+    if type == "string":
+        return Ok(bytes_to_str(raw))
+    return Ok(raw)
+# 解码原始数据 → Ok(dict)
+def pb_decode(schema, data):
+    var out = {}
+    var ip = 0
+    var n = bytes_len(data)
+    while ip < n:
+        var kv = pb_dec_varint(data, ip)
+        if kv.is_err():
+            return Err(str(kv.err()))
+        var key = kv.unwrap()[0]
+        ip = kv.unwrap()[1]
+        var fno = key // 8
+        var wire = key % 8
+        if schema.has(str(fno)):
+            var f = schema[str(fno)]
+            if pb_wire(f["type"]) != wire:
+                # wire 不一致 → 跳过该字段（宽松策略）
+                var sk = pb_skip(data, ip, wire)
+                if sk.is_err():
+                    return Err(str(sk.err()))
+                ip = sk.unwrap()
+            else:
+                if wire == 2:
+                    var lv = pb_dec_varint(data, ip)
+                    if lv.is_err():
+                        return Err(str(lv.err()))
+                    var len_ = lv.unwrap()[0]
+                    ip = lv.unwrap()[1]
+                    var sub = {}
+                    if f.has("fields"):
+                        sub = f["fields"]
+                    var dv = pb_dec_value(f["type"], data, ip, len_)
+                    if dv.is_err():
+                        return Err(str(dv.err()))
+                    var val = dv.unwrap()
+                    if f["type"] == "message":
+                        var dec = pb_decode(sub, val)
+                        if dec.is_err():
+                            return Err(str(dec.err()))
+                        val = dec.unwrap()
+                    out.set(str(fno), val)
+                    ip = ip + len_
+                else:
+                    var plen = 0
+                    if wire == 1:
+                        plen = 8
+                    if wire == 5:
+                        plen = 4
+                    var dv2 = pb_dec_value(f["type"], data, ip, plen)
+                    if dv2.is_err():
+                        return Err(str(dv2.err()))
+                    out.set(str(fno), dv2.unwrap())
+                    if wire == 1:
+                        ip = ip + 8
+                    if wire == 5:
+                        ip = ip + 4
+                    if wire == 0:
+                        var vv = pb_dec_varint(data, ip)
+                        if vv.is_err():
+                            return Err(str(vv.err()))
+                        ip = vv.unwrap()[1]
+        else:
+            var sk2 = pb_skip(data, ip, wire)
+            if sk2.is_err():
+                return Err(str(sk2.err()))
+            ip = sk2.unwrap()
+    return Ok(out)

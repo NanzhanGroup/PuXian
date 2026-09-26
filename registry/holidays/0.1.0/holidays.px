@@ -1,0 +1,240 @@
+# ============================================================
+# 普贤生态库：registry/holidays —— 工作日/节假日历（中国法定节假日）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态、自含日期算法），编译（px build）与解释（px run）双模式一致。
+# 对齐 Python holidays / workalendar / Go x-time 心智（0.1.0 子集）：
+#   hd_is_workday(2025, 10, 1)   → false（国庆，法定假日）
+#   hd_is_workday(2025, 9, 28)   → true （调休上班日）
+#   hd_next_workday(2025, 10, 8) → [2025, 10, 9]
+#   hd_holidays(2025)            → Ok([{m, d, name}, ...]) 当年法定节假日
+#   hd_workdays(2025)            → Ok([{m, d}, ...])       当年调休上班日
+# 日期算法自含（不依赖 datetime 库）：days_from_civil（Hinnant）+ Zeller 取星期。
+# 数据表：2024/2025 中国国务院公布的法定节假日与调休安排（官方口径）。
+#   2026 及以后国务院公布前判为越界 → Err；公布后追加年份。
+# ============================================================
+# ---- 日期算法 ----
+# 1970-01-01 起的天数（Hinnant days_from_civil，仅用于 1970-01-01 之后，正数域安全）
+def hd_days_from_civil(y, m, d):
+    var yy = y
+    if m <= 2:
+        yy -= 1
+    var era = yy // 400
+    var yoe = yy - era * 400
+    var mp = m
+    if m > 2:
+        mp = m - 3
+    else:
+        mp = m + 9
+    var doy = (153 * mp + 2) // 5 + d - 1
+    var doe = yoe * 365 + yoe // 4 - yoe // 100 + doy
+    return era * 146097 + doe - 719468
+# 闰年判断
+def hd_is_leap(y):
+    return (y % 4 == 0 and y % 100 != 0) or y % 400 == 0
+# 每月天数
+def hd_days_in_month(y, m):
+    if m == 2:
+        if hd_is_leap(y):
+            return 29
+        return 28
+    if m == 4 or m == 6 or m == 9 or m == 11:
+        return 30
+    return 31
+# 星期（0=周日 … 6=周六）
+def hd_weekday(y, m, d):
+    var days = hd_days_from_civil(y, m, d)
+    return (days + 4) % 7
+# 星期（中国习惯：1=周一 … 7=周日）
+def hd_weekday_cn(y, m, d):
+    var w = hd_weekday(y, m, d)
+    return (w + 6) % 7 + 1
+# 日期合法性 → Ok(true) | Err
+def hd_valid_date(y, m, d):
+    if m < 1 or m > 12:
+        return Err("holidays: 月份越界: " + str(m))
+    if d < 1 or d > hd_days_in_month(y, m):
+        return Err("holidays: 日期越界: " + str(y) + "-" + str(m) + "-" + str(d))
+    return Ok(true)
+# ---- 数据表（官方公布）----
+# 返回某年法定节假日 [{m, d, name}]；年份未收录 → Err
+def hd_holidays(y):
+    if y == 2024:
+        return Ok([
+            {"m": 1, "d": 1, "name": "元旦"},
+            {"m": 2, "d": 10, "name": "春节"},
+            {"m": 2, "d": 11, "name": "春节"},
+            {"m": 2, "d": 12, "name": "春节"},
+            {"m": 2, "d": 13, "name": "春节"},
+            {"m": 2, "d": 14, "name": "春节"},
+            {"m": 2, "d": 15, "name": "春节"},
+            {"m": 2, "d": 16, "name": "春节"},
+            {"m": 2, "d": 17, "name": "春节"},
+            {"m": 4, "d": 4, "name": "清明节"},
+            {"m": 4, "d": 5, "name": "清明节"},
+            {"m": 4, "d": 6, "name": "清明节"},
+            {"m": 5, "d": 1, "name": "劳动节"},
+            {"m": 5, "d": 2, "name": "劳动节"},
+            {"m": 5, "d": 3, "name": "劳动节"},
+            {"m": 5, "d": 4, "name": "劳动节"},
+            {"m": 5, "d": 5, "name": "劳动节"},
+            {"m": 6, "d": 10, "name": "端午节"},
+            {"m": 9, "d": 15, "name": "中秋节"},
+            {"m": 9, "d": 16, "name": "中秋节"},
+            {"m": 9, "d": 17, "name": "中秋节"},
+            {"m": 10, "d": 1, "name": "国庆节"},
+            {"m": 10, "d": 2, "name": "国庆节"},
+            {"m": 10, "d": 3, "name": "国庆节"},
+            {"m": 10, "d": 4, "name": "国庆节"},
+            {"m": 10, "d": 5, "name": "国庆节"},
+            {"m": 10, "d": 6, "name": "国庆节"},
+            {"m": 10, "d": 7, "name": "国庆节"}
+        ])
+    if y == 2025:
+        return Ok([
+            {"m": 1, "d": 1, "name": "元旦"},
+            {"m": 1, "d": 28, "name": "春节"},
+            {"m": 1, "d": 29, "name": "春节"},
+            {"m": 1, "d": 30, "name": "春节"},
+            {"m": 1, "d": 31, "name": "春节"},
+            {"m": 2, "d": 1, "name": "春节"},
+            {"m": 2, "d": 2, "name": "春节"},
+            {"m": 2, "d": 3, "name": "春节"},
+            {"m": 2, "d": 4, "name": "春节"},
+            {"m": 4, "d": 4, "name": "清明节"},
+            {"m": 4, "d": 5, "name": "清明节"},
+            {"m": 4, "d": 6, "name": "清明节"},
+            {"m": 5, "d": 1, "name": "劳动节"},
+            {"m": 5, "d": 2, "name": "劳动节"},
+            {"m": 5, "d": 3, "name": "劳动节"},
+            {"m": 5, "d": 4, "name": "劳动节"},
+            {"m": 5, "d": 5, "name": "劳动节"},
+            {"m": 5, "d": 31, "name": "端午节"},
+            {"m": 6, "d": 1, "name": "端午节"},
+            {"m": 6, "d": 2, "name": "端午节"},
+            {"m": 10, "d": 1, "name": "国庆节"},
+            {"m": 10, "d": 2, "name": "国庆节"},
+            {"m": 10, "d": 3, "name": "国庆节"},
+            {"m": 10, "d": 4, "name": "国庆节"},
+            {"m": 10, "d": 5, "name": "国庆节"},
+            {"m": 10, "d": 6, "name": "中秋节"},
+            {"m": 10, "d": 7, "name": "国庆节"},
+            {"m": 10, "d": 8, "name": "国庆节"}
+        ])
+    return Err("holidays: 年份未收录（当前数据表 2024-2025）: " + str(y))
+# 某年调休上班日 [{m, d}]；年份未收录 → Err
+def hd_workdays(y):
+    if y == 2024:
+        return Ok([
+            {"m": 2, "d": 4},
+            {"m": 2, "d": 18},
+            {"m": 4, "d": 7},
+            {"m": 4, "d": 28},
+            {"m": 5, "d": 11},
+            {"m": 9, "d": 14},
+            {"m": 9, "d": 29},
+            {"m": 10, "d": 12}
+        ])
+    if y == 2025:
+        return Ok([
+            {"m": 1, "d": 26},
+            {"m": 2, "d": 8},
+            {"m": 4, "d": 27},
+            {"m": 9, "d": 28},
+            {"m": 10, "d": 11}
+        ])
+    return Err("holidays: 年份未收录（当前数据表 2024-2025）: " + str(y))
+# ---- 查询 ----
+# 某日是否法定假日 → Ok(bool) | Err（日期非法/年份未收录）
+def hd_is_holiday(y, m, d):
+    var v = hd_valid_date(y, m, d)
+    if v.is_err():
+        return Err(str(v.err()))
+    var hl = hd_holidays(y)
+    if hl.is_err():
+        return Err(str(hl.err()))
+    var list = hl.unwrap()
+    var i = 0
+    while i < len(list):
+        if list[i]["m"] == m and list[i]["d"] == d:
+            return Ok(true)
+        i += 1
+    return Ok(false)
+# 某日是否工作日（法定假日 → false；调休上班 → true；否则周一至周五 → true）→ Ok(bool) | Err
+def hd_is_workday(y, m, d):
+    var v = hd_valid_date(y, m, d)
+    if v.is_err():
+        return Err(str(v.err()))
+    var h = hd_is_holiday(y, m, d)
+    if h.is_err():
+        return Err(str(h.err()))
+    if h.unwrap():
+        return Ok(false)
+    var wk = hd_workdays(y)
+    if wk.is_err():
+        return Err(str(wk.err()))
+    var list = wk.unwrap()
+    var i = 0
+    while i < len(list):
+        if list[i]["m"] == m and list[i]["d"] == d:
+            return Ok(true)
+        i += 1
+    var w = hd_weekday(y, m, d)
+    if w == 0 or w == 6:
+        return Ok(false)
+    return Ok(true)
+# 下一个工作日（当日为工作日则返回次日）→ Ok([y, m, d]) | Err
+def hd_next_workday(y, m, d):
+    var v = hd_valid_date(y, m, d)
+    if v.is_err():
+        return Err(str(v.err()))
+    var cy = y
+    var cm = m
+    var cd = d
+    var guard = 0
+    while guard < 400:
+        cd += 1
+        if cd > hd_days_in_month(cy, cm):
+            cd = 1
+            cm += 1
+            if cm > 12:
+                cm = 1
+                cy += 1
+        var w = hd_is_workday(cy, cm, cd)
+        if w.is_err():
+            return Err(str(w.err()))
+        if w.unwrap():
+            return Ok([cy, cm, cd])
+        guard += 1
+    return Err("holidays: 未找到下一个工作日（年份越界?）")
+# 下一个法定假日（含当日）→ Ok([y, m, d, name]) | Err
+def hd_next_holiday(y, m, d):
+    var v = hd_valid_date(y, m, d)
+    if v.is_err():
+        return Err(str(v.err()))
+    var cy = y
+    var cm = m
+    var cd = d
+    var guard = 0
+    while guard < 400:
+        var h = hd_is_holiday(cy, cm, cd)
+        if h.is_err():
+            return Err(str(h.err()))
+        if h.unwrap():
+            var hl = hd_holidays(cy)
+            if hl.is_err():
+                return Err(str(hl.err()))
+            var list = hl.unwrap()
+            var i = 0
+            while i < len(list):
+                if list[i]["m"] == cm and list[i]["d"] == cd:
+                    return Ok([cy, cm, cd, list[i]["name"]])
+                i += 1
+        cd += 1
+        if cd > hd_days_in_month(cy, cm):
+            cd = 1
+            cm += 1
+            if cm > 12:
+                cm = 1
+                cy += 1
+        guard += 1
+    return Err("holidays: 未找到下一个法定假日（年份越界?）")

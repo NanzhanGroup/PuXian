@@ -1,0 +1,246 @@
+# ============================================================
+# 普贤生态库：registry/xlsx —— XML parts 生成（内部模块）· 0.2.0
+# ------------------------------------------------------------
+# 被 xlsx.px import；函数 xp_* 供 xlsx.px 与测试使用。
+# 0.2.0 = 0.1.0 超集：新增命名样式（字体/填充/对齐）与公式单元格。
+# 生成最小合法 OpenXML Spreadsheet 包的各 XML part。
+# ============================================================
+# XML 转义（& < > 与引号）
+def xp_esc(s):
+    var out = ""
+    var i = 0
+    while i < len(s):
+        var c = s[i]
+        if c == "&":
+            out = out + "&amp;"
+        elif c == "<":
+            out = out + "&lt;"
+        elif c == ">":
+            out = out + "&gt;"
+        elif c == "\"":
+            out = out + "&quot;"
+        else:
+            out = out + c
+        i += 1
+    return out
+# 单元格类型判定
+def xp_is_num(c):
+    return type(c) == "int" or type(c) == "float"
+# 列字母（命名空间避让 xlsx.px 的 xsx_col_letter）
+def xsx_col_letter_ns(idx):
+    var out = ""
+    var n = idx + 1
+    while n > 0:
+        var rem = (n - 1) % 26
+        out = chr(65 + rem) + out
+        n = (n - 1) // 26
+    return out
+# 字体构造（含 0 额外字体则返回空串）
+def xp_font_xml(opts):
+    var s = ""
+    var any = false
+    if opts.has("bold") and opts["bold"]:
+        s = s + "<b/>"
+        any = true
+    if opts.has("italic") and opts["italic"]:
+        s = s + "<i/>"
+        any = true
+    if opts.has("underline") and opts["underline"]:
+        s = s + "<u/>"
+        any = true
+    if opts.has("color"):
+        s = s + "<color rgb=\"FF" + opts["color"] + "\"/>"
+        any = true
+    if not any:
+        return ""
+    var body = "<font>"
+    if opts.has("size"):
+        body = body + "<sz val=\"" + str(opts["size"]) + "\"/>"
+    body = body + s + "<name val=\"Calibri\"/></font>"
+    return body
+# 填充构造（含 0 额外填充则返回空串）
+def xp_fill_xml(opts):
+    if opts.has("fill"):
+        return "<fill><patternFill patternType=\"solid\"><fgColor rgb=\"FF" +
+            opts["fill"] + "\"/><bgColor indexed=\"64\"/></patternFill></fill>"
+    return ""
+# 样式计划：一次构建 fonts/fills/cellXfs，产出 styles.xml 与 名称→xf 索引
+# → {xml, idx}; idx 是 {样式名: xf 索引}
+def xp_styles_plan(styles):
+    var fonts = ["<font><sz val=\"11\"/><name val=\"Calibri\"/></font>"]
+    var fills = ["<fill><patternFill patternType=\"none\"/></fill>"]
+    var xfs = ["<xf/>"]
+    var idx = {}
+    var names = styles.keys()
+    var n = 0
+    while n < len(names):
+        var name = names[n]
+        var opts = styles[name]
+        var font_id = 0
+        var fill_id = 0
+        var fx = xp_font_xml(opts)
+        if fx != "":
+            fonts.append(fx)
+            font_id = len(fonts) - 1
+        var fl = xp_fill_xml(opts)
+        if fl != "":
+            fills.append(fl)
+            fill_id = len(fills) - 1
+        var xf = "<xf fontId=\"" + str(font_id) + "\" fillId=\"" + str(fill_id) +
+            "\" applyFont=\"1\" applyFill=\"1\""
+        var align = ""
+        var need_align = false
+        if opts.has("align"):
+            align = align + " horizontal=\"" + opts["align"] + "\""
+            need_align = true
+        if opts.has("valign"):
+            align = align + " vertical=\"" + opts["valign"] + "\""
+            need_align = true
+        var body = ""
+        if need_align:
+            body = body + "<alignment" + align + "/>"
+        if body == "":
+            xf = xf + "/>"
+        else:
+            xf = xf + ">" + body + "</xf>"
+        xfs.append(xf)
+        idx.set(name, len(xfs) - 1)
+        n += 1
+    var fxbody = ""
+    var i = 0
+    while i < len(fonts):
+        fxbody = fxbody + fonts[i]
+        i += 1
+    var flbody = ""
+    i = 0
+    while i < len(fills):
+        flbody = flbody + fills[i]
+        i += 1
+    var xfbody = ""
+    i = 0
+    while i < len(xfs):
+        xfbody = xfbody + xfs[i]
+        i += 1
+    var xml = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n" +
+        "<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">" +
+        "<fonts count=\"" + str(len(fonts)) + "\">" + fxbody + "</fonts>" +
+        "<fills count=\"" + str(len(fills)) + "\">" + flbody + "</fills>" +
+        "<borders count=\"1\"><border/></borders>" +
+        "<cellStyleXfs count=\"1\"><xf/></cellStyleXfs>" +
+        "<cellXfs count=\"" + str(len(xfs)) + "\">" + xfbody + "</cellXfs>" +
+        "</styleSheet>"
+    return {"xml": xml, "idx": idx}
+# 拆解 dict 单元格 → [值, 样式名, 公式]
+def xp_cell_fields(cell):
+    var v = cell
+    var style_name = ""
+    var formula = ""
+    if type(cell) == "dict":
+        if cell.has("v"):
+            v = cell["v"]
+        else:
+            v = null
+        if cell.has("style"):
+            style_name = cell["style"]
+        if cell.has("f"):
+            formula = cell["f"]
+    return [v, style_name, formula]
+# 单元格 → <c ...>...</c>；styles_idx 为 样式名→xf 索引
+def xp_cell(cell, col, row, styles_idx):
+    var ref = xsx_col_letter_ns(col) + str(row + 1)
+    var fld = xp_cell_fields(cell)
+    var v = fld[0]
+    var sname = fld[1]
+    var formula = fld[2]
+    var sidx = ""
+    if sname != "" and styles_idx.has(sname):
+        sidx = " s=\"" + str(styles_idx[sname]) + "\""
+    if v == null and formula == "":
+        return ""
+    if formula != "":
+        var cached = ""
+        if v != null:
+            cached = str(v)
+        return "<c r=\"" + ref + "\"" + sidx + "><f>" + xp_esc(formula) +
+            "</f><v>" + cached + "</v></c>"
+    if xp_is_num(v):
+        return "<c r=\"" + ref + "\"" + sidx + "><v>" + str(v) + "</v></c>"
+    if type(v) == "bool":
+        var bv = "0"
+        if v:
+            bv = "1"
+        return "<c r=\"" + ref + "\"" + sidx + " t=\"b\"><v>" + bv + "</v></c>"
+    return "<c r=\"" + ref + "\"" + sidx + " t=\"inlineStr\"><is><t>" +
+        xp_esc(str(v)) + "</t></is></c>"
+# worksheet part
+def xp_worksheet(rows, styles_idx):
+    var body = ""
+    var r = 0
+    while r < len(rows):
+        var row = rows[r]
+        var cells = ""
+        var c = 0
+        while c < len(row):
+            cells = cells + xp_cell(row[c], c, r, styles_idx)
+            c += 1
+        body = body + "<row r=\"" + str(r + 1) + "\">" + cells + "</row>"
+        r += 1
+    return "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n" +
+        "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">" +
+        "<sheetData>" + body + "</sheetData></worksheet>"
+# [Content_Types].xml（每 sheet 一个 Override）
+def xp_content_types(sheets):
+    var overrides = ""
+    var i = 0
+    while i < len(sheets):
+        var p = "/xl/worksheets/sheet" + str(i + 1) + ".xml"
+        overrides = overrides + "<Override PartName=\"" + p +
+            "\" ContentType=\"application/vnd.openxmlformats-" +
+                "officedocument.spreadsheetml.worksheet+xml\"/>"
+        i += 1
+    return "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n" +
+        "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">" +
+        "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-" +
+        "package.relationships+xml\"/>" +
+        "<Default Extension=\"xml\" ContentType=\"application/xml\"/>" +
+        "<Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-" +
+        "officedocument.spreadsheetml.sheet.main+xml\"/>" +
+        "<Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-" +
+        "officedocument.spreadsheetml.styles+xml\"/>" +
+        overrides + "</Types>"
+# _rels/.rels
+def xp_root_rels():
+    return "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n" +
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">" +
+        "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/" +
+            "officeDocument/2006/relationships/officeDocument\" " +
+        "Target=\"xl/workbook.xml\"/></Relationships>"
+# xl/workbook.xml
+def xp_workbook(sheets):
+    var body = ""
+    var i = 0
+    while i < len(sheets):
+        body = body + "<sheet name=\"" + xp_esc(sheets[i]["name"]) + "\" sheetId=\"" + str(i + 1) +
+            "\" r:id=\"rId" + str(i + 1) + "\"/>"
+        i += 1
+    return "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n" +
+        "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" " +
+        "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">" +
+        "<sheets>" + body + "</sheets></workbook>"
+# xl/_rels/workbook.xml.rels
+def xp_workbook_rels(sheets):
+    var body = ""
+    var i = 0
+    while i < len(sheets):
+        body = body + "<Relationship Id=\"rId" + str(i + 1) +
+            "\" Type=\"http://schemas.openxmlformats.org/" +
+                "officeDocument/2006/relationships/worksheet\" " +
+            "Target=\"worksheets/sheet" + str(i + 1) + ".xml\"/>"
+        i += 1
+    var last = str(len(sheets) + 1)
+    body = body + "<Relationship Id=\"rId" + last +
+        "\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" " +
+        "Target=\"styles.xml\"/>"
+    return "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n" +
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">" +
+        body + "</Relationships>"

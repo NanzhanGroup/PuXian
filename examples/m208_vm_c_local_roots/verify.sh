@@ -33,7 +33,7 @@
 #      （见 `examples/m209_gcroot_rules/` 与 `docs/GC_ROOTS.md` §9）。
 #
 # 层：
-#  ① 静态：审计器自证 **19/19** + `--grow`（旧规则对照）下 runtime/vm.c **候选 0**（缺陷 268 收口）
+#  ① 静态：审计器自证 **25/25** + `--grow`（旧规则对照）下 runtime/vm.c **候选 0**（缺陷 268 收口）
 #  ② 静态：S13 不变量 —— **全仓** `runtime/*.c`（+ runtime/vm.c）不得出现两段式
 #     `px_root_push();` + `PX_KEEP(x);`（含**行尾带注释**与**宏续行**两种形态）；
 #     判据由 `selfhost/s13_check.py` 提供（自带 6 条自证，含「注释容忍」负例）。
@@ -119,7 +119,7 @@ run_track() {
 
 step "① 静态：审计器自证 + --grow（旧规则对照）下 vm.c 候选 0"
 if python3 selfhost/gcroot_audit.py --self-test > "$W/selftest.log" 2>&1; then
-    grep -q 'self-test: 19 通过 / 0 失败' "$W/selftest.log" && ok "自证 19/19（M213：10 必中 + 9 必不中）" \
+    grep -q 'self-test: 25 通过 / 0 失败' "$W/selftest.log" && ok "自证 25/25（M214：13 必中 + 12 必不中）" \
         || { bad "自证结论行不符"; tail -6 "$W/selftest.log" | sed 's/^/      /'; }
 else
     bad "自证脚本失败"; tail -6 "$W/selftest.log" | sed 's/^/      /'

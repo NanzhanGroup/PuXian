@@ -1,0 +1,36 @@
+# netprobe.px 测试：TCP 端口探测 / banner（双模式一致）
+import "../registry/netprobe/0.1.0/netprobe.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # 起一个本地监听（不 accept，内核 backlog 即可接受连接）
+    var lfd = tcp_listen(19095)
+    # 开放端口
+    var r1 = np_check("127.0.0.1", 19095)
+    expect(r1.is_ok(), "np_check Ok")
+    expect(r1.unwrap()["open"] == true, "19095 应 open")
+    # 关闭端口
+    var r2 = np_check("127.0.0.1", 19096)
+    expect(r2.is_ok() and r2.unwrap()["open"] == false, "19096 应 closed")
+    # banner：无服务的监听端口读超时 → 空 banner
+    var r3 = np_banner("127.0.0.1", 19095, 200)
+    expect(r3.is_ok() and r3.unwrap()["banner"] == "", "无 banner 服务 → 空串")
+    # banner：关闭端口 → Err
+    expect(np_banner("127.0.0.1", 19096, 200).is_err(), "closed banner Err")
+    # 批量扫描
+    var r4 = np_scan("127.0.0.1", np_ports(19095, 19097).unwrap(), 200)
+    var list = r4.unwrap()
+    expect(len(list) == 3, "scan 3 端口")
+    expect(list[0]["port"] == 19095 and list[0]["open"] == true, "scan[0] open")
+    expect(list[1]["open"] == false and list[2]["open"] == false, "scan[1,2] closed")
+    # 批次含不可达 IP（本机不存在的地址段快速拒绝）
+    var r5 = np_scan("127.0.0.2", np_ports(19100, 19100).unwrap(), 200)
+    expect(r5.is_ok() and r5.unwrap()[0]["open"] == false, "127.0.0.2 拒绝")
+    # 端口区间
+    var ps = np_ports(1, 3).unwrap()
+    expect(len(ps) == 3 and ps[0] == 1 and ps[2] == 3, "np_ports 区间")
+    tcp_close(lfd)
+    print("netprobe: PASS")
+    return Ok(0)

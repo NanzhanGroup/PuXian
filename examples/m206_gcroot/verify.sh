@@ -10,7 +10,7 @@
 #   VM 帧槽 + TLS 登记根栈，**不扫 C 栈**）。
 #
 # 层：
-#  ① 静态：`selfhost/gcroot_audit.py` 自证（M213 起 **19 锚点**：10 必中 / 9 必不中，
+#  ① 静态：`selfhost/gcroot_audit.py` 自证（M214 起 **25 锚点**：13 必中 / 12 必不中，
 #     含 hit6b/hit7/hit8 三条**反向判据** —— 证明排除规则没把工具改瞎）
 #  ② 静态：全仓扫描**候选 ⇄ 已判定基线**（`BASELINE.tsv`）逐条对齐；
 #     基线里**不得**存在「真」判定（= 未修的真缺陷）；规模下限（函数 ≥ 1500、登记站点 ≥ 200）
@@ -85,11 +85,11 @@ MIN_FUNCS=1500
 MIN_KEEPS=200
 BASE="$HERE/BASELINE.tsv"
 
-step "① 静态：扫描器自证（19 锚点）"
+step "① 静态：扫描器自证（25 锚点）"
 if python3 selfhost/gcroot_audit.py --self-test > "$W/selftest.log" 2>&1; then
     # ⚠️ M213（第 92 轮）：锚点数 **16 → 19**（新增 hit9/hit10/miss9 —— 出口参数式
     #   构造器（缺陷 294-a）与「成员取址别名不是消费」（缺陷 294-b）的正/反向判据）。
-    grep -q 'self-test: 19 通过 / 0 失败' "$W/selftest.log" && ok "自证 19/19（10 必中 + 9 必不中；M213 增 hit9/hit10/miss9）" \
+    grep -q 'self-test: 25 通过 / 0 失败' "$W/selftest.log" && ok "自证 25/25（13 必中 + 12 必不中；M214 增 hit11/miss10/hit12/miss11/hit13/miss12）" \
         || { bad "自证结论行不符"; tail -8 "$W/selftest.log" | sed 's/^/      /'; }
 else
     bad "自证脚本失败"; tail -6 "$W/selftest.log" | sed 's/^/      /'

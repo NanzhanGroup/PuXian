@@ -1,0 +1,255 @@
+# ============================================================
+# 普贤生态库：registry/x509 —— X.509 证书 DER/PEM 解析与验签
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态，除原生验签外全为字节运算），双模式一致。
+# 对应缺口表「证书/X.509 解析」（DER 解析纯 .px；验签走 rsa_verify_pkcs1v15_sha256）：
+#   x509_parse_pem(pem)     → Ok(der_bytes) | Err    剥离 PEM 装甲
+#   x509_parse_der(der)     → Ok(cert dict) | Err    解析证书字段
+#   x509_verify_der(der)    → Ok({valid: bool}) | Err 自验签名（TBS + 公钥 + 签名）
+#   x509_verify_pem(pem)    → Ok({valid: bool}) | Err
+# 解析字段：
+#   version / serial(hex) / sig_alg(oid) / issuer{c,o,ou,cn,l,st} /
+#   not_before / not_after（ASN.1 时间串, UTCTime/GeneralizedTime）/
+#   subject{...} / pubkey{alg, n_hex, e_hex, pem} / sig_hex
+# 验签：重建 SPKI PEM（BER/DER 编码）→ rsa_verify_pkcs1v15_sha256(pem_pub, TBS原始字节, sig)
+# 说明：支持 RSA（1.2.840.113549.1.1.1）+ sha256WithRSAEncryption 等常见 OID；
+#   EC 证书解析出 alg 但验签需原生差异（文档注明）；未知扩展忽略。
+# ============================================================
+# ---- ASN.1 ----
+# 读取长度 → [len, new_ip, err]
+def asn_len(data, ip):
+    if ip >= bytes_len(data):
+        return [0, ip, "截断"]
+    var b = bytes_get(data, ip)
+    if b < 128:
+        return [b, ip + 1, ""]
+    var n = b - 128
+    if n == 1:
+        if ip + 2 > bytes_len(data):
+            return [0, ip, "截断长格式"]
+        return [bytes_get(data, ip + 1), ip + 2, ""]
+    if n == 2:
+        if ip + 3 > bytes_len(data):
+            return [0, ip, "截断长格式"]
+        return [bytes_get(data, ip + 1) * 256 + bytes_get(data, ip + 2), ip + 3, ""]
+    return [0, ip, "不支持长度 " + str(n)]
+# 读取元素 → [tag, content_start, content_end, raw_start, raw_end, err]
+def asn_elem(data, ip):
+    var n = bytes_len(data)
+    if ip >= n:
+        return [0, ip, ip, ip, ip, "截断 tag"]
+    var tag = bytes_get(data, ip)
+    var raw_start = ip
+    var lr = asn_len(data, ip + 1)
+    if lr[2] != "":
+        return [0, ip, ip, ip, ip, lr[2]]
+    var len_ = lr[0]
+    var hdr_end = lr[1]
+    var content_end = hdr_end + len_
+    if content_end > n:
+        return [0, ip, ip, ip, ip, "内容越界"]
+    return [tag, hdr_end, content_end, raw_start, content_end, ""]
+# OID 内容 → 点分字符串
+def asn_oid(data, start, end):
+    var out = ""
+    var first = true
+    var i = start
+    var value = 0
+    while i < end:
+        var b = bytes_get(data, i)
+        value = value * 128 + (b % 128)
+        if b < 128:
+            if first:
+                if value < 40:
+                    out = "0." + str(value)
+                elif value < 80:
+                    out = "1." + str(value - 40)
+                else:
+                    out = "2." + str(value - 80)
+                first = false
+            else:
+                out = out + "." + str(value)
+            value = 0
+        i += 1
+    return out
+# 值内容 → 字符串（utf8/printable/ia5/teletex 均按文本）
+def asn_str(data, start, end):
+    return bytes_to_str(bytes_slice(data, start, end))
+# Name（SEQUENCE of SET of SEQUENCE{OID, value}）→ dict
+def asn_name(data, start, end):
+    var out = {}
+    var ip = start
+    while ip < end:
+        var set_el = asn_elem(data, ip)
+        if set_el[5] != "":
+            return out
+        var sip = set_el[1]
+        while sip < set_el[2]:
+            var av = asn_elem(data, sip)
+            if av[5] != "":
+                return out
+            var oid_el = asn_elem(data, av[1])
+            var val_el = asn_elem(data, oid_el[2])
+            var oid = asn_oid(data, oid_el[1], oid_el[2])
+            var v = asn_str(data, val_el[1], val_el[2])
+            if oid == "2.5.4.3":
+                out.set("cn", v)
+            elif oid == "2.5.4.6":
+                out.set("c", v)
+            elif oid == "2.5.4.7":
+                out.set("l", v)
+            elif oid == "2.5.4.8":
+                out.set("st", v)
+            elif oid == "2.5.4.10":
+                out.set("o", v)
+            elif oid == "2.5.4.11":
+                out.set("ou", v)
+            sip = val_el[2]
+        ip = set_el[2]
+    return out
+# ---- 证书解析 ----
+# PEM 文本 → DER bytes
+def x509_parse_pem(pem):
+    var b64 = ""
+    var lines = pem.split("\n")
+    var i = 0
+    var started = false
+    while i < len(lines):
+        var l = lines[i]
+        if contains(l, "BEGIN CERTIFICATE"):
+            started = true
+        elif contains(l, "END CERTIFICATE"):
+            started = false
+        elif started and len(l) > 0:
+            b64 = b64 + l
+        i += 1
+    if len(b64) == 0:
+        return Err("x509: PEM 无证书内容")
+    return Ok(base64_to_bytes(b64))
+# DER → cert dict
+def x509_parse_der(der):
+    var cert_el = asn_elem(der, 0)
+    if cert_el[0] != 0x30 or cert_el[5] != "":
+        return Err("x509: 顶层非 SEQUENCE 或解析失败")
+    var ip = cert_el[1]
+    # TBS
+    var tbs_el = asn_elem(der, ip)
+    if tbs_el[0] != 0x30 or tbs_el[5] != "":
+        return Err("x509: TBS 解析失败")
+    var tbs = bytes_slice(der, tbs_el[3], tbs_el[4])
+    var cert = {"version": 1, "serial": "", "sig_alg": "", "issuer": {},
+        "not_before": "", "not_after": "", "subject": {}}
+    var tip = tbs_el[1]
+    # version [0] EXPLICIT
+    var e0 = asn_elem(der, tip)
+    if e0[0] == 0xA0:
+        var iv = asn_elem(der, e0[1])
+        cert["version"] = bytes_to_int(bytes_slice(der, iv[1], iv[2]), "big", false) + 1
+        tip = e0[2]
+    # serial
+    var serial_el = asn_elem(der, tip)
+    cert["serial"] = bytes_to_hex(bytes_slice(der, serial_el[1], serial_el[2]))
+    tip = serial_el[2]
+    # sig alg
+    var sa_el = asn_elem(der, tip)
+    var oid1 = asn_elem(der, sa_el[1])
+    cert["sig_alg"] = asn_oid(der, oid1[1], oid1[2])
+    tip = sa_el[2]
+    # issuer
+    var iss_el = asn_elem(der, tip)
+    cert["issuer"] = asn_name(der, iss_el[1], iss_el[2])
+    tip = iss_el[2]
+    # validity
+    var val_el = asn_elem(der, tip)
+    var nb_el = asn_elem(der, val_el[1])
+    cert["not_before"] = asn_str(der, nb_el[1], nb_el[2])
+    var na_el = asn_elem(der, nb_el[2])
+    cert["not_after"] = asn_str(der, na_el[1], na_el[2])
+    tip = val_el[2]
+    # subject
+    var sub_el = asn_elem(der, tip)
+    cert["subject"] = asn_name(der, sub_el[1], sub_el[2])
+    tip = sub_el[2]
+    # SPKI
+    var spki_el = asn_elem(der, tip)
+    var alg_el = asn_elem(der, spki_el[1])
+    var aoid = asn_elem(der, alg_el[1])
+    var pubkey = {"alg": asn_oid(der, aoid[1], aoid[2]), "n_hex": "", "e_hex": "", "pem": ""}
+    var bits_el = asn_elem(der, alg_el[2])
+    var pk = x509_rsa_key(der, bits_el[1], bits_el[2])
+    if type(pk) == "dict":
+        pubkey["n_hex"] = pk["n_hex"]
+        pubkey["e_hex"] = pk["e_hex"]
+        pubkey["pem"] = x509_spki_pem(pk["n_hex"], pk["e_hex"])
+    cert["pubkey"] = pubkey
+    tip = spki_el[2]
+    # signatureAlgorithm (outside TBS)
+    var sa2_el = asn_elem(der, tip)
+    tip = sa2_el[2]
+    # signatureValue BIT STRING（首位 0x00 未用位）
+    var sig_el = asn_elem(der, tip)
+    var sig = bytes_slice(der, sig_el[1] + 1, sig_el[2])
+    cert["sig_hex"] = bytes_to_hex(sig)
+    cert["tbs"] = tbs
+    return Ok(cert)
+# RSA 公钥 BIT STRING 内容 → {n_hex, e_hex} | null
+def x509_rsa_key(der, start, end):
+    # BIT STRING content: 1 字节未用位 + RSAPublicKey SEQUENCE{INTEGER n, INTEGER e}
+    if end - start < 2:
+        return null
+    var unused = bytes_get(der, start)
+    if unused != 0:
+        return null
+    var rpk = asn_elem(der, start + 1)
+    if rpk[0] != 0x30:
+        return null
+    var n_el = asn_elem(der, rpk[1])
+    var e_el = asn_elem(der, n_el[2])
+    return {"n_hex": bytes_to_hex(bytes_slice(der, n_el[1], n_el[2])),
+        "e_hex": bytes_to_hex(bytes_slice(der, e_el[1], e_el[2]))}
+# DER 长度编码（≤2字节）
+def x509_len(l):
+    if l < 128:
+        return bytes_to_hex(int_to_bytes(l, 1, "big", false))
+    if l < 256:
+        return "818" + bytes_to_hex(int_to_bytes(l, 1, "big", false))
+    return "82" + bytes_to_hex(int_to_bytes(l, 2, "big", false))
+# n/e → SPKI PEM（RSA）
+def x509_spki_pem(n_hex, e_hex):
+    # INTEGER 需前置 00 若高位为 1
+    var n = n_hex
+    var high = n_hex[0] == "8" or n_hex[0] == "9" or n_hex[0] == "a" or n_hex[0] == "b" or
+        n_hex[0] == "c" or n_hex[0] == "d" or n_hex[0] == "e" or n_hex[0] == "f"
+    if high and not (len(n_hex) > 2 and n_hex[0:2] == "00"):
+        n = "00" + n_hex
+    var int_n = "02" + x509_len(len(n) // 2) + n
+    var int_e = "02" + x509_len(len(e_hex) // 2) + e_hex
+    var rpk = "30" + x509_len((len(int_n) + len(int_e)) // 2) + int_n + int_e
+    var bits = "03" + x509_len(1 + len(rpk) // 2) + "00" + rpk
+    var ai = "30" + x509_len(13) + "06092a864886f70d0101010500"
+    var spki = "30" + x509_len((len(ai) + len(bits)) // 2) + ai + bits
+    var b64 = bytes_base64(hex_to_bytes(spki))
+    var out = "-----BEGIN PUBLIC KEY-----\n"
+    var i = 0
+    while i < len(b64):
+        var take = 64
+        if i + take > len(b64):
+            take = len(b64) - i
+        out = out + b64[i:i + take] + "\n"
+        i += take
+    return out + "-----END PUBLIC KEY-----\n"
+# ---- 验签 ----
+def x509_verify_der(der):
+    var c = x509_parse_der(der)
+    if c.is_err():
+        return Err(str(c.err()))
+    var cert = c.unwrap()
+    if cert["pubkey"]["pem"] == "":
+        return Ok({"valid": false, "reason": "非 RSA 公钥"})
+    var ok = rsa_verify_pkcs1v15_sha256(cert["pubkey"]["pem"], cert["tbs"], cert["sig_hex"])
+    return Ok({"valid": ok})
+def x509_verify_pem(pem):
+    var d = x509_parse_pem(pem)
+    if d.is_err():
+        return Err(str(d.err()))
+    return x509_verify_der(d.unwrap())

@@ -1,0 +1,58 @@
+# lz4.px 测试：block 压缩解压（自往返 + Python lz4 互通，双模式一致）
+import "../registry/lz4/0.1.0/lz4.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def hex_eq(a, b):
+    return bytes_to_hex(a) == bytes_to_hex(b)
+def main():
+    # 构造样本
+    var rep = ""
+    var i = 0
+    while i < 1000:
+        rep = rep + "a"
+        i += 1
+    var binb = bytes("")
+    i = 0
+    while i < 256:
+        binb = bytes_concat(binb, int_to_bytes(i, 1, "little", false))
+        i += 1
+    var cn = bytes("普贤语言测试abc普贤")
+    var mix = bytes("hello hello hello 1234567890 hello")
+    # 自往返一致性
+    var samples = []
+    samples.append(bytes(""))
+    samples.append(bytes("hello world"))
+    samples.append(bytes(rep))
+    samples.append(binb)
+    samples.append(cn)
+    samples.append(mix)
+    i = 0
+    while i < len(samples):
+        var c = lz_compress(samples[i])
+        expect(c.is_ok(), "compress Ok " + str(i))
+        var d = lz_decompress(c.unwrap())
+        expect(d.is_ok(), "decompress Ok " + str(i))
+        expect(hex_eq(d.unwrap(), samples[i]), "roundtrip " + str(i))
+        i += 1
+    # 解 Python lz4.block.compress 产物（嵌入式样例）
+    var ps1 = lz_decompress(hex_to_bytes("b068656c6c6f20776f726c64"))
+    expect(ps1.is_ok() and bytes_to_str(ps1.unwrap()) == "hello world", "Python hello 样例")
+    var ps2 = lz_decompress(hex_to_bytes("1f610100ffffffd2506161616161"))
+    expect(ps2.is_ok() and bytes_to_str(ps2.unwrap()) == rep, "Python 1000a 样例")
+    var ps3 = lz_decompress(hex_to_bytes("f00ce699aee8b4a4e8afade8a880e6b58be8af9561" +
+        "6263e699aee8b4a4"))
+    expect(ps3.is_ok() and hex_eq(ps3.unwrap(), cn), "Python 中文样例")
+    var ps4 = lz_decompress(hex_to_bytes("6868656c6c6f200600f001313233343536373839302068656c6c6f"))
+    expect(ps4.is_ok() and hex_eq(ps4.unwrap(), mix), "Python mix 样例")
+    # 错误路径
+    expect(lz_decompress(hex_to_bytes("a0040123")).is_err(), "字面量越界 → Err")
+    expect(lz_decompress(hex_to_bytes("040200")).is_err(), "字面量越界2 → Err")
+    expect(lz_decompress(hex_to_bytes("ff")).is_err(), "扩展越界 → Err")
+    expect(lz_decompress(hex_to_bytes("040102")).is_err(), "offset 越界 → Err")
+    # 空输入压缩合法
+    var ce = lz_compress(bytes(""))
+    expect(ce.is_ok() and bytes_to_hex(ce.unwrap()) == "00", "空串压缩 = 00")
+    print("lz4: PASS")
+    return Ok(0)

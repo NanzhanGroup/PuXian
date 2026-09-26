@@ -1,0 +1,58 @@
+# sqlparse.px 测试：SELECT 子集解析 AST（双模式一致）
+import "../registry/sqlparse/0.1.0/sqlparse.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # 基础 SELECT *
+    var a1 = sq_parse("SELECT * FROM users").unwrap()
+    expect(a1["type"] == "select" and a1["distinct"] == false, "type/distinct")
+    expect(a1["columns"][0]["expr"]["type"] == "star", "列 *")
+    expect(a1["from"]["table"] == "users" and a1["from"]["alias"] == "", "from")
+    # 列 + 别名
+    var a2 = sq_parse("SELECT id, name AS n FROM t").unwrap()
+    expect(len(a2["columns"]) == 2, "两列")
+    expect(a2["columns"][0]["expr"]["name"] == "id", "col1 id")
+    expect(a2["columns"][1]["expr"]["name"] == "name" and a2["columns"][1]["alias"] == "n",
+        "col2 alias n")
+    # WHERE 比较 + AND
+    var a3 = sq_parse("SELECT a FROM t WHERE age >= 18 AND city = 'BJ'").unwrap()
+    var w = a3["where"]
+    expect(w["type"] == "op" and w["op"] == "and", "where and")
+    expect(w["left"]["type"] == "op" and w["left"]["op"] == ">=", "left >=")
+    expect(w["left"]["left"]["name"] == "age" and w["left"]["right"]["value"] == "18",
+        "age >= 18")
+    expect(w["right"]["right"]["value"] == "BJ", "city = BJ")
+    # ORDER BY + LIMIT
+    var a4 = sq_parse("SELECT name FROM t ORDER BY age DESC, id ASC LIMIT 10").unwrap()
+    expect(len(a4["order_by"]) == 2, "order_by 2 项")
+    expect(a4["order_by"][0]["expr"]["name"] == "age" and a4["order_by"][0]["dir"] == "desc",
+        "age desc")
+    expect(a4["order_by"][1]["dir"] == "asc", "id asc")
+    expect(a4["limit"] == 10, "limit 10")
+    # DISTINCT + 括号 + OR/NOT
+    var a5 = sq_parse("SELECT DISTINCT city FROM users WHERE (age < 30 OR name = 'a')").unwrap()
+    expect(a5["distinct"] == true, "distinct")
+    expect(a5["where"]["op"] == "or", "or 优先")
+    var a6 = sq_parse("SELECT a FROM t WHERE NOT a = 1").unwrap()
+    expect(a6["where"]["op"] == "not", "not")
+    # 表别名
+    var a7 = sq_parse("SELECT u.id FROM users u WHERE u.age > 5").unwrap()
+    expect(a7["from"]["table"] == "users" and a7["from"]["alias"] == "u", "表别名")
+    # 大小写不敏感关键字
+    var a8 = sq_parse("select * from t where x = 2 order by y desc limit 3").unwrap()
+    expect(a8["limit"] == 3 and a8["order_by"][0]["dir"] == "desc", "小写关键字")
+    # 末尾分号
+    var a9 = sq_parse("SELECT * FROM t;").unwrap()
+    expect(a9["from"]["table"] == "t", "分号容忍")
+    # 错误路径
+    expect(sq_parse("SELECT").is_err(), "缺列 Err")
+    expect(sq_parse("SELECT * FROM").is_err(), "缺表 Err")
+    expect(sq_parse("INSERT INTO t VALUES (1)").is_err(), "非 SELECT Err")
+    expect(sq_parse("SELECT * FROM t WHERE").is_err(), "WHERE 残缺 Err")
+    expect(sq_parse("SELECT 'abc").is_err(), "未闭合字符串 Err")
+    expect(sq_parse("SELECT * FROM t LIMIT x").is_err(), "LIMIT 非数字 Err")
+    expect(sq_parse("SELECT * FROM t junk extra").is_err(), "多余 token Err")
+    print("sqlparse: PASS")
+    return Ok(0)

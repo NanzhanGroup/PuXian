@@ -678,7 +678,7 @@ run m206_gcroot bash examples/m206_gcroot/verify.sh
 run m207_gcstress bash examples/m207_gcstress/verify.sh
 run m208_vm_c_local_roots bash examples/m208_vm_c_local_roots/verify.sh
 step "M209 · GC 根面审计器「触发点」更正 + 三条排除规则（缺陷 279–282）"
-#   [1] 自证 19/19（10 必中 + 9 必不中，含 hit6b/hit7/hit8/hit9/hit10 五条**反向判据**）
+#   [1] 自证 25/25（13 必中 + 12 必不中，含 hit6b/hit7/hit8/hit9/hit10/hit11/hit12/hit13 八条**反向判据**）
 #   [2] 新规则全仓候选 0（两次一致）+ 规模锚点（函数 ≥1500 · 登记 ≥200）
 #   [3] 旧规则对照 --grow = 11 且**全部**带「隐式分配·旧规则」标记（防对照被清空）
 #   [4] 三条排除规则 + 触发点集合 + g_tmp_root 置位的**源码在位**断言
@@ -719,7 +719,13 @@ step "M213 · GC 根面审计器「判据诚实度 + 覆盖面」（缺陷 293�
 #   169 函数 / 产出候选 #3）⇒ 分层（precise/conservative）+ 分诊 + 默认留**过近似**档。
 #   另含 F1「被调方登记了实参」判据（消 3 条候选）+ 缺陷 298 的 push/pop 平衡静态判据。
 run m213_gcroot_precision bash examples/m213_gcroot_precision/verify.sh
-step "M190 · 上游 registry-px 真实用例回归（112 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
+# M214（第 93 轮）：把 M213 剩下的 4 条候选（全靠人工判定）下沉为三条**窄条件豁免**：
+#   R-A 提前返回不可达 · R-B 全局根可达（出参写出全部来自全局表元素）·
+#   R-C `&victim` + 被调方「全部形参读在首次触发点之前」。
+#   ⚠️ 首版 R-A 写成「后置死值」⇒ 一口吃掉 6 条既有锚点（那些正是**真形状**）⇒ 已收紧；
+#     第 ①/④/⑤ 层守的就是「规则有牙且不越界」（自证 25 锚点 · 判据回放 · 负控 3 道）。
+run m214_audit_exempt bash examples/m214_audit_exempt/verify.sh
+step "M190 · 上游 registry-px 真实用例回归（128 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。
 run upstream_tests bash selfhost/run_upstream_tests.sh

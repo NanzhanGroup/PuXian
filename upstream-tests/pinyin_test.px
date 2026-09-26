@@ -1,0 +1,40 @@
+# pinyin.px 测试：中文拼音常用字子集（双模式一致）
+import "../registry/pinyin/0.1.0/pinyin.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def main():
+    # 单字查拼音
+    expect(py_lookup("中").unwrap() == "zhong", "中 → zhong")
+    expect(py_lookup("国").unwrap() == "guo", "国 → guo")
+    expect(py_lookup("你").unwrap() == "ni", "你 → ni")
+    expect(py_lookup("水").unwrap() == "shui", "水 → shui")
+    expect(py_lookup("好").unwrap() == "hao", "好 → hao")
+    expect(py_lookup("人").unwrap() == "ren", "人 → ren")
+    expect(py_lookup("！").is_err(), "标点未收录 → Err")
+    expect(py_lookup("𠀀").is_err(), "生僻字未收录 → Err")
+    # 字符串转换（字级、空格分隔）
+    expect(py_convert("中国") == "zhong guo", "中国 → zhong guo")
+    expect(py_convert("你好") == "ni hao", "你好 → ni hao")
+    expect(py_convert("世界") == "shi jie", "世界 → shi jie")
+    expect(py_convert("你好世界") == "ni hao shi jie", "你好世界")
+    expect(py_convert("abc中") == "abc zhong", "混合串：非汉字原样")
+    expect(py_convert("中a国") == "zhong a guo", "夹杂英文字母")
+    expect(py_convert("") == "", "空串")
+    expect(py_convert("一") == "yi", "单字")
+    # 结构化转换
+    var l1 = py_convert_list("中国").unwrap()
+    expect(len(l1) == 2, "list 长度")
+    expect(l1[0]["ch"] == "中" and l1[0]["py"] == "zhong", "list 第一项")
+    expect(l1[1]["ch"] == "国" and l1[1]["py"] == "guo", "list 第二项")
+    var l2 = py_convert_list("a中").unwrap()
+    expect(l2[0]["py"] == "" and l2[1]["py"] == "zhong", "未知字 py 为空")
+    # 词表规模与唯一性
+    var d = py_dict()
+    var ks = d.keys()
+    expect(len(ks) > 150, "常用字表应 >150 字，got " + str(len(ks)))
+    expect(d["昨"] == "zuo", "昨 → zuo")
+    expect(d["中"] == "zhong", "词表查中")
+    print("pinyin: PASS")
+    return Ok(0)

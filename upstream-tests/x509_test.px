@@ -1,0 +1,74 @@
+# x509.px 测试：证书解析 + 验签（双模式一致）
+import "../registry/x509/0.1.0/x509.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+const TEST_PEM =
+    "-----BEGIN CERTIFICATE-----\n" +
+    "MIIDEDCCAfigAwIBAgIUCihvEeOizeSQCzhdZHZMdTvq72gwDQYJKoZIhvcNAQEL\n" +
+    "BQAwQjEZMBcGA1UEAwwQdGVzdC5leGFtcGxlLmNvbTEYMBYGA1UECgwPUHVYaWFu\n" +
+    "IFRlc3QgT3JnMQswCQYDVQQGEwJDTjAeFw0yNDAxMDEwMDAwMDBaFw0yNjEyMzEy\n" +
+    "MzU5MDBaMEIxGTAXBgNVBAMMEHRlc3QuZXhhbXBsZS5jb20xGDAWBgNVBAoMD1B1\n" +
+    "WGlhbiBUZXN0IE9yZzELMAkGA1UEBhMCQ04wggEiMA0GCSqGSIb3DQEBAQUAA4IB\n" +
+    "DwAwggEKAoIBAQCq9l73o5TFj46M2ZmYTfKb7J3w11VmsFNausrL5z12KKNiyrUD\n" +
+    "dquotMQFQEQZfnSEiqfkRzjX69v5VHkX/9gDvz0NPPXOL8sj0PtIJTM8O5RaHQHa\n" +
+    "+NL/JR5D6AYDGPzGyLJhy9RTlTCEDQP4EW3328mvvGSx4d2cFqjVfY5gkytWkEt5\n" +
+    "cl9qyL7A92S/i7KVPdZPdvTcyye7xdQh4Z5lZO1TUA6MvOCfTWZzwIYCxQgN3g6e\n" +
+    "uKDd1KilQwL7uDbnizMM/LUEt1x45ZXvnvsho904zqx+lskuLq1ubHJ4ndHb1ioy\n" +
+    "mrR9HgiUpKX1IVEz7FC29j6g27iaxJ+JlsyHAgMBAAEwDQYJKoZIhvcNAQELBQAD\n" +
+    "ggEBAD45nIc/c4rBELhebMAZbuqlkijbcla5eHAlSN6w6IPLJiZVMYPj0FoXS8cN\n" +
+    "otTH8fVRkOGWyizZ/5YvIqruOSMBY1PBd8DSkA7iF2k7Rih3hetClEQzDuC/TKnj\n" +
+    "SBQ7RpwMzKkDKFP9kNwDbNcmrX213+RjSNqn+mt3CnAl6b6Si8qWZEEe+6AO7RUP\n" +
+    "CQ0BNSRurvkwZCk2LHbY6EmLKoAGaASkt2GHxy1JRQeT22lYNIh2OGQiMkKGpopP\n" +
+    "leSxUvlwfMU6PBBDuut1e1jlriFsbDltWl3HNodF9iqG7k8zS8jZQIDA1NdLcylD\n" +
+    "QZMcsac/dzogxPHpsAH4WZHblW4=\n" +
+    "-----END CERTIFICATE-----\n"
+# 签名与 TBS（供篡改测试之外的验签）
+var TEST_SIG_HEX = "3e399c873f738ac110b85e6cc0196eeaa59228db7256b978702548deb0e883cb" +
+    "2626553183e3d05a174bc70da2d4c7f1f55190e196ca2cd9ff962f22aaee3923" +
+    "016353c177c0d2900ee217693b46287785eb429444330ee0bf4ca9e348143b46" +
+    "9c0ccca9032853fd90dc036cd726ad7db5dfe46348daa7fa6b770a7025e9be92" +
+    "8bca9664411efba00eed150f090d0135246eaef9306429362c76d8e8498b2a80" +
+    "066804a4b76187c72d49450793db6958348876386422324286a68a4f95e4b152" +
+    "f9707cc53a3c1043baeb757b58e5ae216c6c396d5a5dc7368745f62a86ee4f33" +
+    "4bc8d94080c0d4d74b73294341931cb1a73f773a20c4f1e9b001f85991db956e"
+def main():
+    var pd = x509_parse_pem(TEST_PEM)
+    expect(pd.is_ok(), "PEM 解析 Ok")
+    var der = pd.unwrap()
+    expect(bytes_len(der) == 788, "DER 长度 788, got " + str(bytes_len(der)))
+    var c = x509_parse_der(der)
+    expect(c.is_ok(), "DER 解析 Ok, got " + str(c))
+    var cert = c.unwrap()
+    expect(cert["version"] == 3, "version 3, got " + str(cert["version"]))
+    expect(cert["serial"] == "0a286f11e3a2cde4900b385d64764c753beaef68", "serial")
+    expect(cert["sig_alg"] == "1.2.840.113549.1.1.11", "sig_alg sha256WithRSA")
+    expect(cert["issuer"]["cn"] == "test.example.com", "issuer cn")
+    expect(cert["issuer"]["o"] == "PuXian Test Org", "issuer o")
+    expect(cert["issuer"]["c"] == "CN", "issuer c")
+    expect(cert["subject"]["cn"] == "test.example.com", "subject cn")
+    expect(cert["not_before"] == "240101000000Z", "not_before")
+    expect(cert["not_after"] == "261231235900Z", "not_after")
+    expect(cert["pubkey"]["alg"] == "1.2.840.113549.1.1.1", "pubkey alg rsaEncryption")
+    expect(cert["pubkey"]["e_hex"] == "010001", "pubkey e")
+    expect(contains(cert["pubkey"]["n_hex"], "aaf65ef7a394c58f"), "pubkey n 头")
+    expect(cert["sig_hex"] == TEST_SIG_HEX, "签名值")
+    expect(len(cert["sig_hex"]) == 512, "签名 256 字节")
+    # 验签（正）
+    var v = x509_verify_pem(TEST_PEM)
+    expect(v.is_ok() and v.unwrap()["valid"] == true, "PEM 验签 true, got " + str(v))
+    var vd = x509_verify_der(der)
+    expect(vd.is_ok() and vd.unwrap()["valid"] == true, "DER 验签 true")
+    # 篡改 TBS 某字节 → 验签 false（解析仍应成功）
+    var der2 = bytes_concat(bytes_slice(der, 0, 60), int_to_bytes(0, 1, "little", false),
+        bytes_slice(der, 61, bytes_len(der)))
+    var c2 = x509_parse_der(der2)
+    if c2.is_ok():
+        var v2 = x509_verify_der(der2).unwrap()
+        expect(v2["valid"] == false, "篡改 → false, got " + str(v2))
+    # 错误路径
+    expect(x509_parse_pem("no cert here").is_err(), "无证书 PEM Err")
+    expect(x509_parse_der(bytes("abc")).is_err(), "垃圾 DER Err")
+    print("x509: PASS")
+    return Ok(0)

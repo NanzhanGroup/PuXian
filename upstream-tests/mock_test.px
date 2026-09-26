@@ -1,0 +1,66 @@
+# mock.px 测试：HTTP 桩服务器（⚠️ 编译模式，服务器用 spawn）
+import "../registry/mock/0.1.0/mock.px"
+def expect(cond, msg):
+    if not cond:
+        print("FAIL: " + msg)
+        exit(1)
+def req_retry(port, method, path, body = "", tries = 20):
+    var last = null
+    var i = 0
+    while i < tries:
+        var r = mk_request(port, method, path, body)
+        if r.is_ok():
+            return r
+        last = r
+        sleep(20)
+        i += 1
+    return last
+def main():
+    var routes = []
+    routes.append(mk_route("GET", "/hello", 200, "hi there"))
+    routes.append(mk_route("GET", "/json", 200, '{"ok":true}', "application/json"))
+    routes.append(mk_route("POST", "/echo", 201, "echoed"))
+    routes.append(mk_route("GET", "/zh", 200, "你好"))
+    var log = []
+    var srv = mk_start_server(19080, routes, log, 10)
+    expect(srv.is_ok(), "start 应 Ok, got " + str(srv))
+    # GET 200
+    var r1 = req_retry(19080, "GET", "/hello")
+    expect(r1.is_ok(), "GET /hello 应 Ok, got " + str(r1))
+    var resp1 = r1.unwrap()
+    expect(resp1["status"] == 200 and resp1["body"] == "hi there", "200/body hi there")
+    expect(resp1["status_text"] == "OK", "status_text OK")
+    # Content-Type
+    var r2 = mk_request(19080, "GET", "/json").unwrap()
+    expect(r2["status"] == 200, "json 200")
+    expect(r2["headers"].has("Content-Type"), "有 Content-Type")
+    expect(contains(str(r2["headers"]["Content-Type"]), "application/json"), "json ctype")
+    # 中文 body：Content-Length 按字节（6 字节）
+    var r3 = mk_request(19080, "GET", "/zh").unwrap()
+    expect(r3["status"] == 200 and r3["body"] == "你好", "中文 body: " + str(r3["body"]))
+    # 404
+    var r4 = mk_request(19080, "GET", "/nope").unwrap()
+    expect(r4["status"] == 404, "404: got " + str(r4["status"]))
+    # 405：路径存在但方法不符
+    var r5 = mk_request(19080, "POST", "/hello").unwrap()
+    expect(r5["status"] == 405, "405: got " + str(r5["status"]))
+    # POST 201 + body
+    var r6 = mk_request(19080, "POST", "/echo", "abc").unwrap()
+    expect(r6["status"] == 201 and r6["body"] == "echoed", "POST 201")
+    # 请求日志（reqlog list 引用，服务端累计）
+    expect(len(log) == 6, "reqlog 应 6 条，got " + str(len(log)))
+    expect(log[0]["method"] == "GET" and log[0]["path"] == "/hello", "log[0] GET /hello")
+    expect(log[1]["method"] == "GET" and log[1]["path"] == "/json", "log[1] GET /json")
+    expect(log[2]["method"] == "GET" and log[2]["path"] == "/zh", "log[2] GET /zh")
+    expect(log[3]["method"] == "GET" and log[3]["path"] == "/nope", "log[3] GET /nope")
+    expect(log[5]["method"] == "POST" and log[5]["path"] == "/echo", "log[5] POST /echo")
+    # 客户端解析非法响应
+    expect(mk_parse_response("").is_err(), "空响应 → Err")
+    # 时间桩（注入式假时钟）
+    var clk = mk_clock([100, 200, 300])
+    expect(mk_clock_next(clk) == 100 and mk_clock_next(clk) == 200, "时钟递增")
+    expect(mk_clock_next(clk) == 300 and mk_clock_next(clk) == 300, "时钟越界钳制")
+    expect(mk_status_text(404) == "Not Found", "状态短语")
+    expect(srv.unwrap()["port"] == 19080, "port 字段")
+    print("mock: PASS")
+    return Ok(0)

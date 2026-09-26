@@ -1,0 +1,287 @@
+# ============================================================
+# 普贤生态库：registry/sqlparse —— SQL SELECT 子集解析（AST）
+# ------------------------------------------------------------
+# 纯函数库（无 IO、无状态），编译（px build）与解释（px run）双模式一致。
+# 对应缺口表「SQL 解析器」的 SELECT 子集（parser 之上，自实现递归下降）：
+#   sq_parse(sql) → Ok(ast) | Err
+# 支持：
+#   SELECT [DISTINCT] select_list [FROM table [AS alias]]
+#     [WHERE 表达式] [ORDER BY 列 [ASC|DESC], ...] [LIMIT n]
+#   select_list = 表达式 [AS 别名], ...（支持 *）
+#   表达式：比较（= <> != < > <= >=）+ AND/OR/NOT + 括号；
+#     初级量：标识符 / 数字 / 字符串 / 函数名(参数…)
+# AST 形态（示例）：
+#   {"type":"select", "distinct":false,
+#    "columns":[{"expr":{"type":"ident","name":"id"},"alias":""}],
+#    "from":{"table":"users","alias":""},
+#    "where":{"type":"op","op":"and","left":{"type":"op","op":">=",...},"right":...},
+#    "order_by":[{"expr":{"type":"ident","name":"age"},"dir":"desc"}],
+#    "limit":10}
+# 说明：仅 SELECT（无 INSERT/UPDATE/DELETE/JOIN/子查询/函数解析为名字节点）。
+# ============================================================
+# ---- 词法 ----
+# 单字符 token 分类
+def sq_is_ident_start(c):
+    var o = ord(c)
+    return (o >= 65 and o <= 90) or (o >= 97 and o <= 122) or c == "_"
+def sq_is_ident_part(c):
+    var o = ord(c)
+    return (o >= 65 and o <= 90) or (o >= 97 and o <= 122) or
+        (o >= 48 and o <= 57) or c == "_"
+def sq_is_digit(c):
+    return c >= "0" and c <= "9"
+# SQL → token 列表 [{type, value, upper}]
+def sq_tokenize(sql):
+    var out = []
+    var i = 0
+    var n = len(sql)
+    while i < n:
+        var c = sql[i]
+        if c == " " or c == "\t" or c == "\n" or c == "\r":
+            i += 1
+            continue
+        if sq_is_ident_start(c):
+            var s = c
+            var j = i + 1
+            while j < n and sq_is_ident_part(sql[j]):
+                s = s + sql[j]
+                j += 1
+            var up = ""
+            var k = 0
+            while k < len(s):
+                var oc = ord(s[k])
+                if oc >= 97 and oc <= 122:
+                    up = up + chr(oc - 32)
+                else:
+                    up = up + s[k]
+                k += 1
+            out.append({"type": "ident", "value": s, "upper": up})
+            i = j
+            continue
+        if sq_is_digit(c):
+            var s2 = c
+            var j2 = i + 1
+            while j2 < n and (sq_is_digit(sql[j2]) or sql[j2] == "."):
+                s2 = s2 + sql[j2]
+                j2 += 1
+            out.append({"type": "num", "value": s2, "upper": s2})
+            i = j2
+            continue
+        if c == "'":
+            var s3 = ""
+            var j3 = i + 1
+            var done = false
+            while j3 < n and not done:
+                if sql[j3] == "'":
+                    if j3 + 1 < n and sql[j3 + 1] == "'":
+                        s3 = s3 + "'"
+                        j3 += 2
+                    else:
+                        done = true
+                        j3 += 1
+                else:
+                    s3 = s3 + sql[j3]
+                    j3 += 1
+            if not done:
+                return Err("sqlparse: 未闭合字符串")
+            out.append({"type": "str", "value": s3, "upper": s3})
+            i = j3
+            continue
+        if c == "*" or c == "(" or c == ")" or c == "," or c == "." or c == ";":
+            out.append({"type": "punct", "value": c, "upper": c})
+            i += 1
+            continue
+        # 运算符
+        var two = ""
+        if i + 1 < n:
+            two = sql[i] + sql[i + 1]
+        if two == "<=" or two == ">=" or two == "<>" or two == "!=":
+            out.append({"type": "op", "value": two, "upper": two})
+            i += 2
+            continue
+        if c == "=" or c == "<" or c == ">" or c == "+" or c == "-" or c == "/":
+            out.append({"type": "op", "value": c, "upper": c})
+            i += 1
+            continue
+        return Err("sqlparse: 非法字符 " + c)
+    return Ok(out)
+# 下一个 token 是否为子句关键字（FROM/WHERE/ORDER/LIMIT）
+def sq_clause_kw(toks, p):
+    var t = sq_peek(toks, p)
+    return sq_is_kw(t, "FROM") or sq_is_kw(t, "WHERE") or
+        sq_is_kw(t, "ORDER") or sq_is_kw(t, "LIMIT")
+# token 是否关键字（大写匹配）
+def sq_is_kw(t, kw):
+    return t["type"] == "ident" and t["upper"] == kw
+# ---- 递归下降 ----
+# 读当前 token；peek 为 pos 处
+def sq_peek(toks, pos):
+    if pos < len(toks):
+        return toks[pos]
+    return {"type": "eof", "value": "", "upper": ""}
+# 初级量：ident / num / str / * / ( expr )
+def sq_parse_primary(toks, pos):
+    var t = sq_peek(toks, pos)
+    if t["type"] == "ident":
+        var nm = t["value"]
+        var p2 = pos + 1
+        if sq_peek(toks, p2)["type"] == "punct" and sq_peek(toks, p2)["value"] == ".":
+            var fn2 = sq_peek(toks, p2 + 1)
+            if fn2["type"] == "ident":
+                return [{"type": "field", "table": nm, "name": fn2["value"]}, p2 + 2]
+        return [{"type": "ident", "name": nm}, p2]
+    if t["type"] == "num":
+        return [{"type": "num", "value": t["value"]}, pos + 1]
+    if t["type"] == "str":
+        return [{"type": "str", "value": t["value"]}, pos + 1]
+    if t["type"] == "punct" and t["value"] == "*":
+        return [{"type": "star"}, pos + 1]
+    if t["type"] == "punct" and t["value"] == "(":
+        var sub = sq_parse_expr(toks, pos + 1)
+        if sub[1] >= len(toks) or sq_peek(toks, sub[1])["value"] != ")":
+            return [null, pos]
+        return [sub[0], sub[1] + 1]
+    return [null, pos]
+# 比较
+def sq_parse_cmp(toks, pos):
+    var l = sq_parse_primary(toks, pos)
+    if l[0] == null:
+        return [null, pos]
+    var t = sq_peek(toks, l[1])
+    if t["type"] == "op" and (t["value"] == "=" or t["value"] == "<>" or
+        t["value"] == "!=" or t["value"] == "<" or t["value"] == ">" or
+        t["value"] == "<=" or t["value"] == ">="):
+        var r = sq_parse_primary(toks, l[1] + 1)
+        if r[0] == null:
+            return [null, pos]
+        return [{"type": "op", "op": t["value"], "left": l[0], "right": r[0]}, r[1]]
+    return l
+# AND
+def sq_parse_and(toks, pos):
+    var l = sq_parse_cmp(toks, pos)
+    if l[0] == null:
+        return [null, pos]
+    var t = sq_peek(toks, l[1])
+    while sq_is_kw(t, "AND"):
+        var r = sq_parse_cmp(toks, l[1] + 1)
+        if r[0] == null:
+            return [null, l[1]]
+        l = [{"type": "op", "op": "and", "left": l[0], "right": r[0]}, r[1]]
+        t = sq_peek(toks, l[1])
+    return l
+# OR / NOT
+def sq_parse_expr(toks, pos):
+    var t0 = sq_peek(toks, pos)
+    if sq_is_kw(t0, "NOT"):
+        var ns = sq_parse_cmp(toks, pos + 1)
+        if ns[0] == null:
+            return [null, pos]
+        return [{"type": "op", "op": "not", "left": null, "right": ns[0]}, ns[1]]
+    var l = sq_parse_and(toks, pos)
+    if l[0] == null:
+        return [null, pos]
+    var t = sq_peek(toks, l[1])
+    if sq_is_kw(t, "OR"):
+        var r = sq_parse_and(toks, l[1] + 1)
+        if r[0] == null:
+            return [null, l[1]]
+        return [{"type": "op", "op": "or", "left": l[0], "right": r[0]}, r[1]]
+    return l
+# 完整解析 → Ok(ast) | Err
+def sq_parse(sql):
+    var tk = sq_tokenize(sql)
+    if tk.is_err():
+        return Err(str(tk.err()))
+    var toks = tk.unwrap()
+    var pos = 0
+    var t0 = sq_peek(toks, pos)
+    if not sq_is_kw(t0, "SELECT"):
+        return Err("sqlparse: 期望 SELECT，实际 " + t0["value"])
+    pos += 1
+    var distinct = false
+    if sq_is_kw(sq_peek(toks, pos), "DISTINCT"):
+        distinct = true
+        pos += 1
+    # select list
+    var columns = []
+    while true:
+        var ex = sq_parse_expr(toks, pos)
+        if ex[0] == null:
+            return Err("sqlparse: SELECT 列表表达式解析失败 @" + str(pos))
+        var col = {"expr": ex[0], "alias": ""}
+        var p = ex[1]
+        if sq_is_kw(sq_peek(toks, p), "AS"):
+            var an = sq_peek(toks, p + 1)
+            if an["type"] == "ident":
+                col["alias"] = an["value"]
+                p += 2
+        elif sq_peek(toks, p)["type"] == "ident" and not sq_clause_kw(toks, p):
+            col["alias"] = sq_peek(toks, p)["value"]
+            p += 1
+        columns.append(col)
+        pos = p
+        if sq_peek(toks, pos)["type"] == "punct" and sq_peek(toks, pos)["value"] == ",":
+            pos += 1
+            continue
+        break
+    var ast = {"type": "select", "distinct": distinct, "columns": columns,
+        "from": null, "where": null, "order_by": [], "limit": null}
+    if sq_is_kw(sq_peek(toks, pos), "FROM"):
+        var tn = sq_peek(toks, pos + 1)
+        if tn["type"] != "ident":
+            return Err("sqlparse: FROM 后需表名")
+        var f = {"table": tn["value"], "alias": ""}
+        var p2 = pos + 2
+        if sq_is_kw(sq_peek(toks, p2), "AS"):
+            var an2 = sq_peek(toks, p2 + 1)
+            if an2["type"] == "ident":
+                f["alias"] = an2["value"]
+                p2 += 2
+        elif sq_peek(toks, p2)["type"] == "ident" and not sq_clause_kw(toks, p2):
+            f["alias"] = sq_peek(toks, p2)["value"]
+            p2 += 1
+        ast["from"] = f
+        pos = p2
+    if sq_is_kw(sq_peek(toks, pos), "WHERE"):
+        var we = sq_parse_expr(toks, pos + 1)
+        if we[0] == null:
+            return Err("sqlparse: WHERE 表达式解析失败")
+        ast["where"] = we[0]
+        pos = we[1]
+    if sq_is_kw(sq_peek(toks, pos), "ORDER"):
+        if not sq_is_kw(sq_peek(toks, pos + 1), "BY"):
+            return Err("sqlparse: 期望 ORDER BY")
+        var obs = []
+        var p3 = pos + 2
+        while true:
+            var oe = sq_parse_primary(toks, p3)
+            if oe[0] == null:
+                return Err("sqlparse: ORDER BY 表达式失败")
+            var ob = {"expr": oe[0], "dir": "asc"}
+            var p4 = oe[1]
+            if sq_is_kw(sq_peek(toks, p4), "ASC"):
+                ob["dir"] = "asc"
+                p4 += 1
+            elif sq_is_kw(sq_peek(toks, p4), "DESC"):
+                ob["dir"] = "desc"
+                p4 += 1
+            obs.append(ob)
+            p3 = p4
+            if sq_peek(toks, p3)["type"] == "punct" and sq_peek(toks, p3)["value"] == ",":
+                p3 += 1
+                continue
+            break
+        ast["order_by"] = obs
+        pos = p3
+    if sq_is_kw(sq_peek(toks, pos), "LIMIT"):
+        var ln = sq_peek(toks, pos + 1)
+        if ln["type"] != "num":
+            return Err("sqlparse: LIMIT 后需数字")
+        ast["limit"] = int(ln["value"])
+        pos += 2
+    # 允许结尾分号
+    if sq_peek(toks, pos)["type"] == "punct" and sq_peek(toks, pos)["value"] == ";":
+        pos += 1
+    if pos < len(toks):
+        return Err("sqlparse: 多余 token: " + sq_peek(toks, pos)["value"])
+    return Ok(ast)
