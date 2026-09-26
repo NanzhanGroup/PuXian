@@ -263,6 +263,35 @@ LXValue px_add(LXValue a, LXValue b);
 LXValue px_sub(LXValue a, LXValue b);
 LXValue px_mul(LXValue a, LXValue b);
 LXValue px_div(LXValue a, LXValue b);
+
+// M215（第 94 轮 · 缺陷 305/306）：**整数整除/取模的唯一实现**。
+//   历史教训：`px_idiv`（runtime.c）与 `pxc_vm` 的 `PXOP_IDIV`/`PXOP_MOD` 快路径
+//   **各写了一遍同样的公式** ⇒ 两边**一致地错**，而任何「三轨对拍门」都看不见
+//   （三轨跑的是同一份语义）。
+//     ① 商不能由 `(n - r) / d` 求：`n` 接近 `INT64_MIN` 且 `r > 0` 时 `n - r` 溢出
+//        （构建未开 `-fwrapv` ⇒ UB；实测回绕 ⇒ **商符号翻转**：`-(2^63-1) // 3`
+//        曾静默给 `+3074457345618258602`，真值 `-3074457345618258603`）。
+//        改为「**截断商 + ±1 调整**」（= Rust `div_euclid` 的写法），全程不做可溢出的减法。
+//     ② 余数调整里 `-d` 在 `d == INT64_MIN` 上溢出；改写 `r -= d`（`r<0,d<0` ⇒
+//        `r + |d| ∈ (0,|d|)`，**无溢出**）。
+//     ③ `n == INT64_MIN && d == -1` 是唯一令硬件 `idiv` 触发陷阱（**SIGFPE + core**）
+//       的组合，也是唯一**真值不可表示**的情形（真商 = `+2^63`）⇒ 按 **Go 规范**
+//        回绕为 `INT64_MIN`（与「一元负号在 `INT64_MIN` 回绕」「`+`/`*`/`<<` 静默回绕」
+//        同族，且不变量 `a == q*b + r` 在回绕算术下**成立**）。
+//   调用方保证 `d != 0`。权威口径：docs/PUXIAN_CHEATSHEET.md 事实 239 · docs/spec.md §算术。
+static inline int64_t px_idiv64(int64_t n, int64_t d) {
+    if (n == INT64_MIN && d == -1) return INT64_MIN;
+    int64_t q = n / d;
+    if (n % d < 0) q += (d > 0 ? -1 : 1);
+    return q;
+}
+static inline int64_t px_imod64(int64_t n, int64_t d) {
+    if (n == INT64_MIN && d == -1) return 0;
+    int64_t r = n % d;
+    if (r < 0) { if (d > 0) r += d; else r -= d; }
+    return r;
+}
+
 LXValue px_idiv(LXValue a, LXValue b);
 LXValue px_mod(LXValue a, LXValue b);
 LXValue px_pow(LXValue a, LXValue b);

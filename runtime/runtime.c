@@ -4329,9 +4329,11 @@ LXValue px_idiv(LXValue a, LXValue b) {
     int64_t d = int_val(b);
     if (d == 0) px_error("R1006: 除零错误");
     int64_t n = int_val(a);
-    int64_t r = n % d;
-    if (r < 0) r += (d < 0 ? -d : d);  // 欧几里得余数（非负）
-    return px_int((n - r) / d);        // 精确整除（对齐 div_euclid 商）
+    // M215（第 94 轮 · 缺陷 305/306）：改走 px_idiv64（见 runtime.h 的完整说明）——
+    //   修前 `(n - r) / d` 在 n 接近 INT64_MIN 且 r>0 时 `n - r` 溢出（构建未开 -fwrapv ⇒ UB）
+    //   ⇒ **商符号翻转**（实测 `-(2^63-1) // 3` 静默给 +3074457345618258602，真值 -3074457345618258603）；
+    //   `INT64_MIN // -1` 更会触发硬件除法陷阱 **SIGFPE + core dump**。
+    return px_int(px_idiv64(n, d));
 }
 
 LXValue px_mod(LXValue a, LXValue b) {
@@ -4345,10 +4347,9 @@ LXValue px_mod(LXValue a, LXValue b) {
     int64_t d = int_val(b);
     if (d == 0) px_error("R1006: 除零错误");
     // M-B5：对齐 Rust rem_euclid（余数非负）-7%3=2, 7%-3=1, -7%-3=2
-    int64_t n = int_val(a);
-    int64_t r = n % d;
-    if (r < 0) r += (d < 0 ? -d : d);
-    return px_int(r);
+    // M215（缺陷 305/306）：改走 px_imod64（见 runtime.h）——修前 `-d` 在 `d == INT64_MIN`
+    //   上溢出（UB ⇒ 靠回绕碰巧等值），`INT64_MIN % -1` 触发硬件除法陷阱（SIGFPE + core）。
+    return px_int(px_imod64(int_val(a), d));
 }
 
 LXValue px_pow(LXValue a, LXValue b) {
