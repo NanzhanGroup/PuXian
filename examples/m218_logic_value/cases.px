@@ -1,0 +1,173 @@
+# ⚠️ 本文件由 gen_cases.py 生成（单一事实源）—— 手改会被第 1 层的漂移检测判红
+# M218 驱动器：按 args()[1] 分派（一次编译覆盖全量用例）
+a = args()
+sel = ""
+if len(a) >= 2:
+    sel = a[1]
+
+def run_case(sel):
+    if sel == "ok_and_int_int":
+        var a = 1
+        var b = 2
+        print(a and b)
+        return 0
+    if sel == "ok_or_int_int":
+        var a = 1
+        var b = 2
+        print(a or b)
+        return 0
+    if sel == "ok_and_int0_int":
+        var a = 0
+        var b = 3
+        print(a and b)
+        return 0
+    if sel == "ok_or_int0_int":
+        var a = 0
+        var b = 3
+        print(a or b)
+        return 0
+    if sel == "ok_and_int_int0":
+        var a = 5
+        var b = 0
+        print(a and b)
+        return 0
+    if sel == "ok_or_int_int0":
+        var a = 5
+        var b = 0
+        print(a or b)
+        return 0
+    if sel == "ok_and_str_str":
+        var a = "a"
+        var b = "b"
+        print(a and b)
+        return 0
+    if sel == "ok_or_str_str":
+        var a = "a"
+        var b = "b"
+        print(a or b)
+        return 0
+    if sel == "ok_and_empty_str":
+        var a = ""
+        var b = "x"
+        print(a and b)
+        return 0
+    if sel == "ok_or_empty_str":
+        var a = ""
+        var b = "x"
+        print(a or b)
+        return 0
+    if sel == "ok_and_str_empty":
+        var a = "x"
+        var b = ""
+        print(a and b)
+        return 0
+    if sel == "ok_or_str_empty":
+        var a = "x"
+        var b = ""
+        print(a or b)
+        return 0
+    if sel == "ok_and_float_int":
+        var a = 1.5
+        var b = 7
+        print(a and b)
+        return 0
+    if sel == "ok_or_float_int":
+        var a = 1.5
+        var b = 7
+        print(a or b)
+        return 0
+    if sel == "ok_and_zero_float":
+        var a = 0.0
+        var b = 9
+        print(a and b)
+        return 0
+    if sel == "ok_or_zero_float":
+        var a = 0.0
+        var b = 9
+        print(a or b)
+        return 0
+    if sel == "ok_and_bool_int":
+        var a = true
+        var b = 42
+        print(a and b)
+        return 0
+    if sel == "ok_or_bool_int":
+        var a = true
+        var b = 42
+        print(a or b)
+        return 0
+    if sel == "ok_and_int_bool":
+        var a = 7
+        var b = false
+        print(a and b)
+        return 0
+    if sel == "ok_or_int_bool":
+        var a = 7
+        var b = false
+        print(a or b)
+        return 0
+    if sel == "ok_mix_list_list":
+        var a = []
+        var b = [1]
+        print(a and b)
+        print(a or b)
+        return 0
+    if sel == "ok_mix_null_int":
+        var a = null
+        var b = 5
+        print(a and b)
+        print(a or b)
+        return 0
+    if sel == "ok_mix_int_null":
+        var a = 1
+        var b = null
+        print(a and b)
+        print(a or b)
+        return 0
+    if sel == "ok_short_and":
+        def f():
+            print("SIDE")
+            return 1
+        var a = 0
+        print(a and f())
+        return 0
+    if sel == "ok_short_or":
+        def f():
+            print("SIDE")
+            return 1
+        var a = 1
+        print(a or f())
+        return 0
+    if sel == "ok_eval_and":
+        def f():
+            print("SIDE")
+            return 2
+        var a = 1
+        print(a and f())
+        return 0
+    if sel == "ok_eval_or":
+        def f():
+            print("SIDE")
+            return 3
+        var a = 0
+        print(a or f())
+        return 0
+    if sel == "ok_default":
+        def g(x):
+            return x or "default"
+        print(g(""), g("v"), g(0), g(7))
+        return 0
+    if sel == "ok_chain":
+        var a = 0
+        var b = 0
+        var c = "z"
+        print(a or b or c)
+        return 0
+    if sel == "ok_not_bool":
+        var a = 5
+        print(not a, not 0, not "")
+        return 0
+    print("NO-SUCH-CASE: " + sel)
+    return 2
+
+exit(run_case(sel))
