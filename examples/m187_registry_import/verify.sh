@@ -126,8 +126,14 @@ echo "  --- px.toml 依赖段 ---"; grep -c '=' px.toml 2>/dev/null
 } 2>&1 | tee "$W/diag.txt"
 # M195：上面这段诊断此前只进 **stdout**（= CI 的 job 日志，非管理员 403 读不到）⇒ 红的时候
 #   拿到注解也看不见 rc/stderr。现在**同时落 $W/diag.txt**，ci.yml 的注解步会把它收进注解。
+# ⚠️ M214：`.px_modules` 以**包名**为键，而 THIRD_PARTY.md 以 **`<name>/<version>`** 为一行
+#   ⇒ 首次出现「同包多版本」（本轮：`fsnotify 0.2.0` / `xlsx 0.2.0`）时，目录数 = **去重包名数**
+#   而非表行数。判据据此分开：① 目录数 = 去重包名数；② 表行数 ≥ 包名数（多版本 = 正常）。
+NPKG=$(printf '%s\n' "${PKGS[@]}" | sort -u | wc -l)
 n_inst="$(ls .px_modules 2>/dev/null | wc -l)"
-chk "[2] pxpkg 一次装齐 $N 包（.px_modules 目录数 = $N）" "[ \"$n_inst\" = \"$N\" ]"
+echo "  ℹ️ 表行数 N=$N · 去重包名数 NPKG=$NPKG · .px_modules 目录数=$n_inst"
+chk "[2] pxpkg 一次装齐 $NPKG 个包名（.px_modules 目录数 = 去重包名数；表 $N 行含 $((N-NPKG)) 个同包多版本行）" \
+    "[ \"$n_inst\" = \"$NPKG\" ] && [ \"$NPKG\" -le \"$N\" ]"
 n_entry=0
 for i in $(seq 0 $((N-1))); do
     p="${PKGS[$i]}"
