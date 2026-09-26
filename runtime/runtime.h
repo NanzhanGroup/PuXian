@@ -321,6 +321,30 @@ LXValue px_shl(LXValue a, LXValue b);
 LXValue px_shr(LXValue a, LXValue b);
 LXValue px_ushr(LXValue a, LXValue b);
 
+// ═══ M217（第 96 轮 · 缺陷 309）：移位计数的**唯一实现** ═══
+// C11 6.5.7p3/p4 把**两件事**都留成 UB：
+//   ① 计数 `E2 < 0` 或 `E2 >= 位宽`；② **左移结果不可表示**（`1LL << 63`）。
+// 实测（同一份 C，只换优化档；探针 /tmp/m217/ubproof/ub.c）：
+//   `f(1,64)`（运行期移位）  -O0 ⇒ **1**（shl 指令掩码）  **-O2 ⇒ 0**
+//   `f(1,65)`                -O0 ⇒ 2                    -O2 ⇒ 0
+//   常量 `1LL << 64`         两侧 ⇒ 0（gcc 折叠，并告警 `-Wshift-count-overflow`）
+// ⇒ 「三轨一致」只是**恰好**都走 `shl` 指令，与语义无关（同 M216 的结论）。
+// 而且**同族的 4 个移位只收口了 1 个**：`px_ushr`/`PXOP_SHRU` 早已显式 `& 63u`
+//   （注释明写「与解释器 wrapping_shr 一致」），`<<`/`>>` 却一直是裸移位
+//   ⇒ M191/M203/M206/M215 的「同一语义面只收口一处」老病再犯。
+//
+// 本仓把语义**显式定义**为（三轨同一真相）：
+//   · 计数 ∈ [0,63]  ⇒ 正常移位
+//   · 计数 >= 64     ⇒ **掩码 `n & 63`**（与本仓既有 `>>>`/`px_ushr` 口径一致，
+//                       也是 Rust `wrapping_shl/shr` 的语义 ⇒ **零行为变更**）
+//   · 计数 < 0       ⇒ **响亮 R1003**（明显错误；Python `ValueError` / Go panic 同向）
+// 左移**一律经 `uint64_t`**：无符号左移的回绕是**良定义**的 ⇒ 连「结果不可表示」
+//   那一半 UB 也一并消除（`1 << 63` 仍是 INT64_MIN，但不再是「碰巧」）。
+int64_t px_shift_count(int64_t n, const char* what);
+int64_t px_shl64(int64_t a, int64_t n);
+int64_t px_shr64(int64_t a, int64_t n);
+int64_t px_shru64(int64_t a, int64_t n);
+
 // ==================== 容器操作 ====================
 
 LXValue px_index(LXValue obj, LXValue idx);

@@ -776,6 +776,16 @@ def i_bin_numeric(op, l, r, pos):
             return Ok(l % r)
         if op == "Pow":
             return Ok(l ** r)
+        # M217（第 96 轮 · 缺陷 309）：移位计数的**唯一语义**（三轨同一真相）——
+        #   · 计数 < 0   ⇒ R1003 响亮（明显错误；Python `ValueError` / Go panic 同向）
+        #   · 计数 >= 64 ⇒ 掩码 `r & 63`（对齐既有 `>>>` 的 wrapping 口径与 Rust wrapping_*）
+        #   ⚠️ 与 C 轨 `px_shl64/px_shr64/px_shru64`、VM 轨三个快路径**逐字同口径**；
+        #     词条也与 `px_shift_count` 的 `"R1003: %s 计数不能为负数，实际是 %lld"` 对齐。
+        #   ⚠️ 守卫写在**三个分支之前**：一处覆盖三个移位 ⇒ 不会再出现「只收口一个」。
+        if op == "Shl" or op == "Shr" or op == "ShrU":
+            if r < 0:
+                return Err(i_r1003(i_bit_opname(op) + " 计数不能为负数，实际是 " + i_to_str(r), pos))
+            r = r & 63
         if op == "Shl":
             return Ok(l << r)
         if op == "Shr":

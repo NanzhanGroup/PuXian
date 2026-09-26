@@ -802,11 +802,12 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
         case PXOP_BITAND: VM_BIN_F(vm_int(_x.as.i & _y.as.i),  px_bitand(_x, _y)); break;
         case PXOP_BITOR:  VM_BIN_F(vm_int(_x.as.i | _y.as.i),  px_bitor(_x, _y)); break;
         case PXOP_BITXOR: VM_BIN_F(vm_int(_x.as.i ^ _y.as.i),  px_bitxor(_x, _y)); break;
-        case PXOP_SHL:    VM_BIN_F(vm_int(_x.as.i << _y.as.i), px_shl(_x, _y)); break;
-        case PXOP_SHR:    VM_BIN_F(vm_int(_x.as.i >> _y.as.i), px_shr(_x, _y)); break;
-        // px_ushr：按 uint64 逻辑右移，移位量 &63（逐字对齐）
-        case PXOP_SHRU:   VM_BIN_F(vm_int((int64_t)((uint64_t)_x.as.i >> ((uint64_t)_y.as.i & 63u))),
-                                   px_ushr(_x, _y)); break;
+        // M217（缺陷 309）：三个移位快路径**全部**走同一实现（与 C 表 px_shl/px_shr/px_ushr 同口径）。
+        //   修前 SHL/SHR 是**裸移位**（C11 6.5.7p3/p4 的 UB），只有 SHRU 写了 `& 63u`
+        //   ⇒ 同族三个只收口一个。收敛后无论快路径还是慢路径都**良定义**。
+        case PXOP_SHL:    VM_BIN_F(vm_int(px_shl64(_x.as.i, _y.as.i)), px_shl(_x, _y)); break;
+        case PXOP_SHR:    VM_BIN_F(vm_int(px_shr64(_x.as.i, _y.as.i)), px_shr(_x, _y)); break;
+        case PXOP_SHRU:   VM_BIN_F(vm_int(px_shru64(_x.as.i, _y.as.i)), px_ushr(_x, _y)); break;
 
         // ---- C 表：容器 / 字段（S3-B B1；语义=调现 px_* C 函数，错误由 px_* 保证）----
         // NEWLIST/NEWTUPLE：a=dst，b=连续槽基址，c=n；自 槽 b..b+n-1 拷贝建容器
