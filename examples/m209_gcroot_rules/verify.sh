@@ -261,17 +261,36 @@ if [ -n "${PR:-}" ]; then
     run_track "$PR" norm 'M209-PROBE-OK s=[0-9]+' && cp "$W/last_norm.out" "$W/norm1.out" \
         && ok "正常档 1 通过" || bad "正常档 1 失败"
     run_track "$PR" norm 'M209-PROBE-OK s=[0-9]+' && ok "正常档 2 通过" || bad "正常档 2 失败"
-    if diff -q "$W/norm1.out" "$W/last_norm.out" >/dev/null 2>&1; then
-        ok "正常档两跑逐字节一致（确定性）"
+    # ---- 判据精确化（M219s2 · 缺陷 314）----
+    #   为什么：`probe_rules.px` 里 `os_popen` 的**子 shell** 在宿主负载高时会把
+    #     `sh: 1: printf: printf: I/O error` 写进**继承来的 stderr**（实测 CI run
+    #     36270088541：正常档多出这一行）⇒ 原判据「整份 stdout+stderr 逐字节一致」**误红**，
+    #     而两档的 `M209-PROBE-OK s=` **完全相同**。**子进程噪声不是被测程序的契约。**
+    #   ⇒ 主判据 = **契约行**（probe 自己的 marker）逐字节一致；
+    #      附加判据 = 压力档不得出现任何检测器标记（否则可能是真回归，必须红）。
+    _contract() { grep -E '^M209-PROBE-OK ' "$1" 2>/dev/null || true; }
+    _extra()    { grep -vE '^M209-PROBE-OK ' "$1" 2>/dev/null || true; }
+    if diff <(_contract "$W/norm1.out") <(_contract "$W/last_norm.out") >/dev/null; then
+        ok "正常档两跑**契约行**逐字节一致（确定性）"
     else
-        bad "正常档两跑不一致"; diff "$W/norm1.out" "$W/last_norm.out" | head -4 | sed 's/^/      /'
+        bad "正常档两跑契约行不一致"; diff <(_contract "$W/norm1.out") <(_contract "$W/last_norm.out") | head -4 | sed 's/^/      /'
+    fi
+    if [ -n "$(_extra "$W/norm1.out")" ] || [ -n "$(_extra "$W/last_norm.out")" ]; then
+        echo "      ℹ️ 正常档存在**非契约行**（子进程噪声，不参与判据）："
+        { _extra "$W/norm1.out"; _extra "$W/last_norm.out"; } | sort -u | head -3 | sed 's/^/         /'
     fi
     run_track "$PR" stress 'M209-PROBE-OK s=[0-9]+' && ok "压力档通过（STRESS+INLINE+LIVECHK+UAFDET）" \
         || { bad "压力档失败"; tail -6 "$W/last_stress.out" | sed 's/^/      /'; }
-    if diff -q "$W/norm1.out" "$W/last_stress.out" >/dev/null 2>&1; then
-        ok "正常档 ⇄ 压力档逐字节一致"
+    if diff <(_contract "$W/norm1.out") <(_contract "$W/last_stress.out") >/dev/null; then
+        ok "正常档 ⇄ 压力档**契约行**逐字节一致"
     else
-        bad "两档输出不一致"; diff "$W/norm1.out" "$W/last_stress.out" | head -4 | sed 's/^/      /'
+        bad "两档契约行不一致"; diff <(_contract "$W/norm1.out") <(_contract "$W/last_stress.out") | head -4 | sed 's/^/      /'
+    fi
+    if grep -qE 'LIVECHK|UAFDET|已回收|keep后 alive' "$W/last_stress.out"; then
+        bad "压力档出现**检测器标记**（可能是真回归，不能当噪声）"
+        grep -nE 'LIVECHK|UAFDET|已回收|keep后 alive' "$W/last_stress.out" | head -3 | sed 's/^/      /'
+    else
+        ok "压力档无任何检测器标记（LIVECHK / UAFDET / 已回收）"
     fi
     # 覆盖登记（probe 实际走到了哪些站点族）
     echo "  ℹ️ probe 覆盖：bi_map / bi_filter / 生成器物化 · px_cell（闭包捕获）· bi_os_popen"
