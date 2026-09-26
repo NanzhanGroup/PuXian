@@ -122,6 +122,40 @@ git -C "$REPO" commit -aqm "chore: 删掉 CHANGELOG"
 g --ref HEAD; ck "H3 提交里没有 CHANGELOG.md ⇒ rc=2" 2
 g --repo "$TMP/不存在"; ck "H4 仓库目录不存在 ⇒ rc=2" 2
 
+echo "── I 年龄行**无条件**打印 + grace 边界（M215 收尾 · 实测事故回归）──"
+#   事故（2026-09-26）：commit 16:45 CST → 跑完全量门 `m116_gates.sh`（~70 分钟）
+#   → push 18:08 CST ⇒ 年龄 **83 分钟** > grace 45 ⇒ push 触发的 run **误红**；
+#   而红条只说「缺发布 tag」，**读不出真因是「窗口太小」**。
+#   ⇒ 修法：① grace 45 → **180**（覆盖「提交 → 跑全门 → 推送」的正常窗口）；
+#           ② 年龄行**无条件打印**（判红时 run 摘要里能直接读到真值）。
+cat > "$REPO/CHANGELOG.md" <<'EOF'
+# Changelog
+
+## [Unreleased]
+
+### runtime · 老提交夹具（M910）
+EOF
+#   夹具日期取 **3 小时前**（不是"很久以前"）：要的是"年龄 > 45 但 < 大 grace"这个边界，
+#   首版写成 2020 年 ⇒ 年龄 354 万分钟，连 `--grace-min 99999` 都盖不住 ⇒ I3 自伤。
+OLDSTAMP=$(date -u -d '3 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+export GIT_AUTHOR_DATE="$OLDSTAMP" GIT_COMMITTER_DATE="$OLDSTAMP"
+git -C "$REPO" add -A
+git -C "$REPO" commit -qm "feat: M910（3 小时前的夹具）"
+unset GIT_AUTHOR_DATE GIT_COMMITTER_DATE
+OLD=$(git -C "$REPO" rev-parse HEAD)
+git -C "$REPO" tag v0.2.0-m910 "$OLD"
+g --ref "$OLD" --grace-min 45
+ck "I1 老提交 + tag 可达 ⇒ rc=0" 0
+ckhas "I1 打印年龄行" "距今年龄"
+cksame "I1 未走跳过分支" "跳过检查"
+git -C "$REPO" tag -d v0.2.0-m910 >/dev/null
+g --ref "$OLD" --grace-min 45
+ck "I2 老提交 + 缺 tag ⇒ rc=1" 1
+ckhas "I2 判红时也打年龄行（红能读出真因）" "距今年龄"
+g --ref "$OLD" --grace-min 99999
+ck "I3 grace 覆盖老提交 ⇒ 跳过、rc=0" 0
+ckhas "I3 明示跳过" "跳过检查"
+
 echo
 if [ "$fail" -eq 0 ]; then
     echo "✅ tag_guard 自测全通过（pass=$pass fail=0）"
