@@ -294,6 +294,14 @@ static inline int64_t px_imod64(int64_t n, int64_t d) {
 
 LXValue px_idiv(LXValue a, LXValue b);
 LXValue px_mod(LXValue a, LXValue b);
+
+// ═══ M216（第 95 轮 · 缺陷 308）：浮点→int 的**唯一**转换入口 ═══
+//   `(int64_t)f` 在 `f` 越界/非有限时是 C11 6.3.1.4p1 的**未定义行为**：
+//   x86_64 `cvttsd2si` 给 INT64_MIN（不定值哨兵）、aarch64 `fcvtzs` **饱和**给 INT64_MAX
+//   ⇒ 同一份源码在**两个架构上打印不同的数**（都是静默的）。
+//   口径：非有限或落在 [INT64_MIN, 2^63) 之外 ⇒ **R1003 响亮**（与 `px_str_to_i64`
+//   「str→int 溢出即非法」同向）；`what` 是出错消息里的操作名。见 runtime.c 的实现注释。
+int64_t px_f2i(double f, const char* what);
 LXValue px_pow(LXValue a, LXValue b);
 LXValue px_neg(LXValue a);
 LXValue px_not(LXValue a);

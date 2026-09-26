@@ -576,6 +576,17 @@ def i_slice_indices(start, end, step, n):
             i += st
     return {"ok": true, "idxs": idxs, "err": ""}
 def i_slice(v, start, end, step, pos):
+    # M216（第 95 轮 · 缺陷 308）：切片界与**索引位**同口径（M179/M189）—— 只收 int。
+    #   修前解释轨把 float 界直接参与整数比较（`l[0:1e30]` ⇒ 整表 `[1,2,3,4,5]`），而编译
+    #   两轨走 `int_val` 的 `(int64_t)1e30` = INT64_MIN（x86 `cvttsd2si` 的不定值）
+    #   ⇒ `l[0:1e30]` 给 `[]`、`l[1e30:2]` 给 `[1,2]` —— **三轨分叉，且两侧都是静默错值**。
+    #   收紧后三轨同码同文（与 VM/C 的 `px_req_slice_idx` 同一句话）。
+    var bounds = [start, end, step]
+    var bi = 0
+    while bi < 3:
+        if bounds[bi] != null and i_type_name(bounds[bi]) != "int":
+            return Err(i_r1002("切片索引必须是整数，实际是 " + i_type_name(bounds[bi]), pos))
+        bi += 1
     let t = i_type_name(v)
     if t == "bytes":
         # M185（第 63 轮 · 缺陷 203）：bytes 切片 ⇒ **bytes**（按字节），与 VM/C 轨
