@@ -50,10 +50,17 @@ jobs:
           # ⚠️ 必须 0：默认浅克隆**既没有 tag 也没有历史** ⇒ 守卫会判 rc=2
           fetch-depth: 0
 
-      - name: 跑守卫（push 触发带 45 分钟窗口，定时触发 0 窗口）
+      - name: 跑守卫（push 触发带 180 分钟窗口，定时触发 0 窗口）
         env:
-          # push：刚推上来的提交允许「tag 还没打」，避免正常发布流程误报
-          GRACE_MIN: ${{ github.event_name == 'push' && '45' || '0' }}
+          # push：刚推上来的提交允许「tag 还没打」，避免正常发布流程误报。
+          # M215 收尾（2026-09-26 实测事故）：原为 45 —— 而本仓的**正常轮次**是
+          #   「先 commit（全量门 m116 拒绝脏树）→ 跑 m116 全量门（实测 ~70 分钟）
+          #     → 再 push」，commit 与 push 天然隔着 **80+ 分钟** ⇒ 45 分钟窗口
+          #   **必然被突破**、push 触发的 run **必然误红**（实测：16:45 commit →
+          #   18:08 push，年龄 83 分钟）。⇒ 放宽到 180 分钟，覆盖「提交→跑全门→推送」。
+          #   ⚠️ 真正的强制路径是**每日定时**（GRACE_MIN=0），窗口只服务于"别在正常
+          #     发布节奏里误报"；守卫本身另会无条件打印"距今年龄"（判红时读得出真因）。
+          GRACE_MIN: ${{ github.event_name == 'push' && '180' || '0' }}
         run: |
           set -o pipefail
           bash packaging/tag_guard.sh --ref "$GITHUB_SHA" --grace-min "$GRACE_MIN" 2>&1 \

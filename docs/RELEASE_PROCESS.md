@@ -100,7 +100,7 @@ Releases 页最新仍是 `v0.2.0-m125`，而 CI 全绿 —— 没有任何信号
 ```bash
 packaging/tag_guard.sh                  # 检查 HEAD
 packaging/tag_guard.sh --ref <提交>      # 检查指定提交
-packaging/tag_guard.sh --grace-min 45   # 刚推上来的提交允许窗口期（push 触发用）
+packaging/tag_guard.sh --grace-min 180  # 刚推上来的提交允许窗口期（push 触发用；见下"窗口为什么是 180"）
 ```
 
 **判据（唯一）**：被检查提交的 `CHANGELOG.md` **标题行**里最大的里程碑号 `M<NNN>`，
@@ -114,8 +114,18 @@ packaging/tag_guard.sh --grace-min 45   # 刚推上来的提交允许窗口期�
 
 - `ci.yml` 的「发布侧守卫自测」步跑 `packaging/selftest_tag_guard.sh`（22 断言，守脚本自身）。
 - `.github/workflows/tag-guard.yml`：每日 **09:17 CST** 复查 main（主检测路径，0 窗口）
-  ＋ `push(main)` 窗口期检查（`--grace-min 45`）＋ 可手动 `workflow_dispatch`。
+  ＋ `push(main)` 窗口期检查（`--grace-min 180`）＋ 可手动 `workflow_dispatch`。
   失败会把守卫输出写进 run 摘要。
+
+**窗口为什么是 180 分钟（M215 收尾 · 2026-09-26 实测事故）**：
+本仓的**正常轮次**是「先 commit（全量门 `m116_gates.sh` 拒绝脏树）→ 跑 m116 全量门
+（实测 **~70 分钟**）→ 再 push」⇒ commit 与 push 之间**天然隔着 80+ 分钟**。
+原窗口是 45 分钟 ⇒ **必然被突破、push 触发的 run 必然误红**（当日实测：16:45 commit →
+18:08 push，年龄 **83 分钟**）。而那道红条只说「缺发布 tag」，**读不出真因是「窗口太小」**
+—— 按本仓纪律「门的红必须能读出真因」，两处一起改：
+① 窗口 45 → **180**（覆盖「提交→跑全门→推送」）；② 守卫**无条件打印「距今年龄」**信息行，
+判红时 run 摘要里能直接读到「年龄 vs grace」。
+⚠️ 真正的强制路径始终是**每日定时**（`GRACE_MIN=0`）—— 窗口只服务于"别在正常发布节奏里误报"。
 
 **看到这道门红怎么办**：先问「这个里程碑要不要发」。
 
@@ -135,8 +145,9 @@ packaging/tag_guard.sh --grace-min 45   # 刚推上来的提交允许窗口期�
 
 **每轮收尾纪律（2026-09-22 补）**：推 `main` 之前先跑一次 `packaging/tag_guard.sh --ref HEAD`；
 红了就当场处置（补 tag，或 `TAG_GUARD_ALLOW_MISSING='<理由>'` 留痕），**不要留给定时任务** ——
-定时任务是兜底，不是流程。定时任务有 `GRACE_MIN=0`，push 触发只有 45 分钟 grace ⇒
-「推 main 后一小时内不打 tag」必然在下一次复查变红。
+定时任务是兜底，不是流程。定时任务有 `GRACE_MIN=0`，push 触发有 **180 分钟** grace ⇒
+「推 main 后**三小时**内不打 tag」会在 push 触发的复查里被跳过（但**次日定时**必红）；
+⚠️ 反过来说：push 触发的绿**不能**当作「发布侧没问题」，**只有定时那次才算数**。
 
 ## 发布前核对清单
 

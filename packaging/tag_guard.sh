@@ -78,8 +78,14 @@ if [ "$GRACE_MIN" -gt 0 ] 2>/dev/null; then
     TS=$(git show -s --format=%ct "$COMMIT")
     NOW=$(date -u +%s)
     AGE_MIN=$(( (NOW - TS) / 60 )); [ "$AGE_MIN" -lt 0 ] && AGE_MIN=0
+    # M215 收尾（2026-09-26 实测事故）：**年龄行无条件打印**。
+    #   事故形状：commit 16:45 CST → 跑完 `m116_gates.sh` 全量门（~70 分钟）→ push 18:08 CST
+    #   ⇒ 年龄 83 分钟 > grace 45 ⇒ push 触发的 run **误红**，而红条只说「缺发布 tag」，
+    #   **读不出真因是「窗口太小」**。⇒ ① grace 提到 180（见 workflow / RELEASE_PROCESS）；
+    #   ② 把年龄打成**信息行**，这样判红时 run 摘要里能直接读到「年龄 vs grace」。
+    say "ℹ️ $SHORT 距今年龄 ${AGE_MIN} 分钟（grace ${GRACE_MIN} 分钟）"
     if [ "$AGE_MIN" -lt "$GRACE_MIN" ]; then
-        say "⏳ $SHORT 距今 ${AGE_MIN} 分钟（< grace ${GRACE_MIN} 分钟）⇒ 跳过检查"
+        say "⏳ 落在 grace 窗口内 ⇒ 跳过检查"
         say "   刚推上来、tag 尚未打属正常窗口；定时任务会在窗口过后复查。"
         exit 0
     fi
