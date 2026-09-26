@@ -190,9 +190,25 @@ def cg_gen_closure(params, body, dispname):
         else:
             fdef += "    LXValue " + ldecls[ldi][0] + " = px_uninit();\n"
         ldi += 1
+    # M220（缺陷 320）：闭包体也是**帧** ⇒ `?` 必须有**自己的**错误标签，且标签必须在
+    #   **任何读/写发射之前**就压栈（M129 纪律；`cg_gen_lambda` 修前正是「先生成体、
+    #   后压标签」的顺序错 ⇒ 体里的 `?` 用了外层标签）。
+    #   修前 cg_gen_closure **完全没有**这一步：
+    #     · 顶层闭包 `fn() -> int? { return n()? }` ⇒ `len(cg_err_labels)==0`
+    #       被判成「顶层 ?」⇒ 报 R1004（应像解释/VM 轨一样传播 `Err`/`null`）；
+    #     · 函数内闭包 ⇒ `goto` 到**外层函数**的标签 ⇒ **C 编译失败**
+    #       （`label 'px_err_3' used but not defined`）。
+    let cerr_tag = cg_cerr_tag()
+    cg_err_labels.append(cerr_tag)
+    fdef += "    LXValue " + cerr_tag + "_val = px_null();\n"
+    fdef += "    int " + cerr_tag + "_proped = 0;\n"
     let b = cg_gen_expr(body)
     fdef += "    return " + b + ";\n"
+    fdef += cerr_tag + ":\n"
+    fdef += "    if (" + cerr_tag + "_proped) return " + cerr_tag + "_val;\n"
+    fdef += "    return px_null();\n"
     fdef += "}\n"
+    cg_err_labels = cg_err_labels[0:len(cg_err_labels) - 1]
     cg_closures += fdef
     cg_vars = saved_vars
     cg_var_types = saved_types
@@ -362,10 +378,14 @@ def cg_gen_expr(expr):
         let o = cg_gen_expr(obj)
         return "px_field(" + o + ", \"" + fname + "\")"
     if ty == "OptionalField":
+        # M220（缺陷 319）：`?.` 的接收者**必须只求值一次**。
+        #   修前 `px_is_null(t) ? px_null() : px_field(o, …)` 里 `o` 出现**两次**
+        #   ⇒ 接收者表达式被**求值两遍**（实测 `f()?.a` 副作用计数：解释/VM 轨 1 · C 轨 2）。
+        #   与 M165（求值**顺序**）同族的新面：这一条量的是求值**次数**。
         let o = cg_gen_expr(expr[1])
         let t = cg_tmp()
         let fname = rust_unescape(expr[2])
-        return "({ LXValue " + t + " = " + o + "; px_is_null(" + t + ") ? px_null() : px_field(" + o + ", \"" + fname + "\"); })"
+        return "({ LXValue " + t + " = " + o + "; px_is_null(" + t + ") ? px_null() : px_field(" + t + ", \"" + fname + "\"); })"
     if ty == "Index":
         let o = cg_gen_expr(expr[1])
         var i = cg_gen_expr(expr[2])
@@ -541,11 +561,17 @@ def cg_gen_expr(expr):
         if len(cg_err_labels) > 0:
             let tag = cg_err_labels[len(cg_err_labels) - 1]
             return "({ LXValue " + t + " = " + e + "; if (px_is_result(" + t + ")) { if (!px_result_ok(" + t + ")) { " + tag + "_val = " + t + "; " + tag + "_proped = 1; goto " + tag + "; } " + t + " = px_result_unwrap(" + t + "); } else if (px_is_null(" + t + ")) { " + tag + "_val = px_null(); " + tag + "_proped = 1; goto " + tag + "; } " + t + "; })"
-        return "({ LXValue " + t + " = " + e + "; if (px_is_result(" + t + ") && !px_result_ok(" + t + ")) px_error(\"错误传播 ?: 顶层不能传播 Err\"); if (px_is_null(" + t + ")) px_error(\"错误传播 ?: 顶层不能传播 null\"); if (px_is_result(" + t + ")) " + t + " = px_result_unwrap(" + t + "); " + t + "; })"
+        # M220（缺陷 316/317）：**顶层 ? 是用法错误**（仅函数内可用）—— 与解释轨同码同文。
+        #   修前 C 轨写 `错误传播 ?: 顶层不能传播 Err/null`：① 无 R 码；② `?:` 是**幽灵运算符**
+        #   （lexer 符号表里根本没有 `?:`）—— 这个错名从文档扩散进了产品错误消息（缺陷 318）。
+        return "({ LXValue " + t + " = " + e + "; if (px_is_result(" + t + ") && !px_result_ok(" + t + ")) px_error(\"R1004: 顶层不能使用错误传播 ?（仅函数内可用）\"); if (px_is_null(" + t + ")) px_error(\"R1004: 顶层不能使用错误传播 ?（仅函数内可用）\"); if (px_is_result(" + t + ")) " + t + " = px_result_unwrap(" + t + "); " + t + "; })"
     if ty == "ForceUnwrap":
         var e = cg_gen_expr(expr[1])
         let t = cg_tmp()
-        return "({ LXValue " + t + " = " + e + "; if (px_is_result(" + t + ")) { if (!px_result_ok(" + t + ")) px_error(\"force unwrap Err\"); " + t + " = px_result_unwrap(" + t + "); } if (px_is_null(" + t + ")) px_error(\"force unwrap null\"); " + t + "; })"
+        # M220（缺陷 315）：`!` 的失败文案对齐**解释轨**（有 R 码 · 有内容 · 中文）。
+        #   修前 C 轨 `force unwrap Err`（无码无内容）/ `force unwrap null`（无码）
+        #   ⇒ 同一错误三轨三种文案，且 C 轨丢掉了 Err 的**载荷**。
+        return "({ LXValue " + t + " = " + e + "; if (px_is_result(" + t + ")) { if (!px_result_ok(" + t + ")) px_error(\"R1004: 强制解包 !: 值为 Err(%s)\", px_to_string(px_result_unwrap(" + t + "))); " + t + " = px_result_unwrap(" + t + "); } if (px_is_null(" + t + ")) px_error(\"R1004: 强制解包 !: 值为 null\"); " + t + "; })"
     if ty == "IfExpr":
         let c = cg_gen_expr(expr[1])
         let a = cg_gen_expr(expr[2])
@@ -781,11 +807,15 @@ def cg_gen_lambda(params, body):
         if outer_inited3.has(cn):
             cg_inited_add(cn)
         fdef += "    LXValue " + cv2 + " = px_env_lookup(ctx, \"" + cn + "\");\n"
-    let b = cg_gen_expr(body)
-    let err_tag = "px_err_" + str(cg_uid())
+    # M220（缺陷 320 同族 · **顺序错**）：错误标签必须**先压栈、再生成体**。
+    #   修前 `cg_gen_expr(body)` 在前、`cg_err_labels.append` 在后 ⇒ 生成器体里的 `?`
+    #   用的是**外层**的标签：顶层 ⇒ 被误判成「顶层 ?」；函数内 ⇒ goto 到外层函数的标签
+    #   ⇒ C 编译失败。标签改用专用计数器 `cg_cerr_N`（与闭包体同族同命名）。
+    let err_tag = cg_cerr_tag()
     cg_err_labels.append(err_tag)
     fdef += "    LXValue " + err_tag + "_val = px_null();\n"
     fdef += "    int " + err_tag + "_proped = 0;\n"
+    let b = cg_gen_expr(body)
     fdef += "    return " + b + ";\n"
     fdef += err_tag + ":\n"
     fdef += "    if (" + err_tag + "_proped) return " + err_tag + "_val;\n"

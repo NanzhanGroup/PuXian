@@ -1,0 +1,26 @@
+ok_try_ok	ok	A 42
+ok_try_arith	ok	B 43
+ok_force_ok	ok	C 14
+ok_force_plain_int	ok	D 5
+ok_force_plain_str	ok	E x
+ok_force_plain_list	ok	F [1, 2]
+ok_opt_null	ok	G null
+ok_opt_field	ok	H 7
+ok_opt_chain	ok	I 5
+ok_opt_chain_null	ok	J null
+ok_coalesce	ok	K 5
+ok_coalesce_prec	ok	L 5
+ok_try_prop_err	ok	M Err(kaboom)
+ok_try_prop_null	ok	N null
+ok_clos_toplevel_err	ok	O Err(inner)
+ok_clos_toplevel_null	ok	P null
+ok_clos_in_fn	ok	Q Err(deep)
+ok_clos_nested	ok	R Err(nested)
+ok_opt_side_effect	ok	S 1 calls= 1
+ok_opt_side_effect_null	ok	T null calls= 1
+ok_opt_side_effect_chain	ok	U x calls= 1
+ok_force_side_effect	ok	V 1 calls= 1
+err_try_toplevel_null	err	R1004|顶层不能使用错误传播 ?（仅函数内可用）
+err_try_toplevel_err	err	R1004|顶层不能使用错误传播 ?（仅函数内可用）
+err_force_null	err	R1004|强制解包 !: 值为 null
+err_force_err	err	R1004|强制解包 !: 值为 Err(boom)

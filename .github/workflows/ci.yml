@@ -621,7 +621,7 @@ jobs:
       #      （M216s5 就被 30 分钟顶掉过）⇒ 塞进去有把整步推过上限的风险。
       #   ③ 本 step 排在「失败诊断注解」之前 ⇒ 失败仍由那条注解覆盖（它扫 /tmp/v_*.log）。
       #   ⚠️ 每条 verify **独立成行**，不要用 `&&` 串联（`&&` 会吞掉前件失败 —— qg-issue 64）。
-      - name: M217–M219 新门（移位 / 逻辑返回值 / 链接 flag 卫生 · 默认 PIE 环境依赖）
+      - name: M217–M220 新门（移位 / 逻辑返回值 / 链接 flag 卫生 / Result 三运算符）
         timeout-minutes: 30
         run: |
           bash examples/m217_shift_count/verify.sh --neg-skip > /tmp/v_m217.log 2>&1 || { echo "❌ m217_shift_count verify 失败"; grep -E '^(   |── )' /tmp/v_m217.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
@@ -630,7 +630,13 @@ jobs:
           grep -E '^(   |── )' /tmp/v_m218.log | tail -20
           bash examples/m219_link_flags/verify.sh --neg-skip > /tmp/v_m219.log 2>&1 || { echo "❌ m219_link_flags verify 失败"; grep -E '^(   |── )' /tmp/v_m219.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^(   |── )' /tmp/v_m219.log | tail -30
-          echo "✅ m217_shift_count / m218_logic_value / m219_link_flags verify（PIE 环境依赖 + 门漏注册收口）PASS"
+          # M220（第 99 轮 · 缺陷 315/316/317/318/319/320）：`?` / `!` / `?.` 语义收口。
+          #   语料是**每例一个独立小程序**（不用驱动器分派）—— 病根就在「模块体 vs 函数体」
+          #   的上下文差别上，驱动器会把用例塞进函数体 ⇒ 恰好把要测的差别测没了。
+          #   负控要重编 devbuild 四次 ⇒ CI 用 --neg-skip。
+          bash examples/m220_result_ops/verify.sh --neg-skip > /tmp/v_m220.log 2>&1 || { echo "❌ m220_result_ops verify 失败"; grep -E '^(   |── |❌)' /tmp/v_m220.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^(   |── )' /tmp/v_m220.log | tail -30
+          echo "✅ m217_shift_count / m218_logic_value / m219_link_flags / m220_result_ops verify（PIE 环境依赖 + 门漏注册 + Result 三运算符语义收口）PASS"
 
       # M188 补：这一步（工具自测）在 run 382/383 上红了，而 **job 日志非管理员不可读**
       #   （实测 /actions/jobs/<id>/logs → HTTP 403）⇒ 注解是唯一对外通道。
