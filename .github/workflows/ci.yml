@@ -607,148 +607,20 @@ jobs:
       #   （实测 /actions/jobs/<id>/logs → HTTP 403）⇒ 注解是唯一对外通道。
       #   本步把各门的 /tmp/v_*.log 关键行合成**一条** ::error:: 注解（换行编码 %0A）。
       - name: 失败诊断注解（工具自测 —— job 日志 403，此注解是唯一可读通道）
-        if: failure()
+        # ★ M216s2（第 95 轮补 4 · **缺陷 299 家族第四次复发**）：本 step 的逻辑此前内联在此，
+        #   而它按「**原始字符数** 3900」裁剪 —— 本仓日志大量中文，`urllib.parse.quote`
+        #   会把中文**膨胀 9 倍**（`中` → `%E4%B8%AD`）⇒ 编码后可达 3.5 万，
+        #   远超 `::error::` 的 **4096 字符硬上限**（GitHub **workflow command** 的限制，
+        #   与 check-run 的 64KB 不是一回事）。实测 run 36248218474：注解长度**恰好 4096**，
+        #   从中间截断，**真凶连同最终结论行一起被切掉** ⇒ 白跑一轮。
+        #   ⇒ 逻辑抽到 `packaging/ci_diagnose.py`：
+        #     ① **按编码长度二分裁剪**（fit()，含后缀预算）；
+        #     ② **一条注解只放一件事**（摘要 / 尾 20 行 / 头 20 行 / 可疑门一览）⇒ 互不挤占；
+        #     ③ 判据仍是「**最后写入的日志 = 失败门**」（其后门根本没跑）—— 确定性定位；
+        #     ④ 自带 `--selftest`：合成 5 场景 + **真实语料 0 误报**判据（本机 100 份实测）。
+        #   ⚠️ 末行裁决必须**失败优先**：`══ 通过 165 · 失败 3 ══` 含「通过」⇒ 旧判据判绿。
         run: |
-          python3 - <<'PY'
-          import glob, os, subprocess, urllib.parse
-          ws = os.environ.get('GITHUB_WORKSPACE', os.getcwd())
-          parts = []
-
-          # ① 现场复现**放最前**（上一轮放末尾被长度截掉，白跑一轮）：环境自检 + pxpkg 三命令
-          env = dict(os.environ)
-          env['PX_REGISTRY'] = os.path.join(ws, 'registry')
-          env['LC_ALL'] = 'C'
-          rep = '/tmp/pkgrepro'
-          subprocess.run(['rm', '-rf', rep])
-          os.makedirs(rep, exist_ok=True)
-          px = os.path.join(ws, 'tools', 'pxpkg')
-          pxpkgpx = os.path.join(ws, 'tools', 'pxpkg.px')
-          pxi = os.path.join(ws, 'bootstrap', 'pxi')
-
-          def run(cmd, cwd=rep, e=env, t=300):
-              try:
-                  p = subprocess.run(cmd, cwd=cwd, env=e, capture_output=True, text=True, timeout=t)
-                  return 'rc=%d\n%s' % (p.returncode, (p.stdout + p.stderr)[-900:])
-              except Exception as ex:
-                  return '异常: %s' % ex
-
-          out = []
-          out.append('which pxpkg=%s exists=%s' % (px, os.path.exists(px)))
-          out.append('pxpkg.px exists=%s  pxi exists=%s' % (os.path.exists(pxpkgpx), os.path.exists(pxi)))
-          out.append('PX_REGISTRY=%s' % env['PX_REGISTRY'])
-          out.append('ls registry 前 5:\n' + run(['ls', os.path.join(ws, 'registry')], cwd=ws))
-          out.append('ls registry/base58/0.1.0:\n' + run(['ls', '-la', os.path.join(ws, 'registry', 'base58', '0.1.0')], cwd=ws))
-          out.append('init:\n' + run([px, 'init', '--name', 'repro']))
-          out.append('px.toml:\n' + run(['cat', 'px.toml']))
-          out.append('add base58@0.1.0:\n' + run([px, 'add', 'base58@0.1.0']))
-          out.append('px.toml after add:\n' + run(['cat', 'px.toml']))
-          out.append('install:\n' + run([px, 'install']))
-          out.append('ls -la .px_modules:\n' + run(['ls', '-la', '.px_modules']))
-          out.append('直接跑 pxpkg.px（绕开包装脚本）:\n'
-                     + run([pxi, 'run', pxpkgpx], e=dict(env, PXPKG_DIR='.', PXPKG_CMD='list', PXPKG_ARG1='', PXPKG_ARG2='')))
-          parts.append('=== ① CI 现场复现 ===\n' + '\n'.join(out))
-
-          # ② m187 门日志：**不过滤关键词**，取尾部 45 行（上一轮过滤把「首个失败包的 add 输出」丢了）
-          #    M195：加入 `diag.txt`（门把 rc/stderr/进度 同时落盘 —— 此前只进 stdout，注解读不到）
-          #    与 `install.err`（stderr 全文）。
-          for f in (sorted(glob.glob('/tmp/m187_gate*/diag.txt'))
-                    + sorted(glob.glob('/tmp/m187_gate*/install.err'))
-                    + sorted(glob.glob('/tmp/m187_gate*/install.log'))
-                    + sorted(glob.glob('/tmp/m187_gate*/*.log'))):
-              try:
-                  txt = open(f, encoding='utf-8', errors='replace').read().strip()
-              except Exception:
-                  continue
-              if txt:
-                  parts.append('=== ② 门内日志 %s（尾 45 行）===\n%s' % (f, '\n'.join(txt.splitlines()[-45:])))
-
-          # ★ M213s4（缺陷 299）：**先点名可疑门**。
-          #   旧版的 ③ 只按 ASCII 关键词过滤（`❌ / FAIL / Traceback`）⇒ ① 中文判据
-          #   （`失败 N`）整族看不见；② 大量「负控判红」的 **PASS** 行把注解挤满
-          #   ⇒ 真凶那条被截掉（本轮实测：③ 块止于 `v_m189`，而失败的入口在其之后）。
-          #   新判据 = 「**该日志里有没有"成功判据"**」——没有 + 最近修改者排最前。
-          #   判据 = **末行裁决**：末行含成功标记、且不含失败字眼 ⇒ 绿；否则**可疑**。
-          #   本机用 97 份真实日志实测：全绿场景下 **0 误报**（比"全日志找关键词"稳得多，
-          #   因为不再被中间的负控 PASS 行干扰）。
-          # ★ M216s1（第 95 轮补 · **299 家族第三次复发**）：本次实测又栽在同一处 ——
-          #   ① **`::error::` 命令的消息硬上限 = 4096 字符**（实测注解 #1 长度恰好 4096；
-          #      此前注释里写的 "注解 message 上限 64KB" 是 GitHub **check-run** 的限制，
-          #      与 **workflow command** 的限制不是一回事）⇒ 消息被从中间截断，
-          #      真凶那条（按文件名排序靠后的门）**永远在截断点之后**。
-          #   ② 末行裁决会把「══ 通过 165 · 失败 3 ══」判成**绿**（含「通过」）
-          #      ⇒ 真凶不进 ★ 名单。
-          #   ③ 连 `M216-VERIFY-FAIL` 也不进 BAD_LAST（只有 `FAILED`/`FAIL=[1-9]`）。
-          #   ⇒ 三条一起修：**最后写入的日志放最前**（失败门必然是最后写日志的那个 ——
-          #      后面的门根本没跑）+ 全日志找 `❌` + 补中文/`FAIL-N` 判据 + **总长截到 3900**。
-          import re as _re
-          OK_LAST = _re.compile(r'(✅|VERIFY-OK|VERIFY:|ALL-OK|FAIL=0|失败 0|/0F|0F/'
-                                r'|fail=0|\bpass=|done|PASS|通过|一致|EXPECTED)')
-          BAD_LAST = _re.compile(r'(FAIL=[1-9]|FAIL-[A-Z]|[1-9]\s*失败|失败\s*[1-9]|问题\s*[1-9]'
-                                 r'|fail=[1-9]|FAILED|❌)')
-          sus = []
-          alllogs = sorted(glob.glob('/tmp/v_*.log'), key=os.path.getmtime)
-          # ① **最后写入的日志**：失败门必然是最后一个写日志的（其后门未执行）
-          if alllogs:
-              f = alllogs[-1]
-              try:
-                  t = open(f, encoding='utf-8', errors='replace').read()
-              except Exception:
-                  t = ''
-              parts.append('=== ★★ 最后写入的日志（最可能的失败点）%s ===\n%s'
-                           % (os.path.basename(f), '\n'.join(t.splitlines()[-25:])))
-          # ② 其余可疑门：末行无成功判据 **或** 日志里出现硬失败标记
-          for f in alllogs:
-              try:
-                  t = open(f, encoding='utf-8', errors='replace').read()
-              except Exception:
-                  continue
-              lines = [l for l in t.splitlines() if l.strip()]
-              if not lines:
-                  sus.append((os.path.getmtime(f), os.path.basename(f), t)); continue
-              last = lines[-1]
-              # ⚠️ 判据只用「**末行裁决**」：整日志扫 `❌` 会**假报** —— 实测 `v_m157.log`
-              #   含 `❌`（负控/错误路径用例的正常输出）而末行是 `M157-VERIFY-OK（失败 0 · SKIP 1）`
-              #   ⇒ 100 份真实全绿日志里 1 份误判。中文/`FAIL-N` 判据已能覆盖
-              #   「══ 通过 165 · 失败 3 ══」这种末行（这才是真正的盲区）。
-              if not (OK_LAST.search(last) and not BAD_LAST.search(last)):
-                  sus.append((os.path.getmtime(f), os.path.basename(f), t))
-          sus.sort(key=lambda x: -x[0])          # 最近修改在前
-          for _mt, _bn, _tx in sus[:2]:
-              parts.append('=== ★ 可疑门 %s ===\n%s'
-                           % (_bn, '\n'.join(_tx.splitlines()[-22:])))
-
-          # ③ 各门 /tmp/v_*.log 的关键行（放最后）
-          for f in sorted(glob.glob('/tmp/v_*.log')):
-              try:
-                  txt = open(f, encoding='utf-8', errors='replace').read()
-              except Exception:
-                  continue
-              # M213s4：补中文失败判据（旧版只有 ASCII ⇒ `失败 N` 整族看不见）
-              bad = [l for l in txt.splitlines()
-                     if ('❌' in l or 'FAIL' in l or 'VERIFY-FAILED' in l
-                         or 'Traceback' in l or '失败 ' in l or 'MISMATCH' in l)]
-              if bad:
-                  parts.append('=== ③ %s ===\n%s' % (os.path.basename(f), '\n'.join(bad[-12:])))
-
-          # ── M195：顺序与上限都改了 ──
-          #   ① 旧版把「现场复现」放**最前**、把「各门日志的关键行」放**最后**，并截到 5800 字符
-          #      ⇒ 2026-09-23 的 run 35894349130（M194）里，真正指出失败的 ③ 被**截掉**，
-          #      只留了 ① 的"复现成功"（全是 rc=0）⇒ 白跑一轮。
-          #   ② 真因：**注解 message 上限是 64KB**（GitHub 文档），而"每个 step 的注解**条数**"
-          #      才有 ~10 条的限制 —— 这两件事此前被混为一谈，于是把**长度**也砍了。
-          #   ③ 现在：**失败门的关键行放最前** · 现场复现放最后 · 上限提到 60000。
-          # ★ M216s1：**`::error::` 的 message 硬上限 = 4096 字符**（实测注解 #1 长度**恰好 4096**，
-          #   从中间截断 ⇒ 按文件名排序靠后的门永远看不见）。上限从 60000 收到 **3900**；
-          #   并且**有 ★/★★ 时不再附 ③**（③ 是刷屏源）。顺序：★★ → ★ → ③ → ② → ①。
-          has_star = any(p.startswith('=== ★') for p in parts)
-          if has_star:
-              parts = [p for p in parts if not p.startswith('=== ③')]
-          parts.sort(key=lambda p: 0 if p.startswith('=== ★★') else (
-              1 if p.startswith('=== ★') else (2 if p.startswith('=== ③')
-                                               else (3 if p.startswith('=== ②') else 4))))
-          msg = '\n'.join(parts)[:3900]
-          print('::error::' + urllib.parse.quote(msg, safe=''))
-          PY
+          python3 packaging/ci_diagnose.py --logs '/tmp/v_*.log' --extra '/tmp/m187_gate*' --m187-repro || true
       - name: LSP / MCP 服务器冒烟（--version + 协议入口存在性）
         run: |
           chmod +x bootstrap/pxlsp bootstrap/pxmcp bootstrap/pxcheck
@@ -765,7 +637,10 @@ jobs:
           # M168（2026-09-21 用户报障）：install-rpm.sh 的**发行版矩阵离线自测**
           #   （openEuler 22.03/24.03 必须认脸 + 字面目录；不支持组合必须给出替代路线）
           bash packaging/selftest_install_rpm.sh
-          echo "✅ 发布侧守卫自测全绿（41：旧覆盖新必红 · 56：内容同构 + 位级可复现 · 86：最高里程碑缺 tag 必红 · M168：安装矩阵 42 用例）"
+          # M216s2：CI 失败诊断器自证（合成 5 场景 + 真实语料 0 误报；
+          #   它守的是「CI 红能不能读出真因」——已连续 4 轮被 4096 硬上限卡住）
+          python3 packaging/ci_diagnose.py --selftest
+          echo "✅ 发布侧守卫自测全绿（41：旧覆盖新必红 · 56：内容同构 + 位级可复现 · 86：最高里程碑缺 tag 必红 · M168：安装矩阵 42 用例 · 诊断器 10 断言）"
       - name: 二进制可移植性门（M168：入库件必须全静态，与 glibc 版本解耦）
         # 为什么需要（用户报障根因）：官方 aarch64 引导包里的 pxc 曾是**动态件**（需 GLIBC_2.38），
         #   在 openEuler 22.03（glibc 2.34）上「装得上、跑不起来」；同类隐患还有 bootstrap/pxc_vm
