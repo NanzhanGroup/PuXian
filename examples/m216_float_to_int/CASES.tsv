@@ -7,6 +7,10 @@ ok_idiv_float	ok	3 -4 0
 ok_slice_int	ok	[2, 3] [4, 5] [1, 2]
 ok_bslice_int	ok	2
 ok_int_str	ok	123 -45
+ok_fmt_dbl_max	ok	1.7976931348623157e+308
+ok_fmt_dbl_neg	ok	-1.7976931348623157e+308
+ok_fmt_int_like	ok	123.0 -1.0
+ok_fmt_sci	ok	1e+15 1e-300
 rej_int_1e30	rej	R1003|
 rej_int_neg1e30	rej	R1003|
 rej_int_2p63	rej	R1003|

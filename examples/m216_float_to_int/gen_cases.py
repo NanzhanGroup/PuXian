@@ -29,6 +29,15 @@ LEGAL = [
      "[2, 3] [4, 5] [1, 2]"),
     ("ok_bslice_int", "print(len(bytes_slice(bytes(\"abcdef\"), 1, 3)))", "2"),
     ("ok_int_str", "print(int(\"123\"), int(\"-45\"))", "123 -45"),
+    # ---- M216 修复 2：**现场回归**（由全量门的 m148_ieee_div 抓回）----
+    #   `i_fmt_float` 曾用 `int(f)` 做整值判断，而它的守卫按 **double 范围**短路
+    #   ⇒ `DBL_MAX` 本身不算越界 ⇒ 落到 `int(DBL_MAX)`：修前静默给 INT64_MIN
+    #   「碰巧」不出错，M216 把越界改成响亮后 ⇒ 解释轨当场 rc=1。
+    #   ⚠️ 期望值是**语言约定**（最短 roundtrip · spec §十三.7/13.8），非 Python str(float)。
+    ("ok_fmt_dbl_max", "print(str(1.7976931348623157e308))", "1.7976931348623157e+308"),
+    ("ok_fmt_dbl_neg", "print(str(0.0 - 1.7976931348623157e308))", "-1.7976931348623157e+308"),
+    ("ok_fmt_int_like", "print(str(123.0), str(0.0 - 1.0))", "123.0 -1.0"),
+    ("ok_fmt_sci", "print(str(1e15), str(1e-300))", "1e+15 1e-300"),
 ]
 
 # ---- 拒绝侧：期望 (R码, 消息体)。消息体**不含**轨道前缀与行列号 ----

@@ -117,7 +117,12 @@ def i_fmt_float(f):
     var absf = f
     if f < 0.0:
         absf = -f
-    let is_int_val = f == int(f)
+    # M216（缺陷 308 的连带回归 · m148_ieee_div 抓回）：`int(f)` 现在的**前置条件**是
+    #   `[−2^63, 2^63)`（越界/非有限 ⇒ R1003 响亮）—— 而上面那条守卫是按 **double 范围**
+    #   （`f > DBL_MAX`）短路 ±Inf/NaN，**`DBL_MAX` 本身不算越界** ⇒ 落到 `int(DBL_MAX)`
+    #   ⇒ 解释轨 rc=1（修前靠 `int(DBL_MAX)` 静默给 INT64_MIN「碰巧」不出错 = 拿缺陷当护栏）。
+    #   改为与后面**同一个阈值** `absf < 1e15` 短路（`and` 短路 ⇒ int(f) 必在范围内）。
+    let is_int_val = absf < 1e15 and f == int(f)
     if is_int_val and absf < 1e15:
         if contains(s, ".") or contains(s, "e") or contains(s, "E") or contains(s, "inf") or contains(s, "nan"):
             return s
