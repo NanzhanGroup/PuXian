@@ -152,7 +152,10 @@ jobs:
   toolchain:
     name: 工具链自举质量门（fmt + lint）
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # M216s5：**30 → 60**。实测余量只有 ~7 分钟（见下），runner 性能一波动就超时；
+    #   而「工具自测」步本身另设 45 分钟上限 ⇒ 极端情况下由**该步**先失败，
+    #   `if: failure()` 的诊断 step 才跑得起来（job 级超时会让所有后续 step 全部 skip）。
+    timeout-minutes: 60
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -189,6 +192,13 @@ jobs:
           git diff --exit-code -- docs/ecosystem_index.json docs/native_index.json || { echo "❌ stdlib/runtime 变更未同步生态/native 索引 → 重跑生成器并同步 docs/ECOSYSTEM.md 与 docs/PUXIAN_CHEATSHEET.md"; exit 1; }
           echo "✅ 生态索引与 stdlib 一致 + native 清单与 runtime 一致"
       - name: 工具自测（m64_fmt / m64_lint / m65_lsp / m65_mcp + m66_yaml/pxml/lunar + m71_mcp_build + m82_http_serve_unix + m116/m117/m118 真实缺陷用例）
+        # M216s5：**step 级 timeout 45 分钟**。为什么要单独设（而不是只靠 job 的 60）：
+        #   job 级超时会把**后面所有 step 直接 skip**（含 `if: failure()` 的诊断 step）⇒
+        #   连原因都读不到（2026-09-26 run 36255889717 实测：step 8 跑满 30 分钟被杀，
+        #   诊断 step 显示 None）。step 级超时则让**这一步**失败 ⇒ 诊断照跑。
+        #   实测耗时：49650a0 那次 23 分 08 秒；f7a3d74 那次 >30 分钟（同一条门列表）
+        #   ⇒ 共享 runner 的性能波动足以把它顶过 30 分钟。
+        timeout-minutes: 45
         # ⚠️ 每条 verify **必须独立成行**：GitHub Actions 默认 shell 是 `bash -e {0}`，
         #    而 `set -e` **不**作用于 AND-OR 列表 —— `a && b` 里 a 失败只令该列表返回
         #    非零、**不会**中止脚本（实测 `bash -ec 'false && true; echo X'` 仍打印 X、
