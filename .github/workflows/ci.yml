@@ -670,12 +670,34 @@ jobs:
           #   判据 = **末行裁决**：末行含成功标记、且不含失败字眼 ⇒ 绿；否则**可疑**。
           #   本机用 97 份真实日志实测：全绿场景下 **0 误报**（比"全日志找关键词"稳得多，
           #   因为不再被中间的负控 PASS 行干扰）。
+          # ★ M216s1（第 95 轮补 · **299 家族第三次复发**）：本次实测又栽在同一处 ——
+          #   ① **`::error::` 命令的消息硬上限 = 4096 字符**（实测注解 #1 长度恰好 4096；
+          #      此前注释里写的 "注解 message 上限 64KB" 是 GitHub **check-run** 的限制，
+          #      与 **workflow command** 的限制不是一回事）⇒ 消息被从中间截断，
+          #      真凶那条（按文件名排序靠后的门）**永远在截断点之后**。
+          #   ② 末行裁决会把「══ 通过 165 · 失败 3 ══」判成**绿**（含「通过」）
+          #      ⇒ 真凶不进 ★ 名单。
+          #   ③ 连 `M216-VERIFY-FAIL` 也不进 BAD_LAST（只有 `FAILED`/`FAIL=[1-9]`）。
+          #   ⇒ 三条一起修：**最后写入的日志放最前**（失败门必然是最后写日志的那个 ——
+          #      后面的门根本没跑）+ 全日志找 `❌` + 补中文/`FAIL-N` 判据 + **总长截到 3900**。
           import re as _re
           OK_LAST = _re.compile(r'(✅|VERIFY-OK|VERIFY:|ALL-OK|FAIL=0|失败 0|/0F|0F/'
                                 r'|fail=0|\bpass=|done|PASS|通过|一致|EXPECTED)')
-          BAD_LAST = _re.compile(r'(FAIL=[1-9]|[1-9]\s*失败|fail=[1-9]|FAILED|❌)')
+          BAD_LAST = _re.compile(r'(FAIL=[1-9]|FAIL-[A-Z]|[1-9]\s*失败|失败\s*[1-9]|问题\s*[1-9]'
+                                 r'|fail=[1-9]|FAILED|❌)')
           sus = []
-          for f in glob.glob('/tmp/v_*.log'):
+          alllogs = sorted(glob.glob('/tmp/v_*.log'), key=os.path.getmtime)
+          # ① **最后写入的日志**：失败门必然是最后一个写日志的（其后门未执行）
+          if alllogs:
+              f = alllogs[-1]
+              try:
+                  t = open(f, encoding='utf-8', errors='replace').read()
+              except Exception:
+                  t = ''
+              parts.append('=== ★★ 最后写入的日志（最可能的失败点）%s ===\n%s'
+                           % (os.path.basename(f), '\n'.join(t.splitlines()[-25:])))
+          # ② 其余可疑门：末行无成功判据 **或** 日志里出现硬失败标记
+          for f in alllogs:
               try:
                   t = open(f, encoding='utf-8', errors='replace').read()
               except Exception:
@@ -684,12 +706,16 @@ jobs:
               if not lines:
                   sus.append((os.path.getmtime(f), os.path.basename(f), t)); continue
               last = lines[-1]
+              # ⚠️ 判据只用「**末行裁决**」：整日志扫 `❌` 会**假报** —— 实测 `v_m157.log`
+              #   含 `❌`（负控/错误路径用例的正常输出）而末行是 `M157-VERIFY-OK（失败 0 · SKIP 1）`
+              #   ⇒ 100 份真实全绿日志里 1 份误判。中文/`FAIL-N` 判据已能覆盖
+              #   「══ 通过 165 · 失败 3 ══」这种末行（这才是真正的盲区）。
               if not (OK_LAST.search(last) and not BAD_LAST.search(last)):
                   sus.append((os.path.getmtime(f), os.path.basename(f), t))
           sus.sort(key=lambda x: -x[0])          # 最近修改在前
-          for _mt, _bn, _tx in sus[:3]:
-              parts.append('=== ★ 可疑门（末行无成功判据 · 最近修改）%s ===\n%s'
-                           % (_bn, '\n'.join(_tx.splitlines()[-30:])))
+          for _mt, _bn, _tx in sus[:2]:
+              parts.append('=== ★ 可疑门 %s ===\n%s'
+                           % (_bn, '\n'.join(_tx.splitlines()[-22:])))
 
           # ③ 各门 /tmp/v_*.log 的关键行（放最后）
           for f in sorted(glob.glob('/tmp/v_*.log')):
@@ -711,9 +737,16 @@ jobs:
           #   ② 真因：**注解 message 上限是 64KB**（GitHub 文档），而"每个 step 的注解**条数**"
           #      才有 ~10 条的限制 —— 这两件事此前被混为一谈，于是把**长度**也砍了。
           #   ③ 现在：**失败门的关键行放最前** · 现场复现放最后 · 上限提到 60000。
-          parts.sort(key=lambda p: 0 if p.startswith('=== ★') else (
-              1 if p.startswith('=== ③') else (2 if p.startswith('=== ②') else 3)))
-          msg = '\n'.join(parts)[:60000]
+          # ★ M216s1：**`::error::` 的 message 硬上限 = 4096 字符**（实测注解 #1 长度**恰好 4096**，
+          #   从中间截断 ⇒ 按文件名排序靠后的门永远看不见）。上限从 60000 收到 **3900**；
+          #   并且**有 ★/★★ 时不再附 ③**（③ 是刷屏源）。顺序：★★ → ★ → ③ → ② → ①。
+          has_star = any(p.startswith('=== ★') for p in parts)
+          if has_star:
+              parts = [p for p in parts if not p.startswith('=== ③')]
+          parts.sort(key=lambda p: 0 if p.startswith('=== ★★') else (
+              1 if p.startswith('=== ★') else (2 if p.startswith('=== ③')
+                                               else (3 if p.startswith('=== ②') else 4))))
+          msg = '\n'.join(parts)[:3900]
           print('::error::' + urllib.parse.quote(msg, safe=''))
           PY
       - name: LSP / MCP 服务器冒烟（--version + 协议入口存在性）
