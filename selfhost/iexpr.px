@@ -349,28 +349,37 @@ def i_eval_call(node, env):
 # ---------- 二元运算（短路处理，对齐 eval_expr Binary） ----------
 def i_eval_binary_node(node, env):
     let op = node[1]
+    # ── M218（第 97 轮 · 缺陷 310）：`and`/`or` 的**返回值** = **操作数本身** ──
+    #   修前：解释轨返回**布尔**（`1 and 2` ⇒ `true`），而编译两轨走
+    #   `px_and(a,b) = truthy(a) ? b : a` / `px_or(a,b) = truthy(a) ? a : b`
+    #   （runtime.c）⇒ 返回**操作数** ⇒ **三轨分叉**；而文档只规定了「短路」
+    #   （spec.md「短路运算保持短路」），**没规定返回什么**。
+    #   返回值取「操作数」的理由：① 编译两轨已是如此（改动面最小）；
+    #   ② 关键字风格（`and`/`or`）本就对齐 Python；③ `x = a or default` 这类写法
+    #   **需要**操作数语义才有用 —— 修前在解释轨下会静默拿到 `true`（错值，不报错）。
+    #   ⚠️ 四条返回路径**逐字对齐** runtime 的 px_and/px_or；**短路位置不变**。
     if op == "And":
         let lr = i_eval_expr(node[2], env)
         if lr.is_err():
             return Err(lr.err())
         let l = lr.unwrap()
         if not i_truthy(l):
-            return Ok(false)
+            return Ok(l)  # px_and: truthy(a) ? b : a ⇒ 假 ⇒ 返回 a
         let rr = i_eval_expr(node[3], env)
         if rr.is_err():
             return Err(rr.err())
-        return Ok(i_truthy(rr.unwrap()))
+        return Ok(rr.unwrap())  # 真 ⇒ 返回 b
     if op == "Or":
         let lr = i_eval_expr(node[2], env)
         if lr.is_err():
             return Err(lr.err())
         let l = lr.unwrap()
         if i_truthy(l):
-            return Ok(true)
+            return Ok(l)  # px_or: truthy(a) ? a : b ⇒ 真 ⇒ 返回 a
         let rr = i_eval_expr(node[3], env)
         if rr.is_err():
             return Err(rr.err())
-        return Ok(i_truthy(rr.unwrap()))
+        return Ok(rr.unwrap())  # 假 ⇒ 返回 b
     let lr = i_eval_expr(node[2], env)
     if lr.is_err():
         return Err(lr.err())
