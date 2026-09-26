@@ -61,7 +61,7 @@ static LXValue fn_main(LXValue* args, int nargs, void* ctx) {
     px_srcline(18);
     _v10 = px_call(px_get_global("Ok"), (LXValue[]){px_int(7LL)}, 1);
     px_srcline(19);
-    (void)(px_call(px_get_global("print"), (LXValue[]){({ LXValue _t12 = _v10; if (px_is_result(_t12)) { if (!px_result_ok(_t12)) px_error("force unwrap Err"); _t12 = px_result_unwrap(_t12); } if (px_is_null(_t12)) px_error("force unwrap null"); _t12; })}, 1));
+    (void)(px_call(px_get_global("print"), (LXValue[]){({ LXValue _t12 = _v10; if (px_is_result(_t12)) { if (!px_result_ok(_t12)) px_error("R1004: 强制解包 !: 值为 Err(%s)", px_to_string(px_result_unwrap(_t12))); _t12 = px_result_unwrap(_t12); } if (px_is_null(_t12)) px_error("R1004: 强制解包 !: 值为 null"); _t12; })}, 1));
 px_err_11:
     if (px_err_11_proped) return px_err_11_val;
     return px_null();

@@ -79,6 +79,7 @@ var cg_closure_id = 0
 var cg_seq_uid = 0  # M165（缺陷 178）：序列化临时变量计数器（见 cg_gen_expr 前的说明）
 var cg_iter_uid = 0  # M166（缺陷 176）：迭代长度快照局部变量计数器（`_ilN`，与 _tN 分开编号）
 var cg_unpack_uid = 0  # M167（缺陷 180）：多变量解包的临时槽计数器（`_upN`，与 _tN 分开编号）
+var cg_cerr_uid = 0  # M220（缺陷 320）：闭包体 / 生成器 lambda 的**错误传播标签**计数器（`px_cerr_N`）
 var loaded = {"_": 0}
 # ---------- 工具 ----------
 # 空 dict 创建（PuXian 限制：{} 是空块=null，非空 dict）
@@ -110,6 +111,16 @@ def cg_unpack_tmp():
     #   不占 cg_tmp() 的 `_tN` 序号（手法同 cg_iter_len_tmp / cg_seq_uid）。
     cg_unpack_uid = cg_unpack_uid + 1
     return "_up" + str(cg_unpack_uid)
+def cg_cerr_tag():
+    # M220（缺陷 320）：闭包体 / 生成器 lambda 的错误传播标签 —— **闭包体也是帧**
+    #   （M169 定的一条真相），因此 `?` 在其中必须有**自己的**错误标签。
+    #   修前：① 顶层闭包体不压标签 ⇒ `len(cg_err_labels) == 0` 被判成「顶层 ?」⇒ 报错
+    #   （应传播）；② 函数内闭包体 ⇒ `goto` 到**外层函数**的标签 ⇒ **C 编译失败**
+    #   （`label 'px_err_N' used but not defined`）。
+    #   标签走**专用计数器** `px_cerr_N`，不占 cg_uid() 的 `_tN` 序号
+    #   （手法同 cg_seq_uid / cg_iter_len_tmp / cg_unpack_tmp）。
+    cg_cerr_uid = cg_cerr_uid + 1
+    return "px_cerr_" + str(cg_cerr_uid)
 # M167：For.var → 名字列表（去转义；单变量是字符串、多变量是名字列表）
 def cg_for_names(v):
     if type(v) == "string":
@@ -837,6 +848,7 @@ def cg_generate(prog):
     cg_seq_uid = 0
     cg_iter_uid = 0
     cg_unpack_uid = 0
+    cg_cerr_uid = 0  # M220（缺陷 320）：闭包/生成器 lambda 错误标签计数器
     cg_topbody = false  # M169（缺陷 181）：仅模块体语句发射期间置 true
     # M181（缺陷 193）：初始化集清空（模块体绑定走全局 `px_get_global`，本就不发检查）
     cg_inited = cg_new_dict()

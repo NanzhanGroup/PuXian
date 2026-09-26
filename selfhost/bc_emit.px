@@ -635,14 +635,20 @@ def bc_emit_expr(expr, dst, func):
         bc_patch_off(func, jj, len(func["bc"]))
         return d
     if ty == "Try":
-        # A5：?expr → 求值入 d；TRY d（Err/null 就地返回传播；Ok 解包覆写）。
-        # 顶层 ?（is_top 帧）语义：Err/null 经 RET 到 run_module → driver 报错退出
-        # （对齐 codegen "顶层不能传播" 报错意图；文案差异记录）。
+        # A5：?expr → 求值入 d；TRY d, topmark（Err/null 就地返回传播；Ok 解包覆写）。
+        # M220（缺陷 316/317）：**顶层 ? 是用法错误**（解释轨/C 轨均报「仅函数内可用」），
+        #   而 VM 轨修前把 Err/null 经 RET 交回 driver ⇒ Err 只印 `错误: <payload>`
+        #   （丢措辞、无行号），null 更糟：driver 只认 Result/INT ⇒ **rc=0 且零输出**（静默）。
+        #   ⇒ 发射时在 is_top 帧打 **顶层标记**（in.b），由 vm.c 的 PXOP_TRY 就地报 R1004。
+        #   ⚠️ 不能用「main 返回 null 就报错」判据：px_vm_run_module 的 ret 初值本就是 null。
         var d = dst
         if d < 0:
             d = bc_tmp(func)
         bc_emit_expr(expr[1], d, func)
-        bc_emit_inst(func, "TRY", d, 0, 0)
+        var topmark = 0
+        if func["is_top"]:
+            topmark = 1
+        bc_emit_inst(func, "TRY", d, topmark, 0)
         return d
     if ty == "ForceUnwrap":
         # A5：!expr → 求值入 d；FORCE d（Err/null px_error；Ok 解包覆写）

@@ -1030,11 +1030,16 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
         // ---- E 表：错误传播（A5，D7）----
         // TRY（?）：Result-Err → 就地返回 Err（RET 语义回传）；null → 返回 null；
         // Ok → 就地解包覆写槽。对齐 codegen err_tag 模型（函数尾仅转发，语义等价）。
+        // M220（缺陷 316/317）：in.b = **顶层标记**（由 bc_emit 在 is_top 帧发射）
+        //   ⇒ 顶层 `?` 是用法错误，就地报 R1004（与解释轨/C 轨同码同文）。
+        //   修前：Err 经 RET 交回 driver 只印 `错误: <payload>`（丢措辞、无行号）；
+        //   null 更糟 —— driver 只认 Result/INT 两种返回 ⇒ **rc=0 且零输出**（静默通过）。
         case PXOP_TRY: {
             LXValue v = slots[in.a];
             int is_err = px_is_result(v) && !px_result_ok(v);
             int is_nul = !is_err && px_is_null(v);
             if (is_err || is_nul) {
+                if (in.b) px_error("R1004: 顶层不能使用错误传播 ?（仅函数内可用）");
                 LXValue ev = is_err ? v : px_null();
                 int rd = fr->ret_dst;
                 vm_frame_pop(st);
@@ -1050,14 +1055,16 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             break;
         }
         // FORCE（!）：Result-Err → px_error；null → px_error；否则就地解包
+        // M220（缺陷 315）：失败文案对齐**解释轨**（`强制解包 !: 值为 Err(x)` / `值为 null`）——
+        //   修前是英文 `force unwrap …` ⇒ 同一错误三轨三种文案（M203「此类型不支持 X」同族）。
         case PXOP_FORCE: {
             LXValue v = slots[in.a];
             if (px_is_result(v)) {
                 if (!px_result_ok(v))
-                    px_error("R1004: force unwrap Err: %s", px_to_string(px_result_unwrap(v)));
+                    px_error("R1004: 强制解包 !: 值为 Err(%s)", px_to_string(px_result_unwrap(v)));
                 v = px_result_unwrap(v);
             }
-            if (px_is_null(v)) px_error("R1004: force unwrap null");
+            if (px_is_null(v)) px_error("R1004: 强制解包 !: 值为 null");
             slots[in.a] = v;
             break;
         }

@@ -6,21 +6,31 @@ static LXValue fn_closure_1(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     LXValue _v115 = (nargs > 0) ? args[0] : px_null();
     LXValue _v116 = (nargs > 1) ? args[1] : px_null();
+    LXValue px_cerr_1_val = px_null();
+    int px_cerr_1_proped = 0;
     return ({ LXValue _blk = px_null(); _blk = px_add(_v115, _v116); _blk; });
+px_cerr_1:
+    if (px_cerr_1_proped) return px_cerr_1_val;
+    return px_null();
 }
 static LXValue fn_closure_2(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     LXValue _v117 = (nargs > 0) ? args[0] : px_null();
+    LXValue px_cerr_2_val = px_null();
+    int px_cerr_2_proped = 0;
     return px_mul(_v117, _v117);
+px_cerr_2:
+    if (px_cerr_2_proped) return px_cerr_2_val;
+    return px_null();
 }
 static LXValue fn_closure_3(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     LXValue _v118 = (nargs > 0) ? args[0] : px_null();
-    LXValue px_err_119_val = px_null();
-    int px_err_119_proped = 0;
+    LXValue px_cerr_3_val = px_null();
+    int px_cerr_3_proped = 0;
     return px_mul(_v118, _v118);
-px_err_119:
-    if (px_err_119_proped) return px_err_119_val;
+px_cerr_3:
+    if (px_cerr_3_proped) return px_cerr_3_val;
     return px_null();
 }
 
@@ -367,11 +377,11 @@ static LXValue fn_use_ops(LXValue* args, int nargs, void* ctx) {
     px_srcline(44);
     _v95 = ({ LXValue _t101 = _v92; px_is_null(_t101) ? px_int(42LL) : _t101; });
     px_srcline(45);
-    _v96 = ({ LXValue _t102 = _v92; px_is_null(_t102) ? px_null() : px_field(_v92, "name"); });
+    _v96 = ({ LXValue _t102 = _v92; px_is_null(_t102) ? px_null() : px_field(_t102, "name"); });
     px_srcline(46);
-    _v97 = ({ LXValue _t103 = _v92; if (px_is_result(_t103)) { if (!px_result_ok(_t103)) px_error("force unwrap Err"); _t103 = px_result_unwrap(_t103); } if (px_is_null(_t103)) px_error("force unwrap null"); _t103; });
+    _v97 = ({ LXValue _t103 = _v92; if (px_is_result(_t103)) { if (!px_result_ok(_t103)) px_error("R1004: 强制解包 !: 值为 Err(%s)", px_to_string(px_result_unwrap(_t103))); _t103 = px_result_unwrap(_t103); } if (px_is_null(_t103)) px_error("R1004: 强制解包 !: 值为 null"); _t103; });
     px_srcline(47);
-    _v98 = px_field(px_field(({ LXValue _t104 = _v92; if (px_is_result(_t104)) { if (!px_result_ok(_t104)) px_error("force unwrap Err"); _t104 = px_result_unwrap(_t104); } if (px_is_null(_t104)) px_error("force unwrap null"); _t104; }), "b"), "c");
+    _v98 = px_field(px_field(({ LXValue _t104 = _v92; if (px_is_result(_t104)) { if (!px_result_ok(_t104)) px_error("R1004: 强制解包 !: 值为 Err(%s)", px_to_string(px_result_unwrap(_t104))); _t104 = px_result_unwrap(_t104); } if (px_is_null(_t104)) px_error("R1004: 强制解包 !: 值为 null"); _t104; }), "b"), "c");
     px_srcline(48);
     _v99 = px_index(px_index(_v92, px_int(0LL)), px_int(1LL));
     px_srcline(49);
