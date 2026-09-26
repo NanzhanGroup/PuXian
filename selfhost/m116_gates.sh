@@ -725,6 +725,16 @@ run m213_gcroot_precision bash examples/m213_gcroot_precision/verify.sh
 #   ⚠️ 首版 R-A 写成「后置死值」⇒ 一口吃掉 6 条既有锚点（那些正是**真形状**）⇒ 已收紧；
 #     第 ①/④/⑤ 层守的就是「规则有牙且不越界」（自证 25 锚点 · 判据回放 · 负控 3 道）。
 run m214_audit_exempt bash examples/m214_audit_exempt/verify.sh
+# M215（第 94 轮）：**整数运算符的逐值真值对拍** —— 主题是「**三轨一致 ≠ 正确**」。
+#   缺陷 305（`//` 的商由 `(n-r)/d` 求 ⇒ n 逼近 INT64_MIN 时 `n-r` 溢出 ⇒ **商符号翻转**）·
+#   306（`INT64_MIN // -1` / `% -1` ⇒ 硬件除法陷阱 **SIGFPE + core**）·
+#   307（解释轨 `i_bin_compare` 对 int/int 也先转 float ⇒ **>2^53 的整数比较错误**，三轨分叉）。
+#   ⚠️ 305/306 的病灶在**运行时原语内部**，且 `px_idiv`（runtime.c）与 `pxc_vm` 的
+#     `PXOP_IDIV`/`PXOP_MOD` 快路径**各写了一遍同样的公式** ⇒ 三轨跑的是同一份语义、
+#     输出逐字节一致 ⇒ **任何「三轨对拍门」按定义看不见它**。
+#   ⇒ 判据 = 三轨彼此一致 **且** 与 truth/ 的独立真值一致（Python 定义式 + Python 量级域互校，
+#     Go 是第三份意见 —— CI 无 Go，本地全门用 M215_REQUIRE_GO=1 强制三份齐）。
+run m215_int_truth env M215_REQUIRE_GO=1 bash examples/m215_int_truth/verify.sh
 step "M190 · 上游 registry-px 真实用例回归（128 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。

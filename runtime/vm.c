@@ -774,23 +774,21 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
         }
         case PXOP_IDIV: {
             // px_idiv（INT-INT 分支）：欧几里得商（余数非负）；d==0 回落 px_idiv 报错
+            // M215（第 94 轮 · 缺陷 305/306）：快路径**不再自带公式** —— 改调 px_idiv64
+            //   （runtime.h），与 px_idiv 共用**唯一实现**。历史教训：这两处各写了一遍
+            //   同样的 `(n - r) / d` ⇒ 三轨**一致地错**，任何三轨对拍门都看不见。
             LXValue x = slots[in.b], y = slots[in.c];
             if (x.type == PX_INT && y.type == PX_INT && y.as.i != 0) {
-                int64_t d = y.as.i, n = x.as.i;
-                int64_t r = n % d;
-                if (r < 0) r += (d < 0 ? -d : d);
-                slots[in.a] = vm_int((n - r) / d);
+                slots[in.a] = vm_int(px_idiv64(x.as.i, y.as.i));
             } else slots[in.a] = px_idiv(x, y);
             break;
         }
         case PXOP_MOD: {
             // px_mod（INT-INT 分支）：rem_euclid（余数非负）；d==0 回落 px_mod 报错
+            // M215（缺陷 305/306）：同上，改调 px_imod64（runtime.h）。
             LXValue x = slots[in.b], y = slots[in.c];
             if (x.type == PX_INT && y.type == PX_INT && y.as.i != 0) {
-                int64_t d = y.as.i, n = x.as.i;
-                int64_t r = n % d;
-                if (r < 0) r += (d < 0 ? -d : d);
-                slots[in.a] = vm_int(r);
+                slots[in.a] = vm_int(px_imod64(x.as.i, y.as.i));
             } else slots[in.a] = px_mod(x, y);
             break;
         }

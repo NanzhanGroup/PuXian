@@ -827,6 +827,25 @@ def i_shr_u(a, b):
 def i_bin_compare(op, l, r, pos):
     let tl = i_type_name(l)
     let tr = i_type_name(r)
+    # ---------- M215（第 94 轮 · 缺陷 307）：int 对 int 必须**按整数**比较 ----------
+    #   修前这里**一律**走下面的 `float(l) < float(r)`，而 double 只有 53 位尾数 ⇒
+    #   超过 2^53 的整数被舍入到**同一个** double ⇒
+    #       `9223372036854775806 < 9223372036854775807` 给 **false**（真值 true）
+    #       `2^53 < 2^53+1` 给 false · `2^62-1 < 2^62` 给 false · `INT64_MIN < INT64_MIN+1` 给 false
+    #   而编译轨（runtime `px_lt/le/gt/ge`）**第一分支**就是 `a.as.i < b.as.i` ⇒ **三轨分叉**。
+    #   本分支与 runtime 那四个函数逐条对齐：int-int ⇒ 整数；其余数值组合 ⇒ double。
+    #   （`i_cmp_values_raw` 早就有同款 int-int 分支 —— 故 `sorted`/`min`/`max` 是对的、
+    #    只有**比较运算符**这一条路漏了，属于「同一语义面只收口了一处」的旧疾。）
+    #   权威口径：docs/PUXIAN_CHEATSHEET.md 事实 240。
+    if tl == "int" and tr == "int":
+        if op == "Lt":
+            return Ok(l < r)
+        if op == "Le":
+            return Ok(l <= r)
+        if op == "Gt":
+            return Ok(l > r)
+        if op == "Ge":
+            return Ok(l >= r)
     let ln = tl == "int" or tl == "float"
     let rn = tr == "int" or tr == "float"
     if ln and rn:

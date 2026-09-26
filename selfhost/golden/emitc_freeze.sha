@@ -220,6 +220,7 @@ examples/m208_vm_c_local_roots/probe_coro.px src=77ce25ff93dfe5e8 rc=0 out=8b1a7
 examples/m208_vm_c_local_roots/probe_lit.px src=d086227c68cb82bf rc=0 out=f8be800d62000dc9e3759363289bbc0f err=e3b0c44298fc1c14
 examples/m209_gcroot_rules/probe_rules.px src=d4d248549466f5da rc=0 out=174a3a158b13c1505fc879bd55f55119 err=e3b0c44298fc1c14
 examples/m211_conn_read_eintr/probe_eintr.px src=5481e2026ddc9b69 rc=0 out=36710c58a1facb3afc7085f59ab25fcb err=e3b0c44298fc1c14
+examples/m215_int_truth/corpus.px src=cc1eea7f95f18c6d rc=0 out=71736c41deb17980d365e193b5c02643 err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=25f7bb9ac610f0f826c9ed8c4047f24f err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=fc0b79277b06f69862f3101732750439 err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14
