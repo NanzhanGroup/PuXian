@@ -34,7 +34,11 @@
 #  A runtime `bi_bytes_get` 越界退回 `return px_null();`      ⇒ ③ n1 红（rc 由 1 变 0）
 #  B runtime `bi_bytes_set` 越界文案退回旧文               ⇒ ③ n2 红（词条与 b[i] 不同）
 #  C selfhost `ibuiltin.px` 删掉 bytes_get 前置校验        ⇒ ③ n1 红（解释轨丢掉用户行号）
-#  D runtime `bi_bytes_get` 索引校验退回 `int_val`          ⇒ ③ n5/n6 红（文案分叉 + 静默截断）
+#  D runtime `bi_bytes_get` 索引校验退回 `int_val`          ⇒ ③ n5/n6 红（**文案分叉**）
+#    ⚠️ M216（第 95 轮 · 缺陷 308）把 `int_val` 对 float 的**静默截断**改成响亮
+#      （`R1002: 期望整数，实际是 float`）⇒ 本负控原来的「静默截断」那半条判据
+#      被新修复**吸收**、永远不成立（负控失去牙 —— M183 记过的老坑）。
+#      靶心已改为 D 独有的「**词条分叉**」；n6 仍必须 R1002，只是文案不得与用户面相同。
 #
 # 用法：bash examples/m189_bytes_bounds/verify.sh [--neg-skip]
 # 退出码：0 = 绿，1 = 红，2 = 门自身前置自查失败。
@@ -246,11 +250,18 @@ PY
         rm -rf "$ROOT/selfhost/build"
         [ "$rc" != 0 ] && ! grep -qE '错误 \[R100[23]\] 4:' "$W/ncc.out"
     }
-    chk_D_red() {   # n5/n6：文案分叉 + float 静默截断
+    chk_D_red() {   # n5/n6：**词条分叉**（M216 起「float 静默截断」那一半已被吸收）
         run3 "$HERE/neg/n5_badidx.px" ncD
         ! grep -q '索引必须是整数' "$W/ncD.vm.out" || return 1
         run3 "$HERE/neg/n6_floatidx.px" ncE
-        ! grep -q 'R1002' "$W/ncE.vm.out"
+        # ⚠️ M216（第 95 轮 · 缺陷 308）把 `int_val` 对 float 的**静默截断**改成了**响亮**
+        #   （`R1002: 期望整数，实际是 float`）⇒ 本负控原来那半条判据（"不得出现 R1002"）
+        #   被新修复**吸收**、永远不成立 ⇒ 负控失去牙。
+        #   这是 M183 记过的老坑：**新修复会吸收旧缺陷 ⇒ 旧门的负控失效**。
+        #   靶心改为 D 真正独有的那一半：**打了桩之后词条必须与用户面不同**
+        #   （用户面 =「索引必须是整数，实际是 float」；打了桩 =「期望整数，实际是 float」）
+        #   —— 仍要求 rc≠0 + R1002（float 索引**永远**不接受），只是文案必须分叉。
+        ! grep -q '索引必须是整数，实际是 float' "$W/ncE.vm.out"
     }
 
     neg A chk_A_red patch_A "$RT"
