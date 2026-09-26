@@ -38,7 +38,7 @@ emit_and_link() { # $1=px文件 $2=输出名 → /tmp/<out>（VM 轨：compiler_
         echo "  ❌ C 编译失败: $src"; tail -5 "$OUT/${name}.cc.log"; return 1; }
     local objs="" f
     for f in "$CACHE"/*.o; do objs="$objs $f"; done
-    gcc -O2 -pthread -o "$OUT/${name}" "$OUT/${name}.o" $objs \
+    gcc -static -O2 -pthread -o "$OUT/${name}" "$OUT/${name}.o" $objs \
         "$RT/third_party/sqlite3/sqlite3.o" \
         "$RT/mbedtls/lib/libmbedtls.a" "$RT/mbedtls/lib/libmbedx509.a" "$RT/mbedtls/lib/libmbedcrypto.a" \
         "$RT/third_party/ngtcp2/lib/libngtcp2.a" "$RT/third_party/ngtcp2/lib/libngtcp2_crypto_quictls.a" \

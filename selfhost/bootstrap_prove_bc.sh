@@ -87,7 +87,8 @@ if [ "$need_new" = "1" ]; then
     gcc -c -O2 -I"../$CACHE" -I"$RT" "$BUILD/compiler_new.c" -o /tmp/bpbc_cn.o 2>/tmp/bpbc_cn_cc.log || {
         echo "❌ compiler_new.c 编译失败" >&2; tail -15 /tmp/bpbc_cn_cc.log >&2; exit 1; }
     objs=""; for f in "$CACHE"/*.o; do objs="$objs $f"; done
-    gcc -O2 -pthread -o "$BUILD/compiler_new" /tmp/bpbc_cn.o $objs \
+    # M219（缺陷 312）：`-static` 不可省 —— 预置三方静态库非 PIC，默认 PIE 工具链上必被 ld 拒绝
+    gcc -static -O2 -pthread -o "$BUILD/compiler_new" /tmp/bpbc_cn.o $objs \
         "$RT/third_party/sqlite3/sqlite3.o" \
         "$RT/mbedtls/lib/libmbedtls.a" "$RT/mbedtls/lib/libmbedx509.a" "$RT/mbedtls/lib/libmbedcrypto.a" \
         "$RT/third_party/ngtcp2/lib/libngtcp2.a" "$RT/third_party/ngtcp2/lib/libngtcp2_crypto_quictls.a" \
@@ -142,7 +143,8 @@ if [ "$need_vmb" = "1" ]; then
     gcc -c -O2 -I"../$CACHE" -I"$RT" "$BUILD/compiler_vm.c" -o /tmp/bpbc_vm.o 2>/tmp/bpbc_vm_cc.log || {
         echo "❌ compiler_vm.c 编译失败" >&2; tail -15 /tmp/bpbc_vm_cc.log >&2; exit 1; }
     objs=""; for f in "$CACHE"/*.o; do objs="$objs $f"; done
-    gcc -O2 -pthread -o "$BUILD/compiler_vm" /tmp/bpbc_vm.o $objs \
+    # M219（缺陷 312）：同上 —— `-static` 不可省
+    gcc -static -O2 -pthread -o "$BUILD/compiler_vm" /tmp/bpbc_vm.o $objs \
         "$RT/third_party/sqlite3/sqlite3.o" \
         "$RT/mbedtls/lib/libmbedtls.a" "$RT/mbedtls/lib/libmbedx509.a" "$RT/mbedtls/lib/libmbedcrypto.a" \
         "$RT/third_party/ngtcp2/lib/libngtcp2.a" "$RT/third_party/ngtcp2/lib/libngtcp2_crypto_quictls.a" \

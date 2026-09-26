@@ -54,7 +54,7 @@ EOF
 
 for tag in old new; do
     for lvl in O0 O2; do
-        if ! "$CC" -"$lvl" "$W/$tag.c" -o "$W/${tag}_$lvl" 2> "$W/${tag}_${lvl}.log"; then
+        if ! "$CC" -static -"$lvl" "$W/$tag.c" -o "$W/${tag}_$lvl" 2> "$W/${tag}_${lvl}.log"; then
             echo "SKIP=1"; echo "SKIP_REASON=$CC -$lvl $tag 编译失败"; exit 0
         fi
         "$W/${tag}_$lvl" > "$W/${tag}_out_$lvl.txt" 2>&1 || true

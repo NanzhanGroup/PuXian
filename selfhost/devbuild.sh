@@ -10,6 +10,12 @@
 #   ./selfhost/devbuild.sh --vm            # 再生成 /tmp/pxcdev_vm（VM 轨，用户面默认）
 # 产物：/tmp/pxcdev · /tmp/<name>_dev（+ 日志 /tmp/devbuild_*.log）
 # 备注：单件 C 轨 ≈19s；--vm 追加 ≈90s（--emit-c + 链 VM 镜像）
+# ⚠️ M219（缺陷 311）：**C 轨与 VM 轨都必须 `-static`**。本仓预置三方资产
+#   （`sqlite3.o` / `libz.a` / `mbedtls/*.a`）是**非 PIC** 对象，在「默认 PIE」工具链
+#   （Ubuntu / Debian gcc 的 `--enable-default-pie`）上会被 ld 拒绝：
+#     relocation R_X86_64_32[S] against `.rodata' can not be used when making a PIE object
+#   而 Red Hat 系 gcc 默认非 PIE ⇒ **开发机恒绿、CI 必红**（实测 CI run 36262322866）。
+#   守卫：`selfhost/check_link_flags.sh`（静态扫全仓）；本机复现垫片：`selfhost/sim_pie_cc.sh`。
 # ============================================================
 set -u
 cd "$(dirname "$0")/.."
@@ -98,7 +104,7 @@ if [ "$WANT_VM" = "1" ]; then
         echo "❌ --emit-c 失败"; tail -5 /tmp/devbuild_vm.err >&2; exit 1; }
     gcc -c -O2 -I"$CACHE" -I"$RT" /tmp/devbuild_vm.c -o /tmp/devbuild_vm.o 2>/tmp/devbuild_vm.cc.log || {
         echo "❌ VM 镜像编译失败"; tail -10 /tmp/devbuild_vm.cc.log >&2; exit 1; }
-    gcc -O2 -pthread -o /tmp/pxcdev_vm /tmp/devbuild_vm.o $objs $LIBS 2>/tmp/devbuild_vm.link.log || {
+    gcc -static -O2 -pthread -o /tmp/pxcdev_vm /tmp/devbuild_vm.o $objs $LIBS 2>/tmp/devbuild_vm.link.log || {
         echo "❌ VM 轨链接失败"; tail -10 /tmp/devbuild_vm.link.log >&2; exit 1; }
     echo "✅ VM 轨：/tmp/pxcdev_vm（$(stat -c %s /tmp/pxcdev_vm) 字节）"
 fi
