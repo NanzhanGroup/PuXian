@@ -7,7 +7,7 @@
 actor_test	PASS	SKIP	interp 设计性不支持 spawn/chan（Mini 子集排除）
 ansi_test	PASS	PASS	-
 base58_test	PASS	PASS	-
-bcrypt_test	PASS	SKIP	解释器轨 >>180s（bcrypt 刻意慢 · 2^cost 轮；上游文件头自注「解释轨极慢 → 验收以编译轨为准（PX-DEF-024 同族）」· 性能性 · 与 qrcode_test 同款处置）
+bcrypt_test	PASS	SKIP	解释器轨实测 **1801s 仍未完成**（超 30min 上限被 timeout 杀掉 · rc=124；bcrypt 刻意慢 2^cost 轮，上游文件头自注「解释轨极慢 → 验收以编译轨为准（PX-DEF-024 同族）」）；性能性 · 与 qrcode_test 同款处置
 big_test	PASS	PASS	-
 bisect_test	PASS	PASS	-
 bytes_pack_test	PASS	PASS	-
