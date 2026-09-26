@@ -4490,14 +4490,32 @@ LXValue px_bitnot(LXValue a) { return px_int(~px_req_int(a, "按位取反")); }
 LXValue px_bitand(LXValue a, LXValue b) { return px_int(px_req_int(a, "按位与") & px_req_int(b, "按位与")); }
 LXValue px_bitor(LXValue a, LXValue b) { return px_int(px_req_int(a, "按位或") | px_req_int(b, "按位或")); }
 LXValue px_bitxor(LXValue a, LXValue b) { return px_int(px_req_int(a, "按位异或") ^ px_req_int(b, "按位异或")); }
-LXValue px_shl(LXValue a, LXValue b) { return px_int(px_req_int(a, "左移") << px_req_int(b, "左移")); }
-LXValue px_shr(LXValue a, LXValue b) { return px_int(px_req_int(a, "右移") >> px_req_int(b, "右移")); }
+// ── M217（缺陷 309）：移位计数的唯一实现 ──
+// 见 runtime.h 的说明。**唯一入口**：`px_shl64/px_shr64/px_shru64`。
+// ⚠️ 实现放在 .c（**不是** header 里的 inline）：调用点看不到裸 `<<` ⇒ gcc 无从折叠；
+//   而即便 LTO 内联，掩码后的计数 ∈ [0,63] ⇒ **良定义**，优化改变不了答案。
+int64_t px_shift_count(int64_t n, const char* what) {
+    if (n < 0) {
+        px_error("R1003: %s 计数不能为负数，实际是 %lld", what, (long long)n);
+    }
+    return n & 63;
+}
+int64_t px_shl64(int64_t a, int64_t n) {
+    // 经 uint64：无符号左移的回绕**良定义**（消除 C11 6.5.7p4 的「结果不可表示」UB）
+    return (int64_t)((uint64_t)a << (uint64_t)px_shift_count(n, "左移"));
+}
+int64_t px_shr64(int64_t a, int64_t n) {
+    return a >> px_shift_count(n, "右移");
+}
+int64_t px_shru64(int64_t a, int64_t n) {
+    return (int64_t)((uint64_t)a >> (uint64_t)px_shift_count(n, "无符号右移"));
+}
+
+LXValue px_shl(LXValue a, LXValue b) { return px_int(px_shl64(px_req_int(a, "左移"), px_req_int(b, "左移"))); }
+LXValue px_shr(LXValue a, LXValue b) { return px_int(px_shr64(px_req_int(a, "右移"), px_req_int(b, "右移"))); }
 LXValue px_ushr(LXValue a, LXValue b) {
-    // 无符号（逻辑）右移：按 uint64 解释后右移，再转回 int64。
-    // 移位量对 64 取模（与解释器 wrapping_shr 一致；负移位量按无符号取模）。
-    uint64_t v = (uint64_t)px_req_int(a, "无符号右移");
-    uint64_t sh = (uint64_t)px_req_int(b, "无符号右移") & 63u;
-    return px_int((int64_t)(v >> sh));
+    // 无符号（逻辑）右移：按 uint64 解释后右移，再转回 int64（掩码口径收敛到 px_shru64）。
+    return px_int(px_shru64(px_req_int(a, "无符号右移"), px_req_int(b, "无符号右移")));
 }
 
 static int compare_values_raw(LXValue a, LXValue b);

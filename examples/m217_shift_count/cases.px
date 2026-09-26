@@ -1,0 +1,194 @@
+# ⚠️ 本文件由 gen_cases.py 生成（单一事实源）—— 手改会被第 1 层的漂移检测判红
+# M217 驱动器：按 args()[1] 分派（一次编译覆盖全量用例）
+a = args()
+sel = ""
+if len(a) >= 2:
+    sel = a[1]
+
+def run_case(sel):
+    if sel == "ok_scan_pos":
+        var a = 1
+        var n = 0
+        while n < 64:
+            print(a << n, a >> n, a >>> n)
+            n = n + 1
+        return 0
+    if sel == "ok_scan_neg":
+        var a = 0 - 1
+        var n = 0
+        while n < 64:
+            print(a << n, a >> n, a >>> n)
+            n = n + 1
+        return 0
+    if sel == "ok_scan_neg8":
+        var a = 0 - 8
+        var n = 0
+        while n < 64:
+            print(a << n, a >> n, a >>> n)
+            n = n + 1
+        return 0
+    if sel == "ok_scan_min":
+        var a = 0 - 9223372036854775807 - 1
+        var n = 0
+        while n < 64:
+            print(a << n, a >> n, a >>> n)
+            n = n + 1
+        return 0
+    if sel == "ok_scan_max":
+        var a = 9223372036854775807
+        var n = 0
+        while n < 64:
+            print(a << n, a >> n, a >>> n)
+            n = n + 1
+        return 0
+    if sel == "ok_over_counts":
+        var a = 3
+        var n = 0
+        n = 64
+        print(a << n, a >> n, a >>> n)
+        n = 65
+        print(a << n, a >> n, a >>> n)
+        n = 66
+        print(a << n, a >> n, a >>> n)
+        n = 127
+        print(a << n, a >> n, a >>> n)
+        n = 128
+        print(a << n, a >> n, a >>> n)
+        n = 129
+        print(a << n, a >> n, a >>> n)
+        n = 255
+        print(a << n, a >> n, a >>> n)
+        n = 256
+        print(a << n, a >> n, a >>> n)
+        n = 1000
+        print(a << n, a >> n, a >>> n)
+        n = 4095
+        print(a << n, a >> n, a >>> n)
+        n = 9223372036854775807
+        print(a << n, a >> n, a >>> n)
+        return 0
+    if sel == "ok_neg_operand":
+        var a0 = 0 - 1
+        print(a0 << 63, a0 >> 63, a0 >>> 63)
+        var a1 = 0 - 1
+        print(a1 << 64, a1 >> 64, a1 >>> 64)
+        var a2 = 0 - 1
+        print(a2 << 65, a2 >> 65, a2 >>> 65)
+        var a3 = 0 - 8
+        print(a3 << 63, a3 >> 63, a3 >>> 63)
+        var a4 = 0 - 8
+        print(a4 << 64, a4 >> 64, a4 >>> 64)
+        var a5 = 0 - 8
+        print(a5 << 127, a5 >> 127, a5 >>> 127)
+        var a6 = 0 - 9223372036854775807 - 1
+        print(a6 << 1, a6 >> 1, a6 >>> 1)
+        var a7 = 0 - 9223372036854775807 - 1
+        print(a7 << 63, a7 >> 63, a7 >>> 63)
+        var a8 = 0 - 9223372036854775807 - 1
+        print(a8 << 64, a8 >> 64, a8 >>> 64)
+        var a9 = 9223372036854775807
+        print(a9 << 1, a9 >> 1, a9 >>> 1)
+        var a10 = 9223372036854775807
+        print(a10 << 64, a10 >> 64, a10 >>> 64)
+        return 0
+    if sel == "ok_const_vs_runtime":
+        print(1 << 64, 1 >> 64, 1 >>> 64)
+        var c0 = 1
+        var d0 = 64
+        print(c0 << d0, c0 >> d0, c0 >>> d0)
+        print(1 << 63, 1 >> 63, 1 >>> 63)
+        var c1 = 1
+        var d1 = 63
+        print(c1 << d1, c1 >> d1, c1 >>> d1)
+        print(1 << 65, 1 >> 65, 1 >>> 65)
+        var c2 = 1
+        var d2 = 65
+        print(c2 << d2, c2 >> d2, c2 >>> d2)
+        print(1 << 0, 1 >> 0, 1 >>> 0)
+        var c3 = 1
+        var d3 = 0
+        print(c3 << d3, c3 >> d3, c3 >>> d3)
+        print(1 << 1, 1 >> 1, 1 >>> 1)
+        var c4 = 1
+        var d4 = 1
+        print(c4 << d4, c4 >> d4, c4 >>> d4)
+        print(0 - 1 << 63, 0 - 1 >> 63, 0 - 1 >>> 63)
+        var c5 = 0 - 1
+        var d5 = 63
+        print(c5 << d5, c5 >> d5, c5 >>> d5)
+        print(0 - 1 << 64, 0 - 1 >> 64, 0 - 1 >>> 64)
+        var c6 = 0 - 1
+        var d6 = 64
+        print(c6 << d6, c6 >> d6, c6 >>> d6)
+        print(255 << 8, 255 >> 8, 255 >>> 8)
+        var c7 = 255
+        var d7 = 8
+        print(c7 << d7, c7 >> d7, c7 >>> d7)
+        print(7 << 65, 7 >> 65, 7 >>> 65)
+        var c8 = 7
+        var d8 = 65
+        print(c8 << d8, c8 >> d8, c8 >>> d8)
+        print(0 - 9223372036854775807 - 1 << 1, 0 - 9223372036854775807 - 1 >> 1, 0 - 9223372036854775807 - 1 >>> 1)
+        var c9 = 0 - 9223372036854775807 - 1
+        var d9 = 1
+        print(c9 << d9, c9 >> d9, c9 >>> d9)
+        return 0
+    if sel == "ok_bitops_regress":
+        print(7 & 3, 7 | 8, 7 ^ 5, ~0, ~(0 - 1))
+        var x = 0 - 1
+        print(x & 255, x | 0, x ^ x, ~x)
+        return 0
+    if sel == "ok_chain":
+        var a = 1
+        var n = 40
+        print((a << n) >> 20, (a << 40) >>> 39)
+        var m = 63
+        print(a << m, (a << m) >> m)
+        return 0
+    if sel == "rej_shl_neg1":
+        var a = 8
+        var n = 0 - 1
+        print(a << n)
+        return 0
+    if sel == "rej_shr_neg1":
+        var a = 8
+        var n = 0 - 1
+        print(a >> n)
+        return 0
+    if sel == "rej_shru_neg1":
+        var a = 8
+        var n = 0 - 1
+        print(a >>> n)
+        return 0
+    if sel == "rej_shl_neg64":
+        var a = 8
+        var n = 0 - 64
+        print(a << n)
+        return 0
+    if sel == "rej_shr_neg64":
+        var a = 8
+        var n = 0 - 64
+        print(a >> n)
+        return 0
+    if sel == "rej_shru_neg64":
+        var a = 8
+        var n = 0 - 64
+        print(a >>> n)
+        return 0
+    if sel == "rej_shl_negmin":
+        var a = 8
+        var n = 0 - 9223372036854775807 - 1
+        print(a << n)
+        return 0
+    if sel == "rej_shru_negmin":
+        var a = 8
+        var n = 0 - 9223372036854775807 - 1
+        print(a >>> n)
+        return 0
+    if sel == "rej_shl_const_neg":
+        print(8 << (0 - 1))
+        return 0
+    print("NO-SUCH-CASE: " + sel)
+    return 2
+
+exit(run_case(sel))
