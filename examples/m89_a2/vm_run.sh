@@ -53,7 +53,7 @@ gcc -c -O2 -I"$CACHE" -I"$RT" "/tmp/vm_run_${NAME}.c" -o "/tmp/vm_run_${NAME}.o"
     echo "❌ C 编译失败 —— 日志 /tmp/vm_run_cc.log" >&2; tail -15 /tmp/vm_run_cc.log >&2; exit 1; }
 objs=""
 for f in "$CACHE"/*.o; do objs="$objs $f"; done
-gcc -O2 -pthread -o "/tmp/vm_run_${NAME}" "/tmp/vm_run_${NAME}.o" $objs \
+gcc -static -O2 -pthread -o "/tmp/vm_run_${NAME}" "/tmp/vm_run_${NAME}.o" $objs \
     "$RT/third_party/sqlite3/sqlite3.o" \
     "$RT/mbedtls/lib/libmbedtls.a" "$RT/mbedtls/lib/libmbedx509.a" "$RT/mbedtls/lib/libmbedcrypto.a" \
     "$RT/third_party/ngtcp2/lib/libngtcp2.a" "$RT/third_party/ngtcp2/lib/libngtcp2_crypto_quictls.a" \

@@ -747,6 +747,18 @@ step "M216 · 浮点→int 转换族（缺陷 308）：平台相关 UB + 三轨�
 #   ⇒ 判据 = 22 例（合法 9 拒绝 13）× 三轨逐字节一致 **且** 合法侧与 Python 独立真值一致；
 #     第 ③ 层另做**指令级平台举证**（两架构 objdump：旧形态 cvttsd2si⇄fcvtzs、新形态两侧都有守卫）。
 run m216_float_to_int bash examples/m216_float_to_int/verify.sh
+# M217（第 96 轮 · 缺陷 309）：移位计数越界 UB 收口（同一份 C 在 -O0/-O2 给两个答案）。
+# M218（第 97 轮 · 缺陷 310）：`and`/`or` 的**返回值**语义三轨统一（解释轨给 true）。
+#   ⚠️ **缺陷 313（M219 修）**：这两个门在 M217/M218 交付时**漏注册** —— CHANGELOG 写了
+#   「门 7 层」，但 `grep -rn 'm217_shift_count|m218_logic_value'` 在本文件与 ci.yml 里
+#   **零命中** ⇒ 只在提交时手工跑过一次，此后再无回归防线（与 M216 的门进了 ⇒ 反差更明显）。
+run m217_shift_count bash examples/m217_shift_count/verify.sh
+run m218_logic_value bash examples/m218_logic_value/verify.sh
+# M219（第 98 轮 · 缺陷 311/312/313）：**链接 flag 卫生** —— 缺 `-static` 的链接会在
+#   「默认 PIE」工具链（Ubuntu CI）上必红，而 Red Hat 系开发机恒绿（「本地绿、CI 红」第 5 例）。
+#   判据 = 垫片自证 7 判据 + 3 站点「真抽 flag 真链接」+ 全仓扫描 0 违例（豁免带过期判据）
+#        + 负控 3 道（撤 flag ×2 + 判据自伤）。
+run m219_link_flags bash examples/m219_link_flags/verify.sh
 step "M190 · 上游 registry-px 真实用例回归（128 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。

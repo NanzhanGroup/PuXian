@@ -1,3 +1,115 @@
+## M219 · **「默认 PIE 工具链」环境依赖收口 —— 开发机恒绿、CI 必红**（缺陷 311/312/313）（第 98 轮）
+
+> 主题：**「本地绿、CI 红」的第 5 例**（前四例：M168 的 `ldd` 退出码与动态件 · M169 的 devbuild
+> 按 mtime 选料 · M213 的写死开发机路径 · M215 的 tag 守卫 45 分钟窗口）。
+> 共同形状 = **工具/判据依赖了「开发机的某一个默认值」** ⇒ 只有在别处才显形。
+> 手法升级：本轮不满足于「让 CI 去抓」——**把 CI 的环境搬到本机复现**（垫片），
+> 再补一道**静态守卫**把这一类挡在提交之前。
+
+### 一 缺陷 311：`devbuild.sh` 的 VM 轨链接缺 `-static`（**CI 质量门红在 m216**）
+
+现场（CI run `36262322866`；本仓 job 日志非管理员 403 ⇒ **注解是唯一可读通道**）：
+
+```
+❌ devbuild 失败
+❌ VM 轨链接失败
+/usr/bin/ld: …/runtime/third_party/sqlite3/sqlite3.o: relocation R_X86_64_32S against `.rodata'
+              can not be used when making a PIE object; recompile with -fPIE
+```
+
+| 面 | 事实 |
+|---|---|
+| 触发点 | `examples/m216_float_to_int/verify.sh` 的第 ② 层**正判据**需要 `/tmp/pxcdev_vm` |
+| 为什么偏偏现在发作 | `devbuild.sh --vm` 此前只出现在**负控**里，而 CI 一律 `--neg-skip` ⇒ **从未在 CI 真跑过**；M216 把三轨对拍的正判据建在 VM 件上 ⇒ 第一次真跑就红 |
+| 为什么本机恒绿 | 本机 gcc 11.5（Red Hat）**不是** `--enable-default-pie`（`-fPIE [disabled]`）⇒ 不加 `-static` 也链得过 |
+| 为什么 CI 必红 | ubuntu-latest 的 gcc 默认 PIE ⇒ 仓库预置的**非 PIC** 资产（`sqlite3.o` / `libz.a` / `mbedtls/*.a`）进不了 PIE |
+
+**后果（比红本身更严重）**：质量门 step 8 死在 m216 ⇒ 其后的 **m217/m218 新门 + 上游 128 用例回归 +
+发射冻结门在 CI 上从未被验证过**（本地全量门一直在跑，所以问题被掩盖）。
+
+**本机复现（把 CI 的环境搬回来）**：`selfhost/sim_pie_cc.sh` 造一个 gcc 垫片 —— 链接命令
+（无 `-c/-E/-S`）若既无 `-static` 也无 `-pie/-no-pie` ⇒ 追加 `-pie`。用它跑修复前的抽出的 flag 段：
+
+```
+flag=[-O2 -pthread]
+/usr/bin/ld: np.o: relocation R_X86_64_32S against `.rodata' can not be used when making a PIE object
+rc=1        ← 与 CI 错误串**逐字相同**
+```
+
+### 二 缺陷 312：同族 6 处（潜伏 + 口径不统一）
+
+| 站点 | 面 |
+|---|---|
+| `selfhost/bootstrap_prove_bc.sh`（两处） | BC 轨自举证明的链接（**不在 CI** ⇒ 潜伏，一旦被引用即红） |
+| `examples/m89_s3d/verify.sh` · `m90_s1/verify.sh` · `m89_a2/vm_run.sh` | M89–M92 时代的**回归资产**（`gcstress_sweep` 只扫其 `.px`，`verify.sh` 不在任何运行器内） |
+| `examples/m217_shift_count/ub_proof.sh` | UB 举证（只链自有 `.c` ⇒ 本无风险，但口径不统一） |
+
+⇒ 统一口径：**链接一律显式声明 PIE 口径**（`-static`，本仓既有口径 —— 见 `rebake_bin.sh` 的
+`link_vm_track` 注释「M168 起 -static = 用户面默认轨口径」）。**7 处逐一收口：违例 7 → 0。**
+
+### 三 缺陷 313：M217 / M218 的门**漏注册**
+
+`grep -rn 'm217_shift_count\|m218_logic_value'` 在 `selfhost/m116_gates.sh` 与
+`.github/workflows/ci.yml` 里**零命中** —— 而 M216 的门**在**（`m116_gates.sh:749` / `ci.yml:610`）。
+⇒ 两个门只在提交时手工跑过一次，此后再无回归防线；对照之下 M216 有 ⇒ 反差不该出现。
+**本轮补齐**：本地全量门 + CI **新增独立 step**。
+
+> 为什么不塞进既有的「工具自测」step：那一步已是 `timeout-minutes: 45` 而上限、历史实测
+> 23–30 分钟（M216s5 被 30 分钟顶掉过一次）⇒ 塞进去有把整步推过上限、**连带后续步骤全 skip** 的风险。
+> 新 step 排在「失败诊断注解」之前 ⇒ 失败仍由同一条注解覆盖。
+
+### 四 两条腿：垫片（本机可复现）+ 静态守卫（防复发）
+
+**① `selfhost/sim_pie_cc.sh` —— 「默认 PIE 工具链」垫片**
+自证 **7 判据（全部与宿主默认值无关）**：
+`S1` 探针对象带非 PIC 绝对重定位 · `S2` 垫片下无防护链接**必失败**且错误串带 `PIE` ·
+`S3` 垫片行为 == 真实 gcc 显式 `-pie` · `S4` `-static` ⇒ 全静态产物 · `S5` 尊重显式 `-no-pie` ·
+`S6` `-c` 命令逐字透传 · **`N1` 负控**：去掉补 `-pie` 的行为 ⇒ `S2` 的前提消失。
+
+> ⚠️ **本轮自己的第一个坑**：探针首版写 `return (int)(long)ptr;` —— `-O2` 把它优化成 **PC 相对**引用
+> ⇒ 垫片加 `-pie` 也**不失败** ⇒ **判据没有牙**。改成 `-fno-pic` + 运行期下标的 rodata 取址后，
+> 才得到与 CI **逐字相同**的错误串。
+
+**② `selfhost/check_link_flags.sh` —— 链接 flag 卫生守卫**
+判据 = 链接必须显式声明 PIE 口径。**扫描面 7 组 glob / 266 文件 / 24 条链接命令**；
+跳过注释行、消息行、**heredoc 体**、判据自身；**续行拼接后再判**；豁免两条路（**变量** 5 条 +
+**行级** 3 条）**都带理由且计数**，且**行级豁免有过期判据**（该行不再是链接命令 ⇒ 判红）。
+自证 **5 判据**：`F1` 期望违例集**精确相等** · `F2` 链接命令计数（防空集假绿）· `F3` 豁免计数 ·
+`F4` 自身不误伤 · **`N1` 判据自伤**（合规正则恒真 ⇒ `F1` 必红）。
+
+> ⚠️ **第二个坑**：首版把 `run_scan` 包在 `$( )` 里取结果 ⇒ 计数器/违例表落进**子 shell**
+> ⇒ `F1/F2/F3` 全假红。**第三个坑**：「命令位置」判据必须按**谁在跑**判 ——
+> `if grep -q '^ gcc -O2 -o x'` / `sed -i 's|gcc … -o x|…|'` 这类行里含链接**文本**但不是链接
+> （加入模式行跳过 + 全局变量传 token 后，扫描从 **1m19s → 5.6s**）。
+
+### 五 门 `examples/m219_link_flags/`（**M219-VERIFY-OK**）5 层 · 21 通过 / 0 失败
+
+- ① 工具自证（垫片 7/0 + 守卫 5/0）
+- ② **垫片复现**：从 `devbuild.sh` / `bootstrap_prove_bc.sh` 的**脚本源码**抽出链接 flag 段
+  （关键字锚在 `-o <产物>` 上；**抽到编译行即判红**），用垫片**真的链接**一个「保证带非 PIC
+  绝对重定位」的探针对象 ⇒ 必须成功；**同一 flag 串去掉 `-static` ⇒ 必须失败且必须是 PIE 类错误**
+- ③ 全仓扫描：违例 0 + 规模下限（文件 ≥250 / 链接 ≥18）+ 豁免计数自洽（8 == 变量 5 + 行级 3）
+- ④ **负控 3 道**（撤 `devbuild.sh` 的 `-static` ⇒ 探针必 PIE 类失败 **且** 守卫点名该链接 ·
+  撤 `bootstrap_prove_bc.sh` 的 `-static` ⇒ 守卫点名 · **判据自伤**（合规正则恒真）⇒ 守卫自证的 `F1` 必红），
+  源**逐字节还原**
+- ⑤ 覆盖边界（如实登记：不跑完整 devbuild 端到端；4 处非 selfhost 站点只由静态守卫覆盖；
+  aarch64 宿主行为无 qemu；`.so` 不在判据面内）
+
+> ⚠️ **第三个坑（由「跑一遍」抓回）**：`NC-A` 的探针首版用 `pxcdev_vm` 当关键字 ⇒ 命中的是
+> **用法注释行** ⇒ 抽出的「flag」里混进 `./selfhost/devbuild.sh --vm` ⇒ 探针因
+> `unrecognized option '--vm'` 而失败 ⇒ **判据绿灯但理由完全错**（判据假绿）。
+> 修法：加 `_flags_ok`（每个 token 必须以 `-` 开头）+ **失败必须是 PIE 类** 才记 ✅。
+
+### 六 验收
+
+- 链接 flag 守卫：**违例 7 → 0**（7 处逐条收口）；扫描 266 文件 / 24 条链接命令 / 5.6s
+- **`devbuild.sh pxc --vm` 在新口径下端到端通过**（m217 门的正判据里真跑了一次，`/tmp/pxcdev_vm` 产出正常）
+- 三个门进 `selfhost/m116_gates.sh`；M217–M219 在 `ci.yml` 增**独立 step**（`timeout-minutes: 30`）
+- 全量门 `m116_gates.sh`：失败 0 项 · `--check-all` 14/14（**本轮无 `.px` / runtime `.c` 改动 ⇒ 不需重烘**）
+- 发射冻结门：**无新增 `.px` 语料 ⇒ 不需重定基**
+- 文档：`docs/GC_ROOTS.md` 不涉；新增口径见两个工具的文件头（本仓无独立「构建口径」文档，
+  故把纪律写在 `devbuild.sh` 文件头 + 守卫的 `--list`）
+
 ## M218 · **`and` / `or` 的**返回值**语义 —— 解释轨给 `true`、编译轨给操作数**（缺陷 310）（第 97 轮）
 
 > 主题：Operator-family 收口的**第 4 弹**（M215 算术 → M216 转换 → M217 移位 → **本轮逻辑**）。
