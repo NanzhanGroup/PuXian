@@ -54,12 +54,28 @@ echo "══ M219 门 · 默认 PIE 工具链环境依赖收口 ══"
 echo "── 工作目录 $W（--neg-skip=${NEG_SKIP}）"
 
 # ================= 第 ① 层：工具自证 =================
-echo "── [1/5] 工具自证"
+echo "── [1/5] 工具自证（**两档宿主**）"
 if bash "$ROOT/selfhost/sim_pie_cc.sh" --self-test > "$W/sim.log" 2>&1; then
-    if grep -q "通过 7 · 失败 0" "$W/sim.log"; then ok "垫片自证 7/0（S1–S6 + N1）"; else bad "垫片自证计数不符"; tail -8 "$W/sim.log"; fi
+    if grep -q "通过 7 · 失败 0" "$W/sim.log"; then ok "垫片自证 7/0（S1–S6 + N1 · 本机宿主）"; else bad "垫片自证计数不符"; tail -8 "$W/sim.log"; fi
 else
     bad "垫片自证 rc≠0"; tail -12 "$W/sim.log"
 fi
+# ①b **跨宿主**自证：在「默认 PIE 宿主」模拟下再跑一遍
+#   为什么：M219s1 的 N1 首版断言「不补 -pie ⇒ 必须成功」—— 只在**非 PIE 默认**宿主成立，
+#   而 ubuntu-latest（gcc 13.3）自身就加 -pie ⇒ CI 必红（实测注解 `N1 … (r1=1 rn=1)`）。
+#   本机是 Red Hat 系 ⇒ 不把「另一种宿主」搬回本机，这类回归就无人拦。
+SIMA="$(PX_PIE_SHIM_DIR="$W/simshim" bash "$ROOT/selfhost/sim_pie_cc.sh" --make)"
+if PX_REAL_CC="$SIMA/gcc" PX_PIE_SHIM_DIR="$W/nested" \
+   bash "$ROOT/selfhost/sim_pie_cc.sh" --self-test > "$W/sim2.log" 2>&1; then
+    if grep -q "通过 7 · 失败 0" "$W/sim2.log"; then
+        ok "垫片自证 7/0 **在「默认 PIE 宿主」模拟下同样成立**（跨宿主口径）"
+    else bad "PIE 宿主模拟下垫片自证计数不符"; tail -8 "$W/sim2.log"; fi
+else
+    bad "PIE 宿主模拟下垫片自证 rc≠0 ⇒ 存在**宿主相关判据**"; tail -12 "$W/sim2.log"
+fi
+# 模拟必须**确认生效**（首版用 SHIM_DIR_DEFAULT 同名目录 ⇒ 被 resolve_real_cc 跳过 ⇒ 静默没生效）
+grep -q "宿主默认 PIE" "$W/sim2.log" && ok "模拟确已生效（日志出现「宿主默认 PIE」）" \
+    || bad "模拟未生效（垫片没把模拟宿主当成真实 cc）"
 if bash "$ROOT/selfhost/check_link_flags.sh" --self-test > "$W/clf.log" 2>&1; then
     if grep -q "通过 5 · 失败 0" "$W/clf.log"; then ok "守卫自证 5/0（F1–F4 + N1）"; else bad "守卫自证计数不符"; tail -8 "$W/clf.log"; fi
 else

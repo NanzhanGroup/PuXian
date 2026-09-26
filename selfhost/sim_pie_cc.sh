@@ -118,9 +118,9 @@ self_test() {
     if [ "$r1" = "$r2" ] && { [ "$r1" != 0 ] || true; }; then s3=OK; else s3=NG; fi
     _chk "S3 垫片行为 == 真实 gcc -pie（rc=$r1/$r2）" "$s3" "OK"
 
-    # 信息行：本机工具链默认是否 PIE（不作判据，仅取证）
-    "$real" -O2 -o "$T/a3" "$T/m.o" "$T/p.o" >"$T/a3.log" 2>&1
-    if [ $? = 0 ]; then echo "   ℹ️  本机真实 gcc 无防护链接**成功** ⇒ 宿主默认非 PIE（「本地绿、CI 红」的温床）"
+    # 真实 gcc 的「原生行为」（无任何 PIE flag）—— 供信息行与 N1 共用
+    "$real" -O2 -o "$T/a3" "$T/m.o" "$T/p.o" >"$T/a3.log" 2>&1; rnative=$?
+    if [ "$rnative" = 0 ]; then echo "   ℹ️  本机真实 gcc 无防护链接**成功** ⇒ 宿主默认非 PIE（「本地绿、CI 红」的温床）"
     else echo "   ℹ️  本机真实 gcc 无防护链接**失败** ⇒ 宿主默认 PIE（等价 CI 工具链）"; fi
 
     # S4 -static 成功且全静态
@@ -128,7 +128,8 @@ self_test() {
     if [ -x "$T/b1" ] && file -b "$T/b1" | grep -q "statically linked"; then s4=OK; else s4=NG; fi
     _chk "S4 垫片 -static ⇒ 全静态产物" "$s4" "OK"
 
-    # S5 尊重显式 -no-pie
+    # S5 尊重显式 -no-pie（**这一条是「失败确由 PIE 引起」的宿主无关证据**：
+    #   与 S2 合读 ⇒ 同一条命令「不给 flag 就失败、给 -no-pie 就成功」⇒ 差异只可能来自 PIE 模式）
     "$shim/gcc" -no-pie -O2 -o "$T/c1" "$T/m.o" "$T/p.o" >"$T/c1.log" 2>&1
     if [ -x "$T/c1" ]; then s5=OK; else s5=NG; fi
     _chk "S5 垫片尊重显式 -no-pie" "$s5" "OK"
@@ -139,13 +140,23 @@ self_test() {
     if cmp -s "$T/d1.o" "$T/d2.o"; then s6=OK; else s6=NG; fi
     _chk "S6 -c 命令逐字透传（产物逐字节一致）" "$s6" "OK"
 
-    # N1 负控：不补 -pie 的垫片 ⇒ 同一命令成功 ⇒ 证明失败来自 -pie
+    # N1 负控：垫片在「不补 -pie」时的行为，必须 == **真实 gcc 的原生行为**
+    #   ⚠️ M219s1（**本轮的教训又落回自证自身**）：首版断言「不补 -pie ⇒ 同一命令必须**成功**」——
+    #      那只在**非 PIE 默认**宿主（Red Hat 系）上成立；ubuntu-latest（gcc 13.3，
+    #      `--enable-default-pie`）上真实 gcc 自己就加 `-pie` ⇒ rn=1 ⇒ 该判据在 CI 上
+    #      **必然假红**（CI 注解实测：`N1 … （r1=1 rn=1）`）。
+    #      ⇒ 改**宿主无关**判据：只要求「垫片与真实 gcc 原生行为一致」。
     mkdir -p "$T/shim_bad"
     printf '#!/usr/bin/env bash\nexec %s "$@"\n' "$real" > "$T/shim_bad/gcc"
     chmod +x "$T/shim_bad/gcc"
     "$T/shim_bad/gcc" -O2 -o "$T/n1" "$T/m.o" "$T/p.o" >"$T/n1.log" 2>&1; rn=$?
-    if [ "$r1" != 0 ] && [ "$rn" = 0 ]; then n1=OK; else n1=NG; fi
-    _chk "N1 负控：不补 -pie 的垫片 ⇒ 同一命令不再失败（r1=$r1 rn=$rn）" "$n1" "OK"
+    if [ "$rn" = "$rnative" ]; then n1=OK; else n1=NG; fi
+    _chk "N1 负控：不补 -pie 的垫片 == 真实 gcc 原生行为（rc=$rn/$rnative）" "$n1" "OK"
+    if [ "$rnative" = 0 ]; then
+        echo "        （本宿主默认非 PIE ⇒ 负控**可区分**：垫片 r1=$r1 ≠ 原生 rc=0 ⇒ 失败确由 -pie 引起）"
+    else
+        echo "        （本宿主默认 PIE ⇒ 「不补 -pie」与垫片等价（rc=$r1）⇒ 区分力由 S5 的 -no-pie 承担）"
+    fi
 
     echo "── 小计：通过 $ok · 失败 $bad"
     _cleanup
