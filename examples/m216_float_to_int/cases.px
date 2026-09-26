@@ -34,6 +34,18 @@ def run_case(sel):
     if sel == "ok_int_str":
         print(int("123"), int("-45"))
         return 0
+    if sel == "ok_fmt_dbl_max":
+        print(str(1.7976931348623157e308))
+        return 0
+    if sel == "ok_fmt_dbl_neg":
+        print(str(0.0 - 1.7976931348623157e308))
+        return 0
+    if sel == "ok_fmt_int_like":
+        print(str(123.0), str(0.0 - 1.0))
+        return 0
+    if sel == "ok_fmt_sci":
+        print(str(1e15), str(1e-300))
+        return 0
     if sel == "rej_int_1e30":
         print(int(1e30))
         return 0
