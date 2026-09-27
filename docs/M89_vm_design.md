@@ -79,6 +79,11 @@
     否则就地解包 `t = result.value`。
   - `!expr`（ForceUnwrap）→ `OP_FORCE t`：Result Err → px_error("force unwrap Err")；null → px_error；否则解包。
   - 顶层 `?`（无函数上下文）→ 编译期/运行期 px_error（对齐现「顶层不能传播」语义）。
+
+> ⚠️ **M220（第 99 轮 · 缺陷 315/316/317）更新**：上面两条的**文案**已统一为解释轨口径
+> —— `R1004: 强制解包 !: 值为 null` / `R1004: 强制解包 !: 值为 Err(<载荷>)` /
+> `R1004: 顶层不能使用错误传播 ?（仅函数内可用）`（三轨同码同文）。
+> 顶层 `?` 的**报错点**也从 driver 移到了 `PXOP_TRY`（`bc_emit` 在 `is_top` 帧打 `in.b=1` 标记）。
   - 调用方**不自动检查** Result：`?`/`!`/match 是显式消费点（与现一致，无隐式异常栈展开）。
 - px_error 致命错误、spawn 内 longjmp 隔离、px_srcfunc/px_srcline 现场追踪：VM 指令每行插 `SRCLINE line`
   （现 cg 每语句 px_srcline 对应），函数入口帧记录 name（px_srcfunc 语义）。
