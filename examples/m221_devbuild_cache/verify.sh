@@ -87,16 +87,19 @@ check_grep() {  # $1=说明 $2=模式
 }
 check_grep "「--rebuild」 选项在位"            '--rebuild) FORCE_REBUILD=1 ;;'
 check_grep "指纹变量 DEVB_KEY 在位"          'DEVB_KEY="$(src_line | sha256sum'
-check_grep "指纹含 selfhost/*.px"            'for f in selfhost/*.px'
+check_grep "指纹含 selfhost/*.px"            'sha256sum $SRC_PATTERNS'
 check_grep "产物指纹文件 fp 在位"            'fp="/tmp/devbuild_${name}.fp"'
 check_grep "复用标记 ⏭ 在位"                 '⏭  $name：源码链未变'
 check_grep "VM 轨指纹含 pxcdev 的 sha"       'VM_KEY="$DEVB_KEY/$(sha256sum /tmp/pxcdev'
 
-# 不变式 A：runtime/*.c 与 runtime/*.h 必须在 src_line 的 glob 里
-if printf '%s' "$src" | grep -q 'for f in selfhost/\*\.px runtime/\*\.c runtime/\*\.h tools/\*\.px stdlib/\*\.px; do'; then
-    note "✅ 指纹含 runtime/*.c 与 runtime/*.h（负控篡改它们时缓存必然失效）"
+# 不变式 A：runtime/*.c 与 runtime/*.h 必须在**源码链**里
+#   ⚠️ M223：判据载体从「src_line 里的 for-glob」改为 **SRC_PATTERNS 变量**
+#   —— 指纹由 mtime 三元组改成内容哈希，glob 从函数体提到了模块级；
+#   语义不变（负控篡改 runtime/*.c,h 时缓存必须失效），但锚点必须跟着改。
+if printf '%s' "$src" | grep -q 'SRC_PATTERNS="selfhost/\*\.px runtime/\*\.c runtime/\*\.h tools/\*\.px stdlib/\*\.px"'; then
+    note "✅ 源码链含 runtime/*.c 与 runtime/*.h（负控篡改它们时缓存必然失效）"
 else
-    bad "指纹**未**包含 runtime/*.c,h ⇒ 门内负控的重建会被缓存吃掉（假绿）"
+    bad "源码链**未**包含 runtime/*.c,h ⇒ 门内负控的重建会被缓存吃掉（假绿）"
 fi
 
 # 不变式 B：写指纹必须在**构建成功之后**（失败也写 ⇒ 下次复用坏件）
@@ -199,6 +202,8 @@ restore_all; cmp -s "$SNAP/devbuild.sh.snap" "$D" || bad "负控 A 还原后 dev
 
 hdr "[6/7] 负控 B：让指纹**完全不跟踪 runtime** ⇒ ③ 的判据必须红"
 # ⚠️ 负控 B 的设计要点（首版**没牙**，本轮实测抓出）：
+#   ⚠️ M223：载体由 for-glob 改为 SRC_PATTERNS 变量 —— 锚点更稳（不会再因重写
+#   函数体而失效），语义一字未变。
 #   首版只把 `runtime/*.c` 从 glob 删掉 ⇒ 判据**不红**。因为指纹还有另一路
 #   `rtcache=$(basename "$CACHE")`，而该目录名 = `tools/px` 的 `rt_key`
 #   = **runtime 源内容哈希**（rt_src_files：.c 与 .h 都在内）⇒ runtime.c 一变，
@@ -208,9 +213,9 @@ restore_all; snap_all
 python3 - "$D" <<'PY' || bad "负控 B 打桩失败"
 import sys
 p = sys.argv[1]; s = open(p, encoding="utf-8").read()
-old = 'for f in selfhost/*.px runtime/*.c runtime/*.h tools/*.px stdlib/*.px; do'
-assert s.count(old) == 1, "锚点不唯一（glob）"
-s = s.replace(old, 'for f in selfhost/*.px tools/*.px stdlib/*.px; do', 1)
+old = 'SRC_PATTERNS="selfhost/*.px runtime/*.c runtime/*.h tools/*.px stdlib/*.px"'
+assert s.count(old) == 1, "锚点不唯一（SRC_PATTERNS）"
+s = s.replace(old, 'SRC_PATTERNS="selfhost/*.px tools/*.px stdlib/*.px"', 1)
 old2 = '    echo "rtcache=$(basename \"$CACHE\")"'
 assert s.count(old2) == 1, "锚点不唯一（rtcache 名）"
 s = s.replace(old2, '    echo "rtcache=<frozen-by-NEGCTL-B>"', 1)
@@ -255,13 +260,15 @@ fi
 hdr "[7/7] 覆盖边界登记（如实）"
 note "① 短路只覆盖 「devbuild.sh」 的**产物级**复用；门内**非 devbuild** 的重复成本（如各自"
 note "   重编 runtime 对象、各自跑 .rtcache 生成）不在本轮范围内。"
-note "② 指纹用 「stat -c '%n %s %Y'」（**含 mtime**）⇒ 内容不变但 mtime 变（「touch」/「cp -a」 之外"
-note "   的写入）会触发一次重建：这是**保守**方向（宁可多建，不可跑旧件），但意味着"
-note "   「同一源码链」的判定比内容哈希**更严**。"
+note "② 【M223 已收口】修前指纹用 「stat -c '%n %s %Y'」（**含 mtime**）⇒ 内容不变、只是 mtime 变"
+note "   （「touch」/「cp」/解包/编辑器重写）就换 key ⇒ 白付一轮冷重建。M223 改为**源码内容哈希**"
+note "   （三方资产用 名字+大小，去 mtime），并给「key 为什么变」加了**归因**（diff 逐文件清单）。"
+note "   ⇒ 本条的正面判据见 examples/m223_devbuild_fingerprint/。"
 note "③ CI 上 「.rtcache」 冷 ⇒ **第一次** devbuild 仍要付全额（这是不可省的），"
 note "   本轮省的是**第 2..23 次**；CI 实测收益待发布后从 step8 时长对比。"
-note "④ 本门自带 1 次 「pxc --vm」 全量构建（冷缓存时约 100s）＋若干次 「pxc」；"
-note "   在 m116 全量门里它排在 m220 之后，会给后续门带来**一次**额外重建（mtime 已变）。"
+note "④ 本门自带 1 次 「pxc --vm」 全量构建（冷缓存时约 100s）＋若干次 「pxc」。"
+note "   ⚠️ M223 前：门内改 runtime.c 再还原后 **mtime 已变** ⇒ 后续门还得**再重建一次**；"
+note "   M223 后：指纹看**内容** ⇒ 还原即回基线 key ⇒ 后续门直接复用（这条副作用已收口）。"
 
 echo
 if [ "$fail" = "0" ]; then

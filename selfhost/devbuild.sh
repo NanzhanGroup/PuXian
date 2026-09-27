@@ -49,16 +49,29 @@ entry_src() { echo "$ENTRIES" | grep "^$1|" | cut -d'|' -f2; }
 #     再由 ci.yml 的一个 `if: always()` step 合成 `::notice::`。
 #   ⚠️ 台账只**追加**、不影响任何判据；`DEVB_STATS` 可覆盖路径。
 DEVB_STATS_FILE="${DEVB_STATS:-/tmp/devbuild_stats.tsv}"
-devb_stat() {   # $1=reuse|rebuild  $2=件名  $3=key
-    printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$1" "$2" "$3" >>"$DEVB_STATS_FILE" 2>/dev/null || true
+devb_stat() {   # $1=reuse|rebuild  $2=件名  $3=key  [$4=选料来源]
+    printf '%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$1" "$2" "$3" "${4:-${CACHE_SRC:-?}}" \
+        >>"$DEVB_STATS_FILE" 2>/dev/null || true
 }
+# ── M223（缺陷 325）：汇总**必须给出 key 的取值** ──────────────────────
+#   修前只报「出现过的 key N 个」⇒ CI 上实测「3 个」，但**哪 3 个、为什么是 3 个**
+#   无从得知（本仓 job 日志 403，注解是唯一通道 ⇒ 注解里必须自带证据）。
+#   ⚠️ 计数口径也有坑：vm 的 key 是「<pxc_key>/<pxcdev_sha>」= pxc key 的**派生**，
+#      按字符串去重会把 A 与 A/B 算成**两个独立 key** ⇒ 数字被虚增。
+#      ⇒ 这里**按件名分组列出取值**，一眼能看出"是漂移，还是派生"。
 devb_summary() {
     [ -f "$DEVB_STATS_FILE" ] || return 0
-    local r b k
+    local r b
     r=$(grep -c $'\treuse\t'   "$DEVB_STATS_FILE" 2>/dev/null || true)
     b=$(grep -c $'\trebuild\t' "$DEVB_STATS_FILE" 2>/dev/null || true)
-    k=$(cut -f4 "$DEVB_STATS_FILE" 2>/dev/null | sort -u | wc -l)
-    echo "── devbuild 累计：重建 ${b:-0} 次 / 复用 ${r:-0} 次 / 出现过的 key ${k:-0} 个（台账 $DEVB_STATS_FILE）"
+    echo "── devbuild 累计：重建 ${b:-0} 次 / 复用 ${r:-0} 次（台账 $DEVB_STATS_FILE）"
+    echo "── 源码链 key（按件分组 · 取值 ⇒ 可归因）"
+    cut -f3,4 "$DEVB_STATS_FILE" 2>/dev/null | sort | uniq -c | sort -k2,2 -k1,1nr | while read -r cnt nm kv; do
+        echo "     $nm  $kv  ×$cnt"
+    done
+    local cs
+    cs=$(cut -f5 "$DEVB_STATS_FILE" 2>/dev/null | sort | uniq -c | awk '{printf "%s×%s ", $2, $1}')
+    echo "── 选料来源：${cs:-（本台账无第 5 列 —— 旧版 devbuild 写的）}"
 }
 
 # 选 .rtcache（全 runtime 对象）
@@ -68,13 +81,29 @@ devb_summary() {
 #   ⇒ 链接报 `Relocations in generic ELF (EM: 183)` / `file in wrong format`，
 #   错误信息完全指不到根因（本机实测：aarch64 档把 pxc 的 devbuild 全数打死）。
 #   纪律同 M168「门/工具不能依赖环境」：选料必须**可判定**，不能靠「谁最新」。
-CACHE=""; best_m=0
+CACHE=""; best_m=0; CACHE_SRC=""; CACHE_WHY=""
 keyed="$("$ROOT/tools/px" rtcache 2>/dev/null | tail -1)"
 if [ -n "$keyed" ] && [ -d "$keyed" ]; then
     n=$(ls "$keyed"/*.o 2>/dev/null | wc -l)
-    [ "$n" -ge 15 ] && CACHE="${keyed%/}"
+    # ── M223（缺陷 324）：判据由「.o 数 ≥ 15」改为「**rt_ensure 的 .complete 标记**」。
+    #   那个 15 是**无解释的魔法数**。本机 `.rtcache`（3149 目录）的 .o 数实测分布：
+    #     13×2255 · 14×415 · **15×33** · 17×228 · 18×39 · 22×34 · 26×2 · 29×143
+    #   ⇒ 阈值正好卡在 14/15 之间（33 个目录**恰在边界上**），而 13/14 的 2670 个是
+    #   **裁剪版**（cuts 不同）。判「个数」而不判「是哪一份」⇒ 只要某个合法配置只产出
+    #   14 个 .o，主路径就被**静默毙掉**、改走下面的 mtime 回退（挑到**别的**目录）
+    #   ⇒ 指纹漂移，且错误信息指不到根因（M169 同族：「不能靠谁最新」）。
+    #   `.complete` 是 `rt_cache_compile` **成功才 touch** 的 ⇒ 本就是"完整"的定义。
+    if [ -f "$keyed/.complete" ] && [ "$n" -ge 1 ]; then
+        CACHE="${keyed%/}"; CACHE_SRC="rt_key"
+    else
+        CACHE_WHY="目录不完整（.complete=$([ -f "$keyed/.complete" ] && echo 有 || echo 无) · .o=$n）"
+    fi
+else
+    CACHE_WHY="tools/px rtcache 无输出（未命中且现编失败）"
 fi
 if [ -z "$CACHE" ]; then
+    CACHE_SRC="fallback"
+    echo "⚠️  devbuild 选料：主路径失效 ⇒ **回退**到「按 mtime 取最新」（$CACHE_WHY）" >&2
     case "$(uname -m)" in
         x86_64)  WANT="x86-64" ;;
         aarch64) WANT="ARM aarch64" ;;
@@ -93,6 +122,23 @@ if [ -z "$CACHE" ]; then
     done
 fi
 [ -n "$CACHE" ] || { echo "❌ 无可用 .rtcache（先跑 ./tools/px build --full examples/hello.px）" >&2; exit 1; }
+# ── M223（缺陷 324 续）：回退是**不可判定**的选料（M169 原话「不能靠谁最新」）
+#   ⇒ 必须说清挑中了谁、以及它是不是**当前源码**对应的那一份。
+#   `tools/px rtkey`（M153）就是为这种"只算 key 不编译"的核对建的。
+if [ "$CACHE_SRC" = "fallback" ]; then
+    cur_rtkey="$("$ROOT/tools/px" rtkey 2>/dev/null | tail -1)"
+    picked="$(basename "$CACHE" 2>/dev/null)"
+    if [ -n "$cur_rtkey" ]; then
+        if [ "$picked" = "$cur_rtkey" ]; then
+            echo "   ✓ 回退挑中的 $picked **正好是**当前源码 rt_key（本次无实质影响）" >&2
+        else
+            echo "   ⚠️ 回退挑中的 $picked ≠ 当前源码 rt_key $cur_rtkey" >&2
+            echo "      ⇒ **链接的 runtime 对象可能与 runtime/ 当前源码不符**（M169 同族）" >&2
+        fi
+    else
+        echo "   ⚠️ 取不到当前 rt_key（tools/px rtkey 失败）⇒ 无法核对挑中的 runtime 与源码是否相符" >&2
+    fi
+fi
 echo "── devbuild 选料：${CACHE#$ROOT/}（$(file -b "$CACHE/runtime.o" 2>/dev/null | cut -d, -f1-2)）"
 objs=""; for f in "$CACHE"/*.o; do objs="$objs $f"; done
 LIBS="$RT/third_party/sqlite3/sqlite3.o
@@ -105,11 +151,28 @@ build_one() {   # $1=件名 → /tmp/${1}dev
     local name="$1" src out fp
     src=$(entry_src "$name")
     [ -n "$src" ] || { echo "❌ 未知件：$name（可用：$(echo "$ENTRIES" | cut -d'|' -f1 | tr '\n' ' '))" >&2; return 1; }
-    out="/tmp/${name}dev"; fp="/tmp/devbuild_${name}.fp"
+    out="/tmp/${name}dev"; fp="/tmp/devbuild_${name}.fp"; mf="/tmp/devbuild_${name}.src"
     if [ "$FORCE_REBUILD" = 0 ] && [ -f "$out" ] && [ -f "$fp" ] && [ "$(cat "$fp" 2>/dev/null)" = "$DEVB_KEY" ]; then
         echo "⏭  $name：源码链未变（key=$DEVB_KEY）⇒ 复用 $out"
         devb_stat reuse "$name" "$DEVB_KEY"
         return 0
+    fi
+    # ── M223（缺陷 325）：**为什么重建** —— 只报「key 变了」等于没报（本仓纪律：
+    #   「门的红必须能读出真因」）。key 不匹配时 diff 逐文件清单 ⇒ **指名变了哪个文件**。
+    #   动机（实测）：M222 补的台账在 CI 上报「出现过的 key 3 个」，而「3 个」不告诉你
+    #   **为什么**变了 —— 归因能力必须先于下一次排查存在。
+    if [ "$FORCE_REBUILD" = 0 ] && [ -f "$fp" ]; then
+        _oldkv="$(cat "$fp" 2>/dev/null)"
+        if [ "$_oldkv" != "$DEVB_KEY" ]; then
+            echo "── $name：源码链指纹变化 $_oldkv → $DEVB_KEY（选料=$CACHE_SRC）"
+            if [ -f "$mf" ]; then
+                src_manifest > "${mf}.now"
+                diff "$mf" "${mf}.now" 2>/dev/null | grep -E '^[<>]' | head -8 | sed 's/^/   /'
+                rm -f "${mf}.now"
+            else
+                echo "   （无上次清单可比 —— M223 起才落盘）"
+            fi
+        fi
     fi
     timeout 900 "$BASE" build "$ROOT/$src" > "/tmp/devbuild_$name.c" 2>"/tmp/devbuild_$name.err" || {
         echo "❌ $name：pxc build $src 失败"; tail -5 "/tmp/devbuild_$name.err" >&2; return 1; }
@@ -118,6 +181,7 @@ build_one() {   # $1=件名 → /tmp/${1}dev
     gcc -static -O2 -pthread -o "$out" "/tmp/devbuild_$name.o" $objs $LIBS 2>"/tmp/devbuild_$name.link.log" || {
         echo "❌ $name：链接失败"; tail -10 "/tmp/devbuild_$name.link.log" >&2; return 1; }
     echo "$DEVB_KEY" > "$fp"
+    src_manifest > "$mf"
     devb_stat rebuild "$name" "$DEVB_KEY"
     echo "✅ $name → $out（$(stat -c %s "$out") 字节）"
 }
@@ -137,16 +201,28 @@ done
 #   纳入：selfhost/tools/stdlib 的 .px + runtime 顶层 .c/.h + 预置三方资产
 #         + 入库 pxc 的 sha + .rtcache 目录名。
 #   ⚠️ runtime/*.c,h 必须在内（门内负控会改它们）；入库 pxc 在内（自举起点变了产物就变）。
-src_line() {
-    for f in selfhost/*.px runtime/*.c runtime/*.h tools/*.px stdlib/*.px; do
-        [ -f "$f" ] && stat -c '%n %s %Y' "$f"
-    done
-    for f in "$RT"/third_party/sqlite3/sqlite3.o "$RT"/mbedtls/lib/*.a "$RT"/third_party/*/lib/*.a; do
-        [ -f "$f" ] && stat -c '%n %s %Y' "$f"
-    done
-    sha256sum "$BASE" 2>/dev/null | cut -c1-16
-    echo "rtcache=$(basename "$CACHE")"
+# ── M223（缺陷 323）：**源码内容哈希，不是 mtime** ─────────────────────
+#   修前用 `stat -c '%n %s %Y'`（**含 mtime**）：内容一字未改、只是 mtime 变
+#   （`touch` / `cp` / 从归档解包 / 编辑器"重写但没改"）就换一个 key
+#   ⇒ 23 门里后续每一次都白付一轮冷重建。
+#   本机实测（/tmp/m223/exp1.sh）：mtime 版 **152ms** ⇄ 内容哈希版 **34ms**
+#   —— 逐文件 `stat` 要 fork 115 次，而 `sha256sum <glob>` 一个进程处理全部
+#   ⇒ **更严、且更快**（旧口径连"性能"这个理由都不成立）。
+#   三方资产（预置、跨轮不变的大件）用 `%n %s`（名字+大小）**去掉 mtime**：
+#   内容变了大小几乎必然变；mtime 却会因为解包/复制而变。
+SRC_PATTERNS="selfhost/*.px runtime/*.c runtime/*.h tools/*.px stdlib/*.px"
+ASSET_GLOBS="$RT/third_party/sqlite3/sqlite3.o $RT/mbedtls/lib/*.a $RT/third_party/*/lib/*.a"
+src_manifest() {   # stdout：逐文件「名 哈希」清单（**已排序** ⇒ 可 diff、可归因）
+    {
+        sha256sum $SRC_PATTERNS 2>/dev/null | awk '{print $2, substr($1,1,16)}'
+        for f in $ASSET_GLOBS; do
+            [ -f "$f" ] && stat -c '%n %s' "$f"
+        done
+        echo "base=$(sha256sum "$BASE" 2>/dev/null | cut -c1-16)"
+        echo "rtcache=$(basename "$CACHE")"
+    } | LC_ALL=C sort
 }
+src_line() { src_manifest; }    # 兼容旧调用（`src_line | sha256sum | cut -c1-16`）
 DEVB_KEY="$(src_line | sha256sum | cut -c1-16)"
 echo "── 源码链指纹：$DEVB_KEY$([ "$FORCE_REBUILD" = 1 ] && echo "（--rebuild：忽略缓存）")"
 echo "── rtcache: ${CACHE#$ROOT/}"
@@ -161,6 +237,9 @@ if [ "$WANT_VM" = "1" ]; then
         echo "⏭  VM 轨：源码链未变（key=$VM_KEY）⇒ 复用 /tmp/pxcdev_vm"
         devb_stat reuse vm "$VM_KEY"
     else
+    if [ -f /tmp/devbuild_vm.fp ] && [ "$(cat /tmp/devbuild_vm.fp 2>/dev/null)" != "$VM_KEY" ]; then
+        echo "── vm：VM 轨指纹变化 $(cat /tmp/devbuild_vm.fp 2>/dev/null) → $VM_KEY"
+    fi
     echo "── VM 轨：--emit-c → /tmp/pxcdev_vm"
     timeout 1500 /tmp/pxcdev --emit-c "$ROOT/selfhost/compiler.px" > /tmp/devbuild_vm.c 2>/tmp/devbuild_vm.err || {
         echo "❌ --emit-c 失败"; tail -5 /tmp/devbuild_vm.err >&2; exit 1; }

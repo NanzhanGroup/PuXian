@@ -651,6 +651,14 @@ jobs:
           grep -E '^(   |── )' /tmp/v_m222.log | tail -30
           echo "✅ m222_http_body verify（CL 5 档跨阈值 + 落盘文件 sha 逐字节 · chunked 5 档 · 开关/阈值 · 拒绝侧 400/400/413）PASS"
 
+          # M223（第 101 轮）：devbuild 源码链指纹的稳定源（缺陷 323/324/325）。
+          #   门自带 1 次 pxc 构建（暖缓存 ~2s / 冷 ~20s）+ 若干次复用或重建。
+          #   ⚠️ 门内会**临时**改 selfhost/parser.px 作探针 —— EXIT trap 保证还原
+          #     （内容与 mtime 同时回基线），故后续门仍能命中缓存。
+          bash examples/m223_devbuild_fingerprint/verify.sh --neg-skip > /tmp/v_m223.log 2>&1 || { echo "❌ m223_devbuild_fingerprint verify 失败"; grep -E '^(   |── |❌)' /tmp/v_m223.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^(   |── )' /tmp/v_m223.log | tail -30
+          echo "✅ m223_devbuild_fingerprint verify（touch 不触发重建 · 改内容必重建+归因指名 · 回退响亮可判定）PASS"
+
       # M222 补（第 100 轮 · 第 100 轮收口）：**让 M221 的产物指纹短路「在 CI 上是否生效」可观测**。
       #   动机（实测，别当猜测）：M221 短路在本机微测上确证有效（重建 17s → 复用 0s），
       #   但 CI 的「工具自测」步时长 **1337s（M220）→ 1657s（M222）**，而同期只多了两个门
@@ -658,6 +666,11 @@ jobs:
       #   本仓 job 日志非管理员**不可读**（403）⇒ 唯一对外通道是注解，故**成功时也要发**
       #   （只挂 `failure()` 等于「一切正常时什么都看不到」）。
       - name: devbuild 复用台账（M221 短路在 CI 是否生效 —— 免 403 可读通道）
+        # M223（缺陷 325）：**只报「key N 个」无法归因** —— CI 实测「3 个」，而「3 个」
+        #   不告诉你**为什么**（job 日志 403 ⇒ 注解就是唯一通道，通道里必须自带证据）。
+        #   ⇒ 打印 **key 取值**（按件分组）+ **选料来源**列（rt_key / fallback），
+        #     并按 **pxc key** 去重报「源码链漂移数」（vm 的 key 是 `<pxc>/<sha>` 派生，
+        #     按字符串去重会虚增 —— 这是 M222 那次「3 个」里至少有 1 个的来源）。
         if: always()
         run: |
           F=/tmp/devbuild_stats.tsv
@@ -667,9 +680,18 @@ jobs:
           fi
           B=$(grep -c $'\trebuild\t' "$F" || true); B=${B:-0}
           R=$(grep -c $'\treuse\t'   "$F" || true); R=${R:-0}
-          K=$(cut -f4 "$F" | sort -u | wc -l)
           N=$(wc -l < "$F")
-          echo "::notice::devbuild 台账：调用 ${N} 行 · 重建 ${B} 次 / 复用 ${R} 次 · key ${K} 个"
+          KP=$(awk -F'\t' '$3=="pxc"{print $4}' "$F" | sort -u)
+          NKP=$(printf '%s\n' "$KP" | grep -c . || true)
+          KVL=$(awk -F'\t' '{print $3"="$4}' "$F" | sort | uniq -c | sort -k2,2 -k1,1nr | awk '{printf "%s×%s ", $2, $1}')
+          SRC=$(awk -F'\t' '{print $5}' "$F" | sort | uniq -c | awk '{printf "%s×%s ", $2, $1}')
+          echo "::notice::devbuild 台账：调用 ${N} 行 · 重建 ${B} / 复用 ${R} · 源码链 pxc key ${NKP} 个"
+          echo "::notice::devbuild 台账 · pxc key 取值：$(printf '%s' "$KP" | tr '\n' ' ')"
+          echo "::notice::devbuild 台账 · 逐件：${KVL}"
+          echo "::notice::devbuild 台账 · 选料来源：${SRC:-（无第 5 列）}"
+          if [ "${NKP:-0}" -gt 1 ]; then
+            echo "::warning::devbuild 源码链出现 ${NKP} 个 pxc key ⇒ **指纹漂移**（M223 已加归因：查各门日志的「源码链指纹变化」行）"
+          fi
       # M188 补：这一步（工具自测）在 run 382/383 上红了，而 **job 日志非管理员不可读**
       #   （实测 /actions/jobs/<id>/logs → HTTP 403）⇒ 注解是唯一对外通道。
       #   本步把各门的 /tmp/v_*.log 关键行合成**一条** ::error:: 注解（换行编码 %0A）。

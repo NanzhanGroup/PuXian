@@ -812,6 +812,15 @@ run m221_devbuild_cache bash examples/m221_devbuild_cache/verify.sh
 #   定稿：体内存 ⇒ body=体；体落盘 ⇒ body=**null** + body_tmp + body_size；无体 ⇒ ""。
 #   ⚠️ 负控 A/B 各要完整重建一次 runtime（≈6–8min/次）—— 本地全门跑负控，CI 用 --neg-skip。
 run m222_http_body bash examples/m222_http_body/verify.sh
+# M223（第 101 轮）：devbuild **源码链指纹的稳定源**（缺陷 323/324/325）。
+#   323 指纹用 mtime 三元组 ⇒ 一次 `touch` 就换 key、后面 22 门白付冷重建
+#       （实测：mtime 版 152ms ⇄ 内容哈希版 34ms ⇒ **更严且更快**）；
+#   324 `CACHE` 选料的魔法数 `[ "$n" -ge 15 ]`（.rtcache 3149 目录的 .o 数实测
+#       13×2255 · 14×415 · **15×33** · 17×228 … ⇒ 阈值正卡在 14/15 之间）⇒ 主路径
+#       可能被**静默毙掉**、改走 mtime 回退 ⇒ 漂移无归因（M169 同族）；
+#   325 台账只报「key N 个」⇒ 改为 key **取值** + 选料来源列 + **diff 逐文件清单**。
+#   ⚠️ 门内改源码是**临时**的（探针），EXIT trap 保证还原；负控 3 道。
+run m223_devbuild_fingerprint bash examples/m223_devbuild_fingerprint/verify.sh
 step "M190 · 上游 registry-px 真实用例回归（128 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。
