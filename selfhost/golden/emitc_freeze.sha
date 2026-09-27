@@ -224,6 +224,7 @@ examples/m215_int_truth/corpus.px src=cc1eea7f95f18c6d rc=0 out=71736c41deb17980
 examples/m216_float_to_int/cases.px src=9a3073cadbfe5fd3 rc=0 out=a36eb4afe4fcd51f5abea4ff4b3b0611 err=e3b0c44298fc1c14
 examples/m217_shift_count/cases.px src=b73be19187b4371b rc=0 out=bdef24491545175fe87d3714752b1f73 err=e3b0c44298fc1c14
 examples/m218_logic_value/cases.px src=b943ffc534721ebe rc=0 out=4b28bae13808cf6f5d8b03bae0d5b95b err=e3b0c44298fc1c14
+examples/m222_http_body/probe.px src=a75d9a70d35d6174 rc=0 out=da2c16dde513cb2c1076d34b69cdb785 err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=25f7bb9ac610f0f826c9ed8c4047f24f err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=fc0b79277b06f69862f3101732750439 err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14
@@ -379,7 +380,7 @@ examples/m96_s3/m96_s3_daemon.px src=a2ab7f803642778c rc=0 out=47d5730fa142be801
 examples/m97_s2/m97_s2_client.px src=afa10621f42c9d3b rc=0 out=53cd450be29fce7c899a55156f3daaf5 err=e3b0c44298fc1c14
 examples/m97_s2/m97_s2_upstream.px src=2eee8ce0fe75643c rc=0 out=10b289a3eb773e548f480b4c6ebbb4dd err=e3b0c44298fc1c14
 examples/m97_s3/m97_s3_daemon.px src=633127c937de3e04 rc=0 out=7b55179a9dc0ab4e174e52ccde84ee8d err=e3b0c44298fc1c14
-examples/m98_s2/m98_s2_daemon.px src=e9842dd717ff6261 rc=0 out=87f375c8732a4a74a9834f351800acc8 err=e3b0c44298fc1c14
+examples/m98_s2/m98_s2_daemon.px src=b4beefe104b69474 rc=0 out=38c99b0f6b3c637a0c249fa9bf859013 err=e3b0c44298fc1c14
 examples/m99_s2/m99_s2_daemon.px src=ea39ed0d7dde12a7 rc=0 out=e5efb124436039eb7db30fc470d3ad8e err=e3b0c44298fc1c14
 examples/m99_s2/m99_s2_tls_daemon.px src=588f5e6ac27b14ee rc=0 out=8a6e68d8561cd4a2c3068a6dfe11e7e4 err=e3b0c44298fc1c14
 examples/webapp/error.px src=b7dc5623cb840a71 rc=0 out=ce59ddff5240f34676e1d1f7e6cd6db2 err=e3b0c44298fc1c14
