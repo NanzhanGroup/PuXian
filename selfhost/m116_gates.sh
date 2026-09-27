@@ -859,4 +859,13 @@ fi
 echo ""
 echo "══ 汇总：失败 $FAIL 项（总耗时 $((SECONDS-GATE_ALL0))s）══"
 echo "   逐门时序（name<TAB>状态<TAB>秒<TAB>rc）：$GATE_TSV"
+# M222 补（第 100 轮）：**devbuild 复用台账** —— M221 的产物指纹短路到底省了多少？
+#   动机：CI 的「工具自测」步 1337s → 1657s（同期新增两个门）⇒ 净收益无法从单次样本隔离。
+#   台账由 devbuild.sh 追加（DEVB_STATS 可覆盖），这里只汇总，**不参与判据**。
+if [ -f "${DEVB_STATS:-/tmp/devbuild_stats.tsv}" ]; then
+    DS="${DEVB_STATS:-/tmp/devbuild_stats.tsv}"
+    DSB=$(grep -c $'\trebuild\t' "$DS" 2>/dev/null || true); DSB=${DSB:-0}
+    DSR=$(grep -c $'\treuse\t'   "$DS" 2>/dev/null || true); DSR=${DSR:-0}
+    echo "   devbuild 台账：重建 ${DSB} 次 / 复用 ${DSR} 次（$DS）"
+fi
 exit $((FAIL > 0))

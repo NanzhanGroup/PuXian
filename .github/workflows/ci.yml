@@ -651,6 +651,25 @@ jobs:
           grep -E '^(   |── )' /tmp/v_m222.log | tail -30
           echo "✅ m222_http_body verify（CL 5 档跨阈值 + 落盘文件 sha 逐字节 · chunked 5 档 · 开关/阈值 · 拒绝侧 400/400/413）PASS"
 
+      # M222 补（第 100 轮 · 第 100 轮收口）：**让 M221 的产物指纹短路「在 CI 上是否生效」可观测**。
+      #   动机（实测，别当猜测）：M221 短路在本机微测上确证有效（重建 17s → 复用 0s），
+      #   但 CI 的「工具自测」步时长 **1337s（M220）→ 1657s（M222）**，而同期只多了两个门
+      #   （m221 ≈ 200s + m222 ≈ 55s 本机量级）⇒ **净收益无法从单次样本里隔离**。
+      #   本仓 job 日志非管理员**不可读**（403）⇒ 唯一对外通道是注解，故**成功时也要发**
+      #   （只挂 `failure()` 等于「一切正常时什么都看不到」）。
+      - name: devbuild 复用台账（M221 短路在 CI 是否生效 —— 免 403 可读通道）
+        if: always()
+        run: |
+          F=/tmp/devbuild_stats.tsv
+          if [ ! -f "$F" ]; then
+            echo "::notice::devbuild 台账缺失（$F 不存在 —— 本 job 未调用 devbuild？）"
+            exit 0
+          fi
+          B=$(grep -c $'\trebuild\t' "$F" || true); B=${B:-0}
+          R=$(grep -c $'\treuse\t'   "$F" || true); R=${R:-0}
+          K=$(cut -f4 "$F" | sort -u | wc -l)
+          N=$(wc -l < "$F")
+          echo "::notice::devbuild 台账：调用 ${N} 行 · 重建 ${B} 次 / 复用 ${R} 次 · key ${K} 个"
       # M188 补：这一步（工具自测）在 run 382/383 上红了，而 **job 日志非管理员不可读**
       #   （实测 /actions/jobs/<id>/logs → HTTP 403）⇒ 注解是唯一对外通道。
       #   本步把各门的 /tmp/v_*.log 关键行合成**一条** ::error:: 注解（换行编码 %0A）。
