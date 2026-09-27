@@ -41,6 +41,26 @@ pxlint|tools/pxlint.px|static"
 
 entry_src() { echo "$ENTRIES" | grep "^$1|" | cut -d'|' -f2; }
 
+# ── M222 补：复用台账（**让「短路到底有没有生效」可观测**）─────────────────
+#   背景：M221 的产物指纹短路在**本机微测**上确证有效（重建 17s → 复用 0s），
+#   但 CI 的「工具自测」步时长 1337s → 1657s（同时新增了两个门）⇒ **净收益无法从
+#   单次样本里隔离**。CI 的 job 日志非管理员 403 ⇒ 唯一可读通道是注解。
+#   ⇒ 每次 devbuild 调用把「重建 / 复用」记一行台账；`devb_summary` 打印累计，
+#     再由 ci.yml 的一个 `if: always()` step 合成 `::notice::`。
+#   ⚠️ 台账只**追加**、不影响任何判据；`DEVB_STATS` 可覆盖路径。
+DEVB_STATS_FILE="${DEVB_STATS:-/tmp/devbuild_stats.tsv}"
+devb_stat() {   # $1=reuse|rebuild  $2=件名  $3=key
+    printf '%s\t%s\t%s\t%s\n' "$(date +%s)" "$1" "$2" "$3" >>"$DEVB_STATS_FILE" 2>/dev/null || true
+}
+devb_summary() {
+    [ -f "$DEVB_STATS_FILE" ] || return 0
+    local r b k
+    r=$(grep -c $'\treuse\t'   "$DEVB_STATS_FILE" 2>/dev/null || true)
+    b=$(grep -c $'\trebuild\t' "$DEVB_STATS_FILE" 2>/dev/null || true)
+    k=$(cut -f4 "$DEVB_STATS_FILE" 2>/dev/null | sort -u | wc -l)
+    echo "── devbuild 累计：重建 ${b:-0} 次 / 复用 ${r:-0} 次 / 出现过的 key ${k:-0} 个（台账 $DEVB_STATS_FILE）"
+}
+
 # 选 .rtcache（全 runtime 对象）
 #   M169 修（本地实测踩中）：**按 rt_key 命中优先 + 主机架构过滤**。
 #   修前只按 `runtime.o` 的 mtime 取「最新」——而 M168 起交叉编译缓存（aarch64/armv7/
@@ -88,6 +108,7 @@ build_one() {   # $1=件名 → /tmp/${1}dev
     out="/tmp/${name}dev"; fp="/tmp/devbuild_${name}.fp"
     if [ "$FORCE_REBUILD" = 0 ] && [ -f "$out" ] && [ -f "$fp" ] && [ "$(cat "$fp" 2>/dev/null)" = "$DEVB_KEY" ]; then
         echo "⏭  $name：源码链未变（key=$DEVB_KEY）⇒ 复用 $out"
+        devb_stat reuse "$name" "$DEVB_KEY"
         return 0
     fi
     timeout 900 "$BASE" build "$ROOT/$src" > "/tmp/devbuild_$name.c" 2>"/tmp/devbuild_$name.err" || {
@@ -97,6 +118,7 @@ build_one() {   # $1=件名 → /tmp/${1}dev
     gcc -static -O2 -pthread -o "$out" "/tmp/devbuild_$name.o" $objs $LIBS 2>"/tmp/devbuild_$name.link.log" || {
         echo "❌ $name：链接失败"; tail -10 "/tmp/devbuild_$name.link.log" >&2; return 1; }
     echo "$DEVB_KEY" > "$fp"
+    devb_stat rebuild "$name" "$DEVB_KEY"
     echo "✅ $name → $out（$(stat -c %s "$out") 字节）"
 }
 
@@ -137,6 +159,7 @@ if [ "$WANT_VM" = "1" ]; then
     VM_KEY="$DEVB_KEY/$(sha256sum /tmp/pxcdev 2>/dev/null | cut -c1-16)"
     if [ "$FORCE_REBUILD" = 0 ] && [ -f /tmp/pxcdev_vm ] && [ -f /tmp/devbuild_vm.fp ] && [ "$(cat /tmp/devbuild_vm.fp 2>/dev/null)" = "$VM_KEY" ]; then
         echo "⏭  VM 轨：源码链未变（key=$VM_KEY）⇒ 复用 /tmp/pxcdev_vm"
+        devb_stat reuse vm "$VM_KEY"
     else
     echo "── VM 轨：--emit-c → /tmp/pxcdev_vm"
     timeout 1500 /tmp/pxcdev --emit-c "$ROOT/selfhost/compiler.px" > /tmp/devbuild_vm.c 2>/tmp/devbuild_vm.err || {
@@ -147,5 +170,8 @@ if [ "$WANT_VM" = "1" ]; then
         echo "❌ VM 轨链接失败"; tail -10 /tmp/devbuild_vm.link.log >&2; exit 1; }
     echo "✅ VM 轨：/tmp/pxcdev_vm（$(stat -c %s /tmp/pxcdev_vm) 字节）"
     echo "$VM_KEY" > /tmp/devbuild_vm.fp
+    devb_stat rebuild vm "$VM_KEY"
     fi
 fi
+
+devb_summary
