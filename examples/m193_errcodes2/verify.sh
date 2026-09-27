@@ -53,7 +53,7 @@ trap 'restore_all' EXIT
 # 前置不变量：本轮四类改动必须在位（缺一即门坏 / 源码被还原）
 for pat in 'R1002: quic_listen 需要 (port: int)' 'R1002: h3_qenc 需要 (headers: list)' \
            'R1002: ws_send 需要 (conn, data) 参数' 'R1002: ffi_call 需要 (name, args_list) 参数' \
-           'R1002: spawn 需要函数名' 'R1005: VM %s:%d CALL' 'R1004: force unwrap' \
+           'R1002: spawn 需要函数名' 'R1005: VM %s:%d CALL' 'R1004: 强制解包 !:' \
            'R9001: VM %s:%d GETG 全局越界' 'R1002: %s' ; do
     grep -qF "$pat" runtime/*.c || { echo "❌ 前置自查失败：runtime 缺「$pat」（源码被还原/被别的门盖掉？）" >&2; exit 2; }
 done
