@@ -636,7 +636,20 @@ jobs:
           #   负控要重编 devbuild 四次 ⇒ CI 用 --neg-skip。
           bash examples/m220_result_ops/verify.sh --neg-skip > /tmp/v_m220.log 2>&1 || { echo "❌ m220_result_ops verify 失败"; grep -E '^(   |── |❌)' /tmp/v_m220.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
           grep -E '^(   |── )' /tmp/v_m220.log | tail -30
+          # M221（第 100 轮）：`devbuild.sh` **产物指纹短路** —— 23 门 × ≈45s 的重复构建。
+          #   这是**能隐藏重建需求**的机制 ⇒ 自带门守两条不变量 + 冷启动连跑两次 + 负控 3 道。
+          #   负控要反复重建 pxc ⇒ CI 用 --neg-skip（也正因如此，CI 上源码不被改 ⇒ 缓存稳定）。
+          bash examples/m221_devbuild_cache/verify.sh --neg-skip > /tmp/v_m221.log 2>&1 || { echo "❌ m221_devbuild_cache verify 失败"; grep -E '^(   |── |❌)' /tmp/v_m221.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^(   |── )' /tmp/v_m221.log | tail -30
           echo "✅ m217_shift_count / m218_logic_value / m219_link_flags / m220_result_ops verify（PIE 环境依赖 + 门漏注册 + Result 三运算符语义收口）PASS"
+          echo "✅ m221_devbuild_cache verify（冷启动连跑第二次全 ⏭ · 改 runtime.c 必重建 · 负控 3 道）PASS"
+          # M222（第 100 轮 · 晨曦 QA 生产报障）：`px_serve` 请求体契约 —— 「静默丢体」类收口。
+          #   缺陷 321（CL>1MiB 落盘 ⇒ body 给空串）· 缺陷 322（同函数 chunked 通路
+          #   64KB 栈缓冲当累积区 + 边界判据漏扣 body_off ⇒ 栈越界写 + 静默丢字节）。
+          #   负控 A/B 各要完整重建一次 runtime ⇒ CI 用 --neg-skip。
+          bash examples/m222_http_body/verify.sh --neg-skip > /tmp/v_m222.log 2>&1 || { echo "❌ m222_http_body verify 失败"; grep -E '^(   |── |❌)' /tmp/v_m222.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^(   |── )' /tmp/v_m222.log | tail -30
+          echo "✅ m222_http_body verify（CL 5 档跨阈值 + 落盘文件 sha 逐字节 · chunked 5 档 · 开关/阈值 · 拒绝侧 400/400/413）PASS"
 
       # M188 补：这一步（工具自测）在 run 382/383 上红了，而 **job 日志非管理员不可读**
       #   （实测 /actions/jobs/<id>/logs → HTTP 403）⇒ 注解是唯一对外通道。

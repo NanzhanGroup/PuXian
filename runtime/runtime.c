@@ -79,6 +79,10 @@ static volatile sig_atomic_t g_px_listen_fd = -1;
 static int g_px_max_body = 10 * 1024 * 1024;
 volatile int g_px_inflight = 0;  // px_serve 在途请求数（优雅关闭等待归零；runtime_ws.c 共享）
 static long long g_px_body_seq = 0;       // body 落盘临时文件序号
+// M221（缺陷 321/322）：请求体落盘开关与阈值
+//   opts.body_spill=false ⇒ 体一律留内存（≤ max_body_size）；PX_BODY_SPILL_THRESHOLD 可改阈值
+static int g_px_body_spill = 1;
+static int g_px_body_spill_threshold = 1024 * 1024;
 static mbedtls_x509_crt g_srv_cert;
 static mbedtls_pk_context g_srv_key;
 static int g_srv_tls_ready = 0;
@@ -24945,6 +24949,179 @@ int px_pxserve_mw_defer(PxHttpOut* out, LXValue req, LXValue handler, LXValue pa
 }
 
 // 连接处理线程（px_spawn 注册）：args[0] = fd
+
+// ==================== M221（缺陷 321/322）：请求体读取「单一实现」 ====================
+// 病灶：Content-Length 与 Transfer-Encoding: chunked 是**两条各写一遍的**读取路径 ——
+//   ① CL > 1MiB 落盘时 `req["body"] = ""`（与「真的没有体」不可区分）⇒ **静默丢体**（缺陷 321）；
+//   ② chunked 拿 `buf`（64KB **栈**缓冲）当累积区，判据 `pend_len + n < 65536` **没扣 body_off**
+//      ⇒ 最多越界 body_off 字节的**栈写**；且缓冲一满就静默丢字节 ⇒ 单块 2MiB 直接得 0 字节、
+//      小块累计超 ~64KB 同样丢（缺陷 322）。
+// 本块把「读体」收敛成一份实现：**来源**（已读缓存 + 连接）与**去处**（内存 / 落盘）各一抽象，
+// 两条 framing 路径只管「读多少」。语义（与 docs/PUXIAN_CHEATSHEET 一致）：
+//   体内存 ⇒ req["body"] = 体      · 无 body_tmp · 无 body_size
+//   体落盘 ⇒ req["body"] = null    · body_tmp = 路径 · body_size = 字节数
+//   无体   ⇒ req["body"] = ""（空串，长度 0）
+//   null 是**响亮**的：len(null)/null+str/n[0]/null*2/contains(null,…) 一律 R1002，
+//   与空串的「一切照常」形成对照 ⇒ 误用立刻暴露，而不是静默把体丢掉。
+typedef struct {
+    char* mem; int len, cap;     // 内存体
+    int   fd;                    // 落盘 fd（-1 = 未落盘）
+    int   spilled;               // 1 = 已落盘
+    int   spill_on;              // opts.body_spill（默认 1）
+    int   threshold;             // 超过该字节数即落盘
+    char  path[1024];
+    int   err;                   // 1 = 写失败（→ 500）
+} PxBodySink;
+
+typedef struct {
+    char*   buf; int len, pos;   // 已读缓存（buf + header_end + 4）
+    PxConn* conn;
+} PxBodySrc;
+
+// 写全 n 字节（EINTR 重试；短写续写）—— 旧实现是裸 (void)write(...)，落盘失败也当成功
+static int px_body_write_all(int fd, const char* p, int n) {
+    int off = 0;
+    while (off < n) {
+        ssize_t w = write(fd, p + off, (size_t)(n - off));
+        if (w < 0 && errno == EINTR) continue;
+        if (w <= 0) return -1;
+        off += (int)w;
+    }
+    return 0;
+}
+
+static void px_body_sink_init(PxBodySink* k, int spill_on, int threshold) {
+    memset(k, 0, sizeof(*k));
+    k->fd = -1;
+    k->spill_on = spill_on;
+    k->threshold = threshold;
+}
+
+// 切到落盘：建临时文件，把已累积的内存体倒过去
+static int px_body_sink_to_file(PxBodySink* k) {
+    const char* tmpdir = getenv("PX_BODY_TMP_DIR");
+    if (!tmpdir || !*tmpdir) tmpdir = "/tmp";
+    snprintf(k->path, sizeof(k->path), "%s/px_body_%d_%d.tmp",
+             tmpdir, (int)getpid(), (int)__sync_fetch_and_add(&g_px_body_seq, 1));
+    k->fd = open(k->path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (k->fd < 0) { k->path[0] = 0; k->err = 1; return -1; }
+    if (k->len > 0) {
+        if (px_body_write_all(k->fd, k->mem, k->len) != 0) { k->err = 1; return -1; }
+        xfree(k->mem); k->mem = NULL; k->len = 0; k->cap = 0;
+    }
+    k->spilled = 1;
+    return 0;
+}
+
+static int px_body_sink_write(PxBodySink* k, const char* p, int n) {
+    if (n <= 0) return 0;
+    if (k->spilled) return px_body_write_all(k->fd, p, n);
+    if (k->spill_on && k->len + n > k->threshold) {
+        if (px_body_sink_to_file(k) != 0) return -1;
+        return px_body_write_all(k->fd, p, n);
+    }
+    if (k->len + n + 1 > k->cap) {          // 几何增长（防小块 chunked 的 O(n²) 拷贝）
+        int ncap = k->cap > 0 ? k->cap : 8192;
+        while (ncap < k->len + n + 1) ncap *= 2;
+        k->mem = xrealloc(k->mem, (size_t)ncap);
+        k->cap = ncap;
+    }
+    memcpy(k->mem + k->len, p, (size_t)n);
+    k->len += n;
+    k->mem[k->len] = 0;
+    return 0;
+}
+
+// 释放「未移交」的 sink（移交后 fd/path 已置空，不会误删）
+static void px_body_sink_free(PxBodySink* k) {
+    if (k->mem) { xfree(k->mem); k->mem = NULL; }
+    if (k->fd >= 0) { close(k->fd); k->fd = -1; }
+    if (k->path[0]) { unlink(k->path); k->path[0] = 0; }
+}
+
+// 从「已读缓存 + 连接」拉不超过 n 字节；0 = 对端关闭 / 空闲超时
+static int px_body_src_pull(PxBodySrc* s, char* out, int n) {
+    int got = 0;
+    if (s->pos < s->len) {
+        int take = s->len - s->pos;
+        if (take > n) take = n;
+        memcpy(out, s->buf + s->pos, (size_t)take);
+        s->pos += take;
+        got = take;
+    }
+    while (got < n) {
+        ssize_t r = px_conn_read(s->conn, out + got, (size_t)(n - got));
+        if (r <= 0) break;
+        got += (int)r;
+    }
+    return got;
+}
+
+// Content-Length：恰好读 total 字节；返回实读（< total ⇒ 对端提前关闭）
+static int px_body_read_len(PxBodySrc* s, PxBodySink* k, int total) {
+    char tb[16384];
+    int remain = total;
+    while (remain > 0) {
+        int want = remain < (int)sizeof(tb) ? remain : (int)sizeof(tb);
+        int n = px_body_src_pull(s, tb, want);
+        if (n <= 0) break;
+        if (px_body_sink_write(k, tb, n) != 0) { k->err = 1; break; }
+        remain -= n;
+    }
+    return total - remain;
+}
+
+// chunked：逐块解码（块大小行 → 数据 → CRLF），末尾 trailer 段读到空行
+//   返回 0 = 完整 · 1 = 语法错/中断 · 2 = 超 max_body（→413）
+static int px_body_read_chunked(PxBodySrc* s, PxBodySink* k, int max_body, int* out_len) {
+    char line[256];
+    int total = 0;
+    for (;;) {
+        int ll = 0, got_nl = 0;
+        while (ll < (int)sizeof(line) - 1) {
+            char c;
+            if (px_body_src_pull(s, &c, 1) != 1) return 1;
+            if (c == '\n') { got_nl = 1; break; }
+            if (c != '\r') line[ll++] = c;
+        }
+        if (!got_nl) return 1;
+        line[ll] = 0;
+        char* semi = strchr(line, ';');        // chunk-ext 忽略
+        if (semi) *semi = 0;
+        char* endp = NULL;
+        long long csize = strtoll(line, &endp, 16);
+        if (endp == line || csize < 0) return 1;
+        if (csize == 0) break;                 // 末块
+        if (total + (int)csize > max_body) return 2;
+        char tb[16384];
+        int remain = (int)csize;
+        while (remain > 0) {
+            int want = remain < (int)sizeof(tb) ? remain : (int)sizeof(tb);
+            int n = px_body_src_pull(s, tb, want);
+            if (n <= 0) return 1;
+            if (px_body_sink_write(k, tb, n) != 0) { k->err = 1; return 1; }
+            remain -= n;
+        }
+        total += (int)csize;
+        char crlf[2];
+        if (px_body_src_pull(s, crlf, 2) != 2) return 1;
+    }
+    for (;;) {                                 // trailer：读到空行
+        int ll = 0, got_nl = 0;
+        while (ll < (int)sizeof(line) - 1) {
+            char c;
+            if (px_body_src_pull(s, &c, 1) != 1) { got_nl = 1; break; }
+            if (c == '\n') { got_nl = 1; break; }
+            if (c != '\r') line[ll++] = c;
+        }
+        if (!got_nl) return 1;
+        if (ll == 0) break;
+    }
+    if (out_len) *out_len = total;
+    return 0;
+}
+// ==================== M221 请求体读取块结束 ====================
+
 static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 1) return px_null();
@@ -25146,127 +25323,62 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         // M36：每请求清除线程局部上下文（防跨请求泄漏）
         g_px_ctx_n = 0;
 
-        // 4. 读 body（M27：max_body_size 限制 → 413；>1MB 落盘临时文件防内存溢出）
+        // 4. 读 body（M221：CL 与 chunked **共用一份实现**；超阈值落盘，语义见上）
         int body_len = 0;
-        // M38：Transfer-Encoding: chunked 请求体 → 流式解码 + 大小限制（max_body_size）
-        LXValue te_v = px_header_get(&headers, "Transfer-Encoding");
-        int is_chunked = te_v.type == PX_STR && strcasestr(te_v.as.obj->as.str.data, "chunked");
-        if (is_chunked) {
-            int body_off = header_end + 4;
-            int pend_len = len - body_off;
-            char* pend = buf + body_off;
-            int pend_pos = 0;
-            body_buf = xmalloc((size_t)g_px_max_body + 1);
-            int blen = 0;
-            int overflow = 0;
-            for (;;) {
-                // 读 chunk 大小行（hex\r\n）
-                char line[128];
-                int llen = 0;
-                for (;;) {
-                    // 找 pend 中换行
-                    int found = -1;
-                    for (int i = pend_pos; i < pend_len; i++) {
-                        if (pend[i] == '\n') { found = i; break; }
+        int body_size = 0;      // 本次请求体的真实字节数（不论内存/落盘）
+        {
+            LXValue te_v = px_header_get(&headers, "Transfer-Encoding");
+            int is_chunked = te_v.type == PX_STR && strcasestr(te_v.as.obj->as.str.data, "chunked");
+            if (is_chunked || content_length > 0) {
+                int body_status = 200;
+                if (!is_chunked && content_length > g_px_max_body) {
+                    body_status = 413;
+                } else {
+                    PxBodySink sink;
+                    px_body_sink_init(&sink, g_px_body_spill, g_px_body_spill_threshold);
+                    PxBodySrc bsrc;
+                    bsrc.buf = buf + header_end + 4;
+                    bsrc.len = len - (header_end + 4);
+                    if (bsrc.len < 0) bsrc.len = 0;
+                    bsrc.pos = 0;
+                    bsrc.conn = conn;
+                    if (is_chunked) {
+                        int rd = px_body_read_chunked(&bsrc, &sink, g_px_max_body, &body_size);
+                        if (rd == 2) body_status = 413;
+                        else if (rd != 0) body_status = 400;
+                    } else {
+                        int got = px_body_read_len(&bsrc, &sink, content_length);
+                        body_size = got;
+                        // 对端提前关闭 ⇒ **不静默用半个体**
+                        if (got != content_length) body_status = 400;
                     }
-                    if (found >= 0) {
-                        int take = found - pend_pos;
-                        if (take > 120) take = 120;
-                        if (llen + take < 120) { memcpy(line + llen, pend + pend_pos, (size_t)take); llen += take; }
-                        line[llen] = 0; // M38：终止字符串（strtoll 需要）
-                        // 去尾部 \r
-                        if (llen > 0 && line[llen - 1] == '\r') line[llen - 1] = 0;
-                        pend_pos = found + 1;
-                        break;
+                    if (sink.err) body_status = 500;
+                    if (body_status == 200) {
+                        if (sink.spilled) {          // 移交：落盘路径进既有清理链（req_done unlink / pend 移交）
+                            snprintf(body_tmp_path, sizeof(body_tmp_path), "%s", sink.path);
+                            body_tmp_file = sink.fd;
+                            sink.fd = -1;
+                            sink.path[0] = 0;
+                            sink.mem = NULL;
+                        } else {                     // 移交：内存体进既有 xfree 链
+                            body_buf = sink.mem;
+                            body_len = sink.len;
+                            sink.mem = NULL;
+                        }
                     }
-                    // pend 无换行 → 读 conn 补
-                    if (pend_pos < pend_len) { pend_len -= pend_pos; memmove(pend, pend + pend_pos, (size_t)pend_len); pend_pos = 0; }
-                    char tmpb[512];
-                    ssize_t n = px_conn_read(conn, tmpb, sizeof(tmpb));
-                    if (n <= 0) break;
-                    // 追加到 pend（扩大？用静态缓冲；简化：直接处理）
-                    // 简化：把读到的数据追加到 pend 缓冲（buf 后空间足够 64KB）
-                    if (pend_len + (int)n < 65536) {
-                        memcpy(pend + pend_len, tmpb, (size_t)n);
-                        pend_len += (int)n;
-                    }
+                    px_body_sink_free(&sink);
                 }
-                // 解析大小（十六进制）
-                long long csize = 0;
-                {
-                    char* semi = strchr(line, ';');
-                    if (semi) *semi = 0;
-                    char* endp = NULL;
-                    csize = strtoll(line, &endp, 16);
-                }
-                if (csize == 0) break;
-                if (blen + csize > g_px_max_body) { overflow = 1; break; }
-                // 读 csize 字节 + CRLF
-                while (pend_len - pend_pos < csize + 2) {
-                    char tmpb[8192];
-                    ssize_t n = px_conn_read(conn, tmpb, sizeof(tmpb));
-                    if (n <= 0) break;
-                    if (pend_len + (int)n < 65536) {
-                        memcpy(pend + pend_len, tmpb, (size_t)n);
-                        pend_len += (int)n;
-                    }
-                }
-                if (pend_len - pend_pos < csize) break;
-                memcpy(body_buf + blen, pend + pend_pos, (size_t)csize);
-                blen += (int)csize;
-                pend_pos += (int)csize + 2; // 数据 + CRLF
-            }
-            if (overflow) {
-                xfree(body_buf);
-                body_buf = NULL;
-                char extra[256];
-                snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
-                out.respond(&out, 413, "text/plain; charset=utf-8", "413 Payload Too Large", 24, 0, 0, extra);
-                goto req_done;
-            }
-            body_len = blen;
-        } else if (content_length > 0) {
-            if (content_length > g_px_max_body) {
-                char extra[256];
-                snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
-                out.respond(&out, 413, "text/plain; charset=utf-8", "413 Payload Too Large", 24, 0, 0, extra);
-                goto req_done;
-            }
-            int body_off = header_end + 4;
-            int have = len - body_off;
-            if (have > 0 && have > content_length) have = content_length;
-            if (content_length > 1024 * 1024) {
-                const char* tmpdir = getenv("PX_BODY_TMP_DIR");
-                if (!tmpdir || !*tmpdir) tmpdir = "/tmp";
-                snprintf(body_tmp_path, sizeof(body_tmp_path), "%s/px_body_%d_%d.tmp",
-                         tmpdir, (int)getpid(), (int)__sync_fetch_and_add(&g_px_body_seq, 1));
-                body_tmp_file = open(body_tmp_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-                if (body_tmp_file < 0) {
-                    out.respond(&out, 500, "text/plain; charset=utf-8", "500 创建 body 临时文件失败", 26, 0, 0, NULL);
+                if (body_status != 200) {
+                    char extra[256];
+                    const char* msg;
+                    if (body_status == 413)      msg = "413 Payload Too Large";
+                    else if (body_status == 400) msg = "400 Bad Request：请求体不完整或 chunked 语法错误";
+                    else                         msg = "500 请求体写入临时文件失败";
+                    snprintf(extra, sizeof(extra), "X-Request-Id: %s\r\n", req_id);
+                    out.respond(&out, body_status, "text/plain; charset=utf-8",
+                                msg, (int)strlen(msg), 0, 0, extra);
                     goto req_done;
                 }
-                if (have > 0) (void)write(body_tmp_file, buf + body_off, (size_t)have);
-                int remaining = content_length - have;
-                char tmpb[16384];
-                while (remaining > 0) {
-                    ssize_t n = px_conn_read(conn, tmpb, sizeof(tmpb));
-                    if (n <= 0) break;
-                    (void)write(body_tmp_file, tmpb, (size_t)n);
-                    remaining -= (int)n;
-                }
-                close(body_tmp_file);
-                body_tmp_file = -1;
-            } else {
-                body_buf = xmalloc((size_t)content_length + 1);
-                int got = have;
-                if (have > 0) memcpy(body_buf, buf + body_off, (size_t)have);
-                while (got < content_length) {
-                    ssize_t n = px_conn_read(conn, body_buf + got, (size_t)(content_length - got));
-                    if (n <= 0) break;
-                    got += (int)n;
-                }
-                body_len = got;
-                body_buf[body_len] = 0;
             }
         }
 
@@ -25295,8 +25407,11 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
         px_dict_set(req, "headers", headers);
         px_dict_set(req, "request_id", px_str(req_id));
         if (body_tmp_path[0]) {
-            px_dict_set(req, "body", px_str(""));
+            // M221（缺陷 321）：落盘时 body 给 **null** 而非空串 —— 「无体」与「体已落盘」可区分，
+            //   误用（len/null+str/下标/相乘…）一律 R1002 **响亮**报错，不再静默丢数据。
+            px_dict_set(req, "body", px_null());
             px_dict_set(req, "body_tmp", px_str(body_tmp_path));
+            px_dict_set(req, "body_size", px_int((int64_t)body_size));
         } else {
             px_dict_set(req, "body", px_str_len(body_buf, body_len));
         }
@@ -25995,6 +26110,14 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
 #endif
     // M27/M31/M33：opts = {max_body_size, body_tmp_dir, max_conn, rate_limit:{max,window_sec}, access_log, alt_svc}
     g_px_max_body = 10 * 1024 * 1024;
+    g_px_body_spill = 1;
+    {
+        const char* tv = getenv("PX_BODY_SPILL_THRESHOLD");
+        if (tv && *tv) {
+            long v = atol(tv);
+            if (v >= 0) g_px_body_spill_threshold = (int)v;
+        }
+    }
     int max_conn = 32;
     g_px_rate_max = 0;
     g_px_rate_window = 0;
@@ -26012,6 +26135,9 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     if (nargs >= 4 && args[3].type == PX_DICT) {
         LXValue mb = px_dict_get(args[3], "max_body_size");
         if (mb.type == PX_INT) g_px_max_body = (int)(mb.as.i >= 1024 ? mb.as.i : 1024);
+        // M221：请求体落盘开关（缺省开）；关掉则体一律留内存（受 max_body_size 约束）
+        LXValue bs = px_dict_get(args[3], "body_spill");
+        if (bs.type == PX_BOOL) g_px_body_spill = bs.as.b ? 1 : 0;
         LXValue mc = px_dict_get(args[3], "max_conn");
         if (mc.type == PX_INT && mc.as.i >= 1) max_conn = (int)(mc.as.i > PX_POOL_MAX ? PX_POOL_MAX : mc.as.i);
         LXValue rl = px_dict_get(args[3], "rate_limit");
@@ -26123,8 +26249,10 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     signal(SIGINT, px_sigstop_handler);
     signal(SIGTERM, px_sigstop_handler);
     px_session_sweep();
-    fprintf(stderr, "[px-serve] 普贤应用服务器 docroot=%s 端口=%d 超时=%dms tls=%d max_body=%d max_conn=%d\n",
-            docroot, port, timeout_ms, g_srv_tls_ready, g_px_max_body, max_conn);
+    fprintf(stderr, "[px-serve] 普贤应用服务器 docroot=%s 端口=%d 超时=%dms tls=%d max_body=%d max_conn=%d"
+                    " body_spill=%d spill_threshold=%d\n",
+            docroot, port, timeout_ms, g_srv_tls_ready, g_px_max_body, max_conn,
+            g_px_body_spill, g_px_body_spill_threshold);
 #ifndef PX_NO_QUIC
     // M53-S4：HTTP/3（QUIC/UDP）—— 与 HTTP/1.1 同端口（UDP/TCP 不冲突，标准 443+443）或 http3.port；
     // 请求经 runtime_h3.c 管道托管（h3_srv_pipe_cb）走与 HTTP/1.1 同一 vhost/路由/限流/静态/.px 管道。

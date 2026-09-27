@@ -788,6 +788,26 @@ void px_http_out_init_conn(PxHttpOut* o, PxConn* c);
 // （query 拆分+解码 / version="HTTP/3" / request_id / cookie / form / body gzip 解压）
 // 后送入公共管道 px_http_dispatch。req 需含 method/path/headers/body/remote（sid 等可选）。
 void px_http_dispatch_h3(PxHttpOut* pout, LXValue req, int client_keep_alive);
+
+// ==================== M222：`px_serve` 请求体契约（body / body_tmp / body_size / body_spill） ==========
+// ⚠️ 这是本运行时**唯一**一处「同一语义、两种存放」的 API，改这里必须连 docs/PUXIAN_CHEATSHEET
+//    的事实 249 一起改。修前（≤ m220）的缺陷 321/322：
+//      · Content-Length > 1MiB ⇒ 体落盘而 `req["body"]` 给**空串**（与"真的没有体"不可区分）
+//        ⇒ 调用方按常规读 body 得到空体、上游按业务错回 400 —— **静默丢体**；
+//      · 同函数的 chunked 通路另有一条同族静默丢体（拿 64KB **栈**缓冲当累积区，
+//        且边界判据 `pend_len + n < 65536` 漏扣 `body_off` ⇒ 最多越界 body_off 字节的**栈写**）。
+//    定稿语义（CL 与 chunked **同一条实现**）：
+//      体内存   ⇒ `req["body"]` = 体（字符串），无 `body_tmp`，无 `body_size`
+//      体落盘   ⇒ `req["body"]` = **null**，`req["body_tmp"]` = 路径，`req["body_size"]` = 字节数
+//      无体     ⇒ `req["body"]` = ""（空串，长度 0）
+//    为什么落盘给 null 而不是空串：**null 是响亮的** —— `len(null)` / `null + str` / `null[0]` /
+//      `null * 2` / `contains(null,…)` 一律 R1002；空串则"一切照常" ⇒ 忘判 body_tmp 的代码
+//      会**当场报错**而不是静默丢数据（M163/R1003 立的「响亮优于静默」同款）。
+//    落盘开关：opts.body_spill（默认 1 = 落盘）；阈值 env PX_BODY_SPILL_THRESHOLD（默认 1 MiB）；
+//      临时目录 env PX_BODY_TMP_DIR（默认 /tmp）。
+//    已知重复（下一轮）：chunked 框架逻辑另有一份 `px_read_chunked_body`（供 http_serve，
+//      它**不落盘**、上限 256MiB）—— 两份实现是同族风险，计划把「来源/去处」抽象下沉后合并。
+
 // M53-S4：px_serve opts.http3 用 —— 以公共 HTTP 管道托管启动 H3（QUIC/UDP）listener。
 // cert/key 为空串 → 运行时自签（测试）；返回 listener id | -1（runtime_h3.c 定义）。
 int64_t px_h3_server_listen_pipe(int port, const char* cert, const char* key);

@@ -2769,3 +2769,35 @@ set_timeout(fn (): print("once after 2s"), 2000)
 
 248. **`!` 是「三态解包」，不是「Result 专用」**：`5!` ⇒ `5` · `"x"!` ⇒ `"x"` · `[1,2]!` ⇒ `[1,2]`
      （非 Result 非 null 的值**原样通过**）；`Ok(v)!` ⇒ `v`。只有 `Err` / `null` 才报 R1004。
+
+249. **`px_serve` 的请求体契约：`body` / `body_tmp` / `body_size` / `body_spill`**（第 100 轮 · M222 · 缺陷 321/322）：
+     ——**这是本语言里「同一语义、两种存放」的唯一一处**，务必按契约写 handler：
+
+     | 情形 | `req["body"]` | `req["body_tmp"]` | `req["body_size"]` |
+     |---|---|---|---|
+     | 体在内存 | 完整字符串 | 无 | 无（用 `len(req["body"])`） |
+     | 体已落盘 | **`null`** | 临时文件绝对路径 | **真实字节数** |
+     | 无体（GET 等） | `""`（空串，长度 0） | 无 | 无 |
+
+     · **落盘阈值**：`Content-Length`/chunked 体超过 **`PX_BODY_SPILL_THRESHOLD`**（默认 1 MiB）
+       即落盘（写 `/tmp/px_body_<pid>_<seq>.tmp`，目录可用 **`PX_BODY_TMP_DIR`** 改）。
+     · **关掉落盘**：顶层 opts 写 `{"body_spill": false}` ⇒ 体**一律留内存**（只受
+       `opts.max_body_size` 约束，默认 10 MiB ⇒ 超了回 **413**）。想要「body 永远可直读」就写这一行。
+     · ⚠️ **`body` 落盘时给的是 `null` 而**不是**空串**（修前是空串）—— 这是**有意**的：
+       `null` 是**响亮**的（`len(null)` / `null + str` / `null[0]` / `null * 2` / `contains(null,…)`
+       **一律 R1002**），而空串「一切照常」⇒ 忘判 `body_tmp` 的代码会**当场报错**，
+       而不是静默把体丢掉。⇒ 推荐写法：
+       ```
+       def h(req):
+           b = req["body"]
+           if b == null:
+               b = read_file(req["body_tmp"])     # 体在磁盘上
+       ```
+     · **显式落盘**（不靠阈值）：`px_serve` 的**解释器内建服务端**与 H3 通路**不落盘**（体恒在 `body`）；
+       同一台机器上 `http_serve` 也**不落盘**（体恒在 `body`，上限 256 MiB）——只有 `px_serve` 的
+       默认档会落盘。（⚠️ 已知重复：chunked 框架逻辑在 `px_read_chunked_body` 与新实现里各有一份，
+       见 CHANGELOG M222「覆盖边界」。）
+     · **修前**（m220 及更早）：>1 MiB 时 `body` 给**空串** ⇒ 调用方按常规读 `body` 得到空体、
+       上游按业务错回 400，看着像"参数不对"，实为**体被吞**（晨曦 QA 在生产上被这条咬过）；
+       同函数的 chunked 通路另有一条**同族**静默丢体（单块 2 MiB 直接得 0 字节，且 64 KB
+       栈缓冲的边界判据漏扣偏移 ⇒ 越界写）。两条都在 M222 收口。
