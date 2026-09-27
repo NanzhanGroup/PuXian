@@ -27,7 +27,8 @@ def p_handler(req, params):
     return "P:" + params["id"]
 
 def big_handler(req, params):
-    let bt = req["body_tmp"]        # >1MB body 落盘：req.body 为空串，实际数据在 tmp 文件
+    let bt = req["body_tmp"]        # >1MiB body 落盘：M222 起 req.body 为 **null**（修前是空串），
+                                    # 实际数据在 tmp 文件；真实字节数见 req["body_size"]
     if bt != null:
         let data = read_file(bt)    # defer 期 handler 读 tmp（须存活；done 回调才清理）
         return "BT:" + str(len(data))

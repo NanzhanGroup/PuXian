@@ -1,0 +1,30 @@
+# M222 门：px_serve 请求体契约（body / body_tmp / body_size / body_spill）
+# 探针服务端：把「读到的体」用三种方式回报，便于判据逐字节比对
+#   内存档 ⇒ len(body) + body 的 sha256
+#   落盘档 ⇒ body 必须是 null；另回报 body_tmp 文件的实际长度与 sha256（**真读回落盘内容**）、body_size
+def h(req):
+    b = req["body"]
+    if b == null:
+        bl = "null"
+        bh = "-"
+    else:
+        bl = str(len(b))
+        bh = sha256(b)
+    t = "-"
+    extra = ""
+    if req.has("body_tmp"):
+        t = "TMP"
+        sz = req.get("body_size", -1)
+        data = read_file(req["body_tmp"])
+        extra = " file_len=" + str(len(data)) + " file_sha=" + sha256(data) + " body_size=" + str(sz)
+    return {"status": 200, "headers": {"Content-Type": "text/plain"},
+            "body": "len=" + bl + " sha=" + bh + " tmp=" + t + extra}
+
+def main():
+    vhost("*", h)
+    sv = env("M222_SPILL")
+    if sv == null or sv == "":
+        sv = "1"
+    o = {}
+    o.set("body_spill", sv == "1")
+    px_serve(18122, "/tmp/www", 100, o)

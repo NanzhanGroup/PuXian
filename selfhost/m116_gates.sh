@@ -38,12 +38,36 @@ fi
 trap 'rm -f "$LOCK"' EXIT
 
 step() { echo ""; echo "══ $* ══"; }
+# ── M221（第 100 轮）：逐门计时 + 每门独立 timeout ──────────────
+#   为什么：CI「工具自测」步实测 23/40+/37 分钟（上限 45），而**整步只有一个 timeout**、
+#   507 行里 `timeout` 仅出现 2 次 ⇒ 一个门挂住就吃掉全部预算，其后的门**一次都不跑**；
+#   诊断器的判据是「最后写入的日志 = 失败门」⇒ 挂住的门看起来像"没跑"，**根因被误导**。
+#   ⇒ ① 每门独立 `timeout -k 20`（默认 $GATE_TIMEOUT_DEFAULT，可用 GATE_TIMEOUT_<门名> 覆盖）；
+#      ② 逐门耗时写入 TSV（GATE_TSV）⇒ 「哪扇门贵」从此是实测数据，不再是猜。
+#      ⚠️ `-k 20` 必须有：目标忽略 SIGTERM 时（如 px_serve 的优雅关闭）裸 timeout 会一直等
+#         （M207 实测 s2c_pxserve 卡死 3 分钟）。
+GATE_TSV="${GATE_TSV:-/tmp/m116_gates.times.tsv}"
+GATE_TIMEOUT_DEFAULT="${GATE_TIMEOUT_DEFAULT:-900}"
+: > "$GATE_TSV"
+GATE_ALL0=$SECONDS
 run() {  # $1=名 $2..=命令
     local name="$1"; shift
-    if "$@" > "/tmp/gate_$name.log" 2>&1; then
-        echo "✅ $name"
+    local t0=$SECONDS
+    local tmo_var="GATE_TIMEOUT_${name}"
+    local tmo="${!tmo_var:-$GATE_TIMEOUT_DEFAULT}"
+    if timeout -k 20 "$tmo" "$@" > "/tmp/gate_$name.log" 2>&1; then
+        local el=$((SECONDS-t0))
+        printf '%s\tOK\t%d\t-\n' "$name" "$el" >> "$GATE_TSV"
+        echo "✅ $name（${el}s）"
     else
-        echo "❌ $name（rc=$?）"; tail -12 "/tmp/gate_$name.log" | sed 's/^/     /'; FAIL=$((FAIL+1))
+        local rc=$?; local el=$((SECONDS-t0))
+        printf '%s\tFAIL\t%d\t%d\n' "$name" "$el" "$rc" >> "$GATE_TSV"
+        if [ "$rc" = 124 ] || [ "$rc" = 137 ]; then
+            echo "⏱  $name（**超时**：${el}s ≥ 上限 ${tmo}s，rc=$rc）"
+        else
+            echo "❌ $name（rc=$rc, ${el}s）"
+        fi
+        tail -12 "/tmp/gate_$name.log" | sed 's/^/     /'; FAIL=$((FAIL+1))
     fi
 }
 
@@ -772,6 +796,22 @@ run m219_link_flags bash examples/m219_link_flags/verify.sh
 #   ⇒ 判据 = 26 例三轨对拍（合法 22 逐字节一致 + 严格 4 同 R 码同核心文案）+ 文档对拍
 #     + 负控 4 道（撤 319 / 撤 320 / 撤 VM 顶层标记 / 判据自伤，各自独立判红）。
 run m220_result_ops bash examples/m220_result_ops/verify.sh
+# M221（第 100 轮 · step8 时长真因）：`devbuild.sh` **产物指纹短路**。
+#   全量门里 **23 门**各自 `devbuild.sh pxc pxi --vm`（实测单次暖缓存 ≈45s）⇒ ≈17 分钟
+#   纯重复，占 CI「工具自测」步（实测 23/40+/37min，上限 45min）的 40–75%。
+#   ⚠️ 这是**能隐藏重建需求**的机制（假绿风险高）⇒ 必须自带门守：两条不变量
+#   （`runtime/*.c,h` 在指纹里 · 写指纹在构建成功之后）+ 连跑两次第二次必须全 ⏭
+#   + 改 runtime.c 必重建 + `--rebuild` 口子 + 负控 3 道（各自独立判红）。
+#   ⚠️ 本门会**先清 /tmp/devbuild_*.fp**（冷启动）—— 否则开发机上缓存已暖，
+#      「第二次全 ⏭」这条判据什么都没证明。
+run m221_devbuild_cache bash examples/m221_devbuild_cache/verify.sh
+# M222（第 100 轮 · 晨曦 QA 生产报障）：`px_serve` 请求体契约 —— 「静默丢体」类收口。
+#   缺陷 321（CL>1MiB 落盘 ⇒ body 给**空串**，与「无体」不可区分 ⇒ 调用方静默拿到空体）
+#   缺陷 322（同函数 chunked 通路：64KB **栈**缓冲当累积区 + 边界判据漏扣 body_off
+#     ⇒ 栈越界写 + 静默丢字节，单块 2MiB 直接得 0 字节）。
+#   定稿：体内存 ⇒ body=体；体落盘 ⇒ body=**null** + body_tmp + body_size；无体 ⇒ ""。
+#   ⚠️ 负控 A/B 各要完整重建一次 runtime（≈6–8min/次）—— 本地全门跑负控，CI 用 --neg-skip。
+run m222_http_body bash examples/m222_http_body/verify.sh
 step "M190 · 上游 registry-px 真实用例回归（128 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。
@@ -817,5 +857,6 @@ if [ "$DIRTY1" != "$DIRTY0" ]; then
 fi
 
 echo ""
-echo "══ 汇总：失败 $FAIL 项 ══"
+echo "══ 汇总：失败 $FAIL 项（总耗时 $((SECONDS-GATE_ALL0))s）══"
+echo "   逐门时序（name<TAB>状态<TAB>秒<TAB>rc）：$GATE_TSV"
 exit $((FAIL > 0))
