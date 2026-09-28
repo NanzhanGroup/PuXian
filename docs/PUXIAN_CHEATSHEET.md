@@ -2801,3 +2801,32 @@ set_timeout(fn (): print("once after 2s"), 2000)
        上游按业务错回 400，看着像"参数不对"，实为**体被吞**（晨曦 QA 在生产上被这条咬过）；
        同函数的 chunked 通路另有一条**同族**静默丢体（单块 2 MiB 直接得 0 字节，且 64 KB
        栈缓冲的边界判据漏扣偏移 ⇒ 越界写）。两条都在 M222 收口。
+
+250. **HTTP gzip 内容协商口径（第 102 轮 · M224 · 缺陷 326 · 晨曦 QA P1-2 续）**：
+     `px_serve` 的**自动压缩**（vhost / `.px` 脚本 / 原生静态**三处共用** `px_resp_gzipable`）
+     按 **RFC 9110 §12.5.3** 解析 `Accept-Encoding` —— 修前是裸 `strstr(ae, "gzip")`，四个面都不合规：
+
+     | `Accept-Encoding` | 是否自动压缩 | 修前 |
+     |---|---|---|
+     | 无该头 | 否 | 否 ✓ |
+     | `gzip` / `gzip;q=0.5` / `gzip;q=1` | **是** | 是 ✓ |
+     | **`gzip;q=0`**（含 `q=0.` / `q=0.0` / `q=0.000`） | **否**（显式拒绝） | **是 ✗ 错值方向** |
+     | `br, gzip;q=0` | **否** | **是 ✗** |
+     | `xgzip` / `not-gzip` | **否**（token 精确匹配） | **是 ✗** |
+     | **`*`** | **是**（匹配未显式列出者） | **否 ✗** |
+     | `*;q=0` | 否 | 否 ✓ |
+     | `gzip;q=0, *` | **否**（**显式项优先于通配**，RFC 明文） | **是 ✗** |
+     | `GZIP` / `Gzip` / `GZIP;Q=0` | 照常识别（**大小写不敏感**） | **否 ✗** |
+
+     另三个非 AE 条件：体长 ≥ `opts.gzip_min_bytes`（默认 1024）· Content-Type 是 `text/*` 或含
+     `json`/`javascript`/`xml`/`svg`/`csv`（**大小写不敏感**，`application/JSON` 也压）· 响应头无
+     `Content-Encoding`。命中时加 `Content-Encoding: gzip` + **`Vary: Accept-Encoding`**。
+
+     · **新增 `opts{"gzip": false}`** —— **服务级总闸**，关掉后 runtime 层**完全不压**。
+       修前这层**无法关闭**（站点级开关如 Mahesvara 的 `"gzip": false` 管不到它）
+       ⇒ 只能用 `{"gzip_min_bytes": 1073741824}`（1 GiB）抬阈值绕过（**语义借用**，可读性差）。
+     · ⚠️ 压缩配置是**进程级**全局：同进程起两个 `px_serve`（不同 opts）会**互相覆盖** ⇒ 要两套配置请**分进程**。
+     · ⚠️ **不影响** native `gzip_compress()`（用户显式压缩永远可用），也不影响 handler 返回的
+       `{"gzip": true}`（M21，那层语义是「**handler 自己压过了**」，与之不同层）。
+     · **有意不做**（覆盖边界）：`identity;q=0` / `*;q=0` 不回 **406 Not Acceptable**（nginx 同款取舍）；
+       `Vary` 只在实际压缩时发。详见 `docs/HTTP_GZIP_NEGOTIATION.md`。
