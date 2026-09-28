@@ -1,0 +1,87 @@
+# ============================================================
+# M224 门 · 用例 B：opts{"gzip": false} 服务级关闭（晨曦诉求②）
+# ------------------------------------------------------------
+# 背景：修前 runtime 这层的自动压缩**无法关闭** —— 站点级开关（如 Mahesvara 的
+#   `"gzip": false`）管不到它，调用方只能用 `gzip_min_bytes: 1GiB` 把阈值抬到
+#   永不触发（**语义借用**，可读性差，且行为随工具链版本变化）。
+# 判据：① `opts{"gzip": false}` ⇒ 即使 `Accept-Encoding: gzip` 也明文下发；
+#       ② 开关**不影响** native `gzip_compress()`（用户显式压缩永远可用）；
+#       ③ 对照：默认（不开开关）时同一请求**必须**被压（反证判据有牙）。
+# ⚠️ 全局配置是**进程级**的（`g_px_gzip_enabled` 等），故本用例独立进程 + 独立端口。
+# ============================================================
+PORT = 18241
+D = "/tmp/px_m224_doc"
+mkdir(D)
+
+def bigtext():
+    var s = ""
+    var i = 0
+    while i < 120:
+        s += "0123456789"
+        i += 1
+    return s
+
+def handler(req):
+    return {"status": 200, "body": bigtext(), "headers": {"Content-Type": "text/plain"}}
+
+vhost("q.test", handler)
+vhost("*", handler)
+
+def serve():
+    px_serve(PORT, D, 30000, {"gzip": false})
+spawn serve()
+sleep(400)
+
+def raw_get(host, ae):
+    let c = tcp_connect_ex("127.0.0.1", PORT)
+    if not c["ok"]:
+        return bytes("")
+    let fd = c["fd"]
+    var q = "GET / HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n"
+    if ae != "":
+        q += "Accept-Encoding: " + ae + "\r\n"
+    q += "\r\n"
+    tcp_send_ex(fd, q)
+    var raw = bytes("")
+    var i = 0
+    while i < 200:
+        let r = tcp_recv_ex(fd, 65536)
+        if r["n"] > 0:
+            raw = bytes_concat(raw, r["data"])
+        if r["eof"] or not r["ok"]:
+            i = 200
+        i += 1
+    tcp_close(fd)
+    return raw
+
+def is_gz(raw):
+    return contains(bytes_to_hex(raw), "0d0a0d0a1f8b")
+
+var fails = 0
+
+def chk(cond, what):
+    if cond:
+        print("  PASS " + what)
+    else:
+        print("  FAIL " + what)
+        fails = fails + 1
+
+print("[1] opts{gzip:false} ⇒ 服务级关闭生效")
+let r1 = raw_get("q.test", "gzip")
+chk(not is_gz(r1), "AE: gzip ⇒ 线上无 gzip 魔数（明文下发）")
+chk(not contains(bytes_to_hex(r1), bytes_to_hex(bytes("Content-Encoding: gzip"))), "线上无 Content-Encoding: gzip")
+
+print("[2] 即使通配/带 q 也不压（开关是**总闸**，先于协商判定）")
+chk(not is_gz(raw_get("q.test", "*")), "AE: * ⇒ 不压")
+chk(not is_gz(raw_get("q.test", "gzip;q=1")), "AE: gzip;q=1 ⇒ 不压")
+
+print("[3] 开关不影响 native gzip_compress（用户显式压缩永远可用）")
+let z = gzip_compress(bigtext())
+chk(len(z) > 0 and len(z) < 1200, "gzip_compress 仍可用且确实压缩")
+let u = gzip_uncompress(z)
+chk(len(u) == 1200, "gzip_uncompress roundtrip 解回 1200 字节")
+chk(u == bytes(bigtext()), "roundtrip 内容逐字节一致")
+
+print("M224B-SWITCH-OK fails=" + str(fails))
+if fails > 0:
+    exit(1)

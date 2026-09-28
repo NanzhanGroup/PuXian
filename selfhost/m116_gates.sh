@@ -821,6 +821,16 @@ run m222_http_body bash examples/m222_http_body/verify.sh
 #   325 台账只报「key N 个」⇒ 改为 key **取值** + 选料来源列 + **diff 逐文件清单**。
 #   ⚠️ 门内改源码是**临时**的（探针），EXIT trap 保证还原；负控 3 道。
 run m223_devbuild_fingerprint bash examples/m223_devbuild_fingerprint/verify.sh
+
+# M224（第 102 轮）：HTTP gzip 内容协商口径（缺陷 326 · 晨曦 QA P1-2 续）。
+#   修前判据是裸 `strstr(ae, "gzip")` ⇒ 四个面都不合规：
+#     ① `gzip;q=0`（客户端**显式拒绝**）仍被压缩（错值方向）；
+#     ② `xgzip` / `not-gzip` 子串误命中；③ 不认 `*` 通配；④ token 大小写敏感（`GZIP` 不认）。
+#   同族：Content-Type 的 json/xml/svg/csv 匹配也大小写敏感；runtime 层压缩**无法关闭**
+#   ⇒ 新增 `opts{"gzip": false}`（服务级总闸，晨曦诉求②）。
+#   ⚠️ 用例走**裸 TCP + hex 魔数**断言（`http_request` 客户端会自己 gunzip ⇒ 只看响应头
+#     验不出「线上到底压没压」）；负控要重编 runtime（~20s×4）。
+run m224_gzip_negotiate bash examples/m224_gzip_negotiate/verify.sh
 step "M190 · 上游 registry-px 真实用例回归（128 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。

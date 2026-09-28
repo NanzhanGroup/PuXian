@@ -659,6 +659,14 @@ jobs:
           grep -E '^(   |── )' /tmp/v_m223.log | tail -30
           echo "✅ m223_devbuild_fingerprint verify（touch 不触发重建 · 改内容必重建+归因指名 · 回退响亮可判定）PASS"
 
+          # M224（第 102 轮）：HTTP gzip 内容协商口径（缺陷 326 · 晨曦 QA P1-2 续）。
+          #   修前 `strstr(ae,"gzip")` ⇒ `gzip;q=0` 仍压 / `xgzip` 误命中 / 不认 `*` / 大小写敏感；
+          #   另新增 `opts{"gzip": false}` 服务级总闸（修前 runtime 这层**无法关闭**）。
+          #   用例走**裸 TCP + hex 魔数**断言（`http_request` 会自己 gunzip ⇒ 只看头验不出真压没压）。
+          bash examples/m224_gzip_negotiate/verify.sh --neg-skip > /tmp/v_m224.log 2>&1 || { echo "❌ m224_gzip_negotiate verify 失败"; grep -E '^(   |── |❌)' /tmp/v_m224.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^(   |── )' /tmp/v_m224.log | tail -30
+          echo "✅ m224_gzip_negotiate verify（q 值/子串/通配/大小写四面 + opts.gzip 服务级开关）PASS"
+
       # M222 补（第 100 轮 · 第 100 轮收口）：**让 M221 的产物指纹短路「在 CI 上是否生效」可观测**。
       #   动机（实测，别当猜测）：M221 短路在本机微测上确证有效（重建 17s → 复用 0s），
       #   但 CI 的「工具自测」步时长 **1337s（M220）→ 1657s（M222）**，而同期只多了两个门

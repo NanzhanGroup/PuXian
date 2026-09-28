@@ -1,0 +1,108 @@
+# ============================================================
+# M224 门 · 用例 A：gzip 内容协商口径（RFC 9110 §12.5.3）
+# ------------------------------------------------------------
+# 病灶（晨曦 QA P1-2 续 · 缺陷 326）：`px_resp_gzipable` 的 Accept-Encoding
+#   判据是裸 `strstr(ae, "gzip")`，四个面都不合规：
+#     ① 不解析 q 值 ⇒ `gzip;q=0`（客户端**显式拒绝**）仍被压缩；
+#     ② 子串误命中 ⇒ `xgzip` / `not-gzip` 也算接受；
+#     ③ 不认 `*` 通配（RFC：`*` 匹配任何**未显式列出**的编码）；
+#     ④ token 比较大小写敏感 ⇒ `GZIP` 不命中（HTTP token 大小写不敏感 §11.1）。
+# 判据要点：**必须看线上字节** —— `http_request` 客户端会自动 gunzip ⇒
+#   只看响应头验不出「线上到底压没压」。故本用例走**裸 TCP**，
+#   断言「头结束符 \r\n\r\n 之后紧跟 gzip 魔数 1f8b」。
+# ⚠️ stdout 必须**确定性**（门要对双轨 stdout 逐字节对拍）。
+# ============================================================
+PORT = 18240
+D = "/tmp/px_m224_doc"
+mkdir(D)
+write_file(D + "/index.html", "<html><body>" + join("", ["静态正文0123456789ABCDEF" for i in range(80)]) + "</body></html>")
+
+def bigtext():
+    var s = ""
+    var i = 0
+    while i < 120:
+        s += "0123456789"
+        i += 1
+    return s
+
+def handler(req):
+    return {"status": 200, "body": bigtext(), "headers": {"Content-Type": "text/plain"}}
+
+vhost("q.test", handler)
+vhost("*", handler)
+
+def serve():
+    px_serve(PORT, D, 30000)
+spawn serve()
+sleep(400)
+
+def raw_get(host, ae):
+    let c = tcp_connect_ex("127.0.0.1", PORT)
+    if not c["ok"]:
+        return bytes("")
+    let fd = c["fd"]
+    var q = "GET / HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n"
+    if ae != "":
+        q += "Accept-Encoding: " + ae + "\r\n"
+    q += "\r\n"
+    tcp_send_ex(fd, q)
+    var raw = bytes("")
+    var i = 0
+    while i < 200:
+        let r = tcp_recv_ex(fd, 65536)
+        if r["n"] > 0:
+            raw = bytes_concat(raw, r["data"])
+        if r["eof"] or not r["ok"]:
+            i = 200
+        i += 1
+    tcp_close(fd)
+    return raw
+
+def is_gz(raw):
+    return contains(bytes_to_hex(raw), "0d0a0d0a1f8b")
+
+var fails = 0
+
+def acase(label, ae, want_gz):
+    let raw = raw_get("q.test", ae)
+    let g = is_gz(raw)
+    if g == want_gz:
+        print("  PASS " + label)
+    else:
+        print("  FAIL " + label + "  [want_gz=" + str(want_gz) + " got=" + str(g) + "]")
+        fails = fails + 1
+
+print("[1] q 值：显式拒绝必须尊重（RFC 9110 §12.5.3 · q=0 = 不接受）")
+acase("01 baseline: gzip",              "gzip",              true)
+acase("02 gzip;q=0 显式拒绝",           "gzip;q=0",          false)
+acase("03 gzip;q=0.0",                  "gzip;q=0.0",        false)
+acase("04 gzip;q=0.000",                "gzip;q=0.000",      false)
+acase("05 q>0 仍接受: gzip;q=0.5",      "gzip;q=0.5",        true)
+acase("06 q>0 仍接受: gzip;q=1",        "gzip;q=1",          true)
+acase("07 大写 Q: GZIP;Q=0",            "GZIP;Q=0",          false)
+
+print("[2] 子串误命中（修前 strstr 把任意位置出现都算接受）")
+acase("08 xgzip 不算接受",              "xgzip",             false)
+acase("09 not-gzip 不算接受",           "not-gzip",          false)
+acase("10 br,gzip;q=0 不算接受",        "br, gzip;q=0",      false)
+acase("11 br only 不算接受",            "br",                false)
+
+print("[3] 通配与大小写（RFC：`*` 匹配未显式列出的编码；token 大小写不敏感）")
+acase("12 * 通配接受",                  "*",                 true)
+acase("13 GZIP 大写接受",               "GZIP",              true)
+acase("14 Gzip 混合大小写",             "Gzip",              true)
+acase("15 前导/尾随空白",               "  gzip  ",          true)
+
+print("[4] 显式项优先于通配（RFC 明文）")
+acase("16 *;q=0 拒绝",                  "*;q=0",             false)
+acase("17 gzip;q=0, * 显式拒绝优先",    "gzip;q=0, *",       false)
+acase("18 gzip;q=1, *;q=0 显式接受",    "gzip;q=1, *;q=0",   true)
+
+print("[5] 其它")
+acase("19 无 Accept-Encoding ⇒ 不压",   "",                  false)
+acase("20 identity;q=0 ⇒ 不压(非 406)", "identity;q=0",      false)
+acase("21 identity, gzip ⇒ 压",         "identity, gzip",    true)
+
+print("M224A-NEGOTIATE-OK fails=" + str(fails))
+if fails > 0:
+    exit(1)

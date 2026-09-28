@@ -157,6 +157,10 @@ int g_px_log_daily = 0;
 // M37：gzip 响应压缩配置（级别 1-9 / 最小体积阈值）
 int g_px_gzip_level = 6;
 int g_px_gzip_min = 1024;
+// M224（晨曦 QA P1-2 续 · 缺陷 326）：服务级压缩开关（opts{"gzip": false} 关）。
+//   修前 runtime 这层压缩**无法关闭** —— 站点级开关（如 Mahesvara 的 "gzip": false）管不到它，
+//   调用方只能用 `gzip_min_bytes: 1GiB` 把阈值抬到永不触发（语义借用，可读性差）。
+int g_px_gzip_enabled = 1;
 // 虚拟主机表（vhost(host, docroot|handler)）
 #define MAX_VHOSTS 32
 typedef struct {
@@ -23851,14 +23855,84 @@ static int px_parse_range(const char* r, long long size, long long* start, long 
 }
 
 // 响应体是否应 gzip（Accept-Encoding: gzip 且为文本类）
+// M224（晨曦 QA P1-2 续 · 缺陷 326）：q 值「是否等于 0」。
+//   RFC 9110 §12.5.3：q=0 表示**不接受**该编码；其余（>0）都接受。
+//   形式：`q=0` / `q=0.` / `q=0.0` / `q=0.000` ⇒ 零；`q=0.5` / `q=1` / `q=1.000` ⇒ 非零。
+//   解析失败（畸形值）⇒ 按非零（宽松：不因客户端写错而拒绝服务）。
+static int px_q_is_zero(const char* v, int vlen) {
+    int i = 0;
+    while (i < vlen && (v[i] == ' ' || v[i] == '\t')) i++;
+    if (i >= vlen || v[i] != '0') return 0;
+    i++;
+    if (i < vlen && v[i] == '.') {
+        i++;
+        while (i < vlen && v[i] == '0') i++;
+        while (i < vlen && (v[i] == ' ' || v[i] == '\t')) i++;
+        return i >= vlen;
+    }
+    while (i < vlen && (v[i] == ' ' || v[i] == '\t')) i++;
+    return i >= vlen;
+}
+
+// M224：`Accept-Encoding` 是否接受 gzip（RFC 9110 §12.5.3 的 codings/weight 语法）。
+//   修前判据是裸 `strstr(ae, "gzip")`（M53 起）—— 四个面都不合规：
+//     ① 不解析 q 值 ⇒ `gzip;q=0`（客户端**显式拒绝**）仍被压缩；
+//     ② 子串误命中 ⇒ `xgzip` / `not-gzip` 也算接受；
+//     ③ 不认 `*` 通配（RFC：`*` 匹配任何**未显式列出**的编码）；
+//     ④ token 比较大小写敏感 ⇒ `GZIP` 不命中（HTTP token 大小写不敏感，§11.1）。
+//   语义：逐逗号成员解析 `token[;q=value]`；token 去尾空白后**大小写不敏感**比对；
+//     显式 `gzip` 成员存在 ⇒ 用它的 q（**显式优先于 `*`**，RFC 明文）；
+//     无显式 gzip 但有 `*` ⇒ 用 `*` 的 q；都没有 ⇒ 不接受。
+//   ⚠️ 有意**不做**（覆盖边界，见 docs/HTTP_GZIP_NEGOTIATION.md）：`identity;q=0` / `*;q=0`
+//      严格应回 406 Not Acceptable；本实现只表现为「不压」（与 nginx 同款取舍）。
+static int px_ae_accepts_gzip(const char* ae) {
+    if (!ae || !*ae) return 0;
+    int gz_q = -1, star_q = -1;
+    const char* p = ae;
+    while (*p) {
+        while (*p == ' ' || *p == '\t' || *p == ',') p++;
+        if (!*p) break;
+        const char* tok = p;
+        while (*p && *p != ',' && *p != ';') p++;
+        int toklen = (int)(p - tok);
+        while (toklen > 0 && (tok[toklen - 1] == ' ' || tok[toklen - 1] == '\t')) toklen--;
+        int q = 1;
+        if (*p == ';') {
+            const char* s = p + 1;
+            while (*s && *s != ',') {
+                while (*s == ' ' || *s == '\t' || *s == ';') s++;
+                if (!*s || *s == ',') break;
+                const char* pp = s;
+                while (*s && *s != ';' && *s != ',') s++;
+                int plen = (int)(s - pp);
+                if (plen > 2 && (pp[0] == 'q' || pp[0] == 'Q') && pp[1] == '=') {
+                    if (px_q_is_zero(pp + 2, plen - 2)) q = 0;
+                }
+            }
+            p = s;
+        }
+        if (toklen == 4 && strncasecmp(tok, "gzip", 4) == 0) {
+            if (gz_q < 0) gz_q = q;
+        } else if (toklen == 1 && tok[0] == '*') {
+            if (star_q < 0) star_q = q;
+        }
+        while (*p && *p != ',') p++;
+    }
+    int q = (gz_q >= 0) ? gz_q : star_q;
+    return q > 0;
+}
+
 static int px_resp_gzipable(LXValue* headers, const char* ct, int body_len) {
+    if (!g_px_gzip_enabled) return 0;
     if (body_len < g_px_gzip_min) return 0;
     LXValue ae = px_header_get(headers, "Accept-Encoding");
-    if (ae.type != PX_STR || !strstr(ae.as.obj->as.str.data, "gzip")) return 0;
+    if (ae.type != PX_STR) return 0;
+    if (!px_ae_accepts_gzip(ae.as.obj->as.str.data)) return 0;
     if (!ct || !*ct) return 1;
     if (strncasecmp(ct, "text/", 5) == 0) return 1;
-    if (strstr(ct, "json") || strstr(ct, "javascript") || strstr(ct, "xml") ||
-        strstr(ct, "svg") || strstr(ct, "csv")) return 1;
+    // M224：Content-Type 的 type/subtype 大小写不敏感（RFC 9110 §8.3）⇒ 用 strcasestr
+    if (strcasestr(ct, "json") || strcasestr(ct, "javascript") || strcasestr(ct, "xml") ||
+        strcasestr(ct, "svg") || strcasestr(ct, "csv")) return 1;
     return 0;
 }
 
@@ -26129,6 +26203,7 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
     g_px_log_daily = 0;
     g_px_gzip_level = 6;
     g_px_gzip_min = 1024;
+    g_px_gzip_enabled = 1;
 #ifndef PX_NO_QUIC
     g_px_h3_listener = 0;
 #endif
@@ -26179,6 +26254,13 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
         if (gl.type == PX_INT && gl.as.i >= 1 && gl.as.i <= 9) g_px_gzip_level = (int)gl.as.i;
         LXValue gm = px_dict_get(args[3], "gzip_min_bytes");
         if (gm.type == PX_INT && gm.as.i >= 1) g_px_gzip_min = (int)gm.as.i;
+        // M224（晨曦诉求②）：opts.gzip —— 服务级关闭 runtime 层的自动压缩（默认 true）。
+        //   关掉后 px_serve 三处分支（vhost / .px 脚本 / 原生静态）一律明文下发，
+        //   压缩策略完全交给应用层（如 Mahesvara 自己那一层）。
+        //   ⚠️ 与 handler 返回值里的 `gzip: true`（M21：**handler 自己压过了**）不是同一层，互不影响。
+        //   ⚠️ 不影响 native `gzip_compress()`（用户显式压缩永远可用）。
+        LXValue gz_on = px_dict_get(args[3], "gzip");
+        if (gz_on.type == PX_BOOL) g_px_gzip_enabled = gz_on.as.b ? 1 : 0;
         // M180：opts.h2_demo —— **显式**启用 h2 演示帧层（默认关；生产不要开）
         {
             LXValue h2d = px_dict_get(args[3], "h2_demo");
