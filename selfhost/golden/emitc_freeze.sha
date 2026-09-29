@@ -160,11 +160,12 @@ examples/m177_builtin_parity/err_min_empty.px src=a72412d2f887fb9d rc=0 out=ab4b
 examples/m177_builtin_parity/err_sum_int.px src=321ec12b2688c39d rc=0 out=73a3d89182c15e7d3e827762252e8bbf err=e3b0c44298fc1c14
 examples/m177_builtin_parity/iter_builtins.px src=a71036c73f4e2eaa rc=0 out=4e827643db64ddf0660b8f2d2374c666 err=e3b0c44298fc1c14
 examples/m178_iterable_args/err_contains_int.px src=5c7a8040b6eb003a rc=0 out=e8955a110c94a5f118547bb4f222c0c9 err=e3b0c44298fc1c14
+examples/m178_iterable_args/err_contains_nonstr.px src=0217dd1eff37cc07 rc=0 out=09f02f090a3eda5ee132245d4ca39836 err=e3b0c44298fc1c14
 examples/m178_iterable_args/err_join_int.px src=d3f7104a84641c54 rc=0 out=401664529bdbe5cecc399f0d2a25bdb3 err=e3b0c44298fc1c14
 examples/m178_iterable_args/err_reversed_int.px src=330ecb22ecc796c8 rc=0 out=5fbdcac940ebadb68c11429119900ca3 err=e3b0c44298fc1c14
 examples/m178_iterable_args/err_sorted_int.px src=9933879490721181 rc=0 out=25c43e425b7a7aa23a7c374621b7ec18 err=e3b0c44298fc1c14
 examples/m178_iterable_args/err_sum_str.px src=ead374ef6b23fbae rc=0 out=cdb7856b4bf56f025df61298d6bdab4d err=e3b0c44298fc1c14
-examples/m178_iterable_args/iter_args.px src=19a0ad45a87f9ea2 rc=0 out=18fcc502ae1f6632e3864610493a02f2 err=e3b0c44298fc1c14
+examples/m178_iterable_args/iter_args.px src=a2893e0d2f52f804 rc=0 out=a59c038ce38afa9db4d7dbf3a0bf90fc err=e3b0c44298fc1c14
 examples/m178_iterable_args/str_args.px src=f441a4b953064e45 rc=0 out=eca26bd56d172062dee4bc00f6dbf47d err=e3b0c44298fc1c14
 examples/m179_arith_diag/err_add_str.px src=c1e048087ff83f1f rc=0 out=f573c701d97cf04d7364742b6c6345d0 err=e3b0c44298fc1c14
 examples/m179_arith_diag/err_bit_float.px src=07509dff42785cd5 rc=0 out=1af78f4aca311219d73af5970e68bee8 err=e3b0c44298fc1c14

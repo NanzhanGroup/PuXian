@@ -29,7 +29,11 @@ print("24 contains_list=" + str(contains([1, 2, 3], 2)))
 print("25 contains_tuple=" + str(contains((1, 2, 3), 2)))
 print("26 contains_gen=" + str(contains((x for x in [1, 2, 3]), 2)))
 print("27 contains_str=" + str(contains("abc", "b")))
-print("28 contains_str_nonstr=" + str(contains("abc", 1)))
+# M227（缺陷 338 · 「同名两门」）：本行原为 `contains("abc", 1)`，那时编译轨**静默 false**、
+#   而方法面 `"abc".contains(1)` 一直响亮 R1002 ⇒ 同一个操作两个门不同。M227 统一为**响亮**
+#   （子串只能与字符串比较；Python `'in <string>' requires string` 同为 TypeError）
+#   ⇒ 该期望已**移到拒绝侧** `err_contains_nonstr.px`（本行改取一个真子串，仍加一个数据点）。
+print("28 contains_str_sub=" + str(contains("abc", "bc")))
 print("29 contains_gen_str=" + str(contains((c for c in "abc"), "a")))
 print("30 contains_gen_empty=" + str(contains((x for x in []), 1)))
 print("31 contains_gen_miss=" + str(contains((x for x in [1, 2]), 9)))
