@@ -106,8 +106,19 @@ def verdict(x):
 
 
 def collect(pat):
+    """采集门日志。
+
+    M225s2：**显式排除本诊断器自己的日志** —— 诊断器的输出不属于「门的日志」，
+      而它一旦落进扫描面就会**自我包含**（扫到正在写的自己 ⇒ 判 unknown ⇒ 非 ok
+      ⇒ 必然假红；CI 实测 `非 ok 1 份 ['v_ci_diagnose.log']`）。
+      治本在调用方（守卫日志落 /tmp/guard_*.log），这里是**第二道**：即使将来
+      有人把它的日志写回 v_*.log，也不会把判据带进自指。
+    """
     infos = []
+    skip_self = ('ci_diagnose',)
     for f in sorted(glob.glob(pat)):
+        if any(k in os.path.basename(f) for k in skip_self):
+            continue
         try:
             t = open(f, encoding='utf-8', errors='replace').read()
         except Exception:
