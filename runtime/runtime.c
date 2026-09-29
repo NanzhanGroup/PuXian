@@ -26345,7 +26345,13 @@ static LXValue bi_px_serve(LXValue* args, int nargs, void* ctx) {
             g_px_h3_listener = lid;
             // Alt-Svc 自动通告：http3 开启且未显式配置 alt_svc 时，默认 h3=":port"（客户端据此升级）
             if (!g_px_alt_svc[0]) snprintf(g_px_alt_svc, sizeof(g_px_alt_svc), "h3=\":%d\"", h3_port);
-            fprintf(stderr, "[px-serve] HTTP/3 listening udp/%d listener=%lld alt_svc=%s\n",
+            // M225：**实验性**标注（晨曦 QA P3 的可观测性诉求）—— 必须在启动日志里自陈，
+            // 否则运维会把"开了 H3"读成"H3 能用了"（历史上正是缺这条可见性，
+            // 才让 M225 修掉的「listener 被拖死」在生产上更难归因）。
+            // 注：标注放在**行尾**，不动 `HTTP/3 listening udp/<port>` 前缀 ——
+            // m53_s4 / m180 两道门按该前缀断言（改前缀 = 无谓回归）。
+            fprintf(stderr, "[px-serve] HTTP/3 listening udp/%d listener=%lld alt_svc=%s"
+                            "（实验性：未达生产就绪，见 docs/HTTP3_STANCE.md）\n",
                     h3_port, (long long)lid, g_px_alt_svc);
         } else {
             fprintf(stderr, "[px-serve] 警告：HTTP/3 listener 启动失败（udp/%d 被占或证书不可用），仅提供 HTTP/1.1\n",

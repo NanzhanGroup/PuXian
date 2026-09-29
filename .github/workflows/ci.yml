@@ -667,6 +667,16 @@ jobs:
           grep -E '^(   |── )' /tmp/v_m224.log | tail -30
           echo "✅ m224_gzip_negotiate verify（q 值/子串/通配/大小写四面 + opts.gzip 服务级开关）PASS"
 
+          # M225（第 103 轮）：H3 连接槽位复用「会话状态串味」（缺陷 327 · 晨曦 QA P3 阻塞级 续）。
+          #   根因：h3 会话状态（QPACK 动态表 / 流缓冲 / last_sid）按 **conn 号**（= QUIC 槽位号）
+          #   索引，而槽位**可复用**；`h3_conn_setup_c` 幂等短路只看 conn 号 ⇒ 新连接继承
+          #   上一个连接的 QPACK 上下文 ⇒ QUIC 层正常、H3 层解不出 ⇒ 客户端永远收不到响应。
+          #   本机实测：**不需要"非优雅断开"**，连接正常关闭 + 槽位复用即复现。
+          #   用例用 PX_H3_IDLE_MS=300 加速（生产默认 2×8000ms 不变）；负控要重编 runtime。
+          bash examples/m225_h3_conn_reuse/verify.sh --neg-skip > /tmp/v_m225.log 2>&1 || { echo "❌ m225_h3_conn_reuse verify 失败"; grep -E '^(   |── |❌)' /tmp/v_m225.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^(   |── )' /tmp/v_m225.log | tail -30
+          echo "✅ m225_h3_conn_reuse verify（同槽复用 6 连全通 + 钩子/身份双层兜底 + 负控 3 道）PASS"
+
       # M222 补（第 100 轮 · 第 100 轮收口）：**让 M221 的产物指纹短路「在 CI 上是否生效」可观测**。
       #   动机（实测，别当猜测）：M221 短路在本机微测上确证有效（重建 17s → 复用 0s），
       #   但 CI 的「工具自测」步时长 **1337s（M220）→ 1657s（M222）**，而同期只多了两个门

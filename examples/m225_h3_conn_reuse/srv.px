@@ -1,0 +1,27 @@
+# ============================================================
+# M225 门：HTTP/3 连接槽位复用「会话状态串味」—— 服务端
+# ------------------------------------------------------------
+# 用 px_serve + opts.http3（Mahesvara 同路径：M53 托管 listener：
+# 单 fd 收包路由 + 自动 accept + 每连接处理线程）。
+# PX_H3_IDLE_MS 由 verify.sh 设小（300ms）⇒ 连接收尾只需 ~0.6s，
+# 使"槽位复用"在秒级内可测（生产默认仍为 2×8000ms）。
+# ============================================================
+var hp = 19398
+var h3p = 19399
+var ready = "/tmp/m225gate.ready"
+var v = env("M225_HTTP_PORT")
+if v != null:
+    hp = int(v)
+    h3p = hp + 1
+var r = env("M225_READY")
+if r != null:
+    ready = r
+
+def api_m225(req, params):
+    return {"status": 200, "body": "m225-ok", "headers": {"Content-Type": "text/plain; charset=utf-8"}}
+
+route("GET", "/m225", api_m225)
+
+write_file(ready, "ready")
+print("SRV ready http=" + str(hp) + " h3=" + str(h3p))
+px_serve(hp, "/tmp", 10000, {"http3": {"port": h3p}})

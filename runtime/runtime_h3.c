@@ -115,6 +115,7 @@ typedef struct {
 static h3connbuf g_h3buf[H3_MAX_CONN][H3_STREAM_SLOTS];
 static int64_t g_last_sid[H3_MAX_CONN];   // 旧 API 兼容：最近读请求/响应的流
 
+
 // ==================== M51：连接级 HTTP/3 会话（QPACK 动态表接入线上）====================
 // 已 setup 的连接：本端开 3 条单向流（RFC 9114 §6.2.1：控制流必须是本端第一条 uni 流），
 //   控制流首字节 0x00 + SETTINGS 帧（qcap / blocked）；编码器流 0x02 走 QPACK
@@ -146,10 +147,41 @@ typedef struct {
     int64_t dec_sent;      // 本端解码器流累计发送 ack 指令字节
     int64_t dec_sects;     // 本端已发 Section Ack 的字段段数
     int64_t enc_acks;      // 收对端解码器流指令数（Section Ack + Insert Count Increment）
+    int64_t owner_epoch;   // M225：本会话所属连接代次（槽位复用身份判据）
 } h3conn_state;
 static h3conn_state g_h3st[H3_MAX_CONN];
 static h3conn_state* h3_st(int64_t conn) {
     return (conn > 0 && conn <= H3_MAX_CONN) ? &g_h3st[conn - 1] : NULL;
+}
+
+// M225（缺陷 327）：清该 conn 号的全部 HTTP/3 会话状态。
+// 调用时机 = QUIC 槽位释放前（runtime_quic.c 的连接回收钩子）或客户端 quic_close。
+// 为什么必须有：g_h3st / g_h3buf / g_last_sid 都按 **conn 号**索引，而 conn 号是**可复用的槽位**；
+//   不复位就会出现「新连接沿用旧连接的 QPACK 动态表会话 + 流缓冲」——
+//   QUIC 层一切正常（能收能 ACK），但 H3/QPACK 层编码上下文与对端不一致 ⇒ 客户端永远读不到响应。
+void px_h3_recycle_conn(int64_t conn) {
+    if (conn <= 0 || conn > H3_MAX_CONN) return;
+    h3conn_state* st = &g_h3st[conn - 1];
+    if (st->qd > 0) px_qd_close(st->qd);
+    memset(st, 0, sizeof(*st));
+    h3connbuf (*slots)[H3_STREAM_SLOTS] = &g_h3buf[conn - 1];
+    for (int i = 0; i < H3_STREAM_SLOTS; i++) {
+        if ((*slots)[i].data) { free((*slots)[i].data); (*slots)[i].data = NULL; }
+        (*slots)[i].used = 0;
+    }
+    memset(&g_h3buf[conn - 1], 0, sizeof(g_h3buf[conn - 1]));
+    g_last_sid[conn - 1] = 0;
+}
+
+// M225：H3 连接空闲超时（默认 2×8000ms 空闲 ⇒ 关连接，同 keep-alive）。
+// PX_H3_IDLE_MS 可覆盖（测试用；生产默认不变）。
+static int h3_idle_ms(void) {
+    const char* e = getenv("PX_H3_IDLE_MS");
+    if (!e || !*e) return 8000;
+    int v = atoi(e);
+    if (v < 50) return 50;
+    if (v > 60000) return 60000;
+    return v;
 }
 
 // QUIC 流 id 次低位（0x2）：0=双向 / 1=单向（RFC 9000 §2.1；最低位 0x1 是发起者标志）
@@ -848,7 +880,13 @@ static LXValue h3_make_request_fields(const char* method, const char* scheme,
 static bool h3_conn_setup_c(int64_t conn, int64_t cap) {
     h3conn_state* st = h3_st(conn);
     if (!st) return false;
-    if (st->used) return true;               // 幂等
+    // M225（缺陷 327）：幂等判据必须带「连接身份」—— 只看 conn 号会把**上一个连接的**
+    // QPACK 会话误当成本连接的（槽位复用后 conn 号相同）⇒ 响应编码上下文与对端不一致。
+    int64_t ep = px_quic_raw_conn_epoch(conn);
+    if (st->used) {
+        if (ep != 0 && st->owner_epoch == ep) return true;   // 同一连接：幂等返回
+        px_h3_recycle_conn(conn);                            // 身份不符：丢弃陈旧会话（防御层）
+    }
     int64_t ctrl = px_quic_raw_open_uni_stream(conn); // 首条 uni = 控制流（RFC 9114 §6.2.1）
     if (ctrl < 0) return false;
     int64_t enc = px_quic_raw_open_uni_stream(conn);
@@ -868,6 +906,7 @@ static bool h3_conn_setup_c(int64_t conn, int64_t cap) {
     st->used = 1; st->qd = qd;
     st->ctrl_sid = ctrl; st->enc_sid = enc; st->dec_sid = dec;
     st->peer_qcap = -1; st->peer_blocked = -1;
+    st->owner_epoch = ep;                      // M225：记住本会话属于哪个连接代次
     return true;
 }
 
@@ -1304,8 +1343,8 @@ static void h3_srv_pipe_cb(int64_t conn, void* ud) {
     px_quic_raw_peer_addr(conn, peer, sizeof(peer));
     int idle = 0;
     for (;;) {
-        int64_t sid = h3_poll_requests(conn, 8000);   // 自动消费对端单向流（SETTINGS/QPACK）
-        if (sid < 0) { if (++idle >= 2) break; continue; }  // 2×8s 空闲 → 关闭（同 keep-alive 超时）
+        int64_t sid = h3_poll_requests(conn, h3_idle_ms());   // 自动消费对端单向流（SETTINGS/QPACK）
+        if (sid < 0) { if (++idle >= 2) break; continue; }  // 2×idle 空闲 → 关闭（同 keep-alive 超时）
         idle = 0;
         LXValue fields;
         uint8_t* bd = NULL;
@@ -1474,4 +1513,6 @@ void px_register_h3(void) {
     px_ffi_register("h3_server_listen", bi_h3_server_listen);
     px_set_global("h3_server_listen_stateless", px_native("h3_server_listen_stateless", bi_h3_server_listen_stateless));
     px_ffi_register("h3_server_listen_stateless", bi_h3_server_listen_stateless);
+    // M225（缺陷 327）：把 h3 会话回收挂进 QUIC 连接回收路径（槽位释放 / quic_close 前）
+    px_quic_set_conn_recycle_cb(px_h3_recycle_conn);
 }

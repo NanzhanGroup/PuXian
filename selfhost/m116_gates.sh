@@ -831,6 +831,14 @@ run m223_devbuild_fingerprint bash examples/m223_devbuild_fingerprint/verify.sh
 #   ⚠️ 用例走**裸 TCP + hex 魔数**断言（`http_request` 客户端会自己 gunzip ⇒ 只看响应头
 #     验不出「线上到底压没压」）；负控要重编 runtime（~20s×4）。
 run m224_gzip_negotiate bash examples/m224_gzip_negotiate/verify.sh
+step "M225 · H3 连接槽位复用「会话状态串味」（缺陷 327 · 晨曦 QA P3 阻塞级 续）"
+#   根因（本机实测，非推断）：h3 会话状态（QPACK 动态表 / 流缓冲 / last_sid）按 **conn 号**
+#   （= QUIC 槽位号）索引，而槽位**可复用**；`h3_conn_setup_c` 的幂等短路只看 `st->used`
+#   ⇒ 新连接继承**上一个连接**的 QPACK 上下文 ⇒ QUIC 层一切正常（能收能 ACK）、
+#   H3/QPACK 层编码与对端不一致 ⇒ **客户端永远读不到响应**（晨曦生产实测：H3 整体失效）。
+#   ⚠️ 本机实测**不需要"非优雅断开"**：连接正常关闭 → 槽位释放 → 新连接复用同槽即复现。
+#   ⚠️ 判据用 PX_H3_IDLE_MS=300 加速（生产默认仍是 2×8000ms）；负控要重编 runtime（~35s×4）。
+run m225_h3_conn_reuse bash examples/m225_h3_conn_reuse/verify.sh
 step "M190 · 上游 registry-px 真实用例回归（128 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。
