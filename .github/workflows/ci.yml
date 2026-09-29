@@ -677,6 +677,20 @@ jobs:
           grep -E '^(   |── )' /tmp/v_m225.log | tail -30
           echo "✅ m225_h3_conn_reuse verify（同槽复用 6 连全通 + 钩子/身份双层兜底 + 负控 3 道）PASS"
 
+      - name: "M226 · 方法面「逐位置 × 错类型 + 错 arity」全量对拍（缺陷 328–335）"
+        if: always()
+        run: |
+          # 面：方法面从来没有清单级 / 全量度量（M190 只量个数、M199 只量 native 函数面）。
+          #   聚合驱动器 ⇒ 两次编译覆盖全量 222 例：修前 32 例分叉，落在 8 个缺陷族：
+          #     328 `[1,2].join()` 0 参 ⇒ 越界读 ⇒ **VM 轨 SIGSEGV（core）**
+          #     329 `list.contains` / `dict.has|contains|remove` 判据 `< 1` ⇒ 多余实参静默
+          #     330 缺参口径 R1002 ⇄ R1005 · 331/332 方法清单不对称（to_lower/put）
+          #     333 join 文案 · 334 remove 缺键 R1008 ⇄ null · 335 get 放过多余实参
+          #   ⚠️ 清单期望集**从源码派生**（不许手抄 —— M212 缺陷 288）；差集 ⇄ UNPAIRED.tsv 精确相等。
+          bash examples/m226_method_surface/verify.sh --neg-skip > /tmp/v_m226.log 2>&1 || { echo "❌ m226_method_surface verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m226.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^(   |── )' /tmp/v_m226.log | tail -30
+          echo "✅ m226_method_surface verify（222 例三轨分叉 0 + 清单派生对拍 + 崩溃回归）PASS"
+
       # M222 补（第 100 轮 · 第 100 轮收口）：**让 M221 的产物指纹短路「在 CI 上是否生效」可观测**。
       #   动机（实测，别当猜测）：M221 短路在本机微测上确证有效（重建 17s → 复用 0s），
       #   但 CI 的「工具自测」步时长 **1337s（M220）→ 1657s（M222）**，而同期只多了两个门

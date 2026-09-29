@@ -129,11 +129,16 @@ def i_expect_str_arg(args, idx, mname, pos):
 def i_str_method(s, name, args, pos):
     # M190（缺陷 213-i）：本区四个方法修前**完全不查实参**⇒ `s.upper(9)` 解释轨静默
     #   忽略、编译轨响亮 ⇒ 三轨分叉。现在与 native `px_method` **逐字同文**。
-    if name == "upper":
+    # M226（缺陷 331）：`to_upper` / `to_lower` 是 `upper` / `lower` 的**别名**
+    #   （native `px_method` 的 `strcmp(name,"upper")==0 || strcmp(name,"to_upper")==0`
+    #   一直如此），而解释轨**清单里没有** ⇒ `"abc".to_upper()` 解释轨响亮
+    #   `R1007 类型 string 没有方法 'to_upper'`、编译轨正常 ⇒ 方法清单不对称。
+    #   ⇒ 补齐解释侧；**报错文案一律用规范名**（`方法 upper …`）—— 与 native 逐字同文。
+    if name == "upper" or name == "to_upper":
         if len(args) != 0:
             return Err(i_r1005("方法 upper 不接受参数", pos))
         return Ok(s.upper())
-    if name == "lower":
+    if name == "lower" or name == "to_lower":
         if len(args) != 0:
             return Err(i_r1005("方法 lower 不接受参数", pos))
         return Ok(s.lower())
@@ -307,6 +312,12 @@ def i_dict_method(d, name, args, pos):
     if name == "len":
         return Ok(len(d.keys()))
     if name == "get":
+        # M226（缺陷 330/335）：**缺参必须先报缺参**（R1005）—— 修前直接进
+        #   `i_expect_str_arg(args, 0, …)`，0 参时它报 R1002「参数 1 需要 string」
+        #   而编译轨报 R1005「需要 1 个参数」⇒ 同一次误用三轨两种 R 码（且解释轨的
+        #   说法把「没给」说成「类型不对」，指不到真因）。上界同 `set`（get(键[, 默认值])）。
+        if len(args) > 2 or len(args) < 1:
+            return Err(i_r1005("方法 get 需要 1-2 个参数", pos))
         let r = i_expect_str_arg(args, 0, "get", pos)
         if r.is_err():
             return Err(r.err())
@@ -350,11 +361,17 @@ def i_dict_method(d, name, args, pos):
             i += 1
         return Ok(out)
     if name == "has" or name == "contains":
+        # M226（缺陷 330）：先查 arity（缺参 ⇒ R1005」，同编译轨）
+        if len(args) != 1:
+            return Err(i_r1005("方法 " + name + " 需要 1 个参数", pos))
         let r = i_expect_str_arg(args, 0, name, pos)
         if r.is_err():
             return Err(r.err())
         return Ok(d.has(r.unwrap()))
     if name == "remove":
+        # M226（缺陷 330）：先查 arity（缺参 ⇒ R1005，同编译轨）
+        if len(args) != 1:
+            return Err(i_r1005("方法 remove 需要 1 个参数", pos))
         let r = i_expect_str_arg(args, 0, "remove", pos)
         if r.is_err():
             return Err(r.err())
