@@ -5564,7 +5564,7 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
         }
         // M-B2：C 端 list.pop 缺失（自举 lexer 缩进栈用），与解释器一致
         if (strcmp(name, "pop") == 0) {
-            if (nargs != 0) px_error("R1005: pop 不接受参数");
+            if (nargs != 0) px_error("R1005: 方法 pop 不接受参数");
             LXObject* o = obj.as.obj;
             if (o->as.list.len == 0) px_error("R1003: pop 空列表");
             o->as.list.len--;
@@ -5762,15 +5762,15 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
     // M39：Result 方法（is_ok / is_err / unwrap / ok / err）
     if (obj.type == PX_RESULT) {
         if (strcmp(name, "is_ok") == 0) {
-            if (nargs != 0) px_error("R1005: is_ok 不接受参数");
+            if (nargs != 0) px_error("R1005: 方法 is_ok 不接受参数");
             return px_bool(obj.as.obj->as.result.ok);
         }
         if (strcmp(name, "is_err") == 0) {
-            if (nargs != 0) px_error("R1005: is_err 不接受参数");
+            if (nargs != 0) px_error("R1005: 方法 is_err 不接受参数");
             return px_bool(!obj.as.obj->as.result.ok);
         }
         if (strcmp(name, "unwrap") == 0) {
-            if (nargs != 0) px_error("R1005: unwrap 不接受参数");
+            if (nargs != 0) px_error("R1005: 方法 unwrap 不接受参数");
             if (obj.as.obj->as.result.ok) return obj.as.obj->as.result.value;
             px_error("R1004: unwrap 失败: Err(%s)", px_to_string(obj.as.obj->as.result.value));
         }
@@ -5779,15 +5779,22 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
             //   并取出错误值；Ok 上调用 ⇒ 响亮报错（不静默返回 null）。
             //   修前只有 `ok()/err()`（它们对「另一侧」返回 null，是**查询**语义，不是断言），
             //   写库的人要找的是「断言 + 取值」这一个动作（Rust 的 `unwrap_err`）。
-            if (nargs != 0) px_error("R1005: unwrap_err 不接受参数");
+            if (nargs != 0) px_error("R1005: 方法 unwrap_err 不接受参数");
             if (!obj.as.obj->as.result.ok) return obj.as.obj->as.result.value;
             px_error("R1004: unwrap_err 失败: Ok(%s)", px_to_string(obj.as.obj->as.result.value));
         }
         if (strcmp(name, "ok") == 0) {
+            // M229（第 107 轮 · 缺陷 343）：修前**完全不查 arity** —— `Ok(7).ok(1)` 静默返回 7、
+            //   `Ok(7).err(1)` 静默返回 null。而**同一个接收者**上 is_ok / is_err / unwrap /
+            //   unwrap_err 四个都有检查 ⇒ 「同族六个方法，四个拦、两个放行」。
+            //   形状与 M226 缺陷 329（`< 1` 放过多余实参）、M227 缺陷 336（dict.len 无检查）同族；
+            //   **result 面在 M226 的扫描面（str/list/dict）之外** ⇒ 从未被度量过。
+            if (nargs != 0) px_error("R1005: 方法 ok 不接受参数");
             // Ok(v) → Some(v)=v；Err(_) → null
             return obj.as.obj->as.result.ok ? obj.as.obj->as.result.value : px_null();
         }
         if (strcmp(name, "err") == 0) {
+            if (nargs != 0) px_error("R1005: 方法 err 不接受参数");
             // Err(e) → e；Ok(_) → null
             return obj.as.obj->as.result.ok ? px_null() : obj.as.obj->as.result.value;
         }

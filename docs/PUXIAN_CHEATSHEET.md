@@ -2911,3 +2911,21 @@ set_timeout(fn (): print("once after 2s"), 2000)
        ⇒ `true in [1, 2]` = `false`。
      · 判据：`examples/m228_membership/`（**81 例 × 4 门 × 3 轨 = 972 次执行**，
        与 Python 独立真值一致 · 负控 3 道各自独立判红）。
+
+254. **方法面的「精确 arity」按**接收者**全覆盖（第 107 轮 · M229 · 缺陷 343/344）**：
+
+     · `Ok(7).ok(1)` / `Ok(7).err(1)` 修前**静默**（返回 `7` / `null`）——
+       `ok`/`err` 是完全不查 arity 的两个（同接收者的 `is_ok`/`is_err`/`unwrap`/`unwrap_err`
+       四个都拦）。**修后一律响亮** `R1005: 方法 ok 不接受参数`。
+     · 方法面 `R1005` 文案统一为 **`方法 <名> …`**（`pop` / `is_ok` / `is_err` /
+       `unwrap` / `unwrap_err` 已补前缀）。
+     · **有意保留的例外**：`list.index` / `mutex.with` / `rwlock.with_read` /
+       `rwlock.with_write` 用 `类型.方法 …`（刻意点名类型；后三个属 MINI_SUBSET 设计件）。
+     · `unwrap` / `unwrap_err` 的**值错误**（`R1004: unwrap 失败: Err(...)`）**不带**「方法」前缀
+       —— 值错误族（如 `R1008 字典没有键`）本就如此。
+     · 判据：`examples/m229_result_tuple/`（35 例 × 3 轨 = 105 次 · 负控 A 8 项 / B 4 项）。
+     · ⚠️ **门锚点哨兵**（本仓新守卫 `selfhost/check_gate_anchors.py`）：改了
+       `runtime/selfhost` 的源码后，**旧门里嵌的补丁锚点**可能整体失效
+       （`assert s.count(anchor)==1` 失败 ⇒ 门报红但**指不到真因**）。这条纪律已**复发 6 次**
+       （M161/M164/M178+M227/M228 连带 M227/M229 连带 M190）。哨兵判据：门文件里
+       `assert s.count(x)==1` 的锚点 blob 必须在 `runtime|selfhost|tools|stdlib` 里**仍能找到**。

@@ -1,0 +1,36 @@
+例号	表达式	期望形状	期望值
+t_len0	(1, 2, 3).len()	VAL	3
+t_len1	(1, 2, 3).len(1)	R1005	方法 len 不接受参数
+t_len2	(1, 2, 3).len(1, 2)	R1005	方法 len 不接受参数
+t_cont0	(1, 2, 3).contains()	R1005	方法 contains 需要 1 个参数
+t_cont1	(1, 2, 3).contains(2)	VAL	true
+t_cont1b	(1, 2, 3).contains("x")	VAL	false
+t_cont2	(1, 2, 3).contains(2, 3)	R1005	方法 contains 需要 1 个参数
+t_cont3	(1, 2, 3).contains(2, 3, 4)	R1005	方法 contains 需要 1 个参数
+t_join0	(1, 2, 3).join()	R1005	方法 join 需要 1 个参数
+t_join1	("a", "b").join("-")	VAL	a-b
+t_join1t	(1, 2, 3).join(1)	R1002	方法 join 参数 1 需要 string
+t_join2	(1, 2, 3).join("-", "+")	R1005	方法 join 需要 1 个参数
+r_isok0	Ok(7).is_ok()	VAL	true
+r_isok1	Ok(7).is_ok(1)	R1005	方法 is_ok 不接受参数
+r_isok2	Ok(7).is_ok(1, 2)	R1005	方法 is_ok 不接受参数
+r_iserr0	Ok(7).is_err()	VAL	false
+r_iserr1	Ok(7).is_err(1)	R1005	方法 is_err 不接受参数
+r_unw0	Ok(7).unwrap()	VAL	7
+r_unw1	Ok(7).unwrap(1)	R1005	方法 unwrap 不接受参数
+r_unw1e	Err("b").unwrap()	R1004	unwrap 失败: Err(b)
+r_unwe0	Err("b").unwrap_err()	VAL	b
+r_unwe1	Err("b").unwrap_err(1)	R1005	方法 unwrap_err 不接受参数
+r_unwe0o	Ok(7).unwrap_err()	R1004	unwrap_err 失败: Ok(7)
+r_ok0	Ok(7).ok()	VAL	7
+r_ok0e	Err("b").ok()	VAL	null
+r_ok1	Ok(7).ok(1)	R1005	方法 ok 不接受参数
+r_ok2	Ok(7).ok(1, 2)	R1005	方法 ok 不接受参数
+r_err0	Err("b").err()	VAL	b
+r_err0o	Ok(7).err()	VAL	null
+r_err1	Ok(7).err(1)	R1005	方法 err 不接受参数
+r_err2	Err("b").err(1, 2)	R1005	方法 err 不接受参数
+x_int	(7).len()	R1007	类型 int 没有方法 'len'
+x_bool	true.upper()	R1007	类型 bool 没有方法 'upper'
+l_pop0	[1, 2].pop()	VAL	2
+l_pop1	[1, 2].pop(1)	R1005	方法 pop 不接受参数

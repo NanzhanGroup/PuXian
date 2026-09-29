@@ -264,7 +264,7 @@ def i_list_method(l, name, args, pos):
         # M190（缺陷 213-a）：修前**忽略实参个数** ⇒ `l.pop(1)` 解释轨静默删掉一个元素
         #   （rc=0），而 VM/C 轨响亮「pop 不接受参数」⇒ 三轨分叉（静默数据丢失）。
         if len(args) != 0:
-            return Err(i_r1005("pop 不接受参数", pos))
+            return Err(i_r1005("方法 pop 不接受参数", pos))
         if len(l) == 0:
             return Err(i_r1003("pop 空列表", pos))
         return Ok(l.pop())
@@ -416,17 +416,17 @@ def i_dict_method(d, name, args, pos):
 def i_result_method(r, name, args, pos):
     if name == "is_ok":
         if len(args) != 0:
-            return Err(i_r1005("is_ok 不接受参数", pos))
+            return Err(i_r1005("方法 is_ok 不接受参数", pos))
         return Ok(r.is_ok())
     if name == "is_err":
         if len(args) != 0:
-            return Err(i_r1005("is_err 不接受参数", pos))
+            return Err(i_r1005("方法 is_err 不接受参数", pos))
         return Ok(r.is_err())
     if name == "unwrap":
         # M190（缺陷 213-c）：修前**忽略实参** ⇒ `Ok(1).unwrap(2)` 解释轨 rc=0 返回 1，
         #   而 VM/C 轨响亮「unwrap 不接受参数」。（`unwrap_err` 早就有同款检查，`unwrap` 漏了。）
         if len(args) != 0:
-            return Err(i_r1005("unwrap 不接受参数", pos))
+            return Err(i_r1005("方法 unwrap 不接受参数", pos))
         if r.is_err():
             return Err(i_r1004("unwrap 失败: Err(" + i_to_str(r.err()) + ")", pos))
         return Ok(r.unwrap())
@@ -435,15 +435,21 @@ def i_result_method(r, name, args, pos):
         #   Ok 上调用 ⇒ 响亮 R1004（不静默返回 null）。`ok()/err()` 是**查询**语义（另一侧给 null），
         #   写库要的是「断言 + 取值」这一个动作。
         if len(args) != 0:
-            return Err(i_r1005("unwrap_err 不接受参数", pos))
+            return Err(i_r1005("方法 unwrap_err 不接受参数", pos))
         if r.is_ok():
             return Err(i_r1004("unwrap_err 失败: Ok(" + i_to_str(i_result_payload(r)) + ")", pos))
         return Ok(r.err())
     if name == "ok":
+        # M229（缺陷 343）：与 native 侧同步补精确 arity（修前**完全不查** ⇒ 静默取 Ok 侧值）
+        if len(args) != 0:
+            return Err(i_r1005("方法 ok 不接受参数", pos))
         if r.is_ok():
             return Ok(r.ok())
         return Ok(null)
     if name == "err":
+        # M229（缺陷 343）：同 ok —— 补精确 arity
+        if len(args) != 0:
+            return Err(i_r1005("方法 err 不接受参数", pos))
         if r.is_err():
             return Ok(r.err())
         return Ok(null)
