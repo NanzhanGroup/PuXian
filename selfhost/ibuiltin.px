@@ -192,7 +192,9 @@ def i_call_builtin(name, args, pos):
         if len(args) != 2:
             return Err(i_r1002("contains 需要 2 个参数", pos))
         let t0 = i_type_name(args[0])
-        if t0 == "string":
+        # M227（缺陷 337/338）：dict 与 string 一律**转发 native**（一份实现、同码同文）——
+        #   修前 dict 落到末尾 `contains 不支持类型 dict`，而方法面 `d.contains(k)` 正常。
+        if t0 == "string" or t0 == "dict":
             return Ok(contains(args[0], args[1]))
         if t0 == "list":
             var i = 0

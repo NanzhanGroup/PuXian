@@ -1,0 +1,30 @@
+# M227 「同名两门」分类表 —— 函数面（全局 builtin）⇄ 方法面（`px_method`）的**同名操作**清单
+# ================================================================================================
+# 为什么需要这张表（本轮立判据的由来）：
+#   M199 量过 **native 函数面** 的「逐位置 × 错类型」、M226 量过 **方法面** 的同款 ——
+#   但**没人量过「同一个操作的两个门」**：`len(x)` 与 `x.len()` 是同一个操作，
+#   从哪个门进应该看到同一套判据。M199 缺陷 238（`replace` 从函数面进却拿到方法面词条）
+#   正是这个形状的**第一例**，但那是**偶然撞上**的 —— 之后没人系统量过。
+#
+# 判据（examples/m227_two_faces/verify.sh 层①）：
+#   [a] 本表的名字集合 ⇄ **源码派生的交集**（runtime.c 的 `px_set_global("N", px_native("N",…))`
+#       名字集 ∩ `px_method` 的 strcmp 方法名并集）**精确相等**（双向）。
+#       少登记 = 探针面静默变窄；多登记 = 悬空条目（源码里已经不是同名了）。
+#   [b] 每一行必须给出**类别**：`pair`（同名同义 ⇒ 参与对拍）或 `homonym`（假朋友 ⇒ 必须写明理由）。
+#       → 「假朋友」是**豁免**，不是「记下来当绿的」：它必须由**两侧语义不同**论证，且逐条可查。
+#
+# ⚠️ 这张表是**判据的期望集**，不是文档 —— 改源码的全局名或方法名必须同步改这里。
+#
+# 名字	类别	备注
+len	pair	函数面 `len(x)` ⇄ 方法面 `x.len()`（list/dict/string/tuple）
+contains	pair	函数面 `contains(x, v)` ⇄ 方法面 `x.contains(v)`（string/list/dict）
+starts_with	pair	函数面 `starts_with(s, p)` ⇄ 方法面 `s.starts_with(p)`
+ends_with	pair	函数面 `ends_with(s, p)` ⇄ 方法面 `s.ends_with(p)`
+split	pair	函数面 `split(s[, sep])` ⇄ 方法面 `s.split(sep)`
+join	pair	⚠️ **参数顺序相反**：函数面 `join(分隔符, 序列)` ⇄ 方法面 `序列.join(分隔符)`（逻辑参数同为「(序列, 分隔符)」）
+trim	pair	函数面 `trim(s)` ⇄ 方法面 `s.trim()`
+to_upper	pair	函数面 `to_upper(s)` ⇄ 方法面 `s.to_upper()`
+to_lower	pair	函数面 `to_lower(s)` ⇄ 方法面 `s.to_lower()`
+replace	pair	函数面 `replace(s, a, b)` ⇄ 方法面 `s.replace(a, b)`（M199 缺陷 238 的现场）
+close	homonym	**假朋友**：函数面 `close(fd)` = 关**文件描述符**；方法面 `ch.close()` = 关 **chan/mutex/rwlock**。两侧操作对象不同、无共同语义 ⇒ 不参与对拍（各自的逐位置对拍由 M199/M226 覆盖）
+remove	homonym	**假朋友**：函数面 `remove(path)` = 删**文件**；方法面 `d.remove(k)` = 删 **dict 键**。同 `close`
