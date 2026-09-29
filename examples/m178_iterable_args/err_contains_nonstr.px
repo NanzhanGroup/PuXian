@@ -1,0 +1,7 @@
+# M178 门 · 用例 C（M227 补）：**非字符串针**在字符串容器上 ⇒ 三轨同码（R1002）+ 同文案
+#   修前：编译轨静默 `false`（`bi_contains` 里 `if (args[1].type != PX_STR) return px_bool(false);`），
+#         解释轨转发 native ⇒ 也静默；而方法面 `"abc".contains(1)` 三条轨**都**响亮 R1002
+#   ⇒ 同一个操作两个门不同（子串只能与字符串比较；Python `'in <string>' requires string`）。
+#   M227（缺陷 338）统一为**响亮**（响亮优于静默）。
+print("before")
+print(str(contains("abc", 1)))

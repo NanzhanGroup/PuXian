@@ -18,6 +18,11 @@
 #   · `reversed(str)` 是**字符串操作** ⇒ 返回 **str**（rune 级反转）；其余入口返回 list；
 #   · 拒绝文案统一：`<名> 参数需要 list/tuple/生成器/字符串，实际是 <t>`
 #     （`contains` 沿用 `不支持类型 <t>`；字符串容器走**子串**语义，与成员判定对 str 针等价）。
+#   ⚠️ **M227 口径更新（缺陷 338 · 「同名两门」）**：字符串容器的**针必须是字符串** ——
+#     修前编译轨对非字符串针**静默 `false`**，而方法面 `"abc".contains(1)` 一直响亮 R1002
+#     ⇒ 同一个操作两个门不同（子串只能与字符串比较；Python 同为 TypeError）。现三轨统一响亮：
+#     `contains 参数 2 需要 string，实际是 <t>`。原用例 A 第 28 行（静默 false）**已移到拒绝侧**
+#     （`err_contains_nonstr.px`）—— 这是**判据跟着行为走**，不是缺陷。
 #
 # 判据：
 #   [1] 用例 A（31 行矩阵：4 形态 × 4 入口 + 空/重复/嵌套/中文）三轨 rc=0 · stdout **逐字节一致**
@@ -114,8 +119,11 @@ declare -A MSG=(
   [err_sorted_int]='sorted 参数需要 list/tuple/生成器/字符串，实际是 int'
   [err_reversed_int]='reversed 参数需要 list/tuple/生成器/字符串，实际是 int'
   [err_contains_int]='contains 不支持类型 int'
+  # M227（缺陷 338）补：**非字符串针**在字符串容器上，修前编译轨静默 `false`、方法面响亮 ⇒
+  #   现三轨统一响亮（`contains 参数 2 需要 string，实际是 int`）。
+  [err_contains_nonstr]='contains 参数 2 需要 string，实际是 int'
 )
-for c in err_join_int err_sorted_int err_reversed_int err_contains_int; do
+for c in err_join_int err_sorted_int err_reversed_int err_contains_int err_contains_nonstr; do
     run_tracks "$c"
     for t in interp vm c; do
         chk "C/$c/$t rc≠0" "[ \"\$(cat $W/$c.$t.rc)\" != 0 ]"
@@ -129,7 +137,9 @@ run_tracks err_sum_str
 for t in interp vm c; do
     echo "   [195] $t rc=$(cat $W/err_sum_str.$t.rc) err=$(head -1 $W/err_sum_str.$t.err)"
 done
-echo "   ↑ 三轨都响亮报错（rc≠0）；措辞已在 M179 收口为 `无法相加: int + string`（此处只作人证输出）"
+# ⚠️ 消息里**不许用反引号**（双引号内会触发命令替换 ⇒ 日志里冒出一行 `command not found`，
+#   M212/M219 同款；此处改「」——不影响判据，但脏日志会误导排障）。
+echo "   ↑ 三轨都响亮报错（rc≠0）；措辞已在 M179 收口为「无法相加: int + string」（此处只作人证输出）"
 
 if [ $NEG -eq 1 ]; then
 echo "=== [5] 负控 3 道（各自独立判红 + 逐字节还原）"
