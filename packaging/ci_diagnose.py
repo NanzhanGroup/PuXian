@@ -73,14 +73,35 @@ def fit(s, budget):
     return s[:lo] + suffix
 
 
-def verdict(last):
-    """末行裁决：fail / ok / unknown / empty。"""
-    if not last.strip():
+VERDICT_SCAN = 8   # M225s1：裁决窗口（行）
+
+
+def verdict(x):
+    """裁决：fail / ok / unknown / empty。
+
+    M225s1：入参可为 str（单行）或 list（多行）。**只看最后一行是脆的** ——
+      门的 `trap ... EXIT` 会在脚本收尾后追加提示（还原/清理），把
+      `...-VERIFY-OK` 顶掉 ⇒ 绿门被判 unknown ⇒ 本门「真实语料 0 误报」判红。
+      （实测：m225 门末行 `↩︎ 源码已逐字节还原` ⇒ CI step 13 红，
+       而 job 日志 403 ⇒ 真因读不出 —— 属「判据自己制造假红」。）
+      现改为**向下扫最后 VERDICT_SCAN 行**：fail 优先，其次 ok，都没有才 unknown。
+    """
+    lines = [x] if isinstance(x, str) else list(x)
+    lines = [l for l in lines if l.strip()]
+    if not lines:
         return 'empty'
-    if BAD_LAST.search(last):
-        return 'fail'
-    if OK_LAST.search(last):
-        return 'ok'
+    # 从下往上找**第一个「裁决行」**（自带 ok/fail 判据的行）即返回 ——
+    #   不许"扫窗口内任何 ❌"：门日志里 `❌` 常出现在**负控/自证**的预期失败输出里，
+    #   放大窗口去扫会把这些**绿门**判成 fail（M225s1 实测：5 份绿门日志被误判）。
+    for l in reversed(lines[-VERDICT_SCAN:]):
+        bad = BAD_LAST.search(l)
+        ok = OK_LAST.search(l)
+        if bad and ok:
+            return 'fail'        # 同行兼具「通过/✅」与「失败 N」⇒ 失败优先（M216s1 真盲区）
+        if bad:
+            return 'fail'
+        if ok:
+            return 'ok'
     return 'unknown'
 
 
@@ -95,7 +116,7 @@ def collect(pat):
         last = lines[-1] if lines else ''
         infos.append(dict(path=f, name=os.path.basename(f),
                           mtime=os.path.getmtime(f), text=t, lines=lines,
-                          last=last, v=verdict(last)))
+                          last=last, v=verdict(lines)))
     infos.sort(key=lambda x: x['mtime'])
     return infos
 
@@ -252,6 +273,39 @@ def selftest():
         # ② 真盲区：「通过 N · 失败 3」必须判 fail（旧版含「通过」⇒ 判绿）
         chk(verdict('══ 通过 165 · 失败 3 ══') == 'fail',
             '末行「通过 165 · 失败 3」⇒ 判 fail（M216s1 的真盲区）')
+
+        # ②b M225s1：**末行之后还有 trap 尾巴** ⇒ 仍须判 ok
+        #    （旧版只看最后一行 ⇒ unknown ⇒ 非 ok ⇒ 假红；本机实测 m225 门即此形态）
+        import time
+        time.sleep(0.01)
+        _mk(tmp, 'v_tail.log', '── [1/3] 语料\n   ✅ 全过\n'
+                               '===== 失败 0 项 · 通过 11 项 =====\nM225-VERIFY-OK\n'
+                               '  ↩︎ 源码已逐字节还原\n')
+        ins_t = collect(os.path.join(tmp, 'v_tail.log'))
+        chk(ins_t and ins_t[0]['v'] == 'ok',
+            '末行是 trap 尾巴 ⇒ 仍判 ok（M225s1：旧版判 unknown ⇒ 绿门假红）')
+
+        # ②c M225s1：**真失败 + 尾巴** ⇒ 仍须判 fail（加固不能放水）
+        time.sleep(0.01)
+        _mk(tmp, 'v_tail2.log', '── [2/3]\n   ❌ 某断言失败\n'
+                                '===== 失败 1 项 · 通过 10 项 =====\nM225-VERIFY-FAIL\n'
+                                '  ↩︎ 源码已逐字节还原\n')
+        ins_t2 = collect(os.path.join(tmp, 'v_tail2.log'))
+        chk(ins_t2 and ins_t2[0]['v'] == 'fail',
+            '真失败 + 尾巴 ⇒ 仍判 fail（窗口扫描不放水）')
+
+        # ②d M225s1：**❌ 在前（负控的预期输出）但裁决行是 OK** ⇒ 判 ok
+        #    放大窗口去"扫任何 ❌"会把绿门误判成 fail
+        #    （本机实测：5 份绿门日志被这个坑误判 —— 判据不能只看"窗口里有没有 ❌"）
+        time.sleep(0.01)
+        _mk(tmp, 'v_neg.log',
+            '── [4/4] 负控 A\n     · 第 4 次（grace）→ [GRACE timeout]\n'
+            '   ❌ 缺陷复现（成功 3/6 < 6）\n'
+            '===== 失败 0 项 · 通过 15 项 =====\nM225-VERIFY-OK\n'
+            '  ↩︎ 源码已逐字节还原\n')
+        ins_n = collect(os.path.join(tmp, 'v_neg.log'))
+        chk(ins_n and ins_n[0]['v'] == 'ok',
+            '负控 ❌ 在前 + 裁决行在后 ⇒ 判 ok（窗口内扫 ❌ 会误判绿门）')
 
         # ③ 末行 VERIFY-FAIL 必须判 fail 且**点名**
         import time
