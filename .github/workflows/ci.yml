@@ -691,6 +691,20 @@ jobs:
           grep -E '^(   |── )' /tmp/v_m226.log | tail -30
           echo "✅ m226_method_surface verify（222 例三轨分叉 0 + 清单派生对拍 + 崩溃回归）PASS"
 
+      - name: M227 · 「同名两门」全量对拍（函数面 ⇄ 方法面 · 缺陷 336–341）
+        run: |
+          # 主题：**「三轨一致」看不见的缺陷，「两门对拍」才照得出来。**
+          # `len(x)` / `x.len()` 是同一个操作的两个门；M199 量过函数面、M226 量过方法面，
+          # 但**没人量过「同一个操作的两个门」**（M199 缺陷 238 是偶然撞上的第一例）。
+          # 期望集从源码派生：`G ∩ ∪M` = 12 个（10 pair + 2 homonym）。
+          #   336 `d.len(1,2)` 静默（**三轨都静默** ⇒ M226 的门看不见；跨面对拍照出）
+          #   337/338 函数面 contains 缺 dict / 缺 needle 类型检查（后者**静默 false**）
+          #   339 方法面 tuple 缺 contains/join · 340 `str.join` 刻意不补（XALLOW.tsv 登记）
+          #   341 R 码分歧 3 形状登记在 RCODE.tsv（双向判据）
+          bash examples/m227_two_faces/verify.sh --neg-skip > /tmp/v_m227.log 2>&1 || { echo "❌ m227_two_faces verify 失败"; grep -E '^(   |── |❌|  FAIL|  ✖)' /tmp/v_m227.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^(   |── )' /tmp/v_m227.log | tail -30
+          echo "✅ m227_two_faces verify（197 例 × 两面 × 三轨 · 跨轨 0 · 跨面硬分叉 0 · 登记双向）PASS"
+
       # M222 补（第 100 轮 · 第 100 轮收口）：**让 M221 的产物指纹短路「在 CI 上是否生效」可观测**。
       #   动机（实测，别当猜测）：M221 短路在本机微测上确证有效（重建 17s → 复用 0s），
       #   但 CI 的「工具自测」步时长 **1337s（M220）→ 1657s（M222）**，而同期只多了两个门

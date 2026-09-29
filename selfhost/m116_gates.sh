@@ -853,6 +853,22 @@ step "M226 · 方法面「逐位置 × 错类型 + 错 arity」全量对拍（[S
 #      手抄集合会漏掉整族入口（M212 缺陷 288 的教训）；差集必须与 UNPAIRED.tsv 精确相等。
 #   ⚠️ 负控要重编驱动两轨 + 重编解释轨件（~4–6 min）⇒ CI 用 --neg-skip。
 run m226_method_surface bash examples/m226_method_surface/verify.sh
+step "M227 · 「同名两门」全量对拍（函数面 ⇄ 方法面 · 缺陷 336–341）"
+#   主题：**「三轨一致」看不见的缺陷，「两门对拍」才照得出来。**
+#   `len(x)` 与 `x.len()` 是**同一个操作的两个门**。M199 量过 native **函数面** 的
+#   「逐位置 × 错类型」、M226 量过 **方法面** 的同款 —— 但**没人量过「同一个操作的两个门」**。
+#   期望集从源码派生：`G ∩ ∪M`（G = `px_set_global("N", px_native("N"…` 名字集）= **12 个**，
+#   其中 **10 个 pair**（同名同义）+ **2 个 homonym**（`close` 文件/chan、`remove` 文件/键）。
+#   197 例（10 个 pair × 每个位置 × 7 种毒值 ∪ 错 arity）× 两面 × 三轨 = 1182 次执行。
+#     336 `d.len(1,2)` **静默返回**（两侧都没 arity 检查）——**三轨都静默**，M226 的三轨对拍门
+#         因此看不见它；跨面对拍照出（函数面 `len(d,1,2)` 响亮）
+#     337 函数面 `contains` **不支持 dict**（方法面支持）· 338 函数面 `contains("abc", 7)`
+#         **静默 false**（方法面响亮 R1002）· 339 方法面 tuple 缺 `contains`/`join`
+#     340 函数面 `join` 收字符串序列（== Python `"-".join("abc")`）—— `str.join` **刻意不补**
+#     （接收者角色会与 Python 约定相反 ⇒ 静默算错），登记在 XALLOW.tsv（唯一豁免）
+#     341 R 码分歧 3 种形状**不硬判**但逐一登记（两面处于不同检查层）：RCODE.tsv 双向判据
+#   ⚠️ 负控要重编驱动两轨 + 重编解释轨件（~13 min）⇒ CI 用 --neg-skip。
+run m227_two_faces bash examples/m227_two_faces/verify.sh
 step "M190 · 上游 registry-px 真实用例回归（128 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。

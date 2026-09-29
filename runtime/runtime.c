@@ -5639,7 +5639,16 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
             px_dict_set(obj, args[0].as.obj->as.str.data, args[1]);
             return px_null();
         }
-        if (strcmp(name, "len") == 0) return px_int(px_len(obj));
+        if (strcmp(name, "len") == 0) {
+            // M227（缺陷 341）：修前**完全没有 arity 检查** ⇒ `({"a":1}).len(1, 2)`
+            //   静默返回 1（而函数面 `len(d, 1, 2)` 响亮 `R1002 len 需要一个参数`）。
+            //   M226（缺陷 329）已把同族（`contains`/`has`/`remove` 的 `< 1`）统一为
+            //   **精确 arity**，本处是**漏网** —— 而 M226 的门**看不见它**：那道门是
+            //   **三轨对拍**，而三轨（解释/VM/C）的状态机**都**走这条静默路 ⇒ 一致 ⇒
+            //   无分叉。「**跨面对拍**」才照得出来（本轮方法论的核心）。
+            if (nargs != 0) px_error("R1005: 方法 len 不接受参数");
+            return px_int(px_len(obj));
+        }
         if (strcmp(name, "has") == 0 || strcmp(name, "contains") == 0) {
             // M226（缺陷 329）：同 list.contains —— `< 1` 放过多余实参
             if (nargs != 1) px_error("R1005: 方法 %s 需要 1 个参数", name);
@@ -5721,6 +5730,26 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
         if (strcmp(name, "len") == 0) {
             if (nargs != 0) px_error("R1005: 方法 len 不接受参数");
             return px_int(px_len(obj));
+        }
+        // M227（缺陷 339/340）：「同名两门」的能力对齐 —— 函数面 `contains(t, v)` /
+        //   `join(sep, t)` 从 M178（可迭代实参统一）起就支持 tuple，而方法面只有 `len`
+        //   ⇒ 同一个操作两个门支持的类型集合不同（`contains((1,2), 2)` 得 true、
+        //   `((1,2)).contains(2)` 响亮「类型 tuple 没有方法 'contains'」）。补齐方法面。
+        //   ⚠️ `str.join` **刻意不补**：方法面若收，`s.join(sep)` 的接收者是「序列」还是
+        //   「分隔符」会与 Python `str.join` 的约定**正好相反** ⇒ 是有理由的不对称（见门头）。
+        if (strcmp(name, "contains") == 0) {
+            if (nargs != 1) px_error("R1005: 方法 contains 需要 1 个参数");
+            LXObject* o = obj.as.obj;
+            for (int i = 0; i < o->as.tuple.len; i++) {
+                if (px_eq(o->as.tuple.items[i], args[0]).as.b) return px_bool(true);
+            }
+            return px_bool(false);
+        }
+        if (strcmp(name, "join") == 0) {
+            if (nargs != 1) px_error("R1005: 方法 join 需要 1 个参数");
+            if (args[0].type != PX_STR || !args[0].as.obj)
+                px_error("R1002: 方法 join 参数 1 需要 string");
+            return call_with_self("join", args[0], &obj, 1);
         }
     }
     // M39：Result 方法（is_ok / is_err / unwrap / ok / err）
@@ -6872,7 +6901,13 @@ static LXValue bi_contains(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 2) px_error("R1002: contains 需要 2 个参数");
     if (args[0].type == PX_STR) {
-        if (args[1].type != PX_STR) return px_bool(false);
+        // M227（缺陷 338 · 「同名两门」）：修前**静默 `return px_bool(false)`** ——
+        //   同一次误用从**函数面**进得 `false`（**静默错值**），从**方法面**进
+        //   （`"abc".contains(7)`）得 `R1002: 方法 contains 参数 1 需要 string`。
+        //   子串只能与字符串比较（Python `'in <string>' requires string` 同为 TypeError）
+        //   ⇒ 三轨同码同文、响亮优于静默。
+        if (args[1].type != PX_STR)
+            px_error("R1002: contains 参数 2 需要 string，实际是 %s", px_type_name(args[1]));
         LXObject* h = args[0].as.obj;
         LXObject* n = args[1].as.obj;
         // M83-S1：字节 memmem 语义（str.len 边界，内嵌 NUL 的二进制 str 不再截断）
@@ -6899,6 +6934,15 @@ static LXValue bi_contains(LXValue* args, int nargs, void* ctx) {
         }
         px_root_pop();
         return px_bool(found);
+    }
+    // M227（缺陷 337）：「同名两门」的能力对齐 —— 函数面 `contains({"a":1}, "a")`
+    //   修前响亮 `R1002 contains 不支持类型 dict`，而方法面 `({"a":1}).contains("a")`
+    //   返回 true ⇒ **同一个操作两个门支持的类型集合不同**。字典按**键**判定
+    //   （= `d.has(k)` / `d.contains(k)`）；补齐函数面（删能力是退步）。
+    if (args[0].type == PX_DICT) {
+        if (args[1].type != PX_STR || !args[1].as.obj)
+            px_error("R1002: contains 参数 2 需要 string，实际是 %s", px_type_name(args[1]));
+        return px_bool(px_dict_has(args[0], args[1].as.obj->as.str.data));
     }
     px_error("R1002: contains 不支持类型 %s", px_type_name(args[0]));
     return px_null();

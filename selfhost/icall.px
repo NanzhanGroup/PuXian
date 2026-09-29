@@ -118,6 +118,31 @@ def i_call_method(rcv, name, args, pos):
             if len(args) != 0:
                 return Err(i_r1005("方法 len 不接受参数", pos))
             return Ok(len(rcv))
+        # M227（缺陷 339/340）：「同名两门」能力对齐 —— 函数面 `contains(t, v)` /
+        #   `join(sep, t)` 一直支持 tuple，方法面只有 len ⇒ 同一个操作两个门不同。
+        #   ⚠️ `str.join` 刻意不补（接收者角色会与 Python `str.join` 约定相反）。
+        if name == "contains":
+            if len(args) != 1:
+                return Err(i_r1005("方法 contains 需要 1 个参数", pos))
+            var i = 0
+            while i < len(rcv):
+                if i_eq(rcv[i], args[0]):
+                    return Ok(true)
+                i += 1
+            return Ok(false)
+        if name == "join":
+            if len(args) != 1:
+                return Err(i_r1005("方法 join 需要 1 个参数", pos))
+            let r = i_expect_str_arg(args, 0, "join", pos)
+            if r.is_err():
+                return Err(r.err())
+            let sep = r.unwrap()
+            let parts = []
+            var i = 0
+            while i < len(rcv):
+                parts.append(i_to_str(rcv[i]))
+                i += 1
+            return Ok(join(sep, parts))
         return Err(i_r1007("类型 tuple 没有方法 '" + name + "'", pos))
     return Err(i_r1007("类型 " + t + " 没有方法 '" + name + "'", pos))
 # 期望字符串参数（对齐 expect_str_arg）
@@ -310,6 +335,11 @@ def i_list_method(l, name, args, pos):
 # ---- dict 方法（对齐 call_dict_method） ----
 def i_dict_method(d, name, args, pos):
     if name == "len":
+        # M227（缺陷 341）：修前**没有 arity 检查** ⇒ `({"a":1}).len(1, 2)` 静默返回 1
+        #   （native `px_method` 同款漏网 —— M226 缺陷 329 的同族）。三轨**都**静默
+        #   ⇒ 「三轨对拍」门看不见；本轮「跨面对拍」才照出来。
+        if len(args) != 0:
+            return Err(i_r1005("方法 len 不接受参数", pos))
         return Ok(len(d.keys()))
     if name == "get":
         # M226（缺陷 330/335）：**缺参必须先报缺参**（R1005）—— 修前直接进
