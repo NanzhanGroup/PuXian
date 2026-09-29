@@ -1,0 +1,57 @@
+例号	容器	操作	形状	期望种类	期望
+r_list_0	list	read	ok	VAL	10
+r_list_n1	list	read	neg	VAL	30
+r_list_n3	list	read	neg	VAL	10
+r_list_oob	list	read	oob	ERR	R1003|索引越界: 3 (len=3)
+r_list_noob	list	read	noob	ERR	R1003|索引越界: -4 (len=3)
+r_list_strid	list	read	keytype	ERR	R1002|索引必须是整数，实际是 string
+r_list_fl	list	read	keytype	ERR	R1002|索引必须是整数，实际是 float
+r_list_bt	list	read	keytype	ERR	R1002|索引必须是整数，实际是 bool
+r_list_nul	list	read	keytype	ERR	R1002|索引必须是整数，实际是 null
+r_tup_0	tuple	read	ok	VAL	10
+r_tup_n1	tuple	read	neg	VAL	30
+r_tup_oob	tuple	read	oob	ERR	R1003|索引越界: 3 (len=3)
+r_tup_noob	tuple	read	noob	ERR	R1003|索引越界: -4 (len=3)
+r_str_0	string	read	ok	VAL	a
+r_str_n1	string	read	neg	VAL	c
+r_str_oob	string	read	oob	ERR	R1003|索引越界: 3 (len=3)
+r_str_noob	string	read	noob	ERR	R1003|索引越界: -4 (len=3)
+r_str_cjk	string	read	ok	VAL	文
+r_str_cjkoob	string	read	oob	ERR	R1003|索引越界: 2 (len=2)
+r_dic_k	dict	read	ok	VAL	1
+r_dic_miss	dict	read	miss	ERR	R1008|字典没有键 'z'
+r_dic_int	dict	read	keytype	ERR	R1002|字典索引键必须是字符串
+r_dic_neg	dict	read	keytype	ERR	R1002|字典索引键必须是字符串
+r_dic_bt	dict	read	keytype	ERR	R1002|字典索引键必须是字符串
+r_int_recv	int	read	recv	ERR	R1002|此类型不支持索引: int
+r_nul_recv	null	read	recv	ERR	R1002|此类型不支持索引: null
+r_bt_recv	bool	read	recv	ERR	R1002|此类型不支持索引: bool
+r_res_recv	result	read	recv	ERR	R1002|此类型不支持索引: result
+w_list_0	list	write	ok	VAL	[9, 2, 3]
+w_list_n1	list	write	neg	VAL	[1, 2, 9]
+w_list_oob	list	write	oob	ERR	R1003|索引越界: 3 (len=3)
+w_list_noob	list	write	noob	ERR	R1003|索引越界: -5 (len=3)
+w_list_strid	list	write	keytype	ERR	R1002|索引必须是整数，实际是 string
+w_list_nest	list	write	ok	VAL	[[1, 2], [9, 4]]
+w_dic_new	dict	write	ok	VAL	5 2
+w_dic_over	dict	write	ok	VAL	7 1
+w_dic_int	dict	write	keytype	ERR	R1002|字典索引键必须是字符串
+w_dic_neg	dict	write	keytype	ERR	R1002|字典索引键必须是字符串
+w_tup	tuple	write	unsup	ERR	R1002|此类型不支持索引赋值: tuple
+w_str	string	write	unsup	ERR	R1002|此类型不支持索引赋值: string
+w_int_recv	int	write	recv	ERR	R1002|此类型不支持索引赋值: int
+s_list_basic	list	slice	ok	VAL	[2, 3]
+s_list_oob	list	slice	oob	VAL	[]
+s_list_neg	list	slice	neg	VAL	[3]
+s_list_rev	list	slice	ok	VAL	[]
+s_list_step	list	slice	ok	VAL	[1, 3]
+s_list_all	list	slice	ok	VAL	[1, 2, 3, 4]
+s_list_mix	list	slice	neg	VAL	[2, 3]
+s_list_n5	list	slice	neg	VAL	[1, 2]
+s_list_strid	list	slice	keytype	ERR	R1002|切片索引必须是整数，实际是 string
+s_str_basic	string	slice	ok	VAL	bc
+s_str_neg	string	slice	neg	VAL	cd
+s_str_cjk	string	slice	ok	VAL	文测
+s_tup	tuple	slice	ok	VAL	(2, 3)
+s_dic	dict	slice	unsup	ERR	R1002|此类型不支持切片: dict
+s_int_recv	int	slice	recv	ERR	R1002|此类型不支持切片: int

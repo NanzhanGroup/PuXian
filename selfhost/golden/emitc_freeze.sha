@@ -233,6 +233,7 @@ examples/m225_h3_conn_reuse/cli_grace.px src=94ddbf51233b0d7e rc=0 out=264922aac
 examples/m225_h3_conn_reuse/srv.px src=7855a8dc01368b59 rc=0 out=fdeff0c8e8f1b2394706f69ba077eb76 err=e3b0c44298fc1c14
 examples/m228_membership/drv.px src=20267544461cd4f3 rc=0 out=b780368e2e029988a0e82e360e067dd7 err=e3b0c44298fc1c14
 examples/m229_result_tuple/drv.px src=bc65bbdb31d9a2d4 rc=0 out=f53cf105ce38f9c5c02ff1dfad8e3a44 err=e3b0c44298fc1c14
+examples/m230_index_slice/drv.px src=78e16ee10b0a6a2a rc=0 out=5a2d6eb2565c92248dda2f18d68ba14c err=e3b0c44298fc1c14
 examples/m43_webapp/_verify.px src=0d4f3d94b95b3d61 rc=0 out=25f7bb9ac610f0f826c9ed8c4047f24f err=e3b0c44298fc1c14
 examples/m43_webapp/generated_routes.px src=ebafcae8f9a087f3 rc=0 out=fc0b79277b06f69862f3101732750439 err=e3b0c44298fc1c14
 examples/m43_webapp/get_admin.px src=93c0a53266011ea4 rc=0 out=67b99706c75c13478b353a7bd4c7ff67 err=e3b0c44298fc1c14
