@@ -2854,3 +2854,32 @@ set_timeout(fn (): print("once after 2s"), 2000)
        要「有则删、无则不管」请显式写 `if d.has(k): d.remove(k)`。
      · 门 `examples/m226_method_surface/`（聚合驱动器 ⇒ **两次编译**覆盖全量 222 例；
        清单期望集**从源码派生** ⇄ `spec.tsv` 双向一致 ⇄ `UNPAIRED.tsv` 精确相等）。
+
+252. **「同名两门」口径：同一个操作有两个门（第 105 轮 · M227 · 缺陷 336–341）**：
+
+     `len(x)` 与 `x.len()` 是**同一个操作**。两门必须**同响亮、同结果**；R 码可以不同（各有其检查层）。
+     全量清单 = 函数面 312 个全局名 ∩ 方法面 51 个方法名 = **12 个同名** ⇒ **10 个同义两门** + 2 个假朋友。
+
+     | 名字 | 函数面 | 方法面 | 备注 |
+     |---|---|---|---|
+     | `len` | `len(x)` | `x.len()` | list / dict / str / tuple |
+     | `contains` | `contains(x, v)` | `x.contains(v)` | str / list / **dict**（按**键**）/ **tuple** |
+     | `starts_with` `ends_with` | `f(s, p)` | `s.f(p)` | str |
+     | `split` | `split(s[, sep])` | `s.split(sep)` | str |
+     | `join` | `join(分隔符, 序列)` | `序列.join(分隔符)` | ⚠️ **参数顺序相反**（list / tuple） |
+     | `trim` `to_upper` `to_lower` `replace` | `f(s, …)` | `s.f(…)` | str |
+     | `close` | `close(fd)` 关**文件描述符** | `ch.close()` 关 **chan/mutex/rwlock** | **假朋友** |
+     | `remove` | `remove(path)` 删**文件** | `d.remove(k)` 删 **dict 键** | **假朋友** |
+
+     **三条硬线**：① **响亮性一致**（`contains("abc", 7)` 修前函数面**静默 `false`**、方法面响亮 ⇒ 现两面同 `R1002`）；
+     ② **合法输出一致**；③ **词条归属**（函数面调用不得拿到 `方法 X …` / `类型 X 没有方法 'Y'`）。
+
+     **R 码允许不同（已登记）**：接收者位置 函数面 `R1002 …不支持类型 int` ⇄ 方法面 `R1007 类型 int 没有方法 'len'`；
+     错 arity 函数面 `R1002 X 需要 N 个参数` ⇄ 方法面 `R1005 方法 X 需要 N 个参数`。**别把它们「统一」掉**。
+
+     ⚠️ **`str.join` 刻意不存在**：`"-".join("abc")` 若按方法面语义会得 `-`（接收者是序列），
+     而 Python 得 `a-b-c` ⇒ **静默不同**。函数面 `join("-","abc")` 与 Python 一致（分隔符在前）。
+     `list` / `tuple` 的 `join` 两门都有（无方向歧义）。
+
+     ⚠️ **`({"a":1}).len(1, 2)`**（多余实参）修前**静默返回 1** —— 三轨**都**静默 ⇒ 三轨对拍门看不见。
+     判据见 `examples/m227_two_faces/`（197 例 × 两面 × 三轨 = 1182 次）。
