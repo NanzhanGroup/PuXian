@@ -11,6 +11,9 @@
 #   negctl.py --apply  A|B      反向（OLD → NEW，复原用）
 #   negctl.py --snapshot FILES  备份；--restore 从备份逐字节还原
 # 判据：撤回后必须**判红**（H1 分叉回来），且**源逐字节还原**（`--restore` + `cmp`）。
+# ⚠️ M228（第 106 轮）连带更新：三个门（运算符/函数/方法）收口到 `px_membership_probe` 后，
+#   本库 A0/A1/A3 三条锚点已**重新表达**到新结构上（原锚点指向的内联体已不存在）。
+#   详见 examples/m228_membership/verify.sh 头注与本轮 CHANGELOG。
 # ============================================================
 import argparse, json, os, shutil, sys
 
@@ -20,15 +23,15 @@ EDITS = json.loads(r'''{
  "A": [
   {
    "file": "runtime/runtime.c",
-   "old": "    if (args[0].type == PX_STR) {\n        if (args[1].type != PX_STR) return px_bool(false);\n        LXObject* h = args[0].as.obj;",
-   "new": "    if (args[0].type == PX_STR) {\n        // M227（缺陷 338 · 「同名两门」）：修前**静默 `return px_bool(false)`** ——\n        //   同一次误用从**函数面**进得 `false`（**静默错值**），从**方法面**进\n        //   （`\"abc\".contains(7)`）得 `R1002: 方法 contains 参数 1 需要 string`。\n        //   子串只能与字符串比较（Python `'in <string>' requires string` 同为 TypeError）\n        //   ⇒ 三轨同码同文、响亮优于静默。\n        if (args[1].type != PX_STR)\n            px_error(\"R1002: contains 参数 2 需要 string，实际是 %s\", px_type_name(args[1]));\n        LXObject* h = args[0].as.obj;",
-   "why": "缺陷 338 · bi_contains 子串类型检查"
+   "old": "        if (val.type != PX_STR || !val.as.obj) return PX_MEM_NOT_FOUND;  // M227 撤回（缺陷 338）：子串类型不符 ⇒ 静默 false\n        LXObject* h = coll.as.obj;",
+   "new": "        if (val.type != PX_STR || !val.as.obj) return PX_MEM_ERR_ELEM;\n        LXObject* h = coll.as.obj;",
+   "why": "缺陷 338 · 成员判定核心 str 分支的元素类型检查（M228 收口到 px_membership_probe）"
   },
   {
    "file": "runtime/runtime.c",
-   "old": "    px_error(\"R1002: contains 不支持类型 %s\", px_type_name(args[0]));\n    return px_null();\n}",
-   "new": "    // M227（缺陷 337）：「同名两门」的能力对齐 —— 函数面 `contains({\"a\":1}, \"a\")`\n    //   修前响亮 `R1002 contains 不支持类型 dict`，而方法面 `({\"a\":1}).contains(\"a\")`\n    //   返回 true ⇒ **同一个操作两个门支持的类型集合不同**。字典按**键**判定\n    //   （= `d.has(k)` / `d.contains(k)`）；补齐函数面（删能力是退步）。\n    if (args[0].type == PX_DICT) {\n        if (args[1].type != PX_STR || !args[1].as.obj)\n            px_error(\"R1002: contains 参数 2 需要 string，实际是 %s\", px_type_name(args[1]));\n        return px_bool(px_dict_has(args[0], args[1].as.obj->as.str.data));\n    }\n    px_error(\"R1002: contains 不支持类型 %s\", px_type_name(args[0]));\n    return px_null();\n}",
-   "why": "缺陷 337 · bi_contains 补 dict"
+   "old": "    if (args[0].type == PX_DICT) px_error(\"R1002: contains 不支持类型 dict\");  // M227 撤回（缺陷 337）：函数面单独拒 dict\n    int r = px_membership_probe(args[0], args[1]);",
+   "new": "    int r = px_membership_probe(args[0], args[1]);",
+   "why": "缺陷 337 · 函数面 contains 支持 dict（M228 收口后，撤回表达为「函数面单独拒 dict」——改 probe 会连方法面一起改，分叉消失）"
   },
   {
    "file": "runtime/runtime.c",
@@ -38,9 +41,9 @@ EDITS = json.loads(r'''{
   },
   {
    "file": "runtime/runtime.c",
-   "old": "    if (obj.type == PX_TUPLE) {\n        if (strcmp(name, \"len\") == 0) {\n            if (nargs != 0) px_error(\"R1005: 方法 len 不接受参数\");\n            return px_int(px_len(obj));\n        }\n    }",
-   "new": "    if (obj.type == PX_TUPLE) {\n        if (strcmp(name, \"len\") == 0) {\n            if (nargs != 0) px_error(\"R1005: 方法 len 不接受参数\");\n            return px_int(px_len(obj));\n        }\n        // M227（缺陷 339/340）：「同名两门」的能力对齐 —— 函数面 `contains(t, v)` /\n        //   `join(sep, t)` 从 M178（可迭代实参统一）起就支持 tuple，而方法面只有 `len`\n        //   ⇒ 同一个操作两个门支持的类型集合不同（`contains((1,2), 2)` 得 true、\n        //   `((1,2)).contains(2)` 响亮「类型 tuple 没有方法 'contains'」）。补齐方法面。\n        //   ⚠️ `str.join` **刻意不补**：方法面若收，`s.join(sep)` 的接收者是「序列」还是\n        //   「分隔符」会与 Python `str.join` 的约定**正好相反** ⇒ 是有理由的不对称（见门头）。\n        if (strcmp(name, \"contains\") == 0) {\n            if (nargs != 1) px_error(\"R1005: 方法 contains 需要 1 个参数\");\n            LXObject* o = obj.as.obj;\n            for (int i = 0; i < o->as.tuple.len; i++) {\n                if (px_eq(o->as.tuple.items[i], args[0]).as.b) return px_bool(true);\n            }\n            return px_bool(false);\n        }\n        if (strcmp(name, \"join\") == 0) {\n            if (nargs != 1) px_error(\"R1005: 方法 join 需要 1 个参数\");\n            if (args[0].type != PX_STR || !args[0].as.obj)\n                px_error(\"R1002: 方法 join 参数 1 需要 string\");\n            return call_with_self(\"join\", args[0], &obj, 1);\n        }\n    }",
-   "why": "缺陷 339/340 · px_method tuple 补 contains/join"
+   "old": "            // M227 撤回（缺陷 339/340）：方法面 tuple 不再支持 contains（回到 R1007）\n            px_error(\"R1007: 类型 tuple 没有方法 'contains'\");",
+   "new": "            // M228：同 list.contains —— 收口到 px_membership_probe\n            return px_bool(px_membership_probe(obj, args[0]) == PX_MEM_FOUND);",
+   "why": "缺陷 339/340 · px_method tuple 的 contains 分支（M228 收口到 px_membership_probe）"
   }
  ],
  "B": [
