@@ -732,6 +732,13 @@ jobs:
           grep -E '^(   |── )' /tmp/v_m229.log | tail -20
           echo "✅ m229_result_tuple verify（35 例 × 3 轨 = 105 次 · 跨轨 0 · arity 0 · 措辞 0）PASS"
 
+      - name: M230 索引/切片族三轨全量对拍（缺陷 345）
+        if: always()
+        run: |
+          bash examples/m230_index_slice/verify.sh --neg-skip > /tmp/v_m230.log 2>&1 || { echo "❌ m230_index_slice verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m230.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^(   |── )' /tmp/v_m230.log | tail -20
+          echo "✅ m230_index_slice verify（56 例 × 3 轨 = 168 次 · 跨轨 0 · 期望 0 · MODEL 双向）PASS"
+
       # M222 补（第 100 轮 · 第 100 轮收口）：**让 M221 的产物指纹短路「在 CI 上是否生效」可观测**。
       #   动机（实测，别当猜测）：M221 短路在本机微测上确证有效（重建 17s → 复用 0s），
       #   但 CI 的「工具自测」步时长 **1337s（M220）→ 1657s（M222）**，而同期只多了两个门

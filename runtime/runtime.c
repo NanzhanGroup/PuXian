@@ -4748,16 +4748,18 @@ LXValue px_index(LXValue obj, LXValue idx) {
     }
     if (obj.type == PX_LIST) {
         int i = (int)px_req_int_idx(idx);
+        int m230_raw = i;   // M230（缺陷 345）：消息一律报**用户输入的原值**
         int len = obj.as.obj->as.list.len;
         if (i < 0) i += len;
-        if (i < 0 || i >= len) px_error("R1003: 索引越界: %d (len=%d)", i, len);
+        if (i < 0 || i >= len) px_error("R1003: 索引越界: %d (len=%d)", m230_raw, len);
         return obj.as.obj->as.list.items[i];
     }
     if (obj.type == PX_TUPLE) {
         int i = (int)px_req_int_idx(idx);
+        int m230_raw = i;   // M230（缺陷 345）：消息一律报**用户输入的原值**
         int len = obj.as.obj->as.tuple.len;
         if (i < 0) i += len;
-        if (i < 0 || i >= len) px_error("R1003: 索引越界: %d (len=%d)", i, len);
+        if (i < 0 || i >= len) px_error("R1003: 索引越界: %d (len=%d)", m230_raw, len);
         return obj.as.obj->as.tuple.items[i];
     }
     if (obj.type == PX_STR) {
@@ -4766,8 +4768,9 @@ LXValue px_index(LXValue obj, LXValue idx) {
         //   内嵌 NUL 处截断 → 含 \u{0} 的串 len()=N 但 s[0] 判越界，自举编译 pxlexer.px 崩）
         int i = (int)px_req_int_idx(idx);
         int ulen = px_str_rune_len(obj.as.obj);   // M106-S2：惰性 rune 计数（首次 O(n)，之后摊还 O(1)）
+        int m230_raw = i;   // M230（缺陷 345）：消息一律报**用户输入的原值**
         if (i < 0) i += ulen;
-        if (i < 0 || i >= ulen) px_error("R1003: 索引越界: %d (len=%d)", i, ulen);
+        if (i < 0 || i >= ulen) px_error("R1003: 索引越界: %d (len=%d)", m230_raw, ulen);
         const unsigned char* base = (const unsigned char*)obj.as.obj->as.str.data;
         const unsigned char* p;
         int* offs = px_str_offs_get(obj.as.obj);  // M106-S2：≥1KB 的串建一次偏移表
@@ -4802,8 +4805,9 @@ LXValue px_index(LXValue obj, LXValue idx) {
         //   （写二进制库的人照文档写，第一行就崩）。
         int i = (int)px_req_int_idx(idx);
         int blen = obj.as.obj->as.str.len;
+        int m230_raw = i;   // M230（缺陷 345）：消息一律报**用户输入的原值**
         if (i < 0) i += blen;
-        if (i < 0 || i >= blen) px_error("R1003: 索引越界: %d (len=%d)", i, blen);
+        if (i < 0 || i >= blen) px_error("R1003: 索引越界: %d (len=%d)", m230_raw, blen);
         return px_int((int64_t)(unsigned char)obj.as.obj->as.str.data[i]);
     }
     if (obj.type == PX_DICT) {
@@ -4844,10 +4848,11 @@ LXValue px_iter_at(LXValue obj, LXValue idx) {
             px_error("R1002: 字典索引键必须是字符串");
         LXObject* o = obj.as.obj;
         int i = (int)idx.as.i;
+        int m230_raw = i;   // M230（缺陷 345）：同口径（迭代位置语义亦然）
         if (i < 0) i += o->as.dict.len;
         if (i >= 0 && i < o->as.dict.len)
             return px_str(o->as.dict.keys[i]);
-        px_error("R1003: 索引越界: %d (len=%d)", i, o->as.dict.len);
+        px_error("R1003: 索引越界: %d (len=%d)", m230_raw, o->as.dict.len);
     }
     return px_index(obj, idx);
 }
@@ -5018,9 +5023,10 @@ LXValue px_slice(LXValue obj, LXValue start, LXValue end, LXValue step) {
 void px_index_set(LXValue obj, LXValue idx, LXValue val) {
     if (obj.type == PX_LIST) {
         int i = (int)px_req_int_idx(idx);
+        int m230_raw = i;   // M230（缺陷 345）：消息一律报**用户输入的原值**
         int len = obj.as.obj->as.list.len;
         if (i < 0) i += len;
-        if (i < 0 || i >= len) px_error("R1003: 索引越界: %d (len=%d)", i, len);
+        if (i < 0 || i >= len) px_error("R1003: 索引越界: %d (len=%d)", m230_raw, len);
         // M11：与 GC 互斥（见 px_list_push 注释）。注意：必须先拿锁再屏蔽信号——
         // 等锁期间不能屏蔽 SIG_GC_STOP，否则 GC 无法暂停该线程（信号 pending），
         // 导致 stop-the-world 空转/降级/漏扫描。
@@ -13621,8 +13627,9 @@ static LXValue bi_bytes_get(LXValue* args, int nargs, void* ctx) {
     int64_t i = px_req_int_idx(args[1]);
     int len = args[0].as.obj->as.str.len;
     int64_t idx = i;
+    int m230_raw = (int)i;   // M230（缺陷 345）：消息一律报**用户输入的原值**
     if (idx < 0) idx += len;
-    if (idx < 0 || idx >= len) px_error("R1003: 索引越界: %d (len=%d)", (int)idx, len);
+    if (idx < 0 || idx >= len) px_error("R1003: 索引越界: %d (len=%d)", m230_raw, len);
     return px_int((unsigned char)args[0].as.obj->as.str.data[idx]);
 }
 
@@ -13636,8 +13643,9 @@ static LXValue bi_bytes_set(LXValue* args, int nargs, void* ctx) {
     if (v < 0 || v > 255) px_error("R1002: bytes_set 的值必须在 0..255");
     int len = args[0].as.obj->as.str.len;
     int64_t idx = i;
+    int m230_raw = (int)i;   // M230（缺陷 345）：消息一律报**用户输入的原值**
     if (idx < 0) idx += len;
-    if (idx < 0 || idx >= len) px_error("R1003: 索引越界: %d (len=%d)", (int)idx, len);
+    if (idx < 0 || idx >= len) px_error("R1003: 索引越界: %d (len=%d)", m230_raw, len);
     const char* src = args[0].as.obj->as.str.data;
     char* d = xmalloc((size_t)len + 1);
     memcpy(d, src, (size_t)len);

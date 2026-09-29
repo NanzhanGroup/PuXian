@@ -932,9 +932,10 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             LXValue obj = slots[in.b], idx = slots[in.c];
             if (obj.type == PX_LIST && idx.type == PX_INT) {
                 int i = (int)idx.as.i;
+                int m230_raw = i;   // M230（缺陷 345）：消息一律报**用户输入的原值**
                 int len = obj.as.obj->as.list.len;
                 if (i < 0) i += len;
-                if (i < 0 || i >= len) px_error("R1003: 索引越界: %d (len=%d)", i, len);
+                if (i < 0 || i >= len) px_error("R1003: 索引越界: %d (len=%d)", m230_raw, len);
                 slots[in.a] = obj.as.obj->as.list.items[i];
             } else slots[in.a] = px_index(obj, idx);
             break;
@@ -945,9 +946,10 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             LXValue obj = slots[in.b], idx = slots[in.c];
             if (obj.type == PX_LIST && idx.type == PX_INT) {
                 int i = (int)idx.as.i;
+                int m230_raw = i;   // M230（缺陷 345）：消息一律报**用户输入的原值**
                 int len = obj.as.obj->as.list.len;
                 if (i < 0) i += len;
-                if (i < 0 || i >= len) px_error("R1003: 索引越界: %d (len=%d)", i, len);
+                if (i < 0 || i >= len) px_error("R1003: 索引越界: %d (len=%d)", m230_raw, len);
                 slots[in.a] = obj.as.obj->as.list.items[i];
             } else slots[in.a] = px_iter_at(obj, idx);
             break;

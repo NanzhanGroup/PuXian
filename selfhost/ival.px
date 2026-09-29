@@ -450,13 +450,14 @@ def i_iter(v, pos):
 # ---------- 索引 ----------
 def i_as_index(idx, n, pos):
     if type(idx) == "int":
+        # M230（缺陷 345）：消息一律报**用户输入的原值**（修前报归一化后的位置
+        #   —— `s[-4]` 说「索引越界: -1」，指不到真因）
+        var m230_raw = idx
         var i = idx
         if i < 0:
             i = i + n
-            if i < 0:
-                return Err(i_r1003("索引越界: " + i_to_str(i) + " (len=" + i_to_str(n) + ")", pos))
-        if i >= n:
-            return Err(i_r1003("索引越界: " + i_to_str(i) + " (len=" + i_to_str(n) + ")", pos))
+        if i < 0 or i >= n:
+            return Err(i_r1003("索引越界: " + i_to_str(m230_raw) + " (len=" + i_to_str(n) + ")", pos))
         return Ok(i)
     # M179：与编译轨 px_req_int_idx 同文（修前只说「索引必须是整数」）
     return Err(i_r1002("索引必须是整数，实际是 " + i_type_name(idx), pos))
