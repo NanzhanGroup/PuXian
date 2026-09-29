@@ -113,6 +113,7 @@ typedef struct {
     int              qclosed;
     pthread_t        thr;                    // 连接处理线程
     int              thr_started;
+    int64_t          epoch;                  // M225：连接代次（槽位复用后必然不同）
 } quic_conn;
 
 static ngtcp2_conn* quic_get_conn_from_ref(ngtcp2_crypto_conn_ref* ref) {
@@ -123,6 +124,10 @@ static ngtcp2_conn* quic_get_conn_from_ref(ngtcp2_crypto_conn_ref* ref) {
 static quic_listener g_qlis[QUIC_MAX];
 static quic_conn     g_qconns[QUIC_MAX];
 static int           g_quic_init = 0;
+// M225：连接代次（每次槽位分配 +1；同一 conn 号在不同代次代表不同连接）
+static int64_t       g_quic_epoch = 0;
+// M225：连接回收钩子（runtime_h3.c 注册；槽位释放前清理该 conn 的 h3 会话状态）
+static px_quic_conn_recycle_cb g_quic_recycle = NULL;
 
 // M53：server 托管全局锁（cid 路由表 + 收包队列 push/pop + conn 清理互斥）
 static pthread_mutex_t g_quic_srv_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -769,6 +774,9 @@ static void* quic_srv_conn_thr(void* arg) {
             }
         }
     }
+    // M225（缺陷 327）：槽位即将复用 ⇒ 先清该 conn 的 h3 会话状态（QPACK/流缓冲/last_sid），
+    // 否则新连接拿到同一 conn 号时会继承上一个连接的 QPACK 上下文。
+    if (g_quic_recycle) g_quic_recycle(cid);
     memset(qc, 0, sizeof(*qc));   // used=0 → 槽位可复用
     pthread_mutex_unlock(&g_quic_srv_mu);
     px_gc_thread_leave();
@@ -993,6 +1001,17 @@ int64_t px_quic_raw_h3_listen_cb(int port, const char* cert, const char* key,
     return quic_h3_listen_cb_impl(port, cert, key, cb, ud);
 }
 
+// M225：连接代次查询（0 = 无此连接）。同一 conn 号被复用后返回值必不同。
+int64_t px_quic_raw_conn_epoch(int64_t conn) {
+    quic_conn* qc = quic_get_conn(conn);
+    return qc ? qc->epoch : 0;
+}
+
+// M225：注册连接回收钩子（runtime_h3.c 用；槽位释放前调用一次）
+void px_quic_set_conn_recycle_cb(px_quic_conn_recycle_cb cb) {
+    g_quic_recycle = cb;
+}
+
 // raw：连接对端地址 → "ip:port"（请求 remote 字段；连接已清理/无效 → 空串）
 void px_quic_raw_peer_addr(int64_t conn, char* out, size_t n) {
     if (!out || n == 0) return;
@@ -1108,9 +1127,18 @@ static LXValue bi_quic_listen(LXValue* args, int nargs, void* ctx) {
 
 // ---------- 服务端：quic_accept ----------
 static int64_t quic_alloc_conn(quic_conn* qc) {
+    // M225：与「连接回收钩子」互斥 —— 否则"清理 h3 会话"可能落在新连接已占槽之后
+    pthread_mutex_lock(&g_quic_srv_mu);
     for (int i = 0; i < QUIC_MAX; i++) {
-        if (!g_qconns[i].used) { g_qconns[i].used = 1; *qc = g_qconns[i]; return i + 1; }
+        if (!g_qconns[i].used) {
+            g_qconns[i].used = 1;
+            g_qconns[i].epoch = ++g_quic_epoch;   // M225：新代次（不复用）
+            *qc = g_qconns[i];
+            pthread_mutex_unlock(&g_quic_srv_mu);
+            return i + 1;
+        }
     }
+    pthread_mutex_unlock(&g_quic_srv_mu);
     return -1;
 }
 
@@ -2093,6 +2121,8 @@ static LXValue bi_quic_close(LXValue* args, int nargs, void* ctx) {
     if (qc->conn) { ngtcp2_conn_del(qc->conn); qc->conn = NULL; }
     quic_stream_free_all(qc);
     close(qc->fd);
+    // M225：客户端侧（h3_client_*）同样按 conn 号持有 h3 会话状态 —— 一并回收
+    if (g_quic_recycle) g_quic_recycle(args[0].as.i);
     memset(qc, 0, sizeof(*qc));
     return px_bool(true);
 }

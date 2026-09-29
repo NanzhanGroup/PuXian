@@ -226,6 +226,13 @@ int64_t px_quic_raw_h3_listen(int port, const char* cert, const char* key); // �
 int64_t px_quic_raw_h3_listen_cb(int port, const char* cert, const char* key,
                                  px_quic_conn_cb cb, void* ud);
 void    px_quic_raw_peer_addr(int64_t conn, char* out, size_t n);   // 连接对端 "ip:port"
+// M225（缺陷 327）：连接代次 + 回收钩子 —— HTTP/3 会话状态（QPACK 动态表 / 流缓冲 / 上次流 id）
+//   按 **conn 号**（= QUIC 槽位号）索引，而槽位**可复用**；若不在连接回收时清掉，
+//   新连接会继承上一个连接的 QPACK 上下文（QUIC 层正常、H3 层解不出 ⇒ 客户端超时）。
+int64_t px_quic_raw_conn_epoch(int64_t conn);            // 连接代次（槽位复用后不同）| 0=无此连接
+typedef void (*px_quic_conn_recycle_cb)(int64_t conn);
+void    px_quic_set_conn_recycle_cb(px_quic_conn_recycle_cb cb);
+void    px_h3_recycle_conn(int64_t conn);                // runtime_h3.c：清该 conn 的 h3 会话状态
 // M53-S4：指定流对端 FIN 是否已到（1=是/0=否或流不存在）—— H3 server 判请求无 body
 int     px_quic_raw_stream_fin(int64_t conn, int64_t sid);
 LXValue px_struct(const char* type_name, char** fnames, LXValue* fvals, int nfields);
