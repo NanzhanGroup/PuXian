@@ -1,0 +1,50 @@
+# M226 方法面规格表 —— 「方法清单 + 每方法的位置类型」的**单一事实源**
+# ------------------------------------------------------------
+# 列（TAB 分隔）：<接收者类型>	<方法名>	<每个位置的合法实参（**|** 分隔，空 = 0 参）>	<备注>
+# ⚠️ 分隔符必须是 `|` 而不是 `,` —— 实参本身含逗号（如 split 的 `","`）时会被切碎（首版踩过）。
+#
+# 判据（examples/m226_method_surface/verify.sh 层①）：
+#   [a] 本表的方法名集合 ⇄ **源码派生的方法清单**（runtime.c `px_method` 的 strcmp 链
+#       ∪ selfhost/icall.px 的 `i_<type>_method` 的 name== 链）必须一致；
+#       不一致只有在 UNPAIRED.tsv 里登记过才放行（且必须写明「三轨清单为何不同」）。
+#   [b] 表里每条必须在两侧源码里**都**能找到（除已登记的不对称项）；
+#   [c] 源码里有、表里没有 ⇒ 判红（**漂移检测** —— 防止有人加了方法却没人来这里登记，
+#       那样探针面会静默变窄，正是 M212 缺陷 288 的形状）。
+#
+# ⚠️ 这张表是**判据的期望集**，不是文档 —— 改源码方法面必须同步改这里。
+#
+# 类型	方法	合法实参	备注
+str	contains	"b"	
+str	starts_with	"a"	
+str	ends_with	"c"	
+str	find	"b"	
+str	has_prefix	"a"	
+str	has_suffix	"c"	
+str	len		
+str	lower		
+str	upper		
+str	to_lower		alias：native 有、解释轨 M226 前没有 ⇒ 缺陷 331（本轮补齐解释侧）
+str	to_upper		alias：同上
+str	trim		
+str	strip		
+str	replace	"a"|"z"	
+str	split	","	
+list	push	3	
+list	append	3	
+list	pop		
+list	join	"-"	
+list	index	2	
+list	contains	2	
+list	sort		
+list	reverse		
+list	len		
+dict	get	"a"	
+dict	has	"a"	
+dict	contains	"a"	
+dict	set	"b"|1	
+dict	remove	"a"	
+dict	keys		
+dict	values		
+dict	items		
+dict	len		
+dict	put	"b"|1	alias：解释轨有 set 的别名 put、native 无 ⇒ 缺陷 332（本轮补齐编译侧）

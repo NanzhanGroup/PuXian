@@ -839,6 +839,20 @@ step "M225 · H3 连接槽位复用「会话状态串味」（缺陷 327 · 晨�
 #   ⚠️ 本机实测**不需要"非优雅断开"**：连接正常关闭 → 槽位释放 → 新连接复用同槽即复现。
 #   ⚠️ 判据用 PX_H3_IDLE_MS=300 加速（生产默认仍是 2×8000ms）；负控要重编 runtime（~35s×4）。
 run m225_h3_conn_reuse bash examples/m225_h3_conn_reuse/verify.sh
+step "M226 · 方法面「逐位置 × 错类型 + 错 arity」全量对拍（[S10-c] · 缺陷 328–335）"
+#   面：M190 量过「方法实参**个数**」、M199 量过「native **函数**面 × 每个位置 × 错类型」，
+#   而**方法面**从来没有清单级 / 全量度量。本轮把它做成可全量度量（聚合驱动器 ⇒ 两次编译
+#   覆盖全量）：222 例 → **32 例分叉**，落在 8 个缺陷族：
+#     328 `[1,2].join()`（0 参）直接读 `args[0]` ⇒ **越界读** ⇒ VM 轨 SIGSEGV（rc=139 core）
+#     329 `list.contains` / `dict.has|contains|remove` 判据 `< 1` ⇒ 多余实参**静默忽略**
+#     330 解释轨缺参报 R1002「参数 1 需要 string」⇄ 编译轨 R1005「需要 1 个参数」
+#     331 `str.to_lower|to_upper` 只在编译轨 · 332 `dict.put` 只在解释轨（清单不对称）
+#     333 `list.join` 分隔符错类型文案两种 · 334 `dict.remove` 缺键 R1008 ⇄ 静默 null
+#     335 `dict.get` 放过多余实参
+#   ⚠️ 清单判据的期望集**从源码派生**（runtime.c 的 strcmp 链 ∪ icall.px 的 name== 链）——
+#      手抄集合会漏掉整族入口（M212 缺陷 288 的教训）；差集必须与 UNPAIRED.tsv 精确相等。
+#   ⚠️ 负控要重编驱动两轨 + 重编解释轨件（~4–6 min）⇒ CI 用 --neg-skip。
+run m226_method_surface bash examples/m226_method_surface/verify.sh
 step "M190 · 上游 registry-px 真实用例回归（128 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。

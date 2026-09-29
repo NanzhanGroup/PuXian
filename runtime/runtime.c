@@ -5533,14 +5533,27 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
             px_list_push(obj, args[0]); return px_null();
         }
         if (strcmp(name, "contains") == 0) {
-            if (nargs < 1) px_error("R1005: 方法 contains 需要 1 个参数");
+            // M226（缺陷 329）：修前是 `nargs < 1` ⇒ `[1,2].contains(2,1,2)` 静默忽略多余实参
+            //   （解释轨是精确「恰 1」）⇒ 三轨分叉。M190 已把这一族统一为「精确 arity」，
+            //   本处是**漏网**：`< 1` 与 `!= 1` 只差在「多了」这一侧，正是最容易被忽略的方向。
+            if (nargs != 1) px_error("R1005: 方法 contains 需要 1 个参数");
             LXObject* o = obj.as.obj;
             for (int i = 0; i < o->as.list.len; i++) {
                 if (px_eq(o->as.list.items[i], args[0]).as.b) return px_bool(true);
             }
             return px_bool(false);
         }
-        if (strcmp(name, "join") == 0) return call_with_self("join", args[0], &obj, 1);
+        // M226（缺陷 328/329/333）：修前**完全不查实参** —— 三个后果：
+        //   ① 0 参 ⇒ 直接读 `args[0]` = **越界读**（VM 轨实测 `[1,2].join()` SIGSEGV rc=139 core）；
+        //   ② `join("-", 1, 2)` 静默忽略多余实参（解释轨是精确「恰 1」）；
+        //   ③ 分隔符错类型时用的是**转发内置**的文案（`join 分隔符需要 string`），
+        //      与解释轨 `方法 join 参数 1 需要 string` 不一致。
+        if (strcmp(name, "join") == 0) {
+            if (nargs != 1) px_error("R1005: 方法 join 需要 1 个参数");
+            if (args[0].type != PX_STR || !args[0].as.obj)
+                px_error("R1002: 方法 join 参数 1 需要 string");
+            return call_with_self("join", args[0], &obj, 1);
+        }
         // M-B2：C 端 list.pop 缺失（自举 lexer 缩进栈用），与解释器一致
         if (strcmp(name, "pop") == 0) {
             if (nargs != 0) px_error("R1005: pop 不接受参数");
@@ -5593,7 +5606,9 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
     }
     if (obj.type == PX_DICT) {
         if (strcmp(name, "get") == 0) {
-            if (nargs < 1) px_error("R1005: 方法 get 需要 1 个参数");
+            // M226（缺陷 335）：修前是 `nargs < 1` ⇒ `get("a", 1, 2)` 静默忽略第 3 个实参。
+            //   签名是 get(键[, 默认值]) ⇒ 上界 2（与 `set` 的精确 arity 同口径）。
+            if (nargs < 1 || nargs > 2) px_error("R1005: 方法 get 需要 1-2 个参数");
             // M120（qg-issue 76 E4）：**实参类型校验**。此前直接解引用 args[0] 的 str 载荷，
             //   传非字符串（如 int）→ 段错误（实测 rc=139 core dumped）；解释轨友好报 R1002。
             if (args[0].type != PX_STR || !args[0].as.obj)
@@ -5611,7 +5626,11 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
             }
             return px_dict_get(obj, gk);
         }
-        if (strcmp(name, "set") == 0) {
+        // M226（缺陷 332）：`put` 是 `set` 的**别名**（解释轨 `i_dict_method` 的
+        //   `if name == "set" or name == "put"` 分支一直有），而编译轨**清单里没有** ⇒
+        //   `d.put("b", 1)` 在编译轨响亮 `R1007 类型 dict 没有方法 'put'`。
+        //   ⇒ 补齐编译侧（删能力是退步 —— 同 M190 对 list.index/reverse/sort 的处置）。
+        if (strcmp(name, "set") == 0 || strcmp(name, "put") == 0) {
             // M190（缺陷 213-b）：修前只有下限 ⇒ `d.set("a", 1, 2)` 静默忽略第 3 个实参，
             //   而解释轨已收紧为「恰 2」（缺参 ⇒ 数据污染，多参 ⇒ 静默丢弃）⇒ 两侧同形。
             if (nargs != 2) px_error("R1005: 方法 set 需要 2 个参数");
@@ -5622,7 +5641,8 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
         }
         if (strcmp(name, "len") == 0) return px_int(px_len(obj));
         if (strcmp(name, "has") == 0 || strcmp(name, "contains") == 0) {
-            if (nargs < 1) px_error("R1005: 方法 %s 需要 1 个参数", name);
+            // M226（缺陷 329）：同 list.contains —— `< 1` 放过多余实参
+            if (nargs != 1) px_error("R1005: 方法 %s 需要 1 个参数", name);
             // M120（qg-issue 76 E4）：非字符串键此前直接解引用 → SIGSEGV（实测 d.has(1) rc=139）
             if (args[0].type != PX_STR || !args[0].as.obj)
                 px_error("R1002: 方法 %s 参数 1 需要 string", name);
@@ -5666,15 +5686,18 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
         }
         if (strcmp(name, "remove") == 0) {
             // M37 修复：C 端 dict.remove 真删除（原"置 null"导致键残留：has() 仍 true、keys() 仍列出）
-            if (nargs < 1) px_error("R1005: 方法 remove 需要 1 个参数");
+            // M226（缺陷 329）：`< 1` ⇒ 多余实参静默（解释轨精确「恰 1」）
+            if (nargs != 1) px_error("R1005: 方法 remove 需要 1 个参数");
             if (args[0].type != PX_STR || !args[0].as.obj)
                 px_error("R1002: 方法 remove 参数 1 需要 string");
             LXObject* o = obj.as.obj;
             const char* key = args[0].as.obj->as.str.data;
             LXValue v = px_null();
+            int m226_found = 0;
             for (int i = 0; i < o->as.dict.len; i++) {
                 if (strcmp(o->as.dict.keys[i], key) == 0) {
                     v = o->as.dict.vals[i];
+                    m226_found = 1;
                     // 收缩：后续元素前移
                     for (int j = i; j < o->as.dict.len - 1; j++) {
                         o->as.dict.keys[j] = o->as.dict.keys[j + 1];
@@ -5684,6 +5707,11 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
                     break;
                 }
             }
+            // M226（缺陷 334）：缺键 ⇒ **响亮**。解释轨一直报 R1008（`字典没有键 'k'`），
+            //   编译轨此前静默返回 null ⇒ 同一份代码三轨两种命运（静默方向最危险：调用方
+            //   以为删掉了、其实没有）。口径按本仓既定原则「**响亮优于静默**」+ 与 `d[k]`
+            //   的 R1008 完全同形。
+            if (!m226_found) px_error("R1008: 字典没有键 '%s'", key);
             return v;
         }
     }
