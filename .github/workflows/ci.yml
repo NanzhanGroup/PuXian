@@ -741,16 +741,39 @@ jobs:
           echo "✅ pxlsp / pxmcp / pxcheck 就绪"
       - name: 发布侧守卫自测（Issue 41 单调性守卫 + Issue 56 发布包内容/可复现 + Issue 86 tag 守卫 + M168 安装矩阵与二进制可移植性）
         # ⚠️ 沿用 Issue 64 的教训：**每条独立成行**，不要用 `&&` 串联（`&&` 会吞掉前件失败）。
+        # M225s1：本 step 此前**没有诊断包装** —— 首次失败时注解只有
+        #   「Process completed with exit code 1」（**指不到真因**，job 日志又 403）。
+        #   按本仓纪律「门的红必须读出真因」改为逐条包装：日志落 /tmp/v_*.log
+        #   + 失败即调 annotate_failure.sh 发一条**富注解**（换行编码 %0A）。
         run: |
-          bash packaging/selftest_rpm_monotonic_guard.sh
-          bash packaging/selftest_make_release.sh
-          bash packaging/selftest_tag_guard.sh
-          # M168（2026-09-21 用户报障）：install-rpm.sh 的**发行版矩阵离线自测**
+          set +e
+          GUARD_FAIL=""
+          run_guard() {
+            n="$1"; shift
+            echo "── $n"
+            "$@" > "/tmp/v_$n.log" 2>&1
+            rc=$?
+            tail -5 "/tmp/v_$n.log"
+            if [ "$rc" -ne 0 ]; then
+              GUARD_FAIL="$GUARD_FAIL $n(rc=$rc)"
+              echo "❌ 发布侧守卫 $n 失败（rc=$rc）"
+              bash packaging/annotate_failure.sh "发布侧守卫[$n]" "/tmp/v_$n.log" 16 14 || true
+            fi
+            return 0
+          }
+          run_guard rpm_monotonic bash packaging/selftest_rpm_monotonic_guard.sh
+          run_guard make_release  bash packaging/selftest_make_release.sh
+          run_guard tag_guard     bash packaging/selftest_tag_guard.sh
+          # M168：install-rpm.sh 的**发行版矩阵离线自测**
           #   （openEuler 22.03/24.03 必须认脸 + 字面目录；不支持组合必须给出替代路线）
-          bash packaging/selftest_install_rpm.sh
-          # M216s2：CI 失败诊断器自证（合成 5 场景 + 真实语料 0 误报；
+          run_guard install_rpm   bash packaging/selftest_install_rpm.sh
+          # M216s2：CI 失败诊断器自证（合成场景 + 真实语料 0 误报；
           #   它守的是「CI 红能不能读出真因」——已连续 4 轮被 4096 硬上限卡住）
-          python3 packaging/ci_diagnose.py --selftest
+          run_guard ci_diagnose   python3 packaging/ci_diagnose.py --selftest
+          if [ -n "$GUARD_FAIL" ]; then
+            echo "::error::发布侧守卫自测失败：$GUARD_FAIL"
+            exit 1
+          fi
           echo "✅ 发布侧守卫自测全绿（41：旧覆盖新必红 · 56：内容同构 + 位级可复现 · 86：最高里程碑缺 tag 必红 · M168：安装矩阵 42 用例 · 诊断器 10 断言）"
       - name: 二进制可移植性门（M168：入库件必须全静态，与 glibc 版本解耦）
         # 为什么需要（用户报障根因）：官方 aarch64 引导包里的 pxc 曾是**动态件**（需 GLIBC_2.38），

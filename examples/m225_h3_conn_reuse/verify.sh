@@ -74,9 +74,14 @@ print("PATCH-OK mode=%s edits=%d" % (mode, len(edits)))
 PY
 }
 restore_src() {
+  # M225s1：正常路径**必须静默** —— CI 里门是以 `> /tmp/v_*.log 2>&1` 跑的，
+  #   **任何流**的输出都会成为日志末行；而 packaging/ci_diagnose.py 对
+  #   `/tmp/v_*.log` 做**末行裁决** ⇒ 提示语会把 `M225-VERIFY-OK` 顶掉
+  #   （本机实测：非 ok 1 份 ['v_m225.log'] ⇒ CI step 13 假红，而 job 日志 403 读不出真因）。
+  #   加固层在 ci_diagnose（可跳过尾巴），但**门本身也不该污染这条契约**。
   if [ -f "$W/h3.bak" ]; then
     cp -f "$W/h3.bak" "$H3SRC"
-    if cmp -s "$W/h3.bak" "$H3SRC"; then echo "  ↩︎ 源码已逐字节还原"; else echo "  ❌ 源码还原失败"; fi
+    cmp -s "$W/h3.bak" "$H3SRC" || echo "  ❌ 源码还原失败" >&2
   fi
 }
 
