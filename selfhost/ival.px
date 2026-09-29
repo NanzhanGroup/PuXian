@@ -679,7 +679,45 @@ def i_eval_binary(op, l, r, pos):
         return Ok(not i_eq(l, r))
     if op == "Lt" or op == "Le" or op == "Gt" or op == "Ge":
         return i_bin_compare(op, l, r, pos)
+    # M228（第 106 轮）：成员运算 `x in y` / `x not in y`
+    #   ⚠️ 传给 i_membership 的是**用户写下的那个拼写**（"in" / "not in"），
+    #     不是 AST 的 op 名（"In" / "NotIn"）—— 两者都要用到：拼写决定取反与措辞。
+    #     首版直接把 `op` 传进去 ⇒ `opname == "not in"` 恒不成立 ⇒ **`not in` 不退反**
+    #     （三轨分叉，被本门的三轨对拍当场抓住）。
+    if op == "In" or op == "NotIn":
+        var sp = "in"
+        if op == "NotIn":
+            sp = "not in"
+        return i_membership(l, r, sp, pos)
     return i_bin_numeric(op, l, r, pos)
+# M228（第 106 轮 · 成员运算）：`x in y` / `x not in y`（解释轨）。
+#   语义与 contains 族**同源**：str ⇒ 子串、dict ⇒ 键、list/tuple/generator ⇒ 按 i_eq 逐项。
+#   · str/dict 转发 native `contains`（与 ibuiltin 的 contains 同口径：一份实现、同码同文）；
+#   · 措辞归**运算符门**（`<op> 运算符左/右操作数…`），不借用 contains 的词条
+#     —— M227 纪律 H3「词条归属」（编译轨的 px_in/px_not_in 同码同文）。
+#   · 刻意**不**用 i_seq_of：该函数在 ibuiltin.px（本文件之后 import），而此处只需
+#     「生成器看 __gen__、其余按 len/下标通用迭代」这一句，就地写更少耦合。
+def i_membership(l, r, opname, pos):
+    let tr = i_type_name(r)
+    var hit = false
+    if tr == "string" or tr == "dict":
+        if i_type_name(l) != "string":
+            return Err(i_r1002(opname + " 运算符左操作数需要 string，实际是 " + i_type_name(l), pos))
+        hit = contains(r, l)
+    elif tr == "list" or tr == "tuple" or tr == "generator":
+        var src = r
+        if tr == "generator":
+            src = r["__gen__"]
+        var i = 0
+        while i < len(src) and not hit:
+            if i_eq(src[i], l):
+                hit = true
+            i += 1
+    else:
+        return Err(i_r1002(opname + " 运算符右操作数不支持类型 " + tr, pos))
+    if opname == "not in":
+        return Ok(not hit)
+    return Ok(hit)
 def i_bin_add(l, r, pos):
     let tl = i_type_name(l)
     let tr = i_type_name(r)

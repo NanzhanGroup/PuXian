@@ -719,6 +719,11 @@ def cg_binop_cname(op):
         return "px_gt"
     if op == "Ge":
         return "px_ge"
+    # M228（第 106 轮）：成员运算 —— 与 contains 族共用 runtime 的判定核心
+    if op == "In":
+        return "px_in"
+    if op == "NotIn":
+        return "px_not_in"
     if op == "BitAnd":
         return "px_bitand"
     if op == "BitOr":

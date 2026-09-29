@@ -2883,3 +2883,31 @@ set_timeout(fn (): print("once after 2s"), 2000)
 
      ⚠️ **`({"a":1}).len(1, 2)`**（多余实参）修前**静默返回 1** —— 三轨**都**静默 ⇒ 三轨对拍门看不见。
      判据见 `examples/m227_two_faces/`（197 例 × 两面 × 三轨 = 1182 次）。
+
+253. **成员运算 `in` / `not in` —— 同一个操作的**第三个门**（第 106 轮 · M228）**：
+
+     ```puxian
+     print(2 in [1, 2, 3])          # true
+     print(9 not in [1, 2, 3])      # true
+     print("bc" in "abcd")          # true（子串）
+     print("a" in {"a": 1})         # true（字典按**键**）
+     print(3 in (1, 2, 3))          # true
+     ```
+
+     · **修前这两种写法在表达式位置根本不存在**（`E2001 意外的 token: in`）——
+       `in` 此前只出现在 `for x in y` 的**语句位置**；「x 是 y 的成员吗」只能写
+       `contains(y, x)` 或 `y.contains(x)`。⇒ 这是**能力缺口**（同 M202 的 base32/hmac_sha1）。
+     · **三个门，同一个操作**：`x in y` ⇄ `contains(y, x)` ⇄ `y.contains(x)`。
+       支持集合完全一致：`str`（子串 · **字节**语义）· `list` · `tuple` · `dict`（按键）。
+       `str`/`dict` 作集合时**左操作数必须是 `string`**（`1 in "abc"` 响亮）。
+     · 字节语义的后果：`"。" in "中文测试"` = **`false`**（三字节标点不是子串）；
+       `"" in "abcd"` = `true`。
+     · **措辞归运算符门**（M227 纪律 H3）：`in 运算符左操作数需要 string，实际是 int` /
+       `in 运算符右操作数不支持类型 int`；写 `not in` 就说 **`not in 运算符…`**
+       （不是笼统说「in」）。
+     · **单份判定核心**：三个门此前**各写一遍扫描**（`bi_contains` + `px_method` 四处 +
+       解释轨两套）⇒ 收口为 `runtime.c` 的 `px_membership_probe`。
+     · `1 == 1.0` 为真、`2.0 in [1, 2, 3]` = `true`；但 `true == 1` 为 **假**
+       ⇒ `true in [1, 2]` = `false`。
+     · 判据：`examples/m228_membership/`（**81 例 × 4 门 × 3 轨 = 972 次执行**，
+       与 Python 独立真值一致 · 负控 3 道各自独立判红）。

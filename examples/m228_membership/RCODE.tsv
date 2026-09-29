@@ -1,0 +1,12 @@
+# M228 门 · 期望「门 × 错误形状 ⇒ R 码」表（判据双向核对：实测 ⇄ 本表 精确相等）
+# 为什么 op/func 是 R1002 而 method 的 coll 形状是 R1007：方法面在**取方法**这一层
+#   就失败了（M227 RCODE.tsv 同款登记）—— 条数上限 6，多一条都必须有理由。
+门	形状	R码
+op	elem	R1002
+op	coll	R1002
+notop	elem	R1002
+notop	coll	R1002
+func	elem	R1002
+func	coll	R1002
+method	elem	R1002
+method	coll	R1007

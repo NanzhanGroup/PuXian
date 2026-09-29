@@ -114,6 +114,46 @@ M199 缺陷 238（`replace(d,…)` 从函数面进却报 `R1007 类型 dict 没�
 | `close` | `close(fd)` = 关**文件描述符** | `ch.close()` = 关 **chan/mutex/rwlock** | **homonym**（同名不同操作） |
 | `remove` | `remove(path)` = 删**文件** | `d.remove(k)` = 删 **dict 键** | **homonym** |
 
+#### 2.3.3 M228 补（第 106 轮）：**第三个门** —— 运算符面（`x in y` / `x not in y`）
+
+M227 把「同名两门」（函数面 ⇄ 方法面）量了一遍。本轮补上**第三个门**：
+
+| 门 | 写法 | 谁在说话 |
+|---|---|---|
+| **运算符门**（M228 新增） | `x in y` / `x not in y` | `in 运算符左操作数需要 string，实际是 <t>` · `in 运算符右操作数不支持类型 <t>`（`not in` 说 `not in`） |
+| 函数门 | `contains(y, x)` | `contains 参数 2 需要 string，实际是 <t>` · `contains 不支持类型 <t>` |
+| 方法门 | `y.contains(x)` | `方法 contains 参数 1 需要 string` ·（不受支持接收者 ⇒ `R1007 类型 <t> 没有方法 'contains'`） |
+
+**修前实测**（这条是**能力缺口**，不是口径不一）：
+
+```
+let a = 2 in [1, 2, 3]      # E2001 意外的 token: in
+if "bc" in "abcd":          # E2001 期望 ':'，实际得到 in
+```
+
+⇒ `in` 在语言里**只出现在 `for x in y` 的语句位置**；「x 是 y 的成员吗」此前只能写
+`contains(y, x)` 或 `y.contains(x)`。文档未承诺、上游 `PX-DEF` 未登记。
+
+**单份判定核心（本轮的结构性收口）**：三个门此前**各写一遍扫描逻辑**
+（`bi_contains` 内联 / `px_method` 的 str·list·dict·tuple 四处 / 解释轨 `ibuiltin`·`icall`
+各一套）—— 这正是 M226/M227 反复照出「同一个操作在不同门里支持的类型集合不同」的温床。
+现收口为 `runtime.c` 的 **`px_membership_probe(coll, val)`**（返回状态码，不报错）：
+
+```
+str            ⇒ 元素必须是 string ⇒ 字节 memmem（M83-S1）
+dict           ⇒ 元素必须是 string ⇒ px_dict_has（按键）
+list / tuple   ⇒ 按 px_eq 逐项
+gen            ⇒ px_as_list 物化后逐项
+其余           ⇒ PX_MEM_ERR_COLL
+```
+
+**措辞仍归各门**（M227 纪律 H3：词条归属不得借用别的门）—— 核心只判语义，调用方决定说法。
+
+**判据**（`examples/m228_membership/`）：81 例 × 4 门（`in` / `not in` / `contains` /
+`.contains`）× 3 轨 = **972 次执行** ⇒ 跨轨 0 · 跨门 0 · 与 **Python 独立真值**一致 ·
+H3 词条归属 0 违规 · `RCODE.tsv` 双向精确相等。负控 3 道各自独立判红
+（撤回 runtime 取反 ⇒ 84 项 · 撤回解释轨取反 ⇒ 84 项 · 判据自伤 ⇒ 红消失）。
+
 ### 口径一：**响亮性必须一致**（H1 · 硬）
 
 同一个误用，从哪个门进都必须**同样响亮或同样静默**。修前 4 处违反：

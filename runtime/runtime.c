@@ -5380,6 +5380,17 @@ LXValue px_call(LXValue fn, LXValue* args, int nargs) {
     return px_null();
 }
 
+// M228（第 106 轮）：**成员判定核心**的状态码与前置声明。
+//   定义在文件后部（与 px_memmem 相邻），但 px_method 的三个 contains/has 分支
+//   在**前面**就要用它 ⇒ 这里只放枚举 + 前置声明（实现与长注释见定义处）。
+enum {
+    PX_MEM_NOT_FOUND = 0,   // 不是成员
+    PX_MEM_FOUND     = 1,   // 是成员
+    PX_MEM_ERR_COLL  = 2,   // 集合（右操作数 / 接收者）类型不支持
+    PX_MEM_ERR_ELEM  = 3,   // 元素（左操作数 / 实参）类型不符：str/dict 集合只收 string
+};
+static int px_membership_probe(LXValue coll, LXValue val);
+
 // 以 self 为第一参数调用全局函数（字符串方法转发）
 static LXValue call_with_self(const char* fn, LXValue self, LXValue* args, int nargs) {
     LXValue* a = xmalloc(sizeof(LXValue) * (nargs + 1));
@@ -5537,11 +5548,8 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
             //   （解释轨是精确「恰 1」）⇒ 三轨分叉。M190 已把这一族统一为「精确 arity」，
             //   本处是**漏网**：`< 1` 与 `!= 1` 只差在「多了」这一侧，正是最容易被忽略的方向。
             if (nargs != 1) px_error("R1005: 方法 contains 需要 1 个参数");
-            LXObject* o = obj.as.obj;
-            for (int i = 0; i < o->as.list.len; i++) {
-                if (px_eq(o->as.list.items[i], args[0]).as.b) return px_bool(true);
-            }
-            return px_bool(false);
+            // M228：扫描逻辑收口到 px_membership_probe（与 `in` 运算符门、函数门同一份）
+            return px_bool(px_membership_probe(obj, args[0]) == PX_MEM_FOUND);
         }
         // M226（缺陷 328/329/333）：修前**完全不查实参** —— 三个后果：
         //   ① 0 参 ⇒ 直接读 `args[0]` = **越界读**（VM 轨实测 `[1,2].join()` SIGSEGV rc=139 core）；
@@ -5653,9 +5661,11 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
             // M226（缺陷 329）：同 list.contains —— `< 1` 放过多余实参
             if (nargs != 1) px_error("R1005: 方法 %s 需要 1 个参数", name);
             // M120（qg-issue 76 E4）：非字符串键此前直接解引用 → SIGSEGV（实测 d.has(1) rc=139）
-            if (args[0].type != PX_STR || !args[0].as.obj)
+            // M228：判定收口到 px_membership_probe（措辞仍归本门 —— 不带「实际是」）
+            int mr = px_membership_probe(obj, args[0]);
+            if (mr == PX_MEM_ERR_ELEM)
                 px_error("R1002: 方法 %s 参数 1 需要 string", name);
-            return px_bool(px_dict_has(obj, args[0].as.obj->as.str.data));
+            return px_bool(mr == PX_MEM_FOUND);
         }
         if (strcmp(name, "keys") == 0) {
             LXObject* o = obj.as.obj;
@@ -5739,11 +5749,8 @@ LXValue px_method(LXValue obj, const char* name, LXValue* args, int nargs) {
         //   「分隔符」会与 Python `str.join` 的约定**正好相反** ⇒ 是有理由的不对称（见门头）。
         if (strcmp(name, "contains") == 0) {
             if (nargs != 1) px_error("R1005: 方法 contains 需要 1 个参数");
-            LXObject* o = obj.as.obj;
-            for (int i = 0; i < o->as.tuple.len; i++) {
-                if (px_eq(o->as.tuple.items[i], args[0]).as.b) return px_bool(true);
-            }
-            return px_bool(false);
+            // M228：同 list.contains —— 收口到 px_membership_probe
+            return px_bool(px_membership_probe(obj, args[0]) == PX_MEM_FOUND);
         }
         if (strcmp(name, "join") == 0) {
             if (nargs != 1) px_error("R1005: 方法 join 需要 1 个参数");
@@ -6897,55 +6904,82 @@ static const char* px_memmem(const char* hay, int hl, const char* ned, int nl) {
 }
 
 // contains(容器, 元素) -> bool（字符串/列表）
+// ==================== M228（第 106 轮）：成员判定核心（三个门共用一份） ====================
+// 「x 是 y 的成员吗」这**一个语义**从此只有下面这一份实现 —— 三个门：
+//   · 运算符门  `x in y` / `x not in y`   → px_in / px_not_in
+//   · 函数门    `contains(y, x)`          → bi_contains
+//   · 方法门    `y.contains(x)`           → px_method 的 contains / has 分支
+// 每个门只负责**自己的诊断措辞**（M227 纪律 H3：词条归属不得借用别的门），
+// 而「支持哪些集合类型、怎么比」由本函数**唯一**决定。
+// 为什么必须收口：修前三个门各写一遍扫描逻辑，正是 M226/M227 反复照出
+//   「同一个操作在三个门里支持的类型集合不同 / 措辞不同」的温床。
+// 返回状态码，**不报错**（措辞归调用方；px_error 会 longjmp，不能在核心层做）。
+// ⚠️ 枚举与前置声明在文件前部（px_method 之前要用），此处只放实现。
+static int px_membership_probe(LXValue coll, LXValue val) {
+    if (coll.type == PX_STR) {
+        // 子串只能与字符串比较（Python `'in <string>' requires string` 同为 TypeError）。
+        // M227 缺陷 338：函数面修前**静默 return false** ⇒ 与解释/方法面分叉 ⇒ 响亮。
+        // 字节 memmem 语义（M83-S1：按 str.len 取边界，内嵌 NUL 的二进制串不截断）。
+        if (val.type != PX_STR || !val.as.obj) return PX_MEM_ERR_ELEM;
+        LXObject* h = coll.as.obj;
+        LXObject* n = val.as.obj;
+        return px_memmem(h->as.str.data, h->as.str.len, n->as.str.data, n->as.str.len)
+                   ? PX_MEM_FOUND : PX_MEM_NOT_FOUND;
+    }
+    if (coll.type == PX_LIST) {
+        LXObject* o = coll.as.obj;
+        for (int i = 0; i < o->as.list.len; i++)
+            if (px_eq(o->as.list.items[i], val).as.b) return PX_MEM_FOUND;
+        return PX_MEM_NOT_FOUND;
+    }
+    if (coll.type == PX_TUPLE || coll.type == PX_GEN) {
+        // M178：tuple / 生成器同样按「成员判定」（= Go 的「遍历比较」，Python `in` 同义）
+        LXValue xs;
+        px_root_push();
+        if (!px_as_list(coll, &xs)) { px_root_pop(); return PX_MEM_ERR_COLL; }
+        PX_KEEP(xs);
+        LXObject* o = xs.as.obj;
+        int found = PX_MEM_NOT_FOUND;
+        for (int i = 0; i < o->as.list.len; i++) {
+            LXValue e = px_eq(o->as.list.items[i], val);
+            if (e.type == PX_BOOL && e.as.b) { found = PX_MEM_FOUND; break; }
+        }
+        px_root_pop();
+        return found;
+    }
+    if (coll.type == PX_DICT) {
+        // 字典按**键**判定（= `d.has(k)` / `d.contains(k)`）；M227 缺陷 337 补齐函数面
+        if (val.type != PX_STR || !val.as.obj) return PX_MEM_ERR_ELEM;
+        return px_dict_has(coll, val.as.obj->as.str.data) ? PX_MEM_FOUND : PX_MEM_NOT_FOUND;
+    }
+    return PX_MEM_ERR_COLL;
+}
+
+// 运算符门（M228 新增）：`x in y` / `x not in y`。
+//   措辞用**用户实际写下的那个拼写** —— 写 `not in` 就说「not in 运算符」，
+//   而不是笼统说「in」（同 M227 H3：归属要精确）。
+static LXValue px_membership_op(LXValue a, LXValue b, const char* opname, int negate) {
+    int r = px_membership_probe(b, a);
+    if (r == PX_MEM_ERR_ELEM)
+        px_error("R1002: %s 运算符左操作数需要 string，实际是 %s", opname, px_type_name(a));
+    if (r == PX_MEM_ERR_COLL)
+        px_error("R1002: %s 运算符右操作数不支持类型 %s", opname, px_type_name(b));
+    return px_bool(negate ? (r != PX_MEM_FOUND) : (r == PX_MEM_FOUND));
+}
+
+LXValue px_in(LXValue a, LXValue b)     { return px_membership_op(a, b, "in", 0); }
+LXValue px_not_in(LXValue a, LXValue b) { return px_membership_op(a, b, "not in", 1); }
+
+// 函数门：`contains(coll, val)` —— 措辞与 M227 完全一致（一个字都不改）。
 static LXValue bi_contains(LXValue* args, int nargs, void* ctx) {
     (void)ctx;
     if (nargs != 2) px_error("R1002: contains 需要 2 个参数");
-    if (args[0].type == PX_STR) {
-        // M227（缺陷 338 · 「同名两门」）：修前**静默 `return px_bool(false)`** ——
-        //   同一次误用从**函数面**进得 `false`（**静默错值**），从**方法面**进
-        //   （`"abc".contains(7)`）得 `R1002: 方法 contains 参数 1 需要 string`。
-        //   子串只能与字符串比较（Python `'in <string>' requires string` 同为 TypeError）
-        //   ⇒ 三轨同码同文、响亮优于静默。
-        if (args[1].type != PX_STR)
-            px_error("R1002: contains 参数 2 需要 string，实际是 %s", px_type_name(args[1]));
-        LXObject* h = args[0].as.obj;
-        LXObject* n = args[1].as.obj;
-        // M83-S1：字节 memmem 语义（str.len 边界，内嵌 NUL 的二进制 str 不再截断）
-        return px_bool(px_memmem(h->as.str.data, h->as.str.len, n->as.str.data, n->as.str.len) != NULL);
-    }
-    if (args[0].type == PX_LIST) {
-        LXObject* o = args[0].as.obj;
-        for (int i = 0; i < o->as.list.len; i++) {
-            if (px_eq(o->as.list.items[i], args[1]).as.b) return px_bool(true);
-        }
-        return px_bool(false);
-    }
-    // M178：tuple / 生成器同样按「成员判定」（= Go 的「遍历比较」，Python `in` 同义）
-    if (args[0].type == PX_TUPLE || args[0].type == PX_GEN) {
-        LXValue xs;
-        px_root_push();
-        if (!px_as_list(args[0], &xs)) { px_root_pop(); px_error("R1002: contains 不支持类型 %s", px_type_name(args[0])); }
-        PX_KEEP(xs);
-        LXObject* o = xs.as.obj;
-        int found = 0;
-        for (int i = 0; i < o->as.list.len; i++) {
-            LXValue e = px_eq(o->as.list.items[i], args[1]);
-            if (e.type == PX_BOOL && e.as.b) { found = 1; break; }
-        }
-        px_root_pop();
-        return px_bool(found);
-    }
-    // M227（缺陷 337）：「同名两门」的能力对齐 —— 函数面 `contains({"a":1}, "a")`
-    //   修前响亮 `R1002 contains 不支持类型 dict`，而方法面 `({"a":1}).contains("a")`
-    //   返回 true ⇒ **同一个操作两个门支持的类型集合不同**。字典按**键**判定
-    //   （= `d.has(k)` / `d.contains(k)`）；补齐函数面（删能力是退步）。
-    if (args[0].type == PX_DICT) {
-        if (args[1].type != PX_STR || !args[1].as.obj)
-            px_error("R1002: contains 参数 2 需要 string，实际是 %s", px_type_name(args[1]));
-        return px_bool(px_dict_has(args[0], args[1].as.obj->as.str.data));
-    }
-    px_error("R1002: contains 不支持类型 %s", px_type_name(args[0]));
-    return px_null();
+    int r = px_membership_probe(args[0], args[1]);
+    if (r == PX_MEM_ERR_ELEM)
+        px_error("R1002: contains 参数 2 需要 string，实际是 %s", px_type_name(args[1]));
+    if (r == PX_MEM_ERR_COLL)
+        px_error("R1002: contains 不支持类型 %s", px_type_name(args[0]));
+    return px_bool(r == PX_MEM_FOUND);
 }
 
 // replace(s, old, new) -> str

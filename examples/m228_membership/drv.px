@@ -1,0 +1,664 @@
+# M228 门 · 三门聚合驱动器（由 gen_probes.py 生成，勿手改）
+#   env M228_CASE = 例号 · env M228_DOOR = op|notop|func|method
+#   为什么用 env 而不是 args()：三轨取 argv 的通道不一致（M205 tools 面），
+#   env() 是 native，三轨同一条路。
+def main():
+    let c = env("M228_CASE")
+    let d = env("M228_DOOR")
+    if d == "op":
+        if c == "list3__i1":
+            print(1 in [1, 2, 3])
+        elif c == "list3__i9":
+            print(9 in [1, 2, 3])
+        elif c == "list3__sa":
+            print("a" in [1, 2, 3])
+        elif c == "list3__sbc":
+            print("bc" in [1, 2, 3])
+        elif c == "list3__scjk":
+            print("中" in [1, 2, 3])
+        elif c == "list3__btrue":
+            print(true in [1, 2, 3])
+        elif c == "list3__nul":
+            print(null in [1, 2, 3])
+        elif c == "list3__l12":
+            print([1, 2] in [1, 2, 3])
+        elif c == "list3__f1":
+            print(1.0 in [1, 2, 3])
+        elif c == "listE__i1":
+            print(1 in [])
+        elif c == "listE__i9":
+            print(9 in [])
+        elif c == "listE__sa":
+            print("a" in [])
+        elif c == "listE__sbc":
+            print("bc" in [])
+        elif c == "listE__scjk":
+            print("中" in [])
+        elif c == "listE__btrue":
+            print(true in [])
+        elif c == "listE__nul":
+            print(null in [])
+        elif c == "listE__l12":
+            print([1, 2] in [])
+        elif c == "listE__f1":
+            print(1.0 in [])
+        elif c == "str4__i1":
+            print(1 in "abcd")
+        elif c == "str4__i9":
+            print(9 in "abcd")
+        elif c == "str4__sa":
+            print("a" in "abcd")
+        elif c == "str4__sbc":
+            print("bc" in "abcd")
+        elif c == "str4__scjk":
+            print("中" in "abcd")
+        elif c == "str4__btrue":
+            print(true in "abcd")
+        elif c == "str4__nul":
+            print(null in "abcd")
+        elif c == "str4__l12":
+            print([1, 2] in "abcd")
+        elif c == "str4__f1":
+            print(1.0 in "abcd")
+        elif c == "strC__i1":
+            print(1 in "中文测试")
+        elif c == "strC__i9":
+            print(9 in "中文测试")
+        elif c == "strC__sa":
+            print("a" in "中文测试")
+        elif c == "strC__sbc":
+            print("bc" in "中文测试")
+        elif c == "strC__scjk":
+            print("中" in "中文测试")
+        elif c == "strC__btrue":
+            print(true in "中文测试")
+        elif c == "strC__nul":
+            print(null in "中文测试")
+        elif c == "strC__l12":
+            print([1, 2] in "中文测试")
+        elif c == "strC__f1":
+            print(1.0 in "中文测试")
+        elif c == "strE__i1":
+            print(1 in "")
+        elif c == "strE__i9":
+            print(9 in "")
+        elif c == "strE__sa":
+            print("a" in "")
+        elif c == "strE__sbc":
+            print("bc" in "")
+        elif c == "strE__scjk":
+            print("中" in "")
+        elif c == "strE__btrue":
+            print(true in "")
+        elif c == "strE__nul":
+            print(null in "")
+        elif c == "strE__l12":
+            print([1, 2] in "")
+        elif c == "strE__f1":
+            print(1.0 in "")
+        elif c == "dict2__i1":
+            print(1 in {"a": 1, "b": 2})
+        elif c == "dict2__i9":
+            print(9 in {"a": 1, "b": 2})
+        elif c == "dict2__sa":
+            print("a" in {"a": 1, "b": 2})
+        elif c == "dict2__sbc":
+            print("bc" in {"a": 1, "b": 2})
+        elif c == "dict2__scjk":
+            print("中" in {"a": 1, "b": 2})
+        elif c == "dict2__btrue":
+            print(true in {"a": 1, "b": 2})
+        elif c == "dict2__nul":
+            print(null in {"a": 1, "b": 2})
+        elif c == "dict2__l12":
+            print([1, 2] in {"a": 1, "b": 2})
+        elif c == "dict2__f1":
+            print(1.0 in {"a": 1, "b": 2})
+        elif c == "dictE__i1":
+            print(1 in {})
+        elif c == "dictE__i9":
+            print(9 in {})
+        elif c == "dictE__sa":
+            print("a" in {})
+        elif c == "dictE__sbc":
+            print("bc" in {})
+        elif c == "dictE__scjk":
+            print("中" in {})
+        elif c == "dictE__btrue":
+            print(true in {})
+        elif c == "dictE__nul":
+            print(null in {})
+        elif c == "dictE__l12":
+            print([1, 2] in {})
+        elif c == "dictE__f1":
+            print(1.0 in {})
+        elif c == "tuple3__i1":
+            print(1 in (1, 2, 3))
+        elif c == "tuple3__i9":
+            print(9 in (1, 2, 3))
+        elif c == "tuple3__sa":
+            print("a" in (1, 2, 3))
+        elif c == "tuple3__sbc":
+            print("bc" in (1, 2, 3))
+        elif c == "tuple3__scjk":
+            print("中" in (1, 2, 3))
+        elif c == "tuple3__btrue":
+            print(true in (1, 2, 3))
+        elif c == "tuple3__nul":
+            print(null in (1, 2, 3))
+        elif c == "tuple3__l12":
+            print([1, 2] in (1, 2, 3))
+        elif c == "tuple3__f1":
+            print(1.0 in (1, 2, 3))
+        elif c == "int5__i1":
+            print(1 in 5)
+        elif c == "int5__sa":
+            print("a" in 5)
+        elif c == "int5__nul":
+            print(null in 5)
+        elif c == "nul__i1":
+            print(1 in null)
+        elif c == "nul__sa":
+            print("a" in null)
+        elif c == "nul__nul":
+            print(null in null)
+        elif c == "f25__i1":
+            print(1 in 2.5)
+        elif c == "f25__sa":
+            print("a" in 2.5)
+        elif c == "f25__nul":
+            print(null in 2.5)
+        return
+    if d == "notop":
+        if c == "list3__i1":
+            print(1 not in [1, 2, 3])
+        elif c == "list3__i9":
+            print(9 not in [1, 2, 3])
+        elif c == "list3__sa":
+            print("a" not in [1, 2, 3])
+        elif c == "list3__sbc":
+            print("bc" not in [1, 2, 3])
+        elif c == "list3__scjk":
+            print("中" not in [1, 2, 3])
+        elif c == "list3__btrue":
+            print(true not in [1, 2, 3])
+        elif c == "list3__nul":
+            print(null not in [1, 2, 3])
+        elif c == "list3__l12":
+            print([1, 2] not in [1, 2, 3])
+        elif c == "list3__f1":
+            print(1.0 not in [1, 2, 3])
+        elif c == "listE__i1":
+            print(1 not in [])
+        elif c == "listE__i9":
+            print(9 not in [])
+        elif c == "listE__sa":
+            print("a" not in [])
+        elif c == "listE__sbc":
+            print("bc" not in [])
+        elif c == "listE__scjk":
+            print("中" not in [])
+        elif c == "listE__btrue":
+            print(true not in [])
+        elif c == "listE__nul":
+            print(null not in [])
+        elif c == "listE__l12":
+            print([1, 2] not in [])
+        elif c == "listE__f1":
+            print(1.0 not in [])
+        elif c == "str4__i1":
+            print(1 not in "abcd")
+        elif c == "str4__i9":
+            print(9 not in "abcd")
+        elif c == "str4__sa":
+            print("a" not in "abcd")
+        elif c == "str4__sbc":
+            print("bc" not in "abcd")
+        elif c == "str4__scjk":
+            print("中" not in "abcd")
+        elif c == "str4__btrue":
+            print(true not in "abcd")
+        elif c == "str4__nul":
+            print(null not in "abcd")
+        elif c == "str4__l12":
+            print([1, 2] not in "abcd")
+        elif c == "str4__f1":
+            print(1.0 not in "abcd")
+        elif c == "strC__i1":
+            print(1 not in "中文测试")
+        elif c == "strC__i9":
+            print(9 not in "中文测试")
+        elif c == "strC__sa":
+            print("a" not in "中文测试")
+        elif c == "strC__sbc":
+            print("bc" not in "中文测试")
+        elif c == "strC__scjk":
+            print("中" not in "中文测试")
+        elif c == "strC__btrue":
+            print(true not in "中文测试")
+        elif c == "strC__nul":
+            print(null not in "中文测试")
+        elif c == "strC__l12":
+            print([1, 2] not in "中文测试")
+        elif c == "strC__f1":
+            print(1.0 not in "中文测试")
+        elif c == "strE__i1":
+            print(1 not in "")
+        elif c == "strE__i9":
+            print(9 not in "")
+        elif c == "strE__sa":
+            print("a" not in "")
+        elif c == "strE__sbc":
+            print("bc" not in "")
+        elif c == "strE__scjk":
+            print("中" not in "")
+        elif c == "strE__btrue":
+            print(true not in "")
+        elif c == "strE__nul":
+            print(null not in "")
+        elif c == "strE__l12":
+            print([1, 2] not in "")
+        elif c == "strE__f1":
+            print(1.0 not in "")
+        elif c == "dict2__i1":
+            print(1 not in {"a": 1, "b": 2})
+        elif c == "dict2__i9":
+            print(9 not in {"a": 1, "b": 2})
+        elif c == "dict2__sa":
+            print("a" not in {"a": 1, "b": 2})
+        elif c == "dict2__sbc":
+            print("bc" not in {"a": 1, "b": 2})
+        elif c == "dict2__scjk":
+            print("中" not in {"a": 1, "b": 2})
+        elif c == "dict2__btrue":
+            print(true not in {"a": 1, "b": 2})
+        elif c == "dict2__nul":
+            print(null not in {"a": 1, "b": 2})
+        elif c == "dict2__l12":
+            print([1, 2] not in {"a": 1, "b": 2})
+        elif c == "dict2__f1":
+            print(1.0 not in {"a": 1, "b": 2})
+        elif c == "dictE__i1":
+            print(1 not in {})
+        elif c == "dictE__i9":
+            print(9 not in {})
+        elif c == "dictE__sa":
+            print("a" not in {})
+        elif c == "dictE__sbc":
+            print("bc" not in {})
+        elif c == "dictE__scjk":
+            print("中" not in {})
+        elif c == "dictE__btrue":
+            print(true not in {})
+        elif c == "dictE__nul":
+            print(null not in {})
+        elif c == "dictE__l12":
+            print([1, 2] not in {})
+        elif c == "dictE__f1":
+            print(1.0 not in {})
+        elif c == "tuple3__i1":
+            print(1 not in (1, 2, 3))
+        elif c == "tuple3__i9":
+            print(9 not in (1, 2, 3))
+        elif c == "tuple3__sa":
+            print("a" not in (1, 2, 3))
+        elif c == "tuple3__sbc":
+            print("bc" not in (1, 2, 3))
+        elif c == "tuple3__scjk":
+            print("中" not in (1, 2, 3))
+        elif c == "tuple3__btrue":
+            print(true not in (1, 2, 3))
+        elif c == "tuple3__nul":
+            print(null not in (1, 2, 3))
+        elif c == "tuple3__l12":
+            print([1, 2] not in (1, 2, 3))
+        elif c == "tuple3__f1":
+            print(1.0 not in (1, 2, 3))
+        elif c == "int5__i1":
+            print(1 not in 5)
+        elif c == "int5__sa":
+            print("a" not in 5)
+        elif c == "int5__nul":
+            print(null not in 5)
+        elif c == "nul__i1":
+            print(1 not in null)
+        elif c == "nul__sa":
+            print("a" not in null)
+        elif c == "nul__nul":
+            print(null not in null)
+        elif c == "f25__i1":
+            print(1 not in 2.5)
+        elif c == "f25__sa":
+            print("a" not in 2.5)
+        elif c == "f25__nul":
+            print(null not in 2.5)
+        return
+    if d == "func":
+        if c == "list3__i1":
+            print(contains([1, 2, 3], 1))
+        elif c == "list3__i9":
+            print(contains([1, 2, 3], 9))
+        elif c == "list3__sa":
+            print(contains([1, 2, 3], "a"))
+        elif c == "list3__sbc":
+            print(contains([1, 2, 3], "bc"))
+        elif c == "list3__scjk":
+            print(contains([1, 2, 3], "中"))
+        elif c == "list3__btrue":
+            print(contains([1, 2, 3], true))
+        elif c == "list3__nul":
+            print(contains([1, 2, 3], null))
+        elif c == "list3__l12":
+            print(contains([1, 2, 3], [1, 2]))
+        elif c == "list3__f1":
+            print(contains([1, 2, 3], 1.0))
+        elif c == "listE__i1":
+            print(contains([], 1))
+        elif c == "listE__i9":
+            print(contains([], 9))
+        elif c == "listE__sa":
+            print(contains([], "a"))
+        elif c == "listE__sbc":
+            print(contains([], "bc"))
+        elif c == "listE__scjk":
+            print(contains([], "中"))
+        elif c == "listE__btrue":
+            print(contains([], true))
+        elif c == "listE__nul":
+            print(contains([], null))
+        elif c == "listE__l12":
+            print(contains([], [1, 2]))
+        elif c == "listE__f1":
+            print(contains([], 1.0))
+        elif c == "str4__i1":
+            print(contains("abcd", 1))
+        elif c == "str4__i9":
+            print(contains("abcd", 9))
+        elif c == "str4__sa":
+            print(contains("abcd", "a"))
+        elif c == "str4__sbc":
+            print(contains("abcd", "bc"))
+        elif c == "str4__scjk":
+            print(contains("abcd", "中"))
+        elif c == "str4__btrue":
+            print(contains("abcd", true))
+        elif c == "str4__nul":
+            print(contains("abcd", null))
+        elif c == "str4__l12":
+            print(contains("abcd", [1, 2]))
+        elif c == "str4__f1":
+            print(contains("abcd", 1.0))
+        elif c == "strC__i1":
+            print(contains("中文测试", 1))
+        elif c == "strC__i9":
+            print(contains("中文测试", 9))
+        elif c == "strC__sa":
+            print(contains("中文测试", "a"))
+        elif c == "strC__sbc":
+            print(contains("中文测试", "bc"))
+        elif c == "strC__scjk":
+            print(contains("中文测试", "中"))
+        elif c == "strC__btrue":
+            print(contains("中文测试", true))
+        elif c == "strC__nul":
+            print(contains("中文测试", null))
+        elif c == "strC__l12":
+            print(contains("中文测试", [1, 2]))
+        elif c == "strC__f1":
+            print(contains("中文测试", 1.0))
+        elif c == "strE__i1":
+            print(contains("", 1))
+        elif c == "strE__i9":
+            print(contains("", 9))
+        elif c == "strE__sa":
+            print(contains("", "a"))
+        elif c == "strE__sbc":
+            print(contains("", "bc"))
+        elif c == "strE__scjk":
+            print(contains("", "中"))
+        elif c == "strE__btrue":
+            print(contains("", true))
+        elif c == "strE__nul":
+            print(contains("", null))
+        elif c == "strE__l12":
+            print(contains("", [1, 2]))
+        elif c == "strE__f1":
+            print(contains("", 1.0))
+        elif c == "dict2__i1":
+            print(contains({"a": 1, "b": 2}, 1))
+        elif c == "dict2__i9":
+            print(contains({"a": 1, "b": 2}, 9))
+        elif c == "dict2__sa":
+            print(contains({"a": 1, "b": 2}, "a"))
+        elif c == "dict2__sbc":
+            print(contains({"a": 1, "b": 2}, "bc"))
+        elif c == "dict2__scjk":
+            print(contains({"a": 1, "b": 2}, "中"))
+        elif c == "dict2__btrue":
+            print(contains({"a": 1, "b": 2}, true))
+        elif c == "dict2__nul":
+            print(contains({"a": 1, "b": 2}, null))
+        elif c == "dict2__l12":
+            print(contains({"a": 1, "b": 2}, [1, 2]))
+        elif c == "dict2__f1":
+            print(contains({"a": 1, "b": 2}, 1.0))
+        elif c == "dictE__i1":
+            print(contains({}, 1))
+        elif c == "dictE__i9":
+            print(contains({}, 9))
+        elif c == "dictE__sa":
+            print(contains({}, "a"))
+        elif c == "dictE__sbc":
+            print(contains({}, "bc"))
+        elif c == "dictE__scjk":
+            print(contains({}, "中"))
+        elif c == "dictE__btrue":
+            print(contains({}, true))
+        elif c == "dictE__nul":
+            print(contains({}, null))
+        elif c == "dictE__l12":
+            print(contains({}, [1, 2]))
+        elif c == "dictE__f1":
+            print(contains({}, 1.0))
+        elif c == "tuple3__i1":
+            print(contains((1, 2, 3), 1))
+        elif c == "tuple3__i9":
+            print(contains((1, 2, 3), 9))
+        elif c == "tuple3__sa":
+            print(contains((1, 2, 3), "a"))
+        elif c == "tuple3__sbc":
+            print(contains((1, 2, 3), "bc"))
+        elif c == "tuple3__scjk":
+            print(contains((1, 2, 3), "中"))
+        elif c == "tuple3__btrue":
+            print(contains((1, 2, 3), true))
+        elif c == "tuple3__nul":
+            print(contains((1, 2, 3), null))
+        elif c == "tuple3__l12":
+            print(contains((1, 2, 3), [1, 2]))
+        elif c == "tuple3__f1":
+            print(contains((1, 2, 3), 1.0))
+        elif c == "int5__i1":
+            print(contains(5, 1))
+        elif c == "int5__sa":
+            print(contains(5, "a"))
+        elif c == "int5__nul":
+            print(contains(5, null))
+        elif c == "nul__i1":
+            print(contains(null, 1))
+        elif c == "nul__sa":
+            print(contains(null, "a"))
+        elif c == "nul__nul":
+            print(contains(null, null))
+        elif c == "f25__i1":
+            print(contains(2.5, 1))
+        elif c == "f25__sa":
+            print(contains(2.5, "a"))
+        elif c == "f25__nul":
+            print(contains(2.5, null))
+        return
+    if d == "method":
+        if c == "list3__i1":
+            print(([1, 2, 3]).contains(1))
+        elif c == "list3__i9":
+            print(([1, 2, 3]).contains(9))
+        elif c == "list3__sa":
+            print(([1, 2, 3]).contains("a"))
+        elif c == "list3__sbc":
+            print(([1, 2, 3]).contains("bc"))
+        elif c == "list3__scjk":
+            print(([1, 2, 3]).contains("中"))
+        elif c == "list3__btrue":
+            print(([1, 2, 3]).contains(true))
+        elif c == "list3__nul":
+            print(([1, 2, 3]).contains(null))
+        elif c == "list3__l12":
+            print(([1, 2, 3]).contains([1, 2]))
+        elif c == "list3__f1":
+            print(([1, 2, 3]).contains(1.0))
+        elif c == "listE__i1":
+            print(([]).contains(1))
+        elif c == "listE__i9":
+            print(([]).contains(9))
+        elif c == "listE__sa":
+            print(([]).contains("a"))
+        elif c == "listE__sbc":
+            print(([]).contains("bc"))
+        elif c == "listE__scjk":
+            print(([]).contains("中"))
+        elif c == "listE__btrue":
+            print(([]).contains(true))
+        elif c == "listE__nul":
+            print(([]).contains(null))
+        elif c == "listE__l12":
+            print(([]).contains([1, 2]))
+        elif c == "listE__f1":
+            print(([]).contains(1.0))
+        elif c == "str4__i1":
+            print(("abcd").contains(1))
+        elif c == "str4__i9":
+            print(("abcd").contains(9))
+        elif c == "str4__sa":
+            print(("abcd").contains("a"))
+        elif c == "str4__sbc":
+            print(("abcd").contains("bc"))
+        elif c == "str4__scjk":
+            print(("abcd").contains("中"))
+        elif c == "str4__btrue":
+            print(("abcd").contains(true))
+        elif c == "str4__nul":
+            print(("abcd").contains(null))
+        elif c == "str4__l12":
+            print(("abcd").contains([1, 2]))
+        elif c == "str4__f1":
+            print(("abcd").contains(1.0))
+        elif c == "strC__i1":
+            print(("中文测试").contains(1))
+        elif c == "strC__i9":
+            print(("中文测试").contains(9))
+        elif c == "strC__sa":
+            print(("中文测试").contains("a"))
+        elif c == "strC__sbc":
+            print(("中文测试").contains("bc"))
+        elif c == "strC__scjk":
+            print(("中文测试").contains("中"))
+        elif c == "strC__btrue":
+            print(("中文测试").contains(true))
+        elif c == "strC__nul":
+            print(("中文测试").contains(null))
+        elif c == "strC__l12":
+            print(("中文测试").contains([1, 2]))
+        elif c == "strC__f1":
+            print(("中文测试").contains(1.0))
+        elif c == "strE__i1":
+            print(("").contains(1))
+        elif c == "strE__i9":
+            print(("").contains(9))
+        elif c == "strE__sa":
+            print(("").contains("a"))
+        elif c == "strE__sbc":
+            print(("").contains("bc"))
+        elif c == "strE__scjk":
+            print(("").contains("中"))
+        elif c == "strE__btrue":
+            print(("").contains(true))
+        elif c == "strE__nul":
+            print(("").contains(null))
+        elif c == "strE__l12":
+            print(("").contains([1, 2]))
+        elif c == "strE__f1":
+            print(("").contains(1.0))
+        elif c == "dict2__i1":
+            print(({"a": 1, "b": 2}).contains(1))
+        elif c == "dict2__i9":
+            print(({"a": 1, "b": 2}).contains(9))
+        elif c == "dict2__sa":
+            print(({"a": 1, "b": 2}).contains("a"))
+        elif c == "dict2__sbc":
+            print(({"a": 1, "b": 2}).contains("bc"))
+        elif c == "dict2__scjk":
+            print(({"a": 1, "b": 2}).contains("中"))
+        elif c == "dict2__btrue":
+            print(({"a": 1, "b": 2}).contains(true))
+        elif c == "dict2__nul":
+            print(({"a": 1, "b": 2}).contains(null))
+        elif c == "dict2__l12":
+            print(({"a": 1, "b": 2}).contains([1, 2]))
+        elif c == "dict2__f1":
+            print(({"a": 1, "b": 2}).contains(1.0))
+        elif c == "dictE__i1":
+            print(({}).contains(1))
+        elif c == "dictE__i9":
+            print(({}).contains(9))
+        elif c == "dictE__sa":
+            print(({}).contains("a"))
+        elif c == "dictE__sbc":
+            print(({}).contains("bc"))
+        elif c == "dictE__scjk":
+            print(({}).contains("中"))
+        elif c == "dictE__btrue":
+            print(({}).contains(true))
+        elif c == "dictE__nul":
+            print(({}).contains(null))
+        elif c == "dictE__l12":
+            print(({}).contains([1, 2]))
+        elif c == "dictE__f1":
+            print(({}).contains(1.0))
+        elif c == "tuple3__i1":
+            print(((1, 2, 3)).contains(1))
+        elif c == "tuple3__i9":
+            print(((1, 2, 3)).contains(9))
+        elif c == "tuple3__sa":
+            print(((1, 2, 3)).contains("a"))
+        elif c == "tuple3__sbc":
+            print(((1, 2, 3)).contains("bc"))
+        elif c == "tuple3__scjk":
+            print(((1, 2, 3)).contains("中"))
+        elif c == "tuple3__btrue":
+            print(((1, 2, 3)).contains(true))
+        elif c == "tuple3__nul":
+            print(((1, 2, 3)).contains(null))
+        elif c == "tuple3__l12":
+            print(((1, 2, 3)).contains([1, 2]))
+        elif c == "tuple3__f1":
+            print(((1, 2, 3)).contains(1.0))
+        elif c == "int5__i1":
+            print((5).contains(1))
+        elif c == "int5__sa":
+            print((5).contains("a"))
+        elif c == "int5__nul":
+            print((5).contains(null))
+        elif c == "nul__i1":
+            print((null).contains(1))
+        elif c == "nul__sa":
+            print((null).contains("a"))
+        elif c == "nul__nul":
+            print((null).contains(null))
+        elif c == "f25__i1":
+            print((2.5).contains(1))
+        elif c == "f25__sa":
+            print((2.5).contains("a"))
+        elif c == "f25__nul":
+            print((2.5).contains(null))
+        return
+    print("BAD-DOOR")
