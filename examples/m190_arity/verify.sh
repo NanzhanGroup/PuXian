@@ -129,7 +129,7 @@ declare -A PAT=(
   [n8_str_split_2]='方法 split 需要 0-1 个参数'
   [n9_list_append_2]='方法 append 需要 1 个参数'
   [n10_list_push_2]='方法 push 需要 1 个参数'
-  [n11_list_pop_1]='pop 不接受参数'
+  [n11_list_pop_1]='方法 pop 不接受参数'
   [n12_list_len_arg]='方法 len 不接受参数'
   [n13_list_reverse_arg]='方法 reverse 不接受参数'
   [n14_list_sort_arg]='方法 sort 不接受参数'
@@ -138,7 +138,7 @@ declare -A PAT=(
   [n17_dict_set_3]='方法 set 需要 2 个参数'
   [n18_ok_0]='Ok 需要 1 个参数'
   [n19_ok_2]='Ok 需要 1 个参数'
-  [n20_unwrap_arg]='unwrap 不接受参数'
+  [n20_unwrap_arg]='方法 unwrap 不接受参数'
   [n21_assert_3]='assert 需要 1-2 个参数'
   [n22_index_miss]='list.index 未找到元素'
   [n23_index_2]='list.index 需要 1 个参数'
@@ -215,7 +215,7 @@ if [ "$NEG" = 1 ]; then
 import sys
 p=sys.argv[1]; s=open(p,encoding='utf-8').read()
 a='''        if len(args) != 0:
-            return Err(i_r1005("pop 不接受参数", pos))'''
+            return Err(i_r1005("方法 pop 不接受参数", pos))'''
 assert s.count(a)==1
 open(p,'w',encoding='utf-8').write(s.replace(a,'        # M190-NC：负控 A 打桩（退回忽略实参）',1))
 PY

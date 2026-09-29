@@ -718,6 +718,20 @@ jobs:
           grep -E '^(   |── )' /tmp/v_m228.log | tail -30
           echo "✅ m228_membership verify（81 例 × 4 门 × 3 轨 = 972 次 · 跨轨 0 · 跨门 0 · 与独立真值一致）PASS"
 
+      # M229（第 107 轮）：**门锚点哨兵** + **tuple/result 方法面全量对拍**
+      #   ① 哨兵：「改了源码 ⇒ 旧门的补丁锚点还在不在」—— 这条纪律已复发 6 次
+      #      （M161/M164/M178+M227/M228 连带 M227/M229 连带 M190），症状都是「门报红但指不到真因」。
+      #   ② 方法面：M226 量过 str/list/dict，**tuple/result 从未被度量** ⇒
+      #      一量就照出 `ok`/`err` 完全不查 arity（静默）+ 措辞三种写法并存。
+      - name: M229 门锚点哨兵 + tuple/result 方法面
+        if: always()
+        run: |
+          python3 selfhost/check_gate_anchors.py > /tmp/v_m229anchor.log 2>&1 || { echo "❌ 门锚点哨兵失败（有过期锚点）"; grep -E '^(──|❌|   )' /tmp/v_m229anchor.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^(──|✅)' /tmp/v_m229anchor.log | tail -5
+          bash examples/m229_result_tuple/verify.sh --neg-skip > /tmp/v_m229.log 2>&1 || { echo "❌ m229_result_tuple verify 失败"; grep -E '^(   |── |❌|  FAIL|  ✖)' /tmp/v_m229.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^(   |── )' /tmp/v_m229.log | tail -20
+          echo "✅ m229_result_tuple verify（35 例 × 3 轨 = 105 次 · 跨轨 0 · arity 0 · 措辞 0）PASS"
+
       # M222 补（第 100 轮 · 第 100 轮收口）：**让 M221 的产物指纹短路「在 CI 上是否生效」可观测**。
       #   动机（实测，别当猜测）：M221 短路在本机微测上确证有效（重建 17s → 复用 0s），
       #   但 CI 的「工具自测」步时长 **1337s（M220）→ 1657s（M222）**，而同期只多了两个门

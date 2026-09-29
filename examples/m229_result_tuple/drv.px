@@ -1,0 +1,76 @@
+# M229 门 · 聚合驱动器（gen_probes.py 生成，勿手改）
+#   env M229_CASE 选例；一次编译覆盖全量（M199 / M226 / M228 范式）
+def main():
+    let c = env("M229_CASE")
+    if c == "t_len0":
+        print((1, 2, 3).len())
+    elif c == "t_len1":
+        print((1, 2, 3).len(1))
+    elif c == "t_len2":
+        print((1, 2, 3).len(1, 2))
+    elif c == "t_cont0":
+        print((1, 2, 3).contains())
+    elif c == "t_cont1":
+        print((1, 2, 3).contains(2))
+    elif c == "t_cont1b":
+        print((1, 2, 3).contains("x"))
+    elif c == "t_cont2":
+        print((1, 2, 3).contains(2, 3))
+    elif c == "t_cont3":
+        print((1, 2, 3).contains(2, 3, 4))
+    elif c == "t_join0":
+        print((1, 2, 3).join())
+    elif c == "t_join1":
+        print(("a", "b").join("-"))
+    elif c == "t_join1t":
+        print((1, 2, 3).join(1))
+    elif c == "t_join2":
+        print((1, 2, 3).join("-", "+"))
+    elif c == "r_isok0":
+        print(Ok(7).is_ok())
+    elif c == "r_isok1":
+        print(Ok(7).is_ok(1))
+    elif c == "r_isok2":
+        print(Ok(7).is_ok(1, 2))
+    elif c == "r_iserr0":
+        print(Ok(7).is_err())
+    elif c == "r_iserr1":
+        print(Ok(7).is_err(1))
+    elif c == "r_unw0":
+        print(Ok(7).unwrap())
+    elif c == "r_unw1":
+        print(Ok(7).unwrap(1))
+    elif c == "r_unw1e":
+        print(Err("b").unwrap())
+    elif c == "r_unwe0":
+        print(Err("b").unwrap_err())
+    elif c == "r_unwe1":
+        print(Err("b").unwrap_err(1))
+    elif c == "r_unwe0o":
+        print(Ok(7).unwrap_err())
+    elif c == "r_ok0":
+        print(Ok(7).ok())
+    elif c == "r_ok0e":
+        print(Err("b").ok())
+    elif c == "r_ok1":
+        print(Ok(7).ok(1))
+    elif c == "r_ok2":
+        print(Ok(7).ok(1, 2))
+    elif c == "r_err0":
+        print(Err("b").err())
+    elif c == "r_err0o":
+        print(Ok(7).err())
+    elif c == "r_err1":
+        print(Ok(7).err(1))
+    elif c == "r_err2":
+        print(Err("b").err(1, 2))
+    elif c == "x_int":
+        print((7).len())
+    elif c == "x_bool":
+        print(true.upper())
+    elif c == "l_pop0":
+        print([1, 2].pop())
+    elif c == "l_pop1":
+        print([1, 2].pop(1))
+    else:
+        print("BAD-CASE")

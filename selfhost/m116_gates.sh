@@ -876,6 +876,16 @@ step "M228 · 成员运算 in / not in 三轨落地 + 「三个门」全量对�
 #         H3 词条归属 0 违规 · RCODE.tsv 双向精确相等。
 #   ⚠️ 负控 A/B 各要完整重建一次 runtime（~6-8 min）⇒ 本地全量门**跑负控**，CI 用 --neg-skip。
 run m228_membership bash examples/m228_membership/verify.sh
+step "M229 · tuple/result 方法面全量对拍（M226 覆盖面补齐 · 缺陷 343/344）"
+#   主题：M226 量过 str/list/dict —— **tuple 与 result 从未被度量**。
+#   一量就照出：① `ok`/`err` 完全不查 arity（静默）② 方法面 R1005 措辞三种写法并存。
+#   判据：35 例 × 3 轨 = 105 次 ⇒ 跨轨 0 · arity 0 · 措辞 0 · 合法侧一致。
+#   ⚠️ 负控 A/B 各要完整重建一次 runtime（~6-8 min）⇒ 本地跑负控，CI 用 --neg-skip。
+run m229_result_tuple bash examples/m229_result_tuple/verify.sh
+step "M229 · 门锚点哨兵（改了源码 ⇒ 旧门的补丁锚点还在不在）"
+#   为什么有：这条纪律**已复发 6 次**（M161/M164/M178+M227/M228 连带 M227/M229 连带 M190）。
+#   判据：门文件里 `assert s.count(x)==1` 的锚点 blob 必须在 runtime/selfhost/tools/stdlib 里仍能找到。
+run gate_anchor_sentinel python3 selfhost/check_gate_anchors.py
 step "M190 · 上游 registry-px 真实用例回归（128 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。
