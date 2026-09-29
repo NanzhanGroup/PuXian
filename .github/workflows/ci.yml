@@ -743,21 +743,25 @@ jobs:
         # ⚠️ 沿用 Issue 64 的教训：**每条独立成行**，不要用 `&&` 串联（`&&` 会吞掉前件失败）。
         # M225s1：本 step 此前**没有诊断包装** —— 首次失败时注解只有
         #   「Process completed with exit code 1」（**指不到真因**，job 日志又 403）。
-        #   按本仓纪律「门的红必须读出真因」改为逐条包装：日志落 /tmp/v_*.log
-        #   + 失败即调 annotate_failure.sh 发一条**富注解**（换行编码 %0A）。
+        #   按本仓纪律「门的红必须读出真因」改为逐条包装：失败即调
+        #   annotate_failure.sh 发一条**富注解**（换行编码 %0A）。
+        # M225s2：守卫日志**不能**落 `/tmp/v_*.log` —— 其中一条守卫正是
+        #   `ci_diagnose.py --selftest`，而它的判据就扫 `/tmp/v_*.log`
+        #   ⇒ 扫描面包含**正在写的自己** ⇒ 判 unknown ⇒ 非 ok ⇒ **必然假红**
+        #   （CI 实测：`非 ok 1 份 ['v_ci_diagnose.log']`）。故改用 `guard_*.log`。
         run: |
           set +e
           GUARD_FAIL=""
           run_guard() {
             n="$1"; shift
             echo "── $n"
-            "$@" > "/tmp/v_$n.log" 2>&1
+            "$@" > "/tmp/guard_$n.log" 2>&1
             rc=$?
-            tail -5 "/tmp/v_$n.log"
+            tail -5 "/tmp/guard_$n.log"
             if [ "$rc" -ne 0 ]; then
               GUARD_FAIL="$GUARD_FAIL $n(rc=$rc)"
               echo "❌ 发布侧守卫 $n 失败（rc=$rc）"
-              bash packaging/annotate_failure.sh "发布侧守卫[$n]" "/tmp/v_$n.log" 16 14 || true
+              bash packaging/annotate_failure.sh "发布侧守卫[$n]" "/tmp/guard_$n.log" 16 14 || true
             fi
             return 0
           }
