@@ -120,6 +120,7 @@ const char* px_op_name(int op) {
         [PXOP_ITERLEN] = "ITERLEN",
         [PXOP_UNPACKCK] = "UNPACKCK",
         [PXOP_UNINIT] = "UNINIT", [PXOP_CHKINIT] = "CHKINIT",
+        [PXOP_IN] = "IN", [PXOP_NOTIN] = "NOTIN",
         [PXOP_CELLGET] = "CELLGET", [PXOP_CELLSET] = "CELLSET",
         [PXOP_CELLNEW] = "CELLNEW", [PXOP_MKCLO] = "MKCLO",
     };
@@ -959,6 +960,15 @@ static int vm_run_loop(PxVmState* st, int base, int yield_ok, LXValue* out_ret) 
             break;
         case PXOP_UNINIT:    // a=槽（M181 缺陷 193：帧入口 hoist 槽初值 = 未初始化哨兵）
             slots[in.a] = px_uninit();
+            break;
+        // M228（第 106 轮 · 成员运算）：`x in y` / `x not in y`
+        //   与 contains 族共用 runtime 的判定核心（px_membership_probe）；
+        //   这里只负责运算符门的措辞（`in 运算符左/右操作数…`）。
+        case PXOP_IN:        // a=dst, b=元素槽, c=集合槽
+            slots[in.a] = px_in(slots[in.b], slots[in.c]);
+            break;
+        case PXOP_NOTIN:
+            slots[in.a] = px_not_in(slots[in.b], slots[in.c]);
             break;
         case PXOP_CHKINIT:   // a=值槽, c=N 名字 idx（M181 缺陷 193：哨兵 ⇒ R1001 未定义变量）
             if (cf->mod && in.c < cf->mod->nN)

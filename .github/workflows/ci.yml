@@ -705,6 +705,19 @@ jobs:
           grep -E '^(   |── )' /tmp/v_m227.log | tail -30
           echo "✅ m227_two_faces verify（197 例 × 两面 × 三轨 · 跨轨 0 · 跨面硬分叉 0 · 登记双向）PASS"
 
+      # M228（第 106 轮）：**成员运算 in / not in 三轨落地 + 「三个门」全量对拍**
+      #   主题：M226 量过方法面、M227 量过同名两门 —— 本轮补**第三个门**（运算符面）。
+      #   实测修前 `x in y` 作为表达式**根本不存在**（E2001 意外的 token: in）⇒ 能力缺口。
+      #   判据：81 例 × 4 门（in/not in/contains/.contains）× 3 轨 = **972 次执行**
+      #         ⇒ 跨轨 0 · 跨门 0 · **与 Python 独立真值一致** · H3 词条归属 0 违规 ·
+      #         RCODE.tsv 双向精确相等。负控 A/B 各要完整重建一次 runtime ⇒ 这里用 --neg-skip。
+      - name: M228 成员运算三轨 + 三个门对拍
+        if: always()
+        run: |
+          bash examples/m228_membership/verify.sh --neg-skip > /tmp/v_m228.log 2>&1 || { echo "❌ m228_membership verify 失败"; grep -E '^(   |── |❌|  FAIL|  ✖)' /tmp/v_m228.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^(   |── )' /tmp/v_m228.log | tail -30
+          echo "✅ m228_membership verify（81 例 × 4 门 × 3 轨 = 972 次 · 跨轨 0 · 跨门 0 · 与独立真值一致）PASS"
+
       # M222 补（第 100 轮 · 第 100 轮收口）：**让 M221 的产物指纹短路「在 CI 上是否生效」可观测**。
       #   动机（实测，别当猜测）：M221 短路在本机微测上确证有效（重建 17s → 复用 0s），
       #   但 CI 的「工具自测」步时长 **1337s（M220）→ 1657s（M222）**，而同期只多了两个门

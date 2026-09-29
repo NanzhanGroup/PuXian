@@ -314,6 +314,11 @@ LXValue px_neg(LXValue a);
 LXValue px_not(LXValue a);
 LXValue px_eq(LXValue a, LXValue b);
 LXValue px_ne(LXValue a, LXValue b);
+// M228（第 106 轮）：**成员运算** `x in y` / `x not in y`（运算符门）。
+//   判定核心与 contains 族共用一份（runtime.c 的 px_membership_probe）；
+//   本对函数只负责**运算符门的诊断归属**（M227 H3：词条不得借用别的门）。
+LXValue px_in(LXValue a, LXValue b);
+LXValue px_not_in(LXValue a, LXValue b);
 LXValue px_lt(LXValue a, LXValue b);
 LXValue px_le(LXValue a, LXValue b);
 LXValue px_gt(LXValue a, LXValue b);

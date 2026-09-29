@@ -155,7 +155,14 @@ typedef struct {
 //   （解释轨给 1）⇒ 静态拒绝会误拒合法程序 ⇒ 只能运行期判。
 #define PXOP_UNINIT  66  // a=槽 s（slots[a] = px_uninit()；帧入口 hoist 槽初值）
 #define PXOP_CHKINIT 67  // a=槽 s, c=N[n]（slots[a] 是哨兵 ⇒ R1001 未定义变量: N[n]）
-#define PXM_MAX      68
+// M228（第 106 轮 · 成员运算）：`x in y` / `x not in y` 作为**表达式**。
+//   语义 = 「x 是否为 y 的成员」，与 contains 族**共用同一判定核心**
+//   （runtime.c 的 px_membership_probe ⇒ 三轨不会因各写一遍而漂移）。
+//   分两条指令而不是「IN + NOT」：让 `not in` 的**错误归属**也能说自己的名字
+//   （`not in 运算符左操作数需要 string`），同 M227 H3「词条归属」纪律。
+#define PXOP_IN      68  // a=dst, b=左操作数(元素)槽, c=右操作数(集合)槽（px_in）
+#define PXOP_NOTIN   69  // 同 IN（px_not_in）
+#define PXM_MAX      70
 
 // ==================== 常量子（K 池） ====================
 // 发射器按 kind 生成静态项；LOADK 时物化为 LXValue（str 需 strdup/常驻，

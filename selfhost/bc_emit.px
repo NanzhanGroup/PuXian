@@ -499,6 +499,11 @@ def bc_binop_op(op):
         return "GT"
     if op == "Ge":
         return "GE"
+    # M228（第 106 轮）：成员运算 —— 与 contains 族共用 runtime 的判定核心
+    if op == "In":
+        return "IN"
+    if op == "NotIn":
+        return "NOTIN"
     if op == "BitAnd":
         return "BITAND"
     if op == "BitOr":

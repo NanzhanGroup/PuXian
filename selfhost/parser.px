@@ -829,10 +829,23 @@ def parse_comparison():
             op = "Gt"
         elif chk_op(">="):
             op = "Ge"
+        # M228（第 106 轮）：**成员运算** `x in y` / `x not in y`，与比较运算同级。
+        #   修前这两种写法**在表达式位置根本不存在**（`E2001 意外的 token: in`）——
+        #   语言只有 `for x in y` 这一处用到 `in`，而「x 是 y 的成员吗」只能写
+        #   `contains(y, x)` 或 `y.contains(x)`（两个门，见 M226/M227）。
+        #   `not in` 需要两个 token ⇒ 用 chk2 前瞻。⚠️ 本处是**中缀位置**：
+        #   左侧操作数已解析完，此时出现的 `not` 只可能是 `not in` 的一部分
+        #   （`a not b` 本来就不是合法语法），故不会与一元 `not` 冲突。
+        elif chk_op("in"):
+            op = "In"
+        elif chk_op("not") and chk2("in"):
+            op = "NotIn"
         if op == null:
             break
         let pos = ppos()
         adv()
+        if op == "NotIn":
+            adv()
         let right = parse_bitor()
         left = ["Binary", op, left, right, pos]
     return left

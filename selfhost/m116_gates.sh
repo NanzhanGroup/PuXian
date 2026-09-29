@@ -869,6 +869,13 @@ step "M227 · 「同名两门」全量对拍（函数面 ⇄ 方法面 · 缺陷
 #     341 R 码分歧 3 种形状**不硬判**但逐一登记（两面处于不同检查层）：RCODE.tsv 双向判据
 #   ⚠️ 负控要重编驱动两轨 + 重编解释轨件（~13 min）⇒ CI 用 --neg-skip。
 run m227_two_faces bash examples/m227_two_faces/verify.sh
+step "M228 · 成员运算 in / not in 三轨落地 + 「三个门」全量对拍（972 次执行）"
+#   主题：M226 量过方法面、M227 量过同名两门 —— 本轮补**第三个门**（运算符面）。
+#   实测修前 `x in y` 作为表达式**根本不存在**（E2001）⇒ 能力缺口（同 M202 族）。
+#   判据：81 例 × 4 门 × 3 轨 = 972 次执行 ⇒ 跨轨 0 · 跨门 0 · 与 Python 独立真值一致 ·
+#         H3 词条归属 0 违规 · RCODE.tsv 双向精确相等。
+#   ⚠️ 负控 A/B 各要完整重建一次 runtime（~6-8 min）⇒ 本地全量门**跑负控**，CI 用 --neg-skip。
+run m228_membership bash examples/m228_membership/verify.sh
 step "M190 · 上游 registry-px 真实用例回归（128 用例 × 双轨 · EXPECTED.tsv 登记对拍）"
 #   上游 tests/*.px 逐字节照搬（MANIFEST.sha256）：① 引用面完整 ② 与 EXPECTED.tsv 对拍
 #   （5 条 SKIP 各有独立理由：并发两库的解释轨设计性、mysql/pg 需真实服务端、qrcode 解释轨性能）。
