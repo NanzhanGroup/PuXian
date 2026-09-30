@@ -1,0 +1,6 @@
+# M236 拒绝侧 3：methods 含非 GET ⇒ R1002（RFC 6455 握手方法固定为 GET）
+def rej3_h(conn, req):
+    return null
+
+ws_stream("/x3", rej3_h, {"methods": ["POST"]})
+print("SHOULD-NOT-REACH")

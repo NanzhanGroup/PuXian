@@ -1,0 +1,45 @@
+# M236 门探针 · 客户端（模式由 args()[2] 选）
+# 用法：cli.px <port> [basic|miss|plain|manual|manual_reject]
+var cli_port = 18801
+var cli_mode = "basic"
+let cli_av = args()
+if len(cli_av) > 1:
+    cli_port = int(cli_av[1])
+if len(cli_av) > 2:
+    cli_mode = cli_av[2]
+
+if cli_mode == "basic":
+    conn = ws_connect("127.0.0.1", cli_port, "/agent/node1?token=abc")
+    print("CLI connected =", conn != null)
+    if conn != null:
+        print("CLI r1 =", ws_recv(conn, 3000))
+        ws_send(conn, "m1")
+        print("CLI r2 =", ws_recv(conn, 3000))
+        ws_send(conn, "bye")
+        ws_close(conn)
+        print("CLI done")
+    else:
+        print("CLI FAIL")
+elif cli_mode == "miss":
+    # 带 Upgrade 但路由未注册 ⇒ **不得**升级（应落回普通 HTTP ⇒ 握手失败）
+    conn = ws_connect("127.0.0.1", cli_port, "/agent/nope")
+    print("MISS upgraded =", conn != null)
+elif cli_mode == "plain":
+    # ⚠ http_get(url) 返回的是 **body 字符串**；要 status 必须用 http_request（返回
+    #   dict{status,headers,body}）—— 本仓 examples/m63_langfix/m63_net.px 记录了该口径
+    r = http_request("http://127.0.0.1:" + str(cli_port) + "/plain", "GET")
+    print("PLAIN status =", r["status"])
+elif cli_mode == "manual":
+    conn = ws_connect("127.0.0.1", cli_port, "/agent/secure?token=ok")
+    print("MANUAL connected =", conn != null)
+    if conn != null:
+        print("MANUAL r1 =", ws_recv(conn, 3000))
+        ws_close(conn)
+        print("MANUAL done")
+    else:
+        print("MANUAL FAIL")
+elif cli_mode == "manual_reject":
+    conn = ws_connect("127.0.0.1", cli_port, "/agent/secure?token=bad")
+    print("REJECT upgraded =", conn != null)
+else:
+    print("CLI unknown mode")

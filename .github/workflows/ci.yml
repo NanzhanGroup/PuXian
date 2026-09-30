@@ -781,6 +781,17 @@ jobs:
           grep -E '^(   |── )' /tmp/v_m235.log | tail -20
           echo "✅ m235_ws_conn_uaf verify（形态一 12 次 + 形态二 6 次「崩溃 0」· 元信息 path/peer/header 4 项 · 静态 8 项）PASS"
 
+      # M236（第 114 轮 · 晨曦 ws-edge 特性请求）：**HTTP 请求 → WebSocket 升级接管**。
+      #   让已占用 443 的 .px 服务（px_serve / http_serve）在同一监听、同一进程内完成
+      #   `Upgrade: websocket` 握手并把连接交给语言层（多节点路由 `/agent/<节点>` 的前提）。
+      #   本步跑 --neg-skip 档（负控 A/B 各需重编 runtime，本地全量门跑完整档 = 40/0）。
+      - name: m236_ws_stream（ws 升级接管 · 三轨一致 + 元信息 + manual + 拒绝侧）
+        if: always()
+        run: |
+          bash examples/m236_ws_stream/verify.sh --neg-skip > /tmp/v_m236.log 2>&1 || { echo "❌ m236_ws_stream verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m236.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^(   |── )' /tmp/v_m236.log | tail -20
+          echo "✅ m236_ws_stream verify（三轨一致 C/VM/解释 · 元信息 path/header/peer · manual 两条路 · 拒绝侧 4 例 · 未注册路径落回普通 HTTP）PASS"
+
 
       # M222 补（第 100 轮 · 第 100 轮收口）：**让 M221 的产物指纹短路「在 CI 上是否生效」可观测**。
       #   动机（实测，别当猜测）：M221 短路在本机微测上确证有效（重建 17s → 复用 0s），

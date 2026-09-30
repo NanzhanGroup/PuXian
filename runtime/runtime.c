@@ -400,6 +400,15 @@ static LXValue bi_sse_write(LXValue* args, int nargs, void* ctx);   // M131：�
 static int stream_match(const char* path, int method_bit);   // 流式路由表匹配（http_conn_worker 用）
 // 流式接管连接（定义在 SSE 注册表区之后）；http_conn_worker 前向引用
 static LXValue stream_takeover_conn(int fd, LXValue req, int route_idx);
+#ifndef PX_NO_WS
+// M236（晨曦特性请求）：ws_stream —— WebSocket 升级接管（定义见本文件 SSE 区之后）
+static int stream_match_ws(const char* path);
+static LXValue bi_ws_stream(LXValue* args, int nargs, void* ctx);
+// 接管入口与判定（定义在 runtime_ws.c）
+int px_ws_takeover_http_conn(PxConn* c, LXValue req, const char* path, int route_idx, int manual);
+int px_ws_can_takeover(LXValue req);
+LXValue bi_ws_reply_101(LXValue* args, int nargs, void* ctx);
+#endif
 // M23 P1：SSE 客户端（流式消费 / 事件订阅）
 static LXValue bi_sse_connect(LXValue* args, int nargs, void* ctx);
 static LXValue bi_sse_connect_ex(LXValue* args, int nargs, void* ctx);   // M137：失败可分类
@@ -12049,6 +12058,11 @@ void px_register_builtins(void) {
 #ifndef PX_NO_WS
     // M22 P1：WebSocket（RFC 6455，微信/QQ/飞书长连接 / LLM 流式 / 实时推送）
     px_set_global("ws_serve", px_native("ws_serve", bi_ws_serve));
+    // M236（晨曦 ws-edge 特性请求）：WS 升级接管 —— 让已占用 443 的 .px 服务（px_serve /
+    //   http_serve）能在同一监听、同一进程内完成 `Upgrade: websocket` 握手并把连接交给
+    //   语言层（多节点路由 `/agent/<节点>` 的前提；见 docs/WS_UPGRADE.md）
+    px_set_global("ws_stream", px_native("ws_stream", bi_ws_stream));
+    px_set_global("ws_reply_101", px_native("ws_reply_101", bi_ws_reply_101));
     px_set_global("ws_connect", px_native("ws_connect", bi_ws_connect));
     // M38：WS 客户端自动重连
     px_set_global("ws_connect_auto", px_native("ws_connect_auto", bi_ws_connect_auto));
@@ -18878,6 +18892,8 @@ typedef struct {
     int active;
     int mmask;          // 方法位掩码（默认 HTTP_MM_GET；opts.methods 可扩展）
     int manual;         // 1 = 接管时不写响应头，由语言层 sse_start 自写
+    int is_ws;          // M236：1 = WebSocket 升级接管路由（ws_stream 注册）
+                        //   stream_match 排除它、stream_match_ws 只认它 ⇒ 两类接管互不串扰
     int novr;           // 响应头覆写条数
     char oname[MAX_STREAM_OVR][64];
     char oval[MAX_STREAM_OVR][512];
@@ -18933,6 +18949,10 @@ static int hdr_block_chunked(const char* h) {
 #endif
 typedef struct PxConnCtx PxConnCtx;
 static PxConnCtx* px_evc_acquire(int fd, int kind);
+// M236：以下两个 static 函数在 http_conn_worker（本文件靠前）里被用到，而定义在本文件靠后
+//   （px_evc_detach ≈20221 / px_header_get ≈23839）⇒ 按本区既有做法集中前置声明。
+static void px_evc_detach(int fd);
+static LXValue px_header_get(const LXValue* headers, const char* name);
 static void px_evc_close(int fd);
 static int px_evc_idle_put(int fd, int kind);
 // M99：px_serve 版交 IDLE（fd 保持阻塞；px_evc_idle_put 对 http_serve 强制 px_fd_nonblock）
@@ -19568,6 +19588,45 @@ static LXValue http_conn_worker(LXValue* args, int nargs, void* ctx) {
                 px_dict_set(req, "form", form);
             }
         }
+
+#ifndef PX_NO_WS
+        // ═══ M236：WebSocket 升级接管（http_serve / http_serve_unix 轨）═══
+        // 与 px_serve 轨共用同一个接管函数；本轨是 fd 基（无现成 PxConn）⇒ 按
+        //   stream_takeover_conn 同法即时新建连接对象。**仅明文**：本轨的 TLS 由进程级
+        //   tls_server 开关决定，而此处拿不到「已完成握手的现成连接对象」
+        //   （与 http_stream 的 SSE 接管同一边界）。需要 TLS + WS 请用 px_serve 轨。
+        {
+            LXValue upg_w2 = px_header_get(&headers, "Upgrade");
+            if (!g_srv_tls_ready && upg_w2.type == PX_STR
+                && strcasestr(upg_w2.as.obj->as.str.data, "websocket")
+                && px_ws_can_takeover(req)) {
+                int w_idx = -1;
+                int w_manual = 0;
+                pthread_mutex_lock(&g_stream_mu);
+                w_idx = stream_match_ws(path);
+                if (w_idx >= 0) w_manual = g_stream_routes[w_idx].manual;
+                pthread_mutex_unlock(&g_stream_mu);
+                if (w_idx >= 0) {
+                    if (body_buf) { xfree(body_buf); body_buf = NULL; }
+                    PxConn* wc = (PxConn*)xmalloc(sizeof(PxConn));
+                    if (wc && px_conn_init(wc, fd) == 0) {
+                        g_cur_conn = wc;
+                        __sync_fetch_and_add(&g_px_inflight, 1);
+                        (void)px_ws_takeover_http_conn(wc, req, path, w_idx, w_manual);
+                        g_cur_conn = NULL;
+                        px_evc_detach(fd);          // 摘事件循环登记（与 px_pxpend_close 同序）
+                        px_conn_owner_free(wc);     // M235：引用计数收尾（close + 释放对象）
+                        __sync_fetch_and_sub(&g_px_inflight, 1);
+                        px_root_pop();
+                        return px_null();   // 已接管（0）或未接管（-1）都不再回 HTTP 管道：
+                                            // 后者与 ws_serve 的槽满行为一致（关连接，不留半开）
+                    }
+                    if (wc) xfree(wc);
+                    // 建对象失败（明文路径无分配，理论不达）⇒ 落回普通路径
+                }
+            }
+        }
+#endif
 
         // 5.5（M83-S6 / Issue 19 GAP-SRV-SSE）：http_stream 流式路由优先——
         //    命中 → 连接转 SSE 通道（复用 sse_send/sse_close/sse_write），不再走普通 handler。
@@ -21447,7 +21506,8 @@ static LXValue bi_sse_close(LXValue* args, int nargs, void* ctx) {
 // 流式路由精确匹配（调用方需持 g_stream_mu）；命中返回路由下标，否则 -1
 static int stream_match(const char* path, int method_bit) {
     for (int i = 0; i < MAX_STREAM_ROUTES; i++) {
-        if (g_stream_routes[i].active && strcmp(g_stream_routes[i].path, path) == 0
+        if (g_stream_routes[i].active && !g_stream_routes[i].is_ws
+            && strcmp(g_stream_routes[i].path, path) == 0
             && (g_stream_routes[i].mmask & method_bit)) return i;
     }
     return -1;
@@ -21518,6 +21578,7 @@ static LXValue bi_http_stream(LXValue* args, int nargs, void* ctx) {
     // 复用既有槽位（同路径重注册）时**必须整体重置**选项，否则旧 options 残留
     g_stream_routes[idx].mmask = mmask;
     g_stream_routes[idx].manual = manual;
+    g_stream_routes[idx].is_ws = 0;   // M236：复用槽位须整体重置（否则 WS 标记残留）
     g_stream_routes[idx].novr = novr;
     for (int i = 0; i < novr; i++) {
         snprintf(g_stream_routes[idx].oname[i], 64, "%s", oname[i]);
@@ -21530,6 +21591,107 @@ static LXValue bi_http_stream(LXValue* args, int nargs, void* ctx) {
     px_set_global(key, fn);
     return px_bool(true);
 }
+
+#ifndef PX_NO_WS
+// ==================== M236：ws_stream —— WebSocket 升级接管路由（晨曦特性请求）====================
+// 口径与动机见 docs/WS_UPGRADE.md。与 http_stream **同构**（同一张 g_stream_routes 表，
+//   用 is_ws 区分两类接管），差别三点：
+//     ① 只接受 GET（RFC 6455 握手方法固定为 GET；给别的 ⇒ **响亮报错**，不静默忽略）；
+//     ② 默认由**运行时**写 101（Sec-WebSocket-Accept 由运行时算 —— 语言层不必自己 SHA1）；
+//     ③ opts.manual: true ⇒ 运行时**不写** 101，由语言层调 ws_reply_101(conn) 完成握手
+//        （用于「先鉴权/子协议协商、再升级」；拒绝升级就直接返回或 ws_close）。
+//   回调签名 fn(conn, req)：conn 可直接用于 ws_send/ws_recv/ws_close/ws_ping/ws_conn_*。
+// 未支持的 opts（headers）**响亮报错**而非静默忽略（M199 缺陷 237「三元兜底」的教训）。
+
+// WS 升级路由精确匹配（只命中 is_ws=1 且含 GET 的路由）。调用方需持 g_stream_mu。
+//   分工：stream_match 只匹配 SSE 路由（已排除 is_ws），本函数只匹配 WS ⇒ 同一张表互不串扰。
+static int stream_match_ws(const char* path) {
+    for (int i = 0; i < MAX_STREAM_ROUTES; i++) {
+        if (g_stream_routes[i].active && g_stream_routes[i].is_ws
+            && (g_stream_routes[i].mmask & HTTP_MM_GET)
+            && strcmp(g_stream_routes[i].path, path) == 0) return i;
+    }
+    return -1;
+}
+
+// ws_stream(path, on_connect[, opts]) → bool
+static LXValue bi_ws_stream(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if ((nargs != 2 && nargs != 3) || args[0].type != PX_STR)
+        px_error("R1002: ws_stream 需要 (path, on_connect[, opts]) 参数");
+    const char* p = args[0].as.obj->as.str.data;
+    if (p[0] != '/') px_error("R1002: ws_stream 的 path 必须以 / 开头");
+    LXValue fn = args[1];
+    if (fn.type != PX_FUNC && fn.type != PX_NATIVE)
+        px_error("R1002: ws_stream 的 on_connect 必须是函数");
+
+    int mmask = HTTP_MM_GET;
+    int manual = 0;
+    if (nargs == 3) {
+        if (args[2].type != PX_DICT) px_error("R1002: ws_stream 的 opts 必须是字典");
+        LXValue mv = px_dict_get(args[2], "methods");
+        if (mv.type != PX_NULL) {
+            if (mv.type != PX_LIST) px_error("R1002: ws_stream 的 opts.methods 必须是列表");
+            int mm = 0;
+            for (int i = 0; i < mv.as.obj->as.list.len; i++) {
+                LXValue it = mv.as.obj->as.list.items[i];
+                if (it.type != PX_STR)
+                    px_error("R1002: ws_stream 的 opts.methods 元素必须是字符串");
+                int b = http_method_bit(it.as.obj->as.str.data);
+                if (!b) px_error("R1002: ws_stream 的 opts.methods 含未知方法: %s",
+                                 it.as.obj->as.str.data);
+                if (!(b & HTTP_MM_GET))
+                    px_error("R1002: ws_stream 只支持 GET（RFC 6455 握手方法固定为 GET），"
+                             "实际给了 %s", it.as.obj->as.str.data);
+                mm |= b;
+            }
+            if (mm) mmask = mm;
+        }
+        if (px_is_truthy(px_dict_get(args[2], "manual"))) manual = 1;
+        // M199 纪律：不支持的选项**响亮**，不静默忽略
+        LXValue hv = px_dict_get(args[2], "headers");
+        if (hv.type != PX_NULL)
+            px_error("R1002: ws_stream 暂不支持 opts.headers（101 的 Upgrade/Connection/"
+                     "Sec-WebSocket-Accept 三项由 RFC 6455 规定、不可覆写）");
+    }
+
+    pthread_mutex_lock(&g_stream_mu);
+    // 同路径已成**异类**路由 ⇒ 响亮拒绝：两类接管语义不同，静默覆盖会让先注册者永久失效
+    for (int i = 0; i < MAX_STREAM_ROUTES; i++) {
+        if (g_stream_routes[i].active && !g_stream_routes[i].is_ws
+            && strcmp(g_stream_routes[i].path, p) == 0) {
+            pthread_mutex_unlock(&g_stream_mu);
+            px_error("R1002: ws_stream 的 path %s 已被 http_stream（SSE）注册 —— 同一路径不能"
+                     "同时是 SSE 与 WS 路由", p);
+        }
+    }
+    int idx = -1;
+    for (int i = 0; i < MAX_STREAM_ROUTES; i++) {
+        if (g_stream_routes[i].active && g_stream_routes[i].is_ws
+            && strcmp(g_stream_routes[i].path, p) == 0) { idx = i; break; }
+    }
+    if (idx < 0) {
+        for (int i = 0; i < MAX_STREAM_ROUTES; i++) {
+            if (!g_stream_routes[i].active) { idx = i; break; }
+        }
+        if (idx < 0) { pthread_mutex_unlock(&g_stream_mu); return px_bool(false); }
+        snprintf(g_stream_routes[idx].path, sizeof(g_stream_routes[idx].path), "%s", p);
+        g_stream_routes[idx].active = 1;
+    }
+    // 复用既有槽位须**整体重置**（M131 老教训：旧选项残留）
+    g_stream_routes[idx].mmask = mmask;
+    g_stream_routes[idx].manual = manual;
+    g_stream_routes[idx].novr = 0;
+    g_stream_routes[idx].is_ws = 1;
+    pthread_mutex_unlock(&g_stream_mu);
+    // handler 存全局表（GC 扫描根），连接线程经全局表取回
+    char key[300];
+    snprintf(key, sizeof(key), "__wsstream_fn_%d", idx);
+    px_set_global(key, fn);
+    return px_bool(true);
+}
+#endif   // PX_NO_WS
+
 
 // http_stream 连接接管（http_conn_worker 线程内）：已解析的 HTTP 请求连接 → SSE 流式连接。
 static LXValue stream_takeover_conn(int fd, LXValue req, int route_idx) {
@@ -25907,6 +26069,40 @@ static LXValue px_conn_worker(LXValue* args, int nargs, void* ctx) {
                 // 不升级：继续走下面的公共管道（HTTP/1.1）
             }
         }
+#ifndef PX_NO_WS
+        // ═══ M236：WebSocket 升级接管（晨曦特性请求 · 见 docs/WS_UPGRADE.md）═══
+        // 位置与理由：**h2c 块之后、公共管道之前** —— WS 路由因此天然优先于 vhost/route/
+        //   静态（晨曦要的「同一监听、同一进程」），而 `Upgrade: h2c` 的既有口径
+        //   （忽略升级、按 h1.1 服务）一字未动。
+        // 未命中 / 未注册 / 非 WS 请求 ⇒ 直接落回下面的公共管道（对既有程序零影响）。
+        {
+            LXValue upg_ws = px_header_get(&headers, "Upgrade");
+            if (upg_ws.type == PX_STR && strcasestr(upg_ws.as.obj->as.str.data, "websocket")
+                && px_ws_can_takeover(req)) {
+                int w_idx = -1;
+                int w_manual = 0;
+                pthread_mutex_lock(&g_stream_mu);
+                w_idx = stream_match_ws(path);
+                if (w_idx >= 0) w_manual = g_stream_routes[w_idx].manual;
+                pthread_mutex_unlock(&g_stream_mu);
+                if (w_idx >= 0) {
+                    // 体相关资源先释放（WS 握手是 GET，正常无体；防御式收尾）
+                    if (body_tmp_file >= 0) { close(body_tmp_file); body_tmp_file = -1; }
+                    if (body_tmp_path[0]) { unlink(body_tmp_path); body_tmp_path[0] = 0; }
+                    if (body_buf) { xfree(body_buf); body_buf = NULL; }
+                    if (px_ws_takeover_http_conn(conn, req, path, w_idx, w_manual) == 0) {
+                        px_reset_request_state();
+                        px_root_pop();        // M92-S2c：请求迭代登记作用域结束
+                        px_pxpend_close(fd);  // 连接与槽一并收尾（含 inflight-- / M235 引用计数）
+                        g_cur_conn = NULL;
+                        return px_null();     // worker 释放（WS 会话已在本线程内跑完）
+                    }
+                    // 未接管（g_ws_conns 槽满 / 写 101 失败）：连接按关闭处理，不让它半开
+                }
+            }
+        }
+#endif
+
         // M53-S2：req 就绪 → 公共请求管道（CORS/限流/vhost/路由/静态/.px；输出经
         // PxHttpOut）。async_ok=1：route VM handler 命中可拆段帧协程执行（M98-S2a）。
         int dret = px_http_dispatch(&out, req, method, path, query,

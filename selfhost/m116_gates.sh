@@ -909,6 +909,7 @@ run m234_bytes_family bash examples/m234_bytes_family/verify.sh
 #   负控 A「忠实退回不做引用计数 ⇒ 必须崩」证明判据有牙。
 #   ⚠️ 负控 A 要重编 runtime（≈5 min）⇒ 本地跑全量档，CI 用 --neg-skip。
 run m235_ws_conn_uaf bash examples/m235_ws_conn_uaf/verify.sh
+run m236_ws_stream bash examples/m236_ws_stream/verify.sh
 step "M229 · 门锚点哨兵（改了源码 ⇒ 旧门的补丁锚点还在不在）"
 #   为什么有：这条纪律**已复发 6 次**（M161/M164/M178+M227/M228 连带 M227/M229 连带 M190）。
 #   判据：门文件里 `assert s.count(x)==1` 的锚点 blob 必须在 runtime/selfhost/tools/stdlib 里仍能找到。

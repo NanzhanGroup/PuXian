@@ -1,0 +1,22 @@
+# M236 门探针 · 服务端（manual 模式：101 由语言层调 ws_reply_101 完成）
+var mport = 18802
+let mav = args()
+if len(mav) > 1:
+    mport = int(mav[1])
+
+def secure(conn, req):
+    q = req["query"]
+    if contains(q, "token=ok"):
+        ok = ws_reply_101(conn)
+        print("SEC 101=" + str(ok))
+        ws_send(conn, "auth-ok")
+        msg = ws_recv(conn, 2000)
+        print("SEC got=" + str(msg))
+        ws_close(conn)
+    else:
+        # 拒绝升级：**不**写 101（manual 模式下 101 由语言层决定）
+        print("SEC reject q=" + q)
+        ws_close(conn)
+
+ws_stream("/agent/secure", secure, {"manual": true})
+px_serve(mport, ".", 30000, {})

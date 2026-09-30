@@ -1,0 +1,6 @@
+# M236 拒绝侧 1：path 不以 / 开头 ⇒ R1002（响亮，不静默注册失败）
+def rej1_h(conn, req):
+    return null
+
+ws_stream("nope", rej1_h)
+print("SHOULD-NOT-REACH")
