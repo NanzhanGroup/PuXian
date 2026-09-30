@@ -883,6 +883,9 @@ step "M229 · tuple/result 方法面全量对拍（M226 覆盖面补齐 · 缺�
 #   ⚠️ 负控 A/B 各要完整重建一次 runtime（~6-8 min）⇒ 本地跑负控，CI 用 --neg-skip。
 run m229_result_tuple bash examples/m229_result_tuple/verify.sh
 run m230_index_slice bash examples/m230_index_slice/verify.sh
+# M231（第 109 轮 · 缺陷 346）：**运算符 × 逐类型组合**全量矩阵（315 例 × 3 轨）。
+#   负控 A/B/C 各要重编解释轨 / 两轨驱动（≈3–8 min/次），本地全量门跑全量档；CI 用 --neg-skip。
+run m231_op_matrix bash examples/m231_op_matrix/verify.sh
 step "M229 · 门锚点哨兵（改了源码 ⇒ 旧门的补丁锚点还在不在）"
 #   为什么有：这条纪律**已复发 6 次**（M161/M164/M178+M227/M228 连带 M227/M229 连带 M190）。
 #   判据：门文件里 `assert s.count(x)==1` 的锚点 blob 必须在 runtime/selfhost/tools/stdlib 里仍能找到。
