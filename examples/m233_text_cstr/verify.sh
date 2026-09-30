@@ -56,8 +56,17 @@ echo "── [1] 静态与源码派生"
 AUDIT_OUT=$(python3 "$D/gen_probes.py" --root "$ROOT" --audit 2>&1); AUDIT_RC=$?
 echo "$AUDIT_OUT" | sed 's/^/     /'
 chk "源码派生：兜底渲染器已统一到 px_cstr_any（含反向判据）" "[ $AUDIT_RC -eq 0 ]"
+# ⚠️ **M234 连带更新（第 112 轮）**：M234 又给 `bytes_base64` / `bytes_concat` 加了
+#   `i_cstr_arg` ⇒ 总数从 5 变 7。判据改为「**下限 + 逐个点名** M233 引入的五个站点」
+#   （精确到函数名）—— 比原来的**等式**更稳（不会因后续新增而失效），且**更有牙**
+#   （点名后「某个站点被悄悄删掉」仍会判红）。
 NCI=$(grep -c 'i_cstr_arg(args\[0\])' "$ROOT/selfhost/ibuiltin.px" || true)
-chk "解释轨标记值规范化在位（5 处）" "[ ${NCI:-0} -eq 5 ]"
+M233_SITES="sha256 md5 base64_encode ord bytes_to_hex"
+SITES_OK=1
+for f in $M233_SITES; do
+    grep -qF "$f(i_cstr_arg(args[0]))" "$ROOT/selfhost/ibuiltin.px" || SITES_OK=0
+done
+chk "解释轨标记值规范化在位（≥5 处 · 现 $NCI · 五个站点点名）" "[ ${NCI:-0} -ge 5 ] && [ $SITES_OK -eq 1 ]"
 python3 "$D/gen_probes.py" --root "$ROOT" --gen >/dev/null 2>&1
 cp -f "$D/drv.px" "$W/gen_again.px"
 python3 "$D/gen_probes.py" --root "$ROOT" --gen >/dev/null 2>&1
