@@ -20,6 +20,8 @@
 #   [4] 负控 A：忠实退回「不做引用计数」⇒ 形态一必须**崩**（判据有牙）
 #   [5] 负控 B：判据自伤（把崩溃检测改成恒绿）⇒ A 的红必须**消失**
 #   [6] 覆盖边界登记
+#   [8] 分配器配对（缺陷 354，M235s1）：PxConn 由 `xmalloc` 创建 ⇒ 释放必须 `xfree`
+#       （裸 `free(c)` 会让 px_serve 每关一条连接就 `free(): invalid pointer` ⇒ SIGABRT）
 #
 # 用法：verify.sh [--neg-skip] [--runs N]
 # ============================================================
@@ -296,8 +298,48 @@ cat <<'EOF'
     ⇒ 每连接泄漏 sizeof(PxConn)≈16.4KB。本轮**未动**该契约（避免引入新的悬垂风险）。
   · **未覆盖**：wss **客户端**连接（ws_connect wss://）的同款交错；其路径共用
     px_conn_read/write，理论上同修，但未单独构造用例。
+  · ⚠️ **本门的动态面只覆盖 ws 路径**：M235 的**连带改动**（http 路径
+    `px_conn_close(c); xfree(c);` → `px_conn_owner_free(c)`）不在本门内 ——
+    而缺陷 354（裸 `free(c)`）恰恰**只在 HTTP 路径（px_serve）显形**。
+    该面由既有门 **m173 / m176 / m180** 覆盖（它们当场判红，见 M235s1 报告）。
+    ⇒ 教训：**改了哪个调用点，门就必须覆盖那个调用点**。
 EOF
 ok "覆盖边界已登记"
+
+# ------------------------------------------------------------
+echo "[8] 分配器配对：PxConn 由 xmalloc 创建 ⇒ 释放必须 xfree（缺陷 354）"
+# ------------------------------------------------------------
+# 缺陷 354（M235s1）：M235 把 http 路径的 `px_conn_close(c); xfree(c);` 改写成
+#   `px_conn_owner_free(c)`，而新函数体里写的是 `free(c)` —— 对象来自 `xmalloc`，必须 `xfree`。
+#   **实跑后果**：px_serve 每关一条连接即 `free(): invalid pointer` ⇒ SIGABRT（rc=134）
+#   ⇒ m173 / m176 / m180 三个既有门当场判红（它们覆盖的就是 HTTP 路径）。
+#   历史：`xmalloc` 返回的是「跳过大小头」的指针，对它 `free()` 必然崩 —— **M201 记过一次**，
+#   这是第二次 ⇒ 升格为**通用铁律**：改释放点之前，先问「这个指针是谁分配的」。
+# 判据（可判定、无推断）：① 分配点确为 xmalloc；② 两个释放点全部 xfree；③ 裸 free(c) 计数 0。
+# ⚠️ 判据实现纪律（M223/M226）：**不要在 destroy 与 free 之间用固定行数窗口** ——
+#   首版用 `grep -A1`，而修复时在两者之间插了注释 ⇒ 窗口落到注释行 ⇒ **裸 free(c) 也数成 0**
+#   （假阴）。改为：去掉注释后做**空白无关**匹配，与插几行注释无关。
+read -r N_XMALLOC N_BAD N_XFREE <<EOF
+$(python3 - <<'PY'
+import re
+s = open("runtime/runtime.c", encoding="utf-8").read()
+s = re.sub(r"/\*.*?\*/", "", s, flags=re.S)
+s = re.sub(r"//[^\n]*", "", s)
+print(s.count("xmalloc(sizeof(PxConn))"),
+      len(re.findall(r"pthread_mutex_destroy\(&c->mu\);\s*free\(c\);", s)),
+      len(re.findall(r"pthread_mutex_destroy\(&c->mu\);\s*xfree\(c\);", s)))
+PY
+)
+EOF
+[ "$N_XMALLOC" -ge 1 ] \
+    && ok "PxConn 分配点确为 xmalloc（$N_XMALLOC 处 —— 判据前提成立）" \
+    || bad "PxConn 分配点不是 xmalloc ⇒ 本层判据前提失效（须重新推导）"
+[ "$N_BAD" -eq 0 ] \
+    && ok "两个对象释放点均无裸 free(c)" \
+    || bad "仍有 $N_BAD 处裸 free(c) —— 对象来自 xmalloc，运行期必 abort"
+[ "$N_XFREE" -ge 2 ] \
+    && ok "xfree(c) 释放点 $N_XFREE 处（≥2：px_conn_release + px_conn_owner_free）" \
+    || bad "xfree(c) 只 $N_XFREE 处（应为 2）⇒ 对象释放不配对"
 
 echo
 echo "结果：通过 $PASS / 失败 $FAIL"

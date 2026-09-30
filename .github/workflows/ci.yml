@@ -184,13 +184,16 @@ jobs:
       - name: 内置名册防漂移（单一事实源：runtime 注册表 → lint_core.px 生成块）
         run: |
           bash selfhost/builtin_list_check.sh
-      - name: 生态索引防漂移（stdlib → ecosystem_index.json + native_index.json + ECOSYSTEM/CHEATSHEET 同步）
+      - name: 派生索引防漂移（stdlib/runtime → ecosystem_index.json + native_index.json + native_mod_map.txt）
+        # M235s1：第三个生成物 runtime/native_mod_map.txt 原先**没有任何门**（四个生成器里唯一漏网的），
+        #   而它是 px build 自动裁剪的依据 —— 陈旧 ⇒ 正在用的 native 归属不到模块 ⇒ 该模块被折掉 ⇒ R1001。
         run: |
           chmod +x bootstrap/pxi
           ./bootstrap/pxi tools/gen_ecosystem.px
           bash tools/gen_native_table.sh
-          git diff --exit-code -- docs/ecosystem_index.json docs/native_index.json || { echo "❌ stdlib/runtime 变更未同步生态/native 索引 → 重跑生成器并同步 docs/ECOSYSTEM.md 与 docs/PUXIAN_CHEATSHEET.md"; exit 1; }
-          echo "✅ 生态索引与 stdlib 一致 + native 清单与 runtime 一致"
+          bash tools/gen_native_map.sh --update
+          git diff --exit-code -- docs/ecosystem_index.json docs/native_index.json runtime/native_mod_map.txt || { echo "❌ stdlib/runtime 变更未同步派生索引（ecosystem/native/mod_map）→ 重跑生成器并同步 docs/ECOSYSTEM.md 与 docs/PUXIAN_CHEATSHEET.md"; exit 1; }
+          echo "✅ 生态索引与 stdlib 一致 + native 清单与 runtime 一致 + 裁剪模块映射与注册点一致"
       - name: 工具自测（m64_fmt / m64_lint / m65_lsp / m65_mcp + m66_yaml/pxml/lunar + m71_mcp_build + m82_http_serve_unix + m116/m117/m118 真实缺陷用例）
         # M216s5：**step 级 timeout 45 分钟**。为什么要单独设（而不是只靠 job 的 60）：
         #   job 级超时会把**后面所有 step 直接 skip**（含 `if: failure()` 的诊断 step）⇒
