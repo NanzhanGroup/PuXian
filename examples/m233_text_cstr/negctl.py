@@ -45,21 +45,25 @@ _LEG_A = ('static const char* val_cstr(LXValue v) {\n'
           '    snprintf(tmp, PX_TMPSZ, "%s", fmt_num(v));\n'
           '    return tmp;\n'
           '}\n')
-_CALL_B = "i_cstr_arg(args[0])"
-_RAW_B = "args[0]"
+# ⚠️ **M234 连带更新（第 112 轮）**：M234 又给 `bytes_base64` / `bytes_concat` 加了
+#   `i_cstr_arg` 调用 ⇒ 原来「一把替换全部 i_cstr_arg(args[0])」的锚点命中数从 5 变 7
+#   （本门报「锚点不唯一」）。按纪律「**判据跟着结构走**」：改成**逐个点名** M233 引入的
+#   五个站点（精确到函数名）⇒ 与 M234 的新增互不干扰。
+_B_SITES = ["sha256", "md5", "base64_encode", "ord", "bytes_to_hex"]
 
 # 每条 = (文件, 旧文本, 新文本, 期望命中次数)
 PATCHES = {
     "A": [("runtime/runtime.c", _BODY_A, _LEG_A, 1),
           ("runtime/runtime.c", _B_DATA, _LEG_DATA, 1),
           ("runtime/runtime.c", _BLEN, _LEG_BLEN, 1)],
-    "B": [("selfhost/ibuiltin.px", _CALL_B, _RAW_B, 5)],
+    "B": [("selfhost/ibuiltin.px", "%s(i_cstr_arg(args[0]))" % f,
+           "%s(args[0])" % f, 1) for f in _B_SITES],
 }
 ANCHORS = {                          # 必须命中断言次数的锚点
     "A": [("runtime/runtime.c", _BODY_A, 1),
           ("runtime/runtime.c", _B_DATA, 1),
           ("runtime/runtime.c", _BLEN, 1)],
-    "B": [("selfhost/ibuiltin.px", _CALL_B, 5)],
+    "B": [("selfhost/ibuiltin.px", "%s(i_cstr_arg(args[0]))" % f, 1) for f in _B_SITES],
 }
 
 

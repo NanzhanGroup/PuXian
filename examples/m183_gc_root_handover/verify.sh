@@ -140,9 +140,14 @@ chk_198() {          # ② 198 直接判据（UAFDET 武装）
     grep -q 'PX_GC_UAFDET' "$WORK/s3.out" && return 1
     grep -q '^M37_S3_OK$' "$WORK/s3.out"
 }
-chk_199() {          # ③b 199 判据：px_exec 的 env/srv 登记（只判「不得报 UAFDET」，子进程成败不判）
+chk_199() {          # ③b 199 判据：px_exec 的 env/srv 登记
+    # ⚠️ **M234 连带更新（第 112 轮 · 缺陷 352 同批）**：修前只判「**不得报 UAFDET**」、
+    #   **忽略子进程退出码**。而 M233 把「任意值 ⇒ 其 str() 形态」的兜底统一到
+    #   `px_cstr_any`（渲染改走**堆**）⇒ 同一处打桩的**症状从「报 UAFDET」变成「SIGSEGV」**
+    #   ⇒ 判据不再有牙（全量门实测：负控 D 报「未判红」，而日志里其实是 `Segmentation fault`）。
+    #   按纪律「**判据跟着现象走**」：**进程必须正常退出**（rc=0）**且**不得报 UAFDET。
     build "$WORK/m32_hot_reload.px" m32 || return 1
-    env PX_GC_UAFDET=1 PX_GC_STRESS=1 PX_GC_INLINE=1 timeout 300 "$WORK/bm32/build/m32_hot_reload" > "$WORK/m32.out" 2>&1
+    env PX_GC_UAFDET=1 PX_GC_STRESS=1 PX_GC_INLINE=1 timeout 300 "$WORK/bm32/build/m32_hot_reload" > "$WORK/m32.out" 2>&1 || return 1
     ! grep -q 'PX_GC_UAFDET' "$WORK/m32.out"
 }
 chk_handover_inline() {
