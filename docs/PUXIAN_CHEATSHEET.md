@@ -3090,3 +3090,31 @@ set_timeout(fn (): print("once after 2s"), 2000)
        判据三层：三轨一致 · `MODEL.tsv` 双向 · **确定性**（不同进程布局两遍逐字节一致）。
      · **边界**：二元接口取**逐位置**形态（非全叉积 —— 1352 例在解释轨需 68 分钟/轨）；
        `bytes_get`/`bytes_set` 的**下标**面已在 M189 覆盖；fd 语义接口不在面内。
+
+### M235（第 113 轮）· **WebSocket 连接的生命周期与握手元信息**
+
+- ⚠️ **同一 conn 的「关闭」与「并发读/写」原来会 UAF**（缺陷 353 · 已修）：
+  `px_conn_close()` 会 `mbedtls_ssl_free() + free(c->ssl)`，而 `px_conn_read/write`
+  只在**入口**查 `c->closed` ⇒ 另一线程 close 后本线程仍用**已释放的 ssl 上下文**
+  ⇒ SIGSEGV（崩在 `mbedtls_debug_print_msg` 读 `ssl->conf`）。
+  修法 = **引用计数 + 延迟释放**：`acquire/release` 包裹读写，`close` 只标记 +
+  `shutdown(fd, SHUT_RD)` 唤醒阻塞者；**确有使用者在读**时才把释放推后到它退出
+  （无人并发的路径释放时机与修前一致，不引入延迟/泄漏）。
+- 📌 **并发边界（必读）**：本仓 mbedTLS 3.6.2 预编译库**未编线程支持**
+  （`MBEDTLS_THREADING_C` 关 ⇒ **库内无锁**，M101 已记）。
+  - ✅ 一条线程读 + 另一条线程**关闭**同一连接 —— **安全**（M235 起）
+  - ⚠️ 一条线程读 + 另一条线程**写**同一连接（都不关闭）—— **仍是 data race**
+    （「双向中转用两条 `spawn` 泵」正是这个形态；实测通常能跑，但**不是保证**）
+  - ✅ 两条线程操作**不同**连接 —— 安全
+  - **推荐写法**：单执行流 + 超时轮询 `ws_recv(conn, timeout_ms)`（无数据返回 `null`，
+    连接仍可用）⇒ 完全避开并发。详见 `docs/WS_CONN_LIFECYCLE.md`。
+- ✨ **握手元信息三个新 API**（修前握手头读完即丢 ⇒ 多节点路由/限流做不了）：
+
+  | API | 返回 | 语义 |
+  |---|---|---|
+  | `ws_conn_path(conn)` | `str` | 握手请求行的 path（如 `/agent/cx-node-7`）；无则 `""` |
+  | `ws_conn_peer(conn)` | `str` | 对端 `"ip:port"`（AF_INET/AF_INET6）；无则 `""` |
+  | `ws_conn_header(conn, name)` | `str \| null` | **握手那一刻**的请求头，大小写不敏感；未命中 `null` |
+
+  连接不存在/信息缺失 ⇒ 空串或 `null`，**不抛错**（与 `ws_send`/`ws_recv` 口径一致）。
+  绑定的是**握手时**的信息（连接建立后客户端再发的帧不在此列）。

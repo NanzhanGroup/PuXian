@@ -454,6 +454,10 @@ LXValue bi_ws_broadcast(LXValue* args, int nargs, void* ctx);
 LXValue bi_ws_recv(LXValue* args, int nargs, void* ctx);
 LXValue bi_ws_close(LXValue* args, int nargs, void* ctx);
 LXValue bi_ws_ping(LXValue* args, int nargs, void* ctx);
+// M235：ws 连接元信息（握手 path / 请求头 / 对端地址）
+LXValue bi_ws_conn_path(LXValue* args, int nargs, void* ctx);
+LXValue bi_ws_conn_peer(LXValue* args, int nargs, void* ctx);
+LXValue bi_ws_conn_header(LXValue* args, int nargs, void* ctx);
 // M26：内置自动心跳（定时 ping + 死链检测）
 LXValue bi_ws_heartbeat(LXValue* args, int nargs, void* ctx);
 // M23d P1：RSA 非对称加密（实现 runtime_rsa.c）
@@ -760,6 +764,19 @@ typedef struct PxConn {
     int closed;        // 连接已关闭（px_conn_close 置 1；对象保留避免并发 use-after-free）
     int owned;         // M32：1 = ssl/conf/ctr_drbg/entropy 独立 malloc（px_conn_close 释放）；
                        //      0 = 指向外部 HttpsSession（wss 客户端，由 px_https_close_ex 释放）
+    // ── M235（缺陷 353）：引用计数 —— 「关闭」与「并发使用」的竞态收口 ──
+    //   病灶：px_conn_close 会 mbedtls_ssl_free + free(c->ssl)，而 px_conn_read/write 只在
+    //   **入口**检查 c->closed ⇒ 检查通过后另一线程 close ⇒ 继续用已释放的 ssl ⇒ SIGSEGV
+    //   （实测崩在 mbedtls_debug_print_msg 读 ssl->conf；核心栈
+    //    mbedtls_ssl_read ← px_conn_read ← ws_read_frame ← bi_ws_recv ← ws_conn_worker）。
+    //   契约：**任何访问 c->ssl 的路径必须先 px_conn_acquire() 成功**，用完 px_conn_release()。
+    //   `refs` 是**使用者**计数（不含创建者）—— 这样 close 时若无人正在读写就立即释放资源，
+    //   与原行为一致；只有「确有使用者在阻塞读」时才把释放推后到它退出。
+    pthread_mutex_t mu;      // 只保护 refs/closed/pending_free/freed（不覆盖 IO）
+    int refs;                // 使用中（acquire）计数
+    int pending_free;        // close 时有使用者在 ⇒ 等最后一个 release 执行资源释放
+    int freed;               // TLS 资源 + fd 已释放（幂等闸门）
+    int obj_free_pending;    // 创建者已放手 ⇒ 最后一个 release free 对象
 } PxConn;
 
 // 初始化（fd 上做 TLS 握手若服务端 TLS 已注册；失败返回 -1）
@@ -767,6 +784,10 @@ int px_conn_init(PxConn* c, int fd);
 ssize_t px_conn_read(PxConn* c, void* buf, size_t n);
 ssize_t px_conn_write(PxConn* c, const void* buf, size_t n);
 void px_conn_close(PxConn* c);
+// M235（缺陷 353）：引用计数 API（语义见 PxConn 注释）
+int  px_conn_acquire(PxConn* c);      // 1 = 拿到引用（可安全访问 ssl）；0 = 已关闭/已释放
+void px_conn_release(PxConn* c);      // 释放引用（归零时执行挂起的资源释放 / 对象 free）
+void px_conn_owner_free(PxConn* c);   // 仅对象创建者：close + 释放对象（有使用者在则延后）
 // 当前线程正在处理的连接（px_px_send 等旧 fd 接口自动转发 TLS 写）
 extern __thread PxConn* g_cur_conn;
 // 在途请求数（px_serve/sse_serve/ws_serve 连接线程计数；优雅关闭等待归零）

@@ -47,6 +47,13 @@ static struct {
     int hb_active;           // 心跳线程已启动（防重复）
     PxConn* conn;            // M27：连接对象（明文/TLS 统一读写；TLS 时共享指针）
     void* hs;                // M32：wss 客户端 HttpsSession*（关闭时释放）
+    // ── M235：握手元信息（晨曦 ws-edge 需求）──
+    //   修前 `ws_server_handshake` 读完请求头即 `free(head)` ⇒ path 永久丢失，
+    //   语言层也没有任何 API 能拿到 path/对端地址 ⇒ 多节点路由、单 IP 限流、审计
+    //   全部做不了（ws-edge §七.3/§七.4 记载的两处缺口）。此处把它们随连接留存。
+    char path[512];          // 握手请求行里的 path（如 "/agent/cx-node-7"）
+    char* hdrs;              // 握手请求头原文（malloc，为 NULL 表示无；槽复用时释放）
+    char peer[72];           // 对端 "ip:port"（getpeername，AF_INET/AF_INET6）
 } g_ws_conns[MAX_WS_CONNS];
 static int64_t g_ws_next_id = 1;
 // M38：客户端自动重连配置（conn id → url/重连间隔 ms；明文 ws:// 重连）
@@ -77,7 +84,14 @@ static int ws_find(int64_t id) {
 
 static int ws_alloc_slot(void) {
     for (int i = 0; i < MAX_WS_CONNS; i++) {
-        if (!g_ws_conns[i].active) return i;
+        if (!g_ws_conns[i].active) {
+            // M235：槽是按需复用（而非每连接释放）⇒ 握手头原文在此处归还，
+            //   保证泄漏有界（≤ MAX_WS_CONNS 份）。
+            if (g_ws_conns[i].hdrs) { free(g_ws_conns[i].hdrs); g_ws_conns[i].hdrs = NULL; }
+            g_ws_conns[i].path[0] = 0;
+            g_ws_conns[i].peer[0] = 0;
+            return i;
+        }
     }
     return -1;
 }
@@ -332,17 +346,30 @@ static void ws_accept_key(const char* key, char* out) {
 }
 
 // 服务端握手：读请求 → 校验 → 发 101。返回 0 成功。
-static int ws_server_handshake(PxConn* c) {
+// M235：out_path/out_head 为输出参数（可为 NULL）。成功时二者所有权移交调用方
+//   （head 可能为 NULL —— 分配失败时退化为「无头信息」，不影响握手本身）。
+static int ws_server_handshake(PxConn* c, char** out_path, char** out_head) {
     char* head = NULL;
     int hlen = 0;
     if (ws_read_http_header(c, &head, &hlen) < 0) return -1;
     if (strncmp(head, "GET ", 4) != 0) { free(head); return -1; }
     char* key = ws_header_value(head, "Sec-WebSocket-Key");
     char* upgrade = ws_header_value(head, "Upgrade");
-    free(head);
+    // M235：请求行 = "GET <path> HTTP/1.1" ⇒ 取第一、二空格之间的片段。
+    char* path = (char*)malloc(512);
+    if (path) {
+        path[0] = 0;
+        const char* sp = strchr(head + 4, ' ');
+        if (sp) {
+            size_t pl = (size_t)(sp - (head + 4));
+            if (pl > 0 && pl < 511) { memcpy(path, head + 4, pl); path[pl] = 0; }
+        }
+    }
     if (!key || !upgrade || strcasecmp(upgrade, "websocket") != 0) {
         if (key) free(key);
         if (upgrade) free(upgrade);
+        if (path) free(path);
+        free(head);
         return -1;
     }
     char accept[64];
@@ -353,7 +380,13 @@ static int ws_server_handshake(PxConn* c) {
     int rl = snprintf(resp, sizeof(resp),
         "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n",
         accept);
-    if (px_conn_write(c, resp, (size_t)rl) < 0) return -1;
+    if (px_conn_write(c, resp, (size_t)rl) < 0) {
+        if (path) free(path);
+        free(head);
+        return -1;
+    }
+    if (out_path) *out_path = path; else if (path) free(path);
+    if (out_head) *out_head = head; else free(head);
     return 0;
 }
 
@@ -485,8 +518,10 @@ LXValue ws_conn_worker(LXValue* args, int nargs, void* ctx) {
     if (px_conn_init(c, fd) != 0) { free(c); return px_null(); }
     g_cur_conn = c;
     __sync_fetch_and_add(&g_px_inflight, 1);
-    // 1. 握手
-    if (ws_server_handshake(c) < 0) {
+    // 1. 握手（M235：同时取回 path 与请求头原文）
+    char* hs_path = NULL;
+    char* hs_head = NULL;
+    if (ws_server_handshake(c, &hs_path, &hs_head) < 0) {
         px_conn_close(c);  // 对象保留（closed 标记）
         __sync_fetch_and_sub(&g_px_inflight, 1);
         g_cur_conn = NULL;
@@ -511,6 +546,33 @@ LXValue ws_conn_worker(LXValue* args, int nargs, void* ctx) {
     g_ws_conns[slot].last_activity = 0;
     g_ws_conns[slot].hb_active = 0;
     g_ws_conns[slot].conn = c;
+    // M235：随连接留存握手元信息（path / 请求头 / 对端地址）
+    g_ws_conns[slot].path[0] = 0;
+    if (hs_path) {
+        snprintf(g_ws_conns[slot].path, sizeof(g_ws_conns[slot].path), "%s", hs_path);
+        free(hs_path);
+    }
+    g_ws_conns[slot].hdrs = hs_head;   // 所有权移交（ws_alloc_slot 复用时归还）
+    g_ws_conns[slot].peer[0] = 0;
+    {
+        struct sockaddr_storage ss;
+        socklen_t sl = sizeof(ss);
+        if (getpeername(fd, (struct sockaddr*)&ss, &sl) == 0) {
+            char ip[64];
+            ip[0] = 0;
+            int prt = 0;
+            if (ss.ss_family == AF_INET) {
+                struct sockaddr_in* s4 = (struct sockaddr_in*)&ss;
+                inet_ntop(AF_INET, &s4->sin_addr, ip, sizeof(ip));
+                prt = ntohs(s4->sin_port);
+            } else if (ss.ss_family == AF_INET6) {
+                struct sockaddr_in6* s6 = (struct sockaddr_in6*)&ss;
+                inet_ntop(AF_INET6, &s6->sin6_addr, ip, sizeof(ip));
+                prt = ntohs(s6->sin6_port);
+            }
+            if (ip[0]) snprintf(g_ws_conns[slot].peer, sizeof(g_ws_conns[slot].peer), "%s:%d", ip, prt);
+        }
+    }
     pthread_mutex_unlock(&g_ws_mu);
     // M36：服务端自动心跳（ws_serve opts{heartbeat:{interval_ms,timeout_ms}}）
     if (g_ws_hb_interval > 0) {
@@ -1031,6 +1093,60 @@ LXValue bi_ws_close(LXValue* args, int nargs, void* ctx) {
     pthread_mutex_unlock(&g_ws_mu);
     px_conn_close(c);  // 对象保留
     return px_bool(true);
+}
+
+// ==================== M235：ws 连接元信息 API ====================
+// 这三个函数解决的是「握手信息读完即丢」这一个根因的两处表现（晨曦 ws-edge）：
+//   · 多节点路由 `/agent/<节点>` 需要 path；
+//   · 单 IP 限流 / 审计 / 白名单需要对端地址。
+// 语义：连接不存在或信息缺失 ⇒ 返回空串（path/peer）/ null（header 未命中），
+//   不抛错 —— 与 ws_send/ws_recv 的「连接不在 ⇒ 安静失败」口径一致。
+
+// ws_conn_path(conn) → str（握手请求的 path；无则 ""）
+LXValue bi_ws_conn_path(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_INT) px_error("R1002: ws_conn_path 需要 (conn) 参数");
+    int64_t conn = args[0].as.i;
+    char buf[512];
+    buf[0] = 0;
+    pthread_mutex_lock(&g_ws_mu);
+    int idx = ws_find(conn);
+    if (idx >= 0) snprintf(buf, sizeof(buf), "%s", g_ws_conns[idx].path);
+    pthread_mutex_unlock(&g_ws_mu);
+    return px_str(buf);   // 分配在锁外（g_ws_mu 只保护注册表，不覆盖分配/GC）
+}
+
+// ws_conn_peer(conn) → str（对端 "ip:port"；无则 ""）
+LXValue bi_ws_conn_peer(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 1 || args[0].type != PX_INT) px_error("R1002: ws_conn_peer 需要 (conn) 参数");
+    int64_t conn = args[0].as.i;
+    char buf[72];
+    buf[0] = 0;
+    pthread_mutex_lock(&g_ws_mu);
+    int idx = ws_find(conn);
+    if (idx >= 0) snprintf(buf, sizeof(buf), "%s", g_ws_conns[idx].peer);
+    pthread_mutex_unlock(&g_ws_mu);
+    return px_str(buf);
+}
+
+// ws_conn_header(conn, name) → str | null（握手请求头，大小写不敏感；未命中 ⇒ null）
+// 注意：返回的是**握手那一刻**的请求头（连接建立后客户端再发的帧不在此列）。
+LXValue bi_ws_conn_header(LXValue* args, int nargs, void* ctx) {
+    (void)ctx;
+    if (nargs != 2 || args[0].type != PX_INT || args[1].type != PX_STR)
+        px_error("R1002: ws_conn_header 需要 (conn, name) 参数");
+    int64_t conn = args[0].as.i;
+    const char* nm = args[1].as.obj->as.str.data;
+    char* found = NULL;
+    pthread_mutex_lock(&g_ws_mu);
+    int idx = ws_find(conn);
+    if (idx >= 0 && g_ws_conns[idx].hdrs) found = ws_header_value(g_ws_conns[idx].hdrs, nm);
+    pthread_mutex_unlock(&g_ws_mu);
+    if (!found) return px_null();
+    LXValue r = px_str(found);   // 同样在锁外构造
+    free(found);
+    return r;
 }
 
 // ws_ping(conn) → bool（发送 ping 帧；心跳保活，对端应回 pong）

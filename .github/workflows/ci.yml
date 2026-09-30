@@ -767,6 +767,17 @@ jobs:
           grep -E '^(   |── )' /tmp/v_m234.log | tail -20
           echo "✅ m234_bytes_family verify（209 例 × 3 轨 · 三轨一致 + 确定性 · 源码派生「px_type_name 标记识别在位」）PASS"
 
+      # M235（第 113 轮 · 缺陷 353）：**ws 连接「关闭 vs 并发使用」竞态（UAF）** ——
+      #   引用计数收口 + 握手元信息（ws_conn_path / ws_conn_peer / ws_conn_header）。
+      #   起因：晨曦 ws-edge 在 m231 上「一次真实中转即崩」。本步跑 --neg-skip 档（负控 A
+      #   需重编 runtime ≈5 min，本地全量门跑完整档）。
+      - name: m235_ws_conn_uaf（ws 连接关闭竞态 UAF · 12+6 次零崩溃 + 元信息 4 项）
+        if: always()
+        run: |
+          bash examples/m235_ws_conn_uaf/verify.sh --neg-skip > /tmp/v_m235.log 2>&1 || { echo "❌ m235_ws_conn_uaf verify 失败"; grep -E '^(   |── |❌|  FAIL)' /tmp/v_m235.log | tail -30; export GHA_ANNOTATION_FAIL=1; exit 1; }
+          grep -E '^(   |── )' /tmp/v_m235.log | tail -20
+          echo "✅ m235_ws_conn_uaf verify（形态一 12 次 + 形态二 6 次「崩溃 0」· 元信息 path/peer/header 4 项 · 静态 8 项）PASS"
+
 
       # M222 补（第 100 轮 · 第 100 轮收口）：**让 M221 的产物指纹短路「在 CI 上是否生效」可观测**。
       #   动机（实测，别当猜测）：M221 短路在本机微测上确证有效（重建 17s → 复用 0s），

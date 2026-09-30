@@ -1,0 +1,49 @@
+# ============================================================
+# ws_relay_repro.px —— M235 形态二：ws-edge 的真实形态（双向中转）
+#   主线：cli → up 的泵；spawn：up → cli 的泵。
+#   两端任一断开 ⇒ 另一个泵 ws_close 同一个 conn ⇒ 与 ws_conn_worker 的
+#   「handler 返回后读帧循环」并发 ⇒ 同一类 UAF。
+# 环境变量：M235_CERT / M235_KEY / M235_PORT / M235_UP_PORT
+# ============================================================
+def log(msg):
+    print("[" + time_format(now_ms() // 1000, "%Y-%m-%d %H:%M:%S", TZ_OFF) + "] " + msg)
+TZ_OFF = "+08:00"
+def pump_up(cli, up):
+    while true:
+        m = ws_recv(cli)
+        if m == null:
+            break
+        if ws_send(up, m) == false:
+            break
+    ws_close(up)
+def pump_down(cli, up):
+    while true:
+        m = ws_recv(up)
+        if m == null:
+            break
+        if ws_send(cli, m) == false:
+            break
+    ws_close(cli)
+def on_conn(cli):
+    up = ws_connect("ws://127.0.0.1:" + str(UP_PORT) + "/agent")
+    if up == null:
+        log("⚠️ upstream connect failed, drop cli=" + str(cli))
+        ws_close(cli)
+        return
+    log("↔ relay established cli=" + str(cli) + " up=" + str(up))
+    spawn pump_down(cli, up)
+    pump_up(cli, up)
+    log("✕ relay done cli=" + str(cli))
+UP_PORT = 0
+def main():
+    cert = str(env("M235_CERT"))
+    key = str(env("M235_KEY"))
+    port = int(str(env("M235_PORT")))
+    UP_PORT = int(str(env("M235_UP_PORT")))
+    r = tls_server(cert, key)
+    if r != true:
+        log("❌ tls_server failed: " + str(r))
+        exit(1)
+    log("✅ tls registered on " + str(port))
+    ws_serve(port, on_conn)
+main()
