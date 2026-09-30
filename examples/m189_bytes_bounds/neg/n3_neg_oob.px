@@ -1,4 +1,4 @@
-# M189 负判据③：负索引越界（归一后报 -7）
+# M189 负判据③：负索引越界（M230 起报**用户原值** -9；此前报归一化后的 -7）
 var b = hex_to_bytes("aabb")
 print("before")
 print(bytes_get(b, -9))
