@@ -1,0 +1,518 @@
+struct S1:
+    a: int
+
+enum E1:
+    A
+    B
+
+def userfn():
+    return 1
+
+def t0():
+    print("sha256__int_0|" + str(sha256(0)) + "|" + str(sha256(str(0))))
+def t1():
+    print("sha256__int_7|" + str(sha256(7)) + "|" + str(sha256(str(7))))
+def t2():
+    print("sha256__int_neg|" + str(sha256(0 - 7)) + "|" + str(sha256(str(0 - 7))))
+def t3():
+    print("sha256__float_0|" + str(sha256(0.0)) + "|" + str(sha256(str(0.0))))
+def t4():
+    print("sha256__float_15|" + str(sha256(1.5)) + "|" + str(sha256(str(1.5))))
+def t5():
+    print("sha256__float_neg|" + str(sha256(0.0 - 1.5)) + "|" + str(sha256(str(0.0 - 1.5))))
+def t6():
+    print("sha256__str_empty|" + str(sha256("")) + "|" + str(sha256(str(""))))
+def t7():
+    print("sha256__str_ab|" + str(sha256("ab")) + "|" + str(sha256(str("ab"))))
+def t8():
+    print("sha256__str_cjk|" + str(sha256("中文")) + "|" + str(sha256(str("中文"))))
+def t9():
+    print("sha256__bytes_ab|" + str(sha256(bytes("ab"))) + "|" + str(sha256(str(bytes("ab")))))
+def t10():
+    print("sha256__bytes_empty|" + str(sha256(bytes(""))) + "|" + str(sha256(str(bytes("")))))
+def t11():
+    print("sha256__bool_t|" + str(sha256(true)) + "|" + str(sha256(str(true))))
+def t12():
+    print("sha256__bool_f|" + str(sha256(false)) + "|" + str(sha256(str(false))))
+def t13():
+    print("sha256__null_v|" + str(sha256(null)) + "|" + str(sha256(str(null))))
+def t14():
+    print("sha256__list_1|" + str(sha256([1])) + "|" + str(sha256(str([1]))))
+def t15():
+    print("sha256__list_empty|" + str(sha256([])) + "|" + str(sha256(str([]))))
+def t16():
+    print("sha256__dict_a1|" + str(sha256({"a": 1})) + "|" + str(sha256(str({"a": 1}))))
+def t17():
+    print("sha256__dict_empty|" + str(sha256({})) + "|" + str(sha256(str({}))))
+def t18():
+    print("sha256__tuple_1|" + str(sha256((1,))) + "|" + str(sha256(str((1,)))))
+def t19():
+    print("sha256__tuple_empty|" + str(sha256(())) + "|" + str(sha256(str(()))))
+def t20():
+    print("sha256__result_ok|" + str(sha256(Ok(1))) + "|" + str(sha256(str(Ok(1)))))
+def t21():
+    print("sha256__result_err|" + str(sha256(Err("e"))) + "|" + str(sha256(str(Err("e")))))
+def t22():
+    print("sha256__enum_a|" + str(sha256(E1.A)) + "|" + str(sha256(str(E1.A))))
+def t23():
+    print("sha256__struct_v|" + str(sha256(S1(1))) + "|" + str(sha256(str(S1(1)))))
+def t24():
+    print("sha256__fn_v|" + str(sha256(userfn)) + "|" + str(sha256(str(userfn))))
+def t25():
+    print("md5__int_0|" + str(md5(0)) + "|" + str(md5(str(0))))
+def t26():
+    print("md5__int_7|" + str(md5(7)) + "|" + str(md5(str(7))))
+def t27():
+    print("md5__int_neg|" + str(md5(0 - 7)) + "|" + str(md5(str(0 - 7))))
+def t28():
+    print("md5__float_0|" + str(md5(0.0)) + "|" + str(md5(str(0.0))))
+def t29():
+    print("md5__float_15|" + str(md5(1.5)) + "|" + str(md5(str(1.5))))
+def t30():
+    print("md5__float_neg|" + str(md5(0.0 - 1.5)) + "|" + str(md5(str(0.0 - 1.5))))
+def t31():
+    print("md5__str_empty|" + str(md5("")) + "|" + str(md5(str(""))))
+def t32():
+    print("md5__str_ab|" + str(md5("ab")) + "|" + str(md5(str("ab"))))
+def t33():
+    print("md5__str_cjk|" + str(md5("中文")) + "|" + str(md5(str("中文"))))
+def t34():
+    print("md5__bytes_ab|" + str(md5(bytes("ab"))) + "|" + str(md5(str(bytes("ab")))))
+def t35():
+    print("md5__bytes_empty|" + str(md5(bytes(""))) + "|" + str(md5(str(bytes("")))))
+def t36():
+    print("md5__bool_t|" + str(md5(true)) + "|" + str(md5(str(true))))
+def t37():
+    print("md5__bool_f|" + str(md5(false)) + "|" + str(md5(str(false))))
+def t38():
+    print("md5__null_v|" + str(md5(null)) + "|" + str(md5(str(null))))
+def t39():
+    print("md5__list_1|" + str(md5([1])) + "|" + str(md5(str([1]))))
+def t40():
+    print("md5__list_empty|" + str(md5([])) + "|" + str(md5(str([]))))
+def t41():
+    print("md5__dict_a1|" + str(md5({"a": 1})) + "|" + str(md5(str({"a": 1}))))
+def t42():
+    print("md5__dict_empty|" + str(md5({})) + "|" + str(md5(str({}))))
+def t43():
+    print("md5__tuple_1|" + str(md5((1,))) + "|" + str(md5(str((1,)))))
+def t44():
+    print("md5__tuple_empty|" + str(md5(())) + "|" + str(md5(str(()))))
+def t45():
+    print("md5__result_ok|" + str(md5(Ok(1))) + "|" + str(md5(str(Ok(1)))))
+def t46():
+    print("md5__result_err|" + str(md5(Err("e"))) + "|" + str(md5(str(Err("e")))))
+def t47():
+    print("md5__enum_a|" + str(md5(E1.A)) + "|" + str(md5(str(E1.A))))
+def t48():
+    print("md5__struct_v|" + str(md5(S1(1))) + "|" + str(md5(str(S1(1)))))
+def t49():
+    print("md5__fn_v|" + str(md5(userfn)) + "|" + str(md5(str(userfn))))
+def t50():
+    print("base64_encode__int_0|" + str(base64_encode(0)) + "|" + str(base64_encode(str(0))))
+def t51():
+    print("base64_encode__int_7|" + str(base64_encode(7)) + "|" + str(base64_encode(str(7))))
+def t52():
+    print("base64_encode__int_neg|" + str(base64_encode(0 - 7)) + "|" + str(base64_encode(str(0 - 7))))
+def t53():
+    print("base64_encode__float_0|" + str(base64_encode(0.0)) + "|" + str(base64_encode(str(0.0))))
+def t54():
+    print("base64_encode__float_15|" + str(base64_encode(1.5)) + "|" + str(base64_encode(str(1.5))))
+def t55():
+    print("base64_encode__float_neg|" + str(base64_encode(0.0 - 1.5)) + "|" + str(base64_encode(str(0.0 - 1.5))))
+def t56():
+    print("base64_encode__str_empty|" + str(base64_encode("")) + "|" + str(base64_encode(str(""))))
+def t57():
+    print("base64_encode__str_ab|" + str(base64_encode("ab")) + "|" + str(base64_encode(str("ab"))))
+def t58():
+    print("base64_encode__str_cjk|" + str(base64_encode("中文")) + "|" + str(base64_encode(str("中文"))))
+def t59():
+    print("base64_encode__bytes_ab|" + str(base64_encode(bytes("ab"))) + "|" + str(base64_encode(str(bytes("ab")))))
+def t60():
+    print("base64_encode__bytes_empty|" + str(base64_encode(bytes(""))) + "|" + str(base64_encode(str(bytes("")))))
+def t61():
+    print("base64_encode__bool_t|" + str(base64_encode(true)) + "|" + str(base64_encode(str(true))))
+def t62():
+    print("base64_encode__bool_f|" + str(base64_encode(false)) + "|" + str(base64_encode(str(false))))
+def t63():
+    print("base64_encode__null_v|" + str(base64_encode(null)) + "|" + str(base64_encode(str(null))))
+def t64():
+    print("base64_encode__list_1|" + str(base64_encode([1])) + "|" + str(base64_encode(str([1]))))
+def t65():
+    print("base64_encode__list_empty|" + str(base64_encode([])) + "|" + str(base64_encode(str([]))))
+def t66():
+    print("base64_encode__dict_a1|" + str(base64_encode({"a": 1})) + "|" + str(base64_encode(str({"a": 1}))))
+def t67():
+    print("base64_encode__dict_empty|" + str(base64_encode({})) + "|" + str(base64_encode(str({}))))
+def t68():
+    print("base64_encode__tuple_1|" + str(base64_encode((1,))) + "|" + str(base64_encode(str((1,)))))
+def t69():
+    print("base64_encode__tuple_empty|" + str(base64_encode(())) + "|" + str(base64_encode(str(()))))
+def t70():
+    print("base64_encode__result_ok|" + str(base64_encode(Ok(1))) + "|" + str(base64_encode(str(Ok(1)))))
+def t71():
+    print("base64_encode__result_err|" + str(base64_encode(Err("e"))) + "|" + str(base64_encode(str(Err("e")))))
+def t72():
+    print("base64_encode__enum_a|" + str(base64_encode(E1.A)) + "|" + str(base64_encode(str(E1.A))))
+def t73():
+    print("base64_encode__struct_v|" + str(base64_encode(S1(1))) + "|" + str(base64_encode(str(S1(1)))))
+def t74():
+    print("base64_encode__fn_v|" + str(base64_encode(userfn)) + "|" + str(base64_encode(str(userfn))))
+def t75():
+    print("ord__int_0|" + str(ord(0)) + "|" + str(ord(str(0))))
+def t76():
+    print("ord__int_7|" + str(ord(7)) + "|" + str(ord(str(7))))
+def t77():
+    print("ord__int_neg|" + str(ord(0 - 7)) + "|" + str(ord(str(0 - 7))))
+def t78():
+    print("ord__float_0|" + str(ord(0.0)) + "|" + str(ord(str(0.0))))
+def t79():
+    print("ord__float_15|" + str(ord(1.5)) + "|" + str(ord(str(1.5))))
+def t80():
+    print("ord__float_neg|" + str(ord(0.0 - 1.5)) + "|" + str(ord(str(0.0 - 1.5))))
+def t81():
+    print("ord__str_empty|" + str(ord("")) + "|" + str(ord(str(""))))
+def t82():
+    print("ord__str_ab|" + str(ord("ab")) + "|" + str(ord(str("ab"))))
+def t83():
+    print("ord__str_cjk|" + str(ord("中文")) + "|" + str(ord(str("中文"))))
+def t84():
+    print("ord__bytes_ab|" + str(ord(bytes("ab"))) + "|" + str(ord(str(bytes("ab")))))
+def t85():
+    print("ord__bytes_empty|" + str(ord(bytes(""))) + "|" + str(ord(str(bytes("")))))
+def t86():
+    print("ord__bool_t|" + str(ord(true)) + "|" + str(ord(str(true))))
+def t87():
+    print("ord__bool_f|" + str(ord(false)) + "|" + str(ord(str(false))))
+def t88():
+    print("ord__null_v|" + str(ord(null)) + "|" + str(ord(str(null))))
+def t89():
+    print("ord__list_1|" + str(ord([1])) + "|" + str(ord(str([1]))))
+def t90():
+    print("ord__list_empty|" + str(ord([])) + "|" + str(ord(str([]))))
+def t91():
+    print("ord__dict_a1|" + str(ord({"a": 1})) + "|" + str(ord(str({"a": 1}))))
+def t92():
+    print("ord__dict_empty|" + str(ord({})) + "|" + str(ord(str({}))))
+def t93():
+    print("ord__tuple_1|" + str(ord((1,))) + "|" + str(ord(str((1,)))))
+def t94():
+    print("ord__tuple_empty|" + str(ord(())) + "|" + str(ord(str(()))))
+def t95():
+    print("ord__result_ok|" + str(ord(Ok(1))) + "|" + str(ord(str(Ok(1)))))
+def t96():
+    print("ord__result_err|" + str(ord(Err("e"))) + "|" + str(ord(str(Err("e")))))
+def t97():
+    print("ord__enum_a|" + str(ord(E1.A)) + "|" + str(ord(str(E1.A))))
+def t98():
+    print("ord__struct_v|" + str(ord(S1(1))) + "|" + str(ord(str(S1(1)))))
+def t99():
+    print("ord__fn_v|" + str(ord(userfn)) + "|" + str(ord(str(userfn))))
+def t100():
+    print("bytes_to_hex__int_0|" + str(bytes_to_hex(0)) + "|" + str(bytes_to_hex(str(0))))
+def t101():
+    print("bytes_to_hex__int_7|" + str(bytes_to_hex(7)) + "|" + str(bytes_to_hex(str(7))))
+def t102():
+    print("bytes_to_hex__int_neg|" + str(bytes_to_hex(0 - 7)) + "|" + str(bytes_to_hex(str(0 - 7))))
+def t103():
+    print("bytes_to_hex__float_0|" + str(bytes_to_hex(0.0)) + "|" + str(bytes_to_hex(str(0.0))))
+def t104():
+    print("bytes_to_hex__float_15|" + str(bytes_to_hex(1.5)) + "|" + str(bytes_to_hex(str(1.5))))
+def t105():
+    print("bytes_to_hex__float_neg|" + str(bytes_to_hex(0.0 - 1.5)) + "|" + str(bytes_to_hex(str(0.0 - 1.5))))
+def t106():
+    print("bytes_to_hex__str_empty|" + str(bytes_to_hex("")) + "|" + str(bytes_to_hex(str(""))))
+def t107():
+    print("bytes_to_hex__str_ab|" + str(bytes_to_hex("ab")) + "|" + str(bytes_to_hex(str("ab"))))
+def t108():
+    print("bytes_to_hex__str_cjk|" + str(bytes_to_hex("中文")) + "|" + str(bytes_to_hex(str("中文"))))
+def t109():
+    print("bytes_to_hex__bytes_ab|" + str(bytes_to_hex(bytes("ab"))) + "|" + str(bytes_to_hex(str(bytes("ab")))))
+def t110():
+    print("bytes_to_hex__bytes_empty|" + str(bytes_to_hex(bytes(""))) + "|" + str(bytes_to_hex(str(bytes("")))))
+def t111():
+    print("bytes_to_hex__bool_t|" + str(bytes_to_hex(true)) + "|" + str(bytes_to_hex(str(true))))
+def t112():
+    print("bytes_to_hex__bool_f|" + str(bytes_to_hex(false)) + "|" + str(bytes_to_hex(str(false))))
+def t113():
+    print("bytes_to_hex__null_v|" + str(bytes_to_hex(null)) + "|" + str(bytes_to_hex(str(null))))
+def t114():
+    print("bytes_to_hex__list_1|" + str(bytes_to_hex([1])) + "|" + str(bytes_to_hex(str([1]))))
+def t115():
+    print("bytes_to_hex__list_empty|" + str(bytes_to_hex([])) + "|" + str(bytes_to_hex(str([]))))
+def t116():
+    print("bytes_to_hex__dict_a1|" + str(bytes_to_hex({"a": 1})) + "|" + str(bytes_to_hex(str({"a": 1}))))
+def t117():
+    print("bytes_to_hex__dict_empty|" + str(bytes_to_hex({})) + "|" + str(bytes_to_hex(str({}))))
+def t118():
+    print("bytes_to_hex__tuple_1|" + str(bytes_to_hex((1,))) + "|" + str(bytes_to_hex(str((1,)))))
+def t119():
+    print("bytes_to_hex__tuple_empty|" + str(bytes_to_hex(())) + "|" + str(bytes_to_hex(str(()))))
+def t120():
+    print("bytes_to_hex__result_ok|" + str(bytes_to_hex(Ok(1))) + "|" + str(bytes_to_hex(str(Ok(1)))))
+def t121():
+    print("bytes_to_hex__result_err|" + str(bytes_to_hex(Err("e"))) + "|" + str(bytes_to_hex(str(Err("e")))))
+def t122():
+    print("bytes_to_hex__enum_a|" + str(bytes_to_hex(E1.A)) + "|" + str(bytes_to_hex(str(E1.A))))
+def t123():
+    print("bytes_to_hex__struct_v|" + str(bytes_to_hex(S1(1))) + "|" + str(bytes_to_hex(str(S1(1)))))
+def t124():
+    print("bytes_to_hex__fn_v|" + str(bytes_to_hex(userfn)) + "|" + str(bytes_to_hex(str(userfn))))
+def main():
+    let c = env("M233_CASE")
+    if c == null:
+        print("usage")
+        return
+    let i = c
+    if i == "0":
+        t0()
+    elif i == "1":
+        t1()
+    elif i == "2":
+        t2()
+    elif i == "3":
+        t3()
+    elif i == "4":
+        t4()
+    elif i == "5":
+        t5()
+    elif i == "6":
+        t6()
+    elif i == "7":
+        t7()
+    elif i == "8":
+        t8()
+    elif i == "9":
+        t9()
+    elif i == "10":
+        t10()
+    elif i == "11":
+        t11()
+    elif i == "12":
+        t12()
+    elif i == "13":
+        t13()
+    elif i == "14":
+        t14()
+    elif i == "15":
+        t15()
+    elif i == "16":
+        t16()
+    elif i == "17":
+        t17()
+    elif i == "18":
+        t18()
+    elif i == "19":
+        t19()
+    elif i == "20":
+        t20()
+    elif i == "21":
+        t21()
+    elif i == "22":
+        t22()
+    elif i == "23":
+        t23()
+    elif i == "24":
+        t24()
+    elif i == "25":
+        t25()
+    elif i == "26":
+        t26()
+    elif i == "27":
+        t27()
+    elif i == "28":
+        t28()
+    elif i == "29":
+        t29()
+    elif i == "30":
+        t30()
+    elif i == "31":
+        t31()
+    elif i == "32":
+        t32()
+    elif i == "33":
+        t33()
+    elif i == "34":
+        t34()
+    elif i == "35":
+        t35()
+    elif i == "36":
+        t36()
+    elif i == "37":
+        t37()
+    elif i == "38":
+        t38()
+    elif i == "39":
+        t39()
+    elif i == "40":
+        t40()
+    elif i == "41":
+        t41()
+    elif i == "42":
+        t42()
+    elif i == "43":
+        t43()
+    elif i == "44":
+        t44()
+    elif i == "45":
+        t45()
+    elif i == "46":
+        t46()
+    elif i == "47":
+        t47()
+    elif i == "48":
+        t48()
+    elif i == "49":
+        t49()
+    elif i == "50":
+        t50()
+    elif i == "51":
+        t51()
+    elif i == "52":
+        t52()
+    elif i == "53":
+        t53()
+    elif i == "54":
+        t54()
+    elif i == "55":
+        t55()
+    elif i == "56":
+        t56()
+    elif i == "57":
+        t57()
+    elif i == "58":
+        t58()
+    elif i == "59":
+        t59()
+    elif i == "60":
+        t60()
+    elif i == "61":
+        t61()
+    elif i == "62":
+        t62()
+    elif i == "63":
+        t63()
+    elif i == "64":
+        t64()
+    elif i == "65":
+        t65()
+    elif i == "66":
+        t66()
+    elif i == "67":
+        t67()
+    elif i == "68":
+        t68()
+    elif i == "69":
+        t69()
+    elif i == "70":
+        t70()
+    elif i == "71":
+        t71()
+    elif i == "72":
+        t72()
+    elif i == "73":
+        t73()
+    elif i == "74":
+        t74()
+    elif i == "75":
+        t75()
+    elif i == "76":
+        t76()
+    elif i == "77":
+        t77()
+    elif i == "78":
+        t78()
+    elif i == "79":
+        t79()
+    elif i == "80":
+        t80()
+    elif i == "81":
+        t81()
+    elif i == "82":
+        t82()
+    elif i == "83":
+        t83()
+    elif i == "84":
+        t84()
+    elif i == "85":
+        t85()
+    elif i == "86":
+        t86()
+    elif i == "87":
+        t87()
+    elif i == "88":
+        t88()
+    elif i == "89":
+        t89()
+    elif i == "90":
+        t90()
+    elif i == "91":
+        t91()
+    elif i == "92":
+        t92()
+    elif i == "93":
+        t93()
+    elif i == "94":
+        t94()
+    elif i == "95":
+        t95()
+    elif i == "96":
+        t96()
+    elif i == "97":
+        t97()
+    elif i == "98":
+        t98()
+    elif i == "99":
+        t99()
+    elif i == "100":
+        t100()
+    elif i == "101":
+        t101()
+    elif i == "102":
+        t102()
+    elif i == "103":
+        t103()
+    elif i == "104":
+        t104()
+    elif i == "105":
+        t105()
+    elif i == "106":
+        t106()
+    elif i == "107":
+        t107()
+    elif i == "108":
+        t108()
+    elif i == "109":
+        t109()
+    elif i == "110":
+        t110()
+    elif i == "111":
+        t111()
+    elif i == "112":
+        t112()
+    elif i == "113":
+        t113()
+    elif i == "114":
+        t114()
+    elif i == "115":
+        t115()
+    elif i == "116":
+        t116()
+    elif i == "117":
+        t117()
+    elif i == "118":
+        t118()
+    elif i == "119":
+        t119()
+    elif i == "120":
+        t120()
+    elif i == "121":
+        t121()
+    elif i == "122":
+        t122()
+    elif i == "123":
+        t123()
+    elif i == "124":
+        t124()
+    else:
+        print("bad idx")

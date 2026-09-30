@@ -7516,18 +7516,56 @@ static char* px_tmp_slot(void) {
     return p;
 }
 
+// ═══ M233（第 111 轮 · 缺陷 348/349/350）：「任意值 → 文本」的**唯一兜底** ═══
+//   修前 `val_cstr` / `bdata` / `blen` 三处的兜底都写 `fmt_num(v)` —— 而 `fmt_num`
+//   **只对 int/float 正确**（它读的是 `v.as.i` / `v.as.f`）：
+//     · `bool`：`as.f` 是**位模式重解释** —— `true` 的 `as.b=1` 读成 double 得 `5e-324`
+//       ⇒ `sha256(true)` 算的是字符串 `"5e-324"`（静默错值）；
+//     · 容器 / struct / enum / result / function / native：`as.f` 读的是 **`as.obj` 指针位**
+//       ⇒ ① **非确定**（实测同一二进制同一输入连跑 5 次得 5 个不同长度 / 5 个不同哈希）
+//          ② **把堆地址位当文本吐出去**（`base64_encode([1])` 的 base64 里就是 ASLR 位）
+//     · 叠加第二层：`g_tmp_ring` 每槽只有 `PX_TMPSZ`(64) 字节 ⇒ 长渲染**静默截断**。
+//   语义（依据 `docs/ERROR_CODES.md` §6.5「文本语义」豁免）：这些接口对任意值**必须**
+//   取「其 `str()` 形态」—— 与语言里 `str(x)` 同源，且**确定**。
+//   ⇒ 兜底一律走**通用渲染** `px_fmt_value_n`（= `str()` 的实现本体）；
+//      数字与 null/bool 保留**无分配**快路径（渲染长度天然受控）；
+//      其余类型放**堆**上（长度不受 64 限制），生命周期由 TLS 指针环管理
+//      （与 M202 的 `g_tmp_ring` 同口径：**取值后不要假设同一指针跨两次取值仍有效**）。
+#define PX_CSTR_RING 8
+static __thread char* g_cstr_ring[PX_CSTR_RING];
+static __thread unsigned g_cstr_ring_i = 0;
+
+static const char* px_cstr_any(LXValue v, int* out_len) {
+    if (v.type == PX_STR || v.type == PX_BYTES) {
+        if (out_len) *out_len = v.as.obj->as.str.len;
+        return v.as.obj->as.str.data;              // 对象自身缓冲：不占槽、不拷贝
+    }
+    if (v.type == PX_NULL) { if (out_len) *out_len = 4; return "null"; }
+    if (v.type == PX_BOOL) {
+        if (v.as.b) { if (out_len) *out_len = 4; return "true"; }
+        if (out_len) *out_len = 5; return "false";
+    }
+    if (v.type == PX_INT || v.type == PX_FLOAT) {
+        char* tmp = px_tmp_slot();
+        int n = snprintf(tmp, PX_TMPSZ, "%s", fmt_num(v));
+        if (out_len) *out_len = n;
+        return tmp;
+    }
+    // 其余类型：通用渲染（与 str() 同源）+ 堆 + TLS 指针环
+    int n = 0;
+    char* s = px_fmt_value_n(v, &n);
+    unsigned slot = g_cstr_ring_i;
+    g_cstr_ring_i = (g_cstr_ring_i + 1) % PX_CSTR_RING;
+    if (g_cstr_ring[slot]) xfree(g_cstr_ring[slot]);
+    g_cstr_ring[slot] = s;
+    if (out_len) *out_len = n;
+    return s;
+}
+
 static const char* val_cstr(LXValue v) {
-    if (v.type == PX_STR) return v.as.obj->as.str.data;
-    // M129（Issue 87 缺陷 35）：null 必须字符串化为 "null"，与 `str(null)` 一致。
-    //   原先落到 fmt_num()：null 的 as.f 恰为 0.0 ⇒ 得到 **"0.0"** —— 于是
-    //   `sha256(null)` = sha256("0.0")、`base64_encode(null)` = base64("0.0")，
-    //   **静默给出错误结果**（不是崩溃，最难查）。`str()` 走的是另一条路，故此前
-    //   二者行为不一致（str(null)=="null" 而 sha256(null) 按 "0.0" 算）。
-    if (v.type == PX_NULL) return "null";
-    // M202（缺陷 244）：**每线程轮转环**，不再用一处共享 static（见 px_tmp_slot 注释）
-    char* tmp = px_tmp_slot();
-    snprintf(tmp, PX_TMPSZ, "%s", fmt_num(v));
-    return tmp;
+    // M129（Issue 87 缺陷 35）：null 必须字符串化为 "null"（`str(null)` 一致）——
+    //   现由 `px_cstr_any` 统一保证；M233 起该保证覆盖**全部**类型，不再只覆盖 null。
+    return px_cstr_any(v, NULL);
 }
 
 // 跨模块版本（runtime_ws.c 等外部模块用；val_cstr 为 static 不可见）
@@ -13587,15 +13625,27 @@ static LXValue bi_signal(LXValue* args, int nargs, void* ctx) {
 // 字符串/字节串统一取 data+len（二进制安全，可含 NUL；PX_STR 与 PX_BYTES 均可；
 // 数值自动字符串化——与解释器 bytes_of 的 to_string 语义一致）
 static const char* bdata(LXValue v) {
-    if (v.type == PX_STR || v.type == PX_BYTES) return v.as.obj->as.str.data;
-    // M202（缺陷 244）：**每线程轮转环**（同 val_cstr；见 px_tmp_slot 注释）
-    char* tmp = px_tmp_slot();
-    snprintf(tmp, PX_TMPSZ, "%s", fmt_num(v));
-    return tmp;
+    // M233（缺陷 349）：兜底改走与 `val_cstr` **同一个**「任意值 → 文本」入口
+    //   （修前是 `snprintf("%s", fmt_num(v))` ⇒ 非数值实参读 union 垃圾）。
+    return px_cstr_any(v, NULL);
 }
 static int blen(LXValue v) {
+    // M233（缺陷 349）：修前这里**二次渲染**（`strlen(bdata(v))` ⇒ 又占一个 tmp 槽，
+    //   且两次渲染取的是不同槽）—— 现在按**显式长度**返回，与 `bdata` 同源同值。
+    //   ⚠️ 刻意**不占** `g_cstr_ring` 槽（渲染完立即释放）：`bdata(x); blen(x);` 成对出现，
+    //      若 `blen` 也占槽会白白把环的预算减半（8 槽预算要留给「一次调用里多个实参」）。
     if (v.type == PX_STR || v.type == PX_BYTES) return v.as.obj->as.str.len;
-    return (int)strlen(bdata(v));
+    if (v.type == PX_NULL) return 4;
+    if (v.type == PX_BOOL) return v.as.b ? 4 : 5;
+    if (v.type == PX_INT || v.type == PX_FLOAT) {
+        int n = 0;
+        (void)px_cstr_any(v, &n);
+        return n;
+    }
+    int n = 0;
+    char* s = px_fmt_value_n(v, &n);
+    xfree(s);
+    return n;
 }
 
 // bytes(s) → bytes（字符串/字节串 UTF-8 字节原样）

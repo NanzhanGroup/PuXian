@@ -891,6 +891,12 @@ run m231_op_matrix bash examples/m231_op_matrix/verify.sh
 #   缺陷 347 = 两份真值性实现**各漏一个分支**（ival 缺 bytes · runtime 缺 PX_TUPLE）。
 #   ⚠️ 负控 B 要重编解释轨 + 两轨驱动（≈2–3 min）⇒ 本地跑全量档，CI 用 --neg-skip。
 run m232_truthiness bash examples/m232_truthiness/verify.sh
+# M233（第 111 轮 · 缺陷 348/349/350/351）：**文本语义接口 × 逐类型实参**全量对拍（125 例 × 3 轨）。
+#   主题：§6.5「任意值 ⇒ 其 str() 形态」这一侧从来没被度量过 —— 三处兜底（val_cstr/bdata/blen）
+#   都用 fmt_num（只对 int/float 正确）⇒ 非确定 + 指针位泄漏；另照出解释轨的标记字典表示泄漏。
+#   判据三层：三轨一致 · 对齐（f(x) ⇄ f(str(x))）· **确定性**（不同进程布局两遍逐字节一致）。
+#   ⚠️ 负控 A/B 要重编解释轨 + 两轨驱动（≈2–4 min）⇒ 本地跑全量档，CI 用 --neg-skip。
+run m233_text_cstr bash examples/m233_text_cstr/verify.sh
 step "M229 · 门锚点哨兵（改了源码 ⇒ 旧门的补丁锚点还在不在）"
 #   为什么有：这条纪律**已复发 6 次**（M161/M164/M178+M227/M228 连带 M227/M229 连带 M190）。
 #   判据：门文件里 `assert s.count(x)==1` 的锚点 blob 必须在 runtime/selfhost/tools/stdlib 里仍能找到。
