@@ -886,6 +886,11 @@ run m230_index_slice bash examples/m230_index_slice/verify.sh
 # M231（第 109 轮 · 缺陷 346）：**运算符 × 逐类型组合**全量矩阵（315 例 × 3 轨）。
 #   负控 A/B/C 各要重编解释轨 / 两轨驱动（≈3–8 min/次），本地全量门跑全量档；CI 用 --neg-skip。
 run m231_op_matrix bash examples/m231_op_matrix/verify.sh
+# M232（第 110 轮 · 缺陷 347）：**真值性表 + 短路族**全量对拍（46 例 × 3 轨）。
+#   主题：M231 显式排除的短路族，换「真值性」判据来量同一个面。
+#   缺陷 347 = 两份真值性实现**各漏一个分支**（ival 缺 bytes · runtime 缺 PX_TUPLE）。
+#   ⚠️ 负控 B 要重编解释轨 + 两轨驱动（≈2–3 min）⇒ 本地跑全量档，CI 用 --neg-skip。
+run m232_truthiness bash examples/m232_truthiness/verify.sh
 step "M229 · 门锚点哨兵（改了源码 ⇒ 旧门的补丁锚点还在不在）"
 #   为什么有：这条纪律**已复发 6 次**（M161/M164/M178+M227/M228 连带 M227/M229 连带 M190）。
 #   判据：门文件里 `assert s.count(x)==1` 的锚点 blob 必须在 runtime/selfhost/tools/stdlib 里仍能找到。

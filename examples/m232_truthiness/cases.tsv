@@ -1,0 +1,47 @@
+idx	kind	tag	expr	expect	basis
+0	T	int_0	0	F	scalar-zero
+1	T	int_1	1	T	scalar-nonzero
+2	T	int_neg1	0 - 1	T	scalar-nonzero
+3	T	float_00	0.0	F	scalar-zero
+4	T	float_15	1.5	T	scalar-nonzero
+5	T	str_empty	""	F	container-empty
+6	T	str_x	"x"	T	container-nonempty
+7	T	bytes_empty	bytes("")	F	container-empty
+8	T	bytes_x	bytes("x")	T	container-nonempty
+9	T	list_empty	[]	F	container-empty
+10	T	list_1	[1]	T	container-nonempty
+11	T	dict_empty	{}	F	container-empty
+12	T	dict_a1	{"a": 1}	T	container-nonempty
+13	T	tuple_empty	()	F	container-empty
+14	T	tuple_1	(1,)	T	container-nonempty
+15	T	null_v	null	F	null
+16	T	bool_false	false	F	scalar-zero
+17	T	bool_true	true	T	scalar-nonzero
+18	T	fn_v	userfn	T	opaque-always
+19	T	struct_v	S1(1)	T	opaque-always
+20	T	enum_v	E1.A	T	opaque-always
+21	T	result_ok	Ok(1)	T	opaque-always
+22	T	result_err	Err("e")	T	opaque-always
+23	S	and_false	false and rhs("A")	false|[]	rhs-unevaluated-falsy-lhs
+24	S	and_true	true and rhs("A")	true|[A]	rhs-evaluated-truthy-lhs
+25	S	and_zero	0 and rhs("A")	0|[]	rhs-unevaluated-falsy-lhs
+26	S	and_estr	"" and rhs("A")	|[]	rhs-unevaluated-falsy-lhs
+27	S	and_null	null and rhs("A")	null|[]	rhs-unevaluated-falsy-lhs
+28	S	and_ebytes	bytes("") and rhs("A")	<bytes 0>|[]	rhs-unevaluated-falsy-lhs
+29	S	and_etuple	() and rhs("A")	()|[]	rhs-unevaluated-falsy-lhs
+30	S	or_true	true or rhs("A")	true|[]	rhs-unevaluated-truthy-lhs
+31	S	or_false	false or rhs("A")	true|[A]	rhs-evaluated-falsy-lhs
+32	S	or_one	1 or rhs("A")	1|[]	rhs-unevaluated-truthy-lhs
+33	S	or_zero	0 or rhs("A")	true|[A]	rhs-evaluated-falsy-lhs
+34	S	or_ebytes	bytes("") or rhs("A")	true|[A]	rhs-evaluated-falsy-lhs
+35	S	or_etuple	() or rhs("A")	true|[A]	rhs-evaluated-falsy-lhs
+36	S	nc_one	1 ?? rhs("A")	1|[]	coalesce-null-only
+37	S	nc_null	null ?? rhs("A")	true|[A]	coalesce-null-only
+38	S	nc_zero	0 ?? rhs("A")	0|[]	coalesce-null-only
+39	S	nc_estr	"" ?? rhs("A")	|[]	coalesce-null-only
+40	S	nc_false	false ?? rhs("A")	false|[]	coalesce-null-only
+41	S	nc_ebytes	bytes("") ?? rhs("A")	<bytes 0>|[]	coalesce-null-only
+42	S	nc_etuple	() ?? rhs("A")	()|[]	coalesce-null-only
+43	P	pipe_inc	3 |> inc	4	pipe-first-arg
+44	P	pipe_len	"ab" |> len	2	pipe-first-arg
+45	P	pipe_chain	3 |> inc |> inc	5	pipe-left-fold

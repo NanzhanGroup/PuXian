@@ -1,0 +1,485 @@
+# M232 探针驱动器（自动生成 · 勿手改）
+# 面 ① 真值性表（5 个观察点：bool() / not / if / and / or）
+# 面 ②③ 短路族（返回值 + 副作用日志）
+# 面 ④ |> 管道
+var LOG = []
+
+def rhs(tag):
+    LOG.append(tag)
+    return true
+
+def inc(x):
+    return x + 1
+
+def userfn():
+    return 1
+
+struct S1:
+    a: int
+
+enum E1:
+    A
+    B
+
+def t0():
+    let v = 0
+    var s = "int_0"
+    s += "|" + str(bool(v))
+    s += "|" + str(not v)
+    if v:
+        s += "|T"
+    else:
+        s += "|F"
+    s += "|" + str(v and 1)
+    s += "|" + str(v or 1)
+    print(s)
+def t1():
+    let v = 1
+    var s = "int_1"
+    s += "|" + str(bool(v))
+    s += "|" + str(not v)
+    if v:
+        s += "|T"
+    else:
+        s += "|F"
+    s += "|" + str(v and 1)
+    s += "|" + str(v or 1)
+    print(s)
+def t2():
+    let v = 0 - 1
+    var s = "int_neg1"
+    s += "|" + str(bool(v))
+    s += "|" + str(not v)
+    if v:
+        s += "|T"
+    else:
+        s += "|F"
+    s += "|" + str(v and 1)
+    s += "|" + str(v or 1)
+    print(s)
+def t3():
+    let v = 0.0
+    var s = "float_00"
+    s += "|" + str(bool(v))
+    s += "|" + str(not v)
+    if v:
+        s += "|T"
+    else:
+        s += "|F"
+    s += "|" + str(v and 1)
+    s += "|" + str(v or 1)
+    print(s)
+def t4():
+    let v = 1.5
+    var s = "float_15"
+    s += "|" + str(bool(v))
+    s += "|" + str(not v)
+    if v:
+        s += "|T"
+    else:
+        s += "|F"
+    s += "|" + str(v and 1)
+    s += "|" + str(v or 1)
+    print(s)
+def t5():
+    let v = ""
+    var s = "str_empty"
+    s += "|" + str(bool(v))
+    s += "|" + str(not v)
+    if v:
+        s += "|T"
+    else:
+        s += "|F"
+    s += "|" + str(v and 1)
+    s += "|" + str(v or 1)
+    print(s)
+def t6():
+    let v = "x"
+    var s = "str_x"
+    s += "|" + str(bool(v))
+    s += "|" + str(not v)
+    if v:
+        s += "|T"
+    else:
+        s += "|F"
+    s += "|" + str(v and 1)
+    s += "|" + str(v or 1)
+    print(s)
+def t7():
+    let v = bytes("")
+    var s = "bytes_empty"
+    s += "|" + str(bool(v))
+    s += "|" + str(not v)
+    if v:
+        s += "|T"
+    else:
+        s += "|F"
+    s += "|" + str(v and 1)
+    s += "|" + str(v or 1)
+    print(s)
+def t8():
+    let v = bytes("x")
+    var s = "bytes_x"
+    s += "|" + str(bool(v))
+    s += "|" + str(not v)
+    if v:
+        s += "|T"
+    else:
+        s += "|F"
+    s += "|" + str(v and 1)
+    s += "|" + str(v or 1)
+    print(s)
+def t9():
+    let v = []
+    var s = "list_empty"
+    s += "|" + str(bool(v))
+    s += "|" + str(not v)
+    if v:
+        s += "|T"
+    else:
+        s += "|F"
+    s += "|" + str(v and 1)
+    s += "|" + str(v or 1)
+    print(s)
+def t10():
+    let v = [1]
+    var s = "list_1"
+    s += "|" + str(bool(v))
+    s += "|" + str(not v)
+    if v:
+        s += "|T"
+    else:
+        s += "|F"
+    s += "|" + str(v and 1)
+    s += "|" + str(v or 1)
+    print(s)
+def t11():
+    let v = {}
+    var s = "dict_empty"
+    s += "|" + str(bool(v))
+    s += "|" + str(not v)
+    if v:
+        s += "|T"
+    else:
+        s += "|F"
+    s += "|" + str(v and 1)
+    s += "|" + str(v or 1)
+    print(s)
+def t12():
+    let v = {"a": 1}
+    var s = "dict_a1"
+    s += "|" + str(bool(v))
+    s += "|" + str(not v)
+    if v:
+        s += "|T"
+    else:
+        s += "|F"
+    s += "|" + str(v and 1)
+    s += "|" + str(v or 1)
+    print(s)
+def t13():
+    let v = ()
+    var s = "tuple_empty"
+    s += "|" + str(bool(v))
+    s += "|" + str(not v)
+    if v:
+        s += "|T"
+    else:
+        s += "|F"
+    s += "|" + str(v and 1)
+    s += "|" + str(v or 1)
+    print(s)
+def t14():
+    let v = (1,)
+    var s = "tuple_1"
+    s += "|" + str(bool(v))
+    s += "|" + str(not v)
+    if v:
+        s += "|T"
+    else:
+        s += "|F"
+    s += "|" + str(v and 1)
+    s += "|" + str(v or 1)
+    print(s)
+def t15():
+    let v = null
+    var s = "null_v"
+    s += "|" + str(bool(v))
+    s += "|" + str(not v)
+    if v:
+        s += "|T"
+    else:
+        s += "|F"
+    s += "|" + str(v and 1)
+    s += "|" + str(v or 1)
+    print(s)
+def t16():
+    let v = false
+    var s = "bool_false"
+    s += "|" + str(bool(v))
+    s += "|" + str(not v)
+    if v:
+        s += "|T"
+    else:
+        s += "|F"
+    s += "|" + str(v and 1)
+    s += "|" + str(v or 1)
+    print(s)
+def t17():
+    let v = true
+    var s = "bool_true"
+    s += "|" + str(bool(v))
+    s += "|" + str(not v)
+    if v:
+        s += "|T"
+    else:
+        s += "|F"
+    s += "|" + str(v and 1)
+    s += "|" + str(v or 1)
+    print(s)
+def t18():
+    let v = userfn
+    var s = "fn_v"
+    s += "|" + str(bool(v))
+    s += "|" + str(not v)
+    if v:
+        s += "|T"
+    else:
+        s += "|F"
+    s += "|" + str(v and 1)
+    s += "|" + str(v or 1)
+    print(s)
+def t19():
+    let v = S1(1)
+    var s = "struct_v"
+    s += "|" + str(bool(v))
+    s += "|" + str(not v)
+    if v:
+        s += "|T"
+    else:
+        s += "|F"
+    s += "|" + str(v and 1)
+    s += "|" + str(v or 1)
+    print(s)
+def t20():
+    let v = E1.A
+    var s = "enum_v"
+    s += "|" + str(bool(v))
+    s += "|" + str(not v)
+    if v:
+        s += "|T"
+    else:
+        s += "|F"
+    s += "|" + str(v and 1)
+    s += "|" + str(v or 1)
+    print(s)
+def t21():
+    let v = Ok(1)
+    var s = "result_ok"
+    s += "|" + str(bool(v))
+    s += "|" + str(not v)
+    if v:
+        s += "|T"
+    else:
+        s += "|F"
+    s += "|" + str(v and 1)
+    s += "|" + str(v or 1)
+    print(s)
+def t22():
+    let v = Err("e")
+    var s = "result_err"
+    s += "|" + str(bool(v))
+    s += "|" + str(not v)
+    if v:
+        s += "|T"
+    else:
+        s += "|F"
+    s += "|" + str(v and 1)
+    s += "|" + str(v or 1)
+    print(s)
+def t23():
+    LOG = []
+    let r = false and rhs("A")
+    print("and_false|" + str(r) + "|" + str(LOG))
+def t24():
+    LOG = []
+    let r = true and rhs("A")
+    print("and_true|" + str(r) + "|" + str(LOG))
+def t25():
+    LOG = []
+    let r = 0 and rhs("A")
+    print("and_zero|" + str(r) + "|" + str(LOG))
+def t26():
+    LOG = []
+    let r = "" and rhs("A")
+    print("and_estr|" + str(r) + "|" + str(LOG))
+def t27():
+    LOG = []
+    let r = null and rhs("A")
+    print("and_null|" + str(r) + "|" + str(LOG))
+def t28():
+    LOG = []
+    let r = bytes("") and rhs("A")
+    print("and_ebytes|" + str(r) + "|" + str(LOG))
+def t29():
+    LOG = []
+    let r = () and rhs("A")
+    print("and_etuple|" + str(r) + "|" + str(LOG))
+def t30():
+    LOG = []
+    let r = true or rhs("A")
+    print("or_true|" + str(r) + "|" + str(LOG))
+def t31():
+    LOG = []
+    let r = false or rhs("A")
+    print("or_false|" + str(r) + "|" + str(LOG))
+def t32():
+    LOG = []
+    let r = 1 or rhs("A")
+    print("or_one|" + str(r) + "|" + str(LOG))
+def t33():
+    LOG = []
+    let r = 0 or rhs("A")
+    print("or_zero|" + str(r) + "|" + str(LOG))
+def t34():
+    LOG = []
+    let r = bytes("") or rhs("A")
+    print("or_ebytes|" + str(r) + "|" + str(LOG))
+def t35():
+    LOG = []
+    let r = () or rhs("A")
+    print("or_etuple|" + str(r) + "|" + str(LOG))
+def t36():
+    LOG = []
+    let r = 1 ?? rhs("A")
+    print("nc_one|" + str(r) + "|" + str(LOG))
+def t37():
+    LOG = []
+    let r = null ?? rhs("A")
+    print("nc_null|" + str(r) + "|" + str(LOG))
+def t38():
+    LOG = []
+    let r = 0 ?? rhs("A")
+    print("nc_zero|" + str(r) + "|" + str(LOG))
+def t39():
+    LOG = []
+    let r = "" ?? rhs("A")
+    print("nc_estr|" + str(r) + "|" + str(LOG))
+def t40():
+    LOG = []
+    let r = false ?? rhs("A")
+    print("nc_false|" + str(r) + "|" + str(LOG))
+def t41():
+    LOG = []
+    let r = bytes("") ?? rhs("A")
+    print("nc_ebytes|" + str(r) + "|" + str(LOG))
+def t42():
+    LOG = []
+    let r = () ?? rhs("A")
+    print("nc_etuple|" + str(r) + "|" + str(LOG))
+def t43():
+    print("pipe_inc|" + str(3 |> inc))
+def t44():
+    print("pipe_len|" + str("ab" |> len))
+def t45():
+    print("pipe_chain|" + str(3 |> inc |> inc))
+def main():
+    let c = env("M232_CASE")
+    if c == null:
+        print("usage: M232_CASE=<idx>")
+        return
+    let i = c
+    if i == "0":
+        t0()
+    elif i == "1":
+        t1()
+    elif i == "2":
+        t2()
+    elif i == "3":
+        t3()
+    elif i == "4":
+        t4()
+    elif i == "5":
+        t5()
+    elif i == "6":
+        t6()
+    elif i == "7":
+        t7()
+    elif i == "8":
+        t8()
+    elif i == "9":
+        t9()
+    elif i == "10":
+        t10()
+    elif i == "11":
+        t11()
+    elif i == "12":
+        t12()
+    elif i == "13":
+        t13()
+    elif i == "14":
+        t14()
+    elif i == "15":
+        t15()
+    elif i == "16":
+        t16()
+    elif i == "17":
+        t17()
+    elif i == "18":
+        t18()
+    elif i == "19":
+        t19()
+    elif i == "20":
+        t20()
+    elif i == "21":
+        t21()
+    elif i == "22":
+        t22()
+    elif i == "23":
+        t23()
+    elif i == "24":
+        t24()
+    elif i == "25":
+        t25()
+    elif i == "26":
+        t26()
+    elif i == "27":
+        t27()
+    elif i == "28":
+        t28()
+    elif i == "29":
+        t29()
+    elif i == "30":
+        t30()
+    elif i == "31":
+        t31()
+    elif i == "32":
+        t32()
+    elif i == "33":
+        t33()
+    elif i == "34":
+        t34()
+    elif i == "35":
+        t35()
+    elif i == "36":
+        t36()
+    elif i == "37":
+        t37()
+    elif i == "38":
+        t38()
+    elif i == "39":
+        t39()
+    elif i == "40":
+        t40()
+    elif i == "41":
+        t41()
+    elif i == "42":
+        t42()
+    elif i == "43":
+        t43()
+    elif i == "44":
+        t44()
+    elif i == "45":
+        t45()
+    else:
+        print("bad idx")
