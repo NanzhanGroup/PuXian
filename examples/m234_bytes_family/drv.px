@@ -1,0 +1,854 @@
+struct S1:
+    a: int
+
+enum E1:
+    A
+    B
+
+def userfn():
+    return 1
+
+def t0():
+    print("bytes_len__int_7|" + str(bytes_len(7)))
+def t1():
+    print("bytes_len__int_neg|" + str(bytes_len(0 - 3)))
+def t2():
+    print("bytes_len__int_0|" + str(bytes_len(0)))
+def t3():
+    print("bytes_len__float_15|" + str(bytes_len(1.5)))
+def t4():
+    print("bytes_len__float_0|" + str(bytes_len(0.0)))
+def t5():
+    print("bytes_len__str_ab|" + str(bytes_len("ab")))
+def t6():
+    print("bytes_len__str_empty|" + str(bytes_len("")))
+def t7():
+    print("bytes_len__str_cjk|" + str(bytes_len("中文")))
+def t8():
+    print("bytes_len__bytes_ab|" + str(bytes_len(bytes("ab"))))
+def t9():
+    print("bytes_len__bytes_empty|" + str(bytes_len(bytes(""))))
+def t10():
+    print("bytes_len__bytes_cjk|" + str(bytes_len(bytes("中文"))))
+def t11():
+    print("bytes_len__bool_t|" + str(bytes_len(true)))
+def t12():
+    print("bytes_len__null_v|" + str(bytes_len(null)))
+def t13():
+    print("bytes_len__list_1|" + str(bytes_len([1])))
+def t14():
+    print("bytes_len__dict_a1|" + str(bytes_len({"a": 1})))
+def t15():
+    print("bytes_len__tuple_1|" + str(bytes_len((1,))))
+def t16():
+    print("bytes_len__enum_a|" + str(bytes_len(E1.A)))
+def t17():
+    print("bytes_len__struct_v|" + str(bytes_len(S1(1))))
+def t18():
+    print("bytes_len__fn_v|" + str(bytes_len(userfn)))
+def t19():
+    print("bytes_to_str__int_7|" + str(bytes_to_str(7)))
+def t20():
+    print("bytes_to_str__int_neg|" + str(bytes_to_str(0 - 3)))
+def t21():
+    print("bytes_to_str__int_0|" + str(bytes_to_str(0)))
+def t22():
+    print("bytes_to_str__float_15|" + str(bytes_to_str(1.5)))
+def t23():
+    print("bytes_to_str__float_0|" + str(bytes_to_str(0.0)))
+def t24():
+    print("bytes_to_str__str_ab|" + str(bytes_to_str("ab")))
+def t25():
+    print("bytes_to_str__str_empty|" + str(bytes_to_str("")))
+def t26():
+    print("bytes_to_str__str_cjk|" + str(bytes_to_str("中文")))
+def t27():
+    print("bytes_to_str__bytes_ab|" + str(bytes_to_str(bytes("ab"))))
+def t28():
+    print("bytes_to_str__bytes_empty|" + str(bytes_to_str(bytes(""))))
+def t29():
+    print("bytes_to_str__bytes_cjk|" + str(bytes_to_str(bytes("中文"))))
+def t30():
+    print("bytes_to_str__bool_t|" + str(bytes_to_str(true)))
+def t31():
+    print("bytes_to_str__null_v|" + str(bytes_to_str(null)))
+def t32():
+    print("bytes_to_str__list_1|" + str(bytes_to_str([1])))
+def t33():
+    print("bytes_to_str__dict_a1|" + str(bytes_to_str({"a": 1})))
+def t34():
+    print("bytes_to_str__tuple_1|" + str(bytes_to_str((1,))))
+def t35():
+    print("bytes_to_str__enum_a|" + str(bytes_to_str(E1.A)))
+def t36():
+    print("bytes_to_str__struct_v|" + str(bytes_to_str(S1(1))))
+def t37():
+    print("bytes_to_str__fn_v|" + str(bytes_to_str(userfn)))
+def t38():
+    print("bytes_to_hex__int_7|" + str(bytes_to_hex(7)))
+def t39():
+    print("bytes_to_hex__int_neg|" + str(bytes_to_hex(0 - 3)))
+def t40():
+    print("bytes_to_hex__int_0|" + str(bytes_to_hex(0)))
+def t41():
+    print("bytes_to_hex__float_15|" + str(bytes_to_hex(1.5)))
+def t42():
+    print("bytes_to_hex__float_0|" + str(bytes_to_hex(0.0)))
+def t43():
+    print("bytes_to_hex__str_ab|" + str(bytes_to_hex("ab")))
+def t44():
+    print("bytes_to_hex__str_empty|" + str(bytes_to_hex("")))
+def t45():
+    print("bytes_to_hex__str_cjk|" + str(bytes_to_hex("中文")))
+def t46():
+    print("bytes_to_hex__bytes_ab|" + str(bytes_to_hex(bytes("ab"))))
+def t47():
+    print("bytes_to_hex__bytes_empty|" + str(bytes_to_hex(bytes(""))))
+def t48():
+    print("bytes_to_hex__bytes_cjk|" + str(bytes_to_hex(bytes("中文"))))
+def t49():
+    print("bytes_to_hex__bool_t|" + str(bytes_to_hex(true)))
+def t50():
+    print("bytes_to_hex__null_v|" + str(bytes_to_hex(null)))
+def t51():
+    print("bytes_to_hex__list_1|" + str(bytes_to_hex([1])))
+def t52():
+    print("bytes_to_hex__dict_a1|" + str(bytes_to_hex({"a": 1})))
+def t53():
+    print("bytes_to_hex__tuple_1|" + str(bytes_to_hex((1,))))
+def t54():
+    print("bytes_to_hex__enum_a|" + str(bytes_to_hex(E1.A)))
+def t55():
+    print("bytes_to_hex__struct_v|" + str(bytes_to_hex(S1(1))))
+def t56():
+    print("bytes_to_hex__fn_v|" + str(bytes_to_hex(userfn)))
+def t57():
+    print("bytes_base64__int_7|" + str(bytes_base64(7)))
+def t58():
+    print("bytes_base64__int_neg|" + str(bytes_base64(0 - 3)))
+def t59():
+    print("bytes_base64__int_0|" + str(bytes_base64(0)))
+def t60():
+    print("bytes_base64__float_15|" + str(bytes_base64(1.5)))
+def t61():
+    print("bytes_base64__float_0|" + str(bytes_base64(0.0)))
+def t62():
+    print("bytes_base64__str_ab|" + str(bytes_base64("ab")))
+def t63():
+    print("bytes_base64__str_empty|" + str(bytes_base64("")))
+def t64():
+    print("bytes_base64__str_cjk|" + str(bytes_base64("中文")))
+def t65():
+    print("bytes_base64__bytes_ab|" + str(bytes_base64(bytes("ab"))))
+def t66():
+    print("bytes_base64__bytes_empty|" + str(bytes_base64(bytes(""))))
+def t67():
+    print("bytes_base64__bytes_cjk|" + str(bytes_base64(bytes("中文"))))
+def t68():
+    print("bytes_base64__bool_t|" + str(bytes_base64(true)))
+def t69():
+    print("bytes_base64__null_v|" + str(bytes_base64(null)))
+def t70():
+    print("bytes_base64__list_1|" + str(bytes_base64([1])))
+def t71():
+    print("bytes_base64__dict_a1|" + str(bytes_base64({"a": 1})))
+def t72():
+    print("bytes_base64__tuple_1|" + str(bytes_base64((1,))))
+def t73():
+    print("bytes_base64__enum_a|" + str(bytes_base64(E1.A)))
+def t74():
+    print("bytes_base64__struct_v|" + str(bytes_base64(S1(1))))
+def t75():
+    print("bytes_base64__fn_v|" + str(bytes_base64(userfn)))
+def t76():
+    print("bytes_to_int__int_7|" + str(bytes_to_int(7)))
+def t77():
+    print("bytes_to_int__int_neg|" + str(bytes_to_int(0 - 3)))
+def t78():
+    print("bytes_to_int__int_0|" + str(bytes_to_int(0)))
+def t79():
+    print("bytes_to_int__float_15|" + str(bytes_to_int(1.5)))
+def t80():
+    print("bytes_to_int__float_0|" + str(bytes_to_int(0.0)))
+def t81():
+    print("bytes_to_int__str_ab|" + str(bytes_to_int("ab")))
+def t82():
+    print("bytes_to_int__str_empty|" + str(bytes_to_int("")))
+def t83():
+    print("bytes_to_int__str_cjk|" + str(bytes_to_int("中文")))
+def t84():
+    print("bytes_to_int__bytes_ab|" + str(bytes_to_int(bytes("ab"))))
+def t85():
+    print("bytes_to_int__bytes_empty|" + str(bytes_to_int(bytes(""))))
+def t86():
+    print("bytes_to_int__bytes_cjk|" + str(bytes_to_int(bytes("中文"))))
+def t87():
+    print("bytes_to_int__bool_t|" + str(bytes_to_int(true)))
+def t88():
+    print("bytes_to_int__null_v|" + str(bytes_to_int(null)))
+def t89():
+    print("bytes_to_int__list_1|" + str(bytes_to_int([1])))
+def t90():
+    print("bytes_to_int__dict_a1|" + str(bytes_to_int({"a": 1})))
+def t91():
+    print("bytes_to_int__tuple_1|" + str(bytes_to_int((1,))))
+def t92():
+    print("bytes_to_int__enum_a|" + str(bytes_to_int(E1.A)))
+def t93():
+    print("bytes_to_int__struct_v|" + str(bytes_to_int(S1(1))))
+def t94():
+    print("bytes_to_int__fn_v|" + str(bytes_to_int(userfn)))
+def t95():
+    print("base64_to_bytes__int_7|" + str(base64_to_bytes(7)))
+def t96():
+    print("base64_to_bytes__int_neg|" + str(base64_to_bytes(0 - 3)))
+def t97():
+    print("base64_to_bytes__int_0|" + str(base64_to_bytes(0)))
+def t98():
+    print("base64_to_bytes__float_15|" + str(base64_to_bytes(1.5)))
+def t99():
+    print("base64_to_bytes__float_0|" + str(base64_to_bytes(0.0)))
+def t100():
+    print("base64_to_bytes__str_ab|" + str(base64_to_bytes("ab")))
+def t101():
+    print("base64_to_bytes__str_empty|" + str(base64_to_bytes("")))
+def t102():
+    print("base64_to_bytes__str_cjk|" + str(base64_to_bytes("中文")))
+def t103():
+    print("base64_to_bytes__bytes_ab|" + str(base64_to_bytes(bytes("ab"))))
+def t104():
+    print("base64_to_bytes__bytes_empty|" + str(base64_to_bytes(bytes(""))))
+def t105():
+    print("base64_to_bytes__bytes_cjk|" + str(base64_to_bytes(bytes("中文"))))
+def t106():
+    print("base64_to_bytes__bool_t|" + str(base64_to_bytes(true)))
+def t107():
+    print("base64_to_bytes__null_v|" + str(base64_to_bytes(null)))
+def t108():
+    print("base64_to_bytes__list_1|" + str(base64_to_bytes([1])))
+def t109():
+    print("base64_to_bytes__dict_a1|" + str(base64_to_bytes({"a": 1})))
+def t110():
+    print("base64_to_bytes__tuple_1|" + str(base64_to_bytes((1,))))
+def t111():
+    print("base64_to_bytes__enum_a|" + str(base64_to_bytes(E1.A)))
+def t112():
+    print("base64_to_bytes__struct_v|" + str(base64_to_bytes(S1(1))))
+def t113():
+    print("base64_to_bytes__fn_v|" + str(base64_to_bytes(userfn)))
+def t114():
+    print("bytes_find__int_7|" + str(str(bytes_find(bytes("ab"), 7))))
+def t115():
+    print("bytes_get__int_7|" + str(str(bytes_get(bytes("ab"), 7))))
+def t116():
+    print("bytes_concat__int_7|" + str(str(bytes_concat(bytes("ab"), 7))))
+def t117():
+    print("bytes_slice__int_7|" + str(str(bytes_slice(bytes("abc"), 7))))
+def t118():
+    print("int_to_bytes__int_7|" + str(bytes_to_hex(int_to_bytes(7, 1, "little"))))
+def t119():
+    print("bytes_find__int_neg|" + str(str(bytes_find(bytes("ab"), 0 - 3))))
+def t120():
+    print("bytes_get__int_neg|" + str(str(bytes_get(bytes("ab"), 0 - 3))))
+def t121():
+    print("bytes_concat__int_neg|" + str(str(bytes_concat(bytes("ab"), 0 - 3))))
+def t122():
+    print("bytes_slice__int_neg|" + str(str(bytes_slice(bytes("abc"), 0 - 3))))
+def t123():
+    print("int_to_bytes__int_neg|" + str(bytes_to_hex(int_to_bytes(0 - 3, 1, "little"))))
+def t124():
+    print("bytes_find__int_0|" + str(str(bytes_find(bytes("ab"), 0))))
+def t125():
+    print("bytes_get__int_0|" + str(str(bytes_get(bytes("ab"), 0))))
+def t126():
+    print("bytes_concat__int_0|" + str(str(bytes_concat(bytes("ab"), 0))))
+def t127():
+    print("bytes_slice__int_0|" + str(str(bytes_slice(bytes("abc"), 0))))
+def t128():
+    print("int_to_bytes__int_0|" + str(bytes_to_hex(int_to_bytes(0, 1, "little"))))
+def t129():
+    print("bytes_find__float_15|" + str(str(bytes_find(bytes("ab"), 1.5))))
+def t130():
+    print("bytes_get__float_15|" + str(str(bytes_get(bytes("ab"), 1.5))))
+def t131():
+    print("bytes_concat__float_15|" + str(str(bytes_concat(bytes("ab"), 1.5))))
+def t132():
+    print("bytes_slice__float_15|" + str(str(bytes_slice(bytes("abc"), 1.5))))
+def t133():
+    print("int_to_bytes__float_15|" + str(bytes_to_hex(int_to_bytes(1.5, 1, "little"))))
+def t134():
+    print("bytes_find__float_0|" + str(str(bytes_find(bytes("ab"), 0.0))))
+def t135():
+    print("bytes_get__float_0|" + str(str(bytes_get(bytes("ab"), 0.0))))
+def t136():
+    print("bytes_concat__float_0|" + str(str(bytes_concat(bytes("ab"), 0.0))))
+def t137():
+    print("bytes_slice__float_0|" + str(str(bytes_slice(bytes("abc"), 0.0))))
+def t138():
+    print("int_to_bytes__float_0|" + str(bytes_to_hex(int_to_bytes(0.0, 1, "little"))))
+def t139():
+    print("bytes_find__str_ab|" + str(str(bytes_find(bytes("ab"), "ab"))))
+def t140():
+    print("bytes_get__str_ab|" + str(str(bytes_get(bytes("ab"), "ab"))))
+def t141():
+    print("bytes_concat__str_ab|" + str(str(bytes_concat(bytes("ab"), "ab"))))
+def t142():
+    print("bytes_slice__str_ab|" + str(str(bytes_slice(bytes("abc"), "ab"))))
+def t143():
+    print("int_to_bytes__str_ab|" + str(bytes_to_hex(int_to_bytes("ab", 1, "little"))))
+def t144():
+    print("bytes_find__str_empty|" + str(str(bytes_find(bytes("ab"), ""))))
+def t145():
+    print("bytes_get__str_empty|" + str(str(bytes_get(bytes("ab"), ""))))
+def t146():
+    print("bytes_concat__str_empty|" + str(str(bytes_concat(bytes("ab"), ""))))
+def t147():
+    print("bytes_slice__str_empty|" + str(str(bytes_slice(bytes("abc"), ""))))
+def t148():
+    print("int_to_bytes__str_empty|" + str(bytes_to_hex(int_to_bytes("", 1, "little"))))
+def t149():
+    print("bytes_find__str_cjk|" + str(str(bytes_find(bytes("ab"), "中文"))))
+def t150():
+    print("bytes_get__str_cjk|" + str(str(bytes_get(bytes("ab"), "中文"))))
+def t151():
+    print("bytes_concat__str_cjk|" + str(str(bytes_concat(bytes("ab"), "中文"))))
+def t152():
+    print("bytes_slice__str_cjk|" + str(str(bytes_slice(bytes("abc"), "中文"))))
+def t153():
+    print("int_to_bytes__str_cjk|" + str(bytes_to_hex(int_to_bytes("中文", 1, "little"))))
+def t154():
+    print("bytes_find__bytes_ab|" + str(str(bytes_find(bytes("ab"), bytes("ab")))))
+def t155():
+    print("bytes_get__bytes_ab|" + str(str(bytes_get(bytes("ab"), bytes("ab")))))
+def t156():
+    print("bytes_concat__bytes_ab|" + str(str(bytes_concat(bytes("ab"), bytes("ab")))))
+def t157():
+    print("bytes_slice__bytes_ab|" + str(str(bytes_slice(bytes("abc"), bytes("ab")))))
+def t158():
+    print("int_to_bytes__bytes_ab|" + str(bytes_to_hex(int_to_bytes(bytes("ab"), 1, "little"))))
+def t159():
+    print("bytes_find__bytes_empty|" + str(str(bytes_find(bytes("ab"), bytes("")))))
+def t160():
+    print("bytes_get__bytes_empty|" + str(str(bytes_get(bytes("ab"), bytes("")))))
+def t161():
+    print("bytes_concat__bytes_empty|" + str(str(bytes_concat(bytes("ab"), bytes("")))))
+def t162():
+    print("bytes_slice__bytes_empty|" + str(str(bytes_slice(bytes("abc"), bytes("")))))
+def t163():
+    print("int_to_bytes__bytes_empty|" + str(bytes_to_hex(int_to_bytes(bytes(""), 1, "little"))))
+def t164():
+    print("bytes_find__bytes_cjk|" + str(str(bytes_find(bytes("ab"), bytes("中文")))))
+def t165():
+    print("bytes_get__bytes_cjk|" + str(str(bytes_get(bytes("ab"), bytes("中文")))))
+def t166():
+    print("bytes_concat__bytes_cjk|" + str(str(bytes_concat(bytes("ab"), bytes("中文")))))
+def t167():
+    print("bytes_slice__bytes_cjk|" + str(str(bytes_slice(bytes("abc"), bytes("中文")))))
+def t168():
+    print("int_to_bytes__bytes_cjk|" + str(bytes_to_hex(int_to_bytes(bytes("中文"), 1, "little"))))
+def t169():
+    print("bytes_find__bool_t|" + str(str(bytes_find(bytes("ab"), true))))
+def t170():
+    print("bytes_get__bool_t|" + str(str(bytes_get(bytes("ab"), true))))
+def t171():
+    print("bytes_concat__bool_t|" + str(str(bytes_concat(bytes("ab"), true))))
+def t172():
+    print("bytes_slice__bool_t|" + str(str(bytes_slice(bytes("abc"), true))))
+def t173():
+    print("int_to_bytes__bool_t|" + str(bytes_to_hex(int_to_bytes(true, 1, "little"))))
+def t174():
+    print("bytes_find__null_v|" + str(str(bytes_find(bytes("ab"), null))))
+def t175():
+    print("bytes_get__null_v|" + str(str(bytes_get(bytes("ab"), null))))
+def t176():
+    print("bytes_concat__null_v|" + str(str(bytes_concat(bytes("ab"), null))))
+def t177():
+    print("bytes_slice__null_v|" + str(str(bytes_slice(bytes("abc"), null))))
+def t178():
+    print("int_to_bytes__null_v|" + str(bytes_to_hex(int_to_bytes(null, 1, "little"))))
+def t179():
+    print("bytes_find__list_1|" + str(str(bytes_find(bytes("ab"), [1]))))
+def t180():
+    print("bytes_get__list_1|" + str(str(bytes_get(bytes("ab"), [1]))))
+def t181():
+    print("bytes_concat__list_1|" + str(str(bytes_concat(bytes("ab"), [1]))))
+def t182():
+    print("bytes_slice__list_1|" + str(str(bytes_slice(bytes("abc"), [1]))))
+def t183():
+    print("int_to_bytes__list_1|" + str(bytes_to_hex(int_to_bytes([1], 1, "little"))))
+def t184():
+    print("bytes_find__dict_a1|" + str(str(bytes_find(bytes("ab"), {"a": 1}))))
+def t185():
+    print("bytes_get__dict_a1|" + str(str(bytes_get(bytes("ab"), {"a": 1}))))
+def t186():
+    print("bytes_concat__dict_a1|" + str(str(bytes_concat(bytes("ab"), {"a": 1}))))
+def t187():
+    print("bytes_slice__dict_a1|" + str(str(bytes_slice(bytes("abc"), {"a": 1}))))
+def t188():
+    print("int_to_bytes__dict_a1|" + str(bytes_to_hex(int_to_bytes({"a": 1}, 1, "little"))))
+def t189():
+    print("bytes_find__tuple_1|" + str(str(bytes_find(bytes("ab"), (1,)))))
+def t190():
+    print("bytes_get__tuple_1|" + str(str(bytes_get(bytes("ab"), (1,)))))
+def t191():
+    print("bytes_concat__tuple_1|" + str(str(bytes_concat(bytes("ab"), (1,)))))
+def t192():
+    print("bytes_slice__tuple_1|" + str(str(bytes_slice(bytes("abc"), (1,)))))
+def t193():
+    print("int_to_bytes__tuple_1|" + str(bytes_to_hex(int_to_bytes((1,), 1, "little"))))
+def t194():
+    print("bytes_find__enum_a|" + str(str(bytes_find(bytes("ab"), E1.A))))
+def t195():
+    print("bytes_get__enum_a|" + str(str(bytes_get(bytes("ab"), E1.A))))
+def t196():
+    print("bytes_concat__enum_a|" + str(str(bytes_concat(bytes("ab"), E1.A))))
+def t197():
+    print("bytes_slice__enum_a|" + str(str(bytes_slice(bytes("abc"), E1.A))))
+def t198():
+    print("int_to_bytes__enum_a|" + str(bytes_to_hex(int_to_bytes(E1.A, 1, "little"))))
+def t199():
+    print("bytes_find__struct_v|" + str(str(bytes_find(bytes("ab"), S1(1)))))
+def t200():
+    print("bytes_get__struct_v|" + str(str(bytes_get(bytes("ab"), S1(1)))))
+def t201():
+    print("bytes_concat__struct_v|" + str(str(bytes_concat(bytes("ab"), S1(1)))))
+def t202():
+    print("bytes_slice__struct_v|" + str(str(bytes_slice(bytes("abc"), S1(1)))))
+def t203():
+    print("int_to_bytes__struct_v|" + str(bytes_to_hex(int_to_bytes(S1(1), 1, "little"))))
+def t204():
+    print("bytes_find__fn_v|" + str(str(bytes_find(bytes("ab"), userfn))))
+def t205():
+    print("bytes_get__fn_v|" + str(str(bytes_get(bytes("ab"), userfn))))
+def t206():
+    print("bytes_concat__fn_v|" + str(str(bytes_concat(bytes("ab"), userfn))))
+def t207():
+    print("bytes_slice__fn_v|" + str(str(bytes_slice(bytes("abc"), userfn))))
+def t208():
+    print("int_to_bytes__fn_v|" + str(bytes_to_hex(int_to_bytes(userfn, 1, "little"))))
+def main():
+    let c = env("M234_CASE")
+    if c == null:
+        print("usage")
+        return
+    let i = c
+    if i == "0":
+        t0()
+    elif i == "1":
+        t1()
+    elif i == "2":
+        t2()
+    elif i == "3":
+        t3()
+    elif i == "4":
+        t4()
+    elif i == "5":
+        t5()
+    elif i == "6":
+        t6()
+    elif i == "7":
+        t7()
+    elif i == "8":
+        t8()
+    elif i == "9":
+        t9()
+    elif i == "10":
+        t10()
+    elif i == "11":
+        t11()
+    elif i == "12":
+        t12()
+    elif i == "13":
+        t13()
+    elif i == "14":
+        t14()
+    elif i == "15":
+        t15()
+    elif i == "16":
+        t16()
+    elif i == "17":
+        t17()
+    elif i == "18":
+        t18()
+    elif i == "19":
+        t19()
+    elif i == "20":
+        t20()
+    elif i == "21":
+        t21()
+    elif i == "22":
+        t22()
+    elif i == "23":
+        t23()
+    elif i == "24":
+        t24()
+    elif i == "25":
+        t25()
+    elif i == "26":
+        t26()
+    elif i == "27":
+        t27()
+    elif i == "28":
+        t28()
+    elif i == "29":
+        t29()
+    elif i == "30":
+        t30()
+    elif i == "31":
+        t31()
+    elif i == "32":
+        t32()
+    elif i == "33":
+        t33()
+    elif i == "34":
+        t34()
+    elif i == "35":
+        t35()
+    elif i == "36":
+        t36()
+    elif i == "37":
+        t37()
+    elif i == "38":
+        t38()
+    elif i == "39":
+        t39()
+    elif i == "40":
+        t40()
+    elif i == "41":
+        t41()
+    elif i == "42":
+        t42()
+    elif i == "43":
+        t43()
+    elif i == "44":
+        t44()
+    elif i == "45":
+        t45()
+    elif i == "46":
+        t46()
+    elif i == "47":
+        t47()
+    elif i == "48":
+        t48()
+    elif i == "49":
+        t49()
+    elif i == "50":
+        t50()
+    elif i == "51":
+        t51()
+    elif i == "52":
+        t52()
+    elif i == "53":
+        t53()
+    elif i == "54":
+        t54()
+    elif i == "55":
+        t55()
+    elif i == "56":
+        t56()
+    elif i == "57":
+        t57()
+    elif i == "58":
+        t58()
+    elif i == "59":
+        t59()
+    elif i == "60":
+        t60()
+    elif i == "61":
+        t61()
+    elif i == "62":
+        t62()
+    elif i == "63":
+        t63()
+    elif i == "64":
+        t64()
+    elif i == "65":
+        t65()
+    elif i == "66":
+        t66()
+    elif i == "67":
+        t67()
+    elif i == "68":
+        t68()
+    elif i == "69":
+        t69()
+    elif i == "70":
+        t70()
+    elif i == "71":
+        t71()
+    elif i == "72":
+        t72()
+    elif i == "73":
+        t73()
+    elif i == "74":
+        t74()
+    elif i == "75":
+        t75()
+    elif i == "76":
+        t76()
+    elif i == "77":
+        t77()
+    elif i == "78":
+        t78()
+    elif i == "79":
+        t79()
+    elif i == "80":
+        t80()
+    elif i == "81":
+        t81()
+    elif i == "82":
+        t82()
+    elif i == "83":
+        t83()
+    elif i == "84":
+        t84()
+    elif i == "85":
+        t85()
+    elif i == "86":
+        t86()
+    elif i == "87":
+        t87()
+    elif i == "88":
+        t88()
+    elif i == "89":
+        t89()
+    elif i == "90":
+        t90()
+    elif i == "91":
+        t91()
+    elif i == "92":
+        t92()
+    elif i == "93":
+        t93()
+    elif i == "94":
+        t94()
+    elif i == "95":
+        t95()
+    elif i == "96":
+        t96()
+    elif i == "97":
+        t97()
+    elif i == "98":
+        t98()
+    elif i == "99":
+        t99()
+    elif i == "100":
+        t100()
+    elif i == "101":
+        t101()
+    elif i == "102":
+        t102()
+    elif i == "103":
+        t103()
+    elif i == "104":
+        t104()
+    elif i == "105":
+        t105()
+    elif i == "106":
+        t106()
+    elif i == "107":
+        t107()
+    elif i == "108":
+        t108()
+    elif i == "109":
+        t109()
+    elif i == "110":
+        t110()
+    elif i == "111":
+        t111()
+    elif i == "112":
+        t112()
+    elif i == "113":
+        t113()
+    elif i == "114":
+        t114()
+    elif i == "115":
+        t115()
+    elif i == "116":
+        t116()
+    elif i == "117":
+        t117()
+    elif i == "118":
+        t118()
+    elif i == "119":
+        t119()
+    elif i == "120":
+        t120()
+    elif i == "121":
+        t121()
+    elif i == "122":
+        t122()
+    elif i == "123":
+        t123()
+    elif i == "124":
+        t124()
+    elif i == "125":
+        t125()
+    elif i == "126":
+        t126()
+    elif i == "127":
+        t127()
+    elif i == "128":
+        t128()
+    elif i == "129":
+        t129()
+    elif i == "130":
+        t130()
+    elif i == "131":
+        t131()
+    elif i == "132":
+        t132()
+    elif i == "133":
+        t133()
+    elif i == "134":
+        t134()
+    elif i == "135":
+        t135()
+    elif i == "136":
+        t136()
+    elif i == "137":
+        t137()
+    elif i == "138":
+        t138()
+    elif i == "139":
+        t139()
+    elif i == "140":
+        t140()
+    elif i == "141":
+        t141()
+    elif i == "142":
+        t142()
+    elif i == "143":
+        t143()
+    elif i == "144":
+        t144()
+    elif i == "145":
+        t145()
+    elif i == "146":
+        t146()
+    elif i == "147":
+        t147()
+    elif i == "148":
+        t148()
+    elif i == "149":
+        t149()
+    elif i == "150":
+        t150()
+    elif i == "151":
+        t151()
+    elif i == "152":
+        t152()
+    elif i == "153":
+        t153()
+    elif i == "154":
+        t154()
+    elif i == "155":
+        t155()
+    elif i == "156":
+        t156()
+    elif i == "157":
+        t157()
+    elif i == "158":
+        t158()
+    elif i == "159":
+        t159()
+    elif i == "160":
+        t160()
+    elif i == "161":
+        t161()
+    elif i == "162":
+        t162()
+    elif i == "163":
+        t163()
+    elif i == "164":
+        t164()
+    elif i == "165":
+        t165()
+    elif i == "166":
+        t166()
+    elif i == "167":
+        t167()
+    elif i == "168":
+        t168()
+    elif i == "169":
+        t169()
+    elif i == "170":
+        t170()
+    elif i == "171":
+        t171()
+    elif i == "172":
+        t172()
+    elif i == "173":
+        t173()
+    elif i == "174":
+        t174()
+    elif i == "175":
+        t175()
+    elif i == "176":
+        t176()
+    elif i == "177":
+        t177()
+    elif i == "178":
+        t178()
+    elif i == "179":
+        t179()
+    elif i == "180":
+        t180()
+    elif i == "181":
+        t181()
+    elif i == "182":
+        t182()
+    elif i == "183":
+        t183()
+    elif i == "184":
+        t184()
+    elif i == "185":
+        t185()
+    elif i == "186":
+        t186()
+    elif i == "187":
+        t187()
+    elif i == "188":
+        t188()
+    elif i == "189":
+        t189()
+    elif i == "190":
+        t190()
+    elif i == "191":
+        t191()
+    elif i == "192":
+        t192()
+    elif i == "193":
+        t193()
+    elif i == "194":
+        t194()
+    elif i == "195":
+        t195()
+    elif i == "196":
+        t196()
+    elif i == "197":
+        t197()
+    elif i == "198":
+        t198()
+    elif i == "199":
+        t199()
+    elif i == "200":
+        t200()
+    elif i == "201":
+        t201()
+    elif i == "202":
+        t202()
+    elif i == "203":
+        t203()
+    elif i == "204":
+        t204()
+    elif i == "205":
+        t205()
+    elif i == "206":
+        t206()
+    elif i == "207":
+        t207()
+    elif i == "208":
+        t208()
+    else:
+        print("bad idx")

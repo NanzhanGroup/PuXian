@@ -793,10 +793,10 @@ def i_call_builtin(name, args, pos):
         # bytes_concat(a, b, ...) → bytes（≥1 参；解释器两两折叠，等价 C 变参）
         if len(args) < 1:
             return Err(i_r1002("bytes_concat 至少需要一个参数", pos))
-        var acc = args[0]
+        var acc = i_cstr_arg(args[0])
         var bci = 1
         while bci < len(args):
-            acc = bytes_concat(acc, args[bci])
+            acc = bytes_concat(acc, i_cstr_arg(args[bci]))
             bci += 1
         return Ok(acc)
     if name == "bytes_to_str":
@@ -823,7 +823,7 @@ def i_call_builtin(name, args, pos):
         # bytes_base64(b) → str（base64）
         if len(args) != 1:
             return Err(i_r1002("bytes_base64 需要一个参数", pos))
-        return Ok(bytes_base64(args[0]))
+        return Ok(bytes_base64(i_cstr_arg(args[0])))
     if name == "base64_to_bytes":
         # base64_to_bytes(s) → bytes|null（严格解码）
         if len(args) != 1:

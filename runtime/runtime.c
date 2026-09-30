@@ -3351,6 +3351,24 @@ bool px_is_truthy(LXValue v) {
 }
 
 const char* px_type_name(LXValue v) {
+    // ═══ M234（第 112 轮 · 缺陷 352）：**解释轨的「标记字典」必须报真实类型名** ═══
+    //   解释轨把 struct / enum / function / native / type / generator 表示为**带标记的 dict**
+    //   （`__struct__` / `__enum__` / `__ufn__` / `__builtin__` / `__typeref__` / `__gen__`）。
+    //   而 `px_type_name` 只看 `v.type` ⇒ 对这些值一律报 `dict`。实测 `bytes_len(E1.A)`：
+    //     解释轨「实际是 **dict**」⇄ 编译两轨「实际是 **enum**」⇒ **三轨分叉**，
+    //     且违反「**错误必须指到真因**」—— 用户手里根本没有 dict。
+    //   ⇒ 与解释轨的 `i_type_name`（`selfhost/ival.px`）**逐条对齐**：
+    //     两份实现必须给出同一个名字（M232 的判据：「同一语义的两份实现必须一致」）。
+    //   ⚠️ 这是**只影响命名**的桥：C 轨的 dict 永不带这些标记 ⇒ 对本轨零影响；
+    //      判据见 `examples/m234_bytes_family/`（源码派生：两份标记映射表必须逐个相等）。
+    if (v.type == PX_DICT) {
+        if (px_dict_get(v, "__ufn__").type != PX_NULL) return "function";
+        if (px_dict_get(v, "__builtin__").type != PX_NULL) return "native";
+        if (px_dict_get(v, "__struct__").type != PX_NULL) return "struct";
+        if (px_dict_get(v, "__enum__").type != PX_NULL) return "enum";
+        if (px_dict_get(v, "__typeref__").type != PX_NULL) return "type";
+        if (px_dict_get(v, "__gen__").type != PX_NULL) return "generator";
+    }
     switch (v.type) {
         case PX_NULL: return "null";
         case PX_BOOL: return "bool";
